@@ -52,8 +52,22 @@ fi
 chown -R "$DEPLOY_USER:$DEPLOY_USER" "/home/$DEPLOY_USER/.ssh"
 chmod 700 "/home/$DEPLOY_USER/.ssh"
 chmod 600 "/home/$DEPLOY_USER/.ssh/authorized_keys"
-# 信任 github.com 主机
-sudo -u "$DEPLOY_USER" ssh-keyscan github.com >> "/home/$DEPLOY_USER/.ssh/known_hosts" 2>/dev/null || true
+
+# SSH over 443：国内访问 github.com 22/443 常被重置，走 ssh.github.com:443 更稳
+if [ ! -f "/home/$DEPLOY_USER/.ssh/config" ]; then
+    cat > "/home/$DEPLOY_USER/.ssh/config" <<EOF
+Host github.com
+  HostName ssh.github.com
+  Port 443
+  User git
+  IdentityFile ~/.ssh/id_ed25519
+  IdentitiesOnly yes
+EOF
+    chown "$DEPLOY_USER:$DEPLOY_USER" "/home/$DEPLOY_USER/.ssh/config"
+    chmod 600 "/home/$DEPLOY_USER/.ssh/config"
+fi
+# 信任 github.com 主机（走 443）
+sudo -u "$DEPLOY_USER" ssh-keyscan ssh.github.com >> "/home/$DEPLOY_USER/.ssh/known_hosts" 2>/dev/null || true
 
 echo "==> [4/6] 初始化应用目录"
 mkdir -p "$APP_DIR"
