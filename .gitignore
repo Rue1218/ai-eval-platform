@@ -1,0 +1,34 @@
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+dist/
+.vite/
+npm-debug.log*
+
+# Go
+stress/bin/
+stress/*.exe
+
+# Data & runtime
+data/
+*.log
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
