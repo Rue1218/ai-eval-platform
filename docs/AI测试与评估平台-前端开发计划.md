@@ -2,14 +2,14 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.2 |
+| 文档版本 | V1.3 |
 | 对应 PRD | V1.6.3（功能唯一权威） |
 | 对应设计规范 | V1.2（页面 / 组件 / 浮层 / 令牌） |
 | 对应总计划 | V1.0（日历与门禁） |
-| 对应后端计划 | V1.1（契约提供方） |
-| 对应 API | V1.2（路径/JSON 唯一冻结） |
+| 对应后端计划 | V1.3（契约提供方） |
+| 对应 API | V1.3（路径/JSON 唯一冻结） |
 | 撰写日期 | 2026-08-17 |
-| 最近修订 | 2026-08-18：增加原型实时/Mock 数据边界、接口缺口闭环与联调验收 |
+| 最近修订 | 2026-08-18：增加原型逐页还原矩阵、真实数据持久化边界与 V1.0 受控降级 |
 | 计划起点 | 2026-08-18 |
 | V1.0 目标发布 | 2026-12-04 |
 | 总工期 | **16 周**（与总计划同一日历） |
@@ -52,7 +52,7 @@
 
 ### 1.4 V1.2 权限口径校正
 
-PRD 2.1 已冻结为单一 `member`、全员同权。本计划中早期出现的 `admin`、`engineer`、`readonly`、`minRole`、按角色裁剪侧栏等文字均为旧版遗留，**不进入实现**；以 §2.2 和 API V1.2 为准。保留 `/admin/*` 仅为信息架构和历史 URL，不代表角色限制。任务取消仍按“创建者”约束，`prod` 会签须非创建者成员。
+PRD 2.1 已冻结为单一 `member`、全员同权。本计划中早期出现的 `admin`、`engineer`、`readonly`、`minRole`、按角色裁剪侧栏等文字均为旧版遗留，**不进入实现**；以 §2.2 和 API V1.3 为准。保留 `/admin/*` 仅为信息架构和历史 URL，不代表角色限制。任务取消仍按“创建者”约束，`prod` 会签须非创建者成员。
 
 ---
 
@@ -113,7 +113,7 @@ frontend/src/
 
 ### 3.1 REST（PRD 5.9 + 正文补全）
 
-前端 **只调用** `AI测试与评估平台-API.md` V1.0 列出的浏览器路径。5.9 是摘要，补全路径以 API 文档为准，**不算新产品功能**。
+前端 **只调用** `AI测试与评估平台-API.md` V1.3 列出的浏览器路径。5.9 是摘要，补全路径以 API 文档为准，**不算新产品功能**。
 
 | 方法 | 路径 | 前端消费者 | 阶段 |
 | --- | --- | --- | --- |
@@ -124,20 +124,20 @@ frontend/src/
 | POST | `/api/auth/ws-ticket` | Agent WS | M1 |
 | GET | `/ws/agent?ticket=` | `/agent` | M1 |
 | GET/POST | `/api/sessions`；GET `/api/sessions/{id}/messages` | SessionList（**方案 A，已冻结**） | M1 |
-| GET/POST | `/api/users`；PATCH `/api/users/{id}`；POST `/api/users/{id}/reset-password` | `/admin/users` | M1 |
+| GET/POST | `/api/users`；PUT `/api/users/{id}`、`/status`；GET `/api/users/activity-summary`；POST `/api/users/{id}/reset-password` | `/admin/users` | M1 |
 | GET/POST | `/api/files`；GET `/api/files/{id}` | Composer 附件、各上传 | M1 |
 | CRUD | `/api/profiles`；POST `/api/profiles/{id}/check` | `/admin/profiles`；确认卡下拉 | M1 |
 | CRUD | `/api/datasets`；POST `/{id}/upload`；GET `/{id}/rows` | `/datasets` | M2 |
 | GET | `/api/case-sets` `/{id}`；POST `/{id}/confirm` `/{id}/map`；GET `/{id}/export` | `/cases` | M2/M3 |
-| CRUD | `/api/kb`；POST `/{id}/docs`；DELETE `/{id}/docs/{doc_id}` | `/kb` | M3 |
-| CRUD | `/api/gold-qa`；POST `/{id}/upload` | `/kb` | M3 |
+| CRUD | `/api/kb`；POST `/{id}/documents`；DELETE `/{id}/documents/{doc_id}` | `/kb` | M3 |
+| CRUD | `/api/kb/{id}/gold-qa` | `/kb` | M3 |
 | POST/GET | `/api/tasks`；GET `{id}`；POST `{id}/cancel` `{id}/rerun` | Agent / Tasks / 抽屉 | M1 起 |
 | POST | `/api/tasks/{id}/approve-stress` | `prod` 会签 | M4 |
 | GET | `/api/tasks/{id}/stress-series` | ProgressDock / Chart.js | M4 |
 | GET | `/api/reports/{id}`；POST `{id}/share` `{id}/baseline` | Report | M2 |
 | GET/PUT | `/api/admin/settings` | Agent 后端；stress 治理；通知开关 | M1/M4 |
 
-会话 **不再周三二选一**：以 API V1.0 方案 A 为准。  
+会话 **不再周三二选一**：以 API V1.3 方案 A 为准。
 禁止发明：`/api/chat/completions`、旧 TestPilot 路径、把 MCP 工具名当 REST、浏览器直连 `/metrics`。
 
 ### 3.2 WebSocket（PRD 5.1.3）
@@ -171,7 +171,7 @@ frontend/src/
 
 | 组件 | 规范 | 完成标准 |
 | --- | --- | --- |
-| AppShell / Sidebar / Topbar | §3、§8.3；260↔72；主区 18px | 分组：评测 + 管理；按角色不渲染 |
+| AppShell / Sidebar / Topbar | §3、§8.3；260↔72；主区 18px | 分组：评测 + 管理；所有已登录成员一致渲染 |
 | 主题切换 | `data-theme` | 明暗令牌；`prefers-reduced-motion` 关装饰动画 |
 | Toast | §14.2 `n-message` | 右上；error 5s；必 Toast 点按规范清单 |
 | Dialog | §14.3 | 取消评测 vs 取消压测两套文案；`prod` 点遮罩不关 |
@@ -205,7 +205,7 @@ frontend/src/
 | Kb | F-RAG-01～05、F-AGT-07 | M3 | 不把 LightRAG 展示成 Chat Completions |
 | AdminProfiles | F-BM-01、F-AGT-06 | M1 | Key 只写不回显；指定唯一 Agent 后端；可标裁判 |
 | AdminStress | F-ST-05、F-CM-05/06、3.4 | M4 | 白名单、单价、并发、预算默认、通知开关 |
-| AdminUsers | F-CM-03 | M1 | 开户/停用/改角色/重置密 |
+| AdminUsers | F-CM-03 | M1 | 开户/停用/重置密/审计查看 |
 
 ---
 
@@ -242,13 +242,13 @@ frontend/src/
 | 工作项 | 完成标准 |
 | --- | --- |
 | Login + Cookie 会话 + 首次改密 Modal（不可点遮罩关） | 设计规范 5.1 / 14.4；密码校验提示 ≥8 且字母+数字 |
-| `auth` store：角色；侧栏按 2.1 裁剪 | 只读进 `/tasks`；工程师进 `/agent` |
-| `/admin/users`：开户 / 停用 / 改角色 / 重置密 Modal | 仅管理员；写操作走 Dialog |
+| `auth` store：身份、停用态与 `must_change_password`；侧栏不按角色裁剪 | 登录后统一进 `/agent`；停用/失效时清理会话 |
+| `/admin/users`：开户 / 停用 / 重置密 Modal | 全员同权；写操作走 Dialog，敏感变更由后端审计 |
 | 退出登录 Dialog（任务不停止） | 规范 §14.3 |
 | 通用上传：`POST /api/files`；≤20MB；类型白名单 | 超限 Toast；附件芯片 |
 | 错误码 → 中文映射表 | 规范 §7.3 |
 
-**依赖**：后端引导管理员、RBAC、`/api/users`、`/api/files`。
+**依赖**：后端首次成员引导、单一 `member` 鉴权、`/api/users`、`/api/files`。
 
 #### W3  协议档管理
 
@@ -267,11 +267,11 @@ frontend/src/
 | 工作项 | 完成标准 |
 | --- | --- |
 | `/tasks` 表：筛状态 / kind；列按规范 5.3 | 徽章色：灰/靛蓝转圈/琥珀/绿/红/灰 |
-| 行：详情抽屉（`task_events`）、取消 Dialog、复制为新任务 | 工程师只能取消自己的；管理员任何人；只读无写按钮 |
+| 行：详情抽屉（`task_events`）、取消 Dialog、复制为新任务 | 所有成员可见；取消仅创建者可用，其他写操作按资源规则呈现 |
 | 取消文案：评测=样本结束后停（M1 无压测，压测文案可先写死到组件待 M4 启用） | 规范 §14.3 |
-| 周三按 API V1.0 实现 `GET/POST /api/sessions` 与 messages 回放 | 不再二选一 |
+| 周三按 API V1.3 实现 `GET/POST /api/sessions` 与 messages 回放 | 不再二选一 |
 | `schemas/confirmCard.ts` + 单测（必填随 kind 变化） | 与 PRD 5.1.2 一致；含 `run.*`（sample_size/concurrency/timeout_s/retry/temperature/max_tokens/system_prompt）；后端未齐也锁字段 |
-| 复制为新任务 → `POST /api/tasks/{id}/rerun` | F-AGT-09；只读无此按钮 |
+| 复制为新任务 → `POST /api/tasks/{id}/rerun` | F-AGT-09；写操作均有 loading 与错误态 |
 
 #### W5  WebSocket Agent + 确认卡（M1 门禁周）
 
@@ -287,8 +287,8 @@ frontend/src/
 
 **M1 前端演示脚本（对齐总计划）**
 
-1. 管理员登录 → `/admin/profiles` 新增协议档（Key 不回显）。  
-2. 工程师 `/agent` 说「帮我下一单 Benchmark」。  
+1. 成员登录 → `/admin/profiles` 新增协议档（Key 不回显）。
+2. 成员在 `/agent` 说「帮我下一单 Benchmark」。
 3. 确认卡出现 → 确认 → 进度坞 `queued → running → succeeded`（后端 mock）。  
 4. 断线重连，消息与进度仍在；`/tasks` 看得到事件。
 
@@ -297,7 +297,7 @@ frontend/src/
 - [ ] `/login` `/agent` `/tasks` `/admin/users` `/admin/profiles` 主路径 + 空态 + 错误码  
 - [ ] WS 短票、心跳、补发  
 - [ ] 确认卡未 ack 无任务  
-- [ ] 只读看不到 Agent 与写入口  
+- [ ] 全部成员看见相同导航；非创建者只能看到不可用的取消说明
 - [ ] 无 TestPilot 字样、无 T logo、无旧胶囊
 
 ---
@@ -323,7 +323,7 @@ frontend/src/
 | `/reports/:id`：1–5 profile 并排；主指标 KPI `.num` | 配置快照可见 |
 | 失败样本表；失败率 | 样本级失败不 Toast |
 | 导出 Markdown；分享 Modal（7 天链接，可复制） | 只读可打开未过期 `?share=` |
-| 管理员冻结基线 Dialog → `POST /api/reports/{id}/baseline`；解冻入口 | 不同版本/指标对比入口禁用并说明；只读无冻结 |
+| 成员冻结基线 Dialog → `POST /api/reports/{id}/baseline`；解冻入口 | 不同版本/指标对比入口禁用并说明；敏感操作写审计 |
 | `BUDGET_EXCEEDED` Toast + 任务 failed 展示 | F-CM-06 |
 | ReportCard 接真 `report_id` | Agent 可跳转报告 |
 
@@ -374,7 +374,7 @@ frontend/src/
 | 工作项 | 完成标准 |
 | --- | --- |
 | `/kb`：文档上传、文档数、索引状态 | `doc_id` 不强制给用户编辑（UUID 后端写） |
-| 管理员：知识库标核心；删他人文档（Dialog + 审计由后端写） | PRD 2.1；工程师只能删自己的 |
+| 知识库标核心；删文档（Dialog + 审计由后端写） | 单一成员权限；资源归属与敏感操作由后端校验 |
 | 文案：查询走 LightRAG `query`，**UI 不写 Chat Completions** | F-RAG-01 |
 | 空壳里的「发起 RAG」先禁用直到 W11 黄金 QA | 避免半成品下单 |
 
@@ -384,7 +384,7 @@ frontend/src/
 | --- | --- |
 | 黄金 QA 上传：`question,reference,expected_doc_ids[]?`；版本 +1 | ≤1 万条前端提示 |
 | 抽屉「发起 RAG 评测」= 确认卡 `rag` 段：`kb_id`+`gold_qa_id`；`rag_mode` 1–4 默认 hybrid；外部 Chat 时 1 个 RAG 服务档 | F-AGT-07 |
-| 报告：Hit Rate@K / MRR / Recall@K（K 默认 5，可展示配置 1–20）；答案 contain | 无 id 样本不进 Hit 分母，**页脚必须写明**；K 用 `run.k`（API V1.0 已冻结，**不改确认卡必填列**） |
+| 报告：Hit Rate@K / MRR / Recall@K（K 默认 5，可展示配置 1–20）；答案 contain | 无 id 样本不进 Hit 分母，**页脚必须写明**；K 用 `run.k`（API V1.3 已冻结，**不改确认卡必填列**） |
 | 用例映射到黄金 QA：缺 `expected_doc_ids` 手补；无 id 仅答案侧 | PRD 5.4.2；M2 已做的 Benchmark 映射不回退 |
 | Agent 确认卡补齐 RAG 字段下拉（W5 已有 schema） | 选项来自 `kb.list` 对应 REST |
 
@@ -392,8 +392,8 @@ frontend/src/
 
 | 工作项 | 完成标准 |
 | --- | --- |
-| 报告 Judge：1–5 分 + 理由；裁判档=被测时 warning Toast，不拦截 | F-BM-08；确认卡 **不新增** judge 必填列；认 `run.use_judge`（API V1.0，默认 false） |
-| RAG 基线冻结（管理员 Dialog，规则同 Benchmark） | F-RAG-06 |
+| 报告 Judge：1–5 分 + 理由；裁判档=被测时 warning Toast，不拦截 | F-BM-08；确认卡 **不新增** judge 必填列；认 `run.use_judge`（API V1.3，默认 false） |
+| RAG 基线冻结（成员 Dialog，规则同 Benchmark） | F-RAG-06 |
 | 退化 ≥5pp **报告内标红**；不发通知、不 Toast 轰炸 | M3 只标红 |
 | 模式对比（1–4 个 `rag_mode`） | 只读可看报告 |
 
@@ -426,7 +426,7 @@ frontend/src/
 
 | 工作项 | 完成标准 |
 | --- | --- |
-| `/admin/stress`：host 白名单、QPS/时长上限展示、单价 /1k tokens、`max_running_tasks`、`max_inflight_model_calls`、默认 `max_usd` | 仅管理员；**M2 起预算已按默认 5 USD 生效**，本页只是改默认值 |
+| `/admin/stress`：host 白名单、QPS/时长上限展示、单价 /1k tokens、`max_running_tasks`、`max_inflight_model_calls`、默认 `max_usd` | 全员同权；**M2 起预算已按默认 5 USD 生效**，本页只是改默认值且写审计 |
 | 无白名单时压测不得显示为 running（列表保持 queued + `WHITELIST`） | 负例 UI |
 | 报告：未填 `sla_p99_ms` 不出「是否达标」；填了展示拐点 | F-ST-06 |
 | 费用估算展示（父任务 usage × 单价） | F-ST-07 |
@@ -458,7 +458,7 @@ frontend/src/
 
 | 工作项 | 完成标准 |
 | --- | --- |
-| E2E 走查：M2 演示再跑 + 只读账号走一遍 | 主路径 + 空态 + 错误码 |
+| E2E 走查：M2 演示再跑 + 非创建者取消任务走一遍 | 主路径 + 空态 + 错误码 |
 | 视觉对照规范 §12：760px 对话列、签名按钮、无旧品牌 | `prefers-reduced-motion` |
 | 分享未登录只读；Cookie 12h 续期不把 token 写入 localStorage | 安全走查前端侧 |
 | 已知问题列表（前端） | 随 V1.0 tag |
@@ -471,7 +471,7 @@ frontend/src/
 
 1. 有 PRD 编号，字段/事件/路由一致。  
 2. 主路径 + 空态 + 错误码可见（卡内或 Toast，按 §14）。  
-3. 权限至少测过工程师 vs 只读。  
+3. 权限至少测过未登录、已登录成员、任务创建者与非创建者。
 4. 确认卡与表单抽屉同一 `schemas/confirmCard.ts`。  
 5. 不把 P1/后续项（Open API、过程可视化、Postman 输入）塞进当前里程碑。  
 6. 不引入参考文档里的产品能力。
@@ -497,7 +497,7 @@ frontend/src/
 | 用例映射大量待补全 | M2 W8 | 手传 JSONL 走数据集主路径，不挡门禁 |
 | LightRAG 未就绪 | M3 | `/kb` 不提前做假 Chat UI |
 | Prometheus/Grafana 对不上 | M4 | 平台 Chart.js 仍可验收；Grafana 为并行门禁 |
-| 会话 REST | M1 W4 | 以 API V1.0 方案 A 为准 |
+| 会话 REST | M1 W4 | 以 API V1.3 方案 A 为准 |
 
 **进度红线**：与总计划相同——门禁未过只修门禁项。
 
@@ -518,7 +518,7 @@ frontend/src/
 
 1. 按 §2.1 建 `web/` 目录与空视图。  
 2. 从参考实现迁入令牌，**改品牌文案为「AI 测试与评估平台」**。  
-3. 路由表一次性写死 PRD 5.8 + `minRole`。  
+3. 路由表一次性写死 PRD 5.8；不实现 `minRole`。
 4. 与后端约定错误码枚举共享（TS 类型可先手写，周三对齐）。  
 5. 周五只演示登录页壳。
 
@@ -526,9 +526,9 @@ frontend/src/
 
 ---
 
-## 附录 A  对照检查记录（V1.1）
+## 附录 A  对照检查记录（V1.3）
 
-检查对象：PRD V1.6.3、设计规范 V1.2、总计划 V1.0、本文、后端计划 V1.1。
+检查对象：PRD V1.6.3、设计规范 V1.2、总计划 V1.0、本文、后端计划 V1.3。
 
 ### A.1 功能编号
 
@@ -559,10 +559,10 @@ PRD 5.8 / 规范 §3 十一条路由均在 §2.2；无改系统提示词页、�
 
 ### A.3 检查中发现并已修
 
-1. 5.9 未列但正文/规范需要的路径：以 API V1.2 为准（含 `GET /api/auth/me`、会话方案 A）。
+1. 5.9 未列但正文/规范需要的路径：以 API V1.3 为准（含 `GET /api/auth/me`、会话方案 A）。
 2. 黄金 QA 映射（PRD 5.4.2）误只写在 M2 → 改到 M3。  
 3. Hit@K 的 `k`、Judge 开关不在确认卡 5.1.2 → API 已冻结为可选 `run.k` / `run.use_judge`。  
-4. 知识库「标核心」、删他人资产（PRD 2.1）补进 W10。  
+4. 知识库「标核心」、删文档与敏感修改审计补进 W10。
 5. F-ST-02 报告侧 TTFT/TPOT 补进 W15。
 
 ### A.4 与总计划日历
@@ -571,7 +571,7 @@ M0–H 周次与日期与总计划第 1.3 / 第 4 节一致。门禁脚本一致
 
 ---
 
-## 11. 实时 API 接入实施清单（V1.2 新增）
+## 11. 实时 API 接入实施清单（V1.3）
 
 本节把原型审计结论转换为 Vue 实施任务。它是第 3 节“契约”的落地顺序：先让失败可见、再替换 Mock、最后做完整业务页；不以“页面有示例数据”作为完成标准。
 
@@ -580,9 +580,9 @@ M0–H 周次与日期与总计划第 1.3 / 第 4 节一致。门禁脚本一致
 | 层 | 前端位置 | 内容 | 规则 |
 | --- | --- | --- | --- |
 | 静态配置 | `constants/`、路由、UI token、表头、枚举 | 不随用户/任务变化的显示配置 | 不得存任务、报告、用户、KPI 或接口示例实体 |
-| API 类型与请求 | `api/http.ts`、`api/*.ts`、`types/` | API V1.2 的请求、响应、错误、分页类型 | 所有业务请求只能从此层发出；`credentials: include` |
+| API 类型与请求 | `api/http.ts`、`api/*.ts`、`types/` | API V1.3 的请求、响应、错误、分页类型 | 所有业务请求只能从此层发出；`credentials: include` |
 | Store/Query 缓存 | `stores/` 或 Vue Query | 最近一次真实响应、loading/error/stale 状态 | 初始为空；写成功后失效并重取，不能以内置样本补空 |
-| Mock | `mocks/`（MSW 或等价 adapter） | 与 API V1.2 同 schema 的固定夹具 | 仅 `VITE_DATA_MODE=mock`；构建/顶栏必须显示 Mock |
+| Mock | `mocks/`（MSW 或等价 adapter） | 与 API V1.3 同 schema 的固定夹具 | 仅 `VITE_DATA_MODE=mock`；构建/顶栏必须显示 Mock |
 
 原型 `assets/app.js` 的 `MOCK_SEED`、`assets/api.js` 的 `?data=mock` 是上述划分的验证样例。生产 Vue 代码不得复制其业务样本到 store。
 
@@ -604,12 +604,12 @@ M0–H 周次与日期与总计划第 1.3 / 第 4 节一致。门禁脚本一致
 | M1 W4–W5 | sessions、agent、tasks | sessions/messages、profiles、tasks | create session、TaskSpec、cancel/rerun | 确认卡只提交后端返回的 schema；WS 重连从 `last_event_id` 补发 |
 | M1 W5 | dispatch | overview/workers/queued tasks | dispatch config | 拓扑、队列、容量仅由响应驱动；无 Worker 时显示空态 |
 | M2 W6–W9 | datasets、cases、reports | datasets/rows、case-sets、reports/samples | upload/save rows、case confirm/map、share/baseline | 编辑保存后 `invalidate`；报告不存在时只显示空/错误态 |
-| M3 W10–W12 | kb、gold QA、RAG report | kb/docs/gold-qa、report | 文档/QA 上传、query | query 结果与返回 doc ID 一一对应；无 ID 样本的指标说明来自 API |
+| M3 W10–W12 | kb、gold QA、RAG report | kb/documents/gold-qa、report | 文档/QA 上传、query | query 结果与返回 doc ID 一一对应；无 ID 样本的指标说明来自 API |
 | M4 W13–W15 | stress settings、series、notify | whitelist/usage/settings/stress-series | whitelist、settings、approve-stress | 图表只用 series，绝不从 WS progress 拼曲线；prod 未会签只呈 queued |
 
 ### 11.4 每个接口页面的联调动作
 
-1. 先在浏览器 Network 中确认请求 URL、Cookie、请求体、响应 schema 与 API V1.2 一致。
+1. 先在浏览器 Network 中确认请求 URL、Cookie、请求体、响应 schema 与 API V1.3 一致。
 2. 对每一个列表做空、分页、401、403、500 五种状态；图表不得用硬编码数列兜底。
 3. 每一个写操作必须覆盖成功、`VALIDATION.fields`、重复点击、刷新后回读四种情形。
 4. 上传操作覆盖 FormData、20MB 限制、服务端异步处理中/失败、重新拉取版本。
@@ -635,4 +635,29 @@ M0–H 周次与日期与总计划第 1.3 / 第 4 节一致。门禁脚本一致
 | FE-API-08 | KB | 文档列表、切块预览、Query 指标和召回都由接口响应驱动 | documents、chunks、query；生产模式没有投影接口时显示说明，不画样本散点 |
 | FE-API-09 | 调度 | Worker/队列只轮询服务端；浏览器不得随机入队、分配或完成任务 | overview/workers/tasks；注册和节点治理分别 POST/PUT worker；手动造队列只允许 Mock |
 | FE-API-10 | Mock 隔离 | 所有示例实体移到 `mocks/`，以显式开关加载 | 代码审查搜索 `Math.random`、`setTimeout`、固定业务 ID；live 分支不得用于生成业务结果 |
+
+### 11.7 原型逐页还原矩阵（V1.3，开发排期的验收基线）
+
+本矩阵以 `Web-Prototype/` 的页面结构为视觉与交互基线，以 API V1.3 为数据唯一来源。这里的“还原”不是复刻示例数字：首次加载、刷新、空态、权限失败和写后回读必须都呈现同一组区域。页面尚无可用后端能力时，只能显示明确的禁用/说明，不得补画样本实体。
+
+| 页面 | 必须还原的原型区域与状态 | 前端交付 / 里程碑 | 数据、写入与验收 |
+| --- | --- | --- | --- |
+| 全局 Shell | 左侧模块导航、顶栏身份/数据模式、主题、统一 Empty/Error/Loading | M1 W2；抽成 `AppShell`、`DataState`、`ApiErrorStrip` | live 初始 store 为空；401 回登录；每页 Network 可见真实请求，数据源标识不得伪装为实时 |
+| Agent | 会话轨、对话流、Thought/Tool/Confirm/Progress/Report 卡、附件、迷你调度轨 | M1 W4–W5；REST 回放 + WS 增量，迷你轨只读复用 dispatch query | sessions/messages、files、WS；刷新后同一 session 与 task 可恢复；无事件时不生成工具调用或进度 |
+| 调度中心 | KPI、健康雷达、策略/容量、Queue→Worker 拓扑、节点治理、分配日志 | M1 W5；`dispatchStore` 以 5s 轮询聚合，不在浏览器派单 | overview/workers/queued tasks/dispatch events/config；无 Worker、无队列、Worker down、更新失败均有独立状态；节点状态变更后重取 |
+| 任务中心 | 24h 状态趋势、筛选表、详情事件、诊断区、去调度入口 | M1 W4；列表与摘要分开 query，详情抽屉复用任务事件 | tasks、task summary、task events；取消仅创建者可提交；筛选/刷新/重跑后 ID 与终态均服务端回读 |
+| 数据集工作台 | 目录树、数据集卡片、行内编辑网格、待补全数、自定义列、AI 候选确认、导入/导出/发起评测 | M2 W6、W9；目录/列定义存入资源，候选停在本地 draft，提交才失效重取 | dataset folders、datasets、rows、AI generate、upload；刷新后目录、列和编辑值不丢；候选不进入评分分母或版本，直至用户保存 |
+| 用例工作台 | 目录树、策略分布、可编辑用例表、自定义列、自检/72h、目标映射、候选确认、导出 | M2 W8–W9；映射目标由服务端列表驱动，倒计时用 `expires_at` | case folders、case sets/cases、confirm/cancel/map/export、AI generate；确认前不落正式目标；超时/拒绝后清晰显示 cancelled |
+| 报告中心 | Benchmark 雷达、RAG 指标、压测曲线、样本表、基线差异、分享/导出、对话解读入口 | M2 W7，RAG/Judge 在 M3，压测曲线/解读在 M4 | reports、samples、stress-series；报告类型由 `kind` 决定；缺少对应报告段时显示空说明，不能显示另一类静态图 |
+| KB | 三栏（库/文档与切块/查询）、四模式检索、召回/指标、Golden QA、Rerank 对照区域 | M3 W10–W12；文档与 chunks 使用分页 query，检索结果按返回 doc/chunk ID 标识 | kb/documents/chunks/query/gold-qa；投影散点与 rerank 实验只在 capability=true 时渲染；V1.0 未提供 capability 时保留区域说明，禁止本地样本散点 |
+| 协议档与智能体 | 四 Tab 壳：协议档、MCP 工具、技能、运行时；探活与敏感字段掩码 | M1 W3；协议档/运行时为可编辑，工具清单为服务端受控只读 | profiles/check、mcp tools、settings；V1.0 不接入外部 MCP Server 或自定义 System Prompt 写入，相关原型操作显示“未纳入 PRD V1.0”，不得假成功 |
+| 压测治理 | 7 日 QPS、白名单、容量/预算阈值、用量、通知开关 | M4 W14–W15；图表仅消费 usage/series，写后重取 | admin stress settings/whitelist/usage；`/metrics` 不由浏览器调用；无白名单和未会签均维持 queued |
+| 成员与账号 | KPI、成员表、登录活动、审计抽屉、开户/停用/改密 | M1 W2；普通账号与安全审计数据分区加载 | users、member audit logs、activity summary；单一 `member` 不展示改角色控件；异地登录 AI 判断无 API 前只显示“能力未启用” |
+
+### 11.8 原型还原的前端门禁
+
+1. 每页至少录制一次 live 模式的“首次读 → 写 → 刷新回读”证据；目录、列定义、倒计时、拓扑与图表不接受页面内变量作为事实来源。
+2. 逐页比对上表区域：若 V1.0 不做某能力，区域必须保留位置并展示受控说明；不得以 Mock 卡片、曲线或候选替代。
+3. Playwright 覆盖 Agent、调度、数据集、用例、KB、报告六条主链；截图同时显示数据源标识、空/错态与关键写后状态。
+4. 合入前由前后端共同签署“页面—接口—持久化—验收”四列；少任意一列，页面只能标为“结构已还原”，不能标为“真实联调完成”。
 

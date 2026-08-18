@@ -2,14 +2,14 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.2 |
+| 文档版本 | V1.3 |
 | 对应 PRD | V1.6.3（功能唯一权威） |
 | 对应设计规范 | V1.2（仅约束对外字段 / 错误码 / 事件名，不约束像素） |
 | 对应总计划 | V1.0（日历与门禁） |
-| 对应前端计划 | V1.1（契约消费者） |
-| 对应 API | V1.2（路径/JSON 唯一冻结） |
+| 对应前端计划 | V1.3（契约消费者） |
+| 对应 API | V1.3（路径/JSON 唯一冻结） |
 | 撰写日期 | 2026-08-17 |
-| 最近修订 | 2026-08-18：增加现有实现缺口、接口批次、契约测试与真实联调门禁 |
+| 最近修订 | 2026-08-18：增加原型逐页还原矩阵、持久化对象与实时联调门禁 |
 | 计划起点 | 2026-08-18 |
 | V1.0 目标发布 | 2026-12-04 |
 | 总工期 | **16 周**（与总计划同一日历） |
@@ -26,15 +26,15 @@
 
 若只有 2 人（后端兼 Go）：按总计划改为 20 周，不在本文内偷偷砍 M3/M4 范围。
 
-### 1.3 V1.2 权限口径校正
+### 1.3 V1.3 权限口径校正
 
-PRD 2.1 冻结为单一 `member`、全员同权。本文早期出现的 RBAC、`admin`、`engineer`、`readonly` 以及“仅管理员”均为旧版遗留，**不实现也不测试**；后续 API V1.2 §1.4、§12 覆盖这些条目。保留 `/api/admin/*` 仅为历史路径命名，不代表角色鉴权。任务取消限创建者；`prod` 会签由非创建者正常成员完成；所有敏感修改写审计。
+PRD 2.1 冻结为单一 `member`、全员同权。本文不实现 RBAC、`admin`、`engineer`、`readonly` 或角色变更；保留 `/api/admin/*` 仅为历史路径命名，不代表角色鉴权。任务取消限创建者；`prod` 会签由非创建者正常成员完成；所有敏感修改写审计。
 
 ### 1.1 范围
 
 | 做（V1.0 后端） | 不做 |
 | --- | --- |
-| FastAPI REST + WS Agent Host；内部 MCP；PG + worker | 外部 MCP；改系统提示词接口 |
+| FastAPI REST + WS Agent Host；内部 MCP；PG + worker | 外部 MCP 连接；改系统提示词接口 |
 | 三协议适配器；规则评分；用例 Skill（自研对齐，不拷源码） | HumanEval 沙箱；被测走 WS；内置公开集 |
 | LightRAG 原生 `query` 适配 + 外部 OpenAI Chat RAG | 把 LightRAG 伪装成 Chat Completions |
 | 先评后压：worker 下发 **stress 容器**（go-stress-testing 扩展） | api 进程内 Python 压测替代；分布式压测；评测与压测并行 |
@@ -78,7 +78,7 @@ PRD 2.1 冻结为单一 `member`、全员同权。本文早期出现的 RBAC、`
 | DB | PostgreSQL 16、Alembic | PRD 6.1 / 6.4 |
 | 队列 | PG `tasks` 表 + worker 轮询 | PRD 1.6、3.1 |
 | Key | Fernet，密钥来自环境变量 | PRD 8 |
-| Agent | 管理员指定 **一个** 协议档；上下文最近 20 条，系统提示词始终保留 | F-AGT-05/06 |
+| Agent | 平台配置指定 **一个** 协议档；上下文最近 20 条，系统提示词始终保留 | F-AGT-05/06 |
 | RAG | LightRAG 锁 Git tag；外部仅 `POST {base}/v1/chat/completions` | F-RAG-01/02 |
 | 压测 | go-stress-testing 扩展，独立容器，保留 NOTICE（Apache-2.0） | F-ST、6.5 |
 | 部署 | Compose：`web` `api` `worker` `postgres` `lightrag` `stress` | PRD 1.3 |
@@ -102,23 +102,23 @@ deploy/        compose、env 样例、Grafana dashboard JSON
 
 | 表 | 用途 | 最早写入 |
 | --- | --- | --- |
-| `users` | 本地账号、角色、停用 | M1 W2 |
+| `users` | 本地账号、停用、首次改密标记 | M1 W2 |
 | `sessions` `messages` | Agent 会话与历史 | M1 W5 |
 | `ws_events` | 事件持久化，按 `event_id` 补发 | M1 W5 |
 | `protocol_profiles` | 三协议档；Key 密文 | M1 W3 |
 | `settings` | Agent 后端、并发、预算默认、白名单、单价、通知开关 | M1 W3 起，M4 补齐 |
 | `files` | 路径 + sha256；磁盘 `./data/files/{id}` | M1 W2 |
-| `datasets` `dataset_rows` | 集版本、行、待补全标记 | M2 W6 |
-| `case_sets` `cases` `case_maps` | 用例生成、映射、`source_case_id` | M2 W8 |
+| `dataset_folders` `datasets` `dataset_rows` | 目录、集版本、列定义、行、待补全标记 | M2 W6 |
+| `case_folders` `case_sets` `cases` `case_maps` | 目录、用例列定义、生成、映射、`source_case_id` | M2 W8 |
 | `kbs` `kb_docs` `gold_qa` | 知识库、文档、黄金 QA 版本 | M3 |
 | `tasks` `task_events` | 状态机、进度、取消 | M1 W4 |
 | `eval_items` | 样本级结果 / 错误 | M2 |
 | `baselines` | 冻结的 succeeded 报告 | M2 / M3 |
 | `reports` `share_links` | 报告与 7 天分享 | M2 |
-| `audit_logs` | 登录失败、Key、基线、白名单、prod、角色 | M1 W2 |
+| `audit_logs` | 登录失败、Key、基线、白名单、prod、账号状态 | M1 W2 |
 | `usage_ledger` | token 费用累计 | M2 W7 |
 
-不新增产品表去支撑 V1.1 能力。
+不新增产品表去支撑未进入 V1.0 的能力；原型中目录、列定义、日志与摘要等已展示区域除外，必须按本表持久化。
 
 ---
 
@@ -137,13 +137,13 @@ deploy/        compose、env 样例、Grafana dashboard JSON
 | POST | `/api/auth/ws-ticket` | F-AGT-01 | M1 |
 | GET | `/ws/agent?ticket=` | F-AGT-01 | M1 |
 | GET/POST | `/api/sessions`；GET `/api/sessions/{id}/messages` | 6.4；**方案 A 已冻结** | M1 |
-| GET/POST | `/api/users`；PATCH `/api/users/{id}`；POST `/api/users/{id}/reset-password` | F-CM-03 | M1 |
+| GET/POST | `/api/users`；PUT `/api/users/{id}`、`/status`；GET `/api/users/activity-summary`；POST `/api/users/{id}/reset-password` | F-CM-03 | M1 |
 | GET/POST | `/api/files`；GET `/api/files/{id}` | F-CM-07 | M1 |
 | CRUD | `/api/profiles`；POST `/api/profiles/{id}/check` | F-BM-01 | M1 |
 | CRUD | `/api/datasets`；POST `/{id}/upload`；GET `/{id}/rows` | F-BM-03/04 | M2 |
 | GET | `/api/case-sets` `/{id}`；POST `/{id}/confirm` `/{id}/map`；GET `/{id}/export` | 5.4 | M2/M3 |
-| CRUD | `/api/kb`；POST `/{id}/docs`；DELETE `/{id}/docs/{doc_id}` | F-RAG-01 | M3 |
-| CRUD | `/api/gold-qa`；POST `/{id}/upload` | F-RAG-03 | M3 |
+| CRUD | `/api/kb`；POST `/{id}/documents`；DELETE `/{id}/documents/{doc_id}` | F-RAG-01 | M3 |
+| CRUD | `/api/kb/{id}/gold-qa` | F-RAG-03 | M3 |
 | POST GET | `/api/tasks`；GET `/{id}`；POST `/{id}/cancel` `/{id}/rerun` | F-AGT-07/09、F-CM-01 | M1/M2 |
 | POST | `/api/tasks/{id}/approve-stress` | F-ST-05 补全 | M4 |
 | GET | `/api/tasks/{id}/stress-series` | F-ST-03 补全 | M4 |
@@ -151,9 +151,9 @@ deploy/        compose、env 样例、Grafana dashboard JSON
 | GET/PUT | `/api/admin/settings` | 5.9 | M1/M4 |
 | GET | `/api/admin/audit-logs` | F-CM-04 补全 | M1 |
 
-路径、JSON、错误体以 **`AI测试与评估平台-API.md` V1.0** 为准。会话不再二选一。
+路径、JSON、错误体以 **`AI测试与评估平台-API.md` V1.3** 为准。会话不再二选一。
 
-**审计打点（F-CM-04，必须写库，不必做独立页）：** 登录失败、Key 变更、基线冻结/解冻、白名单变更、`prod` 会签/发压、角色变更。
+**审计打点（F-CM-04，必须写库，不必做独立页）：** 登录失败、Key 变更、基线冻结/解冻、白名单变更、`prod` 会签/发压、成员账号状态变更。
 
 禁止：长期 JWT 进 WS query；GET 回显 Key；公网暴露 stress `/metrics`。  
 **不把** 压测时序塞进 WS `progress`（PRD 字段仅 `percent?`/`done`/`total`/`message`）。
@@ -200,7 +200,7 @@ queued → running → succeeded | failed | cancelled
 
 | 规则 | 实现要点 |
 | --- | --- |
-| 取消权限 | 创建者或管理员；评测=当前样本结束后停；**压测=立即停发** |
+| 取消权限 | 仅任务创建者；评测=当前样本结束后停；**压测=立即停发** |
 | 用例 | 确认入库才 succeeded；worker 不再续跑同一任务 |
 | 先评后压 | 父任务非 succeeded 不得创建 `kind=stress` 子任务 |
 | `prod` | 未会签：质量报告保留，压测保持 queued，通知（M4） |
@@ -240,12 +240,12 @@ Python 与 Go/Infra 分列。前端 mock 不挡后端单测。
 
 | 工作项 | 完成标准 |
 | --- | --- |
-| 环境变量创建唯一引导管理员；登录后必须改密 | `users.must_change_password`；密码 ≥8 位含字母和数字 |
+| 环境变量创建首位成员；登录后必须改密 | `users.must_change_password`；密码 ≥8 位含字母和数字 |
 | HttpOnly Cookie 12h 可续 | 前端不拿长期 JWT |
-| RBAC：管理员 / 工程师 / 只读 | 越权 `UNAUTHORIZED` |
-| 用户 CRUD、停用、重置密码 | 角色变更写审计 |
+| 单一 `member` 鉴权、资源创建者校验 | 未登录 `UNAUTHORIZED`；非创建者取消任务返回 `UNAUTHORIZED` |
+| 用户 CRUD、停用、重置密码 | 账号状态变更写审计；不提供改角色字段 |
 | 文件：`./data/files/{id}` + sha256；≤20MB；类型白名单 | 路径存 PG |
-| `audit_logs`：登录失败、角色变更 | `GET /api/admin/audit-logs` 可按时间查（无独立页） |
+| `audit_logs`：登录失败、账号状态变更 | `GET /api/admin/audit-logs` 可按时间查（无独立页） |
 
 #### W3  协议档 + 三协议适配器（Python）
 
@@ -255,7 +255,7 @@ Python 与 Go/Infra 分列。前端 mock 不挡后端单测。
 | 适配器：`openai_chat` / `openai_responses` / `anthropic_messages` | 入 `messages`，出 `text,usage,raw,latency_ms`；鉴权头按 PRD 6.2 |
 | 每种协议 ≥2 夹具单测（成功 + 4xx） | CI 必过；`UPSTREAM` 可区分 |
 | `POST /api/profiles/{id}/check` | 超时/4xx 可测；响应与日志均无 Key |
-| `settings`：指定 Agent 后端协议档 | 仅一个 |
+| `settings`：指定 Agent 后端协议档 | 平台仅一个；全员可见，敏感字段不回显 |
 
 **Go/Infra**：保持占位容器健康检查；不挡 W3。
 
@@ -271,7 +271,7 @@ Python 与 Go/Infra 分列。前端 mock 不挡后端单测。
 | 短 MCP：`model.list` `task.get` `task.create` `task.cancel` | Agent 不执行长任务 |
 | 长任务 mock 成功写事件 | 同一 `benchmark.run` 入口，M2 替换真执行 |
 | `GET /api/tasks` 筛状态 / kind | F-CM-01 |
-| 冻结短工具 JSON Schema；实现 `/api/sessions`（API 方案 A） | 以 API V1.0 为准 |
+| 冻结短工具 JSON Schema；实现 `/api/sessions`（API 方案 A） | 以 API V1.3 为准 |
 
 #### W5  WebSocket Agent + 确认卡（M1 门禁周）
 
@@ -291,11 +291,11 @@ Python 与 Go/Infra 分列。前端 mock 不挡后端单测。
 
 **M1 后端出口**
 
-- [ ] Cookie + RBAC + 文件 + 审计  
+- [ ] Cookie + 单一成员鉴权 + 文件 + 审计
 - [ ] 协议档 + 适配器单测  
 - [ ] WS 短票、心跳、补发  
 - [ ] 确认卡未确认不入队  
-- [ ] 工程师只能取消自己的任务，管理员可取消任何人的  
+- [ ] 仅任务创建者可取消自己的任务，非创建者负例可测
 - [ ] 长任务 mock 与真执行同一入口  
 
 ---
@@ -367,7 +367,7 @@ Python 与 Go/Infra 分列。前端 mock 不挡后端单测。
 | 角色 | 工作项 | 完成标准 |
 | --- | --- | --- |
 | Go/Infra | Compose 正式接入 LightRAG，锁 tag；索引卷；内网 DNS | MIT；镜像可复现 |
-| Python | 上传文档建索引；`doc_id`=UUID 写入 metadata | `/api/kb`；管理员可标核心、删他人文档 |
+| Python | 上传文档建索引；`doc_id`=UUID 写入 metadata | `/api/kb`；成员可标核心、删文档，敏感修改写审计 |
 | Python | 查询原生 `query` API，适配 `{text, contexts[{id,text}]}` | **不**伪装 OpenAI Chat |
 | Python | 模式 naive/local/global/hybrid，一任务 1–4，默认 hybrid | 确认卡字段生效 |
 
@@ -377,7 +377,7 @@ Python 与 Go/Infra 分列。前端 mock 不挡后端单测。
 | --- | --- |
 | 黄金 QA：`question,reference,expected_doc_ids[]?`；≤1 万条；版本 +1 | 覆盖上传 |
 | 用例映射黄金 QA：问句→question，预期→reference；doc_ids 手补；无 id 仅答案侧 | PRD 5.4.2 |
-| Hit Rate@K / MRR / Recall@K；K 默认 5、可配 1–20 | 无 id 样本不进 Hit 分母；字段名 **`run.k`**（API V1.0 已冻结） |
+| Hit Rate@K / MRR / Recall@K；K 默认 5、可配 1–20 | 无 id 样本不进 Hit 分母；字段名 **`run.k`**（API V1.3 已冻结） |
 | 答案侧 contain；命中=返回 id 集合与 expected 相交 | 5.3.1 |
 | 外部 RAG：仅 Chat Completions；content + 可选 context/contexts[] | F-RAG-02 |
 | 同 kb + gold 版本对比；退化 ≥5pp 报告标红 | **不发通知** |
@@ -386,7 +386,7 @@ Python 与 Go/Infra 分列。前端 mock 不挡后端单测。
 
 | 工作项 | 完成标准 |
 | --- | --- |
-| LLM-as-Judge：1–5 + 理由；裁判档 ≠ 被测时警告、不强制 | 只对已有输出打分，不重跑；**不新增确认卡必填列**；`run.use_judge` 默认 false（API V1.0） |
+| LLM-as-Judge：1–5 + 理由；裁判档 ≠ 被测时警告、不强制 | 只对已有输出打分，不重跑；**不新增确认卡必填列**；`run.use_judge` 默认 false（API V1.3） |
 | RAG 基线冻结，权限同 Benchmark | `POST /api/reports/{id}/baseline` |
 | `kb.list` 短工具 | Agent 可列库 |
 | Grafana dashboard JSON 草稿；与监控对齐网段 | 总计划可并行项；指标名 M4 才暴露 |
@@ -428,8 +428,8 @@ Python 与 Go/Infra 分列。前端 mock 不挡后端单测。
 | Go | `/metrics` 内网；Basic 或 IP 白名单；前缀 `ai_eval_stress_` | label `env,model,task_id`；结束后 10min 停该 task 序列 |
 | Infra | 对齐现网 `job=ai-eval-stress` | Grafana 能按 task_id 查 |
 | Python | 未填 `sla_p99_ms` 不出达标；填了则拐点=首次 P99>SLA 或错误率≥1% | F-ST-06 |
-| Python | 父任务 usage × 单价估算窗口费用 | 管理员配 /1k tokens |
-| Python | `PUT /api/admin/settings`：白名单、单价、并发、预算默认 | 仅管理员；白名单/单价变更写审计 |
+| Python | 父任务 usage × 单价估算窗口费用 | 成员配置 /1k tokens，写审计 |
+| Python | `PUT /api/admin/settings`：白名单、单价、并发、预算默认 | 全员同权；白名单/单价变更写审计 |
 
 W13 先冻结指标名；Grafana dashboard JSON 可在 W12–W14 微调。
 
@@ -438,7 +438,7 @@ W13 先冻结指标名；Grafana dashboard JSON 可在 W12–W14 微调。
 | 工作项 | 完成标准 |
 | --- | --- |
 | 解读 Skill：仅已有 `report_id`，不重跑评测 | F-AGT-08 |
-| 通知：终态、退化、会签；企微 / 邮件 / 出站 Webhook；管理员开关默认关 | F-CM-05 |
+| 通知：终态、退化、会签；企微 / 邮件 / 出站 Webhook；成员开关默认关 | F-CM-05 |
 | 向 api 提供压测时序（供前端 Chart.js 与 Grafana 同 task_id） | F-ST-03 |
 | 进度事件持续推送 | Agent ProgressDock |
 
@@ -470,8 +470,8 @@ W13 先冻结指标名；Grafana dashboard JSON 可在 W12–W14 微调。
 
 1. 有 PRD 编号，行为与文档一致。  
 2. 单测或夹具；涉及协议必须含成功 + 4xx。  
-3. 权限至少测过工程师 vs 只读。  
-4. 须打点的审计已写：Key、基线、白名单、prod、角色、登录失败。  
+3. 权限至少测过未登录、已登录成员、任务创建者与非创建者。
+4. 须打点的审计已写：Key、基线、白名单、prod、账号状态、登录失败。
 5. 不把 P1/后续项塞进当前里程碑冒充完成。  
 6. 长任务不在 WS 进程里跑完。
 
@@ -553,9 +553,9 @@ V1.1 不占本周期人力，除非 V1.0 门禁已全绿且产品改 PRD。
 
 ---
 
-## 附录 A  对照检查记录（V1.1）
+## 附录 A  对照检查记录（V1.3）
 
-检查对象：PRD V1.6.3、设计规范 V1.2、总计划 V1.0、前端计划 V1.1、本文。
+检查对象：PRD V1.6.3、设计规范 V1.2、总计划 V1.0、前端计划 V1.3、本文。
 
 ### A.1 功能编号
 
@@ -586,21 +586,21 @@ PRD 6.4 全部表在 §3。PRD 5.5 全部工具在 §4.3（含阶段）。PRD 5.
 2. F-AGT-09 重跑未进 W4 周任务 → 已补。  
 3. `max_inflight_model_calls=8` 应在真调用周（W6）生效，不只 M4 管理页。  
 4. 黄金 QA 映射从 M2 挪到 M3，避免无 KB 时空做。  
-5. Hit@K 的 `k`、`run.use_judge` 不在 PRD 5.1.2 → API V1.0 冻结为可选字段。  
-6. 知识库标核心、删他人文档（PRD 2.1）补进 W10。  
-7. 审计打点清单写全（登录失败、Key、基线、白名单、prod、角色）。  
+5. Hit@K 的 `k`、`run.use_judge` 不在 PRD 5.1.2 → API V1.3 冻结为可选字段。
+6. 知识库标核心、删文档与敏感修改审计补进 W10。
+7. 审计打点清单写全（登录失败、Key、基线、白名单、prod、账号状态）。
 8. Grafana JSON 草稿按总计划放到 M3 W12。
 
 ### A.4 与总计划 / 前端计划
 
 日历、门禁脚本、关键路径、可并行项、红线与总计划一致。  
-REST/WS 以 **API V1.2** 为准，与前端计划路径表对齐（含 `GET /api/auth/me`、会话方案 A、check / baseline / approve-stress / stress-series）。
+REST/WS 以 **API V1.3** 为准，与前端计划路径表对齐（含 `GET /api/auth/me`、会话方案 A、check / baseline / approve-stress / stress-series）。
 
 ---
 
-## 12. API 缺口收敛与真实联调实施计划（V1.2 新增）
+## 12. API 缺口收敛与真实联调实施计划（V1.3）
 
-本节以 2026-08-18 的只读代码检查为基线。当前 FastAPI 骨架已有 health、认证、profiles 的部分 CRUD、datasets 的部分 CRUD、tasks 的部分 CRUD、admin settings 和最小 WS；它们不足以满足 API V1.2。以下任务必须按批次完成，不能因原型能够显示 Mock 而跳过。
+本节以 2026-08-18 的只读代码检查为基线。当前 FastAPI 骨架已有 health、认证、profiles 的部分 CRUD、datasets 的部分 CRUD、tasks 的部分 CRUD、admin settings 和最小 WS；它们不足以满足 API V1.3。以下任务必须按批次完成，不能因原型能够显示 Mock 而跳过。
 
 ### 12.1 所有批次的横向契约要求
 
@@ -618,10 +618,10 @@ REST/WS 以 **API V1.2** 为准，与前端计划路径表对齐（含 `GET /api
 | 批次 | 周次 | 必须完成的 router/服务 | 依赖 | 联调出口 |
 | --- | --- | --- | --- |
 | B0 契约底座 | W1 | exception handler、pagination、CORS/Cookie、OpenAPI tag、health | DB/Compose | `GET /health`、错误体、带 Cookie 的跨端口 smoke test |
-| B1 身份与配置 | W2–W3 | auth/change-password；users/status/reset/audit；files；profiles get/update/check；settings | users/audit/files/profiles 表、Fernet | 原型 login/profiles/users 页面实时模式可读写且 Key 不回显 |
-| B2 会话与任务控制面 | W4–W5 | sessions/messages、task events、dispatch overview/workers/config、WS 短票/补发 | tasks/task_events/ws_events、worker poller | 确认卡提交 queued，刷新/断线后状态与事件一致 |
-| B3 Benchmark 与用例 | W6–W9 | datasets detail/upload/rows/AI generate；case-sets/cases/confirm/map/export；reports/samples/share/baseline | files、dataset versions、eval items、case sets、usage ledger | 上传→TaskSpec→结果报告完整回读；预算/待补全负例可验证 |
-| B4 KB/RAG | W10–W12 | KB CRUD、docs、gold QA、query adapter、RAG reports | LightRAG service、KB/doc/QA 版本表 | 文档→索引→query→Hit@K/答案报告可追溯 |
+| B1 身份与配置 | W2–W3 | auth/change-password；users/status/reset/audit/activity-summary；files；profiles get/update/check；settings；mcp tools inventory | users/audit/files/profiles 表、Fernet | 原型 login/profiles/users 页面实时模式可读写且 Key 不回显 |
+| B2 会话与任务控制面 | W4–W5 | sessions/messages、task events/summary、dispatch overview/workers/events/config、WS 短票/补发 | tasks/task_events/ws_events/dispatch_events、worker poller | 确认卡提交 queued，刷新/断线后状态与事件一致 |
+| B3 Benchmark 与用例 | W6–W9 | dataset folders/detail/upload/rows/AI generate；case folders/case-sets/cases/confirm/map/export；reports/samples/share/baseline | files、目录/列定义、dataset versions、eval items、case sets、usage ledger | 上传→TaskSpec→结果报告完整回读；目录/列/待补全负例可验证 |
+| B4 KB/RAG | W10–W12 | KB CRUD、documents、gold QA、query adapter、capabilities、RAG reports | LightRAG service、KB/doc/QA 版本表 | 文档→索引→query→Hit@K/答案报告可追溯；无实验能力时明确返回 false |
 | B5 压测和治理 | W13–W15 | stress settings/whitelist/usage、approve-stress、stress-series、notify | stress container、Prometheus、audit | 无白名单/无会签均不能 running；曲线同 `task_id` |
 
 ### 12.3 B0–B2 详细拆分（先解除当前原型阻塞）
@@ -633,13 +633,13 @@ REST/WS 以 **API V1.2** 为准，与前端计划路径表对齐（含 `GET /api
 | 协议档 | list/get/create/update/delete/check；API key 仅写入加密列，GET 仅回 `has_api_key` | 三协议校验成功+4xx fixture；日志脱敏扫描 |
 | 会话 | `GET/POST /sessions`、messages 只读回放；会话归属校验 | 新建返回服务端 UUID；重连后的 `last_event_id` 不重复 |
 | 任务 | TaskSpec schema、list/detail/cancel/rerun/events；排队/运行容量控制 | 创建、过滤、终态重跑、权限、协作式取消；API 不伪造 succeeded |
-| 调度 | overview/workers/config 只暴露允许字段 | 无 worker/满队列/worker down 三种响应均被原型正确呈现 |
+| 调度 | overview/workers/events/config 只暴露允许字段 | 无 worker/满队列/worker down 三种响应均被原型正确呈现；事件与拓扑同 task/worker ID |
 
 ### 12.4 B3–B5 的数据与异步边界
 
 | 域 | 写入的事实数据 | 异步状态 | 不能做的捷径 |
 | --- | --- | --- | --- |
-| 数据集/用例 | 文件 hash、dataset/case-set 版本、行/映射、确认时间 | 上传/生成可 `processing`，完成后生成可读版本 | 用原型数组保存编辑结果，或以文件名代替版本 ID |
+| 数据集/用例 | 文件 hash、目录、列定义、dataset/case-set 版本、行/映射、确认时间 | 上传/生成可 `processing`，完成后生成可读版本 | 用原型数组保存编辑结果，或以文件名代替版本 ID |
 | 评测/报告 | TaskSpec 快照、eval item、指标、样本错误、share token、baseline | worker 只推进状态/事件；报告终态可读 | 报告由浏览器计算/拼接；任务失败仍生成成功报告 |
 | KB/RAG | kb/doc/chunk/golden QA 版本、expected_doc_ids | 索引状态和 query results 可轮询/订阅 | 伪装 LightRAG 为 Chat；无 doc ID 仍计入 Hit 分母 |
 | 压测 | 父任务快照、whitelist、approval、time series、usage | stress 子进程启动/停止由 worker 协调 | 在 API 进程压测；从 WS progress 补造曲线 |
@@ -654,7 +654,7 @@ REST/WS 以 **API V1.2** 为准，与前端计划路径表对齐（含 `GET /api
 | M3 | LightRAG 和外部 RAG 均以平台 KB/报告接口返回；版本和指标分母可核对 |
 | M4 | 白名单、会签、立即停发、series、审计和 Prometheus label 同时验证 |
 
-实现顺序遵循本节，不以当前 router 是否能返回 200 判定完成；必须满足 API V1.2 字段、权限、状态机和持久化语义。
+实现顺序遵循本节，不以当前 router 是否能返回 200 判定完成；必须满足 API V1.3 字段、权限、状态机和持久化语义。
 
 ### 12.6 复查后补齐的 API 交付拆分
 
@@ -667,4 +667,28 @@ REST/WS 以 **API V1.2** 为准，与前端计划路径表对齐（含 `GET /api
 | BE-API-11 | B2 | Worker 注册/治理 `POST /dispatch/workers`、`PUT /dispatch/workers/{id}` 与 overview 聚合字段 | 注册、draining、offline、caps/weight 的权限/校验/审计测试；任务分配仅 worker 服务执行，HTTP 页面不改变队列状态 |
 
 本批补齐后，前端实时模式可以把“无响应/无实体”直接呈现为空态或错误态；后端不得用演示数据填充这些响应。
+
+### 12.7 原型逐页还原的后端实施矩阵（V1.3）
+
+前端只有在下表的“事实数据”被服务端持久化、接口可回读、异步所有权明确后，才可以将原型页面标为真实联调。`Web-Prototype/` 中的图、树、卡片和倒计时均不是后端返回示例数据的理由。
+
+| 原型页面 | 后端必须提供的事实数据 / 契约 | 持久化与异步边界 | 批次 / 验收 |
+| --- | --- | --- | --- |
+| Agent | sessions/messages、`ws_events`、files、固定 Agent WS 事件；会话迷你调度只读使用 dispatch 汇总 | `messages` 与 `ws_events` 按 session 保存；worker 推进 task，WS 只转发/补发 | B2；重连不漏不重，服务端无事件时没有客户端伪造的进度或报告 |
+| 调度中心 | overview、workers、queued task 摘要、`GET /dispatch/events?after_id=&limit=`、config | 新增 `dispatch_events`（分配、开始、draining、完成/失败）；仅 worker/调度器写入，不由 HTTP 操作队列 | B2；拓扑、日志与 KPI 使用同一 `task_id`/`worker_id`；空池、离线、满队列可测 |
+| 任务中心 | tasks/list/detail/events 与 `GET /tasks/summary?from=&to=`（24h 状态计数、趋势、失败归因摘要） | summary 可由 tasks/task_events 聚合，不保存浏览器统计；诊断仅返回可追溯规则/事件 ID，不冒充生成式结论 | B2；筛选、详情、summary 的总数一致；取消仅创建者可成功 |
+| 数据集 | dataset folder CRUD；dataset 的 `folder_id`、`column_schema`、版本；rows 批量写回；候选生成 | `dataset_folders`、`datasets.column_schema JSONB`、`dataset_rows.data JSONB`；AI 候选不写库，采纳后的 rows PUT 在事务中落库并递增版本 | B3；刷新后树、列、编辑值和待补全计数一致；候选未保存前不得出现在 GET rows |
+| 用例 | case folder CRUD；case set 的 `folder_id`、`column_schema`、cases、检查项、expires_at、mapping target；候选生成/确认/导出 | `case_folders`、`case_sets.column_schema JSONB`、`cases.data JSONB`；72h 扫描器只改变 case set/task 状态；confirm/map 分别事务化并记录目标版本 | B3；刷新后策略计数与行数一致；超时不可再确认；映射失败不制造半完成结果 |
+| 报告 | `GET /reports/{id}` 以 `kind` 返回 Benchmark/RAG/stress 对应段；samples、share、baseline、stress series | report/eval item/usage/baseline 均由 worker 写；图表计算可在服务端聚合，但不在浏览器拼成功报告 | B3–B5；任一段缺失返回空/不可用说明；基线差异可用任务快照复算 |
+| KB | KB/documents/chunks/query/gold QA；query 返回 doc/chunk ID、score、mode、metric；metadata capabilities | kb/doc/chunk/QA 均与索引版本关联；LightRAG 索引任务异步更新状态 | B4；文档、切块、召回 ID 可逐项追溯。向量投影和 rerank 实验是 F-RAG-07 后续能力，V1.0 仅返回 `capabilities.projection=false`/`rerank_compare=false` |
+| 协议档与运行时 | profiles/check、admin settings、`GET /mcp/tools` 的内置短工具清单 | profiles/settings/audit logs；密钥只写加密列。V1.0 不提供外部 MCP 节点接入或自定义技能/Prompt 写入 | B1；工具清单由服务端配置；原型对应写入口返回明确能力未启用，而非成功空响应 |
+| 压测治理 | admin stress settings/whitelist/usage、approve-stress、stress-series、通知状态 | settings/whitelist/usage ledger/task series/audit；stress 容器独占时序写入 | B5；7日曲线来自 usage，任务曲线来自 task series；浏览器不请求 `/metrics` |
+| 成员与账号 | users、member audit logs、`GET /users/activity-summary?from=&to=` | users/audit logs；登录活动和 KPI 从审计聚合，异地登录 AI 识别不在 V1.0 数据范围 | B1；停用后 login/me/WS 一致拒绝；V1.0 不出现角色字段或改角色审计 |
+
+### 12.8 还原门禁与契约测试
+
+1. 每个矩阵行须有：router 集成测试、迁移测试、至少一条“写入后重新 GET”的测试和前端 live 走查 HAR。
+2. `GET /dispatch/events`、`GET /tasks/summary`、目录 CRUD 与列定义是原型可见状态的新增冻结契约；先更新 API V1.3 和生成的 OpenAPI，再写 router。
+3. 能力暂不进入 V1.0 时，服务端返回 `capabilities` 或 HTTP 409 的 `VALIDATION` 能力未启用错误；不得返回随机数据、空成功对象或示例实体。
+4. B2、B3、B4、B5 的出口分别签署一次矩阵回归。任意页面的持久化、事件来源或空态缺失，不能跨阶段宣称“原型已还原”。
 
