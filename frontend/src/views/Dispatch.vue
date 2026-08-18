@@ -1,153 +1,242 @@
 <template>
   <div class="dispatch-page" data-od-id="dispatch-page">
-    <!-- ═══ 1. 调度大盘 KPI 趋势带（数字滚动 + 迷你趋势线） ═══ -->
+    <!-- ═══ 1. 调度大盘 KPI 趋势带（数字滚动 + 迷你趋势线 + 发光描边） ═══ -->
     <div class="kpi-grid mb16" data-od-id="dispatch-kpis" style="--glow-c: var(--c-agent)">
-      <div class="kpi">
+      <div class="kpi kpi-glow">
         <div class="kpi-num num">{{ onlineDisplay }}<span class="unit">/ {{ totalWorkers }}</span></div>
         <div class="kpi-label">在线 Worker 节点</div>
       </div>
-      <div class="kpi kpi-trend">
+      <div class="kpi kpi-trend kpi-glow">
         <div class="kpi-num num">{{ queueDisplay }}</div>
         <div class="kpi-label">排队队列深度</div>
         <svg class="spark" viewBox="0 0 76 24" preserveAspectRatio="none"><polyline :points="sparkPoints(histQueue)" /></svg>
       </div>
-      <div class="kpi kpi-trend">
+      <div class="kpi kpi-trend kpi-glow">
         <div class="kpi-num num">{{ runningDisplay }}</div>
         <div class="kpi-label">运行中任务</div>
         <svg class="spark" viewBox="0 0 76 24" preserveAspectRatio="none"><polyline :points="sparkPoints(histRunning)" /></svg>
       </div>
-      <div class="kpi kpi-trend">
+      <div class="kpi kpi-trend kpi-glow">
         <div class="kpi-num num">{{ costDisplay }}<span class="unit">ms</span></div>
         <div class="kpi-label">平均分发调度延迟</div>
         <svg class="spark" viewBox="0 0 76 24" preserveAspectRatio="none"><polyline :points="sparkPoints(histCost)" /></svg>
       </div>
-      <div class="kpi kpi-trend">
+      <div class="kpi kpi-trend kpi-glow">
         <div class="kpi-num num">{{ assignedDisplay }}</div>
         <div class="kpi-label">今日已分配任务</div>
         <svg class="spark" viewBox="0 0 76 24" preserveAspectRatio="none"><polyline :points="sparkPoints(histAssigned)" /></svg>
       </div>
     </div>
 
-    <!-- ═══ 2. 多 Agent 协作编排画布：四条业务流水线泳道（Benchmark / RAG / 用例 / 压测） ═══ -->
-    <div class="panel glow mb16" data-od-id="dispatch-canvas" style="--glow-c: var(--c-agent)">
+    <!-- ═══ 2. 调度星图：中心内核 + 技能 Agent 内环 + Worker 业务扇区外环 ═══ -->
+    <div class="panel glow topo-panel mb16" data-od-id="dispatch-canvas" style="--glow-c: var(--c-agent)">
       <div class="row-between mb12" style="flex-wrap: wrap; gap: 8px">
         <div class="panel-title" style="margin: 0">
-          多 Agent 协作编排画布
-          <span class="small tertiary mono" style="font-weight: 400">Skill Agent → 任务工单 → Worker 实时流转</span>
+          调度编排星图
+          <span class="small tertiary mono" style="font-weight: 400">内核 → 技能 Agent → Worker · 实时拓扑</span>
         </div>
         <div class="row" style="gap: 6px; align-items: center">
           <span class="tag-soft" :style="modeTagStyle">{{ modeStore.mode === 'rag' ? 'RAG 模式' : '大模型模式' }}</span>
-          <button class="btn btn-secondary btn-sm" style="font-size: 11px" @click="handleManualEnqueue">
-            + 插入任务
-          </button>
+          <button class="btn btn-secondary btn-sm" style="font-size: 11px" @click="handleManualEnqueue">+ 插入任务</button>
+          <span class="zoom-ctrl">
+            <button class="zoom-btn" title="缩小" @click="zoomBy(0.85)">−</button>
+            <button class="zoom-btn mono" title="重置视图（双击画布同效）" @click="resetView">{{ Math.round(view.k * 100) }}%</button>
+            <button class="zoom-btn" title="放大" @click="zoomBy(1.18)">+</button>
+          </span>
         </div>
       </div>
 
-      <div class="canvas-wrap">
-        <div ref="canvasRef" class="orch-canvas" :style="{ height: canvasLayout.totalHeight + 'px' }">
-          <!-- 连线层：技能→工单灰虚线缓流；工单→Worker 蓝色流动 + 粒子 -->
-          <svg class="wires" aria-hidden="true">
-            <template v-for="w in activeWires" :key="w.key">
-              <path :class="w.cls" :d="w.d" />
-              <circle v-if="w.particle" class="particle" r="2.6">
-                <animateMotion :path="w.d" dur="1.8s" repeatCount="indefinite" />
+      <div ref="wrapRef" class="topo-wrap">
+        <svg
+          ref="svgRef"
+          class="topo-svg"
+          viewBox="0 0 1200 680"
+          preserveAspectRatio="xMidYMid meet"
+          @pointerdown="onPointerDown"
+          @pointermove="onPointerMove"
+          @pointerup="onPointerUp"
+          @pointerleave="onPointerUp"
+          @dblclick="resetView"
+        >
+          <defs>
+            <!-- 网格背景 -->
+            <pattern id="topo-grid" width="28" height="28" patternUnits="userSpaceOnUse">
+              <path d="M 28 0 L 0 0 0 28" class="grid-line" />
+            </pattern>
+            <!-- 内核光晕 -->
+            <radialGradient id="core-glow">
+              <stop offset="0%" stop-color="var(--accent-ai)" stop-opacity="0.20" />
+              <stop offset="100%" stop-color="var(--accent-ai)" stop-opacity="0" />
+            </radialGradient>
+            <!-- 雷达扫描扇形渐变 -->
+            <linearGradient id="sweep-grad" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0%" stop-color="var(--accent-ai)" stop-opacity="0.35" />
+              <stop offset="100%" stop-color="var(--accent-ai)" stop-opacity="0" />
+            </linearGradient>
+          </defs>
+
+          <!-- 可拖拽背景（铺满网格） -->
+          <rect x="-2000" y="-2000" width="5200" height="5200" fill="url(#topo-grid)" class="topo-bg" />
+
+          <g :transform="`translate(${view.x} ${view.y}) scale(${view.k})`">
+            <!-- 业务扇区底色楔块 -->
+            <path
+              v-for="s in topo.sectors"
+              :key="'wedge-' + s.kind"
+              class="sector-wedge"
+              :class="{ dim: focusedSkill && focusedSkill !== s.kind }"
+              :d="s.wedge"
+              :fill="s.color"
+            />
+
+            <!-- 轨道参考线：技能环 / Worker 环 -->
+            <circle :cx="CX" :cy="CY" :r="R_SKILL" class="orbit-guide" />
+            <circle :cx="CX" :cy="CY" :r="R_WORKER" class="orbit-guide outer" />
+
+            <!-- 常驻链路：内核 → 技能 Agent（灰虚线缓流） -->
+            <path
+              v-for="s in topo.skills"
+              :key="'core-' + s.kind"
+              class="wire-core"
+              :class="{ dim: focusedSkill && focusedSkill !== s.kind }"
+              :d="`M ${CX} ${CY} L ${s.x} ${s.y}`"
+            />
+
+            <!-- 归属链路：技能 Agent → Worker（细实线） -->
+            <path
+              v-for="pw in topo.workers"
+              :key="'mem-' + pw.w.id"
+              class="wire-member"
+              :class="{ dim: focusedSkill && focusedSkill !== pw.skillKind }"
+              :d="`M ${pw.sx} ${pw.sy} L ${pw.x} ${pw.y}`"
+            />
+
+            <!-- 执行链路：内核 → 技能 → Worker（高亮流动 + 数据流粒子） -->
+            <template v-for="w in topo.liveWires" :key="w.key">
+              <path class="wire-live" :class="{ dim: focusedSkill && focusedSkill !== w.skillKind }" :d="w.d" />
+              <circle class="particle" r="3">
+                <animateMotion :path="w.d" dur="1.9s" repeatCount="indefinite" />
+              </circle>
+              <circle class="particle" r="2" opacity="0.55">
+                <animateMotion :path="w.d" dur="1.9s" begin="-0.95s" repeatCount="indefinite" />
               </circle>
             </template>
-          </svg>
 
-          <template v-for="l in canvasLayout.lanes" :key="l.kind">
-            <!-- 泳道背景带（左色条标识业务域） -->
-            <div
-              class="lane-band"
-              :style="{ top: l.top + 'px', height: l.height + 'px', borderLeftColor: l.color }"
-            >
-              <span class="lane-caption mono" :style="{ color: l.color }">{{ l.name }}</span>
-            </div>
+            <!-- 任务完成涟漪（Worker 节点处扩散） -->
+            <circle v-for="r in ripples" :key="r.id" class="ripple-c" :cx="r.x" :cy="r.y" r="10" />
 
-            <!-- 泳道技能 Agent 节点（固定于泳道左侧） -->
-            <div
-              class="skill-node"
-              :class="{ on: l.activeCount > 0 }"
-              :data-skill="l.kind"
-              :style="{ top: l.top + l.height / 2 - 30 + 'px' }"
-              :title="l.desc"
-            >
-              <span class="skill-ico">{{ l.icon }}</span>
-              <div class="skill-meta">
-                <div class="skill-name">{{ l.name }}</div>
-                <div class="skill-count mono">
-                  <template v-if="l.activeCount > 0"><b class="num">{{ l.runningCount }}</b> 运行 / <b class="num">{{ l.activeCount }}</b> 活跃</template>
-                  <template v-else><span class="tertiary">待命</span></template>
-                </div>
-              </div>
-              <i v-if="l.runningCount > 0" class="skill-pulse"></i>
-            </div>
-
-            <!-- 任务工单卡片：位置由状态驱动，CSS transition 实现队列→Worker 的飞行动效 -->
-            <div
-              v-for="p in l.tpos"
+            <!-- 任务工单芯片：queued 在内环队列轨道；running 飞向技能→Worker 链路中段 -->
+            <g
+              v-for="p in topo.tasks"
               :key="p.t.id"
-              class="canvas-task"
-              :class="[p.t.status, { flash: flashTaskId === p.t.id || flashTaskId === p.t.shortId }]"
-              :data-ctid="p.t.id"
-              :style="{ left: p.x + '%', top: p.y + 'px' }"
-              :title="`${p.t.label}\n${statusLabel(p.t.status)} · 点击前往任务中心`"
-              @click="goTasks"
+              class="task-chip"
+              :class="[p.t.status, { flash: flashTaskId === p.t.id || flashTaskId === p.t.shortId, dim: focusedSkill && focusedSkill !== p.t.kind }]"
+              :style="{ transform: `translate(${p.x}px, ${p.y}px)` }"
+              @mouseenter="showTaskTip($event, p.t)"
+              @mouseleave="hideTip"
+              @click="onNodeClick(() => goTasks())"
             >
-              <div class="row" style="gap: 5px; align-items: center; min-width: 0">
-                <KindTag :kind="p.t.kind" />
-                <span class="ct-id mono">{{ p.t.shortId }}</span>
-                <span v-if="p.t.parentId" class="tertiary" style="font-size: 10px">↳</span>
-                <span class="badge ct-badge" :class="`badge-${p.t.status}`">{{ statusLabel(p.t.status) }}</span>
-              </div>
-              <div class="ct-label">{{ p.t.label }}</div>
-              <div v-if="p.t.status === 'running'" class="ct-progress"><i :style="{ width: `${p.t.progress ?? 0}%` }"></i></div>
-            </div>
+              <rect x="-76" y="-19" width="152" height="38" rx="9" class="tc-box" />
+              <rect x="-76" y="-19" width="3.5" height="38" class="tc-bar" :fill="kindColor(p.t.kind)" />
+              <circle cx="-61" cy="-7" r="3" class="tc-dot" :class="p.t.status" />
+              <text x="-52" y="-3.5" class="tc-id">{{ p.t.shortId }}</text>
+              <text x="68" y="-3.5" class="tc-status" text-anchor="end">{{ statusLabel(p.t.status) }}</text>
+              <text x="-66" y="10" class="tc-label">{{ trunc(p.t.label, 16) }}</text>
+              <g v-if="p.t.status === 'running'">
+                <rect x="-66" y="13.5" width="132" height="3" rx="1.5" class="tc-progress-bg" />
+                <rect x="-66" y="13.5" :width="132 * (p.t.progress ?? 0) / 100" height="3" rx="1.5" class="tc-progress" />
+              </g>
+            </g>
 
-            <!-- Worker 节点（单列堆叠于泳道右侧） -->
-            <div
-              v-for="pw in l.wpos"
+            <!-- 队列溢出提示 -->
+            <text v-if="topo.queueOverflow > 0" :x="CX" :y="CY + R_QUEUE + 34" class="queue-overflow" text-anchor="middle">
+              +{{ topo.queueOverflow }} 更多排队任务
+            </text>
+
+            <!-- 技能 Agent 内环节点（四大业务域，点击聚焦扇区） -->
+            <g
+              v-for="s in topo.skills"
+              :key="s.kind"
+              class="skill-node"
+              :class="{ on: s.runningCount > 0, dim: focusedSkill && focusedSkill !== s.kind }"
+              :style="{ transform: `translate(${s.x}px, ${s.y}px)`, '--sk': s.color }"
+              @mouseenter="showSkillTip($event, s)"
+              @mouseleave="hideTip"
+              @click="onNodeClick(() => toggleFocus(s.kind))"
+            >
+              <circle r="30" class="sn-halo" />
+              <circle r="24" class="sn-core" />
+              <text y="6" class="sn-ico" text-anchor="middle">{{ s.icon }}</text>
+              <text y="45" class="sn-name" text-anchor="middle">{{ s.name }}</text>
+              <text y="59" class="sn-count" text-anchor="middle">
+                {{ s.activeCount > 0 ? `${s.runningCount} 运行 / ${s.activeCount} 活跃` : '待命' }}
+              </text>
+            </g>
+
+            <!-- Worker 外环节点（业务扇区排布，负载环 + 状态点） -->
+            <g
+              v-for="pw in topo.workers"
               :key="pw.w.id"
-              class="canvas-worker"
-              :class="pw.w.state"
-              :data-caid="pw.w.id"
-              :style="{ left: pw.x + '%', top: pw.y + 'px' }"
-              :title="`${pw.w.name} · 点击治理`"
-              @click="openWorkerModal(pw.w)"
+              class="worker-node"
+              :class="[pw.w.state, { dim: focusedSkill && focusedSkill !== pw.skillKind }]"
+              :style="{ transform: `translate(${pw.x}px, ${pw.y}px)` }"
+              @mouseenter="showWorkerTip($event, pw.w)"
+              @mouseleave="hideTip"
+              @click="onNodeClick(() => openWorkerModal(pw.w))"
             >
-              <div class="row" style="gap: 6px; align-items: center; min-width: 0">
-                <i class="cw-dot" :class="pw.w.state"></i>
-                <span class="cw-name mono">{{ pw.w.id }}</span>
-                <span class="cw-load mono">{{ pw.w.load }}%</span>
-              </div>
-              <div class="load-track" :class="{ hot: pw.w.load >= 80 }" style="margin-top: 5px">
-                <i :style="{ width: `${pw.w.load}%` }"></i>
-              </div>
-            </div>
+              <circle r="21" class="wn-ring-bg" />
+              <circle
+                r="21"
+                class="wn-load"
+                :class="{ hot: pw.w.load >= 80 }"
+                :stroke-dasharray="`${(pw.w.load / 100) * 131.9} 131.9`"
+                transform="rotate(-90)"
+              />
+              <circle r="15" class="wn-core" />
+              <text y="3.5" class="wn-pct" text-anchor="middle">{{ pw.w.load }}</text>
+              <text y="37" class="wn-id" text-anchor="middle">{{ pw.w.id }}</text>
+              <circle cx="13" cy="-13" r="4" class="wn-dot" :class="pw.w.state" />
+            </g>
 
-            <!-- 泳道队列区空态提示 -->
-            <div
-              v-if="!l.tpos.length"
-              class="lane-empty tertiary small"
-              :style="{ top: l.top + l.height / 2 - 9 + 'px' }"
-            >暂无工单</div>
-          </template>
+            <!-- 中心调度内核：光晕 + 双向旋转环 + 雷达扫描 + 状态核心 -->
+            <g class="core" :style="{ transform: `translate(${CX}px, ${CY}px)` }">
+              <circle r="88" fill="url(#core-glow)" />
+              <g class="spin-a"><circle r="66" class="core-ring" /></g>
+              <g class="spin-b"><circle r="53" class="core-ring2" /></g>
+              <g v-if="isRunning" class="core-sweep">
+                <path d="M 0 0 L 62 0 A 62 62 0 0 1 44 44 Z" fill="url(#sweep-grad)" />
+              </g>
+              <circle r="34" class="core-center" :class="{ halt: !isRunning }" />
+              <text y="-1" class="core-ico" text-anchor="middle">🛰</text>
+              <text y="14" class="core-status" text-anchor="middle">{{ isRunning ? 'LIVE' : 'HALT' }}</text>
+              <text y="58" class="core-name" text-anchor="middle">调度内核</text>
+            </g>
+          </g>
+        </svg>
 
-          <!-- 任务完成涟漪 -->
-          <span v-for="r in ripples" :key="r.id" class="ripple" :style="{ left: r.x + 'px', top: r.y + 'px' }"></span>
+        <!-- 悬停详情 tooltip（跟随鼠标，纯展示不拦截事件） -->
+        <div v-if="tooltip" class="topo-tip" :style="{ left: tooltip.x + 'px', top: tooltip.y + 'px' }">
+          <div class="tt-title">{{ tooltip.title }}</div>
+          <div v-for="(ln, i) in tooltip.lines" :key="i" class="tt-line">
+            <span class="tertiary">{{ ln[0] }}</span><span class="tt-val">{{ ln[1] }}</span>
+          </div>
         </div>
+
+        <!-- 扫描线装饰 -->
+        <div class="scanline" aria-hidden="true"></div>
       </div>
 
-      <!-- 画布图例 -->
+      <!-- 图例 -->
       <div class="row mt12" style="gap: 14px; font-size: 11px; flex-wrap: wrap">
-        <span class="row" style="gap: 5px; align-items: center"><i class="legend-line" style="background: repeating-linear-gradient(90deg, var(--text-tertiary) 0 3px, transparent 3px 7px)"></i><span class="tertiary">技能编排链路</span></span>
+        <span class="row" style="gap: 5px; align-items: center"><i class="legend-line" style="background: repeating-linear-gradient(90deg, var(--text-tertiary) 0 3px, transparent 3px 7px)"></i><span class="tertiary">内核编排链路</span></span>
         <span class="row" style="gap: 5px; align-items: center"><i class="legend-line" style="background: var(--accent-ai)"></i><span class="tertiary">执行分发链路</span></span>
         <span class="row" style="gap: 5px; align-items: center"><i class="legend-dot" style="background: var(--accent-ai)"></i><span class="tertiary">数据流粒子</span></span>
         <span class="row" style="gap: 5px; align-items: center"><i class="legend-dot" style="background: var(--accent-success)"></i><span class="tertiary">完成涟漪</span></span>
+        <span class="tertiary" style="margin-left: auto">滚轮缩放 · 拖拽平移 · 双击复位 · 点击技能节点聚焦扇区</span>
       </div>
     </div>
 
-    <!-- ═══ 3. 底部三栏：调度控制面 / 事件流 / 编排时间线 ═══ -->
+    <!-- ═══ 3. 底部三栏：调度控制面（含 Worker 池） / 事件流 / 编排时间线 ═══ -->
     <div class="bottom-grid">
       <div class="section-gap">
         <!-- 调度内核状态面板与雷达 -->
@@ -160,9 +249,7 @@
             <button class="btn btn-secondary btn-sm" style="flex: 1" @click="toggleScheduler">
               {{ isRunning ? '暂停调度' : '恢复调度' }}
             </button>
-            <button class="btn btn-primary btn-sm" style="flex: 1" @click="showRegisterModal = true">
-              + 注册节点
-            </button>
+            <button class="btn btn-primary btn-sm" style="flex: 1" @click="showRegisterModal = true">+ 注册节点</button>
           </div>
           <div style="max-width: 150px; margin: 4px auto 10px">
             <div class="radar">
@@ -210,6 +297,28 @@
           </div>
         </div>
 
+        <!-- Worker 节点池（点击芯片打开治理弹窗，与拓扑节点联动） -->
+        <div class="panel glow" data-od-id="dispatch-pool" style="--glow-c: var(--c-agent)">
+          <div class="panel-title">
+            <span>Worker 节点池</span>
+            <span class="small tertiary mono">{{ onlineCount }}/{{ totalWorkers }} 在线</span>
+          </div>
+          <div class="worker-pool">
+            <button
+              v-for="w in workerPool"
+              :key="w.id"
+              class="wp-chip"
+              :class="w.state"
+              :title="`${w.name} · ${stateLabel(w.state)} · 负载 ${w.load}%`"
+              @click="openWorkerModal(w)"
+            >
+              <i class="wp-dot" :class="w.state"></i>
+              <span class="mono wp-id">{{ w.id }}</span>
+              <span class="mono wp-load">{{ w.load }}%</span>
+            </button>
+          </div>
+        </div>
+
         <!-- AI 调度优化建议卡 -->
         <div class="ai-card" data-od-id="dispatch-ai">
           <div class="ai-card-head">
@@ -226,7 +335,7 @@
         </div>
       </div>
 
-      <!-- 调度事件流（分类过滤 + 点击定位画布工单） -->
+      <!-- 调度事件流（分类过滤 + 点击定位星图工单） -->
       <div class="panel glow dispatch-log-panel" data-od-id="dispatch-log" style="--glow-c: var(--c-agent)">
         <div class="row-between mb8">
           <div class="panel-title" style="margin: 0">
@@ -249,7 +358,7 @@
             :key="idx"
             class="log-line"
             :class="[`cat-${l.cat}`, { clickable: !!l.tid }]"
-            :title="l.tid ? '点击定位画布中的任务工单' : ''"
+            :title="l.tid ? '点击定位星图中的任务工单' : ''"
             @click="l.tid && flashTask(l.tid)"
           >
             <span class="lt">{{ l.time }}</span>
@@ -293,11 +402,7 @@
               <span class="mono" style="font-size: 10px">{{ row.shortId }}</span>
             </div>
             <div class="gantt-track">
-              <i
-                class="gantt-bar"
-                :class="`st-${row.status}`"
-                :style="{ left: row.left + '%', width: row.width + '%' }"
-              ></i>
+              <i class="gantt-bar" :class="`st-${row.status}`" :style="{ left: row.left + '%', width: row.width + '%' }"></i>
             </div>
           </div>
         </div>
@@ -397,7 +502,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import KindTag from '../components/common/KindTag.vue'
@@ -410,8 +515,6 @@ const router = useRouter()
 const modeStore = useModeStore()
 // live 模式接真实调度 API（§3.13）；mock 模式保留本地仿真演示
 const liveMode = !api.isMock()
-
-const canvasRef = ref<HTMLDivElement | null>(null)
 
 const isRunning = ref(true)
 const strategy = ref('负载均衡')
@@ -473,7 +576,7 @@ function pushHist(hist: number[], v: number) {
   if (hist.length > 24) hist.shift()
 }
 
-/* ─── 编排画布数据模型 ─── */
+/* ─── 星图数据模型 ─── */
 interface WorkerNode {
   id: string
   name: string
@@ -498,7 +601,7 @@ const workerPool = ref<WorkerNode[]>([
   { id: 'worker-10', name: 'Case-Node-C2', caps: ['testcase', 'openapi'], state: 'idle', load: 9, ram: '1.5GB/16GB', task: null, weight: 90 },
 ])
 
-// 任务工单：统一 mock 仿真项与 live 任务的画布展示模型
+// 任务工单：统一 mock 仿真项与 live 任务的星图展示模型
 interface TaskNode {
   id: string
   shortId: string
@@ -559,12 +662,12 @@ function taskLabel(t: Task): string {
   return [parent, env, qps].filter(Boolean).join(' · ') || '共享压测'
 }
 
-/** live 任务 → 画布工单；workerId 优先取事件映射，兜底用节点 current_task 短号前缀匹配 */
+/** live 任务 → 星图工单；workerId 优先取事件映射，兜底用节点 current_task 短号前缀匹配 */
 function mapLiveTask(t: Task): TaskNode {
   const short = t.id.substring(0, 6)
   let workerId = taskWorkerMap.value[t.id] || null
   if (!workerId && t.status === 'running') {
-    const w = workerPool.value.find(x => x.current_task && x.current_task.includes(short))
+    const w = workerPool.value.find(x => x.task && x.task.includes(short))
     workerId = w?.id || null
   }
   const pct = t.progress
@@ -597,116 +700,131 @@ const taskNodes = computed<TaskNode[]>(() => {
   }))
 })
 
-/* ─── 业务泳道布局：四条流水线（PRD §5.5.2 技能域）+ 通用兜底泳道 ─── */
-const LANE_DEFS = [
-  { kind: 'benchmark' as TaskKind, name: 'Benchmark 基准评测', icon: '📊', color: 'var(--c-datasets)', desc: '模型评测 · 数据集 · 先评后压' },
-  { kind: 'rag' as TaskKind, name: 'RAG 质量评估', icon: '🔍', color: 'var(--c-kb)', desc: '知识库 · 黄金 QA · 4 模式检索' },
-  { kind: 'testcase' as TaskKind, name: '用例生成', icon: '🧩', color: 'var(--c-cases)', desc: 'PRD/OpenAPI · 6 大策略配比' },
-  { kind: 'stress' as TaskKind, name: '共享压测', icon: '⚡', color: 'var(--c-stress)', desc: '继承父任务 · SLA 拐点定位' },
+/* ─── 星图几何：中心内核 + 技能内环 + Worker 业务扇区外环 ─── */
+const VB_W = 1200
+const VB_H = 680
+const CX = 600
+const CY = 330
+const R_QUEUE = 96    // 排队工单环绕内核的轨道半径
+const R_SKILL = 152   // 技能 Agent 内环半径
+const R_WORKER = 258  // Worker 外环半径
+const MAX_QUEUE_CHIPS = 8 // 队列轨道最多平铺的工单数，溢出以 +N 提示
+
+// 四大业务技能域（PRD §5.5.2）：角度采用屏幕坐标系（y 轴向下，90° 为正下方）
+const SKILL_DEFS = [
+  { kind: 'benchmark' as TaskKind, name: 'Benchmark', fullName: 'Benchmark 基准评测', icon: '📊', color: 'var(--c-datasets)', angle: -90, desc: '模型评测 · 数据集 · 先评后压' },
+  { kind: 'rag' as TaskKind, name: 'RAG', fullName: 'RAG 质量评估', icon: '🔍', color: 'var(--c-kb)', angle: 0, desc: '知识库 · 黄金 QA · 4 模式检索' },
+  { kind: 'stress' as TaskKind, name: 'Stress', fullName: '共享压测', icon: '⚡', color: 'var(--c-stress)', angle: 90, desc: '继承父任务 · SLA 拐点定位' },
+  { kind: 'testcase' as TaskKind, name: 'Testcase', fullName: '用例生成', icon: '🧩', color: 'var(--c-cases)', angle: 180, desc: 'PRD/OpenAPI · 6 大策略配比' },
 ]
 
-/** Worker 归属泳道：取能力标签中首个匹配的业务域，无匹配进通用泳道 */
+/** 极坐标 → 星图直角坐标（角度单位：度，0° 正右，90° 正下） */
+function polar(angleDeg: number, r: number): { x: number; y: number } {
+  const a = (angleDeg * Math.PI) / 180
+  return { x: CX + r * Math.cos(a), y: CY + r * Math.sin(a) }
+}
+
+/** 业务扇区底色楔块路径：从内核出发的扇形（跨度 ±spread） */
+function wedgePath(angle: number, spread: number, r: number): string {
+  const p1 = polar(angle - spread, r)
+  const p2 = polar(angle + spread, r)
+  return `M ${CX} ${CY} L ${p1.x.toFixed(1)} ${p1.y.toFixed(1)} A ${r} ${r} 0 0 1 ${p2.x.toFixed(1)} ${p2.y.toFixed(1)} Z`
+}
+
+/** Worker 归属业务扇区：取能力标签中首个匹配的技能域，无匹配进通用扇区 */
 function workerLane(w: WorkerNode): TaskKind | 'general' {
-  const lane = LANE_DEFS.find(l => w.caps.includes(l.kind))
+  const lane = SKILL_DEFS.find(l => w.caps.includes(l.kind))
   return lane ? lane.kind : 'general'
 }
 
-// 画布几何常量（x 为百分比，y 为 px）
-const AGENT_X = 1
-const QUEUE_X = 18
-const RUN_X = 46
-const WORKER_X = 74
-const CHIP_H = 40
-const CHIP_GAP = 8
-const WORKER_H = 46
-const WORKER_GAP = 8
-const LANE_PAD = 10
+/** 业务标识色（工单芯片左侧色条） */
+function kindColor(kind: TaskKind): string {
+  const def = SKILL_DEFS.find(s => s.kind === kind)
+  return def ? def.color : 'var(--text-tertiary)'
+}
 
-interface CanvasPos { x: number; y: number }
+/** 文本截断：星图芯片宽度有限，超长标签省略号收尾 */
+function trunc(s: string, n: number): string {
+  return s.length > n ? s.slice(0, n - 1) + '…' : s
+}
 
-// 画布布局：先按泳道堆叠 Worker 得到全局节点坐标，再按状态摆放任务工单（队列区 / 随节点）
-const canvasLayout = computed(() => {
-  // 启用泳道：四条业务流水线 + 有未匹配节点时的通用泳道
-  const defs: typeof LANE_DEFS = [...LANE_DEFS]
-  if (workerPool.value.some(w => workerLane(w) === 'general')) {
-    defs.push({ kind: 'general' as any, name: '通用执行', icon: '🛠', color: 'var(--text-tertiary)', desc: '未匹配业务域的执行节点' })
-  }
-
-  // 第一遍：Worker 单列堆叠，建立全局节点坐标表
-  const workerPos = new Map<string, CanvasPos>()
-  const laneWorkers = new Map<string, WorkerNode[]>()
-  defs.forEach(d => laneWorkers.set(d.kind, workerPool.value.filter(w => workerLane(w) === d.kind)))
-
-  const lanes: {
-    kind: TaskKind | 'general'
-    name: string
-    icon: string
-    color: string
-    desc: string
-    top: number
-    height: number
-    activeCount: number
-    runningCount: number
-    tpos: { t: TaskNode; x: number; y: number }[]
-    wpos: { w: WorkerNode; x: number; y: number }[]
-  }[] = []
-
-  let top = 0
-  defs.forEach(d => {
-    const workers = laneWorkers.get(d.kind) || []
+// 星图布局：技能节点坐标 / Worker 扇区坐标 / 工单芯片坐标 / 执行链路路径，全部由数据驱动
+const topo = computed(() => {
+  // 1) 技能 Agent 节点：固定角度布点 + 实时活跃统计
+  const skills = SKILL_DEFS.map(d => {
+    const p = polar(d.angle, R_SKILL)
     const tasks = taskNodes.value.filter(t => t.kind === d.kind)
-    const queuedCount = tasks.filter(t => t.status !== 'running').length
-    // 泳道高度容纳：Worker 堆叠 / 队列堆叠 / Agent 节点
-    const height = Math.max(
-      84,
-      LANE_PAD * 2 + workers.length * (WORKER_H + WORKER_GAP),
-      LANE_PAD * 2 + queuedCount * (CHIP_H + CHIP_GAP),
-    )
-    const wpos = workers.map((w, i) => {
-      const pos = { x: WORKER_X, y: top + LANE_PAD + i * (WORKER_H + WORKER_GAP) }
-      workerPos.set(w.id, pos)
-      return { w, ...pos }
-    })
-    lanes.push({
-      kind: d.kind,
-      name: d.name,
-      icon: d.icon,
-      color: d.color,
-      desc: d.desc,
-      top,
-      height,
+    return {
+      ...d, ...p,
       activeCount: tasks.length,
       runningCount: tasks.filter(t => t.status === 'running').length,
-      tpos: [],
-      wpos,
-    })
-    top += height + 6
+    }
   })
+  const skillByKind = new Map(skills.map(s => [s.kind as string, s]))
 
-  // 第二遍：任务工单定位——运行中跟随其 Worker（跨泳道允许），其余在队列区堆叠
-  lanes.forEach(l => {
-    const tasks = taskNodes.value.filter(t => t.kind === l.kind)
-    const queued = tasks.filter(t => t.status !== 'running')
-    const running = tasks.filter(t => t.status === 'running')
-    const runStack = new Map<string, number>()
-    l.tpos = tasks.map(t => {
-      if (t.status === 'running' && t.workerId && workerPos.has(t.workerId)) {
-        const wp = workerPos.get(t.workerId)!
-        const stackIdx = runStack.get(t.workerId) || 0
-        runStack.set(t.workerId, stackIdx + 1)
-        return { t, x: RUN_X, y: wp.y + 3 + stackIdx * (CHIP_H + 4) }
-      }
-      // 运行中但尚未解析到节点：停在队列区右缘等待连线
-      if (t.status === 'running') {
-        const idx = running.indexOf(t)
-        return { t, x: RUN_X, y: l.top + LANE_PAD + idx * (CHIP_H + CHIP_GAP) }
-      }
-      const qi = queued.indexOf(t)
-      return { t, x: QUEUE_X, y: l.top + LANE_PAD + qi * (CHIP_H + CHIP_GAP) }
+  // 2) 扇区定义：四业务域 + 有未匹配节点时的通用扇区（压缩邻域跨度避免重叠）
+  const hasGeneral = workerPool.value.some(w => workerLane(w) === 'general')
+  const spread = hasGeneral ? 26 : 34
+  const sectorDefs = SKILL_DEFS.map(d => ({ kind: d.kind as string, angle: d.angle, spread, color: d.color }))
+  if (hasGeneral) sectorDefs.push({ kind: 'general', angle: 135, spread: 14, color: 'var(--text-tertiary)' })
+  const sectors = sectorDefs.map(s => ({ ...s, wedge: wedgePath(s.angle, s.spread + 8, R_WORKER + 46) }))
+
+  // 3) Worker 节点：按扇区角距均布，单环超过 5 个时外扩第二环
+  const workers: { w: WorkerNode; x: number; y: number; sx: number; sy: number; skillKind: string }[] = []
+  sectorDefs.forEach(sec => {
+    const list = workerPool.value.filter(w => workerLane(w) === sec.kind)
+    const skill = skillByKind.get(sec.kind)
+    list.forEach((w, i) => {
+      const ring = Math.floor(i / 5)
+      const idxInRing = i % 5
+      const inRing = Math.min(5, list.length - ring * 5)
+      const offset = inRing === 1 ? 0 : -sec.spread + (2 * sec.spread * idxInRing) / (inRing - 1)
+      const p = polar(sec.angle + offset, R_WORKER + ring * 58)
+      workers.push({ w, x: p.x, y: p.y, sx: skill?.x ?? CX, sy: skill?.y ?? CY, skillKind: sec.kind })
     })
   })
+  const workerById = new Map(workers.map(pw => [pw.w.id, pw]))
 
-  return { lanes, totalHeight: Math.max(top - 6, 120) }
+  // 4) 工单芯片：queued 在内环轨道均布；running 飞至 技能→Worker 链路中段（同节点多任务垂直偏移堆叠）
+  const queued = taskNodes.value.filter(t => t.status !== 'running')
+  const running = taskNodes.value.filter(t => t.status === 'running')
+  const runStack = new Map<string, number>()
+  const tasks: { t: TaskNode; x: number; y: number }[] = []
+  queued.slice(0, MAX_QUEUE_CHIPS).forEach((t, i) => {
+    const p = polar(105 + i * 30, R_QUEUE)
+    tasks.push({ t, x: p.x, y: p.y })
+  })
+  running.forEach(t => {
+    const skill = skillByKind.get(t.kind)
+    const pw = t.workerId ? workerById.get(t.workerId) : undefined
+    if (skill && pw) {
+      // 链路中段定位：技能节点 → Worker 55% 处，按堆叠序号垂直偏移
+      const mx = skill.x + (pw.x - skill.x) * 0.55
+      const my = skill.y + (pw.y - skill.y) * 0.55
+      const dx = pw.x - skill.x
+      const dy = pw.y - skill.y
+      const len = Math.max(Math.hypot(dx, dy), 1)
+      const stackIdx = runStack.get(pw.w.id) || 0
+      runStack.set(pw.w.id, stackIdx + 1)
+      tasks.push({ t, x: mx + (-dy / len) * 30 * stackIdx, y: my + (dx / len) * 30 * stackIdx })
+    } else if (skill) {
+      // 运行中但尚未解析到节点：悬停于技能节点内侧等待连线
+      const idx = running.indexOf(t)
+      const p = polar(skill.angle + 24 + idx * 14, R_SKILL - 58)
+      tasks.push({ t, x: p.x, y: p.y })
+    }
+  })
+
+  // 5) 执行链路：内核 → 技能 → Worker 折线，粒子沿路径流动
+  const liveWires = running
+    .filter(t => t.workerId && workerById.has(t.workerId) && skillByKind.has(t.kind))
+    .map(t => {
+      const s = skillByKind.get(t.kind)!
+      const pw = workerById.get(t.workerId!)!
+      return { key: `live-${t.id}`, skillKind: t.kind as string, d: `M ${CX} ${CY} L ${s.x} ${s.y} L ${pw.x} ${pw.y}` }
+    })
+
+  return { skills, sectors, workers, tasks, liveWires, queueOverflow: Math.max(0, queued.length - MAX_QUEUE_CHIPS) }
 })
 
 const onlineCount = computed(() =>
@@ -732,7 +850,141 @@ const runningDisplay = useCountUp(runningCount)
 const costDisplay = useCountUp(avgDispatchCost)
 const assignedDisplay = useCountUp(assignedTodayNum)
 
-/* ─── 调度事件流（分类过滤 + 点击定位画布工单） ─── */
+/* ─── 星图视图变换：滚轮缩放（以光标为中心）+ 拖拽平移 + 双击复位 ─── */
+const svgRef = ref<SVGSVGElement | null>(null)
+const wrapRef = ref<HTMLDivElement | null>(null)
+const view = ref({ x: 0, y: 0, k: 1 })
+
+/** 屏幕坐标 → viewBox 坐标换算（依赖容器实际渲染尺寸） */
+function toViewBox(e: { clientX: number; clientY: number }): { x: number; y: number } {
+  const rect = svgRef.value?.getBoundingClientRect()
+  if (!rect) return { x: 0, y: 0 }
+  return { x: ((e.clientX - rect.left) / rect.width) * VB_W, y: ((e.clientY - rect.top) / rect.height) * VB_H }
+}
+
+function onWheel(e: WheelEvent) {
+  e.preventDefault()
+  const s = toViewBox(e)
+  const k0 = view.value.k
+  const k1 = Math.min(2.2, Math.max(0.55, k0 * (e.deltaY < 0 ? 1.12 : 0.89)))
+  // 保持光标下的内容点不动：p = (s - view) / k0，缩放后 view' = s - k1 * p
+  const px = (s.x - view.value.x) / k0
+  const py = (s.y - view.value.y) / k0
+  view.value = { k: k1, x: s.x - k1 * px, y: s.y - k1 * py }
+}
+
+/** 按钮缩放：以画布中心为基准点 */
+function zoomBy(factor: number) {
+  const k1 = Math.min(2.2, Math.max(0.55, view.value.k * factor))
+  const px = (VB_W / 2 - view.value.x) / view.value.k
+  const py = (VB_H / 2 - view.value.y) / view.value.k
+  view.value = { k: k1, x: VB_W / 2 - k1 * px, y: VB_H / 2 - k1 * py }
+}
+
+/** 复位视图并清除扇区聚焦 */
+function resetView() {
+  view.value = { x: 0, y: 0, k: 1 }
+  focusedSkill.value = null
+}
+
+// 拖拽平移：位移超过 4px 判定为平移，抑制节点 click 触发
+let panning = false
+let panMoved = false
+let panStart = { x: 0, y: 0 }
+let viewStart = { x: 0, y: 0, k: 1 }
+
+function onPointerDown(e: PointerEvent) {
+  if (e.button !== 0) return
+  panning = true
+  panMoved = false
+  panStart = { x: e.clientX, y: e.clientY }
+  viewStart = { ...view.value }
+  hideTip()
+}
+
+function onPointerMove(e: PointerEvent) {
+  if (!panning) return
+  const dx = e.clientX - panStart.x
+  const dy = e.clientY - panStart.y
+  if (Math.abs(dx) + Math.abs(dy) > 4) panMoved = true
+  const rect = svgRef.value?.getBoundingClientRect()
+  if (!rect) return
+  view.value = {
+    k: viewStart.k,
+    x: viewStart.x + dx * (VB_W / rect.width),
+    y: viewStart.y + dy * (VB_H / rect.height),
+  }
+}
+
+function onPointerUp() {
+  panning = false
+}
+
+/** 节点点击守卫：拖拽平移后的抬起不触发节点动作 */
+function onNodeClick(fn: () => void) {
+  if (panMoved) return
+  fn()
+}
+
+/* ─── 扇区聚焦：点击技能节点锁定查看本业务域，其余元素淡化为背景 ─── */
+const focusedSkill = ref<string | null>(null)
+function toggleFocus(kind: string) {
+  focusedSkill.value = focusedSkill.value === kind ? null : kind
+}
+
+/* ─── 悬停 tooltip：Worker / 技能 / 工单 三类节点详情 ─── */
+const tooltip = ref<{ x: number; y: number; title: string; lines: [string, string][] } | null>(null)
+
+function placeTip(e: MouseEvent, title: string, lines: [string, string][]) {
+  const wrap = wrapRef.value
+  if (!wrap) return
+  const r = wrap.getBoundingClientRect()
+  tooltip.value = {
+    x: Math.min(e.clientX - r.left + 14, r.width - 250),
+    y: Math.max(e.clientY - r.top + 12, 8),
+    title,
+    lines,
+  }
+}
+
+function hideTip() {
+  tooltip.value = null
+}
+
+function stateLabel(s: string): string {
+  const map: Record<string, string> = { idle: '在线空闲', busy: '执行中', draining: '排空下线', offline: '离线维护' }
+  return map[s] || s
+}
+
+function showWorkerTip(e: MouseEvent, w: WorkerNode) {
+  placeTip(e, `${w.id} · ${w.name}`, [
+    ['状态', stateLabel(w.state)],
+    ['负载', `CPU ${w.load}% · RAM ${w.ram}`],
+    ['能力', w.caps.join(', ') || '—'],
+    ['当前任务', w.task || '空闲待命中'],
+    ['权重', String(w.weight)],
+  ])
+}
+
+function showSkillTip(e: MouseEvent, s: { fullName: string; desc: string; runningCount: number; activeCount: number }) {
+  placeTip(e, s.fullName, [
+    ['职责', s.desc],
+    ['运行中', `${s.runningCount} 个任务`],
+    ['活跃工单', `${s.activeCount} 个`],
+    ['操作', '点击聚焦 / 取消聚焦本业务扇区'],
+  ])
+}
+
+function showTaskTip(e: MouseEvent, t: TaskNode) {
+  placeTip(e, `工单 ${t.shortId}`, [
+    ['业务', t.label],
+    ['状态', statusLabel(t.status) + (t.progress != null ? ` · ${t.progress}%` : '')],
+    ['执行节点', t.workerId || '排队待分发'],
+    ['操作', '点击前往任务中心'],
+  ])
+}
+
+/* ─── 调度事件流（分类过滤 + 点击定位星图工单） ─── */
 interface LogItem {
   time: string
   kind: string
@@ -771,7 +1023,7 @@ function addLog(kind: string, html: string, tid?: string) {
   if (logs.value.length > 50) logs.value.pop()
 }
 
-// 点击日志定位：闪烁画布中对应任务工单
+// 点击日志定位：闪烁星图中对应任务工单
 const flashTaskId = ref('')
 let flashTimer = 0
 function flashTask(tid: string) {
@@ -887,58 +1139,16 @@ function handleManualEnqueue() {
   enqueueMockTask()
 }
 
-/* ─── 画布连线：技能 Agent→工单（灰虚线缓流）、工单→Worker（蓝色流动 + 粒子） ─── */
-interface WirePath { key: string; d: string; cls: string; particle: boolean }
-const activeWires = ref<WirePath[]>([])
-
-// 连线规格：所有活跃工单挂技能链路；运行中工单向执行节点挂分发链路
-const wireSpecs = computed(() => {
-  const specs: { key: string; fromSel: string; toSel: string; cls: string; particle: boolean }[] = []
-  taskNodes.value.forEach(t => {
-    specs.push({ key: `s-${t.id}`, fromSel: `[data-skill="${t.kind}"]`, toSel: `[data-ctid="${t.id}"]`, cls: 'wire wire-skill', particle: false })
-    if (t.status === 'running' && t.workerId) {
-      specs.push({ key: `w-${t.id}`, fromSel: `[data-ctid="${t.id}"]`, toSel: `[data-caid="${t.workerId}"]`, cls: 'wire live', particle: true })
-    }
-  })
-  return specs
-})
-
-function drawWires() {
-  const box = canvasRef.value?.getBoundingClientRect()
-  if (!box) {
-    activeWires.value = []
-    return
-  }
-  const paths: WirePath[] = []
-  wireSpecs.value.forEach(spec => {
-    const from = canvasRef.value!.querySelector(spec.fromSel)
-    const to = canvasRef.value!.querySelector(spec.toSel)
-    if (!from || !to) return
-    const fr = from.getBoundingClientRect()
-    const tr = to.getBoundingClientRect()
-    const x1 = fr.right - box.left
-    const y1 = fr.top + fr.height / 2 - box.top
-    const x2 = tr.left - box.left
-    const y2 = tr.top + tr.height / 2 - box.top
-    const mx = (x1 + x2) / 2
-    paths.push({ key: spec.key, cls: spec.cls, particle: spec.particle, d: `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}` })
-  })
-  activeWires.value = paths
-}
-
-/* ─── 完成涟漪：任务终态时在执行节点位置扩散一圈 ─── */
+/* ─── 完成涟漪：任务终态时在 Worker 节点位置扩散一圈（SVG 坐标系直取布局坐标） ─── */
 const ripples = ref<{ id: number; x: number; y: number }[]>([])
 let rippleSeq = 0
 function addRippleAtWorker(workerId: string | null | undefined) {
-  const canvas = canvasRef.value
-  if (!canvas || !workerId) return
-  const el = canvas.querySelector(`[data-caid="${workerId}"]`)
-  if (!el) return
-  const box = canvas.getBoundingClientRect()
-  const r = el.getBoundingClientRect()
+  if (!workerId) return
+  const pw = topo.value.workers.find(x => x.w.id === workerId)
+  if (!pw) return
   const id = ++rippleSeq
-  ripples.value.push({ id, x: r.left - box.left + r.width / 2, y: r.top - box.top + r.height / 2 })
-  window.setTimeout(() => { ripples.value = ripples.value.filter(p => p.id !== id) }, 1100)
+  ripples.value.push({ id, x: pw.x, y: pw.y })
+  window.setTimeout(() => { ripples.value = ripples.value.filter(p => p.id !== id) }, 1200)
 }
 
 /* ─── mock 调度分发循环：按策略选节点 → 工单飞向节点 → 进度推进 → 完成涟漪 + 甘特沉淀 ─── */
@@ -1003,7 +1213,7 @@ function tryAssign() {
   const cost = 55 + Math.round(Math.random() * 70)
   assignCosts.value.push(cost)
   if (assignCosts.value.length > 12) assignCosts.value.shift()
-  // 工单状态置为运行并绑定节点：画布位置由 computed 驱动，CSS transition 自动播放飞行动效
+  // 工单状态置为运行并绑定节点：星图位置由 computed 驱动，CSS transition 自动播放飞行动效
   q.workerId = agent.id
   q.progress = 0
   q.startedAt = Date.now()
@@ -1140,7 +1350,7 @@ let lastEventId = 0
 let pollTimer: number | null = null
 let pollRound = 0
 
-/** 服务端 Worker 快照映射为画布节点模型；RAM 用量契约未提供时显示占位。 */
+/** 服务端 Worker 快照映射为星图节点模型；RAM 用量契约未提供时显示占位。 */
 function mapWorker(w: DispatchWorker): WorkerNode {
   return {
     id: w.id,
@@ -1158,7 +1368,7 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
-/** 全量刷新大盘指标、节点池与任务域（活跃任务进画布，近期任务进甘特）。 */
+/** 全量刷新大盘指标、节点池与任务域（活跃任务进星图，近期任务进甘特）。 */
 async function loadLiveAll() {
   try {
     const [ov, workers, allTasks] = await Promise.all([
@@ -1314,7 +1524,8 @@ let nowTimer: any = null
 /** 分发模拟的延时句柄登记：组件卸载时统一清理，避免回调写入已销毁状态 */
 const assignTimers = new Set<number>()
 onMounted(async () => {
-  window.addEventListener('resize', drawWires)
+  // 滚轮缩放需 preventDefault，必须以非 passive 方式注册
+  svgRef.value?.addEventListener('wheel', onWheel, { passive: false })
   // 甘特时间游标：运行中条形每秒延展
   nowTimer = window.setInterval(() => { nowTs.value = Date.now() }, 1000)
   if (liveMode) {
@@ -1322,7 +1533,6 @@ onMounted(async () => {
     await loadLiveAll()
     await pollLiveEvents()
     pollTimer = window.setInterval(liveTick, 3000)
-    nextTick(drawWires)
     return
   }
   timer = setInterval(() => {
@@ -1336,11 +1546,7 @@ onMounted(async () => {
   }, 2000)
 
   dispatchTimer = setInterval(dispatchTick, 2600)
-  nextTick(drawWires)
 })
-
-// 画布布局变化时在 DOM 更新后重绘连线
-watch([wireSpecs, canvasLayout], () => nextTick(drawWires), { deep: true })
 
 onBeforeUnmount(() => {
   if (timer) clearInterval(timer)
@@ -1350,7 +1556,7 @@ onBeforeUnmount(() => {
   assignTimers.forEach(id => { window.clearTimeout(id); window.clearInterval(id) })
   assignTimers.clear()
   window.clearTimeout(flashTimer)
-  window.removeEventListener('resize', drawWires)
+  svgRef.value?.removeEventListener('wheel', onWheel)
 })
 </script>
 
@@ -1374,7 +1580,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   height: 100%;
-  max-height: 560px;
+  max-height: 640px;
 }
 .dispatch-log-panel .log-stream {
   flex: 1;
@@ -1382,9 +1588,20 @@ onBeforeUnmount(() => {
   min-height: 220px;
 }
 
-/* KPI 迷你趋势线 */
-.kpi-trend {
+/* KPI 发光描边与迷你趋势线 */
+.kpi-glow {
   position: relative;
+  overflow: hidden;
+}
+.kpi-glow::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: radial-gradient(120% 90% at 50% -30%, color-mix(in srgb, var(--accent-ai) 9%, transparent), transparent 60%);
+}
+.kpi-trend {
   padding-bottom: 30px;
 }
 .kpi-trend .spark {
@@ -1404,279 +1621,466 @@ onBeforeUnmount(() => {
   stroke-linecap: round;
 }
 
-/* ═══ 编排画布 ═══ */
-.canvas-wrap {
-  overflow-x: auto;
+/* ═══ 调度星图画布 ═══ */
+.topo-panel {
+  overflow: hidden;
+}
+.topo-wrap {
+  position: relative;
   border: 1px solid var(--border-subtle);
   border-radius: 12px;
+  overflow: hidden;
+  aspect-ratio: 1200 / 680;
   background:
-    linear-gradient(rgba(17, 24, 39, 0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(17, 24, 39, 0.03) 1px, transparent 1px),
+    radial-gradient(60% 55% at 50% 48%, color-mix(in srgb, var(--accent-ai) 5%, transparent), transparent 70%),
     var(--bg-elevated);
-  background-size: 24px 24px, 24px 24px, 100% 100%;
 }
-.orch-canvas {
-  position: relative;
-  min-width: 880px;
-}
-.orch-canvas .wires {
-  position: absolute;
-  inset: 0;
+.topo-svg {
   width: 100%;
   height: 100%;
-  pointer-events: none;
-  overflow: visible;
-  z-index: 5;
+  display: block;
+  user-select: none;
+  touch-action: none;
+  cursor: grab;
 }
-/* 数据流粒子：沿分发链路运动 */
-.particle {
-  fill: var(--accent-ai);
-  filter: drop-shadow(0 0 3px rgba(99, 102, 241, 0.8));
+.topo-svg:active {
+  cursor: grabbing;
+}
+.topo-bg {
+  fill: url(#topo-grid);
+}
+.grid-line {
+  fill: none;
+  stroke: var(--text-tertiary);
+  stroke-width: 0.5;
+  opacity: 0.14;
 }
 
-/* 泳道背景带：左侧业务域色条 + 顶部 caption */
-.lane-band {
+/* 扫描线装饰：周期性自上而下扫过画布 */
+.scanline {
   position: absolute;
   left: 0;
   right: 0;
-  border-left: 3px solid transparent;
-  border-bottom: 1px dashed var(--border-subtle);
-  background: color-mix(in srgb, var(--bg-main) 55%, transparent);
+  top: 0;
+  height: 140px;
+  pointer-events: none;
+  background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--accent-ai) 5%, transparent), transparent);
+  animation: scan-sweep 8s linear infinite;
 }
-.lane-caption {
-  position: absolute;
-  top: 6px;
-  right: 10px;
-  font-size: 10px;
-  letter-spacing: 0.06em;
-  opacity: 0.75;
+@keyframes scan-sweep {
+  from { transform: translateY(-160px); }
+  to { transform: translateY(1100px); }
 }
 
-/* 技能 Agent 节点：泳道左侧固定，活跃时发光 + 脉冲点 */
-.skill-node {
-  position: absolute;
-  left: 1%;
-  width: 14%;
-  min-width: 118px;
-  z-index: 6;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 12px;
-  background: var(--bg-main);
-  box-shadow: 0 2px 8px rgba(17, 24, 39, 0.05);
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+/* 业务扇区底色楔块 */
+.sector-wedge {
+  opacity: 0.05;
+  transition: opacity 0.3s ease;
 }
-.skill-node.on {
-  border-color: color-mix(in srgb, var(--accent-ai) 45%, var(--border-subtle));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-ai) 18%, transparent), 0 4px 16px rgba(99, 102, 241, 0.14);
+.sector-wedge.dim {
+  opacity: 0.015;
 }
-.skill-ico {
-  width: 30px;
-  height: 30px;
-  flex: 0 0 30px;
-  display: grid;
-  place-items: center;
-  border-radius: 9px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-subtle);
-  font-size: 15px;
+
+/* 轨道参考线 */
+.orbit-guide {
+  fill: none;
+  stroke: var(--text-tertiary);
+  stroke-width: 0.8;
+  stroke-dasharray: 2 7;
+  opacity: 0.28;
 }
-.skill-meta {
-  min-width: 0;
+.orbit-guide.outer {
+  opacity: 0.18;
 }
-.skill-name {
-  font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+
+/* 常驻链路：内核 → 技能（灰虚线缓流） */
+.wire-core {
+  fill: none;
+  stroke: var(--text-tertiary);
+  stroke-width: 1.4;
+  stroke-dasharray: 4 6;
+  opacity: 0.5;
+  animation: dash-flow 2.6s linear infinite;
+  transition: opacity 0.3s ease;
 }
-.skill-count {
-  font-size: 10px;
-  color: var(--text-secondary);
-  margin-top: 1px;
+/* 归属链路：技能 → Worker（细实线） */
+.wire-member {
+  fill: none;
+  stroke: var(--text-tertiary);
+  stroke-width: 0.9;
+  opacity: 0.3;
+  transition: opacity 0.3s ease;
 }
-.skill-pulse {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--accent-ai);
+/* 执行链路：高亮流动 */
+.wire-live {
+  fill: none;
+  stroke: var(--accent-ai);
+  stroke-width: 1.8;
+  stroke-dasharray: 6 5;
+  opacity: 0.85;
+  animation: dash-flow 0.9s linear infinite;
+  filter: drop-shadow(0 0 3px color-mix(in srgb, var(--accent-ai) 55%, transparent));
+  transition: opacity 0.3s ease;
+}
+.wire-core.dim,
+.wire-member.dim,
+.wire-live.dim {
+  opacity: 0.08;
+}
+/* 数据流粒子 */
+.particle {
+  fill: var(--accent-ai);
+  filter: drop-shadow(0 0 3px color-mix(in srgb, var(--accent-ai) 80%, transparent));
+}
+
+/* 通用聚焦淡化 */
+.task-chip,
+.skill-node,
+.worker-node {
+  transition: opacity 0.3s ease;
+}
+.task-chip.dim,
+.skill-node.dim,
+.worker-node.dim {
+  opacity: 0.18;
+}
+
+/* ─── 任务工单芯片（transform transition 驱动 队列轨道→链路中段 飞行动效） ─── */
+.task-chip {
+  cursor: pointer;
+  transition:
+    transform 0.75s cubic-bezier(0.2, 0.9, 0.3, 1),
+    opacity 0.3s ease;
+}
+.tc-box {
+  fill: var(--bg-main);
+  stroke: var(--border-subtle);
+  stroke-width: 1;
+  filter: drop-shadow(0 2px 5px rgba(17, 24, 39, 0.10));
+  transition: stroke 0.2s ease;
+}
+.task-chip:hover .tc-box {
+  stroke: var(--accent-ai);
+}
+.task-chip.queued .tc-box {
+  stroke-dasharray: 4 3;
+}
+.task-chip.running .tc-box {
+  stroke: color-mix(in srgb, var(--accent-ai) 55%, var(--border-subtle));
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--accent-ai) 30%, transparent));
+}
+.task-chip.flash .tc-box {
+  animation: chip-flash 0.8s ease-in-out 2;
+}
+@keyframes chip-flash {
+  0%, 100% { stroke: var(--border-subtle); }
+  50% { stroke: var(--accent-ai); stroke-width: 2.4; }
+}
+.tc-dot {
+  fill: var(--text-tertiary);
+}
+.tc-dot.running {
+  fill: var(--accent-ai);
   animation: dot-breathe 1.4s ease-in-out infinite;
 }
-
-/* 任务工单卡片：绝对定位 + left/top transition = 状态驱动的飞行动效 */
-.canvas-task {
-  position: absolute;
-  width: 24%;
-  z-index: 7;
-  padding: 6px 10px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 10px;
-  background: var(--bg-main);
-  font-size: 11.5px;
-  cursor: pointer;
-  box-shadow: 0 2px 8px rgba(17, 24, 39, 0.06);
-  transition:
-    left 0.7s cubic-bezier(0.2, 0.9, 0.3, 1),
-    top 0.7s cubic-bezier(0.2, 0.9, 0.3, 1),
-    border-color 0.2s ease,
-    box-shadow 0.2s ease;
+.tc-dot.awaiting_case_confirm {
+  fill: var(--accent-warning);
 }
-.canvas-task:hover {
-  border-color: var(--accent-ai);
+.tc-id {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  fill: var(--text-secondary);
 }
-.canvas-task.queued {
-  border-style: dashed;
-  opacity: 0.9;
+.tc-status {
+  font-size: 9px;
+  fill: var(--text-tertiary);
 }
-.canvas-task.running {
-  border-color: color-mix(in srgb, var(--accent-ai) 45%, var(--border-subtle));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-ai) 18%, transparent), 0 4px 14px rgba(99, 102, 241, 0.12);
-}
-.canvas-task.flash {
-  animation: task-flash 0.8s ease-in-out 2;
-}
-@keyframes task-flash {
-  0%, 100% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-ai) 18%, transparent); }
-  50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent-ai) 45%, transparent); }
-}
-.ct-id {
+.tc-label {
   font-size: 10.5px;
-  color: var(--c-tasks);
-}
-.ct-badge {
-  margin-left: auto;
-  font-size: 9.5px;
-  padding: 0 5px;
-}
-.ct-label {
-  margin-top: 3px;
   font-weight: 500;
-  line-height: 1.35;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  fill: var(--text-primary);
 }
-/* 运行中工单底部进度条（流动条纹） */
-.ct-progress {
-  margin-top: 4px;
-  height: 3px;
-  border-radius: 999px;
-  background: var(--bg-elevated);
-  overflow: hidden;
+.tc-progress-bg {
+  fill: var(--bg-elevated);
 }
-.ct-progress > i {
-  display: block;
-  height: 100%;
-  border-radius: 999px;
-  background: repeating-linear-gradient(45deg, var(--accent-ai) 0 6px, color-mix(in srgb, var(--accent-ai) 55%, #fff) 6px 12px);
-  background-size: 17px 100%;
-  animation: bar-stripes 0.9s linear infinite;
+.tc-progress {
+  fill: var(--accent-ai);
   transition: width 0.4s ease;
 }
-@keyframes bar-stripes {
-  to { background-position: 17px 0; }
+.queue-overflow {
+  font-size: 10px;
+  fill: var(--text-tertiary);
+  font-family: var(--font-mono);
 }
 
-/* Worker 画布节点：紧凑卡片，状态点 + 负载条 */
-.canvas-worker {
+/* ─── 技能 Agent 内环节点 ─── */
+.skill-node {
+  cursor: pointer;
+}
+.sn-halo {
+  fill: var(--sk, var(--accent-ai));
+  opacity: 0.10;
+  transition: opacity 0.25s ease, r 0.25s ease;
+}
+.skill-node.on .sn-halo {
+  opacity: 0.22;
+  animation: halo-breathe 2.2s ease-in-out infinite;
+}
+@keyframes halo-breathe {
+  0%, 100% { opacity: 0.14; }
+  50% { opacity: 0.28; }
+}
+.sn-core {
+  fill: var(--bg-main);
+  stroke: var(--sk, var(--border-subtle));
+  stroke-width: 1.6;
+  filter: drop-shadow(0 2px 6px rgba(17, 24, 39, 0.10));
+  transition: stroke-width 0.2s ease;
+}
+.skill-node:hover .sn-core,
+.skill-node.on .sn-core {
+  stroke-width: 2.4;
+}
+.sn-ico {
+  font-size: 17px;
+}
+.sn-name {
+  font-size: 11.5px;
+  font-weight: 600;
+  fill: var(--text-primary);
+}
+.sn-count {
+  font-size: 9.5px;
+  fill: var(--text-tertiary);
+  font-family: var(--font-mono);
+}
+
+/* ─── Worker 外环节点：负载环 + 状态点 ─── */
+.worker-node {
+  cursor: pointer;
+}
+.wn-ring-bg {
+  fill: none;
+  stroke: var(--border-subtle);
+  stroke-width: 3;
+  opacity: 0.6;
+}
+.wn-load {
+  fill: none;
+  stroke: var(--accent-ai);
+  stroke-width: 3;
+  stroke-linecap: round;
+  transition: stroke-dasharray 0.6s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+.wn-load.hot {
+  stroke: var(--accent-warning);
+}
+.wn-core {
+  fill: var(--bg-main);
+  stroke: var(--border-subtle);
+  stroke-width: 1;
+  transition: stroke 0.2s ease;
+}
+.worker-node:hover .wn-core {
+  stroke: var(--accent-ai);
+}
+.worker-node.busy .wn-core {
+  stroke: color-mix(in srgb, var(--accent-ai) 55%, var(--border-subtle));
+  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--accent-ai) 35%, transparent));
+}
+.worker-node.offline {
+  opacity: 0.4;
+}
+.wn-pct {
+  font-size: 9.5px;
+  font-weight: 600;
+  fill: var(--text-primary);
+  font-family: var(--font-mono);
+}
+.wn-id {
+  font-size: 9.5px;
+  fill: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+.wn-dot {
+  fill: var(--text-tertiary);
+  stroke: var(--bg-main);
+  stroke-width: 1.4;
+}
+.wn-dot.idle { fill: var(--accent-success); }
+.wn-dot.busy { fill: var(--accent-ai); animation: dot-breathe 1.4s ease-in-out infinite; }
+.wn-dot.draining { fill: var(--accent-warning); }
+
+/* ─── 中心调度内核 ─── */
+.core-ring {
+  fill: none;
+  stroke: var(--accent-ai);
+  stroke-width: 1.2;
+  stroke-dasharray: 10 14;
+  opacity: 0.55;
+}
+.core-ring2 {
+  fill: none;
+  stroke: var(--accent-ai);
+  stroke-width: 1;
+  stroke-dasharray: 3 9;
+  opacity: 0.4;
+}
+.spin-a {
+  animation: core-spin 26s linear infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.spin-b {
+  animation: core-spin 18s linear infinite reverse;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+@keyframes core-spin {
+  to { transform: rotate(360deg); }
+}
+.core-sweep {
+  animation: core-spin 5s linear infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.core-center {
+  fill: var(--bg-main);
+  stroke: var(--accent-ai);
+  stroke-width: 1.8;
+  filter: drop-shadow(0 0 10px color-mix(in srgb, var(--accent-ai) 40%, transparent));
+}
+.core-center.halt {
+  stroke: var(--text-tertiary);
+  filter: none;
+}
+.core-ico {
+  font-size: 15px;
+}
+.core-status {
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  fill: var(--accent-ai);
+  font-family: var(--font-mono);
+}
+.core-name {
+  font-size: 12px;
+  font-weight: 600;
+  fill: var(--text-primary);
+}
+
+/* 完成涟漪（SVG 圆扩散） */
+.ripple-c {
+  fill: none;
+  stroke: var(--accent-success);
+  stroke-width: 2.5;
+  pointer-events: none;
+  animation: ripple-svg 1.1s ease-out forwards;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+@keyframes ripple-svg {
+  0% { transform: scale(0.6); opacity: 0.95; }
+  100% { transform: scale(4.2); opacity: 0; }
+}
+
+/* 悬停 tooltip */
+.topo-tip {
   position: absolute;
-  width: 25%;
-  z-index: 6;
-  padding: 7px 10px;
-  border: 1px solid var(--border-subtle);
+  z-index: 20;
+  min-width: 180px;
+  max-width: 250px;
+  padding: 10px 12px;
   border-radius: 10px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-main);
+  box-shadow: 0 8px 24px rgba(17, 24, 39, 0.14);
+  pointer-events: none;
+  font-size: 11.5px;
+}
+.tt-title {
+  font-weight: 600;
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+.tt-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  line-height: 1.8;
+}
+.tt-val {
+  text-align: right;
+  word-break: break-all;
+}
+
+/* 缩放控件 */
+.zoom-ctrl {
+  display: inline-flex;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.zoom-btn {
+  border: none;
+  background: var(--bg-main);
+  color: var(--text-secondary);
+  font-size: 12px;
+  min-width: 30px;
+  height: 26px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.zoom-btn:hover {
+  background: var(--row-hover);
+  color: var(--text-primary);
+}
+.zoom-btn + .zoom-btn {
+  border-left: 1px solid var(--border-subtle);
+}
+
+/* Worker 节点池芯片 */
+.worker-pool {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.wp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
   background: var(--bg-main);
   cursor: pointer;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+  font-size: 10.5px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
-.canvas-worker:hover {
-  border-color: var(--text-tertiary);
+.wp-chip:hover {
+  border-color: var(--accent-ai);
 }
-.canvas-worker.busy {
+.wp-chip.busy {
   border-color: color-mix(in srgb, var(--accent-ai) 40%, var(--border-subtle));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-ai) 16%, transparent);
 }
-.canvas-worker.offline {
+.wp-chip.offline {
   opacity: 0.45;
 }
-.cw-dot {
-  width: 7px;
-  height: 7px;
-  flex: 0 0 7px;
+.wp-dot {
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: var(--text-tertiary);
 }
-.cw-dot.idle { background: var(--accent-success); }
-.cw-dot.busy { background: var(--accent-ai); animation: dot-breathe 1.4s ease-in-out infinite; }
-.cw-dot.draining { background: var(--accent-warning); }
-.cw-name {
-  font-size: 11px;
+.wp-dot.idle { background: var(--accent-success); }
+.wp-dot.busy { background: var(--accent-ai); animation: dot-breathe 1.4s ease-in-out infinite; }
+.wp-dot.draining { background: var(--accent-warning); }
+.wp-id {
   font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
-.cw-load {
-  margin-left: auto;
-  font-size: 10px;
-  color: var(--text-secondary);
-}
-.load-track {
-  height: 4px;
-  border-radius: 999px;
-  background: var(--bg-elevated);
-  overflow: hidden;
-}
-.load-track > i {
-  display: block;
-  height: 100%;
-  border-radius: 999px;
-  background: var(--accent-ai);
-  transition: width 0.5s cubic-bezier(0.2, 0.9, 0.3, 1);
-}
-.load-track.hot > i {
-  background: var(--accent-warning);
-}
-
-/* 泳道队列区空态 */
-.lane-empty {
-  position: absolute;
-  left: 18%;
-  width: 24%;
-  text-align: center;
-  z-index: 4;
-}
-
-/* 完成涟漪 */
-.ripple {
-  position: absolute;
-  z-index: 8;
-  width: 10px;
-  height: 10px;
-  margin: -5px;
-  border-radius: 50%;
-  background: var(--accent-success);
-  pointer-events: none;
-  animation: ripple-out 1s ease-out forwards;
-}
-@keyframes ripple-out {
-  0% { transform: scale(1); opacity: 0.9; }
-  100% { transform: scale(7); opacity: 0; }
-}
-
-/* 技能→工单连线：灰色虚线缓流（区别于工单→Worker 的高亮流动） */
-:deep(.wire-skill) {
-  stroke: var(--text-tertiary);
-  stroke-dasharray: 3 6;
-  opacity: 0.55;
-  animation: dash-flow 2.4s linear infinite;
+.wp-load {
+  color: var(--text-tertiary);
 }
 
 /* 图例 */
@@ -1764,6 +2168,9 @@ onBeforeUnmount(() => {
   background-size: 23px 100%;
   animation: bar-stripes 0.9s linear infinite;
 }
+@keyframes bar-stripes {
+  to { background-position: 23px 0; }
+}
 .gantt-bar.st-awaiting_case_confirm { background: var(--accent-warning); }
 .gantt-bar.st-succeeded { background: var(--accent-success); }
 .gantt-bar.st-failed,
@@ -1787,6 +2194,10 @@ onBeforeUnmount(() => {
 @media (max-width: 880px) {
   .bottom-grid {
     grid-template-columns: 1fr;
+  }
+  .topo-wrap {
+    aspect-ratio: auto;
+    height: 520px;
   }
   .gantt-axis {
     padding-left: 110px;
