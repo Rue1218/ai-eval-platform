@@ -2,14 +2,14 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.1 |
+| 文档版本 | V1.2 |
 | 对应 PRD | V1.6.3（功能唯一权威） |
 | 对应设计规范 | V1.2（页面 / 组件 / 浮层 / 令牌） |
 | 对应总计划 | V1.0（日历与门禁） |
 | 对应后端计划 | V1.1（契约提供方） |
-| 对应 API | V1.0（路径/JSON 唯一冻结） |
+| 对应 API | V1.2（路径/JSON 唯一冻结） |
 | 撰写日期 | 2026-08-17 |
-| 最近修订 | 2026-08-17：契约表对齐 API V1.0（会话方案 A、`GET /api/auth/me`） |
+| 最近修订 | 2026-08-18：增加原型实时/Mock 数据边界、接口缺口闭环与联调验收 |
 | 计划起点 | 2026-08-18 |
 | V1.0 目标发布 | 2026-12-04 |
 | 总工期 | **16 周**（与总计划同一日历） |
@@ -48,7 +48,11 @@
 
 - 编制：Vue × 1（与总计划一致）。  
 - 周一排本周条目；周三与后端对契约；周五 30 分钟演示。  
-- 后端未就绪时：页面用 mock（同 schema），**不得改字段名迁就 mock**。
+- 后端未就绪时：仅可用显式 Mock（`?data=mock`，同 schema）；**不得**把 Mock 作为请求失败回退，更不得改字段名迁就 Mock。
+
+### 1.4 V1.2 权限口径校正
+
+PRD 2.1 已冻结为单一 `member`、全员同权。本计划中早期出现的 `admin`、`engineer`、`readonly`、`minRole`、按角色裁剪侧栏等文字均为旧版遗留，**不进入实现**；以 §2.2 和 API V1.2 为准。保留 `/admin/*` 仅为信息架构和历史 URL，不代表角色限制。任务取消仍按“创建者”约束，`prod` 会签须非创建者成员。
 
 ---
 
@@ -88,23 +92,20 @@ frontend/src/
 
 ### 2.2 路由与权限（设计规范 §3）
 
-| 路由 | 视图 | `minRole` | 侧栏 | 最早可演示 |
+| 路由 | 视图 | 访问口径 | 侧栏 | 最早可演示 |
 | --- | --- | --- | --- | --- |
 | `/login` | Login | 无 | 否 | M0 |
-| `/agent` | Agent | 工程师 | 是「智能体」 | M1 |
-| `/tasks` | Tasks | 只读 | 是 | M1 |
-| `/reports/:id` | Report | 只读；`?share=` 可未登录 | 否 | M2 |
-| `/datasets` | Datasets | 工程师 | 是 | M2 |
-| `/cases` | Cases | 工程师 | 是 | M2 |
-| `/kb` | Kb | 工程师 | 是 | M3 |
-| `/admin/profiles` | AdminProfiles | 管理员 | 是 | M1 |
-| `/admin/stress` | AdminStress | 管理员 | 是 | M4（M1 可放空壳） |
-| `/admin/users` | AdminUsers | 管理员 | 是 | M1 |
+| `/agent` | Agent | 已登录成员 | 是「智能体」 | M1 |
+| `/tasks` | Tasks | 已登录成员；取消限创建者 | 是 | M1 |
+| `/reports/:id` | Report | 已登录成员；`?share=` 可未登录只读 | 否 | M2 |
+| `/datasets` | Datasets | 已登录成员 | 是 | M2 |
+| `/cases` | Cases | 已登录成员 | 是 | M2 |
+| `/kb` | Kb | 已登录成员 | 是 | M3 |
+| `/admin/profiles` | AdminProfiles | 已登录成员（路由名保留） | 是 | M1 |
+| `/admin/stress` | AdminStress | 已登录成员（路由名保留） | 是 | M4（M1 可放空壳） |
+| `/admin/users` | AdminUsers | 已登录成员（路由名保留） | 是 | M1 |
 
-守卫：无权限不渲染入口；误入回 `/tasks`（只读）或 `/agent`（其余），Toast `UNAUTHORIZED` 文案，不整页 403。  
-登录后落地：工程师/管理员 → `/agent`；只读 → `/tasks`。
-
-只读：**看不到** `/agent`、数据集/用例/KB 写入口、管理页。
+守卫：未登录跳 `/login`；分享 token 仅开放对应报告的只读视图。V1.0 不按历史 `admin/engineer/readonly` 隐藏入口；敏感变更由后端审计，任务取消由创建者约束。登录后统一落地 `/agent`。
 
 ---
 
@@ -558,7 +559,7 @@ PRD 5.8 / 规范 §3 十一条路由均在 §2.2；无改系统提示词页、�
 
 ### A.3 检查中发现并已修
 
-1. 5.9 未列但正文/规范需要的路径：以 API V1.0 为准（含 `GET /api/auth/me`、会话方案 A）。  
+1. 5.9 未列但正文/规范需要的路径：以 API V1.2 为准（含 `GET /api/auth/me`、会话方案 A）。
 2. 黄金 QA 映射（PRD 5.4.2）误只写在 M2 → 改到 M3。  
 3. Hit@K 的 `k`、Judge 开关不在确认卡 5.1.2 → API 已冻结为可选 `run.k` / `run.use_judge`。  
 4. 知识库「标核心」、删他人资产（PRD 2.1）补进 W10。  
@@ -567,4 +568,71 @@ PRD 5.8 / 规范 §3 十一条路由均在 §2.2；无改系统提示词页、�
 ### A.4 与总计划日历
 
 M0–H 周次与日期与总计划第 1.3 / 第 4 节一致。门禁脚本一致。红线一致。
+
+---
+
+## 11. 实时 API 接入实施清单（V1.2 新增）
+
+本节把原型审计结论转换为 Vue 实施任务。它是第 3 节“契约”的落地顺序：先让失败可见、再替换 Mock、最后做完整业务页；不以“页面有示例数据”作为完成标准。
+
+### 11.1 数据分层与代码责任
+
+| 层 | 前端位置 | 内容 | 规则 |
+| --- | --- | --- | --- |
+| 静态配置 | `constants/`、路由、UI token、表头、枚举 | 不随用户/任务变化的显示配置 | 不得存任务、报告、用户、KPI 或接口示例实体 |
+| API 类型与请求 | `api/http.ts`、`api/*.ts`、`types/` | API V1.2 的请求、响应、错误、分页类型 | 所有业务请求只能从此层发出；`credentials: include` |
+| Store/Query 缓存 | `stores/` 或 Vue Query | 最近一次真实响应、loading/error/stale 状态 | 初始为空；写成功后失效并重取，不能以内置样本补空 |
+| Mock | `mocks/`（MSW 或等价 adapter） | 与 API V1.2 同 schema 的固定夹具 | 仅 `VITE_DATA_MODE=mock`；构建/顶栏必须显示 Mock |
+
+原型 `assets/app.js` 的 `MOCK_SEED`、`assets/api.js` 的 `?data=mock` 是上述划分的验证样例。生产 Vue 代码不得复制其业务样本到 store。
+
+### 11.2 M0：先交付可观测请求层（W1）
+
+| 编号 | 工作项 | 输入/输出 | 验收 |
+| --- | --- | --- |
+| FE-API-01 | 建 `http.ts`、`ApiError`、JSON/FormData/Blob 三分支 | 输入 API §1；输出统一 `request<T>` | 401/403/4xx/5xx/network 均保留 `code/status/fields`，无自动 Mock 回退 |
+| FE-API-02 | 建运行配置 | `VITE_API_BASE`、`VITE_DATA_MODE`、开发反代 | 默认 `live`；CI build 禁止把 `mock` 设为默认 |
+| FE-API-03 | 定义共享 DTO 与 Zod/TS 校验 | list envelope、Error、TaskSpec、WS event | `TaskSpec` 同时供 ConfirmCard 和表单；类型断言不能吞未知必填字段 |
+| FE-API-04 | 加全局 SourceBadge、Loading/Error/Empty 边界 | AppShell、路由页 | 断网时明确报接口/错误码；不显示示例 KPI 或报告 |
+| FE-API-05 | 为 API adapter 写 MSW 夹具和契约测试 | 登录、列表、写、上传、WS event fixture | Mock 与 live 使用同一 API service 函数；切换模式无页面分支 |
+
+### 11.3 页面替换顺序与接口清单
+
+| 阶段 | 页面/Store | 首批读接口 | 首批写接口 | UI 完成条件 |
+| --- | --- | --- | --- |
+| M1 W2 | auth、member、profiles、settings | me/users/profiles/settings | login、change-password、profile CRUD/check | 刷新身份、密钥不回显、字段错误定位至表单 |
+| M1 W4–W5 | sessions、agent、tasks | sessions/messages、profiles、tasks | create session、TaskSpec、cancel/rerun | 确认卡只提交后端返回的 schema；WS 重连从 `last_event_id` 补发 |
+| M1 W5 | dispatch | overview/workers/queued tasks | dispatch config | 拓扑、队列、容量仅由响应驱动；无 Worker 时显示空态 |
+| M2 W6–W9 | datasets、cases、reports | datasets/rows、case-sets、reports/samples | upload/save rows、case confirm/map、share/baseline | 编辑保存后 `invalidate`；报告不存在时只显示空/错误态 |
+| M3 W10–W12 | kb、gold QA、RAG report | kb/docs/gold-qa、report | 文档/QA 上传、query | query 结果与返回 doc ID 一一对应；无 ID 样本的指标说明来自 API |
+| M4 W13–W15 | stress settings、series、notify | whitelist/usage/settings/stress-series | whitelist、settings、approve-stress | 图表只用 series，绝不从 WS progress 拼曲线；prod 未会签只呈 queued |
+
+### 11.4 每个接口页面的联调动作
+
+1. 先在浏览器 Network 中确认请求 URL、Cookie、请求体、响应 schema 与 API V1.2 一致。
+2. 对每一个列表做空、分页、401、403、500 五种状态；图表不得用硬编码数列兜底。
+3. 每一个写操作必须覆盖成功、`VALIDATION.fields`、重复点击、刷新后回读四种情形。
+4. 上传操作覆盖 FormData、20MB 限制、服务端异步处理中/失败、重新拉取版本。
+5. WS 覆盖短票失败、网络断开、事件重放、重复 event_id 去重；不新增未契约化事件名。
+
+### 11.5 前端联调门禁
+
+| 门禁 | 必须提供的证据 |
+| --- | --- |
+| M1 | 浏览器 HAR：login/me、profiles、sessions、WS 短票；录像显示 API 故障页而非 Mock 数据 |
+| M2 | JSONL 上传后 rows 回读、TaskSpec 下单、报告/样本读取、基线和分享链接的自动化测试 |
+| M3 | 文档上传到 query 回答的完整链路；Golden QA 版本变更后指标刷新 |
+| M4 | 白名单/会签负例、stress-series 图表、断线后最终任务状态一致 |
+
+未通过任一门禁时，相关页面只能标记“Mock 已验收”，不得标记“API 已接入”。
+
+### 11.6 本次原型复查新增的逐页落地项
+
+| 编号 | 页面 | 实施项 | API/验收 |
+| --- | --- | --- | --- |
+| FE-API-06 | Agent | 附件先上传为 `file_id`；会话历史 REST 回放；消息、工具、确认、进度、报告仅消费 WS 固定事件 | `/files`、`/sessions/{id}/messages`、`ws/agent`；服务端无事件时不得浏览器生成任务成功/进度 |
+| FE-API-07 | 数据集/用例 | 行与用例候选统一为“API 返回 → 用户采纳 → 保存”三段；编辑后写回并刷新 | datasets rows/ai-generate，case-sets ai-generate/create/cases；生成接口只返回候选，不暗写业务数据 |
+| FE-API-08 | KB | 文档列表、切块预览、Query 指标和召回都由接口响应驱动 | documents、chunks、query；生产模式没有投影接口时显示说明，不画样本散点 |
+| FE-API-09 | 调度 | Worker/队列只轮询服务端；浏览器不得随机入队、分配或完成任务 | overview/workers/tasks；注册和节点治理分别 POST/PUT worker；手动造队列只允许 Mock |
+| FE-API-10 | Mock 隔离 | 所有示例实体移到 `mocks/`，以显式开关加载 | 代码审查搜索 `Math.random`、`setTimeout`、固定业务 ID；live 分支不得用于生成业务结果 |
 

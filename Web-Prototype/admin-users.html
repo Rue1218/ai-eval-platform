@@ -1,0 +1,422 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>成员与账号管理 · AI 测试与评估平台</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/shell.css">
+<style>
+  .users-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 320px;
+    gap: 20px;
+    align-items: flex-start;
+  }
+  @media (max-width: 1100px) {
+    .users-grid { grid-template-columns: 1fr; }
+  }
+  .avatar-circle {
+    width: 30px; height: 30px; border-radius: 50%;
+    background: color-mix(in srgb, var(--c-users) 20%, var(--bg-main));
+    color: var(--c-users); font-weight: 700; font-size: 12px;
+    display: flex; align-items: center; justify-content: center;
+    border: 1px solid color-mix(in srgb, var(--c-users) 40%, transparent);
+    flex: 0 0 auto;
+  }
+  .user-cell { display: flex; align-items: center; gap: 10px; }
+  .user-name-box { display: flex; flex-direction: column; min-width: 0; }
+  .user-uname { font-weight: 600; font-size: 13px; color: var(--text-primary); }
+  .user-dname { font-size: 11px; color: var(--text-secondary); }
+</style>
+</head>
+<body>
+<div class="app" id="app"></div>
+
+<script src="assets/app.js"></script>
+<script src="assets/api.js"></script>
+<script>
+(function () {
+  const content = AE.renderShell('users', '成员与账号管理', { flush: true });
+  const me = AE.getUser().username;
+
+  let USERS = [];
+  let filterText = '';
+  let filterStatus = 'all'; // 'all' | 'active' | 'disabled'
+
+  const AUDIT_LOGS = [
+    { at: '10:42', type: 'info', text: '重置密码 · ops-li (操作人: admin)' },
+    { at: '09:18', type: 'info', text: '开户注册 · qa-wang (操作人: admin)' },
+    { at: '08:50', type: 'warn', text: '冻结基线 · task e5f2b8 设为评测基准' },
+    { at: '03:12', type: 'err', text: '异地登录拦截 · ops-li (IP: 198.51.100.22)' }
+  ];
+
+  /* ─── 页面主渲染 ─── */
+  function renderLayout() {
+    const total = USERS.length;
+    const active = USERS.filter(u => !u.disabled).length;
+    const disabled = total - active;
+
+    const filteredUsers = USERS.filter(u => {
+      const matchText = !filterText || (u.username + (u.display_name || '') + (u.email || '')).toLowerCase().includes(filterText.toLowerCase());
+      const matchStatus = filterStatus === 'all' || (filterStatus === 'active' && !u.disabled) || (filterStatus === 'disabled' && u.disabled);
+      return matchText && matchStatus;
+    });
+
+    content.innerHTML = `
+      <div class="page-narrow" style="max-width:1300px;padding:0 24px 40px" data-od-id="users-page">
+        <!-- 顶部操作与权限提示 -->
+        <div class="row-between mb16">
+          <div class="info-strip" style="margin:0;padding:6px 14px;border-radius:8px">
+            单一角色「成员（Member）」，全员同权。所有人均具备发起评测、数据集管理与调度观测能力。
+          </div>
+          <button class="btn btn-sign btn-sm" id="btn-add-user">+ 邀请 / 开户</button>
+        </div>
+
+        <!-- 4 维 KPI 统计指标卡 -->
+        <div class="kpi-grid mb20" style="--glow-c:var(--c-users)">
+          <div class="kpi">
+            <div class="kpi-num num">${total}</div>
+            <div class="kpi-label">成员总数</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-num num">${active}</div>
+            <div class="kpi-label">正常使用</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-num num" style="${disabled > 0 ? 'color:var(--accent-warning)' : ''}">${disabled}</div>
+            <div class="kpi-label">已停用账号</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-num num">47</div>
+            <div class="kpi-label">24h 登录活跃</div>
+          </div>
+        </div>
+
+        <!-- 主内容双栏布局 -->
+        <div class="users-grid">
+          <!-- 左主栏：成员列表与即时筛选 -->
+          <div class="panel glow" style="--glow-c:var(--c-users);padding:16px 20px">
+            <div class="row-between mb16">
+              <div class="row" style="gap:10px;flex:1">
+                <input class="input" id="search-user" placeholder="搜索用户名、姓名或邮箱..." style="max-width:280px;font-size:12.5px" value="${AE.esc(filterText)}">
+                <select class="select" id="filter-status-sel" style="max-width:140px;font-size:12.5px">
+                  <option value="all" ${filterStatus === 'all' ? 'selected' : ''}>全部状态</option>
+                  <option value="active" ${filterStatus === 'active' ? 'selected' : ''}>正常账号</option>
+                  <option value="disabled" ${filterStatus === 'disabled' ? 'selected' : ''}>已停用</option>
+                </select>
+              </div>
+              <span class="small tertiary">共 ${filteredUsers.length} 位成员</span>
+            </div>
+
+            <table class="ds-table" data-od-id="users-table">
+              <thead><tr>
+                <th>成员信息</th>
+                <th>权限与角色</th>
+                <th>账号状态</th>
+                <th>最近登录 (IP)</th>
+                <th>开户时间</th>
+                <th style="text-align:right">操作</th>
+              </tr></thead>
+              <tbody>
+                ${filteredUsers.map(u => {
+                  const initial = (u.display_name || u.username).charAt(0).toUpperCase();
+                  return `
+                    <tr data-uid="${u.id}">
+                      <td>
+                        <div class="user-cell">
+                          <div class="avatar-circle">${initial}</div>
+                          <div class="user-name-box">
+                            <span class="user-uname">${AE.esc(u.username)}</span>
+                            <span class="user-dname">${AE.esc(u.display_name || u.email || '未完善资料')}</span>
+                          </div>
+                        </div>
+                      </td>
+                      <td><span class="tag-soft">成员 · 全员同权</span></td>
+                      <td>
+                        ${u.disabled ? '<span class="badge badge-cancelled"><i class="bdot"></i>已停用</span>' : '<span class="badge badge-succeeded"><i class="bdot"></i>正常</span>'}
+                      </td>
+                      <td class="small tertiary mono">${u.last_login_ip || '127.0.0.1'} · ${AE.relTime(u.last_login_at || u.created_at)}</td>
+                      <td class="small tertiary mono">${u.created_at ? u.created_at.slice(0, 10) : '2026-08-10'}</td>
+                      <td style="text-align:right">
+                        <div class="row-actions" style="justify-content:flex-end">
+                          <button class="link-btn" data-act="reset">重置密码</button>
+                          <button class="link-btn danger" data-act="toggle">${u.disabled ? '启用' : '停用'}</button>
+                        </div>
+                      </td>
+                    </tr>`;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+
+          <!-- 右侧栏：AI 安全监控与审计流水 -->
+          <div class="section-gap" style="gap:20px">
+            <!-- 1. AI 账号安全与异常行为检测 -->
+            <div class="ai-card" data-od-id="users-ai">
+              <div class="ai-card-head">
+                <span class="ai-badge"><i class="ai-dot"></i>AI 账号异常检测</span>
+              </div>
+              <div class="section-gap" style="gap:8px;margin-bottom:10px">
+                <div class="small ai-gen-line" style="color:var(--text-secondary);line-height:1.5">
+                  · 账号 <b>ops-li</b> 今晨 03:12 出现一次异地登录（IP: 198.51.100.22 归属地异常），平台安全网关已自动阻断。
+                </div>
+                <div class="small ai-gen-line" style="color:var(--text-secondary);line-height:1.5;animation-delay:90ms">
+                  · 其余成员账号登录频次正常，无暴力破解特征。
+                </div>
+              </div>
+              <div class="row" style="justify-content:flex-end">
+                <button class="btn btn-ai btn-sm" id="ai-lock">临时锁定 ops-li</button>
+              </div>
+            </div>
+
+            <!-- 2. 24h 登录活动分布 -->
+            <div class="panel glow" style="--glow-c:var(--c-users);padding:16px 18px">
+              <div class="panel-title mb8">24h 登录活跃分布</div>
+              <svg id="login-bars" width="100%" height="72" viewBox="0 0 280 72" preserveAspectRatio="none" aria-hidden="true" style="margin-bottom:8px"></svg>
+              <div class="row-between small">
+                <span class="tertiary">登录成功 <b class="num" style="color:var(--accent-success)">47 次</b></span>
+                <span class="tertiary">拦截失败 <b class="num" style="color:var(--accent-error)">3 次</b></span>
+              </div>
+            </div>
+
+            <!-- 3. 近期合规审计日志 -->
+            <div class="panel glow" style="--glow-c:var(--c-users);padding:16px 18px">
+              <div class="panel-title mb12">近期合规审计轨迹</div>
+              <div class="timeline">
+                ${AUDIT_LOGS.map(a => `
+                  <div class="tl-item ${a.type}">
+                    <div class="tl-time mono">${a.at}</div>
+                    <div class="small">${AE.esc(a.text)}</div>
+                  </div>`).join('')}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>`;
+
+    bindEvents();
+    drawLoginBars();
+  }
+
+  /* ─── 绘制 24h 登录柱状图 ─── */
+  function drawLoginBars() {
+    const el = document.getElementById('login-bars');
+    if (!el) return;
+    const H24 = [0, 0, 1, 0, 0, 0, 1, 2, 5, 8, 6, 4, 3, 5, 7, 4, 3, 2, 1, 1, 0, 0, 0, 1];
+    const max = Math.max.apply(null, H24);
+    const bw = 280 / 24;
+    el.innerHTML = H24.map((v, i) => {
+      const h = Math.max(2, v / max * 60);
+      return `<rect x="${(i * bw + 1.5).toFixed(1)}" y="${(68 - h).toFixed(1)}" width="${(bw - 3).toFixed(1)}" height="${h.toFixed(1)}" rx="2" fill="var(--c-users)" opacity="${v ? '.8' : '.18'}"/>`;
+    }).join('');
+  }
+
+  /* ─── 交互与事件绑定 ─── */
+  function bindEvents() {
+    // 搜索与过滤
+    document.getElementById('search-user').oninput = e => {
+      filterText = e.target.value.trim();
+      renderLayout();
+    };
+    document.getElementById('filter-status-sel').onchange = e => {
+      filterStatus = e.target.value;
+      renderLayout();
+    };
+
+    // 开户弹窗
+    document.getElementById('btn-add-user').onclick = () => openAddUserModal();
+
+    // AI 临时锁定
+    document.getElementById('ai-lock').onclick = async () => {
+      const u = USERS.find(x => x.username === 'ops-li');
+      if (!u) return;
+      if (u.disabled) { AE.toast('info', '账号 ops-li 当前已处于停用状态'); return; }
+      await AE.API.users.toggleStatus(u.id, true);
+      u.disabled = true;
+      renderLayout();
+      AE.toast('success', '账号 ops-li 已临时锁定（写审计日志）');
+    };
+
+    // 表格按钮
+    document.querySelectorAll('tr[data-uid]').forEach(tr => {
+      const u = USERS.find(x => x.id === tr.dataset.uid);
+      if (!u) return;
+      tr.querySelector('[data-act=reset]').onclick = () => openResetPwdModal(u);
+      tr.querySelector('[data-act=toggle]').onclick = () => toggleUserStatus(u);
+    });
+  }
+
+  /* ─── 开户注册弹窗 ─── */
+  function openAddUserModal() {
+    AE.modal({
+      title: '成员开户 (POST /api/users)',
+      wide: true,
+      body: `
+        <div class="form-row mb12">
+          <div class="field"><span class="field-label">用户名 (Username) <i class="req">*</i></span><input class="input" id="nu-name" placeholder="如 qa-zhang"></div>
+          <div class="field"><span class="field-label">真实姓名 / 显示名</span><input class="input" id="nu-dname" placeholder="如 张测试"></div>
+        </div>
+        <div class="field mb12">
+          <span class="field-label">电子邮箱</span>
+          <input class="input" id="nu-email" placeholder="zhang@company.com">
+        </div>
+        <div class="field mb12">
+          <span class="field-label">初始登录密码 <i class="req">*</i></span>
+          <div class="row" style="gap:6px">
+            <input class="input mono grow" id="nu-pwd" type="password" placeholder="≥8 位，包含字母与数字">
+            <button class="btn btn-ai btn-sm" id="nu-gen-pwd" type="button" style="flex:0 0 auto">✨ 随机生成</button>
+          </div>
+        </div>
+        <div class="field mb12">
+          <label class="row" style="gap:8px;cursor:pointer">
+            <input type="checkbox" id="nu-must-change" checked>
+            <span class="small">强制首次登录修改密码 (Must Change Password)</span>
+          </label>
+        </div>
+        <div class="field-error" id="nu-err" style="display:none"></div>`,
+      foot: `<button class="btn btn-secondary" id="nu-c">取消</button><button class="btn btn-sign" id="nu-ok">确认创建</button>`,
+      onMount: (el, close) => {
+        el.querySelector('#nu-c').onclick = close;
+        el.querySelector('#nu-gen-pwd').onclick = () => {
+          const randPwd = 'Eval@' + Math.random().toString(36).slice(2, 8) + '9!';
+          const pwdInp = el.querySelector('#nu-pwd');
+          pwdInp.type = 'text';
+          pwdInp.value = randPwd;
+          AE.toast('info', '已生成高强度随机密码');
+        };
+        el.querySelector('#nu-ok').onclick = async () => {
+          const username = el.querySelector('#nu-name').value.trim();
+          const display_name = el.querySelector('#nu-dname').value.trim();
+          const email = el.querySelector('#nu-email').value.trim();
+          const pwd = el.querySelector('#nu-pwd').value.trim();
+          const err = el.querySelector('#nu-err');
+
+          if (!username || pwd.length < 8 || !/[a-zA-Z]/.test(pwd) || !/\d/.test(pwd)) {
+            err.textContent = '请检查字段：用户名必填；密码需不少于 8 位且包含字母和数字';
+            err.style.display = '';
+            return;
+          }
+
+          if (USERS.some(x => x.username === username)) {
+            err.textContent = '该用户名已被占用';
+            err.style.display = '';
+            return;
+          }
+
+          const newUser = {
+            id: 'u-' + Date.now(),
+            username,
+            display_name: display_name || username,
+            email: email || `${username}@company.internal`,
+            role: 'member',
+            disabled: false,
+            created_at: new Date().toISOString()
+          };
+
+          await AE.API.users.create(newUser);
+          USERS.push(newUser);
+          close();
+          renderLayout();
+          AE.toast('success', `成员「${username}」开户成功`);
+        };
+      }
+    });
+  }
+
+  /* ─── 重置密码弹窗 ─── */
+  function openResetPwdModal(u) {
+    AE.modal({
+      title: `重置密码 · ${u.username}`,
+      body: `
+        <div class="field mb12">
+          <span class="field-label">新重置密码 <i class="req">*</i></span>
+          <div class="row" style="gap:6px">
+            <input class="input mono grow" id="rp-pwd" type="password" placeholder="≥8 位，含字母与数字">
+            <button class="btn btn-ai btn-sm" id="rp-gen-pwd" type="button" style="flex:0 0 auto">✨ 随机密码</button>
+          </div>
+          <span class="field-hint">重置后原密码立即失效，操作将记录于安全审计日志。</span>
+        </div>
+        <div class="field-error" id="rp-err" style="display:none"></div>`,
+      foot: `<button class="btn btn-secondary" id="rp-c">取消</button><button class="btn btn-sign" id="rp-ok">确认重置</button>`,
+      onMount: (el, close) => {
+        el.querySelector('#rp-c').onclick = close;
+        el.querySelector('#rp-gen-pwd').onclick = () => {
+          const randPwd = 'Reset@' + Math.random().toString(36).slice(2, 8) + '8#';
+          const pwdInp = el.querySelector('#rp-pwd');
+          pwdInp.type = 'text';
+          pwdInp.value = randPwd;
+          AE.toast('info', '已生成高强度随机密码');
+        };
+        el.querySelector('#rp-ok').onclick = async () => {
+          const pwd = el.querySelector('#rp-pwd').value.trim();
+          const err = el.querySelector('#rp-err');
+          if (pwd.length < 8 || !/[a-zA-Z]/.test(pwd) || !/\d/.test(pwd)) {
+            err.textContent = '密码需不少于 8 位，且包含字母和数字';
+            err.style.display = '';
+            return;
+          }
+          await AE.API.users.resetPassword(u.id, pwd);
+          close();
+          AE.toast('success', `成员「${u.username}」的密码已重置（写审计日志）`);
+        };
+      }
+    });
+  }
+
+  /* ─── 账号启用 / 停用 ─── */
+  function toggleUserStatus(u) {
+    if (!u.disabled) {
+      const activeCount = USERS.filter(x => !x.disabled).length;
+      if (activeCount <= 1) {
+        AE.toast('error', '不可停用系统中最后一名正常使用的账号');
+        return;
+      }
+      AE.dialog({
+        title: `停用成员「${u.username}」账号？`,
+        body: '停用后该用户无法登录平台；其已创建或正在运行的评测任务不受影响。操作将写入安全审计。',
+        okText: '确认停用', okClass: 'btn-danger',
+        onOk: async () => {
+          await AE.API.users.toggleStatus(u.id, true);
+          u.disabled = true;
+          renderLayout();
+          AE.toast('success', `账号「${u.username}」已停用`);
+        }
+      });
+    } else {
+      AE.dialog({
+        title: `恢复启用「${u.username}」账号？`,
+        body: '启用后该用户可正常登录平台发起评测。',
+        okText: '确认启用', okClass: 'btn-sign',
+        onOk: async () => {
+          await AE.API.users.toggleStatus(u.id, false);
+          u.disabled = false;
+          renderLayout();
+          AE.toast('success', `账号「${u.username}」已恢复启用`);
+        }
+      });
+    }
+  }
+
+  /* ─── 初始化 ─── */
+  async function init() {
+    try {
+      const uRes = await AE.API.users.list();
+      if (uRes && uRes.items && uRes.items.length) {
+        USERS = uRes.items;
+      } else if (AE.DB.users && AE.DB.users.length) {
+        USERS = AE.DB.users;
+      }
+    } catch (e) {
+      console.warn('[Users] API init fallback:', e);
+      USERS = AE.DB.users || [];
+    }
+    renderLayout();
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>登录 · AI 测试与评估平台</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/shell.css">
+<style>
+  body { display: grid; place-items: center; overflow: auto; }
+  .login-card {
+    width: 400px; max-width: calc(100vw - 40px);
+    background: rgba(255, 255, 255, .78);
+    backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, .8);
+    border-radius: 16px; padding: 36px 36px 32px;
+    box-shadow: 0 24px 64px rgba(17, 24, 39, .12);
+  }
+  .login-brand { display: flex; flex-direction: column; align-items: center; text-align: center; margin-bottom: 26px; }
+  .login-brand .brand-mark { width: 48px; height: 48px; border-radius: 13px; font-size: 25px; margin-bottom: 14px; }
+  .login-title { font-family: var(--font-display); font-size: 22px; font-weight: 700; letter-spacing: -.01em; }
+  .login-sub { font-size: 12px; color: var(--text-secondary); margin-top: 8px; line-height: 1.7; }
+  .login-err { display: none; font-size: 13px; color: var(--accent-error); margin: -6px 0 12px; }
+  .login-err.show { display: block; }
+  .login-btn { width: 100%; min-height: 42px; font-size: 15px; margin-top: 4px; }
+  .login-hint { margin-top: 18px; padding-top: 14px; border-top: 1px dashed var(--border-subtle); font-size: 12px; color: var(--text-tertiary); line-height: 1.9; }
+  .login-hint .mono { color: var(--text-secondary); }
+</style>
+</head>
+<body>
+  <div class="login-card scanline" data-od-id="login-card">
+    <div class="login-brand">
+      <span class="brand-mark">A</span>
+      <div class="eyebrow" style="margin-bottom:8px">SECURE ACCESS · V1.6.3</div>
+      <div class="login-title">AI 测试与评估平台</div>
+      <div class="login-sub">对话完成：用例（可选）→ Benchmark 和 / 或 RAG →（可选）压测 → 报告</div>
+      <div class="row" style="justify-content:center;margin-top:14px;gap:8px">
+        <span class="ai-badge"><i class="ai-dot"></i>AGENT 后端</span>
+        <span class="small tertiary mono" style="font-size:11px">gpt-5-pro · 连接正常 · 调度器运行中</span>
+      </div>
+    </div>
+    <form id="login-form" novalidate>
+      <div class="field">
+        <span class="field-label">用户名</span>
+        <input class="input" id="username" autocomplete="username" placeholder="admin / alice / boss">
+      </div>
+      <div class="field">
+        <span class="field-label">密码</span>
+        <input class="input" id="password" type="password" autocomplete="current-password" placeholder="不少于 8 位，含字母和数字">
+      </div>
+      <div class="login-err" id="login-err">用户名或密码错误</div>
+      <button class="btn btn-sign login-btn" id="login-btn" type="submit">登 录</button>
+    </form>
+    <div class="login-hint">
+      原型演示账号（单一角色，全员同权）：<span class="mono">admin / Admin123</span>（首登强制改密）<br>
+      <span class="mono">alice / Alice123</span> · <span class="mono">bob / Bob12345</span> · <span class="mono">boss / Boss1234</span>
+    </div>
+  </div>
+
+<script src="assets/app.js"></script>
+<script src="assets/api.js"></script>
+<script>
+(function () {
+  const ACCOUNTS = {
+    admin: { pwd: 'Admin123' },
+    alice: { pwd: 'Alice123' },
+    bob:   { pwd: 'Bob12345' },
+    boss:  { pwd: 'Boss1234' }
+  };
+  const form = document.getElementById('login-form');
+  const err = document.getElementById('login-err');
+  const btn = document.getElementById('login-btn');
+
+  form.addEventListener('submit', async function (e) {
+    e.preventDefault();
+    err.classList.remove('show');
+    const u = document.getElementById('username').value.trim();
+    const p = document.getElementById('password').value;
+    if (!u || !p) { AE.toast('error', '请填写用户名和密码'); return; }
+    btn.disabled = true; btn.textContent = '登录中…';
+
+    try {
+      const res = await AE.API.auth.login({ username: u, password: p });
+      btn.disabled = false; btn.textContent = '登 录';
+      
+      const acc = ACCOUNTS[u];
+      if (!acc || acc.pwd !== p) {
+        err.classList.add('show');
+        AE.toast('error', '用户名或密码错误');
+        return;
+      }
+      localStorage.setItem('ae_user', u);
+      if (u === 'admin' && !localStorage.getItem('ae_pwd_changed')) {
+        forceChangePassword();
+      } else {
+        land();
+      }
+    } catch (e) {
+      btn.disabled = false; btn.textContent = '登 录';
+      err.classList.add('show');
+      AE.toast('error', '用户名或密码错误');
+    }
+  });
+
+  function land() {
+    AE.toast('success', '登录成功');
+    setTimeout(function () { location.href = 'agent.html'; }, 400);
+  }
+
+  /* 首次引导改密：不可点遮罩关闭（规范 §14.4） */
+  function forceChangePassword() {
+    AE.modal({
+      title: '首次登录请修改密码',
+      noMaskClose: true,
+      body: `
+        <p class="small" style="margin-bottom:16px">首次登录必须改密。新密码 ≥8 位，须含字母和数字。</p>
+        <div class="field"><span class="field-label">新密码 <i class="req">*</i></span><input class="input" id="np1" type="password" placeholder="至少 8 位，含字母和数字"></div>
+        <div class="field"><span class="field-label">确认新密码 <i class="req">*</i></span><input class="input" id="np2" type="password"></div>
+        <div class="field-error" id="np-err" style="display:none"></div>`,
+      foot: `<button class="btn btn-sign" id="np-ok">确认修改</button>`,
+      onMount: function (el, close) {
+        el.querySelector('.modal-x').style.display = 'none';
+        el.querySelector('#np-ok').onclick = async function () {
+          const a = el.querySelector('#np1').value, b = el.querySelector('#np2').value;
+          const errEl = el.querySelector('#np-err');
+          const show = function (t) { errEl.textContent = t; errEl.style.display = ''; };
+          if (a.length < 8 || !/[a-zA-Z]/.test(a) || !/\d/.test(a)) return show('密码需不少于 8 位，且包含字母和数字');
+          if (a !== b) return show('两次输入的密码不一致');
+          
+          try {
+            await AE.API.auth.changePassword({ old_password: 'Admin123', new_password: a });
+          } catch (e) {}
+
+          localStorage.setItem('ae_pwd_changed', '1');
+          close();
+          AE.toast('success', '密码已更新');
+          land();
+        };
+      }
+    });
+  }
+})();
+</script>
+</body>
+</html>

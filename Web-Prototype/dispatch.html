@@ -1,0 +1,643 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>调度中心 · AI 测试与评估平台</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/shell.css">
+<style>
+  .dispatch-grid {
+    display: grid;
+    grid-template-columns: 270px minmax(0, 1fr) 310px;
+    gap: 16px;
+    align-items: start;
+  }
+  .topo-container {
+    position: relative;
+    display: grid;
+    grid-template-columns: 200px minmax(0, 1fr);
+    column-gap: 56px;
+    min-height: 520px;
+  }
+  .agent-pool {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 10px;
+  }
+  .cap-slider { width: 100%; accent-color: var(--accent-ai); cursor: pointer; }
+  .dispatch-log-panel {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    max-height: 640px;
+  }
+  .dispatch-log-panel .log-stream {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 220px;
+  }
+  .worker-metrics {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 6px 0;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-secondary);
+  }
+  .worker-metric-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  @media (max-width: 1360px) {
+    .dispatch-grid {
+      grid-template-columns: 250px minmax(0, 1fr);
+    }
+    .dispatch-log-col {
+      grid-column: 1 / -1;
+    }
+    .dispatch-log-panel {
+      max-height: 300px;
+    }
+  }
+
+  @media (max-width: 880px) {
+    .dispatch-grid {
+      grid-template-columns: 1fr;
+    }
+    .topo-container {
+      grid-template-columns: 1fr;
+      row-gap: 24px;
+    }
+  }
+</style>
+</head>
+<body>
+<div class="app" id="app"></div>
+
+<script src="assets/app.js"></script>
+<script src="assets/api.js"></script>
+<script>
+(function () {
+  const content = AE.renderShell('dispatch', '调度中心', {
+    topbarActions: `
+      <div class="row" style="gap:8px">
+        <button class="btn btn-secondary btn-sm" id="btn-add-worker">+ 注册节点</button>
+        <button class="btn btn-ghost btn-sm" id="sched-toggle">暂停调度</button>
+      </div>`
+  });
+
+  /* ─── 状态与 Worker 节点定义（聚焦四大评测能力：benchmark / rag / testcase / stress） ─── */
+  const MOCK_POOL = [
+    { id: 'worker-01', name: 'GPU-Node-A1', caps: ['benchmark', 'judge'], state: 'busy', load: 62, ram: '4.8GB/16GB', task: 'a1f3c2 · smoke-20 v3 (shard 2/5)', weight: 100 },
+    { id: 'worker-02', name: 'Vec-Node-V1', caps: ['rag', 'vector'], state: 'idle', load: 8, ram: '2.1GB/16GB', task: null, weight: 100 },
+    { id: 'worker-03', name: 'Gen-Node-G1', caps: ['testcase', 'prd'], state: 'busy', load: 45, ram: '3.4GB/16GB', task: 'd4c1a9 · PRD-支付 生成用例', weight: 80 },
+    { id: 'worker-04', name: 'Stress-Node-S1', caps: ['stress', 'load'], state: 'idle', load: 12, ram: '1.8GB/16GB', task: null, weight: 120 },
+    { id: 'worker-05', name: 'Judge-Node-J1', caps: ['benchmark', 'prompt'], state: 'offline', load: 0, ram: '0GB/16GB', task: null, weight: 100 },
+    { id: 'worker-06', name: 'Chunk-Node-C1', caps: ['rag', 'chunking'], state: 'idle', load: 5, ram: '1.2GB/16GB', task: null, weight: 80 },
+    { id: 'worker-07', name: 'Stress-Node-S2', caps: ['stress', 'sse'], state: 'busy', load: 88, ram: '7.2GB/16GB', task: 'g7b3d5 · 118 QPS 流式发压', weight: 150 },
+    { id: 'worker-08', name: 'Eval-Node-E1', caps: ['benchmark', 'judge'], state: 'idle', load: 18, ram: '2.6GB/16GB', task: null, weight: 100 },
+    { id: 'worker-09', name: 'RAG-Node-R1', caps: ['rag', 'lightrag'], state: 'offline', load: 0, ram: '0GB/16GB', task: null, weight: 100 },
+    { id: 'worker-10', name: 'Case-Node-C2', caps: ['testcase', 'openapi'], state: 'idle', load: 9, ram: '1.5GB/16GB', task: null, weight: 90 }
+  ];
+
+  let POOL = AE.API.isMock() ? MOCK_POOL : [];
+
+  const QUEUE_TPL = [
+    { kind: 'benchmark', label: 'smoke-20 v3 · shard 3/5', prio: 'P0' },
+    { kind: 'rag', label: 'default 库 · qa-v1 回归', prio: 'P1' },
+    { kind: 'testcase', label: 'PRD-聚合收银台 · 用例生成', prio: 'P1' },
+    { kind: 'stress', label: 'env=test · 10 QPS 压测', prio: 'P2' },
+    { kind: 'benchmark', label: 'FAQ-标准问 v2 · 全量', prio: 'P1' }
+  ];
+
+  const STRATEGIES = ['负载均衡', '优先级抢占', '亲和性'];
+  let strategy = '负载均衡';
+  let capacity = AE.DB.settings.max_running_tasks || 4;
+  let queue = [
+    { qid: 'q-101', kind: 'benchmark', label: 'smoke-20 v3 · shard 3/5', prio: 'P0', wait_ms: 120 },
+    { qid: 'q-102', kind: 'rag', label: 'default 库 · qa-v1 回归', prio: 'P1', wait_ms: 450 },
+    { qid: 'q-103', kind: 'stress', label: 'env=test · 10 QPS 压测', prio: 'P2', wait_ms: 890 }
+  ];
+  let assignments = []; // {qid, aid}
+  let assignedToday = 126;
+  let assignCost = [72, 85, 94, 68, 88]; // 滑动窗口
+  let running = true;
+  let seq = 104;
+
+  content.innerHTML = `
+    <div style="max-width:1400px;margin:0 auto" data-od-id="dispatch-page">
+      <!-- 调度大盘 KPI 指标 -->
+      <div class="kpi-grid mb16" data-od-id="dispatch-kpis" style="--glow-c:var(--c-agent)">
+        <div class="kpi"><div class="kpi-num num" id="k-online">8<span class="unit">/ 10</span></div><div class="kpi-label">在线 Worker 节点</div></div>
+        <div class="kpi"><div class="kpi-num num" id="k-queue">3</div><div class="kpi-label">排队队列深度</div></div>
+        <div class="kpi"><div class="kpi-num num" id="k-cost">81<span class="unit">ms</span></div><div class="kpi-label">平均分发调度延迟</div></div>
+        <div class="kpi"><div class="kpi-num num" id="k-today">126</div><div class="kpi-label">今日已分配任务</div></div>
+      </div>
+
+      <div class="dispatch-grid">
+        <!-- 左栏：调度器控制与策略 -->
+        <div class="section-gap">
+          <div class="panel glow" data-od-id="dispatch-radar" style="--glow-c:var(--c-agent)">
+            <div class="panel-title">调度内核状态 <span class="badge badge-running"><i class="bdot"></i>运行中</span></div>
+            <div style="max-width:170px;margin:6px auto 12px">
+              <div class="radar">
+                <span class="radar-core"></span>
+                <i class="radar-blip" style="left:62%;top:26%"></i>
+                <i class="radar-blip" style="left:30%;top:58%;animation-delay:1.3s"></i>
+                <i class="radar-blip" style="left:68%;top:70%;animation-delay:2.4s"></i>
+              </div>
+            </div>
+            <p class="small tertiary" style="text-align:center;line-height:1.6">心跳周期 500ms · 8/10 节点就绪</p>
+          </div>
+
+          <div class="panel glow" data-od-id="dispatch-strategy" style="--glow-c:var(--c-agent)">
+            <div class="panel-title">调度分发策略</div>
+            <div class="chip-group" id="strategy-chips" style="margin-bottom:12px">
+              ${STRATEGIES.map(s => `<button class="chip ${s === strategy ? 'on' : ''}" data-s="${s}">${s}</button>`).join('')}
+            </div>
+            <div class="field" style="margin:12px 0 4px">
+              <div class="row-between">
+                <span class="field-label" style="margin:0">并发容量 (max_running_tasks)</span>
+                <b class="num" id="cap-num" style="color:var(--accent-ai);font-size:15px">${capacity}</b>
+              </div>
+              <input type="range" class="cap-slider" id="cap-slider" min="1" max="8" step="1" value="${capacity}" style="margin-top:6px">
+              <span class="field-hint">满载时新入队任务在队列中保持 queued</span>
+            </div>
+          </div>
+
+          <div class="ai-card" data-od-id="dispatch-ai">
+            <div class="ai-card-head">
+              <span class="ai-badge"><i class="ai-dot"></i>AI 调度优化建议</span>
+              <span class="grow"></span>
+              <button class="link-btn" id="ai-next" style="font-size:12px">换一条</button>
+            </div>
+            <div id="ai-advice"></div>
+            <div class="row mt8" style="justify-content:flex-end">
+              <button class="btn btn-ai btn-sm" id="ai-apply">采纳建议</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 中栏：实时分发拓扑 (Task Queue -> Wires -> Worker Pool) -->
+        <div class="panel glow" data-od-id="dispatch-topo" style="--glow-c:var(--c-agent)">
+          <div class="row-between mb12">
+            <div class="panel-title" style="margin:0">
+              实时分发拓扑
+              <span class="small tertiary mono" style="font-weight:400">Task Queue → Worker Pool</span>
+            </div>
+            <div class="row" style="gap:6px">
+              <button class="btn btn-secondary btn-sm" id="btn-manual-enqueue" style="font-size:11px">+ 插入任务</button>
+            </div>
+          </div>
+          <div class="topo" id="topo">
+            <svg class="wires" id="wires" aria-hidden="true"></svg>
+            <div class="topo-container">
+              <div>
+                <div class="rail-label">待分发任务队列</div>
+                <div class="section-gap" style="gap:8px" id="queue-list" data-od-id="dispatch-queue"></div>
+              </div>
+              <div>
+                <div class="rail-label">Worker 执行节点池 (点击卡片可治理)</div>
+                <div class="agent-pool" id="agent-pool" data-od-id="dispatch-pool"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 右栏：分配日志流 -->
+        <div class="dispatch-log-col">
+          <div class="panel glow dispatch-log-panel" data-od-id="dispatch-log" style="--glow-c:var(--c-agent)">
+            <div class="row-between mb8">
+              <div class="panel-title" style="margin:0">调度日志流 <span class="small tertiary mono" id="log-count">latest 0</span></div>
+              <button class="link-btn" id="btn-clear-log" style="font-size:11px">清空</button>
+            </div>
+            <div class="log-stream" id="log-stream"></div>
+          </div>
+        </div>
+      </div>
+    </div>`;
+
+  const $ = id => document.getElementById(id);
+  const topoEl = $('topo'), wiresEl = $('wires');
+  const now = () => new Date().toTimeString().slice(0, 8);
+
+  /* ─── 1. 数据渲染与卡片组件 ─── */
+  function renderQueue() {
+    $('queue-list').innerHTML = queue.length ? queue.map(q => `
+      <div class="queue-item ${assignments.some(a => a.qid === q.qid) ? 'assigning' : ''}" data-qid="${q.qid}">
+        <div class="row-between" style="align-items:center">
+          <div class="row" style="gap:5px;align-items:center">
+            ${AE.kindTag(q.kind)}
+            <span class="q-id mono">${q.qid}</span>
+          </div>
+          <span class="tag-soft prio-${q.prio || 'P1'}" style="font-size:10px;padding:0 5px">${q.prio || 'P1'}</span>
+        </div>
+        <div class="small" style="margin-top:4px;font-weight:500;line-height:1.4">${AE.esc(q.label)}</div>
+      </div>`).join('')
+      : '<div class="empty" style="padding:32px 10px"><div class="small tertiary">队列就绪，等待新任务入队</div></div>';
+  }
+
+  function renderPool() {
+    $('agent-pool').innerHTML = POOL.map(a => `
+      <div class="agent-node ${a.state}" data-aid="${a.id}" style="cursor:pointer" title="点击查看节点详情与治理">
+        <div class="an-head">
+          <span class="an-name">${a.id}</span>
+          <span class="an-state ${a.state}">${{ idle: 'IDLE', busy: 'BUSY', offline: 'OFFLINE', draining: 'DRAIN' }[a.state]}</span>
+        </div>
+        <div class="an-caps">${(a.caps || []).map(c => `<span class="an-cap">${c}</span>`).join('')}</div>
+        
+        <div class="worker-metrics">
+          <div class="worker-metric-row">
+            <span>CPU</span>
+            <span>${a.load}%</span>
+          </div>
+          <div class="load-track ${a.load >= 80 ? 'hot' : ''}"><i style="width:${a.load}%"></i></div>
+          <div class="worker-metric-row" style="margin-top:2px">
+            <span>RAM</span>
+            <span class="mono">${a.ram || '2.4GB'}</span>
+          </div>
+        </div>
+
+        <div class="an-task" title="${AE.esc(a.task || '空闲待命')}">${a.task ? AE.esc(a.task) : '<span class="tertiary">空闲待命</span>'}</div>
+      </div>`).join('');
+
+    document.querySelectorAll('.agent-node').forEach(n => {
+      n.onclick = () => openWorkerModal(n.dataset.aid);
+    });
+  }
+
+  function renderKpis() {
+    const online = POOL.filter(a => a.state !== 'offline').length;
+    $('k-online').innerHTML = online + '<span class="unit">/ ' + POOL.length + '</span>';
+    $('k-queue').textContent = queue.filter(q => !assignments.some(a => a.qid === q.qid)).length;
+    const avg = assignCost.length ? Math.round(assignCost.reduce((s, v) => s + v, 0) / assignCost.length) : 81;
+    $('k-cost').innerHTML = avg + '<span class="unit">ms</span>';
+    $('k-today').textContent = assignedToday;
+  }
+
+  function log(kind, html) {
+    const el = document.createElement('div');
+    el.className = 'log-line';
+    el.innerHTML = `<span class="lt">${now()}</span><span class="lk">[${kind}]</span><span class="lr">${html}</span>`;
+    const stream = $('log-stream');
+    stream.prepend(el);
+    while (stream.children.length > 50) stream.lastChild.remove();
+    $('log-count').textContent = 'latest ' + Math.min(50, stream.children.length);
+  }
+
+  /* ─── 2. 交互式节点治理弹窗 (Worker Management Dialog) ─── */
+  function openWorkerModal(aid) {
+    const a = POOL.find(x => x.id === aid);
+    if (!a) return;
+
+    AE.modal({
+      title: `Worker 节点详情 · ${a.id} (${a.name || 'Worker Node'})`,
+      wide: true,
+      body: `
+        <div class="form-row mb12">
+          <div class="field">
+            <span class="field-label">节点状态</span>
+            <select class="select" id="wm-state">
+              <option value="idle" ${a.state === 'idle' ? 'selected' : ''}>在线空闲 (IDLE)</option>
+              <option value="busy" ${a.state === 'busy' ? 'selected' : ''}>执行中 (BUSY)</option>
+              <option value="draining" ${a.state === 'draining' ? 'selected' : ''}>排空下线 (DRAINING · 不接新单)</option>
+              <option value="offline" ${a.state === 'offline' ? 'selected' : ''}>离线维护 (OFFLINE)</option>
+            </select>
+          </div>
+          <div class="field">
+            <span class="field-label">调度权重 (Weight)</span>
+            <input class="input num" id="wm-weight" type="number" value="${a.weight || 100}" min="10" max="500">
+          </div>
+        </div>
+
+        <div class="field">
+          <span class="field-label">专精能力标签 (Capabilities，逗号分隔)</span>
+          <input class="input mono" id="wm-caps" value="${(a.caps || []).join(', ')}">
+          <span class="field-hint">可选能力: benchmark, judge, rag, vector, chunking, testcase, prd, openapi, stress, load, sse</span>
+        </div>
+
+        <div class="cc-grid mt12">
+          <div class="cc-item"><div class="cc-key">当前执行任务</div><div class="cc-val small">${a.task ? AE.esc(a.task) : '空闲待命中'}</div></div>
+          <div class="cc-item"><div class="cc-key">资源占用</div><div class="cc-val num">CPU ${a.load}% · RAM ${a.ram}</div></div>
+          <div class="cc-item"><div class="cc-key">心跳周期</div><div class="cc-val small">${a.state === 'offline' ? '<span class="danger-text">丢失（心跳超时）</span>' : '正常 · 500ms'}</div></div>
+          <div class="cc-item"><div class="cc-key">累计处理任务数</div><div class="cc-val num">${a.processed_count != null ? a.processed_count : '—'} 次</div></div>
+        </div>`,
+      foot: `
+        <button class="btn btn-secondary" id="wm-reboot">重启节点</button>
+        <span class="grow"></span>
+        <button class="btn btn-secondary" id="wm-cancel">关闭</button>
+        <button class="btn btn-sign" id="wm-save">保存配置</button>`,
+      onMount: (el, close) => {
+        el.querySelector('#wm-cancel').onclick = close;
+        el.querySelector('#wm-reboot').onclick = async () => {
+          if (!AE.API.isMock()) {
+            try { await AE.API.dispatch.updateWorker(a.id, { state: 'idle' }); }
+            catch (e) { AE.toast('error', `重启节点失败：${e.message}`); return; }
+          }
+          a.load = 4;
+          a.state = 'idle';
+          a.task = null;
+          renderPool();
+          log('NODE', `管理员重启了节点 <span class="la">${a.id}</span>`);
+          AE.toast('success', `节点 ${a.id} 已重启完毕并重新上线`);
+          close();
+        };
+        el.querySelector('#wm-save').onclick = async () => {
+          const next = {
+            state: el.querySelector('#wm-state').value,
+            weight: +el.querySelector('#wm-weight').value || 100,
+            caps: el.querySelector('#wm-caps').value.split(',').map(s => s.trim()).filter(Boolean)
+          };
+          try {
+            if (!AE.API.isMock()) await AE.API.dispatch.updateWorker(a.id, next);
+            Object.assign(a, next);
+          } catch (e) { AE.toast('error', `更新节点失败：${e.message}`); return; }
+          
+          renderPool(); renderKpis();
+          log('CONFIG', `更新节点 <span class="la">${a.id}</span> 配置 · 状态=${a.state} · 权重=${a.weight}`);
+          AE.toast('success', `已更新 Worker 节点 ${a.id} 配置`);
+          close();
+        };
+      }
+    });
+  }
+
+  /* ─── 3. 连线算法（平滑三次贝塞尔） ─── */
+  function drawWires() {
+    const box = topoEl.getBoundingClientRect();
+    wiresEl.innerHTML = assignments.map(as => {
+      const q = topoEl.querySelector(`[data-qid="${as.qid}"]`);
+      const a = topoEl.querySelector(`[data-aid="${as.aid}"]`);
+      if (!q || !a) return '';
+      const qr = q.getBoundingClientRect(), ar = a.getBoundingClientRect();
+      const x1 = qr.right - box.left, y1 = qr.top + qr.height / 2 - box.top;
+      const x2 = ar.left - box.left, y2 = ar.top + ar.height / 2 - box.top;
+      const mx = (x1 + x2) / 2;
+      return `<path class="wire live" d="M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}"/>`;
+    }).join('');
+  }
+
+  /* ─── 4. 调度分发循环（支持真实 API 调用） ─── */
+  function pickAgent() {
+    const candidates = POOL.filter(a => a.state !== 'offline' && a.state !== 'draining' && a.load < 92);
+    if (!candidates.length) return null;
+    if (strategy === '负载均衡') return candidates.sort((x, y) => x.load - y.load)[0];
+    if (strategy === '优先级抢占') return candidates[Math.floor(Math.random() * candidates.length)];
+    return candidates.sort((x, y) => (y.caps.length - x.caps.length) || (x.load - y.load))[0]; // 亲和性
+  }
+
+  function tryAssign() {
+    if (!AE.API.isMock()) return;
+    const waiting = queue.filter(q => !assignments.some(a => a.qid === q.qid));
+    if (!waiting.length) return;
+    const busyCount = POOL.filter(a => a.state === 'busy').length;
+    if (busyCount >= capacity) {
+      if (Math.random() < .3) log('HOLD', `并发已满（${busyCount}/${capacity}），<span class="la">${waiting[0].qid}</span> 保持排队`);
+      return;
+    }
+    const q = waiting[0];
+    const agent = pickAgent();
+    if (!agent) return;
+    const cost = 55 + Math.round(Math.random() * 70);
+    assignCost.push(cost); if (assignCost.length > 12) assignCost.shift();
+    assignments.push({ qid: q.qid, aid: agent.id });
+    agent.state = 'busy';
+    agent.load = Math.min(96, agent.load + 24 + Math.round(Math.random() * 22));
+    agent.task = q.qid + ' · ' + q.label;
+    assignedToday++;
+    queue = queue.filter(x => x.qid !== q.qid);
+    renderQueue(); renderPool(); renderKpis();
+    requestAnimationFrame(drawWires);
+    log('ASSIGN', `<span class="la">${q.qid}</span> → ${agent.id} · 策略=${strategy} · 耗时 ${cost}ms`);
+    
+    /* 4–8s 后执行完成 */
+    setTimeout(() => {
+      assignments = assignments.filter(x => x.qid !== q.qid);
+      agent.load = Math.max(4, agent.load - 32 - Math.round(Math.random() * 20));
+      if (agent.load < 30) { agent.state = 'idle'; agent.task = null; }
+      renderQueue(); renderPool(); renderKpis();
+      requestAnimationFrame(drawWires);
+      log('DONE', `${agent.id} 执行完成，释放并发槽位 · 负载回落至 ${agent.load}%`);
+    }, 4000 + Math.random() * 4500);
+  }
+
+  function tick() {
+    if (!AE.API.isMock()) return;
+    if (!running) return;
+    const r = Math.random();
+    if (r < .45 && queue.length < 5) {
+      /* 新任务入队 */
+      const tpl = QUEUE_TPL[Math.floor(Math.random() * QUEUE_TPL.length)];
+      const q = { qid: 'q-' + (seq++), kind: tpl.kind, label: tpl.label, prio: tpl.prio };
+      queue.push(q);
+      renderQueue(); renderKpis();
+      log('ENQUEUE', `<span class="la">${q.qid}</span> ${AE.esc(tpl.label)} (${q.prio})`);
+      setTimeout(tryAssign, 600);
+    } else {
+      tryAssign();
+    }
+  }
+
+  /* ─── 5. 交互绑定与 API 联动 ─── */
+  $('sched-toggle').onclick = function () {
+    running = !running;
+    this.textContent = running ? '暂停调度' : '恢复调度';
+    AE.toast('info', running ? '调度器已恢复' : '调度器已暂停（已有任务继续执行）');
+  };
+
+  $('cap-slider').oninput = async function () {
+    capacity = +this.value;
+    $('cap-num').textContent = capacity;
+    AE.DB.settings.max_running_tasks = capacity;
+    await AE.API.dispatch.updateConfig({ max_running_tasks: capacity, strategy });
+  };
+
+  document.querySelectorAll('#strategy-chips .chip').forEach(ch => {
+    ch.onclick = async () => {
+      strategy = ch.dataset.s;
+      document.querySelectorAll('#strategy-chips .chip').forEach(x => x.classList.toggle('on', x === ch));
+      log('CONFIG', `分发策略切换为 <span class="la">${strategy}</span>`);
+      await AE.API.dispatch.updateConfig({ strategy, max_running_tasks: capacity });
+      AE.toast('info', `分发策略已更新为「${strategy}」`);
+    };
+  });
+
+  // 注册新节点
+  $('btn-add-worker').onclick = () => {
+    const id = 'worker-' + String(POOL.length + 1).padStart(2, '0');
+    AE.modal({
+      title: '注册新 Worker 节点',
+      body: `
+        <div class="form-row">
+          <div class="field">
+            <span class="field-label">节点 ID</span>
+            <input class="input mono" id="nw-id" value="${id}">
+          </div>
+          <div class="field">
+            <span class="field-label">节点名称</span>
+            <input class="input" id="nw-name" placeholder="如 GPU-Node-A2">
+          </div>
+        </div>
+        <div class="field">
+          <span class="field-label">专精能力 (Capabilities)</span>
+          <input class="input mono" id="nw-caps" value="benchmark, judge">
+        </div>`,
+      foot: `<button class="btn btn-secondary" id="nw-c">取消</button><button class="btn btn-sign" id="nw-ok">确认注册</button>`,
+      onMount: (el, close) => {
+        el.querySelector('#nw-c').onclick = close;
+        el.querySelector('#nw-ok').onclick = async () => {
+          const newId = el.querySelector('#nw-id').value.trim();
+          const newName = el.querySelector('#nw-name').value.trim() || newId;
+          const newCaps = el.querySelector('#nw-caps').value.split(',').map(s => s.trim()).filter(Boolean);
+          
+          const draft = {
+            id: newId,
+            name: newName,
+            caps: newCaps,
+            state: 'idle',
+            load: 6,
+            ram: '1.4GB/16GB',
+            task: null,
+            weight: 100
+          };
+          try {
+            const created = AE.API.isMock() ? draft : await AE.API.dispatch.createWorker(draft);
+            if (!created || !created.id) throw new Error('注册接口未返回节点 id');
+            POOL.push({ ...draft, ...created });
+          } catch (e) { AE.toast('error', `注册节点失败：${e.message}`); return; }
+
+          close();
+          renderPool(); renderKpis();
+          log('BOOT', `新节点 <span class="la">${newId}</span> 注册成功并加入节点池`);
+          AE.toast('success', `Worker 节点 ${newId} 已成功注册并在线就绪`);
+        };
+      }
+    });
+  };
+
+  // 手动插入任务
+  $('btn-manual-enqueue').onclick = () => {
+    if (!AE.API.isMock()) {
+      AE.toast('info', '实时模式不在浏览器伪造队列任务；请在任务页或 Agent 中创建任务。');
+      return;
+    }
+    const tpl = QUEUE_TPL[Math.floor(Math.random() * QUEUE_TPL.length)];
+    const q = { qid: 'q-' + (seq++), kind: tpl.kind, label: tpl.label, prio: 'P0' };
+    queue.unshift(q);
+    renderQueue(); renderKpis();
+    log('ENQUEUE', `<span class="la">${q.qid}</span> [加急插队] ${AE.esc(tpl.label)}`);
+    setTimeout(tryAssign, 300);
+  };
+
+  $('btn-clear-log').onclick = () => {
+    $('log-stream').innerHTML = '';
+    $('log-count').textContent = 'latest 0';
+    AE.toast('info', '日志流已清空');
+  };
+
+  /* ─── AI 调度建议 ─── */
+  const ADVICES = [
+    { text: '检测到队列含多项 stress 发压任务且 worker-07 负载 88%：建议切换「亲和性」策略，优先将任务调度至空闲发压节点。', strategy: '亲和性', cap: null },
+    { text: '近 10 分钟平均分配耗时 81ms、队列深度持续 ≥3：建议并发容量 +1（max_running_tasks → ' + Math.min(8, capacity + 1) + '）以消化积压。', strategy: null, cap: Math.min(8, capacity + 1) },
+    { text: '当前空闲节点 5 个且队列已排空：建议切回「负载均衡」并收敛容量，降低集群空转功耗。', strategy: '负载均衡', cap: Math.max(1, capacity - 1) }
+  ];
+  let adviceIdx = 0;
+  function renderAdvice() {
+    if (!AE.API.isMock()) {
+      $('ai-advice').innerHTML = '<div class="small tertiary">实时模式不在浏览器模拟调度建议；调度决策、排队与分配均以服务端 worker / task 状态为准。</div>';
+      $('ai-next').disabled = true;
+      $('ai-apply').disabled = true;
+      return;
+    }
+    const a = ADVICES[adviceIdx % ADVICES.length];
+    $('ai-advice').innerHTML = `<div class="ai-gen-line small" style="color:var(--text-secondary);line-height:1.6">${a.text}</div>`;
+  }
+  $('ai-next').onclick = () => { adviceIdx++; renderAdvice(); };
+  $('ai-apply').onclick = () => {
+    if (!AE.API.isMock()) return;
+    const a = ADVICES[adviceIdx % ADVICES.length];
+    if (a.strategy) {
+      strategy = a.strategy;
+      document.querySelectorAll('#strategy-chips .chip').forEach(x => x.classList.toggle('on', x.dataset.s === strategy));
+    }
+    if (a.cap) {
+      capacity = a.cap;
+      $('cap-num').textContent = capacity;
+      $('cap-slider').value = capacity;
+      AE.DB.settings.max_running_tasks = capacity;
+    }
+    log('AI', `采纳调度建议${a.strategy ? ' · 策略=' + a.strategy : ''}${a.cap ? ' · 容量=' + a.cap : ''}`);
+    AE.toast('success', '已采纳 AI 调度建议并动态生效');
+  };
+  renderAdvice();
+
+  window.addEventListener('resize', () => requestAnimationFrame(drawWires));
+
+  /* ─── 初始化与 API 驱动 ─── */
+  async function init() {
+    try {
+      const [workersRes, ovRes, qTasks] = await Promise.all([
+        AE.API.dispatch.getWorkers(),
+        AE.API.dispatch.getOverview(),
+        AE.API.tasks.list({ status: 'queued' })
+      ]);
+
+      if (workersRes && Array.isArray(workersRes.items)) {
+        POOL = workersRes.items;
+      }
+      if (ovRes) {
+        if (ovRes.max_running_tasks) {
+          capacity = ovRes.max_running_tasks;
+          $('cap-num').textContent = capacity;
+          $('cap-slider').value = capacity;
+        }
+        if (ovRes.strategy) {
+          strategy = ovRes.strategy;
+          document.querySelectorAll('#strategy-chips .chip').forEach(x => x.classList.toggle('on', x.dataset.s === strategy));
+        }
+      }
+      if (qTasks && Array.isArray(qTasks.items)) {
+        queue = qTasks.items.map(t => ({
+          qid: t.id,
+          kind: t.kind,
+          label: t.ref || (t.kind === 'benchmark' ? 'smoke-20 基准评测' : '评测任务'),
+          prio: t.need_approval ? 'P0' : 'P1'
+        }));
+      }
+    } catch (e) {
+      POOL = [];
+      queue = [];
+      AE.toast('error', `调度数据加载失败：${e.message}`);
+    }
+
+    renderQueue(); renderPool(); renderKpis();
+    log('BOOT', `调度内核启动 · 最大并发容量 ${capacity} · 分配策略=${strategy}`);
+    log('BOOT', `心跳检测正常：${POOL.filter(p => p.state !== 'offline').length}/${POOL.length} 节点就绪`);
+    if (AE.API.isMock()) {
+      setTimeout(tryAssign, 700);
+      setInterval(tick, 2400);
+    } else {
+      setInterval(async () => {
+        try {
+          const [workersRes, ovRes, qTasks] = await Promise.all([
+            AE.API.dispatch.getWorkers(), AE.API.dispatch.getOverview(), AE.API.tasks.list({ status: 'queued' })
+          ]);
+          POOL = workersRes.items || [];
+          queue = (qTasks.items || []).map(t => ({ qid: t.id, kind: t.kind, label: t.ref || '评测任务', prio: t.need_approval ? 'P0' : 'P1' }));
+          if (ovRes.max_running_tasks) { capacity = ovRes.max_running_tasks; $('cap-num').textContent = capacity; $('cap-slider').value = capacity; }
+          renderQueue(); renderPool(); renderKpis(); requestAnimationFrame(drawWires);
+        } catch (e) { AE.toast('error', `调度刷新失败：${e.message}`); }
+      }, 5000);
+    }
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>

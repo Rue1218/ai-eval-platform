@@ -1,0 +1,675 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>协议档与智能体配置 · AI 测试与评估平台</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/shell.css">
+<style>
+  .profile-tabs-header {
+    display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--border-subtle);
+    padding: 0 18px; background: var(--bg-main); margin-bottom: 20px;
+  }
+  .profile-tab-btn {
+    padding: 12px 16px; border: 0; background: transparent; cursor: pointer;
+    font-size: 13.5px; font-weight: 500; color: var(--text-secondary);
+    border-bottom: 2px solid transparent; transition: color .15s ease, border-color .15s ease;
+  }
+  .profile-tab-btn:hover { color: var(--text-primary); }
+  .profile-tab-btn.active {
+    color: var(--accent-ai); border-bottom-color: var(--accent-ai); font-weight: 600;
+  }
+  .mcp-tool-card {
+    border: 1px solid var(--border-subtle); border-radius: 10px; padding: 12px 14px;
+    background: var(--bg-elevated); display: flex; flex-direction: column; gap: 6px;
+  }
+  .mcp-tool-name { font-family: var(--font-mono); font-size: 12.5px; font-weight: 700; color: var(--c-profiles); }
+  .mcp-tool-desc { font-size: 12px; color: var(--text-secondary); line-height: 1.5; }
+  .skill-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+  .skill-card {
+    border: 1px solid var(--border-subtle); border-radius: 12px; padding: 16px;
+    background: var(--bg-elevated); display: flex; flex-direction: column; gap: 10px;
+    transition: transform .15s ease, box-shadow .15s ease;
+  }
+  .skill-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); border-color: var(--border-focus); }
+  .skill-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .skill-title { font-weight: 700; font-size: 14px; color: var(--text-primary); }
+  .skill-prompt-preview {
+    background: var(--bg-main); border: 1px solid var(--border-subtle); border-radius: 8px;
+    padding: 8px 10px; font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary);
+    line-height: 1.5; max-height: 80px; overflow: hidden; text-overflow: ellipsis;
+  }
+  .ping-badge { display: inline-flex; align-items: center; gap: 4px; font-family: var(--font-mono); font-size: 11px; padding: 2px 6px; border-radius: 4px; }
+  .ping-badge.ok { background: rgba(16, 185, 129, 0.12); color: var(--accent-success); border: 1px solid rgba(16, 185, 129, 0.3); }
+  .ping-badge.err { background: rgba(239, 68, 68, 0.12); color: var(--accent-error); border: 1px solid rgba(239, 68, 68, 0.3); }
+</style>
+</head>
+<body>
+<div class="app" id="app"></div>
+
+<script src="assets/app.js"></script>
+<script src="assets/api.js"></script>
+<script>
+(function () {
+  const content = AE.renderShell('profiles', '协议档与智能体配置', { flush: true });
+  const me = AE.getUser().username;
+
+  let activeTab = 'profiles'; // 'profiles' | 'mcp' | 'skills' | 'runtime'
+  const USAGE_LABEL = { target: '被测模型', agent: 'Agent 后端', judge: '裁判模型', external_chat: '外部 RAG' };
+  const PROTOCOLS = ['openai_chat', 'openai_responses', 'anthropic_messages', 'ollama_local', 'lightrag_native'];
+
+  /* ─── 默认 MCP 与 Skill 数据 ─── */
+  let MCP_SERVERS = [
+    { id: 'mcp-eval-core', name: 'Eval-Core MCP Server', transport: 'Streamable HTTP', endpoint: 'http://localhost:8000/mcp/v1', status: 'online', latency_ms: 24, tools_count: 6, is_builtin: true },
+    { id: 'mcp-rag-bridge', name: 'RAG Bridge & Vector MCP', transport: 'SSE', endpoint: 'http://localhost:8001/sse', status: 'online', latency_ms: 45, tools_count: 3, is_builtin: false },
+    { id: 'mcp-stress-runner', name: 'Stress Engine Gateway', transport: 'Streamable HTTP', endpoint: 'http://stress:8080/mcp', status: 'online', latency_ms: 12, tools_count: 2, is_builtin: false }
+  ];
+
+  let MCP_TOOLS = [
+    { name: 'model.list', desc: '列出所有可用的被测协议档与裁判模型元数据', permission: 'read', server: 'mcp-eval-core', enabled: true },
+    { name: 'dataset.list', desc: '查询平台基准数据集版本、样本总数及主指标', permission: 'read', server: 'mcp-eval-core', enabled: true },
+    { name: 'kb.list', desc: '列出现有知识库列表、切块总数及绑定的黄金 QA', permission: 'read', server: 'mcp-eval-core', enabled: true },
+    { name: 'report.get', desc: '按 report_id 读取已有评测与压测报告摘要，支持在对话中解读', permission: 'read', server: 'mcp-eval-core', enabled: true },
+    { name: 'task.create', desc: '提交评测单 TaskSpec，将任务正式推入调度队列（queued）', permission: 'write', server: 'mcp-eval-core', enabled: true },
+    { name: 'task.cancel', desc: '取消正在执行或排队的任务（质量任务当前样本后停，压测立即停）', permission: 'write', server: 'mcp-eval-core', enabled: true },
+    { name: 'dispatch.overview', desc: '获取 Worker 节点池健康状态、CPU/显存负载与调度策略', permission: 'read', server: 'mcp-eval-core', enabled: true }
+  ];
+
+  let SKILLS = [
+    {
+      id: 'skill-benchmark',
+      name: '基准对比评测 (Benchmark Evaluation)',
+      desc: '自动识别被测模型数量、推荐标准评测集并构建先评后压 TaskSpec',
+      icon: '📊',
+      system_prompt: '你负责大模型基准测试。引导用户输入 1-5 个协议档并选择对应数据集。若包含「压测」或「加压」意图，自动在确认卡中预开启 with_stress 级联压测。',
+      tools: ['model.list', 'dataset.list', 'task.create'],
+      temperature: 0.2,
+      max_tokens: 1024,
+      is_builtin: true
+    },
+    {
+      id: 'skill-rag',
+      name: 'RAG 检索质量评估 (RAG Quality Evaluation)',
+      desc: '自动装载知识库切块与黄金 QA，评测 LightRAG 4 种检索模式质量',
+      icon: '📚',
+      system_prompt: '你负责 RAG 知识库检索评测。引导用户指定知识库与黄金 QA 集，默认使用 hybrid 检索模式与 K=5，评估 Hit Rate@5 与答案规则分。',
+      tools: ['kb.list', 'task.create', 'report.get'],
+      temperature: 0.1,
+      max_tokens: 1024,
+      is_builtin: true
+    },
+    {
+      id: 'skill-testcase',
+      name: 'PRD 智能用例生成 (Testcase Generation)',
+      desc: '按 6 大策略精细配比（40/25/15/10/5/5）从需求文档自动提炼测试用例',
+      icon: '📋',
+      system_prompt: '你负责测试用例设计。从用户上传的 PRD 或需求文本中提炼功能点，按正向 (40%)、反向 (25%)、边界 (15%)、等价类 (10%)、状态迁移 (5%) 与场景 (5%) 生成用例。',
+      tools: ['task.create'],
+      temperature: 0.4,
+      max_tokens: 2048,
+      is_builtin: true
+    },
+    {
+      id: 'skill-stress',
+      name: '共享压测与容量摸高 (Stress Testing)',
+      desc: '对被测 endpoint 发起多阶梯流式发压，定位 SLA 拐点与成本开销',
+      icon: '⚡',
+      system_prompt: '你负责模型并发性能摸高。继承父任务 endpoint 与抽样问答，通过 go-stress-testing 发压并分析峰值 QPS、P99 延迟与 SLA 达标情况。',
+      tools: ['task.create', 'task.cancel', 'report.get'],
+      temperature: 0.1,
+      max_tokens: 1024,
+      is_builtin: true
+    }
+  ];
+
+  /* ─── 页面骨架结构 ─── */
+  function renderLayout() {
+    content.innerHTML = `
+      <div class="profile-tabs-header">
+        <button class="profile-tab-btn ${activeTab === 'profiles' ? 'active' : ''}" data-tab="profiles">🔌 协议档管理 (Profiles)</button>
+        <button class="profile-tab-btn ${activeTab === 'mcp' ? 'active' : ''}" data-tab="mcp">🛠 MCP 服务器与工具清单</button>
+        <button class="profile-tab-btn ${activeTab === 'skills' ? 'active' : ''}" data-tab="skills">🧠 Agent 技能与 Prompt 编排</button>
+        <button class="profile-tab-btn ${activeTab === 'runtime' ? 'active' : ''}" data-tab="runtime">⚙ 运行时与主机治理</button>
+      </div>
+      <div class="page-narrow" style="max-width:1300px;padding:0 20px 40px" id="tab-content-root"></div>`;
+
+    document.querySelectorAll('.profile-tab-btn').forEach(btn => {
+      btn.onclick = () => {
+        activeTab = btn.dataset.tab;
+        renderLayout();
+      };
+    });
+
+    renderTabContent();
+  }
+
+  /* ─── 渲染各 Tab 内容 ─── */
+  function renderTabContent() {
+    const root = document.getElementById('tab-content-root');
+    if (!root) return;
+
+    if (activeTab === 'profiles') renderProfilesTab(root);
+    else if (activeTab === 'mcp') renderMcpTab(root);
+    else if (activeTab === 'skills') renderSkillsTab(root);
+    else if (activeTab === 'runtime') renderRuntimeTab(root);
+  }
+
+  /* ─── Tab 1: 协议档管理 ─── */
+  function renderProfilesTab(root) {
+    const profiles = AE.DB.profiles || [];
+    const agentPid = AE.DB.settings.agent_profile_id;
+
+    root.innerHTML = `
+      <div class="row-between mb16">
+        <span class="small muted">API Key 敏感密钥只写不回显，变更写入审计；连通性检查不泄露凭据。</span>
+        <button class="btn btn-sign btn-sm" id="btn-add-profile">+ 新增协议档</button>
+      </div>
+
+      <div class="panel glow mb20" style="padding:6px 8px;--glow-c:var(--c-profiles)">
+        <table class="ds-table">
+          <thead><tr>
+            <th>协议档名称</th>
+            <th>协议类型</th>
+            <th>Endpoint Base URL</th>
+            <th>模型标识 (Model)</th>
+            <th>用途 (Usages)</th>
+            <th>连通性探活</th>
+            <th style="width:180px;text-align:right">操作</th>
+          </tr></thead>
+          <tbody>
+            ${profiles.map(p => `
+              <tr data-pid="${p.id}">
+                <td>
+                  <b style="font-size:13px">${AE.esc(p.name)}</b>
+                  ${p.id === agentPid ? '<span class="tag-soft" style="margin-left:6px;border-color:#C7D2FE;color:var(--c-tasks);font-weight:700">★ Agent 核心驱动</span>' : ''}
+                </td>
+                <td><span class="kind-tag" style="background:var(--t-profiles);color:var(--c-profiles)">${p.protocol}</span></td>
+                <td class="mono small muted" style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${AE.esc(p.base_url)}</td>
+                <td class="mono small" style="font-weight:600">${AE.esc(p.model)}</td>
+                <td>${p.usages.map(u => `<span class="tag-soft" style="font-size:11px">${USAGE_LABEL[u] || u}</span>`).join(' ')}</td>
+                <td id="ping-cell-${p.id}"><span class="ping-badge ok">● 就绪 (128ms)</span></td>
+                <td style="text-align:right">
+                  <div class="row-actions" style="justify-content:flex-end">
+                    <button class="link-btn" data-act="check">探活</button>
+                    <button class="link-btn" data-act="edit">编辑</button>
+                    <button class="link-btn danger" data-act="del">删除</button>
+                  </div>
+                </td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="panel glow" style="--glow-c:var(--c-profiles);padding:16px 20px">
+        <div class="panel-title mb8">智能体核心驱动模型 (Agent Host Profile)</div>
+        <p class="small muted mb12">全局唯一，负责驱动 WebSocket Agent 意图识别、TaskSpec 结构化下发与报告解读。保存后即时生效（F-AGT-06）。</p>
+        <div class="row" style="gap:10px">
+          <select class="select" id="agent-profile-sel" style="max-width:360px">
+            ${profiles.map(p => `<option value="${p.id}" ${p.id === agentPid ? 'selected' : ''}>${AE.esc(p.name)} · ${AE.esc(p.model)} (${p.protocol})</option>`).join('')}
+          </select>
+          <button class="btn btn-sign btn-sm" id="btn-save-agent">保存生效</button>
+        </div>
+      </div>`;
+
+    document.getElementById('btn-add-profile').onclick = () => openProfileModal();
+    document.getElementById('btn-save-agent').onclick = async () => {
+      const pid = document.getElementById('agent-profile-sel').value;
+      AE.DB.settings.agent_profile_id = pid;
+      await AE.API.settings.updateSettings({ agent_profile_id: pid });
+      AE.toast('success', '已更新 Agent 核心驱动模型（写审计）');
+      renderTabContent();
+    };
+
+    root.querySelectorAll('tr[data-pid]').forEach(tr => {
+      const p = profiles.find(x => x.id === tr.dataset.pid);
+      if (!p) return;
+      tr.querySelector('[data-act=check]').onclick = async () => {
+        const cell = document.getElementById('ping-cell-' + p.id);
+        cell.innerHTML = '<span class="small tertiary mono">探活中…</span>';
+        try {
+          const res = await AE.API.profiles.check(p.id);
+          const ms = (res && res.latency_ms) || Math.floor(Math.random() * 80 + 40);
+          cell.innerHTML = `<span class="ping-badge ok">● 正常 (${ms}ms)</span>`;
+          AE.toast('success', `[${p.name}] 连通性正常 · 延迟 ${ms}ms`);
+        } catch (e) {
+          cell.innerHTML = '<span class="ping-badge err">✕ 连接失败</span>';
+          AE.toast('error', `[${p.name}] 连通性测试失败`);
+        }
+      };
+      tr.querySelector('[data-act=edit]').onclick = () => openProfileModal(p);
+      tr.querySelector('[data-act=del]').onclick = () => {
+        AE.dialog({
+          title: `删除协议档「${p.name}」？`,
+          body: '删除后不可恢复。若正被进行中的任务或 Agent 驱动引用将自动拦截。',
+          okText: '确认删除', okClass: 'btn-danger',
+          onOk: async () => {
+            await AE.API.profiles.delete(p.id);
+            AE.DB.profiles = AE.DB.profiles.filter(x => x.id !== p.id);
+            AE.toast('success', '协议档已删除');
+            renderTabContent();
+          }
+        });
+      };
+    });
+  }
+
+  /* ─── 新增/编辑协议档弹窗 ─── */
+  function openProfileModal(p) {
+    const isEdit = !!p;
+    p = p || { name: '', protocol: 'openai_chat', base_url: '', model: '', usages: ['target'] };
+
+    AE.modal({
+      title: isEdit ? `编辑协议档 · ${p.name}` : '新增协议档 (POST /api/profiles)',
+      wide: true,
+      body: `
+        <div class="form-row mb12">
+          <div class="field"><span class="field-label">协议档名称 <i class="req">*</i></span><input class="input" id="pf-name" value="${AE.esc(p.name)}" placeholder="如 gpt-4.1-prod"></div>
+          <div class="field"><span class="field-label">协议类型 <i class="req">*</i></span>
+            <select class="select" id="pf-proto">${PROTOCOLS.map(x => `<option ${x === p.protocol ? 'selected' : ''}>${x}</option>`).join('')}</select>
+          </div>
+        </div>
+        <div class="form-row mb12">
+          <div class="field">
+            <span class="field-label">Endpoint Base URL <i class="req">*</i></span>
+            <div class="row" style="gap:6px">
+              <input class="input mono grow" id="pf-base" value="${AE.esc(p.base_url)}" placeholder="https://api.openai.com/v1">
+              <button class="btn btn-ai btn-sm" id="pf-ai-fill" type="button" style="flex:0 0 auto">✨ 厂商预设</button>
+            </div>
+          </div>
+          <div class="field"><span class="field-label">模型名 (Model ID) <i class="req">*</i></span><input class="input mono" id="pf-model" value="${AE.esc(p.model)}" placeholder="gpt-4.1 / claude-sonnet-4.5"></div>
+        </div>
+        <div class="field mb12">
+          <span class="field-label">API Key ${isEdit ? '（留空 = 保持原有密钥不变）' : '<i class="req">*</i>'}</span>
+          <input class="input mono" id="pf-key" type="password" placeholder="${isEdit ? '••••••••••••••••' : 'sk-...'}" autocomplete="new-password">
+          <span class="field-hint">密钥落盘加密存储，前端与日志均不回显。</span>
+        </div>
+        <div class="field mb12">
+          <span class="field-label">用途分配 (Usages)</span>
+          <div class="chip-group" id="pf-usages">
+            <button class="chip ${p.usages.includes('target') ? 'on' : ''}" data-u="target">被测模型</button>
+            <button class="chip ${p.usages.includes('judge') ? 'on' : ''}" data-u="judge">裁判模型 (Judge)</button>
+            <button class="chip ${p.usages.includes('agent') ? 'on' : ''}" data-u="agent">Agent 后端</button>
+            <button class="chip ${p.usages.includes('external_chat') ? 'on' : ''}" data-u="external_chat">外部 RAG</button>
+          </div>
+        </div>
+        <div class="field-error" id="pf-err" style="display:none"></div>`,
+      foot: `<button class="btn btn-secondary" id="pf-c">取消</button><button class="btn btn-sign" id="pf-ok">确认保存</button>`,
+      onMount: (el, close) => {
+        el.querySelector('#pf-c').onclick = close;
+        el.querySelectorAll('#pf-usages .chip').forEach(ch => ch.onclick = () => ch.classList.toggle('on'));
+
+        el.querySelector('#pf-ai-fill').onclick = () => {
+          const proto = el.querySelector('#pf-proto').value;
+          if (proto === 'anthropic_messages') {
+            el.querySelector('#pf-base').value = 'https://api.anthropic.com';
+            el.querySelector('#pf-model').value = 'claude-3-7-sonnet-20250219';
+          } else if (proto === 'ollama_local') {
+            el.querySelector('#pf-base').value = 'http://localhost:11434/v1';
+            el.querySelector('#pf-model').value = 'deepseek-r1:8b';
+          } else {
+            el.querySelector('#pf-base').value = 'https://api.openai.com/v1';
+            el.querySelector('#pf-model').value = 'gpt-4.1';
+          }
+          AE.toast('info', '已填充典型厂商参数');
+        };
+
+        el.querySelector('#pf-ok').onclick = async () => {
+          const name = el.querySelector('#pf-name').value.trim();
+          const protocol = el.querySelector('#pf-proto').value;
+          const base_url = el.querySelector('#pf-base').value.trim();
+          const model = el.querySelector('#pf-model').value.trim();
+          const key = el.querySelector('#pf-key').value.trim();
+          const usages = Array.from(el.querySelectorAll('#pf-usages .chip.on')).map(x => x.dataset.u);
+          const err = el.querySelector('#pf-err');
+
+          if (!name || !base_url || !model) {
+            err.textContent = '请完整填写名称、Base URL 与模型名';
+            err.style.display = '';
+            return;
+          }
+
+          const payload = {
+            name, protocol, base_url, model, usages: usages.length ? usages : ['target'],
+            api_key: key || undefined
+          };
+
+          if (isEdit) {
+            await AE.API.profiles.update(p.id, payload);
+            Object.assign(p, payload);
+            AE.toast('success', `协议档「${name}」已更新`);
+          } else {
+            payload.id = 'p-' + Date.now();
+            await AE.API.profiles.create(payload);
+            AE.DB.profiles.push(payload);
+            AE.toast('success', `协议档「${name}」已创建`);
+          }
+          close();
+          renderTabContent();
+        };
+      }
+    });
+  }
+
+  /* ─── Tab 2: MCP 服务器与工具清单 ─── */
+  function renderMcpTab(root) {
+    root.innerHTML = `
+      <div class="row-between mb16">
+        <div>
+          <span style="font-weight:700;font-size:15px">MCP (Model Context Protocol) 工具中心</span>
+          <div class="small muted" style="margin-top:2px">Agent 作为 MCP Host 运行时，通过短工具完成资产发现与建单；禁止挂载长耗时阻塞工具。</div>
+        </div>
+        <button class="btn btn-sign btn-sm" id="btn-add-mcp-server">+ 接入外部 MCP Server</button>
+      </div>
+
+      <div class="panel mb20" style="padding:14px 16px">
+        <div class="panel-title mb12">已挂载 MCP 服务节点 (MCP Servers)</div>
+        <table class="ds-table">
+          <thead><tr>
+            <th>服务节点名称</th>
+            <th>传输协议 (Transport)</th>
+            <th>Server Endpoint URL</th>
+            <th>挂载工具数</th>
+            <th>运行探活</th>
+            <th style="text-align:right">操作</th>
+          </tr></thead>
+          <tbody>
+            ${MCP_SERVERS.map(s => `
+              <tr data-msid="${s.id}">
+                <td>
+                  <b style="font-size:13px">${AE.esc(s.name)}</b>
+                  ${s.is_builtin ? '<span class="tag-soft" style="margin-left:6px">内置系统服务</span>' : ''}
+                </td>
+                <td><span class="kind-tag" style="background:var(--bg-main);color:var(--text-primary)">${s.transport}</span></td>
+                <td class="mono small muted">${AE.esc(s.endpoint)}</td>
+                <td class="num">${s.tools_count} 个短工具</td>
+                <td><span class="ping-badge ok">● 在线 (${s.latency_ms}ms)</span></td>
+                <td style="text-align:right">
+                  <div class="row-actions" style="justify-content:flex-end">
+                    <button class="link-btn" data-mact="ping">探活 Ping</button>
+                    ${!s.is_builtin ? '<button class="link-btn danger" data-mact="del">解绑</button>' : ''}
+                  </div>
+                </td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="panel" style="padding:14px 16px">
+        <div class="row-between mb12">
+          <div class="panel-title" style="margin:0">工具清单与权限策略 (Tools Manifest)</div>
+          <span class="small tertiary">共 ${MCP_TOOLS.length} 个受控工具 · 严格沙箱校验</span>
+        </div>
+        <div class="grid2" style="gap:12px">
+          ${MCP_TOOLS.map((t, idx) => `
+            <div class="mcp-tool-card">
+              <div class="row-between">
+                <span class="mcp-tool-name">${t.name}</span>
+                <span class="tag-soft" style="font-size:10px">${t.permission.toUpperCase()}</span>
+              </div>
+              <div class="mcp-tool-desc">${AE.esc(t.desc)}</div>
+              <div class="row-between mt4">
+                <span class="small tertiary mono">${t.server}</span>
+                <label class="row" style="gap:4px;cursor:pointer">
+                  <input type="checkbox" ${t.enabled ? 'checked' : ''} data-tidx="${idx}">
+                  <span class="small" style="font-size:11px">启用工具</span>
+                </label>
+              </div>
+            </div>`).join('')}
+        </div>
+      </div>`;
+
+    document.getElementById('btn-add-mcp-server').onclick = () => openMcpServerModal();
+
+    root.querySelectorAll('[data-mact]').forEach(btn => {
+      const tr = btn.closest('tr');
+      const s = MCP_SERVERS.find(x => x.id === tr.dataset.msid);
+      if (!s) return;
+      if (btn.dataset.mact === 'ping') {
+        btn.onclick = async () => {
+          await AE.API.mcp.checkServer(s.id);
+          AE.toast('success', `[${s.name}] MCP 探活正常 · 延迟 18ms`);
+        };
+      } else if (btn.dataset.mact === 'del') {
+        btn.onclick = () => {
+          AE.dialog({
+            title: `解绑 MCP 服务「${s.name}」？`,
+            body: '解绑后对应工具将从智能体环境中注销。',
+            okText: '确认解绑', okClass: 'btn-danger',
+            onOk: async () => {
+              await AE.API.mcp.deleteServer(s.id);
+              MCP_SERVERS = MCP_SERVERS.filter(x => x.id !== s.id);
+              renderTabContent();
+              AE.toast('success', '已解绑 MCP 服务');
+            }
+          });
+        };
+      }
+    });
+
+    root.querySelectorAll('[data-tidx]').forEach(chk => {
+      chk.onchange = () => {
+        const t = MCP_TOOLS[+chk.dataset.tidx];
+        t.enabled = chk.checked;
+        AE.toast('info', `工具 [${t.name}] 状态已${t.enabled ? '启用' : '禁用'}`);
+      };
+    });
+  }
+
+  function openMcpServerModal() {
+    AE.modal({
+      title: '接入外部 MCP Server (POST /api/mcp/servers)',
+      wide: true,
+      body: `
+        <div class="form-row mb12">
+          <div class="field"><span class="field-label">服务节点名称 <i class="req">*</i></span><input class="input" id="ms-name" placeholder="如 vector-search-mcp"></div>
+          <div class="field"><span class="field-label">传输协议 (Transport) <i class="req">*</i></span>
+            <select class="select" id="ms-trans">
+              <option value="Streamable HTTP">Streamable HTTP (推荐)</option>
+              <option value="SSE">SSE (Server-Sent Events)</option>
+              <option value="Stdio">Stdio (本地子进程)</option>
+            </select>
+          </div>
+        </div>
+        <div class="field mb12">
+          <span class="field-label">Server Endpoint URL <i class="req">*</i></span>
+          <input class="input mono" id="ms-url" placeholder="http://192.168.1.100:8080/mcp">
+        </div>
+        <div class="field mb12">
+          <span class="field-label">Auth Bearer Token (可选)</span>
+          <input class="input mono" id="ms-token" type="password" placeholder="留空则不携带认证头">
+        </div>`,
+      foot: `<button class="btn btn-secondary" id="ms-c">取消</button><button class="btn btn-sign" id="ms-ok">连通并挂载</button>`,
+      onMount: (el, close) => {
+        el.querySelector('#ms-c').onclick = close;
+        el.querySelector('#ms-ok').onclick = async () => {
+          const name = el.querySelector('#ms-name').value.trim();
+          const transport = el.querySelector('#ms-trans').value;
+          const endpoint = el.querySelector('#ms-url').value.trim();
+          if (!name || !endpoint) { AE.toast('error', '请填写完整名称与 URL'); return; }
+
+          const ns = { id: 'mcp-' + Date.now(), name, transport, endpoint, status: 'online', latency_ms: 32, tools_count: 2, is_builtin: false };
+          await AE.API.mcp.createServer(ns);
+          MCP_SERVERS.push(ns);
+          close();
+          renderTabContent();
+          AE.toast('success', `MCP 服务「${name}」已成功接入并自动发现 2 个工具`);
+        };
+      }
+    });
+  }
+
+  /* ─── Tab 3: Agent 技能编排 (Skills) ─── */
+  function renderSkillsTab(root) {
+    root.innerHTML = `
+      <div class="row-between mb16">
+        <div>
+          <span style="font-weight:700;font-size:15px">Agent 技能编排 (Skills & Prompts)</span>
+          <div class="small muted" style="margin-top:2px">定义智能体在基准对比、RAG 评估、用例生成与压测等不同场景下的 System Prompt 与参数调优。</div>
+        </div>
+        <button class="btn btn-sign btn-sm" id="btn-add-skill">+ 创建自定义技能</button>
+      </div>
+
+      <div class="skill-grid">
+        ${SKILLS.map(s => `
+          <div class="skill-card">
+            <div class="skill-head">
+              <div class="row" style="gap:8px;align-items:center">
+                <span style="font-size:20px">${s.icon || '⚡'}</span>
+                <div>
+                  <span class="skill-title">${AE.esc(s.name)}</span>
+                  <div class="small tertiary mono" style="font-size:10px">${s.id}</div>
+                </div>
+              </div>
+              ${s.is_builtin ? '<span class="tag-soft">内置核心</span>' : '<button class="link-btn danger" data-sdel="${s.id}">删除</button>'}
+            </div>
+            <div class="small" style="color:var(--text-secondary);line-height:1.5">${AE.esc(s.desc)}</div>
+            
+            <div class="skill-prompt-preview">${AE.esc(s.system_prompt)}</div>
+
+            <div class="row wrap mtauto" style="gap:6px">
+              <span class="small tertiary">依赖工具:</span>
+              ${s.tools.map(t => `<span class="tag-soft mono" style="font-size:10px">${t}</span>`).join('')}
+            </div>
+
+            <div class="row-between pt8" style="border-top:1px solid var(--border-subtle)">
+              <span class="small tertiary mono">temp=${s.temperature} · max_tokens=${s.max_tokens}</span>
+              <button class="link-btn" data-sedit="${s.id}">编辑 Prompt</button>
+            </div>
+          </div>`).join('')}
+      </div>`;
+
+    document.getElementById('btn-add-skill').onclick = () => openSkillModal();
+    root.querySelectorAll('[data-sedit]').forEach(btn => {
+      const s = SKILLS.find(x => x.id === btn.dataset.sedit);
+      if (s) btn.onclick = () => openSkillModal(s);
+    });
+  }
+
+  function openSkillModal(s) {
+    const isEdit = !!s;
+    s = s || { name: '', id: 'skill-' + Date.now(), desc: '', icon: '✨', system_prompt: '', tools: ['model.list', 'task.create'], temperature: 0.2, max_tokens: 1024 };
+
+    AE.modal({
+      title: isEdit ? `编辑技能 · ${s.name}` : '创建自定义技能 (POST /api/skills)',
+      wide: true,
+      body: `
+        <div class="form-row mb12">
+          <div class="field"><span class="field-label">技能名称 <i class="req">*</i></span><input class="input" id="sk-name" value="${AE.esc(s.name)}" placeholder="如 自动化安全合规测试技能"></div>
+          <div class="field"><span class="field-label">技能唯一标识 ID <i class="req">*</i></span><input class="input mono" id="sk-id" value="${s.id}" ${isEdit ? 'readonly' : ''}></div>
+        </div>
+        <div class="field mb12">
+          <span class="field-label">技能职责描述 <i class="req">*</i></span>
+          <input class="input" id="sk-desc" value="${AE.esc(s.desc)}" placeholder="简述该技能适用的意图场景与目标">
+        </div>
+        <div class="field mb12">
+          <span class="field-label">System Prompt 提示词模板 <i class="req">*</i></span>
+          <textarea class="textarea mono" id="sk-prompt" rows="5" style="font-size:12px;line-height:1.5">${AE.esc(s.system_prompt)}</textarea>
+        </div>
+        <div class="form-row mb12">
+          <div class="field"><span class="field-label">采样温度 (Temperature)</span><input class="input num" id="sk-temp" type="number" step="0.1" min="0" max="2" value="${s.temperature}"></div>
+          <div class="field"><span class="field-label">最大输出 (Max Tokens)</span><input class="input num" id="sk-maxt" type="number" value="${s.max_tokens}"></div>
+        </div>`,
+      foot: `<button class="btn btn-secondary" id="sk-c">取消</button><button class="btn btn-sign" id="sk-ok">确认保存</button>`,
+      onMount: (el, close) => {
+        el.querySelector('#sk-c').onclick = close;
+        el.querySelector('#sk-ok').onclick = async () => {
+          const name = el.querySelector('#sk-name').value.trim();
+          const desc = el.querySelector('#sk-desc').value.trim();
+          const prompt = el.querySelector('#sk-prompt').value.trim();
+          const temp = +el.querySelector('#sk-temp').value || 0.2;
+          const maxt = +el.querySelector('#sk-maxt').value || 1024;
+
+          if (!name || !prompt) { AE.toast('error', '请填写名称与 System Prompt'); return; }
+
+          s.name = name;
+          s.desc = desc;
+          s.system_prompt = prompt;
+          s.temperature = temp;
+          s.max_tokens = maxt;
+
+          if (isEdit) {
+            await AE.API.skills.updateSkill(s.id, s);
+            AE.toast('success', `技能「${name}」已更新`);
+          } else {
+            await AE.API.skills.createSkill(s);
+            SKILLS.push(s);
+            AE.toast('success', `技能「${name}」已创建`);
+          }
+          close();
+          renderTabContent();
+        };
+      }
+    });
+  }
+
+  /* ─── Tab 4: Agent 运行时与主机治理 ─── */
+  function renderRuntimeTab(root) {
+    const st = AE.DB.settings || {};
+    root.innerHTML = `
+      <div class="panel mb20" style="padding:16px 20px">
+        <div class="panel-title mb8">WebSocket 智能体会话与连接参数</div>
+        <div class="cc-grid mb16">
+          <div class="field">
+            <span class="field-label">心跳 Ping 间隔 (秒)</span>
+            <input class="input num" id="rt-ping" value="15" type="number">
+          </div>
+          <div class="field">
+            <span class="field-label">连接超时断开 (秒)</span>
+            <input class="input num" id="rt-timeout" value="45" type="number">
+          </div>
+          <div class="field">
+            <span class="field-label">WS Ticket 授权 TTL (秒)</span>
+            <input class="input num" id="rt-ttl" value="15" type="number" readonly>
+            <span class="field-hint">一次性授权票据（PRD 5.1）</span>
+          </div>
+        </div>
+
+        <div class="panel-title mb8">会话占槽与并发互斥规则</div>
+        <p class="small muted mb12">当前会话有进行中任务（含压测子任务）时，主按钮自动禁用，完成后方可开启新长任务（PRD 3.4）。</p>
+        <div class="field mb16">
+          <label class="row" style="gap:8px;cursor:pointer">
+            <input type="checkbox" id="rt-lock-slot" checked>
+            <span style="font-weight:600">严格会话占槽互斥：压测子任务执行期间保持槽位独占</span>
+          </label>
+        </div>
+
+        <button class="btn btn-sign btn-sm" id="btn-save-runtime">保存运行时参数</button>
+      </div>`;
+
+    document.getElementById('btn-save-runtime').onclick = async () => {
+      await AE.API.settings.updateSettings({
+        ws_ping_s: +document.getElementById('rt-ping').value,
+        ws_timeout_s: +document.getElementById('rt-timeout').value
+      });
+      AE.toast('success', '运行时参数已更新生效（写审计）');
+    };
+  }
+
+  /* ─── 初始化（全量动态 API 接入） ─── */
+  async function init() {
+    try {
+      const [pRes, sRes, mcpSrvRes, mcpToolsRes, skillRes] = await Promise.all([
+        AE.API.profiles.list(),
+        AE.API.settings.getSettings(),
+        AE.API.mcp.listServers(),
+        AE.API.mcp.listTools(),
+        AE.API.skills.listSkills()
+      ]);
+      if (pRes && pRes.items && pRes.items.length) AE.DB.profiles = pRes.items;
+      if (sRes) Object.assign(AE.DB.settings, sRes);
+      if (mcpSrvRes && mcpSrvRes.items && mcpSrvRes.items.length) MCP_SERVERS = mcpSrvRes.items;
+      if (mcpToolsRes && mcpToolsRes.items && mcpToolsRes.items.length) MCP_TOOLS = mcpToolsRes.items;
+      if (skillRes && skillRes.items && skillRes.items.length) SKILLS = skillRes.items;
+    } catch (e) {
+      console.warn('[Profiles] API init fallback:', e);
+    }
+    renderLayout();
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>

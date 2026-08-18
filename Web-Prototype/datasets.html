@@ -1,0 +1,1235 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>数据集 · AI 测试与评估平台</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/shell.css">
+<style>
+  .ft-layout {
+    display: grid;
+    grid-template-columns: 290px minmax(0, 1fr);
+    height: calc(100vh - var(--topbar-h));
+    overflow: hidden;
+  }
+  .ft-sidebar {
+    background: var(--bg-elevated);
+    border-right: 1px solid var(--border-subtle);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .ft-header {
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border-subtle);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .ft-tree {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .ft-node {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    border-radius: 8px;
+    font-size: 13px;
+    cursor: pointer;
+    user-select: none;
+    transition: background .15s ease, color .15s ease;
+    color: var(--text-primary);
+  }
+  .ft-node:hover {
+    background: rgba(17, 24, 39, 0.04);
+  }
+  .ft-node.active {
+    background: color-mix(in srgb, var(--accent-ai) 12%, var(--bg-main));
+    color: var(--accent-ai);
+    font-weight: 600;
+  }
+  .ft-node.folder {
+    font-weight: 600;
+    color: var(--text-secondary);
+  }
+  .ft-folder-child {
+    padding-left: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .ft-icon {
+    width: 16px;
+    height: 16px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 16px;
+  }
+  .ft-badge {
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-tertiary);
+  }
+  .ft-status-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent-warning);
+  }
+
+  /* 右侧工作台 */
+  .workspace-main {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+    background: var(--bg-main);
+  }
+  .ws-toolbar {
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--border-subtle);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    background: var(--bg-main);
+  }
+  .ws-grid-container {
+    flex: 1;
+    overflow: auto;
+    padding: 0;
+    position: relative;
+  }
+  .ws-status-bar {
+    padding: 8px 16px;
+    border-top: 1px solid var(--border-subtle);
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+  }
+
+  /* 右键上下文菜单 */
+  .context-menu {
+    position: fixed;
+    z-index: 10000;
+    background: var(--bg-main);
+    border: 1px solid var(--border-subtle);
+    border-radius: 10px;
+    padding: 6px;
+    box-shadow: 0 12px 32px rgba(17, 24, 39, 0.14);
+    min-width: 175px;
+    font-size: 12.5px;
+    animation: menu-pop .12s cubic-bezier(0.2, 0.9, 0.3, 1);
+  }
+  @keyframes menu-pop {
+    from { opacity: 0; transform: scale(0.95); }
+    to { opacity: 1; transform: scale(1); }
+  }
+  .context-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    color: var(--text-primary);
+    transition: background .12s ease;
+  }
+  .context-item:hover {
+    background: var(--bg-elevated);
+    color: var(--accent-ai);
+  }
+  .context-item.danger {
+    color: var(--accent-error);
+  }
+  .context-item.danger:hover {
+    background: rgba(239, 68, 68, 0.08);
+  }
+  .context-divider {
+    height: 1px;
+    background: var(--border-subtle);
+    margin: 4px 0;
+  }
+
+  /* 自定义列标头 */
+  .custom-col-th {
+    background: color-mix(in srgb, var(--accent-ai) 4%, var(--bg-elevated));
+    color: var(--accent-ai);
+  }
+  .btn-add-col {
+    padding: 2px 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    border: 1px dashed var(--border-subtle);
+    background: transparent;
+    color: var(--text-tertiary);
+  }
+  .btn-add-col:hover {
+    border-color: var(--accent-ai);
+    color: var(--accent-ai);
+  }
+</style>
+</head>
+<body>
+<div class="app" id="app"></div>
+
+<script src="assets/app.js"></script>
+<script src="assets/api.js"></script>
+<script>
+(function () {
+  const content = AE.renderShell('datasets', '数据集工作台', { flush: true });
+  const isRag = () => AE.getMode() === 'rag';
+  const me = AE.getUser().username;
+  const METRICS = ['contain', 'exact', 'rouge_l', 'bleu', 'regex'];
+
+  /* ─── 动态数据源与树形目录（全量接入 AE.API.datasets） ─── */
+  let TREE_DATA = {
+    folders: [
+      { id: 'f-core', name: '核心主干基准', open: true, items: ['ds-smoke'] },
+      { id: 'f-biz', name: '支付风控链路', open: true, items: ['ds-pay'] },
+      { id: 'f-faq', name: '客服与知识库 FAQ', open: false, items: ['ds-faq', 'gq-1', 'gq-2'] }
+    ]
+  };
+
+  let CUSTOM_COLS = {
+    'ds-smoke': [
+      { key: 'tags', name: '标签', type: 'text' },
+      { key: 'difficulty', name: '难度', type: 'text' }
+    ]
+  };
+
+  const MOCK_ROWS = {
+    'ds-smoke': [
+      { row_no: 1, q: '如何修改默认结算账户？', r: '进入「设置-账户-结算账户」，选择「修改默认账户」并完成短信验证。', c: '用户需已绑定手机号', tags: '账户,安全', difficulty: '中等' },
+      { row_no: 2, q: '支持哪些付款方式？', r: '支持余额、银行卡与对公转账三种方式。', c: '', tags: '收银台', difficulty: '简单' },
+      { row_no: 3, q: '', r: '在「设置-账单」中申请', c: '', tags: '账单', difficulty: '简单' },
+      { row_no: 4, q: '支付密码输错被锁定怎么办？', r: '连续输错 5 次锁定 2 小时，可通过人脸验证立即解锁。', c: '', tags: '风控', difficulty: '高' },
+      { row_no: 5, q: '余额提现有限额吗？', r: '单笔提现不超过 5 万元，单日不超过 20 万元。', c: '', tags: '资金', difficulty: '中等' },
+      { row_no: 6, q: '退款多久到账？', r: '审核通过后 1-3 个工作日原路退回。', c: '', tags: '售后', difficulty: '简单' },
+      { row_no: 17, q: '如何导出上一年度对账单？', r: '', c: '', tags: '财务', difficulty: '中等' }
+    ],
+    'ds-pay': [
+      { row_no: 1, q: '企业对公转账需要几天确认？', r: '1-2 个工作日内由财务人工核销入账。', c: '', tags: '企业' },
+      { row_no: 2, q: '外币结算手续费是多少？', r: '每笔收取 1.5% 跨境结算汇损及手续费。', c: '', tags: '外卡' }
+    ],
+    'ds-faq': [
+      { row_no: 1, q: '发票开具申请入口在哪里？', r: '在「财务-发票中心」提交开票信息。', c: '', tags: '发票' }
+    ],
+    'gq-1': [
+      { row_no: 1, q: '退款多久到账？', r: '审核通过后 1-3 个工作日原路退回。', docs: 'd-03#c01, d-01#c07' },
+      { row_no: 2, q: '如何开具增值税发票？', r: '在「设置-发票」中提交开票信息，电子发票 24 小时内发送至邮箱。', docs: 'd-01#c12' }
+    ],
+    'gq-2': [
+      { row_no: 1, q: '客服工作时间是什么时候？', r: '人工客服工作时间为每日 9:00 - 21:00。', docs: 'd-02#c01' }
+    ]
+  };
+
+  let ROWS = AE.API.isMock() ? MOCK_ROWS : {};
+  let activeId = AE.API.isMock() ? 'ds-smoke' : ''; // 当前选中的数据集或黄金 QA
+
+  function getActiveItem() {
+    return AE.DB.datasets.find(d => d.id === activeId) || AE.DB.goldQAs.find(g => g.id === activeId) || AE.DB.datasets[0];
+  }
+
+  async function syncDatasetRows(id) {
+    try {
+      const apiRows = (ROWS[id] || []).map(row => ({
+        ...row,
+        question: row.q,
+        reference: row.r,
+        context: row.c
+      }));
+      await AE.API.datasets.saveRows(id, apiRows);
+    } catch (e) {
+      AE.toast('error', `保存数据集行失败：${e.message}`);
+    }
+  }
+
+  async function loadDatasetRows(id) {
+    const result = await AE.API.datasets.getRows(id);
+    ROWS[id] = (result.items || result.rows || []).map((row, index) => ({
+      ...row,
+      row_no: row.row_no || index + 1,
+      q: row.q != null ? row.q : (row.question || ''),
+      r: row.r != null ? row.r : (row.reference || ''),
+      c: row.c != null ? row.c : (row.context || ''),
+      docs: row.docs || (Array.isArray(row.expected_doc_ids) ? row.expected_doc_ids.join(',') : '')
+    }));
+  }
+
+  /* ─── 页面骨架结构 ─── */
+  content.innerHTML = `
+    <div class="ft-layout" data-od-id="dataset-filetree-layout">
+      <!-- 左侧：目录树侧边栏 -->
+      <div class="ft-sidebar">
+        <div class="ft-header">
+          <div class="row-between">
+            <span style="font-weight:600;font-size:13px">资源目录树</span>
+            <button class="btn btn-secondary btn-sm" id="btn-tree-add" style="font-size:11px">+ 新建</button>
+          </div>
+          <input class="input" id="tree-search" placeholder="搜索数据集 / 黄金 QA..." style="height:30px;font-size:12px">
+        </div>
+        <div class="ft-tree" id="file-tree"></div>
+      </div>
+
+      <!-- 右侧：数据表格工作台 -->
+      <div class="workspace-main" id="workspace-main">
+        <div class="ws-toolbar" id="ws-toolbar"></div>
+        <div class="ws-grid-container" id="ws-grid-container"></div>
+        <div class="ws-status-bar" id="ws-status-bar"></div>
+      </div>
+    </div>
+    <div id="context-menu-root"></div>`;
+
+  /* ─── 1. 渲染左侧文件树 ─── */
+  function renderTree() {
+    const treeEl = document.getElementById('file-tree');
+    const q = (document.getElementById('tree-search').value || '').trim().toLowerCase();
+    
+    let html = '';
+    TREE_DATA.folders.forEach(folder => {
+      const items = folder.items.map(id => {
+        const ds = AE.DB.datasets.find(d => d.id === id);
+        const gq = AE.DB.goldQAs.find(g => g.id === id);
+        return ds ? { ...ds, type: 'dataset' } : gq ? { ...gq, type: 'gold_qa' } : null;
+      }).filter(Boolean).filter(it => !q || it.name.toLowerCase().includes(q));
+
+      if (q && !items.length) return;
+
+      html += `
+        <div class="ft-node folder" data-fid="${folder.id}">
+          <span class="ft-icon">${folder.open ? '▾' : '▸'}</span>
+          <span>📁 ${AE.esc(folder.name)}</span>
+          <span class="ft-badge">${items.length}</span>
+        </div>`;
+
+      if (folder.open) {
+        html += `<div class="ft-folder-child">`;
+        items.forEach(it => {
+          const isActive = it.id === activeId;
+          const badCount = (ROWS[it.id] || []).filter(r => (!r.q || !r.r)).length;
+          html += `
+            <div class="ft-node ${isActive ? 'active' : ''}" data-node-id="${it.id}" data-node-type="${it.type}">
+              <span class="ft-icon">${it.type === 'dataset' ? '📄' : '⭐'}</span>
+              <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${AE.esc(it.name)}</span>
+              <span class="tag-soft" style="font-size:10px;padding:1px 5px;margin-left:auto">v${it.version}</span>
+              ${badCount ? `<span class="ft-status-dot" title="${badCount} 行待补全"></span>` : ''}
+            </div>`;
+        });
+        html += `</div>`;
+      }
+    });
+
+    treeEl.innerHTML = html;
+
+    // 绑定树节点点击
+    treeEl.querySelectorAll('.ft-node.folder').forEach(el => {
+      el.onclick = () => {
+        const f = TREE_DATA.folders.find(x => x.id === el.dataset.fid);
+        if (f) { f.open = !f.open; renderTree(); }
+      };
+      el.oncontextmenu = e => {
+        e.preventDefault();
+        openFolderContextMenu(e.clientX, e.clientY, el.dataset.fid);
+      };
+    });
+
+    treeEl.querySelectorAll('.ft-node[data-node-id]').forEach(el => {
+      el.onclick = async () => {
+        activeId = el.dataset.nodeId;
+        if (!AE.API.isMock() && el.dataset.nodeType === 'dataset') {
+          try { await loadDatasetRows(activeId); }
+          catch (e) { AE.toast('error', `读取数据集行失败：${e.message}`); }
+        }
+        renderTree();
+        renderWorkspace();
+      };
+      el.oncontextmenu = e => {
+        e.preventDefault();
+        openFileContextMenu(e.clientX, e.clientY, el.dataset.nodeId);
+      };
+    });
+  }
+
+  /* ─── 2. 渲染右侧数据工作台 ─── */
+  function renderWorkspace() {
+    const item = getActiveItem();
+    if (!item) return;
+
+    const rows = ROWS[item.id] || [];
+    const customCols = CUSTOM_COLS[item.id] || [];
+    const isGoldQa = item.type === 'gold_qa' || !!item.kb_id;
+
+    // 1. 顶部工具栏
+    const tb = document.getElementById('ws-toolbar');
+    tb.innerHTML = `
+      <div class="row" style="gap:8px;align-items:center">
+        <span style="font-weight:700;font-size:15px">${AE.esc(item.name)}</span>
+        <span class="tag-soft" style="font-size:11px">v${item.version}</span>
+        <span class="tag-soft" style="color:var(--c-${isGoldQa ? 'kb' : 'datasets'});border-color:var(--t-${isGoldQa ? 'kb' : 'datasets'})">${isGoldQa ? '黄金 QA' : '基准数据集'}</span>
+      </div>
+      <div class="row" style="gap:8px;align-items:center;margin-left:auto">
+        <button class="btn btn-secondary btn-sm" id="btn-add-row">+ 新增行</button>
+        <button class="btn btn-secondary btn-sm" id="btn-add-col">+ 新增列</button>
+        <button class="btn btn-ai btn-sm" id="btn-ai-gen-set">✨ AI 合成新数据</button>
+        <button class="btn btn-ai btn-sm" id="btn-ai-fill">AI 补全缺失行</button>
+        <button class="btn btn-secondary btn-sm" id="btn-export-set">导出 JSONL</button>
+        <button class="btn btn-sign btn-sm" id="btn-eval-set">${isGoldQa ? '发起 RAG 评测' : '发起基准评测'}</button>
+      </div>`;
+
+    // 2. 表格数据网格
+    const grid = document.getElementById('ws-grid-container');
+    grid.innerHTML = `
+      <table class="ds-table" id="data-grid-table">
+        <thead>
+          <tr>
+            <th style="width:44px"><input type="checkbox" id="chk-all"></th>
+            <th style="width:50px">#</th>
+            <th style="min-width:180px">问题 Question <i class="req">*</i></th>
+            <th style="min-width:200px">标准答案 Reference <i class="req">*</i></th>
+            ${isGoldQa ? '<th style="min-width:140px">预期文档 expected_doc_ids</th>' : '<th style="min-width:140px">上下文 / Prompt Context</th>'}
+            ${customCols.map(c => `<th class="custom-col-th" style="min-width:110px">${AE.esc(c.name)} <button class="link-btn danger" data-delcol="${c.key}" style="font-size:10px;padding:0 2px">✕</button></th>`).join('')}
+            <th style="width:90px">校验状态</th>
+            <th style="width:80px">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map((r, idx) => {
+            const hasErr = !r.q || !r.r;
+            return `
+              <tr data-row-idx="${idx}">
+                <td><input type="checkbox" class="row-chk"></td>
+                <td class="num-col tertiary">${r.row_no || idx + 1}</td>
+                <td class="cell-edit ${!r.q ? 'cell-bad' : ''}" data-k="q">${AE.esc(r.q || '（空问句 · 待补全）')}</td>
+                <td class="cell-edit ${!r.r ? 'cell-bad' : ''}" data-k="r">${AE.esc(r.r || '（空答案 · 待补全）')}</td>
+                <td class="cell-edit" data-k="${isGoldQa ? 'docs' : 'c'}">${AE.esc(isGoldQa ? (r.docs || '—') : (r.c || '—'))}</td>
+                ${customCols.map(c => `<td class="cell-edit" data-k="${c.key}">${AE.esc(r[c.key] || '—')}</td>`).join('')}
+                <td>${hasErr ? '<span class="badge badge-awaiting_case_confirm">⊘ 待补全</span>' : '<span class="badge badge-succeeded">✓ 达标</span>'}</td>
+                <td>
+                  <button class="link-btn" data-edit-modal="${idx}">编辑</button>
+                </td>
+              </tr>`;
+          }).join('')}
+        </tbody>
+      </table>`;
+
+    // 3. 底部状态条
+    const sb = document.getElementById('ws-status-bar');
+    const badRows = rows.filter(r => !r.q || !r.r).length;
+    sb.innerHTML = `
+      <span>共 <b class="num">${rows.length}</b> 行</span>
+      ${badRows ? `<span class="st-bad">⊘ ${badRows} 行待补全（不计入规则评分分母）</span>` : '<span class="st-ok">✓ 全行校验通过</span>'}
+      <span>扩展列: ${customCols.length}</span>
+      <span class="grow"></span>
+      ${!isGoldQa ? `
+        <span class="tertiary">主评测指标:</span>
+        <select class="select" id="metric-sel" style="height:26px;padding:2px 24px 2px 8px;font-size:12px">
+          ${METRICS.map(m => `<option ${m === (item.metric || 'contain') ? 'selected' : ''}>${m}</option>`).join('')}
+        </select>` : ''}
+    `;
+
+    // 4. 交互绑定
+    bindGridEvents(item, rows, customCols);
+  }
+
+  /* ─── 3. 表格交互与右键菜单绑定 ─── */
+  function bindGridEvents(item, rows, customCols) {
+    // 单元格双击/点击就地编辑
+    document.querySelectorAll('td.cell-edit').forEach(td => {
+      td.onclick = () => {
+        if (td.querySelector('.cell-input')) return;
+        const tr = td.closest('tr');
+        const idx = +tr.dataset.rowIdx;
+        const k = td.dataset.k;
+        const oldVal = rows[idx][k] || '';
+
+        td.innerHTML = '';
+        const inp = document.createElement('input');
+        inp.className = 'cell-input';
+        inp.value = oldVal === '—' ? '' : oldVal;
+        td.appendChild(inp);
+        inp.focus();
+
+        let saved = false;
+        const commit = () => {
+          if (saved) return; saved = true;
+          rows[idx][k] = inp.value.trim();
+          syncDatasetRows(item.id);
+          renderWorkspace();
+        };
+
+        inp.onblur = commit;
+        inp.onkeydown = e => {
+          if (e.key === 'Enter') { e.preventDefault(); commit(); }
+          if (e.key === 'Escape') { saved = true; renderWorkspace(); }
+        };
+      };
+    });
+
+    // 右键表格行弹窗
+    document.querySelectorAll('#data-grid-table tbody tr').forEach(tr => {
+      tr.oncontextmenu = e => {
+        e.preventDefault();
+        const idx = +tr.dataset.rowIdx;
+        openRowContextMenu(e.clientX, e.clientY, idx, rows, item);
+      };
+    });
+
+    // 弹窗编辑按钮
+    document.querySelectorAll('[data-edit-modal]').forEach(b => {
+      b.onclick = () => openRowEditModal(+b.dataset.editModal, rows, item, customCols);
+    });
+
+    // 删除自定义列
+    document.querySelectorAll('[data-delcol]').forEach(b => {
+      b.onclick = () => {
+        const k = b.dataset.delcol;
+        const list = CUSTOM_COLS[item.id] || [];
+        CUSTOM_COLS[item.id] = list.filter(c => c.key !== k);
+        renderWorkspace();
+        AE.toast('info', '已移除列 ' + k);
+      };
+    });
+
+    // 新增行
+    document.getElementById('btn-add-row').onclick = () => {
+      rows.push({ row_no: rows.length + 1, q: '', r: '', c: '' });
+      item.row_count = rows.length;
+      renderWorkspace();
+      AE.toast('success', '已新增空行，可直接点击单元格编辑');
+    };
+
+    // 新增自定义列
+    document.getElementById('btn-add-col').onclick = () => openAddColModal(item);
+
+    // AI 智能合成新数据
+    const agb = document.getElementById('btn-ai-gen-set');
+    if (agb) agb.onclick = () => openAiGenSetModal();
+
+    // AI 补全缺失行
+    document.getElementById('btn-ai-fill').onclick = () => openAiFillModal(item, rows);
+
+    // 导出
+    document.getElementById('btn-export-set').onclick = () => {
+      const jsonl = rows.map(r => JSON.stringify(r)).join('\n');
+      const blob = new Blob([jsonl], { type: 'application/jsonl' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `${item.name}-v${item.version}.jsonl`;
+      a.click();
+      AE.toast('success', `已导出 ${rows.length} 行 JSONL 数据`);
+    };
+
+    // 发起评测
+    document.getElementById('btn-eval-set').onclick = () => openEvalDrawer(item);
+  }
+
+  /* ─── 4. 对话框补齐（全部结构化可编辑对话框） ─── */
+  // A. 行结构化编辑弹窗（支持多行 Markdown / JSON / 自定义字段）
+  function openRowEditModal(idx, rows, item, customCols) {
+    const r = rows[idx];
+    const isGoldQa = item.type === 'gold_qa' || !!item.kb_id;
+
+    AE.modal({
+      title: `编辑样本行 #${r.row_no || idx + 1}`,
+      wide: true,
+      body: `
+        <div class="field">
+          <span class="field-label">问题 / 提示词 (Question / Prompt) <i class="req">*</i></span>
+          <textarea class="textarea" id="m-q" rows="3">${AE.esc(r.q || '')}</textarea>
+        </div>
+        <div class="field">
+          <span class="field-label">标准答案 / 预期输出 (Reference) <i class="req">*</i></span>
+          <textarea class="textarea" id="m-r" rows="3">${AE.esc(r.r || '')}</textarea>
+        </div>
+        <div class="field">
+          <span class="field-label">${isGoldQa ? '预期召回文档 (expected_doc_ids，逗号分隔)' : '上下文注入 / Prompt Context (支持 Markdown / JSON)'}</span>
+          <textarea class="textarea mono" id="m-c" rows="3">${AE.esc(isGoldQa ? (r.docs || '') : (r.c || ''))}</textarea>
+        </div>
+        ${customCols.length ? `
+          <div class="rail-label mt8">自定义扩展字段</div>
+          <div class="form-row">
+            ${customCols.map(c => `
+              <div class="field">
+                <span class="field-label">${AE.esc(c.name)} (${c.key})</span>
+                <input class="input" id="m-custom-${c.key}" value="${AE.esc(r[c.key] || '')}">
+              </div>`).join('')}
+          </div>` : ''}`,
+      foot: `<button class="btn btn-secondary" id="m-cancel">取消</button><button class="btn btn-sign" id="m-save">保存修改</button>`,
+      onMount: (el, close) => {
+        el.querySelector('#m-cancel').onclick = close;
+        el.querySelector('#m-save').onclick = () => {
+          r.q = el.querySelector('#m-q').value.trim();
+          r.r = el.querySelector('#m-r').value.trim();
+          const extra = el.querySelector('#m-c').value.trim();
+          if (isGoldQa) r.docs = extra; else r.c = extra;
+
+          customCols.forEach(c => {
+            const inp = el.querySelector('#m-custom-' + c.key);
+            if (inp) r[c.key] = inp.value.trim();
+          });
+
+          close();
+          renderWorkspace();
+          AE.toast('success', `已更新样本 #${r.row_no || idx + 1}`);
+        };
+      }
+    });
+  }
+
+  // B. 新增自定义扩展列对话框
+  function openAddColModal(item) {
+    AE.modal({
+      title: '新增自定义数据列 (Custom Column)',
+      body: `
+        <div class="field">
+          <span class="field-label">字段 Key (英文字母 / 下划线) <i class="req">*</i></span>
+          <input class="input mono" id="col-key" placeholder="如 category, meta_tags, prompt_type">
+        </div>
+        <div class="field">
+          <span class="field-label">列显示名称 <i class="req">*</i></span>
+          <input class="input" id="col-name" placeholder="如 业务分类, 标签, 提示词类型">
+        </div>
+        <div class="field">
+          <span class="field-label">字段类型</span>
+          <select class="select" id="col-type">
+            <option value="text">纯文本 (Text)</option>
+            <option value="json">JSON 结构体</option>
+            <option value="number">数值 (Number)</option>
+          </select>
+        </div>`,
+      foot: `<button class="btn btn-sign" id="col-ok">确认添加</button>`,
+      onMount: (el, close) => {
+        el.querySelector('#col-ok').onclick = () => {
+          const key = el.querySelector('#col-key').value.trim().toLowerCase();
+          const name = el.querySelector('#col-name').value.trim();
+          const type = el.querySelector('#col-type').value;
+          if (!key || !name) { AE.toast('error', '请填写完整字段 Key 与显示名称'); return; }
+
+          CUSTOM_COLS[item.id] = CUSTOM_COLS[item.id] || [];
+          if (CUSTOM_COLS[item.id].some(c => c.key === key)) { AE.toast('warning', '该字段 Key 已存在'); return; }
+
+          CUSTOM_COLS[item.id].push({ key, name, type });
+          close();
+          renderWorkspace();
+          AE.toast('success', `已添加自定义列「${name}」`);
+        };
+      }
+    });
+  }
+
+  // C. AI 智能合成新集对话框（多源模式 + 深度控制参数 + 流式候选表格预览）
+  function openAiGenSetModal(targetFolder) {
+    const isGoldQa = isRag();
+    let currentStep = 'config'; // 'config' | 'preview'
+    let generatedCandidates = [];
+    let aiMode = 'scene';
+
+    const PRESETS = [
+      { name: '跨境收银与外币结算', desc: '涵盖外卡快捷支付、汇损换算、3DS 安全验证与跨境退款' },
+      { name: '风控拦截与账户锁定', desc: '密码连续输错锁定、人脸识别解锁、高危 IP 拦截与大额转账审批' },
+      { name: '退款售后与争议仲裁', desc: '退款时效 1-3 工作日、手续费返还规则、部分退款及银联争议处理' },
+      { name: '发票与税务合规', desc: '增值税专用发票邮寄、电子发票 24h 发送、红字冲销及抬头修改' }
+    ];
+
+    AE.modal({
+      title: isGoldQa ? '✨ AI 智能生成黄金 QA 集' : '✨ AI 智能生成评测数据集',
+      wide: true,
+      body: `
+        <div id="ai-gen-body">
+          <!-- Step 1: 配置界面 -->
+          <div id="ai-step-config">
+            <div class="row mb12" style="gap:8px">
+              <button class="chip on" data-aimode="scene">🌟 场景定向合成</button>
+              <button class="chip" data-aimode="seed">🌱 种子样本扩写</button>
+              <button class="chip" data-aimode="doc">📄 需求文档/OpenAPI 提取</button>
+            </div>
+
+            <div id="ai-view-scene">
+              <div class="field">
+                <span class="field-label">预设业务场景模板</span>
+                <select class="select" id="ai-preset-sel">
+                  ${PRESETS.map(p => `<option value="${p.desc}">${p.name} · ${p.desc}</option>`).join('')}
+                </select>
+              </div>
+              <div class="field">
+                <span class="field-label">场景与评估目标描述 (Prompt Instruction) <i class="req">*</i></span>
+                <textarea class="textarea" id="ai-desc-input" rows="3">涵盖外卡快捷支付、汇损换算、3DS 安全验证与跨境退款</textarea>
+              </div>
+            </div>
+
+            <div id="ai-view-seed" style="display:none">
+              <div class="field">
+                <span class="field-label">选择种子样本（基于此样本扩写同义、长尾或边界题）</span>
+                <select class="select" id="ai-seed-sel">
+                  <option>如何修改默认结算账户？ · 在「设置-账户-结算账户」中修改并完成短信验证</option>
+                  <option>余额提现有限额吗？ · 单笔不超过 5 万元，单日不超过 20 万元</option>
+                  <option>退款多久到账？ · 审核通过后 1-3 个工作日原路退回</option>
+                </select>
+              </div>
+              <div class="field">
+                <span class="field-label">扩写维度</span>
+                <div class="row wrap" style="gap:8px">
+                  <label><input type="checkbox" checked> 同义口语化改写</label>
+                  <label><input type="checkbox" checked> 增加前置约束条件</label>
+                  <label><input type="checkbox" checked> 衍生边界异常提问</label>
+                </div>
+              </div>
+            </div>
+
+            <div id="ai-view-doc" style="display:none">
+              <div class="field">
+                <span class="field-label">粘贴 PRD / OpenAPI 接口定义 / Markdown 需求文本</span>
+                <textarea class="textarea mono" id="ai-doc-input" rows="4" placeholder="粘贴接口文档或需求描述，AI 将自动抽取问答对及对应上下文..."></textarea>
+              </div>
+            </div>
+
+            <div class="rail-label mt12">高级控制参数</div>
+            <div class="form-row-3">
+              <div class="field">
+                <span class="field-label">生成行数 (<b class="num" id="ai-rows-num">8</b> 行)</span>
+                <input type="range" class="cap-slider" id="ai-rows-slider" min="3" max="25" value="8" style="margin-top:8px">
+              </div>
+              <div class="field">
+                <span class="field-label">生成模型</span>
+                <select class="select" id="ai-model-sel">
+                  <option value="gpt-4.1">gpt-4.1 (高准确度)</option>
+                  <option value="claude-sonnet-4.5">claude-sonnet-4.5 (强逻辑推理)</option>
+                  <option value="o4">o4 (复杂边界深度推理)</option>
+                </select>
+              </div>
+              <div class="field">
+                <span class="field-label">发散度 Temperature</span>
+                <select class="select" id="ai-temp-sel">
+                  <option value="0.2">0.2 (严谨收敛)</option>
+                  <option value="0.5" selected>0.5 (标准平衡)</option>
+                  <option value="0.8">0.8 (发散多样)</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="field">
+                <span class="field-label">难易度分布配比</span>
+                <div class="row" style="gap:8px;font-size:12px">
+                  <span class="tag-soft">简单 40%</span>
+                  <span class="tag-soft">中等 40%</span>
+                  <span class="tag-soft">高难/陷阱 20%</span>
+                </div>
+              </div>
+              <div class="field">
+                <span class="field-label">自动生成字段</span>
+                <div class="row wrap" style="gap:10px;font-size:12px;margin-top:6px">
+                  <label><input type="checkbox" id="ai-gen-ref" checked> 标准答案</label>
+                  <label><input type="checkbox" id="ai-gen-ctx" checked> 上下文 Context</label>
+                  <label><input type="checkbox" id="ai-gen-tags" checked> 标签 Tags</label>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Step 2: 候选结果表格实时预览 -->
+          <div id="ai-step-preview" style="display:none">
+            <div class="row-between mb8">
+              <span style="font-weight:600;font-size:13px">AI 生成候选项（已生成 <b class="num" id="ai-cand-count">0</b> 条，可直接点击单元格微调）</span>
+              <button class="link-btn" id="ai-cand-toggle-all">全选 / 全不选</button>
+            </div>
+            <div style="max-height:360px;overflow-y:auto;border:1px solid var(--border-subtle);border-radius:8px">
+              <table class="ds-table" id="ai-cand-table">
+                <thead>
+                  <tr>
+                    <th style="width:36px"><input type="checkbox" id="cand-check-all" checked></th>
+                    <th>问题 Question</th>
+                    <th>参考答案 Reference</th>
+                    <th style="width:110px">难度 / 标签</th>
+                    <th style="width:70px">操作</th>
+                  </tr>
+                </thead>
+                <tbody id="ai-cand-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>`,
+      foot: `
+        <div class="row-between" style="width:100%">
+          <button class="btn btn-secondary" id="ai-btn-back" style="display:none">← 返回调整参数</button>
+          <span class="grow"></span>
+          <button class="btn btn-secondary" id="ai-btn-cancel">取消</button>
+          <button class="btn btn-ai" id="ai-btn-next">立即生成候选样本 →</button>
+          <button class="btn btn-sign" id="ai-btn-commit" style="display:none">采纳并导入数据集 (<span class="num" id="ai-sel-num">0</span> 条)</button>
+        </div>`,
+      onMount: (el, close) => {
+        const rowsSlider = el.querySelector('#ai-rows-slider');
+        const rowsNum = el.querySelector('#ai-rows-num');
+        rowsSlider.oninput = () => { rowsNum.textContent = rowsSlider.value; };
+
+        // 预设模板联动
+        const presetSel = el.querySelector('#ai-preset-sel');
+        const descInp = el.querySelector('#ai-desc-input');
+        presetSel.onchange = () => { descInp.value = presetSel.value; };
+
+        // 模式 Tab 切换
+        const modeChips = el.querySelectorAll('[data-aimode]');
+        modeChips.forEach(ch => {
+          ch.onclick = () => {
+            modeChips.forEach(c => c.classList.toggle('on', c === ch));
+            const m = ch.dataset.aimode;
+            aiMode = m;
+            el.querySelector('#ai-view-scene').style.display = m === 'scene' ? '' : 'none';
+            el.querySelector('#ai-view-seed').style.display = m === 'seed' ? '' : 'none';
+            el.querySelector('#ai-view-doc').style.display = m === 'doc' ? '' : 'none';
+          };
+        });
+
+        // 步骤切换与生成模拟
+        const stepConfig = el.querySelector('#ai-step-config');
+        const stepPreview = el.querySelector('#ai-step-preview');
+        const btnNext = el.querySelector('#ai-btn-next');
+        const btnBack = el.querySelector('#ai-btn-back');
+        const btnCommit = el.querySelector('#ai-btn-commit');
+
+        btnBack.onclick = () => {
+          stepConfig.style.display = '';
+          stepPreview.style.display = 'none';
+          btnNext.style.display = '';
+          btnBack.style.display = 'none';
+          btnCommit.style.display = 'none';
+        };
+
+        btnNext.onclick = async () => {
+          const count = +rowsSlider.value || 8;
+          btnNext.disabled = true;
+          btnNext.textContent = 'AI 深度推理生成中…';
+
+          try {
+            if (AE.API.isMock()) {
+              await new Promise(resolve => setTimeout(resolve, 700));
+              generatedCandidates = Array.from({ length: count }, (_, i) => ({
+                selected: true,
+                q: `如何处理跨境交易退款中的汇损问题？（场景派生 #${i + 1}）`,
+                r: '根据平台协议，外币支付订单在退款时按原路退回，退款汇率以交易发起时汇率为准，手续费按比例全额返还。',
+                c: '跨境结算业务指引 v2.4', tags: '外汇,退款',
+                difficulty: i % 3 === 0 ? '困难' : i % 3 === 1 ? '中等' : '简单'
+              }));
+            } else {
+              const result = await AE.API.datasets.aiGenerate({
+                dataset_id: activeId,
+                mode: aiMode,
+                instruction: el.querySelector('#ai-desc-input').value.trim(),
+                source_text: el.querySelector('#ai-doc-input').value.trim(),
+                seed: el.querySelector('#ai-seed-sel').value,
+                max_count: count,
+                model: el.querySelector('#ai-model-sel').value,
+                temperature: Number(el.querySelector('#ai-temp-sel').value)
+              });
+              generatedCandidates = (result.items || result.rows || result.candidates || []).map(row => ({
+                ...row, selected: true,
+                q: row.q || row.question || '', r: row.r || row.reference || '',
+                c: row.c || row.context || '', tags: row.tags || '', difficulty: row.difficulty || '中等'
+              }));
+              if (!generatedCandidates.length) throw new Error('生成接口未返回候选数据行');
+            }
+            btnNext.disabled = false;
+            btnNext.textContent = '立即生成候选样本 →';
+            stepConfig.style.display = 'none';
+            stepPreview.style.display = '';
+            btnNext.style.display = 'none';
+            btnBack.style.display = '';
+            btnCommit.style.display = '';
+
+            renderCandidatesTable();
+          } catch (e) {
+            btnNext.disabled = false;
+            btnNext.textContent = '立即生成候选样本 →';
+            AE.toast('error', `AI 生成失败：${e.message}`);
+          }
+        };
+
+        function renderCandidatesTable() {
+          const tbody = el.querySelector('#ai-cand-tbody');
+          el.querySelector('#ai-cand-count').textContent = generatedCandidates.length;
+          tbody.innerHTML = generatedCandidates.map((c, i) => `
+            <tr>
+              <td><input type="checkbox" class="cand-chk" data-i="${i}" ${c.selected ? 'checked' : ''}></td>
+              <td><input class="input" style="font-size:12px" value="${AE.esc(c.q)}" data-k="q" data-i="${i}"></td>
+              <td><input class="input" style="font-size:12px" value="${AE.esc(c.r)}" data-k="r" data-i="${i}"></td>
+              <td><span class="tag-soft" style="font-size:10px">${c.difficulty} · ${c.tags}</span></td>
+              <td><button class="link-btn danger" data-del-cand="${i}" style="font-size:11px">剔除</button></td>
+            </tr>`).join('');
+
+          updateSelCount();
+
+          tbody.querySelectorAll('.cand-chk').forEach(chk => {
+            chk.onchange = () => {
+              generatedCandidates[+chk.dataset.i].selected = chk.checked;
+              updateSelCount();
+            };
+          });
+
+          tbody.querySelectorAll('input[data-k]').forEach(inp => {
+            inp.onchange = () => {
+              generatedCandidates[+inp.dataset.i][inp.dataset.k] = inp.value.trim();
+            };
+          });
+
+          tbody.querySelectorAll('[data-del-cand]').forEach(b => {
+            b.onclick = () => {
+              generatedCandidates.splice(+b.dataset.delCand, 1);
+              renderCandidatesTable();
+            };
+          });
+        }
+
+        function updateSelCount() {
+          const n = generatedCandidates.filter(c => c.selected).length;
+          el.querySelector('#ai-sel-num').textContent = n;
+          btnCommit.disabled = n === 0;
+        }
+
+        el.querySelector('#cand-check-all').onchange = (e) => {
+          generatedCandidates.forEach(c => c.selected = e.target.checked);
+          renderCandidatesTable();
+        };
+
+        el.querySelector('#ai-btn-cancel').onclick = close;
+
+        // 确认导入
+        btnCommit.onclick = async () => {
+          const sel = generatedCandidates.filter(c => c.selected);
+          if (!sel.length) return;
+
+          const item = getActiveItem();
+          const targetRows = ROWS[item.id] || [];
+          sel.forEach((c, idx) => {
+            targetRows.push({
+              row_no: targetRows.length + 1,
+              q: c.q,
+              r: c.r,
+              c: c.c,
+              tags: c.tags,
+              difficulty: c.difficulty
+            });
+          });
+
+          item.row_count = targetRows.length;
+          if (!AE.API.isMock()) {
+            try { await syncDatasetRows(item.id); }
+            catch (e) { AE.toast('error', `导入失败：${e.message}`); return; }
+          }
+          close();
+          renderWorkspace();
+          AE.toast('success', `已成功采纳并导入 ${sel.length} 条样本至「${item.name}」`);
+        };
+      }
+    });
+  }
+
+  // D. AI 智能补全缺失行对话框（带语义提示与字段选择）
+  function openAiFillModal(item, rows) {
+    const badRows = rows.filter(r => !r.q || !r.r);
+    if (!badRows.length) {
+      AE.toast('info', '当前数据集所有样本均已完整，无缺失项');
+      return;
+    }
+
+    AE.modal({
+      title: `✨ AI 智能补全缺失字段（共 ${badRows.length} 行待补全）`,
+      wide: true,
+      body: `
+        <p class="small" style="margin-bottom:12px;color:var(--text-secondary)">
+          系统检测到以下样本行缺少核心字段（问句或标准答案）。AI 将结合已有业务上下文自动推导并补全，补全后将保持高亮以供复核。
+        </p>
+        <div class="field">
+          <span class="field-label">业务提示词引导 (Prompt Instruction)</span>
+          <textarea class="textarea" id="ai-fill-inst" rows="2">基于收银台与退款业务规则，精准推导出前置问句与包含操作路径的完整标准答案</textarea>
+        </div>
+        <div class="form-row">
+          <div class="field">
+            <span class="field-label">补全范围</span>
+            <div class="row" style="gap:10px;margin-top:6px;font-size:12px">
+              <label><input type="checkbox" id="af-q" checked> 自动填补缺失问句</label>
+              <label><input type="checkbox" id="af-r" checked> 自动填补缺失参考答案</label>
+            </div>
+          </div>
+          <div class="field">
+            <span class="field-label">参考上下文</span>
+            <span class="small tertiary">自动关联数据集同组高质样本特征进行少样本学习 (Few-Shot)</span>
+          </div>
+        </div>`,
+      foot: `<button class="btn btn-secondary" id="af-cancel">取消</button><button class="btn btn-ai" id="af-ok">开始 AI 补全 (${badRows.length} 行)</button>`,
+      onMount: (el, close) => {
+        el.querySelector('#af-cancel').onclick = close;
+        el.querySelector('#af-ok').onclick = async () => {
+          if (!AE.API.isMock()) {
+            try {
+              const result = await AE.API.datasets.aiGenerate({
+                dataset_id: item.id,
+                mode: 'fill_missing',
+                instruction: el.querySelector('#ai-fill-inst').value.trim(),
+                rows: badRows
+              });
+              const completed = result.items || result.rows || [];
+              completed.forEach((value, index) => Object.assign(badRows[index] || {}, {
+                q: value.q || value.question || badRows[index].q,
+                r: value.r || value.reference || badRows[index].r,
+                c: value.c || value.context || badRows[index].c
+              }));
+              await syncDatasetRows(item.id);
+              close(); renderWorkspace();
+              AE.toast('success', `AI 已返回并保存 ${completed.length} 行补全结果`);
+            } catch (e) { AE.toast('error', `AI 补全失败：${e.message}`); }
+            return;
+          }
+          close();
+          AE.toast('info', `AI 正在对 ${badRows.length} 行数据执行上下文推导与补全…`);
+          setTimeout(() => {
+            badRows.forEach((r, i) => {
+              if (!r.q) r.q = `AI 推导问句 #${i + 1}：如何申请退款与发票红冲？`;
+              if (!r.r) r.r = `在「账单详情-申请退款」提交凭证，财务核销后电子发票将自动冲红并在 1-3 工作日原路退回。`;
+            });
+            renderWorkspace();
+            AE.toast('success', `AI 已成功补全 ${badRows.length} 行缺失数据`);
+          }, 650);
+        };
+      }
+    });
+  }
+
+  // D. 发起评测抽屉 (TaskSpec)
+  function openEvalDrawer(item) {
+    const isGoldQa = item.type === 'gold_qa' || !!item.kb_id;
+    AE.drawer({
+      title: isGoldQa ? '发起 RAG 评测任务' : '发起基准评测任务',
+      wide: true,
+      body: isGoldQa ? `
+        <div class="field"><span class="field-label">kind</span><div>${AE.kindTag('rag')}</div></div>
+        <div class="form-row">
+          <div class="field"><span class="field-label">kb_id</span>
+            <input class="input" readonly value="${item.kb_id || 'kb-default'}"></div>
+          <div class="field"><span class="field-label">gold_qa_id</span>
+            <input class="input" readonly value="${item.name} v${item.version}"></div>
+        </div>
+        <div class="field"><span class="field-label">rag_mode（1–4 个）</span>
+          <div class="chip-group" id="dw-modes">${['naive', 'local', 'global', 'hybrid'].map(m => `<button class="chip ${m === 'hybrid' ? 'on' : ''}">${m}</button>`).join('')}</div></div>
+        ${AE.runConfigFoldHtml('dw')}
+        ${AE.stressFieldsHtml('dw')}`
+      : `
+        <div class="field"><span class="field-label">kind</span><div>${AE.kindTag('benchmark')}</div></div>
+        <div class="field"><span class="field-label">profile_ids（被测协议档）<i class="req">*</i></span>
+          <div class="chip-group" id="dw-profiles">
+            ${AE.DB.profiles.filter(p => (p.usages || []).includes('target')).map((p, i) => `<button class="chip ${i === 0 ? 'on' : ''}" data-pid="${p.id}">${AE.esc(p.name)}</button>`).join('')}
+          </div></div>
+        <div class="field"><span class="field-label">dataset_id</span>
+          <input class="input" readonly value="${item.name} v${item.version} · ${item.row_count || 20} 行"></div>
+        ${AE.runConfigFoldHtml('dw')}
+        ${AE.stressFieldsHtml('dw')}`,
+      foot: `<button class="btn btn-secondary" data-d="cancel">取消</button><button class="btn btn-sign" data-d="ok">创建评测任务</button>`,
+      onMount: (el, close) => {
+        AE.bindFold(el); AE.bindStressFields(el, 'dw');
+        el.querySelectorAll('.chip').forEach(ch => ch.onclick = () => ch.classList.toggle('on'));
+        el.querySelector('[data-d=cancel]').onclick = close;
+        el.querySelector('[data-d=ok]').onclick = async () => {
+          const profileIds = Array.from(el.querySelectorAll('#dw-profiles .chip.on')).map(chip => chip.dataset.pid);
+          const ragModes = Array.from(el.querySelectorAll('#dw-modes .chip.on')).map(chip => chip.textContent.trim());
+          const spec = isGoldQa
+            ? { kind: 'rag', kb_id: item.kb_id, gold_qa_id: item.id, rag_mode: ragModes.length ? ragModes : ['hybrid'] }
+            : { kind: 'benchmark', dataset_id: item.id, profile_ids: profileIds };
+          if (!isGoldQa && !profileIds.length) { AE.toast('error', '至少选择一个被测协议档'); return; }
+          try {
+            const task = await AE.API.tasks.create(spec);
+            if (!task || !task.id) throw new Error('创建任务接口未返回 task id');
+            close();
+            AE.toast('success', '任务已创建（queued）');
+            setTimeout(() => location.href = 'tasks.html', 650);
+          } catch (e) { AE.toast('error', `创建任务失败：${e.message}`); }
+        };
+      }
+    });
+  }
+
+  /* ─── 5. 右键上下文菜单交互 ─── */
+  const menuRoot = document.getElementById('context-menu-root');
+  function closeContextMenu() { menuRoot.innerHTML = ''; }
+  window.addEventListener('click', closeContextMenu);
+
+  // 文件节点右键菜单
+  function openFileContextMenu(x, y, fileId) {
+    const ds = AE.DB.datasets.find(d => d.id === fileId);
+    const gq = AE.DB.goldQAs.find(g => g.id === fileId);
+    const item = ds || gq;
+    if (!item) return;
+
+    menuRoot.innerHTML = `
+      <div class="context-menu" style="left:${x}px;top:${y}px">
+        <div class="context-item" id="cm-eval">⚡ ${ds ? '发起基准评测' : '发起 RAG 评测'}</div>
+        <div class="context-item" id="cm-upload">⤴ 覆盖上传新版本 (v${item.version + 1})</div>
+        <div class="context-item" id="cm-ai-fill">✨ AI 补全缺失数据</div>
+        <div class="context-divider"></div>
+        <div class="context-item" id="cm-rename">✏ 重命名</div>
+        <div class="context-item" id="cm-export">⤓ 导出 JSONL 文件</div>
+        <div class="context-divider"></div>
+        <div class="context-item danger" id="cm-del">🗑 删除数据集</div>
+      </div>`;
+
+    document.getElementById('cm-eval').onclick = () => openEvalDrawer(item);
+    document.getElementById('cm-upload').onclick = () => {
+      item.version += 1;
+      renderTree();
+      renderWorkspace();
+      AE.toast('success', `已递增并生成新版本 v${item.version}`);
+    };
+    document.getElementById('cm-ai-fill').onclick = () => openAiFillModal(item, ROWS[item.id] || []);
+    document.getElementById('cm-rename').onclick = () => {
+      const name = prompt('请输入新名称：', item.name);
+      if (name) { item.name = name.trim(); renderTree(); renderWorkspace(); AE.toast('success', '已重命名'); }
+    };
+    document.getElementById('cm-export').onclick = () => document.getElementById('btn-export-set').click();
+    document.getElementById('cm-del').onclick = async () => {
+      if (confirm(`确认删除「${item.name}」？已跑任务快照不受影响。`)) {
+        await AE.API.datasets.delete(item.id);
+        AE.DB.datasets = AE.DB.datasets.filter(d => d.id !== item.id);
+        TREE_DATA.folders.forEach(f => { f.items = f.items.filter(id => id !== item.id); });
+        if (activeId === item.id) {
+          activeId = AE.DB.datasets.length ? AE.DB.datasets[0].id : '';
+        }
+        renderTree();
+        renderWorkspace();
+        AE.toast('success', `已删除「${item.name}」`);
+      }
+    };
+  }
+
+  // 文件夹右键菜单
+  function openFolderContextMenu(x, y, folderId) {
+    const f = TREE_DATA.folders.find(x => x.id === folderId);
+    menuRoot.innerHTML = `
+      <div class="context-menu" style="left:${x}px;top:${y}px">
+        <div class="context-item" id="cm-new-ds">📄 在此目录下新建数据集</div>
+        <div class="context-item" id="cm-new-f">📁 新建子文件夹</div>
+        <div class="context-divider"></div>
+        <div class="context-item" id="cm-f-rename">✏ 重命名目录</div>
+        <div class="context-item danger" id="cm-f-del">🗑 删除目录</div>
+      </div>`;
+
+    document.getElementById('cm-new-ds').onclick = async () => {
+      const name = prompt('请输入新数据集名称：', 'new-dataset');
+      if (name) {
+        const draft = { name: name.trim(), version: 1, row_count: 0, metric: 'contain', owner: me };
+        let nd;
+        try {
+          nd = AE.API.isMock() ? { ...draft, id: 'ds-' + Date.now() } : await AE.API.datasets.create(draft);
+          if (!nd || !nd.id) throw new Error('创建接口未返回 dataset id');
+        } catch (e) { AE.toast('error', `创建数据集失败：${e.message}`); return; }
+        AE.DB.datasets.push(nd);
+        f.items.push(nd.id);
+        ROWS[nd.id] = AE.API.isMock() ? [{ row_no: 1, q: '', r: '', c: '' }] : [];
+        activeId = nd.id;
+        renderTree();
+        renderWorkspace();
+        AE.toast('success', '已创建新数据集');
+      }
+    };
+    document.getElementById('cm-f-rename').onclick = () => {
+      const name = prompt('请输入目录名称：', f.name);
+      if (name) { f.name = name.trim(); renderTree(); AE.toast('success', '已更新目录名'); }
+    };
+  }
+
+  // 表格行右键菜单
+  function openRowContextMenu(x, y, rowIdx, rows, item) {
+    menuRoot.innerHTML = `
+      <div class="context-menu" style="left:${x}px;top:${y}px">
+        <div class="context-item" id="rm-edit">✏ 详细弹窗编辑</div>
+        <div class="context-item" id="rm-ai">✨ AI 智能补全本行</div>
+        <div class="context-item" id="rm-copy">📋 复制为 JSON</div>
+        <div class="context-divider"></div>
+        <div class="context-item" id="rm-insert">＋ 在下方插入新行</div>
+        <div class="context-item danger" id="rm-del">🗑 删除本行</div>
+      </div>`;
+
+    document.getElementById('rm-edit').onclick = () => openRowEditModal(rowIdx, rows, item, CUSTOM_COLS[item.id] || []);
+    document.getElementById('rm-ai').onclick = async () => {
+      if (!AE.API.isMock()) {
+        try {
+          const result = await AE.API.datasets.aiGenerate({ dataset_id: item.id, mode: 'fill_missing', rows: [rows[rowIdx]] });
+          const value = (result.items || result.rows || [])[0];
+          if (!value) throw new Error('补全接口未返回行数据');
+          rows[rowIdx].q = value.q || value.question || rows[rowIdx].q;
+          rows[rowIdx].r = value.r || value.reference || rows[rowIdx].r;
+          await syncDatasetRows(item.id);
+          renderWorkspace();
+          AE.toast('success', '已完成本行 AI 补全并保存');
+        } catch (e) { AE.toast('error', `AI 补全失败：${e.message}`); }
+        return;
+      }
+      rows[rowIdx].q = rows[rowIdx].q || 'AI 补全问句：如何查看账单扣款明细？';
+      rows[rowIdx].r = rows[rowIdx].r || '进入「财务中心-账单管理」查看扣费记录与电子凭证。';
+      syncDatasetRows(item.id);
+      renderWorkspace();
+      AE.toast('success', '已完成本行 AI 补全');
+    };
+    document.getElementById('rm-copy').onclick = () => {
+      navigator.clipboard.writeText(JSON.stringify(rows[rowIdx], null, 2));
+      AE.toast('success', '已复制样本行 JSON 到剪贴板');
+    };
+    document.getElementById('rm-insert').onclick = () => {
+      rows.splice(rowIdx + 1, 0, { row_no: rows.length + 1, q: '', r: '', c: '' });
+      syncDatasetRows(item.id);
+      renderWorkspace();
+      AE.toast('success', '已在下方插入新行');
+    };
+    document.getElementById('rm-del').onclick = () => {
+      rows.splice(rowIdx, 1);
+      syncDatasetRows(item.id);
+      renderWorkspace();
+      AE.toast('info', '已删除行');
+    };
+  }
+
+  // 顶部 "+ 新建" 按钮触发 AI 智能合成
+  document.getElementById('btn-tree-add').onclick = () => openAiGenSetModal();
+
+  document.getElementById('tree-search').oninput = renderTree;
+  window.addEventListener('ae:mode', () => { renderTree(); renderWorkspace(); });
+
+  // 初始化（全量调用 API）
+  async function init() {
+    try {
+      const [dsRes, kbRes] = await Promise.all([
+        AE.API.datasets.list(),
+        AE.API.kb.list()
+      ]);
+      AE.DB.datasets = (dsRes && dsRes.items) || [];
+      if (!AE.API.isMock()) {
+        AE.DB.goldQAs = [];
+        ROWS = {};
+        TREE_DATA.folders = [{ id: 'f-server-datasets', name: '服务端数据集', open: true, items: AE.DB.datasets.map(dataset => dataset.id) }];
+        activeId = (AE.DB.datasets[0] && AE.DB.datasets[0].id) || '';
+        if (activeId) await loadDatasetRows(activeId);
+      }
+    } catch (e) {
+      if (!AE.API.isMock()) AE.toast('error', `数据集加载失败：${e.message}`);
+    }
+    renderTree();
+    renderWorkspace();
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>

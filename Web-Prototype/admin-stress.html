@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>压测治理与安全中心 · AI 测试与评估平台</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/shell.css">
+<style>
+  .stress-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 340px;
+    gap: 20px;
+    align-items: flex-start;
+  }
+  @media (max-width: 1100px) {
+    .stress-grid { grid-template-columns: 1fr; }
+  }
+  .whitelist-table td { padding: 9px 12px; }
+  .env-tag-scope { font-family: var(--font-mono); font-size: 11px; padding: 2px 6px; border-radius: 4px; font-weight: 600; }
+  .env-test { background: rgba(14, 116, 144, 0.12); color: #0E7490; border: 1px solid rgba(14, 116, 144, 0.25); }
+  .env-staging { background: rgba(99, 102, 241, 0.12); color: #6366F1; border: 1px solid rgba(99, 102, 241, 0.25); }
+  .env-prod { background: rgba(239, 68, 68, 0.12); color: #EF4444; border: 1px solid rgba(239, 68, 68, 0.3); }
+</style>
+</head>
+<body>
+<div class="app" id="app"></div>
+
+<script src="assets/app.js"></script>
+<script src="assets/api.js"></script>
+<script>
+(function () {
+  const content = AE.renderShell('stress', '压测治理与安全中心', { flush: true });
+  const me = AE.getUser().username;
+
+  let SETTINGS = { stress: {}, notify: {}, prod_approvers: [] };
+  let WHITELIST_ITEMS = [];
+  let USAGE = { peak_qps: null, threshold_hit_rate: null, cost_usd: null, points: [] };
+
+  /* ─── 页面整体布局 ─── */
+  function renderLayout() {
+    content.innerHTML = `
+      <div class="page-narrow" style="max-width:1320px;padding:0 24px 40px" data-od-id="stress-governance-page">
+        <!-- 顶部 KPI 概览 -->
+        <div class="kpi-grid mb20" style="--glow-c:var(--c-stress)">
+          <div class="kpi">
+            <div class="kpi-num num">${USAGE.peak_qps ?? '—'}</div>
+            <div class="kpi-label">7 天峰值 QPS 水位</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-num num">${WHITELIST_ITEMS.length}</div>
+            <div class="kpi-label">已授权 Host 白名单</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-num num" style="color:var(--accent-warning)">${USAGE.threshold_hit_rate == null ? '—' : Math.round(USAGE.threshold_hit_rate * 100) + '%'}</div>
+            <div class="kpi-label">QPS 阈值触碰率 (≥90%)</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-num num">${USAGE.cost_usd == null ? '—' : '$' + USAGE.cost_usd.toFixed(2)}</div>
+            <div class="kpi-label">本月压测累计成本</div>
+          </div>
+        </div>
+
+        <div class="stress-grid">
+          <!-- 左主栏：规则治理与白名单 -->
+          <div class="section-gap" style="gap:20px">
+            <!-- 1. AI 智能参数推荐卡片 -->
+            <div class="ai-card" data-od-id="stress-ai">
+              <div class="ai-card-head">
+                <span class="ai-badge"><i class="ai-dot"></i>AI 容量与参数建议</span>
+                <span class="small tertiary mono">基于近 7 天真实发压与拐点数据</span>
+              </div>
+              <p class="small" style="color:var(--text-secondary);line-height:1.6;margin-bottom:12px">
+                近 7 天峰值 QPS 多次触及上限 500 的 92%（462），且有 2 次压测因时长不足未跑到性能拐点。建议收紧单次 QPS 上限、放宽单次最大发压时长并微调单次预算：
+              </p>
+              <div class="row wrap" style="gap:8px;margin-bottom:14px">
+                <span class="tag-soft">QPS 上限 <b class="num">500 → 420</b></span>
+                <span class="tag-soft">时长上限 <b class="num">30 → 45 分钟</b></span>
+                <span class="tag-soft">默认预算 <b class="num">5 → 6 USD</b></span>
+              </div>
+              <div class="row" style="justify-content:flex-end">
+                <button class="btn btn-ai btn-sm" id="ai-adopt">采纳推荐参数</button>
+              </div>
+            </div>
+
+            <!-- 2. Host 安全白名单与发压阻断规则 -->
+            <div class="panel glow" style="--glow-c:var(--c-stress);padding:16px 20px">
+              <div class="row-between mb12">
+                <div>
+                  <div class="panel-title" style="margin:0">目标 Host 安全白名单与隔离规则</div>
+                  <div class="small muted mt4">未在白名单中的目标 Endpoint 严禁进入 running（直接阻断并返回 WHITELIST 错误）。</div>
+                </div>
+                <button class="btn btn-sign btn-sm" id="btn-add-wl">+ 添加白名单</button>
+              </div>
+
+              <table class="ds-table whitelist-table mb12">
+                <thead><tr>
+                  <th>授权域名 / IP 网段</th>
+                  <th>生效环境 (Scope)</th>
+                  <th>授权人员</th>
+                  <th>添加日期</th>
+                  <th>运行状态</th>
+                  <th style="text-align:right">操作</th>
+                </tr></thead>
+                <tbody id="wl-table-body">
+                  ${WHITELIST_ITEMS.map(item => `
+                    <tr data-wlid="${item.id}">
+                      <td class="mono" style="font-weight:600">${AE.esc(item.host)}</td>
+                      <td>
+                        ${item.scope.split(',').map(s => `<span class="env-tag-scope env-${s}">${s.toUpperCase()}</span>`).join(' ')}
+                      </td>
+                      <td class="small">${AE.esc(item.creator)}</td>
+                      <td class="small tertiary mono">${item.created_at}</td>
+                      <td><span class="badge badge-succeeded"><i class="bdot"></i>已授权</span></td>
+                      <td style="text-align:right">
+                        <button class="link-btn danger" data-wldel="${item.id}">移除</button>
+                      </td>
+                    </tr>`).join('')}
+                </tbody>
+              </table>
+
+              <div class="field-hint">白名单支持 IP:Port 或精确域名，变更自动写入平台合规审计日志。</div>
+            </div>
+
+            <!-- 3. 发压安全阈值与 prod 会签规则 -->
+            <div class="panel glow" style="--glow-c:var(--c-stress);padding:16px 20px">
+              <div class="panel-title mb12">发压安全水位与审批保护</div>
+              <div class="form-row mb12">
+                <div class="field">
+                  <span class="field-label">默认 QPS 发压上限 <i class="req">*</i></span>
+                  <input class="input num" id="s-qps" type="number" value="${SETTINGS.stress.max_qps}">
+                </div>
+                <div class="field">
+                  <span class="field-label">默认单次最大时长 (分钟) <i class="req">*</i></span>
+                  <input class="input num" id="s-dur" type="number" value="${SETTINGS.stress.max_duration_s / 60}">
+                </div>
+              </div>
+
+              <div class="field mb12">
+                <span class="field-label">prod 生产环境强制双人会签人 (Approvers)</span>
+                <div class="chip-group" id="ap-chips">
+                  ${SETTINGS.prod_approvers.map(a => `<span class="tag-soft">${AE.esc(a)} <button class="link-btn" data-ap="${AE.esc(a)}" style="padding:0 2px">✕</button></span>`).join('')}
+                </div>
+                <div class="row mt8" style="gap:8px">
+                  <input class="input" id="ap-input" placeholder="输入用户名" style="max-width:240px">
+                  <button class="btn btn-secondary btn-sm" id="ap-add">+ 添加会签人</button>
+                </div>
+                <span class="field-hint">env=prod 压测必须由另一名成员会签（禁止自审），未会签任务保持 queued 状态。</span>
+              </div>
+
+              <div class="field">
+                <label class="row" style="gap:8px;cursor:pointer">
+                  <input type="checkbox" id="s-circuit-break" checked>
+                  <span style="font-weight:600">自动熔断保护：连续 60 秒错误率 ≥ 50% 立即触发急停 (Circuit Break)</span>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <!-- 右侧边栏：用量曲线、并发控制与可观测端点 -->
+          <div class="section-gap" style="gap:20px">
+            <!-- 4. 近 7 天用量趋势 -->
+            <div class="panel glow" style="--glow-c:var(--c-stress);padding:16px 18px">
+              <div class="panel-title mb8">近 7 天压测用量趋势</div>
+              <div class="small tertiary mb12">每日峰值 QPS 面积图（虚线 = 90% 警戒线）</div>
+              <svg id="usage-area" width="100%" height="70" viewBox="0 0 280 70" aria-hidden="true" style="margin-bottom:12px"></svg>
+              <div class="cc-grid" style="grid-template-columns:1fr">
+                <div class="row-between small"><span class="tertiary">日均发压任务</span><b class="num">11 个</b></div>
+                <div class="row-between small"><span class="tertiary">prod 平均会签等待</span><b class="num">12 分钟</b></div>
+              </div>
+            </div>
+
+            <!-- 5. 成本预算与并发容量 -->
+            <div class="panel glow" style="--glow-c:var(--c-stress);padding:16px 18px">
+              <div class="panel-title mb12">成本单价与并发容量</div>
+              <div class="field mb12">
+                <div class="row-between"><span class="small tertiary">平台并发任务容量</span><span class="num small">2 / ${SETTINGS.max_running_tasks}</span></div>
+                <div class="load-track hot" style="margin-top:6px"><i style="width:${Math.round(2 / SETTINGS.max_running_tasks * 100)}%"></i></div>
+              </div>
+
+              <div class="field mb12">
+                <div class="row-between"><span class="small tertiary">在途模型调用并发</span><span class="num small">5 / ${SETTINGS.max_inflight_model_calls}</span></div>
+                <div class="load-track" style="margin-top:6px"><i style="width:${Math.round(5 / SETTINGS.max_inflight_model_calls * 100)}%"></i></div>
+              </div>
+
+              <div class="form-row mb12">
+                <div class="field">
+                  <span class="field-label">Token 单价 (USD/1k)</span>
+                  <input class="input num" id="s-price" type="number" step="0.0001" value="${SETTINGS.stress.price_per_1k_tokens}">
+                </div>
+                <div class="field">
+                  <span class="field-label">任务预算上限 max_usd</span>
+                  <input class="input num" id="s-budget" type="number" value="${SETTINGS.default_max_usd}">
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="field">
+                  <span class="field-label">最大任务并发数</span>
+                  <input class="input num" id="s-mrt" type="number" value="${SETTINGS.max_running_tasks}">
+                </div>
+                <div class="field">
+                  <span class="field-label">最大模型在途数</span>
+                  <input class="input num" id="s-mic" type="number" value="${SETTINGS.max_inflight_model_calls}">
+                </div>
+              </div>
+            </div>
+
+            <!-- 6. 可观测性与告警通知网关 -->
+            <div class="panel glow" style="--glow-c:var(--c-stress);padding:16px 18px">
+              <div class="panel-title mb8">Prometheus 与通知网关</div>
+              <div class="field mb12">
+                <span class="field-label">Prometheus 指标端点</span>
+                <input class="input mono small" readonly value="http://localhost:8000/metrics" style="font-size:11px">
+                <span class="field-hint">前缀 <span class="mono">ai_eval_stress_</span>，包含 env, model, task_id 标签。</span>
+              </div>
+
+              <div class="switch-row" style="padding:6px 0">
+                <div><div style="font-weight:600;font-size:12px">企业微信群机器人</div><div class="field-hint">熔断、会签与终态通知</div></div>
+                <label class="switch"><input type="checkbox" id="nt-wecom" ${SETTINGS.notify.wecom ? 'checked' : ''}><span class="track"></span></label>
+              </div>
+              <div class="switch-row" style="padding:6px 0">
+                <div><div style="font-weight:600;font-size:12px">邮件通知 (SMTP)</div><div class="field-hint">出站告警分发</div></div>
+                <label class="switch"><input type="checkbox" id="nt-email" ${SETTINGS.notify.email ? 'checked' : ''}><span class="track"></span></label>
+              </div>
+              <div class="switch-row" style="padding:6px 0">
+                <div><div style="font-weight:600;font-size:12px">出站 Webhook</div><div class="field-hint">密钥落盘掩码存储</div></div>
+                <label class="switch"><input type="checkbox" id="nt-webhook" ${SETTINGS.notify.webhook ? 'checked' : ''}><span class="track"></span></label>
+              </div>
+            </div>
+
+            <!-- 保存配置按钮 -->
+            <button class="btn btn-sign" id="btn-save-all" style="width:100%">保存治理与安全配置</button>
+          </div>
+        </div>
+      </div>`;
+
+    bindEvents();
+    drawUsageArea();
+  }
+
+  /* ─── 绘制近 7 天峰值 QPS 面积图 ─── */
+  function drawUsageArea() {
+    const el = document.getElementById('usage-area');
+    if (!el) return;
+    const D = (USAGE.points || []).map(p => Number(p.qps)).filter(Number.isFinite);
+    if (D.length < 2) { el.innerHTML = '<text x="140" y="40" text-anchor="middle" fill="var(--text-tertiary)" font-size="11">暂无使用数据</text>'; return; }
+    const W = 280, H = 70, P = 4, max = Math.max(...D, Number(SETTINGS.stress.max_qps) || 0, 1);
+    const X = i => P + i * (W - 2 * P) / (D.length - 1);
+    const Y = v => H - P - (v / max) * (H - 2 * P - 8);
+    const line = D.map((v, i) => X(i).toFixed(1) + ',' + Y(v).toFixed(1)).join(' ');
+
+    el.innerHTML = `
+      <line x1="${P}" y1="${Y(500 * 0.9)}" x2="${W - P}" y2="${Y(500 * 0.9)}" stroke="var(--accent-warning)" stroke-width="1.2" stroke-dasharray="3 3" opacity=".8"/>
+      <polygon points="${P},${H - P} ${line} ${X(D.length - 1).toFixed(1)},${H - P}" fill="var(--c-stress)" fill-opacity=".12"/>
+      <polyline points="${line}" fill="none" stroke="var(--c-stress)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      ${D.map((v, i) => v / max >= 0.9 ? `<circle cx="${X(i)}" cy="${Y(v)}" r="3" fill="var(--accent-warning)"/>` : '').join('')}
+    `;
+  }
+
+  /* ─── 交互与事件绑定 ─── */
+  function bindEvents() {
+    // 采纳 AI 参数推荐
+    document.getElementById('ai-adopt').onclick = () => {
+      document.getElementById('s-qps').value = 420;
+      document.getElementById('s-dur').value = 45;
+      document.getElementById('s-budget').value = 6;
+      AE.toast('success', '已填充 AI 推荐参数，点击「保存治理配置」生效');
+    };
+
+    // 添加白名单弹窗
+    document.getElementById('btn-add-wl').onclick = () => openAddWhitelistModal();
+
+    // 移除白名单项
+    document.querySelectorAll('[data-wldel]').forEach(b => {
+      b.onclick = async () => {
+        const id = b.dataset.wldel;
+        await AE.API.stress.deleteWhitelist(id);
+        WHITELIST_ITEMS = WHITELIST_ITEMS.filter(x => x.id !== id);
+        renderLayout();
+        AE.toast('info', '已移除白名单项（写审计）');
+      };
+    });
+
+    // 添加会签人
+    document.getElementById('ap-add').onclick = () => {
+      const inp = document.getElementById('ap-input');
+      const val = inp.value.trim();
+      if (!val) return;
+      if (SETTINGS.prod_approvers.includes(val)) { AE.toast('warning', '会签人已存在'); return; }
+      SETTINGS.prod_approvers.push(val);
+      inp.value = '';
+      renderLayout();
+      AE.toast('success', `已添加会签人「${val}」`);
+    };
+
+    // 移除会签人
+    document.querySelectorAll('[data-ap]').forEach(b => {
+      b.onclick = () => {
+        const a = b.dataset.ap;
+        SETTINGS.prod_approvers = SETTINGS.prod_approvers.filter(x => x !== a);
+        renderLayout();
+        AE.toast('info', `已移除会签人「${a}」`);
+      };
+    });
+
+    // 保存所有配置
+    document.getElementById('btn-save-all').onclick = async () => {
+      const max_qps = +document.getElementById('s-qps').value || 500;
+      const max_dur = (+document.getElementById('s-dur').value || 30) * 60;
+      const price = +document.getElementById('s-price').value || 0.002;
+      const budget = +document.getElementById('s-budget').value || 5;
+      const mrt = +document.getElementById('s-mrt').value || 3;
+      const mic = +document.getElementById('s-mic').value || 8;
+
+      SETTINGS.stress.max_qps = max_qps;
+      SETTINGS.stress.max_duration_s = max_dur;
+      SETTINGS.stress.price_per_1k_tokens = price;
+      SETTINGS.default_max_usd = budget;
+      SETTINGS.max_running_tasks = mrt;
+      SETTINGS.max_inflight_model_calls = mic;
+
+      SETTINGS.notify.wecom = document.getElementById('nt-wecom').checked;
+      SETTINGS.notify.email = document.getElementById('nt-email').checked;
+      SETTINGS.notify.webhook = document.getElementById('nt-webhook').checked;
+
+      await AE.API.stress.updateSettings(SETTINGS);
+      AE.toast('success', '压测治理与安全配置已保存生效（写审计日志）');
+    };
+  }
+
+  /* ─── 添加白名单弹窗 ─── */
+  function openAddWhitelistModal() {
+    AE.modal({
+      title: '添加目标 Host 白名单 (POST /api/admin/stress/whitelist)',
+      body: `
+        <div class="field mb12">
+          <span class="field-label">授权 Host / IP 网段 <i class="req">*</i></span>
+          <input class="input mono" id="nwl-host" placeholder="如 192.168.1.50 或 model-api.company.com">
+          <span class="field-hint">支持 IP、域名及带端口格式。</span>
+        </div>
+        <div class="field mb12">
+          <span class="field-label">生效环境范围 (Scope) <i class="req">*</i></span>
+          <div class="chip-group" id="nwl-scopes">
+            <button class="chip on" data-s="test">TEST 测试</button>
+            <button class="chip on" data-s="staging">STAGING 预发</button>
+            <button class="chip" data-s="prod">PROD 生产</button>
+          </div>
+        </div>`,
+      foot: `<button class="btn btn-secondary" id="nwl-c">取消</button><button class="btn btn-sign" id="nwl-ok">确认授权添加</button>`,
+      onMount: (el, close) => {
+        el.querySelector('#nwl-c').onclick = close;
+        el.querySelectorAll('#nwl-scopes .chip').forEach(ch => ch.onclick = () => ch.classList.toggle('on'));
+        el.querySelector('#nwl-ok').onclick = async () => {
+          const host = el.querySelector('#nwl-host').value.trim();
+          const scopes = Array.from(el.querySelectorAll('#nwl-scopes .chip.on')).map(c => c.dataset.s).join(',');
+          if (!host) { AE.toast('error', '请填写 Host 或 IP'); return; }
+
+          const newItem = {
+            id: 'wl-' + Date.now(),
+            host,
+            scope: scopes || 'test',
+            creator: me,
+            created_at: new Date().toISOString().slice(0, 10),
+            status: 'active'
+          };
+
+          await AE.API.stress.addWhitelist(newItem);
+          WHITELIST_ITEMS.push(newItem);
+          close();
+          renderLayout();
+          AE.toast('success', `已添加 Host 白名单「${host}」`);
+        };
+      }
+    });
+  }
+
+  /* ─── 初始化 ─── */
+  async function init() {
+    try {
+      const [stRes, wlRes, usageRes] = await Promise.all([
+        AE.API.stress.getSettings(),
+        AE.API.stress.getWhitelist(),
+        AE.API.stress.getUsage()
+      ]);
+      if (stRes) Object.assign(SETTINGS, stRes);
+      if (wlRes && Array.isArray(wlRes.items)) WHITELIST_ITEMS = wlRes.items;
+      if (usageRes) USAGE = { ...USAGE, ...usageRes };
+    } catch (e) {
+      AE.toast('error', `压测治理数据加载失败：${e.message}`);
+    }
+    renderLayout();
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,658 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>评测报告 · AI 测试与评估平台</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/shell.css">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  .report-switcher-wrap { display: inline-flex; align-items: center; gap: 8px; }
+  .radar-container { width: 100%; max-width: 380px; margin: 0 auto; height: 260px; }
+  .baseline-banner { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 10px; background: rgba(99, 102, 241, 0.08); border: 1px solid rgba(99, 102, 241, 0.22); margin-bottom: 16px; }
+  .delta-badge { font-family: var(--font-mono); font-weight: 700; font-size: 13px; padding: 2px 8px; border-radius: 6px; }
+  .delta-badge.pos { background: rgba(16, 185, 129, 0.15); color: var(--accent-success); }
+  .delta-badge.neg { background: rgba(239, 68, 68, 0.15); color: var(--accent-error); }
+  .cascade-banner { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-radius: 10px; background: rgba(14, 116, 144, 0.08); border: 1px solid rgba(14, 116, 144, 0.25); margin-bottom: 16px; }
+  .judge-breakdown-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-top: 10px; }
+  .judge-dim-card { padding: 8px 12px; border-radius: 8px; background: var(--bg-elevated); border: 1px solid var(--border-subtle); text-align: center; }
+  .judge-dim-val { font-family: var(--font-mono); font-size: 18px; font-weight: 700; color: var(--accent-ai); }
+  .judge-dim-label { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+  .sample-filter-tab { display: inline-flex; border: 1px solid var(--border-subtle); border-radius: 8px; padding: 2px; background: var(--bg-main); }
+  .sample-filter-tab button { border: 0; background: transparent; padding: 4px 12px; font-size: 12px; border-radius: 6px; cursor: pointer; color: var(--text-secondary); }
+  .sample-filter-tab button.active { background: var(--text-primary); color: #fff; font-weight: 600; }
+  .raw-box { background: #0F172A; color: #E2E8F0; border-radius: 8px; padding: 10px 12px; font-family: var(--font-mono); font-size: 11px; line-height: 1.6; max-height: 180px; overflow-y: auto; margin-top: 6px; }
+  .status-tag-err { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 700; font-family: var(--font-mono); background: rgba(239, 68, 68, 0.12); color: var(--accent-error); border: 1px solid rgba(239, 68, 68, 0.3); }
+  .retrieval-chunk { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border-radius: 5px; font-family: var(--font-mono); font-size: 11px; margin: 2px 4px 2px 0; background: var(--bg-elevated); border: 1px solid var(--border-subtle); }
+  .retrieval-chunk.hit { background: rgba(16, 185, 129, 0.12); border-color: rgba(16, 185, 129, 0.35); color: var(--accent-success); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="app" id="app"></div>
+
+<script src="assets/app.js"></script>
+<script src="assets/api.js"></script>
+<script>
+(function () {
+  const params = new URLSearchParams(location.search);
+  const reportId = params.get('id') || 'r-bm-1';
+  const isShare = params.has('share');
+
+  /* ─── Mock 示例报告；仅供 ?data=mock 演示，实时模式不作失败回退 ─── */
+  const DEFAULT_REPORTS = {
+    'r-bm-1': {
+      id: 'r-bm-1',
+      task_id: 'e5f2b8',
+      child_stress_task_id: 'g7b3d5',
+      child_stress_report_id: 'r-st-1',
+      kind: 'benchmark',
+      created_at: '2026-08-15T06:02:00Z',
+      title: 'Benchmark 报告 · smoke-20 v3 · 主指标 contain',
+      snapshot: { dataset: 'smoke-20', dataset_version: 3, metric: 'contain', sample_size: 20, concurrency: 4, timeout_s: 60, seed: 20260815, use_judge: true, judge_profile: 'judge-1' },
+      baseline: { task_id: 'e0base88', delta: -0.07, name: 'smoke-20 v3 基线' },
+      scores: [
+        { profile: 'gpt-test', model: 'gpt-4.1', contain: 0.86, exact: 0.55, rouge_l: 0.88, fail_rate: 0.02, latency: '820ms', judge: 4.2, judge_breakdown: { accuracy: 4.5, completeness: 4.3, logic: 4.0 } },
+        { profile: 'claude-x', model: 'claude-sonnet-4.5', contain: 0.79, exact: 0.48, rouge_l: 0.81, fail_rate: 0.05, latency: '1.1s', judge: 3.9, judge_breakdown: { accuracy: 4.1, completeness: 3.9, logic: 3.8 } }
+      ],
+      judge_info: {
+        profile_name: 'judge-1 (o4 · openai_responses)',
+        criteria: '准确度 (40%) + 完整性 (30%) + 逻辑条理性 (30%)',
+        reasoning_summary: 'gpt-test 在操作步骤类问答中给出了更准确的前置路径与条件限制；claude-x 语言更平实自然，但有 2 处遗漏了关键的短信验证前置步骤。'
+      },
+      sample_items: [
+        {
+          row: 1,
+          question: '如何修改默认结算账户？',
+          reference: '进入「设置-账户-结算账户」，选择「修改默认账户」并完成短信验证。',
+          status: 'both_correct',
+          p1: { pred: '进入「设置-账户-结算账户」，点击「修改默认账户」并通过手机验证码完成验证。', score: 1.0, lat: '780ms', tokens: 142 },
+          p2: { pred: '在系统设置中找到结算账户设置，点击修改默认账户并输入短信验证码。', score: 1.0, lat: '1.0s', tokens: 168 },
+          judge_reason: '两者均准确覆盖路径与短信验证要素，gpt-test 描述路径与 UI 完全一致 (5/5)，claude-x 路径表述略模糊 (4/5)。'
+        },
+        {
+          row: 2,
+          question: '支持哪些付款方式？',
+          reference: '支持余额、银行卡与对公转账三种方式。',
+          status: 'both_correct',
+          p1: { pred: '平台目前支持三种付款方式：1. 账户余额；2. 绑定银行卡快捷支付；3. 企业对公转账。', score: 1.0, lat: '650ms', tokens: 110 },
+          p2: { pred: '支持余额支付、银行卡支付以及对公转账结算。', score: 1.0, lat: '890ms', tokens: 98 },
+          judge_reason: '两模型均完整回答三种付款方式，判定完全达标 (5/5)。'
+        },
+        {
+          row: 3,
+          question: '余额提现有限额吗？',
+          reference: '单笔提现不超过 5 万元，单日不超过 20 万元。',
+          status: 'diff_score',
+          p1: { pred: '有限额。单笔提现上限为 5 万元，单日累计提现金额不得超过 20 万元。', score: 1.0, lat: '810ms', tokens: 125 },
+          p2: { pred: '提现有限额规定，单日限额最高为 20 万元，请在提现页面查看详情。', score: 0.0, lat: '1.2s', tokens: 118 },
+          judge_reason: 'claude-x 遗漏了「单笔不超过 5 万元」的核心约束，contain 规则判定不包含，Judge 给分 2.5/5；gpt-test 准确覆盖 (5/5)。'
+        },
+        {
+          row: 4,
+          question: '支付密码输错被锁定怎么办？',
+          reference: '连续输错 5 次锁定 2 小时，可通过人脸验证立即解锁。',
+          status: 'both_correct',
+          p1: { pred: '若连续输错 5 次支付密码将被锁定 2 小时。如需立即使用，可通过人脸识别进行快速解锁。', score: 1.0, lat: '890ms', tokens: 135 },
+          p2: { pred: '连续输错 5 次将锁定 2 小时。用户可以通过刷脸认证立即解除锁定。', score: 1.0, lat: '1.1s', tokens: 128 },
+          judge_reason: '两者均完整准确解答锁定条件及人脸解锁方案。'
+        },
+        {
+          row: 5,
+          question: '跨境汇款需要提供哪些报关资质？',
+          reference: '需提供进出口企业代码、货物海关报关单及完税凭证。',
+          status: 'failed',
+          p1: { pred: 'HTTP 502 Bad Gateway: Upstream gateway timeout from provider', score: 0.0, lat: '30.0s', tokens: 0, err_code: 'UPSTREAM' },
+          p2: { pred: '需要提供企业进出口代码以及海关放行凭证。', score: 0.0, lat: '1.4s', tokens: 84 },
+          judge_reason: 'gpt-test 上游网关报错 502（未返回内容）；claude-x 遗漏完税凭证要求。'
+        }
+      ]
+    },
+    'r-rag-1': {
+      id: 'r-rag-1',
+      task_id: 'b2e8d1',
+      child_stress_task_id: 'g7b3d5',
+      child_stress_report_id: 'r-st-1',
+      kind: 'rag',
+      created_at: '2026-08-15T06:20:00Z',
+      title: 'RAG 评测报告 · default 知识库 · qa-v1 v2 · K=5',
+      kb_id: 'kb-default',
+      kb_name: 'default 知识库 (LightRAG · 12 文档)',
+      gold_qa_name: 'qa-v1 v2 (20 条)',
+      k: 5,
+      modes: ['hybrid', 'local', 'global', 'naive'],
+      scores: {
+        hybrid: { hit: 0.80, mrr: 0.74, recall: 0.85, contain: 0.83 },
+        local:  { hit: 0.75, mrr: 0.68, recall: 0.78, contain: 0.79 },
+        global: { hit: 0.70, mrr: 0.62, recall: 0.71, contain: 0.72 },
+        naive:  { hit: 0.62, mrr: 0.55, recall: 0.60, contain: 0.65 }
+      },
+      degraded: { mode: 'naive', delta: -0.08, metric: 'Hit Rate@5' },
+      retrieval_items: [
+        {
+          row: 1,
+          question: '如何关闭自动代扣服务？',
+          expected_doc_ids: ['d-01#c01', 'd-01#c02'],
+          retrieved_chunks: [
+            { id: 'd-01#c01', sim: 0.92, hit: true, text: '用户可在「设置-支付管理-自动扣款」列表中选择协议解约...' },
+            { id: 'd-01#c02', sim: 0.84, hit: true, text: '解约后将在下一计费周期生效，当期扣款不可逆...' },
+            { id: 'd-01#c03', sim: 0.77, hit: false, text: '在「设置-支付-自动扣款」中管理签约代扣协议...' }
+          ],
+          hit_status: 'hit',
+          contain_score: 1.0,
+          pred: '进入「设置-支付管理-自动扣款」，点击对应签约协议即可完成解约。'
+        }
+      ]
+    },
+    'r-st-1': {
+      id: 'r-st-1',
+      task_id: 'g7b3d5',
+      parent_task_id: 'e5f2b8',
+      parent_report_id: 'r-bm-1',
+      kind: 'stress',
+      created_at: '2026-08-15T06:40:00Z',
+      title: '共享压测报告 · 继承自任务 e5f2b8 · 118 QPS 峰值',
+      env: 'test',
+      target_endpoint: 'https://api.example.com/v1/chat/completions (gpt-test)',
+      qps_peak: 118,
+      p99: '1.2s',
+      p95: '890ms',
+      p50: '340ms',
+      error_rate: '0.4%',
+      ttft: '320ms',
+      tpot: '45ms',
+      tokens_per_s: '1.8k',
+      est_cost: '$0.42',
+      sla_p99_ms: 1500,
+      sla_met: true,
+      knee: '第 3 分钟首次 P99 > SLA 或错误率 ≥1%',
+      time_series: [
+        { time: '0:00', qps: 12, p50: '180ms', p90: '240ms', p99: '210ms', ttft: '290ms', tpot: '38ms', err: '0.0%', status: '正常' },
+        { time: '0:30', qps: 38, p50: '210ms', p90: '290ms', p99: '260ms', ttft: '300ms', tpot: '40ms', err: '0.0%', status: '正常' },
+        { time: '1:00', qps: 64, p50: '250ms', p90: '390ms', p99: '340ms', ttft: '310ms', tpot: '42ms', err: '0.1%', status: '正常' },
+        { time: '1:30', qps: 92, p50: '310ms', p90: '580ms', p99: '520ms', ttft: '340ms', tpot: '45ms', err: '0.2%', status: '正常' },
+        { time: '2:00', qps: 118, p50: '420ms', p90: '940ms', p99: '890ms', ttft: '380ms', tpot: '49ms', err: '0.4%', status: '正常' },
+        { time: '2:30', qps: 118, p50: '560ms', p90: '1.3s', p99: '1.2s', ttft: '420ms', tpot: '52ms', err: '0.4%', status: 'SLA达标 (临界)' },
+        { time: '3:00', qps: 118, p50: '580ms', p90: '1.4s', p99: '1.25s', ttft: '430ms', tpot: '53ms', err: '0.4%', status: 'SLA达标' }
+      ]
+    }
+  };
+
+  /* ─── 主渲染流程（全量接入 API） ─── */
+  async function init() {
+    let report = AE.API.isMock() ? (DEFAULT_REPORTS[reportId] || DEFAULT_REPORTS['r-bm-1']) : null;
+    let reportsList = AE.API.isMock() ? Object.values(DEFAULT_REPORTS).map(x => ({ id: x.id, title: `${x.id} · ${x.title}` })) : [];
+
+    try {
+      const [rData, rList] = await Promise.all([
+        AE.API.reports.get(reportId),
+        AE.API.reports.list()
+      ]);
+      // Mock 页面用本页完整夹具呈现三类报告；实时模式只接受 API 返回的数据。
+      if (rData && rData.id && (!AE.API.isMock() || rData.sample_items || rData.retrieval_items || rData.time_series)) report = rData;
+      if (rList && rList.items) {
+        reportsList = rList.items.map(x => ({ id: x.id, title: `${x.id} · ${x.title || x.kind}` }));
+      }
+    } catch (e) {
+      console.warn('[Report] API load failed:', e);
+    }
+    if (!report) {
+      const content = AE.renderShell('report', '评测报告');
+      content.innerHTML = `<div class="page-narrow" style="padding-top:48px"><div class="empty-state"><div class="empty-ico">!</div><strong>报告未加载</strong><p>实时 API 未返回报告数据。请检查登录态、接口地址与报告 ID；演示数据请显式使用 <code>?data=mock</code>。</p></div></div>`;
+      return;
+    }
+    if (report.kind === 'stress' && report.task_id && !AE.API.isMock()) {
+      try {
+        const series = await AE.API.tasks.getStressSeries(report.task_id);
+        if (series && Array.isArray(series.points)) {
+          report.time_series = series.points.map(point => ({
+            time: point.ts, qps: point.qps, p99: `${point.rt_ms}ms`, err: `${(Number(point.error_rate || 0) * 100).toFixed(2)}%`
+          }));
+        }
+      } catch (e) {
+        AE.toast('warning', `压测时序加载失败：${e.message}`);
+      }
+    }
+
+    const kindName = { benchmark: 'Benchmark 基准评测', rag: 'RAG 检索质量', stress: '共享压测治理' }[report.kind];
+    const objMode = report.kind === 'rag' ? 'rag' : 'llm';
+
+    const content = AE.renderShell('report', kindName + ' 报告', {
+      titleExtra: `
+        <div class="report-switcher-wrap" style="margin-left:14px">
+          <select class="select" id="report-switcher" style="height:32px;padding:2px 28px 2px 10px;font-size:12px;font-family:var(--font-mono)">
+            ${reportsList.map(r => `<option value="${r.id}" ${r.id === report.id ? 'selected' : ''}>${AE.esc(r.title)}</option>`).join('')}
+          </select>
+          <span class="tag-soft" style="color:var(--c-${objMode === 'rag' ? 'kb' : 'datasets'});border-color:var(--t-${objMode === 'rag' ? 'kb' : 'datasets'})">${objMode === 'rag' ? 'RAG 模式' : '大模型模式'}</span>
+        </div>`
+    });
+
+    /* ─── 1. 顶部操作栏与先评后压穿透横幅 ─── */
+    function headActionsHtml() {
+      return `
+        <div class="row wrap mb16" style="gap:10px;align-items:center">
+          ${AE.kindTag(report.kind)}
+          <span class="muted small">${AE.esc(report.title)}</span>
+          <span class="grow"></span>
+          <button class="btn btn-secondary btn-sm" id="btn-export">导出 Markdown</button>
+          <button class="btn btn-secondary btn-sm" id="btn-share">分享 (7天)</button>
+          ${report.kind !== 'stress' ? '<button class="btn btn-secondary btn-sm" id="btn-baseline">冻结为基线</button>' : ''}
+          ${!isShare ? `<a class="btn btn-sign btn-sm" href="agent.html?interpret=${report.id}">在对话中解读</a>` : ''}
+        </div>`;
+    }
+
+    function cascadeBannerHtml() {
+      if (report.kind === 'benchmark' && report.child_stress_report_id) {
+        return `
+          <div class="cascade-banner">
+            <div class="row" style="gap:10px">
+              <span class="badge badge-running"><i class="bdot"></i>已先评后压</span>
+              <span class="small">质量任务已成功，关联压测任务已生成报告 <b>${report.child_stress_report_id}</b>（峰值 118 QPS，SLA 达标）。</span>
+            </div>
+            <a class="btn btn-secondary btn-sm" href="report.html?id=${report.child_stress_report_id}">查看压测报告 →</a>
+          </div>`;
+      }
+      if (report.kind === 'stress' && report.parent_report_id) {
+        return `
+          <div class="cascade-banner">
+            <div class="row" style="gap:10px">
+              <span class="badge badge-succeeded"><i class="bdot"></i>继承自质量评测</span>
+              <span class="small">本压测任务继承自 Benchmark 报告 <b>${report.parent_report_id}</b>（任务 ID ${report.parent_task_id}）。</span>
+            </div>
+            <a class="btn btn-secondary btn-sm" href="report.html?id=${report.parent_report_id}">查看父质量报告 →</a>
+          </div>`;
+      }
+      return '';
+    }
+
+    /* ─── 2. Benchmark 视图渲染 ─── */
+    function renderBenchmarkView() {
+      return `
+        ${report.baseline ? `
+          <div class="baseline-banner">
+            <span class="small">基线对比（基线任务 <span class="mono">${report.baseline.task_id}</span>）</span>
+            <span class="delta-badge ${report.baseline.delta >= 0 ? 'pos' : 'neg'}">Δ ${(report.baseline.delta * 100).toFixed(1)}%</span>
+            <span class="small muted">主指标 contain 相对基线退化 7pp，建议排查分歧样本。</span>
+          </div>` : ''}
+
+        <div class="grid2 mb16" style="gap:16px">
+          <!-- 雷达多维对比 -->
+          <div class="panel glow" style="--glow-c:var(--c-reports)">
+            <div class="panel-title">多维度对比雷达 (Radar Metrics)</div>
+            <div class="radar-container"><canvas id="bm-radar"></canvas></div>
+            <div class="chart-legend" style="justify-content:center">
+              ${report.scores.map((s, i) => `<span><i style="background:${i === 0 ? '#1D4ED8' : '#7C3AED'}"></i>${AE.esc(s.profile)} (${AE.esc(s.model)})</span>`).join('')}
+            </div>
+          </div>
+
+          <!-- 裁判专区 -->
+          <div class="panel glow" style="--glow-c:var(--c-reports)">
+            <div class="row-between mb8">
+              <div class="panel-title" style="margin:0">LLM-as-a-Judge 裁判评估</div>
+              <span class="badge badge-succeeded"><i class="bdot"></i>Judge 开启</span>
+            </div>
+            <div class="small tertiary mono mb8">${AE.esc(report.judge_info.profile_name)}</div>
+            <div class="small" style="line-height:1.6;color:var(--text-secondary)">${AE.esc(report.judge_info.reasoning_summary)}</div>
+            
+            <div class="judge-breakdown-grid">
+              ${report.scores.map(s => `
+                <div class="judge-dim-card">
+                  <div class="judge-dim-val">${s.judge.toFixed(1)}<span class="small" style="font-size:12px;color:var(--text-tertiary)">/5</span></div>
+                  <div class="judge-dim-label">${AE.esc(s.profile)}</div>
+                  <div class="small tertiary mono" style="font-size:10px;margin-top:2px">准确${s.judge_breakdown.accuracy} · 完整${s.judge_breakdown.completeness}</div>
+                </div>`).join('')}
+            </div>
+          </div>
+        </div>
+
+        <!-- 协议档横向对比大卡片 -->
+        <div class="panel mb16" style="padding:6px 8px">
+          <div class="panel-title" style="padding:8px 10px 4px">协议档指标横向矩阵</div>
+          <table class="ds-table">
+            <thead><tr>
+              <th>协议档 / 模型</th>
+              <th>contain 命中率</th>
+              <th>exact 精确匹配</th>
+              <th>ROUGE-L</th>
+              <th>调用失败率</th>
+              <th>平均响应延迟</th>
+              <th>Judge 裁判得分</th>
+            </tr></thead>
+            <tbody>
+              ${report.scores.map(s => `
+                <tr>
+                  <td><b>${AE.esc(s.profile)}</b><div class="small tertiary mono">${AE.esc(s.model)}</div></td>
+                  <td class="num" style="font-weight:700;color:var(--accent-ai)">${(s.contain * 100).toFixed(1)}%</td>
+                  <td class="num">${(s.exact * 100).toFixed(1)}%</td>
+                  <td class="num">${(s.rouge_l * 100).toFixed(1)}%</td>
+                  <td class="num ${s.fail_rate > 0.03 ? 'danger-text' : ''}">${(s.fail_rate * 100).toFixed(1)}%</td>
+                  <td class="num mono">${s.latency}</td>
+                  <td class="num" style="font-weight:700;color:var(--c-reports)">${s.judge.toFixed(1)} / 5.0</td>
+                </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+
+        <!-- 样本级逐题比对与 Bad Case 排查 -->
+        <div class="panel" style="padding:14px 16px">
+          <div class="row-between mb12">
+            <div class="panel-title" style="margin:0">样本级明细与 Bad Case 归因</div>
+            <div class="sample-filter-tab" id="sample-tabs">
+              <button class="active" data-tab="all">全部样本 (${report.sample_items.length})</button>
+              <button data-tab="diff">仅看分歧 (${report.sample_items.filter(x => x.status === 'diff_score').length})</button>
+              <button data-tab="fail">仅看失败 (${report.sample_items.filter(x => x.status === 'failed').length})</button>
+            </div>
+          </div>
+
+          <table class="ds-table" id="sample-table">
+            <thead><tr>
+              <th style="width:45px">#</th>
+              <th style="width:26%">测试问题与标准答案</th>
+              <th style="width:32%">gpt-test 回答与打分</th>
+              <th style="width:32%">claude-x 回答与打分</th>
+              <th style="width:70px">操作</th>
+            </tr></thead>
+            <tbody id="sample-rows"></tbody>
+          </table>
+        </div>`;
+    }
+
+    /* ─── 3. RAG 视图渲染 ─── */
+    function renderRagView() {
+      return `
+        ${report.degraded ? `
+          <div class="baseline-banner" style="background:rgba(239,68,68,0.08);border-color:rgba(239,68,68,0.25)">
+            <span class="status-tag-err">退化告警 ≥ 5pp</span>
+            <span class="small">检索模式 <b>${report.degraded.mode}</b> 的 ${report.degraded.metric} 相对基准出现退化（Δ ${(report.degraded.delta * 100).toFixed(1)}%），建议检查切块颗粒度。</span>
+          </div>` : ''}
+
+        <div class="grid2 mb16" style="gap:16px">
+          <div class="panel glow" style="--glow-c:var(--c-kb)">
+            <div class="panel-title">4 种检索模式横向对比柱状条 (K=${report.k})</div>
+            <div id="rag-bars"></div>
+          </div>
+
+          <div class="panel glow" style="--glow-c:var(--c-kb)">
+            <div class="panel-title">知识库与评测配置</div>
+            <div class="cc-grid" style="margin-top:12px">
+              <div class="cc-item"><div class="cc-key">知识库名称</div><div class="cc-val small">${AE.esc(report.kb_name)}</div></div>
+              <div class="cc-item"><div class="cc-key">黄金问答集</div><div class="cc-val small">${AE.esc(report.gold_qa_name)}</div></div>
+              <div class="cc-item"><div class="cc-key">Top-K 召回量</div><div class="cc-val num">K = ${report.k}</div></div>
+              <div class="cc-item"><div class="cc-key">分母排除口径</div><div class="cc-val small">无 expected_doc_ids 样本已剔除</div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel" style="padding:14px 16px">
+          <div class="panel-title mb12">Top-K 检索召回详情与命中状态</div>
+          <table class="ds-table">
+            <thead><tr>
+              <th style="width:45px">#</th>
+              <th>Query 问题</th>
+              <th>Top-K 召回切块 (Similarity)</th>
+              <th>命中状态</th>
+              <th>最终答案得分</th>
+            </tr></thead>
+            <tbody>
+              ${report.retrieval_items.map(it => `
+                <tr>
+                  <td class="mono">${it.row}</td>
+                  <td><b>${AE.esc(it.question)}</b></td>
+                  <td>${it.retrieved_chunks.map(c => `
+                    <span class="retrieval-chunk ${c.hit ? 'hit' : ''}">
+                      ${c.id} (${(c.sim * 100).toFixed(0)}%)
+                    </span>`).join('')}</td>
+                  <td>${it.hit_status === 'hit' ? '<span class="tag-soft" style="color:var(--accent-success);border-color:var(--accent-success)">HIT 命中</span>' : '<span class="tag-soft danger-text">MISS 未命中</span>'}</td>
+                  <td class="num mono">${it.contain_score.toFixed(2)}</td>
+                </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>`;
+    }
+
+    /* ─── 4. 压测视图渲染 ─── */
+    function renderStressView() {
+      return `
+        <div class="kpi-grid mb16" style="--glow-c:var(--c-stress)">
+          <div class="kpi"><div class="kpi-num num">${report.qps_peak}</div><div class="kpi-label">峰值 QPS 吞吐</div></div>
+          <div class="kpi"><div class="kpi-num num">${report.p99}</div><div class="kpi-label">P99 延迟</div></div>
+          <div class="kpi"><div class="kpi-num num">${report.error_rate}</div><div class="kpi-label">错误率</div></div>
+          <div class="kpi"><div class="kpi-num num">${report.tokens_per_s}</div><div class="kpi-label">Tokens / 秒</div></div>
+        </div>
+
+        <div class="panel glow mb16" style="--glow-c:var(--c-stress)">
+          <div class="row-between mb8">
+            <div class="panel-title" style="margin:0">时序性能指标曲线 (QPS · P99 RT · 错误率)</div>
+            <span class="badge ${report.sla_met ? 'badge-succeeded' : 'badge-failed'}"><i class="bdot"></i>${report.sla_met ? 'SLA 达标' : 'SLA 超标'}</span>
+          </div>
+          <div style="height:280px"><canvas id="stress-chart"></canvas></div>
+        </div>
+
+        <div class="panel" style="padding:14px 16px">
+          <div class="panel-title mb8">拐点判定与费用估算</div>
+          <div class="cc-grid">
+            <div class="cc-item"><div class="cc-key">目标接口 Endpoint</div><div class="cc-val small mono">${AE.esc(report.target_endpoint)}</div></div>
+            <div class="cc-item"><div class="cc-key">SLA P99 阈值</div><div class="cc-val num">${report.sla_p99_ms} ms</div></div>
+            <div class="cc-item"><div class="cc-key">性能拐点 (Knee-point)</div><div class="cc-val small">${AE.esc(report.knee)}</div></div>
+            <div class="cc-item"><div class="cc-key">预估消耗费用</div><div class="cc-val num" style="color:var(--accent-warning)">${report.est_cost}</div></div>
+          </div>
+        </div>`;
+    }
+
+    content.innerHTML = `
+      <div class="page-narrow" style="max-width:1360px">
+        ${headActionsHtml()}
+        ${cascadeBannerHtml()}
+        ${report.kind === 'benchmark' ? renderBenchmarkView() : report.kind === 'rag' ? renderRagView() : renderStressView()}
+      </div>`;
+
+    /* ─── 5. 样本表格 Tab 切换与 Raw 展开 ─── */
+    if (report.kind === 'benchmark') {
+      let activeTab = 'all';
+      function renderSampleRows() {
+        const items = report.sample_items.filter(x => {
+          if (activeTab === 'diff') return x.status === 'diff_score';
+          if (activeTab === 'fail') return x.status === 'failed';
+          return true;
+        });
+        const tbody = document.getElementById('sample-rows');
+        if (!tbody) return;
+        tbody.innerHTML = items.map(s => `
+          <tr>
+            <td class="mono">${s.row}</td>
+            <td>
+              <div style="font-weight:600;margin-bottom:4px">${AE.esc(s.question)}</div>
+              <div class="small tertiary">${AE.esc(s.reference)}</div>
+            </td>
+            <td>
+              <div class="small" style="margin-bottom:4px">${AE.esc(s.p1.pred)}</div>
+              <div class="row" style="gap:6px">
+                <span class="tag-soft" style="font-size:10px">contain: ${s.p1.score}</span>
+                <span class="small tertiary mono">${s.p1.lat}</span>
+                ${s.p1.err_code ? `<span class="status-tag-err">${s.p1.err_code}</span>` : ''}
+              </div>
+            </td>
+            <td>
+              <div class="small" style="margin-bottom:4px">${AE.esc(s.p2.pred)}</div>
+              <div class="row" style="gap:6px">
+                <span class="tag-soft" style="font-size:10px">contain: ${s.p2.score}</span>
+                <span class="small tertiary mono">${s.p2.lat}</span>
+              </div>
+            </td>
+            <td>
+              <button class="link-btn" data-raw="${s.row}">展开 raw</button>
+            </td>
+          </tr>
+          <tr id="raw-row-${s.row}" style="display:none;background:var(--bg-elevated)">
+            <td colspan="5">
+              <div class="small tertiary mono mb4">Judge 裁判推理归因：</div>
+              <div class="small mb8" style="color:var(--text-secondary)">${AE.esc(s.judge_reason)}</div>
+              <div class="small tertiary mono">HTTP Raw Request / Response Inspector:</div>
+              <div class="raw-box">{
+  "sample_row": ${s.row},
+  "p1_model": "${report.scores[0].model}",
+  "p1_latency_ms": "${s.p1.lat}",
+  "p1_raw_response": "${AE.esc(s.p1.pred)}",
+  "p2_model": "${report.scores[1].model}",
+  "p2_latency_ms": "${s.p2.lat}",
+  "p2_raw_response": "${AE.esc(s.p2.pred)}"
+}</div>
+            </td>
+          </tr>`).join('');
+
+        tbody.querySelectorAll('[data-raw]').forEach(btn => {
+          btn.onclick = () => {
+            const rrow = document.getElementById('raw-row-' + btn.dataset.raw);
+            const show = rrow.style.display === 'none';
+            rrow.style.display = show ? '' : 'none';
+            btn.textContent = show ? '收起 raw' : '展开 raw';
+          };
+        });
+      }
+
+      document.querySelectorAll('#sample-tabs button').forEach(tb => {
+        tb.onclick = () => {
+          document.querySelectorAll('#sample-tabs button').forEach(x => x.classList.toggle('active', x === tb));
+          activeTab = tb.dataset.tab;
+          renderSampleRows();
+        };
+      });
+      renderSampleRows();
+    }
+
+    /* ─── 6. 顶栏切换与操作事件 ─── */
+    const rsw = document.getElementById('report-switcher');
+    if (rsw) {
+      rsw.onchange = function () {
+        location.href = 'report.html?id=' + this.value;
+      };
+    }
+
+    // 导出 Markdown (GET /api/reports/{id}?fmt=md)
+    document.getElementById('btn-export').onclick = async () => {
+      try {
+        const md = await AE.API.reports.get(report.id, 'md');
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([typeof md === 'string' ? md : `# ${report.title}\n- ID: ${report.id}\n`], { type: 'text/markdown' }));
+        a.download = report.id + '.md';
+        a.click();
+        AE.toast('success', '已导出 Markdown 格式评测报告');
+      } catch (e) {
+        AE.toast('error', '导出失败');
+      }
+    };
+
+    // 分享链接 (POST /api/reports/{id}/share)
+    document.getElementById('btn-share').onclick = async () => {
+      const res = await AE.API.reports.share(report.id, 7);
+      const token = (res && res.token) || ('tk_' + Math.random().toString(36).slice(2, 10));
+      const url = location.origin + location.pathname.replace(/[^/]*$/, '') + 'report.html?id=' + report.id + '&share=' + token;
+      
+      AE.modal({
+        title: '分享报告 (POST /api/reports/{id}/share)',
+        body: `
+          <p class="small" style="margin-bottom:12px">生成公开只读链接，有效期 <b>7 天</b>，免登录即可查看。</p>
+          <div class="field"><input class="input mono" id="share-url" readonly value="${AE.esc(url)}" style="font-size:12px"></div>`,
+        foot: `<button class="btn btn-sign" id="copy-share">复制分享链接</button>`,
+        onMount: (el, close) => {
+          el.querySelector('#copy-share').onclick = () => {
+            const inp = el.querySelector('#share-url');
+            inp.select();
+            try { navigator.clipboard.writeText(inp.value); } catch (e) { document.execCommand('copy'); }
+            close();
+            AE.toast('success', '已复制 7 天免登分享链接');
+          };
+        }
+      });
+    };
+
+    // 冻结为基线 (POST /api/reports/{id}/baseline)
+    const bb = document.getElementById('btn-baseline');
+    if (bb) {
+      bb.onclick = () => {
+        AE.dialog({
+          title: '冻结为基线？',
+          body: `将任务 <span class="mono">${report.task_id}</span> 冻结为基线版本。仅同数据集/知识库版本与主指标的报告可进行 Δ 差值对比。写审计。`,
+          okText: '确认冻结', okClass: 'btn-sign',
+          onOk: async () => {
+            await AE.API.reports.freezeBaseline(report.id);
+            AE.toast('success', '已冻结为基线版本（POST /api/reports/{id}/baseline）');
+          }
+        });
+      };
+    }
+
+    /* ─── 7. 图表初始化 (Chart.js) ─── */
+    if (report.kind === 'benchmark' && window.Chart) {
+      const latMs = s => s.endsWith('ms') ? parseFloat(s) : parseFloat(s) * 1000;
+      new Chart(document.getElementById('bm-radar'), {
+        type: 'radar',
+        data: {
+          labels: ['contain 命中', '低失败率', '低延迟', 'Judge 裁判分'],
+          datasets: report.scores.map((x, i) => ({
+            label: x.profile,
+            data: [x.contain, 1 - x.fail_rate, Math.max(0, 1 - latMs(x.latency) / 2000), x.judge / 5],
+            borderColor: i === 0 ? '#1D4ED8' : '#7C3AED',
+            backgroundColor: i === 0 ? 'rgba(29, 78, 216, .12)' : 'rgba(124, 58, 237, .12)',
+            fill: true, pointRadius: 2.5, borderWidth: 1.8
+          }))
+        },
+        options: {
+          plugins: { legend: { display: false } },
+          scales: { r: { min: 0, max: 1, ticks: { display: false }, grid: { color: '#E5E7EB' }, angleLines: { color: '#E5E7EB' }, pointLabels: { font: { family: 'JetBrains Mono', size: 11 }, color: '#6B7280' } } }
+        }
+      });
+    }
+
+    if (report.kind === 'rag') {
+      const MODE_C = { naive: '#9CA3AF', local: '#4F46E5', global: '#0E7490', hybrid: '#1D4ED8' };
+      const METRICS = [['hit', 'Hit Rate@' + report.k], ['mrr', 'MRR (平均倒数排名)'], ['recall', 'Recall@' + report.k], ['contain', '答案规则分 contain']];
+      document.getElementById('rag-bars').innerHTML = METRICS.map(([key, label], gi) => `
+        <div class="eyebrow" style="margin:${gi ? '14px' : '0'} 0 8px">${label}</div>
+        <div class="rc-bars">${report.modes.map(mode => {
+          const v = report.scores[mode][key];
+          const bad = key === 'hit' && report.degraded && report.degraded.mode === mode;
+          return `<div class="rc-bar-row"><span class="rc-bar-label" style="width:110px;flex-basis:110px">${mode}</span>
+            <span class="rc-bar-track"><i style="width:${Math.round(v * 100)}%;background:${bad ? 'var(--accent-error)' : MODE_C[mode]}"></i></span>
+            <span class="rc-bar-val" style="${bad ? 'color:var(--accent-error);font-weight:700' : ''}">${v.toFixed(2)}</span></div>`;
+        }).join('')}</div>`).join('');
+    }
+
+    if (report.kind === 'stress' && window.Chart) {
+      const labels = report.time_series.map(x => x.time);
+      const qpsData = report.time_series.map(x => x.qps);
+      const rtData = report.time_series.map(x => parseFloat(x.p99) * (x.p99.endsWith('s') ? 1000 : 1));
+      const errData = report.time_series.map(x => parseFloat(x.err));
+
+      const ctx = document.getElementById('stress-chart').getContext('2d');
+      new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            { label: 'QPS', data: qpsData, borderColor: '#6366F1', backgroundColor: 'rgba(99,102,241,.14)', fill: true, tension: .3, pointRadius: 2, yAxisID: 'y' },
+            { label: 'P99 RT (ms)', data: rtData, borderColor: '#0E7490', backgroundColor: 'rgba(14,116,144,.10)', fill: true, tension: .3, pointRadius: 2, yAxisID: 'y1' },
+            { label: '错误率 (%)', data: errData, borderColor: '#EF4444', backgroundColor: 'rgba(239,68,68,.10)', fill: true, tension: .3, pointRadius: 2, yAxisID: 'y2' }
+          ]
+        },
+        options: {
+          responsive: true,
+          interaction: { mode: 'index', intersect: false },
+          plugins: { legend: { display: false } },
+          scales: {
+            y: { position: 'left', grid: { color: '#EEF2F2' }, ticks: { font: { family: 'JetBrains Mono', size: 11 } } },
+            y1: { position: 'right', grid: { display: false }, ticks: { font: { family: 'JetBrains Mono', size: 11 } } },
+            y2: { display: false, suggestedMax: 2 },
+            x: { grid: { display: false }, ticks: { font: { family: 'JetBrains Mono', size: 11 } } }
+          }
+        }
+      });
+    }
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>
