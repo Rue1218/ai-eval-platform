@@ -19,6 +19,7 @@
 | V1.6.1 | 2026-08-17 | 复查修复：一任务一种 kind、LightRAG 查询契约、会签/取消权限、指标与协议档数量对齐 |
 | V1.6.2 | 2026-08-17 | 与问答复核：压测内核改回 go-stress-testing；附录 B 逐条对照 |
 | V1.6.3 | 2026-08-17 | 再核：WS 用 ticket 非长期 token；压测由 stress 容器执行且取消立即停；LightRAG 压测走 query 而非 Chat；会话槽位含子任务 |
+| V1.6.4 | 2026-08-18 | 全面去除静态 Mock 数据，全量接入后端 API 统一客户端；落实全员同权协作与智能体/调度/任务中心动态交互 |
 
 ---
 
@@ -96,25 +97,22 @@
 
 ## 2. 用户、权限与账号
 
-### 2.1 角色
+### 2.1 角色架构（单一角色「成员」· 全员同权）
 
-| 能力 | 管理员 | 工程师 | 只读 |
-| --- | --- | --- | --- |
-| 登录、看报告、打开未过期分享链接 | ✓ | ✓ | ✓ |
-| Agent 对话、创建任务；取消自己的非终态任务 | ✓ | ✓ | |
-| 取消他人任务 | ✓ | | |
-| 上传/删除自己的集与知识库文档、确认用例 | ✓ | ✓ | |
-| 配置协议档、Key、Agent 后端、裁判、白名单、预算、并发上限 | ✓ | | |
-| 冻结/解冻基线、知识库标核心、删他人资产 | ✓ | | |
-| `dev`/`test`/`staging` 压测 | ✓ | ✓ | |
-| `prod` 压测 | 二次确认 | 另一名管理员或工程师会签 | |
-| 开户、停用、改角色、重置密码 | ✓ | | |
+平台面向敏捷 AI 评测团队，采用**单一角色「成员」（全员同权）**架构，彻底摒弃复杂的 RBAC 三级角色阻碍：
 
-首次部署：环境变量创建唯一引导管理员，登录后立即改密。密码 ≥8 位，含字母和数字。浏览器会话用 HttpOnly Cookie（12h 可续）。WebSocket 使用短票，见 F-AGT-01。
+| 权限范围 | 权限能力说明 | 审计与约束 |
+| --- | --- | --- |
+| **评测与任务** | Agent 交互、创建评测任务（Benchmark / RAG / 用例 / 压测）、取消与重跑任务 | 任务创建与取消均记录审计日志 |
+| **资产与工作台** | 数据集与黄金 QA 管理、用例库确认与批量映射、知识库上传与切块检索 | 数据集/知识库变更记录版本快照 |
+| **配置与治理** | 协议档维护与连通性检查、压测治理白名单与预算配置、调度策略与并发上限 | 敏感变更写审计；生产发压二次确认 |
+| **账号与成员** | 开户、停用账号、重置密码、修改个人凭据 | 强制保护：不可停用系统中最后一名正常账号 |
 
-### 2.2 默认身份映射
+首次部署：环境变量创建初始成员账号，登录后强制改密。密码 ≥8 位，含字母和数字。浏览器会话使用 HttpOnly Cookie（12h 可续）。WebSocket 连接使用 5 分钟短票（ticket），见 F-AGT-01。
 
-测试 / 算法 / SRE → 工程师；负责人 → 只读（可升管理员）。
+### 2.2 团队协同原则
+
+团队全员同权，通过全局顶栏「大模型 / RAG」双模式与统一任务工作台实现高效无阻碍协同。
 
 ---
 
@@ -327,24 +325,28 @@ queued → running → succeeded
 
 ---
 
-### 5.5 内部 MCP
+### 5.5 MCP 工具中心与技能编排
 
-长任务由 worker 调；Agent 只 `task.create` 并轮询/订阅事件。
+平台采用 **MCP Host** 统一智能体架构。长任务由 Worker 异步执行；Agent 仅调用 MCP 短工具进行信息发现与 `task.create` 结构化建单。
 
-| 工具 | 类型 | 入参（摘要） | 出参 |
-| --- | --- | --- | --- |
-| `model.list` | 短 | — | 协议档 id/名称/协议（无 Key） |
-| `dataset.list` | 短 | — | 数据集 id/版本/行数 |
-| `kb.list` | 短 | — | 知识库 id/文档数 |
-| `task.get` | 短 | task_id | 状态、进度 |
-| `report.get` | 短 | report_id | 指标摘要 + 下载路径 |
-| `task.create` | 短 | 确认卡 JSON | task_id |
-| `task.cancel` | 短 | task_id | ok |
-| `testcase.generate` | 长 | file_id 或 text | case_set_id |
-| `testcase.confirm` | 短 | case_set_id, edits? | 任务从 `awaiting_case_confirm` → `succeeded`；worker 不再续跑同一任务 |
-| `benchmark.run` | 长 | 确认卡评测段 | report_id |
-| `rag.evaluate` | 长 | 确认卡 RAG 段 | report_id |
-| `stress.run` | 长 | parent_task_id + stress | report_id |
+#### 5.5.1 内置受控短工具清单 (Tools Manifest)
+
+| 工具名称 | 类型 | 入参（摘要） | 出参 | 权限与用途 |
+| --- | --- | --- | --- | --- |
+| `model.list` | 短 | — | 协议档 id/名称/协议（无 Key） | READ · 模型资产发现 |
+| `dataset.list` | 短 | — | 数据集 id/版本/行数/主指标 | READ · 评测集检索 |
+| `kb.list` | 短 | — | 知识库 id/文档数/黄金 QA | READ · RAG 资产列表 |
+| `report.get` | 短 | `report_id` | 指标摘要 + 下载路径 | READ · 报告在对话中解读 |
+| `task.create` | 短 | 确认卡 TaskSpec JSON | `task_id`, `status` | WRITE · 下单推入调度队列 |
+| `task.cancel` | 短 | `task_id`, `reason` | `ok: true` | WRITE · 任务取消分流 |
+| `dispatch.overview` | 短 | — | Worker 节点数/CPU负载/策略 | READ · 调度大盘感知 |
+
+#### 5.5.2 智能体 4 大核心内置技能 (Skills)
+
+1. **`skill-benchmark`（基准对比）**：自动识别被测模型数量、推荐标准评测集并构建先评后压 TaskSpec；
+2. **`skill-rag`（RAG 质量评估）**：自动装载知识库切块与黄金 QA，评测 LightRAG 4 模式检索表现；
+3. **`skill-testcase`（PRD 用例生成）**：按 6 大策略精细配比（40/25/15/10/5/5）提炼测试用例；
+4. **`skill-stress`（共享容量压测）**：继承父任务 endpoint 与抽样问答，定位 SLA 拐点与成本开销。
 
 错误码：`UNAUTHORIZED` `VALIDATION` `NOT_FOUND` `BUDGET_EXCEEDED` `CONCURRENCY` `WHITELIST` `NEED_APPROVAL` `UPSTREAM` `TIMEOUT` `INTERNAL`。
 
@@ -383,19 +385,23 @@ V1 压测内核：**go-stress-testing**（Apache-2.0）扩展，独立 `stress` 
 
 ---
 
-### 5.8 前端信息架构（Vue3 + Naive UI）
+### 5.8 前端信息架构（Vue3 + Naive UI / 原型工作台）
 
-| 路由 | 页 | 角色 |
-| --- | --- | --- |
-| `/login` | 登录 | 全员 |
-| `/agent` | 会话列表 + 对话 + 确认卡 + 进度 | 管理/工程师 |
-| `/tasks` | 任务表 | 全员（只读看） |
-| `/reports/:id` | 报告与对比 | 全员 |
-| `/datasets` `/cases` | 集与用例确认 | 管理/工程师 |
-| `/kb` | 知识库与黄金 QA | 管理/工程师 |
-| `/admin/profiles` | 协议档 / Key / Agent / 裁判 | 管理员 |
-| `/admin/stress` | 白名单、单价、并发、预算默认 | 管理员 |
-| `/admin/users` | 开户 | 管理员 |
+| 路由 | 页 | 功能说明 | 角色 |
+| --- | --- | --- | --- |
+| `/login` | 登录 | 居中登录卡、统一错误提示（不区分用户或密码）、首登强制改密 | 成员（全员） |
+| `/agent` | 智能体 | 会话列表、对话流式交互、思考卡、工具卡、TaskSpec 确认卡、底部吸附进度坞、内嵌迷你调度视图 | 成员 |
+| `/dispatch` | 调度中心 | 调度内核雷达、分发策略切换、并发容量滑块、Task 队列 → Worker 节点平滑三次贝塞尔连线拓扑、调度日志流 | 成员 |
+| `/tasks` | 任务中心 | 六态徽章、24h 吞吐面积图与状态分布分段条、多维筛选、AI 智能编排、任务详情抽屉与事件时间线 | 成员 |
+| `/reports` `/reports/:id` | 评测报告中心 | 独立一级导航；支持 Benchmark 多协议横向对比/基线Δ/Judge裁判分、RAG LightRAG 4模式召回对比、压测多轴曲线与 SLA 拐点、先评后压双向穿透横幅 | 成员 |
+| `/datasets` | 数据集工作台 | 目录树结构管理、自定义列管理（+新增列）、单元格行内即点即改、多行/JSON 弹窗编辑器、AI 智能合成新数据与补全缺失行 | 成员 |
+| `/cases` | 用例工作台 | 用例集目录树、6 大测试策略分布与自检横幅、用例表格行内编辑、AI 智能从 PRD 生成用例集、批量映射至基准数据集/黄金 QA、72h 倒计时确认入库 | 成员 |
+| `/kb` | 知识库与切块检索 | 文档分块预览、2D 向量投影散点图、Top-K 相似度召回连线与重排前后位次对比 (Rerank Delta)、黄金 QA 维护 | 成员 |
+| `/admin/profiles` | 协议档治理 | 三大协议（`openai_chat`、`openai_responses`、`anthropic_messages`）维护、Key 只写不回显、连通性检查 | 成员 |
+| `/admin/stress` | 压测治理 | 白名单维护、QPS/时长上限、默认预算、单价并发控制、AI 参数推荐 | 成员 |
+| `/admin/users` | 账号协同 | 成员开户、停用、重置密码（系统安全保底：不可停用最后一名正常账号） | 成员 |
+
+全站顶栏居中常驻「大模型 / RAG」双模式切换器，全站智能体、任务表、用例映射、知识库与评测发起抽屉自动联动适配。
 
 无独立「改系统提示词」页。
 

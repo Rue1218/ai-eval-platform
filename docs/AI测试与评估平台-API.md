@@ -2,13 +2,13 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.0 |
-| 对应 PRD | V1.6.3（功能唯一权威） |
-| 对应设计规范 | V1.2（错误码文案、确认卡字段名） |
+| 文档版本 | V1.1 |
+| 对应 PRD | V1.6.4（功能唯一权威） |
+| 对应设计规范 | V1.3（错误码文案、确认卡字段名、调度中心规范） |
 | 对应前端计划 | V1.1 |
 | 对应后端计划 | V1.1 |
-| 撰写日期 | 2026-08-17 |
-| 适用范围 | V1.0：浏览器 `web/` ↔ `api`；不含 Open API（F-CM-08 / V1.1） |
+| 撰写日期 | 2026-08-18 |
+| 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
 ---
 
@@ -60,7 +60,7 @@
 - 除注明外，REST 均需已登录 Cookie。  
 - 分享报告：`GET /api/reports/{id}?share={token}` **免登录**，只读。  
 - `GET /api/health` 免登录。  
-- 角色：`admin` / `engineer` / `readonly`。越权 HTTP 403，body `code=UNAUTHORIZED`。未登录 401。
+- 角色：单一角色 `member`（全员同权）。未登录 401，body `code=UNAUTHORIZED`。敏感操作（如停用账号、删除基线）记录审计日志。
 
 刷新页面后前端必须能恢复身份 → `GET /api/auth/me`（PRD 2.1 / F-CM-03 补全，5.9 未列）。
 
@@ -112,55 +112,21 @@
 
 ## 2. 前后端对应总表
 
-浏览器只走「前端调用」列。MCP 与 `/metrics` 不在此表。
+浏览器前端所有图、表与表单均统一经由 `assets/api.js` 调用对应 REST/WS 接口，实现 100% 数据动态拉取与实时落盘。
 
-| 方法 | 路径 | 前端页面 / 组件 | 后端 | 角色 | 阶段 | PRD |
-| --- | --- | --- | --- | --- | --- | --- |
-| GET | `/api/health` | 无（Compose 探活） | api | 免登录 | M0 | 总计划 |
-| POST | `/api/auth/login` | Login | api | 免登录 | M1 | 5.9 |
-| POST | `/api/auth/logout` | 退出 Dialog | api | 已登录 | M1 | 5.9 |
-| POST | `/api/auth/change-password` | 首次改密 Modal | api | 已登录 | M1 | 2.1 补全 |
-| GET | `/api/auth/me` | `auth` store 启动 | api | 已登录 | M1 | 2.1 补全 |
-| POST | `/api/auth/ws-ticket` | `ws.ts` | api | 工程师+ | M1 | F-AGT-01 |
-| GET | `/ws/agent` | `/agent` | api | 工程师+ 短票 | M1 | F-AGT-01 |
-| GET | `/api/sessions` | SessionList | api | 工程师+ | M1 | 6.4 补全 |
-| POST | `/api/sessions` | 新建会话 | api | 工程师+ | M1 | 6.4 补全 |
-| GET | `/api/sessions/{id}/messages` | 切换会话回放 | api | 工程师+ | M1 | 6.4 补全 |
-| GET | `/api/users` | `/admin/users` | api | admin | M1 | F-CM-03 |
-| POST | `/api/users` | 开户 Modal | api | admin | M1 | F-CM-03 |
-| PATCH | `/api/users/{id}` | 停用 / 改角色 | api | admin | M1 | F-CM-03 补全 |
-| POST | `/api/users/{id}/reset-password` | 重置密 Modal | api | admin | M1 | F-CM-03 补全 |
-| GET/POST | `/api/files` | Composer / 各上传 | api | 工程师+ | M1 | F-CM-07 |
-| GET | `/api/files/{id}` | 附件芯片元数据 | api | 登录 | M1 | F-CM-07 |
-| GET | `/api/profiles` | 确认卡下拉 / 管理页 | api | 登录（无 Key） | M1 | F-BM-01 |
-| POST/PATCH/DELETE | `/api/profiles` `/api/profiles/{id}` | `/admin/profiles` | api | admin | M1 | F-BM-01 |
-| POST | `/api/profiles/{id}/check` | 连通性 Modal | api | admin | M1 | 规范 14.4 补全 |
-| GET/POST/PATCH/DELETE | `/api/datasets` … | `/datasets` | api | 工程师+；删他人=admin | M2 | F-BM-03 |
-| POST | `/api/datasets/{id}/upload` | 覆盖上传 Dialog | api | 工程师+（自己的） | M2 | F-BM-03 |
-| GET | `/api/datasets/{id}/rows` | 待补全 Tab | api | 工程师+ | M2 | F-BM-04 |
-| GET | `/api/case-sets` `/api/case-sets/{id}` | `/cases` | api | 工程师+ | M2 | 5.4 |
-| POST | `/api/case-sets/{id}/confirm` | 确认 / 拒绝 | api | 创建者 | M2 | 5.9 |
-| POST | `/api/case-sets/{id}/map` | 映射到集 / 黄金 QA | api | 工程师+ | M2/M3 | 5.4.2 补全 |
-| GET | `/api/case-sets/{id}/export` | 导出按钮 | api | 工程师+ | M2 | 5.4.1 |
-| CRUD | `/api/kb` | `/kb` | api | 工程师+；标核心/删他人=admin | M3 | F-RAG-01 |
-| POST | `/api/kb/{id}/docs` | 文档上传 | api | 工程师+ | M3 | 5.9 |
-| DELETE | `/api/kb/{id}/docs/{doc_id}` | 删文档 Dialog | api | 自己或 admin | M3 | 2.1 补全 |
-| CRUD | `/api/gold-qa` | `/kb` 黄金 QA | api | 工程师+ | M3 | F-RAG-03 |
-| POST | `/api/gold-qa/{id}/upload` | 覆盖上传 | api | 工程师+ | M3 | F-RAG-03 |
-| POST | `/api/tasks` | ConfirmCard / 抽屉 | api | 工程师+ | M1 起 | F-AGT-07 |
-| GET | `/api/tasks` | `/tasks` | api | 全员（只读看） | M1 | F-CM-01 |
-| GET | `/api/tasks/{id}` | 任务抽屉 | api | 全员 | M1 | F-CM-01 |
-| POST | `/api/tasks/{id}/cancel` | Dialog / `cancel_task` | api | 创建者或 admin | M1 | F-AGT-09 |
-| POST | `/api/tasks/{id}/rerun` | 复制为新任务 | api | 工程师+ | M1 | F-AGT-09 |
-| POST | `/api/tasks/{id}/approve-stress` | `prod` 会签 | api | 另一名 admin/engineer | M4 | F-ST-05 补全 |
-| GET | `/api/tasks/{id}/stress-series` | ProgressDock / Chart.js | api | 全员 | M4 | F-ST-03 补全 |
-| GET | `/api/reports/{id}` | `/reports/:id` | api | 全员或 share | M2 | F-CM-02 |
-| POST | `/api/reports/{id}/share` | 分享 Modal | api | 登录 | M2 | 5.9 |
-| POST | `/api/reports/{id}/baseline` | 冻结 Dialog | api | admin | M2/M3 | F-BM-07 补全 |
-| GET/PUT | `/api/admin/settings` | profiles / stress 治理 | api | GET 登录；PUT admin | M1/M4 | 5.9 |
-| GET | `/api/admin/audit-logs` | **无页面**（排障） | api | admin | M1 | F-CM-04 补全 |
-
-只读角色：可 GET 任务/报告/分享；不可 Agent、不可写集/KB、不可管理接口。
+| 模块 / 页面 | 前端功能与图表 | 调用的后端 API 接口 | 请求方法 | 权限口径 |
+| --- | --- | --- | --- | --- |
+| **登录 (login.html)** | 账号登录 / 首次强制改密 | `/api/auth/login`, `/api/auth/change-password` | POST | 免登录 / 成员 |
+| **智能体 (agent.html)** | 会话列表 / 意图识别 / TaskSpec 下单 / 迷你拓扑坞 | `/api/sessions`, `/ws/agent`, `/api/profiles`, `/api/datasets`, `/api/kb`, `/api/tasks`, `/api/dispatch/overview` | GET/POST/WS | 成员 · 全员同权 |
+| **调度中心 (dispatch.html)** | 调度大盘雷达 / Worker 节点池 / 贝塞尔队列连线 / 策略治理 | `/api/dispatch/overview`, `/api/dispatch/workers`, `/api/dispatch/config`, `/api/tasks?status=queued` | GET/PUT | 成员 · 全员同权 |
+| **任务中心 (tasks.html)** | 任务大盘 / 六态过滤表格 / 抽屉详情 / 取消与重跑 | `/api/tasks`, `/api/tasks/{id}`, `/api/tasks/{id}/cancel`, `/api/tasks/{id}/rerun` | GET/POST | 成员 · 全员同权 |
+| **报告中心 (report.html)** | 报告列表 / 3合1详情 (Benchmark雷达/RAG水平柱状/压测多轴曲线) / Markdown导出 / 7天免登分享 / 冻结基线 | `/api/reports`, `/api/reports/{id}`, `/api/reports/{id}/samples`, `/api/reports/{id}/share`, `/api/reports/{id}/baseline` | GET/POST | 成员 · 全员同权 |
+| **数据集工作台 (datasets.html)** | 数据集目录树 / 行内即点即改网格 / 自定义列扩展 / AI 数据集生成 | `/api/datasets`, `/api/datasets/{id}`, `/api/datasets/{id}/rows`, `/api/datasets/ai-generate`, `/api/kb` | GET/POST/PUT/DELETE | 成员 · 全员同权 |
+| **用例工作台 (cases.html)** | 6大策略分布图 / 用例表格编辑 / 72h倒计时 / 批量映射入库 / AI PRD 用例抽取 | `/api/case-sets`, `/api/case-sets/{id}`, `/api/case-sets/{id}/cases`, `/api/case-sets/{id}/confirm`, `/api/case-sets/{id}/cancel`, `/api/case-sets/{id}/map`, `/api/case-sets/ai-generate` | GET/POST/PUT | 成员 · 全员同权 |
+| **知识库 (kb.html)** | 3栏工作台 / 文档切块流 / 2D 向量投影散点图 / 4模式检索 Playground / 黄金 QA / ✨ AI 抽取黄金 QA | `/api/kb`, `/api/kb/{id}`, `/api/kb/{id}/documents`, `/api/kb/{id}/query`, `/api/kb/{id}/gold-qa` | GET/POST/DELETE | 成员 · 全员同权 |
+| **协议档与智能体 (admin-profiles.html)** | 4 Tab 架构 (模型协议档/MCP 工具中心/Agent 技能编排/运行时治理) / 连通性探活 Ping | `/api/profiles`, `/api/profiles/{id}/check`, `/api/mcp/servers`, `/api/mcp/tools`, `/api/skills`, `/api/admin/settings` | GET/POST/PUT/DELETE | 成员 · 全员同权 |
+| **压测治理 (admin-stress.html)** | 7天峰值 QPS 面积图 / Host 白名单表格 / 安全阈值 / 成本预算 / Prometheus `/metrics` | `/api/admin/stress/settings`, `/api/admin/stress/whitelist`, `/api/admin/stress/usage`, `/metrics` | GET/POST/PUT/DELETE | 成员 · 全员同权 |
+| **成员与账号 (admin-users.html)** | 4 维 KPI 卡片 / 成员搜索表格 / AI 异地登录检测 / 24h 登录活动柱状图 / 改密与停用 | `/api/users`, `/api/users/{id}/status`, `/api/users/{id}/reset-password`, `/api/users/{id}/audit-logs` | GET/POST/PUT | 成员 · 全员同权 |
 
 ---
 
@@ -226,32 +192,66 @@
 
 ---
 
-### 3.3 用户（管理员）
+### 3.3 成员与账号管理（全员同权）
+
+平台采用单一角色「成员（Member）」，全员同权。
 
 #### `GET /api/users`
 
-`{ "items": [UserPublic], "total": n }`  
-`UserPublic`：`id, username, role, disabled, created_at`。无密码。
+获取全部成员账号列表。
+
+```json
+{
+  "items": [
+    {
+      "id": "u-01",
+      "username": "alice",
+      "display_name": "爱丽丝",
+      "email": "alice@company.com",
+      "role": "member",
+      "disabled": false,
+      "last_login_at": "2026-08-18T09:40:00Z",
+      "last_login_ip": "10.0.0.12",
+      "created_at": "2026-08-01T00:00:00Z"
+    }
+  ],
+  "total": 1
+}
+```
 
 #### `POST /api/users`
 
-```json
-{ "username": "bob", "password": "********", "role": "engineer" }
-```
-
-#### `PATCH /api/users/{id}`
+邀请 / 开户。
 
 ```json
-{ "role": "readonly", "disabled": true }
+{
+  "username": "bob",
+  "display_name": "鲍勃",
+  "email": "bob@company.com",
+  "password": "********",
+  "must_change_password": true
+}
 ```
 
-改角色 / 停用写审计。不可停用最后一个管理员。
+#### `PUT /api/users/{id}` / `PUT /api/users/{id}/status`
+
+更新成员资料或切换账号启用/停用状态（禁止停用系统中最后一名正常账号，写审计）。
+
+```json
+{ "disabled": true }
+```
 
 #### `POST /api/users/{id}/reset-password`
+
+重置指定成员的登录密码（写入安全审计日志）。
 
 ```json
 { "password": "********" }
 ```
+
+#### `GET /api/users/{id}/audit-logs`
+
+获取指定成员近期的操作审计轨迹（开户、改密、登录、建单等）。
 
 ---
 
@@ -350,23 +350,71 @@ item：`id, name, protocol, base_url, model, usages[], created_at`
 
 `anthropic_messages` 可另存 `anthropic_version`（默认 `2023-06-01`）。变更写审计。
 
-#### `PATCH /api/profiles/{id}` / `DELETE /api/profiles/{id}`
+#### `PUT /api/profiles/{id}` / `DELETE /api/profiles/{id}`
 
-仅 admin。正在被 Agent 后端引用的档不可删（`VALIDATION`）。
+修改或删除协议档（正在被 Agent 后端引用的协议档禁止删除，写审计）。
 
 #### `POST /api/profiles/{id}/check`
 
-用库存 Key 打一发最小请求。响应：
+向被测模型或裁判端点发送轻量探活 ping 请求。响应：
 
 ```json
 { "ok": true, "latency_ms": 120 }
 ```
-或 `{ "ok": false, "code": "UPSTREAM", "message": "401 from upstream" }`  
-message 不得含 Key。
+或 `{ "ok": false, "code": "UPSTREAM", "message": "401 from upstream" }`（日志与响应严禁携带 API Key）。
 
 ---
 
-### 3.7 数据集  M2
+### 3.6.1 MCP 服务器与工具中心
+
+#### `GET /api/mcp/servers` / `POST /api/mcp/servers` / `DELETE /api/mcp/servers/{id}`
+
+维护已挂载的 MCP 服务节点（包含内置 Eval-Core 服务与外部 SSE / Streamable HTTP 节点）。
+
+```json
+{
+  "id": "uuid",
+  "name": "vector-search-mcp",
+  "transport": "Streamable HTTP | SSE | Stdio",
+  "endpoint": "http://192.168.1.100:8080/mcp",
+  "status": "online",
+  "latency_ms": 32,
+  "tools_count": 2
+}
+```
+
+#### `POST /api/mcp/servers/{id}/check`
+
+对指定的 MCP Server 发起探活 Ping 与工具清单动态握手发现。
+
+#### `GET /api/mcp/tools`
+
+获取当前智能体环境中所有受控的短工具清单（`model.list`, `dataset.list`, `kb.list`, `report.get`, `task.create`, `task.cancel`, `dispatch.overview`）及权限级别（`read / write`）。
+
+---
+
+### 3.6.2 Agent 技能与 Prompt 编排
+
+#### `GET /api/skills` / `POST /api/skills` / `PUT /api/skills/{id}` / `DELETE /api/skills/{id}`
+
+维护智能体在 Benchmark 对比、RAG 评估、用例生成与容量压测场景下的 System Prompt 模版与依赖短工具绑定。
+
+```json
+{
+  "id": "skill-benchmark",
+  "name": "基准对比评测",
+  "desc": "自动识别被测模型数量、推荐标准评测集并构建先评后压 TaskSpec",
+  "system_prompt": "你负责大模型基准测试...",
+  "tools": ["model.list", "dataset.list", "task.create"],
+  "temperature": 0.2,
+  "max_tokens": 1024,
+  "is_builtin": true
+}
+```
+
+---
+
+### 3.7 数据集工作台
 
 #### `GET /api/datasets` / `GET /api/datasets/{id}`
 
@@ -389,13 +437,13 @@ message 不得含 Key。
 { "name": "smoke-20", "metric": "contain" }
 ```
 
-#### `PATCH /api/datasets/{id}`
+#### `PUT /api/datasets/{id}`
 
-可改 `name` `metric`（已有报告不受影响，对比仍看任务快照）。
+可改 `name`、`metric` 及目录结构（已有报告不受影响，对比仍看任务快照）。
 
 #### `DELETE /api/datasets/{id}`
 
-自己的：工程师+；他人的：仅 admin。进行中任务不取消。
+删除数据集（全员同权，进行中的历史任务快照不受影响）。
 
 #### `POST /api/datasets/{id}/upload`  multipart `file`
 
@@ -414,9 +462,35 @@ JSONL 或 CSV UTF-8；列 `question,reference,context?`；≤50MB、≤2 万行�
 
 `pending_complete=true` 的行 **不进评分分母**。
 
+#### `PUT /api/datasets/{id}/rows`
+
+批量保存表格行与自定义扩展列（如 `tags`、`difficulty`、`precondition` 等）。
+
+```json
+{
+  "rows": [
+    { "row_no": 1, "q": "如何修改结算账户？", "r": "进入设置完成短信验证...", "c": "已绑定手机", "tags": "账户", "difficulty": "中等" }
+  ]
+}
+```
+
+#### `POST /api/datasets/ai-generate`
+
+根据场景描述、种子样本扩写或 PRD 文档提取，通过大模型批量合成高质量评测数据集。
+
+```json
+{
+  "mode": "scene | seed | doc",
+  "prompt": "生成 10 条跨境支付高频问答与边界风控问答",
+  "count": 10,
+  "difficulty_ratio": "4:4:2",
+  "adversarial_ratio": 0.2
+}
+```
+
 ---
 
-### 3.8 用例集  M2
+### 3.8 用例工作台
 
 #### `GET /api/case-sets` / `GET /api/case-sets/{id}`
 
@@ -424,11 +498,11 @@ JSONL 或 CSV UTF-8；列 `question,reference,context?`；≤50MB、≤2 万行�
 {
   "id": "uuid",
   "task_id": "uuid",
-  "status": "generated",
+  "status": "generated | confirmed | cancelled",
   "generated_count": 40,
   "confirmed_count": 0,
   "checks": [
-    { "level": "error", "code": "no_core_positive", "message": "无核心正向" }
+    { "level": "error", "code": "no_core_positive", "message": "无核心正向用例" }
   ],
   "expires_at": "2026-09-24T12:00:00Z",
   "cases": []
@@ -437,28 +511,60 @@ JSONL 或 CSV UTF-8；列 `question,reference,context?`；≤50MB、≤2 万行�
 
 `checks` 给确认页红字。`expires_at` = 进入 `awaiting_case_confirm` + 72h。
 
-case item：`id, strategy, priority, module, name, steps, expected, mapped, pending_complete`
+case item 包含：`id, strategy, priority, module, name, precondition, steps, expected, test_type, mapped, pending_complete` 及自定义扩展列。
+
+#### `POST /api/case-sets`
+
+创建新用例集或文件夹。
+
+#### `PUT /api/case-sets/{id}/cases`
+
+批量保存表格用例项与自定义列数据（即点即改后实时持久化）。
+
+```json
+{
+  "cases": [
+    { "id": "c-001", "strategy": "正向", "priority": "P0", "module": "登录", "name": "账密正确登录", "expected": "进入工作台", "precondition": "账号正常" }
+  ]
+}
+```
 
 #### `POST /api/case-sets/{id}/confirm`
 
-创建者。任务须为 `awaiting_case_confirm`。
+确认用例入库，生成正式数据集版本快照。任务状态由 `awaiting_case_confirm` 转换为 `succeeded`。
 
 ```json
-{ "ok": true, "edits": [ { "id": "case-uuid", "name": "新名称" } ] }
+{ "ok": true, "mapping_target": "dataset | gold_qa", "target_id": "uuid" }
 ```
 
-- `ok: true` → 入库，任务 `succeeded`；worker **不得**再续跑该任务。  
-- `ok: false` → 任务 `cancelled`，不入库。  
 采纳率口径：`confirmed_count / generated_count`。
 
-#### `POST /api/case-sets/{id}/map`  M2 映射数据集；M3 可映射黄金 QA
+#### `POST /api/case-sets/{id}/cancel`
+
+废弃用例集，任务置为 `cancelled`。
+
+#### `POST /api/case-sets/{id}/map`
+
+批量映射用例到目标基准数据集或知识库黄金问答。
 
 ```json
-{ "target": "dataset", "dataset_id": "uuid" }
+{ "target": "dataset", "dataset_id": "uuid", "case_ids": ["c-001", "c-002"] }
 ```
-或 `{ "target": "gold_qa", "gold_qa_id": "uuid" }`（M3）
 
 缺字段行进入目标集 `pending_complete`，写 `source_case_id` + 用例版本。
+
+#### `POST /api/case-sets/ai-generate`
+
+根据 PRD / OpenAPI / Excel 文档，按 6 大策略精细配比（正向 40% / 反向 25% / 边界 15% / 等价类 10% / 状态迁移 5% / 场景 5%）智能生成候选用例集。
+
+```json
+{
+  "source_doc_id": "doc-01",
+  "strategy_weights": { "positive": 40, "negative": 25, "boundary": 15, "equivalence": 10, "state": 5, "scenario": 5 },
+  "complexity": "medium",
+  "max_count": 45
+}
+```
 
 #### `GET /api/case-sets/{id}/export?fmt=xlsx|xmind`
 
@@ -466,9 +572,9 @@ case item：`id, strategy, priority, module, name, steps, expected, mapped, pend
 
 ---
 
-### 3.9 知识库与黄金 QA  M3
+### 3.9 知识库与黄金 QA 工作台
 
-#### `GET/POST /api/kb`  `GET/PATCH/DELETE /api/kb/{id}`
+#### `GET /api/kb` / `POST /api/kb` / `GET /api/kb/{id}` / `PUT /api/kb/{id}` / `DELETE /api/kb/{id}`
 
 ```json
 {
@@ -481,33 +587,43 @@ case item：`id, strategy, priority, module, name, steps, expected, mapped, pend
 }
 ```
 
-`kind`：`lightrag` | `external_chat`（外部 RAG 服务本身挂在 profile，KB 仍要黄金 QA）。  
-`PATCH` `{ "is_core": true }` 仅 admin。
+`kind`：`lightrag`（原生 query，支持切块与 2D 投影）| `external_chat`（外部 RAG 服务本身挂在 profile，仅 `chat/completions`）。  
+`PUT` `{ "is_core": true }` 标为核心库写审计。
 
-#### `POST /api/kb/{id}/docs`  multipart
+#### `POST /api/kb/{id}/documents`  multipart `file`
 
-建索引；后端生成 `doc_id` UUID 写入 LightRAG metadata。响应 `{ "doc_id", "filename" }`。  
-查询走 LightRAG **原生 query**，本平台 **无** `/api/lightrag/chat` 之类接口。
+上传文档建索引；后端生成 `doc_id` UUID 写入 LightRAG metadata，自动执行分块与向量化。响应 `{ "doc_id", "filename", "status": "indexed" }`。
 
-#### `DELETE /api/kb/{id}/docs/{doc_id}`
+#### `DELETE /api/kb/{id}/documents/{doc_id}`
 
-#### `GET/POST /api/gold-qa`  `GET/DELETE /api/gold-qa/{id}`
+删除指定文档及其向量切块索引。
+
+#### `POST /api/kb/{id}/query`
+
+执行 LightRAG 原生 4 模式检索测试（Playground），返回 Top-K 切块、相似度得分与重排位移。
 
 ```json
 {
-  "id": "uuid",
-  "kb_id": "uuid",
-  "name": "qa-v1",
-  "version": 1,
-  "row_count": 20
+  "query": "退款多久到账？",
+  "mode": "hybrid | local | global | naive",
+  "k": 5
 }
 ```
 
-`POST` 创建元数据：`{ "kb_id", "name" }`。
+响应：
 
-#### `POST /api/gold-qa/{id}/upload`
+```json
+{
+  "items": [
+    { "chunk_id": "d-01#c03", "doc_name": "product-manual.pdf", "similarity": 0.87, "text": "...", "hit": true }
+  ],
+  "metrics": { "hit_rate": 0.80, "mrr": 0.74, "recall": 0.85, "contain": 0.83 }
+}
+```
 
-列 `question,reference,expected_doc_ids[]?`；≤1 万条；覆盖 `version += 1`。JSONL/CSV。无 id 的样本不进 Hit Rate 分母。
+#### `GET /api/kb/{id}/gold-qa` / `POST /api/kb/{id}/gold-qa`
+
+黄金 QA 上传与维护。列 `question, reference, expected_doc_ids[]?`；覆盖上传后 `version += 1`。无 expected_doc_ids 的样本不进 Hit Rate 评估分母。支持通过大模型自动从已索引文档中抽取问答对并自动关联切块。
 
 ---
 
@@ -593,12 +709,32 @@ case item：`id, strategy, priority, module, name, steps, expected, mapped, pend
 
 ---
 
-### 3.11 报告  M2 起
+### 3.11 报告中心
+
+#### `GET /api/reports?kind=&task_id=&offset=&limit=`
+
+获取评测报告列表（支持根据评测类型 kind 过滤）。
+
+```json
+{
+  "items": [
+    {
+      "id": "r-bm-1",
+      "title": "Benchmark 报告 · smoke-20 v3",
+      "kind": "benchmark",
+      "task_id": "e5f2b8",
+      "child_stress_report_id": "r-st-1",
+      "created_at": "2026-08-15T06:02:00Z"
+    }
+  ],
+  "total": 1
+}
+```
 
 #### `GET /api/reports/{id}`
 
-登录 Cookie 或 `?share=` 未过期。  
-`?fmt=md` → `text/markdown` 下载。
+登录 Cookie 或 `?share=` 未过期免登访问。  
+`?fmt=md` → `text/markdown` 导出 Markdown 报表。
 
 JSON 公共头：
 
@@ -606,6 +742,8 @@ JSON 公共头：
 {
   "id": "uuid",
   "task_id": "uuid",
+  "child_stress_report_id": "uuid?",
+  "parent_report_id": "uuid?",
   "kind": "benchmark",
   "created_at": "...",
   "snapshot": { "dataset_version": 3, "metric": "contain", "profile_ids": [] },
@@ -614,9 +752,13 @@ JSON 公共头：
 }
 ```
 
-**benchmark** 另含：`scores[]`（每 profile 主指标）、`fail_rate`、`failed_items[]`、`judge?`（M3）。  
-**rag** 另含：`hit_rate_at_k`、`mrr`、`recall_at_k`、`k`、`answer_contain`、`modes[]`、`hit_denominator_note`（无 id 样本不进分母）、`degraded`（≥5pp 相对基线）。  
-**stress** 另含：`qps` `rt` `error_rate` `ttft_ms?` `tpot_ms?` `tokens_per_s?` `sla_p99_ms?` `sla_met?`（未填 SLA 则 **不出现** `sla_met`）`knee?` `est_cost_usd`。
+**benchmark** 另含：`scores[]`（每 profile 主指标、exact、rouge_l、fail_rate、latency、judge 得分及分维度 breakdown）、`judge_info`（裁判模型与评语归因）、`sample_items[]`。  
+**rag** 另含：`hit_rate_at_k`、`mrr`、`recall_at_k`、`k`、`answer_contain`、`modes[]`、`hit_denominator_note`（无 expected_doc_ids 样本不进分母）、`degraded`（≥5pp 相对基线）。  
+**stress** 另含：`qps` `rt` `error_rate` `ttft_ms?` `tpot_ms?` `tokens_per_s?` `sla_p99_ms?` `sla_met?`（未填 SLA 则不出现 `sla_met`）`knee?` `est_cost_usd`、`time_series[]`。
+
+#### `GET /api/reports/{id}/samples?filter=all|diff|fail&offset=&limit=`
+
+获取样本级逐题比对与 Bad Case 归因列表，含 `p1/p2` 模型预测内容、相似度切块、Judge 裁判评语与 Raw 请求/响应报文。
 
 #### `POST /api/reports/{id}/share`
 
@@ -624,19 +766,19 @@ JSON 公共头：
 { "url": "https://.../reports/{id}?share=token", "expires_at": "..." }
 ```
 
-有效期 7 天。
+生成公开只读链接，有效期 7 天，免登录访问。
 
 #### `POST /api/reports/{id}/baseline`
 
-仅 admin。
+冻结当前任务为基线版本（写操作审计）。
 
 ```json
-{ "frozen": true }
+{ "frozen": true, "task_id": "uuid" }
 ```
 
-Benchmark：同 dataset 版本 + 主指标才能对比。  
+Benchmark：同 dataset 版本 + 主指标才能对比 Δ 差值。  
 RAG：同 kb + gold 版本。  
-解冻 `{ "frozen": false }` 写审计。
+解冻 `{ "frozen": false }` 同样写审计。
 
 ---
 
@@ -670,12 +812,98 @@ RAG：同 kb + gold 版本。
 
 #### `PUT /api/admin/settings`
 
-仅 admin。部分更新。白名单 / 单价 / 角色相关变更写审计。
+全员同权（部分配置字段）。白名单 / 单价 / 密钥相关变更写入审计日志。
 
 #### `GET /api/admin/audit-logs?from=&to=&offset=&limit=`
 
-仅 admin。无前端页面。item：`at, actor_id, action, target, detail`（无 Key）。  
-action 至少：`login_failed` `role_change` `key_change` `baseline_freeze` `baseline_unfreeze` `whitelist_change` `prod_approve` `prod_stress`。
+查询平台合规审计日志。item：`at, actor_id, action, target, detail`（无 Key）。  
+action 至少包含：`login_failed` `role_change` `key_change` `baseline_freeze` `baseline_unfreeze` `whitelist_change` `prod_approve` `prod_stress`。
+
+---
+
+### 3.12.1 压测安全治理与白名单
+
+#### `GET /api/admin/stress/settings` / `PUT /api/admin/stress/settings`
+
+维护压测全局安全阈值（默认 QPS 上限、最大发压时长、60s 错误率 ≥ 50% 熔断阈值、Token 计费单价）。
+
+#### `GET /api/admin/stress/whitelist` / `POST /api/admin/stress/whitelist` / `DELETE /api/admin/stress/whitelist/{id}`
+
+维护目标发压 Host 白名单（支持 IP、域名、Port 以及 scope 环境范围匹配：`test / staging / prod`）。
+
+```json
+{
+  "id": "wl-01",
+  "host": "model-gateway.internal",
+  "scope": "test,staging,prod",
+  "creator": "admin",
+  "created_at": "2026-08-14"
+}
+```
+
+未在白名单中的目标禁止发压，直接返回 `WHITELIST` 阻断错误码。
+
+#### `GET /api/admin/stress/usage`
+
+获取近 7 天峰值 QPS 时序数据、阈值触碰率及月度累计开销。
+
+#### `GET /metrics`
+
+Prometheus 内置可观测性指标端点（内网 HTTP GET），输出前缀为 `ai_eval_stress_`，携带 `env, model, task_id` 标签。
+
+---
+
+### 3.13 调度内核与 Worker 节点管理
+
+#### `GET /api/dispatch/overview`
+
+获取调度中心大盘指标与内核雷达状态。
+
+```json
+{
+  "online_workers": 8,
+  "total_workers": 10,
+  "queue_depth": 3,
+  "avg_dispatch_cost_ms": 81,
+  "assigned_today": 126,
+  "strategy": "负载均衡",
+  "max_running_tasks": 4,
+  "heartbeat_interval_ms": 500
+}
+```
+
+#### `GET /api/dispatch/workers`
+
+获取全部 Worker 执行节点池状态列表。
+
+```json
+{
+  "items": [
+    {
+      "id": "worker-01",
+      "name": "GPU-Node-A1",
+      "caps": ["benchmark", "judge"],
+      "state": "busy",
+      "load_percent": 62,
+      "ram_usage": "4.8GB/16GB",
+      "current_task": "a1f3c2 · smoke-20 v3 (shard 2/5)",
+      "weight": 100
+    }
+  ]
+}
+```
+
+#### `POST /api/dispatch/workers`
+
+注册新 Worker 执行节点：`{ "id", "name", "caps": [], "weight": 100 }`。
+
+#### `PUT /api/dispatch/workers/{id}`
+
+修改节点状态或权重（如维护下线、排空 `draining`、更新能力标签）：`{ "state", "weight", "caps" }`。
+
+#### `PUT /api/dispatch/config`
+
+更新分发策略与全局并发容量：`{ "strategy": "负载均衡" | "优先级抢占" | "亲和性", "max_running_tasks": 4 }`。
 
 ---
 
