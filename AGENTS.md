@@ -65,12 +65,17 @@ ai-eval-platform/
 
 ## 3. Git 提交规范 (Git Commit Conventions)
 
-采用 **[Conventional Commits](https://www.conventionalcommits.org/)** 规范。提交格式：`<type>(<scope>): <subject>`。  
+采用 **[Conventional Commits](https://www.conventionalcommits.org/)** 规范。**提交描述（Subject 与 Body）必须使用中文**。  
 提交作者身份由宿主机当前的 Git 配置（`git config`）或 GitHub CLI 自动决定。
 
+- **提交格式**：`<type>(<scope>): <中文简述>`
 - **常见 Type**：`feat`（新功能）、`fix`（修缺陷）、`docs`（文档）、`style`（格式）、`refactor`（重构）、`test`（测试）、`ci`（CI/CD）、`chore`（杂项）。
 - **常用 Scope**：`api`、`worker`、`web`、`mcp`、`rag`、`stress`、`auth`、`dataset`、`profile`、`task`、`report`、`deploy`。
-- **示例**：`feat(api): add ws-ticket authentication endpoint`
+- **提交前强制门禁**：提交代码前**必须在本地先完成构建与自检**（`npm run build`、`ruff check .`、`pytest`），确保 0 错误后方可执行 `git commit`。
+- **中文示例**：
+  - `feat(api): 新增 WebSocket 短票鉴权接口`
+  - `fix(worker): 修复大模型裁判调用超时重试逻辑`
+  - `docs(agents): 更新自动部署排查指南与提交规范`
 
 ---
 
@@ -142,6 +147,6 @@ async def create_task(payload: TaskCreateIn, db: Session = Depends(get_db)) -> T
 ### 🟢 推荐操作五步法
 1. **先查后改**：查阅 PRD、API.md 与 Web-Prototype 原型；
 2. **中文注释**：编写规范的中文 docstring 与代码注释；
-3. **本地自检**：提交前确保 `ruff check .`、`pytest`、`npm run build` 全部 0 错误；
-4. **规范提交**：遵循 Conventional Commits 原子化提交；
+3. **本地先构建与自检**：提交前必须在本地执行 `npm run build`（前端打包与类型校验）和 `ruff check .` / `pytest`（后端），验证 100% 通过；
+4. **规范中文提交**：严格采用 `<type>(<scope>): <中文描述>` 格式进行原子化中文提交；
 5. **监控部署**：推送后关注 GitHub Actions CI/CD 流水线，异常时按 SOP 处置。
