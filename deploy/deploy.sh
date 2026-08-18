@@ -25,6 +25,13 @@ fi
 git fetch origin "$BRANCH"
 git reset --hard "origin/$BRANCH"
 
+# git reset 可能刚更新本脚本；重新加载一次，确保手动部署也使用当前提交的逻辑。
+if [ "${DEPLOY_SCRIPT_RELOADED:-0}" != "1" ]; then
+    echo "==> 重新加载当前提交的部署脚本"
+    export DEPLOY_SCRIPT_RELOADED=1
+    exec bash "$APP_DIR/deploy/deploy.sh"
+fi
+
 # 注入构建版本信息
 export BUILD_VERSION=$(git rev-parse --short HEAD)
 export BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")

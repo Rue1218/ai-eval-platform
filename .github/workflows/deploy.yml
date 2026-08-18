@@ -10,6 +10,11 @@ on:
       - 'Web-Prototype/**'
   workflow_dispatch:
 
+# 同一台生产服务器一次只执行一个部署，避免并发构建争抢资源并导致 SSH 连接被重置。
+concurrency:
+  group: ai-eval-production-deploy
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -40,4 +45,12 @@ jobs:
           port: ${{ secrets.SSH_PORT || 22 }}
           command_timeout: 30m
           script: |
-            bash /opt/ai-eval-platform/deploy/deploy.sh
+            set -e
+            APP_DIR=/opt/ai-eval-platform
+            # 先同步后再加载脚本，确保本次运行使用触发提交中的 deploy.sh，而不是旧版本。
+            if [ -d "$APP_DIR/.git" ]; then
+              cd "$APP_DIR"
+              git fetch origin main
+              git reset --hard origin/main
+            fi
+            exec bash "$APP_DIR/deploy/deploy.sh"
