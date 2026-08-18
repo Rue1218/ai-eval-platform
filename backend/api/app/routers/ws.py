@@ -16,6 +16,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..db import SessionLocal
+from ..llm import call_agent_model
 from ..models import (
     AuditLog,
     Dataset,
@@ -249,6 +250,97 @@ async def _send_confirm(db: Session, ws: WebSocket, session_id: str, card: dict,
     await _emit(db, ws, session_id, "confirm", card, state=state)
 
 
+# ─── LLM 驱动的目标解析（失败时回退到下方规则版） ───
+
+_LLM_SYSTEM = (
+    "你是 AI 测试评估平台的智能体助手，负责理解用户的评测目标并输出一个 JSON 对象。"
+    "只能输出 JSON 本身，不要输出任何解释、代码块或额外文字。JSON 字段：\n"
+    '{\n'
+    '  "intent": "benchmark" | "testcase" | "rag" | "report" | "chat",\n'
+    '  "reply": "给用户的一句话自然语言回复，简洁友好",\n'
+    '  "profile_names": ["被测协议档名称或 ID，可选"],\n'
+    '  "dataset_name": "数据集名称或 ID，可选",\n'
+    '  "with_stress": false\n'
+    '}\n'
+    "意图判定：benchmark=对比/评测模型或协议档在数据集上的表现（默认意图）；"
+    "testcase=根据 PRD/需求生成测试用例；rag=知识库检索评测；report=解读已有评测报告；"
+    "chat=与评测无关的闲聊。profile_names 与 dataset_name 仅在 benchmark 且用户明确提到时"
+    "从「可用资产」中挑选，不要编造不存在的名称，未提到就留空。with_stress 仅在用户要求压测时置 true。"
+)
+
+
+def _parse_llm_json(text: str) -> dict:
+    """从模型输出中容错提取 JSON 对象（允许 markdown 代码块或首尾文字）。"""
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        lines = [ln for ln in cleaned.splitlines() if not ln.strip().startswith("```")]
+        cleaned = "\n".join(lines).strip()
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start < 0 or end <= start:
+        raise ValueError("模型未返回可解析的 JSON 对象")
+    data = json.loads(cleaned[start : end + 1])
+    if not isinstance(data, dict):
+        raise ValueError("模型返回的不是 JSON 对象")
+    return data
+
+
+def _match_profiles(items: list[dict], names: list[str]) -> list[str]:
+    """把模型提到的协议档名称/ID 映射为已知 ID；未匹配或未提及时回退到首个。"""
+    if not items:
+        return []
+    if names:
+        picked: list[str] = []
+        for name in names:
+            hit = next(
+                (p for p in items if p["id"] == name or name in p["name"] or p["name"] in name),
+                None,
+            )
+            if hit and hit["id"] not in picked:
+                picked.append(hit["id"])
+        if picked:
+            return picked
+    return [items[0]["id"]]
+
+
+def _match_dataset(items: list[dict], name: str) -> str | None:
+    """把模型提到的数据集名称/ID 映射为已知 ID；未匹配或未提及时回退到首个。"""
+    if not items:
+        return None
+    if name:
+        hit = next(
+            (d for d in items if d["id"] == name or name in d["name"] or d["name"] in name),
+            None,
+        )
+        if hit:
+            return hit["id"]
+    return items[0]["id"]
+
+
+def _llm_plan(text: str, profiles: list[dict], datasets: list[dict], history: list[dict]) -> dict:
+    """在独立线程中调用 Agent 协议档模型，解析出结构化评测目标。
+
+    未配置协议档或上游异常时抛异常，由调用方回退到规则版。
+    """
+    db = SessionLocal()
+    try:
+        user_payload = {
+            "用户消息": text,
+            "对话历史": history,
+            "可用协议档": [{"id": p["id"], "name": p["name"], "model": p["model"]} for p in profiles],
+            "可用数据集": [{"id": d["id"], "name": d["name"]} for d in datasets],
+        }
+        raw = call_agent_model(
+            db,
+            system=_LLM_SYSTEM,
+            user=json.dumps(user_payload, ensure_ascii=False),
+            max_tokens=2048,
+        )
+        return _parse_llm_json(raw)
+    finally:
+        db.close()
+
+
 async def _handle_user_message(
     db: Session,
     ws: WebSocket,
@@ -257,12 +349,96 @@ async def _handle_user_message(
     attachments: list[dict],
     state: _ConnState,
 ) -> None:
-    """解析用户目标：意图拆解后调用对应短工具并生成确认卡。"""
+    """LLM 驱动解析用户目标；模型不可用时回退到规则版意图拆解。"""
     file_ids = _assert_attachments(db, attachments)
     db.add(Message(session_id=session.id, role="user", content=text, attachments=file_ids))
     session.updated_at = datetime.now(UTC)
     db.commit()
 
+    profiles = _profile_items(db)
+    datasets = _dataset_items(db)
+    history_rows = (
+        db.query(Message)
+        .filter(Message.session_id == session.id)
+        .order_by(Message.created_at.desc())
+        .limit(8)
+        .all()
+    )
+    history = [{"role": m.role, "content": m.content} for m in reversed(history_rows)]
+
+    plan: dict | None = None
+    try:
+        plan = await asyncio.to_thread(_llm_plan, text, profiles, datasets, history)
+    except Exception:
+        logger.info("LLM 目标解析失败，回退规则版", exc_info=True)
+
+    if plan is None:
+        await _handle_rule_intent(db, ws, session, text, state)
+        return
+
+    intent = str(plan.get("intent") or "benchmark").strip().lower()
+    reply = str(plan.get("reply") or "").strip()
+
+    if intent == "benchmark":
+        if not profiles:
+            await _emit(db, ws, session.id, "thought", {"text": "还没有配置任何协议档，请先到「协议档」页添加被测模型。"}, state=state)
+            return
+        if not datasets:
+            await _emit(db, ws, session.id, "thought", {"text": reply or "已识别为基准评测目标，但当前还没有数据集。请先在「数据集」页上传评测数据。"}, state=state)
+            return
+        raw_names = plan.get("profile_names") or []
+        if isinstance(raw_names, str):
+            raw_names = [raw_names]
+        profile_ids = _match_profiles(profiles, [str(n) for n in raw_names])
+        dataset_id = _match_dataset(datasets, str(plan.get("dataset_name") or ""))
+        with_stress = plan.get("with_stress")
+        with_stress = with_stress.strip().lower() in ("true", "1", "yes") if isinstance(with_stress, str) else bool(with_stress)
+        await _emit(db, ws, session.id, "thought", {"text": reply or "正在梳理基准评测目标，先列出可用协议档与数据集…"}, state=state)
+        await _call_tool(db, ws, session.id, "model.list", {}, {"items": profiles}, state)
+        await _call_tool(db, ws, session.id, "dataset.list", {}, {"items": datasets}, state)
+        await _send_confirm(
+            db,
+            ws,
+            session.id,
+            {
+                "kind": "benchmark",
+                "profile_ids": profile_ids,
+                "dataset_id": dataset_id,
+                "run": _default_run(),
+                "with_stress": with_stress,
+                "stress": _default_stress(),
+            },
+            state,
+        )
+        return
+
+    if intent == "testcase":
+        await _emit(db, ws, session.id, "thought", {"text": reply or "已识别为用例生成目标，请在确认卡中粘贴 PRD / 需求文本。"}, state=state)
+        await _send_confirm(db, ws, session.id, {"kind": "testcase", "case_source": {"text": ""}}, state)
+        return
+
+    if intent == "rag":
+        await _emit(db, ws, session.id, "thought", {"text": reply or "已识别为 RAG 检索评测目标。"}, state=state)
+        await _emit(db, ws, session.id, "error", {"code": "NOT_FOUND", "message": "RAG 检索评测能力将在 M3 接入，当前请先使用基准评测。"}, state=state)
+        return
+
+    if intent == "report":
+        await _emit(db, ws, session.id, "thought", {"text": reply or "报告解读能力将在 M4 接入。"}, state=state)
+        await _emit(db, ws, session.id, "error", {"code": "NOT_FOUND", "message": "报告解读能力将在 M4 接入，当前请先到评测报告页查看。"}, state=state)
+        return
+
+    # chat 或未知意图：仅自然语言回复
+    await _emit(db, ws, session.id, "thought", {"text": reply or "我可以帮你发起基准评测、生成测试用例等。请描述你的评测目标。"}, state=state)
+
+
+async def _handle_rule_intent(
+    db: Session,
+    ws: WebSocket,
+    session: AgentSession,
+    text: str,
+    state: _ConnState,
+) -> None:
+    """规则版意图拆解（LLM 不可用时的降级路径）。"""
     intent = _classify_intent(text)
 
     if intent == "testcase":
