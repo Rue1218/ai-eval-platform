@@ -11,6 +11,17 @@ import './styles/base.css'
 const pad = (n: number) => String(n).padStart(2, '0')
 const buildDate = new Date(__BUILD_TIME__)
 const utcTime = `${buildDate.getUTCFullYear()}-${pad(buildDate.getUTCMonth() + 1)}-${pad(buildDate.getUTCDate())} ${pad(buildDate.getUTCHours())}:${pad(buildDate.getUTCMinutes())}:${pad(buildDate.getUTCSeconds())}`
+// 北京时间：强制用 Asia/Shanghai 时区，不依赖浏览器本地时区
+const beijingTime = buildDate.toLocaleString('zh-CN', {
+  timeZone: 'Asia/Shanghai',
+  hour12: false,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+})
 
 console.log(
   '%cAI 测试与评估平台',
@@ -18,7 +29,7 @@ console.log(
 )
 console.log(`版本（Git Commit）：${__BUILD_VERSION__}`)
 console.log(`构建时间（UTC）：${utcTime}`)
-console.log(`构建时间（本地）：${buildDate.toLocaleString()}`)
+console.log(`构建时间（北京时间）：${beijingTime}`)
 
 const app = createApp(App)
 const pinia = createPinia()
