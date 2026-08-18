@@ -171,16 +171,20 @@ ai-eval-platform/
 
 本项目基于 **GitHub Actions + Docker Compose** 实现了完整的自动化 CI/CD 流水线。
 
-```mermaid
-flowchart LR
-    A[Git Commit Push] --> B[GitHub Actions CI: Ruff Lint + Pytest]
-    B -->|全绿通过| C[GitHub Actions CD: SSH Action]
-    C --> D[服务器 /opt/ai-eval-platform]
-    D --> E[deploy.sh: git reset --hard]
-    E --> F[docker compose build]
-    F --> G[docker compose up -d 自愈拉起]
-    G --> H[api 容器 entrypoint: alembic upgrade head]
-    H --> I[Nginx 80 端口提供服务]
+```text
+Git Commit Push ──► GitHub Actions CI (Ruff + Pytest)
+                         │ (全绿通过)
+                         ▼
+                    GitHub Actions CD (SSH) ──► 服务器 /opt/ai-eval-platform
+                                                    │
+                                                    ▼
+                                            deploy.sh: git reset --hard
+                                                    │
+                                                    ▼
+                                            docker compose build & up -d (自愈拉起)
+                                                    │
+                                                    ▼
+                                            Nginx 80 端口对外提供服务
 ```
 
 ### 4.1 CI 持续集成工作流 (`.github/workflows/ci.yml`)
