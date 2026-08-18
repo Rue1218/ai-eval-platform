@@ -161,6 +161,7 @@
               :card="item.card"
               :is-acked="item.isAcked"
               :ack-result="item.ackResult"
+              :submitting="item.submitting"
               @confirm="(patch) => handleConfirmAck(item, true, patch)"
               @cancel="() => handleConfirmAck(item, false)"
             />
@@ -309,6 +310,7 @@ const dispatchLogs = ref([
 ])
 
 let agentWs: AgentWebSocket | null = null
+let taskPollingTimer: number | null = null
 
 interface StreamItem {
   type: 'user' | 'agent' | 'thought' | 'tool' | 'confirm' | 'report' | 'error'
@@ -321,6 +323,7 @@ interface StreamItem {
   card?: TaskSpec
   isAcked?: boolean
   ackResult?: boolean
+  submitting?: boolean
   reportId?: string
   message?: string
   file?: any
@@ -348,11 +351,12 @@ function scrollToBottom(force = false) {
 }
 
 async function loadSessions() {
+  // 拉取服务端会话后优先保留当前选择，否则切换到第一条可用会话。
   try {
     const list = await api.sessions.list()
     if (list && list.length > 0) {
       sessions.value = list
-      if (!currentSessionId.value) {
+      if (!list.some((session) => session.id === currentSessionId.value)) {
         currentSessionId.value = list[0].id
       }
     }
@@ -362,9 +366,13 @@ async function loadSessions() {
 }
 
 async function selectSession(sid: string) {
+  // 会话切换需恢复持久化内容，并以最后事件号建立 WebSocket 补发连接。
   currentSessionId.value = sid
   events.value = []
-  initWebSocket(sid)
+  activeTask.value = null
+  stopTaskPolling()
+  const lastEventId = await restoreSession(sid)
+  initWebSocket(sid, lastEventId)
 }
 
 async function handleCreateSession() {
@@ -377,13 +385,15 @@ async function handleCreateSession() {
   }
 }
 
-function initWebSocket(sessionId: string) {
+function initWebSocket(sessionId: string, lastEventId = 0) {
+  // 每个会话只维持一个连接，重建前关闭旧连接以避免事件串流。
   if (agentWs) {
     agentWs.close()
     agentWs = null
   }
 
   agentWs = new AgentWebSocket(sessionId)
+  agentWs.lastEventId = lastEventId
   agentWs.onStatus((connected) => {
     wsConnected.value = connected
   })
@@ -391,6 +401,37 @@ function initWebSocket(sessionId: string) {
     handleWsEvent(ev)
   })
   agentWs.connect()
+}
+
+async function restoreSession(sessionId: string): Promise<number> {
+  // 恢复会话消息与持久化事件，并返回断线补发所需的最后事件号。
+  try {
+    const history = await api.sessions.getMessages(sessionId)
+    const messages = history.messages || []
+    const persistedEvents = history.events || []
+
+    events.value = messages.map((row: any) => ({
+      type: row.role === 'user' ? 'user' : 'agent',
+      text: row.content || '',
+      file: row.attachments?.length ? { filename: '已上传附件' } : undefined,
+    }))
+
+    let lastEventId = 0
+    persistedEvents.forEach((row: any) => {
+      lastEventId = Math.max(lastEventId, Number(row.event_id) || 0)
+      handleWsEvent({
+        event: row.event,
+        event_id: row.event_id,
+        task_id: row.task_id,
+        ...(row.payload || {}),
+      } as WsServerEvent)
+    })
+    scrollToBottom(true)
+    return lastEventId
+  } catch (err: any) {
+    message.error(err.message || '恢复会话记录失败')
+    return 0
+  }
 }
 
 function handleWsEvent(ev: WsServerEvent) {
@@ -486,15 +527,78 @@ function sendPredefined(prompt: string) {
   handleUserSend(prompt)
 }
 
-function handleConfirmAck(item: StreamItem, confirmed: boolean, patch?: Partial<TaskSpec>) {
-  item.isAcked = true
-  item.ackResult = confirmed
-  if (confirmed && patch && item.card) {
-    Object.assign(item.card, patch)
+async function handleConfirmAck(item: StreamItem, confirmed: boolean, patch?: Partial<TaskSpec>) {
+  // 确认卡经 REST 真正创建任务，WebSocket 仅同步对话控制事件。
+  if (item.submitting || item.isAcked) return
+
+  if (!confirmed) {
+    item.isAcked = true
+    item.ackResult = false
+    agentWs?.sendConfirmAck(false)
+    return
   }
 
-  if (agentWs) {
-    agentWs.sendConfirmAck(confirmed, patch)
+  const spec: TaskSpec = {
+    ...(item.card as TaskSpec),
+    ...(patch || {}),
+    session_id: currentSessionId.value,
+  }
+  item.submitting = true
+  try {
+    const task = await api.tasks.create(spec)
+    item.card = spec
+    item.isAcked = true
+    item.ackResult = true
+    activeTask.value = task
+    startTaskPolling(task.id)
+    agentWs?.sendConfirmAck(true, spec)
+    isGenerating.value = false
+    message.success('任务已入队，将在当前会话持续同步状态')
+  } catch (err: any) {
+    events.value.push({ type: 'error', message: err.message || '任务入队失败' })
+    scrollToBottom()
+  } finally {
+    item.submitting = false
+  }
+}
+
+function stopTaskPolling() {
+  // 停止当前会话任务的状态轮询，避免切换会话后继续更新旧任务。
+  if (taskPollingTimer !== null) {
+    window.clearInterval(taskPollingTimer)
+    taskPollingTimer = null
+  }
+}
+
+function startTaskPolling(taskId: string) {
+  // 长任务通过 Worker 执行，前端轮询任务接口以获取持久化进度。
+  stopTaskPolling()
+  void refreshActiveTask(taskId)
+  taskPollingTimer = window.setInterval(() => {
+    void refreshActiveTask(taskId)
+  }, 3000)
+}
+
+async function refreshActiveTask(taskId: string) {
+  // 到达终态时停止轮询并在对话流中补充报告或结果反馈。
+  try {
+    const task = await api.tasks.get(taskId)
+    activeTask.value = task
+    if (!['succeeded', 'failed', 'cancelled'].includes(task.status)) return
+
+    stopTaskPolling()
+    activeTask.value = null
+    if (task.status === 'succeeded' && task.report_id) {
+      events.value.push({ type: 'report', reportId: task.report_id })
+    } else if (task.status === 'cancelled') {
+      events.value.push({ type: 'thought', text: '任务已取消。', done: true })
+    } else {
+      events.value.push({ type: 'error', message: task.progress?.message || '任务执行失败' })
+    }
+    scrollToBottom()
+  } catch (err: any) {
+    stopTaskPolling()
+    message.error(err.message || '同步任务状态失败')
   }
 }
 
@@ -507,6 +611,7 @@ async function handleCancelActiveTask(taskId: string) {
     await api.tasks.cancel(taskId)
     message.success('已发送任务取消指令')
     activeTask.value = null
+    stopTaskPolling()
   } catch (err: any) {
     message.error(err.message || '取消失败')
   }
@@ -524,7 +629,7 @@ function formatRelativeTime(dateStr?: string) {
 onMounted(async () => {
   await loadSessions()
   if (currentSessionId.value) {
-    initWebSocket(currentSessionId.value)
+    await selectSession(currentSessionId.value)
   }
 })
 
@@ -532,6 +637,7 @@ onBeforeUnmount(() => {
   if (agentWs) {
     agentWs.close()
   }
+  stopTaskPolling()
 })
 </script>
 

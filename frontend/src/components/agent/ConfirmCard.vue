@@ -186,8 +186,8 @@
       <div class="spacer"></div>
       <template v-if="!isAcked">
         <button class="btn btn-secondary btn-sm" @click="handleCancel">取消</button>
-        <button class="btn btn-sign btn-sm" :disabled="loading" @click="handleConfirm">
-          {{ loading ? '入队中...' : '确认并开始' }}
+        <button class="btn btn-sign btn-sm" :disabled="loading || submitting" @click="handleConfirm">
+          {{ loading || submitting ? '入队中...' : '确认并开始' }}
         </button>
       </template>
     </div>
@@ -204,6 +204,7 @@ const props = defineProps<{
   card: TaskSpec
   isAcked?: boolean
   ackResult?: boolean
+  submitting?: boolean
 }>()
 
 const emit = defineEmits<{

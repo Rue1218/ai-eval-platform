@@ -15,7 +15,7 @@
         ref="uploadRef"
         :default-upload="false"
         :max="1"
-        accept=".pdf,.md,.txt,.html,.docx"
+        accept=".pdf,.md,.txt,.html,.json,.yaml,.yml"
         @change="handleFileChange"
       >
         <n-upload-dragger>

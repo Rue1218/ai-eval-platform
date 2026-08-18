@@ -220,6 +220,9 @@ export interface TestCase {
   module: string
   name: string
   expected: string
+  precondition?: string
+  steps?: string
+  test_type?: string
   mapped?: boolean
   pending?: boolean
   question?: string
@@ -251,6 +254,10 @@ export interface KnowledgeBase {
   owner: string
   profile_id?: string
   created_at?: string
+  capabilities?: {
+    projection: boolean
+    rerank_compare: boolean
+  }
 }
 
 export interface KbDocument {

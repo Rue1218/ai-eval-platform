@@ -26,7 +26,7 @@
         <button v-if="currentKb?.kind === 'lightrag'" class="btn btn-secondary btn-sm" @click="showUploadDocModal = true">
           ↑ 上传文档
         </button>
-        <button class="btn btn-sign btn-sm" @click="showLaunchDrawer = true">发起 RAG 评测</button>
+        <button class="btn btn-sign btn-sm" :disabled="!currentKb" @click="showLaunchDrawer = true">发起 RAG 评测</button>
       </div>
     </div>
 
@@ -55,6 +55,7 @@
             </span>
             <span v-if="d.status === 'indexed'" class="badge badge-succeeded"><i class="bdot"></i>已索引</span>
             <span v-else class="badge badge-running"><i class="bdot"></i>索引中</span>
+            <button class="link-btn danger" style="font-size: 11px" title="删除文档" @click.stop="handleDeleteDoc(d)">删除</button>
           </div>
         </div>
 
@@ -77,7 +78,7 @@
 
         <div class="section-gap" style="gap: 8px">
           <div
-            v-for="ck in mockChunks"
+            v-for="ck in chunkPreview"
             :key="ck.chunk_id"
             class="chunk"
             :class="{ hit: isChunkHit(ck.chunk_id) }"
@@ -135,8 +136,8 @@
           </span>
         </div>
 
-        <!-- 向量空间 2D 降维投影 SVG -->
-        <div class="chart-box mb16">
+        <!-- 向量空间 2D 降维投影仅在后端明确声明支持时展示。 -->
+        <div v-if="supportsProjection" class="chart-box mb16">
           <div class="row-between mb8">
             <span class="small" style="font-weight: 600">向量空间 2D 降维投影 (Vector Projection)</span>
             <span class="small tertiary mono">bge-large-zh · 22 chunks</span>
@@ -174,6 +175,9 @@
             <span><i style="background: var(--c-kb)"></i>Top-5 召回邻域</span>
           </div>
         </div>
+        <div v-else class="info-strip mb16">
+          当前知识库未启用向量投影能力，检索结果以服务端返回的 Top-K 切块为准。
+        </div>
 
         <!-- Top-5 相似度召回结果 -->
         <div class="rail-label">Top-5 相似度召回结果</div>
@@ -199,9 +203,10 @@
           </div>
         </div>
 
-        <!-- 重排对比 -->
-        <div class="rail-label">重排对比 · Rerank Rank Shifts</div>
-        <div class="row" style="align-items: flex-start; gap: 12px">
+        <!-- 重排对比仅在后端明确声明支持时展示。 -->
+        <template v-if="supportsRerankCompare">
+          <div class="rail-label">重排对比 · Rerank Rank Shifts</div>
+          <div class="row" style="align-items: flex-start; gap: 12px">
           <div class="grow">
             <div class="small tertiary mb8">向量初检召回序</div>
             <div v-for="(r, i) in recallResults" :key="i" class="tag-soft mb8" style="width: 100%; justify-content: flex-start">
@@ -227,6 +232,10 @@
               </span>
             </div>
           </div>
+          </div>
+        </template>
+        <div v-else class="info-strip">
+          当前知识库未启用重排对比能力。
         </div>
       </div>
 
@@ -235,19 +244,19 @@
         <div class="rail-label">本次检索指标 · K=5</div>
         <div class="kpi-grid mb16" style="grid-template-columns: 1fr 1fr; gap: 10px">
           <div class="kpi" style="padding: 12px">
-            <div class="kpi-num mono" style="font-size: 20px; color: var(--c-kb)">0.80</div>
+            <div class="kpi-num mono" style="font-size: 20px; color: var(--c-kb)">{{ formatMetric(queryMetrics.hit_rate) }}</div>
             <div class="kpi-label">Hit Rate@5</div>
           </div>
           <div class="kpi" style="padding: 12px">
-            <div class="kpi-num mono" style="font-size: 20px; color: var(--c-kb)">0.74</div>
+            <div class="kpi-num mono" style="font-size: 20px; color: var(--c-kb)">{{ formatMetric(queryMetrics.mrr) }}</div>
             <div class="kpi-label">MRR 倒数排名</div>
           </div>
           <div class="kpi" style="padding: 12px">
-            <div class="kpi-num mono" style="font-size: 20px">0.85</div>
+            <div class="kpi-num mono" style="font-size: 20px">{{ formatMetric(queryMetrics.recall) }}</div>
             <div class="kpi-label">Recall@5</div>
           </div>
           <div class="kpi" style="padding: 12px">
-            <div class="kpi-num mono" style="font-size: 20px">0.83</div>
+            <div class="kpi-num mono" style="font-size: 20px">{{ formatMetric(queryMetrics.contain) }}</div>
             <div class="kpi-label">答案 contain 分</div>
           </div>
         </div>
@@ -304,8 +313,8 @@
       <div class="panel mb16">
         <div class="panel-title">绑定 RAG 服务档</div>
         <div class="row">
-          <span class="tag-soft mono">rag-客服外挂 · rag-chat-v2</span>
-          <span class="small tertiary">恰好 1 个，在协议档管理维护</span>
+          <span class="tag-soft mono">{{ currentKb.profile_id || '未绑定协议档' }}</span>
+          <span class="small tertiary">外部库恰好绑定 1 个协议档，在协议档管理维护</span>
         </div>
       </div>
 
@@ -322,16 +331,37 @@
       </div>
     </div>
 
+    <div v-else class="info-strip page-narrow" style="max-width: 760px; margin: 20px auto">
+      暂无知识库。请先新建知识库，或确认知识库服务已部署。
+    </div>
+
     <!-- 弹窗与抽屉 -->
+    <n-modal v-model:show="showCreateKbModal" preset="card" title="新建知识库" style="width: 460px">
+      <div class="field mb16">
+        <label class="field-label">知识库名称 <span class="req">*</span></label>
+        <n-input v-model:value="newKbName" placeholder="例如：客服产品手册" />
+      </div>
+      <div class="field">
+        <label class="field-label">知识库类型</label>
+        <n-select v-model:value="newKbKind" :options="kbKindOptions" />
+      </div>
+      <template #footer>
+        <div style="display: flex; justify-content: flex-end; gap: 8px">
+          <n-button @click="showCreateKbModal = false">取消</n-button>
+          <n-button type="primary" :loading="creatingKb" @click="handleCreateKb">创建知识库</n-button>
+        </div>
+      </template>
+    </n-modal>
+
     <UploadKbDocModal
       v-model:show="showUploadDocModal"
-      :kb-id="activeKbId"
+      :kb="currentKb"
       @success="loadDocs"
     />
 
     <UploadGoldQaModal
       v-model:show="showUploadGoldQaModal"
-      :kb-id="activeKbId"
+      :kb="currentKb"
       @success="loadGoldQas"
     />
 
@@ -343,76 +373,52 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
-import { useMessage } from 'naive-ui'
+import { ref, computed, onMounted, watch } from 'vue'
+import { useDialog, useMessage } from 'naive-ui'
 import { api } from '../api/http'
-import type { KnowledgeBase, KbDoc, GoldQA } from '../api/types'
+import type { KnowledgeBase, KbChunk, KbDoc, GoldQA } from '../api/types'
 import UploadKbDocModal from '../components/modals/UploadKbDocModal.vue'
 import UploadGoldQaModal from '../components/modals/UploadGoldQaModal.vue'
 import RagLaunchDrawer from '../components/drawers/RagLaunchDrawer.vue'
 
 const message = useMessage()
+const dialog = useDialog()
 
-const kbs = ref<KnowledgeBase[]>([
-  { id: 'kb-default', name: 'default', kind: 'lightrag', doc_count: 12, is_core: true, owner: 'admin' },
-  { id: 'kb-cs', name: '外挂客服', kind: 'external_chat', doc_count: null, is_core: false, owner: 'alice' },
-])
-const activeKbId = ref<string>('kb-default')
+const kbs = ref<KnowledgeBase[]>([])
+const activeKbId = ref<string>('')
 const currentKb = computed(() => kbs.value.find(k => k.id === activeKbId.value) || kbs.value[0])
+const supportsProjection = computed(() => currentKb.value?.capabilities?.projection === true)
+const supportsRerankCompare = computed(() => currentKb.value?.capabilities?.rerank_compare === true)
 
-const docs = ref<KbDoc[]>([
-  { doc_id: 'd-01', filename: 'product-manual.pdf', status: 'indexed', size: '2.4 MB' },
-  { doc_id: 'd-02', filename: 'faq-2026.md', status: 'indexed', size: '88 KB' },
-  { doc_id: 'd-03', filename: 'refund-policy.html', status: 'indexing', size: '41 KB' },
-])
-const activeDocId = ref<string>('d-01')
+const docs = ref<KbDoc[]>([])
+const activeDocId = ref<string>('')
 const currentDoc = computed(() => docs.value.find(d => d.doc_id === activeDocId.value) || docs.value[0])
+const chunkPreview = ref<KbChunk[]>([])
 
-const goldQas = ref<GoldQA[]>([
-  { id: 'gq-1', kb_id: 'kb-default', name: 'qa-v1', version: 2, row_count: 20, owner: 'admin', created_at: new Date().toISOString() },
-])
+const goldQas = ref<GoldQA[]>([])
 
 const chunkSize = ref(512)
 const overlap = ref(64)
 const queryMode = ref('hybrid')
 const queryText = ref('退款多久到账？')
-const queried = ref(true)
+const queried = ref(false)
 const isQuerying = ref(false)
 
 const showCreateKbModal = ref(false)
 const showUploadDocModal = ref(false)
 const showUploadGoldQaModal = ref(false)
 const showLaunchDrawer = ref(false)
-
-const CHUNK_TEXTS = [
-  '……账户体系分为个人账户与企业账户。企业账户支持多人审批与额度管理，审批流最多两级……',
-  '……结算账户用于接收平台打款。修改默认结算账户需进入「设置-账户-结算账户」并完成短信验证……',
-  '……付款方式支持余额、银行卡与对公转账。余额提现单笔不超过 5 万元，单日不超过 20 万元……',
-  '……退款审核通过后 1-3 个工作日原路退回。全额退款退回手续费，部分退款按剩余比例退回……',
-  '……账单支持按项目维度导出 CSV。历史账单最长可查询 24 个月，支持自定义时间范围……',
-  '……电子发票 24 小时内发送至预留邮箱；增值税专用发票需填写邮寄地址，3 个工作日内寄出……',
-  '……连续输错支付密码 5 次将锁定 2 小时，可通过人脸验证立即解锁。风控拦截请联系客服……',
-  '……冻结金额为进行中交易的预占金额，交易完成后自动解冻或扣减，可在账单详情中查看……',
+const creatingKb = ref(false)
+const newKbName = ref('')
+const newKbKind = ref<KnowledgeBase['kind']>('lightrag')
+const kbKindOptions = [
+  { label: 'LightRAG 原生知识库', value: 'lightrag' },
+  { label: '外部 Chat 知识库', value: 'external_chat' },
 ]
 
-const mockChunks = computed(() => {
-  const count = chunkSize.value === 256 ? 14 : chunkSize.value === 1024 ? 4 : 8
-  return Array.from({ length: count }, (_, i) => ({
-    chunk_id: `${activeDocId.value || 'd-01'}#c${String(i + 1).padStart(2, '0')}`,
-    tokens: Math.round(chunkSize.value * (0.75 + ((i * 37) % 25) / 100)),
-    text: CHUNK_TEXTS[i % CHUNK_TEXTS.length],
-  }))
-})
-
-const recallResults = ref([
-  { chunk: 'd-01#c03', doc: 'product-manual.pdf', sim: 0.87, hit: true, text: CHUNK_TEXTS[3] },
-  { chunk: 'd-01#c06', doc: 'product-manual.pdf', sim: 0.78, hit: false, text: CHUNK_TEXTS[6] },
-  { chunk: 'd-01#c01', doc: 'product-manual.pdf', sim: 0.74, hit: false, text: CHUNK_TEXTS[1] },
-  { chunk: 'd-02#c11', doc: 'faq-2026.md', sim: 0.69, hit: false, text: '……FAQ：退款相关问题的统一答复口径，含到账时间与手续费说明……' },
-  { chunk: 'd-01#c04', doc: 'product-manual.pdf', sim: 0.62, hit: false, text: CHUNK_TEXTS[4] },
-])
-
-const rerankedIds = ref(['d-01#c03', 'd-01#c01', 'd-01#c06', 'd-02#c11', 'd-01#c04'])
+const recallResults = ref<Array<{ chunk: string; doc: string; sim: number; hit: boolean; text: string }>>([])
+const rerankedIds = ref<string[]>([])
+const queryMetrics = ref({ hit_rate: null as number | null, mrr: null as number | null, recall: null as number | null, contain: null as number | null })
 
 const scatterPoints = [
   { x: 62, y: 66 }, { x: 104, y: 150 }, { x: 145, y: 44 }, { x: 176, y: 110 }, { x: 208, y: 171 },
@@ -424,75 +430,209 @@ const scatterPoints = [
 const hitIndices = [9, 13, 7, 21, 10]
 
 function isChunkHit(cid: string) {
+  // 仅根据当前检索接口返回的命中切块高亮预览。
   return queried.value && recallResults.value.some(r => r.chunk === cid)
 }
 
+// 将接口可选指标转换为固定两位显示，未检索时明确显示占位符。
+function formatMetric(value: number | null) {
+  return value === null ? '—' : value.toFixed(2)
+}
+
 function getShiftDelta(chunkId: string, afterIdx: number) {
+  // 在后端启用重排能力时计算展示用的排名变化。
   const beforeIdx = recallResults.value.findIndex(r => r.chunk === chunkId)
   if (beforeIdx === -1) return 0
   return beforeIdx - afterIdx
 }
 
-function selectKb(k: KnowledgeBase) {
+// 切换知识库时清除上一个库的派生视图，并重新拉取当前库资源。
+async function selectKb(k: KnowledgeBase) {
   activeKbId.value = k.id
-  loadDocs()
-  loadGoldQas()
+  docs.value = []
+  chunkPreview.value = []
+  goldQas.value = []
+  recallResults.value = []
+  rerankedIds.value = []
+  queryMetrics.value = { hit_rate: null, mrr: null, recall: null, contain: null }
+  queried.value = false
+  await Promise.all([loadDocs(), loadGoldQas()])
 }
 
 function fillAndQuery(q: string) {
+  // 快速填充预置查询后复用正式检索流程。
   queryText.value = q
-  handleQuery()
+  void handleQuery()
 }
 
+// 调用 LightRAG 原生 query，并用契约中的 Top-K 与指标回填 Playground。
 async function handleQuery() {
-  if (!queryText.value.trim()) return
+  if (!currentKb.value) {
+    message.warning('请先创建或选择知识库')
+    return
+  }
+  if (currentKb.value.kind !== 'lightrag') {
+    message.warning('外部 Chat 知识库不支持原生检索 Playground')
+    return
+  }
+  if (!queryText.value.trim()) {
+    message.warning('请输入测试 Query')
+    return
+  }
   isQuerying.value = true
-  await new Promise(r => setTimeout(r, 400))
-  queried.value = true
-  isQuerying.value = false
-  message.success(`已返回 ${recallResults.value.length} 个检索切块 · 模式=${queryMode.value}`)
-}
-
-function markAsCore() {
-  if (currentKb.value) {
-    currentKb.value.is_core = true
-    message.success('已标为核心知识库')
+  try {
+    const result = await api.kb.query(currentKb.value.id, {
+      query: queryText.value.trim(),
+      mode: queryMode.value,
+      k: 5,
+    })
+    const items = Array.isArray(result.items) ? result.items : []
+    recallResults.value = items.map((item: Record<string, unknown>) => ({
+      chunk: String(item.chunk_id || ''),
+      doc: String(item.doc_name || item.doc_id || '未知文档'),
+      sim: Number.isFinite(Number(item.similarity)) ? Number(item.similarity) : 0,
+      hit: item.hit === true,
+      text: String(item.text || ''),
+    }))
+    const metrics = result.metrics || {}
+    queryMetrics.value = {
+      hit_rate: Number.isFinite(Number(metrics.hit_rate)) ? Number(metrics.hit_rate) : null,
+      mrr: Number.isFinite(Number(metrics.mrr)) ? Number(metrics.mrr) : null,
+      recall: Number.isFinite(Number(metrics.recall)) ? Number(metrics.recall) : null,
+      contain: Number.isFinite(Number(metrics.contain)) ? Number(metrics.contain) : null,
+    }
+    rerankedIds.value = Array.isArray(result.reranked_ids) ? result.reranked_ids.map(String) : []
+    queried.value = true
+    message.success(`已返回 ${recallResults.value.length} 个检索切块 · 模式=${queryMode.value}`)
+  } catch (err: any) {
+    message.error(err.message || '检索请求失败')
+  } finally {
+    isQuerying.value = false
   }
 }
 
+// 标为核心库必须落库，避免刷新页面后错误保留本地状态。
+async function markAsCore() {
+  if (!currentKb.value) return
+  try {
+    const updated = await api.kb.update(currentKb.value.id, { is_core: true })
+    const index = kbs.value.findIndex(kb => kb.id === updated.id)
+    if (index !== -1) kbs.value[index] = updated
+    message.success('已标为核心知识库')
+  } catch (err: any) {
+    message.error(err.message || '设置核心知识库失败')
+  }
+}
+
+// 当前契约未定义浏览器端 AI 生成黄金 QA 的调用入口，不能在前端虚构已入库结果。
 function handleAiGenQa() {
-  message.info('AI 正在基于已索引切块提炼高质量黄金问答对...')
-  setTimeout(() => {
-    goldQas.value.unshift({
-      id: `gq-${Date.now()}`,
-      kb_id: activeKbId.value,
-      name: `AI-提炼-问答集-v${goldQas.value.length + 1}`,
-      version: 1,
-      row_count: 25,
-      owner: 'admin',
-      created_at: new Date().toISOString(),
+  message.warning('黄金 QA 的 AI 生成功能尚未提供正式接口，请上传符合规范的 QA 文件')
+}
+
+// 创建知识库后以接口响应更新选择态，再加载该库的子资源。
+async function handleCreateKb() {
+  const name = newKbName.value.trim()
+  if (!name) {
+    message.warning('请输入知识库名称')
+    return
+  }
+  creatingKb.value = true
+  try {
+    const created = await api.kb.create({ name, kind: newKbKind.value })
+    kbs.value.unshift(created)
+    newKbName.value = ''
+    showCreateKbModal.value = false
+    await selectKb(created)
+    message.success('知识库已创建')
+  } catch (err: any) {
+    message.error(err.message || '创建知识库失败')
+  } finally {
+    creatingKb.value = false
+  }
+}
+
+// 删除文档会同时删除对应索引，确认后才发出不可逆请求。
+function handleDeleteDoc(doc: KbDoc) {
+  if (!currentKb.value) return
+  dialog.warning({
+    title: '删除知识库文档',
+    content: `将删除「${doc.filename}」及其切块索引，此操作不可恢复。`,
+    positiveText: '删除',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      try {
+        await api.kb.deleteDoc(currentKb.value!.id, doc.doc_id)
+        docs.value = docs.value.filter(item => item.doc_id !== doc.doc_id)
+        if (activeDocId.value === doc.doc_id) activeDocId.value = docs.value[0]?.doc_id || ''
+        await loadChunkPreview()
+        message.success('文档及其索引已删除')
+      } catch (err: any) {
+        message.error(err.message || '删除文档失败')
+      }
+    },
+  })
+}
+
+// 读取当前文档的服务端切块预览；切块参数仅影响预览，不在浏览器生成样本正文。
+async function loadChunkPreview() {
+  if (!currentKb.value || !activeDocId.value) {
+    chunkPreview.value = []
+    return
+  }
+  try {
+    chunkPreview.value = await api.kb.getDocChunks(currentKb.value.id, activeDocId.value, {
+      chunk_size: chunkSize.value,
+      overlap: overlap.value,
     })
-    message.success('AI 已成功提炼生成 25 条黄金问答对并入库')
-  }, 1200)
+  } catch (err: any) {
+    chunkPreview.value = []
+    message.error(err.message || '加载文档切块失败')
+  }
 }
 
 async function loadDocs() {
+  // 获取当前知识库文档，并同步首个可预览文档。
+  if (!activeKbId.value) return
   try {
     const res = await api.kb.listDocs(activeKbId.value)
-    if (res && res.length) docs.value = res
-  } catch {}
+    docs.value = res
+    if (!docs.value.some(doc => doc.doc_id === activeDocId.value)) {
+      activeDocId.value = docs.value[0]?.doc_id || ''
+    }
+    await loadChunkPreview()
+  } catch (err: any) {
+    docs.value = []
+    chunkPreview.value = []
+    message.error(err.message || '加载知识库文档失败')
+  }
 }
 
 async function loadGoldQas() {
+  // 获取当前知识库关联的黄金 QA 版本列表。
+  if (!activeKbId.value) return
   try {
-    const res = await api.kb.getGoldQA(activeKbId.value)
-    if (res && res.length) goldQas.value = res
-  } catch {}
+    goldQas.value = await api.kb.getGoldQA(activeKbId.value)
+  } catch (err: any) {
+    goldQas.value = []
+    message.error(err.message || '加载黄金 QA 失败')
+  }
 }
 
-onMounted(() => {
-  loadDocs()
-  loadGoldQas()
+// 只要切换文档或调整预览参数，就重新请求当前文档的切块结果。
+watch([activeDocId, chunkSize, overlap], () => {
+  void loadChunkPreview()
+})
+
+// 首次加载知识库清单后，选择首项并读取其文档与黄金 QA。
+onMounted(async () => {
+  try {
+    const list = await api.kb.list()
+    kbs.value = list
+    const first = list[0]
+    if (first) await selectKb(first)
+  } catch (err: any) {
+    message.error(err.message || '加载知识库失败')
+  }
 })
 </script>
 
@@ -505,6 +645,16 @@ onMounted(() => {
 @media (max-width: 1200px) {
   .kb-grid-3col {
     grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 700px) {
+  .kb-bar {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .kb-bar > .row:last-child {
+    flex-wrap: wrap;
   }
 }
 .doc-item {

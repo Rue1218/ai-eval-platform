@@ -54,14 +54,17 @@
             </span>
           </div>
 
-          <div class="row" style="gap: 8px; align-items: center; margin-left: auto">
+          <div class="row" style="gap: 8px; align-items: center; margin-left: auto; flex-wrap: wrap; justify-content: flex-end">
             <button class="btn btn-secondary btn-sm" @click="addCase">+ 新增用例</button>
             <button class="btn btn-ai btn-sm" @click="handleAiGenCases">✨ AI 生成用例集</button>
             <button class="btn btn-ai btn-sm" @click="handleAiFillCase">AI 补全断言</button>
+            <button class="btn btn-secondary btn-sm" :disabled="!hasUnsavedChanges || savingCases" @click="persistCases">
+              {{ savingCases ? '保存中…' : '保存修改' }}
+            </button>
             <button class="btn btn-secondary btn-sm" @click="exportXlsx">导出 xlsx</button>
             <button class="btn btn-secondary btn-sm" @click="exportXmind">导出 xmind</button>
             <button
-              v-if="currentSet.status !== 'confirmed'"
+              v-if="currentSet.status === 'generated'"
               class="btn btn-sign btn-sm"
               @click="confirmAllCases"
             >
@@ -103,7 +106,7 @@
             </thead>
             <tbody>
               <tr v-for="(c, idx) in cases" :key="c.id">
-                <td><input type="checkbox" :checked="!c.pending" /></td>
+                <td><input v-model="selectedCaseIds" type="checkbox" :value="c.id" /></td>
                 <td class="cell-edit">
                   <span class="kind-tag" :class="getStrategyTagClass(c.strategy)">{{ c.strategy }}</span>
                 </td>
@@ -116,8 +119,8 @@
                     v-model="c.module"
                     class="cell-input"
                     autofocus
-                    @blur="editingCell = null"
-                    @keyup.enter="editingCell = null"
+                    @blur="finishEditing"
+                    @keyup.enter="finishEditing"
                   />
                   <span v-else>{{ c.module }}</span>
                 </td>
@@ -127,8 +130,8 @@
                     v-model="c.name"
                     class="cell-input"
                     autofocus
-                    @blur="editingCell = null"
-                    @keyup.enter="editingCell = null"
+                    @blur="finishEditing"
+                    @keyup.enter="finishEditing"
                   />
                   <span v-else style="font-weight: 500">{{ c.name }}</span>
                 </td>
@@ -138,8 +141,8 @@
                     v-model="c.expected"
                     class="cell-input"
                     autofocus
-                    @blur="editingCell = null"
-                    @keyup.enter="editingCell = null"
+                    @blur="finishEditing"
+                    @keyup.enter="finishEditing"
                   />
                   <span v-else>{{ c.expected }}</span>
                 </td>
@@ -168,104 +171,136 @@
 
         <!-- 4. 底部状态栏与批量映射 -->
         <div class="ws-status-bar">
-          <span>已选 <b class="num mono">{{ adoptedCount }}</b> / {{ cases.length }} 条</span>
-          <select v-model="mapTarget" class="select" style="height: 28px; padding: 2px 24px 2px 8px; font-size: 12px">
-            <option value="dataset">映射至基准数据集 · smoke-20</option>
-            <option value="gold_qa">映射至黄金 QA · qa-v1</option>
+          <span>已选 <b class="num mono">{{ selectedCaseIds.length }}</b> / {{ cases.length }} 条</span>
+          <select v-model="mapTarget" class="select" style="height: 28px; padding: 2px 24px 2px 8px; font-size: 12px" @change="loadMappingTargets">
+            <option value="dataset">映射至基准数据集</option>
+            <option value="gold_qa">映射至黄金 QA</option>
+          </select>
+          <select v-model="mapTargetId" class="select" style="height: 28px; padding: 2px 24px 2px 8px; font-size: 12px" :disabled="mappingTargets.length === 0">
+            <option value="">选择目标</option>
+            <option v-for="target in mappingTargets" :key="target.id" :value="target.id">{{ target.name }}</option>
           </select>
           <button class="btn btn-secondary btn-sm" @click="handleBatchMap">批量执行映射</button>
           <span class="grow"></span>
           <span class="tertiary">采纳率: <b class="num mono">{{ adoptionRate }}%</b></span>
         </div>
       </div>
+      <div v-else class="info-strip" style="margin: 20px">
+        暂无用例集。可新建空用例集，或通过 AI 生成候选后保存。
+      </div>
     </div>
+
+    <n-modal v-model:show="showCreateSetModal" preset="card" title="新建用例集" style="width: 440px">
+      <div class="field">
+        <label class="field-label">用例集名称 <span class="req">*</span></label>
+        <n-input v-model:value="newSetName" placeholder="例如：支付模块回归用例" />
+      </div>
+      <template #footer>
+        <div style="display: flex; justify-content: flex-end; gap: 8px">
+          <n-button @click="showCreateSetModal = false">取消</n-button>
+          <n-button type="primary" :loading="creatingSet" @click="createCaseSet">创建</n-button>
+        </div>
+      </template>
+    </n-modal>
+
+    <n-modal v-model:show="showGenerateCasesModal" preset="card" title="AI 生成用例候选" style="width: 560px">
+      <div class="field">
+        <label class="field-label">PRD / OpenAPI 内容 <span class="req">*</span></label>
+        <n-input v-model:value="generationSource" type="textarea" :autosize="{ minRows: 6, maxRows: 10 }" placeholder="粘贴待分析的 PRD、OpenAPI 或业务约束说明" />
+      </div>
+      <template #footer>
+        <div style="display: flex; justify-content: flex-end; gap: 8px">
+          <n-button @click="showGenerateCasesModal = false">取消</n-button>
+          <n-button type="primary" :loading="generatingCases" @click="generateCaseCandidates">生成候选</n-button>
+        </div>
+      </template>
+    </n-modal>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
+import { api } from '../api/http'
+import type { CaseSet, KnowledgeBase, TestCase } from '../api/types'
+
+interface MappingTarget {
+  id: string
+  name: string
+}
 
 const message = useMessage()
-
 const treeSearch = ref('')
-const activeSetId = ref('cs-pay')
-const mapTarget = ref('dataset')
+const activeSetId = ref('')
+const mapTarget = ref<'dataset' | 'gold_qa'>('dataset')
+const mapTargetId = ref('')
+const mappingTargets = ref<MappingTarget[]>([])
+const caseSets = ref<CaseSet[]>([])
+const cases = ref<TestCase[]>([])
+const selectedCaseIds = ref<string[]>([])
+const savingCases = ref(false)
+const hasUnsavedChanges = ref(false)
+const editingCell = ref<{ row: TestCase; field: keyof TestCase } | null>(null)
+const showCreateSetModal = ref(false)
+const newSetName = ref('')
+const creatingSet = ref(false)
+const showGenerateCasesModal = ref(false)
+const generationSource = ref('')
+const generatingCases = ref(false)
+const folders = ref([{ id: 'case-sets', name: '用例集', open: true, items: [] as Array<{ id: string; name: string; status: CaseSet['status'] }> }])
 
-const caseSets = ref([
-  {
-    id: 'cs-pay',
-    name: 'PRD-支付',
-    status: 'generated',
-    generated_count: 40,
-    confirmed_count: 0,
-    expires_in_h: 70.2,
-    checks: [
-      { level: 'error', code: 'no_core_positive', message: '无核心正向用例' },
-      { level: 'error', code: 'missing_constraint_negative', message: '缺约束反向用例' },
-    ],
-  },
-  { id: 'cs-login', name: 'PRD-登录', status: 'confirmed', generated_count: 32, confirmed_count: 26, expires_in_h: 0, checks: [] },
-  { id: 'cs-coupon', name: 'PRD-优惠券', status: 'cancelled', generated_count: 45, confirmed_count: 0, expires_in_h: 0, checks: [] },
-])
-
-const currentSet = computed(() => caseSets.value.find(s => s.id === activeSetId.value) || caseSets.value[0])
-
-const folders = ref([
-  {
-    id: 'f-cases-core',
-    name: '业务需求生成集',
-    open: true,
-    items: [
-      { id: 'cs-pay', name: 'PRD-支付', status: 'generated' },
-      { id: 'cs-login', name: 'PRD-登录', status: 'confirmed' },
-      { id: 'cs-coupon', name: 'PRD-优惠券', status: 'cancelled' },
-    ],
-  },
-])
-
+const currentSet = computed(() => caseSets.value.find(item => item.id === activeSetId.value) || caseSets.value[0])
 const filteredFolders = computed(() => {
-  const kw = treeSearch.value.trim().toLowerCase()
-  if (!kw) return folders.value
-  return folders.value.map(f => ({
-    ...f,
-    items: f.items.filter(it => it.name.toLowerCase().includes(kw)),
-  })).filter(f => f.items.length > 0)
+  const keyword = treeSearch.value.trim().toLowerCase()
+  if (!keyword) return folders.value
+  return folders.value.map(folder => ({
+    ...folder,
+    items: folder.items.filter(item => item.name.toLowerCase().includes(keyword)),
+  })).filter(folder => folder.items.length > 0)
 })
-
-const cases = ref([
-  { id: 'c-001', strategy: '正向', priority: 'P0', module: '登录', name: '正确账密登录成功', expected: '进入工作台首页', mapped: true, pending: false, precondition: '账号状态正常' },
-  { id: 'c-002', strategy: '正向', priority: 'P0', module: '支付', name: '余额充足时支付成功', expected: '订单状态变为已支付', mapped: true, pending: false, precondition: '账户余额 ≥ 订单金额' },
-  { id: 'c-003', strategy: '反向', priority: 'P1', module: '登录', name: '错误密码登录', expected: '提示用户名或密码错误', mapped: false, pending: true, precondition: '无' },
-  { id: 'c-004', strategy: '反向', priority: 'P1', module: '支付', name: '余额不足支付', expected: '返回余额不足错误码', mapped: true, pending: false, precondition: '账户余额 < 订单金额' },
-  { id: 'c-005', strategy: '边界', priority: 'P1', module: '支付', name: '支付金额为 0.01 元', expected: '允许最小金额支付', mapped: true, pending: false, precondition: '收银台已加载' },
-  { id: 'c-006', strategy: '边界', priority: 'P2', module: '支付', name: '支付金额达单笔上限 5 万元', expected: '按限额规则拦截并弹窗提示', mapped: false, pending: true, precondition: '单笔限额已配置' },
-  { id: 'c-007', strategy: '状态', priority: 'P1', module: '订单', name: '重复提交支付请求', expected: '幂等返回同一订单号', mapped: true, pending: false, precondition: '订单已创建' },
-  { id: 'c-008', strategy: '场景', priority: 'P2', module: '支付', name: '支付中断网重试', expected: '网络恢复后可查询最终状态', mapped: true, pending: false, precondition: '弱网模拟环境' },
-])
-
 const strategyCounts = computed(() => {
-  const strats = ['正向', '反向', '边界', '状态', '场景']
-  return strats.map(s => ({
-    name: s,
-    count: cases.value.filter(c => c.strategy === s).length,
-  }))
+  const strategies: TestCase['strategy'][] = ['正向', '反向', '边界', '状态', '场景']
+  return strategies.map(strategy => ({ name: strategy, count: cases.value.filter(item => item.strategy === strategy).length }))
 })
+const adoptionRate = computed(() => Math.round((cases.value.filter(item => item.mapped).length / (cases.value.length || 1)) * 100))
 
-const adoptedCount = computed(() => cases.value.filter(c => !c.pending).length)
-const adoptionRate = computed(() => Math.round((adoptedCount.value / (cases.value.length || 1)) * 100))
+// 目录树由接口用例集清单驱动，避免保留原型中的固定名称与状态。
+function syncCaseSetTree(list: CaseSet[]) {
+  folders.value[0].items = list.map(item => ({ id: item.id, name: item.name, status: item.status }))
+}
 
-const editingCell = ref<{ row: any; field: string } | null>(null)
-function editCell(row: any, field: string) {
+function editCell(row: TestCase, field: keyof TestCase) {
+  // 已确认用例集不可编辑，浏览器侧提前阻止无效编辑操作。
+  if (currentSet.value?.status === 'confirmed') return
   editingCell.value = { row, field }
 }
 
-function selectCaseSet(id: string) {
-  activeSetId.value = id
+function finishEditing() {
+  // 失焦后只标记待保存，不在浏览器中假装已持久化。
+  editingCell.value = null
+  hasUnsavedChanges.value = true
 }
 
-function getStrategyTagClass(st: string) {
-  switch (st) {
+// 切换用例集时拉取详情与具体用例，不复用上一套的本地编辑内容。
+async function selectCaseSet(id: string) {
+  activeSetId.value = id
+  try {
+    const detail = await api.cases.getSet(id)
+    const index = caseSets.value.findIndex(item => item.id === id)
+    if (index !== -1) caseSets.value[index] = { ...caseSets.value[index], ...detail }
+    cases.value = detail.cases || []
+    selectedCaseIds.value = cases.value.filter(item => item.selected || !item.pending).map(item => item.id)
+    hasUnsavedChanges.value = false
+  } catch (err: any) {
+    cases.value = []
+    selectedCaseIds.value = []
+    message.error(err.message || '加载用例集详情失败')
+  }
+}
+
+function getStrategyTagClass(strategy: TestCase['strategy']) {
+  // 将既定五类策略映射到现有视觉令牌。
+  switch (strategy) {
     case '正向': return 'kind-testcase'
     case '反向': return 'kind-stress'
     case '边界': return 'kind-profiles'
@@ -275,79 +310,228 @@ function getStrategyTagClass(st: string) {
 }
 
 function addCase() {
-  cases.value.push({
+  // 新增空白用例，填写后需通过保存按钮提交。
+  if (!currentSet.value || currentSet.value.status === 'confirmed') return
+  const item: TestCase = {
     id: `c-${Date.now()}`,
     strategy: '正向',
     priority: 'P1',
     module: '通用',
-    name: '新建业务测试用例',
-    expected: '断言结果符合预期',
+    name: '',
+    expected: '',
+    precondition: '',
     mapped: false,
     pending: false,
-    precondition: '无',
-  })
-  message.success('已添加新用例')
+  }
+  cases.value.push(item)
+  selectedCaseIds.value.push(item.id)
+  hasUnsavedChanges.value = true
+  message.info('已新增空白用例，填写后点击“保存修改”落库')
 }
 
-function deleteCase(idx: number) {
-  cases.value.splice(idx, 1)
-  message.success('已删除用例')
+function deleteCase(index: number) {
+  // 删除在保存前仅影响本地编辑态，避免误删服务端快照。
+  if (currentSet.value?.status === 'confirmed') return
+  const [removed] = cases.value.splice(index, 1)
+  if (removed) selectedCaseIds.value = selectedCaseIds.value.filter(id => id !== removed.id)
+  hasUnsavedChanges.value = true
+  message.info('已删除用例，点击“保存修改”后生效')
 }
 
-function handleCreateCaseSet() {
-  message.info('请在智能体对话中上传 PRD 文档，由 Agent 自动拆解生成')
-}
-
-function handleAiGenCases() {
-  message.info('AI 正在依据 PRD 规范补充覆盖正向、约束反向与异常用例...')
-  setTimeout(() => {
-    cases.value.unshift({
-      id: `c-ai-${Date.now()}`,
-      strategy: '反向',
-      priority: 'P0',
-      module: '支付约束',
-      name: '非白名单商户调用支付接口',
-      expected: '系统拦截并记录 WHITELIST 审计日志',
-      mapped: true,
-      pending: false,
-      precondition: '商户号未入白名单',
-    })
-    if (currentSet.value) {
-      currentSet.value.checks = []
-    }
-    message.success('AI 已补全约束反向用例，规则自检通过！')
-  }, 1000)
-}
-
-function handleAiFillCase() {
-  message.info('AI 正在自动推导未填写的前置条件与断言表达式...')
-  setTimeout(() => {
-    cases.value.forEach(c => {
-      if (c.precondition === '无') c.precondition = '前置服务已就绪'
-    })
-    message.success('已补全用例前置与断言')
-  }, 800)
-}
-
-function confirmAllCases() {
-  if (currentSet.value) {
-    currentSet.value.status = 'confirmed'
-    message.success('用例集已正式确认入库！')
+// 保存全部编辑用例，已确认用例集的不可修改规则由后端作最终校验。
+async function persistCases(): Promise<boolean> {
+  if (!currentSet.value || savingCases.value) return false
+  savingCases.value = true
+  try {
+    const saved = await api.cases.saveCases(currentSet.value.id, cases.value)
+    cases.value = saved
+    const set = caseSets.value.find(item => item.id === currentSet.value!.id)
+    if (set) set.generated_count = saved.length
+    hasUnsavedChanges.value = false
+    message.success('用例修改已保存')
+    return true
+  } catch (err: any) {
+    message.error(err.message || '保存用例失败')
+    return false
+  } finally {
+    savingCases.value = false
   }
 }
 
-function handleBatchMap() {
-  cases.value.forEach(c => { c.mapped = true; c.pending = false })
-  message.success(`已批量将 ${cases.value.length} 条用例映射至 ${mapTarget.value === 'dataset' ? '基准数据集' : '黄金问答集'}`)
+function handleCreateCaseSet() {
+  // 每次打开新建弹窗清空上一次未提交的名称。
+  newSetName.value = ''
+  showCreateSetModal.value = true
+}
+
+// 新建空用例集只在接口成功后更新目录树，避免“创建成功”假象。
+async function createCaseSet() {
+  const name = newSetName.value.trim()
+  if (!name) {
+    message.warning('请输入用例集名称')
+    return
+  }
+  creatingSet.value = true
+  try {
+    const created = await api.cases.createSet({ name })
+    caseSets.value.unshift(created)
+    syncCaseSetTree(caseSets.value)
+    showCreateSetModal.value = false
+    await selectCaseSet(created.id)
+    message.success('用例集已创建')
+  } catch (err: any) {
+    message.error(err.message || '创建用例集失败')
+  } finally {
+    creatingSet.value = false
+  }
+}
+
+function handleAiGenCases() {
+  // 生成前必须由用户提供 PRD 或 OpenAPI 文本。
+  generationSource.value = ''
+  showGenerateCasesModal.value = true
+}
+
+// API 仅返回候选；将候选加入当前表格供人工审核，用户保存后才会实际入库。
+async function generateCaseCandidates() {
+  if (!currentSet.value) {
+    message.warning('请先新建或选择用例集')
+    return
+  }
+  if (!generationSource.value.trim()) {
+    message.warning('请输入 PRD、OpenAPI 或业务约束内容')
+    return
+  }
+  generatingCases.value = true
+  try {
+    const candidates = await api.cases.generateCases({ source_text: generationSource.value.trim(), max_count: 45 })
+    cases.value.push(...candidates.map(item => ({ ...item, id: item.id || `c-${Date.now()}`, mapped: false, pending: false })))
+    selectedCaseIds.value = cases.value.map(item => item.id)
+    hasUnsavedChanges.value = candidates.length > 0 || hasUnsavedChanges.value
+    showGenerateCasesModal.value = false
+    message.success(`已加入 ${candidates.length} 条 AI 候选，请审核后保存`)
+  } catch (err: any) {
+    message.error(err.message || 'AI 生成候选失败')
+  } finally {
+    generatingCases.value = false
+  }
+}
+
+// 契约没有定义单独的“AI 补全断言”写接口，不能在浏览器伪造已补全状态。
+function handleAiFillCase() {
+  message.warning('请使用“AI 生成用例集”补充候选；单独补全断言接口尚未提供')
+}
+
+// 确认前先保存未提交编辑，再用实际映射目标完成确认入库。
+async function confirmAllCases() {
+  if (!currentSet.value) return
+  if (!mapTargetId.value) {
+    message.warning('请选择确认入库的映射目标')
+    return
+  }
+  if (hasUnsavedChanges.value && !await persistCases()) return
+  try {
+    await api.cases.confirmSet(currentSet.value.id, {
+      ok: true,
+      edits: cases.value,
+      mapping_target: mapTarget.value,
+      target_id: mapTargetId.value,
+    })
+    await selectCaseSet(currentSet.value.id)
+    message.success('用例集已正式确认入库')
+  } catch (err: any) {
+    message.error(err.message || '确认用例集失败')
+  }
+}
+
+// 批量映射严格提交选中用例与目标 ID，不再把全部本地行标记为已映射。
+async function handleBatchMap() {
+  if (!currentSet.value) return
+  if (!mapTargetId.value) {
+    message.warning('请选择映射目标')
+    return
+  }
+  if (!selectedCaseIds.value.length) {
+    message.warning('请至少选择一条用例')
+    return
+  }
+  try {
+    await api.cases.mapCases(currentSet.value.id, {
+      target: mapTarget.value,
+      target_id: mapTargetId.value,
+      case_ids: selectedCaseIds.value,
+    })
+    cases.value = cases.value.map(item => selectedCaseIds.value.includes(item.id) ? { ...item, mapped: true, pending: false } : item)
+    message.success(`已映射 ${selectedCaseIds.value.length} 条用例`)
+  } catch (err: any) {
+    message.error(err.message || '批量映射失败')
+  }
+}
+
+// 拉取当前映射类型的实际可选目标，防止使用原型中写死的目标标识。
+async function loadMappingTargets() {
+  mapTargetId.value = ''
+  try {
+    if (mapTarget.value === 'dataset') {
+      mappingTargets.value = (await api.datasets.list()).map(item => ({ id: item.id, name: `${item.name} · v${item.version}` }))
+      return
+    }
+    const kbs: KnowledgeBase[] = await api.kb.list()
+    const qaLists = await Promise.all(kbs.map(async kb => api.kb.getGoldQA(kb.id)))
+    mappingTargets.value = qaLists.flat().map(item => ({ id: item.id, name: `${item.name} · v${item.version}` }))
+  } catch (err: any) {
+    mappingTargets.value = []
+    message.error(err.message || '加载映射目标失败')
+  }
+}
+
+// 服务端负责生成规范导出文件，页面只负责下载二进制结果。
+async function downloadCaseSet(fmt: 'xlsx' | 'xmind') {
+  if (!currentSet.value) return
+  try {
+    const blob = await api.cases.exportSet(currentSet.value.id, fmt)
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `${currentSet.value.name}.${fmt}`
+    anchor.click()
+    URL.revokeObjectURL(url)
+    message.success(`用例集已导出为 ${fmt}`)
+  } catch (err: any) {
+    message.error(err.message || '导出用例集失败')
+  }
 }
 
 function exportXlsx() {
-  message.success('用例集已成功导出为 Excel (.xlsx)')
+  // 触发服务端 Excel 导出。
+  void downloadCaseSet('xlsx')
 }
 
 function exportXmind() {
-  message.success('用例集已成功导出为脑图 (.xmind)')
+  // 触发服务端脑图导出。
+  void downloadCaseSet('xmind')
 }
+
+async function loadCaseSets() {
+  try {
+    const list = await api.cases.listSets()
+    caseSets.value = list
+    syncCaseSetTree(list)
+    const selected = list.find(item => item.id === activeSetId.value) || list[0]
+    if (selected) await selectCaseSet(selected.id)
+    else cases.value = []
+  } catch (err: any) {
+    caseSets.value = []
+    cases.value = []
+    syncCaseSetTree([])
+    message.error(err.message || '加载用例集失败')
+  }
+}
+
+onMounted(() => {
+  void loadCaseSets()
+  void loadMappingTargets()
+})
 </script>
 
 <style scoped>
@@ -358,6 +542,7 @@ function exportXmind() {
   display: grid;
   grid-template-columns: 260px 1fr;
   height: 100%;
+  min-width: 0;
   background: var(--bg-main);
   border-radius: 14px;
   overflow: hidden;
@@ -425,6 +610,7 @@ function exportXmind() {
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-width: 0;
   min-height: 0;
   background: var(--bg-main);
 }
@@ -447,6 +633,7 @@ function exportXmind() {
 }
 .ws-grid-container {
   flex: 1;
+  min-width: 0;
   overflow: auto;
 }
 .ws-status-bar {
@@ -473,5 +660,34 @@ function exportXmind() {
 .prio-P3 { background: #F3F4F6; color: #6B7280; }
 .st-ok {
   color: var(--accent-success);
+}
+@media (max-width: 900px) {
+  .cases-workbench {
+    height: auto;
+    min-height: calc(100dvh - var(--topbar-h) - 24px);
+  }
+  .ft-layout {
+    grid-template-columns: 1fr;
+    height: auto;
+    overflow: visible;
+  }
+  .ft-sidebar {
+    max-height: 250px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .workspace-main {
+    min-height: 660px;
+  }
+  .ws-toolbar .row:last-child {
+    width: 100%;
+    margin-left: 0 !important;
+    justify-content: flex-start !important;
+  }
+  .strategy-banner,
+  .ws-status-bar {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
 }
 </style>

@@ -12,6 +12,7 @@ import {
   type DatasetRow,
   type KnowledgeBase,
   type KbDocument,
+  type KbChunk,
   type GoldQA,
   type Task,
   type TaskSpec,
@@ -442,6 +443,27 @@ export const api = {
       const { data } = await http.get(`/api/datasets/${id}/rows`, { params })
       return Array.isArray(data) ? data : data.items || []
     },
+    // 批量保存表格编辑结果，确保行内编辑不会只停留在浏览器内存。
+    async saveRows(id: string, rows: Array<DatasetRow & Record<string, unknown>>): Promise<DatasetRow[]> {
+      if (getDataMode() === 'mock') return rows
+      const { data } = await http.put(`/api/datasets/${id}/rows`, { rows })
+      return Array.isArray(data) ? data : data.items || rows
+    },
+    // 请求 AI 候选行；候选必须由页面确认后再经 saveRows 落库。
+    async generateRows(payload: Record<string, unknown>): Promise<Array<DatasetRow & Record<string, unknown>>> {
+      if (getDataMode() === 'mock') {
+        return [{
+          row_no: Number(payload.row_no) || Date.now(),
+          question: 'AI 候选：如何查看任务执行进度？',
+          reference: '在任务中心选择对应任务，即可查看实时进度与事件。',
+          context: '平台操作',
+          tags: '任务中心,AI候选',
+          difficulty: '简单',
+        }]
+      }
+      const { data } = await http.post('/api/datasets/ai-generate', payload)
+      return Array.isArray(data) ? data : data.items || []
+    },
   },
 
   // 7. 用例工作台
@@ -465,7 +487,53 @@ export const api = {
       const { data } = await http.get(`/api/case-sets/${id}`)
       return data
     },
-    async confirmSet(id: string, payload: { ok: boolean; edits?: any[] }): Promise<void> {
+    // 创建空用例集后仍需保存具体用例，避免把生成候选误当成已入库。
+    async createSet(payload: { name: string }): Promise<CaseSet> {
+      if (getDataMode() === 'mock') {
+        const item: CaseSet = {
+          id: 'cs-' + Date.now(),
+          task_id: '',
+          name: payload.name,
+          status: 'generated',
+          generated_count: 0,
+          confirmed_count: 0,
+          expires_in_h: 72,
+          checks: [],
+          cases: [],
+          created_at: new Date().toISOString(),
+        }
+        mockStore.caseSets.unshift(item)
+        return item
+      }
+      const { data } = await http.post('/api/case-sets', payload)
+      return data
+    },
+    // 批量保存用例编辑结果，后端负责已确认用例集的不可编辑校验。
+    async saveCases(id: string, cases: TestCase[]): Promise<TestCase[]> {
+      if (getDataMode() === 'mock') {
+        mockStore.cases = cases
+        return cases
+      }
+      const { data } = await http.put(`/api/case-sets/${id}/cases`, { cases })
+      return Array.isArray(data) ? data : data.items || cases
+    },
+    // 仅生成未落库候选；调用方需要创建用例集并保存候选后才可显示创建成功。
+    async generateCases(payload: Record<string, unknown>): Promise<TestCase[]> {
+      if (getDataMode() === 'mock') {
+        return [{
+          id: 'c-ai-' + Date.now(),
+          strategy: '反向',
+          priority: 'P1',
+          module: '通用',
+          name: 'AI 候选：异常输入校验',
+          expected: '系统拒绝无效输入并返回明确错误信息',
+          precondition: '服务已就绪',
+        }]
+      }
+      const { data } = await http.post('/api/case-sets/ai-generate', payload)
+      return Array.isArray(data) ? data : data.items || []
+    },
+    async confirmSet(id: string, payload: { ok: boolean; edits?: TestCase[]; mapping_target?: 'dataset' | 'gold_qa'; target_id?: string }): Promise<void> {
       if (getDataMode() === 'mock') {
         const cs = mockStore.caseSets.find((x) => x.id === id)
         if (cs) {
@@ -484,9 +552,20 @@ export const api = {
       }
       await http.post(`/api/case-sets/${id}/cancel`, { reason })
     },
-    async mapCases(id: string, payload: { target_type: 'dataset' | 'gold_qa'; target_id: string }): Promise<void> {
-      if (getDataMode() === 'mock') return
+    async mapCases(id: string, payload: { target: 'dataset' | 'gold_qa'; target_id: string; case_ids: string[] }): Promise<void> {
+      if (getDataMode() === 'mock') {
+        mockStore.cases = mockStore.cases.map(item => payload.case_ids.includes(item.id) ? { ...item, mapped: true, pending: false } : item)
+        return
+      }
       await http.post(`/api/case-sets/${id}/map`, payload)
+    },
+    // 导出由服务端生成，前端仅负责触发文件下载。
+    async exportSet(id: string, fmt: 'xlsx' | 'xmind'): Promise<Blob> {
+      if (getDataMode() === 'mock') {
+        return new Blob([JSON.stringify(mockStore.cases, null, 2)], { type: 'application/json' })
+      }
+      const { data } = await http.get(`/api/case-sets/${id}/export`, { params: { fmt }, responseType: 'blob' })
+      return data
     },
   },
 
@@ -576,16 +655,30 @@ export const api = {
       }
       await http.delete(`/api/kb/${id}/documents/${docId}`)
     },
-    async query(id: string, queryPayload: { query: string; mode?: string }): Promise<any> {
+    // 读取服务端按当前切块参数生成的预览，浏览器不自行伪造切块文本。
+    async getDocChunks(id: string, docId: string, params: { chunk_size: number; overlap: number }): Promise<KbChunk[]> {
+      if (getDataMode() === 'mock') {
+        const count = params.chunk_size === 256 ? 14 : params.chunk_size === 1024 ? 4 : 8
+        return Array.from({ length: count }, (_, index) => ({
+          chunk_id: `${docId}#c${String(index + 1).padStart(2, '0')}`,
+          doc_id: docId,
+          tokens: Math.round(params.chunk_size * (0.75 + ((index * 37) % 25) / 100)),
+          text: `第 ${index + 1} 个服务端切块预览。`,
+        }))
+      }
+      const { data } = await http.get(`/api/kb/${id}/documents/${docId}/chunks`, { params })
+      return Array.isArray(data) ? data : data.items || []
+    },
+    async query(id: string, queryPayload: { query: string; mode?: string; k?: number }): Promise<any> {
       if (getDataMode() === 'mock') {
         return {
           query: queryPayload.query,
           mode: queryPayload.mode || 'hybrid',
-          response: 'LightRAG 混合检索结果：根据提供的知识库文档，平台支持混合召回与图谱实体关联...',
-          chunks: [
-            { chunk_id: 'ck-01', doc_id: 'd-01', text: 'AI 测试与评估平台产品手册第一章：评测引擎与三协议调度规范...', tokens: 180, similarity: 0.89 },
-            { chunk_id: 'ck-02', doc_id: 'd-02', text: 'FAQ 常见问题第 12 条：关于黄金 QA 集制作及 Hit Rate 指标定义...', tokens: 140, similarity: 0.82 },
+          items: [
+            { chunk_id: 'd-01#c03', doc_name: 'product-manual.pdf', text: 'AI 测试与评估平台产品手册第一章：评测引擎与三协议调度规范...', similarity: 0.89, hit: true },
+            { chunk_id: 'd-02#c11', doc_name: 'faq-2026.md', text: 'FAQ 常见问题第 12 条：关于黄金 QA 集制作及 Hit Rate 指标定义...', similarity: 0.82, hit: false },
           ],
+          metrics: { hit_rate: 0.8, mrr: 0.74, recall: 0.85, contain: 0.83 },
         }
       }
       const { data } = await http.post(`/api/kb/${id}/query`, queryPayload)

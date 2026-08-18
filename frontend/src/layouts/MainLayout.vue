@@ -1,7 +1,8 @@
 <template>
   <div class="app" :class="{ folded: theme.collapsed }">
     <!-- 侧边栏 -->
-    <aside class="sidebar">
+    <button v-if="mobileNavOpen" class="mobile-nav-backdrop" aria-label="关闭导航菜单" @click="closeMobileNavigation"></button>
+    <aside class="sidebar" :class="{ 'mobile-open': mobileNavOpen }">
       <div class="brand" @click="theme.toggleCollapsed()" title="点击折叠/展开侧栏">
         <div class="brand-mark">A</div>
         <div class="brand-text">
@@ -20,6 +21,7 @@
           class="nav-item"
           :class="{ active: currentPath === item.path }"
           :style="currentPath === item.path ? { '--t': item.t, '--c': item.c } : {}"
+          @click="closeMobileNavigation"
         >
           <span class="nav-ico">
             <component :is="item.icon" />
@@ -36,6 +38,7 @@
           class="nav-item"
           :class="{ active: currentPath === item.path }"
           :style="currentPath === item.path ? { '--t': item.t, '--c': item.c } : {}"
+          @click="closeMobileNavigation"
         >
           <span class="nav-ico">
             <component :is="item.icon" />
@@ -67,6 +70,13 @@
     <main class="main">
       <!-- 顶栏 -->
       <header class="topbar">
+        <button class="mobile-nav-toggle" title="打开导航菜单" @click="toggleMobileNavigation">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <line x1="4" y1="6" x2="20" y2="6" />
+            <line x1="4" y1="12" x2="20" y2="12" />
+            <line x1="4" y1="18" x2="20" y2="18" />
+          </svg>
+        </button>
         <div class="topbar-title">
           <span>{{ currentTitle }}</span>
         </div>
@@ -196,6 +206,7 @@ const modeStore = useModeStore()
 
 const showChangePwd = ref(auth.mustChangePassword)
 const pwdLoading = ref(false)
+const mobileNavOpen = ref(false)
 const pwdForm = ref({
   oldPassword: '',
   newPassword: '',
@@ -283,6 +294,16 @@ const userInitial = computed(() => {
   return name.charAt(0).toUpperCase()
 })
 
+// 移动端侧栏改为覆盖式导航，避免占用工作区横向空间。
+function toggleMobileNavigation() {
+  mobileNavOpen.value = !mobileNavOpen.value
+}
+
+function closeMobileNavigation() {
+  // 路由切换或点击遮罩后关闭覆盖式移动导航。
+  mobileNavOpen.value = false
+}
+
 function handleLogout() {
   dialog.warning({
     title: '退出登录？',
@@ -330,6 +351,10 @@ async function submitChangePassword() {
 }
 .app.folded {
   grid-template-columns: var(--sidebar-w-fold) 1fr;
+}
+.mobile-nav-backdrop,
+.mobile-nav-toggle {
+  display: none;
 }
 
 .sidebar {
@@ -638,5 +663,105 @@ async function submitChangePassword() {
   padding: 0;
   display: flex;
   flex-direction: column;
+}
+
+@media (max-width: 700px) {
+  .app,
+  .app.folded {
+    display: block;
+    height: 100dvh;
+  }
+  .mobile-nav-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    border: 0;
+    background: rgba(17, 24, 39, 0.38);
+  }
+  .sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 21;
+    width: min(280px, calc(100vw - 52px));
+    padding: 14px 12px;
+    transform: translateX(-105%);
+    transition: transform 0.2s ease;
+    box-shadow: 12px 0 30px rgba(17, 24, 39, 0.2);
+  }
+  .sidebar.mobile-open {
+    transform: translateX(0);
+  }
+  .app .brand-text,
+  .app .nav-item .nav-label,
+  .app .user-meta,
+  .app.folded .brand-text,
+  .app.folded .nav-item .nav-label,
+  .app.folded .user-meta {
+    display: block !important;
+  }
+  .app .nav-group,
+  .app.folded .nav-group {
+    margin: 14px 10px 6px;
+    text-align: left;
+    font-size: 10px;
+  }
+  .app .nav-group::after,
+  .app.folded .nav-group::after {
+    content: none;
+  }
+  .app .nav-item,
+  .app.folded .nav-item {
+    justify-content: flex-start !important;
+    padding: 0 12px !important;
+  }
+  .app .user-card,
+  .app.folded .user-card {
+    justify-content: flex-start;
+    padding: 8px 10px;
+    background: var(--bg-elevated);
+    border-color: var(--border-subtle);
+  }
+  .app .logout-btn,
+  .app.folded .logout-btn {
+    display: grid;
+  }
+  .main {
+    height: 100dvh;
+    margin: 0;
+    border-radius: 0;
+  }
+  .topbar {
+    height: 58px;
+    flex-basis: 58px;
+    padding: 0 10px;
+  }
+  .mobile-nav-toggle {
+    display: grid;
+    width: 34px;
+    height: 34px;
+    place-items: center;
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    background: var(--bg-main);
+    color: var(--text-secondary);
+  }
+  .topbar-title,
+  .data-source-badge {
+    display: none;
+  }
+  .mode-switch {
+    padding: 2px;
+  }
+  .mode-opt {
+    min-height: 26px;
+    padding: 2px 9px;
+  }
+  .topbar-actions {
+    gap: 6px;
+  }
+  .content {
+    padding: 12px;
+  }
 }
 </style>
