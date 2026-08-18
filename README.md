@@ -2,6 +2,8 @@
 
 基于《AI 测试与评估平台 PRD V1.6.3》搭建的**基础框架**。面向单一团队，用 Agent 自动化完成大模型基准测试与 RAG 测试，压测是两类评测的共享步骤。
 
+> 📖 **开发规范与 AI 行为准则**：详见 [AGENTS.md](AGENTS.md)。
+
 技术栈：Vue3 + TypeScript + Naive UI / Python 3.12 FastAPI / PostgreSQL / WebSocket / Docker Compose / go-stress-testing（预留）。
 
 ## 架构
