@@ -24,7 +24,8 @@ cd "$APP_DIR"
 if [ "${DEPLOY_LOCK_ACQUIRED:-0}" != "1" ]; then
     exec 9>"$LOCK_FILE"
     echo "==> 等待部署互斥锁"
-    if ! flock -w 25m 9; then
+    # 服务器的 flock 仅接受秒数，1,500 秒等价于 25 分钟。
+    if ! flock -w 1500 9; then
         echo "错误：等待部署互斥锁超过 25 分钟"
         exit 1
     fi
