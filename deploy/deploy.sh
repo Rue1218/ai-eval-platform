@@ -31,11 +31,12 @@ echo "==> 构建镜像（BUILD_VERSION=$BUILD_VERSION）"
 docker compose build
 
 echo "==> 启动与更新容器"
-docker compose up -d --remove-orphans || {
-    echo "检测到容器状态残留，执行清理后重新启动..."
-    docker compose down --remove-orphans || true
+if ! docker compose up -d --remove-orphans; then
+    echo "检测到容器元数据残留，强制清理本项目容器状态后重新拉起..."
+    docker rm -f $(docker ps -a -q --filter "name=ai-eval-platform") 2>/dev/null || true
+    docker container prune -f || true
     docker compose up -d
-}
+fi
 
 echo "==> 清理旧镜像"
 docker image prune -f
