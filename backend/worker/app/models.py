@@ -21,6 +21,14 @@ def uuid_str() -> str:
     return str(uuid.uuid4())
 
 
+class Session(Base):
+    """会话表最小映射：仅供 _push_ws 分配事件号时锁定会话行。"""
+
+    __tablename__ = "sessions"
+
+    id = Column(String, primary_key=True)
+
+
 class Task(Base):
     __tablename__ = "tasks"
 

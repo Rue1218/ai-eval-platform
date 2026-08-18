@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from .models import Report, Task, TaskEvent, WsEvent
+from .models import Report, Session, Task, TaskEvent, WsEvent
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("worker")
@@ -22,11 +22,18 @@ TERMINAL = {"succeeded", "failed", "cancelled"}
 
 
 def _push_ws(session_id: str | None, event: str, payload: dict, task_id: str | None = None) -> None:
-    """向会话事件表追加标准事件；task_id 独立成列，payload 仅存事件数据。"""
+    """向会话事件表追加标准事件；task_id 独立成列，payload 仅存事件数据。
+
+    分配事件号前先锁定会话行（与 api 侧 _next_event_id 同一把行锁），
+    避免 Worker 与 API 并发写同一会话时事件号撞号。
+    """
     if not session_id:
         return
     db = SessionLocal()
     try:
+        locked = db.query(Session.id).filter(Session.id == session_id).with_for_update().first()
+        if not locked:
+            return
         max_eid = (
             db.query(WsEvent.event_id)
             .filter(WsEvent.session_id == session_id)
@@ -85,7 +92,12 @@ def _run_task(task: Task) -> None:
         db.add(TaskEvent(task_id=task.id, event="finish", payload={"status": "succeeded"}))
         db.commit()
 
-        _push_ws(task.session_id, "report", {"report_id": report_id}, task_id=task.id)
+        _push_ws(task.session_id, "progress", {"percent": 100, "done": 1, "total": 1, "message": "任务已完成"}, task_id=task.id)
+        if report_id:
+            _push_ws(task.session_id, "report", {"report_id": report_id}, task_id=task.id)
+        else:
+            # testcase 等无报告类型：不允许推送空 report_id（前端会据此跳转 /reports/undefined）
+            _push_ws(task.session_id, "thought", {"text": "任务已完成（succeeded）。用例生成类任务请到「用例」页确认入库。"}, task_id=task.id)
         logger.info("task %s (%s) succeeded", task.id, task.kind)
     except Exception:
         db.rollback()
