@@ -1,6 +1,6 @@
 # AI 测试与评估平台
 
-基于《AI 测试与评估平台 PRD V1.6.3》搭建的**基础框架**。面向单一团队，用 Agent 自动化完成大模型基准测试与 RAG 测试，压测是两类评测的共享步骤。
+基于《AI 测试与评估平台 PRD V1.6.4》搭建的**基础框架**。面向单一团队，用 Agent 自动化完成大模型基准测试与 RAG 测试，压测是两类评测的共享步骤。
 
 > 📖 **开发规范与 AI 行为准则**：详见 [AGENTS.md](AGENTS.md)。
 
@@ -144,6 +144,6 @@ git fetch + reset --hard origin/main  →  docker compose up -d --build  →  im
 ## 说明
 
 - 表结构由 Alembic 管理，api 容器启动时自动执行 `alembic upgrade head`（迁移文件在 `backend/api/migrations/`）。
-- 统一错误码枚举在 `backend/api/app/errors.py`，对应 PRD 5.5 / API V1.0 §1.3 的十个 `code`。
+- 统一错误码枚举在 `backend/api/app/errors.py`，对应 PRD 5.5 / API V1.3 §1.3 的十个 `code`。
 - worker 侧为容器隔离复制了 `Task/TaskEvent/WsEvent/Report` 模型，后续可抽成共享 package。
 - stress 与 lightrag 均为可运行的骨架服务，真实内核按 PRD 里程碑接入。

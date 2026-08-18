@@ -3,10 +3,10 @@
 | 项目 | 内容 |
 | --- | --- |
 | 文档版本 | V1.2 |
-| 对应 PRD | V1.6.3（唯一产品权威） |
-| 对应开发计划 | V1.0 |
+| 对应 PRD | V1.6.4（唯一产品权威） |
+| 对应开发计划 | V1.3 |
 | 撰写日期 | 2026-08-17 |
-| 最近修订 | 2026-08-17：补齐浮层（Toast/对话框/抽屉）与 Agent 对话组件 |
+| 最近修订 | 2026-08-18：补齐浮层（Toast/对话框/抽屉）与 Agent 对话组件，对齐 PRD V1.6.4 |
 | 技术栈（PRD） | Vue3 + Naive UI、Python FastAPI、PostgreSQL、WebSocket、Docker Compose、go-stress-testing |
 | 适用范围 | V1.0 前端 `frontend/` |
 
