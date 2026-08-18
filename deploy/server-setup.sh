@@ -25,7 +25,19 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-echo "==> [1/6] 安装 Docker"
+echo "==> [1/6] 安装 Docker 与基础环境"
+# 若云服务器无 Swap 分区且内存较小，配置 2GB Swap 避免 Docker 构建时 OOM 夯死
+if [ "$(free -m | awk '/Swap:/ {print $2}')" -eq 0 ]; then
+    echo "未检测到 Swap，创建 2GB 虚拟内存..."
+    fallocate -l 2G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=2048
+    chmod 600 /swapfile
+    mkswap /swapfile
+    swapon /swapfile
+    if ! grep -q '/swapfile' /etc/fstab; then
+        echo '/swapfile none swap sw 0 0' >> /etc/fstab
+    fi
+fi
+
 if ! command -v docker >/dev/null 2>&1; then
     curl -fsSL https://get.docker.com | sh
 else
