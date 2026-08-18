@@ -583,7 +583,8 @@ async function loadReport() {
       } else if (report.value.task_id) {
         try {
           const res = await api.tasks.getStressSeries(report.value.task_id)
-          stressSeries.value = res?.series || []
+          // 契约字段为 points；mock 与早期实现使用 series，两者兼容读取
+          stressSeries.value = res?.points || res?.series || []
         } catch {
           // 时序接口失败不阻断报告主体展示
           stressSeries.value = []

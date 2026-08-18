@@ -1,7 +1,9 @@
-"""全员同权的运行时配置与审计查询接口。"""
+"""全员同权的运行时配置、压测白名单治理与审计查询接口。"""
 
 from copy import deepcopy
+from datetime import UTC, datetime
 from typing import Any
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
@@ -102,6 +104,109 @@ def put_settings(
     )
     db.commit()
     return _load(db)
+
+
+def _normalize_whitelist(items: list[Any]) -> list[dict[str, Any]]:
+    """白名单条目归一化为契约对象；兼容早期纯字符串 host 写法。"""
+    normalized: list[dict[str, Any]] = []
+    for entry in items:
+        if isinstance(entry, str):
+            normalized.append(
+                {"id": f"wl-{uuid4().hex[:8]}", "host": entry, "scope": "test", "creator": None, "created_at": None, "status": "active"}
+            )
+        elif isinstance(entry, dict) and entry.get("host"):
+            normalized.append({**entry, "status": entry.get("status") or "active"})
+    return normalized
+
+
+def _save_stress_settings(db: Session, stress: dict[str, Any], user_id: str) -> None:
+    """整体回写 stress 设置块（白名单与阈值同处一个 JSONB 值）。"""
+    row = db.query(Setting).filter(Setting.key == "stress").first()
+    if row:
+        row.value = stress
+        row.updated_by = user_id
+    else:
+        db.add(Setting(key="stress", value=stress, updated_by=user_id))
+
+
+@router.get("/stress/whitelist", status_code=200)
+def get_whitelist(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """读取发压 Host 白名单（存储于 settings.stress.host_whitelist）。"""
+    items = _normalize_whitelist(_load(db)["stress"].get("host_whitelist") or [])
+    return {"items": items, "total": len(items)}
+
+
+@router.post("/stress/whitelist", status_code=201)
+def add_whitelist(
+    body: dict[str, Any],
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """新增白名单条目：host 必填且去重，scope 为 test/staging/prod 环境范围。"""
+    host = str((body or {}).get("host") or "").strip()
+    if not host:
+        raise AppError(ErrorCode.VALIDATION, "host 不能为空")
+    scope = str((body or {}).get("scope") or "test").strip() or "test"
+    stress = _load(db)["stress"]
+    items = _normalize_whitelist(stress.get("host_whitelist") or [])
+    if any(entry["host"] == host for entry in items):
+        raise AppError(ErrorCode.VALIDATION, "该 Host 已在白名单中")
+    item = {
+        "id": f"wl-{uuid4().hex[:8]}",
+        "host": host,
+        "scope": scope,
+        "creator": user.username,
+        "created_at": datetime.now(UTC).date().isoformat(),
+        "status": "active",
+    }
+    items.append(item)
+    stress["host_whitelist"] = items
+    _save_stress_settings(db, stress, user.id)
+    db.add(
+        AuditLog(
+            user_id=user.id,
+            action="whitelist_change",
+            target_type="stress_whitelist",
+            target_id=item["id"],
+            detail={"op": "add", "host": host, "scope": scope},
+            ip=request.client.host if request.client else None,
+        )
+    )
+    db.commit()
+    return item
+
+
+@router.delete("/stress/whitelist/{entry_id}")
+def delete_whitelist(
+    entry_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """按条目 ID 移除白名单；不存在时按 NOT_FOUND 处理。"""
+    stress = _load(db)["stress"]
+    items = _normalize_whitelist(stress.get("host_whitelist") or [])
+    target = next((entry for entry in items if entry["id"] == entry_id), None)
+    if not target:
+        raise AppError(ErrorCode.NOT_FOUND, "白名单条目不存在")
+    stress["host_whitelist"] = [entry for entry in items if entry["id"] != entry_id]
+    _save_stress_settings(db, stress, user.id)
+    db.add(
+        AuditLog(
+            user_id=user.id,
+            action="whitelist_change",
+            target_type="stress_whitelist",
+            target_id=entry_id,
+            detail={"op": "remove", "host": target["host"]},
+            ip=request.client.host if request.client else None,
+        )
+    )
+    db.commit()
+    return {"ok": True}
 
 
 @router.get("/audit-logs")

@@ -228,6 +228,11 @@ class Report(Base):
     task_id = Column(String, ForeignKey("tasks.id"), nullable=False, index=True, unique=True)
     kind = Column(String, nullable=False)
     metrics = Column(JSONB, nullable=False, default=dict)
+    # 免登分享：token 只写不在列表回显，到期即失效
+    share_token = Column(String, nullable=True, index=True)
+    share_expire_at = Column(DateTime(timezone=True), nullable=True)
+    # 基线冻结标记：同数据集版本 + 主指标对比的基准报告
+    is_baseline = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 

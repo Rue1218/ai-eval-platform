@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
-from ..models import AuditLog, Task, TaskEvent, User
+from ..models import AuditLog, Report, Task, TaskEvent, User
 from ..models import Session as AgentSession
 from ..schemas import TaskCreate, TaskDetailOut, TaskEventOut, TaskOut
 
@@ -251,3 +251,79 @@ def rerun_task(
         raise AppError(ErrorCode.CONCURRENCY, "会话已有未完成任务") from None
     db.refresh(rerun)
     return _task_out(rerun)
+
+
+@router.post("/{task_id}/approve-stress", response_model=TaskOut)
+def approve_stress(
+    task_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """会签放行压测任务：入参可为压测子任务或其质量父任务；prod 发压须非创建者会签。"""
+    task = db.query(Task).filter(Task.id == task_id).first()
+    if not task:
+        raise AppError(ErrorCode.NOT_FOUND, "任务不存在")
+    # 解析到对应的 kind=stress 子任务（先评后压由 Worker 派生）
+    stress = task
+    if task.kind != "stress":
+        stress = (
+            db.query(Task)
+            .filter(Task.parent_task_id == task.id, Task.kind == "stress")
+            .order_by(Task.created_at.asc())
+            .first()
+        )
+    if not stress:
+        raise AppError(ErrorCode.NOT_FOUND, "未找到关联的压测任务")
+    if stress.status in TERMINAL_STATUSES:
+        raise AppError(ErrorCode.VALIDATION, "压测任务已结束")
+
+    config = dict(stress.config or {})
+    env = (config.get("stress") or {}).get("env")
+    if env == "prod" and stress.created_by == user.id:
+        # prod 会签人必须不是创建者本人
+        raise AppError(ErrorCode.NEED_APPROVAL, "prod 发压须由非创建者的成员会签")
+    config["need_approval"] = False
+    config["approved_by"] = user.id
+    stress.config = config
+    _append_event(db, stress, "approved", f"压测会签通过（{user.username}）")
+    db.add(
+        AuditLog(
+            user_id=user.id,
+            action="prod_approve",
+            target_type="task",
+            target_id=stress.id,
+            detail={"env": env, "parent_task_id": stress.parent_task_id},
+            ip=request.client.host if request.client else None,
+        )
+    )
+    db.commit()
+    db.refresh(stress)
+    return _task_out(stress)
+
+
+@router.get("/{task_id}/stress-series")
+def stress_series(
+    task_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """压测时序曲线：取报告 metrics.time_series 映射为契约 points；无数据返回空数组。"""
+    task = db.query(Task).filter(Task.id == task_id, Task.kind == "stress").first()
+    if not task:
+        raise AppError(ErrorCode.NOT_FOUND, "压测任务不存在")
+    report = db.query(Report).filter(Report.task_id == task.id).first()
+    points: list[dict] = []
+    series = (report.metrics or {}).get("time_series") if report else None
+    if isinstance(series, list):
+        for point in series:
+            if isinstance(point, dict):
+                points.append(
+                    {
+                        "ts": point.get("ts"),
+                        "qps": point.get("qps"),
+                        "rt_ms": point.get("rt_ms"),
+                        "error_rate": point.get("error_rate"),
+                    }
+                )
+    return {"task_id": task.id, "points": points}

@@ -8,10 +8,12 @@
 前端人工删改后必须再经 PUT /api/datasets/{id}/rows 保存。
 """
 
+import csv
+import io
 import json
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, File, Query, UploadFile
 from fastapi import Request as FastApiRequest
 from sqlalchemy.orm import Session
 
@@ -270,6 +272,94 @@ def delete_dataset(
     )
     db.commit()
     return {"ok": True}
+
+
+# 上传契约上限：≤50MB、≤2 万行（API.md §3.7）
+_UPLOAD_MAX_BYTES = 50 * 1024 * 1024
+_UPLOAD_MAX_ROWS = 20_000
+
+
+def _parse_upload_rows(filename: str, content: bytes) -> list[dict[str, Any]]:
+    """解析 JSONL / CSV 上传内容为行字典列表；非法结构整文件拒绝（VALIDATION）。"""
+    try:
+        text = content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise AppError(ErrorCode.VALIDATION, "文件必须为 UTF-8 编码") from None
+    rows: list[dict[str, Any]] = []
+    if filename.lower().endswith(".jsonl"):
+        for line_no, line in enumerate(text.splitlines(), start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                raise AppError(ErrorCode.VALIDATION, f"第 {line_no} 行不是合法 JSON") from None
+            if not isinstance(obj, dict):
+                raise AppError(ErrorCode.VALIDATION, f"第 {line_no} 行必须为 JSON 对象")
+            rows.append(obj)
+    elif filename.lower().endswith(".csv"):
+        reader = csv.DictReader(io.StringIO(text))
+        if not reader.fieldnames or "question" not in reader.fieldnames or "reference" not in reader.fieldnames:
+            raise AppError(ErrorCode.VALIDATION, "CSV 必须包含 question,reference 列（context 可选）")
+        rows.extend(dict(row) for row in reader)
+    else:
+        raise AppError(ErrorCode.VALIDATION, "仅支持 .jsonl 或 .csv 文件")
+    if not rows:
+        raise AppError(ErrorCode.VALIDATION, "文件内容为空")
+    if len(rows) > _UPLOAD_MAX_ROWS:
+        raise AppError(ErrorCode.VALIDATION, f"行数超过上限（{_UPLOAD_MAX_ROWS} 行）")
+    return rows
+
+
+@router.post("/{dataset_id}/upload")
+async def upload_dataset_file(
+    dataset_id: str,
+    request: FastApiRequest,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """JSONL/CSV 全量覆盖导入：解析校验 → 替换全部数据行 → version+1 并重算计数。"""
+    dataset = _get_dataset_or_404(db, dataset_id)
+    content = await file.read()
+    if len(content) > _UPLOAD_MAX_BYTES:
+        raise AppError(ErrorCode.VALIDATION, "文件大小超过 50MB 上限")
+    raw_rows = _parse_upload_rows(file.filename or "", content)
+
+    # 全量覆盖：清空旧行后按新文件顺序重建 row_no
+    db.query(DatasetRow).filter(DatasetRow.dataset_id == dataset.id).delete(synchronize_session=False)
+    for idx, raw in enumerate(raw_rows, start=1):
+        question = str(raw.get("question") or raw.get("q") or "")
+        reference = str(raw.get("reference") or raw.get("r") or "")
+        context = raw.get("context") or raw.get("c")
+        extras = {k: v for k, v in raw.items() if k not in _RESERVED_EXTRA_KEYS}
+        db.add(
+            DatasetRow(
+                dataset_id=dataset.id,
+                row_no=idx,
+                question=question,
+                reference=reference,
+                context=str(context) if context is not None else None,
+                extras=extras,
+                pending_complete=not question.strip() or not reference.strip(),
+            )
+        )
+    dataset.version += 1
+    db.flush()
+    _refresh_dataset_counters(db, dataset)
+    db.add(
+        AuditLog(
+            user_id=user.id,
+            action="dataset_upload",
+            target_type="dataset",
+            target_id=dataset.id,
+            detail={"filename": file.filename, "row_count": dataset.row_count, "version": dataset.version},
+            ip=_request_ip(request),
+        )
+    )
+    db.commit()
+    return {"version": dataset.version, "row_count": dataset.row_count}
 
 
 @router.get("/{dataset_id}/rows")
