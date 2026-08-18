@@ -78,10 +78,6 @@ http.interceptors.response.use(
       const code: ErrorCode = data.code || (status === 401 ? ErrorCode.UNAUTHORIZED : status === 404 ? ErrorCode.NOT_FOUND : ErrorCode.INTERNAL)
       const message = data.message || ERROR_MESSAGES[code] || `请求失败 (${status})`
 
-      if (status === 401 && !window.location.pathname.startsWith('/login')) {
-        window.location.href = '/login'
-      }
-
       return Promise.reject(new ApiError(message, code, status, data.fields, data))
     }
     return Promise.reject(new ApiError(err.message || '网络连接异常', ErrorCode.INTERNAL))
