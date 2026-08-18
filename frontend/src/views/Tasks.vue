@@ -699,7 +699,7 @@ const createKbs = ref<KnowledgeBase[]>([])
 
 const datasetOptions = computed(() =>
   createDatasets.value.map(d => ({
-    label: `${d.name} (v${d.version} · ${d.row_count}条 · ${d.main_metric || 'contain'})`,
+    label: `${d.name} (v${d.version} · ${d.row_count}条 · ${d.metric || 'contain'})`,
     value: d.id,
   }))
 )

@@ -41,6 +41,7 @@ import {
   MOCK_TASKS,
   MOCK_REPORTS,
   MOCK_WHITELIST,
+  MOCK_MCP_TOOLS,
   buildMockReportMarkdown,
 } from './mockData'
 

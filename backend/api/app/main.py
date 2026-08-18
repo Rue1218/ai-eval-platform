@@ -24,6 +24,7 @@ from .routers import (
     ws,
 )
 from .security import hash_password
+from .seed import bootstrap_preview_data
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ai-eval")
@@ -55,10 +56,25 @@ def _bootstrap_admin() -> None:
         db.close()
 
 
+def _bootstrap_preview() -> None:
+    """全新部署时播种预览数据；播种失败仅记录日志，不阻塞服务启动。"""
+    db = SessionLocal()
+    try:
+        admin = db.query(User).filter(User.username == settings.bootstrap_admin_username).first()
+        if admin:
+            bootstrap_preview_data(db, admin)
+    except Exception:
+        db.rollback()
+        logger.exception("预览种子数据播种失败（不影响服务运行）")
+    finally:
+        db.close()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # 表结构由 Alembic 管理（启动前执行 alembic upgrade head），此处只做引导数据
     _bootstrap_admin()
+    _bootstrap_preview()
     yield
 
 

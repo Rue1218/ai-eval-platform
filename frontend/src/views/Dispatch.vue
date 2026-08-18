@@ -567,17 +567,20 @@ const modeTagStyle = computed(() => ({
 function useCountUp(source: { value: number }) {
   const display = ref(source.value)
   let raf = 0
-  watch(source, (to) => {
-    const from = display.value
-    const t0 = performance.now()
-    cancelAnimationFrame(raf)
-    const step = (t: number) => {
-      const p = Math.min(1, (t - t0) / 350)
-      display.value = Math.round(from + (to - from) * (1 - Math.pow(1 - p, 3)))
-      if (p < 1) raf = requestAnimationFrame(step)
-    }
-    raf = requestAnimationFrame(step)
-  })
+  watch(
+    () => source.value,
+    (to) => {
+      const from = display.value
+      const t0 = performance.now()
+      cancelAnimationFrame(raf)
+      const step = (t: number) => {
+        const p = Math.min(1, (t - t0) / 350)
+        display.value = Math.round(from + (to - from) * (1 - Math.pow(1 - p, 3)))
+        if (p < 1) raf = requestAnimationFrame(step)
+      }
+      raf = requestAnimationFrame(step)
+    },
+  )
   return display
 }
 
