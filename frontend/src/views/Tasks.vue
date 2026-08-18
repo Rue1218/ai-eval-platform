@@ -238,8 +238,8 @@
                   复制为新任务
                 </button>
                 <router-link
-                  v-if="t.report_id || t.status === 'succeeded'"
-                  :to="`/reports/${t.report_id || 'r-bm-1'}`"
+                  v-if="t.report_id"
+                  :to="`/reports/${t.report_id}`"
                   class="link-btn"
                   style="color: var(--accent-ai); font-weight: 600"
                 >
@@ -476,7 +476,8 @@ const insights = [
   {
     text: '「smoke-20 v3」近 3 次评测 contain 连续下滑（0.86 → 0.81），退化集中在长上下文样本。',
     actionText: '查看最近报告',
-    link: '/reports/r-bm-1',
+    // 跳转报告列表页而非硬编码报告 ID，避免 live 模式下 404
+    link: '/reports',
   },
   {
     text: '调度队列中有 1 个 prod 压测等待会签已 42 分钟，超过历史均值（12 分钟）。',

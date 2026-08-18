@@ -450,7 +450,13 @@ function adoptAiSuggestion() {
 async function loadData() {
   try {
     const [s, w] = await Promise.all([api.admin.getSettings(), api.admin.getWhitelist()])
-    settings.value = s
+    // 深度合并默认值：后端缺省 stress/notify 嵌套对象时模板绑定不崩溃
+    settings.value = {
+      ...settings.value,
+      ...s,
+      stress: { ...settings.value.stress, ...(s?.stress || {}) },
+      notify: { ...settings.value.notify, ...(s?.notify || {}) },
+    }
     whitelist.value = w
   } catch (err: any) {
     message.error(err.message || '加载配置失败')

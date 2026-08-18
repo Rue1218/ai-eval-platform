@@ -968,11 +968,15 @@ function validateConfirmCard(item: StreamItem): boolean {
   return Object.keys(errors).length === 0
 }
 
-/** 确认卡规范化：补齐 run / stress 默认值，保证折叠区 v-model 绑定路径始终存在（对齐 TaskSpec 契约）。 */
+/** 确认卡规范化：补齐 run / stress / case_source 默认值，保证折叠区 v-model 绑定路径始终存在（对齐 TaskSpec 契约）。 */
 function normalizeConfirmCard(card: any) {
   if (!card) return card
   card.run = { ...getDefaultRunConfig(), ...(card.run || {}) }
   card.stress = { ...getDefaultStressConfig(), ...(card.stress || {}) }
+  // testcase 确认卡的 case_source 可能由后端缺省下发，此处兜底初始化避免模板 v-model 崩溃
+  if (card.kind === 'testcase') {
+    card.case_source = { text: '', ...(card.case_source || {}) }
+  }
   return card
 }
 

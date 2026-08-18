@@ -57,7 +57,7 @@
            注意：live 环境仅初始管理员 admin / admin123 有效（由 BOOTSTRAP_ADMIN_PASSWORD 注入），
            alice / bob / boss 为原型演示账号，仅作展示 -->
       <div class="login-foot mono">
-        <span>原型演示账号（单一角色，全员同权）：admin / Admin123（首登强制改密）</span>
+        <span>原型演示账号（单一角色，全员同权）：admin / admin123（首登强制改密）</span>
         <span>alice / Alice123 · bob / Bob12345 · boss / Boss1234</span>
       </div>
     </div>

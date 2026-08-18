@@ -358,6 +358,8 @@ const runtimeSaving = ref(false)
 const profiles = ref<Profile[]>([])
 const loading = ref(false)
 const selectedAgentProfileId = ref<string | null>(null)
+// 最近一次成功保存的 Agent 协议档 ID，用于保存失败时回滚选择器
+const lastSavedAgentProfileId = ref<string | null>(null)
 
 const showModal = ref(false)
 const selectedProfile = ref<Profile | null>(null)
@@ -387,7 +389,9 @@ async function loadProfiles() {
       api.mcp.tools(),
     ])
     profiles.value = pList
-    selectedAgentProfileId.value = settings.agent_profile_id || (pList.length ? pList[0].id : null)
+    // 仅以后端配置为准：未指定时不默认选中首个协议档，避免误导性「Agent 核心驱动」标记
+    selectedAgentProfileId.value = settings.agent_profile_id || null
+    lastSavedAgentProfileId.value = selectedAgentProfileId.value
     mcpTools.value = tools.items
     if (settings.runtime) runtimeForm.value = { ...settings.runtime }
   } catch (err: any) {
@@ -413,8 +417,11 @@ async function saveRuntime() {
 async function handleUpdateAgentProfile(profileId: string) {
   try {
     await api.admin.updateSettings({ agent_profile_id: profileId })
+    lastSavedAgentProfileId.value = profileId
     message.success('Agent 后端模型已指定')
   } catch (err: any) {
+    // 保存失败时回滚选择器，保持 UI 与后端状态一致
+    selectedAgentProfileId.value = lastSavedAgentProfileId.value
     message.error(err.message || '设置失败')
   }
 }

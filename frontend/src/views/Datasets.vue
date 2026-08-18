@@ -132,7 +132,8 @@
             <tbody>
               <!-- 黄金 QA 行级数据依赖 M3 接口，当前展示空态说明（不用静态数据顶替） -->
               <tr v-if="isGoldQaActive">
-                <td :colspan="5 + customCols.length" style="text-align: center; padding: 40px 16px; color: var(--text-tertiary)">
+                <!-- 列数随模式变化：黄金 QA 7+N 列，基准数据集 9+N 列（含标签/难度） -->
+                <td :colspan="(isGoldQaActive ? 7 : 9) + customCols.length" style="text-align: center; padding: 40px 16px; color: var(--text-tertiary)">
                   黄金 QA「{{ currentItem?.name }}」共 {{ activeGoldQa?.row_count || 0 }} 行，行级查看与编辑将在 M3 知识库里程碑接入。
                 </td>
               </tr>
