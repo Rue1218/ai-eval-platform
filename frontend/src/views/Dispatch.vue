@@ -1,5 +1,5 @@
 <template>
-  <div class="dispatch-page" data-od-id="dispatch-page" style="max-width: 1440px; margin: 0 auto">
+  <div class="dispatch-page" data-od-id="dispatch-page">
     <!-- ═══ 1. 调度大盘 KPI 趋势带（数字滚动 + 迷你趋势线） ═══ -->
     <div class="kpi-grid mb16" data-od-id="dispatch-kpis" style="--glow-c: var(--c-agent)">
       <div class="kpi">
@@ -28,8 +28,127 @@
       </div>
     </div>
 
-    <div class="dispatch-grid">
-      <!-- ═══ 2. 左栏：调度内核控制面 ═══ -->
+    <!-- ═══ 2. 多 Agent 协作编排画布：四条业务流水线泳道（Benchmark / RAG / 用例 / 压测） ═══ -->
+    <div class="panel glow mb16" data-od-id="dispatch-canvas" style="--glow-c: var(--c-agent)">
+      <div class="row-between mb12" style="flex-wrap: wrap; gap: 8px">
+        <div class="panel-title" style="margin: 0">
+          多 Agent 协作编排画布
+          <span class="small tertiary mono" style="font-weight: 400">Skill Agent → 任务工单 → Worker 实时流转</span>
+        </div>
+        <div class="row" style="gap: 6px; align-items: center">
+          <span class="tag-soft" :style="modeTagStyle">{{ modeStore.mode === 'rag' ? 'RAG 模式' : '大模型模式' }}</span>
+          <button class="btn btn-secondary btn-sm" style="font-size: 11px" @click="handleManualEnqueue">
+            + 插入任务
+          </button>
+        </div>
+      </div>
+
+      <div class="canvas-wrap">
+        <div ref="canvasRef" class="orch-canvas" :style="{ height: canvasLayout.totalHeight + 'px' }">
+          <!-- 连线层：技能→工单灰虚线缓流；工单→Worker 蓝色流动 + 粒子 -->
+          <svg class="wires" aria-hidden="true">
+            <template v-for="w in activeWires" :key="w.key">
+              <path :class="w.cls" :d="w.d" />
+              <circle v-if="w.particle" class="particle" r="2.6">
+                <animateMotion :path="w.d" dur="1.8s" repeatCount="indefinite" />
+              </circle>
+            </template>
+          </svg>
+
+          <template v-for="l in canvasLayout.lanes" :key="l.kind">
+            <!-- 泳道背景带（左色条标识业务域） -->
+            <div
+              class="lane-band"
+              :style="{ top: l.top + 'px', height: l.height + 'px', borderLeftColor: l.color }"
+            >
+              <span class="lane-caption mono" :style="{ color: l.color }">{{ l.name }}</span>
+            </div>
+
+            <!-- 泳道技能 Agent 节点（固定于泳道左侧） -->
+            <div
+              class="skill-node"
+              :class="{ on: l.activeCount > 0 }"
+              :data-skill="l.kind"
+              :style="{ top: l.top + l.height / 2 - 30 + 'px' }"
+              :title="l.desc"
+            >
+              <span class="skill-ico">{{ l.icon }}</span>
+              <div class="skill-meta">
+                <div class="skill-name">{{ l.name }}</div>
+                <div class="skill-count mono">
+                  <template v-if="l.activeCount > 0"><b class="num">{{ l.runningCount }}</b> 运行 / <b class="num">{{ l.activeCount }}</b> 活跃</template>
+                  <template v-else><span class="tertiary">待命</span></template>
+                </div>
+              </div>
+              <i v-if="l.runningCount > 0" class="skill-pulse"></i>
+            </div>
+
+            <!-- 任务工单卡片：位置由状态驱动，CSS transition 实现队列→Worker 的飞行动效 -->
+            <div
+              v-for="p in l.tpos"
+              :key="p.t.id"
+              class="canvas-task"
+              :class="[p.t.status, { flash: flashTaskId === p.t.id || flashTaskId === p.t.shortId }]"
+              :data-ctid="p.t.id"
+              :style="{ left: p.x + '%', top: p.y + 'px' }"
+              :title="`${p.t.label}\n${statusLabel(p.t.status)} · 点击前往任务中心`"
+              @click="goTasks"
+            >
+              <div class="row" style="gap: 5px; align-items: center; min-width: 0">
+                <KindTag :kind="p.t.kind" />
+                <span class="ct-id mono">{{ p.t.shortId }}</span>
+                <span v-if="p.t.parentId" class="tertiary" style="font-size: 10px">↳</span>
+                <span class="badge ct-badge" :class="`badge-${p.t.status}`">{{ statusLabel(p.t.status) }}</span>
+              </div>
+              <div class="ct-label">{{ p.t.label }}</div>
+              <div v-if="p.t.status === 'running'" class="ct-progress"><i :style="{ width: `${p.t.progress ?? 0}%` }"></i></div>
+            </div>
+
+            <!-- Worker 节点（单列堆叠于泳道右侧） -->
+            <div
+              v-for="pw in l.wpos"
+              :key="pw.w.id"
+              class="canvas-worker"
+              :class="pw.w.state"
+              :data-caid="pw.w.id"
+              :style="{ left: pw.x + '%', top: pw.y + 'px' }"
+              :title="`${pw.w.name} · 点击治理`"
+              @click="openWorkerModal(pw.w)"
+            >
+              <div class="row" style="gap: 6px; align-items: center; min-width: 0">
+                <i class="cw-dot" :class="pw.w.state"></i>
+                <span class="cw-name mono">{{ pw.w.id }}</span>
+                <span class="cw-load mono">{{ pw.w.load }}%</span>
+              </div>
+              <div class="load-track" :class="{ hot: pw.w.load >= 80 }" style="margin-top: 5px">
+                <i :style="{ width: `${pw.w.load}%` }"></i>
+              </div>
+            </div>
+
+            <!-- 泳道队列区空态提示 -->
+            <div
+              v-if="!l.tpos.length"
+              class="lane-empty tertiary small"
+              :style="{ top: l.top + l.height / 2 - 9 + 'px' }"
+            >暂无工单</div>
+          </template>
+
+          <!-- 任务完成涟漪 -->
+          <span v-for="r in ripples" :key="r.id" class="ripple" :style="{ left: r.x + 'px', top: r.y + 'px' }"></span>
+        </div>
+      </div>
+
+      <!-- 画布图例 -->
+      <div class="row mt12" style="gap: 14px; font-size: 11px; flex-wrap: wrap">
+        <span class="row" style="gap: 5px; align-items: center"><i class="legend-line" style="background: repeating-linear-gradient(90deg, var(--text-tertiary) 0 3px, transparent 3px 7px)"></i><span class="tertiary">技能编排链路</span></span>
+        <span class="row" style="gap: 5px; align-items: center"><i class="legend-line" style="background: var(--accent-ai)"></i><span class="tertiary">执行分发链路</span></span>
+        <span class="row" style="gap: 5px; align-items: center"><i class="legend-dot" style="background: var(--accent-ai)"></i><span class="tertiary">数据流粒子</span></span>
+        <span class="row" style="gap: 5px; align-items: center"><i class="legend-dot" style="background: var(--accent-success)"></i><span class="tertiary">完成涟漪</span></span>
+      </div>
+    </div>
+
+    <!-- ═══ 3. 底部三栏：调度控制面 / 事件流 / 编排时间线 ═══ -->
+    <div class="bottom-grid">
       <div class="section-gap">
         <!-- 调度内核状态面板与雷达 -->
         <div class="panel glow" data-od-id="dispatch-radar" style="--glow-c: var(--c-agent)">
@@ -45,7 +164,7 @@
               + 注册节点
             </button>
           </div>
-          <div style="max-width: 170px; margin: 6px auto 12px">
+          <div style="max-width: 150px; margin: 4px auto 10px">
             <div class="radar">
               <span class="radar-core"></span>
               <i class="radar-blip" style="left: 62%; top: 26%"></i>
@@ -107,237 +226,84 @@
         </div>
       </div>
 
-      <!-- ═══ 3. 中栏：多 Agent 协作编排拓扑（技能 Agent → 任务编排 → Worker 池） ═══ -->
-      <div class="panel glow" data-od-id="dispatch-topo" style="--glow-c: var(--c-agent)">
-        <div class="row-between mb12" style="flex-wrap: wrap; gap: 8px">
+      <!-- 调度事件流（分类过滤 + 点击定位画布工单） -->
+      <div class="panel glow dispatch-log-panel" data-od-id="dispatch-log" style="--glow-c: var(--c-agent)">
+        <div class="row-between mb8">
           <div class="panel-title" style="margin: 0">
-            多 Agent 协作编排拓扑
-            <span class="small tertiary mono" style="font-weight: 400">Skill Agent → Task → Worker</span>
+            调度日志流 <span class="small tertiary mono">latest {{ filteredLogs.length }}</span>
           </div>
-          <div class="row" style="gap: 6px; align-items: center">
-            <span class="tag-soft" :style="modeTagStyle">{{ modeStore.mode === 'rag' ? 'RAG 模式' : '大模型模式' }}</span>
-            <button class="btn btn-secondary btn-sm" style="font-size: 11px" @click="handleManualEnqueue">
-              + 插入任务
-            </button>
-          </div>
+          <button class="link-btn" style="font-size: 11px" @click="logs = []">清空</button>
         </div>
-
-        <div ref="topoRef" class="topo" style="position: relative">
-          <!-- 连线层：技能 Agent→任务（灰虚线缓流）、任务→Worker（运行中蓝色流动） -->
-          <svg ref="wiresRef" class="wires" aria-hidden="true" style="position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 5; overflow: visible">
-            <path v-for="w in activeWires" :key="w.key" :class="w.cls" :d="w.d" />
-          </svg>
-
-          <div class="orch-lanes">
-            <!-- 泳道一：4 大技能 Agent（PRD §5.5.2：基准对比 / RAG 评估 / 用例生成 / 共享压测） -->
-            <div class="lane">
-              <div class="rail-label">技能 Agent 编排层</div>
-              <div class="section-gap" style="gap: 8px">
-                <div
-                  v-for="ag in skillAgents"
-                  :key="ag.id"
-                  class="skill-card"
-                  :class="{ on: ag.activeCount > 0 }"
-                  :data-skill="ag.kind"
-                  :title="ag.desc"
-                >
-                  <div class="row" style="gap: 8px; align-items: center">
-                    <span class="skill-ico">{{ ag.icon }}</span>
-                    <div style="min-width: 0">
-                      <div class="skill-name">{{ ag.name }}</div>
-                      <div class="skill-desc tertiary">{{ ag.desc }}</div>
-                    </div>
-                  </div>
-                  <div class="skill-foot mono">
-                    <span v-if="ag.activeCount > 0"><b class="num">{{ ag.runningCount }}</b> 运行 / <b class="num">{{ ag.activeCount }}</b> 活跃</span>
-                    <span v-else class="tertiary">待命</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- 泳道二：任务编排层（队列 + 运行中，含业务上下文与进度） -->
-            <div class="lane">
-              <div class="row-between" style="margin-bottom: 8px">
-                <div class="rail-label" style="margin: 0">任务编排层</div>
-                <!-- 按业务域过滤：基准 / RAG / 用例 / 压测 -->
-                <div class="chip-group" style="gap: 4px">
-                  <button
-                    v-for="f in kindFilters"
-                    :key="f.key"
-                    class="chip chip-xs"
-                    :class="{ on: kindFilter === f.key }"
-                    @click="kindFilter = f.key"
-                  >{{ f.label }} <b class="num">{{ f.count }}</b></button>
-                </div>
-              </div>
-              <div class="lane-scroll section-gap" style="gap: 8px" data-od-id="dispatch-queue">
-                <template v-if="filteredTaskNodes.length">
-                  <div
-                    v-for="t in filteredTaskNodes"
-                    :key="t.id"
-                    class="task-node"
-                    :class="[t.status, { flash: flashTaskId === t.id || flashTaskId === t.shortId }]"
-                    :data-tid="t.id"
-                    @click="goTasks"
-                  >
-                    <div class="row-between" style="align-items: center">
-                      <div class="row" style="gap: 5px; align-items: center; min-width: 0">
-                        <KindTag :kind="t.kind" />
-                        <span class="q-id mono">{{ t.shortId }}</span>
-                      </div>
-                      <span class="badge" :class="`badge-${t.status}`" style="font-size: 10px; padding: 1px 6px">
-                        {{ statusLabel(t.status) }}
-                      </span>
-                    </div>
-                    <div class="small" style="margin-top: 4px; font-weight: 500; line-height: 1.4">
-                      <span v-if="t.parentId" class="tertiary">↳ </span>{{ t.label }}
-                    </div>
-                    <!-- 运行中任务进度条（流动条纹） -->
-                    <div v-if="t.status === 'running'" class="task-progress">
-                      <div class="task-progress-track">
-                        <i :style="{ width: `${t.progress ?? 0}%` }"></i>
-                      </div>
-                      <span class="mono tertiary" style="font-size: 10px">{{ t.progress ?? 0 }}%</span>
-                    </div>
-                  </div>
-                </template>
-                <div v-else class="empty" style="padding: 32px 10px">
-                  <div class="small tertiary">{{ kindFilter === 'all' ? '队列就绪，等待智能体下单入队' : '该业务域暂无活跃任务' }}</div>
-                </div>
-              </div>
-            </div>
-
-            <!-- 泳道三：Worker 执行节点池 -->
-            <div class="lane">
-              <div class="rail-label">Worker 执行节点池 (点击卡片可治理)</div>
-              <div class="lane-scroll agent-pool" data-od-id="dispatch-pool">
-                <div
-                  v-for="a in workerPool"
-                  :key="a.id"
-                  class="agent-node"
-                  :class="[a.state, { matched: matchedKinds.size > 0 && a.caps.some(c => matchedKinds.has(c)) }]"
-                  :data-aid="a.id"
-                  style="cursor: pointer"
-                  title="点击查看节点详情与治理"
-                  @click="openWorkerModal(a)"
-                >
-                  <div class="an-head">
-                    <span class="an-name">{{ a.id }}</span>
-                    <span class="an-state" :class="a.state">
-                      {{ a.state === 'idle' ? 'IDLE' : a.state === 'busy' ? 'BUSY' : a.state === 'offline' ? 'OFFLINE' : 'DRAIN' }}
-                    </span>
-                  </div>
-                  <div class="an-caps">
-                    <span v-for="c in a.caps" :key="c" class="an-cap" :class="{ hot: matchedKinds.has(c) }">{{ c }}</span>
-                  </div>
-
-                  <div class="worker-metrics">
-                    <div class="worker-metric-row">
-                      <span>CPU</span>
-                      <span>{{ a.load }}%</span>
-                    </div>
-                    <div class="load-track" :class="{ hot: a.load >= 80 }">
-                      <i :style="{ width: `${a.load}%` }"></i>
-                    </div>
-                    <div class="worker-metric-row" style="margin-top: 2px">
-                      <span>RAM</span>
-                      <span class="mono">{{ a.ram || '—' }}</span>
-                    </div>
-                  </div>
-
-                  <div class="an-task" :title="a.task || '空闲待命'">
-                    <span v-if="a.task">{{ a.task }}</span>
-                    <span v-else class="tertiary">空闲待命</span>
-                  </div>
-                </div>
-              </div>
-            </div>
+        <div class="chip-group mb8" style="gap: 4px">
+          <button
+            v-for="c in logCats"
+            :key="c.key"
+            class="chip chip-xs"
+            :class="{ on: logCat === c.key }"
+            @click="logCat = c.key"
+          >{{ c.label }}</button>
+        </div>
+        <div class="log-stream">
+          <div
+            v-for="(l, idx) in filteredLogs"
+            :key="idx"
+            class="log-line"
+            :class="[`cat-${l.cat}`, { clickable: !!l.tid }]"
+            :title="l.tid ? '点击定位画布中的任务工单' : ''"
+            @click="l.tid && flashTask(l.tid)"
+          >
+            <span class="lt">{{ l.time }}</span>
+            <span class="lk">[{{ l.kind }}]</span>
+            <span class="lr" v-html="l.html"></span>
+          </div>
+          <div v-if="!filteredLogs.length" class="empty" style="padding: 28px 10px">
+            <div class="small tertiary">暂无调度事件（日志由调度器/Worker 写入，浏览器只读）</div>
           </div>
         </div>
       </div>
 
-      <!-- ═══ 4. 右栏：调度事件流（分类过滤 + 点击定位任务） ═══ -->
-      <div class="dispatch-log-col">
-        <div class="panel glow dispatch-log-panel" data-od-id="dispatch-log" style="--glow-c: var(--c-agent)">
-          <div class="row-between mb8">
-            <div class="panel-title" style="margin: 0">
-              调度日志流 <span class="small tertiary mono">latest {{ filteredLogs.length }}</span>
+      <!-- 任务编排时间线（甘特 · 先评后压父子关联） -->
+      <div class="panel glow" data-od-id="dispatch-gantt" style="--glow-c: var(--c-agent)">
+        <div class="row-between mb12">
+          <div class="panel-title" style="margin: 0">
+            任务编排时间线
+            <span class="small tertiary" style="font-weight: 400">最近 {{ ganttRows.length }} 条</span>
+          </div>
+          <div class="row" style="gap: 8px; font-size: 11px">
+            <span v-for="lg in ganttLegend" :key="lg.label" class="row" style="gap: 4px; align-items: center">
+              <i class="gantt-dot" :style="{ background: lg.color }"></i><span class="tertiary">{{ lg.label }}</span>
+            </span>
+          </div>
+        </div>
+        <div v-if="ganttRows.length" class="gantt">
+          <div class="gantt-axis">
+            <span v-for="(tick, i) in ganttTicks" :key="i" class="mono">{{ tick }}</span>
+          </div>
+          <div
+            v-for="row in ganttRows"
+            :key="row.id"
+            class="gantt-row"
+            :class="{ child: row.isChild }"
+            :title="`${row.label}\n${statusLabel(row.status)} · ${fmtTime(row.start)} → ${fmtTime(row.end)}`"
+            @click="goTasks"
+          >
+            <div class="gantt-name">
+              <span v-if="row.isChild" class="tertiary">↳</span>
+              <KindTag :kind="row.kind" />
+              <span class="mono" style="font-size: 10px">{{ row.shortId }}</span>
             </div>
-            <button class="link-btn" style="font-size: 11px" @click="logs = []">清空</button>
-          </div>
-          <!-- 事件分类过滤：分配 / 完成 / 异常 / 节点 -->
-          <div class="chip-group mb8" style="gap: 4px">
-            <button
-              v-for="c in logCats"
-              :key="c.key"
-              class="chip chip-xs"
-              :class="{ on: logCat === c.key }"
-              @click="logCat = c.key"
-            >{{ c.label }}</button>
-          </div>
-          <div class="log-stream">
-            <div
-              v-for="(l, idx) in filteredLogs"
-              :key="idx"
-              class="log-line"
-              :class="[`cat-${l.cat}`, { clickable: !!l.tid }]"
-              :title="l.tid ? '点击定位编排拓扑中的任务' : ''"
-              @click="l.tid && flashTask(l.tid)"
-            >
-              <span class="lt">{{ l.time }}</span>
-              <span class="lk">[{{ l.kind }}]</span>
-              <span class="lr" v-html="l.html"></span>
-            </div>
-            <div v-if="!filteredLogs.length" class="empty" style="padding: 28px 10px">
-              <div class="small tertiary">暂无调度事件（日志由调度器/Worker 写入，浏览器只读）</div>
+            <div class="gantt-track">
+              <i
+                class="gantt-bar"
+                :class="`st-${row.status}`"
+                :style="{ left: row.left + '%', width: row.width + '%' }"
+              ></i>
             </div>
           </div>
         </div>
-      </div>
-    </div>
-
-    <!-- ═══ 5. 底部：任务编排时间线（甘特 · 先评后压父子关联） ═══ -->
-    <div class="panel glow mt16" data-od-id="dispatch-gantt" style="--glow-c: var(--c-agent)">
-      <div class="row-between mb12">
-        <div class="panel-title" style="margin: 0">
-          任务编排时间线
-          <span class="small tertiary" style="font-weight: 400">最近 {{ ganttRows.length }} 条 · 评测 → 派生压测链路</span>
+        <div v-else class="empty" style="padding: 28px 10px">
+          <div class="small tertiary">暂无任务记录，通过智能体对话或任务中心创建评测任务后此处展示编排链路</div>
         </div>
-        <div class="row" style="gap: 10px; font-size: 11px">
-          <span v-for="lg in ganttLegend" :key="lg.label" class="row" style="gap: 4px; align-items: center">
-            <i class="gantt-dot" :style="{ background: lg.color }"></i><span class="tertiary">{{ lg.label }}</span>
-          </span>
-        </div>
-      </div>
-      <div v-if="ganttRows.length" class="gantt">
-        <div class="gantt-axis">
-          <span v-for="(tick, i) in ganttTicks" :key="i" class="mono">{{ tick }}</span>
-        </div>
-        <div
-          v-for="row in ganttRows"
-          :key="row.id"
-          class="gantt-row"
-          :class="{ child: row.isChild }"
-          :title="`${row.label}\n${statusLabel(row.status)} · ${fmtTime(row.start)} → ${fmtTime(row.end)}`"
-          @click="goTasks"
-        >
-          <div class="gantt-name">
-            <span v-if="row.isChild" class="tertiary">↳</span>
-            <KindTag :kind="row.kind" />
-            <span class="mono" style="font-size: 10px">{{ row.shortId }}</span>
-          </div>
-          <div class="gantt-track">
-            <i
-              class="gantt-bar"
-              :class="`st-${row.status}`"
-              :style="{ left: row.left + '%', width: row.width + '%' }"
-            ></i>
-          </div>
-        </div>
-      </div>
-      <div v-else class="empty" style="padding: 28px 10px">
-        <div class="small tertiary">暂无任务记录，通过智能体对话或任务中心创建评测任务后此处展示编排链路</div>
       </div>
     </div>
 
@@ -445,8 +411,7 @@ const modeStore = useModeStore()
 // live 模式接真实调度 API（§3.13）；mock 模式保留本地仿真演示
 const liveMode = !api.isMock()
 
-const topoRef = ref<HTMLDivElement | null>(null)
-const wiresRef = ref<SVGElement | null>(null)
+const canvasRef = ref<HTMLDivElement | null>(null)
 
 const isRunning = ref(true)
 const strategy = ref('负载均衡')
@@ -508,7 +473,7 @@ function pushHist(hist: number[], v: number) {
   if (hist.length > 24) hist.shift()
 }
 
-/* ─── 编排拓扑数据模型 ─── */
+/* ─── 编排画布数据模型 ─── */
 interface WorkerNode {
   id: string
   name: string
@@ -533,26 +498,24 @@ const workerPool = ref<WorkerNode[]>([
   { id: 'worker-10', name: 'Case-Node-C2', caps: ['testcase', 'openapi'], state: 'idle', load: 9, ram: '1.5GB/16GB', task: null, weight: 90 },
 ])
 
-// 任务编排节点：统一 mock 仿真项与 live 任务的展示模型
+// 任务工单：统一 mock 仿真项与 live 任务的画布展示模型
 interface TaskNode {
   id: string
   shortId: string
   kind: TaskKind
   label: string
   status: TaskStatus
-  prio?: string
   progress: number | null
   workerId: string | null
   parentId: string | null
 }
 
-// mock 队列项扩展：分配后携带 workerId / 进度 / 开始时间，驱动连线与甘特
+// mock 队列项扩展：分配后携带 workerId / 进度 / 开始时间，驱动飞行连线与甘特
 interface QueueItem {
   qid: string
   kind: TaskKind
   label: string
   prio: string
-  wait_ms?: number
   workerId?: string | null
   progress?: number
   startedAt?: number
@@ -560,15 +523,15 @@ interface QueueItem {
 }
 
 const queue = ref<QueueItem[]>([
-  { qid: 'q-101', kind: 'benchmark', label: '2 模型 × 数据集 smoke-20 v3 · shard 3/5', prio: 'P0', wait_ms: 120 },
-  { qid: 'q-102', kind: 'rag', label: '知识库 default · 黄金 QA qa-v1 · hybrid 回归', prio: 'P1', wait_ms: 450 },
-  { qid: 'q-103', kind: 'stress', label: '↳ 派生压测 · env=test · 10 QPS', prio: 'P2', wait_ms: 890, parentId: 'q-101' },
+  { qid: 'q-101', kind: 'benchmark', label: '2 模型 × 数据集 smoke-20 v3 · shard 3/5', prio: 'P0' },
+  { qid: 'q-102', kind: 'rag', label: '知识库 default · 黄金 QA qa-v1 · hybrid 回归', prio: 'P1' },
+  { qid: 'q-103', kind: 'stress', label: '派生压测 · env=test · 10 QPS', prio: 'P2', parentId: 'q-101' },
 ])
 
 // live 模式：活跃任务（queued/running/awaiting_case_confirm）与近期任务（甘特）
 const liveActiveTasks = ref<Task[]>([])
 const liveRecentTasks = ref<Task[]>([])
-// live 模式任务→节点映射：由 assigned 事件维护，succeeded/failed 后移除
+// live 模式任务→节点映射：由 assigned 事件维护，终态事件解除
 const taskWorkerMap = ref<Record<string, string>>({})
 
 /** 任务业务上下文标签：基准=模型×数据集；RAG=知识库×黄金QA×模式；用例=PRD 来源；压测=父任务+env/QPS */
@@ -590,13 +553,13 @@ function taskLabel(t: Task): string {
     if (cfg.case_source?.file_id) return `文件 ${cfg.case_source.file_id} 生成用例`
     return 'PRD 用例生成'
   }
-  const parent = cfg.parent_task_id || t.parent_task_id ? `↳ 派生自 ${String(cfg.parent_task_id || t.parent_task_id).substring(0, 8)}` : ''
+  const parent = cfg.parent_task_id || t.parent_task_id ? `派生自 ${String(cfg.parent_task_id || t.parent_task_id).substring(0, 8)}` : ''
   const env = cfg.stress?.env ? `env=${cfg.stress.env}` : ''
   const qps = cfg.stress?.qps ? `${cfg.stress.qps} QPS` : ''
   return [parent, env, qps].filter(Boolean).join(' · ') || '共享压测'
 }
 
-/** live 任务 → 编排节点；workerId 优先取事件映射，兜底用节点 current_task 短号前缀匹配 */
+/** live 任务 → 画布工单；workerId 优先取事件映射，兜底用节点 current_task 短号前缀匹配 */
 function mapLiveTask(t: Task): TaskNode {
   const short = t.id.substring(0, 6)
   let workerId = taskWorkerMap.value[t.id] || null
@@ -619,57 +582,132 @@ function mapLiveTask(t: Task): TaskNode {
   }
 }
 
-// 统一任务编排节点：live 取服务端活跃任务；mock 由仿真队列合成
+// 统一任务工单：live 取服务端活跃任务；mock 由仿真队列合成
 const taskNodes = computed<TaskNode[]>(() => {
-  if (liveMode) {
-    const order: Record<string, number> = { running: 0, awaiting_case_confirm: 1, queued: 2 }
-    return liveActiveTasks.value
-      .map(mapLiveTask)
-      .sort((a, b) => (order[a.status] ?? 3) - (order[b.status] ?? 3))
-  }
+  if (liveMode) return liveActiveTasks.value.map(mapLiveTask)
   return queue.value.map(q => ({
     id: q.qid,
     shortId: q.qid,
     kind: q.kind,
     label: q.label,
     status: q.workerId ? 'running' as TaskStatus : 'queued' as TaskStatus,
-    prio: q.prio,
     progress: q.workerId ? Math.round(q.progress ?? 0) : null,
     workerId: q.workerId || null,
     parentId: q.parentId || null,
   }))
 })
 
-// 业务域过滤 chips（全部 / 基准 / RAG / 用例 / 压测）
-const kindFilter = ref<'all' | TaskKind>('all')
-const kindFilters = computed(() => ([
-  { key: 'all' as const, label: '全部', count: taskNodes.value.length },
-  { key: 'benchmark' as const, label: '基准', count: taskNodes.value.filter(t => t.kind === 'benchmark').length },
-  { key: 'rag' as const, label: 'RAG', count: taskNodes.value.filter(t => t.kind === 'rag').length },
-  { key: 'testcase' as const, label: '用例', count: taskNodes.value.filter(t => t.kind === 'testcase').length },
-  { key: 'stress' as const, label: '压测', count: taskNodes.value.filter(t => t.kind === 'stress').length },
-]))
-const filteredTaskNodes = computed(() =>
-  kindFilter.value === 'all' ? taskNodes.value : taskNodes.value.filter(t => t.kind === kindFilter.value),
-)
-
-// 4 大技能 Agent（PRD §5.5.2）：活跃/运行任务数由编排层实时统计
-const SKILL_AGENTS = [
-  { id: 'skill-benchmark', name: '基准对比 Agent', kind: 'benchmark' as TaskKind, icon: '📊', desc: '模型评测 · 数据集 · 先评后压' },
-  { id: 'skill-rag', name: 'RAG 评估 Agent', kind: 'rag' as TaskKind, icon: '🔍', desc: '知识库 · 黄金 QA · 4 模式检索' },
-  { id: 'skill-testcase', name: '用例生成 Agent', kind: 'testcase' as TaskKind, icon: '🧩', desc: 'PRD/OpenAPI · 6 大策略配比' },
-  { id: 'skill-stress', name: '共享压测 Agent', kind: 'stress' as TaskKind, icon: '⚡', desc: '继承父任务 · SLA 拐点定位' },
+/* ─── 业务泳道布局：四条流水线（PRD §5.5.2 技能域）+ 通用兜底泳道 ─── */
+const LANE_DEFS = [
+  { kind: 'benchmark' as TaskKind, name: 'Benchmark 基准评测', icon: '📊', color: 'var(--c-datasets)', desc: '模型评测 · 数据集 · 先评后压' },
+  { kind: 'rag' as TaskKind, name: 'RAG 质量评估', icon: '🔍', color: 'var(--c-kb)', desc: '知识库 · 黄金 QA · 4 模式检索' },
+  { kind: 'testcase' as TaskKind, name: '用例生成', icon: '🧩', color: 'var(--c-cases)', desc: 'PRD/OpenAPI · 6 大策略配比' },
+  { kind: 'stress' as TaskKind, name: '共享压测', icon: '⚡', color: 'var(--c-stress)', desc: '继承父任务 · SLA 拐点定位' },
 ]
-const skillAgents = computed(() =>
-  SKILL_AGENTS.map(s => ({
-    ...s,
-    activeCount: taskNodes.value.filter(t => t.kind === s.kind).length,
-    runningCount: taskNodes.value.filter(t => t.kind === s.kind && t.status === 'running').length,
-  })),
-)
 
-// 当前活跃任务涉及的能力域：用于 Worker 能力标签匹配高亮
-const matchedKinds = computed<Set<string>>(() => new Set(taskNodes.value.map(t => t.kind)))
+/** Worker 归属泳道：取能力标签中首个匹配的业务域，无匹配进通用泳道 */
+function workerLane(w: WorkerNode): TaskKind | 'general' {
+  const lane = LANE_DEFS.find(l => w.caps.includes(l.kind))
+  return lane ? lane.kind : 'general'
+}
+
+// 画布几何常量（x 为百分比，y 为 px）
+const AGENT_X = 1
+const QUEUE_X = 18
+const RUN_X = 46
+const WORKER_X = 74
+const CHIP_H = 40
+const CHIP_GAP = 8
+const WORKER_H = 46
+const WORKER_GAP = 8
+const LANE_PAD = 10
+
+interface CanvasPos { x: number; y: number }
+
+// 画布布局：先按泳道堆叠 Worker 得到全局节点坐标，再按状态摆放任务工单（队列区 / 随节点）
+const canvasLayout = computed(() => {
+  // 启用泳道：四条业务流水线 + 有未匹配节点时的通用泳道
+  const defs: typeof LANE_DEFS = [...LANE_DEFS]
+  if (workerPool.value.some(w => workerLane(w) === 'general')) {
+    defs.push({ kind: 'general' as any, name: '通用执行', icon: '🛠', color: 'var(--text-tertiary)', desc: '未匹配业务域的执行节点' })
+  }
+
+  // 第一遍：Worker 单列堆叠，建立全局节点坐标表
+  const workerPos = new Map<string, CanvasPos>()
+  const laneWorkers = new Map<string, WorkerNode[]>()
+  defs.forEach(d => laneWorkers.set(d.kind, workerPool.value.filter(w => workerLane(w) === d.kind)))
+
+  const lanes: {
+    kind: TaskKind | 'general'
+    name: string
+    icon: string
+    color: string
+    desc: string
+    top: number
+    height: number
+    activeCount: number
+    runningCount: number
+    tpos: { t: TaskNode; x: number; y: number }[]
+    wpos: { w: WorkerNode; x: number; y: number }[]
+  }[] = []
+
+  let top = 0
+  defs.forEach(d => {
+    const workers = laneWorkers.get(d.kind) || []
+    const tasks = taskNodes.value.filter(t => t.kind === d.kind)
+    const queuedCount = tasks.filter(t => t.status !== 'running').length
+    // 泳道高度容纳：Worker 堆叠 / 队列堆叠 / Agent 节点
+    const height = Math.max(
+      84,
+      LANE_PAD * 2 + workers.length * (WORKER_H + WORKER_GAP),
+      LANE_PAD * 2 + queuedCount * (CHIP_H + CHIP_GAP),
+    )
+    const wpos = workers.map((w, i) => {
+      const pos = { x: WORKER_X, y: top + LANE_PAD + i * (WORKER_H + WORKER_GAP) }
+      workerPos.set(w.id, pos)
+      return { w, ...pos }
+    })
+    lanes.push({
+      kind: d.kind,
+      name: d.name,
+      icon: d.icon,
+      color: d.color,
+      desc: d.desc,
+      top,
+      height,
+      activeCount: tasks.length,
+      runningCount: tasks.filter(t => t.status === 'running').length,
+      tpos: [],
+      wpos,
+    })
+    top += height + 6
+  })
+
+  // 第二遍：任务工单定位——运行中跟随其 Worker（跨泳道允许），其余在队列区堆叠
+  lanes.forEach(l => {
+    const tasks = taskNodes.value.filter(t => t.kind === l.kind)
+    const queued = tasks.filter(t => t.status !== 'running')
+    const running = tasks.filter(t => t.status === 'running')
+    const runStack = new Map<string, number>()
+    l.tpos = tasks.map(t => {
+      if (t.status === 'running' && t.workerId && workerPos.has(t.workerId)) {
+        const wp = workerPos.get(t.workerId)!
+        const stackIdx = runStack.get(t.workerId) || 0
+        runStack.set(t.workerId, stackIdx + 1)
+        return { t, x: RUN_X, y: wp.y + 3 + stackIdx * (CHIP_H + 4) }
+      }
+      // 运行中但尚未解析到节点：停在队列区右缘等待连线
+      if (t.status === 'running') {
+        const idx = running.indexOf(t)
+        return { t, x: RUN_X, y: l.top + LANE_PAD + idx * (CHIP_H + CHIP_GAP) }
+      }
+      const qi = queued.indexOf(t)
+      return { t, x: QUEUE_X, y: l.top + LANE_PAD + qi * (CHIP_H + CHIP_GAP) }
+    })
+  })
+
+  return { lanes, totalHeight: Math.max(top - 6, 120) }
+})
 
 const onlineCount = computed(() =>
   liveMode && overviewData.value
@@ -694,7 +732,7 @@ const runningDisplay = useCountUp(runningCount)
 const costDisplay = useCountUp(avgDispatchCost)
 const assignedDisplay = useCountUp(assignedTodayNum)
 
-/* ─── 调度事件流（分类过滤 + 点击定位任务） ─── */
+/* ─── 调度事件流（分类过滤 + 点击定位画布工单） ─── */
 interface LogItem {
   time: string
   kind: string
@@ -733,7 +771,7 @@ function addLog(kind: string, html: string, tid?: string) {
   if (logs.value.length > 50) logs.value.pop()
 }
 
-// 点击日志定位：闪烁编排拓扑中对应任务卡片
+// 点击日志定位：闪烁画布中对应任务工单
 const flashTaskId = ref('')
 let flashTimer = 0
 function flashTask(tid: string) {
@@ -849,37 +887,32 @@ function handleManualEnqueue() {
   enqueueMockTask()
 }
 
-/* ─── 实时编排连线：技能 Agent→任务→Worker 三层锚点的三次贝塞尔路径 ─── */
-interface WirePath { key: string; d: string; cls: string }
+/* ─── 画布连线：技能 Agent→工单（灰虚线缓流）、工单→Worker（蓝色流动 + 粒子） ─── */
+interface WirePath { key: string; d: string; cls: string; particle: boolean }
 const activeWires = ref<WirePath[]>([])
 
-// 连线规格：技能 Agent→任务（灰虚线缓流）；任务→Worker（运行中蓝色流动）
+// 连线规格：所有活跃工单挂技能链路；运行中工单向执行节点挂分发链路
 const wireSpecs = computed(() => {
-  const specs: { key: string; fromSel: string; toSel: string; cls: string }[] = []
-  filteredTaskNodes.value.forEach(t => {
-    specs.push({ key: `s-${t.id}`, fromSel: `[data-skill="${t.kind}"]`, toSel: `[data-tid="${t.id}"]`, cls: 'wire wire-skill' })
-    if (t.workerId) {
-      specs.push({
-        key: `w-${t.id}`,
-        fromSel: `[data-tid="${t.id}"]`,
-        toSel: `[data-aid="${t.workerId}"]`,
-        cls: t.status === 'running' ? 'wire live' : 'wire',
-      })
+  const specs: { key: string; fromSel: string; toSel: string; cls: string; particle: boolean }[] = []
+  taskNodes.value.forEach(t => {
+    specs.push({ key: `s-${t.id}`, fromSel: `[data-skill="${t.kind}"]`, toSel: `[data-ctid="${t.id}"]`, cls: 'wire wire-skill', particle: false })
+    if (t.status === 'running' && t.workerId) {
+      specs.push({ key: `w-${t.id}`, fromSel: `[data-ctid="${t.id}"]`, toSel: `[data-caid="${t.workerId}"]`, cls: 'wire live', particle: true })
     }
   })
   return specs
 })
 
 function drawWires() {
-  const box = topoRef.value?.getBoundingClientRect()
+  const box = canvasRef.value?.getBoundingClientRect()
   if (!box) {
     activeWires.value = []
     return
   }
   const paths: WirePath[] = []
   wireSpecs.value.forEach(spec => {
-    const from = topoRef.value!.querySelector(spec.fromSel)
-    const to = topoRef.value!.querySelector(spec.toSel)
+    const from = canvasRef.value!.querySelector(spec.fromSel)
+    const to = canvasRef.value!.querySelector(spec.toSel)
     if (!from || !to) return
     const fr = from.getBoundingClientRect()
     const tr = to.getBoundingClientRect()
@@ -888,18 +921,33 @@ function drawWires() {
     const x2 = tr.left - box.left
     const y2 = tr.top + tr.height / 2 - box.top
     const mx = (x1 + x2) / 2
-    paths.push({ key: spec.key, cls: spec.cls, d: `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}` })
+    paths.push({ key: spec.key, cls: spec.cls, particle: spec.particle, d: `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}` })
   })
   activeWires.value = paths
 }
 
-/* ─── mock 调度分发循环：按策略选节点 → 连线 → 进度推进 → 完成释放并沉淀甘特 ─── */
+/* ─── 完成涟漪：任务终态时在执行节点位置扩散一圈 ─── */
+const ripples = ref<{ id: number; x: number; y: number }[]>([])
+let rippleSeq = 0
+function addRippleAtWorker(workerId: string | null | undefined) {
+  const canvas = canvasRef.value
+  if (!canvas || !workerId) return
+  const el = canvas.querySelector(`[data-caid="${workerId}"]`)
+  if (!el) return
+  const box = canvas.getBoundingClientRect()
+  const r = el.getBoundingClientRect()
+  const id = ++rippleSeq
+  ripples.value.push({ id, x: r.left - box.left + r.width / 2, y: r.top - box.top + r.height / 2 })
+  window.setTimeout(() => { ripples.value = ripples.value.filter(p => p.id !== id) }, 1100)
+}
+
+/* ─── mock 调度分发循环：按策略选节点 → 工单飞向节点 → 进度推进 → 完成涟漪 + 甘特沉淀 ─── */
 let enqueueSeq = 200
 const QUEUE_TPL: { kind: TaskKind; label: string; prio: string; parentId?: string }[] = [
   { kind: 'benchmark', label: '2 模型 × 数据集 smoke-20 v3 · 规则评分', prio: 'P1' },
   { kind: 'rag', label: '知识库 default · 黄金 QA qa-v1 · naive/local 对比', prio: 'P1' },
   { kind: 'testcase', label: 'PRD-支付链路 用例生成（40/25/15/10/5/5）', prio: 'P2' },
-  { kind: 'stress', label: '↳ 派生压测 · env=test · 10 QPS', prio: 'P2', parentId: 'q-101' },
+  { kind: 'stress', label: '派生压测 · env=test · 10 QPS', prio: 'P2', parentId: 'q-101' },
 ]
 
 // mock 甘特历史：完成的编排段沉淀于此（最近 12 条）
@@ -955,6 +1003,7 @@ function tryAssign() {
   const cost = 55 + Math.round(Math.random() * 70)
   assignCosts.value.push(cost)
   if (assignCosts.value.length > 12) assignCosts.value.shift()
+  // 工单状态置为运行并绑定节点：画布位置由 computed 驱动，CSS transition 自动播放飞行动效
   q.workerId = agent.id
   q.progress = 0
   q.startedAt = Date.now()
@@ -964,7 +1013,7 @@ function tryAssign() {
   assignedToday.value++
   addLog('ASSIGN', `<span class="la">${q.qid}</span> → ${agent.id} · 策略=${strategy.value} · 耗时 ${cost}ms`, q.qid)
 
-  // 执行 4~8.5s：期间按节拍推进进度，完成后释放槽位并沉淀甘特历史
+  // 执行 4~8.5s：期间按节拍推进进度，完成后释放槽位、触发涟漪并沉淀甘特历史
   const duration = 4000 + Math.random() * 4500
   const progressTimer = window.setInterval(() => {
     if (q.startedAt) q.progress = Math.min(99, ((Date.now() - q.startedAt) / duration) * 100)
@@ -980,6 +1029,7 @@ function tryAssign() {
       agent.state = 'idle'
       agent.task = null
     }
+    addRippleAtWorker(agent.id)
     mockGanttDone.value.unshift({
       id: q.qid, shortId: q.qid, kind: q.kind, label: q.label, status: 'succeeded',
       start: q.startedAt || Date.now() - duration, end: Date.now(),
@@ -1090,7 +1140,7 @@ let lastEventId = 0
 let pollTimer: number | null = null
 let pollRound = 0
 
-/** 服务端 Worker 快照映射为拓扑卡片模型；RAM 用量契约未提供时显示占位。 */
+/** 服务端 Worker 快照映射为画布节点模型；RAM 用量契约未提供时显示占位。 */
 function mapWorker(w: DispatchWorker): WorkerNode {
   return {
     id: w.id,
@@ -1108,7 +1158,7 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
-/** 全量刷新大盘指标、节点池与任务域（活跃任务进编排层，近期任务进甘特）。 */
+/** 全量刷新大盘指标、节点池与任务域（活跃任务进画布，近期任务进甘特）。 */
 async function loadLiveAll() {
   try {
     const [ov, workers, allTasks] = await Promise.all([
@@ -1135,7 +1185,7 @@ async function loadLiveAll() {
   }
 }
 
-/** 增量拉取调度事件流：维护任务→节点映射；日志只能由调度器/Worker 写入，浏览器不生成不改写。 */
+/** 增量拉取调度事件流：维护任务→节点映射与终态涟漪；日志只能由调度器/Worker 写入，浏览器不生成不改写。 */
 async function pollLiveEvents() {
   try {
     const page = await api.dispatch.events(lastEventId || undefined)
@@ -1143,9 +1193,12 @@ async function pollLiveEvents() {
     if (page.items.length) {
       page.items.forEach(e => {
         const ev = e.event.toLowerCase()
-        // assigned 事件建立任务→节点映射，终态事件解除
+        // assigned 事件建立任务→节点映射，终态事件解除并在节点上触发涟漪
         if (ev === 'assigned' && e.task_id && e.worker_id) taskWorkerMap.value[e.task_id] = e.worker_id
-        if (['succeeded', 'failed', 'cancelled'].includes(ev) && e.task_id) delete taskWorkerMap.value[e.task_id]
+        if (['succeeded', 'failed', 'cancelled'].includes(ev) && e.task_id) {
+          addRippleAtWorker(taskWorkerMap.value[e.task_id])
+          delete taskWorkerMap.value[e.task_id]
+        }
       })
       const mapped = page.items.map(e => ({
         time: new Date(e.ts).toTimeString().slice(0, 8),
@@ -1244,7 +1297,7 @@ function fmtTime(ts: number): string {
 
 function statusLabel(s: string): string {
   const map: Record<string, string> = {
-    queued: '排队中',
+    queued: '排队',
     running: '运行中',
     awaiting_case_confirm: '待确认',
     succeeded: '已成功',
@@ -1286,8 +1339,8 @@ onMounted(async () => {
   nextTick(drawWires)
 })
 
-// 编排数据变化时在 DOM 更新后重绘连线
-watch([wireSpecs, workerPool], () => nextTick(drawWires), { deep: true })
+// 画布布局变化时在 DOM 更新后重绘连线
+watch([wireSpecs, canvasLayout], () => nextTick(drawWires), { deep: true })
 
 onBeforeUnmount(() => {
   if (timer) clearInterval(timer)
@@ -1302,36 +1355,15 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.dispatch-grid {
+.dispatch-page {
+  max-width: 1440px;
+  margin: 0 auto;
+}
+.bottom-grid {
   display: grid;
-  grid-template-columns: 270px minmax(0, 1fr) 310px;
+  grid-template-columns: 270px minmax(0, 1fr) minmax(0, 1.2fr);
   gap: 16px;
   align-items: start;
-}
-/* 三泳道编排拓扑：技能 Agent → 任务编排 → Worker 池 */
-.orch-lanes {
-  position: relative;
-  display: grid;
-  grid-template-columns: 168px minmax(170px, 0.95fr) minmax(0, 1.25fr);
-  column-gap: 44px;
-  min-height: 480px;
-}
-.lane {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-}
-.lane-scroll {
-  flex: 1;
-  overflow-y: auto;
-  max-height: 470px;
-  padding-right: 2px;
-}
-.agent-pool {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 10px;
-  align-content: start;
 }
 .cap-slider {
   width: 100%;
@@ -1342,26 +1374,12 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   height: 100%;
-  max-height: 640px;
+  max-height: 560px;
 }
 .dispatch-log-panel .log-stream {
   flex: 1;
   overflow-y: auto;
   min-height: 220px;
-}
-.worker-metrics {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin: 6px 0;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--text-secondary);
-}
-.worker-metric-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
 }
 
 /* KPI 迷你趋势线 */
@@ -1386,17 +1404,74 @@ onBeforeUnmount(() => {
   stroke-linecap: round;
 }
 
-/* 技能 Agent 卡片：有活跃任务时发光 */
-.skill-card {
+/* ═══ 编排画布 ═══ */
+.canvas-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  background:
+    linear-gradient(rgba(17, 24, 39, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(17, 24, 39, 0.03) 1px, transparent 1px),
+    var(--bg-elevated);
+  background-size: 24px 24px, 24px 24px, 100% 100%;
+}
+.orch-canvas {
+  position: relative;
+  min-width: 880px;
+}
+.orch-canvas .wires {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: visible;
+  z-index: 5;
+}
+/* 数据流粒子：沿分发链路运动 */
+.particle {
+  fill: var(--accent-ai);
+  filter: drop-shadow(0 0 3px rgba(99, 102, 241, 0.8));
+}
+
+/* 泳道背景带：左侧业务域色条 + 顶部 caption */
+.lane-band {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-left: 3px solid transparent;
+  border-bottom: 1px dashed var(--border-subtle);
+  background: color-mix(in srgb, var(--bg-main) 55%, transparent);
+}
+.lane-caption {
+  position: absolute;
+  top: 6px;
+  right: 10px;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  opacity: 0.75;
+}
+
+/* 技能 Agent 节点：泳道左侧固定，活跃时发光 + 脉冲点 */
+.skill-node {
+  position: absolute;
+  left: 1%;
+  width: 14%;
+  min-width: 118px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
   border: 1px solid var(--border-subtle);
   border-radius: 12px;
   background: var(--bg-main);
-  padding: 10px 11px;
+  box-shadow: 0 2px 8px rgba(17, 24, 39, 0.05);
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
-.skill-card.on {
-  border-color: color-mix(in srgb, var(--accent-ai) 42%, var(--border-subtle));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-ai) 16%, transparent), 0 4px 14px rgba(99, 102, 241, 0.1);
+.skill-node.on {
+  border-color: color-mix(in srgb, var(--accent-ai) 45%, var(--border-subtle));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-ai) 18%, transparent), 0 4px 16px rgba(99, 102, 241, 0.14);
 }
 .skill-ico {
   width: 30px;
@@ -1409,95 +1484,194 @@ onBeforeUnmount(() => {
   border: 1px solid var(--border-subtle);
   font-size: 15px;
 }
-.skill-name {
-  font-size: 12.5px;
-  font-weight: 600;
+.skill-meta {
+  min-width: 0;
 }
-.skill-desc {
-  font-size: 10.5px;
-  margin-top: 1px;
+.skill-name {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
-.skill-foot {
-  margin-top: 7px;
-  font-size: 10.5px;
+.skill-count {
+  font-size: 10px;
   color: var(--text-secondary);
+  margin-top: 1px;
+}
+.skill-pulse {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent-ai);
+  animation: dot-breathe 1.4s ease-in-out infinite;
 }
 
-/* 任务编排节点卡片：状态色左边条 + 点击跳任务中心 */
-.task-node {
-  position: relative;
+/* 任务工单卡片：绝对定位 + left/top transition = 状态驱动的飞行动效 */
+.canvas-task {
+  position: absolute;
+  width: 24%;
+  z-index: 7;
+  padding: 6px 10px;
   border: 1px solid var(--border-subtle);
   border-radius: 10px;
   background: var(--bg-main);
-  padding: 8px 11px 8px 13px;
-  font-size: 12px;
+  font-size: 11.5px;
   cursor: pointer;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  box-shadow: 0 2px 8px rgba(17, 24, 39, 0.06);
+  transition:
+    left 0.7s cubic-bezier(0.2, 0.9, 0.3, 1),
+    top 0.7s cubic-bezier(0.2, 0.9, 0.3, 1),
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
 }
-.task-node::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 8px;
-  bottom: 8px;
-  width: 3px;
-  border-radius: 3px;
-  background: var(--border-subtle);
-}
-.task-node.running {
-  border-color: color-mix(in srgb, var(--accent-ai) 42%, var(--border-subtle));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-ai) 18%, transparent);
-}
-.task-node.running::before { background: var(--accent-ai); }
-.task-node.queued::before { background: #9ca3af; }
-.task-node.awaiting_case_confirm::before { background: var(--accent-warning); }
-.task-node:hover {
+.canvas-task:hover {
   border-color: var(--accent-ai);
 }
-/* 日志点击定位的闪烁高亮 */
-.task-node.flash {
+.canvas-task.queued {
+  border-style: dashed;
+  opacity: 0.9;
+}
+.canvas-task.running {
+  border-color: color-mix(in srgb, var(--accent-ai) 45%, var(--border-subtle));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-ai) 18%, transparent), 0 4px 14px rgba(99, 102, 241, 0.12);
+}
+.canvas-task.flash {
   animation: task-flash 0.8s ease-in-out 2;
 }
 @keyframes task-flash {
   0%, 100% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-ai) 18%, transparent); }
-  50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent-ai) 45%, transparent); }
+  50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent-ai) 45%, transparent); }
 }
-.task-node .q-id {
-  font-family: var(--font-mono);
-  font-size: 11px;
+.ct-id {
+  font-size: 10.5px;
   color: var(--c-tasks);
 }
-/* 运行中任务进度条（流动条纹动效） */
-.task-progress {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 6px;
+.ct-badge {
+  margin-left: auto;
+  font-size: 9.5px;
+  padding: 0 5px;
 }
-.task-progress-track {
-  flex: 1;
-  height: 5px;
+.ct-label {
+  margin-top: 3px;
+  font-weight: 500;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 运行中工单底部进度条（流动条纹） */
+.ct-progress {
+  margin-top: 4px;
+  height: 3px;
   border-radius: 999px;
   background: var(--bg-elevated);
   overflow: hidden;
 }
-.task-progress-track > i {
+.ct-progress > i {
   display: block;
   height: 100%;
   border-radius: 999px;
-  background: repeating-linear-gradient(45deg, var(--accent-ai) 0 8px, color-mix(in srgb, var(--accent-ai) 55%, #fff) 8px 16px);
-  background-size: 23px 100%;
+  background: repeating-linear-gradient(45deg, var(--accent-ai) 0 6px, color-mix(in srgb, var(--accent-ai) 55%, #fff) 6px 12px);
+  background-size: 17px 100%;
   animation: bar-stripes 0.9s linear infinite;
   transition: width 0.4s ease;
 }
 @keyframes bar-stripes {
-  to { background-position: 23px 0; }
+  to { background-position: 17px 0; }
 }
 
-/* 技能→任务连线：灰色虚线缓流（区别于任务→Worker 的高亮流动） */
+/* Worker 画布节点：紧凑卡片，状态点 + 负载条 */
+.canvas-worker {
+  position: absolute;
+  width: 25%;
+  z-index: 6;
+  padding: 7px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--bg-main);
+  cursor: pointer;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+}
+.canvas-worker:hover {
+  border-color: var(--text-tertiary);
+}
+.canvas-worker.busy {
+  border-color: color-mix(in srgb, var(--accent-ai) 40%, var(--border-subtle));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-ai) 16%, transparent);
+}
+.canvas-worker.offline {
+  opacity: 0.45;
+}
+.cw-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+}
+.cw-dot.idle { background: var(--accent-success); }
+.cw-dot.busy { background: var(--accent-ai); animation: dot-breathe 1.4s ease-in-out infinite; }
+.cw-dot.draining { background: var(--accent-warning); }
+.cw-name {
+  font-size: 11px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cw-load {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+.load-track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  overflow: hidden;
+}
+.load-track > i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent-ai);
+  transition: width 0.5s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+.load-track.hot > i {
+  background: var(--accent-warning);
+}
+
+/* 泳道队列区空态 */
+.lane-empty {
+  position: absolute;
+  left: 18%;
+  width: 24%;
+  text-align: center;
+  z-index: 4;
+}
+
+/* 完成涟漪 */
+.ripple {
+  position: absolute;
+  z-index: 8;
+  width: 10px;
+  height: 10px;
+  margin: -5px;
+  border-radius: 50%;
+  background: var(--accent-success);
+  pointer-events: none;
+  animation: ripple-out 1s ease-out forwards;
+}
+@keyframes ripple-out {
+  0% { transform: scale(1); opacity: 0.9; }
+  100% { transform: scale(7); opacity: 0; }
+}
+
+/* 技能→工单连线：灰色虚线缓流（区别于工单→Worker 的高亮流动） */
 :deep(.wire-skill) {
   stroke: var(--text-tertiary);
   stroke-dasharray: 3 6;
@@ -1505,14 +1679,18 @@ onBeforeUnmount(() => {
   animation: dash-flow 2.4s linear infinite;
 }
 
-/* Worker 能力匹配高亮：当前活跃任务域对应的节点与能力标签 */
-.agent-node.matched {
-  border-color: color-mix(in srgb, var(--accent-success) 38%, var(--border-subtle));
+/* 图例 */
+.legend-line {
+  display: inline-block;
+  width: 18px;
+  height: 2px;
+  border-radius: 2px;
 }
-.an-cap.hot {
-  color: var(--accent-success);
-  border-color: color-mix(in srgb, var(--accent-success) 40%, var(--border-subtle));
-  background: rgba(16, 185, 129, 0.08);
+.legend-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
 }
 
 /* 小号过滤 chip */
@@ -1540,11 +1718,11 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   font-size: 10px;
   color: var(--text-tertiary);
-  padding: 0 4px 4px 190px;
+  padding: 0 4px 4px 150px;
 }
 .gantt-row {
   display: grid;
-  grid-template-columns: 190px 1fr;
+  grid-template-columns: 150px 1fr;
   align-items: center;
   gap: 8px;
   padding: 3px 4px;
@@ -1597,41 +1775,24 @@ onBeforeUnmount(() => {
   border-radius: 3px;
 }
 
-@media (max-width: 1360px) {
-  .dispatch-grid {
+@media (max-width: 1200px) {
+  .bottom-grid {
     grid-template-columns: 250px minmax(0, 1fr);
   }
-  .dispatch-log-col {
+  .bottom-grid > :last-child {
     grid-column: 1 / -1;
-  }
-  .dispatch-log-panel {
-    max-height: 300px;
-  }
-}
-
-@media (max-width: 1080px) {
-  .orch-lanes {
-    grid-template-columns: 150px minmax(150px, 1fr) minmax(0, 1.1fr);
-    column-gap: 28px;
   }
 }
 
 @media (max-width: 880px) {
-  .dispatch-grid {
+  .bottom-grid {
     grid-template-columns: 1fr;
-  }
-  .orch-lanes {
-    grid-template-columns: 1fr;
-    row-gap: 24px;
-  }
-  .lane-scroll {
-    max-height: 300px;
   }
   .gantt-axis {
-    padding-left: 120px;
+    padding-left: 110px;
   }
   .gantt-row {
-    grid-template-columns: 120px 1fr;
+    grid-template-columns: 110px 1fr;
   }
 }
 </style>
