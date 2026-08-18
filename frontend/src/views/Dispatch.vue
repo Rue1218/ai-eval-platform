@@ -434,10 +434,10 @@ const modeTagStyle = computed(() => ({
 }))
 
 /* ─── KPI 数字滚动（count-up）与迷你趋势线 ─── */
-function useCountUp(get: () => number) {
-  const display = ref(get())
+function useCountUp(source: { value: number }) {
+  const display = ref(source.value)
   let raf = 0
-  watch(get, (to) => {
+  watch(source, (to) => {
     const from = display.value
     const t0 = performance.now()
     cancelAnimationFrame(raf)
