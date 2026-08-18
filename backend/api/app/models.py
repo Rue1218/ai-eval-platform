@@ -1,16 +1,25 @@
+"""平台 M1 数据库模型。
+
+实体主键保持 UUID 字符串，以兼容首个骨架迁移；需要由前端扩展的
+半结构化字段使用 PostgreSQL JSONB，其余可查询事实均使用独立列。
+"""
+
 import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     Column,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 
@@ -18,131 +27,245 @@ from .db import Base
 
 
 def utcnow() -> datetime:
+    """返回数据库默认使用的 UTC 当前时间。"""
     return datetime.now(UTC)
 
 
 def uuid_str() -> str:
+    """生成与 API 契约一致的 UUID 字符串主键。"""
     return str(uuid.uuid4())
 
 
 class User(Base):
+    """单一成员账号及浏览器认证失效版本。"""
+
     __tablename__ = "users"
 
     id = Column(String, primary_key=True, default=uuid_str)
     username = Column(String, unique=True, nullable=False, index=True)
+    display_name = Column(String, nullable=True)
+    email = Column(String, unique=True, nullable=True, index=True)
     password_hash = Column(String, nullable=False)
-    role = Column(String, nullable=False, default="engineer")  # admin / engineer / readonly
-    disabled = Column(Boolean, default=False)
-    created_at = Column(DateTime(timezone=True), default=utcnow)
-    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    role = Column(String, nullable=False, default="member")
+    must_change_password = Column(Boolean, nullable=False, default=True)
+    disabled = Column(Boolean, nullable=False, default=False)
+    auth_version = Column(Integer, nullable=False, default=1)
+    last_login_at = Column(DateTime(timezone=True), nullable=True)
+    last_login_ip = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
 
 
 class Session(Base):
+    """Agent 对话会话，不承载浏览器登录 Cookie。"""
+
     __tablename__ = "sessions"
 
     id = Column(String, primary_key=True, default=uuid_str)
     user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
-    title = Column(String, default="")
-    created_at = Column(DateTime(timezone=True), default=utcnow)
+    title = Column(String, nullable=False, default="新会话")
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
 
 
 class Message(Base):
+    """可通过 REST 回放的会话文本和已上传附件引用。"""
+
     __tablename__ = "messages"
 
     id = Column(String, primary_key=True, default=uuid_str)
     session_id = Column(String, ForeignKey("sessions.id"), nullable=False, index=True)
     role = Column(String, nullable=False)
     content = Column(Text, nullable=False)
-    created_at = Column(DateTime(timezone=True), default=utcnow)
+    attachments = Column(JSONB, nullable=False, default=list)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
 class WsEvent(Base):
+    """按会话单调事件号持久化的 WebSocket 事件。"""
+
     __tablename__ = "ws_events"
-    __table_args__ = (Index("ix_ws_events_session_event", "session_id", "event_id"),)
+    __table_args__ = (
+        UniqueConstraint("session_id", "event_id", name="uq_ws_events_session_event"),
+        Index("ix_ws_events_session_event", "session_id", "event_id"),
+    )
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    session_id = Column(String, nullable=False, index=True)
+    session_id = Column(String, ForeignKey("sessions.id"), nullable=False, index=True)
+    task_id = Column(String, nullable=True, index=True)
     event_id = Column(BigInteger, nullable=False)
     event = Column(String, nullable=False)
-    payload = Column(JSONB, default=dict)
-    ts = Column(DateTime(timezone=True), default=utcnow)
+    payload = Column(JSONB, nullable=False, default=dict)
+    ts = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
 class ProtocolProfile(Base):
+    """三协议档及仅写入的加密上游凭据。"""
+
     __tablename__ = "protocol_profiles"
+    __table_args__ = (
+        CheckConstraint(
+            "protocol IN ('openai_chat', 'openai_responses', 'anthropic_messages')",
+            name="ck_protocol_profiles_protocol",
+        ),
+    )
 
     id = Column(String, primary_key=True, default=uuid_str)
     name = Column(String, nullable=False)
-    protocol = Column(String, nullable=False)  # openai_chat / openai_responses / anthropic_messages
+    protocol = Column(String, nullable=False)
     base_url = Column(String, nullable=False)
     model = Column(String, nullable=False)
-    encrypted_key = Column(Text, nullable=True)  # 只写不回显
-    created_by = Column(String, ForeignKey("users.id"))
-    created_at = Column(DateTime(timezone=True), default=utcnow)
+    usages = Column(JSONB, nullable=False, default=list)
+    anthropic_version = Column(String, nullable=True)
+    encrypted_key = Column(Text, nullable=True)
+    created_by = Column(String, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+
+class StoredFile(Base):
+    """本地文件卷的元数据，二进制内容不进入 PostgreSQL。"""
+
+    __tablename__ = "files"
+
+    id = Column(String, primary_key=True, default=uuid_str)
+    filename = Column(String, nullable=False)
+    content_type = Column(String, nullable=True)
+    size_bytes = Column(BigInteger, nullable=False)
+    sha256 = Column(String(64), nullable=False, index=True)
+    storage_path = Column(String, nullable=False, unique=True)
+    kind = Column(String, nullable=True)
+    uploaded_by = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
 class Dataset(Base):
+    """M1 保留的最小数据集壳；版本行在 M2 迁移加入。"""
+
     __tablename__ = "datasets"
 
     id = Column(String, primary_key=True, default=uuid_str)
     name = Column(String, nullable=False)
-    version = Column(Integer, default=1)
-    row_count = Column(Integer, default=0)
-    created_by = Column(String, ForeignKey("users.id"))
-    created_at = Column(DateTime(timezone=True), default=utcnow)
+    version = Column(Integer, nullable=False, default=1)
+    row_count = Column(Integer, nullable=False, default=0)
+    created_by = Column(String, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
 class Task(Base):
+    """长任务队列、确认卡快照和 Worker 控制字段。"""
+
     __tablename__ = "tasks"
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('benchmark', 'rag', 'testcase', 'stress')", name="ck_tasks_kind"
+        ),
+        CheckConstraint(
+            "status IN ('queued', 'running', 'awaiting_case_confirm', "
+            "'succeeded', 'failed', 'cancelled')",
+            name="ck_tasks_status",
+        ),
+        Index("ix_tasks_queue", "status", "created_at"),
+    )
 
     id = Column(String, primary_key=True, default=uuid_str)
-    session_id = Column(String, nullable=True, index=True)
-    parent_task_id = Column(String, nullable=True, index=True)
-    kind = Column(String, nullable=False)  # benchmark / rag / testcase / stress
+    session_id = Column(String, ForeignKey("sessions.id"), nullable=True, index=True)
+    parent_task_id = Column(String, ForeignKey("tasks.id"), nullable=True, index=True)
+    kind = Column(String, nullable=False)
     status = Column(String, nullable=False, default="queued", index=True)
-    config = Column(JSONB, default=dict)
-    result = Column(JSONB, default=dict)
+    config = Column(JSONB, nullable=False, default=dict)
+    progress = Column(JSONB, nullable=False, default=dict)
+    result = Column(JSONB, nullable=False, default=dict)
     report_id = Column(String, nullable=True)
-    created_by = Column(String, ForeignKey("users.id"))
-    created_at = Column(DateTime(timezone=True), default=utcnow)
-    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    created_by = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    claimed_by_worker_id = Column(String, nullable=True)
+    claim_expires_at = Column(DateTime(timezone=True), nullable=True)
+    attempt = Column(Integer, nullable=False, default=0)
+    cancel_requested_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
     started_at = Column(DateTime(timezone=True), nullable=True)
     finished_at = Column(DateTime(timezone=True), nullable=True)
 
 
 class TaskEvent(Base):
+    """任务状态、告警和进度摘要组成的追加式时间线。"""
+
     __tablename__ = "task_events"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    task_id = Column(String, nullable=False, index=True)
+    task_id = Column(String, ForeignKey("tasks.id"), nullable=False, index=True)
     event = Column(String, nullable=False)
-    payload = Column(JSONB, default=dict)
-    ts = Column(DateTime(timezone=True), default=utcnow)
+    level = Column(String, nullable=False, default="info")
+    message = Column(Text, nullable=True)
+    payload = Column(JSONB, nullable=False, default=dict)
+    ts = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
 class Report(Base):
+    """M1 mock 报告及后续各类评测报告的统一入口。"""
+
     __tablename__ = "reports"
 
     id = Column(String, primary_key=True, default=uuid_str)
-    task_id = Column(String, nullable=False, index=True)
+    task_id = Column(String, ForeignKey("tasks.id"), nullable=False, index=True, unique=True)
     kind = Column(String, nullable=False)
-    metrics = Column(JSONB, default=dict)
-    created_at = Column(DateTime(timezone=True), default=utcnow)
+    metrics = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
 class Setting(Base):
+    """全员同权可维护的非敏感平台配置。"""
+
     __tablename__ = "settings"
 
     key = Column(String, primary_key=True)
-    value = Column(JSONB, default=dict)
-    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    value = Column(JSONB, nullable=False, default=dict)
+    updated_by = Column(String, ForeignKey("users.id"), nullable=True)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
 
 
 class AuditLog(Base):
+    """安全与配置变更审计；明文凭据禁止写入 detail。"""
+
     __tablename__ = "audit_logs"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    user_id = Column(String, nullable=True)
-    action = Column(String, nullable=False)
-    detail = Column(JSONB, default=dict)
-    ts = Column(DateTime(timezone=True), default=utcnow)
+    user_id = Column(String, ForeignKey("users.id"), nullable=True, index=True)
+    action = Column(String, nullable=False, index=True)
+    target_type = Column(String, nullable=True)
+    target_id = Column(String, nullable=True)
+    detail = Column(JSONB, nullable=False, default=dict)
+    ip = Column(String, nullable=True)
+    ts = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class DispatchWorker(Base):
+    """调度面可读的 Worker 心跳和能力快照。"""
+
+    __tablename__ = "dispatch_workers"
+
+    id = Column(String, primary_key=True)
+    name = Column(String, nullable=False)
+    caps = Column(JSONB, nullable=False, default=list)
+    state = Column(String, nullable=False, default="offline", index=True)
+    weight = Column(Integer, nullable=False, default=100)
+    load_percent = Column(Float, nullable=True)
+    current_task_id = Column(String, ForeignKey("tasks.id"), nullable=True)
+    last_heartbeat_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+
+class DispatchEvent(Base):
+    """由 Worker 或调度器追加的分配事件，供前端增量读取。"""
+
+    __tablename__ = "dispatch_events"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    task_id = Column(String, ForeignKey("tasks.id"), nullable=True, index=True)
+    worker_id = Column(String, ForeignKey("dispatch_workers.id"), nullable=True, index=True)
+    event = Column(String, nullable=False)
+    message = Column(Text, nullable=False)
+    detail = Column(JSONB, nullable=False, default=dict)
+    ts = Column(DateTime(timezone=True), nullable=False, default=utcnow)
