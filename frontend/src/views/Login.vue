@@ -1,11 +1,16 @@
 <template>
   <div class="login-wrapper">
-    <div class="login-card">
+    <div class="login-card scanline">
       <div class="login-brand">
         <div class="login-mark">A</div>
+        <div class="eyebrow" style="margin-bottom: 8px">SECURE ACCESS · V1.6.3</div>
         <div class="login-title">AI 测试与评估平台</div>
         <div class="login-desc">
           对话驱动大模型质量评测：用例生成 → Benchmark / RAG → 先评后压 → 对比报告
+        </div>
+        <div class="row" style="justify-content: center; margin-top: 14px; gap: 8px">
+          <span class="ai-badge"><i class="ai-dot"></i>AGENT 后端</span>
+          <span class="small tertiary mono" style="font-size: 11px">连接正常 · 调度器运行中</span>
         </div>
       </div>
 

@@ -1,6 +1,6 @@
 <template>
-  <div class="agent-layout">
-    <!-- 左侧会话轨 -->
+  <div class="agent-layout" :class="{ 'with-rail': isRailOpen }">
+    <!-- 左侧会话列表轨 (264px) -->
     <aside class="session-list">
       <div class="session-list-head">
         <button class="btn btn-secondary btn-sm" style="width: 100%" @click="handleCreateSession">
@@ -22,6 +22,7 @@
         >
           <div class="session-title">
             <span>{{ s.title || '新对话' }}</span>
+            <i v-if="s.active_task" class="nav-dot running"></i>
           </div>
           <div class="session-time mono">{{ formatRelativeTime(s.created_at) }}</div>
         </div>
@@ -38,13 +39,29 @@
           <i class="bdot"></i>
           <span>生成中...</span>
         </div>
-        <div v-if="!wsConnected" class="offline-tag mono">
+        <div v-if="!wsConnected" class="offline-tag mono" style="font-size: 11px; color: var(--accent-warning)">
           断线重连中...
         </div>
+
+        <span class="grow"></span>
+
+        <!-- 调度视图切换按钮 -->
+        <button
+          class="btn btn-sm"
+          :class="isRailOpen ? 'btn-secondary' : 'btn-ghost'"
+          title="展开/折叠任务调度分配侧轨"
+          @click="isRailOpen = !isRailOpen"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+            <line x1="9" y1="3" x2="9" y2="21"></line>
+          </svg>
+          <span>调度视图</span>
+        </button>
       </div>
 
       <!-- 消息流滚动区 -->
-      <div ref="chatScrollRef" class="chat-scroll">
+      <div ref="chatScrollRef" class="chat-scroll" @scroll="handleScroll">
         <div class="chat-col">
           <!-- 空会话欢迎态 -->
           <div v-if="events.length === 0" class="welcome">
@@ -167,6 +184,16 @@
             </div>
           </template>
         </div>
+
+        <!-- 回到底部悬浮按钮 -->
+        <div class="jump-wrap">
+          <button class="jump-bottom" :class="{ show: showJumpBottom }" @click="scrollToBottom(true)">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="6 9 12 15 18 9"></polyline>
+            </svg>
+            <span>回到底部</span>
+          </button>
+        </div>
       </div>
 
       <!-- 进度坞 (吸附输入框上方) -->
@@ -182,6 +209,62 @@
         @send="handleUserSend"
       />
     </section>
+
+    <!-- 右侧迷你调度视图 (308px) -->
+    <aside class="dispatch-rail">
+      <div class="rail-head">
+        <div class="row-between">
+          <span style="font-size: 13px; font-weight: 600">调度视图</span>
+          <router-link to="/tasks" class="link-btn" style="font-size: 12px">任务中心 →</router-link>
+        </div>
+        <div class="small tertiary" style="margin-top: 4px">当前会话任务的实时分配</div>
+      </div>
+      <div class="rail-body">
+        <div>
+          <div class="rail-label">运行中任务</div>
+          <div v-if="activeTask" class="queue-item assigning">
+            <KindTag :kind="activeTask.kind" />
+            <div class="small mono" style="margin-top: 4px">
+              {{ activeTask.id.substring(0, 8) }} · {{ activeTask.kind === 'stress' ? 'go-stress-testing' : '评测执行中' }}
+            </div>
+          </div>
+          <p v-else class="small tertiary" style="margin: 0">当前会话没有运行中的任务</p>
+        </div>
+
+        <div>
+          <div class="rail-label">Worker 节点状态</div>
+          <div style="display: flex; flex-direction: column; gap: 8px">
+            <div
+              v-for="w in railWorkers"
+              :key="w.id"
+              class="agent-node"
+              :class="{ busy: w.load > 30 }"
+            >
+              <div class="an-head">
+                <span class="an-name mono">{{ w.id }}</span>
+                <span class="an-state" :class="w.load > 30 ? 'busy' : 'idle'">
+                  {{ w.load > 30 ? 'BUSY' : 'IDLE' }}
+                </span>
+              </div>
+              <div class="load-track" :class="{ hot: w.load >= 80 }" style="margin-top: 6px">
+                <i :style="{ width: `${w.load}%` }"></i>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div class="rail-label">调度日志</div>
+          <div class="log-stream">
+            <div v-for="(l, idx) in dispatchLogs" :key="idx" class="log-line">
+              <span class="lt">{{ l.time }}</span>
+              <span class="lk">{{ l.kind }}</span>
+              <span class="lr">{{ l.msg }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </aside>
   </div>
 </template>
 
@@ -198,6 +281,7 @@ import ReportCard from '../components/agent/ReportCard.vue'
 import ProgressDock from '../components/agent/ProgressDock.vue'
 import Composer from '../components/agent/Composer.vue'
 import ErrorStrip from '../components/common/ErrorStrip.vue'
+import KindTag from '../components/common/KindTag.vue'
 
 const message = useMessage()
 const chatScrollRef = ref<HTMLDivElement | null>(null)
@@ -210,6 +294,19 @@ const isGenerating = ref(false)
 const wsConnected = ref(false)
 const activeTask = ref<Task | null>(null)
 const agentProfileName = ref('Agent · 主模型')
+const isRailOpen = ref(false)
+const showJumpBottom = ref(false)
+
+// 调度侧轨节点与日志
+const railWorkers = ref([
+  { id: 'worker-01', load: 62 },
+  { id: 'worker-02', load: 24 },
+  { id: 'worker-03', load: 8 },
+])
+const dispatchLogs = ref([
+  { time: '12:01:02', kind: 'ENQUEUE', msg: 'a1f3c2 smoke-20 v3' },
+  { time: '12:01:08', kind: 'ASSIGN', msg: 'shard 1/4 → worker-01' },
+])
 
 let agentWs: AgentWebSocket | null = null
 
@@ -235,12 +332,14 @@ const currentSession = computed(() => {
   return sessions.value.find((s) => s.id === currentSessionId.value)
 })
 
-function formatRelativeTime(dateStr?: string) {
-  if (!dateStr) return '刚刚'
-  return '刚刚'
+function handleScroll() {
+  if (!chatScrollRef.value) return
+  const { scrollTop, scrollHeight, clientHeight } = chatScrollRef.value
+  const distFromBottom = scrollHeight - scrollTop - clientHeight
+  showJumpBottom.value = distFromBottom > 80
 }
 
-function scrollToBottom() {
+function scrollToBottom(force = false) {
   nextTick(() => {
     if (chatScrollRef.value) {
       chatScrollRef.value.scrollTop = chatScrollRef.value.scrollHeight
@@ -251,42 +350,135 @@ function scrollToBottom() {
 async function loadSessions() {
   try {
     const list = await api.sessions.list()
-    if (list && list.length) {
+    if (list && list.length > 0) {
       sessions.value = list
-      if (!currentSessionId.value) currentSessionId.value = list[0].id
+      if (!currentSessionId.value) {
+        currentSessionId.value = list[0].id
+      }
     }
-  } catch (err) {
-    console.error('Failed to load sessions:', err)
+  } catch {
+    // 离线使用默认会话
   }
 }
 
-async function loadAgentSettings() {
-  try {
-    const settings = await api.admin.getSettings()
-    if (settings.agent_profile_id) {
-      const profiles = await api.profiles.list()
-      const p = profiles.find((x) => x.id === settings.agent_profile_id)
-      if (p) agentProfileName.value = `Agent · ${p.name}`
-    }
-  } catch (err) {
-    console.error('Failed to load agent settings:', err)
-  }
-}
-
-function selectSession(id: string) {
-  currentSessionId.value = id
+async function selectSession(sid: string) {
+  currentSessionId.value = sid
   events.value = []
-  activeTask.value = null
-  initWebSocket()
+  initWebSocket(sid)
 }
 
 async function handleCreateSession() {
   try {
-    const newS = await api.sessions.create('新评测对话')
-    sessions.value.unshift(newS)
-    selectSession(newS.id)
+    const newSession = await api.sessions.create('新评测对话')
+    sessions.value.unshift(newSession)
+    selectSession(newSession.id)
   } catch (err: any) {
     message.error(err.message || '创建会话失败')
+  }
+}
+
+function initWebSocket(sessionId: string) {
+  if (agentWs) {
+    agentWs.close()
+    agentWs = null
+  }
+
+  agentWs = new AgentWebSocket(sessionId)
+  agentWs.onStatus((connected) => {
+    wsConnected.value = connected
+  })
+  agentWs.onEvent((ev: WsServerEvent) => {
+    handleWsEvent(ev)
+  })
+  agentWs.connect()
+}
+
+function handleWsEvent(ev: WsServerEvent) {
+  switch (ev.event) {
+    case 'thought': {
+      let last = events.value[events.value.length - 1]
+      if (!last || last.type !== 'thought' || last.done) {
+        events.value.push({ type: 'thought', text: ev.message || '', done: false })
+      } else {
+        last.text = (last.text || '') + (ev.message || '')
+      }
+      scrollToBottom()
+      break
+    }
+    case 'tool_call': {
+      events.value.push({
+        type: 'tool',
+        tool: ev.tool,
+        args: ev.arguments,
+        status: 'pending',
+      })
+      scrollToBottom()
+      break
+    }
+    case 'tool_result': {
+      const target = [...events.value].reverse().find(
+        (x) => x.type === 'tool' && x.tool === ev.tool
+      )
+      if (target) {
+        target.result = ev.result
+        target.status = ev.ok ? 'ok' : 'fail'
+      }
+      scrollToBottom()
+      break
+    }
+    case 'confirm': {
+      events.value.push({
+        type: 'confirm',
+        card: ev.card,
+        isAcked: false,
+      })
+      scrollToBottom()
+      break
+    }
+    case 'progress': {
+      if (activeTask.value) {
+        activeTask.value.progress = ev.progress
+      }
+      if (dispatchLogs.value.length > 8) dispatchLogs.value.pop()
+      dispatchLogs.value.unshift({
+        time: new Date().toTimeString().slice(0, 8),
+        kind: 'TICK',
+        msg: `${ev.task_id?.substring(0, 6)} 进度 ${ev.progress?.percent || 0}%`,
+      })
+      break
+    }
+    case 'report': {
+      activeTask.value = null
+      events.value.push({
+        type: 'report',
+        reportId: ev.report_id,
+      })
+      scrollToBottom()
+      break
+    }
+    case 'error': {
+      events.value.push({
+        type: 'error',
+        message: ev.message || '执行遇到错误',
+      })
+      isGenerating.value = false
+      scrollToBottom()
+      break
+    }
+  }
+}
+
+function handleUserSend(text: string, file?: any) {
+  events.value.push({
+    type: 'user',
+    text,
+    file,
+  })
+  isGenerating.value = true
+  scrollToBottom(true)
+
+  if (agentWs) {
+    agentWs.sendUserMessage(text, file ? [file.id] : [])
   }
 }
 
@@ -294,429 +486,57 @@ function sendPredefined(prompt: string) {
   handleUserSend(prompt)
 }
 
-function handleUserSend(text: string, fileId?: string) {
-  events.value.push({
-    type: 'user',
-    text,
-    file: fileId ? { filename: '需求文件.pdf' } : undefined,
-  })
-  scrollToBottom()
-
-  isGenerating.value = true
-
-  if (agentWs && wsConnected.value) {
-    agentWs.sendUserMessage(text, fileId ? [fileId] : [])
-  } else {
-    // Mock Agent 交互流程
-    simulateMockAgentReply(text)
-  }
-}
-
-function simulateMockAgentReply(userText: string) {
-  setTimeout(() => {
-    // 思考卡
-    events.value.push({
-      type: 'thought',
-      text: `正在分析用户请求：「${userText}」，准备检索已有协议档与数据集信息...`,
-      done: false,
-    })
-    scrollToBottom()
-
-    setTimeout(() => {
-      // 工具调用
-      events.value.push({
-        type: 'tool',
-        tool: 'list_profiles',
-        args: { usage: 'target' },
-        result: { count: 2, profiles: ['gpt-test', 'claude-x'] },
-        status: 'ok',
-      })
-      scrollToBottom()
-
-      setTimeout(() => {
-        // 确认卡
-        const isRag = userText.includes('RAG') || userText.includes('知识库')
-        const isCase = userText.includes('用例')
-        const kind = isRag ? 'rag' : isCase ? 'testcase' : 'benchmark'
-
-        events.value.push({
-          type: 'confirm',
-          card: {
-            kind,
-            profile_ids: ['p-gpt', 'p-claude'],
-            dataset_id: 'ds-smoke',
-            kb_id: 'kb-default',
-            gold_qa_id: 'gq-1',
-            rag_mode: ['hybrid'],
-            case_source: { text: userText },
-            with_stress: userText.includes('压测'),
-          },
-        })
-        isGenerating.value = false
-        scrollToBottom()
-      }, 700)
-    }, 600)
-  }, 400)
-}
-
-async function handleConfirmAck(item: StreamItem, ok: boolean, patch?: TaskSpec) {
+function handleConfirmAck(item: StreamItem, confirmed: boolean, patch?: Partial<TaskSpec>) {
   item.isAcked = true
-  item.ackResult = ok
-
-  if (agentWs && wsConnected.value) {
-    agentWs.sendConfirmAck(ok, patch)
+  item.ackResult = confirmed
+  if (confirmed && patch && item.card) {
+    Object.assign(item.card, patch)
   }
 
-  if (ok) {
-    try {
-      const task = await api.tasks.create(patch || item.card!)
-      activeTask.value = task
-      message.success('评测任务已入队')
-
-      // 模拟进度更新
-      simulateTaskProgress(task)
-    } catch (err: any) {
-      message.error(err.message || '下单失败')
-    }
-  } else {
-    message.info('已取消下单')
+  if (agentWs) {
+    agentWs.sendConfirmAck(confirmed, patch)
   }
-}
-
-function simulateTaskProgress(task: Task) {
-  task.status = 'running'
-  task.progress = { done: 10, total: 100, message: '正在启动评测容器与被测连接...' }
-  activeTask.value = { ...task }
-
-  let current = 10
-  const interval = setInterval(() => {
-    current += 30
-    if (current >= 100) {
-      clearInterval(interval)
-      task.status = 'succeeded'
-      task.progress = { done: 100, total: 100, message: '评测完成' }
-      activeTask.value = null
-
-      events.value.push({
-        type: 'report',
-        reportId: 'r-bm-1',
-      })
-      scrollToBottom()
-    } else {
-      task.progress = { done: current, total: 100, message: `正在调用被测模型 sample ${current}/100...` }
-      activeTask.value = { ...task }
-    }
-  }, 1200)
-}
-
-async function handleCancelActiveTask(taskId: string) {
-  if (agentWs && wsConnected.value) {
-    agentWs.sendCancelTask(taskId)
-  }
-  await api.tasks.cancel(taskId)
-  if (activeTask.value && activeTask.value.id === taskId) {
-    activeTask.value.status = 'cancelled'
-    activeTask.value = null
-  }
-  message.success('任务已取消')
 }
 
 function handleInterpretReport(reportId: string) {
-  handleUserSend(`请对评测报告 #${reportId} 的指标得分进行详细解读，并分析潜在的退化原因与改进建议。`)
+  handleUserSend(`请深入解读评测报告 #${reportId} 的关键退化指标并给出优化建议`)
 }
 
-function handleWsEvent(event: WsServerEvent) {
-  isGenerating.value = false
-
-  if (event.event === 'thought') {
-    events.value.push({ type: 'thought', text: event.message, done: true })
-  } else if (event.event === 'tool_call') {
-    events.value.push({ type: 'tool', tool: event.tool, args: event.arguments, status: 'pending' })
-  } else if (event.event === 'tool_result') {
-    const lastTool = [...events.value].reverse().find((x) => x.type === 'tool' && x.status === 'pending')
-    if (lastTool) {
-      lastTool.result = event.result
-      lastTool.status = event.ok ? 'ok' : 'fail'
-    }
-  } else if (event.event === 'confirm') {
-    events.value.push({ type: 'confirm', card: event.card })
-  } else if (event.event === 'progress') {
-    if (activeTask.value) {
-      activeTask.value.progress = event.progress
-    }
-  } else if (event.event === 'report') {
-    events.value.push({ type: 'report', reportId: event.report_id })
+async function handleCancelActiveTask(taskId: string) {
+  try {
+    await api.tasks.cancel(taskId)
+    message.success('已发送任务取消指令')
     activeTask.value = null
-  } else if (event.event === 'error') {
-    events.value.push({ type: 'error', message: event.message })
+  } catch (err: any) {
+    message.error(err.message || '取消失败')
   }
-
-  scrollToBottom()
 }
 
-function initWebSocket() {
-  if (agentWs) agentWs.close()
-
-  agentWs = new AgentWebSocket(currentSessionId.value)
-  agentWs.onStatus((connected) => {
-    wsConnected.value = connected
-  })
-  agentWs.onEvent(handleWsEvent)
-  agentWs.connect()
+function formatRelativeTime(dateStr?: string) {
+  if (!dateStr) return '刚刚'
+  const diff = Date.now() - new Date(dateStr).getTime()
+  const mins = Math.floor(diff / 60000)
+  if (mins < 1) return '刚刚'
+  if (mins < 60) return `${mins} 分钟前`
+  return `${Math.floor(mins / 60)} 小时前`
 }
 
-onMounted(() => {
-  loadSessions()
-  loadAgentSettings()
-  initWebSocket()
+onMounted(async () => {
+  await loadSessions()
+  if (currentSessionId.value) {
+    initWebSocket(currentSessionId.value)
+  }
 })
 
 onBeforeUnmount(() => {
-  if (agentWs) agentWs.close()
+  if (agentWs) {
+    agentWs.close()
+  }
 })
 </script>
 
 <style scoped>
 .agent-layout {
-  display: grid;
-  grid-template-columns: 264px 1fr;
-  height: 100%;
-  min-height: 0;
-}
-
-.session-list {
-  border-right: 1px solid var(--border-subtle);
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  background: var(--bg-main);
-}
-.session-list-head {
-  padding: 14px;
-}
-.session-items {
-  flex: 1;
-  overflow-y: auto;
-  padding: 0 10px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.session-item {
-  padding: 10px 12px;
-  border-radius: 12px;
-  cursor: pointer;
-  transition: all 0.13s ease;
-  border: 1px solid transparent;
-}
-.session-item:hover {
-  background: var(--bg-elevated);
-}
-.session-item.active {
-  background: var(--t-agent);
-}
-.session-item.active .session-title {
-  color: var(--c-agent);
-  font-weight: 600;
-}
-.session-item.active .session-time {
-  color: var(--c-agent);
-  opacity: 0.7;
-}
-.session-title {
-  font-size: 13px;
-  font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.session-time {
-  font-size: 11px;
-  color: var(--text-tertiary);
-  margin-top: 3px;
-}
-
-.chat-main {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  background: var(--bg-main);
-}
-.chat-head {
-  height: 56px;
-  flex: 0 0 56px;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 0 20px;
-  border-bottom: 1px solid var(--border-subtle);
-}
-.chat-head-title {
-  font-size: 15px;
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.chat-head-model {
-  font-size: 11px;
-  color: var(--text-tertiary);
-  border: 1px solid var(--border-subtle);
-  border-radius: 999px;
-  padding: 2px 10px;
-}
-.gen-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  font-family: var(--font-mono);
-  color: var(--c-agent);
-  background: var(--t-agent);
-  border-radius: 999px;
-  padding: 2px 10px;
-}
-.gen-pill .bdot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-  animation: dot-breathe 1.2s infinite;
-}
-.offline-tag {
-  font-size: 11px;
-  color: var(--accent-warning);
-}
-
-.chat-scroll {
-  flex: 1;
-  overflow-y: auto;
-  min-height: 0;
-}
-.chat-col {
-  max-width: 760px;
-  margin: 0 auto;
-  padding: 24px 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  min-height: 100%;
-}
-
-.welcome {
-  margin: auto;
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  padding: 20px 0;
-}
-.welcome-eyebrow {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--text-tertiary);
-}
-.welcome-title {
-  margin-top: 10px;
-  font-family: var(--font-display);
-  font-size: 28px;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-  line-height: 1.35;
-}
-.welcome-sub {
-  margin-top: 10px;
-  font-size: 13.5px;
-  color: var(--text-secondary);
-  max-width: 60ch;
-  line-height: 1.6;
-}
-.welcome-caps {
-  margin-top: 20px;
-  width: 100%;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-}
-.cap {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 14px;
-  background: var(--bg-main);
-  padding: 12px 14px;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-.cap:hover {
-  border-color: var(--accent-ai);
-  background: var(--bg-elevated);
-  transform: translateY(-1px);
-}
-.cap-ico {
-  width: 32px;
-  height: 32px;
-  flex: 0 0 32px;
-  border-radius: 8px;
-  display: grid;
-  place-items: center;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-subtle);
-  color: var(--text-secondary);
-}
-.cap:hover .cap-ico {
-  color: var(--accent-ai);
-}
-.cap-name {
-  display: block;
-  font-size: 13px;
-  font-weight: 600;
-}
-.cap-desc {
-  display: block;
-  font-size: 12px;
-  color: var(--text-tertiary);
-  margin-top: 2px;
-}
-
-.msg-user {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 6px;
-}
-.bubble-user {
-  background: var(--accent-ai);
-  color: #fff;
-  border-radius: 18px;
-  border-bottom-right-radius: 4px;
-  padding: 10px 16px;
-  font-size: 14.5px;
-  line-height: 1.6;
-  max-width: 80%;
-  animation: msg-in 0.26s cubic-bezier(0.2, 0.9, 0.3, 1);
-}
-.attach-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  padding: 3px 8px;
-  font-size: 11px;
-  color: var(--text-secondary);
-}
-
-.msg-agent {
-  font-size: 15px;
-  line-height: 1.8;
-  color: var(--text-primary);
-  max-width: 92%;
-  animation: msg-in 0.26s cubic-bezier(0.2, 0.9, 0.3, 1);
+  height: calc(100vh - var(--topbar-h) - 20px);
 }
 </style>

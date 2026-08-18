@@ -171,7 +171,10 @@ export interface Task {
   progress?: TaskProgress
   report_id?: string | null
   parent_task_id?: string | null
-  creator: string
+  child_stress_task_id?: string | null
+  with_stress?: boolean
+  creator?: string
+  created_by?: string
   created_at: string
   updated_at?: string
   events?: TaskEvent[]
@@ -257,6 +260,8 @@ export interface KbDocument {
   size: string
   created_at?: string
 }
+
+export type KbDoc = KbDocument
 
 export interface GoldQA {
   id: string
