@@ -21,7 +21,8 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 TERMINAL = {"succeeded", "failed", "cancelled"}
 
 
-def _push_ws(session_id: str | None, event: str, payload: dict) -> None:
+def _push_ws(session_id: str | None, event: str, payload: dict, task_id: str | None = None) -> None:
+    """向会话事件表追加标准事件；task_id 独立成列，payload 仅存事件数据。"""
     if not session_id:
         return
     db = SessionLocal()
@@ -33,7 +34,15 @@ def _push_ws(session_id: str | None, event: str, payload: dict) -> None:
             .first()
         )
         event_id = (max_eid[0] + 1) if max_eid else 1
-        db.add(WsEvent(session_id=session_id, event_id=event_id, event=event, payload=payload))
+        db.add(
+            WsEvent(
+                session_id=session_id,
+                task_id=task_id,
+                event_id=event_id,
+                event=event,
+                payload=payload,
+            )
+        )
         db.commit()
     finally:
         db.close()
@@ -53,7 +62,7 @@ def _run_task(task: Task) -> None:
         db.add(TaskEvent(task_id=task.id, event="start", payload={"kind": task.kind}))
         db.commit()
 
-        _push_ws(task.session_id, "progress", {"task_id": task.id, "done": 0, "total": 1, "message": "执行中"})
+        _push_ws(task.session_id, "progress", {"percent": 0, "done": 0, "total": 1, "message": "执行中"}, task_id=task.id)
 
         time.sleep(2)
 
@@ -76,7 +85,7 @@ def _run_task(task: Task) -> None:
         db.add(TaskEvent(task_id=task.id, event="finish", payload={"status": "succeeded"}))
         db.commit()
 
-        _push_ws(task.session_id, "report", {"task_id": task.id, "report_id": report_id})
+        _push_ws(task.session_id, "report", {"report_id": report_id}, task_id=task.id)
         logger.info("task %s (%s) succeeded", task.id, task.kind)
     except Exception:
         db.rollback()
@@ -84,7 +93,7 @@ def _run_task(task: Task) -> None:
         task.finished_at = datetime.now(timezone.utc)
         db.add(TaskEvent(task_id=task.id, event="error", payload={"message": "执行失败"}))
         db.commit()
-        _push_ws(task.session_id, "error", {"task_id": task.id, "code": "INTERNAL", "message": "执行失败"})
+        _push_ws(task.session_id, "error", {"code": "INTERNAL", "message": "执行失败"}, task_id=task.id)
         logger.exception("task %s failed", task.id)
     finally:
         db.close()
