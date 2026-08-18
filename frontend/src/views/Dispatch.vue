@@ -1,27 +1,35 @@
 <template>
-  <div class="dispatch-page" data-od-id="dispatch-page" style="max-width: 1400px; margin: 0 auto">
-    <!-- 调度大盘 KPI 指标 -->
+  <div class="dispatch-page" data-od-id="dispatch-page" style="max-width: 1440px; margin: 0 auto">
+    <!-- ═══ 1. 调度大盘 KPI 趋势带（数字滚动 + 迷你趋势线） ═══ -->
     <div class="kpi-grid mb16" data-od-id="dispatch-kpis" style="--glow-c: var(--c-agent)">
       <div class="kpi">
-        <div class="kpi-num num">{{ onlineCount }}<span class="unit">/ {{ totalWorkers }}</span></div>
+        <div class="kpi-num num">{{ onlineDisplay }}<span class="unit">/ {{ totalWorkers }}</span></div>
         <div class="kpi-label">在线 Worker 节点</div>
       </div>
-      <div class="kpi">
-        <div class="kpi-num num">{{ queue.length }}</div>
+      <div class="kpi kpi-trend">
+        <div class="kpi-num num">{{ queueDisplay }}</div>
         <div class="kpi-label">排队队列深度</div>
+        <svg class="spark" viewBox="0 0 76 24" preserveAspectRatio="none"><polyline :points="sparkPoints(histQueue)" /></svg>
       </div>
-      <div class="kpi">
-        <div class="kpi-num num">{{ avgDispatchCost }}<span class="unit">ms</span></div>
+      <div class="kpi kpi-trend">
+        <div class="kpi-num num">{{ runningDisplay }}</div>
+        <div class="kpi-label">运行中任务</div>
+        <svg class="spark" viewBox="0 0 76 24" preserveAspectRatio="none"><polyline :points="sparkPoints(histRunning)" /></svg>
+      </div>
+      <div class="kpi kpi-trend">
+        <div class="kpi-num num">{{ costDisplay }}<span class="unit">ms</span></div>
         <div class="kpi-label">平均分发调度延迟</div>
+        <svg class="spark" viewBox="0 0 76 24" preserveAspectRatio="none"><polyline :points="sparkPoints(histCost)" /></svg>
       </div>
-      <div class="kpi">
-        <div class="kpi-num num">{{ assignedTodayDisplay }}</div>
+      <div class="kpi kpi-trend">
+        <div class="kpi-num num">{{ assignedDisplay }}</div>
         <div class="kpi-label">今日已分配任务</div>
+        <svg class="spark" viewBox="0 0 76 24" preserveAspectRatio="none"><polyline :points="sparkPoints(histAssigned)" /></svg>
       </div>
     </div>
 
     <div class="dispatch-grid">
-      <!-- 左栏：调度器控制与策略 -->
+      <!-- ═══ 2. 左栏：调度内核控制面 ═══ -->
       <div class="section-gap">
         <!-- 调度内核状态面板与雷达 -->
         <div class="panel glow" data-od-id="dispatch-radar" style="--glow-c: var(--c-agent)">
@@ -29,7 +37,6 @@
             <span>调度内核状态</span>
             <span class="badge" :class="isRunning ? 'badge-running' : 'badge-cancelled'"><i class="bdot"></i>{{ isRunning ? '运行中' : '已暂停' }}</span>
           </div>
-          <!-- 调度器操作入口（对齐原型顶栏 actions；顶栏无页面级插槽，故置于本面板） -->
           <div class="row mb12" style="gap: 6px">
             <button class="btn btn-secondary btn-sm" style="flex: 1" @click="toggleScheduler">
               {{ isRunning ? '暂停调度' : '恢复调度' }}
@@ -47,7 +54,7 @@
             </div>
           </div>
           <p class="small tertiary" style="text-align: center; line-height: 1.6">
-            心跳周期 500ms · {{ onlineCount }}/{{ totalWorkers }} 节点就绪
+            心跳周期 {{ heartbeatMs }}ms · {{ onlineCount }}/{{ totalWorkers }} 节点就绪
           </p>
         </div>
 
@@ -100,14 +107,15 @@
         </div>
       </div>
 
-      <!-- 中栏：实时分发拓扑 -->
+      <!-- ═══ 3. 中栏：多 Agent 协作编排拓扑（技能 Agent → 任务编排 → Worker 池） ═══ -->
       <div class="panel glow" data-od-id="dispatch-topo" style="--glow-c: var(--c-agent)">
-        <div class="row-between mb12">
+        <div class="row-between mb12" style="flex-wrap: wrap; gap: 8px">
           <div class="panel-title" style="margin: 0">
-            实时分发拓扑
-            <span class="small tertiary mono" style="font-weight: 400">Task Queue → Worker Pool</span>
+            多 Agent 协作编排拓扑
+            <span class="small tertiary mono" style="font-weight: 400">Skill Agent → Task → Worker</span>
           </div>
-          <div class="row" style="gap: 6px">
+          <div class="row" style="gap: 6px; align-items: center">
+            <span class="tag-soft" :style="modeTagStyle">{{ modeStore.mode === 'rag' ? 'RAG 模式' : '大模型模式' }}</span>
             <button class="btn btn-secondary btn-sm" style="font-size: 11px" @click="handleManualEnqueue">
               + 插入任务
             </button>
@@ -115,55 +123,100 @@
         </div>
 
         <div ref="topoRef" class="topo" style="position: relative">
-          <svg ref="wiresRef" class="wires" aria-hidden="true" style="position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 5">
-            <path
-              v-for="(w, idx) in activeWires"
-              :key="idx"
-              class="wire live"
-              :d="w.d"
-            />
+          <!-- 连线层：技能 Agent→任务（灰虚线缓流）、任务→Worker（运行中蓝色流动） -->
+          <svg ref="wiresRef" class="wires" aria-hidden="true" style="position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 5; overflow: visible">
+            <path v-for="w in activeWires" :key="w.key" :class="w.cls" :d="w.d" />
           </svg>
 
-          <div class="topo-container">
-            <!-- 待分发队列 -->
-            <div>
-              <div class="rail-label">待分发任务队列</div>
-              <div class="section-gap" style="gap: 8px" data-od-id="dispatch-queue">
-                <template v-if="queue.length">
-                  <div
-                    v-for="q in queue"
-                    :key="q.qid"
-                    class="queue-item"
-                    :class="{ assigning: assignments.some(a => a.qid === q.qid) }"
-                    :data-qid="q.qid"
-                  >
-                    <div class="row-between" style="align-items: center">
-                      <div class="row" style="gap: 5px; align-items: center">
-                        <KindTag :kind="q.kind" />
-                        <span class="q-id mono">{{ q.qid }}</span>
-                      </div>
-                      <span class="tag-soft" :class="`prio-${q.prio || 'P1'}`" style="font-size: 10px; padding: 0 5px">
-                        {{ q.prio || 'P1' }}
-                      </span>
+          <div class="orch-lanes">
+            <!-- 泳道一：4 大技能 Agent（PRD §5.5.2：基准对比 / RAG 评估 / 用例生成 / 共享压测） -->
+            <div class="lane">
+              <div class="rail-label">技能 Agent 编排层</div>
+              <div class="section-gap" style="gap: 8px">
+                <div
+                  v-for="ag in skillAgents"
+                  :key="ag.id"
+                  class="skill-card"
+                  :class="{ on: ag.activeCount > 0 }"
+                  :data-skill="ag.kind"
+                  :title="ag.desc"
+                >
+                  <div class="row" style="gap: 8px; align-items: center">
+                    <span class="skill-ico">{{ ag.icon }}</span>
+                    <div style="min-width: 0">
+                      <div class="skill-name">{{ ag.name }}</div>
+                      <div class="skill-desc tertiary">{{ ag.desc }}</div>
                     </div>
-                    <div class="small" style="margin-top: 4px; font-weight: 500; line-height: 1.4">{{ q.label }}</div>
                   </div>
-                </template>
-                <div v-else class="empty" style="padding: 32px 10px">
-                  <div class="small tertiary">队列就绪，等待新任务入队</div>
+                  <div class="skill-foot mono">
+                    <span v-if="ag.activeCount > 0"><b class="num">{{ ag.runningCount }}</b> 运行 / <b class="num">{{ ag.activeCount }}</b> 活跃</span>
+                    <span v-else class="tertiary">待命</span>
+                  </div>
                 </div>
               </div>
             </div>
 
-            <!-- Worker 执行节点池 -->
-            <div>
+            <!-- 泳道二：任务编排层（队列 + 运行中，含业务上下文与进度） -->
+            <div class="lane">
+              <div class="row-between" style="margin-bottom: 8px">
+                <div class="rail-label" style="margin: 0">任务编排层</div>
+                <!-- 按业务域过滤：基准 / RAG / 用例 / 压测 -->
+                <div class="chip-group" style="gap: 4px">
+                  <button
+                    v-for="f in kindFilters"
+                    :key="f.key"
+                    class="chip chip-xs"
+                    :class="{ on: kindFilter === f.key }"
+                    @click="kindFilter = f.key"
+                  >{{ f.label }} <b class="num">{{ f.count }}</b></button>
+                </div>
+              </div>
+              <div class="lane-scroll section-gap" style="gap: 8px" data-od-id="dispatch-queue">
+                <template v-if="filteredTaskNodes.length">
+                  <div
+                    v-for="t in filteredTaskNodes"
+                    :key="t.id"
+                    class="task-node"
+                    :class="[t.status, { flash: flashTaskId === t.id || flashTaskId === t.shortId }]"
+                    :data-tid="t.id"
+                    @click="goTasks"
+                  >
+                    <div class="row-between" style="align-items: center">
+                      <div class="row" style="gap: 5px; align-items: center; min-width: 0">
+                        <KindTag :kind="t.kind" />
+                        <span class="q-id mono">{{ t.shortId }}</span>
+                      </div>
+                      <span class="badge" :class="`badge-${t.status}`" style="font-size: 10px; padding: 1px 6px">
+                        {{ statusLabel(t.status) }}
+                      </span>
+                    </div>
+                    <div class="small" style="margin-top: 4px; font-weight: 500; line-height: 1.4">
+                      <span v-if="t.parentId" class="tertiary">↳ </span>{{ t.label }}
+                    </div>
+                    <!-- 运行中任务进度条（流动条纹） -->
+                    <div v-if="t.status === 'running'" class="task-progress">
+                      <div class="task-progress-track">
+                        <i :style="{ width: `${t.progress ?? 0}%` }"></i>
+                      </div>
+                      <span class="mono tertiary" style="font-size: 10px">{{ t.progress ?? 0 }}%</span>
+                    </div>
+                  </div>
+                </template>
+                <div v-else class="empty" style="padding: 32px 10px">
+                  <div class="small tertiary">{{ kindFilter === 'all' ? '队列就绪，等待智能体下单入队' : '该业务域暂无活跃任务' }}</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 泳道三：Worker 执行节点池 -->
+            <div class="lane">
               <div class="rail-label">Worker 执行节点池 (点击卡片可治理)</div>
-              <div class="agent-pool" data-od-id="dispatch-pool">
+              <div class="lane-scroll agent-pool" data-od-id="dispatch-pool">
                 <div
                   v-for="a in workerPool"
                   :key="a.id"
                   class="agent-node"
-                  :class="a.state"
+                  :class="[a.state, { matched: matchedKinds.size > 0 && a.caps.some(c => matchedKinds.has(c)) }]"
                   :data-aid="a.id"
                   style="cursor: pointer"
                   title="点击查看节点详情与治理"
@@ -176,7 +229,7 @@
                     </span>
                   </div>
                   <div class="an-caps">
-                    <span v-for="c in a.caps" :key="c" class="an-cap">{{ c }}</span>
+                    <span v-for="c in a.caps" :key="c" class="an-cap" :class="{ hot: matchedKinds.has(c) }">{{ c }}</span>
                   </div>
 
                   <div class="worker-metrics">
@@ -189,7 +242,7 @@
                     </div>
                     <div class="worker-metric-row" style="margin-top: 2px">
                       <span>RAM</span>
-                      <span class="mono">{{ a.ram || '2.4GB' }}</span>
+                      <span class="mono">{{ a.ram || '—' }}</span>
                     </div>
                   </div>
 
@@ -204,26 +257,87 @@
         </div>
       </div>
 
-      <!-- 右栏：分配日志流 -->
+      <!-- ═══ 4. 右栏：调度事件流（分类过滤 + 点击定位任务） ═══ -->
       <div class="dispatch-log-col">
         <div class="panel glow dispatch-log-panel" data-od-id="dispatch-log" style="--glow-c: var(--c-agent)">
           <div class="row-between mb8">
             <div class="panel-title" style="margin: 0">
-              调度日志流 <span class="small tertiary mono">latest {{ logs.length }}</span>
+              调度日志流 <span class="small tertiary mono">latest {{ filteredLogs.length }}</span>
             </div>
             <button class="link-btn" style="font-size: 11px" @click="logs = []">清空</button>
           </div>
+          <!-- 事件分类过滤：分配 / 完成 / 异常 / 节点 -->
+          <div class="chip-group mb8" style="gap: 4px">
+            <button
+              v-for="c in logCats"
+              :key="c.key"
+              class="chip chip-xs"
+              :class="{ on: logCat === c.key }"
+              @click="logCat = c.key"
+            >{{ c.label }}</button>
+          </div>
           <div class="log-stream">
-            <div v-for="(l, idx) in logs" :key="idx" class="log-line">
+            <div
+              v-for="(l, idx) in filteredLogs"
+              :key="idx"
+              class="log-line"
+              :class="[`cat-${l.cat}`, { clickable: !!l.tid }]"
+              :title="l.tid ? '点击定位编排拓扑中的任务' : ''"
+              @click="l.tid && flashTask(l.tid)"
+            >
               <span class="lt">{{ l.time }}</span>
               <span class="lk">[{{ l.kind }}]</span>
               <span class="lr" v-html="l.html"></span>
             </div>
-            <div v-if="!logs.length" class="empty" style="padding: 28px 10px">
+            <div v-if="!filteredLogs.length" class="empty" style="padding: 28px 10px">
               <div class="small tertiary">暂无调度事件（日志由调度器/Worker 写入，浏览器只读）</div>
             </div>
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- ═══ 5. 底部：任务编排时间线（甘特 · 先评后压父子关联） ═══ -->
+    <div class="panel glow mt16" data-od-id="dispatch-gantt" style="--glow-c: var(--c-agent)">
+      <div class="row-between mb12">
+        <div class="panel-title" style="margin: 0">
+          任务编排时间线
+          <span class="small tertiary" style="font-weight: 400">最近 {{ ganttRows.length }} 条 · 评测 → 派生压测链路</span>
+        </div>
+        <div class="row" style="gap: 10px; font-size: 11px">
+          <span v-for="lg in ganttLegend" :key="lg.label" class="row" style="gap: 4px; align-items: center">
+            <i class="gantt-dot" :style="{ background: lg.color }"></i><span class="tertiary">{{ lg.label }}</span>
+          </span>
+        </div>
+      </div>
+      <div v-if="ganttRows.length" class="gantt">
+        <div class="gantt-axis">
+          <span v-for="(tick, i) in ganttTicks" :key="i" class="mono">{{ tick }}</span>
+        </div>
+        <div
+          v-for="row in ganttRows"
+          :key="row.id"
+          class="gantt-row"
+          :class="{ child: row.isChild }"
+          :title="`${row.label}\n${statusLabel(row.status)} · ${fmtTime(row.start)} → ${fmtTime(row.end)}`"
+          @click="goTasks"
+        >
+          <div class="gantt-name">
+            <span v-if="row.isChild" class="tertiary">↳</span>
+            <KindTag :kind="row.kind" />
+            <span class="mono" style="font-size: 10px">{{ row.shortId }}</span>
+          </div>
+          <div class="gantt-track">
+            <i
+              class="gantt-bar"
+              :class="`st-${row.status}`"
+              :style="{ left: row.left + '%', width: row.width + '%' }"
+            ></i>
+          </div>
+        </div>
+      </div>
+      <div v-else class="empty" style="padding: 28px 10px">
+        <div class="small tertiary">暂无任务记录，通过智能体对话或任务中心创建评测任务后此处展示编排链路</div>
       </div>
     </div>
 
@@ -270,7 +384,7 @@
             <div class="small tertiary">心跳周期</div>
             <div class="small font-bold" style="margin-top: 2px">
               <span v-if="selectedWorker.state === 'offline'" style="color: var(--accent-error)">丢失（心跳超时）</span>
-              <span v-else style="color: var(--accent-success)">正常 · 500ms</span>
+              <span v-else style="color: var(--accent-success)">正常 · {{ heartbeatMs }}ms</span>
             </div>
           </div>
           <div style="margin-top: 6px">
@@ -318,12 +432,16 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import KindTag from '../components/common/KindTag.vue'
 import { api } from '../api/http'
-import type { DispatchWorker } from '../api/types'
+import type { DispatchOverview, DispatchWorker, Task, TaskKind, TaskStatus } from '../api/types'
+import { useModeStore } from '../stores/mode'
 
 const message = useMessage()
+const router = useRouter()
+const modeStore = useModeStore()
 // live 模式接真实调度 API（§3.13）；mock 模式保留本地仿真演示
 const liveMode = !api.isMock()
 
@@ -336,13 +454,61 @@ const capacity = ref(4)
 const assignedToday = ref(126)
 const assignCosts = ref([72, 85, 94, 68, 88])
 // live 模式大盘快照：KPI 与策略/容量以服务端返回为准
-const overviewData = ref<{ online_workers: number; total_workers: number; avg_dispatch_cost_ms: number; assigned_today: number } | null>(null)
+const overviewData = ref<DispatchOverview | null>(null)
+const heartbeatMs = computed(() => overviewData.value?.heartbeat_interval_ms ?? 500)
 const avgDispatchCost = computed(() => {
   if (liveMode) return overviewData.value?.avg_dispatch_cost_ms ?? 0
   if (!assignCosts.value.length) return 81
   return Math.round(assignCosts.value.reduce((a, b) => a + b, 0) / assignCosts.value.length)
 })
 
+// 顶栏模式标签配色（与全站双模式切换器联动展示）
+const modeTagStyle = computed(() => ({
+  color: modeStore.mode === 'rag' ? 'var(--c-kb)' : 'var(--c-datasets)',
+  borderColor: modeStore.mode === 'rag' ? 'var(--t-kb)' : 'var(--t-datasets)',
+}))
+
+/* ─── KPI 数字滚动（count-up）与迷你趋势线 ─── */
+function useCountUp(get: () => number) {
+  const display = ref(get())
+  let raf = 0
+  watch(get, (to) => {
+    const from = display.value
+    const t0 = performance.now()
+    cancelAnimationFrame(raf)
+    const step = (t: number) => {
+      const p = Math.min(1, (t - t0) / 350)
+      display.value = Math.round(from + (to - from) * (1 - Math.pow(1 - p, 3)))
+      if (p < 1) raf = requestAnimationFrame(step)
+    }
+    raf = requestAnimationFrame(step)
+  })
+  return display
+}
+
+/** 迷你趋势线：历史序列 → polyline 坐标点（76×24 视窗） */
+function sparkPoints(hist: number[]): string {
+  if (hist.length < 2) return ''
+  const max = Math.max(...hist, 1)
+  const min = Math.min(...hist, 0)
+  const span = Math.max(max - min, 1)
+  return hist
+    .map((v, i) => `${((i / (hist.length - 1)) * 74 + 1).toFixed(1)},${(22 - ((v - min) / span) * 20).toFixed(1)}`)
+    .join(' ')
+}
+
+// 各 KPI 历史序列（每次全量刷新追加，保留最近 24 点）
+const histQueue = ref<number[]>([])
+const histRunning = ref<number[]>([])
+const histCost = ref<number[]>([])
+const histAssigned = ref<number[]>([])
+
+function pushHist(hist: number[], v: number) {
+  hist.push(v)
+  if (hist.length > 24) hist.shift()
+}
+
+/* ─── 编排拓扑数据模型 ─── */
 interface WorkerNode {
   id: string
   name: string
@@ -367,50 +533,217 @@ const workerPool = ref<WorkerNode[]>([
   { id: 'worker-10', name: 'Case-Node-C2', caps: ['testcase', 'openapi'], state: 'idle', load: 9, ram: '1.5GB/16GB', task: null, weight: 90 },
 ])
 
-const onlineCount = computed(() =>
-  liveMode && overviewData.value
-    ? overviewData.value.online_workers
-    : workerPool.value.filter(w => w.state !== 'offline').length
-)
-const totalWorkers = computed(() =>
-  liveMode && overviewData.value ? overviewData.value.total_workers : workerPool.value.length
-)
-const assignedTodayDisplay = computed(() =>
-  liveMode && overviewData.value ? overviewData.value.assigned_today : assignedToday.value
-)
+// 任务编排节点：统一 mock 仿真项与 live 任务的展示模型
+interface TaskNode {
+  id: string
+  shortId: string
+  kind: TaskKind
+  label: string
+  status: TaskStatus
+  prio?: string
+  progress: number | null
+  workerId: string | null
+  parentId: string | null
+}
 
+// mock 队列项扩展：分配后携带 workerId / 进度 / 开始时间，驱动连线与甘特
 interface QueueItem {
   qid: string
-  kind: 'benchmark' | 'rag' | 'testcase' | 'stress'
+  kind: TaskKind
   label: string
   prio: string
   wait_ms?: number
+  workerId?: string | null
+  progress?: number
+  startedAt?: number
+  parentId?: string | null
 }
 
 const queue = ref<QueueItem[]>([
-  { qid: 'q-101', kind: 'benchmark', label: 'smoke-20 v3 · shard 3/5', prio: 'P0', wait_ms: 120 },
-  { qid: 'q-102', kind: 'rag', label: 'default 库 · qa-v1 回归', prio: 'P1', wait_ms: 450 },
-  { qid: 'q-103', kind: 'stress', label: 'env=test · 10 QPS 压测', prio: 'P2', wait_ms: 890 },
+  { qid: 'q-101', kind: 'benchmark', label: '2 模型 × 数据集 smoke-20 v3 · shard 3/5', prio: 'P0', wait_ms: 120 },
+  { qid: 'q-102', kind: 'rag', label: '知识库 default · 黄金 QA qa-v1 · hybrid 回归', prio: 'P1', wait_ms: 450 },
+  { qid: 'q-103', kind: 'stress', label: '↳ 派生压测 · env=test · 10 QPS', prio: 'P2', wait_ms: 890, parentId: 'q-101' },
 ])
 
-const assignments = ref<{ qid: string; aid: string }[]>([])
-const activeWires = ref<{ d: string }[]>([])
+// live 模式：活跃任务（queued/running/awaiting_case_confirm）与近期任务（甘特）
+const liveActiveTasks = ref<Task[]>([])
+const liveRecentTasks = ref<Task[]>([])
+// live 模式任务→节点映射：由 assigned 事件维护，succeeded/failed 后移除
+const taskWorkerMap = ref<Record<string, string>>({})
 
+/** 任务业务上下文标签：基准=模型×数据集；RAG=知识库×黄金QA×模式；用例=PRD 来源；压测=父任务+env/QPS */
+function taskLabel(t: Task): string {
+  const cfg = t.config || {}
+  if (t.kind === 'benchmark') {
+    const models = cfg.profile_ids?.length ? `${cfg.profile_ids.length} 模型` : ''
+    const ds = cfg.dataset_id ? `数据集 ${cfg.dataset_id}` : ''
+    return [models, ds].filter(Boolean).join(' × ') || 'Benchmark 基准评测'
+  }
+  if (t.kind === 'rag') {
+    const kb = cfg.kb_id ? `知识库 ${cfg.kb_id}` : 'RAG 质量评测'
+    const qa = cfg.gold_qa_id ? `黄金 QA ${cfg.gold_qa_id}` : ''
+    const modes = cfg.rag_mode?.length ? cfg.rag_mode.join('/') : ''
+    return [kb, qa, modes].filter(Boolean).join(' · ')
+  }
+  if (t.kind === 'testcase') {
+    if (cfg.case_source?.text) return 'PRD 文本生成用例（6 大策略配比）'
+    if (cfg.case_source?.file_id) return `文件 ${cfg.case_source.file_id} 生成用例`
+    return 'PRD 用例生成'
+  }
+  const parent = cfg.parent_task_id || t.parent_task_id ? `↳ 派生自 ${String(cfg.parent_task_id || t.parent_task_id).substring(0, 8)}` : ''
+  const env = cfg.stress?.env ? `env=${cfg.stress.env}` : ''
+  const qps = cfg.stress?.qps ? `${cfg.stress.qps} QPS` : ''
+  return [parent, env, qps].filter(Boolean).join(' · ') || '共享压测'
+}
+
+/** live 任务 → 编排节点；workerId 优先取事件映射，兜底用节点 current_task 短号前缀匹配 */
+function mapLiveTask(t: Task): TaskNode {
+  const short = t.id.substring(0, 6)
+  let workerId = taskWorkerMap.value[t.id] || null
+  if (!workerId && t.status === 'running') {
+    const w = workerPool.value.find(x => x.current_task && x.current_task.includes(short))
+    workerId = w?.id || null
+  }
+  const pct = t.progress
+    ? Math.round(t.progress.percent ?? (t.progress.total ? (t.progress.done / t.progress.total) * 100 : 0))
+    : null
+  return {
+    id: t.id,
+    shortId: t.id.substring(0, 8),
+    kind: t.kind,
+    label: taskLabel(t),
+    status: t.status,
+    progress: pct,
+    workerId,
+    parentId: t.parent_task_id || t.config?.parent_task_id || null,
+  }
+}
+
+// 统一任务编排节点：live 取服务端活跃任务；mock 由仿真队列合成
+const taskNodes = computed<TaskNode[]>(() => {
+  if (liveMode) {
+    const order: Record<string, number> = { running: 0, awaiting_case_confirm: 1, queued: 2 }
+    return liveActiveTasks.value
+      .map(mapLiveTask)
+      .sort((a, b) => (order[a.status] ?? 3) - (order[b.status] ?? 3))
+  }
+  return queue.value.map(q => ({
+    id: q.qid,
+    shortId: q.qid,
+    kind: q.kind,
+    label: q.label,
+    status: q.workerId ? 'running' as TaskStatus : 'queued' as TaskStatus,
+    prio: q.prio,
+    progress: q.workerId ? Math.round(q.progress ?? 0) : null,
+    workerId: q.workerId || null,
+    parentId: q.parentId || null,
+  }))
+})
+
+// 业务域过滤 chips（全部 / 基准 / RAG / 用例 / 压测）
+const kindFilter = ref<'all' | TaskKind>('all')
+const kindFilters = computed(() => ([
+  { key: 'all' as const, label: '全部', count: taskNodes.value.length },
+  { key: 'benchmark' as const, label: '基准', count: taskNodes.value.filter(t => t.kind === 'benchmark').length },
+  { key: 'rag' as const, label: 'RAG', count: taskNodes.value.filter(t => t.kind === 'rag').length },
+  { key: 'testcase' as const, label: '用例', count: taskNodes.value.filter(t => t.kind === 'testcase').length },
+  { key: 'stress' as const, label: '压测', count: taskNodes.value.filter(t => t.kind === 'stress').length },
+]))
+const filteredTaskNodes = computed(() =>
+  kindFilter.value === 'all' ? taskNodes.value : taskNodes.value.filter(t => t.kind === kindFilter.value),
+)
+
+// 4 大技能 Agent（PRD §5.5.2）：活跃/运行任务数由编排层实时统计
+const SKILL_AGENTS = [
+  { id: 'skill-benchmark', name: '基准对比 Agent', kind: 'benchmark' as TaskKind, icon: '📊', desc: '模型评测 · 数据集 · 先评后压' },
+  { id: 'skill-rag', name: 'RAG 评估 Agent', kind: 'rag' as TaskKind, icon: '🔍', desc: '知识库 · 黄金 QA · 4 模式检索' },
+  { id: 'skill-testcase', name: '用例生成 Agent', kind: 'testcase' as TaskKind, icon: '🧩', desc: 'PRD/OpenAPI · 6 大策略配比' },
+  { id: 'skill-stress', name: '共享压测 Agent', kind: 'stress' as TaskKind, icon: '⚡', desc: '继承父任务 · SLA 拐点定位' },
+]
+const skillAgents = computed(() =>
+  SKILL_AGENTS.map(s => ({
+    ...s,
+    activeCount: taskNodes.value.filter(t => t.kind === s.kind).length,
+    runningCount: taskNodes.value.filter(t => t.kind === s.kind && t.status === 'running').length,
+  })),
+)
+
+// 当前活跃任务涉及的能力域：用于 Worker 能力标签匹配高亮
+const matchedKinds = computed<Set<string>>(() => new Set(taskNodes.value.map(t => t.kind)))
+
+const onlineCount = computed(() =>
+  liveMode && overviewData.value
+    ? overviewData.value.online_workers
+    : workerPool.value.filter(w => w.state !== 'offline').length,
+)
+const totalWorkers = computed(() =>
+  liveMode && overviewData.value ? overviewData.value.total_workers : workerPool.value.length,
+)
+const queueDepth = computed(() =>
+  liveMode && overviewData.value ? overviewData.value.queue_depth : queue.value.filter(q => !q.workerId).length,
+)
+const runningCount = computed(() => taskNodes.value.filter(t => t.status === 'running').length)
+const assignedTodayNum = computed(() =>
+  liveMode && overviewData.value ? overviewData.value.assigned_today : assignedToday.value,
+)
+
+// KPI 数字滚动显示值
+const onlineDisplay = useCountUp(onlineCount)
+const queueDisplay = useCountUp(queueDepth)
+const runningDisplay = useCountUp(runningCount)
+const costDisplay = useCountUp(avgDispatchCost)
+const assignedDisplay = useCountUp(assignedTodayNum)
+
+/* ─── 调度事件流（分类过滤 + 点击定位任务） ─── */
 interface LogItem {
   time: string
   kind: string
+  cat: 'assign' | 'done' | 'error' | 'node'
   html: string
+  tid?: string
 }
 
 const logs = ref<LogItem[]>([
-  { time: new Date().toTimeString().slice(0, 8), kind: 'ENQUEUE', html: '<span class="la">q-101</span> smoke-20 v3 · shard 3/5 (P0)' },
-  { time: new Date().toTimeString().slice(0, 8), kind: 'ASSIGN', html: '<span class="la">q-100</span> → worker-01 · 耗时 82ms' },
+  { time: new Date().toTimeString().slice(0, 8), kind: 'ENQUEUE', cat: 'assign', html: '<span class="la">q-101</span> 2 模型 × smoke-20 v3 · shard 3/5 (P0)', tid: 'q-101' },
+  { time: new Date().toTimeString().slice(0, 8), kind: 'ASSIGN', cat: 'assign', html: '<span class="la">q-100</span> → worker-01 · 耗时 82ms', tid: 'q-100' },
 ])
 
+const logCat = ref<'all' | LogItem['cat']>('all')
+const logCats = [
+  { key: 'all' as const, label: '全部' },
+  { key: 'assign' as const, label: '分配' },
+  { key: 'done' as const, label: '完成' },
+  { key: 'error' as const, label: '异常' },
+  { key: 'node' as const, label: '节点' },
+]
+const filteredLogs = computed(() => (logCat.value === 'all' ? logs.value : logs.value.filter(l => l.cat === logCat.value)))
+
+/** 事件类型归一化为展示分类 */
+function eventCat(kind: string): LogItem['cat'] {
+  const k = kind.toUpperCase()
+  if (['ASSIGN', 'ENQUEUE', 'HOLD', 'START'].some(x => k.includes(x))) return 'assign'
+  if (['DONE', 'SUCCEEDED', 'COMPLETE', 'FINISH'].some(x => k.includes(x))) return 'done'
+  if (['FAIL', 'ERROR', 'TIMEOUT', 'CANCEL'].some(x => k.includes(x))) return 'error'
+  return 'node'
+}
+
 /** 统一日志入口：prepend 并截断至 50 条，与原型 log() 语义一致。 */
-function addLog(kind: string, html: string) {
-  logs.value.unshift({ time: new Date().toTimeString().slice(0, 8), kind, html })
+function addLog(kind: string, html: string, tid?: string) {
+  logs.value.unshift({ time: new Date().toTimeString().slice(0, 8), kind, cat: eventCat(kind), html, tid })
   if (logs.value.length > 50) logs.value.pop()
+}
+
+// 点击日志定位：闪烁编排拓扑中对应任务卡片
+const flashTaskId = ref('')
+let flashTimer = 0
+function flashTask(tid: string) {
+  flashTaskId.value = tid
+  window.clearTimeout(flashTimer)
+  flashTimer = window.setTimeout(() => { flashTaskId.value = '' }, 1600)
+}
+
+function goTasks() {
+  router.push('/tasks')
 }
 
 /* AI 建议结构化：携带建议动作（策略切换/容量调整），采纳时按内容生效（对齐原型 dispatch.html） */
@@ -513,51 +846,79 @@ function handleManualEnqueue() {
     message.warning('演示插单仅 mock 模式可用；请通过智能体对话或任务页「新建任务」创建真实任务')
     return
   }
-  const seq = Math.floor(Math.random() * 900) + 100
-  const kinds: ('benchmark' | 'rag' | 'testcase' | 'stress')[] = ['benchmark', 'rag', 'testcase', 'stress']
-  const k = kinds[Math.floor(Math.random() * kinds.length)]
-  const newItem: QueueItem = {
-    qid: `q-${seq}`,
-    kind: k,
-    label: `${k === 'benchmark' ? 'smoke-20 评测' : k === 'rag' ? 'default 知识库检索' : k === 'testcase' ? 'PRD 用例生成' : '10 QPS 压测'}`,
-    prio: Math.random() < 0.3 ? 'P0' : 'P1',
-  }
-  queue.value.push(newItem)
-  addLog('ENQUEUE', `<span class="la">${newItem.qid}</span> ${newItem.label} (${newItem.prio})`)
+  enqueueMockTask()
 }
 
-/* ─── 实时分发连线：按队列项与节点卡片的 DOM 坐标计算三次贝塞尔路径（还原原型 drawWires） ─── */
+/* ─── 实时编排连线：技能 Agent→任务→Worker 三层锚点的三次贝塞尔路径 ─── */
+interface WirePath { key: string; d: string; cls: string }
+const activeWires = ref<WirePath[]>([])
+
+// 连线规格：技能 Agent→任务（灰虚线缓流）；任务→Worker（运行中蓝色流动）
+const wireSpecs = computed(() => {
+  const specs: { key: string; fromSel: string; toSel: string; cls: string }[] = []
+  filteredTaskNodes.value.forEach(t => {
+    specs.push({ key: `s-${t.id}`, fromSel: `[data-skill="${t.kind}"]`, toSel: `[data-tid="${t.id}"]`, cls: 'wire wire-skill' })
+    if (t.workerId) {
+      specs.push({
+        key: `w-${t.id}`,
+        fromSel: `[data-tid="${t.id}"]`,
+        toSel: `[data-aid="${t.workerId}"]`,
+        cls: t.status === 'running' ? 'wire live' : 'wire',
+      })
+    }
+  })
+  return specs
+})
+
 function drawWires() {
   const box = topoRef.value?.getBoundingClientRect()
   if (!box) {
     activeWires.value = []
     return
   }
-  const paths: { d: string }[] = []
-  assignments.value.forEach(as => {
-    const q = topoRef.value!.querySelector(`[data-qid="${as.qid}"]`)
-    const a = topoRef.value!.querySelector(`[data-aid="${as.aid}"]`)
-    if (!q || !a) return
-    const qr = q.getBoundingClientRect()
-    const ar = a.getBoundingClientRect()
-    const x1 = qr.right - box.left
-    const y1 = qr.top + qr.height / 2 - box.top
-    const x2 = ar.left - box.left
-    const y2 = ar.top + ar.height / 2 - box.top
+  const paths: WirePath[] = []
+  wireSpecs.value.forEach(spec => {
+    const from = topoRef.value!.querySelector(spec.fromSel)
+    const to = topoRef.value!.querySelector(spec.toSel)
+    if (!from || !to) return
+    const fr = from.getBoundingClientRect()
+    const tr = to.getBoundingClientRect()
+    const x1 = fr.right - box.left
+    const y1 = fr.top + fr.height / 2 - box.top
+    const x2 = tr.left - box.left
+    const y2 = tr.top + tr.height / 2 - box.top
     const mx = (x1 + x2) / 2
-    paths.push({ d: `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}` })
+    paths.push({ key: spec.key, cls: spec.cls, d: `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}` })
   })
   activeWires.value = paths
 }
 
-/* ─── 调度分发循环（还原原型 tryAssign/tick：按策略选节点 → 连线 → 4~8s 后完成释放） ─── */
+/* ─── mock 调度分发循环：按策略选节点 → 连线 → 进度推进 → 完成释放并沉淀甘特 ─── */
 let enqueueSeq = 200
-const QUEUE_TPL: { kind: QueueItem['kind']; label: string; prio: string }[] = [
-  { kind: 'benchmark', label: 'smoke-20 v3 · 规则评分', prio: 'P1' },
-  { kind: 'rag', label: 'default 库 · qa-v1 检索回归', prio: 'P1' },
-  { kind: 'testcase', label: 'PRD-支付链路 用例生成', prio: 'P2' },
-  { kind: 'stress', label: 'env=test · 10 QPS 压测', prio: 'P2' },
+const QUEUE_TPL: { kind: TaskKind; label: string; prio: string; parentId?: string }[] = [
+  { kind: 'benchmark', label: '2 模型 × 数据集 smoke-20 v3 · 规则评分', prio: 'P1' },
+  { kind: 'rag', label: '知识库 default · 黄金 QA qa-v1 · naive/local 对比', prio: 'P1' },
+  { kind: 'testcase', label: 'PRD-支付链路 用例生成（40/25/15/10/5/5）', prio: 'P2' },
+  { kind: 'stress', label: '↳ 派生压测 · env=test · 10 QPS', prio: 'P2', parentId: 'q-101' },
 ]
+
+// mock 甘特历史：完成的编排段沉淀于此（最近 12 条）
+interface GanttRow {
+  id: string
+  shortId: string
+  kind: TaskKind
+  label: string
+  status: TaskStatus
+  start: number
+  end: number
+  parentId: string | null
+  isChild: boolean
+  left: number
+  width: number
+}
+const mockGanttDone = ref<GanttRow[]>([])
+// 甘特「当前时刻」游标：运行中条形随时间延展
+const nowTs = ref(Date.now())
 
 /** 按当前策略挑选可接单节点：离线/排空节点与满载（≥92%）节点不参与。 */
 function pickAgent(): WorkerNode | null {
@@ -568,12 +929,24 @@ function pickAgent(): WorkerNode | null {
   return candidates.sort((x, y) => (y.caps.length - x.caps.length) || (x.load - y.load))[0] // 亲和性
 }
 
+function enqueueMockTask() {
+  const tpl = QUEUE_TPL[Math.floor(Math.random() * QUEUE_TPL.length)]
+  const q: QueueItem = { qid: 'q-' + enqueueSeq++, kind: tpl.kind, label: tpl.label, prio: tpl.prio, parentId: tpl.parentId || null }
+  queue.value.push(q)
+  addLog('ENQUEUE', `<span class="la">${q.qid}</span> ${tpl.label} (${q.prio})`, q.qid)
+  const t = window.setTimeout(() => {
+    assignTimers.delete(t)
+    tryAssign()
+  }, 600)
+  assignTimers.add(t)
+}
+
 function tryAssign() {
-  const waiting = queue.value.filter(q => !assignments.value.some(a => a.qid === q.qid))
+  const waiting = queue.value.filter(q => !q.workerId)
   if (!waiting.length) return
   const busyCount = workerPool.value.filter(w => w.state === 'busy').length
   if (busyCount >= capacity.value) {
-    if (Math.random() < 0.3) addLog('HOLD', `并发已满（${busyCount}/${capacity.value}），<span class="la">${waiting[0].qid}</span> 保持排队`)
+    if (Math.random() < 0.3) addLog('HOLD', `并发已满（${busyCount}/${capacity.value}），<span class="la">${waiting[0].qid}</span> 保持排队`, waiting[0].qid)
     return
   }
   const q = waiting[0]
@@ -582,43 +955,53 @@ function tryAssign() {
   const cost = 55 + Math.round(Math.random() * 70)
   assignCosts.value.push(cost)
   if (assignCosts.value.length > 12) assignCosts.value.shift()
-  assignments.value.push({ qid: q.qid, aid: agent.id })
+  q.workerId = agent.id
+  q.progress = 0
+  q.startedAt = Date.now()
   agent.state = 'busy'
   agent.load = Math.min(96, agent.load + 24 + Math.round(Math.random() * 22))
   agent.task = q.qid + ' · ' + q.label
   assignedToday.value++
-  // 队列项在分发期间保留并以 assigning 态高亮（连线端点依赖其 DOM），完成后再移出队列。
-  addLog('ASSIGN', `<span class="la">${q.qid}</span> → ${agent.id} · 策略=${strategy.value} · 耗时 ${cost}ms`)
+  addLog('ASSIGN', `<span class="la">${q.qid}</span> → ${agent.id} · 策略=${strategy.value} · 耗时 ${cost}ms`, q.qid)
 
-  // 4~8s 后模拟执行完成并释放并发槽位（登记句柄，卸载时统一清理）
+  // 执行 4~8.5s：期间按节拍推进进度，完成后释放槽位并沉淀甘特历史
+  const duration = 4000 + Math.random() * 4500
+  const progressTimer = window.setInterval(() => {
+    if (q.startedAt) q.progress = Math.min(99, ((Date.now() - q.startedAt) / duration) * 100)
+  }, 400)
+  assignTimers.add(progressTimer)
   const doneTimer = window.setTimeout(() => {
     assignTimers.delete(doneTimer)
-    assignments.value = assignments.value.filter(x => x.qid !== q.qid)
+    window.clearInterval(progressTimer)
+    assignTimers.delete(progressTimer)
     queue.value = queue.value.filter(x => x.qid !== q.qid)
     agent.load = Math.max(4, agent.load - 32 - Math.round(Math.random() * 20))
     if (agent.load < 30) {
       agent.state = 'idle'
       agent.task = null
     }
-    addLog('DONE', `${agent.id} 执行完成，释放并发槽位 · 负载回落至 ${agent.load}%`)
-  }, 4000 + Math.random() * 4500)
+    mockGanttDone.value.unshift({
+      id: q.qid, shortId: q.qid, kind: q.kind, label: q.label, status: 'succeeded',
+      start: q.startedAt || Date.now() - duration, end: Date.now(),
+      parentId: q.parentId || null, isChild: !!q.parentId, left: 0, width: 0,
+    })
+    if (mockGanttDone.value.length > 12) mockGanttDone.value.pop()
+    addLog('DONE', `${agent.id} 执行完成 <span class="la">${q.qid}</span>，释放并发槽位 · 负载回落至 ${agent.load}%`, q.qid)
+  }, duration)
   assignTimers.add(doneTimer)
 }
 
 /** 调度主循环节拍：45% 概率自动入队新任务，其余时间尝试分发。 */
 function dispatchTick() {
   if (!isRunning.value) return
+  nowTs.value = Date.now()
+  pushHist(histQueue.value, queueDepth.value)
+  pushHist(histRunning.value, runningCount.value)
+  pushHist(histCost.value, avgDispatchCost.value)
+  pushHist(histAssigned.value, assignedTodayNum.value)
   const r = Math.random()
   if (r < 0.45 && queue.value.length < 5) {
-    const tpl = QUEUE_TPL[Math.floor(Math.random() * QUEUE_TPL.length)]
-    const q: QueueItem = { qid: 'q-' + enqueueSeq++, kind: tpl.kind, label: tpl.label, prio: tpl.prio }
-    queue.value.push(q)
-    addLog('ENQUEUE', `<span class="la">${q.qid}</span> ${tpl.label} (${q.prio})`)
-    const t = window.setTimeout(() => {
-      assignTimers.delete(t)
-      tryAssign()
-    }, 600)
-    assignTimers.add(t)
+    enqueueMockTask()
   } else {
     tryAssign()
   }
@@ -689,7 +1072,7 @@ async function handleRegisterWorker() {
   workerPool.value.push({
     id,
     name: registerForm.value.name.trim() || id,
-    caps: registerForm.value.caps.split(',').map(s => s.trim()).filter(Boolean),
+    caps,
     state: 'idle',
     load: 2,
     ram: '0.5GB/16GB',
@@ -702,7 +1085,7 @@ async function handleRegisterWorker() {
   showRegisterModal.value = false
 }
 
-/* ─── live 模式数据接入：大盘/节点/队列周期拉取 + 调度事件增量轮询（§3.13） ─── */
+/* ─── live 模式数据接入：大盘/节点/任务周期拉取 + 调度事件增量轮询（§3.13） ─── */
 let lastEventId = 0
 let pollTimer: number | null = null
 let pollRound = 0
@@ -721,30 +1104,17 @@ function mapWorker(w: DispatchWorker): WorkerNode {
   }
 }
 
-/** 排队任务映射为待分发队列项；label 取关联资产 ID，优先级契约未定义时按 P1 展示。 */
-function mapTaskToQueueItem(t: { id: string; kind: QueueItem['kind']; config?: any }): QueueItem {
-  const cfg = t.config || {}
-  const label = cfg.dataset_id
-    ? `数据集 ${cfg.dataset_id}`
-    : cfg.kb_id
-      ? `知识库 ${cfg.kb_id}`
-      : cfg.parent_task_id
-        ? `↳ 派生自 ${String(cfg.parent_task_id).substring(0, 8)}`
-        : `${t.kind} 任务`
-  return { qid: t.id.substring(0, 8), kind: t.kind, label, prio: 'P1' }
-}
-
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
-/** 全量刷新大盘指标、节点池与排队队列（queued 任务来自任务域）。 */
+/** 全量刷新大盘指标、节点池与任务域（活跃任务进编排层，近期任务进甘特）。 */
 async function loadLiveAll() {
   try {
-    const [ov, workers, queued] = await Promise.all([
+    const [ov, workers, allTasks] = await Promise.all([
       api.dispatch.overview(),
       api.dispatch.workers(),
-      api.tasks.list({ status: 'queued' }),
+      api.tasks.list(),
     ])
     if (ov) {
       overviewData.value = ov
@@ -752,22 +1122,37 @@ async function loadLiveAll() {
       capacity.value = ov.max_running_tasks
     }
     if (workers) workerPool.value = workers.map(mapWorker)
-    queue.value = queued.map(mapTaskToQueueItem)
+    const sorted = [...allTasks].sort((a, b) => +new Date(b.created_at) - +new Date(a.created_at))
+    liveActiveTasks.value = sorted.filter(t => ['queued', 'running', 'awaiting_case_confirm'].includes(t.status))
+    liveRecentTasks.value = sorted.slice(0, 12)
+    nowTs.value = Date.now()
+    pushHist(histQueue.value, queueDepth.value)
+    pushHist(histRunning.value, runningCount.value)
+    pushHist(histCost.value, avgDispatchCost.value)
+    pushHist(histAssigned.value, assignedTodayNum.value)
   } catch (err: any) {
     message.error(err.message || '调度数据加载失败')
   }
 }
 
-/** 增量拉取调度事件流：日志只能由调度器/Worker 写入，浏览器不生成不改写。 */
+/** 增量拉取调度事件流：维护任务→节点映射；日志只能由调度器/Worker 写入，浏览器不生成不改写。 */
 async function pollLiveEvents() {
   try {
     const page = await api.dispatch.events(lastEventId || undefined)
     if (!page) return
     if (page.items.length) {
+      page.items.forEach(e => {
+        const ev = e.event.toLowerCase()
+        // assigned 事件建立任务→节点映射，终态事件解除
+        if (ev === 'assigned' && e.task_id && e.worker_id) taskWorkerMap.value[e.task_id] = e.worker_id
+        if (['succeeded', 'failed', 'cancelled'].includes(ev) && e.task_id) delete taskWorkerMap.value[e.task_id]
+      })
       const mapped = page.items.map(e => ({
         time: new Date(e.ts).toTimeString().slice(0, 8),
         kind: e.event.toUpperCase(),
+        cat: eventCat(e.event),
         html: escapeHtml(e.message),
+        tid: e.task_id || undefined,
       }))
       logs.value = [...mapped.reverse(), ...logs.value].slice(0, 50)
     }
@@ -783,18 +1168,108 @@ async function liveTick() {
   if (pollRound % 2 === 0) await loadLiveAll()
 }
 
+/* ─── 任务编排时间线（甘特）：先评后压父子关联、运行中条形随时间延展 ─── */
+const ganttLegend = [
+  { label: '排队', color: '#9CA3AF' },
+  { label: '运行中', color: 'var(--accent-ai)' },
+  { label: '待确认', color: 'var(--accent-warning)' },
+  { label: '成功', color: 'var(--accent-success)' },
+  { label: '失败/取消', color: 'var(--accent-error)' },
+]
+
+// 甘特行：live 取近期任务；mock 取运行中队列项 + 已完成历史
+const ganttBase = computed<Omit<GanttRow, 'left' | 'width'>[]>(() => {
+  if (liveMode) {
+    return liveRecentTasks.value.map(t => {
+      const active = ['queued', 'running', 'awaiting_case_confirm'].includes(t.status)
+      return {
+        id: t.id,
+        shortId: t.id.substring(0, 8),
+        kind: t.kind,
+        label: taskLabel(t),
+        status: t.status,
+        start: +new Date(t.created_at),
+        end: active ? nowTs.value : +new Date(t.updated_at || t.created_at),
+        parentId: t.parent_task_id || t.config?.parent_task_id || null,
+        isChild: !!(t.parent_task_id || t.config?.parent_task_id),
+      }
+    })
+  }
+  const running: Omit<GanttRow, 'left' | 'width'>[] = queue.value
+    .filter(q => q.workerId && q.startedAt)
+    .map(q => ({
+      id: q.qid, shortId: q.qid, kind: q.kind, label: q.label, status: 'running' as TaskStatus,
+      start: q.startedAt!, end: nowTs.value, parentId: q.parentId || null, isChild: !!q.parentId,
+    }))
+  return [...running, ...mockGanttDone.value].slice(0, 12)
+})
+
+// 父子分组排序：父任务在前，派生压测紧随其后
+const ganttRows = computed<GanttRow[]>(() => {
+  const rows = [...ganttBase.value]
+  if (!rows.length) return []
+  const minStart = Math.min(...rows.map(r => r.start))
+  const maxEnd = Math.max(nowTs.value, ...rows.map(r => r.end))
+  const span = Math.max(maxEnd - minStart, 60_000)
+  const positioned = rows.map(r => ({
+    ...r,
+    left: Math.max(0, ((r.start - minStart) / span) * 100),
+    width: Math.max(1.5, ((Math.max(r.end, r.start + 800) - r.start) / span) * 100),
+  }))
+  // 父任务（含派生子任务的）优先，子任务紧跟其父
+  const ids = new Set(positioned.map(r => r.id))
+  const parents = positioned.filter(r => !r.isChild || !ids.has(r.parentId || ''))
+  const children = positioned.filter(r => r.isChild && ids.has(r.parentId || ''))
+  const ordered: GanttRow[] = []
+  parents.sort((a, b) => a.start - b.start).forEach(p => {
+    ordered.push(p)
+    children.filter(c => c.parentId === p.id).forEach(c => ordered.push(c))
+  })
+  return ordered
+})
+
+// 时间轴刻度（起止 + 两个中间点）
+const ganttTicks = computed(() => {
+  const rows = ganttRows.value
+  if (!rows.length) return []
+  const minStart = Math.min(...rows.map(r => r.start))
+  const maxEnd = Math.max(nowTs.value, ...rows.map(r => r.end))
+  return [0, 1 / 3, 2 / 3, 1].map(p => fmtTime(minStart + (maxEnd - minStart) * p))
+})
+
+function fmtTime(ts: number): string {
+  const d = new Date(ts)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`
+}
+
+function statusLabel(s: string): string {
+  const map: Record<string, string> = {
+    queued: '排队中',
+    running: '运行中',
+    awaiting_case_confirm: '待确认',
+    succeeded: '已成功',
+    failed: '已失败',
+    cancelled: '已取消',
+  }
+  return map[s] || s
+}
+
 // 调度心跳
 let timer: any = null
 let dispatchTimer: any = null
+let nowTimer: any = null
 /** 分发模拟的延时句柄登记：组件卸载时统一清理，避免回调写入已销毁状态 */
 const assignTimers = new Set<number>()
 onMounted(async () => {
   window.addEventListener('resize', drawWires)
+  // 甘特时间游标：运行中条形每秒延展
+  nowTimer = window.setInterval(() => { nowTs.value = Date.now() }, 1000)
   if (liveMode) {
     // 真实模式：首屏全量加载后按 3s 节拍轮询事件，6s 全量刷新，不启动本地仿真
     await loadLiveAll()
     await pollLiveEvents()
     pollTimer = window.setInterval(liveTick, 3000)
+    nextTick(drawWires)
     return
   }
   timer = setInterval(() => {
@@ -811,15 +1286,17 @@ onMounted(async () => {
   nextTick(drawWires)
 })
 
-// 分配关系变化时在 DOM 更新后重绘连线
-watch(assignments, () => nextTick(drawWires), { deep: true })
+// 编排数据变化时在 DOM 更新后重绘连线
+watch([wireSpecs, workerPool], () => nextTick(drawWires), { deep: true })
 
 onBeforeUnmount(() => {
   if (timer) clearInterval(timer)
   if (dispatchTimer) clearInterval(dispatchTimer)
+  if (nowTimer) clearInterval(nowTimer)
   if (pollTimer !== null) window.clearInterval(pollTimer)
-  assignTimers.forEach(id => window.clearTimeout(id))
+  assignTimers.forEach(id => { window.clearTimeout(id); window.clearInterval(id) })
   assignTimers.clear()
+  window.clearTimeout(flashTimer)
   window.removeEventListener('resize', drawWires)
 })
 </script>
@@ -831,17 +1308,30 @@ onBeforeUnmount(() => {
   gap: 16px;
   align-items: start;
 }
-.topo-container {
+/* 三泳道编排拓扑：技能 Agent → 任务编排 → Worker 池 */
+.orch-lanes {
   position: relative;
   display: grid;
-  grid-template-columns: 200px minmax(0, 1fr);
-  column-gap: 56px;
-  min-height: 520px;
+  grid-template-columns: 168px minmax(170px, 0.95fr) minmax(0, 1.25fr);
+  column-gap: 44px;
+  min-height: 480px;
+}
+.lane {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.lane-scroll {
+  flex: 1;
+  overflow-y: auto;
+  max-height: 470px;
+  padding-right: 2px;
 }
 .agent-pool {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
   gap: 10px;
+  align-content: start;
 }
 .cap-slider {
   width: 100%;
@@ -874,6 +1364,239 @@ onBeforeUnmount(() => {
   align-items: center;
 }
 
+/* KPI 迷你趋势线 */
+.kpi-trend {
+  position: relative;
+  padding-bottom: 30px;
+}
+.kpi-trend .spark {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 8px;
+  width: calc(100% - 28px);
+  height: 22px;
+}
+.kpi-trend .spark polyline {
+  fill: none;
+  stroke: var(--accent-ai);
+  stroke-width: 1.4;
+  opacity: 0.7;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+/* 技能 Agent 卡片：有活跃任务时发光 */
+.skill-card {
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  background: var(--bg-main);
+  padding: 10px 11px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.skill-card.on {
+  border-color: color-mix(in srgb, var(--accent-ai) 42%, var(--border-subtle));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-ai) 16%, transparent), 0 4px 14px rgba(99, 102, 241, 0.1);
+}
+.skill-ico {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  font-size: 15px;
+}
+.skill-name {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.skill-desc {
+  font-size: 10.5px;
+  margin-top: 1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.skill-foot {
+  margin-top: 7px;
+  font-size: 10.5px;
+  color: var(--text-secondary);
+}
+
+/* 任务编排节点卡片：状态色左边条 + 点击跳任务中心 */
+.task-node {
+  position: relative;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--bg-main);
+  padding: 8px 11px 8px 13px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.task-node::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 3px;
+  background: var(--border-subtle);
+}
+.task-node.running {
+  border-color: color-mix(in srgb, var(--accent-ai) 42%, var(--border-subtle));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-ai) 18%, transparent);
+}
+.task-node.running::before { background: var(--accent-ai); }
+.task-node.queued::before { background: #9ca3af; }
+.task-node.awaiting_case_confirm::before { background: var(--accent-warning); }
+.task-node:hover {
+  border-color: var(--accent-ai);
+}
+/* 日志点击定位的闪烁高亮 */
+.task-node.flash {
+  animation: task-flash 0.8s ease-in-out 2;
+}
+@keyframes task-flash {
+  0%, 100% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-ai) 18%, transparent); }
+  50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent-ai) 45%, transparent); }
+}
+.task-node .q-id {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--c-tasks);
+}
+/* 运行中任务进度条（流动条纹动效） */
+.task-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+.task-progress-track {
+  flex: 1;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  overflow: hidden;
+}
+.task-progress-track > i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: repeating-linear-gradient(45deg, var(--accent-ai) 0 8px, color-mix(in srgb, var(--accent-ai) 55%, #fff) 8px 16px);
+  background-size: 23px 100%;
+  animation: bar-stripes 0.9s linear infinite;
+  transition: width 0.4s ease;
+}
+@keyframes bar-stripes {
+  to { background-position: 23px 0; }
+}
+
+/* 技能→任务连线：灰色虚线缓流（区别于任务→Worker 的高亮流动） */
+:deep(.wire-skill) {
+  stroke: var(--text-tertiary);
+  stroke-dasharray: 3 6;
+  opacity: 0.55;
+  animation: dash-flow 2.4s linear infinite;
+}
+
+/* Worker 能力匹配高亮：当前活跃任务域对应的节点与能力标签 */
+.agent-node.matched {
+  border-color: color-mix(in srgb, var(--accent-success) 38%, var(--border-subtle));
+}
+.an-cap.hot {
+  color: var(--accent-success);
+  border-color: color-mix(in srgb, var(--accent-success) 40%, var(--border-subtle));
+  background: rgba(16, 185, 129, 0.08);
+}
+
+/* 小号过滤 chip */
+.chip-xs {
+  font-size: 10.5px;
+  padding: 2px 8px;
+  min-height: 22px;
+}
+
+/* 事件流分类着色与可点击定位 */
+.log-line.cat-error .lk { color: var(--accent-error); }
+.log-line.cat-done .lk { color: var(--accent-success); }
+.log-line.cat-node .lk { color: var(--text-tertiary); }
+.log-line.clickable { cursor: pointer; border-radius: 4px; }
+.log-line.clickable:hover { background: var(--row-hover); }
+
+/* ─── 任务编排时间线（甘特） ─── */
+.gantt {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.gantt-axis {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--text-tertiary);
+  padding: 0 4px 4px 190px;
+}
+.gantt-row {
+  display: grid;
+  grid-template-columns: 190px 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 4px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.gantt-row:hover {
+  background: var(--row-hover);
+}
+.gantt-row.child .gantt-name {
+  padding-left: 14px;
+}
+.gantt-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.gantt-track {
+  position: relative;
+  height: 14px;
+  border-radius: 4px;
+  background: var(--bg-elevated);
+  overflow: hidden;
+}
+.gantt-bar {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  border-radius: 4px;
+  transition: left 0.6s ease, width 0.6s ease;
+}
+.gantt-bar.st-queued { background: #9ca3af; }
+.gantt-bar.st-running {
+  background: repeating-linear-gradient(45deg, var(--accent-ai) 0 8px, color-mix(in srgb, var(--accent-ai) 55%, #fff) 8px 16px);
+  background-size: 23px 100%;
+  animation: bar-stripes 0.9s linear infinite;
+}
+.gantt-bar.st-awaiting_case_confirm { background: var(--accent-warning); }
+.gantt-bar.st-succeeded { background: var(--accent-success); }
+.gantt-bar.st-failed,
+.gantt-bar.st-cancelled { background: var(--accent-error); opacity: 0.75; }
+.gantt-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 3px;
+}
+
 @media (max-width: 1360px) {
   .dispatch-grid {
     grid-template-columns: 250px minmax(0, 1fr);
@@ -886,13 +1609,29 @@ onBeforeUnmount(() => {
   }
 }
 
+@media (max-width: 1080px) {
+  .orch-lanes {
+    grid-template-columns: 150px minmax(150px, 1fr) minmax(0, 1.1fr);
+    column-gap: 28px;
+  }
+}
+
 @media (max-width: 880px) {
   .dispatch-grid {
     grid-template-columns: 1fr;
   }
-  .topo-container {
+  .orch-lanes {
     grid-template-columns: 1fr;
     row-gap: 24px;
+  }
+  .lane-scroll {
+    max-height: 300px;
+  }
+  .gantt-axis {
+    padding-left: 120px;
+  }
+  .gantt-row {
+    grid-template-columns: 120px 1fr;
   }
 }
 </style>
