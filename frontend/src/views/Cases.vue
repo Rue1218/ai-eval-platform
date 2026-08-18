@@ -1,6 +1,6 @@
 <template>
   <div class="cases-workbench">
-    <div class="ft-layout">
+    <div class="ft-layout" :style="{ '--ft-w': treeWidth + 'px' }">
       <!-- 左侧：目录树侧边栏 -->
       <div class="ft-sidebar">
         <div class="ft-header">
@@ -24,13 +24,14 @@
             </div>
 
             <div v-if="folder.open" class="ft-folder-child">
-              <!-- C1：用例集节点右键打开集级上下文菜单 -->
+              <!-- C1：用例集节点右键打开集级上下文菜单；点击切换带未保存守卫 -->
               <div
                 v-for="item in folder.items"
                 :key="item.id"
                 class="ft-node"
                 :class="{ active: activeSetId === item.id }"
-                @click="selectCaseSet(item.id)"
+                :title="`${item.name} · ${item.status === 'confirmed' ? '已入库' : item.status === 'cancelled' ? '已废弃' : '待确认'}`"
+                @click="requestSelectCaseSet(item.id)"
                 @contextmenu.prevent.stop="onSetContextMenu($event, item.id)"
               >
                 <span class="ft-icon">📋</span>
@@ -45,7 +46,19 @@
               </div>
             </div>
           </div>
+          <!-- 目录树空态 / 搜索无结果提示 -->
+          <div v-if="!filteredFolders.length" class="tertiary" style="padding: 14px 12px; font-size: 12px; line-height: 1.7">
+            {{ treeSearch.trim() ? `未找到匹配「${treeSearch.trim()}」的用例集` : '暂无用例集，点击上方「+ 新建集」开始' }}
+          </div>
         </div>
+        <!-- 目录树面板拖拽调宽手柄（200–520px，双击复位 290px，localStorage 持久化），对齐原型 ft-resizer -->
+        <div
+          class="ft-resizer"
+          :class="{ on: treeResizing }"
+          title="拖拽调整目录树宽度 · 双击复位"
+          @mousedown="startTreeResize"
+          @dblclick="resetTreeWidth"
+        ></div>
       </div>
 
       <!-- 右侧：用例数据表格工作台 -->
@@ -67,7 +80,7 @@
             <button class="btn btn-secondary btn-sm" @click="openAddColModal">+ 新增列</button>
             <button class="btn btn-ai btn-sm" @click="openAiGenWizard">✨ AI 生成用例集</button>
             <button class="btn btn-ai btn-sm" :disabled="aiFilling" @click="handleAiFillCase">{{ aiFilling ? '补全中…' : 'AI 补全断言' }}</button>
-            <button class="btn btn-secondary btn-sm" :disabled="!hasUnsavedChanges || savingCases" @click="persistCases">
+            <button class="btn btn-secondary btn-sm" :disabled="!hasUnsavedChanges || savingCases" title="快捷键 Ctrl/⌘ + S" @click="persistCases">
               {{ savingCases ? '保存中…' : '保存修改' }}
             </button>
             <button class="btn btn-secondary btn-sm" @click="exportXlsx">导出 xlsx</button>
@@ -119,8 +132,13 @@
               </tr>
             </thead>
             <tbody>
-              <!-- C1：表格行右键打开行级上下文菜单 -->
-              <tr v-for="(c, idx) in cases" :key="c.id" @contextmenu.prevent="onRowContextMenu($event, idx)">
+              <!-- C1：表格行右键打开行级上下文菜单；双击直达弹窗编辑 -->
+              <tr
+                v-for="(c, idx) in cases"
+                :key="c.id"
+                @contextmenu.prevent="onRowContextMenu($event, idx)"
+                @dblclick="openCaseEditModal(idx)"
+              >
                 <td><input v-model="selectedCaseIds" type="checkbox" :value="c.id" /></td>
                 <!-- C3：策略/级别行内可编辑，点击切换为下拉，选定或失焦后标记待保存 -->
                 <td class="cell-edit" @click="editCell(c, 'strategy')">
@@ -157,6 +175,7 @@
                     autofocus
                     @blur="finishEditing"
                     @keyup.enter="finishEditing"
+                    @keyup.esc="cancelEditing"
                   />
                   <span v-else>{{ c.module }}</span>
                 </td>
@@ -168,6 +187,7 @@
                     autofocus
                     @blur="finishEditing"
                     @keyup.enter="finishEditing"
+                    @keyup.esc="cancelEditing"
                   />
                   <span v-else style="font-weight: 500">{{ c.name }}</span>
                 </td>
@@ -179,17 +199,20 @@
                     autofocus
                     @blur="finishEditing"
                     @keyup.enter="finishEditing"
+                    @keyup.esc="cancelEditing"
                   />
                   <span v-else>{{ c.expected }}</span>
                 </td>
                 <td class="cell-edit" @click="editCell(c, 'precondition')">
+                  <!-- 修复：前置条件编辑此前不标记待保存，导致修改无法落库 -->
                   <input
                     v-if="editingCell?.row === c && editingCell?.field === 'precondition'"
                     v-model="c.precondition"
                     class="cell-input"
                     autofocus
-                    @blur="editingCell = null"
-                    @keyup.enter="editingCell = null"
+                    @blur="finishEditing"
+                    @keyup.enter="finishEditing"
+                    @keyup.esc="cancelEditing"
                   />
                   <span v-else class="small tertiary">{{ c.precondition || '无' }}</span>
                 </td>
@@ -203,6 +226,7 @@
                     @input="setCaseExtra(c, col.key, ($event.target as HTMLInputElement).value)"
                     @blur="finishExtraEditing"
                     @keyup.enter="finishExtraEditing"
+                    @keyup.esc="cancelExtraEditing"
                   />
                   <span v-else class="small" :class="{ tertiary: !getCaseExtra(c, col.key) }">{{ getCaseExtra(c, col.key) || '—' }}</span>
                 </td>
@@ -222,6 +246,12 @@
         <!-- 4. 底部状态栏与批量映射 -->
         <div class="ws-status-bar">
           <span>已选 <b class="num mono">{{ selectedCaseIds.length }}</b> / {{ cases.length }} 条</span>
+          <!-- 批量删除勾选用例（已确认集不可编辑，保存后落库） -->
+          <button
+            v-if="selectedCaseIds.length > 0 && currentSet.status !== 'confirmed'"
+            class="link-btn danger"
+            @click="batchDeleteCases"
+          >批量删除</button>
           <span class="tag-soft" :style="modeTagStyle">{{ modeMappingLabel }}</span>
           <select v-model="mapTargetId" class="select" style="height: 28px; padding: 2px 24px 2px 8px; font-size: 12px" :disabled="mappingTargets.length === 0">
             <option value="">选择目标</option>
@@ -232,8 +262,64 @@
           <span class="tertiary">采纳率: <b class="num mono">{{ adoptionRate }}%</b></span>
         </div>
       </div>
-      <div v-else class="info-strip" style="margin: 20px">
-        暂无用例集。可新建空用例集，或通过 AI 生成候选后保存。
+
+      <!-- 空态仍保留完整工作台骨架：工具栏 + 策略横幅 + 表头 + 状态栏，空表格内嵌引导操作 -->
+      <div v-else class="workspace-main">
+        <div class="ws-toolbar">
+          <div class="row" style="gap: 8px; align-items: center">
+            <span style="font-weight: 700; font-size: 15px">用例工作台</span>
+            <span class="tag-soft" :style="modeTagStyle">{{ modeMappingLabel }}</span>
+          </div>
+          <div class="row" style="gap: 8px; align-items: center; margin-left: auto; flex-wrap: wrap; justify-content: flex-end">
+            <button class="btn btn-ai btn-sm" @click="openAiGenWizard">✨ AI 生成用例集</button>
+            <button class="btn btn-sign btn-sm" @click="handleCreateCaseSet()">+ 新建空用例集</button>
+          </div>
+        </div>
+        <div class="strategy-banner">
+          <span class="tertiary" style="font-weight: 600">策略覆盖分布:</span>
+          <div class="row wrap" style="gap: 6px">
+            <span v-for="st in STRATEGY_LIST" :key="st" class="tag-soft" style="font-size: 11px">{{ st }} <b class="num mono">0</b></span>
+          </div>
+          <span class="grow"></span>
+          <span class="tertiary small">暂无用例集</span>
+        </div>
+        <div class="ws-grid-container">
+          <table class="ds-table">
+            <thead>
+              <tr>
+                <th style="width: 40px"><input type="checkbox" disabled /></th>
+                <th style="width: 75px">策略</th>
+                <th style="width: 65px">级别</th>
+                <th style="min-width: 90px">模块</th>
+                <th style="min-width: 180px">用例名称 <i class="req" style="color: var(--accent-error)">*</i></th>
+                <th style="min-width: 220px">预期结果 <i class="req" style="color: var(--accent-error)">*</i></th>
+                <th style="min-width: 140px">前置条件</th>
+                <th style="width: 90px">映射状态</th>
+                <th style="width: 75px; text-align: right">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td colspan="9" style="padding: 56px 16px; border-bottom: none">
+                  <div style="display: flex; flex-direction: column; align-items: center; gap: 10px; color: var(--text-tertiary)">
+                    <span style="font-size: 34px">📋</span>
+                    <span style="font-size: 14px; font-weight: 600; color: var(--text-secondary)">暂无用例集</span>
+                    <span class="small">粘贴 PRD / OpenAPI 文本由 AI 按六大策略生成候选用例，或先新建空集手工编写</span>
+                    <div class="row" style="gap: 8px; margin-top: 6px">
+                      <button class="btn btn-ai btn-sm" @click="openAiGenWizard">✨ AI 生成用例集</button>
+                      <button class="btn btn-sign btn-sm" @click="handleCreateCaseSet()">+ 新建空用例集</button>
+                    </div>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="ws-status-bar">
+          <span>已选 <b class="num mono">0</b> / 0 条</span>
+          <span class="tertiary">尚未创建用例集</span>
+          <span class="grow"></span>
+        </div>
       </div>
     </div>
 
@@ -467,7 +553,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useMessage, useDialog, type DropdownOption } from 'naive-ui'
 import { api } from '../api/http'
 import type { CaseSet, KnowledgeBase, TestCase } from '../api/types'
@@ -505,7 +591,8 @@ const cases = ref<TestCase[]>([])
 const selectedCaseIds = ref<string[]>([])
 const savingCases = ref(false)
 const hasUnsavedChanges = ref(false)
-const editingCell = ref<{ row: TestCase; field: keyof TestCase } | null>(null)
+// original 供 Escape 取消时还原（对齐原型单元格编辑交互）
+const editingCell = ref<{ row: TestCase; field: keyof TestCase; original: string } | null>(null)
 const showCreateSetModal = ref(false)
 const newSetName = ref('')
 const creatingSet = ref(false)
@@ -514,10 +601,41 @@ const createTargetFolderId = ref('')
 const generatingCases = ref(false)
 const folders = ref([{ id: 'case-sets', name: '用例集', open: true, items: [] as Array<{ id: string; name: string; status: CaseSet['status'] }> }])
 
+// ─── 目录树面板自由伸缩（对齐原型 ft-resizer：拖拽 200–520px，双击复位 290px，localStorage 持久化） ───
+const TREE_W_KEY = 'ae_ft_w_cases'
+const treeWidth = ref(Math.min(520, Math.max(200, +(localStorage.getItem(TREE_W_KEY) || 290))))
+const treeResizing = ref(false)
+
+function applyTreeWidth(w: number) {
+  treeWidth.value = Math.min(520, Math.max(200, Math.round(w)))
+}
+
+function startTreeResize(e: MouseEvent) {
+  e.preventDefault()
+  treeResizing.value = true
+  const startX = e.clientX
+  const startW = treeWidth.value
+  const move = (ev: MouseEvent) => applyTreeWidth(startW + ev.clientX - startX)
+  const up = () => {
+    treeResizing.value = false
+    localStorage.setItem(TREE_W_KEY, String(treeWidth.value))
+    window.removeEventListener('mousemove', move)
+    window.removeEventListener('mouseup', up)
+  }
+  window.addEventListener('mousemove', move)
+  window.addEventListener('mouseup', up)
+}
+
+function resetTreeWidth() {
+  applyTreeWidth(290)
+  localStorage.setItem(TREE_W_KEY, '290')
+  message.info('目录树宽度已复位为 290px')
+}
+
 // C4：每个用例集的自定义扩展列（契约 column_schema），由 getSet 详情加载、updateSet 持久化
 const customColsMap = ref<Record<string, CustomCol[]>>({})
-// 自定义列单元格行内编辑态（独立于内置字段的 editingCell）
-const editingExtraCell = ref<{ row: TestCase; key: string } | null>(null)
+// 自定义列单元格行内编辑态（独立于内置字段的 editingCell）；original 供 Escape 还原
+const editingExtraCell = ref<{ row: TestCase; key: string; original: string } | null>(null)
 
 // C2：结构化编辑弹窗状态；草稿在打开时从行数据拷贝，保存时才写回表格
 const showEditCaseModal = ref(false)
@@ -572,7 +690,8 @@ const strategyCounts = computed(() => {
   // 策略分布统计覆盖契约全部 6 类策略（含「等价」）。
   return STRATEGY_LIST.map(strategy => ({ name: strategy, count: cases.value.filter(item => item.strategy === strategy).length }))
 })
-const adoptionRate = computed(() => Math.round((cases.value.filter(item => item.mapped).length / (cases.value.length || 1)) * 100))
+// 采纳率对齐原型语义：勾选采纳数 / 总条数（勾选 = 采纳，原型 cases.html 以非 pending 计）
+const adoptionRate = computed(() => Math.round((selectedCaseIds.value.length / (cases.value.length || 1)) * 100))
 // 映射目标由全局业务模式固定：大模型用例写入基准数据集，RAG 用例写入黄金 QA。
 const mapTarget = computed<'dataset' | 'gold_qa'>(() => modeStore.mode === 'rag' ? 'gold_qa' : 'dataset')
 const modeMappingLabel = computed(() => modeStore.mode === 'rag' ? '映射至黄金 QA' : '映射至基准数据集')
@@ -596,7 +715,7 @@ const createSetMenuOptions: DropdownOption[] = [
   { label: '新建空用例集', key: 'empty' },
 ]
 
-// C1：用例集节点右键菜单项（确认入库仅对待确认集展示）
+// C1：用例集节点右键菜单项（确认入库仅对待确认集展示；补充复制 ID 与 xmind 导出）
 const ctxSetOptions = computed<DropdownOption[]>(() => {
   const set = caseSets.value.find(s => s.id === ctxSet.setId)
   const opts: DropdownOption[] = []
@@ -604,6 +723,8 @@ const ctxSetOptions = computed<DropdownOption[]>(() => {
   opts.push(
     { label: '⇄ 批量映射到评测集', key: 'map' },
     { label: '⤓ 导出 Excel (.xlsx)', key: 'export' },
+    { label: '⤓ 导出 XMind (.xmind)', key: 'export-xmind' },
+    { label: '📋 复制用例集 ID', key: 'copy-id' },
     { type: 'divider', key: 'd1' },
     { label: '✏ 重命名', key: 'rename' },
     { label: '🗑 废弃用例集', key: 'cancel', props: { style: 'color: var(--accent-error)' } },
@@ -619,15 +740,28 @@ const ctxFolderOptions: DropdownOption[] = [
   { label: '✏ 重命名目录', key: 'rename' },
 ]
 
-// C1：表格行右键菜单项
-const ctxRowOptions: DropdownOption[] = [
-  { label: '✏ 弹窗详细编辑', key: 'edit' },
-  { label: '✨ AI 补全属性', key: 'ai-fill' },
-  { label: '📋 复制为 JSON', key: 'copy' },
-  { type: 'divider', key: 'd1' },
-  { label: '＋ 下方插入新用例', key: 'insert' },
-  { label: '🗑 删除本用例', key: 'delete', props: { style: 'color: var(--accent-error)' } },
-]
+// C1：表格行右键菜单项（勾选态随当前行动态切换；已确认集隐藏编辑类操作）
+const ctxRowOptions = computed<DropdownOption[]>(() => {
+  const row = cases.value[ctxRow.idx]
+  const checked = row ? selectedCaseIds.value.includes(row.id) : false
+  const readonly = currentSet.value?.status === 'confirmed'
+  const opts: DropdownOption[] = [
+    { label: checked ? '☑ 取消勾选本行' : '☐ 勾选本行', key: 'toggle-check' },
+    { label: '✏ 弹窗详细编辑', key: 'edit' },
+  ]
+  if (!readonly) opts.push({ label: '✨ AI 补全属性', key: 'ai-fill' })
+  opts.push({ label: '📋 复制为 JSON', key: 'copy' })
+  if (!readonly) {
+    opts.push(
+      { type: 'divider', key: 'd1' },
+      { label: '⬆ 在上方插入新用例', key: 'insert-above' },
+      { label: '＋ 在下方插入新用例', key: 'insert' },
+      { label: '⧉ 创建本行副本', key: 'duplicate' },
+      { label: '🗑 删除本用例', key: 'delete', props: { style: 'color: var(--accent-error)' } },
+    )
+  }
+  return opts
+})
 
 // ─── C5：向导派生状态 ───
 const aiPresetOptions = PRD_PRESETS.map((p, i) => ({ label: p.name, value: i }))
@@ -686,23 +820,38 @@ function setCaseExtra(row: TestCase, key: string, val: string) {
 // C4：自定义列单元格进入/结束行内编辑（已确认集不可编辑）
 function editExtraCell(row: TestCase, key: string) {
   if (currentSet.value?.status === 'confirmed') return
-  editingExtraCell.value = { row, key }
+  editingExtraCell.value = { row, key, original: getCaseExtra(row, key) }
 }
 function finishExtraEditing() {
   editingExtraCell.value = null
   hasUnsavedChanges.value = true
 }
+function cancelExtraEditing() {
+  // Escape 放弃本次扩展列编辑：还原原始值且不标记待保存。
+  const cell = editingExtraCell.value
+  if (cell) setCaseExtra(cell.row, cell.key, cell.original)
+  editingExtraCell.value = null
+}
 
 function editCell(row: TestCase, field: keyof TestCase) {
   // 已确认用例集不可编辑，浏览器侧提前阻止无效编辑操作。
   if (currentSet.value?.status === 'confirmed') return
-  editingCell.value = { row, field }
+  editingCell.value = { row, field, original: String(row[field] ?? '') }
 }
 
 function finishEditing() {
   // 失焦后只标记待保存，不在浏览器中假装已持久化。
   editingCell.value = null
   hasUnsavedChanges.value = true
+}
+
+function cancelEditing() {
+  // Escape 放弃本次编辑：还原原始值且不标记待保存。
+  const cell = editingCell.value
+  if (cell) {
+    ;(cell.row as unknown as Record<string, unknown>)[cell.field] = cell.original
+  }
+  editingCell.value = null
 }
 
 // 切换用例集时拉取详情与具体用例，不复用上一套的本地编辑内容。
@@ -722,6 +871,37 @@ async function selectCaseSet(id: string) {
     selectedCaseIds.value = []
     message.error(err.message || '加载用例集详情失败')
   }
+}
+
+// 未保存守卫：切换用例集前若有未提交编辑，先询问保存/放弃/取消，防止误丢本地修改
+function requestSelectCaseSet(id: string): Promise<boolean> {
+  if (!id || id === activeSetId.value) return Promise.resolve(false)
+  if (!hasUnsavedChanges.value) {
+    return selectCaseSet(id).then(() => true)
+  }
+  return new Promise(resolve => {
+    dialog.warning({
+      title: '存在未保存的修改',
+      content: '当前用例集有未保存的编辑，切换后将丢失。是否保存后切换？',
+      positiveText: '保存并切换',
+      negativeText: '放弃修改',
+      onPositiveClick: async () => {
+        const ok = await persistCases()
+        if (ok) {
+          await selectCaseSet(id)
+          resolve(true)
+        } else {
+          resolve(false)
+        }
+      },
+      onNegativeClick: async () => {
+        await selectCaseSet(id)
+        resolve(true)
+      },
+      onClose: () => resolve(false),
+      onMaskClick: () => resolve(false),
+    })
+  })
 }
 
 function getStrategyTagClass(strategy: TestCase['strategy']) {
@@ -1176,22 +1356,26 @@ async function renameCaseSet(id: string, name: string) {
   }
 }
 
-// 用例集右键菜单分发：确认入库/批量映射复用主工作台流程（先切到该集，由现有函数校验映射目标）
+// 用例集右键菜单分发：确认入库/批量映射复用主工作台流程（先带守卫切到该集，由现有函数校验映射目标）
 async function handleSetMenuSelect(key: string | number) {
   ctxSet.show = false
   const set = caseSets.value.find(s => s.id === ctxSet.setId)
   if (!set) return
   switch (String(key)) {
     case 'confirm':
-      await selectCaseSet(set.id)
-      await confirmAllCases()
+      if (await requestSelectCaseSet(set.id)) await confirmAllCases()
       break
     case 'map':
-      await selectCaseSet(set.id)
-      await handleBatchMap()
+      if (await requestSelectCaseSet(set.id)) await handleBatchMap()
       break
     case 'export':
       await downloadCaseSet('xlsx', set.id, set.name)
+      break
+    case 'export-xmind':
+      await downloadCaseSet('xmind', set.id, set.name)
+      break
+    case 'copy-id':
+      await copyText(set.id, '已复制用例集 ID')
       break
     case 'rename':
       openPrompt('重命名用例集', set.name, async (val) => { await renameCaseSet(set.id, val) })
@@ -1219,6 +1403,11 @@ function handleFolderMenuSelect(key: string | number) {
       })
       break
     case 'rename':
+      // 主目录为接口数据挂载点，禁止重命名（与数据集页系统目录保护一致）
+      if (folder.id === folders.value[0]?.id) {
+        message.warning('主目录为系统挂载点，不可重命名')
+        break
+      }
       openPrompt('重命名目录', folder.name, (val) => {
         folder.name = val
         message.success('已更新目录名')
@@ -1234,6 +1423,9 @@ async function handleRowMenuSelect(key: string | number) {
   const row = cases.value[idx]
   if (!row) return
   switch (String(key)) {
+    case 'toggle-check':
+      toggleCaseChecked(row)
+      break
     case 'edit':
       openCaseEditModal(idx)
       break
@@ -1243,13 +1435,26 @@ async function handleRowMenuSelect(key: string | number) {
     case 'copy':
       await copyCaseJson(row)
       break
+    case 'insert-above':
+      insertCaseAt(idx)
+      break
     case 'insert':
-      insertCaseBelow(idx)
+      insertCaseAt(idx + 1)
+      break
+    case 'duplicate':
+      duplicateCase(idx)
       break
     case 'delete':
       deleteCase(idx)
       break
   }
+}
+
+// 勾选/取消勾选单条用例（勾选 = 采纳，与原型 case-chk 语义一致）
+function toggleCaseChecked(row: TestCase) {
+  const i = selectedCaseIds.value.indexOf(row.id)
+  if (i >= 0) selectedCaseIds.value.splice(i, 1)
+  else selectedCaseIds.value.push(row.id)
 }
 
 // AI 补全单条用例属性：行级 ai-fill 契约（live）/ 本地候选（mock），均由「保存修改」落库
@@ -1276,24 +1481,67 @@ async function copyCaseJson(row: TestCase) {
   }
 }
 
-// 在当前行下方插入空白用例，继承同模块便于连续编写；保存后才落库
-function insertCaseBelow(idx: number) {
+// 在指定位置插入空白用例，继承相邻行模块便于连续编写；保存后才落库
+function insertCaseAt(at: number) {
   if (currentSet.value?.status === 'confirmed') return
+  const neighbor = cases.value[Math.min(at, cases.value.length - 1)]
   const item: TestCase = {
     id: `c-${Date.now()}`,
     strategy: '正向',
     priority: 'P1',
-    module: cases.value[idx]?.module || '通用',
+    module: neighbor?.module || '通用',
     name: '',
     expected: '',
     precondition: '',
     mapped: false,
     pending: false,
   }
-  cases.value.splice(idx + 1, 0, item)
+  cases.value.splice(at, 0, item)
   selectedCaseIds.value.push(item.id)
   hasUnsavedChanges.value = true
-  message.info('已在下方插入空白用例，点击“保存修改”后生效')
+  message.info('已插入空白用例，点击“保存修改”后生效')
+}
+
+// 复制当前行创建副本（扩展属性一并拷贝），保存后才落库
+function duplicateCase(idx: number) {
+  if (currentSet.value?.status === 'confirmed') return
+  const src = cases.value[idx]
+  if (!src) return
+  const copy: TestCase = { ...src, id: `c-${Date.now()}`, name: `${src.name}（副本）`, mapped: false, pending: false }
+  cases.value.splice(idx + 1, 0, copy)
+  selectedCaseIds.value.push(copy.id)
+  hasUnsavedChanges.value = true
+  message.info('已创建用例副本，点击“保存修改”后生效')
+}
+
+// 批量删除勾选用例：Dialog 确认后仅影响本地编辑态，保存后落库
+function batchDeleteCases() {
+  if (currentSet.value?.status === 'confirmed') return
+  const ids = selectedCaseIds.value.filter(id => cases.value.some(item => item.id === id))
+  if (!ids.length) return
+  dialog.warning({
+    title: '批量删除用例',
+    content: `确认删除勾选的 ${ids.length} 条用例？删除后需点击“保存修改”才会落库。`,
+    positiveText: '确认删除',
+    negativeText: '取消',
+    onPositiveClick: () => {
+      const idSet = new Set(ids)
+      cases.value = cases.value.filter(item => !idSet.has(item.id))
+      selectedCaseIds.value = []
+      hasUnsavedChanges.value = true
+      message.info(`已删除 ${ids.length} 条用例，点击“保存修改”后生效`)
+    },
+  })
+}
+
+// 通用剪贴板复制（用例集 ID 等短文本场景）
+async function copyText(text: string, tip: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+    message.success(tip)
+  } catch {
+    message.error('复制失败：浏览器未授权剪贴板访问')
+  }
 }
 
 // ─── 通用单输入弹窗（重命名 / 新建目录等轻量输入场景）───
@@ -1327,6 +1575,9 @@ function handleCreateSetMenu(key: string | number) {
 function openCaseEditModal(idx: number) {
   const row = cases.value[idx]
   if (!row) return
+  // 双击/右键进入弹窗前退出进行中的行内编辑，避免状态叠加
+  editingCell.value = null
+  editingExtraCell.value = null
   editCaseIdx.value = idx
   editDraft.value = { ...row }
   showEditCaseModal.value = true
@@ -1423,9 +1674,24 @@ async function loadCaseSets() {
   }
 }
 
+// Ctrl/⌘+S 快捷保存：仅在有未保存修改且当前集可编辑时拦截默认行为
+function onGlobalKeydown(e: KeyboardEvent) {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+    if (hasUnsavedChanges.value && currentSet.value && currentSet.value.status !== 'confirmed') {
+      e.preventDefault()
+      void persistCases()
+    }
+  }
+}
+
 onMounted(() => {
   void loadCaseSets()
   void loadMappingTargets()
+  window.addEventListener('keydown', onGlobalKeydown)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', onGlobalKeydown)
 })
 
 // 模式变化后强制清空原目标，并只加载当前业务链路允许映射的资产。
@@ -1440,7 +1706,7 @@ watch(() => modeStore.mode, () => {
 }
 .ft-layout {
   display: grid;
-  grid-template-columns: 260px 1fr;
+  grid-template-columns: var(--ft-w, 290px) minmax(0, 1fr);
   height: 100%;
   min-width: 0;
   background: var(--bg-main);
@@ -1454,6 +1720,21 @@ watch(() => modeStore.mode, () => {
   display: flex;
   flex-direction: column;
   height: 100%;
+  position: relative;
+}
+/* 目录树面板拖拽调宽手柄（对齐原型 ft-resizer） */
+.ft-resizer {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 5;
+}
+.ft-resizer:hover,
+.ft-resizer.on {
+  background: color-mix(in srgb, var(--accent-ai) 35%, transparent);
 }
 .ft-header {
   padding: 12px 14px;
@@ -1582,6 +1863,10 @@ watch(() => modeStore.mode, () => {
     max-height: 250px;
     border-right: 0;
     border-bottom: 1px solid var(--border-subtle);
+  }
+  /* 窄屏单列布局下隐藏拖拽手柄 */
+  .ft-resizer {
+    display: none;
   }
   .workspace-main {
     min-height: 660px;
