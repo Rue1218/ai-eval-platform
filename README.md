@@ -2,7 +2,7 @@
 
 基于《AI 测试与评估平台 PRD V1.6.3》搭建的**基础框架**。面向单一团队，用 Agent 自动化完成大模型基准测试与 RAG 测试，压测是两类评测的共享步骤。
 
-技术栈：Vue3 + Naive UI / Python FastAPI / PostgreSQL / WebSocket / Docker Compose / go-stress-testing（预留）。
+技术栈：Vue3 + TypeScript + Naive UI / Python 3.12 FastAPI / PostgreSQL / WebSocket / Docker Compose / go-stress-testing（预留）。
 
 ## 架构
 
@@ -25,13 +25,14 @@ Compose 六件套：`web` `api` `worker` `postgres` `lightrag` `stress`。
 
 ```
 .
-├── web/            Vue3 + Naive UI + Vite 前端（nginx 反代 /api 与 /ws）
-├── api/            FastAPI 后端（认证 / 任务 / 协议档 / 数据集 / admin / WS）
-├── worker/         Python worker（轮询 PG 任务队列，骨架版 mock 执行）
-├── lightrag/       LightRAG 服务骨架（M3 接入真实内核）
-├── stress/         go-stress-testing 服务骨架（暴露 /metrics，M4 接入内核）
+├── frontend/       Vue3 + TypeScript + Naive UI + Vite 前端（nginx 反代 /api 与 /ws）
+├── backend/
+│   ├── api/        FastAPI 后端（认证 / 任务 / 协议档 / 数据集 / admin / WS）
+│   ├── worker/     Python worker（轮询 PG 任务队列，骨架版 mock 执行）
+│   ├── lightrag/   LightRAG 服务骨架（M3 接入真实内核）
+│   └── stress/     go-stress-testing 服务骨架（暴露 /metrics，M4 接入内核）
 ├── deploy/         server-setup.sh（服务器初始化）+ deploy.sh（同步部署）
-├── .github/workflows/deploy.yml   push main 自动 SSH 部署
+├── .github/workflows/   CI（lint+test）与 deploy.yml（push main 自动 SSH 部署）
 └── docker-compose.yml
 ```
 
@@ -55,7 +56,7 @@ docker compose up -d --build
 ### 前端本地热更新（可选）
 
 ```bash
-cd web
+cd frontend
 npm install
 npm run dev        # http://localhost:5173，/api 与 /ws 代理到 localhost:8000
 ```
@@ -140,6 +141,7 @@ git fetch + reset --hard origin/main  →  docker compose up -d --build  →  im
 
 ## 说明
 
-- 骨架版建表用 `Base.metadata.create_all`（api 启动时）；生产建议迁移到 Alembic。
+- 表结构由 Alembic 管理，api 容器启动时自动执行 `alembic upgrade head`（迁移文件在 `backend/api/migrations/`）。
+- 统一错误码枚举在 `backend/api/app/errors.py`，对应 PRD 5.5 / API V1.0 §1.3 的十个 `code`。
 - worker 侧为容器隔离复制了 `Task/TaskEvent/WsEvent/Report` 模型，后续可抽成共享 package。
 - stress 与 lightrag 均为可运行的骨架服务，真实内核按 PRD 里程碑接入。

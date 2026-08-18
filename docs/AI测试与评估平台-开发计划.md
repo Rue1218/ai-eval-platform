@@ -106,7 +106,7 @@
 
 | 编号 | 工作项 | 角色 | 完成标准 |
 | --- | --- | --- | --- |
-| M0-1 | 单仓结构：`web/` `api/` `worker/` `stress/` `deploy/` | 全员 | README 一条命令起开发环境 |
+| M0-1 | 单仓结构：`frontend/` 与 `backend/{api,worker,lightrag,stress}` + `deploy/` | 全员 | README 一条命令起开发环境 |
 | M0-2 | FastAPI + Alembic + PostgreSQL；环境变量约定 | Python | 健康检查 `GET /api/health` |
 | M0-3 | Vue3 + Vite + Naive UI + 路由空壳（PRD 5.8） | Vue | `/login` 可打开 |
 | M0-4 | Compose：`web` `api` `worker` `postgres`；`lightrag`/`stress` 占位 | Go/Infra | 热重载可用 |

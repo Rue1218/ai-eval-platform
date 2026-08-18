@@ -82,10 +82,12 @@
 建议目录（总计划 M0-1）：
 
 ```
-api/          FastAPI、WS、MCP Host、REST
-worker/       长任务执行器
-stress/       go-stress-testing 扩展（Go/Infra）
-deploy/       compose、env 样例、Grafana dashboard JSON
+backend/
+├── api/       FastAPI、WS、MCP Host、REST
+├── worker/    长任务执行器
+├── lightrag/  LightRAG 适配（M3 接入真实内核）
+└── stress/    go-stress-testing 扩展（Go/Infra）
+deploy/        compose、env 样例、Grafana dashboard JSON
 ```
 
 接口前缀统一 `/api`。健康检查 `GET /api/health`（总计划 M0，5.9 未列但必须有）。
@@ -536,7 +538,7 @@ V1.1 不占本周期人力，除非 V1.0 门禁已全绿且产品改 PRD。
 
 ## 11. 开工当天（08-18）后端待办
 
-1. 建仓结构 `api/` `worker/` `stress/` `deploy/`；分支保护 main + `m1`/`m2`/`m3`/`m4`。  
+1. 建仓结构 `frontend/` 与 `backend/{api,worker,lightrag,stress}` + `deploy/`；分支保护 main + `m1`/`m2`/`m3`/`m4`。  
 2. 冻结 Python 3.12、PG 16、LightRAG tag、go-stress-testing tag。  
 3. 向监控同学发指标前缀 `ai_eval_stress_` 与 `job=ai-eval-stress`（M4 才接，网段早约）。  
 4. 准备至少两套测试协议档（兼容 OpenAI 的本地 mock）。  

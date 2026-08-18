@@ -882,7 +882,7 @@ JSON Schema 冻结点：短工具 M1 W4；评测长工具 M2 W6；RAG M3 W10；s
 
 ## 10. 前端实现约束（对应设计规范）
 
-1. `web/src/api/http.ts` 只封装本文 §3 路径；`ws.ts` 只封装 §4。  
+1. `frontend/src/api/http.ts` 只封装本文 §3 路径；`ws.ts` 只封装 §4。  
 2. `schemas/confirmCard.ts` 与 §6 同一份类型，供 ConfirmCard 与 `/datasets` `/kb` 抽屉。  
 3. 错误码文案用 §1.3，不硬编码第二套。  
 4. 不发明本文没有的 query 参数来「先用着」。缺字段提 PR 改本文。

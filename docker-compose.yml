@@ -17,7 +17,7 @@ services:
       retries: 10
 
   api:
-    build: ./api
+    build: ./backend/api
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-aieval}:${POSTGRES_PASSWORD:-aieval_pass}@postgres:5432/${POSTGRES_DB:-aieval}
@@ -43,7 +43,7 @@ services:
       start_period: 10s
 
   worker:
-    build: ./worker
+    build: ./backend/worker
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-aieval}:${POSTGRES_PASSWORD:-aieval_pass}@postgres:5432/${POSTGRES_DB:-aieval}
@@ -57,7 +57,7 @@ services:
       - ./data:/data
 
   web:
-    build: ./web
+    build: ./frontend
     restart: unless-stopped
     depends_on:
       - api
@@ -65,7 +65,7 @@ services:
       - "${WEB_PORT:-80}:80"
 
   lightrag:
-    build: ./lightrag
+    build: ./backend/lightrag
     restart: unless-stopped
     environment:
       LIGHTRAG_LLM_API_KEY: ${LIGHTRAG_LLM_API_KEY:-}
@@ -78,7 +78,7 @@ services:
       - ./data/lightrag:/data/lightrag
 
   stress:
-    build: ./stress
+    build: ./backend/stress
     restart: unless-stopped
     ports:
       - "${STRESS_PORT:-19090}:19090"

@@ -1,0 +1,63 @@
+/* 设计令牌（设计规范 §8）：浅色 / 深色，data-theme 切换，禁用 Vue 响应式改写 CSS 变量 */
+
+:root {
+  --bg-main: #ffffff;
+  --bg-elevated: #f4f8f8;
+  --text-primary: #111827;
+  --text-secondary: #4b5563;
+  --text-tertiary: #9ca3af;
+
+  --accent-ai: #6366f1;
+  --accent-success: #10b981;
+  --accent-warning: #f59e0b;
+  --accent-error: #ef4444;
+  --accent-info: #3b82f6;
+
+  --border-subtle: #e5e7eb;
+  --row-hover: #f9fafb;
+  --sidebar-bg: rgba(255, 255, 255, 0.72);
+
+  --font-sans: 'Inter', 'Noto Sans SC', sans-serif;
+  --font-serif: 'Noto Serif SC', serif;
+  --font-mono: 'JetBrains Mono', monospace;
+  --font-chat: 'Inter', 'Noto Sans SC', sans-serif;
+
+  /* 模块色（设计规范 §8.2，替换参考文档 smoke/api/ui） */
+  --t-agent: #ddd6fe; --c-agent: #7c3aed;
+  --t-tasks: #e0e7ff; --c-tasks: #4f46e5;
+  --t-reports: #ede9fe; --c-reports: #6d28d9;
+  --t-datasets: #dbeafe; --c-datasets: #1d4ed8;
+  --t-cases: #d1fae5; --c-cases: #047857;
+  --t-kb: #cffafe; --c-kb: #0e7490;
+  --t-profiles: #fef3c7; --c-profiles: #b45309;
+  --t-stress: #fce7f3; --c-stress: #be185d;
+  --t-users: #f3f4f6; --c-users: #4b5563;
+}
+
+[data-theme='dark'] {
+  --bg-main: #020617;
+  --bg-elevated: #0f172a;
+  --text-primary: #f8fafc;
+  --text-secondary: #cbd5e1;
+  --text-tertiary: #64748b;
+
+  --accent-ai: #818cf8;
+  --accent-success: #34d399;
+  --accent-warning: #fbbf24;
+  --accent-error: #f87171;
+  --accent-info: #60a5fa;
+
+  --border-subtle: #1e293b;
+  --row-hover: #0f172a;
+  --sidebar-bg: rgba(2, 6, 23, 0.72);
+
+  --t-agent: #312e81; --c-agent: #c4b5fd;
+  --t-tasks: #3730a3; --c-tasks: #a5b4fc;
+  --t-reports: #4c1d95; --c-reports: #ddd6fe;
+  --t-datasets: #1e3a8a; --c-datasets: #bfdbfe;
+  --t-cases: #064e3b; --c-cases: #a7f3d0;
+  --t-kb: #164e63; --c-kb: #a5f3fc;
+  --t-profiles: #78350f; --c-profiles: #fde68a;
+  --t-stress: #831843; --c-stress: #fbcfe8;
+  --t-users: #374151; --c-users: #d1d5db;
+}

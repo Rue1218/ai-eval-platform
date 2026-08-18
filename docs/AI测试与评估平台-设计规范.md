@@ -8,7 +8,7 @@
 | 撰写日期 | 2026-08-17 |
 | 最近修订 | 2026-08-17：补齐浮层（Toast/对话框/抽屉）与 Agent 对话组件 |
 | 技术栈（PRD） | Vue3 + Naive UI、Python FastAPI、PostgreSQL、WebSocket、Docker Compose、go-stress-testing |
-| 适用范围 | V1.0 前端 `web/` |
+| 适用范围 | V1.0 前端 `frontend/` |
 
 ---
 
@@ -319,7 +319,7 @@ host 白名单；默认 QPS≤500、时长≤30min；单价 /1k tokens；`max_ru
 
 ## 8. 视觉令牌（参考三文档，服务于上面的页面）
 
-文件：`web/src/styles/tokens.css`。主题：`document.documentElement.setAttribute('data-theme', 'light'|'dark')`，禁止用 Vue 响应式改写 CSS 变量。
+文件：`frontend/src/styles/tokens.css`。主题：`document.documentElement.setAttribute('data-theme', 'light'|'dark')`，禁止用 Vue 响应式改写 CSS 变量。
 
 ### 8.1 浅色 / 深色（从参考文档 1:1 拷贝键名）
 
@@ -404,7 +404,7 @@ Agent 导航状态点（可选）：任务 `running` 蓝呼吸 / `succeeded` 绿
 ## 10. Vue 落地（目录对齐开发计划）
 
 ```
-web/src/
+frontend/src/
 ├── styles/     tokens.css  base.css  animations.css  layout.css  agent.css  platform.css
 ├── naive-theme.ts
 ├── stores/     theme  auth  agent  nav

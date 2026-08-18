@@ -60,15 +60,15 @@
 | UI | Naive UI（`n-config-provider` 包整站） | PRD 5.8、设计规范 §8.4 |
 | 状态 | Pinia：`theme` `auth` `agent` `nav` | 设计规范 §10 |
 | 路由 | Vue Router，表 = PRD 5.8 | 不得增减业务路由 |
-| HTTP | `web/src/api/http.ts`，前缀 `/api`，Cookie 会话 | PRD 5.9、2.1 |
-| WS | `web/src/api/ws.ts`，短票升级 | F-AGT-01/02 |
+| HTTP | `frontend/src/api/http.ts`，前缀 `/api`，Cookie 会话 | PRD 5.9、2.1 |
+| WS | `frontend/src/api/ws.ts`，短票升级 | F-AGT-01/02 |
 | 图表 | Chart.js（仅 M4 压测三曲线） | 设计规范 §8.4 |
 | 样式 | `tokens.css` + `data-theme` | 设计规范 §8；禁止用 Vue 响应式改写 CSS 变量 |
 
 ### 2.1 目录（设计规范 §10，M0 一次建齐）
 
 ```
-web/src/
+frontend/src/
 ├── styles/        tokens.css  base.css  animations.css  layout.css  agent.css  platform.css
 ├── naive-theme.ts
 ├── router/        index.ts          # 仅 PRD 5.8

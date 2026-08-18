@@ -20,8 +20,8 @@ dist/
 npm-debug.log*
 
 # Go
-stress/bin/
-stress/*.exe
+backend/stress/bin/
+backend/stress/*.exe
 
 # Data & runtime
 data/
