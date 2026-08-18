@@ -57,6 +57,7 @@
           @pointerup="onPointerUp"
           @pointerleave="onPointerUp"
           @dblclick="resetView"
+          @click="onBgClick"
         >
           <defs>
             <!-- 网格背景 -->
@@ -130,11 +131,11 @@
               v-for="p in topo.tasks"
               :key="p.t.id"
               class="task-chip"
-              :class="[p.t.status, { flash: flashTaskId === p.t.id || flashTaskId === p.t.shortId, dim: focusedSkill && focusedSkill !== p.t.kind }]"
+              :class="[p.t.status, { flash: flashTaskId === p.t.id || flashTaskId === p.t.shortId, dim: focusedSkill && focusedSkill !== p.t.kind, pinned: pinnedTask?.id === p.t.id }]"
               :style="{ transform: `translate(${p.x}px, ${p.y}px)` }"
               @mouseenter="showTaskTip($event, p.t)"
               @mouseleave="hideTip"
-              @click="onNodeClick(() => goTasks())"
+              @click="onNodeClick(() => pinTask(p.t))"
             >
               <rect x="-76" y="-19" width="152" height="38" rx="9" class="tc-box" />
               <rect x="-76" y="-19" width="3.5" height="38" class="tc-bar" :fill="kindColor(p.t.kind)" />
@@ -151,6 +152,11 @@
             <!-- 队列溢出提示 -->
             <text v-if="topo.queueOverflow > 0" :x="CX" :y="CY + R_QUEUE + 34" class="queue-overflow" text-anchor="middle">
               +{{ topo.queueOverflow }} 更多排队任务
+            </text>
+
+            <!-- 节点池空态：引导注册第一个 Worker -->
+            <text v-if="!workerPool.length" :x="CX" :y="CY - R_SKILL - 40" class="queue-overflow" text-anchor="middle">
+              暂无 Worker 节点 · 点击右上角「+ 注册节点」接入执行节点
             </text>
 
             <!-- 技能 Agent 内环节点（四大业务域，点击聚焦扇区） -->
@@ -222,6 +228,27 @@
           </div>
         </div>
 
+        <!-- 工单锁定详情卡：点击工单芯片驻留，跟随缩放平移，Esc / 点空白解锁 -->
+        <div v-if="pinnedTask && pinnedPos" class="pin-card" :style="{ left: pinnedPos.x + 'px', top: pinnedPos.y + 'px' }">
+          <div class="pc-head">
+            <i class="pc-bar" :style="{ background: kindColor(pinnedTask.kind) }"></i>
+            <span class="mono pc-id">{{ pinnedTask.shortId }}</span>
+            <span class="badge" :class="`badge-${pinnedTask.status}`">{{ statusLabel(pinnedTask.status) }}</span>
+            <span class="grow"></span>
+            <button class="pc-close" title="解锁（Esc）" @click="unpinTask">×</button>
+          </div>
+          <div class="pc-label">{{ pinnedTask.label }}</div>
+          <div v-if="pinnedTask.status === 'running' && pinnedTask.progress != null" class="pc-progress">
+            <i :style="{ width: `${pinnedTask.progress}%` }"></i>
+          </div>
+          <div class="pc-lines">
+            <div class="tt-line"><span class="tertiary">执行节点</span><span class="tt-val mono">{{ pinnedTask.workerId || '排队待分发' }}</span></div>
+            <div v-if="pinnedTask.progress != null" class="tt-line"><span class="tertiary">进度</span><span class="tt-val mono">{{ pinnedTask.progress }}%</span></div>
+            <div v-if="pinnedTask.parentId" class="tt-line"><span class="tertiary">派生自</span><span class="tt-val mono">{{ pinnedTask.parentId.substring(0, 8) }}</span></div>
+          </div>
+          <button class="btn btn-primary btn-sm" style="width: 100%; margin-top: 8px" @click="goTasks">前往任务中心</button>
+        </div>
+
         <!-- 扫描线装饰 -->
         <div class="scanline" aria-hidden="true"></div>
       </div>
@@ -232,7 +259,7 @@
         <span class="row" style="gap: 5px; align-items: center"><i class="legend-line" style="background: var(--accent-ai)"></i><span class="tertiary">执行分发链路</span></span>
         <span class="row" style="gap: 5px; align-items: center"><i class="legend-dot" style="background: var(--accent-ai)"></i><span class="tertiary">数据流粒子</span></span>
         <span class="row" style="gap: 5px; align-items: center"><i class="legend-dot" style="background: var(--accent-success)"></i><span class="tertiary">完成涟漪</span></span>
-        <span class="tertiary" style="margin-left: auto">滚轮缩放 · 拖拽平移 · 双击复位 · 点击技能节点聚焦扇区</span>
+        <span class="tertiary" style="margin-left: auto">滚轮缩放 · 拖拽平移 · 双击复位 · 点击技能聚焦扇区 · 点击工单锁定详情</span>
       </div>
     </div>
 
@@ -980,8 +1007,52 @@ function showTaskTip(e: MouseEvent, t: TaskNode) {
     ['业务', t.label],
     ['状态', statusLabel(t.status) + (t.progress != null ? ` · ${t.progress}%` : '')],
     ['执行节点', t.workerId || '排队待分发'],
-    ['操作', '点击前往任务中心'],
+    ['操作', '点击锁定详情卡'],
   ])
+}
+
+/* ─── 工单锁定详情卡：点击芯片驻留，跟随视图变换，Esc / 点击空白解锁 ─── */
+const pinnedTask = ref<TaskNode | null>(null)
+// 容器渲染尺寸：SVG 坐标 → 屏幕像素换算依赖实际宽高，随窗口 resize 更新
+const wrapSize = ref({ w: 0, h: 0 })
+
+function pinTask(t: TaskNode) {
+  pinnedTask.value = t
+  hideTip()
+}
+
+function unpinTask() {
+  pinnedTask.value = null
+}
+
+/** 背景点击解锁：仅在命中网格背景（非任何节点）且非拖拽平移后触发 */
+function onBgClick(e: MouseEvent) {
+  if (panMoved) return
+  if ((e.target as Element)?.classList?.contains('topo-bg')) unpinTask()
+}
+
+// 锁定卡屏幕坐标：星图 SVG 坐标经 view 变换后按容器比例换算，锚定在芯片右下方
+const pinnedPos = computed(() => {
+  const t = pinnedTask.value
+  if (!t || !wrapSize.value.w) return null
+  const p = topo.value.tasks.find(x => x.t.id === t.id)
+  if (!p) return null
+  const sx = (view.value.x + view.value.k * p.x) * (wrapSize.value.w / VB_W)
+  const sy = (view.value.y + view.value.k * p.y) * (wrapSize.value.h / VB_H)
+  return {
+    x: Math.max(8, Math.min(sx + 88 * view.value.k, wrapSize.value.w - 240)),
+    y: Math.max(8, Math.min(sy - 10, wrapSize.value.h - 190)),
+  }
+})
+
+// 锁定的工单完成/消失（离开活跃列表）时自动解锁
+watch(taskNodes, (list) => {
+  if (pinnedTask.value && !list.some(t => t.id === pinnedTask.value!.id)) unpinTask()
+})
+
+/** Esc 解锁锁定卡 */
+function onKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') unpinTask()
 }
 
 /* ─── 调度事件流（分类过滤 + 点击定位星图工单） ─── */
@@ -1523,9 +1594,18 @@ let dispatchTimer: any = null
 let nowTimer: any = null
 /** 分发模拟的延时句柄登记：组件卸载时统一清理，避免回调写入已销毁状态 */
 const assignTimers = new Set<number>()
+/** 刷新容器尺寸缓存：锁定卡定位换算依据 */
+function syncWrapSize() {
+  const el = wrapRef.value
+  if (el) wrapSize.value = { w: el.clientWidth, h: el.clientHeight }
+}
+
 onMounted(async () => {
   // 滚轮缩放需 preventDefault，必须以非 passive 方式注册
   svgRef.value?.addEventListener('wheel', onWheel, { passive: false })
+  window.addEventListener('resize', syncWrapSize)
+  window.addEventListener('keydown', onKeydown)
+  syncWrapSize()
   // 甘特时间游标：运行中条形每秒延展
   nowTimer = window.setInterval(() => { nowTs.value = Date.now() }, 1000)
   if (liveMode) {
@@ -1557,6 +1637,8 @@ onBeforeUnmount(() => {
   assignTimers.clear()
   window.clearTimeout(flashTimer)
   svgRef.value?.removeEventListener('wheel', onWheel)
+  window.removeEventListener('resize', syncWrapSize)
+  window.removeEventListener('keydown', onKeydown)
 })
 </script>
 
@@ -1775,6 +1857,13 @@ onBeforeUnmount(() => {
 @keyframes chip-flash {
   0%, 100% { stroke: var(--border-subtle); }
   50% { stroke: var(--accent-ai); stroke-width: 2.4; }
+}
+/* 锁定中的工单芯片：高亮描边 + 持续辉光 */
+.task-chip.pinned .tc-box {
+  stroke: var(--accent-ai);
+  stroke-width: 2;
+  stroke-dasharray: none;
+  filter: drop-shadow(0 0 8px color-mix(in srgb, var(--accent-ai) 45%, transparent));
 }
 .tc-dot {
   fill: var(--text-tertiary);
@@ -2013,6 +2102,78 @@ onBeforeUnmount(() => {
 .tt-val {
   text-align: right;
   word-break: break-all;
+}
+
+/* 工单锁定详情卡：驻留于芯片旁，随视图变换联动 */
+.pin-card {
+  position: absolute;
+  z-index: 25;
+  width: 228px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--accent-ai) 40%, var(--border-subtle));
+  background: var(--bg-main);
+  box-shadow: 0 10px 28px rgba(17, 24, 39, 0.18), 0 0 0 1px color-mix(in srgb, var(--accent-ai) 14%, transparent);
+  font-size: 11.5px;
+  animation: pin-in 0.18s ease;
+}
+@keyframes pin-in {
+  from { opacity: 0; transform: translateY(4px) scale(0.97); }
+  to { opacity: 1; transform: none; }
+}
+.pc-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.pc-bar {
+  width: 3.5px;
+  height: 14px;
+  border-radius: 2px;
+  flex: 0 0 3.5px;
+}
+.pc-id {
+  font-weight: 700;
+  font-size: 11.5px;
+}
+.pc-close {
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+.pc-close:hover {
+  background: var(--row-hover);
+  color: var(--text-primary);
+}
+.pc-label {
+  margin-top: 6px;
+  font-weight: 500;
+  line-height: 1.45;
+  word-break: break-all;
+}
+.pc-progress {
+  margin-top: 6px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  overflow: hidden;
+}
+.pc-progress > i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: repeating-linear-gradient(45deg, var(--accent-ai) 0 8px, color-mix(in srgb, var(--accent-ai) 55%, #fff) 8px 16px);
+  background-size: 23px 100%;
+  animation: bar-stripes 0.9s linear infinite;
+  transition: width 0.4s ease;
+}
+.pc-lines {
+  margin-top: 6px;
 }
 
 /* 缩放控件 */
