@@ -413,12 +413,20 @@ export interface AgentSession {
   status?: TaskStatus
 }
 
-export type WsServerEvent =
-  | { event: 'thought'; session_id: string; message: string; event_id: number; ts: number }
-  | { event: 'tool_call'; session_id: string; tool: string; arguments: any; event_id: number; ts: number }
-  | { event: 'tool_result'; session_id: string; tool: string; result: any; ok: boolean; event_id: number; ts: number }
-  | { event: 'confirm'; session_id: string; card: TaskSpec; event_id: number; ts: number }
-  | { event: 'progress'; session_id: string; task_id: string; progress: TaskProgress; event_id: number; ts: number }
-  | { event: 'report'; session_id: string; task_id: string; report_id: string; event_id: number; ts: number }
-  | { event: 'error'; session_id: string; code: ErrorCode; message: string; event_id: number; ts: number }
-  | { event: 'pong'; ts: number }
+// WS 事件公共头（API.md §4.2）：payload 嵌套，task_id 入队后才有
+export interface WsServerEvent {
+  event:
+    | 'thought'
+    | 'tool_call'
+    | 'tool_result'
+    | 'confirm'
+    | 'progress'
+    | 'report'
+    | 'error'
+    | 'pong'
+  session_id: string
+  task_id: string | null
+  event_id: number
+  ts: string
+  payload: any
+}

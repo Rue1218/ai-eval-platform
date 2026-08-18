@@ -286,7 +286,7 @@
                   <div class="field">
                     <span class="field-label">case_source <i class="req">*</i></span>
                     <textarea
-                      v-model="item.card.case_source_text"
+                      v-model="item.card.case_source.text"
                       class="textarea"
                       placeholder="粘贴 PRD / 接口描述文本（或用附件上传 OpenAPI / Excel）"
                     ></textarea>
@@ -309,11 +309,11 @@
                     <div class="form-row">
                       <div class="field">
                         <span class="field-label">并发并发数 (concurrency)</span>
-                        <input v-model.number="item.card.concurrency" type="number" class="input mono" placeholder="默认 5" />
+                        <input v-model.number="item.card.run.concurrency" type="number" class="input mono" placeholder="默认 5" />
                       </div>
                       <div class="field">
                         <span class="field-label">单次超时 (timeout_s)</span>
-                        <input v-model.number="item.card.timeout_s" type="number" class="input mono" placeholder="默认 60s" />
+                        <input v-model.number="item.card.run.timeout_s" type="number" class="input mono" placeholder="默认 60s" />
                       </div>
                     </div>
                   </div>
@@ -334,7 +334,7 @@
                     <div class="form-row">
                       <div class="field">
                         <span class="field-label">压测环境 (env)</span>
-                        <select v-model="item.card.stress_env" class="select">
+                        <select v-model="item.card.stress.env" class="select">
                           <option value="test">test · 测试环境（免会签）</option>
                           <option value="staging">staging · 预发环境</option>
                           <option value="prod">prod · 生产环境（需双人会签）</option>
@@ -342,10 +342,10 @@
                       </div>
                       <div class="field">
                         <span class="field-label">目标 QPS (qps)</span>
-                        <input v-model.number="item.card.stress_qps" type="number" class="input mono" placeholder="例如 20" />
+                        <input v-model.number="item.card.stress.qps" type="number" class="input mono" placeholder="例如 20" />
                       </div>
                     </div>
-                    <div v-if="item.card.stress_env === 'prod'" class="badge badge-warning" style="margin-top: 6px">
+                    <div v-if="item.card.stress.env === 'prod'" class="badge badge-warning" style="margin-top: 6px">
                       ⚠ prod 生产压测：评测成功后子任务将处于待会签状态，会签完成后才开始发压。
                     </div>
                   </div>
@@ -604,7 +604,7 @@ import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useMessage, useDialog } from 'naive-ui'
 import { api } from '../api/http'
 import { AgentWebSocket } from '../api/ws'
-import type { Task, TaskSpec, WsServerEvent, Profile, Dataset, KnowledgeBase, GoldQA } from '../api/types'
+import type { Task, WsServerEvent } from '../api/types'
 import { useModeStore } from '../stores/mode'
 import KindTag from '../components/common/KindTag.vue'
 
@@ -622,31 +622,19 @@ const isGenerating = ref(false)
 const showJumpBottom = ref(false)
 const agentModelName = ref('gpt-5-pro')
 
-const sessions = ref<any[]>([
-  { id: 's1', title: 'GPT-4o 与 Claude 3.5 对比评测', time: '刚刚', active_task: true, created_at: new Date().toISOString() },
-  { id: 's2', title: '知识库 default 检索评测', time: '10分钟前', active_task: false, created_at: new Date(Date.now() - 600000).toISOString() },
-])
-const currentSessionId = ref<string>('s1')
-const currentSession = computed(() => sessions.value.find(s => s.id === currentSessionId.value) || sessions.value[0])
+const sessions = ref<any[]>([])
+const currentSessionId = ref<string>('')
+const currentSession = computed(() => sessions.value.find(s => s.id === currentSessionId.value) || sessions.value[0] || null)
 
 const inputText = ref('')
 const stagedFiles = ref<any[]>([])
 const activeTask = ref<Task | null>(null)
 
-const availableProfiles = ref<Profile[]>([
-  { id: 'p-gpt', name: 'gpt-test', model: 'gpt-4o', protocol: 'openai_chat', base_url: 'https://api.openai.com/v1', usages: ['target'], created_at: new Date().toISOString() },
-  { id: 'p-claude', name: 'claude-x', model: 'claude-3-5-sonnet-20241022', protocol: 'anthropic_messages', base_url: 'https://api.anthropic.com', usages: ['target'], created_at: new Date().toISOString() },
-])
-const availableDatasets = ref<Dataset[]>([
-  { id: 'ds-smoke', name: 'smoke-20', version: 3, row_count: 20, pending_complete_count: 0, metric: 'contain', owner: 'admin', created_at: new Date().toISOString() },
-])
-const availableKbs = ref<KnowledgeBase[]>([
-  { id: 'kb-default', name: 'default', kind: 'lightrag', doc_count: 12, is_core: true, owner: 'admin' },
-  { id: 'kb-cs', name: '外挂客服', kind: 'external_chat', doc_count: null, is_core: false, owner: 'alice' },
-])
-const availableGoldQas = ref<GoldQA[]>([
-  { id: 'gq-1', kb_id: 'kb-default', name: 'qa-v1', version: 2, row_count: 20, owner: 'admin', created_at: new Date().toISOString() },
-])
+// 资产列表由服务端短工具（model.list / dataset.list / kb.list）动态回填
+const availableProfiles = ref<any[]>([])
+const availableDatasets = ref<any[]>([])
+const availableKbs = ref<any[]>([])
+const availableGoldQas = ref<any[]>([])
 
 // 智能体能力卡与顶栏共用同一模式状态，避免出现页面内外不一致的评测上下文。
 const isRagMode = computed(() => modeStore.mode === 'rag')
@@ -743,6 +731,7 @@ interface StreamItem {
 
 const events = ref<StreamItem[]>([])
 let agentWs: AgentWebSocket | null = null
+let lastConfirmKind = 'benchmark'
 
 function getToolDisplayName(name?: string) {
   const names: Record<string, string> = {
@@ -809,7 +798,7 @@ function triggerFileInput() {
   fileInputRef.value?.click()
 }
 
-function handleFileUpload(e: Event) {
+async function handleFileUpload(e: Event) {
   const target = e.target as HTMLInputElement
   const f = target.files?.[0]
   if (!f) return
@@ -818,12 +807,18 @@ function handleFileUpload(e: Event) {
     message.error('单文件不超过 20MB')
     return
   }
-  stagedFiles.value.push({
-    name: f.name,
-    size: f.size > 1048576 ? `${(f.size / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(f.size / 1024))} KB`,
-    file: f,
-  })
-  message.success('附件已添加')
+  // 先上传拿到 file_id，消息内仅引用 id（契约：attachments = [{ file_id }]）
+  try {
+    const uploaded = await api.files.upload(f)
+    stagedFiles.value.push({
+      id: uploaded.id,
+      name: uploaded.filename || f.name,
+      size: f.size > 1048576 ? `${(f.size / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(f.size / 1024))} KB`,
+    })
+    message.success('附件已上传')
+  } catch {
+    message.error('附件上传失败，请重试')
+  }
 }
 
 function handleEnterPress() {
@@ -864,10 +859,14 @@ function handleUserSend(text: string, files: any[] = []) {
   isGenerating.value = true
   scrollToBottom(true)
 
-  if (agentWs) {
-    agentWs.sendUserMessage(text, files.map(f => f.name))
-  } else {
+  if (agentWs && agentWs.isConnected) {
+    agentWs.sendUserMessage(text, files.map(f => ({ file_id: f.id })))
+  } else if (!agentWs) {
     simulateAgentFlow(text, files)
+  } else {
+    events.value.push({ type: 'error', code: 'UNAUTHORIZED', message: '连接已断开，正在重连，请稍后重试。' })
+    isGenerating.value = false
+    scrollToBottom()
   }
 }
 
@@ -920,9 +919,9 @@ function runBenchmarkFlow(withStress = false) {
         kind: 'benchmark',
         profile_ids: ['p-gpt', 'p-claude'],
         dataset_id: 'ds-smoke',
+        run: { concurrency: 5, timeout_s: 60 },
         with_stress: withStress,
-        stress_env: 'test',
-        stress_qps: 20,
+        stress: { env: 'test', qps: 20, duration_s: 60 },
       },
       isAcked: false,
       summary: '',
@@ -965,9 +964,9 @@ function runRagFlow() {
         kb_id: 'kb-default',
         gold_qa_id: 'gq-1',
         rag_mode: ['hybrid'],
+        run: { k: 5, concurrency: 5, timeout_s: 60 },
         with_stress: false,
-        stress_env: 'test',
-        stress_qps: 20,
+        stress: { env: 'test', qps: 20, duration_s: 60 },
       },
       isAcked: false,
       summary: '',
@@ -999,7 +998,7 @@ function runTestCaseFlow(file?: any) {
       type: 'confirm',
       card: {
         kind: 'testcase',
-        case_source_text: file ? `附件：${file.name}` : '',
+        case_source: { text: file ? `附件：${file.name}` : '' },
       },
       isAcked: false,
       summary: file ? file.name : '粘贴文本输入',
@@ -1015,12 +1014,27 @@ function handleConfirmAck(item: StreamItem, confirmed: boolean) {
   item.ackResult = confirmed
   item.open = false
 
+  const useLive = !!(agentWs && agentWs.isConnected)
+
   if (item.card?.kind === 'benchmark') {
-    item.summary = `${item.card.profile_ids?.length || 2} 个协议档 × smoke-20`
+    item.summary = `${item.card.profile_ids?.length || 0} 个协议档 · 待入队`
   } else if (item.card?.kind === 'rag') {
-    item.summary = 'default · qa-v1 v2'
+    item.summary = 'RAG 评测 · 待入队'
+  } else if (item.card?.kind === 'testcase') {
+    item.summary = '用例生成 · 待入队'
   }
 
+  // 真实链路：把确认回执（含整卡 patch）发回服务端，由服务端校验并入队
+  if (useLive) {
+    agentWs!.sendConfirmAck(confirmed, item.card)
+    if (!confirmed) {
+      events.value.push({ type: 'agent', text: '<p>已取消，未创建任务。需要调整目标可以继续说。</p>' })
+      scrollToBottom()
+    }
+    return
+  }
+
+  // 无 WS 降级：本地演示入队与进度
   if (!confirmed) {
     events.value.push({
       type: 'agent',
@@ -1080,39 +1094,8 @@ function handleConfirmAck(item: StreamItem, confirmed: boolean) {
 }
 
 function handleInterpretReport(reportId: string) {
-  events.value.push({
-    type: 'user',
-    text: `解读报告 #${reportId}`,
-  })
-  isGenerating.value = true
-  scrollToBottom(true)
-
-  const th: StreamItem = {
-    type: 'thought',
-    text: `读取报告 ${reportId} 的指标摘要与失败样本，进行关键退化原因归因…`,
-    done: false,
-    collapsed: false,
-  }
-  events.value.push(th)
-
-  setTimeout(() => {
-    th.done = true
-    th.collapsed = true
-    events.value.push({
-      type: 'tool',
-      tool: 'report.get',
-      args: { report_id: reportId },
-      result: { scores: [{ profile: 'gpt-test', score: 0.86 }, { profile: 'claude-x', score: 0.79 }] },
-      status: 'ok',
-      open: false,
-    })
-    events.value.push({
-      type: 'agent',
-      text: '<p><b>解读（基于已有报告，不重跑）：</b>gpt-test 以 contain 0.86 领先 claude-x 0.79，失败率 2% 对 5%。两条失败样本分别为 UPSTREAM 502 与超时，与模型能力无关，建议复跑失败行后再冻结基线。</p>',
-    })
-    isGenerating.value = false
-    scrollToBottom()
-  }, 1000)
+  // 报告解读走真实链路：由服务端识别 report 意图（M4 接入前返回提示）
+  handleUserSend(`解读报告 #${reportId}`, [])
 }
 
 function handleFailDemo() {
@@ -1159,11 +1142,12 @@ function handleFailDemo() {
 }
 
 function handleWsToggle() {
-  isWsOnline.value = !isWsOnline.value
-  if (!isWsOnline.value) {
-    message.info('正在模拟断线状态…')
+  if (isWsOnline.value) {
+    message.info('正在断开连接…')
+    agentWs?.close()
   } else {
-    message.success('已恢复连接，已按 last_event_id 自动同步')
+    message.info('正在重新连接（按 last_event_id 补发）…')
+    agentWs?.connect()
   }
 }
 
@@ -1186,16 +1170,17 @@ function handleCancelActiveTask(taskId: string) {
 async function loadSessions() {
   try {
     const list = await api.sessions.list()
-    if (list && list.length > 0) {
-      sessions.value = list
-      if (!currentSessionId.value) currentSessionId.value = list[0].id
-    }
-  } catch {}
+    sessions.value = list || []
+  } catch {
+    sessions.value = []
+  }
 }
 
 function selectSession(sid: string) {
   currentSessionId.value = sid
   events.value = []
+  activeTask.value = null
+  isGenerating.value = false
   initWebSocket(sid)
 }
 
@@ -1205,7 +1190,7 @@ async function handleCreateSession() {
     sessions.value.unshift(newSession)
     selectSession(newSession.id)
   } catch {
-    const localS = { id: `s-${Date.now()}`, title: '新会话', time: '刚刚', created_at: new Date().toISOString() }
+    const localS = { id: `s-${Date.now()}`, title: '新会话', created_at: new Date().toISOString() }
     sessions.value.unshift(localS)
     selectSession(localS.id)
   }
@@ -1228,13 +1213,14 @@ function initWebSocket(sessionId: string) {
 }
 
 function handleWsEvent(ev: WsServerEvent) {
+  const p = ev.payload || {}
   switch (ev.event) {
     case 'thought': {
       let last = events.value[events.value.length - 1]
       if (!last || last.type !== 'thought' || last.done) {
-        events.value.push({ type: 'thought', text: ev.message || '', done: false, collapsed: false })
+        events.value.push({ type: 'thought', text: p.text || '', done: false, collapsed: false })
       } else {
-        last.text = (last.text || '') + (ev.message || '')
+        last.text = (last.text || '') + (p.text || '')
       }
       scrollToBottom()
       break
@@ -1242,8 +1228,8 @@ function handleWsEvent(ev: WsServerEvent) {
     case 'tool_call': {
       events.value.push({
         type: 'tool',
-        tool: ev.tool,
-        args: ev.arguments,
+        tool: p.name,
+        args: p.arguments,
         status: 'pending',
         open: false,
       })
@@ -1251,18 +1237,26 @@ function handleWsEvent(ev: WsServerEvent) {
       break
     }
     case 'tool_result': {
-      const target = [...events.value].reverse().find(x => x.type === 'tool' && x.tool === ev.tool)
+      const target = [...events.value].reverse().find(x => x.type === 'tool' && x.tool === p.name)
       if (target) {
-        target.result = ev.result
-        target.status = ev.ok ? 'ok' : 'fail'
+        target.result = p.ok ? p.data : p.error
+        target.status = p.ok ? 'ok' : 'fail'
+      }
+      // 把短工具发现结果回填到确认卡可选项
+      if (p.ok) {
+        if (p.name === 'model.list') availableProfiles.value = p.data?.items || []
+        if (p.name === 'dataset.list') availableDatasets.value = p.data?.items || []
+        if (p.name === 'kb.list') availableKbs.value = p.data?.items || []
       }
       scrollToBottom()
       break
     }
     case 'confirm': {
+      lastConfirmKind = p.kind || 'benchmark'
+      isGenerating.value = false
       events.value.push({
         type: 'confirm',
-        card: ev.card,
+        card: p,
         isAcked: false,
         summary: '',
         open: true,
@@ -1271,8 +1265,19 @@ function handleWsEvent(ev: WsServerEvent) {
       break
     }
     case 'progress': {
-      if (activeTask.value) {
-        activeTask.value.progress = ev.progress
+      if (ev.task_id) {
+        if (!activeTask.value || activeTask.value.id !== ev.task_id) {
+          activeTask.value = {
+            id: ev.task_id,
+            kind: lastConfirmKind,
+            status: 'running',
+            config: {},
+            progress: { percent: p.percent, done: p.done, total: p.total, message: p.message },
+            created_at: new Date().toISOString(),
+          } as any
+        } else if (activeTask.value) {
+          activeTask.value.progress = { percent: p.percent, done: p.done, total: p.total, message: p.message }
+        }
       }
       break
     }
@@ -1280,7 +1285,7 @@ function handleWsEvent(ev: WsServerEvent) {
       activeTask.value = null
       events.value.push({
         type: 'report',
-        reportId: ev.report_id,
+        reportId: p.report_id,
         kpis: defaultKpis,
       })
       scrollToBottom()
@@ -1289,8 +1294,8 @@ function handleWsEvent(ev: WsServerEvent) {
     case 'error': {
       events.value.push({
         type: 'error',
-        code: ev.code,
-        message: ev.message || '执行遇到错误',
+        code: p.code,
+        message: p.message || '执行遇到错误',
       })
       isGenerating.value = false
       scrollToBottom()
@@ -1310,8 +1315,10 @@ function formatRelativeTime(dateStr?: string) {
 
 onMounted(async () => {
   await loadSessions()
-  if (currentSessionId.value) {
-    initWebSocket(currentSessionId.value)
+  if (sessions.value.length > 0) {
+    selectSession(sessions.value[0].id)
+  } else {
+    await handleCreateSession()
   }
 })
 

@@ -10,7 +10,6 @@ export type WsStatusHandler = (connected: boolean) => void
 
 export class AgentWebSocket {
   private ws: WebSocket | null = null
-  private pingTimer: number | null = null
   private reconnectTimer: number | null = null
   private eventHandlers: Set<WsEventHandler> = new Set()
   private statusHandlers: Set<WsStatusHandler> = new Set()
@@ -75,12 +74,10 @@ export class AgentWebSocket {
 
       this.ws.onopen = () => {
         this.notifyStatus(true)
-        this.startHeartbeat()
       }
 
       this.ws.onclose = () => {
         this.notifyStatus(false)
-        this.stopHeartbeat()
         if (!this.isExplicitlyClosed) {
           this.scheduleReconnect()
         }
@@ -115,15 +112,14 @@ export class AgentWebSocket {
     }
   }
 
-  public sendUserMessage(text: string, attachments?: string[]): void {
+  public sendUserMessage(text: string, attachments?: Array<{ file_id: string }>): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       console.warn('WebSocket not open, cannot send message')
       return
     }
     const payload = {
-      type: 'user_message',
-      text,
-      attachments: attachments || [],
+      event: 'user_message',
+      payload: { text, attachments: attachments || [] },
     }
     this.ws.send(JSON.stringify(payload))
   }
@@ -134,9 +130,8 @@ export class AgentWebSocket {
       return
     }
     const payload = {
-      type: 'confirm_ack',
-      ok,
-      patch,
+      event: 'confirm_ack',
+      payload: { ok, patch },
     }
     this.ws.send(JSON.stringify(payload))
   }
@@ -147,27 +142,10 @@ export class AgentWebSocket {
       return
     }
     const payload = {
-      type: 'cancel_task',
-      task_id: taskId,
+      event: 'cancel_task',
+      payload: { task_id: taskId },
     }
     this.ws.send(JSON.stringify(payload))
-  }
-
-  private startHeartbeat(): void {
-    this.stopHeartbeat()
-    // 30s 发送一次 ping
-    this.pingTimer = window.setInterval(() => {
-      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        this.ws.send(JSON.stringify({ type: 'ping', ts: Date.now() }))
-      }
-    }, 30000)
-  }
-
-  private stopHeartbeat(): void {
-    if (this.pingTimer !== null) {
-      clearInterval(this.pingTimer)
-      this.pingTimer = null
-    }
   }
 
   private scheduleReconnect(): void {
@@ -184,7 +162,6 @@ export class AgentWebSocket {
   }
 
   private cleanup(): void {
-    this.stopHeartbeat()
     if (this.reconnectTimer !== null) {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
