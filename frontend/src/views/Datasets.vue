@@ -53,6 +53,10 @@
               </div>
             </div>
           </div>
+          <!-- 目录树空态 / 搜索无结果提示 -->
+          <div v-if="!filteredFolders.length" class="tertiary" style="padding: 14px 12px; font-size: 12px; line-height: 1.7">
+            {{ treeSearch.trim() ? `未找到匹配「${treeSearch.trim()}」的数据集` : '暂无数据集，点击上方「+ 新建」或「上传」开始' }}
+          </div>
         </div>
         <!-- 目录树面板拖拽调宽手柄（200–520px，双击复位 290px，localStorage 持久化），对齐原型 ft-resizer -->
         <div
@@ -274,8 +278,57 @@
           </div>
         </div>
       </div>
-      <div v-else class="info-strip" style="margin: 20px">
-        暂无可用数据集。请上传一个 JSONL 或 CSV 数据集。
+      <!-- 空态仍保留完整工作台骨架：工具栏 + 表头 + 状态栏，空表格内嵌引导操作 -->
+      <div v-else class="workspace-main">
+        <div class="ws-toolbar">
+          <div class="row" style="gap: 8px; align-items: center">
+            <span style="font-weight: 700; font-size: 15px">数据集工作台</span>
+            <span class="tag-soft" style="color: var(--c-datasets); border-color: var(--t-datasets)">基准数据集</span>
+          </div>
+          <div class="row" style="gap: 8px; align-items: center; margin-left: auto; flex-wrap: wrap; justify-content: flex-end">
+            <button class="btn btn-secondary btn-sm" @click="openUploadModal(null)">⤴ 上传数据集</button>
+            <button class="btn btn-ai btn-sm" @click="createEmptyDataset(() => openAiGenModal())">✨ AI 合成新数据</button>
+            <button class="btn btn-sign btn-sm" @click="createEmptyDataset()">+ 新建空数据集</button>
+          </div>
+        </div>
+        <div class="ws-grid-container">
+          <table class="ds-table">
+            <thead>
+              <tr>
+                <th style="width: 44px"><input type="checkbox" disabled /></th>
+                <th style="width: 70px">行号</th>
+                <th style="min-width: 220px">测试问句 (Question) <i class="req" style="color: var(--accent-error)">*</i></th>
+                <th style="min-width: 260px">标准答案 (Reference) <i class="req" style="color: var(--accent-error)">*</i></th>
+                <th style="min-width: 140px">上下文 / 前置 (Context)</th>
+                <th style="min-width: 110px">标签</th>
+                <th style="min-width: 90px">难度</th>
+                <th style="width: 90px">校验状态</th>
+                <th style="width: 110px; text-align: right">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td colspan="9" style="padding: 56px 16px; border-bottom: none">
+                  <div style="display: flex; flex-direction: column; align-items: center; gap: 10px; color: var(--text-tertiary)">
+                    <span style="font-size: 34px">🗂️</span>
+                    <span style="font-size: 14px; font-weight: 600; color: var(--text-secondary)">暂无可用数据集</span>
+                    <span class="small">上传 JSONL / CSV 文件，或先新建空集再由 AI 从场景描述合成评测数据</span>
+                    <div class="row" style="gap: 8px; margin-top: 6px">
+                      <button class="btn btn-secondary btn-sm" @click="openUploadModal(null)">⤴ 上传数据集</button>
+                      <button class="btn btn-ai btn-sm" @click="createEmptyDataset(() => openAiGenModal())">✨ AI 合成</button>
+                      <button class="btn btn-sign btn-sm" @click="createEmptyDataset()">+ 新建空数据集</button>
+                    </div>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="ws-status-bar">
+          <span>共 <b class="num mono">0</b> 行数据</span>
+          <span class="tertiary">尚未创建数据集</span>
+          <span class="grow"></span>
+        </div>
       </div>
     </div>
 
@@ -995,6 +1048,17 @@ function openUploadModal(dataset: Dataset | null) {
   showUploadModal.value = true
 }
 
+/** 新建空数据集：创建后自动选中；after 回调用于空态「AI 合成」创建完毕直接进入向导。 */
+function createEmptyDataset(after?: () => void) {
+  openNameDialog('新建数据集（空集）', '数据集名称', 'new-dataset', async (val) => {
+    const created = await api.datasets.create({ name: val })
+    await loadDatasets()
+    await selectDataset(created.id)
+    message.success(`已创建空数据集「${created.name}」`)
+    after?.()
+  })
+}
+
 function openLaunchDrawer() {
   // 仅打开评测配置抽屉，任务创建仍由抽屉确认动作完成。
   showLaunchDrawer.value = true
@@ -1279,12 +1343,7 @@ async function handleFolderCtxAction(key: string, folderId: string) {
   switch (key) {
     case 'new-dataset':
       // D16 新建空数据集入口：只创建空集，行数据后续在表格中维护。
-      openNameDialog('新建数据集（空集）', '数据集名称', 'new-dataset', async (val) => {
-        const created = await api.datasets.create({ name: val })
-        await loadDatasets()
-        await selectDataset(created.id)
-        message.success(`已创建空数据集「${created.name}」`)
-      })
+      createEmptyDataset()
       break
     case 'new-folder':
       openNameDialog('新建子文件夹', '文件夹名称', '新建文件夹', (val) => {
@@ -1576,11 +1635,11 @@ const aiSelectedCount = computed(() => aiGen.value.candidates.filter(c => c.sele
 /** 候选全选态：有候选且全部勾选时为 true。 */
 const aiAllSelected = computed(() => aiGen.value.candidates.length > 0 && aiSelectedCount.value === aiGen.value.candidates.length)
 
-/** 打开 AI 合成向导：每次回到 Step1，并默认选中首条可用种子样本。黄金 QA 激活时回退到首个数据集。 */
+/** 打开 AI 合成向导：每次回到 Step1，并默认选中首条可用种子样本。黄金 QA 激活时回退到首个数据集；无数据集时先引导创建空集再自动进入向导。 */
 function openAiGenModal() {
   const target = currentDataset.value || datasets.value[0]
   if (!target) {
-    message.info('请先创建或上传一个数据集')
+    createEmptyDataset(() => openAiGenModal())
     return
   }
   if (target.id !== activeDatasetId.value) void selectDataset(target.id)
