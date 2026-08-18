@@ -1,0 +1,1090 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>用例 · AI 测试与评估平台</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/shell.css">
+<style>
+  .ft-layout {
+    display: grid;
+    grid-template-columns: 290px minmax(0, 1fr);
+    height: calc(100vh - var(--topbar-h));
+    overflow: hidden;
+  }
+  .ft-sidebar {
+    background: var(--bg-elevated);
+    border-right: 1px solid var(--border-subtle);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .ft-header {
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border-subtle);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .ft-tree {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .ft-node {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    border-radius: 8px;
+    font-size: 13px;
+    cursor: pointer;
+    user-select: none;
+    transition: background .15s ease, color .15s ease;
+    color: var(--text-primary);
+  }
+  .ft-node:hover {
+    background: rgba(17, 24, 39, 0.04);
+  }
+  .ft-node.active {
+    background: color-mix(in srgb, var(--accent-ai) 12%, var(--bg-main));
+    color: var(--accent-ai);
+    font-weight: 600;
+  }
+  .ft-node.folder {
+    font-weight: 600;
+    color: var(--text-secondary);
+  }
+  .ft-folder-child {
+    padding-left: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .ft-icon {
+    width: 16px;
+    height: 16px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 16px;
+  }
+  .ft-badge {
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-tertiary);
+  }
+
+  /* 右侧工作台 */
+  .workspace-main {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+    background: var(--bg-main);
+  }
+  .ws-toolbar {
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--border-subtle);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    background: var(--bg-main);
+  }
+  .ws-grid-container {
+    flex: 1;
+    overflow: auto;
+    padding: 0;
+    position: relative;
+  }
+  .ws-status-bar {
+    padding: 8px 16px;
+    border-top: 1px solid var(--border-subtle);
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+  }
+
+  /* 策略条 */
+  .strategy-banner {
+    padding: 10px 18px;
+    background: color-mix(in srgb, var(--accent-ai) 4%, var(--bg-main));
+    border-bottom: 1px solid var(--border-subtle);
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    font-size: 12.5px;
+  }
+
+  /* 右键上下文菜单 */
+  .context-menu {
+    position: fixed;
+    z-index: 10000;
+    background: var(--bg-main);
+    border: 1px solid var(--border-subtle);
+    border-radius: 10px;
+    padding: 6px;
+    box-shadow: 0 12px 32px rgba(17, 24, 39, 0.14);
+    min-width: 175px;
+    font-size: 12.5px;
+    animation: menu-pop .12s cubic-bezier(0.2, 0.9, 0.3, 1);
+  }
+  @keyframes menu-pop {
+    from { opacity: 0; transform: scale(0.95); }
+    to { opacity: 1; transform: scale(1); }
+  }
+  .context-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    color: var(--text-primary);
+    transition: background .12s ease;
+  }
+  .context-item:hover {
+    background: var(--bg-elevated);
+    color: var(--accent-ai);
+  }
+  .context-item.danger { color: var(--accent-error); }
+  .context-item.danger:hover { background: rgba(239, 68, 68, 0.08); }
+  .context-divider { height: 1px; background: var(--border-subtle); margin: 4px 0; }
+
+  /* 优先级与策略徽章 */
+  .prio { font-family: var(--font-mono); font-weight: 700; font-size: 11px; padding: 1px 6px; border-radius: 4px; }
+  .prio-P0 { background: #FEE2E2; color: #DC2626; }
+  .prio-P1 { background: #FEF3C7; color: #D97706; }
+  .prio-P2 { background: #E0E7FF; color: #4F46E5; }
+  .prio-P3 { background: #F3F4F6; color: #6B7280; }
+</style>
+</head>
+<body>
+<div class="app" id="app"></div>
+
+<script src="assets/app.js"></script>
+<script src="assets/api.js"></script>
+<script>
+(function () {
+  const content = AE.renderShell('cases', '用例工作台', { flush: true });
+  const isRag = () => AE.getMode() === 'rag';
+  const me = AE.getUser().username;
+  const STRATEGIES = ['正向', '反向', '边界', '等价', '状态', '场景'];
+
+  /* ─── Mock 数据源与树形目录 ─── */
+  const TREE_DATA = {
+    folders: [
+      { id: 'f-prd', name: 'PRD 业务需求生成库', open: true, items: ['cs-pay', 'cs-login'] },
+      { id: 'f-api', name: 'OpenAPI 接口用例库', open: true, items: ['cs-coupon'] }
+    ]
+  };
+
+  let CUSTOM_COLS = {
+    'cs-pay': [
+      { key: 'precondition', name: '前置条件', type: 'text' },
+      { key: 'test_type', name: '测试类型', type: 'text' }
+    ]
+  };
+
+  let CASES_MAP = {
+    'cs-pay': [
+      { id: 'c-001', strategy: '正向', priority: 'P0', module: '登录', name: '正确账密登录成功', expected: '进入工作台首页', mapped: true, pending: false, precondition: '账号状态正常', test_type: '功能' },
+      { id: 'c-002', strategy: '正向', priority: 'P0', module: '支付', name: '余额充足时支付成功', expected: '订单状态变为已支付', mapped: true, pending: false, precondition: '账户余额 ≥ 订单金额', test_type: '核心' },
+      { id: 'c-003', strategy: '反向', priority: 'P1', module: '登录', name: '错误密码登录', expected: '提示用户名或密码错误', mapped: false, pending: true, precondition: '无', test_type: '异常' },
+      { id: 'c-004', strategy: '反向', priority: 'P1', module: '支付', name: '余额不足支付', expected: '返回余额不足错误码', mapped: true, pending: false, precondition: '账户余额 < 订单金额', test_type: '异常' },
+      { id: 'c-005', strategy: '边界', priority: 'P1', module: '支付', name: '支付金额为 0.01 元', expected: '允许最小金额支付', mapped: true, pending: false, precondition: '收银台已加载', test_type: '边界' },
+      { id: 'c-006', strategy: '边界', priority: 'P2', module: '支付', name: '支付金额达单笔上限 5 万元', expected: '按限额规则拦截并弹窗提示', mapped: false, pending: true, precondition: '单笔限额已配置', test_type: '边界' },
+      { id: 'c-007', strategy: '状态', priority: 'P1', module: '订单', name: '重复提交支付请求', expected: '幂等返回同一订单号', mapped: true, pending: false, precondition: '订单已创建', test_type: '幂等' },
+      { id: 'c-008', strategy: '场景', priority: 'P2', module: '支付', name: '支付中断网重试', expected: '网络恢复后可查询最终状态', mapped: true, pending: false, precondition: '弱网模拟环境', test_type: '容灾' }
+    ],
+    'cs-login': [
+      { id: 'c-101', strategy: '正向', priority: 'P0', module: '登录', name: '短信验证码一键登录', expected: '登录成功并返回 JWT', mapped: true, pending: false, precondition: '手机号已注册', test_type: '功能' }
+    ],
+    'cs-coupon': [
+      { id: 'c-201', strategy: '正向', priority: 'P0', module: '优惠券', name: '满减券满额抵扣', expected: '结算金额正确扣减', mapped: true, pending: false, precondition: '券在有效期内', test_type: '营销' }
+    ]
+  };
+
+  let activeSetId = 'cs-pay';
+
+  function getActiveSet() {
+    return AE.DB.caseSets.find(s => s.id === activeSetId) || AE.DB.caseSets[0];
+  }
+
+  async function syncCaseSetCases(setId) {
+    try {
+      await AE.API.cases.saveCases(setId, CASES_MAP[setId] || []);
+    } catch (e) {
+      AE.toast('error', `保存用例失败：${e.message}`);
+    }
+  }
+
+  /* ─── 页面布局骨架 ─── */
+  content.innerHTML = `
+    <div class="ft-layout" data-od-id="cases-filetree-layout">
+      <!-- 左侧：目录树侧边栏 -->
+      <div class="ft-sidebar">
+        <div class="ft-header">
+          <div class="row-between">
+            <span style="font-weight:600;font-size:13px">用例集目录</span>
+            <button class="btn btn-secondary btn-sm" id="btn-tree-add-case" style="font-size:11px">+ 新建集</button>
+          </div>
+          <input class="input" id="tree-search-cases" placeholder="搜索用例集..." style="height:30px;font-size:12px">
+        </div>
+        <div class="ft-tree" id="cases-tree"></div>
+      </div>
+
+      <!-- 右侧：用例数据表格工作台 -->
+      <div class="workspace-main" id="workspace-main">
+        <div class="ws-toolbar" id="ws-toolbar"></div>
+        <div class="strategy-banner" id="strategy-banner"></div>
+        <div class="ws-grid-container" id="ws-grid-container"></div>
+        <div class="ws-status-bar" id="ws-status-bar"></div>
+      </div>
+    </div>
+    <div id="context-menu-root"></div>`;
+
+  /* ─── 1. 渲染左侧文件树 ─── */
+  function renderTree() {
+    const treeEl = document.getElementById('cases-tree');
+    const q = (document.getElementById('tree-search-cases').value || '').trim().toLowerCase();
+
+    let html = '';
+    TREE_DATA.folders.forEach(folder => {
+      const sets = folder.items.map(id => AE.DB.caseSets.find(s => s.id === id)).filter(Boolean)
+        .filter(s => !q || s.name.toLowerCase().includes(q));
+
+      if (q && !sets.length) return;
+
+      html += `
+        <div class="ft-node folder" data-fid="${folder.id}">
+          <span class="ft-icon">${folder.open ? '▾' : '▸'}</span>
+          <span>📁 ${AE.esc(folder.name)}</span>
+          <span class="ft-badge">${sets.length}</span>
+        </div>`;
+
+      if (folder.open) {
+        html += `<div class="ft-folder-child">`;
+        sets.forEach(s => {
+          const isActive = s.id === activeSetId;
+          const statusCls = s.status === 'confirmed' ? 'badge-succeeded' : s.status === 'cancelled' ? 'badge-cancelled' : 'badge-awaiting_case_confirm';
+          const statusLabel = s.status === 'confirmed' ? '已入库' : s.status === 'cancelled' ? '已废弃' : '待确认';
+
+          html += `
+            <div class="ft-node ${isActive ? 'active' : ''}" data-set-id="${s.id}">
+              <span class="ft-icon">📋</span>
+              <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${AE.esc(s.name)}</span>
+              <span class="badge ${statusCls}" style="font-size:10px;padding:1px 5px;margin-left:auto">${statusLabel}</span>
+            </div>`;
+        });
+        html += `</div>`;
+      }
+    });
+
+    treeEl.innerHTML = html;
+
+    // 绑定树节点事件
+    treeEl.querySelectorAll('.ft-node.folder').forEach(el => {
+      el.onclick = () => {
+        const f = TREE_DATA.folders.find(x => x.id === el.dataset.fid);
+        if (f) { f.open = !f.open; renderTree(); }
+      };
+      el.oncontextmenu = e => {
+        e.preventDefault();
+        openFolderContextMenu(e.clientX, e.clientY, el.dataset.fid);
+      };
+    });
+
+    treeEl.querySelectorAll('.ft-node[data-set-id]').forEach(el => {
+      el.onclick = () => {
+        activeSetId = el.dataset.setId;
+        renderTree();
+        renderWorkspace();
+      };
+      el.oncontextmenu = e => {
+        e.preventDefault();
+        openSetContextMenu(e.clientX, e.clientY, el.dataset.setId);
+      };
+    });
+  }
+
+  /* ─── 2. 渲染右侧用例数据工作台 ─── */
+  function renderWorkspace() {
+    const cs = getActiveSet();
+    if (!cs) return;
+
+    const cases = CASES_MAP[cs.id] || [];
+    const customCols = CUSTOM_COLS[cs.id] || [];
+    const rag = isRag();
+
+    // 1. 顶部工具栏
+    const tb = document.getElementById('ws-toolbar');
+    tb.innerHTML = `
+      <div class="row" style="gap:8px;align-items:center">
+        <span style="font-weight:700;font-size:15px">${AE.esc(cs.name)}</span>
+        <span class="tag-soft">生成 <b class="num">${cs.generated_count}</b> 条</span>
+        <span class="tag-soft" style="color:var(--accent-warning);border-color:#FDE68A">
+          ${cs.status === 'confirmed' ? '✓ 已入库' : cs.status === 'cancelled' ? '已废弃' : `72h 倒计时: 剩 ${Math.floor(cs.expires_in_h || 70)}h`}
+        </span>
+      </div>
+      <div class="row" style="gap:8px;align-items:center;margin-left:auto">
+        <button class="btn btn-secondary btn-sm" id="btn-add-case">+ 新增用例</button>
+        <button class="btn btn-secondary btn-sm" id="btn-add-col">+ 新增列</button>
+        <button class="btn btn-ai btn-sm" id="btn-ai-gen-cases">✨ AI 生成用例集</button>
+        <button class="btn btn-ai btn-sm" id="btn-ai-fill-case">AI 补全前置/断言</button>
+        <button class="btn btn-secondary btn-sm" id="btn-export-xlsx">导出 xlsx</button>
+        <button class="btn btn-secondary btn-sm" id="btn-export-xmind">导出 xmind</button>
+        ${cs.status !== 'confirmed' ? `<button class="btn btn-sign btn-sm" id="btn-confirm-all">确认入库</button>` : ''}
+      </div>`;
+
+    // 2. 策略与自检横幅
+    const sb = document.getElementById('strategy-banner');
+    const stratCounts = STRATEGIES.map(st => ({ st, n: cases.filter(c => c.strategy === st).length }));
+    const errChecks = cs.checks || [];
+    sb.innerHTML = `
+      <span class="tertiary" style="font-weight:600">策略覆盖分布:</span>
+      <div class="row wrap" style="gap:6px">
+        ${stratCounts.map(x => `<span class="tag-soft" style="font-size:11px">${x.st} <b class="num">${x.n}</b></span>`).join('')}
+      </div>
+      <span class="grow"></span>
+      ${errChecks.length ? `<span class="badge badge-failed" style="font-size:11px">⚠ 自检: ${errChecks.map(c => c.message).join('; ')}</span>` : '<span class="st-ok small">✓ 策略自检通过</span>'}
+    `;
+
+    // 3. 用例表格数据网格
+    const grid = document.getElementById('ws-grid-container');
+    grid.innerHTML = `
+      <table class="ds-table" id="cases-grid-table">
+        <thead>
+          <tr>
+            <th style="width:40px"><input type="checkbox" id="chk-all-cases" checked></th>
+            <th style="width:70px">策略</th>
+            <th style="width:65px">级别</th>
+            <th style="min-width:90px">模块</th>
+            <th style="min-width:180px">用例名称 <i class="req">*</i></th>
+            <th style="min-width:190px">预期结果 <i class="req">*</i></th>
+            ${customCols.map(c => `<th class="custom-col-th" style="min-width:110px">${AE.esc(c.name)} <button class="link-btn danger" data-delcol="${c.key}" style="font-size:10px;padding:0 2px">✕</button></th>`).join('')}
+            <th style="width:80px">映射状态</th>
+            <th style="width:75px">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${cases.map((c, idx) => `
+            <tr data-case-idx="${idx}">
+              <td><input type="checkbox" class="case-chk" ${c.pending ? '' : 'checked'}></td>
+              <td class="cell-edit" data-k="strategy"><span class="tag-soft" style="font-size:11px">${c.strategy}</span></td>
+              <td class="cell-edit" data-k="priority"><span class="prio prio-${c.priority}">${c.priority}</span></td>
+              <td class="cell-edit" data-k="module">${AE.esc(c.module)}</td>
+              <td class="cell-edit" data-k="name" style="font-weight:500">${AE.esc(c.name)}</td>
+              <td class="cell-edit" data-k="expected">${AE.esc(c.expected)}</td>
+              ${customCols.map(col => `<td class="cell-edit" data-k="${col.key}">${AE.esc(c[col.key] || '—')}</td>`).join('')}
+              <td>${c.mapped ? '<span class="badge badge-succeeded">✓ 已映射</span>' : '<span class="badge badge-awaiting_case_confirm">待补全</span>'}</td>
+              <td><button class="link-btn" data-edit-modal="${idx}">编辑</button></td>
+            </tr>`).join('')}
+        </tbody>
+      </table>`;
+
+    // 4. 底部状态栏与批量映射
+    const bar = document.getElementById('ws-status-bar');
+    bar.innerHTML = `
+      <span>已选 <b class="num" id="sel-case-count">${cases.filter(c => !c.pending).length}</b> / ${cases.length} 条</span>
+      <select class="select" id="map-target-sel" style="height:28px;padding:2px 24px 2px 8px;font-size:12px">
+        <option value="dataset" ${rag ? '' : 'selected'}>映射至基准数据集 · smoke-20</option>
+        <option value="gold_qa" ${rag ? 'selected' : ''}>映射至黄金 QA · qa-v1</option>
+      </select>
+      <button class="btn btn-secondary btn-sm" id="btn-batch-map-action">批量执行映射</button>
+      <span class="grow"></span>
+      <span class="tertiary">采纳率: <b class="num">${Math.round(cases.filter(c => !c.pending).length / cases.length * 100)}%</b></span>
+    `;
+
+    bindCasesEvents(cs, cases, customCols);
+  }
+
+  /* ─── 3. 交互与右键菜单绑定 ─── */
+  function bindCasesEvents(cs, cases, customCols) {
+    // 单元格行内即点即改
+    document.querySelectorAll('td.cell-edit').forEach(td => {
+      td.onclick = () => {
+        if (td.querySelector('.cell-input')) return;
+        const tr = td.closest('tr');
+        const idx = +tr.dataset.caseIdx;
+        const k = td.dataset.k;
+        const oldVal = cases[idx][k] || '';
+
+        td.innerHTML = '';
+        const inp = document.createElement('input');
+        inp.className = 'cell-input';
+        inp.value = oldVal === '—' ? '' : oldVal;
+        td.appendChild(inp);
+        inp.focus();
+
+        let saved = false;
+        const commit = () => {
+          if (saved) return; saved = true;
+          cases[idx][k] = inp.value.trim();
+          syncCaseSetCases(cs.id);
+          renderWorkspace();
+        };
+
+        inp.onblur = commit;
+        inp.onkeydown = e => {
+          if (e.key === 'Enter') { e.preventDefault(); commit(); }
+          if (e.key === 'Escape') { saved = true; renderWorkspace(); }
+        };
+      };
+    });
+
+    // 右键表格行
+    document.querySelectorAll('#cases-grid-table tbody tr').forEach(tr => {
+      tr.oncontextmenu = e => {
+        e.preventDefault();
+        const idx = +tr.dataset.caseIdx;
+        openCaseRowContextMenu(e.clientX, e.clientY, idx, cases, cs);
+      };
+    });
+
+    // 弹窗编辑按钮
+    document.querySelectorAll('[data-edit-modal]').forEach(b => {
+      b.onclick = () => openCaseEditModal(+b.dataset.editModal, cases, cs, customCols);
+    });
+
+    // 删除自定义列
+    document.querySelectorAll('[data-delcol]').forEach(b => {
+      b.onclick = () => {
+        const k = b.dataset.delcol;
+        CUSTOM_COLS[cs.id] = (CUSTOM_COLS[cs.id] || []).filter(c => c.key !== k);
+        renderWorkspace();
+        AE.toast('info', '已移除列 ' + k);
+      };
+    });
+
+    // 新增用例行
+    document.getElementById('btn-add-case').onclick = () => {
+      cases.push({ id: 'c-' + Date.now(), strategy: '正向', priority: 'P1', module: '通用', name: '新测试用例', expected: '预期验证通过', mapped: false, pending: false });
+      cs.generated_count = cases.length;
+      renderWorkspace();
+      AE.toast('success', '已新增用例行');
+    };
+
+    // 新增自定义列
+    document.getElementById('btn-add-col').onclick = () => openAddColModal(cs);
+
+    // AI 智能生成用例集
+    const agc = document.getElementById('btn-ai-gen-cases');
+    if (agc) agc.onclick = () => openAiGenCasesModal();
+
+    // AI 补全前置/断言
+    document.getElementById('btn-ai-fill-case').onclick = () => {
+      if (!AE.API.isMock()) {
+        AE.toast('info', 'API V1.2 未定义单用例属性补全接口；请用“AI 生成用例集”获取候选后采纳保存。');
+        return;
+      }
+      AE.toast('info', 'AI 正在分析并补全用例前置条件与断言…');
+      setTimeout(() => {
+        cases.forEach(c => {
+          c.precondition = c.precondition || '系统处于就绪状态，前置接口鉴权通过';
+          c.test_type = c.test_type || (c.strategy === '正向' ? '功能核心' : '容错健壮性');
+        });
+        renderWorkspace();
+        AE.toast('success', 'AI 已补全全部用例属性');
+      }, 500);
+    };
+
+    // 导出
+    document.getElementById('btn-export-xlsx').onclick = () => AE.toast('success', `已导出「${cs.name}」XLSX 测试用例表`);
+    document.getElementById('btn-export-xmind').onclick = () => AE.toast('success', `已导出「${cs.name}」XMind 思维导图`);
+
+    // 批量映射
+    document.getElementById('btn-batch-map-action').onclick = async () => {
+      const selTarget = document.getElementById('map-target-sel').value;
+      if (!AE.API.isMock()) {
+        AE.toast('info', '实时模式需先选择服务端目标数据集或黄金 QA；当前原型不再用 smoke-20 / qa-v1 示例 ID 执行映射。');
+        return;
+      }
+      cases.forEach(c => { c.mapped = true; c.pending = false; });
+      renderWorkspace();
+      AE.toast('success', selTarget === 'dataset' ? '已将选中的用例批量映射入基准数据集' : '已将选中的用例批量映射入黄金 QA');
+    };
+
+    // 确认入库
+    const cb = document.getElementById('btn-confirm-all');
+    if (cb) {
+      cb.onclick = async () => {
+        try {
+          await AE.API.cases.confirmSet(cs.id);
+          cs.status = 'confirmed';
+          cs.confirmed_count = cases.length;
+          renderTree();
+          renderWorkspace();
+          AE.toast('success', `用例集「${cs.name}」已确认入库，任务状态流转为 succeeded`);
+        } catch (e) { AE.toast('error', `确认入库失败：${e.message}`); }
+      };
+    }
+  }
+
+  /* ─── 4. 全部可编辑对话框 ─── */
+  // A. 用例结构化弹窗编辑对话框
+  function openCaseEditModal(idx, cases, cs, customCols) {
+    const c = cases[idx];
+    AE.modal({
+      title: `详细编辑用例 · ${c.id}`,
+      wide: true,
+      body: `
+        <div class="form-row">
+          <div class="field">
+            <span class="field-label">测试策略 (Strategy) <i class="req">*</i></span>
+            <select class="select" id="ce-strategy">
+              ${STRATEGIES.map(s => `<option ${s === c.strategy ? 'selected' : ''}>${s}</option>`).join('')}
+            </select>
+          </div>
+          <div class="field">
+            <span class="field-label">优先级 (Priority) <i class="req">*</i></span>
+            <select class="select" id="ce-prio">
+              ${['P0', 'P1', 'P2', 'P3'].map(p => `<option ${p === c.priority ? 'selected' : ''}>${p}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="field">
+            <span class="field-label">所属业务模块 <i class="req">*</i></span>
+            <input class="input" id="ce-module" value="${AE.esc(c.module)}">
+          </div>
+          <div class="field">
+            <span class="field-label">用例名称 / 测试目的 <i class="req">*</i></span>
+            <input class="input" id="ce-name" value="${AE.esc(c.name)}">
+          </div>
+        </div>
+        <div class="field">
+          <span class="field-label">预期结果 / 断言标准 (Expected Result) <i class="req">*</i></span>
+          <textarea class="textarea" id="ce-expected" rows="3">${AE.esc(c.expected)}</textarea>
+        </div>
+        ${customCols.length ? `
+          <div class="rail-label mt8">自定义扩展属性</div>
+          <div class="form-row">
+            ${customCols.map(col => `
+              <div class="field">
+                <span class="field-label">${AE.esc(col.name)} (${col.key})</span>
+                <input class="input" id="ce-custom-${col.key}" value="${AE.esc(c[col.key] || '')}">
+              </div>`).join('')}
+          </div>` : ''}`,
+      foot: `<button class="btn btn-secondary" id="ce-cancel">取消</button><button class="btn btn-sign" id="ce-save">保存用例</button>`,
+      onMount: (el, close) => {
+        el.querySelector('#ce-cancel').onclick = close;
+        el.querySelector('#ce-save').onclick = () => {
+          c.strategy = el.querySelector('#ce-strategy').value;
+          c.priority = el.querySelector('#ce-prio').value;
+          c.module = el.querySelector('#ce-module').value.trim();
+          c.name = el.querySelector('#ce-name').value.trim();
+          c.expected = el.querySelector('#ce-expected').value.trim();
+
+          customCols.forEach(col => {
+            const inp = el.querySelector('#ce-custom-' + col.key);
+            if (inp) c[col.key] = inp.value.trim();
+          });
+
+          close();
+          renderWorkspace();
+          AE.toast('success', `已更新用例「${c.name}」`);
+        };
+      }
+    });
+  }
+
+  // C. AI 智能从 PRD/OpenAPI 生成用例集对话框（6 大测试策略配比 + 复杂度防爆 + 交互式候选预览）
+  function openAiGenCasesModal() {
+    let currentStep = 'config'; // 'config' | 'preview'
+    let generatedCases = [];
+    let sourceText = '';
+
+    const PRD_PRESETS = [
+      { name: 'PRD-聚合收银台与快捷退款', text: '收银台支持余额、银行卡快捷支付与企业对公转账。单笔提现上限 5 万元，单日上限 20 万元。连续输错密码 5 次锁定 2 小时，人脸解锁。退款 1-3 工作日原路退回。' },
+      { name: 'PRD-用户中心与双因子认证 (2FA)', text: '支持账密、短信验证码及扫码登录。登录失败 3 次出图形验证码，失败 5 次锁定 15 分钟。敏感操作需二次验证短信验证码。' },
+      { name: 'PRD-营销中心满减优惠券结算', text: '支持满减券、折扣券及免邮券。一笔订单仅能使用一张主券。发生部分退款时按商品实付比例分摊券金额。' }
+    ];
+
+    AE.modal({
+      title: '✨ AI 智能生成测试用例集',
+      wide: true,
+      body: `
+        <div id="ai-case-gen-body">
+          <!-- Step 1: 配置与需求输入 -->
+          <div id="ai-case-step-config">
+            <div class="field">
+              <span class="field-label">预设 PRD 业务需求模板</span>
+              <select class="select" id="ac-preset-sel">
+                ${PRD_PRESETS.map(p => `<option value="${AE.esc(p.text)}">${p.name}</option>`).join('')}
+              </select>
+            </div>
+            <div class="field">
+              <span class="field-label">PRD 业务需求描述 / 接口定义 (Source Material) <i class="req">*</i></span>
+              <textarea class="textarea" id="ac-prd-input" rows="4">${PRD_PRESETS[0].text}</textarea>
+              <span class="field-hint">支持粘贴 Markdown 文本、接口列表或业务规则描述</span>
+            </div>
+
+            <div class="rail-label mt12">六大测试策略分布配比与规模控制</div>
+            <div style="display:grid;grid-template-columns:repeat(3, 1fr);gap:10px;margin-bottom:12px">
+              <div class="field">
+                <span class="field-label">正向功能 (Positive) 40%</span>
+                <input class="input num" value="40" type="number" min="0" max="100" id="ac-p-pos">
+              </div>
+              <div class="field">
+                <span class="field-label">反向异常 (Negative) 25%</span>
+                <input class="input num" value="25" type="number" min="0" max="100" id="ac-p-neg">
+              </div>
+              <div class="field">
+                <span class="field-label">边界极限 (Boundary) 15%</span>
+                <input class="input num" value="15" type="number" min="0" max="100" id="ac-p-bnd">
+              </div>
+              <div class="field">
+                <span class="field-label">等价类划分 (Equiv) 10%</span>
+                <input class="input num" value="10" type="number" min="0" max="100" id="ac-p-eq">
+              </div>
+              <div class="field">
+                <span class="field-label">状态机迁移 (State) 5%</span>
+                <input class="input num" value="5" type="number" min="0" max="100" id="ac-p-st">
+              </div>
+              <div class="field">
+                <span class="field-label">端到端场景 (Scenario) 5%</span>
+                <input class="input num" value="5" type="number" min="0" max="100" id="ac-p-sc">
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="field">
+                <span class="field-label">目标生成规模 (<b class="num" id="ac-count-num">12</b> 条 · PRD 中等复杂度)</span>
+                <input type="range" class="cap-slider" id="ac-count-slider" min="6" max="30" value="12" style="margin-top:8px">
+                <span class="field-hint">防爆流保护：单次生成上限 45 条</span>
+              </div>
+              <div class="field">
+                <span class="field-label">用例结构属性生成</span>
+                <div class="row wrap" style="gap:10px;font-size:12px;margin-top:6px">
+                  <label><input type="checkbox" checked> 前置条件</label>
+                  <label><input type="checkbox" checked> 测试执行步骤</label>
+                  <label><input type="checkbox" checked> 预期断言</label>
+                  <label><input type="checkbox" checked> P0-P3 自动定级</label>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Step 2: 候选用例策略分布与交互式预览 -->
+          <div id="ai-case-step-preview" style="display:none">
+            <div class="strategy-banner mb8" id="ai-case-strat-bar" style="border-radius:8px"></div>
+            <div class="row-between mb8">
+              <span style="font-weight:600;font-size:13px">候选用例列表（已生成 <b class="num" id="ac-cand-count">0</b> 条，可点击修改）</span>
+              <button class="link-btn" id="ac-cand-toggle-all">全选 / 全不选</button>
+            </div>
+            <div style="max-height:360px;overflow-y:auto;border:1px solid var(--border-subtle);border-radius:8px">
+              <table class="ds-table" id="ac-cand-table">
+                <thead>
+                  <tr>
+                    <th style="width:36px"><input type="checkbox" id="ac-check-all" checked></th>
+                    <th style="width:65px">策略</th>
+                    <th style="width:60px">级别</th>
+                    <th style="width:85px">模块</th>
+                    <th>用例名称</th>
+                    <th>预期断言结果</th>
+                    <th style="width:65px">操作</th>
+                  </tr>
+                </thead>
+                <tbody id="ac-cand-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>`,
+      foot: `
+        <div class="row-between" style="width:100%">
+          <button class="btn btn-secondary" id="ac-btn-back" style="display:none">← 返回调整策略</button>
+          <span class="grow"></span>
+          <button class="btn btn-secondary" id="ac-btn-cancel">取消</button>
+          <button class="btn btn-ai" id="ac-btn-next">立即开始 AI 生成 →</button>
+          <button class="btn btn-sign" id="ac-btn-commit" style="display:none">采纳并创建用例集 (<span class="num" id="ac-sel-num">0</span> 条)</button>
+        </div>`,
+      onMount: (el, close) => {
+        const countSlider = el.querySelector('#ac-count-slider');
+        const countNum = el.querySelector('#ac-count-num');
+        countSlider.oninput = () => { countNum.textContent = countSlider.value; };
+
+        const presetSel = el.querySelector('#ac-preset-sel');
+        const prdInp = el.querySelector('#ac-prd-input');
+        presetSel.onchange = () => { prdInp.value = presetSel.value; };
+
+        const stepConfig = el.querySelector('#ai-case-step-config');
+        const stepPreview = el.querySelector('#ai-case-step-preview');
+        const btnNext = el.querySelector('#ac-btn-next');
+        const btnBack = el.querySelector('#ac-btn-back');
+        const btnCommit = el.querySelector('#ac-btn-commit');
+
+        btnBack.onclick = () => {
+          stepConfig.style.display = '';
+          stepPreview.style.display = 'none';
+          btnNext.style.display = '';
+          btnBack.style.display = 'none';
+          btnCommit.style.display = 'none';
+        };
+
+        function mockCandidates(count) {
+          const MOCK_STRATS = ['正向', '正向', '正向', '反向', '反向', '边界', '等价', '状态', '场景'];
+          return Array.from({ length: count }, (_, i) => {
+            const st = MOCK_STRATS[i % MOCK_STRATS.length];
+            const prio = i < 3 ? 'P0' : i < 7 ? 'P1' : 'P2';
+            return {
+              selected: true, strategy: st, priority: prio,
+              module: i % 2 === 0 ? '收银台' : '退款中心',
+              name: `${st}用例 #${i + 1}：${st === '正向' ? '正常余额支付' : st === '反向' ? '密码输错连续5次' : '提现金额恰好5万元'}`,
+              expected: `${st === '正向' ? '订单支付成功并核销' : st === '反向' ? '账户锁定2小时并提示人脸解锁' : '触发单笔上限合规校验'}`,
+              precondition: '系统处于就绪状态', test_type: '核心业务'
+            };
+          });
+        }
+        function openPreview() {
+          stepConfig.style.display = 'none';
+          stepPreview.style.display = '';
+          btnNext.style.display = 'none';
+          btnBack.style.display = '';
+          btnCommit.style.display = '';
+          renderCaseCandidates();
+        }
+        function normalizeCandidates(items) {
+          return (items || []).map((item, index) => ({
+            ...item,
+            selected: true,
+            strategy: item.strategy || item.test_strategy || '正向',
+            priority: item.priority || 'P2',
+            module: item.module || '未分类',
+            name: item.name || item.title || `候选用例 #${index + 1}`,
+            expected: item.expected || item.expected_result || '',
+            precondition: item.precondition || '',
+            test_type: item.test_type || ''
+          }));
+        }
+
+        btnNext.onclick = async () => {
+          const count = +countSlider.value || 12;
+          sourceText = prdInp.value.trim();
+          if (!sourceText) { AE.toast('error', '请填写 PRD / OpenAPI 内容'); return; }
+          btnNext.disabled = true;
+          btnNext.textContent = 'AI 正在分析 PRD 并推导用例…';
+          try {
+            if (AE.API.isMock()) {
+              await new Promise(resolve => setTimeout(resolve, 700));
+              generatedCases = mockCandidates(count);
+            } else {
+              const weights = {
+                positive: +el.querySelector('#ac-p-pos').value || 0,
+                negative: +el.querySelector('#ac-p-neg').value || 0,
+                boundary: +el.querySelector('#ac-p-bnd').value || 0,
+                equivalence: +el.querySelector('#ac-p-eq').value || 0,
+                state: +el.querySelector('#ac-p-st').value || 0,
+                scenario: +el.querySelector('#ac-p-sc').value || 0
+              };
+              const result = await AE.API.cases.aiGenerate({
+                source_text: sourceText,
+                strategy_weights: weights,
+                complexity: 'medium',
+                max_count: count
+              });
+              generatedCases = normalizeCandidates(result.items || result.candidates || result.cases);
+              if (!generatedCases.length) throw new Error('生成接口未返回候选用例');
+            }
+            btnNext.disabled = false;
+            btnNext.textContent = '立即开始 AI 生成 →';
+            openPreview();
+          } catch (e) {
+            btnNext.disabled = false;
+            btnNext.textContent = '立即开始 AI 生成 →';
+            AE.toast('error', `AI 生成失败：${e.message}`);
+          }
+        };
+
+        function renderCaseCandidates() {
+          const tbody = el.querySelector('#ac-cand-tbody');
+          el.querySelector('#ac-cand-count').textContent = generatedCases.length;
+
+          // 策略分布横幅
+          const stratBar = el.querySelector('#ai-case-strat-bar');
+          stratBar.innerHTML = STRATEGIES.map(s => {
+            const num = generatedCases.filter(c => c.strategy === s).length;
+            return `<span class="tag-soft" style="font-size:11px">${s} <b class="num">${num}</b></span>`;
+          }).join('') + '<span class="st-ok small" style="margin-left:auto">✓ 6 大策略全覆盖</span>';
+
+          tbody.innerHTML = generatedCases.map((c, i) => `
+            <tr>
+              <td><input type="checkbox" class="case-cand-chk" data-i="${i}" ${c.selected ? 'checked' : ''}></td>
+              <td><span class="tag-soft" style="font-size:11px">${c.strategy}</span></td>
+              <td><span class="prio prio-${c.priority}">${c.priority}</span></td>
+              <td><input class="input" style="font-size:12px;padding:3px 6px" value="${AE.esc(c.module)}" data-k="module" data-i="${i}"></td>
+              <td><input class="input" style="font-size:12px;padding:3px 6px" value="${AE.esc(c.name)}" data-k="name" data-i="${i}"></td>
+              <td><input class="input" style="font-size:12px;padding:3px 6px" value="${AE.esc(c.expected)}" data-k="expected" data-i="${i}"></td>
+              <td><button class="link-btn danger" data-del-cand="${i}" style="font-size:11px">剔除</button></td>
+            </tr>`).join('');
+
+          updateCaseSelCount();
+
+          tbody.querySelectorAll('.case-cand-chk').forEach(chk => {
+            chk.onchange = () => {
+              generatedCases[+chk.dataset.i].selected = chk.checked;
+              updateCaseSelCount();
+            };
+          });
+
+          tbody.querySelectorAll('input[data-k]').forEach(inp => {
+            inp.onchange = () => {
+              generatedCases[+inp.dataset.i][inp.dataset.k] = inp.value.trim();
+            };
+          });
+
+          tbody.querySelectorAll('[data-del-cand]').forEach(b => {
+            b.onclick = () => {
+              generatedCases.splice(+b.dataset.delCand, 1);
+              renderCaseCandidates();
+            };
+          });
+        }
+
+        function updateCaseSelCount() {
+          const n = generatedCases.filter(c => c.selected).length;
+          el.querySelector('#ac-sel-num').textContent = n;
+          btnCommit.disabled = n === 0;
+        }
+
+        el.querySelector('#ac-check-all').onchange = (e) => {
+          generatedCases.forEach(c => c.selected = e.target.checked);
+          renderCaseCandidates();
+        };
+
+        el.querySelector('#ac-btn-cancel').onclick = close;
+
+        // 确认创建用例集
+        btnCommit.onclick = async () => {
+          const sel = generatedCases.filter(c => c.selected);
+          if (!sel.length) return;
+          btnCommit.disabled = true;
+          try {
+            const draft = {
+            name: `AI-PRD生成 · ${presetSel.options[presetSel.selectedIndex].text.slice(0, 10)}`,
+            status: 'generated',
+            generated_count: sel.length,
+            confirmed_count: 0,
+            expires_in_h: 72,
+            checks: [], source_text: sourceText
+            };
+            const created = AE.API.isMock() ? { ...draft, id: 'cs-' + Date.now() } : await AE.API.cases.createSet(draft);
+            if (!created || !created.id) throw new Error('创建用例集接口未返回 id');
+            const newSet = { ...draft, ...created };
+            const newSetId = newSet.id;
+            const savedCases = sel.map((c, i) => ({
+              id: c.id || `c-${String(i + 1).padStart(3, '0')}`,
+              strategy: c.strategy, priority: c.priority, module: c.module, name: c.name,
+              expected: c.expected, mapped: false, pending: false,
+              precondition: c.precondition, test_type: c.test_type
+            }));
+            if (!AE.API.isMock()) await AE.API.cases.saveCases(newSetId, savedCases);
+
+            AE.DB.caseSets.push(newSet);
+            TREE_DATA.folders[0].items.push(newSetId);
+            CASES_MAP[newSetId] = savedCases;
+
+            activeSetId = newSetId;
+            close();
+            renderTree();
+            renderWorkspace();
+            AE.toast('success', `已成功创建用例集「${newSet.name}」（${sel.length} 条用例，72h 内待确认入库）`);
+          } catch (e) {
+            btnCommit.disabled = false;
+            AE.toast('error', `创建用例集失败：${e.message}`);
+          }
+        };
+      }
+    });
+  }
+
+  // D. 新增自定义扩展列对话框
+  function openAddColModal(cs) {
+    AE.modal({
+      title: '新增用例自定义字段 (Custom Field)',
+      body: `
+        <div class="field">
+          <span class="field-label">字段 Key (英文字母 / 下划线) <i class="req">*</i></span>
+          <input class="input mono" id="col-key" placeholder="如 precondition, assert_type, env_tag">
+        </div>
+        <div class="field">
+          <span class="field-label">显示名称 <i class="req">*</i></span>
+          <input class="input" id="col-name" placeholder="如 前置条件, 断言方式, 环境要求">
+        </div>`,
+      foot: `<button class="btn btn-sign" id="col-ok">确认添加</button>`,
+      onMount: (el, close) => {
+        el.querySelector('#col-ok').onclick = () => {
+          const key = el.querySelector('#col-key').value.trim().toLowerCase();
+          const name = el.querySelector('#col-name').value.trim();
+          if (!key || !name) { AE.toast('error', '请填写完整字段 Key 与显示名称'); return; }
+
+          CUSTOM_COLS[cs.id] = CUSTOM_COLS[cs.id] || [];
+          CUSTOM_COLS[cs.id].push({ key, name, type: 'text' });
+          close();
+          renderWorkspace();
+          AE.toast('success', `已添加列「${name}」`);
+        };
+      }
+    });
+  }
+
+  /* ─── 5. 右键上下文菜单 ─── */
+  const menuRoot = document.getElementById('context-menu-root');
+  function closeContextMenu() { menuRoot.innerHTML = ''; }
+  window.addEventListener('click', closeContextMenu);
+
+  // 用例集节点右键菜单
+  function openSetContextMenu(x, y, setId) {
+    const cs = AE.DB.caseSets.find(s => s.id === setId);
+    if (!cs) return;
+
+    menuRoot.innerHTML = `
+      <div class="context-menu" style="left:${x}px;top:${y}px">
+        <div class="context-item" id="csm-confirm">✓ 确认入库此用例集</div>
+        <div class="context-item" id="csm-map">⇄ 批量映射到评测集</div>
+        <div class="context-item" id="csm-export">⤓ 导出 Excel (.xlsx)</div>
+        <div class="context-divider"></div>
+        <div class="context-item" id="csm-rename">✏ 重命名</div>
+        <div class="context-item danger" id="csm-del">🗑 废弃用例集</div>
+      </div>`;
+
+    document.getElementById('csm-confirm').onclick = async () => {
+      await AE.API.cases.confirmSet(cs.id);
+      cs.status = 'confirmed';
+      renderTree(); renderWorkspace();
+      AE.toast('success', '已确认入库并生成版本快照');
+    };
+    document.getElementById('csm-map').onclick = () => document.getElementById('btn-batch-map-action').click();
+    document.getElementById('csm-export').onclick = () => AE.toast('success', `已导出「${cs.name}」`);
+    document.getElementById('csm-rename').onclick = () => {
+      const name = prompt('重命名用例集：', cs.name);
+      if (name) { cs.name = name.trim(); renderTree(); renderWorkspace(); AE.toast('success', '已重命名'); }
+    };
+    document.getElementById('csm-del').onclick = async () => {
+      if (confirm(`确认废弃「${cs.name}」？任务将置为 cancelled。`)) {
+        await AE.API.cases.cancelSet(cs.id, '用户在文件树右键废弃');
+        cs.status = 'cancelled';
+        renderTree(); renderWorkspace();
+        AE.toast('info', '已废弃用例集');
+      }
+    };
+  }
+
+  // 文件夹右键菜单
+  function openFolderContextMenu(x, y, folderId) {
+    const f = TREE_DATA.folders.find(x => x.id === folderId);
+    menuRoot.innerHTML = `
+      <div class="context-menu" style="left:${x}px;top:${y}px">
+        <div class="context-item" id="fm-new-set">📋 在此目录下新建用例集</div>
+        <div class="context-item" id="fm-new-f">📁 新建子目录</div>
+        <div class="context-divider"></div>
+        <div class="context-item" id="fm-rename">✏ 重命名目录</div>
+      </div>`;
+
+    document.getElementById('fm-new-set').onclick = async () => {
+      const name = prompt('用例集名称：', '新生成用例集');
+      if (name) {
+        const draft = { name: name.trim(), status: 'generated', generated_count: 0, confirmed_count: 0, expires_in_h: 72, checks: [] };
+        let ns;
+        try {
+          ns = AE.API.isMock() ? { ...draft, id: 'cs-' + Date.now() } : await AE.API.cases.createSet(draft);
+          if (!ns || !ns.id) throw new Error('创建接口未返回 case set id');
+        } catch (e) { AE.toast('error', `创建用例集失败：${e.message}`); return; }
+        AE.DB.caseSets.push(ns);
+        f.items.push(ns.id);
+        CASES_MAP[ns.id] = AE.API.isMock() ? [{ id: 'c-01', strategy: '正向', priority: 'P0', module: '通用', name: '核心主链路验证', expected: '正常返回 200 OK', mapped: false }] : [];
+        activeSetId = ns.id;
+        renderTree(); renderWorkspace();
+        AE.toast('success', '已创建用例集');
+      }
+    };
+    document.getElementById('fm-rename').onclick = () => {
+      const name = prompt('目录名称：', f.name);
+      if (name) { f.name = name.trim(); renderTree(); AE.toast('success', '已更新目录名'); }
+    };
+  }
+
+  // 表格行右键菜单
+  function openCaseRowContextMenu(x, y, caseIdx, cases, cs) {
+    menuRoot.innerHTML = `
+      <div class="context-menu" style="left:${x}px;top:${y}px">
+        <div class="context-item" id="crm-edit">✏ 弹窗详细编辑</div>
+        <div class="context-item" id="crm-ai">✨ AI 智能补全属性</div>
+        <div class="context-item" id="crm-copy">📋 复制为 JSON</div>
+        <div class="context-divider"></div>
+        <div class="context-item" id="crm-insert">＋ 在下方插入新用例</div>
+        <div class="context-item danger" id="crm-del">🗑 删除本用例</div>
+      </div>`;
+
+    document.getElementById('crm-edit').onclick = () => openCaseEditModal(caseIdx, cases, cs, CUSTOM_COLS[cs.id] || []);
+    document.getElementById('crm-ai').onclick = () => {
+      cases[caseIdx].precondition = '前置服务已启动，测试数据已插桩';
+      cases[caseIdx].test_type = '自动化回归';
+      syncCaseSetCases(cs.id);
+      renderWorkspace();
+      AE.toast('success', 'AI 已补全前置条件与测试类型');
+    };
+    document.getElementById('crm-copy').onclick = () => {
+      navigator.clipboard.writeText(JSON.stringify(cases[caseIdx], null, 2));
+      AE.toast('success', '已复制用例 JSON');
+    };
+    document.getElementById('crm-insert').onclick = () => {
+      cases.splice(caseIdx + 1, 0, { id: 'c-' + Date.now(), strategy: '正向', priority: 'P1', module: cases[caseIdx].module, name: '新增测试用例', expected: '预期验证通过', mapped: false });
+      syncCaseSetCases(cs.id);
+      renderWorkspace();
+      AE.toast('success', '已在下方插入新用例');
+    };
+    document.getElementById('crm-del').onclick = () => {
+      cases.splice(caseIdx, 1);
+      syncCaseSetCases(cs.id);
+      renderWorkspace();
+      AE.toast('info', '已删除用例');
+    };
+  }
+
+  // 顶部 "+ 新建集" 按钮触发 AI 智能生成
+  document.getElementById('btn-tree-add-case').onclick = () => openAiGenCasesModal();
+
+  document.getElementById('tree-search-cases').oninput = renderTree;
+  window.addEventListener('ae:mode', () => { renderTree(); renderWorkspace(); });
+
+  // 初始化（全量调用 API）
+  async function init() {
+    try {
+      const res = await AE.API.cases.listSets();
+      AE.DB.caseSets = (res && res.items) || [];
+      if (!AE.API.isMock()) {
+        CASES_MAP = {};
+        TREE_DATA.folders = [{ id: 'f-all-cases', name: '服务端用例集', open: true, items: AE.DB.caseSets.map(set => set.id) }];
+        const details = await Promise.all(AE.DB.caseSets.map(set => AE.API.cases.getSet(set.id).catch(() => null)));
+        details.forEach((detail, index) => {
+          if (!detail) return;
+          const set = AE.DB.caseSets[index];
+          Object.assign(set, detail.case_set || detail);
+          CASES_MAP[set.id] = detail.cases || detail.items || [];
+        });
+        activeSetId = AE.DB.caseSets[0] && AE.DB.caseSets[0].id;
+      }
+    } catch (e) {
+      if (!AE.API.isMock()) AE.toast('error', `用例集加载失败：${e.message}`);
+    }
+    renderTree();
+    renderWorkspace();
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>

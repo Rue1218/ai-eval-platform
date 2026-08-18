@@ -1,0 +1,737 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>知识库 · AI 测试与评估平台</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/shell.css">
+<style>
+  .kb-bar {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 12px;
+    padding: 12px 18px; border-bottom: 1px solid var(--border-subtle); background: var(--bg-main);
+  }
+  .kb-grid {
+    flex: 1; min-height: 0; display: grid;
+    grid-template-columns: 310px minmax(0, 1fr) 300px;
+    height: calc(100vh - var(--topbar-h) - 57px);
+    overflow: hidden;
+  }
+  .kb-col { overflow-y: auto; padding: 16px; min-height: 0; }
+  .kb-col + .kb-col { border-left: 1px solid var(--border-subtle); }
+  .doc-item {
+    display: flex; align-items: center; gap: 9px;
+    border: 1px solid var(--border-subtle); border-radius: 10px;
+    padding: 9px 12px; cursor: pointer; font-size: 12.5px;
+    transition: border-color .15s ease, background .15s ease;
+    background: var(--bg-elevated);
+  }
+  .doc-item:hover { border-color: var(--c-kb); }
+  .doc-item.on { border-color: color-mix(in srgb, var(--c-kb) 45%, var(--border-subtle)); background: color-mix(in srgb, var(--t-kb) 30%, var(--bg-main)); }
+  .doc-item .d-name { font-family: var(--font-mono); font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .recall-item { border: 1px solid var(--border-subtle); border-radius: 10px; padding: 12px; background: var(--bg-elevated); }
+  .recall-item .r-id { font-family: var(--font-mono); font-size: 11px; color: var(--c-kb); font-weight: 600; }
+  .rerank-col { flex: 1; min-width: 0; }
+  .rr-row { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid var(--border-subtle); border-radius: 8px; font-family: var(--font-mono); font-size: 11px; background: var(--bg-main); }
+  .rr-row + .rr-row { margin-top: 6px; }
+  .rr-delta { font-size: 10px; font-weight: 700; }
+  .metric-strip { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .metric-cell { background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 10px; padding: 10px 12px; position: relative; overflow: hidden; }
+  .metric-cell::before { content: ''; position: absolute; top: 0; left: 12px; right: 12px; height: 2px; border-radius: 2px; background: linear-gradient(90deg, var(--c-kb), transparent 72%); opacity: .55; }
+  .metric-cell .m-num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 20px; font-weight: 700; color: var(--accent-ai); }
+  .metric-cell .m-label { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+  .quick-q-pill { display: inline-flex; padding: 3px 8px; border-radius: 6px; font-size: 11px; background: var(--bg-elevated); border: 1px solid var(--border-subtle); cursor: pointer; color: var(--text-secondary); }
+  .quick-q-pill:hover { border-color: var(--accent-ai); color: var(--accent-ai); }
+  @media (max-width: 1280px) { .kb-grid { grid-template-columns: 270px minmax(0, 1fr) 270px; } }
+</style>
+</head>
+<body>
+<div class="app" id="app"></div>
+
+<input type="file" id="doc-file-input" style="display:none" accept=".md,.pdf,.txt,.docx,.json">
+<input type="file" id="qa-file-input" style="display:none" accept=".jsonl,.csv,.json">
+
+<script src="assets/app.js"></script>
+<script src="assets/api.js"></script>
+<script>
+(function () {
+  const content = AE.renderShell('kb', '知识库工作台', { flush: true });
+  const me = AE.getUser().username;
+
+  let activeKb = 'kb-default';
+  let activeDoc = 'd-01';
+  let chunkSize = 512, overlap = 64;
+  let queryMode = 'hybrid';
+  let queried = AE.API.isMock();
+  let queryMetrics = AE.API.isMock() ? { hit_rate: 0.80, mrr: 0.74, recall: 0.85, contain: 0.83 } : {};
+
+  /* ─── 动态分块与召回数据源 ─── */
+  const CHUNK_TEXT = [
+    '……账户体系分为个人账户与企业账户。企业账户支持多人审批与额度管理，审批流最多两级……',
+    '……结算账户用于接收平台打款。修改默认结算账户需进入「设置-账户-结算账户」并完成短信验证……',
+    '……付款方式支持余额、银行卡与对公转账。余额提现单笔不超过 5 万元，单日不超过 20 万元……',
+    '……退款审核通过后 1-3 个工作日原路退回。全额退款退回手续费，部分退款按剩余比例退回……',
+    '……账单支持按项目维度导出 CSV。历史账单最长可查询 24 个月，支持自定义时间范围……',
+    '……电子发票 24 小时内发送至预留邮箱；增值税专用发票需填写邮寄地址，3 个工作日内寄出……',
+    '……连续输错支付密码 5 次将锁定 2 小时，可通过人脸验证立即解锁。风控拦截请联系客服……',
+    '……冻结金额为进行中交易的预占金额，交易完成后自动解冻或扣减，可在账单详情中查看……'
+  ];
+
+  const MOCK_RECALL = [
+    { chunk: 'd-01#c03', doc: 'product-manual.pdf', sim: 0.87, hit: true, text: CHUNK_TEXT[3] },
+    { chunk: 'd-01#c06', doc: 'product-manual.pdf', sim: 0.78, hit: false, text: CHUNK_TEXT[6] },
+    { chunk: 'd-01#c01', doc: 'product-manual.pdf', sim: 0.74, hit: false, text: CHUNK_TEXT[1] },
+    { chunk: 'd-02#c11', doc: 'faq-2026.md', sim: 0.69, hit: false, text: '……FAQ：退款相关问题的统一答复口径，含到账时间与手续费说明……' },
+    { chunk: 'd-01#c04', doc: 'product-manual.pdf', sim: 0.62, hit: false, text: CHUNK_TEXT[4] }
+  ];
+
+  let RECALL = AE.API.isMock() ? MOCK_RECALL.slice() : [];
+  let RERANK_AFTER = AE.API.isMock() ? ['d-01#c03', 'd-01#c01', 'd-01#c06', 'd-02#c11', 'd-01#c04'] : [];
+  const PTS = [[.12, .3], [.2, .68], [.28, .2], [.34, .5], [.4, .78], [.44, .34], [.5, .6], [.55, .16], [.58, .44], [.63, .7], [.66, .3], [.7, .52], [.74, .2], [.78, .66], [.82, .4], [.86, .58], [.16, .5], [.24, .82], [.48, .82], [.88, .26], [.36, .66], [.68, .8]];
+  const QUERY_PT = [.6, .46];
+  const HIT_IDX = [9, 13, 7, 20, 10];
+
+  content.innerHTML = `
+    <div class="kb-bar" data-od-id="kb-bar">
+      <div class="chip-group" id="kb-tabs"></div>
+      <span id="kb-kind-tag"></span>
+      <span class="grow"></span>
+      <button class="btn btn-secondary btn-sm" id="btn-new-kb">+ 新建知识库</button>
+      <button class="btn btn-secondary btn-sm" id="btn-doc-upload">↑ 上传文档</button>
+      <button class="btn btn-sign btn-sm" id="btn-eval" data-od-id="kb-eval">发起 RAG 评测</button>
+    </div>
+    <div class="kb-grid" id="kb-grid" data-od-id="kb-grid"></div>`;
+
+  const grid = document.getElementById('kb-grid');
+  const $ = id => document.getElementById(id);
+
+  function kindTagHtml(k) {
+    if (!k) return '';
+    return k.kind === 'lightrag'
+      ? '<span class="kind-tag kind-rag">lightrag · 原生 query</span>'
+      : '<span class="kind-tag" style="background:#FEF3C7;color:#B45309">external_chat · 仅 chat/completions</span>';
+  }
+
+  /* ─── 左栏：文档列表与切块流 ─── */
+  function chunkCount() { return chunkSize === 256 ? 14 : chunkSize === 1024 ? 4 : 8; }
+  
+  function docsColHtml() {
+    const docs = AE.DB.kbDocs || [];
+    const d = docs.find(x => x.doc_id === activeDoc) || docs[0];
+    if (!docs.length) {
+      return `
+        <div class="rail-label">知识文档（0）</div>
+        <div class="empty" style="padding:32px 20px">
+          <div class="small tertiary">当前库暂无文档，点上方「↑ 上传文档」开始分块建索引；doc_id 由系统自动生成。</div>
+        </div>`;
+    }
+    const mockChunks = Array.from({ length: chunkCount() }, (_, i) => ({
+      chunk_id: `${activeDoc || 'd-01'}#c${String(i + 1).padStart(2, '0')}`,
+      tokens: Math.round(chunkSize * (0.75 + ((i * 37) % 25) / 100)),
+      text: CHUNK_TEXT[i % CHUNK_TEXT.length]
+    }));
+    const chunks = AE.API.isMock() ? mockChunks : (d.chunks || []);
+    const ovW = Math.round(overlap / chunkSize * 100);
+    return `
+      <div class="row-between mb8">
+        <span class="rail-label" style="margin:0">知识文档（${docs.length}）</span>
+        <button class="link-btn" id="btn-upload-sub" style="font-size:11px">+ 添加</button>
+      </div>
+      <div class="section-gap" style="gap:8px;margin-bottom:18px">
+        ${docs.map(x => `
+          <div class="doc-item ${x.doc_id === activeDoc ? 'on' : ''}" data-doc="${x.doc_id}">
+            <span class="grow" style="min-width:0">
+              <span class="d-name">${AE.esc(x.filename)}</span><br>
+              <span class="small tertiary mono">${x.size} · ${x.doc_id}</span>
+            </span>
+            ${x.status === 'indexed' ? '<span class="badge badge-succeeded"><i class="bdot"></i>已索引</span>' : '<span class="badge badge-running"><i class="bdot"></i>索引中</span>'}
+            <button class="link-btn danger" data-deldoc="${x.doc_id}" title="删除文档" style="padding:0 2px;flex:0 0 auto">✕</button>
+          </div>`).join('')}
+      </div>
+      <div class="row-between" style="margin-bottom:8px">
+        <span class="rail-label" style="margin:0">切块预览 · ${AE.esc(d ? d.filename : '文档')}</span>
+      </div>
+      <div class="row" style="gap:8px;margin-bottom:12px">
+        <select class="select" id="ck-size" style="height:30px;padding:3px 30px 3px 10px;font-size:12px;flex:1">
+          ${[256, 512, 1024].map(s => `<option ${s === chunkSize ? 'selected' : ''} value="${s}">chunk ${s}</option>`).join('')}
+        </select>
+        <select class="select" id="ck-ov" style="height:30px;padding:3px 30px 3px 10px;font-size:12px;flex:1">
+          ${[0, 64, 128].map(s => `<option ${s === overlap ? 'selected' : ''} value="${s}">overlap ${s}</option>`).join('')}
+        </select>
+      </div>
+      <div class="section-gap" style="gap:8px" data-od-id="chunk-flow">
+        ${chunks.length ? chunks.map((chunk, i) => {
+          const cid = chunk.chunk_id || chunk.id;
+          const inRecall = queried && RECALL.some(r => r.chunk === cid);
+          const tk = chunk.tokens || chunk.token_count || '—';
+          return `<div class="chunk ${inRecall ? 'hit' : ''}" data-chunk="${cid}">
+            <div class="row-between"><span class="ck-id">${cid}</span><span class="ck-tokens">${tk} tok</span></div>
+            <div class="ck-text">${AE.esc(chunk.text || chunk.content || '')}</div>
+            ${overlap ? `<i class="ck-ov" style="width:${ovW}%" title="与下一块重叠 ${overlap} tok"></i>` : ''}
+          </div>`;
+        }).join('') : '<div class="empty" style="padding:24px 12px"><div class="small tertiary">服务端未返回切块预览。</div></div>'}
+      </div>
+      <p class="small tertiary mt8">分块策略: chunk_size=${chunkSize} · overlap=${overlap}；命中召回的切块自动高亮。</p>`;
+  }
+
+  /* ─── 中栏：检索 Playground ─── */
+  function scatterSvg() {
+    if (!AE.API.isMock()) {
+      return '<div class="empty" style="height:280px;display:flex;align-items:center;justify-content:center"><div class="small tertiary">实时模式未定义向量投影接口，故不展示示例散点或邻域连线。</div></div>';
+    }
+    const W = 520, H = 280;
+    const qx = QUERY_PT[0] * W, qy = QUERY_PT[1] * H;
+    const pts = PTS.map((p, i) => {
+      const hit = queried && HIT_IDX.includes(i);
+      return `<circle class="pt ${hit ? 'hit' : ''}" cx="${(p[0] * W).toFixed(0)}" cy="${(p[1] * H).toFixed(0)}" r="${hit ? 5.5 : 3.4}"/>`;
+    }).join('');
+    const links = queried ? HIT_IDX.map(i => `<line class="lk" x1="${qx}" y1="${qy}" x2="${(PTS[i][0] * W).toFixed(0)}" y2="${(PTS[i][1] * H).toFixed(0)}"/>`).join('') : '';
+    const ring = queried ? `<circle class="ring" cx="${qx}" cy="${qy}" r="96"/>` : '';
+    const q = queried ? `<circle class="pt-query" cx="${qx}" cy="${qy}" r="6"/><circle class="ring" cx="${qx}" cy="${qy}" r="14" style="opacity:.5"/>` : '';
+    return `<svg class="scatter" viewBox="0 0 ${W} ${H}" data-od-id="recall-scatter">${ring}${links}${pts}${q}</svg>`;
+  }
+
+  function playColHtml() {
+    return `
+      <div class="row-between mb8">
+        <span class="rail-label" style="margin:0">检索 Playground · ${queryMode}</span>
+        <div class="chip-group" id="query-mode-chips">
+          ${['hybrid', 'local', 'global', 'naive'].map(m => `<button class="chip ${m === queryMode ? 'on' : ''}" data-qm="${m}">${m}</button>`).join('')}
+        </div>
+      </div>
+      
+      <div class="row" style="gap:8px;margin-bottom:8px">
+        <input class="input mono" id="q-input" style="font-size:13px" value="退款多久到账？" placeholder="输入测试 Query 问句...">
+        <button class="btn btn-sign btn-sm" id="btn-query" data-od-id="btn-query" style="flex:0 0 auto">检索</button>
+      </div>
+
+      <div class="row wrap mb12" style="gap:6px">
+        <span class="small tertiary">快速填充:</span>
+        <span class="quick-q-pill" data-fill="退款多久到账？">退款多久到账？</span>
+        <span class="quick-q-pill" data-fill="如何修改默认结算账户？">如何修改默认结算账户？</span>
+        <span class="quick-q-pill" data-fill="发票开具申请入口在哪里？">发票开具申请入口在哪里？</span>
+        <span class="quick-q-pill" data-fill="连续输错支付密码怎么办？">连续输错支付密码怎么办？</span>
+      </div>
+
+      <div class="chart-box" style="margin-bottom:14px">
+        <div class="row-between" style="margin-bottom:8px">
+          <span class="small" style="font-weight:600">向量空间 2D 降维投影 (Vector Projection)</span>
+          <span class="small tertiary mono">bge-large-zh · 22 chunks</span>
+        </div>
+        ${scatterSvg()}
+        <div class="chart-legend">
+          <span><i style="background:var(--text-tertiary);opacity:.45"></i>语料切块</span>
+          <span><i style="background:var(--accent-ai)"></i>当前 Query</span>
+          <span><i style="background:var(--c-kb)"></i>Top-5 召回邻域</span>
+        </div>
+      </div>
+
+      ${queried ? `
+      <div class="rail-label">Top-5 相似度召回结果</div>
+      <div class="section-gap" style="gap:8px;margin-bottom:16px" data-od-id="recall-list">
+        ${RECALL.map((r, i) => `
+          <div class="recall-item" data-recall="${r.chunk}">
+            <div class="row" style="gap:8px;margin-bottom:6px">
+              <span class="r-id">#${i + 1} ${r.chunk}</span>
+              <span class="small tertiary mono">${AE.esc(r.doc)}</span>
+              <span class="grow"></span>
+              ${r.hit ? '<span class="badge badge-succeeded"><i class="bdot"></i>命中 expected_doc_ids</span>' : '<span class="small tertiary">未命中</span>'}
+            </div>
+            <div class="sim-row"><span class="sim-track"><i style="width:${Math.round(r.sim * 100)}%"></i></span><span class="rc-bar-val">${r.sim.toFixed(2)}</span></div>
+            <div class="ck-text" style="margin-top:6px;font-size:12px">${AE.esc(r.text)}</div>
+          </div>`).join('')}
+      </div>
+
+      <div class="rail-label">重排对比 · Rerank Rank Shifts</div>
+      <div class="row" style="align-items:flex-start;gap:12px" data-od-id="rerank-compare">
+        <div class="rerank-col">
+          <div class="small tertiary" style="margin-bottom:6px">向量初检召回序</div>
+          ${RECALL.map((r, i) => `<div class="rr-row"><span class="tertiary">${i + 1}</span>${r.chunk}</div>`).join('')}
+        </div>
+        <div class="rerank-col">
+          <div class="small tertiary" style="margin-bottom:6px">重排后最终序 (Reranked)</div>
+          ${RERANK_AFTER.map((c, i) => {
+            const before = RECALL.findIndex(r => r.chunk === c);
+            const delta = before - i;
+            return `<div class="rr-row" style="${delta !== 0 ? 'border-color:color-mix(in srgb, var(--c-kb) 40%, var(--border-subtle))' : ''}">
+              <span class="tertiary">${i + 1}</span>${c}
+              <span class="grow"></span>
+              ${delta > 0 ? `<span class="rr-delta" style="color:var(--accent-success)">↑${delta}</span>` : delta < 0 ? `<span class="rr-delta" style="color:var(--accent-warning)">↓${-delta}</span>` : '<span class="rr-delta tertiary">—</span>'}
+            </div>`;
+          }).join('')}
+        </div>
+      </div>` : `
+      <div class="empty" style="padding:36px 24px">
+        <div class="small tertiary">输入 query 后点「检索」，查看召回块、相似度与重排对比</div>
+      </div>`}`;
+  }
+
+  /* ─── 右栏：本次检索指标 + 黄金 QA ─── */
+  function sideColHtml() {
+    const k = AE.DB.kbs.find(x => x.id === activeKb) || AE.DB.kbs[0];
+    const qas = (AE.DB.goldQAs || []).filter(g => g.kb_id === activeKb);
+    return `
+      <div class="rail-label">本次检索指标 · K=5</div>
+      <div class="metric-strip" style="margin-bottom:16px" data-od-id="kb-metrics">
+        <div class="metric-cell"><div class="m-num">${queried && queryMetrics.hit_rate != null ? Number(queryMetrics.hit_rate).toFixed(2) : '—'}</div><div class="m-label">Hit Rate@5</div></div>
+        <div class="metric-cell"><div class="m-num">${queried && queryMetrics.mrr != null ? Number(queryMetrics.mrr).toFixed(2) : '—'}</div><div class="m-label">MRR (倒数排名)</div></div>
+        <div class="metric-cell"><div class="m-num">${queried && queryMetrics.recall != null ? Number(queryMetrics.recall).toFixed(2) : '—'}</div><div class="m-label">Recall@5</div></div>
+        <div class="metric-cell"><div class="m-num">${queried && queryMetrics.contain != null ? Number(queryMetrics.contain).toFixed(2) : '—'}</div><div class="m-label">答案 contain 规则分</div></div>
+      </div>
+
+      <div class="row-between" style="margin-bottom:8px">
+        <span class="rail-label" style="margin:0">黄金问答集 (Gold QA)</span>
+        <div class="row" style="gap:6px">
+          <button class="btn btn-ai btn-sm" id="qa-ai-gen">✨ AI 生成</button>
+          <button class="btn btn-secondary btn-sm" id="qa-upload">${qas.length ? '覆盖上传 +1' : '上传 QA'}</button>
+        </div>
+      </div>
+
+      <div class="section-gap" style="gap:8px;margin-bottom:16px">
+        ${qas.length ? qas.map(g => `
+          <div class="panel" style="padding:12px 14px;border-radius:10px">
+            <div class="row-between">
+              <span style="font-size:13px;font-weight:600">${AE.esc(g.name)}</span>
+              <span class="tag-soft" style="color:var(--c-kb)">v${g.version}</span>
+            </div>
+            <div class="small tertiary mt8"><span class="num">${g.row_count}</span> 条 · 无 expected_doc_ids 样本不进分母</div>
+          </div>`).join('') : '<p class="small tertiary">该库暂无黄金 QA，发起评测前需先上传或 AI 生成。</p>'}
+      </div>
+
+      <div class="rail-label">评测口径说明</div>
+      <p class="small muted" style="line-height:1.6">
+        <b>命中判定</b>：返回 context.id / doc_id 与 expected_doc_ids 集合相交即为 Hit。内置库检索走 LightRAG 原生 query（naive / local / global / hybrid），不伪装成 Chat。
+      </p>
+      ${!k.is_core ? '<button class="btn btn-ghost btn-sm mt16" id="btn-core" style="width:100%">★ 标为核心知识库</button>' : ''}`;
+  }
+
+  /* ─── 外部 Chat 库视图 ─── */
+  function externalHtml() {
+    const qas = (AE.DB.goldQAs || []).filter(g => g.kb_id === activeKb);
+    return `
+      <div class="kb-col" style="grid-column:1 / 4">
+        <div class="page-narrow section-gap" style="max-width:760px;margin-top:20px">
+          <div class="info-strip" style="border-radius:12px">
+            外部库仅通过 <span class="mono">POST {base}/v1/chat/completions</span> 对接：检索切块过程对平台黑盒不可见，不展示分块与空间投影，评测关注端到端答案侧指标（contain / judge）。
+          </div>
+          <div class="panel">
+            <div class="panel-title">绑定 RAG 服务档</div>
+            <div class="row"><span class="tag-soft mono">rag-客服外挂 · rag-chat-v2</span><span class="small tertiary">恰好 1 个，在协议档管理维护</span></div>
+          </div>
+          <div class="panel">
+            <div class="row-between mb8">
+              <div class="panel-title" style="margin:0">黄金 QA 集</div>
+              <button class="btn btn-secondary btn-sm" id="qa-upload-ext">覆盖上传 +1</button>
+            </div>
+            ${qas.map(g => `<div class="row" style="padding:6px 0"><span style="font-weight:500">${AE.esc(g.name)}</span><span class="tag-soft" style="color:var(--c-kb)">v${g.version}</span><span class="small tertiary num" style="margin-left:auto">${g.row_count} 条</span></div>`).join('')}
+          </div>
+        </div>
+      </div>`;
+  }
+
+  /* ─── 统一渲染与事件绑定 ─── */
+  function render() {
+    const k = AE.DB.kbs.find(x => x.id === activeKb) || AE.DB.kbs[0];
+    if (!k) {
+      $('kb-kind-tag').innerHTML = '';
+      grid.innerHTML = '<div class="empty" style="grid-column:1 / 4;padding:56px 24px"><div class="small tertiary">暂无知识库。请先新建知识库后再上传文档或进行检索。</div></div>';
+      return;
+    }
+    $('kb-kind-tag').innerHTML = kindTagHtml(k);
+    $('btn-doc-upload').style.display = k.kind === 'lightrag' ? '' : 'none';
+
+    if (k.kind !== 'lightrag') {
+      grid.innerHTML = externalHtml();
+      const qu = $('qa-upload-ext');
+      if (qu) qu.onclick = qaOverwrite;
+      return;
+    }
+
+    grid.innerHTML = `
+      <div class="kb-col" data-od-id="kb-docs">${docsColHtml()}</div>
+      <div class="kb-col" data-od-id="kb-play">${playColHtml()}</div>
+      <div class="kb-col" data-od-id="kb-side">${sideColHtml()}</div>`;
+
+    // 切换文档
+    grid.querySelectorAll('[data-doc]').forEach(el => el.onclick = async () => {
+      activeDoc = el.dataset.doc;
+      if (!AE.API.isMock()) await loadActiveDocChunks();
+      render();
+    });
+    
+    // 删除文档
+    grid.querySelectorAll('[data-deldoc]').forEach(b => b.onclick = e => {
+      e.stopPropagation();
+      const doc = (AE.DB.kbDocs || []).find(x => x.doc_id === b.dataset.deldoc);
+      if (!doc) return;
+      AE.dialog({
+        title: `删除文档「${doc.filename}」？`,
+        body: '对应切块与向量索引将被移除。已跑任务的历史快照不受影响。',
+        okText: '确认删除', okClass: 'btn-danger',
+        onOk: async () => {
+          await AE.API.kb.deleteDoc(activeKb, doc.doc_id);
+          AE.DB.kbDocs = AE.DB.kbDocs.filter(x => x.doc_id !== doc.doc_id);
+          if (activeDoc === doc.doc_id) activeDoc = AE.DB.kbDocs.length ? AE.DB.kbDocs[0].doc_id : null;
+          render();
+          AE.toast('success', '文档已删除');
+        }
+      });
+    });
+
+    // 分块参数调节
+    $('ck-size').onchange = async e => { chunkSize = +e.target.value; if (!AE.API.isMock()) await loadActiveDocChunks(); render(); };
+    $('ck-ov').onchange = async e => { overlap = +e.target.value; if (!AE.API.isMock()) await loadActiveDocChunks(); render(); };
+
+    // 检索模式切换
+    grid.querySelectorAll('#query-mode-chips .chip').forEach(ch => {
+      ch.onclick = () => { queryMode = ch.dataset.qm; render(); };
+    });
+
+    // 快速填词
+    grid.querySelectorAll('.quick-q-pill').forEach(p => {
+      p.onclick = () => {
+        $('q-input').value = p.dataset.fill;
+        $('btn-query').click();
+      };
+    });
+
+    // 执行检索 Playground
+    $('btn-query').onclick = async () => {
+      const q = $('q-input').value.trim();
+      if (!q) { AE.toast('error', '请输入 Query 问句'); return; }
+      const btn = $('btn-query');
+      btn.disabled = true; btn.textContent = '检索中…';
+      try {
+        const result = await AE.API.kb.query(activeKb, { query: q, mode: queryMode, k: 5 });
+        RECALL = (result.items || []).map(item => ({
+          chunk: item.chunk_id || item.chunk || item.id,
+          doc: item.doc_name || item.doc || '',
+          sim: Number(item.similarity != null ? item.similarity : item.score) || 0,
+          hit: !!item.hit,
+          text: item.text || item.content || ''
+        }));
+        if (AE.API.isMock() && !RECALL.length) RECALL = MOCK_RECALL.slice();
+        RERANK_AFTER = (result.reranked_ids || result.reranked || (AE.API.isMock() ? ['d-01#c03', 'd-01#c01', 'd-01#c06', 'd-02#c11', 'd-01#c04'] : RECALL.map(item => item.chunk))).map(item => typeof item === 'string' ? item : (item.chunk_id || item.chunk || item.id));
+        queryMetrics = result.metrics || (AE.API.isMock() ? { hit_rate: 0.80, mrr: 0.74, recall: 0.85, contain: 0.83 } : {});
+        queried = true;
+        render();
+        AE.toast('success', `已返回 ${RECALL.length} 个检索切块 · 模式=${queryMode}`);
+      } catch (e) {
+        btn.disabled = false; btn.textContent = '检索';
+        AE.toast('error', `检索失败：${e.message}`);
+      }
+    };
+
+    // 切块联动定位
+    grid.querySelectorAll('[data-recall]').forEach(el => el.onclick = () => {
+      const cid = el.dataset.recall;
+      const target = grid.querySelector(`[data-chunk="${cid}"]`);
+      if (target) {
+        const docCol = grid.querySelector('[data-od-id="kb-docs"]');
+        docCol.scrollTop = target.offsetTop - docCol.offsetTop + docCol.scrollTop - 60;
+        target.style.boxShadow = '0 0 0 2px var(--c-kb)';
+        setTimeout(() => target.style.boxShadow = '', 1200);
+      } else {
+        AE.toast('info', cid + ' 属于其他文档');
+      }
+    });
+
+    // 上传辅助按钮
+    const us = $('btn-upload-sub');
+    if (us) us.onclick = () => $('doc-file-input').click();
+
+    const qu = $('qa-upload'); if (qu) qu.onclick = qaOverwrite;
+    const qg = $('qa-ai-gen'); if (qg) qg.onclick = qaAiGen;
+    const bc = $('btn-core'); if (bc) bc.onclick = () => {
+      const k = AE.DB.kbs.find(x => x.id === activeKb);
+      if (k) k.is_core = true;
+      AE.toast('success', '已标为核心知识库');
+      renderTabs();
+      render();
+    };
+  }
+
+  /* ─── AI 生成黄金 QA ─── */
+  function qaAiGen() {
+    const GEN = [
+      { q: '退款多久到账？', r: '审核通过后 1-3 个工作日原路退回。', docs: ['d-01#c03'] },
+      { q: '余额提现有限额吗？', r: '单笔不超过 5 万元，单日不超过 20 万元。', docs: ['d-01#c02'] },
+      { q: '电子发票多久发送？', r: '提交开票信息后 24 小时内发送至预留邮箱。', docs: ['d-01#c06'] }
+    ];
+
+    AE.modal({
+      title: '✨ AI 智能抽取黄金 QA (POST /api/kb/{id}/gold-qa)',
+      wide: true,
+      body: `
+        <p class="small muted" style="margin-bottom:12px">系统已分析当前库已索引文档，自动抽取出 3 条标准问答对并关联 <span class="mono">expected_doc_ids</span>：</p>
+        <div class="section-gap" style="gap:8px">
+          ${GEN.map((g, i) => `
+            <div class="panel" style="padding:10px 12px;border-radius:8px">
+              <div class="row-between mb4">
+                <b style="font-weight:600;font-size:13px">${AE.esc(g.q)}</b>
+                <span class="badge badge-succeeded"><i class="bdot"></i>抽取合格</span>
+              </div>
+              <div class="small muted mb4">${AE.esc(g.r)}</div>
+              <div class="small tertiary mono">expected_doc_ids: [${g.docs.map(d => '"' + d + '"').join(', ')}]</div>
+            </div>`).join('')}
+        </div>`,
+      foot: `<button class="btn btn-secondary" id="qa-gen-c">取消</button><button class="btn btn-ai" id="qa-gen-ok">确认入库并版本 +1</button>`,
+      onMount: (el, close) => {
+        el.querySelector('#qa-gen-c').onclick = close;
+        el.querySelector('#qa-gen-ok').onclick = async () => {
+          await AE.API.kb.uploadGoldQA(activeKb, { items: GEN });
+          let qas = AE.DB.goldQAs.filter(g => g.kb_id === activeKb);
+          if (qas.length) {
+            qas.forEach(g => { g.version += 1; g.row_count += 3; });
+          } else {
+            AE.DB.goldQAs.push({ id: 'gq-' + Date.now(), kb_id: activeKb, name: 'qa-v1', version: 1, row_count: 3 });
+          }
+          close();
+          render();
+          AE.toast('success', 'AI 抽取的 3 条黄金 QA 已入库，版本已递增');
+        };
+      }
+    });
+  }
+
+  /* ─── 覆盖上传黄金 QA ─── */
+  function qaOverwrite() {
+    const qFileInput = $('qa-file-input');
+    qFileInput.onchange = async function () {
+      const f = this.files[0];
+      this.value = '';
+      if (!f) return;
+      await AE.API.kb.uploadGoldQA(activeKb, { filename: f.name });
+      let qas = AE.DB.goldQAs.filter(g => g.kb_id === activeKb);
+      if (qas.length) {
+        qas.forEach(g => g.version += 1);
+      } else {
+        AE.DB.goldQAs.push({ id: 'gq-' + Date.now(), kb_id: activeKb, name: 'qa-v1', version: 1, row_count: 20 });
+      }
+      render();
+      AE.toast('success', `已上传「${f.name}」，黄金 QA 版本 +1`);
+    };
+    qFileInput.click();
+  }
+
+  /* ─── 渲染顶部 Tab ─── */
+  function renderTabs() {
+    document.getElementById('kb-tabs').innerHTML = AE.DB.kbs.map(k => `
+      <button class="chip ${k.id === activeKb ? 'on' : ''}" data-kb="${k.id}">
+        ${AE.esc(k.name)}${k.is_core ? ' ★' : ''}
+      </button>`).join('');
+
+    document.querySelectorAll('#kb-tabs .chip').forEach(ch => {
+      ch.onclick = async () => {
+        activeKb = ch.dataset.kb;
+        queried = AE.API.isMock();
+        RECALL = AE.API.isMock() ? MOCK_RECALL.slice() : [];
+        RERANK_AFTER = AE.API.isMock() ? ['d-01#c03', 'd-01#c01', 'd-01#c06', 'd-02#c11', 'd-01#c04'] : [];
+        queryMetrics = AE.API.isMock() ? { hit_rate: 0.80, mrr: 0.74, recall: 0.85, contain: 0.83 } : {};
+        if (!AE.API.isMock()) { await loadKbAssets(); await loadActiveDocChunks(); }
+        renderTabs();
+        render();
+      };
+    });
+  }
+
+  /* ─── 文档真实上传 ─── */
+  $('btn-doc-upload').onclick = () => $('doc-file-input').click();
+  $('doc-file-input').onchange = async function () {
+    const f = this.files[0];
+    this.value = '';
+    if (!f) return;
+    if (!AE.API.isMock()) {
+      try {
+        const form = new FormData();
+        form.append('file', f, f.name);
+        const uploaded = await AE.API.kb.uploadDocs(activeKb, form);
+        if (!uploaded || !uploaded.doc_id) throw new Error('上传接口未返回 doc_id');
+        await loadKbAssets();
+        await loadActiveDocChunks();
+        render();
+        AE.toast('success', `「${f.name}」已提交索引，当前状态：${uploaded.status || 'indexing'}`);
+      } catch (e) {
+        AE.toast('error', `文档上传失败：${e.message}`);
+      }
+      return;
+    }
+    const docId = 'd-' + String(AE.DB.kbDocs.length + 1).padStart(2, '0');
+    const newDoc = {
+      doc_id: docId,
+      filename: f.name,
+      size: f.size > 1048576 ? (f.size / 1048576).toFixed(1) + ' MB' : Math.round(f.size / 1024) + ' KB',
+      status: 'indexing'
+    };
+    AE.DB.kbDocs.push(newDoc);
+    activeDoc = docId;
+    render();
+    AE.toast('info', `「${f.name}」已上传，后台正在进行切块与向量索引…`);
+
+    try { await AE.API.kb.uploadDocs(activeKb, new FormData()); } catch (e) { AE.toast('error', `上传失败：${e.message}`); return; }
+
+    setTimeout(() => {
+      newDoc.status = 'indexed';
+      render();
+      AE.toast('success', `「${f.name}」索引完成，可进行分块预览与检索`);
+    }, 1200);
+  };
+
+  /* ─── 新建知识库弹窗 ─── */
+  $('btn-new-kb').onclick = () => {
+    AE.modal({
+      title: '新建知识库 (POST /api/kb)',
+      body: `
+        <div class="field"><span class="field-label">知识库名称 <i class="req">*</i></span><input class="input" id="nk-name" placeholder="如 ops-knowledge-base"></div>
+        <div class="field"><span class="field-label">类型 (Kind) <i class="req">*</i></span>
+          <div class="chip-group" id="nk-kind">
+            <button class="chip on" data-k="lightrag">LightRAG（内置 · 原生 query）</button>
+            <button class="chip" data-k="external_chat">外部 Chat（仅 chat/completions）</button>
+          </div>
+        </div>
+        <div class="field" id="nk-profile-row" style="display:none">
+          <span class="field-label">绑定 RAG 服务档 <i class="req">*</i></span>
+          <select class="select"><option value="p-ragsvc">rag-客服外挂 · rag-chat-v2</option></select>
+        </div>
+        <div class="field-error" id="nk-err" style="display:none"></div>`,
+      foot: `<button class="btn btn-secondary" id="nk-c">取消</button><button class="btn btn-sign" id="nk-ok">确认创建</button>`,
+      onMount: (el, close) => {
+        let kind = 'lightrag';
+        el.querySelector('#nk-c').onclick = close;
+        el.querySelectorAll('#nk-kind .chip').forEach(ch => ch.onclick = () => {
+          kind = ch.dataset.k;
+          el.querySelectorAll('#nk-kind .chip').forEach(x => x.classList.toggle('on', x === ch));
+          el.querySelector('#nk-profile-row').style.display = kind === 'external_chat' ? '' : 'none';
+        });
+        el.querySelector('#nk-ok').onclick = async () => {
+          const name = el.querySelector('#nk-name').value.trim();
+          const err = el.querySelector('#nk-err');
+          if (!name) { err.textContent = '请填写知识库名称'; err.style.display = ''; return; }
+          
+          const draft = { name, kind, doc_count: kind === 'lightrag' ? 0 : null, is_core: false, owner: me };
+          try {
+            const created = AE.API.isMock() ? { ...draft, id: 'kb-' + Date.now() } : await AE.API.kb.create(draft);
+            if (!created || !created.id) throw new Error('创建接口未返回 kb id');
+            const nk = { ...draft, ...created };
+            AE.DB.kbs.push(nk);
+            activeKb = nk.id;
+          } catch (e) { err.textContent = `创建失败：${e.message}`; err.style.display = ''; return; }
+          close();
+          renderTabs();
+          render();
+          AE.toast('success', '知识库已成功创建');
+        };
+      }
+    });
+  };
+
+  /* ─── 发起 RAG 评测抽屉 ─── */
+  $('btn-eval').onclick = () => {
+    const k = AE.DB.kbs.find(x => x.id === activeKb) || AE.DB.kbs[0];
+    const isLight = k.kind === 'lightrag';
+    const qas = (AE.DB.goldQAs || []).filter(g => g.kb_id === activeKb);
+
+    AE.drawer({
+      title: '发起 RAG 检索评测 (POST /api/tasks)',
+      wide: true,
+      body: `
+        <div class="field mb12"><span class="field-label">评测类型</span><div>${AE.kindTag('rag')}</div></div>
+        <div class="form-row mb12">
+          <div class="field">
+            <span class="field-label">目标知识库 (kb_id) <i class="req">*</i></span>
+            <select class="select" id="eval-kb">
+              ${AE.DB.kbs.map(x => `<option value="${x.id}" ${x.id === k.id ? 'selected' : ''}>${AE.esc(x.name)}（${x.kind === 'lightrag' ? 'LightRAG' : '外部 Chat'}）</option>`).join('')}
+            </select>
+          </div>
+          <div class="field">
+            <span class="field-label">黄金 QA 集 (gold_qa_id) <i class="req">*</i></span>
+            <select class="select" id="eval-qa">
+              ${qas.map(g => `<option value="${g.id}">${AE.esc(g.name)} v${g.version} · ${g.row_count} 条</option>`).join('') || '<option value="">该库暂无黄金 QA</option>'}
+            </select>
+          </div>
+        </div>
+        ${isLight ? `
+          <div class="field mb12">
+            <span class="field-label">检索模式 (rag_mode，多选)</span>
+            <div class="chip-group" id="rw-modes">
+              ${['naive', 'local', 'global', 'hybrid'].map(m => `<button class="chip ${m === 'hybrid' ? 'on' : ''}">${m}</button>`).join('')}
+            </div>
+          </div>` : `
+          <div class="field mb12">
+            <span class="field-label">RAG 服务协议档 <i class="req">*</i></span>
+            <select class="select"><option>rag-客服外挂 · rag-chat-v2</option></select>
+          </div>`}
+        <div class="field mb12" style="max-width:140px">
+          <span class="field-label">Top-K 召回量 (1–20)</span>
+          <input class="input num" id="eval-k" value="5" type="number" min="1" max="20">
+        </div>
+        ${AE.runConfigFoldHtml('rw')}
+        ${AE.stressFieldsHtml('rw')}`,
+      foot: `<button class="btn btn-secondary" id="eval-c">取消</button><button class="btn btn-sign" id="eval-ok">确认下单入队</button>`,
+      onMount: (el, close) => {
+        AE.bindFold(el);
+        AE.bindStressFields(el, 'rw');
+        el.querySelectorAll('#rw-modes .chip').forEach(ch => ch.onclick = () => ch.classList.toggle('on'));
+        el.querySelector('#eval-c').onclick = close;
+        el.querySelector('#eval-ok').onclick = async () => {
+          const selectedModes = Array.from(el.querySelectorAll('#rw-modes .chip.on')).map(c => c.textContent.trim());
+          const with_stress = el.querySelector('#rw-ws') ? el.querySelector('#rw-ws').checked : false;
+          const kVal = +el.querySelector('#eval-k').value || 5;
+
+          const taskSpec = {
+            kind: 'rag',
+            kb_id: activeKb,
+            gold_qa_id: (qas[0] && qas[0].id) || 'gq-1',
+            rag_mode: selectedModes.length ? selectedModes : ['hybrid'],
+            k: kVal,
+            with_stress,
+            run: { sample_size: 1000, concurrency: 4, timeout_s: 60, retry: 1, temperature: 0, max_tokens: 1024 }
+          };
+
+          await AE.API.tasks.create(taskSpec);
+          close();
+          AE.toast('success', 'RAG 评测任务已成功创建并进入调度队列（queued）');
+          setTimeout(() => location.href = 'tasks.html', 600);
+        };
+      }
+    });
+  };
+
+  /* ─── 初始化 ─── */
+  async function loadKbAssets() {
+    if (!activeKb) return;
+    const [docsRes, qaRes] = await Promise.all([
+      AE.API.kb.listDocs(activeKb),
+      AE.API.kb.getGoldQA(activeKb)
+    ]);
+    AE.DB.kbDocs = docsRes.items || [];
+    AE.DB.goldQAs = qaRes.items || [];
+    activeDoc = (AE.DB.kbDocs[0] && AE.DB.kbDocs[0].doc_id) || null;
+  }
+
+  async function loadActiveDocChunks() {
+    if (!activeKb || !activeDoc) return;
+    const result = await AE.API.kb.getDocChunks(activeKb, activeDoc, { chunk_size: chunkSize, overlap });
+    const doc = (AE.DB.kbDocs || []).find(item => item.doc_id === activeDoc);
+    if (doc) doc.chunks = result.items || result.chunks || [];
+  }
+
+  async function init() {
+    try {
+      const kbRes = await AE.API.kb.list();
+      AE.DB.kbs = (kbRes && kbRes.items) || [];
+      activeKb = (AE.DB.kbs[0] && AE.DB.kbs[0].id) || null;
+      if (!AE.API.isMock()) { await loadKbAssets(); await loadActiveDocChunks(); }
+    } catch (e) {
+      if (!AE.API.isMock()) AE.toast('error', `知识库加载失败：${e.message}`);
+    }
+    renderTabs();
+    render();
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>

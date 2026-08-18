@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>原型导航 · AI 测试与评估平台</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/shell.css">
+<style>
+  body { overflow: auto; }
+  .launch { max-width: 1080px; margin: 0 auto; padding: 72px 32px 64px; }
+  .launch-hero { text-align: center; margin-bottom: 48px; }
+  .launch-hero .brand-mark { width: 56px; height: 56px; border-radius: 15px; font-size: 29px; margin: 0 auto 18px; }
+  .launch-title { font-family: var(--font-display); font-size: clamp(30px, 4vw, 42px); font-weight: 700; letter-spacing: -.02em; }
+  .launch-sub { color: var(--text-secondary); margin-top: 12px; font-size: 15px; }
+  .route-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  .route-card {
+    display: flex; align-items: center; gap: 14px;
+    background: rgba(255, 255, 255, .66); backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, .8); border-radius: 14px;
+    padding: 16px 18px; transition: transform .14s ease, box-shadow .14s ease;
+  }
+  .route-card:hover { transform: translateY(-2px); box-shadow: 0 10px 28px rgba(17, 24, 39, .1); }
+  .route-ico { width: 38px; height: 38px; flex: 0 0 38px; border-radius: 11px; display: grid; place-items: center; background: var(--t); color: var(--c); }
+  .route-ico svg { width: 19px; height: 19px; }
+  .route-name { font-weight: 600; font-size: 14px; }
+  .route-path { font-family: var(--font-mono); font-size: 11px; color: var(--text-tertiary); margin-top: 2px; }
+  .route-desc { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+  .section-label { font-family: var(--font-mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--text-tertiary); margin: 0 0 14px; }
+  @media (max-width: 860px) { .route-grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="launch" data-od-id="launcher">
+  <div class="launch-hero">
+    <span class="brand-mark">A</span>
+    <h1 class="launch-title">AI 测试与评估平台</h1>
+    <p class="launch-sub">高保真前端原型 · PRD V1.6.3 / 设计规范 V1.2 / API V1.0 · 浅色科技感（网格纹理 / 等宽数字 / 发光描边）· 顶栏居中「大模型 / RAG」双模式切换，全站跟随 · 单一角色全员同权</p>
+  </div>
+
+  <p class="section-label">页面清单（11 条路由 + 登录）</p>
+  <div class="route-grid" id="route-grid"></div>
+</div>
+
+<script src="assets/app.js"></script>
+<script src="assets/api.js"></script>
+<script>
+(function () {
+  const ROUTES = [
+    { href: 'login.html', name: '登录', path: '/login', desc: '居中登录卡 · 失败不区分原因 · 首登强制改密', t: 'var(--t-users)', c: 'var(--c-users)', ico: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="4" y="10" width="16" height="10" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>' },
+    { href: 'agent.html', name: '智能体', path: '/agent', desc: '会话 + 对话 + 确认卡 + 进度坞 + 内嵌迷你调度视图；全流程模拟、断线补发、取消', t: 'var(--t-agent)', c: 'var(--c-agent)', ico: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a5 5 0 0 1 5 5v1a5 5 0 0 1-5 5 5 5 0 0 1-5-5V8a5 5 0 0 1 5-5Z"/><path d="M5 21c0-3.3 3.1-5 7-5s7 1.7 7 5"/></svg>' },
+    { href: 'dispatch.html', name: '调度中心', path: '/dispatch', desc: 'Agent 池负载 / 实时分配连线 / 分配日志流 / 策略与并发容量', t: 'var(--t-agent)', c: 'var(--c-agent)', ico: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2.4"/><circle cx="5" cy="5" r="1.8"/><circle cx="19" cy="5" r="1.8"/><circle cx="5" cy="19" r="1.8"/><circle cx="19" cy="19" r="1.8"/><path d="M6.4 6.4 10 10M13.9 10.1l3.7-3.7M6.4 17.6 10 14M13.9 13.9l3.7 3.7"/></svg>' },
+    { href: 'tasks.html', name: '任务中心', path: '/tasks', desc: '六态徽章 · 筛选 · 详情抽屉时间线 · 取消文案按 kind 分流', t: 'var(--t-tasks)', c: 'var(--c-tasks)', ico: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 9h8M8 13h5"/></svg>' },
+    { href: 'report.html?id=r-bm-1', name: '报告 · Benchmark', path: '/reports/:id', desc: '协议档并排对比 · 基线 Δ · 失败样本 raw', t: 'var(--t-reports)', c: 'var(--c-reports)', ico: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 20V10M12 20V4M19 20v-7"/></svg>' },
+    { href: 'report.html?id=r-rag-1', name: '报告 · RAG', path: '/reports/:id', desc: 'Hit Rate@5 / MRR / Recall · 退化 ≥5pp 标红 · 分母口径页脚', t: 'var(--t-reports)', c: 'var(--c-reports)', ico: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>' },
+    { href: 'report.html?id=r-st-1', name: '报告 · 压测', path: '/reports/:id', desc: 'QPS/RT/错误率曲线 · SLA 达标 · 拐点 · 费用估算', t: 'var(--t-stress)', c: 'var(--c-stress)', ico: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l5-6 4 3 6-8"/><path d="M18 6h3v3"/></svg>' },
+    { href: 'datasets.html', name: '数据集', path: '/datasets', desc: '两级文件管理器：集列表 → 行级表格 · 单元格行内编辑 / 校验红字 / 待补全 · RAG 模式切黄金 QA', t: 'var(--t-datasets)', c: 'var(--c-datasets)', ico: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6"/></svg>' },
+    { href: 'cases.html', name: '用例', path: '/cases', desc: '单元格行内编辑 · 勾选批量映射 / 导出 · 自检红字 · 72h 倒计时 · 确认 / 拒绝', t: 'var(--t-cases)', c: 'var(--c-cases)', ico: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11.5 11 14l4.5-5"/><rect x="4" y="4" width="16" height="16" rx="3"/></svg>' },
+    { href: 'kb.html', name: '知识库', path: '/kb', desc: '新建库 · 文档分块预览 · 向量投影 + Top-5 召回 + 重排对比 · 黄金 QA', t: 'var(--t-kb)', c: 'var(--c-kb)', ico: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5.5A2.5 2.5 0 0 1 7.5 3H19v15H7.5A2.5 2.5 0 0 0 5 20.5Z"/><path d="M5 18.5V5.5"/></svg>' },
+    { href: 'admin-profiles.html', name: '协议档', path: '/admin/profiles', desc: '三协议 CRUD · Key 只写不回显 · 连通性检查 · Agent 后端', t: 'var(--t-profiles)', c: 'var(--c-profiles)', ico: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M7 10h4M7 14h7"/></svg>' },
+    { href: 'admin-stress.html', name: '压测治理', path: '/admin/stress', desc: '白名单 · QPS/时长上限 · 单价预算并发 · prod 会签人 · 通知', t: 'var(--t-stress)', c: 'var(--c-stress)', ico: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l5-6 4 3 6-8"/><path d="M18 6h3v3"/></svg>' },
+    { href: 'admin-users.html', name: '账号', path: '/admin/users', desc: '开户 · 重置密码 · 停用（保留最后一名正常账号）', t: 'var(--t-users)', c: 'var(--c-users)', ico: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="9" cy="8" r="3.5"/><path d="M3.5 20c.6-3.2 2.9-5 5.5-5s4.9 1.8 5.5 5"/><path d="M16 8.5h5M18.5 6v5"/></svg>' }
+  ];
+
+  document.getElementById('route-grid').innerHTML = ROUTES.map((r, i) => `
+    <a class="route-card" href="${r.href}" data-od-id="route-${r.path.replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'login'}-${i}">
+      <span class="route-ico" style="--t:${r.t};--c:${r.c}">${r.ico}</span>
+      <span class="grow">
+        <span class="route-name">${r.name}</span>
+        <span class="route-path">${r.path}</span>
+        <div class="route-desc">${r.desc}</div>
+      </span>
+    </a>`).join('');
+})();
+</script>
+</body>
+</html>

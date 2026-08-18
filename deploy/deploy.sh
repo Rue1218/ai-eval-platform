@@ -27,8 +27,16 @@ git reset --hard "origin/$BRANCH"
 export BUILD_VERSION=$(git rev-parse --short HEAD)
 export BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-echo "==> 重建容器（BUILD_VERSION=$BUILD_VERSION）"
-docker compose up -d --build --remove-orphans
+echo "==> 构建镜像（BUILD_VERSION=$BUILD_VERSION）"
+docker compose build
+
+echo "==> 启动与更新容器"
+if ! docker compose up -d --remove-orphans; then
+    echo "检测到容器元数据残留，强制清理本项目容器状态后重新拉起..."
+    docker rm -f $(docker ps -a -q --filter "name=ai-eval-platform") 2>/dev/null || true
+    docker container prune -f || true
+    docker compose up -d
+fi
 
 echo "==> 清理旧镜像"
 docker image prune -f

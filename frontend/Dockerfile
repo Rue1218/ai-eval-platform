@@ -6,9 +6,10 @@ WORKDIR /app
 ARG BUILD_VERSION=unknown
 ARG BUILD_TIME=
 ENV BUILD_VERSION=${BUILD_VERSION} \
-    BUILD_TIME=${BUILD_TIME}
+    BUILD_TIME=${BUILD_TIME} \
+    NODE_OPTIONS="--max-old-space-size=512"
 
-COPY package.json ./
+COPY package.json package-lock.json* ./
 RUN npm config set registry https://registry.npmmirror.com && npm install
 COPY . .
 RUN npm run build

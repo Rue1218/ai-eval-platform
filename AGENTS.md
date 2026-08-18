@@ -1,0 +1,152 @@
+# AI 测试与评估平台 — AI Agent 行为规范与工程指南 (AGENTS.md)
+
+> **最高指示**：本文件是面向所有参与本项目的 **AI Agent 与开发者** 的最高行动指南。在编写或修改代码前，**必须严格遵守本文档所规定的架构边界、开发契约与行为红线**。
+
+---
+
+## 1. 项目简介与架构 (Overview & Architecture)
+
+- **定位**：面向**单一研发/评测团队**的内部平台，利用 **AI Agent（WebSocket + 内部 MCP Host）** 自动化完成大模型 **基准评测（Benchmark）** 与 **知识库评测（RAG）**。
+- **核心逻辑**：对话驱动任务入队 -> 质量评测成功 (`succeeded`) 且勾选压测后 -> 自动派生执行共享压测（**先评后压**）。
+
+### 1.1 服务拓扑与网络端点
+| 服务名称 | 容器标识 | 端口 | 访问方式 / 说明 |
+| :--- | :--- | :--- | :--- |
+| **Web 前端** | `web` | `80` | `http://47.119.132.83/`（Nginx 反代 `/api` 与 `/ws`） |
+| **API 服务** | `api` | `8000` | `http://47.119.132.83:8000/docs`（FastAPI + Swagger + 短 MCP） |
+| **Worker 引擎** | `worker` | - | 容器内部网络通信，轮询 PG 任务队列执行耗时评测 |
+| **数据库** | `postgres` | `5432` | PostgreSQL 16 关系数据库（持久卷 `pgdata`） |
+| **RAG 引擎** | `lightrag` | `9621` | LightRAG 混合检索与图谱评测服务 |
+| **压测引擎** | `stress` | `19090` | go-stress-testing 发压引擎，暴露 `/metrics` |
+
+> 初始管理员：`admin / admin123`（由 `.env` 中 `BOOTSTRAP_ADMIN_PASSWORD` 注入）。
+
+### 1.2 核心架构流
+```text
+浏览器 Vue 3 (Naive UI)
+  │── WS: /ws/agent?ticket= ──► FastAPI Agent Host (短 MCP + 意图拆解 + 任务入队)
+  │── REST: /api/* ───────────► FastAPI REST API (认证 / 协议档 / 数据集 / 报告)
+                                        │
+                                        ▼
+                                  PostgreSQL 16 (tasks 状态机 / task_events / 数据集)
+                                        │
+                                        ▼
+                                  Python Worker (异步执行：三协议评测 / LightRAG / 派生压测)
+```
+
+### 1.3 权威文档与冲突裁决
+1. **L0 产品权威**：[`docs/AI测试与评估平台-PRD.md`](docs/AI测试与评估平台-PRD.md)（功能范围、状态机、确认卡字段唯一真理）；
+2. **L1 接口契约**：[`docs/AI测试与评估平台-API.md`](docs/AI测试与评估平台-API.md)（REST/WS 路径、JSON 契约唯一真理）；
+3. **裁决铁律**：代码/计划与 PRD 冲突以 PRD 为准；接口与 API.md 冲突以 API.md 为准。禁止私自扩充产品范围。
+
+---
+
+## 2. 项目结构 (Project Structure)
+
+```
+ai-eval-platform/
+├── backend/
+│   ├── api/                     # FastAPI 主服务（路由、认证、数据模型、短 MCP）
+│   │   ├── app/                 # 核心代码（routers/, models.py, schemas.py, errors.py, security.py）
+│   │   ├── migrations/          # Alembic 数据库迁移版本脚本
+│   │   └── tests/               # Pytest 自动化测试
+│   ├── worker/                  # 异步任务 Worker（轮询任务队列、三协议适配、评测执行）
+│   ├── lightrag/                # LightRAG 服务组件
+│   └── stress/                  # go-stress-testing 压测组件
+├── frontend/                    # Vue 3 前端工程（Naive UI, Pinia, Vue Router, Vite）
+│   └── src/                     # 源码（api/, layouts/, router/, stores/, views/, naive-theme.ts）
+├── deploy/                      # 部署脚本（server-setup.sh 服务器初始化, deploy.sh 同步部署）
+├── docs/                        # PRD、API 契约、原型设计与开发计划
+├── Web-Prototype/               # 静态 HTML 原型（视觉与交互参考）
+└── docker-compose.yml           # 全栈六件套容器编排文件
+```
+
+---
+
+## 3. Git 提交规范 (Git Commit Conventions)
+
+采用 **[Conventional Commits](https://www.conventionalcommits.org/)** 规范。**提交描述（Subject 与 Body）必须使用中文**。  
+提交作者身份由宿主机当前的 Git 配置（`git config`）或 GitHub CLI 自动决定。
+
+- **提交格式**：`<type>(<scope>): <中文简述>`
+- **常见 Type**：`feat`（新功能）、`fix`（修缺陷）、`docs`（文档）、`style`（格式）、`refactor`（重构）、`test`（测试）、`ci`（CI/CD）、`chore`（杂项）。
+- **常用 Scope**：`api`、`worker`、`web`、`mcp`、`rag`、`stress`、`auth`、`dataset`、`profile`、`task`、`report`、`deploy`。
+- **提交前强制门禁**：提交代码前**必须在本地先完成构建与自检**（`npm run build`、`ruff check .`、`pytest`），确保 0 错误后方可执行 `git commit`。
+- **中文示例**：
+  - `feat(api): 新增 WebSocket 短票鉴权接口`
+  - `fix(worker): 修复大模型裁判调用超时重试逻辑`
+  - `docs(agents): 更新自动部署排查指南与提交规范`
+
+---
+
+## 4. 自动部署与 CI/CD (CI/CD & DevOps)
+
+```text
+Git Commit Push ──► GitHub Actions CI (Ruff Lint + Pytest)
+                         │ (通过)
+                         ▼
+                    GitHub Actions CD (SSH) ──► 服务器 /opt/ai-eval-platform
+                                                    │
+                                                    ▼
+                                            deploy.sh: git reset --hard && docker compose build & up -d
+```
+
+### 4.1 Secrets 配置清单
+- `SSH_HOST`：`47.119.132.83`（纯 IP，严禁带 `http://`）
+- `SSH_PORT`：`22`（**必须是 22**，切勿误填 Web 的 80/8000）
+- `SSH_USER`：`deploy`
+- `SSH_PRIVATE_KEY`：服务器 `/home/deploy/.ssh/id_ed25519` 的完整私钥（含首尾标记）
+
+### 4.2 部署与构建失败排查 SOP
+1. **CI 失败**：本地进入 `backend/api/` 执行 `ruff check --fix .` 与 `pytest`；进入 `frontend/` 执行 `npm run build`。
+2. **CD SSH 握手失败 (`connection reset by peer`)**：检查 `SSH_PORT` 是否误填为 80/8000（必须为 22）；确认云服务器安全组 22 端口对 `0.0.0.0/0` 放行。
+3. **Docker 容器残留 (`No such container`)**：`deploy.sh` 会自动调用 `docker rm -f` 强力清理并自愈拉起。手动修复命令：
+   ```bash
+   docker rm -f $(docker ps -a -q --filter "name=ai-eval-platform") 2>/dev/null || true
+   sudo -u deploy bash /opt/ai-eval-platform/deploy/deploy.sh
+   ```
+4. **容器状态异常 / 端口占用**：在服务器执行 `netstat -tlpn | grep -E '80|8000|5432'` 排查端口占用；执行 `docker compose logs -n 100 api` 查看日志。
+5. **紧急回滚**：本地 `git revert HEAD && git push origin main`，或在服务器执行 `git reset --hard <commit_id> && bash deploy/deploy.sh`。
+
+---
+
+## 5. 开发规范 (Development Standards)
+
+### 5.1 全中文注释要求（核心铁律）
+所有新增与修改的代码（Python、Vue/TypeScript、Shell），**函数/类 docstring、复杂业务分支、类型定义必须配齐中文注释**。
+
+```python
+# Python 注释范例
+@router.post("/tasks", response_model=TaskOut, summary="创建评测任务")
+async def create_task(payload: TaskCreateIn, db: Session = Depends(get_db)) -> Task:
+    """创建评测任务并入队 (queued)。若 payload.with_stress=True，评测成功后由 Worker 派生压测。"""
+```
+
+### 5.2 后端规范 (Python 3.12 / FastAPI)
+1. **10 大标准错误码**：禁止原生 422/500，必须统一抛出 `AppError(code=ErrorCode.XXX, message="说明")`：
+   `UNAUTHORIZED`(401/403), `VALIDATION`(400), `NOT_FOUND`(404), `BUDGET_EXCEEDED`(409), `CONCURRENCY`(409), `WHITELIST`(403), `NEED_APPROVAL`(403), `UPSTREAM`(502), `TIMEOUT`(504), `INTERNAL`(500)。
+2. **数据库与迁移**：修改 `models.py` 后必须通过 Alembic 生成迁移脚本：`alembic revision --autogenerate -m "..."`，禁止私自手动改库。
+3. **安全与鉴权**：API Key 必须用 Fernet 加密存储且只写不回显；用户鉴权用 `HttpOnly` Cookie；WebSocket 使用 5 分钟有效期的单次短票 `ws-ticket`。
+4. **长短任务分离**：`api` 容器仅负责快速交互与任务入队，耗时评测与压测全部由 `worker` 异步消费并下发给 `stress` 容器执行。
+
+### 5.3 前端规范 (Vue 3 / TypeScript / Naive UI)
+1. **统一架构**：采用 `<script setup lang="ts">` + `naive-ui`，严格遵循薄荷绿/深空蓝设计令牌 (`naive-theme.ts`)。
+2. **通信与重连**：API 使用相对路径 `/api/*`；WS 使用相对路径 `/ws/agent?ticket=${ticket}`，支持断线按 `last_event_id` 自动补发事件流。
+
+---
+
+## 6. AI Agent 行为准则 (AI Guardrails)
+
+### 🔴 五大核心红线（绝对禁止）
+1. **禁止私自扩充产品范围**（如外部 MCP、自定义系统提示词、多租户等）；
+2. **禁止破坏统一错误契约**（必须归一化为 10 大 `ErrorCode`）；
+3. **禁止明文暴露敏感凭据**（API Key、密码、JWT Secret 严禁打印或回显）；
+4. **禁止跳过 Alembic 手动改库**（改 Model 必须配 Migration）；
+5. **禁止全量无意义重写**（必须局部替换，保留已有注释与架构）。
+
+### 🟢 推荐操作五步法
+1. **先查后改**：查阅 PRD、API.md 与 Web-Prototype 原型；
+2. **中文注释**：编写规范的中文 docstring 与代码注释；
+3. **本地先构建与自检**：提交前必须在本地执行 `npm run build`（前端打包与类型校验）和 `ruff check .` / `pytest`（后端），验证 100% 通过；
+4. **规范中文提交**：严格采用 `<type>(<scope>): <中文描述>` 格式进行原子化中文提交；
+5. **监控部署**：推送后关注 GitHub Actions CI/CD 流水线，异常时按 SOP 处置。

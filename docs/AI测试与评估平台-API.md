@@ -2,11 +2,11 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.1 |
-| 对应 PRD | V1.6.4（功能唯一权威） |
-| 对应设计规范 | V1.3（错误码文案、确认卡字段名、调度中心规范） |
-| 对应前端计划 | V1.1 |
-| 对应后端计划 | V1.1 |
+| 文档版本 | V1.3 |
+| 对应 PRD | V1.6.3（功能唯一权威） |
+| 对应设计规范 | V1.2（错误码文案、确认卡字段名、调度中心规范） |
+| 对应前端计划 | V1.3 |
+| 对应后端计划 | V1.3 |
 | 撰写日期 | 2026-08-18 |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
@@ -89,7 +89,7 @@
 | 403 | `NEED_APPROVAL` | 等待会签后才能发压 |
 | 502 | `UPSTREAM` | 被测接口失败，详见样本错误 |
 | 504 | `TIMEOUT` | 超时 |
-| 500 | `INTERNAL` | 内部错误，请重试或联系管理员 |
+| 500 | `INTERNAL` | 内部错误，请重试或联系平台维护者 |
 
 确认卡 / 表单校验失败：`VALIDATION`，`fields` 给前端卡内红字，**不要**只靠 Toast。  
 错误 body **不得** 含 Key、Cookie、stack。
@@ -98,7 +98,7 @@
 
 | 名 | 值 |
 | --- | --- |
-| `role` | `admin` `engineer` `readonly` |
+| `role` | `member`（PRD 2.1 单一角色；历史三角色字段不再作为 V1.0 契约） |
 | `kind` | `benchmark` `rag` `testcase` `stress` |
 | `task_status` | `queued` `running` `succeeded` `failed` `cancelled` `awaiting_case_confirm` |
 | `protocol` | `openai_chat` `openai_responses` `anthropic_messages` |
@@ -112,21 +112,21 @@
 
 ## 2. 前后端对应总表
 
-浏览器前端所有图、表与表单均统一经由 `assets/api.js` 调用对应 REST/WS 接口，实现 100% 数据动态拉取与实时落盘。
+目标态：浏览器前端所有业务图、表与表单均统一经由 API service 调用对应 REST/WS 接口，完成动态拉取与实时落盘。当前原型的真实接入现状与剩余静态视觉资产见 §12；不得把本表当作“后端已实现”清单。
 
 | 模块 / 页面 | 前端功能与图表 | 调用的后端 API 接口 | 请求方法 | 权限口径 |
 | --- | --- | --- | --- | --- |
 | **登录 (login.html)** | 账号登录 / 首次强制改密 | `/api/auth/login`, `/api/auth/change-password` | POST | 免登录 / 成员 |
 | **智能体 (agent.html)** | 会话列表 / 意图识别 / TaskSpec 下单 / 迷你拓扑坞 | `/api/sessions`, `/ws/agent`, `/api/profiles`, `/api/datasets`, `/api/kb`, `/api/tasks`, `/api/dispatch/overview` | GET/POST/WS | 成员 · 全员同权 |
-| **调度中心 (dispatch.html)** | 调度大盘雷达 / Worker 节点池 / 贝塞尔队列连线 / 策略治理 | `/api/dispatch/overview`, `/api/dispatch/workers`, `/api/dispatch/config`, `/api/tasks?status=queued` | GET/PUT | 成员 · 全员同权 |
-| **任务中心 (tasks.html)** | 任务大盘 / 六态过滤表格 / 抽屉详情 / 取消与重跑 | `/api/tasks`, `/api/tasks/{id}`, `/api/tasks/{id}/cancel`, `/api/tasks/{id}/rerun` | GET/POST | 成员 · 全员同权 |
+| **调度中心 (dispatch.html)** | 调度大盘 / Worker 节点池 / 策略治理 / 分配日志流 | `/api/dispatch/overview`, `/api/dispatch/workers`, `/api/dispatch/workers/{id}`, `/api/dispatch/events`, `/api/dispatch/config`, `/api/tasks?status=queued` | GET/POST/PUT | 成员 · 全员同权 |
+| **任务中心 (tasks.html)** | 24h 状态趋势 / 六态过滤表格 / 抽屉详情 / 取消与重跑 | `/api/tasks`, `/api/tasks/summary`, `/api/tasks/{id}`, `/api/tasks/{id}/cancel`, `/api/tasks/{id}/rerun` | GET/POST | 成员 · 全员同权 |
 | **报告中心 (report.html)** | 报告列表 / 3合1详情 (Benchmark雷达/RAG水平柱状/压测多轴曲线) / Markdown导出 / 7天免登分享 / 冻结基线 | `/api/reports`, `/api/reports/{id}`, `/api/reports/{id}/samples`, `/api/reports/{id}/share`, `/api/reports/{id}/baseline` | GET/POST | 成员 · 全员同权 |
-| **数据集工作台 (datasets.html)** | 数据集目录树 / 行内即点即改网格 / 自定义列扩展 / AI 数据集生成 | `/api/datasets`, `/api/datasets/{id}`, `/api/datasets/{id}/rows`, `/api/datasets/ai-generate`, `/api/kb` | GET/POST/PUT/DELETE | 成员 · 全员同权 |
-| **用例工作台 (cases.html)** | 6大策略分布图 / 用例表格编辑 / 72h倒计时 / 批量映射入库 / AI PRD 用例抽取 | `/api/case-sets`, `/api/case-sets/{id}`, `/api/case-sets/{id}/cases`, `/api/case-sets/{id}/confirm`, `/api/case-sets/{id}/cancel`, `/api/case-sets/{id}/map`, `/api/case-sets/ai-generate` | GET/POST/PUT | 成员 · 全员同权 |
-| **知识库 (kb.html)** | 3栏工作台 / 文档切块流 / 2D 向量投影散点图 / 4模式检索 Playground / 黄金 QA / ✨ AI 抽取黄金 QA | `/api/kb`, `/api/kb/{id}`, `/api/kb/{id}/documents`, `/api/kb/{id}/query`, `/api/kb/{id}/gold-qa` | GET/POST/DELETE | 成员 · 全员同权 |
-| **协议档与智能体 (admin-profiles.html)** | 4 Tab 架构 (模型协议档/MCP 工具中心/Agent 技能编排/运行时治理) / 连通性探活 Ping | `/api/profiles`, `/api/profiles/{id}/check`, `/api/mcp/servers`, `/api/mcp/tools`, `/api/skills`, `/api/admin/settings` | GET/POST/PUT/DELETE | 成员 · 全员同权 |
+| **数据集工作台 (datasets.html)** | 数据集目录树 / 行内即点即改网格 / 自定义列扩展 / AI 数据集生成 | `/api/dataset-folders`, `/api/datasets`, `/api/datasets/{id}`, `/api/datasets/{id}/rows`, `/api/datasets/ai-generate`, `/api/kb` | GET/POST/PUT/DELETE | 成员 · 全员同权 |
+| **用例工作台 (cases.html)** | 6大策略分布图 / 用例表格编辑 / 72h倒计时 / 批量映射入库 / AI PRD 用例抽取 | `/api/case-folders`, `/api/case-sets`, `/api/case-sets/{id}`, `/api/case-sets/{id}/cases`, `/api/case-sets/{id}/confirm`, `/api/case-sets/{id}/cancel`, `/api/case-sets/{id}/map`, `/api/case-sets/ai-generate` | GET/POST/PUT/DELETE | 成员 · 全员同权 |
+| **知识库 (kb.html)** | 3栏工作台 / 文档与切块预览 / 4模式检索 Playground / 黄金 QA | `/api/kb`, `/api/kb/{id}`, `/api/kb/{id}/documents`, `/api/kb/{id}/documents/{doc_id}/chunks`, `/api/kb/{id}/query`, `/api/kb/{id}/gold-qa` | GET/POST/DELETE | 成员 · 全员同权 |
+| **协议档与智能体 (admin-profiles.html)** | 4 Tab 架构（协议档、MCP 工具只读、技能受控说明、运行时治理）/ 连通性探活 Ping | `/api/profiles`, `/api/profiles/{id}/check`, `/api/mcp/tools`, `/api/admin/settings` | GET/POST/PUT/DELETE | 成员 · 全员同权 |
 | **压测治理 (admin-stress.html)** | 7天峰值 QPS 面积图 / Host 白名单表格 / 安全阈值 / 成本预算 / Prometheus `/metrics` | `/api/admin/stress/settings`, `/api/admin/stress/whitelist`, `/api/admin/stress/usage`, `/metrics` | GET/POST/PUT/DELETE | 成员 · 全员同权 |
-| **成员与账号 (admin-users.html)** | 4 维 KPI 卡片 / 成员搜索表格 / AI 异地登录检测 / 24h 登录活动柱状图 / 改密与停用 | `/api/users`, `/api/users/{id}/status`, `/api/users/{id}/reset-password`, `/api/users/{id}/audit-logs` | GET/POST/PUT | 成员 · 全员同权 |
+| **成员与账号 (admin-users.html)** | 4 维 KPI 卡片 / 成员搜索表格 / 24h 登录活动柱状图 / 改密与停用 | `/api/users`, `/api/users/activity-summary`, `/api/users/{id}/status`, `/api/users/{id}/reset-password`, `/api/users/{id}/audit-logs` | GET/POST/PUT | 成员 · 全员同权 |
 
 ---
 
@@ -167,7 +167,7 @@
 { "old_password": "********", "new_password": "********" }
 ```
 
-规则：≥8 位，含字母和数字。引导管理员首次改密时 `old_password` 为初始密。成功后 `must_change_password=false`。
+规则：≥8 位，含字母和数字。引导初始成员首次改密时 `old_password` 为初始密。成功后 `must_change_password=false`。
 
 #### `GET /api/auth/me`
 
@@ -175,20 +175,20 @@
 {
   "id": "uuid",
   "username": "alice",
-  "role": "engineer",
+  "role": "member",
   "must_change_password": false
 }
 ```
 
 #### `POST /api/auth/ws-ticket`
 
-工程师或管理员。5 分钟有效，一次性或短期内可重复升级（实现可允许多张未过期票，过期即废）。
+已登录成员可调用。5 分钟有效，一次性或短期内可重复升级（实现可允许多张未过期票，过期即废）。
 
 ```json
 { "ticket": "opaque", "expires_in": 300 }
 ```
 
-只读 403。
+未登录 401。
 
 ---
 
@@ -253,11 +253,23 @@
 
 获取指定成员近期的操作审计轨迹（开户、改密、登录、建单等）。
 
+#### `GET /api/users/activity-summary?from=&to=`
+
+成员与账号页的 KPI 与登录活动柱状图。数据由 `users`、`audit_logs` 聚合，不能由浏览器用示例日期计算；V1.0 不含异地登录的 AI 风险判定。
+
+```json
+{
+  "range": { "from": "2026-08-17T00:00:00Z", "to": "2026-08-18T00:00:00Z" },
+  "kpis": { "active_members": 8, "new_members": 1, "login_count": 24, "disabled_members": 0 },
+  "login_buckets": [{ "ts": "2026-08-17T09:00:00Z", "count": 3 }]
+}
+```
+
 ---
 
 ### 3.4 会话（方案 A，M1 冻结）
 
-只读角色 403。V1 **无** 删除会话接口。
+已登录成员可访问。V1 **无** 删除会话接口。
 
 #### `GET /api/sessions`
 
@@ -328,14 +340,14 @@ item：`id, role: user|assistant|system, content, attachments[], created_at`。
 
 ### 3.6 协议档
 
-响应 **永不** 含 Key，即使 PATCH 刚写入。空字符串 Key = 不修改。
+响应 **永不** 含 Key，即使 PUT 刚写入。空字符串 Key = 不修改。
 
 #### `GET /api/profiles`
 
 全员可列（无 Key），供确认卡。  
 item：`id, name, protocol, base_url, model, usages[], created_at`
 
-#### `POST /api/profiles`  仅 admin
+#### `POST /api/profiles`  已登录成员
 
 ```json
 {
@@ -365,52 +377,28 @@ item：`id, name, protocol, base_url, model, usages[], created_at`
 
 ---
 
-### 3.6.1 MCP 服务器与工具中心
-
-#### `GET /api/mcp/servers` / `POST /api/mcp/servers` / `DELETE /api/mcp/servers/{id}`
-
-维护已挂载的 MCP 服务节点（包含内置 Eval-Core 服务与外部 SSE / Streamable HTTP 节点）。
-
-```json
-{
-  "id": "uuid",
-  "name": "vector-search-mcp",
-  "transport": "Streamable HTTP | SSE | Stdio",
-  "endpoint": "http://192.168.1.100:8080/mcp",
-  "status": "online",
-  "latency_ms": 32,
-  "tools_count": 2
-}
-```
-
-#### `POST /api/mcp/servers/{id}/check`
-
-对指定的 MCP Server 发起探活 Ping 与工具清单动态握手发现。
+### 3.6.1 MCP 工具中心（V1.0 只读）
 
 #### `GET /api/mcp/tools`
 
-获取当前智能体环境中所有受控的短工具清单（`model.list`, `dataset.list`, `kb.list`, `report.get`, `task.create`, `task.cancel`, `dispatch.overview`）及权限级别（`read / write`）。
-
----
-
-### 3.6.2 Agent 技能与 Prompt 编排
-
-#### `GET /api/skills` / `POST /api/skills` / `PUT /api/skills/{id}` / `DELETE /api/skills/{id}`
-
-维护智能体在 Benchmark 对比、RAG 评估、用例生成与容量压测场景下的 System Prompt 模版与依赖短工具绑定。
+获取当前智能体环境中受控的**内置**短工具清单（`model.list`, `dataset.list`, `kb.list`, `report.get`, `task.create`, `task.cancel`, `dispatch.overview`）及权限级别（`read / write`）。
 
 ```json
 {
-  "id": "skill-benchmark",
-  "name": "基准对比评测",
-  "desc": "自动识别被测模型数量、推荐标准评测集并构建先评后压 TaskSpec",
-  "system_prompt": "你负责大模型基准测试...",
-  "tools": ["model.list", "dataset.list", "task.create"],
-  "temperature": 0.2,
-  "max_tokens": 1024,
-  "is_builtin": true
+  "items": [
+    { "name": "dataset.list", "desc": "查询数据集版本和行数", "permission": "read", "enabled": true, "source": "builtin" }
+  ],
+  "total": 1
 }
 ```
+
+V1.0 不接入外部 MCP Server，也不让浏览器创建、删除、探活或动态发现外部工具。原型中的 MCP Server 管理按钮须显示“能力未启用”说明；不得请求或假装成功调用 `/api/mcp/servers*`。
+
+---
+
+### 3.6.2 Agent 技能与 Prompt 编排（V1.0 受控）
+
+V1.0 使用服务端固定系统提示词和固定短工具绑定（见 §4、§6），不暴露 `/api/skills*` 读写接口，也不返回/回显 System Prompt。原型的技能 Tab 只展示这一受控边界；如 PRD 后续批准可配置技能，须另起 API 版本并补安全审计、版本化和回滚契约。
 
 ---
 
@@ -423,9 +411,11 @@ item：`id, name, protocol, base_url, model, usages[], created_at`
   "id": "uuid",
   "name": "smoke-20",
   "version": 3,
+  "folder_id": "uuid?",
   "row_count": 20,
   "pending_complete_count": 2,
   "metric": "contain",
+  "column_schema": [{ "key": "difficulty", "name": "难度", "type": "string", "sort_order": 1 }],
   "owner_id": "uuid",
   "created_at": "..."
 }
@@ -437,9 +427,13 @@ item：`id, name, protocol, base_url, model, usages[], created_at`
 { "name": "smoke-20", "metric": "contain" }
 ```
 
+#### `GET /api/dataset-folders` / `POST /api/dataset-folders` / `PUT /api/dataset-folders/{id}` / `DELETE /api/dataset-folders/{id}`
+
+数据集目录树是业务数据而非前端偏好。folder item：`id, name, parent_id?, sort_order, created_at`；删除非空目录返回 `VALIDATION`，前端必须先移动或删除其中数据集。
+
 #### `PUT /api/datasets/{id}`
 
-可改 `name`、`metric` 及目录结构（已有报告不受影响，对比仍看任务快照）。
+可改 `name`、`metric`、`folder_id`、`column_schema`。`column_schema` 为自定义列定义数组（每项 `key,name,type,required?,sort_order`），数据行扩展值保存到对应 key；已有报告不受影响，对比仍看任务快照。
 
 #### `DELETE /api/datasets/{id}`
 
@@ -476,15 +470,29 @@ JSONL 或 CSV UTF-8；列 `question,reference,context?`；≤50MB、≤2 万行�
 
 #### `POST /api/datasets/ai-generate`
 
-根据场景描述、种子样本扩写或 PRD 文档提取，通过大模型批量合成高质量评测数据集。
+根据场景描述、种子样本扩写、PRD 文档提取或缺失字段补全，返回**未落库候选行**；前端允许人工删改后，必须再走 `PUT /api/datasets/{id}/rows` 保存。该接口不得暗中写入数据集版本。
 
 ```json
 {
-  "mode": "scene | seed | doc",
-  "prompt": "生成 10 条跨境支付高频问答与边界风控问答",
-  "count": 10,
-  "difficulty_ratio": "4:4:2",
-  "adversarial_ratio": 0.2
+  "dataset_id": "uuid",
+  "mode": "scene | seed | doc | fill_missing",
+  "instruction": "生成跨境支付高频问答与边界风控问答",
+  "source_text": "可选的 PRD / OpenAPI 文本",
+  "seed": "可选的种子样本摘要",
+  "rows": [],
+  "max_count": 10,
+  "model": "gpt-4.1",
+  "temperature": 0.5
+}
+```
+
+`fill_missing` 时 `dataset_id` 和待补全 `rows[]` 必填；其余模式至少提供 `instruction`、`source_text` 或 `seed` 之一。响应固定为：
+
+```json
+{
+  "items": [
+    { "row_no": 1, "q": "问题", "r": "标准答案", "c": "上下文", "tags": "支付", "difficulty": "中等" }
+  ]
 }
 ```
 
@@ -501,6 +509,8 @@ JSONL 或 CSV UTF-8；列 `question,reference,context?`；≤50MB、≤2 万行�
   "status": "generated | confirmed | cancelled",
   "generated_count": 40,
   "confirmed_count": 0,
+  "folder_id": "uuid?",
+  "column_schema": [{ "key": "owner", "name": "负责人", "type": "string", "sort_order": 1 }],
   "checks": [
     { "level": "error", "code": "no_core_positive", "message": "无核心正向用例" }
   ],
@@ -515,7 +525,15 @@ case item 包含：`id, strategy, priority, module, name, precondition, steps, e
 
 #### `POST /api/case-sets`
 
-创建新用例集或文件夹。
+创建新用例集。请求可含 `name, folder_id?, column_schema?`；`column_schema` 规则同数据集自定义列。
+
+#### `GET /api/case-folders` / `POST /api/case-folders` / `PUT /api/case-folders/{id}` / `DELETE /api/case-folders/{id}`
+
+用例目录树是业务数据而非前端偏好。folder item：`id, name, parent_id?, sort_order, created_at`；删除非空目录返回 `VALIDATION`。
+
+#### `PUT /api/case-sets/{id}`
+
+更新 `name`、`folder_id`、`column_schema`。已确认的用例集不可修改其策略、检查结果或目标映射，只允许返回 `VALIDATION`，避免破坏版本快照。
 
 #### `PUT /api/case-sets/{id}/cases`
 
@@ -548,10 +566,10 @@ case item 包含：`id, strategy, priority, module, name, precondition, steps, e
 批量映射用例到目标基准数据集或知识库黄金问答。
 
 ```json
-{ "target": "dataset", "dataset_id": "uuid", "case_ids": ["c-001", "c-002"] }
+{ "target": "dataset | gold_qa", "target_id": "uuid", "case_ids": ["c-001", "c-002"] }
 ```
 
-缺字段行进入目标集 `pending_complete`，写 `source_case_id` + 用例版本。
+`target=dataset` 时缺字段行进入目标集 `pending_complete`，写 `source_case_id` + 用例版本；`target=gold_qa` 时缺 `expected_doc_ids` 的项仅参与答案侧评分。目标 ID 类型不匹配返回 `VALIDATION`。
 
 #### `POST /api/case-sets/ai-generate`
 
@@ -559,12 +577,25 @@ case item 包含：`id, strategy, priority, module, name, precondition, steps, e
 
 ```json
 {
-  "source_doc_id": "doc-01",
+  "source_doc_id": "可选，已上传文件 ID",
+  "source_text": "可选，PRD / OpenAPI 原文；与 source_doc_id 至少填一项",
   "strategy_weights": { "positive": 40, "negative": 25, "boundary": 15, "equivalence": 10, "state": 5, "scenario": 5 },
   "complexity": "medium",
   "max_count": 45
 }
 ```
+
+该接口只返回候选，不创建用例集：
+
+```json
+{
+  "items": [
+    { "strategy": "正向", "priority": "P0", "module": "收银台", "name": "余额支付成功", "expected": "订单核销成功", "precondition": "账户余额充足", "test_type": "核心业务" }
+  ]
+}
+```
+
+前端采纳后按 `POST /api/case-sets` → `PUT /api/case-sets/{id}/cases` 两步落库；任何一步失败都不得显示“创建成功”。
 
 #### `GET /api/case-sets/{id}/export?fmt=xlsx|xmind`
 
@@ -583,16 +614,31 @@ case item 包含：`id, strategy, priority, module, name, precondition, steps, e
   "kind": "lightrag",
   "doc_count": 12,
   "is_core": false,
+  "capabilities": { "projection": false, "rerank_compare": false },
   "owner_id": "uuid"
 }
 ```
 
-`kind`：`lightrag`（原生 query，支持切块与 2D 投影）| `external_chat`（外部 RAG 服务本身挂在 profile，仅 `chat/completions`）。  
-`PUT` `{ "is_core": true }` 标为核心库写审计。
+`kind`：`lightrag`（原生 query，支持切块）| `external_chat`（外部 RAG 服务本身挂在 profile，仅 `chat/completions`）。
+`capabilities` 必含 `projection`、`rerank_compare` 两个布尔值；V1.0 都为 `false`。前端在 `false` 时保留原型区域但展示能力未启用，不可画示例投影或重排结果。`PUT` `{ "is_core": true }` 标为核心库写审计。
 
 #### `POST /api/kb/{id}/documents`  multipart `file`
 
 上传文档建索引；后端生成 `doc_id` UUID 写入 LightRAG metadata，自动执行分块与向量化。响应 `{ "doc_id", "filename", "status": "indexed" }`。
+
+#### `GET /api/kb/{id}/documents`
+
+返回当前知识库文档及索引状态：`{ "items": [{ "doc_id", "filename", "size", "status" }] }`。`status` 为 `indexing | indexed | failed`；列表不内嵌文本或切块。
+
+#### `GET /api/kb/{id}/documents/{doc_id}/chunks?chunk_size=512&overlap=64`
+
+返回服务端按请求参数生成的切块预览，供原型的切块流使用：
+
+```json
+{ "items": [{ "chunk_id": "uuid#c01", "tokens": 486, "text": "..." }] }
+```
+
+该接口只读；调整 `chunk_size` / `overlap` 不得在浏览器用样本文本伪造预览。
 
 #### `DELETE /api/kb/{id}/documents/{doc_id}`
 
@@ -600,7 +646,7 @@ case item 包含：`id, strategy, priority, module, name, precondition, steps, e
 
 #### `POST /api/kb/{id}/query`
 
-执行 LightRAG 原生 4 模式检索测试（Playground），返回 Top-K 切块、相似度得分与重排位移。
+执行 LightRAG 原生 4 模式检索测试（Playground），返回 Top-K 切块、相似度得分与评测指标。V1.0 不返回实验性的投影或 rerank 比对结果。
 
 ```json
 {
@@ -667,6 +713,19 @@ case item 包含：`id, strategy, priority, module, name, precondition, steps, e
 
 `progress`：`{ percent?, done, total, message }`
 
+#### `GET /api/tasks/summary?from=&to=`
+
+任务中心 24h 趋势、六态计数与可追溯诊断摘要。`from/to` 均为 ISO 8601；未传时返回最近 24h。服务端从 `tasks/task_events` 聚合，前端不得自行合成趋势或“AI 诊断”。
+
+```json
+{
+  "range": { "from": "2026-08-17T00:00:00Z", "to": "2026-08-18T00:00:00Z" },
+  "status_counts": { "queued": 2, "running": 1, "succeeded": 8, "failed": 1, "cancelled": 0, "awaiting_case_confirm": 0 },
+  "series": [{ "ts": "2026-08-18T09:00:00Z", "queued": 1, "running": 1, "succeeded": 2, "failed": 0 }],
+  "diagnosis": [{ "code": "UPSTREAM_SPIKE", "message": "上游 5xx 在 10 分钟内升高", "task_ids": ["uuid"] }]
+}
+```
+
 #### `GET /api/tasks/{id}`
 
 详情 + `config` 快照（确认卡 JSON）+ `events`（`task_events` 时间线：`at, level, message`）。
@@ -677,7 +736,7 @@ case item 包含：`id, strategy, priority, module, name, precondition, steps, e
 { "ok": true, "status": "cancelled" }
 ```
 
-权限：创建者或 admin。  
+权限：任务创建者。
 评测/RAG/用例：当前样本结束后停。  
 压测：**立即**停发。  
 前端 Dialog 文案必须按 kind 分流，接口本身一个。
@@ -689,7 +748,7 @@ case item 包含：`id, strategy, priority, module, name, precondition, steps, e
 #### `POST /api/tasks/{id}/approve-stress`  M4
 
 `{id}` 为 **压测子任务** 或质量任务（实现须能解析到对应 `kind=stress` 子任务）。  
-会签人 ≠ 创建者（工程师发起 `prod` 时须另一名 admin 或 engineer）。管理员对自己的 `prod` 可二次确认。  
+会签人 ≠ 创建者（`prod` 发压须另一名正常成员确认）。
 未会签：子任务保持 `queued`，`NEED_APPROVAL`；质量报告仍保留。写审计。
 
 #### `GET /api/tasks/{id}/stress-series`  M4
@@ -786,7 +845,7 @@ RAG：同 kb + gold 版本。
 
 #### `GET /api/admin/settings`
 
-登录可 GET（只读角色可看并发/预算数字，看不到通知密钥）。敏感密钥不回显。
+已登录成员可 GET；敏感密钥不回显。
 
 ```json
 {
@@ -904,6 +963,26 @@ Prometheus 内置可观测性指标端点（内网 HTTP GET），输出前缀为
 #### `PUT /api/dispatch/config`
 
 更新分发策略与全局并发容量：`{ "strategy": "负载均衡" | "优先级抢占" | "亲和性", "max_running_tasks": 4 }`。
+
+#### `GET /api/dispatch/events?after_id=&limit=`
+
+调度中心的分配日志流。按单调 `id` 升序返回，`after_id` 缺省时返回最近记录；轮询只拉增量。日志由调度器/worker 写入，浏览器不得生成或改写。
+
+```json
+{
+  "items": [
+    {
+      "id": 1042,
+      "at": "2026-08-18T10:22:00Z",
+      "event": "assigned | started | draining | succeeded | failed",
+      "task_id": "uuid?",
+      "worker_id": "worker-01?",
+      "message": "任务已分配至 GPU-Node-A1"
+    }
+  ],
+  "next_after_id": 1042
+}
+```
 
 ---
 
@@ -1124,20 +1203,20 @@ JSON Schema 冻结点：短工具 M1 W4；评测长工具 M2 W6；RAG M3 W10；s
 
 ---
 
-## 附录 A  一致性检查记录（V1.0）
+## 附录 A  一致性检查记录（V1.3）
 
-检查对象：PRD V1.6.3、设计规范 V1.2、总计划 V1.0、前端计划 V1.1、后端计划 V1.1、本文。
+检查对象：PRD V1.6.3、设计规范 V1.2、总计划 V1.0、前端计划 V1.3、后端计划 V1.3、本文。
 
 ### A.1 PRD 5.9 摘要 vs 本文
 
 | 5.9 原文 | 本文 | 一致？ |
 | --- | --- | --- |
 | login/logout | §3.2 | 是 |
-| GET/POST users | + PATCH、reset-password | 补全（F-CM-03 停用/改角色/重置密） |
+| GET/POST users | + PUT、status、reset-password、activity summary | 补全（F-CM-03 停用/重置密/活动聚合） |
 | GET/POST files | + GET `{id}` | 补全 |
 | CRUD profiles | + check | 补全（规范连通性） |
 | CRUD datasets / case-sets / confirm | + upload/rows/map/export | export 在 5.4.1；map 在 5.4.2 |
-| CRUD kb / docs / gold-qa | + 删文档、gold upload、is_core | 补全（PRD 2.1） |
+| CRUD kb / documents / gold-qa | + 删文档、gold upload、is_core | 补全（PRD 2.1） |
 | tasks POST/GET/cancel/rerun | + approve-stress、stress-series | 补全（F-ST） |
 | reports GET/share | + fmt=md、baseline、share query | md/基线在功能表 |
 | admin settings GET/PUT | 字段分 M1/M4 | 是 |
@@ -1162,19 +1241,19 @@ JSON Schema 冻结点：短工具 M1 W4；评测长工具 M2 W6；RAG M3 W10；s
 原前端表有、本文保留。本文多出并需回写计划的：
 
 - `GET /api/auth/me`  
-- `PATCH /api/users/{id}`、`POST /api/users/{id}/reset-password`（计划写「停用/改角色/重置密」未写路径）  
+- `PUT /api/users/{id}`、`POST /api/users/{id}/reset-password`（计划写“停用/重置密”未写路径）
 - 会话方案 A 从「周三二选一」改为冻结  
 - `POST /api/datasets/{id}/upload`、`GET .../rows`  
 - `POST /api/case-sets/{id}/map`  
-- `POST /api/gold-qa/{id}/upload`  
-- `DELETE /api/kb/{id}/docs/{doc_id}`  
+- `POST /api/kb/{id}/gold-qa`
+- `DELETE /api/kb/{id}/documents/{doc_id}`
 - `GET /api/files/{id}`  
 
 后端计划多出的 `GET /api/admin/audit-logs`、`GET /api/health`：前端不强制调用，一致。
 
 ### A.6 角色 vs PRD 2.1
 
-只读不可 Agent / 写资源 / 管理写；分享免登录只读报告；`prod` 会签；取消权限：一致。
+单一 `member` 可访问 V1.0 工作台与配置；分享免登录仅只读报告；`prod` 须非创建者会签；任务取消限创建者：一致。
 
 ### A.7 内部边界
 
@@ -1184,9 +1263,92 @@ MCP 浏览器不调：与 PRD 3.1、前端计划「禁止把 MCP 当 REST」一�
 ### A.8 发现的文档间隙（检查时已在本文冻结，计划需回写）
 
 1. 登录后刷新身份：PRD 未写 `GET /api/auth/me`，SPA + Cookie 必需 → 本文补全。  
-2. 用户停用/改角色/重置密：5.9 只有 GET/POST users → 拆 PATCH 与 reset-password。  
+2. 用户停用/重置密：5.9 只有 GET/POST users → 拆 PUT 与 reset-password。
 3. 会话 REST：计划二选一 → 冻结方案 A。  
 4. 数据集覆盖上传、待补全行、用例映射：功能有、5.9 无独立路径 → 本文给出。  
 5. `CONCURRENCY`：PRD 超限保持 queued，与「错误码」并存 → 本文规定默认仍创建 queued，不把该码当创建失败。
 
-检查结论：本文与 PRD 功能无冲突；与 5.9 的差异均为已声明补全。前端计划 / 后端计划已回写为「以 API V1.0 为准」（会话方案 A、`run.k`、`run.use_judge`、`GET /api/auth/me`）。
+检查结论：本文与 PRD 功能无冲突；与 5.9 的差异均为已声明补全。前端计划 / 后端计划已回写为「以 API V1.3 为准」（会话方案 A、`run.k`、`run.use_judge`、`GET /api/auth/me`、目录/摘要/调度事件）。
+
+---
+
+## 12. 原型数据源与真实联调约定（V1.3，开发前必读）
+
+本节以 `Web-Prototype/` 现状为准，解决原型中“页面看起来有数据”与“浏览器确实调到了 API”混在一起的问题。它不改变 PRD 功能范围，也不要求本次修改业务项目代码。
+
+### 12.1 三类数据必须分开
+
+| 类型 | 可以包含 | 存放/使用规则 | 不可以包含 |
+| --- | --- | --- | --- |
+| 静态 UI 配置 | 路由、导航、状态/指标枚举、文案、颜色令牌、表头、表单默认约束 | `assets/app.js` 的枚举和页面布局；随前端包发布 | 业务实体、KPI、任务、报告、用户、协议档、白名单 |
+| 显式 Mock | `MOCK_SEED` 中的示例业务实体和 Mock 响应 | 仅 URL `?data=mock` 或 `localStorage.ae_data_mode=mock` 时载入；仅用于走查/视觉验收 | 作为 API 失败后的自动回退；用于演示“已联调” |
+| 实时 API 数据 | 所有业务实体、列表、详情、图表序列和可写表单 | 默认模式；统一经 `assets/api.js` → `/api`；响应写入页面缓存后渲染 | `localStorage` 长期 token、将失败替换为假成功 |
+
+`Web-Prototype/assets/api.js` 的默认模式是 `live`。网络失败、非 2xx、未登录均向调用页抛出结构化错误；不得退回 `MOCK_SEED`。顶栏的“实时 API / 示例 Mock”标识是验收证据，不是可随意隐藏的装饰。
+
+### 12.2 原型启动与接口地址
+
+| 场景 | 地址/操作 | 预期 |
+| --- | --- | --- |
+| 同域开发 | `http://<web-host>/...`，反代 `/api` 到 API 服务 | 默认实时调用，Cookie 使用 `credentials: include` |
+| 分离开发 | 页面 URL 加 `?apiBase=http://localhost:8000/api`（或启动前设置 `window.AE_CONFIG.apiBase`） | REST 指向该服务；后端须允许准确 Origin 和凭据 CORS |
+| 视觉走查 | 页面 URL 加 `?data=mock` | 仅加载 `MOCK_SEED`；顶栏显示“示例 Mock” |
+| 不可接受 | 直接双击 `file://` 后把异常吞掉 | 页面必须显示加载失败；不能声称已接 API |
+
+临时兼容说明：当前后端已有的 `GET` 列表有些直接返回数组，而本契约冻结 `{items,total}`。原型客户端会把“顶层数组”归一为列表对象，避免阻塞本轮走查；这不是后端长期豁免。M1 完成后所有列表必须按 §1.1 返回分页对象。
+
+### 12.3 当前实现审计（2026-08-18，只读检查）
+
+下表是对当前 `backend/api/app/routers/` 的实现覆盖检查，不代表目标契约已经完成；本次未修改这些项目代码。
+
+| 域 | 已有实现 | 与 V1.3 的关键缺口 | 首个阻塞里程碑 |
+| --- | --- | --- | --- |
+| 健康、认证 | health；login/logout/me/ws-ticket | 改密接口、Cookie 名/12h 口径、续期与统一错误体未对齐 | M1 |
+| 成员 | 无 `users` router | 成员列表、状态、重置密码、审计查询全部缺失 | M1 |
+| 会话/Agent | WS 会建立会话并发最小确认卡 | `/api/sessions` 及消息回放缺失；WS 事件/重放/上行协议未完整对齐 | M1 |
+| 协议档 | profiles 的 list/create/delete | get/update/check、用途/密钥不回显、审计与统一列表响应缺失 | M1 |
+| 任务 | create/list/get/cancel/rerun | TaskSpec 校验、分页对象、events、worker 状态机与权限口径未完整对齐 | M1–M2 |
+| 数据集 | list/create/delete | 详情、版本上传、行 CRUD、AI 生成、统一响应缺失 | M2 |
+| 用例、报告 | 无对应 router | 全部接口与实体缺失 | M2 |
+| KB/RAG | 独立 LightRAG `/health`、`/query` 骨架 | 平台 `/api/kb*`、文档、黄金 QA、报告关联缺失 | M3 |
+| 调度、压测治理、MCP、Skills | 无平台 router | 全部接口、白名单、会签、曲线、指标边界缺失 | M1/M4 |
+
+结论：原型的接口名称此前大部分已列出，但不能视为“已接入”。本节与后端计划的 M0–M4 清单共同作为实现差距清单。
+
+### 12.4 原型 API 客户端冻结项
+
+| 项 | 冻结处理 | 后端配合 |
+| --- | --- | --- |
+| 任务重跑 | `tasks.rerun(id)` → `POST /api/tasks/{id}/rerun`；不得在浏览器拼造旧任务配置 | 后端从旧任务快照复制并生成新 ID |
+| 会话删除 | V1.0 不提供删除会话接口，原型不再发 `DELETE /api/sessions/{id}` | 若未来 PRD 增加能力，先补本文再做 UI |
+| 上传 | `FormData` 不设置 JSON Content-Type；数据集走 `/datasets/{id}/upload`，KB 走 `/kb/{id}/documents` | 返回文件/版本/异步处理状态，不能只返回 `{ok:true}` |
+| WS | 从 REST 短票换取连接；支持 `session_id` 与 `last_event_id` | 不接受长期 token；按 §4 补发事件 |
+| 缓存 | `AE.DB` 只是一页内响应缓存，实时模式初始为空 | 写操作成功后返回资源或前端重新拉取；禁止依赖原型样本 ID |
+
+### 12.5 页面联调最小验收
+
+| 页面 | 首次真实读 | 最小真实写 | 通过条件 |
+| --- | --- | --- | --- |
+| login | `GET /auth/me`（刷新后） | login / change-password | Cookie 生效，刷新仍能识别身份 |
+| agent | sessions、profiles、datasets/KB | 创建会话、确认卡 `POST /tasks` | 断线重连后按 event_id 补发，不伪造任务成功 |
+| tasks | `GET /tasks` | cancel / rerun | 筛选、详情、状态均来自服务器；重跑 ID 改变 |
+| datasets / cases | 各自列表和详情/行 | 上传、保存、确认/映射 | 刷新后版本和编辑结果仍存在 |
+| report | reports、samples、stress-series | share / baseline | 无报告时显示空/错误态，不能用静态报告顶替 |
+| kb | KB、文档、黄金 QA | 上传、查询、黄金 QA 覆盖 | 检索结果中的 doc ID 可追溯 |
+| 管理与调度 | profiles/settings/workers/whitelist | check、更新治理、白名单 | 敏感字段不回显；变更可审计 |
+
+### 12.6 原型逐页还原新增契约（V1.3）
+
+以下接口和字段补齐的是原型已经可见、但此前未被明确为真实数据的状态。它们的实现批次、表和测试以两份开发计划的 §11.7 / §12.7 为准。
+
+| 页面状态 | 冻结契约 | 实时模式规则 |
+| --- | --- | --- |
+| 调度分配日志 | `GET /api/dispatch/events?after_id=&limit=` | 只增量读取调度器写入的事件；无事件即空日志，不显示示例流 |
+| 任务趋势与诊断 | `GET /api/tasks/summary?from=&to=` | 后端聚合状态趋势与可追溯规则诊断；不返回无来源的生成式文案 |
+| 数据集目录/扩展列 | `/api/dataset-folders*`；dataset `folder_id,column_schema` | 目录、列和行值写后必须刷新仍存在；候选生成结果不属于资源 |
+| 用例目录/扩展列 | `/api/case-folders*`；case set `folder_id,column_schema` | 目录、列、72h 与确认状态由服务端返回；不得用前端倒计时决定终态 |
+| KB 实验区 | KB item `capabilities.projection/rerank_compare` | V1.0 返回 `false`；前端展示能力说明，不能用 Mock 散点或重排对照补位 |
+| 协议档四 Tab | `GET /api/mcp/tools`；profiles/settings | 仅内置工具清单可读；外部 MCP 和自定义技能/Prompt 的写操作在 V1.0 返回 `VALIDATION` 的能力未启用说明 |
+| 成员活动 | `GET /api/users/activity-summary?from=&to=` | KPI/活动由审计聚合；异地登录 AI 风险不在 V1.0 返回范围 |
+
+能力未启用使用 HTTP 409，错误体仍遵循 §1.3：`{ "code": "VALIDATION", "message": "该能力未纳入 PRD V1.0", "fields": { "feature": "disabled" } }`。前端将其渲染为页面内受控说明，不显示为成功 Toast，也不回退 Mock。
