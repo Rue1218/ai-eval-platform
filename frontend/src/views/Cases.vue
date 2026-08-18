@@ -52,6 +52,7 @@
             <span class="tag-soft" style="color: var(--accent-warning); border-color: #FDE68A">
               {{ currentSet.status === 'confirmed' ? '✓ 已入库' : currentSet.status === 'cancelled' ? '已废弃' : `72h 倒计时: 剩 ${Math.floor(currentSet.expires_in_h || 70)}h` }}
             </span>
+            <span class="tag-soft" :style="modeTagStyle">{{ modeMappingLabel }}</span>
           </div>
 
           <div class="row" style="gap: 8px; align-items: center; margin-left: auto; flex-wrap: wrap; justify-content: flex-end">
@@ -172,10 +173,7 @@
         <!-- 4. 底部状态栏与批量映射 -->
         <div class="ws-status-bar">
           <span>已选 <b class="num mono">{{ selectedCaseIds.length }}</b> / {{ cases.length }} 条</span>
-          <select v-model="mapTarget" class="select" style="height: 28px; padding: 2px 24px 2px 8px; font-size: 12px" @change="loadMappingTargets">
-            <option value="dataset">映射至基准数据集</option>
-            <option value="gold_qa">映射至黄金 QA</option>
-          </select>
+          <span class="tag-soft" :style="modeTagStyle">{{ modeMappingLabel }}</span>
           <select v-model="mapTargetId" class="select" style="height: 28px; padding: 2px 24px 2px 8px; font-size: 12px" :disabled="mappingTargets.length === 0">
             <option value="">选择目标</option>
             <option v-for="target in mappingTargets" :key="target.id" :value="target.id">{{ target.name }}</option>
@@ -219,10 +217,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useMessage } from 'naive-ui'
 import { api } from '../api/http'
 import type { CaseSet, KnowledgeBase, TestCase } from '../api/types'
+import { useModeStore } from '../stores/mode'
 
 interface MappingTarget {
   id: string
@@ -230,9 +229,9 @@ interface MappingTarget {
 }
 
 const message = useMessage()
+const modeStore = useModeStore()
 const treeSearch = ref('')
 const activeSetId = ref('')
-const mapTarget = ref<'dataset' | 'gold_qa'>('dataset')
 const mapTargetId = ref('')
 const mappingTargets = ref<MappingTarget[]>([])
 const caseSets = ref<CaseSet[]>([])
@@ -263,6 +262,13 @@ const strategyCounts = computed(() => {
   return strategies.map(strategy => ({ name: strategy, count: cases.value.filter(item => item.strategy === strategy).length }))
 })
 const adoptionRate = computed(() => Math.round((cases.value.filter(item => item.mapped).length / (cases.value.length || 1)) * 100))
+// 映射目标由全局业务模式固定：大模型用例写入基准数据集，RAG 用例写入黄金 QA。
+const mapTarget = computed<'dataset' | 'gold_qa'>(() => modeStore.mode === 'rag' ? 'gold_qa' : 'dataset')
+const modeMappingLabel = computed(() => modeStore.mode === 'rag' ? '映射至黄金 QA' : '映射至基准数据集')
+const modeTagStyle = computed(() => ({
+  color: modeStore.mode === 'rag' ? 'var(--c-kb)' : 'var(--c-datasets)',
+  borderColor: modeStore.mode === 'rag' ? 'var(--t-kb)' : 'var(--t-datasets)',
+}))
 
 // 目录树由接口用例集清单驱动，避免保留原型中的固定名称与状态。
 function syncCaseSetTree(list: CaseSet[]) {
@@ -530,6 +536,11 @@ async function loadCaseSets() {
 
 onMounted(() => {
   void loadCaseSets()
+  void loadMappingTargets()
+})
+
+// 模式变化后强制清空原目标，并只加载当前业务链路允许映射的资产。
+watch(() => modeStore.mode, () => {
   void loadMappingTargets()
 })
 </script>

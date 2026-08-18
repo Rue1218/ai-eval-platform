@@ -79,12 +79,12 @@
           borderColor: modeStore.mode === 'rag' ? 'var(--t-kb)' : 'var(--t-datasets)'
         }"
       >
-        {{ modeStore.mode === 'rag' ? 'RAG 模式' : '大模型模式' }} · 全量视图
+        {{ modeStore.mode === 'rag' ? 'RAG 测试' : '大模型测试' }} · {{ modeTaskLabel }}
       </span>
 
       <n-input
         v-model:value="searchKw"
-        placeholder="搜索任务 ID / 关联集 / 创建者…"
+        :placeholder="modeStore.mode === 'rag' ? '搜索任务 ID / 知识库 / 创建者…' : '搜索任务 ID / 数据集 / 创建者…'"
         style="width: 240px"
         clearable
       />
@@ -105,19 +105,9 @@
         ]"
       />
 
-      <n-select
-        v-model:value="filterKind"
-        placeholder="全部类型"
-        clearable
-        style="width: 150px"
-        :options="[
-          { label: '全部类型', value: '' },
-          { label: '基准评测 (benchmark)', value: 'benchmark' },
-          { label: 'RAG 评测 (rag)', value: 'rag' },
-          { label: '用例生成 (testcase)', value: 'testcase' },
-          { label: '共享压测 (stress)', value: 'stress' },
-        ]"
-      />
+      <span class="tag-soft" style="cursor: default">
+        类型已限定为 {{ modeTaskLabel }}
+      </span>
 
       <span class="grow"></span>
 
@@ -131,7 +121,7 @@
         <span>刷新</span>
       </button>
 
-      <button class="btn btn-ai btn-sm" @click="showPlannerDrawer = true">
+      <button class="btn btn-ai btn-sm" @click="openPlannerDrawer">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4Z" />
         </svg>
@@ -316,7 +306,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useMessage, useDialog, NSelect, NInput, NDrawer, NDrawerContent } from 'naive-ui'
 import { api } from '../api/http'
 import type { Task } from '../api/types'
@@ -333,11 +323,14 @@ const modeStore = useModeStore()
 const tasks = ref<Task[]>([])
 const loading = ref(false)
 const filterStatus = ref('')
-const filterKind = ref('')
 const searchKw = ref('')
 
 const showDetailDrawer = ref(false)
 const selectedTask = ref<Task | null>(null)
+
+// 当前模式只查询同类质量评测，派生压测通过其父质量任务进入，不混入另一条业务工作流。
+const modeTaskKind = computed<'benchmark' | 'rag'>(() => modeStore.mode === 'rag' ? 'rag' : 'benchmark')
+const modeTaskLabel = computed(() => modeStore.mode === 'rag' ? 'RAG 评测' : '基准评测')
 
 // 状态分布与色值
 const statusList = [
@@ -397,9 +390,18 @@ function toggleStatusFilter(st: string) {
 
 // 智能编排
 const showPlannerDrawer = ref(false)
-const plannerGoal = ref('对比 gpt-test 与 claude-x 在 smoke-20 v3 上的 contain，质量达标后自动压测')
+const plannerGoal = ref('')
 const isPlanning = ref(false)
 const plannerSteps = ref<string[]>([])
+
+function openPlannerDrawer() {
+  // 每次打开均按当前模式写入明确目标，防止模式切换后沿用另一类任务文案。
+  plannerGoal.value = modeStore.mode === 'rag'
+    ? '评测知识库的 hybrid 检索质量，质量达标后自动压测 query 接口'
+    : '对比被测模型在基准数据集上的表现，质量达标后自动压测'
+  plannerSteps.value = []
+  showPlannerDrawer.value = true
+}
 
 async function generatePlan() {
   if (!plannerGoal.value.trim()) {
@@ -408,13 +410,21 @@ async function generatePlan() {
   }
   isPlanning.value = true
   plannerSteps.value = []
-  const steps = [
-    '解析目标：识别为 benchmark + 级联 stress（先评后压）',
-    '被测协议档：gpt-test · claude-x（2 个，均为「被测」用途）',
-    '数据集：smoke-20 v3 · 20 行 · 主指标 contain',
-    '运行参数：sample_size=1000 · concurrency=4 · temperature=0 · max_usd=5',
-    '级联策略：contain ≥ 0.80 自动入队压测（env=test · 10 QPS · 2min），否则仅出报告',
-  ]
+  const steps = modeStore.mode === 'rag'
+    ? [
+      '解析目标：识别为 rag + 级联 stress（先评后压）',
+      '目标资产：知识库 + 黄金 QA，按当前版本锁定评测输入',
+      '检索配置：hybrid · Top-K=5，统计 Hit Rate、MRR、Recall 与 Contain',
+      '运行参数：sample_size=1000 · concurrency=4 · timeout_s=60',
+      '级联策略：质量成功后压测同一 query 接口（env=test · 10 QPS · 2min）',
+    ]
+    : [
+      '解析目标：识别为 benchmark + 级联 stress（先评后压）',
+      '被测协议档：选择 1–5 个目标模型进行横向对比',
+      '数据集：选择当前基准数据集，主指标为 contain / exact 等',
+      '运行参数：sample_size=1000 · concurrency=4 · temperature=0 · max_usd=5',
+      '级联策略：质量成功后自动入队压测（env=test · 10 QPS · 2min）',
+    ]
   for (let i = 0; i < steps.length; i++) {
     await new Promise(r => setTimeout(r, 200))
     plannerSteps.value.push(steps[i])
@@ -424,14 +434,36 @@ async function generatePlan() {
 
 async function submitPlannerTask() {
   try {
-    await api.tasks.create({
-      kind: 'benchmark',
-      profile_ids: ['p-gpt', 'p-claude'],
-      dataset_id: 'ds-smoke',
-      with_stress: true,
-      run: { sample_size: 1000, concurrency: 4, timeout_s: 60, retry: 1, temperature: 0 },
-      stress: { env: 'test', qps: 10, duration_s: 120 },
-    })
+    if (modeStore.mode === 'rag') {
+      const kbs = await api.kb.list()
+      const kb = kbs[0]
+      if (!kb) throw new Error('当前没有可用知识库，请先在知识库工作台创建并上传黄金 QA')
+      const goldQas = await api.kb.getGoldQA(kb.id)
+      const goldQa = goldQas[0]
+      if (!goldQa) throw new Error('当前知识库没有黄金 QA，请先上传后再编排评测')
+      await api.tasks.create({
+        kind: 'rag',
+        kb_id: kb.id,
+        gold_qa_id: goldQa.id,
+        rag_mode: ['hybrid'],
+        with_stress: true,
+        run: { sample_size: 1000, concurrency: 4, timeout_s: 60, retry: 1, k: 5 },
+        stress: { env: 'test', qps: 10, duration_s: 120 },
+      })
+    } else {
+      const [profiles, datasets] = await Promise.all([api.profiles.list(), api.datasets.list()])
+      const profileIds = profiles.slice(0, 2).map(profile => profile.id)
+      const dataset = datasets[0]
+      if (!profileIds.length || !dataset) throw new Error('请先准备被测协议档和基准数据集后再编排评测')
+      await api.tasks.create({
+        kind: 'benchmark',
+        profile_ids: profileIds,
+        dataset_id: dataset.id,
+        with_stress: true,
+        run: { sample_size: 1000, concurrency: 4, timeout_s: 60, retry: 1, temperature: 0 },
+        stress: { env: 'test', qps: 10, duration_s: 120 },
+      })
+    }
     message.success('任务已创建（queued），编排方案已成功转为 TaskSpec')
     showPlannerDrawer.value = false
     loadTasks()
@@ -443,14 +475,15 @@ async function submitPlannerTask() {
 // 任务加载与过滤
 const filteredTasks = computed(() => {
   return tasks.value.filter((t) => {
+    if (t.kind !== modeTaskKind.value) return false
     if (filterStatus.value && t.status !== filterStatus.value) return false
-    if (filterKind.value && t.kind !== filterKind.value) return false
     if (searchKw.value) {
       const kw = searchKw.value.toLowerCase()
       const matchId = t.id.toLowerCase().includes(kw)
       const matchCreator = (t.creator || t.created_by || '').toLowerCase().includes(kw)
       const matchDataset = (t.config?.dataset_id || '').toLowerCase().includes(kw)
-      if (!matchId && !matchCreator && !matchDataset) return false
+      const matchKb = (t.config?.kb_id || '').toLowerCase().includes(kw)
+      if (!matchId && !matchCreator && !matchDataset && !matchKb) return false
     }
     return true
   })
@@ -507,7 +540,7 @@ async function loadTasks() {
   try {
     const res = await api.tasks.list({
       status: filterStatus.value || undefined,
-      kind: filterKind.value || undefined,
+      kind: modeTaskKind.value,
     })
     tasks.value = Array.isArray(res) ? res : ((res as any).items || [])
   } catch (err: any) {
@@ -530,6 +563,13 @@ function formatRelativeTime(dateStr?: string) {
 
 onMounted(() => {
   loadTasks()
+})
+
+// 顶栏切换后立即清空局部筛选并重新请求同类任务，统计大盘与表格始终使用当前模式数据。
+watch(() => modeStore.mode, () => {
+  filterStatus.value = ''
+  searchKw.value = ''
+  void loadTasks()
 })
 </script>
 

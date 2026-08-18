@@ -1,5 +1,13 @@
 <template>
   <div class="kb-workbench">
+    <div v-if="modeStore.mode === 'llm'" class="mode-context-panel panel">
+      <span class="eyebrow">大模型测试模式</span>
+      <h2>基准评测使用协议档与数据集</h2>
+      <p>知识库、切块与黄金 QA 仅属于 RAG 测试链路。请切换到 RAG 模式管理检索资产；当前可前往数据集工作台准备 Benchmark 输入。</p>
+      <router-link to="/datasets" class="btn btn-sign btn-sm">进入数据集工作台</router-link>
+    </div>
+
+    <template v-else>
     <!-- 顶部知识库选择与操作栏 -->
     <div class="kb-bar row-between mb16">
       <div class="row wrap" style="gap: 8px">
@@ -369,6 +377,7 @@
       v-model:show="showLaunchDrawer"
       :kb-id="activeKbId"
     />
+    </template>
   </div>
 </template>
 
@@ -377,12 +386,14 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useDialog, useMessage } from 'naive-ui'
 import { api } from '../api/http'
 import type { KnowledgeBase, KbChunk, KbDoc, GoldQA } from '../api/types'
+import { useModeStore } from '../stores/mode'
 import UploadKbDocModal from '../components/modals/UploadKbDocModal.vue'
 import UploadGoldQaModal from '../components/modals/UploadGoldQaModal.vue'
 import RagLaunchDrawer from '../components/drawers/RagLaunchDrawer.vue'
 
 const message = useMessage()
 const dialog = useDialog()
+const modeStore = useModeStore()
 
 const kbs = ref<KnowledgeBase[]>([])
 const activeKbId = ref<string>('')
@@ -623,8 +634,8 @@ watch([activeDocId, chunkSize, overlap], () => {
   void loadChunkPreview()
 })
 
-// 首次加载知识库清单后，选择首项并读取其文档与黄金 QA。
-onMounted(async () => {
+// 读取 RAG 资产时才初始化知识库与子资源，切回 RAG 模式后可复用已加载的内容。
+async function loadKnowledgeBases() {
   try {
     const list = await api.kb.list()
     kbs.value = list
@@ -633,6 +644,15 @@ onMounted(async () => {
   } catch (err: any) {
     message.error(err.message || '加载知识库失败')
   }
+}
+
+onMounted(() => {
+  if (modeStore.mode === 'rag') void loadKnowledgeBases()
+})
+
+// 从大模型模式切回 RAG 时补齐首次加载，避免空白工作台。
+watch(() => modeStore.mode, (mode) => {
+  if (mode === 'rag' && !kbs.value.length) void loadKnowledgeBases()
 })
 </script>
 
@@ -641,6 +661,21 @@ onMounted(async () => {
   display: grid;
   grid-template-columns: 280px 1fr 340px;
   gap: 16px;
+}
+.mode-context-panel {
+  max-width: 680px;
+  margin: 48px auto;
+  padding: 28px;
+}
+.mode-context-panel h2 {
+  margin: 8px 0 10px;
+  font-size: 20px;
+}
+.mode-context-panel p {
+  max-width: 560px;
+  margin: 0 0 20px;
+  color: var(--text-secondary);
+  line-height: 1.7;
 }
 @media (max-width: 1200px) {
   .kb-grid-3col {

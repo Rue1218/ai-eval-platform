@@ -605,10 +605,12 @@ import { useMessage, useDialog } from 'naive-ui'
 import { api } from '../api/http'
 import { AgentWebSocket } from '../api/ws'
 import type { Task, TaskSpec, WsServerEvent, Profile, Dataset, KnowledgeBase, GoldQA } from '../api/types'
+import { useModeStore } from '../stores/mode'
 import KindTag from '../components/common/KindTag.vue'
 
 const message = useMessage()
 const dialog = useDialog()
+const modeStore = useModeStore()
 const chatScrollRef = ref<HTMLDivElement | null>(null)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
@@ -646,7 +648,8 @@ const availableGoldQas = ref<GoldQA[]>([
   { id: 'gq-1', kb_id: 'kb-default', name: 'qa-v1', version: 2, row_count: 20, owner: 'admin', created_at: new Date().toISOString() },
 ])
 
-const isRagMode = ref(false)
+// 智能体能力卡与顶栏共用同一模式状态，避免出现页面内外不一致的评测上下文。
+const isRagMode = computed(() => modeStore.mode === 'rag')
 
 const LLM_CAPS = [
   { id: 'cap-benchmark', name: '多模型基准对比', desc: '1–5 个协议档并排测试，输出 contain / exact / Judge 打分', say: '对比一下 gpt-test 和 claude-x 在 smoke-20 上的表现', icoSvg: '<path d="M4 20V10M10 20V4M16 20v-8M3 20h18"/>' },

@@ -1,6 +1,13 @@
 <template>
   <div class="datasets-workbench">
-    <div class="ft-layout">
+    <div v-if="modeStore.mode === 'rag'" class="mode-context-panel panel">
+      <span class="eyebrow">RAG 测试模式</span>
+      <h2>RAG 评测使用知识库与黄金 QA</h2>
+      <p>基准数据集只服务于大模型对比评测。当前模式下，请在知识库工作台管理文档、切块、检索与黄金 QA，再发起 RAG 评测。</p>
+      <router-link to="/kb" class="btn btn-sign btn-sm">进入知识库工作台</router-link>
+    </div>
+
+    <div v-else class="ft-layout">
       <!-- 左侧：目录树侧边栏 -->
       <div class="ft-sidebar">
         <div class="ft-header">
@@ -192,10 +199,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useMessage } from 'naive-ui'
 import { api } from '../api/http'
 import type { Dataset, DatasetRow } from '../api/types'
+import { useModeStore } from '../stores/mode'
 import UploadDatasetModal from '../components/modals/UploadDatasetModal.vue'
 import BenchmarkLaunchDrawer from '../components/drawers/BenchmarkLaunchDrawer.vue'
 
@@ -210,6 +218,7 @@ interface EditableDatasetRow {
 }
 
 const message = useMessage()
+const modeStore = useModeStore()
 const treeSearch = ref('')
 const datasets = ref<Dataset[]>([])
 const activeDatasetId = ref('')
@@ -442,13 +451,34 @@ async function loadDatasets() {
 }
 
 onMounted(() => {
-  void loadDatasets()
+  // 基准数据只在大模型模式加载，避免 RAG 模式访问后展示错误资产。
+  if (modeStore.mode === 'llm') void loadDatasets()
+})
+
+// 用户在当前页切回大模型模式时，按需读取基准数据资产。
+watch(() => modeStore.mode, (mode) => {
+  if (mode === 'llm' && !datasets.value.length) void loadDatasets()
 })
 </script>
 
 <style scoped>
 .datasets-workbench {
   height: calc(100vh - var(--topbar-h) - 20px);
+}
+.mode-context-panel {
+  max-width: 680px;
+  margin: 48px auto;
+  padding: 28px;
+}
+.mode-context-panel h2 {
+  margin: 8px 0 10px;
+  font-size: 20px;
+}
+.mode-context-panel p {
+  max-width: 560px;
+  margin: 0 0 20px;
+  color: var(--text-secondary);
+  line-height: 1.7;
 }
 .ft-layout {
   display: grid;
