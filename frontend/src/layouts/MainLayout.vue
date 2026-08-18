@@ -271,13 +271,19 @@ const IconUsers = () =>
     h('path', { d: 'M16 3.13a4 4 0 0 1 0 7.75' }),
   ])
 
-const evalRoutes = [
-  { path: '/agent', label: '智能体', icon: IconAgent, t: 'var(--t-agent)', c: 'var(--c-agent)' },
-  { path: '/tasks', label: '任务中心', icon: IconTasks, t: 'var(--t-tasks)', c: 'var(--c-tasks)' },
-  { path: '/datasets', label: '数据集', icon: IconDatasets, t: 'var(--t-datasets)', c: 'var(--c-datasets)' },
-  { path: '/cases', label: '用例', icon: IconCases, t: 'var(--t-cases)', c: 'var(--c-cases)' },
-  { path: '/kb', label: '知识库', icon: IconKb, t: 'var(--t-kb)', c: 'var(--c-kb)' },
-]
+const evalRoutes = computed(() => {
+  // 双模式各自只暴露当前评测链路的资产入口，避免将基准数据集误用于 RAG，或在基准模式误操作知识库。
+  const sharedRoutes = [
+    { path: '/agent', label: '智能体', icon: IconAgent, t: 'var(--t-agent)', c: 'var(--c-agent)' },
+    { path: '/tasks', label: '任务中心', icon: IconTasks, t: 'var(--t-tasks)', c: 'var(--c-tasks)' },
+    { path: '/cases', label: '用例', icon: IconCases, t: 'var(--t-cases)', c: 'var(--c-cases)' },
+  ]
+  const modeAsset = modeStore.mode === 'rag'
+    ? { path: '/kb', label: '知识库', icon: IconKb, t: 'var(--t-kb)', c: 'var(--c-kb)' }
+    : { path: '/datasets', label: '数据集', icon: IconDatasets, t: 'var(--t-datasets)', c: 'var(--c-datasets)' }
+
+  return [...sharedRoutes.slice(0, 2), modeAsset, sharedRoutes[2]]
+})
 
 const adminRoutes = [
   { path: '/admin/profiles', label: '协议档', icon: IconProfiles, t: 'var(--t-profiles)', c: 'var(--c-profiles)' },
@@ -286,7 +292,12 @@ const adminRoutes = [
 ]
 
 const currentPath = computed(() => route.path)
-const currentTitle = computed(() => (route.meta.title as string) || 'AI 测试与评估平台')
+const currentTitle = computed(() => {
+  // 顶栏标题同步当前模式，深链访问另一模式资产页时也能清晰提示其业务边界。
+  if (route.path === '/datasets') return modeStore.mode === 'llm' ? '基准数据集' : 'RAG 资产切换'
+  if (route.path === '/kb') return modeStore.mode === 'rag' ? '知识库' : '大模型资产切换'
+  return (route.meta.title as string) || 'AI 测试与评估平台'
+})
 const isFlushView = computed(() => route.path.startsWith('/agent'))
 
 const userInitial = computed(() => {
