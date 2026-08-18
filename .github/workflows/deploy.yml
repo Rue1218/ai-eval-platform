@@ -10,10 +10,10 @@ on:
       - 'Web-Prototype/**'
   workflow_dispatch:
 
-# 同一台生产服务器一次只执行一个部署，避免并发构建争抢资源并导致 SSH 连接被重置。
+# 同一台生产服务器一次只执行一个部署；新提交应淘汰旧提交，避免它们在服务器上重复构建。
 concurrency:
   group: ai-eval-production-deploy
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   deploy:
@@ -37,20 +37,25 @@ jobs:
 
       - name: Deploy to server
         if: steps.check.outputs.skip != 'true'
+        # 将触发工作流的提交透传到远端，禁止旧工作流改为部署更新后的 main。
+        env:
+          DEPLOY_COMMIT: ${{ github.sha }}
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER || 'deploy' }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
+          envs: DEPLOY_COMMIT
           command_timeout: 30m
           script: |
             set -e
             APP_DIR=/opt/ai-eval-platform
-            # 先同步后再加载脚本，确保本次运行使用触发提交中的 deploy.sh，而不是旧版本。
+            # 先同步到本次触发的提交，再加载其中的部署脚本，确保代码与工作流一一对应。
             if [ -d "$APP_DIR/.git" ]; then
               cd "$APP_DIR"
               git fetch origin main
-              git reset --hard origin/main
+              git cat-file -e "${DEPLOY_COMMIT}^{commit}"
+              git reset --hard "$DEPLOY_COMMIT"
             fi
-            exec bash "$APP_DIR/deploy/deploy.sh"
+            exec env DEPLOY_COMMIT="$DEPLOY_COMMIT" bash "$APP_DIR/deploy/deploy.sh"

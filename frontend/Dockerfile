@@ -2,7 +2,8 @@
 FROM node:20-alpine AS build
 WORKDIR /app
 
-ENV NODE_OPTIONS="--max-old-space-size=1024"
+# 限制 Vite 构建堆，避免小规格生产服务器与其他容器争抢内存后持续 swap。
+ENV NODE_OPTIONS="--max-old-space-size=768"
 
 # 先复制依赖清单并安装，充分利用 Docker 层缓存（只要 package.json 不变就不重复安装）
 COPY package.json package-lock.json* ./
