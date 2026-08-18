@@ -2,10 +2,12 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.1 |
-| 对应 PRD | V1.6.3 |
-| 对应 API | V1.2 |
+| 文档版本 | V1.3 |
+| 对应 PRD | V1.6.3（功能唯一权威） |
+| 对应 API | V1.3（路径与 JSON 契约唯一权威） |
+| 对应规范 | AGENTS.md V1.0（AI 行为准则、全中文注释与提交门禁） |
 | 撰写日期 | 2026-08-17 |
+| 最近修订 | 2026-08-18：M0 里程碑 100% 验收交付，同步 AGENTS.md 工程规范与 M1 推进计划 |
 | 计划起点 | 2026-08-18 |
 | V1.0 目标发布 | 2026-12-04 |
 | 总工期 | **16 周**（含 1 周启动 + 1 周硬化缓冲） |
@@ -16,7 +18,10 @@
 
 本计划严格对应 PRD 第 7 节里程碑（M1–M4）与功能表交付列，不把 V1.1 / 明确不做的能力排进 V1.0。
 
-**V1.1 补充（2026-08-18）**：页面的“可演示”必须分为 Mock 走查和实时 API 联调两种状态。默认原型请求真实 `/api`；Mock 只能显式开启，API 错误不得自动显示样例数据。详细接口缺口与实施顺序见《API》V1.2、《前端开发计划》V1.2 §11、《后端开发计划》V1.2 §12。
+**V1.3 补充（2026-08-18）**：
+1. **M0 阶段已圆满收官**：Docker Compose 六件套、FastAPI 核心骨架、Vue 3 + Naive UI 布局、统一错误码、自动部署流水线（`http://47.119.132.83/`）与 `AGENTS.md` 规范已全部就绪。
+2. **规范与门禁**：所有开发必须遵循 `AGENTS.md` 规定的**全中文注释**、**提交前本地构建自检**（`npm run build`、`ruff check .`、`pytest`）及**中文 Conventional Commits 规范**。
+3. **可演示口径**：默认请求真实 `/api` 与 `/ws` 接口；Mock 仅用于前端独立走查，禁止请求失败自动回退伪造样例数据。
 
 ### 1.1 范围边界
 
@@ -46,21 +51,21 @@
 
 ### 1.3 日历总览
 
-```
+```text
 2026-08-18                                                         2026-12-04
 |--------|--------|--------|--------|--------|--------|--------|--------|
   M0 1w     M1 4w              M2 4w              M3 3w        M4 3w   H 1w
- 启动      底座+Agent         Benchmark+用例      RAG         压测+通知 硬化
+ [✅已交付] [🚀进行中]        Benchmark+用例      RAG         压测+通知 硬化
 ```
 
-| 阶段 | 周次 | 日期 | 主题 | 演示门禁（摘自 PRD） |
-| --- | --- | --- | --- | --- |
-| M0 | W1 | 08-18 ~ 08-24 | 工程启动 | Compose 能起 api+web+postgres；仓库规范就绪 |
-| M1 | W2–W5 | 08-25 ~ 09-21 | 底座 + Agent | 登录后对话下单空跑；断线按 event_id 续；管理员加协议档 |
-| M2 | W6–W9 | 09-22 ~ 10-19 | Benchmark + 用例 + 表单 | 两协议档 + ≥20 条 JSONL，对话出 contain 对比报告 |
-| M3 | W10–W12 | 10-20 ~ 11-09 | RAG | LightRAG hybrid Hit Rate@5；外部 Chat RAG 出 contain |
-| M4 | W13–W15 | 11-10 ~ 11-30 | 先评后压 | test 白名单压 2 分钟；平台曲线与 Grafana 同 task_id |
-| H | W16 | 12-01 ~ 12-04 | 硬化发布 | V1.0 验收清单全绿，打 tag 发布 |
+| 阶段 | 周次 | 日期 | 状态 | 主题 | 演示门禁（摘自 PRD） |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **M0** | W1 | 08-18 ~ 08-24 | **✅ 已完成** | 工程启动 | Compose 六件套正常运行；CI/CD 自动部署就绪；AGENTS.md 规范落地 |
+| **M1** | W2–W5 | 08-25 ~ 09-21 | **🚀 进行中** | 底座 + Agent | 登录后对话下单空跑；断线按 event_id 续；模型协议档与数据集元数据 CRUD |
+| **M2** | W6–W9 | 09-22 ~ 10-19 | 待启动 | Benchmark + 用例 + 表单 | 两协议档 + ≥20 条 JSONL，对话出 contain 对比报告 |
+| **M3** | W10–W12 | 10-20 ~ 11-09 | 待启动 | RAG | LightRAG hybrid Hit Rate@5；外部 Chat RAG 出 contain |
+| **M4** | W13–W15 | 11-10 ~ 11-30 | 待启动 | 先评后压 | test 白名单压 2 分钟；平台曲线与 Grafana 同 task_id |
+| **H** | W16 | 12-01 ~ 12-04 | 待启动 | 硬化发布 | V1.0 验收清单全绿，打 tag 发布 |
 
 ---
 
@@ -68,7 +73,7 @@
 
 最长依赖链（不能并行压缩）：
 
-```
+```text
 账号/任务表 → WS Agent + 确认卡 → worker 状态机
     → 三协议真调用 + 规则评分（M2 门禁）
     → 质量 succeeded 才能派生子任务
@@ -77,49 +82,51 @@
 
 可并行、不挡主路径的工作：
 
-| 工作 | 最早可开工 | 说明 |
-| --- | --- | --- |
-| 协议适配器夹具单测 | M0 末 | 不依赖 UI |
-| 前端页面壳与路由 | M0 | 先 mock，M1 接真接口 |
-| LightRAG 锁 tag + Compose 草稿 | M2 | M3 才接评测 |
-| go-stress-testing 扩展骨架 | M2 | M4 才接父任务 |
-| Grafana dashboard JSON 草稿 | M3 | 等 `/metrics` 契约冻结后微调 |
-| 通知渠道（企微/邮件/Webhook） | M4 前半 | 不挡压测内核 |
+| 工作 | 最早可开工 | 状态 | 说明 |
+| :--- | :--- | :--- | :--- |
+| 协议适配器夹具单测 | M0 末 | 准备中 | 不依赖 UI |
+| 前端页面壳与路由 | M0 | ✅ 已完成 | 现进入 M1 真实接口对接 |
+| LightRAG 锁 tag + Compose 草稿 | M2 | 待启动 | M3 才接评测 |
+| go-stress-testing 扩展骨架 | M2 | 待启动 | M4 才接父任务 |
+| Grafana dashboard JSON 草稿 | M3 | 待启动 | 等 `/metrics` 契约冻结后微调 |
+| 通知渠道（企微/邮件/Webhook） | M4 前半 | 待启动 | 不挡压测内核 |
 
 ---
 
 ## 3. 人员负荷（按阶段）
 
-| 阶段 | Python | Vue | Go/Infra |
-| --- | --- | --- | --- |
-| M0 | 仓库、Compose、Alembic、鉴权骨架 | Vite + Naive 壳、登录页 | Compose 网络、卷、健康检查 |
-| M1 | Agent/WS/MCP/任务机/协议档/文件/审计 | `/agent` `/tasks` `/admin/*` | 六件套占位容器（lightrag/stress 可先 sleep） |
-| M2 | 评测 worker、评分、报告、预算、用例 Skill | 数据集/用例确认/报告对比/表单下单 | 开始 fork go-stress-testing，先打通本地 HTTP 压测 |
-| M3 | LightRAG 适配、外部 RAG、黄金 QA、Judge | `/kb`、RAG 报告、退化标红 | LightRAG 服务稳定、索引卷、内网 DNS |
-| M4 | 先评后压编排、会签、费用估算、解读、通知 | 压测曲线、会签 UI、通知开关 | 指标、立即停、`/metrics`、Prometheus 抓取 |
-| H | 性能、断点续跑、安全复查 | E2E 走查、空态/错误态 | 发布 Compose、备份与回滚说明 |
+| 阶段 | Python | Vue | Go/Infra | 状态 |
+| :--- | :--- | :--- | :--- | :--- |
+| **M0** | 仓库、Compose、Alembic、鉴权骨架、AGENTS.md | Vite + Naive 壳、登录页、原型对齐 | Compose 六件套、CI/CD 自动部署、自愈脚本 | ✅ 100% 验收 |
+| **M1** | Agent Host (WS)、短 MCP、确认卡生成、协议档 CRUD | `/agent` 会话流、确认卡交互、`/tasks` 列表 | 容器健康检查、内存限制与构建缓存优化 | 🚀 迭代中 |
+| **M2** | 评测 worker、评分、报告、预算、用例 Skill | 数据集/用例确认/报告对比/表单下单 | 开始 fork go-stress-testing，先打通本地 HTTP 压测 | 待启动 |
+| **M3** | LightRAG 适配、外部 RAG、黄金 QA、Judge | `/kb`、RAG 报告、退化标红 | LightRAG 服务稳定、索引卷、内网 DNS | 待启动 |
+| **M4** | 先评后压编排、会签、费用估算、解读、通知 | 压测曲线、会签 UI、通知开关 | 指标、立即停、`/metrics`、Prometheus 抓取 | 待启动 |
+| **H** | 性能、断点续跑、安全复查 | E2E 走查、空态/错误态 | 发布 Compose、备份与回滚说明 | 待启动 |
 
 ---
 
 ## 4. 分周计划
 
-### M0  工程启动（W1，08-18 ~ 08-24）
+### M0 工程启动（W1，08-18 ~ 08-24）—— [✅ 已完成交付]
 
-**目标**：能本地 `docker compose up` 打开登录页，后续功能都落在同一骨架上。
+**目标**：能本地 `docker compose up` 打开登录页，全自动化 CI/CD 与规范落地，后续功能都落在同一骨架上。
 
-| 编号 | 工作项 | 角色 | 完成标准 |
-| --- | --- | --- | --- |
-| M0-1 | 单仓结构：`frontend/` 与 `backend/{api,worker,lightrag,stress}` + `deploy/` | 全员 | README 一条命令起开发环境 |
-| M0-2 | FastAPI + Alembic + PostgreSQL；环境变量约定 | Python | 健康检查 `GET /api/health` |
-| M0-3 | Vue3 + Vite + Naive UI + 路由空壳（PRD 5.8） | Vue | `/login` 可打开 |
-| M0-4 | Compose：`web` `api` `worker` `postgres`；`lightrag`/`stress` 占位 | Go/Infra | 热重载可用 |
-| M0-5 | 编码规范、错误码枚举（PRD 5.5）、CI（lint + pytest 空跑） | Python | PR 必须过 CI |
+| 编号 | 工作项 | 角色 | 完成标准 | 交付状态 |
+| :--- | :--- | :--- | :--- | :--- |
+| M0-1 | 单仓结构：`frontend/` 与 `backend/{api,worker,lightrag,stress}` + `deploy/` | 全员 | README 一条命令起开发环境 | ✅ 已完成 |
+| M0-2 | FastAPI + Alembic + PostgreSQL；环境变量约定；健康检查 `GET /api/health` | Python | API 与数据库健康联通 | ✅ 已完成 |
+| M0-3 | Vue3 + Vite + Naive UI + 路由壳（PRD 5.8）；薄荷绿/深空蓝主题 | Vue | `/login` 与各模块壳页面正常访问 | ✅ 已完成 |
+| M0-4 | Compose 六件套：`web` `api` `worker` `postgres` `lightrag` `stress` | Go/Infra | 容器编排稳定启动并反代 | ✅ 已完成 |
+| M0-5 | 编码规范、10 大错误码（PRD 5.5）、CI/CD 自动部署、AGENTS.md | 全员 | GitHub Actions 自动化流水线就绪 | ✅ 已完成 |
 
-**M0 出口**：三人能独立拉起环境；接口前缀统一 `/api`。
+**M0 出口**：三人能独立拉起环境；线上端点 `http://47.119.132.83/` 部署通过；接口前缀统一 `/api`。
 
 ---
 
-### M1  底座 + Agent（W2–W5，08-25 ~ 09-21）
+### M1 底座 + Agent（W2–W5，08-25 ~ 09-21）—— [🚀 进行中]
+
+**目标**：登录后对话下单空跑；断线按 `last_event_id` 续；协议档与数据集元数据 CRUD 全面打通。
 
 对应：F-AGT-01/02/03/04/05/06/09，F-BM-01/02，F-CM-01/03/04/07。  
 本阶段 **不跑真评测**，worker 对长任务可 mock `succeeded`。
