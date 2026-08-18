@@ -27,8 +27,15 @@ git reset --hard "origin/$BRANCH"
 export BUILD_VERSION=$(git rev-parse --short HEAD)
 export BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-echo "==> 重建容器（BUILD_VERSION=$BUILD_VERSION）"
-docker compose up -d --build --remove-orphans
+echo "==> 构建镜像（BUILD_VERSION=$BUILD_VERSION）"
+docker compose build
+
+echo "==> 启动与更新容器"
+docker compose up -d --remove-orphans || {
+    echo "检测到容器状态残留，执行清理后重新启动..."
+    docker compose down --remove-orphans || true
+    docker compose up -d
+}
 
 echo "==> 清理旧镜像"
 docker image prune -f
