@@ -125,7 +125,7 @@ ai-eval-platform/
 
 ## 3. Git 提交规范 (Git Commit Conventions)
 
-本项目严格采用 **[Conventional Commits](https://www.conventionalcommits.org/)** 规范。提交身份默认为 `cweaty <2270040284@qq.com>`。
+本项目严格采用 **[Conventional Commits](https://www.conventionalcommits.org/)** 规范。提交作者身份由当前宿主机的 Git 配置（`git config user.name` / `git config user.email`）或 GitHub CLI（`gh auth`）自动决定，保持宿主机环境原生配置。
 
 ### 3.1 提交格式
 ```
@@ -344,7 +344,7 @@ export const useAgentStore = defineStore('agent', () => {
    - 后端变更：提交前确保 `ruff check .` 与 `pytest` 100% 通过；
    - 前端变更：提交前确保 `npm run build` 打包与 TypeScript 校验 0 错误。
 4. **第四步：原子化规范提交 (Atomic Commits)**  
-   - 遵循 Conventional Commits 格式规范拆分提交，作者身份统一为 `cweaty <2270040284@qq.com>`。
+   - 遵循 Conventional Commits 格式规范拆分提交，提交作者身份由宿主机当前的 Git / GitHub CLI 配置自动决定。
 5. **第五步：推送并监控 CI/CD 流水线**  
    - 推送至 `main` 分支后，密切关注 GitHub Actions CI 检查与 CD 自动部署状态，若遇异常严格按 §4.4 SOP 进行自愈排查。
 
