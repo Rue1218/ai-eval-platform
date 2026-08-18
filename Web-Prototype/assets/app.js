@@ -378,6 +378,10 @@ window.AE = (function () {
         </div>
         <nav class="nav">${navHtml}</nav>
         <div class="sidebar-foot">
+          <button class="sidebar-fold" id="ae-fold" title="折叠 / 展开导航栏（260px ⇄ 72px）">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m14 6-6 6 6 6"/></svg>
+            <span class="fold-label">收起导航</span>
+          </button>
           <div class="user-card">
             <span class="avatar">${esc(user.username[0].toUpperCase())}</span>
             <span class="user-meta"><span class="user-name">${esc(user.username)}</span><br><span class="user-role">${ROLES.member}</span></span>
@@ -399,6 +403,14 @@ window.AE = (function () {
       </div>`;
 
     document.title = pageTitle + ' · AI 测试与评估平台';
+
+    // 导航栏自由伸缩：展开 260px / 折叠 72px，localStorage 跨页持久化
+    if (localStorage.getItem('ae_sidebar_fold') === '1') root.classList.add('folded');
+    root.querySelector('#ae-fold').onclick = () => {
+      const folded = root.classList.toggle('folded');
+      localStorage.setItem('ae_sidebar_fold', folded ? '1' : '0');
+    };
+
     root.querySelectorAll('.mode-switch .mode-opt').forEach(b => { b.onclick = () => setMode(b.dataset.mode); });
     root.querySelector('#ae-chpwd').onclick = changePassword;
     root.querySelector('#ae-logout').onclick = () => {

@@ -155,6 +155,21 @@ p { margin: 0; text-wrap: pretty; }
 @keyframes dot-breathe { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 
 .sidebar-foot { padding-top: 12px; border-top: 1px solid rgba(17, 24, 39, .06); }
+
+/* 侧栏自由伸缩开关（规范 §1.1：展开 260px / 折叠 72px，手动切换并持久化） */
+.sidebar-fold {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; height: 34px; padding: 0 12px; margin-bottom: 10px;
+  border: 1px solid rgba(255, 255, 255, .7); border-radius: 12px;
+  background: rgba(255, 255, 255, .45); color: var(--text-secondary);
+  font-size: 12.5px; white-space: nowrap;
+  transition: background .15s ease, color .15s ease;
+}
+.sidebar-fold:hover { background: rgba(255, 255, 255, .8); color: var(--text-primary); }
+.sidebar-fold svg { width: 15px; height: 15px; flex: 0 0 15px; transition: transform var(--ease-shell); }
+.app.folded .sidebar-fold { justify-content: center; padding: 0; }
+.app.folded .sidebar-fold .fold-label { display: none; }
+.app.folded .sidebar-fold svg { transform: rotate(180deg); }
 .user-card {
   display: flex; align-items: center; gap: 10px;
   padding: 8px 10px; border-radius: 14px;
@@ -768,8 +783,8 @@ pre.code {
 .tertiary { color: var(--text-tertiary); }
 .small { font-size: 12px; }
 .danger-text { color: var(--accent-error); }
-.mt8 { margin-top: 8px; } .mt16 { margin-top: 16px; } .mt24 { margin-top: 24px; }
-.mb8 { margin-bottom: 8px; } .mb16 { margin-bottom: 16px; }
+.mt8 { margin-top: 8px; } .mt12 { margin-top: 12px; } .mt16 { margin-top: 16px; } .mt24 { margin-top: 24px; }
+.mb8 { margin-bottom: 8px; } .mb12 { margin-bottom: 12px; } .mb16 { margin-bottom: 16px; }
 .page-narrow { max-width: 1080px; margin: 0 auto; }
 .section-gap { display: flex; flex-direction: column; gap: 16px; }
 
@@ -1062,6 +1077,36 @@ body::before {
 }
 .fm-status .st-ok { color: var(--accent-success); }
 .fm-status .st-bad { color: var(--accent-error); }
+
+/* 表头必填星号与状态条语义色（原仅在 .field-label / .fm-status 作用域，工作台表头与状态条也需要） */
+.req { color: var(--accent-error); font-style: normal; margin-left: 2px; }
+.st-ok { color: var(--accent-success); }
+.st-bad { color: var(--accent-error); }
+
+/* 自定义扩展列标头（数据集 / 用例页共用；需压过 .ds-table th 的优先级） */
+.ds-table th.custom-col-th {
+  background: color-mix(in srgb, var(--accent-ai) 4%, var(--bg-elevated));
+  color: var(--accent-ai);
+}
+.btn-add-col {
+  padding: 2px 8px; border-radius: 6px; font-size: 11px;
+  border: 1px dashed var(--border-subtle); background: transparent; color: var(--text-tertiary);
+}
+.btn-add-col:hover { border-color: var(--accent-ai); color: var(--accent-ai); }
+
+/* 工作台表格表头吸顶（网格容器纵向滚动时保持列头可见） */
+.ws-grid-container .ds-table thead th {
+  position: sticky; top: 0; z-index: 2;
+  background: var(--bg-main);
+}
+.ws-grid-container .ds-table thead th.custom-col-th {
+  background: color-mix(in srgb, var(--accent-ai) 5%, var(--bg-main));
+}
+
+/* AI 生成参数滑杆（cap-slider，原未定义导致原生样式突兀） */
+.cap-slider { -webkit-appearance: none; appearance: none; width: 100%; height: 4px; border-radius: 999px; background: var(--bg-elevated); outline: none; cursor: pointer; }
+.cap-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%; background: var(--accent-ai); border: 2px solid #fff; box-shadow: 0 1px 4px rgba(17, 24, 39, .25); cursor: pointer; }
+.cap-slider::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: var(--accent-ai); border: 2px solid #fff; box-shadow: 0 1px 4px rgba(17, 24, 39, .25); cursor: pointer; }
 
 /* 单元格行内编辑：点击进入编辑态，Enter / 失焦提交，Esc 取消 */
 td.cell-edit { cursor: text; }

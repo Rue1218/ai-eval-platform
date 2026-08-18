@@ -10,8 +10,9 @@
 <style>
   .ft-layout {
     display: grid;
-    grid-template-columns: 290px minmax(0, 1fr);
-    height: calc(100vh - var(--topbar-h));
+    grid-template-columns: var(--ft-w, 290px) minmax(0, 1fr);
+    flex: 1;
+    min-height: 0;
     overflow: hidden;
   }
   .ft-sidebar {
@@ -20,6 +21,20 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
+    position: relative;
+  }
+  /* 目录树面板拖拽调宽手柄（200–520px，双击复位 290px） */
+  .ft-resizer {
+    position: absolute;
+    top: 0;
+    right: -3px;
+    width: 6px;
+    height: 100%;
+    cursor: col-resize;
+    z-index: 5;
+  }
+  .ft-resizer:hover, .ft-resizer.on {
+    background: color-mix(in srgb, var(--accent-ai) 35%, transparent);
   }
   .ft-header {
     padding: 12px 14px;
@@ -165,23 +180,7 @@
     margin: 4px 0;
   }
 
-  /* 自定义列标头 */
-  .custom-col-th {
-    background: color-mix(in srgb, var(--accent-ai) 4%, var(--bg-elevated));
-    color: var(--accent-ai);
-  }
-  .btn-add-col {
-    padding: 2px 8px;
-    border-radius: 6px;
-    font-size: 11px;
-    border: 1px dashed var(--border-subtle);
-    background: transparent;
-    color: var(--text-tertiary);
-  }
-  .btn-add-col:hover {
-    border-color: var(--accent-ai);
-    color: var(--accent-ai);
-  }
+  /* 自定义列标头与 + 新增列按钮样式已下沉至 shell.css 共享（.ds-table th.custom-col-th / .btn-add-col） */
 </style>
 </head>
 <body>
@@ -284,6 +283,7 @@
           <input class="input" id="tree-search" placeholder="搜索数据集 / 黄金 QA..." style="height:30px;font-size:12px">
         </div>
         <div class="ft-tree" id="file-tree"></div>
+        <div class="ft-resizer" id="ft-resizer" title="拖拽调整目录树宽度 · 双击复位"></div>
       </div>
 
       <!-- 右侧：数据表格工作台 -->
@@ -536,6 +536,27 @@
 
     // 发起评测
     document.getElementById('btn-eval-set').onclick = () => openEvalDrawer(item);
+
+    // 全选 / 全不选
+    const chkAll = document.getElementById('chk-all');
+    if (chkAll) {
+      chkAll.onchange = () => {
+        document.querySelectorAll('#data-grid-table .row-chk').forEach(c => { c.checked = chkAll.checked; });
+      };
+    }
+
+    // 主评测指标切换（实时模式 PATCH 回服务端）
+    const metricSel = document.getElementById('metric-sel');
+    if (metricSel) {
+      metricSel.onchange = async () => {
+        item.metric = metricSel.value;
+        if (!AE.API.isMock()) {
+          try { await AE.API.datasets.update(item.id, { metric: item.metric }); }
+          catch (e) { AE.toast('error', `更新主指标失败：${e.message}`); return; }
+        }
+        AE.toast('success', `主评测指标已切换为 ${item.metric}`);
+      };
+    }
   }
 
   /* ─── 4. 对话框补齐（全部结构化可编辑对话框） ─── */
@@ -1143,9 +1164,25 @@
         AE.toast('success', '已创建新数据集');
       }
     };
+    document.getElementById('cm-new-f').onclick = () => {
+      const name = prompt('请输入子文件夹名称：', '新建文件夹');
+      if (name) {
+        TREE_DATA.folders.push({ id: 'f-' + Date.now(), name: name.trim(), open: true, items: [] });
+        renderTree();
+        AE.toast('success', `已创建子文件夹「${name.trim()}」`);
+      }
+    };
     document.getElementById('cm-f-rename').onclick = () => {
       const name = prompt('请输入目录名称：', f.name);
       if (name) { f.name = name.trim(); renderTree(); AE.toast('success', '已更新目录名'); }
+    };
+    document.getElementById('cm-f-del').onclick = () => {
+      if (f.items.length) { AE.toast('warning', '目录非空，请先移出或删除其中的数据集'); return; }
+      if (confirm(`确认删除空目录「${f.name}」？`)) {
+        TREE_DATA.folders = TREE_DATA.folders.filter(x => x.id !== f.id);
+        renderTree();
+        AE.toast('info', `已删除目录「${f.name}」`);
+      }
     };
   }
 
@@ -1199,6 +1236,38 @@
       AE.toast('info', '已删除行');
     };
   }
+
+  /* ─── 6. 目录树面板自由伸缩（拖拽 200–520px，双击复位，localStorage 持久化） ─── */
+  (function bindTreeResizer() {
+    const layout = content.querySelector('.ft-layout');
+    const resizer = document.getElementById('ft-resizer');
+    const KEY = 'ae_ft_w_datasets';
+    let ftW = Math.min(520, Math.max(200, +(localStorage.getItem(KEY) || 290)));
+    const applyW = w => {
+      ftW = Math.min(520, Math.max(200, Math.round(w)));
+      layout.style.setProperty('--ft-w', ftW + 'px');
+    };
+    applyW(ftW);
+    resizer.addEventListener('mousedown', e => {
+      e.preventDefault();
+      resizer.classList.add('on');
+      const startX = e.clientX, startW = ftW;
+      const move = ev => applyW(startW + ev.clientX - startX);
+      const up = () => {
+        resizer.classList.remove('on');
+        localStorage.setItem(KEY, String(ftW));
+        window.removeEventListener('mousemove', move);
+        window.removeEventListener('mouseup', up);
+      };
+      window.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', up);
+    });
+    resizer.addEventListener('dblclick', () => {
+      applyW(290);
+      localStorage.setItem(KEY, '290');
+      AE.toast('info', '目录树宽度已复位为 290px');
+    });
+  })();
 
   // 顶部 "+ 新建" 按钮触发 AI 智能合成
   document.getElementById('btn-tree-add').onclick = () => openAiGenSetModal();

@@ -10,8 +10,9 @@
 <style>
   .ft-layout {
     display: grid;
-    grid-template-columns: 290px minmax(0, 1fr);
-    height: calc(100vh - var(--topbar-h));
+    grid-template-columns: var(--ft-w, 290px) minmax(0, 1fr);
+    flex: 1;
+    min-height: 0;
     overflow: hidden;
   }
   .ft-sidebar {
@@ -20,6 +21,20 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
+    position: relative;
+  }
+  /* 目录树面板拖拽调宽手柄（200–520px，双击复位 290px） */
+  .ft-resizer {
+    position: absolute;
+    top: 0;
+    right: -3px;
+    width: 6px;
+    height: 100%;
+    cursor: col-resize;
+    z-index: 5;
+  }
+  .ft-resizer:hover, .ft-resizer.on {
+    background: color-mix(in srgb, var(--accent-ai) 35%, transparent);
   }
   .ft-header {
     padding: 12px 14px;
@@ -243,6 +258,7 @@
           <input class="input" id="tree-search-cases" placeholder="搜索用例集..." style="height:30px;font-size:12px">
         </div>
         <div class="ft-tree" id="cases-tree"></div>
+        <div class="ft-resizer" id="ft-resizer" title="拖拽调整目录树宽度 · 双击复位"></div>
       </div>
 
       <!-- 右侧：用例数据表格工作台 -->
@@ -504,16 +520,38 @@
     document.getElementById('btn-export-xlsx').onclick = () => AE.toast('success', `已导出「${cs.name}」XLSX 测试用例表`);
     document.getElementById('btn-export-xmind').onclick = () => AE.toast('success', `已导出「${cs.name}」XMind 思维导图`);
 
-    // 批量映射
+    // 行勾选联动：勾选 = 采纳（pending=false），并实时刷新底部已选计数
+    const updateSelCount = () => {
+      const el = document.getElementById('sel-case-count');
+      if (el) el.textContent = cases.filter(c => !c.pending).length;
+    };
+    document.querySelectorAll('.case-chk').forEach((chk, i) => {
+      chk.onchange = () => {
+        if (cases[i]) cases[i].pending = !chk.checked;
+        updateSelCount();
+      };
+    });
+    const chkAll = document.getElementById('chk-all-cases');
+    if (chkAll) {
+      chkAll.onchange = () => {
+        cases.forEach(c => { c.pending = !chkAll.checked; });
+        document.querySelectorAll('.case-chk').forEach(c => { c.checked = chkAll.checked; });
+        updateSelCount();
+      };
+    }
+
+    // 批量映射（仅作用于已勾选采纳的用例）
     document.getElementById('btn-batch-map-action').onclick = async () => {
       const selTarget = document.getElementById('map-target-sel').value;
+      const selected = cases.filter(c => !c.pending);
+      if (!selected.length) { AE.toast('warning', '请先勾选要映射的用例'); return; }
       if (!AE.API.isMock()) {
         AE.toast('info', '实时模式需先选择服务端目标数据集或黄金 QA；当前原型不再用 smoke-20 / qa-v1 示例 ID 执行映射。');
         return;
       }
-      cases.forEach(c => { c.mapped = true; c.pending = false; });
+      selected.forEach(c => { c.mapped = true; });
       renderWorkspace();
-      AE.toast('success', selTarget === 'dataset' ? '已将选中的用例批量映射入基准数据集' : '已将选中的用例批量映射入黄金 QA');
+      AE.toast('success', selTarget === 'dataset' ? `已将 ${selected.length} 条选中用例映射入基准数据集` : `已将 ${selected.length} 条选中用例映射入黄金 QA`);
     };
 
     // 确认入库
@@ -1009,6 +1047,14 @@
         AE.toast('success', '已创建用例集');
       }
     };
+    document.getElementById('fm-new-f').onclick = () => {
+      const name = prompt('子目录名称：', '新建目录');
+      if (name) {
+        TREE_DATA.folders.push({ id: 'f-' + Date.now(), name: name.trim(), open: true, items: [] });
+        renderTree();
+        AE.toast('success', `已创建子目录「${name.trim()}」`);
+      }
+    };
     document.getElementById('fm-rename').onclick = () => {
       const name = prompt('目录名称：', f.name);
       if (name) { f.name = name.trim(); renderTree(); AE.toast('success', '已更新目录名'); }
@@ -1052,6 +1098,38 @@
       AE.toast('info', '已删除用例');
     };
   }
+
+  /* ─── 6. 目录树面板自由伸缩（拖拽 200–520px，双击复位，localStorage 持久化） ─── */
+  (function bindTreeResizer() {
+    const layout = content.querySelector('.ft-layout');
+    const resizer = document.getElementById('ft-resizer');
+    const KEY = 'ae_ft_w_cases';
+    let ftW = Math.min(520, Math.max(200, +(localStorage.getItem(KEY) || 290)));
+    const applyW = w => {
+      ftW = Math.min(520, Math.max(200, Math.round(w)));
+      layout.style.setProperty('--ft-w', ftW + 'px');
+    };
+    applyW(ftW);
+    resizer.addEventListener('mousedown', e => {
+      e.preventDefault();
+      resizer.classList.add('on');
+      const startX = e.clientX, startW = ftW;
+      const move = ev => applyW(startW + ev.clientX - startX);
+      const up = () => {
+        resizer.classList.remove('on');
+        localStorage.setItem(KEY, String(ftW));
+        window.removeEventListener('mousemove', move);
+        window.removeEventListener('mouseup', up);
+      };
+      window.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', up);
+    });
+    resizer.addEventListener('dblclick', () => {
+      applyW(290);
+      localStorage.setItem(KEY, '290');
+      AE.toast('info', '目录树宽度已复位为 290px');
+    });
+  })();
 
   // 顶部 "+ 新建集" 按钮触发 AI 智能生成
   document.getElementById('btn-tree-add-case').onclick = () => openAiGenCasesModal();
