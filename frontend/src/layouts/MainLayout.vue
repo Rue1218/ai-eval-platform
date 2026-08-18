@@ -280,15 +280,21 @@ const IconUsers = () =>
     h('path', { d: 'M16 8.5h5M18.5 6v5' }),
   ])
 
-const evalRoutes = [
-  { path: '/agent', label: '智能体', icon: IconAgent, t: 'var(--t-agent)', c: 'var(--c-agent)' },
-  { path: '/dispatch', label: '调度中心', icon: IconDispatch, t: 'var(--t-agent)', c: 'var(--c-agent)' },
-  { path: '/tasks', label: '任务中心', icon: IconTasks, t: 'var(--t-tasks)', c: 'var(--c-tasks)' },
-  { path: '/reports', label: '评测报告', icon: IconReports, t: 'var(--t-reports)', c: 'var(--c-reports)' },
-  { path: '/datasets', label: '数据集', icon: IconDatasets, t: 'var(--t-datasets)', c: 'var(--c-datasets)' },
-  { path: '/cases', label: '用例', icon: IconCases, t: 'var(--t-cases)', c: 'var(--c-cases)' },
-  { path: '/kb', label: '知识库', icon: IconKb, t: 'var(--t-kb)', c: 'var(--c-kb)' },
-]
+const evalRoutes = computed(() => {
+  // 两类评测共享智能体、调度、任务、报告和用例；资产入口则严格随顶栏模式切换。
+  const modeAsset = modeStore.mode === 'rag'
+    ? { path: '/kb', label: '知识库', icon: IconKb, t: 'var(--t-kb)', c: 'var(--c-kb)' }
+    : { path: '/datasets', label: '数据集', icon: IconDatasets, t: 'var(--t-datasets)', c: 'var(--c-datasets)' }
+
+  return [
+    { path: '/agent', label: '智能体', icon: IconAgent, t: 'var(--t-agent)', c: 'var(--c-agent)' },
+    { path: '/dispatch', label: '调度中心', icon: IconDispatch, t: 'var(--t-agent)', c: 'var(--c-agent)' },
+    { path: '/tasks', label: '任务中心', icon: IconTasks, t: 'var(--t-tasks)', c: 'var(--c-tasks)' },
+    { path: '/reports', label: '评测报告', icon: IconReports, t: 'var(--t-reports)', c: 'var(--c-reports)' },
+    modeAsset,
+    { path: '/cases', label: '用例', icon: IconCases, t: 'var(--t-cases)', c: 'var(--c-cases)' },
+  ]
+})
 
 const adminRoutes = [
   { path: '/admin/profiles', label: '协议档', icon: IconProfiles, t: 'var(--t-profiles)', c: 'var(--c-profiles)' },
@@ -298,8 +304,8 @@ const adminRoutes = [
 
 const currentPath = computed(() => route.path)
 const currentTitle = computed(() => {
-  if (route.path === '/datasets') return modeStore.mode === 'llm' ? '基准数据集' : '数据集'
-  if (route.path === '/kb') return '知识库'
+  if (route.path === '/datasets') return modeStore.mode === 'llm' ? '基准数据集' : 'RAG 资产切换'
+  if (route.path === '/kb') return modeStore.mode === 'rag' ? '知识库' : '大模型资产切换'
   if (route.path === '/dispatch') return '调度中心'
   if (route.path.startsWith('/reports')) return '评测报告'
   return (route.meta.title as string) || 'AI 测试与评估平台'
