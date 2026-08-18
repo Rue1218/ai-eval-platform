@@ -196,16 +196,74 @@ ai-eval-platform/
 ### 4.3 部署脚本核心流程 (`deploy/deploy.sh`)
 1. **代码同步**：执行 `git fetch origin && git reset --hard origin/main`，保证生产环境严格与远程 `main` 一致；
 2. **构建元数据注入**：自动提取 Git commit hash 注入 `BUILD_VERSION`，提取当前 UTC 时间注入 `BUILD_TIME`；
-3. **无缝容器重建**：执行 `docker compose up -d --build --remove-orphans`；
-4. **数据库自动迁移**：`api` 容器在 `entrypoint.sh` 中自动执行 `alembic upgrade head`；
-5. **镜像清理**：执行 `docker image prune -f` 清理孤儿镜像，避免磁盘耗尽；
-6. **健康自检**：输出 `docker compose ps` 状态。
+3. **独立镜像构建**：执行 `docker compose build` 统一构建镜像；
+4. **自愈式容器拉起**：执行 `docker compose up -d --remove-orphans`；若检测到容器元数据残留（如 `No such container`），自动触发 `docker rm -f` 强力清理残留容器并无损重新拉起；
+5. **数据库自动迁移**：`api` 容器在 `entrypoint.sh` 中自动执行 `alembic upgrade head`；
+6. **镜像清理**：执行 `docker image prune -f` 清理孤儿镜像，避免磁盘耗尽；
+7. **健康自检**：输出 `docker compose ps` 状态。
 
 ### 4.4 生产服务器初始化 (`deploy/server-setup.sh`)
 - 自动安装 Docker CE 及 Docker Compose 插件；
 - 创建低特权部署用户 `deploy` 并赋予 `docker` 组权限；
 - 生成专属 ed25519 密钥对用于 GitHub Actions SSH 通信与 Deploy Keys；
 - 初始化生产目录 `/opt/ai-eval-platform` 与 `.env` 环境变量模板。
+
+### 4.5 提交后 GitHub 构建与部署失败排查 SOP (Troubleshooting & Recovery)
+
+当代码提交/推送后在 GitHub Actions 发生构建或部署失败时，**AI Agent 与开发者必须按以下标准化步骤进行排查与修复**：
+
+#### 场景 1：CI 检查流水线失败（Lint / Test 阶段）
+- **现象**：`CI` 工作流标红，阻断合入或提示语法/单测错误。
+- **排查与修复步骤**：
+  1. **Python 静态代码检查失败**：本地进入 `backend/api/` 执行 `ruff check .`，根据提示修复或执行 `ruff check --fix .` 自动修复；
+  2. **后端单元测试失败**：本地进入 `backend/api/` 执行 `pytest -v`，定位断言失败的接口用例并修正代码逻辑；
+  3. **前端编译检查**：本地进入 `frontend/` 执行 `npm run build`，确保 Vite 打包与 TypeScript 类型检查 0 报错。
+
+#### 场景 2：CD 自动部署 SSH 握手失败 (`ssh: handshake failed: connection reset by peer`)
+- **现象**：`Deploy` 工作流在 SSH 连接步骤失败并被服务端重置连接。
+- **排查与修复步骤**：
+  1. **检查 GitHub Secrets 端口配置**：打开仓库 `Settings → Secrets → Actions`，检查 `SSH_PORT` **必须填 `22`**（绝不能误填 Web 端口 `80` 或 `8000`）；
+  2. **检查主机地址**：确保 `SSH_HOST` 为纯 IP（如 `47.119.132.83`），严禁包含 `http://`、`/` 或端口；
+  3. **检查安全组规则**：登录云服务器控制台，检查安全组入方向规则，确保 `TCP 22` 端口对 `0.0.0.0/0` 放行；
+  4. **检查私钥完整性**：确保 `SSH_PRIVATE_KEY` 完整包含 `-----BEGIN OPENSSH PRIVATE KEY-----` 和 `-----END OPENSSH PRIVATE KEY-----` 首尾标记。
+
+#### 场景 3：Docker 重建容器失败 (`No such container` 状态残留)
+- **现象**：Docker 引擎因容器元数据损坏报错 `Error response from daemon: No such container: xxx`。
+- **排查与修复步骤**：
+  1. **自动恢复**：当前 `deploy.sh` 脚本已内置自动检测机制，会调用 `docker rm -f` 强力清理残留并无损拉起（`pgdata` 持久卷数据不受影响）；
+  2. **手动强制恢复（在服务器执行）**：
+     ```bash
+     # 强删平台残留容器并清理引擎孤儿句柄
+     docker rm -f $(docker ps -a -q --filter "name=ai-eval-platform") 2>/dev/null || true
+     docker container prune -f
+     # 重新以 deploy 身份执行部署脚本
+     sudo -u deploy bash /opt/ai-eval-platform/deploy/deploy.sh
+     ```
+
+#### 场景 4：容器状态异常或健康检查失败 (`unhealthy` / 端口被占用)
+- **现象**：`api` 容器未通过 `/api/health` 健康检查，或启动时报 `bind: address already in use`。
+- **排查与修复步骤**：
+  1. **检查宿主机端口占用**：在服务器执行 `netstat -tlpn | grep -E '80|8000|5432'`，确认是否有外部已有的 Nginx/Postgres 占用了端口；
+  2. **查看容器实时日志**：
+     ```bash
+     cd /opt/ai-eval-platform
+     docker compose logs -n 100 api      # 查看 API 报错堆栈与 Alembic 迁移状态
+     docker compose logs -n 100 worker   # 查看 Worker 任务调度日志
+     docker compose ps                   # 查看各容器健康状态
+     ```
+
+#### 场景 5：紧急生产回滚 (Emergency Rollback)
+- **代码层快速回滚**：
+  ```bash
+  git revert HEAD
+  git push origin main
+  ```
+- **服务器直接切换至稳定 Commit**：
+  ```bash
+  cd /opt/ai-eval-platform
+  git reset --hard <稳定版本的_commit_id>
+  sudo -u deploy bash deploy/deploy.sh
+  ```
 
 ---
 
