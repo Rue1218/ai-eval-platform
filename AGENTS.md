@@ -1,7 +1,7 @@
 # AI 测试与评估平台 — AI Agent 行为规范与工程指南 (AGENTS.md)
 
-> 本文件是面向所有参与本项目的 **AI Agent（以及人类开发者）** 的最高行动指南与行为规范。
-> 在阅读、分析、编写或修改本仓库的任何代码与文档前，**必须严格遵守本文档所规定的原则与约束**。
+> **最高指示**：本文件是面向所有参与本项目的 **AI Agent（以及人类开发者）** 的最高行动指南与行为规范。  
+> 在阅读、分析、编写或修改本仓库的任何代码与文档前，**必须严格遵守本文档所规定的架构边界、开发契约与行为红线**。
 
 ---
 
@@ -11,12 +11,25 @@
 - **项目名称**：AI 测试与评估平台 (`ai-eval-platform`)
 - **核心定位**：面向**单一研发/评测团队**的内部平台，利用 **AI Agent（WebSocket + 内部 MCP Host）** 自动化完成大语言模型（LLM）**基准评测（Benchmark）** 与 **知识库检索增强生成评测（RAG）**。
 - **核心特色**：
-  - **对话驱动**：通过 WebSocket Agent 交互，自动化解析意图并生成结构化「确认卡」；
+  - **对话驱动**：通过 WebSocket Agent 交互，自动化解析自然语言意图并生成结构化「确认卡」；
   - **先评后压**：压测作为质量评测的共享下游环节，仅在质量评测成功 (`succeeded`) 且勾选压测后自动派生执行，继承同一被测端点；
   - **三协议适配**：统一适配 OpenAI Chat Completions、Anthropic Messages、Dify Completion 协议；
   - **单团队全员同权**：单一 `member` 角色，操作留痕审计，敏感 Key 采用 Fernet 强加密且只写不回显。
 
-### 1.2 核心架构模型
+### 1.2 服务拓扑与网络端点 (Topology & Endpoints)
+
+| 服务名称 | 容器标识 | 宿主机端口 | 访问方式 / 协议 | 说明 |
+| :--- | :--- | :--- | :--- | :--- |
+| **Web 前端** | `web` | `80` | `http://47.119.132.83/` | 平台主入口（Nginx 反代 `/api` 与 `/ws`） |
+| **API 服务** | `api` | `8000` | `http://47.119.132.83:8000/docs` | FastAPI 接口文档与短 MCP Host（Swagger） |
+| **Worker 引擎** | `worker` | - | 容器内部网络通信 | 轮询 PG 任务队列，驱动异步长任务评测 |
+| **数据库** | `postgres` | `5432` | 容器内部网络通信 | PostgreSQL 16 关系数据库（持久卷 `pgdata`） |
+| **RAG 引擎** | `lightrag` | `9621` | 内部端口 `9621` | LightRAG 混合检索与图谱评测服务骨架 |
+| **压测引擎** | `stress` | `19090` | `/metrics` | go-stress-testing 发压引擎，暴露监控指标 |
+
+> 初始管理员账号：`admin / admin123`（由 `.env` 中 `BOOTSTRAP_ADMIN_PASSWORD` 注入，登录后建议立即修改）。
+
+### 1.3 核心架构模型
 ```
 浏览器 Vue 3 (Naive UI)
   │── WS: /ws/agent?ticket= ──► FastAPI Agent Host (短 MCP + 意图拆解 + 任务入队)
@@ -29,19 +42,8 @@
                                   Python Worker (长任务调度：Benchmark / RAG / 用例生成)
                                    ├── 三协议统一调用 + 规则评分 / LLM Judge
                                    ├── LightRAG 原生检索 / 外部 Chat RAG (Hit Rate@K / 黄金QA)
-                                   └── 派生压测 ──► stress 容器 (go-stress-testing) ──► /metrics (Prometheus)
+                                   └── 派生压测 ──► stress 容器 (go-stress-testing) ──► /metrics
 ```
-
-### 1.3 核心技术栈
-| 层次 | 技术选型 | 说明 |
-| :--- | :--- | :--- |
-| **前端** | Vue 3.5 + TypeScript + Vite + Naive UI + Pinia | 响应式薄荷绿毛玻璃 / 深空蓝暗色设计系统，Nginx 反代 `/api` 与 `/ws` |
-| **API 服务** | Python 3.12 + FastAPI + Uvicorn + Pydantic v2 | 提供 REST 接口、WebSocket Agent Host、内部 MCP 工具注册 |
-| **数据库/ORM** | PostgreSQL 16 + SQLAlchemy 2.0 + Alembic | 结构化数据存储与全自动化数据库迁移管理 |
-| **Worker 引擎** | Python 3.12 异步 Worker | 轮询 PostgreSQL 任务队列，驱动三协议评测与 RAG 评测 |
-| **RAG 引擎** | LightRAG 服务 | 专有知识图谱/混合检索评估服务 |
-| **压测引擎** | go-stress-testing 服务 | 高性能发压，暴露 `/metrics` 供 Prometheus/Grafana 监控采集 |
-| **容器编排** | Docker Compose 六件套 | `web`、`api`、`worker`、`postgres`、`lightrag`、`stress` |
 
 ### 1.4 文档权威与冲突裁决
 本仓库 `docs/` 目录下存放了完整的规格说明书，效力层级如下：
@@ -50,7 +52,7 @@
 3. **L1 视觉规范**：[`docs/AI测试与评估平台-设计规范.md`](docs/AI测试与评估平台-设计规范.md)（Naive UI 主题覆盖、色彩令牌、排版与微交互规范）。
 4. **L2 计划文档**：[`docs/AI测试与评估平台-开发计划.md`](docs/AI测试与评估平台-开发计划.md)、[`docs/AI测试与评估平台-后端开发计划.md`](docs/AI测试与评估平台-后端开发计划.md)、[`docs/AI测试与评估平台-前端开发计划.md`](docs/AI测试与评估平台-前端开发计划.md)。
 
-> ⚠️ **冲突裁决原则**：
+> ⚠️ **冲突裁决铁律**：
 > - 若代码/计划与 PRD 冲突，**以 PRD 为准**；
 > - 若接口字段与 API.md 冲突，**以 API.md 为准**；
 > - 禁止任何 AI Agent 私自扩大产品范围或变更核心字段命名。
@@ -103,7 +105,7 @@ ai-eval-platform/
 │   │   ├── views/               # 页面视图（/agent, /tasks, /datasets, /kb, /admin/* 等）
 │   │   ├── App.vue              # 根组件（Naive UI ConfigProvider 注入）
 │   │   ├── main.ts              # 前端入口文件
-│   │   └── naive-theme.ts       # Naive UI 主题色与组件定制令牌
+│   │   └── naive-theme.ts       # Naive UI 主题色与组件定制令牌（薄荷绿/深空蓝）
 │   ├── nginx.conf               # 生产环境 Nginx 配置文件（反代 /api 与 /ws）
 │   ├── package.json             # 前端依赖配置
 │   ├── tsconfig.json            # TypeScript 编译配置
@@ -123,7 +125,7 @@ ai-eval-platform/
 
 ## 3. Git 提交规范 (Git Commit Conventions)
 
-本项目严格采用 **[Conventional Commits](https://www.conventionalcommits.org/)** 规范。
+本项目严格采用 **[Conventional Commits](https://www.conventionalcommits.org/)** 规范。提交身份默认为 `cweaty <2270040284@qq.com>`。
 
 ### 3.1 提交格式
 ```
@@ -140,207 +142,212 @@ ai-eval-platform/
 | `feat` | 新增功能 | `feat(api): add ws-ticket authentication endpoint` |
 | `fix` | 修复缺陷 | `fix(worker): handle connection timeout on LLM judge call` |
 | `docs` | 仅文档变更 | `docs: update deployment secret configuration guide` |
-| `style` | 不影响代码含义的代码格式修改（空格、分号、lint等） | `style(frontend): format vue components with prettier` |
-| `refactor` | 代码重构（既不是新增功能也不是修 bug） | `refactor(backend): extract Fernet cipher helper to security module` |
+| `style` | 不影响代码含义的格式调整（空格、分号、lint等） | `style(frontend): format vue components with prettier` |
+| `refactor` | 代码重构（既非新增功能也非修复 bug） | `refactor(backend): extract Fernet cipher helper to security module` |
 | `perf` | 提高性能的代码更改 | `perf(worker): optimize dataset batch stream processing` |
 | `test` | 增加或修正现有测试 | `test(api): add contract tests for profile CRUD` |
 | `build` | 影响构建系统或外部依赖的更改（Vite, Docker, pip 等） | `build(docker): optimize api multi-stage build cache` |
-| `ci` | CI/CD 配置文件与脚本变更（GitHub Actions, deploy.sh 等） | `ci(github): add secret check step in deploy workflow` |
+| `ci` | CI/CD 配置文件与脚本变更（GitHub Actions, deploy.sh 等） | `ci(github): add default fallbacks for deploy workflow` |
 | `chore` | 其他不修改 src 或测试文件的琐碎变更 | `chore: update .gitignore rules` |
 | `revert` | 撤销此前的某次提交 | `revert: feat(api): revert experimental streaming parser` |
 
-### 3.3 常用 Scope 作用域
+### 3.3 业务 Scope 作用域
 - `api`：FastAPI 后端业务逻辑
 - `worker`：异步评测/压测 Worker 调度引擎
 - `web` 或 `frontend`：Vue 3 前端界面
 - `mcp`：Agent MCP 工具与协议
 - `rag`：LightRAG 或外部 RAG 适配器
 - `stress`：go-stress-testing 压测模块
-- `auth`：认证、会话与权限
+- `auth`：认证、会话与短票鉴权
 - `dataset`：数据集管理与解析
 - `profile`：模型协议档配置
 - `task`：任务状态机与任务管理
-- `report`：报告生成与对比
-- `deploy`：部署脚本、Docker 或 Nginx 配置
-
-### 3.4 提交准则
-1. **Subject 规范**：使用动词祈使句开头，首字母小写（若为英文），结尾不加句号，长度控制在 50 字符内，清晰表达修改意图。
-2. **Body 规范**：若修改涉及复杂架构变更、破坏性变更或关键决策，必须在 Body 中详细说明原因、影响范围和解决方案。
-3. **关联 PRD / Issue**：推荐在 Footer 中标注对应的 PRD 需求项或 Issue 编号，例如 `Ref: PRD-5.2` 或 `Closes #12`。
-4. **分支管理**：
-   - `main`：生产主分支，受 CI 保护，直接对接生产自动部署；
-   - `feature/<name>`：特性开发分支；
-   - `fix/<name>`：缺陷修复分支。
+- `report`：报告生成与对比基线
+- `deploy`：部署脚本、Docker 编排或 Nginx 配置
 
 ---
 
-## 4. 自动部署服务 (CI/CD & Automated Deployment)
+## 4. 自动部署服务与 CI/CD (CI/CD & DevOps)
 
-本项目实现了全自动化的 CI/CD 管道，基于 GitHub Actions + Docker Compose 架构。
+本项目基于 **GitHub Actions + Docker Compose** 实现了完整的自动化 CI/CD 流水线。
+
+```mermaid
+flowchart LR
+    A[Git Commit Push] --> B[GitHub Actions CI: Ruff Lint + Pytest]
+    B -->|全绿通过| C[GitHub Actions CD: SSH Action]
+    C --> D[服务器 /opt/ai-eval-platform]
+    D --> E[deploy.sh: git reset --hard]
+    E --> F[docker compose build]
+    F --> G[docker compose up -d 自愈拉起]
+    G --> H[api 容器 entrypoint: alembic upgrade head]
+    H --> I[Nginx 80 端口提供服务]
+```
 
 ### 4.1 CI 持续集成工作流 (`.github/workflows/ci.yml`)
-- **触发条件**：向 `main` 分支 push 或发起针对 `main` 分支的 Pull Request。
+- **触发条件**：向 `main` 分支 push 或发起针对 `main` 分支的 PR；
 - **检查内容**：
-  1. **Python 3.12** 环境搭建与依赖安装；
-  2. **静态代码检查**：执行 `ruff check .`（必须 0 错误）；
-  3. **单元测试与契约测试**：执行 `pytest`（必须全部通过）。
-- **门禁要求**：CI 检查未全部通过前，禁止将代码合入 `main` 分支。
+  1. Python 3.12 环境初始化；
+  2. 静态检查：`ruff check .`（必须 0 错误）；
+  3. 自动化测试：`pytest`（必须全部通过）。
 
 ### 4.2 CD 自动部署工作流 (`.github/workflows/deploy.yml`)
-- **触发条件**：代码合入或直接 push 到 `main` 分支（或手动 `workflow_dispatch` 触发）。
-- **工作流机制**：
-  1. 自动检测 GitHub Secrets（`SSH_HOST`, `SSH_USER`, `SSH_PORT`, `SSH_PRIVATE_KEY`）；
-  2. 使用 `appleboy/ssh-action` 建立安全 SSH 隧道连接生产服务器；
-  3. 切换至生产工作目录并以 `deploy` 用户执行 `/opt/ai-eval-platform/deploy/deploy.sh`。
+- **触发条件**：代码合入或直接 push 到 `main` 分支（或手动 `workflow_dispatch` 触发）；
+- **Secrets 配置清单**：
+  | Secret 变量名 | 正确值说明 | 常见错误警示 |
+  | :--- | :--- | :--- |
+  | `SSH_HOST` | `47.119.132.83` | 纯 IP，严禁带 `http://` 或端口后缀 |
+  | `SSH_PORT` | `22` | **必须填 22**（绝对不可误填 Web 端口 80 或 8000） |
+  | `SSH_USER` | `deploy` | 部署专用低特权用户（属于 docker 组） |
+  | `SSH_PRIVATE_KEY` | 服务器生成的 ed25519 私钥整段内容 | 必须完整包含 `BEGIN/END OPENSSH PRIVATE KEY` 首尾标记 |
 
 ### 4.3 部署脚本核心流程 (`deploy/deploy.sh`)
-1. **代码同步**：执行 `git fetch origin && git reset --hard origin/main`，保证生产环境严格与远程 `main` 一致；
-2. **构建元数据注入**：自动提取 Git commit hash 注入 `BUILD_VERSION`，提取当前 UTC 时间注入 `BUILD_TIME`；
-3. **独立镜像构建**：执行 `docker compose build` 统一构建镜像；
-4. **自愈式容器拉起**：执行 `docker compose up -d --remove-orphans`；若检测到容器元数据残留（如 `No such container`），自动触发 `docker rm -f` 强力清理残留容器并无损重新拉起；
-5. **数据库自动迁移**：`api` 容器在 `entrypoint.sh` 中自动执行 `alembic upgrade head`；
-6. **镜像清理**：执行 `docker image prune -f` 清理孤儿镜像，避免磁盘耗尽；
-7. **健康自检**：输出 `docker compose ps` 状态。
+1. **代码同步**：执行 `git fetch origin && git reset --hard origin/main`；
+2. **元数据注入**：注入当前 Commit Hash 到 `BUILD_VERSION`，注入当前时间到 `BUILD_TIME`；
+3. **镜像构建**：执行 `docker compose build`；
+4. **自愈拉起**：执行 `docker compose up -d --remove-orphans`；若遇到容器元数据残留（`No such container`），自动执行 `docker rm -f $(docker ps -a -q --filter "name=ai-eval-platform")` 强力清理并无损拉起（`pgdata` 持久卷数据不受影响）；
+5. **数据库迁移**：`api` 容器在 `entrypoint.sh` 中自动执行 `alembic upgrade head`；
+6. **孤儿镜像清理**：执行 `docker image prune -f`。
 
-### 4.4 生产服务器初始化 (`deploy/server-setup.sh`)
-- 自动安装 Docker CE 及 Docker Compose 插件；
-- 创建低特权部署用户 `deploy` 并赋予 `docker` 组权限；
-- 生成专属 ed25519 密钥对用于 GitHub Actions SSH 通信与 Deploy Keys；
-- 初始化生产目录 `/opt/ai-eval-platform` 与 `.env` 环境变量模板。
+### 4.4 提交后 GitHub 构建与部署失败排查 SOP (Troubleshooting & Recovery)
 
-### 4.5 提交后 GitHub 构建与部署失败排查 SOP (Troubleshooting & Recovery)
-
-当代码提交/推送后在 GitHub Actions 发生构建或部署失败时，**AI Agent 与开发者必须按以下标准化步骤进行排查与修复**：
-
-#### 场景 1：CI 检查流水线失败（Lint / Test 阶段）
-- **现象**：`CI` 工作流标红，阻断合入或提示语法/单测错误。
-- **排查与修复步骤**：
-  1. **Python 静态代码检查失败**：本地进入 `backend/api/` 执行 `ruff check .`，根据提示修复或执行 `ruff check --fix .` 自动修复；
-  2. **后端单元测试失败**：本地进入 `backend/api/` 执行 `pytest -v`，定位断言失败的接口用例并修正代码逻辑；
-  3. **前端编译检查**：本地进入 `frontend/` 执行 `npm run build`，确保 Vite 打包与 TypeScript 类型检查 0 报错。
-
-#### 场景 2：CD 自动部署 SSH 握手失败 (`ssh: handshake failed: connection reset by peer`)
-- **现象**：`Deploy` 工作流在 SSH 连接步骤失败并被服务端重置连接。
-- **排查与修复步骤**：
-  1. **检查 GitHub Secrets 端口配置**：打开仓库 `Settings → Secrets → Actions`，检查 `SSH_PORT` **必须填 `22`**（绝不能误填 Web 端口 `80` 或 `8000`）；
-  2. **检查主机地址**：确保 `SSH_HOST` 为纯 IP（如 `47.119.132.83`），严禁包含 `http://`、`/` 或端口；
-  3. **检查安全组规则**：登录云服务器控制台，检查安全组入方向规则，确保 `TCP 22` 端口对 `0.0.0.0/0` 放行；
-  4. **检查私钥完整性**：确保 `SSH_PRIVATE_KEY` 完整包含 `-----BEGIN OPENSSH PRIVATE KEY-----` 和 `-----END OPENSSH PRIVATE KEY-----` 首尾标记。
-
-#### 场景 3：Docker 重建容器失败 (`No such container` 状态残留)
-- **现象**：Docker 引擎因容器元数据损坏报错 `Error response from daemon: No such container: xxx`。
-- **排查与修复步骤**：
-  1. **自动恢复**：当前 `deploy.sh` 脚本已内置自动检测机制，会调用 `docker rm -f` 强力清理残留并无损拉起（`pgdata` 持久卷数据不受影响）；
-  2. **手动强制恢复（在服务器执行）**：
-     ```bash
-     # 强删平台残留容器并清理引擎孤儿句柄
-     docker rm -f $(docker ps -a -q --filter "name=ai-eval-platform") 2>/dev/null || true
-     docker container prune -f
-     # 重新以 deploy 身份执行部署脚本
-     sudo -u deploy bash /opt/ai-eval-platform/deploy/deploy.sh
-     ```
-
-#### 场景 4：容器状态异常或健康检查失败 (`unhealthy` / 端口被占用)
-- **现象**：`api` 容器未通过 `/api/health` 健康检查，或启动时报 `bind: address already in use`。
-- **排查与修复步骤**：
-  1. **检查宿主机端口占用**：在服务器执行 `netstat -tlpn | grep -E '80|8000|5432'`，确认是否有外部已有的 Nginx/Postgres 占用了端口；
-  2. **查看容器实时日志**：
-     ```bash
-     cd /opt/ai-eval-platform
-     docker compose logs -n 100 api      # 查看 API 报错堆栈与 Alembic 迁移状态
-     docker compose logs -n 100 worker   # 查看 Worker 任务调度日志
-     docker compose ps                   # 查看各容器健康状态
-     ```
-
-#### 场景 5：紧急生产回滚 (Emergency Rollback)
-- **代码层快速回滚**：
-  ```bash
-  git revert HEAD
-  git push origin main
-  ```
-- **服务器直接切换至稳定 Commit**：
-  ```bash
-  cd /opt/ai-eval-platform
-  git reset --hard <稳定版本的_commit_id>
-  sudo -u deploy bash deploy/deploy.sh
-  ```
+```
+构建/部署失败排查树
+├── 1. CI 流程失败
+│   ├── Ruff 报错 ──► 本地执行 ruff check --fix . 修复
+│   ├── Pytest 报错 ──► 本地执行 pytest -v 定位断言
+│   └── 前端编译报错 ──► 本地执行 npm run build / npm run typecheck
+├── 2. CD SSH 握手失败 (connection reset by peer)
+│   ├── 检查 SSH_PORT 是否误填为 80/8000 (必须为 22)
+│   ├── 检查云控制台安全组入方向 22 端口是否放行 (0.0.0.0/0)
+│   └── 检查 SSH_PRIVATE_KEY 是否包含完整首尾行
+├── 3. Docker 容器残留 (No such container)
+│   └── deploy.sh 会自动自愈；若手动执行:
+│       docker rm -f $(docker ps -a -q --filter "name=ai-eval-platform")
+│       sudo -u deploy bash /opt/ai-eval-platform/deploy/deploy.sh
+├── 4. 容器 Unhealthy 或端口占用
+│   ├── 宿主机执行 netstat -tlpn | grep -E '80|8000|5432'
+│   └── 查看日志 docker compose logs -n 100 api / worker
+└── 5. 紧急回滚
+    ├── git revert HEAD && git push origin main
+    └── 服务器直切: cd /opt/ai-eval-platform && git reset --hard <commit> && bash deploy/deploy.sh
+```
 
 ---
 
 ## 5. 开发规范 (Development Standards)
 
-### 5.1 通用编码与注释规范（核心准则）
-1. **全中文注释要求**：所有新增及修改的代码（包括后端 Python、前端 Vue/TypeScript、配置脚本等），其类说明、方法/函数 docstring、关键业务逻辑分支、复杂算法及类型定义**必须提供清晰、准确的中文注释**。
-2. **文档与代码一致性**：注释需与 PRD/API 规范中的专有名词保持一致（例如：“确认卡”、“协议档”、“先评后压”、“短票”等）。
+### 5.1 通用编码与全中文注释规范（核心准则）
+1. **全中文注释要求**：所有新增及修改的代码（后端 Python、前端 Vue/TypeScript、配置脚本等），其类说明、方法/函数 docstring、关键业务逻辑分支、复杂算法及类型定义**必须提供清晰、准确的中文注释**。
+2. **专有名词对齐**：注释与文档统一使用规范术语（如：“确认卡”、“协议档”、“先评后压”、“短票 ws-ticket”等）。
+
+#### Python 中文注释范例：
+```python
+@router.post("/tasks", response_model=TaskOut, summary="创建并提交评测任务")
+async def create_task(
+    payload: TaskCreateIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Task:
+    """创建评测任务并入队。
+
+    - 业务逻辑：校验协议档可用性 -> 校验数据集存在性 -> 写入 tasks 表 (queued)
+    - 先评后压：若 payload.with_stress=True，由 Worker 在质量评测成功后自动派生压测任务。
+
+    :param payload: 任务创建参数（含模型协议档 ID、数据集 ID 及运行配置）
+    :param db: 数据库会话
+    :param current_user: 当前登录用户
+    :return: 创建成功的任务实体
+    :raises AppError: 当数据集不存在 (NOT_FOUND) 或预算超限 (BUDGET_EXCEEDED) 时抛出
+    """
+```
+
+#### Vue 3 / TypeScript 中文注释范例：
+```typescript
+/**
+ * WebSocket Agent 会话状态管理 Store
+ */
+export const useAgentStore = defineStore('agent', () => {
+  // 当前连接状态机：connecting | connected | reconnecting | disconnected
+  const status = ref<'connecting' | 'connected' | 'reconnecting' | 'disconnected'>('disconnected')
+  
+  // 消息事件流列表（包含 thought 思考气泡、confirm 确认卡、tool_call 工具卡）
+  const events = ref<AgentEvent[]>([])
+
+  /**
+   * 建立与后端的 WebSocket 连接（自动获取 5 分钟有效期的单次短票 ws-ticket）
+   */
+  async function connect() {
+    // 业务实现...
+  }
+
+  return { status, events, connect }
+})
+```
 
 ### 5.2 后端开发规范 (Python 3.12 / FastAPI)
-1. **类型安全与注释**：所有函数、方法必须标注完整的 Python Type Hints，并附带规范的中文 docstring 说明入参、出参和异常场景。
-2. **统一错误码机制（铁律）**：
-   - 严禁直接 `raise HTTPException` 或返回自定义格式的错误 JSON；
-   - 必须使用 `backend/api/app/errors.py` 中定义的 **10 大标准错误码**：
-     `UNAUTHORIZED`, `VALIDATION`, `NOT_FOUND`, `BUDGET_EXCEEDED`, `CONCURRENCY`, `WHITELIST`, `NEED_APPROVAL`, `UPSTREAM`, `TIMEOUT`, `INTERNAL`；
-   - 统一通过抛出 `AppError(code=ErrorCode.XXX, message="说明", fields={...})` 触发全局异常拦截器，输出规范响应 `{ "code": "...", "message": "..." }`。
-3. **数据库与 ORM 规范**：
-   - 必须遵循 SQLAlchemy 2.0 声明式风格；
-   - **禁止直接修改生产数据库表结构**，所有数据模型（`models.py`）变更必须通过 Alembic 生成迁移版本（`alembic revision --autogenerate -m "..."`），并在 `migrations/versions/` 提交版本文件。
-4. **安全与密钥防护**：
+1. **统一错误码机制（10 大标准错误码）**：
+   - 严禁直接 `raise HTTPException` 或返回未定义的自定义错误 JSON；
+   - 必须统一抛出 `AppError(code=ErrorCode.XXX, message="说明", fields={...})`。
+
+| 错误码枚举 (`ErrorCode`) | 默认 HTTP 状态码 | 典型业务触发场景 |
+| :--- | :--- | :--- |
+| `UNAUTHORIZED` | 401 / 403 | 未登录或登录凭据失效、短票过期 |
+| `VALIDATION` | 400 | 表单或请求字段校验失败、标红提示 |
+| `NOT_FOUND` | 404 | 任务、协议档、数据集或报告记录不存在 |
+| `BUDGET_EXCEEDED` | 409 | 预计 Token 消耗或压测并发超出团队配额 |
+| `CONCURRENCY` | 409 | 压测并发连接数超限或存在排队互斥 |
+| `WHITELIST` | 403 | 压测目标域名/IP 不在配置白名单中 |
+| `NEED_APPROVAL` | 403 | `prod` 生产级环境压测未经二人会签批准 |
+| `UPSTREAM` | 502 | 被测模型 API 或 LightRAG 服务网络异常/超时 |
+| `TIMEOUT` | 504 | 评测单样本执行耗时超过预设 Timeout 阈值 |
+| `INTERNAL` | 500 | 平台系统未捕获的运行时内部异常 |
+
+2. **数据库与 ORM 规范**：
+   - 遵循 SQLAlchemy 2.0 声明式模型；
+   - **禁止直接修改数据库表结构**，所有 `models.py` 变更必须通过 Alembic 生成迁移文件：`alembic revision --autogenerate -m "..."`。
+3. **安全与密钥防护**：
    - 模型协议档 API Key 必须使用 Fernet 进行双向加密存储；
    - 接口返回协议档数据时，**严禁回显明文 Key**（仅返回 `has_key: true` 掩码标志）；
    - 用户鉴权采用 `HttpOnly` Cookie（`aieval_session`），有效期 12h；
    - WebSocket 连接鉴权禁止传递长期 JWT，必须先调用 `POST /api/auth/ws-ticket` 获取 5 分钟有效期的单次短票。
 
 ### 5.3 前端开发规范 (Vue 3 / TypeScript / Naive UI)
-1. **组件与类型规范**：
-   - 统一采用 `<script setup lang="ts">` 语法；
-   - 复杂组件、Pinia Store、工具函数与 TypeScript Interface 必须添加中文注释；
-   - 严禁随意引入未经批准的大型 UI 库或图表库，必须基于 `naive-ui` 配合设计规范令牌开发；
-   - 色彩体系遵从 `naive-theme.ts` 与 `styles/` 中的薄荷绿毛玻璃 / 深空蓝暗色设计令牌。
-2. **API 与网络通信**：
-   - API 请求统一封装在 `src/api/` 目录下，使用 Axios 实例；
-   - 请求路径必须使用相对路径 `/api/*`，严禁在前端代码中硬编码 `http://localhost:8000` 或生产服务器 IP；
-   - 全局拦截器必须统一捕获后端 10 大错误码，并映射到 Naive UI `n-message` 或表单标红提示。
-3. **WebSocket 与 Agent 会话**：
-   - WebSocket 地址使用相对路径 `/ws/agent?ticket=${ticket}`；
-   - 严格维护连接状态机（`connecting` / `connected` / `reconnecting` / `disconnected`）；
-   - 支持断线自动重连，携带 `last_event_id` 请求补发断线期间的事件流；
-   - 统一渲染 `thought`（思考气泡）、`confirm`（确认卡）、`tool_call`（MCP工具卡）与 `progress`（任务进度条）。
+1. **组件规范**：统一采用 `<script setup lang="ts">` 语法，严格基于 `naive-ui` 开发；
+2. **色彩与令牌**：遵从 `naive-theme.ts` 与 `styles/` 中的薄荷绿毛玻璃 / 深空蓝暗色设计系统；
+3. **API 请求**：统一封装在 `src/api/` 目录下，使用相对路径 `/api/*`，严禁硬编码后端地址；
+4. **WebSocket 会话**：连接相对路径 `/ws/agent?ticket=${ticket}`，维护 `connecting` / `connected` / `reconnecting` / `disconnected` 状态机，支持断线按 `last_event_id` 自动补发。
 
 ### 5.4 异步调度与 Worker 规范
-1. **职责单一性**：
-   - `api` 容器仅负责 Agent 对话、确认卡生成、短工具执行与任务入队（写入 PG `tasks` 表，状态为 `queued`）；
-   - `worker` 容器负责轮询 PG 任务队列并执行耗时较长的评测长任务；
-   - 严禁在 `api` 进程内直接运行耗时几十分钟的模型评测或压测循环。
-2. **压测隔离机制（先评后压）**：
-   - Worker 在完成 Benchmark/RAG 质量评测且状态置为 `succeeded` 后，若任务配置了 `with_stress=true`，则自动创建并入队压测子任务（`parent_task_id` 指向质量任务）；
-   - 压测执行由 Worker 下发给独立的 `stress` 容器运行，禁止 Worker 本身耗尽连接池发压。
+1. **职责分离**：`api` 进程仅处理快速交互与任务入队（`queued`）；`worker` 进程负责长轮询执行评测；
+2. **先评后压隔离**：质量评测成功 (`succeeded`) 且 `with_stress=true` 时，由 Worker 派生创建压测子任务，并下发至独立 `stress` 容器执行，禁止 Worker 本身打满连接发压。
 
 ---
 
 ## 6. AI Agent 行为规范与铁律 (AI Agent Guardrails)
 
-作为协助开发本项目的 AI Agent，在执行任何编码、重构或调试指令时，必须严格执行以下准则：
+所有协助开发本项目的 AI Agent 必须严格恪守以下行为准则：
 
 ### 🔴 核心禁忌（绝对禁止）
 1. **禁止私自扩充产品范围**：禁止引入 PRD V1.6.3 明确声明不做的特性（如外部 MCP、用户自定义系统提示词、多租户隔离、TMS 外部同步、沙箱代码执行等）。
 2. **禁止破坏统一错误契约**：禁止直接返回原生 422/500 JSON 或私自造错误码，所有错误必须归一化为 `ErrorCode` 的 10 种枚举。
 3. **禁止明文暴露敏感凭据**：禁止在日志、控制台、代码、Git 提交或 API 响应中打印/回显用户 API Key、数据库明文密码或 JWT Secret。
-4. **禁止跳过 Alembic 手动改库**：修改 `backend/api/app/models.py` 后，必须配套更新/生成 Alembic 迁移脚本，严禁直接手写原生 ALTER TABLE 绕过版本追踪。
+4. **禁止跳过 Alembic 手动改库**：修改 `models.py` 后，必须配套更新/生成 Alembic 迁移脚本，严禁直接手写原生 ALTER TABLE 绕过版本追踪。
 5. **禁止全量无意义重写**：修改现有代码时，必须使用局部替换，保留既有注释、docstring 与既定架构，严禁随意删除已有类型定义或业务分支。
 
-### 🟢 推荐操作模式（主动遵循）
-1. **先查后改 (Read-Before-Write)**：
-   - 修改业务逻辑前，优先阅读 `docs/AI测试与评估平台-PRD.md` 和 `docs/AI测试与评估平台-API.md` 相关章节；
-   - 修改前端视图前，先查看 `Web-Prototype/` 对应页面的静态原型结构。
-2. **代码合规自检 (Verification)**：
-   - 每次后端代码改动后，在提交前确保运行并通过 `ruff check .` 与 `pytest`；
-   - 每次前端代码改动后，确保通过 `npm run typecheck`。
-3. **中文注释完备 (Chinese Documentation)**：
-   - 所有编写、重构或新增的代码必须配齐规范的**中文注释与 docstring**，准确阐述业务意图、输入输出参数及核心算法逻辑。
-4. **原子化提交 (Atomic Commits)**：
-   - 将逻辑清晰的独立改动拆分为符合 Conventional Commits 的提交。
-5. **保持架构清晰与文档一致**：
-   - 新增 API 路由时，必须同步在 `backend/api/app/main.py` 注册，并确保请求/响应 Schema 在 `backend/api/app/schemas.py` 严格定义。
+### 🟢 推荐操作五步法 (Standard Operating Workflow)
+1. **第一步：先查后改 (Read-Before-Write)**  
+   - 修改业务逻辑前，必须查阅 [`docs/AI测试与评估平台-PRD.md`](docs/AI测试与评估平台-PRD.md) 与 [`docs/AI测试与评估平台-API.md`](docs/AI测试与评估平台-API.md)；
+   - 修改前端界面前，必须查阅 [`Web-Prototype/`](Web-Prototype/) 中的静态原型结构。
+2. **第二步：中文注释完备 (Chinese Documentation)**  
+   - 所有编写、重构或新增的代码必须配齐规范的**中文注释与 docstring**。
+3. **第三步：本地合规自检 (Local Verification)**  
+   - 后端变更：提交前确保 `ruff check .` 与 `pytest` 100% 通过；
+   - 前端变更：提交前确保 `npm run build` 打包与 TypeScript 校验 0 错误。
+4. **第四步：原子化规范提交 (Atomic Commits)**  
+   - 遵循 Conventional Commits 格式规范拆分提交，作者身份统一为 `cweaty <2270040284@qq.com>`。
+5. **第五步：推送并监控 CI/CD 流水线**  
+   - 推送至 `main` 分支后，密切关注 GitHub Actions CI 检查与 CD 自动部署状态，若遇异常严格按 §4.4 SOP 进行自愈排查。
 
 ---
 
-> **本指南自发布之日起对本项目所有代码生成与协作行为具有强制约束力。**
+> **本指南自发布之日起对本项目所有代码生成、工程协作与自动化运维行为具有最高约束力。**
