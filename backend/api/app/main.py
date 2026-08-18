@@ -8,7 +8,20 @@ from .config import settings
 from .db import SessionLocal
 from .errors import register_error_handlers
 from .models import User
-from .routers import admin, auth, datasets, files, profiles, sessions, tasks, users, ws
+from .routers import (
+    admin,
+    auth,
+    cases,
+    datasets,
+    dispatch,
+    files,
+    mcp,
+    profiles,
+    sessions,
+    tasks,
+    users,
+    ws,
+)
 from .security import hash_password
 
 logging.basicConfig(level=logging.INFO)
@@ -68,7 +81,12 @@ app.include_router(sessions.router)
 app.include_router(tasks.router)
 app.include_router(profiles.router)
 app.include_router(datasets.router)
+app.include_router(datasets.folders_router)
+app.include_router(cases.router)
+app.include_router(cases.folders_router)
 app.include_router(admin.router)
+app.include_router(dispatch.router)
+app.include_router(mcp.router)
 app.include_router(ws.router)
 
 

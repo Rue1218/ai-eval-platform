@@ -141,7 +141,7 @@ class StoredFile(Base):
 
 
 class Dataset(Base):
-    """M1 保留的最小数据集壳；版本行在 M2 迁移加入。"""
+    """数据集：M2 起挂载目录树、评测口径与自定义扩展列定义。"""
 
     __tablename__ = "datasets"
 
@@ -149,6 +149,13 @@ class Dataset(Base):
     name = Column(String, nullable=False)
     version = Column(Integer, nullable=False, default=1)
     row_count = Column(Integer, nullable=False, default=0)
+    # 待补全行数：question/reference 任一缺失的行计入，且不进评分分母
+    pending_complete_count = Column(Integer, nullable=False, default=0)
+    # 默认评判口径，契约取值如 contain / exact / judge，由评测执行侧解释
+    metric = Column(String, nullable=False, default="contain")
+    folder_id = Column(String, ForeignKey("dataset_folders.id"), nullable=True)
+    # 自定义扩展列定义数组：[{key, name, type, required?, sort_order}]
+    column_schema = Column(JSONB, nullable=False, default=list)
     created_by = Column(String, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
@@ -279,3 +286,109 @@ class DispatchEvent(Base):
     message = Column(Text, nullable=False)
     detail = Column(JSONB, nullable=False, default=dict)
     ts = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class DatasetFolder(Base):
+    """数据集目录树节点；删除非空目录由路由层校验拦截。"""
+
+    __tablename__ = "dataset_folders"
+
+    id = Column(String, primary_key=True, default=uuid_str)
+    name = Column(String, nullable=False)
+    parent_id = Column(String, ForeignKey("dataset_folders.id"), nullable=True, index=True)
+    sort_order = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class DatasetRow(Base):
+    """数据集行：固定三元组字段 + 扩展列值 extras，按 (dataset_id, row_no) 唯一。"""
+
+    __tablename__ = "dataset_rows"
+    __table_args__ = (
+        UniqueConstraint("dataset_id", "row_no", name="uq_dataset_rows_dataset_row_no"),
+    )
+
+    id = Column(String, primary_key=True, default=uuid_str)
+    dataset_id = Column(String, ForeignKey("datasets.id"), nullable=False, index=True)
+    row_no = Column(Integer, nullable=False)
+    question = Column(Text, nullable=False, default="")
+    reference = Column(Text, nullable=False, default="")
+    context = Column(Text, nullable=True)
+    # 扩展列 key -> 值，键名由 Dataset.column_schema 定义
+    extras = Column(JSONB, nullable=False, default=dict)
+    # question/reference 任一缺失即视为待补全，评分时不计入分母
+    pending_complete = Column(Boolean, nullable=False, default=False)
+    # 由用例映射等来源写入时可回溯的用例 ID
+    source_case_id = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+
+class CaseFolder(Base):
+    """用例目录树节点；删除非空目录由路由层校验拦截。"""
+
+    __tablename__ = "case_folders"
+
+    id = Column(String, primary_key=True, default=uuid_str)
+    name = Column(String, nullable=False)
+    parent_id = Column(String, ForeignKey("case_folders.id"), nullable=True, index=True)
+    sort_order = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class CaseSet(Base):
+    """用例集：AI 生成或手工维护的用例集合，确认后形成版本快照。
+
+    expires_at 由任务域在关联任务进入 awaiting_case_confirm 时写入（+72h），
+    用例域不主动维护该字段，仅在详情响应中原样返回。
+    """
+
+    __tablename__ = "case_sets"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('generated', 'confirmed', 'cancelled')", name="ck_case_sets_status"
+        ),
+    )
+
+    id = Column(String, primary_key=True, default=uuid_str)
+    # 由 testcase 任务派生的用例集回写任务 ID，确认/废弃时联动任务状态
+    task_id = Column(String, ForeignKey("tasks.id"), nullable=True, index=True)
+    name = Column(String, nullable=False, default="未命名用例集")
+    status = Column(String, nullable=False, default="generated", index=True)
+    generated_count = Column(Integer, nullable=False, default=0)
+    confirmed_count = Column(Integer, nullable=False, default=0)
+    folder_id = Column(String, ForeignKey("case_folders.id"), nullable=True)
+    # 自定义扩展列定义数组：[{key, name, type, required?, sort_order}]
+    column_schema = Column(JSONB, nullable=False, default=list)
+    # 确认页红字检查项数组：[{level, code, message}]，由生成/保存侧计算
+    checks = Column(JSONB, nullable=False, default=list)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    created_by = Column(String, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+
+class CaseItem(Base):
+    """用例行：固定策略字段 + extras 扩展列值，按用例 id 在用例集内 upsert。"""
+
+    __tablename__ = "case_items"
+
+    id = Column(String, primary_key=True, default=uuid_str)
+    case_set_id = Column(String, ForeignKey("case_sets.id"), nullable=False, index=True)
+    strategy = Column(String, nullable=False)
+    priority = Column(String, nullable=False)
+    module = Column(String, nullable=False, default="")
+    name = Column(String, nullable=False)
+    precondition = Column(Text, nullable=False, default="")
+    steps = Column(Text, nullable=False, default="")
+    expected = Column(Text, nullable=False, default="")
+    test_type = Column(String, nullable=False, default="")
+    # 已映射到数据集/黄金 QA 的用例不再重复映射
+    mapped = Column(Boolean, nullable=False, default=False)
+    # name/expected 任一缺失即视为待补全，映射入库时进入目标集待补全行
+    pending_complete = Column(Boolean, nullable=False, default=False)
+    # 扩展列 key -> 值，键名由 CaseSet.column_schema 定义
+    extras = Column(JSONB, nullable=False, default=dict)
+    sort_order = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)

@@ -152,18 +152,23 @@ class FileOut(OrmOut):
 
 
 class DatasetCreate(ApiModel):
-    """创建数据集输入。"""
+    """创建数据集输入；metric 缺省为 contain。"""
 
     name: str = Field(min_length=1, max_length=100)
+    metric: str = Field(default="contain", min_length=1, max_length=32)
 
 
 class DatasetOut(OrmOut):
-    """数据集响应模型。"""
+    """数据集响应模型（API §3.7；契约 owner_id 即本模型的 created_by）。"""
 
     id: str
     name: str
     version: int = 1
+    folder_id: str | None = None
     row_count: int = 0
+    pending_complete_count: int = 0
+    metric: str = "contain"
+    column_schema: list[dict[str, Any]] = Field(default_factory=list)
     created_by: str | None = None
     created_at: Any
 
@@ -311,3 +316,342 @@ class PageOut(OrmOut):
 
     items: list[Any]
     total: int
+
+
+# ─── 调度内核与 Worker 节点管理（API V1.3 §3.13） ───
+
+
+class DispatchWorkerCreate(ApiModel):
+    """注册新 Worker 执行节点的输入。"""
+
+    id: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=128)
+    caps: list[str] = Field(default_factory=list)
+    weight: int = Field(default=100, ge=1, le=1000)
+
+
+class DispatchWorkerUpdate(ApiModel):
+    """修改节点状态、权重或能力标签；状态取值对齐调度契约。"""
+
+    state: Literal["idle", "busy", "offline", "draining"] | None = None
+    weight: int | None = Field(default=None, ge=1, le=1000)
+    caps: list[str] | None = None
+
+
+class DispatchWorkerOut(OrmOut):
+    """调度面可读的 Worker 心跳与能力快照。"""
+
+    id: str
+    name: str
+    caps: list[str]
+    state: str
+    weight: int
+    load_percent: float | None = None
+    current_task: str | None = None
+    last_heartbeat_at: Any | None = None
+
+
+class DispatchConfigUpdate(ApiModel):
+    """更新分发策略与全局并发容量。"""
+
+    strategy: Literal["负载均衡", "优先级抢占", "亲和性"] | None = None
+    max_running_tasks: int | None = Field(default=None, ge=1, le=64)
+
+
+class DispatchOverviewOut(ApiModel):
+    """调度中心大盘指标与内核雷达状态。"""
+
+    online_workers: int
+    total_workers: int
+    queue_depth: int
+    avg_dispatch_cost_ms: float
+    assigned_today: int
+    strategy: str
+    max_running_tasks: int
+    heartbeat_interval_ms: int
+
+
+class DispatchEventOut(OrmOut):
+    """调度分配日志流中的单条事件。"""
+
+    id: int
+    task_id: str | None = None
+    worker_id: str | None = None
+    event: str
+    message: str
+    ts: Any
+
+
+class DispatchEventPage(ApiModel):
+    """增量事件流响应，next_after_id 供下一轮轮询携带。"""
+
+    items: list[DispatchEventOut]
+    next_after_id: int
+
+
+# ─── MCP 工具中心（API V1.3 §3.6.1，V1.0 只读） ───
+
+
+class McpToolOut(ApiModel):
+    """内置受控短工具清单项。"""
+
+    name: str
+    desc: str
+    permission: Literal["read", "write"]
+    enabled: bool
+    source: Literal["builtin"] = "builtin"
+
+
+# ─── 数据集工作台扩展（API V1.3 §3.7） ───
+
+
+class ColumnSchemaItem(ApiModel):
+    """数据集自定义扩展列定义，行内扩展值按 key 落入 DatasetRow.extras。"""
+
+    key: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=100)
+    type: str = Field(min_length=1, max_length=32)
+    required: bool = False
+    sort_order: int = 0
+
+
+class DatasetUpdate(ApiModel):
+    """数据集可修改字段；column_schema 为整体替换而非合并。"""
+
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    metric: str | None = Field(default=None, min_length=1, max_length=32)
+    folder_id: str | None = None
+    column_schema: list[ColumnSchemaItem] | None = None
+
+    @model_validator(mode="after")
+    def validate_unique_column_keys(self) -> "DatasetUpdate":
+        """扩展列 key 必须全局唯一，否则行内扩展值无法对应列定义。"""
+        if self.column_schema is not None:
+            keys = [col.key for col in self.column_schema]
+            if len(keys) != len(set(keys)):
+                raise ValueError("column_schema 中存在重复 key")
+        return self
+
+
+class FolderIn(ApiModel):
+    """目录创建/更新共用输入；POST 时 name 由路由校验必填，PUT 仅修改提供的字段。"""
+
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    parent_id: str | None = None
+    sort_order: int | None = None
+
+
+class FolderOut(OrmOut):
+    """数据集目录树节点响应。"""
+
+    id: str
+    name: str
+    parent_id: str | None = None
+    sort_order: int = 0
+    created_at: Any
+
+
+class DatasetRowIn(ApiModel):
+    """单行保存输入：q/r/c 短名映射 question/reference/context，其余键进入 extras。"""
+
+    # 扩展列 key 由 Dataset.column_schema 动态定义，此处必须放行契约外字段
+    model_config = ConfigDict(extra="allow")
+
+    row_no: int = Field(ge=1)
+    q: str | None = Field(default=None, max_length=100_000)
+    r: str | None = Field(default=None, max_length=100_000)
+    c: str | None = Field(default=None, max_length=100_000)
+    source_case_id: str | None = Field(default=None, max_length=64)
+
+
+class RowsPayload(ApiModel):
+    """批量保存请求；row_no 缺失由字段校验拦截为 VALIDATION，此处拦截重复。"""
+
+    rows: list[DatasetRowIn] = Field(min_length=1, max_length=20_000)
+
+    @model_validator(mode="after")
+    def validate_unique_row_no(self) -> "RowsPayload":
+        """单次批量保存内 row_no 不允许重复，避免 upsert 目标行歧义。"""
+        row_nos = [row.row_no for row in self.rows]
+        if len(row_nos) != len(set(row_nos)):
+            raise ValueError("rows 中存在重复 row_no")
+        return self
+
+
+class AiGenerateIn(ApiModel):
+    """AI 候选生成请求；仅返回未落库候选行。
+
+    model / temperature 按契约透传接收，但实际模型与采样参数以 Agent 协议档
+    配置为准（call_agent_model 固定实现），这两个字段当前为契约预留。
+    """
+
+    dataset_id: str = Field(min_length=1, max_length=64)
+    mode: Literal["scene", "seed", "doc", "fill_missing"]
+    instruction: str | None = Field(default=None, max_length=20_000)
+    source_text: str | None = Field(default=None, max_length=1_000_000)
+    seed: str | None = Field(default=None, max_length=100_000)
+    rows: list[dict[str, Any]] | None = None
+    max_count: int = Field(default=10, ge=1, le=50)
+    model: str | None = Field(default=None, max_length=256)
+    temperature: float | None = Field(default=None, ge=0, le=2)
+
+    @model_validator(mode="after")
+    def validate_by_mode(self) -> "AiGenerateIn":
+        """fill_missing 必须携带待补全行；其余模式至少要有一段生成依据。"""
+        if self.mode == "fill_missing":
+            if not self.rows:
+                raise ValueError("fill_missing 模式必须提供待补全 rows")
+        elif not any(
+            [
+                self.instruction and self.instruction.strip(),
+                self.source_text and self.source_text.strip(),
+                self.seed and self.seed.strip(),
+            ]
+        ):
+            raise ValueError("请至少提供 instruction、source_text 或 seed 之一")
+        return self
+
+
+# ─── 用例工作台（API V1.3 §3.8） ───
+
+
+class CaseSetCreate(ApiModel):
+    """创建空用例集输入；column_schema 规则同数据集自定义列。"""
+
+    name: str = Field(min_length=1, max_length=100)
+    folder_id: str | None = None
+    column_schema: list[ColumnSchemaItem] | None = None
+
+    @model_validator(mode="after")
+    def validate_unique_column_keys(self) -> "CaseSetCreate":
+        """扩展列 key 必须全局唯一，否则用例行内扩展值无法对应列定义。"""
+        if self.column_schema is not None:
+            keys = [col.key for col in self.column_schema]
+            if len(keys) != len(set(keys)):
+                raise ValueError("column_schema 中存在重复 key")
+        return self
+
+
+class CaseSetUpdate(ApiModel):
+    """用例集可修改字段；column_schema 为整体替换，confirmed 集由路由层拒绝。"""
+
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    folder_id: str | None = None
+    column_schema: list[ColumnSchemaItem] | None = None
+
+    @model_validator(mode="after")
+    def validate_unique_column_keys(self) -> "CaseSetUpdate":
+        """扩展列 key 必须全局唯一，否则用例行内扩展值无法对应列定义。"""
+        if self.column_schema is not None:
+            keys = [col.key for col in self.column_schema]
+            if len(keys) != len(set(keys)):
+                raise ValueError("column_schema 中存在重复 key")
+        return self
+
+
+class CaseSetOut(OrmOut):
+    """用例集列表项响应（API §3.8）；expires_at 由任务域写入，此处原样返回。"""
+
+    id: str
+    task_id: str | None = None
+    name: str
+    status: str = "generated"
+    generated_count: int = 0
+    confirmed_count: int = 0
+    folder_id: str | None = None
+    column_schema: list[dict[str, Any]] = Field(default_factory=list)
+    checks: list[dict[str, Any]] = Field(default_factory=list)
+    expires_at: Any | None = None
+    created_at: Any
+    updated_at: Any | None = None
+
+
+class CaseSetDetailOut(CaseSetOut):
+    """用例集详情额外返回的用例行数组（固定字段 + 扩展列平铺）。"""
+
+    cases: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class CaseIn(ApiModel):
+    """单条用例保存输入：固定字段之外的扩展列 key 进入 CaseItem.extras。"""
+
+    # 扩展列 key 由 CaseSet.column_schema 动态定义，此处必须放行契约外字段
+    model_config = ConfigDict(extra="allow")
+
+    id: str | None = Field(default=None, max_length=64)
+    strategy: str = Field(min_length=1, max_length=32)
+    priority: str = Field(min_length=1, max_length=16)
+    module: str = Field(default="", max_length=100)
+    name: str = Field(min_length=1, max_length=200)
+    precondition: str | None = Field(default=None, max_length=100_000)
+    steps: str | None = Field(default=None, max_length=100_000)
+    expected: str | None = Field(default=None, max_length=100_000)
+    test_type: str | None = Field(default=None, max_length=64)
+
+
+class CasesPayload(ApiModel):
+    """批量保存用例请求；单次请求内用例 id 不允许重复，避免 upsert 目标歧义。"""
+
+    cases: list[CaseIn] = Field(min_length=1, max_length=20_000)
+
+    @model_validator(mode="after")
+    def validate_unique_case_id(self) -> "CasesPayload":
+        """单次批量保存内显式 id 不允许重复；缺省 id 由服务端生成，不参与查重。"""
+        ids = [case.id for case in self.cases if case.id]
+        if len(ids) != len(set(ids)):
+            raise ValueError("cases 中存在重复 id")
+        return self
+
+
+class CaseConfirmIn(ApiModel):
+    """确认/废弃用例集请求；ok=false 时置 cancelled 并联动关联任务。"""
+
+    ok: bool
+    # edits / mapping_target / target_id 为契约预留字段：映射入库走 /map 接口，
+    # 本接口仅消费 ok 做状态流转，其余字段接收后仅记入审计明细
+    edits: dict[str, Any] | None = None
+    mapping_target: Literal["dataset", "gold_qa"] | None = None
+    target_id: str | None = Field(default=None, max_length=64)
+
+
+class CaseCancelIn(ApiModel):
+    """废弃用例集请求，可附废弃原因。"""
+
+    reason: str | None = Field(default=None, max_length=2000)
+
+
+class CaseMapIn(ApiModel):
+    """批量映射用例到目标基准数据集或知识库黄金问答的请求。"""
+
+    target: Literal["dataset", "gold_qa"]
+    target_id: str = Field(min_length=1, max_length=64)
+    case_ids: list[str] = Field(min_length=1, max_length=20_000)
+
+
+class CaseAiGenerateIn(ApiModel):
+    """AI 候选用例生成请求；仅返回未落库候选，不创建用例集。"""
+
+    source_doc_id: str | None = Field(default=None, max_length=64)
+    source_text: str | None = Field(default=None, max_length=1_000_000)
+    # 6 大策略配比（百分比），键取值 positive/negative/boundary/equivalence/state/scenario
+    strategy_weights: dict[str, int] | None = None
+    complexity: str | None = Field(default=None, max_length=32)
+    max_count: int = Field(default=45, ge=1, le=100)
+
+    @model_validator(mode="after")
+    def validate_source(self) -> "CaseAiGenerateIn":
+        """source_doc_id 与 source_text 至少填一项，作为用例生成依据。"""
+        has_doc = bool(self.source_doc_id)
+        has_text = bool(self.source_text and self.source_text.strip())
+        if not (has_doc or has_text):
+            raise ValueError("source_doc_id 与 source_text 至少填一项")
+        return self
+
+
+class CaseAiFillIn(ApiModel):
+    """行级 AI 补全请求；case_ids 必填且必须全部属于该用例集。"""
+
+    case_ids: list[str] = Field(min_length=1, max_length=20_000)
+    instruction: str | None = Field(default=None, max_length=20_000)
+    # 缺省时补全所有缺失字段；提供时仅补全指定字段（含扩展列 key）
+    fields: list[str] | None = Field(default=None, max_length=64)

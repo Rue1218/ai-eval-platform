@@ -26,6 +26,8 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     },
     "notify": {"wecom": False, "email": False, "webhook": False},
     "prod_approvers": [],
+    # Agent 运行时治理（协议档页运行时 Tab）：WS 心跳/超时与会话占槽互斥
+    "runtime": {"ws_ping_s": 15, "ws_timeout_s": 45, "strict_session_slot": True},
 }
 ALLOWED_KEYS = set(DEFAULT_SETTINGS)
 
@@ -55,6 +57,13 @@ def _validate_settings(body: dict[str, Any], db: Session) -> None:
             raise AppError(ErrorCode.VALIDATION, f"{key} 必须为正整数")
     if "default_max_usd" in body and (not isinstance(body["default_max_usd"], int | float) or body["default_max_usd"] <= 0):
         raise AppError(ErrorCode.VALIDATION, "default_max_usd 必须大于 0")
+    if "runtime" in body:
+        runtime = body["runtime"]
+        if not isinstance(runtime, dict):
+            raise AppError(ErrorCode.VALIDATION, "runtime 必须为对象")
+        for key in ("ws_ping_s", "ws_timeout_s"):
+            if key in runtime and (not isinstance(runtime[key], int) or not 5 <= runtime[key] <= 300):
+                raise AppError(ErrorCode.VALIDATION, f"runtime.{key} 必须为 5–300 的整数秒")
 
 
 @router.get("/settings")

@@ -597,6 +597,28 @@ case item 包含：`id, strategy, priority, module, name, precondition, steps, e
 
 前端采纳后按 `POST /api/case-sets` → `PUT /api/case-sets/{id}/cases` 两步落库；任何一步失败都不得显示“创建成功”。
 
+#### `POST /api/case-sets/{id}/ai-fill`
+
+行级 AI 补全（原型用例工作台「AI 补全断言 / 补全属性」的落地路径补全，非新产品）。对用例集中**已存在**的用例行补全缺失字段（`expected` 断言、`precondition`、`test_type` 及已声明的自定义扩展列），返回**未落库候选值**；前端人工确认后必须再走 `PUT /api/case-sets/{id}/cases` 保存。已确认（`confirmed`）的用例集拒绝补全，返回 `VALIDATION`。
+
+```json
+{
+  "case_ids": ["c-001", "c-002"],
+  "instruction": "可选，补全侧重点说明",
+  "fields": ["expected", "precondition"]
+}
+```
+
+`case_ids` 必填且必须全部属于该用例集，否则 `VALIDATION`；`fields` 缺省时补全所有缺失字段。响应固定为：
+
+```json
+{
+  "items": [
+    { "id": "c-001", "expected": "进入工作台首页", "precondition": "账号已完成实名认证", "test_type": "核心业务" }
+  ]
+}
+```
+
 #### `GET /api/case-sets/{id}/export?fmt=xlsx|xmind`
 
 `fmt` 必填。响应文件流。Excel 8+。
@@ -1309,9 +1331,10 @@ MCP 浏览器不调：与 PRD 3.1、前端计划「禁止把 MCP 当 REST」一�
 | 协议档 | profiles 的 list/create/delete | get/update/check、用途/密钥不回显、审计与统一列表响应缺失 | M1 |
 | 任务 | create/list/get/cancel/rerun | TaskSpec 校验、分页对象、events、worker 状态机与权限口径未完整对齐 | M1–M2 |
 | 数据集 | list/create/delete | 详情、版本上传、行 CRUD、AI 生成、统一响应缺失 | M2 |
-| 用例、报告 | 无对应 router | 全部接口与实体缺失 | M2 |
+| 用例、报告 | 无对应 router | 全部接口与实体缺失（2026-08-18 起用例域按 §3.8 落地，含行级 `ai-fill` 补全） | M2 |
 | KB/RAG | 独立 LightRAG `/health`、`/query` 骨架 | 平台 `/api/kb*`、文档、黄金 QA、报告关联缺失 | M3 |
-| 调度、压测治理、MCP、Skills | 无平台 router | 全部接口、白名单、会签、曲线、指标边界缺失 | M1/M4 |
+| 调度 | `dispatch` router（overview/workers/config/events）已按 §3.13 落地 | 调度事件由 worker 执行侧写入；压测治理白名单/会签/曲线缺失 | M1/M4 |
+| MCP、Skills | `GET /api/mcp/tools` 只读清单已落地 | 外部 MCP 与自定义技能按 §3.6.1/§3.6.2 保持能力未启用 | M1 |
 
 结论：原型的接口名称此前大部分已列出，但不能视为“已接入”。本节与后端计划的 M0–M4 清单共同作为实现差距清单。
 
