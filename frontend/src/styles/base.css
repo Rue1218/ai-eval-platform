@@ -280,6 +280,8 @@ p { margin: 0; text-wrap: pretty; }
 .badge-succeeded { background: #D1FAE5; color: #047857; }
 .badge-failed { background: #FEE2E2; color: #B91C1C; }
 .badge-cancelled { background: #F3F4F6; color: #6B7280; }
+/* 告警徽标（prod 压测会签提示等，对齐原型 warn 色系） */
+.badge-warning { background: #FEF3C7; color: #B45309; }
 
 .kind-tag {
   display: inline-flex; align-items: center;
@@ -687,6 +689,15 @@ pre.code {
 .run-fold-body { display: none; padding: 4px 14px 14px; }
 .run-fold.open .run-fold-body { display: block; }
 
+/* 确认卡折叠区（fold-* 为 run-fold 的别名形态，供 Agent 确认卡使用；主体显隐由 v-show 控制） */
+.fold-card { border: 1px solid var(--border-subtle); border-radius: 10px; margin: 4px 0 12px; overflow: hidden; }
+.fold-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; font-size: 13px; font-weight: 500; cursor: pointer; user-select: none; color: var(--text-secondary); }
+.fold-head:hover { background: var(--row-hover); }
+.fold-head .chev { margin-left: auto; transition: transform .18s ease; }
+.fold-card.open .fold-head .chev { transform: rotate(180deg); }
+.fold-title { font-weight: 600; color: var(--text-primary); }
+.fold-body { padding: 4px 14px 14px; }
+
 /* 报告卡 */
 .report-card {
   border: 1px solid var(--border-subtle); border-radius: 14px;
@@ -1088,6 +1099,12 @@ td.cell-edit:hover { background: color-mix(in srgb, var(--accent-ai) 5%, transpa
 .cell-bad { color: var(--accent-error); border-bottom: 1px dashed color-mix(in srgb, var(--accent-error) 55%, transparent); }
 .cell-err-text { display: block; color: var(--accent-error); font-size: 11px; line-height: 1.4; margin-top: 3px; }
 .verdict-pending { color: var(--accent-warning); }
+
+/* 自定义扩展列表头：主题色 4% 底 + 主题色文字（迁移自原型 datasets.html 的 .custom-col-th） */
+.ds-table th.custom-col-th {
+  background: color-mix(in srgb, var(--accent-ai) 4%, var(--bg-elevated));
+  color: var(--accent-ai);
+}
 
 /* ─── IDE 文件树与工作台布局（Datasets / Cases） ─── */
 .ft-layout {

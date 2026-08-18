@@ -25,7 +25,17 @@
 
       <div class="field">
         <label class="field-label">Base URL <span class="req">*</span></label>
-        <n-input v-model:value="form.base_url" placeholder="https://api.openai.com/v1 或内网代理地址" />
+        <!-- P3 厂商预设：按当前协议一键填充典型 base_url / model（对齐原型 admin-profiles.html 278） -->
+        <div class="row" style="gap: 6px">
+          <n-input
+            v-model:value="form.base_url"
+            class="grow"
+            placeholder="https://api.openai.com/v1 或内网代理地址"
+          />
+          <button class="btn btn-ai btn-sm" type="button" style="flex: 0 0 auto" @click="applyVendorPreset">
+            ✨ 厂商预设
+          </button>
+        </div>
       </div>
 
       <div class="field">
@@ -114,6 +124,29 @@ const protocolOptions = [
   { label: 'OpenAI Responses (/responses)', value: 'openai_responses' },
   { label: 'Anthropic Messages (/messages)', value: 'anthropic_messages' },
 ]
+// 契约核对（API.md §枚举）：protocol 仅 openai_chat / openai_responses / anthropic_messages 三种，
+// profile_usage 仅 target / agent / judge 三种；原型的 ollama_local、lightrag_native、external_chat
+// 均不在契约内，按 AGENTS.md 红线保持现状不扩充。
+
+/**
+ * P3 厂商预设表（对齐原型 admin-profiles.html 303-316）：
+ * 按当前所选协议自动填充典型 base_url 与 model，仅填充表单、不直接提交。
+ * 注：原型中的 ollama_local 预设因契约无该协议枚举，此处不实现。
+ */
+const VENDOR_PRESETS: Record<ProtocolType, { base_url: string; model: string }> = {
+  openai_chat: { base_url: 'https://api.openai.com/v1', model: 'gpt-4.1' },
+  openai_responses: { base_url: 'https://api.openai.com/v1', model: 'gpt-4.1' },
+  anthropic_messages: { base_url: 'https://api.anthropic.com', model: 'claude-3-7-sonnet-20250219' },
+}
+
+/** 应用厂商预设：覆盖 Base URL 与模型标识输入框 */
+function applyVendorPreset() {
+  const preset = VENDOR_PRESETS[form.value.protocol]
+  if (!preset) return
+  form.value.base_url = preset.base_url
+  form.value.model = preset.model
+  message.info('已填充典型厂商参数')
+}
 
 watch(
   () => props.show,

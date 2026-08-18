@@ -19,8 +19,9 @@
             :class="{ on: activeKbId === k.id }"
             @click="selectKb(k)"
           >
-            <span v-if="k.is_core" style="color: var(--accent-warning); margin-right: 4px">★</span>
             <span>{{ k.name }}</span>
+            <!-- 核心库 ★ 标记置于名称之后并沿用默认色，对齐原型 kb.html。 -->
+            <span v-if="k.is_core" style="margin-left: 4px">★</span>
           </button>
         </div>
 
@@ -47,6 +48,12 @@
           <button class="link-btn" style="font-size: 11px" @click="showUploadDocModal = true">+ 添加</button>
         </div>
 
+        <!-- 库无文档空态：对齐原型，不再渲染下方的切块预览区。 -->
+        <div v-if="!docs.length" class="empty" style="padding: 32px 20px">
+          <div class="small tertiary">当前库暂无文档，点上方「↑ 上传文档」开始分块建索引；doc_id 由系统自动生成。</div>
+        </div>
+
+        <template v-else>
         <div class="section-gap" style="gap: 8px; margin-bottom: 18px">
           <div
             v-for="d in docs"
@@ -84,12 +91,13 @@
           </select>
         </div>
 
-        <div class="section-gap" style="gap: 8px">
+        <div v-if="chunkPreview.length" ref="chunkFlowRef" class="section-gap" style="gap: 8px">
           <div
             v-for="ck in chunkPreview"
             :key="ck.chunk_id"
             class="chunk"
-            :class="{ hit: isChunkHit(ck.chunk_id) }"
+            :class="{ hit: isChunkHit(ck.chunk_id), flash: flashChunkId === ck.chunk_id }"
+            :data-chunk="ck.chunk_id"
           >
             <div class="row-between">
               <span class="ck-id mono">{{ ck.chunk_id }}</span>
@@ -99,6 +107,13 @@
             <i v-if="overlap > 0" class="ck-ov" :style="{ width: `${Math.round((overlap / chunkSize) * 100)}%` }"></i>
           </div>
         </div>
+        <!-- 服务端无切块返回时的空态提示。 -->
+        <div v-else class="empty" style="padding: 24px 12px">
+          <div class="small tertiary">服务端未返回切块预览。</div>
+        </div>
+        <!-- 分块策略说明：参数跟随当前预览选择，命中召回的切块会自动高亮。 -->
+        <p class="small tertiary mt8">分块策略: chunk_size={{ chunkSize }} · overlap={{ overlap }}；命中召回的切块自动高亮。</p>
+        </template>
       </div>
 
       <!-- 2. 中栏：检索 Playground -->
@@ -136,8 +151,7 @@
           <span
             v-for="q in ['退款多久到账？', '如何修改默认结算账户？', '发票开具申请入口在哪里？', '连续输错支付密码怎么办？']"
             :key="q"
-            class="tag-soft"
-            style="cursor: pointer"
+            class="tag-soft quick-pill"
             @click="fillAndQuery(q)"
           >
             {{ q }}
@@ -151,14 +165,16 @@
             <span class="small tertiary mono">bge-large-zh · 22 chunks</span>
           </div>
 
-          <svg class="scatter" viewBox="0 0 520 220" style="height: 180px">
-            <circle v-if="queried" class="ring" cx="312" cy="101" r="76" />
-            <!-- 邻域连线 -->
+          <!-- 散点坐标按原型 kb.html 校准：viewBox 520×280，Query 点 (312,128.8)。 -->
+          <svg class="scatter" viewBox="0 0 520 280">
+            <circle v-if="queried" class="ring" cx="312" cy="128.8" r="96" />
+            <!-- Top-5 召回邻域连线：由 Query 点指向 5 个命中散点。 -->
             <template v-if="queried">
-              <line class="lk" x1="312" y1="101" x2="208" y2="44" />
-              <line class="lk" x1="312" y1="101" x2="327" y2="154" />
-              <line class="lk" x1="312" y1="101" x2="286" y2="35" />
-              <line class="lk" x1="312" y1="101" x2="353" y2="176" />
+              <line class="lk" x1="312" y1="128.8" x2="328" y2="196" />
+              <line class="lk" x1="312" y1="128.8" x2="406" y2="185" />
+              <line class="lk" x1="312" y1="128.8" x2="286" y2="45" />
+              <line class="lk" x1="312" y1="128.8" x2="187" y2="185" />
+              <line class="lk" x1="312" y1="128.8" x2="343" y2="84" />
             </template>
             <!-- 语料切块散点 -->
             <circle
@@ -172,8 +188,8 @@
             />
             <!-- Query 点与波纹 -->
             <template v-if="queried">
-              <circle class="pt-query" cx="312" cy="101" r="6" />
-              <circle class="ring" cx="312" cy="101" r="14" style="opacity: 0.5" />
+              <circle class="pt-query" cx="312" cy="128.8" r="6" />
+              <circle class="ring" cx="312" cy="128.8" r="14" style="opacity: 0.5" />
             </template>
           </svg>
 
@@ -193,8 +209,10 @@
           <div
             v-for="(r, idx) in recallResults"
             :key="idx"
-            class="chunk"
+            class="chunk recall-card"
             :class="{ hit: r.hit }"
+            title="点击定位左栏对应切块"
+            @click="locateChunk(r.chunk)"
           >
             <div class="row mb8" style="gap: 8px">
               <span class="mono" style="font-weight: 600; color: var(--c-kb)">#{{ idx + 1 }} {{ r.chunk }}</span>
@@ -250,21 +268,22 @@
       <!-- 3. 右栏：本次检索指标 + 黄金 QA -->
       <div class="kb-col panel" style="overflow-y: auto; max-height: calc(100vh - 160px)">
         <div class="rail-label">本次检索指标 · K=5</div>
+        <!-- 四个指标卡数字统一使用 accent-ai 主色，对齐原型 metric-cell 视觉。 -->
         <div class="kpi-grid mb16" style="grid-template-columns: 1fr 1fr; gap: 10px">
           <div class="kpi" style="padding: 12px">
-            <div class="kpi-num mono" style="font-size: 20px; color: var(--c-kb)">{{ formatMetric(queryMetrics.hit_rate) }}</div>
+            <div class="kpi-num mono" style="font-size: 20px; color: var(--accent-ai)">{{ formatMetric(queryMetrics.hit_rate) }}</div>
             <div class="kpi-label">Hit Rate@5</div>
           </div>
           <div class="kpi" style="padding: 12px">
-            <div class="kpi-num mono" style="font-size: 20px; color: var(--c-kb)">{{ formatMetric(queryMetrics.mrr) }}</div>
+            <div class="kpi-num mono" style="font-size: 20px; color: var(--accent-ai)">{{ formatMetric(queryMetrics.mrr) }}</div>
             <div class="kpi-label">MRR 倒数排名</div>
           </div>
           <div class="kpi" style="padding: 12px">
-            <div class="kpi-num mono" style="font-size: 20px">{{ formatMetric(queryMetrics.recall) }}</div>
+            <div class="kpi-num mono" style="font-size: 20px; color: var(--accent-ai)">{{ formatMetric(queryMetrics.recall) }}</div>
             <div class="kpi-label">Recall@5</div>
           </div>
           <div class="kpi" style="padding: 12px">
-            <div class="kpi-num mono" style="font-size: 20px">{{ formatMetric(queryMetrics.contain) }}</div>
+            <div class="kpi-num mono" style="font-size: 20px; color: var(--accent-ai)">{{ formatMetric(queryMetrics.contain) }}</div>
             <div class="kpi-label">答案 contain 分</div>
           </div>
         </div>
@@ -279,7 +298,7 @@
           </div>
         </div>
 
-        <div class="section-gap mb16" style="gap: 8px">
+        <div v-if="goldQas.length" class="section-gap mb16" style="gap: 8px">
           <div
             v-for="g in goldQas"
             :key="g.id"
@@ -294,6 +313,10 @@
               <span class="num">{{ g.row_count }}</span> 条 · 无 expected_doc_ids 样本不进分母
             </div>
           </div>
+        </div>
+        <!-- 黄金 QA 空态：提示先上传或 AI 生成后再发起评测。 -->
+        <div v-else class="empty mb16" style="padding: 24px 12px">
+          <div class="small tertiary">该库暂无黄金 QA，需先上传或 AI 生成。</div>
         </div>
 
         <div class="rail-label">评测口径说明</div>
@@ -353,6 +376,15 @@
         <label class="field-label">知识库类型</label>
         <n-select v-model:value="newKbKind" :options="kbKindOptions" />
       </div>
+      <!-- 外部 Chat 库必须绑定 1 个 RAG 服务协议档，创建时随 profile_id 提交。 -->
+      <div v-if="newKbKind === 'external_chat'" class="field">
+        <label class="field-label">绑定 RAG 服务协议档 <span class="req">*</span></label>
+        <n-select
+          v-model:value="newKbProfileId"
+          :options="ragProfileOptions"
+          placeholder="选择提供 chat/completions 的协议档"
+        />
+      </div>
       <template #footer>
         <div style="display: flex; justify-content: flex-end; gap: 8px">
           <n-button @click="showCreateKbModal = false">取消</n-button>
@@ -375,7 +407,8 @@
 
     <RagLaunchDrawer
       v-model:show="showLaunchDrawer"
-      :kb-id="activeKbId"
+      :default-kb-id="activeKbId"
+      @success="handleLaunchSuccess"
     />
     </template>
   </div>
@@ -383,9 +416,10 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { useDialog, useMessage } from 'naive-ui'
 import { api } from '../api/http'
-import type { KnowledgeBase, KbChunk, KbDoc, GoldQA } from '../api/types'
+import type { KnowledgeBase, KbChunk, KbDoc, GoldQA, Profile } from '../api/types'
 import { useModeStore } from '../stores/mode'
 import UploadKbDocModal from '../components/modals/UploadKbDocModal.vue'
 import UploadGoldQaModal from '../components/modals/UploadGoldQaModal.vue'
@@ -393,6 +427,7 @@ import RagLaunchDrawer from '../components/drawers/RagLaunchDrawer.vue'
 
 const message = useMessage()
 const dialog = useDialog()
+const router = useRouter()
 const modeStore = useModeStore()
 
 const kbs = ref<KnowledgeBase[]>([])
@@ -419,26 +454,72 @@ const showCreateKbModal = ref(false)
 const showUploadDocModal = ref(false)
 const showUploadGoldQaModal = ref(false)
 const showLaunchDrawer = ref(false)
+/** RAG 评测下单成功后跳转任务中心，与原型交互保持一致。 */
+function handleLaunchSuccess() {
+  router.push('/tasks')
+}
 const creatingKb = ref(false)
 const newKbName = ref('')
 const newKbKind = ref<KnowledgeBase['kind']>('lightrag')
+const newKbProfileId = ref<string | null>(null)
 const kbKindOptions = [
   { label: 'LightRAG 原生知识库', value: 'lightrag' },
   { label: '外部 Chat 知识库', value: 'external_chat' },
 ]
 
+// 外部 Chat 库可选的 RAG 服务协议档：按现有类型约定取 usages 含 agent/target 的协议档。
+const ragProfiles = ref<Profile[]>([])
+const ragProfileOptions = computed(() =>
+  ragProfiles.value.map(p => ({ label: `${p.name} · ${p.model}`, value: p.id })),
+)
+
+// 打开新建弹窗时按需拉取协议档，过滤出可作为外部 RAG 服务绑定的候选。
+async function loadRagProfiles() {
+  try {
+    const list = await api.profiles.list()
+    ragProfiles.value = list.filter(p => !p.usages?.length || p.usages.some(u => u === 'agent' || u === 'target'))
+  } catch (err: any) {
+    ragProfiles.value = []
+    message.error(err.message || '加载协议档失败')
+  }
+}
+
+watch(showCreateKbModal, (show) => {
+  if (show) void loadRagProfiles()
+})
+
 const recallResults = ref<Array<{ chunk: string; doc: string; sim: number; hit: boolean; text: string }>>([])
 const rerankedIds = ref<string[]>([])
 const queryMetrics = ref({ hit_rate: null as number | null, mrr: null as number | null, recall: null as number | null, contain: null as number | null })
 
+/** 左栏切块流容器与当前闪烁定位的切块 ID，用于召回点击联动定位。 */
+const chunkFlowRef = ref<HTMLElement | null>(null)
+const flashChunkId = ref('')
+
+// 点击召回卡片后滚动左栏切块流到对应切块并短暂高亮；切块属于其他文档时给出提示。
+function locateChunk(chunkId: string) {
+  const target = chunkFlowRef.value?.querySelector(`[data-chunk="${chunkId}"]`) as HTMLElement | null
+  if (!target) {
+    message.info(`${chunkId} 属于其他文档，左栏未找到对应切块`)
+    return
+  }
+  target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  flashChunkId.value = chunkId
+  window.setTimeout(() => {
+    if (flashChunkId.value === chunkId) flashChunkId.value = ''
+  }, 1200)
+}
+
+// 语料切块散点坐标，按原型 PTS 归一化点位 × 520×280 画布取整得到。
 const scatterPoints = [
-  { x: 62, y: 66 }, { x: 104, y: 150 }, { x: 145, y: 44 }, { x: 176, y: 110 }, { x: 208, y: 171 },
-  { x: 228, y: 74 }, { x: 260, y: 132 }, { x: 286, y: 35 }, { x: 301, y: 96 }, { x: 327, y: 154 },
-  { x: 343, y: 66 }, { x: 364, y: 114 }, { x: 384, y: 44 }, { x: 405, y: 145 }, { x: 426, y: 88 },
-  { x: 447, y: 127 }, { x: 83, y: 110 }, { x: 124, y: 180 }, { x: 249, y: 180 }, { x: 457, y: 57 },
-  { x: 187, y: 145 }, { x: 353, y: 176 },
+  { x: 62, y: 84 }, { x: 104, y: 190 }, { x: 146, y: 56 }, { x: 177, y: 140 }, { x: 208, y: 218 },
+  { x: 229, y: 95 }, { x: 260, y: 168 }, { x: 286, y: 45 }, { x: 302, y: 123 }, { x: 328, y: 196 },
+  { x: 343, y: 84 }, { x: 364, y: 146 }, { x: 385, y: 56 }, { x: 406, y: 185 }, { x: 426, y: 112 },
+  { x: 447, y: 162 }, { x: 83, y: 140 }, { x: 125, y: 230 }, { x: 250, y: 230 }, { x: 458, y: 73 },
+  { x: 187, y: 185 }, { x: 354, y: 224 },
 ]
-const hitIndices = [9, 13, 7, 21, 10]
+// Top-5 命中散点下标，与原型 HIT_IDX 保持一致。
+const hitIndices = [9, 13, 7, 20, 10]
 
 function isChunkHit(cid: string) {
   // 仅根据当前检索接口返回的命中切块高亮预览。
@@ -547,11 +628,21 @@ async function handleCreateKb() {
     message.warning('请输入知识库名称')
     return
   }
+  // 外部 Chat 库必须绑定 RAG 服务协议档，否则无法通过 chat/completions 对接。
+  if (newKbKind.value === 'external_chat' && !newKbProfileId.value) {
+    message.warning('请选择绑定的 RAG 服务协议档')
+    return
+  }
   creatingKb.value = true
   try {
-    const created = await api.kb.create({ name, kind: newKbKind.value })
+    const created = await api.kb.create({
+      name,
+      kind: newKbKind.value,
+      profile_id: newKbKind.value === 'external_chat' ? newKbProfileId.value || undefined : undefined,
+    })
     kbs.value.unshift(created)
     newKbName.value = ''
+    newKbProfileId.value = null
     showCreateKbModal.value = false
     await selectKb(created)
     message.success('知识库已创建')
@@ -708,6 +799,31 @@ watch(() => modeStore.mode, (mode) => {
 .doc-item.on {
   border-color: var(--c-kb);
   background: color-mix(in srgb, var(--t-kb) 30%, var(--bg-main));
+}
+/* 快速填充 pill 悬停时染主色，对齐原型 quick-q-pill 交互。 */
+.quick-pill {
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+.quick-pill:hover {
+  border-color: var(--accent-ai);
+  color: var(--accent-ai);
+}
+/* 召回卡片可点击，点击后联动定位左栏切块。 */
+.recall-card {
+  cursor: pointer;
+}
+/* 召回定位的 1.2s 闪烁高亮动画。 */
+.chunk.flash {
+  animation: chunk-flash 1.2s ease;
+}
+@keyframes chunk-flash {
+  0%, 60% {
+    box-shadow: 0 0 0 2px var(--c-kb);
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
 }
 .metric-strip {
   display: grid;

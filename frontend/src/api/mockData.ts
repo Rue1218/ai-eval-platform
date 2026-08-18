@@ -16,6 +16,7 @@ import type {
   Task,
   Report,
   WhitelistItem,
+  McpTool,
 } from './types'
 
 export const MOCK_PROFILES: Profile[] = [
@@ -126,6 +127,8 @@ export const MOCK_KBS: KnowledgeBase[] = [
     doc_count: 12,
     is_core: true,
     owner: 'admin',
+    // 内置 LightRAG 库默认具备向量投影与重排对比能力，用于解锁知识库工作台对应面板。
+    capabilities: { projection: true, rerank_compare: true },
     created_at: '2026-08-01T00:00:00Z',
   },
   {
@@ -197,6 +200,17 @@ export const MOCK_SETTINGS: AdminSettings = {
 export const MOCK_WHITELIST: WhitelistItem[] = [
   { id: 'wl-1', host: '10.0.0.8', scope: 'test,staging', creator: 'admin', created_at: '2026-08-01', status: 'active' },
   { id: 'wl-2', host: 'api.internal.eval', scope: 'test', creator: 'admin', created_at: '2026-08-05', status: 'active' },
+]
+
+// 内置 MCP 短工具清单（与后端 /api/mcp/tools 保持一致）
+export const MOCK_MCP_TOOLS: McpTool[] = [
+  { name: 'model.list', desc: '查询可用被测协议档与模型清单', permission: 'read', enabled: true, source: 'builtin' },
+  { name: 'dataset.list', desc: '查询数据集版本和行数', permission: 'read', enabled: true, source: 'builtin' },
+  { name: 'kb.list', desc: '查询知识库与黄金 QA 资产', permission: 'read', enabled: true, source: 'builtin' },
+  { name: 'report.get', desc: '按 report_id 读取评测报告与指标快照', permission: 'read', enabled: true, source: 'builtin' },
+  { name: 'task.create', desc: '按确认卡 TaskSpec 创建任务并入队', permission: 'write', enabled: true, source: 'builtin' },
+  { name: 'task.cancel', desc: '请求取消排队中或运行中的任务', permission: 'write', enabled: true, source: 'builtin' },
+  { name: 'dispatch.overview', desc: '读取调度大盘与 Worker 节点池状态', permission: 'read', enabled: true, source: 'builtin' },
 ]
 
 export const MOCK_CASE_SETS: CaseSet[] = [
@@ -425,6 +439,9 @@ export const MOCK_REPORTS: Record<string, Report> = {
     kind: 'stress',
     created_at: '2026-08-15T06:40:00Z',
     title: '压测报告 · 继承自任务 e5f2b8 · env=test',
+    // 「先评后压」回溯字段：用于报告页展示父质量报告横幅
+    parent_task_id: 'e5f2b8',
+    parent_report_id: 'r-bm-1',
     env: 'test',
     qps_peak: 118,
     p99: '1.2s',
@@ -444,4 +461,55 @@ export const MOCK_REPORTS: Record<string, Report> = {
       { ts: '02:00', qps: 115, rt_ms: 1100, error_rate: 0.004 },
     ],
   },
+}
+
+/**
+ * 拼装 Mock 模式下的报告 Markdown 文本，模拟服务端 GET /api/reports/{id}?fmt=md 的返回。
+ * 仅覆盖标题、关键 KPI 与指标表，供「导出 Markdown」按钮在演示模式下生成下载文件。
+ */
+export function buildMockReportMarkdown(r: Report): string {
+  // 指标值统一保留两位小数，缺失时输出占位符
+  const fmtNum = (v?: number) => (v === undefined ? '—' : v.toFixed(2))
+  const lines: string[] = [
+    `# ${r.title}`,
+    '',
+    `- 报告 ID: ${r.id}`,
+    `- 关联任务: ${r.task_id}`,
+    `- 生成时间: ${r.created_at}`,
+    '',
+  ]
+
+  if (r.kind === 'benchmark' && r.scores?.length) {
+    lines.push('## 核心指标', '', '| 协议档 | contain | exact | ROUGE-L | 失败率 | 平均延迟 |', '| --- | --- | --- | --- | --- | --- |')
+    for (const s of r.scores) {
+      lines.push(
+        `| ${s.profile_name || s.profile} | ${fmtNum(s.contain)} | ${fmtNum(s.exact)} | ${fmtNum(s.rouge_l)} | ${((s.fail_rate ?? 0) * 100).toFixed(1)}% | ${s.latency ?? '—'} |`,
+      )
+    }
+    lines.push('')
+  }
+
+  if (r.kind === 'rag' && r.rag_scores) {
+    lines.push(`## RAG 检索指标 (K=${r.k ?? 5})`, '', '| 检索模式 | Hit Rate | MRR | Recall | Contain |', '| --- | --- | --- | --- | --- |')
+    for (const m of r.modes || ['naive', 'local', 'global', 'hybrid']) {
+      const sc = r.rag_scores[m]
+      lines.push(`| ${m} | ${fmtNum(sc?.hit)} | ${fmtNum(sc?.mrr)} | ${fmtNum(sc?.recall)} | ${fmtNum(sc?.contain)} |`)
+    }
+    lines.push('')
+  }
+
+  if (r.kind === 'stress') {
+    lines.push(
+      '## 压测 KPI',
+      '',
+      `- 峰值 QPS: ${r.qps_peak ?? '—'}`,
+      `- P99 延迟: ${r.p99 ?? '—'}`,
+      `- 请求错误率: ${r.error_rate ?? '—'}`,
+      `- TTFT 首字延迟: ${r.ttft ?? '—'}`,
+      `- 估算费用: ${r.est_cost ?? '—'}`,
+      '',
+    )
+  }
+
+  return lines.join('\n')
 }

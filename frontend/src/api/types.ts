@@ -105,9 +105,9 @@ export type TaskStatus =
   | 'failed'
   | 'cancelled'
 
-// 压测配置
+// 压测配置（env 枚举对齐 API.md §1.4 与后端 schemas.py：含 dev）
 export interface StressConfig {
-  env: 'test' | 'staging' | 'prod'
+  env: 'dev' | 'test' | 'staging' | 'prod'
   qps: number
   duration_s: number
   sla_p99_ms?: number
@@ -121,6 +121,8 @@ export interface RunConfig {
   retry?: number
   temperature?: number
   max_tokens?: number
+  // 单任务预算上限（美元）：累计 usage 超限即停并返回 BUDGET_EXCEEDED（F-CM-06）
+  max_usd?: number
   system_prompt?: string
   k?: number
   use_judge?: boolean
@@ -145,6 +147,57 @@ export interface TaskSpec {
   stress?: StressConfig
   session_id?: string
   parent_task_id?: string
+}
+
+// 调度中心（API V1.3 §3.13）
+export interface DispatchOverview {
+  online_workers: number
+  total_workers: number
+  queue_depth: number
+  avg_dispatch_cost_ms: number
+  assigned_today: number
+  strategy: string
+  max_running_tasks: number
+  heartbeat_interval_ms: number
+}
+
+export interface DispatchWorker {
+  id: string
+  name: string
+  caps: string[]
+  state: 'idle' | 'busy' | 'offline' | 'draining'
+  weight: number
+  load_percent?: number | null
+  current_task?: string | null
+  last_heartbeat_at?: string | null
+}
+
+export interface DispatchEvent {
+  id: number
+  task_id?: string | null
+  worker_id?: string | null
+  event: string
+  message: string
+  ts: string
+}
+
+export interface DispatchEventPage {
+  items: DispatchEvent[]
+  next_after_id: number
+}
+
+export interface DispatchConfig {
+  strategy: '负载均衡' | '优先级抢占' | '亲和性'
+  max_running_tasks: number
+}
+
+// MCP 内置短工具（API V1.3 §3.6.1，只读）
+export interface McpTool {
+  name: string
+  desc: string
+  permission: 'read' | 'write'
+  enabled: boolean
+  source: 'builtin'
 }
 
 export interface TaskProgress {
@@ -193,6 +246,15 @@ export interface DatasetRow {
   is_pending?: boolean
 }
 
+// 数据集自定义扩展列定义（契约 column_schema 项）
+export interface ColumnSchemaItem {
+  key: string
+  name: string
+  type?: string
+  required?: boolean
+  sort_order?: number
+}
+
 export interface Dataset {
   id: string
   name: string
@@ -201,6 +263,8 @@ export interface Dataset {
   pending_complete_count: number
   metric: DatasetMetric
   owner: string
+  folder_id?: string | null
+  column_schema?: ColumnSchemaItem[]
   created_at: string
   updated_at?: string
   rows?: DatasetRow[]
@@ -215,8 +279,10 @@ export interface TestCaseCheck {
 
 export interface TestCase {
   id: string
-  strategy: '正向' | '反向' | '边界' | '状态' | '场景'
-  priority: 'P0' | 'P1' | 'P2'
+  // 6 类用例策略：正向 / 反向 / 边界 / 状态 / 场景 / 等价
+  strategy: '正向' | '反向' | '边界' | '状态' | '场景' | '等价'
+  // 优先级支持 P0–P3 四档
+  priority: 'P0' | 'P1' | 'P2' | 'P3'
   module: string
   name: string
   expected: string
@@ -337,6 +403,9 @@ export interface Report {
   snapshot?: any
   child_stress_task_id?: string
   child_stress_report_id?: string
+  // 「先评后压」链路回溯：压测报告派生来源的父质量评测任务与报告
+  parent_task_id?: string
+  parent_report_id?: string
   baseline?: {
     task_id: string
     delta: number
@@ -393,6 +462,12 @@ export interface AdminSettings {
     webhook: boolean
   }
   prod_approvers: string[]
+  // Agent 运行时治理（协议档页运行时 Tab）
+  runtime?: {
+    ws_ping_s: number
+    ws_timeout_s: number
+    strict_session_slot: boolean
+  }
 }
 
 export interface WhitelistItem {

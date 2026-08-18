@@ -79,7 +79,7 @@
           borderColor: modeStore.mode === 'rag' ? 'var(--t-kb)' : 'var(--t-datasets)'
         }"
       >
-        {{ modeStore.mode === 'rag' ? 'RAG 测试' : '大模型测试' }} · {{ modeTaskLabel }}
+        {{ modeStore.mode === 'rag' ? 'RAG 模式' : '大模型模式' }}{{ hiddenCount > 0 ? ` · 已隐藏 ${hiddenCount} 个他域任务` : ' · 全量视图' }}
       </span>
 
       <n-input
@@ -105,11 +105,28 @@
         ]"
       />
 
-      <span class="tag-soft" style="cursor: default">
-        类型已限定为 {{ modeTaskLabel }}
-      </span>
+      <n-select
+        v-model:value="filterKind"
+        placeholder="全部类型"
+        clearable
+        style="width: 150px"
+        :options="[
+          { label: '全部类型', value: '' },
+          { label: '基准评测 (benchmark)', value: 'benchmark' },
+          { label: 'RAG 评测 (rag)', value: 'rag' },
+          { label: '用例生成 (testcase)', value: 'testcase' },
+          { label: '共享压测 (stress)', value: 'stress' },
+        ]"
+      />
 
       <span class="grow"></span>
+
+      <button class="btn btn-primary btn-sm" @click="openCreateModal">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <path d="M12 5v14M5 12h14" />
+        </svg>
+        <span>新建任务</span>
+      </button>
 
       <button class="btn btn-secondary btn-sm" :disabled="loading" @click="handleRefresh">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
@@ -241,6 +258,91 @@
       />
     </div>
 
+    <!-- 手动发起评测弹窗 (Create Task Modal · 与智能体确认卡同一 TaskSpec) -->
+    <n-modal
+      v-model:show="showCreateModal"
+      preset="card"
+      title="发起新评测任务 (POST /api/tasks)"
+      style="width: 640px"
+      :bordered="false"
+    >
+      <div class="form-row mb12" style="display: flex; gap: 14px">
+        <div class="field grow">
+          <span class="field-label">评测类型 (Kind) <i class="req">*</i></span>
+          <n-select
+            v-model:value="createForm.kind"
+            :options="[
+              { label: 'Benchmark 基准评测', value: 'benchmark' },
+              { label: 'RAG 检索质量评测', value: 'rag' },
+              { label: '用例智能生成', value: 'testcase' },
+              { label: '独立发压测试', value: 'stress' },
+            ]"
+          />
+        </div>
+        <div class="field" style="width: 180px">
+          <span class="field-label">并发数 (Concurrency)</span>
+          <n-input-number v-model:value="createForm.concurrency" :min="1" :max="16" style="width: 100%" />
+        </div>
+      </div>
+
+      <div v-if="createForm.kind === 'benchmark' || createForm.kind === 'stress'" class="field mb12">
+        <span class="field-label">被测协议档 (可多选，1-5个) <i class="req">*</i></span>
+        <div class="row wrap" style="gap: 8px">
+          <label
+            v-for="p in targetProfiles"
+            :key="p.id"
+            class="tag-soft"
+            style="cursor: pointer"
+            :style="createForm.profileIds.includes(p.id) ? { color: 'var(--accent-primary)', borderColor: 'var(--accent-primary)' } : {}"
+          >
+            <input
+              type="checkbox"
+              :value="p.id"
+              :checked="createForm.profileIds.includes(p.id)"
+              style="margin-right: 4px"
+              @change="toggleCreateProfile(p.id)"
+            />
+            {{ p.name }} ({{ p.model }})
+          </label>
+          <span v-if="targetProfiles.length === 0" class="small tertiary">暂无用途为「被测目标」的协议档，请先在协议档页创建</span>
+        </div>
+      </div>
+
+      <div v-if="createForm.kind === 'benchmark'" class="field mb12">
+        <span class="field-label">评测数据集 <i class="req">*</i></span>
+        <n-select
+          v-model:value="createForm.assetId"
+          placeholder="选择基准数据集"
+          :options="datasetOptions"
+        />
+      </div>
+
+      <div v-if="createForm.kind === 'rag'" class="field mb12">
+        <span class="field-label">评测知识库 <i class="req">*</i></span>
+        <n-select
+          v-model:value="createForm.assetId"
+          placeholder="选择知识库"
+          :options="kbOptions"
+        />
+      </div>
+
+      <div v-if="createForm.kind === 'benchmark' || createForm.kind === 'rag'" class="field mb12">
+        <label class="row" style="gap: 8px; cursor: pointer; user-select: none">
+          <n-checkbox v-model:checked="createForm.withStress" />
+          <span style="font-weight: 600">先评后压：质量任务成功后，自动对相同接口追加发压 (10 QPS / 2min)</span>
+        </label>
+      </div>
+
+      <template #footer>
+        <div class="row" style="justify-content: flex-end; gap: 10px">
+          <button class="btn btn-secondary" @click="showCreateModal = false">取消</button>
+          <button class="btn btn-sign" :disabled="createSubmitting" @click="submitCreateTask">
+            {{ createSubmitting ? '入队中...' : '确认下单入队' }}
+          </button>
+        </div>
+      </template>
+    </n-modal>
+
     <!-- 智能编排抽屉 (AI Planner) -->
     <n-drawer v-model:show="showPlannerDrawer" :width="560">
       <n-drawer-content title="智能编排 · 评测任务方案生成" closable>
@@ -307,9 +409,9 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { useMessage, useDialog, NSelect, NInput, NDrawer, NDrawerContent } from 'naive-ui'
+import { useMessage, useDialog, NSelect, NInput, NInputNumber, NCheckbox, NModal, NDrawer, NDrawerContent } from 'naive-ui'
 import { api } from '../api/http'
-import type { Task } from '../api/types'
+import type { Task, TaskKind, Profile, Dataset, KnowledgeBase } from '../api/types'
 import { useModeStore } from '../stores/mode'
 import StatusBadge from '../components/common/StatusBadge.vue'
 import KindTag from '../components/common/KindTag.vue'
@@ -323,13 +425,17 @@ const modeStore = useModeStore()
 const tasks = ref<Task[]>([])
 const loading = ref(false)
 const filterStatus = ref('')
+const filterKind = ref('')
 const searchKw = ref('')
 
 const showDetailDrawer = ref(false)
 const selectedTask = ref<Task | null>(null)
 
-// 当前模式只查询同类质量评测，派生压测通过其父质量任务进入，不混入另一条业务工作流。
-const modeTaskKind = computed<'benchmark' | 'rag'>(() => modeStore.mode === 'rag' ? 'rag' : 'benchmark')
+// 全局模式域：大模型域含 benchmark/stress/testcase，RAG 域含 rag/testcase；
+// 他域任务不直接删除，而是按原型在列表层隐藏并在模式标签上提示隐藏数量。
+const modeKinds = computed<TaskKind[]>(() =>
+  modeStore.mode === 'rag' ? ['rag', 'testcase'] : ['benchmark', 'stress', 'testcase']
+)
 const modeTaskLabel = computed(() => modeStore.mode === 'rag' ? 'RAG 评测' : '基准评测')
 
 // 状态分布与色值
@@ -374,8 +480,9 @@ const insights = [
   },
   {
     text: '调度队列中有 1 个 prod 压测等待会签已 42 分钟，超过历史均值（12 分钟）。',
-    actionText: '去任务中心查看',
-    link: '/tasks',
+    // 队列类异常应跳转调度中心，避免自跳转回本页。
+    actionText: '去调度中心查看',
+    link: '/dispatch',
   },
 ]
 const insightIdx = ref(0)
@@ -472,11 +579,11 @@ async function submitPlannerTask() {
   }
 }
 
-// 任务加载与过滤
-const filteredTasks = computed(() => {
+// 任务加载与过滤：先按状态/类型/关键字过滤，再按全局模式隐藏他域任务
+const baseFilteredTasks = computed(() => {
   return tasks.value.filter((t) => {
-    if (t.kind !== modeTaskKind.value) return false
     if (filterStatus.value && t.status !== filterStatus.value) return false
+    if (filterKind.value && t.kind !== filterKind.value) return false
     if (searchKw.value) {
       const kw = searchKw.value.toLowerCase()
       const matchId = t.id.toLowerCase().includes(kw)
@@ -488,6 +595,9 @@ const filteredTasks = computed(() => {
     return true
   })
 })
+
+const hiddenCount = computed(() => baseFilteredTasks.value.filter(t => !modeKinds.value.includes(t.kind)).length)
+const filteredTasks = computed(() => baseFilteredTasks.value.filter(t => modeKinds.value.includes(t.kind)))
 
 function canCancel(t: Task) {
   return !['succeeded', 'failed', 'cancelled'].includes(t.status)
@@ -538,9 +648,9 @@ async function handleRefresh() {
 async function loadTasks() {
   loading.value = true
   try {
+    // 全量拉取后在客户端按模式域隐藏他域任务，保证大盘统计与「已隐藏 N 个」提示一致
     const res = await api.tasks.list({
       status: filterStatus.value || undefined,
-      kind: modeTaskKind.value,
     })
     tasks.value = Array.isArray(res) ? res : ((res as any).items || [])
   } catch (err: any) {
@@ -565,12 +675,112 @@ onMounted(() => {
   loadTasks()
 })
 
-// 顶栏切换后立即清空局部筛选并重新请求同类任务，统计大盘与表格始终使用当前模式数据。
+// 顶栏切换后立即清空局部筛选并重新拉取全量任务，统计大盘与表格始终使用当前模式数据。
 watch(() => modeStore.mode, () => {
   filterStatus.value = ''
+  filterKind.value = ''
   searchKw.value = ''
   void loadTasks()
 })
+
+/* ─── 手动发起评测弹窗：动态加载协议档 / 数据集 / 知识库，提交与确认卡同一 TaskSpec ─── */
+const showCreateModal = ref(false)
+const createSubmitting = ref(false)
+const createForm = ref({
+  kind: 'benchmark' as TaskKind,
+  concurrency: 4,
+  profileIds: [] as string[],
+  assetId: null as string | null,
+  withStress: true,
+})
+const targetProfiles = ref<Profile[]>([])
+const createDatasets = ref<Dataset[]>([])
+const createKbs = ref<KnowledgeBase[]>([])
+
+const datasetOptions = computed(() =>
+  createDatasets.value.map(d => ({
+    label: `${d.name} (v${d.version} · ${d.row_count}条 · ${d.main_metric || 'contain'})`,
+    value: d.id,
+  }))
+)
+const kbOptions = computed(() =>
+  createKbs.value.map(k => ({
+    label: `${k.name} (${k.kind === 'lightrag' ? 'LightRAG' : '外部 Chat'})`,
+    value: k.id,
+  }))
+)
+
+function toggleCreateProfile(id: string) {
+  const idx = createForm.value.profileIds.indexOf(id)
+  if (idx >= 0) createForm.value.profileIds.splice(idx, 1)
+  else if (createForm.value.profileIds.length < 5) createForm.value.profileIds.push(id)
+  else message.warning('被测协议档最多选择 5 个')
+}
+
+async function openCreateModal() {
+  // 默认类型跟随当前模式；先评后压默认勾选与原型一致（RAG 模式默认不勾选）
+  const isRag = modeStore.mode === 'rag'
+  createForm.value = {
+    kind: isRag ? 'rag' : 'benchmark',
+    concurrency: 4,
+    profileIds: [],
+    assetId: null,
+    withStress: !isRag,
+  }
+  showCreateModal.value = true
+  try {
+    const [profiles, datasets, kbs] = await Promise.all([
+      api.profiles.list(),
+      api.datasets.list(),
+      api.kb.list(),
+    ])
+    // 仅「被测目标」用途的协议档可参与评测/发压
+    targetProfiles.value = profiles.filter(p => p.usages && p.usages.includes('target'))
+    createDatasets.value = datasets
+    createKbs.value = kbs
+    // 原型默认勾选前两个被测协议档，降低手动建单操作成本
+    createForm.value.profileIds = targetProfiles.value.slice(0, 2).map(p => p.id)
+  } catch (err: any) {
+    message.error(err.message || '加载协议档 / 数据集失败')
+  }
+}
+
+async function submitCreateTask() {
+  const f = createForm.value
+  if ((f.kind === 'benchmark' || f.kind === 'stress') && f.profileIds.length === 0) {
+    message.error('请至少选择 1 个被测协议档')
+    return
+  }
+  if (f.kind === 'benchmark' && !f.assetId) {
+    message.error('请选择评测数据集')
+    return
+  }
+  if (f.kind === 'rag' && !f.assetId) {
+    message.error('请选择评测知识库')
+    return
+  }
+  createSubmitting.value = true
+  try {
+    await api.tasks.create({
+      kind: f.kind,
+      profile_ids: f.kind === 'benchmark' || f.kind === 'stress' ? [...f.profileIds] : undefined,
+      dataset_id: f.kind === 'benchmark' ? f.assetId! : undefined,
+      kb_id: f.kind === 'rag' ? f.assetId! : undefined,
+      with_stress: f.kind === 'benchmark' || f.kind === 'rag' ? f.withStress : false,
+      run: { sample_size: 1000, concurrency: f.concurrency, timeout_s: 60, retry: 1, temperature: 0, max_tokens: 1024 },
+      ...(f.withStress && (f.kind === 'benchmark' || f.kind === 'rag')
+        ? { stress: { env: 'test' as const, qps: 10, duration_s: 120 } }
+        : {}),
+    })
+    message.success('评测任务已成功创建并进入调度队列（queued）')
+    showCreateModal.value = false
+    loadTasks()
+  } catch (err: any) {
+    message.error(err.message || '创建任务失败')
+  } finally {
+    createSubmitting.value = false
+  }
+}
 </script>
 
 <style scoped>

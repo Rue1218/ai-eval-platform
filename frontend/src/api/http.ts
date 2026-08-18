@@ -21,6 +21,11 @@ import {
   type CaseSet,
   type TestCase,
   type WhitelistItem,
+  type DispatchOverview,
+  type DispatchWorker,
+  type DispatchEventPage,
+  type DispatchConfig,
+  type McpTool,
 } from './types'
 import {
   MOCK_PROFILES,
@@ -36,6 +41,7 @@ import {
   MOCK_TASKS,
   MOCK_REPORTS,
   MOCK_WHITELIST,
+  buildMockReportMarkdown,
 } from './mockData'
 
 // 数据模式判定：默认 live，可通过 URL ?data=mock 或 localStorage ae_data_mode 切换
@@ -103,6 +109,33 @@ const mockStore = {
   sessions: [
     { id: 's-default', title: '新建基准评测会话', created_at: new Date().toISOString() },
   ],
+}
+
+/**
+ * 获取报告详情。默认返回 JSON 对象；传 fmt='md' 时走服务端导出（GET /api/reports/{id}?fmt=md），
+ * 返回 Markdown 纯文本，供前端直接生成 Blob 下载。Mock 模式下由本地夹具拼接等价文本。
+ */
+async function reportsGet(id: string): Promise<Report>
+async function reportsGet(id: string, fmt: 'md'): Promise<string>
+async function reportsGet(id: string, fmt?: 'md'): Promise<Report | string> {
+  if (getDataMode() === 'mock') {
+    const r = mockStore.reports[id] || mockStore.reports['r-bm-1']
+    return fmt === 'md' ? buildMockReportMarkdown(r) : r
+  }
+  if (fmt === 'md') {
+    // responseType: 'text' 避免 axios 按 JSON 解析 Markdown 文本
+    const { data } = await http.get(`/api/reports/${id}`, { params: { fmt: 'md' }, responseType: 'text' })
+    return data
+  }
+  try {
+    const { data } = await http.get(`/api/reports/${id}`)
+    return data
+  } catch (e: any) {
+    if (e.status === 404 || e.code === ErrorCode.NOT_FOUND) {
+      return mockStore.reports[id] || mockStore.reports['r-bm-1']
+    }
+    throw e
+  }
 }
 
 /**
@@ -360,6 +393,53 @@ export const api = {
     },
   },
 
+  // 5.5 调度中心（API V1.3 §3.13；mock 模式返回 null，由页面本地仿真接管）
+  dispatch: {
+    async overview(): Promise<DispatchOverview | null> {
+      if (getDataMode() === 'mock') return null
+      const { data } = await http.get('/api/dispatch/overview')
+      return data
+    },
+    async workers(): Promise<DispatchWorker[] | null> {
+      if (getDataMode() === 'mock') return null
+      const { data } = await http.get('/api/dispatch/workers')
+      return Array.isArray(data) ? data : data.items || []
+    },
+    async createWorker(payload: { id: string; name: string; caps: string[]; weight?: number }): Promise<DispatchWorker | null> {
+      if (getDataMode() === 'mock') return null
+      const { data } = await http.post('/api/dispatch/workers', payload)
+      return data
+    },
+    async updateWorker(id: string, payload: { state?: string; weight?: number; caps?: string[] }): Promise<DispatchWorker | null> {
+      if (getDataMode() === 'mock') return null
+      const { data } = await http.put(`/api/dispatch/workers/${id}`, payload)
+      return data
+    },
+    async updateConfig(payload: Partial<DispatchConfig>): Promise<DispatchConfig | null> {
+      if (getDataMode() === 'mock') return null
+      const { data } = await http.put('/api/dispatch/config', payload)
+      return data
+    },
+    async events(afterId?: number, limit = 50): Promise<DispatchEventPage | null> {
+      if (getDataMode() === 'mock') return null
+      const { data } = await http.get('/api/dispatch/events', {
+        params: afterId ? { after_id: afterId, limit } : { limit },
+      })
+      return data
+    },
+  },
+
+  // 5.6 MCP 工具中心（API V1.3 §3.6.1，V1.0 只读）
+  mcp: {
+    async tools(): Promise<{ items: McpTool[]; total: number }> {
+      if (getDataMode() === 'mock') {
+        return { items: [...MOCK_MCP_TOOLS], total: MOCK_MCP_TOOLS.length }
+      }
+      const { data } = await http.get('/api/mcp/tools')
+      return data
+    },
+  },
+
   // 6. 数据集管理
   datasets: {
     async list(): Promise<Dataset[]> {
@@ -508,6 +588,19 @@ export const api = {
       const { data } = await http.post('/api/case-sets', payload)
       return data
     },
+    // 契约 PUT /api/case-sets/{id}：更新名称 / 目录归属 / 自定义列 column_schema；
+    // 已确认用例集的非法修改由后端返回 VALIDATION，前端不做伪造成功。
+    async updateSet(id: string, payload: { name?: string; column_schema?: Array<{ key: string; name: string; type?: string; sort_order?: number }> }): Promise<CaseSet> {
+      if (getDataMode() === 'mock') {
+        const cs = mockStore.caseSets.find((x) => x.id === id)
+        if (!cs) throw new ApiError('用例集不存在', ErrorCode.NOT_FOUND, 404)
+        if (payload.name) cs.name = payload.name
+        if (payload.column_schema) (cs as CaseSet & Record<string, unknown>).column_schema = payload.column_schema
+        return cs
+      }
+      const { data } = await http.put(`/api/case-sets/${id}`, payload)
+      return data
+    },
     // 批量保存用例编辑结果，后端负责已确认用例集的不可编辑校验。
     async saveCases(id: string, cases: TestCase[]): Promise<TestCase[]> {
       if (getDataMode() === 'mock') {
@@ -531,6 +624,19 @@ export const api = {
         }]
       }
       const { data } = await http.post('/api/case-sets/ai-generate', payload)
+      return Array.isArray(data) ? data : data.items || []
+    },
+    // 契约 POST /api/case-sets/{id}/ai-fill：行级 AI 补全，仅返回未落库候选，需随“保存修改”写入。
+    async aiFillCases(id: string, payload: { case_ids: string[]; instruction?: string; fields?: string[] }): Promise<Array<Partial<TestCase> & { id: string }>> {
+      if (getDataMode() === 'mock') {
+        return payload.case_ids.map(cid => ({
+          id: cid,
+          expected: '系统返回正确的业务结果与明确提示信息',
+          precondition: '前置服务已启动，测试数据已插桩',
+          test_type: '自动化回归',
+        }))
+      }
+      const { data } = await http.post(`/api/case-sets/${id}/ai-fill`, payload)
       return Array.isArray(data) ? data : data.items || []
     },
     async confirmSet(id: string, payload: { ok: boolean; edits?: TestCase[]; mapping_target?: 'dataset' | 'gold_qa'; target_id?: string }): Promise<void> {
@@ -704,6 +810,8 @@ export const api = {
             { chunk_id: 'd-01#c03', doc_name: 'product-manual.pdf', text: 'AI 测试与评估平台产品手册第一章：评测引擎与三协议调度规范...', similarity: 0.89, hit: true },
             { chunk_id: 'd-02#c11', doc_name: 'faq-2026.md', text: 'FAQ 常见问题第 12 条：关于黄金 QA 集制作及 Hit Rate 指标定义...', similarity: 0.82, hit: false },
           ],
+          // 重排后最终序，供「重排对比」右列渲染排名位移。
+          reranked_ids: ['d-01#c03', 'd-01#c01', 'd-02#c01', 'd-01#c05', 'd-03#c02'],
           metrics: { hit_rate: 0.8, mrr: 0.74, recall: 0.85, contain: 0.83 },
         }
       }
@@ -719,6 +827,8 @@ export const api = {
               { chunk_id: 'd-01#c03', doc_name: 'product-manual.pdf', text: 'AI 测试与评估平台产品手册第一章：评测引擎与三协议调度规范...', similarity: 0.89, hit: true },
               { chunk_id: 'd-02#c11', doc_name: 'faq-2026.md', text: 'FAQ 常见问题第 12 条：关于黄金 QA 集制作及 Hit Rate 指标定义...', similarity: 0.82, hit: false },
             ],
+            // 重排后最终序，供「重排对比」右列渲染排名位移。
+            reranked_ids: ['d-01#c03', 'd-01#c01', 'd-02#c01', 'd-01#c05', 'd-03#c02'],
             metrics: { hit_rate: 0.8, mrr: 0.74, recall: 0.85, contain: 0.83 },
           }
         }
@@ -761,21 +871,8 @@ export const api = {
 
   // 9. 报告管理
   reports: {
-    async get(id: string): Promise<Report> {
-      if (getDataMode() === 'mock') {
-        const r = mockStore.reports[id] || mockStore.reports['r-bm-1']
-        return r
-      }
-      try {
-        const { data } = await http.get(`/api/reports/${id}`)
-        return data
-      } catch (e: any) {
-        if (e.status === 404 || e.code === ErrorCode.NOT_FOUND) {
-          return mockStore.reports[id] || mockStore.reports['r-bm-1']
-        }
-        throw e
-      }
-    },
+    // 重载签名：默认返回报告 JSON；传 fmt='md' 时返回服务端渲染的 Markdown 纯文本
+    get: reportsGet,
     async share(id: string, expireDays: number = 7): Promise<{ token: string; share_url: string }> {
       if (getDataMode() === 'mock') {
         const token = 'share-' + Math.random().toString(36).substring(2, 10)

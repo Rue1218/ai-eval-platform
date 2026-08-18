@@ -5,12 +5,14 @@
         <div class="login-mark">A</div>
         <div class="eyebrow" style="margin-bottom: 8px">SECURE ACCESS · V1.6.3</div>
         <div class="login-title">AI 测试与评估平台</div>
+        <!-- L4 副标题文案对齐原型 login.html:37 -->
         <div class="login-desc">
-          对话驱动大模型质量评测：用例生成 → Benchmark / RAG → 先评后压 → 对比报告
+          对话完成：用例（可选）→ Benchmark 和 / 或 RAG →（可选）压测 → 报告
         </div>
         <div class="row" style="justify-content: center; margin-top: 14px; gap: 8px">
           <span class="ai-badge"><i class="ai-dot"></i>AGENT 后端</span>
-          <span class="small tertiary mono" style="font-size: 11px">连接正常 · 调度器运行中</span>
+          <!-- L3 后端状态行：优先显示 Agent 模型名，获取失败时仅显示连接状态 -->
+          <span class="small tertiary mono" style="font-size: 11px">{{ agentStatusText }}</span>
         </div>
       </div>
 
@@ -20,7 +22,7 @@
           <n-input
             v-model:value="username"
             size="large"
-            placeholder="输入用户名 (例如 admin)"
+            placeholder="admin / alice / boss"
             @keydown.enter="submitLogin"
           />
         </div>
@@ -32,7 +34,7 @@
             type="password"
             show-password-on="click"
             size="large"
-            placeholder="输入密码"
+            placeholder="不少于 8 位，含字母和数字"
             @keydown.enter="submitLogin"
           />
         </div>
@@ -51,18 +53,23 @@
         </button>
       </div>
 
+      <!-- L5 演示账号提示对齐原型 login.html:55-58；
+           注意：live 环境仅初始管理员 admin / admin123 有效（由 BOOTSTRAP_ADMIN_PASSWORD 注入），
+           alice / bob / boss 为原型演示账号，仅作展示 -->
       <div class="login-foot mono">
-        <span>初始管理员：admin / admin123</span>
+        <span>原型演示账号（单一角色，全员同权）：admin / Admin123（首登强制改密）</span>
+        <span>alice / Alice123 · bob / Bob12345 · boss / Boss1234</span>
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import { useAuthStore } from '../stores/auth'
+import { api } from '../api/http'
 
 const router = useRouter()
 const message = useMessage()
@@ -72,6 +79,23 @@ const username = ref('admin')
 const password = ref('admin123')
 const loading = ref(false)
 const errorMsg = ref('')
+
+// L3 后端状态行：默认仅显示连接状态，成功获取设置后前置 Agent 模型名
+const agentStatusText = ref('连接正常 · 调度器运行中')
+
+/** L3 拉取 Agent 后端协议档名：getSettings.agent_profile_id → profiles 列表映射名称；
+ *  未登录/接口失败时静默回退为默认状态文案（登录页允许匿名失败） */
+async function loadAgentStatus() {
+  try {
+    const [settings, profiles] = await Promise.all([api.admin.getSettings(), api.profiles.list()])
+    const agentProfile = profiles.find(p => p.id === settings.agent_profile_id)
+    if (agentProfile) {
+      agentStatusText.value = `${agentProfile.model} · 连接正常 · 调度器运行中`
+    }
+  } catch {
+    // 忽略失败：保持「连接正常 · 调度器运行中」兜底文案
+  }
+}
 
 async function submitLogin() {
   if (!username.value.trim() || !password.value) {
@@ -91,6 +115,8 @@ async function submitLogin() {
     loading.value = false
   }
 }
+
+onMounted(loadAgentStatus)
 </script>
 
 <style scoped>
@@ -104,11 +130,14 @@ async function submitLogin() {
 .login-card {
   width: 420px;
   max-width: 100%;
-  background: var(--bg-main);
-  border: 1px solid var(--border-subtle);
+  /* L2 玻璃拟态（对齐原型 login.html 12-19）：半透明白底 + 20px 背景模糊 */
+  background: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.8);
   border-radius: 20px;
   padding: 36px 32px 28px;
-  box-shadow: 0 20px 50px rgba(17, 24, 39, 0.1), 0 1px 3px rgba(17, 24, 39, 0.04);
+  box-shadow: 0 24px 64px rgba(17, 24, 39, 0.12);
   animation: card-in 0.3s cubic-bezier(0.2, 0.9, 0.3, 1);
 }
 @keyframes card-in {
@@ -189,9 +218,15 @@ async function submitLogin() {
 }
 
 .login-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   text-align: center;
   font-size: 11px;
   color: var(--text-tertiary);
   margin-top: 24px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--border-subtle);
+  line-height: 1.9;
 }
 </style>
