@@ -5,7 +5,9 @@
 上行仅 ``user_message`` / ``confirm_ack`` / ``cancel_task`` 三类消息。
 """
 
+import asyncio
 import json
+import logging
 from copy import deepcopy
 from datetime import UTC, datetime
 
@@ -29,6 +31,20 @@ from ..schemas import TaskCreate
 from ..security import TOKEN_TYPE_WS, decode_token
 
 router = APIRouter(tags=["ws"])
+logger = logging.getLogger("ai-eval.ws")
+
+
+class _ConnState:
+    """单连接的事件游标与发送锁。
+
+    `_emit` 直连发送与后台转发循环共用同一把锁与同一个游标，
+    保证 Worker 进程外写入的事件与 Agent 即时回复不会交错或重复下发。
+    """
+
+    def __init__(self, cursor: int = 0) -> None:
+        self.cursor = cursor
+        self.lock = asyncio.Lock()
+
 
 # M1 简化：同一 api 进程内保存每会话唯一待确认卡，confirm_ack 时深合并 patch。
 # 契约约定「同一会话同一时刻最多一张待确认卡」，进程内字典即可满足；
@@ -85,23 +101,46 @@ async def _emit(
     payload: dict,
     *,
     task_id: str | None = None,
+    state: _ConnState | None = None,
 ) -> int:
-    """持久化标准 WS 事件后向当前连接发送同一份公开载荷。"""
-    event_id = _next_event_id(db, session_id)
-    now = datetime.now(UTC)
-    db.add(
-        WsEvent(
-            session_id=session_id,
-            task_id=task_id,
-            event_id=event_id,
-            event=event,
-            payload=payload,
-            ts=now,
+    """持久化标准 WS 事件后向当前连接发送同一份公开载荷。
+
+    传入 state 时在连接锁内完成「取号 → 落库 → 发送 → 推进游标」，
+    与后台转发循环互斥，避免同一事件被直连与转发各发一次。
+    """
+    if state is None:
+        event_id = _next_event_id(db, session_id)
+        now = datetime.now(UTC)
+        db.add(
+            WsEvent(
+                session_id=session_id,
+                task_id=task_id,
+                event_id=event_id,
+                event=event,
+                payload=payload,
+                ts=now,
+            )
         )
-    )
-    db.commit()
-    await ws.send_json(_event_body(session_id, event_id, event, payload, task_id, now))
-    return event_id
+        db.commit()
+        await ws.send_json(_event_body(session_id, event_id, event, payload, task_id, now))
+        return event_id
+    async with state.lock:
+        event_id = _next_event_id(db, session_id)
+        now = datetime.now(UTC)
+        db.add(
+            WsEvent(
+                session_id=session_id,
+                task_id=task_id,
+                event_id=event_id,
+                event=event,
+                payload=payload,
+                ts=now,
+            )
+        )
+        db.commit()
+        await ws.send_json(_event_body(session_id, event_id, event, payload, task_id, now))
+        state.cursor = event_id
+        return event_id
 
 
 def _owned_session(db: Session, session_id: str, user_id: str) -> AgentSession | None:
@@ -197,16 +236,17 @@ async def _call_tool(
     name: str,
     arguments: dict,
     data: dict,
+    state: _ConnState,
 ) -> None:
     """发送一对短工具事件：tool_call（pending）后紧跟 tool_result（done）。"""
-    await _emit(db, ws, session_id, "tool_call", {"name": name, "arguments": arguments})
-    await _emit(db, ws, session_id, "tool_result", {"name": name, "ok": True, "data": data})
+    await _emit(db, ws, session_id, "tool_call", {"name": name, "arguments": arguments}, state=state)
+    await _emit(db, ws, session_id, "tool_result", {"name": name, "ok": True, "data": data}, state=state)
 
 
-async def _send_confirm(db: Session, ws: WebSocket, session_id: str, card: dict) -> None:
+async def _send_confirm(db: Session, ws: WebSocket, session_id: str, card: dict, state: _ConnState) -> None:
     """保存会话唯一待确认卡并发 confirm 事件。"""
     _PENDING_CARDS[session_id] = card
-    await _emit(db, ws, session_id, "confirm", card)
+    await _emit(db, ws, session_id, "confirm", card, state=state)
 
 
 async def _handle_user_message(
@@ -215,6 +255,7 @@ async def _handle_user_message(
     session: AgentSession,
     text: str,
     attachments: list[dict],
+    state: _ConnState,
 ) -> None:
     """解析用户目标：意图拆解后调用对应短工具并生成确认卡。"""
     file_ids = _assert_attachments(db, attachments)
@@ -231,12 +272,14 @@ async def _handle_user_message(
             session.id,
             "thought",
             {"text": "已识别为 PRD 用例生成目标。将按 6 大策略生成测试用例，生成后需在 72h 内确认入库。请在确认卡中粘贴 PRD / 接口描述文本。"},
+            state=state,
         )
         await _send_confirm(
             db,
             ws,
             session.id,
             {"kind": "testcase", "case_source": {"text": ""}},
+            state,
         )
         return
 
@@ -247,6 +290,7 @@ async def _handle_user_message(
             session.id,
             "thought",
             {"text": "已识别为 RAG 检索评测目标。知识库与黄金 QA 资产将在 M3 接入，当前请使用「基准评测（Benchmark）」发起评测。"},
+            state=state,
         )
         await _emit(
             db,
@@ -254,6 +298,7 @@ async def _handle_user_message(
             session.id,
             "error",
             {"code": "NOT_FOUND", "message": "RAG 检索评测能力将在 M3 接入，当前请先使用基准评测。"},
+            state=state,
         )
         return
 
@@ -264,6 +309,7 @@ async def _handle_user_message(
             session.id,
             "thought",
             {"text": "报告解读能力将在 M4 接入，当前可在「评测报告」页查看已生成报告并做基线对比。"},
+            state=state,
         )
         await _emit(
             db,
@@ -271,6 +317,7 @@ async def _handle_user_message(
             session.id,
             "error",
             {"code": "NOT_FOUND", "message": "报告解读能力将在 M4 接入，当前请先到评测报告页查看。"},
+            state=state,
         )
         return
 
@@ -281,9 +328,10 @@ async def _handle_user_message(
         session.id,
         "thought",
         {"text": "正在梳理基准评测目标：对比被测协议档在同一数据集上的规则分。先列出可用协议档与数据集…"},
+        state=state,
     )
-    await _call_tool(db, ws, session.id, "model.list", {}, {"items": _profile_items(db)})
-    await _call_tool(db, ws, session.id, "dataset.list", {}, {"items": _dataset_items(db)})
+    await _call_tool(db, ws, session.id, "model.list", {}, {"items": _profile_items(db)}, state)
+    await _call_tool(db, ws, session.id, "dataset.list", {}, {"items": _dataset_items(db)}, state)
 
     profiles = _profile_items(db)
     datasets = _dataset_items(db)
@@ -300,8 +348,8 @@ async def _handle_user_message(
         + ("（已按「先评后压」预开压测开关）" if card["with_stress"] else "")
         + "："
     )
-    await _emit(db, ws, session.id, "thought", {"text": summary})
-    await _send_confirm(db, ws, session.id, card)
+    await _emit(db, ws, session.id, "thought", {"text": summary}, state=state)
+    await _send_confirm(db, ws, session.id, card, state)
 
 
 async def _handle_confirm_ack(
@@ -311,17 +359,18 @@ async def _handle_confirm_ack(
     user: User,
     ok: bool,
     patch: dict | None,
+    state: _ConnState,
 ) -> None:
     """处理确认卡回执：取消则清卡，确认则深合并 patch 后校验并入队。"""
     base = _PENDING_CARDS.get(session.id)
 
     if not ok:
         _PENDING_CARDS.pop(session.id, None)
-        await _emit(db, ws, session.id, "thought", {"text": "已取消本次确认，不会创建任务。需要调整目标可以继续说。"})
+        await _emit(db, ws, session.id, "thought", {"text": "已取消本次确认，不会创建任务。需要调整目标可以继续说。"}, state=state)
         return
 
     if base is None:
-        await _emit(db, ws, session.id, "error", {"code": "VALIDATION", "message": "没有待确认的评测单，请先发送目标重新生成。"})
+        await _emit(db, ws, session.id, "error", {"code": "VALIDATION", "message": "没有待确认的评测单，请先发送目标重新生成。"}, state=state)
         return
 
     merged = _deep_merge(deepcopy(base), patch or {})
@@ -333,14 +382,14 @@ async def _handle_confirm_ack(
         .first()
     )
     if existing:
-        await _emit(db, ws, session.id, "error", {"code": "CONCURRENCY", "message": "当前会话已有未完成任务，请等待其结束后再下单。"})
+        await _emit(db, ws, session.id, "error", {"code": "CONCURRENCY", "message": "当前会话已有未完成任务，请等待其结束后再下单。"}, state=state)
         return
 
     # 复用与 REST 相同的 TaskCreate 校验（PRD 确认卡字段规则）
     try:
         spec = TaskCreate.model_validate(merged)
     except Exception:
-        await _emit(db, ws, session.id, "error", {"code": "VALIDATION", "message": "评测单字段不完整或非法，请补全后重新确认。"})
+        await _emit(db, ws, session.id, "error", {"code": "VALIDATION", "message": "评测单字段不完整或非法，请补全后重新确认。"}, state=state)
         return
 
     task = Task(
@@ -367,7 +416,7 @@ async def _handle_confirm_ack(
 
     _PENDING_CARDS.pop(session.id, None)
 
-    await _emit(db, ws, session.id, "tool_call", {"name": "task.create", "arguments": spec.snapshot()}, task_id=task.id)
+    await _emit(db, ws, session.id, "tool_call", {"name": "task.create", "arguments": spec.snapshot()}, task_id=task.id, state=state)
     await _emit(
         db,
         ws,
@@ -375,8 +424,9 @@ async def _handle_confirm_ack(
         "tool_result",
         {"name": "task.create", "ok": True, "data": {"task_id": task.id, "status": "queued"}},
         task_id=task.id,
+        state=state,
     )
-    await _emit(db, ws, session.id, "thought", {"text": "任务已入队（queued），Worker 将异步执行并回推进度与报告。"}, task_id=task.id)
+    await _emit(db, ws, session.id, "thought", {"text": "任务已入队（queued），Worker 将异步执行并回推进度与报告。"}, task_id=task.id, state=state)
     await _emit(
         db,
         ws,
@@ -384,6 +434,7 @@ async def _handle_confirm_ack(
         "progress",
         {"percent": 0, "done": 0, "total": 1, "message": "任务已入队，等待 Worker 领取"},
         task_id=task.id,
+        state=state,
     )
 
 
@@ -393,14 +444,15 @@ async def _handle_cancel_task(
     session: AgentSession,
     user: User,
     task_id: str,
+    state: _ConnState,
 ) -> None:
     """取消当前成员的非终态任务，与 REST cancel 语义一致。"""
     task = db.query(Task).filter(Task.id == task_id, Task.created_by == user.id).first()
     if not task:
-        await _emit(db, ws, session.id, "error", {"code": "NOT_FOUND", "message": "任务不存在"})
+        await _emit(db, ws, session.id, "error", {"code": "NOT_FOUND", "message": "任务不存在"}, state=state)
         return
     if task.status in _TERMINAL_STATUSES:
-        await _emit(db, ws, session.id, "error", {"code": "VALIDATION", "message": "任务已结束"}, task_id=task.id)
+        await _emit(db, ws, session.id, "error", {"code": "VALIDATION", "message": "任务已结束"}, task_id=task.id, state=state)
         return
     task.cancel_requested_at = datetime.now(UTC)
     task.status = "cancelled"
@@ -416,11 +468,11 @@ async def _handle_cancel_task(
         )
     )
     db.commit()
-    await _emit(db, ws, session.id, "thought", {"text": "已收到取消请求，任务状态已更新为 cancelled。"}, task_id=task.id)
+    await _emit(db, ws, session.id, "thought", {"text": "已收到取消请求，任务状态已更新为 cancelled。"}, task_id=task.id, state=state)
 
 
-async def _replay_events(db: Session, ws: WebSocket, session_id: str, after_id: int) -> None:
-    """断线重连时按 last_event_id 补发会话内缺失的事件。"""
+async def _replay_events(db: Session, ws: WebSocket, session_id: str, after_id: int) -> int:
+    """断线重连时按 last_event_id 补发会话内缺失的事件，返回补发到的最大事件号。"""
     rows = (
         db.query(WsEvent)
         .filter(WsEvent.session_id == session_id, WsEvent.event_id > after_id)
@@ -429,6 +481,36 @@ async def _replay_events(db: Session, ws: WebSocket, session_id: str, after_id: 
     )
     for row in rows:
         await ws.send_json(_event_body(session_id, row.event_id, row.event, row.payload, row.task_id, row.ts))
+    return rows[-1].event_id if rows else after_id
+
+
+async def _forward_loop(ws: WebSocket, session_id: str, state: _ConnState) -> None:
+    """后台转发循环：把 Worker 等进程外写入 ws_events 的新事件推送到当前连接。
+
+    Worker 执行长任务时只向 ws_events 表追加 progress/report/error 事件，
+    本循环按游标增量检出并在连接锁内发送，与 _emit 的直连发送互斥去重。
+    连接关闭（发送抛异常）时静默退出，由主循环的 finally 统一清理。
+    """
+    while True:
+        await asyncio.sleep(1.0)
+        db: Session = SessionLocal()
+        try:
+            async with state.lock:
+                rows = (
+                    db.query(WsEvent)
+                    .filter(WsEvent.session_id == session_id, WsEvent.event_id > state.cursor)
+                    .order_by(WsEvent.event_id)
+                    .all()
+                )
+                for row in rows:
+                    await ws.send_json(_event_body(session_id, row.event_id, row.event, row.payload, row.task_id, row.ts))
+                    state.cursor = row.event_id
+        except Exception:
+            # 连接已关闭或数据库瞬时故障：退出转发，等待主循环收尾
+            logger.debug("会话 %s 的事件转发循环退出", session_id, exc_info=True)
+            return
+        finally:
+            db.close()
 
 
 @router.websocket("/ws/agent")
@@ -442,6 +524,7 @@ async def ws_agent(websocket: WebSocket):
 
     await websocket.accept()
     db: Session = SessionLocal()
+    forwarder: asyncio.Task | None = None
     try:
         requested_session_id = websocket.query_params.get("session_id")
         if requested_session_id:
@@ -460,8 +543,9 @@ async def ws_agent(websocket: WebSocket):
             last_event_id = max(0, int(websocket.query_params.get("last_event_id", "0") or "0"))
         except ValueError:
             last_event_id = 0
+        state = _ConnState(cursor=last_event_id)
         if last_event_id:
-            await _replay_events(db, websocket, session_id, last_event_id)
+            state.cursor = await _replay_events(db, websocket, session_id, last_event_id)
         else:
             await _emit(
                 db,
@@ -469,14 +553,18 @@ async def ws_agent(websocket: WebSocket):
                 session_id,
                 "thought",
                 {"text": "你好，我是评测工程师助手。请描述评测目标，我会澄清后给你确认卡。"},
+                state=state,
             )
+
+        # 启动后台转发：Worker 回推的 progress/report/error 经 ws_events 表送达本连接
+        forwarder = asyncio.create_task(_forward_loop(websocket, session_id, state))
 
         while True:
             raw = await websocket.receive_text()
             try:
                 message = json.loads(raw)
             except json.JSONDecodeError:
-                await _emit(db, websocket, session_id, "error", {"code": "VALIDATION", "message": "消息格式无效"})
+                await _emit(db, websocket, session_id, "error", {"code": "VALIDATION", "message": "消息格式无效"}, state=state)
                 continue
 
             event = message.get("event")
@@ -486,30 +574,32 @@ async def ws_agent(websocket: WebSocket):
                 text = str(payload.get("text", "")).strip()
                 attachments = payload.get("attachments", [])
                 if not isinstance(attachments, list):
-                    await _emit(db, websocket, session_id, "error", {"code": "VALIDATION", "message": "attachments 格式无效"})
+                    await _emit(db, websocket, session_id, "error", {"code": "VALIDATION", "message": "attachments 格式无效"}, state=state)
                     continue
                 if not text and not attachments:
-                    await _emit(db, websocket, session_id, "error", {"code": "VALIDATION", "message": "消息不能为空"})
+                    await _emit(db, websocket, session_id, "error", {"code": "VALIDATION", "message": "消息不能为空"}, state=state)
                     continue
                 try:
-                    await _handle_user_message(db, websocket, session, text, attachments)
+                    await _handle_user_message(db, websocket, session, text, attachments, state)
                 except ValueError as exc:
-                    await _emit(db, websocket, session_id, "error", {"code": "NOT_FOUND", "message": str(exc)})
+                    await _emit(db, websocket, session_id, "error", {"code": "NOT_FOUND", "message": str(exc)}, state=state)
                 continue
 
             if event == "confirm_ack":
                 ok = bool(payload.get("ok"))
                 patch = payload.get("patch") if isinstance(payload.get("patch"), dict) else None
-                await _handle_confirm_ack(db, websocket, session, user, ok, patch)
+                await _handle_confirm_ack(db, websocket, session, user, ok, patch, state)
                 continue
 
             if event == "cancel_task":
                 task_id = str(payload.get("task_id", ""))
-                await _handle_cancel_task(db, websocket, session, user, task_id)
+                await _handle_cancel_task(db, websocket, session, user, task_id, state)
                 continue
 
-            await _emit(db, websocket, session_id, "error", {"code": "VALIDATION", "message": "不支持的消息类型"})
+            await _emit(db, websocket, session_id, "error", {"code": "VALIDATION", "message": "不支持的消息类型"}, state=state)
     except WebSocketDisconnect:
         pass
     finally:
+        if forwarder is not None:
+            forwarder.cancel()
         db.close()
