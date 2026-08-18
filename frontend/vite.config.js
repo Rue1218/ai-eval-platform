@@ -3,8 +3,11 @@ import vue from '@vitejs/plugin-vue'
 import { execSync } from 'node:child_process'
 
 // 获取当前构建对应的 Git 提交 ID（短 hash）
-// 优先取 CI 环境变量（GitHub Actions 的 GITHUB_SHA），本地构建回退到 git 命令
+// 优先级：构建环境变量（docker build arg）> CI 环境变量 > 本地 git 命令
 function getGitCommit() {
+  if (process.env.BUILD_VERSION) {
+    return process.env.BUILD_VERSION
+  }
   if (process.env.GITHUB_SHA) {
     return process.env.GITHUB_SHA.slice(0, 8)
   }
@@ -15,7 +18,7 @@ function getGitCommit() {
   }
 }
 
-const buildTime = new Date().toISOString()
+const buildTime = process.env.BUILD_TIME || new Date().toISOString()
 const gitCommit = getGitCommit()
 
 export default defineConfig({

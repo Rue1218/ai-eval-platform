@@ -23,7 +23,11 @@ fi
 git fetch origin
 git reset --hard "origin/$BRANCH"
 
-echo "==> 重建容器"
+# 注入构建版本信息（前端控制台打印用）
+export BUILD_VERSION=$(git rev-parse --short HEAD)
+export BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+echo "==> 重建容器（BUILD_VERSION=$BUILD_VERSION）"
 docker compose up -d --build --remove-orphans
 
 echo "==> 清理旧镜像"

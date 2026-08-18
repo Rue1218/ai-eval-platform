@@ -57,7 +57,11 @@ services:
       - ./data:/data
 
   web:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        BUILD_VERSION: ${BUILD_VERSION:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-}
     restart: unless-stopped
     depends_on:
       - api
