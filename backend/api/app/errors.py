@@ -6,6 +6,7 @@
 422 校验错误归一为 ``VALIDATION``（400），保证前后端共享同一套错误名单。
 """
 
+import logging
 from enum import Enum
 from typing import Any
 
@@ -62,6 +63,9 @@ class AppError(Exception):
 
 
 def register_error_handlers(app: FastAPI) -> None:
+    """注册业务、校验和未处理异常的统一 JSON 错误响应。"""
+    logger = logging.getLogger("ai-eval.errors")
+
     @app.exception_handler(AppError)
     async def _app_error_handler(request: Request, exc: AppError) -> JSONResponse:
         body: dict[str, Any] = {"code": exc.code.value, "message": exc.message}
@@ -77,4 +81,13 @@ def register_error_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=400,
             content={"code": ErrorCode.VALIDATION.value, "message": "请检查标红字段"},
+        )
+
+    @app.exception_handler(Exception)
+    async def _internal_error_handler(request: Request, exc: Exception) -> JSONResponse:
+        """记录内部堆栈但不把 SQL、密钥或实现细节返回给浏览器。"""
+        logger.exception("未处理的服务端异常: %s", request.url.path, exc_info=exc)
+        return JSONResponse(
+            status_code=500,
+            content={"code": ErrorCode.INTERNAL.value, "message": "内部错误，请重试或联系平台维护者"},
         )

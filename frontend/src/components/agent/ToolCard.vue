@@ -1,0 +1,206 @@
+<template>
+  <div class="tool-card" :class="{ open: isOpen }">
+    <div class="tool-head" @click="isOpen = !isOpen">
+      <div class="tool-status" :class="statusClass">
+        <!-- pending 旋转 -->
+        <svg v-if="status === 'pending'" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="12" y1="2" x2="12" y2="6"></line>
+          <line x1="12" y1="18" x2="12" y2="22"></line>
+          <line x1="4.93" y1="4.93" x2="7.76" y2="7.76"></line>
+          <line x1="16.24" y1="16.24" x2="19.07" y2="19.07"></line>
+          <line x1="2" y1="12" x2="6" y2="12"></line>
+          <line x1="18" y1="12" x2="22" y2="12"></line>
+          <line x1="4.93" y1="19.07" x2="7.76" y2="16.24"></line>
+          <line x1="16.24" y1="7.76" x2="19.07" y2="4.93"></line>
+        </svg>
+        <!-- ok 成功 -->
+        <svg v-else-if="status === 'ok'" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="20 6 9 17 4 12"></polyline>
+        </svg>
+        <!-- fail 失败 -->
+        <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="18" y1="6" x2="6" y2="18"></line>
+          <line x1="6" y1="6" x2="18" y2="18"></line>
+        </svg>
+      </div>
+
+      <div class="tool-name">{{ toolChineseName }}</div>
+      <div class="tool-state-text" :class="{ fail: status === 'fail' }">
+        {{ stateText }}
+      </div>
+
+      <div class="chev">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="6 9 12 15 18 9"></polyline>
+        </svg>
+      </div>
+    </div>
+
+    <div v-if="isOpen" class="tool-detail">
+      <div v-if="args" style="margin-bottom: 8px">
+        <div class="td-label">调用入参</div>
+        <pre class="code">{{ formatJson(args) }}</pre>
+      </div>
+      <div v-if="result">
+        <div class="td-label">返回结果</div>
+        <pre class="code">{{ formatJson(result) }}</pre>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, computed } from 'vue'
+
+const props = withDefaults(
+  defineProps<{
+    tool: string
+    args?: any
+    result?: any
+    status?: 'pending' | 'ok' | 'fail'
+  }>(),
+  {
+    status: 'ok',
+  },
+)
+
+const isOpen = ref(false)
+
+const toolNameMap: Record<string, string> = {
+  list_profiles: '列出协议档',
+  get_profile: '获取协议档详情',
+  list_datasets: '列出数据集',
+  get_dataset: '获取数据集详情',
+  list_kbs: '列出知识库',
+  query_kb: '知识库检索',
+  list_tasks: '查询任务列表',
+  get_task: '查询任务详情',
+  create_task: '创建评测任务',
+  cancel_task: '取消任务',
+  confirm_case_set: '确认用例入库',
+  get_report: '读取评测报告',
+}
+
+const toolChineseName = computed(() => {
+  return toolNameMap[props.tool] || props.tool
+})
+
+const statusClass = computed(() => props.status)
+
+const stateText = computed(() => {
+  if (props.status === 'pending') return '正在调用...'
+  if (props.status === 'fail') return '调用失败'
+  return '调用完成'
+})
+
+function formatJson(val: any): string {
+  if (typeof val === 'string') return val
+  try {
+    return JSON.stringify(val, null, 2)
+  } catch (_) {
+    return String(val)
+  }
+}
+</script>
+
+<style scoped>
+.tool-card {
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  background: var(--bg-main);
+  overflow: hidden;
+  max-width: 92%;
+  box-shadow: 0 1px 2px rgba(17, 24, 39, 0.04);
+  animation: msg-in 0.26s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+.tool-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 14px;
+  cursor: pointer;
+  user-select: none;
+}
+.tool-head:hover {
+  background: var(--row-hover);
+}
+.tool-status {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  display: grid;
+  place-items: center;
+}
+.tool-status.pending {
+  color: var(--accent-info);
+  animation: spin 1.2s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.tool-status.ok {
+  color: var(--accent-success);
+}
+.tool-status.fail {
+  color: var(--accent-error);
+}
+.tool-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+.tool-state-text {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+.tool-state-text.fail {
+  color: var(--accent-error);
+  font-weight: 500;
+}
+.tool-head .chev {
+  margin-left: auto;
+  transition: transform 0.18s ease;
+  color: var(--text-tertiary);
+  display: grid;
+  place-items: center;
+}
+.tool-card.open .tool-head .chev {
+  transform: rotate(180deg);
+}
+.tool-detail {
+  border-top: 1px solid var(--border-subtle);
+  padding: 12px 14px;
+  background: var(--bg-elevated);
+}
+.td-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  margin-bottom: 5px;
+}
+pre.code {
+  margin: 0;
+  background: #0f172a;
+  color: #e2e8f0;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.6;
+  overflow: auto;
+  max-height: 200px;
+}
+@keyframes msg-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+</style>
