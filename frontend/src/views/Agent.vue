@@ -84,9 +84,8 @@
           <!-- 1. 空会话内联欢迎态 -->
           <div v-if="events.length === 0" class="welcome" data-od-id="welcome">
             <div class="welcome-eyebrow">{{ isRagMode ? 'AI Eval · RAG 评估智能体' : 'AI Eval · 大模型测试智能体' }}</div>
-            <h2 class="welcome-title">
-              {{ isRagMode ? '知识库检索质量评估，全链路调优与召回分析。' : '说一句目标，拿回一份评测报告。' }}
-            </h2>
+            <!-- 固定文案两行排版（对齐原型 <br> 换行），非用户输入，无注入风险 -->
+            <h2 class="welcome-title" v-html="isRagMode ? '知识库检索质量评估，<br>全链路调优与召回分析。' : '说一句目标，<br>拿回一份评测报告。'"></h2>
             <p class="welcome-sub">
               {{ isRagMode ? '说明要评测的知识库或外部 RAG 接口，我会澄清后给您确认卡。支持 LightRAG 4 模式对比与召回命中归因。' : '说明要评测的模型或 PRD 生成需求，我会澄清后给您确认卡。未确认不入队，确认前字段都能修改。' }}
             </p>
@@ -462,10 +461,11 @@
                 </div>
               </div>
               <div class="row" style="gap: 8px">
-                <router-link :to="`/reports/${item.reportId}`" class="btn btn-sign btn-sm">
+                <!-- 无 reportId 不渲染入口，避免跳转 /reports/undefined -->
+                <router-link v-if="item.reportId" :to="`/reports/${item.reportId}`" class="btn btn-sign btn-sm">
                   查看报告
                 </router-link>
-                <button class="btn btn-secondary btn-sm" @click="handleInterpretReport(item.reportId || '')">
+                <button v-if="item.reportId" class="btn btn-secondary btn-sm" @click="handleInterpretReport(item.reportId)">
                   在对话中解读
                 </button>
               </div>
@@ -511,6 +511,8 @@
               <svg class="spark" viewBox="0 0 180 36" preserveAspectRatio="none">
                 <polygon class="a-qps" :points="sparkPolygonPoints" />
                 <polyline class="l-qps" :points="sparkLinePoints" />
+                <polyline class="l-rt" :points="sparkRtPoints" />
+                <polyline class="l-err" :points="sparkErrPoints" />
                 <circle class="dot-end" :cx="sparkLastPoint.x" :cy="sparkLastPoint.y" r="2.4" />
               </svg>
               <span class="mini-series">
@@ -548,11 +550,11 @@
         <div v-show="events.length > 0" class="quick-chips">
           <button
             v-for="chip in currentQuickChips"
-            :key="chip"
+            :key="chip.label"
             class="chip"
-            @click="sendPredefined(chip)"
+            @click="sendPredefined(chip.say)"
           >
-            {{ chip }}
+            {{ chip.label }}
           </button>
         </div>
 
@@ -741,10 +743,18 @@ const RAG_CAPS = [
 
 const currentCaps = computed(() => isRagMode.value ? RAG_CAPS : LLM_CAPS)
 
+// 快捷芯片：短标签 + 完整 prompt（对齐原型 data-say），顺序随顶栏模式重排
+const QUICK_CHIPS = [
+  { label: '生成用例', say: '帮我把这份 PRD 生成测试用例' },
+  { label: '基准评测', say: '对比一下 gpt-test 和 claude-x 在 smoke-20 上的表现' },
+  { label: 'RAG 评测', say: '评估 default 知识库的检索质量' },
+  { label: '先评后压', say: '跑完基准评测后自动加压测' },
+]
+
 const currentQuickChips = computed(() => {
-  return isRagMode.value
-    ? ['评估 default 知识库的检索质量', '横向对比 LightRAG 四种模式在 qa-v1 上的表现', '检验 default 知识库黄金 QA 覆盖度', '对 default 知识库 query 接口跑 20 QPS 压测']
-    : ['对比一下 gpt-test 和 claude-x 在 smoke-20 上的表现', '帮我把这份 PRD 生成测试用例', '评估 default 知识库的检索质量', '跑完基准评测后自动加压测']
+  // RAG 模式 RAG 优先（对齐原型 orderChipsByMode）
+  if (isRagMode.value) return [QUICK_CHIPS[2], QUICK_CHIPS[0], QUICK_CHIPS[1], QUICK_CHIPS[3]]
+  return QUICK_CHIPS
 })
 
 const defaultKpis = [
@@ -765,17 +775,23 @@ const dispatchLogs = ref([
 ])
 
 const currentStressMetrics = ref({ qps: 118, rt: 890, err: 0.4 })
-const sparkPointsData = [[12, 210], [38, 260], [64, 340], [92, 520], [118, 890], [118, 1200]]
+// 压测迷你曲线数据：[QPS, RT, 错误率] 三元组（对齐原型 STRESS_SERIES）
+const sparkPointsData = [[12, 210, 0.0], [38, 260, 0.0], [64, 340, 0.1], [92, 520, 0.2], [118, 890, 0.4], [118, 1200, 0.4]]
 
-const sparkLinePoints = computed(() => {
+/** 按列独立归一化生成折线点串（原型 drawSpark：QPS 面积+线 / RT / 错误率三线） */
+function sparkLineFor(colIdx: number): string {
   const W = 180, H = 36, P = 3
-  const maxQ = 120
+  const maxV = Math.max(...sparkPointsData.map(p => p[colIdx])) || 1
   return sparkPointsData.map((p, i) => {
     const x = P + i * (W - 2 * P) / (sparkPointsData.length - 1)
-    const y = H - P - (p[0] / maxQ) * (H - 2 * P)
+    const y = H - P - (p[colIdx] / maxV) * (H - 2 * P)
     return `${x.toFixed(1)},${y.toFixed(1)}`
   }).join(' ')
-})
+}
+
+const sparkLinePoints = computed(() => sparkLineFor(0))
+const sparkRtPoints = computed(() => sparkLineFor(1))
+const sparkErrPoints = computed(() => sparkLineFor(2))
 
 const sparkPolygonPoints = computed(() => {
   const W = 180, H = 36, P = 3
@@ -785,10 +801,11 @@ const sparkPolygonPoints = computed(() => {
 
 const sparkLastPoint = computed(() => {
   const W = 180, H = 36, P = 3
+  const maxQ = Math.max(...sparkPointsData.map(p => p[0])) || 1
   const last = sparkPointsData[sparkPointsData.length - 1]
   return {
     x: W - P,
-    y: H - P - (last[0] / 120) * (H - 2 * P),
+    y: H - P - (last[0] / maxQ) * (H - 2 * P),
   }
 })
 
@@ -943,7 +960,9 @@ function validateConfirmCard(item: StreamItem): boolean {
     }
   }
   if (card?.kind === 'testcase') {
-    if (!card.case_source_text || !card.case_source_text.trim()) errors.case_source = '请提供 file_id 或粘贴文本'
+    // 契约字段为 case_source.text（后端确认卡结构），历史 mock 曾用 case_source_text，两者兼容
+    const sourceText = String(card.case_source?.text ?? card.case_source_text ?? '')
+    if (!sourceText.trim()) errors.case_source = '请提供 file_id 或粘贴文本'
   }
   item.fieldErrors = errors
   return Object.keys(errors).length === 0
@@ -1317,21 +1336,12 @@ function handleConfirmAck(item: StreamItem, confirmed: boolean) {
     return
   }
 
-  // 无 WS 降级：本地演示入队与进度
+  // Mock 模式（无 WS 连接）：本地演示入队与进度
   if (!confirmed) {
-    // 实时模式下取消也需回传服务端，由服务端终止意图流程。
-    if (agentWs?.isConnected) agentWs.sendConfirmAck(false)
     events.value.push({
       type: 'agent',
       text: '<p>已取消，未创建任务。需要调整目标可以继续说。</p>',
     })
-    scrollToBottom()
-    return
-  }
-
-  // 实时模式：回传 confirm_ack（可携带 with_stress 修订），后续入队/进度/报告全部由 WS 事件驱动。
-  if (agentWs?.isConnected) {
-    agentWs.sendConfirmAck(true, { with_stress: item.card?.with_stress })
     scrollToBottom()
     return
   }
@@ -1578,9 +1588,12 @@ function handleCancelActiveTask(taskId: string) {
     positiveButtonProps: isStress ? { type: 'error' } : undefined,
     onPositiveClick: async () => {
       try {
-        await api.tasks.cancel(taskId)
+        // 契约：Agent 页取消走 WS 上行 cancel_task（上行仅三类消息）；连接不可用时回退 REST
+        if (agentWs?.isConnected) agentWs.sendCancelTask(taskId)
+        else await api.tasks.cancel(taskId)
       } catch {}
-      activeTask.value = null
+      // 对齐原型 hideDock：先展示「已提交取消请求」note，2.6s 后隐藏进度坞
+      finishDock('已提交取消请求')
       message.success(isStress ? '已提交停止发压请求' : '评测任务已取消（cancelled）')
     },
   })
@@ -1627,6 +1640,7 @@ async function selectSession(sid: string) {
   currentSessionId.value = sid
   events.value = []
   activeTask.value = null
+  dockClosingNote.value = ''
   isGenerating.value = false
   // F17 会话含进行中任务时默认展开调度侧轨
   const sess = sessions.value.find(s => s.id === sid)
@@ -1743,6 +1757,8 @@ function handleWsEvent(ev: WsServerEvent) {
         } else {
           activeTask.value.progress = progress
         }
+        // 无报告的任务类型（如 testcase 骨架）以 100% 进度作为坞收尾信号
+        if ((progress.percent ?? 0) >= 100) finishDock('任务已完成')
       }
       break
     }
@@ -1751,11 +1767,15 @@ function handleWsEvent(ev: WsServerEvent) {
       // S10 坞先显示「任务 succeeded」note，2.6s 后再隐藏
       finishDock('任务 succeeded')
       isGenerating.value = false
-      events.value.push({
-        type: 'report',
-        reportId: p.report_id,
-        kpis: defaultKpis,
-      })
+      // 契约：report 载荷仅 { report_id }；空 id（如无报告的用例任务）不渲染报告卡，避免跳转 /reports/undefined
+      if (p.report_id) {
+        // 实时模式不伪造指标（对齐原型 addReportCard 占位 KPI），真实数据进报告页查看
+        events.value.push({
+          type: 'report',
+          reportId: p.report_id,
+          kpis: [{ value: '—', label: '报告已生成' }],
+        })
+      }
       scrollToBottom()
       break
     }
@@ -1767,7 +1787,7 @@ function handleWsEvent(ev: WsServerEvent) {
         message: p.message || '执行遇到错误',
       })
       // 内联错误条之外同步弹出 Toast，避免用户错过失败反馈
-      message.error(ev.message || '执行遇到错误')
+      message.error(p.message || '执行遇到错误')
       isGenerating.value = false
       scrollToBottom()
       break

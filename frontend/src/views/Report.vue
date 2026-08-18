@@ -417,7 +417,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useMessage, useDialog } from 'naive-ui'
 import { api } from '../api/http'
@@ -433,7 +433,8 @@ const router = useRouter()
 const message = useMessage()
 const dialog = useDialog()
 
-const reportId = route.params.id as string
+// /reports 列表路由与 /reports/:id 详情路由复用本组件；无 id 时不得发起 /api/reports/undefined 请求
+const reportId = computed(() => (route.params.id as string) || '')
 // 报告数据仅来自服务端 / Mock 夹具，加载失败时保持 null 并展示空态
 const report = ref<Report | null>(null)
 const loading = ref(true)
@@ -565,10 +566,16 @@ function formatScore(val?: number) {
 }
 
 async function loadReport() {
+  if (!reportId.value) {
+    // 列表路由无报告 ID：直接展示空态（对齐原型 report.html 实时模式无数据行为）
+    report.value = null
+    loading.value = false
+    return
+  }
   loading.value = true
   stressSeries.value = []
   try {
-    report.value = await api.reports.get(reportId)
+    report.value = await api.reports.get(reportId.value)
     // 压测报告：报告内嵌 series 缺失时，额外拉取 stress-series 时序接口（对齐原型 live 行为）
     if (report.value?.kind === 'stress') {
       if (report.value.series?.length) {
@@ -593,7 +600,7 @@ async function loadReport() {
 
 async function openShareModal() {
   try {
-    const res = await api.reports.share(reportId, 7)
+    const res = await api.reports.share(reportId.value, 7)
     shareUrl.value = res.share_url
     showShareModal.value = true
   } catch (err: any) {
@@ -604,12 +611,12 @@ async function openShareModal() {
 // 导出 Markdown：内容由服务端（GET /api/reports/{id}?fmt=md）或 Mock 夹具生成，前端仅触发 Blob 下载
 async function handleExportMd() {
   try {
-    const md = await api.reports.get(reportId, 'md')
+    const md = await api.reports.get(reportId.value, 'md')
     const blob = new Blob([md], { type: 'text/markdown' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `Report-${reportId}.md`
+    a.download = `Report-${reportId.value}.md`
     a.click()
     URL.revokeObjectURL(url)
     message.success('Markdown 报告已导出')
@@ -626,7 +633,7 @@ function handleFreezeBaseline() {
     negativeText: '取消',
     onPositiveClick: async () => {
       try {
-        await api.reports.freezeBaseline(reportId)
+        await api.reports.freezeBaseline(reportId.value)
         message.success('已冻结为基线')
       } catch (err: any) {
         message.error(err.message || '冻结失败')
@@ -638,11 +645,13 @@ function handleFreezeBaseline() {
 function handleInterpret() {
   router.push({
     path: '/agent',
-    query: { report_id: reportId },
+    query: { report_id: reportId.value },
   })
 }
 
 onMounted(loadReport)
+// 同组件内切换报告（如先评后压横幅互跳）时按新 id 重新加载
+watch(reportId, () => loadReport())
 </script>
 
 <style scoped>

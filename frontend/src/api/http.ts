@@ -91,6 +91,9 @@ http.interceptors.response.use(
   },
 )
 
+// KB 域后端路由属 M3 里程碑：首次 404 后置位，后续读取直接走降级数据，不再重复请求
+let kbBackendMissing = false
+
 // In-Memory Mock Store for interactive demonstration when in mock mode
 const mockStore = {
   profiles: [...MOCK_PROFILES],
@@ -127,15 +130,9 @@ async function reportsGet(id: string, fmt?: 'md'): Promise<Report | string> {
     const { data } = await http.get(`/api/reports/${id}`, { params: { fmt: 'md' }, responseType: 'text' })
     return data
   }
-  try {
-    const { data } = await http.get(`/api/reports/${id}`)
-    return data
-  } catch (e: any) {
-    if (e.status === 404 || e.code === ErrorCode.NOT_FOUND) {
-      return mockStore.reports[id] || mockStore.reports['r-bm-1']
-    }
-    throw e
-  }
+  // 实时模式不作 Mock 顶替（API.md §12.3：无报告时显示空/错误态）；报告不存在由页面展示错误态
+  const { data } = await http.get(`/api/reports/${id}`)
+  return data
 }
 
 /**
@@ -679,11 +676,16 @@ export const api = {
   kb: {
     async list(): Promise<KnowledgeBase[]> {
       if (getDataMode() === 'mock') return mockStore.kbs
+      // M3 前后端无 /api/kb 路由：已知缺失时直接走降级数据，避免每次挂载重复打 404
+      if (kbBackendMissing) return mockStore.kbs
       try {
         const { data } = await http.get('/api/kb')
         return Array.isArray(data) ? data : data.items || []
       } catch (e: any) {
-        if (e.status === 404 || e.code === ErrorCode.NOT_FOUND) return mockStore.kbs
+        if (e.status === 404 || e.code === ErrorCode.NOT_FOUND) {
+          kbBackendMissing = true
+          return mockStore.kbs
+        }
         throw e
       }
     },
@@ -837,11 +839,15 @@ export const api = {
     },
     async getGoldQA(id: string): Promise<GoldQA[]> {
       if (getDataMode() === 'mock') return mockStore.goldQAs.filter((x) => x.kb_id === id)
+      if (kbBackendMissing) return mockStore.goldQAs.filter((x) => x.kb_id === id)
       try {
         const { data } = await http.get(`/api/kb/${id}/gold-qa`)
         return Array.isArray(data) ? data : data.items || []
       } catch (e: any) {
-        if (e.status === 404 || e.code === ErrorCode.NOT_FOUND) return mockStore.goldQAs.filter((x) => x.kb_id === id)
+        if (e.status === 404 || e.code === ErrorCode.NOT_FOUND) {
+          kbBackendMissing = true
+          return mockStore.goldQAs.filter((x) => x.kb_id === id)
+        }
         throw e
       }
     },

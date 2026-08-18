@@ -92,9 +92,9 @@ export class AgentWebSocket {
         try {
           const data: WsServerEvent = JSON.parse(ev.data)
           if ('event_id' in data && typeof data.event_id === 'number') {
-            if (data.event_id > this.lastEventId) {
-              this.lastEventId = data.event_id
-            }
+            // 事件号单调递增：重放补发与服务端转发竞争可能产生重复事件，按 event_id 去重
+            if (data.event_id <= this.lastEventId) return
+            this.lastEventId = data.event_id
           }
           if ('session_id' in data && data.session_id) {
             this.sessionId = data.session_id
