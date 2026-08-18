@@ -215,75 +215,80 @@ const pwdForm = ref({
 
 // 图标简易渲染
 const IconAgent = () =>
-  h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }, [
-    h('path', { d: 'M12 2a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2 2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z' }),
-    h('rect', { x: '4', y: '8', width: '16', height: '12', rx: '2' }),
-    h('line', { x1: '9', y1: '13', x2: '9', y2: '13' }),
-    h('line', { x1: '15', y1: '13', x2: '15', y2: '13' }),
+  h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round' }, [
+    h('path', { d: 'M12 3a5 5 0 0 1 5 5v1a5 5 0 0 1-5 5 5 5 0 0 1-5-5V8a5 5 0 0 1 5-5Z' }),
+    h('path', { d: 'M5 21c0-3.3 3.1-5 7-5s7 1.7 7 5' }),
+  ])
+
+const IconDispatch = () =>
+  h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round' }, [
+    h('circle', { cx: '12', cy: '12', r: '2.4' }),
+    h('circle', { cx: '5', cy: '5', r: '1.8' }),
+    h('circle', { cx: '19', cy: '5', r: '1.8' }),
+    h('circle', { cx: '5', cy: '19', r: '1.8' }),
+    h('circle', { cx: '19', cy: '19', r: '1.8' }),
+    h('path', { d: 'M6.4 6.4 10 10M13.9 10.1l3.7-3.7M6.4 17.6 10 14M13.9 13.9l3.7 3.7' }),
   ])
 
 const IconTasks = () =>
-  h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }, [
-    h('polyline', { points: '9 11 12 14 22 4' }),
-    h('path', { d: 'M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11' }),
+  h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round' }, [
+    h('rect', { x: '4', y: '4', width: '16', height: '16', rx: '3' }),
+    h('path', { d: 'M8 9h8M8 13h5' }),
+  ])
+
+const IconReports = () =>
+  h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round' }, [
+    h('path', { d: 'M5 20V10M12 20V4M19 20v-7' }),
   ])
 
 const IconDatasets = () =>
-  h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }, [
-    h('ellipse', { cx: '12', cy: '5', rx: '9', ry: '3' }),
-    h('path', { d: 'M21 12c0 1.66-4 3-9 3s-9-1.34-9-3' }),
-    h('path', { d: 'M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5' }),
+  h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round' }, [
+    h('ellipse', { cx: '12', cy: '6', rx: '7', ry: '3' }),
+    h('path', { d: 'M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6' }),
+    h('path', { d: 'M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6' }),
   ])
 
 const IconCases = () =>
-  h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }, [
-    h('path', { d: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z' }),
-    h('polyline', { points: '14 2 14 8 20 8' }),
-    h('line', { x1: '16', y1: '13', x2: '8', y2: '13' }),
-    h('line', { x1: '16', y1: '17', x2: '8', y2: '17' }),
-    h('polyline', { points: '10 9 9 9 8 9' }),
+  h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round' }, [
+    h('path', { d: 'M9 11.5 11 14l4.5-5' }),
+    h('rect', { x: '4', y: '4', width: '16', height: '16', rx: '3' }),
   ])
 
 const IconKb = () =>
-  h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }, [
-    h('path', { d: 'M4 19.5A2.5 2.5 0 0 1 6.5 17H20' }),
-    h('path', { d: 'M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z' }),
+  h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round' }, [
+    h('path', { d: 'M5 5.5A2.5 2.5 0 0 1 7.5 3H19v15H7.5A2.5 2.5 0 0 0 5 20.5Z' }),
+    h('path', { d: 'M5 18.5V5.5' }),
+    h('path', { d: 'M9 7.5h6' }),
   ])
 
 const IconProfiles = () =>
-  h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }, [
-    h('rect', { x: '2', y: '2', width: '20', height: '8', rx: '2', ry: '2' }),
-    h('rect', { x: '2', y: '14', width: '20', height: '8', rx: '2', ry: '2' }),
-    h('line', { x1: '6', y1: '6', x2: '6.01', y2: '6' }),
-    h('line', { x1: '6', y1: '18', x2: '6.01', y2: '18' }),
+  h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round' }, [
+    h('rect', { x: '3', y: '5', width: '18', height: '14', rx: '3' }),
+    h('path', { d: 'M7 10h4M7 14h7' }),
   ])
 
 const IconStress = () =>
-  h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }, [
-    h('polygon', { points: '13 2 3 14 12 14 11 22 21 10 12 10 13 2' }),
+  h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round' }, [
+    h('path', { d: 'M3 17l5-6 4 3 6-8' }),
+    h('path', { d: 'M18 6h3v3' }),
   ])
 
 const IconUsers = () =>
-  h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }, [
-    h('path', { d: 'M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2' }),
-    h('circle', { cx: '9', cy: '7', r: '4' }),
-    h('path', { d: 'M23 21v-2a4 4 0 0 0-3-3.87' }),
-    h('path', { d: 'M16 3.13a4 4 0 0 1 0 7.75' }),
+  h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round' }, [
+    h('circle', { cx: '9', cy: '8', r: '3.5' }),
+    h('path', { d: 'M3.5 20c.6-3.2 2.9-5 5.5-5s4.9 1.8 5.5 5' }),
+    h('path', { d: 'M16 8.5h5M18.5 6v5' }),
   ])
 
-const evalRoutes = computed(() => {
-  // 双模式各自只暴露当前评测链路的资产入口，避免将基准数据集误用于 RAG，或在基准模式误操作知识库。
-  const sharedRoutes = [
-    { path: '/agent', label: '智能体', icon: IconAgent, t: 'var(--t-agent)', c: 'var(--c-agent)' },
-    { path: '/tasks', label: '任务中心', icon: IconTasks, t: 'var(--t-tasks)', c: 'var(--c-tasks)' },
-    { path: '/cases', label: '用例', icon: IconCases, t: 'var(--t-cases)', c: 'var(--c-cases)' },
-  ]
-  const modeAsset = modeStore.mode === 'rag'
-    ? { path: '/kb', label: '知识库', icon: IconKb, t: 'var(--t-kb)', c: 'var(--c-kb)' }
-    : { path: '/datasets', label: '数据集', icon: IconDatasets, t: 'var(--t-datasets)', c: 'var(--c-datasets)' }
-
-  return [...sharedRoutes.slice(0, 2), modeAsset, sharedRoutes[2]]
-})
+const evalRoutes = [
+  { path: '/agent', label: '智能体', icon: IconAgent, t: 'var(--t-agent)', c: 'var(--c-agent)' },
+  { path: '/dispatch', label: '调度中心', icon: IconDispatch, t: 'var(--t-agent)', c: 'var(--c-agent)' },
+  { path: '/tasks', label: '任务中心', icon: IconTasks, t: 'var(--t-tasks)', c: 'var(--c-tasks)' },
+  { path: '/reports', label: '评测报告', icon: IconReports, t: 'var(--t-reports)', c: 'var(--c-reports)' },
+  { path: '/datasets', label: '数据集', icon: IconDatasets, t: 'var(--t-datasets)', c: 'var(--c-datasets)' },
+  { path: '/cases', label: '用例', icon: IconCases, t: 'var(--t-cases)', c: 'var(--c-cases)' },
+  { path: '/kb', label: '知识库', icon: IconKb, t: 'var(--t-kb)', c: 'var(--c-kb)' },
+]
 
 const adminRoutes = [
   { path: '/admin/profiles', label: '协议档', icon: IconProfiles, t: 'var(--t-profiles)', c: 'var(--c-profiles)' },
@@ -293,9 +298,10 @@ const adminRoutes = [
 
 const currentPath = computed(() => route.path)
 const currentTitle = computed(() => {
-  // 顶栏标题同步当前模式，深链访问另一模式资产页时也能清晰提示其业务边界。
-  if (route.path === '/datasets') return modeStore.mode === 'llm' ? '基准数据集' : 'RAG 资产切换'
-  if (route.path === '/kb') return modeStore.mode === 'rag' ? '知识库' : '大模型资产切换'
+  if (route.path === '/datasets') return modeStore.mode === 'llm' ? '基准数据集' : '数据集'
+  if (route.path === '/kb') return '知识库'
+  if (route.path === '/dispatch') return '调度中心'
+  if (route.path.startsWith('/reports')) return '评测报告'
   return (route.meta.title as string) || 'AI 测试与评估平台'
 })
 const isFlushView = computed(() => route.path.startsWith('/agent'))

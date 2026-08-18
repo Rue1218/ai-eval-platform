@@ -25,8 +25,10 @@ const routes: RouteRecordRaw[] = [
     children: [
       { path: '', redirect: '/agent' },
       { path: 'agent', component: () => import('../views/Agent.vue'), meta: { title: '智能体' } },
+      { path: 'dispatch', component: () => import('../views/Dispatch.vue'), meta: { title: '调度中心' } },
       { path: 'tasks', component: () => import('../views/Tasks.vue'), meta: { title: '任务中心' } },
-      { path: 'reports/:id', component: () => import('../views/Report.vue'), meta: { title: '报告' } },
+      { path: 'reports', component: () => import('../views/Report.vue'), meta: { title: '评测报告' } },
+      { path: 'reports/:id', component: () => import('../views/Report.vue'), meta: { title: '评测报告' } },
       { path: 'datasets', component: () => import('../views/Datasets.vue'), meta: { title: '数据集' } },
       { path: 'cases', component: () => import('../views/Cases.vue'), meta: { title: '用例' } },
       { path: 'kb', component: () => import('../views/Kb.vue'), meta: { title: '知识库' } },

@@ -356,12 +356,12 @@ const router = useRouter()
 const message = useMessage()
 const dialog = useDialog()
 
-const reportId = route.params.id as string
+const reportId = (route.params.id as string) || 'r-bm-1'
 const report = ref<Report>({
   id: reportId,
   task_id: 't-default',
   kind: 'benchmark',
-  title: '评测对比报告',
+  title: '评测对比报告 · smoke-20 v3 · 主指标 contain',
   created_at: new Date().toISOString(),
 })
 
