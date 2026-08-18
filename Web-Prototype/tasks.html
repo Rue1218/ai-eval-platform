@@ -1,0 +1,581 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>任务中心 · AI 测试与评估平台</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/shell.css">
+<style>
+  .search-input {
+    height: 32px;
+    padding: 0 10px;
+    font-size: 13px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    background: var(--bg-main);
+    color: var(--text-primary);
+    outline: none;
+    transition: all .15s ease;
+  }
+  .search-input:focus {
+    border-color: var(--accent-ai);
+    box-shadow: var(--focus-ring);
+  }
+  .filter-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+  }
+  .cascade-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: rgba(99, 102, 241, 0.12);
+    color: var(--accent-ai);
+    border: 1px solid rgba(99, 102, 241, 0.25);
+  }
+</style>
+</head>
+<body>
+<div class="app" id="app"></div>
+
+<script src="assets/app.js"></script>
+<script src="assets/api.js"></script>
+<script>
+(function () {
+  const content = AE.renderShell('tasks', '任务中心', {
+    topbarActions: `
+      <div class="row" style="gap:8px">
+        <button class="btn btn-secondary btn-sm" id="btn-create-task">+ 发起评测</button>
+        <button class="btn btn-ai btn-sm" id="btn-ai-plan" data-od-id="btn-ai-plan">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4Z"/></svg>
+          智能编排
+        </button>
+      </div>`
+  });
+
+  const me = AE.getUser().username;
+  let filterStatus = '';
+  let filterKind = '';
+  let searchKw = '';
+
+  content.innerHTML = `
+    <div class="page-narrow" data-od-id="tasks-page" style="max-width:1320px">
+      <!-- 顶部大盘与吞吐概览 -->
+      <div class="panel glow mb16" data-od-id="tasks-overview" style="--glow-c:var(--c-tasks)">
+        <div class="row-between" style="margin-bottom:10px">
+          <span class="eyebrow">近 24h 吞吐 · 状态分布大盘</span>
+          <span class="small tertiary mono">Worker 节点在线 8/10 · 调度周期 500ms</span>
+        </div>
+        <div class="row wrap" style="gap:28px;align-items:center">
+          <div>
+            <svg id="tp-area" width="230" height="60" viewBox="0 0 230 60" aria-hidden="true"></svg>
+            <div class="small tertiary mono" style="margin-top:2px">完成 86 任务 / 24h</div>
+          </div>
+          <div class="grow" style="min-width:260px">
+            <div class="dist" id="tp-dist"></div>
+            <div class="chart-legend" id="tp-legend" style="margin-top:8px"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- AI 巡检卡片 -->
+      <div class="ai-card mb16" data-od-id="tasks-ai-insight">
+        <div class="ai-card-head">
+          <span class="ai-badge"><i class="ai-dot"></i>AI 巡检诊断</span>
+          <span class="small tertiary mono">近 24h · 自动异常归因</span>
+          <span class="grow"></span>
+          <button class="link-btn" id="insight-refresh" style="font-size:12px">换一批</button>
+        </div>
+        <div id="insight-body"></div>
+      </div>
+
+      <!-- 筛选与操作工具栏 -->
+      <div class="filter-bar">
+        <span class="tag-soft" id="mode-note" data-od-id="tasks-mode-note" style="cursor:default"></span>
+        <input class="search-input" id="search-kw" placeholder="搜索任务 ID / 关联集 / 创建者…" style="width:220px">
+        <select class="select" id="f-status" style="width:140px">
+          <option value="">全部状态</option>
+          <option value="queued">排队中 (queued)</option>
+          <option value="running">运行中 (running)</option>
+          <option value="awaiting_case_confirm">待确认 (awaiting)</option>
+          <option value="succeeded">已成功 (succeeded)</option>
+          <option value="failed">已失败 (failed)</option>
+          <option value="cancelled">已取消 (cancelled)</option>
+        </select>
+        <select class="select" id="f-kind" style="width:140px">
+          <option value="">全部类型</option>
+          <option value="benchmark">基准评测 (benchmark)</option>
+          <option value="rag">RAG 评测 (rag)</option>
+          <option value="testcase">用例生成 (testcase)</option>
+          <option value="stress">共享压测 (stress)</option>
+        </select>
+        <span class="grow"></span>
+        <button class="btn btn-secondary btn-sm" id="refresh">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 21h5v-5"/></svg>
+          刷新
+        </button>
+      </div>
+
+      <!-- 任务数据表格 -->
+      <div class="panel" style="padding:6px 8px">
+        <table class="ds-table" data-od-id="tasks-table">
+          <thead><tr>
+            <th style="width:90px">任务 ID</th>
+            <th style="width:110px">评测类型</th>
+            <th style="width:110px">当前状态</th>
+            <th>执行进度 / 指标</th>
+            <th>关联资产 / 目标</th>
+            <th style="width:100px">创建者</th>
+            <th style="width:120px">创建时间</th>
+            <th style="width:210px;text-align:right">操作</th>
+          </tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+        <div class="empty" id="empty" style="display:none">
+          <span class="empty-ico"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 9h8M8 13h5"/></svg></span>
+          <div style="font-weight:600;margin-bottom:4px">暂无符合条件的任务</div>
+          <div class="small tertiary mb12">可点击上方「+ 发起评测」或「智能编排」快速创建测试任务</div>
+          <button class="btn btn-sign btn-sm" id="empty-create">+ 立即发起评测</button>
+        </div>
+      </div>
+    </div>`;
+
+  const $ = id => document.getElementById(id);
+
+  /* ─── 1. 进度列渲染 ─── */
+  function progressCell(t) {
+    if (t.status === 'running' && t.progress) {
+      const pct = t.progress.percent != null ? t.progress.percent : Math.round(t.progress.done / t.progress.total * 100);
+      return `<div class="row" style="gap:8px;min-width:140px">
+        <div class="progress-bar" style="width:90px"><i style="width:${pct}%"></i></div>
+        <span class="num small">${t.progress.done}/${t.progress.total}</span></div>
+        ${t.kind === 'stress' ? '<div class="small tertiary mono">QPS 118 · P99 890ms</div>' : ''}`;
+    }
+    if (t.need_approval) return '<span class="small" style="color:var(--accent-warning)">等待会签审批</span>';
+    if (t.status === 'awaiting_case_confirm') return '<span class="small" style="color:var(--accent-warning);font-weight:600">待入库确认 (剩 70h)</span>';
+    return `<span class="small tertiary">${AE.esc(t.progress ? t.progress.message : '—')}</span>`;
+  }
+
+  function canCancel(t) {
+    return !['succeeded', 'failed', 'cancelled'].includes(t.status);
+  }
+
+  /* ─── 2. 状态分布分段条 + 24h 吞吐面积图 ─── */
+  const ST_COLOR = { queued: '#9CA3AF', running: '#4F46E5', awaiting_case_confirm: '#F59E0B', succeeded: '#10B981', failed: '#EF4444', cancelled: '#6B7280' };
+  function renderOverview(tasks) {
+    const sts = Object.keys(AE.STATUS);
+    const counts = sts.map(s => tasks.filter(t => t.status === s).length);
+    const total = counts.reduce((a, b) => a + b, 0) || 1;
+    
+    $('tp-dist').innerHTML = sts.map((s, i) =>
+      `<i style="width:${counts[i] / total * 100}%;background:${ST_COLOR[s]}" title="${AE.STATUS[s].label} ${counts[i]}"></i>`).join('');
+    
+    $('tp-legend').innerHTML = sts.map((s, i) =>
+      `<span style="cursor:pointer" data-st="${s}"><i style="background:${ST_COLOR[s]}"></i>${AE.STATUS[s].label} <b class="num">${counts[i]}</b></span>`).join('');
+    
+    document.querySelectorAll('#tp-legend [data-st]').forEach(el => el.onclick = () => {
+      filterStatus = filterStatus === el.dataset.st ? '' : el.dataset.st;
+      $('f-status').value = filterStatus;
+      render();
+    });
+
+    const HS = [2, 1, 3, 2, 4, 6, 5, 8, 7, 9, 6, 10, 8, 11, 9, 12, 7, 9, 10, 8, 12, 14, 11, 13];
+    const W = 230, HH = 60, P = 2, max = Math.max.apply(null, HS);
+    const X = i => P + i * (W - 2 * P) / (HS.length - 1);
+    const Y = v => HH - P - v / max * (HH - 2 * P - 8);
+    const line = HS.map((v, i) => X(i).toFixed(1) + ',' + Y(v).toFixed(1)).join(' ');
+    
+    $('tp-area').innerHTML =
+      `<polygon points="${P},${HH - P} ${line} ${X(HS.length - 1).toFixed(1)},${HH - P}" fill="var(--c-tasks)" fill-opacity=".12"/>` +
+      `<polyline points="${line}" fill="none" stroke="var(--c-tasks)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>`;
+  }
+
+  /* ─── 3. 核心表格渲染与 API 联动 ─── */
+  async function render() {
+    const res = await AE.API.tasks.list({ status: filterStatus, kind: filterKind });
+    const allTasks = res.items || [];
+    renderOverview(allTasks);
+
+    const mode = AE.getMode();
+    let rows = allTasks.filter(t =>
+      (!filterStatus || t.status === filterStatus) &&
+      (!filterKind || t.kind === filterKind) &&
+      (!searchKw || t.id.includes(searchKw) || (t.ref && t.ref.includes(searchKw)) || t.creator.includes(searchKw))
+    );
+
+    const hidden = rows.filter(t => !AE.modeMatch(t.kind)).length;
+    rows = rows.filter(t => AE.modeMatch(t.kind));
+
+    const note = $('mode-note');
+    note.textContent = (mode === 'rag' ? 'RAG 模式' : '大模型模式') + (hidden ? ` · 已隐藏 ${hidden} 个他域任务` : ' · 全量视图');
+    note.style.color = mode === 'rag' ? 'var(--c-kb)' : 'var(--c-datasets)';
+    note.style.borderColor = mode === 'rag' ? 'var(--t-kb)' : 'var(--t-datasets)';
+
+    const tbody = $('rows');
+    $('empty').style.display = rows.length ? 'none' : '';
+    
+    tbody.innerHTML = rows.map(t => `
+      <tr data-tid="${t.id}">
+        <td class="num-col mono" style="font-weight:600">${t.id}</td>
+        <td>
+          <div class="row" style="gap:4px">
+            ${AE.kindTag(t.kind)}
+            ${t.with_stress || t.child_stress_task_id ? '<span class="cascade-tag" title="已配置先评后压">先评后压</span>' : ''}
+          </div>
+        </td>
+        <td>${AE.statusBadge(t.status)}</td>
+        <td>${progressCell(t)}</td>
+        <td class="small" style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${AE.esc(t.ref || '—')}</td>
+        <td class="small">${AE.esc(t.creator)}</td>
+        <td class="small tertiary mono">${AE.relTime(t.created_at)}</td>
+        <td style="text-align:right">
+          <div class="row-actions" style="justify-content:flex-end">
+            <button class="link-btn" data-act="detail">详情</button>
+            ${canCancel(t) ? '<button class="link-btn danger" data-act="cancel">取消</button>' : ''}
+            ${['succeeded', 'failed', 'cancelled'].includes(t.status) ? '<button class="link-btn" data-act="rerun">复制为新任务</button>' : ''}
+            ${t.report_id ? `<a class="link-btn" href="report.html?id=${t.report_id}" style="color:var(--accent-ai);font-weight:600">查看报告</a>` : ''}
+          </div>
+        </td>
+      </tr>`).join('');
+
+    tbody.querySelectorAll('tr').forEach(tr => {
+      const t = allTasks.find(x => x.id === tr.dataset.tid);
+      if (!t) return;
+      tr.querySelectorAll('[data-act]').forEach(btn => {
+        btn.onclick = () => {
+          const act = btn.dataset.act;
+          if (act === 'detail') openDetail(t);
+          else if (act === 'cancel') cancelTask(t);
+          else if (act === 'rerun') rerunTask(t);
+        };
+      });
+    });
+  }
+
+  /* ─── 4. 取消任务按 kind 严格分流 ─── */
+  function cancelTask(t) {
+    if (t.kind === 'stress') {
+      AE.dialog({
+        title: '立即停止发压？',
+        body: `压测任务 <span class="mono">${t.id}</span> 正在对目标发压，确认后<strong>立即切断连接</strong>并停止发压。`,
+        okText: '立即停止发压', okClass: 'btn-danger',
+        onOk: async () => {
+          await AE.API.tasks.cancel(t.id, '用户手动终止发压');
+          t.status = 'cancelled';
+          if (t.progress) t.progress.message = '已立即停止发压';
+          render();
+          AE.toast('success', '压测任务已立即终止');
+        }
+      });
+    } else {
+      AE.dialog({
+        title: '取消评测任务？',
+        body: `任务 <span class="mono">${t.id}</span> 将在<strong>当前样本推理完成后</strong>安全停止，已完成的评测得分与报文将完整保留。`,
+        okText: '确认取消', okClass: 'btn-danger',
+        onOk: async () => {
+          await AE.API.tasks.cancel(t.id, '用户取消评测');
+          t.status = 'cancelled';
+          if (t.progress) t.progress.message = '已被用户安全取消';
+          render();
+          AE.toast('success', '任务已安全取消');
+        }
+      });
+    }
+  }
+
+  /* ─── 5. 复制为新任务 (Rerun) ─── */
+  async function rerunTask(t) {
+    await AE.API.tasks.rerun(t.id);
+    AE.toast('success', `已成功复制任务并重新入队（queued）`);
+    render();
+  }
+
+  /* ─── 6. 任务详情抽屉 (Task Detail Drawer) ─── */
+  async function openDetail(t) {
+    const events = [
+      { at: '12:01:02', level: 'info', message: '任务创建成功并进入调度队列（queued）' },
+      { at: '12:01:08', level: 'info', message: '调度器分配至 Worker 节点 worker-01（running）' },
+      { at: '12:03:41', level: 'info', message: t.progress ? t.progress.message : '样本评测执行中' },
+      t.status === 'succeeded' ? { at: '12:08:15', level: 'ok', message: '评测任务执行完毕，得分与报告已持久化落库' } : null,
+      t.status === 'failed' ? { at: '12:05:52', level: 'err', message: 'UPSTREAM 502：被测协议档网关异常' } : null,
+      t.need_approval ? { at: '12:02:00', level: 'err', message: 'NEED_APPROVAL：生产环境压测等待双人会签' } : null
+    ].filter(Boolean);
+
+    const config = {
+      id: t.id,
+      kind: t.kind,
+      creator: t.creator,
+      created_at: t.created_at,
+      profile_ids: t.kind === 'benchmark' ? ['p-gpt', 'p-claude'] : undefined,
+      dataset_id: t.kind === 'benchmark' ? 'ds-smoke' : undefined,
+      kb_id: t.kind === 'rag' ? 'kb-default' : undefined,
+      parent_task_id: t.parent_task_id || undefined,
+      with_stress: Boolean(t.with_stress),
+      run: { sample_size: 1000, concurrency: 4, timeout_s: 60, retry: 1, temperature: 0, max_tokens: 1024 }
+    };
+
+    AE.drawer({
+      title: `任务详情 · ${t.id}`,
+      wide: true,
+      body: `
+        <div class="row-between mb16">
+          <div class="row" style="gap:8px">
+            ${AE.kindTag(t.kind)}
+            ${AE.statusBadge(t.status)}
+            ${t.with_stress ? '<span class="cascade-tag">先评后压</span>' : ''}
+          </div>
+          <span class="small tertiary mono">${t.id}</span>
+        </div>
+
+        <div class="cc-grid mb16">
+          <div class="cc-item"><div class="cc-key">创建者</div><div class="cc-val">${AE.esc(t.creator)}</div></div>
+          <div class="cc-item"><div class="cc-key">创建时间</div><div class="cc-val mono small">${t.created_at}</div></div>
+          <div class="cc-item"><div class="cc-key">关联资产</div><div class="cc-val small">${AE.esc(t.ref || '—')}</div></div>
+          <div class="cc-item"><div class="cc-key">进度状态</div><div class="cc-val small">${progressCell(t)}</div></div>
+        </div>
+
+        <div class="td-label small tertiary mono" style="letter-spacing:.1em;margin-bottom:6px">TaskSpec 配置快照（只读）</div>
+        <pre class="code mb16">${AE.esc(JSON.stringify(config, null, 2))}</pre>
+
+        <div class="td-label small tertiary mono" style="letter-spacing:.1em;margin-bottom:10px">执行事件时间线</div>
+        <div class="timeline">${events.map(e => `<div class="tl-item ${e.level}"><div class="tl-time">${e.at}</div>${AE.esc(e.message)}</div>`).join('')}</div>`,
+      foot: `
+        ${t.report_id ? `<a class="btn btn-sign btn-sm" href="report.html?id=${t.report_id}">查看完整评测报告</a>` : ''}
+        ${canCancel(t) ? '<button class="btn btn-danger btn-sm" data-d="cancel">取消任务</button>' : ''}
+        ${['succeeded', 'failed', 'cancelled'].includes(t.status) ? '<button class="btn btn-secondary btn-sm" data-d="rerun">复制为新任务</button>' : ''}`,
+      onMount: (el, close) => {
+        const c = el.querySelector('[data-d=cancel]');
+        if (c) c.onclick = () => { close(); cancelTask(t); };
+        const r = el.querySelector('[data-d=rerun]');
+        if (r) r.onclick = () => { close(); rerunTask(t); };
+      }
+    });
+  }
+
+  /* ─── 7. 手动发起评测弹窗 (Create Task Modal · 动态加载协议档与数据集) ─── */
+  async function openCreateTaskModal() {
+    const isRag = AE.getMode() === 'rag';
+    let profiles = [], datasets = [], kbs = [];
+    try {
+      const [pRes, dRes, kRes] = await Promise.all([
+        AE.API.profiles.list(),
+        AE.API.datasets.list(),
+        AE.API.kb.list()
+      ]);
+      profiles = (pRes && pRes.items) || AE.DB.profiles;
+      datasets = (dRes && dRes.items) || AE.DB.datasets;
+      kbs = (kRes && kRes.items) || AE.DB.kbs;
+    } catch (e) {
+      profiles = AE.DB.profiles;
+      datasets = AE.DB.datasets;
+      kbs = AE.DB.kbs;
+    }
+
+    const targetProfiles = profiles.filter(p => p.usages && p.usages.includes('target'));
+
+    AE.modal({
+      title: '发起新评测任务 (POST /api/tasks)',
+      wide: true,
+      body: `
+        <div class="form-row mb12">
+          <div class="field">
+            <span class="field-label">评测类型 (Kind) <i class="req">*</i></span>
+            <select class="select" id="nt-kind">
+              <option value="benchmark" ${!isRag ? 'selected' : ''}>Benchmark 基准评测</option>
+              <option value="rag" ${isRag ? 'selected' : ''}>RAG 检索质量评测</option>
+              <option value="testcase">用例智能生成</option>
+              <option value="stress">独立发压测试</option>
+            </select>
+          </div>
+          <div class="field">
+            <span class="field-label">并发并发数 (Concurrency)</span>
+            <input class="input num" id="nt-concurrency" type="number" value="4" min="1" max="16">
+          </div>
+        </div>
+
+        <div class="field mb12" id="box-profiles">
+          <span class="field-label">被测协议档 (可多选，1-5个) <i class="req">*</i></span>
+          <div class="row wrap" style="gap:8px" id="nt-profiles-chips">
+            ${targetProfiles.map((p, i) => `
+              <label class="tag-soft" style="cursor:pointer">
+                <input type="checkbox" value="${p.id}" ${i < 2 ? 'checked' : ''}> ${AE.esc(p.name)} (${AE.esc(p.model)})
+              </label>`).join('')}
+          </div>
+        </div>
+
+        <div class="field mb12" id="box-dataset">
+          <span class="field-label">评测数据集 / 知识库 <i class="req">*</i></span>
+          <select class="select" id="nt-dataset">
+            ${isRag
+              ? kbs.map(k => `<option value="${k.id}">${AE.esc(k.name)} (${k.kind === 'lightrag' ? 'LightRAG' : '外部 Chat'})</option>`).join('')
+              : datasets.map(d => `<option value="${d.id}">${AE.esc(d.name)} (v${d.version} · ${d.row_count}条 · ${d.main_metric || 'contain'})</option>`).join('')
+            }
+          </select>
+        </div>
+
+        <div class="field mb12">
+          <label class="row" style="gap:8px;cursor:pointer;user-select:none">
+            <input type="checkbox" id="nt-stress" ${!isRag ? 'checked' : ''}>
+            <span style="font-weight:600">先评后压：质量任务成功后，自动对相同接口追加发压 (10 QPS / 2min)</span>
+          </label>
+        </div>`,
+      foot: `<button class="btn btn-secondary" id="nt-c">取消</button><button class="btn btn-sign" id="nt-ok">确认下单入队</button>`,
+      onMount: (el, close) => {
+        el.querySelector('#nt-c').onclick = close;
+        el.querySelector('#nt-kind').onchange = (e) => {
+          const k = e.target.value;
+          const dsSel = el.querySelector('#nt-dataset');
+          if (k === 'rag') {
+            dsSel.innerHTML = kbs.map(kb => `<option value="${kb.id}">${AE.esc(kb.name)} (${kb.kind === 'lightrag' ? 'LightRAG' : '外部 Chat'})</option>`).join('');
+          } else {
+            dsSel.innerHTML = datasets.map(d => `<option value="${d.id}">${AE.esc(d.name)} (v${d.version} · ${d.row_count}条 · ${d.main_metric || 'contain'})</option>`).join('');
+          }
+        };
+        el.querySelector('#nt-ok').onclick = async () => {
+          const kind = el.querySelector('#nt-kind').value;
+          const concurrency = +el.querySelector('#nt-concurrency').value || 4;
+          const dataset_id = el.querySelector('#nt-dataset').value;
+          const with_stress = el.querySelector('#nt-stress').checked;
+          const selectedProfiles = Array.from(el.querySelectorAll('#nt-profiles-chips input:checked')).map(x => x.value);
+
+          const taskSpec = {
+            kind,
+            profile_ids: kind === 'benchmark' ? selectedProfiles : undefined,
+            dataset_id: kind === 'benchmark' ? dataset_id : undefined,
+            kb_id: kind === 'rag' ? dataset_id : undefined,
+            with_stress,
+            run: { sample_size: 1000, concurrency, timeout_s: 60, retry: 1, temperature: 0, max_tokens: 1024 }
+          };
+
+          await AE.API.tasks.create(taskSpec);
+          close();
+          AE.toast('success', '评测任务已成功创建并进入调度队列（queued）');
+          render();
+        };
+      }
+    });
+  }
+
+  $('btn-create-task').onclick = openCreateTaskModal;
+  const emptyCreate = $('empty-create');
+  if (emptyCreate) emptyCreate.onclick = openCreateTaskModal;
+
+  /* ─── 8. AI 智能编排 (AI Planner) ─── */
+  $('btn-ai-plan').onclick = () => {
+    const isRag = AE.getMode() === 'rag';
+    const defaultGoal = isRag
+      ? '评估 default 知识库在 qa-v1 上的检索质量，对比 4 种检索模式，达标后自动压测 query 接口'
+      : '对比 gpt-test 与 claude-x 在 smoke-20 v3 上的 contain，质量达标后自动压测';
+    
+    AE.drawer({
+      title: isRag ? '智能编排 · RAG 评测任务' : '智能编排 · 大模型评测任务',
+      wide: true,
+      body: `
+        <div class="field"><span class="field-label">用一句话描述测试目标 <i class="req">*</i></span>
+          <textarea class="textarea" id="ap-goal" rows="2" placeholder="${isRag ? '如：评估 default 库在 qa-v1 上的检索质量' : '如：对比 gpt-test 与 claude-x 在 smoke-20 上的表现'}">${defaultGoal}</textarea></div>
+        <div class="row" style="justify-content:flex-end;margin-bottom:14px">
+          <button class="btn btn-ai btn-sm" id="ap-gen">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4Z"/></svg>
+            生成编排方案
+          </button>
+        </div>
+        <div id="ap-out"></div>`,
+      foot: `<button class="btn btn-secondary" data-d="cancel">取消</button><button class="btn btn-sign" data-d="ok" disabled>采纳并创建任务</button>`,
+      onMount: (el, close) => {
+        el.querySelector('[data-d=cancel]').onclick = close;
+        el.querySelector('#ap-gen').onclick = () => {
+          const goal = el.querySelector('#ap-goal').value.trim();
+          if (!goal) { AE.toast('error', '请先描述测试目标'); return; }
+          const out = el.querySelector('#ap-out');
+          const steps = isRag ? [
+            `<span class="ai-badge"><i class="ai-dot"></i>RAG 评测编排方案</span>`,
+            `解析目标：识别为 <b>rag + 级联 stress</b>（先评后压）`,
+            `知识库对象：default 库（LightRAG 原生 query API）`,
+            `黄金问答集：qa-v1 v2 · 20 条（主指标 Hit Rate@5 / MRR）`,
+            `检索模式组合：hybrid · local · global · naive（4 模式横向对比 · K=5）`,
+            `级联策略：Hit Rate@5 ≥ 0.75 自动入队 query 压测（env=test · 20 QPS · 2min），否则仅出评测报告`
+          ] : [
+            `<span class="ai-badge"><i class="ai-dot"></i>大模型评测编排方案</span>`,
+            `解析目标：识别为 <b>benchmark + 级联 stress</b>（先评后压）`,
+            `被测协议档：gpt-test · claude-x（2 个，均为「被测」用途）`,
+            `数据集：smoke-20 v3 · 20 行 · 主指标 contain`,
+            `运行参数：sample_size=1000 · concurrency=4 · temperature=0 · max_usd=5`,
+            `级联策略：contain ≥ 0.80 自动入队压测（env=test · 10 QPS · 2min），否则仅出报告`
+          ];
+          out.innerHTML = `<div class="ai-card"><div class="ai-card-head">${steps[0]}<span class="small tertiary mono">task.create · 与确认卡同一 schema</span></div><div id="ap-lines" class="section-gap" style="gap:7px"></div></div>`;
+          const box = out.querySelector('#ap-lines');
+          steps.slice(1).forEach((s, i) => {
+            setTimeout(() => {
+              box.insertAdjacentHTML('beforeend', `<div class="ai-gen-line small" style="color:var(--text-secondary)">· ${s}</div>`);
+              if (i === steps.length - 2) el.querySelector('[data-d=ok]').disabled = false;
+            }, 200 * (i + 1));
+          });
+        };
+        el.querySelector('[data-d=ok]').onclick = async () => {
+          const taskSpec = {
+            kind: isRag ? 'rag' : 'benchmark',
+            dataset_id: isRag ? 'kb-default' : 'ds-smoke',
+            with_stress: true,
+            run: { sample_size: 1000, concurrency: 4, timeout_s: 60, retry: 1, temperature: 0, max_tokens: 1024 }
+          };
+          await AE.API.tasks.create(taskSpec);
+          close();
+          AE.toast('success', '任务已创建（queued），编排方案已成功转为 TaskSpec');
+          render();
+        };
+      }
+    });
+  };
+
+  /* ─── 9. AI 巡检诊断 ─── */
+  const INSIGHTS = [
+    {
+      text: '2 个失败任务（t-9c21、g7b3d5）的 UPSTREAM 错误均指向协议档「rag-客服外挂」401，疑似 Key 失效。',
+      action: '<a class="link-btn" href="admin-profiles.html" style="font-size:12px">去协议档做连通性检查 →</a>'
+    },
+    {
+      text: '「smoke-20 v3」近 3 次评测 contain 连续下滑（0.86 → 0.81），退化集中在长上下文样本。',
+      action: '<a class="link-btn" href="report.html?id=r-bm-1" style="font-size:12px">查看最近报告 →</a>'
+    },
+    {
+      text: '调度队列中有 1 个 prod 压测等待会签已 42 分钟，超过历史均值（12 分钟）。',
+      action: '<a class="link-btn" href="dispatch.html" style="font-size:12px">去调度中心查看 →</a>'
+    }
+  ];
+  let insightIdx = 0;
+  function renderInsight() {
+    const it = INSIGHTS[insightIdx % INSIGHTS.length];
+    $('insight-body').innerHTML =
+      `<div class="ai-gen-line small" style="color:var(--text-secondary)">${it.text}</div>
+       <div class="mt8">${it.action}</div>`;
+  }
+  $('insight-refresh').onclick = () => { insightIdx++; renderInsight(); };
+  renderInsight();
+
+  /* ─── 10. 交互筛选与全局模式广播监听 ─── */
+  $('f-status').onchange = e => { filterStatus = e.target.value; render(); };
+  $('f-kind').onchange = e => { filterKind = e.target.value; render(); };
+  $('search-kw').oninput = e => { searchKw = e.target.value.trim(); render(); };
+  window.addEventListener('ae:mode', render);
+
+  $('refresh').onclick = () => {
+    const tbody = $('rows');
+    tbody.innerHTML = Array.from({ length: 4 }).map(() =>
+      `<tr>${'<td><div class="skl" style="height:14px;margin:8px 0"></div></td>'.repeat(8)}</tr>`).join('');
+    setTimeout(() => { render(); AE.toast('info', '任务列表已刷新'); }, 350);
+  };
+
+  render();
+})();
+</script>
+</body>
+</html>

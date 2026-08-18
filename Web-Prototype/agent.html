@@ -1,0 +1,1196 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>智能体 · AI 测试与评估平台</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/shell.css">
+</head>
+<body>
+<div class="app" id="app"></div>
+
+<script src="assets/app.js"></script>
+<script src="assets/api.js"></script>
+<script>
+(function () {
+  const content = AE.renderShell('agent', '智能体', { flush: true, agentDot: 'running' });
+  const MODEL = AE.agentModel();
+
+  /* ─── 布局 ─── */
+  content.innerHTML = `
+    <div class="agent-layout" id="agent-layout">
+      <aside class="session-list" data-od-id="session-list">
+        <div class="session-list-head"><button class="btn btn-secondary" id="new-session" style="width:100%">+ 新建会话</button></div>
+        <div class="session-items" id="session-items"></div>
+      </aside>
+      <div class="chat-main">
+        <div class="chat-head" data-od-id="chat-head">
+          <button class="composer-btn" id="toggle-list" title="折叠会话列表" style="width:30px;height:30px;flex-basis:30px;border-radius:8px"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h10M4 18h16"/></svg></button>
+          <span class="chat-head-title" id="chat-title">新会话</span>
+          <span class="chat-head-model">Agent · ${AE.esc(MODEL)}</span>
+          <span class="gen-pill" id="gen-pill" style="display:none"><i class="bdot"></i>生成中</span>
+          <span class="grow"></span>
+          <button class="btn btn-ghost btn-sm" id="rail-toggle" data-od-id="rail-toggle">调度视图</button>
+          <button class="btn btn-ghost btn-sm" id="fail-demo" data-od-id="fail-demo">模拟失败</button>
+          <button class="btn btn-ghost btn-sm" id="ws-toggle">模拟断线</button>
+        </div>
+        <div class="info-strip" id="ws-strip" style="display:none">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><circle cx="12" cy="7.6" r=".4" fill="currentColor"/></svg>
+          已断线，正在重连（重连后按 last_event_id 补发）…
+        </div>
+        <div class="chat-scroll" id="chat-scroll"><div class="chat-col" id="chat-col"></div><div class="jump-wrap"><button class="jump-bottom" id="jump-bottom" data-od-id="jump-bottom"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12l7 7 7-7"/></svg>回到底部</button></div></div>
+        <div class="progress-dock" id="progress-dock" style="display:none" data-od-id="progress-dock"></div>
+        <div class="composer" data-od-id="composer">
+          <div class="quick-chips" id="quick-chips">
+            <button class="chip" data-say="帮我把这份 PRD 生成测试用例">生成用例</button>
+            <button class="chip" data-say="对比一下 gpt-test 和 claude-x 在 smoke-20 上的表现">基准评测</button>
+            <button class="chip" data-say="评估 default 知识库的检索质量">RAG 评测</button>
+            <button class="chip" data-say="跑完基准评测后自动加压测">先评后压</button>
+          </div>
+          <div id="attach-stage" style="max-width:760px;margin:0 auto 8px;display:none;gap:8px;flex-wrap:wrap"></div>
+          <div class="composer-inner">
+            <button class="composer-btn" id="attach-btn" title="添加附件（≤20MB）"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m21 11.5-8.2 8.2a5.5 5.5 0 0 1-7.8-7.8l8.5-8.5a3.7 3.7 0 0 1 5.2 5.2l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.8-7.8"/></svg></button>
+            <input type="file" id="attach-input" hidden accept=".md,.txt,.html,.pdf,.json,.yaml,.yml,.xlsx,.xls,.csv,.jsonl">
+            <textarea id="composer-text" rows="1" placeholder="说明要评什么（模型 / RAG / 生成用例），我会澄清后给你确认卡。"></textarea>
+            <span class="composer-model">Agent · ${AE.esc(MODEL)}</span>
+            <button class="send-btn" id="send-btn" title="发送" disabled><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
+          </div>
+        </div>
+      </div>
+      <aside class="dispatch-rail" data-od-id="dispatch-rail">
+        <div class="rail-head">
+          <div class="row-between">
+            <span style="font-size:13px;font-weight:600">调度视图</span>
+            <a class="link-btn" href="dispatch.html" data-od-id="rail-open-dispatch">打开调度中心</a>
+          </div>
+          <div class="small tertiary" style="margin-top:4px">当前会话任务的实时分配</div>
+        </div>
+        <div class="rail-body">
+          <div>
+            <div class="rail-label">运行中任务</div>
+            <div id="rail-task"></div>
+          </div>
+          <div>
+            <div class="rail-label">分配节点</div>
+            <div style="display:flex;flex-direction:column;gap:8px" id="rail-nodes"></div>
+          </div>
+          <div>
+            <div class="rail-label">调度日志</div>
+            <div class="log-stream" id="rail-log"></div>
+          </div>
+        </div>
+      </aside>
+    </div>`;
+
+  const col = document.getElementById('chat-col');
+  const scrollBox = document.getElementById('chat-scroll');
+  const dock = document.getElementById('progress-dock');
+  const genPill = document.getElementById('gen-pill');
+  const wsStrip = document.getElementById('ws-strip');
+  const textEl = document.getElementById('composer-text');
+  const sendBtn = document.getElementById('send-btn');
+  const attachStage = document.getElementById('attach-stage');
+
+  /* 滚动锚定：贴底时跟随新消息；用户上翻阅读时不打断，显示「回到底部」 */
+  const jumpBtn = document.getElementById('jump-bottom');
+  let stick = true;
+  function scrollDown(force) { if (force || stick) scrollBox.scrollTop = scrollBox.scrollHeight; }
+  scrollBox.addEventListener('scroll', () => {
+    stick = scrollBox.scrollHeight - scrollBox.scrollTop - scrollBox.clientHeight < 72;
+    jumpBtn.classList.toggle('show', !stick && scrollBox.scrollHeight > scrollBox.clientHeight + 40);
+  });
+  jumpBtn.onclick = () => { scrollBox.scrollTop = scrollBox.scrollHeight; };
+
+  /* ─── 内嵌迷你调度视图（与 dispatch.html 同一数据语言） ─── */
+  const layoutEl = document.getElementById('agent-layout');
+  const railToggle = document.getElementById('rail-toggle');
+  const railTask = document.getElementById('rail-task');
+  const railNodes = document.getElementById('rail-nodes');
+  const railLog = document.getElementById('rail-log');
+  const RAIL_WORKERS = [
+    { id: 'agent-01', load: 62 },
+    { id: 'agent-06', load: 18 },
+    { id: 'agent-10', load: 9 }
+  ];
+  let railSeeded = false;
+  function railLogLine(kind, html) {
+    const el = document.createElement('div');
+    el.className = 'log-line';
+    el.innerHTML = `<span class="lt">${new Date().toTimeString().slice(0, 8)}</span><span class="lk">${kind}</span><span class="lr">${html}</span>`;
+    railLog.prepend(el);
+    while (railLog.children.length > 12) railLog.lastChild.remove();
+  }
+  function renderRailNodes() {
+    railNodes.innerHTML = RAIL_WORKERS.map(w => `
+      <div class="agent-node ${w.load > 30 ? 'busy' : ''}">
+        <div class="an-head"><span class="an-name">${w.id}</span><span class="an-state ${w.load > 30 ? 'busy' : 'idle'}">${w.load > 30 ? 'BUSY' : 'IDLE'}</span></div>
+        <div class="load-track ${w.load >= 80 ? 'hot' : ''}"><i style="width:${w.load}%"></i></div>
+      </div>`).join('');
+  }
+  function renderRailTask() {
+    railTask.innerHTML = dockTask
+      ? `<div class="queue-item assigning">${AE.kindTag(dockTask.kind)}<div class="small" style="margin-top:4px">a1f3c2 · ${dockTask.kind === 'stress' ? 'go-stress-testing' : 'smoke-20 v3'} · 运行中</div></div>`
+      : '<p class="small tertiary" style="margin:0">当前会话没有运行中的任务</p>';
+  }
+  function setRail(open) {
+    layoutEl.classList.toggle('with-rail', open);
+    railToggle.classList.toggle('btn-secondary', open);
+    railToggle.classList.toggle('btn-ghost', !open);
+    if (open && !railSeeded && AE.API.isMock()) {
+      railSeeded = true;
+      renderRailNodes(); renderRailTask();
+      railLogLine('ENQUEUE', '<span class="la">a1f3c2</span> smoke-20 v3 · 5 shards');
+      railLogLine('ASSIGN', 'shard 2/5 → <span class="la">agent-01</span> · 84ms');
+    }
+  }
+  railToggle.onclick = () => setRail(!layoutEl.classList.contains('with-rail'));
+  /* 调度心跳：rail 展开时推进节点负载；有运行中任务时追加日志 */
+  setInterval(() => {
+    if (!AE.API.isMock()) return;
+    if (!layoutEl.classList.contains('with-rail')) return;
+    const w = RAIL_WORKERS[Math.floor(Math.random() * RAIL_WORKERS.length)];
+    w.load = Math.max(6, Math.min(94, w.load + (Math.random() < .5 ? -1 : 1) * (4 + Math.round(Math.random() * 10))));
+    renderRailNodes(); renderRailTask();
+    if (dockTask && Math.random() < .4) railLogLine('TICK', `${w.id} 负载 ${w.load}% · 心跳正常`);
+  }, 2800);
+
+  /* ─── 会话列表（实时 API；Mock 仅由 ?data=mock 显式启用） ─── */
+  let sessions = [];
+  let activeSession = null;
+
+  async function loadSessionsList() {
+    try {
+      const res = await AE.API.agent.getSessions();
+      sessions = (res && res.items) || [];
+    } catch (e) {
+      sessions = [];
+      AE.toast('error', `会话加载失败：${e.message}`);
+    }
+    if (!activeSession && sessions.length) activeSession = sessions[0].id;
+    renderSessions();
+  }
+
+  function renderSessions() {
+    document.getElementById('session-items').innerHTML = sessions.map(s => `
+      <div class="session-item ${s.id === activeSession ? 'active' : ''}" data-sid="${s.id}">
+        <div class="session-title">
+          <span>${AE.esc(s.title)}</span>
+          ${s.dot ? `<i class="nav-dot ${s.dot}"></i>` : ''}
+        </div>
+        <div class="row-between" style="margin-top:2px">
+          <span class="session-time">${s.time || AE.relTime(s.created_at)}</span>
+        </div>
+      </div>`).join('');
+
+    document.querySelectorAll('.session-item').forEach(el => {
+      el.onclick = (e) => {
+        activeSession = el.dataset.sid;
+        renderSessions();
+        loadSession(activeSession);
+      };
+    });
+
+  }
+
+  document.getElementById('new-session').onclick = async () => {
+    const draft = { title: '新会话' };
+    let created;
+    try {
+      created = await AE.API.agent.createSession(draft);
+    } catch (e) {
+      AE.toast('error', `创建会话失败：${e.message}`);
+      return;
+    }
+    const session = { ...draft, ...(created || {}) };
+    if (!session.id) {
+      AE.toast('error', '创建会话失败：API 未返回 session id');
+      return;
+    }
+    sessions.unshift(session);
+    activeSession = session.id;
+    renderSessions();
+    loadSession(session.id);
+  };
+  document.getElementById('toggle-list').onclick = () => document.getElementById('agent-layout').classList.toggle('no-list');
+
+  /* ─── 事件调度（模拟 WS：event_id 单调递增，断线时入队补发） ─── */
+  let eventId = 0;
+  let online = true;
+  let queue = [];
+  let timers = [];
+  function later(ms, fn) { const t = setTimeout(fn, ms); timers.push(t); return t; }
+  function clearTimers() { timers.forEach(clearTimeout); timers = []; }
+  function emit(fn) {
+    eventId++;
+    if (!online) { queue.push(fn); return; }
+    fn(); scrollDown();
+  }
+  document.getElementById('ws-toggle').onclick = function () {
+    if (!AE.API.isMock()) {
+      if (agentSocket) agentSocket.close();
+      this.textContent = '正在重连…';
+      openAgentSocket().then(() => {
+        this.textContent = '重连 Agent';
+        wsStrip.style.display = 'none';
+        AE.toast('success', `已重连，last_event_id=${lastAgentEventId}`);
+      }).catch(e => {
+        this.textContent = '重连 Agent';
+        wsStrip.style.display = '';
+        AE.toast('error', e.message);
+      });
+      return;
+    }
+    if (online) {
+      online = false;
+      this.textContent = '恢复连接';
+      wsStrip.style.display = '';
+      AE.toast('info', '正在重连会话…');
+    } else {
+      online = true;
+      this.textContent = '模拟断线';
+      wsStrip.style.display = 'none';
+      const n = queue.length;
+      const fns = queue.splice(0);
+      fns.forEach(fn => { fn(); });
+      scrollDown();
+      AE.toast('success', n > 0 ? `已重连，按 last_event_id 补发 ${n} 条事件` : '已重连，无遗漏事件');
+    }
+  };
+
+  /* 模拟失败：演示 tool 失败态 + 错误条 + 恢复建议（UPSTREAM 502，任务未入队） */
+  document.getElementById('fail-demo').onclick = () => {
+    if (generating) return;
+    const w = col.querySelector('.welcome'); if (w) w.remove();
+    quickChips.style.display = '';
+    addUser('对比一下 gpt-test 和 claude-x 在 smoke-20 上的表现');
+    setGenerating(true);
+    const th = addThought('目标明确：Benchmark 对比。直接创建任务…');
+    scrollDown(true);
+    later(800, () => emit(() => {
+      finishThought(th);
+      const t1 = addToolCard('task.create', { kind: 'benchmark', profile_ids: ['p-gpt', 'p-claude'], dataset_id: 'ds-smoke' });
+      later(900, () => emit(() => {
+        resolveToolCard(t1, false, 'UPSTREAM 502: bad gateway（gpt-test）');
+        addErrorStrip('UPSTREAM', '被测协议档 gpt-test 返回 502，任务未入队');
+        setGenerating(false);
+        addAgentText('<p>创建失败：<b>UPSTREAM 502</b>（gpt-test 网关错误），与模型能力无关。建议先到「协议档」页对 gpt-test 做连通性检查，恢复后重新发送目标即可。</p>');
+        scrollDown();
+      }));
+    }));
+  };
+
+  /* ─── 消息渲染组件 ─── */
+  function addUser(text, attachments) {
+    const div = document.createElement('div');
+    div.className = 'msg-user';
+    div.innerHTML = `<div class="bubble-user">${AE.esc(text)}</div>` +
+      (attachments && attachments.length ? attachments.map(a => `<span class="attach-chip"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 3h9l4 4v14H6Z"/><path d="M14 3v5h5"/></svg>${AE.esc(a.name)}<span class="mono">${a.size}</span></span>`).join('') : '');
+    col.appendChild(div);
+  }
+  function addAgentText(html) {
+    const div = document.createElement('div');
+    div.className = 'msg-agent';
+    div.innerHTML = html;
+    col.appendChild(div);
+    return div;
+  }
+  const REDUCED = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  function addThought(text, done) {
+    const div = document.createElement('div');
+    div.className = 'thought-card' + (done ? ' done collapsed' : '');
+    div.innerHTML = `
+      <div class="thought-head"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a7 7 0 0 1 4 12.7V17a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2v-1.3A7 7 0 0 1 12 3Z"/><path d="M10 21h4"/></svg>思考<svg class="chev" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg></div>
+      <div class="thought-body">${done ? AE.esc(text) : ''}</div>`;
+    div.querySelector('.thought-head').onclick = () => div.classList.toggle('collapsed');
+    col.appendChild(div);
+    if (!done) { div.dataset.full = text; streamThoughtBody(div, text); }
+    return div;
+  }
+  /* 流式追加短文本（规范 §15.3）；计时器走全局 timers，停生成/切会话即中断 */
+  function streamThoughtBody(div, text) {
+    const body = div.querySelector('.thought-body');
+    if (REDUCED) { body.textContent = text; return; }
+    let i = 0;
+    (function step() {
+      if (!div.isConnected || div.classList.contains('done')) return;
+      i = Math.min(text.length, i + 2);
+      body.textContent = text.slice(0, i);
+      scrollDown();
+      if (i < text.length) later(26, step);
+    })();
+  }
+  function finishThought(el) {
+    const body = el.querySelector('.thought-body');
+    if (el.dataset.full && body.textContent !== el.dataset.full) body.textContent = el.dataset.full;
+    setTimeout(() => { el.classList.add('done'); setTimeout(() => el.classList.add('collapsed'), 800); }, 200);
+  }
+  const TOOL_NAMES = {
+    'model.list': '列出协议档', 'dataset.list': '列出数据集', 'kb.list': '列出知识库',
+    'task.get': '查询任务', 'report.get': '读取报告', 'task.create': '创建任务',
+    'task.cancel': '取消任务', 'testcase.confirm': '确认用例入库'
+  };
+  function addToolCard(name, args) {
+    const div = document.createElement('div');
+    div.className = 'tool-card';
+    div.dataset.tool = name;
+    div.innerHTML = `
+      <div class="tool-head">
+        <span class="tool-status pending"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 3a9 9 0 1 0 9 9"/></svg></span>
+        <span class="tool-name">${TOOL_NAMES[name] || name}</span>
+        <span class="tool-state-text">调用中</span>
+        <svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>
+      </div>
+      <div class="tool-detail">
+        <div class="td-label">输入</div>
+        <pre class="code">${AE.esc(JSON.stringify(args || {}, null, 2))}</pre>
+        <div class="td-label">输出</div>
+        <pre class="code" data-out>…</pre>
+      </div>`;
+    div.querySelector('.tool-head').onclick = () => div.classList.toggle('open');
+    col.appendChild(div);
+    return div;
+  }
+  function resolveToolCard(el, ok, data) {
+    const st = el.querySelector('.tool-status');
+    st.className = 'tool-status ' + (ok ? 'ok' : 'fail');
+    st.innerHTML = ok
+      ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8.5 12.2 2.4 2.4 4.6-5"/></svg>'
+      : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M9 9l6 6M15 9l-6 6"/></svg>';
+    const txt = el.querySelector('.tool-state-text');
+    txt.textContent = ok ? '完成' : '失败';
+    txt.classList.toggle('fail', !ok);
+    el.querySelector('[data-out]').textContent = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+  }
+  function addErrorStrip(code, message) {
+    const div = document.createElement('div');
+    div.className = 'error-strip';
+    div.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="flex:0 0 16px;margin-top:1px"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5"/><circle cx="12" cy="16.4" r=".4" fill="currentColor"/></svg><div><b>${AE.esc(code)}</b> · ${AE.esc(message || AE.ERR_TEXT[code] || '')}</div>`;
+    col.appendChild(div);
+    AE.toast('error', AE.ERR_TEXT[code] || message || code);
+  }
+  function addReportCard(kpis, reportId, extraBtn, bars) {
+    const div = document.createElement('div');
+    div.className = 'report-card';
+    div.setAttribute('data-od-id', 'report-card');
+    div.innerHTML = `
+      <div class="row"><span class="badge badge-succeeded"><i class="bdot"></i>报告已生成</span><span class="small tertiary mono">${reportId}</span></div>
+      <div class="report-card-kpis">${kpis.map(k => `<div><div class="kpi-num num">${k.v}<span class="unit">${k.u || ''}</span></div><div class="kpi-label">${k.l}</div></div>`).join('')}</div>
+      ${bars ? `<div class="rc-bars">${bars.map(b => `<div class="rc-bar-row"><span class="rc-bar-label">${AE.esc(b.label)}</span><span class="rc-bar-track"><i style="width:${Math.round(b.value / (b.max || 1) * 100)}%"></i></span><span class="rc-bar-val">${b.value.toFixed(2)}</span></div>`).join('')}</div>` : ''}
+      <div class="row">
+        <a class="btn btn-sign btn-sm" href="report.html?id=${reportId}">查看报告</a>
+        ${extraBtn || ''}
+      </div>`;
+    col.appendChild(div);
+  }
+
+  /* ─── 空会话内联欢迎态（根据当前模式深度定制） ─── */
+  const quickChips = document.getElementById('quick-chips');
+  function updateQuickChips() {
+    const isRag = AE.getMode() === 'rag';
+    const chips = isRag ? [
+      '评估 default 知识库的检索质量',
+      '横向对比 LightRAG 四种模式在 qa-v1 上的表现',
+      '检验 default 知识库黄金 QA 覆盖度',
+      '对 default 知识库 query 接口跑 20 QPS 压测'
+    ] : [
+      '对比 gpt-test 和 claude-x 在 smoke-20 上的表现',
+      '评测系统 Prompt 在支付链路问答上的准确率',
+      '帮我把这份支付 PRD 生成测试用例',
+      '评测 gpt-test 质量达标后自动加压测 10 QPS'
+    ];
+    quickChips.innerHTML = chips.map(c => `<button class="chip" data-say="${AE.esc(c)}">${AE.esc(c)}</button>`).join('');
+    quickChips.querySelectorAll('.chip').forEach(b => b.onclick = () => {
+      textEl.value = b.dataset.say;
+      textEl.dispatchEvent(new Event('input'));
+      textEl.focus();
+    });
+  }
+
+  function addWelcome() {
+    const isRag = AE.getMode() === 'rag';
+    const div = document.createElement('div');
+    div.className = 'welcome';
+    div.setAttribute('data-od-id', 'welcome');
+    
+    const LLM_CAPS = [
+      { id: 'cap-benchmark', name: '多模型基准对比', desc: '1–5 个协议档并排测试，输出 contain / exact / Judge 打分', say: '对比一下 gpt-test 和 claude-x 在 smoke-20 上的表现', ico: '<path d="M4 20V10M10 20V4M16 20v-8M3 20h18"/>' },
+      { id: 'cap-prompt', name: 'Prompt 效果评测', desc: '评测不同系统提示词与上下文在同一数据集上的得分差异', say: '评测系统 Prompt 在支付链路问答上的准确率', ico: '<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 9h8M8 13h5"/>' },
+      { id: 'cap-testcase', name: 'PRD 生成用例', desc: '附 PRD / OpenAPI，按 6 种策略生成，72h 内确认入库', say: '帮我把这份支付 PRD 生成测试用例', ico: '<path d="M9 11.5 11 14l4.5-5"/><rect x="4" y="4" width="16" height="16" rx="3"/>' },
+      { id: 'cap-stress', name: '先评后压', desc: '质量达标后自动压测同一 endpoint，实时监控 QPS / RT', say: '评测 gpt-test 质量达标后自动加压测 10 QPS', ico: '<path d="M3 17l5-6 4 3 6-8"/><path d="M18 6h3v3"/>' }
+    ];
+
+    const RAG_CAPS = [
+      { id: 'cap-rag', name: 'RAG 检索评测', desc: '知识库 + 黄金 QA，输出 Hit Rate@5 / MRR / Recall', say: '评估 default 知识库的检索质量', ico: '<path d="M5 5.5A2.5 2.5 0 0 1 7.5 3H19v15H7.5A2.5 2.5 0 0 0 5 20.5Z"/><path d="M5 18.5V5.5"/><path d="M9 7.5h6"/>' },
+      { id: 'cap-modes', name: '4 模式横向对比', desc: '对比 LightRAG naive / local / global / hybrid 检索表现', say: '横向对比 LightRAG 四种模式在 qa-v1 上的表现', ico: '<circle cx="12" cy="12" r="3"/><path d="M3 12h3M18 12h3M12 3v3M12 18v3"/>' },
+      { id: 'cap-qa', name: '黄金 QA 检验', desc: '校验 expected_doc_ids 召回命中与相似度分布', say: '检验 default 知识库黄金 QA 覆盖度', ico: '<path d="M9 11.5 11 14l4.5-5"/><circle cx="12" cy="12" r="9"/>' },
+      { id: 'cap-rag-stress', name: 'RAG 接口加压', desc: '对 LightRAG query 或外部 RAG HTTP 服务发起高并发压测', say: '对 default 知识库 query 接口跑 20 QPS 压测', ico: '<path d="M3 17l5-6 4 3 6-8"/><path d="M18 6h3v3"/>' }
+    ];
+
+    const CAPS = isRag ? RAG_CAPS : LLM_CAPS;
+
+    div.innerHTML = `
+      <div class="welcome-eyebrow">${isRag ? 'AI Eval · RAG 评估智能体' : 'AI Eval · 大模型测试智能体'}</div>
+      <h2 class="welcome-title">${isRag ? '知识库检索质量评估，<br>全链路调优与召回分析。' : '说一句目标，<br>拿回一份评测报告。'}</h2>
+      <p class="welcome-sub">${isRag ? '说明要评测的知识库或外部 RAG 接口，我会澄清后给您确认卡。支持 LightRAG 4 模式对比与召回命中归因。' : '说明要评测的模型或 PRD 生成需求，我会澄清后给您确认卡。未确认不入队，确认前字段都能修改。'}</p>
+      <div class="welcome-caps">${CAPS.map(c => `
+        <button class="cap" data-od-id="${c.id}" data-say="${AE.esc(c.say)}">
+          <span class="cap-ico"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${c.ico}</svg></span>
+          <span><span class="cap-name">${c.name}</span><span class="cap-desc">${c.desc}</span></span>
+        </button>`).join('')}
+      </div>`;
+    col.appendChild(div);
+    div.querySelectorAll('.cap').forEach(b => b.onclick = () => {
+      textEl.value = b.dataset.say;
+      textEl.dispatchEvent(new Event('input'));
+      textEl.focus();
+    });
+    updateQuickChips();
+  }
+
+  /* ─── 确认卡（规范 §6：对话流内，未 ack 不入队） ─── */
+  function profileChips(selected) {
+    return AE.DB.profiles.filter(p => (p.usages || []).includes('target')).map(p =>
+      `<button class="chip ${selected.includes(p.id) ? 'on' : ''}" data-pid="${p.id}">${AE.esc(p.name)} <span class="mono" style="opacity:.7">${AE.esc(p.model)}</span></button>`).join('');
+  }
+  function addConfirmCard(kind, opts) {
+    opts = opts || {};
+    const titles = { benchmark: '确认基准评测', rag: '确认 RAG 评测', testcase: '确认生成用例', stress: '确认压测' };
+    const div = document.createElement('div');
+    div.className = 'confirm-card';
+    div.setAttribute('data-od-id', 'confirm-card-' + kind);
+
+    let body = '';
+    if (kind === 'benchmark') {
+      body = `
+        <div class="field"><span class="field-label">kind</span><div>${AE.kindTag('benchmark')}<span class="small tertiary">　一任务一种 kind</span></div></div>
+        <div class="field"><span class="field-label">profile_ids（被测协议档，1–5 个）<i class="req">*</i></span>
+          <div class="chip-group" id="cc-profiles">${profileChips(opts.profiles || (AE.API.isMock() ? ['p-gpt', 'p-claude'] : []))}</div>
+          <div class="field-error" id="cc-err-profiles" style="display:none">至少选择 1 个被测协议档</div></div>
+        <div class="field"><span class="field-label">dataset_id <i class="req">*</i></span>
+          <select class="select" id="cc-dataset">${AE.DB.datasets.map(d => `<option value="${d.id}" ${d.id === (opts.dataset || (AE.API.isMock() ? 'ds-smoke' : '')) ? 'selected' : ''}>${AE.esc(d.name)} v${d.version} · ${d.row_count} 行</option>`).join('')}</select></div>
+        ${AE.runConfigFoldHtml('cc')}
+        ${AE.stressFieldsHtml('cc')}`;
+    } else if (kind === 'rag') {
+      body = `
+        <div class="field"><span class="field-label">kind</span><div>${AE.kindTag('rag')}</div></div>
+        <div class="form-row">
+          <div class="field"><span class="field-label">kb_id <i class="req">*</i></span>
+            <select class="select" id="cc-kb">${AE.DB.kbs.map(k => `<option value="${k.id}" ${k.id === opts.kb ? 'selected' : ''}>${AE.esc(k.name)}（${k.kind === 'lightrag' ? 'LightRAG' : '外部 Chat'}）</option>`).join('')}</select></div>
+          <div class="field"><span class="field-label">gold_qa_id <i class="req">*</i></span>
+            <select class="select" id="cc-qa">${AE.DB.goldQAs.map(g => `<option value="${g.id}" ${g.id === opts.qa ? 'selected' : ''}>${AE.esc(g.name)} v${g.version} · ${g.row_count} 条</option>`).join('')}</select></div>
+        </div>
+        <div class="field" id="cc-mode-field"><span class="field-label">rag_mode（1–4 个，默认 hybrid）</span>
+          <div class="chip-group" id="cc-modes">${['naive', 'local', 'global', 'hybrid'].map(m => `<button class="chip ${m === 'hybrid' ? 'on' : ''}" data-mode="${m}">${m}</button>`).join('')}</div></div>
+        <div class="field" id="cc-profile-field" style="display:none"><span class="field-label">profile_ids（外部 RAG 服务档，恰好 1 个）<i class="req">*</i></span>
+          <select class="select" id="cc-rag-profile"><option value="p-ragsvc">rag-客服外挂 · rag-chat-v2</option></select></div>
+        ${AE.runConfigFoldHtml('cc')}
+        ${AE.stressFieldsHtml('cc')}`;
+    } else if (kind === 'testcase') {
+      body = `
+        <div class="field"><span class="field-label">kind</span><div>${AE.kindTag('testcase')}</div></div>
+        <div class="field"><span class="field-label">case_source <i class="req">*</i></span>
+          ${opts.fileName
+            ? `<span class="attach-chip"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 3h9l4 4v14H6Z"/><path d="M14 3v5h5"/></svg>${AE.esc(opts.fileName)}<span class="mono">${AE.esc(opts.fileSize || '')}</span></span><div class="field-hint">file_id 已随消息上传</div>`
+            : `<textarea class="textarea" id="cc-text" placeholder="粘贴 PRD / 接口描述文本（或用附件上传 OpenAPI / Excel）"></textarea><div class="field-error" id="cc-err-text" style="display:none">请提供 file_id 或粘贴文本</div>`}
+        </div>
+        <div class="field-hint">规模参考上限：PRD 简单 / 中 / 复杂 → 20 / 45 / 80 条；超上限将停止并提示拆分。生成后需在本平台确认入库（72h 内）。</div>`;
+    }
+    div.innerHTML = `
+      <div class="confirm-head">${AE.kindTag(kind)}<span class="confirm-title">${titles[kind]}</span><span class="confirm-summary" id="cc-summary"></span><svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg></div>
+      <div class="confirm-body">${body}</div>
+      <div class="confirm-foot">
+        <span class="confirm-note" id="cc-note">未确认不入队；确认前可修改字段</span>
+        <span class="spacer"></span>
+        <button class="btn btn-secondary" id="cc-cancel">取消</button>
+        <button class="btn btn-sign" id="cc-ok">确认并开始</button>
+      </div>`;
+    col.appendChild(div);
+    scrollDown();
+
+    AE.bindFold(div);
+    if (kind === 'benchmark' || kind === 'rag') AE.bindStressFields(div, 'cc');
+    div.querySelectorAll('#cc-profiles .chip, #cc-modes .chip').forEach(ch => {
+      ch.onclick = () => ch.classList.toggle('on');
+    });
+    const kbSel = div.querySelector('#cc-kb');
+    if (kbSel) kbSel.onchange = () => {
+      const ext = kbSel.value === 'kb-cs';
+      div.querySelector('#cc-mode-field').style.display = ext ? 'none' : '';
+      div.querySelector('#cc-profile-field').style.display = ext ? '' : 'none';
+    };
+    /* ack 后折叠为一行摘要；点头行展开只读复核 */
+    div.querySelector('.confirm-head').onclick = () => {
+      if (div.classList.contains('acked')) div.classList.toggle('open');
+    };
+    /* 会话占槽（PRD 3.4：含压测子任务）：有进行中任务时主按钮禁用 + 说明 */
+    if (dockTask) {
+      div.querySelector('#cc-ok').disabled = true;
+      const note = div.querySelector('#cc-note');
+      note.textContent = '当前会话已有进行中的任务（槽位含压测子任务），完成后才能再开新长任务';
+      note.style.color = 'var(--accent-warning)';
+    }
+    function summarize() {
+      if (kind === 'benchmark') {
+        const n = div.querySelectorAll('#cc-profiles .chip.on').length;
+        const ds = div.querySelector('#cc-dataset');
+        return n + ' 个协议档 × ' + ds.options[ds.selectedIndex].text;
+      }
+      if (kind === 'rag') {
+        const kb = div.querySelector('#cc-kb'), qa = div.querySelector('#cc-qa');
+        return kb.options[kb.selectedIndex].text + ' · ' + qa.options[qa.selectedIndex].text;
+      }
+      return opts.fileName ? opts.fileName : '粘贴文本输入';
+    }
+
+    return new Promise(resolve => {
+      div.querySelector('#cc-cancel').onclick = () => {
+        div.querySelector('#cc-summary').textContent = summarize();
+        div.classList.add('acked');
+        div.querySelector('.confirm-foot').innerHTML = '<span class="ack-stamp no">已取消 · confirm_ack { ok: false }</span>';
+        resolve({ ok: false });
+      };
+      div.querySelector('#cc-ok').onclick = () => {
+        // 卡内校验（VALIDATION 留卡内，不 Toast）
+        if (kind === 'benchmark') {
+          const on = div.querySelectorAll('#cc-profiles .chip.on').length;
+          if (on < 1) { div.querySelector('#cc-err-profiles').style.display = ''; return; }
+          div.querySelector('#cc-err-profiles').style.display = 'none';
+        }
+        if (kind === 'testcase' && !opts.fileName) {
+          const t = div.querySelector('#cc-text').value.trim();
+          if (!t) { div.querySelector('#cc-err-text').style.display = ''; return; }
+        }
+        const withStress = div.querySelector('#cc-ws') ? div.querySelector('#cc-ws').checked : false;
+        const env = div.querySelector('#cc-env') ? div.querySelector('#cc-env').value : null;
+        div.querySelector('#cc-summary').textContent = summarize();
+        div.classList.add('acked');
+        div.querySelector('.confirm-foot').innerHTML = '<span class="ack-stamp ok">已确认 · 任务入队 queued</span>';
+        resolve({ ok: true, withStress, env });
+      };
+    });
+  }
+
+  /* ─── 进度坞 ─── */
+  let dockTask = null;
+  let dockGen = 0;
+  function showDock(kind, text, nums, cancelLabel, taskId) {
+    dockGen++;
+    dockTask = { kind, id: taskId || null };
+    renderRailTask();
+    dock.style.display = '';
+    dock.innerHTML = kind === 'stress' ? `
+      <div class="progress-dock-inner stress">
+        <div class="dock-row">
+          ${AE.kindTag(kind)}
+          <svg class="spark" id="dock-spark" viewBox="0 0 180 36" preserveAspectRatio="none" aria-hidden="true"></svg>
+          <span class="mini-series" id="dock-nums"><span class="ms ms-qps">QPS <b data-ms="0">0</b></span><span class="ms ms-rt">RT <b data-ms="1">—</b></span><span class="ms ms-err">错误率 <b data-ms="2">—</b></span></span>
+          <span class="progress-msg" id="dock-msg">${AE.esc(text)}</span>
+          <button class="btn btn-ghost btn-sm" id="dock-cancel">${cancelLabel}</button>
+        </div>
+        <div class="progress-bar"><i id="dock-bar" style="width:0%"></i></div>
+      </div>` : `
+      <div class="progress-dock-inner">
+        ${AE.kindTag(kind)}
+        <div class="progress-bar"><i id="dock-bar" style="width:0%"></i></div>
+        <span class="progress-nums" id="dock-nums">${nums}</span>
+        <span class="progress-msg" id="dock-msg">${AE.esc(text)}</span>
+        <button class="btn btn-ghost btn-sm" id="dock-cancel">${cancelLabel}</button>
+      </div>`;
+    document.getElementById('dock-cancel').onclick = () => {
+      if (kind === 'stress') {
+        AE.dialog({
+          title: '立即停止发压？',
+          body: '与评测不同，确认后<strong>立刻</strong>停发。',
+          okText: '立即停止', okClass: 'btn-danger',
+          onOk: async () => {
+            try {
+              if (AE.API.isMock()) clearTimers();
+              else if (dockTask && dockTask.id) sendWsEvent('cancel_task', { task_id: dockTask.id });
+              else throw new Error('服务端尚未返回 task_id，暂不能取消');
+              hideDock('已提交取消请求');
+            } catch (e) { addErrorStrip(e.code || 'NETWORK', e.message); }
+          }
+        });
+      } else {
+        AE.dialog({
+          title: '取消任务？',
+          body: '将在<strong>当前样本结束后</strong>停止，已完成部分保留。',
+          okText: '取消任务', okClass: 'btn-danger',
+          onOk: async () => {
+            try {
+              if (AE.API.isMock()) { clearTimers(); hideDock('已取消 · 当前样本结束后停止'); addAgentText('<p>评测任务已取消（cancelled）。已完成的样本结果保留，可在任务中心查看事件时间线。</p>'); }
+              else if (dockTask && dockTask.id) { sendWsEvent('cancel_task', { task_id: dockTask.id }); hideDock('已提交取消请求'); }
+              else throw new Error('服务端尚未返回 task_id，暂不能取消');
+              scrollDown();
+            } catch (e) { addErrorStrip(e.code || 'NETWORK', e.message); }
+          }
+        });
+      }
+    };
+  }
+  function setDock(pct, nums, msg) {
+    const bar = document.getElementById('dock-bar');
+    if (!bar) return;
+    bar.style.width = pct + '%';
+    if (nums !== '') document.getElementById('dock-nums').textContent = nums;
+    if (msg) document.getElementById('dock-msg').textContent = msg;
+  }
+  function hideDock(note) {
+    const gen = ++dockGen;
+    dock.innerHTML = `<div class="progress-dock-inner"><span class="small tertiary">${AE.esc(note)}</span></div>`;
+    setTimeout(() => { if (gen === dockGen) { dock.style.display = 'none'; dock.innerHTML = ''; } }, 2600);
+    dockTask = null;
+    renderRailTask();
+  }
+
+  /* ─── 场景脚本（PRD 5.1.3 时序） ─── */
+  let generating = false;
+  function setGenerating(v) {
+    generating = v;
+    genPill.style.display = v ? '' : 'none';
+    sendBtn.innerHTML = v
+      ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>'
+      : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>';
+    sendBtn.classList.toggle('ready', v || textEl.value.trim().length > 0);
+    sendBtn.disabled = !v && textEl.value.trim().length === 0;
+    sendBtn.title = v ? '暂停生成（不取消已入队任务）' : '发送';
+  }
+
+  /* 实时模式：Agent 只消费 API / WS 事件；下方场景脚本仅服务显式 Mock。 */
+  let agentSocket = null;
+  let lastAgentEventId = 0;
+  let pendingToolCards = [];
+  let liveThought = null;
+  let liveTaskKind = 'benchmark';
+
+  function sendWsEvent(event, payload) {
+    if (!agentSocket || agentSocket.readyState !== WebSocket.OPEN) throw new Error('Agent WebSocket 未连接');
+    agentSocket.send(JSON.stringify({ event, payload }));
+  }
+  function finishLiveThought() {
+    if (liveThought) finishThought(liveThought);
+    liveThought = null;
+  }
+  function handleAgentEvent(raw) {
+    if (!raw || typeof raw !== 'object') return;
+    const event = raw.event;
+    const payload = raw.payload || {};
+    if (Number.isInteger(raw.event_id)) lastAgentEventId = Math.max(lastAgentEventId, raw.event_id);
+    if (event === 'thought') {
+      finishLiveThought();
+      liveThought = addThought(payload.text || '正在处理请求…');
+    } else if (event === 'tool_call') {
+      finishLiveThought();
+      const card = addToolCard(payload.name || 'tool', payload.arguments || {});
+      pendingToolCards.push({ name: payload.name, card });
+    } else if (event === 'tool_result') {
+      const index = pendingToolCards.map(x => x.name).lastIndexOf(payload.name);
+      const pending = index >= 0 ? pendingToolCards.splice(index, 1)[0] : null;
+      if (pending) resolveToolCard(pending.card, payload.ok !== false, payload.ok === false ? (payload.error || {}) : (payload.data || {}));
+    } else if (event === 'confirm') {
+      finishLiveThought();
+      liveTaskKind = payload.kind || liveTaskKind;
+      setGenerating(false);
+      addConfirmCard(liveTaskKind, {
+        profiles: payload.profile_ids,
+        dataset: payload.dataset_id,
+        kb: payload.kb_id,
+        qa: payload.gold_qa_id,
+        fileName: payload.case_source && payload.case_source.filename,
+        fileSize: payload.case_source && payload.case_source.size
+      }).then(ack => {
+        try {
+          sendWsEvent('confirm_ack', { ok: ack.ok, patch: ack.ok ? { with_stress: !!ack.withStress } : {} });
+        } catch (e) { addErrorStrip('NETWORK', e.message); }
+      });
+    } else if (event === 'progress') {
+      const total = Number(payload.total) || 0;
+      const done = Number(payload.done) || 0;
+      const percent = Number.isFinite(Number(payload.percent)) ? Number(payload.percent) : (total ? Math.round(done / total * 100) : 0);
+      if (!dockTask) showDock(liveTaskKind, payload.message || '任务进行中', total ? `${done}/${total}` : '', '取消', raw.task_id);
+      if (dockTask) dockTask.id = raw.task_id || dockTask.id;
+      setDock(percent, total ? `${done}/${total}` : '', payload.message || '任务进行中');
+    } else if (event === 'report') {
+      finishLiveThought();
+      setGenerating(false);
+      hideDock('任务已完成');
+      addReportCard([{ v: '—', l: '报告已生成' }], payload.report_id);
+    } else if (event === 'error') {
+      finishLiveThought();
+      setGenerating(false);
+      addErrorStrip(payload.code || 'UPSTREAM', payload.message || 'Agent 处理失败');
+    }
+    scrollDown();
+  }
+  function openAgentSocket() {
+    if (agentSocket && agentSocket.readyState === WebSocket.OPEN) return Promise.resolve(agentSocket);
+    return AE.API.auth.getWsTicket().then(ticket => new Promise((resolve, reject) => {
+      const socket = AE.API.agent.connectWs(ticket.ticket || ticket, handleAgentEvent, () => reject(new Error('Agent WebSocket 连接失败')), {
+        sessionId: activeSession,
+        lastEventId: lastAgentEventId
+      });
+      agentSocket = socket;
+      socket.onopen = () => resolve(socket);
+      socket.onclose = () => { if (agentSocket === socket) agentSocket = null; };
+    }));
+  }
+  async function sendLiveAgentMessage(text, files) {
+    try {
+      setGenerating(true);
+      const socket = await openAgentSocket();
+      if (agentSocket !== socket) throw new Error('Agent WebSocket 已被替换');
+      sendWsEvent('user_message', { text, attachments: files.map(file => ({ file_id: file.id })).filter(file => file.file_id) });
+    } catch (e) {
+      setGenerating(false);
+      addErrorStrip(e.code || 'NETWORK', e.message);
+    }
+  }
+
+  function runBenchmarkFlow(withStress) {
+    setGenerating(true);
+    const th = addThought('正在梳理评测目标：对比被测协议档在同一数据集上的规则分。先列出可用协议档与数据集…');
+    later(900, () => emit(() => {
+      finishThought(th);
+      const t1 = addToolCard('model.list', {});
+      later(700, () => emit(() => {
+        resolveToolCard(t1, true, { items: [{ id: 'p-gpt', name: 'gpt-test', protocol: 'openai_chat' }, { id: 'p-claude', name: 'claude-x', protocol: 'anthropic_messages' }, { id: 'p-ragsvc', name: 'rag-客服外挂', protocol: 'openai_chat' }] });
+        const t2 = addToolCard('dataset.list', {});
+        later(700, () => emit(() => {
+          resolveToolCard(t2, true, { items: AE.DB.datasets.map(d => ({ id: d.id, version: d.version, row_count: d.row_count })) });
+          addAgentText('<p>找到 <b>2</b> 个被测协议档与 <b>3</b> 个数据集。建议用 <b>smoke-20 v3</b>（20 行，主指标 contain）做对比。请确认评测单' + (withStress ? '；已按「先评后压」预开压测开关' : '') + '：</p>');
+          later(400, () => emit(async () => {
+            setGenerating(false);
+            const ack = await addConfirmCard('benchmark', {});
+            if (!ack.ok) { addAgentText('<p>已取消，未创建任务。需要调整目标可以继续说。</p>'); scrollDown(); return; }
+            if (ack.env === 'prod' && ack.withStress) {
+              addAgentText('<p>env=prod：压测子任务入队前需会签（会签人：admin、bob），未会签不会发压；质量评测不受影响。</p>');
+            }
+            const t3 = addToolCard('task.create', { kind: 'benchmark', profile_ids: ['p-gpt', 'p-claude'], dataset_id: 'ds-smoke', with_stress: ack.withStress });
+            later(600, () => emit(() => {
+              resolveToolCard(t3, true, { task_id: 't-' + Math.random().toString(16).slice(2, 8), status: 'queued' });
+              runProgress('benchmark', 100, '正在调用被测 gpt-test / claude-x', () => {
+                addReportCard([
+                  { v: '2', u: '%', l: '失败率' },
+                  { v: '820', u: 'ms', l: '平均延迟' }
+                ], 'r-bm-1', '<button class="btn btn-secondary btn-sm" id="rc-interpret">在对话中解读</button>', [
+                  { label: 'gpt-test · contain', value: 0.86 },
+                  { label: 'claude-x · contain', value: 0.79 }
+                ]);
+                const ib = col.querySelector('#rc-interpret');
+                if (ib) ib.onclick = () => {
+                  const thx = addThought('读取报告 r-bm-1 的指标摘要与失败样本…');
+                  later(800, () => emit(() => {
+                    finishThought(thx);
+                    addAgentText('<p><b>解读（基于已有报告，不重跑）：</b>gpt-test 以 contain 0.86 领先 claude-x 0.79，失败率 2% 对 5%。两条失败样本分别为 UPSTREAM 502 与超时，与模型能力无关，建议复跑失败行再定基线。</p>');
+                    scrollDown();
+                  }));
+                };
+                if (ack.withStress) runStressChild(ack.env);
+              });
+            }));
+          }));
+        }));
+      }));
+    }));
+  }
+
+  function runRagFlow() {
+    setGenerating(true);
+    const th = addThought('目标是评估知识库检索质量。需要知识库与黄金 QA，先列出现有库…');
+    later(900, () => emit(() => {
+      finishThought(th);
+      const t1 = addToolCard('kb.list', {});
+      later(700, () => emit(() => {
+        resolveToolCard(t1, true, { items: [{ id: 'kb-default', doc_count: 12 }, { id: 'kb-cs', kind: 'external_chat' }] });
+        addAgentText('<p>内置库 <b>default</b>（LightRAG，12 篇文档）配有黄金 QA <b>qa-v1 v2</b>（20 条）。默认用 hybrid 模式、K=5。请确认：</p>');
+        later(400, () => emit(async () => {
+          setGenerating(false);
+          const ack = await addConfirmCard('rag', {});
+          if (!ack.ok) { addAgentText('<p>已取消，未创建任务。</p>'); scrollDown(); return; }
+          const t3 = addToolCard('task.create', { kind: 'rag', kb_id: 'kb-default', gold_qa_id: 'gq-1', rag_mode: ['hybrid'] });
+          later(600, () => emit(() => {
+            resolveToolCard(t3, true, { task_id: 't-' + Math.random().toString(16).slice(2, 8), status: 'queued' });
+            runProgress('rag', 20, '正在查询 LightRAG（query · hybrid）', () => {
+              addReportCard([
+                { v: '0.80', l: 'Hit Rate@5' },
+                { v: '0.74', l: 'MRR' },
+                { v: '0.85', l: 'Recall@5' },
+                { v: '0.83', l: '答案 contain' }
+              ], 'r-rag-1');
+              if (ack.withStress) runStressChild(ack.env);
+            });
+          }));
+        }));
+      }));
+    }));
+  }
+
+  function runTestcaseFlow(file) {
+    setGenerating(true);
+    const th = addThought('解析输入材料，按正向 / 反向 / 边界 / 等价 / 状态 / 场景策略生成用例，规模按 PRD 复杂度上限控制…');
+    later(1000, () => emit(() => {
+      finishThought(th);
+      addAgentText('<p>将基于「支付」模块 PRD 生成用例，预计 40 条（中等复杂度上限 45）。生成后进入 <b>awaiting_case_confirm</b>，需你在 72h 内确认入库。请确认：</p>');
+      later(400, () => emit(async () => {
+        setGenerating(false);
+        const ack = await addConfirmCard('testcase', { fileName: file && file.name, fileSize: file && file.size });
+        if (!ack.ok) { addAgentText('<p>已取消，未创建任务。</p>'); scrollDown(); return; }
+        const t3 = addToolCard('task.create', { kind: 'testcase', case_source: file ? { file_id: 'f-' + Date.now() } : { text: '（粘贴文本）' } });
+        later(600, () => emit(() => {
+          resolveToolCard(t3, true, { task_id: 'd4c1a9', status: 'queued' });
+          runProgress('testcase', 2, '正在生成用例（解析 PRD 结构）', null, () => {
+            dockGen++;
+            dock.style.display = '';
+            dock.innerHTML = `
+              <div class="progress-dock-inner">
+                ${AE.kindTag('testcase')}
+                ${AE.statusBadge('awaiting_case_confirm')}
+                <span class="progress-msg">已生成 40 条，等待确认入库</span>
+                <span class="progress-nums">剩余 70h12m</span>
+                <a class="btn btn-sign btn-sm" href="cases.html">去确认</a>
+              </div>`;
+            addAgentText('<p>用例已生成（40 条），任务进入 <b>awaiting_case_confirm</b>。自检发现：<span class="danger-text">无核心正向用例、缺约束反向用例</span>，建议在确认页复核。72h 未确认将自动取消。</p>');
+            scrollDown();
+          });
+        }));
+      }));
+    }));
+  }
+
+  /* 评测进度：done/total 递增 → report */
+  function runProgress(kind, total, message, onDone, customDone) {
+    showDock(kind, message, '0/' + total, '取消');
+    let done = 0;
+    const step = Math.max(1, Math.round(total / 8));
+    function tick() {
+      if (!dockTask) return;
+      done = Math.min(total, done + step);
+      emit(() => setDock(Math.round(done / total * 100), done + '/' + total, message));
+      if (done < total) later(900, tick);
+      else later(700, () => emit(() => {
+        hideDock(kind === 'testcase' ? '生成完成' : '任务 succeeded');
+        if (customDone) customDone(); else if (onDone) onDone();
+        scrollDown();
+      }));
+    }
+    later(800, tick);
+  }
+
+  /* 先评后压：质量 succeeded 后自动入队压测子任务（无需二次确认） */
+  const STRESS_SERIES = [[12, 210, 0.0], [38, 260, 0.0], [64, 340, 0.1], [92, 520, 0.2], [118, 890, 0.4], [118, 1200, 0.4]];
+  /* 迷你曲线：QPS 面积+线 / RT / 错误率三线，颜色取状态令牌（F-ST-03） */
+  function drawSpark(count) {
+    const svg = document.getElementById('dock-spark');
+    if (!svg) return;
+    const W = 180, H = 36, P = 3;
+    const data = STRESS_SERIES.slice(0, count);
+    const maxes = [0, 1, 2].map(ci => Math.max.apply(null, STRESS_SERIES.map(p => p[ci])) || 1);
+    const X = i => P + i * (W - 2 * P) / (STRESS_SERIES.length - 1);
+    const Y = (v, ci) => H - P - (v / maxes[ci]) * (H - 2 * P);
+    const line = ci => data.map((p, i) => X(i).toFixed(1) + ',' + Y(p[ci], ci).toFixed(1)).join(' ');
+    const lastX = X(data.length - 1).toFixed(1);
+    const lastY = Y(data[data.length - 1][0], 0).toFixed(1);
+    svg.innerHTML =
+      '<polygon class="a-qps" points="' + P + ',' + (H - P) + ' ' + line(0) + ' ' + lastX + ',' + (H - P) + '"/>' +
+      '<polyline class="l-qps" points="' + line(0) + '"/>' +
+      '<polyline class="l-rt" points="' + line(1) + '"/>' +
+      '<polyline class="l-err" points="' + line(2) + '"/>' +
+      '<circle class="dot-end" cx="' + lastX + '" cy="' + lastY + '" r="2.4"/>';
+  }
+  function runStressChild(env) {
+    later(1200, () => emit(() => {
+      addAgentText('<p>质量任务 <b>succeeded</b> 且 with_stress=true，已自动入队压测子任务（继承同一 endpoint，body 取父任务抽样 question 轮询）。' + (env === 'prod' ? '<b>env=prod：等待会签后才发压。</b>' : '') + '</p>');
+      showDock('stress', env === 'prod' ? '等待会签（NEED_APPROVAL）' : 'go-stress-testing · env=test', '', '立即停止');
+      if (env === 'prod') {
+        const sp = dock.querySelector('#dock-spark'); if (sp) sp.style.display = 'none';
+        const pb = dock.querySelector('.progress-bar'); if (pb) pb.style.display = 'none';
+        AE.toast('info', '压测已提交会签');
+        return;
+      }
+      let t = 0;
+      function stick() {
+        if (!dockTask) return;
+        const p = STRESS_SERIES[Math.min(t, STRESS_SERIES.length - 1)];
+        emit(() => {
+          const b0 = dock.querySelector('[data-ms="0"]'), b1 = dock.querySelector('[data-ms="1"]'), b2 = dock.querySelector('[data-ms="2"]');
+          if (b0) b0.textContent = p[0];
+          if (b1) b1.textContent = p[1] + 'ms';
+          if (b2) b2.textContent = p[2] + '%';
+          drawSpark(t + 1);
+          setDock(Math.min(100, (t + 1) / STRESS_SERIES.length * 100), '', 'go-stress-testing · env=test');
+        });
+        t++;
+        if (t < STRESS_SERIES.length) later(1100, stick);
+        else later(900, () => emit(() => {
+          hideDock('压测完成');
+          addReportCard([
+            { v: '118', l: '峰值 QPS' },
+            { v: '1.2', u: 's', l: 'P99' },
+            { v: '0.4', u: '%', l: '错误率' },
+            { v: '320', u: 'ms', l: 'TTFT' }
+          ], 'r-st-1');
+          scrollDown();
+        }));
+      }
+      later(900, stick);
+    }));
+  }
+
+  /* ─── 报告解读（F-AGT-08：仅对已有 report_id 调评测 Skill，不重跑） ─── */
+  function interpretSummary(r) {
+    if (r.kind === 'benchmark') return { title: r.title, metric: r.snapshot.metric, scores: r.scores.map(s => ({ profile: s.profile, contain: s.contain, fail_rate: s.fail_rate, latency: s.latency, judge: s.judge })), baseline: r.baseline, failed_items: r.failed_items.length };
+    if (r.kind === 'rag') return { title: r.title, k: r.k, hit: Object.fromEntries(Object.entries(r.scores).map(([m, s]) => [m, s.hit])), degraded: r.degraded };
+    return { title: r.title, env: r.env, qps_peak: r.qps_peak, p99: r.p99, error_rate: r.error_rate, sla_p99_ms: r.sla_p99_ms, sla_met: r.sla_met };
+  }
+  function interpretText(r) {
+    if (r.kind === 'benchmark') {
+      const s = r.scores;
+      return `<p><b>解读（基于已有报告 ${r.id}，不重跑）：</b>${AE.esc(s[0].profile)} 以 ${r.snapshot.metric} <b>${s[0].contain.toFixed(2)}</b> 领先 ${AE.esc(s[1].profile)} 的 ${s[1].contain.toFixed(2)}，失败率 ${(s[0].fail_rate * 100).toFixed(0)}% 对 ${(s[1].fail_rate * 100).toFixed(0)}%。相对基线 Δ ${r.baseline.delta.toFixed(2)}。两条失败样本分别为 UPSTREAM 502 与超时，与模型能力无关，建议复跑失败行后再冻结基线。</p>`;
+    }
+    if (r.kind === 'rag') {
+      return `<p><b>解读（基于已有报告 ${r.id}，不重跑）：</b>hybrid 模式全面最优（Hit Rate@${r.k} <b>0.80</b> / Recall <b>0.85</b>），但相对基线退化 <b>${r.degraded.pp}pp</b>（≥5pp 标红线）。naive 模式 Hit Rate 仅 0.62，说明关键词召回是短板。建议先排查最近入库文档的分块与索引，再决定是否回滚知识库版本。</p>`;
+    }
+    return `<p><b>解读（基于已有报告 ${r.id}，不重跑）：</b>env=${r.env} 下峰值 QPS <b>${r.qps_peak}</b> 时 P99 ${r.p99}，SLA（p99 ≤ ${r.sla_p99_ms}ms）${r.sla_met ? '达标' : '不达标'}；拐点出现在第 3 分钟。TTFT ${r.ttft} / TPOT ${r.tpot} 健康，估算费用 ${r.est_cost}。如需更高吞吐，建议按拐点前的 QPS 水位设生产上限。</p>`;
+  }
+  function runInterpretFlow(reportId) {
+    const r = AE.DB.reports[reportId];
+    if (!r) { AE.toast('error', 'NOT_FOUND：报告不存在或已删除'); return; }
+    const w = col.querySelector('.welcome'); if (w) w.remove();
+    quickChips.style.display = '';
+    addUser('解读报告 ' + reportId);
+    document.getElementById('chat-title').textContent = '解读报告 ' + reportId;
+    const cur = sessions.find(x => x.id === activeSession);
+    if (cur && cur.title === '新会话') { cur.title = '解读 ' + (r.kind === 'stress' ? '压测报告' : r.kind === 'rag' ? 'RAG 报告' : 'Benchmark 报告'); renderSessions(); }
+    setGenerating(true);
+    scrollDown(true);
+    const th = addThought('仅读取已有报告 ' + reportId + ' 的指标摘要与失败样本，不重跑评测…');
+    later(900, () => emit(() => {
+      finishThought(th);
+      const t1 = addToolCard('report.get', { report_id: reportId });
+      later(800, () => emit(() => {
+        resolveToolCard(t1, true, interpretSummary(r));
+        setGenerating(false);
+        addAgentText(interpretText(r));
+        scrollDown();
+      }));
+    }));
+  }
+
+  /* ─── 发送与路由 ─── */
+  let stagedFiles = [];
+  document.getElementById('attach-btn').onclick = () => document.getElementById('attach-input').click();
+  document.getElementById('attach-input').onchange = async function () {
+    const f = this.files[0];
+    this.value = '';
+    if (!f) return;
+    if (f.size > 20 * 1024 * 1024) { AE.toast('error', '单文件不超过 20MB'); return; }
+    const item = { name: f.name, size: f.size > 1048576 ? (f.size / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(f.size / 1024)) + ' KB' };
+    try {
+      const form = new FormData();
+      form.append('file', f, f.name);
+      const uploaded = await AE.API.files.upload(form);
+      if (!uploaded || !uploaded.id) throw new Error('上传接口未返回 file_id');
+      stagedFiles.push({ ...item, id: uploaded.id });
+      renderStaged();
+      AE.toast('success', '附件已上传');
+    } catch (e) {
+      AE.toast('error', `附件上传失败：${e.message}`);
+    }
+  };
+  function renderStaged() {
+    attachStage.style.display = stagedFiles.length ? 'flex' : 'none';
+    attachStage.innerHTML = stagedFiles.map((f, i) => `<span class="attach-chip">${AE.esc(f.name)}<span class="mono">${f.size}</span><button class="link-btn" data-i="${i}" style="padding:0 2px">✕</button></span>`).join('');
+    attachStage.querySelectorAll('button').forEach(b => b.onclick = () => { stagedFiles.splice(+b.dataset.i, 1); renderStaged(); });
+  }
+
+  textEl.addEventListener('input', () => {
+    textEl.style.height = 'auto';
+    textEl.style.height = Math.min(160, textEl.scrollHeight) + 'px';
+    if (!generating) { sendBtn.classList.toggle('ready', textEl.value.trim().length > 0); sendBtn.disabled = textEl.value.trim().length === 0; }
+  });
+  textEl.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendBtn.click(); }
+  });
+  document.querySelectorAll('#quick-chips .chip').forEach(ch => {
+    ch.onclick = () => { textEl.value = ch.dataset.say; textEl.dispatchEvent(new Event('input')); textEl.focus(); };
+  });
+  /* 顶栏模式：快捷芯片与欢迎能力卡随之重排（RAG 模式 RAG 优先） */
+  function orderChipsByMode() {
+    const order = AE.getMode() === 'rag'
+      ? ['RAG 评测', '生成用例', '基准评测', '先评后压']
+      : ['生成用例', '基准评测', 'RAG 评测', '先评后压'];
+    order.forEach(label => {
+      const ch = Array.from(quickChips.children).find(c => c.textContent.trim() === label);
+      if (ch) quickChips.appendChild(ch);
+    });
+  }
+  orderChipsByMode();
+  window.addEventListener('ae:mode', () => {
+    orderChipsByMode();
+    const w = col.querySelector('.welcome');
+    if (w) { w.remove(); addWelcome(); }
+  });
+
+  sendBtn.onclick = () => {
+    if (generating) { // 仅停生成，不取消已入队任务
+      clearTimers();
+      setGenerating(false);
+      col.querySelectorAll('.thought-card:not(.done)').forEach(finishThought);
+      addAgentText('<p class="muted">已暂停生成。已入队的任务不受影响。</p>');
+      scrollDown();
+      return;
+    }
+    const text = textEl.value.trim();
+    if (!text) return;
+    const files = stagedFiles.splice(0); renderStaged();
+    const w = col.querySelector('.welcome'); if (w) w.remove();
+    quickChips.style.display = '';
+    addUser(text, files);
+    textEl.value = ''; textEl.dispatchEvent(new Event('input'));
+    scrollDown(true);
+    document.getElementById('chat-title').textContent = text.slice(0, 24);
+    const cur = sessions.find(x => x.id === activeSession);
+    if (cur && cur.title === '新会话') { cur.title = text.slice(0, 18); renderSessions(); }
+
+    if (!AE.API.isMock()) {
+      sendLiveAgentMessage(text, files);
+      return;
+    }
+
+    const t = text;
+    if (/压测|加压|先评后压/.test(t)) runBenchmarkFlow(true);
+    else if (/RAG|知识库|检索/i.test(t)) runRagFlow();
+    else if (/用例|PRD|case/i.test(t)) runTestcaseFlow(files[0]);
+    else if (/对比|基准|benchmark/i.test(t)) runBenchmarkFlow(false);
+    /* 模糊的「评测 / 评估」意图：确认卡默认 kind 随顶栏模式（大模型→benchmark，RAG→rag） */
+    else if (/评测|评估/.test(t)) { if (AE.getMode() === 'rag') runRagFlow(); else runBenchmarkFlow(false); }
+    else {
+      setGenerating(true);
+      const th = addThought('理解你的目标，判断属于 Benchmark / RAG / 用例生成中的哪一类…');
+      later(900, () => emit(() => {
+        finishThought(th);
+        setGenerating(false);
+        addAgentText('<p>我可以帮你做三件事：<b>生成用例</b>（附 PRD / OpenAPI / Excel）、<b>基准评测</b>（1–5 个协议档 × 数据集）、<b>RAG 评测</b>（知识库 + 黄金 QA，可先评后压）。说一句具体目标，例如「对比 gpt-test 和 claude-x 在 smoke-20 上的表现」，我会澄清后给你确认卡。</p>');
+        scrollDown();
+      }));
+    }
+  };
+
+  /* ─── 会话载入 ─── */
+  async function loadSession(id) {
+    clearTimers(); setGenerating(false);
+    dock.style.display = 'none'; dock.innerHTML = ''; dockTask = null;
+    col.innerHTML = '';
+    const s = sessions.find(x => x.id === id);
+    document.getElementById('chat-title').textContent = s ? s.title : '新会话';
+    const scripted = AE.API.isMock() && (id === 's1' || id === 's2' || id === 's3');
+    if (!AE.API.isMock()) {
+      try {
+        const history = await AE.API.agent.getSessionMessages(id);
+        (history.messages || []).forEach(message => {
+          if (message.role === 'user') addUser(message.content || '', message.attachments || []);
+          else if (message.role === 'assistant') addAgentText(`<p>${AE.esc(message.content || '')}</p>`);
+        });
+        lastAgentEventId = Math.max(lastAgentEventId, ...(history.events || []).map(event => Number(event.event_id) || 0));
+      } catch (e) {
+        addErrorStrip(e.code || 'NETWORK', `会话历史加载失败：${e.message}`);
+      }
+    }
+    if (!scripted) addWelcome();
+    quickChips.style.display = scripted ? '' : 'none';
+    setRail(id === 's1'); // 运行中会话默认展开迷你调度视图
+    if (id === 's1') {
+      addUser('对比一下 gpt-test 和 claude-x 在 smoke-20 上的表现');
+      addThought('目标：Benchmark 对比。协议档 gpt-test / claude-x，数据集 smoke-20 v3，主指标 contain。', true);
+      const t1 = addToolCard('model.list', {});
+      resolveToolCard(t1, true, { items: [{ id: 'p-gpt', name: 'gpt-test' }, { id: 'p-claude', name: 'claude-x' }] });
+      const t2 = addToolCard('task.create', { kind: 'benchmark', profile_ids: ['p-gpt', 'p-claude'], dataset_id: 'ds-smoke' });
+      resolveToolCard(t2, true, { task_id: 'a1f3c2', status: 'queued' });
+      showDock('benchmark', '正在调用被测 gpt-test / claude-x', '40/100', '取消');
+      setDock(40, '40/100', '正在调用被测 gpt-test / claude-x');
+      // 运行中会话载入后恢复缓速推进（与 running 呼吸点一致；切会话即停）
+      let n = 40;
+      function s1tick() {
+        if (!dockTask) return;
+        n = Math.min(88, n + 6);
+        emit(() => setDock(n, n + '/100', '正在调用被测 gpt-test / claude-x'));
+        if (n < 88) later(1400, s1tick);
+      }
+      later(1300, s1tick);
+    } else if (id === 's2') {
+      addUser('评估 default 知识库的检索质量');
+      const th = addThought('目标：RAG 评测。库 default + 黄金 QA qa-v1 v2，hybrid 模式。', true);
+      const t1 = addToolCard('kb.list', {});
+      resolveToolCard(t1, true, { items: [{ id: 'kb-default', doc_count: 12 }] });
+      const t2 = addToolCard('task.create', { kind: 'rag', kb_id: 'kb-default', gold_qa_id: 'gq-1', rag_mode: ['hybrid'] });
+      resolveToolCard(t2, true, { task_id: 'b2e8d1', status: 'queued' });
+      addReportCard([
+        { v: '0.80', l: 'Hit Rate@5' }, { v: '0.74', l: 'MRR' }, { v: '0.85', l: 'Recall@5' }, { v: '0.83', l: '答案 contain' }
+      ], 'r-rag-1');
+    } else if (id === 's3') {
+      addUser('帮我把这份 PRD 生成测试用例', [{ name: 'PRD-支付.md', size: '36 KB' }]);
+      addAgentText('<p>用例已生成（40 条），任务进入 <b>awaiting_case_confirm</b>。请在 72h 内到「用例」页确认入库。</p>');
+    }
+    // 回放节点标记 no-anim：跳过入场动效，且不会因类移除而重放
+    if (scripted) col.querySelectorAll(':scope > *').forEach(el => el.classList.add('no-anim'));
+    scrollDown(true);
+  }
+
+  async function loadAgentReferences() {
+    try {
+      const [profiles, datasets, kbs] = await Promise.all([
+        AE.API.profiles.list(), AE.API.datasets.list(), AE.API.kb.list()
+      ]);
+      AE.DB.profiles = profiles.items || [];
+      AE.DB.datasets = datasets.items || [];
+      AE.DB.kbs = kbs.items || [];
+      const qaLists = await Promise.all(AE.DB.kbs.map(kb => AE.API.kb.getGoldQA(kb.id).catch(() => ({ items: [] }))));
+      AE.DB.goldQAs = qaLists.flatMap(result => result.items || []);
+    } catch (e) {
+      AE.toast('error', `确认卡选项加载失败：${e.message}`);
+    }
+  }
+
+  (async function init() {
+    await loadAgentReferences();
+    await loadSessionsList();
+    if (AE.API.isMock()) {
+      if (!sessions.some(s => s.id === 's0')) sessions.unshift({ id: 's0', title: '新会话', time: '刚刚', dot: null });
+      activeSession = 's0';
+    } else if (!activeSession) {
+      try {
+        const created = await AE.API.agent.createSession({ title: '新会话' });
+        if (!created || !created.id) throw new Error('API 未返回 session id');
+        sessions.unshift(created);
+        activeSession = created.id;
+      } catch (e) {
+        AE.toast('error', `无法初始化 Agent 会话：${e.message}`);
+        return;
+      }
+    }
+    renderSessions();
+    loadSession(activeSession);
+  })();
+
+  /* 报告页「在对话中解读」入口：agent.html?interpret=<report_id> */
+  const interpretId = new URLSearchParams(location.search).get('interpret');
+  if (interpretId) {
+    history.replaceState(null, '', 'agent.html');
+    runInterpretFlow(interpretId);
+  }
+
+  /* 模式切换：未开始会话时重绘欢迎态与快捷词 */
+  window.addEventListener('ae:mode', () => {
+    if (AE.API.isMock() && activeSession === 's0' && !col.querySelector('.msg')) {
+      col.innerHTML = '';
+      addWelcome();
+    } else {
+      updateQuickChips();
+    }
+  });
+})();
+</script>
+</body>
+</html>

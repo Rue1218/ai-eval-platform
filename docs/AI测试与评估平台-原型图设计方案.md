@@ -2,11 +2,11 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.0 |
+| 文档版本 | V1.1 |
 | 对应 PRD | V1.6.3（功能唯一权威） |
 | 对应设计规范 | V1.2（令牌 / 组件形态 / 浮层） |
-| 对应 API | V1.0（数据来源） |
-| 对应前端计划 | V1.1（里程碑） |
+| 对应 API | V1.2（数据来源与联调边界） |
+| 对应前端计划 | V1.2（里程碑） |
 | 撰写日期 | 2026-08-17 |
 | 交付物形态 | 线框（ASCII）+ 组件规格 + 状态矩阵 + 交互说明；可直接转 Figma / 高保真 |
 
@@ -652,7 +652,7 @@ user_message → thought → tool_call/tool_result（可多轮）
 | --- | --- |
 | 页面清单 vs PRD 5.8 / 规范 §3 | 10 条路由一一对应，无新增 |
 | 确认卡字段 vs PRD 5.1.2 / API §6 | 一致；`run.k`/`run.use_judge` 为可选，未画成必填 |
-| 每页数据来源 vs API V1.0 | 全部接口存在于 API §2 总表 |
+| 每页数据来源 vs API | 全部目标接口存在于 API §2 总表；当前是否已实现须按 API §12 审计 |
 | 浮层清单 vs 规范 §14 | Toast/Dialog/Modal/Drawer 场景一致；确认卡在文档流 |
 | 状态机徽章 vs PRD 3.3 / 规范 §4 | 六态一致 |
 | 角色可见性 vs PRD 2.1 | 只读仅任务/报告；管理页仅管理员；prod 会签 |
@@ -662,7 +662,40 @@ user_message → thought → tool_call/tool_result（可多轮）
 **检查中发现并已处理**
 
 1. 报告页「在对话中解读」标注 M4 才出现（F-AGT-08），避免 M2 提前画。  
-2. 压测曲线数据源明确为 `GET /api/tasks/{id}/stress-series`，不从 WS `progress` 扩展字段。  
+2. 压测曲线数据源明确为 `GET /api/tasks/{id}/stress-series`，不从 WS `progress` 扩展字段。
+
+---
+
+## 17. 原型数据标注与 API 走查（V1.1 新增）
+
+原型页面必须在走查时明确回答“这个数从哪里来”。`Web-Prototype` 顶栏显示数据模式：默认“实时 API”，`?data=mock` 时显示“示例 Mock”。没有这个标识的截图不能作为接口联调验收材料。
+
+| 页面/区域 | 静态 UI | Mock（仅显式模式） | 实时数据/API | 失败时应该显示 |
+| --- | --- | --- | --- | --- |
+| 全局壳 | 导航、模块色、状态枚举、表头 | 无 | 当前用户 `/auth/me`（正式前端） | 未登录/加载错误，不伪造 admin |
+| Agent | 消息卡/确认卡样式 | 示例会话、工具卡、确认卡 | sessions、profiles、datasets/KB、WS、tasks | 空会话或连接错误 |
+| 调度/任务 | 图例、状态颜色、节点形状 | 演示节点/趋势可视素材 | overview/workers/tasks/events/config | 空节点、队列为空、请求错误 |
+| 数据集/用例 | 列定义、策略色、校验规则 | 示例行/用例/倒计时 | datasets/rows/case-sets/map/export | 空工作台/表单错误，不显示示例实体 |
+| KB | 三栏布局、模式标签 | 示例文档/QA/散点投影 | kb/docs/gold-qa/query | 无 KB、索引中、查询失败 |
+| 报告 | Chart.js 配置、指标标签、空态 | 三类示例报告、样本与曲线 | reports/samples/stress-series | “报告未加载”，不得以默认报告替代 |
+| 管理页 | 表格列、阈值范围、提示文案 | 示例协议档/白名单/成员 | profiles/settings/whitelist/users/audit | 空列表或权限/接口错误 |
+
+### 17.1 原型交互验收顺序
+
+1. 在 `?data=mock` 下只验布局、状态、表单交互；记录为“Mock 走查”。
+2. 切回无参数的默认地址，确认顶栏为“实时 API”。
+3. 为页面执行一次读、一次写、一次刷新回读；在浏览器 Network 保存证据。
+4. 停止 API 或返回 500，确认页面显示错误/空态，且不出现任何示例任务、报告、用户或图表数值。
+5. 只有第 2–4 步都通过，才记录为“API 已接入”。
+
+### 17.2 现有原型的整改口径
+
+- 示例业务实体统一归入 `MOCK_SEED`；页面缓存初始为空。
+- `assets/api.js` 默认真实 fetch，保留 Cookie，显式处理 JSON、FormData 和 Blob；网络错误与非 2xx 不允许自动降级。
+- 任务“复制为新任务”调用 `POST /api/tasks/{id}/rerun`，不在浏览器用固定协议档/数据集拼 TaskSpec。
+- V1.0 未定义删除会话接口，原型不再展示或调用该操作。
+- 趋势线、拓扑随机推进、示例报告、KB 投影和候选生成均仅在 `?data=mock` 保留；实时模式无对应接口时展示空态/说明，不把视觉样本当真实指标。
+- KB 切块预览新增 `GET /api/kb/{id}/documents/{doc_id}/chunks`；数据集与用例 AI 接口只返回候选，采纳动作另行落库。
 3. 会话回放用 `GET /api/sessions/{id}/messages`（含 events），避免刷新丢工具卡。  
 4. 待补全入口在 `/datasets` 详情而非独立页面，路由不增。  
 5. 通知开关放 `/admin/stress`（规范 5.9），不单开页面。
