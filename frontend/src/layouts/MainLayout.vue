@@ -47,8 +47,14 @@
         </router-link>
       </nav>
 
-      <!-- 侧边栏底部用户信息 -->
+      <!-- 侧边栏底部：折叠按钮（对齐原型 sidebar-fold）+ 用户信息 -->
       <div class="sidebar-foot">
+        <button class="sidebar-fold" title="折叠 / 展开导航栏（260px ⇄ 72px）" @click="theme.toggleCollapsed()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="m14 6-6 6 6 6" />
+          </svg>
+          <span class="fold-label">收起导航</span>
+        </button>
         <div class="user-card">
           <div class="avatar">{{ userInitial }}</div>
           <div class="user-meta">
@@ -495,6 +501,44 @@ async function submitChangePassword() {
 .sidebar-foot {
   padding-top: 12px;
   border-top: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+/* 折叠按钮（对齐原型 .sidebar-fold：hover 高亮，折叠态仅留旋转箭头） */
+.sidebar-fold {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  transition: all 0.15s ease;
+}
+.sidebar-fold:hover {
+  border-color: var(--text-tertiary);
+  color: var(--text-primary);
+}
+.sidebar-fold svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 15px;
+  transition: transform var(--ease-shell);
+}
+.app.folded .sidebar-fold {
+  justify-content: center;
+  padding: 7px 0;
+}
+.app.folded .sidebar-fold .fold-label {
+  display: none;
+}
+.app.folded .sidebar-fold svg {
+  transform: rotate(180deg);
 }
 .user-card {
   display: flex;
@@ -686,6 +730,47 @@ async function submitChangePassword() {
   padding: 0;
   display: flex;
   flex-direction: column;
+}
+
+/* 对齐原型 shell.css：视口 ≤1200px 时导航栏自动折叠为 72px 图标栏（无论手动折叠态），>1200px 恢复 */
+@media (max-width: 1200px) and (min-width: 701px) {
+  .app,
+  .app.folded {
+    grid-template-columns: var(--sidebar-w-fold) 1fr;
+  }
+  .app .brand-text,
+  .app .nav-item .nav-label,
+  .app .user-meta,
+  .app .logout-btn,
+  .app .sidebar-fold .fold-label {
+    display: none;
+  }
+  .app .nav-group {
+    text-align: center;
+    margin-inline: 0;
+    font-size: 0;
+  }
+  .app .nav-group::after {
+    content: '·';
+    font-size: 14px;
+  }
+  .app .nav-item {
+    justify-content: center;
+    padding: 0;
+  }
+  .app .sidebar-fold {
+    justify-content: center;
+    padding: 7px 0;
+  }
+  .app .sidebar-fold svg {
+    transform: rotate(180deg);
+  }
+  .app .user-card {
+    justify-content: center;
+    padding: 8px 0;
+    background: transparent;
+    border-color: transparent;
+  }
 }
 
 @media (max-width: 700px) {

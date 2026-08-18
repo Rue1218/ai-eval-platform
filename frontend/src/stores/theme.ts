@@ -5,7 +5,8 @@ export type ThemeMode = 'light' | 'dark'
 export const useThemeStore = defineStore('theme', {
   state: () => ({
     mode: (localStorage.getItem('data-theme') as ThemeMode) || 'light',
-    collapsed: false,
+    // 导航栏折叠态跨页持久化（键名对齐原型 ae_sidebar_fold）
+    collapsed: localStorage.getItem('ae_sidebar_fold') === '1',
   }),
   actions: {
     apply() {
@@ -18,6 +19,7 @@ export const useThemeStore = defineStore('theme', {
     },
     toggleCollapsed() {
       this.collapsed = !this.collapsed
+      localStorage.setItem('ae_sidebar_fold', this.collapsed ? '1' : '0')
     },
   },
 })
