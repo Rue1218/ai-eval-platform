@@ -17,6 +17,11 @@ BRANCH=${BRANCH:-main}
 DEPLOY_COMMIT=${DEPLOY_COMMIT:-}
 # CI 传入上次成功部署的提交，用于只构建真正发生变化的服务。
 DEPLOY_BASE_COMMIT=${DEPLOY_BASE_COMMIT:-}
+# CI 构建完成后传入 GHCR 镜像前缀与短期令牌；手动部署未传入时仍保留本机构建能力。
+IMAGE_PREFIX=${IMAGE_PREFIX:-}
+IMAGE_TAG=${IMAGE_TAG:-}
+GHCR_ACTOR=${GHCR_ACTOR:-}
+GHCR_TOKEN=${GHCR_TOKEN:-}
 LOCK_FILE="$APP_DIR/.deploy.lock"
 DEPLOY_MARKER="$APP_DIR/.deploy-success-sha"
 
@@ -74,8 +79,21 @@ export COMPOSE_DOCKER_CLI_BUILD=1
 echo "==> [2/4] 按代码差异构建容器镜像（BUILD_VERSION=$BUILD_VERSION，旧容器持续服务中）"
 BUILD_SERVICES=()
 
-# 首次部署或基准提交不可用时，为保证正确性执行一次全量业务镜像构建。
-if [ -z "$DEPLOY_BASE_COMMIT" ] || ! git cat-file -e "${DEPLOY_BASE_COMMIT}^{commit}" 2>/dev/null; then
+# CI 已在 GitHub runner 构建镜像时，生产机仅拉取增量层，避免编译过程耗尽线上 CPU/内存。
+if [ -n "$IMAGE_PREFIX" ] && [ -n "$IMAGE_TAG" ] && [ -n "$GHCR_ACTOR" ] && [ -n "$GHCR_TOKEN" ]; then
+    IMAGE_PREFIX=${IMAGE_PREFIX,,}
+    export WEB_IMAGE="${IMAGE_PREFIX}-web:${IMAGE_TAG}"
+    export API_IMAGE="${IMAGE_PREFIX}-api:${IMAGE_TAG}"
+    export WORKER_IMAGE="${IMAGE_PREFIX}-worker:${IMAGE_TAG}"
+    export LIGHTRAG_IMAGE="${IMAGE_PREFIX}-lightrag:${IMAGE_TAG}"
+    export STRESS_IMAGE="${IMAGE_PREFIX}-stress:${IMAGE_TAG}"
+
+    echo "==> 登录 GHCR 并拉取预构建镜像"
+    printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_ACTOR" --password-stdin >/dev/null
+    docker compose pull web api worker lightrag stress
+    docker logout ghcr.io >/dev/null 2>&1 || true
+# 首次手动部署或基准提交不可用时，为保证正确性执行一次全量业务镜像构建。
+elif [ -z "$DEPLOY_BASE_COMMIT" ] || ! git cat-file -e "${DEPLOY_BASE_COMMIT}^{commit}" 2>/dev/null; then
     echo "==> 未找到有效部署基准，本次全量构建"
     BUILD_SERVICES=(web api worker lightrag stress)
 else
