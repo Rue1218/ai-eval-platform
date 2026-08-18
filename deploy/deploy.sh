@@ -15,7 +15,10 @@ GIT_REPO=${GIT_REPO:-git@github.com:Rue1218/ai-eval-platform.git}
 BRANCH=${BRANCH:-main}
 # CI 会传入精确提交；手动部署未传入时仍保持部署 main 分支的原有行为。
 DEPLOY_COMMIT=${DEPLOY_COMMIT:-}
+# CI 传入上次成功部署的提交，用于只构建真正发生变化的服务。
+DEPLOY_BASE_COMMIT=${DEPLOY_BASE_COMMIT:-}
 LOCK_FILE="$APP_DIR/.deploy.lock"
+DEPLOY_MARKER="$APP_DIR/.deploy-success-sha"
 
 cd "$APP_DIR"
 
@@ -24,9 +27,9 @@ cd "$APP_DIR"
 if [ "${DEPLOY_LOCK_ACQUIRED:-0}" != "1" ]; then
     exec 9>"$LOCK_FILE"
     echo "==> 等待部署互斥锁"
-    # 服务器的 flock 仅接受秒数，1,500 秒等价于 25 分钟。
-    if ! flock -w 1500 9; then
-        echo "错误：等待部署互斥锁超过 25 分钟"
+    # 取消的 SSH 任务若留下短暂构建进程，最多等待 2 分钟，避免流水线长时间假死。
+    if ! flock -w 120 9; then
+        echo "错误：等待部署互斥锁超过 2 分钟；请检查是否有残留 deploy.sh/docker build 进程"
         exit 1
     fi
     export DEPLOY_LOCK_ACQUIRED=1
@@ -39,6 +42,11 @@ if [ ! -d .git ]; then
 fi
 
 git fetch origin "$BRANCH"
+# 优先使用工作流解析出的上次成功部署提交；手动部署则回退到本机成功标记。
+if [ -z "$DEPLOY_BASE_COMMIT" ] && [ -s "$DEPLOY_MARKER" ]; then
+    DEPLOY_BASE_COMMIT=$(cat "$DEPLOY_MARKER")
+    export DEPLOY_BASE_COMMIT
+fi
 # CI 必须部署触发提交，避免旧工作流在 fetch 后误部署更晚推送的 main。
 if [ -n "$DEPLOY_COMMIT" ]; then
     git cat-file -e "${DEPLOY_COMMIT}^{commit}"
@@ -54,17 +62,47 @@ if [ "${DEPLOY_SCRIPT_RELOADED:-0}" != "1" ]; then
     exec bash "$APP_DIR/deploy/deploy.sh"
 fi
 
+# 手动部署没有传入精确 SHA 时，以同步后的 HEAD 作为本次目标提交。
+DEPLOY_COMMIT=${DEPLOY_COMMIT:-$(git rev-parse HEAD)}
+
 # 注入构建版本信息
 export BUILD_VERSION=$(git rev-parse --short HEAD)
 export BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 export DOCKER_BUILDKIT=1
 export COMPOSE_DOCKER_CLI_BUILD=1
 
-echo "==> [2/4] 分阶段构建容器镜像（BUILD_VERSION=$BUILD_VERSION，旧容器持续服务中）"
-# Vite 与 Python/Go 镜像并发构建会在低配服务器上争抢 CPU、内存并触发 swap；前端单独构建。
-BUILDKIT_PROGRESS=plain docker compose build web
-# 前端完成后再并发构建后端镜像，保留后端依赖缓存的构建效率。
-BUILDKIT_PROGRESS=plain docker compose build --parallel api worker lightrag stress
+echo "==> [2/4] 按代码差异构建容器镜像（BUILD_VERSION=$BUILD_VERSION，旧容器持续服务中）"
+BUILD_SERVICES=()
+
+# 首次部署或基准提交不可用时，为保证正确性执行一次全量业务镜像构建。
+if [ -z "$DEPLOY_BASE_COMMIT" ] || ! git cat-file -e "${DEPLOY_BASE_COMMIT}^{commit}" 2>/dev/null; then
+    echo "==> 未找到有效部署基准，本次全量构建"
+    BUILD_SERVICES=(web api worker lightrag stress)
+else
+    echo "==> 对比上次成功部署：${DEPLOY_BASE_COMMIT:0:8}..${BUILD_VERSION}"
+    CHANGED_FILES=$(git diff --name-only "$DEPLOY_BASE_COMMIT" "$DEPLOY_COMMIT")
+
+    # compose 拓扑或根部署配置变化会影响所有服务，必须全量重建。
+    if grep -Eq '^(docker-compose\.yml|\.env\.example)$' <<<"$CHANGED_FILES"; then
+        BUILD_SERVICES=(web api worker lightrag stress)
+    else
+        grep -q '^frontend/' <<<"$CHANGED_FILES" && BUILD_SERVICES+=(web)
+        grep -q '^backend/api/' <<<"$CHANGED_FILES" && BUILD_SERVICES+=(api)
+        grep -q '^backend/worker/' <<<"$CHANGED_FILES" && BUILD_SERVICES+=(worker)
+        grep -q '^backend/lightrag/' <<<"$CHANGED_FILES" && BUILD_SERVICES+=(lightrag)
+        grep -q '^backend/stress/' <<<"$CHANGED_FILES" && BUILD_SERVICES+=(stress)
+    fi
+fi
+
+if [ "${#BUILD_SERVICES[@]}" -eq 0 ]; then
+    echo "==> 仅部署脚本/工作流发生变化，无需构建业务镜像"
+else
+    echo "==> 本次构建服务：${BUILD_SERVICES[*]}"
+    # 低配服务器顺序构建，避免并发争抢内存触发 swap；未变化服务直接复用现有镜像。
+    for service in "${BUILD_SERVICES[@]}"; do
+        BUILDKIT_PROGRESS=plain docker compose build "$service"
+    done
+fi
 
 echo "==> [3/4] 平滑滚动更新服务容器（无闪断）"
 if ! docker compose up -d --no-build --remove-orphans; then
@@ -73,6 +111,9 @@ if ! docker compose up -d --no-build --remove-orphans; then
     docker compose stop web api worker lightrag stress 2>/dev/null || true
     docker compose up -d --no-build
 fi
+
+# 仅在容器滚动更新成功后记录部署提交，失败任务不会污染下一次差异计算基准。
+printf '%s\n' "${DEPLOY_COMMIT:-$(git rev-parse HEAD)}" > "$DEPLOY_MARKER"
 
 echo "==> [4/4] 清理未使用的历史悬空镜像"
 docker image prune -f --filter "dangling=true" >/dev/null 2>&1 || true

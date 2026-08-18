@@ -10,6 +10,11 @@ on:
       - 'Web-Prototype/**'
   workflow_dispatch:
 
+# 部署只需读取仓库与历史工作流；SSH 凭据仍由仓库 Secrets 注入。
+permissions:
+  contents: read
+  actions: read
+
 # 同一台生产服务器一次只执行一个部署；新提交应淘汰旧提交，避免它们在服务器上重复构建。
 concurrency:
   group: ai-eval-production-deploy
@@ -21,6 +26,22 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Resolve last successful deploy
+        id: base
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const runs = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'deploy.yml',
+              status: 'success',
+              per_page: 1,
+            })
+            const sha = runs.data.workflow_runs[0]?.head_sha || ''
+            core.info(sha ? `上次成功部署提交：${sha}` : '未找到成功部署记录，本次执行全量构建')
+            core.setOutput('sha', sha)
 
       - name: Check deploy secrets
         id: check
@@ -40,22 +61,28 @@ jobs:
         # 将触发工作流的提交透传到远端，禁止旧工作流改为部署更新后的 main。
         env:
           DEPLOY_COMMIT: ${{ github.sha }}
+          DEPLOY_BASE_COMMIT: ${{ steps.base.outputs.sha }}
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER || 'deploy' }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
-          envs: DEPLOY_COMMIT
-          command_timeout: 30m
+          envs: DEPLOY_COMMIT,DEPLOY_BASE_COMMIT
+          command_timeout: 20m
           script: |
             set -e
             APP_DIR=/opt/ai-eval-platform
-            # 先同步到本次触发的提交，再加载其中的部署脚本，确保代码与工作流一一对应。
+            # 只 fetch，不在锁外 reset 工作区；从目标提交提取脚本后由脚本持锁完成同步。
             if [ -d "$APP_DIR/.git" ]; then
               cd "$APP_DIR"
               git fetch origin main
               git cat-file -e "${DEPLOY_COMMIT}^{commit}"
-              git reset --hard "$DEPLOY_COMMIT"
+              DEPLOY_ENTRY=$(mktemp)
+              git show "${DEPLOY_COMMIT}:deploy/deploy.sh" > "$DEPLOY_ENTRY"
+              chmod +x "$DEPLOY_ENTRY"
+              exec env DEPLOY_COMMIT="$DEPLOY_COMMIT" DEPLOY_BASE_COMMIT="$DEPLOY_BASE_COMMIT" \
+                bash "$DEPLOY_ENTRY"
             fi
-            exec env DEPLOY_COMMIT="$DEPLOY_COMMIT" bash "$APP_DIR/deploy/deploy.sh"
+            echo "错误：部署目录不存在或尚未初始化：$APP_DIR"
+            exit 1

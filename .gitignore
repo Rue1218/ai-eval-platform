@@ -27,6 +27,8 @@ backend/stress/*.exe
 data/
 *.log
 .DS_Store
+.deploy.lock
+.deploy-success-sha
 
 # IDE
 .idea/
