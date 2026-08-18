@@ -2,7 +2,8 @@ name: ai-eval-platform
 
 services:
   postgres:
-    image: postgres:16-alpine
+    # 固定 PostgreSQL 补丁版本，避免 16-alpine 浮动标签在重建时静默漂移。
+    image: ${POSTGRES_IMAGE:-postgres:16.15-alpine}
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-aieval}

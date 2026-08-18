@@ -22,6 +22,9 @@ IMAGE_PREFIX=${IMAGE_PREFIX:-}
 IMAGE_TAG=${IMAGE_TAG:-}
 GHCR_ACTOR=${GHCR_ACTOR:-}
 GHCR_TOKEN=${GHCR_TOKEN:-}
+# PostgreSQL 使用精确补丁版本；仅目标镜像发生变化时执行备份与重建。
+POSTGRES_IMAGE=${POSTGRES_IMAGE:-postgres:16.15-alpine}
+export POSTGRES_IMAGE
 LOCK_FILE="$APP_DIR/.deploy.lock"
 DEPLOY_MARKER="$APP_DIR/.deploy-success-sha"
 DEPLOY_IMAGE_ENV="$APP_DIR/.deploy-images.env"
@@ -136,12 +139,84 @@ else
     done
 fi
 
-echo "==> [3/4] 平滑滚动更新服务容器（无闪断）"
-if ! docker compose up -d --no-build --remove-orphans; then
-    echo "警告：平滑更新异常，尝试安全按序自愈拉起..."
-    # 优先保证 postgres 不被误杀，仅重启业务应用
-    docker compose stop web api worker lightrag stress 2>/dev/null || true
-    docker compose up -d --no-build
+# PostgreSQL 镜像变更属于有状态升级：先完整备份，再拉取目标镜像。
+POSTGRES_CONTAINER=$(docker compose ps -q postgres 2>/dev/null || true)
+CURRENT_POSTGRES_IMAGE=""
+POSTGRES_IMAGE_CHANGED=0
+if [ -n "$POSTGRES_CONTAINER" ]; then
+    CURRENT_POSTGRES_IMAGE=$(docker inspect --format '{{.Config.Image}}' "$POSTGRES_CONTAINER")
+fi
+
+if [ "$CURRENT_POSTGRES_IMAGE" != "$POSTGRES_IMAGE" ]; then
+    POSTGRES_IMAGE_CHANGED=1
+    echo "==> PostgreSQL 镜像更新：${CURRENT_POSTGRES_IMAGE:-首次部署} -> ${POSTGRES_IMAGE}"
+    if [ -n "$POSTGRES_CONTAINER" ]; then
+        BACKUP_DIR="$APP_DIR/data/backups"
+        BACKUP_FILE="$BACKUP_DIR/postgres-pre-upgrade-$(date -u +'%Y%m%dT%H%M%SZ').sql.gz"
+        mkdir -p "$BACKUP_DIR"
+        echo "==> 升级前执行 pg_dumpall：$BACKUP_FILE"
+        if ! docker compose exec -T postgres sh -c 'pg_dumpall -U "$POSTGRES_USER"' | gzip -c > "$BACKUP_FILE"; then
+            rm -f "$BACKUP_FILE"
+            echo "错误：PostgreSQL 升级前备份失败，已中止镜像切换" >&2
+            exit 1
+        fi
+        chmod 600 "$BACKUP_FILE"
+        if [ ! -s "$BACKUP_FILE" ]; then
+            echo "错误：PostgreSQL 备份文件为空，已中止镜像切换" >&2
+            exit 1
+        fi
+    fi
+    echo "==> 拉取 PostgreSQL 精确版本镜像"
+    timeout 300 docker pull "$POSTGRES_IMAGE"
+fi
+
+# 有状态容器必须先单独更新并恢复健康，再允许业务容器滚动更新。
+if [ "$POSTGRES_IMAGE_CHANGED" = "1" ]; then
+    echo "==> 单独更新 PostgreSQL 容器"
+    if ! docker compose up -d --no-build postgres; then
+        echo "错误：PostgreSQL 容器更新失败，业务容器保持原状；请使用升级前备份排查" >&2
+        exit 1
+    fi
+    echo "==> 验证 PostgreSQL 升级后健康状态"
+    POSTGRES_READY=0
+    for attempt in $(seq 1 30); do
+        if docker compose exec -T postgres sh -c 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"' >/dev/null 2>&1; then
+            POSTGRES_READY=1
+            break
+        fi
+        sleep 2
+    done
+    if [ "$POSTGRES_READY" != "1" ]; then
+        echo "错误：PostgreSQL 在 60 秒内未恢复健康，请使用升级前备份排查或回滚" >&2
+        exit 1
+    fi
+fi
+
+# 只滚动更新发生变化且原本处于运行状态的服务；用户主动 stop/pause 的服务保持原状态。
+DEPLOY_SERVICES=()
+for service in "${BUILD_SERVICES[@]}"; do
+    SERVICE_CONTAINER=$(docker compose ps -aq "$service" 2>/dev/null || true)
+    if [ -z "$SERVICE_CONTAINER" ]; then
+        # 首次部署没有旧容器，需要创建服务。
+        DEPLOY_SERVICES+=("$service")
+        continue
+    fi
+    SERVICE_RUNNING=$(docker inspect --format '{{.State.Running}}' "$SERVICE_CONTAINER")
+    SERVICE_PAUSED=$(docker inspect --format '{{.State.Paused}}' "$SERVICE_CONTAINER")
+    if [ "$SERVICE_RUNNING" = "true" ] && [ "$SERVICE_PAUSED" != "true" ]; then
+        DEPLOY_SERVICES+=("$service")
+    else
+        echo "==> 保留 $service 的停止/暂停状态；镜像已更新，手动恢复时生效"
+    fi
+done
+
+if [ "${#DEPLOY_SERVICES[@]}" -eq 0 ]; then
+    echo "==> [3/4] 无需滚动更新业务服务"
+elif ! docker compose up -d --no-build --remove-orphans "${DEPLOY_SERVICES[@]}"; then
+    echo "警告：业务服务平滑更新异常，尝试安全按序自愈拉起：${DEPLOY_SERVICES[*]}"
+    # PostgreSQL 已独立验证健康，自愈阶段只处理本次计划更新的业务应用。
+    docker compose stop "${DEPLOY_SERVICES[@]}" 2>/dev/null || true
+    docker compose up -d --no-build "${DEPLOY_SERVICES[@]}"
 fi
 
 # 仅在容器滚动更新成功后记录部署提交，失败任务不会污染下一次差异计算基准。
