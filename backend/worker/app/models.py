@@ -6,7 +6,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, Index, String
+from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, Index, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import declarative_base
 
@@ -40,21 +40,28 @@ class Task(Base):
 
 
 class TaskEvent(Base):
+    """与 API 一致的任务事件最小字段，Worker 写入时默认 info 级别。"""
+
     __tablename__ = "task_events"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     task_id = Column(String, nullable=False, index=True)
     event = Column(String, nullable=False)
+    level = Column(String, nullable=False, default="info")
+    message = Column(Text, nullable=True)
     payload = Column(JSONB, default=dict)
     ts = Column(DateTime(timezone=True), default=utcnow)
 
 
 class WsEvent(Base):
+    """与 API 一致的会话事件字段，支持关联任务 ID。"""
+
     __tablename__ = "ws_events"
     __table_args__ = (Index("ix_ws_events_session_event", "session_id", "event_id"),)
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     session_id = Column(String, nullable=False, index=True)
+    task_id = Column(String, nullable=True, index=True)
     event_id = Column(BigInteger, nullable=False)
     event = Column(String, nullable=False)
     payload = Column(JSONB, default=dict)

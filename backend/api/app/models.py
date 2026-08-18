@@ -20,6 +20,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 
@@ -166,6 +167,15 @@ class Task(Base):
             name="ck_tasks_status",
         ),
         Index("ix_tasks_queue", "status", "created_at"),
+        Index(
+            "uq_tasks_active_session",
+            "session_id",
+            unique=True,
+            postgresql_where=text(
+                "session_id IS NOT NULL AND status IN "
+                "('queued', 'running', 'awaiting_case_confirm')"
+            ),
+        ),
     )
 
     id = Column(String, primary_key=True, default=uuid_str)
