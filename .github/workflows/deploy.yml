@@ -30,9 +30,9 @@ jobs:
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
+          username: ${{ secrets.SSH_USER || 'deploy' }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          port: ${{ secrets.SSH_PORT }}
+          port: ${{ secrets.SSH_PORT || 22 }}
           command_timeout: 30m
           script: |
             bash /opt/ai-eval-platform/deploy/deploy.sh
