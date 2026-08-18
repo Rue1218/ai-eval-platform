@@ -17,7 +17,7 @@ services:
       retries: 10
 
   api:
-    image: ${API_IMAGE:-ai-eval-platform-api:local}
+    image: ${API_IMAGE:-ai-eval-platform-api}
     build: ./backend/api
     restart: unless-stopped
     environment:
@@ -51,7 +51,7 @@ services:
       start_period: 10s
 
   worker:
-    image: ${WORKER_IMAGE:-ai-eval-platform-worker:local}
+    image: ${WORKER_IMAGE:-ai-eval-platform-worker}
     build: ./backend/worker
     restart: unless-stopped
     environment:
@@ -66,7 +66,7 @@ services:
       - ./data:/data
 
   web:
-    image: ${WEB_IMAGE:-ai-eval-platform-web:local}
+    image: ${WEB_IMAGE:-ai-eval-platform-web}
     build:
       context: ./frontend
       args:
@@ -79,7 +79,7 @@ services:
       - "${WEB_PORT:-80}:80"
 
   lightrag:
-    image: ${LIGHTRAG_IMAGE:-ai-eval-platform-lightrag:local}
+    image: ${LIGHTRAG_IMAGE:-ai-eval-platform-lightrag}
     build: ./backend/lightrag
     restart: unless-stopped
     environment:
@@ -93,7 +93,7 @@ services:
       - ./data/lightrag:/data/lightrag
 
   stress:
-    image: ${STRESS_IMAGE:-ai-eval-platform-stress:local}
+    image: ${STRESS_IMAGE:-ai-eval-platform-stress}
     build: ./backend/stress
     restart: unless-stopped
     ports:

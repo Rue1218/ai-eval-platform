@@ -29,6 +29,7 @@ data/
 .DS_Store
 .deploy.lock
 .deploy-success-sha
+.deploy-images.env
 
 # IDE
 .idea/

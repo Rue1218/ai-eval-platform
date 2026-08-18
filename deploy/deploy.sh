@@ -24,6 +24,7 @@ GHCR_ACTOR=${GHCR_ACTOR:-}
 GHCR_TOKEN=${GHCR_TOKEN:-}
 LOCK_FILE="$APP_DIR/.deploy.lock"
 DEPLOY_MARKER="$APP_DIR/.deploy-success-sha"
+DEPLOY_IMAGE_ENV="$APP_DIR/.deploy-images.env"
 
 cd "$APP_DIR"
 
@@ -79,40 +80,53 @@ export COMPOSE_DOCKER_CLI_BUILD=1
 echo "==> [2/4] 按代码差异构建容器镜像（BUILD_VERSION=$BUILD_VERSION，旧容器持续服务中）"
 BUILD_SERVICES=()
 
-# CI 已在 GitHub runner 构建镜像时，生产机仅拉取增量层，避免编译过程耗尽线上 CPU/内存。
-if [ -n "$IMAGE_PREFIX" ] && [ -n "$IMAGE_TAG" ] && [ -n "$GHCR_ACTOR" ] && [ -n "$GHCR_TOKEN" ]; then
-    IMAGE_PREFIX=${IMAGE_PREFIX,,}
-    export WEB_IMAGE="${IMAGE_PREFIX}-web:${IMAGE_TAG}"
-    export API_IMAGE="${IMAGE_PREFIX}-api:${IMAGE_TAG}"
-    export WORKER_IMAGE="${IMAGE_PREFIX}-worker:${IMAGE_TAG}"
-    export LIGHTRAG_IMAGE="${IMAGE_PREFIX}-lightrag:${IMAGE_TAG}"
-    export STRESS_IMAGE="${IMAGE_PREFIX}-stress:${IMAGE_TAG}"
-
-    echo "==> 登录 GHCR 并拉取预构建镜像"
-    printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_ACTOR" --password-stdin >/dev/null
-    docker compose pull web api worker lightrag stress
-    docker logout ghcr.io >/dev/null 2>&1 || true
-# 首次手动部署或基准提交不可用时，为保证正确性执行一次全量业务镜像构建。
-elif [ -z "$DEPLOY_BASE_COMMIT" ] || ! git cat-file -e "${DEPLOY_BASE_COMMIT}^{commit}" 2>/dev/null; then
+# 先计算本次真正受影响的服务；CI 拉取与手动本地构建共用同一结果。
+if [ -z "$DEPLOY_BASE_COMMIT" ] || ! git cat-file -e "${DEPLOY_BASE_COMMIT}^{commit}" 2>/dev/null; then
     echo "==> 未找到有效部署基准，本次全量构建"
     BUILD_SERVICES=(web api worker lightrag stress)
 else
     echo "==> 对比上次成功部署：${DEPLOY_BASE_COMMIT:0:8}..${BUILD_VERSION}"
     CHANGED_FILES=$(git diff --name-only "$DEPLOY_BASE_COMMIT" "$DEPLOY_COMMIT")
 
-    # compose 拓扑或根部署配置变化会影响所有服务，必须全量重建。
-    if grep -Eq '^(docker-compose\.yml|\.env\.example)$' <<<"$CHANGED_FILES"; then
-        BUILD_SERVICES=(web api worker lightrag stress)
-    else
-        grep -q '^frontend/' <<<"$CHANGED_FILES" && BUILD_SERVICES+=(web)
-        grep -q '^backend/api/' <<<"$CHANGED_FILES" && BUILD_SERVICES+=(api)
-        grep -q '^backend/worker/' <<<"$CHANGED_FILES" && BUILD_SERVICES+=(worker)
-        grep -q '^backend/lightrag/' <<<"$CHANGED_FILES" && BUILD_SERVICES+=(lightrag)
-        grep -q '^backend/stress/' <<<"$CHANGED_FILES" && BUILD_SERVICES+=(stress)
-    fi
+    # Compose/部署配置由 up 阶段直接应用，不要求重建镜像；只有服务构建上下文变化才构建。
+    grep -q '^frontend/' <<<"$CHANGED_FILES" && BUILD_SERVICES+=(web)
+    grep -q '^backend/api/' <<<"$CHANGED_FILES" && BUILD_SERVICES+=(api)
+    grep -q '^backend/worker/' <<<"$CHANGED_FILES" && BUILD_SERVICES+=(worker)
+    grep -q '^backend/lightrag/' <<<"$CHANGED_FILES" && BUILD_SERVICES+=(lightrag)
+    grep -q '^backend/stress/' <<<"$CHANGED_FILES" && BUILD_SERVICES+=(stress)
 fi
 
-if [ "${#BUILD_SERVICES[@]}" -eq 0 ]; then
+# 恢复上一轮各服务使用的不可变镜像引用，未变化服务不会回退到旧镜像。
+if [ -s "$DEPLOY_IMAGE_ENV" ]; then
+    set -a
+    # 文件仅由本脚本写入受控的镜像引用，不包含凭据。
+    # shellcheck disable=SC1090
+    source "$DEPLOY_IMAGE_ENV"
+    set +a
+fi
+
+# CI 已在 GitHub runner 构建镜像时，生产机只拉取变化服务的增量层。
+if [ -n "$IMAGE_PREFIX" ] && [ -n "$IMAGE_TAG" ] && [ -n "$GHCR_ACTOR" ] && [ -n "$GHCR_TOKEN" ]; then
+    IMAGE_PREFIX=${IMAGE_PREFIX,,}
+    for service in "${BUILD_SERVICES[@]}"; do
+        case "$service" in
+            web) export WEB_IMAGE="${IMAGE_PREFIX}-web:${IMAGE_TAG}" ;;
+            api) export API_IMAGE="${IMAGE_PREFIX}-api:${IMAGE_TAG}" ;;
+            worker) export WORKER_IMAGE="${IMAGE_PREFIX}-worker:${IMAGE_TAG}" ;;
+            lightrag) export LIGHTRAG_IMAGE="${IMAGE_PREFIX}-lightrag:${IMAGE_TAG}" ;;
+            stress) export STRESS_IMAGE="${IMAGE_PREFIX}-stress:${IMAGE_TAG}" ;;
+        esac
+    done
+
+    if [ "${#BUILD_SERVICES[@]}" -eq 0 ]; then
+        echo "==> 仅部署脚本/工作流发生变化，无需拉取业务镜像"
+    else
+        echo "==> 登录 GHCR，仅拉取变化服务：${BUILD_SERVICES[*]}"
+        printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_ACTOR" --password-stdin >/dev/null
+        docker compose pull "${BUILD_SERVICES[@]}"
+        docker logout ghcr.io >/dev/null 2>&1 || true
+    fi
+elif [ "${#BUILD_SERVICES[@]}" -eq 0 ]; then
     echo "==> 仅部署脚本/工作流发生变化，无需构建业务镜像"
 else
     echo "==> 本次构建服务：${BUILD_SERVICES[*]}"
@@ -132,6 +146,14 @@ fi
 
 # 仅在容器滚动更新成功后记录部署提交，失败任务不会污染下一次差异计算基准。
 printf '%s\n' "${DEPLOY_COMMIT:-$(git rev-parse HEAD)}" > "$DEPLOY_MARKER"
+# 持久化镜像引用；使用 %q 防止再次 source 时发生 shell 注入。
+{
+    for variable in WEB_IMAGE API_IMAGE WORKER_IMAGE LIGHTRAG_IMAGE STRESS_IMAGE; do
+        if [ -n "${!variable:-}" ]; then
+            printf '%s=%q\n' "$variable" "${!variable}"
+        fi
+    done
+} > "$DEPLOY_IMAGE_ENV"
 
 echo "==> [4/4] 清理未使用的历史悬空镜像"
 docker image prune -f --filter "dangling=true" >/dev/null 2>&1 || true
