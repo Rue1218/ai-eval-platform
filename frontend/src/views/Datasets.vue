@@ -42,7 +42,8 @@
                 :key="item.id"
                 class="ft-node"
                 :class="{ active: activeDatasetId === item.id }"
-                @click="selectDataset(item.id)"
+                :title="`${item.name} · v${item.version}`"
+                @click="requestSelectDataset(item.id)"
                 @contextmenu.prevent.stop="openCtxMenu($event, 'file', item.id)"
               >
                 <span class="ft-icon">{{ item.isGoldQa ? '⭐' : '📄' }}</span>
@@ -91,7 +92,7 @@
             <button class="btn btn-secondary btn-sm" @click="openAddColModal">+ 新增列</button>
             <button class="btn btn-ai btn-sm" @click="openAiGenModal">✨ AI 合成新数据</button>
             <button class="btn btn-ai btn-sm" @click="openAiFillModal">AI 补全缺失行</button>
-            <button class="btn btn-secondary btn-sm" :disabled="!hasUnsavedChanges || savingRows" @click="persistRows">
+            <button class="btn btn-secondary btn-sm" :disabled="!hasUnsavedChanges || savingRows" title="快捷键 Ctrl/⌘ + S" @click="persistRows">
               {{ savingRows ? '保存中…' : '保存修改' }}
             </button>
             <button class="btn btn-secondary btn-sm" @click="exportJsonl">导出 JSONL</button>
@@ -131,8 +132,14 @@
                   黄金 QA「{{ currentItem?.name }}」共 {{ activeGoldQa?.row_count || 0 }} 行，行级查看与编辑将在 M3 知识库里程碑接入。
                 </td>
               </tr>
-              <!-- 表格行：右键唤起行级菜单（弹窗编辑 / AI 补全本行 / 复制 JSON / 插入 / 删除） -->
-              <tr v-for="(r, idx) in sampleRows" v-else :key="idx" @contextmenu.prevent="openCtxMenu($event, 'row', '', idx)">
+              <!-- 表格行：双击打开弹窗编辑；右键唤起行级菜单（编辑 / 补全 / 复制 / 勾选 / 插入 / 副本 / 删除） -->
+              <tr
+                v-for="(r, idx) in sampleRows"
+                v-else
+                :key="idx"
+                @contextmenu.prevent="openCtxMenu($event, 'row', '', idx)"
+                @dblclick="openRowEditModal(idx)"
+              >
                 <td><input v-model="r.checked" type="checkbox" /></td>
                 <td class="mono small">{{ r.row_no }}</td>
                 <!-- cell-bad 作用于单元格本身：红字 + 红色虚线下划线，对齐原型 datasets.html。 -->
@@ -246,6 +253,12 @@
             <span v-else class="st-ok">✓ 数据格式校验通过</span>
             <!-- D3 扩展列计数，对齐原型状态栏 -->
             <span>扩展列: <b class="num mono">{{ customCols.length }}</b></span>
+            <!-- 批量操作条：勾选行后出现，支持批量删除与导出选中 -->
+            <template v-if="selectedCount > 0">
+              <span>已选 <b class="num mono">{{ selectedCount }}</b> 行</span>
+              <button class="link-btn" @click="exportSelectedRows">导出选中</button>
+              <button class="link-btn danger" @click="batchDeleteRows">批量删除</button>
+            </template>
           </template>
           <span class="grow"></span>
           <!-- 主评测指标选择仅基准数据集展示（对齐原型：黄金 QA 视图无指标切换） -->
@@ -630,7 +643,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage, useDialog, type DropdownOption } from 'naive-ui'
 import { api } from '../api/http'
@@ -861,14 +874,49 @@ function syncGoldQaTree(list: GoldQA[]) {
   }))
 }
 
-// ─── 行勾选：对齐原型 chk-all 全选 / 全不选联动（仅本地编辑态） ───
+// ─── 行勾选：对齐原型 chk-all 全选 / 全不选联动（仅本地编辑态），并驱动批量操作条 ───
 const allRowsChecked = computed(() => sampleRows.value.length > 0 && sampleRows.value.every(row => row.checked))
+const selectedCount = computed(() => sampleRows.value.filter(row => row.checked).length)
 
 function toggleAllRows(e: Event) {
   const checked = (e.target as HTMLInputElement).checked
   sampleRows.value.forEach(row => {
     row.checked = checked
   })
+}
+
+/** 批量删除勾选行：二次确认后从本地编辑态移除，仍由「保存修改」统一落库。 */
+function batchDeleteRows() {
+  const count = selectedCount.value
+  if (!count) return
+  dialog.warning({
+    title: '批量删除',
+    content: `确认删除勾选的 ${count} 行？点击“保存修改”后同步服务端。`,
+    positiveText: '删除',
+    negativeText: '取消',
+    onPositiveClick: () => {
+      sampleRows.value = sampleRows.value.filter(row => !row.checked)
+      hasUnsavedChanges.value = true
+      message.info(`已删除 ${count} 行，点击“保存修改”后生效`)
+    },
+  })
+}
+
+/** 导出勾选行为 JSONL：便于把子集贴到外部工具或另存为新数据集。 */
+function exportSelectedRows() {
+  const selected = sampleRows.value.filter(row => row.checked)
+  if (!selected.length) return
+  const content = selected
+    .map(row => JSON.stringify({ question: row.q, reference: row.r, context: row.c || null, tags: row.tags, difficulty: row.difficulty, ...row.extras }))
+    .join('\n')
+  const blob = new Blob([content], { type: 'application/jsonl' })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = `${currentDataset.value?.name || 'dataset'}-selected-${selected.length}rows.jsonl`
+  anchor.click()
+  URL.revokeObjectURL(url)
+  message.success(`已导出勾选的 ${selected.length} 行 JSONL`)
 }
 
 // 读取单元格当前值（内置列或扩展列），供编辑取消时还原。
@@ -910,6 +958,35 @@ async function selectDataset(id: string) {
     return
   }
   await loadRows(id)
+}
+
+/**
+ * 带未保存守卫的切换入口：存在未落库编辑时先询问「保存并切换 / 放弃修改」，
+ * 关闭对话框视为取消切换；after 回调在切换完成后执行（供右键菜单续接动作）。
+ */
+function requestSelectDataset(id: string, after?: () => void) {
+  if (id === activeDatasetId.value) {
+    after?.()
+    return
+  }
+  if (!hasUnsavedChanges.value) {
+    void selectDataset(id).then(() => after?.())
+    return
+  }
+  dialog.warning({
+    title: '有未保存的修改',
+    content: '当前表格存在未落库的编辑，切换前请选择处理方式。',
+    positiveText: '保存并切换',
+    negativeText: '放弃修改',
+    onPositiveClick: async () => {
+      await persistRows()
+      await selectDataset(id)
+      after?.()
+    },
+    onNegativeClick: () => {
+      void selectDataset(id).then(() => after?.())
+    },
+  })
 }
 
 function openUploadModal(dataset: Dataset | null) {
@@ -1068,10 +1145,13 @@ function closeCtxMenu() {
 // 按菜单类型动态生成 NDropdown 选项（对齐原型 datasets.html 三组右键菜单）。
 const ctxMenuOptions = computed<DropdownOption[]>(() => {
   if (ctxMenu.value.type === 'file') {
-    // 黄金 QA 节点：覆盖上传 / AI 补全 / 重命名 / 删除均依赖 M3 接口，仅开放评测入口
+    // 黄金 QA 节点：覆盖上传 / AI 补全 / 重命名 / 删除均依赖 M3 接口，开放评测与 ID 复制
     const isGoldQaNode = goldQas.value.some(g => g.id === ctxMenu.value.targetId)
     if (isGoldQaNode) {
-      return [{ label: '⚡ 发起 RAG 评测', key: 'eval' }]
+      return [
+        { label: '⚡ 发起 RAG 评测', key: 'eval' },
+        { label: '📋 复制 gold_qa_id', key: 'copy-id' },
+      ]
     }
     const ds = datasets.value.find(item => item.id === ctxMenu.value.targetId)
     return [
@@ -1080,6 +1160,7 @@ const ctxMenuOptions = computed<DropdownOption[]>(() => {
       { label: '✨ AI 补全', key: 'ai-fill' },
       { type: 'divider', key: 'd1' },
       { label: '✏ 重命名', key: 'rename' },
+      { label: '📋 复制数据集 ID', key: 'copy-id' },
       { label: '⤓ 导出 JSONL', key: 'export' },
       { type: 'divider', key: 'd2' },
       { label: '🗑 删除数据集', key: 'delete' },
@@ -1094,12 +1175,18 @@ const ctxMenuOptions = computed<DropdownOption[]>(() => {
       { label: '🗑 删除目录', key: 'delete-folder' },
     ]
   }
+  // 表格行菜单：编辑 / 补全 / 复制 / 勾选 / 插入 / 副本 / 删除
+  const row = sampleRows.value[ctxMenu.value.rowIdx]
   return [
     { label: '✏ 详细弹窗编辑', key: 'edit' },
     { label: '✨ AI 补全本行', key: 'ai-fill-row' },
     { label: '📋 复制为 JSON', key: 'copy-json' },
+    { label: row?.checked ? '☑ 取消勾选本行' : '☐ 勾选本行', key: 'toggle-check' },
     { type: 'divider', key: 'd1' },
+    { label: '⬆ 在上方插入新行', key: 'insert-above' },
     { label: '＋ 在下方插入新行', key: 'insert-below' },
+    { label: '⧉ 创建本行副本', key: 'duplicate-row' },
+    { type: 'divider', key: 'd2' },
     { label: '🗑 删除本行', key: 'delete-row' },
   ]
 })
@@ -1114,38 +1201,50 @@ function handleCtxSelect(key: string | number) {
   else void handleRowCtxAction(action, rowIdx)
 }
 
-/** 文件节点右键动作：评测 / 覆盖上传 / AI 补全 / 重命名 / 导出 / 删除。 */
-async function handleFileCtxAction(key: string, datasetId: string) {
-  const dataset = datasets.value.find(item => item.id === datasetId)
+/** 文件节点右键动作：评测 / 覆盖上传 / AI 补全 / 重命名 / 复制 ID / 导出 / 删除。 */
+async function handleFileCtxAction(key: string, targetId: string) {
+  // 黄金 QA 节点优先处理：不查数据集表，避免评测入口被空查找拦截。
+  const goldQa = goldQas.value.find(g => g.id === targetId)
+  if (goldQa) {
+    if (key === 'eval') {
+      await selectDataset(targetId)
+      openRagDrawer()
+    } else if (key === 'copy-id') {
+      await navigator.clipboard.writeText(targetId)
+      message.success('已复制 gold_qa_id 到剪贴板')
+    }
+    return
+  }
+  const dataset = datasets.value.find(item => item.id === targetId)
   if (!dataset) return
   switch (key) {
     case 'eval':
-      // 先切到目标节点再开抽屉：数据集走基准评测抽屉，黄金 QA 走 RAG 评测抽屉。
-      await selectDataset(datasetId)
-      if (goldQas.value.some(g => g.id === datasetId)) openRagDrawer()
-      else openLaunchDrawer()
+      // 先切到目标数据集再开抽屉，确保 default-dataset-id 指向右键对象；未保存修改先经守卫确认。
+      requestSelectDataset(targetId, () => openLaunchDrawer())
       break
     case 'upload':
       // 传入已有数据集，UploadDatasetModal 自动进入覆盖上传 (isOverride) 分支。
       openUploadModal(dataset)
       break
     case 'ai-fill':
-      await selectDataset(datasetId)
-      openAiFillModal()
+      requestSelectDataset(targetId, () => openAiFillModal())
       break
     case 'rename':
       openNameDialog('重命名数据集', '数据集名称', dataset.name, async (val) => {
-        const updated = await api.datasets.update(datasetId, { name: val })
-        const index = datasets.value.findIndex(item => item.id === datasetId)
+        const updated = await api.datasets.update(targetId, { name: val })
+        const index = datasets.value.findIndex(item => item.id === targetId)
         if (index !== -1) datasets.value[index] = updated
         syncDatasetTree(datasets.value)
         message.success('已重命名')
       })
       break
+    case 'copy-id':
+      await navigator.clipboard.writeText(targetId)
+      message.success('已复制数据集 ID 到剪贴板')
+      break
     case 'export':
       // 导出以表格数据为准，先切换加载目标数据集的行。
-      await selectDataset(datasetId)
-      exportJsonl()
+      requestSelectDataset(targetId, () => exportJsonl())
       break
     case 'delete':
       confirmDeleteDataset(dataset)
@@ -1194,6 +1293,11 @@ async function handleFolderCtxAction(key: string, folderId: string) {
       })
       break
     case 'rename-folder':
+      // 系统目录（数据集根目录 / 黄金 QA 目录）不可重命名，与删除校验保持一致。
+      if (folder.id === 'datasets' || folder.id === 'gold-qa') {
+        message.warning('系统目录不可重命名')
+        return
+      }
       openNameDialog('重命名目录', '目录名称', folder.name, (val) => {
         folder.name = val
         message.success('已更新目录名')
@@ -1249,11 +1353,35 @@ async function handleRowCtxAction(key: string, rowIdx: number) {
       message.success('已复制样本行 JSON 到剪贴板')
       break
     }
+    case 'toggle-check':
+      row.checked = !row.checked
+      break
+    case 'insert-above':
+      sampleRows.value.splice(rowIdx, 0, buildEmptyRow())
+      hasUnsavedChanges.value = true
+      message.info('已在上方插入新行，点击“保存修改”后生效')
+      break
     case 'insert-below':
       sampleRows.value.splice(rowIdx + 1, 0, buildEmptyRow())
       hasUnsavedChanges.value = true
       message.info('已在下方插入新行，点击“保存修改”后生效')
       break
+    case 'duplicate-row': {
+      // 创建副本：内容全量拷贝，row_no 取最大值 +1，保存后落库。
+      const copy: EditableDatasetRow = {
+        ...buildEmptyRow(),
+        q: row.q,
+        r: row.r,
+        c: row.c,
+        tags: row.tags,
+        difficulty: row.difficulty,
+        extras: { ...row.extras },
+      }
+      sampleRows.value.splice(rowIdx + 1, 0, copy)
+      hasUnsavedChanges.value = true
+      message.success(`已创建第 ${row.row_no} 行副本，点击“保存修改”后生效`)
+      break
+    }
     case 'delete-row':
       deleteRow(rowIdx)
       break
@@ -1307,6 +1435,8 @@ const rowEdit = ref<{ show: boolean; idx: number; rowNo: number; q: string; r: s
 function openRowEditModal(idx: number) {
   const row = sampleRows.value[idx]
   if (!row) return
+  // 双击行可能正处于单元格编辑态，先退出避免弹窗与就地编辑并存。
+  editingCell.value = null
   const extras = { ...row.extras }
   // 补齐扩展列 Key，保证每列都有可编辑输入框。
   customCols.value.forEach(col => {
@@ -1705,12 +1835,27 @@ async function submitRagTask() {
   }
 }
 
+// Ctrl/Cmd + S 快捷保存：仅在存在未落库编辑时接管浏览器默认行为。
+function onGlobalKeydown(e: KeyboardEvent) {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+    if (hasUnsavedChanges.value && !isGoldQaActive.value) {
+      e.preventDefault()
+      void persistRows()
+    }
+  }
+}
+
 onMounted(() => {
   // 基准数据只在大模型模式加载，避免 RAG 模式访问后展示错误资产。
   if (modeStore.mode === 'llm') {
     void loadDatasets()
     void loadGoldQas()
   }
+  window.addEventListener('keydown', onGlobalKeydown)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', onGlobalKeydown)
 })
 
 // 用户在当前页切回大模型模式时，按需读取基准数据资产。
