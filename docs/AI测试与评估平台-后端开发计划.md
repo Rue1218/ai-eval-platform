@@ -353,8 +353,8 @@ Python 与 Go/Infra 分列。前端 mock 不挡后端单测。
 - [x] ≤1k 样本、被测稳定时报告页能看到结果（真实执行器就绪：批内并发 + 断点续跑；性能实测随 M2 演示验收）
 - [x] 用例采纳率字段：确认入库条数 / 生成条数（`case_sets.confirmed_count` / `generated_count`）
 - [x] 预算超限必停（`usage_ledger` 逐调用累计，超 `default_max_usd` 置 failed + `BUDGET_EXCEEDED`）
-- [ ] 基线规则生效（冻结/解冻已就绪，同版本 + 主指标的 Δ 对比待报告层接通）
-- [ ] 72h 超时任务已做（扫描器未实现，W8 交付）
+- [x] 基线规则生效（同数据集版本 + 主指标匹配基准，`baseline_id` / `baseline_scores` / `degraded` ≥5pp 判定已接通）
+- [x] 72h 超时任务已做（Worker 主循环 60s 节流扫描，任务与用例集双取消 + WS 通知）
 
 ---
 
@@ -613,8 +613,11 @@ REST/WS 以 **API V1.3** 为准，与前端计划路径表对齐（含 `GET /api
 | Benchmark 真实执行器（三协议真调用 + 五种规则评分 + 预算熔断 + 断点续跑 + 批内并发） | `worker/app/benchmark.py` + `worker/app/protocol.py` + `worker/app/scoring.py` | ✅ |
 | 样本级逐题比对 `GET /api/reports/{id}/samples`（all/diff/fail 过滤） | `routers/reports.py` | ✅ |
 | 评分器口径单测（CI 内按文件路径加载 worker 正本） | `api/tests/test_scoring.py` | ✅ |
+| 用例生成 Skill 真实执行器（六策略 LLM 生成 + 规模闸门 20/45/80 + 自检红字 + awaiting_case_confirm 流转） | `worker/app/testcase.py` + `worker/app/casegen.py` | ✅ |
+| 72h 用例确认超时扫描器（主循环 60s 节流，联动任务/用例集双取消） | `worker/app/main.py` | ✅ |
+| 报告基线 Δ 对比（同数据集版本 + 主指标匹配，`baseline_id`/`baseline_scores`/`degraded`） | `routers/reports.py` | ✅ |
 
-剩余 B3 项：用例生成 Skill（W8 六策略 + 72h 扫描）、表单双入口联调（W9）、Markdown 导出富化；B4/B5 批次未动工。
+剩余 B3 项：表单双入口联调（W9）、Markdown 导出富化；B4/B5 批次未动工。
 
 ### 12.1 所有批次的横向契约要求
 

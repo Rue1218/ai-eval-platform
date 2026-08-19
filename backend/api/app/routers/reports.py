@@ -64,9 +64,72 @@ def _title(db: Session, report: Report, task: Task | None) -> str:
     return f"{label} · 任务 {report.task_id[:8]}"
 
 
+def _baseline_matches(current: dict, candidate: dict) -> bool:
+    """基线可比对口径（F-BM-07）：同 dataset 版本 + 主指标才允许对比。"""
+    return (
+        current.get("dataset_id") is not None
+        and current.get("dataset_id") == candidate.get("dataset_id")
+        and current.get("dataset_version") == candidate.get("dataset_version")
+        and current.get("metric") == candidate.get("metric")
+    )
+
+
+def _find_baseline(db: Session, report: Report) -> Report | None:
+    """在已冻结的 benchmark 基线中找同数据集版本 + 主指标的最新一条（排除自身）。"""
+    if report.kind != "benchmark":
+        return None
+    metrics = report.metrics if isinstance(report.metrics, dict) else {}
+    if not metrics.get("dataset_id"):
+        return None
+    candidates = (
+        db.query(Report)
+        .filter(Report.kind == "benchmark", Report.is_baseline.is_(True), Report.id != report.id)
+        .order_by(Report.created_at.desc())
+        .all()
+    )
+    for candidate in candidates:
+        cand_metrics = candidate.metrics if isinstance(candidate.metrics, dict) else {}
+        if _baseline_matches(metrics, cand_metrics):
+            return candidate
+    return None
+
+
+def _degraded_vs_baseline(metrics: dict, baseline_scores: list) -> bool:
+    """任一同 profile 主指标较基准下降 ≥5pp 即判定退化（与 RAG 5pp 口径一致）。"""
+    if not baseline_scores:
+        return False
+    base = {
+        item.get("profile_id"): item.get("score")
+        for item in baseline_scores
+        if isinstance(item, dict)
+    }
+    for item in (metrics or {}).get("scores") or []:
+        if not isinstance(item, dict):
+            continue
+        base_score = base.get(item.get("profile_id"))
+        current = item.get("score")
+        if (
+            isinstance(base_score, int | float)
+            and isinstance(current, int | float)
+            # round 消除浮点表示误差(0.65-0.70 实为 -0.04999...),保证 5pp 阈值判定稳定
+            and round(current - base_score, 6) <= -0.05
+        ):
+            return True
+    return False
+
+
 def _report_json(db: Session, report: Report) -> dict:
     """装配契约公共头；metrics JSONB 原样展开，富字段（scores/sample_items 等）随执行器落地自动透出。"""
     task = db.query(Task).filter(Task.id == report.task_id).first()
+    metrics = report.metrics if isinstance(report.metrics, dict) else {}
+    # 基线对比（F-BM-07）：baseline_id 指向同数据集版本 + 主指标的可比基准；
+    # baseline_scores 原样透出供前端并排计算 Δ；degraded 为契约公共头布尔
+    baseline = _find_baseline(db, report)
+    baseline_scores = (
+        baseline.metrics.get("scores") or []
+        if baseline and isinstance(baseline.metrics, dict)
+        else []
+    )
     body = {
         "id": report.id,
         "task_id": report.task_id,
@@ -76,10 +139,12 @@ def _report_json(db: Session, report: Report) -> dict:
         "title": _title(db, report, task),
         "created_at": report.created_at.isoformat() if report.created_at else None,
         "snapshot": (task.config or {}) if task else {},
-        # 基线冻结后 baseline_id 指向本报告，供同数据集版本 + 主指标对比 Δ
-        "baseline_id": report.id if report.is_baseline else None,
-        "degraded": False,
+        # 对比基准报告 ID：无可比基线（含版本/指标不一致）时为 null
+        "baseline_id": baseline.id if baseline else None,
+        "degraded": _degraded_vs_baseline(metrics, baseline_scores),
     }
+    if baseline:
+        body["baseline_scores"] = baseline_scores
     # metrics 内的富字段（scores / rag_scores / qps_peak ...）平铺到顶层，与契约详情结构对齐
     if isinstance(report.metrics, dict):
         body.update(report.metrics)
