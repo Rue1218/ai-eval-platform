@@ -1229,10 +1229,16 @@ function goToTaskDetail(taskId?: string) {
 
 /** 前往报告中心查看评测结果 */
 function goToReport(taskId?: string) {
-  if (taskId) {
-    router.push({ path: '/reports', query: { task_id: taskId } })
-  } else {
+  if (!taskId) {
     router.push('/reports')
+    return
+  }
+  const fullTask = liveRecentTasks.value.find(t => t.id === taskId) || liveActiveTasks.value.find(t => t.id === taskId)
+  if (fullTask?.report_id) {
+    router.push(`/reports/${fullTask.report_id}`)
+  } else {
+    // 若尚未生成 report_id，先前往任务详情抽屉查看实时进展
+    router.push({ path: '/tasks', query: { id: taskId } })
   }
 }
 
