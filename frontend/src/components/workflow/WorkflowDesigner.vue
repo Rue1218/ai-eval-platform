@@ -8,31 +8,31 @@
       <div class="toolbar-left">
         <div class="wf-title-badge">
           <span class="badge-icon">🌐</span>
-          <span class="badge-label">DAG 编排设计器</span>
+          <span class="badge-label">DAG 编排</span>
           <span class="badge-sub">Dify Flow</span>
         </div>
 
         <!-- 模板快速载入下拉 -->
         <div class="template-selector">
           <select v-model="currentTemplateId" class="select-tpl" @change="loadSelectedTemplate">
-            <option value="" disabled>-- 载入预置工作流模板 --</option>
+            <option value="" disabled>-- 预置模板 --</option>
             <option v-for="tpl in WORKFLOW_TEMPLATES" :key="tpl.id" :value="tpl.id">
               {{ tpl.icon }} {{ tpl.name }} ({{ tpl.badgeText }})
             </option>
           </select>
         </div>
 
-        <button class="btn btn-secondary btn-sm" title="拓扑自动分层排版 (Auto Layout)" @click="autoLayout">
+        <button class="btn btn-secondary btn-sm toolbar-btn" title="拓扑自动分层排版 (Auto Layout)" @click="autoLayout">
           <span class="btn-icon">📐</span>
-          <span>自动排版</span>
+          <span>排版</span>
         </button>
 
-        <button class="btn btn-secondary btn-sm" title="导出当前工作流为 JSON 配置文件" @click="exportWorkflowJson">
+        <button class="btn btn-secondary btn-sm toolbar-btn" title="导出当前工作流为 JSON 配置文件" @click="exportWorkflowJson">
           <span class="btn-icon">📥</span>
           <span>导出</span>
         </button>
 
-        <button class="btn btn-secondary btn-sm" title="从 JSON 文件导入工作流" @click="triggerImportJson">
+        <button class="btn btn-secondary btn-sm toolbar-btn" title="从 JSON 文件导入工作流" @click="triggerImportJson">
           <span class="btn-icon">📤</span>
           <span>导入</span>
         </button>
@@ -44,7 +44,7 @@
           @change="handleFileImport"
         />
 
-        <button class="btn btn-secondary btn-sm" title="清空当前画布" @click="clearCanvas">
+        <button class="btn btn-secondary btn-sm toolbar-btn" title="清空当前画布" @click="clearCanvas">
           <span class="btn-icon">🧹</span>
           <span>清空</span>
         </button>
@@ -53,23 +53,23 @@
       <!-- 中间视图缩放 -->
       <div class="toolbar-center">
         <span class="zoom-ctrl">
-          <button class="zoom-btn" title="缩小画布" @click="zoomBy(0.85)">−</button>
-          <button class="zoom-btn mono" title="复位 100% 视图（双击画布同效）" @click="resetView">
+          <button class="zoom-btn" title="缩小画布" @click="zoomBy(0.88)">−</button>
+          <button class="zoom-btn mono" title="自适应全部节点居中" @click="fitView">
             {{ Math.round(view.k * 100) }}%
           </button>
-          <button class="zoom-btn" title="放大画布" @click="zoomBy(1.18)">+</button>
-          <button class="zoom-btn" title="自适应全部节点" @click="fitView">⊡</button>
+          <button class="zoom-btn" title="放大画布" @click="zoomBy(1.14)">+</button>
+          <button class="zoom-btn" title="自适应全部节点居中" @click="fitView">⊡</button>
         </span>
       </div>
 
       <!-- 右侧校验状态、全屏与执行按钮 -->
       <div class="toolbar-right">
         <!-- 连线状态图例指示器 (紧凑微型) -->
-        <div class="edge-status-legend">
-          <span class="legend-item" title="待命闲置"><i class="leg-dot idle"></i>闲置</span>
-          <span class="legend-item" title="实时流转传输"><i class="leg-dot running"></i>运行</span>
-          <span class="legend-item" title="执行成功常态"><i class="leg-dot success"></i>成功</span>
-          <span class="legend-item" title="门禁阻断或失败"><i class="leg-dot failed"></i>失败</span>
+        <div class="edge-status-legend" title="连线4态：灰(闲置) · 蓝(运行) · 绿(成功) · 红(失败)">
+          <span class="legend-item"><i class="leg-dot idle"></i>闲置</span>
+          <span class="legend-item"><i class="leg-dot running"></i>运行</span>
+          <span class="legend-item"><i class="leg-dot success"></i>成功</span>
+          <span class="legend-item"><i class="leg-dot failed"></i>失败</span>
         </div>
 
         <span
@@ -78,7 +78,7 @@
           :title="validation.valid ? 'DAG 拓扑完整且无环路' : validation.errors[0]?.message"
         >
           <i class="v-dot"></i>
-          {{ validation.valid ? '拓扑校验通过' : validation.errors[0]?.message || '存在配置警告' }}
+          {{ validation.valid ? '校验通过' : validation.errors[0]?.message || '配置警告' }}
         </span>
 
         <button
@@ -86,7 +86,7 @@
           :title="isFullScreen ? '退出全屏 (Esc)' : '全屏沉浸式编排'"
           @click="isFullScreen = !isFullScreen"
         >
-          <span>{{ isFullScreen ? '✕ 退出全屏' : '⛶ 全屏' }}</span>
+          <span>{{ isFullScreen ? '✕' : '⛶ 全屏' }}</span>
         </button>
 
         <button
@@ -115,7 +115,7 @@
         @pointerup="onCanvasPointerUp"
         @pointerleave="onCanvasPointerUp"
         @wheel.prevent="onCanvasWheel"
-        @dblclick="resetView"
+        @dblclick="fitView"
         @dragover.prevent
         @drop="onCanvasDrop"
       >
@@ -248,11 +248,11 @@
 
         <!-- 底部快捷提示浮条 -->
         <div class="canvas-hints">
-          <span>滚轮缩放 · 拖拽画布平移 · 端口拖拽连线 · 点击节点配置属性 · 点击连线删除链路</span>
+          <span>滚轮缩放 · 拖拽平移 · 端口连线 · 双击空白自适应居中 · 点击连线删除</span>
         </div>
 
         <!-- ═══ 右下角小地图 (Mini-Map) ═══ -->
-        <div class="canvas-minimap" title="小地图 (点击可快速定位视野)">
+        <div class="canvas-minimap" title="小地图 (点击自适应居中)" @click="fitView">
           <svg viewBox="0 0 2400 1600" class="minimap-svg">
             <rect width="2400" height="1600" fill="var(--bg-elevated)" opacity="0.85" />
             <!-- 微型节点卡片 -->
@@ -294,7 +294,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import WorkflowPalette from './WorkflowPalette.vue'
@@ -319,7 +319,7 @@ const message = useMessage()
 const router = useRouter()
 
 // 画布视口缩放与位移（默认居中自适应）
-const view = ref({ x: 50, y: 50, k: 0.88 })
+const view = ref({ x: 50, y: 50, k: 0.85 })
 const canvasContainerRef = ref<HTMLElement | null>(null)
 const importFileRef = ref<HTMLInputElement | null>(null)
 const isFullScreen = ref(false)
@@ -349,23 +349,36 @@ const connectingPort = ref<{
 } | null>(null)
 const currentMousePos = ref({ x: 0, y: 0 })
 
-// 初始化时默认载入标准先评后压模板
+let resizeObserver: ResizeObserver | null = null
+
 onMounted(() => {
   loadSelectedTemplate()
   window.addEventListener('keydown', onKeyDown)
+
+  if (canvasContainerRef.value) {
+    resizeObserver = new ResizeObserver(() => {
+      // 容器大小变化时保持居中
+    })
+    resizeObserver.observe(canvasContainerRef.value)
+  }
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeyDown)
+  resizeObserver?.disconnect()
 })
 
 function onKeyDown(e: KeyboardEvent) {
-  if (e.key === 'Escape' && isFullScreen.value) {
-    isFullScreen.value = false
+  if (e.key === 'Escape') {
+    if (selectedNode.value) {
+      selectedNode.value = null
+    } else if (isFullScreen.value) {
+      isFullScreen.value = false
+    }
   }
 }
 
-/** 载入选中的模板（默认关闭属性面板，呈现全画幅拓扑） */
+/** 载入选中的模板（自动精准居中自适应视野） */
 function loadSelectedTemplate() {
   const tpl = WORKFLOW_TEMPLATES.find((t) => t.id === currentTemplateId.value)
   if (!tpl) return
@@ -375,33 +388,67 @@ function loadSelectedTemplate() {
     e.status = e.status || 'idle'
   })
   selectedNode.value = null
-  resetView()
+  nextTick(() => {
+    fitView()
+  })
   message.success(`已载入工作流模版：${tpl.name}`)
 }
 
-/** 缩放画布 */
+/** 基于鼠标或中心点的平滑缩放 (Mouse-Centered Zoom) */
+function zoomAt(cx: number, cy: number, factor: number) {
+  const oldK = view.value.k
+  const newK = Math.max(0.35, Math.min(2.0, Math.round(oldK * factor * 100) / 100))
+  if (newK === oldK) return
+
+  view.value.x = Math.round(cx - (cx - view.value.x) * (newK / oldK))
+  view.value.y = Math.round(cy - (cy - view.value.y) * (newK / oldK))
+  view.value.k = newK
+}
+
+/** 点击按钮居中缩放 */
 function zoomBy(factor: number) {
-  const newK = Math.max(0.35, Math.min(2.2, view.value.k * factor))
-  view.value.k = Math.round(newK * 100) / 100
+  const rect = canvasContainerRef.value?.getBoundingClientRect()
+  const cx = (rect?.width || 800) / 2
+  const cy = (rect?.height || 500) / 2
+  zoomAt(cx, cy, factor)
 }
 
-/** 复位视图 */
-function resetView() {
-  view.value = { x: 50, y: 50, k: 0.88 }
-}
-
-/** 自适应适配视口中所有节点 */
+/** 精准自适应计算：将所有节点完美居中放置于当前可视视口内，保证四周留白 */
 function fitView() {
   if (!nodes.value.length) {
-    resetView()
+    view.value = { x: 50, y: 50, k: 0.85 }
     return
   }
+  const rect = canvasContainerRef.value?.getBoundingClientRect()
+  const containerW = rect?.width || 860
+  const containerH = rect?.height || 560
+
   const minX = Math.min(...nodes.value.map((n) => n.x))
+  const maxX = Math.max(...nodes.value.map((n) => n.x + NODE_WIDTH))
   const minY = Math.min(...nodes.value.map((n) => n.y))
+  const maxY = Math.max(...nodes.value.map((n) => n.y + 130))
+
+  const graphW = Math.max(100, maxX - minX)
+  const graphH = Math.max(100, maxY - minY)
+
+  // 左右与上下留白安全边界
+  const paddingX = 48
+  const paddingY = 48
+  const availableW = Math.max(200, containerW - paddingX * 2)
+  const availableH = Math.max(200, containerH - paddingY * 2)
+
+  const scaleX = availableW / graphW
+  const scaleY = availableH / graphH
+  const optimalK = Math.min(1.0, Math.max(0.42, Math.min(scaleX, scaleY)))
+
+  // 居中偏移计算
+  const x = Math.round((containerW - graphW * optimalK) / 2 - minX * optimalK)
+  const y = Math.round((containerH - graphH * optimalK) / 2 - minY * optimalK)
+
   view.value = {
-    x: Math.max(20, 60 - minX * 0.82),
-    y: Math.max(20, 60 - minY * 0.82),
-    k: 0.82,
+    x,
+    y,
+    k: Math.round(optimalK * 100) / 100,
   }
 }
 
@@ -434,7 +481,10 @@ function autoLayout() {
       colX += 340
     })
 
-  message.success('已完成拓扑自动分层排版')
+  nextTick(() => {
+    fitView()
+  })
+  message.success('已完成拓扑自动分层排版并居中')
 }
 
 /** 清空画布 */
@@ -480,7 +530,9 @@ function handleFileImport(e: Event) {
         nodes.value = parsed.nodes
         edges.value = parsed.edges || []
         selectedNode.value = null
-        fitView()
+        nextTick(() => {
+          fitView()
+        })
         message.success('工作流配置已成功导入！')
       } else {
         message.error('无效的工作流 JSON 结构')
@@ -494,8 +546,11 @@ function handleFileImport(e: Event) {
 
 /** 从物料库添加新节点至视口中央 */
 function handleAddNodeFromPalette(type: WorkflowNodeType) {
-  const x = Math.round((240 - view.value.x) / view.value.k)
-  const y = Math.round((160 - view.value.y) / view.value.k)
+  const rect = canvasContainerRef.value?.getBoundingClientRect()
+  const cx = (rect?.width || 800) / 2
+  const cy = (rect?.height || 500) / 2
+  const x = Math.round((cx - view.value.x) / view.value.k) - 132
+  const y = Math.round((cy - view.value.y) / view.value.k) - 50
   const newNode = createNode(type, x, y)
   nodes.value.push(newNode)
   selectedNode.value = newNode
@@ -665,8 +720,12 @@ function onCanvasPointerUp() {
 }
 
 function onCanvasWheel(e: WheelEvent) {
+  const rect = canvasContainerRef.value?.getBoundingClientRect()
+  if (!rect) return
+  const mouseX = e.clientX - rect.left
+  const mouseY = e.clientY - rect.top
   const factor = e.deltaY < 0 ? 1.08 : 0.92
-  zoomBy(factor)
+  zoomAt(mouseX, mouseY, factor)
 }
 
 /* ─── 节点卡片拖拽 ─── */
@@ -855,19 +914,20 @@ async function runWorkflow() {
 
 /* ═══ 顶部控制工具栏 ═══ */
 .designer-toolbar {
-  height: 52px;
+  height: 50px;
   background: var(--bg-elevated);
   border-bottom: 1px solid var(--border-subtle);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 12px;
-  gap: 8px;
+  padding: 0 10px;
+  gap: 6px;
   flex-shrink: 0;
   user-select: none;
   backdrop-filter: blur(12px);
-  overflow-x: auto;
   box-sizing: border-box;
+  overflow: hidden;
+  width: 100%;
 }
 
 .toolbar-left,
@@ -875,7 +935,7 @@ async function runWorkflow() {
 .toolbar-right {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   flex-shrink: 0;
   white-space: nowrap;
 }
@@ -883,16 +943,16 @@ async function runWorkflow() {
 .wf-title-badge {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   font-weight: 700;
-  font-size: 13px;
+  font-size: 12px;
   color: var(--text-primary);
   white-space: nowrap;
   flex-shrink: 0;
 }
 
 .badge-icon {
-  font-size: 16px;
+  font-size: 15px;
 }
 
 .badge-label {
@@ -900,28 +960,28 @@ async function runWorkflow() {
 }
 
 .badge-sub {
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 600;
   color: var(--accent-ai);
   background: var(--t-agent);
-  padding: 1px 5px;
+  padding: 1px 4px;
   border-radius: 4px;
   white-space: nowrap;
 }
 
 .select-tpl {
-  padding: 4px 8px;
-  font-size: 12px;
+  padding: 3px 6px;
+  font-size: 11px;
   background: var(--bg-main);
   border: 1px solid var(--border-subtle);
-  border-radius: 6px;
+  border-radius: 5px;
   color: var(--text-primary);
   outline: none;
   cursor: pointer;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
   white-space: nowrap;
   flex-shrink: 0;
-  max-width: 220px;
+  max-width: 150px;
   text-overflow: ellipsis;
 }
 
@@ -929,15 +989,20 @@ async function runWorkflow() {
   border-color: var(--accent-ai);
 }
 
+.toolbar-btn {
+  padding: 3px 7px;
+  font-size: 11px;
+}
+
 .edge-status-legend {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   background: var(--bg-main);
   border: 1px solid var(--border-subtle);
-  padding: 2px 8px;
-  border-radius: 10px;
-  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 8px;
+  font-size: 9px;
   color: var(--text-tertiary);
   flex-shrink: 0;
 }
@@ -978,13 +1043,18 @@ async function runWorkflow() {
   align-items: center;
 }
 
+.zoom-btn {
+  padding: 2px 6px;
+  font-size: 11px;
+}
+
 .validation-pill {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  font-size: 11px;
-  padding: 3px 10px;
-  border-radius: 12px;
+  gap: 4px;
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 10px;
   background: var(--bg-main);
   border: 1px solid var(--border-subtle);
   white-space: nowrap;
@@ -997,7 +1067,7 @@ async function runWorkflow() {
 
 .validation-pill.valid .v-dot {
   background: var(--accent-success);
-  box-shadow: 0 0 5px var(--accent-success);
+  box-shadow: 0 0 4px var(--accent-success);
 }
 
 .validation-pill.warning {
@@ -1009,18 +1079,20 @@ async function runWorkflow() {
 }
 
 .v-dot {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
   flex-shrink: 0;
 }
 
 .run-btn {
-  font-weight: 600;
+  font-weight: 700;
+  font-size: 12px;
   background: var(--accent-ai);
   border-color: var(--accent-ai);
   color: #fff;
   padding: 0 14px;
+  height: 30px;
   border-radius: 6px;
   transition: all 0.2s;
   white-space: nowrap;
@@ -1179,6 +1251,7 @@ async function runWorkflow() {
   overflow: hidden;
   z-index: 6;
   backdrop-filter: blur(8px);
+  cursor: pointer;
 }
 
 .minimap-svg {
