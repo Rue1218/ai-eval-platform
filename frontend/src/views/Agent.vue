@@ -54,10 +54,19 @@
           </svg>
         </button>
         <span class="chat-head-title">{{ currentSession?.title || '新会话' }}</span>
-        <div class="chat-head-model-pill" title="当前 Agent 驱动模型（由系统设置指定）">
-          <span class="head-model-dot"></span>
-          <span class="mono">Agent · {{ agentModelName || '未配置模型' }}</span>
-        </div>
+        <n-dropdown
+          trigger="click"
+          :options="agentProfileDropdownOptions"
+          @select="handleSelectAgentModel"
+        >
+          <button class="chat-head-model-btn" type="button" title="点击切换当前 Agent 驱动模型">
+            <span class="head-model-dot"></span>
+            <span class="mono">Agent · {{ agentModelName || '未配置模型' }}</span>
+            <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M3 4.5l3 3 3-3" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
+        </n-dropdown>
         <span v-if="isGenerating" class="gen-pill">
           <i class="bdot"></i>
           <span>生成中</span>
@@ -629,10 +638,24 @@
                 @change="handleFileUpload"
               />
 
-              <!-- 只读模型展示胶囊（由系统设置指定） -->
-              <div class="composer-model-readonly" title="当前 Agent 驱动模型（由系统设置指定）">
-                <span class="mono">Agent · {{ agentModelName || '未配置模型' }}</span>
-              </div>
+              <!-- 模型切换下拉胶囊（点击可切换 Agent 驱动模型） -->
+              <n-dropdown
+                trigger="click"
+                :options="agentProfileDropdownOptions"
+                @select="handleSelectAgentModel"
+              >
+                <button
+                  class="composer-model-btn"
+                  type="button"
+                  title="点击切换当前 Agent 驱动模型"
+                >
+                  <span class="head-model-dot"></span>
+                  <span class="mono">Agent · {{ agentModelName || '选择模型' }}</span>
+                  <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M3 4.5l3 3 3-3" stroke-linecap="round" stroke-linejoin="round" />
+                  </svg>
+                </button>
+              </n-dropdown>
             </div>
 
             <!-- 右侧圆形发送/暂停按钮 -->
@@ -2223,7 +2246,7 @@ onBeforeUnmount(() => {
   height: calc(100vh - var(--topbar-h) - 20px);
 }
 
-/* 顶部与输入框只读模型胶囊 */
+/* 顶部与输入框模型选择胶囊按钮 */
 .chat-head-model-pill,
 .chat-head-model-btn {
   display: inline-flex;
@@ -2236,17 +2259,34 @@ onBeforeUnmount(() => {
   color: var(--text-secondary);
   font-family: var(--font-mono);
   font-size: 11px;
+  cursor: pointer;
   user-select: none;
+  transition: all 0.15s ease;
 }
-.composer-model-readonly {
+.chat-head-model-btn:hover {
+  background: var(--bg-hover, #f3f4f6);
+  border-color: var(--border-color, #d1d5db);
+  color: var(--text-primary, #111827);
+}
+.composer-model-btn {
   display: inline-flex;
   align-items: center;
+  gap: 5px;
   padding: 2px 8px;
   border-radius: 6px;
+  border: 1px solid var(--border-subtle);
   background: var(--bg-elevated);
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
   font-size: 11px;
+  cursor: pointer;
   user-select: none;
+  transition: all 0.15s ease;
+}
+.composer-model-btn:hover {
+  background: var(--bg-hover, #f3f4f6);
+  border-color: var(--border-color, #d1d5db);
+  color: var(--text-primary, #111827);
 }
 .think-latency {
   font-size: 11px;
