@@ -93,6 +93,17 @@ def _full_text(protocol: str, data: dict) -> str:
     return "".join(str(block.get("text") or "") for block in data["content"] if block.get("type") == "text")
 
 
+def _service_base_url(base_url: str) -> str:
+    """规范化协议服务根地址，兼容用户输入带或不带 ``/v1`` 的地址。
+
+    三种协议的具体端点都由本适配器统一追加 ``/v1``。协议档常见的
+    OpenAI 兼容地址本身也带 ``/v1``，因此这里仅剥离末尾的版本段，
+    避免真实请求错误落到 ``/v1/v1/...``；不修改数据库中用户保存的原值。
+    """
+    base = base_url.strip().rstrip("/")
+    return base[:-3] if base.endswith("/v1") else base
+
+
 def call_protocol(
     *,
     protocol: str,
@@ -115,7 +126,7 @@ def call_protocol(
     if protocol not in SUPPORTED_PROTOCOLS:
         raise AppError(ErrorCode.VALIDATION, f"协议不受支持：{protocol}")
 
-    base = base_url.rstrip("/")
+    base = _service_base_url(base_url)
     headers = {"Content-Type": "application/json"}
 
     if protocol == "openai_chat":
@@ -210,7 +221,7 @@ def stream_protocol(
     if protocol not in SUPPORTED_PROTOCOLS:
         raise AppError(ErrorCode.VALIDATION, f"协议不受支持：{protocol}")
 
-    base = base_url.rstrip("/")
+    base = _service_base_url(base_url)
     headers = {"Content-Type": "application/json"}
 
     if protocol == "openai_chat":
@@ -358,8 +369,7 @@ def fetch_remote_models(
 
     统一返回结构：``[{"id": "模型标识", "name": "显示名称", "owned_by": "所属供应商/系统"}]``。
     """
-    base = base_url.rstrip("/")
-    clean_base = base[:-3] if base.endswith("/v1") else base
+    base = _service_base_url(base_url)
 
     headers: dict[str, str] = {"Content-Type": "application/json"}
     if api_key:
@@ -371,12 +381,12 @@ def fetch_remote_models(
 
     urls_to_try: list[str] = []
     if protocol == "anthropic_messages":
-        urls_to_try = [f"{base}/v1/models", f"{clean_base}/v1/models"]
+        urls_to_try = [f"{base}/v1/models"]
     else:
         urls_to_try = [
-            f"{clean_base}/v1/models",
+            f"{base}/v1/models",
             f"{base}/models",
-            f"{clean_base}/api/tags",
+            f"{base}/api/tags",
         ]
 
     last_error: Exception | None = None

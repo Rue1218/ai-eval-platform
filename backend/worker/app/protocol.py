@@ -89,6 +89,16 @@ def _full_text(protocol: str, data: dict) -> str:
     return "".join(str(block.get("text") or "") for block in data["content"] if block.get("type") == "text")
 
 
+def _service_base_url(base_url: str) -> str:
+    """规范化协议服务根地址，兼容带或不带 ``/v1`` 的协议档配置。
+
+    Worker 与 API 侧调用器均会统一追加 ``/v1``。仅剥离输入地址末尾的
+    版本段，避免真实评测请求生成 ``/v1/v1/...``，而不改写持久化配置。
+    """
+    base = base_url.strip().rstrip("/")
+    return base[:-3] if base.endswith("/v1") else base
+
+
 def call_protocol(
     *,
     protocol: str,
@@ -106,7 +116,7 @@ def call_protocol(
     if protocol not in SUPPORTED_PROTOCOLS:
         raise ProtocolCallError("VALIDATION", f"协议不受支持：{protocol}")
 
-    base = base_url.rstrip("/")
+    base = _service_base_url(base_url)
     headers = {"Content-Type": "application/json"}
 
     if protocol == "openai_chat":
