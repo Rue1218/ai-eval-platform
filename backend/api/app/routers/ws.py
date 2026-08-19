@@ -293,20 +293,31 @@ async def _call_tool(
     data: dict,
     state: _ConnState,
 ) -> None:
-    """发送一对短工具事件：tool_call（pending）后紧跟 tool_result（done）。"""
+    """发送一对短工具事件：tool_call（pending）后紧跟 tool_result（done，带 latency_ms）。"""
+    t0 = time.perf_counter()
     try:
         assert_short_tool(name)
-        agent_trace(f"短工具调用 session={session_id[:8]} name={name}")
+        agent_trace(f"短工具调用开始 session={session_id[:8]} name={name}")
         await _emit(db, ws, session_id, "tool_call", {"name": name, "arguments": arguments}, state=state)
-        await _emit(db, ws, session_id, "tool_result", {"name": name, "ok": True, "data": data}, state=state)
-    except AppError as exc:
-        agent_trace(f"短工具失败 session={session_id[:8]} name={name} code={exc.code.value}")
+        latency_ms = max(1, round((time.perf_counter() - t0) * 1000))
+        agent_trace(f"短工具调用成功 session={session_id[:8]} name={name} latency={latency_ms}ms")
         await _emit(
             db,
             ws,
             session_id,
             "tool_result",
-            {"name": name, "ok": False, "error": exc.message},
+            {"name": name, "ok": True, "data": data, "latency_ms": latency_ms},
+            state=state,
+        )
+    except AppError as exc:
+        latency_ms = max(1, round((time.perf_counter() - t0) * 1000))
+        agent_trace(f"短工具失败 session={session_id[:8]} name={name} code={exc.code.value} latency={latency_ms}ms")
+        await _emit(
+            db,
+            ws,
+            session_id,
+            "tool_result",
+            {"name": name, "ok": False, "error": exc.message, "latency_ms": latency_ms},
             state=state,
         )
         raise
@@ -570,18 +581,22 @@ async def _stream_llm_plan(
                         pass
         return "".join(parts)
 
+    t_llm_start = time.perf_counter()
     raw = await asyncio.to_thread(_producer)
+    latency_ms = max(1, round((time.perf_counter() - t_llm_start) * 1000))
     agent_trace(
-        f"LLM 流式完成 frames={progress['frames']} 上游输出={len(raw)}字 reply可见={progress['sent']}字"
+        f"LLM 流式完成 latency={latency_ms}ms frames={progress['frames']} 上游输出={len(raw)}字 reply可见={progress['sent']}字"
     )
     logger.info(
-        "Agent 流式意图识别完成: 增量帧=%d 上游输出=%d字 reply可见=%d字",
+        "Agent 流式意图识别完成: latency=%dms 增量帧=%d 上游输出=%d字 reply可见=%d字",
+        latency_ms,
         progress["frames"],
         len(raw),
         progress["sent"],
     )
     parsed = _parse_llm_json(raw)
-    agent_trace(f"LLM 规划完成 intent={parsed.get('intent')}")
+    parsed["latency_ms"] = latency_ms
+    agent_trace(f"LLM 规划完成 intent={parsed.get('intent')} latency={latency_ms}ms")
     return parsed
 
 
@@ -653,6 +668,7 @@ async def _handle_user_message(
     past_msgs = all_msgs[:-1] if all_msgs else []
     history = [{"role": m.role, "content": m.content} for m in past_msgs][-20:]
 
+    t_msg_start = time.perf_counter()
     plan: dict | None = None
     try:
         plan = await _stream_llm_plan(db, ws, session.id, state, text, profiles, datasets, history)
@@ -661,11 +677,12 @@ async def _handle_user_message(
         logger.info("LLM 目标解析失败，回退规则版", exc_info=True)
 
     if plan is None:
-        await _handle_rule_intent(db, ws, session, text, state)
+        await _handle_rule_intent(db, ws, session, text, state, t_msg_start=t_msg_start)
         return
 
     intent = str(plan.get("intent") or "benchmark").strip().lower()
     reply = str(plan.get("reply") or "").strip()
+    latency_ms = plan.get("latency_ms") or max(1, round((time.perf_counter() - t_msg_start) * 1000))
     # 持久化助手回复：切换会话后历史可完整回放（此前回复仅存 ws_events，回放丢失）
     if reply:
         db.add(Message(session_id=session.id, role="assistant", content=reply))
@@ -673,10 +690,10 @@ async def _handle_user_message(
 
     if intent == "benchmark":
         if not profiles:
-            await _emit(db, ws, session.id, "thought", {"text": "还没有配置任何协议档，请先到「协议档」页添加被测模型。"}, state=state)
+            await _emit(db, ws, session.id, "thought", {"text": "还没有配置任何协议档，请先到「协议档」页添加被测模型。", "latency_ms": latency_ms}, state=state)
             return
         if not datasets:
-            await _emit(db, ws, session.id, "thought", {"text": reply or "已识别为基准评测目标，但当前还没有数据集。请先在「数据集」页上传评测数据。"}, state=state)
+            await _emit(db, ws, session.id, "thought", {"text": reply or "已识别为基准评测目标，但当前还没有数据集。请先在「数据集」页上传评测数据。", "latency_ms": latency_ms}, state=state)
             return
         raw_names = plan.get("profile_names") or []
         if isinstance(raw_names, str):
@@ -685,7 +702,7 @@ async def _handle_user_message(
         dataset_id = _match_dataset(datasets, str(plan.get("dataset_name") or ""))
         with_stress = plan.get("with_stress")
         with_stress = with_stress.strip().lower() in ("true", "1", "yes") if isinstance(with_stress, str) else bool(with_stress)
-        await _emit(db, ws, session.id, "thought", {"text": reply or "正在梳理基准评测目标，先列出可用协议档与数据集…"}, state=state)
+        await _emit(db, ws, session.id, "thought", {"text": reply or "正在梳理基准评测目标，先列出可用协议档与数据集…", "latency_ms": latency_ms}, state=state)
         await _call_tool(db, ws, session.id, "model.list", {}, {"items": profiles}, state)
         await _call_tool(db, ws, session.id, "dataset.list", {}, {"items": datasets}, state)
         await _send_confirm(
@@ -705,7 +722,7 @@ async def _handle_user_message(
         return
 
     if intent == "testcase":
-        await _emit(db, ws, session.id, "thought", {"text": reply or "已识别为用例生成目标，请在确认卡中粘贴 PRD / 需求文本。"}, state=state)
+        await _emit(db, ws, session.id, "thought", {"text": reply or "已识别为用例生成目标，请在确认卡中粘贴 PRD / 需求文本。", "latency_ms": latency_ms}, state=state)
         await _send_confirm(db, ws, session.id, {"kind": "testcase", "case_source": {"text": ""}}, state)
         return
 
@@ -714,7 +731,7 @@ async def _handle_user_message(
         return
 
     if intent == "report":
-        await _emit(db, ws, session.id, "thought", {"text": reply or "报告解读能力将在 M4 接入。"}, state=state)
+        await _emit(db, ws, session.id, "thought", {"text": reply or "报告解读能力将在 M4 接入。", "latency_ms": latency_ms}, state=state)
         await _emit(db, ws, session.id, "error", {"code": "NOT_FOUND", "message": "报告解读能力将在 M4 接入，当前请先到评测报告页查看。"}, state=state)
         return
 
@@ -725,7 +742,8 @@ async def _handle_user_message(
         "请告诉我你的评测目标（例如：「对比两个模型的表现」或「生成登录模块测试用例」），"
         "我会先为你列出可用资产并组装确认卡，经你确认后再提交执行。"
     )
-    await _emit(db, ws, session.id, "thought", {"text": chat_reply}, state=state)
+    agent_trace(f"交付 chat 回复 session={session.id[:8]} chars={len(chat_reply)} latency={latency_ms}ms")
+    await _emit(db, ws, session.id, "thought", {"text": chat_reply, "latency_ms": latency_ms}, state=state)
 
 
 async def _handle_rule_intent(
@@ -734,9 +752,13 @@ async def _handle_rule_intent(
     session: AgentSession,
     text: str,
     state: _ConnState,
+    *,
+    t_msg_start: float | None = None,
 ) -> None:
     """规则版意图拆解（LLM 不可用时的降级路径）。"""
     intent = _classify_intent(text)
+    latency_ms = max(1, round((time.perf_counter() - (t_msg_start or time.perf_counter())) * 1000))
+    agent_trace(f"规则意图拆解 intent={intent} latency={latency_ms}ms")
 
     if intent == "chat":
         rule_reply = (
@@ -752,7 +774,7 @@ async def _handle_rule_intent(
             ws,
             session.id,
             "thought",
-            {"text": rule_reply},
+            {"text": rule_reply, "latency_ms": latency_ms},
             state=state,
         )
         return
@@ -766,7 +788,7 @@ async def _handle_rule_intent(
             ws,
             session.id,
             "thought",
-            {"text": rule_reply},
+            {"text": rule_reply, "latency_ms": latency_ms},
             state=state,
         )
         await _send_confirm(
@@ -797,7 +819,7 @@ async def _handle_rule_intent(
             ws,
             session.id,
             "thought",
-            {"text": rule_reply},
+            {"text": rule_reply, "latency_ms": latency_ms},
             state=state,
         )
         await _emit(
@@ -814,10 +836,10 @@ async def _handle_rule_intent(
     profiles = _profile_items(db)
     datasets = _dataset_items(db)
     if not profiles:
-        await _emit(db, ws, session.id, "thought", {"text": "还没有配置任何协议档，请先到「协议档」页添加被测模型。"}, state=state)
+        await _emit(db, ws, session.id, "thought", {"text": "还没有配置任何协议档，请先到「协议档」页添加被测模型。", "latency_ms": latency_ms}, state=state)
         return
     if not datasets:
-        await _emit(db, ws, session.id, "thought", {"text": "已识别为基准评测目标，但当前还没有数据集。请先在「数据集」页上传评测数据。"}, state=state)
+        await _emit(db, ws, session.id, "thought", {"text": "已识别为基准评测目标，但当前还没有数据集。请先在「数据集」页上传评测数据。", "latency_ms": latency_ms}, state=state)
         return
 
     await _emit(
@@ -825,7 +847,7 @@ async def _handle_rule_intent(
         ws,
         session.id,
         "thought",
-        {"text": "正在梳理基准评测目标：对比被测协议档在同一数据集上的规则分。先列出可用协议档与数据集…"},
+        {"text": "正在梳理基准评测目标：对比被测协议档在同一数据集上的规则分。先列出可用协议档与数据集…", "latency_ms": latency_ms},
         state=state,
     )
     await _call_tool(db, ws, session.id, "model.list", {}, {"items": profiles}, state)
