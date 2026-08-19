@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -180,3 +181,127 @@ def call_protocol(
         raw=data,
         latency_ms=latency_ms,
     )
+
+
+def stream_protocol(
+    *,
+    protocol: str,
+    base_url: str,
+    model: str,
+    api_key: str,
+    messages: list[dict],
+    system: str | None = None,
+    temperature: float = 0.2,
+    max_tokens: int = 1024,
+    anthropic_version: str | None = None,
+    timeout_s: float = DEFAULT_TIMEOUT_S,
+) -> Iterator[str]:
+    """按协议流式调用上游模型，逐块 yield 文本增量（SSE）。
+
+    供 Agent 对话等「边生成边下发」的交互场景使用；非流式批量评测
+    仍走 ``call_protocol``。``timeout_s`` 同时约束建连、单次读与整体
+    流式时长，超时统一归一为 TIMEOUT，上游 4xx/5xx 归一为 UPSTREAM。
+
+    三协议的 SSE 增量位置：
+    - ``openai_chat``        ``choices[0].delta.content``（首帧 role 帧 content 为空）
+    - ``openai_responses``   ``type=response.output_text.delta`` 事件的 ``delta``
+    - ``anthropic_messages`` ``content_block_delta`` 事件中 ``delta.text``
+    """
+    if protocol not in SUPPORTED_PROTOCOLS:
+        raise AppError(ErrorCode.VALIDATION, f"协议不受支持：{protocol}")
+
+    base = base_url.rstrip("/")
+    headers = {"Content-Type": "application/json"}
+
+    if protocol == "openai_chat":
+        url = f"{base}/v1/chat/completions"
+        chat: list[dict] = ([{"role": "system", "content": system}] if system else []) + list(messages)
+        body: dict = {
+            "model": model,
+            "messages": chat,
+            "stream": True,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        headers["Authorization"] = f"Bearer {api_key}"
+
+        def delta_of(data: dict) -> str:
+            choices = data.get("choices") or [{}]
+            return str((choices[0].get("delta") or {}).get("content") or "")
+
+    elif protocol == "openai_responses":
+        url = f"{base}/v1/responses"
+        body = {"model": model, "input": list(messages), "stream": True, "max_output_tokens": max_tokens}
+        if system:
+            body["instructions"] = system
+        headers["Authorization"] = f"Bearer {api_key}"
+
+        def delta_of(data: dict) -> str:  # noqa: F811  （各分支同名提取器，互斥定义）
+            if data.get("type") == "response.output_text.delta":
+                return str(data.get("delta") or "")
+            return ""
+
+    else:  # anthropic_messages
+        url = f"{base}/v1/messages"
+        body = {
+            "model": model,
+            "messages": list(messages),
+            "stream": True,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        if system:
+            body["system"] = system
+        headers["x-api-key"] = api_key
+        headers["anthropic-version"] = anthropic_version or "2023-06-01"
+
+        def delta_of(data: dict) -> str:  # noqa: F811
+            if data.get("type") == "content_block_delta":
+                delta = data.get("delta") or {}
+                if delta.get("type") == "text_delta":
+                    return str(delta.get("text") or "")
+            return ""
+
+    request = Request(url, data=json.dumps(body).encode(), headers=headers, method="POST")
+    deadline = time.monotonic() + timeout_s
+    try:
+        response = urlopen(request, timeout=timeout_s)
+    except HTTPError as exc:
+        raise AppError(ErrorCode.UPSTREAM, f"上游返回 {exc.code}") from exc
+    except TimeoutError as exc:
+        raise AppError(ErrorCode.TIMEOUT, "上游调用超时") from exc
+    except URLError as exc:
+        reason = str(getattr(exc, "reason", "")).lower()
+        if "timed out" in reason:
+            raise AppError(ErrorCode.TIMEOUT, "上游调用超时") from exc
+        raise AppError(ErrorCode.UPSTREAM, "上游连接失败") from exc
+
+    try:
+        with response:
+            for raw_line in response:
+                # 整体流式时长兜底：超时视为上游卡死，归一为 TIMEOUT
+                if time.monotonic() > deadline:
+                    raise TimeoutError("stream deadline exceeded")
+                line = raw_line.decode("utf-8", "ignore").strip()
+                if not line.startswith("data:"):
+                    # SSE 的 event:/注释行/空行一律跳过，仅解析 data 帧
+                    continue
+                payload = line[5:].strip()
+                if not payload:
+                    continue
+                if payload == "[DONE]":
+                    return
+                try:
+                    data = json.loads(payload)
+                except json.JSONDecodeError:
+                    continue  # 容忍个别坏帧，不中断整条流
+                if not isinstance(data, dict):
+                    continue
+                text = delta_of(data)
+                if text:
+                    yield text
+    except TimeoutError as exc:
+        raise AppError(ErrorCode.TIMEOUT, "上游调用超时") from exc
+    except OSError as exc:
+        # 读流中连接中断（对端重置等）：统一归一为 UPSTREAM
+        raise AppError(ErrorCode.UPSTREAM, "上游连接中断") from exc

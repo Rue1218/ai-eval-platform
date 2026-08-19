@@ -478,8 +478,13 @@
               </div>
             </div>
 
-            <!-- 2.7 Agent 文本回复 -->
-            <div v-else-if="item.type === 'agent'" class="msg-agent" :class="{ 'no-anim': item.noAnim }" v-html="item.text"></div>
+            <!-- 2.7 Agent 文本回复（streaming 时为流式气泡，带打字光标） -->
+            <div
+              v-else-if="item.type === 'agent'"
+              class="msg-agent"
+              :class="{ 'no-anim': item.noAnim, 'streaming-bubble': item.streaming }"
+              v-html="item.text"
+            ></div>
           </template>
         </div>
 
@@ -809,6 +814,8 @@ interface StreamItem {
   text?: string
   done?: boolean
   collapsed?: boolean
+  // 流式标记：true 表示该 agent 气泡正在接收 LLM 增量帧，终帧到达后置 false
+  streaming?: boolean
   tool?: string
   args?: any
   result?: any
@@ -1737,13 +1744,27 @@ function handleWsEvent(ev: WsServerEvent) {
   const p = ev.payload || {}
   switch (ev.event) {
     case 'thought': {
-      // 助手自然语言回复（闲聊 / 澄清 / 错误引导）：渲染为轻量文本气泡。
-      // 思考过程类重卡片已移除，但纯文本回复必须可见，否则闲聊场景界面零反馈。
-      const text = String(p.text || '').trim()
-      if (text) {
-        events.value.push({ type: 'agent', text: `<p>${escapeHtml(text)}</p>` })
-        scrollToBottom()
+      // 流式增量帧（瞬态，服务端不落库）：追加到当前流式气泡，无则新建
+      if (p.stream === 'chunk') {
+        const delta = String(p.text || '')
+        if (delta) {
+          const target = [...events.value].reverse().find(e => e.type === 'agent' && e.streaming)
+          if (target) target.text = (target.text || '') + escapeHtml(delta).replace(/\n/g, '<br>')
+          else events.value.push({ type: 'agent', text: escapeHtml(delta).replace(/\n/g, '<br>'), streaming: true })
+          scrollToBottom()
+        }
+        break
       }
+      // 完整回复（终帧或非流式）：若存在流式气泡则用权威全文替换落定，避免重复渲染
+      const text = String(p.text || '').trim()
+      const streaming = [...events.value].reverse().find(e => e.type === 'agent' && e.streaming)
+      if (streaming) {
+        if (text) streaming.text = `<p>${escapeHtml(text).replace(/\n/g, '<br>')}</p>`
+        streaming.streaming = false
+      } else if (text) {
+        events.value.push({ type: 'agent', text: `<p>${escapeHtml(text).replace(/\n/g, '<br>')}</p>` })
+      }
+      if (text) scrollToBottom()
       // 纯对话轮次（如闲聊）以 thought 收尾：结束「生成中」状态；
       // 若后续仍有 tool_call / confirm，UI 会随事件自然继续更新。
       isGenerating.value = false

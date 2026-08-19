@@ -606,6 +606,15 @@ p { margin: 0; text-wrap: pretty; }
   30% { transform: translateY(-4px); opacity: 1; }
 }
 
+/* 流式输出气泡：LLM 增量到达期间显示闪烁打字光标，终帧后随 streaming 置 false 消失 */
+.streaming-bubble::after {
+  content: '▍';
+  margin-left: 2px;
+  color: var(--c-agent, #10b981);
+  animation: blink-cursor 1s step-end infinite;
+}
+@keyframes blink-cursor { 50% { opacity: 0; } }
+
 .thought-card {
   border: 1px solid var(--border-subtle); border-radius: 14px;
   background: var(--bg-elevated);

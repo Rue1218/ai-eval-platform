@@ -18,6 +18,7 @@ from app.routers.ws import (
     _match_profiles,
     _parse_llm_json,
     _pong_body,
+    _visible_reply,
 )
 
 
@@ -80,6 +81,30 @@ def test_deep_merge_keeps_defaults_and_overrides_leaf():
     assert merged["run"]["timeout_s"] == 60  # 未提及的默认值保留
     assert merged["with_stress"] is True
     assert merged["kind"] == "benchmark"
+
+
+def test_visible_reply_progressive_extraction():
+    """流式 reply 增量提取：未现键为空、部分值逐增、闭合后不再增长。"""
+    # 未出现 reply 键：无可见文本（自然降级为终帧整体渲染）
+    assert _visible_reply('{"intent": "chat"') == ""
+    assert _visible_reply('') == ""
+    # 部分值：随缓冲增长可见文本逐增
+    assert _visible_reply('{"reply": "你好') == "你好"
+    assert _visible_reply('{"reply": "你好，我是评测') == "你好，我是评测"
+    # 值闭合后：后续 JSON 字段不再进入可见文本
+    assert _visible_reply('{"reply": "完成", "intent": "benchmark"}') == "完成"
+
+
+def test_visible_reply_handles_escapes():
+    """转义处理：换行/引号/反斜杠正确还原，不完整转义尾部暂不展示。"""
+    assert _visible_reply('{"reply": "第一行\\n第二行') == "第一行\n第二行"
+    assert _visible_reply('{"reply": "他说\\"你好\\"') == '他说"你好"'
+    assert _visible_reply('{"reply": "反斜杠\\\\') == "反斜杠\\"
+    # 尾部单独的反斜杠：转义不完整，暂不展示
+    assert _visible_reply('{"reply": "尾部\\') == "尾部"
+    # \uXXXX 完整时还原，不完整时尾部暂不展示
+    assert _visible_reply('{"reply": "中文\\u4e2d') == "中文中"
+    assert _visible_reply('{"reply": "中文\\u4e') == "中文"
 
 
 def test_parse_llm_json_tolerates_markdown_fence():

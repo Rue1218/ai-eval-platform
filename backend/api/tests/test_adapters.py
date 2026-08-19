@@ -5,12 +5,13 @@ usage 归一、鉴权头组装与 API Key 不泄漏。HTTP 层通过 monkeypatch
 替换 ``adapters._post_json`` 注入夹具，不依赖真实上游与数据库。
 """
 
+import json
 from urllib.error import HTTPError
 
 import pytest
 
 from app import adapters
-from app.adapters import call_protocol
+from app.adapters import call_protocol, stream_protocol
 from app.errors import AppError, ErrorCode
 
 API_KEY = "sk-secret-key-123"
@@ -177,3 +178,128 @@ def test_missing_usage_counts_as_zero(monkeypatch):
     result = call_protocol(**_kwargs("openai_chat"))
 
     assert result.usage == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
+
+# ---------------------------------------------------------------------------
+# stream_protocol：三协议 SSE 流式解析夹具
+# ---------------------------------------------------------------------------
+
+
+class _FakeSSE:
+    """把 SSE 文本行包装成可迭代的假响应对象（urlopen 返回值替身）。"""
+
+    def __init__(self, lines: list[str]):
+        self._lines = [f"{ln}\n".encode() for ln in lines]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def __iter__(self):
+        return iter(self._lines)
+
+
+def _capture_stream(monkeypatch, lines: list[str]) -> dict:
+    """替换 urlopen 为 SSE 夹具：记录请求并返回固定行序列。"""
+    seen: dict = {}
+
+    def fake_urlopen(request, timeout):
+        seen["url"] = request.full_url
+        seen["body"] = json.loads(request.data.decode())
+        seen["headers"] = {k.lower(): v for k, v in request.header_items()}
+        return _FakeSSE(lines)
+
+    monkeypatch.setattr(adapters, "urlopen", fake_urlopen)
+    return seen
+
+
+def test_stream_openai_chat_chunks(monkeypatch):
+    """openai_chat 流式：跳过 role 首帧与 [DONE]，仅 yield content 增量。"""
+    seen = _capture_stream(
+        monkeypatch,
+        [
+            'data: {"choices":[{"delta":{"role":"assistant"}}]}',
+            '',
+            'data: {"choices":[{"delta":{"content":"你"}}]}',
+            'data: {"choices":[{"delta":{"content":"好"}}]}',
+            'data: [DONE]',
+        ],
+    )
+    chunks = list(stream_protocol(**_kwargs("openai_chat")))
+
+    assert chunks == ["你", "好"]
+    assert seen["body"]["stream"] is True
+    assert seen["headers"]["authorization"] == f"Bearer {API_KEY}"
+
+
+def test_stream_openai_responses_chunks(monkeypatch):
+    """openai_responses 流式：仅 output_text.delta 事件携带可见增量。"""
+    _capture_stream(
+        monkeypatch,
+        [
+            'data: {"type":"response.created"}',
+            'data: {"type":"response.output_text.delta","delta":"评"}',
+            'data: {"type":"response.output_text.delta","delta":"测"}',
+            'data: {"type":"response.completed","response":{}}',
+        ],
+    )
+    chunks = list(stream_protocol(**_kwargs("openai_responses")))
+
+    assert chunks == ["评", "测"]
+
+
+def test_stream_anthropic_chunks(monkeypatch):
+    """anthropic_messages 流式：仅 text_delta 内容块携带可见增量。"""
+    _capture_stream(
+        monkeypatch,
+        [
+            'data: {"type":"message_start","message":{}}',
+            'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"基"}}',
+            'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"准"}}',
+            'data: {"type":"content_block_stop"}',
+            'data: {"type":"message_stop"}',
+        ],
+    )
+    chunks = list(stream_protocol(**_kwargs("anthropic_messages")))
+
+    assert chunks == ["基", "准"]
+
+
+def test_stream_tolerates_bad_frames(monkeypatch):
+    """坏帧（非 JSON / 非 data 行 / 空 data）不中断整条流。"""
+    _capture_stream(
+        monkeypatch,
+        [
+            'event: message',
+            'data: not-json',
+            'data: ',
+            'data: {"choices":[{"delta":{"content":"ok"}}]}',
+        ],
+    )
+    assert list(stream_protocol(**_kwargs("openai_chat"))) == ["ok"]
+
+
+def test_stream_4xx_maps_to_upstream(monkeypatch):
+    """建连即 4xx：归一为 UPSTREAM，消息仅含状态码。"""
+    monkeypatch.setattr(
+        adapters,
+        "urlopen",
+        lambda request, timeout: (_ for _ in ()).throw(
+            HTTPError("https://upstream", 429, "Too Many Requests", None, None)
+        ),
+    )
+    with pytest.raises(AppError) as exc:
+        list(stream_protocol(**_kwargs("openai_chat")))
+
+    assert exc.value.code == ErrorCode.UPSTREAM
+    assert "429" in exc.value.message
+
+
+def test_stream_unsupported_protocol_rejected():
+    """非契约协议在发请求前即拒绝。"""
+    with pytest.raises(AppError) as exc:
+        list(stream_protocol(**_kwargs("grpc")))
+
+    assert exc.value.code == ErrorCode.VALIDATION

@@ -8,6 +8,7 @@
 import asyncio
 import json
 import logging
+import re
 import time
 from copy import deepcopy
 from datetime import UTC, datetime
@@ -16,8 +17,9 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from ..adapters import stream_protocol
 from ..db import SessionLocal
-from ..llm import call_agent_model
+from ..llm import _resolve_agent_profile
 from ..models import (
     AuditLog,
     Dataset,
@@ -31,7 +33,7 @@ from ..models import (
 )
 from ..models import Session as AgentSession
 from ..schemas import TaskCreate
-from ..security import TOKEN_TYPE_WS, decode_token
+from ..security import TOKEN_TYPE_WS, decode_token, decrypt_secret
 
 router = APIRouter(tags=["ws"])
 logger = logging.getLogger("ai-eval.ws")
@@ -287,10 +289,11 @@ async def _send_confirm(db: Session, ws: WebSocket, session_id: str, card: dict,
 
 _LLM_SYSTEM = (
     "你是 AI 测试评估平台的智能体助手，负责理解用户的评测目标并输出一个 JSON 对象。"
-    "只能输出 JSON 本身，不要输出任何解释、代码块或额外文字。JSON 字段：\n"
+    "只能输出 JSON 本身，不要输出任何解释、代码块或额外文字。JSON 字段"
+    "（必须严格按以下顺序输出，reply 必须在最前）：\n"
     '{\n'
-    '  "intent": "benchmark" | "testcase" | "rag" | "report" | "chat",\n'
     '  "reply": "给用户的一句话自然语言回复，简洁友好",\n'
+    '  "intent": "benchmark" | "testcase" | "rag" | "report" | "chat",\n'
     '  "profile_names": ["被测协议档名称或 ID，可选"],\n'
     '  "dataset_name": "数据集名称或 ID，可选",\n'
     '  "with_stress": false\n'
@@ -350,31 +353,131 @@ def _match_dataset(items: list[dict], name: str) -> str | None:
     return items[0]["id"]
 
 
-def _llm_plan(text: str, profiles: list[dict], datasets: list[dict], history: list[dict]) -> dict:
-    """在独立线程中调用 Agent 协议档模型，解析出结构化评测目标。
+_REPLY_KEY_RE = re.compile(r'"reply"\s*:\s*"')
 
-    未配置协议档或上游异常时抛异常，由调用方回退到规则版。
-    意图识别输出仅一个小 JSON：max_tokens 压到 512 防推理模型长思考，
-    12 秒独立短超时保证最坏情况下快速降级规则版，用户不长时间干等。
+
+def _visible_reply(buf: str) -> str:
+    """从累积的模型输出中提取 ``reply`` 字段的当前可见文本。
+
+    系统提示词要求 reply 字段置于 JSON 首位，因此流式期间即可边生成边展示：
+    找到 ``"reply": "`` 后逐字符扫描（处理转义），直至值闭合引号或缓冲区末尾。
+    尾部不完整的转义序列（如单独的反斜杠或截断的 ``\\uXXXX``）暂不展示，
+    待后续增量到达再补全；未出现 reply 键时返回空串（自然降级为终帧整体渲染）。
     """
-    db = SessionLocal()
-    try:
-        user_payload = {
-            "用户消息": text,
-            "对话历史": history,
-            "可用协议档": [{"id": p["id"], "name": p["name"], "model": p["model"]} for p in profiles],
-            "可用数据集": [{"id": d["id"], "name": d["name"]} for d in datasets],
-        }
-        raw = call_agent_model(
-            db,
+    m = _REPLY_KEY_RE.search(buf)
+    if not m:
+        return ""
+    i = m.end()
+    out: list[str] = []
+    while i < len(buf):
+        ch = buf[i]
+        if ch == "\\":
+            if i + 1 >= len(buf):
+                break  # 转义不完整：尾部暂不展示
+            nxt = buf[i + 1]
+            if nxt == "n":
+                out.append("\n")
+            elif nxt == "t":
+                out.append("\t")
+            elif nxt == '"':
+                out.append('"')
+            elif nxt == "\\":
+                out.append("\\")
+            elif nxt == "u":
+                if i + 6 <= len(buf):
+                    try:
+                        out.append(chr(int(buf[i + 2 : i + 6], 16)))
+                        i += 6
+                        continue
+                    except ValueError:
+                        pass
+                break  # \uXXXX 不完整：尾部暂不展示
+            else:
+                out.append(nxt)
+            i += 2
+            continue
+        if ch == '"':
+            break  # 值闭合：可见文本到此为止
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _stream_frame(session_id: str, cursor: int, delta: str) -> dict:
+    """构造流式增量瞬态帧：复用 thought 事件名，payload 携带 stream 标记。
+
+    与 pong 同策略：不写入 ws_events、不占用单调事件号，断线重连时
+    不会回放半截增量；``event_id`` 复用连接游标仅为满足公共头结构。
+    """
+    return {
+        "event": "thought",
+        "session_id": session_id,
+        "task_id": None,
+        "event_id": cursor,
+        "ts": datetime.now(UTC).isoformat(),
+        "payload": {"text": delta, "stream": "chunk"},
+    }
+
+
+async def _stream_llm_plan(
+    db: Session,
+    ws: WebSocket,
+    session_id: str,
+    state: _ConnState,
+    text: str,
+    profiles: list[dict],
+    datasets: list[dict],
+    history: list[dict],
+) -> dict:
+    """流式调用 Agent 模型做意图识别：reply 字段增量实时推送给前端。
+
+    生产者线程逐块读取上游 SSE，提取可见 reply 增量后经
+    ``run_coroutine_threadsafe`` 回到事件循环在连接锁内下发；线程侧
+    ``.result()`` 等待发送完成形成背压，保证增量顺序。返回解析后的
+    plan；上游失败抛 AppError，由调用方降级规则版。max_tokens=512、
+    12 秒整体超时与降级策略同非流式版本。
+    """
+    profile = _resolve_agent_profile(db)
+    loop = asyncio.get_running_loop()
+    progress = {"buf": "", "sent": 0}
+    user_payload = {
+        "用户消息": text,
+        "对话历史": history,
+        "可用协议档": [{"id": p["id"], "name": p["name"], "model": p["model"]} for p in profiles],
+        "可用数据集": [{"id": d["id"], "name": d["name"]} for d in datasets],
+    }
+
+    async def _push(delta: str) -> None:
+        # 连接锁内直发瞬态帧，与心跳/转发互斥避免帧交错
+        async with state.lock:
+            await ws.send_json(_stream_frame(session_id, state.cursor, delta))
+
+    def _producer() -> str:
+        parts: list[str] = []
+        for chunk in stream_protocol(
+            protocol=profile.protocol,
+            base_url=profile.base_url,
+            model=profile.model,
+            api_key=decrypt_secret(profile.encrypted_key),
+            messages=[{"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)}],
             system=_LLM_SYSTEM,
-            user=json.dumps(user_payload, ensure_ascii=False),
+            temperature=0.3,
             max_tokens=512,
+            anthropic_version=profile.anthropic_version,
             timeout_s=12,
-        )
-        return _parse_llm_json(raw)
-    finally:
-        db.close()
+        ):
+            parts.append(chunk)
+            progress["buf"] += chunk
+            visible = _visible_reply(progress["buf"])
+            if len(visible) > progress["sent"]:
+                delta = visible[progress["sent"] :]
+                progress["sent"] = len(visible)
+                # 阻塞等待发送完成：既是顺序保证，也是天然背压
+                asyncio.run_coroutine_threadsafe(_push(delta), loop).result(timeout=30)
+        return "".join(parts)
+
+    raw = await asyncio.to_thread(_producer)
+    return _parse_llm_json(raw)
 
 
 async def _handle_user_message(
@@ -409,7 +512,7 @@ async def _handle_user_message(
 
     plan: dict | None = None
     try:
-        plan = await asyncio.to_thread(_llm_plan, text, profiles, datasets, history)
+        plan = await _stream_llm_plan(db, ws, session.id, state, text, profiles, datasets, history)
     except Exception:
         logger.info("LLM 目标解析失败，回退规则版", exc_info=True)
 
