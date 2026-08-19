@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from .models import Report, Session, Task, TaskEvent, WsEvent
+from .models import Report, Session, Setting, Task, TaskEvent, WsEvent
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("worker")
@@ -19,6 +19,22 @@ engine = create_engine(DATABASE_URL, pool_pre_ping=True, future=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 TERMINAL = {"succeeded", "failed", "cancelled"}
+
+# 平台并发上限默认值（PRD 3.4 / 后端计划 W4）：与 api 侧 DEFAULT_SETTINGS 保持一致
+DEFAULT_MAX_RUNNING_TASKS = 3
+
+
+def _max_running_tasks(db) -> int:
+    """读取 settings.max_running_tasks 并发闸门；缺失或非法时回退默认 3。"""
+    row = db.query(Setting).filter(Setting.key == "max_running_tasks").first()
+    value = row.value if row else None
+    if isinstance(value, bool):
+        return DEFAULT_MAX_RUNNING_TASKS
+    if isinstance(value, int) and value >= 1:
+        return value
+    if isinstance(value, float) and value >= 1:
+        return int(value)
+    return DEFAULT_MAX_RUNNING_TASKS
 
 
 def _push_ws(session_id: str | None, event: str, payload: dict, task_id: str | None = None) -> None:
@@ -115,19 +131,24 @@ def loop() -> None:
     while True:
         db = SessionLocal()
         try:
-            task = (
-                db.query(Task)
-                .filter(Task.status == "queued")
-                .order_by(Task.created_at.asc())
-                .with_for_update(skip_locked=True)
-                .first()
-            )
-            if task:
-                task.status = "running"
-                task.started_at = datetime.now(timezone.utc)
-                db.commit()
-                db.refresh(task)
-                _run_task(task)
+            # 平台并发闸门（PRD 3.4）：running 任务达到 max_running_tasks 时
+            # 不领取新任务，queued 任务保持排队；会话内串行由 tasks 表的
+            # 部分唯一索引 uq_tasks_active_session 在创建侧保证。
+            running = db.query(Task).filter(Task.status == "running").count()
+            if running < _max_running_tasks(db):
+                task = (
+                    db.query(Task)
+                    .filter(Task.status == "queued")
+                    .order_by(Task.created_at.asc())
+                    .with_for_update(skip_locked=True)
+                    .first()
+                )
+                if task:
+                    task.status = "running"
+                    task.started_at = datetime.now(timezone.utc)
+                    db.commit()
+                    db.refresh(task)
+                    _run_task(task)
         except Exception:
             logger.exception("worker loop error")
         finally:

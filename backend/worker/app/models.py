@@ -84,3 +84,12 @@ class Report(Base):
     kind = Column(String, nullable=False)
     metrics = Column(JSONB, default=dict)
     created_at = Column(DateTime(timezone=True), default=utcnow)
+
+
+class Setting(Base):
+    """平台配置最小映射：Worker 仅读取 max_running_tasks 等并发闸门值。"""
+
+    __tablename__ = "settings"
+
+    key = Column(String, primary_key=True)
+    value = Column(JSONB, default=dict)
