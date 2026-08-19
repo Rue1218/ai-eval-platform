@@ -7,6 +7,7 @@ dict（HAR-NFR-08：单副本或粘性路由；多副本需外置，M1 不做）
 from __future__ import annotations
 
 import asyncio
+import threading
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from dataclasses import dataclass
@@ -30,12 +31,18 @@ from .defaults import (
     TURN_WALL_CLOCK_S,
 )
 from .log import agent_trace
-from .persona import chat_system
+from .persona import chat_system, turn_system
 from .plan import PlanArtifact, TurnBudget, run_plan
 from .prefs import load_prefs, save_prefs_from_spec
 from .react import run_react
 from .reflect import ReflectArtifact, maybe_model_check, run_gates
-from .slash import assert_command_enabled, enabled_help_text, parse_slash, unknown_command_text
+from .slash import (
+    assert_command_enabled,
+    enabled_help_text,
+    is_unknown_slash,
+    parse_slash,
+    unknown_command_text,
+)
 
 EmitFn = Callable[..., Awaitable[int]]
 
@@ -49,6 +56,7 @@ class SessionHarness:
     """单会话进行中的 Harness 回合。"""
 
     abort: asyncio.Event
+    stop: threading.Event
     task: asyncio.Task | None = None
 
 
@@ -70,6 +78,25 @@ def _clear_harness(session_id: str, task: asyncio.Task | None) -> None:
 def _check_abort(abort: asyncio.Event) -> None:
     if abort.is_set():
         raise HarnessAborted()
+
+
+def _run_with_fresh_db(stop: threading.Event, fn: Callable, *args: Any, **kwargs: Any) -> Any:
+    """在独立 Session 中执行同步函数，避免与收包循环/取消路径共用同一条连接。"""
+    if stop.is_set():
+        raise HarnessAborted()
+    db = SessionLocal()
+    try:
+        return fn(db, *args, **kwargs)
+    finally:
+        db.close()
+
+
+async def _await_thread(stop: threading.Event, fn: Callable, *args: Any, **kwargs: Any) -> Any:
+    """to_thread 包装：线程用独立库会话；取消后丢弃结果，不往已关闭会话上 commit。"""
+    result = await asyncio.to_thread(_run_with_fresh_db, stop, fn, *args, **kwargs)
+    if stop.is_set():
+        raise HarnessAborted()
+    return result
 
 
 def deep_merge(base: dict, patch: dict) -> dict:
@@ -149,6 +176,7 @@ async def _run_turn(
     attachments: list[str],
     emit: EmitFn,
     abort: asyncio.Event,
+    stop: threading.Event,
 ) -> None:
     """单回合内部实现；调用前已检查 abort。"""
     _check_abort(abort)
@@ -160,6 +188,11 @@ async def _run_turn(
             await _deliver_sentence(db, session.id, emit, "当前没有正在生成的内容")
             return
 
+    # 未知斜杠（含 /foo 这种正则能解析出命令名的未注册词）须在规划前交付帮助
+    if is_unknown_slash(parsed):
+        await _deliver_sentence(db, session.id, emit, unknown_command_text())
+        return
+
     parsed_cmd = parsed.command or ""
     if session.title == "新会话" and text.strip() and parsed_cmd not in NO_TITLE_COMMANDS:
         session.title = _title_from_text(text)
@@ -167,23 +200,22 @@ async def _run_turn(
 
     prefs = load_prefs(db, user.id)
     history = history_for_plan(db, session)
+    compact_summary = getattr(session, "compact_summary", None)
     budget = TurnBudget(cap=MAX_MODEL_CALLS)
 
-    # 未知斜杠
-    if parsed.is_slash and not parsed.command:
-        await _deliver_sentence(db, session.id, emit, unknown_command_text())
-        return
-
-    plan = await asyncio.to_thread(
-        run_plan,
-        db,
-        text=text,
-        parsed=parsed,
-        history=history,
-        prefs=prefs,
-        attachments=attachments,
-        budget=budget,
-        model_available=True,
+    plan = await _await_thread(
+        stop,
+        lambda tdb: run_plan(
+            tdb,
+            text=text,
+            parsed=parsed,
+            history=history,
+            prefs=prefs,
+            attachments=attachments,
+            budget=budget,
+            model_available=True,
+            compact_summary=compact_summary,
+        ),
     )
     _check_abort(abort)
     notes = plan.notes or "规划中"
@@ -239,16 +271,19 @@ async def _run_turn(
         _check_abort(abort)
         await _emit_thought(emit, "补规划：根据工具观察调整槽位", stage="plan")
         try:
-            extra = await asyncio.to_thread(
-                run_plan,
-                db,
-                text=text,
-                parsed=parsed,
-                history=history,
-                prefs=prefs,
-                attachments=attachments,
-                budget=budget,
-                model_available=True,
+            extra = await _await_thread(
+                stop,
+                lambda tdb: run_plan(
+                    tdb,
+                    text=text,
+                    parsed=parsed,
+                    history=history,
+                    prefs=prefs,
+                    attachments=attachments,
+                    budget=budget,
+                    model_available=True,
+                    compact_summary=compact_summary,
+                ),
             )
             if extra.delivery == "clarify":
                 plan.delivery = "clarify"
@@ -262,7 +297,18 @@ async def _run_turn(
     # /compact 在规则通过后再执行（不计入 4 次硬顶）
     if plan.intent == "compact" and reflect.verdict == "pass":
         try:
-            sentence, _old_m, _new_m = await asyncio.to_thread(run_compact, db, session)
+            session_id = session.id
+
+            def _compact_job(tdb: Session) -> tuple[str, int, int] | None:
+                row = tdb.query(AgentSession).filter(AgentSession.id == session_id).first()
+                if not row:
+                    raise AppError(ErrorCode.NOT_FOUND, "会话不存在")
+                return run_compact(tdb, row, stop=stop)
+
+            packed = await _await_thread(stop, _compact_job)
+            if packed is None:
+                raise HarnessAborted()
+            sentence, _old_m, _new_m = packed
         except AppError as exc:
             await emit("error", {"code": exc.code.value, "message": exc.message})
             await _deliver_sentence(db, session.id, emit, "上下文压缩失败，窗口未改动")
@@ -355,8 +401,16 @@ async def _run_turn(
     # 规则优先；通过后模型核对（A2）
     if reflect.verdict == "pass":
         _check_abort(abort)
-        reflect = await asyncio.to_thread(
-            maybe_model_check, db, reflect, plan=plan, text=text, budget=budget
+        reflect = await _await_thread(
+            stop,
+            lambda tdb, artifact=reflect: maybe_model_check(
+                tdb,
+                artifact,
+                plan=plan,
+                text=text,
+                budget=budget,
+                compact_summary=compact_summary,
+            ),
         )
 
     await after_reflect(plan=plan, reflect=reflect)
@@ -389,14 +443,31 @@ async def _run_turn(
         return
 
     if plan.intent == "chat" or plan.delivery == "text":
-        reply = await _chat_reply(db, text, history, budget)
+        reply = await _chat_reply(
+            db,
+            text,
+            history,
+            budget,
+            stop=stop,
+            compact_summary=compact_summary,
+            skill_id=plan.skill_id,
+        )
         await _deliver_sentence(db, session.id, emit, reply)
         return
 
     await _deliver_sentence(db, session.id, emit, plan.notes or "已处理。")
 
 
-async def _chat_reply(db: Session, text: str, history: list[dict[str, str]], budget: TurnBudget) -> str:
+async def _chat_reply(
+    _db: Session,
+    text: str,
+    history: list[dict[str, str]],
+    budget: TurnBudget,
+    *,
+    stop: threading.Event,
+    compact_summary: str | None,
+    skill_id: str | None,
+) -> str:
     """闲聊交付句：计入 4 次预算；失败回退短答。"""
     canned = (
         "你好！我是 AI 测试与评估平台的评测智能体。职责是协助你进行大模型质量评测、"
@@ -406,19 +477,25 @@ async def _chat_reply(db: Session, text: str, history: list[dict[str, str]], bud
     )
     if not budget.consume():
         return canned
+    user_blob = text if not history else f"最近对话：{history[-6:]}\n用户：{text}"
+    system = turn_system(chat_system(), skill_id=skill_id, compact_summary=compact_summary)
     try:
-        from ..llm import call_agent_model_detailed
+        def _job(tdb: Session):
+            from ..llm import call_agent_model_detailed
 
-        result = await asyncio.to_thread(
-            call_agent_model_detailed,
-            db,
-            chat_system(),
-            text if not history else f"最近对话：{history[-6:]}\n用户：{text}",
-            temperature=0.4,
-            max_tokens=2048,
-            timeout_s=30,
-        )
+            return call_agent_model_detailed(
+                tdb,
+                system,
+                user_blob,
+                temperature=0.4,
+                max_tokens=2048,
+                timeout_s=30,
+            )
+
+        result = await _await_thread(stop, _job)
         return (result.text or "").strip() or canned
+    except HarnessAborted:
+        raise
     except AppError:
         return canned
     except Exception as exc:
@@ -434,6 +511,7 @@ async def _harness_entry(
     attachments: list[str],
     emit_factory: Callable[[Session], EmitFn],
     abort: asyncio.Event,
+    stop: threading.Event,
 ) -> None:
     """Harness 任务入口：独立 DB 会话，墙钟 120s，结束后清理 registry。"""
     db = SessionLocal()
@@ -454,10 +532,13 @@ async def _harness_entry(
                 attachments=attachments,
                 emit=emit,
                 abort=abort,
+                stop=stop,
             )
 
         await asyncio.wait_for(_body(), timeout=TURN_WALL_CLOCK_S)
     except TimeoutError:
+        stop.set()
+        abort.set()
         agent_trace(f"回合墙钟超时 session={session_id[:8]}")
         try:
             emit = emit_factory(db)
@@ -466,12 +547,15 @@ async def _harness_entry(
         except Exception as exc:  # noqa: BLE001
             agent_trace(f"超时交付内部异常 type={type(exc).__name__}")
     except HarnessAborted:
+        stop.set()
         try:
             emit = emit_factory(db)
             await _deliver_sentence(db, session_id, emit, "已停止生成")
         except Exception as exc:  # noqa: BLE001
             agent_trace(f"abort 交付内部异常 type={type(exc).__name__}")
     except asyncio.CancelledError:
+        stop.set()
+        abort.set()
         try:
             emit = emit_factory(db)
             await _deliver_sentence(db, session_id, emit, "已停止生成")
@@ -513,6 +597,7 @@ async def dispatch_user_message(
 
     if running and existing:
         if parsed.command == "stop":
+            existing.stop.set()
             existing.abort.set()
             if existing.task and not existing.task.done():
                 existing.task.cancel()
@@ -524,7 +609,7 @@ async def dispatch_user_message(
         await emit_busy("thought", {"text": "当前没有正在生成的内容"})
         return
 
-    handle = SessionHarness(abort=asyncio.Event())
+    handle = SessionHarness(abort=asyncio.Event(), stop=threading.Event())
     task = asyncio.create_task(
         _harness_entry(
             session_id=session_id,
@@ -533,6 +618,7 @@ async def dispatch_user_message(
             attachments=attachments,
             emit_factory=emit_factory,
             abort=handle.abort,
+            stop=handle.stop,
         )
     )
     handle.task = task

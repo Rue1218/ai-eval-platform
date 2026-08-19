@@ -76,12 +76,23 @@ def history_for_plan(db: Session, session: AgentSession) -> list[dict[str, str]]
     return [{"role": row.role, "content": row.content or ""} for row in window_rows(db, session)]
 
 
-def run_compact(db: Session, session: AgentSession) -> tuple[str, int, int]:
+def run_compact(
+    db: Session,
+    session: AgentSession,
+    *,
+    stop: object | None = None,
+) -> tuple[str, int, int] | None:
     """执行手动 /compact。
 
     返回 (交付句, old_M, new_M)。上下文较短时不调模型、不改列。
     失败不改两列，向上抛 AppError。
+    ``stop`` 若已置位（如 /stop、墙钟），不写入两列，返回 None。
     """
+    def _aborted() -> bool:
+        return stop is not None and hasattr(stop, "is_set") and stop.is_set()
+
+    if _aborted():
+        return None
     rows = window_rows(db, session)
     old_m = len(rows)
     if old_m <= KEEP_RECENT:
@@ -109,6 +120,9 @@ def run_compact(db: Session, session: AgentSession) -> tuple[str, int, int]:
         agent_trace(f"compact 内部异常 type={type(exc).__name__}")
         raise AppError(ErrorCode.INTERNAL, "上下文压缩失败，窗口未改动") from exc
 
+    if _aborted():
+        agent_trace("compact 已中止，窗口未改动")
+        return None
     summary = (result.text or "").strip()[:SUMMARY_MAX_CHARS]
     if not summary:
         raise AppError(ErrorCode.UPSTREAM, "上下文压缩失败，窗口未改动")

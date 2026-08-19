@@ -20,7 +20,7 @@ from .defaults import (
     SKILL_ID_ENUM,
 )
 from .log import agent_trace
-from .persona import PLAN_RETRY_SUFFIX, plan_system
+from .persona import PLAN_RETRY_SUFFIX, plan_system, turn_system
 from .slash import SlashParse
 
 
@@ -366,7 +366,12 @@ def apply_prefs_suggestions(plan: PlanArtifact, prefs: dict) -> list[str]:
             filled["kb_id"] = prefs["last_kb_id"]
         if "gold_qa_id" in missing and prefs.get("last_gold_qa_id"):
             filled["gold_qa_id"] = prefs["last_gold_qa_id"]
-    if prefs.get("last_with_stress") and "with_stress" not in filled:
+    # with_stress 仅 benchmark/rag 合法；testcase 沿用会让确认卡 ack 被 TaskCreate 拒绝
+    if (
+        plan.intent in {"benchmark", "rag"}
+        and prefs.get("last_with_stress")
+        and "with_stress" not in filled
+    ):
         filled["with_stress"] = True
     return thoughts
 
@@ -377,6 +382,7 @@ def _call_plan_model(
     *,
     extra_system: str,
     budget: TurnBudget,
+    compact_summary: str | None = None,
 ) -> tuple[dict, int]:
     if not budget.consume():
         raise AppError(ErrorCode.VALIDATION, "本轮模型调用已达上限")
@@ -384,7 +390,10 @@ def _call_plan_model(
 
     result = call_agent_model_detailed(
         db,
-        f"{plan_system()}\n{extra_system}".strip(),
+        turn_system(
+            f"{plan_system()}\n{extra_system}".strip(),
+            compact_summary=compact_summary,
+        ),
         json.dumps(user_payload, ensure_ascii=False),
         temperature=0,
         max_tokens=1024,
@@ -403,6 +412,7 @@ def run_plan(
     attachments: list[str],
     budget: TurnBudget,
     model_available: bool = True,
+    compact_summary: str | None = None,
 ) -> PlanArtifact:
     """产出 PlanArtifact：斜杠模板 / LLM / 重试 / L0。"""
     if parsed.command and parsed.command in {
@@ -423,13 +433,29 @@ def run_plan(
         apply_prefs_suggestions(plan, prefs)
         return plan
 
-    if parsed.is_slash and not parsed.command:
+    if parsed.is_slash and parsed.command not in {
+        "benchmark",
+        "testcase",
+        "stress",
+        "compact",
+        "cancel",
+        "rerun",
+        "new",
+        "help",
+        "status",
+        "profiles",
+        "datasets",
+        "stop",
+        "rag",
+        "kb",
+        "report",
+    }:
         return PlanArtifact(
             intent="inspect",
             skill_id=None,
             slots={"filled": {}, "missing": []},
             tools_needed=[],
-            delivery="text",
+            delivery="action",
             budget={"max_tool_rounds": 0},
             notes="规划：未知命令。",
             source="slash",
@@ -449,7 +475,9 @@ def run_plan(
         "attachments": attachments,
     }
     try:
-        raw, latency = _call_plan_model(db, user_payload, extra_system="", budget=budget)
+        raw, latency = _call_plan_model(
+            db, user_payload, extra_system="", budget=budget, compact_summary=compact_summary
+        )
         plan = sanitize_plan(raw, source="llm")
         plan.used_model = True
         plan.latency_ms = latency
@@ -468,7 +496,11 @@ def run_plan(
     # 第 1 级：原样再要一次
     try:
         raw, latency = _call_plan_model(
-            db, user_payload, extra_system=PLAN_RETRY_SUFFIX, budget=budget
+            db,
+            user_payload,
+            extra_system=PLAN_RETRY_SUFFIX,
+            budget=budget,
+            compact_summary=compact_summary,
         )
         plan = sanitize_plan(raw, source="retry")
         plan.used_model = True

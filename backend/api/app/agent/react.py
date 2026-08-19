@@ -146,10 +146,16 @@ def build_proposed_spec(plan: PlanArtifact, react: ReactArtifact, *, slash_fill_
         if filled.get("case_source"):
             spec["case_source"] = filled["case_source"]
 
-    spec["with_stress"] = bool(filled.get("with_stress"))
     spec["run"] = _deep_merge(default_run(), filled.get("run") if isinstance(filled.get("run"), dict) else {})
-    if spec["with_stress"]:
-        spec["stress"] = _deep_merge(default_stress(), filled.get("stress") if isinstance(filled.get("stress"), dict) else {})
+    if kind in {"benchmark", "rag"}:
+        spec["with_stress"] = bool(filled.get("with_stress"))
+        if spec["with_stress"]:
+            spec["stress"] = _deep_merge(
+                default_stress(),
+                filled.get("stress") if isinstance(filled.get("stress"), dict) else {},
+            )
+    else:
+        spec["with_stress"] = False
     if kind == "rag":
         spec["rag_mode"] = filled.get("rag_mode") or ["hybrid"]
         if filled.get("kb_id") in known:

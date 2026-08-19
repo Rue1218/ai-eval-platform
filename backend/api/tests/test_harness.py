@@ -2,21 +2,26 @@
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 
+from app.agent.context import run_compact
 from app.agent.defaults import HARD_MAX_TOOL_ROUNDS, is_long_tool
 from app.agent.mcp_tools import redact_secrets, truncate_tool_data
+from app.agent.persona import PERSONA_SYSTEM, turn_system
 from app.agent.plan import (
     PlanArtifact,
+    apply_prefs_suggestions,
     classify_intent_l0,
     l0_plan,
     parse_json_object,
     plan_from_slash,
     sanitize_plan,
 )
-from app.agent.react import ReactArtifact
+from app.agent.react import ReactArtifact, build_proposed_spec
 from app.agent.reflect import run_gates
-from app.agent.slash import parse_slash
+from app.agent.slash import is_unknown_slash, parse_slash, unknown_command_text
 from app.errors import ErrorCode
 from app.models import Session as AgentSession
 
@@ -184,6 +189,62 @@ def test_parse_slash_benchmark_args():
     assert parsed.command == "benchmark"
     assert parsed.args == "smoke-20"
     assert parse_slash("对比两个模型").is_slash is False
+
+
+def test_unknown_slash_foo_is_not_chat():
+    """``/foo`` 正则能解析出命令名，仍须按未知命令而不是闲聊。"""
+    parsed = parse_slash("/foo")
+    assert parsed.is_slash is True
+    assert parsed.command == "foo"
+    assert is_unknown_slash(parsed) is True
+    assert is_unknown_slash(parse_slash("/benchmark")) is False
+    assert is_unknown_slash(parse_slash("你好")) is False
+    help_text = unknown_command_text()
+    assert help_text.startswith("未知命令。")
+    assert "/help" in help_text
+
+
+def test_turn_system_injects_summary_and_skill():
+    """压缩摘要与技能说明进入 system，不能只靠缩短后的 window_rows。"""
+    text = turn_system(
+        PERSONA_SYSTEM,
+        skill_id="skill-benchmark",
+        compact_summary="用户上次要对比两个模型。",
+    )
+    assert "技能 · 基准对比" in text
+    assert "压缩摘要" in text
+    assert "对比两个模型" in text
+    assert PERSONA_SYSTEM in text
+    bare = turn_system(PERSONA_SYSTEM)
+    assert "压缩摘要" not in bare
+
+
+def test_prefs_do_not_attach_stress_to_testcase():
+    """last_with_stress 不得套到 testcase，否则确认卡 ack 会被 TaskCreate 拒绝。"""
+    plan = plan_from_slash(parse_slash("/testcase"), prefs={"last_with_stress": True}, attachments=[])
+    apply_prefs_suggestions(plan, {"last_with_stress": True, "last_kind": "benchmark"})
+    assert plan.slots["filled"].get("with_stress") is not True
+    react = ReactArtifact()
+    spec = build_proposed_spec(plan, react, slash_fill_first=False)
+    assert spec is not None
+    assert spec.get("kind") == "testcase"
+    assert spec.get("with_stress") is False
+    assert "stress" not in spec
+
+
+def test_prefs_stress_still_applies_to_benchmark():
+    plan = l0_plan("帮我评一下")
+    apply_prefs_suggestions(plan, {"last_with_stress": True})
+    assert plan.slots["filled"].get("with_stress") is True
+
+
+def test_compact_aborted_before_model_does_not_write():
+    """/stop 或墙钟已置位时 compact 不得改列。"""
+    stop = threading.Event()
+    stop.set()
+    session = AgentSession(id="s1", user_id="u1", title="t")
+    assert run_compact(_FakeDb(), session, stop=stop) is None
+    assert session.compact_summary is None
 
 
 class _FakeQuery:

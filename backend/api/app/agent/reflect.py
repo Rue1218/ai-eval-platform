@@ -17,7 +17,7 @@ from ..models import Session as AgentSession
 from ..models import Task
 from .defaults import ACTIVE_STATUSES, SHORT_TOOLS, is_long_tool
 from .log import agent_trace
-from .persona import reflect_check_system
+from .persona import reflect_check_system, turn_system
 from .plan import PlanArtifact, TurnBudget, parse_json_object
 from .react import ReactArtifact, _missing_for_kind
 
@@ -215,6 +215,7 @@ def maybe_model_check(
     plan: PlanArtifact,
     text: str,
     budget: TurnBudget,
+    compact_summary: str | None = None,
 ) -> ReflectArtifact:
     """规则 pass 后 1 次「是否符合用户目标」。失败不阻断；不得把 reject 改成 pass。"""
     if artifact.verdict != "pass":
@@ -234,7 +235,11 @@ def maybe_model_check(
 
         result = call_agent_model_detailed(
             db,
-            reflect_check_system(),
+            turn_system(
+                reflect_check_system(),
+                skill_id=plan.skill_id,
+                compact_summary=compact_summary,
+            ),
             json.dumps(payload, ensure_ascii=False),
             temperature=0,
             max_tokens=512,

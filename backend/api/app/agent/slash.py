@@ -46,6 +46,15 @@ class SlashParse:
     is_slash: bool
 
 
+def is_unknown_slash(parsed: SlashParse) -> bool:
+    """语法合法但未注册（如 ``/foo``），或 ``/`` 后无法解析出命令名。"""
+    if not parsed.is_slash:
+        return False
+    if not parsed.command:
+        return True
+    return parsed.command not in SYSTEM_COMMAND_NAMES
+
+
 def parse_slash(text: str) -> SlashParse:
     """解析整段 trim 后的用户输入。不是 ``/`` 开头则整句当自然语言。"""
     raw = (text or "").strip()

@@ -52,6 +52,26 @@ SKILL_HINTS: dict[str, str] = {
 }
 
 
+def turn_system(
+    base: str,
+    *,
+    skill_id: str | None = None,
+    compact_summary: str | None = None,
+) -> str:
+    """按 §16.6 组装系统侧上下文：人设（含调用后缀）→ 技能说明 → 压缩摘要。
+
+    摘要与技能不占 20 条消息窗口；不注入则压缩等于丢掉旧对话。
+    """
+    parts = [base]
+    hint = SKILL_HINTS.get(skill_id or "")
+    if hint:
+        parts.append(hint)
+    summary = (compact_summary or "").strip()
+    if summary:
+        parts.append(f"压缩摘要：\n{summary}")
+    return "\n".join(parts)
+
+
 def plan_system() -> str:
     """规划调用的完整 system 提示词。"""
     return f"{PERSONA_SYSTEM}\n{PLAN_JSON_SUFFIX}"
