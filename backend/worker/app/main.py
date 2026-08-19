@@ -1,8 +1,8 @@
 """Worker 主循环：轮询 PG 任务队列并按 kind 分发执行器。
 
 - ``benchmark`` / ``testcase``：真实执行器（见 benchmark.py / testcase.py）；
-- ``rag`` / ``stress``：仍为骨架 mock（M3/M4 替换为真实实现），与真实执行
-  保持同一领取入口，替换时不动本文件的分发结构。
+- ``rag``：LightRAG 未接入前必须失败，禁止 mock ``succeeded``；
+- ``stress``：仍为骨架 mock（M4 替换为真实实现），与真实执行保持同一领取入口。
 
 主循环同时承担 72h 用例确认超时扫描（PRD 3.3 / 5.4.1）：generated 状态的
 用例集过期后联动 awaiting_case_confirm 任务与用例集双双置 cancelled。
@@ -61,6 +61,26 @@ def _run_task(task_id: str) -> None:
 
         db.add(TaskEvent(task_id=task.id, event="start", payload={"kind": task.kind}))
         db.commit()
+        logger.info("开始执行 task=%s kind=%s", task.id, task.kind)
+        print(f"[worker] start task={task.id} kind={task.kind}", flush=True)
+
+        if task.kind == "rag":
+            # LightRAG 未接入：禁止 mock succeeded，避免对话里出现假报告
+            message = "RAG / LightRAG 尚未接入（计划 M3），当前请使用基准评测"
+            print(f"[worker] skip rag lightrag_not_ready task={task.id}", flush=True)
+            logger.warning("拒绝 rag 任务 %s：LightRAG 未接入", task.id)
+            task.status = "failed"
+            task.finished_at = datetime.now(timezone.utc)
+            task.result = {"code": "VALIDATION", "feature": "lightrag"}
+            db.add(TaskEvent(task_id=task.id, event="error", payload={"message": message}))
+            db.commit()
+            push_ws(
+                task.session_id,
+                "error",
+                {"code": "VALIDATION", "message": message},
+                task_id=task.id,
+            )
+            return
 
         if task.kind == "benchmark":
             # M2 真实执行：三协议调用 + 规则评分 + 预算熔断 + 断点续跑；
@@ -78,7 +98,7 @@ def _run_task(task_id: str) -> None:
             run_testcase(task_id)
             return
 
-        # ─── 以下为骨架 mock 流程（rag / stress，M3/M4 替换） ───
+        # ─── 以下为骨架 mock 流程（stress，M4 替换） ───
         time.sleep(2)
 
         # 期间若被取消则停止
@@ -87,7 +107,7 @@ def _run_task(task_id: str) -> None:
             return
 
         report_id = None
-        if task.kind in {"rag", "stress"}:
+        if task.kind == "stress":
             report = Report(task_id=task.id, kind=task.kind, metrics={"mock": True})
             db.add(report)
             db.flush()
@@ -104,10 +124,12 @@ def _run_task(task_id: str) -> None:
         if report_id:
             push_ws(task.session_id, "report", {"report_id": report_id}, task_id=task.id)
         logger.info("task %s (%s) succeeded (mock)", task.id, task.kind)
+        print(f"[worker] succeeded task={task.id} kind={task.kind}", flush=True)
     except Exception as exc:
         db.rollback()
         # 详细堆栈只进服务端日志;给浏览器/事件流的失败原因仅透出异常类名辅助定位
         logger.exception("task %s execution error", task_id)
+        print(f"[worker] failed task={task_id}", flush=True)
         # 失败状态落库单独保护：即使落库再失败也不阻断 error 事件推送
         try:
             if task is not None:
@@ -234,5 +256,6 @@ def loop() -> None:
 
 
 if __name__ == "__main__":
-    logger.info("worker started, db=%s", DATABASE_URL)
+    logger.info("worker started")
+    print("[worker] started", flush=True)
     loop()

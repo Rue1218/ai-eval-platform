@@ -2,12 +2,14 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.3 |
+| 文档版本 | V1.4 |
 | 对应 PRD | V1.6.4（功能唯一权威） |
 | 对应设计规范 | V1.2（错误码文案、确认卡字段名、调度中心规范） |
+| 对应 Agent 说明书 | V1.1（Harness / 斜杠 / 上下文算法；JSON 仍以本文为准） |
 | 对应前端计划 | V1.3 |
 | 对应后端计划 | V1.3 |
 | 撰写日期 | 2026-08-18 |
+| 最近修订 | 2026-08-19：V1.4 回写 Agent 增量（prefs、slash-commands、pending_confirm、context_meter、thought 可选字段、关闭码）；未启用能力统一 `VALIDATION` 400 |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
 ---
@@ -92,7 +94,10 @@
 | 500 | `INTERNAL` | 内部错误，请重试或联系平台维护者 |
 
 确认卡 / 表单校验失败：`VALIDATION`，`fields` 给前端卡内红字，**不要**只靠 Toast。  
-错误 body **不得** 含 Key、Cookie、stack。
+错误 body **不得** 含 Key、Cookie、stack。  
+WS `error` 事件 payload 与上表同一套 `code` + `message`（可带 `fields`），HTTP 状态码只用于 REST。  
+**能力未启用**（自定义斜杠、RAG、外部 MCP、页面 AI 未交付等）：一律 `VALIDATION` + HTTP **400**，禁止用 409 冒充（409 只给 `BUDGET_EXCEEDED` / `CONCURRENCY`）。  
+业务代码只抛 `AppError`；禁止把未捕获异常的 `str(exc)` 或堆栈写入响应或 WS（见 AGENTS.md §5.2.1）。
 
 ### 1.4 枚举
 
@@ -117,7 +122,7 @@
 | 模块 / 页面 | 前端功能与图表 | 调用的后端 API 接口 | 请求方法 | 权限口径 |
 | --- | --- | --- | --- | --- |
 | **登录 (login.html)** | 账号登录 / 首次强制改密 | `/api/auth/login`, `/api/auth/change-password` | POST | 免登录 / 成员 |
-| **智能体 (agent.html)** | 会话列表 / 意图识别 / TaskSpec 下单 / 迷你拓扑坞 | `/api/sessions`, `/ws/agent`, `/api/profiles`, `/api/datasets`, `/api/kb`, `/api/tasks`, `/api/dispatch/overview` | GET/POST/WS | 成员 · 全员同权 |
+| **智能体 (agent.html)** | 会话列表 / 意图识别 / TaskSpec 下单 / 迷你拓扑坞 / 斜杠面板 / 上下文仪表 | `/api/sessions`, `/api/sessions/{id}/messages`, `/api/agent/prefs`, `/api/slash-commands`, `/ws/agent`, `/api/profiles`, `/api/datasets`, `/api/kb`, `/api/tasks`, `/api/dispatch/overview` | GET/POST/DELETE/WS | 成员 · 全员同权 |
 | **调度中心 (dispatch.html)** | 调度大盘 / Worker 节点池 / 策略治理 / 分配日志流 | `/api/dispatch/overview`, `/api/dispatch/workers`, `/api/dispatch/workers/{id}`, `/api/dispatch/events`, `/api/dispatch/config`, `/api/tasks?status=queued` | GET/POST/PUT | 成员 · 全员同权 |
 | **任务中心 (tasks.html)** | 24h 状态趋势 / 六态过滤表格 / 抽屉详情 / 取消与重跑 | `/api/tasks`, `/api/tasks/summary`, `/api/tasks/{id}`, `/api/tasks/{id}/cancel`, `/api/tasks/{id}/rerun` | GET/POST | 成员 · 全员同权 |
 | **报告中心 (report.html)** | 报告列表 / 3合1详情 (Benchmark雷达/RAG水平柱状/压测多轴曲线) / Markdown导出 / 7天免登分享 / 冻结基线 | `/api/reports`, `/api/reports/{id}`, `/api/reports/{id}/samples`, `/api/reports/{id}/share`, `/api/reports/{id}/baseline` | GET/POST | 成员 · 全员同权 |
@@ -300,17 +305,104 @@
 #### `GET /api/sessions/{id}/messages`
 
 历史回放（REST）。实时增量只走 WS。  
-item：`id, role: user|assistant|system, content, attachments[], created_at`。  
-确认卡/工具卡以 WS 事件为准；REST 历史至少能还原用户文本与助手文本。实现可将 `ws_events` 一并返回：
+`messages` item：`id, role: user|assistant|system, content, attachments[], created_at`。  
+`events` **必带**（否则刷新丢工具卡 / 思考卡）。  
+`pending_confirm`：当前未 ack 的确认卡（TaskSpec）或 `null`；前端优先该字段做成可编辑卡，`events` 里的 `confirm` 只作只读回放。  
+`context_meter`：模型窗口仪表，刷新必须用服务端数字，禁止按 messages 表总条数自己减。`window` 固定 20；`/20` 只约束 `messages` 段；`skills` / `summary` 为 0/1 标志。
 
 ```json
 {
-  "messages": [],
-  "events": [ { "event_id": 1, "event": "thought", "payload": {} } ]
+  "messages": [
+    {
+      "id": "uuid",
+      "role": "user",
+      "content": "/benchmark 对比两模型",
+      "attachments": [],
+      "created_at": "2026-08-19T12:00:00Z"
+    }
+  ],
+  "events": [
+    {
+      "event_id": 1,
+      "event": "thought",
+      "task_id": null,
+      "payload": { "text": "规划：基准评测", "stage": "plan", "skill_id": "skill-benchmark" },
+      "ts": "2026-08-19T12:00:01Z"
+    }
+  ],
+  "pending_confirm": null,
+  "context_meter": {
+    "messages": 8,
+    "skills": 0,
+    "summary": 0,
+    "headroom": 12,
+    "window": 20
+  }
 }
 ```
 
-`events` 建议带上，避免刷新后工具卡丢失。
+实现列（Alembic，不单独 GET 摘要原文，避免把压缩提示词泄漏到浏览器）：`sessions.pending_confirm` JSONB、`sessions.compact_summary` TEXT、`sessions.compact_keep_from`（messages.id）。算法见 Agent 说明书 §16.6。
+
+`messages.role=assistant` 只存**交付句**（澄清、闲聊、「已入队」、「已压缩」、「已停止生成」、只读摘要）。规划 / 复核 thought、工具观察、`progress` 只在 `events`。
+
+---
+
+#### `GET /api/agent/prefs`
+
+当前成员的跨会话下单偏好。只读；无 PUT。写入仅发生在 `confirm_ack.ok=true` 且任务已入队之后（服务端写 `settings` 键 `agent_prefs:{user_id}`）。
+
+```json
+{
+  "last_kind": "benchmark",
+  "last_profile_ids": ["uuid"],
+  "last_dataset_id": "uuid",
+  "last_kb_id": null,
+  "last_gold_qa_id": null,
+  "last_with_stress": false,
+  "updated_at": "2026-08-19T12:00:00Z"
+}
+```
+
+无记录时各字段 `null`（`last_profile_ids` 为 `[]` 或 `null` 均可，前端当缺失）。失效资产 ID 规划侧当 missing，不得编造。闲聊、取消确认、`/compact` 不写。
+
+---
+
+#### `GET /api/slash-commands`
+
+自定义斜杠（下区「我的命令」）。**系统 15 条命令不走本接口**，前端本地注册表即可。
+
+M1 未交付：`VALIDATION`（400），`message` 为「自定义命令未启用」，面板下区展示该句；禁止 200 空列表冒充已启用，禁止 localStorage 冒充已保存。
+
+M2 成功 200：
+
+```json
+{
+  "items": [
+    {
+      "id": "uuid",
+      "name": "smoke",
+      "hint": "冒烟评测",
+      "template": "帮我下一单基准评测，抽样 20 条",
+      "created_by": "uuid",
+      "created_at": "2026-08-19T12:00:00Z"
+    }
+  ],
+  "total": 1
+}
+```
+
+#### `POST /api/slash-commands`
+
+body：`{ "name", "hint", "template" }`。  
+`name`：`^[A-Za-z][A-Za-z0-9_-]{0,31}$`，且不与系统 15 条重名（禁止中文 name）。  
+`template`：1–2000 字符，仅预填用户输入框，永远不当 system。含「跳过确认」「改系统提示词」或去空白后等于 `/bypass` → `VALIDATION`，不保存。  
+成功 201，返回创建对象。改删仅 `created_by` 为当前用户。
+
+#### `DELETE /api/slash-commands/{id}`
+
+仅创建者；否则 `UNAUTHORIZED`。系统命令无 id，不可删。
+
+选中自定义命令后展开 `template` 进输入框，发送仍是 WS `user_message`，不能加新工具、不能跳过确认卡。
 
 ---
 
@@ -381,7 +473,7 @@ item：`id, name, protocol, base_url, model, usages[], created_at`
 
 #### `GET /api/mcp/tools`
 
-获取当前智能体环境中受控的**内置**短工具清单（`model.list`, `dataset.list`, `kb.list`, `report.get`, `task.create`, `task.cancel`, `dispatch.overview`）及权限级别（`read / write`）。
+获取当前智能体环境中受控的**内置**短工具清单（`model.list`, `dataset.list`, `kb.list`, `task.get`, `report.get`, `task.create`, `task.cancel`, `dispatch.overview`）及权限级别（`read / write`）。
 
 ```json
 {
@@ -1014,12 +1106,14 @@ Prometheus 内置可观测性指标端点（内网 HTTP GET），输出前缀为
 
 1. `POST /api/auth/ws-ticket`  
 2. `GET /ws/agent?ticket={ticket}&session_id={uuid}&last_event_id={n}`  
-   - 首次：可无 `last_event_id`；`session_id` 建议已由 REST 创建。  
+   - 首次：前端**先** `POST /api/sessions` 再带 `session_id`；可无 `last_event_id`。无 `session_id` 时服务端可建空会话（兼容），会话列表与 `/new` 仍以 REST 为准。  
    - 重连：必须带 `session_id` + `last_event_id`，服务端从 `ws_events` **补发** `event_id > last_event_id` 的事件。  
-3. ticket 非法/过期：关闭连接，前端重新领票。  
+3. 关闭码：短票非法/过期 **4401**；会话不存在或不属于当前用户 **4404**；正常断开 **1000**。前端 4401 重新领票。  
 4. **禁止** `?token=` 长期 JWT。
 
 心跳：30s；传输层 ping/pong。应用层服务端可发 JSON `pong`。前端不发 JSON `ping`。
+
+Harness 回合必须丢到后台 Task，**不得**在 `receive` 循环里 `await` 整轮规划（否则 `/stop` 进不来）。长任务只入队，由 Worker 写 `progress` / `report` / `error`。
 
 ### 4.2 公共头（服务 → 前端）
 
@@ -1040,11 +1134,11 @@ Prometheus 内置可观测性指标端点（内网 HTTP GET），输出前缀为
 
 | event | payload | 前端渲染 |
 | --- | --- | --- |
-| `thought` | `{ "text": "..." }`；流式扩展：回复生成期间可发送瞬态增量帧 `{ "text": "增量", "stream": "chunk" }`（回复正文增量）与 `{ "text": "增量", "stream": "think" }`（推理模型思考链增量，前端渲染进可折叠思考卡），两种帧均不落库、不占事件号、断线不回放，随后必须有一帧不带 `stream` 的完整文本终帧 | ThoughtCard |
-| `tool_call` | `{ "name": "model.list", "arguments": {} }` | ToolCard pending；标题用中文名 |
-| `tool_result` | `{ "name": "model.list", "ok": true, "data": {} }` 或 `{ "ok": false, "error": "..." }` | ToolCard done |
-| `confirm` | TaskSpec（§6） | ConfirmCard，等 `confirm_ack` |
-| `progress` | `{ "percent": 40, "done": 40, "total": 100, "message": "..." }` | ProgressDock。**仅这四字段**（percent 可选） |
+| `thought` | `{ "text": "..." }`；可选 `latency_ms` `stage`（`plan\|react\|reflect`）`skill_id`。流式扩展：回复生成期间可发送瞬态增量帧 `{ "text": "增量", "stream": "chunk" }`（回复正文增量）与 `{ "text": "增量", "stream": "think" }`（推理模型思考链增量，前端渲染进可折叠思考卡），两种帧均不落库、不占事件号、断线不回放，随后必须有一帧不带 `stream` 的完整文本终帧 | ThoughtCard |
+| `tool_call` | `{ "name": "model.list", "arguments": {} }` | ToolCard pending；标题用中文名；副标题「MCP · 短工具」 |
+| `tool_result` | `{ "name": "model.list", "ok": true, "data": {} }` 或 `{ "ok": false, "error": "..." }`；可选 `latency_ms` | ToolCard done |
+| `confirm` | TaskSpec（§5 / §6） | ConfirmCard，等 `confirm_ack` |
+| `progress` | `{ "percent": 40, "done": 40, "total": 100, "message": "..." }` | ProgressDock。**仅这四字段**（percent 可选），不写入 `messages` |
 | `report` | `{ "report_id": "uuid" }` | ReportCard |
 | `error` | `{ "code": "UPSTREAM", "message": "..." }` | ErrorStrip + Toast |
 | `pong` | `{}` | 不渲染 |
@@ -1063,6 +1157,7 @@ Prometheus 内置可观测性指标端点（内网 HTTP GET），输出前缀为
 | `task.create` | 创建任务 |
 | `task.cancel` | 取消任务 |
 | `testcase.confirm` | 确认用例入库 |
+| `dispatch.overview` | 调度概览 |
 
 长工具不由 Agent 进程跑完；前端只收 `progress` / `report` / `error`。
 
@@ -1083,9 +1178,14 @@ Prometheus 内置可观测性指标端点（内网 HTTP GET），输出前缀为
 规则：
 
 - `confirm_ack.ok=false`：不入队，卡标已取消。  
-- `ok=true`：`patch` 与原 confirm 深合并后按 §6 校验，通过才 `task.create`。  
-- 同一会话同一时刻最多一张待确认卡。  
-- `cancel_task` 权限与 REST cancel 相同。
+- `ok=true`：`patch` 与原 confirm 深合并后按 §5 校验，通过才 `task.create`。  
+- 同一会话同一时刻最多一张待确认卡（落库 `sessions.pending_confirm`，禁止只靠进程内字典）。  
+- `cancel_task` 权限与 REST cancel 相同；斜杠 `/cancel` 只取消**本会话**非终态任务。  
+- 斜杠（含 `/stop` `/compact` `/help`）全部走 `user_message`，**没有第四种上行事件**。  
+- `/stop`：中止本轮 Harness 生成，不取消已 queued/running 任务；abort 为**会话级**（双标签同停）。  
+- 会话已有非终态任务（含压测子任务）：新回合**不得**再发 `confirm`；未 ack 的旧卡确认按钮禁用。  
+- 对话路径**不得**发出 `kind=stress` 确认卡。`/stress` = 质量任务卡且 `with_stress=true`。  
+- Agent 进程禁止同步执行 `benchmark.run` / `rag.evaluate` / `testcase.generate` / `stress.run`。
 
 ---
 
@@ -1140,7 +1240,11 @@ Prometheus 内置可观测性指标端点（内网 HTTP GET），输出前缀为
 
 `prod` + 压测：响应或 confirm payload 可带只读 `approvers: [{id,name}]` 供卡上展示；未会签不得 running。
 
-`stress.qps` ≤ settings.max_qps（默认 500），`duration_s` ≤ max_duration_s（默认 1800）。
+`stress.qps` ≤ settings.max_qps（默认 500），`duration_s` ≤ max_duration_s（默认 1800）。未填 `sla_p99_ms` 时报告不出「是否达标」。
+
+对话 Agent **不得**把 `kind` 设为 `stress` 发给确认卡；压测由质量任务 `succeeded` 且 `with_stress=true` 时 Worker 派生。人手 `POST /api/tasks` `kind=stress` 仍须 `parent_task_id`。
+
+`frontend/src/schemas/confirmCard.ts` 与 `ws.py` 预填必须与上表默认值一致（`sample_size=1000`、`temperature=0`、`max_tokens=1024`、`qps=10`、`duration_s=120`、`sla_p99_ms=null`）。Worker 夹紧：`sample_size = min(请求值, 1000, 行数)`。
 
 ---
 
@@ -1150,20 +1254,21 @@ Agent Host 与 worker 共用。入参/出参与 PRD 5.5 一致。错误码同 §
 
 | 工具 | 类型 | 入参 | 出参 | 阶段 |
 | --- | --- | --- | --- | --- |
-| `model.list` | 短 | — | `{id,name,protocol}[]` 无 Key | M1 |
-| `dataset.list` | 短 | — | `{id,version,row_count}[]` | M2 |
-| `kb.list` | 短 | — | `{id,doc_count}[]` | M3 |
-| `task.get` | 短 | `task_id` | 状态、进度 | M1 |
+| `model.list` | 短 | — | `{items:[{id,name,protocol,model}]}` 无 Key（`model` 仅供展示） | M1 |
+| `dataset.list` | 短 | — | `{items:[{id,name,version,row_count}]}` | M2 |
+| `kb.list` | 短 | — | `{items:[{id,name,doc_count}]}` | M3 |
+| `task.get` | 短 | `task_id` | 状态、进度、`report_id` | M1 |
 | `report.get` | 短 | `report_id` | 摘要 + 下载路径 | M2 |
-| `task.create` | 短 | TaskSpec | `task_id` | M1 |
+| `task.create` | 短 | TaskSpec | `task_id`；仅 `confirm_ack.ok=true` 后 | M1 |
 | `task.cancel` | 短 | `task_id` | `{ok}` | M1 |
+| `dispatch.overview` | 短 | — | Worker 数 / 队列 / 策略（与 `GET /api/dispatch/overview` 同源摘要） | M1 迷你轨 |
 | `testcase.generate` | 长 | `file_id` 或 `text` | `case_set_id` | M2 |
 | `testcase.confirm` | 短 | `case_set_id, edits?` | 状态 succeeded | M2 |
 | `benchmark.run` | 长 | TaskSpec 评测段 | `report_id` | M2（M1 mock） |
 | `rag.evaluate` | 长 | TaskSpec RAG 段 | `report_id` | M3 |
 | `stress.run` | 长 | `parent_task_id` + `stress` | `report_id` | M4 |
 
-Agent **只**调短工具 + `task.create`。长任务由 worker 执行；`stress.run` 只下发 stress 容器。
+Agent **只**调短工具；`task.create` 仅 ack 后。长工具（`benchmark.run` `rag.evaluate` `testcase.generate` `stress.run`）由 worker 执行，Agent 进程调用必须 `VALIDATION`。`stress.run` 只下发 stress 容器。LightRAG 未接入时 `kind=rag` **不得** mock succeeded。
 
 JSON Schema 冻结点：短工具 M1 W4；评测长工具 M2 W6；RAG M3 W10；stress M4 W13。冻结后的 schema 文件挂 `api/mcp/schemas/`，以本文字段名为准。
 
@@ -1188,8 +1293,8 @@ JSON Schema 冻结点：短工具 M1 W4；评测长工具 M2 W6；RAG M3 W10；s
 | 阶段 | 必须就绪 | 门禁相关 |
 | --- | --- | --- |
 | M0 | `GET /api/health` | Compose |
-| M1 | 认证、me、users、files、profiles、check、sessions、tasks CRUD/cancel/rerun、WS 全事件、settings（agent_profile_id） | 对话下单 mock；断线补发；协议档 |
-| M2 | datasets、rows、case-sets confirm/export/map(dataset)、reports、share、baseline、budget 停 | 对比报告；待补全；表单 POST /tasks |
+| M1 | 认证、me、users、files、profiles、check、sessions（含 messages+events+pending_confirm+context_meter）、tasks CRUD/cancel/rerun、WS 全事件、settings（agent_profile_id）、`GET /api/agent/prefs`、slash-commands **桩**（未启用 `VALIDATION`） | 对话下单 mock；断线补发；协议档 |
+| M2 | datasets、rows、case-sets confirm/export/map(dataset)、reports、share、baseline、budget 停、slash-commands 完整 CRUD | 对比报告；待补全；表单 POST /tasks；自定义斜杠 |
 | M3 | kb、docs、gold-qa、map(gold_qa)、RAG 报告字段、Judge 可选 | Hit Rate@5 |
 | M4 | settings.stress/notify、approve-stress、stress-series、解读只读 report_id | 先评后压；Grafana 同 task_id |
 
@@ -1202,6 +1307,7 @@ JSON Schema 冻结点：短工具 M1 W4；评测长工具 M2 W6；RAG M3 W10；s
 | 对外 Open API / 长期 API Token | F-CM-08 V1.1 |
 | `/api/chat/completions`、把 LightRAG 伪装成 Chat | F-RAG-01 |
 | 改系统提示词、外部 MCP 管理、Ask/Plan | PRD 4.2 |
+| 第四种 WS 上行事件（斜杠必须走 `user_message`） | F-AGT-02 |
 | 删除会话 | PRD 未要求 |
 | 独立审计页对应的写操作以外的产品 UI | 仅 `GET /api/admin/audit-logs` |
 | 浏览器直连 MCP 或 `/metrics` | 安全边界 |
@@ -1212,16 +1318,20 @@ JSON Schema 冻结点：短工具 M1 W4；评测长工具 M2 W6；RAG M3 W10；s
 ## 10. 前端实现约束（对应设计规范）
 
 1. `frontend/src/api/http.ts` 只封装本文 §3 路径；`ws.ts` 只封装 §4。  
-2. `schemas/confirmCard.ts` 与 §6 同一份类型，供 ConfirmCard 与 `/datasets` `/kb` 抽屉。  
+2. `schemas/confirmCard.ts` 与 §5 同一份类型与默认值，供 ConfirmCard 与 `/datasets` `/kb` 抽屉。  
 3. 错误码文案用 §1.3，不硬编码第二套。  
-4. 不发明本文没有的 query 参数来「先用着」。缺字段提 PR 改本文。
+4. 不发明本文没有的 query 参数来「先用着」。缺字段提 PR 改本文。  
+5. ContextMeter 只读 `GET .../messages` 的 `context_meter`；自定义斜杠只打 `/api/slash-commands`，禁止 localStorage / admin settings 冒充。
 
 ## 11. 后端实现约束
 
 1. OpenAPI（内部）从本文生成或手写，但 **对外不发布**（非 F-CM-08）。  
 2. Worker 与 Agent 调同一 MCP，不另做一套 REST 给 worker 跑评测（worker 可进程内调）。  
-3. Key Fernet 加密；GET 不回显；日志不落 Key。  
-4. 状态机与取消语义见 PRD 3.3；先评后压由 worker 创建子任务，不要求前端二次 `POST /api/tasks` kind=stress（`prod` 除外走会签）。
+3. Key Fernet 加密；GET 不回显；日志与 `agent_trace` 不落 Key / Cookie / 密码。  
+4. 状态机与取消语义见 PRD 3.3；先评后压由 worker 创建子任务，不要求前端二次 `POST /api/tasks` kind=stress（`prod` 除外走会签）。  
+5. 业务失败只抛 `AppError`（十码）；WS 与 REST 同一错误体。未捕获异常归一 `INTERNAL`，堆栈只进日志。  
+6. `api` 进程禁止 `time.sleep` 评测、禁止同步跑长 MCP、禁止在 `confirm_ack` 里等到 Worker 终态；Harness 不得阻塞 WS `receive` 循环。  
+7. 待确认卡落 `sessions.pending_confirm`，禁止只靠进程内 `_PENDING_CARDS`。
 
 ---
 
@@ -1291,6 +1401,20 @@ MCP 浏览器不调：与 PRD 3.1、前端计划「禁止把 MCP 当 REST」一�
 5. `CONCURRENCY`：PRD 超限保持 queued，与「错误码」并存 → 本文规定默认仍创建 queued，不把该码当创建失败。
 
 检查结论：本文与 PRD 功能无冲突；与 5.9 的差异均为已声明补全。前端计划 / 后端计划已回写为「以 API V1.3 为准」（会话方案 A、`run.k`、`run.use_judge`、`GET /api/auth/me`、目录/摘要/调度事件）。
+
+### A.9 V1.4 Agent 增量（相对 V1.3）
+
+自 Agent 说明书 V1.1 回写，**不是**新产品范围（仍是 F-AGT-01/02/03/04/06 的落地路径与可选 payload）：
+
+| 增量 | 本文位置 |
+| --- | --- |
+| `GET .../messages` 必带 `events`，增 `pending_confirm` `context_meter` | §3.4 |
+| `GET /api/agent/prefs`（只读，ack 后服务端写） | §3.4 |
+| `GET/POST/DELETE /api/slash-commands`（M1 桩 `VALIDATION`） | §3.4 |
+| `thought`/`tool_result` 可选 `latency_ms`；`thought` 可选 `stage` `skill_id` | §4.3 |
+| WS 关闭码 4401/4404；`/stop` 走 `user_message` | §4.1 / §4.4 |
+| 对话不得发 `kind=stress` 确认卡；短工具含 `dispatch.overview` | §5 / §6 |
+| 能力未启用 = `VALIDATION` 400，禁止 409 冒充 | §1.3 |
 
 ---
 
@@ -1374,4 +1498,4 @@ MCP 浏览器不调：与 PRD 3.1、前端计划「禁止把 MCP 当 REST」一�
 | 协议档四 Tab | `GET /api/mcp/tools`；profiles/settings | 仅内置工具清单可读；外部 MCP 和自定义技能/Prompt 的写操作在 V1.0 返回 `VALIDATION` 的能力未启用说明 |
 | 成员活动 | `GET /api/users/activity-summary?from=&to=` | KPI/活动由审计聚合；异地登录 AI 风险不在 V1.0 返回范围 |
 
-能力未启用使用 HTTP 409，错误体仍遵循 §1.3：`{ "code": "VALIDATION", "message": "该能力未纳入 PRD V1.0", "fields": { "feature": "disabled" } }`。前端将其渲染为页面内受控说明，不显示为成功 Toast，也不回退 Mock。
+能力未启用使用 HTTP **400**，错误体遵循 §1.3：`{ "code": "VALIDATION", "message": "该能力未纳入 PRD V1.0", "fields": { "feature": "disabled" } }`。禁止用 409。前端将其渲染为页面内受控说明，不显示为成功 Toast，也不回退 Mock。

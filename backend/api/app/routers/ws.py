@@ -19,7 +19,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..adapters import stream_protocol
+from ..agent.lightrag_stub import assert_lightrag_ready
+from ..agent.log import agent_trace
+from ..agent.long_tasks import assert_short_tool
 from ..db import SessionLocal
+from ..errors import AppError, ErrorCode
 from ..llm import _resolve_agent_profile
 from ..models import (
     AuditLog,
@@ -282,8 +286,22 @@ async def _call_tool(
     state: _ConnState,
 ) -> None:
     """发送一对短工具事件：tool_call（pending）后紧跟 tool_result（done）。"""
-    await _emit(db, ws, session_id, "tool_call", {"name": name, "arguments": arguments}, state=state)
-    await _emit(db, ws, session_id, "tool_result", {"name": name, "ok": True, "data": data}, state=state)
+    try:
+        assert_short_tool(name)
+        agent_trace(f"短工具调用 session={session_id[:8]} name={name}")
+        await _emit(db, ws, session_id, "tool_call", {"name": name, "arguments": arguments}, state=state)
+        await _emit(db, ws, session_id, "tool_result", {"name": name, "ok": True, "data": data}, state=state)
+    except AppError as exc:
+        agent_trace(f"短工具失败 session={session_id[:8]} name={name} code={exc.code.value}")
+        await _emit(
+            db,
+            ws,
+            session_id,
+            "tool_result",
+            {"name": name, "ok": False, "error": exc.message},
+            state=state,
+        )
+        raise
 
 
 async def _send_confirm(db: Session, ws: WebSocket, session_id: str, card: dict, state: _ConnState) -> None:
@@ -531,7 +549,45 @@ async def _stream_llm_plan(
         len(raw),
         progress["sent"],
     )
-    return _parse_llm_json(raw)
+    parsed = _parse_llm_json(raw)
+    agent_trace(f"LLM 规划完成 intent={parsed.get('intent')}")
+    return parsed
+
+
+async def _reject_lightrag(
+    db: Session,
+    ws: WebSocket,
+    session_id: str,
+    state: _ConnState,
+    reply: str,
+) -> None:
+    """RAG 意图：LightRAG 未接入时抛错并转成 thought + error 事件。"""
+    try:
+        assert_lightrag_ready(reason="ws_intent_rag")
+    except AppError as exc:
+        thought = reply or "已识别为 RAG 检索评测目标，但 LightRAG 尚未接入。"
+        db.add(Message(session_id=session_id, role="assistant", content=thought))
+        db.commit()
+        await _emit(
+            db,
+            ws,
+            session_id,
+            "thought",
+            {"text": thought},
+            state=state,
+        )
+        await _emit(
+            db,
+            ws,
+            session_id,
+            "error",
+            {"code": exc.code.value, "message": exc.message},
+            state=state,
+        )
+        return
+    # M3：assert 通过后在此组 rag 确认卡，不得在本进程调用 rag.evaluate
+    agent_trace("LightRAG 已启用但确认卡组装尚未实现")
+    raise AppError(ErrorCode.INTERNAL, "LightRAG 已启用但 Agent 确认卡尚未实现")
 
 
 async def _handle_user_message(
@@ -550,6 +606,7 @@ async def _handle_user_message(
     if session.title == "新会话":
         session.title = text.strip()[:18]
     db.commit()
+    agent_trace(f"收到 user_message session={session.id[:8]} chars={len(text)}")
 
     profiles = _profile_items(db)
     datasets = _dataset_items(db)
@@ -620,8 +677,7 @@ async def _handle_user_message(
         return
 
     if intent == "rag":
-        await _emit(db, ws, session.id, "thought", {"text": reply or "已识别为 RAG 检索评测目标。"}, state=state)
-        await _emit(db, ws, session.id, "error", {"code": "NOT_FOUND", "message": "RAG 检索评测能力将在 M3 接入，当前请先使用基准评测。"}, state=state)
+        await _reject_lightrag(db, ws, session.id, state, reply)
         return
 
     if intent == "report":
@@ -665,24 +721,12 @@ async def _handle_rule_intent(
         return
 
     if intent == "rag":
-        rule_reply = "已识别为 RAG 检索评测目标。知识库与黄金 QA 资产将在 M3 接入，当前请使用「基准评测（Benchmark）」发起评测。"
-        db.add(Message(session_id=session.id, role="assistant", content=rule_reply))
-        db.commit()
-        await _emit(
+        await _reject_lightrag(
             db,
             ws,
             session.id,
-            "thought",
-            {"text": rule_reply},
-            state=state,
-        )
-        await _emit(
-            db,
-            ws,
-            session.id,
-            "error",
-            {"code": "NOT_FOUND", "message": "RAG 检索评测能力将在 M3 接入，当前请先使用基准评测。"},
-            state=state,
+            state,
+            "已识别为 RAG 检索评测目标。知识库与黄金 QA 资产将在 M3 接入，当前请使用「基准评测（Benchmark）」发起评测。",
         )
         return
 
@@ -1009,6 +1053,16 @@ async def ws_agent(websocket: WebSocket):
                     continue
                 try:
                     await _handle_user_message(db, websocket, session, text, attachments, state)
+                except AppError as exc:
+                    agent_trace(f"user_message AppError code={exc.code.value}")
+                    await _emit(
+                        db,
+                        websocket,
+                        session_id,
+                        "error",
+                        {"code": exc.code.value, "message": exc.message},
+                        state=state,
+                    )
                 except ValueError as exc:
                     await _emit(db, websocket, session_id, "error", {"code": "NOT_FOUND", "message": str(exc)}, state=state)
                 except Exception:
@@ -1023,6 +1077,16 @@ async def ws_agent(websocket: WebSocket):
                 patch = payload.get("patch") if isinstance(payload.get("patch"), dict) else None
                 try:
                     await _handle_confirm_ack(db, websocket, session, user, ok, patch, state)
+                except AppError as exc:
+                    agent_trace(f"confirm_ack AppError code={exc.code.value}")
+                    await _emit(
+                        db,
+                        websocket,
+                        session_id,
+                        "error",
+                        {"code": exc.code.value, "message": exc.message},
+                        state=state,
+                    )
                 except IntegrityError:
                     # 双连接同时确认同一会话：撞 uq_tasks_active_session 唯一索引，归一为并发冲突
                     db.rollback()

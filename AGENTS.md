@@ -36,8 +36,9 @@
 
 ### 1.3 权威文档与冲突裁决
 1. **L0 产品权威**：[`docs/AI测试与评估平台-PRD.md`](docs/AI测试与评估平台-PRD.md)（功能范围、状态机、确认卡字段唯一真理）；
-2. **L1 接口契约**：[`docs/AI测试与评估平台-API.md`](docs/AI测试与评估平台-API.md)（REST/WS 路径、JSON 契约唯一真理）；
-3. **裁决铁律**：代码/计划与 PRD 冲突以 PRD 为准；接口与 API.md 冲突以 API.md 为准。禁止私自扩充产品范围。
+2. **L1 接口契约**：[`docs/AI测试与评估平台-API.md`](docs/AI测试与评估平台-API.md) **V1.4+**（REST/WS 路径、JSON 契约唯一真理）；
+3. **Agent 子系统**：[`docs/AI测试与评估平台-Agent开发文档.md`](docs/AI测试与评估平台-Agent开发文档.md)（Harness、斜杠、上下文算法、长任务门禁）；**JSON 字段名与路径仍以 API.md 为准**；
+4. **裁决铁律**：代码/计划与 PRD 冲突以 PRD 为准；接口与 API.md 冲突以 API.md 为准。禁止私自扩充产品范围（Agent 说明书新增路径必须先回写 API.md）。
 
 ---
 
@@ -47,7 +48,7 @@
 ai-eval-platform/
 ├── backend/
 │   ├── api/                     # FastAPI 主服务（路由、认证、数据模型、短 MCP）
-│   │   ├── app/                 # 核心代码（routers/, models.py, schemas.py, errors.py, security.py）
+│   │   ├── app/                 # 核心代码（routers/, models.py, schemas.py, errors.py, security.py, agent/）
 │   │   ├── migrations/          # Alembic 数据库迁移版本脚本
 │   │   └── tests/               # Pytest 自动化测试
 │   ├── worker/                  # 异步任务 Worker（轮询任务队列、三协议适配、评测执行）
@@ -63,26 +64,64 @@ ai-eval-platform/
 
 ---
 
-## 3. Git 提交规范 (Git Commit Conventions)
+## 3. Git 提交与分支规范 (Git Conventions)
 
 采用 **[Conventional Commits](https://www.conventionalcommits.org/)** 规范。**提交描述（Subject 与 Body）必须使用中文**。  
 提交作者身份由宿主机当前的 Git 配置（`git config`）或 GitHub CLI 自动决定。
 
+### 3.1 模块开发必须开分支（强制）
+
+`main` 只接受已审查的合并，**禁止**在 `main` 上直接开发模块功能、修缺陷或改契约。AI Agent 写代码前必须确认当前分支**不是** `main` / `master`；若在主干上，先开分支再改。
+
+```text
+main（保护，仅 PR 合入）
+  └── feat/agent-harness
+  └── feat/web-confirm-card
+  └── fix/worker-progress
+  └── docs/api-v1.4
+         │
+         ▼
+      Pull Request → CI 通过 → 合并 main → CD 部署生产
+```
+
+**分支命名**：`<type>/<scope>-<短横线英文或拼音简述>`，type/scope 与提交规范同一套。
+
+| 场景 | 分支示例 | 说明 |
+| :--- | :--- | :--- |
+| Agent 子系统 | `feat/agent-harness` | 对话、Harness、斜杠、WS |
+| API / 短 MCP | `feat/api-slash-commands` | FastAPI 路由、契约落地 |
+| 前端工作台 | `feat/web-context-meter` | Vue 页面与组件 |
+| Worker / 压测 | `fix/worker-rag-stub` | 长任务、进度、LightRAG 占位 |
+| 数据集 / 用例 | `feat/dataset-ai-generate` | 页面 AI 候选 |
+| 文档 / 契约 | `docs/api-agent-prefs` | 仅文档也可开分支，避免和功能混在 main |
+
+规则：
+
+1. **一模块一分支**（或一 Task 一分支）。Agent、前端、Worker 不要堆在同一条长期分支上。  
+2. 从最新 `origin/main` 拉出：`git fetch origin && git checkout -b feat/agent-xxx origin/main`。  
+3. 推送功能分支：`git push -u origin HEAD`。合入用 **Pull Request**，禁止把功能分支 `push --force` 到 `main`。  
+4. **只有 `main` 触发生产 CD**。功能分支只跑 CI，不部署 `47.119.132.83`。  
+5. 允许直接在 `main` 的例外：**无代码、无迁移**的错别字级文档（仍建议开 `docs/` 分支）。契约变更（API.md / PRD / Agent 说明书）按模块开 `docs/` 分支。  
+6. 合并后删除远程功能分支，不在本地长期占用 `main` 做开发。
+
+### 3.2 提交信息
+
 - **提交格式**：`<type>(<scope>): <中文简述>`
 - **常见 Type**：`feat`（新功能）、`fix`（修缺陷）、`docs`（文档）、`style`（格式）、`refactor`（重构）、`test`（测试）、`ci`（CI/CD）、`chore`（杂项）。
-- **常用 Scope**：`api`、`worker`、`web`、`mcp`、`rag`、`stress`、`auth`、`dataset`、`profile`、`task`、`report`、`deploy`。
+- **常用 Scope**：`api`、`worker`、`web`、`mcp`、`rag`、`stress`、`auth`、`dataset`、`profile`、`task`、`report`、`agent`、`deploy`。
 - **提交前强制门禁**：提交代码前**必须在本地先完成构建与自检**（`npm run build`、`ruff check .`、`pytest`），确保 0 错误后方可执行 `git commit`。
 - **中文示例**：
   - `feat(api): 新增 WebSocket 短票鉴权接口`
   - `fix(worker): 修复大模型裁判调用超时重试逻辑`
-  - `docs(agents): 更新自动部署排查指南与提交规范`
+  - `docs(agent): 更新自动部署排查指南与提交规范`
 
 ---
 
 ## 4. 自动部署与 CI/CD (CI/CD & DevOps)
 
 ```text
-Git Commit Push ──► GitHub Actions CI (Ruff Lint + Pytest)
+功能分支 Push ──► GitHub Actions CI（Ruff + Pytest；不部署）
+合并 PR 到 main ──► GitHub Actions CI
                          │ (通过)
                          ▼
                     GitHub Actions CD (SSH) ──► 服务器 /opt/ai-eval-platform
@@ -90,6 +129,8 @@ Git Commit Push ──► GitHub Actions CI (Ruff Lint + Pytest)
                                                     ▼
                                             deploy.sh: git reset --hard && docker compose build & up -d
 ```
+
+**生产只跟 `main`。** 功能分支、个人 fork、未合并 PR 不得触发对 `47.119.132.83` 的 CD。
 
 ### 4.1 Secrets 配置清单
 - `SSH_HOST`：`47.119.132.83`（纯 IP，严禁带 `http://`）
@@ -123,30 +164,76 @@ async def create_task(payload: TaskCreateIn, db: Session = Depends(get_db)) -> T
 ```
 
 ### 5.2 后端规范 (Python 3.12 / FastAPI)
-1. **10 大标准错误码**：禁止原生 422/500，必须统一抛出 `AppError(code=ErrorCode.XXX, message="说明")`：
+1. **10 大标准错误码**：禁止原生 422/500 直接出给浏览器，必须统一抛出 `AppError(code=ErrorCode.XXX, message="说明")`：
    `UNAUTHORIZED`(401/403), `VALIDATION`(400), `NOT_FOUND`(404), `BUDGET_EXCEEDED`(409), `CONCURRENCY`(409), `WHITELIST`(403), `NEED_APPROVAL`(403), `UPSTREAM`(502), `TIMEOUT`(504), `INTERNAL`(500)。
 2. **数据库与迁移**：修改 `models.py` 后必须通过 Alembic 生成迁移脚本：`alembic revision --autogenerate -m "..."`，禁止私自手动改库。
 3. **安全与鉴权**：API Key 必须用 Fernet 加密存储且只写不回显；用户鉴权用 `HttpOnly` Cookie；WebSocket 使用 5 分钟有效期的单次短票 `ws-ticket`。
-4. **长短任务分离**：`api` 容器仅负责快速交互与任务入队，耗时评测与压测全部由 `worker` 异步消费并下发给 `stress` 容器执行。
+4. **长短任务分离**：`api` 容器仅负责快速交互与任务入队，耗时评测与压测全部由 `worker` 异步消费并下发给 `stress` 容器执行。**禁止**在 `routers/ws.py` / `harness.py` 里 `time.sleep` 评测、同步调用 `benchmark.run` / `rag.evaluate` / `testcase.generate` / `stress.run`、或轮询等到任务终态。
+5. **能力未启用**：抛 `AppError(ErrorCode.VALIDATION, ...)`，HTTP **400**。禁止用 409 表示「功能没做」。LightRAG 未接入时 `kind=rag` **不得** mock `succeeded`。
+
+### 5.2.1 异常处理与控制台追踪（冻结）
+
+业务失败一律 `raise AppError`。外层只把 `AppError` 转成 REST JSON 或 WS `error` 事件。**禁止** `except Exception` 后把 `str(exc)`、traceback、SQL、上游原文发给浏览器。
+
+内部函数（短工具、LLM、校验）冻结写法：
+
+```python
+from app.errors import AppError, ErrorCode
+from app.agent.log import agent_trace
+
+try:
+    ...
+except AppError:
+    raise
+except Exception as exc:
+    agent_trace(f"内部异常 type={type(exc).__name__}")
+    raise AppError(ErrorCode.INTERNAL, "操作失败") from exc
+```
+
+WebSocket 分发冻结写法：
+
+```python
+try:
+    await _handle_user_message(...)
+except AppError as exc:
+    agent_trace(f"user_message AppError code={exc.code.value}")
+    await _emit(
+        db, ws, session_id, "error",
+        {"code": exc.code.value, "message": exc.message},
+        state=state,
+    )
+```
+
+控制台：`agent_trace("...")` 打到 stderr（`[agent] ...`），Docker logs 可见。只打协议名、模型名、耗时、工具名、错误码，**禁止**打印 API Key、Cookie、密码、完整提示词。Worker 用 `print(..., flush=True)` 的 `[worker] start/succeeded/failed` 同样不得带密钥。
+
+未配置 Agent 协议档、上游 4xx/5xx、超时分别归一为 `VALIDATION` / `UPSTREAM` / `TIMEOUT`，与 `llm.py` 现实现一致。
 
 ### 5.3 前端规范 (Vue 3 / TypeScript / Naive UI)
 1. **统一架构**：采用 `<script setup lang="ts">` + `naive-ui`，严格遵循薄荷绿/深空蓝设计令牌 (`naive-theme.ts`)。
-2. **通信与重连**：API 使用相对路径 `/api/*`；WS 使用相对路径 `/ws/agent?ticket=${ticket}`，支持断线按 `last_event_id` 自动补发事件流。
+2. **通信与重连**：API 使用相对路径 `/api/*`；WS 使用相对路径 `/ws/agent?ticket=${ticket}`，支持断线按 `last_event_id` 自动补发事件流。关闭码 `4401` 重新领票，`4404` 视为会话不存在。
+3. **确认卡默认值** 与 API.md §5 / PRD 5.2.2 同一份，禁止前端另备 sample_size=20 等第二套默认。
+4. ContextMeter 只读 `GET /api/sessions/{id}/messages` 的 `context_meter`；自定义斜杠只请求 `/api/slash-commands`。
 
 ---
 
 ## 6. AI Agent 行为准则 (AI Guardrails)
 
-### 🔴 五大核心红线（绝对禁止）
-1. **禁止私自扩充产品范围**（如外部 MCP、自定义系统提示词、多租户等）；
-2. **禁止破坏统一错误契约**（必须归一化为 10 大 `ErrorCode`）；
-3. **禁止明文暴露敏感凭据**（API Key、密码、JWT Secret 严禁打印或回显）；
+### 🔴 六大核心红线（绝对禁止）
+1. **禁止私自扩充产品范围**（如外部 MCP、自定义系统提示词、多租户等）；新 REST/WS 字段必须先改 API.md；
+2. **禁止破坏统一错误契约**（必须归一化为 10 大 `ErrorCode`；未启用能力用 `VALIDATION` 400，不用 409）；
+3. **禁止明文暴露敏感凭据**（API Key、密码、JWT Secret 严禁打印、回显或写入 `agent_trace`）；
 4. **禁止跳过 Alembic 手动改库**（改 Model 必须配 Migration）；
 5. **禁止全量无意义重写**（必须局部替换，保留已有注释与架构）。
+6. **禁止在 `main` 上开发模块**（必须按 §3.1 开 `feat/` `fix/` `docs/` 分支，经 PR 合入）。
+
+额外（Agent / Worker）：
+- 禁止在 WS 收包循环里 `await` 整轮 Harness；禁止在 api 进程跑完长 MCP；
+- 禁止 LightRAG 未接入时把 RAG 任务 mock 成成功；
+- 禁止 `except Exception` 后把异常原文或堆栈发给浏览器。
 
 ### 🟢 推荐操作五步法
-1. **先查后改**：查阅 PRD、API.md 与 Web-Prototype 原型；
+1. **先查后改、先开分支**：查阅 PRD、API.md、Agent 开发文档；从 `origin/main` 拉出 `<type>/<scope>-简述` 再写代码；
 2. **中文注释**：编写规范的中文 docstring 与代码注释；
 3. **本地先构建与自检**：提交前必须在本地执行 `npm run build`（前端打包与类型校验）和 `ruff check .` / `pytest`（后端），验证 100% 通过；
-4. **规范中文提交**：严格采用 `<type>(<scope>): <中文描述>` 格式进行原子化中文提交；
-5. **监控部署**：推送后关注 GitHub Actions CI/CD 流水线，异常时按 SOP 处置。
+4. **规范中文提交**：严格采用 `<type>(<scope>): <中文描述>` 格式在**功能分支**上原子化提交，再开 PR；
+5. **监控部署**：PR 合入 `main` 后关注 GitHub Actions CI/CD 流水线，异常时按 SOP 处置。
