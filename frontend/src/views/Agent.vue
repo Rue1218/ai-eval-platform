@@ -760,16 +760,57 @@ const agentProfileDropdownOptions = computed(() => {
       { label: '⚙ 前往接入协议档 ↗', key: '__goto_profiles__' },
     ]
   }
+  const activeId = currentAgentProfileId.value || allProfiles.value[0]?.id
   const list = allProfiles.value.map((p) => {
-    const isCurrent = p.id === currentAgentProfileId.value || p.model === agentModelName.value
+    const isCurrent = p.id === activeId
     return {
       label: () =>
-        h('div', { style: 'display: flex; align-items: center; justify-content: space-between; gap: 14px; min-width: 220px; padding: 2px 0;' }, [
-          h('div', { style: 'display: flex; flex-direction: column; gap: 1px;' }, [
-            h('span', { style: `font-weight: ${isCurrent ? '700' : '500'}; font-size: 13px; color: ${isCurrent ? 'var(--accent-ai)' : 'inherit'};` }, p.name),
-            h('span', { style: 'font-size: 11px; opacity: 0.65; font-family: var(--font-mono);' }, `${p.model || p.protocol} · ${p.protocol}`),
+        h('div', {
+          style: {
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '16px',
+            minWidth: '260px',
+            padding: '3px 0',
+            lineHeight: '1.4',
+          }
+        }, [
+          h('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px', flex: '1', minWidth: '0' } }, [
+            h('span', {
+              style: {
+                fontWeight: isCurrent ? '700' : '500',
+                fontSize: '13px',
+                color: isCurrent ? 'var(--accent-ai)' : 'inherit',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }
+            }, p.name),
+            h('span', {
+              style: {
+                fontSize: '11px',
+                opacity: '0.65',
+                fontFamily: 'var(--font-mono)',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }
+            }, `${p.model || p.protocol} · ${p.protocol}`),
           ]),
-          isCurrent ? h('span', { style: 'color: var(--accent-ai); font-size: 11px; font-weight: 700; background: var(--t-agent); padding: 1px 6px; border-radius: 4px;' }, '当前驱动') : null,
+          isCurrent
+            ? h('span', {
+                style: {
+                  color: 'var(--accent-ai)',
+                  fontSize: '11px',
+                  fontWeight: '700',
+                  background: 'var(--t-agent)',
+                  padding: '2px 8px',
+                  borderRadius: '6px',
+                  flexShrink: '0',
+                }
+              }, '当前驱动')
+            : null,
         ]),
       key: p.id,
     }

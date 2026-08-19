@@ -811,6 +811,20 @@ pre.code {
 .spark .l-err { stroke: var(--accent-error); stroke-width: 1.4; }
 .spark .dot-end { fill: var(--accent-info); }
 
+/* Naive UI 下拉菜单多行项自适应高度与重叠修复 */
+.n-dropdown-menu .n-dropdown-option-body {
+  height: auto !important;
+  min-height: 38px !important;
+  line-height: 1.4 !important;
+  padding: 8px 12px !important;
+}
+
+.n-dropdown-menu .n-dropdown-option-body__label {
+  line-height: normal !important;
+  width: 100% !important;
+  white-space: normal !important;
+}
+
 /* 输入区 */
 .composer { padding: 12px 24px 18px; }
 .composer-inner {
