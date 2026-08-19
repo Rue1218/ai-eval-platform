@@ -9,7 +9,7 @@
         <div class="wf-title-badge">
           <span class="badge-icon">🌐</span>
           <span class="badge-label">DAG 编排设计器</span>
-          <span class="badge-sub">Dify Flow Studio</span>
+          <span class="badge-sub">Dify Flow</span>
         </div>
 
         <!-- 模板快速载入下拉 -->
@@ -204,7 +204,7 @@
             />
           </svg>
 
-          <!-- 连线中间气泡标签（精准定位在 midX, midY 几何中心） -->
+          <!-- 连线中间气泡标签（轻量微标签，悬停浮现删除按钮） -->
           <div
             v-for="edge in edgePaths"
             :key="'label-' + edge.id"
@@ -223,7 +223,7 @@
             title="点击删除连接链路"
           >
             <span class="pill-text">{{ edge.label || defaultEdgeLabel(edge) }}</span>
-            <span class="pill-del">×</span>
+            <span class="pill-del-icon">✕</span>
           </div>
 
           <!-- 节点卡片层 -->
@@ -244,7 +244,7 @@
 
         <!-- 底部快捷提示浮条 -->
         <div class="canvas-hints">
-          <span>滚轮缩放 · 拖拽画布平移 · 端口拖拽连线 · 双击节点配置参数 · 点击链路气泡删除</span>
+          <span>滚轮缩放 · 拖拽画布平移 · 端口拖拽连线 · 双击节点配置参数 · 悬停标签点击 ✕ 删除</span>
         </div>
 
         <!-- ═══ 右下角小地图 (Mini-Map) ═══ -->
@@ -255,8 +255,8 @@
             <rect
               v-for="n in nodes"
               :key="'mini-' + n.id"
-              :x="n.x + 100"
-              :y="n.y + 100"
+              :x="n.x + 80"
+              :y="n.y + 80"
               width="264"
               height="110"
               rx="16"
@@ -265,8 +265,8 @@
             />
             <!-- 当前视口指示框 -->
             <rect
-              :x="-view.x * (1 / view.k) + 100"
-              :y="-view.y * (1 / view.k) + 100"
+              :x="-view.x * (1 / view.k) + 80"
+              :y="-view.y * (1 / view.k) + 80"
               :width="1000 / view.k"
               :height="650 / view.k"
               fill="none"
@@ -314,8 +314,8 @@ const emit = defineEmits<{
 const message = useMessage()
 const router = useRouter()
 
-// 画布视口缩放与位移
-const view = ref({ x: 50, y: 50, k: 0.85 })
+// 画布视口缩放与位移（默认自适应居中）
+const view = ref({ x: 40, y: 40, k: 0.9 })
 const canvasContainerRef = ref<HTMLElement | null>(null)
 const importFileRef = ref<HTMLInputElement | null>(null)
 const isFullScreen = ref(false)
@@ -380,7 +380,7 @@ function zoomBy(factor: number) {
 
 /** 复位视图 */
 function resetView() {
-  view.value = { x: 50, y: 50, k: 0.85 }
+  view.value = { x: 40, y: 40, k: 0.9 }
 }
 
 /** 自适应适配视口中所有节点 */
@@ -392,13 +392,13 @@ function fitView() {
   const minX = Math.min(...nodes.value.map((n) => n.x))
   const minY = Math.min(...nodes.value.map((n) => n.y))
   view.value = {
-    x: Math.max(20, 60 - minX * 0.72),
-    y: Math.max(20, 60 - minY * 0.72),
-    k: 0.72,
+    x: Math.max(20, 60 - minX * 0.8),
+    y: Math.max(20, 60 - minY * 0.8),
+    k: 0.8,
   }
 }
 
-/** 拓扑自动分层排版（宽阔间距，避免标签挤压） */
+/** 拓扑自动分层排版 */
 function autoLayout() {
   if (!nodes.value.length) return
   const inDegrees: Record<string, number> = {}
@@ -409,7 +409,7 @@ function autoLayout() {
 
   const levels: Record<number, IWorkflowNode[]> = {}
   nodes.value.forEach((n) => {
-    const lvl = Math.min(4, inDegrees[n.id] || 0)
+    const lvl = Math.min(3, inDegrees[n.id] || 0)
     if (!levels[lvl]) levels[lvl] = []
     levels[lvl].push(n)
   })
@@ -422,9 +422,9 @@ function autoLayout() {
       const colNodes = levels[lvl]
       colNodes.forEach((n, idx) => {
         n.x = colX
-        n.y = 120 + idx * 190
+        n.y = 80 + idx * 190
       })
-      colX += 420
+      colX += 360
     })
 
   message.success('已完成拓扑自动分层排版')
@@ -871,6 +871,7 @@ async function runWorkflow() {
   flex-shrink: 0;
   user-select: none;
   backdrop-filter: blur(12px);
+  overflow-x: auto;
 }
 
 .toolbar-left,
@@ -878,33 +879,42 @@ async function runWorkflow() {
 .toolbar-right {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .wf-title-badge {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   font-weight: 700;
   font-size: 13px;
   color: var(--text-primary);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .badge-icon {
   font-size: 16px;
 }
 
+.badge-label {
+  white-space: nowrap;
+}
+
 .badge-sub {
   font-size: 10px;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--accent-ai);
   background: var(--t-agent);
-  padding: 2px 6px;
+  padding: 1px 6px;
   border-radius: 4px;
+  white-space: nowrap;
 }
 
 .select-tpl {
-  padding: 5px 12px;
+  padding: 5px 10px;
   font-size: 12px;
   background: var(--bg-main);
   border: 1px solid var(--border-subtle);
@@ -913,6 +923,8 @@ async function runWorkflow() {
   outline: none;
   cursor: pointer;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .select-tpl:focus {
@@ -926,10 +938,11 @@ async function runWorkflow() {
   background: var(--bg-main);
   border: 1px solid var(--border-subtle);
   border-radius: 12px;
+  white-space: nowrap;
 }
 
 .validation-pill {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 6px;
   font-size: 11px;
@@ -937,6 +950,8 @@ async function runWorkflow() {
   border-radius: 14px;
   background: var(--bg-main);
   border: 1px solid var(--border-subtle);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .validation-pill.valid {
@@ -960,6 +975,7 @@ async function runWorkflow() {
   width: 6px;
   height: 6px;
   border-radius: 50%;
+  flex-shrink: 0;
 }
 
 .run-btn {
@@ -967,9 +983,11 @@ async function runWorkflow() {
   background: var(--accent-ai);
   border-color: var(--accent-ai);
   color: #fff;
-  padding: 0 18px;
+  padding: 0 16px;
   border-radius: 8px;
   transition: all 0.2s;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .run-btn:hover:not(:disabled) {
@@ -1081,24 +1099,24 @@ async function runWorkflow() {
   filter: drop-shadow(0 0 6px var(--accent-ai));
 }
 
-/* 连线中间气泡标签（精准水平垂直居中于中点坐标） */
+/* 连线中间轻量气泡标签（默认只显示文字，悬停出现删除 ✕） */
 .edge-label-pill {
   position: absolute;
   transform: translate(-50%, -50%);
-  padding: 3px 9px;
-  border-radius: 12px;
+  padding: 2px 8px;
+  border-radius: 10px;
   background: var(--bg-main);
   border: 1px solid var(--border-subtle);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 500;
-  color: var(--text-secondary);
+  color: var(--text-tertiary);
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   white-space: nowrap;
   cursor: pointer;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-  transition: all 0.15s;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
+  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
   z-index: 5;
   user-select: none;
 }
@@ -1106,7 +1124,9 @@ async function runWorkflow() {
 .edge-label-pill:hover {
   border-color: var(--accent-error);
   color: var(--accent-error);
-  transform: translate(-50%, -50%) scale(1.12);
+  background: var(--bg-elevated);
+  transform: translate(-50%, -50%) scale(1.1);
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.2);
 }
 
 .edge-label-pill.label-pass {
@@ -1132,12 +1152,13 @@ async function runWorkflow() {
   color: var(--accent-success);
 }
 
-.pill-del {
-  font-size: 12px;
-  opacity: 0.6;
+.pill-del-icon {
+  font-size: 10px;
+  opacity: 0;
+  transition: opacity 0.15s;
 }
 
-.edge-label-pill:hover .pill-del {
+.edge-label-pill:hover .pill-del-icon {
   opacity: 1;
 }
 

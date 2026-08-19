@@ -30,21 +30,23 @@
         <span class="node-icon">{{ node.icon }}</span>
       </div>
       <div class="node-title-area">
-        <div class="row" style="align-items: center; gap: 6px">
-          <span class="node-title" :title="node.name">{{ node.name }}</span>
-        </div>
+        <span class="node-title" :title="node.name">{{ node.name }}</span>
         <div class="node-sub-info">
           <span class="node-category-tag">{{ categoryLabel }}</span>
           <span class="node-id-tag mono">{{ node.id.substring(0, 7) }}</span>
         </div>
       </div>
 
-      <!-- 状态图标/指示灯 -->
+      <!-- 状态文字小胶囊（替换混淆的圆点） -->
       <div class="node-status-badge">
         <span v-if="node.status === 'running'" class="status-spinner" title="节点正在调度执行中..."></span>
-        <span v-else-if="node.status === 'succeeded'" class="status-icon success" title="执行成功">✓</span>
-        <span v-else-if="node.status === 'failed'" class="status-icon error" title="执行异常">✕</span>
-        <i v-else class="status-dot" :class="node.status" :title="statusLabel"></i>
+        <span
+          class="node-status-chip"
+          :class="node.status"
+          :title="statusLabel"
+        >
+          {{ statusText }}
+        </span>
       </div>
     </div>
 
@@ -174,7 +176,7 @@ const categoryLabel = computed(() => {
     case 'output':
       return '汇总报告'
     default:
-      return '工作流组件'
+      return '组件'
   }
 })
 
@@ -191,6 +193,23 @@ const statusLabel = computed(() => {
     case 'skipped':
       return '已跳过'
     default:
+      return '待命就绪'
+  }
+})
+
+const statusText = computed(() => {
+  switch (props.node.status) {
+    case 'queued':
+      return '排队'
+    case 'running':
+      return '运行'
+    case 'succeeded':
+      return '✓ 成功'
+    case 'failed':
+      return '✕ 异常'
+    case 'skipped':
+      return '跳过'
+    default:
       return '待命'
   }
 })
@@ -204,12 +223,10 @@ const summaryTags = computed(() => {
     case 'agent_kernel':
       tags.push(`策略: ${cfg.strategy || '负载均衡'}`)
       tags.push(`并发: ${cfg.max_running_tasks || 4}`)
-      tags.push(`心跳: ${cfg.heartbeat_ms || 500}ms`)
       break
     case 'worker_target':
       tags.push(`节点: ${cfg.worker_id || 'worker-01'}`)
       if (cfg.caps?.length) tags.push(`能力: ${cfg.caps.join('/')}`)
-      tags.push(`权重: ${cfg.weight || 100}`)
       break
     case 'dataset_source':
       tags.push(`数据集: ${cfg.dataset_name || '基准集'}`)
@@ -217,7 +234,7 @@ const summaryTags = computed(() => {
       if (cfg.metric) tags.push(`主指标: ${cfg.metric}`)
       break
     case 'case_gen':
-      tags.push('PRD 6大策略生成')
+      tags.push('PRD 6大策略')
       tags.push(`目标: ${cfg.mapping_target === 'dataset' ? '基准集' : '黄金QA'}`)
       break
     case 'benchmark_eval':
@@ -377,56 +394,48 @@ const summaryTags = computed(() => {
 .node-status-badge {
   display: flex;
   align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
+  gap: 4px;
+  flex-shrink: 0;
 }
 
-.status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--text-tertiary);
+.node-status-chip {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--bg-elevated);
+  color: var(--text-tertiary);
+  border: 1px solid var(--border-subtle);
+  white-space: nowrap;
 }
 
-.status-dot.queued {
-  background: var(--accent-warning);
-  box-shadow: 0 0 6px var(--accent-warning);
+.node-status-chip.queued {
+  background: var(--t-cases);
+  color: var(--accent-warning);
+  border-color: var(--accent-warning);
 }
 
-.status-dot.succeeded {
-  background: var(--accent-success);
-  box-shadow: 0 0 6px var(--accent-success);
+.node-status-chip.running {
+  background: var(--t-agent);
+  color: var(--accent-ai);
+  border-color: var(--accent-ai);
 }
 
-.status-dot.failed {
-  background: var(--accent-error);
+.node-status-chip.succeeded {
+  background: var(--t-cases);
+  color: var(--accent-success);
+  border-color: var(--accent-success);
 }
 
-.status-icon {
-  font-size: 11px;
-  font-weight: bold;
-  border-radius: 50%;
-  width: 16px;
-  height: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.status-icon.success {
-  background: var(--accent-success);
-  color: #fff;
-}
-
-.status-icon.error {
-  background: var(--accent-error);
-  color: #fff;
+.node-status-chip.failed {
+  background: var(--t-stress);
+  color: var(--accent-error);
+  border-color: var(--accent-error);
 }
 
 .status-spinner {
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
   border: 2px solid var(--accent-ai);
   border-top-color: transparent;
   border-radius: 50%;
