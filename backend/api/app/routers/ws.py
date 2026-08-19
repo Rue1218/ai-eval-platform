@@ -645,12 +645,13 @@ async def _handle_user_message(
         db.query(Message)
         .filter(Message.session_id == session.id)
         .order_by(Message.created_at.desc())
-        .limit(20)
+        .limit(21)
         .all()
     )
-    # PRD F-AGT-05：上下文保留最近 20 条用户/助手消息（超长丢最旧），
-    # 系统提示词由 _LLM_SYSTEM 每次调用独立携带、始终保留。
-    history = [{"role": m.role, "content": m.content} for m in reversed(history_rows)]
+    # PRD F-AGT-05：上下文保留最近 20 条历史用户/助手消息（排除刚落库的本条当前消息）
+    all_msgs = list(reversed(history_rows))
+    past_msgs = all_msgs[:-1] if all_msgs else []
+    history = [{"role": m.role, "content": m.content} for m in past_msgs][-20:]
 
     plan: dict | None = None
     try:
