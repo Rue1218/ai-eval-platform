@@ -11,12 +11,13 @@ export interface ValidationResult {
 
 export function getDefaultRunConfig(): RunConfig {
   return {
-    sample_size: 20,
+    sample_size: 1000,
     concurrency: 4,
     timeout_s: 60,
     retry: 1,
-    temperature: 0.2,
-    max_tokens: 2048,
+    temperature: 0,
+    max_tokens: 1024,
+    system_prompt: '',
     k: 5,
     use_judge: false,
   }
@@ -25,9 +26,9 @@ export function getDefaultRunConfig(): RunConfig {
 export function getDefaultStressConfig(): StressConfig {
   return {
     env: 'test',
-    qps: 50,
-    duration_s: 60,
-    sla_p99_ms: 1500,
+    qps: 10,
+    duration_s: 120,
+    sla_p99_ms: null,
   }
 }
 
