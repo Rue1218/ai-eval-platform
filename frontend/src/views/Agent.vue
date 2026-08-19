@@ -54,10 +54,19 @@
           </svg>
         </button>
         <span class="chat-head-title">{{ currentSession?.title || '新会话' }}</span>
-        <div class="chat-head-model-pill" title="当前 Agent 驱动模型（由系统设置指定）">
-          <span class="head-model-dot"></span>
-          <span class="mono">Agent · {{ agentModelName || '未配置模型' }}</span>
-        </div>
+        <n-dropdown
+          trigger="click"
+          :options="agentProfileDropdownOptions"
+          @select="handleSelectAgentModel"
+        >
+          <button class="chat-head-model-btn" type="button" title="点击切换当前 Agent 驱动模型">
+            <span class="head-model-dot"></span>
+            <span class="mono">Agent · {{ agentModelName || '未配置模型' }}</span>
+            <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M3 4.5l3 3 3-3" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
+        </n-dropdown>
         <span v-if="isGenerating" class="gen-pill">
           <i class="bdot"></i>
           <span>{{ harnessStageLabel }}</span>
@@ -634,10 +643,24 @@
                 @change="handleFileUpload"
               />
 
-              <!-- 只读模型展示胶囊（由系统设置指定） -->
-              <div class="composer-model-readonly" title="当前 Agent 驱动模型（由系统设置指定）">
-                <span class="mono">Agent · {{ agentModelName || '未配置模型' }}</span>
-              </div>
+              <!-- 模型切换下拉胶囊（点击可切换 Agent 驱动模型） -->
+              <n-dropdown
+                trigger="click"
+                :options="agentProfileDropdownOptions"
+                @select="handleSelectAgentModel"
+              >
+                <button
+                  class="composer-model-btn"
+                  type="button"
+                  title="点击切换当前 Agent 驱动模型"
+                >
+                  <span class="head-model-dot"></span>
+                  <span class="mono">Agent · {{ agentModelName || '选择模型' }}</span>
+                  <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M3 4.5l3 3 3-3" stroke-linecap="round" stroke-linejoin="round" />
+                  </svg>
+                </button>
+              </n-dropdown>
             </div>
 
             <!-- 右侧圆形发送/暂停按钮 -->
@@ -1355,6 +1378,7 @@ function handleUserSend(text: string, files: any[] = []) {
   }
 
   if (agentWs?.isConnected) {
+    console.log('%c[Agent] 🚀 发送用户消息:', 'color: #3b82f6; font-weight: bold;', text)
     // 打字占位气泡：服务端 LLM 意图识别期间给用户即时反馈，收到任意事件后移除
     events.value.push({ type: 'typing' })
     scrollToBottom()
@@ -2045,7 +2069,13 @@ function typewriteTo(item: StreamItem, fullText: string) {
 
 function handleWsEvent(ev: WsServerEvent) {
   // pong 心跳不参与交互流；其余任何事件到达都意味着本轮已出结果，移除打字占位
-  if (ev.event !== 'pong') dismissTyping()
+  if (ev.event !== 'pong') {
+    dismissTyping()
+    const isStream = ev.payload && typeof ev.payload.stream === 'string'
+    if (!isStream) {
+      console.log(`%c[Agent WS] 📩 收到事件: ${ev.event}`, 'color: #8b5cf6; font-weight: bold;', ev)
+    }
+  }
   const p = ev.payload || {}
   switch (ev.event) {
     case 'thought': {
@@ -2054,8 +2084,12 @@ function handleWsEvent(ev: WsServerEvent) {
         const delta = String(p.text || '')
         if (delta) {
           const target = [...events.value].reverse().find(e => e.type === 'thought' && !e.done)
-          if (target) target.text = (target.text || '') + delta
-          else events.value.push({ type: 'thought', text: delta, done: false, collapsed: false })
+          if (target) {
+            target.text = (target.text || '') + delta
+          } else {
+            console.log('%c[Agent] 💭 深度思考链流式输出中...', 'color: #10b981; font-weight: bold;')
+            events.value.push({ type: 'thought', text: delta, done: false, collapsed: false })
+          }
           scrollToBottom()
         }
         break
@@ -2098,6 +2132,12 @@ function handleWsEvent(ev: WsServerEvent) {
           skill_id: p.skill_id,
         })
       }
+      console.log('%c[Agent] 💡 思考完成 / 助手回复交付:', 'color: #10b981; font-weight: bold;', {
+        chars: text.length,
+        latency: p.latency_ms ? `${p.latency_ms}ms` : '未知',
+        stage: stage || '-',
+        text: text.slice(0, 100) + (text.length > 100 ? '...' : ''),
+      })
       if (text && !stage) {
         const streaming = [...events.value].reverse().find(e => e.type === 'agent' && e.streaming)
         if (streaming) {
@@ -2119,6 +2159,7 @@ function handleWsEvent(ev: WsServerEvent) {
       break
     }
     case 'tool_call': {
+      console.log('%c[Agent] ⚙️ 短工具调用:', 'color: #f59e0b; font-weight: bold;', p.name, p.arguments)
       finishLiveThought()
       harnessStage.value = 'react'
       lastToolTitle.value = getToolDisplayName(p.name)
@@ -2133,6 +2174,11 @@ function handleWsEvent(ev: WsServerEvent) {
       break
     }
     case 'tool_result': {
+      console.log('%c[Agent] ✅ 短工具完成:', 'color: #10b981; font-weight: bold;', p.name, {
+        ok: p.ok,
+        latency: `${p.latency_ms || 0}ms`,
+        data: p.data || p.error,
+      })
       const target = [...events.value].reverse().find(x => x.type === 'tool' && x.tool === p.name)
       if (target) {
         target.result = p.ok ? p.data : p.error
@@ -2156,6 +2202,7 @@ function handleWsEvent(ev: WsServerEvent) {
       break
     }
     case 'confirm': {
+      console.log('%c[Agent] 📋 任务确认卡到达:', 'color: #8b5cf6; font-weight: bold;', p)
       lastConfirmKind = p.kind || 'benchmark'
       finishLiveThought()
       isGenerating.value = false
@@ -2315,7 +2362,7 @@ onBeforeUnmount(() => {
   height: calc(100vh - var(--topbar-h) - 20px);
 }
 
-/* 顶部与输入框只读模型胶囊 */
+/* 顶部与输入框模型选择胶囊按钮 */
 .chat-head-model-pill,
 .chat-head-model-btn {
   display: inline-flex;
@@ -2328,17 +2375,34 @@ onBeforeUnmount(() => {
   color: var(--text-secondary);
   font-family: var(--font-mono);
   font-size: 11px;
+  cursor: pointer;
   user-select: none;
+  transition: all 0.15s ease;
 }
-.composer-model-readonly {
+.chat-head-model-btn:hover {
+  background: var(--bg-hover, #f3f4f6);
+  border-color: var(--border-color, #d1d5db);
+  color: var(--text-primary, #111827);
+}
+.composer-model-btn {
   display: inline-flex;
   align-items: center;
+  gap: 5px;
   padding: 2px 8px;
   border-radius: 6px;
+  border: 1px solid var(--border-subtle);
   background: var(--bg-elevated);
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
   font-size: 11px;
+  cursor: pointer;
   user-select: none;
+  transition: all 0.15s ease;
+}
+.composer-model-btn:hover {
+  background: var(--bg-hover, #f3f4f6);
+  border-color: var(--border-color, #d1d5db);
+  color: var(--text-primary, #111827);
 }
 .think-latency {
   font-size: 11px;

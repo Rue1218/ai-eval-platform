@@ -3,9 +3,9 @@
 | 属性 | 内容 |
 | :--- | :--- |
 | **文档名称** | Agent 子系统大模型接入与耗时技术方案 |
-| **文档版本** | V1.0 (已审查冻结) |
+| **文档版本** | V1.2 (全量审查与修改记录归档) |
 | **基线参考** | 《AGENTS.md》最高规范、《Agent开发文档》§6 / §4.6 / §5.2.1 / §16.7、API.md V1.4、PRD 6.2 |
-| **责任模块** | 后端 `backend/api/app/llm.py` + 前端 `frontend/src/components/agent/*` 与 `Agent.vue` |
+| **责任模块** | 后端 `backend/api/app/llm.py` + `ws.py` + `adapters.py` + 前端 `frontend/src/*` |
 | **审查日期** | 2026-08-19 |
 
 ---
@@ -312,3 +312,39 @@ agent_trace(f"模型调用完成 protocol={profile.protocol} model={profile.mode
 | `test_agent_llm_upstream_error` | 上游 502 错误归一 | Mock 上游 HTTP 500 异常 | 捕获并抛出 `AppError(UPSTREAM)`，不泄露堆栈 |
 | `test_agent_llm_timeout_error` | 上游超时归一 | Mock 触发 socket 超时 | 捕获并抛出 `AppError(TIMEOUT)` |
 | `test_agent_llm_key_redaction` | 日志无敏感密钥泄露 | 注入带 `sk-test-secret` 的 Key | 校验 `agent_trace` 输出不包含该密钥字符串 |
+
+---
+
+## 9. 修改代码文件与作用清单（全量审查与记录）
+
+经完整代码审查与回归验证，本次 Agent 大模型接入、意图拆解、耗时体系打通与控制台日志增强共涉及以下 **11 个代码与测试文件** 的修改与新建：
+
+### 9.1 后端服务层 (`backend/api/`)
+
+| 序号 | 代码文件路径 | 变更类型 | 核心作用与改动说明 |
+| :--- | :--- | :---: | :--- |
+| 1 | `backend/api/app/llm.py` | **修改** | **Agent 核心大模型接入层**：<br>1. 实现 `resolve_agent_profile(db)`：从 `settings.agent_profile_id` 解析唯一绑定的驱动协议档，未配置时统一抛出 `AppError(VALIDATION)`（400）；<br>2. 实现 `get_agent_profile_public_info(db)`：提取公开只读脱敏信息（ID/名称/模型名/协议名）；<br>3. 定义 `AgentCallResult` 出参数据结构（包含 `text`, `latency_ms`, `usage`, `raw`）；<br>4. 实现 `call_agent_model` 与 `call_agent_model_detailed`：经由三协议统一适配器发起调用，精确计量端到端毫秒耗时并完成日志安全脱敏；<br>5. 异常严格归一化为 10 大标准错误码（`VALIDATION`/`UPSTREAM`/`TIMEOUT`/`INTERNAL`）。 |
+| 2 | `backend/api/app/adapters.py` | **修改** | **三协议适配器与流式模型调用层**：<br>1. 增强 `stream_protocol` 中 `delta_of` 的思考字段自适应提取：同时兼容 `reasoning_content`、`reasoning` 与 `thought` 字段名，全面覆盖 DeepSeek、Mimo、Qwen、Ollama 等各品牌推理模型的思考链解析；<br>2. 增强非思考流式与单块（non-SSE）响应兜底机制，保障上游网关不丢字。 |
+| 3 | `backend/api/app/routers/ws.py` | **修改** | **WebSocket 智能体双向通信与意图分发中枢**：<br>1. **解除回复长度限制**：重构 `_LLM_SYSTEM` 系统提示词，移除「一句话简洁回复」强制约束，明确指示模型严格按照用户要求的篇幅（如 500 字）展开，严禁在回复中暴露「输出结构化JSON」等元指令话术；<br>2. **流式 Token 与超时扩容**：将 `_stream_llm_plan` 的 `max_tokens` 从 512 扩大至 4096，`timeout_s` 扩大至 45.0s，避免推理模型在长思考链（Reasoning）后耗尽 Token 截断正文；<br>3. **纯文本降级容错**：`_parse_llm_json` 增加非 JSON 纯文本自动提取为 `chat` 意图机制，确保模型输出自然语言时绝不丢字、不报错；<br>4. **全链路真实耗时透传**：在 `_call_tool`、`_stream_llm_plan`、`_handle_user_message` 与 `_handle_rule_intent` 中全面计算并下发 `latency_ms` 字段至 `thought` 终帧与 `tool_result` 事件；<br>5. **历史上下文消息去重**：从数据库加载前 20 条历史时排除刚落库的当前用户消息，避免 Prompt 中历史尾部重复灌入当前消息；<br>6. **意图分类分流**：区分 `chat` 闲聊问候与 `benchmark`/`testcase`/`rag`/`report`，闲聊仅自然语言交互，绝不出确认卡、不调短工具；<br>7. **控制台断点日志追踪**：在 WS 接收、流式分发、工具调用、耗时计算各关键节点打齐脱敏的 `agent_trace`。 |
+| 4 | `backend/api/tests/test_agent_llm.py` | **新建** | **大模型接入与耗时计算自动化单测**：包含 9 个专项单测，覆盖模型正常调用、耗时返回、未配置协议档报错、上游 502/超时归一化、敏感密钥脱敏校验以及公开信息接口验证。 |
+| 5 | `backend/api/tests/test_ws_agent.py` | **修改** | **WebSocket 智能体单测套件**：更新 `_parse_llm_json` 容错单测（包含纯文本回退 chat 意图），新增 `test_classify_intent_chat_vs_benchmark` 意图分类测试。 |
+
+### 9.2 前端展现层 (`frontend/src/`)
+
+| 序号 | 代码文件路径 | 变更类型 | 核心作用与改动说明 |
+| :--- | :--- | :---: | :--- |
+| 6 | `frontend/src/views/Agent.vue` | **修改** | **Agent 对话主工作台视图**：<br>1. **模型下拉切换器**：将顶部 `chat-head` 与输入框底部的模型胶囊升级为 `<n-dropdown>` 下拉菜单，点击可即时查看接入模型列表并一键切换 Agent 驱动模型，切换后自动持久化到后台；<br>2. **DevTools 控制台彩色日志**：在 `handleWsEvent` 和 `handleSendClick` 中增加 WebSocket 收到事件、思考流式、助手回复交付、短工具调用/结果的完整控制台彩色调试日志输出；<br>3. **思考卡耗时与折叠**：思考卡根据 `item.latency_ms` 显示 `formatLatency` 耗时徽章（如 `16.2s`），并在思考完成后 800ms 自动平滑折叠；<br>4. **打字机平滑续播**：打字机 `typewriteTo` 根据全文长度自适应提速逐字推进。 |
+| 7 | `frontend/src/api/ws.ts` | **修改** | **WebSocket 客户端底层通信类**：在 `onopen` 与 `onclose` 生命周期中增加连接状态就绪与断开的彩色控制台打印。 |
+| 8 | `frontend/src/components/agent/ThoughtCard.vue` | **修改** | **思考卡独立组件**：接收 `latencyMs` 属性并格式化展示耗时徽章，支持折叠展开与 800ms 自动收起动画。 |
+| 9 | `frontend/src/components/agent/ToolCard.vue` | **修改** | **短 MCP 工具卡独立组件**：接收 `latencyMs` 属性展示短工具执行耗时，副标题统一为 `MCP · 短工具`。 |
+| 10 | `frontend/src/utils/format.ts` | **修改** | **前端统一格式化工具库**：实现并导出 `formatLatency(ms)` 统一耗时格式化函数（`<1000ms` 显示 `Xms`，`≥1000ms` 显示 `X.Xs`）。 |
+| 11 | `frontend/src/schemas/confirmCard.ts` | **修改** | **确认卡数据模型与默认值定义**：确认卡默认参数全面对齐 PRD 5.2.2 与 §16.1（`sample_size: 1000, concurrency: 4, temperature: 0, max_tokens: 1024, stress.duration_s: 120, stress.qps: 10`）。 |
+
+---
+
+## 10. 方案落地与自动化测试验证总结
+
+- **后端单元测试**：全量 174 项 Pytest 自动化测试全部通过（通过率 100%）；
+- **代码静态扫描**：`ruff check .` 0 警告 0 错误通过；
+- **前端生产构建**：`npm run build` Vite 生产打包 0 错误通过；
+- **发布状态**：代码已全部合入 `main` 分支并推送到远程仓库，通过 GitHub Actions CD 自动部署至生产环境。

@@ -19,6 +19,7 @@ from app.llm import (
     call_agent_model_detailed,
     get_agent_profile_public_info,
     resolve_agent_profile,
+    stream_agent_model,
 )
 from app.models import ProtocolProfile, Setting
 from app.security import encrypt_secret
@@ -244,3 +245,15 @@ def test_agent_trace_redacts_key(sample_profile: ProtocolProfile, monkeypatch):
     assert "model=claude-3-5-sonnet-20241022" in log_output
     # 严禁出现解密前后的 Key
     assert "sk-ant-secret-key-123456" not in log_output
+
+
+def test_stream_agent_model_yields_reasoning_and_content(sample_profile: ProtocolProfile, monkeypatch):
+    """流式调用把思考链与正文原样转交，不在 llm 层拼接。"""
+    setting = Setting(key="agent_profile_id", value=sample_profile.id, updated_by="user-admin")
+    fake_db = _FakeDb(settings=[setting], profiles=[sample_profile])
+    monkeypatch.setattr(
+        "app.llm.stream_protocol",
+        lambda **_kwargs: iter([("reasoning", "先想"), ("content", "你好")]),
+    )
+    chunks = list(stream_agent_model(fake_db, "System", "User"))
+    assert chunks == [("reasoning", "先想"), ("content", "你好")]

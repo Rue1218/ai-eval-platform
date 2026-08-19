@@ -451,6 +451,7 @@ async def _run_turn(
             stop=stop,
             compact_summary=compact_summary,
             skill_id=plan.skill_id,
+            emit=emit,
         )
         await _deliver_sentence(db, session.id, emit, reply)
         return
@@ -467,8 +468,13 @@ async def _chat_reply(
     stop: threading.Event,
     compact_summary: str | None,
     skill_id: str | None,
+    emit: EmitFn,
 ) -> str:
-    """闲聊交付句：计入 4 次预算；失败回退短答。"""
+    """闲聊交付句：计入 4 次预算；失败回退短答。
+
+    正文与推理思考链经瞬态 WS 帧实时下发（不落库）；完整句子仍由
+    ``_deliver_sentence`` 写成 assistant 消息。取消后丢弃半截增量。
+    """
     canned = (
         "你好！我是 AI 测试与评估平台的评测智能体。职责是协助你进行大模型质量评测、"
         "PRD 测试用例生成、知识库 RAG 评测与共享压测分析。\n\n"
@@ -479,21 +485,51 @@ async def _chat_reply(
         return canned
     user_blob = text if not history else f"最近对话：{history[-6:]}\n用户：{text}"
     system = turn_system(chat_system(), skill_id=skill_id, compact_summary=compact_summary)
-    try:
-        def _job(tdb: Session):
-            from ..llm import call_agent_model_detailed
+    loop = asyncio.get_running_loop()
 
-            return call_agent_model_detailed(
+    def _producer() -> str:
+        from ..llm import stream_agent_model
+
+        if stop.is_set():
+            raise HarnessAborted()
+        tdb = SessionLocal()
+        parts: list[str] = []
+        frames = 0
+        try:
+            for kind, chunk in stream_agent_model(
                 tdb,
                 system,
                 user_blob,
                 temperature=0.4,
                 max_tokens=2048,
                 timeout_s=30,
-            )
+            ):
+                if stop.is_set():
+                    raise HarnessAborted()
+                if not chunk:
+                    continue
+                frames += 1
+                stream = "think" if kind == "reasoning" else "chunk"
+                if kind != "reasoning":
+                    parts.append(chunk)
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        emit("thought", {"text": chunk, "stream": stream}),
+                        loop,
+                    ).result(timeout=30)
+                except Exception:
+                    pass
+            text_out = "".join(parts).strip()
+            agent_trace(f"闲聊流式完成 frames={frames} chars={len(text_out)}")
+            return text_out
+        finally:
+            tdb.close()
 
-        result = await _await_thread(stop, _job)
-        return (result.text or "").strip() or canned
+    try:
+        result = await asyncio.to_thread(_producer)
+        if stop.is_set():
+            raise HarnessAborted()
+        return result or canned
     except HarnessAborted:
         raise
     except AppError:

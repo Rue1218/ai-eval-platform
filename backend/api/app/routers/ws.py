@@ -318,6 +318,38 @@ def _visible_reply(buf: str) -> str:
     return "".join(out)
 
 
+def _stream_frame(session_id: str, cursor: int, delta: str) -> dict:
+    """构造流式增量瞬态帧：复用 thought 事件名，payload 携带 stream=chunk。
+
+    与 pong 同策略：不写入 ws_events、不占用单调事件号，断线重连时
+    不会回放半截增量；``event_id`` 复用连接游标仅为满足公共头结构。
+    """
+    return {
+        "event": "thought",
+        "session_id": session_id,
+        "task_id": None,
+        "event_id": cursor,
+        "ts": datetime.now(UTC).isoformat(),
+        "payload": {"text": delta, "stream": "chunk"},
+    }
+
+
+def _think_frame(session_id: str, cursor: int, delta: str) -> dict:
+    """构造思考链增量瞬态帧：payload 携带 stream=think。
+
+    推理模型的前置思考过程：前端渲染进可展开/收起的思考卡，
+    同样不落库、不占事件号、断线不回放。
+    """
+    return {
+        "event": "thought",
+        "session_id": session_id,
+        "task_id": None,
+        "event_id": cursor,
+        "ts": datetime.now(UTC).isoformat(),
+        "payload": {"text": delta, "stream": "think"},
+    }
+
+
 async def _handle_user_message(
     db: Session,
     ws: WebSocket,
@@ -339,6 +371,23 @@ async def _handle_user_message(
 
     def emit_factory(hdb: Session):
         async def emit(event: str, payload: dict, *, task_id: str | None = None) -> int:
+            stream_kind = payload.get("stream") if isinstance(payload, dict) else None
+            if stream_kind in {"chunk", "think"}:
+                # 瞬态流式帧：不落库、不占事件号，避免断线回放半截增量
+                delta = str(payload.get("text") or "")
+                frame = (
+                    _think_frame(session.id, state.cursor, delta)
+                    if stream_kind == "think"
+                    else _stream_frame(session.id, state.cursor, delta)
+                )
+                if task_id:
+                    frame["task_id"] = task_id
+                try:
+                    async with state.lock:
+                        await ws.send_json(frame)
+                except Exception:
+                    logger.debug("WS 流式帧未投递 session_id=%s", session.id)
+                return state.cursor
             return await _emit(hdb, ws, session.id, event, payload, task_id=task_id, state=state)
 
         return emit

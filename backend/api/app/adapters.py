@@ -242,9 +242,10 @@ def stream_protocol(
         def delta_of(data: dict) -> tuple[str, str]:
             choices = data.get("choices") or [{}]
             delta = choices[0].get("delta") or {}
-            if delta.get("reasoning_content"):
-                # 推理模型的思考链增量（deepseek/mimo 等风格）
-                return ("reasoning", str(delta["reasoning_content"]))
+            reasoning = delta.get("reasoning_content") or delta.get("reasoning") or delta.get("thought")
+            if reasoning:
+                # 推理模型的思考链增量（deepseek/mimo/qwen 等风格）
+                return ("reasoning", str(reasoning))
             return ("content", str(delta.get("content") or ""))
 
     elif protocol == "openai_responses":
