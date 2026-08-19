@@ -63,13 +63,14 @@
       @task-dispatched="handleTaskDispatched"
     />
 
-    <!-- ═══ 2. 调度星图：中心内核 + 技能 Agent 内环 + Worker 业务扇区外环 ═══ -->
+    <!-- ═══ 2. 沉浸式大星图与悬浮控制坞 (Immersive Star Constellation & Floating Glass Docks) ═══ -->
     <div
       v-show="activeTab === 'monitor'"
-      class="panel glow topo-panel mb16"
+      class="panel glow immersive-monitor-panel mb16"
       data-od-id="dispatch-canvas"
       style="--glow-c: var(--c-agent)"
     >
+      <!-- 顶栏快速操作与视口控制条 -->
       <div class="row-between mb12" style="flex-wrap: wrap; gap: 8px">
         <div class="panel-title" style="margin: 0">
           调度编排星图
@@ -83,14 +84,17 @@
             <button class="zoom-btn mono" title="重置视图（双击画布同效）" @click="resetView">{{ Math.round(view.k * 100) }}%</button>
             <button class="zoom-btn" title="放大" @click="zoomBy(1.18)">+</button>
           </span>
+          <button class="btn btn-secondary btn-sm" style="font-size: 11px" @click="resetView">⊡ 居中</button>
         </div>
       </div>
 
-      <div ref="wrapRef" class="topo-wrap">
+      <!-- 全画幅主视口容器 -->
+      <div ref="wrapRef" class="immersive-topo-wrap">
+        <!-- SVG 大星图 -->
         <svg
           ref="svgRef"
           class="topo-svg"
-          viewBox="0 0 1200 680"
+          viewBox="0 0 1200 760"
           preserveAspectRatio="xMidYMid meet"
           @pointerdown="onPointerDown"
           @pointermove="onPointerMove"
@@ -100,23 +104,20 @@
           @click="onBgClick"
         >
           <defs>
-            <!-- 网格背景 -->
             <pattern id="topo-grid" width="28" height="28" patternUnits="userSpaceOnUse">
               <path d="M 28 0 L 0 0 0 28" class="grid-line" />
             </pattern>
-            <!-- 内核光晕 -->
             <radialGradient id="core-glow">
-              <stop offset="0%" stop-color="var(--accent-ai)" stop-opacity="0.20" />
+              <stop offset="0%" stop-color="var(--accent-ai)" stop-opacity="0.25" />
               <stop offset="100%" stop-color="var(--accent-ai)" stop-opacity="0" />
             </radialGradient>
-            <!-- 雷达扫描扇形渐变 -->
             <linearGradient id="sweep-grad" x1="0" y1="0" x2="1" y2="0">
               <stop offset="0%" stop-color="var(--accent-ai)" stop-opacity="0.35" />
               <stop offset="100%" stop-color="var(--accent-ai)" stop-opacity="0" />
             </linearGradient>
           </defs>
 
-          <!-- 可拖拽背景（铺满网格） -->
+          <!-- 可拖拽背景 -->
           <rect x="-2000" y="-2000" width="5200" height="5200" fill="url(#topo-grid)" class="topo-bg" />
 
           <g :transform="`translate(${view.x} ${view.y}) scale(${view.k})`">
@@ -130,11 +131,11 @@
               :fill="s.color"
             />
 
-            <!-- 轨道参考线：技能环 / Worker 环 -->
+            <!-- 轨道参考线 -->
             <circle :cx="CX" :cy="CY" :r="R_SKILL" class="orbit-guide" />
             <circle :cx="CX" :cy="CY" :r="R_WORKER" class="orbit-guide outer" />
 
-            <!-- 常驻链路：内核 → 技能 Agent（灰虚线缓流） -->
+            <!-- 常驻链路：内核 → 技能 -->
             <path
               v-for="s in topo.skills"
               :key="'core-' + s.kind"
@@ -143,7 +144,7 @@
               :d="`M ${CX} ${CY} L ${s.x} ${s.y}`"
             />
 
-            <!-- 归属链路：技能 Agent → Worker（细实线） -->
+            <!-- 归属链路：技能 → Worker -->
             <path
               v-for="pw in topo.workers"
               :key="'mem-' + pw.w.id"
@@ -152,7 +153,7 @@
               :d="`M ${pw.sx} ${pw.sy} L ${pw.x} ${pw.y}`"
             />
 
-            <!-- 执行链路：内核 → 技能 → Worker（高亮流动 + 数据流粒子） -->
+            <!-- 执行链路：高亮流动 + 粒子 -->
             <template v-for="w in topo.liveWires" :key="w.key">
               <path class="wire-live" :class="{ dim: focusedSkill && focusedSkill !== w.skillKind }" :d="w.d" />
               <circle class="particle" r="3">
@@ -163,10 +164,10 @@
               </circle>
             </template>
 
-            <!-- 任务完成涟漪（Worker 节点处扩散） -->
+            <!-- 任务完成涟漪 -->
             <circle v-for="r in ripples" :key="r.id" class="ripple-c" :cx="r.x" :cy="r.y" r="10" />
 
-            <!-- 任务工单芯片：queued 在内环队列轨道；running 飞向技能→Worker 链路中段 -->
+            <!-- 任务工单芯片 -->
             <g
               v-for="p in topo.tasks"
               :key="p.t.id"
@@ -189,17 +190,7 @@
               </g>
             </g>
 
-            <!-- 队列溢出提示 -->
-            <text v-if="topo.queueOverflow > 0" :x="CX" :y="CY + R_QUEUE + 34" class="queue-overflow" text-anchor="middle">
-              +{{ topo.queueOverflow }} 更多排队任务
-            </text>
-
-            <!-- 节点池空态：引导注册第一个 Worker -->
-            <text v-if="!workerPool.length" :x="CX" :y="CY - R_SKILL - 40" class="queue-overflow" text-anchor="middle">
-              暂无 Worker 节点 · 点击右上角「+ 注册节点」接入执行节点
-            </text>
-
-            <!-- 技能 Agent 内环节点（四大业务域，点击聚焦扇区） -->
+            <!-- 技能 Agent 内环节点 -->
             <g
               v-for="s in topo.skills"
               :key="s.kind"
@@ -219,7 +210,7 @@
               </text>
             </g>
 
-            <!-- Worker 外环节点（业务扇区排布，负载环 + 状态点） -->
+            <!-- Worker 外环节点 -->
             <g
               v-for="pw in topo.workers"
               :key="pw.w.id"
@@ -244,7 +235,7 @@
               <circle cx="13" cy="-13" r="4" class="wn-dot" :class="pw.w.state" />
             </g>
 
-            <!-- 中心调度内核：光晕 + 双向旋转环 + 雷达扫描 + 状态核心 -->
+            <!-- 中心调度内核 -->
             <g class="core" :style="{ transform: `translate(${CX}px, ${CY}px)` }">
               <circle r="88" fill="url(#core-glow)" />
               <g class="spin-a"><circle r="66" class="core-ring" /></g>
@@ -260,7 +251,237 @@
           </g>
         </svg>
 
-        <!-- 悬停详情 tooltip（跟随鼠标，纯展示不拦截事件） -->
+        <!-- ═══ 左侧悬浮控制坞 (可收折) ═══ -->
+        <div class="floating-dock dock-left" :class="{ collapsed: isLeftDockCollapsed }">
+          <div class="dock-header">
+            <div class="dock-header-title">
+              <span class="dock-ico">🛰</span>
+              <span v-show="!isLeftDockCollapsed" class="dock-title-text font-bold">调度内核与算力</span>
+            </div>
+            <button class="dock-toggle-btn" :title="isLeftDockCollapsed ? '展开左侧面板' : '收折左侧面板'" @click="isLeftDockCollapsed = !isLeftDockCollapsed">
+              {{ isLeftDockCollapsed ? '⇥' : '⇤' }}
+            </button>
+          </div>
+
+          <div v-show="!isLeftDockCollapsed" class="dock-scroll-content">
+            <!-- 调度内核状态与指标 -->
+            <div class="dock-card mb10">
+              <div class="dock-card-title">
+                <span>内核状态</span>
+                <span class="badge" :class="isRunning ? 'badge-running' : 'badge-cancelled'">
+                  <i class="bdot"></i>{{ isRunning ? '调度中' : '已暂停' }}
+                </span>
+              </div>
+              <div class="kernel-metric-row mb8">
+                <div class="k-stat">
+                  <span class="k-label tertiary">健康度</span>
+                  <span class="k-val font-bold" style="color: var(--accent-success)">99.4%</span>
+                </div>
+                <div class="k-stat">
+                  <span class="k-label tertiary">活跃并发</span>
+                  <span class="k-val font-bold mono" style="color: var(--accent-ai)">{{ runningDisplay }}/{{ capacity }}</span>
+                </div>
+                <div class="k-stat">
+                  <span class="k-label tertiary">心跳</span>
+                  <span class="k-val font-bold mono">{{ heartbeatMs }}ms</span>
+                </div>
+              </div>
+              <div class="row" style="gap: 6px">
+                <button class="btn btn-secondary btn-xs" style="flex: 1" @click="toggleScheduler">
+                  {{ isRunning ? '⏸ 暂停' : '▶ 恢复' }}
+                </button>
+                <button class="btn btn-primary btn-xs" style="flex: 1" @click="showRegisterModal = true">
+                  + 注册节点
+                </button>
+              </div>
+            </div>
+
+            <!-- 分发策略与并发滑块 -->
+            <div class="dock-card mb10">
+              <div class="dock-card-title">分发策略</div>
+              <div class="chip-group mb8">
+                <button
+                  v-for="s in ['负载均衡', '优先级抢占', '亲和性']"
+                  :key="s"
+                  class="chip chip-xs"
+                  :class="{ on: strategy === s }"
+                  @click="handleStrategyChange(s)"
+                >
+                  {{ s }}
+                </button>
+              </div>
+              <div class="field" style="margin: 6px 0 0">
+                <div class="row-between">
+                  <span class="field-label" style="margin: 0; font-size: 11px">并发容量</span>
+                  <b class="num font-bold" style="color: var(--accent-ai); font-size: 13px">{{ capacity }}</b>
+                </div>
+                <input
+                  v-model.number="capacity"
+                  type="range"
+                  class="cap-slider"
+                  min="1"
+                  max="8"
+                  step="1"
+                  style="margin-top: 4px"
+                  @change="handleCapacityChange"
+                />
+              </div>
+            </div>
+
+            <!-- Worker 专精计算节点池 -->
+            <div class="dock-card mb10">
+              <div class="dock-card-title">
+                <span>Worker 专精集群</span>
+                <span class="small tertiary mono">{{ onlineCount }}/{{ totalWorkers }} 在线</span>
+              </div>
+              <div class="worker-card-list">
+                <div
+                  v-for="w in workerPool.slice(0, 4)"
+                  :key="w.id"
+                  class="worker-rich-card"
+                  :class="w.state"
+                  @click="openWorkerModal(w)"
+                >
+                  <div class="wrc-head">
+                    <span class="wrc-dot" :class="w.state"></span>
+                    <span class="wrc-name font-bold">{{ w.name }}</span>
+                    <span class="wrc-state-tag" :class="w.state">{{ stateLabel(w.state) }}</span>
+                  </div>
+                  <div class="wrc-body">
+                    <div class="wrc-caps">
+                      <span v-for="c in w.caps" :key="c" class="cap-tag">{{ c }}</span>
+                    </div>
+                    <div class="wrc-load-wrap">
+                      <span class="wrc-load-text mono small">{{ w.load }}%</span>
+                      <div class="wrc-load-bar">
+                        <div class="wrc-load-fill" :style="{ width: `${w.load}%`, background: w.load > 70 ? 'var(--accent-warning)' : 'var(--accent-ai)' }"></div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- AI 调度调优建议 -->
+            <div class="dock-card ai-dock-card">
+              <div class="dock-card-title">
+                <span class="ai-badge"><i class="ai-dot"></i>AI 调度优化建议</span>
+                <button class="link-btn" style="font-size: 11px" @click="nextAiAdvice">换一条</button>
+              </div>
+              <div class="small" style="line-height: 1.45; color: var(--text-secondary); margin-top: 4px">
+                {{ currentAiAdvice }}
+              </div>
+              <div class="row mt6" style="justify-content: flex-end">
+                <button class="btn btn-ai btn-xs" @click="applyAiAdvice">采纳建议</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ═══ 右侧悬浮审计坞 (可收折) ═══ -->
+        <div class="floating-dock dock-right" :class="{ collapsed: isRightDockCollapsed }">
+          <div class="dock-header">
+            <button class="dock-toggle-btn" :title="isRightDockCollapsed ? '展开审计面板' : '收折审计面板'" @click="isRightDockCollapsed = !isRightDockCollapsed">
+              {{ isRightDockCollapsed ? '⇤' : '⇥' }}
+            </button>
+            <div class="dock-header-title">
+              <span class="dock-ico">📋</span>
+              <span v-show="!isRightDockCollapsed" class="dock-title-text font-bold">调度事件审计流</span>
+            </div>
+            <button v-show="!isRightDockCollapsed" class="link-btn" style="font-size: 10.5px; margin-left: auto" @click="logs = []">清空</button>
+          </div>
+
+          <div v-show="!isRightDockCollapsed" class="dock-scroll-content">
+            <div class="chip-group mb8" style="gap: 4px">
+              <button
+                v-for="c in logCats"
+                :key="c.key"
+                class="chip chip-xs"
+                :class="{ on: logCat === c.key }"
+                @click="logCat = c.key"
+              >
+                {{ c.label }}
+              </button>
+            </div>
+
+            <div class="log-stream">
+              <div
+                v-for="(l, idx) in filteredLogs"
+                :key="idx"
+                class="log-card-item"
+                :class="[`cat-${l.cat}`, { clickable: !!l.tid }]"
+                :title="l.tid ? '点击定位并高亮星图工单' : ''"
+                @click="l.tid && flashTask(l.tid)"
+              >
+                <div class="lci-head">
+                  <span class="lci-time mono">{{ l.time }}</span>
+                  <span class="lci-tag" :class="l.cat">{{ l.kind }}</span>
+                  <span v-if="l.tid" class="lci-tid mono">{{ l.tid.substring(0, 8) }}</span>
+                </div>
+                <div class="lci-body" v-html="l.html"></div>
+              </div>
+              <div v-if="!filteredLogs.length" class="empty" style="padding: 28px 10px">
+                <div class="small tertiary">暂无调度事件流</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ═══ 底部悬浮甘特图抽屉 (可展开/收起) ═══ -->
+        <div class="floating-dock dock-bottom" :class="{ collapsed: isBottomDockCollapsed }">
+          <div class="dock-header dock-bottom-header" @click="isBottomDockCollapsed = !isBottomDockCollapsed">
+            <div class="dock-header-title">
+              <span class="dock-ico">⏱</span>
+              <span class="dock-title-text font-bold">先评后压全链路编排甘特图</span>
+              <span class="dock-subtitle tertiary small">（多阶段流转与父子派生闭环）</span>
+            </div>
+            <div class="row" style="gap: 8px; font-size: 11px; margin-left: auto; margin-right: 12px">
+              <span v-for="lg in ganttLegend" :key="lg.label" class="row" style="gap: 4px; align-items: center">
+                <i class="gantt-dot" :style="{ background: lg.color }"></i>
+                <span class="tertiary" style="font-size: 10px">{{ lg.label }}</span>
+              </span>
+            </div>
+            <button class="dock-toggle-btn" :title="isBottomDockCollapsed ? '展开甘特抽屉' : '收折甘特抽屉'">
+              {{ isBottomDockCollapsed ? '▲ 展开' : '▼ 收起' }}
+            </button>
+          </div>
+
+          <div v-show="!isBottomDockCollapsed" class="dock-bottom-content">
+            <div v-if="ganttRows.length" class="gantt">
+              <div class="gantt-axis">
+                <span v-for="(tick, i) in ganttTicks" :key="i" class="mono">{{ tick }}</span>
+              </div>
+              <div
+                v-for="row in ganttRows"
+                :key="row.id"
+                class="gantt-row"
+                :class="{ child: row.isChild }"
+                :title="`${row.label}\n${statusLabel(row.status)} · ${fmtTime(row.start)} → ${fmtTime(row.end)}`"
+                @click="goTasks"
+              >
+                <div class="gantt-name">
+                  <span v-if="row.isChild" class="tertiary" style="font-size: 10px">↳ 派生压测</span>
+                  <KindTag :kind="row.kind" />
+                  <span class="mono gantt-tid" style="font-size: 10.5px">{{ row.shortId }}</span>
+                </div>
+                <div class="gantt-track">
+                  <div
+                    class="gantt-bar"
+                    :class="`st-${row.status}`"
+                    :style="{ left: row.left + '%', width: Math.max(10, row.width) + '%' }"
+                  >
+                    <span class="gantt-bar-text">{{ statusLabel(row.status) }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div v-else class="empty" style="padding: 16px 10px">
+              <div class="small tertiary">暂无任务记录，发起评测任务后此处将展示完整阶段编排流转</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 悬停详情 tooltip -->
         <div v-if="tooltip" class="topo-tip" :style="{ left: tooltip.x + 'px', top: tooltip.y + 'px' }">
           <div class="tt-title">{{ tooltip.title }}</div>
           <div v-for="(ln, i) in tooltip.lines" :key="i" class="tt-line">
@@ -268,7 +489,7 @@
           </div>
         </div>
 
-        <!-- 工单锁定详情卡：点击工单芯片驻留，跟随缩放平移，Esc / 点空白解锁 -->
+        <!-- 工单锁定详情卡 -->
         <div v-if="pinnedTask && pinnedPos" class="pin-card" :style="{ left: pinnedPos.x + 'px', top: pinnedPos.y + 'px' }">
           <div class="pc-head">
             <i class="pc-bar" :style="{ background: kindColor(pinnedTask.kind) }"></i>
@@ -299,229 +520,7 @@
         <span class="row" style="gap: 5px; align-items: center"><i class="legend-line" style="background: var(--accent-ai)"></i><span class="tertiary">执行分发链路</span></span>
         <span class="row" style="gap: 5px; align-items: center"><i class="legend-dot" style="background: var(--accent-ai)"></i><span class="tertiary">数据流粒子</span></span>
         <span class="row" style="gap: 5px; align-items: center"><i class="legend-dot" style="background: var(--accent-success)"></i><span class="tertiary">完成涟漪</span></span>
-        <span class="tertiary" style="margin-left: auto">滚轮缩放 · 拖拽平移 · 双击复位 · 点击技能聚焦扇区 · 点击工单锁定详情</span>
-      </div>
-    </div>
-
-    <!-- ═══ 3. 底部三栏：调度集群控制面 / 实时调度审计流 / 先评后压全链路甘特图 ═══ -->
-    <div class="bottom-grid">
-      <!-- 左栏：调度内核控制台 + Worker 专精计算节点池 + AI 调度建议 -->
-      <div class="section-gap">
-        <!-- 1. 调度内核控制台 -->
-        <div class="panel glow" data-od-id="dispatch-radar" style="--glow-c: var(--c-agent)">
-          <div class="panel-title">
-            <span>调度内核引擎</span>
-            <span class="badge" :class="isRunning ? 'badge-running' : 'badge-cancelled'">
-              <i class="bdot"></i>{{ isRunning ? '实时调度中' : '已暂停' }}
-            </span>
-          </div>
-
-          <!-- 调度中心核心指标快览 -->
-          <div class="kernel-metric-row mb12">
-            <div class="k-stat">
-              <span class="k-label tertiary">集群健康度</span>
-              <span class="k-val font-bold" style="color: var(--accent-success)">99.4%</span>
-            </div>
-            <div class="k-stat">
-              <span class="k-label tertiary">活跃并发</span>
-              <span class="k-val font-bold mono" style="color: var(--accent-ai)">{{ runningDisplay }} / {{ capacity }}</span>
-            </div>
-            <div class="k-stat">
-              <span class="k-label tertiary">心跳轮询</span>
-              <span class="k-val font-bold mono">{{ heartbeatMs }}ms</span>
-            </div>
-          </div>
-
-          <div class="row mb12" style="gap: 6px">
-            <button class="btn btn-secondary btn-sm" style="flex: 1" @click="toggleScheduler">
-              {{ isRunning ? '⏸ 暂停调度' : '▶ 恢复调度' }}
-            </button>
-            <button class="btn btn-primary btn-sm" style="flex: 1" @click="showRegisterModal = true">
-              + 注册计算节点
-            </button>
-          </div>
-
-          <!-- 分发策略选择 -->
-          <div class="field" style="margin-top: 10px">
-            <span class="field-label" style="margin-bottom: 6px">分发策略 (Strategy)</span>
-            <div class="chip-group mb8">
-              <button
-                v-for="s in ['负载均衡', '优先级抢占', '亲和性']"
-                :key="s"
-                class="chip"
-                :class="{ on: strategy === s }"
-                @click="handleStrategyChange(s)"
-              >
-                {{ s }}
-              </button>
-            </div>
-          </div>
-
-          <!-- 并发容量控制 -->
-          <div class="field" style="margin-top: 8px">
-            <div class="row-between">
-              <span class="field-label" style="margin: 0">并发容量 (max_running_tasks)</span>
-              <b class="num font-bold" style="color: var(--accent-ai)">{{ capacity }} 任务</b>
-            </div>
-            <input
-              v-model.number="capacity"
-              type="range"
-              class="cap-slider"
-              min="1"
-              max="8"
-              step="1"
-              style="margin-top: 6px"
-              @change="handleCapacityChange"
-            />
-            <span class="field-hint">满载时新任务在 PG 队列中保持 queued</span>
-          </div>
-        </div>
-
-        <!-- 2. Worker 专精计算节点池 -->
-        <div class="panel glow" data-od-id="dispatch-pool" style="--glow-c: var(--c-agent)">
-          <div class="panel-title">
-            <span>Worker 专精集群池</span>
-            <span class="small tertiary mono">{{ onlineCount }}/{{ totalWorkers }} 在线</span>
-          </div>
-          <div class="worker-card-list">
-            <div
-              v-for="w in workerPool.slice(0, 4)"
-              :key="w.id"
-              class="worker-rich-card"
-              :class="w.state"
-              @click="openWorkerModal(w)"
-            >
-              <div class="wrc-head">
-                <span class="wrc-dot" :class="w.state"></span>
-                <span class="wrc-name font-bold">{{ w.name }}</span>
-                <span class="wrc-id mono tertiary">{{ w.id }}</span>
-                <span class="wrc-state-tag" :class="w.state">{{ stateLabel(w.state) }}</span>
-              </div>
-              <div class="wrc-body">
-                <div class="wrc-caps">
-                  <span v-for="c in w.caps" :key="c" class="cap-tag">{{ c }}</span>
-                </div>
-                <div class="wrc-load-wrap">
-                  <span class="wrc-load-text mono small">负载 {{ w.load }}%</span>
-                  <div class="wrc-load-bar">
-                    <div class="wrc-load-fill" :style="{ width: `${w.load}%`, background: w.load > 70 ? 'var(--accent-warning)' : 'var(--accent-ai)' }"></div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- 3. AI 调度优化建议卡 -->
-        <div class="ai-card" data-od-id="dispatch-ai">
-          <div class="ai-card-head">
-            <span class="ai-badge"><i class="ai-dot"></i>AI 调度智能调优</span>
-            <span class="grow"></span>
-            <button class="link-btn" style="font-size: 11px" @click="nextAiAdvice">换一条</button>
-          </div>
-          <div class="small" style="line-height: 1.5; color: var(--text-secondary); margin-top: 6px">
-            {{ currentAiAdvice }}
-          </div>
-          <div class="row mt8" style="justify-content: flex-end">
-            <button class="btn btn-ai btn-sm" @click="applyAiAdvice">一键采纳建议</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- 中栏：实时调度审计流 (结构化流水线日志) -->
-      <div class="panel glow dispatch-log-panel" data-od-id="dispatch-log" style="--glow-c: var(--c-agent)">
-        <div class="row-between mb8">
-          <div class="panel-title" style="margin: 0">
-            调度事件审计流
-            <span class="small tertiary mono">{{ filteredLogs.length }} 条事件</span>
-          </div>
-          <button class="link-btn" style="font-size: 11px" @click="logs = []">清空流</button>
-        </div>
-
-        <!-- 审计分类过滤 -->
-        <div class="chip-group mb8" style="gap: 4px">
-          <button
-            v-for="c in logCats"
-            :key="c.key"
-            class="chip chip-xs"
-            :class="{ on: logCat === c.key }"
-            @click="logCat = c.key"
-          >
-            {{ c.label }}
-          </button>
-        </div>
-
-        <!-- 结构化日志条目 -->
-        <div class="log-stream">
-          <div
-            v-for="(l, idx) in filteredLogs"
-            :key="idx"
-            class="log-card-item"
-            :class="[`cat-${l.cat}`, { clickable: !!l.tid }]"
-            :title="l.tid ? '点击定位并高亮星图工单' : ''"
-            @click="l.tid && flashTask(l.tid)"
-          >
-            <div class="lci-head">
-              <span class="lci-time mono">{{ l.time }}</span>
-              <span class="lci-tag" :class="l.cat">{{ l.kind }}</span>
-              <span v-if="l.tid" class="lci-tid mono">{{ l.tid.substring(0, 8) }}</span>
-            </div>
-            <div class="lci-body" v-html="l.html"></div>
-          </div>
-          <div v-if="!filteredLogs.length" class="empty" style="padding: 28px 10px">
-            <div class="small tertiary">暂无调度事件流（由调度内核与计算 Worker 实时写入）</div>
-          </div>
-        </div>
-      </div>
-
-      <!-- 右栏：先评后压全链路编排甘特图 (Pipeline Timeline) -->
-      <div class="panel glow" data-od-id="dispatch-gantt" style="--glow-c: var(--c-agent)">
-        <div class="row-between mb12">
-          <div class="panel-title" style="margin: 0">
-            先评后压全链路甘特图
-            <span class="small tertiary" style="font-weight: 400">最近 {{ ganttRows.length }} 链路</span>
-          </div>
-          <div class="row" style="gap: 8px; font-size: 11px">
-            <span v-for="lg in ganttLegend" :key="lg.label" class="row" style="gap: 4px; align-items: center">
-              <i class="gantt-dot" :style="{ background: lg.color }"></i>
-              <span class="tertiary">{{ lg.label }}</span>
-            </span>
-          </div>
-        </div>
-
-        <!-- 甘特图轴与多阶段进度条 -->
-        <div v-if="ganttRows.length" class="gantt">
-          <div class="gantt-axis">
-            <span v-for="(tick, i) in ganttTicks" :key="i" class="mono">{{ tick }}</span>
-          </div>
-          <div
-            v-for="row in ganttRows"
-            :key="row.id"
-            class="gantt-row"
-            :class="{ child: row.isChild }"
-            :title="`${row.label}\n${statusLabel(row.status)} · ${fmtTime(row.start)} → ${fmtTime(row.end)}`"
-            @click="goTasks"
-          >
-            <div class="gantt-name">
-              <span v-if="row.isChild" class="tertiary" title="由基准/RAG 成功后自动派生">↳ 派生压测</span>
-              <KindTag :kind="row.kind" />
-              <span class="mono gantt-tid" style="font-size: 10.5px">{{ row.shortId }}</span>
-            </div>
-            <div class="gantt-track">
-              <!-- 多阶段分段进度流 -->
-              <div
-                class="gantt-bar"
-                :class="`st-${row.status}`"
-                :style="{ left: row.left + '%', width: Math.max(12, row.width) + '%' }"
-              >
-                <span class="gantt-bar-text">{{ statusLabel(row.status) }}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div v-else class="empty" style="padding: 28px 10px">
-          <div class="small tertiary">暂无任务记录，发起评测任务后此处将展示完整编排阶段链路</div>
-        </div>
+        <span class="tertiary" style="margin-left: auto">滚轮缩放 · 拖拽平移 · 双击复位 · 浮窗面板可折叠</span>
       </div>
     </div>
 
@@ -632,6 +631,11 @@ const liveMode = !api.isMock()
 
 // 视图切换：'designer' (Dify 拖拽编排) vs 'monitor' (实时拓扑星图)
 const activeTab = ref<'designer' | 'monitor'>('designer')
+
+// 沉浸式大星图悬浮控制坞展开/收折状态
+const isLeftDockCollapsed = ref(false)
+const isRightDockCollapsed = ref(false)
+const isBottomDockCollapsed = ref(false)
 
 const isRunning = ref(true)
 const strategy = ref('负载均衡')
@@ -1746,78 +1750,20 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.dispatch-page {
-  max-width: 1440px;
-  margin: 0 auto;
-}
-.bottom-grid {
-  display: grid;
-  grid-template-columns: 270px minmax(0, 1fr) minmax(0, 1.2fr);
-  gap: 16px;
-  align-items: start;
-}
-.cap-slider {
-  width: 100%;
-  accent-color: var(--accent-ai);
-  cursor: pointer;
-}
-.dispatch-log-panel {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  max-height: 640px;
-}
-.dispatch-log-panel .log-stream {
-  flex: 1;
-  overflow-y: auto;
-  min-height: 220px;
-}
-
-/* KPI 发光描边与迷你趋势线 */
-.kpi-glow {
-  position: relative;
+/* ═══ 沉浸式调度星图画布与悬浮控制坞 ═══ */
+.immersive-monitor-panel {
   overflow: hidden;
+  border-radius: 14px;
 }
-.kpi-glow::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  pointer-events: none;
-  background: radial-gradient(120% 90% at 50% -30%, color-mix(in srgb, var(--accent-ai) 9%, transparent), transparent 60%);
-}
-.kpi-trend {
-  padding-bottom: 30px;
-}
-.kpi-trend .spark {
-  position: absolute;
-  left: 14px;
-  right: 14px;
-  bottom: 8px;
-  width: calc(100% - 28px);
-  height: 22px;
-}
-.kpi-trend .spark polyline {
-  fill: none;
-  stroke: var(--accent-ai);
-  stroke-width: 1.4;
-  opacity: 0.7;
-  stroke-linejoin: round;
-  stroke-linecap: round;
-}
-
-/* ═══ 调度星图画布 ═══ */
-.topo-panel {
-  overflow: hidden;
-}
-.topo-wrap {
+.immersive-topo-wrap {
   position: relative;
   border: 1px solid var(--border-subtle);
   border-radius: 12px;
   overflow: hidden;
-  aspect-ratio: 1200 / 680;
+  height: calc(100vh - 270px);
+  min-height: 740px;
   background:
-    radial-gradient(60% 55% at 50% 48%, color-mix(in srgb, var(--accent-ai) 5%, transparent), transparent 70%),
+    radial-gradient(60% 55% at 50% 48%, color-mix(in srgb, var(--accent-ai) 6%, transparent), transparent 70%),
     var(--bg-elevated);
 }
 .topo-svg {
@@ -1841,7 +1787,7 @@ onBeforeUnmount(() => {
   opacity: 0.14;
 }
 
-/* 扫描线装饰：周期性自上而下扫过画布 */
+/* 扫描线装饰 */
 .scanline {
   position: absolute;
   left: 0;
@@ -1878,7 +1824,7 @@ onBeforeUnmount(() => {
   opacity: 0.18;
 }
 
-/* 常驻链路：内核 → 技能（灰虚线缓流） */
+/* 常驻链路：内核 → 技能 */
 .wire-core {
   fill: none;
   stroke: var(--text-tertiary);
@@ -1888,7 +1834,7 @@ onBeforeUnmount(() => {
   animation: dash-flow 2.6s linear infinite;
   transition: opacity 0.3s ease;
 }
-/* 归属链路：技能 → Worker（细实线） */
+/* 归属链路：技能 → Worker */
 .wire-member {
   fill: none;
   stroke: var(--text-tertiary);
@@ -1918,7 +1864,301 @@ onBeforeUnmount(() => {
   filter: drop-shadow(0 0 3px color-mix(in srgb, var(--accent-ai) 80%, transparent));
 }
 
-/* 通用聚焦淡化 */
+/* 悬浮控制坞通用体系 (Floating Glass Docks) */
+.floating-dock {
+  position: absolute;
+  z-index: 20;
+  background: rgba(var(--bg-main-rgb, 17, 24, 39), 0.92);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
+  transition: all 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+  display: flex;
+  flex-direction: column;
+}
+
+.dock-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.dock-header-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.dock-ico {
+  font-size: 14px;
+}
+
+.dock-toggle-btn {
+  border: none;
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.dock-toggle-btn:hover {
+  background: var(--accent-ai);
+  color: #fff;
+}
+
+.dock-scroll-content {
+  padding: 10px;
+  overflow-y: auto;
+  flex: 1;
+  max-height: calc(100vh - 360px);
+}
+
+.dock-card {
+  background: var(--bg-main);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.dock-card-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11.5px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+/* 左侧浮坞 (Dock Left) */
+.dock-left {
+  top: 14px;
+  left: 14px;
+  width: 290px;
+}
+.dock-left.collapsed {
+  width: 44px;
+  overflow: hidden;
+}
+.dock-left.collapsed .dock-header {
+  padding: 8px 6px;
+  justify-content: center;
+}
+
+/* 右侧浮坞 (Dock Right) */
+.dock-right {
+  top: 14px;
+  right: 14px;
+  width: 320px;
+}
+.dock-right.collapsed {
+  width: 44px;
+  overflow: hidden;
+}
+.dock-right.collapsed .dock-header {
+  padding: 8px 6px;
+  justify-content: center;
+}
+
+/* 底部甘特浮坞 (Dock Bottom) */
+.dock-bottom {
+  bottom: 14px;
+  left: 14px;
+  right: 14px;
+  max-height: 240px;
+}
+.dock-bottom.collapsed {
+  max-height: 38px;
+  overflow: hidden;
+}
+.dock-bottom-header {
+  cursor: pointer;
+  padding: 6px 12px;
+}
+.dock-bottom-content {
+  padding: 8px 12px;
+  overflow-y: auto;
+  max-height: 180px;
+}
+
+/* 调度内核核心指标快览 */
+.kernel-metric-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  background: var(--bg-elevated);
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+}
+.k-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 2px;
+}
+.k-label {
+  font-size: 9.5px;
+}
+.k-val {
+  font-size: 11.5px;
+}
+
+/* Worker 专精集群卡片列表 */
+.worker-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.worker-rich-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 6px 8px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.worker-rich-card:hover {
+  border-color: var(--accent-ai);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+.worker-rich-card.busy {
+  border-color: color-mix(in srgb, var(--accent-ai) 40%, var(--border-subtle));
+}
+.worker-rich-card.offline {
+  opacity: 0.55;
+}
+.wrc-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 3px;
+}
+.wrc-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+}
+.wrc-dot.idle { background: var(--accent-success); }
+.wrc-dot.busy { background: var(--accent-ai); animation: dot-breathe 1.4s ease-in-out infinite; }
+.wrc-dot.draining { background: var(--accent-warning); }
+.wrc-name {
+  font-size: 11px;
+  color: var(--text-primary);
+}
+.wrc-state-tag {
+  margin-left: auto;
+  font-size: 9px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--bg-main);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+}
+.wrc-state-tag.idle { color: var(--accent-success); }
+.wrc-state-tag.busy { color: var(--accent-ai); }
+.wrc-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.wrc-caps {
+  display: flex;
+  gap: 3px;
+  flex-wrap: wrap;
+}
+.cap-tag {
+  font-size: 8.5px;
+  font-family: var(--font-mono);
+  background: var(--bg-main);
+  border: 1px solid var(--border-subtle);
+  padding: 0 3px;
+  border-radius: 2px;
+  color: var(--text-tertiary);
+}
+.wrc-load-wrap {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.wrc-load-text {
+  font-size: 9.5px;
+  color: var(--text-secondary);
+}
+.wrc-load-bar {
+  width: 32px;
+  height: 3.5px;
+  background: var(--bg-main);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.wrc-load-fill {
+  height: 100%;
+  transition: width 0.3s;
+}
+
+/* 结构化日志卡片 */
+.log-card-item {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin-bottom: 5px;
+  transition: background 0.15s ease;
+}
+.log-card-item.clickable {
+  cursor: pointer;
+}
+.log-card-item.clickable:hover {
+  border-color: var(--accent-ai);
+  background: var(--row-hover);
+}
+.lci-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 2px;
+}
+.lci-time {
+  font-size: 9.5px;
+  color: var(--text-tertiary);
+}
+.lci-tag {
+  font-size: 9px;
+  padding: 0 4px;
+  border-radius: 3px;
+  font-weight: 600;
+  background: var(--bg-main);
+  border: 1px solid var(--border-subtle);
+}
+.lci-tag.done { color: var(--accent-success); border-color: color-mix(in srgb, var(--accent-success) 30%, transparent); }
+.lci-tag.error { color: var(--accent-error); border-color: color-mix(in srgb, var(--accent-error) 30%, transparent); }
+.lci-tag.node { color: var(--text-secondary); }
+.lci-tid {
+  font-size: 9px;
+  color: var(--accent-ai);
+  margin-left: auto;
+}
+.lci-body {
+  font-size: 10.5px;
+  line-height: 1.35;
+  color: var(--text-primary);
+}
+
+/* ─── 星图节点体系 ─── */
 .task-chip,
 .skill-node,
 .worker-node {
@@ -1930,7 +2170,6 @@ onBeforeUnmount(() => {
   opacity: 0.18;
 }
 
-/* ─── 任务工单芯片（transform transition 驱动 队列轨道→链路中段 飞行动效） ─── */
 .task-chip {
   cursor: pointer;
   transition:
@@ -1961,7 +2200,6 @@ onBeforeUnmount(() => {
   0%, 100% { stroke: var(--border-subtle); }
   50% { stroke: var(--accent-ai); stroke-width: 2.4; }
 }
-/* 锁定中的工单芯片：高亮描边 + 持续辉光 */
 .task-chip.pinned .tc-box {
   stroke: var(--accent-ai);
   stroke-width: 2;
@@ -1999,13 +2237,8 @@ onBeforeUnmount(() => {
   fill: var(--accent-ai);
   transition: width 0.4s ease;
 }
-.queue-overflow {
-  font-size: 10px;
-  fill: var(--text-tertiary);
-  font-family: var(--font-mono);
-}
 
-/* ─── 技能 Agent 内环节点 ─── */
+/* 技能 Agent 内环节点 */
 .skill-node {
   cursor: pointer;
 }
@@ -2047,7 +2280,7 @@ onBeforeUnmount(() => {
   font-family: var(--font-mono);
 }
 
-/* ─── Worker 外环节点：负载环 + 状态点 ─── */
+/* Worker 外环节点 */
 .worker-node {
   cursor: pointer;
 }
@@ -2103,7 +2336,7 @@ onBeforeUnmount(() => {
 .wn-dot.busy { fill: var(--accent-ai); animation: dot-breathe 1.4s ease-in-out infinite; }
 .wn-dot.draining { fill: var(--accent-warning); }
 
-/* ─── 中心调度内核 ─── */
+/* 中心调度内核 */
 .core-ring {
   fill: none;
   stroke: var(--accent-ai);
@@ -2162,7 +2395,7 @@ onBeforeUnmount(() => {
   fill: var(--text-primary);
 }
 
-/* 完成涟漪（SVG 圆扩散） */
+/* 完成涟漪 */
 .ripple-c {
   fill: none;
   stroke: var(--accent-success);
@@ -2180,7 +2413,7 @@ onBeforeUnmount(() => {
 /* 悬停 tooltip */
 .topo-tip {
   position: absolute;
-  z-index: 20;
+  z-index: 25;
   min-width: 180px;
   max-width: 250px;
   padding: 10px 12px;
@@ -2207,7 +2440,7 @@ onBeforeUnmount(() => {
   word-break: break-all;
 }
 
-/* 工单锁定详情卡：驻留于芯片旁，随视图变换联动 */
+/* 工单锁定详情卡 */
 .pin-card {
   position: absolute;
   z-index: 25;
@@ -2279,243 +2512,26 @@ onBeforeUnmount(() => {
   margin-top: 6px;
 }
 
-/* 缩放控件 */
-.zoom-ctrl {
-  display: inline-flex;
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  overflow: hidden;
-}
-.zoom-btn {
-  border: none;
-  background: var(--bg-main);
-  color: var(--text-secondary);
-  font-size: 12px;
-  min-width: 30px;
-  height: 26px;
-  cursor: pointer;
-  transition: background 0.15s ease;
-}
-.zoom-btn:hover {
-  background: var(--row-hover);
-  color: var(--text-primary);
-}
-.zoom-btn + .zoom-btn {
-  border-left: 1px solid var(--border-subtle);
-}
-
-/* 调度内核核心指标快览 */
-.kernel-metric-row {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 6px;
-  background: var(--bg-elevated);
-  padding: 8px 10px;
-  border-radius: 8px;
-  border: 1px solid var(--border-subtle);
-}
-.k-stat {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  gap: 2px;
-}
-.k-label {
-  font-size: 10px;
-}
-.k-val {
-  font-size: 12px;
-}
-
-/* Worker 专精集群卡片列表 */
-.worker-card-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.worker-rich-card {
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  padding: 8px 10px;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-.worker-rich-card:hover {
-  border-color: var(--accent-ai);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
-}
-.worker-rich-card.busy {
-  border-color: color-mix(in srgb, var(--accent-ai) 40%, var(--border-subtle));
-}
-.worker-rich-card.offline {
-  opacity: 0.55;
-}
-.wrc-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 4px;
-}
-.wrc-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--text-tertiary);
-}
-.wrc-dot.idle { background: var(--accent-success); }
-.wrc-dot.busy { background: var(--accent-ai); animation: dot-breathe 1.4s ease-in-out infinite; }
-.wrc-dot.draining { background: var(--accent-warning); }
-.wrc-name {
-  font-size: 11.5px;
-  color: var(--text-primary);
-}
-.wrc-id {
-  font-size: 10px;
-}
-.wrc-state-tag {
-  margin-left: auto;
-  font-size: 9.5px;
-  padding: 1px 5px;
-  border-radius: 4px;
-  background: var(--bg-main);
-  border: 1px solid var(--border-subtle);
-  color: var(--text-secondary);
-}
-.wrc-state-tag.idle { color: var(--accent-success); }
-.wrc-state-tag.busy { color: var(--accent-ai); }
-.wrc-body {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.wrc-caps {
-  display: flex;
-  gap: 4px;
-  flex-wrap: wrap;
-}
-.cap-tag {
-  font-size: 9px;
-  font-family: var(--font-mono);
-  background: var(--bg-main);
-  border: 1px solid var(--border-subtle);
-  padding: 0 4px;
-  border-radius: 3px;
-  color: var(--text-tertiary);
-}
-.wrc-load-wrap {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  flex-shrink: 0;
-}
-.wrc-load-text {
-  font-size: 10px;
-  color: var(--text-secondary);
-}
-.wrc-load-bar {
-  width: 36px;
-  height: 4px;
-  background: var(--bg-main);
-  border-radius: 2px;
-  overflow: hidden;
-}
-.wrc-load-fill {
-  height: 100%;
-  transition: width 0.3s;
-}
-
-/* 结构化日志卡片 */
-.log-card-item {
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  padding: 6px 8px;
-  margin-bottom: 6px;
-  transition: background 0.15s ease;
-}
-.log-card-item.clickable {
-  cursor: pointer;
-}
-.log-card-item.clickable:hover {
-  border-color: var(--accent-ai);
-  background: var(--row-hover);
-}
-.lci-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 3px;
-}
-.lci-time {
-  font-size: 10px;
-  color: var(--text-tertiary);
-}
-.lci-tag {
-  font-size: 9.5px;
-  padding: 0 5px;
-  border-radius: 4px;
-  font-weight: 600;
-  background: var(--bg-main);
-  border: 1px solid var(--border-subtle);
-}
-.lci-tag.done { color: var(--accent-success); border-color: color-mix(in srgb, var(--accent-success) 30%, transparent); }
-.lci-tag.error { color: var(--accent-error); border-color: color-mix(in srgb, var(--accent-error) 30%, transparent); }
-.lci-tag.node { color: var(--text-secondary); }
-.lci-tid {
-  font-size: 9.5px;
-  color: var(--accent-ai);
-  margin-left: auto;
-}
-.lci-body {
-  font-size: 11px;
-  line-height: 1.4;
-  color: var(--text-primary);
-}
-
-/* 图例 */
-.legend-line {
-  display: inline-block;
-  width: 18px;
-  height: 2px;
-  border-radius: 2px;
-}
-.legend-dot {
-  display: inline-block;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-}
-
-/* 小号过滤 chip */
-.chip-xs {
-  font-size: 10.5px;
-  padding: 2px 8px;
-  min-height: 22px;
-}
-
-/* ─── 任务编排时间线（甘特） ─── */
+/* 甘特图 */
 .gantt {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
 }
 .gantt-axis {
   display: flex;
   justify-content: space-between;
-  font-size: 10px;
+  font-size: 9.5px;
   color: var(--text-tertiary);
-  padding: 0 4px 4px 170px;
+  padding: 0 4px 2px 160px;
 }
 .gantt-row {
   display: grid;
-  grid-template-columns: 170px 1fr;
+  grid-template-columns: 160px 1fr;
   align-items: center;
   gap: 8px;
-  padding: 4px 6px;
-  border-radius: 6px;
+  padding: 2px 4px;
+  border-radius: 5px;
   cursor: pointer;
   transition: background 0.15s ease;
 }
@@ -2523,12 +2539,12 @@ onBeforeUnmount(() => {
   background: var(--row-hover);
 }
 .gantt-row.child .gantt-name {
-  padding-left: 12px;
+  padding-left: 10px;
 }
 .gantt-name {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
@@ -2538,8 +2554,8 @@ onBeforeUnmount(() => {
 }
 .gantt-track {
   position: relative;
-  height: 18px;
-  border-radius: 5px;
+  height: 16px;
+  border-radius: 4px;
   background: var(--bg-elevated);
   overflow: hidden;
   border: 1px solid var(--border-subtle);
@@ -2548,14 +2564,14 @@ onBeforeUnmount(() => {
   position: absolute;
   top: 1px;
   bottom: 1px;
-  border-radius: 4px;
+  border-radius: 3px;
   display: flex;
   align-items: center;
-  padding-left: 6px;
+  padding-left: 5px;
   transition: left 0.6s ease, width 0.6s ease;
 }
 .gantt-bar-text {
-  font-size: 9px;
+  font-size: 8.5px;
   font-weight: 600;
   color: #fff;
   white-space: nowrap;
@@ -2576,37 +2592,26 @@ onBeforeUnmount(() => {
 .gantt-bar.st-cancelled { background: var(--accent-error); opacity: 0.75; }
 .gantt-dot {
   display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
 }
 
-@media (max-width: 1200px) {
-  .bottom-grid {
-    grid-template-columns: 250px minmax(0, 1fr);
-  }
-  .bottom-grid > :last-child {
-    grid-column: 1 / -1;
-  }
+/* 图例 */
+.legend-line {
+  display: inline-block;
+  width: 18px;
+  height: 2px;
+  border-radius: 2px;
+}
+.legend-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
 }
 
-@media (max-width: 880px) {
-  .bottom-grid {
-    grid-template-columns: 1fr;
-  }
-  .topo-wrap {
-    aspect-ratio: auto;
-    height: 520px;
-  }
-  .gantt-axis {
-    padding-left: 110px;
-  }
-  .gantt-row {
-    grid-template-columns: 110px 1fr;
-  }
-}
-
-/* ═══ 顶层模式分段选择器样式 ═══ */
+/* 顶部模式分段选择器样式 */
 .dispatch-view-tabs {
   display: flex;
   align-items: center;
