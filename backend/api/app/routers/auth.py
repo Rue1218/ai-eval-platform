@@ -2,6 +2,7 @@
 
 import re
 from datetime import UTC, datetime
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy.orm import Session
@@ -138,11 +139,16 @@ def change_password(
 
 @router.post("/ws-ticket")
 def ws_ticket(user: User = Depends(get_current_user)):
-    """签发五分钟短票，长期浏览器 Cookie 不进入 WS query。"""
+    """签发五分钟单次短票，长期浏览器 Cookie 不进入 WS query。
+
+    每张票携带唯一 ``jti``，WebSocket 建连时消费一次即作废，
+    防止同一票据在有效期内被重复用于建立多个连接。
+    """
     ticket = create_token(
         user.id,
         user.auth_version,
         TOKEN_TYPE_WS,
         settings.ws_ticket_expire_minutes,
+        jti=uuid4().hex,
     )
     return {"ticket": ticket, "expires_in": settings.ws_ticket_expire_minutes * 60}

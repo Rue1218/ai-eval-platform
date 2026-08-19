@@ -8,6 +8,7 @@
 import asyncio
 import json
 import logging
+import time
 from copy import deepcopy
 from datetime import UTC, datetime
 
@@ -53,18 +54,49 @@ class _ConnState:
 # 若未来 api 多副本部署，需将待确认卡迁移到数据库或分布式缓存。
 _PENDING_CARDS: dict[str, dict] = {}
 
+# 已消费的 WS 短票 jti -> 票据到期时间戳（PRD：5 分钟单次短票）。
+# 与 _PENDING_CARDS 同为进程内简化；多副本部署时需迁移到共享存储。
+_USED_WS_TICKETS: dict[str, float] = {}
+
+# 已消费票据记录的清理阈值，避免长期运行下字典无限增长
+_USED_TICKETS_GC_THRESHOLD = 1024
+
+
+def _consume_ws_ticket(payload: dict) -> bool:
+    """消费短票的单次使用标识，同一 jti 第二次连接直接拒绝。
+
+    票据必须携带 ``jti``（缺失视为非法票）；到期记录在后续调用中
+    机会式清理。函数为同步无 await，单事件循环内天然原子。
+    """
+    jti = payload.get("jti")
+    if not jti:
+        return False
+    now = time.time()
+    if len(_USED_WS_TICKETS) > _USED_TICKETS_GC_THRESHOLD:
+        for key, expire_at in list(_USED_WS_TICKETS.items()):
+            if expire_at <= now:
+                _USED_WS_TICKETS.pop(key, None)
+    if jti in _USED_WS_TICKETS:
+        return False
+    # 记录 5 分钟有效窗口（与票面 exp 一致），窗口过后可被清理
+    _USED_WS_TICKETS[jti] = now + 300
+    return True
+
 # 会话内非终态任务集合，用于阻止会话并发下单（与 tasks.py 保持一致）。
 _ACTIVE_STATUSES = {"queued", "running", "awaiting_case_confirm"}
 _TERMINAL_STATUSES = {"succeeded", "failed", "cancelled"}
 
 
 def _user_from_ticket(ticket: str) -> User | None:
-    """验证 WebSocket 短票、账号状态和改密后的认证版本。"""
+    """验证 WebSocket 短票、单次消费、账号状态和改密后的认证版本。"""
     try:
         payload = decode_token(ticket)
     except Exception:
         return None
     if payload.get("type") != TOKEN_TYPE_WS:
+        return None
+    # 单次短票：同一票据建立过连接即作废，重连须重新领票
+    if not _consume_ws_ticket(payload):
         return None
     db: Session = SessionLocal()
     try:
@@ -362,9 +394,11 @@ async def _handle_user_message(
         db.query(Message)
         .filter(Message.session_id == session.id)
         .order_by(Message.created_at.desc())
-        .limit(8)
+        .limit(20)
         .all()
     )
+    # PRD F-AGT-05：上下文保留最近 20 条用户/助手消息（超长丢最旧），
+    # 系统提示词由 _LLM_SYSTEM 每次调用独立携带、始终保留。
     history = [{"role": m.role, "content": m.content} for m in reversed(history_rows)]
 
     plan: dict | None = None

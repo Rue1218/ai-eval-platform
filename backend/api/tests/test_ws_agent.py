@@ -11,6 +11,8 @@ from starlette.websockets import WebSocketDisconnect
 
 from app.main import app
 from app.routers.ws import (
+    _USED_WS_TICKETS,
+    _consume_ws_ticket,
     _deep_merge,
     _match_dataset,
     _match_profiles,
@@ -26,6 +28,35 @@ def test_ws_rejects_invalid_ticket_with_4401():
         with client.websocket_connect("/ws/agent?ticket=not-a-jwt"):
             pass
     assert exc.value.code == 4401
+
+
+def test_ws_ticket_is_single_use():
+    """单次短票（PRD F-AGT-01）：同一 jti 仅首次连接可用，第二次拒绝。"""
+    _USED_WS_TICKETS.clear()
+    payload = {"type": "ws_ticket", "jti": "ticket-once-1"}
+
+    assert _consume_ws_ticket(payload) is True  # 首次连接放行
+    assert _consume_ws_ticket(payload) is False  # 同票再次连接拒绝
+    assert _consume_ws_ticket({"type": "ws_ticket"}) is False  # 无 jti 视为非法票
+    assert _USED_WS_TICKETS["ticket-once-1"] > 0
+
+
+def test_ws_ticket_gc_cleans_expired_entries():
+    """过期票据记录在下一次消费时被机会式清理，不无限增长。"""
+    _USED_WS_TICKETS.clear()
+    _USED_WS_TICKETS["stale-jti"] = 1.0  # 已过期的历史记录
+
+    assert _consume_ws_ticket({"type": "ws_ticket", "jti": "fresh-jti"}) is True
+    # 阈值未到不强制清理，但新票据正常记录
+    assert "fresh-jti" in _USED_WS_TICKETS
+    # 手动注入超阈值数量的过期条目后触发清理
+    for i in range(1100):
+        _USED_WS_TICKETS[f"old-{i}"] = 1.0
+    assert _consume_ws_ticket({"type": "ws_ticket", "jti": "another-jti"}) is True
+    assert "stale-jti" not in _USED_WS_TICKETS
+    assert "old-0" not in _USED_WS_TICKETS
+    assert "another-jti" in _USED_WS_TICKETS
+    _USED_WS_TICKETS.clear()
 
 
 def test_pong_body_matches_contract_shape():

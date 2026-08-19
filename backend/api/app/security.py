@@ -27,8 +27,14 @@ def create_token(
     auth_version: int,
     token_type: str,
     expires_minutes: int,
+    *,
+    jti: str | None = None,
 ) -> str:
-    """签发包含账号认证版本的短期 JWT，改密后旧票自动失效。"""
+    """签发包含账号认证版本的短期 JWT，改密后旧票自动失效。
+
+    ``jti`` 为可选的单次标识：WS 短票传入后，消费方可据此实现
+    「同一票据只能使用一次」的单次语义。
+    """
     now = datetime.now(UTC)
     payload = {
         "sub": sub,
@@ -37,6 +43,8 @@ def create_token(
         "iat": now,
         "exp": now + timedelta(minutes=expires_minutes),
     }
+    if jti:
+        payload["jti"] = jti
     return jwt.encode(payload, settings.secret_key, algorithm="HS256")
 
 
