@@ -456,7 +456,7 @@ async def _stream_llm_plan(
     """
     profile = _resolve_agent_profile(db)
     loop = asyncio.get_running_loop()
-    progress = {"buf": "", "sent": 0}
+    progress = {"buf": "", "sent": 0, "frames": 0}
     user_payload = {
         "用户消息": text,
         "对话历史": history,
@@ -491,6 +491,7 @@ async def _stream_llm_plan(
             if kind == "reasoning":
                 # 推理模型的思考链：整段直发思考卡，不做 reply 提取
                 if chunk:
+                    progress["frames"] += 1
                     asyncio.run_coroutine_threadsafe(_push_think(chunk), loop).result(timeout=30)
                 continue
             parts.append(chunk)
@@ -499,11 +500,18 @@ async def _stream_llm_plan(
             if len(visible) > progress["sent"]:
                 delta = visible[progress["sent"] :]
                 progress["sent"] = len(visible)
+                progress["frames"] += 1
                 # 阻塞等待发送完成：既是顺序保证，也是天然背压
                 asyncio.run_coroutine_threadsafe(_push(delta), loop).result(timeout=30)
         return "".join(parts)
 
     raw = await asyncio.to_thread(_producer)
+    logger.info(
+        "Agent 流式意图识别完成: 增量帧=%d 上游输出=%d字 reply可见=%d字",
+        progress["frames"],
+        len(raw),
+        progress["sent"],
+    )
     return _parse_llm_json(raw)
 
 

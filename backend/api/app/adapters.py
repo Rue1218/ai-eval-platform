@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -338,4 +339,8 @@ def stream_protocol(
                 except (KeyError, IndexError, TypeError, AttributeError):
                     text = ""
                 if text:
+                    # 网关忽略 stream 参数：记录一次便于排查上游流式支持情况
+                    logging.getLogger(__name__).info(
+                        "上游 %s 忽略 stream 参数返回完整 JSON，走非 SSE 兜底", base
+                    )
                     yield ("content", text)

@@ -888,6 +888,8 @@ interface StreamItem {
   collapsed?: boolean
   // 流式标记：true 表示该 agent 气泡正在接收 LLM 增量帧，终帧到达后置 false
   streaming?: boolean
+  // 已显示的纯文本进度（流式增量与打字机共用，text 为其渲染后的 HTML）
+  raw?: string
   tool?: string
   args?: any
   result?: any
@@ -1839,6 +1841,39 @@ function dismissTyping() {
   if (idx >= 0) events.value.splice(idx, 1)
 }
 
+/** 把纯文本渲染为气泡 HTML（转义防 XSS + 换行转 <br>）。 */
+function renderBubbleHtml(raw: string): string {
+  return escapeHtml(raw).replace(/\n/g, '<br>')
+}
+
+/* ─── 打字机渲染：终帧权威全文逐字补齐 ───
+   无论是真流式增量、网关不支持 SSE 的单块兜底、还是降级规则版的整段回复，
+   终帧到达后都从已显示长度逐字推进到全文，保证任何链路下用户都看到
+   「一个字一个字弹出」的效果。定时器登记进 flowTimers，「暂停生成」可中断。 */
+function typewriteTo(item: StreamItem, fullText: string) {
+  // 已显示前缀可续播时从其长度继续，否则（前缀不匹配）从头渲染
+  const start = item.raw && fullText.startsWith(item.raw) ? item.raw.length : 0
+  let pos = start
+  const total = fullText.length
+  if (total === 0) {
+    item.streaming = false
+    return
+  }
+  item.streaming = true
+  // 长文本提速：避免长回复打字机拖沓（80 字内 24ms/字，超长 10ms/字，每 tick 推进 2 字）
+  const stepMs = total > 120 ? 10 : total > 60 ? 16 : 24
+  const id = trackInterval(() => {
+    pos = Math.min(total, pos + 2)
+    item.raw = fullText.slice(0, pos)
+    item.text = renderBubbleHtml(item.raw)
+    scrollToBottom()
+    if (pos >= total) {
+      clearTracked(id)
+      item.streaming = false
+    }
+  }, stepMs, true)
+}
+
 function handleWsEvent(ev: WsServerEvent) {
   // pong 心跳不参与交互流；其余任何事件到达都意味着本轮已出结果，移除打字占位
   if (ev.event !== 'pong') dismissTyping()
@@ -1860,26 +1895,38 @@ function handleWsEvent(ev: WsServerEvent) {
       if (p.stream === 'chunk') {
         const delta = String(p.text || '')
         if (delta) {
-          const target = [...events.value].reverse().find(e => e.type === 'agent' && e.streaming)
-          if (target) target.text = (target.text || '') + escapeHtml(delta).replace(/\n/g, '<br>')
-          else events.value.push({ type: 'agent', text: escapeHtml(delta).replace(/\n/g, '<br>'), streaming: true })
+          let target = [...events.value].reverse().find(e => e.type === 'agent' && e.streaming)
+          if (!target) {
+            target = { type: 'agent', raw: '', text: '', streaming: true }
+            events.value.push(target)
+          }
+          target.raw = (target.raw || '') + delta
+          target.text = renderBubbleHtml(target.raw)
           scrollToBottom()
         }
         break
       }
-      // 完整回复（终帧或非流式）：先收尾思考卡（完成并折叠），再落定回复文本
+      // 完整回复（终帧或非流式）：先收尾思考卡（完成并折叠），再打字机渲染权威全文
       const text = String(p.text || '').trim()
       const think = [...events.value].reverse().find(e => e.type === 'thought' && !e.done)
       if (think) {
         think.done = true
         think.collapsed = true
       }
-      const streaming = [...events.value].reverse().find(e => e.type === 'agent' && e.streaming)
-      if (streaming) {
-        if (text) streaming.text = `<p>${escapeHtml(text).replace(/\n/g, '<br>')}</p>`
-        streaming.streaming = false
-      } else if (text) {
-        events.value.push({ type: 'agent', text: `<p>${escapeHtml(text).replace(/\n/g, '<br>')}</p>` })
+      if (text) {
+        const streaming = [...events.value].reverse().find(e => e.type === 'agent' && e.streaming)
+        if (streaming) {
+          // 真流式已有前缀：从已显示长度打字机续播到权威全文
+          typewriteTo(streaming, text)
+        } else {
+          // 单块兜底 / 降级规则版：新建气泡打字机渲染全文
+          const item: StreamItem = { type: 'agent', raw: '', text: '', streaming: true }
+          events.value.push(item)
+          typewriteTo(item, text)
+        }
+      } else {
+        const orphan = [...events.value].reverse().find(e => e.type === 'agent' && e.streaming)
+        if (orphan) orphan.streaming = false
       }
       if (text) scrollToBottom()
       // 纯对话轮次（如闲聊）以 thought 收尾：结束「生成中」状态；
