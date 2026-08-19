@@ -71,8 +71,12 @@ def _push_ws(session_id: str | None, event: str, payload: dict, task_id: str | N
         db.close()
 
 
-def _run_task(task: Task) -> None:
+def _run_task(task_id: str) -> None:
     """骨架版执行器：mock 执行 2 秒后置 succeeded。
+
+    入参为任务 ID 而非 ORM 对象：主循环 Session 与本函数 Session 相互独立，
+    直接传递跨 Session 的 ORM 实例会导致 refresh 抛 InvalidRequestError、
+    状态赋值不进脏检查（任务永久卡 running）。
 
     后续按 kind 分发到真实执行器：
       benchmark  -> 三协议适配 + 规则评分
@@ -81,7 +85,14 @@ def _run_task(task: Task) -> None:
       stress     -> 下发到 stress 容器（go-stress-testing）
     """
     db = SessionLocal()
+    task: Task | None = None
     try:
+        # 在本函数自己的 Session 内重新加载任务，确保后续读写均被脏检查追踪
+        task = db.query(Task).filter(Task.id == task_id).first()
+        if not task:
+            logger.error("task %s not found, skip execution", task_id)
+            return
+
         db.add(TaskEvent(task_id=task.id, event="start", payload={"kind": task.kind}))
         db.commit()
 
@@ -117,12 +128,23 @@ def _run_task(task: Task) -> None:
         logger.info("task %s (%s) succeeded", task.id, task.kind)
     except Exception:
         db.rollback()
-        task.status = "failed"
-        task.finished_at = datetime.now(timezone.utc)
-        db.add(TaskEvent(task_id=task.id, event="error", payload={"message": "执行失败"}))
-        db.commit()
-        _push_ws(task.session_id, "error", {"code": "INTERNAL", "message": "执行失败"}, task_id=task.id)
-        logger.exception("task %s failed", task.id)
+        logger.exception("task %s execution error", task_id)
+        # 失败状态落库单独保护：即使落库再失败也不阻断 error 事件推送
+        try:
+            if task is not None:
+                task.status = "failed"
+                task.finished_at = datetime.now(timezone.utc)
+            db.add(TaskEvent(task_id=task_id, event="error", payload={"message": "执行失败"}))
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception("task %s failed-status persist error", task_id)
+        _push_ws(
+            task.session_id if task is not None else None,
+            "error",
+            {"code": "INTERNAL", "message": "执行失败"},
+            task_id=task_id,
+        )
     finally:
         db.close()
 
@@ -148,7 +170,7 @@ def loop() -> None:
                     task.started_at = datetime.now(timezone.utc)
                     db.commit()
                     db.refresh(task)
-                    _run_task(task)
+                    _run_task(task.id)
         except Exception:
             logger.exception("worker loop error")
         finally:
