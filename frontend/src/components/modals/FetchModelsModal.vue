@@ -143,24 +143,37 @@ function handleBatchAdd() {
   flex-direction: column;
   gap: 4px;
 }
+@keyframes sel-glow {
+  0%, 100% {
+    border-color: rgba(14, 165, 233, 0.7);
+    box-shadow: 0 0 12px rgba(14, 165, 233, 0.16);
+  }
+  50% {
+    border-color: rgba(99, 102, 241, 0.85);
+    box-shadow: 0 0 18px rgba(99, 102, 241, 0.26);
+  }
+}
+
 .model-item-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 12px;
-  border-radius: 6px;
+  padding: 9px 12px;
+  border-radius: 8px;
   background: var(--bg-card, #ffffff);
-  border: 1px solid transparent;
+  border: 1px solid var(--border-subtle, rgba(229, 231, 235, 0.8));
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .model-item-row:hover {
-  background: rgba(14, 165, 233, 0.05);
-  border-color: rgba(14, 165, 233, 0.3);
+  background: rgba(14, 165, 233, 0.04);
+  border-color: rgba(14, 165, 233, 0.4);
+  transform: translateX(2px);
 }
 .model-item-row.selected {
-  background: rgba(14, 165, 233, 0.1);
-  border-color: var(--accent-info, #0284c7);
+  background: linear-gradient(120deg, rgba(14, 165, 233, 0.12), rgba(99, 102, 241, 0.1), rgba(168, 85, 247, 0.08));
+  background-size: 200% 200%;
+  animation: sel-glow 2.8s ease-in-out infinite;
 }
 .model-meta {
   display: flex;

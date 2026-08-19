@@ -515,7 +515,11 @@ const vendorGroups = computed<VendorGroup[]>(() => {
     let vName = '自定义端点 / 内部代理'
     let icon = '🌐'
 
-    if (url.includes('xiaomimimo') || name.includes('mimo') || model.includes('mimo')) {
+    if (url.includes('nvidia') || name.includes('nvidia') || model.includes('nvidia')) {
+      key = 'nvidia'
+      vName = 'NVIDIA NIM'
+      icon = '🟢'
+    } else if (url.includes('xiaomimimo') || name.includes('mimo') || model.includes('mimo')) {
       key = 'mimo'
       vName = 'Xiaomi Mimo'
       icon = '⚡'
@@ -531,22 +535,50 @@ const vendorGroups = computed<VendorGroup[]>(() => {
       key = 'deepseek'
       vName = 'DeepSeek'
       icon = '🐋'
+    } else if (url.includes('siliconflow') || name.includes('silicon') || name.includes('硅基')) {
+      key = 'siliconflow'
+      vName = 'SiliconFlow (硅基流动)'
+      icon = '⚡'
     } else if (url.includes('aliyuncs') || url.includes('dashscope') || name.includes('qwen') || model.includes('qwen')) {
       key = 'qwen'
       vName = 'Alibaba Qwen (通义千问)'
       icon = '☁️'
+    } else if (url.includes('volces.com') || name.includes('doubao') || name.includes('火山') || name.includes('豆包')) {
+      key = 'volcengine'
+      vName = 'ByteDance Doubao (火山引擎)'
+      icon = '🌋'
+    } else if (url.includes('qianfan') || url.includes('baidubce') || name.includes('ernie') || name.includes('文心') || name.includes('千帆')) {
+      key = 'qianfan'
+      vName = 'Baidu Qianfan (百度千帆)'
+      icon = '🐻'
+    } else if (url.includes('hunyuan') || name.includes('混元')) {
+      key = 'hunyuan'
+      vName = 'Tencent Hunyuan (腾讯混元)'
+      icon = '🐧'
+    } else if (url.includes('groq') || name.includes('groq')) {
+      key = 'groq'
+      vName = 'Groq'
+      icon = '⚡'
     } else if (url.includes('11434') || url.includes('ollama') || name.includes('ollama')) {
       key = 'ollama'
       vName = 'Ollama (本地私有)'
       icon = '🦙'
-    } else if (url.includes('bigmodel.cn') || name.includes('glm') || model.includes('glm')) {
+    } else if (url.includes('bigmodel.cn') || name.includes('glm') || model.includes('glm') || name.includes('智谱')) {
       key = 'zhipu'
       vName = 'Zhipu GLM (智谱清言)'
       icon = '🌟'
-    } else if (url.includes('moonshot') || name.includes('kimi') || name.includes('moonshot')) {
+    } else if (url.includes('moonshot') || name.includes('kimi') || name.includes('moonshot') || name.includes('月之暗面')) {
       key = 'moonshot'
       vName = 'Moonshot (月之暗面)'
       icon = '🌙'
+    } else if (url.includes('mistral') || name.includes('mistral')) {
+      key = 'mistral'
+      vName = 'Mistral AI'
+      icon = '🌪️'
+    } else if (url.includes('together') || name.includes('together')) {
+      key = 'together'
+      vName = 'Together AI'
+      icon = '🤝'
     }
 
     if (!groups[key]) {
@@ -725,19 +757,25 @@ onMounted(loadProfiles)
 }
 .vendor-group-card {
   border: 1px solid var(--border-subtle, rgba(229, 231, 235, 1));
-  border-radius: 12px;
-  background: var(--bg-surface, #fafafa);
-  padding: 16px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, var(--bg-surface, #fafafa) 0%, rgba(255, 255, 255, 0.6) 100%);
+  padding: 16px 18px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+  transition: all 0.2s ease;
+}
+.vendor-group-card:hover {
+  border-color: rgba(99, 102, 241, 0.25);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.03);
 }
 .vendor-group-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   border-bottom: 1px solid var(--border-subtle, rgba(229, 231, 235, 0.6));
-  padding-bottom: 10px;
+  padding-bottom: 12px;
 }
 .vendor-title-row {
   display: flex;
@@ -745,12 +783,16 @@ onMounted(loadProfiles)
   gap: 8px;
 }
 .vendor-badge {
-  font-size: 18px;
+  font-size: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 .vendor-name {
   font-size: 15px;
   font-weight: 700;
   color: var(--text-primary, #111827);
+  letter-spacing: -0.01em;
 }
 .vendor-count-badge {
   font-size: 11px;
@@ -759,6 +801,7 @@ onMounted(loadProfiles)
   padding: 2px 8px;
   border-radius: 999px;
   font-weight: 600;
+  border: 1px solid rgba(79, 70, 229, 0.15);
 }
 .vendor-url {
   font-size: 11.5px;
@@ -770,28 +813,46 @@ onMounted(loadProfiles)
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: 12px;
 }
+
+/* 模型芯片卡片与流光动效 */
+@keyframes core-mesh {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+@keyframes pulse-border {
+  0%, 100% { border-color: rgba(99, 102, 241, 0.55); box-shadow: 0 0 12px rgba(99, 102, 241, 0.12); }
+  50% { border-color: rgba(56, 189, 248, 0.85); box-shadow: 0 0 20px rgba(56, 189, 248, 0.22); }
+}
+
 .model-chip-card {
   background: var(--bg-card, #ffffff);
   border: 1px solid var(--border-subtle, rgba(229, 231, 235, 1));
-  border-radius: 10px;
-  padding: 12px;
+  border-radius: 12px;
+  padding: 14px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  transition: all 0.18s ease;
+  gap: 10px;
+  position: relative;
+  transition: all 0.22s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .model-chip-card:hover {
-  border-color: rgba(79, 70, 229, 0.4);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+  transform: translateY(-2px);
+  border-color: rgba(99, 102, 241, 0.45);
+  box-shadow: 0 6px 20px -2px rgba(99, 102, 241, 0.1);
 }
 .model-chip-card.is-agent-core {
-  border-color: #818cf8;
-  background: linear-gradient(180deg, rgba(99, 102, 241, 0.04) 0%, rgba(255, 255, 255, 1) 100%);
+  border-width: 1.5px;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.07), rgba(56, 189, 248, 0.08), rgba(168, 85, 247, 0.06), rgba(99, 102, 241, 0.07));
+  background-size: 300% 300%;
+  animation: core-mesh 6s ease infinite, pulse-border 3.2s ease-in-out infinite;
+  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.15);
 }
 .model-chip-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
 }
 .model-chip-title-wrap {
   display: flex;
@@ -814,9 +875,10 @@ onMounted(loadProfiles)
 }
 .model-id-tag {
   background: rgba(15, 23, 42, 0.06);
-  padding: 2px 6px;
-  border-radius: 4px;
+  padding: 2px 7px;
+  border-radius: 5px;
   font-weight: 500;
+  color: var(--text-primary, #1e293b);
 }
 .protocol-tag {
   color: var(--text-tertiary, #9ca3af);
@@ -825,7 +887,9 @@ onMounted(loadProfiles)
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-top: 2px;
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(229, 231, 235, 0.5);
 }
 .btn-xs {
   font-size: 12px;

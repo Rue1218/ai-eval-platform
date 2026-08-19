@@ -169,25 +169,45 @@ const protocolOptions = [
 
 /** 主流供应商预设选项 */
 const vendorOptions = [
+  { label: 'NVIDIA NIM (英伟达推理云)', value: 'nvidia' },
   { label: 'Xiaomi Mimo (小米 Mimo 端点)', value: 'mimo' },
   { label: 'OpenAI (官方端点)', value: 'openai' },
   { label: 'Anthropic Claude (官方端点)', value: 'anthropic' },
   { label: 'DeepSeek (深度求索)', value: 'deepseek' },
+  { label: 'SiliconFlow (硅基流动)', value: 'siliconflow' },
   { label: 'Alibaba Qwen (通义千问 / 阿里云百炼)', value: 'qwen' },
+  { label: 'ByteDance Doubao (火山引擎豆包)', value: 'volcengine' },
+  { label: 'Baidu Qianfan (百度文心千帆)', value: 'qianfan' },
+  { label: 'Tencent Hunyuan (腾讯混元)', value: 'hunyuan' },
+  { label: 'Groq (LPU 极速推理)', value: 'groq' },
   { label: 'Ollama (本地私有端点)', value: 'ollama' },
   { label: 'Zhipu GLM (智谱清言)', value: 'zhipu' },
   { label: 'Moonshot AI (月之暗面 Kimi)', value: 'moonshot' },
+  { label: 'Mistral AI', value: 'mistral' },
+  { label: 'Together AI', value: 'together' },
+  { label: '01.AI (零一万物)', value: 'lingyi' },
+  { label: 'Baichuan (百川智能)', value: 'baichuan' },
 ]
 
 const VENDOR_MAP: Record<string, { name: string; base_url: string; protocol: ProtocolType; model: string }> = {
+  nvidia: { name: 'NVIDIA NIM', base_url: 'https://integrate.api.nvidia.com/v1', protocol: 'openai_chat', model: 'meta/llama-3.3-70b-instruct' },
   mimo: { name: 'Xiaomi Mimo', base_url: 'https://token-plan-cn.xiaomimimo.com', protocol: 'openai_chat', model: 'mimo-v2.5-pro' },
   openai: { name: 'OpenAI', base_url: 'https://api.openai.com/v1', protocol: 'openai_chat', model: 'gpt-4o' },
   anthropic: { name: 'Anthropic Claude', base_url: 'https://api.anthropic.com', protocol: 'anthropic_messages', model: 'claude-3-7-sonnet-20250219' },
   deepseek: { name: 'DeepSeek', base_url: 'https://api.deepseek.com/v1', protocol: 'openai_chat', model: 'deepseek-chat' },
+  siliconflow: { name: 'SiliconFlow', base_url: 'https://api.siliconflow.cn/v1', protocol: 'openai_chat', model: 'deepseek-ai/DeepSeek-V3' },
   qwen: { name: 'Alibaba Qwen', base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', protocol: 'openai_chat', model: 'qwen-plus' },
+  volcengine: { name: 'ByteDance Doubao', base_url: 'https://ark.cn-beijing.volces.com/api/v3', protocol: 'openai_chat', model: 'doubao-pro-32k' },
+  qianfan: { name: 'Baidu Qianfan', base_url: 'https://qianfan.baidubce.com/v2', protocol: 'openai_chat', model: 'ernie-4.0-8k-latest' },
+  hunyuan: { name: 'Tencent Hunyuan', base_url: 'https://api.hunyuan.cloud.tencent.com/v1', protocol: 'openai_chat', model: 'hunyuan-standard' },
+  groq: { name: 'Groq', base_url: 'https://api.groq.com/openai/v1', protocol: 'openai_chat', model: 'llama-3.3-70b-versatile' },
   ollama: { name: 'Ollama Local', base_url: 'http://localhost:11434', protocol: 'openai_chat', model: 'llama3:latest' },
   zhipu: { name: 'Zhipu GLM', base_url: 'https://open.bigmodel.cn/api/paas/v4', protocol: 'openai_chat', model: 'glm-4-plus' },
   moonshot: { name: 'Moonshot AI', base_url: 'https://api.moonshot.cn/v1', protocol: 'openai_chat', model: 'moonshot-v1-8k' },
+  mistral: { name: 'Mistral AI', base_url: 'https://api.mistral.ai/v1', protocol: 'openai_chat', model: 'mistral-large-latest' },
+  together: { name: 'Together AI', base_url: 'https://api.together.xyz/v1', protocol: 'openai_chat', model: 'meta-llama/Llama-3.3-70B-Instruct-Turbo' },
+  lingyi: { name: '01.AI', base_url: 'https://api.lingyiwanwu.com/v1', protocol: 'openai_chat', model: 'yi-large' },
+  baichuan: { name: 'Baichuan AI', base_url: 'https://api.baichuan-ai.com/v1', protocol: 'openai_chat', model: 'Baichuan4' },
 }
 
 function handleSelectVendor(val: string | null) {
