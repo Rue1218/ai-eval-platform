@@ -835,12 +835,18 @@ pre.code {
   display: flex; align-items: flex-end; gap: 10px;
   transition: border-color .15s ease, box-shadow .15s ease;
 }
-.composer-inner:focus-within { border-color: var(--accent-ai); box-shadow: var(--focus-ring); }
-.composer textarea {
-  flex: 1; border: 0; outline: none; resize: none;
-  font-family: var(--font-chat); font-size: 15px; line-height: 1.55;
-  min-height: 44px; max-height: 160px; padding: 10px 4px;
-  background: transparent; color: var(--text-primary);
+.composer textarea,
+.composer-card textarea,
+.composer-textarea {
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  resize: none;
+  font-family: var(--font-chat);
+  font-size: 14.5px;
+  line-height: 1.55;
+  background: transparent !important;
+  color: var(--text-primary);
 }
 .composer-btn {
   width: 36px; height: 36px; flex: 0 0 36px;

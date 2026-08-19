@@ -608,6 +608,7 @@
             placeholder="输入任何评测问题或需求，Shift + Enter 换行，Enter 发送"
             @keydown="handleKeydown"
             @input="adjustTextareaHeight"
+            @paste="() => nextTick(adjustTextareaHeight)"
           ></textarea>
 
           <!-- 下半区：操作底栏（附件 + 模型选择 + 发送按钮） -->
@@ -1193,15 +1194,24 @@ function scrollToBottom(force = false) {
   })
 }
 
-/** 自适应调整多行输入框高度（最小 40px，最大 200px 限制，超高自动滚动） */
+/** 自适应调整多行输入框高度（最小 38px，最大 200px 限制，超高自动滚动） */
 function adjustTextareaHeight() {
-  if (!textareaRef.value) return
-  textareaRef.value.style.height = 'auto'
-  const scrollH = textareaRef.value.scrollHeight
-  const targetH = Math.min(200, Math.max(40, scrollH))
-  textareaRef.value.style.height = `${targetH}px`
-  textareaRef.value.style.overflowY = scrollH > 200 ? 'auto' : 'hidden'
+  const el = textareaRef.value
+  if (!el) return
+  // 先将高度置为 0px，强制浏览器依据当前文本行数精确重算真实的 scrollHeight
+  el.style.height = '0px'
+  const scrollH = el.scrollHeight
+  const minH = 38
+  const maxH = 200
+  const targetH = Math.min(maxH, Math.max(minH, scrollH))
+  el.style.height = `${targetH}px`
+  el.style.overflowY = scrollH > maxH ? 'auto' : 'hidden'
 }
+
+// 深度监听输入文本变化，无论是快捷 Prompt 填入还是换行均即时同步高度
+watch(inputText, () => {
+  nextTick(adjustTextareaHeight)
+})
 
 function triggerFileInput() {
   fileInputRef.value?.click()
@@ -2239,20 +2249,32 @@ onBeforeUnmount(() => {
 
 /* 多行文本域自适应高度（最小 38px，最大 200px 限制） */
 .composer-textarea {
-  width: 100%;
-  border: 0;
-  outline: none;
-  resize: none;
-  font-family: var(--font-chat, inherit);
-  font-size: 14.5px;
-  line-height: 1.55;
-  min-height: 38px;
-  max-height: 200px;
-  padding: 4px 6px;
-  background: transparent;
-  color: var(--text-primary);
-  box-sizing: border-box;
+  width: 100% !important;
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  resize: none !important;
+  font-family: var(--font-chat, inherit) !important;
+  font-size: 14.5px !important;
+  line-height: 1.55 !important;
+  min-height: 38px !important;
+  max-height: 200px !important;
+  padding: 4px 6px !important;
+  background: transparent !important;
+  color: var(--text-primary) !important;
+  box-sizing: border-box !important;
   overflow-y: hidden;
+  -webkit-appearance: none !important;
+  -moz-appearance: none !important;
+  appearance: none !important;
+}
+
+.composer-textarea:focus,
+.composer-textarea:hover,
+.composer-textarea:active {
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
 }
 
 .composer-textarea::placeholder {
