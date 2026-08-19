@@ -4,7 +4,14 @@
     <div class="panel glow mb16" style="--glow-c: var(--c-tasks)">
       <div class="row-between" style="margin-bottom: 10px">
         <span class="eyebrow">近 24h 吞吐 · 状态分布大盘</span>
-        <span class="small tertiary mono">Worker 节点在线 8/10 · 调度周期 500ms</span>
+        <router-link
+          to="/dispatch"
+          class="small tertiary mono"
+          style="display: inline-flex; align-items: center; gap: 5px; text-decoration: none; cursor: pointer; transition: color 0.15s"
+          title="点击直达调度中心，查看 Worker 节点池与实时算力拓扑"
+        >
+          <span>Worker 节点在线 8/10 · 调度中心 🪐</span>
+        </router-link>
       </div>
       <div class="row wrap" style="gap: 28px; align-items: center">
         <div>
@@ -223,6 +230,15 @@
             <td style="text-align: right">
               <div class="row-actions" style="justify-content: flex-end">
                 <button class="link-btn" @click="handleOpenDetail(t)">详情</button>
+                <router-link
+                  v-if="['queued', 'running', 'awaiting_case_confirm'].includes(t.status)"
+                  :to="{ path: '/dispatch', query: { task_id: t.id } }"
+                  class="link-btn"
+                  style="color: var(--accent-ai); font-weight: 500"
+                  title="在调度星图中定位该任务执行链路"
+                >
+                  🪐 调度
+                </router-link>
                 <button
                   v-if="canCancel(t)"
                   class="link-btn danger"
@@ -409,6 +425,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { useMessage, useDialog, NSelect, NInput, NInputNumber, NCheckbox, NModal, NDrawer, NDrawerContent } from 'naive-ui'
 import { api } from '../api/http'
 import type { Task, TaskKind, Profile, Dataset, KnowledgeBase } from '../api/types'
@@ -420,6 +437,7 @@ import TaskDetailDrawer from '../components/drawers/TaskDetailDrawer.vue'
 
 const message = useMessage()
 const dialog = useDialog()
+const route = useRoute()
 const modeStore = useModeStore()
 
 const tasks = ref<Task[]>([])
@@ -654,10 +672,22 @@ async function loadTasks() {
       status: filterStatus.value || undefined,
     })
     tasks.value = Array.isArray(res) ? res : ((res as any).items || [])
+    checkRouteTaskId()
   } catch (err: any) {
     message.error(err.message || '加载任务列表失败')
   } finally {
     loading.value = false
+  }
+}
+
+function checkRouteTaskId() {
+  const targetId = route.query.id as string | undefined
+  if (targetId) {
+    const match = tasks.value.find(t => t.id === targetId || t.id.startsWith(targetId))
+    if (match) {
+      handleOpenDetail(match)
+      message.info(`已聚焦任务 ${match.id.substring(0, 8)} 详情`)
+    }
   }
 }
 
@@ -674,6 +704,11 @@ function formatRelativeTime(dateStr?: string) {
 
 onMounted(() => {
   loadTasks()
+})
+
+// 监听路由参数变化，支持外部页面直接透传跳转联动
+watch(() => route.query.id, () => {
+  checkRouteTaskId()
 })
 
 // 顶栏切换后立即清空局部筛选并重新拉取全量任务，统计大盘与表格始终使用当前模式数据。

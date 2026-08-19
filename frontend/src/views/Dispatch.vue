@@ -456,8 +456,8 @@
                 :key="row.id"
                 class="gantt-row"
                 :class="{ child: row.isChild }"
-                :title="`${row.label}\n${statusLabel(row.status)} · ${fmtTime(row.start)} → ${fmtTime(row.end)}`"
-                @click="goTasks"
+                :title="`${row.label}\n${statusLabel(row.status)} · ${fmtTime(row.start)} → ${fmtTime(row.end)}\n点击前往任务中心查看详情`"
+                @click="goToTaskDetail(row.id)"
               >
                 <div class="gantt-name">
                   <span v-if="row.isChild" class="tertiary" style="font-size: 10px">↳ 派生压测</span>
@@ -507,7 +507,10 @@
             <div v-if="pinnedTask.progress != null" class="tt-line"><span class="tertiary">进度</span><span class="tt-val mono">{{ pinnedTask.progress }}%</span></div>
             <div v-if="pinnedTask.parentId" class="tt-line"><span class="tertiary">派生自</span><span class="tt-val mono">{{ pinnedTask.parentId.substring(0, 8) }}</span></div>
           </div>
-          <button class="btn btn-primary btn-sm" style="width: 100%; margin-top: 8px" @click="goTasks">前往任务中心</button>
+          <div class="row" style="gap: 6px; margin-top: 8px">
+            <button class="btn btn-secondary btn-sm grow" @click="goToTaskDetail(pinnedTask.id)">在任务中心查看 ↗</button>
+            <button v-if="pinnedTask.status === 'succeeded'" class="btn btn-ai btn-sm" @click="goToReport(pinnedTask.id)">查看报告 📊</button>
+          </div>
         </div>
 
         <!-- 扫描线装饰 -->
@@ -615,7 +618,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import KindTag from '../components/common/KindTag.vue'
 import WorkflowDesigner from '../components/workflow/WorkflowDesigner.vue'
@@ -625,6 +628,7 @@ import { useModeStore } from '../stores/mode'
 
 const message = useMessage()
 const router = useRouter()
+const route = useRoute()
 const modeStore = useModeStore()
 // live 模式接真实调度 API（§3.13）；mock 模式保留本地仿真演示
 const liveMode = !api.isMock()
@@ -1214,6 +1218,41 @@ function goTasks() {
   router.push('/tasks')
 }
 
+/** 前往任务中心并自动打开指定任务详情抽屉 */
+function goToTaskDetail(taskId?: string) {
+  if (taskId) {
+    router.push({ path: '/tasks', query: { id: taskId } })
+  } else {
+    router.push('/tasks')
+  }
+}
+
+/** 前往报告中心查看评测结果 */
+function goToReport(taskId?: string) {
+  if (taskId) {
+    router.push({ path: '/reports', query: { task_id: taskId } })
+  } else {
+    router.push('/reports')
+  }
+}
+
+/** 处理从外部（如任务中心）传入的任务高亮聚焦参数 */
+function handleRouteTaskFocus() {
+  const tid = (route.query.task_id || route.query.highlight_task) as string | undefined
+  if (tid) {
+    activeTab.value = 'monitor'
+    const match = taskNodes.value.find(t => t.id === tid || t.shortId === tid || t.id.startsWith(tid))
+    if (match) {
+      pinTask(match)
+      flashTask(match.id)
+      focusedSkill.value = match.kind
+      message.info(`已聚焦任务 ${match.shortId} 调度拓扑链路`)
+    } else {
+      flashTask(tid)
+    }
+  }
+}
+
 /* AI 建议结构化：携带建议动作（策略切换/容量调整），采纳时按内容生效（对齐原型 dispatch.html） */
 interface AiAdvice {
   text: string
@@ -1719,9 +1758,11 @@ onMounted(async () => {
     // 真实模式：首屏全量加载后按 3s 节拍轮询事件，6s 全量刷新，不启动本地仿真
     await loadLiveAll()
     await pollLiveEvents()
+    handleRouteTaskFocus()
     pollTimer = window.setInterval(liveTick, 3000)
     return
   }
+  handleRouteTaskFocus()
   timer = setInterval(() => {
     if (!isRunning.value) return
     // 随机微调负载
@@ -1733,6 +1774,11 @@ onMounted(async () => {
   }, 2000)
 
   dispatchTimer = setInterval(dispatchTick, 2600)
+})
+
+// 监听路由参数变化（如由任务中心跳转过来时）
+watch(() => route.query.task_id || route.query.highlight_task, () => {
+  handleRouteTaskFocus()
 })
 
 onBeforeUnmount(() => {
