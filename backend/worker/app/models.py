@@ -182,3 +182,50 @@ class UsageLedger(Base):
     est_cost_usd = Column(Float, nullable=False, default=0.0)
     created_at = Column(DateTime(timezone=True), default=utcnow)
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class StoredFile(Base):
+    """文件元数据最小映射：testcase 任务读来源文档（PRD/OpenAPI/Excel）路径。"""
+
+    __tablename__ = "files"
+
+    id = Column(String, primary_key=True)
+    filename = Column(String)
+    content_type = Column(String, nullable=True)
+    storage_path = Column(String)
+
+
+class CaseSet(Base):
+    """用例集最小映射：testcase 执行器写入，确认/废弃由 api 侧联动任务状态。"""
+
+    __tablename__ = "case_sets"
+
+    id = Column(String, primary_key=True, default=uuid_str)
+    task_id = Column(String, index=True)
+    name = Column(String)
+    status = Column(String)
+    generated_count = Column(Integer)
+    confirmed_count = Column(Integer)
+    checks = Column(JSONB, default=list)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+
+
+class CaseItem(Base):
+    """用例行最小映射：六策略字段 + 扩展列，批量落库。"""
+
+    __tablename__ = "case_items"
+
+    id = Column(String, primary_key=True, default=uuid_str)
+    case_set_id = Column(String, index=True)
+    strategy = Column(String)
+    priority = Column(String)
+    module = Column(String)
+    name = Column(String)
+    precondition = Column(Text)
+    steps = Column(Text)
+    expected = Column(Text)
+    test_type = Column(String)
+    extras = Column(JSONB, default=dict)
+    sort_order = Column(Integer, default=0)
+    created_at = Column(DateTime(timezone=True), default=utcnow)

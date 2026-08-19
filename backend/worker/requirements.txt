@@ -2,3 +2,5 @@ sqlalchemy==2.0.36
 psycopg2-binary==2.9.10
 # Worker 解密协议档 API Key 需要 Fernet，版本与 api 容器保持一致
 cryptography==44.0.0
+# testcase 任务解析 Excel 来源文档，版本与 api 容器保持一致
+openpyxl==3.1.5

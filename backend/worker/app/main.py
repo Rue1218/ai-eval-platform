@@ -1,8 +1,11 @@
 """Worker 主循环：轮询 PG 任务队列并按 kind 分发执行器。
 
-- ``benchmark``：M2 起走真实执行器（三协议调用 + 规则评分，见 benchmark.py）；
-- ``rag`` / ``testcase`` / ``stress``：仍为骨架 mock（M3/M4 替换为真实实现），
-  与真实执行保持同一领取入口，替换时不动本文件的分发结构。
+- ``benchmark`` / ``testcase``：真实执行器（见 benchmark.py / testcase.py）；
+- ``rag`` / ``stress``：仍为骨架 mock（M3/M4 替换为真实实现），与真实执行
+  保持同一领取入口，替换时不动本文件的分发结构。
+
+主循环同时承担 72h 用例确认超时扫描（PRD 3.3 / 5.4.1）：generated 状态的
+用例集过期后联动 awaiting_case_confirm 任务与用例集双双置 cancelled。
 """
 
 import logging
@@ -12,7 +15,8 @@ from datetime import datetime, timezone
 from .benchmark import run_benchmark
 from .db import DATABASE_URL, SessionLocal
 from .events import push_ws
-from .models import Report, Setting, Task, TaskEvent
+from .models import CaseSet, Report, Setting, Task, TaskEvent
+from .testcase import run_testcase
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("worker")
@@ -21,6 +25,9 @@ TERMINAL = {"succeeded", "failed", "cancelled"}
 
 # 平台并发上限默认值（PRD 3.4 / 后端计划 W4）：与 api 侧 DEFAULT_SETTINGS 保持一致
 DEFAULT_MAX_RUNNING_TASKS = 3
+
+# 72h 超时扫描节流间隔（秒）：主循环 1s 一轮，扫描器每 60s 实际执行一次
+EXPIRE_SCAN_INTERVAL_S = 60.0
 
 
 def _max_running_tasks(db) -> int:
@@ -56,14 +63,22 @@ def _run_task(task_id: str) -> None:
         db.commit()
 
         if task.kind == "benchmark":
-            # M2 起真实执行：三协议调用 + 规则评分 + 预算熔断 + 断点续跑；
+            # M2 真实执行：三协议调用 + 规则评分 + 预算熔断 + 断点续跑；
             # 执行器自管数据库会话与任务终态，这里提前释放本层会话
             db.close()
             logger.info("task %s (benchmark) dispatch to real executor", task_id)
             run_benchmark(task_id)
             return
 
-        # ─── 以下为骨架 mock 流程（rag / testcase / stress，M3/M4 替换） ───
+        if task.kind == "testcase":
+            # M2 W8 真实执行：六策略 LLM 生成 + 自检红字 + awaiting_case_confirm；
+            # 执行器自管数据库会话与任务状态流转
+            db.close()
+            logger.info("task %s (testcase) dispatch to real executor", task_id)
+            run_testcase(task_id)
+            return
+
+        # ─── 以下为骨架 mock 流程（rag / stress，M3/M4 替换） ───
         time.sleep(2)
 
         # 期间若被取消则停止
@@ -88,9 +103,6 @@ def _run_task(task_id: str) -> None:
         push_ws(task.session_id, "progress", {"percent": 100, "done": 1, "total": 1, "message": "任务已完成"}, task_id=task.id)
         if report_id:
             push_ws(task.session_id, "report", {"report_id": report_id}, task_id=task.id)
-        else:
-            # testcase 等无报告类型：不允许推送空 report_id（前端会据此跳转 /reports/undefined）
-            push_ws(task.session_id, "thought", {"text": "任务已完成（succeeded）。用例生成类任务请到「用例」页确认入库。"}, task_id=task.id)
         logger.info("task %s (%s) succeeded (mock)", task.id, task.kind)
     except Exception as exc:
         db.rollback()
@@ -122,8 +134,66 @@ def _run_task(task_id: str) -> None:
         db.close()
 
 
+def _expire_stale_case_confirmations(db) -> int:
+    """72h 用例确认超时扫描（PRD 3.3 / 5.4.1）。
+
+    generated 状态且 ``expires_at`` 已过期的用例集 → cancelled；关联任务仍在
+    ``awaiting_case_confirm`` 时同步取消并推送 WS 事件。任务已被单独取消的
+    悬挂用例集也一并清理（扫描器只改 case set / task 状态，不动其它域）。
+    返回本次取消的用例集数量，供日志与测试观测。
+    """
+    now = datetime.now(timezone.utc)
+    stale = (
+        db.query(CaseSet)
+        .filter(
+            CaseSet.status == "generated",
+            CaseSet.expires_at.isnot(None),
+            CaseSet.expires_at < now,
+        )
+        .all()
+    )
+    if not stale:
+        return 0
+    for case_set in stale:
+        case_set.status = "cancelled"
+        if not case_set.task_id:
+            continue
+        task = (
+            db.query(Task)
+            .filter(Task.id == case_set.task_id, Task.status == "awaiting_case_confirm")
+            .first()
+        )
+        if task:
+            task.status = "cancelled"
+            task.finished_at = now
+            task.progress = {**(task.progress or {}), "message": "用例确认超时，任务已自动取消"}
+            db.add(
+                TaskEvent(
+                    task_id=task.id,
+                    event="cancelled",
+                    message="用例确认超过 72h，任务自动取消",
+                    payload={"case_set_id": case_set.id},
+                )
+            )
+    db.commit()
+    # 推送放事务外：逐个任务通知（扫描量小，逐条推送成本可控）
+    for case_set in stale:
+        if case_set.task_id:
+            task = db.query(Task).filter(Task.id == case_set.task_id).first()
+            if task and task.session_id:
+                push_ws(
+                    task.session_id,
+                    "progress",
+                    {"percent": 100, "done": 1, "total": 1, "message": "用例确认超时，任务已自动取消"},
+                    task_id=task.id,
+                )
+    logger.info("expired %d stale case set(s)", len(stale))
+    return len(stale)
+
+
 def loop() -> None:
     """轮询任务队列：受平台并发闸门约束，超限时 queued 任务保持排队。"""
+    last_expire_scan = 0.0
     while True:
         db = SessionLocal()
         try:
@@ -149,6 +219,17 @@ def loop() -> None:
             logger.exception("worker loop error")
         finally:
             db.close()
+        # 72h 超时扫描：节流执行，避免每秒全表扫（表量级小，代价可忽略）
+        if time.monotonic() - last_expire_scan >= EXPIRE_SCAN_INTERVAL_S:
+            last_expire_scan = time.monotonic()
+            scan_db = SessionLocal()
+            try:
+                _expire_stale_case_confirmations(scan_db)
+            except Exception:
+                scan_db.rollback()
+                logger.exception("case confirmation expire scan error")
+            finally:
+                scan_db.close()
         time.sleep(1)
 
 
