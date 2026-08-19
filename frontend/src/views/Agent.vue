@@ -1328,6 +1328,7 @@ function handleUserSend(text: string, files: any[] = []) {
   }
 
   if (agentWs?.isConnected) {
+    console.log('%c[Agent] 🚀 发送用户消息:', 'color: #3b82f6; font-weight: bold;', text)
     // 打字占位气泡：服务端 LLM 意图识别期间给用户即时反馈，收到任意事件后移除
     events.value.push({ type: 'typing' })
     scrollToBottom()
