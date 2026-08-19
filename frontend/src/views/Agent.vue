@@ -1961,7 +1961,13 @@ function typewriteTo(item: StreamItem, fullText: string) {
 
 function handleWsEvent(ev: WsServerEvent) {
   // pong 心跳不参与交互流；其余任何事件到达都意味着本轮已出结果，移除打字占位
-  if (ev.event !== 'pong') dismissTyping()
+  if (ev.event !== 'pong') {
+    dismissTyping()
+    const isStream = ev.payload && typeof ev.payload.stream === 'string'
+    if (!isStream) {
+      console.log(`%c[Agent WS] 📩 收到事件: ${ev.event}`, 'color: #8b5cf6; font-weight: bold;', ev)
+    }
+  }
   const p = ev.payload || {}
   switch (ev.event) {
     case 'thought': {
@@ -1970,8 +1976,12 @@ function handleWsEvent(ev: WsServerEvent) {
         const delta = String(p.text || '')
         if (delta) {
           const target = [...events.value].reverse().find(e => e.type === 'thought' && !e.done)
-          if (target) target.text = (target.text || '') + delta
-          else events.value.push({ type: 'thought', text: delta, done: false, collapsed: false })
+          if (target) {
+            target.text = (target.text || '') + delta
+          } else {
+            console.log('%c[Agent] 💭 深度思考链流式输出中...', 'color: #10b981; font-weight: bold;')
+            events.value.push({ type: 'thought', text: delta, done: false, collapsed: false })
+          }
           scrollToBottom()
         }
         break
@@ -1999,6 +2009,11 @@ function handleWsEvent(ev: WsServerEvent) {
         think.collapsed = true
         if (p.latency_ms !== undefined) think.latency_ms = p.latency_ms
       }
+      console.log('%c[Agent] 💡 思考完成 / 助手回复交付:', 'color: #10b981; font-weight: bold;', {
+        chars: text.length,
+        latency: p.latency_ms ? `${p.latency_ms}ms` : '未知',
+        text: text.slice(0, 100) + (text.length > 100 ? '...' : ''),
+      })
       if (text) {
         const streaming = [...events.value].reverse().find(e => e.type === 'agent' && e.streaming)
         if (streaming) {
@@ -2021,6 +2036,7 @@ function handleWsEvent(ev: WsServerEvent) {
       break
     }
     case 'tool_call': {
+      console.log('%c[Agent] ⚙️ 短工具调用:', 'color: #f59e0b; font-weight: bold;', p.name, p.arguments)
       finishLiveThought()
       events.value.push({
         type: 'tool',
@@ -2033,6 +2049,11 @@ function handleWsEvent(ev: WsServerEvent) {
       break
     }
     case 'tool_result': {
+      console.log('%c[Agent] ✅ 短工具完成:', 'color: #10b981; font-weight: bold;', p.name, {
+        ok: p.ok,
+        latency: `${p.latency_ms || 0}ms`,
+        data: p.data || p.error,
+      })
       const target = [...events.value].reverse().find(x => x.type === 'tool' && x.tool === p.name)
       if (target) {
         target.result = p.ok ? p.data : p.error
@@ -2049,6 +2070,7 @@ function handleWsEvent(ev: WsServerEvent) {
       break
     }
     case 'confirm': {
+      console.log('%c[Agent] 📋 任务确认卡到达:', 'color: #8b5cf6; font-weight: bold;', p)
       lastConfirmKind = p.kind || 'benchmark'
       finishLiveThought()
       isGenerating.value = false
