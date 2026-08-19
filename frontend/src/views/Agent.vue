@@ -126,6 +126,11 @@
               </template>
             </div>
 
+            <!-- 2.1.1 打字占位气泡：LLM 意图识别期间的即时反馈（收到事件后由 dismissTyping 移除） -->
+            <div v-else-if="item.type === 'typing'" class="msg-agent typing-bubble">
+              <span class="tdot"></span><span class="tdot"></span><span class="tdot"></span>
+            </div>
+
             <!-- 2.3 短 MCP 工具调用卡 -->
             <div
               v-else-if="item.type === 'tool'"
@@ -791,7 +796,7 @@ const sparkLastPoint = computed(() => {
 })
 
 interface StreamItem {
-  type: 'user' | 'agent' | 'thought' | 'tool' | 'confirm' | 'report' | 'error'
+  type: 'user' | 'agent' | 'thought' | 'tool' | 'confirm' | 'report' | 'error' | 'typing'
   text?: string
   done?: boolean
   collapsed?: boolean
@@ -1140,6 +1145,9 @@ function handleUserSend(text: string, files: any[] = []) {
   }
 
   if (agentWs?.isConnected) {
+    // 打字占位气泡：服务端 LLM 意图识别期间给用户即时反馈，收到任意事件后移除
+    events.value.push({ type: 'typing' })
+    scrollToBottom()
     // 契约：attachments = [{ file_id }]，仅回传上传成功的附件，失败附件按提示忽略
     agentWs.sendUserMessage(text, files.filter(f => f.id).map(f => ({ file_id: f.id })))
   } else if (agentWs) {
@@ -1682,11 +1690,28 @@ function initWebSocket(sessionId: string, lastEventId = 0) {
   agentWs.connect()
 }
 
+/** 移除打字占位气泡：服务端首个事件到达即表明意图识别已出结果。 */
+function dismissTyping() {
+  const idx = events.value.findIndex(e => e.type === 'typing')
+  if (idx >= 0) events.value.splice(idx, 1)
+}
+
 function handleWsEvent(ev: WsServerEvent) {
+  // pong 心跳不参与交互流；其余任何事件到达都意味着本轮已出结果，移除打字占位
+  if (ev.event !== 'pong') dismissTyping()
   const p = ev.payload || {}
   switch (ev.event) {
     case 'thought': {
-      // 思考卡片已移除：thought 事件（问候语 / 意图回复 / 进度旁白）不再入流渲染
+      // 助手自然语言回复（闲聊 / 澄清 / 错误引导）：渲染为轻量文本气泡。
+      // 思考过程类重卡片已移除，但纯文本回复必须可见，否则闲聊场景界面零反馈。
+      const text = String(p.text || '').trim()
+      if (text) {
+        events.value.push({ type: 'agent', text: `<p>${escapeHtml(text)}</p>` })
+        scrollToBottom()
+      }
+      // 纯对话轮次（如闲聊）以 thought 收尾：结束「生成中」状态；
+      // 若后续仍有 tool_call / confirm，UI 会随事件自然继续更新。
+      isGenerating.value = false
       break
     }
     case 'tool_call': {

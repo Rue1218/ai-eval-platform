@@ -14,6 +14,7 @@ from app.routers.ws import (
     _USED_WS_TICKETS,
     _consume_ws_ticket,
     _deep_merge,
+    _is_smalltalk,
     _match_dataset,
     _match_profiles,
     _parse_llm_json,
@@ -80,6 +81,26 @@ def test_deep_merge_keeps_defaults_and_overrides_leaf():
     assert merged["run"]["timeout_s"] == 60  # 未提及的默认值保留
     assert merged["with_stress"] is True
     assert merged["kind"] == "benchmark"
+
+
+def test_is_smalltalk_matches_greetings_only():
+    """闲聊快速通道：仅整词打招呼/感谢/极短确认命中，评测指令绝不误伤。"""
+    # 命中：各种打招呼、感谢、确认（含大小写、标点、空白）
+    assert _is_smalltalk("你好")
+    assert _is_smalltalk(" 你好！ ")
+    assert _is_smalltalk("hello")
+    assert _is_smalltalk("HI")
+    assert _is_smalltalk("在吗")
+    assert _is_smalltalk("谢谢！")
+    assert _is_smalltalk("好的")
+    assert _is_smalltalk("嗯嗯")
+    assert _is_smalltalk("ok~")
+    assert _is_smalltalk("收到。")
+    # 不命中：真实评测指令与含关键词的句子必须走 LLM
+    assert not _is_smalltalk("帮我评测一下 gpt-4o")
+    assert not _is_smalltalk("你好，我要发起一次基准评测")
+    assert not _is_smalltalk("压测")
+    assert not _is_smalltalk("用 smoke 数据集跑一次评测")
 
 
 def test_parse_llm_json_tolerates_markdown_fence():

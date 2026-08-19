@@ -32,9 +32,18 @@ def _resolve_agent_profile(db: Session) -> ProtocolProfile:
     return profile
 
 
-def call_agent_model(db: Session, system: str, user: str, *, max_tokens: int = 2048) -> str:
+def call_agent_model(
+    db: Session,
+    system: str,
+    user: str,
+    *,
+    max_tokens: int = 2048,
+    timeout_s: float = CALL_TIMEOUT_S,
+) -> str:
     """经三协议统一适配器调用 Agent 模型并返回纯文本内容。
 
+    ``timeout_s`` 允许调用方按场景收紧：意图识别等交互式短调用传 12 秒，
+    候选生成等可稍长；超时归一为 TIMEOUT 抛给调用方降级处理。
     失败语义：上游 4xx/5xx 与连接错误归一为 UPSTREAM；超时归一为 TIMEOUT。
     响应解析失败同样按 UPSTREAM 处理，避免把上游原文抛给浏览器。
     """
@@ -49,7 +58,7 @@ def call_agent_model(db: Session, system: str, user: str, *, max_tokens: int = 2
         temperature=0.3,
         max_tokens=max_tokens,
         anthropic_version=profile.anthropic_version,
-        timeout_s=CALL_TIMEOUT_S,
+        timeout_s=timeout_s,
     )
     if not result.text.strip():
         raise AppError(ErrorCode.UPSTREAM, "Agent 模型返回空内容")

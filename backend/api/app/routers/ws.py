@@ -8,6 +8,7 @@
 import asyncio
 import json
 import logging
+import re
 import time
 from copy import deepcopy
 from datetime import UTC, datetime
@@ -227,6 +228,30 @@ def _wants_stress(text: str) -> bool:
     return any(k in text for k in ("压测", "加压", "先评后压", "QPS", "qps"))
 
 
+# 闲聊快速通道：打招呼/感谢/极短确认类消息不经过上游 LLM，直接本地毫秒级回复。
+# 避免用户一句「你好」也要等待完整的模型意图识别往返。
+_SMALLTALK_RE = re.compile(
+    r"^(你好|您好|hi|hello|嗨|哈喽|在吗|在不在|早|早上好|下午好|晚上好|"
+    r"谢谢|多谢|辛苦了|感谢|好的|好滴|好嘞|嗯+|哦+|ok|okay|"
+    r"收到|明白|了解|知道了|测试)[!！?？。.~\s]*$",
+    re.IGNORECASE,
+)
+
+# 闲聊快速通道的固定引导文案
+_SMALLTALK_REPLY = (
+    "你好！我是评测工程师助手，可以帮你发起基准评测（Benchmark）、生成测试用例，"
+    "RAG 检索评测将在 M3 上线。请描述你的评测目标，我会先澄清再给你确认卡。"
+)
+
+
+def _is_smalltalk(text: str) -> bool:
+    """判定超短打招呼/感谢/确认消息：命中则跳过 LLM 意图识别直接回复。
+
+    仅白名单整词匹配，不影响任何含评测关键词的正常指令。
+    """
+    return len(text) <= 12 and bool(_SMALLTALK_RE.match(text.strip()))
+
+
 def _default_run() -> dict:
     """Benchmark / RAG 的默认运行参数，仅含前端确认卡可编辑的核心字段。"""
     return {
@@ -354,6 +379,8 @@ def _llm_plan(text: str, profiles: list[dict], datasets: list[dict], history: li
     """在独立线程中调用 Agent 协议档模型，解析出结构化评测目标。
 
     未配置协议档或上游异常时抛异常，由调用方回退到规则版。
+    意图识别输出仅一个小 JSON：max_tokens 压到 512 防推理模型长思考，
+    12 秒独立短超时保证最坏情况下快速降级规则版，用户不长时间干等。
     """
     db = SessionLocal()
     try:
@@ -367,7 +394,8 @@ def _llm_plan(text: str, profiles: list[dict], datasets: list[dict], history: li
             db,
             system=_LLM_SYSTEM,
             user=json.dumps(user_payload, ensure_ascii=False),
-            max_tokens=2048,
+            max_tokens=512,
+            timeout_s=12,
         )
         return _parse_llm_json(raw)
     finally:
@@ -387,6 +415,11 @@ async def _handle_user_message(
     db.add(Message(session_id=session.id, role="user", content=text, attachments=file_ids))
     session.updated_at = datetime.now(UTC)
     db.commit()
+
+    # 闲聊快速通道：打招呼/感谢/极短确认无需 LLM 意图识别，毫秒级本地回复
+    if _is_smalltalk(text):
+        await _emit(db, ws, session.id, "thought", {"text": _SMALLTALK_REPLY}, state=state)
+        return
 
     profiles = _profile_items(db)
     datasets = _dataset_items(db)
