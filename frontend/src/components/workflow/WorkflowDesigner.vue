@@ -168,12 +168,14 @@
 
             <!-- 已确立的连线 (Edges) -->
             <g v-for="edge in edgePaths" :key="edge.id" class="edge-group">
-              <!-- 连线外层粗感应热区（点击可删除或切换状态） -->
+              <!-- 连线外层粗感应热区（点击直接删除链路） -->
               <path
                 :d="edge.d"
                 class="edge-hit-area"
-                @click.stop="handleCycleEdgeStatus(edge.id)"
-              />
+                @click.stop="handleDeleteEdge(edge.id)"
+              >
+                <title>点击删除连接链路</title>
+              </path>
 
               <!-- 连线底色实线/动态光轨 -->
               <path
@@ -228,30 +230,6 @@
             />
           </svg>
 
-          <!-- 连线中间状态气泡标签（点击切换状态，悬停点击 ✕ 快速删除） -->
-          <div
-            v-for="edge in edgePaths"
-            :key="'label-' + edge.id"
-            class="edge-label-pill"
-            :class="[
-              `status-${edge.status || 'idle'}`,
-              {
-                'label-pass': edge.sourcePortId === 'pass',
-                'label-fail': edge.sourcePortId === 'fail',
-              },
-            ]"
-            :style="{
-              left: `${edge.midX}px`,
-              top: `${edge.midY}px`,
-            }"
-            @click.stop="handleCycleEdgeStatus(edge.id)"
-            :title="`连线状态: ${edgeStatusName(edge.status)} (点击可切换状态)`"
-          >
-            <span class="pill-status-dot" :class="edge.status || 'idle'"></span>
-            <span class="pill-text">{{ edge.label || defaultEdgeLabel(edge) }}</span>
-            <span class="pill-del-icon" title="删除连接链路" @click.stop="handleDeleteEdge(edge.id)">✕</span>
-          </div>
-
           <!-- 节点卡片层 -->
           <WorkflowNode
             v-for="node in nodes"
@@ -270,7 +248,7 @@
 
         <!-- 底部快捷提示浮条 -->
         <div class="canvas-hints">
-          <span>滚轮缩放 · 拖拽画布平移 · 端口拖拽连线 · 点击节点配置属性 · 点击连线标签切换状态</span>
+          <span>滚轮缩放 · 拖拽画布平移 · 端口拖拽连线 · 点击节点配置属性 · 点击连线删除链路</span>
         </div>
 
         <!-- ═══ 右下角小地图 (Mini-Map) ═══ -->
@@ -329,7 +307,6 @@ import {
   type WorkflowEdge,
   type WorkflowNodeType,
   type WorkflowValidationResult,
-  type WorkflowEdgeStatus,
   getNodePortY,
   NODE_WIDTH,
 } from './workflowTypes'
@@ -572,40 +549,7 @@ function handleDeleteEdge(edgeId: string) {
   message.info('已删除连接链路')
 }
 
-/** 循环切换连线状态 (idle -> running -> success -> failed -> idle) */
-function handleCycleEdgeStatus(edgeId: string) {
-  const edge = edges.value.find((e) => e.id === edgeId)
-  if (!edge) return
-  const seq: WorkflowEdgeStatus[] = ['idle', 'running', 'success', 'failed']
-  const curIdx = seq.indexOf(edge.status || 'idle')
-  const nextStatus = seq[(curIdx + 1) % seq.length]
-  edge.status = nextStatus
-  message.info(`链路 [${edge.label || '数据流'}] 状态已切换为: ${edgeStatusName(nextStatus)}`)
-}
-
-function edgeStatusName(status?: WorkflowEdgeStatus): string {
-  switch (status) {
-    case 'running':
-      return '⚡ 运行中 (动态流光)'
-    case 'success':
-      return '✓ 成功 (持续就绪)'
-    case 'failed':
-      return '✕ 失败/阻断'
-    default:
-      return '待命闲置'
-  }
-}
-
-function defaultEdgeLabel(edge: WorkflowEdge): string {
-  if (edge.sourcePortId === 'pass') return '✓ 门禁通过'
-  if (edge.sourcePortId === 'fail') return '✕ 门禁阻断'
-  if (edge.sourcePortId === 'out_bm') return '基准分发'
-  if (edge.sourcePortId === 'out_rag') return 'RAG 分发'
-  if (edge.sourcePortId === 'out_stress') return '压测分发'
-  return '数据流'
-}
-
-/** 精准计算连线起点终点与中心标签坐标（100% 像素对齐锚点） */
+/** 精准计算连线起点终点坐标（100% 像素对齐锚点） */
 const edgePaths = computed(() => {
   const nodeMap = new Map(nodes.value.map((n) => [n.id, n]))
   return edges.value
@@ -624,8 +568,6 @@ const edgePaths = computed(() => {
 
       const dx = Math.max(50, Math.abs(x2 - x1) * 0.45)
       const d = `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`
-      const midX = Math.round((x1 + x2) / 2)
-      const midY = Math.round((y1 + y2) / 2)
 
       return {
         ...edge,
@@ -634,11 +576,9 @@ const edgePaths = computed(() => {
         y1,
         x2,
         y2,
-        midX,
-        midY,
       }
     })
-    .filter(Boolean) as Array<WorkflowEdge & { d: string; midX: number; midY: number }>
+    .filter(Boolean) as Array<WorkflowEdge & { d: string; x1: number; y1: number; x2: number; y2: number }>
 })
 
 /** 拖拽中的动态连线预览 */
@@ -680,7 +620,7 @@ const validation = computed<WorkflowValidationResult>(() => {
 
 /* ─── 画布平移交互 ─── */
 function onCanvasPointerDown(e: PointerEvent) {
-  if ((e.target as HTMLElement).closest('.wf-node') || (e.target as HTMLElement).closest('.port-anchor') || (e.target as HTMLElement).closest('.edge-label-pill')) {
+  if ((e.target as HTMLElement).closest('.wf-node') || (e.target as HTMLElement).closest('.port-anchor')) {
     return
   }
   isPanning.value = true
@@ -1145,7 +1085,9 @@ async function runWorkflow() {
 }
 
 .edge-hit-area:hover + .edge-line {
+  stroke: var(--accent-error) !important;
   stroke-width: 3.5;
+  filter: drop-shadow(0 0 6px rgba(239, 68, 68, 0.8));
 }
 
 .edge-line {
@@ -1204,91 +1146,6 @@ async function runWorkflow() {
   stroke-width: 2.5;
   stroke-dasharray: 5 5;
   filter: drop-shadow(0 0 6px var(--accent-ai));
-}
-
-/* ═══ 连线中间状态气泡标签 ═══ */
-.edge-label-pill {
-  position: absolute;
-  transform: translate(-50%, -50%);
-  padding: 2px 8px;
-  border-radius: 10px;
-  background: var(--bg-main);
-  border: 1px solid var(--border-subtle);
-  font-size: 10px;
-  font-weight: 500;
-  color: var(--text-secondary);
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  white-space: nowrap;
-  cursor: pointer;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
-  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
-  z-index: 5;
-  user-select: none;
-}
-
-.pill-status-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.pill-status-dot.idle {
-  background: var(--text-tertiary);
-}
-
-.pill-status-dot.running {
-  background: #38bdf8;
-  box-shadow: 0 0 4px #38bdf8;
-}
-
-.pill-status-dot.success {
-  background: #10b981;
-  box-shadow: 0 0 4px #10b981;
-}
-
-.pill-status-dot.failed {
-  background: #ef4444;
-  box-shadow: 0 0 4px #ef4444;
-}
-
-/* 气泡标签状态色 */
-.edge-label-pill.status-running {
-  border-color: #38bdf8;
-  color: #0284c7;
-  background: rgba(56, 189, 248, 0.08);
-  box-shadow: 0 0 8px rgba(56, 189, 248, 0.3);
-}
-
-.edge-label-pill.status-success {
-  border-color: #10b981;
-  color: #059669;
-  background: rgba(16, 185, 129, 0.08);
-}
-
-.edge-label-pill.status-failed {
-  border-color: #ef4444;
-  color: #dc2626;
-  background: rgba(239, 68, 68, 0.08);
-}
-
-.edge-label-pill:hover {
-  transform: translate(-50%, -50%) scale(1.1);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
-}
-
-.pill-del-icon {
-  font-size: 10px;
-  opacity: 0;
-  margin-left: 2px;
-  color: var(--accent-error);
-  transition: opacity 0.15s;
-}
-
-.edge-label-pill:hover .pill-del-icon {
-  opacity: 1;
 }
 
 .canvas-hints {
