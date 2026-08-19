@@ -110,3 +110,22 @@ def get_session_messages(
             for row in events
         ],
     }
+
+
+@router.delete("/{session_id}")
+def delete_session(
+    session_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """删除会话及其对话记录；关联任务与会话解绑后在任务页保留。"""
+    session = _owned_session(db, session_id, user.id)
+    db.query(Message).filter(Message.session_id == session_id).delete(synchronize_session=False)
+    db.query(WsEvent).filter(WsEvent.session_id == session_id).delete(synchronize_session=False)
+    # 任务属独立评测资产，仅解除会话关联（tasks.session_id 置空），不在任务页消失
+    db.query(Task).filter(Task.session_id == session_id).update(
+        {Task.session_id: None}, synchronize_session=False
+    )
+    db.delete(session)
+    db.commit()
+    return {"ok": True}

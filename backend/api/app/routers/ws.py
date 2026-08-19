@@ -389,6 +389,9 @@ async def _handle_user_message(
     file_ids = _assert_attachments(db, attachments)
     db.add(Message(session_id=session.id, role="user", content=text, attachments=file_ids))
     session.updated_at = datetime.now(UTC)
+    # 首条消息自动生成会话标题（此前仅前端本地更新，刷新/重连即丢）
+    if session.title == "新会话":
+        session.title = text.strip()[:18]
     db.commit()
 
     profiles = _profile_items(db)
@@ -416,6 +419,10 @@ async def _handle_user_message(
 
     intent = str(plan.get("intent") or "benchmark").strip().lower()
     reply = str(plan.get("reply") or "").strip()
+    # 持久化助手回复：切换会话后历史可完整回放（此前回复仅存 ws_events，回放丢失）
+    if reply:
+        db.add(Message(session_id=session.id, role="assistant", content=reply))
+        db.commit()
 
     if intent == "benchmark":
         if not profiles:
