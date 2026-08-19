@@ -18,17 +18,19 @@
         >
           <div class="session-title">
             <span class="session-title-text">{{ s.title || '新会话' }}</span>
-            <button
-              class="session-del"
-              title="删除会话"
-              @click.stop="handleDeleteSession(s.id)"
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-                <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
-              </svg>
-            </button>
-            <!-- D5 会话状态点多态：running / succeeded / failed -->
-            <i v-if="sessionDotClass(s)" class="nav-dot" :class="sessionDotClass(s)"></i>
+            <div class="session-meta-right">
+              <!-- D5 会话状态点多态：running / succeeded / failed -->
+              <i v-if="sessionDotClass(s)" class="nav-dot" :class="sessionDotClass(s)" :title="sessionDotTooltip(s)"></i>
+              <button
+                class="session-del"
+                title="删除会话"
+                @click.stop="handleDeleteSession(s.id)"
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                  <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
+                </svg>
+              </button>
+            </div>
           </div>
           <div class="row-between" style="margin-top: 2px">
             <span class="session-time">{{ s.time || formatRelativeTime(s.created_at) }}</span>
@@ -1131,6 +1133,14 @@ function sessionDotClass(s: any): string | null {
   return null
 }
 
+/** 会话状态提示语（鼠标悬停指示点时展示）。 */
+function sessionDotTooltip(s: any): string {
+  if (s.active_task || s.status === 'running' || s.status === 'queued') return '任务进行中…'
+  if (s.status === 'succeeded') return '任务评测成功 (succeeded)'
+  if (s.status === 'failed') return '任务执行失败 (failed)'
+  return '会话就绪'
+}
+
 /** HTML 转义：历史 assistant 消息纯文本安全注入气泡（对齐原型 AE.esc）。 */
 function escapeHtml(s: string) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
@@ -1866,6 +1876,24 @@ async function selectSession(sid: string) {
   // F17 会话含进行中任务时默认展开调度侧轨
   const sess = sessions.value.find(s => s.id === sid)
   isRailOpen.value = !!sess?.active_task
+
+  // 恢复会话进行中任务快照（若存在），解决访问其他会话后切回导致运行中任务进度坞丢失的问题
+  if (sess?.active_task?.id) {
+    try {
+      const t = await api.tasks.get(sess.active_task.id)
+      if (t && ['queued', 'running', 'awaiting_case_confirm'].includes(t.status)) {
+        activeTask.value = {
+          id: t.id,
+          kind: t.kind,
+          status: t.status,
+          config: t.config,
+          progress: t.progress || { percent: 0, done: 0, total: 100, message: '任务进行中...' },
+          created_at: t.created_at,
+        }
+      }
+    } catch {}
+  }
+
   // F4 先回放历史消息并对齐 lastEventId，再建立 WS（带 last_event_id 断点续传）
   const lastEventId = await loadSessionHistory(sid)
   initWebSocket(sid, lastEventId)
@@ -1883,7 +1911,7 @@ async function handleCreateSession() {
   }
 }
 
-async function handleDeleteSession(sid: string) {
+function handleDeleteSession(sid: string) {
   const target = sessions.value.find(s => s.id === sid)
   const name = (target?.title || '新会话').slice(0, 24)
   dialog.warning({
@@ -1895,15 +1923,18 @@ async function handleDeleteSession(sid: string) {
       try {
         await api.sessions.delete(sid)
         sessions.value = sessions.value.filter(s => s.id !== sid)
+        message.success('会话已删除')
         if (currentSessionId.value === sid) {
-          if (sessions.value.length) {
-            selectSession(sessions.value[0].id)
+          if (sessions.value.length > 0) {
+            await selectSession(sessions.value[0].id)
           } else {
-            handleCreateSession()
+            await handleCreateSession()
           }
         }
-      } catch {
-        message.error('删除会话失败')
+        return true
+      } catch (err: any) {
+        message.error(err?.message || '删除会话失败')
+        return false
       }
     },
   })
