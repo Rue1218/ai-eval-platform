@@ -101,6 +101,33 @@
       </div>
     </div>
 
+    <!-- ═══ 运行执行 HUD 悬浮监控条 (Live Pipeline Runner HUD) ═══ -->
+    <div v-if="executionHud.visible" class="execution-hud-bar">
+      <div class="hud-left">
+        <span class="hud-spinner" :class="{ done: executionHud.isDone }"></span>
+        <span class="hud-title font-bold">{{ executionHud.title }}</span>
+        <span class="hud-step tertiary small">{{ executionHud.subtitle }}</span>
+      </div>
+      <div class="hud-progress-wrap">
+        <div class="hud-progress-bar">
+          <div class="hud-progress-fill" :style="{ width: `${executionHud.progress}%` }"></div>
+        </div>
+        <span class="hud-progress-text mono">{{ executionHud.progress }}%</span>
+      </div>
+      <div class="hud-actions">
+        <button
+          v-if="executionHud.isDone && executionHud.taskId"
+          class="btn btn-primary btn-xs"
+          @click="navigateToTask(executionHud.taskId)"
+        >
+          📊 查看报告与指标
+        </button>
+        <button class="btn btn-secondary btn-xs" @click="executionHud.visible = false">
+          ✕ 关闭
+        </button>
+      </div>
+    </div>
+
     <!-- ═══ 主工作区：左侧物料库 + 中央画布 + 右侧属性面板 ═══ -->
     <div class="designer-main">
       <!-- 左侧物料库 -->
@@ -248,7 +275,7 @@
 
         <!-- 底部快捷提示浮条 -->
         <div class="canvas-hints">
-          <span>滚轮缩放 · 拖拽平移 · 端口连线 · 双击空白自适应居中 · 点击连线删除</span>
+          <span>滚轮缩放 · 拖拽平移 · 端口连线 · 按 Delete 删除节点 · 双击空白自适应居中</span>
         </div>
 
         <!-- ═══ 右下角小地图 (Mini-Map) ═══ -->
@@ -331,6 +358,22 @@ const selectedNode = ref<IWorkflowNode | null>(null)
 const currentTemplateId = ref<string>('tpl_benchmark_stress')
 const isExecuting = ref(false)
 
+// 实时执行 HUD 状态
+const executionHud = ref<{
+  visible: boolean
+  title: string
+  subtitle: string
+  progress: number
+  isDone: boolean
+  taskId?: string
+}>({
+  visible: false,
+  title: '',
+  subtitle: '',
+  progress: 0,
+  isDone: false,
+})
+
 // 交互状态：画布平移
 const isPanning = ref(false)
 const panStart = ref({ x: 0, y: 0, vx: 0, vy: 0 })
@@ -357,7 +400,7 @@ onMounted(() => {
 
   if (canvasContainerRef.value) {
     resizeObserver = new ResizeObserver(() => {
-      // 容器大小变化时保持居中
+      // 容器大小变化时保持自适应
     })
     resizeObserver.observe(canvasContainerRef.value)
   }
@@ -374,6 +417,13 @@ function onKeyDown(e: KeyboardEvent) {
       selectedNode.value = null
     } else if (isFullScreen.value) {
       isFullScreen.value = false
+    }
+  } else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedNode.value) {
+    // 焦点不在输入框时按 Delete 删除选中节点
+    const activeEl = document.activeElement
+    const isInput = activeEl instanceof HTMLInputElement || activeEl instanceof HTMLTextAreaElement || activeEl instanceof HTMLSelectElement
+    if (!isInput) {
+      handleDeleteNode(selectedNode.value.id)
     }
   }
 }
@@ -492,6 +542,7 @@ function clearCanvas() {
   nodes.value = []
   edges.value = []
   selectedNode.value = null
+  executionHud.value.visible = false
   message.info('画布已清空')
 }
 
@@ -602,6 +653,10 @@ function handleDeleteNode(nodeId: string) {
 function handleDeleteEdge(edgeId: string) {
   edges.value = edges.value.filter((e) => e.id !== edgeId)
   message.info('已删除连接链路')
+}
+
+function navigateToTask(taskId: string) {
+  router.push(`/report?task_id=${taskId}`)
 }
 
 /** 精准计算连线起点终点坐标（100% 像素对齐锚点） */
@@ -799,7 +854,7 @@ function onPortPointerUp(
   connectingPort.value = null
 }
 
-/* ─── 一键执行与真实任务下发 (DAG Pipeline Runner with Persistent Animated Edges) ─── */
+/* ─── 一键执行与真实任务下发 (DAG Pipeline Runner with Live HUD & Persistent Animated Edges) ─── */
 async function runWorkflow() {
   if (!nodes.value.length) return
   isExecuting.value = true
@@ -813,14 +868,25 @@ async function runWorkflow() {
     e.status = 'idle'
   })
 
-  message.loading('正在流水线编译 DAG 并调度任务执行...', { duration: 1500 })
+  executionHud.value = {
+    visible: true,
+    title: 'DAG 流水线编译与调度中',
+    subtitle: '准备依次触发拓扑节点...',
+    progress: 5,
+    isDone: false,
+  }
 
   try {
+    const total = nodes.value.length
     // 2. 依次按链路流转执行节点，并点亮连线流动光效
-    for (let i = 0; i < nodes.value.length; i++) {
+    for (let i = 0; i < total; i++) {
       const n = nodes.value[i]
       n.status = 'running'
-      n.progress = 30
+      n.progress = 25
+
+      executionHud.value.title = `正在执行步骤 [${i + 1}/${total}] · ${n.name}`
+      executionHud.value.subtitle = `${n.description}`
+      executionHud.value.progress = Math.round(((i + 0.3) / total) * 100)
 
       // 点亮通往该节点的前置连线为 success，通往下游的连线为 running
       edges.value.forEach((e) => {
@@ -832,8 +898,9 @@ async function runWorkflow() {
         }
       })
 
-      await new Promise((r) => setTimeout(r, 450))
+      await new Promise((r) => setTimeout(r, 400))
       n.progress = 85
+      executionHud.value.progress = Math.round(((i + 0.8) / total) * 100)
       await new Promise((r) => setTimeout(r, 300))
 
       n.status = 'succeeded'
@@ -845,7 +912,7 @@ async function runWorkflow() {
           e.status = 'running'
         }
       })
-      await new Promise((r) => setTimeout(r, 200))
+      await new Promise((r) => setTimeout(r, 180))
     }
 
     // 全部完成，所有已通链路长效保持为 success（平稳绿光持续流动）
@@ -877,9 +944,20 @@ async function runWorkflow() {
     }
 
     const taskId = createdTask?.id || `t-wf-${Math.random().toString(36).substring(2, 8)}`
+    
+    executionHud.value = {
+      visible: true,
+      title: '🎉 全链路调度入队完毕！',
+      subtitle: `评测任务 ID: ${taskId.substring(0, 10)} · 质量门禁与压测就绪`,
+      progress: 100,
+      isDone: true,
+      taskId,
+    }
+
     message.success(`工作流已成功调度入队！任务 ID: ${taskId.substring(0, 8)}`)
     emit('task-dispatched', taskId)
   } catch (err: any) {
+    executionHud.value.visible = false
     message.error(err.message || '调度入队失败')
   } finally {
     isExecuting.value = false
@@ -1103,6 +1181,100 @@ async function runWorkflow() {
   opacity: 0.94;
   box-shadow: 0 0 14px var(--accent-ai);
   transform: translateY(-1px);
+}
+
+/* ═══ 运行执行 HUD 悬浮监控条 ═══ */
+.execution-hud-bar {
+  position: absolute;
+  top: 60px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(var(--bg-main-rgb, 17, 24, 39), 0.92);
+  backdrop-filter: blur(16px);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  padding: 8px 16px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  z-index: 100;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+  animation: slide-down 0.25s ease-out;
+}
+
+@keyframes slide-down {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -10px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+.hud-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.hud-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(56, 189, 248, 0.3);
+  border-top-color: #38bdf8;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.hud-spinner.done {
+  border-color: var(--accent-success);
+  background: var(--accent-success);
+  animation: none;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.hud-title {
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.hud-progress-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hud-progress-bar {
+  width: 100px;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.hud-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #38bdf8, var(--accent-success));
+  transition: width 0.3s ease;
+}
+
+.hud-progress-text {
+  font-size: 11px;
+  color: var(--accent-ai);
+}
+
+.hud-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 /* ═══ 主工作区 ═══ */
