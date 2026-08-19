@@ -92,15 +92,22 @@ def _run_task(task_id: str) -> None:
             # testcase 等无报告类型：不允许推送空 report_id（前端会据此跳转 /reports/undefined）
             push_ws(task.session_id, "thought", {"text": "任务已完成（succeeded）。用例生成类任务请到「用例」页确认入库。"}, task_id=task.id)
         logger.info("task %s (%s) succeeded (mock)", task.id, task.kind)
-    except Exception:
+    except Exception as exc:
         db.rollback()
+        # 详细堆栈只进服务端日志;给浏览器/事件流的失败原因仅透出异常类名辅助定位
         logger.exception("task %s execution error", task_id)
         # 失败状态落库单独保护：即使落库再失败也不阻断 error 事件推送
         try:
             if task is not None:
                 task.status = "failed"
                 task.finished_at = datetime.now(timezone.utc)
-            db.add(TaskEvent(task_id=task_id, event="error", payload={"message": "执行失败"}))
+            db.add(
+                TaskEvent(
+                    task_id=task_id,
+                    event="error",
+                    payload={"message": f"执行失败({type(exc).__name__})"},
+                )
+            )
             db.commit()
         except Exception:
             db.rollback()
@@ -108,7 +115,7 @@ def _run_task(task_id: str) -> None:
         push_ws(
             task.session_id if task is not None else None,
             "error",
-            {"code": "INTERNAL", "message": "执行失败"},
+            {"code": "INTERNAL", "message": f"执行失败({type(exc).__name__})"},
             task_id=task_id,
         )
     finally:

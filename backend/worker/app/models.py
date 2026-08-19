@@ -40,6 +40,8 @@ class Task(Base):
     kind = Column(String, nullable=False)
     status = Column(String, nullable=False, default="queued", index=True)
     config = Column(JSONB, default=dict)
+    # 进度摘要(JSONB NOT NULL):执行器逐批回写,缺失映射会导致赋值静默失效不落库
+    progress = Column(JSONB, default=dict)
     result = Column(JSONB, default=dict)
     report_id = Column(String, nullable=True)
     # 不声明 ForeignKey("users.id")：worker 元数据中没有 users 表，
@@ -88,6 +90,9 @@ class Report(Base):
     task_id = Column(String, nullable=False, index=True)
     kind = Column(String, nullable=False)
     metrics = Column(JSONB, default=dict)
+    # 基线冻结标记:数据库列为 NOT NULL 且无 DDL 默认(e5f92b7d31a8 迁移尾部已移除
+    # server_default),ORM 侧缺失该列会使 Worker 写报告必然违反非空约束。
+    is_baseline = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime(timezone=True), default=utcnow)
 
 

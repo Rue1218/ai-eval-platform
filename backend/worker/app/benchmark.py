@@ -359,9 +359,10 @@ def run_benchmark(task_id: str) -> None:
         # ─── 载入协议档（1–5 个） ───
         profile_ids = config.get("profile_ids") or []
         profiles = db.query(ProtocolProfile).filter(ProtocolProfile.id.in_(profile_ids)).all()
-        found_ids = {profile.id for profile in profiles}
-        if len(found_ids) != len(profile_ids):
-            _fail(db, task, "VALIDATION", f"有 {len(profile_ids) - len(found_ids)} 个协议档不存在或已删除")
+        # 先去重再比对:重复 id 会被误判为「档位不存在」
+        missing = set(profile_ids) - {profile.id for profile in profiles}
+        if missing:
+            _fail(db, task, "VALIDATION", f"有 {len(missing)} 个协议档不存在或已删除")
             return
 
         # ─── 运行参数与平台闸门 ───
@@ -468,10 +469,12 @@ def run_benchmark(task_id: str) -> None:
                     return
 
         _finish(db, task, dataset, metric, total)
-    except Exception:
+    except Exception as exc:
         db.rollback()
+        # 详细堆栈只进服务端日志;给浏览器/事件流的失败原因仅透出异常类名,
+        # 便于定位(如 IntegrityError/ValueError)且不泄漏 SQL、路径或凭据
         logger.exception("benchmark task %s execution error", task_id)
         if task is not None:
-            _fail(db, task, "INTERNAL", "执行失败")
+            _fail(db, task, "INTERNAL", f"执行失败({type(exc).__name__}),详情见服务端日志")
     finally:
         db.close()
