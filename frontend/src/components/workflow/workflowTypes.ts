@@ -53,6 +53,9 @@ export interface PortDef {
 /** 节点实时执行状态 */
 export type NodeExecStatus = 'idle' | 'queued' | 'running' | 'succeeded' | 'failed' | 'skipped'
 
+/** 工作流连线 4 大动态状态 (闲置 / 运行中 / 成功 / 失败) */
+export type WorkflowEdgeStatus = 'idle' | 'running' | 'success' | 'failed'
+
 /** 工作流节点定义 */
 export interface WorkflowNode {
   id: string
@@ -83,7 +86,7 @@ export interface WorkflowEdge {
   targetPortId: string
   label?: string
   animated?: boolean
-  status?: 'idle' | 'active' | 'success' | 'error'
+  status?: WorkflowEdgeStatus
 }
 
 /** 计算端口在节点卡片上的纵向像素绝对偏移（精准对其锚点与连线） */

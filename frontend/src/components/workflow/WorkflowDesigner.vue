@@ -50,7 +50,7 @@
         </button>
       </div>
 
-      <!-- 中间视图缩放与统计 -->
+      <!-- 中间视图缩放与连线状态说明 -->
       <div class="toolbar-center">
         <span class="zoom-ctrl">
           <button class="zoom-btn" title="缩小画布" @click="zoomBy(0.85)">−</button>
@@ -60,9 +60,14 @@
           <button class="zoom-btn" title="放大画布" @click="zoomBy(1.18)">+</button>
           <button class="zoom-btn" title="自适应全部节点" @click="fitView">⊡</button>
         </span>
-        <span class="stats-pill mono">
-          {{ nodes.length }} 节点 · {{ edges.length }} 链路
-        </span>
+
+        <!-- 连线状态图例指示器 -->
+        <div class="edge-status-legend">
+          <span class="legend-item" title="待命闲置"><i class="leg-dot idle"></i>闲置</span>
+          <span class="legend-item" title="实时流转传输"><i class="leg-dot running"></i>运行</span>
+          <span class="legend-item" title="执行成功常态"><i class="leg-dot success"></i>成功</span>
+          <span class="legend-item" title="门禁阻断或失败"><i class="leg-dot failed"></i>失败</span>
+        </div>
       </div>
 
       <!-- 右侧校验状态、全屏与执行按钮 -->
@@ -129,27 +134,28 @@
                 <circle cx="14" cy="14" r="1.1" class="grid-dot" />
               </pattern>
 
-              <!-- 连线动态流光渐变 -->
-              <linearGradient id="edge-flow-grad" x1="0%" y1="0%" x2="100%" y2="0%">
-                <stop offset="0%" stop-color="var(--accent-ai)" stop-opacity="0.9" />
+              <!-- 1. 运行中流光渐变 (Cyan to Mint) -->
+              <linearGradient id="edge-running-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+                <stop offset="0%" stop-color="#38bdf8" stop-opacity="1" />
+                <stop offset="50%" stop-color="var(--accent-ai)" stop-opacity="1" />
                 <stop offset="100%" stop-color="var(--accent-success)" stop-opacity="1" />
               </linearGradient>
 
-              <!-- 门禁通过渐变 -->
-              <linearGradient id="edge-pass-grad" x1="0%" y1="0%" x2="100%" y2="0%">
-                <stop offset="0%" stop-color="var(--accent-success)" />
-                <stop offset="100%" stop-color="var(--accent-success)" stop-opacity="0.8" />
+              <!-- 2. 成功长效渐变 (Emerald Glow) -->
+              <linearGradient id="edge-success-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+                <stop offset="0%" stop-color="#10b981" stop-opacity="0.9" />
+                <stop offset="100%" stop-color="#34d399" stop-opacity="1" />
               </linearGradient>
 
-              <!-- 门禁阻断渐变 -->
+              <!-- 3. 失败告警渐变 (Crimson Red) -->
               <linearGradient id="edge-fail-grad" x1="0%" y1="0%" x2="100%" y2="0%">
-                <stop offset="0%" stop-color="var(--accent-error)" />
-                <stop offset="100%" stop-color="var(--accent-error)" stop-opacity="0.8" />
+                <stop offset="0%" stop-color="#ef4444" stop-opacity="1" />
+                <stop offset="100%" stop-color="#f87171" stop-opacity="0.85" />
               </linearGradient>
 
               <!-- 霓虹发光滤镜 -->
               <filter id="neon-glow" x="-20%" y="-20%" width="140%" height="140%">
-                <feGaussianBlur stdDeviation="3" result="blur" />
+                <feGaussianBlur stdDeviation="3.5" result="blur" />
                 <feMerge>
                   <feMergeNode in="blur" />
                   <feMergeNode in="SourceGraphic" />
@@ -162,36 +168,54 @@
 
             <!-- 已确立的连线 (Edges) -->
             <g v-for="edge in edgePaths" :key="edge.id" class="edge-group">
-              <!-- 连线外层感应热区（点击可删除或高亮） -->
+              <!-- 连线外层粗感应热区（点击可删除或切换状态） -->
               <path
                 :d="edge.d"
                 class="edge-hit-area"
-                @click.stop="handleDeleteEdge(edge.id)"
+                @click.stop="handleCycleEdgeStatus(edge.id)"
               />
-              <!-- 连线底色光晕与主体 -->
+
+              <!-- 连线底色实线/动态光轨 -->
               <path
                 :d="edge.d"
                 class="edge-line"
-                :class="{
-                  active: edge.status === 'active' || isExecuting,
-                  success: edge.status === 'success',
-                  'edge-pass': edge.sourcePortId === 'pass',
-                  'edge-fail': edge.sourcePortId === 'fail',
-                }"
+                :class="[
+                  `status-${edge.status || 'idle'}`,
+                  {
+                    'edge-pass': edge.sourcePortId === 'pass',
+                    'edge-fail': edge.sourcePortId === 'fail',
+                  },
+                ]"
               />
-              <!-- 执行时流动的动态光效粒子列 (Flowing Particles) -->
-              <template v-if="isExecuting || edge.status === 'active'">
-                <!-- 头部高亮粒子 -->
-                <circle class="flow-particle" r="4" fill="var(--accent-success)" filter="url(#neon-glow)">
-                  <animateMotion :path="edge.d" dur="1.4s" repeatCount="indefinite" />
+
+              <!-- ═══ 4 大状态的流光粒子特效 (长效持久) ═══ -->
+              <!-- 状态 1: 运行中 (running) - 高频流光粒子列 -->
+              <template v-if="edge.status === 'running'">
+                <circle class="flow-particle particle-running" r="4.5" fill="#38bdf8" filter="url(#neon-glow)">
+                  <animateMotion :path="edge.d" dur="1.2s" repeatCount="indefinite" />
                 </circle>
-                <!-- 尾随粒子 1 -->
-                <circle class="flow-particle" r="3" fill="var(--accent-ai)" opacity="0.85">
-                  <animateMotion :path="edge.d" dur="1.4s" begin="-0.45s" repeatCount="indefinite" />
+                <circle class="flow-particle particle-running" r="3.2" fill="var(--accent-ai)" opacity="0.9">
+                  <animateMotion :path="edge.d" dur="1.2s" begin="-0.4s" repeatCount="indefinite" />
                 </circle>
-                <!-- 尾随粒子 2 -->
-                <circle class="flow-particle" r="2.2" fill="var(--accent-ai)" opacity="0.6">
-                  <animateMotion :path="edge.d" dur="1.4s" begin="-0.9s" repeatCount="indefinite" />
+                <circle class="flow-particle particle-running" r="2.2" fill="var(--accent-success)" opacity="0.7">
+                  <animateMotion :path="edge.d" dur="1.2s" begin="-0.8s" repeatCount="indefinite" />
+                </circle>
+              </template>
+
+              <!-- 状态 2: 执行成功 (success) - 平稳长效绿色光子持续穿梭 -->
+              <template v-else-if="edge.status === 'success'">
+                <circle class="flow-particle particle-success" r="3.5" fill="#10b981" filter="url(#neon-glow)">
+                  <animateMotion :path="edge.d" dur="2.4s" repeatCount="indefinite" />
+                </circle>
+                <circle class="flow-particle particle-success" r="2.5" fill="#34d399" opacity="0.8">
+                  <animateMotion :path="edge.d" dur="2.4s" begin="-1.2s" repeatCount="indefinite" />
+                </circle>
+              </template>
+
+              <!-- 状态 3: 执行失败/阻断 (failed) - 红色警示闪烁粒子 -->
+              <template v-else-if="edge.status === 'failed'">
+                <circle class="flow-particle particle-fail" r="4" fill="#ef4444">
+                  <animateMotion :path="edge.d" dur="0.9s" repeatCount="indefinite" />
                 </circle>
               </template>
             </g>
@@ -204,26 +228,28 @@
             />
           </svg>
 
-          <!-- 连线中间气泡标签（轻量微标签，悬停浮现删除按钮） -->
+          <!-- 连线中间状态气泡标签（点击切换状态，悬停点击 ✕ 快速删除） -->
           <div
             v-for="edge in edgePaths"
             :key="'label-' + edge.id"
             class="edge-label-pill"
-            :class="{
-              'label-pass': edge.sourcePortId === 'pass',
-              'label-fail': edge.sourcePortId === 'fail',
-              active: edge.status === 'active',
-              success: edge.status === 'success',
-            }"
+            :class="[
+              `status-${edge.status || 'idle'}`,
+              {
+                'label-pass': edge.sourcePortId === 'pass',
+                'label-fail': edge.sourcePortId === 'fail',
+              },
+            ]"
             :style="{
               left: `${edge.midX}px`,
               top: `${edge.midY}px`,
             }"
-            @click.stop="handleDeleteEdge(edge.id)"
-            title="点击删除连接链路"
+            @click.stop="handleCycleEdgeStatus(edge.id)"
+            :title="`连线状态: ${edgeStatusName(edge.status)} (点击可切换状态)`"
           >
+            <span class="pill-status-dot" :class="edge.status || 'idle'"></span>
             <span class="pill-text">{{ edge.label || defaultEdgeLabel(edge) }}</span>
-            <span class="pill-del-icon">✕</span>
+            <span class="pill-del-icon" title="删除连接链路" @click.stop="handleDeleteEdge(edge.id)">✕</span>
           </div>
 
           <!-- 节点卡片层 -->
@@ -244,7 +270,7 @@
 
         <!-- 底部快捷提示浮条 -->
         <div class="canvas-hints">
-          <span>滚轮缩放 · 拖拽画布平移 · 端口拖拽连线 · 双击节点配置参数 · 悬停标签点击 ✕ 删除</span>
+          <span>滚轮缩放 · 拖拽画布平移 · 端口拖拽连线 · 点击连线标签切换状态 · 悬停点击 ✕ 删除链路</span>
         </div>
 
         <!-- ═══ 右下角小地图 (Mini-Map) ═══ -->
@@ -303,6 +329,7 @@ import {
   type WorkflowEdge,
   type WorkflowNodeType,
   type WorkflowValidationResult,
+  type WorkflowEdgeStatus,
   getNodePortY,
   NODE_WIDTH,
 } from './workflowTypes'
@@ -367,6 +394,10 @@ function loadSelectedTemplate() {
   if (!tpl) return
   nodes.value = JSON.parse(JSON.stringify(tpl.nodes))
   edges.value = JSON.parse(JSON.stringify(tpl.edges))
+  // 默认初始将连线设为 idle
+  edges.value.forEach((e) => {
+    e.status = e.status || 'idle'
+  })
   selectedNode.value = nodes.value[1] || nodes.value[0] || null
   resetView()
   message.success(`已载入工作流模版：${tpl.name}`)
@@ -540,6 +571,30 @@ function handleDeleteNode(nodeId: string) {
 function handleDeleteEdge(edgeId: string) {
   edges.value = edges.value.filter((e) => e.id !== edgeId)
   message.info('已删除连接链路')
+}
+
+/** 循环切换连线状态 (idle -> running -> success -> failed -> idle) */
+function handleCycleEdgeStatus(edgeId: string) {
+  const edge = edges.value.find((e) => e.id === edgeId)
+  if (!edge) return
+  const seq: WorkflowEdgeStatus[] = ['idle', 'running', 'success', 'failed']
+  const curIdx = seq.indexOf(edge.status || 'idle')
+  const nextStatus = seq[(curIdx + 1) % seq.length]
+  edge.status = nextStatus
+  message.info(`链路 [${edge.label || '数据流'}] 状态已切换为: ${edgeStatusName(nextStatus)}`)
+}
+
+function edgeStatusName(status?: WorkflowEdgeStatus): string {
+  switch (status) {
+    case 'running':
+      return '⚡ 运行中 (动态流光)'
+    case 'success':
+      return '✓ 成功 (持续就绪)'
+    case 'failed':
+      return '✕ 失败/阻断'
+    default:
+      return '待命闲置'
+  }
 }
 
 function defaultEdgeLabel(edge: WorkflowEdge): string {
@@ -737,6 +792,7 @@ function onPortPointerUp(
         sourcePortId,
         targetNodeId: finalTargetNodeId,
         targetPortId: finalTargetPortId,
+        status: 'idle',
       })
       message.success('已建立连接链路')
     }
@@ -745,12 +801,12 @@ function onPortPointerUp(
   connectingPort.value = null
 }
 
-/* ─── 一键执行与真实任务下发 (DAG Pipeline Runner with Animated Edges) ─── */
+/* ─── 一键执行与真实任务下发 (DAG Pipeline Runner with Persistent Animated Edges) ─── */
 async function runWorkflow() {
   if (!nodes.value.length) return
   isExecuting.value = true
 
-  // 1. 重置所有节点与连线状态
+  // 1. 重置所有节点与连线状态为 idle/queued
   nodes.value.forEach((n) => {
     n.status = 'queued'
     n.progress = 0
@@ -768,13 +824,13 @@ async function runWorkflow() {
       n.status = 'running'
       n.progress = 30
 
-      // 点亮通往该节点的前置连线为 success，通往下游的连线为 active
+      // 点亮通往该节点的前置连线为 success，通往下游的连线为 running
       edges.value.forEach((e) => {
         if (e.targetNodeId === n.id) {
           e.status = 'success'
         }
         if (e.sourceNodeId === n.id) {
-          e.status = 'active'
+          e.status = 'running'
         }
       })
 
@@ -785,16 +841,16 @@ async function runWorkflow() {
       n.status = 'succeeded'
       n.progress = 100
 
-      // 激活从当前节点发出的下游连线粒子流
+      // 激活从当前节点发出的下游连线
       edges.value.forEach((e) => {
         if (e.sourceNodeId === n.id) {
-          e.status = 'active'
+          e.status = 'running'
         }
       })
       await new Promise((r) => setTimeout(r, 200))
     }
 
-    // 全部完成，连线置为 success
+    // 全部完成，所有已通链路长效保持为 success（平稳绿光持续流动）
     edges.value.forEach((e) => {
       e.status = 'success'
     })
@@ -931,14 +987,52 @@ async function runWorkflow() {
   border-color: var(--accent-ai);
 }
 
-.stats-pill {
-  font-size: 11px;
-  color: var(--text-tertiary);
-  padding: 3px 10px;
+.edge-status-legend {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   background: var(--bg-main);
   border: 1px solid var(--border-subtle);
+  padding: 3px 10px;
   border-radius: 12px;
-  white-space: nowrap;
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.leg-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.leg-dot.idle {
+  background: var(--text-tertiary);
+}
+
+.leg-dot.running {
+  background: #38bdf8;
+  box-shadow: 0 0 6px #38bdf8;
+}
+
+.leg-dot.success {
+  background: #10b981;
+  box-shadow: 0 0 6px #10b981;
+}
+
+.leg-dot.failed {
+  background: #ef4444;
+  box-shadow: 0 0 6px #ef4444;
+}
+
+.zoom-ctrl {
+  display: flex;
+  align-items: center;
 }
 
 .validation-pill {
@@ -1048,47 +1142,57 @@ async function runWorkflow() {
 }
 
 .edge-hit-area:hover + .edge-line {
-  stroke: var(--accent-error);
   stroke-width: 3.5;
 }
 
 .edge-line {
   fill: none;
-  stroke: var(--text-tertiary);
   stroke-width: 2;
+  transition: stroke 0.25s, stroke-width 0.25s, filter 0.25s;
+}
+
+/* ─── 状态 1: 闲置状态 (idle) ─── */
+.edge-line.status-idle {
+  stroke: var(--text-tertiary);
   stroke-dasharray: 6 5;
-  transition: stroke 0.25s, stroke-width 0.25s;
+  opacity: 0.65;
 }
 
-/* 动态流动的活跃连线 */
-.edge-line.active {
-  stroke: url(#edge-flow-grad);
-  stroke-width: 3;
+/* ─── 状态 2: 运行中活跃状态 (running) ─── */
+.edge-line.status-running {
+  stroke: url(#edge-running-grad);
+  stroke-width: 3.2;
   stroke-dasharray: 8 6;
-  animation: flow-dash 0.6s linear infinite;
-  filter: drop-shadow(0 0 5px var(--accent-ai));
+  animation: flow-dash-rapid 0.6s linear infinite;
+  filter: drop-shadow(0 0 6px #38bdf8);
 }
 
-@keyframes flow-dash {
+@keyframes flow-dash-rapid {
   to {
     stroke-dashoffset: -28;
   }
 }
 
-.edge-line.success {
-  stroke: var(--accent-success);
-  stroke-width: 2.5;
+/* ─── 状态 3: 运行成功长效状态 (success) ─── */
+.edge-line.status-success {
+  stroke: url(#edge-success-grad);
+  stroke-width: 2.8;
   stroke-dasharray: none;
-  filter: drop-shadow(0 0 3px var(--accent-success));
+  filter: drop-shadow(0 0 4px rgba(16, 185, 129, 0.7));
 }
 
-.edge-line.edge-pass {
-  stroke: url(#edge-pass-grad);
-}
-
-.edge-line.edge-fail {
+/* ─── 状态 4: 运行失败/阻断状态 (failed) ─── */
+.edge-line.status-failed {
   stroke: url(#edge-fail-grad);
-  stroke-dasharray: 5 4;
+  stroke-width: 2.8;
+  stroke-dasharray: 6 4;
+  animation: fail-pulse 1s ease-in-out infinite alternate;
+  filter: drop-shadow(0 0 5px rgba(239, 68, 68, 0.7));
+}
+
+@keyframes fail-pulse {
+  0% { opacity: 0.6; stroke-width: 2.2; }
+  100% { opacity: 1; stroke-width: 3.2; }
 }
 
 .edge-connecting-preview {
@@ -1099,62 +1203,84 @@ async function runWorkflow() {
   filter: drop-shadow(0 0 6px var(--accent-ai));
 }
 
-/* 连线中间轻量气泡标签（默认只显示文字，悬停出现删除 ✕） */
+/* ═══ 连线中间状态气泡标签 ═══ */
 .edge-label-pill {
   position: absolute;
   transform: translate(-50%, -50%);
-  padding: 2px 8px;
-  border-radius: 10px;
+  padding: 3px 10px;
+  border-radius: 12px;
   background: var(--bg-main);
   border: 1px solid var(--border-subtle);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 500;
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   white-space: nowrap;
   cursor: pointer;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
   transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
   z-index: 5;
   user-select: none;
 }
 
+.pill-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.pill-status-dot.idle {
+  background: var(--text-tertiary);
+}
+
+.pill-status-dot.running {
+  background: #38bdf8;
+  box-shadow: 0 0 6px #38bdf8;
+}
+
+.pill-status-dot.success {
+  background: #10b981;
+  box-shadow: 0 0 6px #10b981;
+}
+
+.pill-status-dot.failed {
+  background: #ef4444;
+  box-shadow: 0 0 6px #ef4444;
+}
+
+/* 气泡标签状态色 */
+.edge-label-pill.status-running {
+  border-color: #38bdf8;
+  color: #0284c7;
+  background: rgba(56, 189, 248, 0.08);
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.35);
+}
+
+.edge-label-pill.status-success {
+  border-color: #10b981;
+  color: #059669;
+  background: rgba(16, 185, 129, 0.08);
+}
+
+.edge-label-pill.status-failed {
+  border-color: #ef4444;
+  color: #dc2626;
+  background: rgba(239, 68, 68, 0.08);
+}
+
 .edge-label-pill:hover {
-  border-color: var(--accent-error);
-  color: var(--accent-error);
-  background: var(--bg-elevated);
   transform: translate(-50%, -50%) scale(1.1);
-  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.2);
-}
-
-.edge-label-pill.label-pass {
-  background: var(--t-cases);
-  color: var(--c-cases);
-  border-color: var(--c-cases);
-}
-
-.edge-label-pill.label-fail {
-  background: var(--t-stress);
-  color: var(--accent-error);
-  border-color: var(--accent-error);
-}
-
-.edge-label-pill.active {
-  border-color: var(--accent-ai);
-  color: var(--accent-ai);
-  box-shadow: 0 0 10px rgba(99, 102, 241, 0.35);
-}
-
-.edge-label-pill.success {
-  border-color: var(--accent-success);
-  color: var(--accent-success);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14);
 }
 
 .pill-del-icon {
-  font-size: 10px;
+  font-size: 11px;
   opacity: 0;
+  margin-left: 2px;
+  color: var(--accent-error);
   transition: opacity 0.15s;
 }
 
