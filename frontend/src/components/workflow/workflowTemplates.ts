@@ -208,7 +208,7 @@ export function createNode(type: WorkflowNodeType, x = 100, y = 100): WorkflowNo
   }
 }
 
-/** 四大内置工作流模板（采用自然清晰的两层式/分支式拓扑，屏幕自适应居中） */
+/** 四大内置工作流模板（采用两层自适应清晰布局，宽度收敛在 1200px 内防遮挡） */
 export const WORKFLOW_TEMPLATES: WorkflowTemplate[] = [
   {
     id: 'tpl_benchmark_stress',
@@ -220,38 +220,38 @@ export const WORKFLOW_TEMPLATES: WorkflowTemplate[] = [
     nodes: [
       // 第一行：评测与质检主链路
       {
-        ...createNode('dataset_source', 60, 80),
+        ...createNode('dataset_source', 40, 60),
         id: 'node-bm-ds',
         name: '基准数据集 (smoke-20)',
         config: { dataset_id: 'ds-1', dataset_name: 'smoke-20 基准评测集', sample_size: 100, metric: 'contain' },
       },
       {
-        ...createNode('benchmark_eval', 390, 80),
+        ...createNode('benchmark_eval', 360, 60),
         id: 'node-bm-eval',
         name: '大模型基准评测 (横向对比)',
         config: { profile_ids: ['p-gpt4o', 'p-claude-35'], temperature: 0.0, max_usd: 5.0, concurrency: 4, with_stress: true },
       },
       {
-        ...createNode('llm_judge', 720, 80),
+        ...createNode('llm_judge', 680, 60),
         id: 'node-bm-judge',
         name: '大模型裁判 (GPT-4o 质检)',
         config: { judge_profile_id: 'p-gpt4o', pass_score: 4.0 },
       },
       {
-        ...createNode('quality_gate', 1050, 80),
+        ...createNode('quality_gate', 1000, 60),
         id: 'node-bm-gate',
         name: '质量门禁 (准确率 >= 85%)',
         config: { metric: 'contain_rate', operator: '>=', threshold: 85 },
       },
       // 第二行：门禁放行后的压测与报告
       {
-        ...createNode('stress_test', 1050, 290),
+        ...createNode('stress_test', 680, 260),
         id: 'node-bm-stress',
         name: '共享压测 (20 QPS 阶梯发压)',
         config: { env: 'test', qps: 20, duration_seconds: 60, concurrency: 10, sla_p99_ms: 1500 },
       },
       {
-        ...createNode('eval_report', 1380, 290),
+        ...createNode('eval_report', 1000, 260),
         id: 'node-bm-rep',
         name: '综合评测报告',
         config: { format: 'all', auto_share: true },
@@ -275,32 +275,32 @@ export const WORKFLOW_TEMPLATES: WorkflowTemplate[] = [
     nodes: [
       // 第一行
       {
-        ...createNode('rag_eval', 60, 80),
+        ...createNode('rag_eval', 40, 60),
         id: 'node-rag-eval',
         name: 'LightRAG 4 模式检索评测',
         config: { kb_id: 'kb-default', kb_name: '技术文档知识库', gold_qa_id: 'qa-v1', rag_modes: ['hybrid', 'local', 'global', 'naive'], top_k: 5, rerank_delta: true },
       },
       {
-        ...createNode('llm_judge', 390, 80),
+        ...createNode('llm_judge', 360, 60),
         id: 'node-rag-judge',
         name: 'RAG 问答质量裁判',
         config: { judge_profile_id: 'p-gpt4o', pass_score: 4.2 },
       },
       {
-        ...createNode('quality_gate', 720, 80),
+        ...createNode('quality_gate', 680, 60),
         id: 'node-rag-gate',
         name: '召回门禁 (Hit Rate >= 80%)',
         config: { metric: 'hit_rate', operator: '>=', threshold: 80 },
       },
       // 第二行
       {
-        ...createNode('stress_test', 720, 290),
+        ...createNode('stress_test', 680, 260),
         id: 'node-rag-stress',
         name: 'RAG Query 接口压测',
         config: { env: 'test', qps: 15, duration_seconds: 90, concurrency: 8, sla_p99_ms: 2000 },
       },
       {
-        ...createNode('eval_report', 1050, 290),
+        ...createNode('eval_report', 1000, 260),
         id: 'node-rag-rep',
         name: 'RAG 质检与性能报告',
         config: { format: 'all', auto_share: true },
@@ -323,32 +323,32 @@ export const WORKFLOW_TEMPLATES: WorkflowTemplate[] = [
     nodes: [
       // 第一行
       {
-        ...createNode('case_gen', 60, 80),
+        ...createNode('case_gen', 40, 60),
         id: 'node-case-gen',
         name: 'PRD 6 大策略用例生成',
         config: { name: '支付中心 PRD 用例生成', prd_text: '支持微信、支付宝、银联支付，失败自动重试3次并落审计日志...', strategy_weights: { equiv: 25, boundary: 25, cause: 15, error: 15, state: 10, ortho: 10 }, mapping_target: 'dataset' },
       },
       {
-        ...createNode('quality_gate', 390, 80),
+        ...createNode('quality_gate', 360, 60),
         id: 'node-case-gate',
         name: '策略覆盖率门禁 (100%)',
         config: { metric: 'strategy_coverage', operator: '>=', threshold: 100 },
       },
       {
-        ...createNode('dataset_source', 720, 80),
+        ...createNode('dataset_source', 680, 60),
         id: 'node-case-ds',
         name: '自动入库基准数据集',
         config: { dataset_name: '支付中心冒烟测试集 (PRD 生成)', sample_size: 50, metric: 'contain' },
       },
       // 第二行
       {
-        ...createNode('benchmark_eval', 720, 290),
+        ...createNode('benchmark_eval', 680, 260),
         id: 'node-case-bm',
         name: '冒烟基准评测',
         config: { profile_ids: ['p-gpt4o'], temperature: 0.0, concurrency: 2 },
       },
       {
-        ...createNode('eval_report', 1050, 290),
+        ...createNode('eval_report', 1000, 260),
         id: 'node-case-rep',
         name: '用例与评测报告',
         config: { format: 'all', auto_share: true },
@@ -370,52 +370,52 @@ export const WORKFLOW_TEMPLATES: WorkflowTemplate[] = [
     badgeText: '调度集群',
     nodes: [
       {
-        ...createNode('agent_kernel', 60, 190),
+        ...createNode('agent_kernel', 40, 160),
         id: 'node-kernel',
         name: '调度内核 (Kernel)',
         config: { strategy: '负载均衡', max_running_tasks: 4, heartbeat_ms: 500 },
       },
       // Worker 专精节点列
       {
-        ...createNode('worker_target', 390, 60),
+        ...createNode('worker_target', 360, 50),
         id: 'node-w-gpu',
         name: 'GPU 计算节点 (worker-01)',
         config: { worker_id: 'worker-01', name: 'GPU-Node-A1', caps: ['benchmark', 'judge'], weight: 100 },
       },
       {
-        ...createNode('worker_target', 390, 190),
+        ...createNode('worker_target', 360, 160),
         id: 'node-w-vec',
         name: '向量计算节点 (worker-02)',
         config: { worker_id: 'worker-02', name: 'Vec-Node-V1', caps: ['rag', 'vector'], weight: 100 },
       },
       {
-        ...createNode('worker_target', 390, 320),
+        ...createNode('worker_target', 360, 270),
         id: 'node-w-stress',
         name: '压测发压节点 (worker-04)',
         config: { worker_id: 'worker-04', name: 'Stress-Node-S1', caps: ['stress', 'load'], weight: 120 },
       },
       // 任务工作流列
       {
-        ...createNode('benchmark_eval', 720, 60),
+        ...createNode('benchmark_eval', 680, 50),
         id: 'node-w-bm',
         name: '基准评测工作流',
         config: { profile_ids: ['p-gpt4o', 'p-claude-35'], concurrency: 4 },
       },
       {
-        ...createNode('rag_eval', 720, 190),
+        ...createNode('rag_eval', 680, 160),
         id: 'node-w-rag',
         name: 'RAG 检索工作流',
         config: { kb_id: 'kb-default', rag_modes: ['hybrid'], top_k: 5 },
       },
       {
-        ...createNode('stress_test', 720, 320),
+        ...createNode('stress_test', 680, 270),
         id: 'node-w-st',
         name: '性能压测工作流',
         config: { env: 'test', qps: 30, duration_seconds: 60 },
       },
       // 汇总列
       {
-        ...createNode('eval_report', 1050, 190),
+        ...createNode('eval_report', 1000, 160),
         id: 'node-w-rep',
         name: '集群总览报告',
         config: { format: 'all', auto_share: true },

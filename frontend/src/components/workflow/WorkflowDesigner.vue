@@ -50,7 +50,7 @@
         </button>
       </div>
 
-      <!-- 中间视图缩放与连线状态说明 -->
+      <!-- 中间视图缩放 -->
       <div class="toolbar-center">
         <span class="zoom-ctrl">
           <button class="zoom-btn" title="缩小画布" @click="zoomBy(0.85)">−</button>
@@ -60,18 +60,18 @@
           <button class="zoom-btn" title="放大画布" @click="zoomBy(1.18)">+</button>
           <button class="zoom-btn" title="自适应全部节点" @click="fitView">⊡</button>
         </span>
+      </div>
 
-        <!-- 连线状态图例指示器 -->
+      <!-- 右侧校验状态、全屏与执行按钮 -->
+      <div class="toolbar-right">
+        <!-- 连线状态图例指示器 (紧凑微型) -->
         <div class="edge-status-legend">
           <span class="legend-item" title="待命闲置"><i class="leg-dot idle"></i>闲置</span>
           <span class="legend-item" title="实时流转传输"><i class="leg-dot running"></i>运行</span>
           <span class="legend-item" title="执行成功常态"><i class="leg-dot success"></i>成功</span>
           <span class="legend-item" title="门禁阻断或失败"><i class="leg-dot failed"></i>失败</span>
         </div>
-      </div>
 
-      <!-- 右侧校验状态、全屏与执行按钮 -->
-      <div class="toolbar-right">
         <span
           class="validation-pill"
           :class="validation.valid ? 'valid' : 'warning'"
@@ -270,7 +270,7 @@
 
         <!-- 底部快捷提示浮条 -->
         <div class="canvas-hints">
-          <span>滚轮缩放 · 拖拽画布平移 · 端口拖拽连线 · 点击连线标签切换状态 · 悬停点击 ✕ 删除链路</span>
+          <span>滚轮缩放 · 拖拽画布平移 · 端口拖拽连线 · 点击节点配置属性 · 点击连线标签切换状态</span>
         </div>
 
         <!-- ═══ 右下角小地图 (Mini-Map) ═══ -->
@@ -304,7 +304,7 @@
         </div>
       </div>
 
-      <!-- 右侧属性面板 -->
+      <!-- 右侧属性面板（抽屉式，仅在选中节点时滑出） -->
       <WorkflowInspector
         v-if="selectedNode"
         :node="selectedNode"
@@ -341,8 +341,8 @@ const emit = defineEmits<{
 const message = useMessage()
 const router = useRouter()
 
-// 画布视口缩放与位移（默认自适应居中）
-const view = ref({ x: 40, y: 40, k: 0.9 })
+// 画布视口缩放与位移（默认居中自适应）
+const view = ref({ x: 50, y: 50, k: 0.88 })
 const canvasContainerRef = ref<HTMLElement | null>(null)
 const importFileRef = ref<HTMLInputElement | null>(null)
 const isFullScreen = ref(false)
@@ -388,17 +388,16 @@ function onKeyDown(e: KeyboardEvent) {
   }
 }
 
-/** 载入选中的模板 */
+/** 载入选中的模板（默认关闭属性面板，呈现全画幅拓扑） */
 function loadSelectedTemplate() {
   const tpl = WORKFLOW_TEMPLATES.find((t) => t.id === currentTemplateId.value)
   if (!tpl) return
   nodes.value = JSON.parse(JSON.stringify(tpl.nodes))
   edges.value = JSON.parse(JSON.stringify(tpl.edges))
-  // 默认初始将连线设为 idle
   edges.value.forEach((e) => {
     e.status = e.status || 'idle'
   })
-  selectedNode.value = nodes.value[1] || nodes.value[0] || null
+  selectedNode.value = null
   resetView()
   message.success(`已载入工作流模版：${tpl.name}`)
 }
@@ -411,7 +410,7 @@ function zoomBy(factor: number) {
 
 /** 复位视图 */
 function resetView() {
-  view.value = { x: 40, y: 40, k: 0.9 }
+  view.value = { x: 50, y: 50, k: 0.88 }
 }
 
 /** 自适应适配视口中所有节点 */
@@ -423,9 +422,9 @@ function fitView() {
   const minX = Math.min(...nodes.value.map((n) => n.x))
   const minY = Math.min(...nodes.value.map((n) => n.y))
   view.value = {
-    x: Math.max(20, 60 - minX * 0.8),
-    y: Math.max(20, 60 - minY * 0.8),
-    k: 0.8,
+    x: Math.max(20, 60 - minX * 0.82),
+    y: Math.max(20, 60 - minY * 0.82),
+    k: 0.82,
   }
 }
 
@@ -445,7 +444,7 @@ function autoLayout() {
     levels[lvl].push(n)
   })
 
-  let colX = 60
+  let colX = 50
   Object.keys(levels)
     .map(Number)
     .sort((a, b) => a - b)
@@ -453,9 +452,9 @@ function autoLayout() {
       const colNodes = levels[lvl]
       colNodes.forEach((n, idx) => {
         n.x = colX
-        n.y = 80 + idx * 190
+        n.y = 60 + idx * 190
       })
-      colX += 360
+      colX += 340
     })
 
   message.success('已完成拓扑自动分层排版')
@@ -503,7 +502,7 @@ function handleFileImport(e: Event) {
       if (Array.isArray(parsed.nodes)) {
         nodes.value = parsed.nodes
         edges.value = parsed.edges || []
-        selectedNode.value = nodes.value[0] || null
+        selectedNode.value = null
         fitView()
         message.success('工作流配置已成功导入！')
       } else {
@@ -916,18 +915,19 @@ async function runWorkflow() {
 
 /* ═══ 顶部控制工具栏 ═══ */
 .designer-toolbar {
-  height: 54px;
+  height: 52px;
   background: var(--bg-elevated);
   border-bottom: 1px solid var(--border-subtle);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 16px;
-  gap: 12px;
+  padding: 0 12px;
+  gap: 8px;
   flex-shrink: 0;
   user-select: none;
   backdrop-filter: blur(12px);
   overflow-x: auto;
+  box-sizing: border-box;
 }
 
 .toolbar-left,
@@ -935,7 +935,7 @@ async function runWorkflow() {
 .toolbar-right {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   flex-shrink: 0;
   white-space: nowrap;
 }
@@ -964,13 +964,13 @@ async function runWorkflow() {
   font-weight: 600;
   color: var(--accent-ai);
   background: var(--t-agent);
-  padding: 1px 6px;
+  padding: 1px 5px;
   border-radius: 4px;
   white-space: nowrap;
 }
 
 .select-tpl {
-  padding: 5px 10px;
+  padding: 4px 8px;
   font-size: 12px;
   background: var(--bg-main);
   border: 1px solid var(--border-subtle);
@@ -981,6 +981,8 @@ async function runWorkflow() {
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
   white-space: nowrap;
   flex-shrink: 0;
+  max-width: 220px;
+  text-overflow: ellipsis;
 }
 
 .select-tpl:focus {
@@ -990,24 +992,25 @@ async function runWorkflow() {
 .edge-status-legend {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   background: var(--bg-main);
   border: 1px solid var(--border-subtle);
-  padding: 3px 10px;
-  border-radius: 12px;
+  padding: 2px 8px;
+  border-radius: 10px;
   font-size: 10px;
   color: var(--text-tertiary);
+  flex-shrink: 0;
 }
 
 .legend-item {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
 }
 
 .leg-dot {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
 }
 
@@ -1017,17 +1020,17 @@ async function runWorkflow() {
 
 .leg-dot.running {
   background: #38bdf8;
-  box-shadow: 0 0 6px #38bdf8;
+  box-shadow: 0 0 4px #38bdf8;
 }
 
 .leg-dot.success {
   background: #10b981;
-  box-shadow: 0 0 6px #10b981;
+  box-shadow: 0 0 4px #10b981;
 }
 
 .leg-dot.failed {
   background: #ef4444;
-  box-shadow: 0 0 6px #ef4444;
+  box-shadow: 0 0 4px #ef4444;
 }
 
 .zoom-ctrl {
@@ -1038,10 +1041,10 @@ async function runWorkflow() {
 .validation-pill {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   font-size: 11px;
-  padding: 4px 12px;
-  border-radius: 14px;
+  padding: 3px 10px;
+  border-radius: 12px;
   background: var(--bg-main);
   border: 1px solid var(--border-subtle);
   white-space: nowrap;
@@ -1054,7 +1057,7 @@ async function runWorkflow() {
 
 .validation-pill.valid .v-dot {
   background: var(--accent-success);
-  box-shadow: 0 0 6px var(--accent-success);
+  box-shadow: 0 0 5px var(--accent-success);
 }
 
 .validation-pill.warning {
@@ -1077,8 +1080,8 @@ async function runWorkflow() {
   background: var(--accent-ai);
   border-color: var(--accent-ai);
   color: #fff;
-  padding: 0 16px;
-  border-radius: 8px;
+  padding: 0 14px;
+  border-radius: 6px;
   transition: all 0.2s;
   white-space: nowrap;
   flex-shrink: 0;
@@ -1086,7 +1089,7 @@ async function runWorkflow() {
 
 .run-btn:hover:not(:disabled) {
   opacity: 0.94;
-  box-shadow: 0 0 16px var(--accent-ai);
+  box-shadow: 0 0 14px var(--accent-ai);
   transform: translateY(-1px);
 }
 
@@ -1207,27 +1210,27 @@ async function runWorkflow() {
 .edge-label-pill {
   position: absolute;
   transform: translate(-50%, -50%);
-  padding: 3px 10px;
-  border-radius: 12px;
+  padding: 2px 8px;
+  border-radius: 10px;
   background: var(--bg-main);
   border: 1px solid var(--border-subtle);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 500;
   color: var(--text-secondary);
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   white-space: nowrap;
   cursor: pointer;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
   transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
   z-index: 5;
   user-select: none;
 }
 
 .pill-status-dot {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
   flex-shrink: 0;
 }
@@ -1238,17 +1241,17 @@ async function runWorkflow() {
 
 .pill-status-dot.running {
   background: #38bdf8;
-  box-shadow: 0 0 6px #38bdf8;
+  box-shadow: 0 0 4px #38bdf8;
 }
 
 .pill-status-dot.success {
   background: #10b981;
-  box-shadow: 0 0 6px #10b981;
+  box-shadow: 0 0 4px #10b981;
 }
 
 .pill-status-dot.failed {
   background: #ef4444;
-  box-shadow: 0 0 6px #ef4444;
+  box-shadow: 0 0 4px #ef4444;
 }
 
 /* 气泡标签状态色 */
@@ -1256,7 +1259,7 @@ async function runWorkflow() {
   border-color: #38bdf8;
   color: #0284c7;
   background: rgba(56, 189, 248, 0.08);
-  box-shadow: 0 0 10px rgba(56, 189, 248, 0.35);
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.3);
 }
 
 .edge-label-pill.status-success {
@@ -1273,11 +1276,11 @@ async function runWorkflow() {
 
 .edge-label-pill:hover {
   transform: translate(-50%, -50%) scale(1.1);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
 }
 
 .pill-del-icon {
-  font-size: 11px;
+  font-size: 10px;
   opacity: 0;
   margin-left: 2px;
   color: var(--accent-error);

@@ -6,12 +6,12 @@
         <div class="node-icon-box" :style="{ '--node-accent': node.color }">
           <span>{{ node.icon }}</span>
         </div>
-        <div>
-          <div class="inspector-title">{{ node.name }}</div>
-          <div class="inspector-subtitle">{{ node.description }}</div>
+        <div class="inspector-title-texts">
+          <div class="inspector-title" :title="node.name">{{ node.name }}</div>
+          <div class="inspector-subtitle" :title="node.description">{{ node.description }}</div>
         </div>
       </div>
-      <button class="close-btn" title="关闭面板" @click="$emit('close')">×</button>
+      <button class="close-btn" title="关闭面板" @click="$emit('close')">✕</button>
     </div>
 
     <!-- 标签页导航 -->
@@ -570,7 +570,7 @@ function testSingleNode() {
 
 <style scoped>
 .wf-inspector {
-  width: 330px;
+  width: 320px;
   background: var(--bg-main);
   border-left: 1px solid var(--border-subtle);
   display: flex;
@@ -582,11 +582,12 @@ function testSingleNode() {
 }
 
 .inspector-header {
-  height: 54px;
-  padding: 0 16px;
+  height: 52px;
+  padding: 0 14px;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   border-bottom: 1px solid var(--border-subtle);
   background: var(--bg-elevated);
 }
@@ -594,22 +595,29 @@ function testSingleNode() {
 .inspector-title-wrap {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
+  flex: 1;
 }
 
 .node-icon-box {
-  width: 32px;
-  height: 32px;
+  width: 30px;
+  height: 30px;
   border-radius: 8px;
   background: var(--bg-main);
   border: 1px solid var(--border-subtle);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 16px;
+  font-size: 15px;
   flex-shrink: 0;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
+}
+
+.inspector-title-texts {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .inspector-title {
@@ -632,12 +640,17 @@ function testSingleNode() {
 .close-btn {
   background: transparent;
   border: none;
-  font-size: 20px;
+  font-size: 14px;
   color: var(--text-tertiary);
   cursor: pointer;
-  padding: 2px 6px;
-  border-radius: 4px;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
   transition: all 0.15s;
+  flex-shrink: 0;
 }
 
 .close-btn:hover {
@@ -649,7 +662,7 @@ function testSingleNode() {
   display: flex;
   border-bottom: 1px solid var(--border-subtle);
   background: var(--bg-elevated);
-  padding: 0 8px;
+  padding: 0 4px;
 }
 
 .tab-btn {
@@ -663,6 +676,7 @@ function testSingleNode() {
   cursor: pointer;
   border-bottom: 2px solid transparent;
   transition: all 0.15s;
+  white-space: nowrap;
 }
 
 .tab-btn:hover {
@@ -890,8 +904,8 @@ function testSingleNode() {
 }
 
 .inspector-footer {
-  height: 52px;
-  padding: 0 16px;
+  height: 50px;
+  padding: 0 14px;
   display: flex;
   align-items: center;
   justify-content: space-between;
