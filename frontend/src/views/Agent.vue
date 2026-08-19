@@ -52,7 +52,19 @@
           </svg>
         </button>
         <span class="chat-head-title">{{ currentSession?.title || '新会话' }}</span>
-        <span class="chat-head-model">Agent · {{ agentModelName }}</span>
+        <n-dropdown
+          trigger="click"
+          :options="agentProfileDropdownOptions"
+          @select="handleSelectAgentModel"
+        >
+          <button class="chat-head-model-btn" title="点击切换 Agent 驱动模型（来自协议档接入池）">
+            <span class="head-model-dot"></span>
+            <span class="mono">Agent · {{ agentModelName || '选择模型' }}</span>
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="m6 9 6 6 6-6"/>
+            </svg>
+          </button>
+        </n-dropdown>
         <span v-if="isGenerating" class="gen-pill">
           <i class="bdot"></i>
           <span>生成中</span>
@@ -572,7 +584,7 @@
         </div>
 
         <div class="composer-inner">
-          <button class="composer-btn" title="添加附件（≤20MB）" @click="triggerFileInput">
+          <button class="composer-btn" title="添加附件（≤20MB，支持 PRD/OpenAPI/Excel/CSV/PDF 等）" @click="triggerFileInput">
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
               <path d="m21 11.5-8.2 8.2a5.5 5.5 0 0 1-7.8-7.8l8.5-8.5a3.7 3.7 0 0 1 5.2 5.2l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.8-7.8" />
             </svg>
@@ -589,24 +601,36 @@
             ref="textareaRef"
             v-model="inputText"
             rows="1"
-            placeholder="说明要评什么（模型 / RAG / 生成用例），我会澄清后给你确认卡。"
+            placeholder="说明要评测什么（如：对比 gpt-test 和 claude-x / 知识库评测 / 生成用例），回车发送，Shift+Enter 换行"
             @keydown.enter.exact.prevent="handleEnterPress"
             @input="adjustTextareaHeight"
           ></textarea>
 
-          <span class="composer-model">Agent · {{ agentModelName }}</span>
+          <n-dropdown
+            trigger="click"
+            :options="agentProfileDropdownOptions"
+            @select="handleSelectAgentModel"
+          >
+            <button class="composer-model-pill" title="点击切换 Agent 驱动模型（来自协议档接入池）">
+              <span class="model-status-dot"></span>
+              <span class="model-name mono">{{ agentModelName || '选择模型' }}</span>
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="m6 9 6 6 6-6"/>
+              </svg>
+            </button>
+          </n-dropdown>
 
           <button
             class="send-btn"
-            :class="{ ready: isGenerating || inputText.trim().length > 0 }"
-            :disabled="!isGenerating && inputText.trim().length === 0"
-            :title="isGenerating ? '暂停生成（不取消已入队任务）' : '发送'"
+            :class="{ ready: isGenerating || inputText.trim().length > 0 || stagedFiles.length > 0 }"
+            :disabled="!isGenerating && inputText.trim().length === 0 && stagedFiles.length === 0"
+            :title="isGenerating ? '暂停生成（不取消已入队任务）' : '发送 (Enter)'"
             @click="handleSendClick"
           >
             <svg v-if="isGenerating" width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
               <rect x="6" y="6" width="12" height="12" rx="2" />
             </svg>
-            <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M12 19V5M5 12l7-7 7 7" />
             </svg>
           </button>
@@ -673,9 +697,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
-import { useRoute } from 'vue-router'
-import { useMessage, useDialog } from 'naive-ui'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch, h } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { useMessage, useDialog, NDropdown } from 'naive-ui'
 import { api } from '../api/http'
 import { AgentWebSocket } from '../api/ws'
 import type { Task, TaskSpec, WsServerEvent, Profile, Dataset, KnowledgeBase, GoldQA } from '../api/types'
@@ -686,6 +710,7 @@ import KindTag from '../components/common/KindTag.vue'
 const message = useMessage()
 const dialog = useDialog()
 const route = useRoute()
+const router = useRouter()
 const modeStore = useModeStore()
 const chatScrollRef = ref<HTMLDivElement | null>(null)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
@@ -697,6 +722,38 @@ const isWsOnline = ref(true)
 const isGenerating = ref(false)
 const showJumpBottom = ref(false)
 const agentModelName = ref('')
+const currentAgentProfileId = ref<string>('')
+const allProfiles = ref<Profile[]>([])
+
+/** 模型选择下拉菜单项（对齐 /admin/profiles 接入池） */
+const agentProfileDropdownOptions = computed(() => {
+  if (!allProfiles.value.length) {
+    return [
+      { label: '暂无接入模型协议档', key: '__none__', disabled: true },
+      { type: 'divider', key: 'd1' },
+      { label: '⚙ 前往接入协议档 ↗', key: '__goto_profiles__' },
+    ]
+  }
+  const list = allProfiles.value.map((p) => {
+    const isCurrent = p.id === currentAgentProfileId.value || p.model === agentModelName.value
+    return {
+      label: () =>
+        h('div', { style: 'display: flex; align-items: center; justify-content: space-between; gap: 14px; min-width: 220px; padding: 2px 0;' }, [
+          h('div', { style: 'display: flex; flex-direction: column; gap: 1px;' }, [
+            h('span', { style: `font-weight: ${isCurrent ? '700' : '500'}; font-size: 13px; color: ${isCurrent ? 'var(--accent-ai)' : 'inherit'};` }, p.name),
+            h('span', { style: 'font-size: 11px; opacity: 0.65; font-family: var(--font-mono);' }, `${p.model || p.protocol} · ${p.protocol}`),
+          ]),
+          isCurrent ? h('span', { style: 'color: var(--accent-ai); font-size: 11px; font-weight: 700; background: var(--t-agent); padding: 1px 6px; border-radius: 4px;' }, '当前驱动') : null,
+        ]),
+      key: p.id,
+    }
+  })
+  return [
+    ...list,
+    { type: 'divider', key: 'd1' },
+    { label: '⚙ 管理模型接入协议档 ↗', key: '__goto_profiles__' },
+  ]
+})
 
 const sessions = ref<any[]>([])
 const currentSessionId = ref<string>('')
@@ -1067,10 +1124,14 @@ function scrollToBottom(force = false) {
   })
 }
 
+/** 自适应调整多行输入框高度（最小 40px，最大 200px 限制，超高自动滚动） */
 function adjustTextareaHeight() {
   if (!textareaRef.value) return
   textareaRef.value.style.height = 'auto'
-  textareaRef.value.style.height = Math.min(160, textareaRef.value.scrollHeight) + 'px'
+  const scrollH = textareaRef.value.scrollHeight
+  const targetH = Math.min(200, Math.max(40, scrollH))
+  textareaRef.value.style.height = `${targetH}px`
+  textareaRef.value.style.overflowY = scrollH > 200 ? 'auto' : 'hidden'
 }
 
 function triggerFileInput() {
@@ -1617,20 +1678,45 @@ async function loadSessions() {
   }
 }
 
-/** 从后端读取当前 Agent 协议档的真实模型名，回填顶栏与输入框显示；未配置或失败时留空。 */
+/** 加载全部接入协议档并解析当前 Agent 驱动模型 */
 async function resolveAgentModelName() {
   try {
-    const settings = await api.admin.getSettings()
+    const [settings, profiles] = await Promise.all([
+      api.admin.getSettings().catch(() => null),
+      api.profiles.list().catch(() => []),
+    ])
+    allProfiles.value = profiles || []
     const pid = settings?.agent_profile_id
-    if (!pid) {
+    currentAgentProfileId.value = pid || ''
+    if (pid) {
+      const hit = (profiles || []).find((p) => p.id === pid)
+      agentModelName.value = hit ? hit.model || hit.name : ''
+    } else if (profiles && profiles.length > 0) {
+      agentModelName.value = profiles[0].model || profiles[0].name
+      currentAgentProfileId.value = profiles[0].id
+    } else {
       agentModelName.value = ''
-      return
     }
-    const profiles = await api.profiles.list()
-    const hit = profiles.find((p) => p.id === pid)
-    agentModelName.value = hit ? hit.model || hit.name : ''
   } catch {
     agentModelName.value = ''
+  }
+}
+
+/** 切换当前 Agent 调用的后端接入模型（直接持久化至 admin settings 并即时生效） */
+async function handleSelectAgentModel(key: string) {
+  if (key === '__goto_profiles__') {
+    router.push('/admin/profiles')
+    return
+  }
+  const hit = allProfiles.value.find((p) => p.id === key)
+  if (!hit) return
+  try {
+    await api.admin.updateSettings({ agent_profile_id: key })
+    currentAgentProfileId.value = key
+    agentModelName.value = hit.model || hit.name
+    message.success(`已将 Agent 驱动模型切换为「${hit.name}」(${hit.model || hit.protocol})`)
+  } catch (err: any) {
+    message.error(err.message || '切换模型失败')
   }
 }
 
@@ -1948,6 +2034,115 @@ onBeforeUnmount(() => {
 <style scoped>
 .agent-layout {
   height: calc(100vh - var(--topbar-h) - 20px);
+}
+
+/* 顶部模型切换下拉按钮 */
+.chat-head-model-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+.chat-head-model-btn:hover {
+  border-color: var(--accent-ai);
+  color: var(--text-primary);
+  background: var(--bg-main);
+}
+.head-model-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-ai);
+}
+
+/* 底部输入框整体容器（固定吸附于对话流底部，不随会话滚动消失） */
+.composer {
+  padding: 8px 20px 16px;
+  flex-shrink: 0;
+  background: var(--bg-main);
+}
+
+.composer-inner {
+  max-width: 780px;
+  margin: 0 auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 18px;
+  background: var(--bg-main);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.04);
+  padding: 8px 12px;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.composer-inner:focus-within {
+  border-color: var(--accent-ai);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-ai) 16%, transparent), 0 4px 20px rgba(0, 0, 0, 0.06);
+}
+
+/* 多行文本域自适应高度（最大 200px 限制） */
+.composer textarea {
+  flex: 1;
+  border: 0;
+  outline: none;
+  resize: none;
+  font-family: var(--font-chat, inherit);
+  font-size: 14.5px;
+  line-height: 1.55;
+  min-height: 40px;
+  max-height: 200px;
+  padding: 8px 4px;
+  background: transparent;
+  color: var(--text-primary);
+  box-sizing: border-box;
+  overflow-y: hidden;
+}
+
+/* 底部输入框内模型切换下拉胶囊 */
+.composer-model-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 9px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+  margin-bottom: 2px;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+.composer-model-pill:hover {
+  border-color: var(--accent-ai);
+  color: var(--text-primary);
+  background: var(--bg-main);
+}
+.model-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-ai);
+}
+.model-name {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* F9 会话占槽时确认卡 note 转 warning 色 */
