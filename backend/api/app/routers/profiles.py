@@ -1,14 +1,10 @@
 """三协议档的安全 CRUD 和真实连通性检查接口。"""
 
-import json
-import time
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
-
 from fastapi import APIRouter, Depends
 from fastapi import Request as FastApiRequest
 from sqlalchemy.orm import Session
 
+from ..adapters import call_protocol
 from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
@@ -38,32 +34,6 @@ def _profile_out(profile: ProtocolProfile) -> ProfileOut:
 def _request_ip(request: FastApiRequest) -> str | None:
     """提取协议档变更的请求来源 IP。"""
     return request.client.host if request.client else None
-
-
-def _endpoint_and_body(profile: ProtocolProfile) -> tuple[str, dict, dict[str, str]]:
-    """按协议构造最小真实上游探活请求，不返回或记录认证头。"""
-    base = profile.base_url.rstrip("/")
-    api_key = decrypt_secret(profile.encrypted_key) if profile.encrypted_key else ""
-    if not api_key:
-        raise AppError(ErrorCode.VALIDATION, "协议档未配置 API Key")
-    headers = {"Content-Type": "application/json"}
-    if profile.protocol == "openai_chat":
-        headers["Authorization"] = f"Bearer {api_key}"
-        return (
-            f"{base}/v1/chat/completions",
-            {"model": profile.model, "messages": [{"role": "user", "content": "ping"}], "max_tokens": 1},
-            headers,
-        )
-    if profile.protocol == "openai_responses":
-        headers["Authorization"] = f"Bearer {api_key}"
-        return f"{base}/v1/responses", {"model": profile.model, "input": "ping", "max_output_tokens": 1}, headers
-    headers["x-api-key"] = api_key
-    headers["anthropic-version"] = profile.anthropic_version or "2023-06-01"
-    return (
-        f"{base}/v1/messages",
-        {"model": profile.model, "max_tokens": 1, "messages": [{"role": "user", "content": "ping"}]},
-        headers,
-    )
 
 
 @router.get("")
@@ -191,18 +161,27 @@ def check_profile(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """向目标协议端点发送最小真实探活请求并返回脱敏结果。"""
+    """向目标协议端点发送最小真实探活请求并返回脱敏结果。
+
+    复用三协议统一适配器：上游 4xx/5xx → ``UPSTREAM``、超时 → ``TIMEOUT``、
+    结构异常 → ``UPSTREAM``；探活仅验证连通与鉴权，不因空文本判定失败。
+    """
     profile = db.query(ProtocolProfile).filter(ProtocolProfile.id == profile_id).first()
     if not profile:
         raise AppError(ErrorCode.NOT_FOUND, "协议档不存在")
-    url, body, headers = _endpoint_and_body(profile)
-    request = Request(url, data=json.dumps(body).encode(), headers=headers, method="POST")
-    started = time.perf_counter()
+    if not profile.encrypted_key:
+        raise AppError(ErrorCode.VALIDATION, "协议档未配置 API Key")
     try:
-        with urlopen(request, timeout=10) as response:
-            response.read(1)
-        return {"ok": True, "latency_ms": round((time.perf_counter() - started) * 1000), "model": profile.model}
-    except HTTPError as exc:
-        return {"ok": False, "code": "UPSTREAM", "message": f"{exc.code} from upstream"}
-    except (URLError, TimeoutError):
-        return {"ok": False, "code": "UPSTREAM", "message": "上游连接失败"}
+        result = call_protocol(
+            protocol=profile.protocol,
+            base_url=profile.base_url,
+            model=profile.model,
+            api_key=decrypt_secret(profile.encrypted_key),
+            messages=[{"role": "user", "content": "ping"}],
+            max_tokens=1,
+            anthropic_version=profile.anthropic_version,
+            timeout_s=10,
+        )
+    except AppError as exc:
+        return {"ok": False, "code": exc.code.value, "message": exc.message}
+    return {"ok": True, "latency_ms": result.latency_ms, "model": profile.model}

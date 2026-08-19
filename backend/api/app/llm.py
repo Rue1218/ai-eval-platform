@@ -6,12 +6,10 @@
 """
 
 import json
-import time
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 
 from sqlalchemy.orm import Session
 
+from .adapters import call_protocol
 from .errors import AppError, ErrorCode
 from .models import ProtocolProfile, Setting
 from .security import decrypt_secret
@@ -35,82 +33,27 @@ def _resolve_agent_profile(db: Session) -> ProtocolProfile:
 
 
 def call_agent_model(db: Session, system: str, user: str, *, max_tokens: int = 2048) -> str:
-    """以三协议适配调用 Agent 模型并返回纯文本内容。
+    """经三协议统一适配器调用 Agent 模型并返回纯文本内容。
 
     失败语义：上游 4xx/5xx 与连接错误归一为 UPSTREAM；超时归一为 TIMEOUT。
     响应解析失败同样按 UPSTREAM 处理，避免把上游原文抛给浏览器。
     """
     profile = _resolve_agent_profile(db)
-    base = profile.base_url.rstrip("/")
-    api_key = decrypt_secret(profile.encrypted_key)
-    headers = {"Content-Type": "application/json"}
-
-    if profile.protocol == "openai_chat":
-        url = f"{base}/v1/chat/completions"
-        body = {
-            "model": profile.model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            "temperature": 0.3,
-            "max_tokens": max_tokens,
-        }
-        headers["Authorization"] = f"Bearer {api_key}"
-        extract = lambda data: data["choices"][0]["message"]["content"]  # noqa: E731
-    elif profile.protocol == "openai_responses":
-        url = f"{base}/v1/responses"
-        body = {
-            "model": profile.model,
-            "instructions": system,
-            "input": user,
-            "max_output_tokens": max_tokens,
-        }
-        headers["Authorization"] = f"Bearer {api_key}"
-        extract = lambda data: "".join(  # noqa: E731
-            part.get("text", "")
-            for item in data.get("output", [])
-            for part in item.get("content", [])
-            if part.get("type") == "output_text"
-        )
-    elif profile.protocol == "anthropic_messages":
-        url = f"{base}/v1/messages"
-        body = {
-            "model": profile.model,
-            "system": system,
-            "messages": [{"role": "user", "content": user}],
-            "max_tokens": max_tokens,
-        }
-        headers["x-api-key"] = api_key
-        headers["anthropic-version"] = profile.anthropic_version or "2023-06-01"
-        extract = lambda data: "".join(  # noqa: E731
-            block.get("text", "") for block in data.get("content", []) if block.get("type") == "text"
-        )
-    else:
-        raise AppError(ErrorCode.VALIDATION, f"Agent 协议档协议不受支持：{profile.protocol}")
-
-    request = Request(url, data=json.dumps(body).encode(), headers=headers, method="POST")
-    started = time.perf_counter()
-    try:
-        with urlopen(request, timeout=CALL_TIMEOUT_S) as response:
-            payload = json.loads(response.read().decode())
-    except HTTPError as exc:
-        raise AppError(ErrorCode.UPSTREAM, f"Agent 模型上游返回 {exc.code}") from exc
-    except TimeoutError as exc:
-        raise AppError(ErrorCode.TIMEOUT, "Agent 模型调用超时") from exc
-    except URLError as exc:
-        if "timed out" in str(exc.reason).lower():
-            raise AppError(ErrorCode.TIMEOUT, "Agent 模型调用超时") from exc
-        raise AppError(ErrorCode.UPSTREAM, "Agent 模型上游连接失败") from exc
-
-    try:
-        text = extract(payload)
-    except (KeyError, IndexError, TypeError) as exc:
-        raise AppError(ErrorCode.UPSTREAM, "Agent 模型响应结构异常") from exc
-    if not text or not text.strip():
+    result = call_protocol(
+        protocol=profile.protocol,
+        base_url=profile.base_url,
+        model=profile.model,
+        api_key=decrypt_secret(profile.encrypted_key),
+        messages=[{"role": "user", "content": user}],
+        system=system,
+        temperature=0.3,
+        max_tokens=max_tokens,
+        anthropic_version=profile.anthropic_version,
+        timeout_s=CALL_TIMEOUT_S,
+    )
+    if not result.text.strip():
         raise AppError(ErrorCode.UPSTREAM, "Agent 模型返回空内容")
-    _ = started  # 预留：后续接入 usage_ledger 时统计耗时
-    return text
+    return result.text
 
 
 def parse_json_candidates(text: str) -> list[dict]:

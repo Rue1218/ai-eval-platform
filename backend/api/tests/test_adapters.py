@@ -1,0 +1,179 @@
+"""三协议适配器夹具单测（后端开发计划 M1 W3）。
+
+覆盖每种协议的「成功 + 4xx」夹具，并验证 TIMEOUT / UPSTREAM 可区分、
+usage 归一、鉴权头组装与 API Key 不泄漏。HTTP 层通过 monkeypatch
+替换 ``adapters._post_json`` 注入夹具，不依赖真实上游与数据库。
+"""
+
+from urllib.error import HTTPError
+
+import pytest
+
+from app import adapters
+from app.adapters import call_protocol
+from app.errors import AppError, ErrorCode
+
+API_KEY = "sk-secret-key-123"
+BASE = "https://upstream.example.com"
+
+# 三协议成功响应夹具
+OPENAI_CHAT_OK = {
+    "choices": [{"message": {"role": "assistant", "content": "你好"}}],
+    "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+}
+OPENAI_RESPONSES_OK = {
+    "output": [
+        {"content": [{"type": "output_text", "text": "答案"}, {"type": "reasoning", "text": "略"}]},
+    ],
+    "usage": {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10},
+}
+ANTHROPIC_OK = {
+    "content": [{"type": "text", "text": "回复"}, {"type": "tool_use", "id": "x"}],
+    "usage": {"input_tokens": 8, "output_tokens": 4},
+}
+
+# 协议 -> (成功夹具, 期望提取文本, 期望归一 usage)
+SUCCESS_CASES = [
+    ("openai_chat", OPENAI_CHAT_OK, "你好", {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}),
+    (
+        "openai_responses",
+        OPENAI_RESPONSES_OK,
+        "答案",
+        {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10},
+    ),
+    (
+        "anthropic_messages",
+        ANTHROPIC_OK,
+        "回复",
+        {"prompt_tokens": 8, "completion_tokens": 4, "total_tokens": 12},
+    ),
+]
+
+
+def _capture(monkeypatch, payload=None, *, error: Exception | None = None) -> dict:
+    """替换 HTTP 层为夹具：记录请求并返回固定 payload 或抛出固定异常。"""
+    seen: dict = {}
+
+    def fake_post(url, body, headers, timeout_s):
+        seen["url"], seen["body"], seen["headers"], seen["timeout_s"] = url, body, headers, timeout_s
+        if error is not None:
+            raise error
+        return payload
+
+    monkeypatch.setattr(adapters, "_post_json", fake_post)
+    return seen
+
+
+def _kwargs(protocol: str) -> dict:
+    """三协议统一的公共调用参数。"""
+    return {
+        "protocol": protocol,
+        "base_url": BASE,
+        "model": "test-model",
+        "api_key": API_KEY,
+        "messages": [{"role": "user", "content": "ping"}],
+        "system": "你是裁判",
+        "max_tokens": 16,
+    }
+
+
+@pytest.mark.parametrize("protocol,payload,want_text,want_usage", SUCCESS_CASES)
+def test_protocol_success_fixture(monkeypatch, protocol, payload, want_text, want_usage):
+    """成功夹具：文本提取、usage 归一、原始响应与延迟均符合统一契约。"""
+    seen = _capture(monkeypatch, payload)
+    result = call_protocol(**_kwargs(protocol))
+
+    assert result.text == want_text
+    assert result.usage == want_usage
+    assert result.raw == payload
+    assert result.latency_ms >= 0
+    # 端点与超时按协议正确组装
+    assert seen["timeout_s"] == adapters.DEFAULT_TIMEOUT_S
+    assert API_KEY not in seen["url"]
+
+
+def test_openai_chat_request_shape(monkeypatch):
+    """openai_chat：system 进入 messages、Bearer 鉴权头、采样参数入 body。"""
+    seen = _capture(monkeypatch, OPENAI_CHAT_OK)
+    call_protocol(**_kwargs("openai_chat"), temperature=0.3)
+
+    assert seen["url"] == f"{BASE}/v1/chat/completions"
+    assert seen["headers"]["Authorization"] == f"Bearer {API_KEY}"
+    assert seen["body"]["messages"][0] == {"role": "system", "content": "你是裁判"}
+    assert seen["body"]["messages"][1] == {"role": "user", "content": "ping"}
+    assert seen["body"]["model"] == "test-model"
+    assert seen["body"]["max_tokens"] == 16
+
+
+def test_openai_responses_request_shape(monkeypatch):
+    """openai_responses：system 走 instructions、input 承载 messages、Bearer 鉴权。"""
+    seen = _capture(monkeypatch, OPENAI_RESPONSES_OK)
+    call_protocol(**_kwargs("openai_responses"))
+
+    assert seen["url"] == f"{BASE}/v1/responses"
+    assert seen["headers"]["Authorization"] == f"Bearer {API_KEY}"
+    assert seen["body"]["instructions"] == "你是裁判"
+    assert seen["body"]["input"] == [{"role": "user", "content": "ping"}]
+    assert seen["body"]["max_output_tokens"] == 16
+
+
+def test_anthropic_request_shape(monkeypatch):
+    """anthropic_messages：system 独立字段、x-api-key + anthropic-version 鉴权头。"""
+    seen = _capture(monkeypatch, ANTHROPIC_OK)
+    call_protocol(**_kwargs("anthropic_messages"), anthropic_version="2023-06-01")
+
+    assert seen["url"] == f"{BASE}/v1/messages"
+    assert seen["headers"]["x-api-key"] == API_KEY
+    assert seen["headers"]["anthropic-version"] == "2023-06-01"
+    assert seen["headers"].get("Authorization") is None
+    assert seen["body"]["system"] == "你是裁判"
+    assert seen["body"]["messages"] == [{"role": "user", "content": "ping"}]
+    assert seen["body"]["max_tokens"] == 16
+
+
+@pytest.mark.parametrize("protocol", [case[0] for case in SUCCESS_CASES])
+def test_protocol_4xx_maps_to_upstream(monkeypatch, protocol):
+    """4xx 夹具：统一归一为 UPSTREAM，消息仅含状态码且不泄漏 Key。"""
+    _capture(monkeypatch, error=HTTPError("https://upstream", 401, "Unauthorized", None, None))
+    with pytest.raises(AppError) as exc:
+        call_protocol(**_kwargs(protocol))
+
+    assert exc.value.code == ErrorCode.UPSTREAM
+    assert "401" in exc.value.message
+    assert API_KEY not in exc.value.message
+
+
+@pytest.mark.parametrize("protocol", [case[0] for case in SUCCESS_CASES])
+def test_protocol_timeout_maps_to_timeout(monkeypatch, protocol):
+    """超时夹具：统一归一为 TIMEOUT，与 UPSTREAM 可区分。"""
+    _capture(monkeypatch, error=TimeoutError("timed out"))
+    with pytest.raises(AppError) as exc:
+        call_protocol(**_kwargs(protocol))
+
+    assert exc.value.code == ErrorCode.TIMEOUT
+
+
+def test_malformed_response_maps_to_upstream(monkeypatch):
+    """结构异常夹具：上游 200 但缺少协议字段时归一为 UPSTREAM。"""
+    _capture(monkeypatch, {"unexpected": True})
+    with pytest.raises(AppError) as exc:
+        call_protocol(**_kwargs("openai_chat"))
+
+    assert exc.value.code == ErrorCode.UPSTREAM
+    assert "结构" in exc.value.message
+
+
+def test_unsupported_protocol_rejected():
+    """非契约协议在发请求前即拒绝，归一为 VALIDATION。"""
+    with pytest.raises(AppError) as exc:
+        call_protocol(**_kwargs("grpc"))
+
+    assert exc.value.code == ErrorCode.VALIDATION
+
+
+def test_missing_usage_counts_as_zero(monkeypatch):
+    """上游缺失 usage 字段时按 0 计，不抛异常。"""
+    _capture(monkeypatch, {"choices": [{"message": {"content": "ok"}}]})
+    result = call_protocol(**_kwargs("openai_chat"))
+
+    assert result.usage == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
