@@ -219,6 +219,26 @@ elif ! docker compose up -d --no-build --remove-orphans "${DEPLOY_SERVICES[@]}";
     docker compose up -d --no-build "${DEPLOY_SERVICES[@]}"
 fi
 
+# Web 镜像的入口 HTML 与其首屏静态资源必须成对存在，否则 Nginx 会把缺失分包回退成 HTML。
+if [[ " ${DEPLOY_SERVICES[*]} " == *" web "* ]]; then
+    echo "==> 验证 Web 入口引用的静态资源"
+    docker compose exec -T web sh -eu -c '
+        web_root=/usr/share/nginx/html
+        entry_html="$web_root/index.html"
+        [ -f "$entry_html" ] || { echo "错误：Web 容器缺少 index.html" >&2; exit 1; }
+
+        asset_paths=$(sed -n \
+            -e "s|.*src=\"\(/assets/[^\"]*\)\".*|\1|p" \
+            -e "s|.*href=\"\(/assets/[^\"]*\)\".*|\1|p" \
+            "$entry_html")
+        [ -n "$asset_paths" ] || { echo "错误：Web 入口未引用 Vite 静态资源" >&2; exit 1; }
+
+        for asset_path in $asset_paths; do
+            [ -f "$web_root$asset_path" ] || { echo "错误：Web 容器缺少静态资源 $asset_path" >&2; exit 1; }
+        done
+    '
+fi
+
 # 仅在容器滚动更新成功后记录部署提交，失败任务不会污染下一次差异计算基准。
 printf '%s\n' "${DEPLOY_COMMIT:-$(git rev-parse HEAD)}" > "$DEPLOY_MARKER"
 # 持久化镜像引用；使用 %q 防止再次 source 时发生 shell 注入。
