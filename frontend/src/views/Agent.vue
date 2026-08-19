@@ -152,6 +152,21 @@
               <span class="tdot"></span><span class="tdot"></span><span class="tdot"></span>
             </div>
 
+            <!-- 2.2 思考卡：推理模型思考链流式展示，完成后自动折叠，可展开/收起 -->
+            <div v-else-if="item.type === 'thought'" class="think-card" :class="{ done: item.done }">
+              <button class="think-head" type="button" @click="item.collapsed = !item.collapsed">
+                <span class="think-dot" v-if="!item.done"></span>
+                <span class="think-label">{{ item.done ? '已深度思考' : '深度思考中' }}</span>
+                <span class="think-meta">{{ (item.text || '').length }} 字</span>
+                <svg class="think-caret" :class="{ open: !item.collapsed }" viewBox="0 0 12 12" width="12" height="12">
+                  <path d="M2 4l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+                </svg>
+              </button>
+              <div v-show="!item.collapsed" class="think-body">
+                <span>{{ item.text }}</span><span v-if="!item.done" class="think-cursor">▍</span>
+              </div>
+            </div>
+
             <!-- 2.3 短 MCP 工具调用卡 -->
             <div
               v-else-if="item.type === 'tool'"
@@ -1830,6 +1845,17 @@ function handleWsEvent(ev: WsServerEvent) {
   const p = ev.payload || {}
   switch (ev.event) {
     case 'thought': {
+      // 思考链增量帧（瞬态）：追加到可展开/收起的思考卡，无则新建
+      if (p.stream === 'think') {
+        const delta = String(p.text || '')
+        if (delta) {
+          const target = [...events.value].reverse().find(e => e.type === 'thought' && !e.done)
+          if (target) target.text = (target.text || '') + delta
+          else events.value.push({ type: 'thought', text: delta, done: false, collapsed: false })
+          scrollToBottom()
+        }
+        break
+      }
       // 流式增量帧（瞬态，服务端不落库）：追加到当前流式气泡，无则新建
       if (p.stream === 'chunk') {
         const delta = String(p.text || '')
@@ -1841,8 +1867,13 @@ function handleWsEvent(ev: WsServerEvent) {
         }
         break
       }
-      // 完整回复（终帧或非流式）：若存在流式气泡则用权威全文替换落定，避免重复渲染
+      // 完整回复（终帧或非流式）：先收尾思考卡（完成并折叠），再落定回复文本
       const text = String(p.text || '').trim()
+      const think = [...events.value].reverse().find(e => e.type === 'thought' && !e.done)
+      if (think) {
+        think.done = true
+        think.collapsed = true
+      }
       const streaming = [...events.value].reverse().find(e => e.type === 'agent' && e.streaming)
       if (streaming) {
         if (text) streaming.text = `<p>${escapeHtml(text).replace(/\n/g, '<br>')}</p>`

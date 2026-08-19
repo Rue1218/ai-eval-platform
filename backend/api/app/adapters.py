@@ -74,6 +74,24 @@ def _norm_usage(data: dict, *, anthropic: bool) -> dict:
     return {"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": total}
 
 
+def _full_text(protocol: str, data: dict) -> str:
+    """从完整（非流式）响应对象中提取全文，供 call_protocol 与流式兜底复用。"""
+    if protocol == "openai_chat":
+        # 兼容网关在 max_tokens=1 时可能返回 content=None
+        choices = data["choices"]
+        return str(choices[0]["message"].get("content") or "")
+    if protocol == "openai_responses":
+        # output 数组内仅拼接 output_text 内容块
+        return "".join(
+            str(part.get("text") or "")
+            for item in data["output"]
+            for part in (item.get("content") or [])
+            if part.get("type") == "output_text"
+        )
+    # anthropic_messages：content 数组内仅拼接 text 内容块
+    return "".join(str(block.get("text") or "") for block in data["content"] if block.get("type") == "text")
+
+
 def call_protocol(
     *,
     protocol: str,
@@ -115,26 +133,12 @@ def call_protocol(
             body["thinking"] = {"type": "disabled"}
         headers["Authorization"] = f"Bearer {api_key}"
 
-        def extract(data: dict) -> str:
-            # 兼容网关在 max_tokens=1 时可能返回 content=None
-            choices = data["choices"]
-            return str(choices[0]["message"].get("content") or "")
-
     elif protocol == "openai_responses":
         url = f"{base}/v1/responses"
         body = {"model": model, "input": list(messages), "max_output_tokens": max_tokens}
         if system:
             body["instructions"] = system
         headers["Authorization"] = f"Bearer {api_key}"
-
-        def extract(data: dict) -> str:
-            # output 数组内仅拼接 output_text 内容块
-            return "".join(
-                str(part.get("text") or "")
-                for item in data["output"]
-                for part in (item.get("content") or [])
-                if part.get("type") == "output_text"
-            )
 
     else:  # anthropic_messages
         url = f"{base}/v1/messages"
@@ -148,12 +152,6 @@ def call_protocol(
             body["system"] = system
         headers["x-api-key"] = api_key
         headers["anthropic-version"] = anthropic_version or "2023-06-01"
-
-        def extract(data: dict) -> str:
-            # content 数组内仅拼接 text 内容块
-            return "".join(
-                str(block.get("text") or "") for block in data["content"] if block.get("type") == "text"
-            )
 
     started = time.perf_counter()
     try:
@@ -171,7 +169,7 @@ def call_protocol(
 
     latency_ms = round((time.perf_counter() - started) * 1000)
     try:
-        text = extract(data)
+        text = _full_text(protocol, data)
     except (KeyError, IndexError, TypeError, AttributeError) as exc:
         raise AppError(ErrorCode.UPSTREAM, "上游响应结构异常") from exc
 
@@ -195,17 +193,18 @@ def stream_protocol(
     max_tokens: int = 1024,
     anthropic_version: str | None = None,
     timeout_s: float = DEFAULT_TIMEOUT_S,
-) -> Iterator[str]:
-    """按协议流式调用上游模型，逐块 yield 文本增量（SSE）。
+) -> Iterator[tuple[str, str]]:
+    """按协议流式调用上游模型，逐块 yield ``(kind, text)`` 增量（SSE）。
 
-    供 Agent 对话等「边生成边下发」的交互场景使用；非流式批量评测
-    仍走 ``call_protocol``。``timeout_s`` 同时约束建连、单次读与整体
-    流式时长，超时统一归一为 TIMEOUT，上游 4xx/5xx 归一为 UPSTREAM。
+    ``kind`` 为增量类别：``"content"`` 是正式回复正文，``"reasoning"``
+    是推理模型的前置思考链（deepseek 风格 ``reasoning_content`` /
+    anthropic ``thinking_delta`` / responses ``reasoning_summary``），
+    供前端思考卡展示；上游未产生思考链时全程只 yield content。
 
-    三协议的 SSE 增量位置：
-    - ``openai_chat``        ``choices[0].delta.content``（首帧 role 帧 content 为空）
-    - ``openai_responses``   ``type=response.output_text.delta`` 事件的 ``delta``
-    - ``anthropic_messages`` ``content_block_delta`` 事件中 ``delta.text``
+    ``timeout_s`` 同时约束建连、单次读与整体流式时长，超时统一归一为
+    TIMEOUT，上游 4xx/5xx 归一为 UPSTREAM。若网关忽略 ``stream``
+    参数直接返回完整 JSON（非 SSE），则兜底解析全文并作为单块
+    content yield，保证调用方拿到正确结果而非空流降级。
     """
     if protocol not in SUPPORTED_PROTOCOLS:
         raise AppError(ErrorCode.VALIDATION, f"协议不受支持：{protocol}")
@@ -223,11 +222,18 @@ def stream_protocol(
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
+        # 与 call_protocol 一致：mimo 网关显式关闭思考，正文直接流式输出
+        if "xiaomimimo" in base:
+            body["thinking"] = {"type": "disabled"}
         headers["Authorization"] = f"Bearer {api_key}"
 
-        def delta_of(data: dict) -> str:
+        def delta_of(data: dict) -> tuple[str, str]:
             choices = data.get("choices") or [{}]
-            return str((choices[0].get("delta") or {}).get("content") or "")
+            delta = choices[0].get("delta") or {}
+            if delta.get("reasoning_content"):
+                # 推理模型的思考链增量（deepseek/mimo 等风格）
+                return ("reasoning", str(delta["reasoning_content"]))
+            return ("content", str(delta.get("content") or ""))
 
     elif protocol == "openai_responses":
         url = f"{base}/v1/responses"
@@ -236,10 +242,13 @@ def stream_protocol(
             body["instructions"] = system
         headers["Authorization"] = f"Bearer {api_key}"
 
-        def delta_of(data: dict) -> str:  # noqa: F811  （各分支同名提取器，互斥定义）
-            if data.get("type") == "response.output_text.delta":
-                return str(data.get("delta") or "")
-            return ""
+        def delta_of(data: dict) -> tuple[str, str]:  # noqa: F811  （各分支同名提取器，互斥定义）
+            kind = data.get("type")
+            if kind == "response.reasoning_summary_text.delta":
+                return ("reasoning", str(data.get("delta") or ""))
+            if kind == "response.output_text.delta":
+                return ("content", str(data.get("delta") or ""))
+            return ("content", "")
 
     else:  # anthropic_messages
         url = f"{base}/v1/messages"
@@ -255,12 +264,14 @@ def stream_protocol(
         headers["x-api-key"] = api_key
         headers["anthropic-version"] = anthropic_version or "2023-06-01"
 
-        def delta_of(data: dict) -> str:  # noqa: F811
+        def delta_of(data: dict) -> tuple[str, str]:  # noqa: F811
             if data.get("type") == "content_block_delta":
                 delta = data.get("delta") or {}
+                if delta.get("type") == "thinking_delta":
+                    return ("reasoning", str(delta.get("thinking") or ""))
                 if delta.get("type") == "text_delta":
-                    return str(delta.get("text") or "")
-            return ""
+                    return ("content", str(delta.get("text") or ""))
+            return ("content", "")
 
     request = Request(url, data=json.dumps(body).encode(), headers=headers, method="POST")
     deadline = time.monotonic() + timeout_s
@@ -276,6 +287,9 @@ def stream_protocol(
             raise AppError(ErrorCode.TIMEOUT, "上游调用超时") from exc
         raise AppError(ErrorCode.UPSTREAM, "上游连接失败") from exc
 
+    # 非喂 SSE data 行的响应体（网关忽略 stream 参数时的完整 JSON）
+    non_sse_lines: list[str] = []
+    yielded = False
     try:
         with response:
             for raw_line in response:
@@ -284,24 +298,44 @@ def stream_protocol(
                     raise TimeoutError("stream deadline exceeded")
                 line = raw_line.decode("utf-8", "ignore").strip()
                 if not line.startswith("data:"):
-                    # SSE 的 event:/注释行/空行一律跳过，仅解析 data 帧
+                    # SSE 的 event:/注释行/空行跳过；但完整 JSON 响应需收集作兜底
+                    if line:
+                        non_sse_lines.append(line)
                     continue
                 payload = line[5:].strip()
                 if not payload:
                     continue
                 if payload == "[DONE]":
-                    return
+                    break
                 try:
                     data = json.loads(payload)
                 except json.JSONDecodeError:
                     continue  # 容忍个别坏帧，不中断整条流
                 if not isinstance(data, dict):
                     continue
-                text = delta_of(data)
+                kind, text = delta_of(data)
                 if text:
-                    yield text
+                    yielded = True
+                    yield (kind, text)
     except TimeoutError as exc:
         raise AppError(ErrorCode.TIMEOUT, "上游调用超时") from exc
     except OSError as exc:
         # 读流中连接中断（对端重置等）：统一归一为 UPSTREAM
         raise AppError(ErrorCode.UPSTREAM, "上游连接中断") from exc
+
+    # 兜底：SSE 流中无任何增量且响应体是完整 JSON —— 网关按非流式返回了结果，
+    # 用非流式提取器解析全文作为单块 content，避免调用方拿到空流而错误降级。
+    if not yielded and non_sse_lines:
+        joined = "\n".join(non_sse_lines).strip()
+        if joined.startswith("{"):
+            try:
+                data = json.loads(joined)
+            except json.JSONDecodeError:
+                data = None
+            if isinstance(data, dict):
+                try:
+                    text = _full_text(protocol, data)
+                except (KeyError, IndexError, TypeError, AttributeError):
+                    text = ""
+                if text:
+                    yield ("content", text)

@@ -615,6 +615,42 @@ p { margin: 0; text-wrap: pretty; }
 }
 @keyframes blink-cursor { 50% { opacity: 0; } }
 
+/* 思考卡：推理模型思考链流式展示（可展开/收起，完成后自动折叠为一行摘要） */
+.think-card {
+  max-width: 78%;
+  border: 1px solid var(--c-border, rgba(255, 255, 255, 0.08));
+  border-radius: 12px;
+  background: var(--c-think-bg, rgba(148, 163, 184, 0.06));
+  overflow: hidden;
+}
+.think-head {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; padding: 8px 14px;
+  background: none; border: none; cursor: pointer;
+  font-size: 13px; color: var(--text-secondary, #94a3b8);
+}
+.think-head:hover { color: var(--text-primary, #e2e8f0); }
+.think-label { font-weight: 500; }
+.think-meta { opacity: .7; font-size: 12px; }
+.think-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--c-agent, #10b981);
+  animation: think-pulse 1.2s ease-in-out infinite;
+}
+@keyframes think-pulse { 50% { opacity: .25; transform: scale(.8); } }
+.think-caret { margin-left: auto; opacity: .6; transition: transform .2s; }
+.think-caret.open { transform: rotate(180deg); }
+.think-body {
+  padding: 2px 14px 12px;
+  font-size: 13px; line-height: 1.75;
+  color: var(--text-secondary, #94a3b8);
+  white-space: pre-wrap; word-break: break-word;
+  max-height: 220px; overflow-y: auto;
+  border-top: 1px dashed var(--c-border, rgba(255, 255, 255, 0.08));
+}
+.think-card.done .think-body { opacity: .75; }
+.think-cursor { color: var(--c-agent, #10b981); animation: blink-cursor 1s step-end infinite; }
+
 .thought-card {
   border: 1px solid var(--border-subtle); border-radius: 14px;
   background: var(--bg-elevated);

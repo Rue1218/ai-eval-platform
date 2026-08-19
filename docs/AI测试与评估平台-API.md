@@ -1040,7 +1040,7 @@ Prometheus 内置可观测性指标端点（内网 HTTP GET），输出前缀为
 
 | event | payload | 前端渲染 |
 | --- | --- | --- |
-| `thought` | `{ "text": "..." }`；流式扩展：回复生成期间可发送瞬态增量帧 `{ "text": "增量", "stream": "chunk" }`（不落库、不占事件号、断线不回放），随后必须有一帧不带 `stream` 的完整文本终帧 | ThoughtCard |
+| `thought` | `{ "text": "..." }`；流式扩展：回复生成期间可发送瞬态增量帧 `{ "text": "增量", "stream": "chunk" }`（回复正文增量）与 `{ "text": "增量", "stream": "think" }`（推理模型思考链增量，前端渲染进可折叠思考卡），两种帧均不落库、不占事件号、断线不回放，随后必须有一帧不带 `stream` 的完整文本终帧 | ThoughtCard |
 | `tool_call` | `{ "name": "model.list", "arguments": {} }` | ToolCard pending；标题用中文名 |
 | `tool_result` | `{ "name": "model.list", "ok": true, "data": {} }` 或 `{ "ok": false, "error": "..." }` | ToolCard done |
 | `confirm` | TaskSpec（§6） | ConfirmCard，等 `confirm_ack` |

@@ -229,9 +229,48 @@ def test_stream_openai_chat_chunks(monkeypatch):
     )
     chunks = list(stream_protocol(**_kwargs("openai_chat")))
 
-    assert chunks == ["你", "好"]
+    assert chunks == [("content", "你"), ("content", "好")]
     assert seen["body"]["stream"] is True
     assert seen["headers"]["authorization"] == f"Bearer {API_KEY}"
+
+
+def test_stream_openai_chat_reasoning_chunks(monkeypatch):
+    """openai_chat 思考模型流式：reasoning_content 增量归类为 reasoning。"""
+    _capture_stream(
+        monkeypatch,
+        [
+            'data: {"choices":[{"delta":{"reasoning_content":"思考第一段"}}]}',
+            'data: {"choices":[{"delta":{"reasoning_content":"第二段"}}]}',
+            'data: {"choices":[{"delta":{"content":"正文"}}]}',
+            'data: [DONE]',
+        ],
+    )
+    chunks = list(stream_protocol(**_kwargs("openai_chat")))
+
+    assert chunks == [("reasoning", "思考第一段"), ("reasoning", "第二段"), ("content", "正文")]
+
+
+def test_stream_mimo_disables_thinking(monkeypatch):
+    """mimo 网关：流式请求同样显式关闭思考（对齐 call_protocol 提速策略）。"""
+    seen = _capture_stream(monkeypatch, ['data: {"choices":[{"delta":{"content":"ok"}}]}'])
+    kwargs = _kwargs("openai_chat") | {"base_url": "https://xiaomimimo.example.com"}
+    list(stream_protocol(**kwargs))
+
+    assert seen["body"].get("thinking") == {"type": "disabled"}
+
+
+def test_stream_non_sse_fallback(monkeypatch):
+    """网关忽略 stream 参数返回完整 JSON：兜底解析全文作为单块 content。"""
+    _capture_stream(
+        monkeypatch,
+        [
+            '{"choices": [{"message": {"role": "assistant", "content": "完整回复"}}],',
+            ' "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3}}',
+        ],
+    )
+    chunks = list(stream_protocol(**_kwargs("openai_chat")))
+
+    assert chunks == [("content", "完整回复")]
 
 
 def test_stream_openai_responses_chunks(monkeypatch):
@@ -240,6 +279,7 @@ def test_stream_openai_responses_chunks(monkeypatch):
         monkeypatch,
         [
             'data: {"type":"response.created"}',
+            'data: {"type":"response.reasoning_summary_text.delta","delta":"先想想"}',
             'data: {"type":"response.output_text.delta","delta":"评"}',
             'data: {"type":"response.output_text.delta","delta":"测"}',
             'data: {"type":"response.completed","response":{}}',
@@ -247,15 +287,16 @@ def test_stream_openai_responses_chunks(monkeypatch):
     )
     chunks = list(stream_protocol(**_kwargs("openai_responses")))
 
-    assert chunks == ["评", "测"]
+    assert chunks == [("reasoning", "先想想"), ("content", "评"), ("content", "测")]
 
 
 def test_stream_anthropic_chunks(monkeypatch):
-    """anthropic_messages 流式：仅 text_delta 内容块携带可见增量。"""
+    """anthropic_messages 流式：thinking_delta 与 text_delta 正确分类。"""
     _capture_stream(
         monkeypatch,
         [
             'data: {"type":"message_start","message":{}}',
+            'data: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"先推理"}}',
             'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"基"}}',
             'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"准"}}',
             'data: {"type":"content_block_stop"}',
@@ -264,7 +305,7 @@ def test_stream_anthropic_chunks(monkeypatch):
     )
     chunks = list(stream_protocol(**_kwargs("anthropic_messages")))
 
-    assert chunks == ["基", "准"]
+    assert chunks == [("reasoning", "先推理"), ("content", "基"), ("content", "准")]
 
 
 def test_stream_tolerates_bad_frames(monkeypatch):
@@ -278,7 +319,7 @@ def test_stream_tolerates_bad_frames(monkeypatch):
             'data: {"choices":[{"delta":{"content":"ok"}}]}',
         ],
     )
-    assert list(stream_protocol(**_kwargs("openai_chat"))) == ["ok"]
+    assert list(stream_protocol(**_kwargs("openai_chat"))) == [("content", "ok")]
 
 
 def test_stream_4xx_maps_to_upstream(monkeypatch):

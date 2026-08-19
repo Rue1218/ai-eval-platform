@@ -419,6 +419,22 @@ def _stream_frame(session_id: str, cursor: int, delta: str) -> dict:
     }
 
 
+def _think_frame(session_id: str, cursor: int, delta: str) -> dict:
+    """构造思考链增量瞬态帧：payload 携带 stream=think 标记。
+
+    推理模型的前置思考过程：前端渲染进可展开/收起的思考卡，
+    同样不落库、不占事件号、断线不回放。
+    """
+    return {
+        "event": "thought",
+        "session_id": session_id,
+        "task_id": None,
+        "event_id": cursor,
+        "ts": datetime.now(UTC).isoformat(),
+        "payload": {"text": delta, "stream": "think"},
+    }
+
+
 async def _stream_llm_plan(
     db: Session,
     ws: WebSocket,
@@ -429,10 +445,11 @@ async def _stream_llm_plan(
     datasets: list[dict],
     history: list[dict],
 ) -> dict:
-    """流式调用 Agent 模型做意图识别：reply 字段增量实时推送给前端。
+    """流式调用 Agent 模型做意图识别：reply 增量与思考链实时推送给前端。
 
-    生产者线程逐块读取上游 SSE，提取可见 reply 增量后经
-    ``run_coroutine_threadsafe`` 回到事件循环在连接锁内下发；线程侧
+    生产者线程逐块读取上游 SSE：``reasoning`` 增量直发思考卡帧，
+    ``content`` 增量经 ``_visible_reply`` 提取可见 reply 后下发流式帧。
+    经 ``run_coroutine_threadsafe`` 回到事件循环在连接锁内下发；线程侧
     ``.result()`` 等待发送完成形成背压，保证增量顺序。返回解析后的
     plan；上游失败抛 AppError，由调用方降级规则版。max_tokens=512、
     12 秒整体超时与降级策略同非流式版本。
@@ -452,9 +469,14 @@ async def _stream_llm_plan(
         async with state.lock:
             await ws.send_json(_stream_frame(session_id, state.cursor, delta))
 
+    async def _push_think(delta: str) -> None:
+        # 思考链增量帧：前端渲染进可展开/收起的思考卡
+        async with state.lock:
+            await ws.send_json(_think_frame(session_id, state.cursor, delta))
+
     def _producer() -> str:
         parts: list[str] = []
-        for chunk in stream_protocol(
+        for kind, chunk in stream_protocol(
             protocol=profile.protocol,
             base_url=profile.base_url,
             model=profile.model,
@@ -466,6 +488,11 @@ async def _stream_llm_plan(
             anthropic_version=profile.anthropic_version,
             timeout_s=12,
         ):
+            if kind == "reasoning":
+                # 推理模型的思考链：整段直发思考卡，不做 reply 提取
+                if chunk:
+                    asyncio.run_coroutine_threadsafe(_push_think(chunk), loop).result(timeout=30)
+                continue
             parts.append(chunk)
             progress["buf"] += chunk
             visible = _visible_reply(progress["buf"])
