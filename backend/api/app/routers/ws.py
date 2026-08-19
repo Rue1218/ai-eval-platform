@@ -225,14 +225,20 @@ def _deep_merge(base: dict, patch: dict) -> dict:
 
 
 def _classify_intent(text: str) -> str:
-    """按关键词把用户目标拆解为四种意图之一。"""
-    if any(k in text for k in ("PRD", "用例", "测试用例", "生成用例")):
+    """按关键词把用户目标拆解为意图之一（L0 规则降级，对齐说明书 §16.2）。"""
+    t = text.strip()
+    if any(k in t for k in ("PRD", "用例", "测试用例", "生成用例")):
         return "testcase"
-    if any(k in text for k in ("RAG", "知识库", "检索", "召回", "LightRAG", "黄金", "命中")):
+    if any(k in t for k in ("RAG", "知识库", "检索", "召回", "LightRAG", "黄金", "命中")):
         return "rag"
-    if any(k in text for k in ("解读", "报告")):
+    if any(k in t for k in ("解读", "报告")):
         return "report"
-    return "benchmark"
+    if any(k in t for k in ("压测", "加压", "先评后压", "QPS", "qps")):
+        return "benchmark"
+    if any(k in t.lower() for k in ("benchmark", "评测", "评估", "对比", "跑分", "打分", "测试模型", "模型质量")):
+        return "benchmark"
+    # 问候、自我介绍、闲聊或未明确评测目标，全部归为 chat，绝不胡乱下单
+    return "chat"
 
 
 def _wants_stress(text: str) -> bool:
@@ -241,21 +247,23 @@ def _wants_stress(text: str) -> bool:
 
 
 def _default_run() -> dict:
-    """Benchmark / RAG 的默认运行参数，仅含前端确认卡可编辑的核心字段。"""
+    """Benchmark / RAG 的默认运行参数（对齐 PRD 5.2.2 与开发说明书 §16.1）。"""
     return {
-        "concurrency": 5,
+        "sample_size": 1000,
+        "concurrency": 4,
         "timeout_s": 60,
         "retry": 1,
-        "temperature": 0.2,
-        "max_tokens": 2048,
+        "temperature": 0,
+        "max_tokens": 1024,
+        "system_prompt": "",
         "k": 5,
         "use_judge": False,
     }
 
 
 def _default_stress() -> dict:
-    """先评后压子任务的默认压测参数。"""
-    return {"env": "test", "qps": 20, "duration_s": 60, "sla_p99_ms": None}
+    """先评后压子任务的默认压测参数（对齐开发说明书 §16.1）。"""
+    return {"env": "test", "qps": 10, "duration_s": 120, "sla_p99_ms": None}
 
 
 def _profile_items(db: Session) -> list[dict]:
@@ -685,8 +693,14 @@ async def _handle_user_message(
         await _emit(db, ws, session.id, "error", {"code": "NOT_FOUND", "message": "报告解读能力将在 M4 接入，当前请先到评测报告页查看。"}, state=state)
         return
 
-    # chat 或未知意图：仅自然语言回复
-    await _emit(db, ws, session.id, "thought", {"text": reply or "我可以帮你发起基准评测、生成测试用例等。请描述你的评测目标。"}, state=state)
+    # chat 或普通问答意图：仅自然语言回复，绝不出确认卡、不调短工具
+    chat_reply = reply or (
+        "你好！我是 AI 测试与评估平台的评测智能体。职责是协助你进行大模型质量评测、"
+        "PRD 测试用例生成、知识库 RAG 评测与共享压测分析。\n\n"
+        "请告诉我你的评测目标（例如：「对比两个模型的表现」或「生成登录模块测试用例」），"
+        "我会先为你列出可用资产并组装确认卡，经你确认后再提交执行。"
+    )
+    await _emit(db, ws, session.id, "thought", {"text": chat_reply}, state=state)
 
 
 async def _handle_rule_intent(
@@ -698,6 +712,25 @@ async def _handle_rule_intent(
 ) -> None:
     """规则版意图拆解（LLM 不可用时的降级路径）。"""
     intent = _classify_intent(text)
+
+    if intent == "chat":
+        rule_reply = (
+            "你好！我是 AI 测试与评估平台的评测智能体。职责是协助你进行大模型质量评测、"
+            "PRD 测试用例生成、知识库 RAG 评测与共享压测分析。\n\n"
+            "请告诉我你的评测目标（例如：「对比两个模型的表现」或「生成登录模块测试用例」），"
+            "我会先为你列出可用资产并组装确认卡，经你确认后再提交执行。"
+        )
+        db.add(Message(session_id=session.id, role="assistant", content=rule_reply))
+        db.commit()
+        await _emit(
+            db,
+            ws,
+            session.id,
+            "thought",
+            {"text": rule_reply},
+            state=state,
+        )
+        return
 
     if intent == "testcase":
         rule_reply = "已识别为 PRD 用例生成目标。将按 6 大策略生成测试用例，生成后需在 72h 内确认入库。请在确认卡中粘贴 PRD / 接口描述文本。"
@@ -752,7 +785,16 @@ async def _handle_rule_intent(
         )
         return
 
-    # 默认 benchmark：先列出可用协议档与数据集，再生成确认卡
+    # intent == "benchmark"：用户明确提出评测/对比目标时才组装确认卡
+    profiles = _profile_items(db)
+    datasets = _dataset_items(db)
+    if not profiles:
+        await _emit(db, ws, session.id, "thought", {"text": "还没有配置任何协议档，请先到「协议档」页添加被测模型。"}, state=state)
+        return
+    if not datasets:
+        await _emit(db, ws, session.id, "thought", {"text": "已识别为基准评测目标，但当前还没有数据集。请先在「数据集」页上传评测数据。"}, state=state)
+        return
+
     await _emit(
         db,
         ws,
@@ -761,15 +803,13 @@ async def _handle_rule_intent(
         {"text": "正在梳理基准评测目标：对比被测协议档在同一数据集上的规则分。先列出可用协议档与数据集…"},
         state=state,
     )
-    await _call_tool(db, ws, session.id, "model.list", {}, {"items": _profile_items(db)}, state)
-    await _call_tool(db, ws, session.id, "dataset.list", {}, {"items": _dataset_items(db)}, state)
+    await _call_tool(db, ws, session.id, "model.list", {}, {"items": profiles}, state)
+    await _call_tool(db, ws, session.id, "dataset.list", {}, {"items": datasets}, state)
 
-    profiles = _profile_items(db)
-    datasets = _dataset_items(db)
     card = {
         "kind": "benchmark",
-        "profile_ids": [profiles[0]["id"]] if profiles else [],
-        "dataset_id": datasets[0]["id"] if datasets else None,
+        "profile_ids": [profiles[0]["id"]],
+        "dataset_id": datasets[0]["id"],
         "run": _default_run(),
         "with_stress": _wants_stress(text),
         "stress": _default_stress(),

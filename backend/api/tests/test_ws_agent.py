@@ -142,3 +142,19 @@ def test_match_dataset_prefers_named_and_falls_back_to_first():
     assert _match_dataset(items, "") == "d-1"
     assert _match_dataset(items, "未知") == "d-1"
     assert _match_dataset([], "任何") is None
+
+
+def test_classify_intent_chat_vs_benchmark():
+    """意图分类：闲聊与问候识别为 chat，绝不无脑兜底为 benchmark 下单。"""
+    from app.routers.ws import _classify_intent
+
+    assert _classify_intent("介绍一下你") == "chat"
+    assert _classify_intent("你好") == "chat"
+    assert _classify_intent("你是谁？你能帮我做什么？") == "chat"
+    assert _classify_intent("随便聊聊") == "chat"
+
+    assert _classify_intent("对比两个模型的基准表现") == "benchmark"
+    assert _classify_intent("帮我跑一下 benchmark") == "benchmark"
+    assert _classify_intent("根据 PRD 生成测试用例") == "testcase"
+    assert _classify_intent("评测知识库召回效果") == "rag"
+    assert _classify_intent("解读这份评测报告") == "report"
