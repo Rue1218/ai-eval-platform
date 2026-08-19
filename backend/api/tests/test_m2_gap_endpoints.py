@@ -18,6 +18,7 @@ from app.routers.datasets import _parse_upload_rows
         ("POST", "/api/datasets/ds-1/upload", None),
         ("POST", "/api/reports/r-1/share", {"expire_days": 7}),
         ("POST", "/api/reports/r-1/baseline", {"frozen": True}),
+        ("GET", "/api/reports/r-1/samples", None),
         ("POST", "/api/tasks/t-1/approve-stress", None),
         ("GET", "/api/tasks/t-1/stress-series", None),
         ("GET", "/api/admin/stress/whitelist", None),

@@ -397,3 +397,62 @@ class CaseItem(Base):
     sort_order = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+
+class EvalItem(Base):
+    """样本级评测结果：benchmark 任务按「profile × 行」落一行。
+
+    ``score`` 为主指标得分；调用失败样本为 ``None`` 且 ``error`` 非空，
+    不计入评分分母。question/reference/context 为任务执行时点的快照，
+    数据集行后续被编辑不影响历史报告回放。
+    """
+
+    __tablename__ = "eval_items"
+    __table_args__ = (
+        UniqueConstraint("task_id", "profile_id", "row_no", name="uq_eval_items_task_profile_row"),
+        Index("ix_eval_items_task_profile", "task_id", "profile_id"),
+    )
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    task_id = Column(String, ForeignKey("tasks.id"), nullable=False, index=True)
+    # 协议档 ID 以字符串保存：档位删除后历史样本结果仍可回放
+    profile_id = Column(String, nullable=False)
+    row_no = Column(Integer, nullable=False)
+    question = Column(Text, nullable=False, default="")
+    reference = Column(Text, nullable=False, default="")
+    context = Column(Text, nullable=True)
+    output = Column(Text, nullable=False, default="")
+    score = Column(Float, nullable=True)
+    exact = Column(Float, nullable=True)
+    rouge_l = Column(Float, nullable=True)
+    latency_ms = Column(Integer, nullable=True)
+    # 错误码与摘要（如 "UPSTREAM: 上游返回 401"），绝不包含 API Key
+    error = Column(Text, nullable=True)
+    # 上游原始响应（超 32KB 截断），供样本页 Raw 报文回放
+    raw = Column(JSONB, nullable=True)
+    # 归一后的 token 用量 {prompt_tokens, completion_tokens, total_tokens}
+    usage = Column(JSONB, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class UsageLedger(Base):
+    """token 用量与估算费用台账：每「任务 × 协议档」一行，执行器逐调用累加。
+
+    费用估算口径：``total_tokens / 1000 × settings.stress.price_per_1k_tokens``；
+    任务级预算熔断由 Worker 按 ``settings.default_max_usd``（默认 5）执行。
+    """
+
+    __tablename__ = "usage_ledger"
+    __table_args__ = (
+        UniqueConstraint("task_id", "profile_id", name="uq_usage_ledger_task_profile"),
+    )
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    task_id = Column(String, ForeignKey("tasks.id"), nullable=False, index=True)
+    profile_id = Column(String, nullable=False)
+    prompt_tokens = Column(BigInteger, nullable=False, default=0)
+    completion_tokens = Column(BigInteger, nullable=False, default=0)
+    total_tokens = Column(BigInteger, nullable=False, default=0)
+    est_cost_usd = Column(Float, nullable=False, default=0.0)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)

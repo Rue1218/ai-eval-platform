@@ -1,8 +1,8 @@
-"""报告中心接口（API.md §3.11）：列表 / 详情 / Markdown 导出 / 免登分享 / 基线冻结。
+"""报告中心接口（API.md §3.11）：列表 / 详情 / 样本明细 / Markdown 导出 / 免登分享 / 基线冻结。
 
 报告行由 Worker 在评测任务成功后写入；详情支持登录 Cookie 或未过期 ?share= 免登访问。
-samples 属后续里程碑，暂未开放；前端在无数据时必须展示空态/错误态，
-禁止用静态报告顶替（API.md §12.3）。
+benchmark 样本明细来自 Worker 落库的 ``eval_items``；RAG/stress 段暂未开放，
+前端在无数据时必须展示空态/错误态，禁止用静态报告顶替（API.md §12.3）。
 """
 
 import secrets
@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..deps import get_current_user, get_current_user_optional
 from ..errors import AppError, ErrorCode
-from ..models import AuditLog, Dataset, Report, Task, User
+from ..models import AuditLog, Dataset, EvalItem, ProtocolProfile, Report, Task, User
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
@@ -172,6 +172,85 @@ def get_report(
     if fmt == "md":
         return PlainTextResponse(_report_markdown(db, report), media_type="text/markdown; charset=utf-8")
     return _report_json(db, report)
+
+
+@router.get("/{report_id}/samples")
+def report_samples(
+    report_id: str,
+    filter: str = Query(default="all", pattern="^(all|diff|fail)$"),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """样本级逐题比对（API §3.11）：按行聚合各 profile 预测，支持 all/diff/fail 过滤。
+
+    数据全部来自 Worker 写入的 ``eval_items``（含 Raw 报文，超 32KB 已截断），
+    浏览器只做只读回放；非 benchmark 报告暂未提供样本明细，返回空集与说明。
+    """
+    report = db.query(Report).filter(Report.id == report_id).first()
+    if not report:
+        raise AppError(ErrorCode.NOT_FOUND, "报告不存在或已删除")
+    if report.kind != "benchmark":
+        return {"items": [], "total": 0, "note": "该类型报告暂未提供样本明细"}
+
+    items = (
+        db.query(EvalItem)
+        .filter(EvalItem.task_id == report.task_id)
+        .order_by(EvalItem.row_no.asc(), EvalItem.profile_id.asc())
+        .all()
+    )
+    profile_ids = {item.profile_id for item in items}
+    profiles = {
+        profile.id: profile
+        for profile in db.query(ProtocolProfile).filter(ProtocolProfile.id.in_(profile_ids)).all()
+    }
+
+    # 按行号聚合为逐题比对条目（行数上限 2 万，内存聚合可控）
+    grouped: dict[int, list[EvalItem]] = {}
+    for item in items:
+        grouped.setdefault(item.row_no, []).append(item)
+
+    rows: list[dict[str, Any]] = []
+    for row_no, predictions in grouped.items():
+        scores = [p.score for p in predictions if p.score is not None]
+        # 差异行：各 profile 得分不全一致，或部分成功部分失败
+        diff = len({round(s, 6) for s in scores}) > 1 or (
+            any(p.error for p in predictions) and scores
+        )
+        has_fail = any(p.error for p in predictions) or (scores and all(s == 0 for s in scores))
+        if filter == "fail" and not has_fail:
+            continue
+        if filter == "diff" and not diff:
+            continue
+        rows.append(
+            {
+                "row_no": row_no,
+                "question": predictions[0].question,
+                "reference": predictions[0].reference,
+                "context": predictions[0].context,
+                "diff": diff,
+                "predictions": [
+                    {
+                        "profile_id": p.profile_id,
+                        "profile_name": profiles[p.profile_id].name if p.profile_id in profiles else None,
+                        "model": profiles[p.profile_id].model if p.profile_id in profiles else None,
+                        "output": p.output,
+                        "score": p.score,
+                        "exact": p.exact,
+                        "rouge_l": p.rouge_l,
+                        "latency_ms": p.latency_ms,
+                        "error": p.error,
+                        "raw": p.raw,
+                    }
+                    for p in predictions
+                ],
+            }
+        )
+
+    rows.sort(key=lambda entry: entry["row_no"])
+    total = len(rows)
+    return {"items": rows[offset : offset + limit], "total": total}
 
 
 @router.post("/{report_id}/share")
