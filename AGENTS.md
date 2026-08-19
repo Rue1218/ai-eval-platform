@@ -40,6 +40,11 @@
 3. **Agent 子系统**：[`docs/AI测试与评估平台-Agent开发文档.md`](docs/AI测试与评估平台-Agent开发文档.md)（Harness、斜杠、上下文算法、长任务门禁）；**JSON 字段名与路径仍以 API.md 为准**；
 4. **裁决铁律**：代码/计划与 PRD 冲突以 PRD 为准；接口与 API.md 冲突以 API.md 为准。禁止私自扩充产品范围（Agent 说明书新增路径必须先回写 API.md）。
 
+### 1.4 文档命名与更新规范 (Documentation Conventions)
+1. **统一文件命名**：所有设计、契约与技术方案文档统一归档于 `docs/` 目录，格式严格遵循 `docs/AI测试与评估平台-<模块或主题>.md`（如 `docs/AI测试与评估平台-Agent大模型接入与耗时技术方案.md`），严禁无前缀或随意自创命名；
+2. **文档闭环更新**：功能迭代或契约演进后，必须在对应技术文档末尾同步追加「修改代码文件与作用清单」，并在文档头部更新版本号（如 `V1.1`、`V1.2`）与审查日期；
+3. **提交与分支规范**：纯文档变更使用 `docs(<scope>): <中文描述>` 格式提交，重要文档改造建议拉出 `docs/<scope>-简述` 分支。
+
 ---
 
 ## 2. 项目结构 (Project Structure)
@@ -208,27 +213,11 @@ except AppError as exc:
 
 未配置 Agent 协议档、上游 4xx/5xx、超时分别归一为 `VALIDATION` / `UPSTREAM` / `TIMEOUT`，与 `llm.py` 现实现一致。
 
-### 5.2.2 大模型接入、流式与推理模型规范（核心准则）
-1. **驱动协议档绑定**：由 `settings.agent_profile_id` 绑定唯一生效的驱动模型，前端支持点击模型胶囊即时下拉切换并持久化。
-2. **Token 预算与超时保障**：流式意图识别与规划调用的 `max_tokens` 必须保证至少 **4096**，超时时间 `timeout_s` 至少 **45.0s**，严禁使用 512 等过小参数，防止推理模型（如 `mimo-v2.5-pro`、`deepseek-reasoner`）在输出深度思考链后耗尽 Token 截断正文。
-3. **推理思考字段兼容性**：流式提取器 `delta_of` 必须自适应支持 `reasoning_content`、`reasoning` 与 `thought` 等多种字段名。
-4. **输出容错与自然语言降级**：`_parse_llm_json` 必须具备纯文本自动降级机制，当模型直接输出自然语言（未包裹 JSON）时，自动提取为 `chat` 意图，严禁粗暴报错或丢字。
-5. **系统提示词约束**：严禁在系统提示词中写死“一句话回复”等限制用户字数的指令，模型回复中严禁暴露“负责输出结构化JSON”等元指令话术。
-6. **历史消息上下文去重**：加载前 20 条历史时必须排除当前刚落库的消息，严禁在 Prompt 历史末尾重复灌入当前用户消息。
-
-### 5.2.3 耗时计量与全链路下发契约
-1. **模型层耗时**：`_stream_llm_plan` 与 `call_agent_model` 必须精确计量端到端耗时，并在 `thought` 事件 payload 中携带 `latency_ms`。
-2. **工具层耗时**：`_call_tool` 执行必须计算毫秒级耗时，并在 `tool_result` 事件 payload 中携带 `latency_ms`。
-3. **规则降级耗时**：规则意图拆解同样必须计算从收到用户消息到交付的耗时并下发 `latency_ms`。
-
 ### 5.3 前端规范 (Vue 3 / TypeScript / Naive UI)
 1. **统一架构**：采用 `<script setup lang="ts">` + `naive-ui`，严格遵循薄荷绿/深空蓝设计令牌 (`naive-theme.ts`)。
 2. **通信与重连**：API 使用相对路径 `/api/*`；WS 使用相对路径 `/ws/agent?ticket=${ticket}`，支持断线按 `last_event_id` 自动补发事件流。关闭码 `4401` 重新领票，`4404` 视为会话不存在。
 3. **确认卡默认值** 与 API.md §5 / PRD 5.2.2 同一份，禁止前端另备 sample_size=20 等第二套默认。
-4. **DevTools 控制台彩色日志规范**：前端 WebSocket 客户端与 Agent 视图必须在关键生命周期输出结构化彩色调试日志（🚀 发送、📩 收到事件、💭 思考流式、💡 思考交付、⚙️ 工具调用、✅ 工具结果、📋 确认卡、❌ 错误），便于开发者与用户实时调试。
-5. **思考卡与打字机体验**：思考卡根据 `latency_ms` 显示 `formatLatency` 耗时徽章（如 `16.2s`），在生成完成 800ms 后自动平滑折叠；打字机根据全文长度自适应提速推进。
-6. **模型下拉切换**：顶部与输入框模型胶囊使用 `<n-dropdown>` 统一绑定系统协议档列表，点击切换即时生效。
-7. ContextMeter 只读 `GET /api/sessions/{id}/messages` 的 `context_meter`；自定义斜杠只请求 `/api/slash-commands`。
+4. ContextMeter 只读 `GET /api/sessions/{id}/messages` 的 `context_meter`；自定义斜杠只请求 `/api/slash-commands`。
 
 ---
 
