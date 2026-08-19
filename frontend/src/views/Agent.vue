@@ -18,17 +18,19 @@
         >
           <div class="session-title">
             <span class="session-title-text">{{ s.title || '新会话' }}</span>
-            <button
-              class="session-del"
-              title="删除会话"
-              @click.stop="handleDeleteSession(s.id)"
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-                <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
-              </svg>
-            </button>
-            <!-- D5 会话状态点多态：running / succeeded / failed -->
-            <i v-if="sessionDotClass(s)" class="nav-dot" :class="sessionDotClass(s)"></i>
+            <div class="session-meta-right">
+              <!-- D5 会话状态点多态：running / succeeded / failed -->
+              <i v-if="sessionDotClass(s)" class="nav-dot" :class="sessionDotClass(s)" :title="sessionDotTooltip(s)"></i>
+              <button
+                class="session-del"
+                title="删除会话"
+                @click.stop="handleDeleteSession(s.id)"
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                  <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
+                </svg>
+              </button>
+            </div>
           </div>
           <div class="row-between" style="margin-top: 2px">
             <span class="session-time">{{ s.time || formatRelativeTime(s.created_at) }}</span>
@@ -55,6 +57,7 @@
         <n-dropdown
           trigger="click"
           :options="agentProfileDropdownOptions"
+          :render-label="renderAgentProfileOption"
           @select="handleSelectAgentModel"
         >
           <button class="chat-head-model-btn" title="点击切换 Agent 驱动模型（来自协议档接入池）">
@@ -608,6 +611,7 @@
             placeholder="输入任何评测问题或需求，Shift + Enter 换行，Enter 发送"
             @keydown="handleKeydown"
             @input="adjustTextareaHeight"
+            @paste="() => nextTick(adjustTextareaHeight)"
           ></textarea>
 
           <!-- 下半区：操作底栏（附件 + 模型选择 + 发送按钮） -->
@@ -632,6 +636,7 @@
               <n-dropdown
                 trigger="click"
                 :options="agentProfileDropdownOptions"
+                :render-label="renderAgentProfileOption"
                 @select="handleSelectAgentModel"
               >
                 <button class="composer-model-dropdown-btn" title="点击切换当前 Agent 驱动模型（来自协议档接入池）">
@@ -725,7 +730,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch, h } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useMessage, useDialog, NDropdown } from 'naive-ui'
+import { useMessage, useDialog, NDropdown, type DropdownOption } from 'naive-ui'
 import { api } from '../api/http'
 import { AgentWebSocket } from '../api/ws'
 import type { Task, TaskSpec, WsServerEvent, Profile, Dataset, KnowledgeBase, GoldQA } from '../api/types'
@@ -752,7 +757,7 @@ const currentAgentProfileId = ref<string>('')
 const allProfiles = ref<Profile[]>([])
 
 /** 模型选择下拉菜单项（对齐 /admin/profiles 接入池） */
-const agentProfileDropdownOptions = computed(() => {
+const agentProfileDropdownOptions = computed<DropdownOption[]>(() => {
   if (!allProfiles.value.length) {
     return [
       { label: '暂无接入模型协议档', key: '__none__', disabled: true },
@@ -761,58 +766,13 @@ const agentProfileDropdownOptions = computed(() => {
     ]
   }
   const activeId = currentAgentProfileId.value || allProfiles.value[0]?.id
-  const list = allProfiles.value.map((p) => {
+  const list: DropdownOption[] = allProfiles.value.map((p) => {
     const isCurrent = p.id === activeId
     return {
-      label: () =>
-        h('div', {
-          style: {
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: '16px',
-            minWidth: '260px',
-            padding: '3px 0',
-            lineHeight: '1.4',
-          }
-        }, [
-          h('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px', flex: '1', minWidth: '0' } }, [
-            h('span', {
-              style: {
-                fontWeight: isCurrent ? '700' : '500',
-                fontSize: '13px',
-                color: isCurrent ? 'var(--accent-ai)' : 'inherit',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }
-            }, p.name),
-            h('span', {
-              style: {
-                fontSize: '11px',
-                opacity: '0.65',
-                fontFamily: 'var(--font-mono)',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }
-            }, `${p.model || p.protocol} · ${p.protocol}`),
-          ]),
-          isCurrent
-            ? h('span', {
-                style: {
-                  color: 'var(--accent-ai)',
-                  fontSize: '11px',
-                  fontWeight: '700',
-                  background: 'var(--t-agent)',
-                  padding: '2px 8px',
-                  borderRadius: '6px',
-                  flexShrink: '0',
-                }
-              }, '当前驱动')
-            : null,
-        ]),
+      label: p.name,
       key: p.id,
+      profile: p,
+      isCurrent,
     }
   })
   return [
@@ -821,6 +781,63 @@ const agentProfileDropdownOptions = computed(() => {
     { label: '⚙ 管理模型接入协议档 ↗', key: '__goto_profiles__' },
   ]
 })
+
+/** 规范渲染模型下拉项：左右两栏结构，主标题 + 副标题 + 当前驱动高亮微标 */
+function renderAgentProfileOption(option: DropdownOption) {
+  if (option.type === 'divider' || !option.profile) {
+    return option.label as string
+  }
+  const p = option.profile as Profile
+  const isCurrent = !!option.isCurrent
+  return h('div', {
+    class: 'agent-profile-option-row',
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: '16px',
+      minWidth: '240px',
+      padding: '3px 0',
+      lineHeight: '1.4',
+    },
+  }, [
+    h('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px', flex: '1', minWidth: '0' } }, [
+      h('div', {
+        style: {
+          fontWeight: isCurrent ? '700' : '500',
+          fontSize: '13px',
+          color: isCurrent ? 'var(--accent-ai, #10B981)' : 'inherit',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        },
+      }, p.name),
+      h('div', {
+        style: {
+          fontSize: '11px',
+          color: 'var(--text-tertiary, #6B7280)',
+          fontFamily: 'var(--font-mono, monospace)',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        },
+      }, `${p.model || p.protocol} · ${p.protocol}`),
+    ]),
+    isCurrent
+      ? h('span', {
+          style: {
+            color: 'var(--accent-ai, #10B981)',
+            fontSize: '11px',
+            fontWeight: '700',
+            background: 'var(--t-agent, rgba(16, 185, 129, 0.12))',
+            padding: '2px 8px',
+            borderRadius: '6px',
+            flexShrink: '0',
+          },
+        }, '当前驱动')
+      : null,
+  ])
+}
 
 const sessions = ref<any[]>([])
 const currentSessionId = ref<string>('')
@@ -1116,6 +1133,14 @@ function sessionDotClass(s: any): string | null {
   return null
 }
 
+/** 会话状态提示语（鼠标悬停指示点时展示）。 */
+function sessionDotTooltip(s: any): string {
+  if (s.active_task || s.status === 'running' || s.status === 'queued') return '任务进行中…'
+  if (s.status === 'succeeded') return '任务评测成功 (succeeded)'
+  if (s.status === 'failed') return '任务执行失败 (failed)'
+  return '会话就绪'
+}
+
 /** HTML 转义：历史 assistant 消息纯文本安全注入气泡（对齐原型 AE.esc）。 */
 function escapeHtml(s: string) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
@@ -1193,15 +1218,24 @@ function scrollToBottom(force = false) {
   })
 }
 
-/** 自适应调整多行输入框高度（最小 40px，最大 200px 限制，超高自动滚动） */
+/** 自适应调整多行输入框高度（最小 38px，最大 200px 限制，超高自动滚动） */
 function adjustTextareaHeight() {
-  if (!textareaRef.value) return
-  textareaRef.value.style.height = 'auto'
-  const scrollH = textareaRef.value.scrollHeight
-  const targetH = Math.min(200, Math.max(40, scrollH))
-  textareaRef.value.style.height = `${targetH}px`
-  textareaRef.value.style.overflowY = scrollH > 200 ? 'auto' : 'hidden'
+  const el = textareaRef.value
+  if (!el) return
+  // 先将高度置为 0px，强制浏览器依据当前文本行数精确重算真实的 scrollHeight
+  el.style.height = '0px'
+  const scrollH = el.scrollHeight
+  const minH = 38
+  const maxH = 200
+  const targetH = Math.min(maxH, Math.max(minH, scrollH))
+  el.style.height = `${targetH}px`
+  el.style.overflowY = scrollH > maxH ? 'auto' : 'hidden'
 }
+
+// 深度监听输入文本变化，无论是快捷 Prompt 填入还是换行均即时同步高度
+watch(inputText, () => {
+  nextTick(adjustTextareaHeight)
+})
 
 function triggerFileInput() {
   fileInputRef.value?.click()
@@ -1842,6 +1876,24 @@ async function selectSession(sid: string) {
   // F17 会话含进行中任务时默认展开调度侧轨
   const sess = sessions.value.find(s => s.id === sid)
   isRailOpen.value = !!sess?.active_task
+
+  // 恢复会话进行中任务快照（若存在），解决访问其他会话后切回导致运行中任务进度坞丢失的问题
+  if (sess?.active_task?.id) {
+    try {
+      const t = await api.tasks.get(sess.active_task.id)
+      if (t && ['queued', 'running', 'awaiting_case_confirm'].includes(t.status)) {
+        activeTask.value = {
+          id: t.id,
+          kind: t.kind,
+          status: t.status,
+          config: t.config,
+          progress: t.progress || { percent: 0, done: 0, total: 100, message: '任务进行中...' },
+          created_at: t.created_at,
+        }
+      }
+    } catch {}
+  }
+
   // F4 先回放历史消息并对齐 lastEventId，再建立 WS（带 last_event_id 断点续传）
   const lastEventId = await loadSessionHistory(sid)
   initWebSocket(sid, lastEventId)
@@ -2219,20 +2271,32 @@ onBeforeUnmount(() => {
 
 /* 多行文本域自适应高度（最小 38px，最大 200px 限制） */
 .composer-textarea {
-  width: 100%;
-  border: 0;
-  outline: none;
-  resize: none;
-  font-family: var(--font-chat, inherit);
-  font-size: 14.5px;
-  line-height: 1.55;
-  min-height: 38px;
-  max-height: 200px;
-  padding: 4px 6px;
-  background: transparent;
-  color: var(--text-primary);
-  box-sizing: border-box;
+  width: 100% !important;
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  resize: none !important;
+  font-family: var(--font-chat, inherit) !important;
+  font-size: 14.5px !important;
+  line-height: 1.55 !important;
+  min-height: 38px !important;
+  max-height: 200px !important;
+  padding: 4px 6px !important;
+  background: transparent !important;
+  color: var(--text-primary) !important;
+  box-sizing: border-box !important;
   overflow-y: hidden;
+  -webkit-appearance: none !important;
+  -moz-appearance: none !important;
+  appearance: none !important;
+}
+
+.composer-textarea:focus,
+.composer-textarea:hover,
+.composer-textarea:active {
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
 }
 
 .composer-textarea::placeholder {

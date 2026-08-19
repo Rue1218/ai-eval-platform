@@ -159,7 +159,10 @@ async def _emit(
             )
         )
         db.commit()
-        await ws.send_json(_event_body(session_id, event_id, event, payload, task_id, now))
+        try:
+            await ws.send_json(_event_body(session_id, event_id, event, payload, task_id, now))
+        except Exception:
+            logger.debug("WS 连接已断开，事件已落库但未实时投递: session_id=%s, event_id=%d", session_id, event_id)
         return event_id
     async with state.lock:
         event_id = _next_event_id(db, session_id)
@@ -175,7 +178,10 @@ async def _emit(
             )
         )
         db.commit()
-        await ws.send_json(_event_body(session_id, event_id, event, payload, task_id, now))
+        try:
+            await ws.send_json(_event_body(session_id, event_id, event, payload, task_id, now))
+        except Exception:
+            logger.debug("WS 连接已断开，事件已落库但未实时投递: session_id=%s, event_id=%d", session_id, event_id)
         state.cursor = event_id
         return event_id
 
@@ -467,13 +473,19 @@ async def _stream_llm_plan(
 
     async def _push(delta: str) -> None:
         # 连接锁内直发瞬态帧，与心跳/转发互斥避免帧交错
-        async with state.lock:
-            await ws.send_json(_stream_frame(session_id, state.cursor, delta))
+        try:
+            async with state.lock:
+                await ws.send_json(_stream_frame(session_id, state.cursor, delta))
+        except Exception:
+            pass
 
     async def _push_think(delta: str) -> None:
         # 思考链增量帧：前端渲染进可展开/收起的思考卡
-        async with state.lock:
-            await ws.send_json(_think_frame(session_id, state.cursor, delta))
+        try:
+            async with state.lock:
+                await ws.send_json(_think_frame(session_id, state.cursor, delta))
+        except Exception:
+            pass
 
     def _producer() -> str:
         parts: list[str] = []
@@ -493,7 +505,10 @@ async def _stream_llm_plan(
                 # 推理模型的思考链：整段直发思考卡，不做 reply 提取
                 if chunk:
                     progress["frames"] += 1
-                    asyncio.run_coroutine_threadsafe(_push_think(chunk), loop).result(timeout=30)
+                    try:
+                        asyncio.run_coroutine_threadsafe(_push_think(chunk), loop).result(timeout=30)
+                    except Exception:
+                        pass
                 continue
             parts.append(chunk)
             progress["buf"] += chunk
@@ -503,7 +518,10 @@ async def _stream_llm_plan(
                 progress["sent"] = len(visible)
                 progress["frames"] += 1
                 # 阻塞等待发送完成：既是顺序保证，也是天然背压
-                asyncio.run_coroutine_threadsafe(_push(delta), loop).result(timeout=30)
+                try:
+                    asyncio.run_coroutine_threadsafe(_push(delta), loop).result(timeout=30)
+                except Exception:
+                    pass
         return "".join(parts)
 
     raw = await asyncio.to_thread(_producer)
@@ -626,12 +644,15 @@ async def _handle_rule_intent(
     intent = _classify_intent(text)
 
     if intent == "testcase":
+        rule_reply = "已识别为 PRD 用例生成目标。将按 6 大策略生成测试用例，生成后需在 72h 内确认入库。请在确认卡中粘贴 PRD / 接口描述文本。"
+        db.add(Message(session_id=session.id, role="assistant", content=rule_reply))
+        db.commit()
         await _emit(
             db,
             ws,
             session.id,
             "thought",
-            {"text": "已识别为 PRD 用例生成目标。将按 6 大策略生成测试用例，生成后需在 72h 内确认入库。请在确认卡中粘贴 PRD / 接口描述文本。"},
+            {"text": rule_reply},
             state=state,
         )
         await _send_confirm(
@@ -644,12 +665,15 @@ async def _handle_rule_intent(
         return
 
     if intent == "rag":
+        rule_reply = "已识别为 RAG 检索评测目标。知识库与黄金 QA 资产将在 M3 接入，当前请使用「基准评测（Benchmark）」发起评测。"
+        db.add(Message(session_id=session.id, role="assistant", content=rule_reply))
+        db.commit()
         await _emit(
             db,
             ws,
             session.id,
             "thought",
-            {"text": "已识别为 RAG 检索评测目标。知识库与黄金 QA 资产将在 M3 接入，当前请使用「基准评测（Benchmark）」发起评测。"},
+            {"text": rule_reply},
             state=state,
         )
         await _emit(
@@ -663,12 +687,15 @@ async def _handle_rule_intent(
         return
 
     if intent == "report":
+        rule_reply = "报告解读能力将在 M4 接入，当前可在「评测报告」页查看已生成报告并做基线对比。"
+        db.add(Message(session_id=session.id, role="assistant", content=rule_reply))
+        db.commit()
         await _emit(
             db,
             ws,
             session.id,
             "thought",
-            {"text": "报告解读能力将在 M4 接入，当前可在「评测报告」页查看已生成报告并做基线对比。"},
+            {"text": rule_reply},
             state=state,
         )
         await _emit(
@@ -708,6 +735,8 @@ async def _handle_rule_intent(
         + ("（已按「先评后压」预开压测开关）" if card["with_stress"] else "")
         + "："
     )
+    db.add(Message(session_id=session.id, role="assistant", content=summary))
+    db.commit()
     await _emit(db, ws, session.id, "thought", {"text": summary}, state=state)
     await _send_confirm(db, ws, session.id, card, state)
 
