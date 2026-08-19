@@ -17,7 +17,16 @@
           @click="selectSession(s.id)"
         >
           <div class="session-title">
-            <span>{{ s.title || '新会话' }}</span>
+            <span class="session-title-text">{{ s.title || '新会话' }}</span>
+            <button
+              class="session-del"
+              title="删除会话"
+              @click.stop="handleDeleteSession(s.id)"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
+              </svg>
+            </button>
             <!-- D5 会话状态点多态：running / succeeded / failed -->
             <i v-if="sessionDotClass(s)" class="nav-dot" :class="sessionDotClass(s)"></i>
           </div>
@@ -1670,6 +1679,32 @@ async function handleCreateSession() {
     sessions.value.unshift(localS)
     selectSession(localS.id)
   }
+}
+
+async function handleDeleteSession(sid: string) {
+  const target = sessions.value.find(s => s.id === sid)
+  const name = (target?.title || '新会话').slice(0, 24)
+  dialog.warning({
+    title: '删除会话',
+    content: `确定删除「${name}」吗？对话记录将被清除，已创建的任务仍保留在任务页。`,
+    positiveText: '删除',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      try {
+        await api.sessions.delete(sid)
+        sessions.value = sessions.value.filter(s => s.id !== sid)
+        if (currentSessionId.value === sid) {
+          if (sessions.value.length) {
+            selectSession(sessions.value[0].id)
+          } else {
+            handleCreateSession()
+          }
+        }
+      } catch {
+        message.error('删除会话失败')
+      }
+    },
+  })
 }
 
 function initWebSocket(sessionId: string, lastEventId = 0) {

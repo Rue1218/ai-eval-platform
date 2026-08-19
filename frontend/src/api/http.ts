@@ -979,6 +979,13 @@ export const api = {
       const { data } = await http.get(`/api/sessions/${id}/messages`)
       return data
     },
+    async delete(id: string): Promise<void> {
+      if (getDataMode() === 'mock') {
+        mockStore.sessions = mockStore.sessions.filter((x) => x.id !== id)
+        return
+      }
+      await http.delete(`/api/sessions/${id}`)
+    },
   },
 }
 
