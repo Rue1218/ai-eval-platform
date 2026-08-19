@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..adapters import stream_protocol
@@ -981,17 +982,36 @@ async def ws_agent(websocket: WebSocket):
                     await _handle_user_message(db, websocket, session, text, attachments, state)
                 except ValueError as exc:
                     await _emit(db, websocket, session_id, "error", {"code": "NOT_FOUND", "message": str(exc)}, state=state)
+                except Exception:
+                    # DB 瞬断等未预期异常：归一 INTERNAL 错误事件，避免异常冒泡踢断整条连接
+                    db.rollback()
+                    logger.exception("会话 %s 处理 user_message 失败", session_id)
+                    await _emit(db, websocket, session_id, "error", {"code": "INTERNAL", "message": "消息处理失败，请稍后重试"}, state=state)
                 continue
 
             if event == "confirm_ack":
                 ok = bool(payload.get("ok"))
                 patch = payload.get("patch") if isinstance(payload.get("patch"), dict) else None
-                await _handle_confirm_ack(db, websocket, session, user, ok, patch, state)
+                try:
+                    await _handle_confirm_ack(db, websocket, session, user, ok, patch, state)
+                except IntegrityError:
+                    # 双连接同时确认同一会话：撞 uq_tasks_active_session 唯一索引，归一为并发冲突
+                    db.rollback()
+                    await _emit(db, websocket, session_id, "error", {"code": "CONCURRENCY", "message": "当前会话已有未完成任务，请勿重复提交。"}, state=state)
+                except Exception:
+                    db.rollback()
+                    logger.exception("会话 %s 处理 confirm_ack 失败", session_id)
+                    await _emit(db, websocket, session_id, "error", {"code": "INTERNAL", "message": "确认处理失败，请稍后重试"}, state=state)
                 continue
 
             if event == "cancel_task":
                 task_id = str(payload.get("task_id", ""))
-                await _handle_cancel_task(db, websocket, session, user, task_id, state)
+                try:
+                    await _handle_cancel_task(db, websocket, session, user, task_id, state)
+                except Exception:
+                    db.rollback()
+                    logger.exception("会话 %s 处理 cancel_task 失败", session_id)
+                    await _emit(db, websocket, session_id, "error", {"code": "INTERNAL", "message": "取消请求处理失败，请稍后重试"}, state=state)
                 continue
 
             await _emit(db, websocket, session_id, "error", {"code": "VALIDATION", "message": "不支持的消息类型"}, state=state)

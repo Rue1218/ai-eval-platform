@@ -530,6 +530,7 @@ def get_case_set(
 def update_case_set(
     set_id: str,
     body: CaseSetUpdate,
+    request: FastApiRequest,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -546,6 +547,17 @@ def update_case_set(
         case_set.column_schema = values.pop("column_schema")
     for field, value in values.items():
         setattr(case_set, field, value)
+    # 用例集元信息变更写审计（与 dataset_update / folder_update 口径一致）
+    db.add(
+        AuditLog(
+            user_id=user.id,
+            action="case_set_update",
+            target_type="case_set",
+            target_id=case_set.id,
+            detail={"name": case_set.name, "fields": sorted(body.model_fields_set)},
+            ip=_request_ip(request),
+        )
+    )
     db.commit()
     db.refresh(case_set)
     return case_set
