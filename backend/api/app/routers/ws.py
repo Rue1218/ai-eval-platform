@@ -339,19 +339,26 @@ _LLM_SYSTEM = (
 
 
 def _parse_llm_json(text: str) -> dict:
-    """从模型输出中容错提取 JSON 对象（允许 markdown 代码块或首尾文字）。"""
+    """从模型输出中容错提取 JSON 对象（允许 markdown 代码块、首尾文字或纯文本兜底）。"""
     cleaned = text.strip()
     if cleaned.startswith("```"):
         lines = [ln for ln in cleaned.splitlines() if not ln.strip().startswith("```")]
         cleaned = "\n".join(lines).strip()
     start = cleaned.find("{")
     end = cleaned.rfind("}")
-    if start < 0 or end <= start:
-        raise ValueError("模型未返回可解析的 JSON 对象")
-    data = json.loads(cleaned[start : end + 1])
-    if not isinstance(data, dict):
-        raise ValueError("模型返回的不是 JSON 对象")
-    return data
+    if start >= 0 and end > start:
+        try:
+            data = json.loads(cleaned[start : end + 1])
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+    # 容错：如果模型直接输出了自然语言回复（如问候/自我介绍/解答）而未套 JSON，
+    # 绝不能粗暴丢弃，将其视为 chat 意图的自然语言 reply 返回
+    if cleaned:
+        agent_trace(f"LLM 输出非标准 JSON，自动提取为纯文本 chat 回复 chars={len(cleaned)}")
+        return {"reply": cleaned, "intent": "chat"}
+    raise ValueError("模型未返回任何有效文本内容")
 
 
 def _match_profiles(items: list[dict], names: list[str]) -> list[str]:
@@ -484,8 +491,7 @@ async def _stream_llm_plan(
     ``content`` 增量经 ``_visible_reply`` 提取可见 reply 后下发流式帧。
     经 ``run_coroutine_threadsafe`` 回到事件循环在连接锁内下发；线程侧
     ``.result()`` 等待发送完成形成背压，保证增量顺序。返回解析后的
-    plan；上游失败抛 AppError，由调用方降级规则版。max_tokens=512、
-    12 秒整体超时与降级策略同非流式版本。
+    plan；上游失败抛 AppError，由调用方降级规则版。
     """
     profile = _resolve_agent_profile(db)
     loop = asyncio.get_running_loop()
@@ -515,6 +521,7 @@ async def _stream_llm_plan(
 
     def _producer() -> str:
         parts: list[str] = []
+        agent_trace(f"LLM 流式调用开始 protocol={profile.protocol} model={profile.model} max_tokens=4096")
         for kind, chunk in stream_protocol(
             protocol=profile.protocol,
             base_url=profile.base_url,
@@ -523,9 +530,9 @@ async def _stream_llm_plan(
             messages=[{"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)}],
             system=_LLM_SYSTEM,
             temperature=0.3,
-            max_tokens=512,
+            max_tokens=4096,
             anthropic_version=profile.anthropic_version,
-            timeout_s=12,
+            timeout_s=45.0,
         ):
             if kind == "reasoning":
                 # 推理模型的思考链：整段直发思考卡，不做 reply 提取
@@ -548,9 +555,22 @@ async def _stream_llm_plan(
                     asyncio.run_coroutine_threadsafe(_push(delta), loop).result(timeout=30)
                 except Exception:
                     pass
+            elif not visible and len(progress["buf"]) > progress["sent"]:
+                # 容错：如果模型直接输出了纯文本（未包含 JSON 键），也将其作为 content 实时推流展示
+                if not progress["buf"].lstrip().startswith("{") and not progress["buf"].lstrip().startswith("```"):
+                    delta = progress["buf"][progress["sent"] :]
+                    progress["sent"] = len(progress["buf"])
+                    progress["frames"] += 1
+                    try:
+                        asyncio.run_coroutine_threadsafe(_push(delta), loop).result(timeout=30)
+                    except Exception:
+                        pass
         return "".join(parts)
 
     raw = await asyncio.to_thread(_producer)
+    agent_trace(
+        f"LLM 流式完成 frames={progress['frames']} 上游输出={len(raw)}字 reply可见={progress['sent']}字"
+    )
     logger.info(
         "Agent 流式意图识别完成: 增量帧=%d 上游输出=%d字 reply可见=%d字",
         progress["frames"],
@@ -632,7 +652,8 @@ async def _handle_user_message(
     plan: dict | None = None
     try:
         plan = await _stream_llm_plan(db, ws, session.id, state, text, profiles, datasets, history)
-    except Exception:
+    except Exception as exc:
+        agent_trace(f"LLM 规划异常 type={type(exc).__name__} err={str(exc)[:60]}，回退规则版")
         logger.info("LLM 目标解析失败，回退规则版", exc_info=True)
 
     if plan is None:

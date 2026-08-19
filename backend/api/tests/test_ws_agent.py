@@ -115,10 +115,16 @@ def test_parse_llm_json_tolerates_markdown_fence():
     assert data["intent"] == "benchmark"
 
 
-def test_parse_llm_json_rejects_plain_text():
-    """无 JSON 对象的输出必须显式失败，触发调用方回退规则版。"""
+def test_parse_llm_json_fallback_plain_text_to_chat():
+    """纯文本输出（无 JSON 包裹）自动容错为 chat 意图，空白文本抛出 ValueError。"""
+    data = _parse_llm_json("您好，我是评测助手。")
+    assert data["intent"] == "chat"
+    assert data["reply"] == "您好，我是评测助手。"
+
     with pytest.raises(ValueError):
-        _parse_llm_json("抱歉，我不明白你的意思。")
+        _parse_llm_json("")
+    with pytest.raises(ValueError):
+        _parse_llm_json("   \n\t  ")
 
 
 def test_match_profiles_prefers_named_and_falls_back_to_first():
