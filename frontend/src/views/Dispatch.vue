@@ -303,52 +303,65 @@
       </div>
     </div>
 
-    <!-- ═══ 3. 底部三栏：调度控制面（含 Worker 池） / 事件流 / 编排时间线 ═══ -->
+    <!-- ═══ 3. 底部三栏：调度集群控制面 / 实时调度审计流 / 先评后压全链路甘特图 ═══ -->
     <div class="bottom-grid">
+      <!-- 左栏：调度内核控制台 + Worker 专精计算节点池 + AI 调度建议 -->
       <div class="section-gap">
-        <!-- 调度内核状态面板与雷达 -->
+        <!-- 1. 调度内核控制台 -->
         <div class="panel glow" data-od-id="dispatch-radar" style="--glow-c: var(--c-agent)">
           <div class="panel-title">
-            <span>调度内核状态</span>
-            <span class="badge" :class="isRunning ? 'badge-running' : 'badge-cancelled'"><i class="bdot"></i>{{ isRunning ? '运行中' : '已暂停' }}</span>
+            <span>调度内核引擎</span>
+            <span class="badge" :class="isRunning ? 'badge-running' : 'badge-cancelled'">
+              <i class="bdot"></i>{{ isRunning ? '实时调度中' : '已暂停' }}
+            </span>
           </div>
-          <div class="row mb12" style="gap: 6px">
-            <button class="btn btn-secondary btn-sm" style="flex: 1" @click="toggleScheduler">
-              {{ isRunning ? '暂停调度' : '恢复调度' }}
-            </button>
-            <button class="btn btn-primary btn-sm" style="flex: 1" @click="showRegisterModal = true">+ 注册节点</button>
-          </div>
-          <div style="max-width: 150px; margin: 4px auto 10px">
-            <div class="radar">
-              <span class="radar-core"></span>
-              <i class="radar-blip" style="left: 62%; top: 26%"></i>
-              <i class="radar-blip" style="left: 30%; top: 58%; animation-delay: 1.3s"></i>
-              <i class="radar-blip" style="left: 68%; top: 70%; animation-delay: 2.4s"></i>
+
+          <!-- 调度中心核心指标快览 -->
+          <div class="kernel-metric-row mb12">
+            <div class="k-stat">
+              <span class="k-label tertiary">集群健康度</span>
+              <span class="k-val font-bold" style="color: var(--accent-success)">99.4%</span>
+            </div>
+            <div class="k-stat">
+              <span class="k-label tertiary">活跃并发</span>
+              <span class="k-val font-bold mono" style="color: var(--accent-ai)">{{ runningDisplay }} / {{ capacity }}</span>
+            </div>
+            <div class="k-stat">
+              <span class="k-label tertiary">心跳轮询</span>
+              <span class="k-val font-bold mono">{{ heartbeatMs }}ms</span>
             </div>
           </div>
-          <p class="small tertiary" style="text-align: center; line-height: 1.6">
-            心跳周期 {{ heartbeatMs }}ms · {{ onlineCount }}/{{ totalWorkers }} 节点就绪
-          </p>
-        </div>
 
-        <!-- 调度分发策略面板 -->
-        <div class="panel glow" data-od-id="dispatch-strategy" style="--glow-c: var(--c-agent)">
-          <div class="panel-title">调度分发策略</div>
-          <div class="chip-group" style="margin-bottom: 12px">
-            <button
-              v-for="s in ['负载均衡', '优先级抢占', '亲和性']"
-              :key="s"
-              class="chip"
-              :class="{ on: strategy === s }"
-              @click="handleStrategyChange(s)"
-            >
-              {{ s }}
+          <div class="row mb12" style="gap: 6px">
+            <button class="btn btn-secondary btn-sm" style="flex: 1" @click="toggleScheduler">
+              {{ isRunning ? '⏸ 暂停调度' : '▶ 恢复调度' }}
+            </button>
+            <button class="btn btn-primary btn-sm" style="flex: 1" @click="showRegisterModal = true">
+              + 注册计算节点
             </button>
           </div>
-          <div class="field" style="margin: 12px 0 4px">
+
+          <!-- 分发策略选择 -->
+          <div class="field" style="margin-top: 10px">
+            <span class="field-label" style="margin-bottom: 6px">分发策略 (Strategy)</span>
+            <div class="chip-group mb8">
+              <button
+                v-for="s in ['负载均衡', '优先级抢占', '亲和性']"
+                :key="s"
+                class="chip"
+                :class="{ on: strategy === s }"
+                @click="handleStrategyChange(s)"
+              >
+                {{ s }}
+              </button>
+            </div>
+          </div>
+
+          <!-- 并发容量控制 -->
+          <div class="field" style="margin-top: 8px">
             <div class="row-between">
               <span class="field-label" style="margin: 0">并发容量 (max_running_tasks)</span>
-              <b class="num" style="color: var(--accent-ai); font-size: 15px">{{ capacity }}</b>
+              <b class="num font-bold" style="color: var(--accent-ai)">{{ capacity }} 任务</b>
             </div>
             <input
               v-model.number="capacity"
@@ -360,56 +373,72 @@
               style="margin-top: 6px"
               @change="handleCapacityChange"
             />
-            <span class="field-hint">满载时新入队任务在队列中保持 queued</span>
+            <span class="field-hint">满载时新任务在 PG 队列中保持 queued</span>
           </div>
         </div>
 
-        <!-- Worker 节点池（点击芯片打开治理弹窗，与拓扑节点联动） -->
+        <!-- 2. Worker 专精计算节点池 -->
         <div class="panel glow" data-od-id="dispatch-pool" style="--glow-c: var(--c-agent)">
           <div class="panel-title">
-            <span>Worker 节点池</span>
+            <span>Worker 专精集群池</span>
             <span class="small tertiary mono">{{ onlineCount }}/{{ totalWorkers }} 在线</span>
           </div>
-          <div class="worker-pool">
-            <button
-              v-for="w in workerPool"
+          <div class="worker-card-list">
+            <div
+              v-for="w in workerPool.slice(0, 4)"
               :key="w.id"
-              class="wp-chip"
+              class="worker-rich-card"
               :class="w.state"
-              :title="`${w.name} · ${stateLabel(w.state)} · 负载 ${w.load}%`"
               @click="openWorkerModal(w)"
             >
-              <i class="wp-dot" :class="w.state"></i>
-              <span class="mono wp-id">{{ w.id }}</span>
-              <span class="mono wp-load">{{ w.load }}%</span>
-            </button>
+              <div class="wrc-head">
+                <span class="wrc-dot" :class="w.state"></span>
+                <span class="wrc-name font-bold">{{ w.name }}</span>
+                <span class="wrc-id mono tertiary">{{ w.id }}</span>
+                <span class="wrc-state-tag" :class="w.state">{{ stateLabel(w.state) }}</span>
+              </div>
+              <div class="wrc-body">
+                <div class="wrc-caps">
+                  <span v-for="c in w.caps" :key="c" class="cap-tag">{{ c }}</span>
+                </div>
+                <div class="wrc-load-wrap">
+                  <span class="wrc-load-text mono small">负载 {{ w.load }}%</span>
+                  <div class="wrc-load-bar">
+                    <div class="wrc-load-fill" :style="{ width: `${w.load}%`, background: w.load > 70 ? 'var(--accent-warning)' : 'var(--accent-ai)' }"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
-        <!-- AI 调度优化建议卡 -->
+        <!-- 3. AI 调度优化建议卡 -->
         <div class="ai-card" data-od-id="dispatch-ai">
           <div class="ai-card-head">
-            <span class="ai-badge"><i class="ai-dot"></i>AI 调度优化建议</span>
+            <span class="ai-badge"><i class="ai-dot"></i>AI 调度智能调优</span>
             <span class="grow"></span>
-            <button class="link-btn" style="font-size: 12px" @click="nextAiAdvice">换一条</button>
+            <button class="link-btn" style="font-size: 11px" @click="nextAiAdvice">换一条</button>
           </div>
           <div class="small" style="line-height: 1.5; color: var(--text-secondary); margin-top: 6px">
             {{ currentAiAdvice }}
           </div>
           <div class="row mt8" style="justify-content: flex-end">
-            <button class="btn btn-ai btn-sm" @click="applyAiAdvice">采纳建议</button>
+            <button class="btn btn-ai btn-sm" @click="applyAiAdvice">一键采纳建议</button>
           </div>
         </div>
       </div>
 
-      <!-- 调度事件流（分类过滤 + 点击定位星图工单） -->
+      <!-- 中栏：实时调度审计流 (结构化流水线日志) -->
       <div class="panel glow dispatch-log-panel" data-od-id="dispatch-log" style="--glow-c: var(--c-agent)">
         <div class="row-between mb8">
           <div class="panel-title" style="margin: 0">
-            调度日志流 <span class="small tertiary mono">latest {{ filteredLogs.length }}</span>
+            调度事件审计流
+            <span class="small tertiary mono">{{ filteredLogs.length }} 条事件</span>
           </div>
-          <button class="link-btn" style="font-size: 11px" @click="logs = []">清空</button>
+          <button class="link-btn" style="font-size: 11px" @click="logs = []">清空流</button>
         </div>
+
+        <!-- 审计分类过滤 -->
         <div class="chip-group mb8" style="gap: 4px">
           <button
             v-for="c in logCats"
@@ -417,40 +446,50 @@
             class="chip chip-xs"
             :class="{ on: logCat === c.key }"
             @click="logCat = c.key"
-          >{{ c.label }}</button>
+          >
+            {{ c.label }}
+          </button>
         </div>
+
+        <!-- 结构化日志条目 -->
         <div class="log-stream">
           <div
             v-for="(l, idx) in filteredLogs"
             :key="idx"
-            class="log-line"
+            class="log-card-item"
             :class="[`cat-${l.cat}`, { clickable: !!l.tid }]"
-            :title="l.tid ? '点击定位星图中的任务工单' : ''"
+            :title="l.tid ? '点击定位并高亮星图工单' : ''"
             @click="l.tid && flashTask(l.tid)"
           >
-            <span class="lt">{{ l.time }}</span>
-            <span class="lk">[{{ l.kind }}]</span>
-            <span class="lr" v-html="l.html"></span>
+            <div class="lci-head">
+              <span class="lci-time mono">{{ l.time }}</span>
+              <span class="lci-tag" :class="l.cat">{{ l.kind }}</span>
+              <span v-if="l.tid" class="lci-tid mono">{{ l.tid.substring(0, 8) }}</span>
+            </div>
+            <div class="lci-body" v-html="l.html"></div>
           </div>
           <div v-if="!filteredLogs.length" class="empty" style="padding: 28px 10px">
-            <div class="small tertiary">暂无调度事件（日志由调度器/Worker 写入，浏览器只读）</div>
+            <div class="small tertiary">暂无调度事件流（由调度内核与计算 Worker 实时写入）</div>
           </div>
         </div>
       </div>
 
-      <!-- 任务编排时间线（甘特 · 先评后压父子关联） -->
+      <!-- 右栏：先评后压全链路编排甘特图 (Pipeline Timeline) -->
       <div class="panel glow" data-od-id="dispatch-gantt" style="--glow-c: var(--c-agent)">
         <div class="row-between mb12">
           <div class="panel-title" style="margin: 0">
-            任务编排时间线
-            <span class="small tertiary" style="font-weight: 400">最近 {{ ganttRows.length }} 条</span>
+            先评后压全链路甘特图
+            <span class="small tertiary" style="font-weight: 400">最近 {{ ganttRows.length }} 链路</span>
           </div>
           <div class="row" style="gap: 8px; font-size: 11px">
             <span v-for="lg in ganttLegend" :key="lg.label" class="row" style="gap: 4px; align-items: center">
-              <i class="gantt-dot" :style="{ background: lg.color }"></i><span class="tertiary">{{ lg.label }}</span>
+              <i class="gantt-dot" :style="{ background: lg.color }"></i>
+              <span class="tertiary">{{ lg.label }}</span>
             </span>
           </div>
         </div>
+
+        <!-- 甘特图轴与多阶段进度条 -->
         <div v-if="ganttRows.length" class="gantt">
           <div class="gantt-axis">
             <span v-for="(tick, i) in ganttTicks" :key="i" class="mono">{{ tick }}</span>
@@ -464,17 +503,24 @@
             @click="goTasks"
           >
             <div class="gantt-name">
-              <span v-if="row.isChild" class="tertiary">↳</span>
+              <span v-if="row.isChild" class="tertiary" title="由基准/RAG 成功后自动派生">↳ 派生压测</span>
               <KindTag :kind="row.kind" />
-              <span class="mono" style="font-size: 10px">{{ row.shortId }}</span>
+              <span class="mono gantt-tid" style="font-size: 10.5px">{{ row.shortId }}</span>
             </div>
             <div class="gantt-track">
-              <i class="gantt-bar" :class="`st-${row.status}`" :style="{ left: row.left + '%', width: row.width + '%' }"></i>
+              <!-- 多阶段分段进度流 -->
+              <div
+                class="gantt-bar"
+                :class="`st-${row.status}`"
+                :style="{ left: row.left + '%', width: Math.max(12, row.width) + '%' }"
+              >
+                <span class="gantt-bar-text">{{ statusLabel(row.status) }}</span>
+              </div>
             </div>
           </div>
         </div>
         <div v-else class="empty" style="padding: 28px 10px">
-          <div class="small tertiary">暂无任务记录，通过智能体对话或任务中心创建评测任务后此处展示编排链路</div>
+          <div class="small tertiary">暂无任务记录，发起评测任务后此处将展示完整编排阶段链路</div>
         </div>
       </div>
     </div>
@@ -2258,47 +2304,175 @@ onBeforeUnmount(() => {
   border-left: 1px solid var(--border-subtle);
 }
 
-/* Worker 节点池芯片 */
-.worker-pool {
-  display: flex;
-  flex-wrap: wrap;
+/* 调度内核核心指标快览 */
+.kernel-metric-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
   gap: 6px;
-}
-.wp-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 9px;
+  background: var(--bg-elevated);
+  padding: 8px 10px;
+  border-radius: 8px;
   border: 1px solid var(--border-subtle);
-  border-radius: 999px;
-  background: var(--bg-main);
+}
+.k-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 2px;
+}
+.k-label {
+  font-size: 10px;
+}
+.k-val {
+  font-size: 12px;
+}
+
+/* Worker 专精集群卡片列表 */
+.worker-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.worker-rich-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 8px 10px;
   cursor: pointer;
-  font-size: 10.5px;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition: all 0.15s ease;
 }
-.wp-chip:hover {
+.worker-rich-card:hover {
   border-color: var(--accent-ai);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
 }
-.wp-chip.busy {
+.worker-rich-card.busy {
   border-color: color-mix(in srgb, var(--accent-ai) 40%, var(--border-subtle));
 }
-.wp-chip.offline {
-  opacity: 0.45;
+.worker-rich-card.offline {
+  opacity: 0.55;
 }
-.wp-dot {
+.wrc-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.wrc-dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background: var(--text-tertiary);
 }
-.wp-dot.idle { background: var(--accent-success); }
-.wp-dot.busy { background: var(--accent-ai); animation: dot-breathe 1.4s ease-in-out infinite; }
-.wp-dot.draining { background: var(--accent-warning); }
-.wp-id {
-  font-weight: 600;
+.wrc-dot.idle { background: var(--accent-success); }
+.wrc-dot.busy { background: var(--accent-ai); animation: dot-breathe 1.4s ease-in-out infinite; }
+.wrc-dot.draining { background: var(--accent-warning); }
+.wrc-name {
+  font-size: 11.5px;
+  color: var(--text-primary);
 }
-.wp-load {
+.wrc-id {
+  font-size: 10px;
+}
+.wrc-state-tag {
+  margin-left: auto;
+  font-size: 9.5px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--bg-main);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+}
+.wrc-state-tag.idle { color: var(--accent-success); }
+.wrc-state-tag.busy { color: var(--accent-ai); }
+.wrc-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.wrc-caps {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.cap-tag {
+  font-size: 9px;
+  font-family: var(--font-mono);
+  background: var(--bg-main);
+  border: 1px solid var(--border-subtle);
+  padding: 0 4px;
+  border-radius: 3px;
   color: var(--text-tertiary);
+}
+.wrc-load-wrap {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+.wrc-load-text {
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+.wrc-load-bar {
+  width: 36px;
+  height: 4px;
+  background: var(--bg-main);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.wrc-load-fill {
+  height: 100%;
+  transition: width 0.3s;
+}
+
+/* 结构化日志卡片 */
+.log-card-item {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin-bottom: 6px;
+  transition: background 0.15s ease;
+}
+.log-card-item.clickable {
+  cursor: pointer;
+}
+.log-card-item.clickable:hover {
+  border-color: var(--accent-ai);
+  background: var(--row-hover);
+}
+.lci-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 3px;
+}
+.lci-time {
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+.lci-tag {
+  font-size: 9.5px;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-weight: 600;
+  background: var(--bg-main);
+  border: 1px solid var(--border-subtle);
+}
+.lci-tag.done { color: var(--accent-success); border-color: color-mix(in srgb, var(--accent-success) 30%, transparent); }
+.lci-tag.error { color: var(--accent-error); border-color: color-mix(in srgb, var(--accent-error) 30%, transparent); }
+.lci-tag.node { color: var(--text-secondary); }
+.lci-tid {
+  font-size: 9.5px;
+  color: var(--accent-ai);
+  margin-left: auto;
+}
+.lci-body {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-primary);
 }
 
 /* 图例 */
@@ -2322,32 +2496,25 @@ onBeforeUnmount(() => {
   min-height: 22px;
 }
 
-/* 事件流分类着色与可点击定位 */
-.log-line.cat-error .lk { color: var(--accent-error); }
-.log-line.cat-done .lk { color: var(--accent-success); }
-.log-line.cat-node .lk { color: var(--text-tertiary); }
-.log-line.clickable { cursor: pointer; border-radius: 4px; }
-.log-line.clickable:hover { background: var(--row-hover); }
-
 /* ─── 任务编排时间线（甘特） ─── */
 .gantt {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
 .gantt-axis {
   display: flex;
   justify-content: space-between;
   font-size: 10px;
   color: var(--text-tertiary);
-  padding: 0 4px 4px 150px;
+  padding: 0 4px 4px 170px;
 }
 .gantt-row {
   display: grid;
-  grid-template-columns: 150px 1fr;
+  grid-template-columns: 170px 1fr;
   align-items: center;
   gap: 8px;
-  padding: 3px 4px;
+  padding: 4px 6px;
   border-radius: 6px;
   cursor: pointer;
   transition: background 0.15s ease;
@@ -2356,7 +2523,7 @@ onBeforeUnmount(() => {
   background: var(--row-hover);
 }
 .gantt-row.child .gantt-name {
-  padding-left: 14px;
+  padding-left: 12px;
 }
 .gantt-name {
   display: flex;
@@ -2366,19 +2533,33 @@ onBeforeUnmount(() => {
   overflow: hidden;
   white-space: nowrap;
 }
+.gantt-tid {
+  color: var(--text-secondary);
+}
 .gantt-track {
   position: relative;
-  height: 14px;
-  border-radius: 4px;
+  height: 18px;
+  border-radius: 5px;
   background: var(--bg-elevated);
   overflow: hidden;
+  border: 1px solid var(--border-subtle);
 }
 .gantt-bar {
   position: absolute;
-  top: 2px;
-  bottom: 2px;
+  top: 1px;
+  bottom: 1px;
   border-radius: 4px;
+  display: flex;
+  align-items: center;
+  padding-left: 6px;
   transition: left 0.6s ease, width 0.6s ease;
+}
+.gantt-bar-text {
+  font-size: 9px;
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
 }
 .gantt-bar.st-queued { background: #9ca3af; }
 .gantt-bar.st-running {
