@@ -344,3 +344,90 @@ def stream_protocol(
                         "上游 %s 忽略 stream 参数返回完整 JSON，走非 SSE 兜底", base
                     )
                     yield ("content", text)
+
+
+def fetch_remote_models(
+    *,
+    protocol: str,
+    base_url: str,
+    api_key: str | None = None,
+    anthropic_version: str | None = None,
+    timeout_s: float = 15.0,
+) -> list[dict]:
+    """从目标服务端点动态获取可用模型列表（如 /v1/models）。
+
+    统一返回结构：``[{"id": "模型标识", "name": "显示名称", "owned_by": "所属供应商/系统"}]``。
+    """
+    base = base_url.rstrip("/")
+    clean_base = base[:-3] if base.endswith("/v1") else base
+
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    if api_key:
+        if protocol == "anthropic_messages":
+            headers["x-api-key"] = api_key
+            headers["anthropic-version"] = anthropic_version or "2023-06-01"
+        else:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+    urls_to_try: list[str] = []
+    if protocol == "anthropic_messages":
+        urls_to_try = [f"{base}/v1/models", f"{clean_base}/v1/models"]
+    else:
+        urls_to_try = [
+            f"{clean_base}/v1/models",
+            f"{base}/models",
+            f"{clean_base}/api/tags",
+        ]
+
+    last_error: Exception | None = None
+    data: dict | None = None
+    for url in urls_to_try:
+        try:
+            req = Request(url, headers=headers, method="GET")
+            with urlopen(req, timeout=timeout_s) as response:
+                data = json.loads(response.read().decode())
+                if isinstance(data, dict):
+                    break
+        except HTTPError as exc:
+            last_error = exc
+            if exc.code in (401, 403):
+                raise AppError(ErrorCode.UNAUTHORIZED, f"上游鉴权失败 ({exc.code})，请检查 API Key") from exc
+            continue
+        except Exception as exc:
+            last_error = exc
+            continue
+
+    models_list: list[dict] = []
+    if data and isinstance(data, dict):
+        if "data" in data and isinstance(data["data"], list):
+            for item in data["data"]:
+                if isinstance(item, dict) and item.get("id"):
+                    models_list.append({
+                        "id": str(item["id"]),
+                        "name": str(item.get("id")),
+                        "owned_by": str(item.get("owned_by") or item.get("root") or "remote"),
+                    })
+        elif "models" in data and isinstance(data["models"], list):
+            for item in data["models"]:
+                if isinstance(item, dict) and item.get("name"):
+                    models_list.append({
+                        "id": str(item["name"]),
+                        "name": str(item.get("name")),
+                        "owned_by": "ollama",
+                    })
+
+    if models_list:
+        models_list.sort(key=lambda x: x["id"].lower())
+        return models_list
+
+    if protocol == "anthropic_messages":
+        return [
+            {"id": "claude-3-7-sonnet-20250219", "name": "Claude 3.7 Sonnet", "owned_by": "anthropic"},
+            {"id": "claude-3-5-sonnet-20241022", "name": "Claude 3.5 Sonnet v2", "owned_by": "anthropic"},
+            {"id": "claude-3-5-haiku-20241022", "name": "Claude 3.5 Haiku", "owned_by": "anthropic"},
+            {"id": "claude-3-opus-20240229", "name": "Claude 3 Opus", "owned_by": "anthropic"},
+        ]
+
+    if last_error:
+        raise AppError(ErrorCode.UPSTREAM, f"无法从端点获取模型列表: {last_error}")
+    raise AppError(ErrorCode.UPSTREAM, "端点未返回可解析的模型列表，请手动输入模型标识名")

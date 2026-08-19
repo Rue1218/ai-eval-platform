@@ -4,12 +4,12 @@ from fastapi import APIRouter, Depends
 from fastapi import Request as FastApiRequest
 from sqlalchemy.orm import Session
 
-from ..adapters import call_protocol
+from ..adapters import call_protocol, fetch_remote_models
 from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
 from ..models import AuditLog, ProtocolProfile, Setting, User
-from ..schemas import ProfileCreate, ProfileOut, ProfileUpdate
+from ..schemas import FetchModelsIn, ProfileCreate, ProfileOut, ProfileUpdate
 from ..security import decrypt_secret, encrypt_secret
 
 router = APIRouter(prefix="/api/profiles", tags=["profiles"])
@@ -157,6 +157,37 @@ def delete_profile(
     )
     db.commit()
     return {"ok": True}
+
+
+@router.post("/fetch-models")
+def fetch_models(
+    body: FetchModelsIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """从目标服务 Base URL 获取可用的模型标识列表 (/models)。"""
+    api_key = body.api_key
+    protocol = body.protocol
+    base_url = body.base_url
+    anthropic_version = body.anthropic_version
+
+    if body.profile_id:
+        profile = db.query(ProtocolProfile).filter(ProtocolProfile.id == body.profile_id).first()
+        if not profile:
+            raise AppError(ErrorCode.NOT_FOUND, "协议档不存在")
+        protocol = profile.protocol
+        base_url = profile.base_url
+        anthropic_version = profile.anthropic_version
+        if not api_key and profile.encrypted_key:
+            api_key = decrypt_secret(profile.encrypted_key)
+
+    models = fetch_remote_models(
+        protocol=protocol,
+        base_url=base_url,
+        api_key=api_key,
+        anthropic_version=anthropic_version,
+    )
+    return {"ok": True, "models": models, "total": len(models)}
 
 
 @router.post("/{profile_id}/check")
