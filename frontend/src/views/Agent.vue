@@ -55,6 +55,7 @@
         <n-dropdown
           trigger="click"
           :options="agentProfileDropdownOptions"
+          :render-label="renderAgentProfileOption"
           @select="handleSelectAgentModel"
         >
           <button class="chat-head-model-btn" title="点击切换 Agent 驱动模型（来自协议档接入池）">
@@ -633,6 +634,7 @@
               <n-dropdown
                 trigger="click"
                 :options="agentProfileDropdownOptions"
+                :render-label="renderAgentProfileOption"
                 @select="handleSelectAgentModel"
               >
                 <button class="composer-model-dropdown-btn" title="点击切换当前 Agent 驱动模型（来自协议档接入池）">
@@ -726,7 +728,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch, h } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useMessage, useDialog, NDropdown } from 'naive-ui'
+import { useMessage, useDialog, NDropdown, type DropdownOption } from 'naive-ui'
 import { api } from '../api/http'
 import { AgentWebSocket } from '../api/ws'
 import type { Task, TaskSpec, WsServerEvent, Profile, Dataset, KnowledgeBase, GoldQA } from '../api/types'
@@ -753,7 +755,7 @@ const currentAgentProfileId = ref<string>('')
 const allProfiles = ref<Profile[]>([])
 
 /** 模型选择下拉菜单项（对齐 /admin/profiles 接入池） */
-const agentProfileDropdownOptions = computed(() => {
+const agentProfileDropdownOptions = computed<DropdownOption[]>(() => {
   if (!allProfiles.value.length) {
     return [
       { label: '暂无接入模型协议档', key: '__none__', disabled: true },
@@ -762,58 +764,13 @@ const agentProfileDropdownOptions = computed(() => {
     ]
   }
   const activeId = currentAgentProfileId.value || allProfiles.value[0]?.id
-  const list = allProfiles.value.map((p) => {
+  const list: DropdownOption[] = allProfiles.value.map((p) => {
     const isCurrent = p.id === activeId
     return {
-      label: () =>
-        h('div', {
-          style: {
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: '16px',
-            minWidth: '260px',
-            padding: '3px 0',
-            lineHeight: '1.4',
-          }
-        }, [
-          h('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px', flex: '1', minWidth: '0' } }, [
-            h('span', {
-              style: {
-                fontWeight: isCurrent ? '700' : '500',
-                fontSize: '13px',
-                color: isCurrent ? 'var(--accent-ai)' : 'inherit',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }
-            }, p.name),
-            h('span', {
-              style: {
-                fontSize: '11px',
-                opacity: '0.65',
-                fontFamily: 'var(--font-mono)',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }
-            }, `${p.model || p.protocol} · ${p.protocol}`),
-          ]),
-          isCurrent
-            ? h('span', {
-                style: {
-                  color: 'var(--accent-ai)',
-                  fontSize: '11px',
-                  fontWeight: '700',
-                  background: 'var(--t-agent)',
-                  padding: '2px 8px',
-                  borderRadius: '6px',
-                  flexShrink: '0',
-                }
-              }, '当前驱动')
-            : null,
-        ]),
+      label: p.name,
       key: p.id,
+      profile: p,
+      isCurrent,
     }
   })
   return [
@@ -822,6 +779,63 @@ const agentProfileDropdownOptions = computed(() => {
     { label: '⚙ 管理模型接入协议档 ↗', key: '__goto_profiles__' },
   ]
 })
+
+/** 规范渲染模型下拉项：左右两栏结构，主标题 + 副标题 + 当前驱动高亮微标 */
+function renderAgentProfileOption(option: DropdownOption) {
+  if (option.type === 'divider' || !option.profile) {
+    return option.label as string
+  }
+  const p = option.profile as Profile
+  const isCurrent = !!option.isCurrent
+  return h('div', {
+    class: 'agent-profile-option-row',
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: '16px',
+      minWidth: '240px',
+      padding: '3px 0',
+      lineHeight: '1.4',
+    },
+  }, [
+    h('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px', flex: '1', minWidth: '0' } }, [
+      h('div', {
+        style: {
+          fontWeight: isCurrent ? '700' : '500',
+          fontSize: '13px',
+          color: isCurrent ? 'var(--accent-ai, #10B981)' : 'inherit',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        },
+      }, p.name),
+      h('div', {
+        style: {
+          fontSize: '11px',
+          color: 'var(--text-tertiary, #6B7280)',
+          fontFamily: 'var(--font-mono, monospace)',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        },
+      }, `${p.model || p.protocol} · ${p.protocol}`),
+    ]),
+    isCurrent
+      ? h('span', {
+          style: {
+            color: 'var(--accent-ai, #10B981)',
+            fontSize: '11px',
+            fontWeight: '700',
+            background: 'var(--t-agent, rgba(16, 185, 129, 0.12))',
+            padding: '2px 8px',
+            borderRadius: '6px',
+            flexShrink: '0',
+          },
+        }, '当前驱动')
+      : null,
+  ])
+}
 
 const sessions = ref<any[]>([])
 const currentSessionId = ref<string>('')
