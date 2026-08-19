@@ -24,9 +24,16 @@
         </svg>
       </div>
 
-      <div class="tool-name">{{ toolChineseName }}</div>
-      <div class="tool-state-text" :class="{ fail: status === 'fail' }">
-        {{ stateText }}
+      <div class="tool-title-wrap">
+        <div class="tool-name">{{ toolChineseName }}</div>
+        <div class="tool-sub-tag">MCP · 短工具</div>
+      </div>
+
+      <div class="tool-meta-right">
+        <span v-if="formattedLatency" class="tool-latency mono">{{ formattedLatency }}</span>
+        <span class="tool-state-text" :class="{ fail: status === 'fail' }">
+          {{ stateText }}
+        </span>
       </div>
 
       <div class="chev">
@@ -51,6 +58,7 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { formatLatency } from '../../utils/format'
 
 const props = withDefaults(
   defineProps<{
@@ -58,6 +66,7 @@ const props = withDefaults(
     args?: any
     result?: any
     status?: 'pending' | 'ok' | 'fail'
+    latencyMs?: number
   }>(),
   {
     status: 'ok',
@@ -67,6 +76,16 @@ const props = withDefaults(
 const isOpen = ref(false)
 
 const toolNameMap: Record<string, string> = {
+  'model.list': '列出协议档',
+  'dataset.list': '列出数据集',
+  'kb.list': '列出知识库',
+  'task.get': '查询任务详情',
+  'task.create': '创建评测任务',
+  'task.cancel': '取消任务',
+  'report.get': '读取评测报告',
+  'dispatch.overview': '调度概览',
+  'testcase.confirm': '确认用例入库',
+  // 兼容旧下划线命名
   list_profiles: '列出协议档',
   get_profile: '获取协议档详情',
   list_datasets: '列出数据集',
@@ -85,10 +104,12 @@ const toolChineseName = computed(() => {
   return toolNameMap[props.tool] || props.tool
 })
 
+const formattedLatency = computed(() => formatLatency(props.latencyMs))
+
 const statusClass = computed(() => props.status)
 
 const stateText = computed(() => {
-  if (props.status === 'pending') return '正在调用...'
+  if (props.status === 'pending') return '调用中...'
   if (props.status === 'fail') return '调用失败'
   return '调用完成'
 })
@@ -146,9 +167,35 @@ function formatJson(val: any): string {
 .tool-status.fail {
   color: var(--accent-error);
 }
+.tool-title-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
 .tool-name {
   font-size: 13px;
   font-weight: 600;
+  color: var(--text-primary);
+}
+.tool-sub-tag {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  letter-spacing: 0.02em;
+}
+.tool-meta-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+.tool-latency {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  background: var(--bg-elevated);
+  padding: 1px 6px;
+  border-radius: 4px;
 }
 .tool-state-text {
   font-size: 12px;
@@ -159,7 +206,7 @@ function formatJson(val: any): string {
   font-weight: 500;
 }
 .tool-head .chev {
-  margin-left: auto;
+  margin-left: 4px;
   transition: transform 0.18s ease;
   color: var(--text-tertiary);
   display: grid;
