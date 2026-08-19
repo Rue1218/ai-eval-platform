@@ -696,7 +696,7 @@ const isRailOpen = ref(false)
 const isWsOnline = ref(true)
 const isGenerating = ref(false)
 const showJumpBottom = ref(false)
-const agentModelName = ref('gpt-5-pro')
+const agentModelName = ref('')
 
 const sessions = ref<any[]>([])
 const currentSessionId = ref<string>('')
@@ -1612,6 +1612,23 @@ async function loadSessions() {
   }
 }
 
+/** 从后端读取当前 Agent 协议档的真实模型名，回填顶栏与输入框显示；未配置或失败时留空。 */
+async function resolveAgentModelName() {
+  try {
+    const settings = await api.admin.getSettings()
+    const pid = settings?.agent_profile_id
+    if (!pid) {
+      agentModelName.value = ''
+      return
+    }
+    const profiles = await api.profiles.list()
+    const hit = profiles.find((p) => p.id === pid)
+    agentModelName.value = hit ? hit.model || hit.name : ''
+  } catch {
+    agentModelName.value = ''
+  }
+}
+
 /** F4 会话历史回放：拉取历史 user/assistant 消息渲染进事件流（no-anim 跳过入场动画），
  *  并回传最大 event_id 供 WS 断点续传对齐 lastEventId；失败静默降级按全新会话处理。 */
 async function loadSessionHistory(sid: string): Promise<number> {
@@ -1810,6 +1827,8 @@ function formatRelativeTime(dateStr?: string) {
 
 onMounted(async () => {
   await loadSessions()
+  // 顶栏/输入框的 Agent 模型名改为按后端协议档动态解析，不再硬编码
+  resolveAgentModelName()
   if (sessions.value.length > 0) {
     // selectSession 内部完成历史回放对齐、WS 建立与侧轨展开（F4/F17）
     selectSession(sessions.value[0].id)
