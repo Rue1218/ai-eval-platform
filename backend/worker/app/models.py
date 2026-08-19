@@ -1,12 +1,14 @@
 """Worker 侧最小模型副本。
 
-与 backend/api/app/models.py 保持一致的三个表。骨架版为容器隔离而复制；
+与 backend/api/app/models.py 保持一致。骨架版为容器隔离而复制；
 后续可抽成共享 package（如 ./shared）供 api / worker 共同引用，避免漂移。
+跨域外键一律不声明（worker 元数据中没有关联表，悬空外键会在 flush 时
+抛 NoReferencedTableError）；真实外键由 api 侧 Alembic 迁移维护。
 """
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, Column, DateTime, Index, String, Text
+from sqlalchemy import BigInteger, Boolean, Column, DateTime, Float, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import declarative_base
 
@@ -96,3 +98,82 @@ class Setting(Base):
 
     key = Column(String, primary_key=True)
     value = Column(JSONB, default=dict)
+
+
+class ProtocolProfile(Base):
+    """协议档最小映射：Worker 读取连接参数，密文仅在调用上游前解密。"""
+
+    __tablename__ = "protocol_profiles"
+
+    id = Column(String, primary_key=True)
+    name = Column(String)
+    protocol = Column(String, nullable=False)
+    base_url = Column(String, nullable=False)
+    model = Column(String, nullable=False)
+    anthropic_version = Column(String, nullable=True)
+    encrypted_key = Column(Text, nullable=True)
+
+
+class Dataset(Base):
+    """数据集最小映射：Worker 读取主指标口径与版本号写进报告快照。"""
+
+    __tablename__ = "datasets"
+
+    id = Column(String, primary_key=True)
+    name = Column(String)
+    version = Column(Integer)
+    metric = Column(String)
+
+
+class DatasetRow(Base):
+    """数据行最小映射：待补全行（pending_complete）不进评分分母。"""
+
+    __tablename__ = "dataset_rows"
+
+    id = Column(String, primary_key=True)
+    dataset_id = Column(String, index=True)
+    row_no = Column(Integer)
+    question = Column(Text)
+    reference = Column(Text)
+    context = Column(Text, nullable=True)
+    pending_complete = Column(Boolean)
+
+
+class EvalItem(Base):
+    """样本级结果最小映射：断点续跑按 (task, profile, row_no) 查重跳过。"""
+
+    __tablename__ = "eval_items"
+    __table_args__ = (Index("ix_eval_items_task_profile", "task_id", "profile_id"),)
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    task_id = Column(String, nullable=False, index=True)
+    profile_id = Column(String, nullable=False)
+    row_no = Column(Integer, nullable=False)
+    question = Column(Text)
+    reference = Column(Text)
+    context = Column(Text, nullable=True)
+    output = Column(Text)
+    score = Column(Float, nullable=True)
+    exact = Column(Float, nullable=True)
+    rouge_l = Column(Float, nullable=True)
+    latency_ms = Column(Integer, nullable=True)
+    error = Column(Text, nullable=True)
+    raw = Column(JSONB, nullable=True)
+    usage = Column(JSONB, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+
+
+class UsageLedger(Base):
+    """用量台账最小映射：每「任务 × 协议档」一行，逐调用累加用于预算熔断。"""
+
+    __tablename__ = "usage_ledger"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    task_id = Column(String, nullable=False, index=True)
+    profile_id = Column(String, nullable=False)
+    prompt_tokens = Column(BigInteger, nullable=False, default=0)
+    completion_tokens = Column(BigInteger, nullable=False, default=0)
+    total_tokens = Column(BigInteger, nullable=False, default=0)
+    est_cost_usd = Column(Float, nullable=False, default=0.0)
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)

@@ -58,6 +58,9 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-aieval}:${POSTGRES_PASSWORD:-aieval_pass}@postgres:5432/${POSTGRES_DB:-aieval}
       DATA_DIR: /data
+      # Worker 需解密协议档密文：加密密钥必须与 api 容器一致
+      KEY_ENCRYPTION_KEY: ${KEY_ENCRYPTION_KEY:-}
+      SECRET_KEY: ${SECRET_KEY:-dev-secret-change-me}
     depends_on:
       postgres:
         condition: service_healthy

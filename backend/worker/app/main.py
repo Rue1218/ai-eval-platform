@@ -1,22 +1,21 @@
+"""Worker 主循环：轮询 PG 任务队列并按 kind 分发执行器。
+
+- ``benchmark``：M2 起走真实执行器（三协议调用 + 规则评分，见 benchmark.py）；
+- ``rag`` / ``testcase`` / ``stress``：仍为骨架 mock（M3/M4 替换为真实实现），
+  与真实执行保持同一领取入口，替换时不动本文件的分发结构。
+"""
+
 import logging
-import os
 import time
 from datetime import datetime, timezone
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-
-from .models import Report, Session, Setting, Task, TaskEvent, WsEvent
+from .benchmark import run_benchmark
+from .db import DATABASE_URL, SessionLocal
+from .events import push_ws
+from .models import Report, Setting, Task, TaskEvent
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("worker")
-
-DATABASE_URL = os.environ.get(
-    "DATABASE_URL", "postgresql://aieval:aieval_pass@localhost:5432/aieval"
-)
-
-engine = create_engine(DATABASE_URL, pool_pre_ping=True, future=True)
-SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 TERMINAL = {"succeeded", "failed", "cancelled"}
 
@@ -37,52 +36,12 @@ def _max_running_tasks(db) -> int:
     return DEFAULT_MAX_RUNNING_TASKS
 
 
-def _push_ws(session_id: str | None, event: str, payload: dict, task_id: str | None = None) -> None:
-    """向会话事件表追加标准事件；task_id 独立成列，payload 仅存事件数据。
-
-    分配事件号前先锁定会话行（与 api 侧 _next_event_id 同一把行锁），
-    避免 Worker 与 API 并发写同一会话时事件号撞号。
-    """
-    if not session_id:
-        return
-    db = SessionLocal()
-    try:
-        locked = db.query(Session.id).filter(Session.id == session_id).with_for_update().first()
-        if not locked:
-            return
-        max_eid = (
-            db.query(WsEvent.event_id)
-            .filter(WsEvent.session_id == session_id)
-            .order_by(WsEvent.event_id.desc())
-            .first()
-        )
-        event_id = (max_eid[0] + 1) if max_eid else 1
-        db.add(
-            WsEvent(
-                session_id=session_id,
-                task_id=task_id,
-                event_id=event_id,
-                event=event,
-                payload=payload,
-            )
-        )
-        db.commit()
-    finally:
-        db.close()
-
-
 def _run_task(task_id: str) -> None:
-    """骨架版执行器：mock 执行 2 秒后置 succeeded。
+    """按任务类型分发执行。
 
-    入参为任务 ID 而非 ORM 对象：主循环 Session 与本函数 Session 相互独立，
+    入参为任务 ID 而非 ORM 对象：主循环 Session 与执行器 Session 相互独立，
     直接传递跨 Session 的 ORM 实例会导致 refresh 抛 InvalidRequestError、
     状态赋值不进脏检查（任务永久卡 running）。
-
-    后续按 kind 分发到真实执行器：
-      benchmark  -> 三协议适配 + 规则评分
-      rag        -> LightRAG / 外部 Chat RAG
-      testcase   -> 用例生成（进入 awaiting_case_confirm）
-      stress     -> 下发到 stress 容器（go-stress-testing）
     """
     db = SessionLocal()
     task: Task | None = None
@@ -96,8 +55,15 @@ def _run_task(task_id: str) -> None:
         db.add(TaskEvent(task_id=task.id, event="start", payload={"kind": task.kind}))
         db.commit()
 
-        _push_ws(task.session_id, "progress", {"percent": 0, "done": 0, "total": 1, "message": "执行中"}, task_id=task.id)
+        if task.kind == "benchmark":
+            # M2 起真实执行：三协议调用 + 规则评分 + 预算熔断 + 断点续跑；
+            # 执行器自管数据库会话与任务终态，这里提前释放本层会话
+            db.close()
+            logger.info("task %s (benchmark) dispatch to real executor", task_id)
+            run_benchmark(task_id)
+            return
 
+        # ─── 以下为骨架 mock 流程（rag / testcase / stress，M3/M4 替换） ───
         time.sleep(2)
 
         # 期间若被取消则停止
@@ -106,7 +72,7 @@ def _run_task(task_id: str) -> None:
             return
 
         report_id = None
-        if task.kind in {"benchmark", "rag", "stress"}:
+        if task.kind in {"rag", "stress"}:
             report = Report(task_id=task.id, kind=task.kind, metrics={"mock": True})
             db.add(report)
             db.flush()
@@ -119,13 +85,13 @@ def _run_task(task_id: str) -> None:
         db.add(TaskEvent(task_id=task.id, event="finish", payload={"status": "succeeded"}))
         db.commit()
 
-        _push_ws(task.session_id, "progress", {"percent": 100, "done": 1, "total": 1, "message": "任务已完成"}, task_id=task.id)
+        push_ws(task.session_id, "progress", {"percent": 100, "done": 1, "total": 1, "message": "任务已完成"}, task_id=task.id)
         if report_id:
-            _push_ws(task.session_id, "report", {"report_id": report_id}, task_id=task.id)
+            push_ws(task.session_id, "report", {"report_id": report_id}, task_id=task.id)
         else:
             # testcase 等无报告类型：不允许推送空 report_id（前端会据此跳转 /reports/undefined）
-            _push_ws(task.session_id, "thought", {"text": "任务已完成（succeeded）。用例生成类任务请到「用例」页确认入库。"}, task_id=task.id)
-        logger.info("task %s (%s) succeeded", task.id, task.kind)
+            push_ws(task.session_id, "thought", {"text": "任务已完成（succeeded）。用例生成类任务请到「用例」页确认入库。"}, task_id=task.id)
+        logger.info("task %s (%s) succeeded (mock)", task.id, task.kind)
     except Exception:
         db.rollback()
         logger.exception("task %s execution error", task_id)
@@ -139,7 +105,7 @@ def _run_task(task_id: str) -> None:
         except Exception:
             db.rollback()
             logger.exception("task %s failed-status persist error", task_id)
-        _push_ws(
+        push_ws(
             task.session_id if task is not None else None,
             "error",
             {"code": "INTERNAL", "message": "执行失败"},
@@ -150,6 +116,7 @@ def _run_task(task_id: str) -> None:
 
 
 def loop() -> None:
+    """轮询任务队列：受平台并发闸门约束，超限时 queued 任务保持排队。"""
     while True:
         db = SessionLocal()
         try:
