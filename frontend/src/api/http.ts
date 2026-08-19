@@ -979,13 +979,8 @@ export const api = {
       const { data } = await http.get(`/api/sessions/${id}/messages`)
       return data
     },
-    async delete(id: string): Promise<void> {
-      if (getDataMode() === 'mock') {
-        mockStore.sessions = mockStore.sessions.filter((x) => x.id !== id)
-        return
-      }
-      await http.delete(`/api/sessions/${id}`)
-    },
+    // 说明：API.md §3.4/§9 明确 V1 不提供「删除会话」接口，
+    // 会话为审计留存资产仅允许新建，请勿在此追加 delete 封装。
   },
 }
 

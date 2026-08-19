@@ -1859,30 +1859,10 @@ async function handleCreateSession() {
   }
 }
 
-async function handleDeleteSession(sid: string) {
-  const target = sessions.value.find(s => s.id === sid)
-  const name = (target?.title || '新会话').slice(0, 24)
-  dialog.warning({
-    title: '删除会话',
-    content: `确定删除「${name}」吗？对话记录将被清除，已创建的任务仍保留在任务页。`,
-    positiveText: '删除',
-    negativeText: '取消',
-    onPositiveClick: async () => {
-      try {
-        await api.sessions.delete(sid)
-        sessions.value = sessions.value.filter(s => s.id !== sid)
-        if (currentSessionId.value === sid) {
-          if (sessions.value.length) {
-            selectSession(sessions.value[0].id)
-          } else {
-            handleCreateSession()
-          }
-        }
-      } catch {
-        message.error('删除会话失败')
-      }
-    },
-  })
+function handleDeleteSession(_sid: string) {
+  // API.md §3.4/§9：V1 不提供「删除会话」接口；会话为审计留存资产，
+  // 此处按设计规范以提示替代假删除，不向服务端发送请求。
+  message.info('当前版本暂不支持删除会话，对话记录将长期保留以便回溯')
 }
 
 function initWebSocket(sessionId: string, lastEventId = 0) {
