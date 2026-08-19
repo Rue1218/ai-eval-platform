@@ -20,17 +20,34 @@ TERMINAL_STATUSES = {"succeeded", "failed", "cancelled"}
 
 
 def _task_out(task: Task) -> dict:
-    """将任务 ORM 对象统一转换为前端需要的公开字段。"""
-    return TaskOut.model_validate(task).model_dump(mode="json")
+    """将任务 ORM 对象统一转换为前端需要的公开字段。
+
+    同步把 config 快照中的 dataset_id/kb_id 提升为顶层引用（API §3.10 列表
+    item 契约），列表页无需解包 config 即可展示数据集 / 知识库归属。
+    """
+    payload = TaskOut.model_validate(task).model_dump(mode="json")
+    config = task.config or {}
+    if isinstance(config, dict):
+        payload["dataset_id"] = config.get("dataset_id")
+        payload["kb_id"] = config.get("kb_id")
+    return payload
 
 
 def _owned_task(db: Session, task_id: str, user_id: str) -> Task:
-    """读取当前成员创建的任务，避免通过 ID 越权操作。"""
+    """读取当前成员创建的任务，写操作（取消 / 重跑）仅限创建者本人。"""
     task = db.query(Task).filter(Task.id == task_id).first()
     if not task:
         raise AppError(ErrorCode.NOT_FOUND, "任务不存在")
     if task.created_by != user_id:
         raise AppError(ErrorCode.UNAUTHORIZED, "没有权限做这件事")
+    return task
+
+
+def _visible_task(db: Session, task_id: str) -> Task:
+    """按全员只读口径加载任务（API §3.10：详情全员可见，写操作仍走 _owned_task）。"""
+    task = db.query(Task).filter(Task.id == task_id).first()
+    if not task:
+        raise AppError(ErrorCode.NOT_FOUND, "任务不存在")
     return task
 
 
@@ -125,8 +142,8 @@ def list_tasks(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """按状态和类型分页读取当前成员创建的任务。"""
-    query = db.query(Task).filter(Task.created_by == user.id)
+    """按状态和类型分页读取全员任务（API §3.10：列表全员可见，取消/重跑仍限创建者）。"""
+    query = db.query(Task)
     if status:
         query = query.filter(Task.status == status)
     if kind:
@@ -141,13 +158,8 @@ def task_summary(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """从真实任务表聚合当前成员近 24 小时的状态计数。"""
-    rows = (
-        db.query(Task.status, func.count(Task.id))
-        .filter(Task.created_by == user.id)
-        .group_by(Task.status)
-        .all()
-    )
+    """从真实任务表聚合全员任务状态计数（任务中心为团队共享视图）。"""
+    rows = db.query(Task.status, func.count(Task.id)).group_by(Task.status).all()
     counts = {status: 0 for status in [*ACTIVE_STATUSES, *TERMINAL_STATUSES]}
     counts.update({status: count for status, count in rows})
     return {"status_counts": counts, "series": [], "diagnosis": []}
@@ -159,8 +171,8 @@ def get_task(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """返回任务配置快照和按时间排序的事件时间线。"""
-    task = _owned_task(db, task_id, user.id)
+    """返回任务配置快照和按时间排序的事件时间线（全员只读）。"""
+    task = _visible_task(db, task_id)
     events = (
         db.query(TaskEvent)
         .filter(TaskEvent.task_id == task.id)

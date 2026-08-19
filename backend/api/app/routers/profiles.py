@@ -8,7 +8,7 @@ from ..adapters import call_protocol
 from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
-from ..models import AuditLog, ProtocolProfile, User
+from ..models import AuditLog, ProtocolProfile, Setting, User
 from ..schemas import ProfileCreate, ProfileOut, ProfileUpdate
 from ..security import decrypt_secret, encrypt_secret
 
@@ -136,10 +136,14 @@ def delete_profile(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """删除未被 Agent 默认配置引用的协议档。"""
+    """删除未被 Agent 默认配置引用的协议档（API §3.6：被引用的协议档禁止删除）。"""
     profile = db.query(ProtocolProfile).filter(ProtocolProfile.id == profile_id).first()
     if not profile:
         raise AppError(ErrorCode.NOT_FOUND, "协议档不存在")
+    # Agent 核心驱动档不允许直接删除：需先在系统设置中解除 agent_profile_id 引用
+    setting_row = db.query(Setting).filter(Setting.key == "agent_profile_id").first()
+    if setting_row and setting_row.value == profile_id:
+        raise AppError(ErrorCode.VALIDATION, "该协议档正被 Agent 后端引用，请先在设置页解除引用后再删除")
     db.delete(profile)
     db.add(
         AuditLog(

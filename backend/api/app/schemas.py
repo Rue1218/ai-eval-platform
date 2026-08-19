@@ -289,7 +289,7 @@ class TaskEventOut(OrmOut):
 
 
 class TaskOut(OrmOut):
-    """任务列表与创建接口的统一响应。"""
+    """任务列表与创建接口的统一响应（API §3.10：item 含 dataset_id/kb_id/creator_id 顶层引用）。"""
 
     id: str
     session_id: str | None
@@ -300,7 +300,12 @@ class TaskOut(OrmOut):
     progress: dict[str, Any]
     result: dict[str, Any]
     report_id: str | None
+    # 顶层引用字段：Task ORM 无同名列，由路由层 _task_out 从 config 快照提升填充
+    dataset_id: str | None = None
+    kb_id: str | None = None
+    # 契约字段名 creator_id 与既有前端字段 creator 并存输出，保证新旧消费端兼容
     creator: str = Field(validation_alias=AliasChoices("created_by", "creator"))
+    creator_id: str | None = Field(default=None, validation_alias=AliasChoices("created_by", "creator_id"))
     created_at: Any
     updated_at: Any
 

@@ -5,13 +5,14 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
 from ..models import AuditLog, ProtocolProfile, Setting, User
+from .users import _parse_bound
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -211,11 +212,23 @@ def delete_whitelist(
 
 @router.get("/audit-logs")
 def get_audit_logs(
+    from_ts: str | None = Query(default=None, alias="from"),
+    to_ts: str | None = Query(default=None, alias="to"),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """以只读方式返回近期合规审计事件。"""
-    rows = db.query(AuditLog).order_by(AuditLog.ts.desc()).limit(200).all()
+    """按 API §3.12 契约过滤并分页返回合规审计事件（from/to 为 ISO 8601 时间）。"""
+    to_bound = _parse_bound(to_ts, "to", None)
+    from_bound = _parse_bound(from_ts, "from", None)
+    query = db.query(AuditLog)
+    if from_bound is not None:
+        query = query.filter(AuditLog.ts >= from_bound)
+    if to_bound is not None:
+        query = query.filter(AuditLog.ts < to_bound)
+    total = query.count()
+    rows = query.order_by(AuditLog.ts.desc(), AuditLog.id.desc()).offset(offset).limit(limit).all()
     return {
         "items": [
             {
@@ -228,5 +241,5 @@ def get_audit_logs(
             }
             for row in rows
         ],
-        "total": len(rows),
+        "total": total,
     }
