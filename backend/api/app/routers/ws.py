@@ -22,6 +22,7 @@ from ..models import (
     Dataset,
     Message,
     ProtocolProfile,
+    Setting,
     StoredFile,
     Task,
     User,
@@ -660,6 +661,47 @@ async def _replay_events(db: Session, ws: WebSocket, session_id: str, after_id: 
     return rows[-1].event_id if rows else after_id
 
 
+def _pong_body(session_id: str, cursor: int) -> dict:
+    """构造应用层心跳 pong 事件（API.md §4.3：payload 为空、前端不渲染）。
+
+    pong 不写入 ws_events、不占用单调事件号；``event_id`` 复用连接当前
+    游标，仅用于满足公共头结构，前端判活后按去重规则忽略。
+    """
+    return {
+        "event": "pong",
+        "session_id": session_id,
+        "task_id": None,
+        "event_id": cursor,
+        "ts": datetime.now(UTC).isoformat(),
+        "payload": {},
+    }
+
+
+async def _heartbeat_loop(ws: WebSocket, session_id: str, state: _ConnState, interval_s: float) -> None:
+    """按配置周期发送应用层 pong 心跳（契约：前端不发明 JSON ping）。
+
+    心跳在连接锁内发送，与转发循环 / 直发互斥避免帧交错；
+    发送失败（连接关闭）时静默退出，由主循环 finally 统一清理。
+    """
+    while True:
+        await asyncio.sleep(interval_s)
+        try:
+            async with state.lock:
+                await ws.send_json(_pong_body(session_id, state.cursor))
+        except Exception:
+            logger.debug("会话 %s 的心跳循环退出", session_id, exc_info=True)
+            return
+
+
+def _heartbeat_interval(db: Session) -> float:
+    """读取 settings.runtime.ws_ping_s（默认 15s，允许 5–300s）。"""
+    row = db.query(Setting).filter(Setting.key == "runtime").first()
+    value = (row.value or {}).get("ws_ping_s") if row else None
+    if isinstance(value, int | float) and 5 <= value <= 300:
+        return float(value)
+    return 15.0
+
+
 async def _forward_loop(ws: WebSocket, session_id: str, state: _ConnState) -> None:
     """后台转发循环：把 Worker 等进程外写入 ws_events 的新事件推送到当前连接。
 
@@ -701,6 +743,7 @@ async def ws_agent(websocket: WebSocket):
     await websocket.accept()
     db: Session = SessionLocal()
     forwarder: asyncio.Task | None = None
+    heartbeat: asyncio.Task | None = None
     try:
         requested_session_id = websocket.query_params.get("session_id")
         if requested_session_id:
@@ -734,6 +777,10 @@ async def ws_agent(websocket: WebSocket):
 
         # 启动后台转发：Worker 回推的 progress/report/error 经 ws_events 表送达本连接
         forwarder = asyncio.create_task(_forward_loop(websocket, session_id, state))
+        # 启动应用层心跳：周期发送 pong 供前端判活（前端不发 JSON ping）
+        heartbeat = asyncio.create_task(
+            _heartbeat_loop(websocket, session_id, state, _heartbeat_interval(db))
+        )
 
         while True:
             raw = await websocket.receive_text()
@@ -778,4 +825,6 @@ async def ws_agent(websocket: WebSocket):
     finally:
         if forwarder is not None:
             forwarder.cancel()
+        if heartbeat is not None:
+            heartbeat.cancel()
         db.close()

@@ -14,6 +14,12 @@ export class AgentWebSocket {
   private eventHandlers: Set<WsEventHandler> = new Set()
   private statusHandlers: Set<WsStatusHandler> = new Set()
   private isExplicitlyClosed = false
+  // 静默判活：最近一次收到消息（含服务端 pong 心跳）的时间戳
+  private lastReceiveAt = 0
+  private silenceTimer: number | null = null
+  // 服务端按 settings.runtime.ws_ping_s（默认 15s）周期发送应用层 pong；
+  // 超过该窗口未收到任何消息即判定链路死亡，主动断开触发重连
+  private readonly silenceTimeoutMs = 45_000
   public sessionId: string | null = null
   public lastEventId = 0
   public isConnected = false
@@ -73,6 +79,8 @@ export class AgentWebSocket {
       this.ws = new WebSocket(url)
 
       this.ws.onopen = () => {
+        this.lastReceiveAt = Date.now()
+        this.startSilenceWatch()
         this.notifyStatus(true)
       }
 
@@ -89,6 +97,8 @@ export class AgentWebSocket {
       }
 
       this.ws.onmessage = (ev) => {
+        // 任何消息（含 pong 心跳）都视为链路活跃，先于事件去重更新判活时间戳
+        this.lastReceiveAt = Date.now()
         try {
           const data: WsServerEvent = JSON.parse(ev.data)
           if ('event_id' in data && typeof data.event_id === 'number') {
@@ -156,12 +166,33 @@ export class AgentWebSocket {
     }, 3000)
   }
 
+  /** 启动静默判活：周期检查最近消息时间，超时未收到 pong 即断开重连 */
+  private startSilenceWatch(): void {
+    this.stopSilenceWatch()
+    this.silenceTimer = window.setInterval(() => {
+      if (this.ws?.readyState !== WebSocket.OPEN) return
+      if (Date.now() - this.lastReceiveAt > this.silenceTimeoutMs) {
+        console.warn('WS silence timeout, forcing reconnect')
+        this.stopSilenceWatch()
+        this.ws.close()
+      }
+    }, 10_000)
+  }
+
+  private stopSilenceWatch(): void {
+    if (this.silenceTimer !== null) {
+      clearInterval(this.silenceTimer)
+      this.silenceTimer = null
+    }
+  }
+
   public close(): void {
     this.isExplicitlyClosed = true
     this.cleanup()
   }
 
   private cleanup(): void {
+    this.stopSilenceWatch()
     if (this.reconnectTimer !== null) {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
