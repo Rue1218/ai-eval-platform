@@ -912,15 +912,8 @@ async def ws_agent(websocket: WebSocket):
         state = _ConnState(cursor=last_event_id)
         if last_event_id:
             state.cursor = await _replay_events(db, websocket, session_id, last_event_id)
-        else:
-            await _emit(
-                db,
-                websocket,
-                session_id,
-                "thought",
-                {"text": "你好，我是评测工程师助手。请描述评测目标，我会澄清后给你确认卡。"},
-                state=state,
-            )
+        # 新会话不再下发欢迎语：前端空态已有引导文案与快捷芯片，
+        # 服务端重复欢迎语会造成冗余消息；首条消息由用户触发后正常回复。
 
         # 启动后台转发：Worker 回推的 progress/report/error 经 ws_events 表送达本连接
         forwarder = asyncio.create_task(_forward_loop(websocket, session_id, state))
