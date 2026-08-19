@@ -598,57 +598,68 @@
           </span>
         </div>
 
-        <div class="composer-inner">
-          <button class="composer-btn" title="添加附件（≤20MB，支持 PRD/OpenAPI/Excel/CSV/PDF 等）" @click="triggerFileInput">
-            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
-              <path d="m21 11.5-8.2 8.2a5.5 5.5 0 0 1-7.8-7.8l8.5-8.5a3.7 3.7 0 0 1 5.2 5.2l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.8-7.8" />
-            </svg>
-          </button>
-          <input
-            ref="fileInputRef"
-            type="file"
-            hidden
-            accept=".md,.txt,.html,.pdf,.json,.yaml,.yml,.xlsx,.xls,.csv,.jsonl"
-            @change="handleFileUpload"
-          />
-
+        <div class="composer-card">
+          <!-- 上半区：全宽自适应多行文本域 -->
           <textarea
             ref="textareaRef"
             v-model="inputText"
+            class="composer-textarea"
             rows="1"
-            placeholder="说明要评测什么（如：对比 gpt-test 和 claude-x / 知识库评测 / 生成用例），回车发送，Shift+Enter 换行"
-            @keydown.enter.exact.prevent="handleEnterPress"
+            placeholder="输入任何评测问题或需求，Shift + Enter 换行，Enter 发送"
+            @keydown="handleKeydown"
             @input="adjustTextareaHeight"
           ></textarea>
 
-          <n-dropdown
-            trigger="click"
-            :options="agentProfileDropdownOptions"
-            @select="handleSelectAgentModel"
-          >
-            <button class="composer-model-pill" title="点击切换 Agent 驱动模型（来自协议档接入池）">
-              <span class="model-status-dot"></span>
-              <span class="model-name mono">{{ agentModelName || '选择模型' }}</span>
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                <path d="m6 9 6 6 6-6"/>
+          <!-- 下半区：操作底栏（附件 + 模型选择 + 发送按钮） -->
+          <div class="composer-bottom-bar">
+            <div class="composer-left-actions">
+              <!-- 添加附件按钮 -->
+              <button class="composer-action-btn" title="添加附件（≤20MB，支持 PRD/OpenAPI/Excel/CSV/PDF 等）" @click="triggerFileInput">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="12" y1="5" x2="12" y2="19"></line>
+                  <line x1="5" y1="12" x2="19" y2="12"></line>
+                </svg>
+              </button>
+              <input
+                ref="fileInputRef"
+                type="file"
+                hidden
+                accept=".md,.txt,.html,.pdf,.json,.yaml,.yml,.xlsx,.xls,.csv,.jsonl"
+                @change="handleFileUpload"
+              />
+
+              <!-- 接入模型选择下拉胶囊 -->
+              <n-dropdown
+                trigger="click"
+                :options="agentProfileDropdownOptions"
+                @select="handleSelectAgentModel"
+              >
+                <button class="composer-model-dropdown-btn" title="点击切换当前 Agent 驱动模型（来自协议档接入池）">
+                  <span class="model-name">{{ agentModelName || '选择模型' }}</span>
+                  <svg class="chevron-icon" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="m18 15-6-6-6 6"/>
+                  </svg>
+                </button>
+              </n-dropdown>
+            </div>
+
+            <!-- 右侧圆形发送/暂停按钮 -->
+            <button
+              class="composer-send-btn"
+              :class="{ active: isGenerating || inputText.trim().length > 0 || stagedFiles.length > 0 }"
+              :disabled="!isGenerating && inputText.trim().length === 0 && stagedFiles.length === 0"
+              :title="isGenerating ? '暂停生成（不取消已入队任务）' : '发送 (Enter)'"
+              @click="handleSendClick"
+            >
+              <svg v-if="isGenerating" width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                <rect x="6" y="6" width="12" height="12" rx="2" />
+              </svg>
+              <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+                <polyline points="12 5 19 12 12 19"></polyline>
               </svg>
             </button>
-          </n-dropdown>
-
-          <button
-            class="send-btn"
-            :class="{ ready: isGenerating || inputText.trim().length > 0 || stagedFiles.length > 0 }"
-            :disabled="!isGenerating && inputText.trim().length === 0 && stagedFiles.length === 0"
-            :title="isGenerating ? '暂停生成（不取消已入队任务）' : '发送 (Enter)'"
-            @click="handleSendClick"
-          >
-            <svg v-if="isGenerating" width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-              <rect x="6" y="6" width="12" height="12" rx="2" />
-            </svg>
-            <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 19V5M5 12l7-7 7 7" />
-            </svg>
-          </button>
+          </div>
         </div>
       </div>
     </section>
@@ -1182,6 +1193,22 @@ async function handleFileUpload(e: Event) {
   } catch {
     staged.uploading = false
     message.error('附件上传失败，发送时将被忽略')
+  }
+}
+
+/** 键盘事件监听：Enter 发送，Shift + Enter 换行并自适应扩展高度 */
+function handleKeydown(e: KeyboardEvent) {
+  if (e.key === 'Enter') {
+    if (e.shiftKey) {
+      // Shift + Enter: 允许原生换行，并在 DOM 渲染后重新计算自适应高度
+      nextTick(() => {
+        adjustTextareaHeight()
+      })
+    } else if (!e.isComposing) {
+      // 纯 Enter: 发送消息
+      e.preventDefault()
+      handleSendClick()
+    }
   }
 }
 
@@ -2144,83 +2171,151 @@ onBeforeUnmount(() => {
 
 /* 底部输入框整体容器（固定吸附于对话流底部，不随会话滚动消失） */
 .composer {
-  padding: 8px 20px 16px;
+  padding: 6px 20px 14px;
   flex-shrink: 0;
   background: var(--bg-main);
 }
 
-.composer-inner {
+/* 输入卡片：上部多行文本，下部操作底栏（对齐 Gemini / Cursor / Claude 对话框） */
+.composer-card {
   max-width: 780px;
   margin: 0 auto;
   border: 1px solid var(--border-subtle);
-  border-radius: 18px;
+  border-radius: 16px;
   background: var(--bg-main);
-  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.04);
-  padding: 8px 12px;
+  box-shadow: 0 2px 14px rgba(0, 0, 0, 0.04);
+  padding: 10px 12px 8px;
   display: flex;
-  align-items: flex-end;
-  gap: 8px;
-  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+  flex-direction: column;
+  gap: 4px;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease;
 }
 
-.composer-inner:focus-within {
+.composer-card:focus-within {
   border-color: var(--accent-ai);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-ai) 16%, transparent), 0 4px 20px rgba(0, 0, 0, 0.06);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-ai) 15%, transparent), 0 4px 18px rgba(0, 0, 0, 0.06);
 }
 
-/* 多行文本域自适应高度（最大 200px 限制） */
-.composer textarea {
-  flex: 1;
+/* 多行文本域自适应高度（最小 38px，最大 200px 限制） */
+.composer-textarea {
+  width: 100%;
   border: 0;
   outline: none;
   resize: none;
   font-family: var(--font-chat, inherit);
   font-size: 14.5px;
   line-height: 1.55;
-  min-height: 40px;
+  min-height: 38px;
   max-height: 200px;
-  padding: 8px 4px;
+  padding: 4px 6px;
   background: transparent;
   color: var(--text-primary);
   box-sizing: border-box;
   overflow-y: hidden;
 }
 
-/* 底部输入框内模型切换下拉胶囊 */
-.composer-model-pill {
+.composer-textarea::placeholder {
+  color: var(--text-tertiary);
+  font-size: 13.5px;
+}
+
+/* 操作底栏 */
+.composer-bottom-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 2px;
+}
+
+.composer-left-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 附件小按钮 (+) */
+.composer-action-btn {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.composer-action-btn:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+/* 模型切换下拉按钮（对齐参考图：模型名 + 箭头） */
+.composer-model-dropdown-btn {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 5px 9px;
-  border-radius: 8px;
-  border: 1px solid var(--border-subtle);
-  background: var(--bg-elevated);
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
   color: var(--text-secondary);
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12.5px;
+  font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
   user-select: none;
-  margin-bottom: 2px;
   transition: all 0.15s ease;
-  flex-shrink: 0;
 }
-.composer-model-pill:hover {
-  border-color: var(--accent-ai);
+
+.composer-model-dropdown-btn:hover {
+  background: var(--bg-elevated);
   color: var(--text-primary);
-  background: var(--bg-main);
 }
-.model-status-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--accent-ai);
-}
-.model-name {
-  max-width: 140px;
+
+.composer-model-dropdown-btn .model-name {
+  max-width: 220px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+}
+
+.composer-model-dropdown-btn .chevron-icon {
+  opacity: 0.65;
+  transition: transform 0.15s ease;
+}
+
+/* 右侧圆形发送/暂停按钮 */
+.composer-send-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-elevated);
+  color: var(--text-tertiary);
+  cursor: not-allowed;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.composer-send-btn.active {
+  background: var(--text-primary);
+  color: #fff;
+  cursor: pointer;
+}
+
+.composer-send-btn.active:hover {
+  opacity: 0.88;
+  transform: scale(1.05);
 }
 
 /* F9 会话占槽时确认卡 note 转 warning 色 */
