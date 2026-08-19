@@ -107,6 +107,11 @@ def call_protocol(
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
+        # mimo-v2.5 系列是推理模型，默认先产出一大段 reasoning_content 再出正文，
+        # 既拖慢响应（实测 18s→2s）又可能挤占 max_tokens 导致正文为空。
+        # 该网关支持显式关闭思考；其它 OpenAI 兼容端点不动该字段以免被 400 拒绝。
+        if "xiaomimimo" in base:
+            body["thinking"] = {"type": "disabled"}
         headers["Authorization"] = f"Bearer {api_key}"
 
         def extract(data: dict) -> str:
