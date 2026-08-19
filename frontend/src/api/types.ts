@@ -505,3 +505,70 @@ export interface WsServerEvent {
   ts: string
   payload: any
 }
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Dify 风格可视化工作流编排相关数据结构 (Workflow Studio & DAG)
+// ══════════════════════════════════════════════════════════════════════════════
+
+export type WorkflowNodeType =
+  | 'dataset'
+  | 'testcase'
+  | 'prompt'
+  | 'llm'
+  | 'agent'
+  | 'rag'
+  | 'judge'
+  | 'assert'
+  | 'metrics'
+  | 'gate'
+  | 'stress'
+  | 'worker'
+  | 'report'
+  | 'webhook'
+
+export type WorkflowNodeStatus = 'idle' | 'running' | 'succeeded' | 'failed' | 'skipped'
+
+export interface WorkflowPort {
+  id: string
+  name: string
+  type: 'input' | 'output'
+  dataType?: 'dataset' | 'cases' | 'text' | 'json' | 'score' | 'boolean' | 'any'
+}
+
+export interface WorkflowNode<T = Record<string, any>> {
+  id: string
+  type: WorkflowNodeType
+  title: string
+  description?: string
+  x: number
+  y: number
+  inputs?: WorkflowPort[]
+  outputs?: WorkflowPort[]
+  config: T
+  status?: WorkflowNodeStatus
+  progress?: number
+  outputData?: any
+  errorMsg?: string
+  costMs?: number
+}
+
+export interface WorkflowEdge {
+  id: string
+  fromNodeId: string
+  fromPortId: string
+  toNodeId: string
+  toPortId: string
+  label?: string
+  condition?: string
+}
+
+export interface WorkflowTemplate {
+  id: string
+  name: string
+  description: string
+  icon: string
+  category: string
+  nodes: WorkflowNode[]
+  edges: WorkflowEdge[]
+}
+

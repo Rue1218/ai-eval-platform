@@ -28,8 +28,48 @@
       </div>
     </div>
 
+    <!-- ═══ 0. 模式分段选择器（Dify 拖拽编排工作流 vs 实时调度星图监控） ═══ -->
+    <div class="dispatch-view-tabs mb16">
+      <div class="tab-pill-group">
+        <button
+          class="tab-pill-btn"
+          :class="{ active: activeTab === 'designer' }"
+          @click="activeTab = 'designer'"
+        >
+          <span class="tab-icon">🌐</span>
+          <span>Dify 拖拽编排工作流</span>
+          <span class="tab-badge">推荐</span>
+        </button>
+        <button
+          class="tab-pill-btn"
+          :class="{ active: activeTab === 'monitor' }"
+          @click="activeTab = 'monitor'"
+        >
+          <span class="tab-icon">🛰</span>
+          <span>实时调度星图与监控</span>
+        </button>
+      </div>
+
+      <div class="row" style="gap: 8px; align-items: center">
+        <span class="tag-soft" :style="modeTagStyle">{{ modeStore.mode === 'rag' ? 'RAG 模式' : '大模型模式' }}</span>
+        <button class="btn btn-secondary btn-sm" style="font-size: 11px" @click="handleManualEnqueue">+ 快速插入任务</button>
+      </div>
+    </div>
+
+    <!-- ═══ 1. 可视编排设计器（Dify 风格 DAG 拖拽工作流） ═══ -->
+    <WorkflowDesigner
+      v-show="activeTab === 'designer'"
+      class="mb16"
+      @task-dispatched="handleTaskDispatched"
+    />
+
     <!-- ═══ 2. 调度星图：中心内核 + 技能 Agent 内环 + Worker 业务扇区外环 ═══ -->
-    <div class="panel glow topo-panel mb16" data-od-id="dispatch-canvas" style="--glow-c: var(--c-agent)">
+    <div
+      v-show="activeTab === 'monitor'"
+      class="panel glow topo-panel mb16"
+      data-od-id="dispatch-canvas"
+      style="--glow-c: var(--c-agent)"
+    >
       <div class="row-between mb12" style="flex-wrap: wrap; gap: 8px">
         <div class="panel-title" style="margin: 0">
           调度编排星图
@@ -533,6 +573,7 @@ import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import KindTag from '../components/common/KindTag.vue'
+import WorkflowDesigner from '../components/workflow/WorkflowDesigner.vue'
 import { api } from '../api/http'
 import type { DispatchOverview, DispatchWorker, Task, TaskKind, TaskStatus } from '../api/types'
 import { useModeStore } from '../stores/mode'
@@ -542,6 +583,9 @@ const router = useRouter()
 const modeStore = useModeStore()
 // live 模式接真实调度 API（§3.13）；mock 模式保留本地仿真演示
 const liveMode = !api.isMock()
+
+// 视图切换：'designer' (Dify 拖拽编排) vs 'monitor' (实时拓扑星图)
+const activeTab = ref<'designer' | 'monitor'>('designer')
 
 const isRunning = ref(true)
 const strategy = ref('负载均衡')
@@ -1095,6 +1139,16 @@ function eventCat(kind: string): LogItem['cat'] {
 function addLog(kind: string, html: string, tid?: string) {
   logs.value.unshift({ time: new Date().toTimeString().slice(0, 8), kind, cat: eventCat(kind), html, tid })
   if (logs.value.length > 50) logs.value.pop()
+}
+
+/** 接收 WorkflowDesigner 工作流执行派发的任务 */
+function handleTaskDispatched(taskId: string) {
+  assignedToday.value += 1
+  pushHist(histAssigned.value, assignedToday.value)
+  addLog('ENQUEUE', `<span class="la">${taskId.substring(0, 8)}</span> 工作流编排任务已推入执行队列`, taskId)
+  if (liveMode) {
+    loadLiveAll()
+  }
 }
 
 // 点击日志定位：闪烁星图中对应任务工单
@@ -2369,5 +2423,63 @@ onBeforeUnmount(() => {
   .gantt-row {
     grid-template-columns: 110px 1fr;
   }
+}
+
+/* ═══ 顶层模式分段选择器样式 ═══ */
+.dispatch-view-tabs {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.tab-pill-group {
+  display: inline-flex;
+  background: var(--bg-elevated);
+  padding: 4px;
+  border-radius: 10px;
+  border: 1px solid var(--border-subtle);
+  gap: 4px;
+}
+
+.tab-pill-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 7px;
+  border: none;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.tab-pill-btn:hover {
+  color: var(--text-primary);
+}
+
+.tab-pill-btn.active {
+  background: var(--bg-main);
+  color: var(--text-primary);
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.tab-icon {
+  font-size: 14px;
+}
+
+.tab-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--accent-ai);
+  color: #ffffff;
+  line-height: 1.3;
 }
 </style>
