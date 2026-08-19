@@ -69,7 +69,11 @@
         </n-dropdown>
         <span v-if="isGenerating" class="gen-pill">
           <i class="bdot"></i>
-          <span>生成中</span>
+          <span>{{ harnessStageLabel }}</span>
+          <span v-if="turnLatencyLabel" class="mono" style="opacity:.8">{{ turnLatencyLabel }}</span>
+        </span>
+        <span v-else-if="awaitingConfirm" class="gen-pill">
+          <span>等待确认</span>
         </span>
 
         <span class="grow"></span>
@@ -158,7 +162,8 @@
             <div v-else-if="item.type === 'thought'" class="think-card" :class="{ done: item.done }">
               <button class="think-head" type="button" @click="item.collapsed = !item.collapsed">
                 <span class="think-dot" v-if="!item.done"></span>
-                <span class="think-label">{{ item.done ? '已深度思考' : '深度思考中' }}</span>
+                <span class="think-label">{{ item.done ? '已思考' : '思考中' }}</span>
+                <span v-if="item.skill_id && skillLabel(item.skill_id)" class="skill-badge">{{ skillLabel(item.skill_id) }}</span>
                 <span v-if="formatLatency(item.latency_ms)" class="think-latency mono">{{ formatLatency(item.latency_ms) }}</span>
                 <span class="think-meta">{{ (item.text || '').length }} 字</span>
                 <svg class="think-caret" :class="{ open: !item.collapsed }" viewBox="0 0 12 12" width="12" height="12">
@@ -748,6 +753,7 @@ import { getDefaultRunConfig, getDefaultStressConfig } from '../schemas/confirmC
 import { useModeStore } from '../stores/mode'
 import KindTag from '../components/common/KindTag.vue'
 import { formatLatency } from '../utils/format'
+import { skillLabel } from '../agent/skillLabels'
 
 const message = useMessage()
 const dialog = useDialog()
@@ -762,6 +768,20 @@ const isListCollapsed = ref(false)
 const isRailOpen = ref(false)
 const isWsOnline = ref(true)
 const isGenerating = ref(false)
+const harnessStage = ref<'plan' | 'react' | 'reflect' | ''>('')
+const lastToolTitle = ref('')
+const turnLatencyMs = ref(0)
+const awaitingConfirm = computed(() =>
+  events.value.some((item) => item.type === 'confirm' && !item.isAcked) && !isGenerating.value
+)
+const harnessStageLabel = computed(() => {
+  if (harnessStage.value === 'plan') return '规划中'
+  if (harnessStage.value === 'reflect') return '复核中'
+  if (harnessStage.value === 'react' && lastToolTitle.value) return `调用「${lastToolTitle.value}」`
+  if (harnessStage.value === 'react') return '调用工具中'
+  return '生成中'
+})
+const turnLatencyLabel = computed(() => formatLatency(turnLatencyMs.value) || '')
 const showJumpBottom = ref(false)
 const agentModelName = ref('')
 const currentAgentProfileId = ref<string>('')
@@ -966,6 +986,8 @@ interface StreamItem {
   done?: boolean
   collapsed?: boolean
   latency_ms?: number
+  stage?: 'plan' | 'react' | 'reflect'
+  skill_id?: string
   // 流式标记：true 表示该 agent 气泡正在接收 LLM 增量帧，终帧到达后置 false
   streaming?: boolean
   // 已显示的纯文本进度（流式增量与打字机共用，text 为其渲染后的 HTML）
@@ -1303,15 +1325,18 @@ function handleEnterPress() {
 
 function handleSendClick() {
   if (isGenerating.value) {
-    // F19 暂停生成：清理全部生成流定时器真正停止模拟流（保留 WS 连接与页面级心跳），
-    // 未完成的思考卡直接收尾；恢复时发送新消息即可继续。
+    // /stop：只停本轮生成，走 user_message，不清 queued 任务
     flowTimers.forEach(id => clearTracked(id))
     events.value.forEach(ev => { if (ev.type === 'thought' && !ev.done) finishThought(ev) })
-    isGenerating.value = false
-    events.value.push({
-      type: 'agent',
-      text: '<p class="muted">已暂停生成。已入队的任务不受影响。</p>',
-    })
+    if (agentWs?.isConnected) {
+      agentWs.sendUserMessage('/stop', [])
+    } else {
+      isGenerating.value = false
+      events.value.push({
+        type: 'agent',
+        text: '<p class="muted">已暂停生成。已入队的任务不受影响。</p>',
+      })
+    }
     scrollToBottom()
     return
   }
@@ -1342,6 +1367,8 @@ function handleUserSend(text: string, files: any[] = []) {
     files,
   })
   isGenerating.value = true
+  harnessStage.value = 'plan'
+  turnLatencyMs.value = 0
   scrollToBottom(true)
 
   // 首发消息后以首条消息截断更新会话标题
@@ -1508,16 +1535,13 @@ function runTestCaseFlow(file?: any) {
   }, 1000, true)
 }
 
-function handleConfirmAck(item: StreamItem, confirmed: boolean) {
-  // F8 确认前卡内校验：不通过则留卡内显示红字，不盖章、不 Toast
-  if (confirmed && !validateConfirmCard(item)) return
+/** A1：ack 校验失败时卡保持可编辑，待 task.create 成功后再盖章。 */
+const pendingAckItem = ref<StreamItem | null>(null)
 
+function stampConfirmCard(item: StreamItem, confirmed: boolean) {
   item.isAcked = true
   item.ackResult = confirmed
   item.open = false
-
-  const useLive = !!(agentWs && agentWs.isConnected)
-
   if (item.card?.kind === 'benchmark') {
     item.summary = `${item.card.profile_ids?.length || 0} 个协议档 · 待入队`
   } else if (item.card?.kind === 'rag') {
@@ -1525,16 +1549,29 @@ function handleConfirmAck(item: StreamItem, confirmed: boolean) {
   } else if (item.card?.kind === 'testcase') {
     item.summary = '用例生成 · 待入队'
   }
+}
 
-  // 真实链路：把确认回执（含整卡 patch）发回服务端，由服务端校验并入队
+function handleConfirmAck(item: StreamItem, confirmed: boolean) {
+  // F8 确认前卡内校验：不通过则留卡内显示红字，不盖章、不 Toast
+  if (confirmed && !validateConfirmCard(item)) return
+
+  const useLive = !!(agentWs && agentWs.isConnected)
+
+  // 真实链路：确认成功前不盖章（A1）；取消可以立即折叠
   if (useLive) {
-    agentWs!.sendConfirmAck(confirmed, item.card)
-    if (!confirmed) {
-      events.value.push({ type: 'agent', text: '<p>已取消，未创建任务。需要调整目标可以继续说。</p>' })
-      scrollToBottom()
+    if (confirmed) {
+      pendingAckItem.value = item
+      agentWs!.sendConfirmAck(true, item.card)
+      return
     }
+    stampConfirmCard(item, false)
+    agentWs!.sendConfirmAck(false, item.card)
+    events.value.push({ type: 'agent', text: '<p>已取消，未创建任务。需要调整目标可以继续说。</p>' })
+    scrollToBottom()
     return
   }
+
+  stampConfirmCard(item, confirmed)
 
   // Mock 模式（无 WS 连接）：本地演示入队与进度
   if (!confirmed) {
@@ -1860,6 +1897,54 @@ async function loadSessionHistory(sid: string): Promise<number> {
         replay.push({ type: 'agent', text: `<p>${escapeHtml(m.content || '')}</p>`, noAnim: true })
       }
     }
+    for (const ev of history.events || []) {
+      const p = ev.payload || {}
+      if (ev.event === 'thought' && !p.stream) {
+        replay.push({
+          type: 'thought',
+          text: p.text || '',
+          done: true,
+          collapsed: true,
+          noAnim: true,
+          latency_ms: p.latency_ms,
+          stage: p.stage,
+          skill_id: p.skill_id,
+        })
+      } else if (ev.event === 'tool_call') {
+        replay.push({ type: 'tool', tool: p.name, args: p.arguments, status: 'pending', open: false, noAnim: true })
+      } else if (ev.event === 'tool_result') {
+        const target = [...replay].reverse().find((x) => x.type === 'tool' && x.tool === p.name && x.status === 'pending')
+        if (target) {
+          target.result = p.ok ? p.data : p.error
+          target.status = p.ok ? 'ok' : 'fail'
+          target.latency_ms = p.latency_ms
+        }
+      } else if (ev.event === 'confirm') {
+        replay.push({
+          type: 'confirm',
+          card: normalizeConfirmCard(p),
+          isAcked: true,
+          summary: '',
+          open: false,
+          noAnim: true,
+        })
+      } else if (ev.event === 'error') {
+        replay.push({ type: 'error', code: p.code, message: p.message, noAnim: true })
+      } else if (ev.event === 'report' && p.report_id) {
+        replay.push({ type: 'report', reportId: p.report_id, noAnim: true })
+      }
+    }
+    if (history.pending_confirm) {
+      const card = normalizeConfirmCard(history.pending_confirm)
+      const existing = [...replay].reverse().find((x) => x.type === 'confirm')
+      if (existing) {
+        existing.card = card
+        existing.isAcked = false
+        existing.open = true
+      } else {
+        replay.push({ type: 'confirm', card, isAcked: false, summary: '', open: true, noAnim: true })
+      }
+    }
     if (replay.length) {
       events.value = replay
       scrollToBottom(true)
@@ -2024,43 +2109,60 @@ function handleWsEvent(ev: WsServerEvent) {
         }
         break
       }
-      // 完整回复（终帧或非流式）：先收尾思考卡（完成并折叠），再打字机渲染权威全文
+      // 完整回复（终帧或非流式）
       const text = String(p.text || '').trim()
+      const stage = p.stage as StreamItem['stage'] | undefined
+      if (stage) harnessStage.value = stage
+      if (typeof p.latency_ms === 'number') turnLatencyMs.value += p.latency_ms
       const think = [...events.value].reverse().find(e => e.type === 'thought' && !e.done)
       if (think) {
         think.done = true
         think.collapsed = true
         if (p.latency_ms !== undefined) think.latency_ms = p.latency_ms
+        if (p.skill_id) think.skill_id = p.skill_id
+        if (stage) think.stage = stage
+      } else if (stage || p.skill_id) {
+        events.value.push({
+          type: 'thought',
+          text,
+          done: true,
+          collapsed: true,
+          latency_ms: p.latency_ms,
+          stage,
+          skill_id: p.skill_id,
+        })
       }
       console.log('%c[Agent] 💡 思考完成 / 助手回复交付:', 'color: #10b981; font-weight: bold;', {
         chars: text.length,
         latency: p.latency_ms ? `${p.latency_ms}ms` : '未知',
+        stage: stage || '-',
         text: text.slice(0, 100) + (text.length > 100 ? '...' : ''),
       })
-      if (text) {
+      if (text && !stage) {
         const streaming = [...events.value].reverse().find(e => e.type === 'agent' && e.streaming)
         if (streaming) {
-          // 真流式已有前缀：从已显示长度打字机续播到权威全文
           typewriteTo(streaming, text)
         } else {
-          // 单块兜底 / 降级规则版：新建气泡打字机渲染全文
           const item: StreamItem = { type: 'agent', raw: '', text: '', streaming: true }
           events.value.push(item)
           typewriteTo(item, text)
         }
-      } else {
+        isGenerating.value = false
+        harnessStage.value = ''
+      } else if (!stage) {
         const orphan = [...events.value].reverse().find(e => e.type === 'agent' && e.streaming)
         if (orphan) orphan.streaming = false
+        isGenerating.value = false
+        harnessStage.value = ''
       }
       if (text) scrollToBottom()
-      // 纯对话轮次（如闲聊）以 thought 收尾：结束「生成中」状态；
-      // 若后续仍有 tool_call / confirm，UI 会随事件自然继续更新。
-      isGenerating.value = false
       break
     }
     case 'tool_call': {
       console.log('%c[Agent] ⚙️ 短工具调用:', 'color: #f59e0b; font-weight: bold;', p.name, p.arguments)
       finishLiveThought()
+      harnessStage.value = 'react'
+      lastToolTitle.value = getToolDisplayName(p.name)
       events.value.push({
         type: 'tool',
         tool: p.name,
@@ -2081,13 +2183,20 @@ function handleWsEvent(ev: WsServerEvent) {
       if (target) {
         target.result = p.ok ? p.data : p.error
         target.status = p.ok ? 'ok' : 'fail'
-        if (p.latency_ms !== undefined) target.latency_ms = p.latency_ms
+        if (p.latency_ms !== undefined) {
+          target.latency_ms = p.latency_ms
+          turnLatencyMs.value += p.latency_ms
+        }
       }
       // 把短工具发现结果回填到确认卡可选项
       if (p.ok) {
         if (p.name === 'model.list') availableProfiles.value = p.data?.items || []
         if (p.name === 'dataset.list') availableDatasets.value = p.data?.items || []
         if (p.name === 'kb.list') availableKbs.value = p.data?.items || []
+        if (p.name === 'task.create' && pendingAckItem.value) {
+          stampConfirmCard(pendingAckItem.value, true)
+          pendingAckItem.value = null
+        }
       }
       scrollToBottom()
       break
@@ -2097,6 +2206,7 @@ function handleWsEvent(ev: WsServerEvent) {
       lastConfirmKind = p.kind || 'benchmark'
       finishLiveThought()
       isGenerating.value = false
+      harnessStage.value = ''
       events.value.push({
         type: 'confirm',
         // 契约：确认卡 TaskSpec 在 payload；规范化补齐 run / stress 默认值，折叠区绑定路径始终有效
@@ -2149,6 +2259,12 @@ function handleWsEvent(ev: WsServerEvent) {
     }
     case 'error': {
       finishLiveThought()
+      // A1：校验失败保留确认卡可编辑，不盖章
+      if (pendingAckItem.value) {
+        pendingAckItem.value.isAcked = false
+        pendingAckItem.value.open = true
+        pendingAckItem.value = null
+      }
       events.value.push({
         type: 'error',
         code: p.code,

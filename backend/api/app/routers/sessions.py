@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
+from ..agent.context import context_meter
 from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
@@ -75,7 +76,7 @@ def get_session_messages(
     user: User = Depends(get_current_user),
 ):
     """回放用户/助手文本与确认卡等 WebSocket 历史事件。"""
-    _owned_session(db, session_id, user.id)
+    session = _owned_session(db, session_id, user.id)
     messages = (
         db.query(Message)
         .filter(Message.session_id == session_id)
@@ -88,6 +89,7 @@ def get_session_messages(
         .order_by(WsEvent.event_id)
         .all()
     )
+    meter = context_meter(db, session)
     return {
         "messages": [
             {
@@ -109,6 +111,8 @@ def get_session_messages(
             }
             for row in events
         ],
+        "pending_confirm": session.pending_confirm,
+        "context_meter": meter.as_dict(),
     }
 
 # 说明：API.md §3.4/§9 明确 V1 不提供「删除会话」接口；会话与消息为审计留存

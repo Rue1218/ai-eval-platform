@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
-from .adapters import call_protocol
+from .adapters import call_protocol, stream_protocol
 from .agent.log import agent_trace
 from .errors import AppError, ErrorCode
 from .models import ProtocolProfile, Setting
@@ -126,6 +127,44 @@ def call_agent_model_detailed(
     except Exception as exc:
         logger.exception("Agent 模型调用未归类异常")
         agent_trace(f"模型调用内部异常 type={type(exc).__name__}")
+        raise AppError(ErrorCode.INTERNAL, "Agent 模型调用失败") from exc
+
+
+def stream_agent_model(
+    db: Session,
+    system: str,
+    user: str,
+    *,
+    temperature: float = 0.3,
+    max_tokens: int = 2048,
+    timeout_s: float = CALL_TIMEOUT_S,
+) -> Iterator[tuple[str, str]]:
+    """流式调用 Agent 模型，逐块 yield ``(kind, text)``。
+
+    ``kind`` 为 ``content``（正文）或 ``reasoning``（思考链），与
+    ``stream_protocol`` 同源。失败语义与 ``call_agent_model_detailed`` 一致：
+    上游 4xx/5xx 归一 UPSTREAM，超时归一 TIMEOUT。
+    """
+    profile = resolve_agent_profile(db)
+    agent_trace(f"模型流式调用开始 protocol={profile.protocol} model={profile.model} timeout={timeout_s}s")
+    try:
+        yield from stream_protocol(
+            protocol=profile.protocol,
+            base_url=profile.base_url,
+            model=profile.model,
+            api_key=decrypt_secret(profile.encrypted_key),
+            messages=[{"role": "user", "content": user}],
+            system=system,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            anthropic_version=profile.anthropic_version,
+            timeout_s=timeout_s,
+        )
+    except AppError:
+        raise
+    except Exception as exc:
+        logger.exception("Agent 模型流式调用未归类异常")
+        agent_trace(f"模型流式调用内部异常 type={type(exc).__name__}")
         raise AppError(ErrorCode.INTERNAL, "Agent 模型调用失败") from exc
 
 

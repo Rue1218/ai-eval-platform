@@ -10,6 +10,7 @@ from .errors import register_error_handlers
 from .models import User
 from .routers import (
     admin,
+    agent_prefs,
     auth,
     cases,
     datasets,
@@ -19,6 +20,7 @@ from .routers import (
     profiles,
     reports,
     sessions,
+    slash_commands,
     tasks,
     users,
     ws,
@@ -95,6 +97,8 @@ app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(files.router)
 app.include_router(sessions.router)
+app.include_router(agent_prefs.router)
+app.include_router(slash_commands.router)
 app.include_router(tasks.router)
 app.include_router(profiles.router)
 app.include_router(datasets.router)

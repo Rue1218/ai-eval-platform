@@ -65,6 +65,11 @@ class Session(Base):
     id = Column(String, primary_key=True, default=uuid_str)
     user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
     title = Column(String, nullable=False, default="新会话")
+    # 当前未 ack 的确认卡（TaskSpec）；刷新回放优先读此列，禁止只靠进程内字典
+    pending_confirm = Column(JSONB, nullable=True)
+    # /compact 摘要与窗口游标（messages.id）；从未压缩时皆为空
+    compact_summary = Column(Text, nullable=True)
+    compact_keep_from = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
 
