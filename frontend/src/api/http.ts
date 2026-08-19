@@ -995,7 +995,18 @@ export const api = {
       const { data } = await http.post('/api/sessions', { title: title || '新会话' })
       return data
     },
-    async getMessages(id: string): Promise<{ messages: any[]; events: any[] }> {
+    async getMessages(id: string): Promise<{
+      messages: any[]
+      events: any[]
+      pending_confirm?: Record<string, unknown> | null
+      context_meter?: {
+        messages: number
+        skills: number
+        summary: number
+        headroom: number
+        window: number
+      }
+    }> {
       if (getDataMode() === 'mock') return { messages: [], events: [] }
       const { data } = await http.get(`/api/sessions/${id}/messages`)
       return data

@@ -5,7 +5,7 @@
 | 文档名称 | Agent 独立开发说明书 |
 | 版本 | V1.1 |
 | 日期 | 2026-08-19 |
-| 最近修订 | 2026-08-19：完成 AGT-LLM-01（指定唯一 Agent 协议档）与 AGT-LLM-02（thought/tool_result 带 latency_ms 并展示）落地与单测验收 |
+| 最近修订 | 2026-08-19：落地 AGT-HRS-01..07（规划→ReAct→复核 Harness）、pending_confirm 迁移、斜杠 M1 桩与 ack 门禁 |
 | 用法 | **实现 `/agent` 以本文为准（Harness / 斜杠 / 窗口算法）。** REST/WS JSON 以 API.md V1.4 为准。完成某项后勾选文末 Task，并在「最近修订」追加一行。 |
 
 本文是评测平台 **Agent 子系统** 的完整开发说明书：目标、边界、运行时骨架、协议、模块、代码落点与验收任务都写在这里。与 PRD / API.md 冲突时，字段名与事件名以那两份为准；Harness、斜杠、上下文算法以本文 §16 为准。§4.6 所列增量已收入 **API.md V1.4**。
@@ -610,31 +610,31 @@ ChatHead 右侧（或输入框上方）常驻，压缩或新消息后立刻更�
 | AGT-WS-02 | 上行只有三条；斜杠走 user_message | `ws.py` | 无第四种上行 | [ ] |
 | AGT-SES-01 | 会话列表与 messages+events 回放 | `sessions.py` `Agent.vue` | 刷新不丢工具卡 | [ ] |
 | AGT-SES-02 | 交付句写入 messages；规划/复核只走 events | `ws.py` | 刷新气泡与思考卡不重复三倍灌窗口 | [ ] |
-| AGT-SES-03 | sessions.pending_confirm 迁移与回放 | models + Alembic sessions.py | 刷新后确认卡仍可编辑 | [ ] |
-| AGT-SLH-03 | slash-commands M1 桩 | 新 router 或现路由 | GET 返回 VALIDATION「自定义命令未启用」，禁止 200 空列表冒充已启用 | [ ] |
+| AGT-SES-03 | sessions.pending_confirm 迁移与回放 | models + Alembic sessions.py | 刷新后确认卡仍可编辑 | [x] 2026-08-19 |
+| AGT-SLH-03 | slash-commands M1 桩 | 新 router 或现路由 | GET 返回 VALIDATION「自定义命令未启用」，禁止 200 空列表冒充已启用 | [x] 2026-08-19 |
 | AGT-LLM-01 | 指定唯一 Agent 协议档 | `llm.py` 设置项 | 无档时明确报错、不泄 Key | [x] 2026-08-19 |
 | AGT-LLM-02 | thought/tool_result 带 latency_ms 并展示 | `ws.py` 卡片 | 能看到秒或毫秒 | [x] 2026-08-19 |
-| AGT-HRS-01 | 抽出人设、斜杠、短工具模块 | `agent/*` | 清单与实现同一份 | [ ] |
-| AGT-HRS-02 | 规划→行动→复核串联 | `harness.py` | 复核未过不出确认卡 | [ ] |
-| AGT-HRS-03 | 占槽、kind、幻觉 ID、工具白名单 | `reflect.py` | 有测试；`/stress` 不出 kind=stress | [ ] |
-| AGT-HRS-04 | 工具成对事件，最多 5 轮；只读工具默认串行 | `react.py` | 无事件不造卡 | [ ] |
-| AGT-HRS-05 | 阶段 pill：规划中/调用中/复核中 | Agent.vue | 与 thought.stage 或卡片推断一致 | [ ] |
-| AGT-HRS-06 | 规划 JSON 失败重试一次再降级规则 | `plan.py` | 降级后仍进复核、不出假确认卡 | [ ] |
-| AGT-HRS-07 | Harness 丢到 asyncio.Task；收包循环不阻塞 | `ws.py` harness.py | `/stop` 能打断本轮；会话级 abort | [ ] |
-| AGT-SLH-01 | 15 条命令；芯片同源 | slash 注册表 面板 | `/help` 与面板一致 | [ ] |
-| AGT-SLH-02 | `/compact` | `context.py` | 四段计数更新且历史仍在 | [ ] |
-| AGT-CTX-01 | 模型窗口 20 条 | `context.py` | 人设始终带上 | [ ] |
+| AGT-HRS-01 | 抽出人设、斜杠、短工具模块 | `agent/*` | 清单与实现同一份 | [x] 2026-08-19 |
+| AGT-HRS-02 | 规划→行动→复核串联 | `harness.py` | 复核未过不出确认卡 | [x] 2026-08-19 |
+| AGT-HRS-03 | 占槽、kind、幻觉 ID、工具白名单 | `reflect.py` | 有测试；`/stress` 不出 kind=stress | [x] 2026-08-19 |
+| AGT-HRS-04 | 工具成对事件，最多 5 轮；只读工具默认串行 | `react.py` | 无事件不造卡 | [x] 2026-08-19 |
+| AGT-HRS-05 | 阶段 pill：规划中/调用中/复核中 | Agent.vue | 与 thought.stage 或卡片推断一致 | [x] 2026-08-19 |
+| AGT-HRS-06 | 规划 JSON 失败重试一次再降级规则 | `plan.py` | 降级后仍进复核、不出假确认卡 | [x] 2026-08-19 |
+| AGT-HRS-07 | Harness 丢到 asyncio.Task；收包循环不阻塞 | `ws.py` harness.py | `/stop` 能打断本轮；会话级 abort | [x] 2026-08-19 |
+| AGT-SLH-01 | 15 条命令；芯片同源 | slash 注册表 面板 | `/help` 与面板一致 | [x] 2026-08-19 |
+| AGT-SLH-02 | `/compact` | `context.py` | 四段计数更新且历史仍在 | [x] 2026-08-19 |
+| AGT-CTX-01 | 模型窗口 20 条 | `context.py` | 人设始终带上 | [x] 2026-08-19 |
 | AGT-CTX-02 | ContextMeter 消息/技能/摘要/余量 | ContextMeter.vue | `/20` 只约束消息；无记忆文件文案正确 | [ ] |
-| AGT-CTX-03 | compact_keep_from 迁移与 REST context_meter | models Alembic sessions.py | 刷新数字与压缩后 M 一致 | [ ] |
-| AGT-MEM-01 | ack 成功后写 agent_prefs；规划可沿用 | settings + plan.py | 资产已删则不当作有效 ID | [ ] |
+| AGT-CTX-03 | compact_keep_from 迁移与 REST context_meter | models Alembic sessions.py | 刷新数字与压缩后 M 一致 | [x] 2026-08-19 |
+| AGT-MEM-01 | ack 成功后写 agent_prefs；规划可沿用 | settings + plan.py | 资产已删则不当作有效 ID | [x] 2026-08-19 |
 | AGT-UI-01 | live 去掉模拟按钮与种子数据 | `Agent.vue` | 仅 mock 模式可演示 | [ ] |
 | AGT-UI-02 | 工具卡中文名 +「MCP · 短工具」 | `ToolCard.vue` | 无旧名 list_profiles | [ ] |
 | AGT-UI-03 | 确认卡 ack；未确认不入队 | ConfirmCard `ws.py` | 取消无任务 | [ ] |
 | AGT-UI-04 | 进度坞与报告卡走真事件 | 组件、worker | 空跑也发 progress/report | [ ] |
 | AGT-UI-05 | 基础 Markdown 渲染 | MarkdownView | 防 XSS | [ ] |
 | AGT-UI-08 | 思考卡技能徽标 | SkillBadge.vue | 无 skill 不显示；回放仍在 | [ ] |
-| AGT-MCP-01 | 短工具实现与清单同源 | `mcp_tools.py` | 名称冻结 | [ ] |
-| AGT-TSK-01 | ack 合并后再按确认卡校验 | `ws.py` `tasks.py` | 与 REST 下单同一套字段 | [ ] |
+| AGT-MCP-01 | 短工具实现与清单同源 | `mcp_tools.py` | 名称冻结 | [x] 2026-08-19 |
+| AGT-TSK-01 | ack 合并后再按确认卡校验 | `ws.py` `tasks.py` | 与 REST 下单同一套字段 | [x] 2026-08-19 |
 | AGT-TSK-02 | 取消对话框；重跑出新卡 | `Agent.vue` | 重跑新 ID | [ ] |
 | AGT-WRK-01 | Worker 空跑写事件 | worker | 对话里能走完进度 | [ ] |
 | AGT-LNG-01 | 占槽可聊；新回合不再发 confirm；未 ack 卡按钮禁用 | harness ConfirmCard | CONCURRENCY 文案；/status 能看到活动任务 | [ ] |

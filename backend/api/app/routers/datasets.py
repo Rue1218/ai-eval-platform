@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, File, Query, UploadFile
 from fastapi import Request as FastApiRequest
 from sqlalchemy.orm import Session
 
+from ..agent.persona import page_ai_system
 from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
@@ -142,7 +143,7 @@ def _build_ai_prompts(dataset: Dataset, body: AiGenerateIn) -> tuple[str, str]:
     """组装候选生成的中文 system / user prompt。"""
     columns = dataset.column_schema or []
     column_desc = "、".join(f"{col.get('key')}（{col.get('name')}）" for col in columns) or "无"
-    system = (
+    system = page_ai_system(
         "你是评测数据集构建助手，负责为大模型评测数据集生成候选数据行。"
         "每行必须包含 q（问题）、r（标准答案）、c（上下文，可为 null）三个字段，"
         f"并可按需包含以下扩展列字段：{column_desc}。"

@@ -26,6 +26,7 @@ from openpyxl import Workbook, load_workbook
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from ..agent.persona import page_ai_system
 from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
@@ -292,7 +293,7 @@ def _build_ai_generate_prompts(
 ) -> tuple[str, str]:
     """组装候选用例生成的中文 system / user prompt。"""
     ratio_desc = "、".join(f"{_STRATEGY_NAMES[key]} {value}%" for key, value in weights.items())
-    system = (
+    system = page_ai_system(
         "你是资深测试设计专家，负责根据需求文档设计软件测试用例。"
         "每条用例必须包含 strategy（策略，取值限于 正向/反向/边界/等价类/状态迁移/场景）、"
         "priority（优先级，P0/P1/P2）、module（所属模块）、name（用例名称）、"
@@ -334,7 +335,7 @@ def _build_ai_fill_prompts(
     columns = case_set.column_schema or []
     column_desc = "、".join(f"{col.get('key')}（{col.get('name')}）" for col in columns) or "无"
     fillable = body.fields or ["expected", "precondition", "test_type"]
-    system = (
+    system = page_ai_system(
         "你是测试用例补全助手，负责补全测试用例中缺失的字段。"
         f"本次可补全字段：{'、'.join(fillable)}；用例集已声明的扩展列：{column_desc}。"
         "只输出一个 JSON 数组，每项必须包含原用例 id 与补全后的字段，"
