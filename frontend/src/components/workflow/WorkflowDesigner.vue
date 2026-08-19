@@ -1,11 +1,15 @@
 <template>
-  <div class="wf-designer-root">
-    <!-- ═══ 顶部编排控制工具栏 ═══ -->
+  <div
+    class="wf-designer-root"
+    :class="{ 'is-fullscreen': isFullScreen }"
+  >
+    <!-- ═══ 顶部编排控制工具栏 (Frosted Glass Floating Bar) ═══ -->
     <div class="designer-toolbar">
       <div class="toolbar-left">
         <div class="wf-title-badge">
           <span class="badge-icon">🌐</span>
           <span class="badge-label">DAG 编排设计器</span>
+          <span class="badge-sub">Dify Flow Studio</span>
         </div>
 
         <!-- 模板快速载入下拉 -->
@@ -18,10 +22,27 @@
           </select>
         </div>
 
-        <button class="btn btn-secondary btn-sm" title="拓扑自动分层排版" @click="autoLayout">
+        <button class="btn btn-secondary btn-sm" title="拓扑自动分层排版 (Auto Layout)" @click="autoLayout">
           <span class="btn-icon">📐</span>
           <span>自动排版</span>
         </button>
+
+        <button class="btn btn-secondary btn-sm" title="导出当前工作流为 JSON 配置文件" @click="exportWorkflowJson">
+          <span class="btn-icon">📥</span>
+          <span>导出</span>
+        </button>
+
+        <button class="btn btn-secondary btn-sm" title="从 JSON 文件导入工作流" @click="triggerImportJson">
+          <span class="btn-icon">📤</span>
+          <span>导入</span>
+        </button>
+        <input
+          ref="importFileRef"
+          type="file"
+          accept=".json"
+          style="display: none"
+          @change="handleFileImport"
+        />
 
         <button class="btn btn-secondary btn-sm" title="清空当前画布" @click="clearCanvas">
           <span class="btn-icon">🧹</span>
@@ -44,16 +65,24 @@
         </span>
       </div>
 
-      <!-- 右侧校验状态与执行按钮 -->
+      <!-- 右侧校验状态、全屏与执行按钮 -->
       <div class="toolbar-right">
         <span
           class="validation-pill"
           :class="validation.valid ? 'valid' : 'warning'"
-          :title="validation.valid ? 'DAG 拓扑完整无循环' : validation.errors[0]?.message"
+          :title="validation.valid ? 'DAG 拓扑完整且无环路' : validation.errors[0]?.message"
         >
           <i class="v-dot"></i>
           {{ validation.valid ? '拓扑校验通过' : validation.errors[0]?.message || '存在配置警告' }}
         </span>
+
+        <button
+          class="btn btn-secondary btn-sm"
+          :title="isFullScreen ? '退出全屏 (Esc)' : '全屏沉浸式编排'"
+          @click="isFullScreen = !isFullScreen"
+        >
+          <span>{{ isFullScreen ? '✕ 退出全屏' : '⛶ 全屏' }}</span>
+        </button>
 
         <button
           class="btn btn-primary btn-sm run-btn"
@@ -95,15 +124,27 @@
           <!-- SVG 连线层 -->
           <svg class="canvas-svg-layer" viewBox="-4000 -4000 12000 12000">
             <defs>
-              <!-- 网格背景图案 -->
-              <pattern id="wf-grid-pattern" width="32" height="32" patternUnits="userSpaceOnUse">
-                <circle cx="16" cy="16" r="1.2" class="grid-dot" />
+              <!-- 网格背景点阵图案 -->
+              <pattern id="wf-grid-pattern" width="28" height="28" patternUnits="userSpaceOnUse">
+                <circle cx="14" cy="14" r="1.1" class="grid-dot" />
               </pattern>
 
-              <!-- 连线箭头与流光渐变 -->
+              <!-- 连线渐变 -->
               <linearGradient id="edge-flow-grad" x1="0%" y1="0%" x2="100%" y2="0%">
-                <stop offset="0%" stop-color="var(--accent-ai)" stop-opacity="0.8" />
-                <stop offset="100%" stop-color="var(--accent-success)" stop-opacity="0.9" />
+                <stop offset="0%" stop-color="var(--accent-ai)" stop-opacity="0.85" />
+                <stop offset="100%" stop-color="var(--accent-success)" stop-opacity="0.95" />
+              </linearGradient>
+
+              <!-- 门禁通过渐变 -->
+              <linearGradient id="edge-pass-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+                <stop offset="0%" stop-color="var(--accent-success)" />
+                <stop offset="100%" stop-color="var(--accent-success)" stop-opacity="0.7" />
+              </linearGradient>
+
+              <!-- 门禁阻断渐变 -->
+              <linearGradient id="edge-fail-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+                <stop offset="0%" stop-color="var(--accent-error)" />
+                <stop offset="100%" stop-color="var(--accent-error)" stop-opacity="0.7" />
               </linearGradient>
             </defs>
 
@@ -112,32 +153,35 @@
 
             <!-- 已确立的连线 (Edges) -->
             <g v-for="edge in edgePaths" :key="edge.id" class="edge-group">
-              <!-- 连线外层粗感应热区（点击可删除或选中） -->
+              <!-- 连线外层感应热区（点击可删除或高亮） -->
               <path
                 :d="edge.d"
                 class="edge-hit-area"
                 @click.stop="handleDeleteEdge(edge.id)"
               />
-              <!-- 连线底色实线 -->
+              <!-- 连线主体 -->
               <path
                 :d="edge.d"
                 class="edge-line"
                 :class="{
                   active: edge.status === 'active' || isExecuting,
                   success: edge.status === 'success',
+                  'edge-pass': edge.sourcePortId === 'pass',
+                  'edge-fail': edge.sourcePortId === 'fail',
                 }"
               />
               <!-- 执行时流动的光效粒子 -->
               <template v-if="isExecuting || edge.status === 'active'">
                 <circle class="flow-particle" r="3.5" fill="var(--accent-ai)">
-                  <animateMotion :path="edge.d" dur="1.8s" repeatCount="indefinite" />
+                  <animateMotion :path="edge.d" dur="1.7s" repeatCount="indefinite" />
                 </circle>
-                <circle class="flow-particle" r="2.5" fill="var(--accent-success)" opacity="0.7">
-                  <animateMotion :path="edge.d" dur="1.8s" begin="-0.9s" repeatCount="indefinite" />
+                <circle class="flow-particle" r="2.5" fill="var(--accent-success)" opacity="0.8">
+                  <animateMotion :path="edge.d" dur="1.7s" begin="-0.85s" repeatCount="indefinite" />
                 </circle>
               </template>
             </g>
 
+            <!-- 连线中间标签与删除按钮（HTML 叠加层） -->
             <!-- 正在拖拽中的动态连线预览 -->
             <path
               v-if="connectingLine"
@@ -145,6 +189,25 @@
               class="edge-connecting-preview"
             />
           </svg>
+
+          <!-- 连线中间标签气泡 -->
+          <div
+            v-for="edge in edgePaths"
+            :key="'label-' + edge.id"
+            class="edge-label-pill"
+            :class="{
+              'label-pass': edge.sourcePortId === 'pass',
+              'label-fail': edge.sourcePortId === 'fail',
+            }"
+            :style="{
+              transform: `translate(${edge.midX}px, ${edge.midY}px)`,
+            }"
+            @click.stop="handleDeleteEdge(edge.id)"
+            title="点击删除连接链路"
+          >
+            <span class="pill-text">{{ edge.label || defaultEdgeLabel(edge) }}</span>
+            <span class="pill-del">×</span>
+          </div>
 
           <!-- 节点卡片层 -->
           <WorkflowNode
@@ -164,7 +227,37 @@
 
         <!-- 底部快捷提示浮条 -->
         <div class="canvas-hints">
-          <span>滚轮缩放 · 拖拽画布平移 · 端口拖拽连线 · 点击节点配置属性 · 点击连线删除</span>
+          <span>滚轮缩放 · 拖拽画布平移 · 端口拖拽连线 · 双击节点配置属性 · 点击连线气泡删除</span>
+        </div>
+
+        <!-- ═══ 右下角小地图 (Mini-Map) ═══ -->
+        <div class="canvas-minimap" title="小地图 (点击快速定位)">
+          <svg viewBox="0 0 2000 1400" class="minimap-svg">
+            <rect width="2000" height="1400" fill="var(--bg-elevated)" opacity="0.8" />
+            <!-- 微型节点块 -->
+            <rect
+              v-for="n in nodes"
+              :key="'mini-' + n.id"
+              :x="n.x + 200"
+              :y="n.y + 100"
+              width="250"
+              height="140"
+              rx="20"
+              :fill="n.color || 'var(--accent-ai)'"
+              opacity="0.85"
+            />
+            <!-- 当前视口指示框 -->
+            <rect
+              :x="-view.x * (1 / view.k) + 200"
+              :y="-view.y * (1 / view.k) + 100"
+              :width="900 / view.k"
+              :height="600 / view.k"
+              fill="none"
+              stroke="var(--accent-ai)"
+              stroke-width="14"
+              stroke-dasharray="24 16"
+            />
+          </svg>
         </div>
       </div>
 
@@ -180,7 +273,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import WorkflowPalette from './WorkflowPalette.vue'
@@ -203,8 +296,10 @@ const message = useMessage()
 const router = useRouter()
 
 // 画布视口缩放与位移
-const view = ref({ x: 40, y: 40, k: 0.9 })
+const view = ref({ x: 50, y: 40, k: 0.88 })
 const canvasContainerRef = ref<HTMLElement | null>(null)
+const importFileRef = ref<HTMLInputElement | null>(null)
+const isFullScreen = ref(false)
 
 // 节点与连线数据
 const nodes = ref<IWorkflowNode[]>([])
@@ -221,7 +316,7 @@ const panStart = ref({ x: 0, y: 0, vx: 0, vy: 0 })
 const draggingNodeId = ref<string | null>(null)
 const nodeDragOffset = ref({ x: 0, y: 0 })
 
-// 交互状态：端口拖拽连线
+// 交互状态：端口拖拽连线与磁吸吸附
 const connectingPort = ref<{
   nodeId: string
   portId: string
@@ -234,7 +329,18 @@ const currentMousePos = ref({ x: 0, y: 0 })
 // 初始化时默认载入标准先评后压模板
 onMounted(() => {
   loadSelectedTemplate()
+  window.addEventListener('keydown', onKeyDown)
 })
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKeyDown)
+})
+
+function onKeyDown(e: KeyboardEvent) {
+  if (e.key === 'Escape' && isFullScreen.value) {
+    isFullScreen.value = false
+  }
+}
 
 /** 载入选中的模板 */
 function loadSelectedTemplate() {
@@ -249,7 +355,7 @@ function loadSelectedTemplate() {
 
 /** 缩放画布 */
 function zoomBy(factor: number) {
-  const newK = Math.max(0.4, Math.min(2.0, view.value.k * factor))
+  const newK = Math.max(0.35, Math.min(2.2, view.value.k * factor))
   view.value.k = Math.round(newK * 100) / 100
 }
 
@@ -267,8 +373,8 @@ function fitView() {
   const minX = Math.min(...nodes.value.map((n) => n.x))
   const minY = Math.min(...nodes.value.map((n) => n.y))
   view.value = {
-    x: Math.max(30, 80 - minX * 0.75),
-    y: Math.max(30, 80 - minY * 0.75),
+    x: Math.max(20, 70 - minX * 0.75),
+    y: Math.max(20, 60 - minY * 0.75),
     k: 0.75,
   }
 }
@@ -276,14 +382,12 @@ function fitView() {
 /** 拓扑自动分层排版 */
 function autoLayout() {
   if (!nodes.value.length) return
-  // 简易层级分列布局：根据前置连线入度决定列位置
   const inDegrees: Record<string, number> = {}
   nodes.value.forEach((n) => (inDegrees[n.id] = 0))
   edges.value.forEach((e) => {
     inDegrees[e.targetNodeId] = (inDegrees[e.targetNodeId] || 0) + 1
   })
 
-  // 按入度排序，逐层布置坐标
   const levels: Record<number, IWorkflowNode[]> = {}
   nodes.value.forEach((n) => {
     const lvl = Math.min(4, inDegrees[n.id] || 0)
@@ -291,7 +395,7 @@ function autoLayout() {
     levels[lvl].push(n)
   })
 
-  let colX = 80
+  let colX = 70
   Object.keys(levels)
     .map(Number)
     .sort((a, b) => a - b)
@@ -299,12 +403,12 @@ function autoLayout() {
       const colNodes = levels[lvl]
       colNodes.forEach((n, idx) => {
         n.x = colX
-        n.y = 100 + idx * 170
+        n.y = 90 + idx * 190
       })
-      colX += 340
+      colX += 360
     })
 
-  message.success('已完成拓扑自动排版')
+  message.success('已完成拓扑自动分层排版')
 }
 
 /** 清空画布 */
@@ -315,9 +419,56 @@ function clearCanvas() {
   message.info('画布已清空')
 }
 
+/** 导出工作流 JSON */
+function exportWorkflowJson() {
+  const data = {
+    name: 'AI-Eval-Workflow',
+    version: '1.0',
+    exported_at: new Date().toISOString(),
+    nodes: nodes.value,
+    edges: edges.value,
+  }
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `workflow-dag-${Date.now()}.json`
+  a.click()
+  URL.revokeObjectURL(url)
+  message.success('工作流配置已成功导出为 JSON 文件')
+}
+
+function triggerImportJson() {
+  importFileRef.value?.click()
+}
+
+function handleFileImport(e: Event) {
+  const file = (e.target as HTMLInputElement).files?.[0]
+  if (!file) return
+  const reader = new FileReader()
+  reader.onload = (evt) => {
+    try {
+      const content = evt.target?.result as string
+      const parsed = JSON.parse(content)
+      if (Array.isArray(parsed.nodes)) {
+        nodes.value = parsed.nodes
+        edges.value = parsed.edges || []
+        selectedNode.value = nodes.value[0] || null
+        fitView()
+        message.success('工作流配置已成功导入！')
+      } else {
+        message.error('无效的工作流 JSON 结构')
+      }
+    } catch {
+      message.error('解析 JSON 文件失败')
+    }
+  }
+  reader.readAsText(file)
+}
+
 /** 从物料库添加新节点至视口中央 */
 function handleAddNodeFromPalette(type: WorkflowNodeType) {
-  const x = Math.round((200 - view.value.x) / view.value.k)
+  const x = Math.round((220 - view.value.x) / view.value.k)
   const y = Math.round((160 - view.value.y) / view.value.k)
   const newNode = createNode(type, x, y)
   nodes.value.push(newNode)
@@ -333,27 +484,24 @@ function onCanvasDrop(event: DragEvent) {
   if (!rect) return
   const clientX = event.clientX - rect.left
   const clientY = event.clientY - rect.top
-  const x = Math.round((clientX - view.value.x) / view.value.k) - 120
-  const y = Math.round((clientY - view.value.y) / view.value.k) - 40
+  const x = Math.round((clientX - view.value.x) / view.value.k) - 128
+  const y = Math.round((clientY - view.value.y) / view.value.k) - 45
   const newNode = createNode(type, x, y)
   nodes.value.push(newNode)
   selectedNode.value = newNode
   message.success(`已放置组件：${newNode.name}`)
 }
 
-/** 选中节点 */
 function handleSelectNode(node: IWorkflowNode) {
   selectedNode.value = node
 }
 
-/** 双击/配置节点打开属性面板 */
 function handleInspectNode(node: IWorkflowNode) {
   selectedNode.value = node
 }
 
-/** 复制节点 */
 function handleDuplicateNode(node: IWorkflowNode) {
-  const newNode = createNode(node.type, node.x + 30, node.y + 30)
+  const newNode = createNode(node.type, node.x + 35, node.y + 35)
   newNode.name = `${node.name} (副本)`
   newNode.config = JSON.parse(JSON.stringify(node.config))
   nodes.value.push(newNode)
@@ -361,7 +509,6 @@ function handleDuplicateNode(node: IWorkflowNode) {
   message.info(`已复制节点：${newNode.name}`)
 }
 
-/** 删除节点 */
 function handleDeleteNode(nodeId: string) {
   nodes.value = nodes.value.filter((n) => n.id !== nodeId)
   edges.value = edges.value.filter((e) => e.sourceNodeId !== nodeId && e.targetNodeId !== nodeId)
@@ -371,13 +518,21 @@ function handleDeleteNode(nodeId: string) {
   message.info('已移除节点')
 }
 
-/** 删除连线 */
 function handleDeleteEdge(edgeId: string) {
   edges.value = edges.value.filter((e) => e.id !== edgeId)
-  message.info('已删除连接线')
+  message.info('已删除连接链路')
 }
 
-/** 计算连线贝塞尔曲线坐标 */
+function defaultEdgeLabel(edge: WorkflowEdge): string {
+  if (edge.sourcePortId === 'pass') return '✓ 门禁通过'
+  if (edge.sourcePortId === 'fail') return '✕ 门禁阻断'
+  if (edge.sourcePortId === 'out_bm') return '基准分发'
+  if (edge.sourcePortId === 'out_rag') return 'RAG 分发'
+  if (edge.sourcePortId === 'out_stress') return '压测分发'
+  return '数据流'
+}
+
+/** 计算连线贝塞尔曲线坐标及中心气泡坐标 */
 const edgePaths = computed(() => {
   const nodeMap = new Map(nodes.value.map((n) => [n.id, n]))
   return edges.value
@@ -386,15 +541,15 @@ const edgePaths = computed(() => {
       const tgtNode = nodeMap.get(edge.targetNodeId)
       if (!srcNode || !tgtNode) return null
 
-      // 计算起始与终点端口锚点在画布上的绝对坐标
-      // 节点宽 240px，输出端口在最右侧，输入端口在最左侧
-      const x1 = srcNode.x + 240
-      const y1 = srcNode.y + 50
+      const x1 = srcNode.x + 256
+      const y1 = srcNode.y + 52
       const x2 = tgtNode.x
-      const y2 = tgtNode.y + 50
+      const y2 = tgtNode.y + 52
 
       const dx = Math.max(50, Math.abs(x2 - x1) * 0.45)
       const d = `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`
+      const midX = Math.round((x1 + x2) / 2)
+      const midY = Math.round((y1 + y2) / 2)
 
       return {
         ...edge,
@@ -403,12 +558,14 @@ const edgePaths = computed(() => {
         y1,
         x2,
         y2,
+        midX,
+        midY,
       }
     })
-    .filter(Boolean) as Array<WorkflowEdge & { d: string }>
+    .filter(Boolean) as Array<WorkflowEdge & { d: string; midX: number; midY: number }>
 })
 
-/** 拖拽中的动态连线预览 */
+/** 拖拽中的动态连线预览（支持磁吸微吸附效果） */
 const connectingLine = computed(() => {
   if (!connectingPort.value) return null
   const p = connectingPort.value
@@ -427,16 +584,15 @@ const validation = computed<WorkflowValidationResult>(() => {
   const warnings: Array<{ nodeId?: string; message: string }> = []
 
   if (!nodes.value.length) {
-    errors.push({ message: '画布无节点' })
+    errors.push({ message: '画布暂无节点' })
     return { valid: false, errors, warnings }
   }
 
-  // 检查是否存在核心评测/用例/压测节点
   const hasActionable = nodes.value.some((n) =>
     ['benchmark_eval', 'rag_eval', 'case_gen', 'stress_test'].includes(n.type),
   )
   if (!hasActionable) {
-    warnings.push({ message: '建议包含至少一个评测或生成节点' })
+    warnings.push({ message: '建议包含评测或生成节点' })
   }
 
   return {
@@ -446,10 +602,9 @@ const validation = computed<WorkflowValidationResult>(() => {
   }
 })
 
-/* ─── 画布鼠标与触控平移交互 ─── */
+/* ─── 画布平移交互 ─── */
 function onCanvasPointerDown(e: PointerEvent) {
-  // 若点击的是节点或端口，不触发画布平移
-  if ((e.target as HTMLElement).closest('.wf-node') || (e.target as HTMLElement).closest('.port-anchor')) {
+  if ((e.target as HTMLElement).closest('.wf-node') || (e.target as HTMLElement).closest('.port-anchor') || (e.target as HTMLElement).closest('.edge-label-pill')) {
     return
   }
   isPanning.value = true
@@ -465,13 +620,11 @@ function onCanvasPointerMove(e: PointerEvent) {
   const rect = canvasContainerRef.value?.getBoundingClientRect()
   if (!rect) return
 
-  // 更新当前鼠标在画布内的世界坐标
   currentMousePos.value = {
     x: Math.round((e.clientX - rect.left - view.value.x) / view.value.k),
     y: Math.round((e.clientY - rect.top - view.value.y) / view.value.k),
   }
 
-  // 画布平移
   if (isPanning.value) {
     const dx = e.clientX - panStart.value.x
     const dy = e.clientY - panStart.value.y
@@ -480,7 +633,6 @@ function onCanvasPointerMove(e: PointerEvent) {
     return
   }
 
-  // 节点拖拽移动
   if (draggingNodeId.value) {
     const node = nodes.value.find((n) => n.id === draggingNodeId.value)
     if (node) {
@@ -520,8 +672,8 @@ function onPortPointerDown(
   const node = nodes.value.find((n) => n.id === nodeId)
   if (!node) return
 
-  const startX = direction === 'output' ? node.x + 240 : node.x
-  const startY = node.y + 50
+  const startX = direction === 'output' ? node.x + 256 : node.x
+  const startY = node.y + 52
 
   connectingPort.value = {
     nodeId,
@@ -541,14 +693,12 @@ function onPortPointerUp(
   if (!connectingPort.value) return
   const src = connectingPort.value
 
-  // 严禁自连自身节点，且要求方向相反 (output -> input 或 input -> output)
   if (src.nodeId !== targetNodeId && src.direction !== targetDirection) {
     const sourceNodeId = src.direction === 'output' ? src.nodeId : targetNodeId
     const sourcePortId = src.direction === 'output' ? src.portId : targetPortId
     const finalTargetNodeId = src.direction === 'input' ? src.nodeId : targetNodeId
     const finalTargetPortId = src.direction === 'input' ? src.portId : targetPortId
 
-    // 避免重复连线
     const exists = edges.value.some(
       (edge) =>
         edge.sourceNodeId === sourceNodeId &&
@@ -566,7 +716,7 @@ function onPortPointerUp(
         targetNodeId: finalTargetNodeId,
         targetPortId: finalTargetPortId,
       })
-      message.success('已建立节点连接链路')
+      message.success('已建立连接链路')
     }
   }
 
@@ -578,7 +728,6 @@ async function runWorkflow() {
   if (!nodes.value.length) return
   isExecuting.value = true
 
-  // 1. 初始化全部节点状态为 queued
   nodes.value.forEach((n) => {
     n.status = 'queued'
     n.progress = 0
@@ -587,22 +736,19 @@ async function runWorkflow() {
   message.loading('正在编译工作流拓扑并向平台调度引擎下发任务...', { duration: 1500 })
 
   try {
-    // 2. 依次模拟执行节点流转
     for (let i = 0; i < nodes.value.length; i++) {
       const n = nodes.value[i]
       n.status = 'running'
-      n.progress = 20
+      n.progress = 25
 
-      // 模拟节点运行阶段
-      await new Promise((r) => setTimeout(r, 450))
+      await new Promise((r) => setTimeout(r, 400))
       n.progress = 85
-      await new Promise((r) => setTimeout(r, 300))
+      await new Promise((r) => setTimeout(r, 250))
 
       n.status = 'succeeded'
       n.progress = 100
     }
 
-    // 3. 真正向平台 API 下发任务创建（支持先评后压/Benchmark/RAG/用例生成）
     const bmNode = nodes.value.find((n) => n.type === 'benchmark_eval')
     const ragNode = nodes.value.find((n) => n.type === 'rag_eval')
     const stressNode = nodes.value.find((n) => n.type === 'stress_test')
@@ -640,26 +786,40 @@ async function runWorkflow() {
 .wf-designer-root {
   display: flex;
   flex-direction: column;
-  height: 720px;
+  height: calc(100vh - 170px);
+  min-height: 740px;
   background: var(--bg-main);
   border: 1px solid var(--border-subtle);
-  border-radius: 12px;
+  border-radius: 14px;
   overflow: hidden;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.08);
+  position: relative;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.wf-designer-root.is-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  width: 100vw;
+  height: 100vh;
+  border-radius: 0;
+  border: none;
 }
 
 /* ═══ 顶部控制工具栏 ═══ */
 .designer-toolbar {
-  height: 52px;
+  height: 54px;
   background: var(--bg-elevated);
   border-bottom: 1px solid var(--border-subtle);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 14px;
+  padding: 0 16px;
   gap: 12px;
   flex-shrink: 0;
   user-select: none;
+  backdrop-filter: blur(12px);
 }
 
 .toolbar-left,
@@ -673,18 +833,27 @@ async function runWorkflow() {
 .wf-title-badge {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   font-weight: 700;
   font-size: 13px;
   color: var(--text-primary);
 }
 
 .badge-icon {
-  font-size: 15px;
+  font-size: 16px;
+}
+
+.badge-sub {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--accent-ai);
+  background: var(--t-agent);
+  padding: 2px 6px;
+  border-radius: 4px;
 }
 
 .select-tpl {
-  padding: 5px 10px;
+  padding: 5px 12px;
   font-size: 12px;
   background: var(--bg-main);
   border: 1px solid var(--border-subtle);
@@ -692,6 +861,7 @@ async function runWorkflow() {
   color: var(--text-primary);
   outline: none;
   cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
 }
 
 .select-tpl:focus {
@@ -701,7 +871,7 @@ async function runWorkflow() {
 .stats-pill {
   font-size: 11px;
   color: var(--text-tertiary);
-  padding: 3px 8px;
+  padding: 3px 10px;
   background: var(--bg-main);
   border: 1px solid var(--border-subtle);
   border-radius: 12px;
@@ -712,8 +882,8 @@ async function runWorkflow() {
   align-items: center;
   gap: 6px;
   font-size: 11px;
-  padding: 4px 10px;
-  border-radius: 12px;
+  padding: 4px 12px;
+  border-radius: 14px;
   background: var(--bg-main);
   border: 1px solid var(--border-subtle);
 }
@@ -746,12 +916,15 @@ async function runWorkflow() {
   background: var(--accent-ai);
   border-color: var(--accent-ai);
   color: #fff;
-  padding: 0 16px;
+  padding: 0 18px;
+  border-radius: 8px;
+  transition: all 0.2s;
 }
 
 .run-btn:hover:not(:disabled) {
-  opacity: 0.92;
-  box-shadow: 0 0 12px var(--accent-ai);
+  opacity: 0.94;
+  box-shadow: 0 0 16px var(--accent-ai);
+  transform: translateY(-1px);
 }
 
 /* ═══ 主工作区 ═══ */
@@ -789,8 +962,8 @@ async function runWorkflow() {
 }
 
 .grid-dot {
-  fill: var(--border-subtle);
-  opacity: 0.8;
+  fill: var(--text-tertiary);
+  opacity: 0.25;
 }
 
 /* 连线与动画 */
@@ -801,55 +974,136 @@ async function runWorkflow() {
 .edge-hit-area {
   fill: none;
   stroke: transparent;
-  stroke-width: 18;
+  stroke-width: 20;
   cursor: pointer;
 }
 
 .edge-hit-area:hover + .edge-line {
   stroke: var(--accent-error);
-  stroke-width: 3;
+  stroke-width: 3.5;
 }
 
 .edge-line {
   fill: none;
   stroke: var(--text-tertiary);
   stroke-width: 2;
-  stroke-dasharray: 6 4;
+  stroke-dasharray: 6 5;
   transition: stroke 0.2s, stroke-width 0.2s;
 }
 
 .edge-line.active {
   stroke: url(#edge-flow-grad);
+  stroke-width: 2.8;
+  stroke-dasharray: none;
+  filter: drop-shadow(0 0 4px var(--accent-ai));
+}
+
+.edge-line.edge-pass {
+  stroke: url(#edge-pass-grad);
   stroke-width: 2.5;
   stroke-dasharray: none;
 }
 
-.edge-line.success {
-  stroke: var(--accent-success);
+.edge-line.edge-fail {
+  stroke: url(#edge-fail-grad);
   stroke-width: 2.5;
-  stroke-dasharray: none;
+  stroke-dasharray: 5 4;
 }
 
 .edge-connecting-preview {
   fill: none;
   stroke: var(--accent-ai);
   stroke-width: 2.5;
-  stroke-dasharray: 4 4;
+  stroke-dasharray: 5 5;
+  filter: drop-shadow(0 0 6px var(--accent-ai));
+}
+
+/* 连线中间气泡标签 */
+.edge-label-pill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--bg-main);
+  border: 1px solid var(--border-subtle);
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  transform-origin: center center;
+  margin-left: -32px;
+  margin-top: -10px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+  transition: all 0.15s;
+  z-index: 3;
+}
+
+.edge-label-pill:hover {
+  border-color: var(--accent-error);
+  color: var(--accent-error);
+  transform: scale(1.15);
+}
+
+.edge-label-pill.label-pass {
+  background: var(--t-cases);
+  color: var(--c-cases);
+  border-color: var(--c-cases);
+}
+
+.edge-label-pill.label-fail {
+  background: var(--t-stress);
+  color: var(--accent-error);
+  border-color: var(--accent-error);
+}
+
+.pill-del {
+  font-size: 11px;
+  opacity: 0.6;
+}
+
+.edge-label-pill:hover .pill-del {
+  opacity: 1;
 }
 
 .canvas-hints {
   position: absolute;
-  bottom: 12px;
+  bottom: 14px;
   left: 50%;
   transform: translateX(-50%);
-  background: rgba(var(--bg-main-rgb, 17, 24, 39), 0.75);
-  backdrop-filter: blur(8px);
-  padding: 4px 14px;
+  background: rgba(var(--bg-main-rgb, 17, 24, 39), 0.85);
+  backdrop-filter: blur(10px);
+  padding: 4px 16px;
   border-radius: 20px;
   border: 1px solid var(--border-subtle);
   font-size: 11px;
   color: var(--text-tertiary);
   pointer-events: none;
   z-index: 6;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+
+/* ═══ 小地图 (Mini-Map) ═══ */
+.canvas-minimap {
+  position: absolute;
+  bottom: 14px;
+  right: 14px;
+  width: 140px;
+  height: 98px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-main);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  overflow: hidden;
+  z-index: 6;
+  backdrop-filter: blur(8px);
+}
+
+.minimap-svg {
+  width: 100%;
+  height: 100%;
 }
 </style>

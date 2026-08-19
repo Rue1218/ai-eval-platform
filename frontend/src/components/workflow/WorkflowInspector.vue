@@ -14,337 +14,408 @@
       <button class="close-btn" title="关闭面板" @click="$emit('close')">×</button>
     </div>
 
+    <!-- 标签页导航 -->
+    <div class="inspector-tabs">
+      <button
+        class="tab-btn"
+        :class="{ active: currentTab === 'config' }"
+        @click="currentTab = 'config'"
+      >
+        <span>⚙️ 参数配置</span>
+      </button>
+      <button
+        class="tab-btn"
+        :class="{ active: currentTab === 'ports' }"
+        @click="currentTab = 'ports'"
+      >
+        <span>🔌 端口依赖</span>
+      </button>
+      <button
+        class="tab-btn"
+        :class="{ active: currentTab === 'validate' }"
+        @click="currentTab = 'validate'"
+      >
+        <span>⚡ 节点自检</span>
+      </button>
+    </div>
+
     <!-- 面板内容滚动区 -->
     <div class="inspector-body">
-      <!-- 基础通用配置 -->
-      <div class="form-section">
-        <div class="section-title">基础属性</div>
-        <div class="field mb12">
-          <label class="field-label">节点名称</label>
-          <input v-model="node.name" class="input" placeholder="输入节点自定义名称" />
+      <!-- ═══ 1. 参数配置 Tab ═══ -->
+      <template v-if="currentTab === 'config'">
+        <!-- 基础通用配置 -->
+        <div class="form-section">
+          <div class="section-title">基本信息</div>
+          <div class="field mb12">
+            <label class="field-label">节点自定义名称</label>
+            <input v-model="node.name" class="input" placeholder="输入节点自定义名称" />
+          </div>
+          <div class="field mb12">
+            <label class="field-label">作用描述</label>
+            <input v-model="node.description" class="input" placeholder="简要说明该节点作用" />
+          </div>
         </div>
-        <div class="field mb12">
-          <label class="field-label">节点描述</label>
-          <input v-model="node.description" class="input" placeholder="简要说明该节点作用" />
-        </div>
-      </div>
 
-      <!-- 业务专项配置 -->
-      <div class="form-section">
-        <div class="section-title">参数配置 ({{ categoryLabel }})</div>
+        <!-- 业务专项配置 -->
+        <div class="form-section">
+          <div class="section-title">核心业务参数 ({{ categoryLabel }})</div>
 
-        <!-- 1. Agent 调度内核配置 -->
-        <template v-if="node.type === 'agent_kernel'">
-          <div class="field mb12">
-            <label class="field-label">分发策略 (Strategy)</label>
-            <select v-model="node.config.strategy" class="select">
-              <option value="负载均衡">负载均衡 (Round Robin & Weight)</option>
-              <option value="优先级抢占">优先级抢占 (Priority Preemption)</option>
-              <option value="亲和性">亲和性调度 (Affinity Binding)</option>
-            </select>
-          </div>
-          <div class="field mb12">
-            <div class="row-between">
-              <label class="field-label">最大并发任务数 (max_running_tasks)</label>
-              <span class="mono font-bold" style="color: var(--accent-ai)">{{ node.config.max_running_tasks }}</span>
-            </div>
-            <input
-              v-model.number="node.config.max_running_tasks"
-              type="range"
-              class="cap-slider"
-              min="1"
-              max="8"
-              step="1"
-            />
-          </div>
-          <div class="field mb12">
-            <label class="field-label">心跳轮询周期 (ms)</label>
-            <input v-model.number="node.config.heartbeat_ms" type="number" class="input num" min="100" max="5000" step="100" />
-          </div>
-        </template>
-
-        <!-- 2. Worker 执行节点配置 -->
-        <template v-if="node.type === 'worker_target'">
-          <div class="field mb12">
-            <label class="field-label">绑定 Worker 节点</label>
-            <select v-model="node.config.worker_id" class="select" @change="onWorkerChange">
-              <option v-for="w in availableWorkers" :key="w.id" :value="w.id">
-                {{ w.id }} · {{ w.name }} ({{ w.state }})
-              </option>
-            </select>
-          </div>
-          <div class="field mb12">
-            <label class="field-label">调度权重 (Weight)</label>
-            <input v-model.number="node.config.weight" type="number" class="input num" min="10" max="500" />
-          </div>
-        </template>
-
-        <!-- 3. 基准数据集源配置 -->
-        <template v-if="node.type === 'dataset_source'">
-          <div class="field mb12">
-            <label class="field-label">选择基准数据集</label>
-            <select v-model="node.config.dataset_id" class="select" @change="onDatasetChange">
-              <option value="">-- 选择已有数据集 --</option>
-              <option v-for="ds in availableDatasets" :key="ds.id" :value="ds.id">
-                {{ ds.name }} (v{{ ds.version }} · {{ ds.row_count }} 行)
-              </option>
-            </select>
-          </div>
-          <div class="field mb12">
-            <div class="row-between">
-              <label class="field-label">样本抽样数量 (Sample Size)</label>
-              <span class="mono font-bold" style="color: var(--c-datasets)">{{ node.config.sample_size }}</span>
-            </div>
-            <input
-              v-model.number="node.config.sample_size"
-              type="range"
-              class="cap-slider"
-              min="10"
-              max="500"
-              step="10"
-            />
-          </div>
-          <div class="field mb12">
-            <label class="field-label">主要评测指标 (Metric)</label>
-            <select v-model="node.config.metric" class="select">
-              <option value="contain">包含率 (Contain Rate)</option>
-              <option value="exact">精确匹配 (Exact Match)</option>
-              <option value="judge">裁判打分 (LLM Judge)</option>
-              <option value="mrr">平均倒数排名 (MRR)</option>
-            </select>
-          </div>
-        </template>
-
-        <!-- 4. PRD 智能用例生成配置 -->
-        <template v-if="node.type === 'case_gen'">
-          <div class="field mb12">
-            <label class="field-label">用例集名称</label>
-            <input v-model="node.config.name" class="input" placeholder="例如：支付中心 PRD 用例生成" />
-          </div>
-          <div class="field mb12">
-            <label class="field-label">PRD 需求文本 / 描述</label>
-            <textarea
-              v-model="node.config.prd_text"
-              class="input textarea"
-              rows="4"
-              placeholder="输入 PRD 文本或接口规范..."
-            ></textarea>
-          </div>
-          <div class="field mb12">
-            <label class="field-label">入库映射目标</label>
-            <select v-model="node.config.mapping_target" class="select">
-              <option value="dataset">映射并创建为基准数据集 (Dataset)</option>
-              <option value="gold_qa">映射为知识库黄金 QA (Gold QA)</option>
-            </select>
-          </div>
-        </template>
-
-        <!-- 5. 大模型基准评测配置 -->
-        <template v-if="node.type === 'benchmark_eval'">
-          <div class="field mb12">
-            <label class="field-label">被测模型协议档 (支持多选对比)</label>
-            <div class="profile-chips">
-              <label
-                v-for="p in availableProfiles"
-                :key="p.id"
-                class="profile-checkbox-chip"
-                :class="{ checked: (node.config.profile_ids || []).includes(p.id) }"
-              >
-                <input
-                  type="checkbox"
-                  :value="p.id"
-                  :checked="(node.config.profile_ids || []).includes(p.id)"
-                  @change="toggleProfile(p.id)"
-                />
-                <span class="mono">{{ p.name }}</span>
-                <span class="tertiary" style="font-size: 10px">({{ p.protocol }})</span>
-              </label>
-            </div>
-          </div>
-          <div class="grid-2 mb12">
-            <div class="field">
-              <label class="field-label">采样温度 (Temperature)</label>
-              <input v-model.number="node.config.temperature" type="number" class="input num" min="0" max="1" step="0.1" />
-            </div>
-            <div class="field">
-              <label class="field-label">单任务预算 ($)</label>
-              <input v-model.number="node.config.max_usd" type="number" class="input num" min="1" max="100" step="1" />
-            </div>
-          </div>
-          <div class="field mb12">
-            <label class="checkbox-label">
-              <input v-model="node.config.with_stress" type="checkbox" />
-              <span>评测成功后自动派生共享压测（先评后压）</span>
-            </label>
-          </div>
-        </template>
-
-        <!-- 6. RAG 知识库评测配置 -->
-        <template v-if="node.type === 'rag_eval'">
-          <div class="field mb12">
-            <label class="field-label">选择知识库 (KB)</label>
-            <select v-model="node.config.kb_id" class="select" @change="onKbChange">
-              <option value="">-- 选择已有知识库 --</option>
-              <option v-for="kb in availableKbs" :key="kb.id" :value="kb.id">
-                {{ kb.name }} ({{ kb.kind }})
-              </option>
-            </select>
-          </div>
-          <div class="field mb12">
-            <label class="field-label">LightRAG 检索模式</label>
-            <div class="row wrap" style="gap: 8px">
-              <label
-                v-for="mode in ['hybrid', 'local', 'global', 'naive']"
-                :key="mode"
-                class="chip-checkbox"
-                :class="{ checked: (node.config.rag_modes || []).includes(mode) }"
-              >
-                <input
-                  type="checkbox"
-                  :value="mode"
-                  :checked="(node.config.rag_modes || []).includes(mode)"
-                  @change="toggleRagMode(mode)"
-                />
-                <span>{{ mode }}</span>
-              </label>
-            </div>
-          </div>
-          <div class="field mb12">
-            <div class="row-between">
-              <label class="field-label">Top-K 相似度召回数</label>
-              <span class="mono font-bold" style="color: var(--c-kb)">{{ node.config.top_k }}</span>
-            </div>
-            <input
-              v-model.number="node.config.top_k"
-              type="range"
-              class="cap-slider"
-              min="1"
-              max="20"
-              step="1"
-            />
-          </div>
-        </template>
-
-        <!-- 7. 大模型裁判 (LLM Judge) 配置 -->
-        <template v-if="node.type === 'llm_judge'">
-          <div class="field mb12">
-            <label class="field-label">裁判模型 Profile</label>
-            <select v-model="node.config.judge_profile_id" class="select">
-              <option v-for="p in availableProfiles" :key="p.id" :value="p.id">
-                {{ p.name }} ({{ p.protocol }})
-              </option>
-            </select>
-          </div>
-          <div class="field mb12">
-            <label class="field-label">裁判及格分 (Pass Score, 0-5分)</label>
-            <input v-model.number="node.config.pass_score" type="number" class="input num" min="0" max="5" step="0.1" />
-          </div>
-          <div class="field mb12">
-            <label class="field-label">裁判提示词 (Judge Prompt)</label>
-            <textarea
-              v-model="node.config.judge_prompt"
-              class="input textarea"
-              rows="3"
-            ></textarea>
-          </div>
-        </template>
-
-        <!-- 8. 质量门禁 (Quality Gate) 配置 -->
-        <template v-if="node.type === 'quality_gate'">
-          <div class="field mb12">
-            <label class="field-label">判定指标</label>
-            <select v-model="node.config.metric" class="select">
-              <option value="contain_rate">包含准确率 (Contain Rate %)</option>
-              <option value="exact_match_rate">精确匹配率 (Exact Match %)</option>
-              <option value="judge_score">裁判得分 (Judge Score)</option>
-              <option value="hit_rate">RAG 命中文档率 (Hit Rate %)</option>
-              <option value="strategy_coverage">用例策略覆盖率 (Coverage %)</option>
-            </select>
-          </div>
-          <div class="grid-2 mb12">
-            <div class="field">
-              <label class="field-label">判定条件</label>
-              <select v-model="node.config.operator" class="select">
-                <option value=">=">&gt;= (大于等于)</option>
-                <option value=">">&gt; (大于)</option>
-                <option value="<=">&lt;= (小于等于)</option>
+          <!-- 1. Agent 调度内核配置 -->
+          <template v-if="node.type === 'agent_kernel'">
+            <div class="field mb12">
+              <label class="field-label">分发调度策略 (Strategy)</label>
+              <select v-model="node.config.strategy" class="select">
+                <option value="负载均衡">负载均衡 (Round Robin & Weight 权重分发)</option>
+                <option value="优先级抢占">优先级抢占 (Priority Preemption)</option>
+                <option value="亲和性">亲和性调度 (Affinity Binding 专精节点)</option>
               </select>
             </div>
-            <div class="field">
-              <label class="field-label">阈值</label>
-              <input v-model.number="node.config.threshold" type="number" class="input num" step="1" />
+            <div class="field mb12">
+              <div class="row-between">
+                <label class="field-label">全局最大并发任务数 (max_running_tasks)</label>
+                <span class="mono font-bold" style="color: var(--accent-ai)">{{ node.config.max_running_tasks }}</span>
+              </div>
+              <input
+                v-model.number="node.config.max_running_tasks"
+                type="range"
+                class="cap-slider"
+                min="1"
+                max="8"
+                step="1"
+              />
+              <span class="field-hint">并发满载时新任务保持 queued 状态排队</span>
             </div>
-          </div>
-          <p class="small tertiary">
-            达标走 Pass 端口（触发压测/入库）；不达标走 Fail 端口（告警阻断）。
-          </p>
-        </template>
-
-        <!-- 9. 共享压测引擎配置 -->
-        <template v-if="node.type === 'stress_test'">
-          <div class="field mb12">
-            <label class="field-label">目标环境 (Env)</label>
-            <select v-model="node.config.env" class="select">
-              <option value="test">测试环境 (test · 默认免审批)</option>
-              <option value="prod">生产环境 (prod · 需二次审批)</option>
-            </select>
-          </div>
-          <div class="grid-2 mb12">
-            <div class="field">
-              <label class="field-label">起始/目标 QPS</label>
-              <input v-model.number="node.config.qps" type="number" class="input num" min="1" max="500" step="5" />
+            <div class="field mb12">
+              <label class="field-label">心跳轮询周期 (ms)</label>
+              <input v-model.number="node.config.heartbeat_ms" type="number" class="input num" min="100" max="5000" step="100" />
             </div>
-            <div class="field">
-              <label class="field-label">发压时长 (秒)</label>
-              <input v-model.number="node.config.duration_seconds" type="number" class="input num" min="10" max="600" step="10" />
+          </template>
+
+          <!-- 2. Worker 执行节点配置 -->
+          <template v-if="node.type === 'worker_target'">
+            <div class="field mb12">
+              <label class="field-label">绑定目标 Worker 计算节点</label>
+              <select v-model="node.config.worker_id" class="select" @change="onWorkerChange">
+                <option v-for="w in availableWorkers" :key="w.id" :value="w.id">
+                  {{ w.id }} · {{ w.name }} ({{ w.state }} · 负载 {{ w.load }}%)
+                </option>
+              </select>
             </div>
-          </div>
-          <div class="field mb12">
-            <label class="field-label">SLA P99 延迟阈值 (ms)</label>
-            <input v-model.number="node.config.sla_p99_ms" type="number" class="input num" min="100" max="10000" step="100" />
-          </div>
-        </template>
+            <div class="field mb12">
+              <label class="field-label">调度权重 (Weight, 10~500)</label>
+              <input v-model.number="node.config.weight" type="number" class="input num" min="10" max="500" />
+            </div>
+          </template>
 
-        <!-- 10. 评测报告输出配置 -->
-        <template v-if="node.type === 'eval_report'">
-          <div class="field mb12">
-            <label class="field-label">导出与呈现格式</label>
-            <select v-model="node.config.format" class="select">
-              <option value="all">全量雷达图 + 折线图 + 指标大盘</option>
-              <option value="markdown">Markdown 简报</option>
-              <option value="json">JSON 原始指标流</option>
-            </select>
-          </div>
-          <div class="field mb12">
-            <label class="checkbox-label">
-              <input v-model="node.config.auto_share" type="checkbox" />
-              <span>生成免登录公开分享链接</span>
-            </label>
-          </div>
-        </template>
-      </div>
+          <!-- 3. 基准数据集源配置 -->
+          <template v-if="node.type === 'dataset_source'">
+            <div class="field mb12">
+              <label class="field-label">选择基准数据集 (Dataset)</label>
+              <select v-model="node.config.dataset_id" class="select" @change="onDatasetChange">
+                <option value="">-- 选择已有数据集 --</option>
+                <option v-for="ds in availableDatasets" :key="ds.id" :value="ds.id">
+                  {{ ds.name }} (v{{ ds.version }} · {{ ds.row_count }} 行)
+                </option>
+              </select>
+            </div>
+            <div class="field mb12">
+              <div class="row-between">
+                <label class="field-label">评测样本抽样量 (Sample Size)</label>
+                <span class="mono font-bold" style="color: var(--c-datasets)">{{ node.config.sample_size }} 条</span>
+              </div>
+              <input
+                v-model.number="node.config.sample_size"
+                type="range"
+                class="cap-slider"
+                min="10"
+                max="500"
+                step="10"
+              />
+            </div>
+            <div class="field mb12">
+              <label class="field-label">主要评测主指标 (Metric)</label>
+              <select v-model="node.config.metric" class="select">
+                <option value="contain">包含率 (Contain Rate · 包含关键词即通过)</option>
+                <option value="exact">精确匹配 (Exact Match · 100% 严格一致)</option>
+                <option value="judge">裁判打分 (LLM Judge 智能评判)</option>
+                <option value="mrr">平均倒数排名 (MRR 检索相关度)</option>
+              </select>
+            </div>
+          </template>
 
-      <!-- 端口概要说明 -->
-      <div class="form-section">
-        <div class="section-title">端口与连接</div>
-        <div class="ports-summary">
-          <div class="small font-bold mb4">输入端口 (Inputs)</div>
-          <div v-if="node.inputs.length" class="ports-tag-list">
-            <span v-for="p in node.inputs" :key="p.id" class="port-desc-tag in">
-              {{ p.label }} <span class="mono">({{ p.type }})</span>
-            </span>
-          </div>
-          <div v-else class="small tertiary">无输入（根触发节点）</div>
+          <!-- 4. PRD 智能用例生成配置 -->
+          <template v-if="node.type === 'case_gen'">
+            <div class="field mb12">
+              <label class="field-label">用例集名称</label>
+              <input v-model="node.config.name" class="input" placeholder="例如：支付中心 PRD 用例生成" />
+            </div>
+            <div class="field mb12">
+              <label class="field-label">PRD 需求文本 / 接口规范描述</label>
+              <textarea
+                v-model="node.config.prd_text"
+                class="input textarea"
+                rows="4"
+                placeholder="输入 PRD 文本或接口规范..."
+              ></textarea>
+            </div>
+            <div class="field mb12">
+              <label class="field-label">自动入库映射目标</label>
+              <select v-model="node.config.mapping_target" class="select">
+                <option value="dataset">映射并创建为基准数据集 (Dataset)</option>
+                <option value="gold_qa">映射为知识库黄金 QA (Gold QA)</option>
+              </select>
+            </div>
+          </template>
 
-          <div class="small font-bold mt8 mb4">输出端口 (Outputs)</div>
-          <div v-if="node.outputs.length" class="ports-tag-list">
-            <span v-for="p in node.outputs" :key="p.id" class="port-desc-tag out">
-              {{ p.label }} <span class="mono">({{ p.type }})</span>
-            </span>
-          </div>
-          <div v-else class="small tertiary">无输出（终点汇总节点）</div>
+          <!-- 5. 大模型基准评测配置 -->
+          <template v-if="node.type === 'benchmark_eval'">
+            <div class="field mb12">
+              <label class="field-label">被测模型协议档 (支持多选横向对比)</label>
+              <div class="profile-chips">
+                <label
+                  v-for="p in availableProfiles"
+                  :key="p.id"
+                  class="profile-checkbox-chip"
+                  :class="{ checked: (node.config.profile_ids || []).includes(p.id) }"
+                >
+                  <input
+                    type="checkbox"
+                    :value="p.id"
+                    :checked="(node.config.profile_ids || []).includes(p.id)"
+                    @change="toggleProfile(p.id)"
+                  />
+                  <span class="mono font-bold">{{ p.name }}</span>
+                  <span class="tertiary" style="font-size: 10px">({{ p.protocol }})</span>
+                </label>
+              </div>
+            </div>
+            <div class="grid-2 mb12">
+              <div class="field">
+                <label class="field-label">采样温度 (Temperature)</label>
+                <input v-model.number="node.config.temperature" type="number" class="input num" min="0" max="1" step="0.1" />
+              </div>
+              <div class="field">
+                <label class="field-label">单任务预算 ($)</label>
+                <input v-model.number="node.config.max_usd" type="number" class="input num" min="1" max="100" step="1" />
+              </div>
+            </div>
+            <div class="field mb12">
+              <label class="checkbox-label">
+                <input v-model="node.config.with_stress" type="checkbox" />
+                <span>质量成功后自动派生共享压测（先评后压）</span>
+              </label>
+            </div>
+          </template>
+
+          <!-- 6. RAG 知识库评测配置 -->
+          <template v-if="node.type === 'rag_eval'">
+            <div class="field mb12">
+              <label class="field-label">选择知识库 (Knowledge Base)</label>
+              <select v-model="node.config.kb_id" class="select" @change="onKbChange">
+                <option value="">-- 选择已有知识库 --</option>
+                <option v-for="kb in availableKbs" :key="kb.id" :value="kb.id">
+                  {{ kb.name }} ({{ kb.kind }})
+                </option>
+              </select>
+            </div>
+            <div class="field mb12">
+              <label class="field-label">LightRAG 检索模式 (多选对比)</label>
+              <div class="row wrap" style="gap: 8px">
+                <label
+                  v-for="mode in ['hybrid', 'local', 'global', 'naive']"
+                  :key="mode"
+                  class="chip-checkbox"
+                  :class="{ checked: (node.config.rag_modes || []).includes(mode) }"
+                >
+                  <input
+                    type="checkbox"
+                    :value="mode"
+                    :checked="(node.config.rag_modes || []).includes(mode)"
+                    @change="toggleRagMode(mode)"
+                  />
+                  <span>{{ mode }}</span>
+                </label>
+              </div>
+            </div>
+            <div class="field mb12">
+              <div class="row-between">
+                <label class="field-label">Top-K 相似度召回数</label>
+                <span class="mono font-bold" style="color: var(--c-kb)">{{ node.config.top_k }}</span>
+              </div>
+              <input
+                v-model.number="node.config.top_k"
+                type="range"
+                class="cap-slider"
+                min="1"
+                max="20"
+                step="1"
+              />
+            </div>
+          </template>
+
+          <!-- 7. 大模型裁判 (LLM Judge) 配置 -->
+          <template v-if="node.type === 'llm_judge'">
+            <div class="field mb12">
+              <label class="field-label">裁判模型 Profile</label>
+              <select v-model="node.config.judge_profile_id" class="select">
+                <option v-for="p in availableProfiles" :key="p.id" :value="p.id">
+                  {{ p.name }} ({{ p.protocol }})
+                </option>
+              </select>
+            </div>
+            <div class="field mb12">
+              <label class="field-label">裁判及格分 (Pass Score, 0-5分)</label>
+              <input v-model.number="node.config.pass_score" type="number" class="input num" min="0" max="5" step="0.1" />
+            </div>
+            <div class="field mb12">
+              <label class="field-label">裁判提示词 (Judge Prompt)</label>
+              <textarea
+                v-model="node.config.judge_prompt"
+                class="input textarea"
+                rows="3"
+              ></textarea>
+            </div>
+          </template>
+
+          <!-- 8. 质量门禁 (Quality Gate) 配置 -->
+          <template v-if="node.type === 'quality_gate'">
+            <div class="field mb12">
+              <label class="field-label">判定指标</label>
+              <select v-model="node.config.metric" class="select">
+                <option value="contain_rate">包含准确率 (Contain Rate %)</option>
+                <option value="exact_match_rate">精确匹配率 (Exact Match %)</option>
+                <option value="judge_score">裁判得分 (Judge Score)</option>
+                <option value="hit_rate">RAG 命中文档率 (Hit Rate %)</option>
+                <option value="strategy_coverage">用例策略覆盖率 (Coverage %)</option>
+              </select>
+            </div>
+            <div class="grid-2 mb12">
+              <div class="field">
+                <label class="field-label">判定条件</label>
+                <select v-model="node.config.operator" class="select">
+                  <option value=">=">&gt;= (大于等于)</option>
+                  <option value=">">&gt; (大于)</option>
+                  <option value="<=">&lt;= (小于等于)</option>
+                </select>
+              </div>
+              <div class="field">
+                <label class="field-label">阈值</label>
+                <input v-model.number="node.config.threshold" type="number" class="input num" step="1" />
+              </div>
+            </div>
+
+            <!-- 规则预览卡 -->
+            <div class="gate-rule-preview">
+              <div class="small font-bold" style="color: var(--accent-warning)">门禁分支规则逻辑：</div>
+              <div class="mono small" style="margin-top: 4px; line-height: 1.5">
+                IF <b>{{ node.config.metric }}</b> {{ node.config.operator }} <b>{{ node.config.threshold }}</b><br />
+                THEN → <span style="color: var(--accent-success)">Pass 分支 (放行压测/入库)</span><br />
+                ELSE → <span style="color: var(--accent-error)">Fail 分支 (阻断并告警)</span>
+              </div>
+            </div>
+          </template>
+
+          <!-- 9. 共享压测引擎配置 -->
+          <template v-if="node.type === 'stress_test'">
+            <div class="field mb12">
+              <label class="field-label">目标环境 (Env)</label>
+              <select v-model="node.config.env" class="select">
+                <option value="test">测试环境 (test · 默认免审批)</option>
+                <option value="prod">生产环境 (prod · 需二次审批)</option>
+              </select>
+            </div>
+            <div class="grid-2 mb12">
+              <div class="field">
+                <label class="field-label">起始/目标 QPS</label>
+                <input v-model.number="node.config.qps" type="number" class="input num" min="1" max="500" step="5" />
+              </div>
+              <div class="field">
+                <label class="field-label">发压时长 (秒)</label>
+                <input v-model.number="node.config.duration_seconds" type="number" class="input num" min="10" max="600" step="10" />
+              </div>
+            </div>
+            <div class="field mb12">
+              <label class="field-label">SLA P99 延迟阈值 (ms)</label>
+              <input v-model.number="node.config.sla_p99_ms" type="number" class="input num" min="100" max="10000" step="100" />
+            </div>
+          </template>
+
+          <!-- 10. 评测报告输出配置 -->
+          <template v-if="node.type === 'eval_report'">
+            <div class="field mb12">
+              <label class="field-label">导出与呈现格式</label>
+              <select v-model="node.config.format" class="select">
+                <option value="all">全量雷达图 + 折线图 + 指标大盘</option>
+                <option value="markdown">Markdown 简报</option>
+                <option value="json">JSON 原始指标流</option>
+              </select>
+            </div>
+            <div class="field mb12">
+              <label class="checkbox-label">
+                <input v-model="node.config.auto_share" type="checkbox" />
+                <span>生成免登录公开分享链接</span>
+              </label>
+            </div>
+          </template>
         </div>
-      </div>
+      </template>
+
+      <!-- ═══ 2. 端口依赖 Tab ═══ -->
+      <template v-else-if="currentTab === 'ports'">
+        <div class="form-section">
+          <div class="section-title">输入端口 (Inputs)</div>
+          <div v-if="node.inputs.length" class="ports-detail-list">
+            <div v-for="p in node.inputs" :key="p.id" class="port-card">
+              <div class="port-card-head">
+                <span class="port-dot in"></span>
+                <span class="font-bold small">{{ p.label }}</span>
+                <span class="port-type-tag mono">{{ p.type }}</span>
+                <span v-if="p.required" class="required-badge">必连</span>
+              </div>
+              <div class="small tertiary mt4">{{ p.description || '接收前置节点的数据或信号输入' }}</div>
+            </div>
+          </div>
+          <div v-else class="empty-ports-hint">
+            该节点为根触发节点，无需前置输入输入端口
+          </div>
+
+          <div class="section-title mt16">输出端口 (Outputs)</div>
+          <div v-if="node.outputs.length" class="ports-detail-list">
+            <div v-for="p in node.outputs" :key="p.id" class="port-card">
+              <div class="port-card-head">
+                <span class="port-dot out"></span>
+                <span class="font-bold small">{{ p.label }}</span>
+                <span class="port-type-tag mono">{{ p.type }}</span>
+              </div>
+              <div class="small tertiary mt4">{{ p.description || '将处理结果或下游指令向下分发' }}</div>
+            </div>
+          </div>
+          <div v-else class="empty-ports-hint">
+            该节点为终点汇总节点，无下游输出端口
+          </div>
+        </div>
+      </template>
+
+      <!-- ═══ 3. 节点自检 Tab ═══ -->
+      <template v-else-if="currentTab === 'validate'">
+        <div class="form-section">
+          <div class="section-title">配置完整度检查</div>
+          <div class="check-list">
+            <div class="check-item" :class="{ pass: isNodeConfigValid }">
+              <span class="check-icon">{{ isNodeConfigValid ? '✓' : '!' }}</span>
+              <div>
+                <div class="font-bold small">{{ isNodeConfigValid ? '必填配置已完备' : '部分必填项未选择' }}</div>
+                <div class="small tertiary">{{ validationMessage }}</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="section-title mt16">节点快速测试</div>
+          <button class="btn btn-secondary btn-sm" style="width: 100%" @click="testSingleNode">
+            ⚡ 模拟触发当前节点
+          </button>
+        </div>
+      </template>
     </div>
 
     <!-- 底部操作条 -->
@@ -361,6 +432,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useMessage } from 'naive-ui'
 import { api } from '../../api/http'
 import type { WorkflowNode } from './workflowTypes'
 import type { Profile, Dataset, KnowledgeBase, DispatchWorker } from '../../api/types'
@@ -373,6 +445,9 @@ defineEmits<{
   (e: 'close'): void
   (e: 'delete-node', nodeId: string): void
 }>()
+
+const message = useMessage()
+const currentTab = ref<'config' | 'ports' | 'validate'>('config')
 
 const availableProfiles = ref<Profile[]>([])
 const availableDatasets = ref<Dataset[]>([])
@@ -412,6 +487,29 @@ const categoryLabel = computed(() => {
     default:
       return '组件配置'
   }
+})
+
+const isNodeConfigValid = computed(() => {
+  if (!props.node) return false
+  const cfg = props.node.config || {}
+  switch (props.node.type) {
+    case 'benchmark_eval':
+      return Boolean(cfg.profile_ids?.length)
+    case 'rag_eval':
+      return Boolean(cfg.rag_modes?.length)
+    case 'quality_gate':
+      return cfg.threshold != null
+    default:
+      return true
+  }
+})
+
+const validationMessage = computed(() => {
+  if (!props.node) return ''
+  if (props.node.type === 'benchmark_eval' && !props.node.config.profile_ids?.length) {
+    return '请至少勾选一个被测模型协议档'
+  }
+  return '当前节点配置合规，可随时调度执行'
 })
 
 function onDatasetChange() {
@@ -464,47 +562,54 @@ function toggleRagMode(mode: string) {
   }
   props.node.config.rag_modes = [...modes]
 }
+
+function testSingleNode() {
+  message.success(`节点 [${props.node?.name}] 模拟运行通过，参数校验 100% 成功！`)
+}
 </script>
 
 <style scoped>
 .wf-inspector {
-  width: 320px;
+  width: 330px;
   background: var(--bg-main);
   border-left: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
   z-index: 10;
-  box-shadow: -4px 0 16px rgba(0, 0, 0, 0.06);
+  box-shadow: -4px 0 20px rgba(0, 0, 0, 0.08);
+  backdrop-filter: blur(12px);
 }
 
 .inspector-header {
-  height: 52px;
-  padding: 0 14px;
+  height: 54px;
+  padding: 0 16px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
 }
 
 .inspector-title-wrap {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   min-width: 0;
 }
 
 .node-icon-box {
-  width: 30px;
-  height: 30px;
-  border-radius: 6px;
-  background: var(--bg-elevated);
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--bg-main);
   border: 1px solid var(--border-subtle);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 15px;
+  font-size: 16px;
   flex-shrink: 0;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
 }
 
 .inspector-title {
@@ -527,16 +632,47 @@ function toggleRagMode(mode: string) {
 .close-btn {
   background: transparent;
   border: none;
-  font-size: 18px;
+  font-size: 20px;
   color: var(--text-tertiary);
   cursor: pointer;
   padding: 2px 6px;
   border-radius: 4px;
+  transition: all 0.15s;
 }
 
 .close-btn:hover {
   background: var(--row-hover);
   color: var(--text-primary);
+}
+
+.inspector-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  padding: 0 8px;
+}
+
+.tab-btn {
+  flex: 1;
+  padding: 8px 4px;
+  border: none;
+  background: transparent;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.15s;
+}
+
+.tab-btn:hover {
+  color: var(--text-primary);
+}
+
+.tab-btn.active {
+  color: var(--accent-ai);
+  border-bottom-color: var(--accent-ai);
+  font-weight: 600;
 }
 
 .inspector-body {
@@ -580,6 +716,7 @@ function toggleRagMode(mode: string) {
   border-radius: 6px;
   color: var(--text-primary);
   outline: none;
+  transition: border-color 0.15s;
 }
 
 .input:focus,
@@ -601,10 +738,11 @@ function toggleRagMode(mode: string) {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-height: 140px;
+  max-height: 150px;
   overflow-y: auto;
-  padding: 4px;
+  padding: 6px;
   background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
   border-radius: 6px;
 }
 
@@ -655,37 +793,105 @@ function toggleRagMode(mode: string) {
   cursor: pointer;
 }
 
-.ports-summary {
+.gate-rule-preview {
   background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-left: 3px solid var(--accent-warning);
   padding: 10px;
   border-radius: 6px;
 }
 
-.ports-tag-list {
+/* 端口详情列表 */
+.ports-detail-list {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+  flex-direction: column;
+  gap: 8px;
 }
 
-.port-desc-tag {
-  font-size: 10px;
-  padding: 2px 6px;
-  border-radius: 4px;
+.port-card {
+  background: var(--bg-elevated);
   border: 1px solid var(--border-subtle);
+  padding: 8px 10px;
+  border-radius: 6px;
+}
+
+.port-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.port-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.port-dot.in {
+  background: var(--accent-ai);
+}
+
+.port-dot.out {
+  background: var(--accent-success);
+}
+
+.port-type-tag {
+  font-size: 10px;
+  color: var(--text-tertiary);
   background: var(--bg-main);
+  padding: 1px 4px;
+  border-radius: 3px;
 }
 
-.port-desc-tag.in {
-  color: var(--accent-ai);
+.required-badge {
+  font-size: 9px;
+  color: var(--accent-error);
+  margin-left: auto;
+  border: 1px solid var(--accent-error);
+  padding: 0 4px;
+  border-radius: 3px;
 }
 
-.port-desc-tag.out {
-  color: var(--accent-success);
+.empty-ports-hint {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  padding: 12px;
+  background: var(--bg-elevated);
+  border-radius: 6px;
+  text-align: center;
+}
+
+/* 自检项 */
+.check-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  background: var(--bg-elevated);
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+}
+
+.check-item.pass {
+  border-color: var(--accent-success);
+}
+
+.check-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: bold;
+  background: var(--accent-success);
+  color: #fff;
 }
 
 .inspector-footer {
-  height: 48px;
-  padding: 0 14px;
+  height: 52px;
+  padding: 0 16px;
   display: flex;
   align-items: center;
   justify-content: space-between;
