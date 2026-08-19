@@ -208,11 +208,27 @@ except AppError as exc:
 
 未配置 Agent 协议档、上游 4xx/5xx、超时分别归一为 `VALIDATION` / `UPSTREAM` / `TIMEOUT`，与 `llm.py` 现实现一致。
 
+### 5.2.2 大模型接入、流式与推理模型规范（核心准则）
+1. **驱动协议档绑定**：由 `settings.agent_profile_id` 绑定唯一生效的驱动模型，前端支持点击模型胶囊即时下拉切换并持久化。
+2. **Token 预算与超时保障**：流式意图识别与规划调用的 `max_tokens` 必须保证至少 **4096**，超时时间 `timeout_s` 至少 **45.0s**，严禁使用 512 等过小参数，防止推理模型（如 `mimo-v2.5-pro`、`deepseek-reasoner`）在输出深度思考链后耗尽 Token 截断正文。
+3. **推理思考字段兼容性**：流式提取器 `delta_of` 必须自适应支持 `reasoning_content`、`reasoning` 与 `thought` 等多种字段名。
+4. **输出容错与自然语言降级**：`_parse_llm_json` 必须具备纯文本自动降级机制，当模型直接输出自然语言（未包裹 JSON）时，自动提取为 `chat` 意图，严禁粗暴报错或丢字。
+5. **系统提示词约束**：严禁在系统提示词中写死“一句话回复”等限制用户字数的指令，模型回复中严禁暴露“负责输出结构化JSON”等元指令话术。
+6. **历史消息上下文去重**：加载前 20 条历史时必须排除当前刚落库的消息，严禁在 Prompt 历史末尾重复灌入当前用户消息。
+
+### 5.2.3 耗时计量与全链路下发契约
+1. **模型层耗时**：`_stream_llm_plan` 与 `call_agent_model` 必须精确计量端到端耗时，并在 `thought` 事件 payload 中携带 `latency_ms`。
+2. **工具层耗时**：`_call_tool` 执行必须计算毫秒级耗时，并在 `tool_result` 事件 payload 中携带 `latency_ms`。
+3. **规则降级耗时**：规则意图拆解同样必须计算从收到用户消息到交付的耗时并下发 `latency_ms`。
+
 ### 5.3 前端规范 (Vue 3 / TypeScript / Naive UI)
 1. **统一架构**：采用 `<script setup lang="ts">` + `naive-ui`，严格遵循薄荷绿/深空蓝设计令牌 (`naive-theme.ts`)。
 2. **通信与重连**：API 使用相对路径 `/api/*`；WS 使用相对路径 `/ws/agent?ticket=${ticket}`，支持断线按 `last_event_id` 自动补发事件流。关闭码 `4401` 重新领票，`4404` 视为会话不存在。
 3. **确认卡默认值** 与 API.md §5 / PRD 5.2.2 同一份，禁止前端另备 sample_size=20 等第二套默认。
-4. ContextMeter 只读 `GET /api/sessions/{id}/messages` 的 `context_meter`；自定义斜杠只请求 `/api/slash-commands`。
+4. **DevTools 控制台彩色日志规范**：前端 WebSocket 客户端与 Agent 视图必须在关键生命周期输出结构化彩色调试日志（🚀 发送、📩 收到事件、💭 思考流式、💡 思考交付、⚙️ 工具调用、✅ 工具结果、📋 确认卡、❌ 错误），便于开发者与用户实时调试。
+5. **思考卡与打字机体验**：思考卡根据 `latency_ms` 显示 `formatLatency` 耗时徽章（如 `16.2s`），在生成完成 800ms 后自动平滑折叠；打字机根据全文长度自适应提速推进。
+6. **模型下拉切换**：顶部与输入框模型胶囊使用 `<n-dropdown>` 统一绑定系统协议档列表，点击切换即时生效。
+7. ContextMeter 只读 `GET /api/sessions/{id}/messages` 的 `context_meter`；自定义斜杠只请求 `/api/slash-commands`。
 
 ---
 
