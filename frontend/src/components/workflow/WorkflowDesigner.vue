@@ -23,17 +23,17 @@
         </div>
 
         <button class="btn btn-secondary btn-sm toolbar-btn" title="拓扑自动分层排版 (Auto Layout)" @click="autoLayout">
-          <span class="btn-icon">📐</span>
+          <span class="tool-icon">📐</span>
           <span>排版</span>
         </button>
 
         <button class="btn btn-secondary btn-sm toolbar-btn" title="导出当前工作流为 JSON 配置文件" @click="exportWorkflowJson">
-          <span class="btn-icon">📥</span>
+          <span class="tool-icon">📥</span>
           <span>导出</span>
         </button>
 
         <button class="btn btn-secondary btn-sm toolbar-btn" title="从 JSON 文件导入工作流" @click="triggerImportJson">
-          <span class="btn-icon">📤</span>
+          <span class="tool-icon">📤</span>
           <span>导入</span>
         </button>
         <input
@@ -45,7 +45,7 @@
         />
 
         <button class="btn btn-secondary btn-sm toolbar-btn" title="清空当前画布" @click="clearCanvas">
-          <span class="btn-icon">🧹</span>
+          <span class="tool-icon">🧹</span>
           <span>清空</span>
         </button>
       </div>
@@ -82,7 +82,7 @@
         </span>
 
         <button
-          class="btn btn-secondary btn-sm"
+          class="btn btn-secondary btn-sm toolbar-btn"
           :title="isFullScreen ? '退出全屏 (Esc)' : '全屏沉浸式编排'"
           @click="isFullScreen = !isFullScreen"
         >
@@ -992,14 +992,14 @@ async function runWorkflow() {
 
 /* ═══ 顶部控制工具栏 ═══ */
 .designer-toolbar {
-  height: 50px;
+  height: 48px;
   background: var(--bg-elevated);
   border-bottom: 1px solid var(--border-subtle);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 10px;
-  gap: 6px;
+  padding: 0 12px;
+  gap: 8px;
   flex-shrink: 0;
   user-select: none;
   backdrop-filter: blur(12px);
@@ -1013,7 +1013,7 @@ async function runWorkflow() {
 .toolbar-right {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   flex-shrink: 0;
   white-space: nowrap;
 }
@@ -1021,12 +1021,13 @@ async function runWorkflow() {
 .wf-title-badge {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   font-weight: 700;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-primary);
   white-space: nowrap;
   flex-shrink: 0;
+  height: 28px;
 }
 
 .badge-icon {
@@ -1038,29 +1039,31 @@ async function runWorkflow() {
 }
 
 .badge-sub {
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 600;
   color: var(--accent-ai);
   background: var(--t-agent);
-  padding: 1px 4px;
+  padding: 1px 5px;
   border-radius: 4px;
   white-space: nowrap;
 }
 
 .select-tpl {
-  padding: 3px 6px;
-  font-size: 11px;
+  height: 28px;
+  padding: 0 8px;
+  font-size: 12px;
   background: var(--bg-main);
   border: 1px solid var(--border-subtle);
-  border-radius: 5px;
+  border-radius: 6px;
   color: var(--text-primary);
   outline: none;
   cursor: pointer;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
   white-space: nowrap;
   flex-shrink: 0;
-  max-width: 150px;
+  max-width: 160px;
   text-overflow: ellipsis;
+  box-sizing: border-box;
 }
 
 .select-tpl:focus {
@@ -1068,21 +1071,39 @@ async function runWorkflow() {
 }
 
 .toolbar-btn {
-  padding: 3px 7px;
-  font-size: 11px;
+  height: 28px !important;
+  min-height: 28px !important;
+  padding: 0 10px !important;
+  font-size: 12px !important;
+  border-radius: 6px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 4px !important;
+  box-sizing: border-box;
+}
+
+.tool-icon {
+  font-size: 13px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .edge-status-legend {
+  height: 28px;
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   background: var(--bg-main);
   border: 1px solid var(--border-subtle);
-  padding: 2px 6px;
-  border-radius: 8px;
-  font-size: 9px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 10px;
   color: var(--text-tertiary);
   flex-shrink: 0;
+  box-sizing: border-box;
 }
 
 .legend-item {
@@ -1119,24 +1140,29 @@ async function runWorkflow() {
 .zoom-ctrl {
   display: flex;
   align-items: center;
+  height: 28px;
 }
 
 .zoom-btn {
-  padding: 2px 6px;
-  font-size: 11px;
+  height: 28px;
+  padding: 0 8px;
+  font-size: 12px;
+  box-sizing: border-box;
 }
 
 .validation-pill {
+  height: 28px;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  font-size: 10px;
-  padding: 2px 8px;
-  border-radius: 10px;
+  gap: 5px;
+  font-size: 11px;
+  padding: 0 10px;
+  border-radius: 6px;
   background: var(--bg-main);
   border: 1px solid var(--border-subtle);
   white-space: nowrap;
   flex-shrink: 0;
+  box-sizing: border-box;
 }
 
 .validation-pill.valid {
@@ -1157,24 +1183,26 @@ async function runWorkflow() {
 }
 
 .v-dot {
-  width: 5px;
-  height: 5px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   flex-shrink: 0;
 }
 
 .run-btn {
+  height: 28px !important;
+  min-height: 28px !important;
   font-weight: 700;
   font-size: 12px;
   background: var(--accent-ai);
   border-color: var(--accent-ai);
   color: #fff;
-  padding: 0 14px;
-  height: 30px;
-  border-radius: 6px;
+  padding: 0 14px !important;
+  border-radius: 6px !important;
   transition: all 0.2s;
   white-space: nowrap;
   flex-shrink: 0;
+  box-sizing: border-box;
 }
 
 .run-btn:hover:not(:disabled) {
@@ -1186,17 +1214,17 @@ async function runWorkflow() {
 /* ═══ 运行执行 HUD 悬浮监控条 ═══ */
 .execution-hud-bar {
   position: absolute;
-  top: 60px;
+  top: 56px;
   left: 50%;
   transform: translateX(-50%);
   background: rgba(var(--bg-main-rgb, 17, 24, 39), 0.92);
   backdrop-filter: blur(16px);
   border: 1px solid var(--border-subtle);
-  border-radius: 12px;
-  padding: 8px 16px;
+  border-radius: 10px;
+  padding: 6px 14px;
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 14px;
   z-index: 100;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
   animation: slide-down 0.25s ease-out;
@@ -1221,8 +1249,8 @@ async function runWorkflow() {
 }
 
 .hud-spinner {
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
   border: 2px solid rgba(56, 189, 248, 0.3);
   border-top-color: #38bdf8;
   border-radius: 50%;
@@ -1253,8 +1281,8 @@ async function runWorkflow() {
 }
 
 .hud-progress-bar {
-  width: 100px;
-  height: 6px;
+  width: 90px;
+  height: 5px;
   background: rgba(255, 255, 255, 0.1);
   border-radius: 3px;
   overflow: hidden;
