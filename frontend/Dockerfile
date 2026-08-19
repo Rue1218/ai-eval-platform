@@ -1,5 +1,5 @@
-# 构建阶段
-FROM node:20-alpine AS build
+# 构建阶段 (采用 Node.js 22 LTS 基础镜像)
+FROM node:22-alpine AS build
 WORKDIR /app
 
 # 限制 Vite 构建堆，避免小规格生产服务器与其他容器争抢内存后持续 swap。

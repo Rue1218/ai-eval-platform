@@ -4,6 +4,10 @@
  */
 import type { TaskKind, TaskStatus } from '../../api/types'
 
+/** 节点卡片标准几何尺寸 */
+export const NODE_WIDTH = 264
+export const NODE_MIN_HEIGHT = 108
+
 /** 节点大类 */
 export type WorkflowNodeCategory =
   | 'trigger'      // 触发与调度
@@ -80,6 +84,21 @@ export interface WorkflowEdge {
   label?: string
   animated?: boolean
   status?: 'idle' | 'active' | 'success' | 'error'
+}
+
+/** 计算端口在节点卡片上的纵向像素绝对偏移（精准对其锚点与连线） */
+export function getNodePortY(
+  node: { inputs?: PortDef[]; outputs?: PortDef[] },
+  portId: string,
+  direction: 'input' | 'output',
+): number {
+  const ports = direction === 'input' ? node.inputs || [] : node.outputs || []
+  const idx = ports.findIndex((p) => p.id === portId)
+  const count = ports.length
+  if (count <= 1) return 56
+  if (count === 2) return 44 + (idx >= 0 ? idx : 0) * 26
+  if (count === 3) return 38 + (idx >= 0 ? idx : 0) * 22
+  return 36 + (idx >= 0 ? idx : 0) * 20
 }
 
 /** 工作流元数据与图结构 */

@@ -91,7 +91,7 @@
           @click="runWorkflow"
         >
           <span v-if="!isExecuting">▶ 立即执行 / 调度入队</span>
-          <span v-else>正在调度执行中...</span>
+          <span v-else>正在流水线执行中...</span>
         </button>
       </div>
     </div>
@@ -129,23 +129,32 @@
                 <circle cx="14" cy="14" r="1.1" class="grid-dot" />
               </pattern>
 
-              <!-- 连线渐变 -->
+              <!-- 连线动态流光渐变 -->
               <linearGradient id="edge-flow-grad" x1="0%" y1="0%" x2="100%" y2="0%">
-                <stop offset="0%" stop-color="var(--accent-ai)" stop-opacity="0.85" />
-                <stop offset="100%" stop-color="var(--accent-success)" stop-opacity="0.95" />
+                <stop offset="0%" stop-color="var(--accent-ai)" stop-opacity="0.9" />
+                <stop offset="100%" stop-color="var(--accent-success)" stop-opacity="1" />
               </linearGradient>
 
               <!-- 门禁通过渐变 -->
               <linearGradient id="edge-pass-grad" x1="0%" y1="0%" x2="100%" y2="0%">
                 <stop offset="0%" stop-color="var(--accent-success)" />
-                <stop offset="100%" stop-color="var(--accent-success)" stop-opacity="0.7" />
+                <stop offset="100%" stop-color="var(--accent-success)" stop-opacity="0.8" />
               </linearGradient>
 
               <!-- 门禁阻断渐变 -->
               <linearGradient id="edge-fail-grad" x1="0%" y1="0%" x2="100%" y2="0%">
                 <stop offset="0%" stop-color="var(--accent-error)" />
-                <stop offset="100%" stop-color="var(--accent-error)" stop-opacity="0.7" />
+                <stop offset="100%" stop-color="var(--accent-error)" stop-opacity="0.8" />
               </linearGradient>
+
+              <!-- 霓虹发光滤镜 -->
+              <filter id="neon-glow" x="-20%" y="-20%" width="140%" height="140%">
+                <feGaussianBlur stdDeviation="3" result="blur" />
+                <feMerge>
+                  <feMergeNode in="blur" />
+                  <feMergeNode in="SourceGraphic" />
+                </feMerge>
+              </filter>
             </defs>
 
             <!-- 网格背景 -->
@@ -159,7 +168,7 @@
                 class="edge-hit-area"
                 @click.stop="handleDeleteEdge(edge.id)"
               />
-              <!-- 连线主体 -->
+              <!-- 连线底色光晕与主体 -->
               <path
                 :d="edge.d"
                 class="edge-line"
@@ -170,18 +179,23 @@
                   'edge-fail': edge.sourcePortId === 'fail',
                 }"
               />
-              <!-- 执行时流动的光效粒子 -->
+              <!-- 执行时流动的动态光效粒子列 (Flowing Particles) -->
               <template v-if="isExecuting || edge.status === 'active'">
-                <circle class="flow-particle" r="3.5" fill="var(--accent-ai)">
-                  <animateMotion :path="edge.d" dur="1.7s" repeatCount="indefinite" />
+                <!-- 头部高亮粒子 -->
+                <circle class="flow-particle" r="4" fill="var(--accent-success)" filter="url(#neon-glow)">
+                  <animateMotion :path="edge.d" dur="1.4s" repeatCount="indefinite" />
                 </circle>
-                <circle class="flow-particle" r="2.5" fill="var(--accent-success)" opacity="0.8">
-                  <animateMotion :path="edge.d" dur="1.7s" begin="-0.85s" repeatCount="indefinite" />
+                <!-- 尾随粒子 1 -->
+                <circle class="flow-particle" r="3" fill="var(--accent-ai)" opacity="0.85">
+                  <animateMotion :path="edge.d" dur="1.4s" begin="-0.45s" repeatCount="indefinite" />
+                </circle>
+                <!-- 尾随粒子 2 -->
+                <circle class="flow-particle" r="2.2" fill="var(--accent-ai)" opacity="0.6">
+                  <animateMotion :path="edge.d" dur="1.4s" begin="-0.9s" repeatCount="indefinite" />
                 </circle>
               </template>
             </g>
 
-            <!-- 连线中间标签与删除按钮（HTML 叠加层） -->
             <!-- 正在拖拽中的动态连线预览 -->
             <path
               v-if="connectingLine"
@@ -190,7 +204,7 @@
             />
           </svg>
 
-          <!-- 连线中间标签气泡 -->
+          <!-- 连线中间气泡标签（精准定位在 midX, midY 几何中心） -->
           <div
             v-for="edge in edgePaths"
             :key="'label-' + edge.id"
@@ -198,9 +212,12 @@
             :class="{
               'label-pass': edge.sourcePortId === 'pass',
               'label-fail': edge.sourcePortId === 'fail',
+              active: edge.status === 'active',
+              success: edge.status === 'success',
             }"
             :style="{
-              transform: `translate(${edge.midX}px, ${edge.midY}px)`,
+              left: `${edge.midX}px`,
+              top: `${edge.midY}px`,
             }"
             @click.stop="handleDeleteEdge(edge.id)"
             title="点击删除连接链路"
@@ -227,35 +244,35 @@
 
         <!-- 底部快捷提示浮条 -->
         <div class="canvas-hints">
-          <span>滚轮缩放 · 拖拽画布平移 · 端口拖拽连线 · 双击节点配置属性 · 点击连线气泡删除</span>
+          <span>滚轮缩放 · 拖拽画布平移 · 端口拖拽连线 · 双击节点配置参数 · 点击链路气泡删除</span>
         </div>
 
         <!-- ═══ 右下角小地图 (Mini-Map) ═══ -->
-        <div class="canvas-minimap" title="小地图 (点击快速定位)">
-          <svg viewBox="0 0 2000 1400" class="minimap-svg">
-            <rect width="2000" height="1400" fill="var(--bg-elevated)" opacity="0.8" />
-            <!-- 微型节点块 -->
+        <div class="canvas-minimap" title="小地图 (点击可快速定位视野)">
+          <svg viewBox="0 0 2400 1600" class="minimap-svg">
+            <rect width="2400" height="1600" fill="var(--bg-elevated)" opacity="0.85" />
+            <!-- 微型节点卡片 -->
             <rect
               v-for="n in nodes"
               :key="'mini-' + n.id"
-              :x="n.x + 200"
+              :x="n.x + 100"
               :y="n.y + 100"
-              width="250"
-              height="140"
-              rx="20"
+              width="264"
+              height="110"
+              rx="16"
               :fill="n.color || 'var(--accent-ai)'"
-              opacity="0.85"
+              opacity="0.88"
             />
             <!-- 当前视口指示框 -->
             <rect
-              :x="-view.x * (1 / view.k) + 200"
+              :x="-view.x * (1 / view.k) + 100"
               :y="-view.y * (1 / view.k) + 100"
-              :width="900 / view.k"
-              :height="600 / view.k"
+              :width="1000 / view.k"
+              :height="650 / view.k"
               fill="none"
               stroke="var(--accent-ai)"
-              stroke-width="14"
-              stroke-dasharray="24 16"
+              stroke-width="16"
+              stroke-dasharray="28 18"
             />
           </svg>
         </div>
@@ -281,11 +298,13 @@ import WorkflowNode from './WorkflowNode.vue'
 import WorkflowInspector from './WorkflowInspector.vue'
 import { WORKFLOW_TEMPLATES, createNode } from './workflowTemplates'
 import { api } from '../../api/http'
-import type {
-  WorkflowNode as IWorkflowNode,
-  WorkflowEdge,
-  WorkflowNodeType,
-  WorkflowValidationResult,
+import {
+  type WorkflowNode as IWorkflowNode,
+  type WorkflowEdge,
+  type WorkflowNodeType,
+  type WorkflowValidationResult,
+  getNodePortY,
+  NODE_WIDTH,
 } from './workflowTypes'
 
 const emit = defineEmits<{
@@ -296,7 +315,7 @@ const message = useMessage()
 const router = useRouter()
 
 // 画布视口缩放与位移
-const view = ref({ x: 50, y: 40, k: 0.88 })
+const view = ref({ x: 50, y: 50, k: 0.85 })
 const canvasContainerRef = ref<HTMLElement | null>(null)
 const importFileRef = ref<HTMLInputElement | null>(null)
 const isFullScreen = ref(false)
@@ -316,7 +335,7 @@ const panStart = ref({ x: 0, y: 0, vx: 0, vy: 0 })
 const draggingNodeId = ref<string | null>(null)
 const nodeDragOffset = ref({ x: 0, y: 0 })
 
-// 交互状态：端口拖拽连线与磁吸吸附
+// 交互状态：端口拖拽连线
 const connectingPort = ref<{
   nodeId: string
   portId: string
@@ -361,7 +380,7 @@ function zoomBy(factor: number) {
 
 /** 复位视图 */
 function resetView() {
-  view.value = { x: 50, y: 40, k: 0.88 }
+  view.value = { x: 50, y: 50, k: 0.85 }
 }
 
 /** 自适应适配视口中所有节点 */
@@ -373,13 +392,13 @@ function fitView() {
   const minX = Math.min(...nodes.value.map((n) => n.x))
   const minY = Math.min(...nodes.value.map((n) => n.y))
   view.value = {
-    x: Math.max(20, 70 - minX * 0.75),
-    y: Math.max(20, 60 - minY * 0.75),
-    k: 0.75,
+    x: Math.max(20, 60 - minX * 0.72),
+    y: Math.max(20, 60 - minY * 0.72),
+    k: 0.72,
   }
 }
 
-/** 拓扑自动分层排版 */
+/** 拓扑自动分层排版（宽阔间距，避免标签挤压） */
 function autoLayout() {
   if (!nodes.value.length) return
   const inDegrees: Record<string, number> = {}
@@ -395,7 +414,7 @@ function autoLayout() {
     levels[lvl].push(n)
   })
 
-  let colX = 70
+  let colX = 60
   Object.keys(levels)
     .map(Number)
     .sort((a, b) => a - b)
@@ -403,9 +422,9 @@ function autoLayout() {
       const colNodes = levels[lvl]
       colNodes.forEach((n, idx) => {
         n.x = colX
-        n.y = 90 + idx * 190
+        n.y = 120 + idx * 190
       })
-      colX += 360
+      colX += 420
     })
 
   message.success('已完成拓扑自动分层排版')
@@ -468,7 +487,7 @@ function handleFileImport(e: Event) {
 
 /** 从物料库添加新节点至视口中央 */
 function handleAddNodeFromPalette(type: WorkflowNodeType) {
-  const x = Math.round((220 - view.value.x) / view.value.k)
+  const x = Math.round((240 - view.value.x) / view.value.k)
   const y = Math.round((160 - view.value.y) / view.value.k)
   const newNode = createNode(type, x, y)
   nodes.value.push(newNode)
@@ -484,8 +503,8 @@ function onCanvasDrop(event: DragEvent) {
   if (!rect) return
   const clientX = event.clientX - rect.left
   const clientY = event.clientY - rect.top
-  const x = Math.round((clientX - view.value.x) / view.value.k) - 128
-  const y = Math.round((clientY - view.value.y) / view.value.k) - 45
+  const x = Math.round((clientX - view.value.x) / view.value.k) - 132
+  const y = Math.round((clientY - view.value.y) / view.value.k) - 50
   const newNode = createNode(type, x, y)
   nodes.value.push(newNode)
   selectedNode.value = newNode
@@ -501,7 +520,7 @@ function handleInspectNode(node: IWorkflowNode) {
 }
 
 function handleDuplicateNode(node: IWorkflowNode) {
-  const newNode = createNode(node.type, node.x + 35, node.y + 35)
+  const newNode = createNode(node.type, node.x + 40, node.y + 40)
   newNode.name = `${node.name} (副本)`
   newNode.config = JSON.parse(JSON.stringify(node.config))
   nodes.value.push(newNode)
@@ -532,7 +551,7 @@ function defaultEdgeLabel(edge: WorkflowEdge): string {
   return '数据流'
 }
 
-/** 计算连线贝塞尔曲线坐标及中心气泡坐标 */
+/** 精准计算连线起点终点与中心标签坐标（100% 像素对齐锚点） */
 const edgePaths = computed(() => {
   const nodeMap = new Map(nodes.value.map((n) => [n.id, n]))
   return edges.value
@@ -541,10 +560,13 @@ const edgePaths = computed(() => {
       const tgtNode = nodeMap.get(edge.targetNodeId)
       if (!srcNode || !tgtNode) return null
 
-      const x1 = srcNode.x + 256
-      const y1 = srcNode.y + 52
+      // 起点：源节点右侧输出锚点中心 (x + NODE_WIDTH, y + getNodePortY)
+      const x1 = srcNode.x + NODE_WIDTH
+      const y1 = srcNode.y + getNodePortY(srcNode, edge.sourcePortId, 'output')
+
+      // 终点：目标节点左侧输入锚点中心 (x, y + getNodePortY)
       const x2 = tgtNode.x
-      const y2 = tgtNode.y + 52
+      const y2 = tgtNode.y + getNodePortY(tgtNode, edge.targetPortId, 'input')
 
       const dx = Math.max(50, Math.abs(x2 - x1) * 0.45)
       const d = `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`
@@ -565,7 +587,7 @@ const edgePaths = computed(() => {
     .filter(Boolean) as Array<WorkflowEdge & { d: string; midX: number; midY: number }>
 })
 
-/** 拖拽中的动态连线预览（支持磁吸微吸附效果） */
+/** 拖拽中的动态连线预览 */
 const connectingLine = computed(() => {
   if (!connectingPort.value) return null
   const p = connectingPort.value
@@ -672,8 +694,8 @@ function onPortPointerDown(
   const node = nodes.value.find((n) => n.id === nodeId)
   if (!node) return
 
-  const startX = direction === 'output' ? node.x + 256 : node.x
-  const startY = node.y + 52
+  const startX = direction === 'output' ? node.x + NODE_WIDTH : node.x
+  const startY = node.y + getNodePortY(node, portId, direction)
 
   connectingPort.value = {
     nodeId,
@@ -723,32 +745,61 @@ function onPortPointerUp(
   connectingPort.value = null
 }
 
-/* ─── 一键执行与真实任务下发 (DAG Runner) ─── */
+/* ─── 一键执行与真实任务下发 (DAG Pipeline Runner with Animated Edges) ─── */
 async function runWorkflow() {
   if (!nodes.value.length) return
   isExecuting.value = true
 
+  // 1. 重置所有节点与连线状态
   nodes.value.forEach((n) => {
     n.status = 'queued'
     n.progress = 0
   })
+  edges.value.forEach((e) => {
+    e.status = 'idle'
+  })
 
-  message.loading('正在编译工作流拓扑并向平台调度引擎下发任务...', { duration: 1500 })
+  message.loading('正在流水线编译 DAG 并调度任务执行...', { duration: 1500 })
 
   try {
+    // 2. 依次按链路流转执行节点，并点亮连线流动光效
     for (let i = 0; i < nodes.value.length; i++) {
       const n = nodes.value[i]
       n.status = 'running'
-      n.progress = 25
+      n.progress = 30
 
-      await new Promise((r) => setTimeout(r, 400))
+      // 点亮通往该节点的前置连线为 success，通往下游的连线为 active
+      edges.value.forEach((e) => {
+        if (e.targetNodeId === n.id) {
+          e.status = 'success'
+        }
+        if (e.sourceNodeId === n.id) {
+          e.status = 'active'
+        }
+      })
+
+      await new Promise((r) => setTimeout(r, 450))
       n.progress = 85
-      await new Promise((r) => setTimeout(r, 250))
+      await new Promise((r) => setTimeout(r, 300))
 
       n.status = 'succeeded'
       n.progress = 100
+
+      // 激活从当前节点发出的下游连线粒子流
+      edges.value.forEach((e) => {
+        if (e.sourceNodeId === n.id) {
+          e.status = 'active'
+        }
+      })
+      await new Promise((r) => setTimeout(r, 200))
     }
 
+    // 全部完成，连线置为 success
+    edges.value.forEach((e) => {
+      e.status = 'success'
+    })
+
+    // 3. 真正向平台 API 下发任务创建
     const bmNode = nodes.value.find((n) => n.type === 'benchmark_eval')
     const ragNode = nodes.value.find((n) => n.type === 'rag_eval')
     const stressNode = nodes.value.find((n) => n.type === 'stress_test')
@@ -974,7 +1025,7 @@ async function runWorkflow() {
 .edge-hit-area {
   fill: none;
   stroke: transparent;
-  stroke-width: 20;
+  stroke-width: 24;
   cursor: pointer;
 }
 
@@ -988,25 +1039,37 @@ async function runWorkflow() {
   stroke: var(--text-tertiary);
   stroke-width: 2;
   stroke-dasharray: 6 5;
-  transition: stroke 0.2s, stroke-width 0.2s;
+  transition: stroke 0.25s, stroke-width 0.25s;
 }
 
+/* 动态流动的活跃连线 */
 .edge-line.active {
   stroke: url(#edge-flow-grad);
-  stroke-width: 2.8;
+  stroke-width: 3;
+  stroke-dasharray: 8 6;
+  animation: flow-dash 0.6s linear infinite;
+  filter: drop-shadow(0 0 5px var(--accent-ai));
+}
+
+@keyframes flow-dash {
+  to {
+    stroke-dashoffset: -28;
+  }
+}
+
+.edge-line.success {
+  stroke: var(--accent-success);
+  stroke-width: 2.5;
   stroke-dasharray: none;
-  filter: drop-shadow(0 0 4px var(--accent-ai));
+  filter: drop-shadow(0 0 3px var(--accent-success));
 }
 
 .edge-line.edge-pass {
   stroke: url(#edge-pass-grad);
-  stroke-width: 2.5;
-  stroke-dasharray: none;
 }
 
 .edge-line.edge-fail {
   stroke: url(#edge-fail-grad);
-  stroke-width: 2.5;
   stroke-dasharray: 5 4;
 }
 
@@ -1018,34 +1081,32 @@ async function runWorkflow() {
   filter: drop-shadow(0 0 6px var(--accent-ai));
 }
 
-/* 连线中间气泡标签 */
+/* 连线中间气泡标签（精准水平垂直居中于中点坐标） */
 .edge-label-pill {
   position: absolute;
-  top: 0;
-  left: 0;
-  padding: 2px 8px;
-  border-radius: 10px;
+  transform: translate(-50%, -50%);
+  padding: 3px 9px;
+  border-radius: 12px;
   background: var(--bg-main);
   border: 1px solid var(--border-subtle);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 500;
   color: var(--text-secondary);
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
+  white-space: nowrap;
   cursor: pointer;
-  transform-origin: center center;
-  margin-left: -32px;
-  margin-top: -10px;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
   transition: all 0.15s;
-  z-index: 3;
+  z-index: 5;
+  user-select: none;
 }
 
 .edge-label-pill:hover {
   border-color: var(--accent-error);
   color: var(--accent-error);
-  transform: scale(1.15);
+  transform: translate(-50%, -50%) scale(1.12);
 }
 
 .edge-label-pill.label-pass {
@@ -1060,8 +1121,19 @@ async function runWorkflow() {
   border-color: var(--accent-error);
 }
 
+.edge-label-pill.active {
+  border-color: var(--accent-ai);
+  color: var(--accent-ai);
+  box-shadow: 0 0 10px rgba(99, 102, 241, 0.35);
+}
+
+.edge-label-pill.success {
+  border-color: var(--accent-success);
+  color: var(--accent-success);
+}
+
 .pill-del {
-  font-size: 11px;
+  font-size: 12px;
   opacity: 0.6;
 }
 

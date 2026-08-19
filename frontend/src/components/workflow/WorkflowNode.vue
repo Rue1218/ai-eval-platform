@@ -86,55 +86,53 @@
       </button>
     </div>
 
-    <!-- 左侧输入锚点列表 (Inputs) -->
-    <div class="ports-container input-ports">
+    <!-- 左侧输入锚点列表 (Inputs) - 精确像素定位 -->
+    <div
+      v-for="port in node.inputs"
+      :key="port.id"
+      class="port-anchor-wrap input-anchor-wrap"
+      :style="{ top: `${getPortY(port.id, 'input')}px` }"
+      :title="`${port.label} [类型: ${port.type}]`"
+    >
       <div
-        v-for="port in node.inputs"
-        :key="port.id"
-        class="port-item input-port"
-        :title="`${port.label} [类型: ${port.type}]`"
+        class="port-anchor input-anchor"
+        :data-node-id="node.id"
+        :data-port-id="port.id"
+        :data-port-direction="'input'"
+        @pointerdown.stop="$emit('port-pointerdown', $event, node.id, port.id, 'input')"
+        @pointerup.stop="$emit('port-pointerup', $event, node.id, port.id, 'input')"
       >
-        <div
-          class="port-anchor input-anchor"
-          :data-node-id="node.id"
-          :data-port-id="port.id"
-          :data-port-direction="'input'"
-          @pointerdown.stop="$emit('port-pointerdown', $event, node.id, port.id, 'input')"
-          @pointerup.stop="$emit('port-pointerup', $event, node.id, port.id, 'input')"
-        >
-          <span class="anchor-center"></span>
-        </div>
-        <span class="port-label">{{ port.label }}</span>
+        <span class="anchor-center"></span>
       </div>
+      <span class="port-tooltip-label left">{{ port.label }}</span>
     </div>
 
-    <!-- 右侧输出锚点列表 (Outputs) -->
-    <div class="ports-container output-ports">
+    <!-- 右侧输出锚点列表 (Outputs) - 精确像素定位 -->
+    <div
+      v-for="port in node.outputs"
+      :key="port.id"
+      class="port-anchor-wrap output-anchor-wrap"
+      :class="{
+        'port-pass': port.id === 'pass',
+        'port-fail': port.id === 'fail',
+      }"
+      :style="{ top: `${getPortY(port.id, 'output')}px` }"
+      :title="`${port.label} [类型: ${port.type}]`"
+    >
+      <span class="port-tooltip-label right">{{ port.label }}</span>
       <div
-        v-for="port in node.outputs"
-        :key="port.id"
-        class="port-item output-port"
+        class="port-anchor output-anchor"
         :class="{
-          'port-pass': port.id === 'pass',
-          'port-fail': port.id === 'fail',
+          'anchor-pass': port.id === 'pass',
+          'anchor-fail': port.id === 'fail',
         }"
-        :title="`${port.label} [类型: ${port.type}]`"
+        :data-node-id="node.id"
+        :data-port-id="port.id"
+        :data-port-direction="'output'"
+        @pointerdown.stop="$emit('port-pointerdown', $event, node.id, port.id, 'output')"
+        @pointerup.stop="$emit('port-pointerup', $event, node.id, port.id, 'output')"
       >
-        <span class="port-label">{{ port.label }}</span>
-        <div
-          class="port-anchor output-anchor"
-          :class="{
-            'anchor-pass': port.id === 'pass',
-            'anchor-fail': port.id === 'fail',
-          }"
-          :data-node-id="node.id"
-          :data-port-id="port.id"
-          :data-port-direction="'output'"
-          @pointerdown.stop="$emit('port-pointerdown', $event, node.id, port.id, 'output')"
-          @pointerup.stop="$emit('port-pointerup', $event, node.id, port.id, 'output')"
-        >
-          <span class="anchor-center"></span>
-        </div>
+        <span class="anchor-center"></span>
       </div>
     </div>
   </div>
@@ -142,7 +140,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { WorkflowNode } from './workflowTypes'
+import { type WorkflowNode, getNodePortY } from './workflowTypes'
 
 const props = defineProps<{
   node: WorkflowNode
@@ -158,6 +156,10 @@ defineEmits<{
   (e: 'port-pointerdown', event: PointerEvent, nodeId: string, portId: string, direction: 'input' | 'output'): void
   (e: 'port-pointerup', event: PointerEvent, nodeId: string, portId: string, direction: 'input' | 'output'): void
 }>()
+
+function getPortY(portId: string, direction: 'input' | 'output'): number {
+  return getNodePortY(props.node, portId, direction)
+}
 
 const categoryLabel = computed(() => {
   switch (props.node.category) {
@@ -253,7 +255,8 @@ const summaryTags = computed(() => {
 <style scoped>
 .wf-node {
   position: absolute;
-  width: 256px;
+  width: 264px;
+  min-height: 108px;
   background: var(--bg-main);
   border: 1px solid var(--border-subtle);
   border-radius: 12px;
@@ -261,12 +264,12 @@ const summaryTags = computed(() => {
   cursor: grab;
   user-select: none;
   z-index: 2;
-  transition: box-shadow 0.2s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.2s, transform 0.05s ease-out;
+  transition: box-shadow 0.2s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.2s;
   backdrop-filter: blur(12px);
 }
 
 .wf-node:hover {
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.12);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.14);
   border-color: color-mix(in srgb, var(--node-accent) 60%, var(--border-subtle));
 }
 
@@ -303,7 +306,7 @@ const summaryTags = computed(() => {
   opacity: 0.8;
   z-index: -1;
   filter: blur(4px);
-  animation: pulse-glow 1.6s ease-in-out infinite alternate;
+  animation: pulse-glow 1.5s ease-in-out infinite alternate;
 }
 
 @keyframes pulse-glow {
@@ -361,8 +364,8 @@ const summaryTags = computed(() => {
   font-weight: 500;
   color: var(--text-secondary);
   background: var(--bg-elevated);
-  padding: 1px 4px;
-  border-radius: 3px;
+  padding: 1px 5px;
+  border-radius: 4px;
   border: 1px solid var(--border-subtle);
 }
 
@@ -441,18 +444,18 @@ const summaryTags = computed(() => {
 .node-summary-tags {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 5px;
 }
 
 .summary-tag {
   font-size: 11px;
-  padding: 2px 7px;
+  padding: 2px 8px;
   border-radius: 5px;
   background: var(--bg-elevated);
   border: 1px solid var(--border-subtle);
   color: var(--text-secondary);
   white-space: nowrap;
-  max-width: 220px;
+  max-width: 230px;
   overflow: hidden;
   text-overflow: ellipsis;
   transition: all 0.15s;
@@ -525,30 +528,22 @@ const summaryTags = computed(() => {
   color: var(--accent-error);
 }
 
-/* 锚点容器与布局 */
-.ports-container {
+/* ═══ 精准像素对齐的端口锚点 ═══ */
+.port-anchor-wrap {
   position: absolute;
-  top: 42px;
-  bottom: 10px;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-around;
-  pointer-events: none;
-}
-
-.input-ports {
-  left: -9px;
-}
-
-.output-ports {
-  right: -9px;
-}
-
-.port-item {
   display: flex;
   align-items: center;
-  gap: 5px;
+  transform: translateY(-50%);
+  z-index: 10;
   pointer-events: auto;
+}
+
+.input-anchor-wrap {
+  left: -8px;
+}
+
+.output-anchor-wrap {
+  right: -8px;
 }
 
 .port-anchor {
@@ -559,12 +554,10 @@ const summaryTags = computed(() => {
   border: 2px solid var(--node-accent);
   cursor: crosshair;
   transition: transform 0.18s cubic-bezier(0.4, 0, 0.2, 1), background 0.18s, box-shadow 0.18s;
-  position: relative;
-  z-index: 10;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
 }
 
 .anchor-center {
@@ -576,38 +569,44 @@ const summaryTags = computed(() => {
 }
 
 .port-anchor:hover {
-  transform: scale(1.4);
+  transform: scale(1.45);
   background: var(--node-accent);
-  box-shadow: 0 0 10px var(--node-accent);
+  box-shadow: 0 0 12px var(--node-accent);
 }
 
 .port-anchor:hover .anchor-center {
   background: #ffffff;
 }
 
-.port-label {
+/* 锚点微标签（悬浮呈现） */
+.port-tooltip-label {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
   font-size: 10px;
   font-weight: 500;
   color: var(--text-tertiary);
+  white-space: nowrap;
   pointer-events: none;
+  background: var(--bg-main);
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid var(--border-subtle);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+  opacity: 0;
+  transition: opacity 0.15s, transform 0.15s;
 }
 
-.input-port .port-label {
-  margin-left: 2px;
+.port-tooltip-label.left {
+  left: 20px;
 }
 
-.output-port .port-label {
-  margin-right: 2px;
+.port-tooltip-label.right {
+  right: 20px;
 }
 
-.output-port.port-pass .port-label {
-  color: var(--accent-success);
-  font-weight: 600;
-}
-
-.output-port.port-fail .port-label {
-  color: var(--accent-error);
-  font-weight: 600;
+.port-anchor-wrap:hover .port-tooltip-label {
+  opacity: 1;
 }
 
 .port-anchor.anchor-pass {
@@ -616,11 +615,19 @@ const summaryTags = computed(() => {
 .port-anchor.anchor-pass .anchor-center {
   background: var(--accent-success);
 }
+.port-anchor.anchor-pass:hover {
+  background: var(--accent-success);
+  box-shadow: 0 0 12px var(--accent-success);
+}
 
 .port-anchor.anchor-fail {
   border-color: var(--accent-error);
 }
 .port-anchor.anchor-fail .anchor-center {
   background: var(--accent-error);
+}
+.port-anchor.anchor-fail:hover {
+  background: var(--accent-error);
+  box-shadow: 0 0 12px var(--accent-error);
 }
 </style>
