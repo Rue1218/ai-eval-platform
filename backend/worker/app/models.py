@@ -6,7 +6,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, Index, String, Text
+from sqlalchemy import BigInteger, Column, DateTime, Index, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import declarative_base
 
@@ -40,7 +40,10 @@ class Task(Base):
     config = Column(JSONB, default=dict)
     result = Column(JSONB, default=dict)
     report_id = Column(String, nullable=True)
-    created_by = Column(String, ForeignKey("users.id"))
+    # 不声明 ForeignKey("users.id")：worker 元数据中没有 users 表，
+    # 悬空外键会在 flush 时抛 NoReferencedTableError，导致任务无法领取；
+    # worker 不执行 DDL，真实外键由 api 侧 Alembic 迁移维护。
+    created_by = Column(String)
     created_at = Column(DateTime(timezone=True), default=utcnow)
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     started_at = Column(DateTime(timezone=True), nullable=True)
