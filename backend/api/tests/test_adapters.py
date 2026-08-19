@@ -132,6 +132,23 @@ def test_anthropic_request_shape(monkeypatch):
     assert seen["body"]["max_tokens"] == 16
 
 
+@pytest.mark.parametrize(
+    "protocol,payload,endpoint",
+    [
+        ("openai_chat", OPENAI_CHAT_OK, "/v1/chat/completions"),
+        ("openai_responses", OPENAI_RESPONSES_OK, "/v1/responses"),
+        ("anthropic_messages", ANTHROPIC_OK, "/v1/messages"),
+    ],
+)
+@pytest.mark.parametrize("suffix", ["/v1", "/v1/"])
+def test_protocol_url_accepts_optional_v1_suffix(monkeypatch, protocol, payload, endpoint, suffix):
+    """三协议均接受带 ``/v1`` 的协议档地址，且请求端点不会重复版本段。"""
+    seen = _capture(monkeypatch, payload)
+    call_protocol(**(_kwargs(protocol) | {"base_url": f"{BASE}{suffix}"}))
+
+    assert seen["url"] == f"{BASE}{endpoint}"
+
+
 @pytest.mark.parametrize("protocol", [case[0] for case in SUCCESS_CASES])
 def test_protocol_4xx_maps_to_upstream(monkeypatch, protocol):
     """4xx 夹具：统一归一为 UPSTREAM，消息仅含状态码且不泄漏 Key。"""

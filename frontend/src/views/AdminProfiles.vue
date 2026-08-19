@@ -36,9 +36,27 @@
     <!-- 协议档列表 -->
     <div class="panel">
       <div class="panel-title">
-        <div class="row">
-          <span>大模型协议档列表</span>
-          <span class="mono" style="font-size: 12px; color: var(--text-tertiary)">({{ profiles.length }} 个)</span>
+        <div class="row" style="gap: 12px">
+          <span>大模型协议档与供应商管理</span>
+          <span class="mono" style="font-size: 12px; color: var(--text-tertiary)">({{ profiles.length }} 个模型)</span>
+
+          <!-- 视图模式切换器 -->
+          <div class="view-mode-toggle">
+            <button
+              class="toggle-btn"
+              :class="{ active: viewMode === 'cards' }"
+              @click="viewMode = 'cards'"
+            >
+              📇 供应商卡片视图
+            </button>
+            <button
+              class="toggle-btn"
+              :class="{ active: viewMode === 'table' }"
+              @click="viewMode = 'table'"
+            >
+              📑 详细表格视图
+            </button>
+          </div>
         </div>
 
         <div class="row">
@@ -61,7 +79,98 @@
         </div>
       </div>
 
-      <table class="ds-table">
+      <!-- 模式 1：供应商分类多卡片视图 -->
+      <div v-if="viewMode === 'cards'" class="vendor-cards-container">
+        <div
+          v-for="group in vendorGroups"
+          :key="group.key"
+          class="vendor-group-card"
+        >
+          <div class="vendor-group-header">
+            <div class="vendor-info">
+              <div class="vendor-title-row">
+                <span class="vendor-badge">{{ group.icon }}</span>
+                <span class="vendor-name">{{ group.name }}</span>
+                <span class="vendor-count-badge">{{ group.profiles.length }} 个模型</span>
+              </div>
+              <div class="vendor-url mono">{{ group.base_url }}</div>
+            </div>
+            <div class="vendor-actions">
+              <button
+                class="btn btn-secondary btn-xs"
+                @click="openModalWithVendor(group)"
+              >
+                + 添加此供应商模型
+              </button>
+            </div>
+          </div>
+
+          <!-- 模型卡片列表 -->
+          <div class="vendor-models-grid">
+            <div
+              v-for="p in group.profiles"
+              :key="p.id"
+              class="model-chip-card"
+              :class="{ 'is-agent-core': p.id === selectedAgentProfileId }"
+            >
+              <div class="model-chip-top">
+                <div class="model-chip-title-wrap">
+                  <span class="model-chip-name">{{ p.name }}</span>
+                  <span v-if="p.id === selectedAgentProfileId" class="tag-soft agent-core-tag">★ Agent 核心</span>
+                </div>
+                <!-- 探活胶囊 -->
+                <span
+                  v-if="pingStates[p.id]"
+                  class="ping-badge"
+                  :class="pingStates[p.id].ok ? 'ok' : 'err'"
+                  title="点击重新探活"
+                  @click="handlePing(p)"
+                >
+                  {{ pingStates[p.id].ok ? `● 正常 (${pingStates[p.id].latencyMs ?? '—'}ms)` : '✕ 连接失败' }}
+                </span>
+                <button v-else class="link-btn small" :disabled="pingingId === p.id" @click="handlePing(p)">
+                  {{ pingingId === p.id ? '探活中…' : '探活' }}
+                </button>
+              </div>
+
+              <div class="model-chip-meta">
+                <span class="mono model-id-tag">{{ p.model }}</span>
+                <span class="mono protocol-tag">{{ p.protocol }}</span>
+              </div>
+
+              <div class="model-chip-bottom">
+                <div class="row" style="gap: 4px; flex-wrap: wrap">
+                  <span v-if="p.usages?.includes('target')" class="kind-tag kind-benchmark">被测</span>
+                  <span v-if="p.usages?.includes('judge')" class="kind-tag kind-cases">裁判</span>
+                  <span v-if="p.usages?.includes('agent')" class="kind-tag kind-rag">Agent</span>
+                </div>
+                <div class="row" style="gap: 6px">
+                  <button class="link-btn small" @click="openModal(p)">编辑</button>
+                  <button
+                    class="link-btn danger small"
+                    :disabled="p.id === selectedAgentProfileId"
+                    :title="p.id === selectedAgentProfileId ? '当前档已被指定为 Agent 后端，禁止删除' : ''"
+                    @click="handleDelete(p)"
+                  >
+                    删除
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="profiles.length === 0" class="empty-state-wrap">
+          <EmptyState title="暂无模型协议档" description="点击右上角新增 OpenAI / Anthropic / Xiaomi Mimo 协议档">
+            <template #action>
+              <button class="btn btn-primary btn-sm" @click="openModal(null)">新增协议档</button>
+            </template>
+          </EmptyState>
+        </div>
+      </div>
+
+      <!-- 模式 2：详细表格视图 -->
+      <table v-else class="ds-table">
         <thead>
           <tr>
             <th>协议档名称</th>
@@ -284,6 +393,7 @@
     <ProfileModal
       v-model:show="showModal"
       :profile="selectedProfile"
+      :initial-data="modalInitialData"
       @success="loadProfiles"
     />
 
@@ -355,6 +465,9 @@ const builtinSkills = [
 const runtimeForm = ref({ ws_ping_s: 15, ws_timeout_s: 45, strict_session_slot: true })
 const runtimeSaving = ref(false)
 
+// 视图模式：'cards' (供应商分类多卡片视图) | 'table' (详细表格视图)
+const viewMode = ref<'cards' | 'table'>('cards')
+
 const profiles = ref<Profile[]>([])
 const loading = ref(false)
 const selectedAgentProfileId = ref<string | null>(null)
@@ -379,6 +492,129 @@ const pingingId = ref<string | null>(null)
 const agentProfileOptions = computed(() =>
   profiles.value.map((p) => ({ label: `${p.name} (${p.model})`, value: p.id })),
 )
+
+interface VendorGroup {
+  key: string
+  name: string
+  icon: string
+  base_url: string
+  protocol: any
+  profiles: Profile[]
+}
+
+/** 智能归类供应商分组 */
+const vendorGroups = computed<VendorGroup[]>(() => {
+  const groups: Record<string, VendorGroup> = {}
+
+  for (const p of profiles.value) {
+    const url = (p.base_url || '').toLowerCase()
+    const name = (p.name || '').toLowerCase()
+    const model = (p.model || '').toLowerCase()
+
+    let key = 'custom'
+    let vName = '自定义端点 / 内部代理'
+    let icon = '🌐'
+
+    if (url.includes('nvidia') || name.includes('nvidia') || model.includes('nvidia')) {
+      key = 'nvidia'
+      vName = 'NVIDIA NIM'
+      icon = '🟢'
+    } else if (url.includes('xiaomimimo') || name.includes('mimo') || model.includes('mimo')) {
+      key = 'mimo'
+      vName = 'Xiaomi Mimo'
+      icon = '⚡'
+    } else if (url.includes('openai.com') || name.includes('openai') || model.startsWith('gpt-')) {
+      key = 'openai'
+      vName = 'OpenAI'
+      icon = '🤖'
+    } else if (url.includes('anthropic.com') || name.includes('claude') || model.startsWith('claude-')) {
+      key = 'anthropic'
+      vName = 'Anthropic Claude'
+      icon = '🔮'
+    } else if (url.includes('deepseek') || name.includes('deepseek') || model.includes('deepseek')) {
+      key = 'deepseek'
+      vName = 'DeepSeek'
+      icon = '🐋'
+    } else if (url.includes('siliconflow') || name.includes('silicon') || name.includes('硅基')) {
+      key = 'siliconflow'
+      vName = 'SiliconFlow (硅基流动)'
+      icon = '⚡'
+    } else if (url.includes('aliyuncs') || url.includes('dashscope') || name.includes('qwen') || model.includes('qwen')) {
+      key = 'qwen'
+      vName = 'Alibaba Qwen (通义千问)'
+      icon = '☁️'
+    } else if (url.includes('volces.com') || name.includes('doubao') || name.includes('火山') || name.includes('豆包')) {
+      key = 'volcengine'
+      vName = 'ByteDance Doubao (火山引擎)'
+      icon = '🌋'
+    } else if (url.includes('qianfan') || url.includes('baidubce') || name.includes('ernie') || name.includes('文心') || name.includes('千帆')) {
+      key = 'qianfan'
+      vName = 'Baidu Qianfan (百度千帆)'
+      icon = '🐻'
+    } else if (url.includes('hunyuan') || name.includes('混元')) {
+      key = 'hunyuan'
+      vName = 'Tencent Hunyuan (腾讯混元)'
+      icon = '🐧'
+    } else if (url.includes('groq') || name.includes('groq')) {
+      key = 'groq'
+      vName = 'Groq'
+      icon = '⚡'
+    } else if (url.includes('11434') || url.includes('ollama') || name.includes('ollama')) {
+      key = 'ollama'
+      vName = 'Ollama (本地私有)'
+      icon = '🦙'
+    } else if (url.includes('bigmodel.cn') || name.includes('glm') || model.includes('glm') || name.includes('智谱')) {
+      key = 'zhipu'
+      vName = 'Zhipu GLM (智谱清言)'
+      icon = '🌟'
+    } else if (url.includes('moonshot') || name.includes('kimi') || name.includes('moonshot') || name.includes('月之暗面')) {
+      key = 'moonshot'
+      vName = 'Moonshot (月之暗面)'
+      icon = '🌙'
+    } else if (url.includes('mistral') || name.includes('mistral')) {
+      key = 'mistral'
+      vName = 'Mistral AI'
+      icon = '🌪️'
+    } else if (url.includes('together') || name.includes('together')) {
+      key = 'together'
+      vName = 'Together AI'
+      icon = '🤝'
+    }
+
+    if (!groups[key]) {
+      groups[key] = {
+        key,
+        name: vName,
+        icon,
+        base_url: p.base_url,
+        protocol: p.protocol,
+        profiles: [],
+      }
+    }
+    groups[key].profiles.push(p)
+  }
+
+  return Object.values(groups)
+})
+
+const modalInitialData = ref<{ vendorKey?: string; base_url?: string; protocol?: any; name?: string } | null>(null)
+
+function openModal(profile: Profile | null) {
+  selectedProfile.value = profile
+  modalInitialData.value = null
+  showModal.value = true
+}
+
+function openModalWithVendor(group: VendorGroup) {
+  selectedProfile.value = null
+  modalInitialData.value = {
+    vendorKey: group.key !== 'custom' ? group.key : undefined,
+    base_url: group.base_url,
+    protocol: group.protocol,
+    name: group.name,
+  }
+  showModal.value = true
+}
 
 async function loadProfiles() {
   loading.value = true
@@ -424,11 +660,6 @@ async function handleUpdateAgentProfile(profileId: string) {
     selectedAgentProfileId.value = lastSavedAgentProfileId.value
     message.error(err.message || '设置失败')
   }
-}
-
-function openModal(profile: Profile | null) {
-  selectedProfile.value = profile
-  showModal.value = true
 }
 
 /** P2 行内探活：原位刷新 ping-badge（复用 api.profiles.check，不泄露凭据） */
@@ -492,7 +723,184 @@ onMounted(loadProfiles)
   flex-direction: column;
   gap: 16px;
 }
-/* P2 连通性探活胶囊（迁移自原型 admin-profiles.html 44-46：绿/红小胶囊 + 延迟毫秒） */
+/* 视图切换按钮组 */
+.view-mode-toggle {
+  display: inline-flex;
+  background: var(--bg-elevated, rgba(243, 244, 246, 1));
+  padding: 3px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle, rgba(229, 231, 235, 1));
+}
+.toggle-btn {
+  border: none;
+  background: transparent;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text-secondary, #6b7280);
+  transition: all 0.15s ease;
+}
+.toggle-btn.active {
+  background: var(--bg-card, #ffffff);
+  color: var(--c-profiles, #4f46e5);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+/* 供应商多卡片容器 */
+.vendor-cards-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.vendor-group-card {
+  border: 1px solid var(--border-subtle, rgba(229, 231, 235, 1));
+  border-radius: 14px;
+  background: linear-gradient(180deg, var(--bg-surface, #fafafa) 0%, rgba(255, 255, 255, 0.6) 100%);
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+  transition: all 0.2s ease;
+}
+.vendor-group-card:hover {
+  border-color: rgba(99, 102, 241, 0.25);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.03);
+}
+.vendor-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border-subtle, rgba(229, 231, 235, 0.6));
+  padding-bottom: 12px;
+}
+.vendor-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.vendor-badge {
+  font-size: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.vendor-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary, #111827);
+  letter-spacing: -0.01em;
+}
+.vendor-count-badge {
+  font-size: 11px;
+  background: rgba(79, 70, 229, 0.1);
+  color: var(--c-profiles, #4f46e5);
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-weight: 600;
+  border: 1px solid rgba(79, 70, 229, 0.15);
+}
+.vendor-url {
+  font-size: 11.5px;
+  color: var(--text-secondary, #6b7280);
+  margin-top: 2px;
+}
+.vendor-models-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+/* 模型芯片卡片与流光动效 */
+@keyframes core-mesh {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+@keyframes pulse-border {
+  0%, 100% { border-color: rgba(99, 102, 241, 0.55); box-shadow: 0 0 12px rgba(99, 102, 241, 0.12); }
+  50% { border-color: rgba(56, 189, 248, 0.85); box-shadow: 0 0 20px rgba(56, 189, 248, 0.22); }
+}
+
+.model-chip-card {
+  background: var(--bg-card, #ffffff);
+  border: 1px solid var(--border-subtle, rgba(229, 231, 235, 1));
+  border-radius: 12px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  position: relative;
+  transition: all 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.model-chip-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(99, 102, 241, 0.45);
+  box-shadow: 0 6px 20px -2px rgba(99, 102, 241, 0.1);
+}
+.model-chip-card.is-agent-core {
+  border-width: 1.5px;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.07), rgba(56, 189, 248, 0.08), rgba(168, 85, 247, 0.06), rgba(99, 102, 241, 0.07));
+  background-size: 300% 300%;
+  animation: core-mesh 6s ease infinite, pulse-border 3.2s ease-in-out infinite;
+  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.15);
+}
+.model-chip-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.model-chip-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.model-chip-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.model-chip-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+.model-id-tag {
+  background: rgba(15, 23, 42, 0.06);
+  padding: 2px 7px;
+  border-radius: 5px;
+  font-weight: 500;
+  color: var(--text-primary, #1e293b);
+}
+.protocol-tag {
+  color: var(--text-tertiary, #9ca3af);
+}
+.model-chip-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(229, 231, 235, 0.5);
+}
+.btn-xs {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 6px;
+}
+.link-btn.small {
+  font-size: 12px;
+}
+
+/* P2 连通性探活胶囊 */
 .ping-badge {
   display: inline-flex;
   align-items: center;
@@ -514,14 +922,14 @@ onMounted(loadProfiles)
   color: var(--accent-error);
   border: 1px solid rgba(239, 68, 68, 0.3);
 }
-/* P4 Agent 核心驱动徽标（对齐原型 tag-soft 描边强化版） */
+/* P4 Agent 核心驱动徽标 */
 .agent-core-tag {
   border-color: #c7d2fe;
   color: var(--c-tasks);
   font-weight: 700;
   font-size: 11px;
 }
-/* 4 Tab 页签（迁移自原型 admin-profiles.html profile-tab-btn） */
+/* 4 Tab 页签 */
 .profile-tab-btn {
   padding: 8px 16px;
   border-radius: 8px;
@@ -542,7 +950,7 @@ onMounted(loadProfiles)
   color: var(--c-profiles);
   border-color: var(--c-profiles);
 }
-/* 技能卡片网格（迁移自原型 skill-grid/skill-card） */
+/* 技能卡片网格 */
 .skill-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));

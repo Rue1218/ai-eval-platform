@@ -23,7 +23,7 @@
               <i v-if="sessionDotClass(s)" class="nav-dot" :class="sessionDotClass(s)" :title="sessionDotTooltip(s)"></i>
               <button
                 class="session-del"
-                title="删除会话"
+                title="会话删除暂未开放"
                 @click.stop="handleDeleteSession(s.id)"
               >
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
@@ -842,7 +842,6 @@ function renderAgentProfileOption(option: DropdownOption) {
 const sessions = ref<any[]>([])
 const currentSessionId = ref<string>('')
 const currentSession = computed(() => sessions.value.find(s => s.id === currentSessionId.value) || sessions.value[0] || null)
-
 const inputText = ref('')
 const stagedFiles = ref<any[]>([])
 const activeTask = ref<Task | null>(null)
@@ -977,9 +976,8 @@ interface StreamItem {
   files?: any[]
   // F4 历史回放标记：跳过入场动画（对齐原型 no-anim）
   noAnim?: boolean
-  // S3 思考卡流式打字：fullText 为应显示全文，streaming 表示打字机进行中
+  // S3 思考卡流式打字：fullText 为应显示全文，复用上方 streaming 标记表示打字机进行中
   fullText?: string
-  streaming?: boolean
   // F8 确认卡内联校验错误（字段名 → 红字文案）
   fieldErrors?: Record<string, string>
 }

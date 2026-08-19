@@ -281,6 +281,27 @@ export const api = {
       const { data } = await http.post(`/api/profiles/${id}/check`)
       return data
     },
+    async fetchModels(params: {
+      protocol: string
+      base_url: string
+      api_key?: string
+      profile_id?: string
+      anthropic_version?: string
+    }): Promise<{ ok: boolean; models: Array<{ id: string; name: string; owned_by?: string }>; total: number }> {
+      if (getDataMode() === 'mock') {
+        return {
+          ok: true,
+          models: [
+            { id: 'gpt-4o', name: 'gpt-4o', owned_by: 'openai' },
+            { id: 'gpt-4.1', name: 'gpt-4.1', owned_by: 'openai' },
+            { id: 'o3-mini', name: 'o3-mini', owned_by: 'openai' },
+          ],
+          total: 3,
+        }
+      }
+      const { data } = await http.post('/api/profiles/fetch-models', params)
+      return data
+    },
   },
 
   // 5. 任务管理
