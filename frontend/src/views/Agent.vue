@@ -126,25 +126,6 @@
               </template>
             </div>
 
-            <!-- 2.2 思考卡片 -->
-            <div
-              v-else-if="item.type === 'thought'"
-              class="thought-card"
-              :class="{ done: item.done, collapsed: item.collapsed, 'no-anim': item.noAnim }"
-            >
-              <div class="thought-head" @click="item.collapsed = !item.collapsed">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M12 3a7 7 0 0 1 4 12.7V17a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2v-1.3A7 7 0 0 1 12 3Z" />
-                  <path d="M10 21h4" />
-                </svg>
-                <span>思考</span>
-                <svg class="chev" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
-                  <path d="m6 9 6 6 6-6" />
-                </svg>
-              </div>
-              <div class="thought-body">{{ item.text }}</div>
-            </div>
-
             <!-- 2.3 短 MCP 工具调用卡 -->
             <div
               v-else-if="item.type === 'tool'"
@@ -1705,18 +1686,7 @@ function handleWsEvent(ev: WsServerEvent) {
   const p = ev.payload || {}
   switch (ev.event) {
     case 'thought': {
-      // S3 思考文本流式打字：新思考开卡，同卡增量追加 fullText 后由打字机逼近
-      const last = events.value[events.value.length - 1]
-      if (!last || last.type !== 'thought' || last.done) {
-        // 契约：思考增量在 payload.text；打字机以 fullText 为逼近目标
-        const item: StreamItem = { type: 'thought', text: '', fullText: p.text || '', done: false, collapsed: false }
-        events.value.push(item)
-        pumpThought(item)
-      } else {
-        last.fullText = (last.fullText ?? last.text ?? '') + (p.text || '')
-        pumpThought(last)
-      }
-      scrollToBottom()
+      // 思考卡片已移除：thought 事件（问候语 / 意图回复 / 进度旁白）不再入流渲染
       break
     }
     case 'tool_call': {
