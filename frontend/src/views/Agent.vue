@@ -54,20 +54,10 @@
           </svg>
         </button>
         <span class="chat-head-title">{{ currentSession?.title || '新会话' }}</span>
-        <n-dropdown
-          trigger="click"
-          :options="agentProfileDropdownOptions"
-          :render-label="renderAgentProfileOption"
-          @select="handleSelectAgentModel"
-        >
-          <button class="chat-head-model-btn" title="点击切换 Agent 驱动模型（来自协议档接入池）">
-            <span class="head-model-dot"></span>
-            <span class="mono">Agent · {{ agentModelName || '选择模型' }}</span>
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-              <path d="m6 9 6 6 6-6"/>
-            </svg>
-          </button>
-        </n-dropdown>
+        <div class="chat-head-model-pill" title="当前 Agent 驱动模型（由系统设置指定）">
+          <span class="head-model-dot"></span>
+          <span class="mono">Agent · {{ agentModelName || '未配置模型' }}</span>
+        </div>
         <span v-if="isGenerating" class="gen-pill">
           <i class="bdot"></i>
           <span>生成中</span>
@@ -160,6 +150,7 @@
               <button class="think-head" type="button" @click="item.collapsed = !item.collapsed">
                 <span class="think-dot" v-if="!item.done"></span>
                 <span class="think-label">{{ item.done ? '已深度思考' : '深度思考中' }}</span>
+                <span v-if="formatLatency(item.latency_ms)" class="think-latency mono">{{ formatLatency(item.latency_ms) }}</span>
                 <span class="think-meta">{{ (item.text || '').length }} 字</span>
                 <svg class="think-caret" :class="{ open: !item.collapsed }" viewBox="0 0 12 12" width="12" height="12">
                   <path d="M2 4l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
@@ -191,10 +182,16 @@
                     <path d="M9 9l6 6M15 9l-6 6" />
                   </svg>
                 </span>
-                <span class="tool-name">{{ getToolDisplayName(item.tool) }}</span>
-                <span class="tool-state-text" :class="{ fail: item.status === 'fail' }">
-                  {{ item.status === 'pending' ? '调用中' : item.status === 'ok' ? '完成' : '失败' }}
-                </span>
+                <div class="tool-title-wrap">
+                  <span class="tool-name">{{ getToolDisplayName(item.tool) }}</span>
+                  <span class="tool-sub-tag">MCP · 短工具</span>
+                </div>
+                <div class="tool-meta-right">
+                  <span v-if="formatLatency(item.latency_ms)" class="tool-latency mono">{{ formatLatency(item.latency_ms) }}</span>
+                  <span class="tool-state-text" :class="{ fail: item.status === 'fail' }">
+                    {{ item.status === 'pending' ? '调用中' : item.status === 'ok' ? '完成' : '失败' }}
+                  </span>
+                </div>
                 <svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
                   <path d="m6 9 6 6 6-6" />
                 </svg>
@@ -632,20 +629,10 @@
                 @change="handleFileUpload"
               />
 
-              <!-- 接入模型选择下拉胶囊 -->
-              <n-dropdown
-                trigger="click"
-                :options="agentProfileDropdownOptions"
-                :render-label="renderAgentProfileOption"
-                @select="handleSelectAgentModel"
-              >
-                <button class="composer-model-dropdown-btn" title="点击切换当前 Agent 驱动模型（来自协议档接入池）">
-                  <span class="model-name">{{ agentModelName || '选择模型' }}</span>
-                  <svg class="chevron-icon" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="m18 15-6-6-6 6"/>
-                  </svg>
-                </button>
-              </n-dropdown>
+              <!-- 只读模型展示胶囊（由系统设置指定） -->
+              <div class="composer-model-readonly" title="当前 Agent 驱动模型（由系统设置指定）">
+                <span class="mono">Agent · {{ agentModelName || '未配置模型' }}</span>
+              </div>
             </div>
 
             <!-- 右侧圆形发送/暂停按钮 -->
@@ -737,6 +724,7 @@ import type { Task, TaskSpec, WsServerEvent, Profile, Dataset, KnowledgeBase, Go
 import { getDefaultRunConfig, getDefaultStressConfig } from '../schemas/confirmCard'
 import { useModeStore } from '../stores/mode'
 import KindTag from '../components/common/KindTag.vue'
+import { formatLatency } from '../utils/format'
 
 const message = useMessage()
 const dialog = useDialog()
@@ -954,6 +942,7 @@ interface StreamItem {
   text?: string
   done?: boolean
   collapsed?: boolean
+  latency_ms?: number
   // 流式标记：true 表示该 agent 气泡正在接收 LLM 增量帧，终帧到达后置 false
   streaming?: boolean
   // 已显示的纯文本进度（流式增量与打字机共用，text 为其渲染后的 HTML）
@@ -1808,9 +1797,6 @@ async function resolveAgentModelName() {
     if (pid) {
       const hit = (profiles || []).find((p) => p.id === pid)
       agentModelName.value = hit ? hit.model || hit.name : ''
-    } else if (profiles && profiles.length > 0) {
-      agentModelName.value = profiles[0].model || profiles[0].name
-      currentAgentProfileId.value = profiles[0].id
     } else {
       agentModelName.value = ''
     }
@@ -2010,6 +1996,7 @@ function handleWsEvent(ev: WsServerEvent) {
       if (think) {
         think.done = true
         think.collapsed = true
+        if (p.latency_ms !== undefined) think.latency_ms = p.latency_ms
       }
       if (text) {
         const streaming = [...events.value].reverse().find(e => e.type === 'agent' && e.streaming)
@@ -2049,6 +2036,7 @@ function handleWsEvent(ev: WsServerEvent) {
       if (target) {
         target.result = p.ok ? p.data : p.error
         target.status = p.ok ? 'ok' : 'fail'
+        if (p.latency_ms !== undefined) target.latency_ms = p.latency_ms
       }
       // 把短工具发现结果回填到确认卡可选项
       if (p.ok) {
@@ -2212,7 +2200,8 @@ onBeforeUnmount(() => {
   height: calc(100vh - var(--topbar-h) - 20px);
 }
 
-/* 顶部模型切换下拉按钮 */
+/* 顶部与输入框只读模型胶囊 */
+.chat-head-model-pill,
 .chat-head-model-btn {
   display: inline-flex;
   align-items: center;
@@ -2224,14 +2213,26 @@ onBeforeUnmount(() => {
   color: var(--text-secondary);
   font-family: var(--font-mono);
   font-size: 11px;
-  cursor: pointer;
-  transition: all 0.15s ease;
   user-select: none;
 }
-.chat-head-model-btn:hover {
-  border-color: var(--accent-ai);
-  color: var(--text-primary);
+.composer-model-readonly {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  color: var(--text-tertiary);
+  font-size: 11px;
+  user-select: none;
+}
+.think-latency {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-tertiary);
   background: var(--bg-main);
+  padding: 1px 6px;
+  border-radius: 4px;
+  margin-left: 2px;
 }
 .head-model-dot {
   width: 6px;

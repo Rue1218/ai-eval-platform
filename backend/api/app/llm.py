@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
@@ -21,11 +22,34 @@ from .security import decrypt_secret
 logger = logging.getLogger("ai-eval.llm")
 
 # 候选生成属于短工具调用，超过该时长按 TIMEOUT 归一
-CALL_TIMEOUT_S = 30
+CALL_TIMEOUT_S = 30.0
 
 
-def _resolve_agent_profile(db: Session) -> ProtocolProfile:
-    """读取 settings.agent_profile_id 指向的 Agent 协议档。"""
+@dataclass(frozen=True)
+class AgentCallResult:
+    """Agent 大模型调用统一产物（包含耗时与用量）。"""
+
+    text: str
+    latency_ms: int
+    usage: dict
+    raw: dict
+
+
+@dataclass(frozen=True)
+class AgentProfilePublicInfo:
+    """Agent 驱动模型对外公开信息（脱敏、只读）。"""
+
+    profile_id: str
+    name: str
+    model: str
+    protocol: str
+
+
+def resolve_agent_profile(db: Session) -> ProtocolProfile:
+    """读取 settings.agent_profile_id 指向的 Agent 协议档。
+    
+    未配置或已被删除时抛出 VALIDATION (400)，严禁伪造默认模型。
+    """
     row = db.query(Setting).filter(Setting.key == "agent_profile_id").first()
     profile_id = row.value if row else None
     if not profile_id:
@@ -38,24 +62,42 @@ def _resolve_agent_profile(db: Session) -> ProtocolProfile:
     return profile
 
 
-def call_agent_model(
+# 别名兼容内部下划线调用
+_resolve_agent_profile = resolve_agent_profile
+
+
+def get_agent_profile_public_info(db: Session) -> AgentProfilePublicInfo | None:
+    """获取当前生效的 Agent 模型公开信息供界面只读展示；未配置时返回 None。"""
+    try:
+        profile = resolve_agent_profile(db)
+        return AgentProfilePublicInfo(
+            profile_id=str(profile.id),
+            name=profile.name,
+            model=profile.model,
+            protocol=profile.protocol,
+        )
+    except AppError:
+        return None
+
+
+def call_agent_model_detailed(
     db: Session,
     system: str,
     user: str,
     *,
+    temperature: float = 0.3,
     max_tokens: int = 2048,
     timeout_s: float = CALL_TIMEOUT_S,
-) -> str:
-    """经三协议统一适配器调用 Agent 模型并返回纯文本内容。
+) -> AgentCallResult:
+    """经三协议统一适配器调用 Agent 模型并返回包含耗时的结构化结果。
 
     ``timeout_s`` 允许调用方按场景收紧：意图识别等交互式短调用传 12 秒，
     候选生成等可稍长；超时归一为 TIMEOUT 抛给调用方降级处理。
     失败语义：上游 4xx/5xx 与连接错误归一为 UPSTREAM；超时归一为 TIMEOUT。
-    响应解析失败同样按 UPSTREAM 处理，避免把上游原文抛给浏览器。控制台只打印
-    协议名、模型名与耗时，绝不打印 API Key 或完整提示词。
+    控制台只打印协议名、模型名、耗时与字数，绝不打印 API Key 或完整提示词。
     """
-    profile = _resolve_agent_profile(db)
-    agent_trace(f"模型调用开始 protocol={profile.protocol} model={profile.model}")
+    profile = resolve_agent_profile(db)
+    agent_trace(f"模型调用开始 protocol={profile.protocol} model={profile.model} timeout={timeout_s}s")
     try:
         result = call_protocol(
             protocol=profile.protocol,
@@ -64,7 +106,7 @@ def call_agent_model(
             api_key=decrypt_secret(profile.encrypted_key),
             messages=[{"role": "user", "content": user}],
             system=system,
-            temperature=0.3,
+            temperature=temperature,
             max_tokens=max_tokens,
             anthropic_version=profile.anthropic_version,
             timeout_s=timeout_s,
@@ -72,14 +114,40 @@ def call_agent_model(
         text = result.text.strip()
         if not text:
             raise AppError(ErrorCode.UPSTREAM, "Agent 模型返回空内容")
-        agent_trace(f"模型调用完成 chars={len(text)}")
-        return result.text
+        agent_trace(f"模型调用完成 latency={result.latency_ms}ms chars={len(text)}")
+        return AgentCallResult(
+            text=result.text,
+            latency_ms=result.latency_ms,
+            usage=result.usage,
+            raw=result.raw,
+        )
     except AppError:
         raise
     except Exception as exc:
         logger.exception("Agent 模型调用未归类异常")
         agent_trace(f"模型调用内部异常 type={type(exc).__name__}")
         raise AppError(ErrorCode.INTERNAL, "Agent 模型调用失败") from exc
+
+
+def call_agent_model(
+    db: Session,
+    system: str,
+    user: str,
+    *,
+    temperature: float = 0.3,
+    max_tokens: int = 2048,
+    timeout_s: float = CALL_TIMEOUT_S,
+) -> str:
+    """经三协议统一适配器调用 Agent 模型并返回纯文本内容（兼容传统接口）。"""
+    res = call_agent_model_detailed(
+        db,
+        system,
+        user,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        timeout_s=timeout_s,
+    )
+    return res.text
 
 
 def parse_json_candidates(text: str) -> list[dict]:

@@ -6,6 +6,7 @@
         <line x1="10" y1="22" x2="14" y2="22"></line>
       </svg>
       <span>思考过程</span>
+      <span v-if="formattedLatency" class="thought-latency mono">{{ formattedLatency }}</span>
       <span class="chev">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="6 9 12 15 18 9"></polyline>
@@ -19,14 +20,43 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
+import { formatLatency } from '../../utils/format'
 
-defineProps<{
+const props = defineProps<{
   text: string
   done?: boolean
+  latencyMs?: number
 }>()
 
 const collapsed = ref(false)
+
+const formattedLatency = computed(() => formatLatency(props.latencyMs))
+
+// 思考完成 800ms 后平滑自动折叠
+let collapseTimer: number | null = null
+
+function triggerAutoCollapse() {
+  if (collapseTimer) clearTimeout(collapseTimer)
+  collapseTimer = window.setTimeout(() => {
+    collapsed.value = true
+  }, 800)
+}
+
+watch(
+  () => props.done,
+  (isDone) => {
+    if (isDone) {
+      triggerAutoCollapse()
+    }
+  },
+)
+
+onMounted(() => {
+  if (props.done) {
+    collapsed.value = true
+  }
+})
 </script>
 
 <style scoped>
@@ -40,7 +70,7 @@ const collapsed = ref(false)
   animation: msg-in 0.26s cubic-bezier(0.2, 0.9, 0.3, 1);
 }
 .thought-card.done {
-  opacity: 0.7;
+  opacity: 0.85;
 }
 .thought-head {
   display: flex;
@@ -49,9 +79,18 @@ const collapsed = ref(false)
   padding: 9px 14px;
   font-size: 12px;
   font-weight: 600;
-  color: var(--c-agent);
+  color: var(--c-agent, #10b981);
   cursor: pointer;
   user-select: none;
+}
+.thought-latency {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-tertiary, #94a3b8);
+  background: var(--bg-main, #0f172a);
+  padding: 1px 6px;
+  border-radius: 4px;
+  margin-left: 2px;
 }
 .thought-body {
   padding: 0 14px 12px;
@@ -79,7 +118,7 @@ const collapsed = ref(false)
   display: inline-block;
   width: 2px;
   height: 13px;
-  background: var(--c-agent);
+  background: var(--c-agent, #10b981);
   margin-left: 3px;
   vertical-align: -2px;
   animation: caret-blink 0.8s steps(2, jump-none) infinite;

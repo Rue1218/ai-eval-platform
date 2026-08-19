@@ -5,7 +5,7 @@
 | 文档名称 | Agent 独立开发说明书 |
 | 版本 | V1.1 |
 | 日期 | 2026-08-19 |
-| 最近修订 | 2026-08-19：审查收口后，增量契约已回写 API.md V1.4 |
+| 最近修订 | 2026-08-19：完成 AGT-LLM-01（指定唯一 Agent 协议档）与 AGT-LLM-02（thought/tool_result 带 latency_ms 并展示）落地与单测验收 |
 | 用法 | **实现 `/agent` 以本文为准（Harness / 斜杠 / 窗口算法）。** REST/WS JSON 以 API.md V1.4 为准。完成某项后勾选文末 Task，并在「最近修订」追加一行。 |
 
 本文是评测平台 **Agent 子系统** 的完整开发说明书：目标、边界、运行时骨架、协议、模块、代码落点与验收任务都写在这里。与 PRD / API.md 冲突时，字段名与事件名以那两份为准；Harness、斜杠、上下文算法以本文 §16 为准。§4.6 所列增量已收入 **API.md V1.4**。
@@ -612,8 +612,8 @@ ChatHead 右侧（或输入框上方）常驻，压缩或新消息后立刻更�
 | AGT-SES-02 | 交付句写入 messages；规划/复核只走 events | `ws.py` | 刷新气泡与思考卡不重复三倍灌窗口 | [ ] |
 | AGT-SES-03 | sessions.pending_confirm 迁移与回放 | models + Alembic sessions.py | 刷新后确认卡仍可编辑 | [ ] |
 | AGT-SLH-03 | slash-commands M1 桩 | 新 router 或现路由 | GET 返回 VALIDATION「自定义命令未启用」，禁止 200 空列表冒充已启用 | [ ] |
-| AGT-LLM-01 | 指定唯一 Agent 协议档 | `llm.py` 设置项 | 无档时明确报错、不泄 Key | [ ] |
-| AGT-LLM-02 | thought/tool_result 带 latency_ms 并展示 | `ws.py` 卡片 | 能看到秒或毫秒 | [ ] |
+| AGT-LLM-01 | 指定唯一 Agent 协议档 | `llm.py` 设置项 | 无档时明确报错、不泄 Key | [x] 2026-08-19 |
+| AGT-LLM-02 | thought/tool_result 带 latency_ms 并展示 | `ws.py` 卡片 | 能看到秒或毫秒 | [x] 2026-08-19 |
 | AGT-HRS-01 | 抽出人设、斜杠、短工具模块 | `agent/*` | 清单与实现同一份 | [ ] |
 | AGT-HRS-02 | 规划→行动→复核串联 | `harness.py` | 复核未过不出确认卡 | [ ] |
 | AGT-HRS-03 | 占槽、kind、幻觉 ID、工具白名单 | `reflect.py` | 有测试；`/stress` 不出 kind=stress | [ ] |
