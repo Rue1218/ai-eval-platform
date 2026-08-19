@@ -23,7 +23,7 @@
               <i v-if="sessionDotClass(s)" class="nav-dot" :class="sessionDotClass(s)" :title="sessionDotTooltip(s)"></i>
               <button
                 class="session-del"
-                title="删除会话"
+                title="会话删除暂未开放"
                 @click.stop="handleDeleteSession(s.id)"
               >
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
@@ -38,32 +38,6 @@
         </div>
       </div>
     </aside>
-
-    <!-- 会话删除使用页面内受控弹窗，避免回调式 Dialog 在删除按钮事件中丢失函数引用。 -->
-    <n-modal
-      :show="pendingDeleteSessionId !== null"
-      :mask-closable="!isDeletingSession"
-      :close-on-esc="!isDeletingSession"
-      @update:show="handleDeleteSessionModalVisible"
-    >
-      <section
-        class="session-delete-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="session-delete-dialog-title"
-      >
-        <h3 id="session-delete-dialog-title">删除会话</h3>
-        <p>
-          确定删除「{{ pendingDeleteSession?.title || '新会话' }}」吗？对话记录将被清除，已创建的任务仍保留在任务页。
-        </p>
-        <div class="session-delete-actions">
-          <button class="btn btn-secondary" :disabled="isDeletingSession" @click="cancelDeleteSession">取消</button>
-          <button class="btn btn-danger" :disabled="isDeletingSession" @click="confirmDeleteSession">
-            {{ isDeletingSession ? '删除中…' : '删除' }}
-          </button>
-        </div>
-      </section>
-    </n-modal>
 
     <!-- 中间对话主区 -->
     <section class="chat-main">
@@ -868,13 +842,6 @@ function renderAgentProfileOption(option: DropdownOption) {
 const sessions = ref<any[]>([])
 const currentSessionId = ref<string>('')
 const currentSession = computed(() => sessions.value.find(s => s.id === currentSessionId.value) || sessions.value[0] || null)
-// 会话删除弹窗的目标与提交态：同一时刻只允许删除一个会话，防止重复请求。
-const pendingDeleteSessionId = ref<string | null>(null)
-const isDeletingSession = ref(false)
-const pendingDeleteSession = computed(() =>
-  sessions.value.find(s => s.id === pendingDeleteSessionId.value) || null,
-)
-
 const inputText = ref('')
 const stagedFiles = ref<any[]>([])
 const activeTask = ref<Task | null>(null)
@@ -1942,58 +1909,10 @@ async function handleCreateSession() {
   }
 }
 
-function handleDeleteSession(sid: string) {
-  // 会话已被其他操作移除时不再打开空弹窗，直接提示并重新拉取列表。
-  if (!sessions.value.some(s => s.id === sid)) {
-    message.warning('该会话已不存在，请刷新会话列表')
-    loadSessions()
-    return
-  }
-  if (!isDeletingSession.value) pendingDeleteSessionId.value = sid
-}
-
-/** 删除弹窗仅在非提交态允许关闭，保证请求期间的状态不会被用户中断。 */
-function handleDeleteSessionModalVisible(show: boolean) {
-  if (!show && !isDeletingSession.value) pendingDeleteSessionId.value = null
-}
-
-/** 取消待删除会话，不改动会话和任务数据。 */
-function cancelDeleteSession() {
-  if (!isDeletingSession.value) pendingDeleteSessionId.value = null
-}
-
-/**
- * 确认删除会话，并在删除当前会话后切换到下一个可用会话。
- * WebSocket 必须在服务端删除成功后关闭，避免请求失败时意外中断当前对话。
- */
-async function confirmDeleteSession() {
-  const sid = pendingDeleteSessionId.value
-  if (!sid || isDeletingSession.value) return
-
-  const isCurrentSession = currentSessionId.value === sid
-  isDeletingSession.value = true
-  try {
-    await api.sessions.delete(sid)
-    if (isCurrentSession) {
-      agentWs?.close()
-      agentWs = null
-    }
-    sessions.value = sessions.value.filter(s => s.id !== sid)
-    pendingDeleteSessionId.value = null
-    message.success('会话已删除')
-
-    if (isCurrentSession) {
-      if (sessions.value.length > 0) {
-        await selectSession(sessions.value[0].id)
-      } else {
-        await handleCreateSession()
-      }
-    }
-  } catch (err: any) {
-    message.error(err?.message || '删除会话失败')
-  } finally {
-    isDeletingSession.value = false
-  }
+function handleDeleteSession(_sid: string) {
+  // API.md §3.4/§9：V1 不提供「删除会话」接口；会话为审计留存资产，
+  // 此处按设计规范以提示替代假删除，不向服务端发送请求。
+  message.info('当前版本暂不支持删除会话，对话记录将长期保留以便回溯')
 }
 
 function initWebSocket(sessionId: string, lastEventId = 0) {
@@ -2291,35 +2210,6 @@ onBeforeUnmount(() => {
 <style scoped>
 .agent-layout {
   height: calc(100vh - var(--topbar-h) - 20px);
-}
-
-/* 会话删除弹窗：独立于 DialogProvider 回调，保证删除流程可控。 */
-.session-delete-dialog {
-  width: min(420px, calc(100vw - 32px));
-  padding: 22px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 14px;
-  background: var(--bg-main);
-  box-shadow: 0 16px 48px rgba(15, 23, 42, 0.22);
-}
-
-.session-delete-dialog h3 {
-  margin: 0;
-  color: var(--text-primary);
-  font-size: 16px;
-}
-
-.session-delete-dialog p {
-  margin: 10px 0 20px;
-  color: var(--text-secondary);
-  font-size: 13px;
-  line-height: 1.65;
-}
-
-.session-delete-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
 }
 
 /* 顶部模型切换下拉按钮 */
