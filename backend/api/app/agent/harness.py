@@ -64,6 +64,8 @@ class SessionHarness:
 
 # 会话级 abort（进程内 dict）。部署前提：API 单副本，或网关按 session_id 粘性路由。
 _HARNESS_BY_SESSION: dict[str, SessionHarness] = {}
+# 保护 registry 的 check-and-set，避免共享会话两人同时开两轮 Harness
+_HARNESS_REGISTRY_LOCK = asyncio.Lock()
 
 # 斜杠控制/只读命令的交付句由规则决定；核对不得把 /help 等改成澄清问句
 _DETERMINISTIC_SLASH = frozenset(
@@ -700,10 +702,7 @@ async def dispatch_user_message(
     emit_factory: Callable[[Session], EmitFn],
 ) -> None:
     """收包循环调用：共享会话限制 /compact、/stop 的会话级副作用。"""
-    existing = _HARNESS_BY_SESSION.get(session_id)
-    running = existing is not None and existing.task is not None and not existing.task.done()
     parsed = parse_slash(text)
-
     if parsed.command == "compact" and not is_session_owner:
         await emit_busy(
             "error",
@@ -711,40 +710,44 @@ async def dispatch_user_message(
         )
         return
 
-    if running and existing:
-        if parsed.command == "stop":
-            if existing.user_id != user_id:
-                await emit_busy(
-                    "error",
-                    {"code": ErrorCode.UNAUTHORIZED.value, "message": "仅本轮发起人可以停止生成"},
-                )
+    async with _HARNESS_REGISTRY_LOCK:
+        existing = _HARNESS_BY_SESSION.get(session_id)
+        running = existing is not None and existing.task is not None and not existing.task.done()
+
+        if running and existing:
+            if parsed.command == "stop":
+                if existing.user_id != user_id:
+                    await emit_busy(
+                        "error",
+                        {"code": ErrorCode.UNAUTHORIZED.value, "message": "仅本轮发起人可以停止生成"},
+                    )
+                    return
+                existing.stop.set()
+                existing.abort.set()
+                if existing.task and not existing.task.done():
+                    existing.task.cancel()
                 return
-            existing.stop.set()
-            existing.abort.set()
-            if existing.task and not existing.task.done():
-                existing.task.cancel()
+            await emit_busy("thought", {"text": "正在生成，先 /stop 或等本轮结束"})
             return
-        await emit_busy("thought", {"text": "正在生成，先 /stop 或等本轮结束"})
-        return
 
-    if parsed.command == "stop" and not running:
-        await emit_busy("thought", {"text": "当前没有正在生成的内容"})
-        return
+        if parsed.command == "stop" and not running:
+            await emit_busy("thought", {"text": "当前没有正在生成的内容"})
+            return
 
-    handle = SessionHarness(user_id=user_id, abort=asyncio.Event(), stop=threading.Event())
-    task = asyncio.create_task(
-        _harness_entry(
-            session_id=session_id,
-            user_id=user_id,
-            text=text,
-            attachments=attachments,
-            emit_factory=emit_factory,
-            abort=handle.abort,
-            stop=handle.stop,
+        handle = SessionHarness(user_id=user_id, abort=asyncio.Event(), stop=threading.Event())
+        task = asyncio.create_task(
+            _harness_entry(
+                session_id=session_id,
+                user_id=user_id,
+                text=text,
+                attachments=attachments,
+                emit_factory=emit_factory,
+                abort=handle.abort,
+                stop=handle.stop,
+            )
         )
-    )
-    handle.task = task
-    _HARNESS_BY_SESSION[session_id] = handle
+        handle.task = task
+        _HARNESS_BY_SESSION[session_id] = handle
 
 
 def _illegal_ack_fields(db: Session, spec: TaskCreate) -> list[str]:
@@ -784,15 +787,18 @@ async def handle_confirm_ack(
         session = locked_session
     base = session.pending_confirm if isinstance(session.pending_confirm, dict) else None
 
-    if base is not None:
-        # 旧数据迁移会回填 owner；此处兜底避免历史卡在升级瞬间失去控制人。
-        author_id = session.pending_confirm_author_id or session.user_id
-        if author_id != user.id:
-            await emit(
-                "error",
-                {"code": ErrorCode.UNAUTHORIZED.value, "message": "仅确认卡发起人可以确认或取消该任务"},
-            )
-            return
+    if base is None:
+        await emit("error", {"code": ErrorCode.VALIDATION.value, "message": "没有待确认的评测单，请先发送目标重新生成。"})
+        return
+
+    # 旧数据迁移会回填 owner；此处兜底避免历史卡在升级瞬间失去控制人。
+    author_id = session.pending_confirm_author_id or session.user_id
+    if author_id != user.id:
+        await emit(
+            "error",
+            {"code": ErrorCode.UNAUTHORIZED.value, "message": "仅确认卡发起人可以确认或取消该任务"},
+        )
+        return
 
     if not ok:
         session.pending_confirm = None
@@ -803,15 +809,17 @@ async def handle_confirm_ack(
         await _deliver_sentence(db, session.id, emit, "已取消本次确认，不会创建任务。需要调整目标可以继续说。")
         return
 
-    if base is None:
-        await emit("error", {"code": ErrorCode.VALIDATION.value, "message": "没有待确认的评测单，请先发送目标重新生成。"})
-        return
-
     merged = deep_merge(deepcopy(base), patch or {})
     if merged.get("kind") == "stress":
         await emit(
             "error",
             {"code": ErrorCode.VALIDATION.value, "message": "压测由质量任务勾选「先评后压」派生，不能单独下单"},
+        )
+        return
+    if merged.get("kind") == "rag":
+        await emit(
+            "error",
+            {"code": ErrorCode.VALIDATION.value, "message": "将在知识库阶段启用"},
         )
         return
 
@@ -921,6 +929,13 @@ async def handle_cancel_task(
         return
     if task.created_by != user.id:
         await emit("error", {"code": ErrorCode.UNAUTHORIZED.value, "message": "没有权限做这件事"}, task_id=task.id)
+        return
+    if task.session_id and task.session_id != session.id:
+        await emit(
+            "error",
+            {"code": ErrorCode.VALIDATION.value, "message": "只能取消当前会话中的任务"},
+            task_id=task.id,
+        )
         return
     if task.status in TERMINAL_STATUSES:
         await emit("error", {"code": ErrorCode.VALIDATION.value, "message": "任务已结束"}, task_id=task.id)

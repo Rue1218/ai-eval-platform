@@ -1457,6 +1457,11 @@ const dockClosingNote = ref('')
 /** S10 任务结束收尾：先展示完成 note，2.6s 后再隐藏进度坞（对齐原型 hideDock）。 */
 function finishDock(note: string) {
   activeTask.value = null
+  const sid = currentSessionId.value
+  if (sid) {
+    const rt = sessionRuntimes.get(sid)
+    if (rt) rt.activeTask = null
+  }
   cancellingTaskId.value = null
   dockClosingNote.value = note
   trackTimeout(() => { dockClosingNote.value = '' }, 2600)
@@ -1698,6 +1703,10 @@ function sendPredefined(prompt: string) {
 
 function handleUserSend(text: string, files: any[] = []) {
   const clientMessageId = createClientMessageId()
+  // 新回合开始前封口上一轮打字机，避免第二轮 chunk 写进同一气泡
+  events.value.forEach((item) => {
+    if (item.type === 'agent' && item.streaming) item.streaming = false
+  })
   events.value.push({
     type: 'user',
     text,
@@ -1919,6 +1928,10 @@ function handleConfirmAck(item: StreamItem, confirmed: boolean) {
   // 实时模式断线时不可将确认卡伪造成任务成功；保留卡片供重连后再次确认。
   if (!useLive && !api.isMock()) {
     message.error('Agent 连接未就绪，暂不能确认入队')
+    return
+  }
+  if (useLive && agentWs!.sessionId && agentWs!.sessionId !== currentSessionId.value) {
+    message.error('会话切换中，请稍后再确认')
     return
   }
 
@@ -2468,7 +2481,7 @@ async function loadSessionHistory(sid: string): Promise<number> {
 
     const rt = ensureRuntime(sid)
     // 本轮仍在生成时服务端回放可能落后于内存流，避免用旧快照盖掉正在产出的卡片
-    if (!(rt.isGenerating && rt.events.length > replay.length)) {
+    if (!rt.isGenerating) {
       rt.events = replay
     }
     rt.contextMeter = history.context_meter || null
@@ -2496,10 +2509,14 @@ async function loadSessionHistory(sid: string): Promise<number> {
 async function selectSession(sid: string) {
   if (deletingSessionIds.has(sid)) return
   if (sid === currentSessionId.value && sockets.has(sid)) {
-    return
+    const existing = sockets.get(sid)
+    if (existing?.isConnected) return
+    existing?.close()
+    sockets.delete(sid)
   }
   const epoch = ++selectEpoch
   persistCurrentRuntime()
+  stopFlowAnimations()
   currentSessionId.value = sid
 
   const rt = ensureRuntime(sid)
@@ -2535,6 +2552,9 @@ async function selectSession(sid: string) {
           created_at: t.created_at,
         }
         rt.activeTask = activeTask.value
+      } else if (t) {
+        activeTask.value = null
+        rt.activeTask = null
       }
     } catch { /* 进度坞失败不阻断切会话 */ }
   }
@@ -2695,6 +2715,48 @@ function renderBubbleHtml(raw: string): string {
   return escapeHtml(raw).replace(/\n/g, '<br>')
 }
 
+/** 本轮最后一条用户消息之后仍在流式的助手气泡。 */
+function turnStreamingAgent(list: StreamItem[]): StreamItem | undefined {
+  let from = -1
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (list[i].type === 'user') {
+      from = i
+      break
+    }
+  }
+  for (let i = list.length - 1; i > from; i--) {
+    const item = list[i]
+    if (item.type === 'agent' && item.streaming) return item
+  }
+  return undefined
+}
+
+/** 停掉当前页打字机，避免切会话后定时器改旧缓存并滚动新会话。 */
+function stopFlowAnimations() {
+  flowTimers.forEach((id) => clearTracked(id))
+  events.value.forEach((item) => {
+    if (item.type === 'agent' && item.streaming) item.streaming = false
+    if (item.type === 'thought' && item.streaming) item.streaming = false
+  })
+}
+
+/** 交付后向服务端重拉 ContextMeter，禁止前端自己加减条数。 */
+async function refreshContextMeter(sid: string) {
+  if (!sid || deletingSessionIds.has(sid)) return
+  try {
+    const history = await api.sessions.getMessages(sid)
+    const rt = ensureRuntime(sid)
+    rt.contextMeter = history.context_meter || null
+    rt.compactSummary = history.compact_summary || null
+    if (sid === currentSessionId.value) {
+      currentContextMeter.value = rt.contextMeter
+      currentCompactSummary.value = rt.compactSummary
+    }
+  } catch {
+    /* 仪表刷新失败不挡对话 */
+  }
+}
+
 /** 后台会话继续生成：把事件写入该会话缓存，不打断当前正在看的对话。 */
 function ingestBackground(sid: string, ev: WsServerEvent) {
   if (ev.event === 'pong') return
@@ -2761,7 +2823,7 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
       if (p.stream === 'chunk') {
         const delta = String(p.text || '')
         if (!delta) break
-        let target = [...buf].reverse().find(e => e.type === 'agent' && e.streaming)
+        let target = turnStreamingAgent(buf)
         if (!target) {
           target = { type: 'agent', raw: '', text: '', streaming: true }
           buf.push(target)
@@ -2795,7 +2857,7 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
         })
       }
       if (text && !stage) {
-        const streaming = [...buf].reverse().find(e => e.type === 'agent' && e.streaming)
+        const streaming = turnStreamingAgent(buf)
         if (streaming) {
           streaming.raw = text
           streaming.text = renderBubbleHtml(text)
@@ -2805,11 +2867,13 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
         }
         markGenerating(sid, false)
         rt.harnessStage = ''
+        void refreshContextMeter(sid)
       } else if (!stage) {
-        const orphan = [...buf].reverse().find(e => e.type === 'agent' && e.streaming)
+        const orphan = turnStreamingAgent(buf)
         if (orphan) orphan.streaming = false
         markGenerating(sid, false)
         rt.harnessStage = ''
+        void refreshContextMeter(sid)
       } else {
         markGenerating(sid, true)
       }
@@ -2854,16 +2918,38 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
         stampConfirmCard(confirm, Boolean(p.ok))
         if (!p.ok) confirm.summary = ''
       }
+      void refreshContextMeter(sid)
       break
     }
     case 'error':
       markGenerating(sid, false)
+      rt.activeTask = null
       buf.push({ type: 'error', code: p.code, message: p.message || '执行遇到错误' })
       break
     case 'report':
       markGenerating(sid, false)
+      rt.activeTask = null
       if (p.report_id) buf.push({ type: 'report', reportId: p.report_id })
       break
+    case 'progress': {
+      if (ev.task_id) {
+        const progress = { percent: p.percent, done: p.done, total: p.total, message: p.message }
+        if (!rt.activeTask || rt.activeTask.id !== ev.task_id) {
+          rt.activeTask = {
+            id: ev.task_id,
+            kind: 'benchmark',
+            status: 'running',
+            config: {},
+            progress,
+            created_at: new Date().toISOString(),
+          }
+        } else {
+          rt.activeTask.progress = progress
+        }
+        if ((progress.percent ?? 0) >= 100) rt.activeTask = null
+      }
+      break
+    }
     default:
       break
   }
@@ -2873,11 +2959,15 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
    无论是真流式增量、网关不支持 SSE 的单块兜底、还是降级规则版的整段回复，
    终帧到达后都从已显示长度逐字推进到全文，保证任何链路下用户都看到
    「一个字一个字弹出」的效果。定时器登记进 flowTimers，「暂停生成」可中断。 */
+const typewriteTimerByItem = new WeakMap<object, number>()
+
 function typewriteTo(rawItem: StreamItem, fullText: string) {
   // 响应式关键修复：调用方可能传入 push 进响应式数组前的原始对象引用，
   // 直接修改原始对象不会触发 Vue 重渲染（气泡停留在空文本 + 光标卡死）。
   // reactive() 对同一目标有缓存，与 v-for 渲染取到的是同一个代理，修改即触发更新。
   const item = reactive(rawItem) as StreamItem
+  const prev = typewriteTimerByItem.get(item)
+  if (prev) clearTracked(prev)
   // 已显示前缀可续播时从其长度继续，否则（前缀不匹配）从头渲染
   const start = item.raw && fullText.startsWith(item.raw) ? item.raw.length : 0
   let pos = start
@@ -2896,9 +2986,11 @@ function typewriteTo(rawItem: StreamItem, fullText: string) {
     scrollToBottom()
     if (pos >= total) {
       clearTracked(id)
+      typewriteTimerByItem.delete(item)
       item.streaming = false
     }
   }, stepMs, true)
+  typewriteTimerByItem.set(item, id)
 }
 
 function handleWsEvent(ev: WsServerEvent) {
@@ -2991,7 +3083,7 @@ function handleWsEvent(ev: WsServerEvent) {
       if (p.stream === 'chunk') {
         const delta = String(p.text || '')
         if (delta) {
-          let target = [...events.value].reverse().find(e => e.type === 'agent' && e.streaming)
+          let target = turnStreamingAgent(events.value)
           if (!target) {
             // reactive 包装：新建后立即修改 raw/text，原始对象不触发渲染会丢首帧
             target = reactive({ type: 'agent', raw: '', text: '', streaming: true }) as StreamItem
@@ -3041,21 +3133,23 @@ function handleWsEvent(ev: WsServerEvent) {
         text: text.slice(0, 100) + (text.length > 100 ? '...' : ''),
       })
       if (text && !stage) {
-        const streaming = [...events.value].reverse().find(e => e.type === 'agent' && e.streaming)
+        const streaming = turnStreamingAgent(events.value)
         if (streaming) {
           typewriteTo(streaming, text)
         } else {
-          const item: StreamItem = { type: 'agent', raw: '', text: '', streaming: true }
+          const item: StreamItem = reactive({ type: 'agent', raw: '', text: '', streaming: true })
           events.value.push(item)
           typewriteTo(item, text)
         }
         setCurrentGenerating(false)
         harnessStage.value = ''
+        if (currentSessionId.value) void refreshContextMeter(currentSessionId.value)
       } else if (!stage) {
-        const orphan = [...events.value].reverse().find(e => e.type === 'agent' && e.streaming)
+        const orphan = turnStreamingAgent(events.value)
         if (orphan) orphan.streaming = false
         setCurrentGenerating(false)
         harnessStage.value = ''
+        if (currentSessionId.value) void refreshContextMeter(currentSessionId.value)
       }
       if (text) scrollToBottom()
       break
@@ -3113,6 +3207,7 @@ function handleWsEvent(ev: WsServerEvent) {
         if (!p.ok) target.summary = ''
       }
       pendingAckItem.value = null
+      if (currentSessionId.value) void refreshContextMeter(currentSessionId.value)
       break
     }
     case 'confirm': {

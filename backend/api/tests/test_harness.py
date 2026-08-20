@@ -852,6 +852,127 @@ def test_ack_illegal_dataset_keeps_pending_confirm():
     assert errors[0][1]["code"] == ErrorCode.VALIDATION.value
 
 
+def test_ack_patch_kind_rag_rejected_keeps_pending_confirm():
+    """确认卡 patch 改成 rag 必须被拒，与规划门禁一致，卡保留。"""
+
+    class _AckDb:
+        def query(self, model):
+            class _Q:
+                def filter(self, *args, **kwargs):
+                    return self
+
+                def with_for_update(self):
+                    return self
+
+                def first(self):
+                    return None
+
+                def all(self):
+                    return []
+
+            return _Q()
+
+        def add(self, *_args, **_kwargs):
+            return None
+
+        def commit(self):
+            return None
+
+        def flush(self):
+            return None
+
+    class _User:
+        id = "u1"
+
+    session = AgentSession(id="s1", user_id="u1", title="t")
+    session.pending_confirm = {
+        "kind": "benchmark",
+        "profile_ids": ["p1"],
+        "dataset_id": "d1",
+        "run": {
+            "sample_size": 1000,
+            "concurrency": 4,
+            "timeout_s": 60,
+            "retry": 1,
+            "temperature": 0,
+            "max_tokens": 1024,
+            "system_prompt": "",
+            "k": 5,
+            "use_judge": False,
+        },
+        "with_stress": False,
+    }
+    events: list[tuple[str, dict]] = []
+
+    async def _emit(event: str, payload: dict, **_kwargs) -> int:
+        events.append((event, payload))
+        return 1
+
+    asyncio.run(
+        handle_confirm_ack(
+            _AckDb(),
+            session=session,
+            user=_User(),
+            ok=True,
+            patch={"kind": "rag", "kb_id": "kb1", "gold_qa_id": "g1"},
+            emit=_emit,
+        )
+    )
+    assert session.pending_confirm is not None
+    errors = [item for item in events if item[0] == "error"]
+    assert errors
+    assert errors[0][1]["code"] == ErrorCode.VALIDATION.value
+    assert "知识库" in errors[0][1]["message"]
+
+
+def test_confirm_ack_without_card_does_not_fake_cancel():
+    """没有待确认卡时 ok=false 不得写取消交付句。"""
+
+    class _AckDb:
+        def query(self, *_args, **_kwargs):
+            class _Q:
+                def filter(self, *args, **kwargs):
+                    return self
+
+                def with_for_update(self):
+                    return self
+
+                def first(self):
+                    return None
+
+            return _Q()
+
+        def commit(self):
+            raise AssertionError("无待确认卡不得 commit")
+
+    class _User:
+        id = "u1"
+
+    session = AgentSession(id="s1", user_id="u1", title="t")
+    session.pending_confirm = None
+    events: list[tuple[str, dict]] = []
+
+    async def _emit(event: str, payload: dict, **_kwargs) -> int:
+        events.append((event, payload))
+        return 1
+
+    asyncio.run(
+        handle_confirm_ack(
+            _AckDb(),
+            session=session,
+            user=_User(),
+            ok=False,
+            patch=None,
+            emit=_emit,
+        )
+    )
+    assert session.pending_confirm is None
+    assert events[0][0] == "error"
+    assert events[0][1]["code"] == ErrorCode.VALIDATION.value
+    assert "没有待确认" in events[0][1]["message"]
+    assert not any(item[0] == "confirm_ack" for item in events)
+
+
 class _FakeQuery:
     def filter(self, *args, **kwargs):
         return self
@@ -904,12 +1025,13 @@ class _CancelDb:
         self.commit_calls += 1
 
 
-def _cancel_task(status: str = "running", creator: str = "u-owner") -> Task:
+def _cancel_task(status: str = "running", creator: str = "u-owner", session_id: str = "s-cancel") -> Task:
     """构造不落库的 WS 取消任务。"""
     return Task(
         id="t-cancel",
         kind="benchmark",
         status=status,
+        session_id=session_id,
         created_by=creator,
         config={},
         progress={"done": 1, "total": 10},
@@ -1004,5 +1126,33 @@ def test_ws_cancel_terminal_task_is_rejected_without_writes(status: str):
     )
 
     assert events == [("error", {"code": ErrorCode.VALIDATION.value, "message": "任务已结束"}, task.id)]
+    assert db.added == []
+    assert db.commit_calls == 0
+
+
+def test_ws_cancel_rejects_task_from_other_session():
+    """WS 取消必须绑定当前会话，禁止把 B 会话任务的时间线写进 A。"""
+    task = _cancel_task(session_id="s-other")
+    db = _CancelDb(task)
+    events: list[tuple[str, dict, str | None]] = []
+
+    async def emit(event: str, payload: dict, *, task_id: str | None = None) -> int:
+        events.append((event, payload, task_id))
+        return len(events)
+
+    asyncio.run(
+        handle_cancel_task(
+            db,
+            session=AgentSession(id="s-cancel", user_id="u-owner", title="取消测试"),
+            user=User(id="u-owner", username="owner"),
+            task_id=task.id,
+            emit=emit,
+        )
+    )
+
+    assert events == [
+        ("error", {"code": ErrorCode.VALIDATION.value, "message": "只能取消当前会话中的任务"}, task.id)
+    ]
+    assert task.status == "running"
     assert db.added == []
     assert db.commit_calls == 0
