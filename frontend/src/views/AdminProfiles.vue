@@ -136,6 +136,7 @@
               <div class="model-chip-meta">
                 <span class="mono model-id-tag">{{ p.model }}</span>
                 <span class="mono protocol-tag">{{ p.protocol }}</span>
+                <span class="mono window-tag" title="上下文窗口容量">{{ formatContextWindow(p.context_window) }}</span>
               </div>
 
               <div class="model-chip-bottom">
@@ -176,8 +177,9 @@
             <th>协议档名称</th>
             <th style="width: 160px">协议类型</th>
             <th style="width: 140px">模型标识</th>
+            <th style="width: 100px">上下文窗口</th>
             <th>Base URL</th>
-            <th style="width: 150px">用途标签</th>
+            <th style="width: 140px">用途标签</th>
             <!-- P2 连通性探活列（对齐原型 admin-profiles.html：行内 ping-badge） -->
             <th style="width: 130px">探活</th>
             <th style="width: 200px; text-align: right">操作</th>
@@ -197,6 +199,9 @@
             </td>
             <td>
               <span class="mono" style="font-size: 12px; font-weight: 500">{{ p.model }}</span>
+            </td>
+            <td>
+              <span class="mono window-tag">{{ formatContextWindow(p.context_window) }}</span>
             </td>
             <td>
               <span class="mono" style="font-size: 11.5px; color: var(--text-secondary)">{{ p.base_url }}</span>
@@ -597,6 +602,12 @@ const vendorGroups = computed<VendorGroup[]>(() => {
   return Object.values(groups)
 })
 
+function formatContextWindow(tokens?: number): string {
+  if (!tokens || tokens === 200000) return '200k'
+  if (tokens >= 1000000) return `${(tokens / 1000000).toFixed(0)}M`
+  return `${(tokens / 1000).toFixed(0)}k`
+}
+
 const modalInitialData = ref<{ vendorKey?: string; base_url?: string; protocol?: any; name?: string } | null>(null)
 
 function openModal(profile: Profile | null) {
@@ -882,6 +893,15 @@ onMounted(loadProfiles)
 }
 .protocol-tag {
   color: var(--text-tertiary, #9ca3af);
+}
+.window-tag {
+  display: inline-block;
+  padding: 1px 5px;
+  background: var(--t-profiles, rgba(79, 70, 229, 0.08));
+  color: var(--c-profiles, #4f46e5);
+  border-radius: 4px;
+  font-size: 10.5px;
+  font-weight: 600;
 }
 .model-chip-bottom {
   display: flex;

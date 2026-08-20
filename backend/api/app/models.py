@@ -124,6 +124,7 @@ class ProtocolProfile(Base):
     usages = Column(JSONB, nullable=False, default=list)
     anthropic_version = Column(String, nullable=True)
     encrypted_key = Column(Text, nullable=True)
+    context_window = Column(Integer, nullable=False, default=200000)
     created_by = Column(String, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)

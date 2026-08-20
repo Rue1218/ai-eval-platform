@@ -1,88 +1,147 @@
 <template>
-  <!-- 上下文指示器（开发说明书 §8.1 / §16.6 冻结） -->
-  <n-popover trigger="click" placement="bottom-end" :width="340">
+  <!-- 双圆环上下文容量指示器与两层折叠 Popover 视图 -->
+  <n-popover trigger="click" placement="bottom-end" :width="320" raw :show-arrow="false">
     <template #trigger>
-      <button class="context-meter-btn" type="button" title="点击查看当前会话上下文四段详情">
-        <span class="meter-dot"></span>
-        <span class="meter-label mono">
-          上下文 消息 {{ metricLabel(m) }} · 技能 {{ metricLabel(s) }} · 摘要 {{ metricLabel(c) }} · 余量 {{ metricLabel(r) }} / {{ metricLabel(w) }}
-        </span>
+      <button class="context-ring-btn" type="button" :title="`上下文窗口：已使用 ${formattedTotalTokens} / ${formattedMaxTokens} (${clampedPercent.toFixed(1)}%)`">
+        <svg class="ring-svg" viewBox="0 0 36 36">
+          <!-- 底层浅灰背景环 -->
+          <circle class="ring-bg" cx="18" cy="18" r="14" />
+          <!-- 上层动态彩色进度环 -->
+          <circle
+            class="ring-fill"
+            cx="18"
+            cy="18"
+            r="14"
+            :stroke="activeColor"
+            :stroke-dasharray="strokeDasharray"
+            :stroke-dashoffset="strokeDashoffset"
+          />
+        </svg>
+        <span class="ring-tokens mono" :style="{ color: activeColor }">{{ formattedTotalTokens }}</span>
       </button>
     </template>
 
-    <div class="context-popover">
-      <div class="popover-head">
-        <span class="popover-title">模型上下文窗口剖析</span>
-          <span class="popover-cap mono">{{ metricLabel(m) }}/{{ metricLabel(w) }} 条消息</span>
-      </div>
-
-      <div class="popover-sections">
-        <!-- 1. 人设段落 -->
-        <div class="popover-row">
-          <div class="row-left">
-            <span class="row-tag">人设</span>
-            <span class="row-desc">系统不可变人设 (约 320 字符)</span>
-          </div>
-          <span class="row-status ok">常驻生效</span>
-        </div>
-
-        <!-- 2. 技能说明 -->
-        <div class="popover-row">
-          <div class="row-left">
-            <span class="row-tag">技能</span>
-            <span class="row-desc">当前规划激活技能</span>
-          </div>
-          <span class="row-status" :class="{ active: hasMeter && (s || 0) > 0 }">{{ !hasMeter ? '等待服务端数据' : (s || 0) > 0 ? '已注入 1 项' : '无激活' }}</span>
-        </div>
-
-        <!-- 3. 压缩摘要 -->
-        <div class="popover-row">
-          <div class="row-left">
-            <span class="row-tag">摘要</span>
-            <span class="row-desc">/compact 历史对话压缩摘要</span>
-          </div>
-          <span class="row-status" :class="{ active: hasMeter && (c || 0) > 0 }">{{ !hasMeter ? '等待服务端数据' : (c || 0) > 0 ? '已启用 (1条)' : '0 (未压缩)' }}</span>
-        </div>
-        <div v-if="compactSummary" class="popover-summary-box mono">
-          {{ compactSummary }}
-        </div>
-
-        <!-- 4. 消息原文 -->
-        <div class="popover-row">
-          <div class="row-left">
-            <span class="row-tag">消息</span>
-            <span class="row-desc">窗口内有效消息原文</span>
-          </div>
-          <span class="row-status mono">{{ metricLabel(m) }} 条</span>
-        </div>
-
-        <!-- 5. 余量 -->
-        <div class="popover-row">
-          <div class="row-left">
-            <span class="row-tag">余量</span>
-            <span class="row-desc">当前窗口可用消息槽位</span>
-          </div>
-          <span class="row-status mono">{{ metricLabel(r) }} 条</span>
-        </div>
-
-        <!-- 6. 记忆文件 -->
-        <div class="popover-row disabled">
-          <div class="row-left">
-            <span class="row-tag dim">记忆文件</span>
-            <span class="row-desc">本产品无记忆文件</span>
-          </div>
-          <span class="row-status dim">未启用</span>
+    <!-- 弹窗容器 -->
+    <div class="context-popover-card">
+      <!-- 头部：上下文窗口 + 已用量 + 折叠箭头（点击可展开/折叠） -->
+      <div class="popover-header" @click="isExpanded = !isExpanded">
+        <span class="header-title">上下文窗口</span>
+        <div class="header-right">
+          <span class="header-tokens mono">{{ formattedTotalTokens }}</span>
+          <svg
+            class="chevron-icon"
+            :class="{ expanded: isExpanded }"
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <polyline points="9 18 15 12 9 6" />
+          </svg>
         </div>
       </div>
+
+      <!-- 横向彩色进度条（三色健康度阶梯联动：<50% #2F8DEA, 50-80% #EA9B2C, >=80% #D03B3B） -->
+      <div class="progress-bar-track">
+        <div
+          class="progress-bar-fill"
+          :style="{ width: `${clampedPercent}%`, background: activeColor }"
+        ></div>
+      </div>
+
+      <!-- 第 2 层：展开细分明细（参考图片 2） -->
+      <transition name="expand">
+        <div v-if="isExpanded" class="detail-section">
+          <!-- 1. Messages 消息 -->
+          <div class="detail-row">
+            <div class="row-left">
+              <span class="color-box" :style="{ background: activeColor }"></span>
+              <span class="row-name">Messages</span>
+            </div>
+            <div class="row-right mono">
+              <span class="token-num">{{ formattedMessagesTokens }}</span>
+              <span class="token-pct">{{ messagesPercent.toFixed(1) }}%</span>
+            </div>
+          </div>
+
+          <!-- 2. Skills 技能 -->
+          <div class="detail-row">
+            <div class="row-left">
+              <span class="color-box" :style="{ background: activeColor }"></span>
+              <span class="row-name">Skills</span>
+            </div>
+            <div class="row-right mono">
+              <span class="token-num">{{ formattedSkillsTokens }}</span>
+              <span class="token-pct">{{ skillsPercent.toFixed(1) }}%</span>
+            </div>
+          </div>
+
+          <!-- 3. Free space 剩余可用空间 -->
+          <div class="detail-row">
+            <div class="row-left">
+              <span class="color-box empty"></span>
+              <span class="row-name">Free space</span>
+            </div>
+            <div class="row-right mono">
+              <span class="token-num">{{ formattedFreeTokens }}</span>
+              <span class="token-pct">{{ freePercent.toFixed(1) }}%</span>
+            </div>
+          </div>
+
+          <!-- 4. MCP工具 -->
+          <div class="detail-row sub-row">
+            <div class="row-left">
+              <span class="sub-arrow">›</span>
+              <span class="row-name">MCP工具</span>
+            </div>
+            <div class="row-right mono">
+              <span class="token-num">{{ mcpToolsCount }}</span>
+              <span class="token-max">{{ mcpToolsMax }}</span>
+            </div>
+          </div>
+
+          <!-- 5. 记忆文件 -->
+          <div class="detail-row sub-row">
+            <div class="row-left">
+              <span class="sub-arrow">›</span>
+              <span class="row-name">记忆文件</span>
+            </div>
+            <div class="row-right mono">
+              <span class="token-num">{{ memoryFilesCount }}</span>
+              <span class="token-max">{{ memoryFilesMax }}</span>
+            </div>
+          </div>
+        </div>
+      </transition>
     </div>
   </n-popover>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { ref, computed } from 'vue'
 import { NPopover } from 'naive-ui'
 
 export interface ContextMeterData {
+  // Token 级度量
+  total_tokens?: number
+  max_tokens?: number
+  messages_tokens?: number
+  skills_tokens?: number
+  free_tokens?: number
+  used_percent?: number
+  messages_percent?: number
+  skills_percent?: number
+  free_percent?: number
+  mcp_tools_count?: number
+  mcp_tools_max?: number
+  memory_files_count?: number
+  memory_files_max?: number
+
+  // 兼容旧版消息条数字段
   messages?: number
   skills?: number
   summary?: number
@@ -95,129 +154,367 @@ const props = defineProps<{
   compactSummary?: string | null
 }>()
 
-// 仪表数字只能使用会话接口返回的 context_meter，未加载时明确展示未知状态。
-const hasMeter = computed(() => !!props.meter)
-const m = computed(() => props.meter?.messages ?? null)
-const s = computed(() => props.meter?.skills ?? null)
-const c = computed(() => props.meter?.summary ?? null)
-const r = computed(() => props.meter?.headroom ?? null)
-const w = computed(() => props.meter?.window ?? null)
+// 是否展开第 2 层细分视图
+const isExpanded = ref(true)
 
-/** 将服务端上下文字段格式化为可读文本，禁止使用前端推导的默认数字。 */
-function metricLabel(value: number | null): string {
-  return value === null ? '—' : String(value)
+// SVG 双圆环周长计算 (r = 14 -> 2 * PI * 14 = 87.9646)
+const CIRCUMFERENCE = 87.9646
+const strokeDasharray = `${CIRCUMFERENCE} ${CIRCUMFERENCE}`
+
+// 最大 Token 上限（默认 200k）
+const maxTokens = computed(() => {
+  return props.meter?.max_tokens || 200000
+})
+
+// 已使用 Token 总数（优先读取 total_tokens，若无则从条数计算）
+const totalTokens = computed(() => {
+  if (props.meter?.total_tokens !== undefined) {
+    return props.meter.total_tokens
+  }
+  const m = props.meter?.messages || 0
+  const s = props.meter?.skills || 0
+  return (m * 4200) + (s * 2000)
+})
+
+// 消息与技能 Token 拆分
+const messagesTokens = computed(() => {
+  if (props.meter?.messages_tokens !== undefined) {
+    return props.meter.messages_tokens
+  }
+  const m = props.meter?.messages || 0
+  return m * 4200
+})
+
+const skillsTokens = computed(() => {
+  if (props.meter?.skills_tokens !== undefined) {
+    return props.meter.skills_tokens
+  }
+  const s = props.meter?.skills || 0
+  return s > 0 ? 2000 : 0
+})
+
+// 剩余可用 Token
+const freeTokens = computed(() => {
+  if (props.meter?.free_tokens !== undefined) {
+    return props.meter.free_tokens
+  }
+  return Math.max(0, maxTokens.value - totalTokens.value)
+})
+
+// 百分比计算
+const usedPercent = computed(() => {
+  if (props.meter?.used_percent !== undefined) {
+    return props.meter.used_percent
+  }
+  return Math.min(100, Math.max(0, (totalTokens.value / maxTokens.value) * 100))
+})
+
+const clampedPercent = computed(() => {
+  return Math.min(100, Math.max(0, usedPercent.value))
+})
+
+const messagesPercent = computed(() => {
+  if (props.meter?.messages_percent !== undefined) {
+    return props.meter.messages_percent
+  }
+  return Math.min(100, (messagesTokens.value / maxTokens.value) * 100)
+})
+
+const skillsPercent = computed(() => {
+  if (props.meter?.skills_percent !== undefined) {
+    return props.meter.skills_percent
+  }
+  return Math.min(100, (skillsTokens.value / maxTokens.value) * 100)
+})
+
+const freePercent = computed(() => {
+  if (props.meter?.free_percent !== undefined) {
+    return props.meter.free_percent
+  }
+  return Math.max(0, 100 - clampedPercent.value)
+})
+
+// 工具与记忆资源项
+const mcpToolsCount = computed(() => props.meter?.mcp_tools_count ?? 0)
+const mcpToolsMax = computed(() => props.meter?.mcp_tools_max ?? 28)
+const memoryFilesCount = computed(() => props.meter?.memory_files_count ?? 0)
+const memoryFilesMax = computed(() => props.meter?.memory_files_max ?? 1)
+
+// SVG stroke-dashoffset 计算（从 0 到 CIRCUMFERENCE）
+const strokeDashoffset = computed(() => {
+  const ratio = clampedPercent.value / 100
+  return CIRCUMFERENCE * (1 - ratio)
+})
+
+/**
+ * 动态三色健康度阶梯：
+ * < 50%：蓝色 #2F8DEA
+ * 50% - 80%：橙色 #EA9B2C
+ * >= 80%：红色 #D03B3B
+ */
+const activeColor = computed(() => {
+  const pct = clampedPercent.value
+  if (pct < 50) return '#2F8DEA'
+  if (pct < 80) return '#EA9B2C'
+  return '#D03B3B'
+})
+
+// 格式化 Token 数字显示
+function formatTokens(val: number): string {
+  if (val >= 1000000) {
+    return `${(val / 1000000).toFixed(1)}M`
+  }
+  if (val >= 1000) {
+    return `${(val / 1000).toFixed(1)}k`
+  }
+  return String(val)
 }
+
+const formattedTotalTokens = computed(() => formatTokens(totalTokens.value))
+const formattedMaxTokens = computed(() => formatTokens(maxTokens.value))
+const formattedMessagesTokens = computed(() => formatTokens(messagesTokens.value))
+const formattedSkillsTokens = computed(() => formatTokens(skillsTokens.value))
+const formattedFreeTokens = computed(() => formatTokens(freeTokens.value))
 </script>
 
 <style scoped>
-.context-meter-btn {
+/* 双圆环触发按钮 */
+.context-ring-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 10px;
-  background: var(--bg-elevated, rgba(255, 255, 255, 0.04));
-  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
-  border-radius: 8px;
-  color: var(--text-secondary, #94a3b8);
-  font-size: 11.5px;
+  padding: 3px 8px 3px 4px;
+  background: var(--bg-elevated, #ffffff);
+  border: 1px solid var(--border-subtle, #e5e7eb);
+  border-radius: 20px;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: all 0.18s ease;
+  user-select: none;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.context-ring-btn:hover {
+  border-color: var(--border-hover, #cbd5e1);
+  transform: translateY(-0.5px);
+}
+
+[data-theme='dark'] .context-ring-btn {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.ring-svg {
+  width: 22px;
+  height: 22px;
+  display: block;
+}
+
+.ring-bg {
+  fill: none;
+  stroke: #e5e7eb;
+  stroke-width: 3.4;
+}
+
+[data-theme='dark'] .ring-bg {
+  stroke: rgba(255, 255, 255, 0.12);
+}
+
+.ring-fill {
+  fill: none;
+  stroke-width: 3.4;
+  stroke-linecap: round;
+  transform: rotate(-90deg);
+  transform-origin: 50% 50%;
+  transition: stroke-dashoffset 0.35s ease, stroke 0.3s ease;
+}
+
+.ring-tokens {
+  font-size: 11.5px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* 弹窗卡片 */
+.context-popover-card {
+  background: var(--bg-main, #ffffff);
+  border: 1px solid var(--border-subtle, #e5e7eb);
+  border-radius: 10px;
+  padding: 12px 14px;
+  box-shadow: 0 8px 24px -4px rgba(0, 0, 0, 0.12), 0 2px 6px -1px rgba(0, 0, 0, 0.06);
+  color: var(--text-primary, #1e293b);
   user-select: none;
 }
-.context-meter-btn:hover {
-  border-color: var(--accent-ai, #10b981);
-  color: var(--text-primary, #ffffff);
+
+[data-theme='dark'] .context-popover-card {
+  background: #1e293b;
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #f1f5f9;
 }
 
-.meter-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--accent-ai, #10b981);
-  box-shadow: 0 0 6px rgba(16, 185, 129, 0.5);
-}
-
-.context-popover {
-  padding: 4px 2px;
-}
-.popover-head {
+/* 头部 */
+.popover-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  cursor: pointer;
   padding-bottom: 8px;
-  margin-bottom: 8px;
-  border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
-}
-.popover-title {
-  font-size: 12.5px;
-  font-weight: 700;
-  color: var(--text-primary, #ffffff);
-}
-.popover-cap {
-  font-size: 11px;
-  color: var(--accent-ai, #10b981);
 }
 
-.popover-sections {
+.header-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary, #1e293b);
+}
+
+[data-theme='dark'] .header-title {
+  color: #f8fafc;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-secondary, #64748b);
+}
+
+.header-tokens {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.chevron-icon {
+  color: var(--text-tertiary, #94a3b8);
+  transition: transform 0.2s ease;
+}
+
+.chevron-icon.expanded {
+  transform: rotate(90deg);
+}
+
+/* 横向彩色进度条 */
+.progress-bar-track {
+  width: 100%;
+  height: 4px;
+  background: #f1f5f9;
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+
+[data-theme='dark'] .progress-bar-track {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.progress-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.35s ease, background 0.3s ease;
+}
+
+/* 明细列表 */
+.detail-section {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  padding-top: 4px;
 }
 
-.popover-row {
+.detail-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 4px 6px;
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.02);
+  font-size: 12px;
+  line-height: 1.4;
 }
+
 .row-left {
   display: flex;
   align-items: center;
-  gap: 8px;
-}
-.row-tag {
-  font-size: 10.5px;
-  font-weight: 700;
-  padding: 1px 5px;
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--text-primary, #ffffff);
-}
-.row-tag.dim {
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--text-tertiary, #64748b);
-}
-.row-desc {
-  font-size: 11.5px;
-  color: var(--text-secondary, #94a3b8);
+  gap: 7px;
 }
 
-.row-status {
-  font-size: 11px;
-  color: var(--text-tertiary, #64748b);
+.color-box {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
 }
-.row-status.ok {
-  color: #38bdf8;
+
+.color-box.empty {
+  background: #e2e8f0;
 }
-.row-status.active {
-  color: var(--accent-ai, #10b981);
+
+[data-theme='dark'] .color-box.empty {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.row-name {
+  color: var(--text-primary, #334155);
+  font-size: 12px;
+}
+
+[data-theme='dark'] .row-name {
+  color: #cbd5e1;
+}
+
+.row-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+}
+
+.token-num {
+  color: var(--text-secondary, #64748b);
+  min-width: 44px;
+  text-align: right;
+}
+
+.token-pct {
+  color: var(--text-primary, #1e293b);
   font-weight: 600;
-}
-.row-status.dim {
-  color: var(--text-tertiary, #64748b);
+  min-width: 40px;
+  text-align: right;
 }
 
-.popover-summary-box {
-  font-size: 11px;
-  line-height: 1.5;
-  color: var(--text-secondary, #94a3b8);
-  background: #0f172a;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 6px;
-  padding: 6px 8px;
-  max-height: 80px;
-  overflow-y: auto;
+[data-theme='dark'] .token-pct {
+  color: #f1f5f9;
+}
+
+/* 子行（MCP / 记忆文件） */
+.sub-row {
+  color: var(--text-secondary, #64748b);
+}
+
+.sub-arrow {
+  color: var(--text-tertiary, #94a3b8);
+  font-size: 12px;
+  font-weight: 700;
+  margin-left: 1px;
+}
+
+.sub-row .row-name {
+  color: var(--text-secondary, #64748b);
+}
+
+.token-max {
+  color: var(--text-tertiary, #94a3b8);
+  min-width: 24px;
+  text-align: right;
+}
+
+/* 过渡动画 */
+.expand-enter-active,
+.expand-leave-active {
+  transition: all 0.2s ease-out;
+  max-height: 200px;
+  overflow: hidden;
+}
+
+.expand-enter-from,
+.expand-leave-to {
+  opacity: 0;
+  max-height: 0;
+  transform: translateY(-4px);
 }
 </style>

@@ -63,6 +63,7 @@ export interface Profile {
   api_key?: string // 永不回显，仅在提交时可选填写
   anthropic_version?: string
   usages?: ProfileUsage[]
+  context_window?: number // 上下文窗口容量 (Tokens)
   created_at: string
   updated_at?: string
 }
@@ -75,6 +76,7 @@ export interface ProfileCreateIn {
   api_key: string
   anthropic_version?: string
   usages?: ProfileUsage[]
+  context_window?: number
 }
 
 export interface ProfileUpdateIn {
@@ -85,6 +87,7 @@ export interface ProfileUpdateIn {
   api_key?: string
   anthropic_version?: string
   usages?: ProfileUsage[]
+  context_window?: number
 }
 
 export interface ProfileCheckOut {

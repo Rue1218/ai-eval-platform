@@ -16,13 +16,27 @@ from .persona import COMPACT_SYSTEM
 
 @dataclass(frozen=True)
 class ContextMeter:
-    """ContextMeter 四段数字（/20 只约束消息窗口）。"""
+    """ContextMeter 扩展度量（包含消息窗口与 Token 级容量统计）。"""
 
     messages: int
     skills: int
     summary: int
     headroom: int
     window: int = WINDOW
+    # Token 级绝对值与占比扩展
+    total_tokens: int = 0
+    max_tokens: int = 200000
+    messages_tokens: int = 0
+    skills_tokens: int = 0
+    free_tokens: int = 200000
+    used_percent: float = 0.0
+    messages_percent: float = 0.0
+    skills_percent: float = 0.0
+    free_percent: float = 100.0
+    mcp_tools_count: int = 0
+    mcp_tools_max: int = 28
+    memory_files_count: int = 0
+    memory_files_max: int = 1
 
     def as_dict(self) -> dict:
         return {
@@ -31,6 +45,19 @@ class ContextMeter:
             "summary": self.summary,
             "headroom": self.headroom,
             "window": self.window,
+            "total_tokens": self.total_tokens,
+            "max_tokens": self.max_tokens,
+            "messages_tokens": self.messages_tokens,
+            "skills_tokens": self.skills_tokens,
+            "free_tokens": self.free_tokens,
+            "used_percent": self.used_percent,
+            "messages_percent": self.messages_percent,
+            "skills_percent": self.skills_percent,
+            "free_percent": self.free_percent,
+            "mcp_tools_count": self.mcp_tools_count,
+            "mcp_tools_max": self.mcp_tools_max,
+            "memory_files_count": self.memory_files_count,
+            "memory_files_max": self.memory_files_max,
         }
 
 
@@ -58,16 +85,55 @@ def window_rows(db: Session, session: AgentSession) -> list[Message]:
 
 
 def context_meter(db: Session, session: AgentSession, *, skill_id: str | None = None) -> ContextMeter:
-    """刷新用的四段计数；技能仅在本轮规划进行中为 1。"""
+    """刷新用的四段计数与 Token 级容量度量。"""
     rows = window_rows(db, session)
     m_count = len(rows)
     summary_flag = 1 if getattr(session, "compact_summary", None) else 0
     skill_flag = 1 if skill_id else 0
+
+    # 1. 尝试从 Profile 读取上下文窗口上限（默认 200,000）
+    max_tokens = 200000
+    try:
+        from ..models import ProtocolProfile, Setting
+        setting = db.query(Setting).filter(Setting.key == "agent_profile_id").first()
+        if setting and setting.value:
+            prof = db.query(ProtocolProfile).filter(ProtocolProfile.id == setting.value).first()
+            if prof and getattr(prof, "context_window", None):
+                max_tokens = int(prof.context_window)
+    except Exception:
+        max_tokens = 200000
+
+    # 2. 计算 Token 消耗预估（中英混排约 1.3 字符/Token，加单条消息基础结构开销）
+    msg_char_count = sum(len(r.content or "") for r in rows)
+    messages_tokens = max(0, int(msg_char_count * 1.35)) + (m_count * 80)
+    skills_tokens = 2000 if skill_flag else 0
+    summary_tokens = 1200 if summary_flag else 0
+    total_tokens = messages_tokens + skills_tokens + summary_tokens
+
+    free_tokens = max(0, max_tokens - total_tokens)
+    used_pct = round(min(100.0, (total_tokens / max_tokens) * 100), 1)
+    msg_pct = round(min(100.0, (messages_tokens / max_tokens) * 100), 1)
+    sk_pct = round(min(100.0, (skills_tokens / max_tokens) * 100), 1) if skill_flag else 0.0
+    free_pct = round(max(0.0, 100.0 - used_pct), 1)
+
     return ContextMeter(
         messages=m_count,
         skills=skill_flag,
         summary=summary_flag,
         headroom=WINDOW - m_count,
+        total_tokens=total_tokens,
+        max_tokens=max_tokens,
+        messages_tokens=messages_tokens,
+        skills_tokens=skills_tokens,
+        free_tokens=free_tokens,
+        used_percent=used_pct,
+        messages_percent=msg_pct,
+        skills_percent=sk_pct,
+        free_percent=free_pct,
+        mcp_tools_count=0,
+        mcp_tools_max=28,
+        memory_files_count=0,
+        memory_files_max=1,
     )
 
 
