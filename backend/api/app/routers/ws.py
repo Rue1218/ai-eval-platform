@@ -11,6 +11,7 @@ import json
 import logging
 import re
 import time
+import uuid
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -37,6 +38,8 @@ from ..models import (
 )
 from ..models import Session as AgentSession
 from ..security import TOKEN_TYPE_WS, decode_token
+from ..session_access import find_visible_session
+from ..session_connections import SESSION_CONNECTION_HUB
 
 router = APIRouter(tags=["ws"])
 logger = logging.getLogger("ai-eval.ws")
@@ -179,12 +182,8 @@ async def _emit(
 
 
 def _owned_session(db: Session, session_id: str, user_id: str) -> AgentSession | None:
-    """读取当前成员拥有的会话，阻止短票跨账号复用会话 ID。"""
-    return (
-        db.query(AgentSession)
-        .filter(AgentSession.id == session_id, AgentSession.user_id == user_id)
-        .first()
-    )
+    """读取当前成员可访问的未删除会话，私有会话不泄露给协作者。"""
+    return find_visible_session(db, session_id, user_id)
 
 
 def _assert_attachments(db: Session, attachments: list[dict]) -> list[str]:
@@ -200,6 +199,24 @@ def _assert_attachments(db: Session, attachments: list[dict]) -> list[str]:
         if count != len(set(file_ids)):
             raise ValueError("附件不存在")
     return file_ids
+
+
+def _message_payload(message: Message, user: User) -> dict:
+    """构造持久化用户消息事件，供协作者实时回显并按幂等键去重。"""
+    return {
+        "id": message.id,
+        "role": message.role,
+        "content": message.content,
+        "attachments": message.attachments or [],
+        "author_id": message.author_id,
+        "author": {
+            "id": user.id,
+            "username": user.username,
+            "display_name": user.display_name,
+        },
+        "client_message_id": message.client_message_id,
+        "created_at": message.created_at.isoformat(),
+    }
 
 
 def _deep_merge(base: dict, patch: dict) -> dict:
@@ -357,13 +374,52 @@ async def _handle_user_message(
     user: User,
     text: str,
     attachments: list[dict],
+    client_message_id: str | None,
     state: _ConnState,
 ) -> None:
     """落库用户消息后把 Harness 丢到 asyncio.Task，不阻塞收包循环。"""
     file_ids = _assert_attachments(db, attachments)
-    db.add(Message(session_id=session.id, role="user", content=text, attachments=file_ids))
+    if client_message_id:
+        existing = (
+            db.query(Message)
+            .filter(
+                Message.session_id == session.id,
+                Message.client_message_id == client_message_id,
+            )
+            .first()
+        )
+        if existing:
+            # 浏览器断线后重发相同幂等键：只补发已保存的气泡，不再触发第二轮 Harness。
+            await _emit(
+                db,
+                ws,
+                session.id,
+                "message",
+                _message_payload(existing, user),
+                state=state,
+            )
+            return
+    message = Message(
+        session_id=session.id,
+        role="user",
+        content=text,
+        attachments=file_ids,
+        author_id=user.id,
+        client_message_id=client_message_id,
+    )
+    db.add(message)
     session.updated_at = datetime.now(UTC)
     db.commit()
+    db.refresh(message)
+    # 用户气泡必须是持久化事件；否则协作者只有刷新历史才能看见对方发言。
+    await _emit(
+        db,
+        ws,
+        session.id,
+        "message",
+        _message_payload(message, user),
+        state=state,
+    )
     agent_trace(f"收到 user_message session={session.id[:8]} chars={len(text)}")
 
     async def emit_busy(event: str, payload: dict, *, task_id: str | None = None) -> int:
@@ -375,18 +431,25 @@ async def _handle_user_message(
             if stream_kind in {"chunk", "think"}:
                 # 瞬态流式帧：不落库、不占事件号，避免断线回放半截增量
                 delta = str(payload.get("text") or "")
-                frame = (
-                    _think_frame(session.id, state.cursor, delta)
-                    if stream_kind == "think"
-                    else _stream_frame(session.id, state.cursor, delta)
-                )
-                if task_id:
-                    frame["task_id"] = task_id
-                try:
-                    async with state.lock:
-                        await ws.send_json(frame)
-                except Exception:
-                    logger.debug("WS 流式帧未投递 session_id=%s", session.id)
+                if stream_kind == "chunk":
+                    # 正文增量对团队共享会话的全部在线成员可见；每个连接独立持锁发送。
+                    def _build_chunk_frame(cursor: int) -> dict:
+                        frame = _stream_frame(session.id, cursor, delta)
+                        if task_id:
+                            frame["task_id"] = task_id
+                        return frame
+
+                    await SESSION_CONNECTION_HUB.broadcast_chunk(session.id, _build_chunk_frame)
+                else:
+                    # 原始推理思考链只保留给发起本轮生成的连接，不向协作者泄露。
+                    frame = _think_frame(session.id, state.cursor, delta)
+                    if task_id:
+                        frame["task_id"] = task_id
+                    try:
+                        async with state.lock:
+                            await ws.send_json(frame)
+                    except Exception:
+                        logger.debug("WS 思考帧未投递 session_id=%s", session.id)
                 return state.cursor
             return await _emit(hdb, ws, session.id, event, payload, task_id=task_id, state=state)
 
@@ -397,6 +460,7 @@ async def _handle_user_message(
         user_id=user.id,
         text=text,
         attachments=file_ids,
+        is_session_owner=session.user_id == user.id,
         emit_busy=emit_busy,
         emit_factory=emit_factory,
     )
@@ -490,7 +554,12 @@ def _heartbeat_interval(db: Session) -> float:
     return 15.0
 
 
-async def _forward_loop(ws: WebSocket, session_id: str, state: _ConnState) -> None:
+async def _forward_loop(
+    ws: WebSocket,
+    session_id: str,
+    user_id: str,
+    state: _ConnState,
+) -> None:
     """后台转发循环：把 Worker 等进程外写入 ws_events 的新事件推送到当前连接。
 
     Worker 执行长任务时只向 ws_events 表追加 progress/report/error 事件，
@@ -501,6 +570,14 @@ async def _forward_loop(ws: WebSocket, session_id: str, state: _ConnState) -> No
         await asyncio.sleep(1.0)
         db: Session = SessionLocal()
         try:
+            # 分享被收回或会话被软删除时，已连接协作者也必须立即失去事件读取能力。
+            if not _owned_session(db, session_id, user_id):
+                try:
+                    async with state.lock:
+                        await ws.close(code=4404)
+                except Exception:
+                    pass
+                return
             async with state.lock:
                 rows = (
                     db.query(WsEvent)
@@ -532,6 +609,7 @@ async def ws_agent(websocket: WebSocket):
     db: Session = SessionLocal()
     forwarder: asyncio.Task | None = None
     heartbeat: asyncio.Task | None = None
+    connection_id: str | None = None
     try:
         requested_session_id = websocket.query_params.get("session_id")
         if requested_session_id:
@@ -557,7 +635,9 @@ async def ws_agent(websocket: WebSocket):
         # 服务端重复欢迎语会造成冗余消息；首条消息由用户触发后正常回复。
 
         # 启动后台转发：Worker 回推的 progress/report/error 经 ws_events 表送达本连接
-        forwarder = asyncio.create_task(_forward_loop(websocket, session_id, state))
+        connection_id = uuid.uuid4().hex
+        SESSION_CONNECTION_HUB.register(connection_id, session_id, user.id, websocket, state)
+        forwarder = asyncio.create_task(_forward_loop(websocket, session_id, user.id, state))
         # 启动应用层心跳：周期发送 pong 供前端判活（前端不发 JSON ping）
         heartbeat = asyncio.create_task(
             _heartbeat_loop(websocket, session_id, state, _heartbeat_interval(db))
@@ -565,6 +645,12 @@ async def ws_agent(websocket: WebSocket):
 
         while True:
             raw = await websocket.receive_text()
+            # 会话可能在连接存活期间被收回共享或软删除；收包前再次校验权限。
+            fresh_session = _owned_session(db, session_id, user.id)
+            if not fresh_session:
+                await websocket.close(code=4404)
+                return
+            session = fresh_session
             try:
                 message = json.loads(raw)
             except json.JSONDecodeError:
@@ -577,14 +663,38 @@ async def ws_agent(websocket: WebSocket):
             if event == "user_message":
                 text = str(payload.get("text", "")).strip()
                 attachments = payload.get("attachments", [])
+                client_message_id = payload.get("client_message_id")
                 if not isinstance(attachments, list):
                     await _emit(db, websocket, session_id, "error", {"code": "VALIDATION", "message": "attachments 格式无效"}, state=state)
+                    continue
+                if client_message_id is not None and (
+                    not isinstance(client_message_id, str)
+                    or not client_message_id.strip()
+                    or len(client_message_id) > 128
+                ):
+                    await _emit(
+                        db,
+                        websocket,
+                        session_id,
+                        "error",
+                        {"code": "VALIDATION", "message": "client_message_id 格式无效"},
+                        state=state,
+                    )
                     continue
                 if not text and not attachments:
                     await _emit(db, websocket, session_id, "error", {"code": "VALIDATION", "message": "消息不能为空"}, state=state)
                     continue
                 try:
-                    await _handle_user_message(db, websocket, session, user, text, attachments, state)
+                    await _handle_user_message(
+                        db,
+                        websocket,
+                        session,
+                        user,
+                        text,
+                        attachments,
+                        client_message_id.strip() if isinstance(client_message_id, str) else None,
+                        state,
+                    )
                 except AppError as exc:
                     agent_trace(f"user_message AppError code={exc.code.value}")
                     await _emit(
@@ -647,4 +757,6 @@ async def ws_agent(websocket: WebSocket):
             forwarder.cancel()
         if heartbeat is not None:
             heartbeat.cancel()
+        if connection_id is not None:
+            SESSION_CONNECTION_HUB.unregister(session_id, connection_id)
         db.close()

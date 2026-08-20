@@ -1,18 +1,17 @@
-"""已有模块契约对齐回归单测（API V1.3 审计修复项）。
+"""已有模块契约对齐回归单测（API V1.5 审计修复项）。
 
-覆盖：V1 无删除会话接口、协议档 Agent 引用保护、任务全员只读口径、
+覆盖：会话软删除路由、协议档 Agent 引用保护、任务全员只读口径、
 TaskOut 顶层引用字段、activity-summary 时间边界解析。全部不依赖数据库。
 """
 
 from datetime import UTC, datetime
 
 import pytest
-from fastapi.testclient import TestClient
 
 from app.errors import AppError, ErrorCode
-from app.main import app
 from app.models import ProtocolProfile, Setting, Task, TaskEvent, User
 from app.routers.profiles import delete_profile
+from app.routers.sessions import router as sessions_router
 from app.routers.tasks import _task_out, get_task, task_summary
 from app.routers.users import _parse_bound
 
@@ -36,6 +35,9 @@ class _RichQuery:
         return self
 
     def limit(self, *args, **kwargs):
+        return self
+
+    def with_for_update(self, *args, **kwargs):
         return self
 
     def count(self):
@@ -101,15 +103,17 @@ def _task(creator: str) -> Task:
     )
 
 
-# ─── 1. V1 明确不提供删除会话接口（API §3.4/§9/§12.4） ───
+# ─── 1. V1.5 会话软删除接口（API §3.4） ───
 
 
-def test_delete_session_endpoint_not_provided():
-    # 路由层不再注册 DELETE /api/sessions/{id}：请求以 404/405 表达接口不存在，
-    # 绝不会返回 2xx 假成功
-    client = TestClient(app)
-    resp = client.delete("/api/sessions/s-1")
-    assert resp.status_code in {404, 405}
+def test_delete_session_endpoint_is_registered():
+    """会话删除已升级为软删除契约，路由必须受登录依赖保护地注册。"""
+    route = next(
+        (item for item in sessions_router.routes if item.path == "/api/sessions/{session_id}"),
+        None,
+    )
+    assert route is not None
+    assert "DELETE" in route.methods
 
 
 # ─── 2. 协议档删除的 Agent 引用保护（API §3.6） ───

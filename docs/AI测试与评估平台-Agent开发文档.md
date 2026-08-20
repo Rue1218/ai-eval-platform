@@ -4,11 +4,11 @@
 | :--- | :--- |
 | 文档名称 | Agent 独立开发说明书 |
 | 版本 | V1.3 |
-| 日期 | 2026-08-19 |
-| 最近修订 | 2026-08-20：问候/闲聊跳过规划模型与核对，避免「你好」串行 3 次上游；切换会话保留历史；Harness 缺口补齐 |
-| 用法 | **实现 `/agent` 以本文为准（Harness / 斜杠 / 窗口算法）。** REST/WS JSON 以 API.md V1.4 为准。完成某项后勾选文末 Task，并在「最近修订」追加一行。 |
+| 日期 | 2026-08-20 |
+| 最近修订 | 2026-08-20：问候/闲聊跳过规划模型与核对；切换会话保留历史并让后台继续生成；新增默认私有/团队共享会话、软删除、协作者正文流、消息作者与确认卡作者边界；修复任务取消确认、创建者权限提示与 Worker 终态竞态 |
+| 用法 | **实现 `/agent` 以本文为准（Harness / 斜杠 / 窗口算法）。** REST/WS JSON 以 API.md V1.5 为准。完成某项后勾选文末 Task，并在「最近修订」追加一行。 |
 
-本文是评测平台 **Agent 子系统** 的完整开发说明书：目标、边界、运行时骨架、协议、模块、代码落点与验收任务都写在这里。与 PRD / API.md 冲突时，字段名与事件名以那两份为准；Harness、斜杠、上下文算法以本文 §16 为准。§4.6 所列增量已收入 **API.md V1.4**。
+本文是评测平台 **Agent 子系统** 的完整开发说明书：目标、边界、运行时骨架、协议、模块、代码落点与验收任务都写在这里。与 PRD / API.md 冲突时，字段名与事件名以那两份为准；Harness、斜杠、上下文算法以本文 §16 为准。§4.6 所列增量已收入 **API.md V1.5**。
 
 ---
 
@@ -19,7 +19,7 @@
 要做成的体验：
 
 1. 接入平台指定的大模型；思考过程可见；回复渲染 Markdown；Mermaid 与数学公式为明确后补渲染层。思考强度无滑杆，由 Harness 内部档位决定。  
-2. 会话可刷新、可断线续上；思考、工具、技能徽标、MCP 工具卡、确认卡都能回放（不新增事件名）。  
+2. 会话可刷新、可断线续上；思考、工具、技能徽标、MCP 工具卡、确认卡都能回放；V1.5 增加持久化 `message` 事件用于协作者实时用户气泡。
 3. 只能调内部短工具；四种评测技能内置。Subagent / 通用工作流不做产品，但预留调用边界。  
 4. 每个会话有上下文窗口、可压缩（`/compact`）；界面实时拆开 **消息 / 技能 / 摘要 / 余量**；本产品无记忆文件段。  
 5. 默认 **先规划、中间 ReAct、交付前 Reflection**（Harness：调用次数、失败回退、阶段提示均有规定）。  
@@ -86,18 +86,19 @@ Worker 容器  长任务（评测、用例、RAG、下发压测）
 2. 心跳 30s（传输层 ping/pong）。应用层服务端可发 `pong`。前端不发 JSON `ping`。  
 3. 重连必须带 `session_id` + `last_event_id`，服务端补发 `event_id` 更大的事件。  
 4. 前端**先** `POST /api/sessions` 再带 `session_id` 连接。无 `session_id` 时服务端可建空会话（兼容），`/new` 与会话列表仍以 REST 为准。  
-5. 关闭码冻结：短票非法/过期 `4401`；会话不存在或不属于当前用户 `4404`；正常断开 `1000`。
+5. 关闭码冻结：短票非法/过期 `4401`；会话不存在、已软删除或当前成员无权访问 `4404`；正常断开 `1000`。收到 `4404` 后前端停止重连旧会话并回到列表。
 
-**服务端 → 前端（事件名不可增减）**
+**服务端 → 前端（事件名冻结；V1.5 允许 `message`）**
 
 公共头：`event` `session_id` `task_id?` `event_id` `ts` `payload`。
 
 | event | payload | 界面 |
 | :--- | :--- | :--- |
 | `thought` | `{ text, latency_ms?, stage?, skill_id? }` | 思考卡；`stage`/`skill_id` 可选，用于阶段提示与技能徽标 |
+| `message` | `{ id, role:"user", content, attachments, author_id, author, client_message_id?, created_at }` | 用户气泡；落库并占 event_id，协作者按 id/幂等键去重 |
 | `tool_call` | `{ name, arguments }` | 工具卡 pending |
 | `tool_result` | `{ name, ok, data\|error, latency_ms? }` | 工具卡完成 |
-| `confirm` | 确认卡 JSON（§4.2） | 确认卡，等待 ack |
+| `confirm` | 确认卡 JSON（§4.2）+ `confirm_author` 元数据 | 确认卡，只有发起人可 ack |
 | `progress` | `{ percent?, done, total, message }` | 进度坞，仅这四字段 |
 | `report` | `{ report_id }` | 报告卡 |
 | `error` | `{ code, message }` | 错误条 + Toast |
@@ -105,15 +106,17 @@ Worker 容器  长任务（评测、用例、RAG、下发压测）
 
 禁止发明 `thinking` `token` `plan` `reflect` `assistant` 等事件。规划句、复核句都放进 `thought.text`（可用「规划」「复核」作正文前缀）。
 
+共享会话中，`thought.stream="chunk"` 只向同会话在线成员广播，`think` 原始推理流只给本轮发起连接；两者均不落库、不占 event_id，断线依赖最终交付句恢复。当前是单 API 副本的进程内 Hub，扩为多副本必须换成 Redis Pub/Sub 等进程外广播。
+
 **前端 → 服务端（仅三条）**
 
 ```json
-{ "event": "user_message", "payload": { "text": "/benchmark 对比两模型", "attachments": [{ "file_id": "uuid" }] } }
+{ "event": "user_message", "payload": { "text": "/benchmark 对比两模型", "attachments": [{ "file_id": "uuid" }], "client_message_id": "browser-uuid" } }
 { "event": "confirm_ack", "payload": { "ok": true, "patch": { "with_stress": false } } }
 { "event": "cancel_task", "payload": { "task_id": "uuid" } }
 ```
 
-斜杠、芯片、普通打字全部走 `user_message`。`ok=false` 不入队。`ok=true` 时 `patch` 与原卡深合并，校验通过才创建任务。同一会话同一时刻最多一张待确认卡。
+斜杠、芯片、普通打字全部走 `user_message`。`ok=false` 不入队。`ok=true` 时 `patch` 与原卡深合并，校验通过才创建任务。同一会话同一时刻最多一张待确认卡。`client_message_id` 用于浏览器重连重发幂等和本地乐观气泡去重。
 
 ### 4.2 确认卡（= `POST /api/tasks` 的 body）
 
@@ -155,11 +158,12 @@ Worker 专用（Agent 进程禁止跑完）：`benchmark.run` `rag.evaluate` `te
 
 ### 4.5 会话 REST
 
-- `GET/POST /api/sessions`  
-- `GET /api/sessions/{id}/messages` 返回 `messages`、`events`，以及增量字段 `pending_confirm`、`context_meter`（§4.6）  
-- 无删除会话接口  
+- `GET/POST /api/sessions`：新会话默认 `private`；`team` 表示当前内部团队的正常成员均可读写；
+- `PUT /api/sessions/{id}/sharing`：仅 owner，在 `private` / `team` 间切换；收回共享时立即关闭协作者 WS；
+- `DELETE /api/sessions/{id}`：仅 owner，软删除；存在生成、待确认卡或非终态任务时返回 `VALIDATION`；
+- `GET /api/sessions/{id}/messages` 返回 `messages`、`events`，以及增量字段 `pending_confirm`、`pending_confirm_author_id`、`context_meter`（§4.6）。
 
-`messages`：用户原文，以及 **交付句**（见下）。`ws_events`：思考、工具、确认、进度、报告（规划/复核 thought 也在这里）。
+`messages`：用户原文及其 `author_id` / `client_message_id`，以及 **交付句**（见下）。`ws_events`：用户 `message`、思考、工具、确认、进度、报告（规划/复核 thought 也在这里）。会话 owner 不因协作者发言改变。
 
 **哪些 thought 写入 `messages.role=assistant`（冻结）**
 
@@ -173,9 +177,9 @@ Worker 专用（Agent 进程禁止跑完）：`benchmark.run` `rag.evaluate` `te
 
 同一句交付文本：先 `_emit thought`，再 `INSERT messages`，正文相同。刷新：对话气泡来自 `messages`，思考/工具/确认卡来自 `events`。禁止把规划+复核+已入队三条都当 assistant 消息（否则约 5 个下单回合就满 20）。
 
-### 4.6 相对 API.md 的增量（**已回写 API.md V1.4**）
+### 4.6 相对 API.md 的增量（**已回写 API.md V1.5**）
 
-下列内容以 **API.md V1.4** 为接口真理；本文保留摘要便于实现 Harness。禁止另搞第二套路径。
+下列内容以 **API.md V1.5** 为接口真理；本文保留摘要便于实现 Harness。禁止另搞第二套路径。
 
 | 增量 | 形状 |
 | :--- | :--- |
@@ -186,7 +190,10 @@ Worker 专用（Agent 进程禁止跑完）：`benchmark.run` `rag.evaluate` `te
 | 列 `sessions.compact_summary` | TEXT 可空 |
 | 列 `sessions.compact_keep_from` | 消息 id 可空，窗口游标，见 §16.6 |
 | 列 `sessions.pending_confirm` | JSONB 可空 |
-| `GET .../messages` 增补 | `pending_confirm`、`context_meter` |
+| 列 `sessions.pending_confirm_author_id` | 确认卡作者；团队协作时只允许该成员 ack |
+| 列 `sessions.visibility` / `deleted_at` | 默认私有、可团队共享、软删除不物理清历史 |
+| 列 `messages.author_id` / `client_message_id` | 用户发言人、浏览器幂等与协作者实时去重 |
+| `GET .../messages` 增补 | `author`、`pending_confirm_author_id`、`context_meter` |
 
 `context_meter`：`{ "messages", "skills", "summary", "headroom", "window": 20 }`。刷新必须用服务端数字，禁止前端按 messages 表总条数自己减。
 
@@ -544,7 +551,7 @@ ChatHead 右侧（或输入框上方）常驻，压缩或新消息后立刻更�
 | `backend/api/app/routers/cases.py` | 用例 AI 生成/补全 |
 | `frontend/src/views/Datasets.vue` `Cases.vue` `Tasks.vue` `AdminStress.vue` | 各页 AI 入口，遵守 §10.1 |
 
-压缩摘要：`sessions.compact_summary`。窗口游标：`sessions.compact_keep_from`。待确认卡：`sessions.pending_confirm`。偏好：`GET /api/agent/prefs`（ack 时服务端写）。自定义斜杠：仅 `/api/slash-commands`。凡改表结构用 Alembic。上述 REST/列已收入 **API.md V1.4**。
+压缩摘要：`sessions.compact_summary`。窗口游标：`sessions.compact_keep_from`。待确认卡：`sessions.pending_confirm` + `pending_confirm_author_id`。共享范围：`sessions.visibility` + `deleted_at`。偏好：`GET /api/agent/prefs`（ack 时服务端写）。自定义斜杠：仅 `/api/slash-commands`。凡改表结构用 Alembic。上述 REST/列已收入 **API.md V1.5**。
 
 当前已知缺口（开工时对着改）：`ws.py` 仍一次 JSON 规划且同步阻塞收包循环、上下文只取 8 条、**交付句助手消息常不落库**、工具卡仍有旧英文名、`llm.py` 已返回耗时但 thought/tool_result **尚未带 `latency_ms`**、live 页仍有模拟按钮、无 ContextMeter 四段、无技能徽标、无 `/compact`、待确认卡仍是进程内 `_PENDING_CARDS`。
 
@@ -675,7 +682,7 @@ ChatHead 右侧（或输入框上方）常驻，压缩或新消息后立刻更�
 - [ ] 改了表结构就有迁移  
 - [ ] 对应 Task 已勾选，文首修订已更新  
 - [ ] 实现与 §16 冻结 JSON / 接口 / 公式一致  
-- [ ] §4.6 增量与 API.md V1.4 一致（路径、payload、错误码）  
+- [ ] §4.6 增量与 API.md V1.5 一致（路径、payload、错误码）
 
 ---
 
@@ -796,7 +803,7 @@ Worker 夹紧：`sample_size = min(请求值, 1000, 行数)`；`concurrency` ≤
 `clarify`：`spec=null`，只发 thought 问句。`reject`：发 `error`，不出 confirm。
 
 **待确认卡**  
-列 `sessions.pending_confirm` JSONB 可空（Alembic）。发 confirm 时写入；任意 `confirm_ack` 后清空。刷新以该列 + `events` 回放；禁止只靠进程内字典。
+列 `sessions.pending_confirm` JSONB 及 `sessions.pending_confirm_author_id`（Alembic）。发 confirm 时在同一事务写入卡与作者；只有该作者的 `confirm_ack` 可以确认、拒绝或提交 patch，成功/拒绝时在同一事务清空两列。刷新以该列 + 作者字段 + `events` 回放；禁止只靠进程内字典，也禁止协作者覆盖已有卡。
 
 **thought 缺省**  
 无 `latency_ms` 则不显示耗时；无 `stage` 则用相邻工具卡推断；无 `skill_id` 则无徽标。规划、复核各一条 thought（**不**写入 messages）；交付句另见 §4.5。ReAct 默认只发工具卡。
@@ -922,9 +929,9 @@ ws_agent 主循环只负责 receive + 分发：
     → 否则 create_task(run_harness)；主循环继续 receive
 
 会话级 abort（不是连接级）：
-  进程内 dict session_id → { abort: Event, harness_task }
+  进程内 dict session_id → { user_id, abort: Event, harness_task }
   规划、每一轮短工具、每一次模型调用之前检查 abort
-  双标签同一会话：任一连接发 /stop，两边都停这一轮生成
+  同一成员双标签：任一连接发 /stop，两边都停这一轮生成
 ```
 
 - 本轮 Harness 未 ack：置 `abort`，取消未发出的工具与后续模型调用，发 thought「已停止生成」并写入 messages（交付句）；**不**清 queued 任务。已发出的 confirm 保留（用户仍可取消卡）。  
@@ -933,9 +940,10 @@ ws_agent 主循环只负责 receive + 分发：
 - 整回合墙钟 120s：发 `error` `TIMEOUT`「本轮超时，未出确认卡」+ thought 说明，不出卡；等价于 abort。  
 - 前端：本地发送 `/stop` 后可忽略本轮后续 thought/tool 直到下一条用户消息；**以服务端 thought 为准**。  
 - `/cancel` 只取消本会话非终态任务（与 REST 按 `task_id` 跨会话取消不同）；权限仍按 PRD：创建者可取消自己的，管理员可取消任何人的。
+- 共享会话中：只有本轮 Harness 发起成员可以 `/stop`；只有会话 owner 可以 `/compact`；其他团队成员可正常发送下一条消息、查看持久化事件和正文 chunk。
 
 **确认卡回放**  
-`GET /api/sessions/{id}/messages` 增加 `pending_confirm`（与列同源）。前端优先该字段做成可编辑卡；`events` 里的 `confirm` 只作只读回放，避免两张卡。
+`GET /api/sessions/{id}/messages` 增加 `pending_confirm` 与 `pending_confirm_author_id`（与列同源）。前端只为确认卡作者显示可操作按钮；`events` 里的 `confirm` 只作只读回放，避免两张卡。
 
 **偏好（只读给规划，写入仅 ack 成功）——§4.6 增量**
 
@@ -1053,7 +1061,7 @@ GET /api/sessions/{id}/messages
 首条 user 文本 trim 后取 40 字符，超出加 `…`。`/compact` `/help` `/stop` 不改标题。
 
 **WS 连接**  
-每个浏览器标签一连接；切会话带新 `session_id` 重连（可同一短票未过期则续用，过期再领票）。切走 **不等于** `/stop`：旧会话 harness 继续跑完（未置 abort），已发出事件落库，关掉的 socket 不再推送；回看靠 REST。同一会话双标签共用会话级 abort。
+每个浏览器标签一连接；切会话带新 `session_id` 重连（可同一短票未过期则续用，过期再领票）。切走 **不等于** `/stop`：旧会话 harness 继续跑完（未置 abort），已发出事件落库，关掉的 socket 不再推送；回看靠 REST。同一成员的双标签可共同 `/stop`；共享会话的其他成员只能看正文流，不能停止他人的回合。
 
 **Markdown**  
 `role=assistant` 的 messages 与 `thought.text` 长度 > 80 或含 `` ``` `` 时用 MarkdownView；规划短句（notes）纯文本。思考卡结束 **800ms** 后收起。无 token 流式。
@@ -1216,7 +1224,7 @@ M3 接 LightRAG：把 `LIGHTRAG_ENABLED` 改为 True，在 `query_lightrag` 请�
 
 ---
 
-## 19. 修改代码文件与作用清单（2026-08-20 Harness 缺口补齐）
+## 19. 修改代码文件与作用清单（2026-08-20 Harness 与团队共享会话）
 
 | 文件 | 作用 |
 | :--- | :--- |
@@ -1226,6 +1234,16 @@ M3 接 LightRAG：把 `LIGHTRAG_ENABLED` 改为 True，在 `query_lightrag` 请�
 | `backend/api/app/agent/harness.py` | 发出偏好 thought；补规划闭环；控制斜杠先 `run_gates`；**仅确认卡**再 `maybe_model_check` |
 | `backend/api/app/agent/persona.py` | 增加补规划附加段 `REPLAN_JSON_SUFFIX` |
 | `backend/api/tests/test_harness.py` | 补 TC-05/08/09/14/16/17/19/20b 等单测 |
+| `backend/api/app/models.py` | 会话共享/软删除/确认卡作者列，以及消息作者和浏览器幂等键 |
+| `backend/api/migrations/versions/*` | 由 Alembic 自动生成的团队共享会话迁移与历史作者回填 |
+| `backend/api/app/session_access.py` | 会话可见性、owner 管理权的唯一权限判断 |
+| `backend/api/app/session_connections.py` | 单 API 副本的在线正文 chunk 广播与撤销共享断连 |
+| `backend/api/app/routers/sessions.py` | 共享设置、软删除、消息作者和会话历史权限 |
+| `backend/api/app/routers/ws.py` | 用户消息事件、团队正文流、连接权限复验与幂等回显 |
+| `backend/api/app/agent/harness.py` | 确认卡作者锁定、协作者 `/stop`/`/compact` 边界 |
+| `backend/api/app/routers/tasks.py` | 共享会话挂载任务的可见性校验 |
+| `frontend/src/api/types.ts` `http.ts` `ws.ts` | 共享会话、消息作者、客户端幂等键及新 REST/WS 契约 |
+| `frontend/src/views/Agent.vue` | 团队标识、共享设置、软删除、协作者气泡与流式回显 |
 
 ---
 
@@ -1249,5 +1267,34 @@ M3 接 LightRAG：把 `LIGHTRAG_ENABLED` 改为 True，在 `query_lightrag` 请�
 | `backend/api/app/agent/harness.py` | 注释与核对范围对齐 |
 | `backend/api/tests/test_harness.py` | 问候跳过规划模型；闲聊跳过核对 |
 
+---
+
+## 22. 任务取消确认与终态并发（2026-08-20）
+
+`cancel_task` 与 `POST /api/tasks/{id}/cancel` 都只允许任务创建者操作；前端以
+`creator_id` 与当前成员 ID 判定，非创建者不展示可执行按钮，避免先展示再返回
+`UNAUTHORIZED`。Agent 页发起取消后只能显示「等待服务端确认」：收到
+`tool_result(name="task.cancel", ok=true)` 或 REST 成功响应才关闭进度坞并显示
+`cancelled`，失败必须保留任务和重试入口。
+
+取消与 Worker 完成路径都必须先用同一任务行锁刷新状态：取消锁到任务后才可写
+`cancelled`，Worker 在 Benchmark 汇总、用例生成落库和压测骨架完成前也只允许
+`running` 任务继续。已经 `cancelled` 的任务不得创建报告、用例集或完成事件；已经
+完成的任务也不能被取消请求以陈旧读结果反向覆盖。这避免最后一批样本完成时的双向
+终态竞态。
+
+### 修改代码文件与作用清单（2026-08-20 取消链路修复）
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `frontend/src/views/Agent.vue` | 取消请求进入确认态；失败不再伪报成功，WS/REST 确认后才收起进度坞 |
+| `frontend/src/views/Tasks.vue` | 表格和详情抽屉按任务创建者显示取消/重跑写操作 |
+| `frontend/src/components/drawers/TaskDetailDrawer.vue` | 抽屉复用父页权限判定，避免旁路越权操作入口 |
+| `frontend/src/api/http.ts`、`frontend/src/api/ws.ts`、`frontend/src/api/types.ts` | 返回 REST 取消终态、识别 WS 发送失败、补齐 `creator_id` 类型 |
+| `backend/api/app/agent/harness.py` | WS 取消与 REST 对齐权限、审计和 `task_events`，回传关联任务的工具确认 |
+| `backend/worker/app/task_state.py` | 统一 Worker 各终态写入前的行锁与运行态校验 |
+| `backend/worker/app/benchmark.py`、`testcase.py`、`main.py` | 防止 Benchmark、用例生成和压测骨架完成路径覆盖 `cancelled` |
+| `backend/api/tests/test_task_permissions.py`、`backend/api/tests/test_harness.py` | 覆盖 REST/WS 非创建者拒绝、取消时间线和确认事件 |
+| `backend/worker/tests/test_task_state.py`、`test_benchmark_cancel.py`、`.github/workflows/ci.yml` | 覆盖 Worker 陈旧对象竞态，并纳入 CI 执行 |
 
   

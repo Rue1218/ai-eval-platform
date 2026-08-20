@@ -13,6 +13,7 @@ from ..errors import AppError, ErrorCode
 from ..models import AuditLog, Report, Task, TaskEvent, User
 from ..models import Session as AgentSession
 from ..schemas import TaskCreate, TaskDetailOut, TaskEventOut, TaskOut
+from ..session_access import require_visible_session
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 ACTIVE_STATUSES = {"queued", "running", "awaiting_case_confirm"}
@@ -34,8 +35,8 @@ def _task_out(task: Task) -> dict:
 
 
 def _owned_task(db: Session, task_id: str, user_id: str) -> Task:
-    """读取当前成员创建的任务，写操作（取消 / 重跑）仅限创建者本人。"""
-    task = db.query(Task).filter(Task.id == task_id).first()
+    """锁定当前成员创建的任务，串行化取消、重跑与 Worker 终态写入。"""
+    task = db.query(Task).filter(Task.id == task_id).with_for_update().first()
     if not task:
         raise AppError(ErrorCode.NOT_FOUND, "任务不存在")
     if task.created_by != user_id:
@@ -51,17 +52,17 @@ def _visible_task(db: Session, task_id: str) -> Task:
     return task
 
 
-def _validate_session(db: Session, session_id: str | None, user_id: str) -> None:
-    """确保任务挂载的 Agent 会话存在且归当前成员所有。"""
+def _validate_session(
+    db: Session,
+    session_id: str | None,
+    user_id: str,
+    *,
+    lock: bool = False,
+) -> AgentSession | None:
+    """确保任务挂载的 Agent 会话对当前成员可见且未软删除。"""
     if not session_id:
-        return
-    session = (
-        db.query(AgentSession)
-        .filter(AgentSession.id == session_id, AgentSession.user_id == user_id)
-        .first()
-    )
-    if not session:
-        raise AppError(ErrorCode.NOT_FOUND, "会话不存在")
+        return None
+    return require_visible_session(db, session_id, user_id, lock=lock)
 
 
 def _append_event(db: Session, task: Task, event: str, message: str, *, level: str = "info") -> None:
@@ -85,7 +86,10 @@ def create_task(
     user: User = Depends(get_current_user),
 ):
     """校验确认卡后原子入队；未确认的非法字段不会产生任务行。"""
-    _validate_session(db, body.session_id, user.id)
+    session = _validate_session(db, body.session_id, user.id, lock=bool(body.session_id))
+    if session and session.pending_confirm:
+        # 团队协作时不得绕过确认卡直接从 REST 抢占会话活动任务。
+        raise AppError(ErrorCode.CONCURRENCY, "会话存在待确认任务，请先由发起人确认或取消")
     if body.session_id:
         existing = (
             db.query(Task)
@@ -227,6 +231,8 @@ def rerun_task(
     if task.status not in TERMINAL_STATUSES:
         raise AppError(ErrorCode.VALIDATION, "仅终态任务可重跑")
     if task.session_id:
+        # 已私有化或软删除的会话不能承接新任务，避免从任务页绕过会话边界。
+        _validate_session(db, task.session_id, user.id)
         existing = (
             db.query(Task)
             .filter(Task.session_id == task.session_id, Task.status.in_(ACTIVE_STATUSES))

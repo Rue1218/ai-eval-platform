@@ -38,6 +38,7 @@ from .db import SessionLocal
 from .events import push_ws
 from .models import CaseItem, CaseSet, ProtocolProfile, Setting, StoredFile, Task, TaskEvent
 from .protocol import ProtocolCallError, call_protocol
+from .task_state import claim_running_task_for_terminal_write
 
 logger = logging.getLogger("worker.testcase")
 
@@ -54,6 +55,11 @@ def _now():
 
 def _fail(db: Session, task: Task, code: str, message: str) -> None:
     """任务失败收尾：落终态、写错误时间线并推送 WS error 事件。"""
+    task_id = task.id
+    task = claim_running_task_for_terminal_write(db, task_id)
+    if not task:
+        logger.info("testcase task %s skipped failure because it is no longer running", task_id)
+        return
     task.status = "failed"
     task.finished_at = _now()
     task.result = {**(task.result or {}), "error_code": code, "error_message": message}
@@ -211,6 +217,11 @@ def run_testcase(task_id: str) -> None:
             return
 
         # ─── 落库用例集 + 自检红字 + 任务转 awaiting_case_confirm ───
+        # 模型调用期间可能收到取消；落库前重新锁定任务，不能覆盖 cancelled 终态。
+        task = claim_running_task_for_terminal_write(db, task.id)
+        if not task:
+            logger.info("testcase task %s skipped persistence because it is no longer running", task_id)
+            return
         expires_at = _now() + timedelta(hours=CONFIRM_WINDOW_H)
         case_set = CaseSet(
             task_id=task.id,
