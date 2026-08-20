@@ -567,6 +567,7 @@
               </span>
               <span class="progress-msg">{{ activeTask.progress?.message || '压测执行中' }}</span>
               <button
+                v-if="canCancelActiveTask"
                 class="btn btn-ghost btn-sm"
                 :disabled="cancellingTaskId === activeTask.id"
                 @click="handleCancelActiveTask(activeTask.id)"
@@ -587,6 +588,7 @@
             <span class="progress-nums mono">{{ activeTask.progress?.done || 0 }}/{{ activeTask.progress?.total || 100 }}</span>
             <span class="progress-msg">{{ activeTask.progress?.message || '任务进行中...' }}</span>
             <button
+              v-if="canCancelActiveTask"
               class="btn btn-ghost btn-sm"
               :disabled="cancellingTaskId === activeTask.id"
               @click="handleCancelActiveTask(activeTask.id)"
@@ -897,6 +899,16 @@ const stagedFiles = ref<any[]>([])
 const activeTask = ref<Task | null>(null)
 // 取消请求发送后等待服务端确认，避免重复提交且不提前伪造 cancelled。
 const cancellingTaskId = ref<string | null>(null)
+
+/** 共享会话里进度坞只给任务创建者展示取消入口，服务端仍是最终权限裁决。 */
+const canCancelActiveTask = computed(() => {
+  const task = activeTask.value
+  const user = authStore.user
+  if (!task || !user) return false
+  const creatorId = task.creator_id || task.created_by
+  // 无创建者信息时宁可暂不展示，异步补齐后再开放，避免协作者得到越权入口。
+  return !!creatorId && creatorId === user.id
+})
 
 const isSlashCommandMode = computed(() => {
   return (inputText.value || '').trimStart().startsWith('/')
@@ -2081,6 +2093,10 @@ function handleWsToggle() {
 }
 
 function handleCancelActiveTask(taskId: string) {
+  if (!canCancelActiveTask.value || activeTask.value?.id !== taskId) {
+    message.error('仅任务创建者可以取消任务')
+    return
+  }
   if (cancellingTaskId.value === taskId) return
   // S9 取消弹窗区分压测/评测：压测立即停发（危险语义按钮），评测当前样本结束后停止
   const isStress = activeTask.value?.kind === 'stress'
@@ -2839,6 +2855,14 @@ function handleWsEvent(ev: WsServerEvent) {
             progress,
             created_at: new Date().toISOString(),
           } as any
+          // Worker 进度事件不携带创建者，补读任务以决定共享会话里的取消按钮归属。
+          void api.tasks.get(ev.task_id).then((task) => {
+            if (activeTask.value?.id === task.id) {
+              activeTask.value.creator_id = task.creator_id
+              activeTask.value.created_by = task.created_by
+              activeTask.value.creator = task.creator
+            }
+          }).catch(() => undefined)
         } else {
           activeTask.value.progress = progress
         }
