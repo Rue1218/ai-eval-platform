@@ -5,7 +5,7 @@
 | 文档名称 | Agent 独立开发说明书 |
 | 版本 | V1.6 |
 | 日期 | 2026-08-20 |
-| 最近修订 | 2026-08-20：Harness ReAct 改为内部短工具 JSON 多轮循环（禁止 function calling）；长任务槽位齐后确认卡入队；前端每轮独立思考卡 / ToolCall 卡 / 技能徽标 |
+| 最近修订 | 2026-08-21：Harness 按 TurnMode 选择 ReAct / Plan-and-Solve / Reflection，禁止每回合固定三阶段 |
 | 用法 | **实现 `/agent` 以本文为准（Harness / 斜杠 / 窗口算法）。** REST/WS JSON 以 API.md V1.6 为准。完成某项后勾选文末 Task，并在「最近修订」追加一行。 |
 
 本文是评测平台 **Agent 子系统** 的完整开发说明书：目标、边界、运行时骨架、协议、模块、代码落点与验收任务都写在这里。与 PRD / API.md 冲突时，字段名与事件名以那两份为准；Harness、斜杠、上下文算法以本文 §16 为准。§4.6 所列增量已收入 **API.md V1.6**。
@@ -22,7 +22,7 @@
 2. 会话可刷新、可断线续上；思考、工具、技能徽标、ToolCall 卡、确认卡都能回放；V1.6 增加思考快照、确认回执、压缩摘要与持久化 `message` 事件。
 3. 只能调内部短工具；四种评测技能内置。Subagent / 通用工作流不做产品，但预留调用边界。  
 4. 每个会话有上下文窗口、可压缩（`/compact`）；界面实时拆开 **消息 / 技能 / 摘要 / 余量**；本产品无记忆文件段。  
-5. 默认 **先规划、中间 ReAct（Think-Act-Observe）、交付前 Reflection**（Harness：调用次数、失败回退、阶段提示均有规定）。  
+5. **按任务选范式**：一两步工具用 ReAct；评测下单等有结构的多步用 Plan-and-Solve；确认卡前用规则门禁（可选 1 次核对）。禁止每句话都走「规划技能 → 列出协议档 → 复核」。  
 6. 工作方式对齐「先评后压」；其它页面 AI 逐页预留（数据集、用例、任务诊断、报告解读、压测建议）。  
 7. 输入框 `/`：上区系统 15 条，下区团队自定义模板（可添加，不能改人设、不能跳过确认卡）。  
 8. 思考卡 / 工具卡展示模型与工具耗时；生成中提示当前阶段（规划中 / 调用工具 / 复核中）。  
@@ -203,18 +203,25 @@ Worker 专用（Agent 进程禁止跑完）：`benchmark.run` `rag.evaluate` `te
 
 ---
 
-## 5. Harness Engineering（规划 → ReAct → 复核）
+## 5. Harness Engineering（按 TurnMode 选择范式）
 
 这是运行时骨架，不是界面上的三种模式。模型只负责填结构化产物；**能不能出确认卡、能不能建任务，由门禁决定**。
 
+ReAct（Yao 2022）与 Plan-and-Solve（Wang 2023）是同一根轴：下一步依赖观察 → 偏 ReAct；步骤结构事先清楚 → 偏 Plan-and-Solve（失败再补规划）。Reflection（Shinn 2023）是外层，只在有可验证信号时启用；本产品的真信号是确认卡门禁，不是每回合都调核对模型。
+
 ```text
 TurnInput（自然语言 / 斜杠 / 芯片 / 页面 REST）
-    → PLAN     产出：intent、缺哪些确认卡槽位、建议短工具、交付类型
-    → REACT    Think-Act-Observe：每轮模型输出 MCP JSON（thought/tool/arguments/done/reply），经 mcp_tools.execute_short_tool 执行 1 个短工具；失败则按 tools_needed 串行
-    → REFLECT  交付前必做：规则清单为主，模型核对为辅
+    → TurnMode 路由（0 次模型）
+         DIRECT      /help /status /new /compact /cancel：规则交付
+         CHAT        问候：流式回复，跳过 ReAct
+         REACT_ONLY  生图/配音/列出协议档：1～2 个短工具，无评测技能卡
+         PLAN_SOLVE  /benchmark 或明确评测：规划 → 执行队列或短 ReAct → 门禁 + 可选核对
+         INTENT      含糊 NL：一次规划分类后再收束为上面之一
     → 交付     确认卡 | 澄清问句 | 纯文本 | 控制动作 | 错误
     → 仅 ack   task.create → Worker
 ```
+
+WS 事件名仍冻结为 `thought` / `tool_call` / `tool_result` / `confirm` / `error`。长任务不得在对话循环执行。
 
 ### 5.1 产物形状（路径可跳，字段不可乱编）
 
@@ -233,15 +240,15 @@ TurnInput（自然语言 / 斜杠 / 芯片 / 页面 REST）
 
 ### 5.2 何时跳过哪一段
 
-| 场景 | 规划 | ReAct | 复核 |
-| :--- | :--- | :--- | :--- |
-| `/benchmark` 且资产能列全 | 短 | 1～2 次 list | 出卡前必过 |
-| 用户话含糊 | 问缺什么 | 可 0 轮 | 不出卡 |
-| `/help` `/status` `/compact` | 短 | 按需 | 不得误下单 |
-| `/cancel` `/rerun` `/new` `/stop` | 短 | 读当前任务 | 控制动作门禁 |
-| 闲聊 | 问候走 L0 定位（0 次规划模型、跳过 ReAct）；其它自然语言走规划模型自主选 intent/工具；**不发**规划/复核思考卡 | 非问候可按规划调工具 | 规则确认没有 create（不调核对模型、不发复核卡） |
-| RAG / 解读尚未交付 | 识别意图 | 可不调工具 | **拒绝并说明未启用** |
-| 页面 AI | 表单即规划 | 无工具卡 | 只返回候选 |
+| TurnMode | 判定 | 规划模型 | ReAct 决策模型 | 规划/复核思考卡 | 核对模型 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| DIRECT | `/help` `/status` `/new` `/compact` `/cancel` | 斜杠模板 0 次 | 否（队列仅 cancel 可读任务） | 否 | 否 |
+| CHAT | 问候且无评测口令 | L0 0 次 | 否 | 否 | 否 |
+| REACT_ONLY | 生图/配音/列出协议档或数据集；`/profiles` | L0/模板 0 次 | 自然语言是；斜杠 list 走队列 | 否 | 否 |
+| PLAN_SOLVE | `/benchmark` `/testcase` `/stress` `/rerun`；「帮我评一下」 | 斜杠模板或 1 次规划 | 斜杠填槽否（执行清单）；NL 评测是 | 是 | 仅 `delivery=confirm` 且规则 pass |
+| INTENT | 其它自然语言 | 1 次规划选 intent | 收束后再定 | 收束为 PLAN_SOLVE 才发 | 同上 |
+
+规则门禁 `run_gates` 每回合都跑（0 次模型），保证闲聊不能 create。页面 AI：表单即规划，无工具卡。
 
 ReAct 停机（任一即进入复核）：槽位已从**本轮工具返回值**填齐；工具失败无替代；轮次到顶；本轮不需要工具。
 
@@ -1383,6 +1390,20 @@ Qwen Image 按 `audio.voiceclone` 的内部短工具方式接入：自然语言�
 | `frontend/src/components/agent/ToolCard.vue` | 副标题 `ToolCall · name`；始终展示输入 arguments / 输出 result |
 | `backend/api/tests/test_harness.py` | 内部短工具多轮、长任务不执行、模型不可用回退 |
 | `docs/AI测试与评估平台-Agent开发文档.md` | §5 行动阶段与预算说明 |
+
+---
+
+## 29. 修改代码文件与作用清单（2026-08-21 TurnMode 路由）
+
+按任务复杂度选择范式：一两步短工具走 ReAct；评测下单走 Plan-and-Solve（斜杠执行清单，NL 可短 ReAct）；确认卡前规则门禁 + 可选核对。Reflection 不是每回合必跑的第三段。
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/agent/turn_mode.py` | `select_turn_mode` / `refine_turn_mode` 与 ReAct LLM、补规划、核对开关 |
+| `backend/api/app/agent/harness.py` | `_run_turn` 按模式跳过规划卡、补规划、核对模型 |
+| `backend/api/app/agent/plan.py` | 只读清单 L0；生图/配音/inspect 跳过规划模型 |
+| `backend/api/tests/test_harness.py` | TurnMode 路由与 inspect 规划单测 |
+| `docs/AI测试与评估平台-Agent开发文档.md` | §5 改为按 TurnMode 跳过 |
 
 
 

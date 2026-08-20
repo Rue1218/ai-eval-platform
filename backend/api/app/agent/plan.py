@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -26,7 +27,7 @@ from .imagegen import inject_imagegen_plan, looks_like_image_generation
 from .log import agent_trace
 from .persona import PLAN_RETRY_SUFFIX, REPLAN_JSON_SUFFIX, plan_system, turn_system
 from .slash import SlashParse
-from .voiceclone import inject_voiceclone_plan
+from .voiceclone import inject_voiceclone_plan, looks_like_voiceclone
 
 
 @dataclass
@@ -187,7 +188,6 @@ EVAL_INTENT_HINTS = (
     "对比两个",
     "对比几个",
     "对比一下模型",
-    "协议档",
 )
 # 与评测关键词重叠时不得当闲聊，避免「你好，帮我评一下」跳过规划
 EVAL_BLOCK_HINTS = EVAL_INTENT_HINTS
@@ -200,6 +200,34 @@ def is_smalltalk(text: str) -> bool:
     if any(k in raw for k in EVAL_BLOCK_HINTS):
         return False
     return any(k.lower() in lowered for k in CHAT_HINTS)
+
+
+# 只读查询：一两步 list/get，走 ReAct，不套评测技能
+INSPECT_QUERY_RE = re.compile(
+    r"(列出(协议档|数据集|知识库|任务)|有哪些(协议档|数据集|模型)|调度概览)"
+)
+
+
+def looks_like_inspect_query(text: str) -> bool:
+    """用户只要清单/概览，不是下单评测。"""
+    raw = text or ""
+    if any(k in raw for k in ("评测", "评估", "帮我评", "评一下", "benchmark", "跑分", "打分", "测试模型")):
+        return False
+    return bool(INSPECT_QUERY_RE.search(raw))
+
+
+def inspect_tools_needed(text: str) -> list[str]:
+    """按查询对象选一个短工具。"""
+    raw = text or ""
+    if "数据集" in raw:
+        return ["dataset.list"]
+    if "知识库" in raw:
+        return ["kb.list"]
+    if "调度" in raw:
+        return ["dispatch.overview"]
+    if "任务" in raw:
+        return ["task.get"]
+    return ["model.list"]
 
 
 def classify_intent_l0(text: str) -> tuple[str, bool]:
@@ -243,6 +271,18 @@ def l0_plan(text: str, *, prefs: dict | None = None) -> PlanArtifact:
             delivery="text",
             budget={"max_tool_rounds": DEFAULT_TOOL_ROUNDS},
             notes="规划：使用 Qwen Image 生成图片",
+            source="l0",
+        )
+    if looks_like_inspect_query(text):
+        tools = inspect_tools_needed(text)
+        return PlanArtifact(
+            intent="inspect",
+            skill_id=None,
+            slots={"filled": {}, "missing": []},
+            tools_needed=tools,
+            delivery="text",
+            budget={"max_tool_rounds": DEFAULT_TOOL_ROUNDS},
+            notes=f"规划：查询 {tools[0]}。",
             source="l0",
         )
     intent, with_stress = classify_intent_l0(text)
@@ -533,6 +573,15 @@ def run_plan(
 
     # 生图口令不走规划模型：避免人设/偏好把「生成一张人像摄影」规划成基准对比。
     if looks_like_image_generation(text):
+        plan = l0_plan(text, prefs=prefs)
+        return _finish(plan)
+
+    if looks_like_voiceclone(text):
+        plan = l0_plan(text, prefs=prefs)
+        return _finish(plan)
+
+    # 只读清单查询：一两步 ReAct，不付规划模型、不套评测技能。
+    if looks_like_inspect_query(text):
         plan = l0_plan(text, prefs=prefs)
         return _finish(plan)
 

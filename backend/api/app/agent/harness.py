@@ -1,4 +1,4 @@
-"""Harness：规划 → ReAct（Think-Act-Observe）→ 复核串联（HAR-FLOW / AGT-HRS-02/07）。
+"""Harness：按 TurnMode 选择 DIRECT / CHAT / ReAct / Plan-and-Solve（HAR-FLOW / AGT-HRS-02/07）。
 
 必须丢到 asyncio.Task 执行，收包循环不得 await 整轮。会话级 abort 为进程内
 dict（HAR-NFR-08：单副本或粘性路由；多副本需外置，M1 不做）。
@@ -44,6 +44,15 @@ from .slash import (
     parse_slash,
     unknown_command_text,
 )
+from .turn_mode import (
+    TurnMode,
+    allows_model_check,
+    allows_replan,
+    emits_stage_thoughts,
+    refine_turn_mode,
+    select_turn_mode,
+    uses_react_llm,
+)
 from .voiceclone import VOICECLONE_CLARIFY_RE
 
 EmitFn = Callable[..., Awaitable[int]]
@@ -78,12 +87,18 @@ _DETERMINISTIC_SLASH = frozenset(
 )
 
 
-def should_emit_stage_thoughts(intent: str, command: str | None) -> bool:
+def should_emit_stage_thoughts(
+    intent: str,
+    command: str | None,
+    mode: TurnMode | None = None,
+) -> bool:
     """是否把规划/复核刷成思考卡。
 
-    闲聊与 /help 等确定性斜杠只交付正文；再发「规划：识别为 chat」「复核：确认没有
+    闲聊、生图 ReAct、/help 等只交付正文；再发「规划：识别为 chat」「复核：确认没有
     create」会连同模型推理卡变成三张一模一样的「已思考」。
     """
+    if mode is not None:
+        return emits_stage_thoughts(mode)
     if intent == "chat":
         return False
     if command in _DETERMINISTIC_SLASH:
@@ -257,6 +272,8 @@ async def _run_turn(
     history = history_for_plan(db, session)
     compact_summary = getattr(session, "compact_summary", None)
     budget = TurnBudget(cap=MAX_MODEL_CALLS)
+    mode = select_turn_mode(text, parsed)
+    agent_trace(f"TurnMode 入口 mode={mode.value} command={parsed.command or '-'}")
 
     plan = await _await_thread(
         stop,
@@ -273,7 +290,16 @@ async def _run_turn(
         ),
     )
     _check_abort(abort)
-    emit_stage_thoughts = should_emit_stage_thoughts(plan.intent, parsed.command)
+    mode = refine_turn_mode(
+        mode,
+        intent=plan.intent,
+        tools_needed=list(plan.tools_needed),
+        delivery=plan.delivery,
+    )
+    agent_trace(
+        f"TurnMode 收束 mode={mode.value} intent={plan.intent} tools={plan.tools_needed}"
+    )
+    emit_stage_thoughts = should_emit_stage_thoughts(plan.intent, parsed.command, mode)
     if emit_stage_thoughts:
         notes = plan.notes or "规划中"
         if not notes.startswith("规划"):
@@ -289,7 +315,9 @@ async def _run_turn(
             await _emit_thought(emit, pref_note, stage="plan")
 
     slash_fill_first = parsed.command in {"benchmark", "stress", "testcase", "rerun"}
-    use_llm_react = parsed.command not in _DETERMINISTIC_SLASH
+    use_llm_react = uses_react_llm(
+        mode, command=parsed.command, slash_fill_first=slash_fill_first
+    )
     # 问候 L0 且无短工具：跳过 ReAct，避免人设把「你好」也走成 list 协议档
     if plan.intent == "chat" and not plan.tools_needed and is_smalltalk(text):
         use_llm_react = False
@@ -312,9 +340,9 @@ async def _run_turn(
     for note in react.pref_stale_notes:
         await _emit_thought(emit, note, stage="react")
 
-    # 补规划：工具跑完仍缺槽，允许 1 次（HAR-ACT-04）。斜杠缺槽同样允许。
+    # 补规划：仅 Plan-and-Solve 且仍缺槽时 1 次（HAR-ACT-04）。斜杠缺槽同样允许。
     missing = (plan.slots.get("missing") or []) if plan.intent in {"benchmark", "rag", "testcase"} else []
-    if missing and budget.remaining() > 0 and plan.delivery == "confirm":
+    if allows_replan(mode) and missing and budget.remaining() > 0 and plan.delivery == "confirm":
         _check_abort(abort)
         await _emit_thought(emit, "补规划：根据工具观察调整槽位", stage="plan")
         extra = await _await_thread(
@@ -384,8 +412,8 @@ async def _run_turn(
                 plan.intent = str(cfg.get("kind") or "benchmark")
                 reflect = run_gates(db, session=session, plan=plan, react=react, source="plan")
 
-    # 规则优先；仅确认卡再做模型核对（闲聊/只读斜杠 0 次核对，避免问候串行 3 次上游）
-    if reflect.verdict == "pass":
+    # 规则优先；仅 Plan-and-Solve 确认卡再做模型核对
+    if reflect.verdict == "pass" and allows_model_check(mode):
         _check_abort(abort)
         gate_reasons = list(reflect.reasons)
         reflect = await _await_thread(
