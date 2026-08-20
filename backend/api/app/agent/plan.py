@@ -27,7 +27,7 @@ from .imagegen import inject_imagegen_plan, looks_like_image_generation
 from .log import agent_trace
 from .persona import PLAN_RETRY_SUFFIX, REPLAN_JSON_SUFFIX, plan_system, turn_system
 from .slash import SlashParse
-from .voiceclone import inject_voiceclone_plan, looks_like_voiceclone
+from .voiceclone import inject_voiceclone_plan
 
 
 @dataclass
@@ -46,6 +46,9 @@ class PlanArtifact:
     source: str = "llm"  # llm | slash | l0 | retry | replan
     # 规划阶段沿用偏好时要发的思考卡（不写入 PlanArtifact JSON）
     pref_thoughts: list[str] = field(default_factory=list)
+    # 模型判定的范式与复杂度；不进 as_dict（确认卡字段冻结）
+    loop: str = ""
+    complexity: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -157,6 +160,11 @@ def sanitize_plan(raw: dict, *, source: str = "llm") -> PlanArtifact:
     if "kind" not in slots["filled"] and intent in {"benchmark", "rag", "testcase"}:
         slots["filled"]["kind"] = intent
 
+    loop = _clip_loop(raw.get("loop"), intent=intent, tools=tools)
+    complexity = str(raw.get("complexity") or "").strip().lower()
+    if complexity not in {"low", "medium", "high"}:
+        complexity = _default_complexity(loop)
+
     return PlanArtifact(
         intent=intent,
         skill_id=skill_id,
@@ -166,10 +174,49 @@ def sanitize_plan(raw: dict, *, source: str = "llm") -> PlanArtifact:
         budget={"max_tool_rounds": rounds},
         notes=notes,
         source=source,
+        loop=loop,
+        complexity=complexity,
     )
 
 
-# 高置信闲聊提示（不含「其它 → chat」兜底）。用于跳过规划模型，把预算留给流式回复。
+LOOP_ENUM = frozenset({"chat", "react", "plan_solve"})
+
+
+def _clip_loop(raw_loop: Any, *, intent: str, tools: list[str]) -> str:
+    """模型给出的 loop 优先；缺省时按 intent/工具推断。"""
+    loop = str(raw_loop or "").strip().lower()
+    if loop in LOOP_ENUM:
+        return loop
+    if intent in {"benchmark", "rag", "testcase", "rerun"}:
+        return "plan_solve"
+    if tools:
+        return "react"
+    if intent == "inspect":
+        return "react"
+    return "chat"
+
+
+def _default_complexity(loop: str) -> str:
+    if loop == "plan_solve":
+        return "high"
+    if loop == "react":
+        return "medium"
+    return "low"
+
+
+def _stamp_loop(plan: PlanArtifact) -> PlanArtifact:
+    """补全 runtime 的 loop/complexity，不写入确认卡 JSON。"""
+    tools = list(plan.tools_needed or [])
+    if "image.generate" in tools or "audio.voiceclone" in tools:
+        plan.loop = "react"
+    elif plan.loop not in LOOP_ENUM:
+        plan.loop = _clip_loop(plan.loop, intent=plan.intent, tools=tools)
+    if plan.complexity not in {"low", "medium", "high"}:
+        plan.complexity = _default_complexity(plan.loop)
+    return plan
+
+
+# 高置信闲聊提示（不含「其它 → chat」兜底）。仅 L0 分类与关键词回退使用；自然语言规划不再短路。
 CHAT_HINTS = ("你好", "您好", "介绍", "你是谁", "天气", "谢谢", "闲聊", "随便聊聊", "hello", "hi ")
 # 评测口令。禁止用光杆「对比」：摄影提示词里的明暗对比/冷暖对比会误判成 benchmark。
 EVAL_INTENT_HINTS = (
@@ -263,7 +310,8 @@ def classify_intent_l0(text: str) -> tuple[str, bool]:
 def l0_plan(text: str, *, prefs: dict | None = None) -> PlanArtifact:
     """L0 降级产物形状（评审默认方案 D1）。仍必须进入复核。"""
     if looks_like_image_generation(text):
-        return PlanArtifact(
+        return _stamp_loop(
+            PlanArtifact(
             intent="chat",
             skill_id=None,
             slots={"filled": {}, "missing": []},
@@ -272,10 +320,12 @@ def l0_plan(text: str, *, prefs: dict | None = None) -> PlanArtifact:
             budget={"max_tool_rounds": DEFAULT_TOOL_ROUNDS},
             notes="规划：使用 Qwen Image 生成图片",
             source="l0",
+            )
         )
     if looks_like_inspect_query(text):
         tools = inspect_tools_needed(text)
-        return PlanArtifact(
+        return _stamp_loop(
+            PlanArtifact(
             intent="inspect",
             skill_id=None,
             slots={"filled": {}, "missing": []},
@@ -284,6 +334,7 @@ def l0_plan(text: str, *, prefs: dict | None = None) -> PlanArtifact:
             budget={"max_tool_rounds": DEFAULT_TOOL_ROUNDS},
             notes=f"规划：查询 {tools[0]}。",
             source="l0",
+            )
         )
     intent, with_stress = classify_intent_l0(text)
     filled: dict[str, Any] = {}
@@ -315,7 +366,8 @@ def l0_plan(text: str, *, prefs: dict | None = None) -> PlanArtifact:
     }.get(intent)
     if with_stress:
         skill_id = "skill-stress"
-    return PlanArtifact(
+    return _stamp_loop(
+        PlanArtifact(
         intent=intent,
         skill_id=skill_id,
         slots={"filled": filled, "missing": missing},
@@ -324,6 +376,7 @@ def l0_plan(text: str, *, prefs: dict | None = None) -> PlanArtifact:
         budget={"max_tool_rounds": DEFAULT_TOOL_ROUNDS},
         notes=notes,
         source="l0",
+        )
     )
 
 
@@ -517,10 +570,10 @@ def run_plan(
     def _finish(plan: PlanArtifact, *, slash: bool = False) -> PlanArtifact:
         """先按本轮意图注入短工具，再挂评测偏好，避免生图被沿用协议档/数据集。"""
         if slash:
-            return _attach_prefs(plan, prefs)
+            return _stamp_loop(_attach_prefs(plan, prefs))
         plan = inject_voiceclone_plan(db, plan, text=text, attachments=attachments)
         plan = inject_imagegen_plan(db, plan, text=text, attachments=attachments)
-        return _attach_prefs(plan, prefs)
+        return _stamp_loop(_attach_prefs(plan, prefs))
 
     if parsed.command and parsed.command in {
         "benchmark",
@@ -571,26 +624,8 @@ def run_plan(
         plan = l0_plan(text, prefs=prefs)
         return _finish(plan)
 
-    # 生图口令不走规划模型：避免人设/偏好把「生成一张人像摄影」规划成基准对比。
-    if looks_like_image_generation(text):
-        plan = l0_plan(text, prefs=prefs)
-        return _finish(plan)
-
-    if looks_like_voiceclone(text):
-        plan = l0_plan(text, prefs=prefs)
-        return _finish(plan)
-
-    # 只读清单查询：一两步 ReAct，不付规划模型、不套评测技能。
-    if looks_like_inspect_query(text):
-        plan = l0_plan(text, prefs=prefs)
-        return _finish(plan)
-
-    # 无评测关键词的问候（你好 / hi）：L0 即可，把预算留给流式回复。
-    # 其它自然语言必须走规划模型，由模型按本轮目标选 intent / 工具，禁止一律套评测技能。
-    if is_smalltalk(text):
-        plan = l0_plan(text, prefs=prefs)
-        return _finish(plan)
-
+    # 自然语言一律交给规划模型判定复杂度与 loop（chat / react / plan_solve）。
+    # 关键词短路只作上游失败时的 L0 回退；斜杠仍 0 次模型。
     user_payload = {
         "text": text,
         "command": parsed.command or "",

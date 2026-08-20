@@ -20,7 +20,11 @@ PERSONA_SYSTEM = """你是 AI 测试与评估平台的智能体。职责：理�
 # 规划调用附加段：拼接在 PERSONA_SYSTEM 之后
 PLAN_JSON_SUFFIX = (
     "只输出一个 JSON 对象，不要 Markdown 围栏。字段：intent, skill_id, slots, "
-    "tools_needed, delivery, budget, notes。"
+    "tools_needed, delivery, budget, notes, complexity, loop。"
+    "先自己判断本轮任务复杂度 complexity=low|medium|high，再选循环 loop："
+    "low 且无需工具 → loop=chat；一两步短工具、下一步依赖观察 → loop=react；"
+    "多步且结构清楚（评测下单、先 list 再填槽）→ loop=plan_solve。"
+    "禁止所有自然语言都走 plan_solve。"
     "intent 必须按用户本轮目标选择，允许：benchmark, rag, testcase, report, cancel, "
     "rerun, inspect, compact, chat。不得为 stress；先评后压把 "
     "slots.filled.with_stress 置 true，kind 仍为 benchmark 或 rag。"
@@ -42,7 +46,7 @@ PLAN_JSON_SUFFIX = (
 )
 
 # 规划 JSON 解析失败后的唯一重试附加指令
-PLAN_RETRY_SUFFIX = "只输出 JSON"
+PLAN_RETRY_SUFFIX = "只输出 JSON 对象，字段同上一轮，必须含 complexity 与 loop。"
 
 # 补规划附加段：观察摘要拼在 user JSON 的 observations 字段，不占 20 条窗口
 REPLAN_JSON_SUFFIX = (
