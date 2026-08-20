@@ -35,8 +35,21 @@ def _json_response(payload: dict, status_code: int = 200) -> httpx.Response:
     return httpx.Response(status_code, json=payload, request=httpx.Request("POST", "https://test.local"))
 
 
+def test_client_reads_url_key_and_model_from_environment(monkeypatch):
+    """客户端默认读取 .env/进程环境中的 URL、Key 和模型 ID。"""
+    monkeypatch.setenv("QWEN_IMAGE_API_URL", "https://env.test/generation")
+    monkeypatch.setenv("QWEN_IMAGE_API_KEY", "env-key")
+    monkeypatch.setenv("QWEN_IMAGE_MODEL", "qwen-image-3.0")
+
+    client = QwenImageClient()
+
+    assert client.api_url == "https://env.test/generation"
+    assert client.api_key == "env-key"
+    assert client.model == "qwen-image-3.0"
+
+
 @pytest.mark.asyncio
-async def test_generate_uses_fixed_model_and_prompt_extend():
+async def test_generate_uses_configured_model_and_prompt_extend():
     # 上游 URL 结果会被下载为 MCP image 内容。
     image_url = "https://cdn.example.test/result.png"
     fake = _FakeAsyncClient(
@@ -55,7 +68,12 @@ async def test_generate_uses_fixed_model_and_prompt_extend():
             request=httpx.Request("GET", image_url),
         ),
     )
-    client = QwenImageClient(api_key="test-key", api_url="https://test.local/generate", http_client=fake)
+    client = QwenImageClient(
+        api_key="test-key",
+        api_url="https://test.local/generate",
+        model="qwen-image-3.0",
+        http_client=fake,
+    )
 
     result = await client.generate("画一只猫", prompt_extend=False)
 
@@ -95,7 +113,12 @@ async def test_generate_sends_text_and_reference_image():
             request=httpx.Request("GET", "https://cdn.example.test/result.png"),
         ),
     )
-    client = QwenImageClient(api_key="test-key", http_client=fake)
+    client = QwenImageClient(
+        api_key="test-key",
+        api_url="https://test.local/generate",
+        model="qwen-image-3.0",
+        http_client=fake,
+    )
 
     await client.generate("把人物改成油画风格", image=image_url)
 
@@ -120,7 +143,12 @@ async def test_generate_supports_base64_content():
             }
         )
     )
-    client = QwenImageClient(api_key="test-key", http_client=fake)
+    client = QwenImageClient(
+        api_key="test-key",
+        api_url="https://test.local/generate",
+        model="qwen-image-3.0",
+        http_client=fake,
+    )
 
     result = await client.generate("test")
 
@@ -132,7 +160,7 @@ async def test_generate_supports_base64_content():
 @pytest.mark.asyncio
 async def test_generate_rejects_missing_key_without_http_call():
     fake = _FakeAsyncClient(_json_response({}))
-    client = QwenImageClient(api_key="", http_client=fake)
+    client = QwenImageClient(api_key="", model="qwen-image-3.0", http_client=fake)
 
     with pytest.raises(ImageMcpError) as exc_info:
         await client.generate("test")
@@ -144,7 +172,12 @@ async def test_generate_rejects_missing_key_without_http_call():
 @pytest.mark.asyncio
 async def test_generate_normalizes_upstream_error():
     fake = _FakeAsyncClient(_json_response({"error": "hidden"}, status_code=401))
-    client = QwenImageClient(api_key="test-key", http_client=fake)
+    client = QwenImageClient(
+        api_key="test-key",
+        api_url="https://test.local/generate",
+        model="qwen-image-3.0",
+        http_client=fake,
+    )
 
     with pytest.raises(ImageMcpError) as exc_info:
         await client.generate("test")

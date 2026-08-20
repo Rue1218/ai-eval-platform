@@ -424,13 +424,13 @@ class DispatchEventPage(ApiModel):
 
 
 class McpToolOut(ApiModel):
-    """内置受控短工具清单项。"""
+    """MCP 工具注册清单项，区分已挂载内置工具与独立注册项。"""
 
     name: str
     desc: str
     permission: Literal["read", "write"]
     enabled: bool
-    source: Literal["builtin"] = "builtin"
+    source: Literal["builtin", "standalone"] = "builtin"
 
 
 # ─── 数据集工作台扩展（API V1.3 §3.7） ───

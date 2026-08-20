@@ -271,7 +271,9 @@
               <div class="row" style="gap: 8px; align-items: center">
                 <span class="mcp-main-title">🛠 MCP (Model Context Protocol) 工具中心</span>
                 <span class="tag-soft mcp-badge-host">Host 模式 · V1.0 受控沙箱</span>
-                <span class="badge badge-succeeded">全短工具就绪</span>
+                <span class="badge" :class="disabledMcpToolsCount ? 'badge-warning' : 'badge-succeeded'">
+                  {{ disabledMcpToolsCount ? `${disabledMcpToolsCount} 项能力未挂载` : '全短工具就绪' }}
+                </span>
               </div>
               <div class="small tertiary mt4" style="line-height: 1.5">
                 Agent 作为 MCP Host 运行时，通过短工具完成资产发现与建单；禁止挂载长耗时阻塞工具。
@@ -311,8 +313,10 @@
                 <span class="mcp-kpi-label">已挂载受控短工具</span>
                 <span class="mcp-kpi-icon">🛠️</span>
               </div>
-              <div class="mcp-kpi-val num">{{ mcpTools.length }} <span class="unit">个受控短工具</span></div>
-              <div class="mcp-kpi-sub text-success">● 100% 毫秒级极速响应</div>
+              <div class="mcp-kpi-val num">{{ enabledMcpToolsCount }} <span class="unit">个已挂载短工具</span></div>
+              <div class="mcp-kpi-sub text-success">
+                ● {{ mcpTools.length }} 项清单 · {{ disabledMcpToolsCount }} 项未挂载
+              </div>
             </div>
 
             <div class="mcp-kpi-card">
@@ -517,7 +521,7 @@
               v-for="t in filteredMcpTools"
               :key="t.name"
               class="mcp-card"
-              :class="{ 'is-write': t.permission === 'write' }"
+              :class="{ 'is-write': t.permission === 'write', 'is-disabled': t.enabled === false }"
             >
               <div class="mcp-card-top">
                 <div class="row" style="gap: 8px; align-items: center">
@@ -539,15 +543,17 @@
               <div class="mcp-tool-desc">{{ t.desc }}</div>
 
               <div class="mcp-card-specs">
-                <div class="spec-tag mono">⚡ 耗时: &lt;50ms</div>
+                <div class="spec-tag mono">{{ t.enabled === false ? '⏸ 未挂载' : '⚡ 耗时: <50ms' }}</div>
                 <div class="spec-tag mono">📦 JSON Schema</div>
                 <div class="spec-tag">🔒 受控沙箱</div>
               </div>
 
               <div class="mcp-card-bottom">
                 <div class="row" style="gap: 6px; align-items: center">
-                  <span class="status-dot"></span>
-                  <span class="small tertiary">内置直连 · 活跃</span>
+                  <span class="status-dot" :class="{ 'is-disabled': t.enabled === false }"></span>
+                  <span class="small tertiary">
+                    {{ t.enabled === false ? '独立 MCP · 能力未启用' : '内置直连 · 活跃' }}
+                  </span>
                 </div>
                 <button
                   class="btn btn-secondary btn-xs"
@@ -598,10 +604,14 @@
                       {{ t.permission === 'write' ? 'WRITE · 写入' : 'READ · 只读' }}
                     </span>
                   </td>
-                  <td class="mono small text-success">&lt; 30ms</td>
+                  <td class="mono small" :class="t.enabled === false ? 'tertiary' : 'text-success'">
+                    {{ t.enabled === false ? '未接入' : '< 30ms' }}
+                  </td>
                   <td class="mono small tertiary">JSON Schema</td>
                   <td>
-                    <span class="badge badge-succeeded">已启用</span>
+                    <span class="badge" :class="t.enabled === false ? 'badge-warning' : 'badge-succeeded'">
+                      {{ t.enabled === false ? '能力未启用' : '已启用' }}
+                    </span>
                   </td>
                   <td style="text-align: right">
                     <button class="link-btn" @click="handleOpenMcpModal(t)">
@@ -1132,6 +1142,7 @@ const domainFilterOptions = [
   { label: '🖥️ 调度算力', value: 'dispatch' },
   { label: '🧪 用例管理', value: 'cases' },
   { label: '🔊 音色克隆', value: 'audio' },
+  { label: '🖼️ 图像生成', value: 'image' },
 ]
 
 /** 获取工具业务领域与图标映射 */
@@ -1144,11 +1155,14 @@ function getToolDomain(name: string): { label: string; icon: string; key: string
   if (name.startsWith('dispatch.')) return { label: '调度大盘', icon: '🖥️', key: 'dispatch' }
   if (name.startsWith('testcase.')) return { label: '用例管理', icon: '🧪', key: 'cases' }
   if (name.startsWith('audio.')) return { label: '音色克隆', icon: '🔊', key: 'audio' }
+  if (name.startsWith('image.')) return { label: '图像生成', icon: '🖼️', key: 'image' }
   return { label: '内置通用', icon: '🛠️', key: 'other' }
 }
 
 const readToolsCount = computed(() => mcpTools.value.filter((t) => t.permission === 'read').length)
 const writeToolsCount = computed(() => mcpTools.value.filter((t) => t.permission === 'write').length)
+const enabledMcpToolsCount = computed(() => mcpTools.value.filter((t) => t.enabled !== false).length)
+const disabledMcpToolsCount = computed(() => mcpTools.value.filter((t) => t.enabled === false).length)
 
 /** 多维过滤后的 MCP 工具清单 */
 const filteredMcpTools = computed(() => {
@@ -1181,7 +1195,7 @@ async function handleRefreshMcpTools() {
     const latency = Math.round(performance.now() - start)
     mcpTools.value = res.items || []
     mcpServerPingState.value = { ok: true, latencyMs: Math.max(1, latency) }
-    message.success(`已从服务端加载 ${mcpTools.value.length} 个受控短工具 (耗时 ${mcpServerPingState.value.latencyMs}ms)`)
+    message.success(`已从服务端加载 ${enabledMcpToolsCount.value} 个已挂载短工具（共 ${mcpTools.value.length} 项清单，耗时 ${mcpServerPingState.value.latencyMs}ms）`)
   } catch (err: any) {
     mcpServerPingState.value = { ok: false, latencyMs: null }
     message.error(err.message || '调用 /api/mcp/tools 接口失败')
@@ -1199,7 +1213,7 @@ async function handlePingMcpServer() {
     const latency = Math.round(performance.now() - start)
     mcpTools.value = res.items || []
     mcpServerPingState.value = { ok: true, latencyMs: Math.max(1, latency) }
-    message.success(`[Eval-Core MCP Server] 探活成功 · 延迟 ${mcpServerPingState.value.latencyMs}ms · 挂载 ${mcpTools.value.length} 个短工具`)
+    message.success(`[Eval-Core MCP Server] 探活成功 · 延迟 ${mcpServerPingState.value.latencyMs}ms · 挂载 ${enabledMcpToolsCount.value} 个短工具`)
   } catch (err: any) {
     mcpServerPingState.value = { ok: false, latencyMs: null }
     message.error(`[Eval-Core MCP Server] 探活失败: ${err.message || '网络连接异常'}`)
@@ -2106,6 +2120,10 @@ onMounted(loadProfiles)
 .mcp-card.is-write {
   border-left: 3.5px solid var(--accent-warning);
 }
+.mcp-card.is-disabled {
+  opacity: 0.72;
+  border-left-color: var(--text-tertiary);
+}
 .mcp-card-top {
   display: flex;
   justify-content: space-between;
@@ -2167,6 +2185,9 @@ onMounted(loadProfiles)
   border-radius: 50%;
   background: var(--accent-success);
   display: inline-block;
+}
+.status-dot.is-disabled {
+  background: var(--text-tertiary);
 }
 
 /* 契约安全准则卡片网格 */

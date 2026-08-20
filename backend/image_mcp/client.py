@@ -16,15 +16,14 @@ from pathlib import Path
 from urllib.parse import unquote_to_bytes, urlparse
 
 import httpx
+from dotenv import load_dotenv
 
-DEFAULT_API_URL = (
-    "https://ws-2jjtk1qzvfbov9p0.cn-beijing.maas.aliyuncs.com/"
-    "api/v1/services/aigc/multimodal-generation/generation"
-)
-DEFAULT_MODEL = "qwen-image-3.0"
 DEFAULT_TIMEOUT_SECONDS = 120.0
 MAX_PROMPT_LENGTH = 32_000
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
+
+# 优先加载仓库根目录 .env；外部进程已经注入的环境变量不会被覆盖。
+load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=False)
 
 
 class ImageMcpError(Exception):
@@ -175,16 +174,18 @@ class QwenImageClient:
         *,
         api_key: str | None = None,
         api_url: str | None = None,
+        model: str | None = None,
         timeout_seconds: float | None = None,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
-        """初始化客户端；未显式传参时从 QWEN_IMAGE_* 环境变量读取配置。"""
+        """初始化客户端；未显式传参时从仓库根目录 .env 读取配置。"""
         configured_key = api_key
         if configured_key is None:
             # 兼容用户 curl 示例中的 DASHSCOPE_API_KEY，同时优先使用 MCP 专用变量。
             configured_key = os.getenv("QWEN_IMAGE_API_KEY") or os.getenv("DASHSCOPE_API_KEY", "")
         self.api_key = configured_key.strip()
-        self.api_url = (api_url or os.getenv("QWEN_IMAGE_API_URL") or DEFAULT_API_URL).strip()
+        self.api_url = (api_url if api_url is not None else os.getenv("QWEN_IMAGE_API_URL", "")).strip()
+        self.model = (model if model is not None else os.getenv("QWEN_IMAGE_MODEL", "")).strip()
         timeout_value = timeout_seconds
         if timeout_value is None:
             raw_timeout = os.getenv("QWEN_IMAGE_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS))
@@ -210,6 +211,8 @@ class QwenImageClient:
             raise ImageMcpError("CONFIG", "未配置 QWEN_IMAGE_API_KEY")
         if not self.api_url:
             raise ImageMcpError("CONFIG", "未配置 QWEN_IMAGE_API_URL")
+        if not self.model:
+            raise ImageMcpError("CONFIG", "未配置 QWEN_IMAGE_MODEL")
 
         content: list[dict[str, str]] = []
         if image is not None:
@@ -217,7 +220,7 @@ class QwenImageClient:
         content.append({"text": prompt})
 
         request_body = {
-            "model": DEFAULT_MODEL,
+            "model": self.model,
             "input": {
                 "messages": [
                     {
