@@ -320,6 +320,7 @@ defineExpose({
   bottom: calc(100% + 10px);
   left: 0;
   width: 380px;
+  max-width: calc(100vw - 32px);
   max-height: 420px;
   background: var(--bg-main, #ffffff);
   border: 1px solid var(--border-subtle, #e5e7eb);

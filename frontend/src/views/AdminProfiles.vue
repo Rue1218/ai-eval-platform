@@ -2450,4 +2450,21 @@ onMounted(loadProfiles)
   margin-top: auto;
   border-top: 1px solid var(--border-subtle, #f1f5f9);
 }
+
+/* 移动端：卡片栅格最小宽度超过视口，统一折为单列 */
+@media (max-width: 700px) {
+  .vendor-models-grid,
+  .skill-grid,
+  .mcp-kpi-grid,
+  .mcp-servers-grid,
+  .mcp-cards-grid,
+  .guardrails-grid,
+  .skills-kpi-grid,
+  .skills-cards-grid {
+    grid-template-columns: 1fr;
+  }
+  .server-card-meta {
+    grid-template-columns: 1fr;
+  }
+}
 </style>

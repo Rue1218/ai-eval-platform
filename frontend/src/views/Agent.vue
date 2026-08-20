@@ -817,7 +817,7 @@ const chatScrollRef = ref<HTMLDivElement | null>(null)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 
-const isListCollapsed = ref(false)
+const isListCollapsed = ref(typeof window !== 'undefined' && window.innerWidth <= 700)
 const isRailOpen = ref(false)
 const isWsOnline = ref(true)
 const isGenerating = ref(false)
@@ -2537,6 +2537,8 @@ async function loadSessionHistory(sid: string): Promise<number> {
 
 async function selectSession(sid: string) {
   if (deletingSessionIds.has(sid)) return
+  // 移动端会话列表是覆盖式抽屉，选中会话后自动收起让出对话区。
+  if (window.innerWidth <= 700) isListCollapsed.value = true
   if (sid === currentSessionId.value && sockets.has(sid)) {
     const existing = sockets.get(sid)
     if (existing?.isConnected) return
@@ -3773,5 +3775,21 @@ onBeforeUnmount(() => {
 /* F9 会话占槽时确认卡 note 转 warning 色 */
 .confirm-note.warn {
   color: var(--accent-warning);
+}
+
+/* 移动端：顶栏 58px 且无外边距，对话区高度改用 dvh；头部操作收紧 */
+@media (max-width: 700px) {
+  .agent-layout {
+    height: calc(100dvh - 58px);
+  }
+  .composer {
+    padding: 6px 12px 12px;
+  }
+  .composer-card {
+    border-radius: 14px;
+  }
+  .composer-model-dropdown-btn .model-name {
+    max-width: 110px;
+  }
 }
 </style>

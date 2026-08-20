@@ -848,4 +848,12 @@ watch(reportId, () => loadReport())
   white-space: pre-wrap;
   word-break: break-all;
 }
+
+/* 移动端：并排对比栅格折为单列 */
+@media (max-width: 700px) {
+  .judge-breakdown-grid,
+  .sample-models-grid {
+    grid-template-columns: 1fr;
+  }
+}
 </style>

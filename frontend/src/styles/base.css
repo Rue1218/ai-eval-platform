@@ -1406,3 +1406,102 @@ td.cell-edit:hover { background: color-mix(in srgb, var(--accent-ai) 5%, transpa
   margin: 4px 0;
 }
 
+/* ============================================================
+   移动端适配（≤700px）：排版收紧 / 表格横滚 / 弹层全宽 / 对话轨覆盖
+   ============================================================ */
+@media (max-width: 700px) {
+  /* 内容区与面板 */
+  .content { padding: 12px; }
+  .panel { padding: 14px; border-radius: 14px; }
+  .panel + .panel { margin-top: 12px; }
+  .panel-title { font-size: 14px; margin-bottom: 10px; }
+  .page-narrow { max-width: 100%; }
+
+  /* 表格：保持最小宽度并在面板内横向滚动，避免挤压变形 */
+  .panel:has(.ds-table) { overflow-x: auto; }
+  .ds-table { min-width: 600px; }
+  .ds-table th, .ds-table td { padding: 10px 12px; }
+  .ds-table .row-actions { opacity: 1; }
+
+  /* 表单栅格折为单列 */
+  .form-row, .form-row-3 { grid-template-columns: 1fr; }
+
+  /* KPI 卡片收紧 */
+  .kpi-grid { grid-template-columns: repeat(auto-fit, minmax(136px, 1fr)); gap: 10px; }
+  .kpi { padding: 12px 14px; }
+  .kpi-num { font-size: 21px; }
+
+  /* 弹层全宽化 */
+  .modal, .modal.wide { width: calc(100vw - 24px); max-height: calc(100dvh - 48px); }
+  .modal-head { padding: 14px 16px 0; }
+  .modal-body { padding: 12px 16px; }
+  .modal-foot { padding: 12px 16px 14px; }
+  .drawer, .drawer.wide { width: 100vw; max-width: 100vw; }
+  /* Naive UI 抽屉宽度为内联样式，移动端强制铺满视口 */
+  .n-drawer { width: 100vw !important; max-width: 100vw !important; }
+  .n-modal { max-width: calc(100vw - 24px) !important; }
+  .drawer-head { padding: 14px 16px; }
+  .drawer-body { padding: 14px 16px; }
+  .drawer-foot { padding: 12px 16px; }
+  .toast-stack { left: 12px; right: 12px; top: 10px; max-width: none; }
+
+  /* ─── Agent 对话区 ─── */
+  .agent-layout,
+  .agent-layout.with-rail,
+  .agent-layout.no-list,
+  .agent-layout.no-list.with-rail {
+    grid-template-columns: 1fr;
+    position: relative;
+    overflow: hidden;
+  }
+  /* 会话列表与调度侧轨改为覆盖式抽屉，由折叠态类控制滑入滑出 */
+  .agent-layout .session-list {
+    position: absolute;
+    inset: 0 auto 0 0;
+    z-index: 30;
+    width: min(280px, 84vw);
+    border-right: 1px solid var(--border-subtle);
+    box-shadow: 12px 0 30px rgba(17, 24, 39, 0.18);
+    transform: translateX(-105%);
+    transition: transform 0.2s ease;
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .agent-layout:not(.no-list) .session-list { transform: translateX(0); }
+  .agent-layout .dispatch-rail {
+    position: absolute;
+    inset: 0 0 0 auto;
+    z-index: 30;
+    width: min(300px, 88vw);
+    transform: translateX(105%);
+    transition: transform 0.2s ease;
+    opacity: 1;
+    pointer-events: auto;
+    box-shadow: -12px 0 30px rgba(17, 24, 39, 0.14);
+  }
+  .agent-layout.with-rail .dispatch-rail { transform: translateX(0); }
+
+  .chat-head { padding: 0 12px; gap: 8px; }
+  .chat-head-model { display: none; }
+  .chat-col { padding: 16px 12px 12px; gap: 14px; }
+  .bubble-user { max-width: 88%; font-size: 14.5px; }
+  .msg-agent { max-width: 100%; font-size: 15px; }
+  .think-card, .thought-card, .tool-card { max-width: 100%; }
+  .confirm-card, .report-card { max-width: 100%; }
+  .cc-grid { grid-template-columns: 1fr; }
+  .rc-bar-label { width: 92px; flex-basis: 92px; }
+  .report-card-kpis { gap: 16px; }
+
+  .welcome { padding: 12px 0; }
+  .welcome-title { font-size: 24px; }
+
+  .composer { padding: 8px 12px 12px; }
+  .quick-chips { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 2px; }
+  .progress-dock { padding: 8px 12px; }
+  .progress-msg { max-width: 140px; }
+  .mini-series { display: none; }
+
+  /* 登录页 */
+  .login-wrapper { height: 100dvh; padding: 14px; }
+}
+

@@ -229,4 +229,15 @@ onMounted(loadAgentStatus)
   border-top: 1px dashed var(--border-subtle);
   line-height: 1.9;
 }
+
+@media (max-width: 700px) {
+  .login-wrapper {
+    height: 100dvh;
+    padding: 14px;
+  }
+  .login-card {
+    padding: 28px 20px 22px;
+    border-radius: 16px;
+  }
+}
 </style>
