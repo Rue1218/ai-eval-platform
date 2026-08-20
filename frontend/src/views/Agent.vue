@@ -1890,56 +1890,115 @@ async function handleSelectAgentModel(key: string) {
   }
 }
 
-/** F4 会话历史回放：拉取历史 user/assistant 消息渲染进事件流（no-anim 跳过入场动画），
- *  并回传最大 event_id 供 WS 断点续传对齐 lastEventId；失败静默降级按全新会话处理。 */
+/** F4 会话历史回放：拉取历史 user/assistant 消息与事件流，严格按时间序与优先级排列
+ *  保证思考卡 (ThoughtCard) 与 MCP 短工具卡 (ToolCard) 永远在 AI 回复内容 (Agent Message) 的上方。 */
 async function loadSessionHistory(sid: string): Promise<number> {
   try {
     const history = await api.sessions.getMessages(sid)
-    const replay: StreamItem[] = []
+    interface TimelineItem {
+      time: number
+      priority: number
+      eventId?: number
+      item: StreamItem
+    }
+    const rawList: TimelineItem[] = []
+
+    // 1. 收集 user 与 assistant 历史消息
     for (const m of history.messages || []) {
+      const t = m.created_at ? new Date(m.created_at).getTime() : 0
       if (m.role === 'user') {
-        replay.push({ type: 'user', text: m.content || '', files: m.attachments || [], noAnim: true })
+        rawList.push({
+          time: t,
+          priority: 1,
+          item: { type: 'user', text: m.content || '', files: m.attachments || [], noAnim: true },
+        })
       } else if (m.role === 'assistant') {
-        replay.push({ type: 'agent', text: m.content || '', raw: m.content || '', noAnim: true })
+        rawList.push({
+          time: t,
+          priority: 5,
+          item: { type: 'agent', text: m.content || '', raw: m.content || '', noAnim: true },
+        })
       }
     }
+
+    // 2. 收集 WS 事件流（思考过程、短工具、确认卡、报告卡等）
     for (const ev of history.events || []) {
       const p = ev.payload || {}
+      const t = ev.ts ? new Date(ev.ts).getTime() : 0
+      const eid = Number(ev.event_id) || 0
+
       if (ev.event === 'thought' && !p.stream) {
-        replay.push({
-          type: 'thought',
-          text: p.text || '',
-          done: true,
-          collapsed: true,
-          noAnim: true,
-          latency_ms: p.latency_ms,
-          stage: p.stage,
-          skill_id: p.skill_id,
-        })
+        if (p.stage || p.skill_id || p.latency_ms || (p.text && p.stage !== null)) {
+          rawList.push({
+            time: t,
+            priority: 2,
+            eventId: eid,
+            item: {
+              type: 'thought',
+              text: p.text || '',
+              done: true,
+              collapsed: true,
+              noAnim: true,
+              latency_ms: p.latency_ms,
+              stage: p.stage,
+              skill_id: p.skill_id,
+            },
+          })
+        }
       } else if (ev.event === 'tool_call') {
-        replay.push({ type: 'tool', tool: p.name, args: p.arguments, status: 'pending', open: false, noAnim: true })
+        rawList.push({
+          time: t,
+          priority: 3,
+          eventId: eid,
+          item: { type: 'tool', tool: p.name, args: p.arguments, status: 'pending', open: false, noAnim: true },
+        })
       } else if (ev.event === 'tool_result') {
-        const target = [...replay].reverse().find((x) => x.type === 'tool' && x.tool === p.name && x.status === 'pending')
+        const target = [...rawList].reverse().find((x) => x.item.type === 'tool' && x.item.tool === p.name && x.item.status === 'pending')
         if (target) {
-          target.result = p.ok ? p.data : p.error
-          target.status = p.ok ? 'ok' : 'fail'
-          target.latency_ms = p.latency_ms
+          target.item.result = p.ok ? p.data : p.error
+          target.item.status = p.ok ? 'ok' : 'fail'
+          target.item.latency_ms = p.latency_ms
         }
       } else if (ev.event === 'confirm') {
-        replay.push({
-          type: 'confirm',
-          card: normalizeConfirmCard(p),
-          isAcked: true,
-          summary: '',
-          open: false,
-          noAnim: true,
+        rawList.push({
+          time: t,
+          priority: 4,
+          eventId: eid,
+          item: {
+            type: 'confirm',
+            card: normalizeConfirmCard(p),
+            isAcked: true,
+            summary: '',
+            open: false,
+            noAnim: true,
+          },
         })
       } else if (ev.event === 'error') {
-        replay.push({ type: 'error', code: p.code, message: p.message, noAnim: true })
+        rawList.push({
+          time: t,
+          priority: 7,
+          eventId: eid,
+          item: { type: 'error', code: p.code, message: p.message, noAnim: true },
+        })
       } else if (ev.event === 'report' && p.report_id) {
-        replay.push({ type: 'report', reportId: p.report_id, noAnim: true })
+        rawList.push({
+          time: t,
+          priority: 6,
+          eventId: eid,
+          item: { type: 'report', reportId: p.report_id, noAnim: true },
+        })
       }
     }
+
+    // 3. 严格按时间戳递增排序；若时间戳相同则按优先级排列 (user:1 -> thought:2 -> tool:3 -> confirm:4 -> agent:5 -> report:6 -> error:7)
+    rawList.sort((a, b) => {
+      if (a.time !== b.time) return a.time - b.time
+      if (a.eventId && b.eventId) return a.eventId - b.eventId
+      return a.priority - b.priority
+    })
+
+    const replay = rawList.map((x) => x.item)
+
     if (history.pending_confirm) {
       const card = normalizeConfirmCard(history.pending_confirm)
       const existing = [...replay].reverse().find((x) => x.type === 'confirm')
