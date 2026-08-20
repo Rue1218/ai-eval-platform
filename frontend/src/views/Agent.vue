@@ -95,9 +95,6 @@
 
         <span class="grow"></span>
 
-        <!-- 上下文指示器（开发说明书 §8.1 冻结） -->
-        <ContextMeter :meter="currentContextMeter" :compact-summary="currentCompactSummary" />
-
         <button
           v-if="currentSession?.can_manage"
           class="btn btn-sm btn-ghost"
@@ -714,6 +711,9 @@
                   </svg>
                 </button>
               </n-dropdown>
+
+              <!-- 上下文容量小圆环指示器（紧邻模型选择器右侧） -->
+              <ContextMeter :meter="currentContextMeter" :compact-summary="currentCompactSummary" />
             </div>
 
             <!-- 右侧圆形发送/暂停按钮 -->

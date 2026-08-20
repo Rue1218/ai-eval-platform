@@ -1,8 +1,12 @@
 <template>
-  <!-- 双圆环上下文容量指示器与两层折叠 Popover 视图 -->
-  <n-popover trigger="click" placement="bottom-end" :width="320" raw :show-arrow="false">
+  <!-- 双圆环上下文容量指示器与两层折叠 Popover 视图（纯圆环触发器，上弹卡片） -->
+  <n-popover trigger="click" placement="top-start" :width="310" raw :show-arrow="false">
     <template #trigger>
-      <button class="context-ring-btn" type="button" :title="`上下文窗口：已使用 ${formattedTotalTokens} / ${formattedMaxTokens} (${clampedPercent.toFixed(1)}%)`">
+      <button
+        class="context-ring-btn"
+        type="button"
+        :title="`上下文窗口：${formattedTotalTokens} / ${formattedMaxTokens} (${clampedPercent.toFixed(1)}%)`"
+      >
         <svg class="ring-svg" viewBox="0 0 36 36">
           <!-- 底层浅灰背景环 -->
           <circle class="ring-bg" cx="18" cy="18" r="14" />
@@ -17,7 +21,6 @@
             :stroke-dashoffset="strokeDashoffset"
           />
         </svg>
-        <span class="ring-tokens mono" :style="{ color: activeColor }">{{ formattedTotalTokens }}</span>
       </button>
     </template>
 
@@ -28,11 +31,12 @@
         <span class="header-title">上下文窗口</span>
         <div class="header-right">
           <span class="header-tokens mono">{{ formattedTotalTokens }}</span>
+          <span class="header-sub">（当前上下文）</span>
           <svg
             class="chevron-icon"
             :class="{ expanded: isExpanded }"
-            width="14"
-            height="14"
+            width="13"
+            height="13"
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
@@ -278,60 +282,57 @@ const formattedFreeTokens = computed(() => formatTokens(freeTokens.value))
 </script>
 
 <style scoped>
-/* 双圆环触发按钮 */
+/* 双圆环触发按钮（紧凑纯圆环小按钮） */
 .context-ring-btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 3px 8px 3px 4px;
-  background: var(--bg-elevated, #ffffff);
-  border: 1px solid var(--border-subtle, #e5e7eb);
-  border-radius: 20px;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 50%;
   cursor: pointer;
-  transition: all 0.18s ease;
+  transition: all 0.15s ease;
   user-select: none;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  flex-shrink: 0;
 }
 
 .context-ring-btn:hover {
-  border-color: var(--border-hover, #cbd5e1);
-  transform: translateY(-0.5px);
+  background: var(--bg-hover, rgba(0, 0, 0, 0.05));
+  border-color: var(--border-subtle, rgba(0, 0, 0, 0.08));
+  transform: scale(1.05);
 }
 
-[data-theme='dark'] .context-ring-btn {
-  background: rgba(255, 255, 255, 0.05);
-  border-color: rgba(255, 255, 255, 0.1);
+[data-theme='dark'] .context-ring-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.15);
 }
 
 .ring-svg {
-  width: 22px;
-  height: 22px;
+  width: 15px;
+  height: 15px;
   display: block;
 }
 
 .ring-bg {
   fill: none;
-  stroke: #e5e7eb;
-  stroke-width: 3.4;
+  stroke: #e2e8f0;
+  stroke-width: 4.2;
 }
 
 [data-theme='dark'] .ring-bg {
-  stroke: rgba(255, 255, 255, 0.12);
+  stroke: rgba(255, 255, 255, 0.18);
 }
 
 .ring-fill {
   fill: none;
-  stroke-width: 3.4;
+  stroke-width: 4.2;
   stroke-linecap: round;
   transform: rotate(-90deg);
   transform-origin: 50% 50%;
   transition: stroke-dashoffset 0.35s ease, stroke 0.3s ease;
-}
-
-.ring-tokens {
-  font-size: 11.5px;
-  font-weight: 700;
-  line-height: 1;
 }
 
 /* 弹窗卡片 */
@@ -373,18 +374,29 @@ const formattedFreeTokens = computed(() => formatTokens(freeTokens.value))
 .header-right {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   color: var(--text-secondary, #64748b);
 }
 
 .header-tokens {
   font-size: 13px;
   font-weight: 600;
+  color: var(--text-primary, #1e293b);
+}
+
+[data-theme='dark'] .header-tokens {
+  color: #f8fafc;
+}
+
+.header-sub {
+  font-size: 11px;
+  color: var(--text-tertiary, #94a3b8);
 }
 
 .chevron-icon {
   color: var(--text-tertiary, #94a3b8);
   transition: transform 0.2s ease;
+  margin-left: 2px;
 }
 
 .chevron-icon.expanded {
