@@ -26,6 +26,13 @@ PLAN_JSON_SUFFIX = (
 # 规划 JSON 解析失败后的唯一重试附加指令
 PLAN_RETRY_SUFFIX = "只输出 JSON"
 
+# 补规划附加段：观察摘要拼在 user JSON 的 observations 字段，不占 20 条窗口
+REPLAN_JSON_SUFFIX = (
+    "这是补规划，不是首次规划。根据 observations（工具摘要，禁止把完整 list 当原文）调整："
+    "只可改 tools_needed（短工具名）或把 delivery 改为 clarify；不得编造资产 ID。"
+    "只输出一个 JSON 对象，不要 Markdown 围栏。"
+)
+
 # 页面 AI 附加说明（数据集 / 用例工作台），不得另写第二套人设
 PAGE_AI_SUFFIX = "你在数据集/用例工作台生成候选，只输出 JSON 数组，不要落库。"
 
