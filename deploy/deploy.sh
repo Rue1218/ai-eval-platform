@@ -44,25 +44,57 @@ if [ "${DEPLOY_LOCK_ACQUIRED:-0}" != "1" ]; then
     export DEPLOY_LOCK_ACQUIRED=1
 fi
 
+git_fetch_with_retry() {
+    # GitHub SSH 偶发拒绝复用通道（channel 0: administratively prohibited），短间隔连拉会失败。
+    local attempt=1
+    local max_attempts=3
+    while true; do
+        if git fetch "$@"; then
+            return 0
+        fi
+        if [ "$attempt" -ge "$max_attempts" ]; then
+            echo "错误：git fetch 失败（已重试 $max_attempts 次）" >&2
+            return 1
+        fi
+        echo "警告：git fetch 失败，${attempt}/${max_attempts} 次，即将重试"
+        sleep $((attempt * 2))
+        attempt=$((attempt + 1))
+    done
+}
+
 echo "==> [1/4] 同步最新代码 (分支: $BRANCH)"
 if [ ! -d .git ]; then
     echo "首次部署：初始化 clone 仓库"
     git clone "$GIT_REPO" .
 fi
 
-git fetch origin "$BRANCH"
 # 优先使用工作流解析出的上次成功部署提交；手动部署则回退到本机成功标记。
 if [ -z "$DEPLOY_BASE_COMMIT" ] && [ -s "$DEPLOY_MARKER" ]; then
     DEPLOY_BASE_COMMIT=$(cat "$DEPLOY_MARKER")
     export DEPLOY_BASE_COMMIT
 fi
-# CI 必须部署触发提交，避免旧工作流在 fetch 后误部署更晚推送的 main。
-if [ -n "$DEPLOY_COMMIT" ]; then
-    git cat-file -e "${DEPLOY_COMMIT}^{commit}"
+
+# 工作流入口已经 fetch 过目标提交；脚本重载后 HEAD 已到位。再 fetch 会被 GitHub SSH 拒通道。
+if [ -n "$DEPLOY_COMMIT" ] && git cat-file -e "${DEPLOY_COMMIT}^{commit}" 2>/dev/null \
+    && [ "$(git rev-parse HEAD 2>/dev/null || true)" = "$(git rev-parse "$DEPLOY_COMMIT")" ]; then
+    echo "==> 工作区已在目标提交 ${DEPLOY_COMMIT:0:8}，跳过 fetch"
+elif [ -n "$DEPLOY_COMMIT" ] && git cat-file -e "${DEPLOY_COMMIT}^{commit}" 2>/dev/null; then
+    echo "==> 目标提交已在本地对象库，跳过 fetch：${DEPLOY_COMMIT:0:8}"
     git reset --hard "$DEPLOY_COMMIT"
 else
-    git reset --hard "origin/$BRANCH"
+    git_fetch_with_retry origin "$BRANCH"
+    # CI 必须部署触发提交，避免旧工作流在 fetch 后误部署更晚推送的 main。
+    if [ -n "$DEPLOY_COMMIT" ]; then
+        git cat-file -e "${DEPLOY_COMMIT}^{commit}"
+        git reset --hard "$DEPLOY_COMMIT"
+    else
+        git reset --hard "origin/$BRANCH"
+    fi
 fi
+
+# 手动部署没有传入精确 SHA 时，以同步后的 HEAD 作为本次目标提交。
+DEPLOY_COMMIT=${DEPLOY_COMMIT:-$(git rev-parse HEAD)}
+export DEPLOY_COMMIT
 
 # git reset 可能刚更新本脚本；重新加载一次，确保手动部署也使用当前提交的逻辑。
 if [ "${DEPLOY_SCRIPT_RELOADED:-0}" != "1" ]; then
@@ -70,9 +102,6 @@ if [ "${DEPLOY_SCRIPT_RELOADED:-0}" != "1" ]; then
     export DEPLOY_SCRIPT_RELOADED=1
     exec bash "$APP_DIR/deploy/deploy.sh"
 fi
-
-# 手动部署没有传入精确 SHA 时，以同步后的 HEAD 作为本次目标提交。
-DEPLOY_COMMIT=${DEPLOY_COMMIT:-$(git rev-parse HEAD)}
 
 # 注入构建版本信息
 export BUILD_VERSION=$(git rev-parse --short HEAD)
