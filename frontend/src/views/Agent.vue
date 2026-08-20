@@ -199,9 +199,16 @@
               :tool="item.tool || ''"
               :args="item.args"
               :result="item.result"
-              :status="item.status"
+              :status="item.status || 'pending'"
               :latency-ms="item.latency_ms"
-              :default-open="item.open"
+              :default-open="item.status === 'pending' || item.open"
+              :no-anim="item.noAnim"
+            />
+
+            <MediaPreview
+              v-else-if="item.type === 'media' && item.contentUrl"
+              :src="item.contentUrl"
+              :filename="item.filename"
               :no-anim="item.noAnim"
             />
 
@@ -794,6 +801,7 @@ import { skillLabel } from '../agent/skillLabels'
 import SkillBadge from '../components/agent/SkillBadge.vue'
 import ThoughtCard from '../components/agent/ThoughtCard.vue'
 import ToolCard from '../components/agent/ToolCard.vue'
+import MediaPreview from '../components/agent/MediaPreview.vue'
 import MarkdownView from '../components/agent/MarkdownView.vue'
 import SlashPalette from '../components/agent/SlashPalette.vue'
 import { SYSTEM_SLASH_COMMANDS } from '../agent/slashRegistry'
@@ -1026,7 +1034,7 @@ const sparkLastPoint = computed(() => {
 })
 
 interface StreamItem {
-  type: 'user' | 'agent' | 'thought' | 'tool' | 'confirm' | 'report' | 'error' | 'typing'
+  type: 'user' | 'agent' | 'thought' | 'tool' | 'media' | 'confirm' | 'report' | 'error' | 'typing'
   text?: string
   done?: boolean
   collapsed?: boolean
@@ -1044,6 +1052,10 @@ interface StreamItem {
   result?: any
   status?: 'pending' | 'ok' | 'fail'
   open?: boolean
+  mediaKind?: 'image'
+  contentUrl?: string
+  filename?: string
+  fileId?: string
   card?: any
   isAcked?: boolean
   ackResult?: boolean
@@ -1075,6 +1087,24 @@ function normalizeMessageFiles(attachments: unknown): any[] {
   return attachments.map((item) => (
     typeof item === 'string' ? { id: item, name: item, size: '' } : item
   ))
+}
+
+function mediaItemFromToolResult(name: string, data: unknown, extra: Partial<StreamItem> = {}): StreamItem | null {
+  if (name !== 'image.generate' || !data || typeof data !== 'object') return null
+  const rec = data as Record<string, unknown>
+  const fileId = typeof rec.file_id === 'string' ? rec.file_id : ''
+  const contentUrl = typeof rec.content_url === 'string' && rec.content_url.startsWith('/api/files/')
+    ? rec.content_url
+    : (fileId ? `/api/files/${fileId}/content` : '')
+  if (!contentUrl) return null
+  return {
+    type: 'media',
+    mediaKind: 'image',
+    fileId,
+    contentUrl,
+    filename: typeof rec.filename === 'string' ? rec.filename : 'imagegen.png',
+    ...extra,
+  }
 }
 
 /** 返回用户气泡展示名：自己的消息显示“我”，协作者优先显示昵称。 */
@@ -2383,7 +2413,13 @@ async function loadSessionHistory(sid: string): Promise<number> {
           target.item.result = p.ok ? p.data : p.error
           target.item.status = p.ok ? 'ok' : 'fail'
           target.item.latency_ms = p.latency_ms
-          if (p.ok && ['audio.voiceclone', 'image.generate'].includes(p.name)) target.item.open = true
+          if (p.ok && p.name === 'audio.voiceclone') target.item.open = true
+        }
+        if (p.ok) {
+          const media = mediaItemFromToolResult(p.name, p.data, { noAnim: true })
+          if (media) {
+            rawList.push({ time: t, priority: 3, eventId: eid, item: media })
+          }
         }
         // 历史回放也要恢复确认卡的 MCP 选项，否则刷新后下拉框会变空。
         if (p.ok) hydrateToolResult(p.name, p.data)
@@ -2878,9 +2914,13 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
         target.result = p.ok ? p.data : p.error
         target.status = p.ok ? 'ok' : 'fail'
         if (p.latency_ms !== undefined) target.latency_ms = p.latency_ms
-        if (p.ok && ['audio.voiceclone', 'image.generate'].includes(p.name)) target.open = true
+        if (p.ok && p.name === 'audio.voiceclone') target.open = true
       }
-      if (p.ok) hydrateToolResult(p.name, p.data)
+      if (p.ok) {
+        const media = mediaItemFromToolResult(p.name, p.data)
+        if (media) buf.push(media)
+        hydrateToolResult(p.name, p.data)
+      }
       if (p.ok && p.name === 'task.create') {
         const confirm = [...buf].reverse().find(x => x.type === 'confirm')
         if (confirm) {
@@ -3157,13 +3197,13 @@ function handleWsEvent(ev: WsServerEvent) {
       harnessStage.value = 'react'
       lastToolTitle.value = getToolDisplayName(p.name)
       setCurrentGenerating(true)
-      events.value.push({
+      events.value.push(reactive({
         type: 'tool',
         tool: p.name,
         args: p.arguments,
         status: 'pending',
         open: true,
-      })
+      }))
       scrollToBottom()
       break
     }
@@ -3181,10 +3221,11 @@ function handleWsEvent(ev: WsServerEvent) {
           target.latency_ms = p.latency_ms
           turnLatencyMs.value += p.latency_ms
         }
-        if (p.ok && ['audio.voiceclone', 'image.generate'].includes(p.name)) target.open = true
+        target.open = p.ok && p.name === 'audio.voiceclone'
       }
-      // 把短工具发现结果回填到确认卡可选项
       if (p.ok) {
+        const media = mediaItemFromToolResult(p.name, p.data)
+        if (media) events.value.push(reactive(media))
         hydrateToolResult(p.name, p.data)
         if (p.name === 'task.cancel' && p.data?.task_id) {
           finishCancelledTask(p.data.task_id)

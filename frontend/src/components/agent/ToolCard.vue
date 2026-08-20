@@ -31,7 +31,7 @@
 
       <div class="tool-meta-right">
         <span v-if="formattedLatency" class="tool-latency mono">{{ formattedLatency }}</span>
-        <span class="tool-state-text" :class="{ fail: status === 'fail' }">
+        <span class="tool-state-text" :class="statusClass">
           {{ stateText }}
         </span>
       </div>
@@ -50,12 +50,6 @@
         controls
         preload="metadata"
         :src="playUrl"
-      />
-      <img
-        v-if="tool === 'image.generate' && status === 'ok' && imagePlayUrl"
-        class="tool-image"
-        :src="imagePlayUrl"
-        alt="Qwen Image 生成结果"
       />
       <div class="td-block">
         <div class="td-label">输入 arguments</div>
@@ -84,7 +78,7 @@ const props = withDefaults(
     noAnim?: boolean
   }>(),
   {
-    status: 'ok',
+    status: 'pending',
     defaultOpen: false,
     noAnim: false,
   },
@@ -95,8 +89,16 @@ const isOpen = ref(!!props.defaultOpen)
 watch(
   () => props.status,
   (status) => {
-    if (status === 'ok' && ['audio.voiceclone', 'image.generate'].includes(props.tool)) {
+    if (status === 'pending') {
       isOpen.value = true
+      return
+    }
+    if (status === 'ok' && props.tool === 'audio.voiceclone') {
+      isOpen.value = true
+      return
+    }
+    if (status === 'ok' || status === 'fail') {
+      isOpen.value = false
     }
   },
 )
@@ -145,22 +147,12 @@ const playUrl = computed(() => {
   return ''
 })
 
-const imagePlayUrl = computed(() => {
-  const result = props.result
-  if (!result || typeof result !== 'object') return ''
-  const data = result as Record<string, unknown>
-  const url = data.content_url
-  if (typeof url === 'string' && url.startsWith('/api/files/') && url.includes('/content')) return url
-  const id = data.file_id
-  return typeof id === 'string' && id ? `/api/files/${id}/content` : ''
-})
-
 const statusClass = computed(() => props.status)
 
 const stateText = computed(() => {
-  if (props.status === 'pending') return 'ToolCall 调用中'
-  if (props.status === 'fail') return 'ToolCall 失败'
-  return 'ToolCall 完成'
+  if (props.status === 'pending') return '调用中'
+  if (props.status === 'fail') return '调用失败'
+  return '调用成功'
 })
 
 const outputText = computed(() => {
@@ -256,6 +248,13 @@ function formatJson(val: any): string {
   font-size: 12px;
   color: var(--text-tertiary);
 }
+.tool-state-text.pending {
+  color: var(--accent-info);
+  font-weight: 600;
+}
+.tool-state-text.ok {
+  color: var(--accent-success);
+}
 .tool-state-text.fail {
   color: var(--accent-error);
   font-weight: 500;
@@ -309,13 +308,6 @@ pre.code {
   width: 100%;
   margin-bottom: 10px;
   height: 36px;
-}
-.tool-image {
-  display: block;
-  max-width: 100%;
-  max-height: 280px;
-  margin-bottom: 10px;
-  border-radius: 8px;
 }
 @keyframes msg-in {
   from {

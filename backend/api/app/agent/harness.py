@@ -571,12 +571,12 @@ async def _run_turn(
         )
         if image_obs is not None:
             if image_obs.get("ok"):
-                await _deliver_sentence(
-                    db,
-                    session.id,
-                    emit,
-                    "图片已生成，可在工具卡中查看或下载。",
-                )
+                ids = (image_obs.get("data_summary") or {}).get("ids") or []
+                file_id = str(ids[0]) if ids else ""
+                sentence = "图片已生成。"
+                if file_id:
+                    sentence = f"图片已生成。file_id={file_id}"
+                await _deliver_sentence(db, session.id, emit, sentence)
             else:
                 err = (image_obs.get("data_summary") or {}).get("error") or "图像生成失败"
                 await _deliver_sentence(db, session.id, emit, err)
@@ -662,7 +662,7 @@ async def _chat_reply(
                 user_blob,
                 temperature=0.4,
                 max_tokens=2048,
-                timeout_s=30,
+                timeout_s=90,
             ):
                 if stop.is_set():
                     raise HarnessAborted()

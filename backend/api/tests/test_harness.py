@@ -92,6 +92,41 @@ def test_chat_reply_persists_completed_reasoning_snapshot(monkeypatch):
     assert ("thought", {"text": "先检查上下文", "stream": "think_final"}) in events
 
 
+def test_stream_mcp_step_emits_native_reasoning(monkeypatch):
+    """ReAct 决策流式下发推理链，并在成功后落 think_final。"""
+
+    class _Db:
+        def close(self):
+            return None
+
+    def _stream(*_args, **_kwargs):
+        yield "reasoning", "先想要不要生图"
+        yield "content", '{"thought":"调用生图","tool":"image.generate","arguments":{},"done":false,"reply":""}'
+
+    monkeypatch.setattr("app.llm.stream_agent_model", _stream)
+    monkeypatch.setattr("app.db.SessionLocal", lambda: _Db())
+    events: list[tuple[str, dict]] = []
+
+    async def _emit(event: str, payload: dict, **_kwargs) -> int:
+        events.append((event, payload))
+        return len(events)
+
+    from app.agent.react import _stream_mcp_step
+
+    step = asyncio.run(
+        _stream_mcp_step(
+            system="sys",
+            payload={"text": "帮我画一张图"},
+            stop=threading.Event(),
+            emit=_emit,
+        )
+    )
+    assert step.tool == "image.generate"
+    assert step.reasoning_text == "先想要不要生图"
+    assert any(event == "thought" and payload.get("stream") == "think" for event, payload in events)
+    assert ("thought", {"text": "先想要不要生图", "stream": "think_final"}) in events
+
+
 def test_chat_and_help_skip_stage_thoughts():
     """闲聊与 /help 不发规划/复核思考卡，避免三张「已思考」。"""
     assert should_emit_stage_thoughts("chat", None) is False
@@ -1067,7 +1102,7 @@ def test_run_react_mcp_loop_executes_one_tool_per_round(monkeypatch):
     calls: list[str] = []
     thoughts: list[str] = []
 
-    def _fake_step(_stop, _system, _payload):
+    async def _fake_step(**_kwargs):
         rounds["n"] += 1
         if rounds["n"] == 1:
             return McpStep(thought="先列出协议档", tool="model.list", arguments={}, done=False, reply="")
@@ -1087,7 +1122,7 @@ def test_run_react_mcp_loop_executes_one_tool_per_round(monkeypatch):
             return True, {"items": [{"id": "p1", "name": "a"}]}, None, 1
         return True, {"items": [{"id": "d1", "name": "ds"}]}, None, 1
 
-    monkeypatch.setattr("app.agent.react._run_with_fresh_db_step", _fake_step)
+    monkeypatch.setattr("app.agent.react._stream_mcp_step", _fake_step)
     monkeypatch.setattr("app.agent.react.execute_short_tool", _fake_exec)
     plan = PlanArtifact(
         intent="chat",
@@ -1123,7 +1158,7 @@ def test_run_react_long_tool_does_not_execute(monkeypatch):
     """长任务只发思考卡移交，不得在对话进程 execute_short_tool。"""
     calls: list[str] = []
 
-    def _fake_step(_stop, _system, _payload):
+    async def _fake_step(**_kwargs):
         return McpStep(thought="去跑评测", tool="benchmark.run", arguments={}, done=False, reply="")
 
     async def _emit(event: str, payload: dict, **_kwargs) -> int:
@@ -1134,7 +1169,7 @@ def test_run_react_long_tool_does_not_execute(monkeypatch):
     def _fake_exec(*_args, **_kwargs):
         raise AssertionError("长任务不得在 ReAct 循环内执行")
 
-    monkeypatch.setattr("app.agent.react._run_with_fresh_db_step", _fake_step)
+    monkeypatch.setattr("app.agent.react._stream_mcp_step", _fake_step)
     monkeypatch.setattr("app.agent.react.execute_short_tool", _fake_exec)
     plan = PlanArtifact(
         intent="benchmark",
@@ -1167,7 +1202,7 @@ def test_run_react_llm_unavailable_falls_back_to_tools_needed(monkeypatch):
     """模型不可用时仍按 tools_needed 串行，保证斜杠下单不空转。"""
     calls: list[str] = []
 
-    def _fail(*_args, **_kwargs):
+    async def _fail(*_args, **_kwargs):
         raise AppError(ErrorCode.VALIDATION, "未配置 Agent 协议档，请先到协议档页指定")
 
     async def _emit(event: str, payload: dict, **_kwargs) -> int:
@@ -1178,7 +1213,7 @@ def test_run_react_llm_unavailable_falls_back_to_tools_needed(monkeypatch):
     def _fake_exec(_db, name, _arguments, *, user_id, allow_create=False):
         return True, {"items": [{"id": "p1", "name": "a"}]}, None, 1
 
-    monkeypatch.setattr("app.agent.react._run_with_fresh_db_step", _fail)
+    monkeypatch.setattr("app.agent.react._stream_mcp_step", _fail)
     monkeypatch.setattr("app.agent.react.execute_short_tool", _fake_exec)
     plan = PlanArtifact(
         intent="benchmark",
@@ -1211,7 +1246,7 @@ def test_run_react_llm_stop_does_not_drain_tools_needed(monkeypatch):
     """模型已 done 时不得再把 tools_needed 当固定剧本跑完。"""
     calls: list[str] = []
 
-    def _fake_step(_stop, _system, _payload):
+    async def _fake_step(**_kwargs):
         return McpStep(
             thought="用户在问概念，不必列资产",
             tool=None,
@@ -1228,7 +1263,7 @@ def test_run_react_llm_stop_does_not_drain_tools_needed(monkeypatch):
     def _fake_exec(*_args, **_kwargs):
         raise AssertionError("模型停止后不应再执行规划清单")
 
-    monkeypatch.setattr("app.agent.react._run_with_fresh_db_step", _fake_step)
+    monkeypatch.setattr("app.agent.react._stream_mcp_step", _fake_step)
     monkeypatch.setattr("app.agent.react.execute_short_tool", _fake_exec)
     plan = PlanArtifact(
         intent="benchmark",
