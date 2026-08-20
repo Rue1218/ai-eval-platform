@@ -274,6 +274,39 @@ const TOOL_META_MAP: Record<string, ToolMeta> = {
     }, null, 2),
     securityNote: '只读短工具。实时读取 Worker 节点健康、显存负载与排队深度，为 Agent 分发建议提供决策依据。',
   },
+  'task.get': {
+    icon: '🔍',
+    domain: '任务中心与调度',
+    latency: '< 20ms',
+    params: [
+      { name: 'task_id', type: 'string', required: true, desc: '待查询的目标评测/压测任务唯一 ID' },
+    ],
+    exampleRequest: JSON.stringify({ name: 'task.get', arguments: { task_id: 't-20260820-0012' } }, null, 2),
+    exampleResponse: JSON.stringify({
+      task_id: 't-20260820-0012',
+      kind: 'benchmark',
+      status: 'running',
+      progress: { done: 30, total: 50, percent: 60, message: '正在执行被测模型推理评测 (30/50)' },
+    }, null, 2),
+    securityNote: '只读短工具。实时读取指定任务的状态机状态、执行进度与派生压测状态。',
+  },
+  'testcase.confirm': {
+    icon: '🧪',
+    domain: '用例生成与入库',
+    latency: '< 40ms',
+    params: [
+      { name: 'case_set_id', type: 'string', required: true, desc: '待确认入库的用例集 ID (UUID)' },
+      { name: 'confirmed_case_ids', type: 'array', required: false, desc: '勾选确认转正的用例 ID 列表（留空默认全量确认）' },
+    ],
+    exampleRequest: JSON.stringify({ name: 'testcase.confirm', arguments: { case_set_id: 'cs-pay-01', confirmed_case_ids: ['c-1', 'c-2'] } }, null, 2),
+    exampleResponse: JSON.stringify({
+      case_set_id: 'cs-pay-01',
+      status: 'confirmed',
+      confirmed_count: 26,
+      message: '用例已成功确认并转正入库',
+    }, null, 2),
+    securityNote: '受控写入工具 (WRITE)。将 AI 提炼生成的候选 PRD 测试用例持久化转正为可复用的标准用例库。',
+  },
 }
 
 const meta = computed<ToolMeta>(() => {
