@@ -3,9 +3,9 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Agent 独立开发说明书 |
-| 版本 | V1.1 |
+| 版本 | V1.2 |
 | 日期 | 2026-08-19 |
-| 最近修订 | 2026-08-19：落地 AGT-HRS-01..07（规划→ReAct→复核 Harness）、pending_confirm 迁移、斜杠 M1 桩与 ack 门禁 |
+| 最近修订 | 2026-08-20：Harness 缺口补齐（偏好 thought、补规划观察闭环、控制斜杠走完整复核 A2） |
 | 用法 | **实现 `/agent` 以本文为准（Harness / 斜杠 / 窗口算法）。** REST/WS JSON 以 API.md V1.4 为准。完成某项后勾选文末 Task，并在「最近修订」追加一行。 |
 
 本文是评测平台 **Agent 子系统** 的完整开发说明书：目标、边界、运行时骨架、协议、模块、代码落点与验收任务都写在这里。与 PRD / API.md 冲突时，字段名与事件名以那两份为准；Harness、斜杠、上下文算法以本文 §16 为准。§4.6 所列增量已收入 **API.md V1.4**。
@@ -626,7 +626,7 @@ ChatHead 右侧（或输入框上方）常驻，压缩或新消息后立刻更�
 | AGT-CTX-01 | 模型窗口 20 条 | `context.py` | 人设始终带上 | [x] 2026-08-19 |
 | AGT-CTX-02 | ContextMeter 消息/技能/摘要/余量 | ContextMeter.vue | `/20` 只约束消息；无记忆文件文案正确 | [ ] |
 | AGT-CTX-03 | compact_keep_from 迁移与 REST context_meter | models Alembic sessions.py | 刷新数字与压缩后 M 一致 | [x] 2026-08-19 |
-| AGT-MEM-01 | ack 成功后写 agent_prefs；规划可沿用 | settings + plan.py | 资产已删则不当作有效 ID | [x] 2026-08-19 |
+| AGT-MEM-01 | ack 成功后写 agent_prefs；规划可沿用 | settings + plan.py | 资产已删则不当作有效 ID；须发「沿用你上次的协议档」thought | [x] 2026-08-20 |
 | AGT-UI-01 | live 去掉模拟按钮与种子数据 | `Agent.vue` | 仅 mock 模式可演示 | [ ] |
 | AGT-UI-02 | 工具卡中文名 +「MCP · 短工具」 | `ToolCard.vue` | 无旧名 list_profiles | [ ] |
 | AGT-UI-03 | 确认卡 ack；未确认不入队 | ConfirmCard `ws.py` | 取消无任务 | [ ] |
@@ -1213,4 +1213,18 @@ except AppError as exc:
 | `backend/worker/app/main.py` | `kind=rag` **不得 mock 成功**，failed + 控制台 `[worker] skip rag` |
 
 M3 接 LightRAG：把 `LIGHTRAG_ENABLED` 改为 True，在 `query_lightrag` 请求 `lightrag:9621/query`，再组 rag 确认卡。现在不要把 query 容器里的空实现当成评测成功。
+
+---
+
+## 19. 修改代码文件与作用清单（2026-08-20 Harness 缺口补齐）
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/agent/plan.py` | 偏好 thought 挂到 `PlanArtifact.pref_thoughts`；新增 `run_replan` / `merge_replan`（观察进 user JSON，不占 20 条窗口） |
+| `backend/api/app/agent/react.py` | `run_react` 支持 `prior` + `extra_tools`，补规划后继续串行工具且计入 5 轮硬顶 |
+| `backend/api/app/agent/reflect.py` | 核对调用附带 observations 摘要 |
+| `backend/api/app/agent/harness.py` | 发出偏好 thought；补规划闭环；`/help` `/new` `/status` 等控制斜杠先 `run_gates` + `maybe_model_check` 再交付 |
+| `backend/api/app/agent/persona.py` | 增加补规划附加段 `REPLAN_JSON_SUFFIX` |
+| `backend/api/tests/test_harness.py` | 补 TC-05/08/09/14/16/17/19/20b 等单测 |
+
   

@@ -32,7 +32,7 @@ from .defaults import (
 )
 from .log import agent_trace
 from .persona import chat_system, turn_system
-from .plan import PlanArtifact, TurnBudget, run_plan
+from .plan import PlanArtifact, TurnBudget, merge_replan, run_plan, run_replan
 from .prefs import load_prefs, save_prefs_from_spec
 from .react import run_react
 from .reflect import ReflectArtifact, maybe_model_check, run_gates
@@ -62,6 +62,11 @@ class SessionHarness:
 
 # 会话级 abort（进程内 dict）。部署前提：API 单副本，或网关按 session_id 粘性路由。
 _HARNESS_BY_SESSION: dict[str, SessionHarness] = {}
+
+# 斜杠控制/只读命令的交付句由规则决定；核对不得把 /help 等改成澄清问句
+_DETERMINISTIC_SLASH = frozenset(
+    {"help", "new", "status", "cancel", "profiles", "datasets", "compact"}
+)
 
 
 def session_harness(session_id: str) -> SessionHarness | None:
@@ -228,24 +233,10 @@ async def _run_turn(
         skill_id=plan.skill_id,
         latency_ms=plan.latency_ms or None,
     )
+    for pref_note in plan.pref_thoughts:
+        await _emit_thought(emit, pref_note, stage="plan")
 
     slash_fill_first = parsed.command in {"benchmark", "stress", "testcase", "rerun"}
-
-    # 控制动作：/help /new 可不调工具
-    if parsed.command == "help":
-        plan.delivery = "text"
-        plan.intent = "inspect"
-        plan.tools_needed = []
-    if parsed.command == "new":
-        reflect = ReflectArtifact(verdict="pass", reasons=["控制动作 /new"], spec=None)
-        await _emit_thought(emit, "复核：新建会话不入队", stage="reflect")
-        await after_reflect(plan=plan, reflect=reflect)
-        await _deliver_sentence(db, session.id, emit, "请使用左侧「新建会话」，随后会切换到新的空会话。")
-        return
-    if parsed.command == "help":
-        await _emit_thought(emit, "复核：只读帮助，确认没有 create", stage="reflect")
-        await _deliver_sentence(db, session.id, emit, enabled_help_text())
-        return
 
     _check_abort(abort)
     react = await run_react(
@@ -259,118 +250,45 @@ async def _run_turn(
     for note in react.pref_stale_notes:
         await _emit_thought(emit, note, stage="react")
 
-    # 补规划：工具跑完仍缺槽，允许 1 次（HAR-ACT-04）
+    # 补规划：工具跑完仍缺槽，允许 1 次（HAR-ACT-04）。斜杠缺槽同样允许。
     missing = (plan.slots.get("missing") or []) if plan.intent in {"benchmark", "rag", "testcase"} else []
-    if (
-        missing
-        and plan.tools_needed
-        and budget.remaining() > 0
-        and plan.delivery == "confirm"
-        and parsed.command not in {"benchmark", "stress", "testcase"}
-    ):
+    if missing and budget.remaining() > 0 and plan.delivery == "confirm":
         _check_abort(abort)
         await _emit_thought(emit, "补规划：根据工具观察调整槽位", stage="plan")
-        try:
-            extra = await _await_thread(
-                stop,
-                lambda tdb: run_plan(
-                    tdb,
-                    text=text,
-                    parsed=parsed,
-                    history=history,
-                    prefs=prefs,
-                    attachments=attachments,
-                    budget=budget,
-                    model_available=True,
-                    compact_summary=compact_summary,
-                ),
+        extra = await _await_thread(
+            stop,
+            lambda tdb: run_replan(
+                tdb,
+                text=text,
+                parsed=parsed,
+                history=history,
+                prefs=prefs,
+                attachments=attachments,
+                budget=budget,
+                plan=plan,
+                observations=list(react.observations),
+                compact_summary=compact_summary,
+            ),
+        )
+        executed_names = [str(obs.get("name") or "") for obs in react.observations]
+        plan, extra_tools = merge_replan(plan, extra, executed_tool_names=executed_names)
+        if extra_tools and plan.delivery == "confirm":
+            stale_before = len(react.pref_stale_notes)
+            react = await run_react(
+                db,
+                plan,
+                user_id=user.id,
+                emit=emit,
+                check_abort=lambda: _check_abort(abort),
+                slash_fill_first=slash_fill_first,
+                prior=react,
+                extra_tools=extra_tools,
             )
-            if extra.delivery == "clarify":
-                plan.delivery = "clarify"
-                plan.slots["missing"] = extra.slots.get("missing") or missing
-                plan.notes = extra.notes
-        except AppError:
-            plan.delivery = "clarify"
+            for note in react.pref_stale_notes[stale_before:]:
+                await _emit_thought(emit, note, stage="react")
 
     _check_abort(abort)
     reflect = run_gates(db, session=session, plan=plan, react=react, source="plan")
-    # /compact 在规则通过后再执行（不计入 4 次硬顶）
-    if plan.intent == "compact" and reflect.verdict == "pass":
-        try:
-            session_id = session.id
-
-            def _compact_job(tdb: Session) -> tuple[str, int, int] | None:
-                row = tdb.query(AgentSession).filter(AgentSession.id == session_id).first()
-                if not row:
-                    raise AppError(ErrorCode.NOT_FOUND, "会话不存在")
-                return run_compact(tdb, row, stop=stop)
-
-            packed = await _await_thread(stop, _compact_job)
-            if packed is None:
-                raise HarnessAborted()
-            sentence, _old_m, _new_m = packed
-        except AppError as exc:
-            await emit("error", {"code": exc.code.value, "message": exc.message})
-            await _deliver_sentence(db, session.id, emit, "上下文压缩失败，窗口未改动")
-            return
-        await _emit_thought(emit, "复核：保留近几条原文，不删历史、不覆盖人设", stage="reflect")
-        await after_reflect(plan=plan, reflect=reflect)
-        await _deliver_sentence(db, session.id, emit, sentence)
-        return
-
-    if parsed.command == "status":
-        task = (
-            db.query(Task)
-            .filter(Task.session_id == session.id, Task.status.in_(ACTIVE_STATUSES))
-            .first()
-        )
-        await _emit_thought(emit, "复核：只读状态，确认没有 create", stage="reflect")
-        if task:
-            await _deliver_sentence(
-                db,
-                session.id,
-                emit,
-                f"当前占槽：kind={task.kind} status={task.status} task_id={task.id}",
-            )
-        else:
-            await _deliver_sentence(db, session.id, emit, "无活动任务")
-        return
-
-    if parsed.command == "cancel":
-        task = (
-            db.query(Task)
-            .filter(Task.session_id == session.id, Task.status.in_(ACTIVE_STATUSES))
-            .first()
-        )
-        await _emit_thought(emit, "复核：取消动作", stage="reflect")
-        if not task:
-            await _deliver_sentence(db, session.id, emit, "当前没有可取消的任务")
-            return
-        await _deliver_sentence(
-            db,
-            session.id,
-            emit,
-            f"将取消任务 {task.id[:8]}（{task.kind}/{task.status}）。请在界面确认对话框后提交取消。",
-        )
-        return
-
-    if parsed.command == "profiles":
-        count = 0
-        for obs in react.observations:
-            if obs.get("name") == "model.list" and obs.get("ok"):
-                count = int((obs.get("data_summary") or {}).get("count") or 0)
-        await _emit_thought(emit, "复核：只读列出协议档", stage="reflect")
-        await _deliver_sentence(db, session.id, emit, f"当前共 {count} 个协议档。")
-        return
-
-    if parsed.command == "datasets":
-        count = 0
-        for obs in react.observations:
-            if obs.get("name") == "dataset.list" and obs.get("ok"):
-                count = int((obs.get("data_summary") or {}).get("count") or 0)
-        await _emit_thought(emit, "复核：只读列出数据集", stage="reflect")
-        await _deliver_sentence(db, session.id, emit, f"当前共 {count} 个数据集。" if count else "还没有数据集，请先到「数据集」页上传。")
-        return
 
     if parsed.command == "rerun":
         last = (
@@ -398,9 +316,10 @@ async def _run_turn(
                 plan.intent = str(cfg.get("kind") or "benchmark")
                 reflect = run_gates(db, session=session, plan=plan, react=react, source="plan")
 
-    # 规则优先；通过后模型核对（A2）
+    # 规则优先；通过后模型核对（A2：confirm / text / action 均启用）
     if reflect.verdict == "pass":
         _check_abort(abort)
+        gate_reasons = list(reflect.reasons)
         reflect = await _await_thread(
             stop,
             lambda tdb, artifact=reflect: maybe_model_check(
@@ -410,8 +329,14 @@ async def _run_turn(
                 text=text,
                 budget=budget,
                 compact_summary=compact_summary,
+                observations=list(react.observations),
             ),
         )
+        # /help 等用户目标就是该命令本身；核对改判 clarify 会吞掉确定性交付
+        if parsed.command in _DETERMINISTIC_SLASH and reflect.verdict == "clarify":
+            reflect.verdict = "pass"
+            reflect.reasons = gate_reasons
+            reflect.spec = None
 
     await after_reflect(plan=plan, reflect=reflect)
 
@@ -433,6 +358,86 @@ async def _run_turn(
 
     if reflect.verdict == "clarify" or plan.delivery == "clarify":
         await _deliver_sentence(db, session.id, emit, _clarify_text(reflect, plan))
+        return
+
+    # /compact 在规则 + 核对通过后再执行（压缩调用不计入 4 次硬顶）
+    if plan.intent == "compact":
+        try:
+            session_id = session.id
+
+            def _compact_job(tdb: Session) -> tuple[str, int, int] | None:
+                row = tdb.query(AgentSession).filter(AgentSession.id == session_id).first()
+                if not row:
+                    raise AppError(ErrorCode.NOT_FOUND, "会话不存在")
+                return run_compact(tdb, row, stop=stop)
+
+            packed = await _await_thread(stop, _compact_job)
+            if packed is None:
+                raise HarnessAborted()
+            sentence, _old_m, _new_m = packed
+        except AppError as exc:
+            await emit("error", {"code": exc.code.value, "message": exc.message})
+            await _deliver_sentence(db, session.id, emit, "上下文压缩失败，窗口未改动")
+            return
+        await _deliver_sentence(db, session.id, emit, sentence)
+        return
+
+    if parsed.command == "new":
+        await _deliver_sentence(db, session.id, emit, "请使用左侧「新建会话」，随后会切换到新的空会话。")
+        return
+    if parsed.command == "help":
+        await _deliver_sentence(db, session.id, emit, enabled_help_text())
+        return
+    if parsed.command == "status":
+        task = (
+            db.query(Task)
+            .filter(Task.session_id == session.id, Task.status.in_(ACTIVE_STATUSES))
+            .first()
+        )
+        if task:
+            await _deliver_sentence(
+                db,
+                session.id,
+                emit,
+                f"当前占槽：kind={task.kind} status={task.status} task_id={task.id}",
+            )
+        else:
+            await _deliver_sentence(db, session.id, emit, "无活动任务")
+        return
+    if parsed.command == "cancel":
+        task = (
+            db.query(Task)
+            .filter(Task.session_id == session.id, Task.status.in_(ACTIVE_STATUSES))
+            .first()
+        )
+        if not task:
+            await _deliver_sentence(db, session.id, emit, "当前没有可取消的任务")
+            return
+        await _deliver_sentence(
+            db,
+            session.id,
+            emit,
+            f"将取消任务 {task.id[:8]}（{task.kind}/{task.status}）。请在界面确认对话框后提交取消。",
+        )
+        return
+    if parsed.command == "profiles":
+        count = 0
+        for obs in react.observations:
+            if obs.get("name") == "model.list" and obs.get("ok"):
+                count = int((obs.get("data_summary") or {}).get("count") or 0)
+        await _deliver_sentence(db, session.id, emit, f"当前共 {count} 个协议档。")
+        return
+    if parsed.command == "datasets":
+        count = 0
+        for obs in react.observations:
+            if obs.get("name") == "dataset.list" and obs.get("ok"):
+                count = int((obs.get("data_summary") or {}).get("count") or 0)
+        await _deliver_sentence(
+            db,
+            session.id,
+            emit,
+            f"当前共 {count} 个数据集。" if count else "还没有数据集，请先到「数据集」页上传。",
+        )
         return
 
     if plan.delivery == "confirm" and reflect.verdict == "pass" and reflect.spec:
@@ -470,7 +475,7 @@ async def _chat_reply(
     skill_id: str | None,
     emit: EmitFn,
 ) -> str:
-    """闲聊交付句：计入 4 次预算；失败回退短答。
+    """闲聊交付句：与规划/重试/补规划/核对共用 4 次硬顶；达顶回退短答，不再调模型。
 
     正文与推理思考链经瞬态 WS 帧实时下发（不落库）；完整句子仍由
     ``_deliver_sentence`` 写成 assistant 消息。取消后丢弃半截增量。

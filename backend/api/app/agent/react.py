@@ -40,6 +40,8 @@ class ReactArtifact:
     proposed_spec: dict[str, Any] | None = None
     known_ids: list[str] = field(default_factory=list)
     pref_stale_notes: list[str] = field(default_factory=list)
+    # 已消耗的工具轮次（含跳过/失败），补规划续跑时计入同一硬顶
+    rounds_used: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         body: dict[str, Any] = {"observations": list(self.observations)}
@@ -128,7 +130,9 @@ def build_proposed_spec(plan: PlanArtifact, react: ReactArtifact, *, slash_fill_
     valid_profiles = [pid for pid in wanted_profiles if pid in known]
     stale_profiles = [pid for pid in wanted_profiles if pid and pid not in known]
     if stale_profiles and profile_items:
-        react.pref_stale_notes.append("上次的协议档已删除")
+        note = "上次的协议档已删除"
+        if note not in react.pref_stale_notes:
+            react.pref_stale_notes.append(note)
     if not valid_profiles and slash_fill_first and profile_items:
         valid_profiles = [profile_items[0]["id"]]
     if valid_profiles:
@@ -138,7 +142,9 @@ def build_proposed_spec(plan: PlanArtifact, react: ReactArtifact, *, slash_fill_
     if wanted_dataset and wanted_dataset in known:
         spec["dataset_id"] = wanted_dataset
     elif wanted_dataset and dataset_items:
-        react.pref_stale_notes.append("上次的数据集已删除")
+        note = "上次的数据集已删除"
+        if note not in react.pref_stale_notes:
+            react.pref_stale_notes.append(note)
     elif slash_fill_first and dataset_items:
         spec["dataset_id"] = dataset_items[0]["id"]
 
@@ -178,19 +184,25 @@ async def run_react(
     emit: EmitFn,
     check_abort: AbortCheck,
     slash_fill_first: bool,
+    prior: ReactArtifact | None = None,
+    extra_tools: list[str] | None = None,
 ) -> ReactArtifact:
-    """串行执行 tools_needed，发出成对 tool_call / tool_result。"""
-    react = ReactArtifact()
+    """串行执行短工具，发出成对 tool_call / tool_result。
+
+    ``prior`` + ``extra_tools`` 用于补规划后继续执行尚未跑过的工具，
+    轮次计入同一 ``max_tool_rounds`` 硬顶（默认 4，硬顶 5）。
+    """
+    react = prior or ReactArtifact()
     # 预留并行开关：M1 强制串行，打开后仍须保证事件成对
     _ = PARALLEL_READONLY_TOOLS
     rounds_cap = min(int(plan.budget.get("max_tool_rounds") or DEFAULT_TOOL_ROUNDS), HARD_MAX_TOOL_ROUNDS)
-    queue = list(plan.tools_needed)
+    queue = list(extra_tools if extra_tools is not None else plan.tools_needed)
+    executed = react.rounds_used
 
     if not queue:
         react.proposed_spec = build_proposed_spec(plan, react, slash_fill_first=slash_fill_first)
         return react
 
-    executed = 0
     while queue and executed < rounds_cap:
         check_abort()
         name = queue.pop(0)
@@ -231,6 +243,7 @@ async def run_react(
             # 单工具失败：记入观察，无替代则进入复核 clarify
             break
 
+    react.rounds_used = executed
     if executed >= rounds_cap and queue:
         agent_trace(f"工具轮次达到硬顶 rounds={executed}")
     if react.proposed_spec is None:

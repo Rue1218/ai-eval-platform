@@ -216,6 +216,7 @@ def maybe_model_check(
     text: str,
     budget: TurnBudget,
     compact_summary: str | None = None,
+    observations: list[dict[str, Any]] | None = None,
 ) -> ReflectArtifact:
     """规则 pass 后 1 次「是否符合用户目标」。失败不阻断；不得把 reject 改成 pass。"""
     if artifact.verdict != "pass":
@@ -230,6 +231,8 @@ def maybe_model_check(
             "plan": plan.as_dict(),
             "verdict": artifact.verdict,
             "spec": artifact.spec,
+            # 观察摘要不占 20 条消息窗口，只进本轮核对 user JSON（HAR-ACT-01）
+            "observations": observations or [],
         }
         from ..llm import call_agent_model_detailed
 

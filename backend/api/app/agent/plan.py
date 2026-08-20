@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -17,10 +17,13 @@ from .defaults import (
     HARD_MAX_TOOL_ROUNDS,
     INTENT_ENUM,
     REQUIRED_SLOTS,
+    SHORT_TOOLS,
     SKILL_ID_ENUM,
+    WRITE_TOOLS,
+    is_long_tool,
 )
 from .log import agent_trace
-from .persona import PLAN_RETRY_SUFFIX, plan_system, turn_system
+from .persona import PLAN_RETRY_SUFFIX, REPLAN_JSON_SUFFIX, plan_system, turn_system
 from .slash import SlashParse
 
 
@@ -37,7 +40,9 @@ class PlanArtifact:
     notes: str
     used_model: bool = False
     latency_ms: int = 0
-    source: str = "llm"  # llm | slash | l0 | retry
+    source: str = "llm"  # llm | slash | l0 | retry | replan
+    # 规划阶段沿用偏好时要发的思考卡（不写入 PlanArtifact JSON）
+    pref_thoughts: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -184,6 +189,7 @@ def classify_intent_l0(text: str) -> tuple[str, bool]:
     if any(k in lowered for k in chat_keys) and not any(
         k in raw for k in ("评测", "评估", "对比", "benchmark", "跑分")
     ):
+        # HAR-PLAN-05 表「其它 → benchmark」与 TC-15 闲聊验收冲突时，按 TC-15 走 chat。
         return "chat", False
     if any(k in lowered for k in ("benchmark", "评测", "评估", "对比", "跑分", "打分", "测试模型", "模型质量", "评一下", "帮我评")):
         return "benchmark", False
@@ -376,6 +382,14 @@ def apply_prefs_suggestions(plan: PlanArtifact, prefs: dict) -> list[str]:
     return thoughts
 
 
+def _attach_prefs(plan: PlanArtifact, prefs: dict) -> PlanArtifact:
+    """把偏好建议写入 filled，并把思考卡文案挂到 plan.pref_thoughts（HAR-PLAN-06）。"""
+    extra = apply_prefs_suggestions(plan, prefs)
+    if extra:
+        plan.pref_thoughts.extend(extra)
+    return plan
+
+
 def _call_plan_model(
     db: Session,
     user_payload: dict,
@@ -430,8 +444,7 @@ def run_plan(
         "stop",
     }:
         plan = plan_from_slash(parsed, prefs=prefs, attachments=attachments)
-        apply_prefs_suggestions(plan, prefs)
-        return plan
+        return _attach_prefs(plan, prefs)
 
     if parsed.is_slash and parsed.command not in {
         "benchmark",
@@ -463,8 +476,7 @@ def run_plan(
 
     if not model_available:
         plan = l0_plan(text, prefs=prefs)
-        apply_prefs_suggestions(plan, prefs)
-        return plan
+        return _attach_prefs(plan, prefs)
 
     user_payload = {
         "text": text,
@@ -481,15 +493,13 @@ def run_plan(
         plan = sanitize_plan(raw, source="llm")
         plan.used_model = True
         plan.latency_ms = latency
-        apply_prefs_suggestions(plan, prefs)
-        return plan
+        return _attach_prefs(plan, prefs)
     except AppError as exc:
         # 未配置协议档 / 上游失败：降级 L0，仍必须进复核
         if exc.code in {ErrorCode.VALIDATION, ErrorCode.UPSTREAM, ErrorCode.TIMEOUT}:
             agent_trace(f"规划模型不可用 code={exc.code.value}，降级 L0")
             plan = l0_plan(text, prefs=prefs)
-            apply_prefs_suggestions(plan, prefs)
-            return plan
+            return _attach_prefs(plan, prefs)
         raise
     except Exception:
         agent_trace("规划 JSON 解析失败，准备重试")
@@ -505,17 +515,131 @@ def run_plan(
         plan = sanitize_plan(raw, source="retry")
         plan.used_model = True
         plan.latency_ms = latency
-        apply_prefs_suggestions(plan, prefs)
-        return plan
+        return _attach_prefs(plan, prefs)
     except AppError as exc:
         if exc.code in {ErrorCode.VALIDATION, ErrorCode.UPSTREAM, ErrorCode.TIMEOUT}:
             agent_trace(f"规划重试模型不可用 code={exc.code.value}，降级 L0")
             plan = l0_plan(text, prefs=prefs)
-            apply_prefs_suggestions(plan, prefs)
-            return plan
+            return _attach_prefs(plan, prefs)
         raise
     except Exception:
         agent_trace("规划重试仍失败，降级 L0 规则意图")
         plan = l0_plan(text, prefs=prefs)
-        apply_prefs_suggestions(plan, prefs)
-        return plan
+        return _attach_prefs(plan, prefs)
+
+
+def _clarify_from_plan(plan: PlanArtifact, *, source: str = "replan") -> PlanArtifact:
+    """补规划失败或预算不足时改判 clarify，不新开第二轮模型调用。"""
+    extra = PlanArtifact(
+        intent=plan.intent,
+        skill_id=plan.skill_id,
+        slots={
+            "filled": dict(plan.slots.get("filled") or {}),
+            "missing": list(plan.slots.get("missing") or []),
+        },
+        tools_needed=list(plan.tools_needed),
+        delivery="clarify",
+        budget=dict(plan.budget),
+        notes=plan.notes or "补规划：槽位仍不齐，改为澄清。",
+        used_model=plan.used_model,
+        latency_ms=0,
+        source=source,
+        pref_thoughts=list(plan.pref_thoughts),
+    )
+    return extra
+
+
+def run_replan(
+    db: Session,
+    *,
+    text: str,
+    parsed: SlashParse,
+    history: list[dict[str, str]],
+    prefs: dict,
+    attachments: list[str],
+    budget: TurnBudget,
+    plan: PlanArtifact,
+    observations: list[dict[str, Any]],
+    compact_summary: str | None = None,
+) -> PlanArtifact:
+    """1 次补规划：观察摘要放入本轮 user JSON，不占 20 条消息窗口（HAR-ACT-04）。
+
+    失败只降级为 clarify，禁止再开第二轮补规划。
+    """
+    if budget.remaining() <= 0:
+        return _clarify_from_plan(plan)
+    user_payload = {
+        "text": text,
+        "command": parsed.command or "",
+        "args": parsed.args,
+        "history": history,
+        "prefs": prefs,
+        "attachments": attachments,
+        "observations": observations,
+        "current_plan": plan.as_dict(),
+    }
+    try:
+        raw, latency = _call_plan_model(
+            db,
+            user_payload,
+            extra_system=REPLAN_JSON_SUFFIX,
+            budget=budget,
+            compact_summary=compact_summary,
+        )
+        extra = sanitize_plan({**plan.as_dict(), **raw}, source="replan")
+        extra.used_model = True
+        extra.latency_ms = latency
+        extra.pref_thoughts = list(plan.pref_thoughts)
+        return extra
+    except AppError as exc:
+        # 补规划失败一律澄清，不得把 INTERNAL 冒成 500 中断回合
+        agent_trace(f"补规划模型失败 code={exc.code.value}，改判 clarify")
+        return _clarify_from_plan(plan)
+    except Exception:
+        agent_trace("补规划 JSON 解析失败，改判 clarify")
+        return _clarify_from_plan(plan)
+
+
+def merge_replan(
+    plan: PlanArtifact,
+    extra: PlanArtifact,
+    *,
+    executed_tool_names: list[str],
+) -> tuple[PlanArtifact, list[str]]:
+    """把补规划合并进当前 plan；返回尚未执行的只读短工具队列。
+
+    下单意图只允许继续 confirm 或改判 clarify；模型若返回 text/action，
+    一律当澄清，避免随后误走闲聊交付。
+    """
+    plan.notes = extra.notes or plan.notes
+    plan.latency_ms = extra.latency_ms
+    plan.source = extra.source or plan.source
+    extra_slots = extra.slots or {}
+    if extra.delivery != "confirm":
+        plan.delivery = "clarify"
+        missing = extra_slots.get("missing")
+        if missing:
+            plan.slots["missing"] = list(missing)
+        return plan, []
+    plan.delivery = "confirm"
+    filled = extra_slots.get("filled")
+    if isinstance(filled, dict):
+        plan.slots.setdefault("filled", {}).update(filled)
+    if extra_slots.get("missing") is not None:
+        plan.slots["missing"] = list(extra_slots.get("missing") or [])
+    plan.tools_needed = list(extra.tools_needed)
+    if extra.skill_id is not None:
+        plan.skill_id = extra.skill_id
+    # 出现长工具/未知工具时不续跑，留给 G4 reject，避免先出工具卡再报错
+    if any(
+        (not name) or name not in SHORT_TOOLS or is_long_tool(name) for name in extra.tools_needed
+    ):
+        return plan, []
+    done = set(executed_tool_names)
+    extra_tools = [
+        name
+        for name in extra.tools_needed
+        if name not in done and name not in WRITE_TOOLS
+    ]
+    return plan, extra_tools
+
