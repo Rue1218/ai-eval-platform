@@ -13,20 +13,16 @@ python -m pip install -r requirements.txt
 
 ## 配置
 
-只通过环境变量注入 API Key：
-
-```powershell
-$env:QWEN_IMAGE_API_KEY = "你的 DashScope API Key"
-```
-
-也兼容 curl 示例中的环境变量名：`DASHSCOPE_API_KEY`。如果两者同时存在，优先使用 `QWEN_IMAGE_API_KEY`。
-
-可选配置：
+配置写在仓库根目录 `.env` 中。MCP 启动时会自动加载该文件；如果运行环境已经注入同名变量，则以运行环境变量为准。
 
 ```text
 QWEN_IMAGE_API_URL=https://ws-2jjtk1qzvfbov9p0.cn-beijing.maas.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation
+QWEN_IMAGE_API_KEY=请填写你的 DashScope API Key
+QWEN_IMAGE_MODEL=qwen-image-3.0
 QWEN_IMAGE_TIMEOUT_SECONDS=120
 ```
+
+也兼容 curl 示例中的环境变量名 `DASHSCOPE_API_KEY`；如果两者同时存在，优先使用 `QWEN_IMAGE_API_KEY`。URL、Key 或模型 ID 缺失时，工具会返回配置错误，不会发起请求。
 
 不要把真实 Key 写入 Git、README、日志或截图。用户提供的 Key 若已在其他地方公开，建议在 DashScope 控制台立即轮换。
 

@@ -201,7 +201,7 @@ export interface McpTool {
   desc: string
   permission: 'read' | 'write'
   enabled: boolean
-  source: 'builtin'
+    source: 'builtin' | 'standalone'
 }
 
 export interface TaskProgress {

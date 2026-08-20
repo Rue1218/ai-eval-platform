@@ -2,10 +2,10 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.1 |
+| 文档版本 | V1.2 |
 | 审查日期 | 2026-08-20 |
 | 接入范围 | 独立 stdio MCP，不纳入平台 V1.0 外部 MCP REST/WS 契约 |
-| 默认模型 | `qwen-image-3.0` |
+| 配置模型 | 通过 `QWEN_IMAGE_MODEL` 注入 |
 
 ## 1. 说明
 
@@ -31,14 +31,19 @@
 }
 ```
 
-API Key 只能通过 `QWEN_IMAGE_API_KEY` 或兼容 curl 示例的 `DASHSCOPE_API_KEY` 环境变量注入。代码、日志和文档均不保存真实密钥；用户此前提供的密钥若已经暴露，应在供应商控制台轮换。
+URL、API Key 和模型 ID 从仓库根目录 `.env` 或进程环境读取，分别对应 `QWEN_IMAGE_API_URL`、`QWEN_IMAGE_API_KEY` 和 `QWEN_IMAGE_MODEL`。API Key 也兼容 curl 示例中的 `DASHSCOPE_API_KEY`；如果两者同时存在，优先使用 `QWEN_IMAGE_API_KEY`。代码、日志和文档均不保存真实密钥；用户此前提供的密钥若已经暴露，应在供应商控制台轮换。
 
 ## 2. 启动方式
 
-在仓库根目录安装 `backend/image_mcp/requirements.txt` 后运行：
+在仓库根目录 `.env` 填写配置，然后安装 `backend/image_mcp/requirements.txt` 并运行：
+
+```text
+QWEN_IMAGE_API_URL=https://ws-2jjtk1qzvfbov9p0.cn-beijing.maas.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation
+QWEN_IMAGE_API_KEY=你的 DashScope API Key
+QWEN_IMAGE_MODEL=qwen-image-3.0
+```
 
 ```powershell
-$env:QWEN_IMAGE_API_KEY = "你的 DashScope API Key"
 python -m backend.image_mcp.server
 ```
 
@@ -48,7 +53,7 @@ python -m backend.image_mcp.server
 
 | 场景 | MCP 工具错误 |
 | --- | --- |
-| 缺少 Key、超时配置非法 | `CONFIG` |
+| 缺少 URL、Key 或模型 ID，或超时配置非法 | `CONFIG` |
 | `prompt` 为空或过长 | `VALIDATION` |
 | 上游 4xx/5xx、连接失败、响应结构异常 | `UPSTREAM` |
 | 上游请求或图片下载超时 | `TIMEOUT` |
@@ -64,3 +69,12 @@ python -m backend.image_mcp.server
 | `backend/image_mcp/requirements.txt` | 独立 MCP 运行依赖 |
 | `backend/image_mcp/README.md` | 安装、环境变量和客户端配置示例 |
 | `backend/image_mcp/tests/test_client.py` | 不调用真实上游的客户端单元测试 |
+
+## V1.2 修改代码文件与作用清单
+
+| 文件 | 作用 |
+| --- | --- |
+| `backend/image_mcp/client.py` | 自动加载仓库根目录 `.env`，从环境变量读取 URL、API Key 和模型 ID；缺失配置时拒绝发起请求 |
+| `backend/image_mcp/requirements.txt` | 增加 `python-dotenv`，支持独立 MCP 自动加载 `.env` |
+| `backend/image_mcp/README.md` / `.env.example` | 补充三项 Qwen Image 配置示例 |
+| `backend/image_mcp/tests/test_client.py` | 增加环境变量配置读取测试并更新模型配置测试 |

@@ -309,6 +309,29 @@ const TOOL_META_MAP: Record<string, ToolMeta> = {
     }, null, 2),
     securityNote: '受控写入工具 (WRITE)。将 AI 提炼生成的候选 PRD 测试用例持久化转正为可复用的标准用例库。',
   },
+  'image.generate': {
+    icon: '🖼️',
+    domain: '图像生成',
+    latency: '上游耗时，未挂载',
+    params: [
+      { name: 'prompt', type: 'string', required: true, desc: '图像生成提示词' },
+      { name: 'image', type: 'string', required: false, desc: '参考图 URL、Data URI 或服务端本地图片路径' },
+      { name: 'prompt_extend', type: 'boolean', required: false, desc: '是否启用提示词扩展，默认 true' },
+    ],
+    exampleRequest: JSON.stringify({
+      name: 'image.generate',
+      arguments: {
+        prompt: '基于参考图生成一张油画风格图片',
+        image: 'https://example.com/reference.png',
+        prompt_extend: true,
+      },
+    }, null, 2),
+    exampleResponse: JSON.stringify({
+      status: 'disabled',
+      message: '独立 stdio MCP 尚未挂载到 Eval-Core Host',
+    }, null, 2),
+    securityNote: '当前仅在工具中心展示。独立 stdio MCP 尚未挂载到平台 Eval-Core Host，因此不会假装成功调用。',
+  },
 }
 
 const meta = computed<ToolMeta>(() => {

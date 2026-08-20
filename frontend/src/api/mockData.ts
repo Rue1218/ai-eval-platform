@@ -214,6 +214,7 @@ export const MOCK_MCP_TOOLS: McpTool[] = [
   { name: 'kb.list', desc: '查询知识库与黄金 QA 资产', permission: 'read', enabled: true, source: 'builtin' },
   { name: 'testcase.confirm', desc: '确认用例入库', permission: 'write', enabled: true, source: 'builtin' },
   { name: 'audio.voiceclone', desc: '用本轮 wav/mp3 参考音频克隆音色并合成配音', permission: 'write', enabled: true, source: 'builtin' },
+  { name: 'image.generate', desc: 'Qwen Image 3.0 文本或参考图生图（独立 stdio MCP，当前未挂载）', permission: 'write', enabled: false, source: 'standalone' },
 ]
 
 export const MOCK_CASE_SETS: CaseSet[] = [
