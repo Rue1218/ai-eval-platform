@@ -796,7 +796,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch, h } from 'vue'
+import { ref, computed, reactive, onMounted, onBeforeUnmount, nextTick, watch, h } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useMessage, useDialog, NDropdown, type DropdownOption } from 'naive-ui'
 import { api } from '../api/http'
@@ -1059,6 +1059,8 @@ interface StreamItem {
   latency_ms?: number
   stage?: 'plan' | 'react' | 'reflect'
   skill_id?: string
+  // 推理思考链标记：由 stream=think 瞬态增量帧创建，终帧只结束折叠、不得覆盖其内容
+  streamThink?: boolean
   // 流式标记：true 表示该 agent 气泡正在接收 LLM 增量帧，终帧到达后置 false
   streaming?: boolean
   // 已显示的纯文本进度（流式增量与打字机共用，text 为其渲染后的 HTML）
@@ -1711,7 +1713,10 @@ function handleUserSend(text: string, files: any[] = []) {
     session.title = text.slice(0, 18)
   }
 
-  if (agentWs?.isConnected) {
+  // 会话匹配守卫：切换会话时 initWebSocket 在历史回放完成后才指向新会话，
+  // 竞态窗口内 agentWs 仍指旧会话——此时发送会把消息写进旧会话且回复被后台分流，
+  // 当前视图永远等不到事件（表现为打字占位/空光标气泡卡住）。
+  if (agentWs?.isConnected && (!agentWs.sessionId || agentWs.sessionId === currentSessionId.value)) {
     console.log('%c[Agent] 🚀 发送用户消息:', 'color: #3b82f6; font-weight: bold;', text)
     // 打字占位气泡：服务端 LLM 意图识别期间给用户即时反馈，收到任意事件后移除
     events.value.push({ type: 'typing' })
@@ -2314,7 +2319,11 @@ async function loadSessionHistory(sid: string): Promise<number> {
       const eid = Number(ev.event_id) || 0
 
       if (ev.event === 'thought' && !p.stream) {
-        if (p.stage || p.skill_id || p.latency_ms || (p.text && p.stage !== null)) {
+        // 交付终帧判定：无 stage / skill_id / latency 的 thought 落库事件即助手交付句，
+        // 其正文已随 messages.role=assistant 回放成气泡；若再渲染成思考卡会造成
+        // 「已思考 N 字」重复卡（原条件 p.stage !== null 对 undefined 恒真，属逻辑缺陷）。
+        const isDeliveryFrame = !p.stage && !p.skill_id && p.latency_ms === undefined
+        if (!isDeliveryFrame && p.text) {
           rawList.push({
             time: t,
             priority: 2,
@@ -2684,7 +2693,7 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
         if (!delta) break
         const target = [...buf].reverse().find(e => e.type === 'thought' && !e.done)
         if (target) target.text = (target.text || '') + delta
-        else buf.push({ type: 'thought', text: delta, done: false, collapsed: false })
+        else buf.push({ type: 'thought', text: delta, done: false, collapsed: false, streamThink: true })
         markGenerating(sid, true)
         rt.harnessStage = rt.harnessStage || 'plan'
         break
@@ -2707,7 +2716,8 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
       if (stage) rt.harnessStage = stage
       const think = [...buf].reverse().find(e => e.type === 'thought' && !e.done)
       if (think) {
-        if (text) think.text = text
+        // 与前台一致：交付终帧（无 stage）不得覆盖 streamThink 卡的推理内容
+        if (text && (stage || !think.streamThink)) think.text = text
         think.done = true
         think.collapsed = true
         if (p.latency_ms !== undefined) think.latency_ms = p.latency_ms
@@ -2788,7 +2798,11 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
    无论是真流式增量、网关不支持 SSE 的单块兜底、还是降级规则版的整段回复，
    终帧到达后都从已显示长度逐字推进到全文，保证任何链路下用户都看到
    「一个字一个字弹出」的效果。定时器登记进 flowTimers，「暂停生成」可中断。 */
-function typewriteTo(item: StreamItem, fullText: string) {
+function typewriteTo(rawItem: StreamItem, fullText: string) {
+  // 响应式关键修复：调用方可能传入 push 进响应式数组前的原始对象引用，
+  // 直接修改原始对象不会触发 Vue 重渲染（气泡停留在空文本 + 光标卡死）。
+  // reactive() 对同一目标有缓存，与 v-for 渲染取到的是同一个代理，修改即触发更新。
+  const item = reactive(rawItem) as StreamItem
   // 已显示前缀可续播时从其长度继续，否则（前缀不匹配）从头渲染
   const start = item.raw && fullText.startsWith(item.raw) ? item.raw.length : 0
   let pos = start
@@ -2867,7 +2881,8 @@ function handleWsEvent(ev: WsServerEvent) {
             target.text = (target.text || '') + delta
           } else {
             console.log('%c[Agent] 💭 深度思考链流式输出中...', 'color: #10b981; font-weight: bold;')
-            events.value.push({ type: 'thought', text: delta, done: false, collapsed: false })
+            // reactive 包装：push 后的增量追加必须走响应式代理，否则首帧之后的修改不触发渲染
+            events.value.push(reactive({ type: 'thought', text: delta, done: false, collapsed: false, streamThink: true }))
           }
           scrollToBottom()
           setCurrentGenerating(true)
@@ -2880,7 +2895,8 @@ function handleWsEvent(ev: WsServerEvent) {
         if (delta) {
           let target = [...events.value].reverse().find(e => e.type === 'agent' && e.streaming)
           if (!target) {
-            target = { type: 'agent', raw: '', text: '', streaming: true }
+            // reactive 包装：新建后立即修改 raw/text，原始对象不触发渲染会丢首帧
+            target = reactive({ type: 'agent', raw: '', text: '', streaming: true }) as StreamItem
             events.value.push(target)
           }
           target.raw = (target.raw || '') + delta
@@ -2901,14 +2917,16 @@ function handleWsEvent(ev: WsServerEvent) {
       const think = [...events.value].reverse().find(e => e.type === 'thought' && !e.done)
       if (think) {
         // 终帧是权威全文，不能只依赖可能丢失的瞬态增量帧。
-        if (text) think.text = text
+        // 但交付终帧（无 stage）不得覆盖 streamThink 卡的推理内容——那是模型 reasoning，
+        // 与交付句是两回事；只结束并折叠该卡，正文走下方打字机气泡。
+        if (text && (stage || !think.streamThink)) think.text = text
         think.done = true
         think.collapsed = true
         if (p.latency_ms !== undefined) think.latency_ms = p.latency_ms
         if (p.skill_id) think.skill_id = p.skill_id
         if (stage) think.stage = stage
       } else if (stage || p.skill_id) {
-        events.value.push({
+        events.value.push(reactive({
           type: 'thought',
           text,
           done: true,
@@ -2916,7 +2934,7 @@ function handleWsEvent(ev: WsServerEvent) {
           latency_ms: p.latency_ms,
           stage,
           skill_id: p.skill_id,
-        })
+        }))
       }
       console.log('%c[Agent] 💡 思考完成 / 助手回复交付:', 'color: #10b981; font-weight: bold;', {
         chars: text.length,
