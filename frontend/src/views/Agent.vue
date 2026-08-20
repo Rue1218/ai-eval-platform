@@ -601,12 +601,9 @@
             @close="handleSlashClose"
           />
 
-          <!-- 上半区：行内命令标签 + 正常黑色多行文本域 -->
+          <!-- 上半区：行内命令纯文本强调色前缀 + 正常黑色多行文本域 -->
           <div class="composer-input-row">
-            <span v-if="selectedSlashCmd" class="composer-cmd-tag mono">
-              /{{ selectedSlashCmd }}
-              <button class="cmd-tag-close" title="取消命令" @click="removeSelectedSlashCmd">✕</button>
-            </span>
+            <span v-if="selectedSlashCmd" class="composer-cmd-prefix mono">/{{ selectedSlashCmd }}&nbsp;</span>
             <textarea
               ref="textareaRef"
               v-model="inputText"
@@ -2623,78 +2620,31 @@ onBeforeUnmount(() => {
   user-select: none;
 }
 
-[data-theme='dark'] .composer-command-pill {
-  background: rgba(99, 102, 241, 0.22);
-  border-color: rgba(99, 102, 241, 0.35);
-}
-
 /* 输入框上半区行容器 */
 .composer-input-row {
   display: flex;
   align-items: flex-start;
-  gap: 6px;
+  gap: 0;
   width: 100%;
   min-height: 38px;
 }
 
-/* 行内命令徽标 */
-.composer-cmd-tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 7px;
-  margin-top: 5px;
-  border-radius: 6px;
-  background: var(--t-tasks, #e0e7ff);
+/* 行内命令前缀：纯文本高亮，无卡片框/无背景/无边框 */
+.composer-cmd-prefix {
+  display: inline-block;
+  padding: 4px 0 4px 6px;
+  background: transparent;
   color: var(--accent-ai, #6366f1);
-  font-size: 13px;
+  font-family: var(--font-mono, monospace);
+  font-size: 14.5px;
+  line-height: 1.55;
   font-weight: 700;
-  border: 1px solid color-mix(in srgb, var(--accent-ai, #6366f1) 25%, transparent);
   flex-shrink: 0;
   user-select: none;
-  animation: tag-in 0.12s ease-out;
 }
 
-[data-theme='dark'] .composer-cmd-tag {
-  background: rgba(99, 102, 241, 0.22);
-  color: #a5b4fc;
-  border-color: rgba(99, 102, 241, 0.35);
-}
-
-.composer-cmd-tag .cmd-tag-close {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  border: none;
-  background: rgba(0, 0, 0, 0.06);
-  color: var(--accent-ai, #6366f1);
-  font-size: 9px;
-  cursor: pointer;
-  padding: 0;
-  transition: all 0.12s ease;
-}
-
-[data-theme='dark'] .composer-cmd-tag .cmd-tag-close {
-  color: #a5b4fc;
-  background: rgba(255, 255, 255, 0.1);
-}
-
-.composer-cmd-tag .cmd-tag-close:hover {
-  background: rgba(0, 0, 0, 0.14);
-}
-
-@keyframes tag-in {
-  from {
-    opacity: 0;
-    transform: scale(0.92);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
+[data-theme='dark'] .composer-cmd-prefix {
+  color: #818cf8;
 }
 
 /* 多行文本域自适应高度（最小 38px，最大 200px 限制） */
