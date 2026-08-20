@@ -147,6 +147,8 @@ def get_session_messages(
                 "author_id": row.author_id,
                 "author": author_map.get(row.author_id),
                 "client_message_id": row.client_message_id,
+                # assistant 交付句回复耗时（毫秒），仅 assistant 非空；前端气泡展示「耗时 x 秒」。
+                "latency_ms": row.latency_ms,
                 "created_at": row.created_at,
             }
             for row in messages

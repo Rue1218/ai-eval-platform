@@ -553,6 +553,10 @@
             >
               <MarkdownView v-if="!item.streaming" :content="item.raw || item.text || ''" />
               <div v-else v-html="item.text"></div>
+              <!-- 回复耗时：交付终帧 / 历史回放携带 latency_ms，生成中与无效值不显示 -->
+              <div v-if="!item.streaming && formatLatency(item.latency_ms)" class="reply-latency mono">
+                耗时 {{ formatLatency(item.latency_ms) }}
+              </div>
             </div>
           </template>
         </div>
@@ -2330,7 +2334,13 @@ async function loadSessionHistory(sid: string): Promise<number> {
         rawList.push({
           time: t,
           priority: 5,
-          item: { type: 'agent', text: m.content || '', raw: m.content || '', noAnim: true },
+          item: {
+            type: 'agent',
+            text: m.content || '',
+            raw: m.content || '',
+            latency_ms: m.latency_ms ?? undefined,
+            noAnim: true,
+          },
         })
       }
     }
@@ -3134,10 +3144,19 @@ function handleWsEvent(ev: WsServerEvent) {
       })
       if (text && !stage) {
         const streaming = turnStreamingAgent(events.value)
+        const agentItem = streaming
+        // 交付终帧的 reply_latency_ms 即本轮回复耗时，落到气泡供「耗时 x 秒」展示
+        if (agentItem && typeof p.reply_latency_ms === 'number') agentItem.latency_ms = p.reply_latency_ms
         if (streaming) {
           typewriteTo(streaming, text)
         } else {
-          const item: StreamItem = reactive({ type: 'agent', raw: '', text: '', streaming: true })
+          const item: StreamItem = reactive({
+            type: 'agent',
+            raw: '',
+            text: '',
+            streaming: true,
+            latency_ms: typeof p.reply_latency_ms === 'number' ? p.reply_latency_ms : undefined,
+          })
           events.value.push(item)
           typewriteTo(item, text)
         }

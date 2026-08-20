@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from collections.abc import Awaitable, Callable
+from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -66,6 +67,9 @@ class SessionHarness:
 _HARNESS_BY_SESSION: dict[str, SessionHarness] = {}
 # 保护 registry 的 check-and-set，避免共享会话两人同时开两轮 Harness
 _HARNESS_REGISTRY_LOCK = asyncio.Lock()
+# 回合开始时间（wall-clock）：_harness_entry 启动时写入，_deliver_sentence 用它计算
+# 回复耗时 latency_ms。以 contextvar 传播，避免把 round_started_at 参数串进十几个调用点。
+_ROUND_STARTED_AT: ContextVar[datetime | None] = ContextVar("round_started_at", default=None)
 
 # 斜杠控制/只读命令的交付句由规则决定；核对不得把 /help 等改成澄清问句
 _DETERMINISTIC_SLASH = frozenset(
@@ -157,9 +161,28 @@ async def _deliver_sentence(
     *,
     task_id: str | None = None,
 ) -> None:
-    """交付句：先 thought 事件，再写入 messages.role=assistant。"""
-    await emit("thought", {"text": text}, task_id=task_id)
-    db.add(Message(session_id=session_id, role="assistant", content=text))
+    """交付句：先 thought 事件，再写入 messages.role=assistant。
+
+    latency_ms：本轮 Harness 墙钟耗时（毫秒），来自 contextvar ``_ROUND_STARTED_AT``。
+    ``reply_latency_ms`` 走 thought 终帧实时下发（区别于各阶段耗时的 ``latency_ms``，
+    不破坏前端交付帧判定）；同时落库 ``messages.latency_ms`` 供历史回放展示。
+    """
+    latency_ms = None
+    round_started = _ROUND_STARTED_AT.get()
+    if round_started is not None:
+        latency_ms = max(0, int((datetime.now(UTC) - round_started).total_seconds() * 1000))
+    payload: dict[str, Any] = {"text": text}
+    if latency_ms is not None:
+        payload["reply_latency_ms"] = latency_ms
+    await emit("thought", payload, task_id=task_id)
+    db.add(
+        Message(
+            session_id=session_id,
+            role="assistant",
+            content=text,
+            latency_ms=latency_ms,
+        )
+    )
     db.commit()
 
 
@@ -620,6 +643,8 @@ async def _harness_entry(
     stop: threading.Event,
 ) -> None:
     """Harness 任务入口：独立 DB 会话，墙钟 120s，结束后清理 registry。"""
+    # 记录回合墙钟起点，供 _deliver_sentence 计算回复耗时 latency_ms 展示给用户。
+    _ROUND_STARTED_AT.set(datetime.now(UTC))
     db = SessionLocal()
     task = asyncio.current_task()
     try:

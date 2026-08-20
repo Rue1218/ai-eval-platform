@@ -69,7 +69,7 @@
             <span style="font-weight: 700; font-size: 15px">{{ currentSet.name }}</span>
             <span class="tag-soft">生成 <b class="num mono">{{ currentSet.generated_count }}</b> 条</span>
             <span class="tag-soft" style="color: var(--accent-warning); border-color: #FDE68A">
-              {{ currentSet.status === 'confirmed' ? '✓ 已入库' : currentSet.status === 'cancelled' ? '已废弃' : `72h 倒计时: 剩 ${Math.floor(currentSet.expires_in_h || 70)}h` }}
+              {{ currentSet.status === 'confirmed' ? '✓ 已入库' : currentSet.status === 'cancelled' ? '已废弃' : expiresLabel(currentSet) }}
             </span>
             <span class="tag-soft" :style="modeTagStyle">{{ modeMappingLabel }}</span>
           </div>
@@ -83,6 +83,7 @@
             <button class="btn btn-secondary btn-sm" :disabled="!hasUnsavedChanges || savingCases" title="快捷键 Ctrl/⌘ + S" @click="persistCases">
               {{ savingCases ? '保存中…' : '保存修改' }}
             </button>
+            <button class="btn btn-secondary btn-sm" @click="openImportModal">导入 Excel</button>
             <button class="btn btn-secondary btn-sm" @click="exportXlsx">导出 xlsx</button>
             <button class="btn btn-secondary btn-sm" @click="exportXmind">导出 xmind</button>
             <button
@@ -272,6 +273,7 @@
           </div>
           <div class="row" style="gap: 8px; align-items: center; margin-left: auto; flex-wrap: wrap; justify-content: flex-end">
             <button class="btn btn-ai btn-sm" @click="openAiGenWizard">✨ AI 生成用例集</button>
+            <button class="btn btn-secondary btn-sm" @click="openImportModal">导入 Excel</button>
             <button class="btn btn-sign btn-sm" @click="handleCreateCaseSet()">+ 新建空用例集</button>
           </div>
         </div>
@@ -335,6 +337,13 @@
         </div>
       </template>
     </n-modal>
+
+    <ImportCasesExcelModal
+      v-model:show="showImportModal"
+      :current-set="currentSet"
+      :folder-id="importFolderId"
+      @imported="onExcelImported"
+    />
 
     <!-- C2：用例结构化编辑弹窗（原型 cases.html:537-601） -->
     <n-modal v-model:show="showEditCaseModal" preset="card" :title="`详细编辑用例 · ${editDraft.id || '新用例'}`" style="width: 640px">
@@ -556,8 +565,9 @@
 import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useMessage, useDialog, type DropdownOption } from 'naive-ui'
 import { api } from '../api/http'
-import type { CaseSet, KnowledgeBase, TestCase } from '../api/types'
+import type { CaseFolder, CaseSet, KnowledgeBase, TestCase } from '../api/types'
 import { useModeStore } from '../stores/mode'
+import ImportCasesExcelModal from '../components/modals/ImportCasesExcelModal.vue'
 
 interface MappingTarget {
   id: string
@@ -594,12 +604,17 @@ const hasUnsavedChanges = ref(false)
 // original 供 Escape 取消时还原（对齐原型单元格编辑交互）
 const editingCell = ref<{ row: TestCase; field: keyof TestCase; original: string } | null>(null)
 const showCreateSetModal = ref(false)
+const showImportModal = ref(false)
+const importFolderId = ref('')
 const newSetName = ref('')
 const creatingSet = ref(false)
 // 记录触发「新建空集」的目录 id（空串为主目录），用于创建成功后挂到对应本地子目录
 const createTargetFolderId = ref('')
 const generatingCases = ref(false)
-const folders = ref([{ id: 'case-sets', name: '用例集', open: true, items: [] as Array<{ id: string; name: string; status: CaseSet['status'] }> }])
+const ROOT_FOLDER_ID = 'case-sets'
+type TreeFolder = { id: string; name: string; open: boolean; items: Array<{ id: string; name: string; status: CaseSet['status'] }> }
+const folders = ref<TreeFolder[]>([{ id: ROOT_FOLDER_ID, name: '用例集', open: true, items: [] }])
+const folderRecords = ref<CaseFolder[]>([])
 
 // ─── 目录树面板自由伸缩（对齐原型 ft-resizer：拖拽 200–520px，双击复位 290px，localStorage 持久化） ───
 const TREE_W_KEY = 'ae_ft_w_cases'
@@ -712,6 +727,8 @@ const allCasesChecked = computed({
 // C6/C14：「+ 新建集」入口选项——主行为 AI 生成向导，空集创建保留下拉
 const createSetMenuOptions: DropdownOption[] = [
   { label: '✨ AI 生成用例集', key: 'ai' },
+  { label: '导入 Excel 用例', key: 'import' },
+  { label: '下载 Excel 模板', key: 'template' },
   { label: '新建空用例集', key: 'empty' },
 ]
 
@@ -722,6 +739,7 @@ const ctxSetOptions = computed<DropdownOption[]>(() => {
   if (set?.status === 'generated') opts.push({ label: '✓ 确认入库此用例集', key: 'confirm' })
   opts.push(
     { label: '⇄ 批量映射到评测集', key: 'map' },
+    { label: '⤴ 导入 Excel (.xlsx)', key: 'import' },
     { label: '⤓ 导出 Excel (.xlsx)', key: 'export' },
     { label: '⤓ 导出 XMind (.xmind)', key: 'export-xmind' },
     { label: '📋 复制用例集 ID', key: 'copy-id' },
@@ -736,8 +754,10 @@ const ctxSetOptions = computed<DropdownOption[]>(() => {
 const ctxFolderOptions: DropdownOption[] = [
   { label: '📋 在此目录下新建用例集', key: 'new-set' },
   { label: '📁 新建子目录', key: 'new-folder' },
+  { label: '⤴ 导入 Excel 到此目录', key: 'import' },
   { type: 'divider', key: 'd1' },
   { label: '✏ 重命名目录', key: 'rename' },
+  { label: '🗑 删除目录', key: 'delete', props: { style: 'color: var(--accent-error)' } },
 ]
 
 // C1：表格行右键菜单项（勾选态随当前行动态切换；已确认集隐藏编辑类操作）
@@ -775,30 +795,69 @@ const allCandidatesChecked = computed({
   set: (val: boolean) => { aiCandidates.value.forEach(c => { c.selected = val }) },
 })
 
-// 目录树由接口用例集清单驱动，避免保留原型中的固定名称与状态；
-// 主目录全量同步，本地子目录按 id  reconcile 名称/状态并剔除已删除项，防止右键重命名/废弃后出现陈旧节点。
-function syncCaseSetTree(list: CaseSet[]) {
-  const mapped = list.map(item => ({ id: item.id, name: item.name, status: item.status }))
-  const knownIds = new Set(list.map(item => item.id))
-  // 已被移动到本地子目录的集合不再重复出现在主目录
-  const placedElsewhere = new Set(
-    folders.value.slice(1).flatMap(f => f.items.map(i => i.id)).filter(id => knownIds.has(id)),
-  )
-  folders.value[0].items = mapped.filter(i => !placedElsewhere.has(i.id))
-  folders.value.slice(1).forEach(folder => {
-    folder.items = folder.items
-      .filter(i => knownIds.has(i.id))
-      .map(i => mapped.find(m => m.id === i.id) ?? i)
-  })
+function persistFolderId(folderId: string): string | null {
+  return folderId && folderId !== ROOT_FOLDER_ID ? folderId : null
 }
 
-// 将用例集树节点移动到指定本地目录（目录结构为前端本地组织，契约 folder_id 待后端接入后替换）
-function moveTreeItemToFolder(setId: string, folderId: string) {
+function expiresLabel(set: CaseSet): string {
+  if (!set.expires_at) return '待确认'
+  const ms = new Date(set.expires_at).getTime() - Date.now()
+  if (Number.isNaN(ms)) return '待确认'
+  if (ms <= 0) return '72h 确认窗口已过期'
+  const hours = Math.floor(ms / 3_600_000)
+  return `72h 倒计时: 剩 ${hours}h`
+}
+
+function normalizeStrategy(raw: string | undefined): TestCase['strategy'] {
+  if (raw === '等价类' || raw === '等价') return '等价'
+  if (raw === '状态迁移' || raw === '状态') return '状态'
+  if (raw === '正向' || raw === '反向' || raw === '边界' || raw === '场景') return raw
+  return '正向'
+}
+
+function normalizeLoadedCases(rows: TestCase[]): TestCase[] {
+  return rows.map(row => ({
+    ...row,
+    strategy: normalizeStrategy(row.strategy),
+    pending: row.pending ?? Boolean(row.pending_complete),
+  }))
+}
+
+// 目录树以服务端 folder_id 为准：根目录挂未分组集，其余按接口目录分组。
+function syncCaseSetTree(list: CaseSet[]) {
+  const mapped = list.map(item => ({ id: item.id, name: item.name, status: item.status, folder_id: item.folder_id || null }))
+  const openState = new Map(folders.value.map(folder => [folder.id, folder.open]))
+  const next: TreeFolder[] = [
+    {
+      id: ROOT_FOLDER_ID,
+      name: '用例集',
+      open: openState.get(ROOT_FOLDER_ID) ?? true,
+      items: mapped.filter(item => !item.folder_id).map(({ id, name, status }) => ({ id, name, status })),
+    },
+  ]
+  for (const folder of folderRecords.value) {
+    next.push({
+      id: folder.id,
+      name: folder.name,
+      open: openState.get(folder.id) ?? true,
+      items: mapped.filter(item => item.folder_id === folder.id).map(({ id, name, status }) => ({ id, name, status })),
+    })
+  }
+  folders.value = next
+}
+
+async function moveTreeItemToFolder(setId: string, folderId: string) {
   const folder = folders.value.find(f => f.id === folderId)
   const set = caseSets.value.find(s => s.id === setId)
   if (!folder || !set) return
-  folders.value.forEach(f => { f.items = f.items.filter(i => i.id !== setId) })
-  folder.items.push({ id: set.id, name: set.name, status: set.status })
+  try {
+    const updated = await api.cases.updateSet(setId, { folder_id: persistFolderId(folderId) })
+    const index = caseSets.value.findIndex(item => item.id === setId)
+    if (index !== -1) caseSets.value[index] = { ...caseSets.value[index], ...updated }
+    syncCaseSetTree(caseSets.value)
+  } catch (err: any) {
+    message.error(err.message || '移动用例集失败')
+  }
 }
 
 // 归一化契约 column_schema（[{key,name,type?,sort_order?}]），过滤缺 key 的脏数据
@@ -861,7 +920,7 @@ async function selectCaseSet(id: string) {
     const detail = await api.cases.getSet(id)
     const index = caseSets.value.findIndex(item => item.id === id)
     if (index !== -1) caseSets.value[index] = { ...caseSets.value[index], ...detail }
-    cases.value = detail.cases || []
+    cases.value = normalizeLoadedCases(detail.cases || [])
     // C4：从用例集详情读取契约 column_schema 作为自定义扩展列
     customColsMap.value[id] = normalizeColumnSchema((detail as CaseSet & Record<string, unknown>).column_schema)
     selectedCaseIds.value = cases.value.filter(item => item.selected || !item.pending).map(item => item.id)
@@ -980,11 +1039,9 @@ async function createCaseSet() {
   }
   creatingSet.value = true
   try {
-    const created = await api.cases.createSet({ name })
+    const created = await api.cases.createSet({ name, folder_id: persistFolderId(createTargetFolderId.value) })
     caseSets.value.unshift(created)
     syncCaseSetTree(caseSets.value)
-    // 从本地子目录右键触发创建时，将新集节点挂到该目录下
-    if (createTargetFolderId.value) moveTreeItemToFolder(created.id, createTargetFolderId.value)
     showCreateSetModal.value = false
     await selectCaseSet(created.id)
     message.success('用例集已创建')
@@ -1212,20 +1269,28 @@ async function handleAiFillCase() {
 // 确认前先保存未提交编辑，再用实际映射目标完成确认入库。
 async function confirmAllCases() {
   if (!currentSet.value) return
-  if (!mapTargetId.value) {
-    message.warning('请选择确认入库的映射目标')
-    return
-  }
   if (hasUnsavedChanges.value && !await persistCases()) return
   try {
     await api.cases.confirmSet(currentSet.value.id, {
       ok: true,
       edits: cases.value,
-      mapping_target: mapTarget.value,
-      target_id: mapTargetId.value,
+      mapping_target: mapTargetId.value ? mapTarget.value : undefined,
+      target_id: mapTargetId.value || undefined,
     })
+    const ids = selectedCaseIds.value.length ? selectedCaseIds.value : cases.value.map(item => item.id)
+    if (mapTargetId.value && ids.length && mapTarget.value === 'dataset') {
+      await api.cases.mapCases(currentSet.value.id, {
+        target: 'dataset',
+        target_id: mapTargetId.value,
+        case_ids: ids,
+      })
+      message.success('用例集已确认入库，并完成数据集映射')
+    } else if (mapTargetId.value && mapTarget.value === 'gold_qa') {
+      message.warning('用例集已确认入库；黄金 QA 映射尚未启用，请稍后在知识库阶段映射')
+    } else {
+      message.success('用例集已确认入库')
+    }
     await selectCaseSet(currentSet.value.id)
-    message.success('用例集已正式确认入库')
   } catch (err: any) {
     message.error(err.message || '确认用例集失败')
   }
@@ -1248,7 +1313,7 @@ async function handleBatchMap() {
       target_id: mapTargetId.value,
       case_ids: selectedCaseIds.value,
     })
-    cases.value = cases.value.map(item => selectedCaseIds.value.includes(item.id) ? { ...item, mapped: true, pending: false } : item)
+    await selectCaseSet(currentSet.value.id)
     message.success(`已映射 ${selectedCaseIds.value.length} 条用例`)
   } catch (err: any) {
     message.error(err.message || '批量映射失败')
@@ -1368,6 +1433,9 @@ async function handleSetMenuSelect(key: string | number) {
     case 'map':
       if (await requestSelectCaseSet(set.id)) await handleBatchMap()
       break
+    case 'import':
+      if (await requestSelectCaseSet(set.id)) openImportModal()
+      break
     case 'export':
       await downloadCaseSet('xlsx', set.id, set.name)
       break
@@ -1393,24 +1461,59 @@ function handleFolderMenuSelect(key: string | number) {
   if (!folder) return
   switch (String(key)) {
     case 'new-set':
-      // 打开空集创建弹窗，创建成功后挂到当前目录
-      handleCreateCaseSet(folder.id === folders.value[0]?.id ? '' : folder.id)
+      handleCreateCaseSet(folder.id === ROOT_FOLDER_ID ? '' : folder.id)
+      break
+    case 'import':
+      openImportModal(folder.id === ROOT_FOLDER_ID ? '' : folder.id)
       break
     case 'new-folder':
-      openPrompt('新建子目录', '新目录', (val) => {
-        folders.value.push({ id: `f-local-${Date.now()}`, name: val, open: true, items: [] })
-        message.success('已创建本地子目录')
+      openPrompt('新建子目录', '新目录', async (val) => {
+        try {
+          const created = await api.cases.createFolder({ name: val })
+          folderRecords.value = [...folderRecords.value, created]
+          syncCaseSetTree(caseSets.value)
+          message.success('已创建目录')
+        } catch (err: any) {
+          message.error(err.message || '创建目录失败')
+        }
       })
       break
     case 'rename':
-      // 主目录为接口数据挂载点，禁止重命名（与数据集页系统目录保护一致）
-      if (folder.id === folders.value[0]?.id) {
+      if (folder.id === ROOT_FOLDER_ID) {
         message.warning('主目录为系统挂载点，不可重命名')
         break
       }
-      openPrompt('重命名目录', folder.name, (val) => {
-        folder.name = val
-        message.success('已更新目录名')
+      openPrompt('重命名目录', folder.name, async (val) => {
+        try {
+          const updated = await api.cases.updateFolder(folder.id, { name: val })
+          folderRecords.value = folderRecords.value.map(item => item.id === folder.id ? updated : item)
+          syncCaseSetTree(caseSets.value)
+          message.success('已更新目录名')
+        } catch (err: any) {
+          message.error(err.message || '重命名目录失败')
+        }
+      })
+      break
+    case 'delete':
+      if (folder.id === ROOT_FOLDER_ID) {
+        message.warning('主目录为系统挂载点，不可删除')
+        break
+      }
+      dialog.warning({
+        title: '删除目录',
+        content: `确认删除「${folder.name}」？目录必须为空。`,
+        positiveText: '删除',
+        negativeText: '取消',
+        onPositiveClick: async () => {
+          try {
+            await api.cases.deleteFolder(folder.id)
+            folderRecords.value = folderRecords.value.filter(item => item.id !== folder.id)
+            syncCaseSetTree(caseSets.value)
+            message.success('已删除目录')
+          } catch (err: any) {
+            message.error(err.message || '删除目录失败')
+          }
+        },
       })
       break
   }
@@ -1567,8 +1670,36 @@ async function submitPrompt() {
 
 // C6/C14：「+ 新建集」下拉分发——AI 生成向导为原型主行为，空集创建保留
 function handleCreateSetMenu(key: string | number) {
-  if (String(key) === 'ai') openAiGenWizard()
+  const action = String(key)
+  if (action === 'ai') openAiGenWizard()
+  else if (action === 'import') openImportModal()
+  else if (action === 'template') void downloadImportTemplate()
   else handleCreateCaseSet()
+}
+
+function openImportModal(folderId = '') {
+  importFolderId.value = folderId
+  showImportModal.value = true
+}
+
+async function downloadImportTemplate() {
+  try {
+    const blob = await api.cases.downloadImportTemplate()
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = '用例导入模板.xlsx'
+    anchor.click()
+    URL.revokeObjectURL(url)
+    message.success('已下载 Excel 模板')
+  } catch (err: any) {
+    message.error(err.message || '下载模板失败')
+  }
+}
+
+async function onExcelImported(setId: string) {
+  await loadCaseSets()
+  await selectCaseSet(setId)
 }
 
 // ─── C2：用例结构化编辑弹窗 ───
@@ -1660,7 +1791,8 @@ async function removeCustomCol(key: string) {
 
 async function loadCaseSets() {
   try {
-    const list = await api.cases.listSets()
+    const [list, folderList] = await Promise.all([api.cases.listSets(), api.cases.listFolders()])
+    folderRecords.value = folderList
     caseSets.value = list
     syncCaseSetTree(list)
     const selected = list.find(item => item.id === activeSetId.value) || list[0]
@@ -1669,6 +1801,7 @@ async function loadCaseSets() {
   } catch (err: any) {
     caseSets.value = []
     cases.value = []
+    folderRecords.value = []
     syncCaseSetTree([])
     message.error(err.message || '加载用例集失败')
   }

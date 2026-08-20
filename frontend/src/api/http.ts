@@ -19,6 +19,8 @@ import {
   type Report,
   type AdminSettings,
   type CaseSet,
+  type CaseFolder,
+  type CaseImportResult,
   type TestCase,
   type WhitelistItem,
   type DispatchOverview,
@@ -602,7 +604,7 @@ export const api = {
       return data
     },
     // 创建空用例集后仍需保存具体用例，避免把生成候选误当成已入库。
-    async createSet(payload: { name: string }): Promise<CaseSet> {
+    async createSet(payload: { name: string; folder_id?: string | null }): Promise<CaseSet> {
       if (getDataMode() === 'mock') {
         const item: CaseSet = {
           id: 'cs-' + Date.now(),
@@ -611,6 +613,7 @@ export const api = {
           status: 'generated',
           generated_count: 0,
           confirmed_count: 0,
+          folder_id: payload.folder_id || null,
           expires_in_h: 72,
           checks: [],
           cases: [],
@@ -624,11 +627,12 @@ export const api = {
     },
     // 契约 PUT /api/case-sets/{id}：更新名称 / 目录归属 / 自定义列 column_schema；
     // 已确认用例集的非法修改由后端返回 VALIDATION，前端不做伪造成功。
-    async updateSet(id: string, payload: { name?: string; column_schema?: Array<{ key: string; name: string; type?: string; sort_order?: number }> }): Promise<CaseSet> {
+    async updateSet(id: string, payload: { name?: string; folder_id?: string | null; column_schema?: Array<{ key: string; name: string; type?: string; sort_order?: number }> }): Promise<CaseSet> {
       if (getDataMode() === 'mock') {
         const cs = mockStore.caseSets.find((x) => x.id === id)
         if (!cs) throw new ApiError('用例集不存在', ErrorCode.NOT_FOUND, 404)
         if (payload.name) cs.name = payload.name
+        if (payload.folder_id !== undefined) cs.folder_id = payload.folder_id
         if (payload.column_schema) (cs as CaseSet & Record<string, unknown>).column_schema = payload.column_schema
         return cs
       }
@@ -706,6 +710,45 @@ export const api = {
       }
       const { data } = await http.get(`/api/case-sets/${id}/export`, { params: { fmt }, responseType: 'blob' })
       return data
+    },
+    async downloadImportTemplate(): Promise<Blob> {
+      if (getDataMode() === 'mock') {
+        return new Blob(['mock-template'], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+      }
+      const { data } = await http.get('/api/case-sets/import-template', { responseType: 'blob' })
+      return data
+    },
+    async importExcel(id: string, file: File, mode: 'append' | 'replace' = 'append'): Promise<CaseImportResult> {
+      if (getDataMode() === 'mock') {
+        return { ok: true, format: 'platform', mode, imported_count: 1, skipped_count: 0, generated_count: 1, checks: [] }
+      }
+      const formData = new FormData()
+      formData.append('file', file)
+      const { data } = await http.post(`/api/case-sets/${id}/import`, formData, { params: { mode } })
+      return data
+    },
+    async listFolders(): Promise<CaseFolder[]> {
+      if (getDataMode() === 'mock') return []
+      const { data } = await http.get('/api/case-folders')
+      return Array.isArray(data) ? data : data.items || []
+    },
+    async createFolder(payload: { name: string; parent_id?: string | null }): Promise<CaseFolder> {
+      if (getDataMode() === 'mock') {
+        return { id: 'f-' + Date.now(), name: payload.name, parent_id: payload.parent_id || null, sort_order: 0, created_at: new Date().toISOString() }
+      }
+      const { data } = await http.post('/api/case-folders', payload)
+      return data
+    },
+    async updateFolder(id: string, payload: { name?: string }): Promise<CaseFolder> {
+      if (getDataMode() === 'mock') {
+        return { id, name: payload.name || '目录', sort_order: 0, created_at: new Date().toISOString() }
+      }
+      const { data } = await http.put(`/api/case-folders/${id}`, payload)
+      return data
+    },
+    async deleteFolder(id: string): Promise<void> {
+      if (getDataMode() === 'mock') return
+      await http.delete(`/api/case-folders/${id}`)
     },
   },
 
