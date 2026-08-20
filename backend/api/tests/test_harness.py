@@ -39,6 +39,15 @@ from app.agent.slash import (
     parse_slash,
     unknown_command_text,
 )
+from app.agent.turn_mode import (
+    TurnMode,
+    allows_model_check,
+    allows_replan,
+    emits_stage_thoughts,
+    refine_turn_mode,
+    select_turn_mode,
+    uses_react_llm,
+)
 from app.errors import AppError, ErrorCode
 from app.models import Dataset, ProtocolProfile, Task, User
 from app.models import Session as AgentSession
@@ -89,6 +98,35 @@ def test_chat_and_help_skip_stage_thoughts():
     assert should_emit_stage_thoughts("inspect", "status") is False
     assert should_emit_stage_thoughts("benchmark", None) is True
     assert should_emit_stage_thoughts("benchmark", "benchmark") is True
+    assert should_emit_stage_thoughts("inspect", None, TurnMode.REACT_ONLY) is False
+    assert should_emit_stage_thoughts("benchmark", "benchmark", TurnMode.PLAN_SOLVE) is True
+
+
+def test_select_turn_mode_by_task_shape():
+    """一两步走 ReAct；评测下单走 Plan-and-Solve；问候/斜杠帮助走 DIRECT/CHAT。"""
+    assert select_turn_mode("你好", parse_slash("你好")) is TurnMode.CHAT
+    assert select_turn_mode("/help", parse_slash("/help")) is TurnMode.DIRECT
+    assert select_turn_mode("/profiles", parse_slash("/profiles")) is TurnMode.REACT_ONLY
+    assert select_turn_mode("/benchmark", parse_slash("/benchmark")) is TurnMode.PLAN_SOLVE
+    portrait = "帮我生成一张竖幅户外人像摄影，明暗对比柔和"
+    assert select_turn_mode(portrait, parse_slash(portrait)) is TurnMode.REACT_ONLY
+    list_profiles = "\u5217\u51fa\u534f\u8bae\u6863"  # 列出协议档
+    assert select_turn_mode(list_profiles, parse_slash(list_profiles)) is TurnMode.REACT_ONLY
+    assert select_turn_mode("帮我评一下", parse_slash("帮我评一下")) is TurnMode.PLAN_SOLVE
+    assert select_turn_mode("帮我生成一首轻盈的音乐", parse_slash("帮我生成一首轻盈的音乐")) is TurnMode.INTENT
+    assert uses_react_llm(TurnMode.PLAN_SOLVE, command="benchmark", slash_fill_first=True) is False
+    assert uses_react_llm(TurnMode.REACT_ONLY, command=None, slash_fill_first=False) is True
+    assert allows_replan(TurnMode.REACT_ONLY) is False
+    assert allows_model_check(TurnMode.CHAT) is False
+    assert emits_stage_thoughts(TurnMode.PLAN_SOLVE) is True
+    refined = refine_turn_mode(
+        TurnMode.INTENT, intent="chat", tools_needed=["image.generate"], delivery="text"
+    )
+    assert refined is TurnMode.REACT_ONLY
+    assert (
+        refine_turn_mode(TurnMode.INTENT, intent="benchmark", tools_needed=["model.list"], delivery="clarify")
+        is TurnMode.PLAN_SOLVE
+    )
 
 
 def test_l0_chat_vs_benchmark_and_testcase():
@@ -462,6 +500,25 @@ def test_run_plan_offtopic_uses_planner_not_eval_defaults(monkeypatch):
     assert budget.used == 0  # consume 发生在 _call_plan_model 内，此处被 mock 掉
 
 
+def test_run_plan_inspect_skips_planner_and_eval_skill():
+    """列出协议档是只读 ReAct，不得规划成基准对比。"""
+    budget = TurnBudget()
+    plan = run_plan(
+        _FakeDb(),
+        text="\u5217\u51fa\u534f\u8bae\u6863",
+        parsed=parse_slash("\u5217\u51fa\u534f\u8bae\u6863"),
+        history=[],
+        prefs={"last_profile_ids": ["p-old"], "last_dataset_id": "ds-old"},
+        attachments=[],
+        budget=budget,
+    )
+    assert plan.intent == "inspect"
+    assert plan.skill_id is None
+    assert plan.tools_needed == ["model.list"]
+    assert plan.pref_thoughts == []
+    assert budget.used == 0
+
+
 def test_run_plan_portrait_skips_eval_script_and_prefs():
     """「生成一张人像摄影」不得规划成基准对比，也不得沿用上次协议档/数据集。"""
     text = "帮我生成一张一张竖幅户外人像摄影，整体从上到下呈现温暖的午后街景氛围"
@@ -482,6 +539,7 @@ def test_run_plan_portrait_skips_eval_script_and_prefs():
     assert plan.pref_thoughts == []
     assert budget.used == 0
     assert should_emit_stage_thoughts(plan.intent, None) is False
+    assert should_emit_stage_thoughts(plan.intent, None, TurnMode.REACT_ONLY) is False
 
 
 

@@ -130,9 +130,14 @@ def _looks_like_eval(text: str) -> bool:
     return any(hint in lowered for hint in _EVAL_KEEP_HINTS)
 
 
-def _looks_like_clone(text: str) -> bool:
+def looks_like_voiceclone(text: str) -> bool:
+    """判断自然语言是否在要求参考音频配音。"""
     lowered = (text or "").lower()
     return any(hint in lowered for hint in _CLONE_HINTS)
+
+
+def _looks_like_clone(text: str) -> bool:
+    return looks_like_voiceclone(text)
 
 
 def inject_voiceclone_plan(
