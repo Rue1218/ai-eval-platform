@@ -5,7 +5,7 @@
 | 文档名称 | Agent 独立开发说明书 |
 | 版本 | V1.2 |
 | 日期 | 2026-08-19 |
-| 最近修订 | 2026-08-20：Harness 缺口补齐（偏好 thought、补规划观察闭环、控制斜杠复核）；落地模块 7 卡片/Markdown/斜杠面板/ContextMeter |
+| 最近修订 | 2026-08-20：切换会话保留历史并让后台会话继续生成（不拆生成中 WS）；Harness 缺口补齐；落地模块 7 |
 | 用法 | **实现 `/agent` 以本文为准（Harness / 斜杠 / 窗口算法）。** REST/WS JSON 以 API.md V1.4 为准。完成某项后勾选文末 Task，并在「最近修订」追加一行。 |
 
 本文是评测平台 **Agent 子系统** 的完整开发说明书：目标、边界、运行时骨架、协议、模块、代码落点与验收任务都写在这里。与 PRD / API.md 冲突时，字段名与事件名以那两份为准；Harness、斜杠、上下文算法以本文 §16 为准。§4.6 所列增量已收入 **API.md V1.4**。
@@ -608,7 +608,7 @@ ChatHead 右侧（或输入框上方）常驻，压缩或新消息后立刻更�
 | AGT-STB-03 | 模型调用 AppError + agent_trace + 返回 latency_ms | `llm.py` | 控制台有耗时，不泄 Key | [x] 2026-08-19 |
 | AGT-WS-01 | 短票、心跳、断线补发 | `ws.py` `ws.ts` | 重连不丢卡；关闭码 4401/4404 | [ ] |
 | AGT-WS-02 | 上行只有三条；斜杠走 user_message | `ws.py` | 无第四种上行 | [ ] |
-| AGT-SES-01 | 会话列表与 messages+events 回放 | `sessions.py` `Agent.vue` | 刷新不丢工具卡 | [ ] |
+| AGT-SES-01 | 会话列表与 messages+events 回放 | `sessions.py` `Agent.vue` | 刷新不丢工具卡；切换会话不丢历史、生成中不 abort | [x] 2026-08-20 |
 | AGT-SES-02 | 交付句写入 messages；规划/复核只走 events | `ws.py` | 刷新气泡与思考卡不重复三倍灌窗口 | [ ] |
 | AGT-SES-03 | sessions.pending_confirm 迁移与回放 | models + Alembic sessions.py | 刷新后确认卡仍可编辑 | [x] 2026-08-19 |
 | AGT-SLH-03 | slash-commands M1 桩 | 新 router 或现路由 | GET 返回 VALIDATION「自定义命令未启用」，禁止 200 空列表冒充已启用 | [x] 2026-08-19 |
@@ -1226,5 +1226,14 @@ M3 接 LightRAG：把 `LIGHTRAG_ENABLED` 改为 True，在 `query_lightrag` 请�
 | `backend/api/app/agent/harness.py` | 发出偏好 thought；补规划闭环；`/help` `/new` `/status` 等控制斜杠先 `run_gates` + `maybe_model_check` 再交付 |
 | `backend/api/app/agent/persona.py` | 增加补规划附加段 `REPLAN_JSON_SUFFIX` |
 | `backend/api/tests/test_harness.py` | 补 TC-05/08/09/14/16/17/19/20b 等单测 |
+
+---
+
+## 20. 修改代码文件与作用清单（2026-08-20 切换会话保留历史与后台生成）
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `frontend/src/views/Agent.vue` | 按会话缓存对话流；生成中的 WS 不随切换拆掉；后台事件写入原会话；切回立即看到进度 |
+| `docs/AI测试与评估平台-Agent开发文档.md` | 勾选 AGT-SES-01；记录切换会话不丢历史、不 abort 生成 |
 
   
