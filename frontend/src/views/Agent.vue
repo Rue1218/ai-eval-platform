@@ -998,6 +998,91 @@ const events = ref<StreamItem[]>([])
 let agentWs: AgentWebSocket | null = null
 let lastConfirmKind = 'benchmark'
 
+/** 按会话缓存对话流与生成态：切换会话不丢历史，生成中的 WS 不拆。 */
+interface SessionRuntime {
+  events: StreamItem[]
+  isGenerating: boolean
+  harnessStage: 'plan' | 'react' | 'reflect' | ''
+  lastToolTitle: string
+  turnLatencyMs: number
+  activeTask: any
+  contextMeter: ContextMeterData | null
+  compactSummary: string | null
+}
+
+const sessionRuntimes = new Map<string, SessionRuntime>()
+const sockets = new Map<string, AgentWebSocket>()
+const generatingBySession = ref<Record<string, boolean>>({})
+let selectEpoch = 0
+
+function emptyRuntime(): SessionRuntime {
+  return {
+    events: [],
+    isGenerating: false,
+    harnessStage: '',
+    lastToolTitle: '',
+    turnLatencyMs: 0,
+    activeTask: null,
+    contextMeter: null,
+    compactSummary: null,
+  }
+}
+
+function ensureRuntime(sid: string): SessionRuntime {
+  let rt = sessionRuntimes.get(sid)
+  if (!rt) {
+    rt = emptyRuntime()
+    sessionRuntimes.set(sid, rt)
+  }
+  return rt
+}
+
+function markGenerating(sid: string, value: boolean) {
+  if (!sid) return
+  const rt = ensureRuntime(sid)
+  rt.isGenerating = value
+  if (generatingBySession.value[sid] === value) return
+  generatingBySession.value = { ...generatingBySession.value, [sid]: value }
+}
+
+/** 当前会话生成态：同步列表小点与缓存，切走后后台仍显示「正在生成」。 */
+function setCurrentGenerating(value: boolean) {
+  isGenerating.value = value
+  const sid = currentSessionId.value
+  if (!sid) return
+  const rt = ensureRuntime(sid)
+  rt.events = events.value
+  rt.isGenerating = value
+  rt.harnessStage = harnessStage.value
+  markGenerating(sid, value)
+}
+
+/** 把当前 UI 状态写回该会话缓存（切走前调用）。 */
+function persistCurrentRuntime() {
+  const sid = currentSessionId.value
+  if (!sid) return
+  const rt = ensureRuntime(sid)
+  rt.events = events.value
+  rt.isGenerating = isGenerating.value
+  rt.harnessStage = harnessStage.value
+  rt.lastToolTitle = lastToolTitle.value
+  rt.turnLatencyMs = turnLatencyMs.value
+  rt.activeTask = activeTask.value
+  rt.contextMeter = currentContextMeter.value
+  rt.compactSummary = currentCompactSummary.value
+  markGenerating(sid, isGenerating.value)
+}
+
+/** 关闭已结束生成且非当前会话的连接，生成中的会话保持 WS 以便后台继续收事件。 */
+function gcIdleSockets(keepId: string) {
+  for (const [id, ws] of sockets) {
+    if (id === keepId) continue
+    if (sessionRuntimes.get(id)?.isGenerating) continue
+    ws.close()
+    sockets.delete(id)
+  }
+}
+
 /* ─── 页面级定时器登记：所有演示/兜底定时器统一登记，组件卸载时集中清理，避免回调写入已销毁状态 ─── */
 const pendingTimers = new Set<number>()
 /* F19 生成流定时器子集：mock 场景步骤 / 思考打字机 / mock 进度推进专用，
@@ -1135,8 +1220,9 @@ function normalizeConfirmCard(card: any) {
   return card
 }
 
-/** D5 会话列表状态点多态：按 status / active_task 映射 nav-dot 样式。 */
+/** D5 会话列表状态点多态：按 status / active_task / 本轮生成中 映射 nav-dot 样式。 */
 function sessionDotClass(s: any): string | null {
+  if (generatingBySession.value[s.id] || (s.id === currentSessionId.value && isGenerating.value)) return 'running'
   if (s.active_task || s.status === 'running' || s.status === 'queued') return 'running'
   if (s.status === 'succeeded') return 'succeeded'
   if (s.status === 'failed') return 'failed'
@@ -1145,6 +1231,7 @@ function sessionDotClass(s: any): string | null {
 
 /** 会话状态提示语（鼠标悬停指示点时展示）。 */
 function sessionDotTooltip(s: any): string {
+  if (generatingBySession.value[s.id] || (s.id === currentSessionId.value && isGenerating.value)) return '正在生成…'
   if (s.active_task || s.status === 'running' || s.status === 'queued') return '任务进行中…'
   if (s.status === 'succeeded') return '任务评测成功 (succeeded)'
   if (s.status === 'failed') return '任务执行失败 (failed)'
@@ -1345,7 +1432,7 @@ function handleSendClick() {
     if (agentWs?.isConnected) {
       agentWs.sendUserMessage('/stop', [])
     } else {
-      isGenerating.value = false
+      setCurrentGenerating(false)
       events.value.push({
         type: 'agent',
         text: '<p class="muted">已暂停生成。已入队的任务不受影响。</p>',
@@ -1396,7 +1483,7 @@ function handleUserSend(text: string, files: any[] = []) {
     text,
     files,
   })
-  isGenerating.value = true
+  setCurrentGenerating(true)
   harnessStage.value = 'plan'
   turnLatencyMs.value = 0
   scrollToBottom(true)
@@ -1418,7 +1505,7 @@ function handleUserSend(text: string, files: any[] = []) {
     // 显式 mock 模式保留本地演示，实时模式绝不伪造任务、资产或报告。
     simulateAgentFlow(text, files)
   } else {
-    isGenerating.value = false
+    setCurrentGenerating(false)
     harnessStage.value = ''
     events.value.push({ type: 'error', code: 'UPSTREAM', message: 'Agent 连接未就绪，请等待重连后重试。' })
     message.error('Agent 连接未就绪，请等待重连后重试')
@@ -1484,7 +1571,7 @@ function runBenchmarkFlow(withStress = false) {
       summary: '',
       open: true,
     })
-    isGenerating.value = false
+    setCurrentGenerating(false)
     scrollToBottom()
   }, 900, true)
 }
@@ -1530,7 +1617,7 @@ function runRagFlow() {
       summary: '',
       open: true,
     })
-    isGenerating.value = false
+    setCurrentGenerating(false)
     scrollToBottom()
   }, 900, true)
 }
@@ -1563,7 +1650,7 @@ function runTestCaseFlow(file?: any) {
       summary: file ? file.name : '粘贴文本输入',
       open: true,
     })
-    isGenerating.value = false
+    setCurrentGenerating(false)
     scrollToBottom()
   }, 1000, true)
 }
@@ -1757,7 +1844,7 @@ function handleInterpretReport(reportId: string) {
     type: 'user',
     text: `解读报告 #${reportId}`,
   })
-  isGenerating.value = true
+  setCurrentGenerating(true)
   scrollToBottom(true)
 
   // 实时模式交由服务端智能体解读，结果经 WS 事件回流。
@@ -1767,7 +1854,7 @@ function handleInterpretReport(reportId: string) {
   }
 
   if (!api.isMock()) {
-    isGenerating.value = false
+    setCurrentGenerating(false)
     events.value.push({ type: 'error', code: 'UPSTREAM', message: 'Agent 连接未就绪，暂不能解读报告。' })
     message.error('Agent 连接未就绪，暂不能解读报告')
     scrollToBottom()
@@ -1798,7 +1885,7 @@ function handleInterpretReport(reportId: string) {
       type: 'agent',
       text: '<p><b>解读（基于已有报告，不重跑）：</b>gpt-test 以 contain 0.86 领先 claude-x 0.79，失败率 2% 对 5%。两条失败样本分别为 UPSTREAM 502 与超时，与模型能力无关，建议复跑失败行后再冻结基线。</p>',
     })
-    isGenerating.value = false
+    setCurrentGenerating(false)
     scrollToBottom()
   }, 1000, true)
 }
@@ -1810,7 +1897,7 @@ function handleFailDemo() {
     type: 'user',
     text: '对比一下 gpt-test 和 claude-x 在 smoke-20 上的表现',
   })
-  isGenerating.value = true
+  setCurrentGenerating(true)
   const th: StreamItem = {
     type: 'thought',
     text: '',
@@ -1843,7 +1930,7 @@ function handleFailDemo() {
         type: 'agent',
         text: '<p>创建失败：<b>UPSTREAM 502</b>（gpt-test 网关错误），与模型能力无关。建议先到「协议档」页对 gpt-test 做连通性检查，恢复后重新发送目标即可。</p>',
       })
-      isGenerating.value = false
+      setCurrentGenerating(false)
       scrollToBottom()
     }, 800, true)
   }, 800, true)
@@ -2054,11 +2141,19 @@ async function loadSessionHistory(sid: string): Promise<number> {
     currentContextMeter.value = history.context_meter || null
     currentCompactSummary.value = history.compact_summary || null
 
-    if (replay.length) {
-      events.value = replay
-      scrollToBottom(true)
+    const rt = ensureRuntime(sid)
+    // 本轮仍在生成时服务端回放可能落后于内存流，避免用旧快照盖掉正在产出的卡片
+    if (!(rt.isGenerating && rt.events.length > replay.length)) {
+      rt.events = replay
     }
-    // 对齐 lastEventId：取历史事件流与消息中的最大 event_id
+    rt.contextMeter = history.context_meter || null
+    rt.compactSummary = history.compact_summary || null
+    if (sid === currentSessionId.value) {
+      events.value = rt.events
+      currentContextMeter.value = rt.contextMeter
+      currentCompactSummary.value = rt.compactSummary
+      if (rt.events.length) scrollToBottom(true)
+    }
     const eventIds = [
       ...(history.events || []).map((e: any) => Number(e?.event_id) || 0),
       ...(history.messages || []).map((m: any) => Number(m?.event_id) || 0),
@@ -2070,21 +2165,32 @@ async function loadSessionHistory(sid: string): Promise<number> {
 }
 
 async function selectSession(sid: string) {
+  if (sid === currentSessionId.value && sockets.has(sid)) {
+    return
+  }
+  const epoch = ++selectEpoch
+  persistCurrentRuntime()
   currentSessionId.value = sid
-  events.value = []
-  currentContextMeter.value = null
-  currentCompactSummary.value = null
-  activeTask.value = null
-  dockClosingNote.value = ''
-  isGenerating.value = false
-  // F17 会话含进行中任务时默认展开调度侧轨
-  const sess = sessions.value.find(s => s.id === sid)
-  isRailOpen.value = !!sess?.active_task
 
-  // 恢复会话进行中任务快照（若存在），解决访问其他会话后切回导致运行中任务进度坞丢失的问题
+  const rt = ensureRuntime(sid)
+  events.value = rt.events
+  isGenerating.value = rt.isGenerating
+  harnessStage.value = rt.harnessStage
+  lastToolTitle.value = rt.lastToolTitle
+  turnLatencyMs.value = rt.turnLatencyMs
+  activeTask.value = rt.activeTask
+  currentContextMeter.value = rt.contextMeter
+  currentCompactSummary.value = rt.compactSummary
+  dockClosingNote.value = ''
+  markGenerating(sid, rt.isGenerating)
+
+  const sess = sessions.value.find(s => s.id === sid)
+  isRailOpen.value = !!sess?.active_task || rt.isGenerating
+
   if (sess?.active_task?.id) {
     try {
       const t = await api.tasks.get(sess.active_task.id)
+      if (epoch !== selectEpoch || currentSessionId.value !== sid) return
       if (t && ['queued', 'running', 'awaiting_case_confirm'].includes(t.status)) {
         activeTask.value = {
           id: t.id,
@@ -2094,12 +2200,22 @@ async function selectSession(sid: string) {
           progress: t.progress || { percent: 0, done: 0, total: 100, message: '任务进行中...' },
           created_at: t.created_at,
         }
+        rt.activeTask = activeTask.value
       }
-    } catch {}
+    } catch { /* 进度坞失败不阻断切会话 */ }
   }
 
-  // F4 先回放历史消息并对齐 lastEventId，再建立 WS（带 last_event_id 断点续传）
+  const existingWs = sockets.get(sid)
+  if (existingWs) {
+    agentWs = existingWs
+    isWsOnline.value = existingWs.isConnected
+    gcIdleSockets(sid)
+    scrollToBottom(true)
+    return
+  }
+
   const lastEventId = await loadSessionHistory(sid)
+  if (epoch !== selectEpoch || currentSessionId.value !== sid) return
   initWebSocket(sid, lastEventId)
 }
 
@@ -2122,21 +2238,34 @@ function handleDeleteSession(_sid: string) {
 }
 
 function initWebSocket(sessionId: string, lastEventId = 0) {
-  if (agentWs) {
-    agentWs.close()
-    agentWs = null
+  const reused = sockets.get(sessionId)
+  if (reused) {
+    agentWs = reused
+    isWsOnline.value = reused.isConnected
+    gcIdleSockets(sessionId)
+    return
   }
 
-  agentWs = new AgentWebSocket(sessionId)
-  // F4 历史回放对齐断点：连接时带 last_event_id，服务端据此补发遗漏事件
-  if (lastEventId > 0) agentWs.lastEventId = lastEventId
-  agentWs.onStatus((connected) => {
-    isWsOnline.value = connected
+  gcIdleSockets(sessionId)
+
+  const ws = new AgentWebSocket(sessionId)
+  if (lastEventId > 0) ws.lastEventId = lastEventId
+  ws.onStatus((connected) => {
+    if (sessionId === currentSessionId.value) {
+      isWsOnline.value = connected
+    }
   })
-  agentWs.onEvent((ev: WsServerEvent) => {
+  ws.onEvent((ev: WsServerEvent) => {
+    const sid = (ev.session_id || sessionId || currentSessionId.value || '') as string
+    if (sid && sid !== currentSessionId.value) {
+      ingestBackground(sid, ev)
+      return
+    }
     handleWsEvent(ev)
   })
-  agentWs.connect()
+  sockets.set(sessionId, ws)
+  agentWs = ws
+  ws.connect()
 }
 
 /** 移除打字占位气泡：服务端首个事件到达即表明意图识别已出结果。 */
@@ -2148,6 +2277,111 @@ function dismissTyping() {
 /** 把纯文本渲染为气泡 HTML（转义防 XSS + 换行转 <br>）。 */
 function renderBubbleHtml(raw: string): string {
   return escapeHtml(raw).replace(/\n/g, '<br>')
+}
+
+/** 后台会话继续生成：把事件写入该会话缓存，不打断当前正在看的对话。 */
+function ingestBackground(sid: string, ev: WsServerEvent) {
+  if (ev.event === 'pong') return
+  const rt = ensureRuntime(sid)
+  const buf = rt.events
+  const p = ev.payload || {}
+  switch (ev.event) {
+    case 'thought': {
+      if (p.stream === 'think') {
+        const delta = String(p.text || '')
+        if (!delta) break
+        const target = [...buf].reverse().find(e => e.type === 'thought' && !e.done)
+        if (target) target.text = (target.text || '') + delta
+        else buf.push({ type: 'thought', text: delta, done: false, collapsed: false })
+        markGenerating(sid, true)
+        rt.harnessStage = rt.harnessStage || 'plan'
+        break
+      }
+      if (p.stream === 'chunk') {
+        const delta = String(p.text || '')
+        if (!delta) break
+        let target = [...buf].reverse().find(e => e.type === 'agent' && e.streaming)
+        if (!target) {
+          target = { type: 'agent', raw: '', text: '', streaming: true }
+          buf.push(target)
+        }
+        target.raw = (target.raw || '') + delta
+        target.text = renderBubbleHtml(target.raw)
+        markGenerating(sid, true)
+        break
+      }
+      const text = String(p.text || '').trim()
+      const stage = p.stage as StreamItem['stage'] | undefined
+      if (stage) rt.harnessStage = stage
+      const think = [...buf].reverse().find(e => e.type === 'thought' && !e.done)
+      if (think) {
+        if (text) think.text = text
+        think.done = true
+        think.collapsed = true
+        if (p.latency_ms !== undefined) think.latency_ms = p.latency_ms
+        if (p.skill_id) think.skill_id = p.skill_id
+        if (stage) think.stage = stage
+      } else if (stage || p.skill_id) {
+        buf.push({
+          type: 'thought',
+          text,
+          done: true,
+          collapsed: true,
+          latency_ms: p.latency_ms,
+          stage,
+          skill_id: p.skill_id,
+        })
+      }
+      if (text && !stage) {
+        buf.push({ type: 'agent', raw: text, text: renderBubbleHtml(text), streaming: false })
+        markGenerating(sid, false)
+        rt.harnessStage = ''
+      } else if (!stage) {
+        const orphan = [...buf].reverse().find(e => e.type === 'agent' && e.streaming)
+        if (orphan) orphan.streaming = false
+        markGenerating(sid, false)
+        rt.harnessStage = ''
+      } else {
+        markGenerating(sid, true)
+      }
+      break
+    }
+    case 'tool_call':
+      markGenerating(sid, true)
+      rt.harnessStage = 'react'
+      buf.push({ type: 'tool', tool: p.name, args: p.arguments, status: 'pending', open: false })
+      break
+    case 'tool_result': {
+      const target = [...buf].reverse().find(x => x.type === 'tool' && x.tool === p.name)
+      if (target) {
+        target.result = p.ok ? p.data : p.error
+        target.status = p.ok ? 'ok' : 'fail'
+        if (p.latency_ms !== undefined) target.latency_ms = p.latency_ms
+      }
+      break
+    }
+    case 'confirm':
+      markGenerating(sid, false)
+      rt.harnessStage = ''
+      buf.push({
+        type: 'confirm',
+        card: normalizeConfirmCard(p),
+        isAcked: false,
+        summary: '',
+        open: true,
+      })
+      break
+    case 'error':
+      markGenerating(sid, false)
+      buf.push({ type: 'error', code: p.code, message: p.message || '执行遇到错误' })
+      break
+    case 'report':
+      markGenerating(sid, false)
+      if (p.report_id) buf.push({ type: 'report', reportId: p.report_id })
+      break
+    default:
+      break
+  }
 }
 
 /* ─── 打字机渲染：终帧权威全文逐字补齐 ───
@@ -2202,6 +2436,7 @@ function handleWsEvent(ev: WsServerEvent) {
             events.value.push({ type: 'thought', text: delta, done: false, collapsed: false })
           }
           scrollToBottom()
+          setCurrentGenerating(true)
         }
         break
       }
@@ -2217,13 +2452,17 @@ function handleWsEvent(ev: WsServerEvent) {
           target.raw = (target.raw || '') + delta
           target.text = renderBubbleHtml(target.raw)
           scrollToBottom()
+          setCurrentGenerating(true)
         }
         break
       }
       // 完整回复（终帧或非流式）
       const text = String(p.text || '').trim()
       const stage = p.stage as StreamItem['stage'] | undefined
-      if (stage) harnessStage.value = stage
+      if (stage) {
+        harnessStage.value = stage
+        setCurrentGenerating(true)
+      }
       if (typeof p.latency_ms === 'number') turnLatencyMs.value += p.latency_ms
       const think = [...events.value].reverse().find(e => e.type === 'thought' && !e.done)
       if (think) {
@@ -2260,12 +2499,12 @@ function handleWsEvent(ev: WsServerEvent) {
           events.value.push(item)
           typewriteTo(item, text)
         }
-        isGenerating.value = false
+        setCurrentGenerating(false)
         harnessStage.value = ''
       } else if (!stage) {
         const orphan = [...events.value].reverse().find(e => e.type === 'agent' && e.streaming)
         if (orphan) orphan.streaming = false
-        isGenerating.value = false
+        setCurrentGenerating(false)
         harnessStage.value = ''
       }
       if (text) scrollToBottom()
@@ -2276,6 +2515,7 @@ function handleWsEvent(ev: WsServerEvent) {
       finishLiveThought()
       harnessStage.value = 'react'
       lastToolTitle.value = getToolDisplayName(p.name)
+      setCurrentGenerating(true)
       events.value.push({
         type: 'tool',
         tool: p.name,
@@ -2318,7 +2558,7 @@ function handleWsEvent(ev: WsServerEvent) {
       console.log('%c[Agent] 📋 任务确认卡到达:', 'color: #8b5cf6; font-weight: bold;', p)
       lastConfirmKind = p.kind || 'benchmark'
       finishLiveThought()
-      isGenerating.value = false
+      setCurrentGenerating(false)
       harnessStage.value = ''
       events.value.push({
         type: 'confirm',
@@ -2357,7 +2597,7 @@ function handleWsEvent(ev: WsServerEvent) {
       finishLiveThought()
       // S10 坞先显示「任务 succeeded」note，2.6s 后再隐藏
       finishDock('任务 succeeded')
-      isGenerating.value = false
+      setCurrentGenerating(false)
       // 契约：report 载荷仅 { report_id }；空 id（如无报告的用例任务）不渲染报告卡，避免跳转 /reports/undefined
       if (p.report_id) {
         // 实时模式不伪造指标（对齐原型 addReportCard 占位 KPI），真实数据进报告页查看
@@ -2385,7 +2625,7 @@ function handleWsEvent(ev: WsServerEvent) {
       })
       // 内联错误条之外同步弹出 Toast，避免用户错过失败反馈
       message.error(p.message || '执行遇到错误')
-      isGenerating.value = false
+      setCurrentGenerating(false)
       scrollToBottom()
       break
     }
@@ -2464,9 +2704,11 @@ onBeforeUnmount(() => {
   pendingTimers.clear()
   interpretStopWatch?.()
   interpretStopWatch = null
-  if (agentWs) {
-    agentWs.close()
+  for (const ws of sockets.values()) {
+    ws.close()
   }
+  sockets.clear()
+  agentWs = null
 })
 </script>
 
