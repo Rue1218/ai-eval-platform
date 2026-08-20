@@ -21,7 +21,6 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from .crypto import decrypt_secret
 from .db import SessionLocal
 from .events import push_ws
 from .models import (
@@ -36,6 +35,7 @@ from .models import (
     UsageLedger,
 )
 from .protocol import ProtocolCallError, call_protocol
+from .profile_env import profile_connection
 from .scoring import DEFAULT_METRIC, score_answer, score_exact, score_rouge_l
 from .task_state import claim_running_task_for_terminal_write
 
@@ -254,6 +254,7 @@ def _finish(db: Session, task: Task, dataset: Dataset, metric: str, total: int) 
     scores: list[dict] = []
     sample_items: list[dict] = []
     for profile in sorted(profiles, key=lambda p: profile_order.get(p.id, 0)):
+        _profile_base_url, profile_model, _profile_api_key = profile_connection(profile)
         items = (
             db.query(EvalItem)
             .filter(EvalItem.task_id == task.id, EvalItem.profile_id == profile.id)
@@ -270,7 +271,7 @@ def _finish(db: Session, task: Task, dataset: Dataset, metric: str, total: int) 
             {
                 "profile_id": profile.id,
                 "profile_name": profile.name,
-                "model": profile.model,
+                "model": profile_model,
                 "metric": metric,
                 # 主指标均值：失败样本不进分母（PRD 5.2.2）
                 "score": _avg([item.score for item in ok_items]),
@@ -418,7 +419,8 @@ def run_benchmark(task_id: str) -> None:
             if not pending:
                 continue
 
-            if not profile.encrypted_key:
+            base_url, model, api_key = profile_connection(profile)
+            if not api_key:
                 # 无 Key 档位：全部样本记 VALIDATION 错误，不中断其它档评测
                 for row in pending:
                     _save_item(
@@ -431,9 +433,9 @@ def run_benchmark(task_id: str) -> None:
 
             call_kwargs = dict(
                 protocol=profile.protocol,
-                base_url=profile.base_url,
-                model=profile.model,
-                api_key=decrypt_secret(profile.encrypted_key),
+                base_url=base_url,
+                model=model,
+                api_key=api_key,
                 anthropic_version=profile.anthropic_version,
                 system=system_prompt,
                 temperature=temperature,

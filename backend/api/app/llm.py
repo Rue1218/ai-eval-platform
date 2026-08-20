@@ -18,6 +18,7 @@ from .adapters import call_protocol, stream_protocol
 from .agent.log import agent_trace
 from .errors import AppError, ErrorCode
 from .models import ProtocolProfile, Setting
+from .profile_env import read_global_llm_env, read_profile_env
 from .security import decrypt_secret
 
 logger = logging.getLogger("ai-eval.llm")
@@ -58,7 +59,7 @@ def resolve_agent_profile(db: Session) -> ProtocolProfile:
     profile = db.query(ProtocolProfile).filter(ProtocolProfile.id == profile_id).first()
     if not profile:
         raise AppError(ErrorCode.VALIDATION, "Agent 协议档不存在或已删除，请重新指定")
-    if not profile.encrypted_key:
+    if not _profile_api_key(profile):
         raise AppError(ErrorCode.VALIDATION, "Agent 协议档未配置 API Key")
     return profile
 
@@ -67,14 +68,68 @@ def resolve_agent_profile(db: Session) -> ProtocolProfile:
 _resolve_agent_profile = resolve_agent_profile
 
 
+def _profile_connection(profile: ProtocolProfile) -> tuple[str, str, str]:
+    """读取 Agent 协议档环境参数，历史密文仅作兼容回退。"""
+    try:
+        env_values = read_profile_env(profile.id)
+        global_values = read_global_llm_env()
+        profile_env_configured = any((env_values.base_url, env_values.model, env_values.api_key))
+        global_base_url = (
+            global_values.anthropic_base_url
+            if profile.protocol == "anthropic_messages"
+            else global_values.openai_base_url
+        )
+        api_key = env_values.api_key or (None if profile_env_configured else global_values.api_key)
+        if not api_key and profile.encrypted_key:
+            api_key = decrypt_secret(profile.encrypted_key)
+        if not api_key:
+            raise AppError(ErrorCode.VALIDATION, "Agent 协议档未配置 API Key")
+        return (
+            env_values.base_url
+            or (None if profile_env_configured else global_base_url)
+            or profile.base_url,
+            env_values.model
+            or (None if profile_env_configured else global_values.model)
+            or profile.model,
+            api_key,
+        )
+    except AppError:
+        raise
+    except Exception as exc:
+        agent_trace(f"Agent 协议档环境读取失败 type={type(exc).__name__}")
+        raise AppError(ErrorCode.INTERNAL, "Agent 协议档环境读取失败") from exc
+
+
+def _profile_api_key(profile: ProtocolProfile) -> str | None:
+    """只判断协议档是否存在可用 Key，不向日志或响应暴露内容。"""
+    try:
+        env_values = read_profile_env(profile.id)
+        if env_values.api_key:
+            return env_values.api_key
+        if any((env_values.base_url, env_values.model)):
+            return None
+        global_api_key = read_global_llm_env().api_key
+        if global_api_key:
+            return global_api_key
+        if profile.encrypted_key:
+            return decrypt_secret(profile.encrypted_key)
+        return None
+    except AppError:
+        raise
+    except Exception as exc:
+        agent_trace(f"Agent 协议档 Key 读取失败 type={type(exc).__name__}")
+        raise AppError(ErrorCode.INTERNAL, "Agent 协议档环境读取失败") from exc
+
+
 def get_agent_profile_public_info(db: Session) -> AgentProfilePublicInfo | None:
     """获取当前生效的 Agent 模型公开信息供界面只读展示；未配置时返回 None。"""
     try:
         profile = resolve_agent_profile(db)
+        _base_url, model, _api_key = _profile_connection(profile)
         return AgentProfilePublicInfo(
             profile_id=str(profile.id),
             name=profile.name,
-            model=profile.model,
+            model=model,
             protocol=profile.protocol,
         )
     except AppError:
@@ -98,13 +153,14 @@ def call_agent_model_detailed(
     控制台只打印协议名、模型名、耗时与字数，绝不打印 API Key 或完整提示词。
     """
     profile = resolve_agent_profile(db)
-    agent_trace(f"模型调用开始 protocol={profile.protocol} model={profile.model} timeout={timeout_s}s")
+    base_url, model, api_key = _profile_connection(profile)
+    agent_trace(f"模型调用开始 protocol={profile.protocol} model={model} timeout={timeout_s}s")
     try:
         result = call_protocol(
             protocol=profile.protocol,
-            base_url=profile.base_url,
-            model=profile.model,
-            api_key=decrypt_secret(profile.encrypted_key),
+            base_url=base_url,
+            model=model,
+            api_key=api_key,
             messages=[{"role": "user", "content": user}],
             system=system,
             temperature=temperature,
@@ -146,13 +202,14 @@ def stream_agent_model(
     上游 4xx/5xx 归一 UPSTREAM，超时归一 TIMEOUT。
     """
     profile = resolve_agent_profile(db)
-    agent_trace(f"模型流式调用开始 protocol={profile.protocol} model={profile.model} timeout={timeout_s}s")
+    base_url, model, api_key = _profile_connection(profile)
+    agent_trace(f"模型流式调用开始 protocol={profile.protocol} model={model} timeout={timeout_s}s")
     try:
         yield from stream_protocol(
             protocol=profile.protocol,
-            base_url=profile.base_url,
-            model=profile.model,
-            api_key=decrypt_secret(profile.encrypted_key),
+            base_url=base_url,
+            model=model,
+            api_key=api_key,
             messages=[{"role": "user", "content": user}],
             system=system,
             temperature=temperature,

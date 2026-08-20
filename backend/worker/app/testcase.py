@@ -33,11 +33,11 @@ from .casegen import (
     rebalance_by_strategy,
     selfcheck,
 )
-from .crypto import decrypt_secret
 from .db import SessionLocal
 from .events import push_ws
 from .models import CaseItem, CaseSet, ProtocolProfile, Setting, StoredFile, Task, TaskEvent
 from .protocol import ProtocolCallError, call_protocol
+from .profile_env import profile_connection
 from .task_state import claim_running_task_for_terminal_write
 
 logger = logging.getLogger("worker.testcase")
@@ -170,7 +170,11 @@ def run_testcase(task_id: str) -> None:
             if profile_id
             else None
         )
-        if not profile or not profile.encrypted_key:
+        if not profile:
+            _fail(db, task, "VALIDATION", "未配置 Agent 协议档或未填写 API Key，无法生成用例")
+            return
+        base_url, model, api_key = profile_connection(profile, allow_global_alias=True)
+        if not api_key:
             _fail(db, task, "VALIDATION", "未配置 Agent 协议档或未填写 API Key，无法生成用例")
             return
 
@@ -182,9 +186,9 @@ def run_testcase(task_id: str) -> None:
         try:
             result = call_protocol(
                 protocol=profile.protocol,
-                base_url=profile.base_url,
-                model=profile.model,
-                api_key=decrypt_secret(profile.encrypted_key),
+                base_url=base_url,
+                model=model,
+                api_key=api_key,
                 messages=[{"role": "user", "content": user}],
                 system=system,
                 temperature=0.3,

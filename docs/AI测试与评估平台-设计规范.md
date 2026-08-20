@@ -2,11 +2,11 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.2 |
-| 对应 PRD | V1.6.4（唯一产品权威） |
+| 文档版本 | V1.3 |
+| 对应 PRD | V1.7.0（唯一产品权威） |
 | 对应开发计划 | V1.3 |
 | 撰写日期 | 2026-08-17 |
-| 最近修订 | 2026-08-18：补齐浮层（Toast/对话框/抽屉）与 Agent 对话组件，对齐 PRD V1.6.4 |
+| 最近修订 | 2026-08-20：协议档多供应商 URL、模型 ID、Key 改由环境文件按 profile 隔离持久化 |
 | 技术栈（PRD） | Vue3 + Naive UI、Python FastAPI、PostgreSQL、WebSocket、Docker Compose、go-stress-testing |
 | 适用范围 | V1.0 前端 `frontend/` |
 
@@ -210,7 +210,7 @@ JSONL/CSV UTF-8；列 `question,reference,context?`；覆盖上传版本 +1；�
 
 ### 5.8 `/admin/profiles`（F-BM-01，F-AGT-06）
 
-协议档 CRUD：`openai_chat` / `openai_responses` / `anthropic_messages` + base_url + 模型名 + 加密 Key。Key **只写不回显**，变更写审计。指定唯一 Agent 后端。可标裁判档。连通性检查不把 Key 打进前端日志。
+协议档 CRUD：`openai_chat` / `openai_responses` / `anthropic_messages` + base_url + 模型名 + 环境文件 Key。Key **只写不回显**，URL、模型 ID、Key 按 profile 独立变量写入服务器受控环境文件，变更写审计。指定唯一 Agent 后端。可标裁判档。连通性检查不把 Key 打进前端日志。
 
 ### 5.9 `/admin/stress`（F-ST-05、F-CM-06、3.4）
 

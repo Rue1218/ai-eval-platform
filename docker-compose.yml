@@ -27,6 +27,8 @@ services:
       BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:-admin}
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-admin123}
       KEY_ENCRYPTION_KEY: ${KEY_ENCRYPTION_KEY:-}
+      # 协议档 URL、模型 ID、API Key 的宿主机环境文件；API 加锁刷新，Worker 只读。
+      PROFILE_ENV_FILE: ${PROFILE_ENV_FILE:-/run/config/.env}
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-720}
       WS_TICKET_EXPIRE_MINUTES: ${WS_TICKET_EXPIRE_MINUTES:-5}
       DATA_DIR: /data
@@ -44,6 +46,7 @@ services:
       - "${API_PORT:-8000}:8000"
     volumes:
       - ./data:/data
+      - ./.env:/run/config/.env
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
       interval: 10s
@@ -61,6 +64,7 @@ services:
       # Worker 需解密协议档密文：加密密钥必须与 api 容器一致
       KEY_ENCRYPTION_KEY: ${KEY_ENCRYPTION_KEY:-}
       SECRET_KEY: ${SECRET_KEY:-dev-secret-change-me}
+      PROFILE_ENV_FILE: ${PROFILE_ENV_FILE:-/run/config/.env}
     depends_on:
       postgres:
         condition: service_healthy
@@ -68,6 +72,7 @@ services:
         condition: service_healthy
     volumes:
       - ./data:/data
+      - ./.env:/run/config/.env:ro
 
   web:
     image: ${WEB_IMAGE:-ai-eval-platform-web}

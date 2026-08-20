@@ -2,10 +2,10 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.6.5 |
+| 文档版本 | V1.7.0 |
 | 文档状态 | 已冻结基线 |
 | 撰写日期 | 2026-08-17 |
-| 最近修订 | 2026-08-20 |
+| 最近修订 | 2026-08-20：协议档连接参数改由受控环境文件保存，支持多供应商并行配置 |
 | 适用版本 | 平台 V1.0 |
 | 技术栈 | Vue3 + Naive UI、Python FastAPI、PostgreSQL、WebSocket、Docker Compose、go-stress-testing |
 
@@ -69,7 +69,7 @@
 
 | 术语 | 含义 |
 | --- | --- |
-| 协议档 | `openai_chat` / `openai_responses` / `anthropic_messages` 之一 + base_url + 模型名 + 加密 Key |
+| 协议档 | `openai_chat` / `openai_responses` / `anthropic_messages` 之一 + base_url + 模型名 + 受控环境文件 Key |
 | 会话 | 每成员可多开；默认仅创建者可见，也可由创建者设为团队共享；**会话内任务串行**，会话间可并行（受平台并发上限） |
 | 长任务 | `benchmark.run` / `rag.evaluate` / `testcase.generate` 由 **worker 进程执行**；`stress.run` 由 worker **下发到 stress 容器**（go-stress-testing） |
 | 短工具 | `*.list` / `report.get` / `task.get`，Agent 可同步调用 |
@@ -502,7 +502,7 @@ testcase-tools：只对齐，不进镜像。LightRAG：MIT，锁 tag。go-stress
 | --- | --- |
 | 性能 | ≤1k 样本且被测稳定 ≥5 QPS → 规则评测 ≤30min；中等 PRD 用例 ≤5min |
 | 稳定 | 断点：评测按样本行号续跑；可用性 99%/月 |
-| 安全 | Key 加密（KMS 或本地 Fernet，密钥来自环境变量）；WS 使用短票 `ws_ticket`；`/metrics` 不暴露公网 |
+| 安全 | 协议档 URL、模型 ID、API Key 按 profile 写入服务器受控环境文件（文件权限 0600、API 加锁刷新并 fsync、Worker 只读）；旧数据库密文仅迁移后清空；WS 使用短票 `ws_ticket`；`/metrics` 不暴露公网 |
 | 成本 | usage_ledger + 任务预算 |
 | 兼容 | 被测仅 HTTP 三协议；导出 xlsx / xmind 8+ |
 
