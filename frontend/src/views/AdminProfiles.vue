@@ -911,14 +911,23 @@ watch(
   },
 )
 
+/** 安全失焦辅助函数，避免弹窗在 aria-hidden 生效时子元素保留 focus 产生警告 */
+function safeBlur() {
+  if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
+    document.activeElement.blur()
+  }
+}
+
 /** 打开短工具契约 Schema 详情弹窗 */
 function handleOpenMcpModal(tool: McpTool) {
+  safeBlur()
   selectedMcpTool.value = tool
   showMcpModal.value = true
 }
 
 /** 导出/复制 MCP 工具 JSON 契约 */
 function handleExportMcpJson() {
+  safeBlur()
   try {
     const payload = JSON.stringify(mcpTools.value, null, 2)
     navigator.clipboard.writeText(payload)
@@ -930,6 +939,7 @@ function handleExportMcpJson() {
 
 /** 接入外部 MCP Server 受控说明 */
 function handleOpenAddExternalServer() {
+  safeBlur()
   dialog.info({
     title: '接入外部 MCP Server · 架构受控说明',
     content:
@@ -1115,12 +1125,14 @@ function formatContextWindow(tokens?: number): string {
 const modalInitialData = ref<{ vendorKey?: string; base_url?: string; protocol?: any; name?: string } | null>(null)
 
 function openModal(profile: Profile | null) {
+  safeBlur()
   selectedProfile.value = profile
   modalInitialData.value = null
   showModal.value = true
 }
 
 function openModalWithVendor(group: VendorGroup) {
+  safeBlur()
   selectedProfile.value = null
   modalInitialData.value = {
     vendorKey: group.key !== 'custom' ? group.key : undefined,
@@ -1204,6 +1216,7 @@ async function handlePing(p: Profile) {
 
 /** 连通详情：保留原有 CheckResultModal 弹窗（展示完整检查结果/错误信息） */
 async function handleCheck(p: Profile) {
+  safeBlur()
   checkingId.value = p.id
   try {
     const res = await api.profiles.check(p.id)

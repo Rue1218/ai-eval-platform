@@ -2,6 +2,8 @@
   <n-modal
     :show="show"
     preset="card"
+    :trap-focus="false"
+    :auto-focus="false"
     :title="isEdit ? '编辑模型协议档' : '新增模型协议档'"
     style="width: 620px; max-width: 95vw"
     @update:show="$emit('update:show', $event)"

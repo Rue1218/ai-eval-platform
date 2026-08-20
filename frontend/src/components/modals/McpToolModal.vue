@@ -2,6 +2,8 @@
   <n-modal
     :show="show"
     preset="card"
+    :trap-focus="false"
+    :auto-focus="false"
     :title="`MCP 工具契约详情 · ${tool?.name || ''}`"
     style="width: 720px; max-width: 95vw; border-radius: 14px"
     @update:show="$emit('update:show', $event)"

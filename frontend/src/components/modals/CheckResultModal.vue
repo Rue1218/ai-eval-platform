@@ -2,6 +2,8 @@
   <n-modal
     :show="show"
     preset="card"
+    :trap-focus="false"
+    :auto-focus="false"
     title="连通性检查结果"
     style="width: 440px"
     @update:show="$emit('update:show', $event)"
