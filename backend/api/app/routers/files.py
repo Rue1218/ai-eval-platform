@@ -4,6 +4,7 @@ import hashlib
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from ..config import settings
@@ -16,7 +17,21 @@ from ..schemas import FileOut
 router = APIRouter(prefix="/api/files", tags=["files"])
 
 MAX_FILE_BYTES = 20 * 1024 * 1024
-ALLOWED_SUFFIXES = {".md", ".txt", ".html", ".pdf", ".json", ".yaml", ".yml", ".xlsx", ".xls", ".csv", ".jsonl"}
+ALLOWED_SUFFIXES = {
+    ".md",
+    ".txt",
+    ".html",
+    ".pdf",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".xlsx",
+    ".xls",
+    ".csv",
+    ".jsonl",
+    ".wav",
+    ".mp3",
+}
 
 
 def _validate_filename(filename: str | None) -> str:
@@ -78,3 +93,25 @@ def get_file_metadata(
     if not stored:
         raise AppError(ErrorCode.NOT_FOUND, "文件不存在")
     return stored
+
+
+@router.get("/{file_id}/content")
+def get_file_content(
+    file_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """登录后下载或在线播放文件二进制；不回内部存储路径。"""
+    stored = db.query(StoredFile).filter(StoredFile.id == file_id).first()
+    if not stored:
+        raise AppError(ErrorCode.NOT_FOUND, "文件不存在")
+    path = Path(stored.storage_path)
+    if not path.is_file():
+        raise AppError(ErrorCode.NOT_FOUND, "文件不存在")
+    media = stored.content_type or "application/octet-stream"
+    return FileResponse(
+        path,
+        media_type=media,
+        filename=stored.filename,
+        content_disposition_type="inline",
+    )

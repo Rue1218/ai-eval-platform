@@ -44,6 +44,13 @@
     </div>
 
     <div v-if="isOpen" class="tool-detail">
+      <audio
+        v-if="tool === 'audio.voiceclone' && status === 'ok' && playUrl"
+        class="tool-audio"
+        controls
+        preload="metadata"
+        :src="playUrl"
+      />
       <div v-if="args" style="margin-bottom: 8px">
         <div class="td-label">调用入参</div>
         <pre class="code">{{ formatJson(args) }}</pre>
@@ -85,6 +92,7 @@ const toolNameMap: Record<string, string> = {
   'report.get': '读取评测报告',
   'dispatch.overview': '调度概览',
   'testcase.confirm': '确认用例入库',
+  'audio.voiceclone': '音色克隆配音',
   // 兼容旧下划线命名
   list_profiles: '列出协议档',
   get_profile: '获取协议档详情',
@@ -105,6 +113,17 @@ const toolChineseName = computed(() => {
 })
 
 const formattedLatency = computed(() => formatLatency(props.latencyMs))
+
+const playUrl = computed(() => {
+  const result = props.result
+  if (!result || typeof result !== 'object') return ''
+  const data = result as Record<string, unknown>
+  const url = data.content_url
+  if (typeof url === 'string' && url.startsWith('/api/files/') && url.includes('/content')) return url
+  const id = data.file_id
+  if (typeof id === 'string' && id) return `/api/files/${id}/content`
+  return ''
+})
 
 const statusClass = computed(() => props.status)
 
@@ -239,6 +258,12 @@ pre.code {
   line-height: 1.6;
   overflow: auto;
   max-height: 200px;
+}
+.tool-audio {
+  display: block;
+  width: 100%;
+  margin-bottom: 10px;
+  height: 36px;
 }
 @keyframes msg-in {
   from {

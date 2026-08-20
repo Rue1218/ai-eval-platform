@@ -42,7 +42,7 @@
           ref="fileInputRef"
           type="file"
           style="display: none"
-          accept=".txt,.md,.pdf,.json,.jsonl,.csv,.xlsx"
+          accept=".txt,.md,.pdf,.json,.jsonl,.csv,.xlsx,.wav,.mp3"
           @change="handleFileChange"
         />
 

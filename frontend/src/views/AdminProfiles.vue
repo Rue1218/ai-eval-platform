@@ -826,6 +826,7 @@ const domainFilterOptions = [
   { label: '🚀 任务调度', value: 'task' },
   { label: '🖥️ 调度算力', value: 'dispatch' },
   { label: '🧪 用例管理', value: 'cases' },
+  { label: '🔊 音色克隆', value: 'audio' },
 ]
 
 /** 获取工具业务领域与图标映射 */
@@ -837,6 +838,7 @@ function getToolDomain(name: string): { label: string; icon: string; key: string
   if (name.startsWith('task.')) return { label: '任务调度', icon: '🚀', key: 'task' }
   if (name.startsWith('dispatch.')) return { label: '调度大盘', icon: '🖥️', key: 'dispatch' }
   if (name.startsWith('testcase.')) return { label: '用例管理', icon: '🧪', key: 'cases' }
+  if (name.startsWith('audio.')) return { label: '音色克隆', icon: '🔊', key: 'audio' }
   return { label: '内置通用', icon: '🛠️', key: 'other' }
 }
 
