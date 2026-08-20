@@ -123,8 +123,22 @@ DEFAULT_TOOLS_BY_INTENT: dict[str, list[str]] = {
 MAX_MODEL_CALLS = 4
 DEFAULT_TOOL_ROUNDS = 4
 HARD_MAX_TOOL_ROUNDS = 5
+# ReAct LLM 轮次与工具硬顶对齐（参考 TestPilot MAX_REACT_ROUNDS，本产品更紧）
+MAX_REACT_ROUNDS = HARD_MAX_TOOL_ROUNDS
 TURN_WALL_CLOCK_S = 180.0
 MODEL_TIMEOUT_S = 30.0
+
+# 短工具执行超时（秒）；未列出的默认 30s
+TOOL_TIMEOUTS: dict[str, int] = {
+    "model.list": 10,
+    "dataset.list": 10,
+    "kb.list": 10,
+    "task.get": 10,
+    "report.get": 10,
+    "dispatch.overview": 10,
+    "audio.voiceclone": 90,
+    "image.generate": 90,
+}
 
 # 上下文窗口
 WINDOW = 20

@@ -66,7 +66,10 @@ const titleText = computed(() => {
   const finished = !!props.done
   if (props.stage === 'plan') return finished ? '已规划' : '规划中'
   if (props.stage === 'reflect') return finished ? '已复核' : '复核中'
-  if (props.stage === 'react') return finished ? '已执行' : '调用工具'
+  if (props.stage === 'react' && props.skillId) {
+    return finished ? '已使用技能' : '正在使用技能'
+  }
+  if (props.stage === 'react') return finished ? '已完成 ToolCall' : '正在 ToolCall'
   return finished ? '已思考' : '深度思考中...'
 })
 

@@ -3,9 +3,9 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Agent 独立开发说明书 |
-| 版本 | V1.5 |
+| 版本 | V1.6 |
 | 日期 | 2026-08-20 |
-| 最近修订 | 2026-08-20：内部短工具 image.generate（Qwen Image 图文生图）；短工具 audio.voiceclone（wav/mp3 克隆配音）；修复流式气泡串轮、切会话打字机泄漏、确认卡 rag patch 与跨会话取消；补齐思考快照与 ContextMeter 恢复 |
+| 最近修订 | 2026-08-20：Harness ReAct 改为内部短工具 JSON 多轮循环（禁止 function calling）；长任务槽位齐后确认卡入队；前端每轮独立思考卡 / ToolCall 卡 / 技能徽标 |
 | 用法 | **实现 `/agent` 以本文为准（Harness / 斜杠 / 窗口算法）。** REST/WS JSON 以 API.md V1.6 为准。完成某项后勾选文末 Task，并在「最近修订」追加一行。 |
 
 本文是评测平台 **Agent 子系统** 的完整开发说明书：目标、边界、运行时骨架、协议、模块、代码落点与验收任务都写在这里。与 PRD / API.md 冲突时，字段名与事件名以那两份为准；Harness、斜杠、上下文算法以本文 §16 为准。§4.6 所列增量已收入 **API.md V1.6**。
@@ -19,10 +19,10 @@
 要做成的体验：
 
 1. 接入平台指定的大模型；思考过程可见；回复渲染 Markdown；Mermaid 与数学公式为明确后补渲染层。思考强度无滑杆，由 Harness 内部档位决定。  
-2. 会话可刷新、可断线续上；思考、工具、技能徽标、MCP 工具卡、确认卡都能回放；V1.6 增加思考快照、确认回执、压缩摘要与持久化 `message` 事件。
+2. 会话可刷新、可断线续上；思考、工具、技能徽标、ToolCall 卡、确认卡都能回放；V1.6 增加思考快照、确认回执、压缩摘要与持久化 `message` 事件。
 3. 只能调内部短工具；四种评测技能内置。Subagent / 通用工作流不做产品，但预留调用边界。  
 4. 每个会话有上下文窗口、可压缩（`/compact`）；界面实时拆开 **消息 / 技能 / 摘要 / 余量**；本产品无记忆文件段。  
-5. 默认 **先规划、中间 ReAct、交付前 Reflection**（Harness：调用次数、失败回退、阶段提示均有规定）。  
+5. 默认 **先规划、中间 ReAct（Think-Act-Observe）、交付前 Reflection**（Harness：调用次数、失败回退、阶段提示均有规定）。  
 6. 工作方式对齐「先评后压」；其它页面 AI 逐页预留（数据集、用例、任务诊断、报告解读、压测建议）。  
 7. 输入框 `/`：上区系统 15 条，下区团队自定义模板（可添加，不能改人设、不能跳过确认卡）。  
 8. 思考卡 / 工具卡展示模型与工具耗时；生成中提示当前阶段（规划中 / 调用工具 / 复核中）。  
@@ -209,8 +209,8 @@ Worker 专用（Agent 进程禁止跑完）：`benchmark.run` `rag.evaluate` `te
 
 ```text
 TurnInput（自然语言 / 斜杠 / 芯片 / 页面 REST）
-    → PLAN     产出：intent、缺哪些确认卡槽位、要调哪些短工具、交付类型
-    → REACT    0～N 轮短工具（没有缺项就 0 轮）
+    → PLAN     产出：intent、缺哪些确认卡槽位、建议短工具、交付类型
+    → REACT    Think-Act-Observe：每轮模型输出 MCP JSON（thought/tool/arguments/done/reply），经 mcp_tools.execute_short_tool 执行 1 个短工具；失败则按 tools_needed 串行
     → REFLECT  交付前必做：规则清单为主，模型核对为辅
     → 交付     确认卡 | 澄清问句 | 纯文本 | 控制动作 | 错误
     → 仅 ack   task.create → Worker
@@ -239,7 +239,7 @@ TurnInput（自然语言 / 斜杠 / 芯片 / 页面 REST）
 | 用户话含糊 | 问缺什么 | 可 0 轮 | 不出卡 |
 | `/help` `/status` `/compact` | 短 | 按需 | 不得误下单 |
 | `/cancel` `/rerun` `/new` `/stop` | 短 | 读当前任务 | 控制动作门禁 |
-| 闲聊 | 问候走 L0 定位（0 次规划模型）；**不发**规划/复核思考卡 | 跳过 | 规则确认没有 create（不调核对模型、不发复核卡） |
+| 闲聊 | 问候走 L0 定位（0 次规划模型、跳过 ReAct）；其它自然语言走规划模型自主选 intent/工具；**不发**规划/复核思考卡 | 非问候可按规划调工具 | 规则确认没有 create（不调核对模型、不发复核卡） |
 | RAG / 解读尚未交付 | 识别意图 | 可不调工具 | **拒绝并说明未启用** |
 | 页面 AI | 表单即规划 | 无工具卡 | 只返回候选 |
 
@@ -275,10 +275,10 @@ ReAct 停机（任一即进入复核）：槽位已从**本轮工具返回值**�
 | 阶段 | 模型次数 | 失败怎么走 |
 | :--- | :--- | :--- |
 | 规划 | 默认 **1** 次。斜杠已绑定 intent 且不缺槽，可用模板生成规划短句，**0** 次模型 | JSON 解析失败：原样再要一次「只输出 JSON」；仍失败 → L0 规则意图，**必须仍进复核** |
-| ReAct | M1 **0** 次（按规划里的 `tools_needed` 顺序执行）。工具跑完仍缺槽，允许 **1** 次补规划，计入本轮，不得再开第二轮补规划 | 单工具失败：记入 observation，换下一候选或进入复核 `clarify`；禁止用幻觉 ID 填槽 |
+| ReAct | 每轮 **1** 次 JSON 决策（`thought/tool/arguments/done/reply`），**不走** OpenAI function calling。每轮最多执行 **1** 个内部 MCP 短工具，观察写入下一轮 `observations` 后再决策。硬顶与 `max_tool_rounds` 相同（默认 4，硬顶 5）。`/help` 等确定性斜杠 **0** 次，只走工具队列。模型不可用 → 按 `tools_needed` 串行（与 M1 行为一致）。长任务名（`benchmark.run` 等）不得执行，槽位齐后出确认卡由 Worker 入队 | 单工具失败：观察返回给模型，下一轮改策略或进入复核 `clarify`；禁止用幻觉 ID 填槽 |
 | 复核 | 规则门禁 **0** 次模型。规则 `pass` 之后可选 **1** 次「是否符合用户目标」；模型不得把 `reject` 改成 `pass` | 规则失败立即 `clarify`/`reject`，不再调模型放行 |
 
-合计一回合模型调用硬顶：**规划 1 + 重试 1 + 补规划 1 + 可选复核 1 ≤ 4**。超时或 `UPSTREAM`：思考卡说明原因，不出确认卡。
+合计：规划 1 + 重试 1 + 补规划 1 + 可选复核 1 ≤ 4（不含 ReAct 循环）。ReAct 每轮 1 次 JSON 决策，受 `max_tool_rounds`（硬顶 5）约束。超时或 `UPSTREAM`：思考卡说明原因，不出确认卡。
 
 **工具并行：** 第一阶段 **串行**（保证 `tool_call` / `tool_result` 成对、event_id 不乱）。`model.list` 与 `dataset.list` 互相无依赖时，预留并行开关 `harness.parallel_readonly_tools`，默认关。写工具（`task.create` / `task.cancel`）永远串行，且 create 只在 ack 后。
 
@@ -819,7 +819,8 @@ Worker 夹紧：`sample_size = min(请求值, 1000, 行数)`；`concurrency` ≤
 **`PERSONA_SYSTEM`**
 
 ```text
-你是 AI 测试与评估平台的智能体。职责：理解评测目标、调用内部短工具发现资产、给出确认卡供用户确认。
+你是 AI 测试与评估平台的智能体。职责：理解用户本轮目标，按需调用内部短工具，评测下单时给出确认卡。
+先判断本轮是评测下单、只读查询还是闲聊，再决定工具与是否出确认卡；不要把每句话都走成同一套「规划技能 → 列出协议档/数据集 → 确认卡」。
 硬规则：
 1. 先澄清再下单。未确认不得创建任务。
 2. 一单只能是 benchmark、rag、testcase、stress 之一，禁止混跑 Benchmark 与 RAG。
@@ -832,7 +833,7 @@ Worker 夹紧：`sample_size = min(请求值, 1000, 行数)`；`concurrency` ≤
 ```
 
 **规划调用**  
-`system = PERSONA_SYSTEM + "\n只输出一个 JSON 对象，不要 Markdown 围栏。字段：intent, skill_id, slots, tools_needed, delivery, budget, notes。intent 不得为 stress；先评后压把 slots.filled.with_stress 置 true，kind 仍为 benchmark 或 rag。"`  
+`system = PERSONA_SYSTEM +` 规划 JSON 后缀（`PLAN_JSON_SUFFIX`）：只输出一个 JSON；`intent` 按本轮目标选择（含 `chat` / `inspect`）；`skill_id` 仅明确评测时填写，否则 null；`tools_needed` 只列真正需要的短工具，禁止默认塞 `model.list`+`dataset.list`。intent 不得为 stress；先评后压把 `slots.filled.with_stress` 置 true，kind 仍为 benchmark 或 rag。  
 `user` 为 JSON：`{ "text", "command", "args", "history": 最近消息最多 20 条的 role+content, "prefs", "attachments" }`。不把完整工具 list 结果塞进规划调用（规划只需 intent；list 在 ReAct）。
 
 **L0 规则（模型失败后，关键词不区分大小写、命中先到先得）**
@@ -1364,6 +1365,25 @@ Qwen Image 按 `audio.voiceclone` 的内部短工具方式接入：自然语言�
 | `backend/api/app/config.py` / `docker-compose.yml` / `backend/api/app/routers/files.py` | Qwen 环境变量注入、图片附件白名单 |
 | `frontend/src/views/Agent.vue` / `frontend/src/styles/base.css` | 图片附件选择、生成结果预览与同源下载 |
 | `backend/api/tests/test_imagegen.py` | 图文请求、规划、落盘和 React 线程隔离单测 |
+
+---
+
+## 28. 修改代码文件与作用清单（2026-08-20 Harness MCP ReAct 循环）
+
+行动阶段改为 Think-Act-Observe，但工具面走本产品 **内部短工具**（`mcp_tools.execute_short_tool`），禁止 OpenAI function calling。每轮模型只输出 JSON 决策；前端按轮展示思考卡（`stage=react` + `skill_id` 技能徽标）和 **ToolCall 卡**（展开可见 `arguments` 与 `result`/`error`）。长任务（`benchmark.run` / `rag.evaluate` / `testcase.generate` / `stress.run`）不得在循环内执行，槽位齐后确认卡 → Worker 入队。WS 事件名仍冻结为 `thought` / `tool_call` / `tool_result`（不引入 `thinking`/`token`）。`/help` 等确定性斜杠仍 0 次模型。上游不可用时回退 `tools_needed` 队列，确认卡门禁不变。未预期异常经 `agent_exception` 打 traceback，并包装为 `AppError(INTERNAL)`。
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/agent/persona.py` | `REACT_LOOP_SUFFIX` 要求 MCP JSON 字段 `thought/tool/arguments/done/reply` |
+| `backend/api/app/agent/defaults.py` | `MAX_REACT_ROUNDS`、`TOOL_TIMEOUTS` |
+| `backend/api/app/agent/react.py` | MCP JSON 多轮循环 + tools_needed 回退队列；长工具移交 |
+| `backend/api/app/agent/harness.py` | 生产路径 `use_llm`；闲聊优先交付 ReAct `reply_text`；ReAct 思考走 `stage=react` 落库 |
+| `frontend/src/views/Agent.vue` | 每轮独立思考卡；ToolCall 控制台打印入参出参；协作者缓冲 `tool_call` 先收尾思考卡 |
+| `frontend/src/components/agent/ThoughtCard.vue` | ReAct 标题为 ToolCall；技能徽标保留 |
+| `frontend/src/components/agent/ToolCard.vue` | 副标题 `ToolCall · name`；始终展示输入 arguments / 输出 result |
+| `backend/api/tests/test_harness.py` | 内部短工具多轮、长任务不执行、模型不可用回退 |
+| `docs/AI测试与评估平台-Agent开发文档.md` | §5 行动阶段与预算说明 |
+
 
 
   

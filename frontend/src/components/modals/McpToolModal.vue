@@ -87,7 +87,7 @@
       <!-- 调用示例与返回报文 -->
       <div class="section-block">
         <div class="section-title">
-          <span>📤 调用示例与返回报文 (Tool Call & Response Payload)</span>
+          <span>📤 ToolCall 请求与返回报文</span>
         </div>
         <div class="code-box-tabs">
           <div class="code-preview-wrap">
