@@ -34,7 +34,7 @@ from .defaults import (
     default_stress,
     is_long_tool,
 )
-from .imagegen import arguments_for_imagegen
+from .imagegen import arguments_for_imagegen, looks_like_image_generation
 from .log import agent_exception, agent_trace
 from .mcp_tools import collect_ids, execute_short_tool, redact_secrets, summarize_observation
 from .persona import react_system, turn_system
@@ -43,6 +43,27 @@ from .voiceclone import arguments_for_voiceclone
 
 EmitFn = Callable[..., Awaitable[int]]
 AbortCheck = Callable[[], None]
+
+_EVAL_INVENTORY_TOOLS = frozenset({"model.list", "dataset.list", "kb.list"})
+
+
+def _redirect_creative_tool(plan: PlanArtifact, text: str, name: str | None) -> str | None:
+    """生图/配音回合拦截协议档、数据集清单，改回本轮真正需要的短工具。"""
+    if not name or name not in _EVAL_INVENTORY_TOOLS:
+        return name
+    tools = list(plan.tools_needed or [])
+    if not (
+        "image.generate" in tools
+        or "audio.voiceclone" in tools
+        or looks_like_image_generation(text)
+    ):
+        return name
+    agent_trace(f"ReAct 拦截评测清单工具 name={name}")
+    if "image.generate" in tools or looks_like_image_generation(text):
+        return "image.generate"
+    if "audio.voiceclone" in tools:
+        return "audio.voiceclone"
+    return None
 
 
 @dataclass
@@ -455,7 +476,7 @@ async def _run_mcp_react_loop(
         if step.reply:
             react.reply_text = step.reply
 
-        raw_tool = step.tool
+        raw_tool = _redirect_creative_tool(plan, text, step.tool)
         if raw_tool and is_long_tool(raw_tool):
             await _emit_react_thought(
                 emit,
@@ -522,11 +543,16 @@ async def _run_tool_queue(
     rounds_cap: int,
 ) -> None:
     """按规划队列串行执行尚未跑过的短工具（LLM 不可用或仍缺槽时的回退）。"""
-    skip = _executed_names(react)
-    pending = [name for name in queue if name and name not in skip]
+    executed = set(_executed_names(react))
+    pending = [name for name in queue if name and name not in executed]
     while pending and react.rounds_used < rounds_cap:
         check_abort()
-        name = pending.pop(0)
+        original = pending.pop(0)
+        name = _redirect_creative_tool(plan, text, original)
+        if not name:
+            continue
+        if name != original and name in executed:
+            continue
         if is_long_tool(name):
             await _emit_react_thought(
                 emit,
@@ -553,6 +579,7 @@ async def _run_tool_queue(
             text=text,
             attachments=attachments,
         )
+        executed.add(name)
         if name == "task.create":
             continue
         spec = build_proposed_spec(plan, react, slash_fill_first=slash_fill_first)

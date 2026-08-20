@@ -104,6 +104,9 @@ def test_l0_chat_vs_benchmark_and_testcase():
     assert classify_intent_l0("评测知识库召回效果")[0] == "rag"
     intent, stress = classify_intent_l0("先评后压 10 QPS")
     assert intent == "benchmark" and stress is True
+    # 摄影提示词里的「对比」不得当成评测
+    portrait = "帮我生成一张竖幅户外人像摄影，明暗对比柔和"
+    assert classify_intent_l0(portrait)[0] == "chat"
     assert is_smalltalk("你好") is True
     assert is_smalltalk("你好，帮我评一下") is False
     assert is_smalltalk("随便说说") is False
@@ -457,6 +460,28 @@ def test_run_plan_offtopic_uses_planner_not_eval_defaults(monkeypatch):
     assert plan.source == "llm"
     assert plan.tools_needed == []
     assert budget.used == 0  # consume 发生在 _call_plan_model 内，此处被 mock 掉
+
+
+def test_run_plan_portrait_skips_eval_script_and_prefs():
+    """「生成一张人像摄影」不得规划成基准对比，也不得沿用上次协议档/数据集。"""
+    text = "帮我生成一张一张竖幅户外人像摄影，整体从上到下呈现温暖的午后街景氛围"
+    budget = TurnBudget()
+    plan = run_plan(
+        _FakeDb(),
+        text=text,
+        parsed=parse_slash(text),
+        history=[],
+        prefs={"last_profile_ids": ["p-old"], "last_dataset_id": "ds-old"},
+        attachments=[],
+        budget=budget,
+    )
+    assert plan.intent == "chat"
+    assert plan.skill_id is None
+    assert plan.delivery == "text"
+    assert plan.tools_needed == ["image.generate"]
+    assert plan.pref_thoughts == []
+    assert budget.used == 0
+    assert should_emit_stage_thoughts(plan.intent, None) is False
 
 
 

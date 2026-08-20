@@ -34,7 +34,10 @@ PLAN_JSON_SUFFIX = (
     "delivery=text。"
     "本轮若用户上传了 wav/mp3 参考音频并要求配音，tools_needed 可含 "
     "audio.voiceclone；file_id 由系统从本轮附件填写，禁止编造。"
-    "若用户要求生成或编辑图片，tools_needed 可含 image.generate；"
+    "若用户要求生成或编辑图片、人像、摄影、竖幅/横幅海报，intent=chat、"
+    "skill_id=null、tools_needed 只含 image.generate，delivery=text；"
+    "禁止套 skill-benchmark，禁止为此列出协议档或数据集。"
+    "画面描述里的「对比」（明暗对比、冷暖对比）不是评测。"
     "参考图 file_id 由系统从本轮图片附件填写，禁止编造。"
 )
 
@@ -94,7 +97,8 @@ REACT_LOOP_SUFFIX = """你运行在「思考 → 行动 → 观察 → 再思考
    禁止为了走流程去调用 model.list / dataset.list。
 7. 只读问题才调对应工具：问协议档 → model.list；问数据集 → dataset.list；
    问任务 → task.get；问调度 → dispatch.overview。
-8. 用户明确要求生图或配音时才调用对应工具。"""
+8. 用户明确要求生图、摄影、人像或配音时才调用对应工具。
+   生图时只调 image.generate，禁止 model.list / dataset.list。"""
 
 
 # /compact 压缩提示词（不计入 4 次模型硬顶，仍受 180s 墙钟约束）

@@ -10,6 +10,7 @@ from app.agent.imagegen import (
     arguments_for_imagegen,
     generate_image_bytes,
     inject_imagegen_plan,
+    looks_like_image_generation,
 )
 from app.agent.mcp_tools import collect_ids, execute_short_tool
 from app.agent.plan import PlanArtifact, l0_plan
@@ -95,6 +96,38 @@ def test_inject_imagegen_does_not_replace_testcase_intent():
 
     assert out.intent == "testcase"
     assert "image.generate" not in out.tools_needed
+
+
+def test_portrait_photography_is_image_not_benchmark():
+    """用户要竖幅人像摄影时，即使文案含明暗对比，也只规划 image.generate。"""
+    text = "帮我生成一张一张竖幅户外人像摄影，整体从上到下呈现温暖的午后街景氛围。顶部左侧明暗对比柔和。"
+    assert looks_like_image_generation(text) is True
+    plan = l0_plan(text, prefs={"last_profile_ids": ["p1"], "last_dataset_id": "d1"})
+    assert plan.intent == "chat"
+    assert plan.skill_id is None
+    assert plan.tools_needed == ["image.generate"]
+    assert plan.delivery == "text"
+    out = inject_imagegen_plan(
+        _ImageDb(),
+        PlanArtifact(
+            intent="benchmark",
+            skill_id="skill-benchmark",
+            slots={"filled": {"kind": "benchmark"}, "missing": ["profile_ids", "dataset_id"]},
+            tools_needed=["model.list", "dataset.list"],
+            delivery="clarify",
+            budget={"max_tool_rounds": 4},
+            notes="规划：已按规则识别为 benchmark。",
+            source="l0",
+            pref_thoughts=["沿用你上次的协议档，可在卡上改"],
+        ),
+        text=text,
+        attachments=[],
+    )
+    assert out.intent == "chat"
+    assert out.skill_id is None
+    assert out.tools_needed == ["image.generate"]
+    assert out.pref_thoughts == []
+    assert "已按规则识别为 benchmark" not in (out.notes or "")
 
 
 def test_generate_image_bytes_sends_text_and_reference(monkeypatch):
@@ -195,6 +228,49 @@ def test_run_react_passes_imagegen_arguments(tmp_path, monkeypatch):
     assert events[0][0] == "thought"
     assert events[0][1].get("stage") == "react"
     assert events[1][0] == "tool_call"
+
+
+def test_react_redirects_eval_inventory_when_user_asks_for_photo(monkeypatch):
+    """规划误塞 model.list 时，生图口令仍只执行 image.generate。"""
+    captured: list[str] = []
+
+    def _fake_isolated(name, arguments, user_id):
+        captured.append(name)
+        return True, {"file_id": "out-1"}, None, 8
+
+    monkeypatch.setattr("app.agent.react._execute_short_tool_isolated", _fake_isolated)
+    plan = PlanArtifact(
+        intent="benchmark",
+        skill_id="skill-benchmark",
+        slots={"filled": {"kind": "benchmark"}, "missing": ["profile_ids", "dataset_id"]},
+        tools_needed=["model.list", "dataset.list"],
+        delivery="clarify",
+        budget={"max_tool_rounds": 4},
+        notes="规划：已按规则识别为 benchmark。",
+        source="l0",
+    )
+    events: list[str] = []
+
+    async def _emit(event: str, payload: dict, **_kwargs) -> int:
+        events.append(payload.get("name") or event)
+        return len(events)
+
+    asyncio.run(
+        run_react(
+            _ImageDb(),
+            plan,
+            user_id="u1",
+            emit=_emit,
+            check_abort=lambda: None,
+            slash_fill_first=False,
+            text="帮我生成一张竖幅户外人像摄影",
+            attachments=[],
+        )
+    )
+
+    assert captured == ["image.generate"]
+    assert "model.list" not in events
+    assert "dataset.list" not in events
 
 
 def test_generate_image_requires_configuration(monkeypatch):
