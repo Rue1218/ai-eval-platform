@@ -258,12 +258,9 @@ watch(
 )
 
 async function loadCustomCommands() {
-  try {
-    const res: any = await api.slashCommands.list()
-    customCommands.value = Array.isArray(res) ? res : res?.items || []
-  } catch {
-    customCommands.value = []
-  }
+  // 说明：依 API.md §3.4 与说明书 AGT-SLH-03，后端 /api/slash-commands 在 M1 为桩（严格返回 VALIDATION 400「自定义命令未启用」）。
+  // 完整自定义斜杠 CRUD 将在 M2（AGT-M2-04）开放。M1 阶段默认置空，避免在控制台产生无意义的网络 400 日志。
+  customCommands.value = []
 }
 
 onMounted(() => {
