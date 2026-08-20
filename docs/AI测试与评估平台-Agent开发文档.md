@@ -5,7 +5,7 @@
 | 文档名称 | Agent 独立开发说明书 |
 | 版本 | V1.4 |
 | 日期 | 2026-08-20 |
-| 最近修订 | 2026-08-20：补齐思考快照、确认回执、历史工具资产与 ContextMeter 恢复；闲聊不再刷出规划/复核「已思考」卡；团队共享会话与软删除；任务取消确认与终态竞态 |
+| 最近修订 | 2026-08-20：修复流式气泡串轮、切会话打字机泄漏、确认卡 rag patch 与跨会话取消；补齐思考快照与 ContextMeter 恢复 |
 | 用法 | **实现 `/agent` 以本文为准（Harness / 斜杠 / 窗口算法）。** REST/WS JSON 以 API.md V1.6 为准。完成某项后勾选文末 Task，并在「最近修订」追加一行。 |
 
 本文是评测平台 **Agent 子系统** 的完整开发说明书：目标、边界、运行时骨架、协议、模块、代码落点与验收任务都写在这里。与 PRD / API.md 冲突时，字段名与事件名以那两份为准；Harness、斜杠、上下文算法以本文 §16 为准。§4.6 所列增量已收入 **API.md V1.6**。
@@ -1322,5 +1322,17 @@ M3 接 LightRAG：把 `LIGHTRAG_ENABLED` 改为 True，在 `query_lightrag` 请�
 | `backend/api/app/routers/sessions.py` | 历史接口补回 `compact_summary` |
 | `frontend/src/views/Agent.vue` | 历史/实时回放思考快照、确认回执和工具资产 |
 | `frontend/src/api/types.ts` | 补齐新增 WS 事件与 ContextMeter 扩展字段 |
+
+---
+
+## 25. 修改代码文件与作用清单（2026-08-20 审查竞态）
+
+流式气泡按本轮用户消息隔离；切会话停打字机；确认卡 rag patch 与规划门禁对齐；WS 取消绑定当前会话。
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `frontend/src/views/Agent.vue` | 本轮流式气泡、切会话停 flowTimers、历史回放不覆盖生成中缓存、确认卡会话守卫、后台任务坞收口 |
+| `backend/api/app/agent/harness.py` | ack 拒绝 kind=rag；取消校验 task.session_id；调度登记加锁 |
+| `backend/api/tests/test_harness.py` | rag patch 拒收；跨会话取消拒收 |
 
   
