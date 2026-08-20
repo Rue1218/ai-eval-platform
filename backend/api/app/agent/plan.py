@@ -22,7 +22,7 @@ from .defaults import (
     WRITE_TOOLS,
     is_long_tool,
 )
-from .imagegen import inject_imagegen_plan
+from .imagegen import inject_imagegen_plan, looks_like_image_generation
 from .log import agent_trace
 from .persona import PLAN_RETRY_SUFFIX, REPLAN_JSON_SUFFIX, plan_system, turn_system
 from .slash import SlashParse
@@ -170,19 +170,27 @@ def sanitize_plan(raw: dict, *, source: str = "llm") -> PlanArtifact:
 
 # 高置信闲聊提示（不含「其它 → chat」兜底）。用于跳过规划模型，把预算留给流式回复。
 CHAT_HINTS = ("你好", "您好", "介绍", "你是谁", "天气", "谢谢", "闲聊", "随便聊聊", "hello", "hi ")
-# 与评测关键词重叠时不得当闲聊，避免「你好，帮我评一下」跳过规划
-EVAL_BLOCK_HINTS = (
+# 评测口令。禁止用光杆「对比」：摄影提示词里的明暗对比/冷暖对比会误判成 benchmark。
+EVAL_INTENT_HINTS = (
+    "benchmark",
     "评测",
     "评估",
-    "对比",
-    "benchmark",
     "跑分",
     "打分",
     "测试模型",
     "模型质量",
     "评一下",
     "帮我评",
+    "基准对比",
+    "模型对比",
+    "对比评测",
+    "对比两个",
+    "对比几个",
+    "对比一下模型",
+    "协议档",
 )
+# 与评测关键词重叠时不得当闲聊，避免「你好，帮我评一下」跳过规划
+EVAL_BLOCK_HINTS = EVAL_INTENT_HINTS
 
 
 def is_smalltalk(text: str) -> bool:
@@ -216,7 +224,7 @@ def classify_intent_l0(text: str) -> tuple[str, bool]:
     if is_smalltalk(text):
         # HAR-PLAN-05 表「其它 → benchmark」与 TC-15 闲聊验收冲突时，按 TC-15 走 chat。
         return "chat", False
-    if any(k in lowered for k in ("benchmark", "评测", "评估", "对比", "跑分", "打分", "测试模型", "模型质量", "评一下", "帮我评")):
+    if any(k in lowered for k in EVAL_INTENT_HINTS):
         return "benchmark", False
     # HAR-PLAN-05：其它 → benchmark（缺槽走 clarify，不出假卡）
     if raw.startswith("/"):
@@ -226,6 +234,17 @@ def classify_intent_l0(text: str) -> tuple[str, bool]:
 
 def l0_plan(text: str, *, prefs: dict | None = None) -> PlanArtifact:
     """L0 降级产物形状（评审默认方案 D1）。仍必须进入复核。"""
+    if looks_like_image_generation(text):
+        return PlanArtifact(
+            intent="chat",
+            skill_id=None,
+            slots={"filled": {}, "missing": []},
+            tools_needed=["image.generate"],
+            delivery="text",
+            budget={"max_tool_rounds": DEFAULT_TOOL_ROUNDS},
+            notes="规划：使用 Qwen Image 生成图片",
+            source="l0",
+        )
     intent, with_stress = classify_intent_l0(text)
     filled: dict[str, Any] = {}
     if intent in {"benchmark", "rag", "testcase"}:
@@ -456,12 +475,12 @@ def run_plan(
     """产出 PlanArtifact：斜杠模板 / LLM / 重试 / L0。"""
 
     def _finish(plan: PlanArtifact, *, slash: bool = False) -> PlanArtifact:
-        """挂偏好后，自然语言回合按本轮意图注入音频或图像短工具。"""
-        plan = _attach_prefs(plan, prefs)
+        """先按本轮意图注入短工具，再挂评测偏好，避免生图被沿用协议档/数据集。"""
         if slash:
-            return plan
+            return _attach_prefs(plan, prefs)
         plan = inject_voiceclone_plan(db, plan, text=text, attachments=attachments)
-        return inject_imagegen_plan(db, plan, text=text, attachments=attachments)
+        plan = inject_imagegen_plan(db, plan, text=text, attachments=attachments)
+        return _attach_prefs(plan, prefs)
 
     if parsed.command and parsed.command in {
         "benchmark",
@@ -509,6 +528,11 @@ def run_plan(
         )
 
     if not model_available:
+        plan = l0_plan(text, prefs=prefs)
+        return _finish(plan)
+
+    # 生图口令不走规划模型：避免人设/偏好把「生成一张人像摄影」规划成基准对比。
+    if looks_like_image_generation(text):
         plan = l0_plan(text, prefs=prefs)
         return _finish(plan)
 

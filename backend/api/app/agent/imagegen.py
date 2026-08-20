@@ -296,9 +296,46 @@ def execute_imagegen(db: Session, arguments: dict | None, *, user_id: str) -> di
     }
 
 
-def _looks_like_image_generation(text: str) -> bool:
-    """判断自然语言是否明确要求生成或编辑图片。"""
-    return bool(IMAGEGEN_CLARIFY_RE.search(text or ""))
+# 用例生成优先：避免「生成登录模块测试用例」被生图口令误伤
+_TESTCASE_BLOCK_RE = re.compile(r"(测试用例|生成用例|用例集|\bPRD\b)")
+# 「生成一张人像摄影 / 竖幅照片」也要命中；不要要求 12 字内必须出现「图片」
+IMAGEGEN_CLARIFY_RE = re.compile(
+    r"("
+    r"生图|"
+    r"生成.{0,16}(图片|图像|照片|相片|海报|插画|壁纸|头像|人像|写真|摄影|图)|"
+    r"生成.{0,8}张|"
+    r"画一(张|幅)|"
+    r"绘制.{0,8}(图片|图像|海报|插画|人像)|"
+    r"(竖幅|横幅).{0,12}(人像|摄影|照片|海报)|"
+    r"(人像|户外).{0,8}摄影|"
+    r"帮我画|"
+    r"改图|图片编辑|参考图|"
+    r"(?:图|图片|图像).{0,8}(改成|编辑|转换)|"
+    r"(?:generate|create|edit)\s+(?:an?\s+)?image"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def looks_like_image_generation(text: str) -> bool:
+    """判断自然语言是否在要求生成或编辑图片（不含测试用例）。"""
+    raw = text or ""
+    if _TESTCASE_BLOCK_RE.search(raw):
+        return False
+    return bool(IMAGEGEN_CLARIFY_RE.search(raw))
+
+
+def _apply_imagegen_plan(plan: Any, *, notes: str) -> Any:
+    """把规划改成只跑生图，清掉评测技能、清单工具和偏好思考卡。"""
+    plan.intent = "chat"
+    plan.skill_id = None
+    plan.tools_needed = ["image.generate"]
+    plan.delivery = "text"
+    plan.slots = {"filled": {}, "missing": []}
+    plan.notes = notes
+    if hasattr(plan, "pref_thoughts"):
+        plan.pref_thoughts = []
+    return plan
 
 
 def inject_imagegen_plan(
@@ -309,16 +346,15 @@ def inject_imagegen_plan(
     attachments: list[str],
 ) -> Any:
     """自然语言回合按图片意图注入图像工具，参考图由本轮附件自动绑定。"""
-    if plan.intent in {"cancel", "rerun", "compact", "report"}:
+    if plan.intent in {"cancel", "rerun", "compact", "report", "testcase"}:
         return plan
-    if "image.generate" in plan.tools_needed:
-        return plan
-    explicit_image_request = _looks_like_image_generation(text)
+    explicit_image_request = looks_like_image_generation(text)
+    already_planned = "image.generate" in (plan.tools_needed or [])
     has_reference_image = bool(list_image_file_ids(db, attachments))
     edit_with_reference = has_reference_image and any(
         word in (text or "") for word in ("改成", "变成", "转换", "编辑", "优化", "重绘", "风格")
     )
-    if not explicit_image_request and not edit_with_reference:
+    if not explicit_image_request and not edit_with_reference and not already_planned:
         return plan
     if not (text or "").strip():
         plan.intent = "chat"
@@ -326,17 +362,7 @@ def inject_imagegen_plan(
         plan.tools_needed = []
         plan.delivery = "clarify"
         plan.notes = "规划：请先输入图像生成提示词"
+        if hasattr(plan, "pref_thoughts"):
+            plan.pref_thoughts = []
         return plan
-    plan.intent = "chat"
-    plan.skill_id = None
-    plan.tools_needed = ["image.generate"]
-    plan.delivery = "text"
-    plan.slots = {"filled": {}, "missing": []}
-    plan.notes = "规划：使用 Qwen Image 生成图片"
-    return plan
-
-
-IMAGEGEN_CLARIFY_RE = re.compile(
-    r"(生图|生成.{0,12}(图片|图像|照片|海报|插画|壁纸|头像|图)|画一张|绘制.{0,8}(图片|图像|海报|插画)|改图|图片编辑|参考图|(?:图|图片|图像).{0,8}(改成|编辑|转换)|(?:generate|create|edit)\s+(?:an?\s+)?image)",
-    re.IGNORECASE,
-)
+    return _apply_imagegen_plan(plan, notes="规划：使用 Qwen Image 生成图片")
