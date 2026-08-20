@@ -285,7 +285,7 @@ export interface TestCaseCheck {
 
 export interface TestCase {
   id: string
-  // 6 类用例策略：正向 / 反向 / 边界 / 状态 / 场景 / 等价
+  // 6 类用例策略：正向 / 反向 / 边界 / 状态 / 场景 / 等价（后端亦可能回写 等价类 / 状态迁移）
   strategy: '正向' | '反向' | '边界' | '状态' | '场景' | '等价'
   // 优先级支持 P0–P3 四档
   priority: 'P0' | 'P1' | 'P2' | 'P3'
@@ -297,20 +297,41 @@ export interface TestCase {
   test_type?: string
   mapped?: boolean
   pending?: boolean
+  pending_complete?: boolean
   question?: string
   reference?: string
   selected?: boolean
 }
 
+export interface CaseFolder {
+  id: string
+  name: string
+  parent_id?: string | null
+  sort_order: number
+  created_at: string
+}
+
+export interface CaseImportResult {
+  ok: boolean
+  format: 'platform' | 'standard' | 'simple'
+  mode: 'append' | 'replace'
+  imported_count: number
+  skipped_count: number
+  generated_count: number
+  checks: TestCaseCheck[]
+}
+
 export interface CaseSet {
   id: string
-  task_id: string
+  task_id?: string | null
   name: string
   status: 'generated' | 'confirmed' | 'cancelled'
   generated_count: number
   confirmed_count: number
-  expires_in_h: number
-  expires_at?: string
+  expires_in_h?: number
+  expires_at?: string | null
+  folder_id?: string | null
+  column_schema?: ColumnSchemaItem[]
   checks: TestCaseCheck[]
   cases?: TestCase[]
   created_at?: string

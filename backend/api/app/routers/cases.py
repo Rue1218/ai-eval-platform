@@ -2,7 +2,7 @@
 
 包含两组 router：
 - ``router``：/api/case-sets 用例集 CRUD、用例行批量保存、确认/废弃/映射、
-  AI 候选生成与行级补全、xlsx/xmind 导出；
+  AI 候选生成与行级补全、xlsx 导入/模板、xlsx/xmind 导出；
 - ``folders_router``：/api/case-folders 用例目录树管理（在 main.py 单独注册）。
 
 AI 候选生成（ai-generate）与行级补全（ai-fill）只返回未落库候选，前端人工
@@ -20,13 +20,21 @@ from typing import Any
 from urllib.parse import quote
 from xml.sax.saxutils import escape
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, File, Query, Response, UploadFile
 from fastapi import Request as FastApiRequest
 from openpyxl import Workbook, load_workbook
+from pydantic import ValidationError
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..agent.persona import page_ai_system
+from ..case_excel import (
+    EXPORT_FIXED_COLUMNS,
+    IMPORT_MAX_BYTES,
+    build_import_template,
+    parse_cases_xlsx,
+    xlsx_media_type,
+)
 from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
@@ -104,20 +112,7 @@ _DEFAULT_STRATEGY_WEIGHTS = {
 # 来源文档注入 prompt 的最大字符数，防止超大文档撑爆模型上下文
 _SOURCE_DOC_MAX_CHARS = 20_000
 
-# 导出 Excel 的固定列：字段名 -> 中文列名；扩展列追加在其后
-_EXPORT_FIXED_COLUMNS = [
-    ("strategy", "策略"),
-    ("priority", "优先级"),
-    ("module", "模块"),
-    ("name", "用例名称"),
-    ("precondition", "前置条件"),
-    ("steps", "步骤"),
-    ("expected", "预期结果"),
-    ("test_type", "测试类型"),
-    ("mapped", "已映射"),
-    ("pending_complete", "待补全"),
-]
-_XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+_XLSX_MEDIA_TYPE = xlsx_media_type()
 _XMIND_MEDIA_TYPE = "application/vnd.xmind.workbook"
 
 
@@ -245,6 +240,43 @@ def _upsert_case(
     # name / expected 任一缺失即视为待补全，映射入库时进入目标集待补全行
     case.pending_complete = not (case.name or "").strip() or not (case.expected or "").strip()
     return case
+
+
+def _merge_column_schema(case_set: CaseSet, extra_keys: list[str]) -> None:
+    """把导入 Excel 中未识别的扩展列并入 column_schema，已有 key 不覆盖。"""
+    schema = [col for col in (case_set.column_schema or []) if isinstance(col, dict)]
+    existing = {str(col.get("key") or "") for col in schema}
+    for key in extra_keys:
+        if not key or key in existing or key in _RESERVED_EXTRA_KEYS:
+            continue
+        schema.append({"key": key, "name": key, "type": "string", "sort_order": len(schema) + 1})
+        existing.add(key)
+    case_set.column_schema = schema
+
+
+def _selfcheck_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """导入后刷新确认页红字：无核心正向、缺约束反向。"""
+    checks: list[dict[str, Any]] = []
+    positives = [item for item in items if item.get("strategy") == "正向"]
+    core_positives = [
+        item
+        for item in positives
+        if item.get("priority") == "P0" or "核心" in str(item.get("test_type") or "")
+    ]
+    if not positives:
+        checks.append({"level": "error", "code": "no_core_positive", "message": "自检未通过：未导入任何正向策略用例"})
+    elif not core_positives:
+        checks.append({"level": "error", "code": "no_core_positive", "message": "自检未通过：正向用例中没有 P0 核心用例"})
+    if not any(item.get("strategy") == "反向" for item in items):
+        checks.append({"level": "error", "code": "missing_constraint_negative", "message": "自检未通过：缺少反向（约束/异常）策略用例"})
+    return checks
+
+
+def _parsed_row_to_case_in(item: dict[str, Any]) -> CaseIn:
+    """把 Excel 解析行转为 CaseIn；extras 平铺为扩展列。"""
+    payload = {key: value for key, value in item.items() if key != "extras"}
+    payload.update(item.get("extras") or {})
+    return CaseIn.model_validate(payload)
 
 
 def _normalize_strategy_weights(weights: dict[str, int] | None) -> dict[str, int]:
@@ -378,11 +410,11 @@ def _build_xlsx(case_set: CaseSet, cases: list[CaseItem]) -> bytes:
         (col.get("key", ""), col.get("name") or col.get("key", ""))
         for col in (case_set.column_schema or [])
     ]
-    sheet.append([title for _, title in _EXPORT_FIXED_COLUMNS] + [name for _, name in extra_columns])
+    sheet.append([title for _, title in EXPORT_FIXED_COLUMNS] + [name for _, name in extra_columns])
     for case in cases:
         item = _case_to_item(case)
         row: list[Any] = []
-        for field, _title in _EXPORT_FIXED_COLUMNS:
+        for field, _title in EXPORT_FIXED_COLUMNS:
             value = item.get(field)
             if isinstance(value, bool):
                 value = "是" if value else "否"
@@ -512,6 +544,33 @@ def ai_generate_cases(
     text = call_agent_model(db, system, user_prompt, max_tokens=4096)
     items = parse_json_candidates(text)
     return {"items": _rebalance_by_strategy(items, weights, body.max_count)}
+
+
+@router.get("/import-template")
+def download_import_template(
+    request: FastApiRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """下载平台标准列 Excel 模板（含填写说明工作表）。"""
+    content = build_import_template()
+    db.add(
+        AuditLog(
+            user_id=user.id,
+            action="case_set_import_template",
+            target_type="case_set",
+            target_id="template",
+            detail={"fmt": "xlsx"},
+            ip=_request_ip(request),
+        )
+    )
+    db.commit()
+    filename = quote("用例导入模板.xlsx")
+    return Response(
+        content=content,
+        media_type=_XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"},
+    )
 
 
 @router.get("/{set_id}", response_model=CaseSetDetailOut)
@@ -699,6 +758,7 @@ def map_cases(
     for offset, case in enumerate(cases, start=1):
         question = (case.name or "").strip()
         reference = (case.expected or "").strip()
+        context = (case.precondition or "").strip() or None
         pending = not question or not reference
         if pending:
             pending_count += 1
@@ -708,13 +768,14 @@ def map_cases(
                 row_no=max_row_no + offset,
                 question=question,
                 reference=reference,
+                context=context,
                 pending_complete=pending,
-                # 仅待补全行回写 source_case_id，便于人工补全时回溯来源用例
-                source_case_id=case.id if pending else None,
+                # 全部映射行回写来源用例，便于评测集待补全与版本溯源
+                source_case_id=case.id,
+                extras={"source_case_set_id": case_set.id},
             )
         )
         case.mapped = True
-        case.pending_complete = False
     db.flush()
     # 按 dataset_rows 实况重算目标集行数与待补全行数
     rows = db.query(DatasetRow).filter(DatasetRow.dataset_id == dataset.id).all()
@@ -760,6 +821,93 @@ def ai_fill_cases(
     text = call_agent_model(db, system, user_prompt, max_tokens=4096)
     items = parse_json_candidates(text)
     return {"items": _filter_fill_items(items, body)}
+
+
+@router.post("/{set_id}/import")
+async def import_case_set(
+    set_id: str,
+    request: FastApiRequest,
+    file: UploadFile = File(...),
+    mode: str = Query("append"),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """从 Excel 导入用例行。mode=append 追加（同 id 则更新），replace 先清空再写入。"""
+    case_set = _get_case_set_or_404(db, set_id)
+    if case_set.status in {"confirmed", "cancelled"}:
+        raise AppError(ErrorCode.VALIDATION, "用例集已终态，无法导入")
+    if mode not in {"append", "replace"}:
+        raise AppError(ErrorCode.VALIDATION, "mode 仅支持 append 或 replace")
+    filename = (file.filename or "").lower()
+    if not filename.endswith((".xlsx", ".xlsm")):
+        raise AppError(ErrorCode.VALIDATION, "仅支持 .xlsx，请将 .xls 另存为 .xlsx 后再导入")
+    content = await file.read()
+    if not content:
+        raise AppError(ErrorCode.VALIDATION, "上传文件为空")
+    if len(content) > IMPORT_MAX_BYTES:
+        raise AppError(ErrorCode.VALIDATION, "文件大小超过 10MB 上限")
+
+    parsed, fmt, skipped = parse_cases_xlsx(content)
+    extra_keys: list[str] = []
+    for item in parsed:
+        extra_keys.extend((item.get("extras") or {}).keys())
+    _merge_column_schema(case_set, extra_keys)
+
+    existing = {
+        case.id: case
+        for case in db.query(CaseItem).filter(CaseItem.case_set_id == case_set.id).all()
+    }
+    if mode == "replace":
+        db.query(CaseItem).filter(CaseItem.case_set_id == case_set.id).delete(synchronize_session=False)
+        db.flush()
+        existing = {}
+
+    sort_base = 0 if mode == "replace" else len(existing)
+    imported = 0
+    for offset, item in enumerate(parsed):
+        try:
+            case_in = _parsed_row_to_case_in(item)
+        except ValidationError as exc:
+            raise AppError(ErrorCode.VALIDATION, f"第 {offset + 1} 条用例字段不合法") from exc
+        target = existing.get(case_in.id) if case_in.id else None
+        if case_in.id and target is None:
+            clash = db.query(CaseItem).filter(CaseItem.id == case_in.id).first()
+            if clash:
+                # 其他用例集占用该编号时改为新 id，避免跨集串行
+                case_in.id = None
+        _upsert_case(db, case_set, case_in, target, sort_base + offset)
+        imported += 1
+    db.flush()
+    _refresh_generated_count(db, case_set)
+    case_set.checks = _selfcheck_items(parsed)
+    db.add(
+        AuditLog(
+            user_id=user.id,
+            action="case_set_import",
+            target_type="case_set",
+            target_id=case_set.id,
+            detail={
+                "name": case_set.name,
+                "filename": file.filename,
+                "mode": mode,
+                "format": fmt,
+                "imported_count": imported,
+                "skipped_count": skipped,
+            },
+            ip=_request_ip(request),
+        )
+    )
+    db.commit()
+    db.refresh(case_set)
+    return {
+        "ok": True,
+        "format": fmt,
+        "mode": mode,
+        "imported_count": imported,
+        "skipped_count": skipped,
+        "generated_count": case_set.generated_count,
+        "checks": case_set.checks,
+    }
 
 
 @router.get("/{set_id}/export")
