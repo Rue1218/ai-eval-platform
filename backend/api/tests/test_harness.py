@@ -9,7 +9,12 @@ import pytest
 
 from app.agent.context import run_compact
 from app.agent.defaults import HARD_MAX_TOOL_ROUNDS, MAX_MODEL_CALLS, is_long_tool
-from app.agent.harness import handle_cancel_task, handle_confirm_ack, should_emit_stage_thoughts
+from app.agent.harness import (
+    _chat_reply,
+    handle_cancel_task,
+    handle_confirm_ack,
+    should_emit_stage_thoughts,
+)
 from app.agent.mcp_tools import redact_secrets, truncate_tool_data
 from app.agent.persona import PERSONA_SYSTEM, turn_system
 from app.agent.plan import (
@@ -37,6 +42,44 @@ from app.agent.slash import (
 from app.errors import AppError, ErrorCode
 from app.models import Dataset, ProtocolProfile, Task, User
 from app.models import Session as AgentSession
+
+
+def test_chat_reply_persists_completed_reasoning_snapshot(monkeypatch):
+    """流式思考只增量发送，成功结束后必须补一帧可回放的完整快照。"""
+
+    class _Db:
+        def close(self):
+            return None
+
+    def _stream(*_args, **_kwargs):
+        yield "reasoning", "先检查"
+        yield "reasoning", "上下文"
+        yield "answer", "你好"
+
+    monkeypatch.setattr("app.llm.stream_agent_model", _stream)
+    monkeypatch.setattr("app.agent.harness.SessionLocal", lambda: _Db())
+    events: list[tuple[str, dict]] = []
+
+    async def _emit(event: str, payload: dict, **_kwargs) -> int:
+        events.append((event, payload))
+        return len(events)
+
+    result = asyncio.run(
+        _chat_reply(
+            None,
+            "你好",
+            [],
+            TurnBudget(),
+            stop=threading.Event(),
+            compact_summary=None,
+            skill_id=None,
+            emit=_emit,
+        )
+    )
+
+    assert result == "你好"
+    assert any(event == "thought" and payload.get("stream") == "think" for event, payload in events)
+    assert ("thought", {"text": "先检查上下文", "stream": "think_final"}) in events
 
 
 def test_chat_and_help_skip_stage_thoughts():

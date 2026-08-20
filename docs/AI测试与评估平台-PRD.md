@@ -245,7 +245,7 @@ queued → running → succeeded
 
 前端 → 服务：`user_message` `{text, attachments[]?, client_message_id?}`，`confirm_ack` `{ok, patch?}`，`cancel_task` `{task_id}`。
 
-`thought.stream=chunk` 只在在线时即时广播，断线不回放，随后完整交付句仍写入历史；`thought.stream=think` 仅发给本轮发起连接，不向团队协作者泄露。
+`thought.stream=chunk` 只在在线时即时广播，断线不回放，随后完整交付句仍写入历史；`thought.stream=think` 仅发给本轮发起连接，不向团队协作者泄露；本轮成功结束时以 `thought.stream=think_final` 保存完整思考快照，供历史回放恢复思考卡。
 
 附件：先 `POST /api/files` 得 `file_id`，再在消息里引用。单文件 ≤20MB；PRD/OpenAPI/Excel/JSONL/CSV/PDF/MD/TXT/HTML。
 
@@ -612,3 +612,9 @@ testcase-tools：只对齐，不进镜像。LightRAG：MIT，锁 tag。go-stress
 - 「Agent 调 MCP」：Host 仍是 Agent；长任务进 PG 后由 worker / stress 执行，避免对话断线任务停。与「PG 队列 + worker」那一问一致。
 - 外部 RAG 只用 OpenAI Chat：以最后一问为准；被测/Agent/Judge 仍是三协议。
 - 压测 Grafana：以「需要接入」为准，覆盖更早的「不需要」。
+
+### 会话上下文持久化修订（2026-08-20）
+
+思考卡、工具/MCP 卡、技能徽标、确认卡及其回执均通过 `ws_events` 或会话状态保存；
+流式增量仍为瞬态，成功回合额外保存 `thought.stream=think_final` 完整思考快照。
+历史接口同时返回 `compact_summary` 与服务端 ContextMeter，刷新不得依赖浏览器临时状态。

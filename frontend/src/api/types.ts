@@ -531,6 +531,19 @@ export interface SessionHistory {
     summary: number
     headroom: number
     window: number
+    total_tokens?: number
+    max_tokens?: number
+    messages_tokens?: number
+    skills_tokens?: number
+    free_tokens?: number
+    used_percent?: number
+    messages_percent?: number
+    skills_percent?: number
+    free_percent?: number
+    mcp_tools_count?: number
+    mcp_tools_max?: number
+    memory_files_count?: number
+    memory_files_max?: number
   }
 }
 
@@ -542,6 +555,7 @@ export interface WsServerEvent {
     | 'tool_call'
     | 'tool_result'
     | 'confirm'
+    | 'confirm_ack'
     | 'progress'
     | 'report'
     | 'error'

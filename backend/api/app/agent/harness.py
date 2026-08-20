@@ -531,8 +531,10 @@ async def _chat_reply(
 ) -> str:
     """闲聊交付句：与规划/重试/补规划/核对共用 4 次硬顶；达顶回退短答，不再调模型。
 
-    正文与推理思考链经瞬态 WS 帧实时下发（不落库）；完整句子仍由
-    ``_deliver_sentence`` 写成 assistant 消息。取消后丢弃半截增量。
+    正文增量与推理思考链增量经瞬态 WS 帧实时下发；正文由
+    ``_deliver_sentence`` 写成 assistant 消息，完整推理链只在本轮成功结束时
+    以 ``stream=think_final`` 保存一帧，供历史回放恢复思考卡。取消或异常时
+    丢弃半截增量，避免把不完整的模型内部过程写进会话。
     """
     canned = (
         "你好！我是 AI 测试与评估平台的评测智能体。职责是协助你进行大模型质量评测、"
@@ -546,13 +548,14 @@ async def _chat_reply(
     system = turn_system(chat_system(), skill_id=skill_id, compact_summary=compact_summary)
     loop = asyncio.get_running_loop()
 
-    def _producer() -> str:
+    def _producer() -> tuple[str, str]:
         from ..llm import stream_agent_model
 
         if stop.is_set():
             raise HarnessAborted()
         tdb = SessionLocal()
         parts: list[str] = []
+        thought_parts: list[str] = []
         frames = 0
         try:
             for kind, chunk in stream_agent_model(
@@ -569,7 +572,9 @@ async def _chat_reply(
                     continue
                 frames += 1
                 stream = "think" if kind == "reasoning" else "chunk"
-                if kind != "reasoning":
+                if kind == "reasoning":
+                    thought_parts.append(chunk)
+                else:
                     parts.append(chunk)
                 try:
                     asyncio.run_coroutine_threadsafe(
@@ -579,15 +584,19 @@ async def _chat_reply(
                 except Exception:
                     pass
             text_out = "".join(parts).strip()
+            thought_out = "".join(thought_parts).strip()[:12000]
             agent_trace(f"闲聊流式完成 frames={frames} chars={len(text_out)}")
-            return text_out
+            return text_out, thought_out
         finally:
             tdb.close()
 
     try:
-        result = await asyncio.to_thread(_producer)
+        result, thought = await asyncio.to_thread(_producer)
         if stop.is_set():
             raise HarnessAborted()
+        if thought:
+            # 只保存完整思考快照，不逐 token 写 ws_events，避免事件表膨胀。
+            await emit("thought", {"text": thought, "stream": "think_final"})
         return result or canned
     except HarnessAborted:
         raise
@@ -789,6 +798,8 @@ async def handle_confirm_ack(
         session.pending_confirm = None
         session.pending_confirm_author_id = None
         db.commit()
+        # 回执本身也进入事件时间线，协作者/历史回放才能区分已取消与仍待确认。
+        await emit("confirm_ack", {"ok": False})
         await _deliver_sentence(db, session.id, emit, "已取消本次确认，不会创建任务。需要调整目标可以继续说。")
         return
 
@@ -871,6 +882,8 @@ async def handle_confirm_ack(
         return
     save_prefs_from_spec(db, user.id, spec.snapshot())
 
+    # 先记录确认结果，再记录 task.create 工具事件；前端可在协作者连接上即时盖章。
+    await emit("confirm_ack", {"ok": True, "task_id": task.id}, task_id=task.id)
     await emit("tool_call", {"name": "task.create", "arguments": spec.snapshot()}, task_id=task.id)
     await emit(
         "tool_result",

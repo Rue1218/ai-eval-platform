@@ -2,14 +2,14 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.5 |
+| 文档版本 | V1.6 |
 | 对应 PRD | V1.6.5（功能唯一权威） |
 | 对应设计规范 | V1.2（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | V1.3（Harness / 斜杠 / 上下文算法；JSON 仍以本文为准） |
 | 对应前端计划 | V1.3 |
 | 对应后端计划 | V1.3 |
 | 撰写日期 | 2026-08-18 |
-| 最近修订 | 2026-08-20：V1.5 新增团队共享会话、软删除、消息事件与共享正文流；未启用能力统一 `VALIDATION` 400 |
+| 最近修订 | 2026-08-20：V1.6 补充思考快照、确认回执与历史上下文能力恢复；未启用能力统一 `VALIDATION` 400 |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
 ---
@@ -371,12 +371,21 @@ WS 不再可访问，但 `messages`、`ws_events`、tasks、reports 均保留审
   "pending_confirm": null,
   "pending_confirm_author_id": null,
   "pending_confirm_author": null,
+  "compact_summary": null,
   "context_meter": {
     "messages": 8,
     "skills": 0,
     "summary": 0,
     "headroom": 12,
-    "window": 20
+    "window": 20,
+    "total_tokens": 6720,
+    "max_tokens": 200000,
+    "messages_tokens": 5520,
+    "skills_tokens": 0,
+    "free_tokens": 193280,
+    "used_percent": 3.4,
+    "mcp_tools_count": 2,
+    "mcp_tools_max": 28
   }
 }
 ```
@@ -1175,15 +1184,16 @@ Harness 回合必须丢到后台 Task，**不得**在 `receive` 循环里 `await
 
 `event_id` 在会话内单调递增。`task_id` 在入队后才有。
 
-### 4.3 服务 → 前端（事件名冻结，V1.5 增加 `message`）
+### 4.3 服务 → 前端（事件名冻结，V1.6 增加 `message`、`confirm_ack`）
 
 | event | payload | 前端渲染 |
 | --- | --- | --- |
-| `thought` | `{ "text": "..." }`；可选 `latency_ms` `stage`（`plan\|react\|reflect`）`skill_id`。流式扩展：回复生成期间可发送瞬态增量帧 `{ "text": "增量", "stream": "chunk" }`（回复正文增量）与 `{ "text": "增量", "stream": "think" }`（推理模型思考链增量，前端渲染进可折叠思考卡），两种帧均不落库、不占事件号、断线不回放，随后必须有一帧不带 `stream` 的完整文本终帧 | ThoughtCard |
+| `thought` | `{ "text": "..." }`；可选 `latency_ms` `stage`（`plan\|react\|reflect`）`skill_id`。流式扩展：回复生成期间可发送瞬态增量帧 `{ "text": "增量", "stream": "chunk" }`（回复正文增量）与 `{ "text": "增量", "stream": "think" }`（推理模型思考链增量，前端渲染进可折叠思考卡），两种增量均不落库、不占事件号；本轮成功结束时发送 `{ "text": "完整思考链", "stream": "think_final" }`，该快照落库并可历史回放。随后发送不带 `stream` 的完整文本终帧 | ThoughtCard |
 | `message` | `{ "id", "role":"user", "content", "attachments", "author_id", "author":{id,username,display_name?}, "client_message_id?", "created_at" }`；落库、占 event_id，用于协作者实时补用户气泡 | UserBubble |
 | `tool_call` | `{ "name": "model.list", "arguments": {} }` | ToolCard pending；标题用中文名；副标题「MCP · 短工具」 |
 | `tool_result` | `{ "name": "model.list", "ok": true, "data": {} }` 或 `{ "ok": false, "error": "..." }`；可选 `latency_ms` | ToolCard done |
 | `confirm` | TaskSpec（§5 / §6）+ 非 TaskSpec 元数据 `confirm_author:{id,username,display_name?}` | ConfirmCard，等 `confirm_ack`；仅 `confirm_author.id` 可操作 |
+| `confirm_ack` | `{ "ok": true, "task_id": "uuid" }` 或 `{ "ok": false }` | 更新最近一张 ConfirmCard 的确认/取消状态；落库、可回放 |
 | `progress` | `{ "percent": 40, "done": 40, "total": 100, "message": "..." }` | ProgressDock。**仅这四字段**（percent 可选），不写入 `messages` |
 | `report` | `{ "report_id": "uuid" }` | ReportCard |
 | `error` | `{ "code": "UPSTREAM", "message": "..." }` | ErrorStrip + Toast |
@@ -1192,8 +1202,9 @@ Harness 回合必须丢到后台 Task，**不得**在 `receive` 循环里 `await
 禁止：`thinking` `token` `chat:send` `tool_call_start` 及任何参考文档旧名。
 
 共享流规则：`thought.stream="chunk"` 仅向同一 `team` 会话内的**在线**成员广播；
-`thought.stream="think"` 只发送给本轮发起连接，不向协作者广播。两类瞬态帧不落库、
-不占单调事件号；中途加入/断线重连者从后续增量继续看，最终完整交付句仍可从历史回放。
+`thought.stream="think"` 只发送给本轮发起连接，不向协作者广播。两类瞬态增量不落库、
+不占单调事件号；中途加入/断线重连者从后续增量继续看，最终完整交付句与
+`thought.stream="think_final"` 思考快照可从历史回放。
 当前 Compose 只有单 API 副本，chunk 广播为进程内 Hub；多 API 副本时必须改为进程外
 Pub/Sub，不能假定跨进程实时可见。
 
@@ -1553,3 +1564,15 @@ MCP 浏览器不调：与 PRD 3.1、前端计划「禁止把 MCP 当 REST」一�
 | 成员活动 | `GET /api/users/activity-summary?from=&to=` | KPI/活动由审计聚合；异地登录 AI 风险不在 V1.0 返回范围 |
 
 能力未启用使用 HTTP **400**，错误体遵循 §1.3：`{ "code": "VALIDATION", "message": "该能力未纳入 PRD V1.0", "fields": { "feature": "disabled" } }`。禁止用 409。前端将其渲染为页面内受控说明，不显示为成功 Toast，也不回退 Mock。
+
+---
+
+## 13. 本次修订代码文件与作用清单（2026-08-20）
+
+| 文件 | 作用 |
+| --- | --- |
+| `backend/api/app/agent/harness.py` | 保存完整 `think_final` 思考快照；确认/取消确认卡写入 `confirm_ack` 事件 |
+| `backend/api/app/agent/context.py` | 从持久化事件恢复技能与短 MCP 工具计数，刷新 ContextMeter 不归零 |
+| `backend/api/app/routers/sessions.py` | 历史接口返回 `compact_summary`，恢复压缩后的模型上下文 |
+| `frontend/src/views/Agent.vue` | 回放思考快照、确认回执与历史工具资产，并修正确认卡状态 |
+| `frontend/src/api/types.ts` | 补齐 `confirm_ack` 事件和 ContextMeter 扩展字段类型 |
