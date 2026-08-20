@@ -6,6 +6,7 @@ M1 阶段 ReAct 0 次模型调用；工具跑完仍缺槽允许 1 次补规划�
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -27,6 +28,7 @@ from .log import agent_trace
 from .long_tasks import assert_short_tool
 from .mcp_tools import collect_ids, execute_short_tool, summarize_observation
 from .plan import PlanArtifact, sanitize_plan
+from .voiceclone import arguments_for_voiceclone
 
 EmitFn = Callable[..., Awaitable[int]]
 AbortCheck = Callable[[], None]
@@ -186,11 +188,14 @@ async def run_react(
     slash_fill_first: bool,
     prior: ReactArtifact | None = None,
     extra_tools: list[str] | None = None,
+    text: str = "",
+    attachments: list[str] | None = None,
 ) -> ReactArtifact:
     """串行执行短工具，发出成对 tool_call / tool_result。
 
     ``prior`` + ``extra_tools`` 用于补规划后继续执行尚未跑过的工具，
     轮次计入同一 ``max_tool_rounds`` 硬顶（默认 4，硬顶 5）。
+    ``text`` / ``attachments`` 仅 ``audio.voiceclone`` 使用，file_id 取自本轮附件。
     """
     react = prior or ReactArtifact()
     # 预留并行开关：M1 强制串行，打开后仍须保证事件成对
@@ -198,6 +203,7 @@ async def run_react(
     rounds_cap = min(int(plan.budget.get("max_tool_rounds") or DEFAULT_TOOL_ROUNDS), HARD_MAX_TOOL_ROUNDS)
     queue = list(extra_tools if extra_tools is not None else plan.tools_needed)
     executed = react.rounds_used
+    turn_attachments = list(attachments or [])
 
     if not queue:
         react.proposed_spec = build_proposed_spec(plan, react, slash_fill_first=slash_fill_first)
@@ -224,8 +230,21 @@ async def run_react(
             )
             continue
 
-        await emit("tool_call", {"name": name, "arguments": {}})
-        ok, data, error, latency_ms = execute_short_tool(db, name, {}, user_id=user_id, allow_create=False)
+        arguments: dict[str, Any] = {}
+        if name == "audio.voiceclone":
+            arguments = arguments_for_voiceclone(db, text=text, attachments=turn_attachments)
+        await emit("tool_call", {"name": name, "arguments": arguments})
+        if name == "audio.voiceclone":
+            ok, data, error, latency_ms = await asyncio.to_thread(
+                _execute_short_tool_isolated,
+                name,
+                arguments,
+                user_id,
+            )
+        else:
+            ok, data, error, latency_ms = execute_short_tool(
+                db, name, arguments, user_id=user_id, allow_create=False
+            )
         payload: dict[str, Any] = {"name": name, "ok": ok, "latency_ms": latency_ms}
         if ok:
             payload["data"] = data
@@ -249,6 +268,21 @@ async def run_react(
     if react.proposed_spec is None:
         react.proposed_spec = build_proposed_spec(plan, react, slash_fill_first=slash_fill_first)
     return react
+
+
+def _execute_short_tool_isolated(
+    name: str,
+    arguments: dict,
+    user_id: str,
+) -> tuple[bool, Any, str | None, int]:
+    """耗时短工具用独立会话在线程里跑，避免阻塞事件循环时共用 Harness 会话。"""
+    from ..db import SessionLocal
+
+    isolated = SessionLocal()
+    try:
+        return execute_short_tool(isolated, name, arguments, user_id=user_id, allow_create=False)
+    finally:
+        isolated.close()
 
 
 def apply_replan(raw: dict, plan: PlanArtifact) -> PlanArtifact:

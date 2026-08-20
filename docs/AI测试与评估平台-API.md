@@ -2,14 +2,14 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.8 |
+| 文档版本 | V1.9 |
 | 对应 PRD | V1.7.0（功能唯一权威） |
 | 对应设计规范 | V1.3（错误码文案、确认卡字段名、调度中心规范） |
-| 对应 Agent 说明书 | V1.3（Harness / 斜杠 / 上下文算法；JSON 仍以本文为准） |
+| 对应 Agent 说明书 | V1.4（Harness / 斜杠 / 上下文算法；JSON 仍以本文为准） |
 | 对应前端计划 | V1.3 |
 | 对应后端计划 | V1.3 |
 | 撰写日期 | 2026-08-18 |
-| 最近修订 | 2026-08-20：V1.8 助手回复耗时展示；用例工作台 Excel 导入（三种表头）/模板下载，映射回写 context 与 source_case_id |
+| 最近修订 | 2026-08-20：V1.9 短工具 `audio.voiceclone` 与 `GET /api/files/{id}/content`；V1.8 助手回复耗时展示；用例工作台 Excel 导入 |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
 ---
@@ -111,7 +111,7 @@ WS `error` 事件 payload 与上表同一套 `code` + `message`（可带 `fields
 | `metric` | `exact` `contain` `regex` `rouge_l` `bleu` |
 | `rag_mode` | `naive` `local` `global` `hybrid` |
 | `stress_env` | `dev` `test` `staging` `prod` |
-| `file_kind` 扩展名 | `.md` `.txt` `.html` `.pdf` `.json` `.yaml` `.yml` `.xlsx` `.xls` `.csv` `.jsonl` |
+| `file_kind` 扩展名 | `.md` `.txt` `.html` `.pdf` `.json` `.yaml` `.yml` `.xlsx` `.xls` `.csv` `.jsonl` `.wav` `.mp3` |
 
 ---
 
@@ -481,7 +481,11 @@ body：`{ "name", "hint", "template" }`。
 
 #### `GET /api/files/{id}`
 
-元数据，同 POST 响应。不回文件二进制。下载如需要：`GET /api/files/{id}/content`（登录，M1 可选；用例导出走 case-sets export）。
+元数据，同 POST 响应。不回文件二进制。
+
+#### `GET /api/files/{id}/content`
+
+登录后返回文件二进制（`Content-Disposition: inline`），供浏览器 `<audio>` 播放或下载。未登录 `UNAUTHORIZED`；不存在 `NOT_FOUND`。路径不回显内部存储位置。Agent 音色克隆短工具的 `content_url` 指向本接口。
 
 ---
 
@@ -546,7 +550,7 @@ item：`id, name, protocol, base_url, model, usages[], created_at`
 
 #### `GET /api/mcp/tools`
 
-获取当前智能体环境中受控的**内置**短工具清单（`model.list`, `dataset.list`, `kb.list`, `task.get`, `report.get`, `task.create`, `task.cancel`, `dispatch.overview`）及权限级别（`read / write`）。
+获取当前智能体环境中受控的**内置**短工具清单（`model.list`, `dataset.list`, `kb.list`, `task.get`, `report.get`, `task.create`, `task.cancel`, `dispatch.overview`, `testcase.confirm`, `audio.voiceclone`）及权限级别（`read / write`）。
 
 ```json
 {
@@ -1271,6 +1275,7 @@ Pub/Sub，不能假定跨进程实时可见。
 | `task.cancel` | 取消任务 |
 | `testcase.confirm` | 确认用例入库 |
 | `dispatch.overview` | 调度概览 |
+| `audio.voiceclone` | 音色克隆配音 |
 
 长工具不由 Agent 进程跑完；前端只收 `progress` / `report` / `error`。
 
@@ -1377,6 +1382,7 @@ Agent Host 与 worker 共用。入参/出参与 PRD 5.5 一致。错误码同 §
 | `task.create` | 短 | TaskSpec | `task_id`；仅 `confirm_ack.ok=true` 后 | M1 |
 | `task.cancel` | 短 | `task_id` | `{ok}` | M1 |
 | `dispatch.overview` | 短 | — | Worker 数 / 队列 / 策略（与 `GET /api/dispatch/overview` 同源摘要） | M1 迷你轨 |
+| `audio.voiceclone` | 短 | `text`（朗读稿，必填）；`file_id`（本轮 wav/mp3 参考音，缺省取本轮最后一段音频附件）；`style?`（可选语气，对应上游 user 消息） | `{file_id, filename, content_type, size, content_url}`；`content_url` 为 `/api/files/{id}/content`。禁止把音频 base64 写入 `tool_result` | 对话同步 |
 | `testcase.generate` | 长 | `file_id` 或 `text` | `case_set_id` | M2 |
 | `testcase.confirm` | 短 | `case_set_id, edits?` | 状态 succeeded | M2 |
 | `benchmark.run` | 长 | TaskSpec 评测段 | `report_id` | M2（M1 mock） |
@@ -1495,6 +1501,7 @@ JSON Schema 冻结点：短工具 M1 W4；评测长工具 M2 W6；RAG M3 W10；s
 - `POST /api/kb/{id}/gold-qa`
 - `DELETE /api/kb/{id}/documents/{doc_id}`
 - `GET /api/files/{id}`  
+- `GET /api/files/{id}/content`  
 
 后端计划多出的 `GET /api/admin/audit-logs`、`GET /api/health`：前端不强制调用，一致。
 
@@ -1656,3 +1663,19 @@ MCP 浏览器不调：与 PRD 3.1、前端计划「禁止把 MCP 当 REST」一�
 | `frontend/src/components/modals/ImportCasesExcelModal.vue` | 用例工作台 Excel 导入弹窗 |
 | `frontend/src/views/Cases.vue` | 导入导出入口、目录持久化、72h 按 expires_at 展示 |
 | `frontend/src/api/http.ts` / `frontend/src/api/types.ts` | 导入、模板、目录树客户端 |
+
+**V1.9（2026-08-20）— 音色克隆短工具**
+
+对话附件上传 wav/mp3 后，Agent 调用内部短工具 `audio.voiceclone`（MIMO `mimo-v2.5-tts-voiceclone`，OpenAI `chat/completions` 兼容）。合成音频落盘，`tool_result` 只回 `file_id` 与 `content_url`，浏览器经 `GET /api/files/{id}/content` 播放。环境变量 `MIMO_TTS_BASE_URL` / `MIMO_TTS_API_KEY` / `MIMO_TTS_MODEL` 注入 API 容器，禁止把 Key 写入仓库或日志。
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/agent/voiceclone.py` | MIMO 调用、参考音校验、规划注入 |
+| `backend/api/app/agent/mcp_tools.py` / `defaults.py` / `routers/mcp.py` | 短工具名单与执行 |
+| `backend/api/app/agent/plan.py` / `react.py` / `harness.py` | 注入工具、传入本轮附件、独立线程执行、交付句 |
+| `backend/api/app/routers/files.py` | 允许 wav/mp3；实现 `GET /{id}/content` |
+| `backend/api/app/config.py` / `.env.example` / `docker-compose.yml` | MIMO TTS 环境变量 |
+| `backend/api/tests/test_voiceclone.py` | 规划注入与假上游落盘单测 |
+| `frontend/src/views/Agent.vue` | 附件白名单、工具卡播放器 |
+| `docs/AI测试与评估平台-Agent开发文档.md` | 短工具表与墙钟 180s |
+
