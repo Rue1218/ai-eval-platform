@@ -1332,7 +1332,7 @@ function getToolDisplayName(name?: string) {
     'task.create': '创建任务',
     'task.cancel': '取消任务',
     'testcase.confirm': '确认用例入库',
-    'audio.voiceclone': '音色克隆配音',
+    'audio.voiceclone': '语音合成',
   }
   return (name && names[name]) || name || '调用工具'
 }

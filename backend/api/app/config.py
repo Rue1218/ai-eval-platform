@@ -18,10 +18,12 @@ class Settings(BaseSettings):
     profile_env_file: str = ".env"
     cookie_secure: bool = False
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
-    # 音色克隆（MIMO TTS，OpenAI chat/completions 兼容）。Key 只从环境注入，禁止回显。
+    # 语音合成（MIMO TTS，OpenAI chat/completions 兼容）。Key 只从环境注入，禁止回显。
     mimo_tts_base_url: str = "https://token-plan-cn.xiaomimimo.com/v1"
     mimo_tts_api_key: str = ""
     mimo_tts_model: str = "mimo-v2.5-tts-voiceclone"
+    mimo_tts_speech_model: str = "mimo-v2.5-tts"
+    mimo_tts_voice: str = "mimo_default"
     mimo_tts_timeout_s: float = 90.0
 
     @property

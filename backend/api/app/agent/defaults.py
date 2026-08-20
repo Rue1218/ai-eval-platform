@@ -95,7 +95,7 @@ TOOL_TITLES: dict[str, str] = {
     "task.cancel": "取消任务",
     "dispatch.overview": "调度概览",
     "testcase.confirm": "确认用例入库",
-    "audio.voiceclone": "音色克隆配音",
+    "audio.voiceclone": "语音合成",
 }
 
 # 各 kind 必填槽位（G2）；with_stress 另要求 stress 段

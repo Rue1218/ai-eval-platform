@@ -2,14 +2,14 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.10 |
+| 文档版本 | V1.11 |
 | 对应 PRD | V1.7.0（功能唯一权威） |
 | 对应设计规范 | V1.3（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | V1.4（Harness / 斜杠 / 上下文算法；JSON 仍以本文为准） |
 | 对应前端计划 | V1.3 |
 | 对应后端计划 | V1.3 |
 | 撰写日期 | 2026-08-18 |
-| 最近修订 | 2026-08-20：V1.10 MCP 工具中心展示独立 Qwen Image 工具；V1.9 短工具 `audio.voiceclone` 与 `GET /api/files/{id}/content`；V1.8 助手回复耗时展示；用例工作台 Excel 导入 |
+| 最近修订 | 2026-08-20：V1.11 `audio.voiceclone` 支持无附件文本转语音；V1.10 MCP 工具中心展示独立 Qwen Image 工具；V1.9 短工具 `audio.voiceclone` |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
 ---
@@ -1275,7 +1275,7 @@ Pub/Sub，不能假定跨进程实时可见。
 | `task.cancel` | 取消任务 |
 | `testcase.confirm` | 确认用例入库 |
 | `dispatch.overview` | 调度概览 |
-| `audio.voiceclone` | 音色克隆配音 |
+| `audio.voiceclone` | 语音合成 |
 
 长工具不由 Agent 进程跑完；前端只收 `progress` / `report` / `error`。
 
@@ -1382,7 +1382,7 @@ Agent Host 与 worker 共用。入参/出参与 PRD 5.5 一致。错误码同 §
 | `task.create` | 短 | TaskSpec | `task_id`；仅 `confirm_ack.ok=true` 后 | M1 |
 | `task.cancel` | 短 | `task_id` | `{ok}` | M1 |
 | `dispatch.overview` | 短 | — | Worker 数 / 队列 / 策略（与 `GET /api/dispatch/overview` 同源摘要） | M1 迷你轨 |
-| `audio.voiceclone` | 短 | `text`（朗读稿，必填）；`file_id`（本轮 wav/mp3 参考音，缺省取本轮最后一段音频附件）；`style?`（可选语气，对应上游 user 消息） | `{file_id, filename, content_type, size, content_url}`；`content_url` 为 `/api/files/{id}/content`。禁止把音频 base64 写入 `tool_result` | 对话同步 |
+| `audio.voiceclone` | 短 | `text`（朗读稿，必填）；`file_id?`（本轮 wav/mp3 参考音，缺省取本轮最后一段音频附件；无附件则用内置音色 `mimo-v2.5-tts` / `mimo_default`）；`style?`（可选语气，对应上游 user 消息） | `{file_id, filename, content_type, size, content_url}`；`content_url` 为 `/api/files/{id}/content`。禁止把音频 base64 写入 `tool_result` | 对话同步 |
 | `testcase.generate` | 长 | `file_id` 或 `text` | `case_set_id` | M2 |
 | `testcase.confirm` | 短 | `case_set_id, edits?` | 状态 succeeded | M2 |
 | `benchmark.run` | 长 | TaskSpec 评测段 | `report_id` | M2（M1 mock） |
@@ -1688,4 +1688,16 @@ MCP 浏览器不调：与 PRD 3.1、前端计划「禁止把 MCP 当 REST」一�
 | `backend/api/app/routers/mcp.py` / `backend/api/tests/test_dispatch.py` | 注册并校验 `image.generate` 的未挂载状态 |
 | `frontend/src/api/mockData.ts` / `frontend/src/views/AdminProfiles.vue` | 增加图像生成领域、未挂载状态展示与统计 |
 | `frontend/src/components/modals/McpToolModal.vue` | 增加图像生成工具契约详情 |
+
+**V1.11（2026-08-20）— 文本转语音（无参考音）**
+
+自然语言如「帮我输出音频：……」即可调用 `audio.voiceclone`：无 wav/mp3 附件时走 MIMO `mimo-v2.5-tts` 内置音色 `mimo_default`；有参考音时仍走 `mimo-v2.5-tts-voiceclone`。环境变量可加 `MIMO_TTS_SPEECH_MODEL` / `MIMO_TTS_VOICE`。
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/agent/voiceclone.py` | 朗读稿抽取、无附件走内置音色 |
+| `backend/api/app/config.py` / `.env.example` / `docker-compose.yml` | 内置音色模型与 voice |
+| `backend/api/tests/test_voiceclone.py` | 纯文本注入与假上游落盘 |
+| `docs/AI测试与评估平台-Agent开发文档.md` | 短工具入参 `file_id` 可选 |
+
 

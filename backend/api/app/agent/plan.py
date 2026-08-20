@@ -455,7 +455,7 @@ def run_plan(
     """产出 PlanArtifact：斜杠模板 / LLM / 重试 / L0。"""
 
     def _finish(plan: PlanArtifact, *, slash: bool = False) -> PlanArtifact:
-        """挂偏好后，自然语言回合按本轮附件注入音色克隆短工具。"""
+        """挂偏好后，自然语言回合按原文/附件注入语音合成短工具。"""
         plan = _attach_prefs(plan, prefs)
         if slash:
             return plan

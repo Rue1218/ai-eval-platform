@@ -92,7 +92,7 @@ const toolNameMap: Record<string, string> = {
   'report.get': '读取评测报告',
   'dispatch.overview': '调度概览',
   'testcase.confirm': '确认用例入库',
-  'audio.voiceclone': '音色克隆配音',
+  'audio.voiceclone': '语音合成',
   // 兼容旧下划线命名
   list_profiles: '列出协议档',
   get_profile: '获取协议档详情',

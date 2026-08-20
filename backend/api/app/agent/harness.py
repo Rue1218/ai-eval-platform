@@ -545,10 +545,10 @@ async def _run_turn(
                     db,
                     session.id,
                     emit,
-                    "已用参考音频合成配音，可在工具卡中播放或下载。",
+                    "已合成语音，可在工具卡中播放或下载。",
                 )
             else:
-                err = (clone_obs.get("data_summary") or {}).get("error") or "音色合成失败"
+                err = (clone_obs.get("data_summary") or {}).get("error") or "语音合成失败"
                 await _deliver_sentence(db, session.id, emit, err)
             return
         reply = await _chat_reply(

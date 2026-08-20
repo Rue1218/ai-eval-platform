@@ -194,7 +194,8 @@ async def run_react(
 
     ``prior`` + ``extra_tools`` 用于补规划后继续执行尚未跑过的工具，
     轮次计入同一 ``max_tool_rounds`` 硬顶（默认 4，硬顶 5）。
-    ``text`` / ``attachments`` 仅 ``audio.voiceclone`` 使用，file_id 取自本轮附件。
+    ``text`` / ``attachments`` 仅 ``audio.voiceclone`` 使用：朗读稿从原文抽取，
+    ``file_id`` 仅在本轮确有音频附件时填入。
     """
     react = prior or ReactArtifact()
     # 预留并行开关：M1 强制串行，打开后仍须保证事件成对

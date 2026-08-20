@@ -25,7 +25,7 @@ BUILTIN_TOOLS: list[McpToolOut] = [
     McpToolOut(name="testcase.confirm", desc="确认用例入库", permission="write", enabled=True),
     McpToolOut(
         name="audio.voiceclone",
-        desc="用本轮 wav/mp3 参考音频克隆音色并合成配音",
+        desc="把文本合成语音；附 wav/mp3 时克隆该音色，否则用内置音色",
         permission="write",
         enabled=True,
     ),

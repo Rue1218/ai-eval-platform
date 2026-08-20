@@ -309,6 +309,28 @@ const TOOL_META_MAP: Record<string, ToolMeta> = {
     }, null, 2),
     securityNote: '受控写入工具 (WRITE)。将 AI 提炼生成的候选 PRD 测试用例持久化转正为可复用的标准用例库。',
   },
+  'audio.voiceclone': {
+    icon: '🔊',
+    domain: '语音合成',
+    latency: '上游 10–90s',
+    params: [
+      { name: 'text', type: 'string', required: true, desc: '要朗读的文本（对话里从「帮我输出音频：…」抽取）' },
+      { name: 'file_id', type: 'string', required: false, desc: '本轮 wav/mp3 参考音；缺省走内置音色 mimo_default' },
+      { name: 'style', type: 'string', required: false, desc: '可选语气/风格，对应上游 user 消息' },
+    ],
+    exampleRequest: JSON.stringify({
+      name: 'audio.voiceclone',
+      arguments: { text: '欢迎使用评测平台' },
+    }, null, 2),
+    exampleResponse: JSON.stringify({
+      file_id: 'f-tts-1',
+      filename: 'tts.wav',
+      content_type: 'audio/wav',
+      size: 48000,
+      content_url: '/api/files/f-tts-1/content',
+    }, null, 2),
+    securityNote: '受控写入工具 (WRITE)。合成音频落盘后只回 file_id，禁止把音频 base64 写入工具观察。',
+  },
   'image.generate': {
     icon: '🖼️',
     domain: '图像生成',

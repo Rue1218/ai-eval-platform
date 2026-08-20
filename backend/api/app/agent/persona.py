@@ -21,8 +21,8 @@ PLAN_JSON_SUFFIX = (
     "只输出一个 JSON 对象，不要 Markdown 围栏。字段：intent, skill_id, slots, "
     "tools_needed, delivery, budget, notes。intent 不得为 stress；先评后压把 "
     "slots.filled.with_stress 置 true，kind 仍为 benchmark 或 rag。"
-    "本轮若用户上传了 wav/mp3 参考音频并要求配音，tools_needed 可含 "
-    "audio.voiceclone；file_id 由系统从本轮附件填写，禁止编造。"
+    "用户要求把文本读成语音时 tools_needed 可含 audio.voiceclone；"
+    "有 wav/mp3 附件则克隆该音色，否则用内置音色。file_id 由系统从本轮附件填写，禁止编造。"
 )
 
 # 规划 JSON 解析失败后的唯一重试附加指令

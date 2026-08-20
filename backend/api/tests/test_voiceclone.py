@@ -15,6 +15,7 @@ from app.agent.voiceclone import (
     _completions_url,
     _decode_audio_b64,
     arguments_for_voiceclone,
+    extract_tts_text,
     inject_voiceclone_plan,
 )
 from app.errors import AppError, ErrorCode
@@ -112,6 +113,29 @@ def test_inject_voiceclone_clarify_without_text(tmp_path):
     assert "参考音频" in out.notes
 
 
+def test_extract_tts_text_strips_command_prefix():
+    assert extract_tts_text("帮我输出音频：欢迎使用评测平台") == "欢迎使用评测平台"
+    assert extract_tts_text("朗读「你好」") == "你好"
+    assert extract_tts_text("帮我输出音频") == ""
+
+
+def test_inject_tts_text_only_uses_builtin_voice():
+    plan = l0_plan("帮我输出音频：欢迎使用评测平台")
+    out = inject_voiceclone_plan(_AudioDb(None), plan, text="帮我输出音频：欢迎使用评测平台", attachments=[])
+    assert out.intent == "chat"
+    assert out.delivery == "text"
+    assert out.tools_needed == ["audio.voiceclone"]
+    assert "内置音色" in out.notes
+
+
+def test_inject_tts_clarify_when_text_missing():
+    plan = l0_plan("帮我输出音频")
+    out = inject_voiceclone_plan(_AudioDb(None), plan, text="帮我输出音频", attachments=[])
+    assert out.delivery == "clarify"
+    assert out.tools_needed == []
+    assert "朗读" in out.notes
+
+
 def test_inject_voiceclone_clarify_without_audio():
     plan = l0_plan("帮我克隆音色朗读这段话")
     out = inject_voiceclone_plan(_AudioDb(None), plan, text="帮我克隆音色朗读这段话", attachments=[])
@@ -125,6 +149,24 @@ def test_inject_skips_real_benchmark(tmp_path):
     out = inject_voiceclone_plan(_AudioDb(row), plan, text="帮我评一下这两个模型", attachments=[row.id])
     assert out.intent == "benchmark"
     assert "audio.voiceclone" not in out.tools_needed
+
+
+def test_run_plan_text_tts_skips_planner(monkeypatch):
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("纯文本语音合成不应调用规划模型")
+
+    monkeypatch.setattr("app.agent.plan._call_plan_model", _boom)
+    plan = run_plan(
+        _AudioDb(None),
+        text="帮我输出音频：欢迎使用评测平台",
+        parsed=parse_slash("帮我输出音频：欢迎使用评测平台"),
+        history=[],
+        prefs={},
+        attachments=[],
+        budget=TurnBudget(),
+    )
+    assert plan.intent == "chat"
+    assert plan.tools_needed == ["audio.voiceclone"]
 
 
 def test_run_plan_greeting_with_audio_injects_tool(tmp_path, monkeypatch):
@@ -166,6 +208,30 @@ def test_execute_voiceclone_persists_file_without_audio_payload(tmp_path, monkey
     assert collect_ids(data) == [data["file_id"]]
     saved = (tmp_path / "data" / "files" / data["file_id"]).read_bytes()
     assert saved == b"SYNTH-WAV"
+
+
+def test_execute_tts_without_reference_audio(tmp_path, monkeypatch):
+    captured: dict = {}
+
+    def _fake_synth(**kwargs):
+        captured.update(kwargs)
+        return b"TTS-WAV"
+
+    monkeypatch.setattr("app.agent.voiceclone.settings.data_dir", str(tmp_path / "data"))
+    monkeypatch.setattr("app.agent.voiceclone.synthesize_wav", _fake_synth)
+    ok, data, error, _latency = execute_short_tool(
+        _AudioDb(None),
+        "audio.voiceclone",
+        {"text": "欢迎使用评测平台"},
+        user_id="u1",
+    )
+    assert ok is True
+    assert error is None
+    assert data["filename"] == "tts.wav"
+    assert captured["text"] == "欢迎使用评测平台"
+    assert captured.get("ref_bytes") is None
+    saved = (tmp_path / "data" / "files" / data["file_id"]).read_bytes()
+    assert saved == b"TTS-WAV"
 
 
 def test_execute_voiceclone_requires_config(monkeypatch):
@@ -220,4 +286,6 @@ def test_run_react_passes_voiceclone_arguments(tmp_path, monkeypatch):
     assert captured["arguments"]["file_id"] == row.id
     assert events[0][0] == "tool_call"
     assert events[0][1]["arguments"]["file_id"] == row.id
+    assert "file_id" not in arguments_for_voiceclone(_AudioDb(None), text="帮我输出音频：你好", attachments=[])
+    assert arguments_for_voiceclone(_AudioDb(None), text="帮我输出音频：你好", attachments=[])["text"] == "你好"
     assert arguments_for_voiceclone(_AudioDb(row), text="欢迎使用", attachments=[row.id])["file_id"] == row.id
