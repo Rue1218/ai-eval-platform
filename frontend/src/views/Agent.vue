@@ -155,23 +155,15 @@
               <span class="tdot"></span><span class="tdot"></span><span class="tdot"></span>
             </div>
 
-            <!-- 2.2 思考卡：推理模型思考链流式展示，完成后自动折叠，可展开/收起 -->
-            <div v-else-if="item.type === 'thought'" class="think-card" :class="{ done: item.done }">
-              <button class="think-head" type="button" @click="item.collapsed = !item.collapsed">
-                <span class="think-dot" v-if="!item.done"></span>
-                <span class="think-label">{{ item.done ? '已思考' : '思考中' }}</span>
-                <SkillBadge v-if="item.skill_id" :skill-id="item.skill_id" />
-                <span v-if="formatLatency(item.latency_ms)" class="think-latency mono">{{ formatLatency(item.latency_ms) }}</span>
-                <span class="think-meta">{{ (item.text || '').length }} 字</span>
-                <svg class="think-caret" :class="{ open: !item.collapsed }" viewBox="0 0 12 12" width="12" height="12">
-                  <path d="M2 4l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
-                </svg>
-              </button>
-              <div v-show="!item.collapsed" class="think-body">
-                <MarkdownView :content="item.text || ''" />
-                <span v-if="!item.done" class="think-cursor">▍</span>
-              </div>
-            </div>
+            <!-- 2.2 思考卡：深度思考链流式展示，完成后自动折叠，可展开/收起 -->
+            <ThoughtCard
+              v-else-if="item.type === 'thought'"
+              :text="item.text || ''"
+              :done="item.done"
+              :latency-ms="item.latency_ms"
+              :skill-id="item.skill_id"
+              :stage="item.stage"
+            />
 
             <!-- 2.3 短 MCP 工具调用卡 -->
             <div
@@ -764,6 +756,7 @@ import KindTag from '../components/common/KindTag.vue'
 import { formatLatency } from '../utils/format'
 import { skillLabel } from '../agent/skillLabels'
 import SkillBadge from '../components/agent/SkillBadge.vue'
+import ThoughtCard from '../components/agent/ThoughtCard.vue'
 import MarkdownView from '../components/agent/MarkdownView.vue'
 import SlashPalette from '../components/agent/SlashPalette.vue'
 import ContextMeter, { type ContextMeterData } from '../components/agent/ContextMeter.vue'
