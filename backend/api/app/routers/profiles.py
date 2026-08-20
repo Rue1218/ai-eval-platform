@@ -5,27 +5,112 @@ from fastapi import Request as FastApiRequest
 from sqlalchemy.orm import Session
 
 from ..adapters import call_protocol, fetch_remote_models
+from ..agent.log import agent_trace
 from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
 from ..models import AuditLog, ProtocolProfile, Setting, User
+from ..profile_env import (
+    ProfileEnvSnapshot,
+    read_global_llm_env,
+    read_profile_env,
+    remove_profile_env,
+    restore_snapshot,
+    write_profile_env,
+)
 from ..schemas import FetchModelsIn, ProfileCreate, ProfileOut, ProfileUpdate
-from ..security import decrypt_secret, encrypt_secret
+from ..security import decrypt_secret
 
 router = APIRouter(prefix="/api/profiles", tags=["profiles"])
 
 
-def _profile_out(profile: ProtocolProfile) -> ProfileOut:
-    """构造永不回显 Key 的协议档响应。"""
+def _legacy_api_key(profile: ProtocolProfile) -> str | None:
+    """兼容迁移前的历史密文；新建和更新协议档不会再写入该列。"""
+    if not profile.encrypted_key:
+        return None
+    try:
+        return decrypt_secret(profile.encrypted_key)
+    except AppError:
+        raise
+    except Exception as exc:
+        agent_trace(f"协议档历史密文解密失败 type={type(exc).__name__}")
+        raise AppError(ErrorCode.INTERNAL, "协议档凭据读取失败") from exc
+
+
+def _profile_connection(
+    profile: ProtocolProfile,
+    *,
+    allow_global_alias: bool = False,
+) -> tuple[str, str, str | None]:
+    """读取环境文件中的 URL、模型 ID、Key，历史密文仅作一次性回退。"""
+    try:
+        env_values = read_profile_env(profile.id)
+        global_values = read_global_llm_env()
+        profile_env_configured = any((env_values.base_url, env_values.model, env_values.api_key))
+        global_base_url = (
+            global_values.anthropic_base_url
+            if profile.protocol == "anthropic_messages"
+            else global_values.openai_base_url
+        )
+        return (
+            env_values.base_url
+            or (global_base_url if allow_global_alias and not profile_env_configured else None)
+            or profile.base_url,
+            env_values.model
+            or (global_values.model if allow_global_alias and not profile_env_configured else None)
+            or profile.model,
+            env_values.api_key
+            or (global_values.api_key if allow_global_alias and not profile_env_configured else None)
+            or _legacy_api_key(profile),
+        )
+    except AppError:
+        raise
+    except Exception as exc:
+        agent_trace(f"协议档环境配置读取失败 type={type(exc).__name__}")
+        raise AppError(ErrorCode.INTERNAL, "协议档环境配置读取失败") from exc
+
+
+def _migrate_profile_to_env(profile: ProtocolProfile) -> ProfileEnvSnapshot | None:
+    """把历史数据库字段迁移到环境文件并清空历史密文列。"""
+    env_values = read_profile_env(profile.id)
+    global_values = read_global_llm_env()
+    global_base_url = (
+        global_values.anthropic_base_url
+        if profile.protocol == "anthropic_messages"
+        else global_values.openai_base_url
+    )
+    legacy_key = (
+        _legacy_api_key(profile)
+        if not env_values.api_key and not global_values.api_key
+        else None
+    )
+    updates: dict[str, str] = {}
+    if not env_values.base_url and not global_base_url and profile.base_url:
+        updates["base_url"] = profile.base_url
+    if not env_values.model and not global_values.model and profile.model:
+        updates["model"] = profile.model
+    if not env_values.api_key and not global_values.api_key and legacy_key:
+        updates["api_key"] = legacy_key
+    snapshot = None
+    if updates:
+        snapshot = write_profile_env(profile.id, **updates)
+    if profile.encrypted_key:
+        profile.encrypted_key = None
+    return snapshot
+
+
+def _profile_out(profile: ProtocolProfile, connection: tuple[str, str, str | None] | None = None) -> ProfileOut:
+    """构造永不回显 Key 的协议档响应，连接参数以环境文件为准。"""
+    base_url, model, api_key = connection or _profile_connection(profile)
     return ProfileOut(
         id=profile.id,
         name=profile.name,
         protocol=profile.protocol,
-        base_url=profile.base_url,
-        model=profile.model,
+        base_url=base_url,
+        model=model,
         usages=profile.usages or [],
         anthropic_version=profile.anthropic_version,
-        has_api_key=bool(profile.encrypted_key),
+        has_api_key=bool(api_key),
         context_window=getattr(profile, "context_window", 200000) or 200000,
         created_at=profile.created_at,
         updated_at=profile.updated_at,
@@ -42,9 +127,28 @@ def list_profiles(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """列出所有协议档的非敏感发现信息。"""
+    """列出协议档，并将旧数据库参数一次性迁移到环境文件。"""
     rows = db.query(ProtocolProfile).order_by(ProtocolProfile.created_at.desc()).all()
-    return {"items": [_profile_out(row).model_dump(mode="json") for row in rows], "total": len(rows)}
+    snapshots: list[ProfileEnvSnapshot] = []
+    db_changed = False
+    try:
+        for row in rows:
+            had_legacy_key = bool(row.encrypted_key)
+            snapshot = _migrate_profile_to_env(row)
+            if snapshot:
+                snapshots.append(snapshot)
+            db_changed = db_changed or had_legacy_key or bool(snapshot)
+        if db_changed:
+            db.commit()
+    except Exception as exc:
+        db.rollback()
+        for snapshot in reversed(snapshots):
+            restore_snapshot(snapshot)
+        raise AppError(ErrorCode.INTERNAL, "协议档环境配置读写失败") from exc
+    return {
+        "items": [_profile_out(row).model_dump(mode="json") for row in rows],
+        "total": len(rows),
+    }
 
 
 @router.get("/{profile_id}", response_model=ProfileOut)
@@ -57,6 +161,17 @@ def get_profile(
     profile = db.query(ProtocolProfile).filter(ProtocolProfile.id == profile_id).first()
     if not profile:
         raise AppError(ErrorCode.NOT_FOUND, "协议档不存在")
+    snapshot = None
+    had_legacy_key = bool(profile.encrypted_key)
+    try:
+        snapshot = _migrate_profile_to_env(profile)
+        if snapshot or had_legacy_key:
+            db.commit()
+    except Exception as exc:
+        db.rollback()
+        if snapshot:
+            restore_snapshot(snapshot)
+        raise AppError(ErrorCode.INTERNAL, "协议档环境配置读写失败") from exc
     return _profile_out(profile)
 
 
@@ -67,7 +182,7 @@ def create_profile(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """创建协议档并将可选 API Key 加密后写入数据库。"""
+    """创建协议档并把 URL、模型 ID、API Key 写入受控环境文件。"""
     profile = ProtocolProfile(
         name=body.name,
         protocol=body.protocol,
@@ -75,24 +190,40 @@ def create_profile(
         model=body.model,
         usages=body.usages,
         anthropic_version=body.anthropic_version,
-        encrypted_key=encrypt_secret(body.api_key) if body.api_key else None,
+        # API Key 严禁写入数据库；这里只保留数据库模型兼容列的空值。
+        encrypted_key=None,
         context_window=body.context_window,
         created_by=user.id,
     )
     db.add(profile)
-    db.flush()
-    db.add(
-        AuditLog(
-            user_id=user.id,
-            action="key_change" if body.api_key else "profile_create",
-            target_type="profile",
-            target_id=profile.id,
-            detail={"name": profile.name, "has_api_key": bool(body.api_key)},
-            ip=_request_ip(request),
+    snapshot: ProfileEnvSnapshot | None = None
+    try:
+        db.flush()
+        snapshot = write_profile_env(
+            profile.id,
+            base_url=str(body.base_url).rstrip("/"),
+            model=body.model,
+            api_key=body.api_key or None,
+            protocol=body.protocol,
+            write_global_aliases=True,
         )
-    )
-    db.commit()
-    db.refresh(profile)
+        db.add(
+            AuditLog(
+                user_id=user.id,
+                action="key_change" if body.api_key else "profile_create",
+                target_type="profile",
+                target_id=profile.id,
+                detail={"name": profile.name, "has_api_key": bool(body.api_key)},
+                ip=_request_ip(request),
+            )
+        )
+        db.commit()
+        db.refresh(profile)
+    except Exception as exc:
+        db.rollback()
+        if snapshot:
+            restore_snapshot(snapshot)
+        raise AppError(ErrorCode.INTERNAL, "协议档环境配置写入失败") from exc
     return _profile_out(profile)
 
 
@@ -104,30 +235,54 @@ def update_profile(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """更新协议档公开字段，并在有新 Key 时替换密文。"""
+    """更新协议档并安全刷新环境文件中的 URL、模型 ID、API Key。"""
     profile = db.query(ProtocolProfile).filter(ProtocolProfile.id == profile_id).first()
     if not profile:
         raise AppError(ErrorCode.NOT_FOUND, "协议档不存在")
     values = body.model_dump(exclude_unset=True)
     api_key = values.pop("api_key", None)
+    # 编辑旧单模型环境配置时允许从全局别名读取一次，随后固化为本 profile 变量。
+    current_base_url, current_model, current_api_key = _profile_connection(profile, allow_global_alias=True)
+    next_base_url = current_base_url
+    next_model = current_model
+    if values.get("base_url") is not None:
+        next_base_url = str(values["base_url"]).rstrip("/")
+    if values.get("model") is not None:
+        next_model = values["model"]
+    next_api_key = api_key or current_api_key
+    snapshot: ProfileEnvSnapshot | None = None
     for field, value in values.items():
         if field == "base_url" and value is not None:
             value = str(value).rstrip("/")
         setattr(profile, field, value)
-    if api_key:
-        profile.encrypted_key = encrypt_secret(api_key)
-    db.add(
-        AuditLog(
-            user_id=user.id,
-            action="key_change" if api_key else "profile_update",
-            target_type="profile",
-            target_id=profile.id,
-            detail={"name": profile.name, "has_api_key": bool(api_key)},
-            ip=_request_ip(request),
+    profile.encrypted_key = None
+    try:
+        snapshot = write_profile_env(
+            profile.id,
+            base_url=next_base_url,
+            model=next_model,
+            # 编辑其它字段时保留现有 Key，并把旧全局/历史密文 Key 固化到本 profile 变量。
+            api_key=next_api_key,
+            protocol=profile.protocol,
+            write_global_aliases=True,
         )
-    )
-    db.commit()
-    db.refresh(profile)
+        db.add(
+            AuditLog(
+                user_id=user.id,
+                action="key_change" if api_key else "profile_update",
+                target_type="profile",
+                target_id=profile.id,
+                detail={"name": profile.name, "has_api_key": bool(next_api_key)},
+                ip=_request_ip(request),
+            )
+        )
+        db.commit()
+        db.refresh(profile)
+    except Exception as exc:
+        db.rollback()
+        if snapshot:
+            restore_snapshot(snapshot)
+        raise AppError(ErrorCode.INTERNAL, "协议档环境配置写入失败") from exc
     return _profile_out(profile)
 
 
@@ -146,18 +301,26 @@ def delete_profile(
     setting_row = db.query(Setting).filter(Setting.key == "agent_profile_id").first()
     if setting_row and setting_row.value == profile_id:
         raise AppError(ErrorCode.VALIDATION, "该协议档正被 Agent 后端引用，请先在设置页解除引用后再删除")
-    db.delete(profile)
-    db.add(
-        AuditLog(
-            user_id=user.id,
-            action="profile_delete",
-            target_type="profile",
-            target_id=profile_id,
-            detail={"name": profile.name},
-            ip=_request_ip(request),
+    snapshot: ProfileEnvSnapshot | None = None
+    try:
+        snapshot = remove_profile_env(profile_id)
+        db.delete(profile)
+        db.add(
+            AuditLog(
+                user_id=user.id,
+                action="profile_delete",
+                target_type="profile",
+                target_id=profile_id,
+                detail={"name": profile.name},
+                ip=_request_ip(request),
+            )
         )
-    )
-    db.commit()
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        if snapshot:
+            restore_snapshot(snapshot)
+        raise AppError(ErrorCode.INTERNAL, "协议档环境配置删除失败") from exc
     return {"ok": True}
 
 
@@ -178,10 +341,12 @@ def fetch_models(
         if not profile:
             raise AppError(ErrorCode.NOT_FOUND, "协议档不存在")
         protocol = profile.protocol
-        base_url = profile.base_url
+        # 兼容旧单模型环境；若该 profile 已有任一独立变量，则不会串用全局 Key。
+        env_base_url, _model, env_api_key = _profile_connection(profile, allow_global_alias=True)
+        base_url = env_base_url
         anthropic_version = profile.anthropic_version
-        if not api_key and profile.encrypted_key:
-            api_key = decrypt_secret(profile.encrypted_key)
+        if not api_key:
+            api_key = env_api_key
 
     models = fetch_remote_models(
         protocol=protocol,
@@ -206,14 +371,16 @@ def check_profile(
     profile = db.query(ProtocolProfile).filter(ProtocolProfile.id == profile_id).first()
     if not profile:
         raise AppError(ErrorCode.NOT_FOUND, "协议档不存在")
-    if not profile.encrypted_key:
+    # 旧单模型部署可直接用服务器 LLM_* 别名探活；已配置 profile 变量时优先 profile。
+    base_url, model, api_key = _profile_connection(profile, allow_global_alias=True)
+    if not api_key:
         raise AppError(ErrorCode.VALIDATION, "协议档未配置 API Key")
     try:
         result = call_protocol(
             protocol=profile.protocol,
-            base_url=profile.base_url,
-            model=profile.model,
-            api_key=decrypt_secret(profile.encrypted_key),
+            base_url=base_url,
+            model=model,
+            api_key=api_key,
             messages=[{"role": "user", "content": "ping"}],
             max_tokens=1,
             anthropic_version=profile.anthropic_version,
@@ -221,4 +388,4 @@ def check_profile(
         )
     except AppError as exc:
         return {"ok": False, "code": exc.code.value, "message": exc.message}
-    return {"ok": True, "latency_ms": result.latency_ms, "model": profile.model}
+    return {"ok": True, "latency_ms": result.latency_ms, "model": model}

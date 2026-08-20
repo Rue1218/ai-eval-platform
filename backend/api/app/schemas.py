@@ -102,7 +102,7 @@ class ProfileUpdate(ApiModel):
 
 
 class ProfileOut(OrmOut):
-    """协议档公开字段，任何响应均不含加密 Key。"""
+    """协议档公开字段，任何响应均不含 API Key。"""
 
     id: str
     name: str

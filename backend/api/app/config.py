@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 720
     ws_ticket_expire_minutes: int = 5
     data_dir: str = "/data"
+    # 协议档连接参数写入的受控环境文件；生产通过 Compose 挂载宿主机 .env。
+    profile_env_file: str = ".env"
     cookie_secure: bool = False
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 

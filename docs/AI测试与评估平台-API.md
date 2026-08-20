@@ -2,14 +2,14 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.6 |
-| 对应 PRD | V1.6.5（功能唯一权威） |
-| 对应设计规范 | V1.2（错误码文案、确认卡字段名、调度中心规范） |
+| 文档版本 | V1.7 |
+| 对应 PRD | V1.7.0（功能唯一权威） |
+| 对应设计规范 | V1.3（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | V1.3（Harness / 斜杠 / 上下文算法；JSON 仍以本文为准） |
 | 对应前端计划 | V1.3 |
 | 对应后端计划 | V1.3 |
 | 撰写日期 | 2026-08-18 |
-| 最近修订 | 2026-08-20：V1.6 补充思考快照、确认回执与历史上下文能力恢复；未启用能力统一 `VALIDATION` 400 |
+| 最近修订 | 2026-08-20：V1.7 协议档连接参数改由受控环境文件持久化，支持多供应商隔离与安全 CRUD |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
 ---
@@ -487,6 +487,20 @@ body：`{ "name", "hint", "template" }`。
 
 响应 **永不** 含 Key，即使 PUT 刚写入。空字符串 Key = 不修改。
 
+协议档的 `base_url`、`model` 和 `api_key` 由 API 后端脚本写入服务器受控环境文件，数据库只保留
+协议档 ID、名称、协议、用途和上下文窗口等元数据。每个协议档使用独立变量，变量名为：
+
+```text
+AI_PROFILE_<PROFILE_ID_NORMALIZED>_BASE_URL
+AI_PROFILE_<PROFILE_ID_NORMALIZED>_MODEL
+AI_PROFILE_<PROFILE_ID_NORMALIZED>_API_KEY
+```
+
+其中 `PROFILE_ID_NORMALIZED` 将非字母数字字符替换为下划线并转为大写，因此多个供应商可以同时存在，
+不会互相覆盖。服务器既有的 `LLM_API_KEY`、`LLM_MODEL`、`OPENAI_BASE_URL`、`ANTHROPIC_BASE_URL`
+仅作为旧单模型环境配置兼容别名；切换 Agent 协议档时由后端同步。环境文件由 Compose 挂载给 `api`（可写）
+和 `worker`（只读），后端在文件锁保护下原位刷新并 `fsync`，失败时按快照回滚。
+
 #### `GET /api/profiles`
 
 全员可列（无 Key），供确认卡。  
@@ -505,7 +519,8 @@ item：`id, name, protocol, base_url, model, usages[], created_at`
 }
 ```
 
-`anthropic_messages` 可另存 `anthropic_version`（默认 `2023-06-01`）。变更写审计。
+`anthropic_messages` 可另存 `anthropic_version`（默认 `2023-06-01`）。变更写审计；API Key 不进入数据库，
+`has_api_key` 仅表示环境文件中是否存在对应 Key。
 
 #### `PUT /api/profiles/{id}` / `DELETE /api/profiles/{id}`
 
@@ -519,6 +534,9 @@ item：`id, name, protocol, base_url, model, usages[], created_at`
 { "ok": true, "latency_ms": 120 }
 ```
 或 `{ "ok": false, "code": "UPSTREAM", "message": "401 from upstream" }`（日志与响应严禁携带 API Key）。
+
+环境文件不存在、不可写、格式错误或调用时缺少对应 Key，统一返回 `VALIDATION` / `INTERNAL`，不得把文件内容
+或凭据原文返回浏览器。
 
 ---
 
@@ -1392,7 +1410,7 @@ JSON Schema 冻结点：短工具 M1 W4；评测长工具 M2 W6；RAG M3 W10；s
 
 1. OpenAPI（内部）从本文生成或手写，但 **对外不发布**（非 F-CM-08）。  
 2. Worker 与 Agent 调同一 MCP，不另做一套 REST 给 worker 跑评测（worker 可进程内调）。  
-3. Key Fernet 加密；GET 不回显；日志与 `agent_trace` 不落 Key / Cookie / 密码。  
+3. 协议档 URL、模型 ID、API Key 写入按 profile 隔离的受控环境文件；GET 不回显；日志与 `agent_trace` 不落 Key / Cookie / 密码。
 4. 状态机与取消语义见 PRD 3.3；先评后压由 worker 创建子任务，不要求前端二次 `POST /api/tasks` kind=stress（`prod` 除外走会签）。  
 5. 业务失败只抛 `AppError`（十码）；WS 与 REST 同一错误体。未捕获异常归一 `INTERNAL`，堆栈只进日志。  
 6. `api` 进程禁止 `time.sleep` 评测、禁止同步跑长 MCP、禁止在 `confirm_ack` 里等到 Worker 终态；Harness 不得阻塞 WS `receive` 循环。  
@@ -1576,3 +1594,10 @@ MCP 浏览器不调：与 PRD 3.1、前端计划「禁止把 MCP 当 REST」一�
 | `backend/api/app/routers/sessions.py` | 历史接口返回 `compact_summary`，恢复压缩后的模型上下文 |
 | `frontend/src/views/Agent.vue` | 回放思考快照、确认回执与历史工具资产，并修正确认卡状态 |
 | `frontend/src/api/types.ts` | 补齐 `confirm_ack` 事件和 ContextMeter 扩展字段类型 |
+| `backend/api/app/profile_env.py` | 按 profile 生成环境变量名，在 bind mount 文件上加锁刷新/删除/回滚 URL、模型 ID、API Key |
+| `backend/api/app/routers/profiles.py` | 协议档 CRUD 改为环境文件存储，旧密文迁移，连通性检查读取环境参数 |
+| `backend/api/app/routers/admin.py` | 切换 Agent 协议档时同步兼容 `LLM_*` 环境别名 |
+| `backend/api/app/llm.py` | Agent 调用优先读取 profile 环境变量，兼容旧全局 LLM 环境变量 |
+| `backend/worker/app/profile_env.py` | Worker 只读共享环境文件并隔离多供应商配置 |
+| `backend/worker/app/benchmark.py` / `backend/worker/app/testcase.py` | 评测与用例生成调用改读环境文件参数 |
+| `docker-compose.yml` / `.env.example` | API 可写、Worker 只读挂载服务器 `.env`，新增 `PROFILE_ENV_FILE` |
