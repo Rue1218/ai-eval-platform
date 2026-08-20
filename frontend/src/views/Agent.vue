@@ -808,39 +808,39 @@ const inputText = ref('')
 const stagedFiles = ref<any[]>([])
 const activeTask = ref<Task | null>(null)
 
-// 资产列表种子数据供 mock 演示；实时模式下由服务端短工具（model.list / dataset.list / kb.list）动态回填
-const availableProfiles = ref<Profile[]>([
+// 模拟资产只允许在显式 mock 模式中存在；实时模式必须等待服务端短工具回填。
+const availableProfiles = ref<Profile[]>(api.isMock() ? [
   { id: 'p-gpt', name: 'gpt-test', model: 'gpt-4o', protocol: 'openai_chat', base_url: 'https://api.openai.com/v1', usages: ['target'], created_at: new Date().toISOString() },
   { id: 'p-claude', name: 'claude-x', model: 'claude-3-5-sonnet-20241022', protocol: 'anthropic_messages', base_url: 'https://api.anthropic.com', usages: ['target'], created_at: new Date().toISOString() },
   // F10 外部 RAG 服务档（external_chat 库确认卡单选选项）
   { id: 'p-ragsvc', name: 'rag-客服外挂', model: 'rag-chat-v2', protocol: 'openai_chat', base_url: 'https://rag.internal.example.com/v1', usages: ['target'], created_at: new Date().toISOString() },
-])
-const availableDatasets = ref<Dataset[]>([
+ ] : [])
+const availableDatasets = ref<Dataset[]>(api.isMock() ? [
   { id: 'ds-smoke', name: 'smoke-20', version: 3, row_count: 20, pending_complete_count: 0, metric: 'contain', owner: 'admin', created_at: new Date().toISOString() },
-])
-const availableKbs = ref<KnowledgeBase[]>([
+ ] : [])
+const availableKbs = ref<KnowledgeBase[]>(api.isMock() ? [
   { id: 'kb-default', name: 'default', kind: 'lightrag', doc_count: 12, is_core: true, owner: 'admin' },
   { id: 'kb-cs', name: '外挂客服', kind: 'external_chat', doc_count: null, is_core: false, owner: 'alice' },
-])
-const availableGoldQas = ref<GoldQA[]>([
+ ] : [])
+const availableGoldQas = ref<GoldQA[]>(api.isMock() ? [
   { id: 'gq-1', kb_id: 'kb-default', name: 'qa-v1', version: 2, row_count: 20, owner: 'admin', created_at: new Date().toISOString() },
-])
+ ] : [])
 
 // 智能体能力卡与顶栏共用同一模式状态，避免出现页面内外不一致的评测上下文。
 const isRagMode = computed(() => modeStore.mode === 'rag')
 
 const LLM_CAPS = [
-  { id: 'cap-benchmark', name: '多模型基准对比', desc: '1–5 个协议档并排测试，输出 contain / exact / Judge 打分', say: '对比一下 gpt-test 和 claude-x 在 smoke-20 上的表现', icoSvg: '<path d="M4 20V10M10 20V4M16 20v-8M3 20h18"/>' },
+  { id: 'cap-benchmark', name: '多模型基准对比', desc: '1–5 个协议档并排测试，输出 contain / exact / Judge 打分', say: '帮我对两个已配置模型进行基准评测', icoSvg: '<path d="M4 20V10M10 20V4M16 20v-8M3 20h18"/>' },
   { id: 'cap-prompt', name: 'Prompt 效果评测', desc: '评测不同系统提示词与上下文在同一数据集上的得分差异', say: '评测系统 Prompt 在支付链路问答上的准确率', icoSvg: '<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 9h8M8 13h5"/>' },
   { id: 'cap-testcase', name: 'PRD 生成用例', desc: '附 PRD / OpenAPI，按 6 种策略生成，72h 内确认入库', say: '帮我把这份支付 PRD 生成测试用例', icoSvg: '<path d="M9 11.5 11 14l4.5-5"/><rect x="4" y="4" width="16" height="16" rx="3"/>' },
-  { id: 'cap-stress', name: '先评后压', desc: '质量达标后自动压测同一 endpoint，实时监控 QPS / RT', say: '评测 gpt-test 质量达标后自动加压测 10 QPS', icoSvg: '<path d="M3 17l5-6 4 3 6-8"/><path d="M18 6h3v3"/>' }
+  { id: 'cap-stress', name: '先评后压', desc: '质量达标后自动压测同一 endpoint，实时监控 QPS / RT', say: '帮我评测已配置模型，并在成功后自动执行压测', icoSvg: '<path d="M3 17l5-6 4 3 6-8"/><path d="M18 6h3v3"/>' }
 ]
 
 const RAG_CAPS = [
-  { id: 'cap-rag', name: 'RAG 检索评测', desc: '知识库 + 黄金 QA，输出 Hit Rate@5 / MRR / Recall', say: '评估 default 知识库的检索质量', icoSvg: '<path d="M5 5.5A2.5 2.5 0 0 1 7.5 3H19v15H7.5A2.5 2.5 0 0 0 5 20.5Z"/><path d="M5 18.5V5.5"/><path d="M9 7.5h6"/>' },
-  { id: 'cap-modes', name: '4 模式横向对比', desc: '对比 LightRAG naive / local / global / hybrid 检索表现', say: '横向对比 LightRAG 四种模式在 qa-v1 上的表现', icoSvg: '<circle cx="12" cy="12" r="3"/><path d="M3 12h3M18 12h3M12 3v3M12 18v3"/>' },
-  { id: 'cap-qa', name: '黄金 QA 检验', desc: '校验 expected_doc_ids 召回命中与相似度分布', say: '检验 default 知识库黄金 QA 覆盖度', icoSvg: '<path d="M9 11.5 11 14l4.5-5"/><circle cx="12" cy="12" r="9"/>' },
-  { id: 'cap-rag-stress', name: 'RAG 接口加压', desc: '对 LightRAG query 或外部 RAG HTTP 服务发起高并发压测', say: '对 default 知识库 query 接口跑 20 QPS 压测', icoSvg: '<path d="M3 17l5-6 4 3 6-8"/><path d="M18 6h3v3"/>' }
+  { id: 'cap-rag', name: 'RAG 检索评测', desc: '知识库 + 黄金 QA，输出 Hit Rate@5 / MRR / Recall', say: '帮我评估已配置知识库的检索质量', icoSvg: '<path d="M5 5.5A2.5 2.5 0 0 1 7.5 3H19v15H7.5A2.5 2.5 0 0 0 5 20.5Z"/><path d="M5 18.5V5.5"/><path d="M9 7.5h6"/>' },
+  { id: 'cap-modes', name: '4 模式横向对比', desc: '对比 LightRAG naive / local / global / hybrid 检索表现', say: '横向对比已配置知识库的四种检索模式', icoSvg: '<circle cx="12" cy="12" r="3"/><path d="M3 12h3M18 12h3M12 3v3M12 18v3"/>' },
+  { id: 'cap-qa', name: '黄金 QA 检验', desc: '校验 expected_doc_ids 召回命中与相似度分布', say: '检验已配置知识库的黄金 QA 覆盖度', icoSvg: '<path d="M9 11.5 11 14l4.5-5"/><circle cx="12" cy="12" r="9"/>' },
+  { id: 'cap-rag-stress', name: 'RAG 接口加压', desc: '对 LightRAG query 或外部 RAG HTTP 服务发起高并发压测', say: '对已配置知识库的查询接口执行压测', icoSvg: '<path d="M3 17l5-6 4 3 6-8"/><path d="M18 6h3v3"/>' }
 ]
 
 const currentCaps = computed(() => isRagMode.value ? RAG_CAPS : LLM_CAPS)
@@ -1326,12 +1326,15 @@ function handleUserSend(text: string, files: any[] = []) {
     scrollToBottom()
     // 契约：attachments = [{ file_id }]，仅回传上传成功的附件，失败附件按提示忽略
     agentWs.sendUserMessage(text, files.filter(f => f.id).map(f => ({ file_id: f.id })))
-  } else if (agentWs) {
-    // 实时模式但连接未就绪：给出错误反馈并走本地模拟，避免消息静默丢失
-    events.value.push({ type: 'error', code: 'NETWORK', message: '连接未就绪，消息将在本地模拟流程中演示' })
+  } else if (api.isMock()) {
+    // 显式 mock 模式保留本地演示，实时模式绝不伪造任务、资产或报告。
     simulateAgentFlow(text, files)
   } else {
-    simulateAgentFlow(text, files)
+    isGenerating.value = false
+    harnessStage.value = ''
+    events.value.push({ type: 'error', code: 'UPSTREAM', message: 'Agent 连接未就绪，请等待重连后重试。' })
+    message.error('Agent 连接未就绪，请等待重连后重试')
+    scrollToBottom()
   }
 }
 
@@ -1499,6 +1502,12 @@ function handleConfirmAck(item: StreamItem, confirmed: boolean) {
 
   const useLive = !!(agentWs && agentWs.isConnected)
 
+  // 实时模式断线时不可将确认卡伪造成任务成功；保留卡片供重连后再次确认。
+  if (!useLive && !api.isMock()) {
+    message.error('Agent 连接未就绪，暂不能确认入队')
+    return
+  }
+
   // 真实链路：确认成功前不盖章（A1）；取消可以立即折叠
   if (useLive) {
     if (confirmed) {
@@ -1515,7 +1524,7 @@ function handleConfirmAck(item: StreamItem, confirmed: boolean) {
 
   stampConfirmCard(item, confirmed)
 
-  // Mock 模式（无 WS 连接）：本地演示入队与进度
+  // 显式 mock 模式：本地演示入队与进度。
   if (!confirmed) {
     events.value.push({
       type: 'agent',
@@ -1666,6 +1675,14 @@ function handleInterpretReport(reportId: string) {
   // 实时模式交由服务端智能体解读，结果经 WS 事件回流。
   if (agentWs?.isConnected) {
     agentWs.sendUserMessage(`解读报告 #${reportId}`)
+    return
+  }
+
+  if (!api.isMock()) {
+    isGenerating.value = false
+    events.value.push({ type: 'error', code: 'UPSTREAM', message: 'Agent 连接未就绪，暂不能解读报告。' })
+    message.error('Agent 连接未就绪，暂不能解读报告')
+    scrollToBottom()
     return
   }
 
@@ -2063,6 +2080,8 @@ function handleWsEvent(ev: WsServerEvent) {
       if (typeof p.latency_ms === 'number') turnLatencyMs.value += p.latency_ms
       const think = [...events.value].reverse().find(e => e.type === 'thought' && !e.done)
       if (think) {
+        // 终帧是权威全文，不能只依赖可能丢失的瞬态增量帧。
+        if (text) think.text = text
         think.done = true
         think.collapsed = true
         if (p.latency_ms !== undefined) think.latency_ms = p.latency_ms
@@ -2270,12 +2289,12 @@ onMounted(async () => {
     if (api.isMock()) {
       handleInterpretReport(interpretId)
     } else {
-      // 实时模式需等待 WS 建立连接后再发送解读请求；5s 超时兜底走本地演示流程。
+      // 实时模式需等待 WS 建立连接后再发送解读请求；超时只提示连接异常，禁止伪造解读。
       // 兜底定时器与 watch 均登记在册，组件卸载时统一清理。
       const fallbackTimer = trackTimeout(() => {
-        interpretStopWatch?.()
-        interpretStopWatch = null
-        handleInterpretReport(interpretId)
+        events.value.push({ type: 'error', code: 'UPSTREAM', message: 'Agent 连接未就绪，报告解读将在重连后继续。' })
+        message.warning('Agent 连接未就绪，正在等待重连')
+        scrollToBottom()
       }, 5000)
       interpretStopWatch = watch(isWsOnline, (online) => {
         if (online) {

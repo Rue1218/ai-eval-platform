@@ -37,12 +37,17 @@ function renderMarkdown(raw: string): string {
 
   let text = raw
 
+  // 使用私有区字符保存占位符，避免后续 HTML 转义破坏围栏代码和公式的回填标记。
+  const codeMarker = (idx: number) => `\uE000CODE_BLOCK_${idx}\uE001`
+  const mathMarker = (idx: number) => `\uE000MATH_BLOCK_${idx}\uE001`
+  const inlineMathMarker = (idx: number) => `\uE000INLINE_MATH_${idx}\uE001`
+
   // 1. 提取并暂存围栏代码块 ```lang\ncode\n```
   const codeBlocks: { lang: string; code: string }[] = []
   text = text.replace(/```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g, (_, lang, code) => {
     const idx = codeBlocks.length
     codeBlocks.push({ lang: (lang || 'text').trim(), code: code.replace(/\n$/, '') })
-    return `<!--CODE_BLOCK_${idx}-->`
+    return codeMarker(idx)
   })
 
   // 2. 提取并暂存块级数学公式 $$formula$$
@@ -50,7 +55,7 @@ function renderMarkdown(raw: string): string {
   text = text.replace(/\$\$([\s\S]*?)\$\$/g, (_, formula) => {
     const idx = mathBlocks.length
     mathBlocks.push(formula.trim())
-    return `<!--MATH_BLOCK_${idx}-->`
+    return mathMarker(idx)
   })
 
   // 3. 提取并暂存行内数学公式 $formula$
@@ -58,7 +63,7 @@ function renderMarkdown(raw: string): string {
   text = text.replace(/\$([^\$\n]+?)\$/g, (_, formula) => {
     const idx = inlineMaths.length
     inlineMaths.push(formula.trim())
-    return `<!--INLINE_MATH_${idx}-->`
+    return inlineMathMarker(idx)
   })
 
   // 4. HTML 实体转义（消除普通文本中的 XSS 漏洞）
@@ -100,7 +105,13 @@ function renderMarkdown(raw: string): string {
     .map((p) => {
       const trimmed = p.trim()
       if (!trimmed) return ''
-      if (trimmed.startsWith('<h') || trimmed.startsWith('<hr') || trimmed.startsWith('<blockquote') || trimmed.startsWith('<!--CODE_BLOCK') || trimmed.startsWith('<!--MATH_BLOCK')) {
+      if (
+        trimmed.startsWith('<h') ||
+        trimmed.startsWith('<hr') ||
+        trimmed.startsWith('<blockquote') ||
+        trimmed.startsWith('\uE000CODE_BLOCK_') ||
+        trimmed.startsWith('\uE000MATH_BLOCK_')
+      ) {
         return trimmed
       }
       if (trimmed.includes('<li')) {
@@ -111,7 +122,7 @@ function renderMarkdown(raw: string): string {
     .join('\n')
 
   // 13. 回填围栏代码块
-  text = text.replace(/<!--CODE_BLOCK_(\d+)-->/g, (_, idxStr) => {
+  text = text.replace(/\uE000CODE_BLOCK_(\d+)\uE001/g, (_, idxStr) => {
     const item = codeBlocks[Number(idxStr)]
     if (!item) return ''
     const escapedCode = escapeHtml(item.code)
@@ -138,13 +149,13 @@ function renderMarkdown(raw: string): string {
   })
 
   // 14. 回填块级数学公式
-  text = text.replace(/<!--MATH_BLOCK_(\d+)-->/g, (_, idxStr) => {
+  text = text.replace(/\uE000MATH_BLOCK_(\d+)\uE001/g, (_, idxStr) => {
     const formula = mathBlocks[Number(idxStr)] || ''
     return `<div class="md-math-block mono">$$ ${escapeHtml(formula)} $$</div>`
   })
 
   // 15. 回填行内数学公式
-  text = text.replace(/<!--INLINE_MATH_(\d+)-->/g, (_, idxStr) => {
+  text = text.replace(/\uE000INLINE_MATH_(\d+)\uE001/g, (_, idxStr) => {
     const formula = inlineMaths[Number(idxStr)] || ''
     return `<span class="md-inline-math mono">$ ${escapeHtml(formula)} $</span>`
   })
