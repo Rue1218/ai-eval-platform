@@ -8,6 +8,7 @@ ReAct 与 Plan-and-Solve 是同一根轴：一两步、下一步依赖观察 →
 from __future__ import annotations
 
 from enum import Enum
+from typing import Any
 
 from .imagegen import looks_like_image_generation
 from .plan import classify_intent_l0, is_smalltalk, looks_like_inspect_query
@@ -65,6 +66,37 @@ def refine_turn_mode(mode: TurnMode, *, intent: str, tools_needed: list[str], de
     if tools_needed:
         return TurnMode.REACT_ONLY
     return TurnMode.CHAT
+
+
+def turn_mode_from_loop(loop: str) -> TurnMode | None:
+    """把模型 JSON 的 loop 收成 TurnMode。"""
+    mapping = {
+        "chat": TurnMode.CHAT,
+        "react": TurnMode.REACT_ONLY,
+        "plan_solve": TurnMode.PLAN_SOLVE,
+        "direct": TurnMode.DIRECT,
+    }
+    return mapping.get((loop or "").strip().lower())
+
+
+def resolve_turn_mode(*, text: str, parsed: SlashParse, plan: Any) -> TurnMode:
+    """斜杠由产品绑定；自然语言优先用模型判定的 loop，再兜底启发式。"""
+    if parsed.is_slash:
+        return select_turn_mode(text, parsed)
+    mode = turn_mode_from_loop(getattr(plan, "loop", "") or "")
+    if mode is None:
+        mode = select_turn_mode(text, parsed)
+        if mode is TurnMode.INTENT:
+            mode = refine_turn_mode(
+                mode,
+                intent=plan.intent,
+                tools_needed=list(plan.tools_needed or []),
+                delivery=plan.delivery,
+            )
+    tools = list(plan.tools_needed or [])
+    if "image.generate" in tools or "audio.voiceclone" in tools:
+        return TurnMode.REACT_ONLY
+    return mode
 
 
 def uses_react_llm(mode: TurnMode, *, command: str | None, slash_fill_first: bool) -> bool:

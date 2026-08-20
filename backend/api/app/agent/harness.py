@@ -1,4 +1,4 @@
-"""Harness：按 TurnMode 选择 DIRECT / CHAT / ReAct / Plan-and-Solve（HAR-FLOW / AGT-HRS-02/07）。
+"""Harness：规划模型输出 loop 后调度 DIRECT / CHAT / ReAct / Plan-and-Solve（HAR-FLOW / AGT-HRS-02/07）。
 
 必须丢到 asyncio.Task 执行，收包循环不得 await 整轮。会话级 abort 为进程内
 dict（HAR-NFR-08：单副本或粘性路由；多副本需外置，M1 不做）。
@@ -33,7 +33,7 @@ from .defaults import (
 )
 from .log import agent_exception, agent_trace
 from .persona import chat_system, turn_system
-from .plan import PlanArtifact, TurnBudget, is_smalltalk, merge_replan, run_plan, run_replan
+from .plan import PlanArtifact, TurnBudget, merge_replan, run_plan, run_replan
 from .prefs import load_prefs, save_prefs_from_spec
 from .react import run_react
 from .reflect import ReflectArtifact, maybe_model_check, run_gates
@@ -49,8 +49,7 @@ from .turn_mode import (
     allows_model_check,
     allows_replan,
     emits_stage_thoughts,
-    refine_turn_mode,
-    select_turn_mode,
+    resolve_turn_mode,
     uses_react_llm,
 )
 from .voiceclone import VOICECLONE_CLARIFY_RE
@@ -272,8 +271,6 @@ async def _run_turn(
     history = history_for_plan(db, session)
     compact_summary = getattr(session, "compact_summary", None)
     budget = TurnBudget(cap=MAX_MODEL_CALLS)
-    mode = select_turn_mode(text, parsed)
-    agent_trace(f"TurnMode 入口 mode={mode.value} command={parsed.command or '-'}")
 
     plan = await _await_thread(
         stop,
@@ -290,14 +287,10 @@ async def _run_turn(
         ),
     )
     _check_abort(abort)
-    mode = refine_turn_mode(
-        mode,
-        intent=plan.intent,
-        tools_needed=list(plan.tools_needed),
-        delivery=plan.delivery,
-    )
+    mode = resolve_turn_mode(text=text, parsed=parsed, plan=plan)
     agent_trace(
-        f"TurnMode 收束 mode={mode.value} intent={plan.intent} tools={plan.tools_needed}"
+        f"TurnMode 调度 mode={mode.value} loop={plan.loop or '-'} "
+        f"complexity={plan.complexity or '-'} intent={plan.intent} tools={plan.tools_needed}"
     )
     emit_stage_thoughts = should_emit_stage_thoughts(plan.intent, parsed.command, mode)
     if emit_stage_thoughts:
@@ -318,9 +311,6 @@ async def _run_turn(
     use_llm_react = uses_react_llm(
         mode, command=parsed.command, slash_fill_first=slash_fill_first
     )
-    # 问候 L0 且无短工具：跳过 ReAct，避免人设把「你好」也走成 list 协议档
-    if plan.intent == "chat" and not plan.tools_needed and is_smalltalk(text):
-        use_llm_react = False
 
     _check_abort(abort)
     react = await run_react(

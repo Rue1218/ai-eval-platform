@@ -130,10 +130,23 @@ def test_inject_skips_real_benchmark(tmp_path):
 def test_run_plan_greeting_with_audio_injects_tool(tmp_path, monkeypatch):
     row = _wav_row(tmp_path)
 
-    def _boom(*_args, **_kwargs):
-        raise AssertionError("问候配音不应调用规划模型")
+    def _fake(_db, _payload, **_kwargs):
+        return (
+            {
+                "intent": "chat",
+                "skill_id": None,
+                "slots": {"filled": {}, "missing": []},
+                "tools_needed": [],
+                "delivery": "text",
+                "budget": {"max_tool_rounds": 0},
+                "notes": "规划：问候。",
+                "complexity": "low",
+                "loop": "chat",
+            },
+            8,
+        )
 
-    monkeypatch.setattr("app.agent.plan._call_plan_model", _boom)
+    monkeypatch.setattr("app.agent.plan._call_plan_model", _fake)
     plan = run_plan(
         _AudioDb(row),
         text="你好",
@@ -145,6 +158,7 @@ def test_run_plan_greeting_with_audio_injects_tool(tmp_path, monkeypatch):
     )
     assert plan.intent == "chat"
     assert plan.tools_needed == ["audio.voiceclone"]
+    assert plan.loop == "react"
 
 
 def test_execute_voiceclone_persists_file_without_audio_payload(tmp_path, monkeypatch):

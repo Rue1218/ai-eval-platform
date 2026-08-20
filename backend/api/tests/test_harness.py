@@ -45,6 +45,7 @@ from app.agent.turn_mode import (
     allows_replan,
     emits_stage_thoughts,
     refine_turn_mode,
+    resolve_turn_mode,
     select_turn_mode,
     uses_react_llm,
 )
@@ -127,6 +128,22 @@ def test_select_turn_mode_by_task_shape():
         refine_turn_mode(TurnMode.INTENT, intent="benchmark", tools_needed=["model.list"], delivery="clarify")
         is TurnMode.PLAN_SOLVE
     )
+    eval_plan = PlanArtifact(
+        intent="benchmark",
+        skill_id="skill-benchmark",
+        slots={"filled": {"kind": "benchmark"}, "missing": ["profile_ids"]},
+        tools_needed=["model.list"],
+        delivery="clarify",
+        budget={"max_tool_rounds": 4},
+        notes="规划：评测",
+        source="llm",
+        loop="plan_solve",
+        complexity="high",
+    )
+    assert (
+        resolve_turn_mode(text="帮我评一下", parsed=parse_slash("帮我评一下"), plan=eval_plan)
+        is TurnMode.PLAN_SOLVE
+    )
 
 
 def test_l0_chat_vs_benchmark_and_testcase():
@@ -176,6 +193,63 @@ def test_sanitize_plan_clamps_budget_and_nulls_illegal_skill():
     assert artifact.delivery == "clarify"
     assert artifact.budget["max_tool_rounds"] == HARD_MAX_TOOL_ROUNDS
     assert "foo" not in artifact.slots["filled"]
+    assert artifact.loop == "plan_solve"
+    assert artifact.complexity == "high"
+
+
+def test_sanitize_plan_reads_loop_and_complexity():
+    artifact = sanitize_plan(
+        {
+            "intent": "chat",
+            "skill_id": None,
+            "slots": {"filled": {}, "missing": []},
+            "tools_needed": [],
+            "delivery": "text",
+            "budget": {"max_tool_rounds": 1},
+            "notes": "规划：闲聊",
+            "complexity": "low",
+            "loop": "chat",
+        }
+    )
+    assert artifact.loop == "chat"
+    assert artifact.complexity == "low"
+    assert "loop" not in artifact.as_dict()
+
+
+def test_resolve_turn_mode_prefers_model_loop_over_eval_keywords():
+    """模型判 chat 时，即使用户话里有「评一下」也不走规划卡。"""
+    text = "帮我评一下这张图好不好看"
+    plan = PlanArtifact(
+        intent="chat",
+        skill_id=None,
+        slots={"filled": {}, "missing": []},
+        tools_needed=[],
+        delivery="text",
+        budget={"max_tool_rounds": 1},
+        notes="规划：闲聊",
+        source="llm",
+        loop="chat",
+        complexity="low",
+    )
+    assert resolve_turn_mode(text=text, parsed=parse_slash(text), plan=plan) is TurnMode.CHAT
+
+
+def test_resolve_turn_mode_forces_react_when_image_tool_present():
+    """inject 后含 image.generate 时覆盖模型误选的 plan_solve。"""
+    text = "帮我生成一张竖幅户外人像摄影"
+    plan = PlanArtifact(
+        intent="benchmark",
+        skill_id="skill-benchmark",
+        slots={"filled": {"kind": "benchmark"}, "missing": ["profile_ids"]},
+        tools_needed=["image.generate"],
+        delivery="clarify",
+        budget={"max_tool_rounds": 4},
+        notes="规划：误判",
+        source="llm",
+        loop="plan_solve",
+        complexity="high",
+    )
+    assert resolve_turn_mode(text=text, parsed=parse_slash(text), plan=plan) is TurnMode.REACT_ONLY
 
 
 def test_parse_plan_json_rejects_plain_text():
@@ -440,13 +514,26 @@ def test_turn_budget_hard_cap_four():
     assert budget.remaining() == 0
 
 
-def test_run_plan_greeting_skips_planner_llm(monkeypatch):
-    """「你好」走 L0 定位，不得再打规划模型，把预算留给闲聊流式回复。"""
+def test_run_plan_greeting_model_chooses_chat_loop(monkeypatch):
+    """问候由规划模型判定 loop=chat，而不是关键词短路。"""
 
-    def _boom(*_args, **_kwargs):
-        raise AssertionError("问候不应调用规划模型")
+    def _fake(_db, _payload, **_kwargs):
+        return (
+            {
+                "intent": "chat",
+                "skill_id": None,
+                "slots": {"filled": {}, "missing": []},
+                "tools_needed": [],
+                "delivery": "text",
+                "budget": {"max_tool_rounds": 0},
+                "notes": "规划：问候。",
+                "complexity": "low",
+                "loop": "chat",
+            },
+            8,
+        )
 
-    monkeypatch.setattr("app.agent.plan._call_plan_model", _boom)
+    monkeypatch.setattr("app.agent.plan._call_plan_model", _fake)
     budget = TurnBudget()
     plan = run_plan(
         _FakeDb(),
@@ -458,9 +545,9 @@ def test_run_plan_greeting_skips_planner_llm(monkeypatch):
         budget=budget,
     )
     assert plan.intent == "chat"
+    assert plan.loop == "chat"
     assert plan.delivery == "text"
-    assert plan.source == "l0"
-    assert budget.used == 0
+    assert plan.source == "llm"
 
 
 def test_run_plan_offtopic_uses_planner_not_eval_defaults(monkeypatch):
@@ -476,6 +563,8 @@ def test_run_plan_offtopic_uses_planner_not_eval_defaults(monkeypatch):
                 "delivery": "text",
                 "budget": {"max_tool_rounds": 4},
                 "notes": "规划：与评测无关，短答。",
+                "complexity": "low",
+                "loop": "chat",
             },
             12,
         )
@@ -500,8 +589,26 @@ def test_run_plan_offtopic_uses_planner_not_eval_defaults(monkeypatch):
     assert budget.used == 0  # consume 发生在 _call_plan_model 内，此处被 mock 掉
 
 
-def test_run_plan_inspect_skips_planner_and_eval_skill():
-    """列出协议档是只读 ReAct，不得规划成基准对比。"""
+def test_run_plan_inspect_model_chooses_react_loop(monkeypatch):
+    """列出协议档由模型判 loop=react，不得规划成基准对比。"""
+
+    def _fake(_db, _payload, **_kwargs):
+        return (
+            {
+                "intent": "inspect",
+                "skill_id": None,
+                "slots": {"filled": {}, "missing": []},
+                "tools_needed": ["model.list"],
+                "delivery": "text",
+                "budget": {"max_tool_rounds": 2},
+                "notes": "规划：列出协议档。",
+                "complexity": "low",
+                "loop": "react",
+            },
+            10,
+        )
+
+    monkeypatch.setattr("app.agent.plan._call_plan_model", _fake)
     budget = TurnBudget()
     plan = run_plan(
         _FakeDb(),
@@ -513,15 +620,33 @@ def test_run_plan_inspect_skips_planner_and_eval_skill():
         budget=budget,
     )
     assert plan.intent == "inspect"
+    assert plan.loop == "react"
     assert plan.skill_id is None
     assert plan.tools_needed == ["model.list"]
     assert plan.pref_thoughts == []
-    assert budget.used == 0
 
 
-def test_run_plan_portrait_skips_eval_script_and_prefs():
-    """「生成一张人像摄影」不得规划成基准对比，也不得沿用上次协议档/数据集。"""
+def test_run_plan_portrait_model_chooses_react_not_eval(monkeypatch):
+    """人像摄影由模型判 loop=react；注入后不得沿用评测偏好。"""
     text = "帮我生成一张一张竖幅户外人像摄影，整体从上到下呈现温暖的午后街景氛围"
+
+    def _fake(_db, _payload, **_kwargs):
+        return (
+            {
+                "intent": "chat",
+                "skill_id": None,
+                "slots": {"filled": {}, "missing": []},
+                "tools_needed": ["image.generate"],
+                "delivery": "text",
+                "budget": {"max_tool_rounds": 2},
+                "notes": "规划：生图。",
+                "complexity": "medium",
+                "loop": "react",
+            },
+            11,
+        )
+
+    monkeypatch.setattr("app.agent.plan._call_plan_model", _fake)
     budget = TurnBudget()
     plan = run_plan(
         _FakeDb(),
@@ -533,12 +658,12 @@ def test_run_plan_portrait_skips_eval_script_and_prefs():
         budget=budget,
     )
     assert plan.intent == "chat"
+    assert plan.loop == "react"
     assert plan.skill_id is None
     assert plan.delivery == "text"
     assert plan.tools_needed == ["image.generate"]
     assert plan.pref_thoughts == []
-    assert budget.used == 0
-    assert should_emit_stage_thoughts(plan.intent, None) is False
+    assert resolve_turn_mode(text=text, parsed=parse_slash(text), plan=plan) is TurnMode.REACT_ONLY
     assert should_emit_stage_thoughts(plan.intent, None, TurnMode.REACT_ONLY) is False
 
 
