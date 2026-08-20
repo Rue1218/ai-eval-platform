@@ -34,8 +34,8 @@ def _task_out(task: Task) -> dict:
 
 
 def _owned_task(db: Session, task_id: str, user_id: str) -> Task:
-    """读取当前成员创建的任务，写操作（取消 / 重跑）仅限创建者本人。"""
-    task = db.query(Task).filter(Task.id == task_id).first()
+    """锁定当前成员创建的任务，串行化取消、重跑与 Worker 终态写入。"""
+    task = db.query(Task).filter(Task.id == task_id).with_for_update().first()
     if not task:
         raise AppError(ErrorCode.NOT_FOUND, "任务不存在")
     if task.created_by != user_id:

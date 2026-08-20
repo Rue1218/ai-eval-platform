@@ -231,6 +231,8 @@ export interface Task {
   child_stress_task_id?: string | null
   with_stress?: boolean
   creator?: string
+  /** API 契约中的创建者用户 ID；任务写操作须与当前登录用户精确比对。 */
+  creator_id?: string
   created_by?: string
   created_at: string
   updated_at?: string

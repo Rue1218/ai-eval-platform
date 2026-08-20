@@ -37,6 +37,7 @@ from .models import (
 )
 from .protocol import ProtocolCallError, call_protocol
 from .scoring import DEFAULT_METRIC, score_answer, score_exact, score_rouge_l
+from .task_state import claim_running_task_for_terminal_write
 
 logger = logging.getLogger("worker.benchmark")
 
@@ -215,6 +216,11 @@ def _progress(db: Session, task: Task, done: int, total: int, message: str) -> N
 
 def _fail(db: Session, task: Task, code: str, message: str) -> None:
     """任务失败收尾：落终态、写错误时间线并推送 WS error 事件。"""
+    task_id = task.id
+    task = claim_running_task_for_terminal_write(db, task_id)
+    if not task:
+        logger.info("benchmark task %s skipped failure because it is no longer running", task_id)
+        return
     task.status = "failed"
     task.finished_at = _now()
     task.result = {**(task.result or {}), "error_code": code, "error_message": message}
@@ -232,8 +238,14 @@ def _avg(values: list) -> float | None:
     return round(sum(nums) / len(nums), 4)
 
 
-def _finish(db: Session, task: Task, dataset: Dataset, metric: str, total: int) -> None:
-    """汇总各 profile 指标写报告，任务置 succeeded。"""
+def _finish(db: Session, task: Task, dataset: Dataset, metric: str, total: int) -> bool:
+    """汇总各 profile 指标并安全置 succeeded；已取消时不写报告。"""
+    task_id = task.id
+    # 最后一批完成与取消请求并发时，以数据库中先取得的终态写锁为准。
+    task = claim_running_task_for_terminal_write(db, task_id)
+    if not task:
+        logger.info("benchmark task %s skipped finish because it is no longer running", task_id)
+        return False
     config = task.config or {}
     profile_ids = config.get("profile_ids") or []
     profiles = db.query(ProtocolProfile).filter(ProtocolProfile.id.in_(profile_ids)).all()
@@ -323,6 +335,7 @@ def _finish(db: Session, task: Task, dataset: Dataset, metric: str, total: int) 
     )
     push_ws(task.session_id, "report", {"report_id": report.id}, task_id=task.id)
     logger.info("benchmark task %s succeeded (report=%s)", task.id, report.id)
+    return True
 
 
 def run_benchmark(task_id: str) -> None:

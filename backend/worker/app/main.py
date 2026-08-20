@@ -16,6 +16,7 @@ from .benchmark import run_benchmark
 from .db import SessionLocal
 from .events import push_ws
 from .models import CaseSet, Report, Setting, Task, TaskEvent
+from .task_state import claim_running_task_for_terminal_write
 from .testcase import run_testcase
 
 logging.basicConfig(level=logging.INFO)
@@ -66,6 +67,10 @@ def _run_task(task_id: str) -> None:
 
         if task.kind == "rag":
             # LightRAG 未接入：禁止 mock succeeded，避免对话里出现假报告
+            task = claim_running_task_for_terminal_write(db, task.id)
+            if not task:
+                logger.info("task %s skipped rag failure because it is no longer running", task_id)
+                return
             message = "RAG / LightRAG 尚未接入（计划 M3），当前请使用基准评测"
             print(f"[worker] skip rag lightrag_not_ready task={task.id}", flush=True)
             logger.warning("拒绝 rag 任务 %s：LightRAG 未接入", task.id)
@@ -101,9 +106,10 @@ def _run_task(task_id: str) -> None:
         # ─── 以下为骨架 mock 流程（stress，M4 替换） ───
         time.sleep(2)
 
-        # 期间若被取消则停止
-        db.refresh(task)
-        if task.status == "cancelled":
+        # 期间若被取消则停止；行锁避免取消与完成路径互相覆盖终态。
+        task = claim_running_task_for_terminal_write(db, task_id)
+        if not task:
+            logger.info("task %s skipped mock completion because it is no longer running", task_id)
             return
 
         report_id = None
@@ -133,6 +139,10 @@ def _run_task(task_id: str) -> None:
         # 失败状态落库单独保护：即使落库再失败也不阻断 error 事件推送
         try:
             if task is not None:
+                task = claim_running_task_for_terminal_write(db, task.id)
+                if not task:
+                    logger.info("task %s skipped exception failure because it is no longer running", task_id)
+                    return
                 task.status = "failed"
                 task.finished_at = datetime.now(timezone.utc)
             db.add(

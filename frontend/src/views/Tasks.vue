@@ -246,13 +246,27 @@
                 >
                   取消
                 </button>
+                <span
+                  v-else-if="isActiveTask(t)"
+                  class="small tertiary"
+                  title="任务取消仅限创建者本人"
+                >
+                  仅创建者可取消
+                </span>
                 <button
-                  v-if="['succeeded', 'failed', 'cancelled'].includes(t.status)"
+                  v-if="canRerun(t)"
                   class="link-btn"
                   @click="handleRerun(t)"
                 >
                   复制为新任务
                 </button>
+                <span
+                  v-else-if="isTerminalTask(t)"
+                  class="small tertiary"
+                  title="任务重跑仅限创建者本人"
+                >
+                  仅创建者可重跑
+                </span>
                 <router-link
                   v-if="t.report_id"
                   :to="`/reports/${t.report_id}`"
@@ -417,6 +431,8 @@
     <TaskDetailDrawer
       v-model:show="showDetailDrawer"
       :task="selectedTask"
+      :can-cancel="selectedTask ? canCancel(selectedTask) : false"
+      :can-rerun="selectedTask ? canRerun(selectedTask) : false"
       @cancel="handleCancel(selectedTask!)"
       @rerun="handleRerun(selectedTask!)"
     />
@@ -429,6 +445,7 @@ import { useRoute } from 'vue-router'
 import { useMessage, useDialog, NSelect, NInput, NInputNumber, NCheckbox, NModal, NDrawer, NDrawerContent } from 'naive-ui'
 import { api } from '../api/http'
 import type { Task, TaskKind, Profile, Dataset, KnowledgeBase } from '../api/types'
+import { useAuthStore } from '../stores/auth'
 import { useModeStore } from '../stores/mode'
 import StatusBadge from '../components/common/StatusBadge.vue'
 import KindTag from '../components/common/KindTag.vue'
@@ -438,6 +455,7 @@ import TaskDetailDrawer from '../components/drawers/TaskDetailDrawer.vue'
 const message = useMessage()
 const dialog = useDialog()
 const route = useRoute()
+const auth = useAuthStore()
 const modeStore = useModeStore()
 
 const tasks = ref<Task[]>([])
@@ -618,8 +636,32 @@ const baseFilteredTasks = computed(() => {
 const hiddenCount = computed(() => baseFilteredTasks.value.filter(t => !modeKinds.value.includes(t.kind)).length)
 const filteredTasks = computed(() => baseFilteredTasks.value.filter(t => modeKinds.value.includes(t.kind)))
 
-function canCancel(t: Task) {
+/** 判断任务是否仍处于可写的非终态。 */
+function isActiveTask(t: Task) {
   return !['succeeded', 'failed', 'cancelled'].includes(t.status)
+}
+
+/** 终态任务才允许复制重跑。 */
+function isTerminalTask(t: Task) {
+  return ['succeeded', 'failed', 'cancelled'].includes(t.status)
+}
+
+/** 仅创建者可取消或重跑任务，和 API 的 _owned_task 权限口径保持一致。 */
+function isTaskOwner(t: Task) {
+  const user = auth.user
+  if (!user) return false
+  const creatorId = t.creator_id || t.created_by
+  if (creatorId) return creatorId === user.id
+  // mock 数据沿用创建者用户名，真实接口优先使用 creator_id。
+  return t.creator === user.username || t.creator === user.id
+}
+
+function canCancel(t: Task) {
+  return isActiveTask(t) && isTaskOwner(t)
+}
+
+function canRerun(t: Task) {
+  return isTerminalTask(t) && isTaskOwner(t)
 }
 
 function handleOpenDetail(t: Task) {

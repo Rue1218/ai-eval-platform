@@ -16,12 +16,17 @@ class _FakeQuery:
 
     def __init__(self, result):
         self._result = result
+        self.locked = False
 
     def filter(self, *args, **kwargs):
         return self
 
     def first(self):
         return self._result
+
+    def with_for_update(self):
+        self.locked = True
+        return self
 
 
 class _FakeDb:
@@ -30,6 +35,7 @@ class _FakeDb:
     def __init__(self, result=None):
         self._query = _FakeQuery(result)
         self.added: list = []
+        self.commit_calls = 0
 
     def query(self, *args, **kwargs):
         return self._query
@@ -38,7 +44,7 @@ class _FakeDb:
         self.added.append(obj)
 
     def commit(self):
-        pass
+        self.commit_calls += 1
 
     def rollback(self):
         pass
@@ -102,6 +108,24 @@ def test_cancel_terminal_task_rejected():
 
     assert exc.value.code == ErrorCode.VALIDATION
     assert db.added == []
+
+
+def test_cancel_by_non_creator_is_unauthorized_without_side_effects():
+    """路由入口必须先鉴权，非创建者不能留下半条取消写入。"""
+    user = User(id="user-other", username="other")
+    task = _task("running", creator="user-owner")
+    db = _FakeDb(result=task)
+
+    with pytest.raises(AppError) as exc:
+        cancel_task(task_id="t-1", request=_FakeRequest(), db=db, user=user)
+
+    assert exc.value.code == ErrorCode.UNAUTHORIZED
+    assert task.status == "running"
+    assert task.cancel_requested_at is None
+    assert task.finished_at is None
+    assert db.added == []
+    assert db.commit_calls == 0
+    assert db._query.locked is True
 
 
 def test_cancel_by_creator_marks_cancelled_with_audit():

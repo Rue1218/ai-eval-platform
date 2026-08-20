@@ -566,8 +566,12 @@
                 <span class="ms ms-err">错误率 <b>{{ currentStressMetrics.err }}%</b></span>
               </span>
               <span class="progress-msg">{{ activeTask.progress?.message || '压测执行中' }}</span>
-              <button class="btn btn-ghost btn-sm" @click="handleCancelActiveTask(activeTask.id)">
-                立即停止
+              <button
+                class="btn btn-ghost btn-sm"
+                :disabled="cancellingTaskId === activeTask.id"
+                @click="handleCancelActiveTask(activeTask.id)"
+              >
+                {{ cancellingTaskId === activeTask.id ? '停止中…' : '立即停止' }}
               </button>
             </div>
             <div class="progress-bar">
@@ -582,8 +586,12 @@
             </div>
             <span class="progress-nums mono">{{ activeTask.progress?.done || 0 }}/{{ activeTask.progress?.total || 100 }}</span>
             <span class="progress-msg">{{ activeTask.progress?.message || '任务进行中...' }}</span>
-            <button class="btn btn-ghost btn-sm" @click="handleCancelActiveTask(activeTask.id)">
-              取消
+            <button
+              class="btn btn-ghost btn-sm"
+              :disabled="cancellingTaskId === activeTask.id"
+              @click="handleCancelActiveTask(activeTask.id)"
+            >
+              {{ cancellingTaskId === activeTask.id ? '取消中…' : '取消' }}
             </button>
           </template>
         </div>
@@ -887,6 +895,8 @@ const currentSession = computed(() => sessions.value.find(s => s.id === currentS
 const inputText = ref('')
 const stagedFiles = ref<any[]>([])
 const activeTask = ref<Task | null>(null)
+// 取消请求发送后等待服务端确认，避免重复提交且不提前伪造 cancelled。
+const cancellingTaskId = ref<string | null>(null)
 
 const isSlashCommandMode = computed(() => {
   return (inputText.value || '').trimStart().startsWith('/')
@@ -1334,8 +1344,23 @@ const dockClosingNote = ref('')
 /** S10 任务结束收尾：先展示完成 note，2.6s 后再隐藏进度坞（对齐原型 hideDock）。 */
 function finishDock(note: string) {
   activeTask.value = null
+  cancellingTaskId.value = null
   dockClosingNote.value = note
   trackTimeout(() => { dockClosingNote.value = '' }, 2600)
+}
+
+/** 仅在服务端确认取消后关闭进度坞，避免网络失败被前端误报为已取消。 */
+function finishCancelledTask(taskId: string) {
+  if (activeTask.value?.id === taskId) {
+    activeTask.value.status = 'cancelled'
+    activeTask.value.progress = {
+      ...(activeTask.value.progress || { done: 0, total: 0 }),
+      message: '任务已取消',
+    }
+    finishDock('任务已取消')
+    return
+  }
+  if (cancellingTaskId.value === taskId) cancellingTaskId.value = null
 }
 
 /* ─── S3 思考卡流式打字（原型 300-328） ─── */
@@ -2056,6 +2081,7 @@ function handleWsToggle() {
 }
 
 function handleCancelActiveTask(taskId: string) {
+  if (cancellingTaskId.value === taskId) return
   // S9 取消弹窗区分压测/评测：压测立即停发（危险语义按钮），评测当前样本结束后停止
   const isStress = activeTask.value?.kind === 'stress'
   dialog.warning({
@@ -2067,14 +2093,22 @@ function handleCancelActiveTask(taskId: string) {
     negativeText: '放弃',
     positiveButtonProps: isStress ? { type: 'error' } : undefined,
     onPositiveClick: async () => {
+      if (cancellingTaskId.value === taskId) return
+      cancellingTaskId.value = taskId
       try {
-        // 契约：Agent 页取消走 WS 上行 cancel_task（上行仅三类消息）；连接不可用时回退 REST
-        if (agentWs?.isConnected) agentWs.sendCancelTask(taskId)
-        else await api.tasks.cancel(taskId)
-      } catch {}
-      // 对齐原型 hideDock：先展示「已提交取消请求」note，2.6s 后隐藏进度坞
-      finishDock('已提交取消请求')
-      message.success(isStress ? '已提交停止发压请求' : '评测任务已取消（cancelled）')
+        // 契约：优先使用 WS 上行 cancel_task；发送失败才回退 REST，避免链路半开时静默丢请求。
+        const sentByWs = agentWs?.sendCancelTask(taskId) ?? false
+        if (sentByWs) {
+          message.info(isStress ? '停止发压请求已提交，等待服务端确认' : '取消请求已提交，等待服务端确认')
+          return
+        }
+        const cancelled = await api.tasks.cancel(taskId)
+        finishCancelledTask(cancelled.id)
+        message.success(isStress ? '压测任务已停止' : '评测任务已取消（cancelled）')
+      } catch (err: any) {
+        if (cancellingTaskId.value === taskId) cancellingTaskId.value = null
+        message.error(err?.message || '取消请求失败，请稍后重试')
+      }
     },
   })
 }
@@ -2761,6 +2795,10 @@ function handleWsEvent(ev: WsServerEvent) {
         if (p.name === 'model.list') availableProfiles.value = p.data?.items || []
         if (p.name === 'dataset.list') availableDatasets.value = p.data?.items || []
         if (p.name === 'kb.list') availableKbs.value = p.data?.items || []
+        if (p.name === 'task.cancel' && p.data?.task_id) {
+          finishCancelledTask(p.data.task_id)
+          message.success('任务已取消（cancelled）')
+        }
         if (p.name === 'task.create' && pendingAckItem.value) {
           stampConfirmCard(pendingAckItem.value, true)
           pendingAckItem.value = null
@@ -2828,6 +2866,10 @@ function handleWsEvent(ev: WsServerEvent) {
     }
     case 'error': {
       finishLiveThought()
+      // 取消失败时恢复按钮；不能保留“取消中”假象阻断用户重试。
+      if (cancellingTaskId.value && (!ev.task_id || ev.task_id === cancellingTaskId.value)) {
+        cancellingTaskId.value = null
+      }
       // A1：校验失败保留确认卡可编辑，不盖章
       if (pendingAckItem.value) {
         pendingAckItem.value.isAcked = false

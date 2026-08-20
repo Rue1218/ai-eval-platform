@@ -67,19 +67,33 @@
             查看报告
           </router-link>
           <button
-            v-if="task && ['queued', 'running'].includes(task.status)"
+            v-if="task && canCancel"
             class="btn btn-secondary btn-sm danger-text"
             @click="$emit('cancel', task)"
           >
             取消任务
           </button>
+          <span
+            v-else-if="task && ['queued', 'running', 'awaiting_case_confirm'].includes(task.status)"
+            class="small tertiary"
+            title="任务取消仅限创建者本人"
+          >
+            仅创建者可取消
+          </span>
           <button
-            v-if="task"
+            v-if="task && canRerun"
             class="btn btn-secondary btn-sm"
             @click="$emit('rerun', task)"
           >
             复制为新任务
           </button>
+          <span
+            v-else-if="task && ['succeeded', 'failed', 'cancelled'].includes(task.status)"
+            class="small tertiary"
+            title="任务重跑仅限创建者本人"
+          >
+            仅创建者可重跑
+          </span>
         </div>
       </template>
     </n-drawer-content>
@@ -96,6 +110,10 @@ import KindTag from '../common/KindTag.vue'
 const props = defineProps<{
   show: boolean
   task?: Task | null
+  /** 任务写操作由父页按当前登录成员权限判定。 */
+  canCancel?: boolean
+  /** 重跑同样属于任务写操作，需与服务端创建者权限一致。 */
+  canRerun?: boolean
 }>()
 
 defineEmits<{

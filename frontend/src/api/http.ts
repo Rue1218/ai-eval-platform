@@ -366,13 +366,17 @@ export const api = {
       })
       return data
     },
-    async cancel(id: string, reason?: string): Promise<void> {
+    async cancel(id: string, reason?: string): Promise<Task> {
       if (getDataMode() === 'mock') {
         const t = mockStore.tasks.find((x) => x.id === id)
-        if (t) t.status = 'cancelled'
-        return
+        if (!t) throw new ApiError('任务不存在', ErrorCode.NOT_FOUND, 404)
+        t.status = 'cancelled'
+        t.progress = { ...(t.progress || { done: 0, total: 0 }), message: '任务已取消' }
+        return t
       }
-      await http.post(`/api/tasks/${id}/cancel`, { reason })
+      // 返回服务端终态，调用方仅在取消实际成功后更新本地界面。
+      const { data } = await http.post(`/api/tasks/${id}/cancel`, { reason })
+      return data
     },
     async rerun(id: string): Promise<Task> {
       if (getDataMode() === 'mock') {

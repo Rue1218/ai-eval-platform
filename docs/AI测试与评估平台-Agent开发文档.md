@@ -5,7 +5,7 @@
 | 文档名称 | Agent 独立开发说明书 |
 | 版本 | V1.3 |
 | 日期 | 2026-08-20 |
-| 最近修订 | 2026-08-20：问候/闲聊跳过规划模型与核对；切换会话保留历史并让后台继续生成；新增默认私有/团队共享会话、软删除、协作者正文流、消息作者与确认卡作者边界 |
+| 最近修订 | 2026-08-20：问候/闲聊跳过规划模型与核对；切换会话保留历史并让后台继续生成；新增默认私有/团队共享会话、软删除、协作者正文流、消息作者与确认卡作者边界；修复任务取消确认、创建者权限提示与 Worker 终态竞态 |
 | 用法 | **实现 `/agent` 以本文为准（Harness / 斜杠 / 窗口算法）。** REST/WS JSON 以 API.md V1.5 为准。完成某项后勾选文末 Task，并在「最近修订」追加一行。 |
 
 本文是评测平台 **Agent 子系统** 的完整开发说明书：目标、边界、运行时骨架、协议、模块、代码落点与验收任务都写在这里。与 PRD / API.md 冲突时，字段名与事件名以那两份为准；Harness、斜杠、上下文算法以本文 §16 为准。§4.6 所列增量已收入 **API.md V1.5**。
@@ -1267,5 +1267,34 @@ M3 接 LightRAG：把 `LIGHTRAG_ENABLED` 改为 True，在 `query_lightrag` 请�
 | `backend/api/app/agent/harness.py` | 注释与核对范围对齐 |
 | `backend/api/tests/test_harness.py` | 问候跳过规划模型；闲聊跳过核对 |
 
+---
+
+## 22. 任务取消确认与终态并发（2026-08-20）
+
+`cancel_task` 与 `POST /api/tasks/{id}/cancel` 都只允许任务创建者操作；前端以
+`creator_id` 与当前成员 ID 判定，非创建者不展示可执行按钮，避免先展示再返回
+`UNAUTHORIZED`。Agent 页发起取消后只能显示「等待服务端确认」：收到
+`tool_result(name="task.cancel", ok=true)` 或 REST 成功响应才关闭进度坞并显示
+`cancelled`，失败必须保留任务和重试入口。
+
+取消与 Worker 完成路径都必须先用同一任务行锁刷新状态：取消锁到任务后才可写
+`cancelled`，Worker 在 Benchmark 汇总、用例生成落库和压测骨架完成前也只允许
+`running` 任务继续。已经 `cancelled` 的任务不得创建报告、用例集或完成事件；已经
+完成的任务也不能被取消请求以陈旧读结果反向覆盖。这避免最后一批样本完成时的双向
+终态竞态。
+
+### 修改代码文件与作用清单（2026-08-20 取消链路修复）
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `frontend/src/views/Agent.vue` | 取消请求进入确认态；失败不再伪报成功，WS/REST 确认后才收起进度坞 |
+| `frontend/src/views/Tasks.vue` | 表格和详情抽屉按任务创建者显示取消/重跑写操作 |
+| `frontend/src/components/drawers/TaskDetailDrawer.vue` | 抽屉复用父页权限判定，避免旁路越权操作入口 |
+| `frontend/src/api/http.ts`、`frontend/src/api/ws.ts`、`frontend/src/api/types.ts` | 返回 REST 取消终态、识别 WS 发送失败、补齐 `creator_id` 类型 |
+| `backend/api/app/agent/harness.py` | WS 取消与 REST 对齐权限、审计和 `task_events`，回传关联任务的工具确认 |
+| `backend/worker/app/task_state.py` | 统一 Worker 各终态写入前的行锁与运行态校验 |
+| `backend/worker/app/benchmark.py`、`testcase.py`、`main.py` | 防止 Benchmark、用例生成和压测骨架完成路径覆盖 `cancelled` |
+| `backend/api/tests/test_task_permissions.py`、`backend/api/tests/test_harness.py` | 覆盖 REST/WS 非创建者拒绝、取消时间线和确认事件 |
+| `backend/worker/tests/test_task_state.py`、`test_benchmark_cancel.py`、`.github/workflows/ci.yml` | 覆盖 Worker 陈旧对象竞态，并纳入 CI 执行 |
 
   

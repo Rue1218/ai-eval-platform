@@ -161,16 +161,17 @@ export class AgentWebSocket {
     this.ws.send(JSON.stringify(payload))
   }
 
-  public sendCancelTask(taskId: string): void {
+  public sendCancelTask(taskId: string): boolean {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       console.warn('WebSocket not open, cannot send cancel_task')
-      return
+      return false
     }
     const payload = {
       event: 'cancel_task',
       payload: { task_id: taskId },
     }
     this.ws.send(JSON.stringify(payload))
+    return true
   }
 
   private scheduleReconnect(): void {
