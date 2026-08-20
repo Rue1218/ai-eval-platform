@@ -54,19 +54,6 @@
           </svg>
         </button>
         <span class="chat-head-title">{{ currentSession?.title || '新会话' }}</span>
-        <n-dropdown
-          trigger="click"
-          :options="agentProfileDropdownOptions"
-          @select="handleSelectAgentModel"
-        >
-          <button class="chat-head-model-btn" type="button" title="点击切换当前 Agent 驱动模型">
-            <span class="head-model-dot"></span>
-            <span class="mono">Agent · {{ agentModelName || '未配置模型' }}</span>
-            <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5">
-              <path d="M3 4.5l3 3 3-3" stroke-linecap="round" stroke-linejoin="round" />
-            </svg>
-          </button>
-        </n-dropdown>
         <span v-if="isGenerating" class="gen-pill">
           <i class="bdot"></i>
           <span>{{ harnessStageLabel }}</span>
