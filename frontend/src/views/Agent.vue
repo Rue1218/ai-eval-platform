@@ -1186,6 +1186,30 @@ function gcIdleSockets(keepId: string) {
   }
 }
 
+/** 服务端以 4404 收回会话后同步移除本地缓存，避免列表留下无法重连的幽灵项。 */
+function removeInaccessibleSession(sid: string) {
+  const index = sessions.value.findIndex((session) => session.id === sid)
+  const wasCurrent = currentSessionId.value === sid
+  const socket = sockets.get(sid)
+  if (socket) socket.close()
+  sockets.delete(sid)
+  sessionRuntimes.delete(sid)
+  const nextGenerating = { ...generatingBySession.value }
+  delete nextGenerating[sid]
+  generatingBySession.value = nextGenerating
+  if (index < 0) return
+
+  sessions.value.splice(index, 1)
+  if (!wasCurrent) return
+  if (agentWs === socket) agentWs = null
+  const next = sessions.value[index] || sessions.value[index - 1]
+  if (next) {
+    void selectSession(next.id)
+  } else {
+    void handleCreateSession()
+  }
+}
+
 /* ─── 页面级定时器登记：所有演示/兜底定时器统一登记，组件卸载时集中清理，避免回调写入已销毁状态 ─── */
 const pendingTimers = new Set<number>()
 /* F19 生成流定时器子集：mock 场景步骤 / 思考打字机 / mock 进度推进专用，
@@ -2367,9 +2391,10 @@ async function selectSession(sid: string) {
   const sess = sessions.value.find(s => s.id === sid)
   isRailOpen.value = !!sess?.active_task || rt.isGenerating
 
-  if (sess?.active_task?.id) {
+  const activeTaskId = sess?.active_task?.id || rt.activeTask?.id
+  if (activeTaskId) {
     try {
-      const t = await api.tasks.get(sess.active_task.id)
+      const t = await api.tasks.get(activeTaskId)
       if (epoch !== selectEpoch || currentSessionId.value !== sid) return
       if (t && ['queued', 'running', 'awaiting_case_confirm'].includes(t.status)) {
         activeTask.value = {
@@ -2378,6 +2403,9 @@ async function selectSession(sid: string) {
           status: t.status,
           config: t.config,
           progress: t.progress || { percent: 0, done: 0, total: 100, message: '任务进行中...' },
+          creator_id: t.creator_id,
+          created_by: t.created_by,
+          creator: t.creator,
           created_at: t.created_at,
         }
         rt.activeTask = activeTask.value
@@ -2450,16 +2478,7 @@ function handleDeleteSession(sid: string) {
     onPositiveClick: async () => {
       try {
         await api.sessions.remove(sid)
-        const index = sessions.value.findIndex((item) => item.id === sid)
-        const wasCurrent = currentSessionId.value === sid
-        if (index >= 0) sessions.value.splice(index, 1)
-        if (wasCurrent) {
-          agentWs?.close()
-          agentWs = null
-          const next = sessions.value[index] || sessions.value[index - 1]
-          if (next) await selectSession(next.id)
-          else await handleCreateSession()
-        }
+        removeInaccessibleSession(sid)
         message.success('会话已删除，对话与任务记录仍保留审计')
       } catch (err: any) {
         message.error(err?.message || '删除会话失败')
@@ -2485,6 +2504,9 @@ function initWebSocket(sessionId: string, lastEventId = 0) {
     if (sessionId === currentSessionId.value) {
       isWsOnline.value = connected
     }
+  })
+  ws.onClosed((code) => {
+    if (code === 4404) removeInaccessibleSession(sessionId)
   })
   ws.onEvent((ev: WsServerEvent) => {
     const sid = (ev.session_id || sessionId || currentSessionId.value || '') as string
@@ -2517,6 +2539,36 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
   const buf = rt.events
   const p = ev.payload || {}
   switch (ev.event) {
+    case 'message': {
+      const messageId = String(p.id || '')
+      const clientMessageId = typeof p.client_message_id === 'string' ? p.client_message_id : ''
+      const existing = buf.find((item) => (
+        item.type === 'user'
+        && ((messageId && item.messageId === messageId)
+          || (clientMessageId && item.clientMessageId === clientMessageId))
+      ))
+      const author = p.author && typeof p.author === 'object' ? p.author as SessionAuthor : null
+      if (existing) {
+        existing.messageId = messageId || existing.messageId
+        existing.clientMessageId = clientMessageId || existing.clientMessageId
+        existing.author = author || existing.author
+        existing.files = normalizeMessageFiles(p.attachments)
+      } else {
+        buf.push({
+          type: 'user',
+          text: String(p.content || ''),
+          files: normalizeMessageFiles(p.attachments),
+          messageId: messageId || undefined,
+          clientMessageId: clientMessageId || undefined,
+          author,
+        })
+      }
+      if (author?.id && author.id !== authStore.user?.id) {
+        markGenerating(sid, true)
+        rt.harnessStage = 'plan'
+      }
+      break
+    }
     case 'thought': {
       if (p.stream === 'think') {
         const delta = String(p.text || '')
@@ -2564,7 +2616,14 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
         })
       }
       if (text && !stage) {
-        buf.push({ type: 'agent', raw: text, text: renderBubbleHtml(text), streaming: false })
+        const streaming = [...buf].reverse().find(e => e.type === 'agent' && e.streaming)
+        if (streaming) {
+          streaming.raw = text
+          streaming.text = renderBubbleHtml(text)
+          streaming.streaming = false
+        } else {
+          buf.push({ type: 'agent', raw: text, text: renderBubbleHtml(text), streaming: false })
+        }
         markGenerating(sid, false)
         rt.harnessStage = ''
       } else if (!stage) {
@@ -2597,6 +2656,7 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
       buf.push({
         type: 'confirm',
         card: normalizeConfirmCard(p),
+        confirmAuthor: p.confirm_author || null,
         isAcked: false,
         summary: '',
         open: true,

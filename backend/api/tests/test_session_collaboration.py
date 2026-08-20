@@ -5,11 +5,14 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime
 
+import pytest
+
 from app.agent.harness import handle_confirm_ack
-from app.errors import ErrorCode
+from app.errors import AppError, ErrorCode
 from app.models import AuditLog, Task, User
 from app.models import Session as AgentSession
 from app.routers.sessions import delete_session
+from app.schemas import TaskCreate
 from app.session_access import can_access_session
 from app.session_connections import SessionConnectionHub
 
@@ -183,3 +186,30 @@ def test_delete_session_soft_deletes_without_removing_audit_assets():
     assert session.deleted_at is not None
     assert db.commit_calls == 1
     assert any(isinstance(row, AuditLog) and row.action == "session_delete" for row in db.added)
+
+
+def test_rest_task_create_cannot_bypass_pending_confirmation(monkeypatch):
+    """共享会话存在确认卡时，REST 入口也不能让协作者抢占活动任务。"""
+    from app.routers import tasks as task_router
+
+    session = _session(visibility="team")
+    session.pending_confirm = {"kind": "testcase"}
+    monkeypatch.setattr(
+        task_router,
+        "require_visible_session",
+        lambda *_args, **_kwargs: session,
+    )
+
+    with pytest.raises(AppError) as exc:
+        task_router.create_task(
+            TaskCreate(
+                kind="testcase",
+                session_id="s-1",
+                case_source={"text": "从接口文档生成用例"},
+            ),
+            request=type("_Request", (), {"client": None})(),
+            db=object(),
+            user=User(id="u-peer", username="peer"),
+        )
+
+    assert exc.value.code == ErrorCode.CONCURRENCY

@@ -1,7 +1,7 @@
 """增加团队共享会话字段。
 
 Revision ID: 4812e1f50613
-Revises: f7c3e91a2b04
+Revises: a1b2c3d4e5f6
 Create Date: 2026-08-20 11:41:23
 """
 
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "4812e1f50613"
-down_revision: Union[str, None] = "f7c3e91a2b04"
+down_revision: Union[str, None] = "a1b2c3d4e5f6"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

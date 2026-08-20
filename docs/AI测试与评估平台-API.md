@@ -284,6 +284,8 @@ WS 不再可访问，但 `messages`、`ws_events`、tasks、reports 均保留审
 - 分享设置、取消分享和软删除：只有 owner；
 - 确认卡：只有 `pending_confirm_author_id` 对应成员可确认、拒绝或提交 patch；任务
   仍归确认卡作者创建；
+- 带 `session_id` 的 `POST /api/tasks` 会锁住会话；存在待确认卡时统一返回
+  `CONCURRENCY`，不得绕过该卡抢占活动任务；
 - `DELETE` 遇到生成中的 Harness、待确认卡、`queued`/`running`/
   `awaiting_case_confirm` 任务时返回 `VALIDATION`，要求先停止、确认/取消或等待终态。
 
@@ -858,6 +860,7 @@ case item 包含：`id, strategy, priority, module, name, precondition, steps, e
 规则：
 
 - 未通过字段校验 → 400 `VALIDATION`，**不入队**（与确认卡未 ack 同等）。  
+- 会话存在待确认卡 → 409 `CONCURRENCY`，必须由确认卡作者确认或取消后再创建。
 - 会话已有非终态任务（含压测子任务）→ 400 `VALIDATION`（占槽），前端应已禁用按钮。  
 - 平台 `max_running_tasks` 满 → **仍** `queued`（3.4），可附 `warning: "CONCURRENCY"` 字段（可选）。  
 - `kind=stress` 一般由 worker 在质量 `succeeded` 且 `with_stress=true` 时创建；人手 POST 须带 `parent_task_id`，且父任务必须 succeeded。  

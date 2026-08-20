@@ -11,6 +11,7 @@ from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
 from ..models import AuditLog, Report, Task, TaskEvent, User
+from ..models import Session as AgentSession
 from ..schemas import TaskCreate, TaskDetailOut, TaskEventOut, TaskOut
 from ..session_access import require_visible_session
 
@@ -51,11 +52,17 @@ def _visible_task(db: Session, task_id: str) -> Task:
     return task
 
 
-def _validate_session(db: Session, session_id: str | None, user_id: str) -> None:
+def _validate_session(
+    db: Session,
+    session_id: str | None,
+    user_id: str,
+    *,
+    lock: bool = False,
+) -> AgentSession | None:
     """确保任务挂载的 Agent 会话对当前成员可见且未软删除。"""
     if not session_id:
-        return
-    require_visible_session(db, session_id, user_id)
+        return None
+    return require_visible_session(db, session_id, user_id, lock=lock)
 
 
 def _append_event(db: Session, task: Task, event: str, message: str, *, level: str = "info") -> None:
@@ -79,7 +86,10 @@ def create_task(
     user: User = Depends(get_current_user),
 ):
     """校验确认卡后原子入队；未确认的非法字段不会产生任务行。"""
-    _validate_session(db, body.session_id, user.id)
+    session = _validate_session(db, body.session_id, user.id, lock=bool(body.session_id))
+    if session and session.pending_confirm:
+        # 团队协作时不得绕过确认卡直接从 REST 抢占会话活动任务。
+        raise AppError(ErrorCode.CONCURRENCY, "会话存在待确认任务，请先由发起人确认或取消")
     if body.session_id:
         existing = (
             db.query(Task)
