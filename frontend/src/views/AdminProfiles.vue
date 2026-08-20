@@ -672,42 +672,341 @@
 
     <!-- Tab 3：Agent 技能编排（V1.0 受控边界：固定系统提示词，不回显、不可自定义） -->
     <template v-else-if="activeTab === 'skills'">
-      <div class="panel mb16">
-        <div class="row-between mb12">
-          <div>
-            <span style="font-weight: 700; font-size: 15px">Agent 技能编排 (Skills & Prompts)</span>
-            <div class="small tertiary" style="margin-top: 2px">
-              智能体在基准对比、RAG 评估、用例生成与压测场景下的 4 大核心内置技能（PRD 5.5.2）。
+      <div class="skills-center-container">
+        <!-- 1. 顶部全景与操作栏 -->
+        <div class="panel mb16">
+          <div class="row-between mb8" style="flex-wrap: wrap; gap: 12px">
+            <div class="skills-hero-title-area">
+              <div class="row" style="gap: 8px; align-items: center">
+                <span class="skills-main-title">🧠 Agent 技能编排 (Skills & Prompts)</span>
+                <span class="tag-soft skills-badge-vault">PRD 5.5.2 受控编排 · 4大内置场景</span>
+                <span class="badge badge-succeeded">Prompt 沙箱托管</span>
+              </div>
+              <div class="small tertiary mt4" style="line-height: 1.5">
+                智能体在基准对比、RAG 评估、用例生成与压测场景下的 4 大核心内置技能；System Prompt 由服务端安全沙箱托管。
+              </div>
+            </div>
+
+            <!-- 操作按钮组 -->
+            <div class="row" style="gap: 8px; align-items: center">
+              <button
+                class="btn btn-secondary btn-sm"
+                title="导出技能编排配置清单"
+                @click="handleExportSkillsJson"
+              >
+                📋 导出技能配置
+              </button>
+              <button
+                class="btn btn-sign btn-sm"
+                @click="handleOpenAddSkillNotice"
+              >
+                + 创建自定义技能
+              </button>
             </div>
           </div>
-          <button class="btn btn-sign btn-sm" disabled title="V1.0 使用服务端固定系统提示词，不开放自定义技能（API §3.6.2）">
-            + 创建自定义技能（能力未启用）
-          </button>
+
+          <!-- 2. KPI 核心指标微光带 -->
+          <div class="skills-kpi-grid">
+            <div class="skills-kpi-card">
+              <div class="skills-kpi-top">
+                <span class="skills-kpi-label">核心内置技能</span>
+                <span class="skills-kpi-icon">🧠</span>
+              </div>
+              <div class="skills-kpi-val num">{{ builtinSkills.length }} <span class="unit">大核心技能</span></div>
+              <div class="skills-kpi-sub text-success">● 100% 架构受控冻结</div>
+            </div>
+
+            <div class="skills-kpi-card">
+              <div class="skills-kpi-top">
+                <span class="skills-kpi-label">提示词托管模式</span>
+                <span class="skills-kpi-icon">🔒</span>
+              </div>
+              <div class="skills-kpi-val mono" style="color: var(--accent-ai)">服务端托管</div>
+              <div class="skills-kpi-sub">代码级硬编码 · 沙箱防注入</div>
+            </div>
+
+            <div class="skills-kpi-card">
+              <div class="skills-kpi-top">
+                <span class="skills-kpi-label">绑定短工具矩阵</span>
+                <span class="skills-kpi-icon">🛠️</span>
+              </div>
+              <div class="skills-kpi-val num">
+                <span style="color: var(--accent-success)">{{ mcpTools.length || 9 }}</span>
+                <span class="unit">个受控短工具</span>
+              </div>
+              <div class="skills-kpi-sub mono text-info">毫秒级非阻塞 · 极速执行</div>
+            </div>
+
+            <div class="skills-kpi-card">
+              <div class="skills-kpi-top">
+                <span class="skills-kpi-label">快捷斜杠命令</span>
+                <span class="skills-kpi-icon">⚡</span>
+              </div>
+              <div class="skills-kpi-val num" style="color: var(--accent-warning)">15 <span class="unit">条内置指令</span></div>
+              <div class="skills-kpi-sub">支持自然语言与快捷命令分发</div>
+            </div>
+          </div>
         </div>
 
-        <div class="skill-grid">
-          <div v-for="s in builtinSkills" :key="s.id" class="skill-card">
-            <div class="skill-head">
-              <div class="row" style="gap: 8px; align-items: center">
-                <span style="font-size: 20px">{{ s.icon }}</span>
-                <div>
-                  <span class="skill-title">{{ s.name }}</span>
-                  <div class="small tertiary mono" style="font-size: 10px">{{ s.id }}</div>
+        <!-- 3. 技能编排矩阵与工具条 -->
+        <div class="panel mb16">
+          <div class="skills-toolbar mb16">
+            <div class="skills-filter-group">
+              <!-- 场景分类分段器 -->
+              <div class="pill-segmented">
+                <button
+                  class="pill-btn"
+                  :class="{ active: skillCategoryFilter === 'all' }"
+                  @click="skillCategoryFilter = 'all'"
+                >
+                  全部场景 ({{ builtinSkills.length }})
+                </button>
+                <button
+                  class="pill-btn"
+                  :class="{ active: skillCategoryFilter === 'benchmark' }"
+                  @click="skillCategoryFilter = 'benchmark'"
+                >
+                  📊 基准对比
+                </button>
+                <button
+                  class="pill-btn"
+                  :class="{ active: skillCategoryFilter === 'rag' }"
+                  @click="skillCategoryFilter = 'rag'"
+                >
+                  🔍 RAG 评估
+                </button>
+                <button
+                  class="pill-btn"
+                  :class="{ active: skillCategoryFilter === 'testcase' }"
+                  @click="skillCategoryFilter = 'testcase'"
+                >
+                  🧪 用例生成
+                </button>
+                <button
+                  class="pill-btn"
+                  :class="{ active: skillCategoryFilter === 'stress' }"
+                  @click="skillCategoryFilter = 'stress'"
+                >
+                  🚀 容量压测
+                </button>
+              </div>
+
+              <!-- 搜索框 -->
+              <div style="width: 220px">
+                <n-input
+                  v-model:value="skillSearchKeyword"
+                  size="small"
+                  placeholder="搜索技能名称或依赖工具…"
+                  clearable
+                >
+                  <template #prefix>🔍</template>
+                </n-input>
+              </div>
+            </div>
+
+            <!-- 视图切换器 -->
+            <div class="view-mode-toggle">
+              <button
+                class="toggle-btn"
+                :class="{ active: skillViewMode === 'cards' }"
+                @click="skillViewMode = 'cards'"
+              >
+                🎴 现代卡片
+              </button>
+              <button
+                class="toggle-btn"
+                :class="{ active: skillViewMode === 'table' }"
+                @click="skillViewMode = 'table'"
+              >
+                📑 规格表格
+              </button>
+            </div>
+          </div>
+
+          <!-- 模式 A：现代卡片网格 -->
+          <div v-if="skillViewMode === 'cards'" class="skills-cards-grid">
+            <div
+              v-for="s in filteredSkills"
+              :key="s.id"
+              class="skill-card-v2"
+            >
+              <div class="skill-card-top">
+                <div class="row" style="gap: 10px; align-items: flex-start">
+                  <span class="skill-main-icon">{{ s.icon }}</span>
+                  <div>
+                    <div class="row" style="gap: 6px; align-items: center">
+                      <span class="skill-card-name">{{ s.name }}</span>
+                      <span class="tag-soft mono" style="font-size: 10px">{{ s.id }}</span>
+                    </div>
+                    <div class="skill-scenario-tag">{{ s.scenario }}</div>
+                  </div>
+                </div>
+
+                <div class="row" style="gap: 6px; align-items: center">
+                  <span class="tag-soft skill-builtin-chip">内置核心</span>
+                  <span class="status-dot"></span>
                 </div>
               </div>
-              <span class="tag-soft">内置核心</span>
+
+              <div class="skill-card-desc">{{ s.desc }}</div>
+
+              <!-- 调优参数微型芯片 -->
+              <div class="skill-tuning-chips">
+                <div class="tuning-chip">
+                  <span class="tuning-k">Temp</span>
+                  <span class="tuning-v mono">{{ s.temperature }}</span>
+                </div>
+                <div class="tuning-chip">
+                  <span class="tuning-k">MaxTokens</span>
+                  <span class="tuning-v mono">{{ s.maxTokens }}</span>
+                </div>
+                <div class="tuning-chip">
+                  <span class="tuning-k">TopP</span>
+                  <span class="tuning-v mono">{{ s.topP }}</span>
+                </div>
+              </div>
+
+              <!-- 触发斜杠命令 -->
+              <div class="skill-cmds-row">
+                <span class="cmd-label">触发命令:</span>
+                <span v-for="cmd in s.slashCommands" :key="cmd" class="cmd-tag mono">{{ cmd }}</span>
+              </div>
+
+              <!-- 依赖工具 -->
+              <div class="skill-tools-row">
+                <span class="tools-label">依赖短工具:</span>
+                <div class="row wrap" style="gap: 4px">
+                  <span v-for="t in s.tools" :key="t" class="tool-tag mono">{{ t }}</span>
+                </div>
+              </div>
+
+              <div class="skill-card-bottom">
+                <div class="row" style="gap: 6px; align-items: center">
+                  <span class="small tertiary">🔒 System Prompt 安全沙箱托管</span>
+                </div>
+                <button
+                  class="btn btn-secondary btn-xs"
+                  @click="handleOpenSkillModal(s)"
+                >
+                  编排详情
+                </button>
+              </div>
             </div>
-            <div class="small" style="color: var(--text-secondary); line-height: 1.5">{{ s.desc }}</div>
-            <div class="row wrap" style="gap: 6px; margin-top: auto">
-              <span class="small tertiary">依赖工具:</span>
-              <span v-for="tool in s.tools" :key="tool" class="tag-soft mono" style="font-size: 10px">{{ tool }}</span>
+
+            <div v-if="filteredSkills.length === 0" class="empty-state-wrap" style="grid-column: 1 / -1">
+              <EmptyState title="未找到匹配的 Agent 技能" description="请尝试清空搜索条件或重置筛选器" />
             </div>
+          </div>
+
+          <!-- 模式 B：规格矩阵表格 -->
+          <div v-else class="table-responsive">
+            <table class="ds-table">
+              <thead>
+                <tr>
+                  <th style="width: 170px">技能名称 / ID</th>
+                  <th style="width: 140px">适用场景</th>
+                  <th>职责说明与编排策略</th>
+                  <th style="width: 170px">触发斜杠命令</th>
+                  <th style="width: 200px">依赖短工具</th>
+                  <th style="width: 140px">调优参数</th>
+                  <th style="width: 90px">状态</th>
+                  <th style="width: 100px; text-align: right">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="s in filteredSkills" :key="s.id">
+                  <td>
+                    <div class="row" style="gap: 6px; align-items: center">
+                      <span style="font-size: 18px">{{ s.icon }}</span>
+                      <div>
+                        <div style="font-weight: 700; font-size: 13.5px">{{ s.name }}</div>
+                        <div class="mono small tertiary" style="font-size: 10px">{{ s.id }}</div>
+                      </div>
+                    </div>
+                  </td>
+                  <td><span class="tag-soft">{{ s.scenario }}</span></td>
+                  <td class="small" style="color: var(--text-primary)">{{ s.desc }}</td>
+                  <td>
+                    <div class="row wrap" style="gap: 4px">
+                      <span v-for="cmd in s.slashCommands" :key="cmd" class="cmd-tag mono">{{ cmd }}</span>
+                    </div>
+                  </td>
+                  <td>
+                    <div class="row wrap" style="gap: 4px">
+                      <span v-for="t in s.tools" :key="t" class="tool-tag mono">{{ t }}</span>
+                    </div>
+                  </td>
+                  <td>
+                    <div class="mono small" style="color: var(--accent-ai)">
+                      T={{ s.temperature }} · {{ s.maxTokens }}t
+                    </div>
+                  </td>
+                  <td>
+                    <span class="badge badge-succeeded">已启用</span>
+                  </td>
+                  <td style="text-align: right">
+                    <button class="link-btn" @click="handleOpenSkillModal(s)">
+                      编排详情
+                    </button>
+                  </td>
+                </tr>
+
+                <tr v-if="filteredSkills.length === 0">
+                  <td colspan="8">
+                    <EmptyState title="未找到匹配的 Agent 技能" description="请尝试清空搜索条件或重置筛选器" />
+                  </td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         </div>
 
-        <div class="small tertiary" style="margin-top: 14px; line-height: 1.6">
-          V1.0 使用服务端固定系统提示词与固定短工具绑定，System Prompt 不回显、不可编辑（API §3.6.2）；
-          如后续批准可配置技能，将另起 API 版本并补安全审计、版本化与回滚契约。
+        <!-- 4. 技能安全与编排边界准则 (Architecture Guardrails) -->
+        <div class="panel mb16">
+          <div class="panel-title mb12">
+            🛡️ Agent 技能安全与编排边界准则 (Skills Guardrails)
+          </div>
+          <div class="guardrails-grid">
+            <div class="guardrail-card">
+              <div class="guardrail-head">
+                <span class="g-icon">🔒</span>
+                <span class="g-title">固定提示词安全托管</span>
+              </div>
+              <p class="g-text">
+                采用服务端代码级固定系统提示词（System Prompt），<strong>严禁外部明文读取或动态覆盖</strong>，严格防范 Prompt 越权注入与越狱。
+              </p>
+            </div>
+
+            <div class="guardrail-card">
+              <div class="guardrail-head">
+                <span class="g-icon">⚡</span>
+                <span class="g-title">ReAct 单步受控调度</span>
+              </div>
+              <p class="g-text">
+                智能体通过 ReAct 循环分解意图并调用受控短工具，<strong>严格限制思考轮次与上下文窗口</strong>，保障快速确定性响应。
+              </p>
+            </div>
+
+            <div class="guardrail-card">
+              <div class="guardrail-head">
+                <span class="g-icon">🔄</span>
+                <span class="g-title">先评后压自动派生</span>
+              </div>
+              <p class="g-text">
+                基准评测质量任务成功 (`succeeded`) 后自动派生 go-stress-testing 压测，<strong>技能间遵循严格状态机流转</strong>。
+              </p>
+            </div>
+
+            <div class="guardrail-card">
+              <div class="guardrail-head">
+                <span class="g-icon">🏛️</span>
+                <span class="g-title">V1.0 架构冻结准则</span>
+              </div>
+              <p class="g-text">
+                自定义技能创建与 Prompt 编辑在 V1.0 处于受控未开放状态（API §3.6.2），后续版本将另立 API 并补齐安全审计与回滚机制。
+              </p>
+            </div>
+          </div>
         </div>
       </div>
     </template>
@@ -766,6 +1065,11 @@
       v-model:show="showMcpModal"
       :tool="selectedMcpTool"
     />
+
+    <SkillDetailModal
+      v-model:show="showSkillModal"
+      :skill="selectedSkill"
+    />
   </div>
 </template>
 
@@ -778,6 +1082,7 @@ import EmptyState from '../components/common/EmptyState.vue'
 import ProfileModal from '../components/modals/ProfileModal.vue'
 import CheckResultModal from '../components/modals/CheckResultModal.vue'
 import McpToolModal from '../components/modals/McpToolModal.vue'
+import SkillDetailModal, { type SkillDetail } from '../components/modals/SkillDetailModal.vue'
 
 const message = useMessage()
 const dialog = useDialog()
@@ -948,37 +1253,118 @@ function handleOpenAddExternalServer() {
   })
 }
 
+// ═══════════════════════════════════════════════════════════════
+// Agent 技能编排 (Skills & Prompts) 状态与交互管理
+// ═══════════════════════════════════════════════════════════════
 // PRD 5.5.2 的 4 大核心内置技能（V1.0 受控展示，不回显 System Prompt）
-const builtinSkills = [
+const builtinSkills: SkillDetail[] = [
   {
     id: 'skill-benchmark',
     icon: '📊',
     name: '基准对比',
     desc: '自动识别被测模型数量、推荐标准评测集并构建先评后压 TaskSpec。',
-    tools: ['model.list', 'dataset.list', 'task.create'],
+    scenario: '大模型质量基准评测',
+    tools: ['model.list', 'dataset.list', 'task.create', 'task.get'],
+    slashCommands: ['/compare', '/benchmark', '/eval'],
+    temperature: 0.2,
+    maxTokens: 2048,
+    topP: 0.9,
   },
   {
     id: 'skill-rag',
     icon: '🔍',
     name: 'RAG 质量评估',
     desc: '自动装载知识库切块与黄金 QA，评测 LightRAG 4 模式检索表现。',
+    scenario: '知识库与切块检索评估',
     tools: ['kb.list', 'task.create', 'report.get'],
+    slashCommands: ['/rag', '/kb', '/retrieval'],
+    temperature: 0.1,
+    maxTokens: 2048,
+    topP: 0.85,
   },
   {
     id: 'skill-testcase',
     icon: '🧪',
     name: 'PRD 用例生成',
-    desc: '按 6 大策略精细配比（40/25/15/10/5/5）提炼测试用例。',
-    tools: ['dataset.list', 'task.create'],
+    desc: '按 6 大策略精细配比（40/25/15/10/5/5）提炼测试用例并支持确认转正。',
+    scenario: 'AI 需求与用例生成',
+    tools: ['dataset.list', 'task.create', 'testcase.confirm'],
+    slashCommands: ['/case', '/generate', '/prd'],
+    temperature: 0.3,
+    maxTokens: 3072,
+    topP: 0.95,
   },
   {
     id: 'skill-stress',
     icon: '🚀',
     name: '共享容量压测',
     desc: '继承父任务 endpoint 与抽样问答，定位 SLA 拐点与成本开销。',
+    scenario: '高并发容量与吞吐压测',
     tools: ['dispatch.overview', 'task.create', 'task.cancel'],
+    slashCommands: ['/stress', '/capacity', '/load'],
+    temperature: 0.0,
+    maxTokens: 1024,
+    topP: 1.0,
   },
 ]
+
+const skillViewMode = ref<'cards' | 'table'>('cards')
+const skillCategoryFilter = ref<'all' | 'benchmark' | 'rag' | 'testcase' | 'stress'>('all')
+const skillSearchKeyword = ref('')
+const selectedSkill = ref<SkillDetail | null>(null)
+const showSkillModal = ref(false)
+
+/** 多维过滤后的技能清单 */
+const filteredSkills = computed(() => {
+  return builtinSkills.filter((s) => {
+    if (skillCategoryFilter.value !== 'all') {
+      if (skillCategoryFilter.value === 'benchmark' && s.id !== 'skill-benchmark') return false
+      if (skillCategoryFilter.value === 'rag' && s.id !== 'skill-rag') return false
+      if (skillCategoryFilter.value === 'testcase' && s.id !== 'skill-testcase') return false
+      if (skillCategoryFilter.value === 'stress' && s.id !== 'skill-stress') return false
+    }
+    if (skillSearchKeyword.value.trim()) {
+      const kw = skillSearchKeyword.value.toLowerCase().trim()
+      const matchName = s.name.toLowerCase().includes(kw)
+      const matchId = s.id.toLowerCase().includes(kw)
+      const matchDesc = s.desc.toLowerCase().includes(kw)
+      const matchScenario = s.scenario.toLowerCase().includes(kw)
+      const matchTools = s.tools.some((t) => t.toLowerCase().includes(kw))
+      if (!matchName && !matchId && !matchDesc && !matchScenario && !matchTools) return false
+    }
+    return true
+  })
+})
+
+/** 打开技能编排详情弹窗 */
+function handleOpenSkillModal(skill: SkillDetail) {
+  safeBlur()
+  selectedSkill.value = skill
+  showSkillModal.value = true
+}
+
+/** 导出/复制技能清单配置 JSON */
+function handleExportSkillsJson() {
+  safeBlur()
+  try {
+    const payload = JSON.stringify(builtinSkills, null, 2)
+    navigator.clipboard.writeText(payload)
+    message.success('已复制全部技能编排配置 JSON 至剪贴板')
+  } catch {
+    message.info('请在安全上下文中复制配置')
+  }
+}
+
+/** 创建自定义技能受控说明 */
+function handleOpenAddSkillNotice() {
+  safeBlur()
+  dialog.info({
+    title: '创建自定义技能 · 架构受控说明',
+    content:
+      '依据系统安全与评测确定性契约（PRD §5.5.2 与 API §3.6.2），V1.0 使用服务端固定的高安全性系统提示词（System Prompt）与短工具绑定，暂不开放自定义技能创建与外部提示词篡改，防范 Prompt 越权注入。如后续版本开放将补齐安全审计与版本回滚机制。',
+    positiveText: '了解规范',
+  })
+}
 
 // 运行时治理表单（settings.runtime）
 const runtimeForm = ref({ ws_ping_s: 15, ws_timeout_s: 45, strict_session_slot: true })
@@ -1812,5 +2198,233 @@ onMounted(loadProfiles)
   color: var(--text-secondary);
   line-height: 1.5;
   margin: 0;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Agent 技能编排 (Skills & Prompts) 专属排版与微光设计
+   ═══════════════════════════════════════════════════════════════ */
+.skills-center-container {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.skills-hero-title-area {
+  display: flex;
+  flex-direction: column;
+}
+
+.skills-main-title {
+  font-size: 15.5px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.skills-badge-vault {
+  background: rgba(99, 102, 241, 0.1);
+  color: var(--accent-ai, #6366f1);
+  border-color: rgba(99, 102, 241, 0.25);
+  font-size: 11px;
+}
+
+/* 4 项 KPI 微光带 */
+.skills-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.skills-kpi-card {
+  padding: 12px 14px;
+  background: var(--bg-elevated, #f8fafc);
+  border: 1px solid var(--border-subtle, #e2e8f0);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.skills-kpi-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(99, 102, 241, 0.35);
+  box-shadow: 0 4px 12px -2px rgba(99, 102, 241, 0.08);
+}
+
+.skills-kpi-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.skills-kpi-label {
+  font-size: 11.5px;
+  color: var(--text-tertiary, #9ca3af);
+  font-weight: 500;
+}
+
+.skills-kpi-icon {
+  font-size: 15px;
+}
+
+.skills-kpi-val {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary, #0f172a);
+}
+
+.skills-kpi-sub {
+  font-size: 11px;
+  color: var(--text-secondary, #64748b);
+}
+
+/* 技能工具条与分段器 */
+.skills-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.skills-filter-group {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+/* 技能卡片网格 */
+.skills-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 14px;
+}
+
+.skill-card-v2 {
+  border: 1px solid var(--border-subtle, #e2e8f0);
+  border-radius: 12px;
+  padding: 16px;
+  background: var(--bg-card, #ffffff);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+}
+
+.skill-card-v2:hover {
+  transform: translateY(-2px);
+  border-color: rgba(99, 102, 241, 0.4);
+  box-shadow: 0 6px 18px -2px rgba(99, 102, 241, 0.1);
+}
+
+.skill-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.skill-main-icon {
+  font-size: 26px;
+  line-height: 1;
+}
+
+.skill-card-name {
+  font-size: 14.5px;
+  font-weight: 700;
+  color: var(--text-primary, #0f172a);
+}
+
+.skill-scenario-tag {
+  font-size: 11px;
+  color: var(--text-tertiary, #94a3b8);
+  margin-top: 2px;
+}
+
+.skill-builtin-chip {
+  font-size: 10.5px;
+  background: rgba(99, 102, 241, 0.08);
+  color: var(--accent-ai, #6366f1);
+  border-color: rgba(99, 102, 241, 0.2);
+  font-weight: 600;
+}
+
+.skill-card-desc {
+  font-size: 12.5px;
+  color: var(--text-secondary, #475569);
+  line-height: 1.5;
+  min-height: 38px;
+}
+
+/* 调优参数微型芯片 */
+.skill-tuning-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tuning-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  background: rgba(15, 23, 42, 0.04);
+  border-radius: 5px;
+  font-size: 10.5px;
+  border: 1px solid rgba(226, 232, 240, 0.6);
+}
+
+.tuning-k {
+  color: var(--text-tertiary, #94a3b8);
+}
+
+.tuning-v {
+  color: var(--accent-ai, #6366f1);
+  font-weight: 700;
+}
+
+/* 触发命令与依赖工具行 */
+.skill-cmds-row,
+.skill-tools-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+}
+
+.cmd-label,
+.tools-label {
+  font-size: 11px;
+  color: var(--text-tertiary, #94a3b8);
+  white-space: nowrap;
+}
+
+.cmd-tag {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(56, 189, 248, 0.1);
+  color: #0284c7;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.tool-tag {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(15, 23, 42, 0.04);
+  color: var(--c-profiles, #b45309);
+  font-size: 10.5px;
+  border: 1px solid rgba(226, 232, 240, 0.6);
+}
+
+.skill-card-bottom {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 10px;
+  margin-top: auto;
+  border-top: 1px solid var(--border-subtle, #f1f5f9);
 }
 </style>
