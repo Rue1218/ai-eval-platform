@@ -591,7 +591,7 @@
           </span>
         </div>
 
-        <div class="composer-card" style="position: relative;">
+        <div class="composer-card" :class="{ generating: isGenerating }" style="position: relative;">
           <!-- 斜杠命令悬浮面板 (宽 360px，键入 / 触发) -->
           <SlashPalette
             ref="slashPaletteRef"
@@ -2497,6 +2497,51 @@ onBeforeUnmount(() => {
 .composer-card:focus-within {
   border-color: var(--accent-ai);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-ai) 15%, transparent), 0 4px 18px rgba(0, 0, 0, 0.06);
+}
+
+/* 运行生成中的动态环绕光束特效 (Border Beam) */
+@property --composer-border-angle {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+
+.composer-card.generating {
+  border-color: transparent !important;
+  box-shadow: 0 0 20px color-mix(in srgb, var(--accent-ai, #10b981) 22%, transparent),
+              0 4px 20px rgba(0, 0, 0, 0.12);
+}
+
+.composer-card.generating::before {
+  content: '';
+  position: absolute;
+  inset: -1.5px;
+  border-radius: 17.5px;
+  padding: 1.5px;
+  background: conic-gradient(
+    from var(--composer-border-angle, 0deg),
+    transparent 0%,
+    transparent 40%,
+    var(--accent-ai, #10b981) 60%,
+    #38bdf8 76%,
+    #818cf8 88%,
+    transparent 100%
+  );
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+  z-index: 1;
+  animation: rotate-composer-border 2.4s linear infinite;
+}
+
+@keyframes rotate-composer-border {
+  from {
+    --composer-border-angle: 0deg;
+  }
+  to {
+    --composer-border-angle: 360deg;
+  }
 }
 
 /* 多行文本域自适应高度（最小 38px，最大 200px 限制） */
