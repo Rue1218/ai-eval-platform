@@ -920,6 +920,7 @@ const agentProfileDropdownOptions = computed<DropdownOption[]>(() => {
 
 const sessions = ref<AgentSession[]>([])
 const selectedSessionIds = ref<string[]>([])
+const deletingSessionIds = new Set<string>()
 const currentSessionId = ref<string>('')
 const currentSession = computed(() => sessions.value.find(s => s.id === currentSessionId.value) || sessions.value[0] || null)
 const deletableSessionCount = computed(() => sessions.value.filter((session) => session.can_delete).length)
@@ -1220,7 +1221,7 @@ function gcIdleSockets(keepId: string) {
 }
 
 /** 服务端以 4404 收回会话后同步移除本地缓存，避免列表留下无法重连的幽灵项。 */
-function removeInaccessibleSession(sid: string) {
+function removeInaccessibleSession(sid: string, navigate = true) {
   const index = sessions.value.findIndex((session) => session.id === sid)
   const wasCurrent = currentSessionId.value === sid
   const socket = sockets.get(sid)
@@ -1234,9 +1235,23 @@ function removeInaccessibleSession(sid: string) {
   if (index < 0) return
 
   sessions.value.splice(index, 1)
-  if (!wasCurrent) return
-  if (agentWs === socket) agentWs = null
+  if (wasCurrent && agentWs === socket) agentWs = null
+  if (!wasCurrent || !navigate) return
   const next = sessions.value[index] || sessions.value[index - 1]
+  if (next) {
+    void selectSession(next.id)
+  } else {
+    void handleCreateSession()
+  }
+}
+
+/** 批量清理已删除会话后只导航一次，避免依次跳转到同批次的已删除会话。 */
+function removeInaccessibleSessions(sids: string[]) {
+  const wasCurrent = sids.includes(currentSessionId.value)
+  if (wasCurrent) selectEpoch += 1
+  sids.forEach((sid) => removeInaccessibleSession(sid, false))
+  if (!wasCurrent) return
+  const next = sessions.value[0]
   if (next) {
     void selectSession(next.id)
   } else {
@@ -2255,6 +2270,7 @@ async function handleSelectAgentModel(key: string) {
 /** F4 会话历史回放：拉取历史 user/assistant 消息与事件流，严格按时间序与优先级排列
  *  保证思考卡 (ThoughtCard) 与 MCP 短工具卡 (ToolCard) 永远在 AI 回复内容 (Agent Message) 的上方。 */
 async function loadSessionHistory(sid: string): Promise<number> {
+  if (deletingSessionIds.has(sid)) return 0
   try {
     const history = await api.sessions.getMessages(sid)
     interface TimelineItem {
@@ -2414,12 +2430,17 @@ async function loadSessionHistory(sid: string): Promise<number> {
       ...(history.messages || []).map((m: any) => Number(m?.event_id) || 0),
     ]
     return eventIds.length ? Math.max(0, ...eventIds) : 0
-  } catch {
+  } catch (err: any) {
+    // 软删除或权限收回后，清理旧列表缓存，避免用户再次点击幽灵会话。
+    if (err?.status === 404 && sessions.value.some((session) => session.id === sid)) {
+      removeInaccessibleSession(sid)
+    }
     return 0
   }
 }
 
 async function selectSession(sid: string) {
+  if (deletingSessionIds.has(sid)) return
   if (sid === currentSessionId.value && sockets.has(sid)) {
     return
   }
@@ -2552,10 +2573,12 @@ function handleBatchDeleteSessions() {
     negativeText: '保留',
     positiveButtonProps: { type: 'error' },
     onPositiveClick: async () => {
+      ids.forEach((sid) => deletingSessionIds.add(sid))
       const results = await Promise.allSettled(ids.map((sid) => api.sessions.remove(sid)))
       const succeeded = ids.filter((_sid, index) => results[index]?.status === 'fulfilled')
       const failed = results.filter((result) => result.status === 'rejected')
-      succeeded.forEach((sid) => removeInaccessibleSession(sid))
+      ids.forEach((sid) => deletingSessionIds.delete(sid))
+      removeInaccessibleSessions(succeeded)
       if (!failed.length) {
         message.success(`已删除 ${succeeded.length} 个会话，对话与任务记录仍保留审计`)
         return
