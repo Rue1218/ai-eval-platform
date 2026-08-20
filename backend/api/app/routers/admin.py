@@ -12,6 +12,8 @@ from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
 from ..models import AuditLog, ProtocolProfile, Setting, User
+from ..profile_env import ProfileEnvSnapshot, restore_snapshot, write_profile_env
+from .profiles import _profile_connection
 from .users import _parse_bound
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -85,25 +87,49 @@ def put_settings(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """保存允许的设置字段，并为每次变更追加审计记录。"""
+    """保存允许的设置字段，并同步 Agent 模型的全局 LLM 环境别名。"""
     _validate_settings(body, db)
-    for key, value in body.items():
-        row = db.query(Setting).filter(Setting.key == key).first()
-        if row:
-            row.value = value
-            row.updated_by = user.id
-        else:
-            db.add(Setting(key=key, value=value, updated_by=user.id))
-    db.add(
-        AuditLog(
-            user_id=user.id,
-            action="settings_update",
-            target_type="settings",
-            detail={"keys": sorted(body)},
-            ip=request.client.host if request.client else None,
+    env_snapshot: ProfileEnvSnapshot | None = None
+    try:
+        if body.get("agent_profile_id"):
+            profile = db.query(ProtocolProfile).filter(ProtocolProfile.id == body["agent_profile_id"]).first()
+            base_url, model, api_key = _profile_connection(profile, allow_global_alias=True)
+            env_snapshot = write_profile_env(
+                profile.id,
+                base_url=base_url,
+                model=model,
+                api_key=api_key,
+                protocol=profile.protocol,
+                write_global_aliases=True,
+                remove_global_api_key=not bool(api_key),
+            )
+        for key, value in body.items():
+            row = db.query(Setting).filter(Setting.key == key).first()
+            if row:
+                row.value = value
+                row.updated_by = user.id
+            else:
+                db.add(Setting(key=key, value=value, updated_by=user.id))
+        db.add(
+            AuditLog(
+                user_id=user.id,
+                action="settings_update",
+                target_type="settings",
+                detail={"keys": sorted(body)},
+                ip=request.client.host if request.client else None,
+            )
         )
-    )
-    db.commit()
+        db.commit()
+    except AppError:
+        db.rollback()
+        if env_snapshot:
+            restore_snapshot(env_snapshot)
+        raise
+    except Exception as exc:
+        db.rollback()
+        if env_snapshot:
+            restore_snapshot(env_snapshot)
+        raise AppError(ErrorCode.INTERNAL, "运行时配置写入失败") from exc
     return _load(db)
 
 

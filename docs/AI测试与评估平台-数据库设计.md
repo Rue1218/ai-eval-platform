@@ -2,10 +2,10 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.0-Draft |
+| 文档版本 | V1.1-Draft |
 | 状态 | 目标数据模型，待按里程碑以 Alembic 落地 |
 | 数据库 | PostgreSQL 16 |
-| 最近修订 | 2026-08-18 |
+| 最近修订 | 2026-08-20：协议档 URL、模型 ID、API Key 移出数据库，改由环境文件按 profile 隔离保存 |
 | 适用范围 | 平台 V1.0 |
 
 ## 1. 文档定位与裁决
@@ -28,7 +28,7 @@
 | 结构化字段 | 可筛选、关联、约束的事实数据单列保存；TaskSpec 快照、指标分段、自定义列、上游原始报文等半结构化内容才使用 `jsonb`。 |
 | 版本 | 数据集、黄金 QA、用例映射和任务均保存版本/快照。编辑当前资产不改变已经创建的任务和报告。 |
 | 删除 | 历史任务、报告、审计、用量和事件不级联删除。资产删除后，历史快照继续可读；运行中任务引用的资产禁止删除。 |
-| 安全 | 密码只存不可逆哈希；协议 Key 和通知密钥只存 Fernet 密文；分享令牌只存哈希；日志、事件、原始报文不得含密码、Cookie 或 API Key。 |
+| 安全 | 密码只存不可逆哈希；协议 Key 写入服务器受控环境文件，通知密钥按写入型敏感项保护；分享令牌只存哈希；日志、事件、原始报文不得含密码、Cookie 或 API Key。 |
 | 写入边界 | API/Agent 仅创建控制面数据和事件；Worker 写任务状态、样本、报告和用量；stress 容器的曲线由 Worker 回写平台库。 |
 | 事务 | 影响状态机、版本、映射、会签、预算或审计的写操作必须同事务提交；任一步失败即整体回滚。 |
 
@@ -69,7 +69,7 @@ erDiagram
 | 表 | 主要字段 | 约束与说明 | 最早批次 |
 | --- | --- | --- | --- |
 | `users` | `id`、`username`、`display_name`、`email`、`password_hash`、`role`、`must_change_password`、`disabled`、`last_login_at`、`last_login_ip`、`auth_version`、`created_at`、`updated_at` | `username` 唯一；`email` 非空时唯一；`role` 固定为 `member`，不再使用旧多角色含义；停用最后一个正常账号须由服务层在事务内拒绝。`auth_version` 用于改密或停用后统一失效旧登录态。 | B1 |
-| `protocol_profiles` | `id`、`name`、`protocol`、`base_url`、`model`、`usages`、`anthropic_version`、`encrypted_key`、`created_by`、`created_at`、`updated_at` | `protocol` 限定 `openai_chat`、`openai_responses`、`anthropic_messages`；`usages` 为 `jsonb` 数组，如 `target`、`judge`、`agent`；`encrypted_key` 仅写入、不在任何 GET 返回。 | B1 |
+| `protocol_profiles` | `id`、`name`、`protocol`、`base_url`、`model`、`usages`、`anthropic_version`、`encrypted_key`、`created_by`、`created_at`、`updated_at` | `protocol` 限定 `openai_chat`、`openai_responses`、`anthropic_messages`；`usages` 为 `jsonb` 数组，如 `target`、`judge`、`agent`。`base_url`、`model` 是兼容快照，运行时以环境文件为准；`encrypted_key` 仅用于旧数据迁移，新 CRUD 永远为空。 | B1 |
 | `settings` | `key`、`value`、`encrypted_value`、`updated_by`、`updated_at` | `key` 主键；`value` 存非敏感配置，如并发、预算、Agent profile、通知开关和阈值；`encrypted_value` 仅存 Webhook token 等写入型敏感项。白名单使用独立表，不塞入本表。 | B1/B5 |
 | `files` | `id`、`filename`、`content_type`、`size_bytes`、`sha256`、`storage_path`、`kind`、`uploaded_by`、`created_at` | 文件二进制位于 `./data/files/{id}`，数据库只存元数据和路径；`sha256` 建普通索引用于去重核验，不以文件名判断同一内容。 | B1 |
 | `audit_logs` | `id`、`actor_id`、`action`、`target_type`、`target_id`、`detail`、`ip`、`ts` | 追加写入，不更新、不删除；`detail` 必须经脱敏。至少覆盖登录失败、Key 变更、基线冻结/解冻、白名单变更、`prod` 会签/发压、账号状态变更。 | B1 |
@@ -184,7 +184,7 @@ Worker 将质量任务从 `running` 置为 `succeeded` 且需要压测时，必�
 | 数据 | 存储要求 |
 | --- | --- |
 | 密码 | 使用安全密码哈希；禁止写入 `audit_logs`、`task_events`、异常详情或 Worker 日志。 |
-| API Key / 通知凭据 | Fernet 密文列保存；所有 GET、报告、WS 和审计只返回 `has_api_key`、开关或掩码。 |
+| API Key / 通知凭据 | 协议档 API Key 写入服务器受控环境文件并按 profile 变量隔离；所有 GET、报告、WS 和审计只返回 `has_api_key`、开关或掩码。旧 `encrypted_key` 仅在迁移时读取后清空。 |
 | 分享链接 | 仅保存随机 token 的哈希；原 token 只在创建响应中返回一次。 |
 | 上游原始报文 | 仅在 `eval_items.raw_request/raw_response` 脱敏、截断（最大 32KB）后保存；移除 Authorization、Cookie 和 Key 形态字段。 |
 | 文件 | 本地卷保存，数据库保存路径和 SHA-256；上传大小、扩展名和访问权限均在落盘前校验。 |
@@ -223,3 +223,12 @@ Worker 将质量任务从 `running` 置为 `succeeded` 且需要压测时，必�
 - 当前任务预算累计到上限后原子地停止后续调用，`usage_ledger` 与报告成本一致。
 - 所有协议 Key、密码、Cookie、WS ticket 和明文分享 token 均不能从数据库查询结果、API、WS 事件、审计或原始报文中回显。
 - 每个表的写入后都有重新读取的集成测试；涉及迁移的表有 upgrade/downgrade 验证。
+
+## 9. 本次修订代码文件与作用清单（2026-08-20）
+
+| 文件 | 作用 |
+| --- | --- |
+| `backend/api/app/profile_env.py` | 协议档环境变量命名、挂载文件加锁刷新、删除与事务回滚 |
+| `backend/api/app/routers/profiles.py` | CRUD 不再写入 API Key，运行时以环境文件为准，并迁移旧密文 |
+| `backend/worker/app/profile_env.py` | Worker 只读 API 写入的多供应商环境变量 |
+| `docker-compose.yml` | `.env` 以 API 可写、Worker 只读方式挂载 |
