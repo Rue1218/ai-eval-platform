@@ -1,5 +1,5 @@
 <template>
-  <div class="tool-card" :class="{ open: isOpen }">
+  <div class="tool-card" :class="{ open: isOpen, 'no-anim': noAnim }" :data-tool="tool">
     <div class="tool-head" @click="isOpen = !isOpen">
       <div class="tool-status" :class="statusClass">
         <!-- pending 旋转 -->
@@ -26,7 +26,7 @@
 
       <div class="tool-title-wrap">
         <div class="tool-name">{{ toolChineseName }}</div>
-        <div class="tool-sub-tag">MCP · 短工具</div>
+        <div class="tool-sub-tag">ToolCall · {{ tool }}</div>
       </div>
 
       <div class="tool-meta-right">
@@ -43,7 +43,7 @@
       </div>
     </div>
 
-    <div v-if="isOpen" class="tool-detail">
+    <div v-show="isOpen" class="tool-detail">
       <audio
         v-if="tool === 'audio.voiceclone' && status === 'ok' && playUrl"
         class="tool-audio"
@@ -57,20 +57,20 @@
         :src="imagePlayUrl"
         alt="Qwen Image 生成结果"
       />
-      <div v-if="args" style="margin-bottom: 8px">
-        <div class="td-label">调用入参</div>
-        <pre class="code">{{ formatJson(args) }}</pre>
+      <div class="td-block">
+        <div class="td-label">输入 arguments</div>
+        <pre class="code">{{ formatJson(args ?? {}) }}</pre>
       </div>
-      <div v-if="result">
-        <div class="td-label">返回结果</div>
-        <pre class="code">{{ formatJson(result) }}</pre>
+      <div class="td-block">
+        <div class="td-label">{{ status === 'fail' ? '输出 error' : '输出 result' }}</div>
+        <pre class="code">{{ outputText }}</pre>
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { formatLatency } from '../../utils/format'
 
 const props = withDefaults(
@@ -80,13 +80,26 @@ const props = withDefaults(
     result?: any
     status?: 'pending' | 'ok' | 'fail'
     latencyMs?: number
+    defaultOpen?: boolean
+    noAnim?: boolean
   }>(),
   {
     status: 'ok',
+    defaultOpen: false,
+    noAnim: false,
   },
 )
 
-const isOpen = ref(false)
+const isOpen = ref(!!props.defaultOpen)
+
+watch(
+  () => props.status,
+  (status) => {
+    if (status === 'ok' && ['audio.voiceclone', 'image.generate'].includes(props.tool)) {
+      isOpen.value = true
+    }
+  },
+)
 
 const toolNameMap: Record<string, string> = {
   'model.list': '列出协议档',
@@ -145,9 +158,15 @@ const imagePlayUrl = computed(() => {
 const statusClass = computed(() => props.status)
 
 const stateText = computed(() => {
-  if (props.status === 'pending') return '调用中...'
-  if (props.status === 'fail') return '调用失败'
-  return '调用完成'
+  if (props.status === 'pending') return 'ToolCall 调用中'
+  if (props.status === 'fail') return 'ToolCall 失败'
+  return 'ToolCall 完成'
+})
+
+const outputText = computed(() => {
+  if (props.status === 'pending') return '…'
+  if (props.result === undefined || props.result === null || props.result === '') return '{}'
+  return formatJson(props.result)
 })
 
 function formatJson(val: any): string {
@@ -264,6 +283,12 @@ function formatJson(val: any): string {
   color: var(--text-tertiary);
   margin-bottom: 5px;
 }
+.td-block {
+  margin-bottom: 8px;
+}
+.td-block:last-child {
+  margin-bottom: 0;
+}
 pre.code {
   margin: 0;
   background: #0f172a;
@@ -276,11 +301,21 @@ pre.code {
   overflow: auto;
   max-height: 200px;
 }
+.tool-card.no-anim {
+  animation: none;
+}
 .tool-audio {
   display: block;
   width: 100%;
   margin-bottom: 10px;
   height: 36px;
+}
+.tool-image {
+  display: block;
+  max-width: 100%;
+  max-height: 280px;
+  margin-bottom: 10px;
+  border-radius: 8px;
 }
 @keyframes msg-in {
   from {

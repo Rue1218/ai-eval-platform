@@ -512,9 +512,9 @@ def run_plan(
         plan = l0_plan(text, prefs=prefs)
         return _finish(plan)
 
-    # 无评测关键词的闲聊（含问候与「生成一首音乐」这类离题请求）：L0 即可，
-    # 禁止再串行打规划模型，否则前端打字占位被用户 message 回显拆掉后会长时间空白。
-    if classify_intent_l0(text)[0] == "chat":
+    # 无评测关键词的问候（你好 / hi）：L0 即可，把预算留给流式回复。
+    # 其它自然语言必须走规划模型，由模型按本轮目标选 intent / 工具，禁止一律套评测技能。
+    if is_smalltalk(text):
         plan = l0_plan(text, prefs=prefs)
         return _finish(plan)
 

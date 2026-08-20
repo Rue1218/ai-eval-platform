@@ -218,6 +218,8 @@ def test_run_react_passes_voiceclone_arguments(tmp_path, monkeypatch):
     )
     assert captured["arguments"]["text"] == "欢迎使用"
     assert captured["arguments"]["file_id"] == row.id
-    assert events[0][0] == "tool_call"
-    assert events[0][1]["arguments"]["file_id"] == row.id
+    assert events[0][0] == "thought"
+    assert events[0][1].get("stage") == "react"
+    assert events[1][0] == "tool_call"
+    assert events[1][1]["arguments"]["file_id"] == row.id
     assert arguments_for_voiceclone(_AudioDb(row), text="欢迎使用", attachments=[row.id])["file_id"] == row.id

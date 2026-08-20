@@ -22,7 +22,7 @@ from .defaults import (
     SHORT_TOOLS,
     TOOL_TITLES,
 )
-from .log import agent_trace
+from .log import agent_exception, agent_trace
 from .long_tasks import assert_short_tool
 
 _SENSITIVE_KEY_RE = re.compile(r"(?i)(api_key|token|password|secret|cookie)")
@@ -223,16 +223,16 @@ def execute_short_tool(
             raise AppError(ErrorCode.VALIDATION, "该能力未启用")
 
         latency_ms = int((time.perf_counter() - started) * 1000)
-        agent_trace(f"短工具完成 name={name} latency={latency_ms}ms")
+        agent_trace(f"ToolCall 完成 name={name} ok=true latency={latency_ms}ms")
         return True, truncate_tool_data(data), None, latency_ms
     except AppError as exc:
         latency_ms = int((time.perf_counter() - started) * 1000)
-        agent_trace(f"短工具失败 name={name} code={exc.code.value} latency={latency_ms}ms")
+        agent_trace(f"ToolCall 失败 name={name} code={exc.code.value} latency={latency_ms}ms error={exc.message}")
         return False, None, exc.message, latency_ms
     except Exception as exc:
-        agent_trace(f"短工具内部异常 name={name} type={type(exc).__name__}")
         latency_ms = int((time.perf_counter() - started) * 1000)
-        return False, None, "操作失败", latency_ms
+        agent_exception(f"ToolCall 内部异常 name={name}", exc)
+        raise AppError(ErrorCode.INTERNAL, f"ToolCall「{name}」执行失败") from exc
 
 
 def tool_title(name: str) -> str:

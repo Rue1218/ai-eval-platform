@@ -192,7 +192,9 @@ def test_run_react_passes_imagegen_arguments(tmp_path, monkeypatch):
     assert captured["name"] == "image.generate"
     assert captured["arguments"]["prompt"] == "根据参考图生成油画风格"
     assert captured["arguments"]["file_id"] == row.id
-    assert events[0][0] == "tool_call"
+    assert events[0][0] == "thought"
+    assert events[0][1].get("stage") == "react"
+    assert events[1][0] == "tool_call"
 
 
 def test_generate_image_requires_configuration(monkeypatch):

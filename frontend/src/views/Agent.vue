@@ -193,61 +193,17 @@
               :stage="item.stage"
             />
 
-            <!-- 2.3 短 MCP 工具调用卡 -->
-            <div
+            <!-- 2.3 ToolCall 卡片：WS 事件 tool_call/tool_result，执行走内部短工具 -->
+            <ToolCard
               v-else-if="item.type === 'tool'"
-              class="tool-card"
-              :class="{ open: item.open, 'no-anim': item.noAnim }"
-              :data-tool="item.tool"
-            >
-              <div class="tool-head" @click="item.open = !item.open">
-                <span class="tool-status" :class="item.status">
-                  <svg v-if="item.status === 'pending'" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
-                    <path d="M12 3a9 9 0 1 0 9 9" />
-                  </svg>
-                  <svg v-else-if="item.status === 'ok'" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="12" cy="12" r="9" />
-                    <path d="m8.5 12.2 2.4 2.4 4.6-5" />
-                  </svg>
-                  <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
-                    <circle cx="12" cy="12" r="9" />
-                    <path d="M9 9l6 6M15 9l-6 6" />
-                  </svg>
-                </span>
-                <div class="tool-title-wrap">
-                  <span class="tool-name">{{ getToolDisplayName(item.tool) }}</span>
-                  <span class="tool-sub-tag">MCP · 短工具</span>
-                </div>
-                <div class="tool-meta-right">
-                  <span v-if="formatLatency(item.latency_ms)" class="tool-latency mono">{{ formatLatency(item.latency_ms) }}</span>
-                  <span class="tool-state-text" :class="{ fail: item.status === 'fail' }">
-                    {{ item.status === 'pending' ? '调用中' : item.status === 'ok' ? '完成' : '失败' }}
-                  </span>
-                </div>
-                <svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
-                  <path d="m6 9 6 6 6-6" />
-                </svg>
-              </div>
-              <audio
-                v-if="item.tool === 'audio.voiceclone' && item.status === 'ok' && voiceclonePlayUrl(item.result)"
-                class="tool-audio"
-                controls
-                preload="metadata"
-                :src="voiceclonePlayUrl(item.result)"
-              />
-              <img
-                v-if="item.tool === 'image.generate' && item.status === 'ok' && imagegenPlayUrl(item.result)"
-                class="tool-image"
-                :src="imagegenPlayUrl(item.result)"
-                alt="Qwen Image 生成结果"
-              />
-              <div v-show="item.open" class="tool-detail">
-                <div class="td-label">输入</div>
-                <pre class="code">{{ JSON.stringify(item.args || {}, null, 2) }}</pre>
-                <div class="td-label">输出</div>
-                <pre class="code">{{ item.status === 'pending' ? '…' : (typeof item.result === 'string' ? item.result : JSON.stringify(item.result || {}, null, 2)) }}</pre>
-              </div>
-            </div>
+              :tool="item.tool || ''"
+              :args="item.args"
+              :result="item.result"
+              :status="item.status"
+              :latency-ms="item.latency_ms"
+              :default-open="item.open"
+              :no-anim="item.noAnim"
+            />
 
             <!-- 2.4 任务确认卡 (Benchmark / RAG / TestCase) -->
             <div
@@ -837,6 +793,7 @@ import { formatLatency } from '../utils/format'
 import { skillLabel } from '../agent/skillLabels'
 import SkillBadge from '../components/agent/SkillBadge.vue'
 import ThoughtCard from '../components/agent/ThoughtCard.vue'
+import ToolCard from '../components/agent/ToolCard.vue'
 import MarkdownView from '../components/agent/MarkdownView.vue'
 import SlashPalette from '../components/agent/SlashPalette.vue'
 import { SYSTEM_SLASH_COMMANDS } from '../agent/slashRegistry'
@@ -865,8 +822,8 @@ const awaitingConfirm = computed(() =>
 const harnessStageLabel = computed(() => {
   if (harnessStage.value === 'plan') return '规划中'
   if (harnessStage.value === 'reflect') return '复核中'
-  if (harnessStage.value === 'react' && lastToolTitle.value) return `调用「${lastToolTitle.value}」`
-  if (harnessStage.value === 'react') return '调用工具中'
+  if (harnessStage.value === 'react' && lastToolTitle.value) return `ToolCall「${lastToolTitle.value}」`
+  if (harnessStage.value === 'react') return 'ToolCall 中'
   return '生成中'
 })
 const turnLatencyLabel = computed(() => formatLatency(turnLatencyMs.value) || '')
@@ -1340,34 +1297,9 @@ function getToolDisplayName(name?: string) {
     'testcase.confirm': '确认用例入库',
     'audio.voiceclone': '音色克隆配音',
     'image.generate': 'Qwen Image 生图',
+    'dispatch.overview': '调度概览',
   }
-  return (name && names[name]) || name || '调用工具'
-}
-
-/** 音色克隆成功后的可播放地址（须同源 Cookie 鉴权）。 */
-function voiceclonePlayUrl(result: unknown): string {
-  if (!result || typeof result !== 'object') return ''
-  const data = result as Record<string, unknown>
-  const url = data.content_url
-  if (typeof url === 'string' && url.startsWith('/api/files/') && url.includes('/content')) {
-    return url
-  }
-  const id = data.file_id
-  if (typeof id === 'string' && id) return `/api/files/${id}/content`
-  return ''
-}
-
-/** Qwen Image 成功后的图片地址（须同源 Cookie 鉴权）。 */
-function imagegenPlayUrl(result: unknown): string {
-  if (!result || typeof result !== 'object') return ''
-  const data = result as Record<string, unknown>
-  const url = data.content_url
-  if (typeof url === 'string' && url.startsWith('/api/files/') && url.includes('/content')) {
-    return url
-  }
-  const id = data.file_id
-  if (typeof id === 'string' && id) return `/api/files/${id}/content`
-  return ''
+  return (name && names[name]) || name || 'MCP 短工具'
 }
 
 function getConfirmTitle(kind: string) {
@@ -1561,8 +1493,17 @@ function finishThought(item: StreamItem) {
 
 /** 实时模式：下一个非 thought 事件到达时收尾当前思考卡（对齐原型 finishLiveThought）。 */
 function finishLiveThought() {
-  const last = events.value[events.value.length - 1]
-  if (last?.type === 'thought' && !last.done) finishThought(last)
+  const last = [...events.value].reverse().find(e => e.type === 'thought' && !e.done)
+  if (last) finishThought(last)
+}
+
+/** 协作者缓冲区：立刻收尾未完成思考卡，避免下一轮工具卡叠进同一张。 */
+function finishBufferThought(buf: StreamItem[]) {
+  const last = [...buf].reverse().find(e => e.type === 'thought' && !e.done)
+  if (last) {
+    last.done = true
+    last.collapsed = true
+  }
 }
 
 /** 滚动锚定：仅当视口贴底（距底 <72px）时才跟随新消息，上翻阅读不被打断（对齐原型行为）。 */
@@ -2341,7 +2282,7 @@ async function handleSelectAgentModel(key: string) {
 }
 
 /** F4 会话历史回放：拉取历史 user/assistant 消息与事件流，严格按时间序与优先级排列
- *  保证思考卡 (ThoughtCard) 与 MCP 短工具卡 (ToolCard) 永远在 AI 回复内容 (Agent Message) 的上方。 */
+ *  保证思考卡 (ThoughtCard) 与 ToolCall 卡 (ToolCard) 永远在 AI 回复内容 (Agent Message) 的上方。 */
 async function loadSessionHistory(sid: string): Promise<number> {
   if (deletingSessionIds.has(sid)) return 0
   try {
@@ -2434,7 +2375,7 @@ async function loadSessionHistory(sid: string): Promise<number> {
           time: t,
           priority: 3,
           eventId: eid,
-          item: { type: 'tool', tool: p.name, args: p.arguments, status: 'pending', open: false, noAnim: true },
+          item: { type: 'tool', tool: p.name, args: p.arguments, status: 'pending', open: true, noAnim: true },
         })
       } else if (ev.event === 'tool_result') {
         const target = [...rawList].reverse().find((x) => x.item.type === 'tool' && x.item.tool === p.name && x.item.status === 'pending')
@@ -2887,28 +2828,24 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
       }
       const text = String(p.text || '').trim()
       const stage = p.stage as StreamItem['stage'] | undefined
-      if (stage) rt.harnessStage = stage
-      const think = [...buf].reverse().find(e => e.type === 'thought' && !e.done)
-      if (think) {
-        // 与前台一致：交付终帧（无 stage）不得覆盖 streamThink 卡的推理内容
-        if (text && (stage || !think.streamThink)) think.text = text
-        think.done = true
-        think.collapsed = true
-        if (p.latency_ms !== undefined) think.latency_ms = p.latency_ms
-        if (p.skill_id) think.skill_id = p.skill_id
-        if (stage) think.stage = stage
-      } else if (stage || p.skill_id) {
+      if (stage) {
+        // 每轮 Harness 阶段单独一张卡（规划 / MCP ReAct / 复核），禁止叠进上一轮。
+        finishBufferThought(buf)
+        rt.harnessStage = stage
         buf.push({
           type: 'thought',
           text,
-          done: true,
-          collapsed: true,
+          done: false,
+          collapsed: false,
           latency_ms: p.latency_ms,
           stage,
           skill_id: p.skill_id,
         })
+        markGenerating(sid, true)
+        break
       }
-      if (text && !stage) {
+      finishBufferThought(buf)
+      if (text) {
         const streaming = turnStreamingAgent(buf)
         if (streaming) {
           streaming.raw = text
@@ -2920,21 +2857,20 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
         markGenerating(sid, false)
         rt.harnessStage = ''
         void refreshContextMeter(sid)
-      } else if (!stage) {
+      } else {
         const orphan = turnStreamingAgent(buf)
         if (orphan) orphan.streaming = false
         markGenerating(sid, false)
         rt.harnessStage = ''
         void refreshContextMeter(sid)
-      } else {
-        markGenerating(sid, true)
       }
       break
     }
     case 'tool_call':
       markGenerating(sid, true)
       rt.harnessStage = 'react'
-      buf.push({ type: 'tool', tool: p.name, args: p.arguments, status: 'pending', open: false })
+      finishBufferThought(buf)
+      buf.push({ type: 'tool', tool: p.name, args: p.arguments, status: 'pending', open: true })
       break
     case 'tool_result': {
       const target = [...buf].reverse().find(x => x.type === 'tool' && x.tool === p.name)
@@ -2956,6 +2892,7 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
     case 'confirm':
       markGenerating(sid, false)
       rt.harnessStage = ''
+      finishBufferThought(buf)
       buf.push({
         type: 'confirm',
         card: normalizeConfirmCard(p),
@@ -3150,43 +3087,40 @@ function handleWsEvent(ev: WsServerEvent) {
         }
         break
       }
-      // 完整回复（终帧或非流式）
+      // 阶段思考卡（规划 / MCP ReAct / 复核）：每轮一张，禁止叠进上一张未完成卡
       const text = String(p.text || '').trim()
       const stage = p.stage as StreamItem['stage'] | undefined
+      if (typeof p.latency_ms === 'number') turnLatencyMs.value += p.latency_ms
       if (stage) {
+        finishLiveThought()
         harnessStage.value = stage
         setCurrentGenerating(true)
-      }
-      if (typeof p.latency_ms === 'number') turnLatencyMs.value += p.latency_ms
-      const think = [...events.value].reverse().find(e => e.type === 'thought' && !e.done)
-      if (think) {
-        // 终帧是权威全文，不能只依赖可能丢失的瞬态增量帧。
-        // 但交付终帧（无 stage）不得覆盖 streamThink 卡的推理内容——那是模型 reasoning，
-        // 与交付句是两回事；只结束并折叠该卡，正文走下方打字机气泡。
-        if (text && (stage || !think.streamThink)) think.text = text
-        think.done = true
-        think.collapsed = true
-        if (p.latency_ms !== undefined) think.latency_ms = p.latency_ms
-        if (p.skill_id) think.skill_id = p.skill_id
-        if (stage) think.stage = stage
-      } else if (stage || p.skill_id) {
         events.value.push(reactive({
           type: 'thought',
           text,
-          done: true,
-          collapsed: true,
+          done: false,
+          collapsed: false,
           latency_ms: p.latency_ms,
           stage,
           skill_id: p.skill_id,
         }))
+        console.log('%c[Agent] 💡 阶段思考卡:', 'color: #10b981; font-weight: bold;', {
+          stage,
+          skill: p.skill_id || '-',
+          chars: text.length,
+        })
+        if (text) scrollToBottom()
+        break
       }
+      // 交付终帧：先收尾思考卡，正文走打字机气泡，不得覆盖 reasoning / ReAct 卡
+      finishLiveThought()
       console.log('%c[Agent] 💡 思考完成 / 助手回复交付:', 'color: #10b981; font-weight: bold;', {
         chars: text.length,
         latency: p.latency_ms ? `${p.latency_ms}ms` : '未知',
-        stage: stage || '-',
+        stage: '-',
         text: text.slice(0, 100) + (text.length > 100 ? '...' : ''),
       })
-      if (text && !stage) {
+      if (text) {
         const streaming = turnStreamingAgent(events.value)
         const agentItem = streaming
         // 交付终帧的 reply_latency_ms 即本轮回复耗时，落到气泡供「耗时 x 秒」展示
@@ -3207,7 +3141,7 @@ function handleWsEvent(ev: WsServerEvent) {
         setCurrentGenerating(false)
         harnessStage.value = ''
         if (currentSessionId.value) void refreshContextMeter(currentSessionId.value)
-      } else if (!stage) {
+      } else {
         const orphan = turnStreamingAgent(events.value)
         if (orphan) orphan.streaming = false
         setCurrentGenerating(false)
@@ -3218,7 +3152,7 @@ function handleWsEvent(ev: WsServerEvent) {
       break
     }
     case 'tool_call': {
-      console.log('%c[Agent] ⚙️ 短工具调用:', 'color: #f59e0b; font-weight: bold;', p.name, p.arguments)
+      console.log('%c[Agent] ⚙️ ToolCall:', 'color: #f59e0b; font-weight: bold;', p.name, p.arguments)
       finishLiveThought()
       harnessStage.value = 'react'
       lastToolTitle.value = getToolDisplayName(p.name)
@@ -3228,13 +3162,13 @@ function handleWsEvent(ev: WsServerEvent) {
         tool: p.name,
         args: p.arguments,
         status: 'pending',
-        open: false,
+        open: true,
       })
       scrollToBottom()
       break
     }
     case 'tool_result': {
-      console.log('%c[Agent] ✅ 短工具完成:', 'color: #10b981; font-weight: bold;', p.name, {
+      console.log('%c[Agent] ✅ ToolCall 完成:', 'color: #10b981; font-weight: bold;', p.name, {
         ok: p.ok,
         latency: `${p.latency_ms || 0}ms`,
         data: p.data || p.error,

@@ -31,7 +31,7 @@ from app.agent.plan import (
     run_replan,
     sanitize_plan,
 )
-from app.agent.react import ReactArtifact, build_proposed_spec, run_react
+from app.agent.react import McpStep, ReactArtifact, build_proposed_spec, parse_mcp_step, run_react
 from app.agent.reflect import ReflectArtifact, maybe_model_check, run_gates
 from app.agent.slash import (
     assert_command_enabled,
@@ -422,18 +422,24 @@ def test_run_plan_greeting_skips_planner_llm(monkeypatch):
     assert budget.used == 0
 
 
-def test_run_plan_offtopic_chat_skips_planner_llm(monkeypatch):
-    """无评测关键词的闲聊（如生成音乐）也必须跳过规划模型。
+def test_run_plan_offtopic_uses_planner_not_eval_defaults(monkeypatch):
+    """离题请求必须走规划模型，不得被 L0 套成 benchmark + list 工具。"""
 
-    否则会先空等 1～2 次上游 JSON，期间前端若已收掉打字占位，对话区只剩用户气泡。
-    """
-    calls: list[int] = []
+    def _fake(_db, _payload, **_kwargs):
+        return (
+            {
+                "intent": "chat",
+                "skill_id": None,
+                "slots": {"filled": {}, "missing": []},
+                "tools_needed": [],
+                "delivery": "text",
+                "budget": {"max_tool_rounds": 4},
+                "notes": "规划：与评测无关，短答。",
+            },
+            12,
+        )
 
-    def _boom(*_args, **_kwargs):
-        calls.append(1)
-        raise AssertionError("非评测闲聊不应调用规划模型")
-
-    monkeypatch.setattr("app.agent.plan._call_plan_model", _boom)
+    monkeypatch.setattr("app.agent.plan._call_plan_model", _fake)
     budget = TurnBudget()
     plan = run_plan(
         _FakeDb(),
@@ -444,13 +450,14 @@ def test_run_plan_offtopic_chat_skips_planner_llm(monkeypatch):
         attachments=[],
         budget=budget,
     )
-    assert calls == []
     assert classify_intent_l0("帮我生成一首轻盈的音乐")[0] == "chat"
     assert plan.intent == "chat"
+    assert plan.skill_id is None
     assert plan.delivery == "text"
-    assert plan.source == "l0"
+    assert plan.source == "llm"
     assert plan.tools_needed == []
-    assert budget.used == 0
+    assert budget.used == 0  # consume 发生在 _call_plan_model 内，此处被 mock 掉
+
 
 
 def test_maybe_model_check_skips_chat_text(monkeypatch):
@@ -738,8 +745,8 @@ def test_run_react_continuation_respects_rounds_used(monkeypatch):
     assert len(calls) == 4
 
 
-def test_run_react_long_tool_records_failure_instead_of_raising():
-    """规划若误点长工具，ReAct 必须记失败观察并继续，不得让整轮 Harness 静默中断。"""
+def test_run_react_long_tool_handoff_without_execute():
+    """规划若误点长工具，只发思考卡移交 Worker，不得 execute 也不得打断整轮。"""
     events: list[tuple[str, dict]] = []
 
     async def _emit(event: str, payload: dict, **_kwargs) -> int:
@@ -767,11 +774,11 @@ def test_run_react_long_tool_records_failure_instead_of_raising():
             text="帮我生成一首轻盈的音乐",
         )
     )
-    assert events[0][0] == "tool_call"
-    assert events[1][0] == "tool_result"
-    assert events[1][1]["ok"] is False
-    assert "长任务" in (events[1][1].get("error") or "")
-    assert react.observations and react.observations[0]["ok"] is False
+    assert events[0][0] == "thought"
+    assert events[0][1].get("stage") == "react"
+    assert "长任务" in (events[0][1].get("text") or "")
+    assert all(ev[0] != "tool_call" for ev in events)
+    assert react.observations == []
 
 
 def test_run_replan_without_budget_clarifies():
@@ -835,6 +842,211 @@ def test_run_react_stops_at_five_rounds(monkeypatch):
         )
     )
     assert len(calls) == HARD_MAX_TOOL_ROUNDS
+
+
+def test_parse_mcp_step_keeps_long_tool_and_drops_writes():
+    """长工具名留给循环移交；task.create 不得进入执行。"""
+    long_step = parse_mcp_step({"thought": "去跑评测", "tool": "benchmark.run", "arguments": {}, "done": False})
+    assert long_step.tool == "benchmark.run"
+    write_step = parse_mcp_step({"tool": "task.create", "arguments": {"kind": "benchmark"}, "done": False})
+    assert write_step.tool is None
+    assert write_step.done is True
+
+
+def test_run_react_mcp_loop_executes_one_tool_per_round(monkeypatch):
+    """MCP ReAct：每轮 JSON 只执行 1 个短工具，多轮后留下 reply。"""
+    rounds = {"n": 0}
+    calls: list[str] = []
+    thoughts: list[str] = []
+
+    def _fake_step(_stop, _system, _payload):
+        rounds["n"] += 1
+        if rounds["n"] == 1:
+            return McpStep(thought="先列出协议档", tool="model.list", arguments={}, done=False, reply="")
+        if rounds["n"] == 2:
+            return McpStep(thought="再列出数据集", tool="dataset.list", arguments={}, done=False, reply="")
+        return McpStep(thought="观察已够", tool=None, arguments={}, done=True, reply="当前共 1 个协议档。")
+
+    async def _emit(event: str, payload: dict, **_kwargs) -> int:
+        if event == "tool_call":
+            calls.append(str(payload.get("name")))
+        if event == "thought" and payload.get("stage") == "react":
+            thoughts.append(str(payload.get("text") or ""))
+        return 1
+
+    def _fake_exec(_db, name, _arguments, *, user_id, allow_create=False):
+        if name == "model.list":
+            return True, {"items": [{"id": "p1", "name": "a"}]}, None, 1
+        return True, {"items": [{"id": "d1", "name": "ds"}]}, None, 1
+
+    monkeypatch.setattr("app.agent.react._run_with_fresh_db_step", _fake_step)
+    monkeypatch.setattr("app.agent.react.execute_short_tool", _fake_exec)
+    plan = PlanArtifact(
+        intent="chat",
+        skill_id=None,
+        slots={"filled": {}, "missing": []},
+        tools_needed=[],
+        delivery="text",
+        budget={"max_tool_rounds": 4},
+        notes="规划：闲聊",
+        source="l0",
+    )
+    react = asyncio.run(
+        run_react(
+            _FakeDb(),
+            plan,
+            user_id="u1",
+            emit=_emit,
+            check_abort=lambda: None,
+            slash_fill_first=False,
+            use_llm=True,
+            stop=threading.Event(),
+        )
+    )
+    assert calls == ["model.list", "dataset.list"]
+    assert thoughts[:2] == ["先列出协议档", "再列出数据集"]
+    assert react.used_llm is True
+    assert react.reply_text == "当前共 1 个协议档。"
+    assert [obs["name"] for obs in react.observations] == ["model.list", "dataset.list"]
+    assert react.rounds_used == 2
+
+
+def test_run_react_long_tool_does_not_execute(monkeypatch):
+    """长任务只发思考卡移交，不得在对话进程 execute_short_tool。"""
+    calls: list[str] = []
+
+    def _fake_step(_stop, _system, _payload):
+        return McpStep(thought="去跑评测", tool="benchmark.run", arguments={}, done=False, reply="")
+
+    async def _emit(event: str, payload: dict, **_kwargs) -> int:
+        if event == "tool_call":
+            calls.append(str(payload.get("name")))
+        return 1
+
+    def _fake_exec(*_args, **_kwargs):
+        raise AssertionError("长任务不得在 ReAct 循环内执行")
+
+    monkeypatch.setattr("app.agent.react._run_with_fresh_db_step", _fake_step)
+    monkeypatch.setattr("app.agent.react.execute_short_tool", _fake_exec)
+    plan = PlanArtifact(
+        intent="benchmark",
+        skill_id="skill-benchmark",
+        slots={"filled": {"kind": "benchmark", "profile_ids": ["p1"], "dataset_id": "d1"}, "missing": []},
+        tools_needed=[],
+        delivery="confirm",
+        budget={"max_tool_rounds": 4},
+        notes="规划",
+        source="llm",
+    )
+    react = asyncio.run(
+        run_react(
+            _FakeDb(),
+            plan,
+            user_id="u1",
+            emit=_emit,
+            check_abort=lambda: None,
+            slash_fill_first=False,
+            use_llm=True,
+            stop=threading.Event(),
+        )
+    )
+    assert calls == []
+    assert react.used_llm is True
+    assert react.observations == []
+
+
+def test_run_react_llm_unavailable_falls_back_to_tools_needed(monkeypatch):
+    """模型不可用时仍按 tools_needed 串行，保证斜杠下单不空转。"""
+    calls: list[str] = []
+
+    def _fail(*_args, **_kwargs):
+        raise AppError(ErrorCode.VALIDATION, "未配置 Agent 协议档，请先到协议档页指定")
+
+    async def _emit(event: str, payload: dict, **_kwargs) -> int:
+        if event == "tool_call":
+            calls.append(str(payload.get("name")))
+        return 1
+
+    def _fake_exec(_db, name, _arguments, *, user_id, allow_create=False):
+        return True, {"items": [{"id": "p1", "name": "a"}]}, None, 1
+
+    monkeypatch.setattr("app.agent.react._run_with_fresh_db_step", _fail)
+    monkeypatch.setattr("app.agent.react.execute_short_tool", _fake_exec)
+    plan = PlanArtifact(
+        intent="benchmark",
+        skill_id="skill-benchmark",
+        slots={"filled": {"kind": "benchmark"}, "missing": ["profile_ids"]},
+        tools_needed=["model.list"],
+        delivery="confirm",
+        budget={"max_tool_rounds": 4},
+        notes="规划",
+        source="slash",
+    )
+    react = asyncio.run(
+        run_react(
+            _FakeDb(),
+            plan,
+            user_id="u1",
+            emit=_emit,
+            check_abort=lambda: None,
+            slash_fill_first=True,
+            use_llm=True,
+            stop=threading.Event(),
+        )
+    )
+    assert calls == ["model.list"]
+    assert react.used_llm is False
+    assert react.proposed_spec and react.proposed_spec.get("profile_ids") == ["p1"]
+
+
+def test_run_react_llm_stop_does_not_drain_tools_needed(monkeypatch):
+    """模型已 done 时不得再把 tools_needed 当固定剧本跑完。"""
+    calls: list[str] = []
+
+    def _fake_step(_stop, _system, _payload):
+        return McpStep(
+            thought="用户在问概念，不必列资产",
+            tool=None,
+            arguments={},
+            done=True,
+            reply="评测需要协议档和数据集，你想对比哪几个模型？",
+        )
+
+    async def _emit(event: str, payload: dict, **_kwargs) -> int:
+        if event == "tool_call":
+            calls.append(str(payload.get("name")))
+        return 1
+
+    def _fake_exec(*_args, **_kwargs):
+        raise AssertionError("模型停止后不应再执行规划清单")
+
+    monkeypatch.setattr("app.agent.react._run_with_fresh_db_step", _fake_step)
+    monkeypatch.setattr("app.agent.react.execute_short_tool", _fake_exec)
+    plan = PlanArtifact(
+        intent="benchmark",
+        skill_id="skill-benchmark",
+        slots={"filled": {"kind": "benchmark"}, "missing": ["profile_ids", "dataset_id"]},
+        tools_needed=["model.list", "dataset.list"],
+        delivery="confirm",
+        budget={"max_tool_rounds": 4},
+        notes="规划",
+        source="llm",
+    )
+    react = asyncio.run(
+        run_react(
+            _FakeDb(),
+            plan,
+            user_id="u1",
+            emit=_emit,
+            check_abort=lambda: None,
+            slash_fill_first=False,
+            use_llm=True,
+            stop=threading.Event(),
+        )
+    )
+    assert calls == []
+    assert react.used_llm is True
+    assert react.reply_text.startswith("评测需要协议档")
 
 
 def test_ack_illegal_dataset_keeps_pending_confirm():

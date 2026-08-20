@@ -1,4 +1,4 @@
-"""Harness：规划 → ReAct → 复核串联（HAR-FLOW / AGT-HRS-02/07）。
+"""Harness：规划 → ReAct（Think-Act-Observe）→ 复核串联（HAR-FLOW / AGT-HRS-02/07）。
 
 必须丢到 asyncio.Task 执行，收包循环不得 await 整轮。会话级 abort 为进程内
 dict（HAR-NFR-08：单副本或粘性路由；多副本需外置，M1 不做）。
@@ -31,9 +31,9 @@ from .defaults import (
     TERMINAL_STATUSES,
     TURN_WALL_CLOCK_S,
 )
-from .log import agent_trace
+from .log import agent_exception, agent_trace
 from .persona import chat_system, turn_system
-from .plan import PlanArtifact, TurnBudget, merge_replan, run_plan, run_replan
+from .plan import PlanArtifact, TurnBudget, is_smalltalk, merge_replan, run_plan, run_replan
 from .prefs import load_prefs, save_prefs_from_spec
 from .react import run_react
 from .reflect import ReflectArtifact, maybe_model_check, run_gates
@@ -289,6 +289,10 @@ async def _run_turn(
             await _emit_thought(emit, pref_note, stage="plan")
 
     slash_fill_first = parsed.command in {"benchmark", "stress", "testcase", "rerun"}
+    use_llm_react = parsed.command not in _DETERMINISTIC_SLASH
+    # 问候 L0 且无短工具：跳过 ReAct，避免人设把「你好」也走成 list 协议档
+    if plan.intent == "chat" and not plan.tools_needed and is_smalltalk(text):
+        use_llm_react = False
 
     _check_abort(abort)
     react = await run_react(
@@ -300,6 +304,10 @@ async def _run_turn(
         slash_fill_first=slash_fill_first,
         text=text,
         attachments=attachments,
+        use_llm=use_llm_react,
+        stop=stop,
+        history=history,
+        compact_summary=compact_summary,
     )
     for note in react.pref_stale_notes:
         await _emit_thought(emit, note, stage="react")
@@ -339,6 +347,10 @@ async def _run_turn(
                 extra_tools=extra_tools,
                 text=text,
                 attachments=attachments,
+                use_llm=use_llm_react,
+                stop=stop,
+                history=history,
+                compact_summary=compact_summary,
             )
             for note in react.pref_stale_notes[stale_before:]:
                 await _emit_thought(emit, note, stage="react")
@@ -567,6 +579,9 @@ async def _run_turn(
                 err = (clone_obs.get("data_summary") or {}).get("error") or "音色合成失败"
                 await _deliver_sentence(db, session.id, emit, err)
             return
+        if react.reply_text:
+            await _deliver_sentence(db, session.id, emit, react.reply_text)
+            return
         reply = await _chat_reply(
             db,
             text,
@@ -668,7 +683,7 @@ async def _chat_reply(
     except AppError:
         return canned
     except Exception as exc:
-        agent_trace(f"闲聊回复内部异常 type={type(exc).__name__}")
+        agent_exception("闲聊回复内部异常", exc)
         return canned
 
 
@@ -720,14 +735,14 @@ async def _harness_entry(
             await emit("error", {"code": ErrorCode.TIMEOUT.value, "message": "本轮超时，未出确认卡"})
             await _deliver_sentence(db, session_id, emit, "本轮超时，未出确认卡")
         except Exception as exc:  # noqa: BLE001
-            agent_trace(f"超时交付内部异常 type={type(exc).__name__}")
+            agent_exception("超时交付内部异常", exc)
     except HarnessAborted:
         stop.set()
         try:
             emit = emit_factory(db)
             await _deliver_sentence(db, session_id, emit, "已停止生成")
         except Exception as exc:  # noqa: BLE001
-            agent_trace(f"abort 交付内部异常 type={type(exc).__name__}")
+            agent_exception("abort 交付内部异常", exc)
     except asyncio.CancelledError:
         stop.set()
         abort.set()
@@ -735,7 +750,7 @@ async def _harness_entry(
             emit = emit_factory(db)
             await _deliver_sentence(db, session_id, emit, "已停止生成")
         except Exception as exc:  # noqa: BLE001
-            agent_trace(f"cancel 交付内部异常 type={type(exc).__name__}")
+            agent_exception("cancel 交付内部异常", exc)
         raise
     except AppError as exc:
         agent_trace(f"harness AppError code={exc.code.value}")
@@ -746,7 +761,7 @@ async def _harness_entry(
         except Exception:
             pass
     except Exception as exc:
-        agent_trace(f"harness 内部异常 type={type(exc).__name__}")
+        agent_exception("harness 内部异常", exc)
         try:
             emit = emit_factory(db)
             await emit("error", {"code": ErrorCode.INTERNAL.value, "message": "消息处理失败，请稍后重试"})
