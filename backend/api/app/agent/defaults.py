@@ -79,10 +79,49 @@ SHORT_TOOLS = frozenset(
     }
 )
 
-WRITE_TOOLS = frozenset({"task.create", "task.cancel"})
+WRITE_TOOLS = frozenset({"task.create", "task.cancel", "testcase.confirm"})
 READONLY_LIST_TOOLS = frozenset(
     {"model.list", "dataset.list", "kb.list", "task.get", "report.get", "dispatch.overview"}
 )
+
+# 已落地的内部短工具；kb.list 等 M3 资产表未建前禁止假成功
+IMPLEMENTED_SHORT_TOOLS = frozenset(
+    {
+        "model.list",
+        "dataset.list",
+        "task.get",
+        "task.create",
+        "task.cancel",
+        "dispatch.overview",
+        "report.get",
+        "testcase.confirm",
+    }
+)
+
+# GET /api/mcp/tools 展示顺序（与 PRD 5.5.1 / API §6 对齐）
+MCP_TOOL_ORDER: tuple[str, ...] = (
+    "model.list",
+    "task.get",
+    "task.create",
+    "task.cancel",
+    "dispatch.overview",
+    "dataset.list",
+    "report.get",
+    "kb.list",
+    "testcase.confirm",
+)
+
+MCP_TOOL_DESCRIPTIONS: dict[str, str] = {
+    "model.list": "查询可用被测协议档与模型清单",
+    "task.get": "查询任务状态与进度",
+    "task.create": "按确认卡 TaskSpec 创建任务并入队",
+    "task.cancel": "请求取消排队中或运行中的任务",
+    "dispatch.overview": "读取调度大盘与 Worker 节点池状态",
+    "dataset.list": "查询数据集版本和行数",
+    "report.get": "按 report_id 读取评测报告与指标快照",
+    "kb.list": "查询知识库与黄金 QA 资产",
+    "testcase.confirm": "确认用例入库",
+}
 
 TOOL_TITLES: dict[str, str] = {
     "model.list": "列出协议档",

@@ -9,7 +9,7 @@
 | 对应前端计划 | V1.3 |
 | 对应后端计划 | V1.3 |
 | 撰写日期 | 2026-08-18 |
-| 最近修订 | 2026-08-20：V1.6 补充思考快照、确认回执与历史上下文能力恢复；未启用能力统一 `VALIDATION` 400 |
+| 最近修订 | 2026-08-20：V1.6 补充思考快照、确认回执与历史上下文能力恢复；内部短工具 `enabled` 与实现同源，`kb.list` 未启用 |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
 ---
@@ -526,7 +526,7 @@ item：`id, name, protocol, base_url, model, usages[], created_at`
 
 #### `GET /api/mcp/tools`
 
-获取当前智能体环境中受控的**内置**短工具清单（`model.list`, `dataset.list`, `kb.list`, `task.get`, `report.get`, `task.create`, `task.cancel`, `dispatch.overview`）及权限级别（`read / write`）。
+获取当前智能体环境中受控的**内置**短工具清单（`model.list`, `dataset.list`, `kb.list`, `task.get`, `report.get`, `task.create`, `task.cancel`, `dispatch.overview`, `testcase.confirm`）及权限级别（`read / write`）。`enabled` 必须与 Agent Host 实际可执行的短工具一致：已落地为 `true`；知识库域未建表前 `kb.list` 为 `false`，调用短工具返回 `VALIDATION`「该能力未启用」，禁止假成功。
 
 ```json
 {
@@ -1320,15 +1320,15 @@ Agent Host 与 worker 共用。入参/出参与 PRD 5.5 一致。错误码同 §
 | 工具 | 类型 | 入参 | 出参 | 阶段 |
 | --- | --- | --- | --- | --- |
 | `model.list` | 短 | — | `{items:[{id,name,protocol,model}]}` 无 Key（`model` 仅供展示） | M1 |
-| `dataset.list` | 短 | — | `{items:[{id,name,version,row_count}]}` | M2 |
+| `dataset.list` | 短 | — | `{items:[{id,name,version,row_count,metric}]}` | M2 |
 | `kb.list` | 短 | — | `{items:[{id,name,doc_count}]}` | M3 |
 | `task.get` | 短 | `task_id` | 状态、进度、`report_id` | M1 |
-| `report.get` | 短 | `report_id` | 摘要 + 下载路径 | M2 |
+| `report.get` | 短 | `report_id` | `{report_id,summary,download_url}`；`download_url` 为 `/api/reports/{id}?fmt=md` | M2 |
 | `task.create` | 短 | TaskSpec | `task_id`；仅 `confirm_ack.ok=true` 后 | M1 |
-| `task.cancel` | 短 | `task_id` | `{ok}` | M1 |
+| `task.cancel` | 短 | `task_id` | `{ok,task_id,status}` | M1 |
 | `dispatch.overview` | 短 | — | Worker 数 / 队列 / 策略（与 `GET /api/dispatch/overview` 同源摘要） | M1 迷你轨 |
 | `testcase.generate` | 长 | `file_id` 或 `text` | `case_set_id` | M2 |
-| `testcase.confirm` | 短 | `case_set_id, edits?` | 状态 succeeded | M2 |
+| `testcase.confirm` | 短 | `case_set_id` 必填；`ok?` `edits?` | `{status,case_set_id}` | M2 |
 | `benchmark.run` | 长 | TaskSpec 评测段 | `report_id` | M2（M1 mock） |
 | `rag.evaluate` | 长 | TaskSpec RAG 段 | `report_id` | M3 |
 | `stress.run` | 长 | `parent_task_id` + `stress` | `report_id` | M4 |
@@ -1576,3 +1576,19 @@ MCP 浏览器不调：与 PRD 3.1、前端计划「禁止把 MCP 当 REST」一�
 | `backend/api/app/routers/sessions.py` | 历史接口返回 `compact_summary`，恢复压缩后的模型上下文 |
 | `frontend/src/views/Agent.vue` | 回放思考快照、确认回执与历史工具资产，并修正确认卡状态 |
 | `frontend/src/api/types.ts` | 补齐 `confirm_ack` 事件和 ContextMeter 扩展字段类型 |
+
+---
+
+## 14. 内部短 MCP 工具落地（2026-08-20）
+
+对话 Agent 仍只调内置短工具，不接入外部 MCP Server。`task.cancel` / `testcase.confirm` 与 REST 同权；`kb.list` 因知识库表未建保持未启用。`dataset.list` 带 `metric`；`report.get` 带 `download_url`；`task.cancel` 出参含 `task_id/status`；`testcase.confirm` 必填 `case_set_id`。
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/agent/mcp_tools.py` | 实现 `task.cancel`、`testcase.confirm`；`report.get` 含 `download_url`；`dataset.list` 含 `metric`；缺 `case_set_id` 不默认确认 |
+| `backend/api/app/agent/react.py` | `tool_call.arguments` 带上观察中的 task/report/case_set id |
+| `backend/api/app/agent/defaults.py` | `IMPLEMENTED_SHORT_TOOLS` 与清单同源 |
+| `backend/api/app/routers/mcp.py` | `GET /api/mcp/tools` 的 `enabled` 跟随实现表 |
+| `backend/api/app/agent/harness.py` | WS 取消复用 `cancel_owned_task` |
+| `backend/api/tests/test_mcp_tools.py` | 覆盖取消权限、用例确认、kb 未启用 |
+| `frontend/src/api/mockData.ts` | Mock 清单与后端 `enabled` 对齐 |

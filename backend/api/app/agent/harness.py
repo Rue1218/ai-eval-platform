@@ -11,7 +11,6 @@ import threading
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy.exc import IntegrityError
@@ -19,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from ..db import SessionLocal
 from ..errors import AppError, ErrorCode
-from ..models import AuditLog, Dataset, Message, ProtocolProfile, Task, TaskEvent, User
+from ..models import AuditLog, Dataset, Message, ProtocolProfile, Task, User
 from ..models import Session as AgentSession
 from ..schemas import TaskCreate
 from .context import history_for_plan, run_compact
@@ -31,6 +30,7 @@ from .defaults import (
     TURN_WALL_CLOCK_S,
 )
 from .log import agent_trace
+from .mcp_tools import cancel_owned_task
 from .persona import chat_system, turn_system
 from .plan import PlanArtifact, TurnBudget, merge_replan, run_plan, run_replan
 from .prefs import load_prefs, save_prefs_from_spec
@@ -271,6 +271,7 @@ async def _run_turn(
         emit=emit,
         check_abort=lambda: _check_abort(abort),
         slash_fill_first=slash_fill_first,
+        session_id=session.id,
     )
     for note in react.pref_stale_notes:
         await _emit_thought(emit, note, stage="react")
@@ -308,6 +309,7 @@ async def _run_turn(
                 slash_fill_first=slash_fill_first,
                 prior=react,
                 extra_tools=extra_tools,
+                session_id=session.id,
             )
             for note in react.pref_stale_notes[stale_before:]:
                 await _emit_thought(emit, note, stage="react")
@@ -922,58 +924,29 @@ async def handle_cancel_task(
     emit: EmitFn,
 ) -> None:
     """取消当前成员的非终态任务，与 REST cancel 语义一致。"""
-    # 与 REST cancel 同样先锁定任务行，避免读到 Worker 即将完成前的陈旧 running 状态。
-    task = db.query(Task).filter(Task.id == task_id).with_for_update().first()
-    if not task:
-        await emit("error", {"code": ErrorCode.NOT_FOUND.value, "message": "任务不存在"})
-        return
-    if task.created_by != user.id:
-        await emit("error", {"code": ErrorCode.UNAUTHORIZED.value, "message": "没有权限做这件事"}, task_id=task.id)
-        return
-    if task.session_id and task.session_id != session.id:
+    try:
+        # 与 REST cancel 同样先锁定任务行，避免读到 Worker 即将完成前的陈旧 running 状态。
+        data = cancel_owned_task(db, task_id=task_id, user_id=user.id, session_id=session.id)
+        db.commit()
+    except AppError as exc:
         await emit(
             "error",
-            {"code": ErrorCode.VALIDATION.value, "message": "只能取消当前会话中的任务"},
-            task_id=task.id,
+            {"code": exc.code.value, "message": exc.message},
+            **({} if exc.code == ErrorCode.NOT_FOUND else {"task_id": task_id}),
         )
         return
-    if task.status in TERMINAL_STATUSES:
-        await emit("error", {"code": ErrorCode.VALIDATION.value, "message": "任务已结束"}, task_id=task.id)
-        return
-    now = datetime.now(UTC)
-    task.cancel_requested_at = now
-    task.status = "cancelled"
-    task.finished_at = now
-    task.progress = {**(task.progress or {}), "message": "任务已取消"}
-    db.add(
-        TaskEvent(
-            task_id=task.id,
-            event="cancelled",
-            message="任务已取消",
-            payload={"status": "cancelled"},
-        )
-    )
-    db.add(
-        AuditLog(
-            user_id=user.id,
-            action="task_cancel",
-            target_type="task",
-            target_id=task.id,
-            detail={"kind": task.kind},
-        )
-    )
-    db.commit()
     # _emit 会提交 ws_events；先提交取消事务，避免事件落库提前释放任务行锁。
-    await emit("tool_call", {"name": "task.cancel", "arguments": {"task_id": task.id}}, task_id=task.id)
+    cancelled_id = str(data["task_id"])
+    await emit("tool_call", {"name": "task.cancel", "arguments": {"task_id": cancelled_id}}, task_id=cancelled_id)
     await emit(
         "tool_result",
-        {"name": "task.cancel", "ok": True, "data": {"task_id": task.id, "status": "cancelled"}, "latency_ms": 0},
-        task_id=task.id,
+        {"name": "task.cancel", "ok": True, "data": data, "latency_ms": 0},
+        task_id=cancelled_id,
     )
     await _deliver_sentence(
         db,
         session.id,
         emit,
         "已收到取消请求，任务状态已更新为 cancelled。",
-        task_id=task.id,
+        task_id=cancelled_id,
     )

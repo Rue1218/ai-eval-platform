@@ -15,7 +15,7 @@ from app.agent.harness import (
     handle_confirm_ack,
     should_emit_stage_thoughts,
 )
-from app.agent.mcp_tools import redact_secrets, truncate_tool_data
+from app.agent.mcp_tools import redact_secrets, summarize_observation, truncate_tool_data
 from app.agent.persona import PERSONA_SYSTEM, turn_system
 from app.agent.plan import (
     PlanArtifact,
@@ -31,7 +31,7 @@ from app.agent.plan import (
     run_replan,
     sanitize_plan,
 )
-from app.agent.react import ReactArtifact, build_proposed_spec, run_react
+from app.agent.react import ReactArtifact, arguments_for_tool, build_proposed_spec, run_react
 from app.agent.reflect import ReflectArtifact, maybe_model_check, run_gates
 from app.agent.slash import (
     assert_command_enabled,
@@ -665,7 +665,7 @@ def test_run_react_continuation_respects_rounds_used(monkeypatch):
             calls.append(str(payload.get("name")))
         return 1
 
-    def _fake_exec(_db, name, _arguments, *, user_id, allow_create=False):
+    def _fake_exec(_db, name, _arguments, *, user_id, allow_create=False, session_id=None):
         return True, {"items": []}, None, 1
 
     monkeypatch.setattr("app.agent.react.execute_short_tool", _fake_exec)
@@ -742,7 +742,7 @@ def test_run_react_stops_at_five_rounds(monkeypatch):
             calls.append(str(payload.get("name")))
         return 1
 
-    def _fake_exec(_db, name, _arguments, *, user_id, allow_create=False):
+    def _fake_exec(_db, name, _arguments, *, user_id, allow_create=False, session_id=None):
         return True, {"items": []}, None, 1
 
     monkeypatch.setattr("app.agent.react.execute_short_tool", _fake_exec)
@@ -767,6 +767,87 @@ def test_run_react_stops_at_five_rounds(monkeypatch):
         )
     )
     assert len(calls) == HARD_MAX_TOOL_ROUNDS
+
+
+def test_arguments_for_tool_uses_prior_task_get_only():
+    """report.get / task.cancel 只接受 task.get 观察里的 id，不用协议档 id 冒充。"""
+    react = ReactArtifact(
+        observations=[
+            summarize_observation(
+                "model.list",
+                True,
+                {"items": [{"id": "p-1", "name": "demo"}]},
+                None,
+                1,
+            ),
+            summarize_observation(
+                "task.get",
+                True,
+                {
+                    "id": "t-9",
+                    "kind": "benchmark",
+                    "status": "succeeded",
+                    "progress": {},
+                    "report_id": "r-2",
+                },
+                None,
+                1,
+            ),
+        ]
+    )
+    assert arguments_for_tool("report.get", react) == {"report_id": "r-2"}
+    assert arguments_for_tool("task.cancel", react) == {"task_id": "t-9"}
+    assert arguments_for_tool("model.list", react) == {}
+    empty = ReactArtifact()
+    assert arguments_for_tool("testcase.confirm", empty) == {}
+    assert arguments_for_tool("report.get", empty) == {}
+
+
+def test_run_react_forwards_report_id_from_task_get(monkeypatch):
+    """同一回合先 task.get 再 report.get 时，工具卡 arguments 必须带 report_id。"""
+    captured: list[tuple[str, dict]] = []
+
+    async def _emit(event: str, payload: dict, **_kwargs) -> int:
+        if event == "tool_call":
+            captured.append((str(payload.get("name")), dict(payload.get("arguments") or {})))
+        return 1
+
+    def _fake_exec(_db, name, arguments, *, user_id, allow_create=False, session_id=None):
+        if name == "task.get":
+            return True, {
+                "id": "t-1",
+                "kind": "benchmark",
+                "status": "succeeded",
+                "progress": {},
+                "report_id": "r-8",
+            }, None, 1
+        return True, {"report_id": "r-8", "summary": None, "download_url": "/api/reports/r-8?fmt=md"}, None, 1
+
+    monkeypatch.setattr("app.agent.react.execute_short_tool", _fake_exec)
+    plan = PlanArtifact(
+        intent="report",
+        skill_id=None,
+        slots={"filled": {}, "missing": []},
+        tools_needed=["task.get", "report.get"],
+        delivery="text",
+        budget={"max_tool_rounds": 4},
+        notes="规划：读报告",
+        source="llm",
+    )
+    asyncio.run(
+        run_react(
+            _FakeDb(),
+            plan,
+            user_id="u1",
+            emit=_emit,
+            check_abort=lambda: None,
+            slash_fill_first=False,
+        )
+    )
+    assert captured == [
+        ("task.get", {}),
+        ("report.get", {"report_id": "r-8"}),
+    ]
 
 
 def test_ack_illegal_dataset_keeps_pending_confirm():

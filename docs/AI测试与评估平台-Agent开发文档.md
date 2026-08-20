@@ -5,7 +5,7 @@
 | 文档名称 | Agent 独立开发说明书 |
 | 版本 | V1.4 |
 | 日期 | 2026-08-20 |
-| 最近修订 | 2026-08-20：修复流式气泡串轮、切会话打字机泄漏、确认卡 rag patch 与跨会话取消；补齐思考快照与 ContextMeter 恢复 |
+| 最近修订 | 2026-08-20：内部短工具出参对齐、ReAct 传参、`testcase.confirm` 必填 id；`kb.list` 保持未启用 |
 | 用法 | **实现 `/agent` 以本文为准（Harness / 斜杠 / 窗口算法）。** REST/WS JSON 以 API.md V1.6 为准。完成某项后勾选文末 Task，并在「最近修订」追加一行。 |
 
 本文是评测平台 **Agent 子系统** 的完整开发说明书：目标、边界、运行时骨架、协议、模块、代码落点与验收任务都写在这里。与 PRD / API.md 冲突时，字段名与事件名以那两份为准；Harness、斜杠、上下文算法以本文 §16 为准。§4.6 所列增量已收入 **API.md V1.6**。
@@ -143,12 +143,12 @@ Agent 对话不得发出 `kind=stress` 确认卡。压测由质量任务 `succee
 | `model.list` | 列出协议档 | 先做 |
 | `task.get` | 查询任务 | 先做 |
 | `task.create` | 创建任务 | 仅 ack 后 |
-| `task.cancel` | 取消任务 | 先做 |
+| `task.cancel` | 取消任务 | 已落地 |
 | `dispatch.overview` | 调度概览 | 迷你轨只读 |
-| `dataset.list` | 列出数据集 | 数据集页打通后 |
-| `report.get` | 读取报告 | 报告打通后 |
-| `kb.list` | 列出知识库 | RAG 阶段 |
-| `testcase.confirm` | 确认用例入库 | 用例阶段 |
+| `dataset.list` | 列出数据集 | 已落地 |
+| `report.get` | 读取报告 | 已落地 |
+| `kb.list` | 列出知识库 | RAG 阶段（未启用，禁止假成功） |
+| `testcase.confirm` | 确认用例入库 | 已落地 |
 
 Worker 专用（Agent 进程禁止跑完）：`benchmark.run` `rag.evaluate` `testcase.generate` `stress.run`。
 
@@ -642,7 +642,7 @@ ChatHead 右侧（或输入框上方）常驻，压缩或新消息后立刻更�
 | AGT-UI-04 | 进度坞与报告卡走真事件 | 组件、worker | 空跑也发 progress/report | [ ] |
 | AGT-UI-05 | 基础 Markdown 渲染 | MarkdownView | 防 XSS | [x] 2026-08-20 |
 | AGT-UI-08 | 思考卡技能徽标 | SkillBadge.vue | 无 skill 不显示；回放仍在 | [x] 2026-08-20 |
-| AGT-MCP-01 | 短工具实现与清单同源 | `mcp_tools.py` | 名称冻结 | [x] 2026-08-19 |
+| AGT-MCP-01 | 短工具实现与清单同源 | `mcp_tools.py` | 名称冻结；`enabled` 与实现一致 | [x] 2026-08-20 |
 | AGT-TSK-01 | ack 合并后再按确认卡校验 | `ws.py` `tasks.py` | 与 REST 下单同一套字段 | [x] 2026-08-19 |
 | AGT-TSK-02 | 取消对话框；重跑出新卡 | `Agent.vue` | 重跑新 ID | [ ] |
 | AGT-WRK-01 | Worker 空跑写事件 | worker | 对话里能走完进度 | [ ] |
@@ -865,16 +865,18 @@ Worker 夹紧：`sample_size = min(请求值, 1000, 行数)`；`concurrency` ≤
 | 工具 | 入参 | 成功 `data` |
 | :--- | :--- | :--- |
 | `model.list` | `{}` | `{ "items": [{ "id", "name", "protocol", "model" }] }` 无 Key（相对 API.md 示例只多 `model` 供展示） |
-| `dataset.list` | `{}` | `{ "items": [{ "id", "name", "version", "row_count" }] }` |
+| `dataset.list` | `{}` | `{ "items": [{ "id", "name", "version", "row_count", "metric" }] }` |
 | `kb.list` | `{}` | `{ "items": [{ "id", "name", "doc_count" }] }` |
 | `task.get` | `{ "task_id": "uuid" }` | `{ "id", "kind", "status", "progress", "report_id" }` |
 | `task.create` | 确认卡 JSON | `{ "task_id", "status": "queued" }` 仅 ack 后 |
-| `task.cancel` | `{ "task_id": "uuid", "reason": "string?" }` | `{ "ok": true }` |
-| `report.get` | `{ "report_id": "uuid" }` | `{ "report_id", "summary", "download_url?" }` |
+| `task.cancel` | `{ "task_id": "uuid", "reason": "string?" }` | `{ "ok": true, "task_id", "status": "cancelled" }` |
+| `report.get` | `{ "report_id": "uuid" }`；可空则取当前成员最近带报告任务 | `{ "report_id", "summary", "download_url" }` |
 | `dispatch.overview` | `{}` | `{ "workers", "queue_depth", "strategy" }` 以现网 overview 为准 |
-| `testcase.confirm` | `{ "case_set_id", "edits"? }` | `{ "status": "succeeded" }` |
+| `testcase.confirm` | `{ "case_set_id", "ok"?, "edits"? }`；**`case_set_id` 必填** | `{ "status": "succeeded" \| "cancelled", "case_set_id" }` |
 
-未实现的工具：`ok=false`，`error` 用用户可读中文「该能力未启用」，WS 可另发 `error` `code=VALIDATION`。
+未实现的工具（当前仅 `kb.list`）：`ok=false`，`error` 用用户可读中文「该能力未启用」，WS 可另发 `error` `code=VALIDATION`。禁止返回空列表冒充已接入知识库。
+
+ReAct 调用 `task.get` / `task.cancel` / `report.get` / `testcase.confirm` 时，必须把上一轮**同名或 `task.get`** 观察里的 id 写入 `tool_call.arguments`；没有观察则传 `{}`，由工具校验必填（`testcase.confirm` 缺 `case_set_id` 不得默认确认最近一份）。
 
 ---
 
@@ -1334,5 +1336,19 @@ M3 接 LightRAG：把 `LIGHTRAG_ENABLED` 改为 True，在 `query_lightrag` 请�
 | `frontend/src/views/Agent.vue` | 本轮流式气泡、切会话停 flowTimers、历史回放不覆盖生成中缓存、确认卡会话守卫、后台任务坞收口 |
 | `backend/api/app/agent/harness.py` | ack 拒绝 kind=rag；取消校验 task.session_id；调度登记加锁 |
 | `backend/api/tests/test_harness.py` | rag patch 拒收；跨会话取消拒收 |
+
+---
+
+## 26. 修改代码文件与作用清单（2026-08-20 内部短 MCP）
+
+内部短工具补齐 `task.cancel` 与 `testcase.confirm`；`GET /api/mcp/tools` 的 `enabled` 与实现同源。知识库短工具仍返回「该能力未启用」，不接入外部 MCP。ReAct 将观察中的 id 写入工具入参；`testcase.confirm` 必填 `case_set_id`。
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/agent/mcp_tools.py` | 短工具实现：取消、用例确认、报告 `download_url`、数据集 `metric` |
+| `backend/api/app/agent/defaults.py` / `routers/mcp.py` | 清单、权限、enabled 同源 |
+| `backend/api/app/agent/react.py` | 按观察填写 `task_id` / `report_id` / `case_set_id` |
+| `backend/api/app/agent/harness.py` | WS 取消走同一 cancel |
+| `backend/api/tests/test_mcp_tools.py` `test_harness.py` | 内部短工具与 ReAct 传参单测 |
 
   

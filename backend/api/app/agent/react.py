@@ -75,6 +75,36 @@ def match_named_ids(items: list[dict], names: list[str]) -> list[str]:
     return picked
 
 
+def _last_obs_value(observations: list[dict], tool_name: str, key: str) -> str | None:
+    """从最近一次成功观察的 data_summary 取字段，禁止用其它工具的 id 冒充。"""
+    for obs in reversed(observations):
+        if obs.get("name") != tool_name or not obs.get("ok"):
+            continue
+        value = (obs.get("data_summary") or {}).get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def arguments_for_tool(name: str, react: ReactArtifact) -> dict[str, Any]:
+    """按上一轮观察填写短工具入参；没有观察则空对象，由工具自己校验必填。"""
+    if name == "task.get":
+        task_id = _last_obs_value(react.observations, "task.get", "id")
+        return {"task_id": task_id} if task_id else {}
+    if name == "task.cancel":
+        task_id = _last_obs_value(react.observations, "task.get", "id")
+        return {"task_id": task_id} if task_id else {}
+    if name == "report.get":
+        report_id = _last_obs_value(react.observations, "task.get", "report_id") or _last_obs_value(
+            react.observations, "report.get", "report_id"
+        )
+        return {"report_id": report_id} if report_id else {}
+    if name == "testcase.confirm":
+        case_set_id = _last_obs_value(react.observations, "testcase.confirm", "case_set_id")
+        return {"case_set_id": case_set_id} if case_set_id else {}
+    return {}
+
+
 def _items_of(observations: list[dict], tool_name: str) -> list[dict]:
     """从成功的 list 观察中还原 items 已不可得，仅有 ids；此处用 data_summary。"""
     for obs in observations:
@@ -186,6 +216,7 @@ async def run_react(
     slash_fill_first: bool,
     prior: ReactArtifact | None = None,
     extra_tools: list[str] | None = None,
+    session_id: str | None = None,
 ) -> ReactArtifact:
     """串行执行短工具，发出成对 tool_call / tool_result。
 
@@ -224,8 +255,16 @@ async def run_react(
             )
             continue
 
-        await emit("tool_call", {"name": name, "arguments": {}})
-        ok, data, error, latency_ms = execute_short_tool(db, name, {}, user_id=user_id, allow_create=False)
+        arguments = arguments_for_tool(name, react)
+        await emit("tool_call", {"name": name, "arguments": arguments})
+        ok, data, error, latency_ms = execute_short_tool(
+            db,
+            name,
+            arguments,
+            user_id=user_id,
+            allow_create=False,
+            session_id=session_id,
+        )
         payload: dict[str, Any] = {"name": name, "ok": ok, "latency_ms": latency_ms}
         if ok:
             payload["data"] = data
