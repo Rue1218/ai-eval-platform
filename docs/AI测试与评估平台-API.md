@@ -2,14 +2,14 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.7 |
+| 文档版本 | V1.8 |
 | 对应 PRD | V1.7.0（功能唯一权威） |
 | 对应设计规范 | V1.3（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | V1.3（Harness / 斜杠 / 上下文算法；JSON 仍以本文为准） |
 | 对应前端计划 | V1.3 |
 | 对应后端计划 | V1.3 |
 | 撰写日期 | 2026-08-18 |
-| 最近修订 | 2026-08-20：V1.7 协议档连接参数改由受控环境文件持久化，支持多供应商隔离与安全 CRUD |
+| 最近修订 | 2026-08-20：V1.8 助手回复耗时展示；用例工作台 Excel 导入（三种表头）/模板下载，映射回写 context 与 source_case_id |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
 ---
@@ -127,7 +127,7 @@ WS `error` 事件 payload 与上表同一套 `code` + `message`（可带 `fields
 | **任务中心 (tasks.html)** | 24h 状态趋势 / 六态过滤表格 / 抽屉详情 / 取消与重跑 | `/api/tasks`, `/api/tasks/summary`, `/api/tasks/{id}`, `/api/tasks/{id}/cancel`, `/api/tasks/{id}/rerun` | GET/POST | 成员 · 全员同权 |
 | **报告中心 (report.html)** | 报告列表 / 3合1详情 (Benchmark雷达/RAG水平柱状/压测多轴曲线) / Markdown导出 / 7天免登分享 / 冻结基线 | `/api/reports`, `/api/reports/{id}`, `/api/reports/{id}/samples`, `/api/reports/{id}/share`, `/api/reports/{id}/baseline` | GET/POST | 成员 · 全员同权 |
 | **数据集工作台 (datasets.html)** | 数据集目录树 / 行内即点即改网格 / 自定义列扩展 / AI 数据集生成 | `/api/dataset-folders`, `/api/datasets`, `/api/datasets/{id}`, `/api/datasets/{id}/rows`, `/api/datasets/ai-generate`, `/api/kb` | GET/POST/PUT/DELETE | 成员 · 全员同权 |
-| **用例工作台 (cases.html)** | 6大策略分布图 / 用例表格编辑 / 72h倒计时 / 批量映射入库 / AI PRD 用例抽取 | `/api/case-folders`, `/api/case-sets`, `/api/case-sets/{id}`, `/api/case-sets/{id}/cases`, `/api/case-sets/{id}/confirm`, `/api/case-sets/{id}/cancel`, `/api/case-sets/{id}/map`, `/api/case-sets/ai-generate` | GET/POST/PUT/DELETE | 成员 · 全员同权 |
+| **用例工作台 (cases.html)** | 6大策略分布图 / 用例表格编辑 / 72h倒计时 / Excel 导入导出 / 批量映射入库 / AI PRD 用例抽取 | `/api/case-folders`, `/api/case-sets`, `/api/case-sets/{id}`, `/api/case-sets/{id}/cases`, `/api/case-sets/{id}/confirm`, `/api/case-sets/{id}/cancel`, `/api/case-sets/{id}/map`, `/api/case-sets/ai-generate`, `/api/case-sets/import-template`, `/api/case-sets/{id}/import`, `/api/case-sets/{id}/export` | GET/POST/PUT/DELETE | 成员 · 全员同权 |
 | **知识库 (kb.html)** | 3栏工作台 / 文档与切块预览 / 4模式检索 Playground / 黄金 QA | `/api/kb`, `/api/kb/{id}`, `/api/kb/{id}/documents`, `/api/kb/{id}/documents/{doc_id}/chunks`, `/api/kb/{id}/query`, `/api/kb/{id}/gold-qa` | GET/POST/DELETE | 成员 · 全员同权 |
 | **协议档与智能体 (admin-profiles.html)** | 4 Tab 架构（协议档、MCP 工具只读、技能受控说明、运行时治理）/ 连通性探活 Ping | `/api/profiles`, `/api/profiles/{id}/check`, `/api/mcp/tools`, `/api/admin/settings` | GET/POST/PUT/DELETE | 成员 · 全员同权 |
 | **压测治理 (admin-stress.html)** | 7天峰值 QPS 面积图 / Host 白名单表格 / 安全阈值 / 成本预算 / Prometheus `/metrics` | `/api/admin/stress/settings`, `/api/admin/stress/whitelist`, `/api/admin/stress/usage`, `/metrics` | GET/POST/PUT/DELETE | 成员 · 全员同权 |
@@ -338,8 +338,10 @@ WS 不再可访问，但 `messages`、`ws_events`、tasks、reports 均保留审
 #### `GET /api/sessions/{id}/messages`
 
 历史回放（REST）。实时增量只走 WS。  
-`messages` item：`id, role: user|assistant|system, content, attachments[], author_id?, author?, client_message_id?, created_at`。
-其中 `author` 为 `{id,username,display_name?}`；用户消息必填，assistant/system 为 `null`。
+`messages` item：`id, role: user|assistant|system, content, attachments[], author_id?, author?, client_message_id?, latency_ms?, created_at`。
+其中 `author` 为 `{id,username,display_name?}`；用户消息必填，assistant/system 为 `null`。  
+`latency_ms` 仅 `role=assistant` 非空：该交付句从本轮 `user_message` 入 Harness 到交付的墙钟耗时（毫秒），
+前端在气泡下方展示「耗时 x 秒」；`user`/`system` 与无耗时历史消息为 `null`。
 `events` **必带**（否则刷新丢工具卡 / 思考卡）。  
 `pending_confirm`：当前未 ack 的确认卡（TaskSpec）或 `null`；
 `pending_confirm_author_id` / `pending_confirm_author` 标识唯一可操作者；前端优先该字段做成可编辑卡，`events` 里的 `confirm` 只作只读回放。
@@ -732,7 +734,7 @@ case item 包含：`id, strategy, priority, module, name, precondition, steps, e
 { "target": "dataset | gold_qa", "target_id": "uuid", "case_ids": ["c-001", "c-002"] }
 ```
 
-`target=dataset` 时缺字段行进入目标集 `pending_complete`，写 `source_case_id` + 用例版本；`target=gold_qa` 时缺 `expected_doc_ids` 的项仅参与答案侧评分。目标 ID 类型不匹配返回 `VALIDATION`。
+`target=dataset` 时：问句←用例名称、预期←expected、前置←context；缺 `question` 或 `reference` 的行进入目标集 `pending_complete`（不进评分分母）；**全部**映射行写 `source_case_id`，并在 `extras.source_case_set_id` 记录用例集 ID。`target=gold_qa` 时缺 `expected_doc_ids` 的项仅参与答案侧评分（M3；当前返回 `VALIDATION`）。目标 ID 类型不匹配返回 `VALIDATION`。
 
 #### `POST /api/case-sets/ai-generate`
 
@@ -782,9 +784,39 @@ case item 包含：`id, strategy, priority, module, name, precondition, steps, e
 }
 ```
 
+#### `GET /api/case-sets/import-template`
+
+下载平台标准列 Excel 模板（`用例集` + `填写说明` 两个工作表）。响应文件流。登录后可用。
+
+#### `POST /api/case-sets/{id}/import?mode=append|replace`
+
+`multipart/form-data`，字段名 `file`。仅 `.xlsx` / `.xlsm`；`.xls` 返回 `VALIDATION` 提示另存。单文件 ≤10MB，有效用例 ≤2000 条。已确认或已废弃的用例集拒绝导入。
+
+`mode` 缺省 `append`：追加写入，Excel「用例编号」若属于本集则更新该行，否则插入；`replace` 先清空本集全部用例再写入。
+
+表头识别（列顺序不限，可出现在前 20 行）：
+
+1. **platform**：平台导出列（用例编号、策略、优先级、模块、用例名称、前置条件、步骤、预期结果、测试类型）
+2. **standard**：testcase-tools 标准列（用例编号、所属模块、用例标题、优先级、用例类型、前置条件、测试步骤、预期结果）
+3. **simple**：简化列（模块、名称、步骤、预期）；缺策略默认「正向」，缺优先级默认 P1
+
+无用例名称的数据行计入 `skipped_count`。「已映射」「待补全」列忽略。未识别的额外列写入扩展字段并并入 `column_schema`。
+
+```json
+{
+  "ok": true,
+  "format": "platform | standard | simple",
+  "mode": "append | replace",
+  "imported_count": 12,
+  "skipped_count": 1,
+  "generated_count": 13,
+  "checks": []
+}
+```
+
 #### `GET /api/case-sets/{id}/export?fmt=xlsx|xmind`
 
-`fmt` 必填。响应文件流。Excel 8+。
+`fmt` 必填。响应文件流。Excel 8+。xlsx 固定列含用例编号，可再导入做往返。
 
 ---
 
@@ -1206,7 +1238,7 @@ Harness 回合必须丢到后台 Task，**不得**在 `receive` 循环里 `await
 
 | event | payload | 前端渲染 |
 | --- | --- | --- |
-| `thought` | `{ "text": "..." }`；可选 `latency_ms` `stage`（`plan\|react\|reflect`）`skill_id`。流式扩展：回复生成期间可发送瞬态增量帧 `{ "text": "增量", "stream": "chunk" }`（回复正文增量）与 `{ "text": "增量", "stream": "think" }`（推理模型思考链增量，前端渲染进可折叠思考卡），两种增量均不落库、不占事件号；本轮成功结束时发送 `{ "text": "完整思考链", "stream": "think_final" }`，该快照落库并可历史回放。随后发送不带 `stream` 的完整文本终帧 | ThoughtCard |
+| `thought` | `{ "text": "..." }`；可选 `latency_ms` `stage`（`plan\|react\|reflect`）`skill_id`。流式扩展：回复生成期间可发送瞬态增量帧 `{ "text": "增量", "stream": "chunk" }`（回复正文增量）与 `{ "text": "增量", "stream": "think" }`（推理模型思考链增量，前端渲染进可折叠思考卡），两种增量均不落库、不占事件号；本轮成功结束时发送 `{ "text": "完整思考链", "stream": "think_final" }`，该快照落库并可历史回放。随后发送不带 `stream` 的完整文本终帧。交付终帧可选 `reply_latency_ms`（本轮回复墙钟耗时 ms，与各阶段 `latency_ms` 区分，实时气泡展示「耗时 x 秒」）；历史回放不依赖该字段，耗时从 `GET /sessions/{id}/messages` 的 `messages[].latency_ms` 读取 | ThoughtCard |
 | `message` | `{ "id", "role":"user", "content", "attachments", "author_id", "author":{id,username,display_name?}, "client_message_id?", "created_at" }`；落库、占 event_id，用于协作者实时补用户气泡 | UserBubble |
 | `tool_call` | `{ "name": "model.list", "arguments": {} }` | ToolCard pending；标题用中文名；副标题「MCP · 短工具」 |
 | `tool_result` | `{ "name": "model.list", "ok": true, "data": {} }` 或 `{ "ok": false, "error": "..." }`；可选 `latency_ms` | ToolCard done |
@@ -1601,3 +1633,26 @@ MCP 浏览器不调：与 PRD 3.1、前端计划「禁止把 MCP 当 REST」一�
 | `backend/worker/app/profile_env.py` | Worker 只读共享环境文件并隔离多供应商配置 |
 | `backend/worker/app/benchmark.py` / `backend/worker/app/testcase.py` | 评测与用例生成调用改读环境文件参数 |
 | `docker-compose.yml` / `.env.example` | API 可写、Worker 只读挂载服务器 `.env`，新增 `PROFILE_ENV_FILE` |
+
+**V1.8（2026-08-20）— 助手回复耗时展示**
+
+| 文件 | 作用 |
+| --- | --- |
+| `backend/shared/models.py` | `messages.latency_ms` 字段：assistant 交付句回复耗时（毫秒） |
+| `backend/api/migrations/versions/cf9e2d5b7a01_助手消息增加回复耗时字段.py` | Alembic 迁移：新增 `messages.latency_ms` 列 |
+| `backend/api/app/agent/harness.py` | 回合计时：`_ROUND_STARTED_AT` contextvar 记录回合起点，`_deliver_sentence` 计算耗时并写入 Message，交付 thought 终帧带 `reply_latency_ms` |
+| `backend/api/app/routers/sessions.py` | `GET /sessions/{id}/messages` 返回 `messages[].latency_ms` |
+| `frontend/src/api/types.ts` | `SessionMessage` 补 `latency_ms` 字段 |
+| `frontend/src/views/Agent.vue` | 历史回放/实时交付帧把 `latency_ms` 落到助手气泡，气泡下方展示「耗时 x 秒」 |
+| `frontend/src/styles/base.css` | 新增 `.reply-latency` 耗时角标样式 |
+
+**V1.8（2026-08-20）— 用例 Excel 导入导出**
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/case_excel.py` | Excel 三种表头解析与模板生成 |
+| `backend/api/app/routers/cases.py` | `import-template` / `import`；映射回写 context 与 source_case_id |
+| `backend/api/tests/test_case_excel.py` | 导入解析与模板往返单测 |
+| `frontend/src/components/modals/ImportCasesExcelModal.vue` | 用例工作台 Excel 导入弹窗 |
+| `frontend/src/views/Cases.vue` | 导入导出入口、目录持久化、72h 按 expires_at 展示 |
+| `frontend/src/api/http.ts` / `frontend/src/api/types.ts` | 导入、模板、目录树客户端 |

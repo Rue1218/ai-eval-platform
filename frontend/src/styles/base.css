@@ -611,6 +611,16 @@ p { margin: 0; text-wrap: pretty; }
 
 .msg-agent { font-size: 16px; line-height: 1.9; color: var(--text-primary); max-width: 92%; }
 .msg-agent p + p { margin-top: 10px; }
+/* 回复耗时角标：助手气泡下方展示「耗时 x 秒」，生成中不渲染 */
+.reply-latency {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  user-select: none;
+}
 
 /* 打字占位气泡：LLM 意图识别期间的三点跳动反馈 */
 .typing-bubble { display: inline-flex; align-items: center; gap: 5px; padding: 10px 14px; }

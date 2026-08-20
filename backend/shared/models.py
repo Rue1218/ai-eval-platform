@@ -113,6 +113,9 @@ class Message(Base):
     author_id = Column(String, ForeignKey("users.id"), nullable=True, index=True)
     # 浏览器生成的幂等键，仅 user 消息使用，供实时回显去重。
     client_message_id = Column(String(128), nullable=True)
+    # assistant 交付句的回复生成耗时（毫秒）：从本轮 user_message 入 Harness 到交付的墙钟时长。
+    # 仅 assistant 消息非空，user/system 保持 NULL；历史回放供前端气泡展示「耗时 x 秒」。
+    latency_ms = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 

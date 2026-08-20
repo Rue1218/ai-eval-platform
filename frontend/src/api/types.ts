@@ -515,6 +515,8 @@ export interface SessionMessage {
   author_id?: string | null
   author?: SessionAuthor | null
   client_message_id?: string | null
+  // assistant 交付句的回复生成耗时（毫秒），仅 assistant 非空，气泡展示「耗时 x 秒」。
+  latency_ms?: number | null
   created_at: string
 }
 
