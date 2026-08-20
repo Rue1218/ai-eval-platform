@@ -932,7 +932,7 @@ async function runWorkflow() {
         profile_ids: bmNode.config.profile_ids || ['p-gpt4o'],
         dataset_id: bmNode.config.dataset_id || 'ds-1',
         with_stress: !!stressNode || bmNode.config.with_stress,
-        stress: stressNode ? { env: stressNode.config.env, qps: stressNode.config.qps, duration_seconds: stressNode.config.duration_seconds } : undefined,
+        stress: stressNode ? { env: stressNode.config.env, qps: stressNode.config.qps, duration_s: stressNode.config.duration_seconds || stressNode.config.duration_s || 120 } : undefined,
       }).catch(() => null)
     } else if (ragNode) {
       createdTask = await api.tasks.create({

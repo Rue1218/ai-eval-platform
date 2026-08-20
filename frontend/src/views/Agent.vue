@@ -54,19 +54,10 @@
           </svg>
         </button>
         <span class="chat-head-title">{{ currentSession?.title || '新会话' }}</span>
-        <n-dropdown
-          trigger="click"
-          :options="agentProfileDropdownOptions"
-          @select="handleSelectAgentModel"
-        >
-          <button class="chat-head-model-btn" type="button" title="点击切换当前 Agent 驱动模型">
-            <span class="head-model-dot"></span>
-            <span class="mono">Agent · {{ agentModelName || '未配置模型' }}</span>
-            <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5">
-              <path d="M3 4.5l3 3 3-3" stroke-linecap="round" stroke-linejoin="round" />
-            </svg>
-          </button>
-        </n-dropdown>
+        <span class="chat-head-model-badge mono" title="当前 Agent 驱动模型（只读）">
+          <span class="head-model-dot"></span>
+          <span>Agent · {{ agentModelName || '未配置模型' }}</span>
+        </span>
         <span v-if="isGenerating" class="gen-pill">
           <i class="bdot"></i>
           <span>{{ harnessStageLabel }}</span>
@@ -78,6 +69,9 @@
 
         <span class="grow"></span>
 
+        <!-- 上下文指示器（开发说明书 §8.1 冻结） -->
+        <ContextMeter :meter="currentContextMeter" :compact-summary="currentCompactSummary" />
+
         <!-- 调度视图切换按钮 -->
         <button
           class="btn btn-sm"
@@ -87,15 +81,9 @@
         >
           调度视图
         </button>
-
-        <!-- 模拟失败与模拟断线按钮 -->
-        <button class="btn btn-ghost btn-sm" @click="handleFailDemo">模拟失败</button>
-        <button class="btn btn-ghost btn-sm" @click="handleWsToggle">
-          {{ isWsOnline ? '模拟断线' : '恢复连接' }}
-        </button>
       </div>
 
-      <!-- 断线重连横幅提示 -->
+      <!-- 断线重连横幅提示（真实 WS 状态） -->
       <div v-if="!isWsOnline" class="info-strip">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
           <circle cx="12" cy="12" r="9" />
@@ -163,7 +151,7 @@
               <button class="think-head" type="button" @click="item.collapsed = !item.collapsed">
                 <span class="think-dot" v-if="!item.done"></span>
                 <span class="think-label">{{ item.done ? '已思考' : '思考中' }}</span>
-                <span v-if="item.skill_id && skillLabel(item.skill_id)" class="skill-badge">{{ skillLabel(item.skill_id) }}</span>
+                <SkillBadge v-if="item.skill_id" :skill-id="item.skill_id" />
                 <span v-if="formatLatency(item.latency_ms)" class="think-latency mono">{{ formatLatency(item.latency_ms) }}</span>
                 <span class="think-meta">{{ (item.text || '').length }} 字</span>
                 <svg class="think-caret" :class="{ open: !item.collapsed }" viewBox="0 0 12 12" width="12" height="12">
@@ -171,7 +159,8 @@
                 </svg>
               </button>
               <div v-show="!item.collapsed" class="think-body">
-                <span>{{ item.text }}</span><span v-if="!item.done" class="think-cursor">▍</span>
+                <MarkdownView :content="item.text || ''" />
+                <span v-if="!item.done" class="think-cursor">▍</span>
               </div>
             </div>
 
@@ -519,13 +508,15 @@
               </div>
             </div>
 
-            <!-- 2.7 Agent 文本回复（streaming 时为流式气泡，带打字光标） -->
+            <!-- 2.7 Agent 文本回复（非 streaming 时使用 MarkdownView 渲染富文本） -->
             <div
               v-else-if="item.type === 'agent'"
               class="msg-agent"
               :class="{ 'no-anim': item.noAnim, 'streaming-bubble': item.streaming }"
-              v-html="item.text"
-            ></div>
+            >
+              <MarkdownView v-if="!item.streaming" :content="item.raw || item.text || ''" />
+              <div v-else v-html="item.text"></div>
+            </div>
           </template>
         </div>
 
@@ -612,20 +603,29 @@
           </span>
         </div>
 
-        <div class="composer-card">
+        <div class="composer-card" style="position: relative;">
+          <!-- 斜杠命令悬浮面板 (宽 360px，键入 / 触发) -->
+          <SlashPalette
+            ref="slashPaletteRef"
+            :show="showSlashPalette"
+            :filter-query="inputText"
+            @select="handleSlashSelect"
+            @close="handleSlashClose"
+          />
+
           <!-- 上半区：全宽自适应多行文本域 -->
           <textarea
             ref="textareaRef"
             v-model="inputText"
             class="composer-textarea"
             rows="1"
-            placeholder="输入任何评测问题或需求，Shift + Enter 换行，Enter 发送"
+            placeholder="输入任何评测问题或需求，或键入 / 选择命令，Shift + Enter 换行，Enter 发送"
             @keydown="handleKeydown"
             @input="adjustTextareaHeight"
             @paste="() => nextTick(adjustTextareaHeight)"
           ></textarea>
 
-          <!-- 下半区：操作底栏（附件 + 模型选择 + 发送按钮） -->
+          <!-- 下半区：操作底栏（附件 + 只读模型标识 + 发送按钮） -->
           <div class="composer-bottom-bar">
             <div class="composer-left-actions">
               <!-- 添加附件按钮 -->
@@ -643,24 +643,11 @@
                 @change="handleFileUpload"
               />
 
-              <!-- 模型切换下拉胶囊（点击可切换 Agent 驱动模型） -->
-              <n-dropdown
-                trigger="click"
-                :options="agentProfileDropdownOptions"
-                @select="handleSelectAgentModel"
-              >
-                <button
-                  class="composer-model-btn"
-                  type="button"
-                  title="点击切换当前 Agent 驱动模型"
-                >
-                  <span class="head-model-dot"></span>
-                  <span class="mono">Agent · {{ agentModelName || '选择模型' }}</span>
-                  <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5">
-                    <path d="M3 4.5l3 3 3-3" stroke-linecap="round" stroke-linejoin="round" />
-                  </svg>
-                </button>
-              </n-dropdown>
+              <!-- 只读模型展示标签（开发说明书 §6 / §7 严格只读） -->
+              <span class="composer-model-badge mono" title="当前 Agent 驱动模型（只读）">
+                <span class="head-model-dot"></span>
+                <span>Agent · {{ agentModelName || '主模型' }}</span>
+              </span>
             </div>
 
             <!-- 右侧圆形发送/暂停按钮 -->
@@ -745,7 +732,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch, h } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useMessage, useDialog, NDropdown, type DropdownOption } from 'naive-ui'
+import { useMessage, useDialog } from 'naive-ui'
 import { api } from '../api/http'
 import { AgentWebSocket } from '../api/ws'
 import type { Task, TaskSpec, WsServerEvent, Profile, Dataset, KnowledgeBase, GoldQA } from '../api/types'
@@ -754,6 +741,10 @@ import { useModeStore } from '../stores/mode'
 import KindTag from '../components/common/KindTag.vue'
 import { formatLatency } from '../utils/format'
 import { skillLabel } from '../agent/skillLabels'
+import SkillBadge from '../components/agent/SkillBadge.vue'
+import MarkdownView from '../components/agent/MarkdownView.vue'
+import SlashPalette from '../components/agent/SlashPalette.vue'
+import ContextMeter, { type ContextMeterData } from '../components/agent/ContextMeter.vue'
 
 const message = useMessage()
 const dialog = useDialog()
@@ -787,87 +778,27 @@ const agentModelName = ref('')
 const currentAgentProfileId = ref<string>('')
 const allProfiles = ref<Profile[]>([])
 
-/** 模型选择下拉菜单项（对齐 /admin/profiles 接入池） */
-const agentProfileDropdownOptions = computed<DropdownOption[]>(() => {
-  if (!allProfiles.value.length) {
-    return [
-      { label: '暂无接入模型协议档', key: '__none__', disabled: true },
-      { type: 'divider', key: 'd1' },
-      { label: '⚙ 前往接入协议档 ↗', key: '__goto_profiles__' },
-    ]
-  }
-  const activeId = currentAgentProfileId.value || allProfiles.value[0]?.id
-  const list: DropdownOption[] = allProfiles.value.map((p) => {
-    const isCurrent = p.id === activeId
-    return {
-      label: p.name,
-      key: p.id,
-      profile: p,
-      isCurrent,
-    }
-  })
-  return [
-    ...list,
-    { type: 'divider', key: 'd1' },
-    { label: '⚙ 管理模型接入协议档 ↗', key: '__goto_profiles__' },
-  ]
+// 上下文度量与斜杠命令面板状态
+const currentContextMeter = ref<ContextMeterData | null>(null)
+const currentCompactSummary = ref<string | null>(null)
+const slashPaletteRef = ref<InstanceType<typeof SlashPalette> | null>(null)
+const paletteClosedManually = ref(false)
+
+const showSlashPalette = computed(() => {
+  return inputText.value.startsWith('/') && !paletteClosedManually.value
 })
 
-/** 规范渲染模型下拉项：左右两栏结构，主标题 + 副标题 + 当前驱动高亮微标 */
-function renderAgentProfileOption(option: DropdownOption) {
-  if (option.type === 'divider' || !option.profile) {
-    return option.label as string
-  }
-  const p = option.profile as Profile
-  const isCurrent = !!option.isCurrent
-  return h('div', {
-    class: 'agent-profile-option-row',
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      gap: '16px',
-      minWidth: '240px',
-      padding: '3px 0',
-      lineHeight: '1.4',
-    },
-  }, [
-    h('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px', flex: '1', minWidth: '0' } }, [
-      h('div', {
-        style: {
-          fontWeight: isCurrent ? '700' : '500',
-          fontSize: '13px',
-          color: isCurrent ? 'var(--accent-ai, #10B981)' : 'inherit',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-        },
-      }, p.name),
-      h('div', {
-        style: {
-          fontSize: '11px',
-          color: 'var(--text-tertiary, #6B7280)',
-          fontFamily: 'var(--font-mono, monospace)',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-        },
-      }, `${p.model || p.protocol} · ${p.protocol}`),
-    ]),
-    isCurrent
-      ? h('span', {
-          style: {
-            color: 'var(--accent-ai, #10B981)',
-            fontSize: '11px',
-            fontWeight: '700',
-            background: 'var(--t-agent, rgba(16, 185, 129, 0.12))',
-            padding: '2px 8px',
-            borderRadius: '6px',
-            flexShrink: '0',
-          },
-        }, '当前驱动')
-      : null,
-  ])
+function handleSlashSelect(cmdText: string) {
+  inputText.value = cmdText
+  paletteClosedManually.value = true
+  nextTick(() => {
+    textareaRef.value?.focus()
+    adjustTextareaHeight()
+  })
+}
+
+function handleSlashClose() {
+  paletteClosedManually.value = true
 }
 
 const sessions = ref<any[]>([])
@@ -877,39 +808,39 @@ const inputText = ref('')
 const stagedFiles = ref<any[]>([])
 const activeTask = ref<Task | null>(null)
 
-// 资产列表种子数据供 mock 演示；实时模式下由服务端短工具（model.list / dataset.list / kb.list）动态回填
-const availableProfiles = ref<Profile[]>([
+// 模拟资产只允许在显式 mock 模式中存在；实时模式必须等待服务端短工具回填。
+const availableProfiles = ref<Profile[]>(api.isMock() ? [
   { id: 'p-gpt', name: 'gpt-test', model: 'gpt-4o', protocol: 'openai_chat', base_url: 'https://api.openai.com/v1', usages: ['target'], created_at: new Date().toISOString() },
   { id: 'p-claude', name: 'claude-x', model: 'claude-3-5-sonnet-20241022', protocol: 'anthropic_messages', base_url: 'https://api.anthropic.com', usages: ['target'], created_at: new Date().toISOString() },
   // F10 外部 RAG 服务档（external_chat 库确认卡单选选项）
   { id: 'p-ragsvc', name: 'rag-客服外挂', model: 'rag-chat-v2', protocol: 'openai_chat', base_url: 'https://rag.internal.example.com/v1', usages: ['target'], created_at: new Date().toISOString() },
-])
-const availableDatasets = ref<Dataset[]>([
+ ] : [])
+const availableDatasets = ref<Dataset[]>(api.isMock() ? [
   { id: 'ds-smoke', name: 'smoke-20', version: 3, row_count: 20, pending_complete_count: 0, metric: 'contain', owner: 'admin', created_at: new Date().toISOString() },
-])
-const availableKbs = ref<KnowledgeBase[]>([
+ ] : [])
+const availableKbs = ref<KnowledgeBase[]>(api.isMock() ? [
   { id: 'kb-default', name: 'default', kind: 'lightrag', doc_count: 12, is_core: true, owner: 'admin' },
   { id: 'kb-cs', name: '外挂客服', kind: 'external_chat', doc_count: null, is_core: false, owner: 'alice' },
-])
-const availableGoldQas = ref<GoldQA[]>([
+ ] : [])
+const availableGoldQas = ref<GoldQA[]>(api.isMock() ? [
   { id: 'gq-1', kb_id: 'kb-default', name: 'qa-v1', version: 2, row_count: 20, owner: 'admin', created_at: new Date().toISOString() },
-])
+ ] : [])
 
 // 智能体能力卡与顶栏共用同一模式状态，避免出现页面内外不一致的评测上下文。
 const isRagMode = computed(() => modeStore.mode === 'rag')
 
 const LLM_CAPS = [
-  { id: 'cap-benchmark', name: '多模型基准对比', desc: '1–5 个协议档并排测试，输出 contain / exact / Judge 打分', say: '对比一下 gpt-test 和 claude-x 在 smoke-20 上的表现', icoSvg: '<path d="M4 20V10M10 20V4M16 20v-8M3 20h18"/>' },
+  { id: 'cap-benchmark', name: '多模型基准对比', desc: '1–5 个协议档并排测试，输出 contain / exact / Judge 打分', say: '帮我对两个已配置模型进行基准评测', icoSvg: '<path d="M4 20V10M10 20V4M16 20v-8M3 20h18"/>' },
   { id: 'cap-prompt', name: 'Prompt 效果评测', desc: '评测不同系统提示词与上下文在同一数据集上的得分差异', say: '评测系统 Prompt 在支付链路问答上的准确率', icoSvg: '<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 9h8M8 13h5"/>' },
   { id: 'cap-testcase', name: 'PRD 生成用例', desc: '附 PRD / OpenAPI，按 6 种策略生成，72h 内确认入库', say: '帮我把这份支付 PRD 生成测试用例', icoSvg: '<path d="M9 11.5 11 14l4.5-5"/><rect x="4" y="4" width="16" height="16" rx="3"/>' },
-  { id: 'cap-stress', name: '先评后压', desc: '质量达标后自动压测同一 endpoint，实时监控 QPS / RT', say: '评测 gpt-test 质量达标后自动加压测 10 QPS', icoSvg: '<path d="M3 17l5-6 4 3 6-8"/><path d="M18 6h3v3"/>' }
+  { id: 'cap-stress', name: '先评后压', desc: '质量达标后自动压测同一 endpoint，实时监控 QPS / RT', say: '帮我评测已配置模型，并在成功后自动执行压测', icoSvg: '<path d="M3 17l5-6 4 3 6-8"/><path d="M18 6h3v3"/>' }
 ]
 
 const RAG_CAPS = [
-  { id: 'cap-rag', name: 'RAG 检索评测', desc: '知识库 + 黄金 QA，输出 Hit Rate@5 / MRR / Recall', say: '评估 default 知识库的检索质量', icoSvg: '<path d="M5 5.5A2.5 2.5 0 0 1 7.5 3H19v15H7.5A2.5 2.5 0 0 0 5 20.5Z"/><path d="M5 18.5V5.5"/><path d="M9 7.5h6"/>' },
-  { id: 'cap-modes', name: '4 模式横向对比', desc: '对比 LightRAG naive / local / global / hybrid 检索表现', say: '横向对比 LightRAG 四种模式在 qa-v1 上的表现', icoSvg: '<circle cx="12" cy="12" r="3"/><path d="M3 12h3M18 12h3M12 3v3M12 18v3"/>' },
-  { id: 'cap-qa', name: '黄金 QA 检验', desc: '校验 expected_doc_ids 召回命中与相似度分布', say: '检验 default 知识库黄金 QA 覆盖度', icoSvg: '<path d="M9 11.5 11 14l4.5-5"/><circle cx="12" cy="12" r="9"/>' },
-  { id: 'cap-rag-stress', name: 'RAG 接口加压', desc: '对 LightRAG query 或外部 RAG HTTP 服务发起高并发压测', say: '对 default 知识库 query 接口跑 20 QPS 压测', icoSvg: '<path d="M3 17l5-6 4 3 6-8"/><path d="M18 6h3v3"/>' }
+  { id: 'cap-rag', name: 'RAG 检索评测', desc: '知识库 + 黄金 QA，输出 Hit Rate@5 / MRR / Recall', say: '帮我评估已配置知识库的检索质量', icoSvg: '<path d="M5 5.5A2.5 2.5 0 0 1 7.5 3H19v15H7.5A2.5 2.5 0 0 0 5 20.5Z"/><path d="M5 18.5V5.5"/><path d="M9 7.5h6"/>' },
+  { id: 'cap-modes', name: '4 模式横向对比', desc: '对比 LightRAG naive / local / global / hybrid 检索表现', say: '横向对比已配置知识库的四种检索模式', icoSvg: '<circle cx="12" cy="12" r="3"/><path d="M3 12h3M18 12h3M12 3v3M12 18v3"/>' },
+  { id: 'cap-qa', name: '黄金 QA 检验', desc: '校验 expected_doc_ids 召回命中与相似度分布', say: '检验已配置知识库的黄金 QA 覆盖度', icoSvg: '<path d="M9 11.5 11 14l4.5-5"/><circle cx="12" cy="12" r="9"/>' },
+  { id: 'cap-rag-stress', name: 'RAG 接口加压', desc: '对 LightRAG query 或外部 RAG HTTP 服务发起高并发压测', say: '对已配置知识库的查询接口执行压测', icoSvg: '<path d="M3 17l5-6 4 3 6-8"/><path d="M18 6h3v3"/>' }
 ]
 
 const currentCaps = computed(() => isRagMode.value ? RAG_CAPS : LLM_CAPS)
@@ -1303,8 +1234,19 @@ async function handleFileUpload(e: Event) {
   }
 }
 
-/** 键盘事件监听：Enter 发送，Shift + Enter 换行并自适应扩展高度 */
+/** 键盘事件监听：SlashPalette 导航、Enter 发送，Shift + Enter 换行 */
 function handleKeydown(e: KeyboardEvent) {
+  if (paletteClosedManually.value && e.key !== 'Escape') {
+    paletteClosedManually.value = false
+  }
+
+  // 1. 若斜杠面板可见且非中文输入法合成期，委托斜杠面板处理按键 (↑ / ↓ / Enter / Esc)
+  if (showSlashPalette.value && !e.isComposing && slashPaletteRef.value) {
+    const handled = slashPaletteRef.value.handleKeyDown(e)
+    if (handled) return
+  }
+
+  // 2. 正常输入换行 / 发送
   if (e.key === 'Enter') {
     if (e.shiftKey) {
       // Shift + Enter: 允许原生换行，并在 DOM 渲染后重新计算自适应高度
@@ -1384,12 +1326,15 @@ function handleUserSend(text: string, files: any[] = []) {
     scrollToBottom()
     // 契约：attachments = [{ file_id }]，仅回传上传成功的附件，失败附件按提示忽略
     agentWs.sendUserMessage(text, files.filter(f => f.id).map(f => ({ file_id: f.id })))
-  } else if (agentWs) {
-    // 实时模式但连接未就绪：给出错误反馈并走本地模拟，避免消息静默丢失
-    events.value.push({ type: 'error', code: 'NETWORK', message: '连接未就绪，消息将在本地模拟流程中演示' })
+  } else if (api.isMock()) {
+    // 显式 mock 模式保留本地演示，实时模式绝不伪造任务、资产或报告。
     simulateAgentFlow(text, files)
   } else {
-    simulateAgentFlow(text, files)
+    isGenerating.value = false
+    harnessStage.value = ''
+    events.value.push({ type: 'error', code: 'UPSTREAM', message: 'Agent 连接未就绪，请等待重连后重试。' })
+    message.error('Agent 连接未就绪，请等待重连后重试')
+    scrollToBottom()
   }
 }
 
@@ -1557,6 +1502,12 @@ function handleConfirmAck(item: StreamItem, confirmed: boolean) {
 
   const useLive = !!(agentWs && agentWs.isConnected)
 
+  // 实时模式断线时不可将确认卡伪造成任务成功；保留卡片供重连后再次确认。
+  if (!useLive && !api.isMock()) {
+    message.error('Agent 连接未就绪，暂不能确认入队')
+    return
+  }
+
   // 真实链路：确认成功前不盖章（A1）；取消可以立即折叠
   if (useLive) {
     if (confirmed) {
@@ -1573,7 +1524,7 @@ function handleConfirmAck(item: StreamItem, confirmed: boolean) {
 
   stampConfirmCard(item, confirmed)
 
-  // Mock 模式（无 WS 连接）：本地演示入队与进度
+  // 显式 mock 模式：本地演示入队与进度。
   if (!confirmed) {
     events.value.push({
       type: 'agent',
@@ -1724,6 +1675,14 @@ function handleInterpretReport(reportId: string) {
   // 实时模式交由服务端智能体解读，结果经 WS 事件回流。
   if (agentWs?.isConnected) {
     agentWs.sendUserMessage(`解读报告 #${reportId}`)
+    return
+  }
+
+  if (!api.isMock()) {
+    isGenerating.value = false
+    events.value.push({ type: 'error', code: 'UPSTREAM', message: 'Agent 连接未就绪，暂不能解读报告。' })
+    message.error('Agent 连接未就绪，暂不能解读报告')
+    scrollToBottom()
     return
   }
 
@@ -1945,6 +1904,9 @@ async function loadSessionHistory(sid: string): Promise<number> {
         replay.push({ type: 'confirm', card, isAcked: false, summary: '', open: true, noAnim: true })
       }
     }
+    currentContextMeter.value = history.context_meter || null
+    currentCompactSummary.value = history.compact_summary || null
+
     if (replay.length) {
       events.value = replay
       scrollToBottom(true)
@@ -1963,6 +1925,8 @@ async function loadSessionHistory(sid: string): Promise<number> {
 async function selectSession(sid: string) {
   currentSessionId.value = sid
   events.value = []
+  currentContextMeter.value = null
+  currentCompactSummary.value = null
   activeTask.value = null
   dockClosingNote.value = ''
   isGenerating.value = false
@@ -2116,6 +2080,8 @@ function handleWsEvent(ev: WsServerEvent) {
       if (typeof p.latency_ms === 'number') turnLatencyMs.value += p.latency_ms
       const think = [...events.value].reverse().find(e => e.type === 'thought' && !e.done)
       if (think) {
+        // 终帧是权威全文，不能只依赖可能丢失的瞬态增量帧。
+        if (text) think.text = text
         think.done = true
         think.collapsed = true
         if (p.latency_ms !== undefined) think.latency_ms = p.latency_ms
@@ -2323,12 +2289,12 @@ onMounted(async () => {
     if (api.isMock()) {
       handleInterpretReport(interpretId)
     } else {
-      // 实时模式需等待 WS 建立连接后再发送解读请求；5s 超时兜底走本地演示流程。
+      // 实时模式需等待 WS 建立连接后再发送解读请求；超时只提示连接异常，禁止伪造解读。
       // 兜底定时器与 watch 均登记在册，组件卸载时统一清理。
       const fallbackTimer = trackTimeout(() => {
-        interpretStopWatch?.()
-        interpretStopWatch = null
-        handleInterpretReport(interpretId)
+        events.value.push({ type: 'error', code: 'UPSTREAM', message: 'Agent 连接未就绪，报告解读将在重连后继续。' })
+        message.warning('Agent 连接未就绪，正在等待重连')
+        scrollToBottom()
       }, 5000)
       interpretStopWatch = watch(isWsOnline, (online) => {
         if (online) {

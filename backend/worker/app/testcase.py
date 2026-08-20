@@ -17,6 +17,7 @@ JSON 数组输出、配比校正），修改任一侧必须同步另一侧。
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path

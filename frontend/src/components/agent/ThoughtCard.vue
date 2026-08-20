@@ -1,11 +1,13 @@
 <template>
+  <!-- 思考卡组件（开发说明书 §7 / §16.1 / §16.7 冻结） -->
   <div class="thought-card" :class="{ done, collapsed }">
     <div class="thought-head" @click="collapsed = !collapsed">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M12 2a8 8 0 0 0-8 8c0 3 2 5.5 5 7v3h6v-3c3-1.5 5-4 5-7a8 8 0 0 0-8-8z"></path>
         <line x1="10" y1="22" x2="14" y2="22"></line>
       </svg>
-      <span>思考过程</span>
+      <span class="thought-title">{{ done ? '已思考' : '思考中' }}</span>
+      <SkillBadge v-if="skillId" :skill-id="skillId" />
       <span v-if="formattedLatency" class="thought-latency mono">{{ formattedLatency }}</span>
       <span class="chev">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -13,8 +15,9 @@
         </svg>
       </span>
     </div>
-    <div class="thought-body">
-      {{ text }}
+    <div v-show="!collapsed" class="thought-body">
+      <MarkdownView :content="text" />
+      <span v-if="!done" class="thought-cursor">▍</span>
     </div>
   </div>
 </template>
@@ -22,11 +25,15 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
 import { formatLatency } from '../../utils/format'
+import SkillBadge from './SkillBadge.vue'
+import MarkdownView from './MarkdownView.vue'
 
 const props = defineProps<{
   text: string
   done?: boolean
   latencyMs?: number
+  skillId?: string | null
+  stage?: string | null
 }>()
 
 const collapsed = ref(false)
@@ -61,27 +68,34 @@ onMounted(() => {
 
 <style scoped>
 .thought-card {
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
   border-radius: 14px;
-  background: var(--bg-elevated);
+  background: var(--bg-elevated, #1e293b);
   overflow: hidden;
   max-width: 92%;
-  transition: opacity 0.5s ease;
+  transition: opacity 0.3s ease;
   animation: msg-in 0.26s cubic-bezier(0.2, 0.9, 0.3, 1);
 }
 .thought-card.done {
-  opacity: 0.85;
+  opacity: 0.9;
 }
 .thought-head {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 9px 14px;
+  padding: 8px 14px;
   font-size: 12px;
   font-weight: 600;
   color: var(--c-agent, #10b981);
   cursor: pointer;
   user-select: none;
+  background: rgba(255, 255, 255, 0.02);
+}
+.thought-head:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+.thought-title {
+  color: var(--c-agent, #10b981);
 }
 .thought-latency {
   font-size: 11px;
@@ -93,19 +107,15 @@ onMounted(() => {
   margin-left: 2px;
 }
 .thought-body {
-  padding: 0 14px 12px;
+  padding: 10px 14px 12px;
   font-size: 13px;
-  color: var(--text-secondary);
-  line-height: 1.7;
-  white-space: pre-wrap;
-}
-.thought-card.collapsed .thought-body {
-  display: none;
+  color: var(--text-secondary, #cbd5e1);
+  line-height: 1.6;
 }
 .thought-head .chev {
   margin-left: auto;
   transition: transform 0.18s ease;
-  color: var(--text-tertiary);
+  color: var(--text-tertiary, #64748b);
   display: grid;
   place-items: center;
 }
@@ -113,15 +123,11 @@ onMounted(() => {
   transform: rotate(-90deg);
 }
 
-.thought-card:not(.done) .thought-body::after {
-  content: '';
+.thought-cursor {
   display: inline-block;
-  width: 2px;
-  height: 13px;
-  background: var(--c-agent, #10b981);
-  margin-left: 3px;
-  vertical-align: -2px;
+  color: var(--c-agent, #10b981);
   animation: caret-blink 0.8s steps(2, jump-none) infinite;
+  margin-left: 2px;
 }
 @keyframes caret-blink {
   50% {

@@ -1,11 +1,12 @@
 <template>
   <div class="composer-wrap">
-    <!-- 快捷提示芯片 -->
+    <!-- 快捷提示芯片（空输入时展示） -->
     <div v-if="showChips && !text.trim()" class="quick-chips">
       <button
         v-for="chip in chips"
         :key="chip.label"
         class="chip"
+        type="button"
         @click="selectChip(chip.prompt)"
       >
         {{ chip.label }}
@@ -20,57 +21,72 @@
         </svg>
         <span>{{ attachment.filename }}</span>
         <span class="mono">{{ formatSize(attachment.size) }}</span>
-        <button class="remove-attach" @click="removeAttachment" title="移除附件">×</button>
+        <button class="remove-attach" type="button" @click="removeAttachment" title="移除附件">×</button>
       </div>
     </div>
 
-    <!-- 输入区 -->
-    <div class="composer-inner">
-      <!-- 附件上传隐藏 input -->
-      <input
-        ref="fileInputRef"
-        type="file"
-        style="display: none"
-        accept=".txt,.md,.pdf,.json,.jsonl,.csv,.xlsx"
-        @change="handleFileChange"
+    <!-- 输入区包装（相对定位以容纳斜杠面板） -->
+    <div class="composer-box-relative">
+      <!-- 斜杠命令悬浮面板 -->
+      <SlashPalette
+        ref="slashPaletteRef"
+        :show="showSlashPalette"
+        :filter-query="text"
+        @select="handleSlashSelect"
+        @close="handleSlashClose"
       />
 
-      <!-- 附件按钮 -->
-      <button
-        class="composer-btn"
-        :disabled="uploading"
-        @click="triggerUpload"
-        title="上传附件（≤20MB）"
-      >
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
-        </svg>
-      </button>
+      <div class="composer-inner">
+        <!-- 附件上传隐藏 input -->
+        <input
+          ref="fileInputRef"
+          type="file"
+          style="display: none"
+          accept=".txt,.md,.pdf,.json,.jsonl,.csv,.xlsx"
+          @change="handleFileChange"
+        />
 
-      <!-- 文本输入框 -->
-      <textarea
-        v-model="text"
-        placeholder="说明要评测什么（模型 / RAG / 生成用例），我会先澄清后给出确认卡..."
-        :rows="1"
-        @keydown.enter.prevent="handleEnter"
-      ></textarea>
+        <!-- 附件按钮 -->
+        <button
+          class="composer-btn"
+          type="button"
+          :disabled="uploading"
+          @click="triggerUpload"
+          title="上传附件（≤20MB）"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
+          </svg>
+        </button>
 
-      <!-- 右侧只读模型名 -->
-      <div class="composer-model mono">{{ agentModelName }}</div>
+        <!-- 文本输入框 -->
+        <textarea
+          v-model="text"
+          placeholder="说明要评测什么（模型 / RAG / 生成用例）或键入 / 选择命令..."
+          :rows="1"
+          @keydown="handleKeyDown"
+          @compositionstart="isComposing = true"
+          @compositionend="isComposing = false"
+        ></textarea>
 
-      <!-- 发送按钮 -->
-      <button
-        class="send-btn"
-        :class="{ ready: canSend }"
-        :disabled="!canSend"
-        @click="handleSend"
-        title="发送消息"
-      >
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-          <line x1="22" y1="2" x2="11" y2="13"></line>
-          <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-        </svg>
-      </button>
+        <!-- 右侧只读模型名（开发说明书 §6 / §7 严格只读，无下拉） -->
+        <div class="composer-model mono">{{ agentModelName }}</div>
+
+        <!-- 发送按钮 -->
+        <button
+          class="send-btn"
+          type="button"
+          :class="{ ready: canSend }"
+          :disabled="!canSend"
+          @click="handleSend"
+          title="发送消息 (Enter)"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="22" y1="2" x2="11" y2="13"></line>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+          </svg>
+        </button>
+      </div>
     </div>
   </div>
 </template>
@@ -79,6 +95,7 @@
 import { ref, computed } from 'vue'
 import { useMessage } from 'naive-ui'
 import { api } from '../../api/http'
+import SlashPalette from './SlashPalette.vue'
 
 const props = withDefaults(
   defineProps<{
@@ -100,8 +117,11 @@ const emit = defineEmits<{
 const message = useMessage()
 const text = ref('')
 const fileInputRef = ref<HTMLInputElement | null>(null)
+const slashPaletteRef = ref<InstanceType<typeof SlashPalette> | null>(null)
 const uploading = ref(false)
+const isComposing = ref(false)
 const attachment = ref<{ id: string; filename: string; size: number } | null>(null)
+const paletteClosedManually = ref(false)
 
 const chips = [
   { label: '基准评测', prompt: '帮我针对最新的两个大模型进行一单 Benchmark 基准评测' },
@@ -109,6 +129,10 @@ const chips = [
   { label: '生成用例', prompt: '根据需求描述生成一批结构化测试用例并进行正反向自检' },
   { label: '先评后压', prompt: '帮我对比模型质量，并在评测成功后自动派生压测' },
 ]
+
+const showSlashPalette = computed(() => {
+  return text.value.startsWith('/') && !paletteClosedManually.value
+})
 
 const canSend = computed(() => {
   return props.connected && (text.value.trim().length > 0 || !!attachment.value)
@@ -156,8 +180,30 @@ function formatSize(bytes: number): string {
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
 }
 
-function handleEnter(e: KeyboardEvent) {
-  if (!e.shiftKey) {
+function handleSlashSelect(cmdText: string) {
+  text.value = cmdText
+  paletteClosedManually.value = true
+}
+
+function handleSlashClose() {
+  paletteClosedManually.value = true
+}
+
+function handleKeyDown(e: KeyboardEvent) {
+  // 如果用户修改了输入内容，重置手动关闭状态
+  if (paletteClosedManually.value && e.key !== 'Escape') {
+    paletteClosedManually.value = false
+  }
+
+  // 1. 若斜杠面板处于显示态且非中文合成期，优先委托斜杠面板处理（↑ / ↓ / Enter / Esc）
+  if (showSlashPalette.value && !isComposing.value && slashPaletteRef.value) {
+    const handled = slashPaletteRef.value.handleKeyDown(e)
+    if (handled) return
+  }
+
+  // 2. 普通 Enter 键触发发送
+  if (e.key === 'Enter' && !e.shiftKey && !isComposing.value) {
+    e.preventDefault()
     handleSend()
   }
 }
@@ -169,6 +215,7 @@ function handleSend() {
   emit('send', msg, fileId)
   text.value = ''
   attachment.value = null
+  paletteClosedManually.value = false
 }
 </script>
 
@@ -193,6 +240,7 @@ function handleSend() {
   font-size: 12px;
   color: var(--text-secondary);
   transition: all 0.14s ease;
+  cursor: pointer;
 }
 .chip:hover {
   border-color: var(--accent-ai);
@@ -226,9 +274,13 @@ function handleSend() {
   color: var(--accent-error);
 }
 
-.composer-inner {
+.composer-box-relative {
   max-width: 760px;
   margin: 0 auto;
+  position: relative;
+}
+
+.composer-inner {
   border: 1px solid var(--border-subtle);
   border-radius: 20px;
   background: var(--bg-main);
@@ -269,6 +321,7 @@ function handleSend() {
   display: grid;
   place-items: center;
   transition: all 0.15s ease;
+  cursor: pointer;
 }
 .composer-btn:hover:not(:disabled) {
   border-color: var(--text-tertiary);
@@ -280,6 +333,7 @@ function handleSend() {
   color: var(--text-tertiary);
   white-space: nowrap;
   padding-bottom: 8px;
+  user-select: none;
 }
 
 .send-btn {
@@ -293,6 +347,7 @@ function handleSend() {
   background: var(--bg-elevated);
   color: var(--text-tertiary);
   transition: all 0.15s ease;
+  cursor: pointer;
 }
 .send-btn.ready {
   background: var(--text-primary);

@@ -5,7 +5,7 @@
 | 文档名称 | Agent 独立开发说明书 |
 | 版本 | V1.2 |
 | 日期 | 2026-08-19 |
-| 最近修订 | 2026-08-20：Harness 缺口补齐（偏好 thought、补规划观察闭环、控制斜杠走完整复核 A2） |
+| 最近修订 | 2026-08-20：Harness 缺口补齐（偏好 thought、补规划观察闭环、控制斜杠复核）；落地模块 7 卡片/Markdown/斜杠面板/ContextMeter |
 | 用法 | **实现 `/agent` 以本文为准（Harness / 斜杠 / 窗口算法）。** REST/WS JSON 以 API.md V1.4 为准。完成某项后勾选文末 Task，并在「最近修订」追加一行。 |
 
 本文是评测平台 **Agent 子系统** 的完整开发说明书：目标、边界、运行时骨架、协议、模块、代码落点与验收任务都写在这里。与 PRD / API.md 冲突时，字段名与事件名以那两份为准；Harness、斜杠、上下文算法以本文 §16 为准。§4.6 所列增量已收入 **API.md V1.4**。
@@ -624,15 +624,15 @@ ChatHead 右侧（或输入框上方）常驻，压缩或新消息后立刻更�
 | AGT-SLH-01 | 15 条命令；芯片同源 | slash 注册表 面板 | `/help` 与面板一致 | [x] 2026-08-19 |
 | AGT-SLH-02 | `/compact` | `context.py` | 四段计数更新且历史仍在 | [x] 2026-08-19 |
 | AGT-CTX-01 | 模型窗口 20 条 | `context.py` | 人设始终带上 | [x] 2026-08-19 |
-| AGT-CTX-02 | ContextMeter 消息/技能/摘要/余量 | ContextMeter.vue | `/20` 只约束消息；无记忆文件文案正确 | [ ] |
+| AGT-CTX-02 | ContextMeter 消息/技能/摘要/余量 | ContextMeter.vue | `/20` 只约束消息；无记忆文件文案正确 | [x] 2026-08-20 |
 | AGT-CTX-03 | compact_keep_from 迁移与 REST context_meter | models Alembic sessions.py | 刷新数字与压缩后 M 一致 | [x] 2026-08-19 |
 | AGT-MEM-01 | ack 成功后写 agent_prefs；规划可沿用 | settings + plan.py | 资产已删则不当作有效 ID；须发「沿用你上次的协议档」thought | [x] 2026-08-20 |
-| AGT-UI-01 | live 去掉模拟按钮与种子数据 | `Agent.vue` | 仅 mock 模式可演示 | [ ] |
-| AGT-UI-02 | 工具卡中文名 +「MCP · 短工具」 | `ToolCard.vue` | 无旧名 list_profiles | [ ] |
+| AGT-UI-01 | live 去掉模拟按钮与种子数据 | `Agent.vue` | 仅 mock 模式可演示 | [x] 2026-08-20 |
+| AGT-UI-02 | 工具卡中文名 +「MCP · 短工具」 | `ToolCard.vue` | 无旧名 list_profiles | [x] 2026-08-20 |
 | AGT-UI-03 | 确认卡 ack；未确认不入队 | ConfirmCard `ws.py` | 取消无任务 | [ ] |
 | AGT-UI-04 | 进度坞与报告卡走真事件 | 组件、worker | 空跑也发 progress/report | [ ] |
-| AGT-UI-05 | 基础 Markdown 渲染 | MarkdownView | 防 XSS | [ ] |
-| AGT-UI-08 | 思考卡技能徽标 | SkillBadge.vue | 无 skill 不显示；回放仍在 | [ ] |
+| AGT-UI-05 | 基础 Markdown 渲染 | MarkdownView | 防 XSS | [x] 2026-08-20 |
+| AGT-UI-08 | 思考卡技能徽标 | SkillBadge.vue | 无 skill 不显示；回放仍在 | [x] 2026-08-20 |
 | AGT-MCP-01 | 短工具实现与清单同源 | `mcp_tools.py` | 名称冻结 | [x] 2026-08-19 |
 | AGT-TSK-01 | ack 合并后再按确认卡校验 | `ws.py` `tasks.py` | 与 REST 下单同一套字段 | [x] 2026-08-19 |
 | AGT-TSK-02 | 取消对话框；重跑出新卡 | `Agent.vue` | 重跑新 ID | [ ] |
