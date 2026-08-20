@@ -69,6 +69,19 @@ _DETERMINISTIC_SLASH = frozenset(
 )
 
 
+def should_emit_stage_thoughts(intent: str, command: str | None) -> bool:
+    """是否把规划/复核刷成思考卡。
+
+    闲聊与 /help 等确定性斜杠只交付正文；再发「规划：识别为 chat」「复核：确认没有
+    create」会连同模型推理卡变成三张一模一样的「已思考」。
+    """
+    if intent == "chat":
+        return False
+    if command in _DETERMINISTIC_SLASH:
+        return False
+    return True
+
+
 def session_harness(session_id: str) -> SessionHarness | None:
     """读取当前会话的进行中回合。"""
     return _HARNESS_BY_SESSION.get(session_id)
@@ -164,11 +177,17 @@ def _title_from_text(text: str) -> str:
 
 
 def _clarify_text(reflect: ReflectArtifact, plan: PlanArtifact) -> str:
-    if reflect.reasons:
+    # 只有 verdict=clarify 的 reasons 才是真正的澄清理由；
+    # verdict=pass 时 reasons 是门禁通过语（如「确认没有 create」），
+    # 若 plan.delivery=clarify 走到本函数，不得把通过语当澄清句交付给用户。
+    if reflect.verdict == "clarify" and reflect.reasons:
         return str(reflect.reasons[0])
     missing = plan.slots.get("missing") or []
     if missing:
         return f"还需要确认：{', '.join(missing)}。可以说具体协议档和数据集，或发送 /benchmark。"
+    # 规划自身判 clarify（意图不清）但门禁通过：用规划短句说明，避免答非所问
+    if plan.delivery == "clarify" and plan.notes:
+        return f"{plan.notes}。可以补充评测目标（协议档、数据集），或直接发送 /benchmark。"
     return "请再补充一下评测目标（协议档、数据集或 /benchmark）。"
 
 
@@ -223,18 +242,20 @@ async def _run_turn(
         ),
     )
     _check_abort(abort)
-    notes = plan.notes or "规划中"
-    if not notes.startswith("规划"):
-        notes = f"规划：{notes}"
-    await _emit_thought(
-        emit,
-        notes,
-        stage="plan",
-        skill_id=plan.skill_id,
-        latency_ms=plan.latency_ms or None,
-    )
-    for pref_note in plan.pref_thoughts:
-        await _emit_thought(emit, pref_note, stage="plan")
+    emit_stage_thoughts = should_emit_stage_thoughts(plan.intent, parsed.command)
+    if emit_stage_thoughts:
+        notes = plan.notes or "规划中"
+        if not notes.startswith("规划"):
+            notes = f"规划：{notes}"
+        await _emit_thought(
+            emit,
+            notes,
+            stage="plan",
+            skill_id=plan.skill_id,
+            latency_ms=plan.latency_ms or None,
+        )
+        for pref_note in plan.pref_thoughts:
+            await _emit_thought(emit, pref_note, stage="plan")
 
     slash_fill_first = parsed.command in {"benchmark", "stress", "testcase", "rerun"}
 
@@ -340,14 +361,15 @@ async def _run_turn(
 
     await after_reflect(plan=plan, reflect=reflect)
 
-    reflect_note = "复核：" + ("；".join(reflect.reasons[:3]) if reflect.reasons else "已检查门禁")
-    await _emit_thought(
-        emit,
-        reflect_note,
-        stage="reflect",
-        skill_id=plan.skill_id,
-        latency_ms=reflect.latency_ms or None,
-    )
+    if emit_stage_thoughts:
+        reflect_note = "复核：" + ("；".join(reflect.reasons[:3]) if reflect.reasons else "已检查门禁")
+        await _emit_thought(
+            emit,
+            reflect_note,
+            stage="reflect",
+            skill_id=plan.skill_id,
+            latency_ms=reflect.latency_ms or None,
+        )
 
     if reflect.verdict == "reject":
         code = reflect.error_code or ErrorCode.VALIDATION.value

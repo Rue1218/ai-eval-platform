@@ -15,7 +15,7 @@
       </div>
 
       <!-- 思考状态标题 -->
-      <span class="thought-title">{{ done ? '已思考' : '深度思考中...' }}</span>
+      <span class="thought-title">{{ titleText }}</span>
 
       <!-- 关联技能徽标 -->
       <SkillBadge v-if="skillId" :skill-id="skillId" />
@@ -61,6 +61,14 @@ const props = defineProps<{
 const collapsed = ref(false)
 
 const formattedLatency = computed(() => formatLatency(props.latencyMs))
+
+const titleText = computed(() => {
+  const finished = !!props.done
+  if (props.stage === 'plan') return finished ? '已规划' : '规划中'
+  if (props.stage === 'reflect') return finished ? '已复核' : '复核中'
+  if (props.stage === 'react') return finished ? '已执行' : '调用工具'
+  return finished ? '已思考' : '深度思考中...'
+})
 
 function toggleCollapse() {
   collapsed.value = !collapsed.value

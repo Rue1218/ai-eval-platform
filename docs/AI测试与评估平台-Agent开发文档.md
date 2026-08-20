@@ -5,7 +5,7 @@
 | 文档名称 | Agent 独立开发说明书 |
 | 版本 | V1.3 |
 | 日期 | 2026-08-19 |
-| 最近修订 | 2026-08-20：问候/闲聊跳过规划模型与核对，避免「你好」串行 3 次上游；切换会话保留历史；Harness 缺口补齐 |
+| 最近修订 | 2026-08-20：闲聊不再刷出规划/复核「已思考」卡；问候跳过规划模型与核对；切换会话保留历史 |
 | 用法 | **实现 `/agent` 以本文为准（Harness / 斜杠 / 窗口算法）。** REST/WS JSON 以 API.md V1.4 为准。完成某项后勾选文末 Task，并在「最近修订」追加一行。 |
 
 本文是评测平台 **Agent 子系统** 的完整开发说明书：目标、边界、运行时骨架、协议、模块、代码落点与验收任务都写在这里。与 PRD / API.md 冲突时，字段名与事件名以那两份为准；Harness、斜杠、上下文算法以本文 §16 为准。§4.6 所列增量已收入 **API.md V1.4**。
@@ -228,7 +228,7 @@ TurnInput（自然语言 / 斜杠 / 芯片 / 页面 REST）
 | 用户话含糊 | 问缺什么 | 可 0 轮 | 不出卡 |
 | `/help` `/status` `/compact` | 短 | 按需 | 不得误下单 |
 | `/cancel` `/rerun` `/new` `/stop` | 短 | 读当前任务 | 控制动作门禁 |
-| 闲聊 | 问候走 L0 定位（0 次规划模型） | 跳过 | 规则确认没有 create（不调核对模型） |
+| 闲聊 | 问候走 L0 定位（0 次规划模型）；**不发**规划/复核思考卡 | 跳过 | 规则确认没有 create（不调核对模型、不发复核卡） |
 | RAG / 解读尚未交付 | 识别意图 | 可不调工具 | **拒绝并说明未启用** |
 | 页面 AI | 表单即规划 | 无工具卡 | 只返回候选 |
 
@@ -1248,6 +1248,20 @@ M3 接 LightRAG：把 `LIGHTRAG_ENABLED` 改为 True，在 `query_lightrag` 请�
 | `backend/api/app/agent/reflect.py` | `maybe_model_check` 仅 `delivery=confirm` 才调上游 |
 | `backend/api/app/agent/harness.py` | 注释与核对范围对齐 |
 | `backend/api/tests/test_harness.py` | 问候跳过规划模型；闲聊跳过核对 |
+
+---
+
+## 22. 修改代码文件与作用清单（2026-08-20 闲聊思考卡）
+
+「你好」会连出三张标题都是「已思考」的卡：规划短句、复核门禁、模型推理（或交付句被误渲染）。闲聊与 /help 等不再发规划/复核 thought；交付终帧不占思考卡；卡头按 stage 区分「已规划 / 已复核 / 已思考」。
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/agent/harness.py` | `should_emit_stage_thoughts`：chat / 确定性斜杠不发规划、复核卡 |
+| `frontend/src/views/Agent.vue` | 交付终帧不渲染思考卡；推理链与交付句分离 |
+| `frontend/src/components/agent/ThoughtCard.vue` | 卡头按 `stage` 显示规划/复核/思考 |
+| `backend/api/tests/test_harness.py` | 闲聊与 /help 跳过阶段思考卡 |
+
 
 
   

@@ -9,7 +9,7 @@ import pytest
 
 from app.agent.context import run_compact
 from app.agent.defaults import HARD_MAX_TOOL_ROUNDS, MAX_MODEL_CALLS, is_long_tool
-from app.agent.harness import handle_confirm_ack
+from app.agent.harness import handle_confirm_ack, should_emit_stage_thoughts
 from app.agent.mcp_tools import redact_secrets, truncate_tool_data
 from app.agent.persona import PERSONA_SYSTEM, turn_system
 from app.agent.plan import (
@@ -37,6 +37,15 @@ from app.agent.slash import (
 from app.errors import AppError, ErrorCode
 from app.models import Dataset, ProtocolProfile, Task
 from app.models import Session as AgentSession
+
+
+def test_chat_and_help_skip_stage_thoughts():
+    """闲聊与 /help 不发规划/复核思考卡，避免三张「已思考」。"""
+    assert should_emit_stage_thoughts("chat", None) is False
+    assert should_emit_stage_thoughts("inspect", "help") is False
+    assert should_emit_stage_thoughts("inspect", "status") is False
+    assert should_emit_stage_thoughts("benchmark", None) is True
+    assert should_emit_stage_thoughts("benchmark", "benchmark") is True
 
 
 def test_l0_chat_vs_benchmark_and_testcase():
