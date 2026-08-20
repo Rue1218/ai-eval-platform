@@ -7,13 +7,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY requirements.txt .
+# 构建上下文为 backend/：api 与 worker 共享 backend/shared 模型包
+COPY api/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app ./app
-COPY alembic.ini .
-COPY migrations ./migrations
-COPY entrypoint.sh /entrypoint.sh
+COPY shared ./shared
+COPY api/app ./app
+COPY api/alembic.ini .
+COPY api/migrations ./migrations
+COPY api/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 EXPOSE 8000

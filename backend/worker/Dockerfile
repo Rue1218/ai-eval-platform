@@ -7,9 +7,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY requirements.txt .
+# 构建上下文为 backend/：api 与 worker 共享 backend/shared 模型包
+COPY worker/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app ./app
+COPY shared ./shared
+COPY worker/app ./app
 
 CMD ["python", "-m", "app.main"]

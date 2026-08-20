@@ -1,5 +1,6 @@
 [tool.pytest.ini_options]
-pythonpath = ["."]
+# ".." 使共享包 backend/shared 可导入（shared.models）
+pythonpath = [".", ".."]
 testpaths = ["tests"]
 
 [tool.ruff]

@@ -19,7 +19,10 @@ services:
 
   api:
     image: ${API_IMAGE:-ai-eval-platform-api}
-    build: ./backend/api
+    # 上下文为 backend/，Dockerfile 内 COPY api/ 与 shared/（共享模型包）
+    build:
+      context: ./backend
+      dockerfile: api/Dockerfile
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-aieval}:${POSTGRES_PASSWORD:-aieval_pass}@postgres:5432/${POSTGRES_DB:-aieval}
@@ -53,7 +56,10 @@ services:
 
   worker:
     image: ${WORKER_IMAGE:-ai-eval-platform-worker}
-    build: ./backend/worker
+    # 上下文为 backend/，Dockerfile 内 COPY worker/ 与 shared/（共享模型包）
+    build:
+      context: ./backend
+      dockerfile: worker/Dockerfile
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-aieval}:${POSTGRES_PASSWORD:-aieval_pass}@postgres:5432/${POSTGRES_DB:-aieval}

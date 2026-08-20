@@ -25,7 +25,7 @@ jobs:
         run: pip install -r requirements.txt -r requirements-dev.txt
 
       - name: Lint (ruff)
-        run: ruff check .
+        run: ruff check . ../shared
 
       - name: Test (pytest)
         run: pytest
@@ -49,4 +49,5 @@ jobs:
         run: pip install -r requirements.txt pytest
 
       - name: Test (pytest)
-        run: PYTHONPATH=. pytest
+        # ".." 使共享包 backend/shared 可导入（shared.models）
+        run: PYTHONPATH=.:.. pytest

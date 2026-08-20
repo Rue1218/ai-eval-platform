@@ -97,6 +97,17 @@ else
     grep -q '^backend/worker/' <<<"$CHANGED_FILES" && BUILD_SERVICES+=(worker)
     grep -q '^backend/lightrag/' <<<"$CHANGED_FILES" && BUILD_SERVICES+=(lightrag)
     grep -q '^backend/stress/' <<<"$CHANGED_FILES" && BUILD_SERVICES+=(stress)
+    # 共享模型包 backend/shared/ 被 api 与 worker 打进镜像，变更须同时重建（缺谁补谁）。
+    if grep -q '^backend/shared/' <<<"$CHANGED_FILES"; then
+        case " ${BUILD_SERVICES[*]} " in
+            *' api '*) ;;
+            *) BUILD_SERVICES+=(api) ;;
+        esac
+        case " ${BUILD_SERVICES[*]} " in
+            *' worker '*) ;;
+            *) BUILD_SERVICES+=(worker) ;;
+        esac
+    fi
 fi
 
 # 恢复上一轮各服务使用的不可变镜像引用，未变化服务不会回退到旧镜像。
