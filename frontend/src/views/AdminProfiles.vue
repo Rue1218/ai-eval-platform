@@ -7,7 +7,7 @@
         :key="t.key"
         class="profile-tab-btn"
         :class="{ active: activeTab === t.key }"
-        @click="activeTab = t.key"
+        @click="switchTab(t.key)"
       >
         {{ t.label }}
       </button>
@@ -770,7 +770,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useMessage, useDialog, NSelect, NInput, NInputNumber, NSwitch } from 'naive-ui'
 import { api } from '../api/http'
 import type { Profile, ProfileCheckOut, McpTool } from '../api/types'
@@ -791,6 +791,16 @@ const tabs: { key: TabKey; label: string }[] = [
   { key: 'runtime', label: '⚙ 运行时与主机治理' },
 ]
 const activeTab = ref<TabKey>('profiles')
+
+/** 切换 Tab 时触发对应真实后端接口加载 */
+function switchTab(key: TabKey) {
+  activeTab.value = key
+  if (key === 'mcp') {
+    handleRefreshMcpTools()
+  } else if (key === 'profiles') {
+    loadProfiles()
+  }
+}
 
 // ═══════════════════════════════════════════════════════════════
 // MCP 工具中心状态与交互管理
@@ -815,6 +825,7 @@ const domainFilterOptions = [
   { label: '📊 评测报告', value: 'report' },
   { label: '🚀 任务调度', value: 'task' },
   { label: '🖥️ 调度算力', value: 'dispatch' },
+  { label: '🧪 用例管理', value: 'cases' },
 ]
 
 /** 获取工具业务领域与图标映射 */
@@ -825,6 +836,7 @@ function getToolDomain(name: string): { label: string; icon: string; key: string
   if (name.startsWith('report.')) return { label: '评测报告', icon: '📊', key: 'report' }
   if (name.startsWith('task.')) return { label: '任务调度', icon: '🚀', key: 'task' }
   if (name.startsWith('dispatch.')) return { label: '调度大盘', icon: '🖥️', key: 'dispatch' }
+  if (name.startsWith('testcase.')) return { label: '用例管理', icon: '🧪', key: 'cases' }
   return { label: '内置通用', icon: '🛠️', key: 'other' }
 }
 
@@ -853,29 +865,34 @@ const filteredMcpTools = computed(() => {
   })
 })
 
-/** 刷新 MCP 工具清单 */
+/** 刷新 MCP 工具清单（真实调用 GET /api/mcp/tools） */
 async function handleRefreshMcpTools() {
   mcpLoading.value = true
+  const start = performance.now()
   try {
     const res = await api.mcp.tools()
-    mcpTools.value = res.items
-    message.success('MCP 工具清单已刷新')
+    const latency = Math.round(performance.now() - start)
+    mcpTools.value = res.items || []
+    mcpServerPingState.value = { ok: true, latencyMs: Math.max(1, latency) }
+    message.success(`已从服务端加载 ${mcpTools.value.length} 个受控短工具 (耗时 ${mcpServerPingState.value.latencyMs}ms)`)
   } catch (err: any) {
-    message.error(err.message || '刷新 MCP 工具清单失败')
+    mcpServerPingState.value = { ok: false, latencyMs: null }
+    message.error(err.message || '调用 /api/mcp/tools 接口失败')
   } finally {
     mcpLoading.value = false
   }
 }
 
-/** 探活 Eval-Core MCP Host 宿主直连延迟 */
+/** 探活 Eval-Core MCP Host 宿主直连延迟（真实调用 GET /api/mcp/tools） */
 async function handlePingMcpServer() {
   mcpServerPinging.value = true
   const start = performance.now()
   try {
-    await api.mcp.tools()
+    const res = await api.mcp.tools()
     const latency = Math.round(performance.now() - start)
+    mcpTools.value = res.items || []
     mcpServerPingState.value = { ok: true, latencyMs: Math.max(1, latency) }
-    message.success(`[Eval-Core MCP Server] 探活正常 · 延迟 ${mcpServerPingState.value.latencyMs}ms`)
+    message.success(`[Eval-Core MCP Server] 探活成功 · 延迟 ${mcpServerPingState.value.latencyMs}ms · 挂载 ${mcpTools.value.length} 个短工具`)
   } catch (err: any) {
     mcpServerPingState.value = { ok: false, latencyMs: null }
     message.error(`[Eval-Core MCP Server] 探活失败: ${err.message || '网络连接异常'}`)
@@ -883,6 +900,16 @@ async function handlePingMcpServer() {
     mcpServerPinging.value = false
   }
 }
+
+/** 监听 activeTab 变化以保证 MCP Tab 即刻调用真实后端 API */
+watch(
+  () => activeTab.value,
+  (newTab) => {
+    if (newTab === 'mcp' && mcpTools.value.length === 0) {
+      handleRefreshMcpTools()
+    }
+  },
+)
 
 /** 打开短工具契约 Schema 详情弹窗 */
 function handleOpenMcpModal(tool: McpTool) {
@@ -1107,19 +1134,25 @@ function openModalWithVendor(group: VendorGroup) {
 async function loadProfiles() {
   loading.value = true
   try {
-    const [pList, settings, tools] = await Promise.all([
+    const [pListRes, settingsRes, toolsRes] = await Promise.allSettled([
       api.profiles.list(),
       api.admin.getSettings(),
       api.mcp.tools(),
     ])
-    profiles.value = pList
-    // 仅以后端配置为准：未指定时不默认选中首个协议档，避免误导性「Agent 核心驱动」标记
-    selectedAgentProfileId.value = settings.agent_profile_id || null
-    lastSavedAgentProfileId.value = selectedAgentProfileId.value
-    mcpTools.value = tools.items
-    if (settings.runtime) runtimeForm.value = { ...settings.runtime }
+    if (pListRes.status === 'fulfilled') {
+      profiles.value = pListRes.value || []
+    }
+    if (settingsRes.status === 'fulfilled') {
+      const settings = settingsRes.value
+      selectedAgentProfileId.value = settings?.agent_profile_id || null
+      lastSavedAgentProfileId.value = selectedAgentProfileId.value
+      if (settings?.runtime) runtimeForm.value = { ...settings.runtime }
+    }
+    if (toolsRes.status === 'fulfilled') {
+      mcpTools.value = toolsRes.value?.items || []
+    }
   } catch (err: any) {
-    message.error(err.message || '加载协议档失败')
+    message.error(err.message || '加载配置失败')
   } finally {
     loading.value = false
   }
