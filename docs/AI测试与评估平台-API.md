@@ -2,14 +2,14 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.4 |
-| 对应 PRD | V1.6.4（功能唯一权威） |
+| 文档版本 | V1.5 |
+| 对应 PRD | V1.6.5（功能唯一权威） |
 | 对应设计规范 | V1.2（错误码文案、确认卡字段名、调度中心规范） |
-| 对应 Agent 说明书 | V1.1（Harness / 斜杠 / 上下文算法；JSON 仍以本文为准） |
+| 对应 Agent 说明书 | V1.3（Harness / 斜杠 / 上下文算法；JSON 仍以本文为准） |
 | 对应前端计划 | V1.3 |
 | 对应后端计划 | V1.3 |
 | 撰写日期 | 2026-08-18 |
-| 最近修订 | 2026-08-19：V1.4 回写 Agent 增量（prefs、slash-commands、pending_confirm、context_meter、thought 可选字段、关闭码）；未启用能力统一 `VALIDATION` 400 |
+| 最近修订 | 2026-08-20：V1.5 新增团队共享会话、软删除、消息事件与共享正文流；未启用能力统一 `VALIDATION` 400 |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
 ---
@@ -18,7 +18,7 @@
 
 | 层级 | 文档 | 管什么 |
 | --- | --- | --- |
-| L0 | PRD V1.6.4 | 做不做、字段语义、状态机、事件名、错误码枚举 |
+| L0 | PRD V1.6.5 | 做不做、字段语义、状态机、事件名、错误码枚举 |
 | L1 | **本文** | 路径、方法、请求/响应 JSON、鉴权、前后端谁调用 |
 | L2 | 前端/后端开发计划 | 哪一周实现本文哪一节 |
 
@@ -272,9 +272,20 @@ WS `error` 事件 payload 与上表同一套 `code` + `message`（可带 `fields
 
 ---
 
-### 3.4 会话（方案 A，M1 冻结）
+### 3.4 会话（方案 A，M1 团队协作增量）
 
-已登录成员可访问。V1 **无** 删除会话接口。
+新会话默认 `visibility="private"`，仅 `owner_id` 可访问。创建者可切为
+`team`，表示当前单一内部团队的正常成员均可读写；本期不是邀请制成员表。
+`owner_id` 不因协作者发言而改变。会话删除是**软删除**：会话列表、历史和
+WS 不再可访问，但 `messages`、`ws_events`、tasks、reports 均保留审计记录。
+
+- `private`：只有 owner 可读写；
+- `team`：所有正常成员可浏览、发送消息和连接同一会话；
+- 分享设置、取消分享和软删除：只有 owner；
+- 确认卡：只有 `pending_confirm_author_id` 对应成员可确认、拒绝或提交 patch；任务
+  仍归确认卡作者创建；
+- `DELETE` 遇到生成中的 Harness、待确认卡、`queued`/`running`/
+  `awaiting_case_confirm` 任务时返回 `VALIDATION`，要求先停止、确认/取消或等待终态。
 
 #### `GET /api/sessions`
 
@@ -284,6 +295,10 @@ WS `error` 事件 payload 与上表同一套 `code` + `message`（可带 `fields
     {
       "id": "uuid",
       "title": "帮我下一单 Benchmark",
+      "owner_id": "uuid",
+      "visibility": "team",
+      "can_manage": false,
+      "can_delete": false,
       "updated_at": "2026-09-21T12:00:00Z",
       "active_task": { "id": "uuid", "kind": "benchmark", "status": "running" }
     }
@@ -293,21 +308,39 @@ WS `error` 事件 payload 与上表同一套 `code` + `message`（可带 `fields
 ```
 
 `active_task`：该会话当前非终态任务（含压测子任务），无则 `null`。
+`can_manage` / `can_delete` 只在当前成员为 owner 时为 `true`。
 
 #### `POST /api/sessions`
 
-```json
-{ "id": "uuid", "title": "新会话", "created_at": "..." }
-```
+请求：`{ "title": "新会话", "visibility": "private" }`；`visibility` 省略时为
+`private`。响应包含 GET 列表项的 `owner_id`、`visibility`、权限字段和时间。
 
 空会话，不创建 task。
+
+#### `PUT /api/sessions/{id}/sharing`
+
+仅 owner。请求和响应：
+
+```json
+{ "visibility": "team" }
+```
+
+将 `team` 改回 `private` 后，服务端立即以关闭码 `4404` 关闭协作者 WS，避免继续接收
+瞬态正文流。正在执行的任务不因分享设置变化而取消。
+
+#### `DELETE /api/sessions/{id}`
+
+仅 owner，成功 `204 No Content`。这是软删除，不级联物理删除历史消息、事件、任务或
+报告；已删除或无权访问均返回 `404 NOT_FOUND`，禁止返回“删除成功”的假响应。
 
 #### `GET /api/sessions/{id}/messages`
 
 历史回放（REST）。实时增量只走 WS。  
-`messages` item：`id, role: user|assistant|system, content, attachments[], created_at`。  
+`messages` item：`id, role: user|assistant|system, content, attachments[], author_id?, author?, client_message_id?, created_at`。
+其中 `author` 为 `{id,username,display_name?}`；用户消息必填，assistant/system 为 `null`。
 `events` **必带**（否则刷新丢工具卡 / 思考卡）。  
-`pending_confirm`：当前未 ack 的确认卡（TaskSpec）或 `null`；前端优先该字段做成可编辑卡，`events` 里的 `confirm` 只作只读回放。  
+`pending_confirm`：当前未 ack 的确认卡（TaskSpec）或 `null`；
+`pending_confirm_author_id` / `pending_confirm_author` 标识唯一可操作者；前端优先该字段做成可编辑卡，`events` 里的 `confirm` 只作只读回放。
 `context_meter`：模型窗口仪表，刷新必须用服务端数字，禁止按 messages 表总条数自己减。`window` 固定 20；`/20` 只约束 `messages` 段；`skills` / `summary` 为 0/1 标志。
 
 ```json
@@ -318,6 +351,9 @@ WS `error` 事件 payload 与上表同一套 `code` + `message`（可带 `fields
       "role": "user",
       "content": "/benchmark 对比两模型",
       "attachments": [],
+      "author_id": "uuid",
+      "author": { "id": "uuid", "username": "alice", "display_name": "Alice" },
+      "client_message_id": "browser-uuid",
       "created_at": "2026-08-19T12:00:00Z"
     }
   ],
@@ -331,6 +367,8 @@ WS `error` 事件 payload 与上表同一套 `code` + `message`（可带 `fields
     }
   ],
   "pending_confirm": null,
+  "pending_confirm_author_id": null,
+  "pending_confirm_author": null,
   "context_meter": {
     "messages": 8,
     "skills": 0,
@@ -341,7 +379,11 @@ WS `error` 事件 payload 与上表同一套 `code` + `message`（可带 `fields
 }
 ```
 
-实现列（Alembic，不单独 GET 摘要原文，避免把压缩提示词泄漏到浏览器）：`sessions.pending_confirm` JSONB、`sessions.compact_summary` TEXT、`sessions.compact_keep_from`（messages.id）。算法见 Agent 说明书 §16.6。
+实现列（Alembic，不单独 GET 摘要原文，避免把压缩提示词泄漏到浏览器）：
+`sessions.visibility`、`sessions.deleted_at`、`sessions.pending_confirm` JSONB、
+`sessions.pending_confirm_author_id`、`sessions.compact_summary` TEXT、
+`sessions.compact_keep_from`（messages.id），以及 `messages.author_id` /
+`messages.client_message_id`。算法见 Agent 说明书 §16.6。
 
 `messages.role=assistant` 只存**交付句**（澄清、闲聊、「已入队」、「已压缩」、「已停止生成」、只读摘要）。规划 / 复核 thought、工具观察、`progress` 只在 `events`。
 
@@ -1108,7 +1150,7 @@ Prometheus 内置可观测性指标端点（内网 HTTP GET），输出前缀为
 2. `GET /ws/agent?ticket={ticket}&session_id={uuid}&last_event_id={n}`  
    - 首次：前端**先** `POST /api/sessions` 再带 `session_id`；可无 `last_event_id`。无 `session_id` 时服务端可建空会话（兼容），会话列表与 `/new` 仍以 REST 为准。  
    - 重连：必须带 `session_id` + `last_event_id`，服务端从 `ws_events` **补发** `event_id > last_event_id` 的事件。  
-3. 关闭码：短票非法/过期 **4401**；会话不存在或不属于当前用户 **4404**；正常断开 **1000**。前端 4401 重新领票。  
+3. 关闭码：短票非法/过期 **4401**；会话不存在、已软删除或当前成员无权访问 **4404**；正常断开 **1000**。前端 4401 重新领票，4404 停止重连旧会话并回到会话列表。
 4. **禁止** `?token=` 长期 JWT。
 
 心跳：30s；传输层 ping/pong。应用层服务端可发 JSON `pong`。前端不发 JSON `ping`。
@@ -1130,20 +1172,27 @@ Harness 回合必须丢到后台 Task，**不得**在 `receive` 循环里 `await
 
 `event_id` 在会话内单调递增。`task_id` 在入队后才有。
 
-### 4.3 服务 → 前端（事件名不可改、不可增减）
+### 4.3 服务 → 前端（事件名冻结，V1.5 增加 `message`）
 
 | event | payload | 前端渲染 |
 | --- | --- | --- |
 | `thought` | `{ "text": "..." }`；可选 `latency_ms` `stage`（`plan\|react\|reflect`）`skill_id`。流式扩展：回复生成期间可发送瞬态增量帧 `{ "text": "增量", "stream": "chunk" }`（回复正文增量）与 `{ "text": "增量", "stream": "think" }`（推理模型思考链增量，前端渲染进可折叠思考卡），两种帧均不落库、不占事件号、断线不回放，随后必须有一帧不带 `stream` 的完整文本终帧 | ThoughtCard |
+| `message` | `{ "id", "role":"user", "content", "attachments", "author_id", "author":{id,username,display_name?}, "client_message_id?", "created_at" }`；落库、占 event_id，用于协作者实时补用户气泡 | UserBubble |
 | `tool_call` | `{ "name": "model.list", "arguments": {} }` | ToolCard pending；标题用中文名；副标题「MCP · 短工具」 |
 | `tool_result` | `{ "name": "model.list", "ok": true, "data": {} }` 或 `{ "ok": false, "error": "..." }`；可选 `latency_ms` | ToolCard done |
-| `confirm` | TaskSpec（§5 / §6） | ConfirmCard，等 `confirm_ack` |
+| `confirm` | TaskSpec（§5 / §6）+ 非 TaskSpec 元数据 `confirm_author:{id,username,display_name?}` | ConfirmCard，等 `confirm_ack`；仅 `confirm_author.id` 可操作 |
 | `progress` | `{ "percent": 40, "done": 40, "total": 100, "message": "..." }` | ProgressDock。**仅这四字段**（percent 可选），不写入 `messages` |
 | `report` | `{ "report_id": "uuid" }` | ReportCard |
 | `error` | `{ "code": "UPSTREAM", "message": "..." }` | ErrorStrip + Toast |
 | `pong` | `{}` | 不渲染 |
 
 禁止：`thinking` `token` `chat:send` `tool_call_start` 及任何参考文档旧名。
+
+共享流规则：`thought.stream="chunk"` 仅向同一 `team` 会话内的**在线**成员广播；
+`thought.stream="think"` 只发送给本轮发起连接，不向协作者广播。两类瞬态帧不落库、
+不占单调事件号；中途加入/断线重连者从后续增量继续看，最终完整交付句仍可从历史回放。
+当前 Compose 只有单 API 副本，chunk 广播为进程内 Hub；多 API 副本时必须改为进程外
+Pub/Sub，不能假定跨进程实时可见。
 
 短工具中文名（ToolCard 标题）：
 
@@ -1164,7 +1213,7 @@ Harness 回合必须丢到后台 Task，**不得**在 `receive` 循环里 `await
 ### 4.4 前端 → 服务（仅此三条 JSON）
 
 ```json
-{ "event": "user_message", "payload": { "text": "帮我下一单 Benchmark", "attachments": [ { "file_id": "uuid" } ] } }
+{ "event": "user_message", "payload": { "text": "帮我下一单 Benchmark", "attachments": [ { "file_id": "uuid" } ], "client_message_id": "browser-uuid" } }
 ```
 
 ```json
@@ -1179,10 +1228,12 @@ Harness 回合必须丢到后台 Task，**不得**在 `receive` 循环里 `await
 
 - `confirm_ack.ok=false`：不入队，卡标已取消。  
 - `ok=true`：`patch` 与原 confirm 深合并后按 §5 校验，通过才 `task.create`。  
-- 同一会话同一时刻最多一张待确认卡（落库 `sessions.pending_confirm`，禁止只靠进程内字典）。  
+- `client_message_id` 可选，非空时最长 128 字符；同一会话同一键重复发送只回显已保存消息，不会启动第二轮 Harness。
+- 同一会话同一时刻最多一张待确认卡（落库 `sessions.pending_confirm`，禁止只靠进程内字典）；仅 `confirm_author` 可以确认、拒绝或提交 patch，前端提交 patch 必须剥离该元数据。
 - `cancel_task` 权限与 REST cancel 相同；斜杠 `/cancel` 只取消**本会话**非终态任务。  
 - 斜杠（含 `/stop` `/compact` `/help`）全部走 `user_message`，**没有第四种上行事件**。  
-- `/stop`：中止本轮 Harness 生成，不取消已 queued/running 任务；abort 为**会话级**（双标签同停）。  
+- `/stop`：中止本轮 Harness 生成，不取消已 queued/running 任务；abort 为**会话级**（双标签同停）。共享会话仅本轮发起成员可执行。
+- `/compact`：会话级上下文副作用，仅会话 owner 可执行。
 - 会话已有非终态任务（含压测子任务）：新回合**不得**再发 `confirm`；未 ack 的旧卡确认按钮禁用。  
 - 对话路径**不得**发出 `kind=stress` 确认卡。`/stress` = 质量任务卡且 `with_stress=true`。  
 - Agent 进程禁止同步执行 `benchmark.run` / `rag.evaluate` / `testcase.generate` / `stress.run`。
@@ -1467,7 +1518,7 @@ MCP 浏览器不调：与 PRD 3.1、前端计划「禁止把 MCP 当 REST」一�
 | 项 | 冻结处理 | 后端配合 |
 | --- | --- | --- |
 | 任务重跑 | `tasks.rerun(id)` → `POST /api/tasks/{id}/rerun`；不得在浏览器拼造旧任务配置 | 后端从旧任务快照复制并生成新 ID |
-| 会话删除 | V1.0 不提供删除会话接口，原型不再发 `DELETE /api/sessions/{id}` | 若未来 PRD 增加能力，先补本文再做 UI |
+| 会话删除 | owner 调 `DELETE /api/sessions/{id}`，成功 204；只软删除 | 有生成、待确认卡或非终态任务时返回 `VALIDATION`，历史任务/报告仍在任务中心保留 |
 | 上传 | `FormData` 不设置 JSON Content-Type；数据集走 `/datasets/{id}/upload`，KB 走 `/kb/{id}/documents` | 返回文件/版本/异步处理状态，不能只返回 `{ok:true}` |
 | WS | 从 REST 短票换取连接；支持 `session_id` 与 `last_event_id` | 不接受长期 token；按 §4 补发事件 |
 | 缓存 | `AE.DB` 只是一页内响应缓存，实时模式初始为空 | 写操作成功后返回资源或前端重新拉取；禁止依赖原型样本 ID |

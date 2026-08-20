@@ -1,6 +1,6 @@
 /**
  * AI 测试与评估平台 — 前端核心类型定义
- * 契约依据：docs/AI测试与评估平台-API.md (V1.3) 与 docs/AI测试与评估平台-PRD.md (V1.6.4)
+ * 契约依据：docs/AI测试与评估平台-API.md (V1.5) 与 docs/AI测试与评估平台-PRD.md (V1.6.5)
  */
 
 // 10 大标准业务错误码
@@ -37,6 +37,7 @@ export type Role = 'member' | 'admin' | 'engineer' | 'readonly'
 export interface AuthUser {
   id: string
   username: string
+  display_name?: string | null
   role: Role
   disabled: boolean
   must_change_password?: boolean
@@ -482,19 +483,60 @@ export interface WhitelistItem {
   status: 'active' | 'inactive'
 }
 
-// 智能体会话
+// 智能体会话：默认 private，owner 可切换为当前内部团队共享。
+export type SessionVisibility = 'private' | 'team'
+
+export interface SessionAuthor {
+  id: string
+  username: string
+  display_name?: string | null
+}
+
 export interface AgentSession {
   id: string
   title: string
+  owner_id: string
+  visibility: SessionVisibility
   created_at: string
   updated_at?: string
   status?: TaskStatus
+  can_manage: boolean
+  can_delete: boolean
+  active_task?: { id: string; kind: TaskKind; status: TaskStatus } | null
+}
+
+export interface SessionMessage {
+  id: string
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  attachments: string[]
+  author_id?: string | null
+  author?: SessionAuthor | null
+  client_message_id?: string | null
+  created_at: string
+}
+
+export interface SessionHistory {
+  messages: SessionMessage[]
+  events: Array<Omit<WsServerEvent, 'session_id'>>
+  pending_confirm?: Record<string, unknown> | null
+  pending_confirm_author_id?: string | null
+  pending_confirm_author?: SessionAuthor | null
+  compact_summary?: string | null
+  context_meter?: {
+    messages: number
+    skills: number
+    summary: number
+    headroom: number
+    window: number
+  }
 }
 
 // WS 事件公共头（API.md §4.2）：payload 嵌套，task_id 入队后才有
 export interface WsServerEvent {
   event:
     | 'thought'
+    | 'message'
     | 'tool_call'
     | 'tool_result'
     | 'confirm'

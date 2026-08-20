@@ -11,8 +11,8 @@ from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
 from ..models import AuditLog, Report, Task, TaskEvent, User
-from ..models import Session as AgentSession
 from ..schemas import TaskCreate, TaskDetailOut, TaskEventOut, TaskOut
+from ..session_access import require_visible_session
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 ACTIVE_STATUSES = {"queued", "running", "awaiting_case_confirm"}
@@ -52,16 +52,10 @@ def _visible_task(db: Session, task_id: str) -> Task:
 
 
 def _validate_session(db: Session, session_id: str | None, user_id: str) -> None:
-    """确保任务挂载的 Agent 会话存在且归当前成员所有。"""
+    """确保任务挂载的 Agent 会话对当前成员可见且未软删除。"""
     if not session_id:
         return
-    session = (
-        db.query(AgentSession)
-        .filter(AgentSession.id == session_id, AgentSession.user_id == user_id)
-        .first()
-    )
-    if not session:
-        raise AppError(ErrorCode.NOT_FOUND, "会话不存在")
+    require_visible_session(db, session_id, user_id)
 
 
 def _append_event(db: Session, task: Task, event: str, message: str, *, level: str = "info") -> None:
@@ -227,6 +221,8 @@ def rerun_task(
     if task.status not in TERMINAL_STATUSES:
         raise AppError(ErrorCode.VALIDATION, "仅终态任务可重跑")
     if task.session_id:
+        # 已私有化或软删除的会话不能承接新任务，避免从任务页绕过会话边界。
+        _validate_session(db, task.session_id, user.id)
         existing = (
             db.query(Task)
             .filter(Task.session_id == task.session_id, Task.status.in_(ACTIVE_STATUSES))

@@ -2,10 +2,10 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.6.4 |
+| 文档版本 | V1.6.5 |
 | 文档状态 | 已冻结基线 |
 | 撰写日期 | 2026-08-17 |
-| 最近修订 | 2026-08-18 |
+| 最近修订 | 2026-08-20 |
 | 适用版本 | 平台 V1.0 |
 | 技术栈 | Vue3 + Naive UI、Python FastAPI、PostgreSQL、WebSocket、Docker Compose、go-stress-testing |
 
@@ -20,6 +20,7 @@
 | V1.6.2 | 2026-08-17 | 与问答复核：压测内核改回 go-stress-testing；附录 B 逐条对照 |
 | V1.6.3 | 2026-08-17 | 再核：WS 用 ticket 非长期 token；压测由 stress 容器执行且取消立即停；LightRAG 压测走 query 而非 Chat；会话槽位含子任务 |
 | V1.6.4 | 2026-08-18 | 全面去除静态 Mock 数据，全量接入后端 API 统一客户端；落实全员同权协作与智能体/调度/任务中心动态交互 |
+| V1.6.5 | 2026-08-20 | 新增默认私有、创建者可切换团队共享的 Agent 会话；补齐软删除、多人实时正文流与确认卡作者边界 |
 
 ---
 
@@ -69,7 +70,7 @@
 | 术语 | 含义 |
 | --- | --- |
 | 协议档 | `openai_chat` / `openai_responses` / `anthropic_messages` 之一 + base_url + 模型名 + 加密 Key |
-| 会话 | 每用户可多开；**会话内任务串行**，会话间可并行（受平台并发上限） |
+| 会话 | 每成员可多开；默认仅创建者可见，也可由创建者设为团队共享；**会话内任务串行**，会话间可并行（受平台并发上限） |
 | 长任务 | `benchmark.run` / `rag.evaluate` / `testcase.generate` 由 **worker 进程执行**；`stress.run` 由 worker **下发到 stress 容器**（go-stress-testing） |
 | 短工具 | `*.list` / `report.get` / `task.get`，Agent 可同步调用 |
 | 先评后压 | 质量任务 `succeeded` 后才创建压测子任务 |
@@ -113,6 +114,14 @@
 ### 2.2 团队协同原则
 
 团队全员同权，通过全局顶栏「大模型 / RAG」双模式与统一任务工作台实现高效无阻碍协同。
+
+Agent 会话采用以下更细的资产边界，不把「全员同权」误解为默认公开历史：
+
+- 新会话默认 `private`，仅会话创建者可浏览、发送消息、连接 WS、压缩上下文、设置共享或软删除；
+- 创建者可切为 `team`，表示当前单一内部团队的正常成员均可浏览历史、发送消息并看到在线协作者产生的 AI **正文**流式增量；本期不是邀请制成员表；
+- 创建者可随时收回为 `private`，服务端立即断开协作者连接；已删除会话对所有成员返回“会话不存在”；
+- 共享会话中的确认卡只允许提出该卡的成员确认、拒绝或提交 patch；任务仍归该成员创建，取消/重跑仍按任务创建者；
+- 原始模型推理 `think` 流不对协作者广播。附件被发送到共享会话即视为授权本团队成员查看。
 
 ---
 
@@ -200,6 +209,7 @@ queued → running → succeeded
 | F-AGT-07 | 表单双入口 | P0 | M2 | `POST /api/tasks` 与确认卡字段一致 |
 | F-AGT-08 | 解读 | P1 | M4 | 仅对已有 `report_id` 调评测 Skill，不重跑评测 |
 | F-AGT-09 | 取消 / 重跑 | P0 | M1 | 工程师取消自己的非终态任务；管理员可取消任何人的。评测取消=当前样本结束后停；**压测取消=立即停发**。重跑=新任务拷配置 |
+| F-AGT-10 | 团队共享与软删除会话 | P0 | M1 | 默认私有；会话创建者可切为 `team`，在线协作者实时看到用户消息与 AI 正文 chunk；删除为软删除，运行中的 Harness、待确认卡或非终态任务必须先结束 |
 
 #### 5.1.2 确认卡字段（P0）
 
@@ -224,6 +234,7 @@ queued → running → succeeded
 | event | payload 要点 |
 | --- | --- |
 | `thought` | 短文本，给人看 |
+| `message` | 已持久化用户消息、作者与浏览器幂等键；协作者即时补气泡 |
 | `tool_call` | `name`, `arguments` |
 | `tool_result` | `name`, `ok`, `data` 或 `error` |
 | `confirm` | 确认卡 JSON，等前端 `confirm_ack` |
@@ -232,7 +243,9 @@ queued → running → succeeded
 | `error` | `code`, `message`（可给用户看） |
 | `pong` | 心跳 |
 
-前端 → 服务：`user_message` `{text, attachments[]?}`，`confirm_ack` `{ok, patch?}`，`cancel_task` `{task_id}`。
+前端 → 服务：`user_message` `{text, attachments[]?, client_message_id?}`，`confirm_ack` `{ok, patch?}`，`cancel_task` `{task_id}`。
+
+`thought.stream=chunk` 只在在线时即时广播，断线不回放，随后完整交付句仍写入历史；`thought.stream=think` 仅发给本轮发起连接，不向团队协作者泄露。
 
 附件：先 `POST /api/files` 得 `file_id`，再在消息里引用。单文件 ≤20MB；PRD/OpenAPI/Excel/JSONL/CSV/PDF/MD/TXT/HTML。
 

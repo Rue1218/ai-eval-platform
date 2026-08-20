@@ -1,6 +1,6 @@
 /**
  * AI 测试与评估平台 — WebSocket 智能体客户端
- * 依据：docs/AI测试与评估平台-PRD.md (5.1.3) 与 API.md (1.3)
+ * 依据：docs/AI测试与评估平台-PRD.md (5.1.3) 与 API.md (V1.5)
  */
 import { api } from './http'
 import type { WsServerEvent } from './types'
@@ -129,14 +129,22 @@ export class AgentWebSocket {
     }
   }
 
-  public sendUserMessage(text: string, attachments?: Array<{ file_id: string }>): void {
+  public sendUserMessage(
+    text: string,
+    attachments?: Array<{ file_id: string }>,
+    clientMessageId?: string,
+  ): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       console.warn('WebSocket not open, cannot send message')
       return
     }
     const payload = {
       event: 'user_message',
-      payload: { text, attachments: attachments || [] },
+      payload: {
+        text,
+        attachments: attachments || [],
+        ...(clientMessageId ? { client_message_id: clientMessageId } : {}),
+      },
     }
     this.ws.send(JSON.stringify(payload))
   }
