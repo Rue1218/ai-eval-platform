@@ -562,6 +562,11 @@ onMounted(loadData)
     grid-template-columns: 1fr;
   }
 }
+@media (max-width: 700px) {
+  .form-row {
+    grid-template-columns: 1fr;
+  }
+}
 /* S9 环境 Scope 三色胶囊（迁移自原型 admin-stress.html 21-24） */
 .env-tag-scope {
   font-family: var(--font-mono);

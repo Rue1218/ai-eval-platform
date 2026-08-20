@@ -636,10 +636,11 @@ const liveMode = !api.isMock()
 // 视图切换：'designer' (Dify 拖拽编排) vs 'monitor' (实时拓扑星图)
 const activeTab = ref<'designer' | 'monitor'>('designer')
 
-// 沉浸式大星图悬浮控制坞展开/收折状态
-const isLeftDockCollapsed = ref(false)
-const isRightDockCollapsed = ref(false)
-const isBottomDockCollapsed = ref(false)
+// 沉浸式大星图悬浮控制坞展开/收折状态；移动端默认收折左右浮坞，避免遮住星图
+const isMobileViewport = typeof window !== 'undefined' && window.innerWidth <= 700
+const isLeftDockCollapsed = ref(isMobileViewport)
+const isRightDockCollapsed = ref(isMobileViewport)
+const isBottomDockCollapsed = ref(isMobileViewport)
 
 const isRunning = ref(true)
 const strategy = ref('负载均衡')
@@ -2719,5 +2720,39 @@ onBeforeUnmount(() => {
   background: var(--accent-ai);
   color: #ffffff;
   line-height: 1.3;
+}
+
+/* 移动端：浮坞收窄、甘特行压缩、分段标签可横滚 */
+@media (max-width: 700px) {
+  .dispatch-view-tabs {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .tab-pill-group {
+    overflow-x: auto;
+  }
+  .tab-pill-btn {
+    white-space: nowrap;
+  }
+  .dock-left,
+  .dock-right {
+    width: min(260px, calc(100vw - 60px));
+  }
+  .dock-scroll-content {
+    max-height: 38dvh;
+  }
+  .dock-bottom {
+    max-height: 200px;
+  }
+  .gantt-row {
+    grid-template-columns: 104px 1fr;
+  }
+  .gantt-axis {
+    padding-left: 104px;
+  }
+  .gantt-name {
+    font-size: 10.5px;
+  }
 }
 </style>
