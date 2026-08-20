@@ -592,7 +592,7 @@
         </div>
 
         <div class="composer-card" :class="{ generating: isGenerating }" style="position: relative;">
-          <!-- 斜杠命令悬浮面板 (宽 360px，键入 / 触发) -->
+          <!-- 斜杠命令悬浮面板 (宽 380px，键入 / 触发) -->
           <SlashPalette
             ref="slashPaletteRef"
             :show="showSlashPalette"
@@ -601,28 +601,18 @@
             @close="handleSlashClose"
           />
 
-          <!-- 顶部激活的斜杠命令识别芯片（高辨识度提示） -->
-          <div v-if="activeSlashCommand" class="composer-command-pill">
-            <span class="cmd-pill-tag mono">{{ activeSlashCommand.prefix }}</span>
-            <span class="cmd-pill-hint">{{ activeSlashCommand.hint }}</span>
-            <button class="cmd-pill-clear" title="清除命令" @click="clearSlashCommand">✕</button>
-          </div>
-
-          <!-- 上半区：全宽自适应多行文本域（带双层命令高亮识别底色） -->
-          <div class="composer-editor-wrap">
-            <div class="composer-backdrop" aria-hidden="true" v-html="highlightedInputHtml"></div>
-            <textarea
-              ref="textareaRef"
-              v-model="inputText"
-              class="composer-textarea"
-              :class="{ 'has-cmd': Boolean(activeSlashCommand) }"
-              rows="1"
-              placeholder="输入任何评测问题或需求，或键入 / 选择命令，Shift + Enter 换行，Enter 发送"
-              @keydown="handleKeydown"
-              @input="adjustTextareaHeight"
-              @paste="() => nextTick(adjustTextareaHeight)"
-            ></textarea>
-          </div>
+          <!-- 上半区：全宽自适应多行文本域（斜杠命令模式高识别度等宽主题色） -->
+          <textarea
+            ref="textareaRef"
+            v-model="inputText"
+            class="composer-textarea"
+            :class="{ 'is-slash-cmd': isSlashCommandMode }"
+            rows="1"
+            :placeholder="isSlashCommandMode ? '斜杠命令模式：输入参数后按 Enter 发送，或继续输入' : '输入任何评测问题或需求，或键入 / 选择命令，Shift + Enter 换行，Enter 发送'"
+            @keydown="handleKeydown"
+            @input="adjustTextareaHeight"
+            @paste="() => nextTick(adjustTextareaHeight)"
+          ></textarea>
 
           <!-- 下半区：操作底栏（附件 + 只读模型标识 + 发送按钮） -->
           <div class="composer-bottom-bar">
@@ -799,7 +789,8 @@ const slashPaletteRef = ref<InstanceType<typeof SlashPalette> | null>(null)
 const paletteClosedManually = ref(false)
 
 const showSlashPalette = computed(() => {
-  return inputText.value.startsWith('/') && !paletteClosedManually.value
+  const text = inputText.value
+  return text.startsWith('/') && !text.includes(' ') && !paletteClosedManually.value
 })
 
 function handleSlashSelect(cmdText: string) {
@@ -847,55 +838,8 @@ const inputText = ref('')
 const stagedFiles = ref<any[]>([])
 const activeTask = ref<Task | null>(null)
 
-/** 识别当前输入框中的斜杠命令，提供高识别度状态芯片与语法颜色区分 */
-const activeSlashCommand = computed(() => {
-  const text = (inputText.value || '').trimStart()
-  if (!text.startsWith('/')) return null
-  const match = text.match(/^(\/[a-zA-Z0-9_-]+)/)
-  if (!match) return null
-  const cmdName = match[1].slice(1).toLowerCase()
-  const found = SYSTEM_SLASH_COMMANDS.find(c => c.name.toLowerCase() === cmdName)
-  if (found) {
-    return {
-      name: found.name,
-      prefix: `/${found.name}`,
-      hint: found.hint,
-      enabled: found.enabled,
-    }
-  }
-  return {
-    name: cmdName,
-    prefix: match[1],
-    hint: '快捷命令',
-    enabled: true,
-  }
-})
-
-function clearSlashCommand() {
-  if (activeSlashCommand.value) {
-    const prefix = activeSlashCommand.value.prefix
-    if (inputText.value.startsWith(prefix)) {
-      inputText.value = inputText.value.slice(prefix.length).trimStart()
-    } else {
-      inputText.value = ''
-    }
-    nextTick(adjustTextareaHeight)
-  }
-}
-
-/** 双层编辑器富文本高亮：将 /command 前缀渲染为高辨识度标签底色 */
-const highlightedInputHtml = computed(() => {
-  if (!inputText.value) return ''
-  const val = escapeHtml(inputText.value)
-  if (val.startsWith('/')) {
-    const match = val.match(/^(\/[a-zA-Z0-9_\u4e00-\u9fa5-]+)(\s*[\s\S]*)$/)
-    if (match) {
-      const cmd = match[1]
-      const rest = match[2]
-      return `<span class="composer-cmd-badge">${cmd}</span><span class="composer-rest-text">${rest}</span>`
-    }
-  }
-  return `<span class="composer-rest-text">${val}</span>`
+const isSlashCommandMode = computed(() => {
+  return (inputText.value || '').trimStart().startsWith('/')
 })
 
 // 模拟资产只允许在显式 mock 模式中存在；实时模式必须等待服务端短工具回填。
@@ -1286,7 +1230,10 @@ function adjustTextareaHeight() {
 }
 
 // 深度监听输入文本变化，无论是快捷 Prompt 填入还是换行均即时同步高度
-watch(inputText, () => {
+watch(inputText, (newVal) => {
+  if (newVal === '/' || (newVal.startsWith('/') && !newVal.includes(' '))) {
+    paletteClosedManually.value = false
+  }
   nextTick(adjustTextareaHeight)
 })
 
@@ -2627,96 +2574,8 @@ onBeforeUnmount(() => {
   border-color: rgba(99, 102, 241, 0.35);
 }
 
-.composer-command-pill .cmd-pill-tag {
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--accent-ai, #6366f1);
-}
-
-.composer-command-pill .cmd-pill-hint {
-  font-size: 11.5px;
-  color: var(--text-secondary, #6b7280);
-}
-
-.composer-command-pill .cmd-pill-clear {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 15px;
-  height: 15px;
-  border-radius: 50%;
-  border: none;
-  background: rgba(0, 0, 0, 0.06);
-  color: var(--text-secondary, #6b7280);
-  font-size: 10px;
-  cursor: pointer;
-  padding: 0;
-  transition: all 0.12s ease;
-}
-
-.composer-command-pill .cmd-pill-clear:hover {
-  background: rgba(0, 0, 0, 0.12);
-  color: var(--text-primary, #111827);
-}
-
-@keyframes pill-pop {
-  from {
-    opacity: 0;
-    transform: scale(0.96);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-/* 双层编辑器包裹层 */
-.composer-editor-wrap {
-  position: relative;
-  width: 100%;
-  min-height: 38px;
-}
-
-.composer-backdrop {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  pointer-events: none;
-  font-family: var(--font-chat, inherit);
-  font-size: 14.5px;
-  line-height: 1.55;
-  padding: 4px 6px;
-  box-sizing: border-box;
-  white-space: pre-wrap;
-  word-break: break-word;
-  overflow: hidden;
-  color: transparent;
-  user-select: none;
-  z-index: 1;
-}
-
-:deep(.composer-cmd-badge) {
-  font-family: var(--font-mono, monospace);
-  font-weight: 700;
-  color: var(--accent-ai, #6366f1) !important;
-  background: var(--t-tasks, #e0e7ff);
-  border: 1px solid color-mix(in srgb, var(--accent-ai, #6366f1) 30%, transparent);
-  border-radius: 5px;
-  padding: 1px 5px;
-  margin: 0 1px;
-}
-
-[data-theme='dark'] :deep(.composer-cmd-badge) {
-  background: rgba(99, 102, 241, 0.28);
-  color: #a5b4fc !important;
-  border-color: rgba(99, 102, 241, 0.45);
-}
-
 /* 多行文本域自适应高度（最小 38px，最大 200px 限制） */
 .composer-textarea {
-  position: relative;
   width: 100% !important;
   border: none !important;
   outline: none !important;
@@ -2735,11 +2594,18 @@ onBeforeUnmount(() => {
   -webkit-appearance: none !important;
   -moz-appearance: none !important;
   appearance: none !important;
-  z-index: 2;
+  transition: color 0.12s ease;
 }
 
-.composer-textarea.has-cmd {
+/* 斜杠命令模式：高识别度等宽字体与强调色 */
+.composer-textarea.is-slash-cmd {
   font-family: var(--font-mono, monospace) !important;
+  color: var(--accent-ai, #6366f1) !important;
+  font-weight: 600 !important;
+}
+
+[data-theme='dark'] .composer-textarea.is-slash-cmd {
+  color: #818cf8 !important;
 }
 
 .composer-textarea:focus,

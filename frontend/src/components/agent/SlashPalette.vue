@@ -216,11 +216,12 @@ function setActive(cmd: SlashCommandDef) {
 
 function handleItemClick(cmd: SlashCommandDef) {
   if (!cmd.enabled) return
-  emit('select', `/${cmd.name}`)
+  emit('select', `/${cmd.name} `)
 }
 
 function handleCustomClick(cmd: any) {
-  emit('select', cmd.template || `/${cmd.name}`)
+  const text = (cmd.template || `/${cmd.name}`)
+  emit('select', text.endsWith(' ') ? text : `${text} `)
 }
 
 function scrollToActive() {
@@ -270,11 +271,12 @@ function handleKeyDown(e: KeyboardEvent): boolean {
   const items = flatEnabledItems.value
   if (!items.length) return false
 
-  const currentIndex = items.findIndex((i) => i.name === activeName.value)
+  let idx = items.findIndex((i) => i.name === activeName.value)
+  if (idx < 0) idx = 0
 
   if (e.key === 'ArrowDown') {
     e.preventDefault()
-    const nextIdx = (currentIndex + 1) % items.length
+    const nextIdx = (idx + 1) % items.length
     activeName.value = items[nextIdx].name
     scrollToActive()
     return true
@@ -282,17 +284,18 @@ function handleKeyDown(e: KeyboardEvent): boolean {
 
   if (e.key === 'ArrowUp') {
     e.preventDefault()
-    const prevIdx = (currentIndex - 1 + items.length) % items.length
+    const prevIdx = (idx - 1 + items.length) % items.length
     activeName.value = items[prevIdx].name
     scrollToActive()
     return true
   }
 
   if (e.key === 'Enter' || e.key === 'Tab') {
-    const activeItem = items.find((i) => i.name === activeName.value)
+    const activeItem = items.find((i) => i.name === activeName.value) || items[0]
     if (activeItem) {
       e.preventDefault()
-      emit('select', ('template' in activeItem && activeItem.template) ? activeItem.template : `/${activeItem.name}`)
+      const rawText = ('template' in activeItem && activeItem.template) ? activeItem.template : `/${activeItem.name}`
+      emit('select', rawText.endsWith(' ') ? rawText : `${rawText} `)
       return true
     }
   }
