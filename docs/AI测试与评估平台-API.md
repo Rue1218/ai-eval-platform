@@ -2,14 +2,14 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.10 |
+| 文档版本 | V1.11 |
 | 对应 PRD | V1.7.0（功能唯一权威） |
 | 对应设计规范 | V1.3（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | V1.4（Harness / 斜杠 / 上下文算法；JSON 仍以本文为准） |
 | 对应前端计划 | V1.3 |
 | 对应后端计划 | V1.3 |
 | 撰写日期 | 2026-08-18 |
-| 最近修订 | 2026-08-20：V1.10 MCP 工具中心展示独立 Qwen Image 工具；V1.9 短工具 `audio.voiceclone` 与 `GET /api/files/{id}/content`；V1.8 助手回复耗时展示；用例工作台 Excel 导入 |
+| 最近修订 | 2026-08-20：V1.11 通过内部 `mcp_tools` 接入 Qwen Image 图文生图；V1.10 MCP 工具中心展示 Qwen Image 注册项；V1.9 短工具 `audio.voiceclone` 与 `GET /api/files/{id}/content`；V1.8 助手回复耗时展示；用例工作台 Excel 导入 |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
 ---
@@ -550,7 +550,7 @@ item：`id, name, protocol, base_url, model, usages[], created_at`
 
 #### `GET /api/mcp/tools`
 
-获取当前智能体环境中受控的短工具注册清单（`model.list`, `dataset.list`, `kb.list`, `task.get`, `report.get`, `task.create`, `task.cancel`, `dispatch.overview`, `testcase.confirm`, `audio.voiceclone`, `image.generate`）及权限级别（`read / write`）。`image.generate` 当前仅作为独立 stdio MCP 注册项展示，`enabled=false`、`source=standalone`，未挂载到 Eval-Core Host，不属于可执行的内置短工具。
+获取当前智能体环境中受控的短工具注册清单（`model.list`, `dataset.list`, `kb.list`, `task.get`, `report.get`, `task.create`, `task.cancel`, `dispatch.overview`, `testcase.confirm`, `audio.voiceclone`, `image.generate`）及权限级别（`read / write`）。`image.generate` 已通过内部 `mcp_tools` 挂载到 Eval-Core Host，`enabled=true`、`source=builtin`；支持纯文本或本轮图片附件参考图输入。
 
 ```json
 {
@@ -1681,11 +1681,23 @@ MCP 浏览器不调：与 PRD 3.1、前端计划「禁止把 MCP 当 REST」一�
 
 **V1.10（2026-08-20）— 独立 Qwen Image MCP 工具中心可见性**
 
-独立 Qwen Image stdio MCP 在 `/api/mcp/tools` 返回注册项 `image.generate`，但明确标记 `enabled=false`、`source=standalone`；管理页展示“能力未启用”，避免把未挂载的外部/独立 MCP 伪装成 Eval-Core 内置可执行工具。
+独立 Qwen Image stdio MCP 曾作为 `/api/mcp/tools` 注册项展示；V1.11 起，平台改为直接在 API Agent Host 的内部 `mcp_tools` 中执行 `image.generate`，不再依赖额外 stdio MCP 进程。
 
 | 文件 | 作用 |
 | :--- | :--- |
-| `backend/api/app/routers/mcp.py` / `backend/api/tests/test_dispatch.py` | 注册并校验 `image.generate` 的未挂载状态 |
-| `frontend/src/api/mockData.ts` / `frontend/src/views/AdminProfiles.vue` | 增加图像生成领域、未挂载状态展示与统计 |
+| `backend/api/app/routers/mcp.py` / `backend/api/tests/test_dispatch.py` | 注册并校验 `image.generate` 的工具中心可见性 |
+| `frontend/src/api/mockData.ts` / `frontend/src/views/AdminProfiles.vue` | 增加图像生成领域与工具中心展示 |
 | `frontend/src/components/modals/McpToolModal.vue` | 增加图像生成工具契约详情 |
+
+**V1.11（2026-08-20）— Qwen Image 内部短工具接入**
+
+Qwen Image 通过与 `audio.voiceclone` 相同的 Agent 内部短工具链路执行：规划阶段识别图像生成意图，React 阶段在独立线程中调用上游，参考图只从本轮图片附件选择，生成结果落盘到 `files` 表并通过同源 `content_url` 返回。URL、Key、模型 ID 和超时从环境变量 `QWEN_IMAGE_API_URL`、`QWEN_IMAGE_API_KEY`、`QWEN_IMAGE_MODEL`、`QWEN_IMAGE_TIMEOUT_SECONDS` 注入。
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/agent/imagegen.py` | Qwen Image 请求、图文 content 组装、响应解析、图片落盘与规划注入 |
+| `backend/api/app/agent/defaults.py` / `mcp_tools.py` / `react.py` / `plan.py` / `harness.py` | 注册、线程隔离执行、自然语言规划注入和交付句 |
+| `backend/api/app/config.py` / `docker-compose.yml` / `backend/api/app/routers/files.py` | 环境变量注入和图片附件白名单 |
+| `frontend/src/views/Agent.vue` / `frontend/src/styles/base.css` | 图片附件上传、工具结果预览与下载 |
+| `backend/api/tests/test_imagegen.py` | 图文请求、规划注入、落盘和线程执行单测 |
 

@@ -51,6 +51,12 @@
         preload="metadata"
         :src="playUrl"
       />
+      <img
+        v-if="tool === 'image.generate' && status === 'ok' && imagePlayUrl"
+        class="tool-image"
+        :src="imagePlayUrl"
+        alt="Qwen Image 生成结果"
+      />
       <div v-if="args" style="margin-bottom: 8px">
         <div class="td-label">调用入参</div>
         <pre class="code">{{ formatJson(args) }}</pre>
@@ -93,6 +99,7 @@ const toolNameMap: Record<string, string> = {
   'dispatch.overview': '调度概览',
   'testcase.confirm': '确认用例入库',
   'audio.voiceclone': '音色克隆配音',
+  'image.generate': 'Qwen Image 生图',
   // 兼容旧下划线命名
   list_profiles: '列出协议档',
   get_profile: '获取协议档详情',
@@ -123,6 +130,16 @@ const playUrl = computed(() => {
   const id = data.file_id
   if (typeof id === 'string' && id) return `/api/files/${id}/content`
   return ''
+})
+
+const imagePlayUrl = computed(() => {
+  const result = props.result
+  if (!result || typeof result !== 'object') return ''
+  const data = result as Record<string, unknown>
+  const url = data.content_url
+  if (typeof url === 'string' && url.startsWith('/api/files/') && url.includes('/content')) return url
+  const id = data.file_id
+  return typeof id === 'string' && id ? `/api/files/${id}/content` : ''
 })
 
 const statusClass = computed(() => props.status)

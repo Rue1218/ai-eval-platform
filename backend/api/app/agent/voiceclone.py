@@ -145,6 +145,8 @@ def inject_voiceclone_plan(
     斜杠评测路径不要调用本函数。L0 把配音句误判成 benchmark 时，
     若没有评测关键词则改走 chat + ``audio.voiceclone``。
     """
+    if "image.generate" in plan.tools_needed:
+        return plan
     audio_ids = list_audio_file_ids(db, attachments)
     if plan.intent in _SKIP_INTENTS:
         return plan

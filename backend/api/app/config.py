@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     mimo_tts_api_key: str = ""
     mimo_tts_model: str = "mimo-v2.5-tts-voiceclone"
     mimo_tts_timeout_s: float = 90.0
+    # Qwen Image 图像生成（DashScope 多模态生成接口）。Key 只从环境注入，禁止回显。
+    qwen_image_api_url: str = ""
+    qwen_image_api_key: str = ""
+    qwen_image_model: str = ""
+    qwen_image_timeout_seconds: float = 120.0
 
     @property
     def cors_origin_list(self) -> list[str]:

@@ -77,6 +77,7 @@ SHORT_TOOLS = frozenset(
         "kb.list",
         "testcase.confirm",
         "audio.voiceclone",
+        "image.generate",
     }
 )
 
@@ -96,6 +97,7 @@ TOOL_TITLES: dict[str, str] = {
     "dispatch.overview": "调度概览",
     "testcase.confirm": "确认用例入库",
     "audio.voiceclone": "音色克隆配音",
+    "image.generate": "Qwen Image 生图",
 }
 
 # 各 kind 必填槽位（G2）；with_stress 另要求 stress 段

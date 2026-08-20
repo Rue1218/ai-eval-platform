@@ -215,6 +215,10 @@ def execute_short_tool(
             from .voiceclone import execute_voiceclone
 
             data = execute_voiceclone(db, args, user_id=user_id)
+        elif name == "image.generate":
+            from .imagegen import execute_imagegen
+
+            data = execute_imagegen(db, args, user_id=user_id)
         else:
             raise AppError(ErrorCode.VALIDATION, "该能力未启用")
 

@@ -312,25 +312,26 @@ const TOOL_META_MAP: Record<string, ToolMeta> = {
   'image.generate': {
     icon: '🖼️',
     domain: '图像生成',
-    latency: '上游耗时，未挂载',
+    latency: '上游耗时，最长 120s',
     params: [
       { name: 'prompt', type: 'string', required: true, desc: '图像生成提示词' },
-      { name: 'image', type: 'string', required: false, desc: '参考图 URL、Data URI 或服务端本地图片路径' },
+      { name: 'file_id', type: 'string', required: false, desc: '本轮上传的 png/jpg/jpeg/webp/gif 参考图 ID' },
       { name: 'prompt_extend', type: 'boolean', required: false, desc: '是否启用提示词扩展，默认 true' },
     ],
     exampleRequest: JSON.stringify({
-      name: 'image.generate',
-      arguments: {
-        prompt: '基于参考图生成一张油画风格图片',
-        image: 'https://example.com/reference.png',
-        prompt_extend: true,
-      },
+        name: 'image.generate',
+        arguments: {
+          prompt: '基于参考图生成一张油画风格图片',
+          file_id: '本轮图片附件 ID',
+          prompt_extend: true,
+        },
     }, null, 2),
     exampleResponse: JSON.stringify({
-      status: 'disabled',
-      message: '独立 stdio MCP 尚未挂载到 Eval-Core Host',
+      file_id: '生成图片文件 ID',
+      content_url: '/api/files/生成图片文件 ID/content',
+      content_type: 'image/png',
     }, null, 2),
-    securityNote: '当前仅在工具中心展示。独立 stdio MCP 尚未挂载到平台 Eval-Core Host，因此不会假装成功调用。',
+    securityNote: '内部受控写入工具。参考图只能取自本轮已上传文件，工具结果只返回文件元数据，不回传图片 base64。',
   },
 }
 

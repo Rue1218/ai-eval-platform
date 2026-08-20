@@ -235,6 +235,12 @@
                 preload="metadata"
                 :src="voiceclonePlayUrl(item.result)"
               />
+              <img
+                v-if="item.tool === 'image.generate' && item.status === 'ok' && imagegenPlayUrl(item.result)"
+                class="tool-image"
+                :src="imagegenPlayUrl(item.result)"
+                alt="Qwen Image 生成结果"
+              />
               <div v-show="item.open" class="tool-detail">
                 <div class="td-label">输入</div>
                 <pre class="code">{{ JSON.stringify(item.args || {}, null, 2) }}</pre>
@@ -690,7 +696,7 @@
           <div class="composer-bottom-bar">
             <div class="composer-left-actions">
               <!-- 添加附件按钮 -->
-              <button class="composer-action-btn" title="添加附件（≤20MB，支持 PRD/OpenAPI/Excel/CSV/PDF/wav/mp3 等）" @click="triggerFileInput">
+              <button class="composer-action-btn" title="添加附件（≤20MB，支持 PRD/OpenAPI/Excel/CSV/PDF/wav/mp3/png/jpg 等）" @click="triggerFileInput">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
                   <line x1="12" y1="5" x2="12" y2="19"></line>
                   <line x1="5" y1="12" x2="19" y2="12"></line>
@@ -700,7 +706,7 @@
                 ref="fileInputRef"
                 type="file"
                 hidden
-                accept=".md,.txt,.html,.pdf,.json,.yaml,.yml,.xlsx,.xls,.csv,.jsonl,.wav,.mp3"
+                accept=".md,.txt,.html,.pdf,.json,.yaml,.yml,.xlsx,.xls,.csv,.jsonl,.wav,.mp3,.png,.jpg,.jpeg,.webp,.gif"
                 @change="handleFileUpload"
               />
 
@@ -1333,12 +1339,26 @@ function getToolDisplayName(name?: string) {
     'task.cancel': '取消任务',
     'testcase.confirm': '确认用例入库',
     'audio.voiceclone': '音色克隆配音',
+    'image.generate': 'Qwen Image 生图',
   }
   return (name && names[name]) || name || '调用工具'
 }
 
 /** 音色克隆成功后的可播放地址（须同源 Cookie 鉴权）。 */
 function voiceclonePlayUrl(result: unknown): string {
+  if (!result || typeof result !== 'object') return ''
+  const data = result as Record<string, unknown>
+  const url = data.content_url
+  if (typeof url === 'string' && url.startsWith('/api/files/') && url.includes('/content')) {
+    return url
+  }
+  const id = data.file_id
+  if (typeof id === 'string' && id) return `/api/files/${id}/content`
+  return ''
+}
+
+/** Qwen Image 成功后的图片地址（须同源 Cookie 鉴权）。 */
+function imagegenPlayUrl(result: unknown): string {
   if (!result || typeof result !== 'object') return ''
   const data = result as Record<string, unknown>
   const url = data.content_url
@@ -2422,7 +2442,7 @@ async function loadSessionHistory(sid: string): Promise<number> {
           target.item.result = p.ok ? p.data : p.error
           target.item.status = p.ok ? 'ok' : 'fail'
           target.item.latency_ms = p.latency_ms
-          if (p.ok && p.name === 'audio.voiceclone') target.item.open = true
+          if (p.ok && ['audio.voiceclone', 'image.generate'].includes(p.name)) target.item.open = true
         }
         // 历史回放也要恢复确认卡的 MCP 选项，否则刷新后下拉框会变空。
         if (p.ok) hydrateToolResult(p.name, p.data)
@@ -2922,7 +2942,7 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
         target.result = p.ok ? p.data : p.error
         target.status = p.ok ? 'ok' : 'fail'
         if (p.latency_ms !== undefined) target.latency_ms = p.latency_ms
-        if (p.ok && p.name === 'audio.voiceclone') target.open = true
+        if (p.ok && ['audio.voiceclone', 'image.generate'].includes(p.name)) target.open = true
       }
       if (p.ok) hydrateToolResult(p.name, p.data)
       if (p.ok && p.name === 'task.create') {
@@ -3227,7 +3247,7 @@ function handleWsEvent(ev: WsServerEvent) {
           target.latency_ms = p.latency_ms
           turnLatencyMs.value += p.latency_ms
         }
-        if (p.ok && p.name === 'audio.voiceclone') target.open = true
+        if (p.ok && ['audio.voiceclone', 'image.generate'].includes(p.name)) target.open = true
       }
       // 把短工具发现结果回填到确认卡可选项
       if (p.ok) {

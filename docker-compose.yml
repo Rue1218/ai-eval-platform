@@ -46,6 +46,11 @@ services:
       MIMO_TTS_BASE_URL: ${MIMO_TTS_BASE_URL:-https://token-plan-cn.xiaomimimo.com/v1}
       MIMO_TTS_API_KEY: ${MIMO_TTS_API_KEY:-}
       MIMO_TTS_MODEL: ${MIMO_TTS_MODEL:-mimo-v2.5-tts-voiceclone}
+      # Qwen Image 图像生成。API Key 只从宿主机 .env 注入，禁止写入镜像或仓库。
+      QWEN_IMAGE_API_URL: ${QWEN_IMAGE_API_URL:-}
+      QWEN_IMAGE_API_KEY: ${QWEN_IMAGE_API_KEY:-}
+      QWEN_IMAGE_MODEL: ${QWEN_IMAGE_MODEL:-}
+      QWEN_IMAGE_TIMEOUT_SECONDS: ${QWEN_IMAGE_TIMEOUT_SECONDS:-120}
     depends_on:
       postgres:
         condition: service_healthy

@@ -24,6 +24,7 @@ from .defaults import (
     default_stress,
     is_long_tool,
 )
+from .imagegen import arguments_for_imagegen
 from .log import agent_trace
 from .mcp_tools import collect_ids, execute_short_tool, summarize_observation
 from .plan import PlanArtifact, sanitize_plan
@@ -194,7 +195,7 @@ async def run_react(
 
     ``prior`` + ``extra_tools`` 用于补规划后继续执行尚未跑过的工具，
     轮次计入同一 ``max_tool_rounds`` 硬顶（默认 4，硬顶 5）。
-    ``text`` / ``attachments`` 仅 ``audio.voiceclone`` 使用，file_id 取自本轮附件。
+    ``text`` / ``attachments`` 用于音色克隆和图像生成，file_id 取自本轮附件。
     """
     react = prior or ReactArtifact()
     # 预留并行开关：M1 强制串行，打开后仍须保证事件成对
@@ -239,8 +240,10 @@ async def run_react(
         arguments: dict[str, Any] = {}
         if name == "audio.voiceclone":
             arguments = arguments_for_voiceclone(db, text=text, attachments=turn_attachments)
+        elif name == "image.generate":
+            arguments = arguments_for_imagegen(db, text=text, attachments=turn_attachments)
         await emit("tool_call", {"name": name, "arguments": arguments})
-        if name == "audio.voiceclone":
+        if name in {"audio.voiceclone", "image.generate"}:
             ok, data, error, latency_ms = await asyncio.to_thread(
                 _execute_short_tool_isolated,
                 name,
