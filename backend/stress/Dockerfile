@@ -1,5 +1,7 @@
 # 构建阶段
 FROM golang:1.22-alpine AS build
+# proxy.golang.org 在国内不可达，本机构建走 goproxy.cn
+ENV GOPROXY=https://goproxy.cn,direct
 WORKDIR /src
 COPY go.mod ./
 COPY main.go ./
