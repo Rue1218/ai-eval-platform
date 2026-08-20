@@ -3027,8 +3027,9 @@ function typewriteTo(rawItem: StreamItem, fullText: string) {
 }
 
 function handleWsEvent(ev: WsServerEvent) {
-  // pong 心跳不参与交互流；其余任何事件到达都意味着本轮已出结果，移除打字占位
-  if (ev.event !== 'pong') {
+  // 用户自己的 message 回显不是「本轮已出结果」。过早移除打字占位时，
+  // 规划/流式开始前对话区只剩用户气泡，看起来像模型没有回复。
+  if (ev.event !== 'pong' && ev.event !== 'message') {
     dismissTyping()
     const isStream = ev.payload && typeof ev.payload.stream === 'string'
     if (!isStream) {

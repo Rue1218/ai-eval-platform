@@ -96,6 +96,7 @@ def test_l0_chat_vs_benchmark_and_testcase():
     assert classify_intent_l0("介绍一下你")[0] == "chat"
     assert classify_intent_l0("你好")[0] == "chat"
     assert classify_intent_l0("今天天气如何")[0] == "chat"
+    assert classify_intent_l0("帮我生成一首轻盈的音乐")[0] == "chat"
     assert classify_intent_l0("对比两个模型的基准表现")[0] == "benchmark"
     assert classify_intent_l0("帮我评一下")[0] == "benchmark"
     assert classify_intent_l0("你好，帮我评一下")[0] == "benchmark"
@@ -421,6 +422,37 @@ def test_run_plan_greeting_skips_planner_llm(monkeypatch):
     assert budget.used == 0
 
 
+def test_run_plan_offtopic_chat_skips_planner_llm(monkeypatch):
+    """无评测关键词的闲聊（如生成音乐）也必须跳过规划模型。
+
+    否则会先空等 1～2 次上游 JSON，期间前端若已收掉打字占位，对话区只剩用户气泡。
+    """
+    calls: list[int] = []
+
+    def _boom(*_args, **_kwargs):
+        calls.append(1)
+        raise AssertionError("非评测闲聊不应调用规划模型")
+
+    monkeypatch.setattr("app.agent.plan._call_plan_model", _boom)
+    budget = TurnBudget()
+    plan = run_plan(
+        _FakeDb(),
+        text="帮我生成一首轻盈的音乐",
+        parsed=parse_slash("帮我生成一首轻盈的音乐"),
+        history=[],
+        prefs={},
+        attachments=[],
+        budget=budget,
+    )
+    assert calls == []
+    assert classify_intent_l0("帮我生成一首轻盈的音乐")[0] == "chat"
+    assert plan.intent == "chat"
+    assert plan.delivery == "text"
+    assert plan.source == "l0"
+    assert plan.tools_needed == []
+    assert budget.used == 0
+
+
 def test_maybe_model_check_skips_chat_text(monkeypatch):
     """闲聊 delivery=text 只走规则门禁，不再串行核对上游。"""
 
@@ -704,6 +736,42 @@ def test_run_react_continuation_respects_rounds_used(monkeypatch):
         )
     )
     assert len(calls) == 4
+
+
+def test_run_react_long_tool_records_failure_instead_of_raising():
+    """规划若误点长工具，ReAct 必须记失败观察并继续，不得让整轮 Harness 静默中断。"""
+    events: list[tuple[str, dict]] = []
+
+    async def _emit(event: str, payload: dict, **_kwargs) -> int:
+        events.append((event, payload))
+        return len(events)
+
+    plan = PlanArtifact(
+        intent="chat",
+        skill_id=None,
+        slots={"filled": {}, "missing": []},
+        tools_needed=["testcase.generate"],
+        delivery="text",
+        budget={"max_tool_rounds": 1},
+        notes="规划：闲聊",
+        source="llm",
+    )
+    react = asyncio.run(
+        run_react(
+            _FakeDb(),
+            plan,
+            user_id="u1",
+            emit=_emit,
+            check_abort=lambda: None,
+            slash_fill_first=False,
+            text="帮我生成一首轻盈的音乐",
+        )
+    )
+    assert events[0][0] == "tool_call"
+    assert events[1][0] == "tool_result"
+    assert events[1][1]["ok"] is False
+    assert "长任务" in (events[1][1].get("error") or "")
+    assert react.observations and react.observations[0]["ok"] is False
 
 
 def test_run_replan_without_budget_clarifies():

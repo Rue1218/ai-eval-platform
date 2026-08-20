@@ -25,7 +25,6 @@ from .defaults import (
     is_long_tool,
 )
 from .log import agent_trace
-from .long_tasks import assert_short_tool
 from .mcp_tools import collect_ids, execute_short_tool, summarize_observation
 from .plan import PlanArtifact, sanitize_plan
 from .voiceclone import arguments_for_voiceclone
@@ -214,7 +213,14 @@ async def run_react(
         name = queue.pop(0)
         executed += 1
         if is_long_tool(name):
-            assert_short_tool(name)  # 抛 VALIDATION
+            error = f"「{name}」是长任务，只能入队后由 Worker 执行"
+            await emit("tool_call", {"name": name, "arguments": {}})
+            await emit(
+                "tool_result",
+                {"name": name, "ok": False, "error": error, "latency_ms": 0},
+            )
+            react.observations.append(summarize_observation(name, False, None, error, 0))
+            break
         if name not in SHORT_TOOLS and not is_long_tool(name):
             agent_trace(f"跳过未知工具 name={name}")
             continue

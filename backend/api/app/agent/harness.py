@@ -726,6 +726,7 @@ async def _harness_entry(
         try:
             emit = emit_factory(db)
             await emit("error", {"code": exc.code.value, "message": exc.message})
+            await _deliver_sentence(db, session_id, emit, exc.message)
         except Exception:
             pass
     except Exception as exc:

@@ -510,8 +510,9 @@ def run_plan(
         plan = l0_plan(text, prefs=prefs)
         return _finish(plan)
 
-    # 「你好」等高置信闲聊：L0 定位即可，禁止再串行打规划模型（否则问候要等 2～3 次上游）。
-    if is_smalltalk(text):
+    # 无评测关键词的闲聊（含问候与「生成一首音乐」这类离题请求）：L0 即可，
+    # 禁止再串行打规划模型，否则前端打字占位被用户 message 回显拆掉后会长时间空白。
+    if classify_intent_l0(text)[0] == "chat":
         plan = l0_plan(text, prefs=prefs)
         return _finish(plan)
 
