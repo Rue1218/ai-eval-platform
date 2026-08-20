@@ -5,7 +5,7 @@
 | 文档名称 | Agent 独立开发说明书 |
 | 版本 | V1.6 |
 | 日期 | 2026-08-20 |
-| 最近修订 | 2026-08-21：自然语言由规划模型输出 complexity/loop 调度循环；斜杠仍 0 次模型；关键词仅 L0 回退 |
+| 最近修订 | 2026-08-21：流式保留模型思考链；生图预览移出 ToolCall 并写入会话消息 |
 | 用法 | **实现 `/agent` 以本文为准（Harness / 斜杠 / 窗口算法）。** REST/WS JSON 以 API.md V1.6 为准。完成某项后勾选文末 Task，并在「最近修订」追加一行。 |
 
 本文是评测平台 **Agent 子系统** 的完整开发说明书：目标、边界、运行时骨架、协议、模块、代码落点与验收任务都写在这里。与 PRD / API.md 冲突时，字段名与事件名以那两份为准；Harness、斜杠、上下文算法以本文 §16 为准。§4.6 所列增量已收入 **API.md V1.6**。
@@ -310,8 +310,8 @@ ReAct 停机（任一即进入复核）：槽位已从**本轮工具返回值**�
 - 设置项 `agent_profile_id` 指向唯一协议档（OpenAI Chat / Responses / Anthropic Messages）。  
 - Key 加密存储，接口不回显。未配置时思考卡说明去协议档页，不出确认卡。  
 - 输入栏只读：`Agent · {模型名}`。  
-- 同步短调用，超时约 30s；失败归为 `UPSTREAM` / `TIMEOUT`。  
-- 不做 token 级流式事件。若上游带 reasoning，先一条思考卡，再一条正文思考卡。
+- 同步短调用，超时约 90s（含思考链）；失败归为 `UPSTREAM` / `TIMEOUT`。  
+- 对话与 ReAct 决策走流式：推理链 `thought.stream=think`（瞬态），成功结束补 `think_final` 落库。规划/核对 JSON 仍非流式，mimo 关闭思考以免正文被挤空。
 
 **耗时三层（payload 可选字段，旧前端忽略即可）：**
 
@@ -1414,6 +1414,24 @@ Qwen Image 按 `audio.voiceclone` 的内部短工具方式接入：自然语言�
 | `backend/api/app/agent/harness.py` | 规划后再调度 TurnMode |
 | `backend/api/tests/test_harness.py` | 问候/inspect/人像改为 mock 规划 JSON |
 | `docs/AI测试与评估平台-Agent开发文档.md` | §5 改为模型选循环 |
+
+---
+
+## 31. 修改代码文件与作用清单（2026-08-21 思考流式与生图预览）
+
+根因：mimo 流式请求曾写 `thinking.disabled`，对话/ReAct 看不到 `reasoning_content`；ReAct 决策还是非流式 JSON，思考卡只能整段后出。生图预览塞在 ToolCall 卡里，刷新后只剩工具 JSON。
+
+现：流式路径打开思考；ReAct 决策流式下发 `thought.stream=think`，成功后落 `think_final`。规划 JSON 仍关闭思考以免正文被挤空。生成图片在对话流独立预览（放大/下载），ToolCall 只保留 arguments/result；助手消息写入 `file_id` 供会话窗口回放。
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/adapters.py` | 流式不再关闭 mimo 思考；`call_protocol` 仍 disabled |
+| `backend/api/app/agent/react.py` | `_stream_mcp_step` 流式推理 + JSON 决策 |
+| `backend/api/app/agent/harness.py` | 生图交付句带 file_id |
+| `frontend/src/components/agent/ToolCard.vue` | pending/成功态；图片移出 |
+| `frontend/src/components/agent/MediaPreview.vue` | 图片预览与下载 |
+| `frontend/src/views/Agent.vue` | 实时/协作/历史插入 media 项 |
+| `backend/api/tests/test_adapters.py` / `test_harness.py` | 思考开关与 ReAct 流式单测 |
 
 
 

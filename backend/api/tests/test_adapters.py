@@ -267,11 +267,20 @@ def test_stream_openai_chat_reasoning_chunks(monkeypatch):
     assert chunks == [("reasoning", "思考第一段"), ("reasoning", "第二段"), ("content", "正文")]
 
 
-def test_stream_mimo_disables_thinking(monkeypatch):
-    """mimo 网关：流式请求同样显式关闭思考（对齐 call_protocol 提速策略）。"""
+def test_stream_mimo_keeps_thinking_enabled(monkeypatch):
+    """对话/ReAct 流式请求不得关闭 mimo 思考，否则前端收不到 reasoning_content。"""
     seen = _capture_stream(monkeypatch, ['data: {"choices":[{"delta":{"content":"ok"}}]}'])
     kwargs = _kwargs("openai_chat") | {"base_url": "https://xiaomimimo.example.com"}
     list(stream_protocol(**kwargs))
+
+    assert "thinking" not in seen["body"]
+
+
+def test_call_mimo_still_disables_thinking(monkeypatch):
+    """非流式 JSON 规划仍关闭思考，避免 reasoning 占满 max_tokens。"""
+    seen = _capture(monkeypatch, OPENAI_CHAT_OK)
+    kwargs = _kwargs("openai_chat") | {"base_url": "https://xiaomimimo.example.com"}
+    call_protocol(**kwargs)
 
     assert seen["body"].get("thinking") == {"type": "disabled"}
 

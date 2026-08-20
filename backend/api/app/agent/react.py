@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+import time
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -338,6 +339,7 @@ class McpStep:
     done: bool
     reply: str
     latency_ms: int = 0
+    reasoning_text: str = ""
 
 
 def parse_mcp_step(raw: dict) -> McpStep:
@@ -388,6 +390,78 @@ def _call_mcp_step(db: Session, *, system: str, payload: dict, stop: threading.E
     parsed = parse_json_object(result.text)
     step = parse_mcp_step(parsed)
     step.latency_ms = result.latency_ms
+    return step
+
+
+async def _stream_mcp_step(
+    *,
+    system: str,
+    payload: dict,
+    stop: threading.Event,
+    emit: EmitFn,
+) -> McpStep:
+    """流式跑一轮 MCP 决策：推理链走 thought.stream=think，正文只解析 JSON。"""
+    from ..db import SessionLocal
+    from ..llm import stream_agent_model
+
+    loop = asyncio.get_running_loop()
+    user_blob = json.dumps(payload, ensure_ascii=False)
+
+    def _producer() -> tuple[str, str, int]:
+        if stop.is_set():
+            raise RuntimeError("aborted")
+        tdb = SessionLocal()
+        content_parts: list[str] = []
+        thought_parts: list[str] = []
+        started = time.perf_counter()
+        try:
+            for kind, chunk in stream_agent_model(
+                tdb,
+                system,
+                user_blob,
+                temperature=0,
+                max_tokens=2048,
+                timeout_s=90,
+            ):
+                if stop.is_set():
+                    raise RuntimeError("aborted")
+                if not chunk:
+                    continue
+                if kind == "reasoning":
+                    thought_parts.append(chunk)
+                    try:
+                        asyncio.run_coroutine_threadsafe(
+                            emit("thought", {"text": chunk, "stream": "think"}),
+                            loop,
+                        ).result(timeout=30)
+                    except Exception:
+                        pass
+                else:
+                    content_parts.append(chunk)
+            latency_ms = round((time.perf_counter() - started) * 1000)
+            return "".join(content_parts), "".join(thought_parts).strip()[:12000], latency_ms
+        finally:
+            tdb.close()
+
+    content, reasoning, latency_ms = await asyncio.to_thread(_producer)
+    if reasoning:
+        await emit("thought", {"text": reasoning, "stream": "think_final"})
+    try:
+        parsed = parse_json_object(content)
+    except ValueError:
+        agent_trace("ReAct 流式 JSON 解析失败，回退非流式决策")
+        isolated = SessionLocal()
+        try:
+            step = _call_mcp_step(isolated, system=system, payload=payload, stop=stop)
+        finally:
+            isolated.close()
+        step.reasoning_text = reasoning
+        if not step.latency_ms:
+            step.latency_ms = latency_ms
+        return step
+    step = parse_mcp_step(parsed)
+    step.latency_ms = latency_ms
+    step.reasoning_text = reasoning
     return step
 
 
@@ -448,11 +522,11 @@ async def _run_mcp_react_loop(
             "note": "suggested_tools 只是规划建议，不是必须执行的清单",
         }
         try:
-            step = await asyncio.to_thread(
-                _run_with_fresh_db_step,
-                stop,
-                system,
-                payload,
+            step = await _stream_mcp_step(
+                system=system,
+                payload=payload,
+                stop=stop,
+                emit=emit,
             )
         except RuntimeError:
             check_abort()
@@ -467,6 +541,10 @@ async def _run_mcp_react_loop(
         react.used_llm = True
         if step.thought:
             react.thinking_text = (react.thinking_text + "\n" + step.thought).strip()[-12000:]
+        if step.reasoning_text:
+            react.thinking_text = (react.thinking_text + "\n" + step.reasoning_text).strip()[-12000:]
+        elif step.thought:
+            # 上游没有 reasoning_content 时，用 JSON thought 落一张可回放思考卡
             await _emit_react_thought(
                 emit,
                 step.thought,
@@ -515,17 +593,6 @@ async def _run_mcp_react_loop(
         # 评测槽位已齐：结束 MCP 循环，把长任务交给确认卡 / Worker
         if plan.delivery == "confirm" and spec and not _missing_for_kind(spec):
             break
-
-
-def _run_with_fresh_db_step(stop: threading.Event, system: str, payload: dict) -> McpStep:
-    """独立库会话跑一轮 MCP 决策，避免与 Harness 共用连接。"""
-    from ..db import SessionLocal
-
-    isolated = SessionLocal()
-    try:
-        return _call_mcp_step(isolated, system=system, payload=payload, stop=stop)
-    finally:
-        isolated.close()
 
 
 async def _run_tool_queue(

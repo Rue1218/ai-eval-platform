@@ -138,9 +138,8 @@ def call_protocol(
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
-        # mimo-v2.5 系列是推理模型，默认先产出一大段 reasoning_content 再出正文，
-        # 既拖慢响应（实测 18s→2s）又可能挤占 max_tokens 导致正文为空。
-        # 该网关支持显式关闭思考；其它 OpenAI 兼容端点不动该字段以免被 400 拒绝。
+        # mimo-v2.5 默认会先出 reasoning_content。规划/核对等非流式 JSON 调用
+        # 仍关闭思考，避免占满 max_tokens 导致正文为空；对话与 ReAct 走流式并保留思考。
         if "xiaomimimo" in base:
             body["thinking"] = {"type": "disabled"}
         headers["Authorization"] = f"Bearer {api_key}"
@@ -234,9 +233,8 @@ def stream_protocol(
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
-        # 与 call_protocol 一致：mimo 网关显式关闭思考，正文直接流式输出
-        if "xiaomimimo" in base:
-            body["thinking"] = {"type": "disabled"}
+        # 流式必须保留推理链：前端 thought.stream=think 依赖 reasoning_content。
+        # 不传 thinking.disabled；mimo 默认开启思考。JSON 规划仍走 call_protocol。
         headers["Authorization"] = f"Bearer {api_key}"
 
         def delta_of(data: dict) -> tuple[str, str]:
