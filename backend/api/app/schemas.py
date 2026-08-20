@@ -85,6 +85,7 @@ class ProfileCreate(ApiModel):
     api_key: str | None = Field(default=None, max_length=4096)
     anthropic_version: str | None = Field(default=None, max_length=64)
     usages: list[Literal["target", "agent", "judge"]] = Field(default_factory=list)
+    context_window: int = Field(default=200000, ge=1000, le=10000000, description="上下文窗口大小 (Tokens)")
 
 
 class ProfileUpdate(ApiModel):
@@ -97,6 +98,7 @@ class ProfileUpdate(ApiModel):
     api_key: str | None = Field(default=None, max_length=4096)
     anthropic_version: str | None = Field(default=None, max_length=64)
     usages: list[Literal["target", "agent", "judge"]] | None = None
+    context_window: int | None = Field(default=None, ge=1000, le=10000000, description="上下文窗口大小 (Tokens)")
 
 
 class ProfileOut(OrmOut):
@@ -110,6 +112,7 @@ class ProfileOut(OrmOut):
     usages: list[str]
     anthropic_version: str | None = None
     has_api_key: bool = False
+    context_window: int = 200000
     created_at: Any
     updated_at: Any
 

@@ -81,6 +81,18 @@
       </div>
 
       <div class="field">
+        <label class="field-label">上下文窗口大小 (Context Window)</label>
+        <n-radio-group v-model:value="form.context_window" name="context_window_group" size="small">
+          <n-space :size="8">
+            <n-radio-button :value="200000">200k (默认)</n-radio-button>
+            <n-radio-button :value="256000">256k</n-radio-button>
+            <n-radio-button :value="500000">500k</n-radio-button>
+            <n-radio-button :value="1000000">1M</n-radio-button>
+          </n-space>
+        </n-radio-group>
+      </div>
+
+      <div class="field">
         <label class="field-label">用途标签</label>
         <n-checkbox-group v-model:value="form.usages">
           <n-space>
@@ -113,7 +125,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import { useMessage } from 'naive-ui'
+import { useMessage, NRadioGroup, NRadioButton, NSpace, NCheckboxGroup, NCheckbox, NSelect, NInput, NButton, NModal } from 'naive-ui'
 import { api } from '../../api/http'
 import type { Profile, ProtocolType, ProfileUsage } from '../../api/types'
 import FetchModelsModal from './FetchModelsModal.vue'
@@ -151,6 +163,7 @@ const form = ref<{
   api_key: string
   anthropic_version?: string
   usages: ProfileUsage[]
+  context_window: number
 }>({
   name: '',
   protocol: 'openai_chat',
@@ -159,6 +172,7 @@ const form = ref<{
   api_key: '',
   anthropic_version: '2023-06-01',
   usages: ['target'],
+  context_window: 200000,
 })
 
 const protocolOptions = [
@@ -309,6 +323,7 @@ watch(
           api_key: '',
           anthropic_version: props.profile.anthropic_version || '2023-06-01',
           usages: props.profile.usages ? [...props.profile.usages] : ['target'],
+          context_window: props.profile.context_window || 200000,
         }
       } else if (props.initialData) {
         form.value = {
@@ -319,6 +334,7 @@ watch(
           api_key: '',
           anthropic_version: '2023-06-01',
           usages: ['target'],
+          context_window: 200000,
         }
       } else {
         form.value = {
@@ -329,6 +345,7 @@ watch(
           api_key: '',
           anthropic_version: '2023-06-01',
           usages: ['target'],
+          context_window: 200000,
         }
       }
     }
@@ -363,6 +380,7 @@ async function handleSave() {
         model: form.value.model,
         anthropic_version: form.value.anthropic_version,
         usages: form.value.usages,
+        context_window: form.value.context_window,
       }
       if (form.value.api_key.trim()) {
         payload.api_key = form.value.api_key

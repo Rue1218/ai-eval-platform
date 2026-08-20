@@ -26,6 +26,7 @@ def _profile_out(profile: ProtocolProfile) -> ProfileOut:
         usages=profile.usages or [],
         anthropic_version=profile.anthropic_version,
         has_api_key=bool(profile.encrypted_key),
+        context_window=getattr(profile, "context_window", 200000) or 200000,
         created_at=profile.created_at,
         updated_at=profile.updated_at,
     )
@@ -75,6 +76,7 @@ def create_profile(
         usages=body.usages,
         anthropic_version=body.anthropic_version,
         encrypted_key=encrypt_secret(body.api_key) if body.api_key else None,
+        context_window=body.context_window,
         created_by=user.id,
     )
     db.add(profile)
