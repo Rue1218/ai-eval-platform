@@ -3,12 +3,12 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Agent 独立开发说明书 |
-| 版本 | V1.3 |
+| 版本 | V1.4 |
 | 日期 | 2026-08-20 |
-| 最近修订 | 2026-08-20：闲聊不再刷出规划/复核「已思考」卡；问候跳过规划模型与核对；团队共享会话与软删除；任务取消确认与终态竞态 |
-| 用法 | **实现 `/agent` 以本文为准（Harness / 斜杠 / 窗口算法）。** REST/WS JSON 以 API.md V1.5 为准。完成某项后勾选文末 Task，并在「最近修订」追加一行。 |
+| 最近修订 | 2026-08-20：补齐思考快照、确认回执、历史工具资产与 ContextMeter 恢复；闲聊不再刷出规划/复核「已思考」卡；团队共享会话与软删除；任务取消确认与终态竞态 |
+| 用法 | **实现 `/agent` 以本文为准（Harness / 斜杠 / 窗口算法）。** REST/WS JSON 以 API.md V1.6 为准。完成某项后勾选文末 Task，并在「最近修订」追加一行。 |
 
-本文是评测平台 **Agent 子系统** 的完整开发说明书：目标、边界、运行时骨架、协议、模块、代码落点与验收任务都写在这里。与 PRD / API.md 冲突时，字段名与事件名以那两份为准；Harness、斜杠、上下文算法以本文 §16 为准。§4.6 所列增量已收入 **API.md V1.5**。
+本文是评测平台 **Agent 子系统** 的完整开发说明书：目标、边界、运行时骨架、协议、模块、代码落点与验收任务都写在这里。与 PRD / API.md 冲突时，字段名与事件名以那两份为准；Harness、斜杠、上下文算法以本文 §16 为准。§4.6 所列增量已收入 **API.md V1.6**。
 
 ---
 
@@ -19,7 +19,7 @@
 要做成的体验：
 
 1. 接入平台指定的大模型；思考过程可见；回复渲染 Markdown；Mermaid 与数学公式为明确后补渲染层。思考强度无滑杆，由 Harness 内部档位决定。  
-2. 会话可刷新、可断线续上；思考、工具、技能徽标、MCP 工具卡、确认卡都能回放；V1.5 增加持久化 `message` 事件用于协作者实时用户气泡。
+2. 会话可刷新、可断线续上；思考、工具、技能徽标、MCP 工具卡、确认卡都能回放；V1.6 增加思考快照、确认回执、压缩摘要与持久化 `message` 事件。
 3. 只能调内部短工具；四种评测技能内置。Subagent / 通用工作流不做产品，但预留调用边界。  
 4. 每个会话有上下文窗口、可压缩（`/compact`）；界面实时拆开 **消息 / 技能 / 摘要 / 余量**；本产品无记忆文件段。  
 5. 默认 **先规划、中间 ReAct、交付前 Reflection**（Harness：调用次数、失败回退、阶段提示均有规定）。  
@@ -88,17 +88,18 @@ Worker 容器  长任务（评测、用例、RAG、下发压测）
 4. 前端**先** `POST /api/sessions` 再带 `session_id` 连接。无 `session_id` 时服务端可建空会话（兼容），`/new` 与会话列表仍以 REST 为准。  
 5. 关闭码冻结：短票非法/过期 `4401`；会话不存在、已软删除或当前成员无权访问 `4404`；正常断开 `1000`。收到 `4404` 后前端停止重连旧会话并回到列表。
 
-**服务端 → 前端（事件名冻结；V1.5 允许 `message`）**
+**服务端 → 前端（事件名冻结；V1.6 允许 `message`、`confirm_ack` 与 `think_final` 快照）**
 
 公共头：`event` `session_id` `task_id?` `event_id` `ts` `payload`。
 
 | event | payload | 界面 |
 | :--- | :--- | :--- |
-| `thought` | `{ text, latency_ms?, stage?, skill_id? }` | 思考卡；`stage`/`skill_id` 可选，用于阶段提示与技能徽标 |
+| `thought` | `{ text, latency_ms?, stage?, skill_id? }`；流式 `chunk`/`think` 为瞬态，成功结束补 `stream=think_final` 快照 | 思考卡；阶段/技能和完整推理快照可历史回放 |
 | `message` | `{ id, role:"user", content, attachments, author_id, author, client_message_id?, created_at }` | 用户气泡；落库并占 event_id，协作者按 id/幂等键去重 |
 | `tool_call` | `{ name, arguments }` | 工具卡 pending |
 | `tool_result` | `{ name, ok, data\|error, latency_ms? }` | 工具卡完成 |
 | `confirm` | 确认卡 JSON（§4.2）+ `confirm_author` 元数据 | 确认卡，只有发起人可 ack |
+| `confirm_ack` | `{ ok, task_id? }` | 确认/取消结果；落库并供协作者回放 |
 | `progress` | `{ percent?, done, total, message }` | 进度坞，仅这四字段 |
 | `report` | `{ report_id }` | 报告卡 |
 | `error` | `{ code, message }` | 错误条 + Toast |
@@ -106,7 +107,7 @@ Worker 容器  长任务（评测、用例、RAG、下发压测）
 
 禁止发明 `thinking` `token` `plan` `reflect` `assistant` 等事件。规划句、复核句都放进 `thought.text`（可用「规划」「复核」作正文前缀）。
 
-共享会话中，`thought.stream="chunk"` 只向同会话在线成员广播，`think` 原始推理流只给本轮发起连接；两者均不落库、不占 event_id，断线依赖最终交付句恢复。当前是单 API 副本的进程内 Hub，扩为多副本必须换成 Redis Pub/Sub 等进程外广播。
+共享会话中，`thought.stream="chunk"` 只向同会话在线成员广播，`think` 原始推理流只给本轮发起连接；两类增量均不落库、不占 event_id，成功结束的 `think_final` 快照落库，断线可恢复完整思考卡。当前是单 API 副本的进程内 Hub，扩为多副本必须换成 Redis Pub/Sub 等进程外广播。
 
 **前端 → 服务端（仅三条）**
 
@@ -161,7 +162,7 @@ Worker 专用（Agent 进程禁止跑完）：`benchmark.run` `rag.evaluate` `te
 - `GET/POST /api/sessions`：新会话默认 `private`；`team` 表示当前内部团队的正常成员均可读写；
 - `PUT /api/sessions/{id}/sharing`：仅 owner，在 `private` / `team` 间切换；收回共享时立即关闭协作者 WS；
 - `DELETE /api/sessions/{id}`：仅 owner，软删除；存在生成、待确认卡或非终态任务时返回 `VALIDATION`；
-- `GET /api/sessions/{id}/messages` 返回 `messages`、`events`，以及增量字段 `pending_confirm`、`pending_confirm_author_id`、`context_meter`（§4.6）。
+- `GET /api/sessions/{id}/messages` 返回 `messages`、`events`，以及增量字段 `pending_confirm`、`pending_confirm_author_id`、`compact_summary`、`context_meter`（§4.6）。
 
 `messages`：用户原文及其 `author_id` / `client_message_id`，以及 **交付句**（见下）。`ws_events`：用户 `message`、思考、工具、确认、进度、报告（规划/复核 thought 也在这里）。会话 owner 不因协作者发言改变。
 
@@ -177,9 +178,9 @@ Worker 专用（Agent 进程禁止跑完）：`benchmark.run` `rag.evaluate` `te
 
 同一句交付文本：先 `_emit thought`，再 `INSERT messages`，正文相同。刷新：对话气泡来自 `messages`，思考/工具/确认卡来自 `events`。禁止把规划+复核+已入队三条都当 assistant 消息（否则约 5 个下单回合就满 20）。
 
-### 4.6 相对 API.md 的增量（**已回写 API.md V1.5**）
+### 4.6 相对 API.md 的增量（**已回写 API.md V1.6**）
 
-下列内容以 **API.md V1.5** 为接口真理；本文保留摘要便于实现 Harness。禁止另搞第二套路径。
+下列内容以 **API.md V1.6** 为接口真理；本文保留摘要便于实现 Harness。禁止另搞第二套路径。
 
 | 增量 | 形状 |
 | :--- | :--- |
@@ -194,8 +195,9 @@ Worker 专用（Agent 进程禁止跑完）：`benchmark.run` `rag.evaluate` `te
 | 列 `sessions.visibility` / `deleted_at` | 默认私有、可团队共享、软删除不物理清历史 |
 | 列 `messages.author_id` / `client_message_id` | 用户发言人、浏览器幂等与协作者实时去重 |
 | `GET .../messages` 增补 | `author`、`pending_confirm_author_id`、`context_meter` |
+| `GET .../messages` 历史恢复 | `compact_summary`；events 中的 `think_final`、`confirm_ack` 与 tool/skill 事件均可回放 |
 
-`context_meter`：`{ "messages", "skills", "summary", "headroom", "window": 20 }`。刷新必须用服务端数字，禁止前端按 messages 表总条数自己减。
+`context_meter`：`{ "messages", "skills", "summary", "headroom", "window": 20, "mcp_tools_count", "mcp_tools_max" }`，并可带 token 级扩展字段。`skills` 与 MCP 计数从持久化事件恢复；刷新必须用服务端数字，禁止前端按 messages 表总条数自己减。
 
 ---
 
@@ -551,7 +553,7 @@ ChatHead 右侧（或输入框上方）常驻，压缩或新消息后立刻更�
 | `backend/api/app/routers/cases.py` | 用例 AI 生成/补全 |
 | `frontend/src/views/Datasets.vue` `Cases.vue` `Tasks.vue` `AdminStress.vue` | 各页 AI 入口，遵守 §10.1 |
 
-压缩摘要：`sessions.compact_summary`。窗口游标：`sessions.compact_keep_from`。待确认卡：`sessions.pending_confirm` + `pending_confirm_author_id`。共享范围：`sessions.visibility` + `deleted_at`。偏好：`GET /api/agent/prefs`（ack 时服务端写）。自定义斜杠：仅 `/api/slash-commands`。凡改表结构用 Alembic。上述 REST/列已收入 **API.md V1.5**。
+压缩摘要：`sessions.compact_summary`。窗口游标：`sessions.compact_keep_from`。待确认卡：`sessions.pending_confirm` + `pending_confirm_author_id`。共享范围：`sessions.visibility` + `deleted_at`。偏好：`GET /api/agent/prefs`（ack 时服务端写）。自定义斜杠：仅 `/api/slash-commands`。凡改表结构用 Alembic。上述 REST/列已收入 **API.md V1.6**。
 
 当前已知缺口（开工时对着改）：`ws.py` 仍一次 JSON 规划且同步阻塞收包循环、上下文只取 8 条、**交付句助手消息常不落库**、工具卡仍有旧英文名、`llm.py` 已返回耗时但 thought/tool_result **尚未带 `latency_ms`**、live 页仍有模拟按钮、无 ContextMeter 四段、无技能徽标、无 `/compact`、待确认卡仍是进程内 `_PENDING_CARDS`。
 
@@ -682,7 +684,7 @@ ChatHead 右侧（或输入框上方）常驻，压缩或新消息后立刻更�
 - [ ] 改了表结构就有迁移  
 - [ ] 对应 Task 已勾选，文首修订已更新  
 - [ ] 实现与 §16 冻结 JSON / 接口 / 公式一致  
-- [ ] §4.6 增量与 API.md V1.5 一致（路径、payload、错误码）
+- [ ] §4.6 增量与 API.md V1.6 一致（路径、payload、错误码）
 
 ---
 
@@ -1006,7 +1008,7 @@ rows = 该会话 messages 中 role∈{user, assistant}，按 (created_at, id) �
 
 M = len(rows)                        # 0…20
 R = WINDOW - M                       # 余量，0…20
-S = 1 若本轮进行中的 PlanArtifact.skill_id 非空，否则 0（刷新无进行中规划则为 0）
+S = 1 若本会话持久化 thought 事件曾记录 skill_id，否则 0（刷新后仍可恢复）
 C = 1 若 compact_summary 非空，否则 0
 
 展示：上下文  消息 {M}  · 技能 {S}  · 摘要 {C}  · 余量 {R}  / {WINDOW}
@@ -1041,7 +1043,8 @@ GET /api/sessions/{id}/messages
   "messages": [...],
   "events": [...],
   "pending_confirm": {} | null,
-  "context_meter": { "messages": M, "skills": 0, "summary": C, "headroom": R, "window": 20 }
+  "compact_summary": null,
+  "context_meter": { "messages": M, "skills": S, "summary": C, "headroom": R, "window": 20, "mcp_tools_count": 0, "mcp_tools_max": 28 }
 }
 ```
 
@@ -1309,5 +1312,15 @@ M3 接 LightRAG：把 `LIGHTRAG_ENABLED` 改为 True，在 `query_lightrag` 请�
 | `frontend/src/views/Agent.vue` | 交付终帧不渲染思考卡；推理链与交付句分离 |
 | `frontend/src/components/agent/ThoughtCard.vue` | 卡头按 `stage` 显示规划/复核/思考 |
 | `backend/api/tests/test_harness.py` | 闲聊与 /help 跳过阶段思考卡 |
+
+## 24. 修改代码文件与作用清单（2026-08-20 会话上下文持久化）
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/agent/harness.py` | 完成本轮后保存 `think_final` 思考快照；确认/取消确认卡写入 `confirm_ack` |
+| `backend/api/app/agent/context.py` | 从 `ws_events` 恢复 skill 与短 MCP 工具计数 |
+| `backend/api/app/routers/sessions.py` | 历史接口补回 `compact_summary` |
+| `frontend/src/views/Agent.vue` | 历史/实时回放思考快照、确认回执和工具资产 |
+| `frontend/src/api/types.ts` | 补齐新增 WS 事件与 ContextMeter 扩展字段 |
 
   

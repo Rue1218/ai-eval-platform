@@ -164,6 +164,9 @@ def get_session_messages(
         "pending_confirm": session.pending_confirm,
         "pending_confirm_author_id": session.pending_confirm_author_id,
         "pending_confirm_author": author_map.get(session.pending_confirm_author_id),
+        # 压缩摘要是模型窗口的一部分，历史接口必须与 context_meter 一起返回，
+        # 否则刷新后前端只能看到裁剪后的消息，无法恢复完整上下文状态。
+        "compact_summary": session.compact_summary,
         "context_meter": meter.as_dict(),
     }
 

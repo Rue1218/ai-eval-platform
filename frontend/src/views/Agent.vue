@@ -1415,6 +1415,15 @@ function normalizeConfirmCard(card: any) {
   return card
 }
 
+/** 将历史短工具结果恢复到当前会话的确认卡选项，保证刷新前后 MCP 上下文一致。 */
+function hydrateToolResult(name: unknown, data: any) {
+  if (!data || typeof data !== 'object') return
+  const items = Array.isArray(data.items) ? data.items : []
+  if (name === 'model.list') availableProfiles.value = items
+  if (name === 'dataset.list') availableDatasets.value = items
+  if (name === 'kb.list') availableKbs.value = items
+}
+
 /** D5 会话列表状态点多态：按 status / active_task / 本轮生成中 映射 nav-dot 样式。 */
 function sessionDotClass(s: any): string | null {
   if (generatingBySession.value[s.id] || (s.id === currentSessionId.value && isGenerating.value)) return 'running'
@@ -1924,7 +1933,8 @@ function handleConfirmAck(item: StreamItem, confirmed: boolean) {
     }
     stampConfirmCard(item, false)
     agentWs!.sendConfirmAck(false, item.card)
-    events.value.push({ type: 'agent', text: '<p>已取消，未创建任务。需要调整目标可以继续说。</p>' })
+    // 取消结果与交付句由服务端 confirm_ack + thought 事件回放，
+    // 不在这里再插入一条乐观助手气泡，避免实时链路出现重复文本。
     scrollToBottom()
     return
   }
@@ -2318,7 +2328,22 @@ async function loadSessionHistory(sid: string): Promise<number> {
       const t = ev.ts ? new Date(ev.ts).getTime() : 0
       const eid = Number(ev.event_id) || 0
 
-      if (ev.event === 'thought' && !p.stream) {
+      if (ev.event === 'thought' && p.stream === 'think_final') {
+        // 推理增量不逐 token 落库；服务端在本轮成功结束时保存一帧完整快照。
+        rawList.push({
+          time: t,
+          priority: 2,
+          eventId: eid,
+          item: {
+            type: 'thought',
+            text: p.text || '',
+            done: true,
+            collapsed: true,
+            streamThink: true,
+            noAnim: true,
+          },
+        })
+      } else if (ev.event === 'thought' && !p.stream) {
         // 交付终帧判定：无 stage / skill_id / latency 的 thought 落库事件即助手交付句，
         // 其正文已随 messages.role=assistant 回放成气泡；若再渲染成思考卡会造成
         // 「已思考 N 字」重复卡（原条件 p.stage !== null 对 undefined 恒真，属逻辑缺陷）。
@@ -2354,6 +2379,17 @@ async function loadSessionHistory(sid: string): Promise<number> {
           target.item.status = p.ok ? 'ok' : 'fail'
           target.item.latency_ms = p.latency_ms
         }
+        // 历史回放也要恢复确认卡的 MCP 选项，否则刷新后下拉框会变空。
+        if (p.ok) hydrateToolResult(p.name, p.data)
+        // 旧版本没有 confirm_ack；task.create 成功可作为兼容性的确认结果。
+        if (p.ok && p.name === 'task.create') {
+          const confirm = [...rawList].reverse().find((x) => x.item.type === 'confirm')
+          if (confirm) {
+            confirm.item.isAcked = true
+            confirm.item.ackResult = true
+            confirm.item.open = false
+          }
+        }
       } else if (ev.event === 'confirm') {
         rawList.push({
           time: t,
@@ -2363,12 +2399,21 @@ async function loadSessionHistory(sid: string): Promise<number> {
             type: 'confirm',
             card: normalizeConfirmCard(p),
             confirmAuthor: p.confirm_author || null,
+            // 兼容没有 confirm_ack 的旧事件：没有 pending_confirm 时按历史已处理卡展示；
+            // 当前仍待确认的卡会在下方由 pending_confirm 覆盖为未 ack。
             isAcked: true,
             summary: '',
             open: false,
             noAnim: true,
           },
         })
+      } else if (ev.event === 'confirm_ack') {
+        const confirm = [...rawList].reverse().find((x) => x.item.type === 'confirm')
+        if (confirm) {
+          confirm.item.isAcked = true
+          confirm.item.ackResult = Boolean(p.ok)
+          confirm.item.open = false
+        }
       } else if (ev.event === 'error') {
         rawList.push({
           time: t,
@@ -2688,6 +2733,21 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
       break
     }
     case 'thought': {
+      if (p.stream === 'think_final') {
+        const fullText = String(p.text || '')
+        if (!fullText) break
+        const target = [...buf].reverse().find(e => e.type === 'thought' && !e.done)
+        if (target) {
+          target.text = fullText
+          target.fullText = fullText
+          target.done = true
+          target.collapsed = true
+          target.streamThink = true
+        } else {
+          buf.push({ type: 'thought', text: fullText, fullText, done: true, collapsed: true, streamThink: true })
+        }
+        break
+      }
       if (p.stream === 'think') {
         const delta = String(p.text || '')
         if (!delta) break
@@ -2767,6 +2827,13 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
         target.status = p.ok ? 'ok' : 'fail'
         if (p.latency_ms !== undefined) target.latency_ms = p.latency_ms
       }
+      if (p.ok) hydrateToolResult(p.name, p.data)
+      if (p.ok && p.name === 'task.create') {
+        const confirm = [...buf].reverse().find(x => x.type === 'confirm')
+        if (confirm) {
+          stampConfirmCard(confirm, true)
+        }
+      }
       break
     }
     case 'confirm':
@@ -2781,6 +2848,14 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
         open: true,
       })
       break
+    case 'confirm_ack': {
+      const confirm = [...buf].reverse().find(x => x.type === 'confirm')
+      if (confirm) {
+        stampConfirmCard(confirm, Boolean(p.ok))
+        if (!p.ok) confirm.summary = ''
+      }
+      break
+    }
     case 'error':
       markGenerating(sid, false)
       buf.push({ type: 'error', code: p.code, message: p.message || '执行遇到错误' })
@@ -2872,6 +2947,29 @@ function handleWsEvent(ev: WsServerEvent) {
       break
     }
     case 'thought': {
+      if (p.stream === 'think_final') {
+        const fullText = String(p.text || '')
+        if (!fullText) break
+        const target = [...events.value].reverse().find(e => e.type === 'thought' && !e.done)
+        if (target) {
+          target.text = fullText
+          target.fullText = fullText
+          target.done = true
+          target.collapsed = true
+          target.streamThink = true
+        } else {
+          events.value.push(reactive({
+            type: 'thought',
+            text: fullText,
+            fullText,
+            done: true,
+            collapsed: true,
+            streamThink: true,
+          }))
+        }
+        scrollToBottom()
+        break
+      }
       // 思考链增量帧（瞬态）：追加到可展开/收起的思考卡，无则新建
       if (p.stream === 'think') {
         const delta = String(p.text || '')
@@ -2995,9 +3093,7 @@ function handleWsEvent(ev: WsServerEvent) {
       }
       // 把短工具发现结果回填到确认卡可选项
       if (p.ok) {
-        if (p.name === 'model.list') availableProfiles.value = p.data?.items || []
-        if (p.name === 'dataset.list') availableDatasets.value = p.data?.items || []
-        if (p.name === 'kb.list') availableKbs.value = p.data?.items || []
+        hydrateToolResult(p.name, p.data)
         if (p.name === 'task.cancel' && p.data?.task_id) {
           finishCancelledTask(p.data.task_id)
           message.success('任务已取消（cancelled）')
@@ -3008,6 +3104,15 @@ function handleWsEvent(ev: WsServerEvent) {
         }
       }
       scrollToBottom()
+      break
+    }
+    case 'confirm_ack': {
+      const target = [...events.value].reverse().find(e => e.type === 'confirm')
+      if (target) {
+        stampConfirmCard(target, Boolean(p.ok))
+        if (!p.ok) target.summary = ''
+      }
+      pendingAckItem.value = null
       break
     }
     case 'confirm': {

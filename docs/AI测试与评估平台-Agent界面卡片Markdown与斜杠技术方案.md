@@ -3,10 +3,11 @@
 | 属性 | 内容 |
 | :--- | :--- |
 | **文档名称** | Agent 界面卡片、Markdown 与斜杠技术方案 |
-| **文档版本** | V1.0 (全量详细设计与实现规范) |
-| **基线参考** | 《AGENTS.md》最高规范、《Agent开发文档》§7 / §9 / §11 / §16、API.md V1.4、PRD 5.1 |
+| **文档版本** | V1.1 (全量详细设计与实现规范) |
+| **基线参考** | 《AGENTS.md》最高规范、《Agent开发文档》§7 / §9 / §11 / §16、API.md V1.6、PRD 5.1 |
 | **责任模块** | 前端 `frontend/src/views/Agent.vue` + `frontend/src/components/agent/*` + `frontend/src/agent/*` |
 | **审查日期** | 2026-08-20 |
+| **最近修订** | 补齐思考快照、工具/技能/确认卡历史回放与 ContextMeter 恢复 |
 
 ---
 
@@ -105,6 +106,22 @@
      │◄─ 14. event: report { report_id: 'uuid' } ──────────│◄─────────────────────────────│
      │   (前端渲染 ReportCard，进度坞隐藏)                 │                              │
 ```
+
+### 2.3 会话持久化与历史回放契约
+
+卡片的实时渲染与会话保存分层处理，不能把“当前连接看到了”当成“会话已经保存”：
+
+| 信息 | 保存位置 | 刷新/断线恢复规则 |
+| :--- | :--- | :--- |
+| 用户气泡、助手交付句 | `messages` | 按消息时间回放；助手交付句不再重复渲染成思考卡 |
+| 阶段思考、技能徽标 | `ws_events.thought`（含 `stage` / `skill_id`） | 事件回放后恢复 ThoughtCard 与 SkillBadge |
+| 模型推理链 | `thought.stream=think` 为瞬态；成功结束写 `thought.stream=think_final` | 不逐 token 写库；完整 `think_final` 快照可回放 |
+| MCP 短工具 | 成对的 `tool_call` / `tool_result` 事件 | 按工具名配对恢复 ToolCard，并用历史结果重新填充确认卡选项 |
+| 确认卡及回执 | `confirm` 事件 + `sessions.pending_confirm`；`confirm_ack` 事件 | 当前未处理卡由 pending 字段覆盖为可编辑；确认/取消状态从回执回放 |
+| 压缩上下文 | `sessions.compact_summary` + `compact_keep_from` | 历史接口返回摘要与服务端 ContextMeter，前端不得自行计算 |
+
+`thought.stream=chunk` 仍只负责在线正文增量，不落库；完整助手正文以 `messages.role=assistant`
+保存。所有持久化事件统一进入 `ws_events`，因此团队协作者可通过 forward loop 补发，刷新也不会丢卡片。
 
 ---
 
@@ -381,6 +398,10 @@ $$\text{记忆文件  未启用}$$
 | 8 | `frontend/src/components/agent/Composer.vue` | **修改** | 接入 SlashPalette 面板、IME 输入法防抖、只读模型名展示。 |
 | 9 | `frontend/src/views/Agent.vue` | **修改** | 移除模型下拉切换菜单与 live 模拟按钮，集成 ContextMeter 与统一卡片组件。 |
 | 10 | `docs/AI测试与评估平台-Agent开发文档.md` | **修改** | 同步勾选 Task 清单（AGT-UI-01/02/05/08, AGT-SLH-01, AGT-CTX-02）并更新修订记录。 |
+| 11 | `backend/api/app/agent/harness.py` | **修改** | 保存 `think_final` 思考快照并记录 `confirm_ack` 回执事件。 |
+| 12 | `backend/api/app/agent/context.py` | **修改** | 从持久化事件恢复技能与 MCP 工具计数。 |
+| 13 | `backend/api/app/routers/sessions.py` | **修改** | 历史接口返回 `compact_summary`。 |
+| 14 | `frontend/src/views/Agent.vue` | **修改** | 回放思考快照、确认回执与历史工具资产。 |
 
 ---
 

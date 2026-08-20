@@ -174,6 +174,35 @@ def test_confirm_ack_rejects_collaborator_and_preserves_card():
     ]
 
 
+def test_confirm_ack_cancel_is_persisted_in_session_timeline():
+    """确认卡取消必须写回执事件，历史回放才能区分已取消和待确认。"""
+    session = _session()
+    session.pending_confirm = {"kind": "benchmark"}
+    session.pending_confirm_author_id = "u-owner"
+    db = _Db({AgentSession: session})
+    events: list[tuple[str, dict]] = []
+
+    async def emit(event: str, payload: dict, **_kwargs: object) -> int:
+        events.append((event, payload))
+        return len(events)
+
+    asyncio.run(
+        handle_confirm_ack(
+            db,
+            session=session,
+            user=User(id="u-owner", username="owner"),
+            ok=False,
+            patch=None,
+            emit=emit,
+        )
+    )
+
+    assert session.pending_confirm is None
+    assert ("confirm_ack", {"ok": False}) in events
+    assert any(event == "thought" for event, _payload in events)
+    assert db.commit_calls == 2
+
+
 def test_delete_session_soft_deletes_without_removing_audit_assets():
     """空闲 owner 会话删除只写 deleted_at 和审计，不删除关联业务资产。"""
     session = _session()

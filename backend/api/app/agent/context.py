@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from sqlalchemy.orm import Session
 
 from ..errors import AppError, ErrorCode
-from ..models import Message
+from ..models import Message, WsEvent
 from ..models import Session as AgentSession
 from .defaults import COMPACT_INPUT_MAX, KEEP_RECENT, SUMMARY_MAX_CHARS, WINDOW
 from .log import agent_trace
@@ -84,12 +84,40 @@ def window_rows(db: Session, session: AgentSession) -> list[Message]:
     return rows
 
 
+def _persisted_capability_stats(db: Session, session_id: str) -> tuple[bool, int]:
+    """从已落库事件恢复技能与短 MCP 工具占用，避免刷新后仪表归零。
+
+    思考增量不会写入事件表，但阶段思考、技能标识和 tool_call/tool_result
+    都是可回放事件；这里仅统计唯一工具名，避免同一轮重复调用把数量夸大。
+    旧数据库或测试桩没有事件查询能力时安全回退为零。
+    """
+    try:
+        events = (
+            db.query(WsEvent)
+            .filter(WsEvent.session_id == session_id)
+            .order_by(WsEvent.event_id.asc())
+            .all()
+        )
+    except Exception:
+        return False, 0
+    skill_seen = False
+    tool_names: set[str] = set()
+    for row in events:
+        payload = row.payload if isinstance(row.payload, dict) else {}
+        if payload.get("skill_id"):
+            skill_seen = True
+        if row.event == "tool_call" and payload.get("name"):
+            tool_names.add(str(payload["name"]))
+    return skill_seen, min(len(tool_names), 28)
+
+
 def context_meter(db: Session, session: AgentSession, *, skill_id: str | None = None) -> ContextMeter:
     """刷新用的四段计数与 Token 级容量度量。"""
     rows = window_rows(db, session)
     m_count = len(rows)
     summary_flag = 1 if getattr(session, "compact_summary", None) else 0
-    skill_flag = 1 if skill_id else 0
+    persisted_skill, mcp_tools_count = _persisted_capability_stats(db, session.id)
+    skill_flag = 1 if skill_id or persisted_skill else 0
 
     # 1. 尝试从 Profile 读取上下文窗口上限（默认 200,000）
     max_tokens = 200000
@@ -130,7 +158,7 @@ def context_meter(db: Session, session: AgentSession, *, skill_id: str | None = 
         messages_percent=msg_pct,
         skills_percent=sk_pct,
         free_percent=free_pct,
-        mcp_tools_count=0,
+        mcp_tools_count=mcp_tools_count,
         mcp_tools_max=28,
         memory_files_count=0,
         memory_files_max=1,
