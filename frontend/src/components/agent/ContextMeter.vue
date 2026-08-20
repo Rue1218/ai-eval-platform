@@ -1,6 +1,6 @@
 <template>
   <!-- 双圆环上下文容量指示器与两层折叠 Popover 视图（纯圆环触发器，上弹卡片） -->
-  <n-popover trigger="click" placement="top-start" :width="310" raw :show-arrow="false">
+  <n-popover trigger="click" placement="top-start" :width="340" raw :show-arrow="false">
     <template #trigger>
       <button
         class="context-ring-btn"
@@ -26,11 +26,11 @@
 
     <!-- 弹窗容器 -->
     <div class="context-popover-card">
-      <!-- 头部：上下文窗口 + 已用量 + 折叠箭头（点击可展开/折叠） -->
+      <!-- 头部：上下文窗口 + 已用量 / 上限 + （当前上下文） + 折叠箭头（点击可展开/折叠） -->
       <div class="popover-header" @click="isExpanded = !isExpanded">
         <span class="header-title">上下文窗口</span>
         <div class="header-right">
-          <span class="header-tokens mono">{{ formattedTotalTokens }}</span>
+          <span class="header-tokens mono">{{ formattedTotalTokens }} / {{ formattedMaxTokens }}</span>
           <span class="header-sub">（当前上下文）</span>
           <svg
             class="chevron-icon"
@@ -87,7 +87,7 @@
           <!-- 3. Free space 剩余可用空间 -->
           <div class="detail-row">
             <div class="row-left">
-              <span class="color-box empty"></span>
+              <span class="color-box box-empty"></span>
               <span class="row-name">Free space</span>
             </div>
             <div class="row-right mono">
@@ -263,15 +263,17 @@ const activeColor = computed(() => {
   return '#D03B3B'
 })
 
-// 格式化 Token 数字显示
+// 格式化 Token 数字显示（支持规范的 XXX.X k / XXX.X M 格式）
 function formatTokens(val: number): string {
   if (val >= 1000000) {
-    return `${(val / 1000000).toFixed(1)}M`
+    const m = val / 1000000
+    return m % 1 === 0 ? `${m.toFixed(0)}M` : `${m.toFixed(1)}M`
   }
-  if (val >= 1000) {
-    return `${(val / 1000).toFixed(1)}k`
+  const k = val / 1000
+  if (k < 10) {
+    return `${k.toFixed(1)}k`
   }
-  return String(val)
+  return k % 1 === 0 ? `${k.toFixed(0)}k` : `${k.toFixed(1)}k`
 }
 
 const formattedTotalTokens = computed(() => formatTokens(totalTokens.value))
@@ -448,15 +450,21 @@ const formattedFreeTokens = computed(() => formatTokens(freeTokens.value))
 .color-box {
   width: 8px;
   height: 8px;
+  min-width: 8px;
+  min-height: 8px;
   border-radius: 2px;
   flex-shrink: 0;
+  display: inline-block;
+  box-sizing: border-box;
+  padding: 0 !important;
+  margin: 0 !important;
 }
 
-.color-box.empty {
+.color-box.box-empty {
   background: #e2e8f0;
 }
 
-[data-theme='dark'] .color-box.empty {
+[data-theme='dark'] .color-box.box-empty {
   background: rgba(255, 255, 255, 0.2);
 }
 
