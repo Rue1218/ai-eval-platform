@@ -124,6 +124,11 @@ jobs:
         shell: bash
         run: echo "IMAGE_PREFIX=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
 
+      - name: Set real build time
+        # 用真实构建时刻而非 head commit 时间戳（后者比实际构建早数分钟，
+        # 且 workflow_dispatch 触发时为空），前端版本面板显示为"构建时间"
+        run: echo "BUILD_TIME_REAL=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -145,7 +150,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
           build-args: |
             BUILD_VERSION=${{ github.sha }}
-            BUILD_TIME=${{ github.event.head_commit.timestamp }}
+            BUILD_TIME=${{ env.BUILD_TIME_REAL }}
 
   deploy:
     needs: [plan, build]
