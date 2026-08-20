@@ -35,7 +35,14 @@ function escapeHtml(str: string): string {
 function renderMarkdown(raw: string): string {
   if (!raw) return ''
 
-  let text = raw
+  let text = raw.trim()
+
+  // 0. 清理可能由历史数据或后端预包裹的 <p> / </p> 标签，防止转义后输出字面标签
+  text = text
+    .replace(/^<p>/i, '')
+    .replace(/<\/p>$/i, '')
+    .replace(/<p\b[^>]*>/gi, '\n\n')
+    .replace(/<\/p>/gi, '')
 
   // 使用私有区字符保存占位符，避免后续 HTML 转义破坏围栏代码和公式的回填标记。
   const codeMarker = (idx: number) => `\uE000CODE_BLOCK_${idx}\uE001`
@@ -189,14 +196,16 @@ function handleContainerClick(e: MouseEvent) {
 
 <style scoped>
 .markdown-view {
-  font-size: 13.5px;
-  line-height: 1.7;
-  color: var(--text-primary, #e2e8f0);
+  font-size: 15px;
+  line-height: 1.8;
+  color: var(--text-primary, #f1f5f9);
   word-break: break-word;
 }
 
 :deep(.md-p) {
-  margin: 0 0 10px;
+  margin: 0 0 12px;
+  font-size: 15px;
+  line-height: 1.8;
 }
 :deep(.md-p:last-child) {
   margin-bottom: 0;
@@ -207,34 +216,34 @@ function handleContainerClick(e: MouseEvent) {
 :deep(.md-h3),
 :deep(.md-h4) {
   font-weight: 700;
-  margin: 14px 0 8px;
-  line-height: 1.35;
+  margin: 16px 0 10px;
+  line-height: 1.4;
   color: var(--text-primary, #ffffff);
 }
-:deep(.md-h1) { font-size: 17px; }
-:deep(.md-h2) { font-size: 15.5px; }
-:deep(.md-h3) { font-size: 14.5px; }
-:deep(.md-h4) { font-size: 13.5px; }
+:deep(.md-h1) { font-size: 19px; }
+:deep(.md-h2) { font-size: 17.5px; }
+:deep(.md-h3) { font-size: 16px; }
+:deep(.md-h4) { font-size: 15px; }
 
 :deep(.md-hr) {
   border: 0;
   border-top: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
-  margin: 14px 0;
+  margin: 16px 0;
 }
 
 :deep(.md-quote) {
-  margin: 8px 0;
-  padding: 6px 12px;
+  margin: 10px 0;
+  padding: 8px 14px;
   border-left: 3px solid var(--accent-ai, #10b981);
   background: var(--bg-elevated, rgba(255, 255, 255, 0.04));
   border-radius: 0 6px 6px 0;
   color: var(--text-secondary, #94a3b8);
-  font-size: 13px;
+  font-size: 14px;
 }
 
 :deep(.md-inline-code) {
   font-family: var(--font-mono, monospace);
-  font-size: 12px;
+  font-size: 13px;
   background: var(--bg-elevated, rgba(255, 255, 255, 0.08));
   color: var(--accent-ai, #10b981);
   padding: 2px 6px;
@@ -253,21 +262,25 @@ function handleContainerClick(e: MouseEvent) {
 }
 
 :deep(.md-ul) {
-  margin: 6px 0 10px 18px;
+  margin: 8px 0 12px 20px;
   padding: 0;
 }
 :deep(.md-li-bullet) {
   list-style-type: disc;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
+  font-size: 15px;
+  line-height: 1.8;
 }
 :deep(.md-li-num) {
   list-style-type: decimal;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
+  font-size: 15px;
+  line-height: 1.8;
 }
 
 /* 围栏代码块卡片 */
 :deep(.md-code-card) {
-  margin: 10px 0;
+  margin: 12px 0;
   border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.1));
   border-radius: 8px;
   overflow: hidden;
@@ -283,7 +296,7 @@ function handleContainerClick(e: MouseEvent) {
 }
 :deep(.md-code-lang) {
   font-family: var(--font-mono, monospace);
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-tertiary, #64748b);
   text-transform: lowercase;
 }
@@ -293,7 +306,7 @@ function handleContainerClick(e: MouseEvent) {
   color: var(--text-secondary, #94a3b8);
   border-radius: 4px;
   padding: 2px 8px;
-  font-size: 11px;
+  font-size: 11.5px;
   cursor: pointer;
   transition: all 0.15s ease;
 }
@@ -308,7 +321,7 @@ function handleContainerClick(e: MouseEvent) {
 :deep(.md-code-body) {
   margin: 0;
   padding: 10px 12px;
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.6;
   color: #e2e8f0;
   overflow-x: auto;
@@ -316,19 +329,19 @@ function handleContainerClick(e: MouseEvent) {
 
 /* 数学公式与 Mermaid 降级样式 */
 :deep(.md-math-block) {
-  padding: 8px 12px;
-  margin: 8px 0;
+  padding: 10px 14px;
+  margin: 10px 0;
   text-align: center;
   background: var(--bg-elevated, rgba(255, 255, 255, 0.03));
   border-radius: 6px;
   color: #cbd5e1;
-  font-size: 13px;
+  font-size: 14px;
 }
 :deep(.md-inline-math) {
-  padding: 1px 4px;
+  padding: 1px 5px;
   background: var(--bg-elevated, rgba(255, 255, 255, 0.04));
   border-radius: 3px;
   color: #cbd5e1;
-  font-size: 12.5px;
+  font-size: 13.5px;
 }
 </style>

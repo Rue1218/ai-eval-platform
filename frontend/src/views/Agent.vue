@@ -54,10 +54,19 @@
           </svg>
         </button>
         <span class="chat-head-title">{{ currentSession?.title || '新会话' }}</span>
-        <span class="chat-head-model-badge mono" title="当前 Agent 驱动模型（只读）">
-          <span class="head-model-dot"></span>
-          <span>Agent · {{ agentModelName || '未配置模型' }}</span>
-        </span>
+        <n-dropdown
+          trigger="click"
+          :options="agentProfileDropdownOptions"
+          @select="handleSelectAgentModel"
+        >
+          <button class="chat-head-model-btn" type="button" title="点击切换当前 Agent 驱动模型">
+            <span class="head-model-dot"></span>
+            <span class="mono">Agent · {{ agentModelName || '未配置模型' }}</span>
+            <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M3 4.5l3 3 3-3" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
+        </n-dropdown>
         <span v-if="isGenerating" class="gen-pill">
           <i class="bdot"></i>
           <span>{{ harnessStageLabel }}</span>
@@ -643,11 +652,24 @@
                 @change="handleFileUpload"
               />
 
-              <!-- 只读模型展示标签（开发说明书 §6 / §7 严格只读） -->
-              <span class="composer-model-badge mono" title="当前 Agent 驱动模型（只读）">
-                <span class="head-model-dot"></span>
-                <span>Agent · {{ agentModelName || '主模型' }}</span>
-              </span>
+              <!-- 模型切换下拉按钮（模型名 + 箭头，点击可自由切换） -->
+              <n-dropdown
+                trigger="click"
+                :options="agentProfileDropdownOptions"
+                @select="handleSelectAgentModel"
+              >
+                <button
+                  class="composer-model-dropdown-btn"
+                  type="button"
+                  title="点击切换当前 Agent 驱动模型"
+                >
+                  <span class="head-model-dot"></span>
+                  <span class="model-name mono">Agent · {{ agentModelName || '选择模型' }}</span>
+                  <svg class="chevron-icon" width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M3 4.5l3 3 3-3" stroke-linecap="round" stroke-linejoin="round" />
+                  </svg>
+                </button>
+              </n-dropdown>
             </div>
 
             <!-- 右侧圆形发送/暂停按钮 -->
@@ -732,7 +754,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch, h } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useMessage, useDialog } from 'naive-ui'
+import { useMessage, useDialog, NDropdown, type DropdownOption } from 'naive-ui'
 import { api } from '../api/http'
 import { AgentWebSocket } from '../api/ws'
 import type { Task, TaskSpec, WsServerEvent, Profile, Dataset, KnowledgeBase, GoldQA } from '../api/types'
@@ -800,6 +822,31 @@ function handleSlashSelect(cmdText: string) {
 function handleSlashClose() {
   paletteClosedManually.value = true
 }
+
+/** 模型选择下拉菜单项（对齐 /admin/profiles 接入池） */
+const agentProfileDropdownOptions = computed<DropdownOption[]>(() => {
+  if (!allProfiles.value.length) {
+    return [
+      { label: '暂无接入模型协议档', key: '__none__', disabled: true },
+      { type: 'divider', key: 'd1' },
+      { label: '⚙ 前往接入协议档 ↗', key: '__goto_profiles__' },
+    ]
+  }
+  const activeId = currentAgentProfileId.value || allProfiles.value[0]?.id
+  const list: DropdownOption[] = allProfiles.value.map((p) => {
+    const isCurrent = p.id === activeId
+    return {
+      label: `${p.name} (${p.model || p.protocol})${isCurrent ? ' ✓' : ''}`,
+      key: p.id,
+      disabled: isCurrent,
+    }
+  })
+  return [
+    ...list,
+    { type: 'divider', key: 'd1' },
+    { label: '⚙ 管理模型接入协议档 ↗', key: '__goto_profiles__' },
+  ]
+})
 
 const sessions = ref<any[]>([])
 const currentSessionId = ref<string>('')
@@ -1853,7 +1900,7 @@ async function loadSessionHistory(sid: string): Promise<number> {
       if (m.role === 'user') {
         replay.push({ type: 'user', text: m.content || '', files: m.attachments || [], noAnim: true })
       } else if (m.role === 'assistant') {
-        replay.push({ type: 'agent', text: `<p>${escapeHtml(m.content || '')}</p>`, noAnim: true })
+        replay.push({ type: 'agent', text: m.content || '', raw: m.content || '', noAnim: true })
       }
     }
     for (const ev of history.events || []) {
