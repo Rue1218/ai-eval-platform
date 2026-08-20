@@ -1,5 +1,5 @@
 <template>
-  <!-- 斜杠命令悬浮面板（极简毛玻璃卡片、SVG 图标、键盘导航与微交互） -->
+  <!-- 斜杠命令悬浮面板（完全适配项目浅色/深色主题令牌、SVG 图标、键盘导航与微交互） -->
   <div v-if="show" class="slash-palette-wrap" @mousedown.prevent>
     <!-- 顶部导引栏 -->
     <div class="slash-palette-head">
@@ -148,7 +148,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import { SYSTEM_SLASH_COMMANDS, type SlashCommandDef } from '../../agent/slashRegistry'
-import { api } from '../../api/http'
 
 const props = withDefaults(
   defineProps<{
@@ -257,14 +256,9 @@ watch(
   },
 )
 
-async function loadCustomCommands() {
-  // 说明：依 API.md §3.4 与说明书 AGT-SLH-03，后端 /api/slash-commands 在 M1 为桩（严格返回 VALIDATION 400「自定义命令未启用」）。
-  // 完整自定义斜杠 CRUD 将在 M2（AGT-M2-04）开放。M1 阶段默认置空，避免在控制台产生无意义的网络 400 日志。
-  customCommands.value = []
-}
-
 onMounted(() => {
-  loadCustomCommands()
+  // M1 阶段使用内置 15 条命令，自定义命令在 M2 开放
+  customCommands.value = []
 })
 
 /**
@@ -323,18 +317,24 @@ defineExpose({
   bottom: calc(100% + 10px);
   left: 0;
   width: 380px;
-  max-height: 400px;
-  background: var(--bg-surface, rgba(15, 23, 42, 0.94));
-  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.12));
+  max-height: 420px;
+  background: var(--bg-main, #ffffff);
+  border: 1px solid var(--border-subtle, #e5e7eb);
   border-radius: 14px;
-  box-shadow: 0 16px 40px -6px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.08);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  box-shadow: 0 16px 36px -4px rgba(0, 0, 0, 0.12), 0 4px 14px -2px rgba(0, 0, 0, 0.06);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   z-index: 100;
   animation: palette-in 0.16s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+[data-theme='dark'] .slash-palette-wrap {
+  background: var(--bg-elevated, #1f2937);
+  border-color: var(--border-subtle, #374151);
+  box-shadow: 0 16px 40px -6px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.08);
 }
 
 @keyframes palette-in {
@@ -352,23 +352,23 @@ defineExpose({
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 9px 14px;
-  background: rgba(255, 255, 255, 0.02);
-  border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.06));
+  padding: 10px 14px;
+  background: var(--bg-elevated, #f4f8f8);
+  border-bottom: 1px solid var(--border-subtle, #e5e7eb);
 }
 
 .slash-palette-title-wrap {
   display: flex;
   align-items: center;
   gap: 6px;
-  color: var(--accent-ai, #10b981);
+  color: var(--accent-ai, #6366f1);
 }
 
 .slash-palette-title {
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--text-secondary, #cbd5e1);
-  letter-spacing: 0.2px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary, #111827);
+  letter-spacing: 0.1px;
 }
 
 .slash-palette-kbd-group {
@@ -379,7 +379,7 @@ defineExpose({
 
 .slash-palette-kbd-group .kbd {
   font-size: 11px;
-  color: var(--text-tertiary, #64748b);
+  color: var(--text-tertiary, #9ca3af);
   display: inline-flex;
   align-items: center;
   gap: 3px;
@@ -387,23 +387,29 @@ defineExpose({
 
 .slash-palette-kbd-group kbd {
   display: inline-block;
-  padding: 1px 4px;
-  font-family: inherit;
-  font-size: 10px;
+  padding: 1.5px 5px;
+  font-family: var(--font-mono, monospace);
+  font-size: 10.5px;
   font-weight: 600;
   line-height: 1;
-  color: var(--text-secondary, #94a3b8);
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--text-secondary, #6b7280);
+  background: var(--bg-main, #ffffff);
+  border: 1px solid var(--border-subtle, #e5e7eb);
   border-radius: 4px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+[data-theme='dark'] .slash-palette-kbd-group kbd {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-secondary, #9ca3af);
+  border-color: rgba(255, 255, 255, 0.12);
 }
 
 .slash-palette-body {
   flex: 1;
   overflow-y: auto;
   padding: 6px 6px 8px;
-  max-height: 340px;
-  scrollbar-width: thin;
+  max-height: 350px;
 }
 
 .slash-group {
@@ -413,9 +419,9 @@ defineExpose({
 .slash-group-label {
   font-size: 11px;
   font-weight: 600;
-  color: var(--text-tertiary, #64748b);
+  color: var(--text-tertiary, #9ca3af);
   padding: 6px 10px 3px;
-  letter-spacing: 0.4px;
+  letter-spacing: 0.3px;
 }
 
 .slash-item {
@@ -423,7 +429,7 @@ defineExpose({
   align-items: center;
   justify-content: space-between;
   padding: 7px 10px;
-  margin: 1px 0;
+  margin: 1px 2px;
   border-radius: 8px;
   cursor: pointer;
   transition: all 0.12s ease;
@@ -431,11 +437,15 @@ defineExpose({
 }
 
 .slash-item:hover:not(.disabled) {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--row-hover, rgba(17, 24, 39, 0.04));
 }
 
 .slash-item.active:not(.disabled) {
-  background: color-mix(in srgb, var(--accent-ai, #10b981) 14%, transparent);
+  background: var(--t-tasks, #e0e7ff);
+}
+
+[data-theme='dark'] .slash-item.active:not(.disabled) {
+  background: rgba(99, 102, 241, 0.22);
 }
 
 .slash-item.disabled {
@@ -446,7 +456,7 @@ defineExpose({
 .slash-item-left {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 10px;
   min-width: 0;
   flex: 1;
 }
@@ -458,32 +468,34 @@ defineExpose({
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--accent-ai, #10b981);
+  background: var(--bg-elevated, #f4f8f8);
+  color: var(--text-secondary, #6b7280);
   flex-shrink: 0;
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-subtle, #e5e7eb);
   transition: all 0.15s ease;
 }
 
 .slash-item.active .slash-item-icon {
-  background: color-mix(in srgb, var(--accent-ai, #10b981) 22%, transparent);
-  border-color: color-mix(in srgb, var(--accent-ai, #10b981) 35%, transparent);
+  background: var(--bg-main, #ffffff);
+  color: var(--accent-ai, #6366f1);
+  border-color: var(--accent-ai, #6366f1);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 }
 
 .slash-item-icon.control {
-  color: #38bdf8;
+  color: #0284c7;
 }
 .slash-item-icon.readonly {
-  color: #a78bfa;
+  color: #7c3aed;
 }
 .slash-item-icon.system {
-  color: #f59e0b;
+  color: #d97706;
 }
 .slash-item-icon.custom {
-  color: #ec4899;
+  color: #db2777;
 }
 .slash-item-icon.disabled {
-  color: var(--text-tertiary, #64748b);
+  color: var(--text-tertiary, #9ca3af);
 }
 
 .slash-item-content {
@@ -496,27 +508,32 @@ defineExpose({
 .slash-item-name {
   font-size: 13.5px;
   font-weight: 700;
-  color: var(--text-primary, #ffffff);
+  color: var(--text-primary, #111827);
 }
 
 .slash-item.active .slash-item-name {
-  color: var(--accent-ai, #10b981);
+  color: var(--accent-ai, #6366f1);
 }
 
 .slash-item.disabled .slash-item-name {
-  color: var(--text-tertiary, #64748b);
+  color: var(--text-tertiary, #9ca3af);
 }
 
 .slash-item-hint {
   font-size: 12.5px;
-  color: var(--text-secondary, #94a3b8);
+  color: var(--text-secondary, #6b7280);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .slash-item.active .slash-item-hint {
-  color: var(--text-primary, #f1f5f9);
+  color: var(--text-primary, #111827);
+  font-weight: 500;
+}
+
+[data-theme='dark'] .slash-item.active .slash-item-hint {
+  color: #ffffff;
 }
 
 .slash-item-right {
@@ -528,24 +545,19 @@ defineExpose({
 }
 
 .slash-item-badge {
-  font-size: 10.5px;
-  padding: 1.5px 7px;
+  font-size: 11px;
+  padding: 2px 8px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--text-tertiary, #64748b);
+  background: var(--bg-elevated, #f3f4f6);
+  color: var(--text-tertiary, #9ca3af);
+  border: 1px solid var(--border-subtle, #e5e7eb);
   white-space: nowrap;
 }
 
-.slash-item-badge.disabled {
-  background: rgba(148, 163, 184, 0.08);
-  color: var(--text-tertiary, #64748b);
-  border: 1px solid rgba(255, 255, 255, 0.05);
-}
-
 .slash-item-arrow {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: bold;
-  color: var(--accent-ai, #10b981);
+  color: var(--accent-ai, #6366f1);
   padding: 0 2px;
 }
 </style>
