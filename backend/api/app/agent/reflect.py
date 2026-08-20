@@ -218,10 +218,14 @@ def maybe_model_check(
     compact_summary: str | None = None,
     observations: list[dict[str, Any]] | None = None,
 ) -> ReflectArtifact:
-    """规则 pass 后 1 次「是否符合用户目标」。失败不阻断；不得把 reject 改成 pass。"""
+    """规则 pass 后 1 次「是否符合用户目标」。失败不阻断；不得把 reject 改成 pass。
+
+    仅确认卡需要模型核对。闲聊 / 只读斜杠由规则门禁「确认没有 create」即可，
+    再调一次上游会把「你好」拖到几十秒，且核对结果对确定性斜杠本来就会被丢弃。
+    """
     if artifact.verdict != "pass":
         return artifact
-    if plan.delivery not in {"confirm", "text", "action"}:
+    if plan.delivery != "confirm":
         return artifact
     if not budget.consume():
         return artifact
@@ -246,7 +250,7 @@ def maybe_model_check(
             json.dumps(payload, ensure_ascii=False),
             temperature=0,
             max_tokens=512,
-            timeout_s=30,
+            timeout_s=12,
         )
         artifact.latency_ms = result.latency_ms
         parsed = parse_json_object(result.text)

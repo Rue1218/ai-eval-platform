@@ -166,6 +166,32 @@ def sanitize_plan(raw: dict, *, source: str = "llm") -> PlanArtifact:
     )
 
 
+# 高置信闲聊提示（不含「其它 → chat」兜底）。用于跳过规划模型，把预算留给流式回复。
+CHAT_HINTS = ("你好", "您好", "介绍", "你是谁", "天气", "谢谢", "闲聊", "随便聊聊", "hello", "hi ")
+# 与评测关键词重叠时不得当闲聊，避免「你好，帮我评一下」跳过规划
+EVAL_BLOCK_HINTS = (
+    "评测",
+    "评估",
+    "对比",
+    "benchmark",
+    "跑分",
+    "打分",
+    "测试模型",
+    "模型质量",
+    "评一下",
+    "帮我评",
+)
+
+
+def is_smalltalk(text: str) -> bool:
+    """问候/闲聊关键词且无评测关键词。不含含糊句的 chat 兜底。"""
+    raw = text or ""
+    lowered = raw.lower()
+    if any(k in raw for k in EVAL_BLOCK_HINTS):
+        return False
+    return any(k.lower() in lowered for k in CHAT_HINTS)
+
+
 def classify_intent_l0(text: str) -> tuple[str, bool]:
     """L0 规则意图（不区分大小写、命中先到先得）。
 
@@ -185,10 +211,7 @@ def classify_intent_l0(text: str) -> tuple[str, bool]:
         return "benchmark", True
     if "/compact" in lowered:
         return "compact", False
-    chat_keys = ("你好", "您好", "介绍", "你是谁", "天气", "谢谢", "闲聊", "随便聊聊", "hello", "hi ")
-    if any(k in lowered for k in chat_keys) and not any(
-        k in raw for k in ("评测", "评估", "对比", "benchmark", "跑分")
-    ):
+    if is_smalltalk(text):
         # HAR-PLAN-05 表「其它 → benchmark」与 TC-15 闲聊验收冲突时，按 TC-15 走 chat。
         return "chat", False
     if any(k in lowered for k in ("benchmark", "评测", "评估", "对比", "跑分", "打分", "测试模型", "模型质量", "评一下", "帮我评")):
@@ -411,7 +434,7 @@ def _call_plan_model(
         json.dumps(user_payload, ensure_ascii=False),
         temperature=0,
         max_tokens=1024,
-        timeout_s=30,
+        timeout_s=12,
     )
     return parse_json_object(result.text), result.latency_ms
 
@@ -475,6 +498,11 @@ def run_plan(
         )
 
     if not model_available:
+        plan = l0_plan(text, prefs=prefs)
+        return _attach_prefs(plan, prefs)
+
+    # 「你好」等高置信闲聊：L0 定位即可，禁止再串行打规划模型（否则问候要等 2～3 次上游）。
+    if is_smalltalk(text):
         plan = l0_plan(text, prefs=prefs)
         return _attach_prefs(plan, prefs)
 
