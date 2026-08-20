@@ -29,23 +29,18 @@ BUILTIN_TOOLS: list[McpToolOut] = [
         permission="write",
         enabled=True,
     ),
-]
-
-# 独立 MCP 注册项：仅供管理页展示，未挂载到 Eval-Core，不得被 Agent 当作内置工具执行
-UNMOUNTED_TOOLS: list[McpToolOut] = [
     McpToolOut(
         name="image.generate",
-        desc="Qwen Image 3.0 文本或参考图生图（独立 stdio MCP，当前未挂载）",
+        desc="Qwen Image 3.0 文本或参考图生图",
         permission="write",
-        enabled=False,
-        source="standalone",
+        enabled=True,
     ),
 ]
 
-MCP_TOOL_REGISTRY: list[McpToolOut] = [*BUILTIN_TOOLS, *UNMOUNTED_TOOLS]
+MCP_TOOL_REGISTRY: list[McpToolOut] = BUILTIN_TOOLS
 
 
 @router.get("/tools", summary="MCP 工具注册清单（只读）")
 def list_tools(user: User = Depends(get_current_user)):
-    """返回内置短工具与未挂载独立 MCP 注册项及权限级别。"""
+    """返回当前 Agent Host 已挂载的内置短工具及权限级别。"""
     return {"items": [t.model_dump(mode="json") for t in MCP_TOOL_REGISTRY], "total": len(MCP_TOOL_REGISTRY)}

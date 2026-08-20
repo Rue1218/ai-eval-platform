@@ -737,6 +737,15 @@ p { margin: 0; text-wrap: pretty; }
   margin: 8px 14px 12px;
   height: 36px;
 }
+.tool-image {
+  display: block;
+  width: calc(100% - 28px);
+  max-height: 360px;
+  margin: 8px 14px 12px;
+  border-radius: 8px;
+  object-fit: contain;
+  background: var(--bg-elevated);
+}
 pre.code {
   margin: 0; background: #0F172A; color: #E2E8F0;
   border-radius: 10px; padding: 12px 14px;

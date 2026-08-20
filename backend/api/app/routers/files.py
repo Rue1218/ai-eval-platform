@@ -31,6 +31,11 @@ ALLOWED_SUFFIXES = {
     ".jsonl",
     ".wav",
     ".mp3",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".webp",
+    ".gif",
 }
 
 

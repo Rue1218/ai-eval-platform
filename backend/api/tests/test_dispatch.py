@@ -55,10 +55,9 @@ def test_dispatch_config_strategy_enum():
         DispatchConfigUpdate(strategy="随机分配")
 
 
-def test_mcp_registry_exposes_unmounted_qwen_image_tool():
-    """独立 Qwen Image MCP 在管理页可见，但未挂载到 Eval-Core 时不能假报启用。"""
+def test_mcp_registry_exposes_mounted_qwen_image_tool():
+    """Qwen Image 通过内部 mcp_tools 执行，并在管理页标记为已挂载。"""
     tool = next(item for item in MCP_TOOL_REGISTRY if item.name == "image.generate")
     assert tool.permission == "write"
-    assert tool.enabled is False
-    assert tool.source == "standalone"
-    assert "未挂载" in tool.desc
+    assert tool.enabled is True
+    assert tool.source == "builtin"

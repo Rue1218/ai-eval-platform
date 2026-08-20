@@ -535,6 +535,22 @@ async def _run_turn(
         return
 
     if plan.intent == "chat" or plan.delivery == "text":
+        image_obs = next(
+            (obs for obs in react.observations if obs.get("name") == "image.generate"),
+            None,
+        )
+        if image_obs is not None:
+            if image_obs.get("ok"):
+                await _deliver_sentence(
+                    db,
+                    session.id,
+                    emit,
+                    "图片已生成，可在工具卡中查看或下载。",
+                )
+            else:
+                err = (image_obs.get("data_summary") or {}).get("error") or "图像生成失败"
+                await _deliver_sentence(db, session.id, emit, err)
+            return
         clone_obs = next(
             (obs for obs in react.observations if obs.get("name") == "audio.voiceclone"),
             None,

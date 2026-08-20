@@ -23,6 +23,8 @@ PLAN_JSON_SUFFIX = (
     "slots.filled.with_stress 置 true，kind 仍为 benchmark 或 rag。"
     "本轮若用户上传了 wav/mp3 参考音频并要求配音，tools_needed 可含 "
     "audio.voiceclone；file_id 由系统从本轮附件填写，禁止编造。"
+    "若用户要求生成或编辑图片，tools_needed 可含 image.generate；"
+    "参考图 file_id 由系统从本轮图片附件填写，禁止编造。"
 )
 
 # 规划 JSON 解析失败后的唯一重试附加指令

@@ -22,6 +22,7 @@ from .defaults import (
     WRITE_TOOLS,
     is_long_tool,
 )
+from .imagegen import inject_imagegen_plan
 from .log import agent_trace
 from .persona import PLAN_RETRY_SUFFIX, REPLAN_JSON_SUFFIX, plan_system, turn_system
 from .slash import SlashParse
@@ -455,11 +456,12 @@ def run_plan(
     """产出 PlanArtifact：斜杠模板 / LLM / 重试 / L0。"""
 
     def _finish(plan: PlanArtifact, *, slash: bool = False) -> PlanArtifact:
-        """挂偏好后，自然语言回合按本轮附件注入音色克隆短工具。"""
+        """挂偏好后，自然语言回合按本轮意图注入音频或图像短工具。"""
         plan = _attach_prefs(plan, prefs)
         if slash:
             return plan
-        return inject_voiceclone_plan(db, plan, text=text, attachments=attachments)
+        plan = inject_voiceclone_plan(db, plan, text=text, attachments=attachments)
+        return inject_imagegen_plan(db, plan, text=text, attachments=attachments)
 
     if parsed.command and parsed.command in {
         "benchmark",
@@ -680,4 +682,3 @@ def merge_replan(
         if name not in done and name not in WRITE_TOOLS
     ]
     return plan, extra_tools
-

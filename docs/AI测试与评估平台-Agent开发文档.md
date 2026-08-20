@@ -3,9 +3,9 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Agent 独立开发说明书 |
-| 版本 | V1.4 |
+| 版本 | V1.5 |
 | 日期 | 2026-08-20 |
-| 最近修订 | 2026-08-20：短工具 audio.voiceclone（wav/mp3 克隆配音）；修复流式气泡串轮、切会话打字机泄漏、确认卡 rag patch 与跨会话取消；补齐思考快照与 ContextMeter 恢复 |
+| 最近修订 | 2026-08-20：内部短工具 image.generate（Qwen Image 图文生图）；短工具 audio.voiceclone（wav/mp3 克隆配音）；修复流式气泡串轮、切会话打字机泄漏、确认卡 rag patch 与跨会话取消；补齐思考快照与 ContextMeter 恢复 |
 | 用法 | **实现 `/agent` 以本文为准（Harness / 斜杠 / 窗口算法）。** REST/WS JSON 以 API.md V1.6 为准。完成某项后勾选文末 Task，并在「最近修订」追加一行。 |
 
 本文是评测平台 **Agent 子系统** 的完整开发说明书：目标、边界、运行时骨架、协议、模块、代码落点与验收任务都写在这里。与 PRD / API.md 冲突时，字段名与事件名以那两份为准；Harness、斜杠、上下文算法以本文 §16 为准。§4.6 所列增量已收入 **API.md V1.6**。
@@ -150,6 +150,7 @@ Agent 对话不得发出 `kind=stress` 确认卡。压测由质量任务 `succee
 | `kb.list` | 列出知识库 | RAG 阶段 |
 | `testcase.confirm` | 确认用例入库 | 用例阶段 |
 | `audio.voiceclone` | 音色克隆配音 | 对话同步 |
+| `image.generate` | Qwen Image 文本或参考图生图 | 对话同步 |
 
 Worker 专用（Agent 进程禁止跑完）：`benchmark.run` `rag.evaluate` `testcase.generate` `stress.run`。
 
@@ -875,6 +876,7 @@ Worker 夹紧：`sample_size = min(请求值, 1000, 行数)`；`concurrency` ≤
 | `dispatch.overview` | `{}` | `{ "workers", "queue_depth", "strategy" }` 以现网 overview 为准 |
 | `testcase.confirm` | `{ "case_set_id", "edits"? }` | `{ "status": "succeeded" }` |
 | `audio.voiceclone` | `{ "text", "file_id", "style"? }`；`file_id` 必须来自本轮附件，禁止编造 | `{ "file_id", "filename", "content_type", "size", "content_url" }` 不含音频 base64 |
+| `image.generate` | `{ "prompt", "file_id"?, "prompt_extend"? }`；`file_id` 必须来自本轮图片附件，禁止编造 | `{ "file_id", "filename", "content_type", "size", "content_url" }` 不含图片 base64 |
 
 未实现的工具：`ok=false`，`error` 用用户可读中文「该能力未启用」，WS 可另发 `error` `code=VALIDATION`。
 
@@ -1350,6 +1352,18 @@ M3 接 LightRAG：把 `LIGHTRAG_ENABLED` 改为 True，在 `query_lightrag` 请�
 | `backend/api/tests/test_voiceclone.py` | 注入与假上游单测 |
 | `frontend/src/views/Agent.vue` | 附件与工具卡播放器 |
 | `docs/AI测试与评估平台-API.md` | V1.9 契约 |
+
+## 27. 修改代码文件与作用清单（2026-08-20 Qwen Image 内部短工具）
+
+Qwen Image 按 `audio.voiceclone` 的内部短工具方式接入：自然语言识别图像生成意图，React 独立线程调用上游，图片附件由系统绑定，生成结果落盘并在工具卡中预览。
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/agent/imagegen.py` | 图文请求组装、上游响应解析、图片落盘、规划注入与配置校验 |
+| `backend/api/app/agent/defaults.py` / `mcp_tools.py` / `react.py` / `plan.py` / `harness.py` | 短工具注册、线程隔离执行、规划注入、工具结果交付句 |
+| `backend/api/app/config.py` / `docker-compose.yml` / `backend/api/app/routers/files.py` | Qwen 环境变量注入、图片附件白名单 |
+| `frontend/src/views/Agent.vue` / `frontend/src/styles/base.css` | 图片附件选择、生成结果预览与同源下载 |
+| `backend/api/tests/test_imagegen.py` | 图文请求、规划、落盘和 React 线程隔离单测 |
 
 
   
