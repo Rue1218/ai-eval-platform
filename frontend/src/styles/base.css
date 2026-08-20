@@ -497,6 +497,19 @@ p { margin: 0; text-wrap: pretty; }
 }
 .agent-layout.no-list .session-list { opacity: 0; pointer-events: none; }
 .session-list-head { padding: 14px; }
+.session-batch-toolbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin-top: 9px; color: var(--text-secondary); font-size: 12px;
+}
+.session-select-all { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.session-select, .session-select-all input {
+  width: 14px; height: 14px; margin: 0; accent-color: var(--accent-ai); cursor: pointer;
+}
+.session-batch-delete {
+  border: 0; border-radius: 6px; padding: 4px 8px; cursor: pointer;
+  background: var(--t-error); color: var(--accent-error); font-size: 12px;
+}
+.session-batch-delete:hover { filter: brightness(.96); }
 .session-items { flex: 1; overflow-y: auto; padding: 0 10px 14px; display: flex; flex-direction: column; gap: 4px; }
 .session-item {
   padding: 10px 12px; border-radius: 12px; cursor: pointer;
@@ -507,6 +520,7 @@ p { margin: 0; text-wrap: pretty; }
 .session-item.active .session-title { color: var(--c-agent); font-weight: 600; }
 .session-item.active .session-time { color: var(--c-agent); opacity: .62; }
 .session-title { font-size: 13px; font-weight: 500; display: flex; align-items: center; gap: 8px; min-height: 22px; }
+.session-select { flex: 0 0 auto; }
 .session-title-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-meta-right { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; margin-left: auto; }
 .session-del {

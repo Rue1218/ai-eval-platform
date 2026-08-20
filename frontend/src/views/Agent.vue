@@ -6,6 +6,24 @@
         <button class="btn btn-secondary" style="width: 100%" @click="handleCreateSession">
           + 新建会话
         </button>
+        <div v-if="deletableSessionCount" class="session-batch-toolbar">
+          <label class="session-select-all">
+            <input
+              type="checkbox"
+              :checked="allDeletableSessionsSelected"
+              @change="handleSelectAllChange"
+            />
+            <span>{{ selectedSessionIds.length ? `已选 ${selectedSessionIds.length} 个` : '选择会话' }}</span>
+          </label>
+          <button
+            v-if="selectedSessionIds.length"
+            class="session-batch-delete"
+            type="button"
+            @click="handleBatchDeleteSessions"
+          >
+            删除选中
+          </button>
+        </div>
       </div>
 
       <div class="session-items">
@@ -17,6 +35,15 @@
           @click="selectSession(s.id)"
         >
           <div class="session-title">
+            <input
+              v-if="s.can_delete"
+              class="session-select"
+              type="checkbox"
+              :checked="selectedSessionIds.includes(s.id)"
+              :aria-label="`选择会话：${s.title || '新会话'}`"
+              @click.stop
+              @change="toggleSessionSelected(s.id)"
+            />
             <span class="session-title-text">{{ s.title || '新会话' }}</span>
             <span v-if="s.visibility === 'team'" class="session-team-badge">团队</span>
             <div class="session-meta-right">
@@ -892,8 +919,14 @@ const agentProfileDropdownOptions = computed<DropdownOption[]>(() => {
 })
 
 const sessions = ref<AgentSession[]>([])
+const selectedSessionIds = ref<string[]>([])
 const currentSessionId = ref<string>('')
 const currentSession = computed(() => sessions.value.find(s => s.id === currentSessionId.value) || sessions.value[0] || null)
+const deletableSessionCount = computed(() => sessions.value.filter((session) => session.can_delete).length)
+const allDeletableSessionsSelected = computed(() => {
+  const deletableIds = sessions.value.filter((session) => session.can_delete).map((session) => session.id)
+  return deletableIds.length > 0 && deletableIds.every((id) => selectedSessionIds.value.includes(id))
+})
 const inputText = ref('')
 const stagedFiles = ref<any[]>([])
 const activeTask = ref<Task | null>(null)
@@ -1194,6 +1227,7 @@ function removeInaccessibleSession(sid: string) {
   if (socket) socket.close()
   sockets.delete(sid)
   sessionRuntimes.delete(sid)
+  selectedSessionIds.value = selectedSessionIds.value.filter((id) => id !== sid)
   const nextGenerating = { ...generatingBySession.value }
   delete nextGenerating[sid]
   generatingBySession.value = nextGenerating
@@ -1208,6 +1242,23 @@ function removeInaccessibleSession(sid: string) {
   } else {
     void handleCreateSession()
   }
+}
+
+/** 切换单个 owner 会话的批量选择状态。 */
+function toggleSessionSelected(sid: string) {
+  if (selectedSessionIds.value.includes(sid)) {
+    selectedSessionIds.value = selectedSessionIds.value.filter((id) => id !== sid)
+  } else {
+    selectedSessionIds.value = [...selectedSessionIds.value, sid]
+  }
+}
+
+/** 全选或清空当前列表中可由本人删除的会话。 */
+function handleSelectAllChange(event: Event) {
+  const checked = (event.target as HTMLInputElement).checked
+  selectedSessionIds.value = checked
+    ? sessions.value.filter((session) => session.can_delete).map((session) => session.id)
+    : []
 }
 
 /* ─── 页面级定时器登记：所有演示/兜底定时器统一登记，组件卸载时集中清理，避免回调写入已销毁状态 ─── */
@@ -2482,6 +2533,41 @@ function handleDeleteSession(sid: string) {
         message.success('会话已删除，对话与任务记录仍保留审计')
       } catch (err: any) {
         message.error(err?.message || '删除会话失败')
+      }
+    },
+  })
+}
+
+/** 批量软删除 owner 会话；每个请求仍由服务端独立校验活动任务与权限。 */
+function handleBatchDeleteSessions() {
+  const ids = selectedSessionIds.value.filter((sid) => sessions.value.some((session) => session.id === sid && session.can_delete))
+  if (!ids.length) {
+    selectedSessionIds.value = []
+    return
+  }
+  dialog.warning({
+    title: '批量删除会话？',
+    content: `将删除选中的 ${ids.length} 个会话。消息、任务和报告仍会保留用于审计回溯；包含生成中、待确认或执行中任务的会话会单独失败。`,
+    positiveText: '删除选中',
+    negativeText: '保留',
+    positiveButtonProps: { type: 'error' },
+    onPositiveClick: async () => {
+      const results = await Promise.allSettled(ids.map((sid) => api.sessions.remove(sid)))
+      const succeeded = ids.filter((_sid, index) => results[index]?.status === 'fulfilled')
+      const failed = results.filter((result) => result.status === 'rejected')
+      succeeded.forEach((sid) => removeInaccessibleSession(sid))
+      if (!failed.length) {
+        message.success(`已删除 ${succeeded.length} 个会话，对话与任务记录仍保留审计`)
+        return
+      }
+      const firstFailure = failed[0]
+      const reason = firstFailure?.status === 'rejected' && firstFailure.reason?.message
+        ? `（${firstFailure.reason.message}）`
+        : ''
+      if (succeeded.length) {
+        message.warning(`已删除 ${succeeded.length} 个会话，${failed.length} 个未删除${reason}`)
+      } else {
+        message.error(`批量删除失败：${failed.length} 个会话均未删除${reason}`)
       }
     },
   })
