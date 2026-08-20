@@ -601,18 +601,23 @@
             @close="handleSlashClose"
           />
 
-          <!-- 上半区：全宽自适应多行文本域（斜杠命令模式高识别度等宽主题色） -->
-          <textarea
-            ref="textareaRef"
-            v-model="inputText"
-            class="composer-textarea"
-            :class="{ 'is-slash-cmd': isSlashCommandMode }"
-            rows="1"
-            :placeholder="isSlashCommandMode ? '斜杠命令模式：输入参数后按 Enter 发送，或继续输入' : '输入任何评测问题或需求，或键入 / 选择命令，Shift + Enter 换行，Enter 发送'"
-            @keydown="handleKeydown"
-            @input="adjustTextareaHeight"
-            @paste="() => nextTick(adjustTextareaHeight)"
-          ></textarea>
+          <!-- 上半区：行内命令标签 + 正常黑色多行文本域 -->
+          <div class="composer-input-row">
+            <span v-if="selectedSlashCmd" class="composer-cmd-tag mono">
+              /{{ selectedSlashCmd }}
+              <button class="cmd-tag-close" title="取消命令" @click="removeSelectedSlashCmd">✕</button>
+            </span>
+            <textarea
+              ref="textareaRef"
+              v-model="inputText"
+              class="composer-textarea"
+              rows="1"
+              :placeholder="selectedSlashCmd ? '输入命令参数（可选），Enter 发送' : '输入任何评测问题或需求，或键入 / 选择命令，Shift + Enter 换行，Enter 发送'"
+              @keydown="handleKeydown"
+              @input="adjustTextareaHeight"
+              @paste="() => nextTick(adjustTextareaHeight)"
+            ></textarea>
+          </div>
 
           <!-- 下半区：操作底栏（附件 + 只读模型标识 + 发送按钮） -->
           <div class="composer-bottom-bar">
@@ -787,15 +792,26 @@ const currentContextMeter = ref<ContextMeterData | null>(null)
 const currentCompactSummary = ref<string | null>(null)
 const slashPaletteRef = ref<InstanceType<typeof SlashPalette> | null>(null)
 const paletteClosedManually = ref(false)
+const selectedSlashCmd = ref<string>('')
 
 const showSlashPalette = computed(() => {
   const text = inputText.value
-  return text.startsWith('/') && !text.includes(' ') && !paletteClosedManually.value
+  return !selectedSlashCmd.value && text.startsWith('/') && !text.includes(' ') && !paletteClosedManually.value
 })
 
 function handleSlashSelect(cmdText: string) {
-  inputText.value = cmdText
+  const cleanName = cmdText.trim().replace(/^\//, '')
+  selectedSlashCmd.value = cleanName
+  inputText.value = ''
   paletteClosedManually.value = true
+  nextTick(() => {
+    textareaRef.value?.focus()
+    adjustTextareaHeight()
+  })
+}
+
+function removeSelectedSlashCmd() {
+  selectedSlashCmd.value = ''
   nextTick(() => {
     textareaRef.value?.focus()
     adjustTextareaHeight()
@@ -1231,6 +1247,17 @@ function adjustTextareaHeight() {
 
 // 深度监听输入文本变化，无论是快捷 Prompt 填入还是换行均即时同步高度
 watch(inputText, (newVal) => {
+  // 当用户在输入框键入 "/stress xxx" 时自动转为行内命令标签
+  if (!selectedSlashCmd.value && newVal.startsWith('/') && newVal.includes(' ')) {
+    const match = newVal.match(/^(\/[a-zA-Z0-9_-]+)\s([\s\S]*)$/)
+    if (match) {
+      selectedSlashCmd.value = match[1].slice(1)
+      inputText.value = match[2]
+      paletteClosedManually.value = true
+      nextTick(adjustTextareaHeight)
+      return
+    }
+  }
   if (newVal === '/' || (newVal.startsWith('/') && !newVal.includes(' '))) {
     paletteClosedManually.value = false
   }
@@ -1271,7 +1298,7 @@ async function handleFileUpload(e: Event) {
   }
 }
 
-/** 键盘事件监听：SlashPalette 导航、Enter 发送，Shift + Enter 换行 */
+/** 键盘事件监听：SlashPalette 导航、Enter 发送，Shift + Enter 换行，Backspace 删除命令 Tag */
 function handleKeydown(e: KeyboardEvent) {
   if (paletteClosedManually.value && e.key !== 'Escape') {
     paletteClosedManually.value = false
@@ -1283,7 +1310,18 @@ function handleKeydown(e: KeyboardEvent) {
     if (handled) return
   }
 
-  // 2. 正常输入换行 / 发送
+  // 2. 参数为空时，按 Backspace 回退命令标签为输入框文字
+  if (e.key === 'Backspace' && selectedSlashCmd.value && !inputText.value) {
+    e.preventDefault()
+    const prev = selectedSlashCmd.value
+    selectedSlashCmd.value = ''
+    inputText.value = `/${prev}`
+    paletteClosedManually.value = false
+    nextTick(adjustTextareaHeight)
+    return
+  }
+
+  // 3. 正常输入换行 / 发送
   if (e.key === 'Enter') {
     if (e.shiftKey) {
       // Shift + Enter: 允许原生换行，并在 DOM 渲染后重新计算自适应高度
@@ -1319,11 +1357,13 @@ function handleSendClick() {
     scrollToBottom()
     return
   }
-  const text = inputText.value.trim()
+  const rawInput = inputText.value.trim()
+  const text = selectedSlashCmd.value ? `/${selectedSlashCmd.value}${rawInput ? ' ' + rawInput : ''}` : rawInput
   if (!text && stagedFiles.value.length === 0) return
 
   const files = [...stagedFiles.value]
   stagedFiles.value = []
+  selectedSlashCmd.value = ''
   inputText.value = ''
   adjustTextareaHeight()
 
@@ -1332,6 +1372,20 @@ function handleSendClick() {
 
 /** 快捷芯片/能力卡点击仅填入输入框并聚焦，由用户确认后再发送（对齐原型行为）。 */
 function sendPredefined(prompt: string) {
+  if (prompt.startsWith('/')) {
+    const match = prompt.match(/^(\/[a-zA-Z0-9_-]+)\s*([\s\S]*)$/)
+    if (match) {
+      selectedSlashCmd.value = match[1].slice(1)
+      inputText.value = match[2]
+      paletteClosedManually.value = true
+      nextTick(() => {
+        adjustTextareaHeight()
+        textareaRef.value?.focus()
+      })
+      return
+    }
+  }
+  selectedSlashCmd.value = ''
   inputText.value = prompt
   nextTick(() => {
     adjustTextareaHeight()
@@ -2574,8 +2628,78 @@ onBeforeUnmount(() => {
   border-color: rgba(99, 102, 241, 0.35);
 }
 
+/* 输入框上半区行容器 */
+.composer-input-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  width: 100%;
+  min-height: 38px;
+}
+
+/* 行内命令徽标 */
+.composer-cmd-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  margin-top: 5px;
+  border-radius: 6px;
+  background: var(--t-tasks, #e0e7ff);
+  color: var(--accent-ai, #6366f1);
+  font-size: 13px;
+  font-weight: 700;
+  border: 1px solid color-mix(in srgb, var(--accent-ai, #6366f1) 25%, transparent);
+  flex-shrink: 0;
+  user-select: none;
+  animation: tag-in 0.12s ease-out;
+}
+
+[data-theme='dark'] .composer-cmd-tag {
+  background: rgba(99, 102, 241, 0.22);
+  color: #a5b4fc;
+  border-color: rgba(99, 102, 241, 0.35);
+}
+
+.composer-cmd-tag .cmd-tag-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--accent-ai, #6366f1);
+  font-size: 9px;
+  cursor: pointer;
+  padding: 0;
+  transition: all 0.12s ease;
+}
+
+[data-theme='dark'] .composer-cmd-tag .cmd-tag-close {
+  color: #a5b4fc;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.composer-cmd-tag .cmd-tag-close:hover {
+  background: rgba(0, 0, 0, 0.14);
+}
+
+@keyframes tag-in {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 /* 多行文本域自适应高度（最小 38px，最大 200px 限制） */
 .composer-textarea {
+  flex: 1;
   width: 100% !important;
   border: none !important;
   outline: none !important;
@@ -2588,24 +2712,12 @@ onBeforeUnmount(() => {
   max-height: 200px !important;
   padding: 4px 6px !important;
   background: transparent !important;
-  color: var(--text-primary) !important;
+  color: var(--text-primary, #111827) !important;
   box-sizing: border-box !important;
   overflow-y: hidden;
   -webkit-appearance: none !important;
   -moz-appearance: none !important;
   appearance: none !important;
-  transition: color 0.12s ease;
-}
-
-/* 斜杠命令模式：高识别度等宽字体与强调色 */
-.composer-textarea.is-slash-cmd {
-  font-family: var(--font-mono, monospace) !important;
-  color: var(--accent-ai, #6366f1) !important;
-  font-weight: 600 !important;
-}
-
-[data-theme='dark'] .composer-textarea.is-slash-cmd {
-  color: #818cf8 !important;
 }
 
 .composer-textarea:focus,
