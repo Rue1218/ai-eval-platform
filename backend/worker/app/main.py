@@ -13,7 +13,7 @@ import time
 from datetime import datetime, timezone
 
 from .benchmark import run_benchmark
-from .db import DATABASE_URL, SessionLocal
+from .db import SessionLocal
 from .events import push_ws
 from .models import CaseSet, Report, Setting, Task, TaskEvent
 from .testcase import run_testcase

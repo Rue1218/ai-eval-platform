@@ -28,7 +28,7 @@ export function getDefaultStressConfig(): StressConfig {
     env: 'test',
     qps: 10,
     duration_s: 120,
-    sla_p99_ms: null,
+    sla_p99_ms: undefined,
   }
 }
 

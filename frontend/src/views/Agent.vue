@@ -54,19 +54,10 @@
           </svg>
         </button>
         <span class="chat-head-title">{{ currentSession?.title || '新会话' }}</span>
-        <n-dropdown
-          trigger="click"
-          :options="agentProfileDropdownOptions"
-          @select="handleSelectAgentModel"
-        >
-          <button class="chat-head-model-btn" type="button" title="点击切换当前 Agent 驱动模型">
-            <span class="head-model-dot"></span>
-            <span class="mono">Agent · {{ agentModelName || '未配置模型' }}</span>
-            <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5">
-              <path d="M3 4.5l3 3 3-3" stroke-linecap="round" stroke-linejoin="round" />
-            </svg>
-          </button>
-        </n-dropdown>
+        <span class="chat-head-model-badge mono" title="当前 Agent 驱动模型（只读）">
+          <span class="head-model-dot"></span>
+          <span>Agent · {{ agentModelName || '未配置模型' }}</span>
+        </span>
         <span v-if="isGenerating" class="gen-pill">
           <i class="bdot"></i>
           <span>{{ harnessStageLabel }}</span>
@@ -78,6 +69,9 @@
 
         <span class="grow"></span>
 
+        <!-- 上下文指示器（开发说明书 §8.1 冻结） -->
+        <ContextMeter :meter="currentContextMeter" :compact-summary="currentCompactSummary" />
+
         <!-- 调度视图切换按钮 -->
         <button
           class="btn btn-sm"
@@ -87,15 +81,9 @@
         >
           调度视图
         </button>
-
-        <!-- 模拟失败与模拟断线按钮 -->
-        <button class="btn btn-ghost btn-sm" @click="handleFailDemo">模拟失败</button>
-        <button class="btn btn-ghost btn-sm" @click="handleWsToggle">
-          {{ isWsOnline ? '模拟断线' : '恢复连接' }}
-        </button>
       </div>
 
-      <!-- 断线重连横幅提示 -->
+      <!-- 断线重连横幅提示（真实 WS 状态） -->
       <div v-if="!isWsOnline" class="info-strip">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
           <circle cx="12" cy="12" r="9" />
@@ -163,7 +151,7 @@
               <button class="think-head" type="button" @click="item.collapsed = !item.collapsed">
                 <span class="think-dot" v-if="!item.done"></span>
                 <span class="think-label">{{ item.done ? '已思考' : '思考中' }}</span>
-                <span v-if="item.skill_id && skillLabel(item.skill_id)" class="skill-badge">{{ skillLabel(item.skill_id) }}</span>
+                <SkillBadge v-if="item.skill_id" :skill-id="item.skill_id" />
                 <span v-if="formatLatency(item.latency_ms)" class="think-latency mono">{{ formatLatency(item.latency_ms) }}</span>
                 <span class="think-meta">{{ (item.text || '').length }} 字</span>
                 <svg class="think-caret" :class="{ open: !item.collapsed }" viewBox="0 0 12 12" width="12" height="12">
@@ -171,7 +159,8 @@
                 </svg>
               </button>
               <div v-show="!item.collapsed" class="think-body">
-                <span>{{ item.text }}</span><span v-if="!item.done" class="think-cursor">▍</span>
+                <MarkdownView :content="item.text || ''" />
+                <span v-if="!item.done" class="think-cursor">▍</span>
               </div>
             </div>
 
@@ -519,13 +508,15 @@
               </div>
             </div>
 
-            <!-- 2.7 Agent 文本回复（streaming 时为流式气泡，带打字光标） -->
+            <!-- 2.7 Agent 文本回复（非 streaming 时使用 MarkdownView 渲染富文本） -->
             <div
               v-else-if="item.type === 'agent'"
               class="msg-agent"
               :class="{ 'no-anim': item.noAnim, 'streaming-bubble': item.streaming }"
-              v-html="item.text"
-            ></div>
+            >
+              <MarkdownView v-if="!item.streaming" :content="item.raw || item.text || ''" />
+              <div v-else v-html="item.text"></div>
+            </div>
           </template>
         </div>
 
@@ -612,20 +603,29 @@
           </span>
         </div>
 
-        <div class="composer-card">
+        <div class="composer-card" style="position: relative;">
+          <!-- 斜杠命令悬浮面板 (宽 360px，键入 / 触发) -->
+          <SlashPalette
+            ref="slashPaletteRef"
+            :show="showSlashPalette"
+            :filter-query="inputText"
+            @select="handleSlashSelect"
+            @close="handleSlashClose"
+          />
+
           <!-- 上半区：全宽自适应多行文本域 -->
           <textarea
             ref="textareaRef"
             v-model="inputText"
             class="composer-textarea"
             rows="1"
-            placeholder="输入任何评测问题或需求，Shift + Enter 换行，Enter 发送"
+            placeholder="输入任何评测问题或需求，或键入 / 选择命令，Shift + Enter 换行，Enter 发送"
             @keydown="handleKeydown"
             @input="adjustTextareaHeight"
             @paste="() => nextTick(adjustTextareaHeight)"
           ></textarea>
 
-          <!-- 下半区：操作底栏（附件 + 模型选择 + 发送按钮） -->
+          <!-- 下半区：操作底栏（附件 + 只读模型标识 + 发送按钮） -->
           <div class="composer-bottom-bar">
             <div class="composer-left-actions">
               <!-- 添加附件按钮 -->
@@ -643,24 +643,11 @@
                 @change="handleFileUpload"
               />
 
-              <!-- 模型切换下拉胶囊（点击可切换 Agent 驱动模型） -->
-              <n-dropdown
-                trigger="click"
-                :options="agentProfileDropdownOptions"
-                @select="handleSelectAgentModel"
-              >
-                <button
-                  class="composer-model-btn"
-                  type="button"
-                  title="点击切换当前 Agent 驱动模型"
-                >
-                  <span class="head-model-dot"></span>
-                  <span class="mono">Agent · {{ agentModelName || '选择模型' }}</span>
-                  <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5">
-                    <path d="M3 4.5l3 3 3-3" stroke-linecap="round" stroke-linejoin="round" />
-                  </svg>
-                </button>
-              </n-dropdown>
+              <!-- 只读模型展示标签（开发说明书 §6 / §7 严格只读） -->
+              <span class="composer-model-badge mono" title="当前 Agent 驱动模型（只读）">
+                <span class="head-model-dot"></span>
+                <span>Agent · {{ agentModelName || '主模型' }}</span>
+              </span>
             </div>
 
             <!-- 右侧圆形发送/暂停按钮 -->
@@ -745,7 +732,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch, h } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useMessage, useDialog, NDropdown, type DropdownOption } from 'naive-ui'
+import { useMessage, useDialog } from 'naive-ui'
 import { api } from '../api/http'
 import { AgentWebSocket } from '../api/ws'
 import type { Task, TaskSpec, WsServerEvent, Profile, Dataset, KnowledgeBase, GoldQA } from '../api/types'
@@ -754,6 +741,10 @@ import { useModeStore } from '../stores/mode'
 import KindTag from '../components/common/KindTag.vue'
 import { formatLatency } from '../utils/format'
 import { skillLabel } from '../agent/skillLabels'
+import SkillBadge from '../components/agent/SkillBadge.vue'
+import MarkdownView from '../components/agent/MarkdownView.vue'
+import SlashPalette from '../components/agent/SlashPalette.vue'
+import ContextMeter, { type ContextMeterData } from '../components/agent/ContextMeter.vue'
 
 const message = useMessage()
 const dialog = useDialog()
@@ -787,87 +778,27 @@ const agentModelName = ref('')
 const currentAgentProfileId = ref<string>('')
 const allProfiles = ref<Profile[]>([])
 
-/** 模型选择下拉菜单项（对齐 /admin/profiles 接入池） */
-const agentProfileDropdownOptions = computed<DropdownOption[]>(() => {
-  if (!allProfiles.value.length) {
-    return [
-      { label: '暂无接入模型协议档', key: '__none__', disabled: true },
-      { type: 'divider', key: 'd1' },
-      { label: '⚙ 前往接入协议档 ↗', key: '__goto_profiles__' },
-    ]
-  }
-  const activeId = currentAgentProfileId.value || allProfiles.value[0]?.id
-  const list: DropdownOption[] = allProfiles.value.map((p) => {
-    const isCurrent = p.id === activeId
-    return {
-      label: p.name,
-      key: p.id,
-      profile: p,
-      isCurrent,
-    }
-  })
-  return [
-    ...list,
-    { type: 'divider', key: 'd1' },
-    { label: '⚙ 管理模型接入协议档 ↗', key: '__goto_profiles__' },
-  ]
+// 上下文度量与斜杠命令面板状态
+const currentContextMeter = ref<ContextMeterData | null>(null)
+const currentCompactSummary = ref<string | null>(null)
+const slashPaletteRef = ref<InstanceType<typeof SlashPalette> | null>(null)
+const paletteClosedManually = ref(false)
+
+const showSlashPalette = computed(() => {
+  return inputText.value.startsWith('/') && !paletteClosedManually.value
 })
 
-/** 规范渲染模型下拉项：左右两栏结构，主标题 + 副标题 + 当前驱动高亮微标 */
-function renderAgentProfileOption(option: DropdownOption) {
-  if (option.type === 'divider' || !option.profile) {
-    return option.label as string
-  }
-  const p = option.profile as Profile
-  const isCurrent = !!option.isCurrent
-  return h('div', {
-    class: 'agent-profile-option-row',
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      gap: '16px',
-      minWidth: '240px',
-      padding: '3px 0',
-      lineHeight: '1.4',
-    },
-  }, [
-    h('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px', flex: '1', minWidth: '0' } }, [
-      h('div', {
-        style: {
-          fontWeight: isCurrent ? '700' : '500',
-          fontSize: '13px',
-          color: isCurrent ? 'var(--accent-ai, #10B981)' : 'inherit',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-        },
-      }, p.name),
-      h('div', {
-        style: {
-          fontSize: '11px',
-          color: 'var(--text-tertiary, #6B7280)',
-          fontFamily: 'var(--font-mono, monospace)',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-        },
-      }, `${p.model || p.protocol} · ${p.protocol}`),
-    ]),
-    isCurrent
-      ? h('span', {
-          style: {
-            color: 'var(--accent-ai, #10B981)',
-            fontSize: '11px',
-            fontWeight: '700',
-            background: 'var(--t-agent, rgba(16, 185, 129, 0.12))',
-            padding: '2px 8px',
-            borderRadius: '6px',
-            flexShrink: '0',
-          },
-        }, '当前驱动')
-      : null,
-  ])
+function handleSlashSelect(cmdText: string) {
+  inputText.value = cmdText
+  paletteClosedManually.value = true
+  nextTick(() => {
+    textareaRef.value?.focus()
+    adjustTextareaHeight()
+  })
+}
+
+function handleSlashClose() {
+  paletteClosedManually.value = true
 }
 
 const sessions = ref<any[]>([])
@@ -1303,8 +1234,19 @@ async function handleFileUpload(e: Event) {
   }
 }
 
-/** 键盘事件监听：Enter 发送，Shift + Enter 换行并自适应扩展高度 */
+/** 键盘事件监听：SlashPalette 导航、Enter 发送，Shift + Enter 换行 */
 function handleKeydown(e: KeyboardEvent) {
+  if (paletteClosedManually.value && e.key !== 'Escape') {
+    paletteClosedManually.value = false
+  }
+
+  // 1. 若斜杠面板可见且非中文输入法合成期，委托斜杠面板处理按键 (↑ / ↓ / Enter / Esc)
+  if (showSlashPalette.value && !e.isComposing && slashPaletteRef.value) {
+    const handled = slashPaletteRef.value.handleKeyDown(e)
+    if (handled) return
+  }
+
+  // 2. 正常输入换行 / 发送
   if (e.key === 'Enter') {
     if (e.shiftKey) {
       // Shift + Enter: 允许原生换行，并在 DOM 渲染后重新计算自适应高度
@@ -1945,6 +1887,9 @@ async function loadSessionHistory(sid: string): Promise<number> {
         replay.push({ type: 'confirm', card, isAcked: false, summary: '', open: true, noAnim: true })
       }
     }
+    currentContextMeter.value = history.context_meter || null
+    currentCompactSummary.value = history.compact_summary || null
+
     if (replay.length) {
       events.value = replay
       scrollToBottom(true)
@@ -1963,6 +1908,8 @@ async function loadSessionHistory(sid: string): Promise<number> {
 async function selectSession(sid: string) {
   currentSessionId.value = sid
   events.value = []
+  currentContextMeter.value = null
+  currentCompactSummary.value = null
   activeTask.value = null
   dockClosingNote.value = ''
   isGenerating.value = false

@@ -999,6 +999,7 @@ export const api = {
       messages: any[]
       events: any[]
       pending_confirm?: Record<string, unknown> | null
+      compact_summary?: string | null
       context_meter?: {
         messages: number
         skills: number
@@ -1013,6 +1014,13 @@ export const api = {
     },
     // 说明：API.md §3.4/§9 明确 V1 不提供「删除会话」接口，
     // 会话为审计留存资产仅允许新建，请勿在此追加 delete 封装。
+  },
+  slashCommands: {
+    async list(): Promise<{ items: any[]; total: number }> {
+      if (getDataMode() === 'mock') return { items: [], total: 0 }
+      const { data } = await http.get('/api/slash-commands')
+      return data
+    },
   },
 }
 

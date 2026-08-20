@@ -97,7 +97,7 @@
               <label class="field-label">绑定目标 Worker 计算节点</label>
               <select v-model="node.config.worker_id" class="select" @change="onWorkerChange">
                 <option v-for="w in availableWorkers" :key="w.id" :value="w.id">
-                  {{ w.id }} · {{ w.name }} ({{ w.state }} · 负载 {{ w.load }}%)
+                  {{ w.id }} · {{ w.name }} ({{ w.state }} · 负载 {{ w.load_percent ?? 0 }}%)
                 </option>
               </select>
             </div>
