@@ -6,6 +6,24 @@
         <button class="btn btn-secondary" style="width: 100%" @click="handleCreateSession">
           + 新建会话
         </button>
+        <div v-if="deletableSessionCount" class="session-batch-toolbar">
+          <label class="session-select-all">
+            <input
+              type="checkbox"
+              :checked="allDeletableSessionsSelected"
+              @change="handleSelectAllChange"
+            />
+            <span>{{ selectedSessionIds.length ? `已选 ${selectedSessionIds.length} 个` : '选择会话' }}</span>
+          </label>
+          <button
+            v-if="selectedSessionIds.length"
+            class="session-batch-delete"
+            type="button"
+            @click="handleBatchDeleteSessions"
+          >
+            删除选中
+          </button>
+        </div>
       </div>
 
       <div class="session-items">
@@ -17,13 +35,24 @@
           @click="selectSession(s.id)"
         >
           <div class="session-title">
+            <input
+              v-if="s.can_delete"
+              class="session-select"
+              type="checkbox"
+              :checked="selectedSessionIds.includes(s.id)"
+              :aria-label="`选择会话：${s.title || '新会话'}`"
+              @click.stop
+              @change="toggleSessionSelected(s.id)"
+            />
             <span class="session-title-text">{{ s.title || '新会话' }}</span>
+            <span v-if="s.visibility === 'team'" class="session-team-badge">团队</span>
             <div class="session-meta-right">
               <!-- D5 会话状态点多态：running / succeeded / failed -->
               <i v-if="sessionDotClass(s)" class="nav-dot" :class="sessionDotClass(s)" :title="sessionDotTooltip(s)"></i>
               <button
+                v-if="s.can_delete"
                 class="session-del"
-                title="会话删除暂未开放"
+                title="软删除会话"
                 @click.stop="handleDeleteSession(s.id)"
               >
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
@@ -33,7 +62,7 @@
             </div>
           </div>
           <div class="row-between" style="margin-top: 2px">
-            <span class="session-time">{{ s.time || formatRelativeTime(s.created_at) }}</span>
+            <span class="session-time">{{ formatRelativeTime(s.created_at) }}</span>
           </div>
         </div>
       </div>
@@ -54,6 +83,7 @@
           </svg>
         </button>
         <span class="chat-head-title">{{ currentSession?.title || '新会话' }}</span>
+        <span v-if="currentSession?.visibility === 'team'" class="chat-team-badge">团队共享</span>
         <span v-if="isGenerating" class="gen-pill">
           <i class="bdot"></i>
           <span>{{ harnessStageLabel }}</span>
@@ -67,6 +97,15 @@
 
         <!-- 上下文指示器（开发说明书 §8.1 冻结） -->
         <ContextMeter :meter="currentContextMeter" :compact-summary="currentCompactSummary" />
+
+        <button
+          v-if="currentSession?.can_manage"
+          class="btn btn-sm btn-ghost"
+          :title="currentSession.visibility === 'team' ? '收回团队共享' : '向团队共享此会话'"
+          @click="toggleSessionSharing"
+        >
+          {{ currentSession.visibility === 'team' ? '仅自己' : '共享团队' }}
+        </button>
 
         <!-- 调度视图切换按钮 -->
         <button
@@ -123,7 +162,12 @@
           <!-- 2. 消息流组件渲染 -->
           <template v-for="(item, idx) in events" :key="idx">
             <!-- 2.1 用户气泡（no-anim：历史回放项跳过入场动画） -->
-            <div v-if="item.type === 'user'" class="msg-user" :class="{ 'no-anim': item.noAnim }">
+            <div
+              v-if="item.type === 'user'"
+              class="msg-user"
+              :class="{ 'no-anim': item.noAnim, remote: isRemoteUserMessage(item) }"
+            >
+              <div v-if="item.author" class="user-author">{{ userMessageAuthorLabel(item) }}</div>
               <div class="bubble-user">{{ item.text }}</div>
               <template v-if="item.files && item.files.length">
                 <span v-for="f in item.files" :key="f.name" class="attach-chip">
@@ -433,11 +477,19 @@
                 <template v-if="!item.isAcked">
                   <!-- F9 会话占槽：有进行中任务（含压测子任务）时主按钮禁用，note 转 warning 色 -->
                   <span class="confirm-note" :class="{ warn: !!activeTask }">
-                    {{ activeTask ? '当前会话已有任务进行中（槽位含压测子任务），完成后才能再开新长任务' : '未确认不入队；确认前可修改字段' }}
+                    {{
+                      !canConfirmItem(item)
+                        ? `等待 ${confirmAuthorLabel(item)} 确认`
+                        : activeTask
+                          ? '当前会话已有任务进行中（槽位含压测子任务），完成后才能再开新长任务'
+                          : '未确认不入队；确认前可修改字段'
+                    }}
                   </span>
                   <span class="spacer"></span>
-                  <button class="btn btn-secondary" @click="handleConfirmAck(item, false)">取消</button>
-                  <button class="btn btn-sign" :disabled="!!activeTask" @click="handleConfirmAck(item, true)">确认并开始</button>
+                  <template v-if="canConfirmItem(item)">
+                    <button class="btn btn-secondary" @click="handleConfirmAck(item, false)">取消</button>
+                    <button class="btn btn-sign" :disabled="!!activeTask" @click="handleConfirmAck(item, true)">确认并开始</button>
+                  </template>
                 </template>
                 <template v-else>
                   <span class="ack-stamp" :class="item.ackResult ? 'ok' : 'no'">
@@ -541,8 +593,13 @@
                 <span class="ms ms-err">错误率 <b>{{ currentStressMetrics.err }}%</b></span>
               </span>
               <span class="progress-msg">{{ activeTask.progress?.message || '压测执行中' }}</span>
-              <button class="btn btn-ghost btn-sm" @click="handleCancelActiveTask(activeTask.id)">
-                立即停止
+              <button
+                v-if="canCancelActiveTask"
+                class="btn btn-ghost btn-sm"
+                :disabled="cancellingTaskId === activeTask.id"
+                @click="handleCancelActiveTask(activeTask.id)"
+              >
+                {{ cancellingTaskId === activeTask.id ? '停止中…' : '立即停止' }}
               </button>
             </div>
             <div class="progress-bar">
@@ -557,8 +614,13 @@
             </div>
             <span class="progress-nums mono">{{ activeTask.progress?.done || 0 }}/{{ activeTask.progress?.total || 100 }}</span>
             <span class="progress-msg">{{ activeTask.progress?.message || '任务进行中...' }}</span>
-            <button class="btn btn-ghost btn-sm" @click="handleCancelActiveTask(activeTask.id)">
-              取消
+            <button
+              v-if="canCancelActiveTask"
+              class="btn btn-ghost btn-sm"
+              :disabled="cancellingTaskId === activeTask.id"
+              @click="handleCancelActiveTask(activeTask.id)"
+            >
+              {{ cancellingTaskId === activeTask.id ? '取消中…' : '取消' }}
             </button>
           </template>
         </div>
@@ -739,9 +801,20 @@ import { useRoute, useRouter } from 'vue-router'
 import { useMessage, useDialog, NDropdown, type DropdownOption } from 'naive-ui'
 import { api } from '../api/http'
 import { AgentWebSocket } from '../api/ws'
-import type { Task, TaskSpec, WsServerEvent, Profile, Dataset, KnowledgeBase, GoldQA } from '../api/types'
+import type {
+  AgentSession,
+  GoldQA,
+  KnowledgeBase,
+  Profile,
+  Dataset,
+  SessionAuthor,
+  Task,
+  TaskSpec,
+  WsServerEvent,
+} from '../api/types'
 import { getDefaultRunConfig, getDefaultStressConfig } from '../schemas/confirmCard'
 import { useModeStore } from '../stores/mode'
+import { useAuthStore } from '../stores/auth'
 import KindTag from '../components/common/KindTag.vue'
 import { formatLatency } from '../utils/format'
 import { skillLabel } from '../agent/skillLabels'
@@ -757,6 +830,7 @@ const dialog = useDialog()
 const route = useRoute()
 const router = useRouter()
 const modeStore = useModeStore()
+const authStore = useAuthStore()
 const chatScrollRef = ref<HTMLDivElement | null>(null)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
@@ -844,12 +918,30 @@ const agentProfileDropdownOptions = computed<DropdownOption[]>(() => {
   ]
 })
 
-const sessions = ref<any[]>([])
+const sessions = ref<AgentSession[]>([])
+const selectedSessionIds = ref<string[]>([])
 const currentSessionId = ref<string>('')
 const currentSession = computed(() => sessions.value.find(s => s.id === currentSessionId.value) || sessions.value[0] || null)
+const deletableSessionCount = computed(() => sessions.value.filter((session) => session.can_delete).length)
+const allDeletableSessionsSelected = computed(() => {
+  const deletableIds = sessions.value.filter((session) => session.can_delete).map((session) => session.id)
+  return deletableIds.length > 0 && deletableIds.every((id) => selectedSessionIds.value.includes(id))
+})
 const inputText = ref('')
 const stagedFiles = ref<any[]>([])
 const activeTask = ref<Task | null>(null)
+// 取消请求发送后等待服务端确认，避免重复提交且不提前伪造 cancelled。
+const cancellingTaskId = ref<string | null>(null)
+
+/** 共享会话里进度坞只给任务创建者展示取消入口，服务端仍是最终权限裁决。 */
+const canCancelActiveTask = computed(() => {
+  const task = activeTask.value
+  const user = authStore.user
+  if (!task || !user) return false
+  const creatorId = task.creator_id || task.created_by
+  // 无创建者信息时宁可暂不展示，异步补齐后再开放，避免协作者得到越权入口。
+  return !!creatorId && creatorId === user.id
+})
 
 const isSlashCommandMode = computed(() => {
   return (inputText.value || '').trimStart().startsWith('/')
@@ -988,12 +1080,56 @@ interface StreamItem {
   code?: string
   message?: string
   files?: any[]
+  // 用户消息的服务端 ID / 浏览器幂等键与作者，用于团队协作实时回显去重。
+  messageId?: string
+  clientMessageId?: string
+  author?: SessionAuthor | null
+  // 确认卡作者不属于 TaskSpec；只能用于前端权限展示，提交 patch 前必须剥离。
+  confirmAuthor?: SessionAuthor | null
   // F4 历史回放标记：跳过入场动画（对齐原型 no-anim）
   noAnim?: boolean
   // S3 思考卡流式打字：fullText 为应显示全文，复用上方 streaming 标记表示打字机进行中
   fullText?: string
   // F8 确认卡内联校验错误（字段名 → 红字文案）
   fieldErrors?: Record<string, string>
+}
+
+/** 将历史或 WS 的文件 ID 统一成既有附件芯片可读取的对象。 */
+function normalizeMessageFiles(attachments: unknown): any[] {
+  if (!Array.isArray(attachments)) return []
+  return attachments.map((item) => (
+    typeof item === 'string' ? { id: item, name: item, size: '' } : item
+  ))
+}
+
+/** 返回用户气泡展示名：自己的消息显示“我”，协作者优先显示昵称。 */
+function userMessageAuthorLabel(item: StreamItem): string {
+  if (!item.author) return ''
+  if (item.author.id === authStore.user?.id) return '我'
+  return item.author.display_name || item.author.username
+}
+
+/** 判断用户气泡是否来自当前成员以外的团队协作者。 */
+function isRemoteUserMessage(item: StreamItem): boolean {
+  return Boolean(item.author?.id && authStore.user?.id && item.author.id !== authStore.user.id)
+}
+
+/** 判断当前成员是否是待确认卡的唯一作者；兼容迁移前无作者字段的历史卡。 */
+function canConfirmItem(item: StreamItem): boolean {
+  return !item.confirmAuthor?.id || item.confirmAuthor.id === authStore.user?.id
+}
+
+/** 返回待确认卡作者的展示名称，供协作者只读提示使用。 */
+function confirmAuthorLabel(item: StreamItem): string {
+  return item.confirmAuthor?.display_name || item.confirmAuthor?.username || '发起人'
+}
+
+/** 为每次用户发送生成浏览器侧幂等键，断线重发时避免重复触发 Harness。 */
+function createClientMessageId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return `browser-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 }
 
 const events = ref<StreamItem[]>([])
@@ -1083,6 +1219,48 @@ function gcIdleSockets(keepId: string) {
     ws.close()
     sockets.delete(id)
   }
+}
+
+/** 服务端以 4404 收回会话后同步移除本地缓存，避免列表留下无法重连的幽灵项。 */
+function removeInaccessibleSession(sid: string) {
+  const index = sessions.value.findIndex((session) => session.id === sid)
+  const wasCurrent = currentSessionId.value === sid
+  const socket = sockets.get(sid)
+  if (socket) socket.close()
+  sockets.delete(sid)
+  sessionRuntimes.delete(sid)
+  selectedSessionIds.value = selectedSessionIds.value.filter((id) => id !== sid)
+  const nextGenerating = { ...generatingBySession.value }
+  delete nextGenerating[sid]
+  generatingBySession.value = nextGenerating
+  if (index < 0) return
+
+  sessions.value.splice(index, 1)
+  if (!wasCurrent) return
+  if (agentWs === socket) agentWs = null
+  const next = sessions.value[index] || sessions.value[index - 1]
+  if (next) {
+    void selectSession(next.id)
+  } else {
+    void handleCreateSession()
+  }
+}
+
+/** 切换单个 owner 会话的批量选择状态。 */
+function toggleSessionSelected(sid: string) {
+  if (selectedSessionIds.value.includes(sid)) {
+    selectedSessionIds.value = selectedSessionIds.value.filter((id) => id !== sid)
+  } else {
+    selectedSessionIds.value = [...selectedSessionIds.value, sid]
+  }
+}
+
+/** 全选或清空当前列表中可由本人删除的会话。 */
+function handleSelectAllChange(event: Event) {
+  const checked = (event.target as HTMLInputElement).checked
+  selectedSessionIds.value = checked
+    ? sessions.value.filter((session) => session.can_delete).map((session) => session.id)
+    : []
 }
 
 /* ─── 页面级定时器登记：所有演示/兜底定时器统一登记，组件卸载时集中清理，避免回调写入已销毁状态 ─── */
@@ -1255,8 +1433,23 @@ const dockClosingNote = ref('')
 /** S10 任务结束收尾：先展示完成 note，2.6s 后再隐藏进度坞（对齐原型 hideDock）。 */
 function finishDock(note: string) {
   activeTask.value = null
+  cancellingTaskId.value = null
   dockClosingNote.value = note
   trackTimeout(() => { dockClosingNote.value = '' }, 2600)
+}
+
+/** 仅在服务端确认取消后关闭进度坞，避免网络失败被前端误报为已取消。 */
+function finishCancelledTask(taskId: string) {
+  if (activeTask.value?.id === taskId) {
+    activeTask.value.status = 'cancelled'
+    activeTask.value.progress = {
+      ...(activeTask.value.progress || { done: 0, total: 0 }),
+      message: '任务已取消',
+    }
+    finishDock('任务已取消')
+    return
+  }
+  if (cancellingTaskId.value === taskId) cancellingTaskId.value = null
 }
 
 /* ─── S3 思考卡流式打字（原型 300-328） ─── */
@@ -1432,7 +1625,7 @@ function handleSendClick() {
     flowTimers.forEach(id => clearTracked(id))
     events.value.forEach(ev => { if (ev.type === 'thought' && !ev.done) finishThought(ev) })
     if (agentWs?.isConnected) {
-      agentWs.sendUserMessage('/stop', [])
+      agentWs.sendUserMessage('/stop', [], createClientMessageId())
     } else {
       setCurrentGenerating(false)
       events.value.push({
@@ -1480,10 +1673,19 @@ function sendPredefined(prompt: string) {
 }
 
 function handleUserSend(text: string, files: any[] = []) {
+  const clientMessageId = createClientMessageId()
   events.value.push({
     type: 'user',
     text,
     files,
+    clientMessageId,
+    author: authStore.user
+      ? {
+          id: authStore.user.id,
+          username: authStore.user.username,
+          display_name: authStore.user.display_name,
+        }
+      : null,
   })
   setCurrentGenerating(true)
   harnessStage.value = 'plan'
@@ -1505,7 +1707,11 @@ function handleUserSend(text: string, files: any[] = []) {
     events.value.push({ type: 'typing' })
     scrollToBottom()
     // 契约：attachments = [{ file_id }]，仅回传上传成功的附件，失败附件按提示忽略
-    agentWs.sendUserMessage(text, files.filter(f => f.id).map(f => ({ file_id: f.id })))
+    agentWs.sendUserMessage(
+      text,
+      files.filter(f => f.id).map(f => ({ file_id: f.id })),
+      clientMessageId,
+    )
   } else if (api.isMock()) {
     // 显式 mock 模式保留本地演示，实时模式绝不伪造任务、资产或报告。
     simulateAgentFlow(text, files)
@@ -1677,6 +1883,10 @@ function stampConfirmCard(item: StreamItem, confirmed: boolean) {
 }
 
 function handleConfirmAck(item: StreamItem, confirmed: boolean) {
+  if (!canConfirmItem(item)) {
+    message.error(`仅 ${confirmAuthorLabel(item)} 可以确认或取消该任务`)
+    return
+  }
   // F8 确认前卡内校验：不通过则留卡内显示红字，不盖章、不 Toast
   if (confirmed && !validateConfirmCard(item)) return
 
@@ -1692,7 +1902,9 @@ function handleConfirmAck(item: StreamItem, confirmed: boolean) {
   if (useLive) {
     if (confirmed) {
       pendingAckItem.value = item
-      agentWs!.sendConfirmAck(true, item.card)
+      // confirm_author 是服务端事件元数据，TaskSpec 输入模型严格拒绝，提交前必须移除。
+      const { confirm_author: _confirmAuthor, ...patch } = item.card || {}
+      agentWs!.sendConfirmAck(true, patch)
       return
     }
     stampConfirmCard(item, false)
@@ -1845,16 +2057,25 @@ function runStressChild(card: any) {
 }
 
 function handleInterpretReport(reportId: string) {
+  const clientMessageId = createClientMessageId()
   events.value.push({
     type: 'user',
     text: `解读报告 #${reportId}`,
+    clientMessageId,
+    author: authStore.user
+      ? {
+          id: authStore.user.id,
+          username: authStore.user.username,
+          display_name: authStore.user.display_name,
+        }
+      : null,
   })
   setCurrentGenerating(true)
   scrollToBottom(true)
 
   // 实时模式交由服务端智能体解读，结果经 WS 事件回流。
   if (agentWs?.isConnected) {
-    agentWs.sendUserMessage(`解读报告 #${reportId}`)
+    agentWs.sendUserMessage(`解读报告 #${reportId}`, [], clientMessageId)
     return
   }
 
@@ -1952,6 +2173,11 @@ function handleWsToggle() {
 }
 
 function handleCancelActiveTask(taskId: string) {
+  if (!canCancelActiveTask.value || activeTask.value?.id !== taskId) {
+    message.error('仅任务创建者可以取消任务')
+    return
+  }
+  if (cancellingTaskId.value === taskId) return
   // S9 取消弹窗区分压测/评测：压测立即停发（危险语义按钮），评测当前样本结束后停止
   const isStress = activeTask.value?.kind === 'stress'
   dialog.warning({
@@ -1963,14 +2189,22 @@ function handleCancelActiveTask(taskId: string) {
     negativeText: '放弃',
     positiveButtonProps: isStress ? { type: 'error' } : undefined,
     onPositiveClick: async () => {
+      if (cancellingTaskId.value === taskId) return
+      cancellingTaskId.value = taskId
       try {
-        // 契约：Agent 页取消走 WS 上行 cancel_task（上行仅三类消息）；连接不可用时回退 REST
-        if (agentWs?.isConnected) agentWs.sendCancelTask(taskId)
-        else await api.tasks.cancel(taskId)
-      } catch {}
-      // 对齐原型 hideDock：先展示「已提交取消请求」note，2.6s 后隐藏进度坞
-      finishDock('已提交取消请求')
-      message.success(isStress ? '已提交停止发压请求' : '评测任务已取消（cancelled）')
+        // 契约：优先使用 WS 上行 cancel_task；发送失败才回退 REST，避免链路半开时静默丢请求。
+        const sentByWs = agentWs?.sendCancelTask(taskId) ?? false
+        if (sentByWs) {
+          message.info(isStress ? '停止发压请求已提交，等待服务端确认' : '取消请求已提交，等待服务端确认')
+          return
+        }
+        const cancelled = await api.tasks.cancel(taskId)
+        finishCancelledTask(cancelled.id)
+        message.success(isStress ? '压测任务已停止' : '评测任务已取消（cancelled）')
+      } catch (err: any) {
+        if (cancellingTaskId.value === taskId) cancellingTaskId.value = null
+        message.error(err?.message || '取消请求失败，请稍后重试')
+      }
     },
   })
 }
@@ -2043,7 +2277,15 @@ async function loadSessionHistory(sid: string): Promise<number> {
         rawList.push({
           time: t,
           priority: 1,
-          item: { type: 'user', text: m.content || '', files: m.attachments || [], noAnim: true },
+          item: {
+            type: 'user',
+            text: m.content || '',
+            files: normalizeMessageFiles(m.attachments),
+            messageId: m.id,
+            clientMessageId: m.client_message_id || undefined,
+            author: m.author || null,
+            noAnim: true,
+          },
         })
       } else if (m.role === 'assistant') {
         rawList.push({
@@ -2104,6 +2346,7 @@ async function loadSessionHistory(sid: string): Promise<number> {
           item: {
             type: 'confirm',
             card: normalizeConfirmCard(p),
+            confirmAuthor: p.confirm_author || null,
             isAcked: true,
             summary: '',
             open: false,
@@ -2137,14 +2380,26 @@ async function loadSessionHistory(sid: string): Promise<number> {
     const replay = rawList.map((x) => x.item)
 
     if (history.pending_confirm) {
-      const card = normalizeConfirmCard(history.pending_confirm)
+      const card = normalizeConfirmCard({
+        ...history.pending_confirm,
+        confirm_author: history.pending_confirm_author || undefined,
+      })
       const existing = [...replay].reverse().find((x) => x.type === 'confirm')
       if (existing) {
         existing.card = card
+        existing.confirmAuthor = history.pending_confirm_author || null
         existing.isAcked = false
         existing.open = true
       } else {
-        replay.push({ type: 'confirm', card, isAcked: false, summary: '', open: true, noAnim: true })
+        replay.push({
+          type: 'confirm',
+          card,
+          confirmAuthor: history.pending_confirm_author || null,
+          isAcked: false,
+          summary: '',
+          open: true,
+          noAnim: true,
+        })
       }
     }
     currentContextMeter.value = history.context_meter || null
@@ -2196,9 +2451,10 @@ async function selectSession(sid: string) {
   const sess = sessions.value.find(s => s.id === sid)
   isRailOpen.value = !!sess?.active_task || rt.isGenerating
 
-  if (sess?.active_task?.id) {
+  const activeTaskId = sess?.active_task?.id || rt.activeTask?.id
+  if (activeTaskId) {
     try {
-      const t = await api.tasks.get(sess.active_task.id)
+      const t = await api.tasks.get(activeTaskId)
       if (epoch !== selectEpoch || currentSessionId.value !== sid) return
       if (t && ['queued', 'running', 'awaiting_case_confirm'].includes(t.status)) {
         activeTask.value = {
@@ -2207,6 +2463,9 @@ async function selectSession(sid: string) {
           status: t.status,
           config: t.config,
           progress: t.progress || { percent: 0, done: 0, total: 100, message: '任务进行中...' },
+          creator_id: t.creator_id,
+          created_by: t.created_by,
+          creator: t.creator,
           created_at: t.created_at,
         }
         rt.activeTask = activeTask.value
@@ -2234,16 +2493,93 @@ async function handleCreateSession() {
     sessions.value.unshift(newSession)
     selectSession(newSession.id)
   } catch {
-    const localS = { id: `s-${Date.now()}`, title: '新会话', created_at: new Date().toISOString() }
+    const localS: AgentSession = {
+      id: `s-${Date.now()}`,
+      title: '新会话',
+      owner_id: authStore.user?.id || '',
+      visibility: 'private',
+      can_manage: true,
+      can_delete: true,
+      created_at: new Date().toISOString(),
+    }
     sessions.value.unshift(localS)
     selectSession(localS.id)
   }
 }
 
-function handleDeleteSession(_sid: string) {
-  // API.md §3.4/§9：V1 不提供「删除会话」接口；会话为审计留存资产，
-  // 此处按设计规范以提示替代假删除，不向服务端发送请求。
-  message.info('当前版本暂不支持删除会话，对话记录将长期保留以便回溯')
+/** 仅 owner 可切换会话私有/团队共享范围，服务端为最终权限裁决。 */
+async function toggleSessionSharing() {
+  const session = currentSession.value
+  if (!session?.can_manage) return
+  const visibility = session.visibility === 'team' ? 'private' : 'team'
+  try {
+    const updated = await api.sessions.updateSharing(session.id, visibility)
+    const target = sessions.value.find((item) => item.id === session.id)
+    if (target) Object.assign(target, updated)
+    message.success(visibility === 'team' ? '已向团队共享此会话' : '已收回团队共享')
+  } catch (err: any) {
+    message.error(err?.message || '更新会话共享设置失败')
+  }
+}
+
+/** 软删除空闲会话；成功后关闭旧连接并切换到下一个可见会话。 */
+function handleDeleteSession(sid: string) {
+  const target = sessions.value.find((item) => item.id === sid)
+  if (!target?.can_delete) {
+    message.error('仅会话创建者可以删除会话')
+    return
+  }
+  dialog.warning({
+    title: '删除会话？',
+    content: '对话将在列表中隐藏，但消息、任务和报告会保留用于审计回溯。正在生成、待确认或执行中的任务需先处理。',
+    positiveText: '删除会话',
+    negativeText: '保留',
+    positiveButtonProps: { type: 'error' },
+    onPositiveClick: async () => {
+      try {
+        await api.sessions.remove(sid)
+        removeInaccessibleSession(sid)
+        message.success('会话已删除，对话与任务记录仍保留审计')
+      } catch (err: any) {
+        message.error(err?.message || '删除会话失败')
+      }
+    },
+  })
+}
+
+/** 批量软删除 owner 会话；每个请求仍由服务端独立校验活动任务与权限。 */
+function handleBatchDeleteSessions() {
+  const ids = selectedSessionIds.value.filter((sid) => sessions.value.some((session) => session.id === sid && session.can_delete))
+  if (!ids.length) {
+    selectedSessionIds.value = []
+    return
+  }
+  dialog.warning({
+    title: '批量删除会话？',
+    content: `将删除选中的 ${ids.length} 个会话。消息、任务和报告仍会保留用于审计回溯；包含生成中、待确认或执行中任务的会话会单独失败。`,
+    positiveText: '删除选中',
+    negativeText: '保留',
+    positiveButtonProps: { type: 'error' },
+    onPositiveClick: async () => {
+      const results = await Promise.allSettled(ids.map((sid) => api.sessions.remove(sid)))
+      const succeeded = ids.filter((_sid, index) => results[index]?.status === 'fulfilled')
+      const failed = results.filter((result) => result.status === 'rejected')
+      succeeded.forEach((sid) => removeInaccessibleSession(sid))
+      if (!failed.length) {
+        message.success(`已删除 ${succeeded.length} 个会话，对话与任务记录仍保留审计`)
+        return
+      }
+      const firstFailure = failed[0]
+      const reason = firstFailure?.status === 'rejected' && firstFailure.reason?.message
+        ? `（${firstFailure.reason.message}）`
+        : ''
+      if (succeeded.length) {
+        message.warning(`已删除 ${succeeded.length} 个会话，${failed.length} 个未删除${reason}`)
+      } else {
+        message.error(`批量删除失败：${failed.length} 个会话均未删除${reason}`)
+      }
+    },
+  })
 }
 
 function initWebSocket(sessionId: string, lastEventId = 0) {
@@ -2263,6 +2599,9 @@ function initWebSocket(sessionId: string, lastEventId = 0) {
     if (sessionId === currentSessionId.value) {
       isWsOnline.value = connected
     }
+  })
+  ws.onClosed((code) => {
+    if (code === 4404) removeInaccessibleSession(sessionId)
   })
   ws.onEvent((ev: WsServerEvent) => {
     const sid = (ev.session_id || sessionId || currentSessionId.value || '') as string
@@ -2295,6 +2634,36 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
   const buf = rt.events
   const p = ev.payload || {}
   switch (ev.event) {
+    case 'message': {
+      const messageId = String(p.id || '')
+      const clientMessageId = typeof p.client_message_id === 'string' ? p.client_message_id : ''
+      const existing = buf.find((item) => (
+        item.type === 'user'
+        && ((messageId && item.messageId === messageId)
+          || (clientMessageId && item.clientMessageId === clientMessageId))
+      ))
+      const author = p.author && typeof p.author === 'object' ? p.author as SessionAuthor : null
+      if (existing) {
+        existing.messageId = messageId || existing.messageId
+        existing.clientMessageId = clientMessageId || existing.clientMessageId
+        existing.author = author || existing.author
+        existing.files = normalizeMessageFiles(p.attachments)
+      } else {
+        buf.push({
+          type: 'user',
+          text: String(p.content || ''),
+          files: normalizeMessageFiles(p.attachments),
+          messageId: messageId || undefined,
+          clientMessageId: clientMessageId || undefined,
+          author,
+        })
+      }
+      if (author?.id && author.id !== authStore.user?.id) {
+        markGenerating(sid, true)
+        rt.harnessStage = 'plan'
+      }
+      break
+    }
     case 'thought': {
       if (p.stream === 'think') {
         const delta = String(p.text || '')
@@ -2343,7 +2712,14 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
         })
       }
       if (text && !stage) {
-        buf.push({ type: 'agent', raw: text, text: renderBubbleHtml(text), streaming: false })
+        const streaming = [...buf].reverse().find(e => e.type === 'agent' && e.streaming)
+        if (streaming) {
+          streaming.raw = text
+          streaming.text = renderBubbleHtml(text)
+          streaming.streaming = false
+        } else {
+          buf.push({ type: 'agent', raw: text, text: renderBubbleHtml(text), streaming: false })
+        }
         markGenerating(sid, false)
         rt.harnessStage = ''
       } else if (!stage) {
@@ -2376,6 +2752,7 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
       buf.push({
         type: 'confirm',
         card: normalizeConfirmCard(p),
+        confirmAuthor: p.confirm_author || null,
         isAcked: false,
         summary: '',
         open: true,
@@ -2437,6 +2814,40 @@ function handleWsEvent(ev: WsServerEvent) {
   }
   const p = ev.payload || {}
   switch (ev.event) {
+    case 'message': {
+      // 用户消息已同时存在于 REST 历史与 WS 事件中；按服务端 ID 或浏览器幂等键合并。
+      const messageId = String(p.id || '')
+      const clientMessageId = typeof p.client_message_id === 'string' ? p.client_message_id : ''
+      const existing = events.value.find((item) => (
+        item.type === 'user'
+        && ((messageId && item.messageId === messageId)
+          || (clientMessageId && item.clientMessageId === clientMessageId))
+      ))
+      const author = p.author && typeof p.author === 'object' ? p.author as SessionAuthor : null
+      if (existing) {
+        existing.messageId = messageId || existing.messageId
+        existing.clientMessageId = clientMessageId || existing.clientMessageId
+        existing.author = author || existing.author
+        existing.files = normalizeMessageFiles(p.attachments)
+      } else {
+        events.value.push({
+          type: 'user',
+          text: String(p.content || ''),
+          files: normalizeMessageFiles(p.attachments),
+          messageId: messageId || undefined,
+          clientMessageId: clientMessageId || undefined,
+          author,
+        })
+      }
+      // 协作者发言意味着本会话即将生成一轮回复，复用现有阶段提示与流式气泡。
+      if (author?.id && author.id !== authStore.user?.id) {
+        isGenerating.value = true
+        harnessStage.value = 'plan'
+        turnLatencyMs.value = 0
+      }
+      scrollToBottom()
+      break
+    }
     case 'thought': {
       // 思考链增量帧（瞬态）：追加到可展开/收起的思考卡，无则新建
       if (p.stream === 'think') {
@@ -2564,6 +2975,10 @@ function handleWsEvent(ev: WsServerEvent) {
         if (p.name === 'model.list') availableProfiles.value = p.data?.items || []
         if (p.name === 'dataset.list') availableDatasets.value = p.data?.items || []
         if (p.name === 'kb.list') availableKbs.value = p.data?.items || []
+        if (p.name === 'task.cancel' && p.data?.task_id) {
+          finishCancelledTask(p.data.task_id)
+          message.success('任务已取消（cancelled）')
+        }
         if (p.name === 'task.create' && pendingAckItem.value) {
           stampConfirmCard(pendingAckItem.value, true)
           pendingAckItem.value = null
@@ -2582,6 +2997,7 @@ function handleWsEvent(ev: WsServerEvent) {
         type: 'confirm',
         // 契约：确认卡 TaskSpec 在 payload；规范化补齐 run / stress 默认值，折叠区绑定路径始终有效
         card: normalizeConfirmCard(p),
+        confirmAuthor: p.confirm_author || null,
         isAcked: false,
         summary: '',
         open: true,
@@ -2603,6 +3019,14 @@ function handleWsEvent(ev: WsServerEvent) {
             progress,
             created_at: new Date().toISOString(),
           } as any
+          // Worker 进度事件不携带创建者，补读任务以决定共享会话里的取消按钮归属。
+          void api.tasks.get(ev.task_id).then((task) => {
+            if (activeTask.value?.id === task.id) {
+              activeTask.value.creator_id = task.creator_id
+              activeTask.value.created_by = task.created_by
+              activeTask.value.creator = task.creator
+            }
+          }).catch(() => undefined)
         } else {
           activeTask.value.progress = progress
         }
@@ -2630,6 +3054,10 @@ function handleWsEvent(ev: WsServerEvent) {
     }
     case 'error': {
       finishLiveThought()
+      // 取消失败时恢复按钮；不能保留“取消中”假象阻断用户重试。
+      if (cancellingTaskId.value && (!ev.task_id || ev.task_id === cancellingTaskId.value)) {
+        cancellingTaskId.value = null
+      }
       // A1：校验失败保留确认卡可编辑，不盖章
       if (pendingAckItem.value) {
         pendingAckItem.value.isAcked = false
@@ -2733,6 +3161,44 @@ onBeforeUnmount(() => {
 <style scoped>
 .agent-layout {
   height: calc(100vh - var(--topbar-h) - 20px);
+}
+
+/* 团队共享会话的轻量状态标识，避免把私有/共享混在同一种列表视觉中。 */
+.session-team-badge,
+.chat-team-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  color: var(--c-agent);
+  background: var(--t-agent);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 3px 6px;
+  white-space: nowrap;
+}
+
+.chat-team-badge {
+  font-size: 11px;
+}
+
+/* 协作者消息左对齐并弱化背景色，作者行让多人记录可以追溯。 */
+.msg-user.remote {
+  align-items: flex-start;
+}
+
+.msg-user.remote .bubble-user {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-bottom-left-radius: 6px;
+  border-bottom-right-radius: 20px;
+  color: var(--text-primary);
+}
+
+.user-author {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 600;
 }
 
 /* 顶部与输入框模型选择胶囊按钮 */

@@ -1,6 +1,6 @@
 /**
  * AI 测试与评估平台 — 统一 HTTP 客户端
- * 依据：docs/AI测试与评估平台-API.md (V1.3)
+ * 依据：docs/AI测试与评估平台-API.md (V1.5)
  */
 import axios, { type AxiosRequestConfig } from 'axios'
 import {
@@ -26,6 +26,9 @@ import {
   type DispatchEventPage,
   type DispatchConfig,
   type McpTool,
+  type AgentSession,
+  type SessionHistory,
+  type SessionVisibility,
 } from './types'
 import {
   MOCK_PROFILES,
@@ -111,7 +114,15 @@ const mockStore = {
   reports: { ...MOCK_REPORTS },
   whitelist: [...MOCK_WHITELIST],
   sessions: [
-    { id: 's-default', title: '新建基准评测会话', created_at: new Date().toISOString() },
+    {
+      id: 's-default',
+      title: '新建基准评测会话',
+      owner_id: 'u-admin',
+      visibility: 'private' as SessionVisibility,
+      can_manage: true,
+      can_delete: true,
+      created_at: new Date().toISOString(),
+    },
   ],
 }
 
@@ -355,13 +366,17 @@ export const api = {
       })
       return data
     },
-    async cancel(id: string, reason?: string): Promise<void> {
+    async cancel(id: string, reason?: string): Promise<Task> {
       if (getDataMode() === 'mock') {
         const t = mockStore.tasks.find((x) => x.id === id)
-        if (t) t.status = 'cancelled'
-        return
+        if (!t) throw new ApiError('任务不存在', ErrorCode.NOT_FOUND, 404)
+        t.status = 'cancelled'
+        t.progress = { ...(t.progress || { done: 0, total: 0 }), message: '任务已取消' }
+        return t
       }
-      await http.post(`/api/tasks/${id}/cancel`, { reason })
+      // 返回服务端终态，调用方仅在取消实际成功后更新本地界面。
+      const { data } = await http.post(`/api/tasks/${id}/cancel`, { reason })
+      return data
     },
     async rerun(id: string): Promise<Task> {
       if (getDataMode() === 'mock') {
@@ -972,7 +987,7 @@ export const api = {
 
   // 11. 会话管理
   sessions: {
-    async list(): Promise<any[]> {
+    async list(): Promise<AgentSession[]> {
       if (getDataMode() === 'mock') return mockStore.sessions
       try {
         const { data } = await http.get('/api/sessions')
@@ -982,38 +997,45 @@ export const api = {
         throw e
       }
     },
-    async create(title?: string): Promise<any> {
+    async create(title?: string, visibility: SessionVisibility = 'private'): Promise<AgentSession> {
       if (getDataMode() === 'mock') {
-        const s = {
+        const s: AgentSession = {
           id: 's-' + Date.now(),
           title: title || '新会话',
+          owner_id: 'u-admin',
+          visibility,
+          can_manage: true,
+          can_delete: true,
           created_at: new Date().toISOString(),
         }
         mockStore.sessions.unshift(s)
         return s
       }
-      const { data } = await http.post('/api/sessions', { title: title || '新会话' })
+      const { data } = await http.post('/api/sessions', { title: title || '新会话', visibility })
       return data
     },
-    async getMessages(id: string): Promise<{
-      messages: any[]
-      events: any[]
-      pending_confirm?: Record<string, unknown> | null
-      compact_summary?: string | null
-      context_meter?: {
-        messages: number
-        skills: number
-        summary: number
-        headroom: number
-        window: number
+    async updateSharing(id: string, visibility: SessionVisibility): Promise<AgentSession> {
+      if (getDataMode() === 'mock') {
+        const session = mockStore.sessions.find((item) => item.id === id)
+        if (!session) throw new ApiError('会话不存在', ErrorCode.NOT_FOUND)
+        session.visibility = visibility
+        return session
       }
-    }> {
+      const { data } = await http.put(`/api/sessions/${id}/sharing`, { visibility })
+      return data
+    },
+    async remove(id: string): Promise<void> {
+      if (getDataMode() === 'mock') {
+        mockStore.sessions = mockStore.sessions.filter((item) => item.id !== id)
+        return
+      }
+      await http.delete(`/api/sessions/${id}`)
+    },
+    async getMessages(id: string): Promise<SessionHistory> {
       if (getDataMode() === 'mock') return { messages: [], events: [] }
       const { data } = await http.get(`/api/sessions/${id}/messages`)
       return data
     },
-    // 说明：API.md §3.4/§9 明确 V1 不提供「删除会话」接口，
-    // 会话为审计留存资产仅允许新建，请勿在此追加 delete 封装。
   },
   slashCommands: {
     async list(): Promise<{ items: any[]; total: number }> {

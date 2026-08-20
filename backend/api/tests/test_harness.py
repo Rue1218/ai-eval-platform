@@ -9,7 +9,7 @@ import pytest
 
 from app.agent.context import run_compact
 from app.agent.defaults import HARD_MAX_TOOL_ROUNDS, MAX_MODEL_CALLS, is_long_tool
-from app.agent.harness import handle_confirm_ack, should_emit_stage_thoughts
+from app.agent.harness import handle_cancel_task, handle_confirm_ack, should_emit_stage_thoughts
 from app.agent.mcp_tools import redact_secrets, truncate_tool_data
 from app.agent.persona import PERSONA_SYSTEM, turn_system
 from app.agent.plan import (
@@ -35,7 +35,7 @@ from app.agent.slash import (
     unknown_command_text,
 )
 from app.errors import AppError, ErrorCode
-from app.models import Dataset, ProtocolProfile, Task
+from app.models import Dataset, ProtocolProfile, Task, User
 from app.models import Session as AgentSession
 
 
@@ -823,3 +823,143 @@ class _FakeQuery:
 class _FakeDb:
     def query(self, *_args, **_kwargs):
         return _FakeQuery()
+
+
+class _CancelQuery:
+    """返回指定任务的取消链路查询桩。"""
+
+    def __init__(self, task: Task | None):
+        self.task = task
+        self.locked = False
+
+    def filter(self, *_args, **_kwargs):
+        return self
+
+    def first(self):
+        return self.task
+
+    def with_for_update(self):
+        self.locked = True
+        return self
+
+
+class _CancelDb:
+    """覆盖 WS 取消分支所需的最小事务观测。"""
+
+    def __init__(self, task: Task | None):
+        self.query_result = _CancelQuery(task)
+        self.added: list = []
+        self.commit_calls = 0
+
+    def query(self, *_args, **_kwargs):
+        return self.query_result
+
+    def add(self, item):
+        self.added.append(item)
+
+    def commit(self):
+        self.commit_calls += 1
+
+
+def _cancel_task(status: str = "running", creator: str = "u-owner") -> Task:
+    """构造不落库的 WS 取消任务。"""
+    return Task(
+        id="t-cancel",
+        kind="benchmark",
+        status=status,
+        created_by=creator,
+        config={},
+        progress={"done": 1, "total": 10},
+        result={},
+    )
+
+
+def test_ws_cancel_by_creator_writes_timeline_and_confirmation():
+    """WS 取消与 REST 同样写审计、时间线，并回传可关联任务的确认事件。"""
+    task = _cancel_task()
+    db = _CancelDb(task)
+    events: list[tuple[str, dict, str | None]] = []
+
+    async def emit(event: str, payload: dict, *, task_id: str | None = None) -> int:
+        events.append((event, payload, task_id))
+        return len(events)
+
+    asyncio.run(
+        handle_cancel_task(
+            db,
+            session=AgentSession(id="s-cancel", user_id="u-owner", title="取消测试"),
+            user=User(id="u-owner", username="owner"),
+            task_id=task.id,
+            emit=emit,
+        )
+    )
+
+    assert task.status == "cancelled"
+    assert task.cancel_requested_at == task.finished_at
+    assert task.progress["message"] == "任务已取消"
+    added_types = {type(item).__name__ for item in db.added}
+    assert {"TaskEvent", "AuditLog", "Message"} <= added_types
+    timeline = next(item for item in db.added if type(item).__name__ == "TaskEvent")
+    assert timeline.event == "cancelled"
+    assert timeline.payload == {"status": "cancelled"}
+    assert ("tool_call", {"name": "task.cancel", "arguments": {"task_id": task.id}}, task.id) in events
+    assert any(
+        event == "tool_result" and payload["ok"] is True and payload["data"]["task_id"] == task.id and event_task_id == task.id
+        for event, payload, event_task_id in events
+    )
+    assert any(event == "thought" and event_task_id == task.id for event, _payload, event_task_id in events)
+    assert db.commit_calls == 2
+    assert db.query_result.locked is True
+
+
+def test_ws_cancel_by_non_creator_is_unauthorized_without_writes():
+    """WS 入口不得用 NOT_FOUND 隐藏已有任务，也不能写入取消状态。"""
+    task = _cancel_task(creator="u-owner")
+    db = _CancelDb(task)
+    events: list[tuple[str, dict, str | None]] = []
+
+    async def emit(event: str, payload: dict, *, task_id: str | None = None) -> int:
+        events.append((event, payload, task_id))
+        return len(events)
+
+    asyncio.run(
+        handle_cancel_task(
+            db,
+            session=AgentSession(id="s-cancel", user_id="u-other", title="取消测试"),
+            user=User(id="u-other", username="other"),
+            task_id=task.id,
+            emit=emit,
+        )
+    )
+
+    assert events == [("error", {"code": ErrorCode.UNAUTHORIZED.value, "message": "没有权限做这件事"}, task.id)]
+    assert task.status == "running"
+    assert task.cancel_requested_at is None
+    assert db.added == []
+    assert db.commit_calls == 0
+
+
+@pytest.mark.parametrize("status", ["succeeded", "cancelled"])
+def test_ws_cancel_terminal_task_is_rejected_without_writes(status: str):
+    """已结束任务拒绝重复取消，不能追加审计或时间线噪声。"""
+    task = _cancel_task(status=status)
+    db = _CancelDb(task)
+    events: list[tuple[str, dict, str | None]] = []
+
+    async def emit(event: str, payload: dict, *, task_id: str | None = None) -> int:
+        events.append((event, payload, task_id))
+        return len(events)
+
+    asyncio.run(
+        handle_cancel_task(
+            db,
+            session=AgentSession(id="s-cancel", user_id="u-owner", title="取消测试"),
+            user=User(id="u-owner", username="owner"),
+            task_id=task.id,
+            emit=emit,
+        )
+    )
+
+    assert events == [("error", {"code": ErrorCode.VALIDATION.value, "message": "任务已结束"}, task.id)]
+    assert db.added == []
+    assert db.commit_calls == 0

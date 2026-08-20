@@ -131,15 +131,26 @@ class SessionCreate(ApiModel):
     """创建空 Agent 会话的输入。"""
 
     title: str = Field(default="新会话", min_length=1, max_length=200)
+    visibility: Literal["private", "team"] = "private"
+
+
+class SessionSharingUpdate(ApiModel):
+    """会话创建者设置团队共享范围的输入。"""
+
+    visibility: Literal["private", "team"]
 
 
 class SessionOut(OrmOut):
-    """会话列表项及可选活动任务摘要。"""
+    """会话列表项及当前成员的共享管理权限。"""
 
     id: str
     title: str
+    owner_id: str = Field(validation_alias=AliasChoices("user_id", "owner_id"))
+    visibility: Literal["private", "team"] = "private"
     created_at: Any
     updated_at: Any
+    can_manage: bool = False
+    can_delete: bool = False
     active_task: dict[str, Any] | None = None
 
 
@@ -150,6 +161,8 @@ class MessageOut(OrmOut):
     role: str
     content: str
     attachments: list[str]
+    author_id: str | None = None
+    client_message_id: str | None = None
     created_at: Any
 
 

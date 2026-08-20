@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from ..db import SessionLocal
 from ..errors import AppError, ErrorCode
-from ..models import AuditLog, Dataset, Message, ProtocolProfile, Task, User
+from ..models import AuditLog, Dataset, Message, ProtocolProfile, Task, TaskEvent, User
 from ..models import Session as AgentSession
 from ..schemas import TaskCreate
 from .context import history_for_plan, run_compact
@@ -55,6 +55,8 @@ class HarnessAborted(Exception):
 class SessionHarness:
     """单会话进行中的 Harness 回合。"""
 
+    # 当前回合的发言人；共享会话中只有该成员可执行 /stop。
+    user_id: str
     abort: asyncio.Event
     stop: threading.Event
     task: asyncio.Task | None = None
@@ -464,9 +466,39 @@ async def _run_turn(
 
     if plan.delivery == "confirm" and reflect.verdict == "pass" and reflect.spec:
         card = dict(reflect.spec)
-        session.pending_confirm = card
+        # 再读并锁住会话，防止并发回合覆盖尚未处理的确认卡。
+        locked_session = (
+            db.query(AgentSession)
+            .filter(AgentSession.id == session.id, AgentSession.deleted_at.is_(None))
+            .with_for_update()
+            .first()
+        )
+        if not locked_session:
+            raise AppError(ErrorCode.NOT_FOUND, "会话不存在")
+        if locked_session.pending_confirm:
+            await emit(
+                "error",
+                {
+                    "code": ErrorCode.CONCURRENCY.value,
+                    "message": "当前会话已有待确认任务，请先确认或取消后再发起新任务。",
+                },
+            )
+            return
+        locked_session.pending_confirm = card
+        locked_session.pending_confirm_author_id = user.id
         db.commit()
-        await emit("confirm", card)
+        await emit(
+            "confirm",
+            {
+                **card,
+                # 元数据不属于 TaskSpec；前端提交 patch 前必须剥离。
+                "confirm_author": {
+                    "id": user.id,
+                    "username": user.username,
+                    "display_name": user.display_name,
+                },
+            },
+        )
         return
 
     if plan.intent == "chat" or plan.delivery == "text":
@@ -580,7 +612,11 @@ async def _harness_entry(
     db = SessionLocal()
     task = asyncio.current_task()
     try:
-        session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+        session = (
+            db.query(AgentSession)
+            .filter(AgentSession.id == session_id, AgentSession.deleted_at.is_(None))
+            .first()
+        )
         user = db.query(User).filter(User.id == user_id).first()
         if not session or not user:
             return
@@ -650,16 +686,30 @@ async def dispatch_user_message(
     user_id: str,
     text: str,
     attachments: list[str],
+    is_session_owner: bool,
     emit_busy: EmitFn,
     emit_factory: Callable[[Session], EmitFn],
 ) -> None:
-    """收包循环调用：/stop 置 abort；其它输入在已有回合时拒绝排队；否则 create_task。"""
+    """收包循环调用：共享会话限制 /compact、/stop 的会话级副作用。"""
     existing = _HARNESS_BY_SESSION.get(session_id)
     running = existing is not None and existing.task is not None and not existing.task.done()
     parsed = parse_slash(text)
 
+    if parsed.command == "compact" and not is_session_owner:
+        await emit_busy(
+            "error",
+            {"code": ErrorCode.UNAUTHORIZED.value, "message": "仅会话创建者可以压缩共享会话上下文"},
+        )
+        return
+
     if running and existing:
         if parsed.command == "stop":
+            if existing.user_id != user_id:
+                await emit_busy(
+                    "error",
+                    {"code": ErrorCode.UNAUTHORIZED.value, "message": "仅本轮发起人可以停止生成"},
+                )
+                return
             existing.stop.set()
             existing.abort.set()
             if existing.task and not existing.task.done():
@@ -672,7 +722,7 @@ async def dispatch_user_message(
         await emit_busy("thought", {"text": "当前没有正在生成的内容"})
         return
 
-    handle = SessionHarness(abort=asyncio.Event(), stop=threading.Event())
+    handle = SessionHarness(user_id=user_id, abort=asyncio.Event(), stop=threading.Event())
     task = asyncio.create_task(
         _harness_entry(
             session_id=session_id,
@@ -712,11 +762,32 @@ async def handle_confirm_ack(
     patch: dict | None,
     emit: EmitFn,
 ) -> None:
-    """确认卡回执。ok=true 但校验失败：error + 卡保留（A1）。"""
+    """确认卡回执。共享会话中仅创建卡的成员可确认、拒绝或提交 patch。"""
+    # 确认/拒绝与创建确认卡共用 sessions 行锁，避免两个标签并发消费同一张卡。
+    query = db.query(AgentSession).filter(
+        AgentSession.id == session.id,
+        AgentSession.deleted_at.is_(None),
+    )
+    if hasattr(query, "with_for_update"):
+        query = query.with_for_update()
+    locked_session = query.first()
+    if locked_session is not None:
+        session = locked_session
     base = session.pending_confirm if isinstance(session.pending_confirm, dict) else None
+
+    if base is not None:
+        # 旧数据迁移会回填 owner；此处兜底避免历史卡在升级瞬间失去控制人。
+        author_id = session.pending_confirm_author_id or session.user_id
+        if author_id != user.id:
+            await emit(
+                "error",
+                {"code": ErrorCode.UNAUTHORIZED.value, "message": "仅确认卡发起人可以确认或取消该任务"},
+            )
+            return
 
     if not ok:
         session.pending_confirm = None
+        session.pending_confirm_author_id = None
         db.commit()
         await _deliver_sentence(db, session.id, emit, "已取消本次确认，不会创建任务。需要调整目标可以继续说。")
         return
@@ -771,6 +842,7 @@ async def handle_confirm_ack(
         session_id=session.id,
         config=spec.snapshot(),
         progress={"done": 0, "total": 0, "message": "任务已入队"},
+        # 与已验证的确认卡作者保持同一任务归属，不能被协作者劫持。
         created_by=user.id,
         status="queued",
     )
@@ -786,6 +858,7 @@ async def handle_confirm_ack(
         )
     )
     session.pending_confirm = None
+    session.pending_confirm_author_id = None
     try:
         db.commit()
         db.refresh(task)
@@ -828,9 +901,13 @@ async def handle_cancel_task(
     emit: EmitFn,
 ) -> None:
     """取消当前成员的非终态任务，与 REST cancel 语义一致。"""
-    task = db.query(Task).filter(Task.id == task_id, Task.created_by == user.id).first()
+    # 与 REST cancel 同样先锁定任务行，避免读到 Worker 即将完成前的陈旧 running 状态。
+    task = db.query(Task).filter(Task.id == task_id).with_for_update().first()
     if not task:
         await emit("error", {"code": ErrorCode.NOT_FOUND.value, "message": "任务不存在"})
+        return
+    if task.created_by != user.id:
+        await emit("error", {"code": ErrorCode.UNAUTHORIZED.value, "message": "没有权限做这件事"}, task_id=task.id)
         return
     if task.status in TERMINAL_STATUSES:
         await emit("error", {"code": ErrorCode.VALIDATION.value, "message": "任务已结束"}, task_id=task.id)
@@ -841,6 +918,14 @@ async def handle_cancel_task(
     task.finished_at = now
     task.progress = {**(task.progress or {}), "message": "任务已取消"}
     db.add(
+        TaskEvent(
+            task_id=task.id,
+            event="cancelled",
+            message="任务已取消",
+            payload={"status": "cancelled"},
+        )
+    )
+    db.add(
         AuditLog(
             user_id=user.id,
             action="task_cancel",
@@ -850,4 +935,17 @@ async def handle_cancel_task(
         )
     )
     db.commit()
-    await _deliver_sentence(db, session.id, emit, "已收到取消请求，任务状态已更新为 cancelled。")
+    # _emit 会提交 ws_events；先提交取消事务，避免事件落库提前释放任务行锁。
+    await emit("tool_call", {"name": "task.cancel", "arguments": {"task_id": task.id}}, task_id=task.id)
+    await emit(
+        "tool_result",
+        {"name": "task.cancel", "ok": True, "data": {"task_id": task.id, "status": "cancelled"}, "latency_ms": 0},
+        task_id=task.id,
+    )
+    await _deliver_sentence(
+        db,
+        session.id,
+        emit,
+        "已收到取消请求，任务状态已更新为 cancelled。",
+        task_id=task.id,
+    )

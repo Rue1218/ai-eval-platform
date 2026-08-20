@@ -61,12 +61,30 @@ class Session(Base):
     """Agent 对话会话，不承载浏览器登录 Cookie。"""
 
     __tablename__ = "sessions"
+    __table_args__ = (
+        CheckConstraint(
+            "visibility IN ('private', 'team')", name="ck_sessions_visibility"
+        ),
+        Index("ix_sessions_visibility_deleted_at", "visibility", "deleted_at"),
+    )
 
     id = Column(String, primary_key=True, default=uuid_str)
+    # 创建者（owner）始终不变；团队共享不改变资产归属。
     user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
     title = Column(String, nullable=False, default="新会话")
+    # private 仅 owner 可访问；team 对当前内部团队的正常成员开放协作。
+    visibility = Column(
+        String,
+        nullable=False,
+        default="private",
+        server_default=text("'private'"),
+    )
+    # 软删除仅隐藏会话入口，消息、事件、任务和报告仍保留供审计回溯。
+    deleted_at = Column(DateTime(timezone=True), nullable=True, index=True)
     # 当前未 ack 的确认卡（TaskSpec）；刷新回放优先读此列，禁止只靠进程内字典
     pending_confirm = Column(JSONB, nullable=True)
+    # 确认卡属于提出该卡的成员，团队协作者不能替其确认、拒绝或覆盖。
+    pending_confirm_author_id = Column(String, ForeignKey("users.id"), nullable=True)
     # /compact 摘要与窗口游标（messages.id）；从未压缩时皆为空
     compact_summary = Column(Text, nullable=True)
     compact_keep_from = Column(String, nullable=True)
@@ -78,12 +96,22 @@ class Message(Base):
     """可通过 REST 回放的会话文本和已上传附件引用。"""
 
     __tablename__ = "messages"
+    __table_args__ = (
+        # 同一浏览器重连重发同一个 client_message_id 时只保留一条用户消息。
+        UniqueConstraint(
+            "session_id", "client_message_id", name="uq_messages_session_client_message"
+        ),
+    )
 
     id = Column(String, primary_key=True, default=uuid_str)
     session_id = Column(String, ForeignKey("sessions.id"), nullable=False, index=True)
     role = Column(String, nullable=False)
     content = Column(Text, nullable=False)
     attachments = Column(JSONB, nullable=False, default=list)
+    # user 消息记录实际发言人；assistant/system 由平台生成，保留为空。
+    author_id = Column(String, ForeignKey("users.id"), nullable=True, index=True)
+    # 浏览器生成的幂等键，仅 user 消息使用，供实时回显去重。
+    client_message_id = Column(String(128), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 

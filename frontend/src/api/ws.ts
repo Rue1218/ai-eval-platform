@@ -1,18 +1,20 @@
 /**
  * AI 测试与评估平台 — WebSocket 智能体客户端
- * 依据：docs/AI测试与评估平台-PRD.md (5.1.3) 与 API.md (1.3)
+ * 依据：docs/AI测试与评估平台-PRD.md (5.1.3) 与 API.md (V1.5)
  */
 import { api } from './http'
 import type { WsServerEvent } from './types'
 
 export type WsEventHandler = (event: WsServerEvent) => void
 export type WsStatusHandler = (connected: boolean) => void
+export type WsCloseHandler = (code: number) => void
 
 export class AgentWebSocket {
   private ws: WebSocket | null = null
   private reconnectTimer: number | null = null
   private eventHandlers: Set<WsEventHandler> = new Set()
   private statusHandlers: Set<WsStatusHandler> = new Set()
+  private closeHandlers: Set<WsCloseHandler> = new Set()
   private isExplicitlyClosed = false
   // 静默判活：最近一次收到消息（含服务端 pong 心跳）的时间戳
   private lastReceiveAt = 0
@@ -39,6 +41,12 @@ export class AgentWebSocket {
     return () => this.statusHandlers.delete(handler)
   }
 
+  /** 透出服务端关闭码，调用方可在 4404 时移除已不可访问的会话。 */
+  public onClosed(handler: WsCloseHandler) {
+    this.closeHandlers.add(handler)
+    return () => this.closeHandlers.delete(handler)
+  }
+
   private notifyEvent(event: WsServerEvent) {
     this.eventHandlers.forEach((h) => {
       try {
@@ -56,6 +64,17 @@ export class AgentWebSocket {
         h(connected)
       } catch (err) {
         console.error('WS status handler error:', err)
+      }
+    })
+  }
+
+  /** 通知连接关闭原因；关闭处理器错误不得影响重连策略。 */
+  private notifyClosed(code: number) {
+    this.closeHandlers.forEach((handler) => {
+      try {
+        handler(code)
+      } catch (err) {
+        console.error('WS close handler error:', err)
       }
     })
   }
@@ -85,9 +104,16 @@ export class AgentWebSocket {
         this.notifyStatus(true)
       }
 
-      this.ws.onclose = () => {
+      this.ws.onclose = (event) => {
         console.log('%c[Agent WS] 🔴 WebSocket 智能体长连接已断开', 'color: #f59e0b; font-weight: bold;')
         this.notifyStatus(false)
+        this.notifyClosed(event.code)
+        // 4404 表示会话已删除或权限被收回；继续重连只会形成无效循环。
+        if (event.code === 4404) {
+          this.isExplicitlyClosed = true
+          this.stopSilenceWatch()
+          return
+        }
         if (!this.isExplicitlyClosed) {
           this.scheduleReconnect()
         }
@@ -129,14 +155,22 @@ export class AgentWebSocket {
     }
   }
 
-  public sendUserMessage(text: string, attachments?: Array<{ file_id: string }>): void {
+  public sendUserMessage(
+    text: string,
+    attachments?: Array<{ file_id: string }>,
+    clientMessageId?: string,
+  ): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       console.warn('WebSocket not open, cannot send message')
       return
     }
     const payload = {
       event: 'user_message',
-      payload: { text, attachments: attachments || [] },
+      payload: {
+        text,
+        attachments: attachments || [],
+        ...(clientMessageId ? { client_message_id: clientMessageId } : {}),
+      },
     }
     this.ws.send(JSON.stringify(payload))
   }
@@ -153,16 +187,17 @@ export class AgentWebSocket {
     this.ws.send(JSON.stringify(payload))
   }
 
-  public sendCancelTask(taskId: string): void {
+  public sendCancelTask(taskId: string): boolean {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       console.warn('WebSocket not open, cannot send cancel_task')
-      return
+      return false
     }
     const payload = {
       event: 'cancel_task',
       payload: { task_id: taskId },
     }
     this.ws.send(JSON.stringify(payload))
+    return true
   }
 
   private scheduleReconnect(): void {
