@@ -316,7 +316,7 @@ async def _run_turn(
                 plan.intent = str(cfg.get("kind") or "benchmark")
                 reflect = run_gates(db, session=session, plan=plan, react=react, source="plan")
 
-    # 规则优先；通过后模型核对（A2：confirm / text / action 均启用）
+    # 规则优先；仅确认卡再做模型核对（闲聊/只读斜杠 0 次核对，避免问候串行 3 次上游）
     if reflect.verdict == "pass":
         _check_abort(abort)
         gate_reasons = list(reflect.reasons)

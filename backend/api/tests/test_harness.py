@@ -17,6 +17,7 @@ from app.agent.plan import (
     TurnBudget,
     apply_prefs_suggestions,
     classify_intent_l0,
+    is_smalltalk,
     l0_plan,
     merge_replan,
     parse_json_object,
@@ -45,10 +46,14 @@ def test_l0_chat_vs_benchmark_and_testcase():
     assert classify_intent_l0("今天天气如何")[0] == "chat"
     assert classify_intent_l0("对比两个模型的基准表现")[0] == "benchmark"
     assert classify_intent_l0("帮我评一下")[0] == "benchmark"
+    assert classify_intent_l0("你好，帮我评一下")[0] == "benchmark"
     assert classify_intent_l0("根据 PRD 生成测试用例")[0] == "testcase"
     assert classify_intent_l0("评测知识库召回效果")[0] == "rag"
     intent, stress = classify_intent_l0("先评后压 10 QPS")
     assert intent == "benchmark" and stress is True
+    assert is_smalltalk("你好") is True
+    assert is_smalltalk("你好，帮我评一下") is False
+    assert is_smalltalk("随便说说") is False
 
 
 def test_l0_plan_missing_slots_clarify_not_confirm():
@@ -339,6 +344,58 @@ def test_turn_budget_hard_cap_four():
     assert all(budget.consume() for _ in range(MAX_MODEL_CALLS))
     assert budget.consume() is False
     assert budget.remaining() == 0
+
+
+def test_run_plan_greeting_skips_planner_llm(monkeypatch):
+    """「你好」走 L0 定位，不得再打规划模型，把预算留给闲聊流式回复。"""
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("问候不应调用规划模型")
+
+    monkeypatch.setattr("app.agent.plan._call_plan_model", _boom)
+    budget = TurnBudget()
+    plan = run_plan(
+        _FakeDb(),
+        text="你好",
+        parsed=parse_slash("你好"),
+        history=[],
+        prefs={},
+        attachments=[],
+        budget=budget,
+    )
+    assert plan.intent == "chat"
+    assert plan.delivery == "text"
+    assert plan.source == "l0"
+    assert budget.used == 0
+
+
+def test_maybe_model_check_skips_chat_text(monkeypatch):
+    """闲聊 delivery=text 只走规则门禁，不再串行核对上游。"""
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("闲聊不应调用核对模型")
+
+    monkeypatch.setattr("app.llm.call_agent_model_detailed", _boom)
+    budget = TurnBudget()
+    plan = PlanArtifact(
+        intent="chat",
+        skill_id=None,
+        slots={"filled": {}, "missing": []},
+        tools_needed=[],
+        delivery="text",
+        budget={"max_tool_rounds": 0},
+        notes="规划：闲聊",
+        source="l0",
+    )
+    out = maybe_model_check(
+        _FakeDb(),
+        ReflectArtifact(verdict="pass", reasons=["确认没有 create"]),
+        plan=plan,
+        text="你好",
+        budget=budget,
+    )
+    assert out.verdict == "pass"
+    assert budget.used == 0
 
 
 def test_maybe_model_check_skips_when_rules_failed():
