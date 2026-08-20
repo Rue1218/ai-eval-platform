@@ -42,6 +42,10 @@ services:
       MIGRATION_TIMEOUT_SECONDS: ${MIGRATION_TIMEOUT_SECONDS:-180}
       MIGRATION_LOCK_TIMEOUT_MS: ${MIGRATION_LOCK_TIMEOUT_MS:-15000}
       MIGRATION_STATEMENT_TIMEOUT_MS: ${MIGRATION_STATEMENT_TIMEOUT_MS:-120000}
+      # 音色克隆（MIMO TTS）。API Key 只从宿主机 .env 注入，禁止写入镜像或仓库。
+      MIMO_TTS_BASE_URL: ${MIMO_TTS_BASE_URL:-https://token-plan-cn.xiaomimimo.com/v1}
+      MIMO_TTS_API_KEY: ${MIMO_TTS_API_KEY:-}
+      MIMO_TTS_MODEL: ${MIMO_TTS_MODEL:-mimo-v2.5-tts-voiceclone}
     depends_on:
       postgres:
         condition: service_healthy

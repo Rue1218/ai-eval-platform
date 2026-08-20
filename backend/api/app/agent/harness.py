@@ -44,6 +44,7 @@ from .slash import (
     parse_slash,
     unknown_command_text,
 )
+from .voiceclone import VOICECLONE_CLARIFY_RE
 
 EmitFn = Callable[..., Awaitable[int]]
 
@@ -214,7 +215,10 @@ def _clarify_text(reflect: ReflectArtifact, plan: PlanArtifact) -> str:
         return f"还需要确认：{', '.join(missing)}。可以说具体协议档和数据集，或发送 /benchmark。"
     # 规划自身判 clarify（意图不清）但门禁通过：用规划短句说明，避免答非所问
     if plan.delivery == "clarify" and plan.notes:
-        return f"{plan.notes}。可以补充评测目标（协议档、数据集），或直接发送 /benchmark。"
+        notes = plan.notes.rstrip("。")
+        if VOICECLONE_CLARIFY_RE.search(notes):
+            return f"{notes}。"
+        return f"{notes}。可以补充评测目标（协议档、数据集），或直接发送 /benchmark。"
     return "请再补充一下评测目标（协议档、数据集或 /benchmark）。"
 
 
@@ -294,6 +298,8 @@ async def _run_turn(
         emit=emit,
         check_abort=lambda: _check_abort(abort),
         slash_fill_first=slash_fill_first,
+        text=text,
+        attachments=attachments,
     )
     for note in react.pref_stale_notes:
         await _emit_thought(emit, note, stage="react")
@@ -331,6 +337,8 @@ async def _run_turn(
                 slash_fill_first=slash_fill_first,
                 prior=react,
                 extra_tools=extra_tools,
+                text=text,
+                attachments=attachments,
             )
             for note in react.pref_stale_notes[stale_before:]:
                 await _emit_thought(emit, note, stage="react")
@@ -527,6 +535,22 @@ async def _run_turn(
         return
 
     if plan.intent == "chat" or plan.delivery == "text":
+        clone_obs = next(
+            (obs for obs in react.observations if obs.get("name") == "audio.voiceclone"),
+            None,
+        )
+        if clone_obs is not None:
+            if clone_obs.get("ok"):
+                await _deliver_sentence(
+                    db,
+                    session.id,
+                    emit,
+                    "已用参考音频合成配音，可在工具卡中播放或下载。",
+                )
+            else:
+                err = (clone_obs.get("data_summary") or {}).get("error") or "音色合成失败"
+                await _deliver_sentence(db, session.id, emit, err)
+            return
         reply = await _chat_reply(
             db,
             text,
@@ -642,7 +666,7 @@ async def _harness_entry(
     abort: asyncio.Event,
     stop: threading.Event,
 ) -> None:
-    """Harness 任务入口：独立 DB 会话，墙钟 120s，结束后清理 registry。"""
+    """Harness 任务入口：独立 DB 会话，墙钟 180s（含音色克隆），结束后清理 registry。"""
     # 记录回合墙钟起点，供 _deliver_sentence 计算回复耗时 latency_ms 展示给用户。
     _ROUND_STARTED_AT.set(datetime.now(UTC))
     db = SessionLocal()

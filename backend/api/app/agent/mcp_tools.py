@@ -75,7 +75,7 @@ def collect_ids(data: Any) -> list[str]:
             for item in items:
                 if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"]:
                     ids.append(item["id"])
-        for key in ("task_id", "report_id", "dataset_id", "kb_id", "gold_qa_id"):
+        for key in ("task_id", "report_id", "dataset_id", "kb_id", "gold_qa_id", "file_id"):
             value = data.get(key)
             if isinstance(value, str) and value:
                 ids.append(value)
@@ -211,6 +211,10 @@ def execute_short_tool(
             data = _report_get(db, args)
         elif name == "task.cancel":
             raise AppError(ErrorCode.VALIDATION, "请使用会话内取消或 REST /api/tasks/{id}/cancel")
+        elif name == "audio.voiceclone":
+            from .voiceclone import execute_voiceclone
+
+            data = execute_voiceclone(db, args, user_id=user_id)
         else:
             raise AppError(ErrorCode.VALIDATION, "该能力未启用")
 

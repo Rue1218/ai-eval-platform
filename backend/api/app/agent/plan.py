@@ -25,6 +25,7 @@ from .defaults import (
 from .log import agent_trace
 from .persona import PLAN_RETRY_SUFFIX, REPLAN_JSON_SUFFIX, plan_system, turn_system
 from .slash import SlashParse
+from .voiceclone import inject_voiceclone_plan
 
 
 @dataclass
@@ -452,6 +453,14 @@ def run_plan(
     compact_summary: str | None = None,
 ) -> PlanArtifact:
     """产出 PlanArtifact：斜杠模板 / LLM / 重试 / L0。"""
+
+    def _finish(plan: PlanArtifact, *, slash: bool = False) -> PlanArtifact:
+        """挂偏好后，自然语言回合按本轮附件注入音色克隆短工具。"""
+        plan = _attach_prefs(plan, prefs)
+        if slash:
+            return plan
+        return inject_voiceclone_plan(db, plan, text=text, attachments=attachments)
+
     if parsed.command and parsed.command in {
         "benchmark",
         "testcase",
@@ -467,7 +476,7 @@ def run_plan(
         "stop",
     }:
         plan = plan_from_slash(parsed, prefs=prefs, attachments=attachments)
-        return _attach_prefs(plan, prefs)
+        return _finish(plan, slash=True)
 
     if parsed.is_slash and parsed.command not in {
         "benchmark",
@@ -499,12 +508,12 @@ def run_plan(
 
     if not model_available:
         plan = l0_plan(text, prefs=prefs)
-        return _attach_prefs(plan, prefs)
+        return _finish(plan)
 
     # 「你好」等高置信闲聊：L0 定位即可，禁止再串行打规划模型（否则问候要等 2～3 次上游）。
     if is_smalltalk(text):
         plan = l0_plan(text, prefs=prefs)
-        return _attach_prefs(plan, prefs)
+        return _finish(plan)
 
     user_payload = {
         "text": text,
@@ -521,13 +530,13 @@ def run_plan(
         plan = sanitize_plan(raw, source="llm")
         plan.used_model = True
         plan.latency_ms = latency
-        return _attach_prefs(plan, prefs)
+        return _finish(plan)
     except AppError as exc:
         # 未配置协议档 / 上游失败：降级 L0，仍必须进复核
         if exc.code in {ErrorCode.VALIDATION, ErrorCode.UPSTREAM, ErrorCode.TIMEOUT}:
             agent_trace(f"规划模型不可用 code={exc.code.value}，降级 L0")
             plan = l0_plan(text, prefs=prefs)
-            return _attach_prefs(plan, prefs)
+            return _finish(plan)
         raise
     except Exception:
         agent_trace("规划 JSON 解析失败，准备重试")
@@ -543,17 +552,17 @@ def run_plan(
         plan = sanitize_plan(raw, source="retry")
         plan.used_model = True
         plan.latency_ms = latency
-        return _attach_prefs(plan, prefs)
+        return _finish(plan)
     except AppError as exc:
         if exc.code in {ErrorCode.VALIDATION, ErrorCode.UPSTREAM, ErrorCode.TIMEOUT}:
             agent_trace(f"规划重试模型不可用 code={exc.code.value}，降级 L0")
             plan = l0_plan(text, prefs=prefs)
-            return _attach_prefs(plan, prefs)
+            return _finish(plan)
         raise
     except Exception:
         agent_trace("规划重试仍失败，降级 L0 规则意图")
         plan = l0_plan(text, prefs=prefs)
-        return _attach_prefs(plan, prefs)
+        return _finish(plan)
 
 
 def _clarify_from_plan(plan: PlanArtifact, *, source: str = "replan") -> PlanArtifact:

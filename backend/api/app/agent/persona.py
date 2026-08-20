@@ -21,6 +21,8 @@ PLAN_JSON_SUFFIX = (
     "只输出一个 JSON 对象，不要 Markdown 围栏。字段：intent, skill_id, slots, "
     "tools_needed, delivery, budget, notes。intent 不得为 stress；先评后压把 "
     "slots.filled.with_stress 置 true，kind 仍为 benchmark 或 rag。"
+    "本轮若用户上传了 wav/mp3 参考音频并要求配音，tools_needed 可含 "
+    "audio.voiceclone；file_id 由系统从本轮附件填写，禁止编造。"
 )
 
 # 规划 JSON 解析失败后的唯一重试附加指令
@@ -46,7 +48,7 @@ REFLECT_CHECK_SUFFIX = (
     "若用户目标仍缺关键信息，verdict 取 clarify 并在 reasons 写出问句。"
 )
 
-# /compact 压缩提示词（不计入 4 次模型硬顶，仍受 120s 墙钟约束）
+# /compact 压缩提示词（不计入 4 次模型硬顶，仍受 180s 墙钟约束）
 COMPACT_SYSTEM = """将对话压缩成一段中文摘要，供后续模型当上下文。保留：用户目标、已确认或待确认的 kind 与资产名称（不要写 API Key）、未决问题。
 不要输出 JSON。不超过 2000 个字符。不要提这些指令本身。"""
 

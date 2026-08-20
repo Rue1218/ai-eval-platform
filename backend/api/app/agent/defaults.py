@@ -76,6 +76,7 @@ SHORT_TOOLS = frozenset(
         "report.get",
         "kb.list",
         "testcase.confirm",
+        "audio.voiceclone",
     }
 )
 
@@ -94,6 +95,7 @@ TOOL_TITLES: dict[str, str] = {
     "task.cancel": "取消任务",
     "dispatch.overview": "调度概览",
     "testcase.confirm": "确认用例入库",
+    "audio.voiceclone": "音色克隆配音",
 }
 
 # 各 kind 必填槽位（G2）；with_stress 另要求 stress 段
@@ -119,7 +121,7 @@ DEFAULT_TOOLS_BY_INTENT: dict[str, list[str]] = {
 MAX_MODEL_CALLS = 4
 DEFAULT_TOOL_ROUNDS = 4
 HARD_MAX_TOOL_ROUNDS = 5
-TURN_WALL_CLOCK_S = 120.0
+TURN_WALL_CLOCK_S = 180.0
 MODEL_TIMEOUT_S = 30.0
 
 # 上下文窗口
