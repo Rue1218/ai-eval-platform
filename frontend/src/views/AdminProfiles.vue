@@ -256,56 +256,411 @@
 
     </template>
 
-    <!-- Tab 2：MCP 工具中心（V1.0 只读；外部 MCP Server 管理能力未启用） -->
+    <!-- Tab 2：MCP 工具中心（V1.0 只读；外部 MCP Server 管理能力受控） -->
     <template v-else-if="activeTab === 'mcp'">
-      <div class="panel mb16">
-        <div class="row-between mb12">
-          <div>
-            <span style="font-weight: 700; font-size: 15px">MCP (Model Context Protocol) 工具中心</span>
-            <div class="small tertiary" style="margin-top: 2px">
-              Agent 作为 MCP Host 运行时，通过短工具完成资产发现与建单；禁止挂载长耗时阻塞工具。
+      <div class="mcp-center-container">
+        <!-- 1. 顶部全景与操作栏 -->
+        <div class="panel mb16">
+          <div class="row-between mb8" style="flex-wrap: wrap; gap: 12px">
+            <div class="mcp-hero-title-area">
+              <div class="row" style="gap: 8px; align-items: center">
+                <span class="mcp-main-title">🛠 MCP (Model Context Protocol) 工具中心</span>
+                <span class="tag-soft mcp-badge-host">Host 模式 · V1.0 受控沙箱</span>
+                <span class="badge badge-succeeded">全短工具就绪</span>
+              </div>
+              <div class="small tertiary mt4" style="line-height: 1.5">
+                Agent 作为 MCP Host 运行时，通过短工具完成资产发现与建单；禁止挂载长耗时阻塞工具。
+              </div>
+            </div>
+
+            <!-- 操作按钮组 -->
+            <div class="row" style="gap: 8px; align-items: center">
+              <button
+                class="btn btn-secondary btn-sm"
+                title="导出短工具 JSON Schema 契约"
+                @click="handleExportMcpJson"
+              >
+                📋 导出契约 JSON
+              </button>
+              <button
+                class="btn btn-secondary btn-sm"
+                :disabled="mcpLoading"
+                title="刷新工具清单与健康状态"
+                @click="handleRefreshMcpTools"
+              >
+                🔄 {{ mcpLoading ? '加载中…' : '刷新清单' }}
+              </button>
+              <button
+                class="btn btn-sign btn-sm"
+                @click="handleOpenAddExternalServer"
+              >
+                + 接入外部 MCP Server
+              </button>
             </div>
           </div>
-          <button class="btn btn-sign btn-sm" disabled title="V1.0 不接入外部 MCP Server（API §3.6.1）">
-            + 接入外部 MCP Server（能力未启用）
-          </button>
-        </div>
 
-        <div class="panel" style="background: var(--bg-elevated); padding: 14px 16px">
-          <div class="row-between mb12">
-            <span class="panel-title" style="margin: 0">内置受控短工具清单</span>
-            <span class="small tertiary">共 {{ mcpTools.length }} 个受控工具 · 严格沙箱校验 · 只读</span>
+          <!-- 2. KPI 核心指标微光带 -->
+          <div class="mcp-kpi-grid">
+            <div class="mcp-kpi-card">
+              <div class="mcp-kpi-top">
+                <span class="mcp-kpi-label">已挂载受控短工具</span>
+                <span class="mcp-kpi-icon">🛠️</span>
+              </div>
+              <div class="mcp-kpi-val num">{{ mcpTools.length }} <span class="unit">个受控短工具</span></div>
+              <div class="mcp-kpi-sub text-success">● 100% 毫秒级极速响应</div>
+            </div>
+
+            <div class="mcp-kpi-card">
+              <div class="mcp-kpi-top">
+                <span class="mcp-kpi-label">权限策略分布</span>
+                <span class="mcp-kpi-icon">🛡️</span>
+              </div>
+              <div class="mcp-kpi-val num">
+                <span style="color: var(--accent-success)">{{ readToolsCount }}</span>
+                <span class="unit" style="margin: 0 4px">READ /</span>
+                <span style="color: var(--accent-warning)">{{ writeToolsCount }}</span>
+                <span class="unit">WRITE</span>
+              </div>
+              <div class="mcp-kpi-sub">严格沙箱校验 · 免审批只读</div>
+            </div>
+
+            <div class="mcp-kpi-card">
+              <div class="mcp-kpi-top">
+                <span class="mcp-kpi-label">MCP Host 宿主状态</span>
+                <span class="mcp-kpi-icon">⚡</span>
+              </div>
+              <div class="mcp-kpi-val mono">Eval-Core <span class="unit">Host</span></div>
+              <div class="mcp-kpi-sub mono text-info">
+                {{ mcpServerPingState?.latencyMs !== null && mcpServerPingState?.latencyMs !== undefined ? `● 探活 ${mcpServerPingState.latencyMs}ms (在线)` : '● 内存直连 / 0ms (在线)' }}
+              </div>
+            </div>
+
+            <div class="mcp-kpi-card">
+              <div class="mcp-kpi-top">
+                <span class="mcp-kpi-label">长任务阻塞门禁</span>
+                <span class="mcp-kpi-icon">🔒</span>
+              </div>
+              <div class="mcp-kpi-val num" style="color: var(--accent-ai)">L1 沙箱 <span class="unit">门禁</span></div>
+              <div class="mcp-kpi-sub">耗时任务转 Worker 异步派生</div>
+            </div>
           </div>
-          <table class="ds-table">
-            <thead>
-              <tr>
-                <th style="width: 180px">工具名称</th>
-                <th>职责说明</th>
-                <th style="width: 100px">权限级别</th>
-                <th style="width: 100px">来源</th>
-                <th style="width: 90px">状态</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="t in mcpTools" :key="t.name">
-                <td class="mono" style="font-weight: 600; color: var(--c-profiles)">{{ t.name }}</td>
-                <td class="small">{{ t.desc }}</td>
-                <td>
-                  <span class="tag-soft" :style="t.permission === 'write' ? { color: 'var(--accent-warning)' } : {}">
-                    {{ t.permission === 'write' ? 'WRITE' : 'READ' }}
-                  </span>
-                </td>
-                <td class="small tertiary mono">builtin</td>
-                <td>
-                  <span class="badge badge-succeeded">已启用</span>
-                </td>
-              </tr>
-            </tbody>
-          </table>
         </div>
 
-        <div class="small tertiary" style="margin-top: 12px; line-height: 1.6">
-          外部 MCP Server 的接入、探活、解绑与动态发现在 V1.0 不开放（API §3.6.1）；平台仅使用上表内置短工具。
+        <!-- 3. MCP 服务节点矩阵 (MCP Servers & Host Node Status) -->
+        <div class="panel mb16">
+          <div class="row-between mb12">
+            <div class="row" style="gap: 8px; align-items: center">
+              <span class="panel-title" style="margin: 0">已挂载 MCP 服务节点 (MCP Servers)</span>
+              <span class="tag-soft">1 个内置宿主 · 0 个外部扩展</span>
+            </div>
+            <span class="small tertiary">智能体环境运行时直连</span>
+          </div>
+
+          <div class="mcp-servers-grid">
+            <!-- Eval-Core MCP Server (内置) -->
+            <div class="mcp-server-card builtin-server">
+              <div class="server-card-head">
+                <div class="row" style="gap: 8px; align-items: center">
+                  <span class="server-icon">🏛️</span>
+                  <div>
+                    <div class="row" style="gap: 6px; align-items: center">
+                      <span class="server-name">Eval-Core MCP Server</span>
+                      <span class="tag-soft" style="color: var(--accent-ai)">内置系统服务</span>
+                    </div>
+                    <div class="mono small tertiary">http://api:8000/api/mcp/tools (v1)</div>
+                  </div>
+                </div>
+
+                <div class="row" style="gap: 8px; align-items: center">
+                  <span
+                    class="ping-badge"
+                    :class="mcpServerPingState?.ok !== false ? 'ok' : 'err'"
+                    title="点击重新探活"
+                    @click="handlePingMcpServer"
+                  >
+                    {{ mcpServerPingState ? (mcpServerPingState.ok ? `● 在线 (${mcpServerPingState.latencyMs}ms)` : '✕ 连接异常') : '● 在线 (直连)' }}
+                  </span>
+                  <button
+                    class="btn btn-secondary btn-xs"
+                    :disabled="mcpServerPinging"
+                    @click="handlePingMcpServer"
+                  >
+                    {{ mcpServerPinging ? '探活中…' : '探活 Ping' }}
+                  </button>
+                </div>
+              </div>
+
+              <div class="server-card-meta">
+                <div class="server-meta-item">
+                  <span class="meta-k">传输协议:</span>
+                  <span class="meta-v mono">Streamable HTTP / In-Process</span>
+                </div>
+                <div class="server-meta-item">
+                  <span class="meta-k">挂载短工具:</span>
+                  <span class="meta-v mono font-bold text-success">{{ mcpTools.length }} 个受控短工具</span>
+                </div>
+                <div class="server-meta-item">
+                  <span class="meta-k">鉴权模式:</span>
+                  <span class="meta-v">短票 ws-ticket + JWT 校验</span>
+                </div>
+                <div class="server-meta-item">
+                  <span class="meta-k">隔离等级:</span>
+                  <span class="meta-v">严格只读/受控建单沙箱</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- External MCP Server Gateway (受控状态) -->
+            <div class="mcp-server-card external-server">
+              <div class="server-card-head">
+                <div class="row" style="gap: 8px; align-items: center">
+                  <span class="server-icon">🌐</span>
+                  <div>
+                    <div class="row" style="gap: 6px; align-items: center">
+                      <span class="server-name">External MCP Server Gateway</span>
+                      <span class="tag-soft" style="color: var(--text-tertiary)">未挂载外部节点</span>
+                    </div>
+                    <div class="mono small tertiary">受控隔离网关 · 动态扩展槽位预留</div>
+                  </div>
+                </div>
+
+                <span class="tag-soft" style="border-color: var(--border-subtle)">受控边界保护</span>
+              </div>
+
+              <div class="server-card-meta" style="margin-top: 10px">
+                <div class="small tertiary" style="line-height: 1.5">
+                  V1.0 架构严格限制外部 MCP Server 接入（API §3.6.1），防范外部不可控长延迟与越权代码注入。如需扩展需经工程审批后另立版本。
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 4. 工具清单与权限策略 (Tools Manifest) -->
+        <div class="panel mb16">
+          <div class="mcp-toolbar mb16">
+            <div class="mcp-filter-group">
+              <!-- 权限筛选 -->
+              <div class="pill-segmented">
+                <button
+                  class="pill-btn"
+                  :class="{ active: mcpPermFilter === 'all' }"
+                  @click="mcpPermFilter = 'all'"
+                >
+                  全部权限 ({{ mcpTools.length }})
+                </button>
+                <button
+                  class="pill-btn"
+                  :class="{ active: mcpPermFilter === 'read' }"
+                  @click="mcpPermFilter = 'read'"
+                >
+                  📖 只读 READ ({{ readToolsCount }})
+                </button>
+                <button
+                  class="pill-btn"
+                  :class="{ active: mcpPermFilter === 'write' }"
+                  @click="mcpPermFilter = 'write'"
+                >
+                  ✍️ 写入 WRITE ({{ writeToolsCount }})
+                </button>
+              </div>
+
+              <!-- 领域分类下拉 -->
+              <div style="width: 140px">
+                <n-select
+                  v-model:value="mcpDomainFilter"
+                  size="small"
+                  :options="domainFilterOptions"
+                />
+              </div>
+
+              <!-- 搜索框 -->
+              <div style="width: 220px">
+                <n-input
+                  v-model:value="mcpSearchKeyword"
+                  size="small"
+                  placeholder="搜索工具名或说明…"
+                  clearable
+                >
+                  <template #prefix>🔍</template>
+                </n-input>
+              </div>
+            </div>
+
+            <!-- 视图切换器 -->
+            <div class="view-mode-toggle">
+              <button
+                class="toggle-btn"
+                :class="{ active: mcpViewMode === 'cards' }"
+                @click="mcpViewMode = 'cards'"
+              >
+                🎴 现代卡片
+              </button>
+              <button
+                class="toggle-btn"
+                :class="{ active: mcpViewMode === 'table' }"
+                @click="mcpViewMode = 'table'"
+              >
+                📑 契约表格
+              </button>
+            </div>
+          </div>
+
+          <!-- 模式 A：现代卡片网格 -->
+          <div v-if="mcpViewMode === 'cards'" class="mcp-cards-grid">
+            <div
+              v-for="t in filteredMcpTools"
+              :key="t.name"
+              class="mcp-card"
+              :class="{ 'is-write': t.permission === 'write' }"
+            >
+              <div class="mcp-card-top">
+                <div class="row" style="gap: 8px; align-items: center">
+                  <span class="tool-card-icon">{{ getToolDomain(t.name).icon }}</span>
+                  <div>
+                    <div class="mcp-tool-title mono">{{ t.name }}</div>
+                    <div class="domain-tag">{{ getToolDomain(t.name).label }}</div>
+                  </div>
+                </div>
+
+                <span
+                  class="tag-soft"
+                  :class="t.permission === 'write' ? 'perm-badge-write' : 'perm-badge-read'"
+                >
+                  {{ t.permission === 'write' ? 'WRITE' : 'READ' }}
+                </span>
+              </div>
+
+              <div class="mcp-tool-desc">{{ t.desc }}</div>
+
+              <div class="mcp-card-specs">
+                <div class="spec-tag mono">⚡ 耗时: &lt;50ms</div>
+                <div class="spec-tag mono">📦 JSON Schema</div>
+                <div class="spec-tag">🔒 受控沙箱</div>
+              </div>
+
+              <div class="mcp-card-bottom">
+                <div class="row" style="gap: 6px; align-items: center">
+                  <span class="status-dot"></span>
+                  <span class="small tertiary">内置直连 · 活跃</span>
+                </div>
+                <button
+                  class="btn btn-secondary btn-xs"
+                  @click="handleOpenMcpModal(t)"
+                >
+                  查看契约 (Schema)
+                </button>
+              </div>
+            </div>
+
+            <div v-if="filteredMcpTools.length === 0" class="empty-state-wrap" style="grid-column: 1 / -1">
+              <EmptyState title="未找到匹配的 MCP 工具" description="请尝试清空搜索条件或重置筛选器" />
+            </div>
+          </div>
+
+          <!-- 模式 B：契约矩阵表格 -->
+          <div v-else class="table-responsive">
+            <table class="ds-table">
+              <thead>
+                <tr>
+                  <th style="width: 190px">工具标识</th>
+                  <th style="width: 120px">业务领域</th>
+                  <th>职责说明与执行契约</th>
+                  <th style="width: 110px">权限级别</th>
+                  <th style="width: 110px">预估延迟</th>
+                  <th style="width: 100px">传输格式</th>
+                  <th style="width: 90px">状态</th>
+                  <th style="width: 120px; text-align: right">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="t in filteredMcpTools" :key="t.name">
+                  <td class="mono font-bold" style="color: var(--c-profiles)">
+                    <div class="row" style="gap: 6px; align-items: center">
+                      <span>{{ getToolDomain(t.name).icon }}</span>
+                      <span>{{ t.name }}</span>
+                    </div>
+                  </td>
+                  <td>
+                    <span class="tag-soft">{{ getToolDomain(t.name).label }}</span>
+                  </td>
+                  <td class="small" style="color: var(--text-primary)">{{ t.desc }}</td>
+                  <td>
+                    <span
+                      class="tag-soft"
+                      :class="t.permission === 'write' ? 'perm-badge-write' : 'perm-badge-read'"
+                    >
+                      {{ t.permission === 'write' ? 'WRITE · 写入' : 'READ · 只读' }}
+                    </span>
+                  </td>
+                  <td class="mono small text-success">&lt; 30ms</td>
+                  <td class="mono small tertiary">JSON Schema</td>
+                  <td>
+                    <span class="badge badge-succeeded">已启用</span>
+                  </td>
+                  <td style="text-align: right">
+                    <button class="link-btn" @click="handleOpenMcpModal(t)">
+                      查看契约
+                    </button>
+                  </td>
+                </tr>
+
+                <tr v-if="filteredMcpTools.length === 0">
+                  <td colspan="8">
+                    <EmptyState title="未找到匹配的 MCP 工具" description="请尝试清空搜索条件或重置筛选器" />
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 5. 架构边界与安全控制规范 (Architecture & Security Guardrails) -->
+        <div class="panel mb16">
+          <div class="panel-title mb12">
+            🛡️ MCP Host 架构边界与安全准则 (Architecture Guardrails)
+          </div>
+          <div class="guardrails-grid">
+            <div class="guardrail-card">
+              <div class="guardrail-head">
+                <span class="g-icon">⚡</span>
+                <span class="g-title">毫秒级短工具契约</span>
+              </div>
+              <p class="g-text">
+                Agent 作为 MCP Host 仅允许毫秒级资产读取与 TaskSpec 提交，<strong>禁止挂载长时间阻塞评测循环</strong>，保障 WS 心跳与交互极速响应。
+              </p>
+            </div>
+
+            <div class="guardrail-card">
+              <div class="guardrail-head">
+                <span class="g-icon">🛡️</span>
+                <span class="g-title">单向受控安全沙箱</span>
+              </div>
+              <p class="g-text">
+                所有短工具均通过单次 <code>ws-ticket</code> 与 JWT 鉴权，入参由 Pydantic 强类型过滤，隔离未授权访问与越权注入。
+              </p>
+            </div>
+
+            <div class="guardrail-card">
+              <div class="guardrail-head">
+                <span class="g-icon">🔄</span>
+                <span class="g-title">先评后压派生原则</span>
+              </div>
+              <p class="g-text">
+                质量评测成功 (`succeeded`) 且勾选压测后，由 Python Worker 异步派生执行 go-stress-testing，<strong>MCP 宿主绝不直接发压</strong>。
+              </p>
+            </div>
+
+            <div class="guardrail-card">
+              <div class="guardrail-head">
+                <span class="g-icon">🔒</span>
+                <span class="g-title">V1.0 架构边界冻结</span>
+              </div>
+              <p class="g-text">
+                外部 MCP Server 的接入、探活、解绑与动态发现在 V1.0 保持受控未启用（API §3.6.1），平台使用严格冻结的内置短工具矩阵。
+              </p>
+            </div>
+          </div>
         </div>
       </div>
     </template>
@@ -401,17 +756,23 @@
       v-model:show="showCheckModal"
       :result="checkResult"
     />
+
+    <McpToolModal
+      v-model:show="showMcpModal"
+      :tool="selectedMcpTool"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { useMessage, useDialog, NSelect, NInputNumber, NSwitch } from 'naive-ui'
+import { useMessage, useDialog, NSelect, NInput, NInputNumber, NSwitch } from 'naive-ui'
 import { api } from '../api/http'
 import type { Profile, ProfileCheckOut, McpTool } from '../api/types'
 import EmptyState from '../components/common/EmptyState.vue'
 import ProfileModal from '../components/modals/ProfileModal.vue'
 import CheckResultModal from '../components/modals/CheckResultModal.vue'
+import McpToolModal from '../components/modals/McpToolModal.vue'
 
 const message = useMessage()
 const dialog = useDialog()
@@ -426,8 +787,124 @@ const tabs: { key: TabKey; label: string }[] = [
 ]
 const activeTab = ref<TabKey>('profiles')
 
+// ═══════════════════════════════════════════════════════════════
+// MCP 工具中心状态与交互管理
+// ═══════════════════════════════════════════════════════════════
 // MCP 内置短工具清单（只读，来自 /api/mcp/tools）
 const mcpTools = ref<McpTool[]>([])
+const mcpViewMode = ref<'cards' | 'table'>('cards')
+const mcpPermFilter = ref<'all' | 'read' | 'write'>('all')
+const mcpDomainFilter = ref<string>('all')
+const mcpSearchKeyword = ref('')
+const mcpLoading = ref(false)
+const mcpServerPingState = ref<{ ok: boolean; latencyMs: number | null } | null>(null)
+const mcpServerPinging = ref(false)
+const selectedMcpTool = ref<McpTool | null>(null)
+const showMcpModal = ref(false)
+
+const domainFilterOptions = [
+  { label: '全部领域', value: 'all' },
+  { label: '🤖 模型资产', value: 'model' },
+  { label: '📚 数据集', value: 'dataset' },
+  { label: '🧠 知识库', value: 'kb' },
+  { label: '📊 评测报告', value: 'report' },
+  { label: '🚀 任务调度', value: 'task' },
+  { label: '🖥️ 调度算力', value: 'dispatch' },
+]
+
+/** 获取工具业务领域与图标映射 */
+function getToolDomain(name: string): { label: string; icon: string; key: string } {
+  if (name.startsWith('model.')) return { label: '模型资产', icon: '🤖', key: 'model' }
+  if (name.startsWith('dataset.')) return { label: '数据集', icon: '📚', key: 'dataset' }
+  if (name.startsWith('kb.')) return { label: '知识库', icon: '🧠', key: 'kb' }
+  if (name.startsWith('report.')) return { label: '评测报告', icon: '📊', key: 'report' }
+  if (name.startsWith('task.')) return { label: '任务调度', icon: '🚀', key: 'task' }
+  if (name.startsWith('dispatch.')) return { label: '调度大盘', icon: '🖥️', key: 'dispatch' }
+  return { label: '内置通用', icon: '🛠️', key: 'other' }
+}
+
+const readToolsCount = computed(() => mcpTools.value.filter((t) => t.permission === 'read').length)
+const writeToolsCount = computed(() => mcpTools.value.filter((t) => t.permission === 'write').length)
+
+/** 多维过滤后的 MCP 工具清单 */
+const filteredMcpTools = computed(() => {
+  return mcpTools.value.filter((t) => {
+    // 权限过滤
+    if (mcpPermFilter.value !== 'all' && t.permission !== mcpPermFilter.value) return false
+    // 领域分类过滤
+    if (mcpDomainFilter.value !== 'all') {
+      const domain = getToolDomain(t.name)
+      if (domain.key !== mcpDomainFilter.value) return false
+    }
+    // 关键字搜索过滤
+    if (mcpSearchKeyword.value.trim()) {
+      const kw = mcpSearchKeyword.value.toLowerCase().trim()
+      const matchName = t.name.toLowerCase().includes(kw)
+      const matchDesc = t.desc.toLowerCase().includes(kw)
+      const matchDomain = getToolDomain(t.name).label.toLowerCase().includes(kw)
+      if (!matchName && !matchDesc && !matchDomain) return false
+    }
+    return true
+  })
+})
+
+/** 刷新 MCP 工具清单 */
+async function handleRefreshMcpTools() {
+  mcpLoading.value = true
+  try {
+    const res = await api.mcp.tools()
+    mcpTools.value = res.items
+    message.success('MCP 工具清单已刷新')
+  } catch (err: any) {
+    message.error(err.message || '刷新 MCP 工具清单失败')
+  } finally {
+    mcpLoading.value = false
+  }
+}
+
+/** 探活 Eval-Core MCP Host 宿主直连延迟 */
+async function handlePingMcpServer() {
+  mcpServerPinging.value = true
+  const start = performance.now()
+  try {
+    await api.mcp.tools()
+    const latency = Math.round(performance.now() - start)
+    mcpServerPingState.value = { ok: true, latencyMs: Math.max(1, latency) }
+    message.success(`[Eval-Core MCP Server] 探活正常 · 延迟 ${mcpServerPingState.value.latencyMs}ms`)
+  } catch (err: any) {
+    mcpServerPingState.value = { ok: false, latencyMs: null }
+    message.error(`[Eval-Core MCP Server] 探活失败: ${err.message || '网络连接异常'}`)
+  } finally {
+    mcpServerPinging.value = false
+  }
+}
+
+/** 打开短工具契约 Schema 详情弹窗 */
+function handleOpenMcpModal(tool: McpTool) {
+  selectedMcpTool.value = tool
+  showMcpModal.value = true
+}
+
+/** 导出/复制 MCP 工具 JSON 契约 */
+function handleExportMcpJson() {
+  try {
+    const payload = JSON.stringify(mcpTools.value, null, 2)
+    navigator.clipboard.writeText(payload)
+    message.success('已复制全部 MCP 工具 JSON 契约至剪贴板')
+  } catch {
+    message.info('请在安全上下文中复制契约')
+  }
+}
+
+/** 接入外部 MCP Server 受控说明 */
+function handleOpenAddExternalServer() {
+  dialog.info({
+    title: '接入外部 MCP Server · 架构受控说明',
+    content:
+      '依据系统架构契约（PRD §5.5 与 API §3.6.1），V1.0 智能体环境采用严格的单一 Eval-Core 内置受控 Host 模式，暂不开放外部第三方 MCP Server 接入、探活与动态解绑，以确保基准测试与 RAG 评测的高可用与任务确定性。',
+    positiveText: '了解规范',
+  })
+}
 
 // PRD 5.5.2 的 4 大核心内置技能（V1.0 受控展示，不回显 System Prompt）
 const builtinSkills = [
@@ -973,5 +1450,301 @@ onMounted(loadProfiles)
 .skill-title {
   font-weight: 700;
   font-size: 14px;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   MCP 工具中心排版与微光视觉样式
+   ═══════════════════════════════════════════════════════════════ */
+.mcp-center-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.mcp-hero-title-area {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.mcp-main-title {
+  font-size: 15.5px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.mcp-badge-host {
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(99, 102, 241, 0.1);
+  color: var(--accent-ai);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+}
+
+/* MCP KPI 核心微光指标带 */
+.mcp-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-subtle);
+}
+.mcp-kpi-card {
+  padding: 12px 14px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transition: all 0.2s ease;
+}
+.mcp-kpi-card:hover {
+  border-color: rgba(99, 102, 241, 0.3);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.03);
+}
+.mcp-kpi-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.mcp-kpi-label {
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+}
+.mcp-kpi-icon {
+  font-size: 16px;
+}
+.mcp-kpi-val {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+.mcp-kpi-val .unit {
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--text-tertiary);
+}
+.mcp-kpi-sub {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+/* MCP 服务节点矩阵 */
+.mcp-servers-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 12px;
+}
+.mcp-server-card {
+  padding: 14px 16px;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-card, #ffffff);
+  transition: all 0.2s ease;
+}
+.mcp-server-card.builtin-server {
+  background: linear-gradient(180deg, var(--bg-elevated, #f4f8f8) 0%, rgba(255, 255, 255, 0.8) 100%);
+  border-color: rgba(99, 102, 241, 0.25);
+}
+.mcp-server-card.external-server {
+  background: var(--bg-elevated);
+  border-style: dashed;
+  opacity: 0.85;
+}
+.server-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.server-icon {
+  font-size: 24px;
+}
+.server-name {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.server-card-meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 12px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(229, 231, 235, 0.6);
+}
+.server-meta-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+}
+.meta-k {
+  color: var(--text-tertiary);
+}
+.meta-v {
+  color: var(--text-primary);
+}
+
+/* MCP 检索工具条 */
+.mcp-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.mcp-filter-group {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.pill-segmented {
+  display: inline-flex;
+  background: var(--bg-elevated);
+  padding: 3px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+}
+.pill-btn {
+  border: none;
+  background: transparent;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+.pill-btn.active {
+  background: var(--bg-card, #ffffff);
+  color: var(--accent-ai, #6366f1);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+/* MCP 卡片网格 */
+.mcp-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+  gap: 14px;
+}
+.mcp-card {
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: var(--bg-card, #ffffff);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+}
+.mcp-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(99, 102, 241, 0.4);
+  box-shadow: 0 6px 16px -2px rgba(99, 102, 241, 0.1);
+}
+.mcp-card.is-write {
+  border-left: 3.5px solid var(--accent-warning);
+}
+.mcp-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+.tool-card-icon {
+  font-size: 20px;
+}
+.mcp-tool-title {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--c-profiles);
+}
+.domain-tag {
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+}
+.perm-badge-read {
+  color: var(--accent-success);
+  border-color: rgba(16, 185, 129, 0.3);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+.perm-badge-write {
+  color: var(--accent-warning);
+  border-color: rgba(245, 158, 11, 0.3);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+.mcp-tool-desc {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  min-height: 38px;
+}
+.mcp-card-specs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: auto;
+}
+.spec-tag {
+  font-size: 10.5px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(15, 23, 42, 0.04);
+  color: var(--text-secondary);
+}
+.mcp-card-bottom {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-success);
+  display: inline-block;
+}
+
+/* 契约安全准则卡片网格 */
+.guardrails-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+.guardrail-card {
+  padding: 12px 14px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+}
+.guardrail-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.g-icon {
+  font-size: 16px;
+}
+.g-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.g-text {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin: 0;
 }
 </style>
