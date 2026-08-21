@@ -120,6 +120,8 @@ services:
       args:
         BUILD_VERSION: ${BUILD_VERSION:-unknown}
         BUILD_TIME: ${BUILD_TIME:-}
+        # Vite 构建堆：CI 默认 4096；服务器本地构建由 deploy.sh 收紧为 768。
+        NODE_BUILD_MEMORY: ${NODE_BUILD_MEMORY:-4096}
     restart: unless-stopped
     depends_on:
       - api

@@ -2,8 +2,11 @@
 FROM node:22-alpine AS build
 WORKDIR /app
 
-# 限制 Vite 构建堆，避免小规格生产服务器与其他容器争抢内存后持续 swap。
-ENV NODE_OPTIONS="--max-old-space-size=768"
+# Vite 构建堆大小可用 NODE_BUILD_MEMORY 覆盖：
+# - CI（GitHub runner，7G 内存）不传该参数，使用默认 4096，避免前端体积增大后 OOM；
+# - 服务器本地构建由 deploy.sh 收紧为 768，避免低配机与其他容器争抢内存后持续 swap。
+ARG NODE_BUILD_MEMORY=4096
+ENV NODE_OPTIONS="--max-old-space-size=${NODE_BUILD_MEMORY}"
 
 # 先复制依赖清单并安装，充分利用 Docker 层缓存（只要 package.json 不变就不重复安装）
 COPY package.json package-lock.json* ./

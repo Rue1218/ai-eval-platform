@@ -174,7 +174,12 @@ else
     echo "==> 本次构建服务：${BUILD_SERVICES[*]}"
     # 低配服务器顺序构建，避免并发争抢内存触发 swap；未变化服务直接复用现有镜像。
     for service in "${BUILD_SERVICES[@]}"; do
-        BUILDKIT_PROGRESS=plain docker compose build "$service"
+        if [ "$service" = "web" ]; then
+            # 服务器本地构建收紧 Vite 堆，避免与运行中容器争抢内存后持续 swap（CI 构建不受影响）。
+            NODE_BUILD_MEMORY=768 BUILDKIT_PROGRESS=plain docker compose build "$service"
+        else
+            BUILDKIT_PROGRESS=plain docker compose build "$service"
+        fi
     done
 fi
 
