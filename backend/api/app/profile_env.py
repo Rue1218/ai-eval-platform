@@ -354,3 +354,138 @@ def restore_snapshot(snapshot: ProfileEnvSnapshot) -> None:
         return
     with _ENV_WRITE_LOCK:
         _write_content(path, snapshot.content, snapshot.mode or 0o600)
+
+
+def resolve_env_api_key_for_url(base_url: str | None, protocol: str | None = None) -> str | None:
+    """根据给定的 Base URL 或协议类型，从 .env 环境文件（及进程环境变量）中自动匹配可用的 API Key。"""
+    try:
+        snapshot = _read_snapshot(env_path())
+        values = _parse_lines(snapshot.content.splitlines())
+    except Exception:
+        values = {}
+
+    def _get(key: str) -> str | None:
+        return values.get(key) or os.environ.get(key) or None
+
+    norm_target = str(base_url or "").strip().rstrip("/")
+    if norm_target.endswith("/v1"):
+        norm_target = norm_target[:-3].rstrip("/")
+
+    # 1. 优先在已有的 AI_PROFILE_*_BASE_URL 中寻找匹配的 profile Key
+    if norm_target:
+        combined = {**values, **os.environ}
+        for k, v in combined.items():
+            if k.startswith("AI_PROFILE_") and k.endswith("_BASE_URL"):
+                profile_base = str(v).strip().rstrip("/")
+                if profile_base.endswith("/v1"):
+                    profile_base = profile_base[:-3].rstrip("/")
+                if profile_base == norm_target:
+                    key_var = k[:-9] + "_API_KEY"
+                    cand = _get(key_var)
+                    if cand:
+                        return cand
+
+    # 2. 根据 Base URL 中的厂商域名特征映射环境变量
+    url_lower = norm_target.lower()
+    if "xiaomimimo" in url_lower or "mimo" in url_lower:
+        for var in ("MIMO_API_KEY", "MIMO_TTS_API_KEY", "LLM_API_KEY"):
+            val = _get(var)
+            if val:
+                return val
+    elif "openai" in url_lower:
+        for var in ("OPENAI_API_KEY", "LLM_API_KEY"):
+            val = _get(var)
+            if val:
+                return val
+    elif "anthropic" in url_lower:
+        for var in ("ANTHROPIC_API_KEY", "LLM_API_KEY"):
+            val = _get(var)
+            if val:
+                return val
+    elif "deepseek" in url_lower:
+        for var in ("DEEPSEEK_API_KEY", "LLM_API_KEY"):
+            val = _get(var)
+            if val:
+                return val
+    elif "siliconflow" in url_lower:
+        for var in ("SILICONFLOW_API_KEY", "LLM_API_KEY"):
+            val = _get(var)
+            if val:
+                return val
+    elif "dashscope" in url_lower or "aliyuncs" in url_lower or "qwen" in url_lower:
+        for var in ("DASHSCOPE_API_KEY", "QWEN_API_KEY", "QWEN_IMAGE_API_KEY", "LLM_API_KEY"):
+            val = _get(var)
+            if val:
+                return val
+    elif "nvidia" in url_lower or "integrate.api.nvidia" in url_lower:
+        for var in ("NVIDIA_API_KEY", "NIM_API_KEY", "LLM_API_KEY"):
+            val = _get(var)
+            if val:
+                return val
+    elif "volces" in url_lower or "volcengine" in url_lower:
+        for var in ("VOLCENGINE_API_KEY", "DOUBAO_API_KEY", "LLM_API_KEY"):
+            val = _get(var)
+            if val:
+                return val
+    elif "baidubce" in url_lower or "qianfan" in url_lower:
+        for var in ("QIANFAN_API_KEY", "BAIDU_API_KEY", "LLM_API_KEY"):
+            val = _get(var)
+            if val:
+                return val
+    elif "bigmodel" in url_lower or "zhipu" in url_lower:
+        for var in ("ZHIPU_API_KEY", "GLM_API_KEY", "LLM_API_KEY"):
+            val = _get(var)
+            if val:
+                return val
+    elif "moonshot" in url_lower or "kimi" in url_lower:
+        for var in ("MOONSHOT_API_KEY", "KIMI_API_KEY", "LLM_API_KEY"):
+            val = _get(var)
+            if val:
+                return val
+    elif "groq" in url_lower:
+        for var in ("GROQ_API_KEY", "LLM_API_KEY"):
+            val = _get(var)
+            if val:
+                return val
+    elif "together" in url_lower:
+        for var in ("TOGETHER_API_KEY", "LLM_API_KEY"):
+            val = _get(var)
+            if val:
+                return val
+    elif "mistral" in url_lower:
+        for var in ("MISTRAL_API_KEY", "LLM_API_KEY"):
+            val = _get(var)
+            if val:
+                return val
+    elif "lingyi" in url_lower or "01.ai" in url_lower:
+        for var in ("LINGYI_API_KEY", "YI_API_KEY", "LLM_API_KEY"):
+            val = _get(var)
+            if val:
+                return val
+    elif "baichuan" in url_lower:
+        for var in ("BAICHUAN_API_KEY", "LLM_API_KEY"):
+            val = _get(var)
+            if val:
+                return val
+
+    # 3. 按协议类型或通用别名兜底
+    if protocol == "anthropic_messages":
+        return _get("ANTHROPIC_API_KEY") or _get("LLM_API_KEY")
+    return _get("OPENAI_API_KEY") or _get("LLM_API_KEY")
+
+
+def resolve_env_base_url(protocol: str | None = None) -> str | None:
+    """根据协议类型从 .env 环境文件中读取默认 Base URL。"""
+    try:
+        snapshot = _read_snapshot(env_path())
+        values = _parse_lines(snapshot.content.splitlines())
+    except Exception:
+        values = {}
+
+    def _get(key: str) -> str | None:
+        return values.get(key) or os.environ.get(key) or None
+
+    if protocol == "anthropic_messages":
+        return _get("ANTHROPIC_BASE_URL") or _get("LLM_BASE_URL")
+    return _get("OPENAI_BASE_URL") or _get("LLM_BASE_URL")
+

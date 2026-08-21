@@ -62,3 +62,37 @@ def test_fetch_remote_models_anthropic_preset_fallback():
         assert len(models) >= 3
         ids = [m["id"] for m in models]
         assert "claude-3-7-sonnet-20250219" in ids
+
+
+def test_resolve_env_api_key_for_url(tmp_path, monkeypatch):
+    """测试根据 Base URL 与协议从 .env 解析 API Key。"""
+    from app.profile_env import resolve_env_api_key_for_url, resolve_env_base_url
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        'AI_PROFILE_MY_VENDOR_BASE_URL="https://my-vendor.example.com/v1"\n'
+        'AI_PROFILE_MY_VENDOR_API_KEY="sk-vendor-12345"\n'
+        'MIMO_API_KEY="mimo-token-abc"\n'
+        'DEEPSEEK_API_KEY="deepseek-token-xyz"\n'
+        'OPENAI_BASE_URL="https://api.openai.com/v1"\n'
+        'OPENAI_API_KEY="sk-openai-global"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("app.config.settings.profile_env_file", str(env_file))
+
+    # 1. 匹配 profile Base URL
+    key = resolve_env_api_key_for_url("https://my-vendor.example.com")
+    assert key == "sk-vendor-12345"
+
+    # 2. 匹配 Xiaomi Mimo 域名特征
+    key_mimo = resolve_env_api_key_for_url("https://token-plan-cn.xiaomimimo.com")
+    assert key_mimo == "mimo-token-abc"
+
+    # 3. 匹配 DeepSeek 域名特征
+    key_ds = resolve_env_api_key_for_url("https://api.deepseek.com/v1")
+    assert key_ds == "deepseek-token-xyz"
+
+    # 4. 默认 Base URL
+    base = resolve_env_base_url("openai_chat")
+    assert base == "https://api.openai.com/v1"
+

@@ -15,6 +15,8 @@ from ..profile_env import (
     read_global_llm_env,
     read_profile_env,
     remove_profile_env,
+    resolve_env_api_key_for_url,
+    resolve_env_base_url,
     restore_snapshot,
     write_profile_env,
 )
@@ -395,7 +397,7 @@ def fetch_models(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """从目标服务 Base URL 获取可用的模型标识列表 (/models)。"""
+    """从目标服务 Base URL 获取可用的模型标识列表 (/models)，支持从 .env 自动匹配凭据。"""
     api_key = body.api_key
     protocol = body.protocol
     base_url = body.base_url
@@ -408,10 +410,21 @@ def fetch_models(
         protocol = profile.protocol
         # 兼容旧单模型环境；若该 profile 已有任一独立变量，则不会串用全局 Key。
         env_base_url, _model, env_api_key = _profile_connection(profile, allow_global_alias=True)
-        base_url = env_base_url
+        if not base_url:
+            base_url = env_base_url
         anthropic_version = profile.anthropic_version
         if not api_key:
             api_key = env_api_key
+
+    # 若未提供 Base URL，尝试从 .env 获取默认 Base URL
+    if not base_url:
+        base_url = resolve_env_base_url(protocol)
+    if not base_url:
+        raise AppError(ErrorCode.VALIDATION, "请提供目标服务的 Base URL")
+
+    # 若未显式传入 api_key，从 .env 环境配置中自动解析
+    if not api_key:
+        api_key = resolve_env_api_key_for_url(base_url, protocol=protocol)
 
     models = fetch_remote_models(
         protocol=protocol,
@@ -420,6 +433,7 @@ def fetch_models(
         anthropic_version=anthropic_version,
     )
     return {"ok": True, "models": models, "total": len(models)}
+
 
 
 @router.post("/{profile_id}/check")

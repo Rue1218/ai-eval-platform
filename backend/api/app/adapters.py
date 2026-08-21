@@ -444,7 +444,11 @@ def fetch_remote_models(
     """
     base = _service_base_url(base_url)
 
-    headers: dict[str, str] = {"Content-Type": "application/json"}
+    headers: dict[str, str] = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": "ai-eval-platform/1.0",
+    }
     if api_key:
         if protocol == "anthropic_messages":
             headers["x-api-key"] = api_key
@@ -463,13 +467,14 @@ def fetch_remote_models(
         ]
 
     last_error: Exception | None = None
-    data: dict | None = None
+    data: dict | list | None = None
     for url in urls_to_try:
         try:
             req = Request(url, headers=headers, method="GET")
             with urlopen(req, timeout=timeout_s) as response:
-                data = json.loads(response.read().decode())
-                if isinstance(data, dict):
+                raw_bytes = response.read()
+                data = json.loads(raw_bytes.decode("utf-8", errors="replace"))
+                if isinstance(data, dict | list):
                     break
         except HTTPError as exc:
             last_error = exc
@@ -481,27 +486,39 @@ def fetch_remote_models(
             continue
 
     models_list: list[dict] = []
-    if data and isinstance(data, dict):
-        if "data" in data and isinstance(data["data"], list):
-            for item in data["data"]:
-                if isinstance(item, dict) and item.get("id"):
+    if isinstance(data, list):
+        for item in data:
+            if isinstance(item, dict) and (item.get("id") or item.get("name")):
+                m_id = str(item.get("id") or item.get("name"))
+                models_list.append({
+                    "id": m_id,
+                    "name": str(item.get("name") or m_id),
+                    "owned_by": str(item.get("owned_by") or item.get("root") or "remote"),
+                })
+    elif isinstance(data, dict):
+        raw_items = data.get("data") or data.get("models") or data.get("items") or []
+        if isinstance(raw_items, dict) and isinstance(raw_items.get("models"), list):
+            raw_items = raw_items["models"]
+        if isinstance(raw_items, list):
+            for item in raw_items:
+                if isinstance(item, dict) and (item.get("id") or item.get("name")):
+                    m_id = str(item.get("id") or item.get("name"))
                     models_list.append({
-                        "id": str(item["id"]),
-                        "name": str(item.get("id")),
-                        "owned_by": str(item.get("owned_by") or item.get("root") or "remote"),
-                    })
-        elif "models" in data and isinstance(data["models"], list):
-            for item in data["models"]:
-                if isinstance(item, dict) and item.get("name"):
-                    models_list.append({
-                        "id": str(item["name"]),
-                        "name": str(item.get("name")),
-                        "owned_by": "ollama",
+                        "id": m_id,
+                        "name": str(item.get("name") or m_id),
+                        "owned_by": str(item.get("owned_by") or item.get("root") or ("ollama" if "models" in data else "remote")),
                     })
 
     if models_list:
-        models_list.sort(key=lambda x: x["id"].lower())
-        return models_list
+        # 去重并排序
+        seen_ids: set[str] = set()
+        deduped: list[dict] = []
+        for m in models_list:
+            if m["id"] not in seen_ids:
+                seen_ids.add(m["id"])
+                deduped.append(m)
+        deduped.sort(key=lambda x: x["id"].lower())
+        return deduped
 
     if protocol == "anthropic_messages":
         return [
@@ -514,3 +531,4 @@ def fetch_remote_models(
     if last_error:
         raise AppError(ErrorCode.UPSTREAM, f"无法从端点获取模型列表: {last_error}")
     raise AppError(ErrorCode.UPSTREAM, "端点未返回可解析的模型列表，请手动输入模型标识名")
+

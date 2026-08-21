@@ -23,6 +23,11 @@ const gitCommit = getGitCommit()
 
 export default defineConfig({
   plugins: [vue()],
+  resolve: {
+    alias: {
+      mermaid: 'mermaid/dist/mermaid.esm.min.mjs',
+    },
+  },
   define: {
     __BUILD_VERSION__: JSON.stringify(gitCommit),
     __BUILD_TIME__: JSON.stringify(buildTime),

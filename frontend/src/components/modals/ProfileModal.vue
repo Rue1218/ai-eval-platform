@@ -80,7 +80,7 @@
           v-model:value="form.api_key"
           type="password"
           show-password-on="click"
-          placeholder="可选；私有端点或免密模型可留空"
+          :placeholder="props.profile?.has_api_key ? '********* (已配置密钥，留空保留原密钥)' : '可选；私有端点或免密模型可留空'"
         />
       </div>
 
@@ -261,14 +261,16 @@ async function handleFetchRemoteModels() {
   }
   fetchingModels.value = true
   try {
-    const list = await api.profiles.fetchModels({
+    const res = await api.profiles.fetchModels({
       base_url: form.value.base_url.trim(),
       protocol: form.value.protocol,
       api_key: form.value.api_key.trim() || undefined,
       profile_id: props.profile?.id,
+      anthropic_version: form.value.anthropic_version?.trim() || undefined,
     })
+    const list = Array.isArray(res) ? res : res.models || []
     if (!list.length) {
-      message.warning('服务端未返回可用模型列表')
+      message.warning('服务端未返回可用模型列表，请手动输入模型标识名')
       return
     }
     fetchedModelList.value = list

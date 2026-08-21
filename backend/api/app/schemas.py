@@ -175,10 +175,11 @@ class FetchModelsIn(ApiModel):
     """远程获取模型列表请求入参。"""
 
     protocol: Literal["openai_chat", "openai_responses", "anthropic_messages"] = "openai_chat"
-    base_url: str = Field(min_length=1, max_length=1024)
+    base_url: str | None = Field(default=None, max_length=1024)
     api_key: str | None = Field(default=None, max_length=4096)
     profile_id: str | None = None
     anthropic_version: str | None = None
+
 
 
 class SessionCreate(ApiModel):
