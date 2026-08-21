@@ -48,8 +48,16 @@ from app.agent.turn_mode import (
     uses_react_llm,
 )
 from app.errors import AppError, ErrorCode
+from app.harness.contracts.cancellation import CancellationToken
+from app.harness.contracts.trace import TraceContext
 from app.models import Dataset, ProtocolProfile, Task, User
 from app.models import Session as AgentSession
+
+
+def _turn_ctx() -> dict:
+    """阶段 2：测试夹具必须显式构造同一 Turn 的 trace/cancel。"""
+    trace = TraceContext.for_turn()
+    return {"trace": trace, "cancel": CancellationToken(turn_id=trace.turn_id)}
 
 
 def test_chat_reply_persists_completed_reasoning_snapshot(monkeypatch):
@@ -82,6 +90,7 @@ def test_chat_reply_persists_completed_reasoning_snapshot(monkeypatch):
             compact_summary=None,
             skill_id=None,
             emit=_emit,
+            **_turn_ctx(),
         )
     )
 
@@ -117,6 +126,7 @@ def test_stream_mcp_step_emits_native_reasoning(monkeypatch):
             payload={"text": "帮我画一张图"},
             stop=threading.Event(),
             emit=_emit,
+            **_turn_ctx(),
         )
     )
     assert step.tool == "image.generate"
@@ -931,6 +941,7 @@ def test_run_react_continuation_respects_rounds_used(monkeypatch):
             emit=_emit,
             check_abort=lambda: None,
             slash_fill_first=False,
+            **_turn_ctx(),
         )
     )
     assert calls == []
@@ -945,6 +956,7 @@ def test_run_react_continuation_respects_rounds_used(monkeypatch):
             slash_fill_first=False,
             prior=react,
             extra_tools=["dataset.list"],
+            **_turn_ctx(),
         )
     )
     assert calls == []
@@ -977,6 +989,7 @@ def test_run_react_long_tool_handoff_without_execute():
             check_abort=lambda: None,
             slash_fill_first=False,
             text="帮我生成一首轻盈的音乐",
+            **_turn_ctx(),
         )
     )
     assert events[0][0] == "thought"
@@ -1044,6 +1057,7 @@ def test_run_react_stops_at_five_rounds(monkeypatch):
             emit=_emit,
             check_abort=lambda: None,
             slash_fill_first=False,
+            **_turn_ctx(),
         )
     )
     assert calls == []
@@ -1106,6 +1120,7 @@ def test_run_react_mcp_loop_executes_one_tool_per_round(monkeypatch):
             slash_fill_first=False,
             use_llm=True,
             stop=threading.Event(),
+            **_turn_ctx(),
         )
     )
     assert calls == ["model.list", "dataset.list"]
@@ -1153,6 +1168,7 @@ def test_run_react_long_tool_does_not_execute(monkeypatch):
             slash_fill_first=False,
             use_llm=True,
             stop=threading.Event(),
+            **_turn_ctx(),
         )
     )
     assert calls == []
@@ -1197,6 +1213,7 @@ def test_run_react_llm_unavailable_falls_back_to_tools_needed(monkeypatch):
             slash_fill_first=True,
             use_llm=True,
             stop=threading.Event(),
+            **_turn_ctx(),
         )
     )
     assert calls == []
@@ -1248,6 +1265,7 @@ def test_run_react_llm_stop_does_not_drain_tools_needed(monkeypatch):
             slash_fill_first=False,
             use_llm=True,
             stop=threading.Event(),
+            **_turn_ctx(),
         )
     )
     assert calls == []

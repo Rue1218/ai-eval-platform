@@ -20,6 +20,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..agent.harness import (
+    abort_running_turn,
     deep_merge,
     dispatch_user_message,
     handle_cancel_task,
@@ -610,6 +611,7 @@ async def ws_agent(websocket: WebSocket):
     forwarder: asyncio.Task | None = None
     heartbeat: asyncio.Task | None = None
     connection_id: str | None = None
+    session_id: str | None = None
     try:
         requested_session_id = websocket.query_params.get("session_id")
         if requested_session_id:
@@ -751,12 +753,13 @@ async def ws_agent(websocket: WebSocket):
 
             await _emit(db, websocket, session_id, "error", {"code": "VALIDATION", "message": "不支持的消息类型"}, state=state)
     except WebSocketDisconnect:
-        pass
+        if session_id:
+            abort_running_turn(session_id, reason="disconnect", user_id=user.id)
     finally:
         if forwarder is not None:
             forwarder.cancel()
         if heartbeat is not None:
             heartbeat.cancel()
-        if connection_id is not None:
+        if connection_id is not None and session_id is not None:
             SESSION_CONNECTION_HUB.unregister(session_id, connection_id)
         db.close()

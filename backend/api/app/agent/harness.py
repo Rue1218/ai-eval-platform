@@ -18,6 +18,12 @@ from typing import Any
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.harness.contracts.cancellation import CancellationToken, TurnCancelled
+from app.harness.contracts.trace import TraceContext, using_trace
+from app.harness.contracts.turn import TurnStatus
+from app.harness.feedback.publisher import publisher
+from app.harness.orchestration.budgets import wall_clock_s
+
 from ..db import SessionLocal
 from ..errors import AppError, ErrorCode
 from ..models import AuditLog, Dataset, Message, ProtocolProfile, Task, TaskEvent, User
@@ -29,7 +35,6 @@ from .defaults import (
     MAX_MODEL_CALLS,
     NO_TITLE_COMMANDS,
     TERMINAL_STATUSES,
-    TURN_WALL_CLOCK_S,
 )
 from .log import agent_exception, agent_trace
 from .persona import chat_system, turn_system
@@ -69,10 +74,13 @@ class SessionHarness:
     user_id: str
     abort: asyncio.Event
     stop: threading.Event
+    cancel: CancellationToken
+    trace: TraceContext
     task: asyncio.Task | None = None
 
 
 # 会话级 abort（进程内 dict）。部署前提：API 单副本，或网关按 session_id 粘性路由。
+# 阶段 2 不把该 registry 迁 Redis（扩副本议题，非本阶段）。
 _HARNESS_BY_SESSION: dict[str, SessionHarness] = {}
 # 保护 registry 的 check-and-set，避免共享会话两人同时开两轮 Harness
 _HARNESS_REGISTRY_LOCK = asyncio.Lock()
@@ -114,6 +122,35 @@ def _clear_harness(session_id: str, task: asyncio.Task | None) -> None:
     current = _HARNESS_BY_SESSION.get(session_id)
     if current and (task is None or current.task is task):
         _HARNESS_BY_SESSION.pop(session_id, None)
+
+
+def abort_running_turn(
+    session_id: str,
+    *,
+    reason: str,
+    user_id: str | None = None,
+) -> bool:
+    """置位同一 CancellationToken，并取消未完成的本地 asyncio.Task。
+
+    返回是否实际发出了本地取消调度。100ms SLO 只覆盖本函数返回前的本地动作，
+    不含 MCP 远端往返。无 MCP 客户端时不得声称已向 Server 发取消。
+    """
+    existing = _HARNESS_BY_SESSION.get(session_id)
+    if existing is None or existing.task is None or existing.task.done():
+        return False
+    if user_id is not None and existing.user_id != user_id:
+        return False
+    existing.cancel.request(reason)
+    existing.stop.set()
+    existing.abort.set()
+    if existing.task is not None and not existing.task.done():
+        existing.task.cancel()
+    latency = existing.cancel.dispatch_latency_ms()
+    with using_trace(existing.trace):
+        if latency is not None:
+            agent_trace(f"取消调度 reason={reason} dispatch_latency_ms={latency:.1f}")
+        publisher().set_turn_status(existing.trace, status=TurnStatus.CANCELLING, finished=False)
+    return True
 
 
 def _check_abort(abort: asyncio.Event) -> None:
@@ -246,6 +283,8 @@ async def _run_turn(
     emit: EmitFn,
     abort: asyncio.Event,
     stop: threading.Event,
+    trace: TraceContext,
+    cancel: CancellationToken,
 ) -> None:
     """单回合内部实现；调用前已检查 abort。"""
     _check_abort(abort)
@@ -313,20 +352,25 @@ async def _run_turn(
     )
 
     _check_abort(abort)
-    react = await run_react(
-        db,
-        plan,
-        user_id=user.id,
-        emit=emit,
-        check_abort=lambda: _check_abort(abort),
-        slash_fill_first=slash_fill_first,
-        text=text,
-        attachments=attachments,
-        use_llm=use_llm_react,
-        stop=stop,
-        history=history,
-        compact_summary=compact_summary,
-    )
+    try:
+        react = await run_react(
+            db,
+            plan,
+            user_id=user.id,
+            emit=emit,
+            check_abort=lambda: _check_abort(abort),
+            slash_fill_first=slash_fill_first,
+            text=text,
+            attachments=attachments,
+            use_llm=use_llm_react,
+            stop=stop,
+            history=history,
+            compact_summary=compact_summary,
+            trace=trace,
+            cancel=cancel,
+        )
+    except TurnCancelled as exc:
+        raise HarnessAborted() from exc
     for note in react.pref_stale_notes:
         await _emit_thought(emit, note, stage="react")
 
@@ -354,22 +398,27 @@ async def _run_turn(
         plan, extra_tools = merge_replan(plan, extra, executed_tool_names=executed_names)
         if extra_tools and plan.delivery == "confirm":
             stale_before = len(react.pref_stale_notes)
-            react = await run_react(
-                db,
-                plan,
-                user_id=user.id,
-                emit=emit,
-                check_abort=lambda: _check_abort(abort),
-                slash_fill_first=slash_fill_first,
-                prior=react,
-                extra_tools=extra_tools,
-                text=text,
-                attachments=attachments,
-                use_llm=use_llm_react,
-                stop=stop,
-                history=history,
-                compact_summary=compact_summary,
-            )
+            try:
+                react = await run_react(
+                    db,
+                    plan,
+                    user_id=user.id,
+                    emit=emit,
+                    check_abort=lambda: _check_abort(abort),
+                    slash_fill_first=slash_fill_first,
+                    prior=react,
+                    extra_tools=extra_tools,
+                    text=text,
+                    attachments=attachments,
+                    use_llm=use_llm_react,
+                    stop=stop,
+                    history=history,
+                    compact_summary=compact_summary,
+                    trace=trace,
+                    cancel=cancel,
+                )
+            except TurnCancelled as exc:
+                raise HarnessAborted() from exc
             for note in react.pref_stale_notes[stale_before:]:
                 await _emit_thought(emit, note, stage="react")
 
@@ -619,6 +668,8 @@ async def _run_turn(
             compact_summary=compact_summary,
             skill_id=plan.skill_id,
             emit=emit,
+            trace=trace,
+            cancel=cancel,
         )
         await _deliver_sentence(db, session.id, emit, reply)
         return
@@ -636,6 +687,8 @@ async def _chat_reply(
     compact_summary: str | None,
     skill_id: str | None,
     emit: EmitFn,
+    trace: TraceContext,
+    cancel: CancellationToken,
 ) -> str:
     """闲聊交付句：与规划/重试/补规划/核对共用 4 次硬顶；达顶回退短答，不再调模型。
 
@@ -659,23 +712,24 @@ async def _chat_reply(
     def _producer() -> tuple[str, str]:
         from ..llm import stream_agent_model
 
-        if stop.is_set():
-            raise HarnessAborted()
+        cancel.raise_if_cancelled()
         tdb = SessionLocal()
         parts: list[str] = []
         thought_parts: list[str] = []
         frames = 0
+        chat_span = trace.child("orchestration.chat")
         try:
             for kind, chunk in stream_agent_model(
                 tdb,
                 system,
                 user_blob,
+                trace=chat_span,
+                cancel=cancel,
                 temperature=0.4,
                 max_tokens=2048,
                 timeout_s=90,
             ):
-                if stop.is_set():
-                    raise HarnessAborted()
+                cancel.raise_if_cancelled()
                 if not chunk:
                     continue
                 frames += 1
@@ -700,6 +754,7 @@ async def _chat_reply(
 
     try:
         result, thought = await asyncio.to_thread(_producer)
+        cancel.raise_if_cancelled()
         if stop.is_set():
             raise HarnessAborted()
         if thought:
@@ -708,6 +763,8 @@ async def _chat_reply(
         return result or canned
     except HarnessAborted:
         raise
+    except TurnCancelled as exc:
+        raise HarnessAborted() from exc
     except AppError:
         return canned
     except Exception as exc:
@@ -724,12 +781,17 @@ async def _harness_entry(
     emit_factory: Callable[[Session], EmitFn],
     abort: asyncio.Event,
     stop: threading.Event,
+    trace: TraceContext,
+    cancel: CancellationToken,
 ) -> None:
-    """Harness 任务入口：独立 DB 会话，墙钟 180s（含音色克隆），结束后清理 registry。"""
+    """Harness 任务入口：独立 DB 会话，墙钟默认 180s（含音色克隆），结束后清理 registry。"""
     # 记录回合墙钟起点，供 _deliver_sentence 计算回复耗时 latency_ms 展示给用户。
     _ROUND_STARTED_AT.set(datetime.now(UTC))
     db = SessionLocal()
     task = asyncio.current_task()
+    final_status = TurnStatus.FINISHED
+    _trace_cm = using_trace(trace)
+    _trace_cm.__enter__()
     try:
         session = (
             db.query(AgentSession)
@@ -740,6 +802,7 @@ async def _harness_entry(
         if not session or not user:
             return
         emit = emit_factory(db)
+        publisher().start_turn(trace, session_id=session_id, status=TurnStatus.INIT)
 
         async def _body() -> None:
             await _run_turn(
@@ -751,12 +814,16 @@ async def _harness_entry(
                 emit=emit,
                 abort=abort,
                 stop=stop,
+                trace=trace,
+                cancel=cancel,
             )
 
-        await asyncio.wait_for(_body(), timeout=TURN_WALL_CLOCK_S)
+        await asyncio.wait_for(_body(), timeout=wall_clock_s())
     except TimeoutError:
+        cancel.request("deadline")
         stop.set()
         abort.set()
+        final_status = TurnStatus.FAILED_STOP
         agent_trace(f"回合墙钟超时 session={session_id[:8]}")
         try:
             emit = emit_factory(db)
@@ -765,15 +832,19 @@ async def _harness_entry(
         except Exception as exc:  # noqa: BLE001
             agent_exception("超时交付内部异常", exc)
     except HarnessAborted:
+        cancel.request("user_stop")
         stop.set()
+        final_status = TurnStatus.CANCELLED
         try:
             emit = emit_factory(db)
             await _deliver_sentence(db, session_id, emit, "已停止生成")
         except Exception as exc:  # noqa: BLE001
             agent_exception("abort 交付内部异常", exc)
     except asyncio.CancelledError:
+        cancel.request("user_stop")
         stop.set()
         abort.set()
+        final_status = TurnStatus.CANCELLED
         try:
             emit = emit_factory(db)
             await _deliver_sentence(db, session_id, emit, "已停止生成")
@@ -781,6 +852,7 @@ async def _harness_entry(
             agent_exception("cancel 交付内部异常", exc)
         raise
     except AppError as exc:
+        final_status = TurnStatus.FAILED_STOP
         agent_trace(f"harness AppError code={exc.code.value}")
         try:
             emit = emit_factory(db)
@@ -789,6 +861,7 @@ async def _harness_entry(
         except Exception:
             pass
     except Exception as exc:
+        final_status = TurnStatus.FAILED_STOP
         agent_exception("harness 内部异常", exc)
         try:
             emit = emit_factory(db)
@@ -796,6 +869,11 @@ async def _harness_entry(
         except Exception:
             pass
     finally:
+        try:
+            publisher().finish_turn(trace, status=final_status)
+        except Exception:
+            pass
+        _trace_cm.__exit__(None, None, None)
         db.close()
         _clear_harness(session_id, task)
 
@@ -831,10 +909,7 @@ async def dispatch_user_message(
                         {"code": ErrorCode.UNAUTHORIZED.value, "message": "仅本轮发起人可以停止生成"},
                     )
                     return
-                existing.stop.set()
-                existing.abort.set()
-                if existing.task and not existing.task.done():
-                    existing.task.cancel()
+                abort_running_turn(session_id, reason="user_stop", user_id=user_id)
                 return
             await emit_busy("thought", {"text": "正在生成，先 /stop 或等本轮结束"})
             return
@@ -843,7 +918,15 @@ async def dispatch_user_message(
             await emit_busy("thought", {"text": "当前没有正在生成的内容"})
             return
 
-        handle = SessionHarness(user_id=user_id, abort=asyncio.Event(), stop=threading.Event())
+        trace = TraceContext.for_turn(component="dispatch")
+        cancel = CancellationToken(turn_id=trace.turn_id)
+        handle = SessionHarness(
+            user_id=user_id,
+            abort=asyncio.Event(),
+            stop=cancel.stop,
+            cancel=cancel,
+            trace=trace,
+        )
         task = asyncio.create_task(
             _harness_entry(
                 session_id=session_id,
@@ -853,6 +936,8 @@ async def dispatch_user_message(
                 emit_factory=emit_factory,
                 abort=handle.abort,
                 stop=handle.stop,
+                trace=trace,
+                cancel=cancel,
             )
         )
         handle.task = task

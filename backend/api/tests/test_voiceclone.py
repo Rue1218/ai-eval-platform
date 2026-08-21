@@ -18,8 +18,16 @@ from app.agent.voiceclone import (
     inject_voiceclone_plan,
 )
 from app.errors import AppError, ErrorCode
+from app.harness.contracts.cancellation import CancellationToken
+from app.harness.contracts.trace import TraceContext
 from app.models import StoredFile
 from app.routers.files import _validate_filename
+
+
+def _turn_ctx() -> dict:
+    """阶段 2：测试夹具必须显式构造同一 Turn 的 trace/cancel。"""
+    trace = TraceContext.for_turn()
+    return {"trace": trace, "cancel": CancellationToken(turn_id=trace.turn_id)}
 
 
 class _AudioQuery:
@@ -228,6 +236,7 @@ def test_run_react_passes_voiceclone_arguments(tmp_path, monkeypatch):
             slash_fill_first=False,
             text="欢迎使用",
             attachments=[row.id],
+            **_turn_ctx(),
         )
     )
     assert captured["arguments"]["text"] == "欢迎使用"

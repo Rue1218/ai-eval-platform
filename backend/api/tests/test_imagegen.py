@@ -16,7 +16,15 @@ from app.agent.mcp_tools import collect_ids, execute_short_tool
 from app.agent.plan import PlanArtifact, l0_plan
 from app.agent.react import run_react
 from app.errors import AppError, ErrorCode
+from app.harness.contracts.cancellation import CancellationToken
+from app.harness.contracts.trace import TraceContext
 from app.models import StoredFile
+
+
+def _turn_ctx() -> dict:
+    """阶段 2：测试夹具必须显式构造同一 Turn 的 trace/cancel。"""
+    trace = TraceContext.for_turn()
+    return {"trace": trace, "cancel": CancellationToken(turn_id=trace.turn_id)}
 
 
 class _ImageQuery:
@@ -219,6 +227,7 @@ def test_run_react_passes_imagegen_arguments(tmp_path, monkeypatch):
             slash_fill_first=False,
             text="根据参考图生成油画风格",
             attachments=[row.id],
+            **_turn_ctx(),
         )
     )
 
@@ -265,6 +274,7 @@ def test_react_redirects_eval_inventory_when_user_asks_for_photo(monkeypatch):
             slash_fill_first=False,
             text="帮我生成一张竖幅户外人像摄影",
             attachments=[],
+            **_turn_ctx(),
         )
     )
 
