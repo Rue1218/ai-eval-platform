@@ -8,6 +8,8 @@ import {
   ERROR_MESSAGES,
   type AuthUser,
   type Profile,
+  type ProfileCreateIn,
+  type ProfileUpdateIn,
   type Dataset,
   type DatasetRow,
   type KnowledgeBase,
@@ -260,7 +262,7 @@ export const api = {
         throw e
       }
     },
-    async create(payload: any): Promise<Profile> {
+    async create(payload: ProfileCreateIn): Promise<Profile> {
       if (getDataMode() === 'mock') {
         const p: Profile = {
           id: 'p-' + Date.now(),
@@ -273,7 +275,7 @@ export const api = {
       const { data } = await http.post('/api/profiles', payload)
       return data
     },
-    async update(id: string, payload: any): Promise<Profile> {
+    async update(id: string, payload: ProfileUpdateIn): Promise<Profile> {
       if (getDataMode() === 'mock') {
         const idx = mockStore.profiles.findIndex((x) => x.id === id)
         if (idx >= 0) mockStore.profiles[idx] = { ...mockStore.profiles[idx], ...payload }

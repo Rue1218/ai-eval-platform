@@ -135,6 +135,8 @@
 
               <div class="model-chip-meta">
                 <span class="mono model-id-tag">{{ p.model }}</span>
+                <span v-if="p.embedding_model" class="mono model-id-tag" title="Embedding 模型">E: {{ p.embedding_model }}</span>
+                <span v-if="p.reranker_model" class="mono model-id-tag" title="Reranker 模型">R: {{ p.reranker_model }}</span>
                 <span class="mono protocol-tag">{{ p.protocol }}</span>
                 <span class="mono window-tag" title="上下文窗口容量">{{ formatContextWindow(p.context_window) }}</span>
               </div>
@@ -198,7 +200,11 @@
               <span class="mono" style="font-size: 12px">{{ p.protocol }}</span>
             </td>
             <td>
-              <span class="mono" style="font-size: 12px; font-weight: 500">{{ p.model }}</span>
+              <div class="row" style="gap: 4px; flex-wrap: wrap">
+                <span class="mono" style="font-size: 12px; font-weight: 500">{{ p.model }}</span>
+                <span v-if="p.embedding_model" class="mono" style="font-size: 11px; color: var(--text-secondary)" title="Embedding 模型">E: {{ p.embedding_model }}</span>
+                <span v-if="p.reranker_model" class="mono" style="font-size: 11px; color: var(--text-secondary)" title="Reranker 模型">R: {{ p.reranker_model }}</span>
+              </div>
             </td>
             <td>
               <span class="mono window-tag">{{ formatContextWindow(p.context_window) }}</span>

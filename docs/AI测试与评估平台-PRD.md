@@ -2,10 +2,10 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.7.0 |
+| 文档版本 | V1.7.1 |
 | 文档状态 | 已冻结基线 |
 | 撰写日期 | 2026-08-17 |
-| 最近修订 | 2026-08-20：协议档连接参数改由受控环境文件保存，支持多供应商并行配置 |
+| 最近修订 | 2026-08-21：协议档增加可选 Embedding / Reranker 独立端点配置，三类 Key 均按 profile 写入受控环境文件 |
 | 适用版本 | 平台 V1.0 |
 | 技术栈 | Vue3 + Naive UI、Python FastAPI、PostgreSQL、WebSocket、Docker Compose、go-stress-testing |
 
@@ -21,6 +21,7 @@
 | V1.6.3 | 2026-08-17 | 再核：WS 用 ticket 非长期 token；压测由 stress 容器执行且取消立即停；LightRAG 压测走 query 而非 Chat；会话槽位含子任务 |
 | V1.6.4 | 2026-08-18 | 全面去除静态 Mock 数据，全量接入后端 API 统一客户端；落实全员同权协作与智能体/调度/任务中心动态交互 |
 | V1.6.5 | 2026-08-20 | 新增默认私有、创建者可切换团队共享的 Agent 会话；补齐软删除、多人实时正文流与确认卡作者边界 |
+| V1.7.1 | 2026-08-21 | 协议档支持可选 Embedding / Reranker 的 URL、模型标识与 Key；Key 只写不回显 |
 
 ---
 
@@ -69,7 +70,7 @@
 
 | 术语 | 含义 |
 | --- | --- |
-| 协议档 | `openai_chat` / `openai_responses` / `anthropic_messages` 之一 + base_url + 模型名 + 受控环境文件 Key |
+| 协议档 | `openai_chat` / `openai_responses` / `anthropic_messages` 之一 + 主模型 base_url/模型名/Key；可选 Embedding、Reranker 各自 base_url/模型名/Key，均写入受控环境文件 |
 | 会话 | 每成员可多开；默认仅创建者可见，也可由创建者设为团队共享；**会话内任务串行**，会话间可并行（受平台并发上限） |
 | 长任务 | `benchmark.run` / `rag.evaluate` / `testcase.generate` 由 **worker 进程执行**；`stress.run` 由 worker **下发到 stress 容器**（go-stress-testing） |
 | 短工具 | `*.list` / `report.get` / `task.get`，Agent 可同步调用 |
@@ -257,7 +258,7 @@ queued → running → succeeded
 
 | 编号 | 功能 | 优先级 | 交付 | 说明 |
 | --- | --- | --- | --- | --- |
-| F-BM-01 | 协议档 CRUD | P0 | M1 | 见 6.2；Key 只写不回显，审计变更 |
+| F-BM-01 | 协议档 CRUD | P0 | M1 | 见 6.2；主模型及可选 Embedding / Reranker 端点配置，三类 Key 只写不回显，审计变更 |
 | F-BM-02 | 统一调用 | P0 | M1 | 入 `messages`，出 `text,usage,raw,latency_ms` |
 | F-BM-03 | 数据集 | P0 | M2 | JSONL/CSV UTF-8；列 `question,reference,context?`；版本号每次覆盖上传 +1；单集 ≤50MB、≤2 万行 |
 | F-BM-04 | 用例入集 | P0 | M2 | 5.4.2；待补全不评分 |
@@ -410,7 +411,7 @@ V1 压测内核：**go-stress-testing**（Apache-2.0）扩展，独立 `stress` 
 | `/datasets` | 数据集工作台 | 目录树结构管理、自定义列管理（+新增列）、单元格行内即点即改、多行/JSON 弹窗编辑器、AI 智能合成新数据与补全缺失行 | 成员 |
 | `/cases` | 用例工作台 | 用例集目录树、6 大测试策略分布与自检横幅、用例表格行内编辑、AI 智能从 PRD 生成用例集、批量映射至基准数据集/黄金 QA、72h 倒计时确认入库 | 成员 |
 | `/kb` | 知识库与切块检索 | 文档分块预览、2D 向量投影散点图、Top-K 相似度召回连线与重排前后位次对比 (Rerank Delta)、黄金 QA 维护 | 成员 |
-| `/admin/profiles` | 协议档治理 | 三大协议（`openai_chat`、`openai_responses`、`anthropic_messages`）维护、Key 只写不回显、连通性检查 | 成员 |
+| `/admin/profiles` | 协议档治理 | 三大协议（`openai_chat`、`openai_responses`、`anthropic_messages`）及可选 Embedding / Reranker 端点维护、Key 只写不回显、连通性检查 | 成员 |
 | `/admin/stress` | 压测治理 | 白名单维护、QPS/时长上限、默认预算、单价并发控制、AI 参数推荐 | 成员 |
 | `/admin/users` | 账号协同 | 成员开户、停用、重置密码（系统安全保底：不可停用最后一名正常账号） | 成员 |
 
@@ -618,3 +619,14 @@ testcase-tools：只对齐，不进镜像。LightRAG：MIT，锁 tag。go-stress
 思考卡、工具/MCP 卡、技能徽标、确认卡及其回执均通过 `ws_events` 或会话状态保存；
 流式增量仍为瞬态，成功回合额外保存 `thought.stream=think_final` 完整思考快照。
 历史接口同时返回 `compact_summary` 与服务端 ContextMeter，刷新不得依赖浏览器临时状态。
+
+### 协议档多模型端点修订（2026-08-21）
+
+协议档在主模型配置之外，可选保存 Embedding 与 Reranker 的独立 URL、模型标识和 API Key；
+三类 Key 均只写入受控环境文件，不进入数据库或任何响应正文。
+
+| 文件 | 作用 |
+| --- | --- |
+| `backend/api/app/schemas.py` / `backend/api/app/profile_env.py` | 定义附加端点字段及按 profile 隔离的环境变量写入契约 |
+| `backend/api/app/routers/profiles.py` / `backend/worker/app/profile_env.py` | CRUD 保存、脱敏返回与 Worker 只读解析 |
+| `frontend/src/components/modals/ProfileModal.vue` / `frontend/src/views/AdminProfiles.vue` | 配置表单和协议档列表标识 |

@@ -62,6 +62,13 @@ export interface Profile {
   base_url: string
   model: string
   api_key?: string // 永不回显，仅在提交时可选填写
+  embedding_base_url?: string | null
+  embedding_model?: string | null
+  has_embedding_api_key?: boolean
+  reranker_base_url?: string | null
+  reranker_model?: string | null
+  has_reranker_api_key?: boolean
+  has_api_key?: boolean
   anthropic_version?: string
   usages?: ProfileUsage[]
   context_window?: number // 上下文窗口容量 (Tokens)
@@ -75,6 +82,12 @@ export interface ProfileCreateIn {
   base_url: string
   model: string
   api_key: string
+  embedding_base_url?: string
+  embedding_model?: string
+  embedding_api_key?: string
+  reranker_base_url?: string
+  reranker_model?: string
+  reranker_api_key?: string
   anthropic_version?: string
   usages?: ProfileUsage[]
   context_window?: number
@@ -86,6 +99,12 @@ export interface ProfileUpdateIn {
   base_url?: string
   model?: string
   api_key?: string
+  embedding_base_url?: string
+  embedding_model?: string
+  embedding_api_key?: string
+  reranker_base_url?: string
+  reranker_model?: string
+  reranker_api_key?: string
   anthropic_version?: string
   usages?: ProfileUsage[]
   context_window?: number

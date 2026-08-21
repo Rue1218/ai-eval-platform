@@ -76,26 +76,38 @@ class UserOut(OrmOut):
 
 
 class ProfileCreate(ApiModel):
-    """创建协议档时的可写字段，API Key 仅在本模型出现。"""
+    """创建协议档时的可写字段；三类模型的 API Key 仅在本模型出现。"""
 
     name: str = Field(min_length=1, max_length=128)
     protocol: Literal["openai_chat", "openai_responses", "anthropic_messages"]
     base_url: HttpUrl
     model: str = Field(min_length=1, max_length=256)
     api_key: str | None = Field(default=None, max_length=4096)
+    embedding_base_url: HttpUrl | None = None
+    embedding_model: str | None = Field(default=None, min_length=1, max_length=256)
+    embedding_api_key: str | None = Field(default=None, max_length=4096)
+    reranker_base_url: HttpUrl | None = None
+    reranker_model: str | None = Field(default=None, min_length=1, max_length=256)
+    reranker_api_key: str | None = Field(default=None, max_length=4096)
     anthropic_version: str | None = Field(default=None, max_length=64)
     usages: list[Literal["target", "agent", "judge"]] = Field(default_factory=list)
     context_window: int = Field(default=200000, ge=1000, le=10000000, description="上下文窗口大小 (Tokens)")
 
 
 class ProfileUpdate(ApiModel):
-    """更新协议档；空 API Key 表示不修改既有密文。"""
+    """更新协议档；空的三类 API Key 均表示不修改既有密文。"""
 
     name: str | None = Field(default=None, min_length=1, max_length=128)
     protocol: Literal["openai_chat", "openai_responses", "anthropic_messages"] | None = None
     base_url: HttpUrl | None = None
     model: str | None = Field(default=None, min_length=1, max_length=256)
     api_key: str | None = Field(default=None, max_length=4096)
+    embedding_base_url: HttpUrl | None = None
+    embedding_model: str | None = Field(default=None, min_length=1, max_length=256)
+    embedding_api_key: str | None = Field(default=None, max_length=4096)
+    reranker_base_url: HttpUrl | None = None
+    reranker_model: str | None = Field(default=None, min_length=1, max_length=256)
+    reranker_api_key: str | None = Field(default=None, max_length=4096)
     anthropic_version: str | None = Field(default=None, max_length=64)
     usages: list[Literal["target", "agent", "judge"]] | None = None
     context_window: int | None = Field(default=None, ge=1000, le=10000000, description="上下文窗口大小 (Tokens)")
@@ -112,6 +124,12 @@ class ProfileOut(OrmOut):
     usages: list[str]
     anthropic_version: str | None = None
     has_api_key: bool = False
+    embedding_base_url: str | None = None
+    embedding_model: str | None = None
+    has_embedding_api_key: bool = False
+    reranker_base_url: str | None = None
+    reranker_model: str | None = None
+    has_reranker_api_key: bool = False
     context_window: int = 200000
     created_at: Any
     updated_at: Any

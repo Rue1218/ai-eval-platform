@@ -77,6 +77,59 @@
         />
       </div>
 
+      <!-- Embedding 与 Reranker 使用独立端点，密钥仍遵循只写不回显规则。 -->
+      <div class="endpoint-section">
+        <div class="endpoint-title">Embedding 模型（可选）</div>
+        <div class="form-row">
+          <div class="field">
+            <label class="field-label">Embedding Base URL</label>
+            <n-input v-model:value="form.embedding_base_url" placeholder="https://embedding.example.com/v1" />
+          </div>
+          <div class="field">
+            <label class="field-label">Embedding 模型标识</label>
+            <n-input v-model:value="form.embedding_model" placeholder="例如：text-embedding-3-large" />
+          </div>
+        </div>
+        <div class="field">
+          <label class="field-label">
+            Embedding API Key
+            <span style="font-size: 11px; color: var(--text-tertiary); margin-left: 6px">（只写不回显，留空表示不修改）</span>
+          </label>
+          <n-input
+            v-model:value="form.embedding_api_key"
+            type="password"
+            show-password-on="click"
+            placeholder="可选；与主模型 Key 独立保存"
+          />
+        </div>
+      </div>
+
+      <div class="endpoint-section">
+        <div class="endpoint-title">Reranker 模型（可选）</div>
+        <div class="form-row">
+          <div class="field">
+            <label class="field-label">Reranker Base URL</label>
+            <n-input v-model:value="form.reranker_base_url" placeholder="https://reranker.example.com/v1" />
+          </div>
+          <div class="field">
+            <label class="field-label">Reranker 模型标识</label>
+            <n-input v-model:value="form.reranker_model" placeholder="例如：bge-reranker-v2-m3" />
+          </div>
+        </div>
+        <div class="field">
+          <label class="field-label">
+            Reranker API Key
+            <span style="font-size: 11px; color: var(--text-tertiary); margin-left: 6px">（只写不回显，留空表示不修改）</span>
+          </label>
+          <n-input
+            v-model:value="form.reranker_api_key"
+            type="password"
+            show-password-on="click"
+            placeholder="可选；与主模型 Key 独立保存"
+          />
+        </div>
+      </div>
+
       <div v-if="form.protocol === 'anthropic_messages'" class="field">
         <label class="field-label">Anthropic Version Header</label>
         <n-input v-model:value="form.anthropic_version" placeholder="2023-06-01 (默认)" />
@@ -129,7 +182,7 @@
 import { ref, computed, watch } from 'vue'
 import { useMessage, NRadioGroup, NRadioButton, NSpace, NCheckboxGroup, NCheckbox, NSelect, NInput, NButton, NModal } from 'naive-ui'
 import { api } from '../../api/http'
-import type { Profile, ProtocolType, ProfileUsage } from '../../api/types'
+import type { Profile, ProfileCreateIn, ProfileUpdateIn, ProtocolType, ProfileUsage } from '../../api/types'
 import FetchModelsModal from './FetchModelsModal.vue'
 
 const props = defineProps<{
@@ -163,6 +216,12 @@ const form = ref<{
   base_url: string
   model: string
   api_key: string
+  embedding_base_url: string
+  embedding_model: string
+  embedding_api_key: string
+  reranker_base_url: string
+  reranker_model: string
+  reranker_api_key: string
   anthropic_version?: string
   usages: ProfileUsage[]
   context_window: number
@@ -172,6 +231,12 @@ const form = ref<{
   base_url: 'https://api.openai.com/v1',
   model: '',
   api_key: '',
+  embedding_base_url: '',
+  embedding_model: '',
+  embedding_api_key: '',
+  reranker_base_url: '',
+  reranker_model: '',
+  reranker_api_key: '',
   anthropic_version: '2023-06-01',
   usages: ['target'],
   context_window: 200000,
@@ -296,6 +361,12 @@ async function onBatchCreate(modelIds: string[]) {
         base_url: form.value.base_url,
         model: mId,
         api_key: form.value.api_key,
+        ...(form.value.embedding_base_url.trim() ? { embedding_base_url: form.value.embedding_base_url } : {}),
+        ...(form.value.embedding_model.trim() ? { embedding_model: form.value.embedding_model } : {}),
+        ...(form.value.embedding_api_key.trim() ? { embedding_api_key: form.value.embedding_api_key } : {}),
+        ...(form.value.reranker_base_url.trim() ? { reranker_base_url: form.value.reranker_base_url } : {}),
+        ...(form.value.reranker_model.trim() ? { reranker_model: form.value.reranker_model } : {}),
+        ...(form.value.reranker_api_key.trim() ? { reranker_api_key: form.value.reranker_api_key } : {}),
         anthropic_version: form.value.anthropic_version,
         usages: form.value.usages,
       })
@@ -323,6 +394,12 @@ watch(
           base_url: props.profile.base_url,
           model: props.profile.model,
           api_key: '',
+          embedding_base_url: props.profile.embedding_base_url || '',
+          embedding_model: props.profile.embedding_model || '',
+          embedding_api_key: '',
+          reranker_base_url: props.profile.reranker_base_url || '',
+          reranker_model: props.profile.reranker_model || '',
+          reranker_api_key: '',
           anthropic_version: props.profile.anthropic_version || '2023-06-01',
           usages: props.profile.usages ? [...props.profile.usages] : ['target'],
           context_window: props.profile.context_window || 200000,
@@ -334,6 +411,12 @@ watch(
           base_url: props.initialData.base_url || 'https://api.openai.com/v1',
           model: '',
           api_key: '',
+          embedding_base_url: '',
+          embedding_model: '',
+          embedding_api_key: '',
+          reranker_base_url: '',
+          reranker_model: '',
+          reranker_api_key: '',
           anthropic_version: '2023-06-01',
           usages: ['target'],
           context_window: 200000,
@@ -345,6 +428,12 @@ watch(
           base_url: 'https://api.openai.com/v1',
           model: '',
           api_key: '',
+          embedding_base_url: '',
+          embedding_model: '',
+          embedding_api_key: '',
+          reranker_base_url: '',
+          reranker_model: '',
+          reranker_api_key: '',
           anthropic_version: '2023-06-01',
           usages: ['target'],
           context_window: 200000,
@@ -375,7 +464,7 @@ async function handleSave() {
   saving.value = true
   try {
     if (isEdit.value && props.profile?.id) {
-      const payload: any = {
+      const payload: ProfileUpdateIn = {
         name: form.value.name,
         protocol: form.value.protocol,
         base_url: form.value.base_url,
@@ -387,10 +476,32 @@ async function handleSave() {
       if (form.value.api_key.trim()) {
         payload.api_key = form.value.api_key
       }
+      if (form.value.embedding_base_url.trim()) payload.embedding_base_url = form.value.embedding_base_url
+      if (form.value.embedding_model.trim()) payload.embedding_model = form.value.embedding_model
+      if (form.value.embedding_api_key.trim()) payload.embedding_api_key = form.value.embedding_api_key
+      if (form.value.reranker_base_url.trim()) payload.reranker_base_url = form.value.reranker_base_url
+      if (form.value.reranker_model.trim()) payload.reranker_model = form.value.reranker_model
+      if (form.value.reranker_api_key.trim()) payload.reranker_api_key = form.value.reranker_api_key
       await api.profiles.update(props.profile.id, payload)
       message.success('协议档已更新')
     } else {
-      await api.profiles.create(form.value)
+      const payload: ProfileCreateIn = {
+        name: form.value.name,
+        protocol: form.value.protocol,
+        base_url: form.value.base_url,
+        model: form.value.model,
+        api_key: form.value.api_key,
+        anthropic_version: form.value.anthropic_version,
+        usages: form.value.usages,
+        context_window: form.value.context_window,
+      }
+      if (form.value.embedding_base_url.trim()) payload.embedding_base_url = form.value.embedding_base_url
+      if (form.value.embedding_model.trim()) payload.embedding_model = form.value.embedding_model
+      if (form.value.embedding_api_key.trim()) payload.embedding_api_key = form.value.embedding_api_key
+      if (form.value.reranker_base_url.trim()) payload.reranker_base_url = form.value.reranker_base_url
+      if (form.value.reranker_model.trim()) payload.reranker_model = form.value.reranker_model
+      if (form.value.reranker_api_key.trim()) payload.reranker_api_key = form.value.reranker_api_key
+      await api.profiles.create(payload)
       message.success('协议档创建成功')
     }
     emit('update:show', false)
@@ -426,5 +537,18 @@ async function handleSave() {
   display: grid;
   grid-template-columns: 1fr 1.3fr;
   gap: 12px;
+}
+.endpoint-section {
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.endpoint-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
 }
 </style>

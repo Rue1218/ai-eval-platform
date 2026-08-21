@@ -1,4 +1,4 @@
-"""Worker 读取 API 容器写入的协议档环境文件。"""
+"""Worker 读取 API 容器写入的主模型、Embedding 与 Reranker 环境配置。"""
 
 from __future__ import annotations
 
@@ -20,6 +20,12 @@ class ProfileEnvValues:
     base_url: str | None
     model: str | None
     api_key: str | None
+    embedding_base_url: str | None = None
+    embedding_model: str | None = None
+    embedding_api_key: str | None = None
+    reranker_base_url: str | None = None
+    reranker_model: str | None = None
+    reranker_api_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -39,6 +45,12 @@ def _profile_env_keys(profile_id: str) -> dict[str, str]:
         "base_url": f"AI_PROFILE_{token}_BASE_URL",
         "model": f"AI_PROFILE_{token}_MODEL",
         "api_key": f"AI_PROFILE_{token}_API_KEY",
+        "embedding_base_url": f"AI_PROFILE_{token}_EMBEDDING_BASE_URL",
+        "embedding_model": f"AI_PROFILE_{token}_EMBEDDING_MODEL",
+        "embedding_api_key": f"AI_PROFILE_{token}_EMBEDDING_API_KEY",
+        "reranker_base_url": f"AI_PROFILE_{token}_RERANKER_BASE_URL",
+        "reranker_model": f"AI_PROFILE_{token}_RERANKER_MODEL",
+        "reranker_api_key": f"AI_PROFILE_{token}_RERANKER_API_KEY",
     }
 
 
@@ -71,6 +83,12 @@ def read_profile_env(profile_id: str) -> ProfileEnvValues:
         base_url=values.get(keys["base_url"]) or None,
         model=values.get(keys["model"]) or None,
         api_key=values.get(keys["api_key"]) or None,
+        embedding_base_url=values.get(keys["embedding_base_url"]) or None,
+        embedding_model=values.get(keys["embedding_model"]) or None,
+        embedding_api_key=values.get(keys["embedding_api_key"]) or None,
+        reranker_base_url=values.get(keys["reranker_base_url"]) or None,
+        reranker_model=values.get(keys["reranker_model"]) or None,
+        reranker_api_key=values.get(keys["reranker_api_key"]) or None,
     )
 
 

@@ -23,6 +23,12 @@ def test_profile_env_supports_multiple_profiles_without_key_collision(tmp_path: 
         base_url="https://api.openai.com/v1",
         model="gpt-4.1",
         api_key="sk-a#b=c",
+        embedding_base_url="https://embed.example.com/v1",
+        embedding_model="text-embedding-3-large",
+        embedding_api_key="embed#key",
+        reranker_base_url="https://rerank.example.com/v1",
+        reranker_model="bge-reranker-v2-m3",
+        reranker_api_key="rerank=key",
         protocol="openai_chat",
         write_global_aliases=True,
     )
@@ -36,6 +42,18 @@ def test_profile_env_supports_multiple_profiles_without_key_collision(tmp_path: 
     )
 
     assert read_profile_env("openai-profile").api_key == "sk-a#b=c"
+    openai_values = read_profile_env("openai-profile")
+    assert openai_values.embedding_base_url == "https://embed.example.com/v1"
+    assert openai_values.embedding_model == "text-embedding-3-large"
+    assert openai_values.embedding_api_key == "embed#key"
+    assert openai_values.reranker_base_url == "https://rerank.example.com/v1"
+    assert openai_values.reranker_model == "bge-reranker-v2-m3"
+    assert openai_values.reranker_api_key == "rerank=key"
+    write_profile_env("openai-profile", model="gpt-4.1-mini")
+    preserved_values = read_profile_env("openai-profile")
+    assert preserved_values.model == "gpt-4.1-mini"
+    assert preserved_values.embedding_model == "text-embedding-3-large"
+    assert preserved_values.reranker_model == "bge-reranker-v2-m3"
     assert read_profile_env("anthropic-profile").model == "claude-sonnet-4"
     assert read_global_llm_env().model == "gpt-4.1"
     assert "SECRET_KEY=server-secret" in env_file.read_text(encoding="utf-8")
@@ -45,12 +63,29 @@ def test_profile_env_delete_and_restore(tmp_path: Path, monkeypatch):
     """删除协议档变量后可恢复快照，确保数据库事务失败不会留下半套配置。"""
     env_file = tmp_path / ".env"
     monkeypatch.setattr(settings, "profile_env_file", str(env_file))
-    write_profile_env("p-1", base_url="https://example.test", model="m-1", api_key="k-1")
+    write_profile_env(
+        "p-1",
+        base_url="https://example.test",
+        model="m-1",
+        api_key="k-1",
+        embedding_base_url="https://embed.example.test",
+        embedding_model="embed-1",
+        embedding_api_key="embed-key",
+        reranker_base_url="https://rerank.example.test",
+        reranker_model="rerank-1",
+        reranker_api_key="rerank-key",
+    )
 
     snapshot = remove_profile_env("p-1")
     assert read_profile_env("p-1").base_url is None
+    assert read_profile_env("p-1").embedding_model is None
+    assert read_profile_env("p-1").reranker_model is None
     restore_snapshot(snapshot)
     restored = read_profile_env("p-1")
     assert restored.base_url == "https://example.test"
     assert restored.model == "m-1"
     assert restored.api_key == "k-1"
+    assert restored.embedding_model == "embed-1"
+    assert restored.embedding_api_key == "embed-key"
+    assert restored.reranker_model == "rerank-1"
+    assert restored.reranker_api_key == "rerank-key"
