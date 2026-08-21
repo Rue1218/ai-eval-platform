@@ -138,23 +138,10 @@ def test_inject_skips_real_benchmark(tmp_path):
 def test_run_plan_greeting_with_audio_injects_tool(tmp_path, monkeypatch):
     row = _wav_row(tmp_path)
 
-    def _fake(_db, _payload, **_kwargs):
-        return (
-            {
-                "intent": "chat",
-                "skill_id": None,
-                "slots": {"filled": {}, "missing": []},
-                "tools_needed": [],
-                "delivery": "text",
-                "budget": {"max_tool_rounds": 0},
-                "notes": "规划：问候。",
-                "complexity": "low",
-                "loop": "chat",
-            },
-            8,
-        )
+    def _boom(*_a, **_k):
+        raise AssertionError("自然语言不得打独立规划模型")
 
-    monkeypatch.setattr("app.agent.plan._call_plan_model", _fake)
+    monkeypatch.setattr("app.agent.plan._call_plan_model", _boom)
     plan = run_plan(
         _AudioDb(row),
         text="你好",

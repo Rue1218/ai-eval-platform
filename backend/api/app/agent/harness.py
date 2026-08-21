@@ -1,4 +1,4 @@
-"""Harness：规划模型输出 loop 后调度 DIRECT / CHAT / ReAct / Plan-and-Solve（HAR-FLOW / AGT-HRS-02/07）。
+"""Harness：斜杠直达；自然语言走同一轮 CoT（流式思考链 → 工具或回复）。
 
 必须丢到 asyncio.Task 执行，收包循环不得 await 整轮。会话级 abort 为进程内
 dict（HAR-NFR-08：单副本或粘性路由；多副本需外置，M1 不做）。
@@ -340,9 +340,6 @@ async def _run_turn(
     history = history_for_plan(db, session)
     compact_summary = getattr(session, "compact_summary", None)
     budget = TurnBudget(cap=MAX_MODEL_CALLS)
-    loop = asyncio.get_running_loop()
-    plan_thought, on_plan_reasoning = _live_reasoning_sink(emit, loop)
-    plan_span = trace.child("orchestration.plan")
 
     try:
         plan = await _await_thread(
@@ -358,13 +355,11 @@ async def _run_turn(
                 model_available=True,
                 compact_summary=compact_summary,
                 cancel=cancel,
-                trace=plan_span,
-                on_reasoning=on_plan_reasoning,
+                trace=trace,
             ),
         )
     except TurnCancelled as exc:
         raise HarnessAborted() from exc
-    await _flush_think_final(emit, plan_thought)
     _check_abort(abort)
     mode = resolve_turn_mode(text=text, parsed=parsed, plan=plan)
     agent_trace(
@@ -419,6 +414,7 @@ async def _run_turn(
     if allows_replan(mode) and missing and budget.remaining() > 0 and plan.delivery == "confirm":
         _check_abort(abort)
         await _emit_thought(emit, "补规划：根据工具观察调整槽位", stage="plan")
+        loop = asyncio.get_running_loop()
         replan_thought, on_replan_reasoning = _live_reasoning_sink(emit, loop)
         replan_span = trace.child("orchestration.replan")
         try:
@@ -709,19 +705,7 @@ async def _run_turn(
         if react.reply_text:
             await _deliver_sentence(db, session.id, emit, react.reply_text)
             return
-        reply = await _chat_reply(
-            db,
-            text,
-            history,
-            budget,
-            stop=stop,
-            compact_summary=compact_summary,
-            skill_id=plan.skill_id,
-            emit=emit,
-            trace=trace,
-            cancel=cancel,
-        )
-        await _deliver_sentence(db, session.id, emit, reply)
+        await _deliver_sentence(db, session.id, emit, "我在，请继续说明你的需求。")
         return
 
     await _deliver_sentence(db, session.id, emit, plan.notes or "已处理。")

@@ -30,7 +30,7 @@ from .defaults import (
 )
 from .imagegen import inject_imagegen_plan, looks_like_image_generation
 from .log import agent_trace
-from .persona import PLAN_RETRY_SUFFIX, REPLAN_JSON_SUFFIX, plan_system, turn_system
+from .persona import REPLAN_JSON_SUFFIX, plan_system, turn_system
 from .slash import SlashParse
 from .voiceclone import inject_voiceclone_plan, list_audio_file_ids
 
@@ -48,7 +48,7 @@ class PlanArtifact:
     notes: str
     used_model: bool = False
     latency_ms: int = 0
-    source: str = "llm"  # llm | slash | l0 | retry | replan
+    source: str = "llm"  # llm | slash | l0 | retry | replan | react
     # 规划阶段沿用偏好时要发的思考卡（不写入 PlanArtifact JSON）
     pref_thoughts: list[str] = field(default_factory=list)
     # 模型判定的范式与复杂度；不进 as_dict（确认卡字段冻结）
@@ -588,7 +588,11 @@ def run_plan(
     trace: TraceContext | None = None,
     on_reasoning: Callable[[str], None] | None = None,
 ) -> PlanArtifact:
-    """产出 PlanArtifact：斜杠模板 / LLM / 重试 / L0。"""
+    """产出 PlanArtifact：斜杠模板 / 自然语言 CoT 种子 + inject。
+
+    自然语言不调用独立规划模型（那条路径会 ``thinking.disabled``，界面空等整包 JSON）。
+    CoT 由后续 ReAct 同一轮流式 ``reasoning_content`` 一步一步吐出，再给出 reply/tool。
+    """
 
     def _finish(plan: PlanArtifact, *, slash: bool = False) -> PlanArtifact:
         """先按本轮意图注入短工具，再挂评测偏好，避免生图被沿用协议档/数据集。"""
@@ -616,73 +620,26 @@ def run_plan(
             source="slash",
         )
 
-    if not model_available:
-        plan = l0_plan(text, prefs=prefs)
-        return _finish(plan)
-
-    # 自然语言一律交给规划模型判定 loop（chat / react）；关键词只作上游失败时的 L0 回退。
-    user_payload = {
-        "text": text,
-        "command": parsed.command or "",
-        "args": parsed.args,
-        "history": history,
-        "prefs": prefs,
-        "attachments": attachments,
-    }
-    try:
-        raw, latency = _call_plan_model(
-            db,
-            user_payload,
-            extra_system="",
-            budget=budget,
-            compact_summary=compact_summary,
-            cancel=cancel,
-            trace=trace,
-            on_reasoning=on_reasoning,
+    # CoT（Wei 2022）：同一轮先逐步推理再出结果。独立规划 JSON 会关掉思考链。
+    # 签名仍接收 history/budget/trace，供 Harness 注入；NL 不再消耗规划预算。
+    if cancel is not None:
+        cancel.raise_if_cancelled()
+    agent_trace("自然语言跳过规划模型，CoT 交由 ReAct 流式思考链")
+    return _finish(
+        PlanArtifact(
+            intent="chat",
+            skill_id=None,
+            slots={"filled": {}, "missing": []},
+            tools_needed=[],
+            delivery="text",
+            budget={"max_tool_rounds": DEFAULT_TOOL_ROUNDS},
+            notes="",
+            source="react",
+            loop="react",
+            complexity="low",
+            used_model=False,
         )
-        plan = sanitize_plan(raw, source="llm")
-        plan.used_model = True
-        plan.latency_ms = latency
-        return _finish(plan)
-    except TurnCancelled:
-        raise
-    except AppError as exc:
-        # 未配置协议档 / 上游失败：降级 L0，仍必须进复核
-        if exc.code in {ErrorCode.VALIDATION, ErrorCode.UPSTREAM, ErrorCode.TIMEOUT}:
-            agent_trace(f"规划模型不可用 code={exc.code.value}，降级 L0")
-            plan = l0_plan(text, prefs=prefs)
-            return _finish(plan)
-        raise
-    except Exception:
-        agent_trace("规划 JSON 解析失败，准备重试")
-    # 第 1 级：原样再要一次
-    try:
-        raw, latency = _call_plan_model(
-            db,
-            user_payload,
-            extra_system=PLAN_RETRY_SUFFIX,
-            budget=budget,
-            compact_summary=compact_summary,
-            cancel=cancel,
-            trace=trace,
-            on_reasoning=on_reasoning,
-        )
-        plan = sanitize_plan(raw, source="retry")
-        plan.used_model = True
-        plan.latency_ms = latency
-        return _finish(plan)
-    except TurnCancelled:
-        raise
-    except AppError as exc:
-        if exc.code in {ErrorCode.VALIDATION, ErrorCode.UPSTREAM, ErrorCode.TIMEOUT}:
-            agent_trace(f"规划重试模型不可用 code={exc.code.value}，降级 L0")
-            plan = l0_plan(text, prefs=prefs)
-            return _finish(plan)
-        raise
-    except Exception:
-        agent_trace("规划重试仍失败，降级 L0 规则意图")
-        plan = l0_plan(text, prefs=prefs)
-        return _finish(plan)
+    )
 
 
 def _clarify_from_plan(plan: PlanArtifact, *, source: str = "replan") -> PlanArtifact:

@@ -3,9 +3,9 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Agent 独立开发说明书 |
-| 版本 | V1.10 |
+| 版本 | V1.11 |
 | 日期 | 2026-08-22 |
-| 最近修订 | 2026-08-22：规划改为流式推理；思考卡在判定 loop 期间即可出现。断线取消只停本轮生成（网页刷新/关标签断开 WS），不取消会话、不取消已入队任务。 |
+| 最近修订 | 2026-08-22：自然语言按 CoT 同一轮逐步推理再出结果；不再先打规划 JSON 判定 loop。断线取消只停本轮生成。 |
 | 用法 | **实现 `/agent` 以本文为准（Harness / 斜杠 / 窗口算法）。** REST/WS JSON 以 API.md V1.6 为准。完成某项后勾选文末 Task，并在「最近修订」追加一行。 |
 
 本文是评测平台 **Agent 子系统** 的完整开发说明书：目标、边界、运行时骨架、协议、模块、代码落点与验收任务都写在这里。与 PRD / API.md 冲突时，字段名与事件名以那两份为准；Harness、斜杠、上下文算法以本文 §16 为准。§4.6 所列增量已收入 **API.md V1.6**。
@@ -22,7 +22,7 @@
 2. 会话可刷新、可断线续上；思考、工具、技能徽标、ToolCall 卡、确认卡都能回放；V1.6 增加思考快照、确认回执、压缩摘要与持久化 `message` 事件。
 3. 只能调内部短工具；四种评测技能内置。Subagent / 通用工作流不做产品，但预留调用边界。  
 4. 每个会话有上下文窗口、可压缩（`/compact`）；界面实时拆开 **消息 / 技能 / 摘要 / 余量**；本产品无记忆文件段。  
-5. **按任务选范式**：规划模型自己判断复杂度并输出 `loop`（chat / react / plan_solve）；斜杠由产品绑定。禁止每句话都走「规划技能 → 列出协议档 → 复核」。  
+5. **自然语言走 CoT**：同一轮流式先逐步推理（`reasoning_content` → 思考卡），再给出 reply 或调用短工具。禁止先打规划 JSON 分类、再二次闲聊生成。斜杠会话控制仍 0 次模型。  
 6. 工作方式对齐「先评后压」；其它页面 AI 逐页预留（数据集、用例、任务诊断、报告解读、压测建议）。  
 7. 输入框 `/`：上区系统 15 条，下区团队自定义模板（可添加，不能改人设、不能跳过确认卡）。  
 8. 思考卡 / 工具卡展示模型与工具耗时；生成中提示当前阶段（规划中 / 调用工具 / 复核中）。  
@@ -205,13 +205,13 @@ Worker 专用（Agent 进程禁止跑完）：`benchmark.run` `rag.evaluate` `te
 
 ---
 
-## 5. Harness Engineering（模型判断复杂度并选循环）
+## 5. Harness Engineering（自然语言 CoT 一步一步出结果）
 
 这是运行时骨架，不是界面上的三种模式。模型只负责填结构化产物；**能不能出确认卡、能不能建任务，由门禁决定**。
 
 ReAct（Yao 2022）与 Plan-and-Solve（Wang 2023）是同一根轴：下一步依赖观察 → 偏 ReAct；步骤结构事先清楚 → 偏 Plan-and-Solve（失败再补规划）。Reflection（Shinn 2023）是外层，只在有可验证信号时启用；本产品的真信号是确认卡门禁，不是每回合都调核对模型。
 
-**自然语言**：规划模型必须输出 `complexity`（low/medium/high）和 `loop`（chat / react / plan_solve）。Harness 按 `loop` 调度循环，**不**用关键词表猜复杂度。`loop`/`complexity` 不进冻结 `PlanArtifact.as_dict()`。
+**自然语言（CoT）**：不调用独立规划模型。`run_plan` 只给 ReAct 种子（`intent=chat`、`loop=react`），生图/配音仍可由 inject 挂工具。随后同一轮 `stream_mcp_step` 把思考链增量推到 `thought.stream=think`，步骤完成后再解析 JSON 的 `reply`/`tool`。`loop`/`complexity` 不进冻结 `PlanArtifact.as_dict()`。
 
 **斜杠**：仍 0 次模型，由产品绑定循环（`/help`→DIRECT，`/profiles`→REACT_ONLY，`/benchmark`→PLAN_SOLVE）。
 
@@ -240,10 +240,10 @@ WS 事件名仍冻结为 `thought` / `tool_call` / `tool_result` / `confirm` / `
 
 | TurnMode | 判定 | 规划模型 | ReAct 决策模型 | 规划/复核思考卡 | 核对模型 |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| DIRECT | `/help` `/status` `/new` `/compact` `/cancel` | 斜杠模板 0 次 | 否（队列仅 cancel 可读任务） | 否 | 否 |
-| CHAT | 模型 `loop=chat` | 1 次规划（NL） | 否 | 否 | 否 |
-| REACT_ONLY | 模型 `loop=react`；或 inject 后含生图/配音；`/profiles` | NL 1 次规划；斜杠模板 0 次 | 自然语言是；斜杠 list 走队列 | 否 | 否 |
-| PLAN_SOLVE | 模型 `loop=plan_solve`；`/benchmark` `/testcase` `/stress` `/rerun` | 斜杠模板或 1 次规划 | 斜杠填槽否（执行清单）；NL 评测是 | 是 | 仅 `delivery=confirm` 且规则 pass |
+| DIRECT | `/stop` `/compact` | 斜杠模板 0 次 | 否 | 否 | 否 |
+| CHAT | 已并入 REACT_ONLY，不再二次闲聊生成 | — | — | — | — |
+| REACT_ONLY | 全部自然语言 | 0 次规划 | 是：流式思考链 → 工具或 reply | 否 | 否 |
+| PLAN_SOLVE | 业务 Workflow 未注册前不启用 | — | — | — | — |
 
 规则门禁 `run_gates` 每回合都跑（0 次模型），保证闲聊不能 create。页面 AI：表单即规划，无工具卡。
 
@@ -313,7 +313,7 @@ ReAct 停机（任一即进入复核）：槽位已从**本轮工具返回值**�
 - Key 加密存储，接口不回显。未配置时思考卡说明去协议档页，不出确认卡。  
 - 输入栏只读：`Agent · {模型名}`。  
 - 同步短调用，超时约 90s（含思考链）；失败归为 `UPSTREAM` / `TIMEOUT`。  
-- 对话、ReAct 决策与**规划 JSON** 走流式：推理链 `thought.stream=think`（瞬态），成功结束补 `think_final` 落库。核对 JSON 仍非流式，mimo 关闭思考以免正文被挤空。
+- 对话走 ReAct 同一轮流式 CoT：推理链 `thought.stream=think`（瞬态），成功结束补 `think_final` 落库。不再先打规划 JSON。核对 JSON 仍非流式，mimo 关闭思考以免正文被挤空。
 
 **耗时三层（payload 可选字段，旧前端忽略即可）：**
 
@@ -837,8 +837,8 @@ Worker 夹紧：`sample_size = min(请求值, 1000, 行数)`；`concurrency` ≤
 ```
 
 **规划调用**  
-`system = PERSONA_SYSTEM +` 规划 JSON 后缀（`PLAN_JSON_SUFFIX`）：只输出一个 JSON；必须含 `complexity`（low/medium/high）与 `loop`（chat / react / plan_solve）；`intent` 按本轮目标选择（含 `chat` / `inspect`）；`skill_id` 仅明确评测时填写，否则 null；`tools_needed` 只列真正需要的短工具，禁止默认塞 `model.list`+`dataset.list`。intent 不得为 stress；先评后压把 `slots.filled.with_stress` 置 true，kind 仍为 benchmark 或 rag。  
-`user` 为 JSON：`{ "text", "command", "args", "history": 最近消息最多 20 条的 role+content, "prefs", "attachments" }`。不把完整工具 list 结果塞进规划调用（规划只需 intent；list 在 ReAct）。
+自然语言**不再**走规划 JSON。`run_plan` 只产出 ReAct 种子；思考链由 `REACT_LOOP_SUFFIX` + 流式 `reasoning_content` 承担。`PLAN_JSON_SUFFIX` 仅保留给补规划（当前业务 Workflow 未启用）。  
+`user` 为 JSON：`{ "text", "command", "args", "history": 最近消息最多 20 条的 role+content, "prefs", "attachments" }`。
 
 **L0 规则（模型失败后，关键词不区分大小写、命中先到先得）**
 
@@ -1514,3 +1514,19 @@ ToolCall 的执行顺序冻结为：注册表查找 → 系统绑定本轮附件
 | `backend/api/app/agent/mimo_audio.py` | 新增 `extract_tts_text` 朗读稿抽取；`arguments_for_speech_synthesis` 接入抽取 |
 | `backend/api/app/agent/plan.py` | `SPEECH_SYNTHESIS_HINTS` 扩充中文命令词 |
 | `backend/api/tests/test_mimo_audio.py` | 朗读稿抽取与参数绑定单测 |
+
+## 36. 修改代码文件与作用清单（2026-08-22 CoT 一步一步出结果）
+
+空等约 30 秒才出思考卡的根因：自然语言先打规划 JSON（mimo `thinking.disabled`），整包返回后再二次闲聊流式。这不是 CoT。
+
+CoT（Wei 2022 / 流式 reasoning）：**同一轮生成**里先逐步吐出中间推理步骤，再给出最终结果。实现上即 ReAct `stream_mcp_step`：`reasoning_content` 增量 → 思考卡，正文 JSON 的 `reply`/`tool` 在步骤完成后出现。
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/agent/plan.py` | 自然语言跳过 `_call_plan_model`，种子 `loop=react`，inject 仍挂生图/配音 |
+| `backend/api/app/agent/turn_mode.py` | NL 一律 `REACT_ONLY`；`uses_react_llm` 为 True |
+| `backend/api/app/agent/harness.py` | 去掉规划期思考回调与 `_chat_reply` 二次生成 |
+| `backend/api/app/agent/persona.py` | ReAct 提示词要求一步一步思考后再给 reply |
+| `backend/api/tests/test_harness.py` | 问候/离题/人像改为断言不打规划模型 |
+| `backend/api/tests/test_voiceclone.py` | 问候+音频仍 inject，但不 mock 规划模型 |
+| `docs/AI测试与评估平台-Agent开发文档.md` | §5 / §6 改为同一轮 CoT |
