@@ -1095,7 +1095,7 @@
                 v-model:value="ragModelsForm.embedding_api_key"
                 type="password"
                 show-password-on="click"
-                placeholder="可选；私有端点或免密模型可留空"
+                :placeholder="ragModelsForm.has_embedding_api_key ? '********* (已配置密钥，留空保留原密钥)' : '可选；私有端点或免密模型可留空'"
               />
             </div>
 
@@ -1168,7 +1168,7 @@
                 v-model:value="ragModelsForm.reranker_api_key"
                 type="password"
                 show-password-on="click"
-                placeholder="可选；私有端点或免密模型可留空"
+                :placeholder="ragModelsForm.has_reranker_api_key ? '********* (已配置密钥，留空保留原密钥)' : '可选；私有端点或免密模型可留空'"
               />
             </div>
 
