@@ -3,7 +3,7 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 阶段 0 — 契约骨架 |
-| 版本 | V1.2 |
+| 版本 | V1.3 |
 | 审查日期 | 2026-08-21 |
 | 文档性质 | **开工前分析文档**（需求分析、功能点、实现路径、技术难点与对策）；代码必须按本文验收，不得超出范围 |
 | 对应目标架构 | [`docs/AI测试与评估平台-Harness六层ReAct核心架构设计.md`](docs/AI测试与评估平台-Harness六层ReAct核心架构设计.md) **第七章为阶段 0 需求权威**（从第一至六章抽出） |
@@ -16,7 +16,7 @@
 
 ## 1. 从架构文档抽出的需求（为什么先做阶段 0）
 
-目标架构 V1.2/V1.3 的核心原则是：**模型只推理并产出结构化 JSON；Harness 是唯一控制、执行、持久化和授权主体。** 六层之间有不可跨越边界：
+目标架构（以当前架构文档为准，现为 V1.7）的核心原则是：**模型只推理并产出结构化 JSON；Harness 是唯一控制、执行、持久化和授权主体。** 六层之间有不可跨越边界：
 
 ```text
 Context ──只通过 MemoryPort──> Memory；不得 import 存储 SDK
@@ -88,6 +88,9 @@ TraceContext ──贯穿六层──> 每次跨层必须带 trace_id 与 span_i
 4. **取消不替换 `/stop`**：本阶段只定义令牌；现网仍用 `abort`+`stop`。
 5. **禁止双活路径**：不得把 `mcp_tools.py` / `llm.py` 改成再导出。后续层目录可以空壳存在，但不得接管会话。
 6. **LightRAG 不出现**：禁止创建 `long_term_lightrag.py`。
+7. **Schema 前向兼容债务（留给阶段 3）**：`react-output.schema.json` 已允许可选 `tool_calls[]`，但顶层仍 `required: [thought, tool, arguments, done]`。架构 §3.2.1 的批次示例（无顶层 `tool`）在本阶段**故意不能通过**校验，避免阶段 1 误把数组当可执行输入。阶段 3 再改 `oneOf`。
+8. **`MemoryQuery` 只预埋字段**：`tenant_id`/`user_id`/`session_id` 本阶段允许空串，以便纯类型测试；阶段 4 收紧「retrieve 拒绝空租户/会话」，不算重定义类型名。
+9. **`planner-output.schema.json` / `system.yaml` 本阶段不建正文**（可空文件或不创建）；人设仍在 `persona.py`。
 
 ---
 
@@ -280,6 +283,8 @@ from app.harness.feedback.normalizer import normalize
 - [x] `app/llm.py`、`app/agent/mcp_tools.py`、`app/agent/mcp_registry.py` 相对 `main` 无行为性 diff
 - [x] 无 Alembic、无新 REST/WS 字段
 - [x] `ruff check app/harness tests/harness` 通过
+- [x] `react-output.schema.json` 顶层仍要求 `tool`；`tool_calls[]` 仅可选且 item 级 `additionalProperties: false`（阶段 3 再 `oneOf`）
+- [x] 未创建 `long_term_lightrag.py`；`execution/mcp/` 与 `security/` 为空壳
 
 ---
 
@@ -301,6 +306,8 @@ MemoryPort 协议（仅类型）
 ---
 
 ## 修改代码文件与作用清单
+
+V1.3：补 Schema 与 MemoryQuery 的前向债务、挂起模板清单。代码仍以 V1.2 落地为准，本修订不改契约运行时行为。
 
 V1.2：按本文落地契约骨架；后续层仅保留空壳，禁止 Redis / 执行门面 / `app.llm` 再导出。
 

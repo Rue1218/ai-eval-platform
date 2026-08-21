@@ -1,16 +1,27 @@
-"""原始 traceback 仅服务端审计；缺 trace_id/span_id 直接拒绝记录。"""
+"""原始 traceback 仅服务端审计；缺 trace_id/span_id 直接拒绝记录。
+
+生产写入 PostgreSQL；单测通过 reset_audit_store 注入 InMemoryAuditStore。
+诊断保留天数见 budgets.diagnostics_retention_days；定时清理任务可后补。
+"""
 
 from __future__ import annotations
 
 import traceback
 import uuid
 from dataclasses import dataclass, field
+from typing import Protocol
 
 from app.harness.contracts.errors import DiagnosticRef, MissingTraceContext
 from app.harness.contracts.trace import TraceContext
 
-# 阶段 2 迁 PG 前的进程内上限，防止 traceback 无限堆积。
+# 进程内上限，防止 traceback 无限堆积；PG 路径不使用该上限。
 MAX_AUDIT_ITEMS = 256
+
+
+class AuditStore(Protocol):
+    """诊断存储端口；测试注入内存实现，生产写入 PG。"""
+
+    def append(self, *, trace_id: str, span_id: str, traceback_text: str) -> DiagnosticRef: ...
 
 
 @dataclass
@@ -40,16 +51,44 @@ class InMemoryAuditStore:
         self.items.clear()
 
 
-_STORE = InMemoryAuditStore()
+class PgAuditStore:
+    """把诊断写入 harness_diagnostics。落库失败不得打断 Turn，只打控制台。"""
+
+    def append(self, *, trace_id: str, span_id: str, traceback_text: str) -> DiagnosticRef:
+        from app.agent.log import agent_trace
+        from app.db import SessionLocal
+        from app.models import HarnessDiagnostic
+
+        diagnostic_id = f"diag-{uuid.uuid4().hex[:12]}"
+        db = SessionLocal()
+        try:
+            db.add(
+                HarnessDiagnostic(
+                    diagnostic_id=diagnostic_id,
+                    trace_id=trace_id,
+                    span_id=span_id,
+                    traceback=traceback_text,
+                )
+            )
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            agent_trace(f"诊断落库失败 type={type(exc).__name__}")
+        finally:
+            db.close()
+        return DiagnosticRef(diagnostic_id=diagnostic_id, trace_id=trace_id, span_id=span_id)
 
 
-def audit_store() -> InMemoryAuditStore:
+_STORE: AuditStore = InMemoryAuditStore()
+
+
+def audit_store() -> AuditStore:
     """当前诊断库。测试应通过 reset_audit_store 注入，避免依赖隐式全局。"""
     return _STORE
 
 
-def reset_audit_store(*, store: InMemoryAuditStore | None = None) -> InMemoryAuditStore:
-    """替换或重建进程内诊断库。"""
+def reset_audit_store(*, store: AuditStore | None = None) -> AuditStore:
+    """替换或重建诊断库。"""
     global _STORE
     _STORE = store if store is not None else InMemoryAuditStore()
     return _STORE

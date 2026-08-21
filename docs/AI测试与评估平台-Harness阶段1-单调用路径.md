@@ -3,13 +3,13 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 阶段 1 — 单调用路径 |
-| 版本 | V1.2 |
+| 版本 | V1.5 |
 | 审查日期 | 2026-08-21 |
 | 文档性质 | **开工前分析文档**（需求分析、功能点、实现路径、技术难点与对策）；代码必须按本文验收，不得超出范围 |
 | 对应目标架构 | [`docs/AI测试与评估平台-Harness六层ReAct核心架构设计.md`](docs/AI测试与评估平台-Harness六层ReAct核心架构设计.md) **第八章为需求索引**；展开以本文为准 |
-| 阶段 0 契约权威 | [`docs/AI测试与评估平台-Harness阶段0-契约骨架.md`](docs/AI测试与评估平台-Harness阶段0-契约骨架.md) V1.2 已冻结的类型与 `normalize`；禁止重定义 |
+| 阶段 0 契约权威 | [`docs/AI测试与评估平台-Harness阶段0-契约骨架.md`](docs/AI测试与评估平台-Harness阶段0-契约骨架.md) V1.3（类型与 `normalize` 仍以已落地代码为准）；禁止重定义 |
 | 产品/协议裁决 | PRD、[`docs/AI测试与评估平台-API.md`](docs/AI测试与评估平台-API.md)、[`docs/AI测试与评估平台-Agent开发文档.md`](docs/AI测试与评估平台-Agent开发文档.md)；JSON 字段名与路径以 API.md 为准 |
-| 分支 | `feat/harness-single-call`（从**已合入阶段 0** 的 `main` 拉出；禁止在 `feat/harness-contracts` 上续堆） |
+| 分支 | `feat/harness-single-call`（阶段 0 PR #52 未合入前从 `feat/harness-contracts` 拉出；合入后应 rebase 到 `origin/main`） |
 | 前置依赖 | 阶段 0 验收通过（契约 + tracing Fail-fast；活路径未迁） |
 | 后续阶段 | 阶段 2 强制透传与取消令牌、Alembic 三表 |
 
@@ -78,6 +78,8 @@
 | R1-12 | 迁完即消灭双实现：一份正文 + 薄再导出 | 架构 §5.3、AR1-11 | P0 |
 | R1-13 | 只使用阶段 0 冻结名；`McpStep` 可作产品适配别名，字段必须能转到 `ToolCall` | 阶段 0 §8、AR1-13 | P0 |
 | R1-14 | Parser 先走 `react-output.schema.json`，再由编排写 `trace_id`/`span_id`；禁止 `ToolCall.model_validate` 直接吃模型 JSON | 阶段 0 F0-4 / F0-8、审查残留风险 | P0 |
+| R1-15 | §5.1 映射表以**现网四项工具**为准（含 `mimo_audio.py`）；领域函数正文留在 `agent/`，只经注册表分派，不复制进 `execution/adapters/` | 架构 §5.1「两项」过时；总册 V1.4 | P0 |
+| R1-16 | JSON/Schema 不合法时保持现网解析失败语义（不执行工具）；不在本阶段实现「FEEDBACK_READY 回填后再调模型」的完整状态机 | 架构 §3.2.2 vs 现网 `parse_mcp_step` | P0 |
 
 ### 3.2 非功能需求
 
@@ -102,6 +104,22 @@
 8. **`persona.py` 人设不迁 YAML**。Schema 已在阶段 0。
 9. **禁止创建 `long_term_lightrag.py`**，禁止改 `models.py` / Alembic。
 10. **空壳层不得提前填满**：`memory/short_term_redis.py`、`orchestration/parallel_facade.py`、`orchestration/streaming.py`、`execution/mcp/*` 保持空壳。
+11. **`llm/usage.py` 本阶段不实现**。token 记账回填 Context 账本归阶段 4（有 `CompiledContext.ledger` 之后）。本阶段 LLM 迁入只保留现网 `call_agent_model*` / `stream_agent_model` / `parse_json_candidates`。
+12. **状态机本阶段保持隐式**（Think → 0/1 工具 → 观察）。具名状态 `CONTEXT_READY` / `FEEDBACK_READY` / `FINALIZING_STREAM` / `PARALLEL_EXECUTING` 归阶段 2（取消终态）与阶段 3。
+
+### 3.4 明确不属于阶段 1（对照架构第二章 / §4 / §5.1 / §6）
+
+| 能力 | 架构出处 | 归属 |
+| :--- | :--- | :--- |
+| 强制 `trace`/`cancel`、`/stop` 令牌、Alembic 三表 | §2.2、§5.3 | 阶段 2 |
+| `tool_calls[]` 可执行、`oneOf` Schema、`merge_batch`、`FINALIZING_STREAM` | §3.2.1、§3.2.2 | 阶段 3 |
+| Redis / pgvector / Context 去存储 SDK | §5.2 | 阶段 4 |
+| MCP Transport、`file_sandbox`、Eval-Core 适配器 | §4.1、§4.2 | **挂起**（总册覆盖矩阵） |
+| 长任务 `pending` + 队列控制面 | §4.3 | **挂起**；本阶段只 `assert_short_tool` |
+| `security/policy|consent|secrets` | §6.1 | **挂起**；确认卡仍 `AppError` |
+| `reflect.py` / `plan.py` / `run_gates` 迁入编排 | §5.1 | **挂起** |
+| `persona.py` → `system.yaml` | §1.3、§5.1 | **挂起** |
+| `MISSING_TOOL` / `DONE_TOOL_CONFLICT` 对模型可见回填 | §3.2.2 | 阶段 3；本阶段对外仍静默 `done=True` |
 
 ---
 
@@ -340,21 +358,33 @@
 
 **对策**：本 PR 必选仅 §5.5 文件 + 再导出。`memory/`、`context/`、`security/`、`execution/mcp/` 保持空壳。审查时用 grep：`ws.py` / `harness.py` 不得引用未验收层。
 
+### 难点 11：架构 §5.1 写「迁入 adapters/」，复制领域函数会造成双实现
+
+**对策**：`imagegen.py` / `voiceclone.py` / `mimo_audio.py` **不搬文件**。注册表分派调用现网函数。§5.1 该行视为「经注册表分发」，不是「复制一份到 adapters」。`execution/adapters/` 保持空壳（挂起 MCP/文件适配）。
+
+### 难点 12：架构示例 JSON 与阶段 0 Schema 不一致
+
+批次示例没有顶层 `tool`。本阶段 Schema 仍要求 `tool`，且忽略 `tool_calls[]` 不执行。
+
+**对策**：不在本阶段放宽 Schema。阶段 3 用 `oneOf` 解决。单测继续用现网单 `tool` 载荷。
+
 ---
 
 ## 7. 验收清单
 
-- [ ] 阶段 0 类型被循环使用，没有第三套 dict / 第二套 `McpStep` 契约
-- [ ] 模型 JSON 先 Schema 后绑定 trace；带 `trace_id` 的模型输出被拒绝
-- [ ] 每轮最多 1 个工具；`parallel_safe` 缺省 false；无 `gather` / 无 `merge_batch`
-- [ ] `pytest tests/test_harness.py tests/test_mcp_registry.py tests/test_imagegen.py tests/test_voiceclone.py tests/test_mimo_audio.py tests/test_agent_llm.py tests/harness/tracing tests/test_errors.py` 全绿
-- [ ] `ruff check app/harness app/llm.py app/agent`
-- [ ] WS `tool_call` / `tool_result` 字段名不变
-- [ ] `app/llm.py` 无重复实现正文；`execution/` 不 import `harness.llm`
-- [ ] `mcp_tools.py` 与 `facade.py` 不各写一份 `execute_short_tool` 正文
-- [ ] 无 Alembic、无新 REST/WS 字段、无 Redis 业务读写、无 `/stop` 改令牌
-- [ ] `kind=rag` 仍不得 mock succeeded
-- [ ] `agent/harness.py` 总控、斜杠、确认卡未迁
+- [x] 阶段 0 类型被循环使用，没有第三套 dict / 第二套 `McpStep` 契约
+- [x] 模型 JSON 先 Schema 后绑定 trace；带 `trace_id` 的模型输出被拒绝
+- [x] 每轮最多 1 个工具；`parallel_safe` 缺省 false；无 `gather` / 无 `merge_batch`
+- [x] `pytest tests/test_harness.py tests/test_mcp_registry.py tests/test_imagegen.py tests/test_voiceclone.py tests/test_mimo_audio.py tests/test_agent_llm.py tests/harness/tracing tests/test_errors.py` 全绿
+- [x] `ruff check app/harness app/llm.py app/agent`
+- [x] WS `tool_call` / `tool_result` 字段名不变
+- [x] `app/llm.py` 无重复实现正文；`execution/` 不 import `harness.llm`
+- [x] `mcp_tools.py` 与 `facade.py` 不各写一份 `execute_short_tool` 正文
+- [x] 无 Alembic、无新 REST/WS 字段、无 Redis 业务读写、无 `/stop` 改令牌
+- [x] `kind=rag` 仍不得 mock succeeded
+- [x] `agent/harness.py` 总控、斜杠、确认卡未迁
+- [x] 未实现 `llm/usage.py` 账本、未填 `execution/mcp/` / `security/` / `file_sandbox`
+- [x] `imagegen.py` / `voiceclone.py` / `mimo_audio.py` 无第二份正文
 
 ---
 
@@ -379,9 +409,26 @@ parse_mcp_step / execute_short_tool / redact_secrets 测试 import 仍可用
 
 ## 修改代码文件与作用清单
 
-V1.2：按阶段 0 文档结构补齐五块分析；吸收阶段 0 审查结论（禁止 `merge_batch`、Schema 拒 trace、再导出消灭双实现）。**尚未写业务代码**。合入后回写实际 diff。
+V1.5：审查修复——活路径改为 `execute(..., *, trace)`，`normalize` 的 ToolResult 回填观察；`execute_short_tool` 仅作测试 tuple 与 monkeypatch 锚点。
+
+V1.4：在 `feat/harness-single-call` 落地单调用热路径。阶段 0 PR #52 尚未合入 `main`，本分支从 `feat/harness-contracts` 拉出，避免把阶段 1 代码堆进阶段 0 PR。
 
 | 文件 | 作用 |
 | :--- | :--- |
-| `docs/AI测试与评估平台-Harness阶段1-单调用路径.md` | 阶段 1 需求分析、功能点、实现路径、难点对策（本文） |
-| 规划落点见 §5.5 | 开工后按该表改代码 |
+| `backend/api/app/harness/execution/tool_registry.py` | 四项工具注册表正文；补 `parallel_safe=False`、`idempotency=False` |
+| `backend/api/app/harness/execution/facade.py` | 公开 `execute(..., *, trace)`；tuple 包装给测试；`bind_arguments` 供编排调用 |
+| `backend/api/app/harness/execution/jobs.py` | 包装现网 `assert_short_tool` |
+| `backend/api/app/harness/feedback/observation.py` | `collect_ids` / `summarize_observation` 唯一正文 |
+| `backend/api/app/harness/orchestration/parser.py` | Schema 校验 + 现网产品裁剪 + `McpStep`/`ToolCall` |
+| `backend/api/app/harness/orchestration/react_loop.py` | 单调用循环：`execute` → `normalize` → 观察 / WS |
+| `backend/api/app/harness/orchestration/budgets.py` | 只读产品 4/5/180s |
+| `backend/api/app/harness/llm/client.py` | `call_agent_model*` / `stream_agent_model` 正文 |
+| `backend/api/app/harness/llm/structured.py` | `parse_json_candidates` 正文 |
+| `backend/api/app/agent/mcp_registry.py` | 薄再导出 |
+| `backend/api/app/agent/mcp_tools.py` | 薄再导出 |
+| `backend/api/app/agent/react.py` | 保留确认卡规格组装；循环/解析再导出；保留 monkeypatch 锚点 |
+| `backend/api/app/llm.py` | 薄再导出；保留 `call_protocol` 测试锚点 |
+| `backend/api/tests/harness/test_parser.py` | Schema 拒绝 `trace_id` |
+| `backend/api/tests/harness/test_single_call.py` | 调用方 trace 进入 Outcome；normalize 脱敏后回填 |
+| `backend/api/tests/harness/tracing/test_contracts.py` | 阶段 1 再导出允许 import harness；WS/总控仍禁止 |
+| `docs/AI测试与评估平台-Harness阶段1-单调用路径.md` | 回写落地 diff 与验收勾选（本文） |

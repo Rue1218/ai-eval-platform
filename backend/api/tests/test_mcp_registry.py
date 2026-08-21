@@ -12,6 +12,7 @@ def test_registered_tools_only_keep_multimedia_capabilities():
         "audio.speech_synthesis",
     ]
     assert all(tool.permission == "write" and tool.timeout_s == 90 for tool in REGISTERED_TOOLS)
+    assert all(tool.parallel_safe is False and tool.idempotency is False for tool in REGISTERED_TOOLS)
 
 
 def test_unregistered_business_tool_cannot_be_resolved():

@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
+
+_CURRENT_TRACE: ContextVar[TraceContext | None] = ContextVar("harness_current_trace", default=None)
 
 
 def new_trace_id() -> str:
@@ -24,6 +29,35 @@ def new_turn_id() -> str:
 def new_call_id() -> str:
     """生成 Turn 内唯一的工具调用 call_id。"""
     return f"call-{uuid.uuid4().hex[:12]}"
+
+
+def current_trace() -> TraceContext | None:
+    """当前任务绑定的 TraceContext；未绑定时返回 None。"""
+    return _CURRENT_TRACE.get()
+
+
+def format_trace_prefix(trace: TraceContext, *, call_id: str | None = None) -> str:
+    """结构化日志前缀；调用方禁止手写拼接作为唯一来源。"""
+    parts = [
+        f"trace_id={trace.trace_id}",
+        f"span_id={trace.span_id}",
+        f"turn_id={trace.turn_id}",
+    ]
+    if trace.component:
+        parts.append(f"component={trace.component}")
+    if call_id:
+        parts.append(f"call_id={call_id}")
+    return " ".join(parts)
+
+
+@contextmanager
+def using_trace(trace: TraceContext) -> Iterator[TraceContext]:
+    """在当前任务绑定 span，使 agent_trace 自动带上 ID。"""
+    token = _CURRENT_TRACE.set(trace)
+    try:
+        yield trace
+    finally:
+        _CURRENT_TRACE.reset(token)
 
 
 @dataclass(frozen=True)

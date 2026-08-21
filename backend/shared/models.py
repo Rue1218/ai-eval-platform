@@ -494,3 +494,48 @@ class UsageLedger(Base):
     est_cost_usd = Column(Float, nullable=False, default=0.0)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+
+class HarnessTurn(Base):
+    """Harness 用户 Turn 审计：一个 Turn 一行，供链路回放。
+
+    终态为 FINISHED / CANCELLED / FAILED_STOP；审计只落 PostgreSQL，不进 Redis。
+    定时清理任务可后补，本表保留 created_at 供按保留天数过滤。
+    """
+
+    __tablename__ = "harness_turns"
+
+    id = Column(String, primary_key=True, default=uuid_str)
+    trace_id = Column(String, unique=True, nullable=False, index=True)
+    turn_id = Column(String, nullable=False, index=True)
+    session_id = Column(String, ForeignKey("sessions.id"), nullable=False, index=True)
+    status = Column(String, nullable=False, default="INIT")
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    finished_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class HarnessSpan(Base):
+    """跨层 span：编排 / 执行 / 反馈写入；按 trace_id 索引并随 Turn 过期。"""
+
+    __tablename__ = "harness_spans"
+    __table_args__ = (Index("ix_harness_spans_trace_id", "trace_id"),)
+
+    span_id = Column(String, primary_key=True)
+    trace_id = Column(String, nullable=False)
+    parent_span_id = Column(String, nullable=True)
+    component = Column(String, nullable=False, default="")
+    started_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    latency_ms = Column(Integer, nullable=True)
+
+
+class HarnessDiagnostic(Base):
+    """受限诊断审计：原始 traceback 仅服务端可见，默认保留 30 天。"""
+
+    __tablename__ = "harness_diagnostics"
+    __table_args__ = (Index("ix_harness_diagnostics_trace_id", "trace_id"),)
+
+    diagnostic_id = Column(String, primary_key=True)
+    trace_id = Column(String, nullable=False)
+    span_id = Column(String, nullable=False)
+    traceback = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)

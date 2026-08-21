@@ -14,6 +14,8 @@ import pytest
 
 from app.adapters import AdapterResult
 from app.errors import AppError, ErrorCode
+from app.harness.contracts.cancellation import CancellationToken
+from app.harness.contracts.trace import TraceContext
 from app.llm import (
     call_agent_model,
     call_agent_model_detailed,
@@ -255,5 +257,13 @@ def test_stream_agent_model_yields_reasoning_and_content(sample_profile: Protoco
         "app.llm.stream_protocol",
         lambda **_kwargs: iter([("reasoning", "先想"), ("content", "你好")]),
     )
-    chunks = list(stream_agent_model(fake_db, "System", "User"))
+    chunks = list(
+        stream_agent_model(
+            fake_db,
+            "System",
+            "User",
+            trace=TraceContext.for_turn(),
+            cancel=CancellationToken(turn_id="t-stream"),
+        )
+    )
     assert chunks == [("reasoning", "先想"), ("content", "你好")]

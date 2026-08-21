@@ -7,7 +7,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from ..agent.context import context_meter
-from ..agent.harness import session_harness
+from ..agent.harness import abort_running_turn, session_harness
 from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
@@ -205,6 +205,7 @@ async def delete_session(
         )
     )
     db.commit()
-    # 删除完成后统一断开 owner 与协作者，客户端收到 4404 后不再自动重连旧会话。
+    # 删除完成后统一断开 owner 与协作者，并取消仍在跑的 Harness 回合。
+    abort_running_turn(session.id, reason="session_close")
     await SESSION_CONNECTION_HUB.close_all(session.id)
     return Response(status_code=204)

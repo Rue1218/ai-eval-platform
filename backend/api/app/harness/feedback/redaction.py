@@ -1,4 +1,4 @@
-"""secret / PII / 路径 / 堆栈脱敏。阶段 0 仅最小截断，不改活路径 mcp_tools。"""
+"""secret / PII / 路径 / 堆栈脱敏；活路径 mcp_tools 再导出本模块。"""
 
 from __future__ import annotations
 

@@ -3,7 +3,7 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 阶段 3 — 并行与流式收尾 |
-| 版本 | V1.1 |
+| 版本 | V1.2 |
 | 审查日期 | 2026-08-21 |
 | 文档性质 | **开工前分析文档**（需求分析、功能点、实现路径、技术难点与对策）；未勾验收前禁止合入、禁止开阶段 4 |
 | 对应目标架构 | 架构文档 §3.2.1 / §3.2.2 / §3.5 末段 / §5.3 |
@@ -41,7 +41,7 @@ PARSED
 
 | 架构要求 | 阶段 2 结束后 | 阶段 3 要补 |
 | :--- | :--- | :--- |
-| `ToolCallBatch` + `ParallelFacade` | 类型已有；Parser 忽略 `tool_calls[]`（阶段 1 冻结的现网行为） | Parser 识别数组；门禁失败则整批拒绝并行并串行或回填 `PARALLEL_POLICY_VIOLATION` |
+| `ToolCallBatch` + `ParallelFacade` | 类型已有；Parser 忽略 `tool_calls[]`（阶段 1 冻结的现网行为） | Parser `oneOf`；门禁按决策表（开关关串行 / 开关开全安全才 gather / 否则 VIOLATION 不执行） |
 | `parallel_safe` 缺省 false | 阶段 1 注册表已补字段；四项工具均为写 | 保持 false；单测用**桩工具**验证 gather |
 | observation 按 `batch_index` | `ToolResultBatch` 类型已有 | 正确 `merge_batch`；禁止按完成时间排序 |
 | `done=true` → `FINALIZING_STREAM` | 现网直接交付回复 | 流读完、消息持久化后才 `FINISHED` |
@@ -59,7 +59,7 @@ PARSED
 | R3-1 | 模型可输出 `tool_calls[]`；`call_id` Turn 内唯一，`batch_index` 从 0 连续 | §3.2.1 | P0 |
 | R3-2 | 并行必须逐项 `parallel_safe=true`、无写副作用、无数据依赖、每项独立授权；缺省 false | §3.2.1、阶段 1 F1-5 | P0 |
 | R3-3 | `asyncio.gather(..., return_exceptions=True)`；一子调用失败不得取消同批其他调用 | §3.2.1 | P0 |
-| R3-4 | 上限 `min(HARNESS_MAX_PARALLEL_CALLS, 连接池容量)`，默认 4 | §3.2.2 | P0 |
+| R3-4 | 并行上限 = `HARNESS_MAX_PARALLEL_CALLS`（缺省 4）。无 MCP `session_pool`，禁止再取「连接池容量」的虚构 min | §3.2.2、R3-16 | P0 |
 | R3-5 | `ordered_results` 按 `batch_index`；`results_by_call_id` 可反查 | §3.2.1 | P0 |
 | R3-6 | 正确实现 `merge_batch` 的批次 span 树校验 | §3.5 末段、阶段 0 审查 P1 | P0 |
 | R3-7 | `done=true` 且无工具 → `FINALIZING_STREAM`；流结束 + 持久化成功 → `FINISHED` | §3.2.2 | P0 |
@@ -68,6 +68,10 @@ PARSED
 | R3-10 | 现网四项多媒体工具不得被标成 `parallel_safe=true` | §5.1 行为不变 | P0 |
 | R3-11 | 取消必须落到未开始的并行子任务；已开始的走阶段 2 cancelled Outcome | §3.2.2、§4.4 | P0 |
 | R3-12 | 不新增 WS 事件名；并行开启时仍成对发 `tool_call` / `tool_result` | API.md | P0 |
+| R3-13 | Schema 改为 `oneOf`：单调用（必填 `tool`）\| 批次（必填 `tool_calls`，可无顶层 `tool`）。阶段 0 顶层 required 不得继续挡住架构 §3.2.1 示例 | 阶段 0 债务、§1.3 vs §3.2.1 | P0 |
+| R3-14 | `done=false` 且 `tool=null` 且 `tool_calls` 为空 → 不执行，内部 `MISSING_TOOL`；对外不新 WS 键 | §3.2.2 | P0 |
+| R3-15 | `done=false` 且参数不合规 → 不执行，内部 `ARGUMENT_VALIDATION_ERROR` | §3.2.2 | P0 |
+| R3-16 | 同 R3-4：验收时 grep 不得出现用「连接池容量」参与 min 的占位实现 | 总册挂起项 | P0 |
 
 ### 3.2 非功能需求
 
@@ -87,6 +91,16 @@ PARSED
 5. **禁止**把 Memory/Redis、Alembic 新业务表塞进本阶段。
 6. 阶段 1 兼容：`parse_mcp_step` 对外形状可继续只暴露单 `tool`；内部 Parser 可同时理解 `tool_calls`。测试 `parse_mcp_step` 旧用例仍绿。
 7. `FINALIZING_STREAM` 是内部状态；对外仍是现有 token/文本事件，不新造事件名。
+8. **并行门禁决策表（冻结，禁止第三种「有时串行有时违规」）**：
+
+| 条件 | 处理 |
+| :--- | :--- |
+| 产品开关 `PARALLEL_READONLY_TOOLS=false`（默认） | 即使有 `tool_calls[]` 也**串行**执行；不回填 `PARALLEL_POLICY_VIOLATION` |
+| 开关 true，且逐项 `parallel_safe=true`、无写副作用、无数据依赖、未超上限 | `PARALLEL_EXECUTING` + `gather` |
+| 开关 true，但任一项不安全 / 写工具 / 超上限 / 有依赖 | **整批不执行**，回填 `PARALLEL_POLICY_VIOLATION`，要求模型改串行。禁止悄悄改串行（否则模型以为已并行） |
+| 四项多媒体工具 | 注册表锁死 `parallel_safe=false`；即使误标 true，副作用检查仍拒绝整批并行 |
+
+9. **不属于本阶段**：Redis/pgvector、MCP Transport、把内部 `call_id` 加成对外 WS 字段、`security/` 迁确认卡。
 
 ---
 
@@ -95,16 +109,17 @@ PARSED
 ### F3-1 批次解析
 
 - **输入**：模型 JSON，可能含 `tool_calls`。
-- **处理**：Schema 校验（阶段 0 已禁 extra / 禁 item 级 trace）→ `ToolCallBatch`；编排绑定 trace，每 call 派生子 span。
-- **输出**：合法 Batch 或内部错误类。
-- **验收**：模型在 item 上塞 `trace_id` 被 Schema 拒绝。
+- **处理**：先按 `oneOf` Schema 校验（单调用或批次；item 级仍禁止 extra / 禁止 item 级 trace）→ `ToolCall` 或 `ToolCallBatch`；编排绑定 trace，每 call 派生子 span。
+- **输出**：合法 Batch / 单调用，或内部错误类。
+- **验收**：架构 §3.2.1 无顶层 `tool` 的批次示例能通过 Schema；模型在 item 上塞 `trace_id` 被拒绝；旧的单 `tool` JSON 仍通过。
+- **不做**：阶段 1 的 `parse_mcp_step` 对外形状继续只暴露单 `tool`。
 
 ### F3-2 并行门禁
 
 - **输入**：Batch + 注册表。
-- **处理**：逐项检查 `parallel_safe`、幂等、资源、授权、数量上限、开关。
-- **输出**：允许并行 / 整批改串行 / `PARALLEL_POLICY_VIOLATION` 回填且不执行。
-- **验收**：四项多媒体工具走串行；桩工具可并行。
+- **处理**：按 §3.3 决策表：开关关 → 串行；开关开且全安全 → 并行；开关开但不安全 → `PARALLEL_POLICY_VIOLATION` 且不执行。
+- **输出**：允许并行 / 整批串行（仅开关关闭时） / 违规回填。
+- **验收**：四项多媒体工具走串行；桩工具在开关打开时可并行；不安全批次在开关打开时**不**被改成串行执行。
 
 ### F3-3 ParallelFacade
 
@@ -139,6 +154,12 @@ PARSED
 - **输入**：`done=true` 且仍有 tool / tool_calls。
 - **处理**：不执行工具；内部 ToolResult `error_class=DONE_TOOL_CONFLICT`；对外表现与现网「停工具」兼容（不新 WS 键）。
 - **验收**：不出现「一边 done 一边还打了工具」。
+
+### F3-7b MISSING_TOOL / ARGUMENT_VALIDATION_ERROR
+
+- **输入**：`done=false` 且无工具；或参数不合 schema。
+- **处理**：不执行；内部回填对应 `ErrorClass`；对外不新字段。现网「未知工具静默 done=True」对**未注册名**继续有效（阶段 1 冻结）；`MISSING_TOOL` 只覆盖「明确 done=false 且 tool 与 tool_calls 都空」。
+- **验收**：单测区分三种：未知工具静默停、空工具 MISSING_TOOL、done+tool 冲突。
 
 ### F3-8 状态机补齐
 
@@ -177,7 +198,7 @@ Feedback merge span F-01        parent=O-01（或 X-batch，文档冻结为：no
 | 功能点 | 文件 |
 | :--- | :--- |
 | F3-1 / F3-7 | `orchestration/parser.py` |
-| F3-2 / F3-3 / F3-8 | `orchestration/parallel_facade.py`、`state_machine.py`、`authorization.py` |
+| F3-2 / F3-3 / F3-8 | `orchestration/parallel_facade.py`、`state_machine.py`、`authorization.py`（只做 parallel_safe / 副作用门禁，**不是** `security/consent` 确认卡） |
 | F3-4 | `feedback/normalizer.py`（本阶段才允许出现 `merge_batch`） |
 | F3-5 | `react_loop.py` 发 WS 的适配（字段仍走 `agent/harness` emit） |
 | F3-6 | `orchestration/streaming.py`、`finalizer.py` |
@@ -210,6 +231,22 @@ Feedback merge span F-01        parent=O-01（或 X-batch，文档冻结为：no
 
 **对策**：对外再导出函数继续吃单 `tool` JSON。新路径走内部 `parse_model_payload`。旧测试不改断言。
 
+### 难点 7：阶段 0 Schema 必填 `tool`，架构批次示例没有 `tool`
+
+若阶段 3 不改 Schema，要么模型必须继续发 `tool=null`，要么批次路径永远校验失败。
+
+**对策**：`react-output.schema.json` 改为 `oneOf` 两个分支，均 `additionalProperties: false`。单测：架构示例通过；带 item 级 `trace_id` 仍失败；阶段 1 单 `tool` 用例仍绿。
+
+### 难点 8：F3-2 曾允许「违规则改串行」，与架构「拒绝整批」冲突
+
+悄悄串行会让模型以为并行策略已满足。
+
+**对策**：只在**产品开关关闭**时串行（能力未启用）。开关打开后的违规必须 `PARALLEL_POLICY_VIOLATION` 且不执行。
+
+### 难点 9：`streaming.py` 与 `harness/llm` 流式正文双实现
+
+**对策**：`orchestration/streaming.py` 只做状态（`FINALIZING_STREAM`）与取消订阅；字节流仍走阶段 1 的 `harness/llm` 唯一正文。禁止再写一套 Provider 读取。
+
 ---
 
 ## 7. 验收清单
@@ -220,8 +257,11 @@ Feedback merge span F-01        parent=O-01（或 X-batch，文档冻结为：no
 - [ ] `merge_batch` mismatch 熔断；无伪造 parent
 - [ ] `done=true` 单测经过 `FINALIZING_STREAM`
 - [ ] `DONE_TOOL_CONFLICT` 不执行工具
+- [ ] `MISSING_TOOL` 覆盖空工具；未知工具静默语义仍在
+- [ ] Schema `oneOf`：无顶层 `tool` 的批次示例可通过
+- [ ] 开关打开且批次不安全 → 不执行、不悄悄串行
 - [ ] WS 事件名/字段不变；无新 REST
-- [ ] 无 Alembic 业务新表（本阶段不改记忆表）；无 Redis；无 LightRAG
+- [ ] 无 Alembic 业务新表（本阶段不改记忆表）；无 Redis；无 LightRAG；无 MCP Transport
 - [ ] `ruff` + `pytest tests/harness tests/test_harness.py` 等全绿
 
 ---
@@ -241,7 +281,7 @@ Feedback merge span F-01        parent=O-01（或 X-batch，文档冻结为：no
 
 ## 修改代码文件与作用清单
 
-V1.1：按阶段 0 模板补齐五块分析；吸收阶段 0 对错误 `merge_batch` 的否决。**尚未写业务代码**。
+V1.2：补 Schema `oneOf`、MISSING_TOOL、并行门禁三分支冻结、streaming 不复制 LLM 客户端。**尚未写业务代码**。
 
 | 文件 | 作用 |
 | :--- | :--- |

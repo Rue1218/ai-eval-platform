@@ -21,7 +21,16 @@ from .tool_call import (
     ToolResult,
     ToolResultBatch,
 )
-from .trace import TraceContext, new_span_id, new_trace_id, new_turn_id
+from .trace import (
+    TraceContext,
+    current_trace,
+    format_trace_prefix,
+    new_span_id,
+    new_trace_id,
+    new_turn_id,
+    using_trace,
+)
+from .turn import TurnStatus
 
 __all__ = [
     "CancellationToken",
@@ -46,8 +55,12 @@ __all__ = [
     "ToolResultBatch",
     "TraceContext",
     "TraceMismatch",
+    "TurnStatus",
+    "current_trace",
+    "format_trace_prefix",
     "map_error_class_to_code",
     "new_span_id",
     "new_trace_id",
     "new_turn_id",
+    "using_trace",
 ]

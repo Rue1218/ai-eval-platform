@@ -144,6 +144,11 @@ def test_cancellation_request_is_idempotent():
     token.request("disconnect")
     assert token.reason == "user_stop"
     assert token.requested_at_monotonic == first_ts
+    assert token.stop.is_set()
+    assert token.cancelled.is_set()
+    latency = token.dispatch_latency_ms()
+    assert latency is not None
+    assert latency < token.propagation_budget_ms
     with pytest.raises(TurnCancelled):
         token.raise_if_cancelled()
 

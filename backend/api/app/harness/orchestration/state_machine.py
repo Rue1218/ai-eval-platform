@@ -1,1 +1,5 @@
-"""ReAct 状态机。阶段 1 落地；阶段 0 不实现。"""
+"""ReAct 回合状态。阶段 2 只落地取消终态；FINALIZING_STREAM 归阶段 3。"""
+
+from app.harness.contracts.turn import TurnStatus
+
+__all__ = ["TurnStatus"]

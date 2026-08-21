@@ -32,6 +32,9 @@ EXPECTED_TABLES = {
     "case_items",
     "eval_items",
     "usage_ledger",
+    "harness_turns",
+    "harness_spans",
+    "harness_diagnostics",
 }
 
 

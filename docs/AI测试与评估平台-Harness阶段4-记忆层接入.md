@@ -3,7 +3,7 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 阶段 4 — 记忆层接入 |
-| 版本 | V1.1 |
+| 版本 | V1.2 |
 | 审查日期 | 2026-08-21 |
 | 文档性质 | **开工前分析文档**（需求分析、功能点、实现路径、技术难点与对策）；未勾验收前禁止把 Redis/pgvector 当「已经迁完六层」 |
 | 对应目标架构 | 架构文档 §2.1 / §3.1 / §5.2 / §5.3 / §5.4（消息表溯源列） |
@@ -67,11 +67,14 @@
 | R4-5 | PG `conversation_store`：长期对话归档，带 `origin_trace_id` / `origin_span_id` | §5.2、§5.4 | P0 |
 | R4-6 | pgvector `knowledge_store`：向量检索 + metadata 过滤；与业务数据同库 | §5.2 | P0 |
 | R4-7 | `forget(source_id)` 后相关摘要失效，不得再注入窗口 | §3.1 压缩失效规则 | P0 |
-| R4-8 | WindowManager：System/用户输入不可降级；Lost-in-the-Middle 布局 | §3.1 阶段 C | P1 |
-| R4-9 | `CompiledContext` 公开 token 账本；超额按槽位策略淘汰 | §3.1 账本表 | P1 |
+| R4-8 | WindowManager：System/用户输入不可降级；Lost-in-the-Middle 最小布局（System 最前、observation 靠近用户问题、无 `source_id` 不进知识槽） | §3.1 阶段 C | P0 |
+| R4-9 | `CompiledContext` 公开 token 账本；超额按槽位策略淘汰。对外 ContextMeter 键不变 | §3.1 账本表、API.md | P0 |
 | R4-10 | ContextMeter REST 字段与现网一致 | API.md、前端只读该结构 | P0 |
 | R4-11 | 单测用内存 Port，不强制本机 Redis/PG | 阶段 0 N0-4 精神 | P0 |
 | R4-12 | 禁止 `long_term_lightrag.py`；`kind=rag` 不得 mock succeeded | §5.1、AGENTS.md | P0 |
+| R4-13 | `retrieve` 拒绝空 `tenant_id`/`user_id`/`session_id`（阶段 0 类型允许空串，本阶段收紧行为，不改字段名） | §3.1、阶段 0 债务 | P0 |
+| R4-14 | `llm/usage.py`：编排侧 token 用量回填 `TokenLedger`；`context/` 仍禁止 import `harness.llm` | §2 树 `usage.py`、§1.1 LLM 归属 | P1 |
+| R4-15 | 完整五信号 rerank（authority/freshness/diversity…）允许先用启发式；禁止「按向量分原样塞中部」 | §3.1 阶段 C | P1 |
 
 ### 3.2 非功能需求
 
@@ -91,6 +94,8 @@
 5. **对外 ContextMeter 字段冻结**；内部 `TokenLedger` 可以更细，但 `as_dict()` 键名以现网为准。
 6. **召回 → 压缩 → 重排** 全在 Context；Memory 不知道 token 预算。
 7. LightRAG 容器即使在 compose 里，本阶段也不得新建适配器文件、不得把 RAG 任务标成功。
+8. **阶段 4 合入后仍为空壳（禁止顺手填）**：`execution/mcp/`、`file_sandbox.py`、`security/policy|consent|secrets`、`long_term_lightrag.py`、`planner-output.schema.json` 业务逻辑。
+9. **生成式压缩若用模型**：必须经编排持有的 `harness/llm`（或现网 `app.llm` 再导出），claims 必须带 `source_id`；Context 包自己不得 import LLM。本阶段优先抽取式，生成式为超限兜底。
 
 ---
 
@@ -131,9 +136,15 @@
 ### F4-6 Context 编译器
 
 - **输入**：用户目标、`MemoryPort`、当前 ToolResult。
-- **处理**：召回 → 压缩 → 重排 → 窗口；输出 `CompiledContext`。
-- **验收**：`context/` 文件 grep 无 `import redis` / `from sqlalchemy`。
-- **不做**：编译器里调 LLM 做「无来源摘要当事实」（生成式压缩若用模型，必须经编排/llm 且 claims 带回 `source_id`；本阶段优先抽取式）。
+- **处理**：召回 → 压缩 → 重排 → 窗口；输出 `CompiledContext`。最小布局：System+Schema 不可降级；用户输入不可降级；本轮 observation 靠近用户问题；无 `source_id` 的文本不进知识槽。
+- **验收**：`context/` 文件 grep 无 `import redis` / `from sqlalchemy` / `from app.harness.llm`。
+- **不做**：编译器里调 LLM 做「无来源摘要当事实」。
+
+### F4-6b MemoryQuery 收紧
+
+- **输入**：阶段 0 允许空 `tenant_id` 的模型。
+- **处理**：`retrieve`/`append` 实现层拒绝空租户/用户/会话；可补 validator，类型名不变。
+- **验收**：缺会话 id 的 query 不得返回「成功但空列表」冒充无命中。
 
 ### F4-7 ContextMeter 适配
 
@@ -225,6 +236,18 @@
 
 **对策**：本阶段才填 `short_term_redis.py`。若发现阶段 1–3 PR 混入 Redis，必须回滚到空壳。
 
+### 难点 8：窗口布局被标成 P1 后，MemoryPort 只包一层 `query(Message)`
+
+那样阶段 4 名义迁完、Lost-in-the-Middle 仍不存在。
+
+**对策**：最小布局列为 P0 验收。完整五信号 rerank 可以启发式，但不能把无来源长文本塞进窗口中部。
+
+### 难点 9：`usage.py` 归属编排还是 Context
+
+账本在 `CompiledContext`，调用权在编排。
+
+**对策**：P1。若做：`orchestration` 读 `llm/usage` 后写入 ledger 字段；`context/` 不 import `llm/`。可不做则 ledger 先用估算 tokenizer，不得为此让 Context 调模型。
+
 ---
 
 ## 7. 验收清单
@@ -234,9 +257,12 @@
 - [ ] 内存 Port 单测覆盖 retrieve/append/forget
 - [ ] 有 Redis 时 TTL 过期；forget 后不再注入
 - [ ] Alembic 溯源列 + 知识表可逆
+- [ ] 最小窗口布局：System 在前、observation 靠近用户问题、无 source_id 不进知识槽
+- [ ] retrieve 空租户/会话不得冒充召回成功
 - [ ] ContextMeter REST 字段与现网一致
 - [ ] 无 `long_term_lightrag.py`；rag 任务不得 mock succeeded
 - [ ] 审计三表仍在 PG；`/stop` registry 仍未伪装成已多副本
+- [ ] `execution/mcp/`、`security/`、`file_sandbox` 仍未被活路径引用
 - [ ] `ruff` + 相关 pytest 全绿
 
 ---
@@ -245,7 +271,8 @@
 
 ```text
 六层运行时：契约 + 单调用 + 强制追踪取消 + 可选并行 + MemoryPort
-仍不包含：LightRAG、多副本 abort、外部 MCP 生态、自定义系统提示词
+仍不包含（见总册覆盖矩阵）：LightRAG、多副本 abort、MCP Transport / file_sandbox、
+security/ 三文件、reflect/plan 迁入、persona YAML、外部 MCP 生态、自定义系统提示词
 ```
 
 新 REST/WS 字段仍必须先改 API.md。后续 RAG 接入单独评审，不得在本阶段文档里开口子。
@@ -254,7 +281,7 @@
 
 ## 修改代码文件与作用清单
 
-V1.1：按阶段 0 模板补齐五块分析。**尚未写业务代码**。
+V1.2：窗口最小布局升 P0、MemoryQuery 行为收紧、标明阶段 4 结束后仍挂起的 MCP/security。**尚未写业务代码**。
 
 | 文件 | 作用 |
 | :--- | :--- |

@@ -16,13 +16,15 @@ from app.harness.contracts.memory import MemoryQuery
 API_ROOT = Path(__file__).resolve().parents[3]
 HARNESS_ROOT = API_ROOT / "app" / "harness"
 FORBIDDEN_MODULES = {"redis", "sqlalchemy", "app.llm", "app.adapters", "app.models"}
-LIVE_PATHS = (
+LIVE_PATHS_MUST_NOT_IMPORT_HARNESS = (
+    "app/routers/ws.py",
+)
+LIVE_PATHS_MUST_REEXPORT_HARNESS = (
     "app/llm.py",
     "app/agent/mcp_tools.py",
     "app/agent/mcp_registry.py",
-    "app/agent/harness.py",
     "app/agent/react.py",
-    "app/routers/ws.py",
+    "app/agent/harness.py",
 )
 
 
@@ -85,11 +87,28 @@ def test_app_py_does_not_assemble_runtime():
     assert "build_runtime" not in functions
 
 
-def test_live_paths_do_not_import_harness():
-    """活路径继续走 app.agent / app.llm，禁止提前再导出。"""
-    for rel in LIVE_PATHS:
+def test_ws_and_session_harness_do_not_import_harness():
+    """WS 收包循环不直接引用六层包；总控经 agent.harness 注入 token。"""
+    for rel in LIVE_PATHS_MUST_NOT_IMPORT_HARNESS:
         text = (API_ROOT / rel).read_text(encoding="utf-8")
         assert "app.harness" not in text, rel
+
+
+def test_phase1_reexport_modules_import_harness():
+    """阶段 1 薄再导出必须指向 harness 正文。"""
+    for rel in LIVE_PATHS_MUST_REEXPORT_HARNESS:
+        text = (API_ROOT / rel).read_text(encoding="utf-8")
+        assert "app.harness" in text, rel
+
+
+def test_execution_and_feedback_do_not_import_llm():
+    """执行层与反馈层不得持有模型客户端。"""
+    forbidden = {"app.harness.llm", "app.llm", "app.adapters"}
+    for folder in ("execution", "feedback"):
+        for path in (HARNESS_ROOT / folder).rglob("*.py"):
+            imported = _imported_modules(path)
+            overlap = imported & forbidden
+            assert not overlap, f"{path} 引入了 {overlap}"
 
 
 def test_react_output_schema_forbids_trace_and_cot():

@@ -3,13 +3,13 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 阶段 2 — 链路追踪与取消 |
-| 版本 | V1.1 |
+| 版本 | V1.4 |
 | 审查日期 | 2026-08-21 |
-| 文档性质 | **开工前分析文档**（需求分析、功能点、实现路径、技术难点与对策）；未勾验收前禁止合入、禁止开阶段 3 |
+| 文档性质 | **阶段施工文档**（需求分析、功能点、实现路径、技术难点与对策 + 代码落地） |
 | 对应目标架构 | [`docs/AI测试与评估平台-Harness六层ReAct核心架构设计.md`](docs/AI测试与评估平台-Harness六层ReAct核心架构设计.md) §2.2 / §3.2.2 / §3.5 / §4.4 / §5.3 / §5.4 |
 | 前置阶段权威 | 阶段 0 冻结类型；阶段 1 单调用循环已用可选 `trace=` / `cancel=` 接入 `normalize` |
 | 产品/协议裁决 | API.md、Agent 开发文档；`/stop` 与 WS 事件名以 API.md 为准，本阶段不新增字段 |
-| 分支 | `feat/harness-trace-cancel`（从已合入阶段 1 的 `main` 拉出） |
+| 分支 | `feat/harness-trace-cancel`（从 `feat/harness-single-call` 拉出：阶段 1 尚未合入 `main`） |
 | 前置依赖 | 阶段 1 验收通过 |
 | 后续阶段 | 阶段 3 并行与流式收尾 |
 
@@ -35,7 +35,7 @@ dispatch_user_message
   → PG：harness_turns / harness_spans / harness_diagnostics
 ```
 
-100ms 是 **Harness 本地调度 SLO**（置位 → 停 LLM 流读取 / 取消未开始 task / 向可取消 MCP 发取消），不含远端真正停止时间。远端未确认记 `cancel_requested`，不得伪报已停止。
+100ms 是 **Harness 本地调度 SLO**（置位 → 停 LLM 流读取 / 取消未开始的本地 task）。不含远端真正停止时间。无 MCP 客户端时不得伪报已向 Server 发取消。本地已停的 task 记 `cancelled`；无法确认的远端记 `cancel_requested`。
 
 ---
 
@@ -63,13 +63,17 @@ dispatch_user_message
 | R2-1 | Turn 入口创建唯一 `TraceContext`；跨层必须 `child(component)`，禁止把 `call_id` 当 trace | §2.2、§3.5 | P0 |
 | R2-2 | `run_react` / `Facade.execute` / `normalize` / LLM 流读取以关键字参数接收不可选 `trace`；执行路径另收不可选 `cancel` | §2.2 | P0 |
 | R2-3 | `/stop`、会话关闭、WS 断开置位同一 `CancellationToken`；`request` 幂等 | §3.2.2、§4.4、API.md `/stop` | P0 |
-| R2-4 | 本地取消调度 ≤100ms：停流读取、取消未开始 task、向可取消 MCP 发取消 | §4.4 | P0 |
+| R2-4 | 本地取消调度 ≤100ms：停流读取、取消未开始的本地 task；**不含** MCP 远端往返（见 R2-11） | §4.4、总册挂起项 | P0 |
 | R2-5 | 已开始未完成的短工具 → `ExecutionOutcome.cancelled` / `cancel_requested`，经 `normalize` 回填；**当前 Turn 禁止为回填再调模型** | §3.2.2 | P0 |
 | R2-6 | Alembic 新增 `harness_turns` / `harness_spans` / `harness_diagnostics`；审计不进 Redis | §5.4、AGENTS.md 红线 4 | P0 |
 | R2-7 | `record_diagnostic` 写入 PG；保留天数默认 30；缺 trace 仍 Fail-fast | §3.5、§5.4、阶段 0 diagnostics | P0 |
 | R2-8 | 环境变量接入预算键，启动日志回显生效值；产品默认 硬顶 5 / 墙钟 180s / 默认轮次 4 | §3.2.2 vs Agent §5.6、阶段 1 R1-11 | P0 |
 | R2-9 | WS `/stop` 语义与事件名不变；无新 REST 字段 | API.md、§5.3 | P0 |
 | R2-10 | 单副本或粘性路由前提暂时不变；不把 `_HARNESS_BY_SESSION` 迁 Redis（那是扩副本议题，非本阶段） | 驾驭工程架构说明 | P1 |
+| R2-11 | 100ms SLO 的本地动作仅限：置位令牌、停 LLM 流读取、`task.cancel()`、取消**尚未开始**的本地执行。**不得**声称已向 MCP Server 发出 `CancelledNotification`（`execution/mcp/` 仍空壳） | §4.4 vs 总册挂起项 | P0 |
+| R2-12 | 结构化日志 / `publisher` 自动带 `trace_id`、`span_id`、`turn_id`；禁止依赖人工拼接。`agent_trace` 脱敏红线不变 | §3.5 Logging、§5.1 `log.py` | P0 |
+| R2-13 | 本阶段写入 span 表的范围：编排 / 执行 / 反馈。Context / Memory span 等阶段 4 接线后补 | §3.5 树 vs 阶段 4 | P0 |
+| R2-14 | 预算**键名**接入八项；**执行语义**默认仍只用产品轮次硬顶与墙钟。指纹 / 连续可重试 / 上下文重建默认关闭，未设 env 不得把循环次数改成架构表示例 | §3.2.2 vs Agent §5.6、WS 行为不变 | P0 |
 
 ### 3.2 非功能需求
 
@@ -90,6 +94,19 @@ dispatch_user_message
 5. **禁止**新增 WS 事件名或 `/stop` JSON 字段。
 6. `asyncio.Event` 为主、`threading.Event` 为镜像：`cancel.request()` 必须同时 `stop.set()`，否则 `to_thread` 里的短工具看不见取消。
 7. 改 `models.py` 必须生成 Alembic，禁止服务器手工改库。
+8. **`MissingTraceContext` 告警**本阶段等于：`agent_trace` + 熔断 Turn + 对外 `INTERNAL`。不接外部 pager / 不新增 REST 告警字段。
+9. **不属于本阶段**：MCP Transport、`file_sandbox`、`security/`、`merge_batch`、MemoryPort 接存储、把 `HARNESS_MAX_REACT_STEPS=6` 当缺省。
+
+### 3.4 明确不属于阶段 2
+
+| 能力 | 归属 |
+| :--- | :--- |
+| MCP `CancelledNotification` / `X-Trace-Id` 请求头 | 挂起（无 MCP 客户端） |
+| `cancel_ack_latency_ms`、`remote_completion_after_cancel` | 挂起；本阶段只测 `dispatch_latency_ms` |
+| 长任务 `job_ref` + `idempotency_key` 取消 | 挂起（§4.3） |
+| 诊断 30 天定时清理任务 | 本阶段只留 `created_at` + 保留天数常量；定时 job 可后补 |
+| `FINALIZING_STREAM` / 并行子任务取消扇出 | 阶段 3（接到本阶段令牌） |
+| `BUDGET_EXHAUSTED` 后再发起「最后一次无工具权限」模型调用 | 默认关闭；若设 env 显式打开再走内部 observation，对外文案仍固定、不新 WS 字段 |
 
 ---
 
@@ -146,8 +163,28 @@ dispatch_user_message
 ### F2-8 预算环境变量
 
 - **输入**：§3.2.2 八键。
-- **处理**：`budgets.py` 读 env；缺省=产品值；启动 `agent_trace` 回显（无密钥）。
+- **处理**：`budgets.py` 读 env；缺省=产品值（硬顶 5 / 墙钟 180s / 默认轮次 4）；启动 `agent_trace` 回显（无密钥）。
+- **输出**：调用方可读生效值。
 - **验收**：不设 env 时硬顶仍为 5、墙钟 180s。
+- **不做**：不把架构表示例 6/60 写成代码缺省；不默认启用指纹 / 连续错误 / 重建次数截断（见 F2-9）。
+
+### F2-9 预算停止条件（默认关）
+
+- **输入**：`max_same_call_fingerprint` / `max_consecutive_retryable_error` / `max_context_rebuilds`。
+- **处理**：仅当对应 env **显式设置** 才启用截断；截断时内部可记 `BUDGET_EXHAUSTED`，对外仍走现网停工具/固定文案，不新 WS 字段。
+- **验收**：未设 env 的现网 `test_harness.py` 循环次数不变。
+- **不做**：不实现「最后一次无工具权限再调模型」除非产品测试已覆盖且不改 WS。
+
+### F2-10 结构化追踪日志
+
+- **输入**：现网 `agent_trace`。
+- **处理**：`publisher.py` 输出必须能带上 `trace_id`/`span_id`/`turn_id`；禁止把 API Key、Cookie、完整提示词打进日志。
+- **验收**：Turn 内至少一条带同一 `trace_id` 的记录可与 `harness_turns` 对上。
+- **不做**：不新增浏览器可见事件。
+
+### F2-11 取消 Outcome（已有 F2-5 的补充口径）
+
+与 F2-5 相同路径。额外冻结：无 MCP 适配器时，远端状态一律记 `cancel_requested` 不得伪报 `cancelled`（本地 task 已停仍可用 `cancelled`）。
 
 ---
 
@@ -187,6 +224,9 @@ WS /stop 或断开
 | F2-6 | `app/models.py`、`migrations/versions/*` |
 | F2-7 | `feedback/diagnostics.py`、`feedback/publisher.py` |
 | F2-8 | `orchestration/budgets.py`、`harness/app.py` 启动回显 |
+| F2-9 | `orchestration/budgets.py`（默认关的截断开关） |
+| F2-10 | `feedback/publisher.py`；`agent/log.py` 可再导出，禁止第二套脱敏 |
+| F2-11 | 同 F2-5 |
 
 ---
 
@@ -216,18 +256,34 @@ WS /stop 或断开
 
 **对策**：`record_diagnostic` 依赖可注入 Port；pytest 用阶段 0 的 `InMemoryAuditStore`。
 
+### 难点 7：§4.4 清单含「向 MCP 发取消」，但客户端不存在
+
+若本阶段写空的 `CancelledNotification`，审查者会以为 MCP 层已接通。
+
+**对策**：取消链在 Facade / LLM 流 / 本地 task 终止。文档与单测只断言这三段的 `dispatch_latency_ms`。MCP 项留在总册挂起矩阵。
+
+### 难点 8：八键接入被理解成「循环行为改成架构表」
+
+`MAX_SAME_CALL_FINGERPRINT=2` 会让现网同一工具连调 4 轮的用例失败。
+
+**对策**：缺省映射产品常量；指纹类键未设置则不截断。启动日志打印「未启用」。
+
 ---
 
 ## 7. 验收清单
 
-- [ ] 公开执行/编排 API 缺少 `trace` 无法通过单测
-- [ ] `/stop` 置位 token 后循环退出；WS 协议不变
-- [ ] `dispatch_latency_ms` 口径为本地调度，默认预算 100
-- [ ] Alembic upgrade/downgrade 可逆；三表在 PG 不在 Redis
-- [ ] `pytest tests/test_harness.py tests/harness/tracing` 及多媒体 / llm 用例全绿
-- [ ] 未配 env 时轮次硬顶 5、墙钟 180s
-- [ ] 无新 REST/WS 字段；无 `merge_batch`；无 LightRAG 文件
-- [ ] `ruff check` 通过
+- [x] 公开执行/编排/LLM 流 API 缺少 `trace`/`cancel` 无法通过单测
+- [x] `/stop` 置位 token 后循环退出；WS 协议不变
+- [x] `dispatch_latency_ms` 口径为本地调度，默认预算 100
+- [x] Alembic upgrade/downgrade 可逆；三表在 PG 不在 Redis
+- [x] `pytest tests/test_harness.py tests/harness/tracing` 及多媒体 / llm 用例全绿
+- [x] 未配 env 时轮次硬顶 5、墙钟 180s；指纹类截断默认关
+- [x] 无新 REST/WS 字段；无 `merge_batch`；无 LightRAG 文件
+- [x] 无 MCP Transport / `file_sandbox` / `security/` 实现
+- [x] `publisher` 日志含 `trace_id`；热路径 `agent_trace` 自动带链路 ID
+- [x] 取消先持久化 `CANCELLING`，收敛后写 `CANCELLED`
+- [x] `TurnStatus` 在契约层，feedback 不引用 orchestration
+- [x] `ruff check` 通过
 
 ---
 
@@ -247,8 +303,33 @@ normalize Fail-fast 仍然有效
 
 ## 修改代码文件与作用清单
 
-V1.1：按阶段 0 模板补齐五块分析。**尚未写业务代码**。
+V1.4：按审查补齐 P0/P1。`run_react` / `stream_mcp_step` / `stream_agent_model` 强制 `trace`/`cancel`；热路径日志经 ContextVar 自动带 ID；取消先写 `CANCELLING`；`TurnStatus` 下沉契约层。
+
+V1.3：强制 `trace`/`cancel`、`/stop` 接令牌、Alembic 三表、预算 env 与结构化追踪日志已落地。分支从 `feat/harness-single-call` 拉出（阶段 1 尚未合入 `main`）。
 
 | 文件 | 作用 |
 | :--- | :--- |
 | `docs/AI测试与评估平台-Harness阶段2-链路追踪与取消.md` | 本文 |
+| `backend/shared/models.py` | 新增 `HarnessTurn` / `HarnessSpan` / `HarnessDiagnostic` |
+| `backend/api/app/models.py` | 再导出审计三表 |
+| `backend/api/migrations/versions/b7e4a1c90825_新增harness审计三表.py` | Alembic 可逆迁移 |
+| `backend/api/app/harness/contracts/cancellation.py` | `request()` 同时置位 asyncio + threading Event |
+| `backend/api/app/harness/contracts/turn.py` | `TurnStatus` 下沉契约层，feedback 不再引用 orchestration |
+| `backend/api/app/harness/contracts/trace.py` | `using_trace` / `current_trace`，热路径日志自动带 ID |
+| `backend/api/app/agent/log.py` | `agent_trace` 从当前 span 自动加前缀 |
+| `backend/api/app/harness/orchestration/state_machine.py` | 再导出 `TurnStatus`（不含 FINALIZING_STREAM） |
+| `backend/api/app/harness/orchestration/budgets.py` | 八键读 env，缺省=产品 5/180s/4；指纹类默认关 |
+| `backend/api/app/harness/feedback/diagnostics.py` | `record_diagnostic` 可注入；生产 `PgAuditStore` |
+| `backend/api/app/harness/feedback/publisher.py` | Turn/Span 持久化；`set_turn_status` 支持 `CANCELLING` |
+| `backend/api/app/harness/app.py` | 启动回显预算并切换 PG 审计存储 |
+| `backend/api/app/main.py` | lifespan 调用 `configure_runtime` |
+| `backend/api/app/harness/execution/facade.py` | `execute(..., *, trace, cancel)` 强制；取消 Outcome |
+| `backend/api/app/harness/orchestration/react_loop.py` | 强制透传；取消后不再调模型；编排 span 记真实耗时 |
+| `backend/api/app/harness/llm/client.py` | 流式调用强制 `trace`/`cancel`，块间检查取消 |
+| `backend/api/app/agent/react.py` | 薄封装：`run_react` 强制同一 Turn 的 trace/cancel |
+| `backend/api/app/agent/harness.py` | 根 Trace + `/stop` 先写 `CANCELLING`；闲聊流接下发令牌 |
+| `backend/api/app/routers/ws.py` | 断线置位同一令牌（不直接 import `app.harness`） |
+| `backend/api/app/routers/sessions.py` | 会话删除时取消进行中 Turn |
+| `backend/api/tests/harness/test_trace_cancel.py` | 阶段 2 强制参数、100ms SLO、预算缺省、审计表 |
+| `backend/api/tests/harness/tracing/test_contracts.py` | 总控允许引用契约；WS 仍不得 import 六层包 |
+| `backend/api/tests/test_shared_models.py` | EXPECTED_TABLES 补三表 |
