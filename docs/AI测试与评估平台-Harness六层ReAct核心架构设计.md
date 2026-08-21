@@ -3,7 +3,7 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 六层 ReAct 核心架构设计 |
-| 版本 | V1.2（目标架构） |
+| 版本 | V1.6（目标架构 + 阶段 0–4 需求分析索引） |
 | 审查日期 | 2026-08-21 |
 | 目标运行时 | Python 3.12 / `asyncio` / Pydantic v2 或等价 JSON Schema 校验器 |
 | 适用范围 | 高性能、多轮 ReAct Agent、MCP 工具与 Eval-Core 等远程执行服务 |
@@ -14,6 +14,12 @@
 > **V1.1 定向修订定位**：在原第二章项目树中新增追踪、取消与并行门面文件；在第三章 `§3.2` 中扩展为批量 ToolCall、并行状态机和流式取消；在 `§3.3` 中替换取消异常处理；在 `§3.4` 后新增 `§3.5` 跨层强制链路追踪；在第四章 `§4.3` 后补充长任务取消时限；在文末自检清单新增对应不变量。原有六层、记忆解耦、MCP 和反幻觉设计均保留。
 
 > **V1.2 定向修订定位**：① 裁决 LLM 客户端归属——新增 `llm/` 模块并由编排层独占持有，修正 `§1.1`/`§1.2` 两图关于"谁调用模型"的矛盾；② 新增第五章"现状迁移映射与基础设施决策"（现有 `app/agent/` 模块 → 目标目录映射、**首期 PostgreSQL（含 pgvector）+ Redis、LightRAG 暂不接入**的存储决策与部署红线、分阶段迁移与持久化契约）；③ 新增第六章"安全层契约与错误码对齐"（`security/` 三文件契约、ToolResult 内部枚举与 10 大 ErrorCode 的关系、与 Agent 开发文档的裁决关系）；④ 在 `§3.2.2` 补充权威预算默认值表；⑤ 修正 `§3.5` 批量合并场景的 trace 父子校验说明；⑥ `§1.2` 时序图补显式"执行报错 → 反馈 → 二次推理"分支；⑦ 文档头部补审查日期、目标运行时对齐 Python 3.12。
+
+> **V1.3 定向修订定位**：§5.3 增补五份阶段施工文档索引；阶段 0 开始落地 `harness/contracts` 与 tracing fail-fast 测试，不改变对外 REST/WS。
+
+> **V1.4 定向修订定位**：新增第七章，从本文第一至六章抽出阶段 0 的需求分析、细分功能点、实现路径、技术难点与对策。阶段 0 开工以第七章为准，禁止跳过分析直接迁 `app/agent/`。
+
+> **V1.6 定向修订定位**：增补第九至十一章，作为阶段 2/3/4 需求索引；五块分析展开以各阶段施工文档 V1.1 为准（与阶段 0 同一模板）。
 
 ---
 
@@ -747,6 +753,17 @@ ToolCall
 
 每个阶段独立开 `feat/` 分支、独立 PR 合入 `main`；阶段内必须保持 `app/agent/` 与 `harness/` 不存在同一职责的双实现（迁移完成即删旧路径）。
 
+**阶段 0 开工前必须先完成第七章分析**（需求、功能点、实现、难点与对策），再写代码。后续阶段同样：先在对应阶段文档补齐这五块，再开分支。
+
+开工以分阶段施工文档为准（范围、验收、不做清单）；阶段 0 的需求与难点以 **本文第七章** 为权威：
+
+- 总册：[`docs/AI测试与评估平台-Harness分阶段实施总册.md`](docs/AI测试与评估平台-Harness分阶段实施总册.md)
+- 阶段 0：[`docs/AI测试与评估平台-Harness阶段0-契约骨架.md`](docs/AI测试与评估平台-Harness阶段0-契约骨架.md)
+- 阶段 1：[`docs/AI测试与评估平台-Harness阶段1-单调用路径.md`](docs/AI测试与评估平台-Harness阶段1-单调用路径.md)
+- 阶段 2：[`docs/AI测试与评估平台-Harness阶段2-链路追踪与取消.md`](docs/AI测试与评估平台-Harness阶段2-链路追踪与取消.md)
+- 阶段 3：[`docs/AI测试与评估平台-Harness阶段3-并行与流式收尾.md`](docs/AI测试与评估平台-Harness阶段3-并行与流式收尾.md)
+- 阶段 4：[`docs/AI测试与评估平台-Harness阶段4-记忆层接入.md`](docs/AI测试与评估平台-Harness阶段4-记忆层接入.md)
+
 ### 5.4 持久化契约（trace、诊断与回合状态）
 
 新增三张 PG 表，一律经 Alembic 迁移（红线 4）：
@@ -789,6 +806,184 @@ Agent 开发文档（`docs/AI测试与评估平台-Agent开发文档.md`）定�
 
 ---
 
+## 第七章：阶段 0 需求分析、功能点、实现路径与难点对策（V1.4）
+
+本章只分析 **§5.3 阶段 0**。不把阶段 1–4 的运行时迁移、Alembic 三表、并行执行、Redis/pgvector 提前做完。分析依据仅限本文第一至六章，不私自扩充产品范围。
+
+### 7.1 需求分析
+
+#### 7.1.1 从本文抽出的阶段 0 需求
+
+| ID | 需求陈述 | 本文出处 | 阶段 0 是否落地代码 |
+| :--- | :--- | :--- | :--- |
+| AR-01 | 模型不持有控制逻辑；跨层只通过冻结契约说话 | §1.1 原则与依赖规则 | 是：定义契约，不迁循环 |
+| AR-02 | 每一跨层调用必须携带不可选的 `trace_id` 与 `span_id`；`call_id` 不得替代它们 | §2.2、§3.5 | 是：`TraceContext` + 单测 |
+| AR-03 | `child()` 保持同一 `trace_id`、新 `span_id`、`parent_span_id=当前 span` | §2.2、§3.5 树形示例 | 是 |
+| AR-04 | `CancellationToken` 默认 `propagation_budget_ms=100` | §2.2、§3.2.2 配置表、§4.4 | 是：只定义类型；不替换 `/stop` |
+| AR-05 | 唯一可执行输入是 Schema 校验后的 `ToolCall` / `ToolCallBatch`；模型 JSON 不得自带 trace | §1.3、§3.2 | 是：冻结模型；解析仍留现网 |
+| AR-06 | 执行层返回 `ExecutionOutcome`，禁止成功 dict / 失败裸抛 | §3.3 | 是：冻结 Outcome；`execute_short_tool` 不迁 |
+| AR-07 | Feedback 将 Outcome 转为脱敏 `ToolResult`；缺 trace 的 Outcome Fail-fast，不得静默降级 | §3.3、§3.5 | 是：`normalize` 纯函数 + 测试 |
+| AR-08 | observation 级 `ErrorClass` 不构成第二套对外错误码 | §6.2 | 是：枚举 + 映射函数 |
+| AR-09 | Context 只经 `MemoryPort`；本阶段不接存储 SDK | §1.1、§2.1、§5.2 | 仅定义 Port |
+| AR-10 | `prompts/` 只放静态模板与 JSON Schema，不含 CoT 指令 | §1.3 | 静态 schema 文件 |
+| AR-11 | 建 `harness/` 目录骨架 + `tests/tracing` fail-fast | §2 项目树、§5.3 | 是 |
+| AR-12 | WS / 多媒体工具 / `app/llm.py` 行为保持不变 | §5.1、§6.3 | **约束：禁止改活路径** |
+
+非功能：契约层无 I/O、无 LLM SDK（§2.1）；物理代码落在 `backend/api/app/harness/` 以便 `from app.harness...` 导入；pytest 的 `testpaths=tests`，tracing 用例必须放 `backend/api/tests/harness/tracing/`。
+
+#### 7.1.2 明确不属于阶段 0（避免把后面阶段提前做完）
+
+| 能力 | 本文出处 | 归属阶段 |
+| :--- | :--- | :--- |
+| `react.py` 拆循环/解析/预算并接管活路径 | §5.1、§5.3 | 1 |
+| `llm/` 迁入且仅编排层 import | §1.1 LLM 裁决、§5.1 | 1 |
+| 全层强制关键字参数 `trace`/`cancel`；`/stop` 接令牌；100ms 真实调度 | §2.2、§4.4、§5.3 | 2 |
+| `harness_turns` / `harness_spans` / `harness_diagnostics` Alembic | §5.4 | 2 |
+| `ParallelFacade`、`FINALIZING_STREAM`、批量 span 树校验 | §3.2.1、§3.2.2、§3.5 末段 | 3 |
+| Redis 短期态、PG 归档、pgvector 检索、Context 去掉存储 SDK | §5.2、§5.3 | 4 |
+| `long_term_lightrag.py` | §5.1、§5.2 | 不在 V1.0 首期 |
+| 斜杠 / 确认卡 / WS 事件 | §5.1 `slash.py`、§6.3 | 永不进六层 |
+
+#### 7.1.3 现状差距（§5.1 映射的阶段 0 切片）
+
+现网是扁平 `backend/api/app/agent/` + `app/llm.py`。与阶段 0 相关的缺口：
+
+- 追踪：`agent/log.py` 的 `agent_trace` 无 `trace_id`/`span_id`（应对 §5.1 升级为 contracts + publisher，本阶段只完成 contracts）。
+- 取消：`SessionHarness.abort` + `threading.Event`，无 `CancellationToken`（阶段 2 才替换）。
+- 工具步骤：`McpStep` 内联在 `react.py`，无 `ExecutionOutcome`（阶段 1 才拆 parser）。
+- 目录：不存在 `harness/`。
+
+### 7.2 细分功能点
+
+| 功能点 | 输入 | 处理 | 输出 | 验收 |
+| :--- | :--- | :--- | :--- | :--- |
+| F0-1 目录骨架 | 架构 §2 树 | 在 `backend/api/app/harness/` 建层目录与 `app.py` 装配根 | 可导入的包 | import 时不接管 WS |
+| F0-2 `TraceContext` | Turn 或父 span | `for_turn()` / `child(component)` | 同 trace、新 span、parent 指向父 | 空 id 拒绝；child 单测 |
+| F0-3 `CancellationToken` | `turn_id`、原因 | `request` 幂等置位；`raise_if_cancelled` | `TurnCancelled` | 默认预算 100ms |
+| F0-4 Tool 契约 | 模型 JSON 外形 §1.3 / §3.2 | Pydantic：`thought`≤512、`arguments` 为 object | `ToolCall`/`Batch`/`Outcome`/`ToolResult`/`ToolResultBatch` | extra=forbid；trace 不由模型填写 |
+| F0-5 `ErrorClass` | §6.2 枚举 | 与 10 大 `ErrorCode` 映射，其余返回空 | 内部码不对外 | `test_errors.py` 仍 10 码 |
+| F0-6 `normalize` Fail-fast | Outcome + Feedback span | 缺 trace / trace 不一致 / 单调用父子不匹配则抛 | `ToolResult` 或熔断异常 | tracing 三测 |
+| F0-7 MemoryPort 预埋 | §3.1 记录字段 | 只定义 Protocol | `retrieve/append/forget` 签名 | 无 Redis/SQL 实现 |
+| F0-8 静态 Schema | §1.3 JSON 示例 | 写入 `prompts/react-output.schema.json` | 无 CoT 指令 | 不改 `persona.py` |
+| F0-9 tracing 测试 | §5.3、§3.5 | pytest 纯内存 | `tests/harness/tracing/` | `pytest tests/harness/tracing` 绿 |
+
+### 7.3 怎么实现
+
+1. 物理路径用 `backend/api/app/harness/`，不是仓库根下的裸 `harness/`（否则 FastAPI `pythonpath` 找不到）。
+2. `TraceContext` 用 frozen dataclass（值对象、高频 `child()`）；`ToolCall`/`Outcome` 用 Pydantic v2（与本文头部「Pydantic v2 或 JSON Schema」对齐，`extra=forbid`）。
+3. `CancellationToken` 必须可变：内含 `asyncio.Event`，不能 frozen。
+4. `MemoryPort` 用 `typing.Protocol`，兑现 §2.1 依赖倒置。
+5. `normalize` 放 `feedback/normalizer.py`：阶段 0 需要可测的 Fail-fast，但不把 `mcp_tools.execute_short_tool` 迁走。
+6. `app/harness/__init__.py` 禁止在 import 时装配 Redis、执行门面或会话表。
+7. **隔离活路径**：不修改 `app/agent/*.py` 行为、不改 `app/llm.py`、不加 Alembic。误改再导出必须回滚。
+8. 测试必须落在 `backend/api/tests/harness/tracing/`（`pyproject.toml` 的 `testpaths=["tests"]`），不能只放架构树里的 `harness/tests/`。
+
+建议实现顺序：trace → cancellation → errors → tool_call → memory/context 类型 → normalize → tracing 测试 → ruff。
+
+### 7.4 技术难点与对策
+
+| 难点 | 为何出现（本文依据） | 对策 |
+| :--- | :--- | :--- |
+| 契约要强制透传，但现在不能改几十处函数签名 | §2.2 要求公开方法带 `trace`/`cancel`；§5.3 又禁止阶段 0 接管循环 | 只在 contracts/feedback 上使用关键字参数；`run_react` 签名留到阶段 1/2 |
+| `call_id` 被误当成 trace | §2.2：`call_id` 不得替代 trace/span；§3.2 模型不得填 trace | `ToolCall.trace_*` 允许空，由编排绑定；单测显式传执行 span |
+| Fail-fast 与「工具异常不得打崩 Agent」看似冲突 | §3.3 普通错误→ToolResult；§3.5 缺 trace 熔断 | `MissingTraceContext`/`TraceMismatch` 不是可重试 `ErrorClass`；`normalize` 直接 raise，阶段 1 再映射 `INTERNAL` |
+| 如何单测「非法空 trace」 | `TraceContext` 构造期已禁空 id | 空串放在 `ExecutionOutcome` 字段上，由 `normalize` Fail-fast；不要把 Outcome 的 Field 设成必填非空，否则测不到诊断拒绝路径 |
+| 架构树测试目录不被 pytest 收集 | §2 写 `harness/tests/tracing/`；工程 `testpaths=tests` | 以 `backend/api/tests/harness/tracing/` 为权威落点 |
+| `asyncio.Event` 与现网 `threading.Event` 并存 | §4.4 取消链；现网短工具在 `to_thread` | 阶段 0 不接线；阶段 2 再做双事件镜像。不把 100ms SLO 伪报为已实现 |
+| 内部枚举抄成第二套对外码 | §6.2 | 映射函数对其余枚举返回 `None`；守住 10 大 `ErrorCode` 测试 |
+| 空壳层写成完整实现，造成「已经迁完」的假象 | §5.3 双实现禁令 | 阶段 0 PR 必选仅 contracts + tracing 测试 + 本章；`ws.py`/`agent/harness.py` 不得引用未验收层 |
+
+### 7.5 阶段 0 验收（对应 §5.3 一句话）
+
+- `pytest tests/harness/tracing` 覆盖：child 同 trace、缺 trace 拒绝、trace mismatch、取消预算 100ms。
+- 对外 10 大 `ErrorCode` 不变。
+- `app/llm.py`、`mcp_tools.py`、`mcp_registry.py` 相对主干无行为性 diff。
+- 无新 REST/WS 字段、无 Alembic。
+
+通过后，阶段 1 只能 **使用** 本章冻结的类型名，不得再造第二套 `McpStep`/`dict` 当跨层契约。阶段 1 开工前必须完成 [`docs/AI测试与评估平台-Harness阶段1-单调用路径.md`](docs/AI测试与评估平台-Harness阶段1-单调用路径.md) 的五块分析（本文第八章为索引）。
+
+---
+
+## 第八章：阶段 1 需求分析索引（V1.5）
+
+本章不替代阶段 1 施工文档。权威展开（功能点 F1-1～F1-11、实现顺序、难点对策）见 [`docs/AI测试与评估平台-Harness阶段1-单调用路径.md`](docs/AI测试与评估平台-Harness阶段1-单调用路径.md) **V1.2**。此处只锁定与本文前七章的对应关系。
+
+### 8.1 阶段 1 需求（从 §5.3 / §5.1 / §1.1 / §3.3 抽出）
+
+| ID | 需求 | 本文出处 | 阶段 1 文档 |
+| :--- | :--- | :--- | :--- |
+| AR1-01 | 编排只解析 JSON，禁止整文件搬运后继续内联解析 | §3.2、§5.1 `react.py` 行 | §3.1 R1-1 / F1-1 |
+| AR1-02 | 只接管**单调用**路径，每轮最多 1 个工具 | §5.3 | §3.1 R1-2 / F1-3 |
+| AR1-03 | 执行只返回 `ExecutionOutcome` | §3.3 | F1-4 |
+| AR1-04 | Feedback 强制回填 ToolResult | §1.2、§3.3 | F1-7 |
+| AR1-05 | 注册表补 `parallel_safe` 缺省 false | §5.1 | F1-5 |
+| AR1-06 | 多媒体工具行为原样 | §5.1 | F1-4 |
+| AR1-07 | 长任务不在 api 进程跑完 | §4.3 | F1-10 |
+| AR1-08 | `llm/` 仅编排层与 `app.py` import；`app/llm.py` 可再导出 | §1.1、§5.1 | F1-8 |
+| AR1-09 | 产品预算 4/5/180s，不改成示例 6/60 | §3.2.2 vs Agent 说明书 | F1-9 |
+| AR1-10 | 斜杠/确认卡/WS/`harness.py` 总控不迁 | §5.1、§6.3 | §3.3 / R1-10 |
+| AR1-11 | 无双实现 | §5.3 | F1-11 |
+
+### 8.2 阶段 1 不做
+
+强制透传与三表（阶段 2）；并行、`merge_batch` 与 `FINALIZING_STREAM`（阶段 3）；MemoryPort 接 Redis/pgvector（阶段 4）。Parser 必须先走阶段 0 Schema 再绑定 trace，不得 `ToolCall.model_validate` 直接吃模型 JSON。
+
+### 8.3 开工门禁
+
+阶段 0 第七章验收通过后，才允许开 `feat/harness-single-call`。未在阶段 1 文档勾完五块分析与验收清单，不得把 `react.py` 热路径合入 `main`。阶段 2–4 同样：先完成对应施工文档五块分析，再开分支。
+
+---
+
+## 第九章：阶段 2 需求分析索引（V1.6）
+
+权威展开见 [`docs/AI测试与评估平台-Harness阶段2-链路追踪与取消.md`](docs/AI测试与评估平台-Harness阶段2-链路追踪与取消.md) V1.1。
+
+| ID | 需求 | 本文出处 | 阶段 2 文档 |
+| :--- | :--- | :--- | :--- |
+| AR2-01 | 公开方法强制 `trace`/`cancel` | §2.2、§5.3 | R2-1 / R2-2 |
+| AR2-02 | `/stop` 接同一 CancellationToken；本地调度 ≤100ms | §3.2.2、§4.4 | R2-3 / R2-4 |
+| AR2-03 | 取消后不再编上下文、不再调模型；未完成调用 → cancelled Outcome | §3.2.2 | R2-5 |
+| AR2-04 | Alembic 三表在 PG，不进 Redis | §5.4 | R2-6 / R2-7 |
+| AR2-05 | 预算 env 回显；运行默认仍是产品 4/5/180s | §3.2.2 vs Agent 说明书 | R2-8 |
+
+阶段 2 不做：`merge_batch`、并行、MemoryPort 接存储、新 WS 字段。asyncio.Event 与 threading.Event 必须镜像。
+
+---
+
+## 第十章：阶段 3 需求分析索引（V1.6）
+
+权威展开见 [`docs/AI测试与评估平台-Harness阶段3-并行与流式收尾.md`](docs/AI测试与评估平台-Harness阶段3-并行与流式收尾.md) V1.1。
+
+| ID | 需求 | 本文出处 | 阶段 3 文档 |
+| :--- | :--- | :--- | :--- |
+| AR3-01 | `tool_calls[]` + ParallelFacade；`parallel_safe` 缺省 false | §3.2.1 | R3-1 / R3-2 |
+| AR3-02 | gather 局部失败保留成功；observation 按 batch_index | §3.2.1 | R3-3 / R3-5 |
+| AR3-03 | 正确批次 span 树 + `merge_batch` Fail-fast | §3.5 末段 | R3-6 |
+| AR3-04 | `done=true` → FINALIZING_STREAM 再 FINISHED | §3.2.2 | R3-7 |
+| AR3-05 | 默认串行；四项多媒体写工具永不并行 | §5.1、Agent §5.6 | R3-9 / R3-10 |
+
+阶段 3 不做：Redis/pgvector、把内部 `call_id` 加成对外 WS 字段（须先改 API.md）。禁止再实现阶段 0 已否决的伪造 parent `merge_batch`。
+
+---
+
+## 第十一章：阶段 4 需求分析索引（V1.6）
+
+权威展开见 [`docs/AI测试与评估平台-Harness阶段4-记忆层接入.md`](docs/AI测试与评估平台-Harness阶段4-记忆层接入.md) V1.1。
+
+| ID | 需求 | 本文出处 | 阶段 4 文档 |
+| :--- | :--- | :--- | :--- |
+| AR4-01 | Context 只经 MemoryPort，不 import 存储 SDK | §1.1、§2.1 | R4-1 |
+| AR4-02 | Redis 短期态（Key 含 trace）+ PG 归档 + pgvector 知识 | §5.2、§3.5 | R4-4 / R4-5 / R4-6 |
+| AR4-03 | 无 source_id 不得当高可信事实；forget 后摘要失效 | §3.1 | R4-3 / R4-7 |
+| AR4-04 | ContextMeter REST 字段冻结 | API.md | R4-10 |
+| AR4-05 | 禁止 long_term_lightrag.py；rag 不得 mock succeeded | §5.1 | R4-12 |
+
+阶段 4 不做：LightRAG、把 `/stop` registry 迁 Redis、改确认卡默认值。
+
+---
+
+---
+
 ## 架构逻辑自检清单
 
 - [x] 明确为 Harness 定义了独立于大模型的六层运行时，模型不持有控制逻辑。
@@ -818,11 +1013,20 @@ Agent 开发文档（`docs/AI测试与评估平台-Agent开发文档.md`）定�
 - [x] 预算与调度默认值是否有权威配置表？是；`§3.2.2` 固化 8 项配置键与默认值。
 - [x] trace/诊断/回合状态持久化是否定义？是；`§5.4` 三张 PG 表经 Alembic 迁移，诊断保留 30 天。
 - [x] 批量合并场景的 trace 父子校验是否有明确规则？是；`§3.5` 末段定义批次 span 树与逐项校验、失败熔断。
+- [x] 阶段 0 是否在写代码前完成需求分析、功能点、实现路径、难点对策？是；第七章从本文前六章抽出，并划清阶段 1–4 不得提前做的范围。
+- [x] 阶段 1 是否具备同样五块分析？是；第八章为索引，展开见阶段 1 施工文档 V1.2（需求 R1-1～14、功能点、实现路径、难点对策、验收）。
+- [x] 阶段 2–4 是否具备同样五块分析？是；第九至十一章为索引，展开见各阶段施工文档 V1.1。
 
 ## 本次文档变更范围
 
-本次仅对目标架构文档做 V1.2 定向修订，不改变现有 API、数据库、前端或 Agent 运行代码。
+V1.6 增补阶段 2/3/4 需求分析索引（第九至十一章）；五块分析展开以各阶段施工文档为准。
 
 | 文件 | 作用 |
 | :--- | :--- |
-| `docs/AI测试与评估平台-Harness六层ReAct核心架构设计.md` | V1.2：裁决 LLM 客户端归属并新增 `llm/` 模块；新增第五章迁移映射（`app/agent/` 模块映射、首期 PG（含 pgvector）+ Redis / LightRAG 暂不接入的决策与部署红线、分阶段计划、持久化契约）与第六章安全层契约（security 展开、错误码对齐、文档裁决）；补权威预算默认值表；修正两图矛盾、时序图错误分支与批量 trace 校验说明。 |
+| `docs/AI测试与评估平台-Harness六层ReAct核心架构设计.md` | V1.6：第九至十一章（阶段 2–4 需求索引） |
+| `docs/AI测试与评估平台-Harness阶段0-契约骨架.md` | 阶段 0 五块分析 + 代码落地 |
+| `docs/AI测试与评估平台-Harness阶段1-单调用路径.md` | 阶段 1 五块分析 V1.2 |
+| `docs/AI测试与评估平台-Harness阶段2-链路追踪与取消.md` | 阶段 2 五块分析 V1.1 |
+| `docs/AI测试与评估平台-Harness阶段3-并行与流式收尾.md` | 阶段 3 五块分析 V1.1 |
+| `docs/AI测试与评估平台-Harness阶段4-记忆层接入.md` | 阶段 4 五块分析 V1.1 |
+| `docs/AI测试与评估平台-Harness分阶段实施总册.md` | 五阶段索引 |
