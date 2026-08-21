@@ -144,13 +144,88 @@ def read_profile_env(profile_id: str) -> ProfileEnvValues:
         base_url=values.get(keys["base_url"]) or None,
         model=values.get(keys["model"]) or None,
         api_key=values.get(keys["api_key"]) or None,
-        embedding_base_url=values.get(keys["embedding_base_url"]) or None,
-        embedding_model=values.get(keys["embedding_model"]) or None,
-        embedding_api_key=values.get(keys["embedding_api_key"]) or None,
-        reranker_base_url=values.get(keys["reranker_base_url"]) or None,
-        reranker_model=values.get(keys["reranker_model"]) or None,
-        reranker_api_key=values.get(keys["reranker_api_key"]) or None,
+        embedding_base_url=values.get(keys["embedding_base_url"]) or values.get("AI_EMBEDDING_BASE_URL") or None,
+        embedding_model=values.get(keys["embedding_model"]) or values.get("AI_EMBEDDING_MODEL") or None,
+        embedding_api_key=values.get(keys["embedding_api_key"]) or values.get("AI_EMBEDDING_API_KEY") or None,
+        reranker_base_url=values.get(keys["reranker_base_url"]) or values.get("AI_RERANKER_BASE_URL") or None,
+        reranker_model=values.get(keys["reranker_model"]) or values.get("AI_RERANKER_MODEL") or None,
+        reranker_api_key=values.get(keys["reranker_api_key"]) or values.get("AI_RERANKER_API_KEY") or None,
     )
+
+
+@dataclass(frozen=True)
+class GlobalRagEnvValues:
+    """系统全局唯一的 Embedding 与 Reranker 模型环境参数。"""
+
+    embedding_base_url: str | None
+    embedding_model: str | None
+    embedding_api_key: str | None
+    reranker_base_url: str | None
+    reranker_model: str | None
+    reranker_api_key: str | None
+
+
+def read_global_rag_env() -> GlobalRagEnvValues:
+    """读取系统全局唯一的 Embedding 与 Reranker 模型环境参数。"""
+    snapshot = _read_snapshot(env_path())
+    values = _parse_lines(snapshot.content.splitlines())
+    return GlobalRagEnvValues(
+        embedding_base_url=values.get("AI_EMBEDDING_BASE_URL") or None,
+        embedding_model=values.get("AI_EMBEDDING_MODEL") or None,
+        embedding_api_key=values.get("AI_EMBEDDING_API_KEY") or None,
+        reranker_base_url=values.get("AI_RERANKER_BASE_URL") or None,
+        reranker_model=values.get("AI_RERANKER_MODEL") or None,
+        reranker_api_key=values.get("AI_RERANKER_API_KEY") or None,
+    )
+
+
+def write_global_rag_env(
+    *,
+    embedding_base_url: str | None = None,
+    embedding_model: str | None = None,
+    embedding_api_key: str | None = None,
+    reranker_base_url: str | None = None,
+    reranker_model: str | None = None,
+    reranker_api_key: str | None = None,
+) -> ProfileEnvSnapshot:
+    """安全保存系统全局唯一的 Embedding 与 Reranker 模型环境参数。"""
+    with _ENV_WRITE_LOCK:
+        path = env_path()
+        snapshot = _read_snapshot(path)
+        lines = snapshot.content.splitlines()
+        updates: dict[str, str] = {}
+        if embedding_base_url is not None:
+            updates["AI_EMBEDDING_BASE_URL"] = str(embedding_base_url).rstrip("/")
+        if embedding_model is not None:
+            updates["AI_EMBEDDING_MODEL"] = str(embedding_model).strip()
+        if embedding_api_key is not None and str(embedding_api_key).strip():
+            updates["AI_EMBEDDING_API_KEY"] = str(embedding_api_key).strip()
+        if reranker_base_url is not None:
+            updates["AI_RERANKER_BASE_URL"] = str(reranker_base_url).rstrip("/")
+        if reranker_model is not None:
+            updates["AI_RERANKER_MODEL"] = str(reranker_model).strip()
+        if reranker_api_key is not None and str(reranker_api_key).strip():
+            updates["AI_RERANKER_API_KEY"] = str(reranker_api_key).strip()
+
+        if not updates:
+            return snapshot
+
+        rendered: list[str] = []
+        seen: set[str] = set()
+        for line in lines:
+            stripped = line.strip()
+            key = stripped.split("=", 1)[0].strip() if "=" in stripped else ""
+            if key in updates:
+                rendered.append(f"{key}={json.dumps(updates[key], ensure_ascii=False)}")
+                seen.add(key)
+            else:
+                rendered.append(line)
+        for key, value in updates.items():
+            if key not in seen:
+                rendered.append(f"{key}={json.dumps(value, ensure_ascii=False)}")
+        content = "\n".join(rendered).rstrip("\n") + "\n"
+        _write_content(path, content)
+        return snapshot
 
 
 def read_global_llm_env() -> GlobalLlmEnvValues:

@@ -214,6 +214,17 @@ export interface DispatchConfig {
   max_running_tasks: number
 }
 
+export interface RagModelsConfig {
+  embedding_base_url: string
+  embedding_model: string
+  embedding_api_key?: string
+  has_embedding_api_key?: boolean
+  reranker_base_url: string
+  reranker_model: string
+  reranker_api_key?: string
+  has_reranker_api_key?: boolean
+}
+
 // MCP 内置短工具（API V1.3 §3.6.1，只读）
 export interface McpTool {
   name: string

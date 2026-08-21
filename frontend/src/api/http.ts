@@ -30,6 +30,7 @@ import {
   type DispatchEventPage,
   type DispatchConfig,
   type McpTool,
+  type RagModelsConfig,
   type AgentSession,
   type SessionHistory,
   type SessionVisibility,
@@ -1027,6 +1028,14 @@ export const api = {
         return
       }
       await http.delete(`/api/admin/stress/whitelist/${id}`)
+    },
+    async getRagModels(): Promise<RagModelsConfig> {
+      const { data } = await http.get('/api/admin/rag-models')
+      return data
+    },
+    async updateRagModels(payload: Partial<RagModelsConfig>): Promise<RagModelsConfig> {
+      const { data } = await http.put('/api/admin/rag-models', payload)
+      return data
     },
   },
 

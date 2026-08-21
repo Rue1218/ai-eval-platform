@@ -83,12 +83,12 @@ def read_profile_env(profile_id: str) -> ProfileEnvValues:
         base_url=values.get(keys["base_url"]) or None,
         model=values.get(keys["model"]) or None,
         api_key=values.get(keys["api_key"]) or None,
-        embedding_base_url=values.get(keys["embedding_base_url"]) or None,
-        embedding_model=values.get(keys["embedding_model"]) or None,
-        embedding_api_key=values.get(keys["embedding_api_key"]) or None,
-        reranker_base_url=values.get(keys["reranker_base_url"]) or None,
-        reranker_model=values.get(keys["reranker_model"]) or None,
-        reranker_api_key=values.get(keys["reranker_api_key"]) or None,
+        embedding_base_url=values.get(keys["embedding_base_url"]) or values.get("AI_EMBEDDING_BASE_URL") or None,
+        embedding_model=values.get(keys["embedding_model"]) or values.get("AI_EMBEDDING_MODEL") or None,
+        embedding_api_key=values.get(keys["embedding_api_key"]) or values.get("AI_EMBEDDING_API_KEY") or None,
+        reranker_base_url=values.get(keys["reranker_base_url"]) or values.get("AI_RERANKER_BASE_URL") or None,
+        reranker_model=values.get(keys["reranker_model"]) or values.get("AI_RERANKER_MODEL") or None,
+        reranker_api_key=values.get(keys["reranker_api_key"]) or values.get("AI_RERANKER_API_KEY") or None,
     )
 
 

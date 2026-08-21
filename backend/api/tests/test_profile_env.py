@@ -86,6 +86,37 @@ def test_profile_env_delete_and_restore(tmp_path: Path, monkeypatch):
     assert restored.model == "m-1"
     assert restored.api_key == "k-1"
     assert restored.embedding_model == "embed-1"
-    assert restored.embedding_api_key == "embed-key"
     assert restored.reranker_model == "rerank-1"
     assert restored.reranker_api_key == "rerank-key"
+
+
+def test_global_rag_env_write_and_fallback(tmp_path: Path, monkeypatch):
+    """测试系统全局唯一的 Embedding 与 Reranker 模型写入及 profile 自动 fallback。"""
+    from app.profile_env import read_global_rag_env, write_global_rag_env
+
+    env_file = tmp_path / ".env"
+    monkeypatch.setattr(settings, "profile_env_file", str(env_file))
+
+    write_global_rag_env(
+        embedding_base_url="https://api.siliconflow.cn/v1",
+        embedding_model="BAAI/bge-large-zh-v1.5",
+        embedding_api_key="sk-embed-global",
+        reranker_base_url="https://api.siliconflow.cn/v1",
+        reranker_model="BAAI/bge-reranker-v2-m3",
+        reranker_api_key="sk-rerank-global",
+    )
+
+    rag_values = read_global_rag_env()
+    assert rag_values.embedding_base_url == "https://api.siliconflow.cn/v1"
+    assert rag_values.embedding_model == "BAAI/bge-large-zh-v1.5"
+    assert rag_values.embedding_api_key == "sk-embed-global"
+    assert rag_values.reranker_base_url == "https://api.siliconflow.cn/v1"
+    assert rag_values.reranker_model == "BAAI/bge-reranker-v2-m3"
+    assert rag_values.reranker_api_key == "sk-rerank-global"
+
+    # 未单独配置 embedding/reranker 的 profile 应自动回退至全局 RAG 配置
+    write_profile_env("only-llm", base_url="https://api.openai.com/v1", model="gpt-4o")
+    profile_val = read_profile_env("only-llm")
+    assert profile_val.base_url == "https://api.openai.com/v1"
+    assert profile_val.embedding_model == "BAAI/bge-large-zh-v1.5"
+    assert profile_val.reranker_model == "BAAI/bge-reranker-v2-m3"

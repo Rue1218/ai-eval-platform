@@ -12,11 +12,46 @@ from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
 from ..models import AuditLog, ProtocolProfile, Setting, User
-from ..profile_env import ProfileEnvSnapshot, restore_snapshot, write_profile_env
+from ..profile_env import (
+    ProfileEnvSnapshot,
+    read_global_rag_env,
+    restore_snapshot,
+    write_global_rag_env,
+    write_profile_env,
+)
+from ..schemas import ApiModel
+from pydantic import Field, model_validator
 from .profiles import _profile_connection
 from .users import _parse_bound
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+
+
+class RagModelsIn(ApiModel):
+    """全局唯一的 Embedding 与 Reranker 模型配置输入。"""
+
+    embedding_base_url: str | None = Field(default=None, max_length=1024)
+    embedding_model: str | None = Field(default=None, max_length=256)
+    embedding_api_key: str | None = Field(default=None, max_length=4096)
+    reranker_base_url: str | None = Field(default=None, max_length=1024)
+    reranker_model: str | None = Field(default=None, max_length=256)
+    reranker_api_key: str | None = Field(default=None, max_length=4096)
+
+    @model_validator(mode="before")
+    @classmethod
+    def clean_empty(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            for k in (
+                "embedding_base_url",
+                "embedding_model",
+                "embedding_api_key",
+                "reranker_base_url",
+                "reranker_model",
+                "reranker_api_key",
+            ):
+                if k in data and isinstance(data[k], str) and not data[k].strip():
+                    data[k] = None
+        return data
 
 DEFAULT_SETTINGS: dict[str, Any] = {
     "agent_profile_id": None,
@@ -131,6 +166,63 @@ def put_settings(
             restore_snapshot(env_snapshot)
         raise AppError(ErrorCode.INTERNAL, "运行时配置写入失败") from exc
     return _load(db)
+
+
+@router.get("/rag-models")
+def get_rag_models(
+    user: User = Depends(get_current_user),
+):
+    """读取全局唯一的 Embedding 与 Reranker 模型配置（绝不回显密钥）。"""
+    values = read_global_rag_env()
+    return {
+        "embedding_base_url": values.embedding_base_url or "",
+        "embedding_model": values.embedding_model or "",
+        "has_embedding_api_key": bool(values.embedding_api_key),
+        "reranker_base_url": values.reranker_base_url or "",
+        "reranker_model": values.reranker_model or "",
+        "has_reranker_api_key": bool(values.reranker_api_key),
+    }
+
+
+@router.put("/rag-models")
+def put_rag_models(
+    body: RagModelsIn,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """更新系统全局唯一的 Embedding 与 Reranker 模型配置。"""
+    env_snapshot: ProfileEnvSnapshot | None = None
+    try:
+        env_snapshot = write_global_rag_env(
+            embedding_base_url=body.embedding_base_url,
+            embedding_model=body.embedding_model,
+            embedding_api_key=body.embedding_api_key,
+            reranker_base_url=body.reranker_base_url,
+            reranker_model=body.reranker_model,
+            reranker_api_key=body.reranker_api_key,
+        )
+        db.add(
+            AuditLog(
+                user_id=user.id,
+                action="rag_models_update",
+                target_type="rag_models",
+                detail={
+                    "embedding_model": body.embedding_model,
+                    "reranker_model": body.reranker_model,
+                    "has_embedding_api_key": bool(body.embedding_api_key),
+                    "has_reranker_api_key": bool(body.reranker_api_key),
+                },
+                ip=request.client.host if request.client else None,
+            )
+        )
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        if env_snapshot:
+            restore_snapshot(env_snapshot)
+        raise AppError(ErrorCode.INTERNAL, "全局 RAG 模型配置保存失败") from exc
+    return get_rag_models(user=user)
 
 
 def _normalize_whitelist(items: list[Any]) -> list[dict[str, Any]]:

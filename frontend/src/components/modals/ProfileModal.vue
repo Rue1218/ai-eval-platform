@@ -5,14 +5,100 @@
     :trap-focus="false"
     :auto-focus="false"
     :title="isEdit ? '编辑模型协议档' : '新增模型协议档'"
-    style="width: 660px; max-width: 95vw"
+    style="width: 620px; max-width: 95vw"
     @update:show="$emit('update:show', $event)"
   >
     <div class="profile-form">
-      <!-- 基础公共配置（名称与用途） -->
       <div class="field">
         <label class="field-label">协议档名称 <span class="req">*</span></label>
         <n-input v-model:value="form.name" placeholder="例如：Xiaomi Mimo v2.5 或 OpenAI GPT-4o" />
+      </div>
+
+      <!-- 供应商快捷分类预设选择 -->
+      <div class="field">
+        <label class="field-label">主流供应商快速填充</label>
+        <n-select
+          v-model:value="selectedVendor"
+          :options="vendorOptions"
+          placeholder="选择供应商可一键填入典型 Base URL 与协议"
+          @update:value="handleSelectVendor"
+        />
+      </div>
+
+      <div class="form-row">
+        <div class="field">
+          <label class="field-label">协议类型 <span class="req">*</span></label>
+          <n-select v-model:value="form.protocol" :options="protocolOptions" />
+        </div>
+        <div class="field">
+          <label class="field-label">
+            模型标识名 <span class="req">*</span>
+          </label>
+          <div class="row" style="gap: 6px">
+            <n-input
+              v-model:value="form.model"
+              class="grow"
+              placeholder="例如：mimo-v2.5-pro / gpt-4o"
+            />
+            <n-button
+              type="info"
+              secondary
+              size="small"
+              :loading="fetchingModels"
+              style="flex: 0 0 auto"
+              title="根据当前 Base URL 和 API Key 从服务端点拉取所有可用模型 ID"
+              @click="handleFetchRemoteModels"
+            >
+              🔍 获取模型 (/models)
+            </n-button>
+          </div>
+        </div>
+      </div>
+
+      <div class="field">
+        <label class="field-label">Base URL <span class="req">*</span></label>
+        <n-input
+          v-model:value="form.base_url"
+          placeholder="https://api.openai.com/v1 或 http://localhost:11434/v1"
+        />
+      </div>
+
+      <div class="field">
+        <div class="row-between">
+          <label class="field-label">
+            API Key
+            <span style="font-size: 11.5px; color: var(--text-tertiary); margin-left: 6px">(平台受控加密存储不回显；编辑时留空保留原密钥)</span>
+          </label>
+          <span v-if="props.profile?.has_api_key" class="key-status-badge ok">
+            ● 已配置密钥
+          </span>
+          <span v-else class="key-status-badge none">
+            ○ 未配置密钥
+          </span>
+        </div>
+        <n-input
+          v-model:value="form.api_key"
+          type="password"
+          show-password-on="click"
+          placeholder="可选；私有端点或免密模型可留空"
+        />
+      </div>
+
+      <div v-if="form.protocol === 'anthropic_messages'" class="field">
+        <label class="field-label">Anthropic Version Header</label>
+        <n-input v-model:value="form.anthropic_version" placeholder="2023-06-01 (默认)" />
+      </div>
+
+      <div class="field">
+        <label class="field-label">上下文窗口大小 (Context Window)</label>
+        <n-radio-group v-model:value="form.context_window" name="context_window_group" size="small">
+          <n-space :size="8">
+            <n-radio-button :value="200000">200k (默认)</n-radio-button>
+            <n-radio-button :value="256000">256k</n-radio-button>
+            <n-radio-button :value="500000">500k</n-radio-button>
+            <n-radio-button :value="1000000">1M</n-radio-button>
+          </n-space>
+        </n-radio-group>
       </div>
 
       <div class="field">
@@ -25,202 +111,6 @@
           </n-space>
         </n-checkbox-group>
       </div>
-
-      <!-- 三大独立配置 Tab 入口：主对话模型、向量模型、重排模型 -->
-      <n-tabs v-model:value="activeTab" type="segment" animated size="small" class="profile-tabs">
-        <!-- 1. 主对话模型 (Chat / Completions) -->
-        <n-tab-pane name="llm" tab="💬 主对话模型 (LLM)">
-          <div class="tab-pane-content">
-            <!-- 供应商快捷分类预设选择 -->
-            <div class="field">
-              <label class="field-label">主流供应商快速填充</label>
-              <n-select
-                v-model:value="selectedVendor"
-                :options="vendorOptions"
-                placeholder="选择供应商可一键填入典型 Base URL 与协议"
-                @update:value="handleSelectVendor"
-              />
-            </div>
-
-            <div class="form-row">
-              <div class="field">
-                <label class="field-label">协议类型 <span class="req">*</span></label>
-                <n-select v-model:value="form.protocol" :options="protocolOptions" />
-              </div>
-              <div class="field">
-                <label class="field-label">
-                  模型标识名 <span class="req">*</span>
-                </label>
-                <div class="row" style="gap: 6px">
-                  <n-input
-                    v-model:value="form.model"
-                    class="grow"
-                    placeholder="例如：mimo-v2.5-pro / gpt-4o"
-                  />
-                  <n-button
-                    type="info"
-                    secondary
-                    size="small"
-                    :loading="fetchingModels"
-                    style="flex: 0 0 auto"
-                    title="根据当前 Base URL 和 API Key 从服务端点拉取所有可用模型 ID"
-                    @click="handleFetchRemoteModels"
-                  >
-                    🔍 获取模型 (/models)
-                  </n-button>
-                </div>
-              </div>
-            </div>
-
-            <div class="field">
-              <label class="field-label">Base URL <span class="req">*</span></label>
-              <n-input
-                v-model:value="form.base_url"
-                placeholder="https://api.openai.com/v1 或 https://token-plan-cn.xiaomimimo.com"
-              />
-            </div>
-
-            <div class="field">
-              <label class="field-label">
-                API Key
-                <span v-if="!isEdit" class="req">*</span>
-                <span style="font-size: 11px; color: var(--text-tertiary); margin-left: 6px">(平台只写不回显，留空表示不修改)</span>
-              </label>
-              <n-input
-                v-model:value="form.api_key"
-                type="password"
-                show-password-on="click"
-                placeholder="输入 API Key"
-              />
-            </div>
-
-            <div v-if="form.protocol === 'anthropic_messages'" class="field">
-              <label class="field-label">Anthropic Version Header</label>
-              <n-input v-model:value="form.anthropic_version" placeholder="2023-06-01 (默认)" />
-            </div>
-
-            <div class="field">
-              <label class="field-label">上下文窗口大小 (Context Window)</label>
-              <n-radio-group v-model:value="form.context_window" name="context_window_group" size="small">
-                <n-space :size="8">
-                  <n-radio-button :value="200000">200k (默认)</n-radio-button>
-                  <n-radio-button :value="256000">256k</n-radio-button>
-                  <n-radio-button :value="500000">500k</n-radio-button>
-                  <n-radio-button :value="1000000">1M</n-radio-button>
-                </n-space>
-              </n-radio-group>
-            </div>
-          </div>
-        </n-tab-pane>
-
-        <!-- 2. 向量模型 (Embedding) -->
-        <n-tab-pane name="embedding" tab="🔤 向量模型 (Embedding)">
-          <div class="tab-pane-content">
-            <div class="tab-intro-card">
-              <div class="tab-intro-icon">🔤</div>
-              <div class="tab-intro-text">
-                <b>Embedding 独立端点配置（可选）</b>
-                <span>用于 RAG 知识库切块向量化、语义特征提取与向量相似度检索。支持配置独立的供应商端点、模型名与 API Key。</span>
-              </div>
-            </div>
-
-            <div class="field">
-              <label class="field-label">常用 Embedding 预设填充</label>
-              <n-select
-                :options="embeddingPresetOptions"
-                placeholder="快速选择常见 Embedding 厂商预设"
-                @update:value="handleSelectEmbeddingPreset"
-              />
-            </div>
-
-            <div class="form-row">
-              <div class="field">
-                <label class="field-label">Embedding Base URL</label>
-                <n-input v-model:value="form.embedding_base_url" placeholder="例如：https://api.openai.com/v1" />
-              </div>
-              <div class="field">
-                <label class="field-label">Embedding 模型标识</label>
-                <n-input v-model:value="form.embedding_model" placeholder="例如：text-embedding-3-large" />
-              </div>
-            </div>
-
-            <div class="field">
-              <div class="row-between">
-                <label class="field-label">
-                  Embedding API Key
-                  <span style="font-size: 11px; color: var(--text-tertiary); margin-left: 6px">(只写不回显，留空表示不修改)</span>
-                </label>
-                <span v-if="props.profile?.has_embedding_api_key" class="key-status-badge ok">
-                  ● 已配置独立密钥
-                </span>
-                <span v-else class="key-status-badge none">
-                  ○ 未配置独立密钥
-                </span>
-              </div>
-              <n-input
-                v-model:value="form.embedding_api_key"
-                type="password"
-                show-password-on="click"
-                placeholder="可选；与主模型 Key 独立隔离写入受控环境文件"
-              />
-            </div>
-          </div>
-        </n-tab-pane>
-
-        <!-- 3. 重排模型 (Reranker) -->
-        <n-tab-pane name="reranker" tab="🎯 重排模型 (Reranker)">
-          <div class="tab-pane-content">
-            <div class="tab-intro-card">
-              <div class="tab-intro-icon">🎯</div>
-              <div class="tab-intro-text">
-                <b>Reranker 独立端点配置（可选）</b>
-                <span>用于 RAG 检索候选切块的交叉编码打分与二次精排，显著提升 Top-K 上下文召回质量。</span>
-              </div>
-            </div>
-
-            <div class="field">
-              <label class="field-label">常用 Reranker 预设填充</label>
-              <n-select
-                :options="rerankerPresetOptions"
-                placeholder="快速选择常见 Reranker 厂商预设"
-                @update:value="handleSelectRerankerPreset"
-              />
-            </div>
-
-            <div class="form-row">
-              <div class="field">
-                <label class="field-label">Reranker Base URL</label>
-                <n-input v-model:value="form.reranker_base_url" placeholder="例如：https://api.siliconflow.cn/v1" />
-              </div>
-              <div class="field">
-                <label class="field-label">Reranker 模型标识</label>
-                <n-input v-model:value="form.reranker_model" placeholder="例如：BAAI/bge-reranker-v2-m3" />
-              </div>
-            </div>
-
-            <div class="field">
-              <div class="row-between">
-                <label class="field-label">
-                  Reranker API Key
-                  <span style="font-size: 11px; color: var(--text-tertiary); margin-left: 6px">(只写不回显，留空表示不修改)</span>
-                </label>
-                <span v-if="props.profile?.has_reranker_api_key" class="key-status-badge ok">
-                  ● 已配置独立密钥
-                </span>
-                <span v-else class="key-status-badge none">
-                  ○ 未配置独立密钥
-                </span>
-              </div>
-              <n-input
-                v-model:value="form.reranker_api_key"
-                type="password"
-                show-password-on="click"
-                placeholder="可选；与主模型 Key 独立隔离写入受控环境文件"
-              />
-            </div>
-          </div>
-        </n-tab-pane>
-      </n-tabs>
     </div>
 
     <template #footer>
@@ -233,7 +123,6 @@
     </template>
   </n-modal>
 
-  <!-- 远程拉取模型选择弹窗 -->
   <FetchModelsModal
     v-model:show="showFetchModal"
     :models="fetchedModelList"
@@ -246,8 +135,6 @@
 import { ref, computed, watch } from 'vue'
 import {
   useMessage,
-  NTabs,
-  NTabPane,
   NRadioGroup,
   NRadioButton,
   NSpace,
@@ -271,7 +158,6 @@ const props = defineProps<{
     protocol?: ProtocolType
     name?: string
   } | null
-  initialTab?: 'llm' | 'embedding' | 'reranker'
 }>()
 
 const emit = defineEmits<{
@@ -285,7 +171,6 @@ const fetchingModels = ref(false)
 const showFetchModal = ref(false)
 const fetchedModelList = ref<Array<{ id: string; name: string; owned_by?: string }>>([])
 const selectedVendor = ref<string | null>(null)
-const activeTab = ref<'llm' | 'embedding' | 'reranker'>('llm')
 
 const isEdit = computed(() => !!props.profile?.id)
 
@@ -295,12 +180,6 @@ const form = ref<{
   base_url: string
   model: string
   api_key: string
-  embedding_base_url: string
-  embedding_model: string
-  embedding_api_key: string
-  reranker_base_url: string
-  reranker_model: string
-  reranker_api_key: string
   anthropic_version?: string
   usages: ProfileUsage[]
   context_window: number
@@ -310,12 +189,6 @@ const form = ref<{
   base_url: 'https://api.openai.com/v1',
   model: '',
   api_key: '',
-  embedding_base_url: '',
-  embedding_model: '',
-  embedding_api_key: '',
-  reranker_base_url: '',
-  reranker_model: '',
-  reranker_api_key: '',
   anthropic_version: '2023-06-01',
   usages: ['target'],
   context_window: 200000,
@@ -327,7 +200,6 @@ const protocolOptions = [
   { label: 'Anthropic Messages (/messages)', value: 'anthropic_messages' },
 ]
 
-/** 主流供应商预设选项 */
 const vendorOptions = [
   { label: 'NVIDIA NIM (英伟达推理云)', value: 'nvidia' },
   { label: 'Xiaomi Mimo (小米 Mimo 端点)', value: 'mimo' },
@@ -343,7 +215,7 @@ const vendorOptions = [
   { label: 'Ollama (本地私有端点)', value: 'ollama' },
   { label: 'Zhipu GLM (智谱清言)', value: 'zhipu' },
   { label: 'Moonshot AI (月之暗面 Kimi)', value: 'moonshot' },
-  { label: 'Mistral AI', value: 'mistral' },
+  { label: 'Mistral AI (Mistral AI)', value: 'mistral' },
   { label: 'Together AI', value: 'together' },
   { label: '01.AI (零一万物)', value: 'lingyi' },
   { label: 'Baichuan (百川智能)', value: 'baichuan' },
@@ -361,7 +233,7 @@ const VENDOR_MAP: Record<string, { name: string; base_url: string; protocol: Pro
   qianfan: { name: 'Baidu Qianfan', base_url: 'https://qianfan.baidubce.com/v2', protocol: 'openai_chat', model: 'ernie-4.0-8k-latest' },
   hunyuan: { name: 'Tencent Hunyuan', base_url: 'https://api.hunyuan.cloud.tencent.com/v1', protocol: 'openai_chat', model: 'hunyuan-standard' },
   groq: { name: 'Groq', base_url: 'https://api.groq.com/openai/v1', protocol: 'openai_chat', model: 'llama-3.3-70b-versatile' },
-  ollama: { name: 'Ollama Local', base_url: 'http://localhost:11434', protocol: 'openai_chat', model: 'llama3:latest' },
+  ollama: { name: 'Ollama Local', base_url: 'http://localhost:11434/v1', protocol: 'openai_chat', model: 'llama3:latest' },
   zhipu: { name: 'Zhipu GLM', base_url: 'https://open.bigmodel.cn/api/paas/v4', protocol: 'openai_chat', model: 'glm-4-plus' },
   moonshot: { name: 'Moonshot AI', base_url: 'https://api.moonshot.cn/v1', protocol: 'openai_chat', model: 'moonshot-v1-8k' },
   mistral: { name: 'Mistral AI', base_url: 'https://api.mistral.ai/v1', protocol: 'openai_chat', model: 'mistral-large-latest' },
@@ -382,105 +254,41 @@ function handleSelectVendor(val: string | null) {
   message.info(`已快速填充 ${item.name} 厂商端点与协议配置`)
 }
 
-/** Embedding 常用预设 */
-const embeddingPresetOptions = [
-  { label: 'OpenAI (text-embedding-3-small)', value: 'openai-small' },
-  { label: 'OpenAI (text-embedding-3-large)', value: 'openai-large' },
-  { label: 'SiliconFlow (BAAI/bge-large-zh-v1.5)', value: 'sf-bge-large' },
-  { label: 'SiliconFlow (BAAI/bge-m3)', value: 'sf-bge-m3' },
-  { label: 'Alibaba DashScope (text-embedding-v3)', value: 'dashscope-v3' },
-  { label: 'Zhipu AI (embedding-3)', value: 'zhipu-3' },
-  { label: 'Ollama Local (nomic-embed-text)', value: 'ollama-nomic' },
-]
-
-const EMBEDDING_PRESET_MAP: Record<string, { base_url: string; model: string }> = {
-  'openai-small': { base_url: 'https://api.openai.com/v1', model: 'text-embedding-3-small' },
-  'openai-large': { base_url: 'https://api.openai.com/v1', model: 'text-embedding-3-large' },
-  'sf-bge-large': { base_url: 'https://api.siliconflow.cn/v1', model: 'BAAI/bge-large-zh-v1.5' },
-  'sf-bge-m3': { base_url: 'https://api.siliconflow.cn/v1', model: 'BAAI/bge-m3' },
-  'dashscope-v3': { base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'text-embedding-v3' },
-  'zhipu-3': { base_url: 'https://open.bigmodel.cn/api/paas/v4', model: 'embedding-3' },
-  'ollama-nomic': { base_url: 'http://localhost:11434/v1', model: 'nomic-embed-text' },
-}
-
-function handleSelectEmbeddingPreset(key: string) {
-  const item = EMBEDDING_PRESET_MAP[key]
-  if (!item) return
-  form.value.embedding_base_url = item.base_url
-  form.value.embedding_model = item.model
-  message.info(`已快速填充 Embedding 预设: ${item.model}`)
-}
-
-/** Reranker 常用预设 */
-const rerankerPresetOptions = [
-  { label: 'SiliconFlow (BAAI/bge-reranker-v2-m3)', value: 'sf-rerank-v2-m3' },
-  { label: 'SiliconFlow (BAAI/bge-reranker-large)', value: 'sf-rerank-large' },
-  { label: 'Jina AI (jina-reranker-v2-base-multilingual)', value: 'jina-v2' },
-  { label: 'Alibaba DashScope (gte-rerank)', value: 'dashscope-gte' },
-  { label: 'Cohere (rerank-v3.5)', value: 'cohere-v3.5' },
-]
-
-const RERANKER_PRESET_MAP: Record<string, { base_url: string; model: string }> = {
-  'sf-rerank-v2-m3': { base_url: 'https://api.siliconflow.cn/v1', model: 'BAAI/bge-reranker-v2-m3' },
-  'sf-rerank-large': { base_url: 'https://api.siliconflow.cn/v1', model: 'BAAI/bge-reranker-large' },
-  'jina-v2': { base_url: 'https://api.jina.ai/v1', model: 'jina-reranker-v2-base-multilingual' },
-  'dashscope-gte': { base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'gte-rerank' },
-  'cohere-v3.5': { base_url: 'https://api.cohere.com/v2', model: 'rerank-v3.5' },
-}
-
-function handleSelectRerankerPreset(key: string) {
-  const item = RERANKER_PRESET_MAP[key]
-  if (!item) return
-  form.value.reranker_base_url = item.base_url
-  form.value.reranker_model = item.model
-  message.info(`已快速填充 Reranker 预设: ${item.model}`)
-}
-
-/** 触发 /models 远程模型列表获取 */
 async function handleFetchRemoteModels() {
   if (!form.value.base_url.trim()) {
-    message.warning('请先输入 Base URL')
+    message.warning('请先填写 Base URL')
     return
   }
-  if (!isEdit.value && !form.value.api_key.trim() && !form.value.base_url.includes('localhost') && !form.value.base_url.includes('11434')) {
-    message.warning('请先输入 API Key，以便向上游端点发送认证请求')
-    return
-  }
-
   fetchingModels.value = true
   try {
-    const res = await api.profiles.fetchModels({
+    const list = await api.profiles.fetchModels({
+      base_url: form.value.base_url.trim(),
       protocol: form.value.protocol,
-      base_url: form.value.base_url,
-      api_key: form.value.api_key || undefined,
-      profile_id: props.profile?.id || undefined,
-      anthropic_version: form.value.anthropic_version || undefined,
+      api_key: form.value.api_key.trim() || undefined,
+      profile_id: props.profile?.id,
     })
-    if (res.ok && res.models?.length) {
-      fetchedModelList.value = res.models
-      showFetchModal.value = true
-      message.success(`成功获取到 ${res.models.length} 个可用模型`)
-    } else {
-      message.warning('端点未返回模型列表，请手动输入模型标识名')
+    if (!list.length) {
+      message.warning('服务端未返回可用模型列表')
+      return
     }
+    fetchedModelList.value = list
+    showFetchModal.value = true
   } catch (err: any) {
-    message.error(err.message || '获取模型列表失败，请检查 Base URL 与 API Key')
+    message.error(err.message || '获取远程模型列表失败，请检查 Base URL 与 API Key')
   } finally {
     fetchingModels.value = false
   }
 }
 
-/** 弹窗中选择单个模型回填 */
 function onModelSelect(modelId: string) {
   form.value.model = modelId
   if (!form.value.name || form.value.name.includes('(')) {
-    const vendorPrefix = selectedVendor.value ? VENDOR_MAP[selectedVendor.value]?.name : (props.profile?.name.split(' ')[0] || '大模型')
-    form.value.name = `${vendorPrefix} ${modelId}`
+    const vendorName = selectedVendor.value ? VENDOR_MAP[selectedVendor.value]?.name : ''
+    form.value.name = vendorName ? `${vendorName} (${modelId})` : modelId
   }
   message.info(`已选用模型: ${modelId}`)
 }
 
-/** 批量添加所选模型为独立协议档 */
 async function onBatchCreate(modelIds: string[]) {
   if (!modelIds.length) return
   saving.value = true
@@ -491,17 +299,12 @@ async function onBatchCreate(modelIds: string[]) {
       await api.profiles.create({
         name: `${vendorName} ${mId}`,
         protocol: form.value.protocol,
-        base_url: form.value.base_url,
+        base_url: form.value.base_url.trim(),
         model: mId,
-        api_key: form.value.api_key,
-        ...(form.value.embedding_base_url.trim() ? { embedding_base_url: form.value.embedding_base_url } : {}),
-        ...(form.value.embedding_model.trim() ? { embedding_model: form.value.embedding_model } : {}),
-        ...(form.value.embedding_api_key.trim() ? { embedding_api_key: form.value.embedding_api_key } : {}),
-        ...(form.value.reranker_base_url.trim() ? { reranker_base_url: form.value.reranker_base_url } : {}),
-        ...(form.value.reranker_model.trim() ? { reranker_model: form.value.reranker_model } : {}),
-        ...(form.value.reranker_api_key.trim() ? { reranker_api_key: form.value.reranker_api_key } : {}),
-        anthropic_version: form.value.anthropic_version,
+        api_key: form.value.api_key.trim() || undefined,
+        anthropic_version: form.value.anthropic_version?.trim() || undefined,
         usages: form.value.usages,
+        context_window: form.value.context_window,
       })
       count++
     }
@@ -516,27 +319,20 @@ async function onBatchCreate(modelIds: string[]) {
 }
 
 watch(
-  () => props.show,
-  (val) => {
-    if (val) {
-      activeTab.value = props.initialTab || 'llm'
+  [() => props.show, () => props.profile],
+  ([showVal, profileVal]) => {
+    if (showVal) {
       selectedVendor.value = props.initialData?.vendorKey || null
-      if (props.profile) {
+      if (profileVal) {
         form.value = {
-          name: props.profile.name,
-          protocol: props.profile.protocol,
-          base_url: props.profile.base_url,
-          model: props.profile.model,
+          name: profileVal.name || '',
+          protocol: profileVal.protocol || 'openai_chat',
+          base_url: profileVal.base_url || '',
+          model: profileVal.model || '',
           api_key: '',
-          embedding_base_url: props.profile.embedding_base_url || '',
-          embedding_model: props.profile.embedding_model || '',
-          embedding_api_key: '',
-          reranker_base_url: props.profile.reranker_base_url || '',
-          reranker_model: props.profile.reranker_model || '',
-          reranker_api_key: '',
-          anthropic_version: props.profile.anthropic_version || '2023-06-01',
-          usages: props.profile.usages ? [...props.profile.usages] : ['target'],
-          context_window: props.profile.context_window || 200000,
+          anthropic_version: profileVal.anthropic_version || '2023-06-01',
+          usages: profileVal.usages ? [...profileVal.usages] : ['target'],
+          context_window: profileVal.context_window || 200000,
         }
       } else if (props.initialData) {
         form.value = {
@@ -545,12 +341,6 @@ watch(
           base_url: props.initialData.base_url || 'https://api.openai.com/v1',
           model: '',
           api_key: '',
-          embedding_base_url: '',
-          embedding_model: '',
-          embedding_api_key: '',
-          reranker_base_url: '',
-          reranker_model: '',
-          reranker_api_key: '',
           anthropic_version: '2023-06-01',
           usages: ['target'],
           context_window: 200000,
@@ -562,12 +352,6 @@ watch(
           base_url: 'https://api.openai.com/v1',
           model: '',
           api_key: '',
-          embedding_base_url: '',
-          embedding_model: '',
-          embedding_api_key: '',
-          reranker_base_url: '',
-          reranker_model: '',
-          reranker_api_key: '',
           anthropic_version: '2023-06-01',
           usages: ['target'],
           context_window: 200000,
@@ -575,23 +359,16 @@ watch(
       }
     }
   },
+  { immediate: true },
 )
 
 async function handleSave() {
-  if (!form.value.name.trim()) {
-    message.warning('请输入协议档名称')
-    return
-  }
-  if (!form.value.model.trim()) {
-    message.warning('请输入主模型标识名')
-    return
-  }
-  if (!form.value.base_url.trim()) {
-    message.warning('请输入主模型 Base URL')
-    return
-  }
-  if (!isEdit.value && !form.value.api_key.trim()) {
-    message.warning('请输入主模型 API Key')
+  const name = form.value.name.trim()
+  const model = form.value.model.trim()
+  const baseUrl = form.value.base_url.trim()
+
+  if (!name || !model || !baseUrl) {
+    message.warning('请确保名称、模型标识名及 Base URL 已填写')
     return
   }
 
@@ -599,49 +376,37 @@ async function handleSave() {
   try {
     if (isEdit.value && props.profile?.id) {
       const payload: ProfileUpdateIn = {
-        name: form.value.name,
+        name,
         protocol: form.value.protocol,
-        base_url: form.value.base_url,
-        model: form.value.model,
-        anthropic_version: form.value.anthropic_version,
+        base_url: baseUrl,
+        model,
+        anthropic_version: form.value.anthropic_version?.trim() || undefined,
         usages: form.value.usages,
         context_window: form.value.context_window,
       }
       if (form.value.api_key.trim()) {
-        payload.api_key = form.value.api_key
+        payload.api_key = form.value.api_key.trim()
       }
-      if (form.value.embedding_base_url.trim()) payload.embedding_base_url = form.value.embedding_base_url
-      if (form.value.embedding_model.trim()) payload.embedding_model = form.value.embedding_model
-      if (form.value.embedding_api_key.trim()) payload.embedding_api_key = form.value.embedding_api_key
-      if (form.value.reranker_base_url.trim()) payload.reranker_base_url = form.value.reranker_base_url
-      if (form.value.reranker_model.trim()) payload.reranker_model = form.value.reranker_model
-      if (form.value.reranker_api_key.trim()) payload.reranker_api_key = form.value.reranker_api_key
       await api.profiles.update(props.profile.id, payload)
       message.success('协议档已更新')
     } else {
       const payload: ProfileCreateIn = {
-        name: form.value.name,
+        name,
         protocol: form.value.protocol,
-        base_url: form.value.base_url,
-        model: form.value.model,
-        api_key: form.value.api_key,
-        anthropic_version: form.value.anthropic_version,
+        base_url: baseUrl,
+        model,
+        api_key: form.value.api_key.trim() || undefined,
+        anthropic_version: form.value.anthropic_version?.trim() || undefined,
         usages: form.value.usages,
         context_window: form.value.context_window,
       }
-      if (form.value.embedding_base_url.trim()) payload.embedding_base_url = form.value.embedding_base_url
-      if (form.value.embedding_model.trim()) payload.embedding_model = form.value.embedding_model
-      if (form.value.embedding_api_key.trim()) payload.embedding_api_key = form.value.embedding_api_key
-      if (form.value.reranker_base_url.trim()) payload.reranker_base_url = form.value.reranker_base_url
-      if (form.value.reranker_model.trim()) payload.reranker_model = form.value.reranker_model
-      if (form.value.reranker_api_key.trim()) payload.reranker_api_key = form.value.reranker_api_key
       await api.profiles.create(payload)
       message.success('协议档创建成功')
     }
     emit('update:show', false)
     emit('success')
   } catch (err: any) {
-    message.error(err.message || '保存失败')
+    message.error(err.message || '保存失败，请检查配置')
   } finally {
     saving.value = false
   }

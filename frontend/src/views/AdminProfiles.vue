@@ -138,16 +138,16 @@
                 <span
                   v-if="p.embedding_model"
                   class="mono model-id-tag tag-embed tag-clickable"
-                  title="点击查看/配置 Embedding 向量模型"
-                  @click.stop="openModal(p, 'embedding')"
+                  title="点击查看/配置全局 Embedding 向量模型"
+                  @click.stop="switchTab('rag_models')"
                 >
                   🔤 E: {{ p.embedding_model }}
                 </span>
                 <span
                   v-if="p.reranker_model"
                   class="mono model-id-tag tag-rerank tag-clickable"
-                  title="点击查看/配置 Reranker 重排模型"
-                  @click.stop="openModal(p, 'reranker')"
+                  title="点击查看/配置全局 Reranker 重排模型"
+                  @click.stop="switchTab('rag_models')"
                 >
                   🎯 R: {{ p.reranker_model }}
                 </span>
@@ -220,8 +220,8 @@
                   v-if="p.embedding_model"
                   class="mono model-id-tag tag-embed tag-clickable"
                   style="font-size: 11px"
-                  title="点击查看/配置 Embedding 向量模型"
-                  @click.stop="openModal(p, 'embedding')"
+                  title="点击查看/配置全局 Embedding 向量模型"
+                  @click.stop="switchTab('rag_models')"
                 >
                   🔤 E: {{ p.embedding_model }}
                 </span>
@@ -229,8 +229,8 @@
                   v-if="p.reranker_model"
                   class="mono model-id-tag tag-rerank tag-clickable"
                   style="font-size: 11px"
-                  title="点击查看/配置 Reranker 重排模型"
-                  @click.stop="openModal(p, 'reranker')"
+                  title="点击查看/配置全局 Reranker 重排模型"
+                  @click.stop="switchTab('rag_models')"
                 >
                   🎯 R: {{ p.reranker_model }}
                 </span>
@@ -1057,7 +1057,126 @@
       </div>
     </template>
 
-    <!-- Tab 4：Agent 运行时与主机治理（写入 /api/admin/settings.runtime，带审计） -->
+    <!-- Tab: 全局向量与重排模型 (RAG) 独立专区 -->
+    <template v-else-if="activeTab === 'rag_models'">
+      <div class="panel mb16" style="padding: 16px 20px">
+        <div class="panel-title mb8">
+          <div class="row" style="gap: 8px">
+            <span>🔤 全局向量嵌入与重排模型配置 (RAG System Models)</span>
+          </div>
+        </div>
+        <p class="small tertiary mb16">
+          系统全局仅需配置一套向量嵌入（Embedding）模型与重排序（Reranker）模型，供知识库文档向量化、语义混合检索与二次交叉精排打分全局复用。
+        </p>
+
+        <div class="rag-models-grid">
+          <!-- 1. 全局向量嵌入模型 -->
+          <div class="card p16 rag-model-card">
+            <div class="row-between mb12">
+              <div class="row" style="gap: 8px">
+                <span class="rag-icon">🔤</span>
+                <span style="font-weight: 600; font-size: 14.5px">全局向量嵌入模型 (Embedding)</span>
+              </div>
+              <span v-if="ragModelsForm.has_embedding_api_key" class="key-status-badge ok">● 已配置独立密钥</span>
+              <span v-else class="key-status-badge none">○ 未配置独立密钥</span>
+            </div>
+
+            <div class="field mb12">
+              <label class="field-label">常用 Embedding 预设一键填充</label>
+              <n-select
+                :options="embeddingPresetOptions"
+                placeholder="选择厂商常用向量模型预设"
+                @update:value="handleSelectEmbeddingPreset"
+              />
+            </div>
+
+            <div class="field mb12">
+              <label class="field-label">Embedding Base URL <span class="req">*</span></label>
+              <n-input
+                v-model:value="ragModelsForm.embedding_base_url"
+                placeholder="例如：https://api.siliconflow.cn/v1 或 https://api.openai.com/v1"
+              />
+            </div>
+
+            <div class="field mb12">
+              <label class="field-label">Embedding 模型标识 <span class="req">*</span></label>
+              <n-input
+                v-model:value="ragModelsForm.embedding_model"
+                placeholder="例如：BAAI/bge-large-zh-v1.5 或 text-embedding-3-large"
+              />
+            </div>
+
+            <div class="field mb12">
+              <label class="field-label">Embedding API Key (平台受控加密写入 .env，留空保留原密钥)</label>
+              <n-input
+                v-model:value="ragModelsForm.embedding_api_key"
+                type="password"
+                show-password-on="click"
+                placeholder="可选；私有端点或免密模型可留空"
+              />
+            </div>
+          </div>
+
+          <!-- 2. 全局重排序模型 -->
+          <div class="card p16 rag-model-card">
+            <div class="row-between mb12">
+              <div class="row" style="gap: 8px">
+                <span class="rag-icon">🎯</span>
+                <span style="font-weight: 600; font-size: 14.5px">全局重排序模型 (Reranker)</span>
+              </div>
+              <span v-if="ragModelsForm.has_reranker_api_key" class="key-status-badge ok">● 已配置独立密钥</span>
+              <span v-else class="key-status-badge none">○ 未配置独立密钥</span>
+            </div>
+
+            <div class="field mb12">
+              <label class="field-label">常用 Reranker 预设一键填充</label>
+              <n-select
+                :options="rerankerPresetOptions"
+                placeholder="选择厂商常用重排模型预设"
+                @update:value="handleSelectRerankerPreset"
+              />
+            </div>
+
+            <div class="field mb12">
+              <label class="field-label">Reranker Base URL <span class="req">*</span></label>
+              <n-input
+                v-model:value="ragModelsForm.reranker_base_url"
+                placeholder="例如：https://api.siliconflow.cn/v1 或 https://api.jina.ai/v1"
+              />
+            </div>
+
+            <div class="field mb12">
+              <label class="field-label">Reranker 模型标识 <span class="req">*</span></label>
+              <n-input
+                v-model:value="ragModelsForm.reranker_model"
+                placeholder="例如：BAAI/bge-reranker-v2-m3 或 jina-reranker-v2-base-multilingual"
+              />
+            </div>
+
+            <div class="field mb12">
+              <label class="field-label">Reranker API Key (平台受控加密写入 .env，留空保留原密钥)</label>
+              <n-input
+                v-model:value="ragModelsForm.reranker_api_key"
+                type="password"
+                show-password-on="click"
+                placeholder="可选；私有端点或免密模型可留空"
+              />
+            </div>
+          </div>
+        </div>
+
+        <div class="row mt16" style="gap: 12px; justify-content: flex-end">
+          <button class="btn btn-secondary btn-sm" :disabled="ragModelsLoading" @click="loadRagModels">
+            重置 / 刷新
+          </button>
+          <button class="btn btn-primary btn-sm" :disabled="ragModelsSaving" @click="saveRagModels">
+            {{ ragModelsSaving ? '保存中…' : '保存全局 RAG 模型配置' }}
+          </button>
+        </div>
+      </div>
+    </template>
+
+    <!-- Tab: Agent 运行时与主机治理（写入 /api/admin/settings.runtime，带审计） -->
     <template v-else>
       <div class="panel mb16" style="padding: 16px 20px">
         <div class="panel-title mb8">WebSocket 智能体会话与连接参数</div>
@@ -1099,7 +1218,6 @@
       v-model:show="showModal"
       :profile="selectedProfile"
       :initial-data="modalInitialData"
-      :initial-tab="modalInitialTab"
       @success="loadProfiles"
     />
 
@@ -1134,10 +1252,11 @@ import SkillDetailModal, { type SkillDetail } from '../components/modals/SkillDe
 const message = useMessage()
 const dialog = useDialog()
 
-// 4 Tab 架构（API V1.3 §3.6）：profiles / mcp / skills / runtime
-type TabKey = 'profiles' | 'mcp' | 'skills' | 'runtime'
+// 5 Tab 架构：profiles / rag_models / mcp / skills / runtime
+type TabKey = 'profiles' | 'rag_models' | 'mcp' | 'skills' | 'runtime'
 const tabs: { key: TabKey; label: string }[] = [
-  { key: 'profiles', label: '协议档治理' },
+  { key: 'profiles', label: '💬 大模型协议档' },
+  { key: 'rag_models', label: '🔤 向量与重排模型 (RAG)' },
   { key: 'mcp', label: '🛠 MCP 服务器与工具清单' },
   { key: 'skills', label: '🧠 Agent 技能与 Prompt 编排' },
   { key: 'runtime', label: '⚙ 运行时与主机治理' },
@@ -1151,6 +1270,8 @@ function switchTab(key: TabKey) {
     handleRefreshMcpTools()
   } else if (key === 'profiles') {
     loadProfiles()
+  } else if (key === 'rag_models') {
+    loadRagModels()
   }
 }
 
@@ -1562,20 +1683,17 @@ function formatContextWindow(tokens?: number): string {
 }
 
 const modalInitialData = ref<{ vendorKey?: string; base_url?: string; protocol?: any; name?: string } | null>(null)
-const modalInitialTab = ref<'llm' | 'embedding' | 'reranker'>('llm')
 
-function openModal(profile: Profile | null, tab: 'llm' | 'embedding' | 'reranker' = 'llm') {
+function openModal(profile: Profile | null) {
   safeBlur()
-  selectedProfile.value = profile
+  selectedProfile.value = profile ? JSON.parse(JSON.stringify(profile)) : null
   modalInitialData.value = null
-  modalInitialTab.value = tab
   showModal.value = true
 }
 
 function openModalWithVendor(group: VendorGroup) {
   safeBlur()
   selectedProfile.value = null
-  modalInitialTab.value = 'llm'
   modalInitialData.value = {
     vendorKey: group.key !== 'custom' ? group.key : undefined,
     base_url: group.base_url,
@@ -1583,6 +1701,147 @@ function openModalWithVendor(group: VendorGroup) {
     name: group.name,
   }
   showModal.value = true
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 全局向量与重排模型 (RAG) 状态与交互管理
+// ═══════════════════════════════════════════════════════════════
+const ragModelsForm = ref<{
+  embedding_base_url: string
+  embedding_model: string
+  embedding_api_key: string
+  has_embedding_api_key?: boolean
+  reranker_base_url: string
+  reranker_model: string
+  reranker_api_key: string
+  has_reranker_api_key?: boolean
+}>({
+  embedding_base_url: '',
+  embedding_model: '',
+  embedding_api_key: '',
+  reranker_base_url: '',
+  reranker_model: '',
+  reranker_api_key: '',
+})
+const ragModelsLoading = ref(false)
+const ragModelsSaving = ref(false)
+
+/** Embedding 常用预设 */
+const embeddingPresetOptions = [
+  { label: 'SiliconFlow (BAAI/bge-large-zh-v1.5)', value: 'sf-bge-large' },
+  { label: 'SiliconFlow (BAAI/bge-m3)', value: 'sf-bge-m3' },
+  { label: 'OpenAI (text-embedding-3-small)', value: 'openai-small' },
+  { label: 'OpenAI (text-embedding-3-large)', value: 'openai-large' },
+  { label: 'Alibaba DashScope (text-embedding-v3)', value: 'dashscope-v3' },
+  { label: 'Zhipu AI (embedding-3)', value: 'zhipu-3' },
+  { label: 'Ollama Local (nomic-embed-text)', value: 'ollama-nomic' },
+]
+
+const EMBEDDING_PRESET_MAP: Record<string, { base_url: string; model: string }> = {
+  'sf-bge-large': { base_url: 'https://api.siliconflow.cn/v1', model: 'BAAI/bge-large-zh-v1.5' },
+  'sf-bge-m3': { base_url: 'https://api.siliconflow.cn/v1', model: 'BAAI/bge-m3' },
+  'openai-small': { base_url: 'https://api.openai.com/v1', model: 'text-embedding-3-small' },
+  'openai-large': { base_url: 'https://api.openai.com/v1', model: 'text-embedding-3-large' },
+  'dashscope-v3': { base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'text-embedding-v3' },
+  'zhipu-3': { base_url: 'https://open.bigmodel.cn/api/paas/v4', model: 'embedding-3' },
+  'ollama-nomic': { base_url: 'http://localhost:11434/v1', model: 'nomic-embed-text' },
+}
+
+function handleSelectEmbeddingPreset(key: string) {
+  const item = EMBEDDING_PRESET_MAP[key]
+  if (!item) return
+  ragModelsForm.value.embedding_base_url = item.base_url
+  ragModelsForm.value.embedding_model = item.model
+  message.info(`已填充 Embedding 预设: ${item.model}`)
+}
+
+/** Reranker 常用预设 */
+const rerankerPresetOptions = [
+  { label: 'SiliconFlow (BAAI/bge-reranker-v2-m3)', value: 'sf-rerank-v2-m3' },
+  { label: 'SiliconFlow (BAAI/bge-reranker-large)', value: 'sf-rerank-large' },
+  { label: 'Jina AI (jina-reranker-v2-base-multilingual)', value: 'jina-v2' },
+  { label: 'Alibaba DashScope (gte-rerank)', value: 'dashscope-gte' },
+  { label: 'Cohere (rerank-v3.5)', value: 'cohere-v3.5' },
+]
+
+const RERANKER_PRESET_MAP: Record<string, { base_url: string; model: string }> = {
+  'sf-rerank-v2-m3': { base_url: 'https://api.siliconflow.cn/v1', model: 'BAAI/bge-reranker-v2-m3' },
+  'sf-rerank-large': { base_url: 'https://api.siliconflow.cn/v1', model: 'BAAI/bge-reranker-large' },
+  'jina-v2': { base_url: 'https://api.jina.ai/v1', model: 'jina-reranker-v2-base-multilingual' },
+  'dashscope-gte': { base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'gte-rerank' },
+  'cohere-v3.5': { base_url: 'https://api.cohere.com/v2', model: 'rerank-v3.5' },
+}
+
+function handleSelectRerankerPreset(key: string) {
+  const item = RERANKER_PRESET_MAP[key]
+  if (!item) return
+  ragModelsForm.value.reranker_base_url = item.base_url
+  ragModelsForm.value.reranker_model = item.model
+  message.info(`已填充 Reranker 预设: ${item.model}`)
+}
+
+async function loadRagModels() {
+  ragModelsLoading.value = true
+  try {
+    const data = await api.admin.getRagModels()
+    ragModelsForm.value = {
+      embedding_base_url: data.embedding_base_url || '',
+      embedding_model: data.embedding_model || '',
+      embedding_api_key: '',
+      has_embedding_api_key: data.has_embedding_api_key,
+      reranker_base_url: data.reranker_base_url || '',
+      reranker_model: data.reranker_model || '',
+      reranker_api_key: '',
+      has_reranker_api_key: data.has_reranker_api_key,
+    }
+  } catch (err: any) {
+    message.error(err.message || '加载全局 RAG 模型配置失败')
+  } finally {
+    ragModelsLoading.value = false
+  }
+}
+
+async function saveRagModels() {
+  if (
+    !ragModelsForm.value.embedding_base_url.trim() &&
+    !ragModelsForm.value.embedding_model.trim() &&
+    !ragModelsForm.value.reranker_base_url.trim() &&
+    !ragModelsForm.value.reranker_model.trim()
+  ) {
+    message.warning('请至少填写 Embedding 或 Reranker 的基础配置')
+    return
+  }
+  ragModelsSaving.value = true
+  try {
+    const payload: any = {
+      embedding_base_url: ragModelsForm.value.embedding_base_url.trim() || undefined,
+      embedding_model: ragModelsForm.value.embedding_model.trim() || undefined,
+      reranker_base_url: ragModelsForm.value.reranker_base_url.trim() || undefined,
+      reranker_model: ragModelsForm.value.reranker_model.trim() || undefined,
+    }
+    if (ragModelsForm.value.embedding_api_key?.trim()) {
+      payload.embedding_api_key = ragModelsForm.value.embedding_api_key.trim()
+    }
+    if (ragModelsForm.value.reranker_api_key?.trim()) {
+      payload.reranker_api_key = ragModelsForm.value.reranker_api_key.trim()
+    }
+    const res = await api.admin.updateRagModels(payload)
+    ragModelsForm.value = {
+      embedding_base_url: res.embedding_base_url || '',
+      embedding_model: res.embedding_model || '',
+      embedding_api_key: '',
+      has_embedding_api_key: res.has_embedding_api_key,
+      reranker_base_url: res.reranker_base_url || '',
+      reranker_model: res.reranker_model || '',
+      reranker_api_key: '',
+      has_reranker_api_key: res.has_reranker_api_key,
+    }
+    message.success('全局 RAG 模型配置已成功保存并生效！')
+  } catch (err: any) {
+    message.error(err.message || '保存全局 RAG 模型配置失败')
+  } finally {
+    ragModelsSaving.value = false
+  }
 }
 
 async function loadProfiles() {
@@ -1690,7 +1949,10 @@ function handleDelete(p: Profile) {
   })
 }
 
-onMounted(loadProfiles)
+onMounted(() => {
+  loadProfiles()
+  loadRagModels()
+})
 </script>
 
 <style scoped>
@@ -2509,6 +2771,23 @@ onMounted(loadProfiles)
   background: rgba(139, 92, 246, 0.12) !important;
   color: #a78bfa !important;
   border: 1px solid rgba(139, 92, 246, 0.28) !important;
+}
+
+.rag-models-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.rag-model-card {
+  background: var(--bg-card, rgba(255, 255, 255, 0.02));
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+}
+.rag-icon {
+  font-size: 18px;
+  line-height: 1;
 }
 
 /* 移动端：卡片栅格最小宽度超过视口，统一折为单列 */

@@ -289,22 +289,18 @@ def update_profile(
     next_embedding_model = current_env.embedding_model
     next_reranker_base_url = current_env.reranker_base_url
     next_reranker_model = current_env.reranker_model
-    if values.get("embedding_base_url") is not None:
-        next_embedding_base_url = str(values.pop("embedding_base_url")).rstrip("/")
-    else:
-        values.pop("embedding_base_url", None)
-    if values.get("embedding_model") is not None:
-        next_embedding_model = values.pop("embedding_model")
-    else:
-        values.pop("embedding_model", None)
-    if values.get("reranker_base_url") is not None:
-        next_reranker_base_url = str(values.pop("reranker_base_url")).rstrip("/")
-    else:
-        values.pop("reranker_base_url", None)
-    if values.get("reranker_model") is not None:
-        next_reranker_model = values.pop("reranker_model")
-    else:
-        values.pop("reranker_model", None)
+    if "embedding_base_url" in values:
+        raw_val = values.pop("embedding_base_url")
+        next_embedding_base_url = str(raw_val).rstrip("/") if raw_val and str(raw_val).strip() else None
+    if "embedding_model" in values:
+        raw_model = values.pop("embedding_model")
+        next_embedding_model = str(raw_model).strip() if raw_model and str(raw_model).strip() else None
+    if "reranker_base_url" in values:
+        raw_val = values.pop("reranker_base_url")
+        next_reranker_base_url = str(raw_val).rstrip("/") if raw_val and str(raw_val).strip() else None
+    if "reranker_model" in values:
+        raw_model = values.pop("reranker_model")
+        next_reranker_model = str(raw_model).strip() if raw_model and str(raw_model).strip() else None
     next_embedding_api_key = embedding_api_key or current_env.embedding_api_key
     next_reranker_api_key = reranker_api_key or current_env.reranker_api_key
     key_changed = bool(api_key or embedding_api_key or reranker_api_key)
