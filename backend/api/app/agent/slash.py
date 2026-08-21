@@ -1,7 +1,7 @@
-"""系统斜杠命令解析（开发说明书 §9 / §16.4）。
+"""最小会话控制斜杠解析。
 
-发送仍走 ``user_message``；参数只作规划提示，前端不直接拼确认卡。
-自定义斜杠 M1 未启用，本模块只处理系统 15 条。
+业务斜杠、资产查询斜杠及其 MCP 注入已移除，避免抢占模型路由。
+当前仅保留不参与业务决策的 ``/stop`` 与 ``/compact``。
 """
 
 from __future__ import annotations
@@ -14,23 +14,10 @@ from ..errors import AppError, ErrorCode
 # 斜杠语法冻结：/name 后可选参数
 _SLASH_RE = re.compile(r"^/([A-Za-z][A-Za-z0-9_-]{0,31})(?:\s+(.+))?$")
 
-# 系统 15 条：enabled=False 时面板灰置；若仍发来则 VALIDATION
+# 控制命令不绑定业务工具，也不向规划阶段注入工具清单。
 SYSTEM_COMMANDS: dict[str, dict[str, str | bool]] = {
-    "benchmark": {"group": "order", "enabled": True, "hint": "基准评测"},
-    "rag": {"group": "order", "enabled": False, "hint": "RAG 评测", "reason": "将在知识库阶段启用"},
-    "testcase": {"group": "order", "enabled": True, "hint": "生成用例"},
-    "stress": {"group": "order", "enabled": True, "hint": "先评后压"},
-    "cancel": {"group": "control", "enabled": True, "hint": "取消本会话非终态任务"},
-    "rerun": {"group": "control", "enabled": True, "hint": "拷贝最近任务配置为新确认卡"},
     "stop": {"group": "control", "enabled": True, "hint": "停止本轮生成"},
-    "new": {"group": "control", "enabled": True, "hint": "新建空会话"},
     "compact": {"group": "control", "enabled": True, "hint": "压缩本会话模型窗口"},
-    "status": {"group": "readonly", "enabled": True, "hint": "当前占槽 / 活动任务"},
-    "profiles": {"group": "readonly", "enabled": True, "hint": "列出协议档"},
-    "datasets": {"group": "readonly", "enabled": True, "hint": "列出数据集"},
-    "kb": {"group": "readonly", "enabled": False, "hint": "列出知识库", "reason": "将在知识库阶段启用"},
-    "report": {"group": "readonly", "enabled": False, "hint": "读取已有报告", "reason": "报告解读将在 M4 接入"},
-    "help": {"group": "system", "enabled": True, "hint": "列出当前已启用命令"},
 }
 
 SYSTEM_COMMAND_NAMES = frozenset(SYSTEM_COMMANDS)
@@ -81,7 +68,7 @@ def assert_command_enabled(command: str) -> None:
 
 def enabled_help_text() -> str:
     """``/help`` 只列出当前已启用命令。"""
-    lines = ["当前已启用的命令："]
+    lines = ["当前仅保留会话控制命令："]
     for name, meta in SYSTEM_COMMANDS.items():
         if meta.get("enabled"):
             lines.append(f"/{name}  {meta['hint']}")

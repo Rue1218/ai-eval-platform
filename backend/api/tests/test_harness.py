@@ -34,7 +34,6 @@ from app.agent.plan import (
 from app.agent.react import McpStep, ReactArtifact, build_proposed_spec, parse_mcp_step, run_react
 from app.agent.reflect import ReflectArtifact, maybe_model_check, run_gates
 from app.agent.slash import (
-    assert_command_enabled,
     is_unknown_slash,
     parse_slash,
     unknown_command_text,
@@ -43,7 +42,6 @@ from app.agent.turn_mode import (
     TurnMode,
     allows_model_check,
     allows_replan,
-    emits_stage_thoughts,
     refine_turn_mode,
     resolve_turn_mode,
     select_turn_mode,
@@ -139,46 +137,22 @@ def test_chat_and_help_skip_stage_thoughts():
 
 
 def test_select_turn_mode_by_task_shape():
-    """一两步走 ReAct；评测下单走 Plan-and-Solve；问候/斜杠帮助走 DIRECT/CHAT。"""
+    """最小内核只保留会话控制、闲聊与多媒体 ReAct。"""
     assert select_turn_mode("你好", parse_slash("你好")) is TurnMode.CHAT
-    assert select_turn_mode("/help", parse_slash("/help")) is TurnMode.DIRECT
-    assert select_turn_mode("/profiles", parse_slash("/profiles")) is TurnMode.REACT_ONLY
-    assert select_turn_mode("/benchmark", parse_slash("/benchmark")) is TurnMode.PLAN_SOLVE
+    assert select_turn_mode("/compact", parse_slash("/compact")) is TurnMode.DIRECT
+    assert select_turn_mode("/benchmark", parse_slash("/benchmark")) is TurnMode.DIRECT
     portrait = "帮我生成一张竖幅户外人像摄影，明暗对比柔和"
     assert select_turn_mode(portrait, parse_slash(portrait)) is TurnMode.REACT_ONLY
-    list_profiles = "\u5217\u51fa\u534f\u8bae\u6863"  # 列出协议档
-    assert select_turn_mode(list_profiles, parse_slash(list_profiles)) is TurnMode.REACT_ONLY
-    assert select_turn_mode("帮我评一下", parse_slash("帮我评一下")) is TurnMode.PLAN_SOLVE
-    assert select_turn_mode("帮我生成一首轻盈的音乐", parse_slash("帮我生成一首轻盈的音乐")) is TurnMode.INTENT
-    assert uses_react_llm(TurnMode.PLAN_SOLVE, command="benchmark", slash_fill_first=True) is False
+    assert select_turn_mode("列出协议档", parse_slash("列出协议档")) is TurnMode.INTENT
+    assert select_turn_mode("帮我评一下", parse_slash("帮我评一下")) is TurnMode.INTENT
     assert uses_react_llm(TurnMode.REACT_ONLY, command=None, slash_fill_first=False) is True
     assert allows_replan(TurnMode.REACT_ONLY) is False
     assert allows_model_check(TurnMode.CHAT) is False
-    assert emits_stage_thoughts(TurnMode.PLAN_SOLVE) is True
     refined = refine_turn_mode(
         TurnMode.INTENT, intent="chat", tools_needed=["image.generate"], delivery="text"
     )
     assert refined is TurnMode.REACT_ONLY
-    assert (
-        refine_turn_mode(TurnMode.INTENT, intent="benchmark", tools_needed=["model.list"], delivery="clarify")
-        is TurnMode.PLAN_SOLVE
-    )
-    eval_plan = PlanArtifact(
-        intent="benchmark",
-        skill_id="skill-benchmark",
-        slots={"filled": {"kind": "benchmark"}, "missing": ["profile_ids"]},
-        tools_needed=["model.list"],
-        delivery="clarify",
-        budget={"max_tool_rounds": 4},
-        notes="规划：评测",
-        source="llm",
-        loop="plan_solve",
-        complexity="high",
-    )
-    assert (
-        resolve_turn_mode(text="帮我评一下", parsed=parse_slash("帮我评一下"), plan=eval_plan)
-        is TurnMode.PLAN_SOLVE
-    )
+    assert refine_turn_mode(TurnMode.INTENT, intent="chat", tools_needed=[], delivery="text") is TurnMode.CHAT
 
 
 def test_l0_chat_vs_benchmark_and_testcase():
@@ -208,7 +182,7 @@ def test_l0_plan_missing_slots_clarify_not_confirm():
     assert plan.intent == "benchmark"
     assert "profile_ids" in plan.slots["missing"]
     assert plan.delivery == "clarify"
-    assert "model.list" in plan.tools_needed
+    assert plan.tools_needed == []
 
 
 def test_sanitize_plan_clamps_budget_and_nulls_illegal_skill():
@@ -293,21 +267,18 @@ def test_parse_plan_json_rejects_plain_text():
 
 
 def test_slash_stress_never_kind_stress():
-    """TC-07：/stress 的 intent 仍是质量任务，skill_id=skill-stress。"""
+    """已删除的业务斜杠不能再创建业务规划。"""
     parsed = parse_slash("/stress")
     plan = plan_from_slash(parsed, prefs={}, attachments=[])
-    assert plan.intent == "benchmark"
-    assert plan.skill_id == "skill-stress"
-    assert plan.slots["filled"]["with_stress"] is True
-    assert plan.slots["filled"]["kind"] == "benchmark"
+    assert plan.intent == "chat"
+    assert plan.tools_needed == []
 
 
 def test_slash_testcase_missing_source():
     parsed = parse_slash("/testcase")
     plan = plan_from_slash(parsed, prefs={}, attachments=[])
-    assert plan.intent == "testcase"
-    assert plan.slots["missing"] == ["case_source"]
-    assert plan.delivery == "clarify"
+    assert plan.intent == "chat"
+    assert plan.tools_needed == []
 
 
 def test_gates_reject_long_tool():
@@ -366,8 +337,7 @@ def test_gates_hallucinated_id_clarify():
     )
     session = AgentSession(id="s1", user_id="u1", title="t")
     artifact = run_gates(_FakeDb(), session=session, plan=plan, react=react)
-    assert artifact.verdict == "clarify"
-    assert "资产不存在" in artifact.reasons[0]
+    assert artifact.verdict == "reject"
 
 
 def test_gates_kind_stress_rejected():
@@ -417,11 +387,11 @@ def test_unknown_slash_foo_is_not_chat():
     assert parsed.is_slash is True
     assert parsed.command == "foo"
     assert is_unknown_slash(parsed) is True
-    assert is_unknown_slash(parse_slash("/benchmark")) is False
+    assert is_unknown_slash(parse_slash("/benchmark")) is True
     assert is_unknown_slash(parse_slash("你好")) is False
     help_text = unknown_command_text()
     assert help_text.startswith("未知命令。")
-    assert "/help" in help_text
+    assert "/compact" in help_text
 
 
 def test_turn_system_injects_summary_and_skill():
@@ -446,10 +416,7 @@ def test_prefs_do_not_attach_stress_to_testcase():
     assert plan.slots["filled"].get("with_stress") is not True
     react = ReactArtifact()
     spec = build_proposed_spec(plan, react, slash_fill_first=False)
-    assert spec is not None
-    assert spec.get("kind") == "testcase"
-    assert spec.get("with_stress") is False
-    assert "stress" not in spec
+    assert spec is None
 
 
 def test_prefs_stress_still_applies_to_benchmark():
@@ -478,17 +445,14 @@ def test_run_plan_slash_keeps_pref_thoughts():
         attachments=[],
         budget=TurnBudget(),
     )
-    assert "沿用你上次的协议档，可在卡上改" in plan.pref_thoughts
-    assert "沿用你上次的数据集，可在卡上改" in plan.pref_thoughts
-    assert plan.slots["filled"]["profile_ids"] == ["p-last"]
-    assert plan.slots["filled"]["dataset_id"] == "d-last"
+    assert plan.intent == "chat"
+    assert plan.pref_thoughts == []
 
 
 def test_prefs_suggestions_return_reuse_copy():
     plan = plan_from_slash(parse_slash("/benchmark"), prefs={}, attachments=[])
     thoughts = apply_prefs_suggestions(plan, {"last_profile_ids": ["p1"], "last_dataset_id": "d1"})
-    assert "沿用你上次的协议档，可在卡上改" in thoughts
-    assert "沿用你上次的数据集，可在卡上改" in thoughts
+    assert thoughts == []
 
 
 def test_gates_occupied_forbids_second_card():
@@ -535,9 +499,10 @@ def test_gates_occupied_forbids_second_card():
     )
     session = AgentSession(id="s1", user_id="u1", title="t")
     artifact = run_gates(_OccupiedDb(), session=session, plan=plan, react=react)
-    assert artifact.verdict == "clarify"
-    assert artifact.error_code == ErrorCode.CONCURRENCY.value
-    assert "未完成任务" in artifact.reasons[0]
+    assert artifact.verdict == "reject"
+    # 业务任务工具已经移除，门禁会先拒绝该无效的业务执行计划。
+    assert artifact.error_code == ErrorCode.VALIDATION.value
+    assert "model.list" in artifact.reasons[0]
     assert artifact.spec is None
 
 
@@ -792,12 +757,9 @@ def test_maybe_model_check_sends_observations(monkeypatch):
     assert budget.used == 1
 
 
-def test_rag_slash_disabled_validation():
-    """TC-16：M1 发 /rag → VALIDATION 说明未启用。"""
-    with pytest.raises(AppError) as exc_info:
-        assert_command_enabled("rag")
-    assert exc_info.value.code == ErrorCode.VALIDATION
-    assert "将在知识库阶段启用" in exc_info.value.message
+def test_rag_slash_is_removed():
+    """RAG 业务斜杠已移除，不能再作为系统命令校验。"""
+    assert is_unknown_slash(parse_slash("/rag")) is True
 
 
 def test_failed_list_does_not_fill_hallucinated_ids():
@@ -852,7 +814,7 @@ def test_merge_replan_only_queues_unexecuted_tools():
         source="replan",
     )
     plan, extra_tools = merge_replan(plan, extra, executed_tool_names=["model.list"])
-    assert extra_tools == ["dataset.list"]
+    assert extra_tools == []
     assert plan.delivery == "confirm"
 
 
@@ -971,8 +933,8 @@ def test_run_react_continuation_respects_rounds_used(monkeypatch):
             slash_fill_first=False,
         )
     )
-    assert len(calls) == 4
-    assert react.rounds_used == 4
+    assert calls == []
+    assert react.rounds_used == 0
     asyncio.run(
         run_react(
             _FakeDb(),
@@ -985,7 +947,7 @@ def test_run_react_continuation_respects_rounds_used(monkeypatch):
             extra_tools=["dataset.list"],
         )
     )
-    assert len(calls) == 4
+    assert calls == []
 
 
 def test_run_react_long_tool_handoff_without_execute():
@@ -1084,7 +1046,7 @@ def test_run_react_stops_at_five_rounds(monkeypatch):
             slash_fill_first=False,
         )
     )
-    assert len(calls) == HARD_MAX_TOOL_ROUNDS
+    assert calls == []
 
 
 def test_parse_mcp_step_keeps_long_tool_and_drops_writes():
@@ -1237,9 +1199,10 @@ def test_run_react_llm_unavailable_falls_back_to_tools_needed(monkeypatch):
             stop=threading.Event(),
         )
     )
-    assert calls == ["model.list"]
+    assert calls == []
     assert react.used_llm is False
-    assert react.proposed_spec and react.proposed_spec.get("profile_ids") == ["p1"]
+    # 模型不可用时也不能回退执行已删除的业务资产查询工具。
+    assert react.proposed_spec and react.proposed_spec.get("profile_ids") is None
 
 
 def test_run_react_llm_stop_does_not_drain_tools_needed(monkeypatch):

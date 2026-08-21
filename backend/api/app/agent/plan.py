@@ -381,54 +381,8 @@ def l0_plan(text: str, *, prefs: dict | None = None) -> PlanArtifact:
 
 
 def plan_from_slash(parsed: SlashParse, *, prefs: dict | None, attachments: list[str]) -> PlanArtifact:
-    """斜杠已绑定 intent：0 次模型，模板生成规划短句（HAR-PLAN-04）。"""
+    """仅处理不注入业务工具的会话控制斜杠。"""
     command = parsed.command or ""
-    args = parsed.args
-    prefs = prefs or {}
-    last_kind = prefs.get("last_kind")
-
-    if command == "benchmark":
-        return PlanArtifact(
-            intent="benchmark",
-            skill_id="skill-benchmark",
-            slots={"filled": {"kind": "benchmark", "with_stress": False}, "missing": ["profile_ids", "dataset_id"]},
-            tools_needed=["model.list", "dataset.list"],
-            delivery="confirm",
-            budget={"max_tool_rounds": DEFAULT_TOOL_ROUNDS},
-            notes="规划：基准评测。先列出协议档和数据集，再组确认卡。",
-            source="slash",
-        )
-    if command == "stress":
-        intent = "rag" if last_kind == "rag" else "benchmark"
-        return PlanArtifact(
-            intent=intent,
-            skill_id="skill-stress",
-            slots={
-                "filled": {"kind": intent, "with_stress": True},
-                "missing": list(REQUIRED_SLOTS[intent]) + ["stress"],
-            },
-            tools_needed=list(DEFAULT_TOOLS_BY_INTENT[intent]),
-            delivery="confirm",
-            budget={"max_tool_rounds": DEFAULT_TOOL_ROUNDS},
-            notes="规划：先评后压。确认卡 kind 仍为质量任务。",
-            source="slash",
-        )
-    if command == "testcase":
-        missing = [] if attachments or args else ["case_source"]
-        filled: dict[str, Any] = {"kind": "testcase"}
-        if args:
-            filled["case_source"] = {"text": args}
-            missing = []
-        return PlanArtifact(
-            intent="testcase",
-            skill_id="skill-testcase",
-            slots={"filled": filled, "missing": missing},
-            tools_needed=[],
-            delivery="confirm" if not missing else "clarify",
-            budget={"max_tool_rounds": DEFAULT_TOOL_ROUNDS},
-            notes="规划：用例生成。请确认 PRD / 需求文本。",
-            source="slash",
-        )
     if command == "compact":
         return PlanArtifact(
             intent="compact",
@@ -440,44 +394,9 @@ def plan_from_slash(parsed: SlashParse, *, prefs: dict | None, attachments: list
             notes="规划：压缩本会话模型窗口。",
             source="slash",
         )
-    if command in {"cancel", "rerun", "new", "help"}:
-        notes_map = {
-            "cancel": "规划：取消本会话未完成任务。",
-            "rerun": "规划：拷贝最近任务配置，仍须确认卡。",
-            "new": "规划：新建空会话。",
-            "help": "规划：列出已启用命令。",
-        }
-        tools = ["task.get"] if command in {"cancel", "rerun"} else []
-        delivery = "confirm" if command == "rerun" else "action" if command != "help" else "text"
-        return PlanArtifact(
-            intent="cancel" if command == "cancel" else "rerun" if command == "rerun" else "inspect",
-            skill_id="skill-benchmark" if command == "rerun" else None,
-            slots={"filled": {}, "missing": []},
-            tools_needed=tools,
-            delivery=delivery,
-            budget={"max_tool_rounds": DEFAULT_TOOL_ROUNDS},
-            notes=notes_map[command],
-            source="slash",
-        )
-    if command in {"status", "profiles", "datasets"}:
-        tools = {
-            "status": ["task.get"],
-            "profiles": ["model.list"],
-            "datasets": ["dataset.list"],
-        }[command]
-        return PlanArtifact(
-            intent="inspect",
-            skill_id=None,
-            slots={"filled": {}, "missing": []},
-            tools_needed=tools,
-            delivery="text",
-            budget={"max_tool_rounds": DEFAULT_TOOL_ROUNDS},
-            notes=f"规划：只读查询 /{command}。",
-            source="slash",
-        )
-    # 未知命令：text 交付
+    # 未知命令不会走到这里；保留安全回退，禁止将其解释为业务意图。
     return PlanArtifact(
-        intent="inspect",
+        intent="chat",
         skill_id=None,
         slots={"filled": {}, "missing": []},
         tools_needed=[],
@@ -575,48 +494,19 @@ def run_plan(
         plan = inject_imagegen_plan(db, plan, text=text, attachments=attachments)
         return _stamp_loop(_attach_prefs(plan, prefs))
 
-    if parsed.command and parsed.command in {
-        "benchmark",
-        "testcase",
-        "stress",
-        "compact",
-        "cancel",
-        "rerun",
-        "new",
-        "help",
-        "status",
-        "profiles",
-        "datasets",
-        "stop",
-    }:
+    if parsed.command == "compact":
         plan = plan_from_slash(parsed, prefs=prefs, attachments=attachments)
         return _finish(plan, slash=True)
 
-    if parsed.is_slash and parsed.command not in {
-        "benchmark",
-        "testcase",
-        "stress",
-        "compact",
-        "cancel",
-        "rerun",
-        "new",
-        "help",
-        "status",
-        "profiles",
-        "datasets",
-        "stop",
-        "rag",
-        "kb",
-        "report",
-    }:
+    if parsed.is_slash:
         return PlanArtifact(
-            intent="inspect",
+            intent="chat",
             skill_id=None,
             slots={"filled": {}, "missing": []},
             tools_needed=[],
-            delivery="action",
+            delivery="text",
             budget={"max_tool_rounds": 0},
-            notes="规划：未知命令。",
+            notes="规划：未知会话控制命令。",
             source="slash",
         )
 

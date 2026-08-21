@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 
 from .long_tasks import LONG_MCP_TOOLS
+from .mcp_registry import REGISTERED_TOOLS
 
 # 确认卡数字默认值对齐 PRD 5.2.2 与 API.md TaskSpec
 DEFAULT_RUN: dict = {
@@ -64,41 +65,14 @@ SKILL_ID_ENUM = frozenset(
 
 DELIVERY_ENUM = frozenset({"confirm", "clarify", "text", "action"})
 
-# 短工具清单与 mcp_tools / MCP 路由同源（名称冻结）
-SHORT_TOOLS = frozenset(
-    {
-        "model.list",
-        "task.get",
-        "task.create",
-        "task.cancel",
-        "dispatch.overview",
-        "dataset.list",
-        "report.get",
-        "kb.list",
-        "testcase.confirm",
-        "audio.voiceclone",
-        "image.generate",
-    }
-)
+# 最小工具内核：业务工作流重构期间，Agent 仅挂载两项多媒体工具。
+# 评测、资产、任务与调度能力不再以 MCP 工具或斜杠命令形式暴露。
+SHORT_TOOLS = frozenset(tool.name for tool in REGISTERED_TOOLS)
 
-WRITE_TOOLS = frozenset({"task.create", "task.cancel"})
-READONLY_LIST_TOOLS = frozenset(
-    {"model.list", "dataset.list", "kb.list", "task.get", "report.get", "dispatch.overview"}
-)
+WRITE_TOOLS = frozenset()
+READONLY_LIST_TOOLS = frozenset()
 
-TOOL_TITLES: dict[str, str] = {
-    "model.list": "列出协议档",
-    "dataset.list": "列出数据集",
-    "kb.list": "列出知识库",
-    "task.get": "查询任务",
-    "report.get": "读取报告",
-    "task.create": "创建任务",
-    "task.cancel": "取消任务",
-    "dispatch.overview": "调度概览",
-    "testcase.confirm": "确认用例入库",
-    "audio.voiceclone": "音色克隆配音",
-    "image.generate": "Qwen Image 生图",
-}
+TOOL_TITLES: dict[str, str] = {tool.name: tool.title for tool in REGISTERED_TOOLS}
 
 # 各 kind 必填槽位（G2）；with_stress 另要求 stress 段
 REQUIRED_SLOTS: dict[str, tuple[str, ...]] = {
@@ -108,14 +82,14 @@ REQUIRED_SLOTS: dict[str, tuple[str, ...]] = {
 }
 
 DEFAULT_TOOLS_BY_INTENT: dict[str, list[str]] = {
-    "benchmark": ["model.list", "dataset.list"],
-    "rag": ["kb.list"],
+    "benchmark": [],
+    "rag": [],
     "inspect": [],
     "chat": [],
     "compact": [],
-    "cancel": ["task.get"],
-    "rerun": ["task.get"],
-    "report": ["report.get"],
+    "cancel": [],
+    "rerun": [],
+    "report": [],
     "testcase": [],
 }
 
@@ -129,16 +103,7 @@ TURN_WALL_CLOCK_S = 180.0
 MODEL_TIMEOUT_S = 30.0
 
 # 短工具执行超时（秒）；未列出的默认 30s
-TOOL_TIMEOUTS: dict[str, int] = {
-    "model.list": 10,
-    "dataset.list": 10,
-    "kb.list": 10,
-    "task.get": 10,
-    "report.get": 10,
-    "dispatch.overview": 10,
-    "audio.voiceclone": 90,
-    "image.generate": 90,
-}
+TOOL_TIMEOUTS: dict[str, int] = {tool.name: tool.timeout_s for tool in REGISTERED_TOOLS}
 
 # 上下文窗口
 WINDOW = 20
