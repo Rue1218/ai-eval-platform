@@ -6,6 +6,7 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Query, Request
+from pydantic import Field, model_validator
 from sqlalchemy.orm import Session
 
 from ..db import get_db
@@ -20,7 +21,6 @@ from ..profile_env import (
     write_profile_env,
 )
 from ..schemas import ApiModel
-from pydantic import Field, model_validator
 from .profiles import _profile_connection
 from .users import _parse_bound
 
