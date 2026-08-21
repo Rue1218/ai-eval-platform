@@ -9,6 +9,8 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.harness.contracts.cancellation import CancellationToken, TurnCancelled
+
 from ..errors import AppError, ErrorCode
 from .defaults import (
     CONFIRM_SLOT_KEYS,
@@ -282,7 +284,7 @@ def inject_speech_plan(db: Session, plan: PlanArtifact, *, text: str, attachment
     return plan
 
 
-# 高置信闲聊提示（不含「其它 → chat」兜底）。仅 L0 分类与关键词回退使用；自然语言规划不再短路。
+# 高置信闲聊提示（不含「其它 → chat」兜底）。仅 L0 分类与上游失败回退使用；自然语言仍走规划模型。
 CHAT_HINTS = ("你好", "您好", "介绍", "你是谁", "天气", "谢谢", "闲聊", "随便聊聊", "hello", "hi ")
 # 评测口令。禁止用光杆「对比」：摄影提示词里的明暗对比/冷暖对比会误判成 benchmark。
 EVAL_INTENT_HINTS = (
@@ -519,11 +521,14 @@ def _call_plan_model(
     extra_system: str,
     budget: TurnBudget,
     compact_summary: str | None = None,
+    cancel: CancellationToken | None = None,
 ) -> tuple[dict, int]:
     if not budget.consume():
         raise AppError(ErrorCode.VALIDATION, "本轮模型调用已达上限")
     from ..llm import call_agent_model_detailed
 
+    if cancel is not None:
+        cancel.raise_if_cancelled()
     result = call_agent_model_detailed(
         db,
         turn_system(
@@ -534,6 +539,7 @@ def _call_plan_model(
         temperature=0,
         max_tokens=1024,
         timeout_s=12,
+        cancel=cancel,
     )
     return parse_json_object(result.text), result.latency_ms
 
@@ -549,6 +555,7 @@ def run_plan(
     budget: TurnBudget,
     model_available: bool = True,
     compact_summary: str | None = None,
+    cancel: CancellationToken | None = None,
 ) -> PlanArtifact:
     """产出 PlanArtifact：斜杠模板 / LLM / 重试 / L0。"""
 
@@ -582,8 +589,7 @@ def run_plan(
         plan = l0_plan(text, prefs=prefs)
         return _finish(plan)
 
-    # 自然语言一律交给规划模型判定复杂度与 loop（chat / react / plan_solve）。
-    # 关键词短路只作上游失败时的 L0 回退；斜杠仍 0 次模型。
+    # 自然语言一律交给规划模型判定 loop（chat / react）；关键词只作上游失败时的 L0 回退。
     user_payload = {
         "text": text,
         "command": parsed.command or "",
@@ -594,12 +600,19 @@ def run_plan(
     }
     try:
         raw, latency = _call_plan_model(
-            db, user_payload, extra_system="", budget=budget, compact_summary=compact_summary
+            db,
+            user_payload,
+            extra_system="",
+            budget=budget,
+            compact_summary=compact_summary,
+            cancel=cancel,
         )
         plan = sanitize_plan(raw, source="llm")
         plan.used_model = True
         plan.latency_ms = latency
         return _finish(plan)
+    except TurnCancelled:
+        raise
     except AppError as exc:
         # 未配置协议档 / 上游失败：降级 L0，仍必须进复核
         if exc.code in {ErrorCode.VALIDATION, ErrorCode.UPSTREAM, ErrorCode.TIMEOUT}:
@@ -617,11 +630,14 @@ def run_plan(
             extra_system=PLAN_RETRY_SUFFIX,
             budget=budget,
             compact_summary=compact_summary,
+            cancel=cancel,
         )
         plan = sanitize_plan(raw, source="retry")
         plan.used_model = True
         plan.latency_ms = latency
         return _finish(plan)
+    except TurnCancelled:
+        raise
     except AppError as exc:
         if exc.code in {ErrorCode.VALIDATION, ErrorCode.UPSTREAM, ErrorCode.TIMEOUT}:
             agent_trace(f"规划重试模型不可用 code={exc.code.value}，降级 L0")

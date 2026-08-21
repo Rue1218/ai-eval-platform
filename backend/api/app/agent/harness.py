@@ -34,6 +34,8 @@ from .defaults import (
     ACTIVE_STATUSES,
     MAX_MODEL_CALLS,
     NO_TITLE_COMMANDS,
+    STREAM_EMIT_WAIT_S,
+    STREAM_TIMEOUT_S,
     TERMINAL_STATUSES,
 )
 from .log import agent_exception, agent_trace
@@ -311,20 +313,24 @@ async def _run_turn(
     compact_summary = getattr(session, "compact_summary", None)
     budget = TurnBudget(cap=MAX_MODEL_CALLS)
 
-    plan = await _await_thread(
-        stop,
-        lambda tdb: run_plan(
-            tdb,
-            text=text,
-            parsed=parsed,
-            history=history,
-            prefs=prefs,
-            attachments=attachments,
-            budget=budget,
-            model_available=True,
-            compact_summary=compact_summary,
-        ),
-    )
+    try:
+        plan = await _await_thread(
+            stop,
+            lambda tdb: run_plan(
+                tdb,
+                text=text,
+                parsed=parsed,
+                history=history,
+                prefs=prefs,
+                attachments=attachments,
+                budget=budget,
+                model_available=True,
+                compact_summary=compact_summary,
+                cancel=cancel,
+            ),
+        )
+    except TurnCancelled as exc:
+        raise HarnessAborted() from exc
     _check_abort(abort)
     mode = resolve_turn_mode(text=text, parsed=parsed, plan=plan)
     agent_trace(
@@ -727,7 +733,7 @@ async def _chat_reply(
                 cancel=cancel,
                 temperature=0.4,
                 max_tokens=2048,
-                timeout_s=90,
+                timeout_s=STREAM_TIMEOUT_S,
             ):
                 cancel.raise_if_cancelled()
                 if not chunk:
@@ -742,7 +748,7 @@ async def _chat_reply(
                     asyncio.run_coroutine_threadsafe(
                         emit("thought", {"text": chunk, "stream": stream}),
                         loop,
-                    ).result(timeout=30)
+                    ).result(timeout=STREAM_EMIT_WAIT_S)
                 except Exception:
                     pass
             text_out = "".join(parts).strip()

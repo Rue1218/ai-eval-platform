@@ -226,6 +226,7 @@ def _capture_stream(monkeypatch, lines: list[str]) -> dict:
         seen["url"] = request.full_url
         seen["body"] = json.loads(request.data.decode())
         seen["headers"] = {k.lower(): v for k, v in request.header_items()}
+        seen["timeout"] = timeout
         return _FakeSSE(lines)
 
     monkeypatch.setattr(adapters, "urlopen", fake_urlopen)
@@ -370,3 +371,59 @@ def test_stream_unsupported_protocol_rejected():
         list(stream_protocol(**_kwargs("grpc")))
 
     assert exc.value.code == ErrorCode.VALIDATION
+
+
+def test_stream_connect_timeout_capped(monkeypatch):
+    """建连超时不得超过 CONNECT_TIMEOUT_S，避免整段 STREAM 时限卡在 urlopen。"""
+    seen = _capture_stream(
+        monkeypatch,
+        ['data: {"choices":[{"delta":{"content":"ok"}}]}'],
+    )
+    list(stream_protocol(**_kwargs("openai_chat"), timeout_s=45.0))
+
+    assert seen["timeout"] == adapters.CONNECT_TIMEOUT_S
+
+
+def test_stream_aborts_before_connect(monkeypatch):
+    """令牌已取消时不得发 HTTP 请求。"""
+    called = {"n": 0}
+
+    def fake_urlopen(request, timeout):
+        called["n"] += 1
+        raise AssertionError("已取消时不得建连")
+
+    monkeypatch.setattr(adapters, "urlopen", fake_urlopen)
+    with pytest.raises(adapters.StreamAborted):
+        list(stream_protocol(**_kwargs("openai_chat"), should_abort=lambda: True))
+
+    assert called["n"] == 0
+
+
+def test_stream_aborts_during_read_timeout_slice(monkeypatch):
+    """读体切片超时后检查 should_abort，不必等到整体 timeout_s。"""
+    reads = {"n": 0}
+
+    class _TimeoutThenBlock:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            reads["n"] += 1
+            raise TimeoutError()
+
+    monkeypatch.setattr(adapters, "urlopen", lambda request, timeout: _TimeoutThenBlock())
+    with pytest.raises(adapters.StreamAborted):
+        list(
+            stream_protocol(
+                **_kwargs("openai_chat"),
+                should_abort=lambda: reads["n"] >= 1,
+            )
+        )
+
+    assert reads["n"] >= 1

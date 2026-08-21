@@ -101,6 +101,10 @@ HARD_MAX_TOOL_ROUNDS = 5
 MAX_REACT_ROUNDS = HARD_MAX_TOOL_ROUNDS
 TURN_WALL_CLOCK_S = 180.0
 MODEL_TIMEOUT_S = 30.0
+# 流式含思考链：接入方案允许放宽，但 90s 会让首 token 空等过久；45s 与耗时方案一致。
+STREAM_TIMEOUT_S = 45.0
+# 流式线程里等待 WS 投递的上限；过长会把上游读流堵住。
+STREAM_EMIT_WAIT_S = 2.0
 
 # 短工具执行超时（秒）；未列出的默认 30s
 TOOL_TIMEOUTS: dict[str, int] = {tool.name: tool.timeout_s for tool in REGISTERED_TOOLS}
