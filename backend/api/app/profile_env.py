@@ -1,6 +1,6 @@
 """协议档环境文件读写工具。
 
-协议档的 Base URL、模型 ID 和 API Key 不再写入数据库；本模块以 profile ID
+协议档的主模型、Embedding、Reranker 的 Base URL、模型 ID 和 API Key 不再写入数据库；本模块以 profile ID
 生成稳定的环境变量名，并在 bind mount 受控 ``.env`` 文件上加锁刷新。
 模块不执行 shell、不展开变量，也不会把敏感值写入日志。
 """
@@ -39,6 +39,12 @@ class ProfileEnvValues:
     base_url: str | None
     model: str | None
     api_key: str | None
+    embedding_base_url: str | None = None
+    embedding_model: str | None = None
+    embedding_api_key: str | None = None
+    reranker_base_url: str | None = None
+    reranker_model: str | None = None
+    reranker_api_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -63,6 +69,12 @@ def profile_env_keys(profile_id: str) -> dict[str, str]:
         "base_url": f"AI_PROFILE_{token}_BASE_URL",
         "model": f"AI_PROFILE_{token}_MODEL",
         "api_key": f"AI_PROFILE_{token}_API_KEY",
+        "embedding_base_url": f"AI_PROFILE_{token}_EMBEDDING_BASE_URL",
+        "embedding_model": f"AI_PROFILE_{token}_EMBEDDING_MODEL",
+        "embedding_api_key": f"AI_PROFILE_{token}_EMBEDDING_API_KEY",
+        "reranker_base_url": f"AI_PROFILE_{token}_RERANKER_BASE_URL",
+        "reranker_model": f"AI_PROFILE_{token}_RERANKER_MODEL",
+        "reranker_api_key": f"AI_PROFILE_{token}_RERANKER_API_KEY",
     }
 
 
@@ -132,6 +144,12 @@ def read_profile_env(profile_id: str) -> ProfileEnvValues:
         base_url=values.get(keys["base_url"]) or None,
         model=values.get(keys["model"]) or None,
         api_key=values.get(keys["api_key"]) or None,
+        embedding_base_url=values.get(keys["embedding_base_url"]) or None,
+        embedding_model=values.get(keys["embedding_model"]) or None,
+        embedding_api_key=values.get(keys["embedding_api_key"]) or None,
+        reranker_base_url=values.get(keys["reranker_base_url"]) or None,
+        reranker_model=values.get(keys["reranker_model"]) or None,
+        reranker_api_key=values.get(keys["reranker_api_key"]) or None,
     )
 
 
@@ -153,14 +171,22 @@ def write_profile_env(
     base_url: str | None = None,
     model: str | None = None,
     api_key: str | None = None,
+    embedding_base_url: str | None = None,
+    embedding_model: str | None = None,
+    embedding_api_key: str | None = None,
+    reranker_base_url: str | None = None,
+    reranker_model: str | None = None,
+    reranker_api_key: str | None = None,
     remove_api_key: bool = False,
+    remove_embedding_api_key: bool = False,
+    remove_reranker_api_key: bool = False,
     protocol: str | None = None,
     write_global_aliases: bool = False,
     remove_global_api_key: bool = False,
 ) -> ProfileEnvSnapshot:
     """安全刷新协议档连接参数并返回写入前快照。
 
-    ``None`` 表示保留原值，``remove_api_key`` 仅用于明确删除密钥；API 页面留空
+    ``None`` 表示保留原值，``remove_*_api_key`` 仅用于明确删除密钥；API 页面留空
     时不会误删既有 Key。值采用 JSON 字符串转义，避免 ``#``、空格和换行破坏 dotenv。
     """
     with _ENV_WRITE_LOCK:
@@ -169,13 +195,27 @@ def write_profile_env(
         lines = snapshot.content.splitlines()
         keys = profile_env_keys(profile_id)
         updates: dict[str, str] = {}
-        removals = {keys["api_key"]} if remove_api_key else set()
-        if base_url is not None:
-            updates[keys["base_url"]] = base_url
-        if model is not None:
-            updates[keys["model"]] = model
-        if api_key is not None:
-            updates[keys["api_key"]] = api_key
+        removals: set[str] = set()
+        endpoint_values = {
+            "base_url": base_url,
+            "model": model,
+            "api_key": api_key,
+            "embedding_base_url": embedding_base_url,
+            "embedding_model": embedding_model,
+            "embedding_api_key": embedding_api_key,
+            "reranker_base_url": reranker_base_url,
+            "reranker_model": reranker_model,
+            "reranker_api_key": reranker_api_key,
+        }
+        for field, value in endpoint_values.items():
+            if value is not None:
+                updates[keys[field]] = value
+        if remove_api_key:
+            removals.add(keys["api_key"])
+        if remove_embedding_api_key:
+            removals.add(keys["embedding_api_key"])
+        if remove_reranker_api_key:
+            removals.add(keys["reranker_api_key"])
         if write_global_aliases:
             if api_key is not None:
                 updates["LLM_API_KEY"] = api_key
@@ -210,7 +250,7 @@ def write_profile_env(
 
 
 def remove_profile_env(profile_id: str) -> ProfileEnvSnapshot:
-    """从环境文件删除协议档的三个变量并返回删除前快照。"""
+    """从环境文件删除协议档的主模型、Embedding、Reranker 全部变量。"""
     with _ENV_WRITE_LOCK:
         path = env_path()
         snapshot = _read_snapshot(path)

@@ -2,14 +2,14 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.11 |
-| 对应 PRD | V1.7.0（功能唯一权威） |
+| 文档版本 | V1.12 |
+| 对应 PRD | V1.7.1（功能唯一权威） |
 | 对应设计规范 | V1.3（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | V1.4（Harness / 斜杠 / 上下文算法；JSON 仍以本文为准） |
 | 对应前端计划 | V1.3 |
 | 对应后端计划 | V1.3 |
 | 撰写日期 | 2026-08-18 |
-| 最近修订 | 2026-08-20：V1.11 通过内部 `mcp_tools` 接入 Qwen Image 图文生图；V1.10 MCP 工具中心展示 Qwen Image 注册项；V1.9 短工具 `audio.voiceclone` 与 `GET /api/files/{id}/content`；V1.8 助手回复耗时展示；用例工作台 Excel 导入 |
+| 最近修订 | 2026-08-21：V1.12 协议档支持独立 Embedding / Reranker 端点配置，三类 API Key 均只写入受控环境文件且不回显；V1.11 通过内部 `mcp_tools` 接入 Qwen Image 图文生图；V1.10 MCP 工具中心展示 Qwen Image 注册项；V1.9 短工具 `audio.voiceclone` 与 `GET /api/files/{id}/content`；V1.8 助手回复耗时展示；用例工作台 Excel 导入 |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
 ---
@@ -500,6 +500,12 @@ body：`{ "name", "hint", "template" }`。
 AI_PROFILE_<PROFILE_ID_NORMALIZED>_BASE_URL
 AI_PROFILE_<PROFILE_ID_NORMALIZED>_MODEL
 AI_PROFILE_<PROFILE_ID_NORMALIZED>_API_KEY
+AI_PROFILE_<PROFILE_ID_NORMALIZED>_EMBEDDING_BASE_URL
+AI_PROFILE_<PROFILE_ID_NORMALIZED>_EMBEDDING_MODEL
+AI_PROFILE_<PROFILE_ID_NORMALIZED>_EMBEDDING_API_KEY
+AI_PROFILE_<PROFILE_ID_NORMALIZED>_RERANKER_BASE_URL
+AI_PROFILE_<PROFILE_ID_NORMALIZED>_RERANKER_MODEL
+AI_PROFILE_<PROFILE_ID_NORMALIZED>_RERANKER_API_KEY
 ```
 
 其中 `PROFILE_ID_NORMALIZED` 将非字母数字字符替换为下划线并转为大写，因此多个供应商可以同时存在，
@@ -509,8 +515,10 @@ AI_PROFILE_<PROFILE_ID_NORMALIZED>_API_KEY
 
 #### `GET /api/profiles`
 
-全员可列（无 Key），供确认卡。  
-item：`id, name, protocol, base_url, model, usages[], created_at`
+全员可列（无 Key），供确认卡和 RAG 上下文工程使用。除主模型外，Embedding 与 Reranker
+端点均为可选；响应只返回 URL、模型标识和 `has_*_api_key` 布尔值，不返回任何 Key。
+item：`id, name, protocol, base_url, model, usages[], embedding_base_url, embedding_model,
+has_embedding_api_key, reranker_base_url, reranker_model, has_reranker_api_key, created_at`
 
 #### `POST /api/profiles`  已登录成员
 
@@ -521,12 +529,20 @@ item：`id, name, protocol, base_url, model, usages[], created_at`
   "base_url": "https://api.example.com",
   "model": "gpt-4.1",
   "api_key": "sk-...",
+  "embedding_base_url": "https://embedding.example.com/v1",
+  "embedding_model": "text-embedding-3-large",
+  "embedding_api_key": "ek-...",
+  "reranker_base_url": "https://reranker.example.com/v1",
+  "reranker_model": "bge-reranker-v2-m3",
+  "reranker_api_key": "rk-...",
   "usages": ["target"]
 }
 ```
 
 `anthropic_messages` 可另存 `anthropic_version`（默认 `2023-06-01`）。变更写审计；API Key 不进入数据库，
-`has_api_key` 仅表示环境文件中是否存在对应 Key。
+`has_api_key`、`has_embedding_api_key`、`has_reranker_api_key` 仅表示环境文件中是否存在对应 Key。
+Embedding 与 Reranker 的 URL、模型和 Key 与主模型使用相同的“按协议档隔离、受控环境文件写入、空 Key 保留旧值”规则；
+更新时只提交需要修改的字段，三类 Key 留空均表示不修改既有密文。
 
 #### `PUT /api/profiles/{id}` / `DELETE /api/profiles/{id}`
 
@@ -1624,7 +1640,7 @@ MCP 浏览器不调：与 PRD 3.1、前端计划「禁止把 MCP 当 REST」一�
 
 ---
 
-## 13. 本次修订代码文件与作用清单（2026-08-20）
+## 13. 本次修订代码文件与作用清单（2026-08-21）
 
 | 文件 | 作用 |
 | --- | --- |
@@ -1700,4 +1716,16 @@ Qwen Image 通过与 `audio.voiceclone` 相同的 Agent 内部短工具链路执
 | `backend/api/app/config.py` / `docker-compose.yml` / `backend/api/app/routers/files.py` | 环境变量注入和图片附件白名单 |
 | `frontend/src/views/Agent.vue` / `frontend/src/styles/base.css` | 图片附件上传、工具结果预览与下载 |
 | `backend/api/tests/test_imagegen.py` | 图文请求、规划注入、落盘和线程执行单测 |
+
+**V1.12（2026-08-21）— 协议档 Embedding / Reranker 配置**
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/schemas.py` | 增加 Embedding / Reranker 的 URL、模型标识与 API Key 输入字段；响应只返回配置公开值和密钥存在性布尔值 |
+| `backend/api/app/profile_env.py` | 为两类附加模型生成隔离环境变量，沿用加锁、fsync、回滚和只写不回显规则 |
+| `backend/api/app/routers/profiles.py` | CRUD 写入和读取两类附加端点配置，更新时保留未提交的既有密钥 |
+| `backend/worker/app/profile_env.py` | Worker 只读解析 Embedding / Reranker 环境变量 |
+| `frontend/src/api/http.ts` / `frontend/src/components/modals/ProfileModal.vue` / `frontend/src/views/AdminProfiles.vue` | 协议档新增 Embedding / Reranker 可选配置表单、列表标识，并按空值保留规则提交；客户端请求类型同步收紧 |
+| `frontend/src/api/types.ts` | 补齐协议档附加模型配置与脱敏状态字段 |
+| `backend/api/tests/test_profile_env.py` / `backend/api/tests/test_profile_schemas.py` | 覆盖多端点环境变量隔离、删除回滚及请求校验 |
 

@@ -101,7 +101,14 @@ def _migrate_profile_to_env(profile: ProtocolProfile) -> ProfileEnvSnapshot | No
 
 def _profile_out(profile: ProtocolProfile, connection: tuple[str, str, str | None] | None = None) -> ProfileOut:
     """构造永不回显 Key 的协议档响应，连接参数以环境文件为准。"""
-    base_url, model, api_key = connection or _profile_connection(profile)
+    try:
+        base_url, model, api_key = connection or _profile_connection(profile)
+        env_values = read_profile_env(profile.id)
+    except AppError:
+        raise
+    except Exception as exc:
+        agent_trace(f"协议档响应环境读取失败 type={type(exc).__name__}")
+        raise AppError(ErrorCode.INTERNAL, "协议档环境配置读取失败") from exc
     return ProfileOut(
         id=profile.id,
         name=profile.name,
@@ -111,6 +118,12 @@ def _profile_out(profile: ProtocolProfile, connection: tuple[str, str, str | Non
         usages=profile.usages or [],
         anthropic_version=profile.anthropic_version,
         has_api_key=bool(api_key),
+        embedding_base_url=env_values.embedding_base_url,
+        embedding_model=env_values.embedding_model,
+        has_embedding_api_key=bool(env_values.embedding_api_key),
+        reranker_base_url=env_values.reranker_base_url,
+        reranker_model=env_values.reranker_model,
+        has_reranker_api_key=bool(env_values.reranker_api_key),
         context_window=getattr(profile, "context_window", 200000) or 200000,
         created_at=profile.created_at,
         updated_at=profile.updated_at,
@@ -204,16 +217,35 @@ def create_profile(
             base_url=str(body.base_url).rstrip("/"),
             model=body.model,
             api_key=body.api_key or None,
+            embedding_base_url=(
+                str(body.embedding_base_url).rstrip("/") if body.embedding_base_url else None
+            ),
+            embedding_model=body.embedding_model,
+            embedding_api_key=body.embedding_api_key or None,
+            reranker_base_url=(
+                str(body.reranker_base_url).rstrip("/") if body.reranker_base_url else None
+            ),
+            reranker_model=body.reranker_model,
+            reranker_api_key=body.reranker_api_key or None,
             protocol=body.protocol,
             write_global_aliases=True,
         )
         db.add(
             AuditLog(
                 user_id=user.id,
-                action="key_change" if body.api_key else "profile_create",
+                action=(
+                    "key_change"
+                    if body.api_key or body.embedding_api_key or body.reranker_api_key
+                    else "profile_create"
+                ),
                 target_type="profile",
                 target_id=profile.id,
-                detail={"name": profile.name, "has_api_key": bool(body.api_key)},
+                detail={
+                    "name": profile.name,
+                    "has_api_key": bool(body.api_key),
+                    "has_embedding_api_key": bool(body.embedding_api_key),
+                    "has_reranker_api_key": bool(body.reranker_api_key),
+                },
                 ip=_request_ip(request),
             )
         )
@@ -241,6 +273,9 @@ def update_profile(
         raise AppError(ErrorCode.NOT_FOUND, "协议档不存在")
     values = body.model_dump(exclude_unset=True)
     api_key = values.pop("api_key", None)
+    embedding_api_key = values.pop("embedding_api_key", None)
+    reranker_api_key = values.pop("reranker_api_key", None)
+    current_env = read_profile_env(profile.id)
     # 编辑旧单模型环境配置时允许从全局别名读取一次，随后固化为本 profile 变量。
     current_base_url, current_model, current_api_key = _profile_connection(profile, allow_global_alias=True)
     next_base_url = current_base_url
@@ -250,6 +285,29 @@ def update_profile(
     if values.get("model") is not None:
         next_model = values["model"]
     next_api_key = api_key or current_api_key
+    next_embedding_base_url = current_env.embedding_base_url
+    next_embedding_model = current_env.embedding_model
+    next_reranker_base_url = current_env.reranker_base_url
+    next_reranker_model = current_env.reranker_model
+    if values.get("embedding_base_url") is not None:
+        next_embedding_base_url = str(values.pop("embedding_base_url")).rstrip("/")
+    else:
+        values.pop("embedding_base_url", None)
+    if values.get("embedding_model") is not None:
+        next_embedding_model = values.pop("embedding_model")
+    else:
+        values.pop("embedding_model", None)
+    if values.get("reranker_base_url") is not None:
+        next_reranker_base_url = str(values.pop("reranker_base_url")).rstrip("/")
+    else:
+        values.pop("reranker_base_url", None)
+    if values.get("reranker_model") is not None:
+        next_reranker_model = values.pop("reranker_model")
+    else:
+        values.pop("reranker_model", None)
+    next_embedding_api_key = embedding_api_key or current_env.embedding_api_key
+    next_reranker_api_key = reranker_api_key or current_env.reranker_api_key
+    key_changed = bool(api_key or embedding_api_key or reranker_api_key)
     snapshot: ProfileEnvSnapshot | None = None
     for field, value in values.items():
         if field == "base_url" and value is not None:
@@ -263,16 +321,27 @@ def update_profile(
             model=next_model,
             # 编辑其它字段时保留现有 Key，并把旧全局/历史密文 Key 固化到本 profile 变量。
             api_key=next_api_key,
+            embedding_base_url=next_embedding_base_url,
+            embedding_model=next_embedding_model,
+            embedding_api_key=next_embedding_api_key,
+            reranker_base_url=next_reranker_base_url,
+            reranker_model=next_reranker_model,
+            reranker_api_key=next_reranker_api_key,
             protocol=profile.protocol,
             write_global_aliases=True,
         )
         db.add(
             AuditLog(
                 user_id=user.id,
-                action="key_change" if api_key else "profile_update",
+                action="key_change" if key_changed else "profile_update",
                 target_type="profile",
                 target_id=profile.id,
-                detail={"name": profile.name, "has_api_key": bool(next_api_key)},
+                detail={
+                    "name": profile.name,
+                    "has_api_key": bool(next_api_key),
+                    "has_embedding_api_key": bool(next_embedding_api_key),
+                    "has_reranker_api_key": bool(next_reranker_api_key),
+                },
                 ip=_request_ip(request),
             )
         )

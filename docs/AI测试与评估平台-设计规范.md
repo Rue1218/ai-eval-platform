@@ -3,10 +3,10 @@
 | 项目 | 内容 |
 | --- | --- |
 | 文档版本 | V1.3 |
-| 对应 PRD | V1.7.0（唯一产品权威） |
+| 对应 PRD | V1.7.1（唯一产品权威） |
 | 对应开发计划 | V1.3 |
 | 撰写日期 | 2026-08-17 |
-| 最近修订 | 2026-08-20：协议档多供应商 URL、模型 ID、Key 改由环境文件按 profile 隔离持久化 |
+| 最近修订 | 2026-08-21：协议档增加 Embedding / Reranker 独立 URL、模型 ID、Key 配置，仍按 profile 环境文件隔离持久化 |
 | 技术栈（PRD） | Vue3 + Naive UI、Python FastAPI、PostgreSQL、WebSocket、Docker Compose、go-stress-testing |
 | 适用范围 | V1.0 前端 `frontend/` |
 
@@ -210,7 +210,7 @@ JSONL/CSV UTF-8；列 `question,reference,context?`；覆盖上传版本 +1；�
 
 ### 5.8 `/admin/profiles`（F-BM-01，F-AGT-06）
 
-协议档 CRUD：`openai_chat` / `openai_responses` / `anthropic_messages` + base_url + 模型名 + 环境文件 Key。Key **只写不回显**，URL、模型 ID、Key 按 profile 独立变量写入服务器受控环境文件，变更写审计。指定唯一 Agent 后端。可标裁判档。连通性检查不把 Key 打进前端日志。
+协议档 CRUD：`openai_chat` / `openai_responses` / `anthropic_messages` + 主模型 base_url/模型名/Key，并可选配置 Embedding、Reranker 各自的 base_url/模型名/Key。Key **只写不回显**，三类端点的 URL、模型 ID、Key 按 profile 独立变量写入服务器受控环境文件，变更写审计。指定唯一 Agent 后端。可标裁判档。连通性检查不把 Key 打进前端日志。
 
 ### 5.9 `/admin/stress`（F-ST-05、F-CM-06、3.4）
 
@@ -530,7 +530,7 @@ Agent 确认卡          在文档流内，不抢 z-index
 | 首次引导改密 | 新密码、确认 | 不可点遮罩关闭，直到成功（PRD 2.1） |
 | 开户 | 用户名、初始密码、角色 | 仅管理员 |
 | 重置密码 | 新密码 | 仅管理员；不回显旧密 |
-| 新增/编辑协议档 | 名称、协议类型、base_url、模型名、Key、用途（被测/Agent 后端/裁判） | Key 空=不修改；只写不回显 |
+| 新增/编辑协议档 | 名称、协议类型、主模型 base_url/模型名/Key、可选 Embedding 与 Reranker base_url/模型名/Key、用途（被测/Agent 后端/裁判） | 三类 Key 空=不修改；只写不回显 |
 | 分享报告 | 只读链接 + 复制；有效期 7 天 | 未登录可打开 |
 | 连通性检查结果 | 成功/失败摘要 | 失败不展示 Key |
 
@@ -682,6 +682,14 @@ Agent 页允许的 Dialog **只有**：取消当前长任务、退出登录。�
 | **共享压测报告** | `#stress-chart` + `.kpi-grid` | 多轴折线图呈现 QPS 阶梯加压、P99/P95/P50 延迟响应与错误率波动；自动定位 SLA 拐点（Knee-point），输出 Tokens/s 吞吐与费用估算 |
 | **先评后压穿透横幅** | `.cascade-banner` | Benchmark 与对应压测子任务报告之间双向常驻穿透横幅，支持一键无缝跳转互相复核 |
 
+## 本次修订代码文件与作用清单（2026-08-21）
+
+| 文件 | 作用 |
+| --- | --- |
+| `frontend/src/components/modals/ProfileModal.vue` | 增加 Embedding / Reranker 独立端点配置表单，三类 Key 均只写不回显 |
+| `frontend/src/views/AdminProfiles.vue` | 在协议档卡片和表格中标识已配置的 Embedding / Reranker 模型 |
+| `frontend/src/api/types.ts` | 补齐附加模型配置及密钥存在性字段 |
+
 ---
 
-*V1.4：补齐全域 API 契约、报告中心多维可视化卡片规范、调度拓扑规范与全员同权协作模式。产品以 PRD 为准。*
+*V1.4.1：补齐 Embedding / Reranker 协议档配置的表单字段与列表标识。产品以 PRD 为准。*
