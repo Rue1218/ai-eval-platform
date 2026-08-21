@@ -367,6 +367,9 @@ docker images --format '{{.Repository}}:{{.Tag}}' \
     | while read -r old_image; do
         grep -qx "$old_image" <<<"$KEEP_IMAGES" || docker rmi "$old_image" >/dev/null 2>&1 || true
     done
+# 构建缓存只清 7 天前的：服务器本地构建（手动部署回退路径）仍可复用近期层，
+# 又避免历史缓存无限堆积（2026-08-21 实测曾积到 4.6GB）。
+docker builder prune -f --filter "until=168h" >/dev/null 2>&1 || true
 
 echo "==> 部署成功完成！各服务运行状态："
 docker compose ps
