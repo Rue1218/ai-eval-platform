@@ -159,14 +159,31 @@ def _full_text(protocol: str, data: dict) -> str:
 
 
 def _service_base_url(base_url: str) -> str:
-    """规范化协议服务根地址，兼容用户输入带或不带 ``/v1`` 的地址。
+    """规范化协议服务根地址，智能剥离常见后缀（如 /v1/models、/models、/chat/completions、/messages 等）。
 
-    三种协议的具体端点都由本适配器统一追加 ``/v1``。协议档常见的
-    OpenAI 兼容地址本身也带 ``/v1``，因此这里仅剥离末尾的版本段，
-    避免真实请求错误落到 ``/v1/v1/...``；不修改数据库中用户保存的原值。
+    三种协议的具体端点由本适配器统一追加相应路径段。协议档常见的
+    OpenAI 兼容地址通常带 /v1，因此这里会智能剥离末尾的子路径与版本段，
+    避免真实请求错误落到 /models/v1/models、/v1/v1/... 等错误地址；不修改数据库中用户保存的原值。
     """
     base = base_url.strip().rstrip("/")
-    return base[:-3] if base.endswith("/v1") else base
+    for suffix in (
+        "/chat/completions",
+        "/messages",
+        "/responses",
+        "/models",
+        "/v1/models",
+        "/v1/chat/completions",
+        "/v1/messages",
+        "/v1/responses",
+        "/api/tags",
+        "/api/v1/models",
+    ):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)].rstrip("/")
+            break
+    if base.endswith("/v1"):
+        base = base[:-3].rstrip("/")
+    return base
 
 
 def call_protocol(
@@ -444,6 +461,7 @@ def fetch_remote_models(
     真实调用远程端点解析实际可用模型，不返回硬编码假数据。
     """
     base = _service_base_url(base_url)
+    raw_clean = base_url.strip().rstrip("/")
 
     headers: dict[str, str] = {
         "Content-Type": "application/json",
@@ -458,18 +476,33 @@ def fetch_remote_models(
         else:
             headers["Authorization"] = f"Bearer {api_key}"
 
-    urls_to_try: list[str] = []
+    candidate_urls: list[str] = []
     if protocol == "anthropic_messages":
-        urls_to_try = [
+        candidate_urls = [
             f"{base}/v1/models",
             f"{base}/models",
+            f"{base}/api/v1/models",
         ]
+        if raw_clean not in candidate_urls:
+            candidate_urls.append(raw_clean)
+            if not raw_clean.endswith("/models"):
+                candidate_urls.append(f"{raw_clean}/models")
     else:
-        urls_to_try = [
+        candidate_urls = [
             f"{base}/v1/models",
             f"{base}/models",
             f"{base}/api/tags",
+            f"{base}/api/v1/models",
         ]
+        if raw_clean not in candidate_urls:
+            candidate_urls.append(raw_clean)
+            if not raw_clean.endswith("/models"):
+                candidate_urls.append(f"{raw_clean}/models")
+
+    urls_to_try: list[str] = []
+    for u in candidate_urls:
+        if u not in urls_to_try and (u.startswith("http://") or u.startswith("https://")):
+            urls_to_try.append(u)
 
     last_error: Exception | None = None
     data: dict | list | None = None
@@ -484,7 +517,7 @@ def fetch_remote_models(
         except HTTPError as exc:
             last_error = exc
             if exc.code in (401, 403):
-                raise AppError(ErrorCode.UNAUTHORIZED, f"上游鉴权失败 ({exc.code})，请检查 API Key") from exc
+                raise AppError(ErrorCode.UNAUTHORIZED, f"上游鉴权失败 ({exc.code})，请检查 API Key 凭据") from exc
             continue
         except TimeoutError as exc:
             last_error = exc
@@ -534,7 +567,12 @@ def fetch_remote_models(
     if last_error:
         if isinstance(last_error, HTTPError):
             if last_error.code in (401, 403):
-                raise AppError(ErrorCode.UNAUTHORIZED, f"上游鉴权失败 ({last_error.code})，请检查 API Key") from last_error
+                raise AppError(ErrorCode.UNAUTHORIZED, f"上游鉴权失败 ({last_error.code})，请检查 API Key 凭据") from last_error
+            if last_error.code == 404:
+                raise AppError(
+                    ErrorCode.NOT_FOUND,
+                    "目标服务端点未开放模型列表接口 (HTTP 404)。请检查 Base URL 地址或直接在输入框手动填入模型标识名（如 claude-3-7-sonnet-20250219、gpt-4o 等）",
+                ) from last_error
             raise AppError(ErrorCode.UPSTREAM, f"上游服务返回 HTTP {last_error.code}，无法获取模型列表") from last_error
         if isinstance(last_error, TimeoutError):
             raise AppError(ErrorCode.TIMEOUT, "获取模型列表超时，请检查服务端点网络") from last_error

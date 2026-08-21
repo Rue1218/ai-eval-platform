@@ -105,6 +105,40 @@ def test_fetch_remote_models_error_raising():
         assert exc_info.value.code == ErrorCode.UPSTREAM
 
 
+def test_service_base_url_suffix_stripping():
+    """测试 _service_base_url 智能剥离 /v1/models、/models、/chat/completions 等后缀。"""
+    from app.adapters import _service_base_url
+
+    assert _service_base_url("https://api.anthropic.com/v1/models") == "https://api.anthropic.com"
+    assert _service_base_url("https://api.anthropic.com/v1/models/") == "https://api.anthropic.com"
+    assert _service_base_url("https://api.anthropic.com/models") == "https://api.anthropic.com"
+    assert _service_base_url("https://api.anthropic.com/v1/messages") == "https://api.anthropic.com"
+    assert _service_base_url("https://api.openai.com/v1/chat/completions") == "https://api.openai.com"
+    assert _service_base_url("https://api.openai.com/v1/models") == "https://api.openai.com"
+    assert _service_base_url("https://api.openai.com/v1") == "https://api.openai.com"
+    assert _service_base_url("https://dashscope.aliyuncs.com/compatible-mode/v1") == "https://dashscope.aliyuncs.com/compatible-mode"
+
+
+def test_fetch_remote_models_404_not_found():
+    """测试当端点返回 404 时抛出 NOT_FOUND 并附带友好提示。"""
+    from urllib.error import HTTPError
+
+    import pytest
+
+    from app.errors import AppError, ErrorCode
+
+    err = HTTPError(url="https://api.example.com/v1/models", code=404, msg="Not Found", hdrs={}, fp=None)
+    with patch("app.adapters.urlopen", side_effect=err):
+        with pytest.raises(AppError) as exc_info:
+            fetch_remote_models(
+                protocol="openai_chat",
+                base_url="https://api.example.com/v1/models",
+                api_key="sk-test",
+            )
+        assert exc_info.value.code == ErrorCode.NOT_FOUND
+        assert "404" in exc_info.value.message
+
+
 def test_resolve_env_api_key_for_url(tmp_path, monkeypatch):
     """测试根据 Base URL 与协议从 .env 解析 API Key。"""
     from app.profile_env import resolve_env_api_key_for_url, resolve_env_base_url
