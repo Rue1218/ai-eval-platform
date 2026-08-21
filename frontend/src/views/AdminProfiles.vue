@@ -135,8 +135,22 @@
 
               <div class="model-chip-meta">
                 <span class="mono model-id-tag">{{ p.model }}</span>
-                <span v-if="p.embedding_model" class="mono model-id-tag" title="Embedding 模型">E: {{ p.embedding_model }}</span>
-                <span v-if="p.reranker_model" class="mono model-id-tag" title="Reranker 模型">R: {{ p.reranker_model }}</span>
+                <span
+                  v-if="p.embedding_model"
+                  class="mono model-id-tag tag-embed tag-clickable"
+                  title="点击查看/配置 Embedding 向量模型"
+                  @click.stop="openModal(p, 'embedding')"
+                >
+                  🔤 E: {{ p.embedding_model }}
+                </span>
+                <span
+                  v-if="p.reranker_model"
+                  class="mono model-id-tag tag-rerank tag-clickable"
+                  title="点击查看/配置 Reranker 重排模型"
+                  @click.stop="openModal(p, 'reranker')"
+                >
+                  🎯 R: {{ p.reranker_model }}
+                </span>
                 <span class="mono protocol-tag">{{ p.protocol }}</span>
                 <span class="mono window-tag" title="上下文窗口容量">{{ formatContextWindow(p.context_window) }}</span>
               </div>
@@ -202,8 +216,24 @@
             <td>
               <div class="row" style="gap: 4px; flex-wrap: wrap">
                 <span class="mono" style="font-size: 12px; font-weight: 500">{{ p.model }}</span>
-                <span v-if="p.embedding_model" class="mono" style="font-size: 11px; color: var(--text-secondary)" title="Embedding 模型">E: {{ p.embedding_model }}</span>
-                <span v-if="p.reranker_model" class="mono" style="font-size: 11px; color: var(--text-secondary)" title="Reranker 模型">R: {{ p.reranker_model }}</span>
+                <span
+                  v-if="p.embedding_model"
+                  class="mono model-id-tag tag-embed tag-clickable"
+                  style="font-size: 11px"
+                  title="点击查看/配置 Embedding 向量模型"
+                  @click.stop="openModal(p, 'embedding')"
+                >
+                  🔤 E: {{ p.embedding_model }}
+                </span>
+                <span
+                  v-if="p.reranker_model"
+                  class="mono model-id-tag tag-rerank tag-clickable"
+                  style="font-size: 11px"
+                  title="点击查看/配置 Reranker 重排模型"
+                  @click.stop="openModal(p, 'reranker')"
+                >
+                  🎯 R: {{ p.reranker_model }}
+                </span>
               </div>
             </td>
             <td>
@@ -1069,6 +1099,7 @@
       v-model:show="showModal"
       :profile="selectedProfile"
       :initial-data="modalInitialData"
+      :initial-tab="modalInitialTab"
       @success="loadProfiles"
     />
 
@@ -1531,17 +1562,20 @@ function formatContextWindow(tokens?: number): string {
 }
 
 const modalInitialData = ref<{ vendorKey?: string; base_url?: string; protocol?: any; name?: string } | null>(null)
+const modalInitialTab = ref<'llm' | 'embedding' | 'reranker'>('llm')
 
-function openModal(profile: Profile | null) {
+function openModal(profile: Profile | null, tab: 'llm' | 'embedding' | 'reranker' = 'llm') {
   safeBlur()
   selectedProfile.value = profile
   modalInitialData.value = null
+  modalInitialTab.value = tab
   showModal.value = true
 }
 
 function openModalWithVendor(group: VendorGroup) {
   safeBlur()
   selectedProfile.value = null
+  modalInitialTab.value = 'llm'
   modalInitialData.value = {
     vendorKey: group.key !== 'custom' ? group.key : undefined,
     base_url: group.base_url,
@@ -2455,6 +2489,26 @@ onMounted(loadProfiles)
   padding-top: 10px;
   margin-top: auto;
   border-top: 1px solid var(--border-subtle, #f1f5f9);
+}
+
+.tag-clickable {
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.15s ease;
+}
+.tag-clickable:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.15);
+}
+.tag-embed {
+  background: rgba(16, 185, 129, 0.12) !important;
+  color: #10b981 !important;
+  border: 1px solid rgba(16, 185, 129, 0.28) !important;
+}
+.tag-rerank {
+  background: rgba(139, 92, 246, 0.12) !important;
+  color: #a78bfa !important;
+  border: 1px solid rgba(139, 92, 246, 0.28) !important;
 }
 
 /* 移动端：卡片栅格最小宽度超过视口，统一折为单列 */
