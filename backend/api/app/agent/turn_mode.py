@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from .imagegen import looks_like_image_generation
@@ -11,7 +11,7 @@ from .slash import SlashParse
 from .voiceclone import looks_like_voiceclone
 
 
-class TurnMode(str, Enum):
+class TurnMode(StrEnum):
     """本轮编排模式。"""
 
     DIRECT = "direct"

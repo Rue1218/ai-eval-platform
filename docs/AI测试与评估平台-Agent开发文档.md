@@ -3,9 +3,9 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Agent 独立开发说明书 |
-| 版本 | V1.8 |
+| 版本 | V1.9 |
 | 日期 | 2026-08-20 |
-| 最近修订 | 2026-08-21：增加 MiMo STT/TTS 工具、意图优先级、独立线程执行、转写卡与音频播放回放；保留音色克隆和生图行为 |
+| 最近修订 | 2026-08-21：语音合成支持朗读稿抽取（命令前缀/引号/冒号剥离）与 TTS 意图词表扩充；增加 MiMo STT/TTS 工具、意图优先级、独立线程执行、转写卡与音频播放回放；保留音色克隆和生图行为 |
 | 用法 | **实现 `/agent` 以本文为准（Harness / 斜杠 / 窗口算法）。** REST/WS JSON 以 API.md V1.6 为准。完成某项后勾选文末 Task，并在「最近修订」追加一行。 |
 
 本文是评测平台 **Agent 子系统** 的完整开发说明书：目标、边界、运行时骨架、协议、模块、代码落点与验收任务都写在这里。与 PRD / API.md 冲突时，字段名与事件名以那两份为准；Harness、斜杠、上下文算法以本文 §16 为准。§4.6 所列增量已收入 **API.md V1.6**。
@@ -1504,3 +1504,13 @@ ToolCall 的执行顺序冻结为：注册表查找 → 系统绑定本轮附件
 | `frontend/src/components/modals/McpToolModal.vue` | 增加 STT/TTS 参数、返回和安全契约展示 |
 | `docs/AI测试与评估平台-API.md` | 更新 MCP、WS 事件和安全返回契约 |
 | `docs/AI测试与评估平台-Agent开发文档.md` | 记录路由优先级、交付 UX 和本次文件清单 |
+
+## 35. 语音合成朗读稿抽取（2026-08-21）
+
+`audio.speech_synthesis` 增加朗读稿抽取：模型未显式给出 `text` 时，从用户原话剥离「帮我输出音频 / 朗读一下」等命令前缀，以及引号、冒号后的内容作为播报文本，避免把命令整句合成语音；`SPEECH_SYNTHESIS_HINTS` 补充「输出音频 / 生成音频 / 读出来 / 念出来 / 帮我朗读」等中文意图词。有 wav/mp3 参考音频时仍优先走音色克隆，不改变既有路由。
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/agent/mimo_audio.py` | 新增 `extract_tts_text` 朗读稿抽取；`arguments_for_speech_synthesis` 接入抽取 |
+| `backend/api/app/agent/plan.py` | `SPEECH_SYNTHESIS_HINTS` 扩充中文命令词 |
+| `backend/api/tests/test_mimo_audio.py` | 朗读稿抽取与参数绑定单测 |

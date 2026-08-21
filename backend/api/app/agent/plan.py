@@ -217,8 +217,28 @@ def _stamp_loop(plan: PlanArtifact) -> PlanArtifact:
 
 
 # 语音意图提示：识别/转写必须先于音色克隆，合成则使用独立 TTS 工具。
+# 「配音」归入音色克隆口令（EXPLICIT_VOICECLONE_HINTS），不列入纯文本合成。
 SPEECH_RECOGNITION_HINTS = ("语音识别", "识别这段音频", "把音频识别", "转文字", "转写", "听写", "生成字幕", "speech recognition", "asr", "stt")
-SPEECH_SYNTHESIS_HINTS = ("语音合成", "文字转语音", "文本转语音", "转成语音", "生成语音", "合成音频", "播报", "朗读", "text to speech", "tts")
+SPEECH_SYNTHESIS_HINTS = (
+    "语音合成",
+    "文字转语音",
+    "文本转语音",
+    "转成语音",
+    "生成语音",
+    "合成音频",
+    "合成语音",
+    "播报",
+    "朗读",
+    "输出音频",
+    "生成音频",
+    "输出语音",
+    "转成音频",
+    "读出来",
+    "念出来",
+    "帮我朗读",
+    "text to speech",
+    "tts",
+)
 EXPLICIT_VOICECLONE_HINTS = ("配音", "克隆", "音色", "voiceclone", "voice clone", "参考音频", "用这个声音", "模仿声音")
 AUDIO_CLARIFY_RE = re.compile(r"(语音识别|语音合成|音色克隆|参考音频|wav|mp3)")
 

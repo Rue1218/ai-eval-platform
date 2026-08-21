@@ -298,8 +298,73 @@ def arguments_for_speech_recognition(db: Session, *, text: str, attachments: lis
     return {"file_id": audio_ids[-1] if audio_ids else "", "language": "auto"}
 
 
+# 纯文本 TTS 朗读稿抽取：引号 / 冒号 / 命令前缀剥离（预设音色合成）
+_QUOTE_PAIRS = (("「", "」"), ("『", "』"), ("“", "”"), ('"', '"'))
+_PLACEHOLDER_SPEAK = frozenset({"这段话", "这段文字", "一下", "吧"})
+_TTS_COMMAND_PREFIXES = (
+    "帮我输出音频",
+    "请输出音频",
+    "帮我生成音频",
+    "请生成音频",
+    "帮我生成语音",
+    "生成一段音频",
+    "生成音频",
+    "输出音频",
+    "帮我朗读一下",
+    "帮我朗读",
+    "请朗读",
+    "朗读一下",
+    "帮我读出来",
+    "文字转语音",
+    "语音合成",
+    "合成语音",
+    "输出语音",
+    "转成语音",
+    "转成音频",
+    "朗读",
+)
+
+
+def extract_tts_text(text: str) -> str:
+    """从用户原话抽出朗读稿：引号 / 冒号之后 / 去掉「帮我输出音频」一类前缀。
+
+    返回空串表示没有可朗读的内容（如只剩命令词或占位词）。
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+    for left, right in _QUOTE_PAIRS:
+        start = raw.find(left)
+        if start < 0:
+            continue
+        end = raw.find(right, start + len(left))
+        if end > start + len(left):
+            inner = raw[start + len(left) : end].strip()
+            if inner:
+                return inner
+    for sep in ("：", ":"):
+        if sep in raw:
+            after = raw.split(sep, 1)[1].strip()
+            if after:
+                return after
+    leftover = raw
+    lowered = leftover.lower()
+    for prefix in _TTS_COMMAND_PREFIXES:
+        if lowered.startswith(prefix.lower()):
+            leftover = leftover[len(prefix) :].lstrip("，,。 !！")
+            break
+    leftover = leftover.strip()
+    if leftover in _PLACEHOLDER_SPEAK:
+        return ""
+    return leftover
+
+
 def arguments_for_speech_synthesis(*, text: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-    """绑定 TTS 文本、模式、风格和受控模型参数。"""
+    """绑定 TTS 文本、模式、风格和受控模型参数。
+
+    模型未显式给朗读稿时，从用户原话用 ``extract_tts_text`` 抽取
+    （引号 / 冒号 / 命令前缀剥离），避免把「帮我输出音频」整句当作播报文本。
+    """
     args = dict(arguments or {})
     mode = str(args.get("mode") or "preset").strip().lower()
     if mode not in {"preset", "voicedesign"}:
@@ -310,8 +375,11 @@ def arguments_for_speech_synthesis(*, text: str, arguments: dict[str, Any] | Non
         else getattr(settings, "mimo_tts_preset_model", TTS_MODEL)
     )
     model = str(args.get("model") or default_model or "").strip()
+    raw_text = str(args.get("text") or "").strip()
+    if not raw_text:
+        raw_text = extract_tts_text(text) or (text or "").strip()
     return {
-        "text": str(args.get("text") or text or "").strip(),
+        "text": raw_text,
         "mode": mode,
         "style": str(args.get("style") or "").strip(),
         "model": model,
