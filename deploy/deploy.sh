@@ -184,17 +184,20 @@ else
 fi
 
 # 基础设施目标镜像以 docker-compose.yml 插值结果为准（唯一事实源），脚本不再重复定义默认值；
-# 若环境显式设置 POSTGRES_IMAGE/REDIS_IMAGE，compose 插值会自然生效。
-TARGET_POSTGRES_IMAGE=$(docker compose config --format json | python3 -c \
-    'import json,sys; print(json.load(sys.stdin)["services"]["postgres"]["image"])') || {
-    echo "错误：无法解析 postgres 服务镜像，请确认 docker-compose.yml 含 postgres 服务" >&2
+# 若环境显式设置 POSTGRES_IMAGE/REDIS_IMAGE，compose 插值会自然生效。单次调用减少部署耗时。
+INFRA_IMAGES=$(docker compose config --format json | python3 -c \
+    'import json, sys
+services = json.load(sys.stdin)["services"]
+try:
+    print(services["postgres"]["image"])
+    print(services["redis"]["image"])
+except KeyError:
+    sys.exit(1)') || {
+    echo "错误：无法解析 postgres/redis 服务镜像，请确认 docker-compose.yml 含对应服务" >&2
     exit 1
 }
-TARGET_REDIS_IMAGE=$(docker compose config --format json | python3 -c \
-    'import json,sys; print(json.load(sys.stdin)["services"]["redis"]["image"])') || {
-    echo "错误：无法解析 redis 服务镜像，请确认 docker-compose.yml 含 redis 服务" >&2
-    exit 1
-}
+TARGET_POSTGRES_IMAGE=$(sed -n '1p' <<<"$INFRA_IMAGES")
+TARGET_REDIS_IMAGE=$(sed -n '2p' <<<"$INFRA_IMAGES")
 
 # PostgreSQL 镜像变更属于有状态升级：先完整备份，再拉取目标镜像。
 POSTGRES_CONTAINER=$(docker compose ps -q postgres 2>/dev/null || true)
@@ -349,8 +352,21 @@ printf '%s\n' "${DEPLOY_COMMIT:-$(git rev-parse HEAD)}" > "$DEPLOY_MARKER"
     done
 } > "$DEPLOY_IMAGE_ENV"
 
-echo "==> [4/4] 清理未使用的历史悬空镜像"
+echo "==> [4/4] 清理未使用的历史镜像"
 docker image prune -f --filter "dangling=true" >/dev/null 2>&1 || true
+# 高频部署下旧 ghcr tag 快速堆积（曾达 68 个镜像把 dockerd RSS 推到 483MB）；
+# 低配机 docker system df 会卡死，改用定向列表：保留所有容器（含手动停止）引用的
+# 镜像与 .deploy-images.env 记录的当前镜像引用，其余 ghcr 业务镜像删除。
+# 回滚代价为重新 pull（ghcr 保留全部历史 tag），与 2026-08-19 手动清理策略一致。
+KEEP_IMAGES=$(docker ps -a --format '{{.Image}}')
+for variable in WEB_IMAGE API_IMAGE WORKER_IMAGE LIGHTRAG_IMAGE STRESS_IMAGE; do
+    KEEP_IMAGES+=$'\n'"${!variable:-}"
+done
+docker images --format '{{.Repository}}:{{.Tag}}' \
+    | grep '^ghcr.io/rue1218/ai-eval-platform-' \
+    | while read -r old_image; do
+        grep -qx "$old_image" <<<"$KEEP_IMAGES" || docker rmi "$old_image" >/dev/null 2>&1 || true
+    done
 
 echo "==> 部署成功完成！各服务运行状态："
 docker compose ps
