@@ -2,8 +2,9 @@ name: ai-eval-platform
 
 services:
   postgres:
-    # 固定 PostgreSQL 补丁版本，避免 16-alpine 浮动标签在重建时静默漂移。
-    image: ${POSTGRES_IMAGE:-postgres:16.15-alpine}
+    # 使用带 pgvector 扩展的官方镜像（同一 PG 16 大版本，pgdata 卷兼容）；
+    # 与 postgres:16.x-alpine 一样锁定具体版本，避免浮动标签在重建时静默漂移。
+    image: ${POSTGRES_IMAGE:-pgvector/pgvector:0.8.0-pg16}
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-aieval}
@@ -11,8 +12,23 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-aieval}
     volumes:
       - pgdata:/var/lib/postgresql/data
+      # 首次初始化数据卷时自动启用 vector 扩展；已有数据卷需按 README 执行一次性命令。
+      - ./deploy/initdb/001-pgvector.sql:/docker-entrypoint-initdb.d/001-pgvector.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aieval} -d ${POSTGRES_DB:-aieval}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    # Harness 记忆层短期回合状态 / 会话索引 / 幂等键；仅容器网络内访问，不暴露公网端口。
+    image: ${REDIS_IMAGE:-redis:7.4-alpine}
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -51,8 +67,12 @@ services:
       QWEN_IMAGE_API_KEY: ${QWEN_IMAGE_API_KEY:-}
       QWEN_IMAGE_MODEL: ${QWEN_IMAGE_MODEL:-}
       QWEN_IMAGE_TIMEOUT_SECONDS: ${QWEN_IMAGE_TIMEOUT_SECONDS:-120}
+      # Harness 记忆层 Redis 连接（短期回合状态 / 幂等键）；接入前无消费者，仅预注入。
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     ports:
       - "${API_PORT:-8000}:8000"
@@ -80,8 +100,12 @@ services:
       KEY_ENCRYPTION_KEY: ${KEY_ENCRYPTION_KEY:-}
       SECRET_KEY: ${SECRET_KEY:-dev-secret-change-me}
       PROFILE_ENV_FILE: ${PROFILE_ENV_FILE:-/run/config/.env}
+      # 与 api 容器共享同一 Redis；Worker 后续按需消费任务事件。
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       api:
         condition: service_healthy
@@ -125,3 +149,4 @@ services:
 
 volumes:
   pgdata:
+  redisdata:

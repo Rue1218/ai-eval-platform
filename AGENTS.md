@@ -15,7 +15,8 @@
 | **Web 前端** | `web` | `80` | `http://47.119.132.83/`（Nginx 反代 `/api` 与 `/ws`） |
 | **API 服务** | `api` | `8000` | `http://47.119.132.83:8000/docs`（FastAPI + Swagger + 短 MCP） |
 | **Worker 引擎** | `worker` | - | 容器内部网络通信，轮询 PG 任务队列执行耗时评测 |
-| **数据库** | `postgres` | `5432` | PostgreSQL 16 关系数据库（持久卷 `pgdata`） |
+| **数据库** | `postgres` | `5432` | PostgreSQL 16 关系数据库（pgvector 镜像，含向量扩展；持久卷 `pgdata`） |
+| **缓存/记忆** | `redis` | - | 容器内部网络通信；Harness 记忆层短期回合状态与幂等键（持久卷 `redisdata`） |
 | **RAG 引擎** | `lightrag` | `9621` | LightRAG 混合检索与图谱评测服务 |
 | **压测引擎** | `stress` | `19090` | go-stress-testing 发压引擎，暴露 `/metrics` |
 
