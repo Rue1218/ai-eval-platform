@@ -207,6 +207,33 @@ async def _emit_thought(
     await emit("thought", payload)
 
 
+def _live_reasoning_sink(
+    emit: EmitFn,
+    loop: asyncio.AbstractEventLoop,
+) -> tuple[list[str], Callable[[str], None]]:
+    """规划线程里把推理增量推到思考卡，避免非流式整包空等。"""
+    sink: list[str] = []
+
+    def on_reasoning(chunk: str) -> None:
+        sink.append(chunk)
+        try:
+            asyncio.run_coroutine_threadsafe(
+                emit("thought", {"text": chunk, "stream": "think"}),
+                loop,
+            ).result(timeout=STREAM_EMIT_WAIT_S)
+        except Exception:
+            pass
+
+    return sink, on_reasoning
+
+
+async def _flush_think_final(emit: EmitFn, sink: list[str]) -> None:
+    """规划流结束后落思考快照，供刷新回放。"""
+    thought = "".join(sink).strip()[:12000]
+    if thought:
+        await emit("thought", {"text": thought, "stream": "think_final"})
+
+
 async def _deliver_sentence(
     db: Session,
     session_id: str,
@@ -229,6 +256,7 @@ async def _deliver_sentence(
     if latency_ms is not None:
         payload["reply_latency_ms"] = latency_ms
     await emit("thought", payload, task_id=task_id)
+    agent_trace(f"交付助手回复 chars={len(text)} latency={latency_ms or 0}ms")
     db.add(
         Message(
             session_id=session_id,
@@ -312,6 +340,9 @@ async def _run_turn(
     history = history_for_plan(db, session)
     compact_summary = getattr(session, "compact_summary", None)
     budget = TurnBudget(cap=MAX_MODEL_CALLS)
+    loop = asyncio.get_running_loop()
+    plan_thought, on_plan_reasoning = _live_reasoning_sink(emit, loop)
+    plan_span = trace.child("orchestration.plan")
 
     try:
         plan = await _await_thread(
@@ -327,10 +358,13 @@ async def _run_turn(
                 model_available=True,
                 compact_summary=compact_summary,
                 cancel=cancel,
+                trace=plan_span,
+                on_reasoning=on_plan_reasoning,
             ),
         )
     except TurnCancelled as exc:
         raise HarnessAborted() from exc
+    await _flush_think_final(emit, plan_thought)
     _check_abort(abort)
     mode = resolve_turn_mode(text=text, parsed=parsed, plan=plan)
     agent_trace(
@@ -385,21 +419,30 @@ async def _run_turn(
     if allows_replan(mode) and missing and budget.remaining() > 0 and plan.delivery == "confirm":
         _check_abort(abort)
         await _emit_thought(emit, "补规划：根据工具观察调整槽位", stage="plan")
-        extra = await _await_thread(
-            stop,
-            lambda tdb: run_replan(
-                tdb,
-                text=text,
-                parsed=parsed,
-                history=history,
-                prefs=prefs,
-                attachments=attachments,
-                budget=budget,
-                plan=plan,
-                observations=list(react.observations),
-                compact_summary=compact_summary,
-            ),
-        )
+        replan_thought, on_replan_reasoning = _live_reasoning_sink(emit, loop)
+        replan_span = trace.child("orchestration.replan")
+        try:
+            extra = await _await_thread(
+                stop,
+                lambda tdb: run_replan(
+                    tdb,
+                    text=text,
+                    parsed=parsed,
+                    history=history,
+                    prefs=prefs,
+                    attachments=attachments,
+                    budget=budget,
+                    plan=plan,
+                    observations=list(react.observations),
+                    compact_summary=compact_summary,
+                    cancel=cancel,
+                    trace=replan_span,
+                    on_reasoning=on_replan_reasoning,
+                ),
+            )
+        except TurnCancelled as exc:
+            raise HarnessAborted() from exc
+        await _flush_think_final(emit, replan_thought)
         executed_names = [str(obs.get("name") or "") for obs in react.observations]
         plan, extra_tools = merge_replan(plan, extra, executed_tool_names=executed_names)
         if extra_tools and plan.delivery == "confirm":
@@ -617,6 +660,7 @@ async def _run_turn(
                 },
             },
         )
+        agent_trace(f"生成确认卡 intent={plan.intent} kind={card.get('kind')}")
         return
 
     if plan.intent == "chat" or plan.delivery == "text":

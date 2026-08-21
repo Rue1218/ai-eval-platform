@@ -21,6 +21,7 @@ from app.llm import (
     call_agent_model_detailed,
     get_agent_profile_public_info,
     resolve_agent_profile,
+    stream_agent_json,
     stream_agent_model,
 )
 from app.models import ProtocolProfile, Setting
@@ -267,6 +268,47 @@ def test_stream_agent_model_yields_reasoning_and_content(sample_profile: Protoco
         )
     )
     assert chunks == [("reasoning", "先想"), ("content", "你好")]
+
+
+def test_stream_agent_json_callback_then_parse_body(sample_profile: ProtocolProfile, monkeypatch):
+    """结构化流式调用：推理走回调，正文拼给 JSON 解析。"""
+    setting = Setting(key="agent_profile_id", value=sample_profile.id, updated_by="user-admin")
+    fake_db = _FakeDb(settings=[setting], profiles=[sample_profile])
+    chunks: list[str] = []
+    monkeypatch.setattr(
+        "app.harness.llm.client.stream_agent_model",
+        lambda *_a, **_k: iter([("reasoning", "先判断闲聊"), ("content", '{"loop":"chat"}')]),
+    )
+    result = stream_agent_json(
+        fake_db,
+        "System",
+        "User",
+        trace=TraceContext.for_turn(),
+        cancel=CancellationToken(turn_id="t-json"),
+        on_reasoning=chunks.append,
+    )
+    assert chunks == ["先判断闲聊"]
+    assert result.text == '{"loop":"chat"}'
+    assert result.reasoning == "先判断闲聊"
+
+
+def test_stream_agent_json_empty_content_is_upstream(sample_profile: ProtocolProfile, monkeypatch):
+    """只有思考没有正文时归一 UPSTREAM，触发规划重试/L0。"""
+    setting = Setting(key="agent_profile_id", value=sample_profile.id, updated_by="user-admin")
+    fake_db = _FakeDb(settings=[setting], profiles=[sample_profile])
+    monkeypatch.setattr(
+        "app.harness.llm.client.stream_agent_model",
+        lambda *_a, **_k: iter([("reasoning", "只想不说")]),
+    )
+    with pytest.raises(AppError) as exc:
+        stream_agent_json(
+            fake_db,
+            "System",
+            "User",
+            trace=TraceContext.for_turn(),
+            cancel=CancellationToken(turn_id="t-empty"),
+        )
+    assert exc.value.code == ErrorCode.UPSTREAM
 
 
 def test_stream_agent_model_passes_should_abort(sample_profile: ProtocolProfile, monkeypatch):

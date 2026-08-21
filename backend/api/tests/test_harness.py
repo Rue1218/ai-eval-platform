@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 
 import pytest
@@ -20,6 +21,7 @@ from app.agent.persona import PERSONA_SYSTEM, turn_system
 from app.agent.plan import (
     PlanArtifact,
     TurnBudget,
+    _call_plan_model,
     apply_prefs_suggestions,
     classify_intent_l0,
     is_smalltalk,
@@ -48,8 +50,9 @@ from app.agent.turn_mode import (
     uses_react_llm,
 )
 from app.errors import AppError, ErrorCode
-from app.harness.contracts.cancellation import CancellationToken
+from app.harness.contracts.cancellation import CancellationToken, TurnCancelled
 from app.harness.contracts.trace import TraceContext
+from app.harness.llm.client import AgentJsonStreamResult
 from app.models import Dataset, ProtocolProfile, Task, User
 from app.models import Session as AgentSession
 
@@ -559,6 +562,105 @@ def test_run_plan_greeting_model_chooses_chat_loop(monkeypatch):
     assert plan.delivery == "text"
     assert plan.used_model is True
     assert plan.source == "llm"
+
+
+_PLAN_JSON = {
+    "intent": "chat",
+    "skill_id": None,
+    "slots": {"filled": {}, "missing": []},
+    "tools_needed": [],
+    "delivery": "text",
+    "budget": {"max_tool_rounds": 0},
+    "notes": "规划：问候。",
+    "complexity": "low",
+    "loop": "chat",
+}
+
+
+def test_call_plan_model_streams_when_reasoning_callback(monkeypatch):
+    """规划有思考回调时必须流式，推理增量立即回调，不得整包空等。"""
+    chunks: list[str] = []
+
+    def _fake_stream(_db, _system, _user, **kwargs):
+        cb = kwargs.get("on_reasoning")
+        if cb:
+            cb("先判断是闲聊")
+        return AgentJsonStreamResult(
+            text=json.dumps(_PLAN_JSON, ensure_ascii=False),
+            reasoning="先判断是闲聊",
+            latency_ms=11,
+        )
+
+    monkeypatch.setattr("app.llm.stream_agent_json", _fake_stream)
+    monkeypatch.setattr(
+        "app.llm.call_agent_model_detailed",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("有思考回调时不得走非流式规划")),
+    )
+    raw, latency = _call_plan_model(
+        _FakeDb(),
+        {"text": "你好", "command": "", "args": "", "history": [], "prefs": {}, "attachments": []},
+        extra_system="",
+        budget=TurnBudget(),
+        cancel=CancellationToken(turn_id="t-plan-stream"),
+        trace=TraceContext.for_turn(),
+        on_reasoning=chunks.append,
+    )
+    assert chunks == ["先判断是闲聊"]
+    assert raw["loop"] == "chat"
+    assert latency == 11
+
+
+def test_call_plan_model_nonstream_without_callback(monkeypatch):
+    """无思考回调时保持非流式，便于单测夹具。"""
+
+    class _Result:
+        text = json.dumps(_PLAN_JSON, ensure_ascii=False)
+        latency_ms = 6
+
+    monkeypatch.setattr("app.llm.call_agent_model_detailed", lambda *_a, **_k: _Result())
+    monkeypatch.setattr(
+        "app.llm.stream_agent_json",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("无回调不应走流式规划")),
+    )
+    raw, latency = _call_plan_model(
+        _FakeDb(),
+        {"text": "你好", "command": "", "args": "", "history": [], "prefs": {}, "attachments": []},
+        extra_system="",
+        budget=TurnBudget(),
+    )
+    assert raw["intent"] == "chat"
+    assert latency == 6
+
+
+def test_run_replan_propagates_turn_cancelled(monkeypatch):
+    """补规划读流取消不得被当成 JSON 失败改判 clarify。"""
+
+    def _boom(*_a, **_k):
+        raise TurnCancelled("disconnect")
+
+    monkeypatch.setattr("app.agent.plan._call_plan_model", _boom)
+    plan = PlanArtifact(
+        intent="benchmark",
+        skill_id="skill-benchmark",
+        slots={"filled": {"kind": "benchmark"}, "missing": ["dataset_id"]},
+        tools_needed=["dataset.list"],
+        delivery="confirm",
+        budget={"max_tool_rounds": 4},
+        notes="规划",
+        source="llm",
+    )
+    with pytest.raises(TurnCancelled):
+        run_replan(
+            _FakeDb(),
+            text="评测",
+            parsed=parse_slash("评测"),
+            history=[],
+            prefs={},
+            attachments=[],
+            budget=TurnBudget(),
+            plan=plan,
+            observations=[],
+        )
 
 
 def test_run_plan_offtopic_uses_planner_not_eval_defaults(monkeypatch):
