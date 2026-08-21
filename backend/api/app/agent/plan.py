@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from app.harness.contracts.cancellation import CancellationToken, TurnCancelled
+from app.harness.contracts.trace import TraceContext
 
 from ..errors import AppError, ErrorCode
 from .defaults import (
@@ -22,6 +24,7 @@ from .defaults import (
     REQUIRED_SLOTS,
     SHORT_TOOLS,
     SKILL_ID_ENUM,
+    STREAM_TIMEOUT_S,
     WRITE_TOOLS,
     is_long_tool,
 )
@@ -332,17 +335,22 @@ def looks_like_inspect_query(text: str) -> bool:
 
 
 def inspect_tools_needed(text: str) -> list[str]:
-    """按查询对象选一个短工具。"""
+    """按查询对象选一个短工具（仅限当前注册的短工具）。"""
+    from .defaults import SHORT_TOOLS
+
     raw = text or ""
+    cand = []
     if "数据集" in raw:
-        return ["dataset.list"]
-    if "知识库" in raw:
-        return ["kb.list"]
-    if "调度" in raw:
-        return ["dispatch.overview"]
-    if "任务" in raw:
-        return ["task.get"]
-    return ["model.list"]
+        cand = ["dataset.list"]
+    elif "知识库" in raw:
+        cand = ["kb.list"]
+    elif "调度" in raw:
+        cand = ["dispatch.overview"]
+    elif "任务" in raw:
+        cand = ["task.get"]
+    else:
+        cand = ["model.list"]
+    return [t for t in cand if t in SHORT_TOOLS]
 
 
 def classify_intent_l0(text: str) -> tuple[str, bool]:
@@ -522,20 +530,41 @@ def _call_plan_model(
     budget: TurnBudget,
     compact_summary: str | None = None,
     cancel: CancellationToken | None = None,
+    trace: TraceContext | None = None,
+    on_reasoning: Callable[[str], None] | None = None,
 ) -> tuple[dict, int]:
     if not budget.consume():
         raise AppError(ErrorCode.VALIDATION, "本轮模型调用已达上限")
-    from ..llm import call_agent_model_detailed
-
     if cancel is not None:
         cancel.raise_if_cancelled()
+    system = turn_system(
+        f"{plan_system()}\n{extra_system}".strip(),
+        compact_summary=compact_summary,
+    )
+    user_blob = json.dumps(user_payload, ensure_ascii=False)
+    # 有回调时走流式：推理链先上思考卡，正文再解析 loop/intent。
+    if on_reasoning is not None and trace is not None and cancel is not None:
+        from ..llm import stream_agent_json
+
+        result = stream_agent_json(
+            db,
+            system,
+            user_blob,
+            trace=trace,
+            cancel=cancel,
+            on_reasoning=on_reasoning,
+            temperature=0,
+            max_tokens=2048,
+            timeout_s=STREAM_TIMEOUT_S,
+        )
+        return parse_json_object(result.text), result.latency_ms
+
+    from ..llm import call_agent_model_detailed
+
     result = call_agent_model_detailed(
         db,
-        turn_system(
-            f"{plan_system()}\n{extra_system}".strip(),
-            compact_summary=compact_summary,
-        ),
-        json.dumps(user_payload, ensure_ascii=False),
+        system,
+        user_blob,
         temperature=0,
         max_tokens=1024,
         timeout_s=12,
@@ -556,6 +585,8 @@ def run_plan(
     model_available: bool = True,
     compact_summary: str | None = None,
     cancel: CancellationToken | None = None,
+    trace: TraceContext | None = None,
+    on_reasoning: Callable[[str], None] | None = None,
 ) -> PlanArtifact:
     """产出 PlanArtifact：斜杠模板 / LLM / 重试 / L0。"""
 
@@ -606,6 +637,8 @@ def run_plan(
             budget=budget,
             compact_summary=compact_summary,
             cancel=cancel,
+            trace=trace,
+            on_reasoning=on_reasoning,
         )
         plan = sanitize_plan(raw, source="llm")
         plan.used_model = True
@@ -631,6 +664,8 @@ def run_plan(
             budget=budget,
             compact_summary=compact_summary,
             cancel=cancel,
+            trace=trace,
+            on_reasoning=on_reasoning,
         )
         plan = sanitize_plan(raw, source="retry")
         plan.used_model = True
@@ -683,6 +718,9 @@ def run_replan(
     plan: PlanArtifact,
     observations: list[dict[str, Any]],
     compact_summary: str | None = None,
+    cancel: CancellationToken | None = None,
+    trace: TraceContext | None = None,
+    on_reasoning: Callable[[str], None] | None = None,
 ) -> PlanArtifact:
     """1 次补规划：观察摘要放入本轮 user JSON，不占 20 条消息窗口（HAR-ACT-04）。
 
@@ -707,12 +745,17 @@ def run_replan(
             extra_system=REPLAN_JSON_SUFFIX,
             budget=budget,
             compact_summary=compact_summary,
+            cancel=cancel,
+            trace=trace,
+            on_reasoning=on_reasoning,
         )
         extra = sanitize_plan({**plan.as_dict(), **raw}, source="replan")
         extra.used_model = True
         extra.latency_ms = latency
         extra.pref_thoughts = list(plan.pref_thoughts)
         return extra
+    except TurnCancelled:
+        raise
     except AppError as exc:
         # 补规划失败一律澄清，不得把 INTERNAL 冒成 500 中断回合
         agent_trace(f"补规划模型失败 code={exc.code.value}，改判 clarify")

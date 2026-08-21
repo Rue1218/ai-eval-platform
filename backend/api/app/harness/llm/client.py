@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import nullcontext
 from dataclasses import dataclass
 
@@ -33,6 +33,15 @@ class AgentCallResult:
     latency_ms: int
     usage: dict
     raw: dict
+
+
+@dataclass(frozen=True)
+class AgentJsonStreamResult:
+    """流式 JSON 调用产物：正文供解析，推理链经回调实时下发。"""
+
+    text: str
+    reasoning: str
+    latency_ms: int
 
 
 @dataclass(frozen=True)
@@ -183,7 +192,13 @@ def call_agent_model_detailed(
                 usage=result.usage,
                 raw=result.raw,
             )
-        except (AppError, TurnCancelled):
+        except AppError as exc:
+            agent_trace(
+                f"模型调用失败 protocol={profile.protocol} model={model} code={exc.code.value} error={exc.message}"
+            )
+            raise
+        except TurnCancelled:
+            agent_trace(f"模型调用取消 protocol={profile.protocol} model={model}")
             raise
         except Exception as exc:
             logger.exception("Agent 模型调用未归类异常")
@@ -240,12 +255,67 @@ def stream_agent_model(
         except StreamAborted as exc:
             agent_trace("模型流式调用被取消")
             raise TurnCancelled(cancel.reason or "cancelled") from exc
-        except (AppError, TurnCancelled):
+        except AppError as exc:
+            agent_trace(
+                f"模型流式调用失败 protocol={profile.protocol} model={model} code={exc.code.value} error={exc.message}"
+            )
+            raise
+        except TurnCancelled:
+            agent_trace("模型流式调用被取消")
             raise
         except Exception as exc:
             logger.exception("Agent 模型流式调用未归类异常")
             agent_trace(f"模型流式调用内部异常 type={type(exc).__name__}")
             raise AppError(ErrorCode.INTERNAL, "Agent 模型调用失败") from exc
+
+
+def stream_agent_json(
+    db: Session,
+    system: str,
+    user: str,
+    *,
+    trace: TraceContext,
+    cancel: CancellationToken,
+    on_reasoning: Callable[[str], None] | None = None,
+    temperature: float = 0,
+    max_tokens: int = 2048,
+    timeout_s: float = STREAM_TIMEOUT_S,
+) -> AgentJsonStreamResult:
+    """流式调用并拆出 JSON 正文与推理链。
+
+    规划/ReAct 等结构化调用走这里：思考卡随 ``reasoning`` 增量出现，
+    调用方只解析 ``text``。取消令牌下传到读循环。
+    """
+    content_parts: list[str] = []
+    thought_parts: list[str] = []
+    started = time.perf_counter()
+    for kind, chunk in stream_agent_model(
+        db,
+        system,
+        user,
+        trace=trace,
+        cancel=cancel,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        timeout_s=timeout_s,
+    ):
+        cancel.raise_if_cancelled()
+        if not chunk:
+            continue
+        if kind == "reasoning":
+            thought_parts.append(chunk)
+            if on_reasoning is not None:
+                on_reasoning(chunk)
+        else:
+            content_parts.append(chunk)
+    text = "".join(content_parts)
+    if not text.strip():
+        raise AppError(ErrorCode.UPSTREAM, "Agent 模型返回空内容")
+    return AgentJsonStreamResult(
+        text=text,
+        reasoning="".join(thought_parts).strip()[:12000],
+        latency_ms=round((time.perf_counter() - started) * 1000),
+    )
 
 
 def call_agent_model(
