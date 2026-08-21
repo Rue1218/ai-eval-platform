@@ -133,23 +133,7 @@
               </div>
 
               <div class="model-chip-meta">
-                <span class="mono model-id-tag">{{ p.model }}</span>
-                <span
-                  v-if="p.embedding_model"
-                  class="mono model-id-tag tag-embed tag-clickable"
-                  title="点击查看/配置全局 Embedding 向量模型"
-                  @click.stop="switchTab('rag_models')"
-                >
-                  🔤 E: {{ p.embedding_model }}
-                </span>
-                <span
-                  v-if="p.reranker_model"
-                  class="mono model-id-tag tag-rerank tag-clickable"
-                  title="点击查看/配置全局 Reranker 重排模型"
-                  @click.stop="switchTab('rag_models')"
-                >
-                  🎯 R: {{ p.reranker_model }}
-                </span>
+                <span class="mono model-id-tag" :title="p.model">{{ p.model }}</span>
                 <span class="mono protocol-tag">{{ p.protocol }}</span>
                 <span class="mono window-tag" title="上下文窗口容量">{{ formatContextWindow(p.context_window) }}</span>
               </div>
@@ -213,27 +197,7 @@
               <span class="mono" style="font-size: 12px">{{ p.protocol }}</span>
             </td>
             <td>
-              <div class="row" style="gap: 4px; flex-wrap: wrap">
-                <span class="mono" style="font-size: 12px; font-weight: 500">{{ p.model }}</span>
-                <span
-                  v-if="p.embedding_model"
-                  class="mono model-id-tag tag-embed tag-clickable"
-                  style="font-size: 11px"
-                  title="点击查看/配置全局 Embedding 向量模型"
-                  @click.stop="switchTab('rag_models')"
-                >
-                  🔤 E: {{ p.embedding_model }}
-                </span>
-                <span
-                  v-if="p.reranker_model"
-                  class="mono model-id-tag tag-rerank tag-clickable"
-                  style="font-size: 11px"
-                  title="点击查看/配置全局 Reranker 重排模型"
-                  @click.stop="switchTab('rag_models')"
-                >
-                  🎯 R: {{ p.reranker_model }}
-                </span>
-              </div>
+              <span class="mono" style="font-size: 12.5px; font-weight: 600">{{ p.model }}</span>
             </td>
             <td>
               <span class="mono window-tag">{{ formatContextWindow(p.context_window) }}</span>
@@ -2234,26 +2198,34 @@ onMounted(() => {
 .model-chip-meta {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 11px;
+  gap: 8px;
+  font-size: 11.5px;
+  min-width: 0;
+  flex-wrap: wrap;
 }
 .model-id-tag {
-  background: rgba(15, 23, 42, 0.06);
-  padding: 2px 7px;
-  border-radius: 5px;
-  font-weight: 500;
+  background: rgba(15, 23, 42, 0.05);
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-weight: 600;
   color: var(--text-primary, #1e293b);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+  display: inline-block;
 }
 .protocol-tag {
-  color: var(--text-tertiary, #9ca3af);
+  color: var(--text-secondary, #64748b);
+  font-weight: 500;
 }
 .window-tag {
   display: inline-block;
-  padding: 1px 5px;
+  padding: 2px 6px;
   background: var(--t-profiles, rgba(79, 70, 229, 0.08));
   color: var(--c-profiles, #4f46e5);
   border-radius: 4px;
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 600;
 }
 .model-chip-bottom {
