@@ -868,4 +868,29 @@ async function submitCreateTask() {
 .filter-bar {
   align-items: center;
 }
+
+/* 移动端与小屏响应式适配 */
+@media (max-width: 768px) {
+  .tasks-page {
+    padding-bottom: 16px;
+  }
+  .filter-bar {
+    flex-direction: column;
+    align-items: stretch !important;
+    gap: 8px !important;
+  }
+  .filter-bar .n-input,
+  .filter-bar .n-select {
+    width: 100% !important;
+  }
+  .filter-bar .btn {
+    flex: 1;
+    justify-content: center;
+  }
+  .chart-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+}
 </style>

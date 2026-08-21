@@ -1037,6 +1037,10 @@ export const api = {
       const { data } = await http.put('/api/admin/rag-models', payload)
       return data
     },
+    async checkRagModel(payload: { target: 'embedding' | 'reranker'; base_url?: string; model?: string; api_key?: string }): Promise<{ ok: boolean; latency_ms?: number; model?: string; message?: string }> {
+      const { data } = await http.post('/api/admin/rag-models/check', payload)
+      return data
+    },
   },
 
   // 11. 会话管理

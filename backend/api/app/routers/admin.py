@@ -2,7 +2,7 @@
 
 from copy import deepcopy
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -25,6 +25,13 @@ from .profiles import _profile_connection
 from .users import _parse_bound
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+
+
+class RagCheckIn(ApiModel):
+    target: Literal["embedding", "reranker"]
+    base_url: str | None = None
+    model: str | None = None
+    api_key: str | None = None
 
 
 class RagModelsIn(ApiModel):
@@ -223,6 +230,60 @@ def put_rag_models(
             restore_snapshot(env_snapshot)
         raise AppError(ErrorCode.INTERNAL, "全局 RAG 模型配置保存失败") from exc
     return get_rag_models(user=user)
+
+
+@router.post("/rag-models/check")
+def check_rag_model(
+    body: RagCheckIn,
+    user: User = Depends(get_current_user),
+):
+    """向指定的 Embedding 或 Reranker 模型端点发送轻量探活请求并返回延迟和状态。"""
+    import time
+
+    import httpx
+
+    values = read_global_rag_env()
+    if body.target == "embedding":
+        base_url = (body.base_url or values.embedding_base_url or "").rstrip("/")
+        model = body.model or values.embedding_model or ""
+        api_key = body.api_key or values.embedding_api_key or ""
+        if not base_url or not model:
+            raise AppError(ErrorCode.VALIDATION, "Embedding 端点或模型名称未指定")
+        url = f"{base_url}/embeddings" if not base_url.endswith("/embeddings") else base_url
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        payload = {"input": "ping", "model": model}
+    else:
+        base_url = (body.base_url or values.reranker_base_url or "").rstrip("/")
+        model = body.model or values.reranker_model or ""
+        api_key = body.api_key or values.reranker_api_key or ""
+        if not base_url or not model:
+            raise AppError(ErrorCode.VALIDATION, "Reranker 端点或模型名称未指定")
+        url = f"{base_url}/rerank" if not base_url.endswith("/rerank") else base_url
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        payload = {"query": "ping", "documents": ["ping"], "model": model}
+
+    t0 = time.perf_counter()
+    try:
+        with httpx.Client(timeout=8.0) as client:
+            resp = client.post(url, json=payload, headers=headers)
+            latency_ms = round((time.perf_counter() - t0) * 1000, 1)
+            if resp.status_code < 400:
+                return {"ok": True, "latency_ms": latency_ms, "model": model, "target": body.target}
+            else:
+                return {
+                    "ok": False,
+                    "latency_ms": latency_ms,
+                    "code": resp.status_code,
+                    "message": f"HTTP {resp.status_code}: {resp.text[:120]}",
+                }
+    except httpx.TimeoutException:
+        return {"ok": False, "message": "连接超时（超过 8 秒未响应）"}
+    except Exception as exc:
+        return {"ok": False, "message": f"网络连通失败: {type(exc).__name__}"}
 
 
 def _normalize_whitelist(items: list[Any]) -> list[dict[str, Any]]:
