@@ -181,9 +181,15 @@ fi
 # 基础设施目标镜像以 docker-compose.yml 插值结果为准（唯一事实源），脚本不再重复定义默认值；
 # 若环境显式设置 POSTGRES_IMAGE/REDIS_IMAGE，compose 插值会自然生效。
 TARGET_POSTGRES_IMAGE=$(docker compose config --format json | python3 -c \
-    'import json,sys; print(json.load(sys.stdin)["services"]["postgres"]["image"])')
+    'import json,sys; print(json.load(sys.stdin)["services"]["postgres"]["image"])') || {
+    echo "错误：无法解析 postgres 服务镜像，请确认 docker-compose.yml 含 postgres 服务" >&2
+    exit 1
+}
 TARGET_REDIS_IMAGE=$(docker compose config --format json | python3 -c \
-    'import json,sys; print(json.load(sys.stdin)["services"]["redis"]["image"])')
+    'import json,sys; print(json.load(sys.stdin)["services"]["redis"]["image"])') || {
+    echo "错误：无法解析 redis 服务镜像，请确认 docker-compose.yml 含 redis 服务" >&2
+    exit 1
+}
 
 # PostgreSQL 镜像变更属于有状态升级：先完整备份，再拉取目标镜像。
 POSTGRES_CONTAINER=$(docker compose ps -q postgres 2>/dev/null || true)
@@ -236,12 +242,13 @@ if [ "$POSTGRES_IMAGE_CHANGED" = "1" ]; then
         echo "错误：PostgreSQL 在 60 秒内未恢复健康，请使用升级前备份排查或回滚" >&2
         exit 1
     fi
-    # 已有 pgdata 卷不会重新执行 /docker-entrypoint-initdb.d 脚本，升级后补齐 vector 扩展。
-    echo "==> 确保 pgvector 扩展已启用"
-    if ! docker compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "CREATE EXTENSION IF NOT EXISTS vector"'; then
-        echo "错误：pgvector 扩展启用失败，请检查 PostgreSQL 日志" >&2
-        exit 1
-    fi
+fi
+
+# 已有 pgdata 卷不会重新执行 /docker-entrypoint-initdb.d 脚本；每次部署幂等补齐 vector 扩展。
+echo "==> 确保 pgvector 扩展已启用"
+if ! docker compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "CREATE EXTENSION IF NOT EXISTS vector"'; then
+    echo "错误：pgvector 扩展启用失败，请检查 PostgreSQL 日志" >&2
+    exit 1
 fi
 
 # Redis 与 PostgreSQL 一样独立检测与更新（AOF/rdb 持久化在 redisdata 卷，无需备份）。
