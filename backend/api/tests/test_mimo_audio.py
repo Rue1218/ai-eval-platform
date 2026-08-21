@@ -10,10 +10,12 @@ from app.agent.mcp_registry import bind_tool_arguments, execute_registered_tool
 from app.agent.mimo_audio import (
     TTS_MODEL,
     TTS_VOICEDESIGN_MODEL,
+    arguments_for_speech_synthesis,
     build_asr_payload,
     build_tts_payload,
     execute_speech_recognition,
     execute_speech_synthesis,
+    extract_tts_text,
     recognize_speech,
     synthesize_speech,
 )
@@ -196,3 +198,30 @@ def test_registry_binds_audio_files_and_executes_tts(monkeypatch, tmp_path):
     result = execute_registered_tool(db, "audio.speech_synthesis", bound_tts, user_id="u1")
     assert result["file_id"]
     assert result["model"] == TTS_VOICEDESIGN_MODEL
+
+
+def test_extract_tts_text_strips_command_prefix_and_quote():
+    # 命令前缀 + 冒号：取冒号后内容
+    assert extract_tts_text("帮我输出音频：欢迎使用评测平台") == "欢迎使用评测平台"
+    assert extract_tts_text("生成一段音频：今天天气很好") == "今天天气很好"
+    # 引号优先：取引号内内容
+    assert extract_tts_text("朗读「你好」") == "你好"
+    # 命令前缀剥离后为空：无朗读稿
+    assert extract_tts_text("帮我输出音频") == ""
+    assert extract_tts_text("朗读一下") == ""
+    # 普通文本原样返回
+    assert extract_tts_text("欢迎使用评测平台") == "欢迎使用评测平台"
+    assert extract_tts_text("") == ""
+
+
+def test_arguments_synthesis_extracts_tts_text_when_model_omits():
+    # 模型未显式给朗读稿时，从用户原话抽取，避免把命令整句当播报文本
+    bound = arguments_for_speech_synthesis(text="帮我输出音频：欢迎使用评测平台", arguments=None)
+    assert bound["text"] == "欢迎使用评测平台"
+    assert bound["mode"] == "preset"
+
+
+def test_arguments_synthesis_prefers_explicit_text():
+    # 模型显式给了朗读稿时以参数为准，不再做原话抽取
+    bound = arguments_for_speech_synthesis(text="帮我输出音频", arguments={"text": "您好"})
+    assert bound["text"] == "您好"
