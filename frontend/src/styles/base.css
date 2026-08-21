@@ -609,8 +609,8 @@ p { margin: 0; text-wrap: pretty; }
 }
 .attach-chip .mono { font-size: 11px; color: var(--text-tertiary); }
 
-.msg-agent { font-size: 16px; line-height: 1.9; color: var(--text-primary); max-width: 92%; }
-.msg-agent p + p { margin-top: 10px; }
+.msg-agent { font-size: 16.5px; line-height: 1.85; color: var(--text-primary); max-width: 92%; }
+.msg-agent p + p { margin-top: 12px; }
 /* 回复耗时角标：助手气泡下方展示「耗时 x 秒」，生成中不渲染 */
 .reply-latency {
   display: inline-flex;
@@ -635,15 +635,6 @@ p { margin: 0; text-wrap: pretty; }
   0%, 60%, 100% { transform: translateY(0); opacity: .4; }
   30% { transform: translateY(-4px); opacity: 1; }
 }
-
-/* 流式输出气泡：LLM 增量到达期间显示闪烁打字光标，终帧后随 streaming 置 false 消失 */
-.streaming-bubble::after {
-  content: '▍';
-  margin-left: 2px;
-  color: var(--c-agent, #10b981);
-  animation: blink-cursor 1s step-end infinite;
-}
-@keyframes blink-cursor { 50% { opacity: 0; } }
 
 /* 思考卡：推理模型思考链流式展示（可展开/收起，完成后自动折叠为一行摘要） */
 .think-card {

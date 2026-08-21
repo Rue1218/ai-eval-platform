@@ -521,14 +521,16 @@
               </div>
             </div>
 
-            <!-- 2.7 Agent 文本回复（非 streaming 时使用 MarkdownView 渲染富文本） -->
+            <!-- 2.7 Agent 文本回复（始终使用 MarkdownView 进行实时 Markdown 渲染） -->
             <div
               v-else-if="item.type === 'agent'"
               class="msg-agent"
               :class="{ 'no-anim': item.noAnim, 'streaming-bubble': item.streaming }"
             >
-              <MarkdownView v-if="!item.streaming" :content="item.raw || item.text || ''" />
-              <div v-else v-html="item.text"></div>
+              <MarkdownView
+                :content="item.raw || item.text || ''"
+                :is-streaming="item.streaming"
+              />
               <!-- 回复耗时：交付终帧 / 历史回放携带 latency_ms，生成中与无效值不显示 -->
               <div v-if="!item.streaming && formatLatency(item.latency_ms)" class="reply-latency mono">
                 耗时 {{ formatLatency(item.latency_ms) }}
