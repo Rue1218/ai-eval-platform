@@ -35,12 +35,12 @@ from .defaults import (
     default_stress,
     is_long_tool,
 )
-from .imagegen import arguments_for_imagegen, looks_like_image_generation
+from .imagegen import looks_like_image_generation
 from .log import agent_exception, agent_trace
+from .mcp_registry import bind_tool_arguments, get_tool_definition
 from .mcp_tools import collect_ids, execute_short_tool, redact_secrets, summarize_observation
 from .persona import react_system, turn_system
 from .plan import PlanArtifact, parse_json_object, sanitize_plan
-from .voiceclone import arguments_for_voiceclone
 
 EmitFn = Callable[..., Awaitable[int]]
 AbortCheck = Callable[[], None]
@@ -223,25 +223,8 @@ def _bind_tool_arguments(
     text: str,
     attachments: list[str],
 ) -> dict[str, Any]:
-    """把模型入参与本轮附件合并；file_id 始终由系统绑定，禁止幻觉。"""
-    args = dict(arguments or {})
-    if name == "audio.voiceclone":
-        bound = arguments_for_voiceclone(
-            db, text=str(args.get("text") or text), attachments=attachments
-        )
-        if args.get("text"):
-            bound["text"] = str(args["text"])
-        return bound
-    if name == "image.generate":
-        bound = arguments_for_imagegen(
-            db, text=str(args.get("prompt") or text), attachments=attachments
-        )
-        if args.get("prompt"):
-            bound["prompt"] = str(args["prompt"])
-        if "prompt_extend" in args:
-            bound["prompt_extend"] = bool(args["prompt_extend"])
-        return bound
-    return args
+    """委托统一注册表绑定模型入参与本轮附件。"""
+    return bind_tool_arguments(db, name, arguments, text=text, attachments=attachments)
 
 
 def _executed_names(react: ReactArtifact) -> set[str]:
@@ -294,7 +277,8 @@ async def _emit_and_run_tool(
     bound = _bind_tool_arguments(db, name, arguments, text=text, attachments=attachments)
     agent_trace(f"ToolCall 开始 name={name} arguments={_trace_toolcall_args(bound)}")
     await emit("tool_call", {"name": name, "arguments": bound})
-    timeout_sec = TOOL_TIMEOUTS.get(name, 30)
+    definition = get_tool_definition(name)
+    timeout_sec = definition.timeout_s if definition else TOOL_TIMEOUTS.get(name, 30)
     ok, data, error, latency_ms = False, None, None, 0
     try:
         if name in {"audio.voiceclone", "image.generate"}:

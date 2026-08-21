@@ -3,9 +3,9 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Agent 独立开发说明书 |
-| 版本 | V1.6 |
+| 版本 | V1.7 |
 | 日期 | 2026-08-20 |
-| 最近修订 | 2026-08-21：流式保留模型思考链；生图预览移出 ToolCall 并写入会话消息 |
+| 最近修订 | 2026-08-21：收缩为两项多媒体 MCP；移除业务斜杠的工具注入，评测工作流待分层重构 |
 | 用法 | **实现 `/agent` 以本文为准（Harness / 斜杠 / 窗口算法）。** REST/WS JSON 以 API.md V1.6 为准。完成某项后勾选文末 Task，并在「最近修订」追加一行。 |
 
 本文是评测平台 **Agent 子系统** 的完整开发说明书：目标、边界、运行时骨架、协议、模块、代码落点与验收任务都写在这里。与 PRD / API.md 冲突时，字段名与事件名以那两份为准；Harness、斜杠、上下文算法以本文 §16 为准。§4.6 所列增量已收入 **API.md V1.6**。
@@ -1432,6 +1432,50 @@ Qwen Image 按 `audio.voiceclone` 的内部短工具方式接入：自然语言�
 | `frontend/src/components/agent/MediaPreview.vue` | 图片预览与下载 |
 | `frontend/src/views/Agent.vue` | 实时/协作/历史插入 media 项 |
 | `backend/api/tests/test_adapters.py` / `test_harness.py` | 思考开关与 ReAct 流式单测 |
+
+---
+
+## 32. 最小 MCP 工具内核（2026-08-21）
+
+为先完成 Harness 分层重构、避免旧业务斜杠抢占模型路线，当前 Agent MCP 注册清单冻结为：
+
+| 工具 | 用途 |
+| :--- | :--- |
+| `audio.voiceclone` | 使用本轮 wav/mp3 参考音频合成配音 |
+| `image.generate` | 文本或参考图生成图片 |
+
+`model.list`、`task.get`、`task.create`、`task.cancel`、`dispatch.overview`、`dataset.list`、`report.get`、`kb.list` 与 `testcase.confirm` 均不再属于 Agent MCP。任务、资产、报告及调度的业务工作流将在后续独立 Workflow 层重建；本阶段不得通过对话伪造其结果。
+
+系统斜杠仅保留不参与模型业务路由的 `/stop` 和 `/compact`。`/benchmark`、`/stress`、`/testcase`、`/rag`、`/profiles`、`/datasets`、`/kb`、`/report`、`/status`、`/rerun`、`/cancel`、`/new`、`/help` 已移除，不能再向规划或 ReAct 阶段注入业务工具。
+
+### 修改代码文件与作用清单
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/agent/defaults.py` | 将 Agent 短工具白名单收缩为两项多媒体能力 |
+| `backend/api/app/agent/mcp_tools.py` | 移除旧业务 MCP 的执行实现 |
+| `backend/api/app/agent/slash.py` | 将系统斜杠收缩为会话控制命令 |
+| `backend/api/app/agent/persona.py` | 从规划与 ReAct 提示词中移除旧业务工具 |
+| `backend/api/app/routers/mcp.py` | MCP 工具中心只返回两项已挂载能力 |
+| `frontend/src/agent/slashRegistry.ts` | 斜杠面板只展示 `/stop` 与 `/compact` |
+
+---
+
+## 33. MCP Server 与 ToolCall 注册表收敛（2026-08-21）
+
+`agent/mcp_registry.py` 是当前最小 MCP 内核的唯一注册源。每项工具统一定义名称、中文标题、说明、权限和超时；后端白名单、MCP 工具中心响应、ToolCall 参数绑定与执行分派均从该注册表派生，禁止在路由、提示词或前端再复制工具名称。
+
+ToolCall 的执行顺序冻结为：注册表查找 → 系统绑定本轮附件参数 → 脱敏日志 → `tool_call` 事件 → 隔离会话执行与超时控制 → 截断/脱敏结果 → `tool_result` 事件与 observation。未注册工具在执行前统一返回 `VALIDATION`，不得进入执行器。
+
+### 修改代码文件与作用清单
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/agent/mcp_registry.py` | MCP 元数据、参数绑定、执行分派的唯一注册表 |
+| `backend/api/app/agent/defaults.py` | 从注册表派生白名单、标题和超时 |
+| `backend/api/app/agent/mcp_tools.py` | 统一走注册表执行已注册工具 |
+| `backend/api/app/agent/react.py` | ToolCall 统一通过注册表绑定参数与读取超时 |
+| `backend/api/app/routers/mcp.py` | 从注册表转换 MCP 工具中心响应 |
 
 
 

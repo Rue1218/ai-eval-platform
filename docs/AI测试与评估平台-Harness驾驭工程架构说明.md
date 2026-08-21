@@ -330,7 +330,7 @@ pass → confirm；clarify → 追问；reject → 标准错误
                           reject │        │ clarify
                                  ▼        ▼
                                错误     澄清问题 ───→ 用户输入
-                                          
+
                                       pass
                                        ▼
                              ┌─────────────────────┐
