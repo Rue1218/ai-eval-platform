@@ -77,7 +77,7 @@
       <!-- 1. Benchmark 报告视图 -->
       <template v-if="report.kind === 'benchmark'">
         <!-- 多模型核心指标并排对比 -->
-        <div class="panel glow mb16" style="--glow-c: var(--c-reports)">
+        <div class="panel glow mb16 table-responsive" style="--glow-c: var(--c-reports); overflow-x: auto">
           <div class="panel-title">模型得分并排对比 (≤5 列)</div>
           <table class="ds-table">
             <thead>

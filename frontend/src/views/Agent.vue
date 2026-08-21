@@ -3779,19 +3779,37 @@ onBeforeUnmount(() => {
   color: var(--accent-warning);
 }
 
-/* 移动端：顶栏 58px 且无外边距，对话区高度改用 dvh；头部操作收紧 */
-@media (max-width: 700px) {
+/* 移动端：顶栏 58px 且无外边距，对话区高度改用 dvh；头部操作收紧与安全区适配 */
+@media (max-width: 768px) {
   .agent-layout {
     height: calc(100dvh - 58px);
   }
   .composer {
-    padding: 6px 12px 12px;
+    padding: 6px 10px max(12px, env(safe-area-inset-bottom));
   }
   .composer-card {
     border-radius: 14px;
   }
   .composer-model-dropdown-btn .model-name {
-    max-width: 110px;
+    max-width: 100px;
+  }
+  .composer-toolbar {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .quick-chips {
+    overflow-x: auto;
+    white-space: nowrap;
+    -webkit-overflow-scrolling: touch;
+  }
+  .chat-scroll {
+    padding: 12px 10px;
+  }
+  .msg-agent pre,
+  .msg-agent table {
+    max-width: calc(100vw - 44px);
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
   }
 }
 </style>

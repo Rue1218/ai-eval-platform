@@ -1,7 +1,6 @@
 <template>
   <div class="profiles-page">
-    <!-- 4 Tab 架构（API V1.3 §3.6：协议档 / MCP 工具只读 / 技能受控说明 / 运行时治理） -->
-    <div class="row" style="gap: 8px">
+    <div class="tabs-nav-bar row" style="gap: 8px">
       <button
         v-for="t in tabs"
         :key="t.key"
@@ -1059,33 +1058,53 @@
 
     <!-- Tab: 全局向量与重排模型 (RAG) 独立专区 -->
     <template v-else-if="activeTab === 'rag_models'">
-      <div class="panel mb16" style="padding: 16px 20px">
-        <div class="panel-title mb8">
-          <div class="row" style="gap: 8px">
-            <span>🔤 全局向量嵌入与重排模型配置 (RAG System Models)</span>
+      <div class="panel mb16 rag-panel-container">
+        <!-- 头部说明卡片 -->
+        <div class="rag-intro-banner mb16">
+          <div class="row-between wrap" style="gap: 12px">
+            <div class="row" style="gap: 10px; align-items: flex-start">
+              <div class="rag-badge-icon">🔤</div>
+              <div>
+                <div class="rag-intro-title">全局向量与重排模型体系 (Global RAG System Models)</div>
+                <div class="rag-intro-desc">
+                  全平台集中托管单一向量嵌入（Embedding）与交叉重排序（Reranker）模型。用于知识库切块向量化、语义混合检索与二次深度精排。配置保存后自动同步受控环境并实时对全平台任务生效。
+                </div>
+              </div>
+            </div>
+            <div class="rag-scope-tag">
+              <span class="dot-live">●</span> 全局生效 · 零冗余配置
+            </div>
           </div>
         </div>
-        <p class="small tertiary mb16">
-          系统全局仅需配置一套向量嵌入（Embedding）模型与重排序（Reranker）模型，供知识库文档向量化、语义混合检索与二次交叉精排打分全局复用。
-        </p>
 
         <div class="rag-models-grid">
           <!-- 1. 全局向量嵌入模型 -->
-          <div class="card p16 rag-model-card">
-            <div class="row-between mb12">
+          <div class="card p16 rag-model-card rag-card-embedding">
+            <div class="rag-card-header mb12">
               <div class="row" style="gap: 8px">
-                <span class="rag-icon">🔤</span>
-                <span style="font-weight: 600; font-size: 14.5px">全局向量嵌入模型 (Embedding)</span>
+                <span class="rag-type-pill pill-embedding">🔤 向量嵌入 (Dense Embeddings)</span>
+                <span class="rag-model-sub">知识库向量化 & 提问检索</span>
               </div>
-              <span v-if="ragModelsForm.has_embedding_api_key" class="key-status-badge ok">● 已配置独立密钥</span>
-              <span v-else class="key-status-badge none">○ 未配置独立密钥</span>
+              <span v-if="ragModelsForm.has_embedding_api_key" class="key-status-badge ok" title="受控环境文件已安全加密存储独立密钥">
+                🔒 ● 已配置独立密钥
+              </span>
+              <span v-else class="key-status-badge none" title="未配置独立密钥时将使用免密或平台缺省">
+                ○ 留空使用平台全局/免密
+              </span>
+            </div>
+
+            <!-- 能力标签 -->
+            <div class="rag-pills-row mb12">
+              <span class="rag-feature-tag">✓ 知识库切块向量化</span>
+              <span class="rag-feature-tag">✓ 提问语义混合检索</span>
+              <span class="rag-feature-tag">✓ Cosine / Dot 相似度</span>
             </div>
 
             <div class="field mb12">
               <label class="field-label">常用 Embedding 预设一键填充</label>
               <n-select
                 :options="embeddingPresetOptions"
-                placeholder="选择厂商常用向量模型预设"
+                placeholder="⚡ 选择厂商常用向量模型预设..."
                 @update:value="handleSelectEmbeddingPreset"
               />
             </div>
@@ -1099,7 +1118,7 @@
             </div>
 
             <div class="field mb12">
-              <label class="field-label">Embedding 模型标识 <span class="req">*</span></label>
+              <label class="field-label">Embedding 模型标识 (Model ID) <span class="req">*</span></label>
               <n-input
                 v-model:value="ragModelsForm.embedding_model"
                 placeholder="例如：BAAI/bge-large-zh-v1.5 或 text-embedding-3-large"
@@ -1115,24 +1134,50 @@
                 placeholder="可选；私有端点或免密模型可留空"
               />
             </div>
+
+            <!-- 探活测试操作与状态 -->
+            <div class="rag-check-row mt8">
+              <button
+                class="btn btn-secondary btn-xs"
+                :disabled="checkingEmbedding || !ragModelsForm.embedding_base_url || !ragModelsForm.embedding_model"
+                @click="handleCheckEmbedding"
+              >
+                {{ checkingEmbedding ? '探活中…' : '⚡ 端点探活测试' }}
+              </button>
+              <div v-if="embeddingCheckResult" class="rag-check-feedback" :class="embeddingCheckResult.ok ? 'success' : 'fail'">
+                <span v-if="embeddingCheckResult.ok">✓ 连通正常 ({{ embeddingCheckResult.latency_ms }}ms)</span>
+                <span v-else>✕ {{ embeddingCheckResult.message }}</span>
+              </div>
+            </div>
           </div>
 
           <!-- 2. 全局重排序模型 -->
-          <div class="card p16 rag-model-card">
-            <div class="row-between mb12">
+          <div class="card p16 rag-model-card rag-card-reranker">
+            <div class="rag-card-header mb12">
               <div class="row" style="gap: 8px">
-                <span class="rag-icon">🎯</span>
-                <span style="font-weight: 600; font-size: 14.5px">全局重排序模型 (Reranker)</span>
+                <span class="rag-type-pill pill-reranker">🎯 语义重排 (Cross-Encoder Rerank)</span>
+                <span class="rag-model-sub">Top-K 降噪 & 精排打分</span>
               </div>
-              <span v-if="ragModelsForm.has_reranker_api_key" class="key-status-badge ok">● 已配置独立密钥</span>
-              <span v-else class="key-status-badge none">○ 未配置独立密钥</span>
+              <span v-if="ragModelsForm.has_reranker_api_key" class="key-status-badge ok" title="受控环境文件已安全加密存储独立密钥">
+                🔒 ● 已配置独立密钥
+              </span>
+              <span v-else class="key-status-badge none" title="未配置独立密钥时将使用免密或平台缺省">
+                ○ 留空使用平台全局/免密
+              </span>
+            </div>
+
+            <!-- 能力标签 -->
+            <div class="rag-pills-row mb12">
+              <span class="rag-feature-tag">✓ 检索候选 Top-K 交叉打分</span>
+              <span class="rag-feature-tag">✓ 过滤无关噪音段落</span>
+              <span class="rag-feature-tag">✓ 显著提升黄金 QA 召回率</span>
             </div>
 
             <div class="field mb12">
               <label class="field-label">常用 Reranker 预设一键填充</label>
               <n-select
                 :options="rerankerPresetOptions"
-                placeholder="选择厂商常用重排模型预设"
+                placeholder="⚡ 选择厂商常用重排模型预设..."
                 @update:value="handleSelectRerankerPreset"
               />
             </div>
@@ -1146,7 +1191,7 @@
             </div>
 
             <div class="field mb12">
-              <label class="field-label">Reranker 模型标识 <span class="req">*</span></label>
+              <label class="field-label">Reranker 模型标识 (Model ID) <span class="req">*</span></label>
               <n-input
                 v-model:value="ragModelsForm.reranker_model"
                 placeholder="例如：BAAI/bge-reranker-v2-m3 或 jina-reranker-v2-base-multilingual"
@@ -1162,16 +1207,35 @@
                 placeholder="可选；私有端点或免密模型可留空"
               />
             </div>
+
+            <!-- 探活测试操作与状态 -->
+            <div class="rag-check-row mt8">
+              <button
+                class="btn btn-secondary btn-xs"
+                :disabled="checkingReranker || !ragModelsForm.reranker_base_url || !ragModelsForm.reranker_model"
+                @click="handleCheckReranker"
+              >
+                {{ checkingReranker ? '探活中…' : '⚡ 端点探活测试' }}
+              </button>
+              <div v-if="rerankerCheckResult" class="rag-check-feedback" :class="rerankerCheckResult.ok ? 'success' : 'fail'">
+                <span v-if="rerankerCheckResult.ok">✓ 连通正常 ({{ rerankerCheckResult.latency_ms }}ms)</span>
+                <span v-else>✕ {{ rerankerCheckResult.message }}</span>
+              </div>
+            </div>
           </div>
         </div>
 
-        <div class="row mt16" style="gap: 12px; justify-content: flex-end">
-          <button class="btn btn-secondary btn-sm" :disabled="ragModelsLoading" @click="loadRagModels">
-            重置 / 刷新
-          </button>
-          <button class="btn btn-primary btn-sm" :disabled="ragModelsSaving" @click="saveRagModels">
-            {{ ragModelsSaving ? '保存中…' : '保存全局 RAG 模型配置' }}
-          </button>
+        <!-- 底部操作与提示 -->
+        <div class="rag-footer-bar mt16">
+          <span class="rag-footer-tip">💡 修改完成后点击保存即可立即写入受控环境，并在全平台知识库切块与 RAG 任务中实时生效。</span>
+          <div class="row" style="gap: 10px">
+            <button class="btn btn-secondary btn-sm" :disabled="ragModelsLoading" @click="loadRagModels">
+              重置 / 刷新
+            </button>
+            <button class="btn btn-primary btn-sm" :disabled="ragModelsSaving" @click="saveRagModels">
+              {{ ragModelsSaving ? '保存中…' : '保存全局 RAG 模型配置' }}
+            </button>
+          </div>
         </div>
       </div>
     </template>
@@ -1780,6 +1844,68 @@ function handleSelectRerankerPreset(key: string) {
   message.info(`已填充 Reranker 预设: ${item.model}`)
 }
 
+const checkingEmbedding = ref(false)
+const embeddingCheckResult = ref<{ ok: boolean; latency_ms?: number; message?: string } | null>(null)
+
+async function handleCheckEmbedding() {
+  if (!ragModelsForm.value.embedding_base_url.trim() || !ragModelsForm.value.embedding_model.trim()) {
+    message.warning('请先填写 Embedding Base URL 与模型名称')
+    return
+  }
+  checkingEmbedding.value = true
+  embeddingCheckResult.value = null
+  try {
+    const res = await api.admin.checkRagModel({
+      target: 'embedding',
+      base_url: ragModelsForm.value.embedding_base_url.trim(),
+      model: ragModelsForm.value.embedding_model.trim(),
+      api_key: ragModelsForm.value.embedding_api_key?.trim() || undefined,
+    })
+    embeddingCheckResult.value = res
+    if (res.ok) {
+      message.success(`Embedding 端点连通正常！响应延迟: ${res.latency_ms}ms`)
+    } else {
+      message.error(res.message || 'Embedding 连通检测未通过')
+    }
+  } catch (err: any) {
+    embeddingCheckResult.value = { ok: false, message: err.message || '请求异常' }
+    message.error(err.message || '探活异常')
+  } finally {
+    checkingEmbedding.value = false
+  }
+}
+
+const checkingReranker = ref(false)
+const rerankerCheckResult = ref<{ ok: boolean; latency_ms?: number; message?: string } | null>(null)
+
+async function handleCheckReranker() {
+  if (!ragModelsForm.value.reranker_base_url.trim() || !ragModelsForm.value.reranker_model.trim()) {
+    message.warning('请先填写 Reranker Base URL 与模型名称')
+    return
+  }
+  checkingReranker.value = true
+  rerankerCheckResult.value = null
+  try {
+    const res = await api.admin.checkRagModel({
+      target: 'reranker',
+      base_url: ragModelsForm.value.reranker_base_url.trim(),
+      model: ragModelsForm.value.reranker_model.trim(),
+      api_key: ragModelsForm.value.reranker_api_key?.trim() || undefined,
+    })
+    rerankerCheckResult.value = res
+    if (res.ok) {
+      message.success(`Reranker 端点连通正常！响应延迟: ${res.latency_ms}ms`)
+    } else {
+      message.error(res.message || 'Reranker 连通检测未通过')
+    }
+  } catch (err: any) {
+    rerankerCheckResult.value = { ok: false, message: err.message || '请求异常' }
+    message.error(err.message || '探活异常')
+  } finally {
+    checkingReranker.value = false
+  }
+}
+
 async function loadRagModels() {
   ragModelsLoading.value = true
   try {
@@ -2176,8 +2302,18 @@ onMounted(() => {
   font-weight: 700;
   font-size: 11px;
 }
-/* 4 Tab 页签 */
+/* 5 Tab 页签导航 */
+.tabs-nav-bar {
+  overflow-x: auto;
+  white-space: nowrap;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 4px;
+}
+.tabs-nav-bar::-webkit-scrollbar {
+  height: 0;
+}
 .profile-tab-btn {
+  flex-shrink: 0;
   padding: 8px 16px;
   border-radius: 8px;
   border: 1px solid var(--border-subtle);
@@ -2187,6 +2323,7 @@ onMounted(() => {
   font-weight: 600;
   cursor: pointer;
   transition: all 0.18s ease;
+  user-select: none;
 }
 .profile-tab-btn:hover {
   color: var(--text-primary);
@@ -2773,24 +2910,174 @@ onMounted(() => {
   border: 1px solid rgba(139, 92, 246, 0.28) !important;
 }
 
+/* ─── RAG 专属全局模型面板 ─── */
+.rag-panel-container {
+  padding: 18px 22px;
+}
+.rag-intro-banner {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.06), rgba(99, 102, 241, 0.06));
+  border: 1px solid rgba(16, 185, 129, 0.18);
+  border-radius: 12px;
+  padding: 14px 18px;
+}
+.rag-badge-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: var(--bg-elevated, #ffffff);
+  border: 1px solid var(--border-subtle);
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+  flex-shrink: 0;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
+}
+.rag-intro-title {
+  font-size: 14.5px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 3px;
+}
+.rag-intro-desc {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  max-width: 900px;
+}
+.rag-scope-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 20px;
+  background: rgba(16, 185, 129, 0.1);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  color: #10b981;
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.dot-live {
+  color: #10b981;
+  animation: dot-breathe 2s ease-in-out infinite;
+}
+
 .rag-models-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 16px;
+  gap: 18px;
 }
 .rag-model-card {
   background: var(--bg-card, rgba(255, 255, 255, 0.02));
   border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
-  border-radius: 8px;
+  border-radius: 12px;
   display: flex;
   flex-direction: column;
+  padding: 18px;
+  transition: all 0.2s ease;
 }
-.rag-icon {
-  font-size: 18px;
-  line-height: 1;
+.rag-card-embedding {
+  border-top: 3px solid #10b981;
+}
+.rag-card-reranker {
+  border-top: 3px solid #8b5cf6;
+}
+.rag-card-embedding:hover {
+  border-color: rgba(16, 185, 129, 0.4);
+  box-shadow: 0 8px 24px rgba(16, 185, 129, 0.06);
+}
+.rag-card-reranker:hover {
+  border-color: rgba(139, 92, 246, 0.4);
+  box-shadow: 0 8px 24px rgba(139, 92, 246, 0.06);
 }
 
-/* 移动端：卡片栅格最小宽度超过视口，统一折为单列 */
+.rag-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.rag-type-pill {
+  font-size: 13.5px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.pill-embedding {
+  color: #10b981;
+}
+.pill-reranker {
+  color: #8b5cf6;
+}
+.rag-model-sub {
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  font-weight: normal;
+}
+.rag-pills-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.rag-feature-tag {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: var(--bg-elevated, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.06));
+  color: var(--text-secondary);
+}
+
+.rag-check-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 6px;
+}
+.btn-xs {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 11.5px;
+}
+.rag-check-feedback {
+  font-size: 11.5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.rag-check-feedback.success {
+  color: #10b981;
+  font-weight: 500;
+}
+.rag-check-feedback.fail {
+  color: #ef4444;
+}
+
+.rag-footer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+.rag-footer-tip {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+/* 移动端与平板端：栅格自适应 */
+@media (max-width: 900px) {
+  .rag-models-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 700px) {
   .vendor-models-grid,
   .skill-grid,
@@ -2804,6 +3091,9 @@ onMounted(() => {
   }
   .server-card-meta {
     grid-template-columns: 1fr;
+  }
+  .rag-panel-container {
+    padding: 12px;
   }
 }
 </style>
