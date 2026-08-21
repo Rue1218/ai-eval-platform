@@ -22,9 +22,8 @@ IMAGE_PREFIX=${IMAGE_PREFIX:-}
 IMAGE_TAG=${IMAGE_TAG:-}
 GHCR_ACTOR=${GHCR_ACTOR:-}
 GHCR_TOKEN=${GHCR_TOKEN:-}
-# PostgreSQL 使用精确补丁版本；仅目标镜像发生变化时执行备份与重建。
-POSTGRES_IMAGE=${POSTGRES_IMAGE:-postgres:16.15-alpine}
-export POSTGRES_IMAGE
+# 基础设施镜像不在此处定义默认值：以 docker-compose.yml 的插值结果为唯一事实源（见 [2] 阶段）。
+# 避免脚本默认值与 Compose 默认镜像漂移（曾因旧 postgres:16.15-alpine 硬编码覆盖 pgvector 镜像）。
 LOCK_FILE="$APP_DIR/.deploy.lock"
 DEPLOY_MARKER="$APP_DIR/.deploy-success-sha"
 DEPLOY_IMAGE_ENV="$APP_DIR/.deploy-images.env"
@@ -179,6 +178,13 @@ else
     done
 fi
 
+# 基础设施目标镜像以 docker-compose.yml 插值结果为准（唯一事实源），脚本不再重复定义默认值；
+# 若环境显式设置 POSTGRES_IMAGE/REDIS_IMAGE，compose 插值会自然生效。
+TARGET_POSTGRES_IMAGE=$(docker compose config --format json | python3 -c \
+    'import json,sys; print(json.load(sys.stdin)["services"]["postgres"]["image"])')
+TARGET_REDIS_IMAGE=$(docker compose config --format json | python3 -c \
+    'import json,sys; print(json.load(sys.stdin)["services"]["redis"]["image"])')
+
 # PostgreSQL 镜像变更属于有状态升级：先完整备份，再拉取目标镜像。
 POSTGRES_CONTAINER=$(docker compose ps -q postgres 2>/dev/null || true)
 CURRENT_POSTGRES_IMAGE=""
@@ -187,9 +193,9 @@ if [ -n "$POSTGRES_CONTAINER" ]; then
     CURRENT_POSTGRES_IMAGE=$(docker inspect --format '{{.Config.Image}}' "$POSTGRES_CONTAINER")
 fi
 
-if [ "$CURRENT_POSTGRES_IMAGE" != "$POSTGRES_IMAGE" ]; then
+if [ "$CURRENT_POSTGRES_IMAGE" != "$TARGET_POSTGRES_IMAGE" ]; then
     POSTGRES_IMAGE_CHANGED=1
-    echo "==> PostgreSQL 镜像更新：${CURRENT_POSTGRES_IMAGE:-首次部署} -> ${POSTGRES_IMAGE}"
+    echo "==> PostgreSQL 镜像更新：${CURRENT_POSTGRES_IMAGE:-首次部署} -> ${TARGET_POSTGRES_IMAGE}"
     if [ -n "$POSTGRES_CONTAINER" ]; then
         BACKUP_DIR="$APP_DIR/data/backups"
         BACKUP_FILE="$BACKUP_DIR/postgres-pre-upgrade-$(date -u +'%Y%m%dT%H%M%SZ').sql.gz"
@@ -206,8 +212,8 @@ if [ "$CURRENT_POSTGRES_IMAGE" != "$POSTGRES_IMAGE" ]; then
             exit 1
         fi
     fi
-    echo "==> 拉取 PostgreSQL 精确版本镜像"
-    timeout 300 docker pull "$POSTGRES_IMAGE"
+    echo "==> 拉取 PostgreSQL 目标镜像"
+    timeout 300 docker pull "$TARGET_POSTGRES_IMAGE"
 fi
 
 # 有状态容器必须先单独更新并恢复健康，再允许业务容器滚动更新。
@@ -228,6 +234,47 @@ if [ "$POSTGRES_IMAGE_CHANGED" = "1" ]; then
     done
     if [ "$POSTGRES_READY" != "1" ]; then
         echo "错误：PostgreSQL 在 60 秒内未恢复健康，请使用升级前备份排查或回滚" >&2
+        exit 1
+    fi
+    # 已有 pgdata 卷不会重新执行 /docker-entrypoint-initdb.d 脚本，升级后补齐 vector 扩展。
+    echo "==> 确保 pgvector 扩展已启用"
+    if ! docker compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "CREATE EXTENSION IF NOT EXISTS vector"'; then
+        echo "错误：pgvector 扩展启用失败，请检查 PostgreSQL 日志" >&2
+        exit 1
+    fi
+fi
+
+# Redis 与 PostgreSQL 一样独立检测与更新（AOF/rdb 持久化在 redisdata 卷，无需备份）。
+REDIS_CONTAINER=$(docker compose ps -q redis 2>/dev/null || true)
+CURRENT_REDIS_IMAGE=""
+REDIS_IMAGE_CHANGED=0
+if [ -n "$REDIS_CONTAINER" ]; then
+    CURRENT_REDIS_IMAGE=$(docker inspect --format '{{.Config.Image}}' "$REDIS_CONTAINER")
+fi
+
+if [ "$CURRENT_REDIS_IMAGE" != "$TARGET_REDIS_IMAGE" ]; then
+    REDIS_IMAGE_CHANGED=1
+    echo "==> Redis 镜像更新：${CURRENT_REDIS_IMAGE:-首次部署} -> ${TARGET_REDIS_IMAGE}"
+    timeout 300 docker pull "$TARGET_REDIS_IMAGE"
+fi
+
+if [ "$REDIS_IMAGE_CHANGED" = "1" ]; then
+    echo "==> 单独更新 Redis 容器"
+    if ! docker compose up -d --no-build redis; then
+        echo "错误：Redis 容器更新失败，业务容器保持原状" >&2
+        exit 1
+    fi
+    echo "==> 验证 Redis 健康状态"
+    REDIS_READY=0
+    for attempt in $(seq 1 30); do
+        if docker compose exec -T redis redis-cli ping 2>/dev/null | grep -q PONG; then
+            REDIS_READY=1
+            break
+        fi
+        sleep 2
+    done
+    if [ "$REDIS_READY" != "1" ]; then
+        echo "错误：Redis 在 60 秒内未恢复健康，请检查容器日志" >&2
         exit 1
     fi
 fi
