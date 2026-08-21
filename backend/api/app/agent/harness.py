@@ -33,7 +33,7 @@ from .defaults import (
 )
 from .log import agent_exception, agent_trace
 from .persona import chat_system, turn_system
-from .plan import PlanArtifact, TurnBudget, merge_replan, run_plan, run_replan
+from .plan import AUDIO_CLARIFY_RE, PlanArtifact, TurnBudget, merge_replan, run_plan, run_replan
 from .prefs import load_prefs, save_prefs_from_spec
 from .react import run_react
 from .reflect import ReflectArtifact, maybe_model_check, run_gates
@@ -230,7 +230,7 @@ def _clarify_text(reflect: ReflectArtifact, plan: PlanArtifact) -> str:
     # 规划自身判 clarify（意图不清）但门禁通过：用规划短句说明，避免答非所问
     if plan.delivery == "clarify" and plan.notes:
         notes = plan.notes.rstrip("。")
-        if VOICECLONE_CLARIFY_RE.search(notes):
+        if VOICECLONE_CLARIFY_RE.search(notes) or AUDIO_CLARIFY_RE.search(notes):
             return f"{notes}。"
         return f"{notes}。可以补充评测目标（协议档、数据集），或直接发送 /benchmark。"
     return "请再补充一下评测目标（协议档、数据集或 /benchmark）。"
@@ -580,6 +580,16 @@ async def _run_turn(
             else:
                 err = (image_obs.get("data_summary") or {}).get("error") or "图像生成失败"
                 await _deliver_sentence(db, session.id, emit, err)
+            return
+        stt_obs = next((obs for obs in react.observations if obs.get("name") == "audio.speech_recognition"), None)
+        if stt_obs is not None:
+            sentence = "语音识别完成，转写文本已在工具卡中展示。" if stt_obs.get("ok") else ((stt_obs.get("data_summary") or {}).get("error") or "语音识别失败")
+            await _deliver_sentence(db, session.id, emit, sentence)
+            return
+        tts_obs = next((obs for obs in react.observations if obs.get("name") == "audio.speech_synthesis"), None)
+        if tts_obs is not None:
+            sentence = "语音合成完成，可在工具卡中播放或下载。" if tts_obs.get("ok") else ((tts_obs.get("data_summary") or {}).get("error") or "语音合成失败")
+            await _deliver_sentence(db, session.id, emit, sentence)
             return
         clone_obs = next(
             (obs for obs in react.observations if obs.get("name") == "audio.voiceclone"),

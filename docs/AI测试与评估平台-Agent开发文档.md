@@ -3,9 +3,9 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Agent 独立开发说明书 |
-| 版本 | V1.7 |
+| 版本 | V1.8 |
 | 日期 | 2026-08-20 |
-| 最近修订 | 2026-08-21：收缩为两项多媒体 MCP；移除业务斜杠的工具注入，评测工作流待分层重构 |
+| 最近修订 | 2026-08-21：增加 MiMo STT/TTS 工具、意图优先级、独立线程执行、转写卡与音频播放回放；保留音色克隆和生图行为 |
 | 用法 | **实现 `/agent` 以本文为准（Harness / 斜杠 / 窗口算法）。** REST/WS JSON 以 API.md V1.6 为准。完成某项后勾选文末 Task，并在「最近修订」追加一行。 |
 
 本文是评测平台 **Agent 子系统** 的完整开发说明书：目标、边界、运行时骨架、协议、模块、代码落点与验收任务都写在这里。与 PRD / API.md 冲突时，字段名与事件名以那两份为准；Harness、斜杠、上下文算法以本文 §16 为准。§4.6 所列增量已收入 **API.md V1.6**。
@@ -149,6 +149,8 @@ Agent 对话不得发出 `kind=stress` 确认卡。压测由质量任务 `succee
 | `report.get` | 读取报告 | 报告打通后 |
 | `kb.list` | 列出知识库 | RAG 阶段 |
 | `testcase.confirm` | 确认用例入库 | 用例阶段 |
+| `audio.speech_recognition` | 语音识别转写 | 对话同步 |
+| `audio.speech_synthesis` | 语音合成 | 对话同步 |
 | `audio.voiceclone` | 音色克隆配音 | 对话同步 |
 | `image.generate` | Qwen Image 文本或参考图生图 | 对话同步 |
 
@@ -215,7 +217,7 @@ ReAct（Yao 2022）与 Plan-and-Solve（Wang 2023）是同一根轴：下一步�
 
 **L0 回退**：仅当规划失败或模型没给合法 `loop` 时，才用关键词表。
 
-**安全网**：inject 之后若 `tools_needed` 含 `image.generate` / `audio.voiceclone`，强制 `REACT_ONLY`（覆盖模型误选的 plan_solve）。
+**安全网**：inject 之后若 `tools_needed` 含 `audio.speech_recognition` / `audio.speech_synthesis` / `audio.voiceclone` / `image.generate`，强制 `REACT_ONLY`（覆盖模型误选的 plan_solve）。
 
 WS 事件名仍冻结为 `thought` / `tool_call` / `tool_result` / `confirm` / `error`。长任务不得在对话循环执行。
 
@@ -1477,6 +1479,28 @@ ToolCall 的执行顺序冻结为：注册表查找 → 系统绑定本轮附件
 | `backend/api/app/agent/react.py` | ToolCall 统一通过注册表绑定参数与读取超时 |
 | `backend/api/app/routers/mcp.py` | 从注册表转换 MCP 工具中心响应 |
 
+## 34. MiMo 语音识别与语音合成路由（2026-08-21）
 
+本阶段在既有音色克隆、生图短工具之外增加两项音频能力，不新增 REST 代理，也不让浏览器直连上游：
 
-  
+- `audio.speech_recognition`（STT）：用户明确要求转写、听写或生成字幕时优先于音色克隆；`file_id` 只能由系统从本轮 wav/mp3 附件绑定，缺少音频时交付澄清。
+- `audio.speech_synthesis`（TTS）：用户明确要求文字转语音、播报或语音合成时使用；文本、模式、风格和受控模型参数由系统绑定，缺少必要文本时交付澄清。
+- 以上工具与 `audio.voiceclone`、`image.generate` 均强制 `REACT_ONLY`，在隔离线程和独立数据库会话执行；既有音色克隆与生图路径不改变。
+- STT 成功结果只显示安全的 transcript 与元数据；TTS/voiceclone 成功结果只显示同源文件播放地址和元数据，不展示 Base64、Key 或上游响应原文。
+- `tool_call` / `tool_result` 仍按原事件名实时下发并落库，历史回放使用相同事件：STT 工具卡自动展开转写文本，TTS 工具卡自动展开播放器；助手交付句分别说明“转写文本已在工具卡中展示”和“可在工具卡中播放或下载”。
+
+### 修改代码文件与作用清单
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/agent/persona.py` | 增加 STT/TTS 工具名、输入绑定规则和识别优先级 |
+| `backend/api/app/agent/plan.py` | 增加 STT/TTS 意图检测、附件/文本澄清与计划注入 |
+| `backend/api/app/agent/turn_mode.py` | 新音频工具和既有媒体工具统一强制 ReAct |
+| `backend/api/app/agent/react.py` | 将 STT/TTS 纳入隔离线程工具集合 |
+| `backend/api/app/agent/harness.py` | 分别交付 STT 转写、TTS 播放与既有音色克隆结果 |
+| `frontend/src/components/agent/ToolCard.vue` | 增加安全转写卡、TTS 播放器和成功自动展开 |
+| `frontend/src/views/Agent.vue` | 新工具中文名、实时/历史事件回放和脱敏控制台日志 |
+| `frontend/src/api/mockData.ts` | mock 工具清单与后端四项媒体能力对齐 |
+| `frontend/src/components/modals/McpToolModal.vue` | 增加 STT/TTS 参数、返回和安全契约展示 |
+| `docs/AI测试与评估平台-API.md` | 更新 MCP、WS 事件和安全返回契约 |
+| `docs/AI测试与评估平台-Agent开发文档.md` | 记录路由优先级、交付 UX 和本次文件清单 |

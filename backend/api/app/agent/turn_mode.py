@@ -6,7 +6,7 @@ from enum import Enum
 from typing import Any
 
 from .imagegen import looks_like_image_generation
-from .plan import is_smalltalk
+from .plan import is_smalltalk, looks_like_speech_recognition, looks_like_speech_synthesis
 from .slash import SlashParse
 from .voiceclone import looks_like_voiceclone
 
@@ -29,6 +29,9 @@ def select_turn_mode(text: str, parsed: SlashParse) -> TurnMode:
     if parsed.is_slash:
         return TurnMode.DIRECT
 
+    # 识别意图必须先于音色克隆，避免「识别这段配音」被旧关键词抢走。
+    if looks_like_speech_recognition(text) or looks_like_speech_synthesis(text):
+        return TurnMode.REACT_ONLY
     if looks_like_image_generation(text):
         return TurnMode.REACT_ONLY
     if looks_like_voiceclone(text):
@@ -72,7 +75,7 @@ def resolve_turn_mode(*, text: str, parsed: SlashParse, plan: Any) -> TurnMode:
                 delivery=plan.delivery,
             )
     tools = list(plan.tools_needed or [])
-    if "image.generate" in tools or "audio.voiceclone" in tools:
+    if any(name in {"audio.speech_recognition", "audio.speech_synthesis", "audio.voiceclone", "image.generate"} for name in tools):
         return TurnMode.REACT_ONLY
     return mode
 

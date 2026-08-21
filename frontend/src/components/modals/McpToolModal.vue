@@ -592,6 +592,38 @@ const TOOL_META_MAP: Record<string, ToolMeta> = {
     }, null, 2),
     securityNote: '受控写入工具 (WRITE)。将 AI 提炼生成的候选 PRD 测试用例持久化转正为可复用的标准用例库。',
   },
+  'audio.speech_recognition': {
+    icon: 'ASR',
+    domain: '语音识别',
+    latency: '< 90s',
+    sourceFile: 'backend/api/app/agent/mimo_audio.py',
+    backendFunction: 'execute_speech_recognition(db, arguments, user_id)',
+    dbEntity: 'StoredFile（本轮 wav/mp3 附件）',
+    params: [
+      { name: 'file_id', type: 'string', required: true, desc: '由系统从本轮 wav/mp3 附件绑定，模型不得编造' },
+      { name: 'language', type: 'string', required: false, desc: 'auto | zh | en，默认 auto' },
+    ],
+    exampleRequest: JSON.stringify({ name: 'audio.speech_recognition', arguments: { file_id: 'file-uuid', language: 'zh' } }, null, 2),
+    exampleResponse: JSON.stringify({ transcript: '识别出的文本', language: 'zh', file_id: 'file-uuid' }, null, 2),
+    securityNote: '受控音频工具。工具结果只返回转写文本与文件元数据，不回传 Base64；文件 ID 仅从本轮附件绑定。',
+  },
+  'audio.speech_synthesis': {
+    icon: 'TTS',
+    domain: '语音合成',
+    latency: '< 90s',
+    sourceFile: 'backend/api/app/agent/mimo_audio.py',
+    backendFunction: 'execute_speech_synthesis(db, arguments, user_id)',
+    dbEntity: 'StoredFile（合成 wav 输出）',
+    params: [
+      { name: 'text', type: 'string', required: true, desc: '要合成的文本，由本轮用户输入绑定' },
+      { name: 'mode', type: 'string', required: false, desc: 'preset | voicedesign，默认 preset' },
+      { name: 'style', type: 'string', required: false, desc: 'voicedesign 模式必填的风格描述' },
+      { name: 'voice', type: 'string', required: false, desc: 'preset 模式的受控音色标识' },
+    ],
+    exampleRequest: JSON.stringify({ name: 'audio.speech_synthesis', arguments: { text: '欢迎使用', mode: 'preset' } }, null, 2),
+    exampleResponse: JSON.stringify({ file_id: 'file-uuid', content_type: 'audio/wav', content_url: '/api/files/file-uuid/content' }, null, 2),
+    securityNote: '受控音频工具。只回 StoredFile 元数据和同源播放地址，不回传 Base64、Key 或上游原文。',
+  },
 }
 
 const meta = computed<ToolMeta>(() => {

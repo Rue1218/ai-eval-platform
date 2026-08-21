@@ -2,14 +2,14 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.12 |
+| 文档版本 | V1.13 |
 | 对应 PRD | V1.7.1（功能唯一权威） |
 | 对应设计规范 | V1.3（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | V1.4（Harness / 斜杠 / 上下文算法；JSON 仍以本文为准） |
 | 对应前端计划 | V1.3 |
 | 对应后端计划 | V1.3 |
 | 撰写日期 | 2026-08-18 |
-| 最近修订 | 2026-08-21：V1.12 协议档支持独立 Embedding / Reranker 端点配置，三类 API Key 均只写入受控环境文件且不回显；V1.11 通过内部 `mcp_tools` 接入 Qwen Image 图文生图；V1.10 MCP 工具中心展示 Qwen Image 注册项；V1.9 短工具 `audio.voiceclone` 与 `GET /api/files/{id}/content`；V1.8 助手回复耗时展示；用例工作台 Excel 导入 |
+| 最近修订 | 2026-08-21：V1.13 增加 MiMo STT/TTS 短工具、意图优先级、音频事件交付与安全展示；V1.12 协议档支持独立 Embedding / Reranker 端点配置，三类 API Key 均只写入受控环境文件且不回显；V1.11 通过内部 `mcp_tools` 接入 Qwen Image 图文生图；V1.9 短工具 `audio.voiceclone` 与文件播放；V1.8 助手回复耗时展示 |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
 ---
@@ -566,7 +566,7 @@ Embedding 与 Reranker 的 URL、模型和 Key 与主模型使用相同的“按
 
 #### `GET /api/mcp/tools`
 
-获取当前智能体环境中受控的短工具注册清单（`model.list`, `dataset.list`, `kb.list`, `task.get`, `report.get`, `task.create`, `task.cancel`, `dispatch.overview`, `testcase.confirm`, `audio.voiceclone`, `image.generate`）及权限级别（`read / write`）。`image.generate` 已通过内部 `mcp_tools` 挂载到 Eval-Core Host，`enabled=true`、`source=builtin`；支持纯文本或本轮图片附件参考图输入。
+获取当前智能体环境中受控的短工具注册清单（`audio.speech_recognition`, `audio.speech_synthesis`, `audio.voiceclone`, `image.generate`）及权限级别（`write`）。四项能力均通过内部注册表挂载到 Eval-Core Host，`enabled=true`、`source=builtin`；STT 只接收本轮 wav/mp3 附件，TTS 只接收本轮文本与受控参数。
 
 ```json
 {
@@ -1291,7 +1291,10 @@ Pub/Sub，不能假定跨进程实时可见。
 | `task.cancel` | 取消任务 |
 | `testcase.confirm` | 确认用例入库 |
 | `dispatch.overview` | 调度概览 |
+| `audio.speech_recognition` | 语音识别转写 |
+| `audio.speech_synthesis` | 语音合成 |
 | `audio.voiceclone` | 音色克隆配音 |
+| `image.generate` | Qwen Image 生图 |
 
 长工具不由 Agent 进程跑完；前端只收 `progress` / `report` / `error`。
 
@@ -1398,7 +1401,10 @@ Agent Host 与 worker 共用。入参/出参与 PRD 5.5 一致。错误码同 §
 | `task.create` | 短 | TaskSpec | `task_id`；仅 `confirm_ack.ok=true` 后 | M1 |
 | `task.cancel` | 短 | `task_id` | `{ok}` | M1 |
 | `dispatch.overview` | 短 | — | Worker 数 / 队列 / 策略（与 `GET /api/dispatch/overview` 同源摘要） | M1 迷你轨 |
-| `audio.voiceclone` | 短 | `text`（朗读稿，必填）；`file_id`（本轮 wav/mp3 参考音，缺省取本轮最后一段音频附件）；`style?`（可选语气，对应上游 user 消息） | `{file_id, filename, content_type, size, content_url}`；`content_url` 为 `/api/files/{id}/content`。禁止把音频 base64 写入 `tool_result` | 对话同步 |
+| `audio.speech_recognition` | 短 | `file_id`（本轮 wav/mp3 音频，由系统绑定）；`language?`（`auto|zh|en`，默认 `auto`） | `{transcript, language, model, file_id, filename, content_type, size}`；禁止回传音频 Base64 | 对话同步 |
+| `audio.speech_synthesis` | 短 | `text`（必填，由本轮原文绑定）；`mode?`（`preset|voicedesign`）；`style?`；`model?`；`voice?` | `{file_id, filename, content_type, size, model, mode, content_url}`；`content_url` 为 `/api/files/{id}/content`，禁止回传音频 Base64 | 对话同步 |
+| `audio.voiceclone` | 短 | `text`（朗读稿，必填）；`file_id`（本轮 wav/mp3 参考音，缺省取本轮最后一段音频附件）；`style?`（可选语气） | `{file_id, filename, content_type, size, content_url}`；禁止把音频 Base64 写入 `tool_result` | 对话同步 |
+| `image.generate` | 短 | `prompt`（文本或本轮图片附件） | `{file_id, filename, content_type, size, content_url}`；禁止回传图片 Base64 | 对话同步 |
 | `testcase.generate` | 长 | `file_id` 或 `text` | `case_set_id` | M2 |
 | `testcase.confirm` | 短 | `case_set_id, edits?` | 状态 succeeded | M2 |
 | `benchmark.run` | 长 | TaskSpec 评测段 | `report_id` | M2（M1 mock） |
@@ -1407,7 +1413,7 @@ Agent Host 与 worker 共用。入参/出参与 PRD 5.5 一致。错误码同 §
 
 Agent **只**调短工具；`task.create` 仅 ack 后。长工具（`benchmark.run` `rag.evaluate` `testcase.generate` `stress.run`）由 worker 执行，Agent 进程调用必须 `VALIDATION`。`stress.run` 只下发 stress 容器。LightRAG 未接入时 `kind=rag` **不得** mock succeeded。
 
-JSON Schema 冻结点：短工具 M1 W4；评测长工具 M2 W6；RAG M3 W10；stress M4 W13。冻结后的 schema 文件挂 `api/mcp/schemas/`，以本文字段名为准。
+JSON Schema 冻结点：短工具 M1 W4；音频工具输入以本节为准，结果只回安全文本/文件元数据；评测长工具 M2 W6；RAG M3 W10；stress M4 W13。禁止新增 REST 代理或浏览器直连上游音频服务。
 
 ---
 

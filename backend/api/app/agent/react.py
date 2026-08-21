@@ -281,7 +281,7 @@ async def _emit_and_run_tool(
     timeout_sec = definition.timeout_s if definition else TOOL_TIMEOUTS.get(name, 30)
     ok, data, error, latency_ms = False, None, None, 0
     try:
-        if name in {"audio.voiceclone", "image.generate"}:
+        if name in {"audio.speech_recognition", "audio.speech_synthesis", "audio.voiceclone", "image.generate"}:
             ok, data, error, latency_ms = await asyncio.wait_for(
                 asyncio.to_thread(_execute_short_tool_isolated, name, bound, user_id),
                 timeout=timeout_sec,

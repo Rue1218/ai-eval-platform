@@ -1327,6 +1327,8 @@ function getToolDisplayName(name?: string) {
     'task.create': '创建任务',
     'task.cancel': '取消任务',
     'testcase.confirm': '确认用例入库',
+    'audio.speech_recognition': '语音识别转写',
+    'audio.speech_synthesis': '语音合成',
     'audio.voiceclone': '音色克隆配音',
     'image.generate': 'Qwen Image 生图',
     'dispatch.overview': '调度概览',
@@ -1753,7 +1755,7 @@ function handleUserSend(text: string, files: any[] = []) {
   // 竞态窗口内 agentWs 仍指旧会话——此时发送会把消息写进旧会话且回复被后台分流，
   // 当前视图永远等不到事件（表现为打字占位/空光标气泡卡住）。
   if (agentWs?.isConnected && (!agentWs.sessionId || agentWs.sessionId === currentSessionId.value)) {
-    console.log('%c[Agent] 🚀 发送用户消息:', 'color: #3b82f6; font-weight: bold;', text)
+    console.debug('[Agent] 发送用户消息', { chars: text.length, attachments: files.filter(f => f.id).length })
     // 打字占位气泡：服务端 LLM 意图识别期间给用户即时反馈，收到任意事件后移除
     events.value.push({ type: 'typing' })
     scrollToBottom()
@@ -2415,7 +2417,10 @@ async function loadSessionHistory(sid: string): Promise<number> {
           target.item.result = p.ok ? p.data : p.error
           target.item.status = p.ok ? 'ok' : 'fail'
           target.item.latency_ms = p.latency_ms
-          if (p.ok && p.name === 'audio.voiceclone') target.item.open = true
+          if (
+            p.ok
+            && ['audio.speech_recognition', 'audio.speech_synthesis', 'audio.voiceclone'].includes(p.name)
+          ) target.item.open = true
         }
         if (p.ok) {
           const media = mediaItemFromToolResult(p.name, p.data, { noAnim: true })
@@ -2918,7 +2923,10 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
         target.result = p.ok ? p.data : p.error
         target.status = p.ok ? 'ok' : 'fail'
         if (p.latency_ms !== undefined) target.latency_ms = p.latency_ms
-        if (p.ok && p.name === 'audio.voiceclone') target.open = true
+        if (
+          p.ok
+          && ['audio.speech_recognition', 'audio.speech_synthesis', 'audio.voiceclone'].includes(p.name)
+        ) target.open = true
       }
       if (p.ok) {
         const media = mediaItemFromToolResult(p.name, p.data)
@@ -3034,7 +3042,7 @@ function handleWsEvent(ev: WsServerEvent) {
     dismissTyping()
     const isStream = ev.payload && typeof ev.payload.stream === 'string'
     if (!isStream) {
-      console.log(`%c[Agent WS] 📩 收到事件: ${ev.event}`, 'color: #8b5cf6; font-weight: bold;', ev)
+      console.debug('[Agent WS] 收到事件', { event: ev.event, eventId: ev.event_id })
     }
   }
   const p = ev.payload || {}
@@ -3105,7 +3113,7 @@ function handleWsEvent(ev: WsServerEvent) {
           if (target) {
             target.text = (target.text || '') + delta
           } else {
-            console.log('%c[Agent] 💭 深度思考链流式输出中...', 'color: #10b981; font-weight: bold;')
+            console.debug('[Agent] 思考链增量')
             // reactive 包装：push 后的增量追加必须走响应式代理，否则首帧之后的修改不触发渲染
             events.value.push(reactive({ type: 'thought', text: delta, done: false, collapsed: false, streamThink: true }))
           }
@@ -3158,11 +3166,9 @@ function handleWsEvent(ev: WsServerEvent) {
       }
       // 交付终帧：先收尾思考卡，正文走打字机气泡，不得覆盖 reasoning / ReAct 卡
       finishLiveThought()
-      console.log('%c[Agent] 💡 思考完成 / 助手回复交付:', 'color: #10b981; font-weight: bold;', {
+      console.debug('[Agent] 助手回复交付', {
         chars: text.length,
         latency: p.latency_ms ? `${p.latency_ms}ms` : '未知',
-        stage: '-',
-        text: text.slice(0, 100) + (text.length > 100 ? '...' : ''),
       })
       if (text) {
         const streaming = turnStreamingAgent(events.value)
@@ -3196,7 +3202,10 @@ function handleWsEvent(ev: WsServerEvent) {
       break
     }
     case 'tool_call': {
-      console.log('%c[Agent] ⚙️ ToolCall:', 'color: #f59e0b; font-weight: bold;', p.name, p.arguments)
+      console.debug('[Agent] ToolCall', {
+        name: p.name,
+        argumentKeys: p.arguments && typeof p.arguments === 'object' ? Object.keys(p.arguments) : [],
+      })
       finishLiveThought()
       harnessStage.value = 'react'
       lastToolTitle.value = getToolDisplayName(p.name)
@@ -3212,10 +3221,10 @@ function handleWsEvent(ev: WsServerEvent) {
       break
     }
     case 'tool_result': {
-      console.log('%c[Agent] ✅ ToolCall 完成:', 'color: #10b981; font-weight: bold;', p.name, {
-        ok: p.ok,
+      console.debug('[Agent] ToolCall 完成', {
+        name: p.name,
+        ok: Boolean(p.ok),
         latency: `${p.latency_ms || 0}ms`,
-        data: p.data || p.error,
       })
       const target = [...events.value].reverse().find(x => x.type === 'tool' && x.tool === p.name)
       if (target) {
@@ -3225,7 +3234,7 @@ function handleWsEvent(ev: WsServerEvent) {
           target.latency_ms = p.latency_ms
           turnLatencyMs.value += p.latency_ms
         }
-        target.open = p.ok && p.name === 'audio.voiceclone'
+        target.open = p.ok && ['audio.speech_recognition', 'audio.speech_synthesis', 'audio.voiceclone'].includes(p.name)
       }
       if (p.ok) {
         const media = mediaItemFromToolResult(p.name, p.data)
@@ -3254,7 +3263,7 @@ function handleWsEvent(ev: WsServerEvent) {
       break
     }
     case 'confirm': {
-      console.log('%c[Agent] 📋 任务确认卡到达:', 'color: #8b5cf6; font-weight: bold;', p)
+      console.debug('[Agent] 确认卡到达', { kind: p.kind || 'unknown' })
       lastConfirmKind = p.kind || 'benchmark'
       finishLiveThought()
       setCurrentGenerating(false)

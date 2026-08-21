@@ -45,12 +45,16 @@
 
     <div v-show="isOpen" class="tool-detail">
       <audio
-        v-if="tool === 'audio.voiceclone' && status === 'ok' && playUrl"
+        v-if="isAudioOutput && status === 'ok' && playUrl"
         class="tool-audio"
         controls
         preload="metadata"
         :src="playUrl"
       />
+      <div v-if="tool === 'audio.speech_recognition' && status === 'ok' && transcriptText" class="transcript-card">
+        <div class="transcript-label">识别文本</div>
+        <div class="transcript-text">{{ transcriptText }}</div>
+      </div>
       <div class="td-block">
         <div class="td-label">输入 arguments</div>
         <pre class="code">{{ formatJson(args ?? {}) }}</pre>
@@ -93,7 +97,7 @@ watch(
       isOpen.value = true
       return
     }
-    if (status === 'ok' && props.tool === 'audio.voiceclone') {
+    if (status === 'ok' && ['audio.speech_recognition', 'audio.speech_synthesis', 'audio.voiceclone'].includes(props.tool)) {
       isOpen.value = true
       return
     }
@@ -113,6 +117,8 @@ const toolNameMap: Record<string, string> = {
   'report.get': '读取评测报告',
   'dispatch.overview': '调度概览',
   'testcase.confirm': '确认用例入库',
+  'audio.speech_recognition': '语音识别转写',
+  'audio.speech_synthesis': '语音合成',
   'audio.voiceclone': '音色克隆配音',
   'image.generate': 'Qwen Image 生图',
   // 兼容旧下划线命名
@@ -135,6 +141,7 @@ const toolChineseName = computed(() => {
 })
 
 const formattedLatency = computed(() => formatLatency(props.latencyMs))
+const isAudioOutput = computed(() => ['audio.speech_synthesis', 'audio.voiceclone'].includes(props.tool))
 
 const playUrl = computed(() => {
   const result = props.result
@@ -145,6 +152,12 @@ const playUrl = computed(() => {
   const id = data.file_id
   if (typeof id === 'string' && id) return `/api/files/${id}/content`
   return ''
+})
+
+const transcriptText = computed(() => {
+  if (!props.result || typeof props.result !== 'object') return ''
+  const transcript = (props.result as Record<string, unknown>).transcript
+  return typeof transcript === 'string' ? transcript : ''
 })
 
 const statusClass = computed(() => props.status)
@@ -308,6 +321,27 @@ pre.code {
   width: 100%;
   margin-bottom: 10px;
   height: 36px;
+}
+.transcript-card {
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent-info) 28%, var(--border-subtle));
+  border-radius: 8px;
+  background: var(--bg-main);
+}
+.transcript-label {
+  margin-bottom: 5px;
+  color: var(--accent-info);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+.transcript-text {
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 @keyframes msg-in {
   from {

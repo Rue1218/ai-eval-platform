@@ -20,10 +20,16 @@ PLAN_JSON_SUFFIX = (
     "先自己判断本轮复杂度 complexity=low|medium，再选循环 loop："
     "无需工具 → loop=chat；需多媒体工具 → loop=react。"
     "intent 只能为 chat；skill_id 必须为 null；delivery 必须为 text 或 clarify。"
-    "tools_needed 只能是 audio.voiceclone、image.generate 或 []；禁止生成任何任务、资产、"
+    "tools_needed 只能是 audio.speech_recognition、audio.speech_synthesis、"
+    "audio.voiceclone、image.generate 或 []；禁止生成任何任务、资产、"
     "数据集、报告、知识库、调度或用例工具。"
-    "本轮若用户上传了 wav/mp3 参考音频并要求配音，tools_needed 可含 "
-    "audio.voiceclone；file_id 由系统从本轮附件填写，禁止编造。"
+    "若用户明确要求把 wav/mp3 转写、识别、听写或生成字幕，优先使用 "
+    "audio.speech_recognition；file_id 由系统从本轮音频附件填写，禁止编造。"
+    "若用户明确要求文字转语音、播报或语音合成，使用 audio.speech_synthesis；"
+    "text/style/model/voice 由系统按本轮原文与受控参数绑定。"
+    "若同时出现识别意图与配音/音色意图，识别优先，不调用 audio.voiceclone。"
+    "若用户上传参考音频并明确要求克隆音色配音，使用 audio.voiceclone；"
+    "file_id 由系统从本轮附件填写，禁止编造。"
     "若用户要求生成或编辑图片、人像、摄影、竖幅/横幅海报，intent=chat、"
     "skill_id=null、tools_needed 只含 image.generate，delivery=text；"
     "禁止套评测技能或调用业务工具。"
@@ -67,6 +73,8 @@ REACT_LOOP_SUFFIX = """你运行在「思考 → 行动 → 观察 → 再思考
 以用户本轮原文为准：只对生图或配音请求调工具，不需要就结束。
 
 可用短工具（必须用这些点分名，禁止 OpenAI function calling / 自造工具名）：
+- audio.speech_recognition — wav/mp3 语音识别转写（file_id 由系统绑定）
+- audio.speech_synthesis — 文本转语音（文本与受控参数由系统绑定）
 - audio.voiceclone — 参考音频克隆配音（file_id 由系统绑定）
 - image.generate — 文本或参考图生图（参考图由系统绑定）
 
@@ -75,8 +83,9 @@ REACT_LOOP_SUFFIX = """你运行在「思考 → 行动 → 观察 → 再思考
 2. 不要编造观察结果或 file_id；file_id 必须来自工具返回或本轮附件。
 3. 禁止用相同参数重复调用同一工具。
 4. 禁止任务、资产、报告、知识库、调度及长任务工具；业务工作流尚未重建。
-5. 用户未明确要求生图、摄影、人像或配音时：tool=null、done=true，把答复写入 reply。
-6. 用户明确要求生图、摄影、人像或配音时才调用对应工具。"""
+5. 用户未明确要求语音识别、语音合成、配音或生图时：tool=null、done=true，把答复写入 reply。
+6. 用户明确要求语音识别、语音合成、配音或生图时才调用对应工具；识别意图优先于配音。
+7. 语音识别只使用本轮音频附件，语音合成只使用本轮文本与受控参数，禁止编造文件 ID 或音频数据。"""
 
 
 # /compact 压缩提示词（不计入 4 次模型硬顶，仍受 180s 墙钟约束）

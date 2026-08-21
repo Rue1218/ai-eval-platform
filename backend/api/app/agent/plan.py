@@ -27,7 +27,7 @@ from .imagegen import inject_imagegen_plan, looks_like_image_generation
 from .log import agent_trace
 from .persona import PLAN_RETRY_SUFFIX, REPLAN_JSON_SUFFIX, plan_system, turn_system
 from .slash import SlashParse
-from .voiceclone import inject_voiceclone_plan
+from .voiceclone import inject_voiceclone_plan, list_audio_file_ids
 
 
 @dataclass
@@ -207,12 +207,58 @@ def _default_complexity(loop: str) -> str:
 def _stamp_loop(plan: PlanArtifact) -> PlanArtifact:
     """补全 runtime 的 loop/complexity，不写入确认卡 JSON。"""
     tools = list(plan.tools_needed or [])
-    if "image.generate" in tools or "audio.voiceclone" in tools:
+    if any(name in {"audio.speech_recognition", "audio.speech_synthesis", "audio.voiceclone", "image.generate"} for name in tools):
         plan.loop = "react"
     elif plan.loop not in LOOP_ENUM:
         plan.loop = _clip_loop(plan.loop, intent=plan.intent, tools=tools)
     if plan.complexity not in {"low", "medium", "high"}:
         plan.complexity = _default_complexity(plan.loop)
+    return plan
+
+
+# 语音意图提示：识别/转写必须先于音色克隆，合成则使用独立 TTS 工具。
+SPEECH_RECOGNITION_HINTS = ("语音识别", "识别这段音频", "把音频识别", "转文字", "转写", "听写", "生成字幕", "speech recognition", "asr", "stt")
+SPEECH_SYNTHESIS_HINTS = ("语音合成", "文字转语音", "文本转语音", "转成语音", "生成语音", "合成音频", "播报", "朗读", "text to speech", "tts")
+EXPLICIT_VOICECLONE_HINTS = ("配音", "克隆", "音色", "voiceclone", "voice clone", "参考音频", "用这个声音", "模仿声音")
+AUDIO_CLARIFY_RE = re.compile(r"(语音识别|语音合成|音色克隆|参考音频|wav|mp3)")
+
+
+def looks_like_speech_recognition(text: str) -> bool:
+    """判断用户是否要求把语音识别或转写为文本。"""
+    lowered = (text or "").lower()
+    return any(hint.lower() in lowered for hint in SPEECH_RECOGNITION_HINTS)
+
+
+def looks_like_speech_synthesis(text: str) -> bool:
+    """判断用户是否要求普通文字转语音，不含明确的音色克隆请求。"""
+    lowered = (text or "").lower()
+    if any(hint.lower() in lowered for hint in EXPLICIT_VOICECLONE_HINTS):
+        return False
+    return any(hint.lower() in lowered for hint in SPEECH_SYNTHESIS_HINTS)
+
+
+def _set_audio_plan(plan: PlanArtifact, *, tool: str, note: str, delivery: str = "text") -> PlanArtifact:
+    """把本轮计划收束为音频短工具，避免夹带评测技能或旧业务工具。"""
+    plan.intent = "chat"
+    plan.skill_id = None
+    plan.tools_needed = [tool] if delivery == "text" else []
+    plan.delivery = delivery
+    plan.slots = {"filled": {}, "missing": []}
+    plan.notes = note
+    return plan
+
+
+def inject_speech_plan(db: Session, plan: PlanArtifact, *, text: str, attachments: list[str]) -> PlanArtifact:
+    """按意图注入 STT/TTS；STT 优先，缺音频时明确澄清。"""
+    audio_ids = list_audio_file_ids(db, attachments)
+    if looks_like_speech_recognition(text):
+        if not audio_ids:
+            return _set_audio_plan(plan, tool="audio.speech_recognition", note="规划：语音识别需要上传 wav 或 mp3 音频", delivery="clarify")
+        return _set_audio_plan(plan, tool="audio.speech_recognition", note="规划：将本轮音频识别为文本")
+    if looks_like_speech_synthesis(text):
+        if audio_ids and "朗读" in (text or ""):
+            return plan
+        return _set_audio_plan(plan, tool="audio.speech_synthesis", note="规划：将文本合成为语音")
     return plan
 
 
@@ -490,7 +536,9 @@ def run_plan(
         """先按本轮意图注入短工具，再挂评测偏好，避免生图被沿用协议档/数据集。"""
         if slash:
             return _stamp_loop(_attach_prefs(plan, prefs))
-        plan = inject_voiceclone_plan(db, plan, text=text, attachments=attachments)
+        plan = inject_speech_plan(db, plan, text=text, attachments=attachments)
+        if not any(name in {"audio.speech_recognition", "audio.speech_synthesis"} for name in plan.tools_needed) and plan.delivery != "clarify":
+            plan = inject_voiceclone_plan(db, plan, text=text, attachments=attachments)
         plan = inject_imagegen_plan(db, plan, text=text, attachments=attachments)
         return _stamp_loop(_attach_prefs(plan, prefs))
 
