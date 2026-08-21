@@ -7,7 +7,7 @@
 """
 
 import logging
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -15,7 +15,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 
-class ErrorCode(str, Enum):
+class ErrorCode(StrEnum):
     UNAUTHORIZED = "UNAUTHORIZED"
     VALIDATION = "VALIDATION"
     NOT_FOUND = "NOT_FOUND"
