@@ -329,13 +329,9 @@ def execute_speech_recognition(db: Session, arguments: dict[str, Any] | None, *,
     language = str(args.get("language") or "auto").strip().lower()
     text = recognize_speech(audio_bytes=audio, audio_mime=mime, language=language)
     return {
-        "transcript": text,
+        "text": text,
         "language": language,
-        "model": str(getattr(settings, "mimo_asr_model", ASR_MODEL) or ASR_MODEL),
         "file_id": file_id,
-        "filename": stored.filename,
-        "content_type": stored.content_type,
-        "size": stored.size_bytes,
     }
 
 

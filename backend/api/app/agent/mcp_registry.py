@@ -38,6 +38,20 @@ REGISTERED_TOOLS: tuple[McpToolDefinition, ...] = (
         permission="write",
         timeout_s=90,
     ),
+    McpToolDefinition(
+        name="audio.speech_recognition",
+        title="语音识别",
+        description="将本地上传的 wav/mp3 音频转录为文本",
+        permission="write",
+        timeout_s=90,
+    ),
+    McpToolDefinition(
+        name="audio.speech_synthesis",
+        title="语音合成",
+        description="用 MiMo TTS 将文本合成为 wav 音频",
+        permission="write",
+        timeout_s=90,
+    ),
 )
 TOOL_BY_NAME = {tool.name: tool for tool in REGISTERED_TOOLS}
 
@@ -77,6 +91,17 @@ def bind_tool_arguments(
         if "prompt_extend" in args:
             bound["prompt_extend"] = bool(args["prompt_extend"])
         return bound
+    if name == "audio.speech_recognition":
+        from .mimo_audio import arguments_for_speech_recognition
+
+        bound = arguments_for_speech_recognition(db, text=text, attachments=attachments)
+        if args.get("language"):
+            bound["language"] = str(args["language"]).strip().lower()
+        return bound
+    if name == "audio.speech_synthesis":
+        from .mimo_audio import arguments_for_speech_synthesis
+
+        return arguments_for_speech_synthesis(text=text, arguments=args)
     raise AppError(ErrorCode.VALIDATION, f"未知短工具「{name}」")
 
 
@@ -96,4 +121,12 @@ def execute_registered_tool(
         from .imagegen import execute_imagegen
 
         return execute_imagegen(db, arguments, user_id=user_id)
+    if name == "audio.speech_recognition":
+        from .mimo_audio import execute_speech_recognition
+
+        return execute_speech_recognition(db, arguments, user_id=user_id)
+    if name == "audio.speech_synthesis":
+        from .mimo_audio import execute_speech_synthesis
+
+        return execute_speech_synthesis(db, arguments, user_id=user_id)
     raise AppError(ErrorCode.VALIDATION, f"未知短工具「{name}」")

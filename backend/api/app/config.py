@@ -23,6 +23,14 @@ class Settings(BaseSettings):
     mimo_tts_api_key: str = ""
     mimo_tts_model: str = "mimo-v2.5-tts-voiceclone"
     mimo_tts_timeout_s: float = 90.0
+    # MiMo 音频短工具（ASR/TTS，OpenAI chat/completions 兼容）。Key 只从环境注入，禁止回显。
+    mimo_audio_base_url: str = "https://token-plan-cn.xiaomimimo.com/v1"
+    mimo_audio_api_key: str = ""
+    mimo_audio_timeout_s: float = 90.0
+    mimo_asr_model: str = "mimo-v2.5-asr"
+    mimo_tts_preset_model: str = "mimo-v2.5-tts"
+    mimo_tts_voicedesign_model: str = "mimo-v2.5-tts-voicedesign"
+    mimo_tts_voice: str = "mimo_default"
     # Qwen Image 图像生成（DashScope 多模态生成接口）。Key 只从环境注入，禁止回显。
     qwen_image_api_url: str = ""
     qwen_image_api_key: str = ""
