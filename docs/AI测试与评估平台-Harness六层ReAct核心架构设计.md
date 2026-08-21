@@ -13,7 +13,7 @@
 
 > **V1.1 定向修订定位**：在原第二章项目树中新增追踪、取消与并行门面文件；在第三章 `§3.2` 中扩展为批量 ToolCall、并行状态机和流式取消；在 `§3.3` 中替换取消异常处理；在 `§3.4` 后新增 `§3.5` 跨层强制链路追踪；在第四章 `§4.3` 后补充长任务取消时限；在文末自检清单新增对应不变量。原有六层、记忆解耦、MCP 和反幻觉设计均保留。
 
-> **V1.2 定向修订定位**：① 裁决 LLM 客户端归属——新增 `llm/` 模块并由编排层独占持有，修正 `§1.1`/`§1.2` 两图关于"谁调用模型"的矛盾；② 新增第五章"现状迁移映射与基础设施决策"（现有 `app/agent/` 模块 → 目标目录映射、**MemoryPort 首期仅 PostgreSQL 且 LightRAG 暂不接入**、分阶段迁移与持久化契约），并同步把正文各章原 Redis/Vector DB 默认落点表述统一改为 PG；③ 新增第六章"安全层契约与错误码对齐"（`security/` 三文件契约、ToolResult 内部枚举与 10 大 ErrorCode 的关系、与 Agent 开发文档的裁决关系）；④ 在 `§3.2.2` 补充权威预算默认值表；⑤ 修正 `§3.5` 批量合并场景的 trace 父子校验说明；⑥ `§1.2` 时序图补显式"执行报错 → 反馈 → 二次推理"分支；⑦ 文档头部补审查日期、目标运行时对齐 Python 3.12。
+> **V1.2 定向修订定位**：① 裁决 LLM 客户端归属——新增 `llm/` 模块并由编排层独占持有，修正 `§1.1`/`§1.2` 两图关于"谁调用模型"的矛盾；② 新增第五章"现状迁移映射与基础设施决策"（现有 `app/agent/` 模块 → 目标目录映射、**首期 PostgreSQL（含 pgvector）+ Redis、LightRAG 暂不接入**的存储决策与部署红线、分阶段迁移与持久化契约）；③ 新增第六章"安全层契约与错误码对齐"（`security/` 三文件契约、ToolResult 内部枚举与 10 大 ErrorCode 的关系、与 Agent 开发文档的裁决关系）；④ 在 `§3.2.2` 补充权威预算默认值表；⑤ 修正 `§3.5` 批量合并场景的 trace 父子校验说明；⑥ `§1.2` 时序图补显式"执行报错 → 反馈 → 二次推理"分支；⑦ 文档头部补审查日期、目标运行时对齐 Python 3.12。
 
 ---
 
@@ -25,7 +25,7 @@
 | :--- | :--- | :--- | :--- |
 | 1. 提示词工程 | 固定 System Prompt、阶段角色及 JSON Schema 约束 | `prompts/` 静态模板 | 上下文检索、CoT 内容、工具执行、状态存储 |
 | 2. 上下文工程 | 动态窗口、召回结果装配、压缩、重排序和 token 预算 | Memory 的抽象检索端口、Prompt 模板 | 直接操作任何具体存储（PostgreSQL、LightRAG、缓存或向量库）、执行工具、业务授权 |
-| 3. 记忆层 | 短期状态持久化、长期对话/知识索引和检索 | PostgreSQL（首期唯一实现；LightRAG、Redis、独立向量库均为后续演进，见 §5.2） | 窗口裁剪、摘要策略、提示词拼接、模型调用 |
+| 3. 记忆层 | 短期状态持久化、长期对话/知识索引和检索 | PostgreSQL（含 pgvector）+ Redis（首期安装）；LightRAG、独立向量库为后续演进，见 §5.2 | 窗口裁剪、摘要策略、提示词拼接、模型调用 |
 | 4. 编排层 | ReAct JSON 状态机、ToolCall 解析、预算、停止条件、经 `llm/` 客户端发起模型调用 | Context 编译器、Execution 门面、Feedback 门面、`llm/` 模型客户端 | 解析自由文本作为动作、直接 I/O、直接访问存储驱动 |
 | 5. 执行层 | 权限后的 I/O、MCP 客户端、文件能力、超时与后台任务提交 | MCP 适配器、文件沙箱、队列客户端 | 调模型、决定下一轮、向模型拼接上下文 |
 | 6. 反馈层 | 将执行结果/错误规范化成可注入的 `ToolResult` observation | 脱敏器、诊断审计、事件发布器 | 直接重试工具、绕过编排层调用模型 |
@@ -35,7 +35,7 @@
 ```mermaid
 flowchart LR
     P["1. Prompt Engineering\nSystem 模板 + JSON Schema"] --> C["2. Context Engineering\n召回结果装配 / 压缩 / Rerank / 窗口预算"]
-    M["3. Memory Layer\n短期状态 + 长期记录（首期仅 PG，检索能力后续接入，见 §5.2）"] -->|"MemoryPort.retrieve()"| C
+    M["3. Memory Layer\nRedis 短期状态 + PG 长期归档 + pgvector 知识检索（见 §5.2）"] -->|"MemoryPort.retrieve()"| C
     C -->|"CompiledContext"| O["4. Orchestration\nReAct JSON 状态机"]
     O -->|"ToolCall / ToolCallBatch\ntrace_id + span_id + CancellationToken"| X["5. Execution\nMCP / 文件 / 后台任务"]
     X -->|"ExecutionOutcome"| F["6. Feedback\nToolResult / Observation / 脱敏"]
@@ -162,11 +162,11 @@ harness/
 │   └── policies.py                # 上下文优先级、最大 token、注入白名单
 ├── memory/
 │   ├── ports.py                   # ShortTermMemoryPort / LongTermMemoryPort / MemoryPort
-│   ├── short_term_pg.py          # PostgreSQL：回合状态、会话索引、幂等键、TTL 策略（首期唯一短期实现）
-│   ├── long_term_lightrag.py     # 可选演进：LightRAG 混合检索适配器；RAG 接入评审通过前不创建此文件
-│   ├── cache_redis.py            # 可选演进：Redis 缓存适配器；未引入 Redis 前不创建此文件
+│   ├── short_term_redis.py      # Redis：回合状态、会话索引、TTL、幂等键（首期实现）
+│   ├── long_term_pgvector.py    # pgvector：向量检索、metadata 过滤、文档版本（首期实现）
+│   ├── long_term_lightrag.py    # 可选演进：LightRAG 适配器；RAG 接入评审通过前不创建此文件
 │   ├── conversation_store.py      # 长期对话归档（首期 PG 实现，带溯源字段）
-│   ├── knowledge_store.py         # 知识库写入/删除/撤权（首期仅接口预留，实现待 RAG 接入评审）
+│   ├── knowledge_store.py         # 知识库写入/删除/撤权（首期基于 pgvector 实现）
 │   └── retention.py               # TTL、删除、重建索引、数据主权策略
 ├── orchestration/
 │   ├── react_loop.py              # ReAct 总控循环；强制 trace/cancel 透传
@@ -208,7 +208,7 @@ harness/
 │   └── secrets.py                 # 凭据引用、轮换、永不进入模型上下文
 └── tests/
     ├── context/                   # 召回-压缩-Rerank、窗口布局、来源冲突测试
-    ├── memory/                    # PG 短期状态与长期归档、撤权和删除测试
+    ├── memory/                    # Redis TTL、pgvector 向量过滤、撤权和删除测试
     ├── orchestration/             # 状态机、done、死循环与 JSON 解析测试
     ├── execution/                 # MCP stdio/HTTP/WS、超时、取消、文件沙箱测试
     ├── feedback/                  # traceback 脱敏、ToolResult 回填和错误降级测试
@@ -217,7 +217,7 @@ harness/
 
 ### 2.1 依赖倒置要求
 
-`context/` 只能依赖 `contracts.memory.MemoryPort`。该 Port 暴露 `retrieve()`、`append()`、`forget()` 等抽象能力；具体存储 SDK 只允许出现在 `memory/`（首期仅 SQLAlchemy/PG；后续 LightRAG、Redis 等同样只落此层）。这保证后续引入检索或缓存增强实现时，不会改动窗口管理、压缩和 Rerank 策略。
+`context/` 只能依赖 `contracts.memory.MemoryPort`。该 Port 暴露 `retrieve()`、`append()`、`forget()` 等抽象能力；具体存储 SDK 只允许出现在 `memory/`（首期 SQLAlchemy/PG + pgvector、redis-py；后续 LightRAG 等同样只落此层）。这保证后续引入检索或缓存增强实现时，不会改动窗口管理、压缩和 Rerank 策略。
 
 同理，`orchestration/` 只能通过 `ExecutionFacade` 调用执行层，只能通过 `FeedbackNormalizer` 接收结果；`execution/` 不允许 import `orchestration.react_loop` 或任意 LLM SDK。循环控制权必须单向集中在编排层。
 
@@ -572,7 +572,7 @@ Turn trace_id=T-01
 | 边界 | 必须动作 |
 | :--- | :--- |
 | Logging | 每条结构化日志必须自动带 `trace_id`、`span_id`、`turn_id` 和可选 `call_id`；禁止依赖人工字符串拼接。 |
-| Context ↔ Memory | `MemoryQuery`、`MemoryRecord` 与存储 metadata（首期 PG 行；后续检索文档同理）必须携带同一 `trace_id`；用于短期回合状态的存储键必须包含 `trace:{trace_id}`。 |
+| Context ↔ Memory | `MemoryQuery`、`MemoryRecord` 与存储 metadata（PG 行、pgvector 向量记录、Redis 值）必须携带同一 `trace_id`；用于短期回合状态的 Redis Key 必须包含 `trace:{trace_id}`。 |
 | Memory 持久化 | 长期记录保存 `origin_trace_id` 和 `origin_span_id`，便于回放“事实由哪一回合写入”。 |
 | Orchestration ↔ Execution | 每个 ToolCall 必须有 child span；并行批次中每个 `call_id` 使用独立 `span_id`。 |
 | MCP | Streamable HTTP 请求必须发送 `X-Trace-Id`、`X-Span-Id`，并建议同步 `traceparent`；WebSocket 握手和每条关联请求必须携带同值。stdio 没有 HTTP 请求头，适配器必须以进程内请求关联/受协商的 metadata 传递同一 trace，禁止伪造 HTTP header。 |
@@ -721,17 +721,19 @@ ToolCall
 | `agent/lightrag_stub.py` | 保留现状（api 层不动） | LightRAG 暂不接入；待 RAG 接入评审后再迁入 `harness/memory/` 实现 `LongTermMemoryPort`；未接入不得 mock `succeeded` 的红线保持（AGENTS.md §5.2）。 |
 | `app/llm.py` | `harness/llm/client.py` + `structured.py` | Provider 适配与错误归一（`VALIDATION`/`UPSTREAM`/`TIMEOUT`）逻辑不变。 |
 
-### 5.2 基础设施决策：MemoryPort 首期仅 PostgreSQL，LightRAG 暂不接入
+### 5.2 基础设施决策：首期 PostgreSQL（含 pgvector）+ Redis；LightRAG 暂不接入
 
-现有服务拓扑（web / api / worker / postgres / lightrag / stress）中**没有 Redis 与独立 Vector DB**；且 **LightRAG 首期不接入**（RAG 评测能力另行评审）。记忆层落地决策如下：
+经评审决定：服务器安装 **Redis** 与 **pgvector**。pgvector 以 PostgreSQL 扩展形式运行在现有 PG 16 内，**不新增独立向量库容器**；**LightRAG 首期仍不接入**（RAG 评测能力另行评审）。记忆层落地决策如下：
 
 | 能力 | 首期实现 | 演进实现（后续按需评审） | 约束 |
 | :--- | :--- | :--- | :--- |
-| 短期回合状态、会话索引、幂等键 | PostgreSQL 16（复用现有库与 Alembic） | Redis Cluster | SDK 只允许出现在 `harness/memory/`；替换不改 Context 层。 |
+| 短期回合状态、会话索引、幂等键 | Redis 7（新增 `redis` 容器；TTL 天然匹配回合状态生命周期） | Redis Cluster | SDK 只允许出现在 `harness/memory/`；替换不改 Context 层。 |
 | 长期对话归档 | PostgreSQL（`conversation_store.py`，带 `origin_trace_id` 溯源） | PG 分区 / 对象存储 | 记录必须可回放"由哪一回合写入"。 |
-| 知识/向量检索 | **暂不接入**（`LongTermMemoryPort` 与 `knowledge_store.py` 仅接口预留，不提供实现） | LightRAG（现有容器）→ pgvector / Qdrant / Milvus | 未接入前 `kind=rag` 不得 mock `succeeded`；引入前必须单独评审。 |
+| 知识/向量检索 | pgvector（PG 内向量扩展；`LongTermMemoryPort` 由 `knowledge_store.py` 基于 pgvector 落地） | LightRAG（现有容器）/ Qdrant / Milvus | 向量数据与业务数据同库同备份；未接入 RAG 评测前 `kind=rag` 仍不得 mock `succeeded`。 |
 
-裁决口径：正文各章（第一章依赖图、第二章目录树、§3.5 透传规则）一律以 **PostgreSQL 为首期唯一存储落点**；LightRAG、Redis、pgvector 等仅在 `memory/` 内作为后续演进项出现，是否引入由独立技术方案评审，本文不构成扩容承诺。
+**部署红线**：基础设施变更必须落入 `docker-compose.yml`（新增 `redis` 服务；`postgres` 换用带 pgvector 的镜像如 `pgvector/pgvector:pg16` 或在初始化脚本中 `CREATE EXTENSION vector`）并经 Alembic 迁移建表，走 `feat/deploy-*` 分支合入 `main` 由 CD 生效。**禁止只在服务器手工安装**——`deploy.sh` 每次 `git reset --hard && docker compose up -d` 会覆盖手工产物，造成环境漂移。
+
+裁决口径：正文各章（第一章依赖图、第二章目录树、§3.5 透传规则）一律以 **PostgreSQL（含 pgvector）+ Redis 为首期落点**；LightRAG、Qdrant、Milvus 等仅在 `memory/` 内作为后续演进项出现，是否引入由独立技术方案评审，本文不构成扩容承诺。
 
 ### 5.3 分阶段迁移（每阶段 WS 对外协议不变，以 API.md 为准）
 
@@ -740,7 +742,7 @@ ToolCall
 阶段 1  编排/执行/反馈三层接管单调用路径（react.py + mcp_tools.py 逻辑迁入，外部行为不变）
 阶段 2  TraceContext / CancellationToken 强制透传 + 诊断审计持久化
 阶段 3  ParallelFacade 批量 ToolCall + FINALIZING_STREAM 流式收尾
-阶段 4  记忆层接入（PG 短期状态 + PG 长期对话归档；知识检索仅接口预留），context/ 换用 MemoryPort
+阶段 4  记忆层接入（Redis 短期状态 + PG 长期归档 + pgvector 知识检索），context/ 换用 MemoryPort
 ```
 
 每个阶段独立开 `feat/` 分支、独立 PR 合入 `main`；阶段内必须保持 `app/agent/` 与 `harness/` 不存在同一职责的双实现（迁移完成即删旧路径）。
@@ -755,7 +757,7 @@ ToolCall
 | `harness_spans` | `trace_id`、`span_id`(唯一)、`parent_span_id`、`component`、`started_at`、`latency_ms` | 全部跨层 span；按 `trace_id` 建索引，随 `trace_id` 一并过期清理。 |
 | `harness_diagnostics` | `diagnostic_id`(唯一)、`trace_id`、`span_id`、`traceback`、`created_at` | 受限审计存储；保留 `HARNESS_DIAGNOSTICS_RETENTION_DAYS`（默认 30 天）后由定时任务清除。 |
 
-`MemoryRecord` 复用现有会话消息表并补充 `source_id`、`version`、`origin_trace_id` 溯源字段；任何长期记忆写入都必须可回放"由哪一回合写入"（`§3.5`）。
+`MemoryRecord` 复用现有会话消息表并补充 `source_id`、`version`、`origin_trace_id` 溯源字段；任何长期记忆写入都必须可回放"由哪一回合写入"（`§3.5`）。审计三表（turns/spans/diagnostics）**保留在 PostgreSQL，不迁 Redis**——审计数据要求持久与可回放，Redis 只承载可过期的回合态与索引。
 
 ---
 
@@ -810,7 +812,7 @@ Agent 开发文档（`docs/AI测试与评估平台-Agent开发文档.md`）定�
 - [x] LLM 客户端归属是否唯一？是；`llm/` 仅允许 `orchestration/` 与 `app.py` import，`§1.1` 依赖图与 `§1.2` 时序图已统一为"编排层经 `llm/` 调用模型"。
 - [x] 时序图是否包含显式"执行报错 → 反馈 → 二次推理"分支？是；`§1.2` call_02 失败路径经 Feedback 结构化回填后进入纠错轮模型调用。
 - [x] 是否给出从现有 `app/agent/` 扁平实现到六层目录的迁移映射？是；`§5.1` 逐模块映射，`§5.3` 分五阶段迁移且每阶段 WS 协议不变。
-- [x] 基础设施是否与现有六容器拓扑对齐？是；`§5.2` 裁决 MemoryPort 首期仅 PostgreSQL，LightRAG、Redis、独立向量库均为后续演进项。
+- [x] 基础设施是否与现有拓扑对齐？是；`§5.2` 裁决首期为 PostgreSQL（含 pgvector 扩展，不新增向量库容器）+ Redis（新增容器），LightRAG、独立向量库均为后续演进；基础设施变更必须走 docker-compose + CD，禁止服务器手工安装。
 - [x] `security/` 三文件契约是否展开？是；`§6.1` 定义 policy/consent/secrets 输入输出与强制规则。
 - [x] 内部错误枚举是否与 10 大 ErrorCode 区分？是；`§6.2` 裁决 observation 级枚举不对外、并给出映射表。
 - [x] 预算与调度默认值是否有权威配置表？是；`§3.2.2` 固化 8 项配置键与默认值。
@@ -823,4 +825,4 @@ Agent 开发文档（`docs/AI测试与评估平台-Agent开发文档.md`）定�
 
 | 文件 | 作用 |
 | :--- | :--- |
-| `docs/AI测试与评估平台-Harness六层ReAct核心架构设计.md` | V1.2：裁决 LLM 客户端归属并新增 `llm/` 模块；新增第五章迁移映射（`app/agent/` 模块映射、首期仅 PostgreSQL / LightRAG 暂不接入的决策、分阶段计划、持久化契约）与第六章安全层契约（security 展开、错误码对齐、文档裁决），并把正文 Redis/Vector DB 默认落点统一改为 PG；补权威预算默认值表；修正两图矛盾、时序图错误分支与批量 trace 校验说明。 |
+| `docs/AI测试与评估平台-Harness六层ReAct核心架构设计.md` | V1.2：裁决 LLM 客户端归属并新增 `llm/` 模块；新增第五章迁移映射（`app/agent/` 模块映射、首期 PG（含 pgvector）+ Redis / LightRAG 暂不接入的决策与部署红线、分阶段计划、持久化契约）与第六章安全层契约（security 展开、错误码对齐、文档裁决）；补权威预算默认值表；修正两图矛盾、时序图错误分支与批量 trace 校验说明。 |
