@@ -1,13 +1,19 @@
 <template>
-  <!-- 富文本 Markdown 渲染器：支持实时流式解析、代码块高亮/复制、GFM 表格、公式与排版优化 -->
-  <div class="markdown-view" :class="[customClass, { 'is-streaming': isStreaming }]" @click="handleContainerClick">
+  <!-- 富文本 Markdown 渲染器：支持实时流式解析、Mermaid 架构图/流程图、代码块高亮/复制、GFM 表格、公式与排版优化 -->
+  <div
+    ref="containerRef"
+    class="markdown-view"
+    :class="[customClass, { 'is-streaming': isStreaming }]"
+    @click="handleContainerClick"
+  >
     <div class="markdown-content" v-html="renderedHtml"></div>
     <span v-if="isStreaming" class="md-streaming-cursor" aria-hidden="true">▍</span>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { ref, computed, watch, onMounted, nextTick } from 'vue'
+import mermaid from 'mermaid'
 
 const props = withDefaults(
   defineProps<{
@@ -21,6 +27,102 @@ const props = withDefaults(
     isStreaming: false,
   },
 )
+
+const containerRef = ref<HTMLElement | null>(null)
+let renderSvgCounter = 0
+let mermaidInitialized = false
+
+/**
+ * 初始化 Mermaid 全局深色主题与渲染配置
+ */
+function initMermaid(): void {
+  if (mermaidInitialized) return
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: 'dark',
+    themeVariables: {
+      darkMode: true,
+      background: '#090d16',
+      primaryColor: '#059669',
+      primaryTextColor: '#f8fafc',
+      primaryBorderColor: '#10b981',
+      lineColor: '#34d399',
+      secondaryColor: '#1e293b',
+      tertiaryColor: '#0f172a',
+      secondaryTextColor: '#cbd5e1',
+      tertiaryTextColor: '#94a3b8',
+      fontSize: '14px',
+      fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
+      nodeBorder: '#10b981',
+      mainBkg: '#0f172a',
+      nodeTextColor: '#f8fafc',
+      actorBkg: '#1e293b',
+      actorBorder: '#10b981',
+      actorTextColor: '#f8fafc',
+      signalColor: '#10b981',
+      signalTextColor: '#f8fafc',
+      clusterBkg: '#0d131f',
+      clusterBorder: '#334155',
+    },
+    securityLevel: 'loose',
+    fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
+  })
+  mermaidInitialized = true
+}
+
+/**
+ * 异步渲染单个 Mermaid 结构图为 SVG
+ */
+async function renderMermaidSvg(id: string, code: string): Promise<string> {
+  initMermaid()
+  try {
+    const { svg } = await mermaid.render(id, code)
+    return svg
+  } catch (err) {
+    // 移除 Mermaid 渲染失败时可能挂载到 document.body 上的残留错误 DOM 节点
+    const errEl = document.getElementById('d' + id) || document.getElementById(id)
+    if (errEl && errEl.parentNode === document.body) {
+      document.body.removeChild(errEl)
+    }
+    throw err
+  }
+}
+
+/**
+ * 遍历渲染容器内的所有 Mermaid 卡片
+ */
+async function renderAllMermaidDiagrams(): Promise<void> {
+  await nextTick()
+  if (!containerRef.value) return
+
+  const cards = containerRef.value.querySelectorAll<HTMLElement>('.md-mermaid-card[data-mermaid-code]')
+  for (const card of Array.from(cards)) {
+    const encodedCode = card.getAttribute('data-mermaid-code')
+    const chartView = card.querySelector<HTMLElement>('.md-mermaid-view-chart')
+    if (!encodedCode || !chartView) continue
+
+    const code = decodeURIComponent(encodedCode).trim()
+    if (!code) continue
+
+    // 若已经成功渲染过相同代码，则避免重复渲染
+    if (card.getAttribute('data-rendered-code') === encodedCode) continue
+
+    const uniqueId = `mermaid-svg-${Date.now()}-${++renderSvgCounter}`
+    try {
+      const svg = await renderMermaidSvg(uniqueId, code)
+      chartView.innerHTML = svg
+      card.setAttribute('data-rendered-code', encodedCode)
+      card.classList.remove('has-error')
+    } catch {
+      card.classList.add('has-error')
+      if (props.isStreaming) {
+        chartView.innerHTML = `<div class="md-mermaid-streaming-hint"><span class="md-spin">⏳</span> 架构图生成中...</div>`
+      } else {
+        chartView.innerHTML = `<div class="md-mermaid-error-hint">⚠️ 图表语法不完整或解析异常，请切换「源码」查看</div>`
+      }
+    }
+  }
+}
 
 /**
  * 基础 HTML 实体转义（防御 XSS）
@@ -170,36 +272,54 @@ function renderMarkdown(raw: string): string {
     .replace(/<\/p>/gi, '')
 
   // 占位符定义（私有区字符，防止转义破坏）
+  const mermaidMarker = (idx: number) => `\uE000MERMAID_BLOCK_${idx}\uE001`
   const codeMarker = (idx: number) => `\uE000CODE_BLOCK_${idx}\uE001`
   const tableMarker = (idx: number) => `\uE000TABLE_BLOCK_${idx}\uE001`
   const mathMarker = (idx: number) => `\uE000MATH_BLOCK_${idx}\uE001`
   const inlineMathMarker = (idx: number) => `\uE000INLINE_MATH_${idx}\uE001`
 
-  // 1. 提取并暂存围栏代码块 ```lang\ncode\n```（支持流式未闭合代码块）
+  // 1. 优先提取并暂存 Mermaid 架构图/流程图（支持闭合与流式未闭合）
+  const mermaidBlocks: { code: string; isStreamingUnclosed?: boolean }[] = []
+
+  // 1.1 闭合 Mermaid 块
+  text = text.replace(/```(?:mermaid)\n([\s\S]*?)```/gi, (_, code) => {
+    const idx = mermaidBlocks.length
+    mermaidBlocks.push({ code: code.trim() })
+    return mermaidMarker(idx)
+  })
+
+  // 1.2 流式未闭合 Mermaid 块
+  text = text.replace(/```(?:mermaid)\n([\s\S]*)$/gi, (_, code) => {
+    const idx = mermaidBlocks.length
+    mermaidBlocks.push({ code: code.trim(), isStreamingUnclosed: true })
+    return mermaidMarker(idx)
+  })
+
+  // 2. 提取并暂存常规围栏代码块 ```lang\ncode\n```
   const codeBlocks: { lang: string; code: string; isStreamingUnclosed?: boolean }[] = []
 
-  // 1.1 闭合代码块
+  // 2.1 闭合代码块
   text = text.replace(/```([a-zA-Z0-9_#+-]*)\n([\s\S]*?)```/g, (_, lang, code) => {
     const idx = codeBlocks.length
     codeBlocks.push({ lang: (lang || 'text').trim(), code: code.replace(/\n$/, '') })
     return codeMarker(idx)
   })
 
-  // 1.2 流式未闭合代码块（处于生成尾部的 ```lang\ncode...）
+  // 2.2 流式未闭合代码块
   text = text.replace(/```([a-zA-Z0-9_#+-]*)\n([\s\S]*)$/g, (_, lang, code) => {
     const idx = codeBlocks.length
     codeBlocks.push({ lang: (lang || 'text').trim(), code: code.replace(/\n$/, ''), isStreamingUnclosed: true })
     return codeMarker(idx)
   })
 
-  // 1.3 刚打出 ```lang 还没有换行的情况
+  // 2.3 刚打出 ```lang 还没有换行的情况
   text = text.replace(/```([a-zA-Z0-9_#+-]*)$/g, (_, lang) => {
     const idx = codeBlocks.length
     codeBlocks.push({ lang: (lang || 'text').trim(), code: '', isStreamingUnclosed: true })
     return codeMarker(idx)
   })
 
-  // 2. 提取并暂存 GFM 表格
+  // 3. 提取并暂存 GFM 表格
   const tableBlocks: string[] = []
   const lines = text.split('\n')
   const outLines: string[] = []
@@ -207,10 +327,8 @@ function renderMarkdown(raw: string): string {
 
   while (lineIdx < lines.length) {
     const curLine = lines[lineIdx]
-    // 检查是否包含表格特征字符 '|'
     if (curLine.includes('|') && lineIdx + 1 < lines.length) {
       const nextLine = lines[lineIdx + 1]
-      // 判断下一行是否为分隔符行 (包含 - 与 |，仅由空格、:、-、| 组成)
       const isSeparator = /^[\s|:-]+$/.test(nextLine) && nextLine.includes('-') && nextLine.includes('|')
       if (isSeparator) {
         const headerLine = curLine
@@ -233,7 +351,7 @@ function renderMarkdown(raw: string): string {
   }
   text = outLines.join('\n')
 
-  // 3. 提取并暂存块级数学公式 $$formula$$
+  // 4. 提取并暂存块级数学公式 $$formula$$
   const mathBlocks: string[] = []
   text = text.replace(/\$\$([\s\S]*?)\$\$/g, (_, formula) => {
     const idx = mathBlocks.length
@@ -241,7 +359,7 @@ function renderMarkdown(raw: string): string {
     return mathMarker(idx)
   })
 
-  // 4. 提取并暂存行内数学公式 $formula$
+  // 5. 提取并暂存行内数学公式 $formula$
   const inlineMaths: string[] = []
   text = text.replace(/\$([^\$\n]+?)\$/g, (_, formula) => {
     const idx = inlineMaths.length
@@ -249,10 +367,10 @@ function renderMarkdown(raw: string): string {
     return inlineMathMarker(idx)
   })
 
-  // 5. HTML 实体转义
+  // 6. HTML 实体转义
   text = escapeHtml(text)
 
-  // 6. 标题转换 (# ~ ######)
+  // 7. 标题转换 (# ~ ######)
   text = text.replace(/^######\s+(.+)$/gm, '<h6 class="md-h6">$1</h6>')
   text = text.replace(/^#####\s+(.+)$/gm, '<h5 class="md-h5">$1</h5>')
   text = text.replace(/^####\s+(.+)$/gm, '<h4 class="md-h4">$1</h4>')
@@ -260,13 +378,13 @@ function renderMarkdown(raw: string): string {
   text = text.replace(/^##\s+(.+)$/gm, '<h2 class="md-h2">$1</h2>')
   text = text.replace(/^#\s+(.+)$/gm, '<h1 class="md-h1">$1</h1>')
 
-  // 7. 水平分割线 (--- 或 *** 或 ===)
+  // 8. 水平分割线 (--- 或 *** 或 ===)
   text = text.replace(/^(?:---|===|\*\*\*)$/gm, '<hr class="md-hr" />')
 
-  // 8. 引用块 (> quote)
+  // 9. 引用块 (> quote)
   text = text.replace(/^>\s+(.+)$/gm, '<blockquote class="md-quote">$1</blockquote>')
 
-  // 9. 行内元素（粗体、斜体、删除线、行内代码、安全链接）
+  // 10. 行内元素（粗体、斜体、删除线、行内代码、安全链接）
   text = text.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
   text = text.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
   text = text.replace(/\*(.+?)\*/g, '<em>$1</em>')
@@ -277,11 +395,11 @@ function renderMarkdown(raw: string): string {
     '<a href="$2" target="_blank" rel="noopener noreferrer" class="md-link">$1 <span class="link-arrow">↗</span></a>',
   )
 
-  // 10. 无序列表与有序列表
+  // 11. 无序列表与有序列表
   text = text.replace(/^[\*\-\+]\s+(.+)$/gm, '<li class="md-li-bullet">$1</li>')
   text = text.replace(/^\d+\.\s+(.+)$/gm, '<li class="md-li-num">$1</li>')
 
-  // 11. 段落分块与换行处理
+  // 12. 段落分块与换行处理
   const paragraphs = text.split(/\n{2,}/)
   text = paragraphs
     .map((p) => {
@@ -291,6 +409,7 @@ function renderMarkdown(raw: string): string {
         trimmed.startsWith('<h') ||
         trimmed.startsWith('<hr') ||
         trimmed.startsWith('<blockquote') ||
+        trimmed.startsWith('\uE000MERMAID_BLOCK_') ||
         trimmed.startsWith('\uE000CODE_BLOCK_') ||
         trimmed.startsWith('\uE000TABLE_BLOCK_') ||
         trimmed.startsWith('\uE000MATH_BLOCK_')
@@ -304,34 +423,48 @@ function renderMarkdown(raw: string): string {
     })
     .join('\n')
 
-  // 12. 回填表格
+  // 13. 回填 Mermaid 架构图卡片
+  text = text.replace(/\uE000MERMAID_BLOCK_(\d+)\uE001/g, (_, idxStr) => {
+    const item = mermaidBlocks[Number(idxStr)]
+    if (!item) return ''
+    const escapedCode = escapeHtml(item.code)
+    const encodedCode = encodeURIComponent(item.code)
+
+    return `<div class="md-mermaid-card" data-mermaid-code="${encodedCode}">
+      <div class="md-code-head">
+        <div class="md-code-lang-tag">
+          <span class="md-code-icon">📊</span>
+          <span class="md-code-lang">Mermaid 架构图 / 流程图</span>
+        </div>
+        <div class="md-mermaid-actions">
+          <button class="md-mermaid-tab-btn active" data-action="tab-chart" type="button">📊 图表</button>
+          <button class="md-mermaid-tab-btn" data-action="tab-code" type="button">💻 源码</button>
+          <button class="md-copy-btn" data-copy="${escapedCode}" type="button" title="复制 Mermaid 源码">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+            <span class="md-copy-text">复制</span>
+          </button>
+        </div>
+      </div>
+      <div class="md-mermaid-view-chart">
+        <div class="md-mermaid-loading"><span class="md-spin">⏳</span> 正在渲染架构图...</div>
+      </div>
+      <div class="md-mermaid-view-code" style="display: none;">
+        <pre class="md-code-body mono"><code>${escapedCode}</code></pre>
+      </div>
+    </div>`
+  })
+
+  // 14. 回填表格
   text = text.replace(/\uE000TABLE_BLOCK_(\d+)\uE001/g, (_, idxStr) => {
     return tableBlocks[Number(idxStr)] || ''
   })
 
-  // 13. 回填围栏代码块
+  // 15. 回填常规代码块
   text = text.replace(/\uE000CODE_BLOCK_(\d+)\uE001/g, (_, idxStr) => {
     const item = codeBlocks[Number(idxStr)]
     if (!item) return ''
     const escapedCode = escapeHtml(item.code)
-    const isMermaid = item.lang.toLowerCase() === 'mermaid'
     const langDisplay = formatLanguageName(item.lang)
-
-    if (isMermaid) {
-      return `<div class="md-code-card md-mermaid-card">
-        <div class="md-code-head">
-          <div class="md-code-lang-tag">
-            <span class="md-code-icon">📊</span>
-            <span class="md-code-lang">Mermaid 流程图</span>
-          </div>
-          <button class="md-copy-btn" data-copy="${escapeHtml(item.code)}" type="button" title="复制源码">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-            <span class="md-copy-text">复制源码</span>
-          </button>
-        </div>
-        <pre class="md-code-body mono"><code>${escapedCode}</code></pre>
-      </div>`
-    }
 
     return `<div class="md-code-card">
       <div class="md-code-head">
@@ -348,13 +481,13 @@ function renderMarkdown(raw: string): string {
     </div>`
   })
 
-  // 14. 回填块级数学公式
+  // 16. 回填块级数学公式
   text = text.replace(/\uE000MATH_BLOCK_(\d+)\uE001/g, (_, idxStr) => {
     const formula = mathBlocks[Number(idxStr)] || ''
     return `<div class="md-math-block mono">$$ ${escapeHtml(formula)} $$</div>`
   })
 
-  // 15. 回填行内数学公式
+  // 17. 回填行内数学公式
   text = text.replace(/\uE000INLINE_MATH_(\d+)\uE001/g, (_, idxStr) => {
     const formula = inlineMaths[Number(idxStr)] || ''
     return `<span class="md-inline-math mono">$ ${escapeHtml(formula)} $</span>`
@@ -366,25 +499,67 @@ function renderMarkdown(raw: string): string {
 const renderedHtml = computed(() => renderMarkdown(props.content))
 
 /**
- * 委托处理代码块复制按钮点击
+ * 监听内容更新，自动触发 Mermaid 图表渲染
  */
-function handleContainerClick(e: MouseEvent) {
+watch(
+  () => props.content,
+  () => {
+    renderAllMermaidDiagrams()
+  },
+  { immediate: true },
+)
+
+onMounted(() => {
+  renderAllMermaidDiagrams()
+})
+
+/**
+ * 委托处理点击事件（代码复制、Mermaid 图表/源码 Tab 切换）
+ */
+function handleContainerClick(e: MouseEvent): void {
   const target = e.target as HTMLElement
-  const btn = target.closest('.md-copy-btn') as HTMLElement | null
-  if (btn) {
-    const code = btn.getAttribute('data-copy')
+
+  // 1. 处理复制代码
+  const copyBtn = target.closest('.md-copy-btn') as HTMLElement | null
+  if (copyBtn) {
+    const code = copyBtn.getAttribute('data-copy')
     if (code) {
       navigator.clipboard.writeText(code).then(() => {
-        const textSpan = btn.querySelector('.md-copy-text') || btn
-        const originalText = textSpan.textContent || '复制代码'
+        const textSpan = copyBtn.querySelector('.md-copy-text') || copyBtn
+        const originalText = textSpan.textContent || '复制'
         textSpan.textContent = '已复制 ✓'
-        btn.classList.add('copied')
+        copyBtn.classList.add('copied')
         setTimeout(() => {
           textSpan.textContent = originalText
-          btn.classList.remove('copied')
+          copyBtn.classList.remove('copied')
         }, 1800)
       })
     }
+    return
+  }
+
+  // 2. 处理 Mermaid Tab 切换（图表 / 源码）
+  const tabBtn = target.closest('.md-mermaid-tab-btn') as HTMLElement | null
+  if (tabBtn) {
+    const action = tabBtn.getAttribute('data-action')
+    const card = tabBtn.closest('.md-mermaid-card') as HTMLElement | null
+    if (card) {
+      const chartView = card.querySelector<HTMLElement>('.md-mermaid-view-chart')
+      const codeView = card.querySelector<HTMLElement>('.md-mermaid-view-code')
+      const allTabs = card.querySelectorAll('.md-mermaid-tab-btn')
+
+      allTabs.forEach((t) => t.classList.remove('active'))
+      tabBtn.classList.add('active')
+
+      if (action === 'tab-chart') {
+        if (chartView) chartView.style.display = 'flex'
+        if (codeView) codeView.style.display = 'none'
+      } else if (action === 'tab-code') {
+        if (chartView) chartView.style.display = 'none'
+        if (codeView) codeView.style.display = 'block'
+      }
+    }
+    return
   }
 }
 </script>
@@ -601,6 +776,78 @@ function handleContainerClick(e: MouseEvent) {
   overflow-x: auto;
 }
 
+/* Mermaid 架构图卡片样式 */
+:deep(.md-mermaid-card) {
+  margin: 16px 0;
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.12));
+  border-radius: 10px;
+  overflow: hidden;
+  background: #090d16;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.28);
+}
+:deep(.md-mermaid-actions) {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+:deep(.md-mermaid-tab-btn) {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-secondary, #94a3b8);
+  border-radius: 5px;
+  padding: 2.5px 8px;
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+:deep(.md-mermaid-tab-btn:hover) {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary, #ffffff);
+}
+:deep(.md-mermaid-tab-btn.active) {
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--accent-ai, #10b981);
+  border-color: rgba(16, 185, 129, 0.32);
+  font-weight: 600;
+}
+:deep(.md-mermaid-view-chart) {
+  padding: 18px 14px;
+  overflow-x: auto;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 90px;
+  background: #090d16;
+}
+:deep(.md-mermaid-view-chart svg) {
+  max-width: 100% !important;
+  height: auto !important;
+  display: block;
+  margin: 0 auto;
+}
+:deep(.md-mermaid-loading),
+:deep(.md-mermaid-streaming-hint) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-tertiary, #64748b);
+  padding: 12px;
+}
+:deep(.md-mermaid-error-hint) {
+  font-size: 13px;
+  color: #f59e0b;
+  padding: 12px;
+}
+:deep(.md-spin) {
+  display: inline-block;
+  animation: md-spin 1.5s linear infinite;
+}
+@keyframes md-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 /* GFM 表格样式 */
 :deep(.md-table-wrap) {
   margin: 14px 0;
@@ -639,7 +886,7 @@ function handleContainerClick(e: MouseEvent) {
   background: rgba(16, 185, 129, 0.04);
 }
 
-/* 数学公式与 Mermaid 降级样式 */
+/* 数学公式 */
 :deep(.md-math-block) {
   padding: 12px 16px;
   margin: 12px 0;
