@@ -80,18 +80,36 @@ class ProfileCreate(ApiModel):
 
     name: str = Field(min_length=1, max_length=128)
     protocol: Literal["openai_chat", "openai_responses", "anthropic_messages"]
-    base_url: HttpUrl
+    base_url: str = Field(min_length=1, max_length=1024)
     model: str = Field(min_length=1, max_length=256)
     api_key: str | None = Field(default=None, max_length=4096)
-    embedding_base_url: HttpUrl | None = None
-    embedding_model: str | None = Field(default=None, min_length=1, max_length=256)
+    embedding_base_url: str | None = Field(default=None, max_length=1024)
+    embedding_model: str | None = Field(default=None, max_length=256)
     embedding_api_key: str | None = Field(default=None, max_length=4096)
-    reranker_base_url: HttpUrl | None = None
-    reranker_model: str | None = Field(default=None, min_length=1, max_length=256)
+    reranker_base_url: str | None = Field(default=None, max_length=1024)
+    reranker_model: str | None = Field(default=None, max_length=256)
     reranker_api_key: str | None = Field(default=None, max_length=4096)
     anthropic_version: str | None = Field(default=None, max_length=64)
     usages: list[Literal["target", "agent", "judge"]] = Field(default_factory=list)
     context_window: int = Field(default=200000, ge=1000, le=10000000, description="上下文窗口大小 (Tokens)")
+
+    @model_validator(mode="before")
+    @classmethod
+    def clean_empty_strings(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            for k in (
+                "embedding_base_url",
+                "embedding_model",
+                "embedding_api_key",
+                "reranker_base_url",
+                "reranker_model",
+                "reranker_api_key",
+                "api_key",
+                "anthropic_version",
+            ):
+                if k in data and isinstance(data[k], str) and not data[k].strip():
+                    data[k] = None
+        return data
 
 
 class ProfileUpdate(ApiModel):
@@ -99,18 +117,36 @@ class ProfileUpdate(ApiModel):
 
     name: str | None = Field(default=None, min_length=1, max_length=128)
     protocol: Literal["openai_chat", "openai_responses", "anthropic_messages"] | None = None
-    base_url: HttpUrl | None = None
+    base_url: str | None = Field(default=None, min_length=1, max_length=1024)
     model: str | None = Field(default=None, min_length=1, max_length=256)
     api_key: str | None = Field(default=None, max_length=4096)
-    embedding_base_url: HttpUrl | None = None
-    embedding_model: str | None = Field(default=None, min_length=1, max_length=256)
+    embedding_base_url: str | None = Field(default=None, max_length=1024)
+    embedding_model: str | None = Field(default=None, max_length=256)
     embedding_api_key: str | None = Field(default=None, max_length=4096)
-    reranker_base_url: HttpUrl | None = None
-    reranker_model: str | None = Field(default=None, min_length=1, max_length=256)
+    reranker_base_url: str | None = Field(default=None, max_length=1024)
+    reranker_model: str | None = Field(default=None, max_length=256)
     reranker_api_key: str | None = Field(default=None, max_length=4096)
     anthropic_version: str | None = Field(default=None, max_length=64)
     usages: list[Literal["target", "agent", "judge"]] | None = None
     context_window: int | None = Field(default=None, ge=1000, le=10000000, description="上下文窗口大小 (Tokens)")
+
+    @model_validator(mode="before")
+    @classmethod
+    def clean_empty_strings(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            for k in (
+                "embedding_base_url",
+                "embedding_model",
+                "embedding_api_key",
+                "reranker_base_url",
+                "reranker_model",
+                "reranker_api_key",
+                "api_key",
+                "anthropic_version",
+            ):
+                if k in data and isinstance(data[k], str) and not data[k].strip():
+                    data[k] = None
+        return data
 
 
 class ProfileOut(OrmOut):
