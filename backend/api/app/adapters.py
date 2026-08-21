@@ -441,6 +441,7 @@ def fetch_remote_models(
     """从目标服务端点动态获取可用模型列表（如 /v1/models）。
 
     统一返回结构：``[{"id": "模型标识", "name": "显示名称", "owned_by": "所属供应商/系统"}]``。
+    真实调用远程端点解析实际可用模型，不返回硬编码假数据。
     """
     base = _service_base_url(base_url)
 
@@ -453,12 +454,16 @@ def fetch_remote_models(
         if protocol == "anthropic_messages":
             headers["x-api-key"] = api_key
             headers["anthropic-version"] = anthropic_version or "2023-06-01"
+            headers["Authorization"] = f"Bearer {api_key}"
         else:
             headers["Authorization"] = f"Bearer {api_key}"
 
     urls_to_try: list[str] = []
     if protocol == "anthropic_messages":
-        urls_to_try = [f"{base}/v1/models"]
+        urls_to_try = [
+            f"{base}/v1/models",
+            f"{base}/models",
+        ]
     else:
         urls_to_try = [
             f"{base}/v1/models",
@@ -481,6 +486,12 @@ def fetch_remote_models(
             if exc.code in (401, 403):
                 raise AppError(ErrorCode.UNAUTHORIZED, f"上游鉴权失败 ({exc.code})，请检查 API Key") from exc
             continue
+        except TimeoutError as exc:
+            last_error = exc
+            continue
+        except URLError as exc:
+            last_error = exc
+            continue
         except Exception as exc:
             last_error = exc
             continue
@@ -488,12 +499,12 @@ def fetch_remote_models(
     models_list: list[dict] = []
     if isinstance(data, list):
         for item in data:
-            if isinstance(item, dict) and (item.get("id") or item.get("name")):
-                m_id = str(item.get("id") or item.get("name"))
+            if isinstance(item, dict) and (item.get("id") or item.get("name") or item.get("display_name")):
+                m_id = str(item.get("id") or item.get("name") or item.get("display_name"))
                 models_list.append({
                     "id": m_id,
-                    "name": str(item.get("name") or m_id),
-                    "owned_by": str(item.get("owned_by") or item.get("root") or "remote"),
+                    "name": str(item.get("display_name") or item.get("name") or m_id),
+                    "owned_by": str(item.get("owned_by") or item.get("root") or ("anthropic" if protocol == "anthropic_messages" else "remote")),
                 })
     elif isinstance(data, dict):
         raw_items = data.get("data") or data.get("models") or data.get("items") or []
@@ -501,12 +512,12 @@ def fetch_remote_models(
             raw_items = raw_items["models"]
         if isinstance(raw_items, list):
             for item in raw_items:
-                if isinstance(item, dict) and (item.get("id") or item.get("name")):
-                    m_id = str(item.get("id") or item.get("name"))
+                if isinstance(item, dict) and (item.get("id") or item.get("name") or item.get("display_name")):
+                    m_id = str(item.get("id") or item.get("name") or item.get("display_name"))
                     models_list.append({
                         "id": m_id,
-                        "name": str(item.get("name") or m_id),
-                        "owned_by": str(item.get("owned_by") or item.get("root") or ("ollama" if "models" in data else "remote")),
+                        "name": str(item.get("display_name") or item.get("name") or m_id),
+                        "owned_by": str(item.get("owned_by") or item.get("root") or ("anthropic" if protocol == "anthropic_messages" else ("ollama" if "models" in data else "remote"))),
                     })
 
     if models_list:
@@ -520,15 +531,15 @@ def fetch_remote_models(
         deduped.sort(key=lambda x: x["id"].lower())
         return deduped
 
-    if protocol == "anthropic_messages":
-        return [
-            {"id": "claude-3-7-sonnet-20250219", "name": "Claude 3.7 Sonnet", "owned_by": "anthropic"},
-            {"id": "claude-3-5-sonnet-20241022", "name": "Claude 3.5 Sonnet v2", "owned_by": "anthropic"},
-            {"id": "claude-3-5-haiku-20241022", "name": "Claude 3.5 Haiku", "owned_by": "anthropic"},
-            {"id": "claude-3-opus-20240229", "name": "Claude 3 Opus", "owned_by": "anthropic"},
-        ]
-
     if last_error:
-        raise AppError(ErrorCode.UPSTREAM, f"无法从端点获取模型列表: {last_error}")
-    raise AppError(ErrorCode.UPSTREAM, "端点未返回可解析的模型列表，请手动输入模型标识名")
+        if isinstance(last_error, HTTPError):
+            if last_error.code in (401, 403):
+                raise AppError(ErrorCode.UNAUTHORIZED, f"上游鉴权失败 ({last_error.code})，请检查 API Key") from last_error
+            raise AppError(ErrorCode.UPSTREAM, f"上游服务返回 HTTP {last_error.code}，无法获取模型列表") from last_error
+        if isinstance(last_error, TimeoutError):
+            raise AppError(ErrorCode.TIMEOUT, "获取模型列表超时，请检查服务端点网络") from last_error
+        if isinstance(last_error, URLError):
+            raise AppError(ErrorCode.UPSTREAM, f"连接上游端点失败: {getattr(last_error, 'reason', last_error)}") from last_error
+        raise AppError(ErrorCode.UPSTREAM, f"无法从端点获取模型列表: {last_error}") from last_error
+    raise AppError(ErrorCode.UPSTREAM, "端点未返回可解析的模型列表，请检查端点地址或手动输入模型标识名")
 

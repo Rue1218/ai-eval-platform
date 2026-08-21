@@ -51,17 +51,58 @@ def test_fetch_remote_models_ollama_format():
         assert models[1]["id"] == "qwen2.5:7b"
 
 
-def test_fetch_remote_models_anthropic_preset_fallback():
-    """测试 Anthropic 协议兜底返回主流 Claude 家族模型列表。"""
-    with patch("app.adapters.urlopen", side_effect=Exception("not found")):
+def test_fetch_remote_models_anthropic_format():
+    """测试解析真实 Anthropic /v1/models 格式（含 display_name 与 id）。"""
+    mock_data = {
+        "data": [
+            {
+                "type": "model",
+                "id": "claude-3-7-sonnet-20250219",
+                "display_name": "Claude 3.7 Sonnet",
+                "created_at": "2025-02-19T00:00:00Z",
+            },
+            {
+                "type": "model",
+                "id": "claude-3-5-haiku-20241022",
+                "display_name": "Claude 3.5 Haiku",
+                "created_at": "2024-10-22T00:00:00Z",
+            },
+        ],
+        "has_more": False,
+    }
+    mock_resp = MagicMock()
+    mock_resp.read.return_value = json.dumps(mock_data).encode("utf-8")
+    mock_resp.__enter__.return_value = mock_resp
+
+    with patch("app.adapters.urlopen", return_value=mock_resp):
         models = fetch_remote_models(
             protocol="anthropic_messages",
             base_url="https://api.anthropic.com",
             api_key="sk-ant-test",
         )
-        assert len(models) >= 3
-        ids = [m["id"] for m in models]
-        assert "claude-3-7-sonnet-20250219" in ids
+        assert len(models) == 2
+        assert models[0]["id"] == "claude-3-5-haiku-20241022"
+        assert models[0]["name"] == "Claude 3.5 Haiku"
+        assert models[0]["owned_by"] == "anthropic"
+        assert models[1]["id"] == "claude-3-7-sonnet-20250219"
+        assert models[1]["name"] == "Claude 3.7 Sonnet"
+        assert models[1]["owned_by"] == "anthropic"
+
+
+def test_fetch_remote_models_error_raising():
+    """测试当端点网络或服务异常时抛出 AppError 而非假数据。"""
+    import pytest
+
+    from app.errors import AppError, ErrorCode
+
+    with patch("app.adapters.urlopen", side_effect=Exception("connection refused")):
+        with pytest.raises(AppError) as exc_info:
+            fetch_remote_models(
+                protocol="anthropic_messages",
+                base_url="https://api.anthropic.com",
+                api_key="sk-ant-test",
+            )
+        assert exc_info.value.code == ErrorCode.UPSTREAM
 
 
 def test_resolve_env_api_key_for_url(tmp_path, monkeypatch):
