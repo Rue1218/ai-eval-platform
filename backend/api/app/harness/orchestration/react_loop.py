@@ -15,6 +15,8 @@ from app.agent.defaults import (
     MODEL_TIMEOUT_S,
     PARALLEL_READONLY_TOOLS,
     SHORT_TOOLS,
+    STREAM_EMIT_WAIT_S,
+    STREAM_TIMEOUT_S,
     TOOL_TITLES,
     is_long_tool,
 )
@@ -217,7 +219,7 @@ async def stream_mcp_step(
                 cancel=cancel,
                 temperature=0,
                 max_tokens=2048,
-                timeout_s=90,
+                timeout_s=STREAM_TIMEOUT_S,
             ):
                 cancel.raise_if_cancelled()
                 if not chunk:
@@ -228,7 +230,7 @@ async def stream_mcp_step(
                         asyncio.run_coroutine_threadsafe(
                             emit("thought", {"text": chunk, "stream": "think"}),
                             loop,
-                        ).result(timeout=30)
+                        ).result(timeout=STREAM_EMIT_WAIT_S)
                     except Exception:
                         pass
                 else:

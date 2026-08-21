@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -29,6 +29,14 @@ SUPPORTED_PROTOCOLS = ("openai_chat", "openai_responses", "anthropic_messages")
 
 # 非流式调用被测 / Agent 模型的默认超时秒数
 DEFAULT_TIMEOUT_S = 30.0
+# 建连 + 响应头；正文首 token 在读循环里按切片等待，避免整段 timeout_s 卡死。
+CONNECT_TIMEOUT_S = 15.0
+# 读流切片：到期后检查取消与总时限，再继续等下一刀。
+STREAM_READ_SLICE_S = 2.0
+
+
+class StreamAborted(Exception):
+    """本地取消令牌在读上游时触发；由调用层转成 TurnCancelled，不发给浏览器。"""
 
 
 @dataclass(frozen=True)
@@ -44,6 +52,63 @@ class AdapterResult:
     usage: dict
     raw: dict
     latency_ms: int
+
+
+def _close_quietly(response: object) -> None:
+    """取消或超时时关掉上游连接，忽略二次 close 异常。"""
+    closer = getattr(response, "close", None)
+    if callable(closer):
+        try:
+            closer()
+        except Exception:
+            return
+
+
+def _arm_read_timeout(response: object, seconds: float) -> None:
+    """把已建立连接的读超时切成短片，便于块间检查取消。夹具无 socket 时跳过。"""
+    try:
+        fp = getattr(response, "fp", None)
+        raw = getattr(fp, "raw", None) if fp is not None else None
+        sock = getattr(raw, "_sock", None) if raw is not None else None
+        if sock is not None:
+            sock.settimeout(seconds)
+    except Exception:
+        return
+
+
+def _is_wait_timeout(exc: BaseException) -> bool:
+    """socket / urllib 在切片读超时后抛出的等待类异常。"""
+    if isinstance(exc, TimeoutError):
+        return True
+    return type(exc).__name__ in {"timeout", "TimeoutError"}
+
+
+def _iter_stream_lines(
+    response: object,
+    *,
+    deadline: float,
+    should_abort: Callable[[], bool] | None,
+    slice_s: float = STREAM_READ_SLICE_S,
+) -> Iterator[bytes]:
+    """按切片读取 SSE 行：总时限内可中断，取消后立即停读。"""
+    _arm_read_timeout(response, slice_s)
+    iterator = iter(response)  # type: ignore[arg-type]
+    while True:
+        if should_abort is not None and should_abort():
+            _close_quietly(response)
+            raise StreamAborted()
+        if time.monotonic() > deadline:
+            _close_quietly(response)
+            raise TimeoutError("stream deadline exceeded")
+        try:
+            raw_line = next(iterator)
+        except StopIteration:
+            break
+        except Exception as exc:
+            if _is_wait_timeout(exc):
+                continue
+            raise
+        yield raw_line
 
 
 def _post_json(url: str, body: dict, headers: dict, timeout_s: float) -> dict:
@@ -204,6 +269,7 @@ def stream_protocol(
     max_tokens: int = 1024,
     anthropic_version: str | None = None,
     timeout_s: float = DEFAULT_TIMEOUT_S,
+    should_abort: Callable[[], bool] | None = None,
 ) -> Iterator[tuple[str, str]]:
     """按协议流式调用上游模型，逐块 yield ``(kind, text)`` 增量（SSE）。
 
@@ -212,10 +278,11 @@ def stream_protocol(
     anthropic ``thinking_delta`` / responses ``reasoning_summary``），
     供前端思考卡展示；上游未产生思考链时全程只 yield content。
 
-    ``timeout_s`` 同时约束建连、单次读与整体流式时长，超时统一归一为
-    TIMEOUT，上游 4xx/5xx 归一为 UPSTREAM。若网关忽略 ``stream``
-    参数直接返回完整 JSON（非 SSE），则兜底解析全文并作为单块
-    content yield，保证调用方拿到正确结果而非空流降级。
+    ``timeout_s`` 约束整体流式时长；建连用较短 ``CONNECT_TIMEOUT_S``，
+    读体按 ``STREAM_READ_SLICE_S`` 切片以便 ``should_abort`` 生效。
+    超时归一为 TIMEOUT，上游 4xx/5xx 归一为 UPSTREAM。若网关忽略
+    ``stream`` 参数直接返回完整 JSON（非 SSE），则兜底解析全文并作为
+    单块 content yield，保证调用方拿到正确结果而非空流降级。
     """
     if protocol not in SUPPORTED_PROTOCOLS:
         raise AppError(ErrorCode.VALIDATION, f"协议不受支持：{protocol}")
@@ -284,10 +351,14 @@ def stream_protocol(
                     return ("content", str(delta.get("text") or ""))
             return ("content", "")
 
+    if should_abort is not None and should_abort():
+        raise StreamAborted()
+
     request = Request(url, data=json.dumps(body).encode(), headers=headers, method="POST")
     deadline = time.monotonic() + timeout_s
+    connect_timeout = min(timeout_s, CONNECT_TIMEOUT_S)
     try:
-        response = urlopen(request, timeout=timeout_s)
+        response = urlopen(request, timeout=connect_timeout)
     except HTTPError as exc:
         raise AppError(ErrorCode.UPSTREAM, f"上游返回 {exc.code}") from exc
     except TimeoutError as exc:
@@ -303,10 +374,11 @@ def stream_protocol(
     yielded = False
     try:
         with response:
-            for raw_line in response:
-                # 整体流式时长兜底：超时视为上游卡死，归一为 TIMEOUT
-                if time.monotonic() > deadline:
-                    raise TimeoutError("stream deadline exceeded")
+            for raw_line in _iter_stream_lines(
+                response,
+                deadline=deadline,
+                should_abort=should_abort,
+            ):
                 line = raw_line.decode("utf-8", "ignore").strip()
                 if not line.startswith("data:"):
                     # SSE 的 event:/注释行/空行跳过；但完整 JSON 响应需收集作兜底
@@ -328,6 +400,8 @@ def stream_protocol(
                 if text:
                     yielded = True
                     yield (kind, text)
+    except StreamAborted:
+        raise
     except TimeoutError as exc:
         raise AppError(ErrorCode.TIMEOUT, "上游调用超时") from exc
     except OSError as exc:

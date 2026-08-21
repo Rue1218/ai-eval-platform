@@ -12,9 +12,9 @@ from uuid import uuid4
 
 import pytest
 
-from app.adapters import AdapterResult
+from app.adapters import AdapterResult, StreamAborted
 from app.errors import AppError, ErrorCode
-from app.harness.contracts.cancellation import CancellationToken
+from app.harness.contracts.cancellation import CancellationToken, TurnCancelled
 from app.harness.contracts.trace import TraceContext
 from app.llm import (
     call_agent_model,
@@ -267,3 +267,48 @@ def test_stream_agent_model_yields_reasoning_and_content(sample_profile: Protoco
         )
     )
     assert chunks == [("reasoning", "先想"), ("content", "你好")]
+
+
+def test_stream_agent_model_passes_should_abort(sample_profile: ProtocolProfile, monkeypatch):
+    """取消回调必须下传到适配器，读循环才能在块间中断。"""
+    setting = Setting(key="agent_profile_id", value=sample_profile.id, updated_by="user-admin")
+    fake_db = _FakeDb(settings=[setting], profiles=[sample_profile])
+    seen: dict = {}
+
+    def fake_stream(**kwargs):
+        seen.update(kwargs)
+        return iter([("content", "ok")])
+
+    monkeypatch.setattr("app.llm.stream_protocol", fake_stream)
+    list(
+        stream_agent_model(
+            fake_db,
+            "System",
+            "User",
+            trace=TraceContext.for_turn(),
+            cancel=CancellationToken(turn_id="t-abort"),
+        )
+    )
+    assert callable(seen.get("should_abort"))
+
+
+def test_stream_agent_model_maps_stream_aborted(sample_profile: ProtocolProfile, monkeypatch):
+    """适配器读中断归一为 TurnCancelled，不得变成 INTERNAL。"""
+    setting = Setting(key="agent_profile_id", value=sample_profile.id, updated_by="user-admin")
+    fake_db = _FakeDb(settings=[setting], profiles=[sample_profile])
+
+    def fake_stream(**_kwargs):
+        raise StreamAborted()
+        yield  # pragma: no cover  — 标记为生成器
+
+    monkeypatch.setattr("app.llm.stream_protocol", fake_stream)
+    with pytest.raises(TurnCancelled):
+        list(
+            stream_agent_model(
+                fake_db,
+                "System",
+                "User",
+                trace=TraceContext.for_turn(),
+                cancel=CancellationToken(turn_id="t-aborted"),
+            )
+        )

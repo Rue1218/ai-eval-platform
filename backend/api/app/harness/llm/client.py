@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Iterator
 from contextlib import nullcontext
 from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
+from app.adapters import StreamAborted
+from app.agent.defaults import STREAM_TIMEOUT_S
 from app.agent.log import agent_trace
 from app.errors import AppError, ErrorCode
 from app.harness.contracts.cancellation import CancellationToken, TurnCancelled
@@ -197,11 +200,12 @@ def stream_agent_model(
     cancel: CancellationToken,
     temperature: float = 0.3,
     max_tokens: int = 2048,
-    timeout_s: float = CALL_TIMEOUT_S,
+    timeout_s: float = STREAM_TIMEOUT_S,
 ) -> Iterator[tuple[str, str]]:
     """流式调用 Agent 模型，逐块 yield ``(kind, text)``。
 
     ``trace`` / ``cancel`` 不可缺省：块间检查取消，日志自动带链路 ID。
+    取消回调下传到适配器读循环，避免 ``urlopen`` 整段 timeout 才返回。
     """
     cancel.raise_if_cancelled()
     _call_protocol, stream_protocol = _protocol_fns()
@@ -209,6 +213,8 @@ def stream_agent_model(
     base_url, model, api_key = _profile_connection(profile)
     with using_trace(trace):
         agent_trace(f"模型流式调用开始 protocol={profile.protocol} model={model} timeout={timeout_s}s")
+        started = time.perf_counter()
+        first_chunk = True
         try:
             for kind, chunk in stream_protocol(
                 protocol=profile.protocol,
@@ -221,9 +227,19 @@ def stream_agent_model(
                 max_tokens=max_tokens,
                 anthropic_version=profile.anthropic_version,
                 timeout_s=timeout_s,
+                should_abort=cancel.is_cancelled,
             ):
+                if first_chunk:
+                    first_ms = round((time.perf_counter() - started) * 1000)
+                    agent_trace(f"模型流式首块 latency={first_ms}ms kind={kind}")
+                    first_chunk = False
                 cancel.raise_if_cancelled()
                 yield kind, chunk
+            total_ms = round((time.perf_counter() - started) * 1000)
+            agent_trace(f"模型流式调用完成 latency={total_ms}ms")
+        except StreamAborted as exc:
+            agent_trace("模型流式调用被取消")
+            raise TurnCancelled(cancel.reason or "cancelled") from exc
         except (AppError, TurnCancelled):
             raise
         except Exception as exc:

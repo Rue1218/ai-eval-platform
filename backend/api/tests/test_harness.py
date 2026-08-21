@@ -525,7 +525,7 @@ def test_turn_budget_hard_cap_four():
 
 
 def test_run_plan_greeting_model_chooses_chat_loop(monkeypatch):
-    """问候由规划模型判定 loop=chat，而不是关键词短路。"""
+    """问候也由规划模型动态判定 loop=chat，不靠关键词短路。"""
 
     def _fake(_db, _payload, **_kwargs):
         return (
@@ -557,6 +557,7 @@ def test_run_plan_greeting_model_chooses_chat_loop(monkeypatch):
     assert plan.intent == "chat"
     assert plan.loop == "chat"
     assert plan.delivery == "text"
+    assert plan.used_model is True
     assert plan.source == "llm"
 
 
