@@ -391,6 +391,31 @@ def delete_profile(
     return {"ok": True}
 
 
+@router.get("/{profile_id}/models")
+def get_profile_models(
+    profile_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """根据已有协议档 ID 直接获取该目标端点可用模型列表。"""
+    profile = db.query(ProtocolProfile).filter(ProtocolProfile.id == profile_id).first()
+    if not profile:
+        raise AppError(ErrorCode.NOT_FOUND, "协议档不存在")
+    env_base_url, _model, env_api_key = _profile_connection(profile, allow_global_alias=True)
+    base_url = env_base_url or resolve_env_base_url(profile.protocol)
+    if not base_url:
+        raise AppError(ErrorCode.VALIDATION, "该协议档未配置目标服务的 Base URL")
+    api_key = env_api_key or resolve_env_api_key_for_url(base_url, protocol=profile.protocol)
+    models = fetch_remote_models(
+        protocol=profile.protocol,
+        base_url=base_url,
+        api_key=api_key,
+        anthropic_version=profile.anthropic_version,
+    )
+    return {"ok": True, "models": models, "total": len(models)}
+
+
+@router.post("/models")
 @router.post("/fetch-models")
 def fetch_models(
     body: FetchModelsIn,
