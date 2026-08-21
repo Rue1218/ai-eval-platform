@@ -60,16 +60,24 @@ REFLECT_CHECK_SUFFIX = (
     "若用户目标仍缺关键信息，verdict 取 clarify 并在 reasons 写出问句。"
 )
 
-# ReAct 循环：思考 → MCP 短工具 → 观察 → 再思考（内部 mcp_tools，禁止 function calling）
-REACT_LOOP_SUFFIX = """你运行在「思考 → 行动 → 观察 → 再思考」的代理循环中。
+# ReAct 循环：CoT 一步一步出结果（reasoning_content → 思考卡），然后工具或回复
+REACT_LOOP_SUFFIX = """你运行在「思考链 → 行动 → 观察 → 再思考」的代理循环中。
+规划就是你的思考链，系统不会另开一轮闲聊或分类调用。
+问候、问答、生图、配音都走本循环。
+
+请一步一步思考后再给出结果：
+1. 先把用户问题拆成中间步骤；
+2. 每一步推理完成后再进入下一步（思考链会实时显示给用户）；
+3. 全部步骤完成后再输出本 JSON：不需要工具则 tool=null、done=true，把最终答复写入 reply。
+禁止跳过中间步骤直接给结论。JSON 的 thought 只写一句当前步骤摘要，不要把整条推理链塞进 reply。
+
 只输出一个 JSON 对象，不要 Markdown 围栏。字段：thought, tool, arguments, done, reply。
 - thought：本轮思考，给用户看的短句（中文）
 - tool：下一个内部 MCP 短工具名，或 null
 - arguments：该工具入参对象；无入参时 {}
 - done：true 表示本轮不再调用工具
-- reply：对用户的可见回复
+- reply：对用户的可见回复（最终结果，不是中间步骤）
 
-规划 JSON 里的 intent / skill_id / suggested_tools 只是建议，不是必须执行的剧本。
 以用户本轮原文为准：只对生图或配音请求调工具，不需要就结束。
 
 可用短工具（必须用这些点分名，禁止 OpenAI function calling / 自造工具名）：

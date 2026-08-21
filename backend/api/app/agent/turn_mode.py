@@ -1,14 +1,11 @@
-"""最小 Agent 内核的回合路由：仅 chat、ReAct 与会话控制。"""
+"""最小 Agent 内核的回合路由：会话控制直达，自然语言一律走思考链循环。"""
 
 from __future__ import annotations
 
 from enum import StrEnum
 from typing import Any
 
-from .imagegen import looks_like_image_generation
-from .plan import is_smalltalk, looks_like_speech_recognition, looks_like_speech_synthesis
 from .slash import SlashParse
-from .voiceclone import looks_like_voiceclone
 
 
 class TurnMode(StrEnum):
@@ -25,35 +22,23 @@ _DIRECT_SLASH = frozenset({"stop", "compact"})
 
 
 def select_turn_mode(text: str, parsed: SlashParse) -> TurnMode:
-    """入口路由：只根据原文和斜杠，不调模型。"""
+    """入口路由：斜杠会话控制直达；自然语言不拆闲聊，思考链即规划。"""
     if parsed.is_slash:
         return TurnMode.DIRECT
-
-    # 识别意图必须先于音色克隆，避免「识别这段配音」被旧关键词抢走。
-    if looks_like_speech_recognition(text) or looks_like_speech_synthesis(text):
-        return TurnMode.REACT_ONLY
-    if looks_like_image_generation(text):
-        return TurnMode.REACT_ONLY
-    if looks_like_voiceclone(text):
-        return TurnMode.REACT_ONLY
-    if is_smalltalk(text):
-        return TurnMode.CHAT
-    return TurnMode.INTENT
+    return TurnMode.REACT_ONLY
 
 
 def refine_turn_mode(mode: TurnMode, *, intent: str, tools_needed: list[str], delivery: str) -> TurnMode:
-    """规划完成后收束：有已注册短工具走 ReAct，否则走闲聊。"""
-    if mode != TurnMode.INTENT:
+    """规划完成后收束：自然语言保持同一循环，不再降级闲聊二次生成。"""
+    if mode in {TurnMode.DIRECT, TurnMode.REACT_ONLY}:
         return mode
-    if tools_needed:
-        return TurnMode.REACT_ONLY
-    return TurnMode.CHAT
+    return TurnMode.REACT_ONLY
 
 
 def turn_mode_from_loop(loop: str) -> TurnMode | None:
-    """把模型 JSON 的 loop 收成 TurnMode。"""
+    """历史 loop=chat 并入思考链循环，避免再走二次闲聊生成。"""
     mapping = {
-        "chat": TurnMode.CHAT,
+        "chat": TurnMode.REACT_ONLY,
         "react": TurnMode.REACT_ONLY,
         "direct": TurnMode.DIRECT,
     }
@@ -61,32 +46,17 @@ def turn_mode_from_loop(loop: str) -> TurnMode | None:
 
 
 def resolve_turn_mode(*, text: str, parsed: SlashParse, plan: Any) -> TurnMode:
-    """会话控制命令直达；自然语言优先使用模型判定的 chat/react 循环。"""
+    """会话控制命令直达；其余一律 ReAct，思考链即规划。"""
     if parsed.is_slash:
-        return select_turn_mode(text, parsed)
-    mode = turn_mode_from_loop(getattr(plan, "loop", "") or "")
-    if mode is None:
-        mode = select_turn_mode(text, parsed)
-        if mode is TurnMode.INTENT:
-            mode = refine_turn_mode(
-                mode,
-                intent=plan.intent,
-                tools_needed=list(plan.tools_needed or []),
-                delivery=plan.delivery,
-            )
-    tools = list(plan.tools_needed or [])
-    if any(name in {"audio.speech_recognition", "audio.speech_synthesis", "audio.voiceclone", "image.generate"} for name in tools):
-        return TurnMode.REACT_ONLY
-    return mode
+        return TurnMode.DIRECT
+    return TurnMode.REACT_ONLY
 
 
 def uses_react_llm(mode: TurnMode, *, command: str | None, slash_fill_first: bool) -> bool:
-    """是否运行 Think-Act-Observe 决策模型。"""
-    if mode in {TurnMode.DIRECT, TurnMode.CHAT}:
+    """是否运行思考链循环（流式 reasoning → 工具或回复）。"""
+    if mode == TurnMode.DIRECT:
         return False
-    if mode == TurnMode.REACT_ONLY:
-        return command not in _DIRECT_SLASH
-    return False
+    return command not in _DIRECT_SLASH
 
 
 def allows_replan(mode: TurnMode) -> bool:
@@ -100,5 +70,5 @@ def allows_model_check(mode: TurnMode) -> bool:
 
 
 def emits_stage_thoughts(mode: TurnMode) -> bool:
-    """规划/复核思考卡只在 Plan-and-Solve 出现，避免生图/闲聊套「技能 · 基准对比」。"""
+    """规划/复核阶段卡只在 Plan-and-Solve 出现；思考链走 thought.stream=think。"""
     return mode == TurnMode.PLAN_SOLVE

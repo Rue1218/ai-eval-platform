@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+import time
 
 import pytest
 
@@ -138,6 +139,54 @@ def test_stream_mcp_step_emits_native_reasoning(monkeypatch):
     assert ("thought", {"text": "先想要不要生图", "stream": "think_final"}) in events
 
 
+def test_stream_mcp_step_think_arrives_before_slow_content(monkeypatch):
+    """CoT：思考增量必须在正文 JSON 完成前到达，不得整包空等。"""
+
+    class _Db:
+        def close(self):
+            return None
+
+    think_at: list[float] = []
+    started = time.perf_counter()
+
+    def _stream(*_args, **_kwargs):
+        yield "reasoning", "步骤一"
+        time.sleep(0.2)
+        yield "reasoning", "步骤二"
+        time.sleep(0.2)
+        yield "content", '{"thought":"问候","tool":null,"arguments":{},"done":true,"reply":"你好"}'
+
+    monkeypatch.setattr("app.llm.stream_agent_model", _stream)
+    monkeypatch.setattr("app.db.SessionLocal", lambda: _Db())
+
+    async def _emit(event: str, payload: dict, **_kwargs) -> int:
+        if event == "thought" and payload.get("stream") == "think":
+            think_at.append(time.perf_counter() - started)
+        return 1
+
+    from app.agent.react import _stream_mcp_step
+
+    step = asyncio.run(
+        _stream_mcp_step(
+            system="sys",
+            payload={"text": "你好"},
+            stop=threading.Event(),
+            emit=_emit,
+            **_turn_ctx(),
+        )
+    )
+    elapsed = time.perf_counter() - started
+    assert step.reply == "你好"
+    assert step.reasoning_text == "步骤一步骤二"
+    assert len(think_at) == 2
+    # 第一块思考链应几乎立刻到达，不能等完整正文。
+    assert think_at[0] < 0.12
+    # 第二步在第一次休眠之后、正文结束之前。
+    assert think_at[1] >= 0.18
+    assert think_at[1] < elapsed
+    assert elapsed >= 0.38
+
+
 def test_chat_and_help_skip_stage_thoughts():
     """闲聊与 /help 不发规划/复核思考卡，避免三张「已思考」。"""
     assert should_emit_stage_thoughts("chat", None) is False
@@ -150,22 +199,23 @@ def test_chat_and_help_skip_stage_thoughts():
 
 
 def test_select_turn_mode_by_task_shape():
-    """最小内核只保留会话控制、闲聊与多媒体 ReAct。"""
-    assert select_turn_mode("你好", parse_slash("你好")) is TurnMode.CHAT
+    """最小内核：斜杠直达；自然语言一律走思考链循环。"""
+    assert select_turn_mode("你好", parse_slash("你好")) is TurnMode.REACT_ONLY
     assert select_turn_mode("/compact", parse_slash("/compact")) is TurnMode.DIRECT
     assert select_turn_mode("/benchmark", parse_slash("/benchmark")) is TurnMode.DIRECT
     portrait = "帮我生成一张竖幅户外人像摄影，明暗对比柔和"
     assert select_turn_mode(portrait, parse_slash(portrait)) is TurnMode.REACT_ONLY
-    assert select_turn_mode("列出协议档", parse_slash("列出协议档")) is TurnMode.INTENT
-    assert select_turn_mode("帮我评一下", parse_slash("帮我评一下")) is TurnMode.INTENT
+    assert select_turn_mode("列出协议档", parse_slash("列出协议档")) is TurnMode.REACT_ONLY
+    assert select_turn_mode("帮我评一下", parse_slash("帮我评一下")) is TurnMode.REACT_ONLY
     assert uses_react_llm(TurnMode.REACT_ONLY, command=None, slash_fill_first=False) is True
+    assert uses_react_llm(TurnMode.CHAT, command=None, slash_fill_first=False) is True
     assert allows_replan(TurnMode.REACT_ONLY) is False
     assert allows_model_check(TurnMode.CHAT) is False
     refined = refine_turn_mode(
         TurnMode.INTENT, intent="chat", tools_needed=["image.generate"], delivery="text"
     )
     assert refined is TurnMode.REACT_ONLY
-    assert refine_turn_mode(TurnMode.INTENT, intent="chat", tools_needed=[], delivery="text") is TurnMode.CHAT
+    assert refine_turn_mode(TurnMode.INTENT, intent="chat", tools_needed=[], delivery="text") is TurnMode.REACT_ONLY
 
 
 def test_l0_chat_vs_benchmark_and_testcase():
@@ -238,8 +288,8 @@ def test_sanitize_plan_reads_loop_and_complexity():
     assert "loop" not in artifact.as_dict()
 
 
-def test_resolve_turn_mode_prefers_model_loop_over_eval_keywords():
-    """模型判 chat 时，即使用户话里有「评一下」也不走规划卡。"""
+def test_resolve_turn_mode_nl_always_react():
+    """自然语言即使历史 loop=chat 也走思考链循环，不再二次闲聊生成。"""
     text = "帮我评一下这张图好不好看"
     plan = PlanArtifact(
         intent="chat",
@@ -253,7 +303,7 @@ def test_resolve_turn_mode_prefers_model_loop_over_eval_keywords():
         loop="chat",
         complexity="low",
     )
-    assert resolve_turn_mode(text=text, parsed=parse_slash(text), plan=plan) is TurnMode.CHAT
+    assert resolve_turn_mode(text=text, parsed=parse_slash(text), plan=plan) is TurnMode.REACT_ONLY
 
 
 def test_resolve_turn_mode_forces_react_when_image_tool_present():
@@ -527,27 +577,15 @@ def test_turn_budget_hard_cap_four():
     assert budget.remaining() == 0
 
 
-def test_run_plan_greeting_model_chooses_chat_loop(monkeypatch):
-    """问候也由规划模型动态判定 loop=chat，不靠关键词短路。"""
+def test_run_plan_greeting_skips_planner_for_cot(monkeypatch):
+    """问候不打独立规划模型；CoT 由后续 ReAct 流式思考链一步一步出。"""
 
-    def _fake(_db, _payload, **_kwargs):
-        return (
-            {
-                "intent": "chat",
-                "skill_id": None,
-                "slots": {"filled": {}, "missing": []},
-                "tools_needed": [],
-                "delivery": "text",
-                "budget": {"max_tool_rounds": 0},
-                "notes": "规划：问候。",
-                "complexity": "low",
-                "loop": "chat",
-            },
-            8,
-        )
+    def _boom(*_a, **_k):
+        raise AssertionError("自然语言不得打独立规划模型")
 
-    monkeypatch.setattr("app.agent.plan._call_plan_model", _fake)
+    monkeypatch.setattr("app.agent.plan._call_plan_model", _boom)
     budget = TurnBudget()
+    started = time.perf_counter()
     plan = run_plan(
         _FakeDb(),
         text="你好",
@@ -557,11 +595,15 @@ def test_run_plan_greeting_model_chooses_chat_loop(monkeypatch):
         attachments=[],
         budget=budget,
     )
+    elapsed_ms = (time.perf_counter() - started) * 1000
     assert plan.intent == "chat"
-    assert plan.loop == "chat"
+    assert plan.loop == "react"
     assert plan.delivery == "text"
-    assert plan.used_model is True
-    assert plan.source == "llm"
+    assert plan.used_model is False
+    assert plan.source == "react"
+    assert budget.used == 0
+    # 规划阶段不得再打模型；本地种子应在几十毫秒内完成。
+    assert elapsed_ms < 50
 
 
 _PLAN_JSON = {
@@ -663,26 +705,13 @@ def test_run_replan_propagates_turn_cancelled(monkeypatch):
         )
 
 
-def test_run_plan_offtopic_uses_planner_not_eval_defaults(monkeypatch):
-    """离题请求必须走规划模型，不得被 L0 套成 benchmark + list 工具。"""
+def test_run_plan_offtopic_skips_planner_not_eval_defaults(monkeypatch):
+    """离题请求不打规划模型，也不得被 L0 套成 benchmark + list 工具。"""
 
-    def _fake(_db, _payload, **_kwargs):
-        return (
-            {
-                "intent": "chat",
-                "skill_id": None,
-                "slots": {"filled": {}, "missing": []},
-                "tools_needed": [],
-                "delivery": "text",
-                "budget": {"max_tool_rounds": 4},
-                "notes": "规划：与评测无关，短答。",
-                "complexity": "low",
-                "loop": "chat",
-            },
-            12,
-        )
+    def _boom(*_a, **_k):
+        raise AssertionError("自然语言不得打独立规划模型")
 
-    monkeypatch.setattr("app.agent.plan._call_plan_model", _fake)
+    monkeypatch.setattr("app.agent.plan._call_plan_model", _boom)
     budget = TurnBudget()
     plan = run_plan(
         _FakeDb(),
@@ -697,69 +726,44 @@ def test_run_plan_offtopic_uses_planner_not_eval_defaults(monkeypatch):
     assert plan.intent == "chat"
     assert plan.skill_id is None
     assert plan.delivery == "text"
-    assert plan.source == "llm"
+    assert plan.source == "react"
+    assert plan.loop == "react"
     assert plan.tools_needed == []
-    assert budget.used == 0  # consume 发生在 _call_plan_model 内，此处被 mock 掉
+    assert budget.used == 0
 
 
-def test_run_plan_inspect_model_chooses_react_loop(monkeypatch):
-    """列出协议档由模型判 loop=react，不得规划成基准对比。"""
+def test_run_plan_inspect_skips_planner_no_business_tools(monkeypatch):
+    """列出协议档不打规划模型，也不再注入已下线的业务 list 工具。"""
 
-    def _fake(_db, _payload, **_kwargs):
-        return (
-            {
-                "intent": "inspect",
-                "skill_id": None,
-                "slots": {"filled": {}, "missing": []},
-                "tools_needed": ["model.list"],
-                "delivery": "text",
-                "budget": {"max_tool_rounds": 2},
-                "notes": "规划：列出协议档。",
-                "complexity": "low",
-                "loop": "react",
-            },
-            10,
-        )
+    def _boom(*_a, **_k):
+        raise AssertionError("自然语言不得打独立规划模型")
 
-    monkeypatch.setattr("app.agent.plan._call_plan_model", _fake)
+    monkeypatch.setattr("app.agent.plan._call_plan_model", _boom)
     budget = TurnBudget()
     plan = run_plan(
         _FakeDb(),
-        text="\u5217\u51fa\u534f\u8bae\u6863",
-        parsed=parse_slash("\u5217\u51fa\u534f\u8bae\u6863"),
+        text="列出协议档",
+        parsed=parse_slash("列出协议档"),
         history=[],
         prefs={"last_profile_ids": ["p-old"], "last_dataset_id": "ds-old"},
         attachments=[],
         budget=budget,
     )
-    assert plan.intent == "inspect"
+    assert plan.intent == "chat"
     assert plan.loop == "react"
     assert plan.skill_id is None
-    assert plan.tools_needed == ["model.list"]
+    assert plan.tools_needed == []
     assert plan.pref_thoughts == []
 
 
-def test_run_plan_portrait_model_chooses_react_not_eval(monkeypatch):
-    """人像摄影由模型判 loop=react；注入后不得沿用评测偏好。"""
+def test_run_plan_portrait_injects_image_without_planner(monkeypatch):
+    """人像摄影由 inject 挂生图工具；不打规划模型，不得沿用评测偏好。"""
     text = "帮我生成一张一张竖幅户外人像摄影，整体从上到下呈现温暖的午后街景氛围"
 
-    def _fake(_db, _payload, **_kwargs):
-        return (
-            {
-                "intent": "chat",
-                "skill_id": None,
-                "slots": {"filled": {}, "missing": []},
-                "tools_needed": ["image.generate"],
-                "delivery": "text",
-                "budget": {"max_tool_rounds": 2},
-                "notes": "规划：生图。",
-                "complexity": "medium",
-                "loop": "react",
-            },
-            11,
-        )
+    def _boom(*_a, **_k):
+        raise AssertionError("自然语言不得打独立规划模型")
 
-    monkeypatch.setattr("app.agent.plan._call_plan_model", _fake)
+    monkeypatch.setattr("app.agent.plan._call_plan_model", _boom)
     budget = TurnBudget()
     plan = run_plan(
         _FakeDb(),
@@ -774,6 +778,7 @@ def test_run_plan_portrait_model_chooses_react_not_eval(monkeypatch):
     assert plan.loop == "react"
     assert plan.skill_id is None
     assert plan.delivery == "text"
+    assert plan.source == "react"
     assert plan.tools_needed == ["image.generate"]
     assert plan.pref_thoughts == []
     assert resolve_turn_mode(text=text, parsed=parse_slash(text), plan=plan) is TurnMode.REACT_ONLY
