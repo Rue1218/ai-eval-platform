@@ -15,7 +15,13 @@ from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from typing_extensions import TypedDict
 
-from ..adapters import SUPPORTED_PROTOCOLS, AdapterResult, call_protocol, stream_protocol
+from ..adapters import (
+    SUPPORTED_PROTOCOLS,
+    AdapterResult,
+    StreamAborted,
+    call_protocol,
+    stream_protocol,
+)
 from ..errors import AppError, ErrorCode
 from .contracts import ModelRequest, ModelResponse, ModelStreamEvent
 
@@ -186,6 +192,9 @@ class ModelGateway:
                     kind = "content"
                     content.append(delta)
                 writer({"kind": kind, "text": delta})
+        except StreamAborted:
+            # 本地取消是受控流程，不应被归一成内部错误或继续向上游重试。
+            raise
         except AppError:
             raise
         except Exception as exc:

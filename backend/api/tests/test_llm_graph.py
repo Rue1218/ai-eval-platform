@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from app.adapters import AdapterResult
+from app.adapters import AdapterResult, StreamAborted
 from app.errors import AppError, ErrorCode
 from app.llm import ModelConfig, ModelGateway, ModelRequest
 
@@ -82,6 +82,17 @@ def test_astream_projects_same_events() -> None:
     assert [event.kind for event in events] == ["content", "completed"]
     assert events[-1].response is not None
     assert events[-1].response.text == "异步答案"
+
+
+def test_stream_abort_is_not_mapped_to_internal_error() -> None:
+    """流式取消保持受控异常，交由 Agent 回合决定停止后的交付。"""
+    def abort(_request: ModelRequest):
+        raise StreamAborted()
+
+    gateway = ModelGateway(stream_transport=abort)
+
+    with pytest.raises(StreamAborted):
+        list(gateway.stream(_request()))
 
 
 def test_unexpected_transport_error_is_redacted() -> None:

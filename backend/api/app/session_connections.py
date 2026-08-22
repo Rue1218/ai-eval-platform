@@ -85,6 +85,29 @@ class SessionConnectionHub:
         for connection_id in (item for item in failed if item):
             self.unregister(session_id, connection_id)
 
+    async def broadcast_event(self, session_id: str, frame: dict) -> bool:
+        """向会话在线成员广播同一条持久化事件，并同步各连接事件游标。"""
+        rows = list(self._connections.get(session_id, {}).values())
+        if not rows:
+            return False
+
+        async def _send(row: LiveSessionConnection) -> str | None:
+            try:
+                async with row.state.lock:
+                    await asyncio.wait_for(row.websocket.send_json(frame), timeout=1.0)
+                    row.state.cursor = max(
+                        int(getattr(row.state, "cursor", 0)),
+                        int(frame.get("event_id", 0)),
+                    )
+            except Exception:
+                return row.connection_id
+            return None
+
+        failed = await asyncio.gather(*(_send(row) for row in rows))
+        for connection_id in (item for item in failed if item):
+            self.unregister(session_id, connection_id)
+        return any(item is None for item in failed)
+
     async def close_non_owner(self, session_id: str, owner_id: str) -> None:
         """会话取消分享时立刻关闭协作者连接，阻止继续接收瞬态数据。"""
         rows = [
