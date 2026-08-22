@@ -3,9 +3,10 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 阶段 3 — 并行与流式收尾 |
-| 版本 | V1.3 |
+| 版本 | V1.4 |
 | 审查日期 | 2026-08-22 |
 | 文档性质 | **施工与验收文档**（需求分析、功能点、实现路径、技术难点与对策）；阶段 4 仅可在本阶段验收通过后开工 |
+| 当前验收状态 | **实现审查未通过**：3 个 P1、1 个 P2 待修复；阶段 4 不得开工 |
 | 对应目标架构 | 架构文档 §3.2.1 / §3.2.2 / §3.5 末段 / §5.3 |
 | 前置阶段权威 | 阶段 2 强制 trace/cancel；阶段 0 **禁止错误 merge_batch**（伪造 parent 绕过 Fail-fast） |
 | 产品/协议裁决 | API.md；Agent §5.6 第一阶段串行保证 `tool_call`/`tool_result` 成对。本阶段实现能力，**默认行为仍串行** |
@@ -253,16 +254,25 @@ Feedback merge span F-01        parent=O-01（或 X-batch，文档冻结为：no
 
 - [x] 默认串行：四项多媒体 `parallel_safe=false`；现网测试全绿
 - [x] 桩工具并行：gather 局部失败保留成功项
-- [x] `ordered_results` 按 `batch_index`；`results_by_call_id` 可反查
-- [x] `merge_batch` mismatch 熔断；无伪造 parent
-- [x] `done=true` 单测经过 `FINALIZING_STREAM`
-- [x] `DONE_TOOL_CONFLICT` 不执行工具
-- [x] `MISSING_TOOL` 覆盖空工具；未知工具静默语义仍在
+- [ ] `ordered_results` 按 `batch_index`；`results_by_call_id` 可反查（仅并行路径覆盖；默认串行批次未进入批次归并）
+- [ ] `merge_batch` mismatch 熔断；无伪造 parent（独立单测通过；默认串行批次未建立批次 span 树）
+- [ ] `done=true` 单测经过 `FINALIZING_STREAM`，且仅在流结束、消息持久化成功后进入 `FINISHED`
+- [ ] `DONE_TOOL_CONFLICT` 不执行工具且 ErrorClass 进入下一轮内部 observation
+- [ ] `MISSING_TOOL` 覆盖空工具且 ErrorClass 进入下一轮内部 observation；未知工具静默语义仍在
 - [x] Schema `oneOf`：无顶层 `tool` 的批次示例可通过
 - [x] 开关打开且批次不安全 → 不执行、不悄悄串行
 - [x] WS 事件名/字段不变；无新 REST
 - [x] 无 Alembic 业务新表（本阶段不改记忆表）；无 Redis；无 LightRAG；无 MCP Transport
 - [x] `ruff` + `pytest tests/harness tests/test_harness.py` 等全绿
+
+### 7.1 2026-08-22 实现审查待修项
+
+1. **P1：默认串行批次绕过批次归并。** `PARALLEL_READONLY_TOOLS=false` 时，`react_loop.py` 逐项走单调用路径，未创建批次执行 span、未调用 `merge_batch`，因此无法保证默认批次的 `batch_index`、`call_id` 反查和批次父子 span 契约。
+2. **P1：`FINALIZING_STREAM` 未包住实际交付边界。** ReAct 刚收到 `done=true` 即写入该状态；之后仍可能重规划、复核或发送确认卡。最终 `FINISHED` 由 Harness 的 `finish_turn` 直接写入，未在消息流结束并持久化后经状态机转移。
+3. **P1：内部 ErrorClass 未回填到下一轮。** `DONE_TOOL_CONFLICT`、`MISSING_TOOL` 与并行策略错误虽会创建 `ToolResult`，但 observation 摘要只保留错误文案，下一轮模型看不到受控的 `error_class`。
+4. **P2：参数校验失败的执行 span 未持久化。** 该 Outcome 引用了批次 child span，但异常分支未记录该 span，审计链不完整。
+
+修复后须新增端到端 Harness 回归：默认串行批次也经过批次归并；最终回复完成并落库后才 `FINISHED`；下一轮输入保留 ErrorClass；参数校验失败的 span 可在审计中查询。当前独立单测手工调用 `finish_turn`，不能替代以上边界验证。
 
 ---
 
@@ -275,13 +285,13 @@ Feedback merge span F-01        parent=O-01（或 X-batch，文档冻结为：no
 阶段 2 取消链接到并行子任务
 ```
 
-阶段 4 **不得**改并行门禁与 WS 字段，只把 Context 换成 MemoryPort。
+阶段 4 **不得开工**，直到 §7.1 的 P1/P2 修复、端到端回归通过且本阶段重新验收；通过后阶段 4 仍不得改并行门禁与 WS 字段，只把 Context 换成 MemoryPort。
 
 ---
 
 ## 修改代码文件与作用清单
 
-V1.3：落地批次 Schema `oneOf`、三分支并行门禁、正确的批次 span 归并、`FINALIZING_STREAM` 与取消协同。默认仍串行，四项多媒体工具保持写操作且不可并行；无 REST/WS 契约扩展。
+V1.4：根据代码质量审查校正验收状态。批次 Schema `oneOf`、三分支并行门禁和并行路径的归并实现已存在，但默认串行批次归并、最终交付状态机、ErrorClass observation 回填及参数失败 span 审计尚未满足本文件 R3-5～R3-8 的完整验收；无 REST/WS 契约扩展。
 
 | 文件 | 作用 |
 | :--- | :--- |
