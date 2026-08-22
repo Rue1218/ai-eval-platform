@@ -1,5 +1,5 @@
 <template>
-  <n-drawer :show="show" :width="560" @update:show="$emit('update:show', $event)">
+  <n-drawer :show="show" :width="drawerWidth" @update:show="$emit('update:show', $event)">
     <n-drawer-content title="发起 RAG 知识库评测" closable>
       <div class="launch-form">
         <div class="field">
@@ -107,6 +107,14 @@ const emit = defineEmits<{
   (e: 'update:show', val: boolean): void
   (e: 'success', taskId: string): void
 }>()
+
+/** 移动端自适应抽屉宽度 */
+const drawerWidth = computed(() => {
+  if (typeof window !== 'undefined' && window.innerWidth <= 640) {
+    return '100%'
+  }
+  return 560
+})
 
 const message = useMessage()
 const submitting = ref(false)

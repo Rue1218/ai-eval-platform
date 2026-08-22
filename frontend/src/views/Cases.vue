@@ -325,7 +325,7 @@
       </div>
     </div>
 
-    <n-modal v-model:show="showCreateSetModal" preset="card" title="新建用例集" style="width: 440px">
+    <n-modal v-model:show="showCreateSetModal" preset="card" title="新建用例集" style="width: 440px; max-width: calc(100vw - 24px)">
       <div class="field">
         <label class="field-label">用例集名称 <span class="req">*</span></label>
         <n-input v-model:value="newSetName" placeholder="例如：支付模块回归用例" />
@@ -346,7 +346,7 @@
     />
 
     <!-- C2：用例结构化编辑弹窗（原型 cases.html:537-601） -->
-    <n-modal v-model:show="showEditCaseModal" preset="card" :title="`详细编辑用例 · ${editDraft.id || '新用例'}`" style="width: 640px">
+    <n-modal v-model:show="showEditCaseModal" preset="card" :title="`详细编辑用例 · ${editDraft.id || '新用例'}`" style="width: 640px; max-width: calc(100vw - 24px)">
       <div class="form-row">
         <div class="field">
           <label class="field-label">测试策略 (Strategy) <span class="req">*</span></label>
@@ -397,7 +397,7 @@
     </n-modal>
 
     <!-- C4：新增自定义扩展列弹窗（原型 cases.html:913-940） -->
-    <n-modal v-model:show="showAddColModal" preset="card" title="新增用例自定义字段 (Custom Field)" style="width: 440px">
+    <n-modal v-model:show="showAddColModal" preset="card" title="新增用例自定义字段 (Custom Field)" style="width: 440px; max-width: calc(100vw - 24px)">
       <div class="field">
         <label class="field-label">字段 Key (英文字母 / 下划线) <span class="req">*</span></label>
         <n-input v-model:value="newColKey" class="mono" placeholder="如 assert_type, env_tag" />
@@ -415,7 +415,7 @@
     </n-modal>
 
     <!-- 通用单输入弹窗：重命名用例集 / 新建子目录 / 重命名目录共用 -->
-    <n-modal v-model:show="promptState.show" preset="card" :title="promptState.title" style="width: 400px">
+    <n-modal v-model:show="promptState.show" preset="card" :title="promptState.title" style="width: 400px; max-width: calc(100vw - 24px)">
       <div class="field">
         <n-input v-model:value="promptState.value" :placeholder="promptState.placeholder" autofocus @keyup.enter="submitPrompt" />
       </div>
@@ -428,7 +428,7 @@
     </n-modal>
 
     <!-- C5：AI 生成用例集两步向导（原型 cases.html:604-910） -->
-    <n-modal v-model:show="showAiGenModal" preset="card" title="✨ AI 智能生成测试用例集" style="width: 760px" :mask-closable="false">
+    <n-modal v-model:show="showAiGenModal" preset="card" title="✨ AI 智能生成测试用例集" style="width: 760px; max-width: calc(100vw - 24px)" :mask-closable="false">
       <!-- Step 1：配置与需求输入 -->
       <div v-show="aiStep === 'config'">
         <div class="field">
@@ -2013,6 +2013,37 @@ watch(() => modeStore.mode, () => {
   .ws-status-bar {
     flex-wrap: wrap;
     gap: 8px;
+  }
+}
+
+@media (max-width: 640px) {
+  .ft-sidebar {
+    max-height: 210px;
+  }
+  .ws-toolbar {
+    padding: 8px 12px;
+    gap: 8px;
+  }
+  .ws-toolbar .btn {
+    font-size: 11px;
+    padding: 4px 8px;
+  }
+  .strategy-banner {
+    padding: 6px 12px;
+    font-size: 11.5px;
+  }
+  .ai-weights-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .ws-status-bar {
+    padding: 6px 12px;
+    font-size: 11px;
+  }
+}
+
+@media (max-width: 420px) {
+  .ai-weights-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>

@@ -359,7 +359,7 @@
     />
 
     <!-- D2 行结构化编辑弹窗：问题 / 答案 / 上下文 + 自定义扩展字段 -->
-    <n-modal v-model:show="rowEdit.show" preset="card" :title="`编辑样本行 #${rowEdit.rowNo}`" style="width: 640px">
+    <n-modal v-model:show="rowEdit.show" preset="card" :title="`编辑样本行 #${rowEdit.rowNo}`" style="width: 640px; max-width: calc(100vw - 24px)">
       <div class="field">
         <label class="field-label">问题 / 提示词 (Question / Prompt) <span class="req">*</span></label>
         <n-input v-model:value="rowEdit.q" type="textarea" :autosize="{ minRows: 3, maxRows: 6 }" placeholder="请输入测试问句" />
@@ -391,7 +391,7 @@
     </n-modal>
 
     <!-- D3 新增自定义扩展列弹窗：Key / 名称 / 类型三要素 -->
-    <n-modal v-model:show="addCol.show" preset="card" title="新增自定义数据列 (Custom Column)" style="width: 460px">
+    <n-modal v-model:show="addCol.show" preset="card" title="新增自定义数据列 (Custom Column)" style="width: 460px; max-width: calc(100vw - 24px)">
       <div class="field">
         <label class="field-label">字段 Key (英文字母 / 下划线) <span class="req">*</span></label>
         <n-input v-model:value="addCol.key" class="mono" placeholder="如 category, meta_tags, prompt_type" />
@@ -420,7 +420,7 @@
     </n-modal>
 
     <!-- D4 AI 合成新数据两步向导：Step1 参数配置 → Step2 候选预览导入 -->
-    <n-modal v-model:show="aiGen.show" preset="card" title="✨ AI 智能生成评测数据集" style="width: 760px">
+    <n-modal v-model:show="aiGen.show" preset="card" title="✨ AI 智能生成评测数据集" style="width: 760px; max-width: calc(100vw - 24px)">
       <!-- Step 1: 合成模式与高级控制参数 -->
       <div v-show="aiGen.step === 1">
         <div class="row" style="gap: 8px; margin-bottom: 14px">
@@ -565,7 +565,7 @@
     </n-modal>
 
     <!-- D5 AI 补全确认弹窗：待补全统计 + Prompt 引导 + 补全范围 + Few-Shot 说明 -->
-    <n-modal v-model:show="aiFill.show" preset="card" :title="`✨ AI 智能补全缺失字段（共 ${pendingCount} 行待补全）`" style="width: 560px">
+    <n-modal v-model:show="aiFill.show" preset="card" :title="`✨ AI 智能补全缺失字段（共 ${pendingCount} 行待补全）`" style="width: 560px; max-width: calc(100vw - 24px)">
       <p class="small" style="margin: 0 0 12px; color: var(--text-secondary)">
         系统检测到以下样本行缺少核心字段（问句或标准答案）。AI 将结合已有业务上下文自动推导并补全，补全后将保持高亮以供复核。
       </p>
@@ -595,7 +595,7 @@
     </n-modal>
 
     <!-- 通用命名弹窗：复用于 重命名数据集 / 新建空数据集 / 新建子文件夹 / 重命名目录 -->
-    <n-modal v-model:show="nameDialog.show" preset="card" :title="nameDialog.title" style="width: 420px">
+    <n-modal v-model:show="nameDialog.show" preset="card" :title="nameDialog.title" style="width: 420px; max-width: calc(100vw - 24px)">
       <div class="field">
         <label class="field-label">{{ nameDialog.label }} <span class="req">*</span></label>
         <n-input v-model:value="nameDialog.value" placeholder="请输入名称" @keyup.enter="confirmNameDialog" />
@@ -609,7 +609,7 @@
     </n-modal>
 
     <!-- 黄金 QA「发起 RAG 评测」抽屉：字段对齐原型 openEvalDrawer 的 rag 分支（kb_id / gold_qa_id / rag_mode / 运行参数 / 先评后压） -->
-    <n-drawer v-model:show="ragDrawer.show" :width="480">
+    <n-drawer v-model:show="ragDrawer.show" :width="ragDrawerWidth">
       <n-drawer-content title="发起 RAG 评测任务" closable>
         <div class="field">
           <label class="field-label">kind</label>
@@ -1843,6 +1843,14 @@ const ragDrawer = ref({
   submitting: false,
 })
 
+/** 黄金 QA 评测抽屉移动端自适应宽度 */
+const ragDrawerWidth = computed(() => {
+  if (typeof window !== 'undefined' && window.innerWidth <= 640) {
+    return '100%'
+  }
+  return 480
+})
+
 function openRagDrawer() {
   const qa = activeGoldQa.value
   if (!qa) return
@@ -2095,6 +2103,9 @@ watch(() => modeStore.mode, (mode) => {
     border-right: 0;
     border-bottom: 1px solid var(--border-subtle);
   }
+  .ft-resizer {
+    display: none;
+  }
   .workspace-main {
     min-height: 620px;
   }
@@ -2106,6 +2117,24 @@ watch(() => modeStore.mode, (mode) => {
   .ws-status-bar {
     flex-wrap: wrap;
     gap: 8px;
+  }
+}
+
+@media (max-width: 640px) {
+  .ft-sidebar {
+    max-height: 210px;
+  }
+  .ws-toolbar {
+    padding: 8px 12px;
+    gap: 8px;
+  }
+  .ws-toolbar .btn {
+    font-size: 11px;
+    padding: 4px 8px;
+  }
+  .ws-status-bar {
+    padding: 6px 12px;
+    font-size: 11px;
   }
 }
 </style>
