@@ -3,13 +3,13 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 阶段 3 — 并行与流式收尾 |
-| 版本 | V1.2 |
-| 审查日期 | 2026-08-21 |
-| 文档性质 | **开工前分析文档**（需求分析、功能点、实现路径、技术难点与对策）；未勾验收前禁止合入、禁止开阶段 4 |
+| 版本 | V1.3 |
+| 审查日期 | 2026-08-22 |
+| 文档性质 | **施工与验收文档**（需求分析、功能点、实现路径、技术难点与对策）；阶段 4 仅可在本阶段验收通过后开工 |
 | 对应目标架构 | 架构文档 §3.2.1 / §3.2.2 / §3.5 末段 / §5.3 |
 | 前置阶段权威 | 阶段 2 强制 trace/cancel；阶段 0 **禁止错误 merge_batch**（伪造 parent 绕过 Fail-fast） |
 | 产品/协议裁决 | API.md；Agent §5.6 第一阶段串行保证 `tool_call`/`tool_result` 成对。本阶段实现能力，**默认行为仍串行** |
-| 分支 | `feat/harness-parallel-stream` |
+| 分支 | `feat/harness-parallel-streaming` |
 | 前置依赖 | 阶段 2 验收通过 |
 | 后续阶段 | 阶段 4 记忆层接入 |
 
@@ -251,18 +251,18 @@ Feedback merge span F-01        parent=O-01（或 X-batch，文档冻结为：no
 
 ## 7. 验收清单
 
-- [ ] 默认串行：四项多媒体 `parallel_safe=false`；现网测试全绿
-- [ ] 桩工具并行：gather 局部失败保留成功项
-- [ ] `ordered_results` 按 `batch_index`；`results_by_call_id` 可反查
-- [ ] `merge_batch` mismatch 熔断；无伪造 parent
-- [ ] `done=true` 单测经过 `FINALIZING_STREAM`
-- [ ] `DONE_TOOL_CONFLICT` 不执行工具
-- [ ] `MISSING_TOOL` 覆盖空工具；未知工具静默语义仍在
-- [ ] Schema `oneOf`：无顶层 `tool` 的批次示例可通过
-- [ ] 开关打开且批次不安全 → 不执行、不悄悄串行
-- [ ] WS 事件名/字段不变；无新 REST
-- [ ] 无 Alembic 业务新表（本阶段不改记忆表）；无 Redis；无 LightRAG；无 MCP Transport
-- [ ] `ruff` + `pytest tests/harness tests/test_harness.py` 等全绿
+- [x] 默认串行：四项多媒体 `parallel_safe=false`；现网测试全绿
+- [x] 桩工具并行：gather 局部失败保留成功项
+- [x] `ordered_results` 按 `batch_index`；`results_by_call_id` 可反查
+- [x] `merge_batch` mismatch 熔断；无伪造 parent
+- [x] `done=true` 单测经过 `FINALIZING_STREAM`
+- [x] `DONE_TOOL_CONFLICT` 不执行工具
+- [x] `MISSING_TOOL` 覆盖空工具；未知工具静默语义仍在
+- [x] Schema `oneOf`：无顶层 `tool` 的批次示例可通过
+- [x] 开关打开且批次不安全 → 不执行、不悄悄串行
+- [x] WS 事件名/字段不变；无新 REST
+- [x] 无 Alembic 业务新表（本阶段不改记忆表）；无 Redis；无 LightRAG；无 MCP Transport
+- [x] `ruff` + `pytest tests/harness tests/test_harness.py` 等全绿
 
 ---
 
@@ -281,8 +281,16 @@ Feedback merge span F-01        parent=O-01（或 X-batch，文档冻结为：no
 
 ## 修改代码文件与作用清单
 
-V1.2：补 Schema `oneOf`、MISSING_TOOL、并行门禁三分支冻结、streaming 不复制 LLM 客户端。**尚未写业务代码**。
+V1.3：落地批次 Schema `oneOf`、三分支并行门禁、正确的批次 span 归并、`FINALIZING_STREAM` 与取消协同。默认仍串行，四项多媒体工具保持写操作且不可并行；无 REST/WS 契约扩展。
 
 | 文件 | 作用 |
 | :--- | :--- |
 | `docs/AI测试与评估平台-Harness阶段3-并行与流式收尾.md` | 本文 |
+| `backend/api/app/harness/prompts/react-output.schema.json` | 单调用 / 批次 `oneOf` 输出约束，禁止模型填 trace |
+| `backend/api/app/harness/orchestration/parser.py` | 批次解析、模型完成/空工具语义保留与编排绑定 Turn |
+| `backend/api/app/harness/orchestration/parallel_facade.py` | 并行三分支门禁、`gather(return_exceptions=True)` 与顺序收敛 |
+| `backend/api/app/harness/feedback/normalizer.py` | `merge_batch` 的批次父子 span Fail-fast 校验 |
+| `backend/api/app/harness/orchestration/{react_loop,state_machine,streaming}.py` | 批次执行、内部状态机、最终交付前流式收尾状态 |
+| `backend/api/app/harness/contracts/turn.py` | 批次与流式收尾内部状态枚举 |
+| `backend/api/tests/harness/test_parallel_streaming.py` | 批次解析、门禁、局部失败、归并与默认串行回归 |
+| `backend/api/tests/harness/tracing/{test_contracts,test_trace}.py` | 阶段 3 Schema 与 `merge_batch` 可用性断言 |

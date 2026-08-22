@@ -188,13 +188,13 @@ def test_execution_error_dumps_class_alias():
     assert "class_" not in nested["error"]
 
 
-def test_merge_batch_is_not_exported_in_phase_0():
-    """批量 span 树归阶段 3；阶段 0 不得公开会绕过 Fail-fast 的 merge_batch。"""
+def test_merge_batch_is_only_available_from_normalizer_in_phase_3():
+    """阶段 3 批量归并只供反馈层内部调用，包入口仍不得形成第二套公开契约。"""
     import app.harness.feedback as feedback
     import app.harness.feedback.normalizer as normalizer
 
     assert not hasattr(feedback, "merge_batch")
-    assert not hasattr(normalizer, "merge_batch")
+    assert hasattr(normalizer, "merge_batch")
 
 
 def test_tool_call_rejects_non_object_arguments():
