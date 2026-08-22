@@ -3,9 +3,18 @@
     <!-- 左侧会话列表轨 (264px) -->
     <aside class="session-list" data-od-id="session-list">
       <div class="session-list-head">
-        <button class="btn btn-secondary" style="width: 100%" @click="handleCreateSession">
-          + 新建会话
-        </button>
+        <div class="session-list-top-row">
+          <button class="btn btn-secondary session-create-btn" @click="handleCreateSession">
+            + 新建会话
+          </button>
+          <button
+            class="session-drawer-close-btn mobile-only"
+            title="关闭会话列表"
+            @click="isListCollapsed = true"
+          >
+            ✕
+          </button>
+        </div>
         <div v-if="deletableSessionCount" class="session-batch-toolbar">
           <label class="session-select-all">
             <input
@@ -76,7 +85,7 @@
           class="composer-btn"
           title="折叠/展开会话列表"
           style="width: 30px; height: 30px; flex-basis: 30px; border-radius: 8px"
-          @click="isListCollapsed = !isListCollapsed"
+          @click="toggleSessionList"
         >
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
             <path d="M4 6h16M4 12h10M4 18h16" />
@@ -109,7 +118,7 @@
           class="btn btn-sm"
           :class="isRailOpen ? 'btn-secondary' : 'btn-ghost'"
           title="展开/折叠任务调度分配侧轨"
-          @click="isRailOpen = !isRailOpen"
+          @click="toggleDispatchRail"
         >
           调度视图
         </button>
@@ -722,9 +731,18 @@
     <!-- 右侧迷你调度视图侧轨 (308px) -->
     <aside class="dispatch-rail" data-od-id="dispatch-rail">
       <div class="rail-head">
-        <div class="row-between">
+        <div class="rail-head-top-row">
           <span style="font-size: 13px; font-weight: 600">调度视图</span>
-          <router-link to="/tasks" class="link-btn" data-od-id="rail-open-dispatch">打开任务中心 →</router-link>
+          <div class="row" style="gap: 8px; align-items: center">
+            <router-link to="/tasks" class="link-btn" data-od-id="rail-open-dispatch">打开任务中心 →</router-link>
+            <button
+              class="rail-drawer-close-btn mobile-only"
+              title="关闭调度视图"
+              @click="isRailOpen = false"
+            >
+              ✕
+            </button>
+          </div>
         </div>
         <div class="small tertiary" style="margin-top: 4px">当前会话任务的实时分配</div>
       </div>
@@ -774,6 +792,13 @@
         </div>
       </div>
     </aside>
+
+    <!-- 移动端侧边栏抽屉遮罩层 (点击遮罩收起所有侧边栏) -->
+    <div
+      v-if="isMobileDrawerActive"
+      class="agent-mobile-backdrop"
+      @click="closeMobileDrawers"
+    ></div>
   </div>
 </template>
 
@@ -819,8 +844,35 @@ const chatScrollRef = ref<HTMLDivElement | null>(null)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 
-const isListCollapsed = ref(typeof window !== 'undefined' && window.innerWidth <= 700)
+const isListCollapsed = ref(typeof window !== 'undefined' && window.innerWidth <= 768)
 const isRailOpen = ref(false)
+
+/** 移动端抽屉遮罩层显隐状态：在窄屏下有任一侧边栏抽屉展开时激活 */
+const isMobileDrawerActive = computed(() => {
+  if (typeof window === 'undefined') return false
+  const isMobile = window.innerWidth <= 768
+  return isMobile && (!isListCollapsed.value || isRailOpen.value)
+})
+
+function closeMobileDrawers() {
+  isListCollapsed.value = true
+  isRailOpen.value = false
+}
+
+function toggleSessionList() {
+  isListCollapsed.value = !isListCollapsed.value
+  if (!isListCollapsed.value && typeof window !== 'undefined' && window.innerWidth <= 768) {
+    isRailOpen.value = false
+  }
+}
+
+function toggleDispatchRail() {
+  isRailOpen.value = !isRailOpen.value
+  if (isRailOpen.value && typeof window !== 'undefined' && window.innerWidth <= 768) {
+    isListCollapsed.value = true
+  }
+}
+
 const isWsOnline = ref(true)
 const isGenerating = ref(false)
 const harnessStage = ref<'plan' | 'react' | 'reflect' | ''>('')
@@ -2545,7 +2597,7 @@ async function loadSessionHistory(sid: string): Promise<number> {
 async function selectSession(sid: string) {
   if (deletingSessionIds.has(sid)) return
   // 移动端会话列表是覆盖式抽屉，选中会话后自动收起让出对话区。
-  if (window.innerWidth <= 700) isListCollapsed.value = true
+  if (typeof window !== 'undefined' && window.innerWidth <= 768) isListCollapsed.value = true
   if (sid === currentSessionId.value && sockets.has(sid)) {
     const existing = sockets.get(sid)
     if (existing?.isConnected) return
@@ -2570,7 +2622,10 @@ async function selectSession(sid: string) {
   markGenerating(sid, rt.isGenerating)
 
   const sess = sessions.value.find(s => s.id === sid)
-  isRailOpen.value = !!sess?.active_task || rt.isGenerating
+  // 仅在桌面端自动展开调度侧轨，避免移动端遮挡聊天界面
+  if (typeof window !== 'undefined' && window.innerWidth > 768) {
+    isRailOpen.value = !!sess?.active_task || rt.isGenerating
+  }
 
   const activeTaskId = sess?.active_task?.id || rt.activeTask?.id
   if (activeTaskId) {
@@ -3792,6 +3847,30 @@ onBeforeUnmount(() => {
 @media (max-width: 768px) {
   .agent-layout {
     height: calc(100dvh - 58px);
+  }
+  .chat-head-title {
+    max-width: calc(100vw - 200px);
+  }
+  .session-item {
+    min-height: 42px;
+    padding: 8px 10px;
+  }
+  .session-title {
+    font-size: 13.5px;
+  }
+  .dispatch-rail .rail-head {
+    padding: 12px 14px 10px;
+  }
+  .dispatch-rail .rail-body {
+    padding: 10px 12px 14px;
+    gap: 10px;
+  }
+  .agent-node {
+    padding: 9px 11px;
+  }
+  .log-stream {
+    max-height: 200px;
+    -webkit-overflow-scrolling: touch;
   }
   .composer {
     padding: 6px 10px max(12px, env(safe-area-inset-bottom));

@@ -1400,6 +1400,9 @@ td.cell-edit:hover { background: color-mix(in srgb, var(--accent-ai) 5%, transpa
 /* ============================================================
    移动端与触控设备深度适配（≤768px）：排版收紧 / 表格横滚 / 弹层全宽 / 对话轨覆盖
    ============================================================ */
+.mobile-only { display: none !important; }
+.desktop-only { display: block !important; }
+
 .table-responsive {
   width: 100%;
   overflow-x: auto;
@@ -1407,6 +1410,9 @@ td.cell-edit:hover { background: color-mix(in srgb, var(--accent-ai) 5%, transpa
 }
 
 @media (max-width: 768px) {
+  .mobile-only { display: inline-flex !important; }
+  .desktop-only { display: none !important; }
+
   /* 内容区与面板 */
   .content {
     padding: 10px 8px;
@@ -1464,32 +1470,83 @@ td.cell-edit:hover { background: color-mix(in srgb, var(--accent-ai) 5%, transpa
     position: relative;
     overflow: hidden;
   }
+
+  /* 移动端侧边栏半透明磨砂遮罩层 */
+  .agent-mobile-backdrop {
+    position: absolute;
+    inset: 0;
+    z-index: 25;
+    background: rgba(0, 0, 0, 0.48);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    animation: agent-backdrop-fade 0.2s ease-out;
+  }
+  @keyframes agent-backdrop-fade {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
   /* 会话列表与调度侧轨改为覆盖式抽屉，由折叠态类控制滑入滑出 */
   .agent-layout .session-list {
     position: absolute;
     inset: 0 auto 0 0;
     z-index: 30;
-    width: min(280px, 86vw);
+    width: min(290px, 86vw);
     border-right: 1px solid var(--border-subtle);
-    box-shadow: 12px 0 30px rgba(17, 24, 39, 0.18);
+    box-shadow: 12px 0 32px rgba(0, 0, 0, 0.24);
     transform: translateX(-105%);
-    transition: transform 0.2s ease;
+    transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
     opacity: 1;
     pointer-events: auto;
   }
   .agent-layout:not(.no-list) .session-list { transform: translateX(0); }
+
   .agent-layout .dispatch-rail {
     position: absolute;
     inset: 0 0 0 auto;
     z-index: 30;
-    width: min(300px, 88vw);
+    width: min(320px, 90vw);
     transform: translateX(105%);
-    transition: transform 0.2s ease;
+    transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
     opacity: 1;
     pointer-events: auto;
-    box-shadow: -12px 0 30px rgba(17, 24, 39, 0.14);
+    box-shadow: -12px 0 32px rgba(0, 0, 0, 0.24);
   }
   .agent-layout.with-rail .dispatch-rail { transform: translateX(0); }
+
+  .session-list-top-row,
+  .rail-head-top-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+  }
+  .session-create-btn {
+    flex: 1;
+  }
+  .session-drawer-close-btn,
+  .rail-drawer-close-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+    font-size: 14px;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: all 0.15s ease;
+  }
+  .session-drawer-close-btn:hover,
+  .rail-drawer-close-btn:hover {
+    background: var(--row-hover);
+    color: var(--text-primary);
+    border-color: var(--border-color);
+  }
 
   .chat-head { padding: 0 10px; gap: 6px; }
   .chat-head-model { display: none; }
