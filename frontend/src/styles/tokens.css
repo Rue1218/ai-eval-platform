@@ -19,16 +19,17 @@
   --row-hover: rgba(17, 24, 39, 0.035);
   --sidebar-bg: rgba(255, 255, 255, 0.55);
 
-  /* 模块色（--t-* 淡底 / --c-* 深字） */
-  --t-agent: #ddd6fe;    --c-agent: #7c3aed;
-  --t-tasks: #e0e7ff;    --c-tasks: #4f46e5;
-  --t-reports: #ede9fe;  --c-reports: #6d28d9;
-  --t-datasets: #dbeafe; --c-datasets: #1d4ed8;
-  --t-cases: #d1fae5;    --c-cases: #047857;
-  --t-kb: #cffafe;       --c-kb: #0e7490;
-  --t-profiles: #fef3c7; --c-profiles: #b45309;
-  --t-stress: #fce7f3;   --c-stress: #be185d;
-  --t-users: #f3f4f6;    --c-users: #4b5563;
+  /* 模块专属强调色（--t-* 柔和淡底 / --c-* 鲜明深字） */
+  --t-agent: #ede9fe;    --c-agent: #7c3aed;    /* 智能体：AI 紫罗兰 */
+  --t-dispatch: #e0f2fe; --c-dispatch: #0284c7; /* 调度中心：科技青天蓝 */
+  --t-tasks: #e0e7ff;    --c-tasks: #4f46e5;    /* 任务中心：经典靛蓝 */
+  --t-reports: #fae8ff;  --c-reports: #a21caf;  /* 评测报告：品红紫罗兰 */
+  --t-datasets: #dbeafe; --c-datasets: #1d4ed8; /* 数据集：极客深蓝 */
+  --t-cases: #d1fae5;    --c-cases: #059669;    /* 用例：薄荷翠绿 */
+  --t-kb: #ccfbf1;       --c-kb: #0f766e;       /* 知识库：松石海青 */
+  --t-profiles: #fef3c7; --c-profiles: #d97706; /* 协议档：琥珀暖金 */
+  --t-stress: #ffe4e6;   --c-stress: #e11d48;   /* 压测治理：能量玫红 */
+  --t-users: #e0f2fe;    --c-users: #0369a1;    /* 账号：极光蔚蓝 */
 
   /* 字体 */
   --font-display: 'Noto Serif SC', 'Space Grotesk', Georgia, serif;
@@ -60,12 +61,13 @@
   --sidebar-bg: rgba(11, 15, 25, 0.65);
 
   --t-agent: #2e1065;    --c-agent: #c4b5fd;
+  --t-dispatch: #082f49; --c-dispatch: #38bdf8;
   --t-tasks: #1e1b4b;    --c-tasks: #a5b4fc;
-  --t-reports: #3b0764;  --c-reports: #d8b4fe;
+  --t-reports: #4a044e;  --c-reports: #f0abfc;
   --t-datasets: #172554; --c-datasets: #93c5fd;
   --t-cases: #064e3b;    --c-cases: #6ee7b7;
-  --t-kb: #083344;       --c-kb: #67e8f9;
-  --t-profiles: #451a03; --c-profiles: #fcd34d;
-  --t-stress: #500724;   --c-stress: #f9a8d4;
-  --t-users: #1f2937;    --c-users: #d1d5db;
+  --t-kb: #042f2e;       --c-kb: #5eead4;
+  --t-profiles: #451a03; --c-profiles: #fbbf24;
+  --t-stress: #4c0519;   --c-stress: #fb7185;
+  --t-users: #0c4a6e;    --c-users: #7dd3fc;
 }
