@@ -13,10 +13,10 @@ from app.agent.imagegen import (
     looks_like_image_generation,
 )
 from app.agent.mcp_tools import collect_ids, execute_short_tool
-from app.agent.plan import PlanArtifact, l0_plan
 from app.errors import AppError, ErrorCode
 from app.harness.contracts.cancellation import CancellationToken
 from app.harness.contracts.trace import TraceContext
+from app.harness.orchestration.plan_runtime import PlanArtifact, l0_plan
 from app.harness.orchestration.react_adapter import run_react
 from app.models import StoredFile
 

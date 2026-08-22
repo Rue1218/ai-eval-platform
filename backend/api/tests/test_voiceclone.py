@@ -8,7 +8,6 @@ import base64
 import pytest
 
 from app.agent.mcp_tools import collect_ids, execute_short_tool
-from app.agent.plan import PlanArtifact, TurnBudget, l0_plan, run_plan
 from app.agent.slash import parse_slash
 from app.agent.voiceclone import (
     _completions_url,
@@ -19,6 +18,7 @@ from app.agent.voiceclone import (
 from app.errors import AppError, ErrorCode
 from app.harness.contracts.cancellation import CancellationToken
 from app.harness.contracts.trace import TraceContext
+from app.harness.orchestration.plan_runtime import PlanArtifact, TurnBudget, l0_plan, run_plan
 from app.harness.orchestration.react_adapter import run_react
 from app.models import StoredFile
 from app.routers.files import _validate_filename
@@ -141,7 +141,7 @@ def test_run_plan_greeting_with_audio_injects_tool(tmp_path, monkeypatch):
     def _boom(*_a, **_k):
         raise AssertionError("自然语言不得打独立规划模型")
 
-    monkeypatch.setattr("app.agent.plan._call_plan_model", _boom)
+    monkeypatch.setattr("app.harness.orchestration.plan_runtime._call_plan_model", _boom)
     plan = run_plan(
         _AudioDb(row),
         text="你好",

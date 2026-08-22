@@ -12,6 +12,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.harness.orchestration.plan_runtime import PlanArtifact, TurnBudget, parse_json_object
 from app.harness.orchestration.react_adapter import ReactArtifact, _missing_for_kind
 
 from ..errors import AppError, ErrorCode
@@ -20,7 +21,6 @@ from ..models import Task
 from .defaults import ACTIVE_STATUSES, SHORT_TOOLS, is_long_tool
 from .log import agent_trace
 from .persona import reflect_check_system, turn_system
-from .plan import PlanArtifact, TurnBudget, parse_json_object
 
 
 @dataclass

@@ -17,11 +17,11 @@ from sqlalchemy.orm import Session
 from app.agent.defaults import REQUIRED_SLOTS, default_run, default_stress
 from app.agent.imagegen import looks_like_image_generation
 from app.agent.log import agent_trace
-from app.agent.plan import PlanArtifact, sanitize_plan
 from app.harness.contracts.cancellation import CancellationToken
 from app.harness.contracts.trace import TraceContext
 from app.harness.execution.facade import execute_short_tool
 from app.harness.orchestration.parser import McpStep, parse_mcp_step
+from app.harness.orchestration.plan_runtime import PlanArtifact, sanitize_plan
 from app.harness.orchestration.react_loop import (
     emit_and_run_tool,
     execute_short_tool_isolated,

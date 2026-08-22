@@ -19,6 +19,7 @@ FORBIDDEN_MODULES = {"redis", "sqlalchemy", "app.llm", "app.adapters", "app.mode
 LEGACY_COORDINATOR_PATHS = (
     "app/agent/harness.py",
     "app/agent/react.py",
+    "app/agent/plan.py",
 )
 
 
@@ -87,8 +88,8 @@ def test_ws_routes_to_new_session_runtime():
     assert "harness.orchestration.session_runtime" in imported
 
 
-def test_legacy_agent_harness_modules_are_removed():
-    """旧 Harness / ReAct 协调器不得以兼容壳残留，防止双轨重新出现。"""
+def test_legacy_agent_runtime_modules_are_removed():
+    """旧 Harness / ReAct / Plan 模块不得以兼容壳残留，防止双轨重新出现。"""
     for rel in LEGACY_COORDINATOR_PATHS:
         assert not (API_ROOT / rel).exists(), rel
 
@@ -96,14 +97,15 @@ def test_legacy_agent_harness_modules_are_removed():
         text = path.read_text(encoding="utf-8")
         assert "app.agent.harness" not in text, path
         assert "app.agent.react" not in text, path
+        assert "app.agent.plan" not in text, path
         tree = ast.parse(text)
         for node in ast.walk(tree):
             if not isinstance(node, ast.ImportFrom):
                 continue
-            assert node.module not in {"app.agent.harness", "app.agent.react"}, path
+            assert node.module not in {"app.agent.harness", "app.agent.react", "app.agent.plan"}, path
             if node.module == "app.agent":
                 imported_names = {alias.name for alias in node.names}
-                assert not ({"harness", "react"} & imported_names), path
+                assert not ({"harness", "react", "plan"} & imported_names), path
 
 
 def test_execution_and_feedback_do_not_import_llm():

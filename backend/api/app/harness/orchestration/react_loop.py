@@ -22,7 +22,6 @@ from app.agent.defaults import (
 )
 from app.agent.log import agent_exception, agent_trace
 from app.agent.persona import react_system, turn_system
-from app.agent.plan import PlanArtifact, parse_json_object
 from app.errors import AppError, ErrorCode
 from app.harness.contracts.cancellation import CancellationToken, TurnCancelled
 from app.harness.contracts.errors import ErrorClass, MissingTraceContext, TraceMismatch
@@ -58,6 +57,7 @@ from app.harness.orchestration.parser import (
     ReactDecision,
     parse_model_payload,
 )
+from app.harness.orchestration.plan_runtime import PlanArtifact, parse_json_object
 from app.harness.orchestration.state_machine import TurnStateMachine
 
 EmitFn = Callable[..., Awaitable[int]]

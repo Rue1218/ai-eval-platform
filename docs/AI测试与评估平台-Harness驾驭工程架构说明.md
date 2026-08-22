@@ -3,7 +3,7 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 驾驭工程架构说明 |
-| 版本 | V1.2（历史目标架构，已同步当前入口） |
+| 版本 | V1.3（历史目标架构，已同步当前入口） |
 | 审查日期 | 2026-08-22 |
 | 适用范围 | `/agent` 对话智能体、内部 MCP、任务队列与 Worker 回写闭环 |
 | 事实来源 | Agent 开发文档、PRD、API 契约及 `backend/api/app/agent/`、`backend/worker/app/` 的现行实现 |
@@ -441,7 +441,7 @@ Harness 的会话级 abort registry 存在 API 进程内。因此当前实现要
 | `backend/api/app/harness/orchestration/session_runtime.py` | 单回合编排、异步调度、确认卡、确认回执、`/stop` |
 | `backend/api/app/agent/persona.py` | 固定 Persona、规划/ReAct/复核/压缩提示词与 Skill Hint |
 | `backend/api/app/agent/context.py` | 20 条窗口、摘要压缩、ContextMeter |
-| `backend/api/app/agent/plan.py` | PlanArtifact、模型规划、JSON 重试、L0 回退、偏好建议 |
+| `backend/api/app/harness/orchestration/plan_runtime.py` | PlanArtifact、模型规划、JSON 重试、L0 回退、偏好建议 |
 | `backend/api/app/agent/turn_mode.py` | `chat/react/plan_solve` 到 TurnMode 的路由 |
 | `backend/api/app/harness/orchestration/react_adapter.py` / `react_loop.py` | 多轮 Think-Act-Observe、工具观察、proposed spec 组装 |
 | `backend/api/app/agent/mcp_tools.py` | 短 MCP 白名单、结果截断、敏感信息脱敏、工具执行 |
@@ -485,9 +485,9 @@ Harness 的会话级 abort registry 存在 API 进程内。因此当前实现要
 | `docs/AI测试与评估平台-Harness驾驭工程架构说明.md` | 更新 | 标记 V1.0 为历史目标架构，给出当前能力文档的阅读入口。 |
 | `docs/AI测试与评估平台-Harness运行逻辑与架构校正说明.md` | 新增 | 以现行最小内核校正提示词、上下文、记忆、ReAct 与反馈层概念。 |
 
-## 12. V1.2 当前入口同步（2026-08-22）
+## 12. V1.3 当前入口同步（2026-08-22）
 
-旧 `agent/harness.py` 与 `agent/react.py` 已删除，当前 WS 路由直接使用 `harness/orchestration/session_runtime.py`，ReAct 产品适配位于 `react_adapter.py`。该项只收口内部双轨，不恢复本文 V1.0 中已标记为历史目标的业务 MCP，也不改变 API 契约。
+旧 `agent/harness.py`、`agent/react.py` 与 `agent/plan.py` 已删除，当前 WS 路由直接使用 `harness/orchestration/session_runtime.py`，ReAct 产品适配位于 `react_adapter.py`，规划运行时位于 `plan_runtime.py`。该项只收口内部双轨，不恢复本文 V1.0 中已标记为历史目标的业务 MCP，也不改变 API 契约。
 
 | 文件 | 操作 | 作用 |
 | :--- | :--- | :--- |

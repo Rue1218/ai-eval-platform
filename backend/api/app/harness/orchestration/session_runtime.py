@@ -29,14 +29,6 @@ from app.agent.defaults import (
 )
 from app.agent.log import agent_exception, agent_trace
 from app.agent.persona import chat_system, turn_system
-from app.agent.plan import (
-    AUDIO_CLARIFY_RE,
-    PlanArtifact,
-    TurnBudget,
-    merge_replan,
-    run_plan,
-    run_replan,
-)
 from app.agent.prefs import load_prefs, save_prefs_from_spec
 from app.agent.reflect import ReflectArtifact, maybe_model_check, run_gates
 from app.agent.slash import (
@@ -63,6 +55,14 @@ from app.harness.contracts.turn import TurnStatus
 from app.harness.feedback.publisher import publisher
 from app.harness.memory.runtime import append_persisted_conversation_message
 from app.harness.orchestration.budgets import wall_clock_s
+from app.harness.orchestration.plan_runtime import (
+    AUDIO_CLARIFY_RE,
+    PlanArtifact,
+    TurnBudget,
+    merge_replan,
+    run_plan,
+    run_replan,
+)
 from app.harness.orchestration.streaming import begin_finalizing_delivery
 from app.models import AuditLog, Dataset, Message, ProtocolProfile, Task, TaskEvent, User
 from app.models import Session as AgentSession

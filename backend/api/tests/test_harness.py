@@ -13,21 +13,6 @@ from app.agent.context import run_compact
 from app.agent.defaults import HARD_MAX_TOOL_ROUNDS, MAX_MODEL_CALLS, is_long_tool
 from app.agent.mcp_tools import redact_secrets, truncate_tool_data
 from app.agent.persona import PERSONA_SYSTEM, turn_system
-from app.agent.plan import (
-    PlanArtifact,
-    TurnBudget,
-    _call_plan_model,
-    apply_prefs_suggestions,
-    classify_intent_l0,
-    is_smalltalk,
-    l0_plan,
-    merge_replan,
-    parse_json_object,
-    plan_from_slash,
-    run_plan,
-    run_replan,
-    sanitize_plan,
-)
 from app.agent.reflect import ReflectArtifact, maybe_model_check, run_gates
 from app.agent.slash import (
     is_unknown_slash,
@@ -47,6 +32,21 @@ from app.errors import AppError, ErrorCode
 from app.harness.contracts.cancellation import CancellationToken, TurnCancelled
 from app.harness.contracts.trace import TraceContext
 from app.harness.llm.client import AgentJsonStreamResult
+from app.harness.orchestration.plan_runtime import (
+    PlanArtifact,
+    TurnBudget,
+    _call_plan_model,
+    apply_prefs_suggestions,
+    classify_intent_l0,
+    is_smalltalk,
+    l0_plan,
+    merge_replan,
+    parse_json_object,
+    plan_from_slash,
+    run_plan,
+    run_replan,
+    sanitize_plan,
+)
 from app.harness.orchestration.react_adapter import (
     McpStep,
     ReactArtifact,
@@ -589,7 +589,7 @@ def test_run_plan_greeting_skips_planner_for_cot(monkeypatch):
     def _boom(*_a, **_k):
         raise AssertionError("自然语言不得打独立规划模型")
 
-    monkeypatch.setattr("app.agent.plan._call_plan_model", _boom)
+    monkeypatch.setattr("app.harness.orchestration.plan_runtime._call_plan_model", _boom)
     budget = TurnBudget()
     started = time.perf_counter()
     plan = run_plan(
@@ -686,7 +686,7 @@ def test_run_replan_propagates_turn_cancelled(monkeypatch):
     def _boom(*_a, **_k):
         raise TurnCancelled("disconnect")
 
-    monkeypatch.setattr("app.agent.plan._call_plan_model", _boom)
+    monkeypatch.setattr("app.harness.orchestration.plan_runtime._call_plan_model", _boom)
     plan = PlanArtifact(
         intent="benchmark",
         skill_id="skill-benchmark",
@@ -717,7 +717,7 @@ def test_run_plan_offtopic_skips_planner_not_eval_defaults(monkeypatch):
     def _boom(*_a, **_k):
         raise AssertionError("自然语言不得打独立规划模型")
 
-    monkeypatch.setattr("app.agent.plan._call_plan_model", _boom)
+    monkeypatch.setattr("app.harness.orchestration.plan_runtime._call_plan_model", _boom)
     budget = TurnBudget()
     plan = run_plan(
         _FakeDb(),
@@ -744,7 +744,7 @@ def test_run_plan_inspect_skips_planner_no_business_tools(monkeypatch):
     def _boom(*_a, **_k):
         raise AssertionError("自然语言不得打独立规划模型")
 
-    monkeypatch.setattr("app.agent.plan._call_plan_model", _boom)
+    monkeypatch.setattr("app.harness.orchestration.plan_runtime._call_plan_model", _boom)
     budget = TurnBudget()
     plan = run_plan(
         _FakeDb(),
@@ -769,7 +769,7 @@ def test_run_plan_portrait_injects_image_without_planner(monkeypatch):
     def _boom(*_a, **_k):
         raise AssertionError("自然语言不得打独立规划模型")
 
-    monkeypatch.setattr("app.agent.plan._call_plan_model", _boom)
+    monkeypatch.setattr("app.harness.orchestration.plan_runtime._call_plan_model", _boom)
     budget = TurnBudget()
     plan = run_plan(
         _FakeDb(),

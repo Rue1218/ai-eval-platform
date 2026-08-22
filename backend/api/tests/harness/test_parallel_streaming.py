@@ -8,7 +8,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.agent.plan import PlanArtifact
 from app.errors import AppError, ErrorCode
 from app.harness.contracts.cancellation import CancellationToken
 from app.harness.contracts.errors import ErrorClass, TraceMismatch
@@ -28,6 +27,7 @@ from app.harness.orchestration.parallel_facade import (
     execute_parallel,
 )
 from app.harness.orchestration.parser import McpStep, parse_model_payload, validate_react_output
+from app.harness.orchestration.plan_runtime import PlanArtifact
 from app.harness.orchestration.react_loop import _emit_and_run_batch, _run_mcp_react_loop
 from app.harness.orchestration.session_runtime import _deliver_sentence
 

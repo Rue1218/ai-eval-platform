@@ -2,14 +2,14 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.15 |
+| 文档版本 | V1.16 |
 | 对应 PRD | V1.7.1（功能唯一权威） |
 | 对应设计规范 | V1.3（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | V1.4（Harness / 斜杠 / 上下文算法；JSON 仍以本文为准） |
 | 对应前端计划 | V1.3 |
 | 对应后端计划 | V1.3 |
 | 撰写日期 | 2026-08-18 |
-| 最近修订 | 2026-08-22：V1.15 同步 Harness 内部编排模块迁移（无 REST/WS JSON 变更）；2026-08-21：V1.14 `audio.speech_synthesis` 支持朗读稿抽取与 TTS 意图词表扩充；V1.13 增加 MiMo STT/TTS 短工具、意图优先级、音频事件交付与安全展示；V1.12 协议档支持独立 Embedding / Reranker 端点配置，三类 API Key 均只写入受控环境文件且不回显；V1.11 通过内部 `mcp_tools` 接入 Qwen Image 图文生图；V1.9 短工具 `audio.voiceclone` 与文件播放；V1.8 助手回复耗时展示 |
+| 最近修订 | 2026-08-22：V1.16 同步规划模块迁入 Harness 编排层（无 REST/WS JSON 变更）；V1.15 同步 Harness 内部编排模块迁移；2026-08-21：V1.14 `audio.speech_synthesis` 支持朗读稿抽取与 TTS 意图词表扩充；V1.13 增加 MiMo STT/TTS 短工具、意图优先级、音频事件交付与安全展示；V1.12 协议档支持独立 Embedding / Reranker 端点配置，三类 API Key 均只写入受控环境文件且不回显；V1.11 通过内部 `mcp_tools` 接入 Qwen Image 图文生图；V1.9 短工具 `audio.voiceclone` 与文件播放；V1.8 助手回复耗时展示 |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
 ---
@@ -1648,6 +1648,15 @@ MCP 浏览器不调：与 PRD 3.1、前端计划「禁止把 MCP 当 REST」一�
 
 ## 13. 本次修订代码文件与作用清单（2026-08-21）
 
+**V1.16（2026-08-22）— 规划模块迁入 Harness（无协议变更）**
+
+`agent/plan.py` 已删除，PlanArtifact、L0、斜杠模板、媒体工具注入与补规划由 `harness/orchestration/plan_runtime.py` 承接。上行/下行 WS 事件、REST 字段、鉴权和错误码均未变化。
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/harness/orchestration/plan_runtime.py` | 唯一规划实现，保持本文定义的确认卡和工具事件语义不变 |
+| `backend/api/app/routers/ws.py`、`harness/orchestration/session_runtime.py` | 路由和会话总控直接使用新规划模块 |
+
 **V1.15（2026-08-22）— Harness 内部编排迁移（无协议变更）**
 
 `agent/harness.py` 与 `agent/react.py` 已删除，WS 和会话 REST 改为直接使用 `harness/orchestration/session_runtime.py`；事件名、字段、鉴权和错误码均未变化，故本文接口契约仅同步内部代码定位。
@@ -1664,7 +1673,7 @@ MCP 浏览器不调：与 PRD 3.1、前端计划「禁止把 MCP 当 REST」一�
 | 文件 | 作用 |
 | :--- | :--- |
 | `backend/api/app/agent/mimo_audio.py` | 新增 `extract_tts_text` 朗读稿抽取（引号/冒号/命令前缀剥离）；`arguments_for_speech_synthesis` 模型未给朗读稿时从原文抽取 |
-| `backend/api/app/agent/plan.py` | `SPEECH_SYNTHESIS_HINTS` 扩充「输出音频/生成音频/输出语音/转成音频/读出来/念出来/帮我朗读」等词 |
+| `backend/api/app/harness/orchestration/plan_runtime.py` | `SPEECH_SYNTHESIS_HINTS` 扩充「输出音频/生成音频/输出语音/转成音频/读出来/念出来/帮我朗读」等词 |
 | `backend/api/tests/test_mimo_audio.py` | 新增朗读稿抽取与参数绑定单测 |
 
 | 文件 | 作用 |
@@ -1713,7 +1722,7 @@ MCP 浏览器不调：与 PRD 3.1、前端计划「禁止把 MCP 当 REST」一�
 | :--- | :--- |
 | `backend/api/app/agent/voiceclone.py` | MIMO 调用、参考音校验、规划注入 |
 | `backend/api/app/agent/mcp_tools.py` / `defaults.py` / `routers/mcp.py` | 短工具名单与执行 |
-| `backend/api/app/agent/plan.py` / `react.py` / `harness.py` | 注入工具、传入本轮附件、独立线程执行、交付句 |
+| `backend/api/app/harness/orchestration/plan_runtime.py` / `react_adapter.py` / `session_runtime.py` | 注入工具、传入本轮附件、独立线程执行、交付句 |
 | `backend/api/app/routers/files.py` | 允许 wav/mp3；实现 `GET /{id}/content` |
 | `backend/api/app/config.py` / `.env.example` / `docker-compose.yml` | MIMO TTS 环境变量 |
 | `backend/api/tests/test_voiceclone.py` | 规划注入与假上游落盘单测 |

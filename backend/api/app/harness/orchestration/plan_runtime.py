@@ -10,11 +10,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.harness.contracts.cancellation import CancellationToken, TurnCancelled
-from app.harness.contracts.trace import TraceContext
-
-from ..errors import AppError, ErrorCode
-from .defaults import (
+from app.agent.defaults import (
     CONFIRM_SLOT_KEYS,
     DEFAULT_TOOL_ROUNDS,
     DEFAULT_TOOLS_BY_INTENT,
@@ -28,11 +24,14 @@ from .defaults import (
     WRITE_TOOLS,
     is_long_tool,
 )
-from .imagegen import inject_imagegen_plan, looks_like_image_generation
-from .log import agent_trace
-from .persona import REPLAN_JSON_SUFFIX, plan_system, turn_system
-from .slash import SlashParse
-from .voiceclone import inject_voiceclone_plan, list_audio_file_ids
+from app.agent.imagegen import inject_imagegen_plan, looks_like_image_generation
+from app.agent.log import agent_trace
+from app.agent.persona import REPLAN_JSON_SUFFIX, plan_system, turn_system
+from app.agent.slash import SlashParse
+from app.agent.voiceclone import inject_voiceclone_plan, list_audio_file_ids
+from app.errors import AppError, ErrorCode
+from app.harness.contracts.cancellation import CancellationToken, TurnCancelled
+from app.harness.contracts.trace import TraceContext
 
 
 @dataclass
@@ -336,7 +335,7 @@ def looks_like_inspect_query(text: str) -> bool:
 
 def inspect_tools_needed(text: str) -> list[str]:
     """按查询对象选一个短工具（仅限当前注册的短工具）。"""
-    from .defaults import SHORT_TOOLS
+    from app.agent.defaults import SHORT_TOOLS
 
     raw = text or ""
     cand = []
@@ -544,7 +543,7 @@ def _call_plan_model(
     user_blob = json.dumps(user_payload, ensure_ascii=False)
     # 有回调时走流式：推理链先上思考卡，正文再解析 loop/intent。
     if on_reasoning is not None and trace is not None and cancel is not None:
-        from ..llm import stream_agent_json
+        from app.llm import stream_agent_json
 
         result = stream_agent_json(
             db,
@@ -559,7 +558,7 @@ def _call_plan_model(
         )
         return parse_json_object(result.text), result.latency_ms
 
-    from ..llm import call_agent_model_detailed
+    from app.llm import call_agent_model_detailed
 
     result = call_agent_model_detailed(
         db,

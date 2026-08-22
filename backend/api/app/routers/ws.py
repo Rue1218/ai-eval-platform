@@ -21,9 +21,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..agent.log import agent_trace
-from ..agent.plan import classify_intent_l0
 from ..db import SessionLocal
 from ..errors import AppError
+from ..harness.orchestration.plan_runtime import classify_intent_l0
 from ..harness.orchestration.session_runtime import (
     abort_running_turn,
     deep_merge,

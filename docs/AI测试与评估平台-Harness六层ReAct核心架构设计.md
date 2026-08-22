@@ -37,6 +37,8 @@
 
 > **V1.14 定向修订定位**：架构联调确认旧 `agent/harness.py` 仍是 WS 实际总控，构成与六层并排的双轨实现。现已将会话总控迁至 `harness/orchestration/session_runtime.py`、ReAct 产品适配迁至 `harness/orchestration/react_adapter.py`，路由直接接入新总控并删除旧文件；WS/REST JSON 契约未变。`plan.py` / `reflect.py` 等未列入首期的 Agent 依赖仍保持原位置。
 
+> **V1.15 定向修订定位**：规划层也已完成收口：删除 `agent/plan.py`，由 `harness/orchestration/plan_runtime.py` 承接 PlanArtifact、L0、斜杠模板、媒体工具注入与补规划；路由、ReAct、会话总控和复核均改为新导入。规划能力及 WS/REST JSON 契约不变；`reflect.py` 仍是下一项独立迁移。
+
 ---
 
 ## 第一章：总体架构分层图解
@@ -738,7 +740,8 @@ ToolCall
 | `agent/mcp_registry.py` / `agent/mcp_tools.py` | `harness/execution/tool_registry.py`（再导出薄封装） | 工具元数据补 `parallel_safe`（缺省 false）、`idempotency`、`timeout` 字段。`execution/adapters/` 留给挂起的 MCP/文件适配，阶段 1 不填。 |
 | `agent/imagegen.py` / `agent/voiceclone.py` / `agent/mimo_audio.py` | 仍留 `agent/`，经 `harness/execution/tool_registry.py` 分派 | 现网四项多媒体工具行为原样保留；**禁止复制第二份正文到 `execution/adapters/`**（阶段 1 映射例外）。`adapters/` 留给挂起的 MCP/文件适配。 |
 | `agent/long_tasks.py` | `harness/execution/jobs.py` 薄包装 | 阶段 1 只复用 `assert_short_tool`；`§4.3` 完整控制面（`pending` / 幂等 / Worker 订阅）挂起，禁止在五阶段内重写入队。 |
-| `agent/reflect.py` / `agent/plan.py` | 首期仍留 `agent/` | 复核硬门禁逻辑不变，以 Agent 开发文档为准；**迁入 `orchestration/` 挂起**（第十二章）。 |
+| `agent/plan.py`（已删除） | `harness/orchestration/plan_runtime.py` | PlanArtifact、L0、斜杠模板、媒体工具注入与补规划均归入编排层；禁止恢复旧 Agent 规划入口。 |
+| `agent/reflect.py` | 首期仍留 `agent/` | 复核硬门禁逻辑不变，以 Agent 开发文档为准；**迁入 `orchestration/` 挂起**（第十二章）。 |
 | `agent/slash.py` | 保留在 `api` 层（routers） | 斜杠命令是 API 协议面，不进 Harness 六层。 |
 | `agent/persona.py` / `agent/prefs.py` / `agent/defaults.py` | 人设仍留 `persona.py`；默认值仍 `defaults.py` | 阶段 0 只落 ReAct JSON Schema。`system.yaml` / `planner-output.schema.json` 挂起。 |
 | `agent/log.py`（`agent_trace`） | `harness/contracts/trace.py` + `harness/feedback/publisher.py` | 升级为结构化 trace 输出；脱敏红线不变。 |
@@ -771,7 +774,7 @@ ToolCall
 
 每个阶段独立开 `feat/` 分支、独立 PR 合入 `main`；阶段内必须保持 `app/agent/` 与 `harness/` 不存在同一职责的双实现（迁移完成即删旧路径）。
 
-**迁移收口（V1.14）**：阶段性薄桥接已经结束。任何生产路径、测试或动态导入均不得重新引用 `app.agent.harness` / `app.agent.react`；`tests/harness/tracing/test_contracts.py` 必须同时断言旧文件不存在且 WS 路由导入 `harness.orchestration.session_runtime`。这是内部目录迁移，不改变 API.md 定义的 REST/WS 字段或事件。
+**迁移收口（V1.15）**：阶段性薄桥接已经结束。任何生产路径、测试或动态导入均不得重新引用 `app.agent.harness` / `app.agent.react` / `app.agent.plan`；`tests/harness/tracing/test_contracts.py` 必须断言旧文件不存在且 WS 路由导入 `harness.orchestration.session_runtime`。这是内部目录迁移，不改变 API.md 定义的 REST/WS 字段或事件。
 
 **阶段 0 开工前必须先完成第七章分析**（需求、功能点、实现、难点与对策），再写代码。后续阶段同样：先在对应阶段文档补齐这五块，再开分支。
 
@@ -994,9 +997,9 @@ Agent 开发文档（`docs/AI测试与评估平台-Agent开发文档.md`）定�
 
 ---
 
-## 第十一章：阶段 4 需求分析索引（V1.14）
+## 第十一章：阶段 4 需求分析索引（V1.15）
 
-权威展开见 [`docs/AI测试与评估平台-Harness阶段4-记忆层接入.md`](docs/AI测试与评估平台-Harness阶段4-记忆层接入.md) V1.8。阶段 4.1 已把 `app/agent/` 规划历史接入组合 Port，保留 user/assistant 角色并对 conversation 强制 tenant/user/session；消息 trace 溯源与记忆撤权经 Alembic 管理。阶段 4.2 新增 `memory_knowledge` pgvector 表、向量校验、知识 ACL/撤权 Port，并由运行时组合 Port 装配；真实 Redis/PG 服务测试已在 PR #67 通过。随后完成旧会话协调器的架构收口，WS 活路径改由 `session_runtime.py` 承接，旧 Agent Harness / ReAct 文件已删除。外部 Embedding 生成和 forget 对外产品入口未在本阶段扩充，故阶段 4 不构成验收。
+权威展开见 [`docs/AI测试与评估平台-Harness阶段4-记忆层接入.md`](docs/AI测试与评估平台-Harness阶段4-记忆层接入.md) V1.9。阶段 4.1 已把 `app/agent/` 规划历史接入组合 Port，保留 user/assistant 角色并对 conversation 强制 tenant/user/session；消息 trace 溯源与记忆撤权经 Alembic 管理。阶段 4.2 新增 `memory_knowledge` pgvector 表、向量校验、知识 ACL/撤权 Port，并由运行时组合 Port 装配；真实 Redis/PG 服务测试已在 PR #67 通过。随后完成旧会话协调器和规划层的架构收口，WS 活路径改由 `session_runtime.py` 承接，PlanArtifact 由 `plan_runtime.py` 承接，旧 Agent Harness / ReAct / Plan 文件已删除。外部 Embedding 生成和 forget 对外产品入口未在本阶段扩充，故阶段 4 不构成验收。
 
 | ID | 需求 | 本文出处 | 阶段 4 文档 |
 | :--- | :--- | :--- | :--- |
@@ -1078,11 +1081,12 @@ Agent 开发文档（`docs/AI测试与评估平台-Agent开发文档.md`）定�
 
 ## 本次文档变更范围
 
-V1.14：在阶段 4.2 的记忆运行时基础上完成旧 Harness 架构收口：删除 `agent/harness.py` 与 `agent/react.py`，由 `harness/orchestration/session_runtime.py` / `react_adapter.py` 接管；WS 和会话 REST 直连新总控，并以契约测试禁止旧路径回流。该内部迁移不增加 API 字段；阶段 4 的 forget 产品入口边界仍不变。
+V1.15：在阶段 4.2 的记忆运行时及 V1.14 总控收口基础上，删除 `agent/plan.py`，由 `harness/orchestration/plan_runtime.py` 接管规划产物、L0、斜杠、媒体注入和补规划；路由、ReAct、会话总控和复核全量改线，并以契约测试禁止旧路径回流。该内部迁移不增加 API 字段；阶段 4 的 forget 产品入口边界仍不变。
 
 | 文件 | 作用 |
 | :--- | :--- |
 | `backend/api/app/harness/orchestration/session_runtime.py`、`react_adapter.py`、`react_loop.py` | V1.14：删除旧 Agent 协调器后承接会话总控、ReAct 产品适配及循环内动态依赖 |
+| `backend/api/app/harness/orchestration/plan_runtime.py` | V1.15：删除旧 Agent Plan 后承接规划产物、L0、媒体注入与补规划 |
 | `backend/api/app/routers/ws.py`、`routers/sessions.py`、`agent/reflect.py` | V1.14：线上入口和复核类型依赖改为新编排模块 |
 | `backend/api/tests/harness/tracing/test_contracts.py` 及 Harness 回归测试 | V1.14：验证旧文件不存在、WS 直连新总控，并保留取消、流式、确认卡与媒体工具回归 |
 | `docs/AI测试与评估平台-Harness六层ReAct核心架构设计.md` | V1.14：更新模块映射、迁移收口约束与实际运行路径 |
