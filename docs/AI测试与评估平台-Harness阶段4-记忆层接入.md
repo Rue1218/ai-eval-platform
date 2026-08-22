@@ -5,12 +5,12 @@
 | 文档名称 | Harness 阶段 4 — 记忆层接入 |
 | 版本 | V1.7 |
 | 审查日期 | 2026-08-22 |
-| 文档性质 | **施工中分析与交付状态文档**；阶段 4.2 已实现 pgvector 知识存储与容器集成测试，当前分支仍须通过该真实服务 CI 验收 |
+| 文档性质 | **施工中分析与交付状态文档**；阶段 4.2 已实现 pgvector 知识存储并通过真实 Redis/PG 服务 CI 验收；阶段 4 总体验收仍受对外 forget 产品入口范围约束 |
 | 对应目标架构 | 架构文档 §2.1 / §3.1 / §5.2 / §5.3 / §5.4（消息表溯源列） |
 | 前置阶段权威 | 阶段 0 已冻结 `MemoryPort` / `MemoryQuery` / `CompiledContext`（`trace_id` 必填）；阶段 3 评论修复已随 PR #73 合入 `main`，阶段 4 仍须独立验收 |
 | 产品/协议裁决 | API.md `GET /api/sessions/{id}/messages` 的 `context_meter` 字段冻结；PRD 确认卡默认值不变 |
 | 分支 | `fix/memory-activation` |
-| 阶段 4.2 合入门禁 | 阶段 4.1 两个 P1 已补回归；阶段 4.2 的 pgvector 迁移与真实 Redis/PG CI 已加入本分支。必须通过该 CI，且不得把受限 `forget` 的产品入口自行扩成新 REST/WS 契约，方可进行阶段验收审查 |
+| 阶段 4.2 合入门禁 | 阶段 4.1 两个 P1 已补回归；阶段 4.2 的 pgvector 迁移与真实 Redis/PG CI 已在 PR #67 通过。后续变更必须保持该 CI 绿色，且不得把受限 `forget` 的产品入口自行扩成新 REST/WS 契约 |
 | 后续 | LightRAG / RAG 评测 **不在本阶段**；独立评审。禁止创建 `long_term_lightrag.py` |
 
 ---
@@ -259,7 +259,7 @@
 - [x] 内存 Port 单测覆盖 retrieve/append/forget
 - [x] 活路径在 user/assistant 消息提交后调用组合 Port `append()`；Redis 与 PG 复用 `message:{id}` 来源
 - [x] `/compact` 后只召回 `compact_keep_from` 及之后的原文；已覆盖压缩边界回归
-- [~] Redis 适配器单元覆盖 TTL、重复写、损坏记录撤权及活路径写入；真实 Redis TTL 由 `memory-integration` CI 服务测试验收
+- [x] Redis 适配器单元覆盖 TTL、重复写、损坏记录撤权及活路径写入；真实 Redis TTL 已由 `memory-integration` CI 服务测试验收
 - [x] Alembic 消息溯源列与 `memory_knowledge` pgvector 表均可生成离线 SQL；知识检索先做数据库 ACL/撤权过滤再相似度排序
 - [x] 最小窗口布局：System 在前、observation 靠近用户问题、无 source_id 不进知识槽
 - [x] retrieve 空租户/会话不得冒充召回成功；缺归属 conversation 不可见
@@ -267,7 +267,7 @@
 - [x] 无 `long_term_lightrag.py`；rag 任务不得 mock succeeded
 - [x] 审计三表仍在 PG；`/stop` registry 仍未伪装成已多副本
 - [x] `execution/mcp/`、`security/`、`file_sandbox` 仍未被活路径引用
-- [~] 后端 `ruff` + 392 项 pytest（1 项容器用例因本机无 Docker 跳过）与前端 `npm run build` 已通过；PR 容器 CI 待本轮提交后复核
+- [x] 后端 `ruff` + 392 项 pytest（1 项容器用例因本机无 Docker 跳过）与前端 `npm run build` 已通过；PR #67 的 backend、worker、真实容器 CI 均已通过
 
 ---
 
@@ -285,7 +285,7 @@
 1. **已修复：`/compact` 语义。** `ConversationMemoryPort.retrieve()` 先取得完整时间序列，按 `session.compact_keep_from` 截断后再过滤 `memory_forgotten`，不会因游标消息撤权而丢失边界。新增测试覆盖压缩后仅召回游标及之后的消息。
 2. **已修复：Redis 生产写入。** 运行时新增“已提交消息 → `MemoryRecord`”适配器；Harness 入口在用户消息拥有真实 trace 后调用，`_deliver_sentence()` 在助手消息提交后调用。短期 Redis 与 PG 对话归档使用相同 `record_id/source_id=message:{id}`，组合 Port 可正确去重。新增测试覆盖 user、assistant 两种角色及助手交付的实际调用点。
 
-阶段 4.2 已实现 pgvector 知识存储与真实 Redis/PG 容器联调脚本；当前提交仍必须由 PR CI 实际执行该服务测试。受限 `forget` 尚无对外产品入口，若要增加 REST/WS 必须先更新 PRD/API.md，禁止在本阶段自行扩展。阶段验收前不得将“测试已接入”表述为“容器 CI 已通过”。
+阶段 4.2 已实现 pgvector 知识存储并通过真实 Redis/PG 容器 CI。受限 `forget` 尚无对外产品入口，若要增加 REST/WS 必须先更新 PRD/API.md，禁止在本阶段自行扩展；因此阶段 4 总体验收不能把内部 Port 行为等同为一个未获授权的新产品功能。
 
 上述问题与阶段 3 已合入的修复彼此独立；阶段 4 不得因基础组件和首批评论已修复而提前宣告验收或合入。
 
@@ -295,7 +295,7 @@
 
 本轮在既有 `pgvector/pgvector:0.8.0-pg16` Compose 镜像上补齐可迁移的 `memory_knowledge` 表，不新增向量库容器、不调用外部 Embedding 服务、不增加 REST/WS 字段。`MemoryRecord.embedding` 和 `MemoryQuery.query_embedding` 均拒绝空、非有限或超长向量；知识 Port 只在调用方同时提供查询向量与已授权 `permitted_resource_ids` 时检索。写入、召回和撤权均保留 `source_id`、version、trace 与 ACL 归属；运行时组合 Port 已装配知识实现。
 
-真实服务验收放在 GitHub Actions `memory-integration` 任务：使用同版本 PostgreSQL/pgvector、Redis 容器，执行 `alembic upgrade head` 后验证扩展、向量 ACL、撤权和 Redis TTL。该任务是当前 PR 的合入门禁；本机因 Docker 不可用仅运行单元回归并明确 skip，不能替代 CI 结果。
+真实服务验收放在 GitHub Actions `memory-integration` 任务：使用同版本 PostgreSQL/pgvector、Redis 容器，执行 `alembic upgrade head` 后验证扩展、向量 ACL、撤权和 Redis TTL。该任务已在 PR #67 成功执行，并继续作为后续提交的合入门禁；本机因 Docker 不可用仅运行单元回归并明确 skip，不能替代 CI 结果。
 
 ## 8. 本阶段交付后（V1.0 六层首期闭环）
 
@@ -311,7 +311,7 @@ security/ 三文件、reflect/plan 迁入、persona YAML、外部 MCP 生态、�
 
 ## 修改代码文件与作用清单
 
-V1.7：在 V1.6 两个 P1 修复之上实现阶段 4.2：新增同库 `memory_knowledge` pgvector 迁移与 Port，数据库优先过滤撤权和 ACL，再按余弦距离召回；运行时组合 Port 接入知识存储。新增真实 PostgreSQL/Redis 容器测试并接入 CI，当前提交等待该必经任务实际验收；不增加 forget REST/WS 入口，不接入 LightRAG。
+V1.7：在 V1.6 两个 P1 修复之上实现阶段 4.2：新增同库 `memory_knowledge` pgvector 迁移与 Port，数据库优先过滤撤权和 ACL，再按余弦距离召回；运行时组合 Port 接入知识存储。真实 PostgreSQL/Redis 容器测试已接入并通过 PR CI；不增加 forget REST/WS 入口，不接入 LightRAG。
 
 | 文件 | 作用 |
 | :--- | :--- |

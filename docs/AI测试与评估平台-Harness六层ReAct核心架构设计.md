@@ -992,7 +992,7 @@ Agent 开发文档（`docs/AI测试与评估平台-Agent开发文档.md`）定�
 
 ## 第十一章：阶段 4 需求分析索引（V1.13）
 
-权威展开见 [`docs/AI测试与评估平台-Harness阶段4-记忆层接入.md`](docs/AI测试与评估平台-Harness阶段4-记忆层接入.md) V1.7。阶段 4.1 已把 `app/agent/` 规划历史接入组合 Port，保留 user/assistant 角色并对 conversation 强制 tenant/user/session；消息 trace 溯源与记忆撤权经 Alembic 管理。阶段 4.2 新增 `memory_knowledge` pgvector 表、向量校验、知识 ACL/撤权 Port，并由运行时组合 Port 装配；真实 Redis/PG 服务测试已加入 PR CI。外部 Embedding 生成和 forget 对外产品入口未在本阶段扩充，且当前分支必须先通过真实服务门禁，故阶段 4 不构成验收。
+权威展开见 [`docs/AI测试与评估平台-Harness阶段4-记忆层接入.md`](docs/AI测试与评估平台-Harness阶段4-记忆层接入.md) V1.7。阶段 4.1 已把 `app/agent/` 规划历史接入组合 Port，保留 user/assistant 角色并对 conversation 强制 tenant/user/session；消息 trace 溯源与记忆撤权经 Alembic 管理。阶段 4.2 新增 `memory_knowledge` pgvector 表、向量校验、知识 ACL/撤权 Port，并由运行时组合 Port 装配；真实 Redis/PG 服务测试已在 PR #67 通过。外部 Embedding 生成和 forget 对外产品入口未在本阶段扩充，故阶段 4 不构成验收。
 
 | ID | 需求 | 本文出处 | 阶段 4 文档 |
 | :--- | :--- | :--- | :--- |
@@ -1074,7 +1074,7 @@ Agent 开发文档（`docs/AI测试与评估平台-Agent开发文档.md`）定�
 
 ## 本次文档变更范围
 
-V1.13：阶段 3 评论修复已随 PR #73 合入 `main`。阶段 4.2 新增同库 pgvector 知识表、向量/ACL/撤权适配器、运行时组合装配和真实 PostgreSQL/Redis CI 服务测试；本地 392 项 pytest 已通过，容器用例仅因本机无 Docker 跳过。当前分支仍须通过 PR 的真实服务门禁；不新增外部 Embedding 或 forget REST/WS 产品入口，阶段 4 仍未验收。
+V1.13：阶段 3 评论修复已随 PR #73 合入 `main`。阶段 4.2 新增同库 pgvector 知识表、向量/ACL/撤权适配器、运行时组合装配和真实 PostgreSQL/Redis CI 服务测试；本地 392 项 pytest 已通过，容器用例仅因本机无 Docker 跳过，PR #67 的真实服务门禁已通过。不新增外部 Embedding 或 forget REST/WS 产品入口，阶段 4 仍未验收。
 
 | 文件 | 作用 |
 | :--- | :--- |
