@@ -3,11 +3,11 @@
 | 属性 | 内容 |
 | :--- | :--- |
 | **文档名称** | Agent 界面卡片、Markdown 与斜杠技术方案 |
-| **文档版本** | V1.2 (全量详细设计与实现规范) |
+| **文档版本** | V1.3 (全量详细设计与实现规范) |
 | **基线参考** | 《AGENTS.md》最高规范、《Agent开发文档》§7 / §9 / §11 / §16、API.md V1.6、PRD 5.1 |
 | **责任模块** | 前端 `frontend/src/views/Agent.vue` + `frontend/src/components/agent/*` + `frontend/src/agent/*` |
 | **审查日期** | 2026-08-22 |
-| **最近修订** | V1.2 同步 Harness 会话总控迁移（UI/WS 字段不变）；补齐思考快照、工具/技能/确认卡历史回放与 ContextMeter 恢复 |
+| **最近修订** | V1.3 同步 Context 职责迁入 Memory / 编排边界（UI/WS 字段不变）；V1.2 同步 Harness 会话总控迁移；补齐思考快照、工具/技能/确认卡历史回放与 ContextMeter 恢复 |
 
 ---
 
@@ -399,7 +399,7 @@ $$\text{记忆文件  未启用}$$
 | 9 | `frontend/src/views/Agent.vue` | **修改** | 移除模型下拉切换菜单与 live 模拟按钮，集成 ContextMeter 与统一卡片组件。 |
 | 10 | `docs/AI测试与评估平台-Agent开发文档.md` | **修改** | 同步勾选 Task 清单（AGT-UI-01/02/05/08, AGT-SLH-01, AGT-CTX-02）并更新修订记录。 |
 | 11 | `backend/api/app/harness/orchestration/session_runtime.py` | **修改** | 保存 `think_final` 思考快照并记录 `confirm_ack` 回执事件。 |
-| 12 | `backend/api/app/agent/context.py` | **修改** | 从持久化事件恢复技能与 MCP 工具计数。 |
+| 12 | `backend/api/app/harness/memory/session_context_store.py` | **修改** | 从持久化事件恢复技能与 MCP 工具计数；`meter.py` 保持前端所用四段 JSON 语义。 |
 | 13 | `backend/api/app/routers/sessions.py` | **修改** | 历史接口返回 `compact_summary`。 |
 | 14 | `frontend/src/views/Agent.vue` | **修改** | 回放思考快照、确认回执与历史工具资产。 |
 

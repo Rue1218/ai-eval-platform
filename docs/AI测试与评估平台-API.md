@@ -2,14 +2,14 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.16 |
+| 文档版本 | V1.17 |
 | 对应 PRD | V1.7.1（功能唯一权威） |
 | 对应设计规范 | V1.3（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | V1.4（Harness / 斜杠 / 上下文算法；JSON 仍以本文为准） |
 | 对应前端计划 | V1.3 |
 | 对应后端计划 | V1.3 |
 | 撰写日期 | 2026-08-18 |
-| 最近修订 | 2026-08-22：V1.16 同步规划模块迁入 Harness 编排层（无 REST/WS JSON 变更）；V1.15 同步 Harness 内部编排模块迁移；2026-08-21：V1.14 `audio.speech_synthesis` 支持朗读稿抽取与 TTS 意图词表扩充；V1.13 增加 MiMo STT/TTS 短工具、意图优先级、音频事件交付与安全展示；V1.12 协议档支持独立 Embedding / Reranker 端点配置，三类 API Key 均只写入受控环境文件且不回显；V1.11 通过内部 `mcp_tools` 接入 Qwen Image 图文生图；V1.9 短工具 `audio.voiceclone` 与文件播放；V1.8 助手回复耗时展示 |
+| 最近修订 | 2026-08-22：V1.17 同步 Context 模块迁入 Memory/编排边界（无 REST/WS JSON 变更）；V1.16 同步规划模块迁入 Harness 编排层；V1.15 同步 Harness 内部编排模块迁移；2026-08-21：V1.14 `audio.speech_synthesis` 支持朗读稿抽取与 TTS 意图词表扩充；V1.13 增加 MiMo STT/TTS 短工具、意图优先级、音频事件交付与安全展示；V1.12 协议档支持独立 Embedding / Reranker 端点配置，三类 API Key 均只写入受控环境文件且不回显；V1.11 通过内部 `mcp_tools` 接入 Qwen Image 图文生图；V1.9 短工具 `audio.voiceclone` 与文件播放 |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
 ---
@@ -1648,6 +1648,16 @@ MCP 浏览器不调：与 PRD 3.1、前端计划「禁止把 MCP 当 REST」一�
 
 ## 13. 本次修订代码文件与作用清单（2026-08-21）
 
+**V1.17（2026-08-22）— Context 职责收口（无协议变更）**
+
+`agent/context.py` 已删除。规划历史由 `harness/context/history.py` 经 `MemoryPort` 编译，ContextMeter 由纯函数 `meter.py` 计算，会话 ORM 查询与压缩游标归 `memory/session_context_store.py`，模型 `/compact` 调用归 `orchestration/compaction_runtime.py`。REST 字段、WS 事件、鉴权和错误码均未变化。
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/harness/context/history.py`、`meter.py`、`memory/session_context_store.py`、`orchestration/compaction_runtime.py` | 分离 Context、Memory 与编排职责，保持本文 `context_meter` JSON 不变 |
+| `backend/api/app/routers/sessions.py` | 历史接口通过 Memory Store 构造既有 `context_meter` 字段 |
+| `backend/api/tests/harness/tracing/test_contracts.py` | 断言旧 Context 不回流，且 Context 不导入 ORM、Redis 或模型客户端 |
+
 **V1.16（2026-08-22）— 规划模块迁入 Harness（无协议变更）**
 
 `agent/plan.py` 已删除，PlanArtifact、L0、斜杠模板、媒体工具注入与补规划由 `harness/orchestration/plan_runtime.py` 承接。上行/下行 WS 事件、REST 字段、鉴权和错误码均未变化。
@@ -1679,7 +1689,7 @@ MCP 浏览器不调：与 PRD 3.1、前端计划「禁止把 MCP 当 REST」一�
 | 文件 | 作用 |
 | --- | --- |
 | `backend/api/app/harness/orchestration/session_runtime.py` | 保存完整 `think_final` 思考快照；确认/取消确认卡写入 `confirm_ack` 事件 |
-| `backend/api/app/agent/context.py` | 从持久化事件恢复技能与短 MCP 工具计数，刷新 ContextMeter 不归零 |
+| `backend/api/app/harness/memory/session_context_store.py` | 从持久化事件恢复技能与短 MCP 工具计数，刷新 ContextMeter 不归零 |
 | `backend/api/app/routers/sessions.py` | 历史接口返回 `compact_summary`，恢复压缩后的模型上下文 |
 | `frontend/src/views/Agent.vue` | 回放思考快照、确认回执与历史工具资产，并修正确认卡状态 |
 | `frontend/src/api/types.ts` | 补齐 `confirm_ack` 事件和 ContextMeter 扩展字段类型 |

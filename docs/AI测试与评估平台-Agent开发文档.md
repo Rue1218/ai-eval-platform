@@ -3,9 +3,9 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Agent 独立开发说明书 |
-| 版本 | V1.13 |
+| 版本 | V1.14 |
 | 日期 | 2026-08-22 |
-| 最近修订 | 2026-08-22：V1.13 删除旧 Agent Plan 入口，规划能力迁入六层编排；V1.12 删除旧 Agent Harness / ReAct 入口，WS 直连六层编排总控；自然语言按 CoT 同一轮逐步推理再出结果；不再先打规划 JSON 判定 loop。断线取消只停本轮生成。 |
+| 最近修订 | 2026-08-22：V1.14 删除旧 Agent Context 入口，规划历史、计量、会话存储和模型压缩按六层唯一归属；V1.13 删除旧 Agent Plan 入口，规划能力迁入六层编排；V1.12 删除旧 Agent Harness / ReAct 入口，WS 直连六层编排总控；自然语言按 CoT 同一轮逐步推理再出结果；不再先打规划 JSON 判定 loop。断线取消只停本轮生成。 |
 | 用法 | **实现 `/agent` 以本文为准（Harness / 斜杠 / 窗口算法）。** REST/WS JSON 以 API.md V1.6 为准。完成某项后勾选文末 Task，并在「最近修订」追加一行。 |
 
 本文是评测平台 **Agent 子系统** 的完整开发说明书：目标、边界、运行时骨架、协议、模块、代码落点与验收任务都写在这里。与 PRD / API.md 冲突时，字段名与事件名以那两份为准；Harness、斜杠、上下文算法以本文 §16 为准。§4.6 所列增量已收入 **API.md V1.6**。
@@ -543,7 +543,8 @@ ChatHead 右侧（或输入框上方）常驻，压缩或新消息后立刻更�
 | :--- | :--- |
 | `backend/api/app/agent/persona.py` | 人设 |
 | `backend/api/app/agent/slash.py` | 15 条命令解析 |
-| `backend/api/app/agent/context.py` | 20 条窗口与 compact |
+| `backend/api/app/harness/context/history.py`、`meter.py` | 规划历史经 MemoryPort 编译；ContextMeter 纯计量 |
+| `backend/api/app/harness/memory/session_context_store.py`、`orchestration/compaction_runtime.py` | 会话窗口/压缩游标/事件读取；模型 `/compact` 编排 |
 | `backend/api/app/agent/mcp_tools.py` | 短工具实现（与清单同源） |
 | `backend/api/app/agent/plan.py` | 规划产物 |
 | `backend/api/app/agent/react.py` | 工具循环 |
@@ -637,8 +638,8 @@ ChatHead 右侧（或输入框上方）常驻，压缩或新消息后立刻更�
 | AGT-HRS-06 | 规划 JSON 失败重试一次再降级规则 | `plan.py` | 降级后仍进复核、不出假确认卡 | [x] 2026-08-19 |
 | AGT-HRS-07 | Harness 丢到 asyncio.Task；收包循环不阻塞 | `ws.py` harness.py | `/stop` 能打断本轮；会话级 abort | [x] 2026-08-19 |
 | AGT-SLH-01 | 15 条命令；芯片同源 | slash 注册表 面板 | `/help` 与面板一致 | [x] 2026-08-19 |
-| AGT-SLH-02 | `/compact` | `context.py` | 四段计数更新且历史仍在 | [x] 2026-08-19 |
-| AGT-CTX-01 | 模型窗口 20 条 | `context.py` | 人设始终带上 | [x] 2026-08-19 |
+| AGT-SLH-02 | `/compact` | `compaction_runtime.py` + `SessionContextStore` | 四段计数更新且历史仍在 | [x] 2026-08-19 |
+| AGT-CTX-01 | 模型窗口 20 条 | `SessionContextStore` + `meter.py` | 人设始终带上 | [x] 2026-08-19 |
 | AGT-CTX-02 | ContextMeter 消息/技能/摘要/余量 | ContextMeter.vue | `/20` 只约束消息；无记忆文件文案正确 | [x] 2026-08-20 |
 | AGT-CTX-03 | compact_keep_from 迁移与 REST context_meter | models Alembic sessions.py | 刷新数字与压缩后 M 一致 | [x] 2026-08-19 |
 | AGT-MEM-01 | ack 成功后写 agent_prefs；规划可沿用 | settings + plan.py | 资产已删则不当作有效 ID；须发「沿用你上次的协议档」thought | [x] 2026-08-20 |
@@ -653,7 +654,7 @@ ChatHead 右侧（或输入框上方）常驻，压缩或新消息后立刻更�
 | AGT-TSK-02 | 取消对话框；重跑出新卡 | `Agent.vue` | 重跑新 ID | [ ] |
 | AGT-WRK-01 | Worker 空跑写事件 | worker | 对话里能走完进度 | [ ] |
 | AGT-LNG-01 | 占槽可聊；新回合不再发 confirm；未 ack 卡按钮禁用 | harness ConfirmCard | CONCURRENCY 文案；/status 能看到活动任务 | [ ] |
-| AGT-LNG-02 | progress 节流且不写入 messages、不进 20 条窗口 | worker context.py | 重连仍能看到最后进度 | [ ] |
+| AGT-LNG-02 | progress 节流且不写入 messages、不进 20 条窗口 | worker + `SessionContextStore` | 重连仍能看到最后进度 | [ ] |
 | AGT-LNG-03 | /stop 与 /cancel 分流；评测协作停、压测立即停 | Agent.vue ws.py worker | Dialog 文案不同 | [ ] |
 | AGT-LNG-04 | Worker 无进度超时与 claim 过期对 Agent 可见 | worker + error/progress | 不假造成功 | [ ] |
 
@@ -1531,19 +1532,21 @@ CoT（Wei 2022 / 流式 reasoning）：**同一轮生成**里先逐步吐出中�
 | `backend/api/tests/test_voiceclone.py` | 问候+音频仍 inject，但不 mock 规划模型 |
 | `docs/AI测试与评估平台-Agent开发文档.md` | §5 / §6 改为同一轮 CoT |
 
-## 37. Harness 编排入口收口（2026-08-22）
+## 37. Harness 编排与上下文入口收口（2026-08-22）
 
-旧 `app.agent.harness`、`app.agent.react` 和 `app.agent.plan` 已删除，不保留导入兼容壳。下面映射覆盖本文早期变更记录中出现的历史路径；历史章节描述的是当时改动，当前线上代码必须以本表为准。该迁移不改变 API.md 定义的 WS/REST JSON。
+旧 `app.agent.harness`、`app.agent.react`、`app.agent.plan` 和 `app.agent.context` 已删除，不保留导入兼容壳。下面映射覆盖本文早期变更记录中出现的历史路径；历史章节描述的是当时改动，当前线上代码必须以本表为准。该迁移不改变 API.md 定义的 WS/REST JSON。
 
 | 历史路径 | 当前路径 | 职责 |
 | :--- | :--- | :--- |
 | `backend/api/app/agent/harness.py` | `backend/api/app/harness/orchestration/session_runtime.py` | 单回合编排、异步调度、确认卡、确认回执、`/stop` 与流式交付 |
 | `backend/api/app/agent/react.py` | `backend/api/app/harness/orchestration/react_adapter.py` | ReAct 产品规格组装、循环入口和测试适配锚点 |
 | `backend/api/app/agent/plan.py` | `backend/api/app/harness/orchestration/plan_runtime.py` | PlanArtifact、L0、斜杠模板、媒体工具注入与补规划 |
+| `backend/api/app/agent/context.py` | `backend/api/app/harness/context/history.py`、`meter.py`；`memory/session_context_store.py`；`orchestration/compaction_runtime.py` | 历史只经 MemoryPort；计量无 I/O；会话 ORM 与压缩游标归 Memory；模型摘要归编排 |
 
 | 文件 | 作用 |
 | :--- | :--- |
 | `backend/api/app/harness/orchestration/session_runtime.py`、`react_adapter.py`、`react_loop.py` | 删除旧 Agent 双轨后承接运行总控、ReAct 产品适配和循环动态依赖 |
 | `backend/api/app/harness/orchestration/plan_runtime.py` | 删除旧 Agent Plan 后承接规划能力唯一正文 |
+| `backend/api/app/harness/context/history.py`、`meter.py`、`memory/session_context_store.py`、`orchestration/compaction_runtime.py` | 删除旧 Agent Context 后按六层职责唯一承接历史、计量、存储和压缩 |
 | `backend/api/app/routers/ws.py`、`routers/sessions.py`、`agent/reflect.py` | 路由和复核模块直接依赖新编排层 |
-| `backend/api/tests/harness/tracing/test_contracts.py` | 断言旧模块不存在且 WS 必须接入新会话总控 |
+| `backend/api/tests/harness/tracing/test_contracts.py` | 断言旧模块不存在、WS 接入新会话总控且 Context 不得越层导入 I/O |

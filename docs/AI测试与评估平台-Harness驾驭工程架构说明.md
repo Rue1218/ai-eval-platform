@@ -3,10 +3,10 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 驾驭工程架构说明 |
-| 版本 | V1.3（历史目标架构，已同步当前入口） |
+| 版本 | V1.4（历史目标架构，已同步当前入口） |
 | 审查日期 | 2026-08-22 |
 | 适用范围 | `/agent` 对话智能体、内部 MCP、任务队列与 Worker 回写闭环 |
-| 事实来源 | Agent 开发文档、PRD、API 契约及 `backend/api/app/agent/`、`backend/worker/app/` 的现行实现 |
+| 事实来源 | Agent 开发文档、PRD、API 契约及 `backend/api/app/agent/`、`backend/api/app/harness/`、`backend/worker/app/` 的现行实现 |
 
 > **阅读状态（2026-08-21）**：本文 V1.0 的主体保留了“评测 Workflow 完整开放”时的目标架构和历史实现细节，其中列出的 `model.list`、`task.get`、`task.create` 等业务 MCP 已不属于当前最小内核。当前运行行为、能力边界和术语校正以《AI测试与评估平台-Harness运行逻辑与架构校正说明.md》及《AI测试与评估平台-Agent开发文档.md》§32–§33 为准；接口字段与路径仍以 `AI测试与评估平台-API.md` 为准，产品范围与状态机以 PRD 为准。
 
@@ -440,7 +440,8 @@ Harness 的会话级 abort registry 存在 API 进程内。因此当前实现要
 | `backend/api/app/routers/ws.py` | WS 短票、收包、事件落库、重放、Worker 事件后台转发 |
 | `backend/api/app/harness/orchestration/session_runtime.py` | 单回合编排、异步调度、确认卡、确认回执、`/stop` |
 | `backend/api/app/agent/persona.py` | 固定 Persona、规划/ReAct/复核/压缩提示词与 Skill Hint |
-| `backend/api/app/agent/context.py` | 20 条窗口、摘要压缩、ContextMeter |
+| `backend/api/app/harness/context/history.py`、`meter.py` | 规划历史经 MemoryPort 编译、ContextMeter 纯计量 |
+| `backend/api/app/harness/memory/session_context_store.py`、`orchestration/compaction_runtime.py` | 20 条窗口、摘要游标、事件读取与模型摘要编排 |
 | `backend/api/app/harness/orchestration/plan_runtime.py` | PlanArtifact、模型规划、JSON 重试、L0 回退、偏好建议 |
 | `backend/api/app/agent/turn_mode.py` | `chat/react/plan_solve` 到 TurnMode 的路由 |
 | `backend/api/app/harness/orchestration/react_adapter.py` / `react_loop.py` | 多轮 Think-Act-Observe、工具观察、proposed spec 组装 |
@@ -488,6 +489,14 @@ Harness 的会话级 abort registry 存在 API 进程内。因此当前实现要
 ## 12. V1.3 当前入口同步（2026-08-22）
 
 旧 `agent/harness.py`、`agent/react.py` 与 `agent/plan.py` 已删除，当前 WS 路由直接使用 `harness/orchestration/session_runtime.py`，ReAct 产品适配位于 `react_adapter.py`，规划运行时位于 `plan_runtime.py`。该项只收口内部双轨，不恢复本文 V1.0 中已标记为历史目标的业务 MCP，也不改变 API 契约。
+
+## 13. V1.4 Context 职责同步（2026-08-22）
+
+旧 `agent/context.py` 已删除。Context 只保留经 `MemoryPort` 的历史编译和纯计量；会话窗口、压缩游标和持久化事件读取归 `memory/session_context_store.py`，模型 `/compact` 调用归 `orchestration/compaction_runtime.py`。该项只收口内部双轨，不改变 API 契约或本文标记为历史目标的业务 MCP。
+
+| 文件 | 操作 | 作用 |
+| :--- | :--- | :--- |
+| `docs/AI测试与评估平台-Harness驾驭工程架构说明.md` | 更新 | V1.4：同步 Context / Memory / 编排唯一职责，禁止旧 Context 回流。 |
 
 | 文件 | 操作 | 作用 |
 | :--- | :--- | :--- |

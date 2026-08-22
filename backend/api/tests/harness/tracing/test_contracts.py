@@ -16,10 +16,12 @@ from app.harness.contracts.memory import MemoryQuery
 API_ROOT = Path(__file__).resolve().parents[3]
 HARNESS_ROOT = API_ROOT / "app" / "harness"
 FORBIDDEN_MODULES = {"redis", "sqlalchemy", "app.llm", "app.adapters", "app.models"}
+FORBIDDEN_CONTEXT_MODULES = {"redis", "sqlalchemy", "app.llm", "app.adapters", "app.models"}
 LEGACY_COORDINATOR_PATHS = (
     "app/agent/harness.py",
     "app/agent/react.py",
     "app/agent/plan.py",
+    "app/agent/context.py",
 )
 
 
@@ -63,6 +65,14 @@ def test_contracts_forbid_io_and_llm_imports():
         assert not overlap, f"{path.name} 引入了 {overlap}"
 
 
+def test_context_layer_only_depends_on_contracts_and_memory_port():
+    """Context 负责编译和计量，不得重新查询 ORM 或调用 Redis、模型客户端。"""
+    for path in (HARNESS_ROOT / "context").glob("*.py"):
+        imported = _imported_modules(path)
+        overlap = imported & FORBIDDEN_CONTEXT_MODULES
+        assert not overlap, f"{path.name} 引入了 {overlap}"
+
+
 def test_app_py_does_not_assemble_runtime():
     """装配根不得在阶段 0 连接 Redis 或缓存 Turn。"""
     path = HARNESS_ROOT / "app.py"
@@ -89,7 +99,7 @@ def test_ws_routes_to_new_session_runtime():
 
 
 def test_legacy_agent_runtime_modules_are_removed():
-    """旧 Harness / ReAct / Plan 模块不得以兼容壳残留，防止双轨重新出现。"""
+    """旧 Harness / ReAct / Plan / Context 模块不得以兼容壳残留，防止双轨重新出现。"""
     for rel in LEGACY_COORDINATOR_PATHS:
         assert not (API_ROOT / rel).exists(), rel
 
@@ -98,14 +108,20 @@ def test_legacy_agent_runtime_modules_are_removed():
         assert "app.agent.harness" not in text, path
         assert "app.agent.react" not in text, path
         assert "app.agent.plan" not in text, path
+        assert "app.agent.context" not in text, path
         tree = ast.parse(text)
         for node in ast.walk(tree):
             if not isinstance(node, ast.ImportFrom):
                 continue
-            assert node.module not in {"app.agent.harness", "app.agent.react", "app.agent.plan"}, path
+            assert node.module not in {
+                "app.agent.harness",
+                "app.agent.react",
+                "app.agent.plan",
+                "app.agent.context",
+            }, path
             if node.module == "app.agent":
                 imported_names = {alias.name for alias in node.names}
-                assert not ({"harness", "react", "plan"} & imported_names), path
+                assert not ({"harness", "react", "plan", "context"} & imported_names), path
 
 
 def test_execution_and_feedback_do_not_import_llm():

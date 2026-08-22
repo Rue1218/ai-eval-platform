@@ -9,7 +9,6 @@ import time
 
 import pytest
 
-from app.agent.context import run_compact
 from app.agent.defaults import HARD_MAX_TOOL_ROUNDS, MAX_MODEL_CALLS, is_long_tool
 from app.agent.mcp_tools import redact_secrets, truncate_tool_data
 from app.agent.persona import PERSONA_SYSTEM, turn_system
@@ -32,6 +31,7 @@ from app.errors import AppError, ErrorCode
 from app.harness.contracts.cancellation import CancellationToken, TurnCancelled
 from app.harness.contracts.trace import TraceContext
 from app.harness.llm.client import AgentJsonStreamResult
+from app.harness.orchestration.compaction_runtime import run_compact
 from app.harness.orchestration.plan_runtime import (
     PlanArtifact,
     TurnBudget,

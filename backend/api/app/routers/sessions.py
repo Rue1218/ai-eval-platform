@@ -6,10 +6,12 @@ from fastapi import APIRouter, Depends, Response
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from ..agent.context import context_meter
+from ..agent.defaults import WINDOW
 from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
+from ..harness.context.meter import build_context_meter
+from ..harness.memory.session_context_store import SessionContextStore
 from ..harness.orchestration.session_runtime import abort_running_turn, session_harness
 from ..models import AuditLog, Message, Task, User, WsEvent
 from ..models import Session as AgentSession
@@ -136,7 +138,15 @@ def get_session_messages(
         }
         for row in authors
     }
-    meter = context_meter(db, session)
+    context_store = SessionContextStore(db)
+    persisted_skill, mcp_tools_count = context_store.capability_stats(session.id)
+    meter = build_context_meter(
+        context_store.window_messages(session, max_messages=WINDOW),
+        compact_summary=session.compact_summary,
+        persisted_skill=persisted_skill,
+        mcp_tools_count=mcp_tools_count,
+        max_tokens=context_store.profile_context_window(),
+    )
     return {
         "messages": [
             {

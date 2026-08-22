@@ -3,7 +3,7 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 分阶段实施总册 |
-| 版本 | V1.13 |
+| 版本 | V1.14 |
 | 审查日期 | 2026-08-22 |
 | 用法 | 每个阶段先读对应施工文档的五块分析（与阶段 0 同一模板），再开分支写代码。架构文档第七至十一章只做需求索引；**第十二章为覆盖矩阵与挂起项** |
 
@@ -15,7 +15,7 @@
 | 1 | [阶段1-单调用路径](docs/AI测试与评估平台-Harness阶段1-单调用路径.md) V1.3 | `feat/harness-single-call` | 编排/执行/反馈接管单工具循环 | 验收完成，已合入 `main` |
 | 2 | [阶段2-链路追踪与取消](docs/AI测试与评估平台-Harness阶段2-链路追踪与取消.md) V1.3 | `feat/harness-trace-cancel` | 强制 trace/cancel + 三张审计表 | 验收完成，已合入 `main` |
 | 3 | [阶段3-并行与流式收尾](docs/AI测试与评估平台-Harness阶段3-并行与流式收尾.md) V1.6 | 原实现 `feat/harness-parallel-streaming`；修复 `fix/harness-stage3-comments` | 批次并行能力默认关；流式终态 | 3 个 P1、1 个 P2 已修复，PR #73 已合入 `main` |
-| 4 | [阶段4-记忆层接入](docs/AI测试与评估平台-Harness阶段4-记忆层接入.md) V1.9 | `fix/memory-activation` → `refactor/harness-cutover` → `refactor/harness-plan-cutover` | MemoryPort + Redis/pgvector；收口 WS 与规划层到新编排总控；不接 LightRAG | 阶段 4.2 已补 pgvector 知识表/ACL Port 并通过真实 Redis/PG CI 服务测试；旧 Harness / ReAct / Plan 双轨已删除。未授权扩充 forget REST/WS，**阶段 4 未验收** |
+| 4 | [阶段4-记忆层接入](docs/AI测试与评估平台-Harness阶段4-记忆层接入.md) V1.10 | `fix/memory-activation` → `refactor/harness-cutover` → `refactor/harness-plan-cutover` → `refactor/harness-context-cutover` | MemoryPort + Redis/pgvector；收口 WS、规划和上下文到六层边界；不接 LightRAG | 阶段 4.2 已补 pgvector 知识表/ACL Port 并通过真实 Redis/PG CI 服务测试；旧 Harness / ReAct / Plan / Context 双轨已删除。未授权扩充 forget REST/WS，**阶段 4 未验收** |
 
 规则：
 
@@ -44,7 +44,7 @@
 | `file_sandbox.py` 与任意路径拒绝 | §4.2 | **挂起** | 现网多媒体工具无通用文件根 |
 | 长任务完整控制面：`pending` + `idempotency_key` + Worker 订阅进度 | §4.3 | **挂起** | 阶段 1 只包装 `assert_short_tool`；入队仍走现网 `long_tasks.py` |
 | `security/policy.py` `consent.py` `secrets.py` | §6.1 | **挂起** | 确认卡继续 api 层 `AppError`（§6.3）；不在阶段 1–4 迁入 |
-| `reflect.py` / `plan.py` 迁入 `orchestration/` | §5.1 | **挂起** | 阶段 1 明确不迁复核门禁 |
+| `reflect.py` 迁入 `orchestration/` | §5.1 | **挂起** | Plan 已完成收口；阶段 1 明确不迁复核门禁 |
 | `persona.py` → `prompts/system.yaml`；`planner-output.schema.json` | §1.3、§5.1 | **挂起** | 阶段 0 只落 ReAct Schema |
 | LightRAG 适配器、`kind=rag` 真评测 | §5.1、§5.2 | **挂起** | 禁止创建 `long_term_lightrag.py` |
 | 多副本 `/stop` registry 迁 Redis | 驾驭工程说明 | **挂起** | 阶段 2/4 均禁止借记忆层做 abort 表 |
@@ -63,11 +63,11 @@
 
 ## 本次文档变更范围
 
-V1.13：在总控收口之后，`refactor/harness-plan-cutover` 完成 `agent/plan.py` 删除与编排层迁入；PlanArtifact、L0、斜杠模板和补规划不再保留 Agent 双轨，并由架构契约测试防回流。该项不改变阶段 4 的产品验收边界：forget 仍无对外产品入口，阶段 4 不构成验收。
+V1.14：`refactor/harness-context-cutover` 删除 `agent/context.py`，将规划历史、纯计量、会话存储和模型压缩拆到 Context、Memory、编排三层；架构契约测试禁止旧路径、ORM/Redis/模型客户端回流到 Context。该项不改变阶段 4 的产品验收边界：forget 仍无对外产品入口，阶段 4 不构成验收。
 
 | 文件 | 作用 |
 | :--- | :--- |
-| `docs/AI测试与评估平台-Harness分阶段实施总册.md` | V1.13：同步旧规划层删除、编排迁入与阶段边界 |
-| `docs/AI测试与评估平台-Harness六层ReAct核心架构设计.md` | V1.15：更新规划层映射和禁止双轨回流的架构约束 |
+| `docs/AI测试与评估平台-Harness分阶段实施总册.md` | V1.14：同步旧上下文删除、唯一职责边界与阶段状态 |
+| `docs/AI测试与评估平台-Harness六层ReAct核心架构设计.md` | V1.16：更新上下文映射和禁止 I/O 回流的架构约束 |
 | `docs/AI测试与评估平台-Harness阶段3-并行与流式收尾.md` | V1.6：记录四项评论修复已合入 `main` |
-| `docs/AI测试与评估平台-Harness阶段4-记忆层接入.md` | V1.9：记录阶段 4.2 实现、旧 Harness / Plan 收口与产品入口边界 |
+| `docs/AI测试与评估平台-Harness阶段4-记忆层接入.md` | V1.10：记录旧 Context 收口、存储/编排边界与产品入口边界 |

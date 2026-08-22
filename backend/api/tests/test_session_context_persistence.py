@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from app.agent.context import context_meter
+from app.agent.defaults import WINDOW
+from app.harness.context.meter import build_context_meter
+from app.harness.memory.session_context_store import SessionContextStore
 from app.models import Message, WsEvent
 from app.models import Session as AgentSession
 
@@ -52,7 +54,15 @@ def test_context_meter_restores_skill_and_mcp_usage_from_events():
     ]
     db = _Db({Message: messages, WsEvent: events})
 
-    meter = context_meter(db, session)
+    store = SessionContextStore(db)
+    persisted_skill, mcp_tools_count = store.capability_stats(session.id)
+    meter = build_context_meter(
+        store.window_messages(session, max_messages=WINDOW),
+        compact_summary=session.compact_summary,
+        persisted_skill=persisted_skill,
+        mcp_tools_count=mcp_tools_count,
+        max_tokens=store.profile_context_window(),
+    )
 
     assert meter.messages == 2
     assert meter.skills == 1

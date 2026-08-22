@@ -33,6 +33,16 @@ class ContextItem(BaseModel):
     priority: str = "medium"
 
 
+class SessionContextMessage(BaseModel):
+    """会话窗口的最小消息视图；由记忆层读取，Context 层只消费此契约。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    role: Literal["user", "assistant"]
+    content: str = ""
+
+
 class TokenLedger(BaseModel):
     """CompiledContext 公开的 token 预算账本。"""
 

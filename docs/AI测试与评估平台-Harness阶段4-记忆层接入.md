@@ -3,13 +3,13 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 阶段 4 — 记忆层接入 |
-| 版本 | V1.9 |
+| 版本 | V1.10 |
 | 审查日期 | 2026-08-22 |
-| 文档性质 | **施工中分析与交付状态文档**；阶段 4.2 已实现 pgvector 知识存储并通过真实 Redis/PG 服务 CI 验收，随后已删除旧 Harness / Plan 双轨；阶段 4 总体验收仍受对外 forget 产品入口范围约束 |
+| 文档性质 | **施工中分析与交付状态文档**；阶段 4.2 已实现 pgvector 知识存储并通过真实 Redis/PG 服务 CI 验收，随后已删除旧 Harness / ReAct / Plan / Context 双轨；阶段 4 总体验收仍受对外 forget 产品入口范围约束 |
 | 对应目标架构 | 架构文档 §2.1 / §3.1 / §5.2 / §5.3 / §5.4（消息表溯源列） |
 | 前置阶段权威 | 阶段 0 已冻结 `MemoryPort` / `MemoryQuery` / `CompiledContext`（`trace_id` 必填）；阶段 3 评论修复已随 PR #73 合入 `main`，阶段 4 仍须独立验收 |
 | 产品/协议裁决 | API.md `GET /api/sessions/{id}/messages` 的 `context_meter` 字段冻结；PRD 确认卡默认值不变 |
-| 分支 | `fix/memory-activation` → `refactor/harness-cutover` → `refactor/harness-plan-cutover` |
+| 分支 | `fix/memory-activation` → `refactor/harness-cutover` → `refactor/harness-plan-cutover` → `refactor/harness-context-cutover` |
 | 阶段 4.2 合入门禁 | 阶段 4.1 两个 P1 已补回归；阶段 4.2 的 pgvector 迁移与真实 Redis/PG CI 已在 PR #67 通过。后续变更必须保持该 CI 绿色，且不得把受限 `forget` 的产品入口自行扩成新 REST/WS 契约 |
 | 后续 | LightRAG / RAG 评测 **不在本阶段**；独立评审。禁止创建 `long_term_lightrag.py` |
 
@@ -21,7 +21,7 @@
 
 > 阶段 4  记忆层接入（Redis 短期状态 + PG 长期归档 + pgvector 知识检索），context/ 换用 MemoryPort
 
-前三阶段可以仍让 `agent/context.py` 直接 `query(Message)`。本阶段要回答的产品问题：
+阶段 4 开工前旧 `agent/context.py` 曾直接 `query(Message)`；V1.10 已删除该文件，不再保留兼容壳。本阶段要回答的产品问题：
 
 **Context 工程只做本轮可见性决策（召回后的压缩、重排、窗口）；存取与检索只经 MemoryPort。换 Redis 或换 pgvector 实现时，窗口策略代码不动。对外 ContextMeter 看起来与现在一样。**
 
@@ -42,7 +42,7 @@
 
 | 架构要求 | 现网 / 阶段 3 后 | 阶段 4 要补 |
 | :--- | :--- | :--- |
-| Context 不 import 存储 SDK | [`context.py`](backend/api/app/agent/context.py) 直接查 `Message` | `compiler.py` 只依赖 `MemoryPort` |
+| Context 不 import 存储 SDK | 旧 `agent/context.py` 曾直接查 `Message`，现已删除 | `compiler.py` / `history.py` 只依赖 `MemoryPort`；会话 ORM 集中在 `memory/session_context_store.py` |
 | Redis 短期态、幂等键、TTL | compose 已有 `redis` 服务；Harness 未用 | `short_term_redis.py`；Key 含 `trace:{trace_id}` |
 | PG 对话归档带溯源 | 消息表无 `origin_trace_id` | Alembic 补 `source_id` / `version` / `origin_trace_id` |
 | pgvector 知识检索 | 镜像含扩展；业务未建知识向量表 | `knowledge_store.py`；不新开向量库容器 |
@@ -172,7 +172,7 @@
 禁止：  新建 memory/long_term_lightrag.py
 ```
 
-`agent/context.py` 迁完后只留再导出或薄适配给 REST。
+`agent/context.py` 已删除，不留再导出或薄适配；REST 通过 `SessionContextStore` 读取素材并调用纯 `meter.py`，JSON 键保持冻结。
 
 ### 5.2 实现顺序
 
@@ -181,10 +181,10 @@
 3. `InMemoryMemoryPort` 单测先绿（retrieve/append/forget/trace 必填）。
 4. Redis 短期 + PG 归档 + pgvector。
 5. compiler / window / provenance / rerank；ledger。
-6. `context.py` / compact 接线；ContextMeter 兼容。
+6. `history.py` / `meter.py`、Memory Store 与 `compaction_runtime.py` 接线；ContextMeter JSON 兼容。
 7. grep 隔离 + 全量 API/Agent 测试。
 
-**当前进度（2026-08-22，阶段 4.2）**：已完成内存 Port、Redis 依赖声明与适配器单元回归、PG `ConversationMemoryPort`、消息 trace/撤权 Alembic、运行时 Port 装配及 `agent/context.py` 薄适配；`history_for_plan()` 已通过 `compile_context → MemoryPort` 获取历史，`context_meter` REST JSON 键未改。`ConversationMemoryPort.retrieve()` 先按 `compact_keep_from` 截断完整时序，再过滤撤权消息；用户消息在 Harness 入口获得真实 trace 后、助手消息在提交后，均会经统一适配器写入组合 Port，Redis 与 PG 使用同一 `message:{id}` 来源。阶段 4.2 新增同库 `memory_knowledge`（pgvector）迁移、`PgvectorKnowledgeMemoryPort`、向量格式校验与运行时组合装配；数据库在 `memory_forgotten`、tenant、资源、user/session 与白名单 ACL 过滤后才按余弦距离排序。专用 CI 服务会运行完整 Alembic 迁移，并实测 pgvector 召回/撤权和 Redis TTL；本机无 Docker 时该用例只跳过，不伪造通过。
+**当前进度（2026-08-22，阶段 4.2）**：已完成内存 Port、Redis 依赖声明与适配器单元回归、PG `ConversationMemoryPort`、消息 trace/撤权 Alembic、运行时 Port 装配，以及旧 Context 删除后的职责拆分：`history_for_plan()` 通过 `compile_context → MemoryPort` 获取历史，`SessionContextStore` 集中会话窗口、压缩游标和事件计量读取，`meter.py` 仅构造计量，`compaction_runtime.py` 调模型摘要；`context_meter` REST JSON 键未改。`ConversationMemoryPort.retrieve()` 先按 `compact_keep_from` 截断完整时序，再过滤撤权消息；用户消息在 Harness 入口获得真实 trace 后、助手消息在提交后，均会经统一适配器写入组合 Port，Redis 与 PG 使用同一 `message:{id}` 来源。阶段 4.2 新增同库 `memory_knowledge`（pgvector）迁移、`PgvectorKnowledgeMemoryPort`、向量格式校验与运行时组合装配；数据库在 `memory_forgotten`、tenant、资源、user/session 与白名单 ACL 过滤后才按余弦距离排序。专用 CI 服务会运行完整 Alembic 迁移，并实测 pgvector 召回/撤权和 Redis TTL；本机无 Docker 时该用例只跳过，不伪造通过。
 
 ### 5.3 代码落点
 
@@ -196,7 +196,7 @@
 | F4-4 | `memory/long_term_pgvector.py`、`knowledge_store.py` |
 | F4-5 | `forget` 实现于各 store + compiler 丢弃失效摘要 |
 | F4-6 | `context/compiler.py`、`window_manager.py`、`summarizer.py`、`reranker.py`、`provenance.py`、`policies.py` |
-| F4-7 / F4-8 | `agent/context.py` 再导出；`routers/sessions.py` 不改 JSON 键 |
+| F4-7 / F4-8 | `context/history.py`、`meter.py`、`memory/session_context_store.py`；`routers/sessions.py` 不改 JSON 键 |
 
 `harness/app.py` 此时才允许装配 Redis/PG Port；**仍然禁止**在 `__init__` 缓存 `TraceContext`。
 
@@ -297,18 +297,18 @@
 
 真实服务验收放在 GitHub Actions `memory-integration` 任务：使用同版本 PostgreSQL/pgvector、Redis 容器，执行 `alembic upgrade head` 后验证扩展、向量 ACL、撤权和 Redis TTL。该任务已在 PR #67 成功执行，并继续作为后续提交的合入门禁；本机因 Docker 不可用仅运行单元回归并明确 skip，不能替代 CI 结果。
 
-## 7.3 旧 Harness 与规划架构收口（V1.9）
+## 7.3 旧 Harness、规划与上下文架构收口（V1.10）
 
-阶段 4.2 联调发现 `agent/harness.py` 仍被 `routers/ws.py` 和 `routers/sessions.py` 直接引用，`agent/react.py` 仍被 ReAct 循环的动态导入使用。这会令新六层运行时与旧 Agent 协调器并行存在，违反架构文档的“同一职责不保留双实现”约束。
+阶段 4.2 联调先发现 `agent/harness.py` 仍被 `routers/ws.py` 和 `routers/sessions.py` 直接引用，`agent/react.py` 仍被 ReAct 循环的动态导入使用；随后审计又确认 `agent/context.py` 与 `harness/context/` 并行持有消息窗口、压缩和 ORM 查询。这些都会令新六层运行时与旧 Agent 模块并行存在，违反架构文档的“同一职责不保留双实现”约束。
 
-本次只迁移内部模块位置，不改变任何 REST/WS 事件或字段：`session_runtime.py` 承接会话 registry、取消、确认卡和流式交付；`react_adapter.py` 承接产品规格组装及 ReAct 入口；`plan_runtime.py` 承接 PlanArtifact、L0、斜杠模板、媒体工具注入与补规划；路由、复核和 ReAct 循环均改为直接导入新位置。旧 `agent/harness.py`、`agent/react.py` 与 `agent/plan.py` 不保留兼容壳。`test_contracts.py` 断言旧文件不存在且 WS 入口已导入新总控，并由取消、并行流式、记忆、媒体工具和确认卡回归覆盖行为不变。
+本次只迁移内部模块位置，不改变任何 REST/WS 事件或字段：`session_runtime.py` 承接会话 registry、取消、确认卡和流式交付；`react_adapter.py` 承接产品规格组装及 ReAct 入口；`plan_runtime.py` 承接 PlanArtifact、L0、斜杠模板、媒体工具注入与补规划；`context/history.py` 只经 `MemoryPort` 编译规划历史，`context/meter.py` 只作纯计量，`memory/session_context_store.py` 独占会话 ORM 读取，`compaction_runtime.py` 独占模型摘要编排。旧 `agent/harness.py`、`agent/react.py`、`agent/plan.py` 与 `agent/context.py` 不保留兼容壳。`test_contracts.py` 断言旧文件不存在、Context 不得导入 ORM/Redis/模型客户端且 WS 入口已导入新总控，并由取消、并行流式、记忆、媒体工具和确认卡回归覆盖行为不变。
 
 ## 8. 本阶段交付后（V1.0 六层首期闭环）
 
 ```text
 六层运行时：契约 + 单调用 + 强制追踪取消 + 可选并行 + MemoryPort
-会话总控与 ReAct 产品适配已位于 `harness/orchestration/`，不再保留 Agent 双轨。仍不包含（见总册覆盖矩阵）：LightRAG、多副本 abort、MCP Transport / file_sandbox、
-security/ 三文件、reflect/plan 迁入、persona YAML、外部 MCP 生态、自定义系统提示词
+会话总控、ReAct、Plan 与 Context 已按 `harness/orchestration/`、`harness/context/`、`harness/memory/` 唯一归属，不再保留 Agent 双轨。仍不包含（见总册覆盖矩阵）：LightRAG、多副本 abort、MCP Transport / file_sandbox、
+security/ 三文件、reflect 迁入、persona YAML、外部 MCP 生态、自定义系统提示词
 ```
 
 新 REST/WS 字段仍必须先改 API.md。后续 RAG 接入单独评审，不得在本阶段文档里开口子。
@@ -317,17 +317,17 @@ security/ 三文件、reflect/plan 迁入、persona YAML、外部 MCP 生态、�
 
 ## 修改代码文件与作用清单
 
-V1.9：在 V1.8 旧 Harness 收口之上删除 `agent/plan.py`，生产规划路径直连 `harness/orchestration/plan_runtime.py`；路由、ReAct、会话总控和复核同步改线，契约与回归测试禁止旧路径回流。不增加 REST/WS 字段，不接入 LightRAG，也不扩充 forget 产品入口。
+V1.10：在 V1.9 规划层收口之上删除 `agent/context.py`，将规划历史、纯计量、会话 ORM 和模型压缩分别放入 Context、Memory 和编排层；路由改经 Memory Store 构造 ContextMeter，契约与回归测试禁止旧路径和 Context I/O 回流。不增加 REST/WS 字段，不接入 LightRAG，也不扩充 forget 产品入口。
 
 | 文件 | 作用 |
 | :--- | :--- |
-| `backend/api/app/harness/contracts/context.py`、`context/compiler.py`、`window_manager.py`、`reranker.py` | 保留 user/assistant 角色、对话时序与纯 Context 编译 |
-| `backend/api/app/harness/memory/ports.py`、`short_term_redis.py`、`conversation_store.py`、`runtime.py` | Redis 短期适配、PG 对话归档与运行时组合 Port；V1.6 恢复压缩游标、提供统一消息写入适配器并复核写入侧 session owner |
+| `backend/api/app/harness/contracts/context.py`、`context/compiler.py`、`history.py`、`meter.py`、`window_manager.py`、`reranker.py` | 保留 user/assistant 角色、对话时序与纯 Context 编译/计量；V1.10 Context 只经 MemoryPort，不查询 ORM |
+| `backend/api/app/harness/memory/ports.py`、`short_term_redis.py`、`conversation_store.py`、`session_context_store.py`、`runtime.py` | Redis 短期适配、PG 对话归档、会话窗口/事件/压缩游标读取与运行时组合 Port；V1.6 恢复压缩游标、提供统一消息写入适配器并复核写入侧 session owner |
 | `backend/api/app/harness/memory/long_term_pgvector.py`、`knowledge_store.py`、`contracts/memory.py` | V1.7：pgvector 知识写入、向量 ACL 召回与撤权；校验记录/查询向量，不在 Context 调用 Embedding SDK |
-| `backend/api/app/agent/context.py`、`harness/orchestration/session_runtime.py`、`routers/ws.py` | 将规划历史接入 MemoryPort，并给新消息回填真实 trace 溯源；V1.8 删除旧协调器后由新会话总控承接写入时机 |
+| `backend/api/app/harness/orchestration/compaction_runtime.py`、`session_runtime.py`、`routers/ws.py` | V1.10 将模型 `/compact` 编排与会话总控留在编排层；规划历史改经 MemoryPort，并给新消息回填真实 trace 溯源 |
 | `backend/shared/models.py`、`backend/api/migrations/env.py`、`backend/api/migrations/versions/c650ba766b96_消息记忆溯源与撤权字段.py`、`d6f2a91be430_新增记忆知识向量表.py` | Message 溯源列、知识向量表与撤权标记；Alembic 同时识别 API 与共享模型根目录，pgvector 扩展在迁移内幂等启用 |
 | `backend/api/tests/harness/memory/test_memory_activation.py`、`test_pgvector_knowledge.py`、`tests/integration/test_memory_containers.py`、`.github/workflows/ci.yml` | V1.7：记忆单元回归及真实 PostgreSQL/Redis 容器 CI 门禁 |
 | `backend/api/app/harness/orchestration/react_adapter.py`、`react_loop.py`、`session_runtime.py`、`agent/reflect.py` | V1.8：删除旧 ReAct / 会话协调器，并改造循环动态依赖与复核类型依赖 |
 | `backend/api/app/harness/orchestration/plan_runtime.py`、`routers/ws.py`、`agent/reflect.py` | V1.9：删除旧规划层，路由与复核改用新编排规划模块 |
-| `backend/api/app/routers/ws.py`、`routers/sessions.py`、`tests/harness/tracing/test_contracts.py` | V1.8：线上路由直连新总控，测试禁止旧文件或旧模块引用回流 |
-| `docs/AI测试与评估平台-Harness阶段4-记忆层接入.md` | V1.8：阶段 4.2 实现范围、旧 Harness 收口与未授权产品入口边界 |
+| `backend/api/app/routers/ws.py`、`routers/sessions.py`、`tests/harness/tracing/test_contracts.py` | 线上路由直连新总控；V1.10 历史 REST 改经 Memory Store，测试禁止旧文件和 Context I/O 回流 |
+| `docs/AI测试与评估平台-Harness阶段4-记忆层接入.md` | V1.10：阶段 4.2 实现范围、旧 Context 收口与未授权产品入口边界 |

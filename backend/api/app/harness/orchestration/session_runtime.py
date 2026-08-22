@@ -18,7 +18,6 @@ from typing import Any
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.agent.context import history_for_plan, run_compact
 from app.agent.defaults import (
     ACTIVE_STATUSES,
     MAX_MODEL_CALLS,
@@ -26,6 +25,7 @@ from app.agent.defaults import (
     STREAM_EMIT_WAIT_S,
     STREAM_TIMEOUT_S,
     TERMINAL_STATUSES,
+    WINDOW,
 )
 from app.agent.log import agent_exception, agent_trace
 from app.agent.persona import chat_system, turn_system
@@ -47,14 +47,20 @@ from app.agent.turn_mode import (
     uses_react_llm,
 )
 from app.agent.voiceclone import VOICECLONE_CLARIFY_RE
+from app.config import settings
 from app.db import SessionLocal
 from app.errors import AppError, ErrorCode
+from app.harness.context.history import history_for_plan
 from app.harness.contracts.cancellation import CancellationToken, TurnCancelled
 from app.harness.contracts.trace import TraceContext, current_trace, using_trace
 from app.harness.contracts.turn import TurnStatus
 from app.harness.feedback.publisher import publisher
-from app.harness.memory.runtime import append_persisted_conversation_message
+from app.harness.memory.runtime import (
+    append_persisted_conversation_message,
+    memory_port_for_session,
+)
 from app.harness.orchestration.budgets import wall_clock_s
+from app.harness.orchestration.compaction_runtime import run_compact
 from app.harness.orchestration.plan_runtime import (
     AUDIO_CLARIFY_RE,
     PlanArtifact,
@@ -355,7 +361,14 @@ async def _run_turn(
         db.commit()
 
     prefs = load_prefs(db, user.id)
-    history = await history_for_plan(db, session, trace=trace)
+    history = await history_for_plan(
+        port=memory_port_for_session(db),
+        tenant_id=settings.memory_tenant_id,
+        user_id=session.user_id,
+        session_id=session.id,
+        trace=trace,
+        top_k_recall=WINDOW,
+    )
     compact_summary = getattr(session, "compact_summary", None)
     budget = TurnBudget(cap=MAX_MODEL_CALLS)
 

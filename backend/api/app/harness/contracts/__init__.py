@@ -1,7 +1,7 @@
 """跨层唯一数据契约：无 I/O、无 LLM SDK。"""
 
 from .cancellation import CancellationToken
-from .context import CompiledContext, ContextItem, Provenance, TokenLedger
+from .context import CompiledContext, ContextItem, Provenance, SessionContextMessage, TokenLedger
 from .errors import (
     DiagnosticRef,
     ErrorClass,
@@ -48,6 +48,7 @@ __all__ = [
     "OutcomeStatus",
     "Provenance",
     "RetryPolicy",
+    "SessionContextMessage",
     "TokenLedger",
     "ToolCall",
     "ToolCallBatch",

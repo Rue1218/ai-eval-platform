@@ -8,9 +8,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.agent.context import history_for_plan
+from app.agent.defaults import WINDOW
+from app.config import settings
 from app.errors import AppError, ErrorCode
 from app.harness.context.compiler import compile_context
+from app.harness.context.history import history_for_plan
 from app.harness.contracts.memory import MemoryQuery, MemoryRecord
 from app.harness.contracts.trace import TraceContext, using_trace
 from app.harness.memory.conversation_store import ConversationMemoryPort
@@ -412,9 +414,15 @@ def test_history_for_plan_uses_memory_port(monkeypatch: pytest.MonkeyPatch) -> N
             ),
             trace=trace,
         )
-        monkeypatch.setattr("app.agent.context.memory_port_for_session", lambda _db: port)
         session = AgentSession(id="session-1", user_id="owner-1", title="测试会话")
-        history = await history_for_plan(object(), session, trace=trace)
+        history = await history_for_plan(
+            port=port,
+            tenant_id=settings.memory_tenant_id,
+            user_id=session.user_id,
+            session_id=session.id,
+            trace=trace,
+            top_k_recall=WINDOW,
+        )
         assert history == [
             {"role": "user", "content": "用户历史"},
             {"role": "assistant", "content": "助手历史"},
