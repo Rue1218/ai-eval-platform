@@ -204,4 +204,24 @@ onMounted(fetchReport)
   padding-top: 10px;
   border-top: 1px solid var(--border-subtle);
 }
+
+@media (max-width: 640px) {
+  .report-card {
+    padding: 12px 14px;
+  }
+  .rc-bar-label {
+    width: 90px;
+    flex: 0 0 90px;
+  }
+  .report-card-kpis {
+    gap: 14px;
+  }
+  .rc-foot {
+    flex-wrap: wrap;
+  }
+  .rc-foot .btn {
+    flex: 1 1 calc(50% - 6px);
+    justify-content: center;
+  }
+}
 </style>

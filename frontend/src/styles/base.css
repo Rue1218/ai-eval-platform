@@ -1555,6 +1555,44 @@ td.cell-edit:hover { background: color-mix(in srgb, var(--accent-ai) 5%, transpa
   .msg-agent { max-width: 100%; font-size: 14.5px; }
   .think-card, .thought-card, .tool-card { max-width: 100%; }
   .confirm-card, .report-card { max-width: 100%; }
+  .confirm-head { padding: 12px 14px 0; gap: 8px; }
+  .confirm-title { font-size: 14.5px; }
+  .confirm-body { padding: 10px 14px 4px; }
+  .confirm-foot {
+    padding: 10px 14px 14px;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .confirm-foot .spacer { display: none; }
+  .confirm-note {
+    width: 100%;
+    order: -1;
+    font-size: 11.5px;
+    line-height: 1.5;
+  }
+  .confirm-foot .btn {
+    flex: 1 1 calc(50% - 6px);
+    justify-content: center;
+  }
+  .chip-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .chip {
+    padding: 4px 10px;
+    font-size: 12px;
+  }
+  .fold-card {
+    margin: 4px 0 8px;
+  }
+  .fold-head {
+    padding: 8px 10px;
+    font-size: 12px;
+  }
+  .fold-body {
+    padding: 4px 10px 10px;
+  }
   .cc-grid { grid-template-columns: 1fr; }
   .rc-bar-label { width: 92px; flex-basis: 92px; }
   .report-card-kpis { gap: 14px; }

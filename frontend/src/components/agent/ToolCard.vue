@@ -353,4 +353,34 @@ pre.code {
     transform: none;
   }
 }
+
+@media (max-width: 640px) {
+  .tool-head {
+    padding: 8px 10px;
+    gap: 8px;
+  }
+  .tool-name {
+    font-size: 12.5px;
+  }
+  .tool-sub-tag {
+    font-size: 10px;
+  }
+  .tool-meta-right {
+    gap: 6px;
+  }
+  .tool-latency {
+    font-size: 10px;
+    padding: 1px 4px;
+  }
+  .tool-state-text {
+    font-size: 11px;
+  }
+  .tool-detail {
+    padding: 10px 10px;
+  }
+  pre.code {
+    font-size: 11px;
+    padding: 8px 10px;
+  }
+}
 </style>
