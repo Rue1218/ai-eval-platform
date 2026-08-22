@@ -83,17 +83,15 @@ const errorMsg = ref('')
 // L3 后端状态行：默认仅显示连接状态，成功获取设置后前置 Agent 模型名
 const agentStatusText = ref('连接正常 · 调度器运行中')
 
-/** L3 拉取 Agent 后端协议档名：getSettings.agent_profile_id → profiles 列表映射名称；
- *  未登录/接口失败时静默回退为默认状态文案（登录页允许匿名失败） */
+/** 登录页健康探测：未登录状态下调用免密公网健康接口，避免触发受保护接口 401 日志 */
 async function loadAgentStatus() {
   try {
-    const [settings, profiles] = await Promise.all([api.admin.getSettings(), api.profiles.list()])
-    const agentProfile = profiles.find(p => p.id === settings.agent_profile_id)
-    if (agentProfile) {
-      agentStatusText.value = `${agentProfile.model} · 连接正常 · 调度器运行中`
+    const res = await fetch('/api/health')
+    if (res.ok) {
+      agentStatusText.value = '连接正常 · 调度器运行中'
     }
   } catch {
-    // 忽略失败：保持「连接正常 · 调度器运行中」兜底文案
+    // 忽略失败：保持默认兜底状态文案
   }
 }
 
