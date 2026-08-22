@@ -24,8 +24,43 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import declarative_base
+from sqlalchemy.types import UserDefinedType
 
 Base = declarative_base()
+
+
+class PgVectorType(UserDefinedType):
+    """不引入额外 ORM 依赖的 pgvector 列类型；仅记忆层模型使用。"""
+
+    cache_ok = True
+
+    def __init__(self, dimensions: int = 1536) -> None:
+        self.dimensions = dimensions
+
+    def get_col_spec(self, **_kwargs: object) -> str:
+        """生成 PostgreSQL pgvector 的确定维度列定义。"""
+        return f"vector({self.dimensions})"
+
+    def bind_processor(self, _dialect: object):
+        """将 Python 浮点数组安全序列化为 PostgreSQL vector 文本。"""
+        def process(value: list[float] | str | None) -> str | None:
+            if value is None or isinstance(value, str):
+                return value
+            return "[" + ",".join(str(float(item)) for item in value) + "]"
+
+        return process
+
+    def result_processor(self, _dialect: object, _coltype: object):
+        """将 pgvector 文本恢复为浮点数组，异常值只作为空向量处理。"""
+        def process(value: str | list[float] | None) -> list[float] | None:
+            if value is None or isinstance(value, list):
+                return value
+            try:
+                return [float(item) for item in value.strip("[]").split(",") if item]
+            except (TypeError, ValueError):
+                return None
+
+        return process
 
 
 def utcnow() -> datetime:
@@ -116,7 +151,40 @@ class Message(Base):
     # assistant 交付句的回复生成耗时（毫秒）：从本轮 user_message 入 Harness 到交付的墙钟时长。
     # 仅 assistant 消息非空，user/system 保持 NULL；历史回放供前端气泡展示「耗时 x 秒」。
     latency_ms = Column(Integer, nullable=True)
+    # 记忆层溯源：历史存量回填为 message:{id}，新消息由写入方一次性指定。
+    source_id = Column(String, nullable=False, index=True)
+    source_version = Column(Integer, nullable=False, default=1)
+    origin_trace_id = Column(String, nullable=True, index=True)
+    origin_span_id = Column(String, nullable=True)
+    # forget/撤权后只禁止记忆召回，不删除 REST 审计消息。
+    memory_revoked = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class KnowledgeMemory(Base):
+    """同库 pgvector 知识记忆；ACL/撤权先过滤，再由 MemoryPort 提供给 Context。"""
+
+    __tablename__ = "memory_knowledge"
+    __table_args__ = (
+        Index("ix_memory_knowledge_tenant_source", "tenant_id", "source_id"),
+        Index("ix_memory_knowledge_revoked", "memory_revoked"),
+    )
+
+    id = Column(String, primary_key=True, default=uuid_str)
+    tenant_id = Column(String, nullable=False, index=True)
+    source_id = Column(String, nullable=False, index=True)
+    source_version = Column(Integer, nullable=False, default=1)
+    content = Column(Text, nullable=False)
+    embedding = Column(PgVectorType(1536), nullable=True)
+    # metadata 是 SQLAlchemy 保留属性名，模型属性使用 meta，数据库列仍为 metadata。
+    meta = Column("metadata", JSONB, nullable=False, default=dict)
+    acl = Column(String, nullable=False, default="tenant")
+    acl_user_ids = Column(JSONB, nullable=False, default=list)
+    origin_trace_id = Column(String, nullable=True, index=True)
+    origin_span_id = Column(String, nullable=True)
+    memory_revoked = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
 
 
 class WsEvent(Base):

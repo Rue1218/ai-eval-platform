@@ -1,5 +1,7 @@
 """抽取式候选压缩；本阶段不在 Context 包中调用模型生成摘要。"""
 
+from __future__ import annotations
+
 from app.harness.contracts.memory import MemoryRecord
 
 

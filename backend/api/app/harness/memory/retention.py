@@ -1,5 +1,7 @@
 """短期记忆的保留策略；审计表与 /stop 注册表均不在此处处理。"""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 
 

@@ -309,6 +309,9 @@ async def run_react(
         execute_short_tool=execute_short_tool,
         execute_isolated=_execute_short_tool_isolated,
         new_artifact=ReactArtifact,
+        redirect_creative_tool=_redirect_creative_tool,
+        missing_for_kind=_missing_for_kind,
+        build_proposed_spec=build_proposed_spec,
         trace=trace,
         cancel=cancel,
     )

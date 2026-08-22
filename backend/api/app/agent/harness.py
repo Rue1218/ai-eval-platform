@@ -18,19 +18,22 @@ from typing import Any
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.harness.context.compiler import compile_history_window
 from app.harness.contracts.cancellation import CancellationToken, TurnCancelled
+from app.harness.contracts.memory import MemoryQuery, MemoryRecord
 from app.harness.contracts.trace import TraceContext, current_trace, using_trace
 from app.harness.contracts.turn import TurnStatus
 from app.harness.feedback.publisher import publisher
+from app.harness.memory.runtime import build_memory_port
 from app.harness.orchestration.budgets import wall_clock_s
 from app.harness.orchestration.streaming import begin_finalizing_delivery
 
 from ..db import SessionLocal
 from ..errors import AppError, ErrorCode
-from ..models import AuditLog, Dataset, Message, ProtocolProfile, Task, TaskEvent, User
+from ..models import AuditLog, Dataset, ProtocolProfile, Task, TaskEvent, User, uuid_str
 from ..models import Session as AgentSession
 from ..schemas import TaskCreate
-from .context import history_for_plan, run_compact
+from .context import run_compact
 from .defaults import (
     ACTIVE_STATUSES,
     MAX_MODEL_CALLS,
@@ -38,6 +41,7 @@ from .defaults import (
     STREAM_EMIT_WAIT_S,
     STREAM_TIMEOUT_S,
     TERMINAL_STATUSES,
+    WINDOW,
 )
 from .log import agent_exception, agent_trace
 from .persona import chat_system, turn_system
@@ -262,13 +266,27 @@ async def _deliver_sentence(
         begin_finalizing_delivery(trace=trace)
     await emit("thought", payload, task_id=task_id)
     agent_trace(f"交付助手回复 chars={len(text)} latency={latency_ms or 0}ms")
-    db.add(
-        Message(
-            session_id=session_id,
-            role="assistant",
-            content=text,
-            latency_ms=latency_ms,
-        )
+    trace = current_trace() or TraceContext.for_turn(component="feedback.persist")
+    message_id = uuid_str()
+    # 交付句统一经记忆层组合 Port 落库（短期层开启时同步镜像），禁止直写 messages。
+    await build_memory_port(db).append(
+        MemoryRecord(
+            record_id=message_id,
+            source_id=f"message:{message_id}",
+            version=1,
+            text=text,
+            record_type="conversation",
+            acl="session",
+            origin_trace_id=trace.trace_id,
+            origin_span_id=trace.span_id,
+            metadata={
+                "tenant_id": "internal",
+                "session_id": session_id,
+                "role": "assistant",
+                "latency_ms": latency_ms,
+            },
+        ),
+        trace=trace,
     )
     db.commit()
 
@@ -342,7 +360,26 @@ async def _run_turn(
         db.commit()
 
     prefs = load_prefs(db, user.id)
-    history = history_for_plan(db, session)
+    # 历史窗口统一经 harness/context 管线装配：MemoryPort 召回 + keep_from 截断 + 尾部窗口。
+    history_records = await compile_history_window(
+        port=build_memory_port(db),
+        query=MemoryQuery(
+            query_text=text,
+            tenant_id="internal",
+            user_id=user.id,
+            session_id=session.id,
+            record_types=["conversation"],
+            trace_id=trace.trace_id,
+            top_k_recall=WINDOW * 4,
+        ),
+        trace=trace.child("context.compile"),
+        keep_from=getattr(session, "compact_keep_from", None),
+        max_records=WINDOW,
+    )
+    history = [
+        {"role": str(record.metadata.get("role") or "user"), "content": record.text}
+        for record in history_records
+    ]
     compact_summary = getattr(session, "compact_summary", None)
     budget = TurnBudget(cap=MAX_MODEL_CALLS)
 
@@ -555,7 +592,7 @@ async def _run_turn(
                 row = tdb.query(AgentSession).filter(AgentSession.id == session_id).first()
                 if not row:
                     raise AppError(ErrorCode.NOT_FOUND, "会话不存在")
-                return run_compact(tdb, row, stop=stop)
+                return run_compact(tdb, row, stop=stop, user_id=user.id, trace=trace)
 
             packed = await _await_thread(stop, _compact_job)
             if packed is None:
@@ -917,6 +954,49 @@ async def _harness_entry(
         _clear_harness(session_id, task)
 
 
+def begin_turn_trace() -> TraceContext:
+    """在收包处创建回合 TraceContext：用户气泡与后续 Harness 回合共用同一 trace_id。
+
+    WS 收包层被阶段 0 契约守卫禁止直接引用六层包，trace 的创建经本适配暴露。
+    """
+    return TraceContext.for_turn(component="ws.user_message")
+
+
+async def persist_user_message(
+    db: Session,
+    *,
+    session: AgentSession,
+    message_id: str,
+    text: str,
+    author_id: str,
+    client_message_id: str | None,
+    attachments: list[str],
+    trace: TraceContext,
+) -> None:
+    """用户气泡经记忆层组合 Port 落库；api 收包层不直写 messages 表。"""
+    await build_memory_port(db).append(
+        MemoryRecord(
+            record_id=message_id,
+            source_id=f"message:{message_id}",
+            version=1,
+            text=text,
+            record_type="conversation",
+            acl="session",
+            origin_trace_id=trace.trace_id,
+            origin_span_id=trace.span_id,
+            metadata={
+                "tenant_id": "internal",
+                "session_id": session.id,
+                "role": "user",
+                "author_id": author_id,
+                "client_message_id": client_message_id or "",
+                "attachments": list(attachments or []),
+            },
+        ),
+        trace=trace,
+    )
+
+
 async def dispatch_user_message(
     *,
     session_id: str,
@@ -926,8 +1006,13 @@ async def dispatch_user_message(
     is_session_owner: bool,
     emit_busy: EmitFn,
     emit_factory: Callable[[Session], EmitFn],
+    trace: TraceContext,
 ) -> None:
-    """收包循环调用：共享会话限制 /compact、/stop 的会话级副作用。"""
+    """收包循环调用：共享会话限制 /compact、/stop 的会话级副作用。
+
+    ``trace`` 由收包处在持久化用户消息时创建并传入，保证用户气泡与后续
+    Harness 回合共用同一 trace_id（§3.5 一个 Turn 一条因果链）。
+    """
     parsed = parse_slash(text)
     if parsed.command == "compact" and not is_session_owner:
         await emit_busy(
@@ -957,7 +1042,6 @@ async def dispatch_user_message(
             await emit_busy("thought", {"text": "当前没有正在生成的内容"})
             return
 
-        trace = TraceContext.for_turn(component="dispatch")
         cancel = CancellationToken(turn_id=trace.turn_id)
         handle = SessionHarness(
             user_id=user_id,
