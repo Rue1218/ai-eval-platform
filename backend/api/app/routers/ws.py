@@ -461,6 +461,7 @@ async def _handle_user_message(
         user_id=user.id,
         text=text,
         attachments=file_ids,
+        message_id=message.id,
         is_session_owner=session.user_id == user.id,
         emit_busy=emit_busy,
         emit_factory=emit_factory,

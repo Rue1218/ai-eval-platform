@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -20,12 +20,14 @@ class Provenance(BaseModel):
 
 
 class ContextItem(BaseModel):
-    """窗口中的独立证据单元。"""
+    """窗口中的独立证据单元，保留可安全发送给模型的消息角色。"""
 
     model_config = ConfigDict(extra="forbid")
 
     slot: str
     text: str
+    # 历史消息必须保留 user/assistant 语义，不能在窗口输出时一律降成 user。
+    role: Literal["system", "user", "assistant"] = "user"
     token_cost: int = 0
     provenance: Provenance | None = None
     priority: str = "medium"

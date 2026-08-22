@@ -6,7 +6,12 @@ from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
+from ..config import settings
 from ..errors import AppError, ErrorCode
+from ..harness.context.compiler import compile_context
+from ..harness.contracts.memory import MemoryQuery
+from ..harness.contracts.trace import TraceContext
+from ..harness.memory.runtime import memory_port_for_session
 from ..models import Message, WsEvent
 from ..models import Session as AgentSession
 from .defaults import COMPACT_INPUT_MAX, KEEP_RECENT, SUMMARY_MAX_CHARS, WINDOW
@@ -165,9 +170,34 @@ def context_meter(db: Session, session: AgentSession, *, skill_id: str | None = 
     )
 
 
-def history_for_plan(db: Session, session: AgentSession) -> list[dict[str, str]]:
-    """规划调用的 history：窗口内 role+content，不含 progress。"""
-    return [{"role": row.role, "content": row.content or ""} for row in window_rows(db, session)]
+async def history_for_plan(
+    db: Session,
+    session: AgentSession,
+    *,
+    trace: TraceContext,
+) -> list[dict[str, str]]:
+    """规划调用的 history：经 MemoryPort 编译后保留 user/assistant 角色，不含 progress。"""
+    query = MemoryQuery(
+        query_text="plan-history",
+        tenant_id=settings.memory_tenant_id,
+        user_id=session.user_id,
+        session_id=session.id,
+        record_types=["conversation"],
+        top_k_recall=WINDOW,
+        trace_id=trace.trace_id,
+    )
+    compiled = await compile_context(
+        port=memory_port_for_session(db),
+        query=query,
+        trace=trace.child("context_retrieve"),
+        system_prompt="",
+        user_input="",
+    )
+    return [
+        {"role": message["role"], "content": message["content"]}
+        for message in compiled.messages
+        if message["role"] in {"user", "assistant"}
+    ]
 
 
 def run_compact(

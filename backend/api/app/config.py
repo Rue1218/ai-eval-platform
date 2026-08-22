@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     profile_env_file: str = ".env"
     cookie_secure: bool = False
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+    # Redis 只承载可过期短期记忆；生产 Compose 注入 REDIS_URL，未配置的本地环境仅使用 PG 对话归档。
+    redis_url: str = ""
+    memory_tenant_id: str = "internal"
+    memory_redis_ttl_seconds: int = 86400
     # 音色克隆（MIMO TTS，OpenAI chat/completions 兼容）。Key 只从环境注入，禁止回显。
     mimo_tts_base_url: str = "https://token-plan-cn.xiaomimimo.com/v1"
     mimo_tts_api_key: str = ""

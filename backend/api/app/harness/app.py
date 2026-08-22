@@ -7,14 +7,16 @@ from __future__ import annotations
 
 
 def configure_runtime() -> None:
-    """进程启动装配：预算回显 + 诊断/审计切到 PostgreSQL。
+    """进程启动装配：预算回显、审计 PostgreSQL 与记忆 Port。
 
-    禁止在此缓存 TraceContext；禁止装配 Redis 记忆层（阶段 4）。
+    禁止在此缓存 TraceContext；Redis 客户端可复用，但请求级数据库 Session 必须按请求注入。
     """
     from app.harness.feedback.diagnostics import PgAuditStore, reset_audit_store
     from app.harness.feedback.publisher import PgAuditPublisher, reset_publisher
+    from app.harness.memory.runtime import configure_memory_runtime
     from app.harness.orchestration.budgets import echo_budget_config
 
     echo_budget_config()
     reset_audit_store(store=PgAuditStore())
     reset_publisher(store=PgAuditPublisher())
+    configure_memory_runtime()

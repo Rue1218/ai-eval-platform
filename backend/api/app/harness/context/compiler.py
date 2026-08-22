@@ -35,23 +35,42 @@ async def compile_context(
     window_policy = policy or WindowPolicy()
     records = rerank_records(discard_conflicting_records(await retrieve_records(port, query, trace=trace)))
     items: list[ContextItem] = [
-        ContextItem(slot="system", text=system_prompt, priority="critical"),
-        ContextItem(slot="user_input", text=user_input, priority="critical"),
+        ContextItem(slot="system", text=system_prompt, role="system", priority="critical"),
+        ContextItem(slot="user_input", text=user_input, role="user", priority="critical"),
     ]
     if compact_summary and compact_summary.strip():
-        items.append(ContextItem(slot="session_state", text=compact_summary.strip(), priority="high"))
+        items.append(
+            ContextItem(
+                slot="session_state",
+                text=compact_summary.strip(),
+                role="system",
+                priority="high",
+            )
+        )
     for observation in observations or []:
-        items.append(ContextItem(slot="observation", text=_observation_text(observation), priority="high"))
+        items.append(
+            ContextItem(
+                slot="observation",
+                text=_observation_text(observation),
+                # 现有模型调用不携带 tool_call_id，工具 observation 先以已标注的 user 素材进入窗口。
+                role="user",
+                priority="high",
+            )
+        )
     for record in records:
         slot = "knowledge" if record.record_type == "knowledge" else "history"
         text = compress_record(record, max_tokens=window_policy.slot_budget(slot))
         if not text:
             continue
         metadata = record.metadata if isinstance(record.metadata, dict) else {}
+        record_role = str(metadata.get("role") or "user")
+        if record_role not in {"user", "assistant"}:
+            record_role = "user"
         items.append(
             ContextItem(
                 slot=slot,
                 text=text,
+                role=record_role,
                 token_cost=estimate_tokens(text),
                 provenance=Provenance(
                     source_id=record.source_id,

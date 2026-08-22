@@ -50,7 +50,7 @@ def build_window(items: list[ContextItem], *, policy: WindowPolicy) -> CompiledC
         max_tokens=policy.max_tokens,
     )
     messages = [
-        {"role": "system" if item.slot in {"system", "session_state"} else "user", "content": item.text}
+        {"role": item.role, "content": item.text}
         for item in selected
     ]
     return CompiledContext(items=selected, ledger=ledger, messages=messages)

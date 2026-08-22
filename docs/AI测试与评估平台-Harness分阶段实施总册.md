@@ -3,7 +3,7 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 分阶段实施总册 |
-| 版本 | V1.8 |
+| 版本 | V1.9 |
 | 审查日期 | 2026-08-22 |
 | 用法 | 每个阶段先读对应施工文档的五块分析（与阶段 0 同一模板），再开分支写代码。架构文档第七至十一章只做需求索引；**第十二章为覆盖矩阵与挂起项** |
 
@@ -14,8 +14,8 @@
 | 0 | [阶段0-契约骨架](docs/AI测试与评估平台-Harness阶段0-契约骨架.md) V1.3 | `feat/harness-contracts` | 契约 + tracing；活路径不动 | 验收完成，已合入 `main` |
 | 1 | [阶段1-单调用路径](docs/AI测试与评估平台-Harness阶段1-单调用路径.md) V1.3 | `feat/harness-single-call` | 编排/执行/反馈接管单工具循环 | 验收完成，已合入 `main` |
 | 2 | [阶段2-链路追踪与取消](docs/AI测试与评估平台-Harness阶段2-链路追踪与取消.md) V1.3 | `feat/harness-trace-cancel` | 强制 trace/cancel + 三张审计表 | 验收完成，已合入 `main` |
-| 3 | [阶段3-并行与流式收尾](docs/AI测试与评估平台-Harness阶段3-并行与流式收尾.md) V1.5 | 原实现 `feat/harness-parallel-streaming`；修复 `fix/harness-stage3-comments` | 批次并行能力默认关；流式终态 | 3 个 P1、1 个 P2 的代码与定向回归已完成，**待修复 PR 复审与合入**；阶段 4 仍须独立验收 |
-| 4 | [阶段4-记忆层接入](docs/AI测试与评估平台-Harness阶段4-记忆层接入.md) V1.4 | `feat/harness-memory-port` | MemoryPort + Redis/pgvector；不接 LightRAG | 用户明确授权受控启动；第一批基础组件已推送，但未接入活路径且有 4 个 P1、1 个 P2，**未验收、不得合入** |
+| 3 | [阶段3-并行与流式收尾](docs/AI测试与评估平台-Harness阶段3-并行与流式收尾.md) V1.6 | 原实现 `feat/harness-parallel-streaming`；修复 `fix/harness-stage3-comments` | 批次并行能力默认关；流式终态 | 3 个 P1、1 个 P2 已修复，PR #73 已合入 `main` |
+| 4 | [阶段4-记忆层接入](docs/AI测试与评估平台-Harness阶段4-记忆层接入.md) V1.5 | `fix/memory-activation` | MemoryPort + Redis/pgvector；不接 LightRAG | 阶段 4.1 已修复首批 4 个 P1、1 个 P2 并接入 PG 对话归档；pgvector/容器联调未完成，**阶段 4 未验收** |
 
 规则：
 
@@ -38,7 +38,7 @@
 | Trace / Cancel / ToolCall / ErrorClass / MemoryPort 类型 + `normalize` Fail-fast | §2.2、§3.5、§6.2 | 阶段 0 | 已落地 |
 | 单调用 Parser / Facade / 观察回填 / `harness/llm` 正文 | §5.1、§5.3 | 阶段 1 | 现网四项多媒体工具经注册表分派，**不搬** `imagegen.py` 等正文 |
 | 强制 `trace`/`cancel`、`/stop`、Alembic 三表、结构化日志带 trace | §2.2、§4.4、§5.4 | 阶段 2 | 100ms SLO **不含**尚未存在的 MCP CancelledNotification |
-| `ParallelFacade`、正确 `merge_batch`、`FINALIZING_STREAM` | §3.2.1、§3.2.2 | 阶段 3 | 评论修复分支已补齐默认串行归并、交付状态时序、ErrorClass 回填和失败 span；待 PR 复审，详见阶段 3 V1.5 |
+| `ParallelFacade`、正确 `merge_batch`、`FINALIZING_STREAM` | §3.2.1、§3.2.2 | 阶段 3 | 4 项评论修复已随 PR #73 合入 `main`，详见阶段 3 V1.6 |
 | Context 只经 MemoryPort；Redis 短期 + PG 归档 + pgvector | §2.1、§3.1、§5.2 | 阶段 4 | 窗口最小布局为本阶段 P0，不是可选项 |
 | MCP `stdio` / Streamable HTTP / WebSocket custom、`session_pool`、`eval_core` 适配器 | §4.1 | **挂起** | 现网短工具不是 MCP JSON-RPC；§5.3 五阶段未列此项 |
 | `file_sandbox.py` 与任意路径拒绝 | §4.2 | **挂起** | 现网多媒体工具无通用文件根 |
@@ -63,10 +63,10 @@
 
 ## 本次文档变更范围
 
-V1.8：同步阶段 3 评论修复进度。默认串行批次归并、最终交付状态时序、ErrorClass observation 回填和参数失败 span 审计均已在 `fix/harness-stage3-comments` 完成并通过定向回归，待 PR 复审与合入；阶段 4 状态、对外协议和挂起项均未改变。
+V1.9：阶段 3 评论修复已随 PR #73 合入 `main`；阶段 4.1 的 4 个 P1、1 个 P2 修复在 `fix/memory-activation` 保留，包含 PG 对话归档活路径、消息角色、归属 ACL、Redis 依赖/撤权容错与可逆迁移。pgvector 与真实 Redis/PG 容器联调仍未完成，阶段 4 不构成验收。
 
 | 文件 | 作用 |
 | :--- | :--- |
-| `docs/AI测试与评估平台-Harness分阶段实施总册.md` | V1.8：更新阶段 3 评论修复进度与 PR 合入门禁 |
-| `docs/AI测试与评估平台-Harness阶段3-并行与流式收尾.md` | V1.5：记录四项评论修复、定向回归和复审条件 |
-| `docs/AI测试与评估平台-Harness阶段4-记忆层接入.md` | V1.4：同步阶段 3 修复 PR 状态；阶段 4 已实现范围和阻塞项不变 |
+| `docs/AI测试与评估平台-Harness分阶段实施总册.md` | V1.9：同步阶段 3 合入与阶段 4.1 实际交付状态 |
+| `docs/AI测试与评估平台-Harness阶段3-并行与流式收尾.md` | V1.6：记录四项评论修复已合入 `main` |
+| `docs/AI测试与评估平台-Harness阶段4-记忆层接入.md` | V1.5：记录阶段 4.1 修复、活路径接线与剩余验收项 |

@@ -80,6 +80,8 @@ class RedisMemoryPort(MemoryPort):
 
     async def append(self, record: MemoryRecord, *, trace: TraceContext) -> None:
         """以 metadata 的租户/用户/会话归属写入本回合 Redis 列表并设置 TTL。"""
+        if record.record_type != "conversation":
+            raise AppError(ErrorCode.VALIDATION, "Redis 短期记忆仅保存对话记录")
         metadata = record.metadata if isinstance(record.metadata, dict) else {}
         query = MemoryQuery(
             query_text="append",
@@ -96,11 +98,25 @@ class RedisMemoryPort(MemoryPort):
             raise self._failure(exc) from exc
 
     def _append_sync(self, query: MemoryQuery, record: MemoryRecord) -> None:
-        """用 pipeline 保证记录键与会话 trace 索引拥有相同 TTL。"""
+        """用 pipeline 覆盖同 ID 记录并保证记录键与会话索引拥有相同 TTL。"""
         ttl = self._retention.normalized_ttl()
+        records_key = self._records_key(query, query.trace_id)
+        existing = self._client.lrange(records_key, 0, -1) or []
+        kept: list[str] = []
+        for raw in existing:
+            try:
+                previous = MemoryRecord.model_validate_json(raw)
+            except ValueError:
+                # 损坏历史不会阻断同一会话的新记忆写入；retrieve 也会忽略它。
+                kept.append(raw)
+                continue
+            if previous.record_id != record.record_id:
+                kept.append(raw)
+        kept.append(record.model_dump_json())
         with self._client.pipeline() as pipeline:
-            pipeline.rpush(self._records_key(query, query.trace_id), record.model_dump_json())
-            pipeline.expire(self._records_key(query, query.trace_id), ttl)
+            pipeline.delete(records_key)
+            pipeline.rpush(records_key, *kept)
+            pipeline.expire(records_key, ttl)
             pipeline.sadd(self._index_key(query), query.trace_id)
             pipeline.expire(self._index_key(query), ttl)
             pipeline.execute()
@@ -116,9 +132,21 @@ class RedisMemoryPort(MemoryPort):
 
     def _forget_sync(self, source_id: str) -> None:
         """只扫描 memory records 键，不触碰审计或 abort 数据。"""
+        from app.agent.log import agent_trace
+
         for key in self._client.scan_iter(match="harness:memory:*:records"):
             values = self._client.lrange(key, 0, -1) or []
-            kept = [raw for raw in values if MemoryRecord.model_validate_json(raw).source_id != source_id]
+            kept: list[str] = []
+            for raw in values:
+                try:
+                    record = MemoryRecord.model_validate_json(raw)
+                except ValueError:
+                    # 损坏项不会被 retrieve 使用，保留它并写受限日志，不能阻断其余来源撤权。
+                    agent_trace("memory Redis撤权跳过损坏记录")
+                    kept.append(raw)
+                    continue
+                if record.source_id != source_id:
+                    kept.append(raw)
             if len(kept) != len(values):
                 ttl = self._client.ttl(key)
                 with self._client.pipeline() as pipeline:

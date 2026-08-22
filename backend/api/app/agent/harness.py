@@ -262,12 +262,15 @@ async def _deliver_sentence(
         begin_finalizing_delivery(trace=trace)
     await emit("thought", payload, task_id=task_id)
     agent_trace(f"交付助手回复 chars={len(text)} latency={latency_ms or 0}ms")
+    trace = current_trace()
     db.add(
         Message(
             session_id=session_id,
             role="assistant",
             content=text,
             latency_ms=latency_ms,
+            origin_trace_id=trace.trace_id if trace else None,
+            origin_span_id=trace.span_id if trace else None,
         )
     )
     db.commit()
@@ -342,7 +345,7 @@ async def _run_turn(
         db.commit()
 
     prefs = load_prefs(db, user.id)
-    history = history_for_plan(db, session)
+    history = await history_for_plan(db, session, trace=trace)
     compact_summary = getattr(session, "compact_summary", None)
     budget = TurnBudget(cap=MAX_MODEL_CALLS)
 
@@ -817,6 +820,7 @@ async def _harness_entry(
     user_id: str,
     text: str,
     attachments: list[str],
+    message_id: str | None,
     emit_factory: Callable[[Session], EmitFn],
     abort: asyncio.Event,
     stop: threading.Event,
@@ -840,6 +844,21 @@ async def _harness_entry(
         user = db.query(User).filter(User.id == user_id).first()
         if not session or not user:
             return
+        if message_id:
+            # 用户消息先于异步 Turn 落库；在本入口回填真实 trace，避免伪造消息级 trace。
+            try:
+                message = (
+                    db.query(Message)
+                    .filter(Message.id == message_id, Message.session_id == session_id)
+                    .first()
+                )
+                if message is not None:
+                    message.origin_trace_id = trace.trace_id
+                    message.origin_span_id = trace.span_id
+                    db.commit()
+            except Exception as exc:
+                db.rollback()
+                agent_trace(f"message trace回填异常 type={type(exc).__name__}")
         emit = emit_factory(db)
         publisher().start_turn(trace, session_id=session_id, status=TurnStatus.INIT)
 
@@ -926,6 +945,7 @@ async def dispatch_user_message(
     is_session_owner: bool,
     emit_busy: EmitFn,
     emit_factory: Callable[[Session], EmitFn],
+    message_id: str | None = None,
 ) -> None:
     """收包循环调用：共享会话限制 /compact、/stop 的会话级副作用。"""
     parsed = parse_slash(text)
@@ -972,6 +992,7 @@ async def dispatch_user_message(
                 user_id=user_id,
                 text=text,
                 attachments=attachments,
+                message_id=message_id,
                 emit_factory=emit_factory,
                 abort=handle.abort,
                 stop=handle.stop,

@@ -13,24 +13,47 @@ from app.harness.contracts.trace import TraceContext
 
 
 def is_record_visible(record: MemoryRecord, query: MemoryQuery) -> bool:
-    """在 Port 边界执行最小 ACL 与撤权过滤，不能把不可信记录交给 Context。"""
+    """在 Port 边界执行最小 ACL 与撤权过滤，缺归属的对话记录必须拒绝。"""
     metadata = record.metadata if isinstance(record.metadata, dict) else {}
     if metadata.get("forgotten") is True:
         return False
-    for key, expected in (
-        ("tenant_id", query.tenant_id),
-        ("user_id", query.user_id),
-        ("session_id", query.session_id),
-    ):
-        actual = metadata.get(key)
-        if actual not in (None, "", expected):
-            return False
-    allowed_users = metadata.get("allowed_user_ids")
-    if isinstance(allowed_users, list) and allowed_users and query.user_id not in allowed_users:
-        return False
+    if record.record_type == "conversation":
+        # 会话消息不得缺任一归属字段，否则会被错误地当成全局可见历史。
+        return all(
+            str(metadata.get(key) or "").strip() == expected
+            for key, expected in (
+                ("tenant_id", query.tenant_id),
+                ("user_id", query.user_id),
+                ("session_id", query.session_id),
+            )
+        )
     if record.record_type == "knowledge":
+        if str(metadata.get("tenant_id") or "").strip() != query.tenant_id:
+            return False
+        for key, expected in (("user_id", query.user_id), ("session_id", query.session_id)):
+            actual = str(metadata.get(key) or "").strip()
+            if actual and actual != expected:
+                return False
+        allowed_users = metadata.get("allowed_user_ids")
+        if isinstance(allowed_users, list) and allowed_users and query.user_id not in allowed_users:
+            return False
         return bool(query.permitted_resource_ids) and record.source_id in query.permitted_resource_ids
-    return True
+    # 未知记录类型没有明确 ACL 语义，必须按拒绝处理。
+    return False
+
+
+def _validate_append_scope(record: MemoryRecord) -> None:
+    """在写入端拒绝无归属记录，避免脏数据绕过后续 retrieve 的 ACL。"""
+    metadata = record.metadata if isinstance(record.metadata, dict) else {}
+    if record.record_type == "conversation":
+        required = ("tenant_id", "user_id", "session_id")
+    elif record.record_type == "knowledge":
+        # 知识可以跨会话复用，但仍必须隶属租户。
+        required = ("tenant_id",)
+    else:
+        raise AppError(ErrorCode.VALIDATION, "记忆记录类型不受支持")
+    if any(not str(metadata.get(key) or "").strip() for key in required):
+        raise AppError(ErrorCode.VALIDATION, "记忆记录缺少归属信息")
 
 
 @dataclass
@@ -56,6 +79,7 @@ class InMemoryMemoryPort(MemoryPort):
         """追加带 trace 来源的记录；相同 record_id 覆盖以保证调用幂等。"""
         if not record.source_id.strip():
             raise AppError(ErrorCode.VALIDATION, "记忆记录缺少来源")
+        _validate_append_scope(record)
         normalized = record.model_copy(
             update={
                 "origin_trace_id": record.origin_trace_id or trace.trace_id,
@@ -96,8 +120,8 @@ class CompositeMemoryPort(MemoryPort):
         return sorted(deduplicated.values(), key=lambda item: (-item.score, item.record_id))[: query.top_k_recall]
 
     async def append(self, record: MemoryRecord, *, trace: TraceContext) -> None:
-        """短期必写；长期按记录类型分派，失败不吞掉以免伪造成功。"""
-        if self.short_term is not None:
+        """对话写短期态；长期按记录类型分派，失败不吞掉以免伪造成功。"""
+        if record.record_type == "conversation" and self.short_term is not None:
             await self.short_term.append(record, trace=trace)
         target = self.knowledge if record.record_type == "knowledge" else self.conversation
         if target is not None:

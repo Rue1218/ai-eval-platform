@@ -116,6 +116,11 @@ class Message(Base):
     # assistant 交付句的回复生成耗时（毫秒）：从本轮 user_message 入 Harness 到交付的墙钟时长。
     # 仅 assistant 消息非空，user/system 保持 NULL；历史回放供前端气泡展示「耗时 x 秒」。
     latency_ms = Column(Integer, nullable=True)
+    # 记忆层溯源仅供服务端审计与回放；历史旧行允许为空，新增消息由 Harness 回填当前 Turn。
+    origin_trace_id = Column(String, nullable=True, index=True)
+    origin_span_id = Column(String, nullable=True)
+    # forget 只禁止进入模型记忆，不删除用户可回放的产品消息和审计链路。
+    memory_forgotten = Column(Boolean, nullable=False, default=False, server_default=text("false"))
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
