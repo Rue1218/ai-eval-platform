@@ -5,8 +5,13 @@ from pathlib import Path
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-# 确保 api/ 在 sys.path，可导入 app 包（alembic 从 api/ 目录运行）
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# 开发环境的 shared/ 位于 backend/，容器内则与 app/ 同在 /app；
+# 两个根目录都加入路径，保证 Alembic 与 API/Worker 使用同一份共享模型。
+api_root = Path(__file__).resolve().parents[1]
+for import_root in (api_root, api_root.parent):
+    root_text = str(import_root)
+    if root_text not in sys.path:
+        sys.path.insert(0, root_text)
 
 from app.config import settings  # noqa: E402
 from app.db import Base  # noqa: E402

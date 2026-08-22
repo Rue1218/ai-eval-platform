@@ -319,6 +319,6 @@ V1.7：在 V1.6 两个 P1 修复之上实现阶段 4.2：新增同库 `memory_kn
 | `backend/api/app/harness/memory/ports.py`、`short_term_redis.py`、`conversation_store.py`、`runtime.py` | Redis 短期适配、PG 对话归档与运行时组合 Port；V1.6 恢复压缩游标、提供统一消息写入适配器并复核写入侧 session owner |
 | `backend/api/app/harness/memory/long_term_pgvector.py`、`knowledge_store.py`、`contracts/memory.py` | V1.7：pgvector 知识写入、向量 ACL 召回与撤权；校验记录/查询向量，不在 Context 调用 Embedding SDK |
 | `backend/api/app/agent/context.py`、`agent/harness.py`、`routers/ws.py` | 将规划历史接入 MemoryPort，并给新消息回填真实 trace 溯源；V1.6 在用户入口和助手提交后写入记忆 |
-| `backend/shared/models.py`、`backend/api/migrations/versions/c650ba766b96_消息记忆溯源与撤权字段.py`、`d6f2a91be430_新增记忆知识向量表.py` | Message 溯源列、知识向量表与撤权标记；pgvector 扩展在迁移内幂等启用 |
+| `backend/shared/models.py`、`backend/api/migrations/env.py`、`backend/api/migrations/versions/c650ba766b96_消息记忆溯源与撤权字段.py`、`d6f2a91be430_新增记忆知识向量表.py` | Message 溯源列、知识向量表与撤权标记；Alembic 同时识别 API 与共享模型根目录，pgvector 扩展在迁移内幂等启用 |
 | `backend/api/tests/harness/memory/test_memory_activation.py`、`test_pgvector_knowledge.py`、`tests/integration/test_memory_containers.py`、`.github/workflows/ci.yml` | V1.7：记忆单元回归及真实 PostgreSQL/Redis 容器 CI 门禁 |
 | `docs/AI测试与评估平台-Harness阶段4-记忆层接入.md` | V1.7：阶段 4.2 实现范围、容器验收方式与未授权产品入口边界 |
