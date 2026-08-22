@@ -9,7 +9,8 @@ from typing import Any
 
 from app.agent.defaults import SHORT_TOOLS, TOOL_TITLES, WRITE_TOOLS, is_long_tool
 from app.agent.log import agent_trace
-from app.harness.contracts.tool_call import ToolCall
+from app.harness.contracts.tool_call import ToolCall, ToolCallBatch
+from app.harness.contracts.trace import TraceContext
 
 _SCHEMA_PATH = Path(__file__).resolve().parents[1] / "prompts" / "react-output.schema.json"
 _SCHEMA: dict[str, Any] | None = None
@@ -26,6 +27,16 @@ class McpStep:
     reply: str
     latency_ms: int = 0
     reasoning_text: str = ""
+    missing_tool: bool = False
+    model_done: bool | None = None
+
+    def __post_init__(self) -> None:
+        """兼容旧测试桩：未显式区分时，``done`` 即视为模型的完成声明。"""
+        if self.model_done is None:
+            self.model_done = self.done
+
+
+ReactDecision = McpStep | ToolCallBatch
 
 
 def _schema() -> dict[str, Any]:
@@ -52,6 +63,23 @@ def _type_ok(value: Any, expected: Any) -> bool:
 
 def _validate_against(payload: Any, schema: dict[str, Any], *, loc: str) -> None:
     """只覆盖本阶段 Schema 用到的关键字，避免引入 jsonschema 依赖。"""
+    variants = schema.get("oneOf")
+    if isinstance(variants, list):
+        matched = 0
+        errors: list[ValueError] = []
+        for variant in variants:
+            try:
+                _validate_against(payload, variant, loc=loc)
+            except ValueError as exc:
+                errors.append(exc)
+                continue
+            matched += 1
+        if matched == 0 and errors:
+            # 保留第一个分支的精确字段诊断，兼容单调用路径既有错误契约。
+            raise errors[0]
+        if matched != 1:
+            raise ValueError(f"ReAct JSON {loc} 未匹配唯一输出分支")
+        return
     if not _type_ok(payload, schema.get("type", "object")):
         raise ValueError(f"ReAct JSON {loc} 类型不合法")
     if schema.get("type") == "object" or "properties" in schema:
@@ -100,6 +128,7 @@ def parse_mcp_step(raw: dict) -> McpStep:
     reply = str(raw.get("reply") or "").strip()
     done = bool(raw.get("done"))
     tool_raw = raw.get("tool")
+    requested_no_tool = tool_raw in (None, "", "null", "none", "None")
     tool: str | None
     if tool_raw in (None, "", "null", "none", "None"):
         tool = None
@@ -121,7 +150,16 @@ def parse_mcp_step(raw: dict) -> McpStep:
             thought = f"ToolCall「{TOOL_TITLES.get(tool, tool)}」"
         elif done:
             thought = "本轮观察已足够，停止调用工具"
-    return McpStep(thought=thought, tool=tool, arguments=arguments, done=done or not tool, reply=reply)
+    return McpStep(
+        thought=thought,
+        tool=tool,
+        arguments=arguments,
+        done=done or not tool,
+        reply=reply,
+        # 仅标记模型明确要求继续却未给动作；未知/写/长工具沿用既有静默停止语义。
+        missing_tool=not done and requested_no_tool,
+        model_done=done,
+    )
 
 
 def tool_call_from_step(step: McpStep) -> ToolCall:
@@ -132,4 +170,45 @@ def tool_call_from_step(step: McpStep) -> ToolCall:
         arguments=dict(step.arguments or {}),
         done=step.done,
         reply=step.reply,
+    )
+
+
+def parse_model_payload(raw: dict[str, Any], *, trace: TraceContext) -> ReactDecision:
+    """解析模型结构化输出并绑定 Turn；批次 span 仅由编排执行阶段创建。"""
+    validated = validate_react_output(raw)
+    if "tool_calls" not in validated:
+        return parse_mcp_step(validated)
+
+    calls: list[ToolCall] = []
+    for item in validated.get("tool_calls") or []:
+        # 复用产品工具裁剪：未知工具/长任务保持既有不执行语义。
+        step = parse_mcp_step(
+            {
+                "thought": validated.get("thought") or "",
+                "tool": item.get("tool"),
+                "arguments": item.get("arguments"),
+                "done": False,
+                "reply": "",
+            }
+        )
+        if not step.tool or step.done:
+            continue
+        call_payload: dict[str, Any] = {
+            "tool": step.tool,
+            "arguments": step.arguments,
+            "thought": str(validated.get("thought") or ""),
+            "done": False,
+            "reply": "",
+            "trace_id": trace.trace_id,
+        }
+        if str(item.get("call_id") or "").strip():
+            call_payload["call_id"] = str(item["call_id"])
+        calls.append(ToolCall(**call_payload))
+
+    return ToolCallBatch(
+        turn_id=trace.turn_id,
+        thought=str(validated.get("thought") or ""),
+        done=bool(validated.get("done")),
+        reply=str(validated.get("reply") or ""),
+        tool_calls=calls,
     )

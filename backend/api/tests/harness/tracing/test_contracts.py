@@ -118,11 +118,13 @@ def test_react_output_schema_forbids_trace_and_cot():
     assert "请逐步" not in raw
     assert "chain of thought" not in raw.lower()
     schema = json.loads(raw)
-    properties = schema.get("properties", {})
-    assert "trace_id" not in properties
-    assert "span_id" not in properties
-    assert properties["arguments"]["type"] == "object"
-    items = properties["tool_calls"]["items"]
+    variants = schema["oneOf"]
+    single = next(item for item in variants if "arguments" in item["properties"])
+    batch = next(item for item in variants if "tool_calls" in item["properties"])
+    assert "trace_id" not in single["properties"]
+    assert "span_id" not in single["properties"]
+    assert single["properties"]["arguments"]["type"] == "object"
+    items = batch["properties"]["tool_calls"]["items"]
     assert items.get("additionalProperties") is False
     assert "trace_id" not in items["properties"]
     assert "span_id" not in items["properties"]

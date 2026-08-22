@@ -25,21 +25,35 @@ from app.agent.persona import react_system, turn_system
 from app.agent.plan import PlanArtifact, parse_json_object
 from app.errors import AppError, ErrorCode
 from app.harness.contracts.cancellation import CancellationToken, TurnCancelled
-from app.harness.contracts.errors import MissingTraceContext, TraceMismatch
-from app.harness.contracts.tool_call import OutcomeStatus, ToolCall
+from app.harness.contracts.errors import ErrorClass, MissingTraceContext, TraceMismatch
+from app.harness.contracts.tool_call import ExecutionOutcome, OutcomeStatus, ToolCall, ToolCallBatch
 from app.harness.contracts.trace import TraceContext, using_trace
+from app.harness.contracts.turn import TurnStatus
 from app.harness.execution.facade import bind_arguments
 from app.harness.execution.facade import execute as execute_tool
-from app.harness.feedback.normalizer import normalize
+from app.harness.execution.tool_registry import get_tool_definition
+from app.harness.feedback.normalizer import merge_batch, normalize
 from app.harness.feedback.observation import collect_ids, summarize_observation
 from app.harness.feedback.publisher import publisher
 from app.harness.feedback.redaction import redact_secrets
 from app.harness.orchestration.budgets import (
     consecutive_retryable_error_cap,
+    max_parallel_calls,
     rounds_cap,
     same_call_fingerprint_cap,
 )
-from app.harness.orchestration.parser import McpStep, parse_mcp_step, validate_react_output
+from app.harness.orchestration.parallel_facade import (
+    PreparedBatchCall,
+    decide_parallel,
+    execute_parallel,
+)
+from app.harness.orchestration.parser import (
+    McpStep,
+    ReactDecision,
+    parse_model_payload,
+)
+from app.harness.orchestration.state_machine import TurnStateMachine
+from app.harness.orchestration.streaming import begin_finalizing_stream
 
 EmitFn = Callable[..., Awaitable[int]]
 AbortCheck = Callable[[], None]
@@ -97,7 +111,19 @@ async def emit_and_run_tool(
         agent_trace("ToolCall 拒绝 task.create（须 ack 后）")
         return False
 
-    bound = bind_arguments(db, name, arguments, text=text, attachments=attachments)
+    try:
+        bound = bind_arguments(db, name, arguments, text=text, attachments=attachments)
+    except AppError as exc:
+        # 参数绑定失败时没有真正 ToolCall，不能孤立发送 tool_result；仅回填安全 observation。
+        _append_internal_error(
+            react,
+            tool=name,
+            error_class=ErrorClass.ARGUMENT_VALIDATION_ERROR,
+            message=exc.message,
+            trace=trace,
+        )
+        agent_trace(f"ToolCall 参数校验失败 name={name}")
+        return False
     agent_trace(f"ToolCall 开始 name={name} arguments={_trace_toolcall_args(bound)}")
     await emit("tool_call", {"name": name, "arguments": bound})
 
@@ -149,6 +175,160 @@ async def emit_and_run_tool(
     return result.ok
 
 
+def _append_internal_error(
+    react: Any,
+    *,
+    tool: str,
+    error_class: ErrorClass,
+    message: str,
+    trace: TraceContext,
+) -> None:
+    """把未执行的编排错误收成 observation，不发送孤立的 WS 工具事件。"""
+    execution_span = trace.child("execution.validation")
+    call = ToolCall(
+        tool=tool,
+        arguments={},
+        thought="",
+        done=False,
+        reply="",
+        trace_id=execution_span.trace_id,
+        span_id=execution_span.span_id,
+    )
+    outcome = ExecutionOutcome.failed(
+        call,
+        error_class,
+        message,
+        trace_id=execution_span.trace_id,
+        span_id=execution_span.span_id,
+        parent_span_id=execution_span.parent_span_id,
+    )
+    feedback_span = execution_span.child("feedback.normalize")
+    result = normalize(outcome, trace=feedback_span)
+    publisher().record_span(execution_span)
+    publisher().record_span(feedback_span)
+    react.observations.append(
+        summarize_observation(result.tool, result.ok, result.data, result.error, result.latency_ms)
+    )
+
+
+async def _emit_and_run_parallel_batch(
+    db: Session,
+    react: Any,
+    *,
+    batch: ToolCallBatch,
+    user_id: str,
+    emit: EmitFn,
+    text: str,
+    attachments: list[str],
+    execute_short_tool: Callable[..., tuple[bool, Any, str | None, int]],
+    execute_isolated: Callable[..., tuple[bool, Any, str | None, int]],
+    trace: TraceContext,
+    cancel: CancellationToken,
+    max_calls: int,
+) -> bool:
+    """并发执行一批已过门禁的调用；批次 span 是每个执行 Outcome 的唯一父节点。"""
+    batch_execution_span = trace.child("execution.batch")
+    prepared: list[PreparedBatchCall] = []
+    outcomes_by_call_id: dict[str, ExecutionOutcome] = {}
+    emitted_call_ids: set[str] = set()
+
+    for call in batch.tool_calls:
+        execution_span = batch_execution_span.child("execution.facade")
+        try:
+            bound = bind_arguments(
+                db,
+                call.tool or "",
+                call.arguments,
+                text=text,
+                attachments=attachments,
+            )
+        except AppError as exc:
+            # 入参不合规不能启动工具，但必须作为同一批次的结构化 observation 回填。
+            outcomes_by_call_id[call.call_id] = ExecutionOutcome.failed(
+                call,
+                ErrorClass.ARGUMENT_VALIDATION_ERROR,
+                exc.message,
+                trace_id=execution_span.trace_id,
+                span_id=execution_span.span_id,
+                parent_span_id=batch_execution_span.span_id,
+            )
+            continue
+        bound_call = call.model_copy(
+            update={
+                "arguments": bound,
+                "trace_id": execution_span.trace_id,
+                "span_id": execution_span.span_id,
+            }
+        )
+        prepared.append(PreparedBatchCall(call=bound_call, trace=execution_span))
+        emitted_call_ids.add(bound_call.call_id)
+        await emit("tool_call", {"name": bound_call.tool, "arguments": bound})
+
+    async def _run_one(prepared_call: PreparedBatchCall) -> ExecutionOutcome:
+        return await execute_tool(
+            prepared_call.call,
+            trace=prepared_call.trace,
+            db=db,
+            user_id=user_id,
+            cancel=cancel,
+            run_tuple=execute_short_tool,
+            run_isolated=execute_isolated,
+        )
+
+    outcomes = await execute_parallel(
+        prepared,
+        cancel=cancel,
+        run_call=_run_one,
+        max_calls=max_calls,
+    )
+    outcomes_by_call_id.update({outcome.call_id: outcome for outcome in outcomes})
+    ordered_outcomes = [outcomes_by_call_id[call.call_id] for call in batch.tool_calls]
+
+    feedback_span = trace.child("feedback.merge_batch")
+    try:
+        result_batch = merge_batch(
+            batch,
+            ordered_outcomes,
+            batch_execution_span=batch_execution_span,
+            trace=feedback_span,
+        )
+    except (MissingTraceContext, TraceMismatch) as exc:
+        agent_trace(f"ReAct 批次 normalize Fail-fast type={type(exc).__name__}")
+        raise AppError(ErrorCode.INTERNAL, "操作失败") from exc
+    publisher().record_span(batch_execution_span)
+    publisher().record_span(feedback_span)
+
+    all_ok = True
+    cancelled = False
+    for result in result_batch.ordered_results:
+        if result.call_id in emitted_call_ids:
+            payload: dict[str, Any] = {
+                "name": result.tool,
+                "ok": result.ok,
+                "latency_ms": result.latency_ms,
+            }
+            if result.ok:
+                payload["data"] = result.data
+            else:
+                payload["error"] = result.error or "该能力未启用"
+            await emit("tool_result", payload)
+        if result.ok:
+            react.known_ids.extend(collect_ids(result.data))
+        else:
+            all_ok = False
+        react.observations.append(
+            summarize_observation(result.tool, result.ok, result.data, result.error, result.latency_ms)
+        )
+        cancelled = cancelled or result.status in {
+            OutcomeStatus.CANCELLED,
+            OutcomeStatus.CANCEL_REQUESTED,
+        }
+    if cancelled:
+        raise TurnCancelled(cancel.reason or "cancelled")
+    cancel.raise_if_cancelled()
+    return all_ok
+
+
 def _call_mcp_step(
     db: Session,
     *,
@@ -156,7 +336,8 @@ def _call_mcp_step(
     payload: dict,
     stop: threading.Event,
     cancel: CancellationToken,
-) -> McpStep:
+    trace: TraceContext,
+) -> ReactDecision:
     """同步调用模型，只要 JSON 决策，不走 function calling。
 
     经 ``app.llm`` 再导出以保留 monkeypatch 锚点；正文在 ``harness.llm.client``。
@@ -175,10 +356,10 @@ def _call_mcp_step(
         timeout_s=MODEL_TIMEOUT_S,
         cancel=cancel,
     )
-    parsed = validate_react_output(parse_json_object(result.text))
-    step = parse_mcp_step(parsed)
-    step.latency_ms = result.latency_ms
-    return step
+    decision = parse_model_payload(parse_json_object(result.text), trace=trace)
+    if isinstance(decision, McpStep):
+        decision.latency_ms = result.latency_ms
+    return decision
 
 
 async def stream_mcp_step(
@@ -189,7 +370,7 @@ async def stream_mcp_step(
     emit: EmitFn,
     trace: TraceContext,
     cancel: CancellationToken,
-) -> McpStep:
+) -> ReactDecision:
     """流式跑一轮 MCP 决策：推理链走 thought.stream=think，正文只解析 JSON。
 
     ``trace`` / ``cancel`` 不可缺省。经 ``app.llm`` 再导出以保留 monkeypatch 锚点。
@@ -246,30 +427,37 @@ async def stream_mcp_step(
         if reasoning:
             await emit("thought", {"text": reasoning, "stream": "think_final"})
         try:
-            parsed = validate_react_output(parse_json_object(content))
+            parsed = parse_json_object(content)
         except ValueError:
             agent_trace("ReAct 流式 JSON 解析失败，回退非流式决策")
             isolated = SessionLocal()
             try:
-                step = _call_mcp_step(
-                    isolated, system=system, payload=payload, stop=stop, cancel=cancel
+                decision = _call_mcp_step(
+                    isolated,
+                    system=system,
+                    payload=payload,
+                    stop=stop,
+                    cancel=cancel,
+                    trace=trace,
                 )
             finally:
                 isolated.close()
-            step.reasoning_text = reasoning
-            if not step.latency_ms:
-                step.latency_ms = latency_ms
+            if isinstance(decision, McpStep):
+                decision.reasoning_text = reasoning
+                if not decision.latency_ms:
+                    decision.latency_ms = latency_ms
             publisher().record_span(
                 parse_span, latency_ms=round((time.perf_counter() - started) * 1000)
             )
-            return step
-        step = parse_mcp_step(parsed)
-        step.latency_ms = latency_ms
-        step.reasoning_text = reasoning
+            return decision
+        decision = parse_model_payload(parsed, trace=trace)
+        if isinstance(decision, McpStep):
+            decision.latency_ms = latency_ms
+            decision.reasoning_text = reasoning
         publisher().record_span(
             parse_span, latency_ms=round((time.perf_counter() - started) * 1000)
         )
-        return step
+        return decision
 
 
 async def _emit_react_thought(
@@ -303,7 +491,7 @@ async def _run_mcp_react_loop(
     history: list[dict[str, str]],
     compact_summary: str | None,
     rounds_limit: int,
-    stream_mcp_step: Callable[..., Awaitable[McpStep]],
+    stream_mcp_step: Callable[..., Awaitable[ReactDecision]],
     execute_short_tool: Callable[..., tuple[bool, Any, str | None, int]],
     execute_isolated: Callable[..., tuple[bool, Any, str | None, int]],
     trace: TraceContext,
@@ -319,6 +507,7 @@ async def _run_mcp_react_loop(
     )
     executed_calls: dict[tuple[str, str], int] = {}
     consecutive_retryable = 0
+    state = TurnStateMachine()
 
     while react.rounds_used < rounds_limit:
         check_abort()
@@ -338,7 +527,7 @@ async def _run_mcp_react_loop(
             "note": "suggested_tools 只是规划建议，不是必须执行的清单",
         }
         try:
-            step = await stream_mcp_step(
+            decision = await stream_mcp_step(
                 system=system,
                 payload=payload,
                 stop=stop,
@@ -359,20 +548,116 @@ async def _run_mcp_react_loop(
             agent_exception("ReAct 决策内部异常，改走工具队列", exc)
             return
 
+        state.transition(TurnStatus.PARSED)
+        publisher().set_turn_status(trace, status=TurnStatus.PARSED)
         react.used_llm = True
-        if step.thought:
-            react.thinking_text = (react.thinking_text + "\n" + step.thought).strip()[-12000:]
-        if step.reasoning_text:
-            react.thinking_text = (react.thinking_text + "\n" + step.reasoning_text).strip()[-12000:]
-        elif step.thought:
+        if decision.thought:
+            react.thinking_text = (react.thinking_text + "\n" + decision.thought).strip()[-12000:]
+        if isinstance(decision, McpStep) and decision.reasoning_text:
+            react.thinking_text = (
+                react.thinking_text + "\n" + decision.reasoning_text
+            ).strip()[-12000:]
+        elif decision.thought:
             await _emit_react_thought(
                 emit,
-                step.thought,
+                decision.thought,
                 skill_id=plan.skill_id,
-                latency_ms=step.latency_ms or None,
+                latency_ms=decision.latency_ms if isinstance(decision, McpStep) else None,
             )
-        if step.reply:
-            react.reply_text = step.reply
+        if decision.reply:
+            react.reply_text = decision.reply
+
+        if isinstance(decision, ToolCallBatch):
+            if decision.done:
+                if decision.tool_calls:
+                    react.rounds_used += 1
+                    react.reply_text = ""
+                    _append_internal_error(
+                        react,
+                        tool="batch",
+                        error_class=ErrorClass.DONE_TOOL_CONFLICT,
+                        message="模型已声明完成，不能同时请求批量工具调用",
+                        trace=trace,
+                    )
+                    state.transition(TurnStatus.FEEDBACK_READY)
+                    publisher().set_turn_status(trace, status=TurnStatus.FEEDBACK_READY)
+                    continue
+                else:
+                    begin_finalizing_stream(trace=trace, cancel=cancel, state=state)
+                break
+            react.rounds_used += 1
+            if not decision.tool_calls:
+                _append_internal_error(
+                    react,
+                    tool="",
+                    error_class=ErrorClass.MISSING_TOOL,
+                    message="模型未提供可执行工具",
+                    trace=trace,
+                )
+                state.transition(TurnStatus.FEEDBACK_READY)
+                publisher().set_turn_status(trace, status=TurnStatus.FEEDBACK_READY)
+                continue
+
+            parallel = decide_parallel(
+                decision,
+                enabled=PARALLEL_READONLY_TOOLS,
+                max_calls=max_parallel_calls(),
+                lookup=get_tool_definition,
+            )
+            if not PARALLEL_READONLY_TOOLS:
+                state.transition(TurnStatus.EXECUTING)
+                publisher().set_turn_status(trace, status=TurnStatus.EXECUTING)
+                for call in decision.tool_calls:
+                    await emit_and_run_tool(
+                        db,
+                        react,
+                        name=call.tool or "",
+                        arguments=call.arguments,
+                        user_id=user_id,
+                        emit=emit,
+                        text=text,
+                        attachments=attachments,
+                        execute_short_tool=execute_short_tool,
+                        execute_isolated=execute_isolated,
+                        trace=trace,
+                        cancel=cancel,
+                    )
+                state.transition(TurnStatus.FEEDBACK_READY)
+                publisher().set_turn_status(trace, status=TurnStatus.FEEDBACK_READY)
+                continue
+            if not parallel.execute_in_parallel:
+                _append_internal_error(
+                    react,
+                    tool="batch",
+                    error_class=ErrorClass.PARALLEL_POLICY_VIOLATION,
+                    message=parallel.violation_reason or "批量工具不满足并行策略",
+                    trace=trace,
+                )
+                state.transition(TurnStatus.FEEDBACK_READY)
+                publisher().set_turn_status(trace, status=TurnStatus.FEEDBACK_READY)
+                continue
+
+            state.transition(TurnStatus.PARALLEL_EXECUTING)
+            publisher().set_turn_status(trace, status=TurnStatus.PARALLEL_EXECUTING)
+            await _emit_and_run_parallel_batch(
+                db,
+                react,
+                batch=decision,
+                user_id=user_id,
+                emit=emit,
+                text=text,
+                attachments=attachments,
+                execute_short_tool=execute_short_tool,
+                execute_isolated=execute_isolated,
+                trace=trace,
+                cancel=cancel,
+                max_calls=max_parallel_calls(),
+            )
+            state.transition(TurnStatus.FEEDBACK_READY)
+            publisher().set_turn_status(trace, status=TurnStatus.FEEDBACK_READY)
+            continue
+
+        step = decision
 
         raw_tool = _redirect_creative_tool(plan, text, step.tool)
         if raw_tool and is_long_tool(raw_tool):
@@ -382,7 +667,34 @@ async def _run_mcp_react_loop(
                 skill_id=plan.skill_id,
             )
             break
+        if step.model_done and raw_tool:
+            react.rounds_used += 1
+            react.reply_text = ""
+            _append_internal_error(
+                react,
+                tool=raw_tool,
+                error_class=ErrorClass.DONE_TOOL_CONFLICT,
+                message="模型已声明完成，不能同时请求工具调用",
+                trace=trace,
+            )
+            state.transition(TurnStatus.FEEDBACK_READY)
+            publisher().set_turn_status(trace, status=TurnStatus.FEEDBACK_READY)
+            continue
+        if step.missing_tool:
+            react.rounds_used += 1
+            _append_internal_error(
+                react,
+                tool="",
+                error_class=ErrorClass.MISSING_TOOL,
+                message="模型未提供可执行工具",
+                trace=trace,
+            )
+            state.transition(TurnStatus.FEEDBACK_READY)
+            publisher().set_turn_status(trace, status=TurnStatus.FEEDBACK_READY)
+            continue
         if not raw_tool or step.done:
+            if step.model_done and not raw_tool:
+                begin_finalizing_stream(trace=trace, cancel=cancel, state=state)
             break
 
         args_key = json.dumps(step.arguments, ensure_ascii=False, sort_keys=True)
@@ -402,6 +714,8 @@ async def _run_mcp_react_loop(
             break
 
         react.rounds_used += 1
+        state.transition(TurnStatus.EXECUTING)
+        publisher().set_turn_status(trace, status=TurnStatus.EXECUTING)
         ok = await emit_and_run_tool(
             db,
             react,
@@ -416,6 +730,8 @@ async def _run_mcp_react_loop(
             trace=trace,
             cancel=cancel,
         )
+        state.transition(TurnStatus.FEEDBACK_READY)
+        publisher().set_turn_status(trace, status=TurnStatus.FEEDBACK_READY)
         executed_calls[dedup_key] = seen + 1
         if ok:
             consecutive_retryable = 0
@@ -522,7 +838,7 @@ async def run_react_loop(
     stop: threading.Event | None = None,
     history: list[dict[str, str]] | None = None,
     compact_summary: str | None = None,
-    stream_mcp_step: Callable[..., Awaitable[McpStep]],
+    stream_mcp_step: Callable[..., Awaitable[ReactDecision]],
     execute_short_tool: Callable[..., tuple[bool, Any, str | None, int]],
     execute_isolated: Callable[..., tuple[bool, Any, str | None, int]],
     new_artifact: Callable[[], Any],
