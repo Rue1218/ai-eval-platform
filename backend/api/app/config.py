@@ -14,6 +14,11 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 720
     ws_ticket_expire_minutes: int = 5
     data_dir: str = "/data"
+    # Harness 记忆层：Redis 仅存可过期短期状态，长期审计仍使用 PostgreSQL。
+    # 短期 Port 默认关闭；Redis 容器经 feat/deploy-* 落地后再由环境变量开启。
+    redis_url: str = "redis://localhost:6379/0"
+    harness_memory_short_term_enabled: bool = False
+    harness_memory_ttl_seconds: int = 86400
     # 协议档连接参数写入的受控环境文件；生产通过 Compose 挂载宿主机 .env。
     profile_env_file: str = ".env"
     cookie_secure: bool = False

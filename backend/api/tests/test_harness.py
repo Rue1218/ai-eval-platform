@@ -6,6 +6,9 @@ import asyncio
 import json
 import threading
 import time
+import uuid
+from datetime import datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
@@ -54,7 +57,7 @@ from app.errors import AppError, ErrorCode
 from app.harness.contracts.cancellation import CancellationToken, TurnCancelled
 from app.harness.contracts.trace import TraceContext
 from app.harness.llm.client import AgentJsonStreamResult
-from app.models import Dataset, ProtocolProfile, Task, User
+from app.models import Dataset, Message, ProtocolProfile, Task, User
 from app.models import Session as AgentSession
 
 
@@ -495,6 +498,87 @@ def test_compact_aborted_before_model_does_not_write():
     session = AgentSession(id="s1", user_id="u1", title="t")
     assert run_compact(_FakeDb(), session, stop=stop) is None
     assert session.compact_summary is None
+
+
+def test_run_compact_summarizes_oldest_and_keeps_latest_chronology(monkeypatch):
+    """/compact 候选经记忆层管线取回：keep 必须是最新 KEEP_RECENT 条且按时间序。
+
+    回归锚：CompositeMemoryPort 曾按 record_id（uuid4）字典序决序，把会话历史
+    打乱后导致 keep 取到任意 6 条、compact_keep_from 指向随机中间消息。
+    """
+    session = AgentSession(id="s-compact", user_id="u-compact", title="压缩")
+    base = datetime(2026, 8, 22, 12, 0, 0)
+    messages = []
+    for index in range(10):
+        mid = uuid.uuid4().hex
+        messages.append(
+            Message(
+                id=mid,
+                session_id=session.id,
+                role="user" if index % 2 == 0 else "assistant",
+                content=f"消息{index}",
+                source_id=f"message:{mid}",
+                created_at=base + timedelta(minutes=index),
+            )
+        )
+
+    class _RowsQuery:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def filter(self, *_args, **_kwargs):
+            return self
+
+        def order_by(self, *_args, **_kwargs):
+            return self
+
+        def limit(self, _count):
+            return self
+
+        def all(self):
+            # 模拟 ConversationStore 查询的 created_at/id DESC 排序；
+            # Port 内部再 reversed() 还原为时间序。
+            return list(reversed(self._rows))
+
+        def first(self):
+            return self._rows[0] if self._rows else None
+
+    class _CompactDb:
+        def __init__(self):
+            self.commits = 0
+
+        def query(self, model):
+            if model is AgentSession:
+                return _RowsQuery([session])
+            if model is Message:
+                return _RowsQuery(messages)
+            return _RowsQuery([])
+
+        def add(self, _item):
+            return None
+
+        def flush(self):
+            return None
+
+        def commit(self):
+            self.commits += 1
+
+    captured: dict = {}
+
+    def _fake_llm(_db, _system, payload, **_kwargs):
+        captured["payload"] = payload
+        return SimpleNamespace(text="这是压缩摘要")
+
+    monkeypatch.setattr("app.llm.call_agent_model_detailed", _fake_llm)
+    sentence, old_m, new_m = run_compact(_CompactDb(), session, user_id="u-compact")
+
+    assert sentence == "已压缩 10→6"
+    assert (old_m, new_m) == (10, 6)
+    assert session.compact_summary == "这是压缩摘要"
+    # keep 是时间序上最新的 KEEP_RECENT 条，锚点指向其中最早一条。
+    assert session.compact_keep_from == messages[-6].id
+    assert "消息0" in captured["payload"]
+    assert "消息9" not in captured["payload"]  # 最新 6 条进入 keep，不参与摘要
 
 
 def test_run_plan_slash_keeps_pref_thoughts():
@@ -1602,17 +1686,18 @@ class _FakeDb:
 
 
 class _CancelQuery:
-    """返回指定任务的取消链路查询桩。"""
+    """取消链路查询桩：按预设行返回，缺省回落到任务本身。"""
 
-    def __init__(self, task: Task | None):
+    def __init__(self, task: Task | None, rows: list | None = None):
         self.task = task
+        self.rows = list(rows) if rows is not None else ([task] if task is not None else [])
         self.locked = False
 
     def filter(self, *_args, **_kwargs):
         return self
 
     def first(self):
-        return self.task
+        return self.rows[0] if self.rows else None
 
     def with_for_update(self):
         self.locked = True
@@ -1620,18 +1705,31 @@ class _CancelQuery:
 
 
 class _CancelDb:
-    """覆盖 WS 取消分支所需的最小事务观测。"""
+    """覆盖 WS 取消分支所需的最小事务观测。
 
-    def __init__(self, task: Task | None):
+    记忆层 Port 落库走查改/插入路径：会话查询返回可见会话，消息查询返回空行使
+    ``ConversationStore.append`` 走新增插入；Task 查询保留 ``with_for_update`` 行锁观测。
+    """
+
+    def __init__(self, task: Task | None, session: AgentSession | None = None):
         self.query_result = _CancelQuery(task)
+        self.session_query = _CancelQuery(None, rows=[session] if session is not None else [])
+        self.message_query = _CancelQuery(None, rows=[])
         self.added: list = []
         self.commit_calls = 0
 
-    def query(self, *_args, **_kwargs):
+    def query(self, model, *_args, **_kwargs):
+        if model is AgentSession:
+            return self.session_query
+        if model is Message:
+            return self.message_query
         return self.query_result
 
     def add(self, item):
         self.added.append(item)
+
+    def flush(self):
+        return None
 
     def commit(self):
         self.commit_calls += 1
@@ -1654,7 +1752,8 @@ def _cancel_task(status: str = "running", creator: str = "u-owner", session_id: 
 def test_ws_cancel_by_creator_writes_timeline_and_confirmation():
     """WS 取消与 REST 同样写审计、时间线，并回传可关联任务的确认事件。"""
     task = _cancel_task()
-    db = _CancelDb(task)
+    session = AgentSession(id="s-cancel", user_id="u-owner", title="取消测试")
+    db = _CancelDb(task, session=session)
     events: list[tuple[str, dict, str | None]] = []
 
     async def emit(event: str, payload: dict, *, task_id: str | None = None) -> int:
@@ -1664,7 +1763,7 @@ def test_ws_cancel_by_creator_writes_timeline_and_confirmation():
     asyncio.run(
         handle_cancel_task(
             db,
-            session=AgentSession(id="s-cancel", user_id="u-owner", title="取消测试"),
+            session=session,
             user=User(id="u-owner", username="owner"),
             task_id=task.id,
             emit=emit,

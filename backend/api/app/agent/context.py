@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
 from ..errors import AppError, ErrorCode
+from ..harness.context.compiler import compile_history_window
+from ..harness.contracts.memory import MemoryQuery
+from ..harness.contracts.trace import TraceContext
+from ..harness.memory.runtime import build_memory_port
 from ..models import Message, WsEvent
 from ..models import Session as AgentSession
 from .defaults import COMPACT_INPUT_MAX, KEEP_RECENT, SUMMARY_MAX_CHARS, WINDOW
@@ -62,10 +67,18 @@ class ContextMeter:
 
 
 def _ordered_messages(db: Session, session_id: str) -> list[Message]:
-    """按 (created_at, id) 升序取出 user/assistant 原文。"""
+    """按 (created_at, id) 升序取出未撤权的 user/assistant 原文。
+
+    与 ``ConversationStore.retrieve`` 的 ``memory_revoked`` 口径一致：
+    已撤权消息不进模型窗口，也不应计入 ContextMeter 容量仪表。
+    """
     return (
         db.query(Message)
-        .filter(Message.session_id == session_id, Message.role.in_(("user", "assistant")))
+        .filter(
+            Message.session_id == session_id,
+            Message.role.in_(("user", "assistant")),
+            Message.memory_revoked.is_(False),
+        )
         .order_by(Message.created_at.asc(), Message.id.asc())
         .all()
     )
@@ -165,16 +178,13 @@ def context_meter(db: Session, session: AgentSession, *, skill_id: str | None = 
     )
 
 
-def history_for_plan(db: Session, session: AgentSession) -> list[dict[str, str]]:
-    """规划调用的 history：窗口内 role+content，不含 progress。"""
-    return [{"role": row.role, "content": row.content or ""} for row in window_rows(db, session)]
-
-
 def run_compact(
     db: Session,
     session: AgentSession,
     *,
     stop: object | None = None,
+    user_id: str | None = None,
+    trace: TraceContext | None = None,
 ) -> tuple[str, int, int] | None:
     """执行手动 /compact。
 
@@ -187,14 +197,32 @@ def run_compact(
 
     if _aborted():
         return None
-    rows = window_rows(db, session)
+    memory_trace = trace or TraceContext.for_turn(component="context.compact")
+    # 压缩候选与规划历史共用 compile_history_window：Port 召回 + 来源消解 + keep_from + 尾部窗口。
+    rows = asyncio.run(
+        compile_history_window(
+            port=build_memory_port(db),
+            query=MemoryQuery(
+                query_text="会话压缩历史",
+                tenant_id="internal",
+                user_id=user_id or session.user_id,
+                session_id=session.id,
+                record_types=["conversation"],
+                trace_id=memory_trace.trace_id,
+                top_k_recall=WINDOW * 4,
+            ),
+            trace=memory_trace.child("context.compile"),
+            keep_from=getattr(session, "compact_keep_from", None),
+            max_records=WINDOW,
+        )
+    )
     old_m = len(rows)
     if old_m <= KEEP_RECENT:
         return "上下文较短，无需压缩", old_m, old_m
 
     keep = rows[-KEEP_RECENT:]
     to_summarize = rows[: len(rows) - KEEP_RECENT]
-    chunks = [f"{row.role}: {row.content}" for row in to_summarize]
+    chunks = [f"{row.metadata.get('role') or 'user'}: {row.text}" for row in to_summarize]
     payload = "\n".join(chunks)
     if len(payload) > COMPACT_INPUT_MAX:
         payload = payload[-COMPACT_INPUT_MAX:]
@@ -221,7 +249,7 @@ def run_compact(
     if not summary:
         raise AppError(ErrorCode.UPSTREAM, "上下文压缩失败，窗口未改动")
     session.compact_summary = summary
-    session.compact_keep_from = keep[0].id
+    session.compact_keep_from = keep[0].record_id
     db.commit()
     new_m = len(keep)
     agent_trace(f"compact 完成 old_m={old_m} new_m={new_m}")

@@ -21,10 +21,12 @@ from sqlalchemy.orm import Session
 
 from ..agent.harness import (
     abort_running_turn,
+    begin_turn_trace,
     deep_merge,
     dispatch_user_message,
     handle_cancel_task,
     handle_confirm_ack,
+    persist_user_message,
 )
 from ..agent.log import agent_trace
 from ..agent.plan import classify_intent_l0
@@ -400,18 +402,22 @@ async def _handle_user_message(
                 state=state,
             )
             return
-    message = Message(
-        session_id=session.id,
-        role="user",
-        content=text,
-        attachments=file_ids,
+    message_id = str(uuid.uuid4())
+    # 用户气泡与后续 Harness 回合共用同一因果链（§3.5）；写入统一收敛到记忆层 Port。
+    turn_trace = begin_turn_trace()
+    await persist_user_message(
+        db,
+        session=session,
+        message_id=message_id,
+        text=text,
         author_id=user.id,
         client_message_id=client_message_id,
+        attachments=file_ids,
+        trace=turn_trace,
     )
-    db.add(message)
     session.updated_at = datetime.now(UTC)
     db.commit()
-    db.refresh(message)
+    message = db.query(Message).filter(Message.id == message_id).first()
     # 用户气泡必须是持久化事件；否则协作者只有刷新历史才能看见对方发言。
     await _emit(
         db,
@@ -464,6 +470,7 @@ async def _handle_user_message(
         is_session_owner=session.user_id == user.id,
         emit_busy=emit_busy,
         emit_factory=emit_factory,
+        trace=turn_trace,
     )
 
 

@@ -1,5 +1,7 @@
 """窗口构建与 token 账本：不可降级槽位优先，observation 紧邻用户输入。"""
 
+from __future__ import annotations
+
 from collections import defaultdict
 
 from app.harness.contracts.context import CompiledContext, ContextItem, TokenLedger
@@ -22,14 +24,17 @@ def build_window(items: list[ContextItem], *, policy: WindowPolicy) -> CompiledC
     for item in items:
         if item.text.strip():
             grouped[item.slot].append(item)
+
     selected: list[ContextItem] = []
     used = 0
     ledger_values: dict[str, int] = defaultdict(int)
     for slot in SLOT_ORDER:
+        slot_items = grouped.get(slot, [])
         slot_cap = policy.slot_budget(slot)
         slot_used = 0
-        for item in grouped.get(slot, []):
+        for item in slot_items:
             token_cost = item.token_cost or estimate_tokens(item.text)
+            # System/用户输入不能降级；若自身超额仍保留并如实记录超额。
             if slot not in IMMUTABLE_SLOTS and (
                 used + token_cost > policy.max_tokens or slot_used + token_cost > slot_cap
             ):
@@ -39,6 +44,7 @@ def build_window(items: list[ContextItem], *, policy: WindowPolicy) -> CompiledC
             used += token_cost
             slot_used += token_cost
             ledger_values[_ledger_slot(slot)] += token_cost
+
     ledger = TokenLedger(
         system=ledger_values["system"],
         user_input=ledger_values["user_input"],
@@ -50,7 +56,10 @@ def build_window(items: list[ContextItem], *, policy: WindowPolicy) -> CompiledC
         max_tokens=policy.max_tokens,
     )
     messages = [
-        {"role": "system" if item.slot in {"system", "session_state"} else "user", "content": item.text}
+        {
+            "role": "system" if item.slot in {"system", "session_state"} else "user",
+            "content": item.text,
+        }
         for item in selected
     ]
     return CompiledContext(items=selected, ledger=ledger, messages=messages)

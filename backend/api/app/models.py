@@ -19,6 +19,7 @@ from shared.models import (  # noqa: F401
     HarnessDiagnostic,
     HarnessSpan,
     HarnessTurn,
+    KnowledgeMemory,
     Message,
     ProtocolProfile,
     Report,

@@ -1,4 +1,4 @@
-"""短期与长期记忆的组合端口；Context 只能依赖本模块的 MemoryPort 实现。"""
+"""短期与长期记忆的组合端口；Context 只能依赖此处导出的实现。"""
 
 from dataclasses import dataclass, field
 
@@ -28,6 +28,7 @@ def is_record_visible(record: MemoryRecord, query: MemoryQuery) -> bool:
     allowed_users = metadata.get("allowed_user_ids")
     if isinstance(allowed_users, list) and allowed_users and query.user_id not in allowed_users:
         return False
+    # 知识记录必须声明可访问来源，避免缺 ACL 的内容被当作通用事实。
     if record.record_type == "knowledge":
         return bool(query.permitted_resource_ids) and record.source_id in query.permitted_resource_ids
     return True
@@ -82,18 +83,26 @@ class CompositeMemoryPort(MemoryPort):
     knowledge: MemoryPort | None = None
 
     async def retrieve(self, query: MemoryQuery, *, trace: TraceContext) -> list[MemoryRecord]:
-        """各存储先过滤，再按分数与记录 ID 稳定合并。"""
+        """先由各存储各自 ACL 过滤，再按首次出现顺序去重合并。
+
+        会话时间序（ConversationStore）与知识相关度序（pgvector Store）都由各
+        存储在各自检索内给出；本层禁止再按 score/record_id 全局重排——record_id
+        是随机 UUID，字典序决序会把会话历史打乱。同一 record_id 保留最高分版本。
+        """
         validate_memory_query(query, trace)
-        candidates: list[MemoryRecord] = []
+        merged: list[MemoryRecord] = []
+        first_seen_index: dict[str, int] = {}
         for store in (self.short_term, self.conversation, self.knowledge):
-            if store is not None:
-                candidates.extend(await store.retrieve(query, trace=trace))
-        deduplicated: dict[str, MemoryRecord] = {}
-        for record in candidates:
-            current = deduplicated.get(record.record_id)
-            if current is None or record.score > current.score:
-                deduplicated[record.record_id] = record
-        return sorted(deduplicated.values(), key=lambda item: (-item.score, item.record_id))[: query.top_k_recall]
+            if store is None:
+                continue
+            for record in await store.retrieve(query, trace=trace):
+                seen = first_seen_index.get(record.record_id)
+                if seen is None:
+                    first_seen_index[record.record_id] = len(merged)
+                    merged.append(record)
+                elif record.score > merged[seen].score:
+                    merged[seen] = record
+        return merged[: query.top_k_recall]
 
     async def append(self, record: MemoryRecord, *, trace: TraceContext) -> None:
         """短期必写；长期按记录类型分派，失败不吞掉以免伪造成功。"""

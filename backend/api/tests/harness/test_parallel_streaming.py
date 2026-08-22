@@ -36,6 +36,17 @@ class _Db:
     """无真实数据库依赖的 ReAct 循环测试桩。"""
 
 
+class _DeliveryQuery:
+    def __init__(self, obj: object | None) -> None:
+        self._obj = obj
+
+    def filter(self, *criteria: object) -> _DeliveryQuery:
+        return self
+
+    def first(self) -> object | None:
+        return self._obj
+
+
 class _DeliveryDb:
     """记录最终回复落库顺序的最小数据库测试桩。"""
 
@@ -43,9 +54,21 @@ class _DeliveryDb:
         self.rows: list[object] = []
         self.commits = 0
 
+    def query(self, model: object) -> _DeliveryQuery:
+        from types import SimpleNamespace
+
+        from app.models import Session as AgentSession
+
+        if model is AgentSession:
+            return _DeliveryQuery(SimpleNamespace(id="session-stage3"))
+        return _DeliveryQuery(None)
+
     def add(self, row: object) -> None:
         """记录待持久化的助手消息。"""
         self.rows.append(row)
+
+    def flush(self) -> None:
+        """模拟会话刷新。"""
 
     def commit(self) -> None:
         """模拟消息提交完成。"""
@@ -278,6 +301,9 @@ def test_default_batch_path_stays_serial_and_keeps_batch_audit(monkeypatch):
             stream_mcp_step=_step,
             execute_short_tool=lambda *_args, **_kwargs: (True, {}, None, 0),
             execute_isolated=lambda *_args, **_kwargs: (True, {}, None, 0),
+            redirect_creative_tool=lambda _plan, _text, name=None: name,
+            missing_for_kind=lambda _spec: [],
+            build_proposed_spec=lambda *_args, **_kwargs: None,
             trace=trace,
             cancel=cancel,
         )
@@ -437,6 +463,9 @@ def test_done_tool_conflict_and_missing_tool_never_execute(monkeypatch):
             stream_mcp_step=_step,
             execute_short_tool=lambda *_args, **_kwargs: (True, {}, None, 0),
             execute_isolated=lambda *_args, **_kwargs: (True, {}, None, 0),
+            redirect_creative_tool=lambda _plan, _text, name=None: name,
+            missing_for_kind=lambda _spec: [],
+            build_proposed_spec=lambda *_args, **_kwargs: None,
             trace=trace,
             cancel=cancel,
         )

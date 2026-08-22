@@ -1,5 +1,7 @@
 """来源约束：无来源文本不能进入知识槽，冲突版本只保留可信候选。"""
 
+from __future__ import annotations
+
 from app.harness.contracts.memory import MemoryRecord
 
 

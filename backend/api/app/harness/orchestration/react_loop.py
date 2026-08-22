@@ -583,11 +583,16 @@ async def _run_mcp_react_loop(
     stream_mcp_step: Callable[..., Awaitable[ReactDecision]],
     execute_short_tool: Callable[..., tuple[bool, Any, str | None, int]],
     execute_isolated: Callable[..., tuple[bool, Any, str | None, int]],
+    redirect_creative_tool: Callable[..., str | None],
+    missing_for_kind: Callable[[dict[str, Any]], list[str]],
+    build_proposed_spec: Callable[..., dict[str, Any] | None],
     trace: TraceContext,
     cancel: CancellationToken,
 ) -> None:
-    """多轮 MCP ReAct：思考卡 → 一个短工具 → 观察 → 再思考。"""
-    from app.agent.react import _missing_for_kind, _redirect_creative_tool, build_proposed_spec
+    """多轮 MCP ReAct：思考卡 → 一个短工具 → 观察 → 再思考。
+
+    产品规格组装（``build_proposed_spec`` 等）由总控注入，本模块不反向 import ``app.agent``。
+    """
 
     system = turn_system(
         react_system(),
@@ -747,7 +752,7 @@ async def _run_mcp_react_loop(
 
         step = decision
 
-        raw_tool = _redirect_creative_tool(plan, text, step.tool)
+        raw_tool = redirect_creative_tool(plan, text, step.tool)
         if raw_tool and is_long_tool(raw_tool):
             await _emit_react_thought(
                 emit,
@@ -829,7 +834,7 @@ async def _run_mcp_react_loop(
                 break
         spec = build_proposed_spec(plan, react, slash_fill_first=slash_fill_first)
         react.proposed_spec = spec
-        if plan.delivery == "confirm" and spec and not _missing_for_kind(spec):
+        if plan.delivery == "confirm" and spec and not missing_for_kind(spec):
             break
 
 
@@ -848,19 +853,20 @@ async def _run_tool_queue(
     rounds_limit: int,
     execute_short_tool: Callable[..., tuple[bool, Any, str | None, int]],
     execute_isolated: Callable[..., tuple[bool, Any, str | None, int]],
+    redirect_creative_tool: Callable[..., str | None],
+    missing_for_kind: Callable[[dict[str, Any]], list[str]],
+    build_proposed_spec: Callable[..., dict[str, Any] | None],
     trace: TraceContext,
     cancel: CancellationToken,
 ) -> None:
     """按规划队列串行执行尚未跑过的短工具。"""
-    from app.agent.react import _missing_for_kind, _redirect_creative_tool, build_proposed_spec
-
     executed = set(_executed_names(react))
     pending = [name for name in queue if name and name not in executed]
     while pending and react.rounds_used < rounds_limit:
         check_abort()
         cancel.raise_if_cancelled()
         original = pending.pop(0)
-        name = _redirect_creative_tool(plan, text, original)
+        name = redirect_creative_tool(plan, text, original)
         if not name:
             continue
         if name != original and name in executed:
@@ -900,7 +906,7 @@ async def _run_tool_queue(
             continue
         spec = build_proposed_spec(plan, react, slash_fill_first=slash_fill_first)
         react.proposed_spec = spec
-        if spec and not _missing_for_kind(spec):
+        if spec and not missing_for_kind(spec):
             break
         if not ok:
             break
@@ -928,12 +934,13 @@ async def run_react_loop(
     execute_short_tool: Callable[..., tuple[bool, Any, str | None, int]],
     execute_isolated: Callable[..., tuple[bool, Any, str | None, int]],
     new_artifact: Callable[[], Any],
+    redirect_creative_tool: Callable[..., str | None],
+    missing_for_kind: Callable[[dict[str, Any]], list[str]],
+    build_proposed_spec: Callable[..., dict[str, Any] | None],
     trace: TraceContext,
     cancel: CancellationToken,
 ) -> Any:
     """ReAct 行动：优先 MCP JSON 多轮循环，失败则按 tools_needed 串行。"""
-    from app.agent.react import _missing_for_kind, build_proposed_spec
-
     react = prior or new_artifact()
     _ = PARALLEL_READONLY_TOOLS
     cap = rounds_cap(plan.budget.get("max_tool_rounds"))
@@ -961,6 +968,9 @@ async def run_react_loop(
                     stream_mcp_step=stream_mcp_step,
                     execute_short_tool=execute_short_tool,
                     execute_isolated=execute_isolated,
+                    redirect_creative_tool=redirect_creative_tool,
+                    missing_for_kind=missing_for_kind,
+                    build_proposed_spec=build_proposed_spec,
                     trace=trace,
                     cancel=cancel,
                 )
@@ -976,7 +986,7 @@ async def run_react_loop(
         elif slash_fill_first and plan.delivery == "confirm":
             spec = build_proposed_spec(plan, react, slash_fill_first=slash_fill_first)
             react.proposed_spec = spec
-            need_queue = bool(remaining) and bool(spec and _missing_for_kind(spec))
+            need_queue = bool(remaining) and bool(spec and missing_for_kind(spec))
         elif (
             plan.intent in {"benchmark", "rag", "testcase"}
             and plan.delivery == "confirm"
@@ -1004,6 +1014,9 @@ async def run_react_loop(
                     rounds_limit=cap,
                     execute_short_tool=execute_short_tool,
                     execute_isolated=execute_isolated,
+                    redirect_creative_tool=redirect_creative_tool,
+                    missing_for_kind=missing_for_kind,
+                    build_proposed_spec=build_proposed_spec,
                     trace=trace,
                     cancel=cancel,
                 )
