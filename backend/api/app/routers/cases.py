@@ -12,22 +12,19 @@ awaiting_case_confirm 时写入（+72h），本域不主动维护。
 """
 
 import io
-import json
 import time
 import zipfile
-from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 from xml.sax.saxutils import escape
 
 from fastapi import APIRouter, Depends, File, Query, Response, UploadFile
 from fastapi import Request as FastApiRequest
-from openpyxl import Workbook, load_workbook
+from openpyxl import Workbook
 from pydantic import ValidationError
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from ..agent.persona import page_ai_system
 from ..case_excel import (
     EXPORT_FIXED_COLUMNS,
     IMPORT_MAX_BYTES,
@@ -38,7 +35,6 @@ from ..case_excel import (
 from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
-from ..llm import call_agent_model, parse_json_candidates
 from ..models import (
     AuditLog,
     CaseFolder,
@@ -46,7 +42,6 @@ from ..models import (
     CaseSet,
     Dataset,
     DatasetRow,
-    StoredFile,
     Task,
     User,
     utcnow,
@@ -279,128 +274,6 @@ def _parsed_row_to_case_in(item: dict[str, Any]) -> CaseIn:
     return CaseIn.model_validate(payload)
 
 
-def _normalize_strategy_weights(weights: dict[str, int] | None) -> dict[str, int]:
-    """校验并归一化策略配比；缺省使用契约默认配比。"""
-    if not weights:
-        return dict(_DEFAULT_STRATEGY_WEIGHTS)
-    unknown = set(weights) - set(_STRATEGY_NAMES)
-    if unknown:
-        raise AppError(
-            ErrorCode.VALIDATION, f"strategy_weights 包含未知策略：{'、'.join(sorted(unknown))}"
-        )
-    for value in weights.values():
-        if value < 0:
-            raise AppError(ErrorCode.VALIDATION, "strategy_weights 配比必须为非负整数")
-    if sum(weights.values()) <= 0:
-        raise AppError(ErrorCode.VALIDATION, "strategy_weights 配比总和必须大于 0")
-    return dict(weights)
-
-
-def _read_source_doc_text(stored: StoredFile) -> str:
-    """读取来源文档文本：xlsx 提取单元格文本，其余按 UTF-8 容错解码并截断。"""
-    try:
-        if (stored.kind or "").lower() == "xlsx":
-            workbook = load_workbook(stored.storage_path, read_only=True, data_only=True)
-            try:
-                lines = []
-                for sheet in workbook.worksheets:
-                    for row in sheet.iter_rows(values_only=True):
-                        line = " ".join(str(cell) for cell in row if cell is not None)
-                        if line.strip():
-                            lines.append(line)
-            finally:
-                workbook.close()
-            return "\n".join(lines)[:_SOURCE_DOC_MAX_CHARS]
-        return Path(stored.storage_path).read_bytes().decode("utf-8", errors="ignore")[
-            :_SOURCE_DOC_MAX_CHARS
-        ]
-    except Exception as exc:
-        raise AppError(
-            ErrorCode.VALIDATION, "来源文档内容不可读，请改用 source_text 直接粘贴原文"
-        ) from exc
-
-
-def _build_ai_generate_prompts(
-    body: CaseAiGenerateIn, weights: dict[str, int], source_sections: list[str]
-) -> tuple[str, str]:
-    """组装候选用例生成的中文 system / user prompt。"""
-    ratio_desc = "、".join(f"{_STRATEGY_NAMES[key]} {value}%" for key, value in weights.items())
-    system = page_ai_system(
-        "你是资深测试设计专家，负责根据需求文档设计软件测试用例。"
-        "每条用例必须包含 strategy（策略，取值限于 正向/反向/边界/等价类/状态迁移/场景）、"
-        "priority（优先级，P0/P1/P2）、module（所属模块）、name（用例名称）、"
-        "expected（预期结果）、precondition（前置条件）、"
-        "test_type（测试类型，如 核心业务/异常处理/兼容性），可选 steps（操作步骤）。"
-        "只输出一个 JSON 数组，不要输出任何解释文字或 markdown 代码围栏。"
-    )
-    sections = [f"请按以下策略配比生成不超过 {body.max_count} 条测试用例：{ratio_desc}。"]
-    if body.complexity:
-        sections.append(f"业务复杂度：{body.complexity}。")
-    sections.extend(source_sections)
-    return system, "\n\n".join(sections)
-
-
-def _rebalance_by_strategy(
-    items: list[dict], weights: dict[str, int], max_count: int
-) -> list[dict]:
-    """按策略配比对候选条数做软性校正：超出配比的截断，不足的保留。"""
-    total_weight = sum(weights.values())
-    quotas = {
-        _STRATEGY_NAMES[key]: (max(1, round(max_count * value / total_weight)) if value > 0 else 0)
-        for key, value in weights.items()
-    }
-    grouped: dict[str, list[dict]] = {}
-    for item in items:
-        grouped.setdefault(str(item.get("strategy", "")), []).append(item)
-    result: list[dict] = []
-    for strategy, group in grouped.items():
-        quota = quotas.get(strategy)
-        # 未在配比中的策略（模型自由发挥）全量保留；配比内策略超出配额即截断
-        result.extend(group if quota is None else group[:quota])
-    return result[:max_count]
-
-
-def _build_ai_fill_prompts(
-    case_set: CaseSet, cases: list[CaseItem], body: CaseAiFillIn
-) -> tuple[str, str]:
-    """组装行级补全的中文 system / user prompt，要求模型仅补全缺失字段。"""
-    columns = case_set.column_schema or []
-    column_desc = "、".join(f"{col.get('key')}（{col.get('name')}）" for col in columns) or "无"
-    fillable = body.fields or ["expected", "precondition", "test_type"]
-    system = page_ai_system(
-        "你是测试用例补全助手，负责补全测试用例中缺失的字段。"
-        f"本次可补全字段：{'、'.join(fillable)}；用例集已声明的扩展列：{column_desc}。"
-        "只输出一个 JSON 数组，每项必须包含原用例 id 与补全后的字段，"
-        "不要输出任何解释文字或 markdown 代码围栏。"
-    )
-    rows_text = json.dumps([_case_to_item(case) for case in cases], ensure_ascii=False, indent=2)
-    sections = [
-        f"以下是待补全的用例行（JSON 数组）：\n{rows_text}",
-        "要求：保留每行 id 与已有非空字段不变，仅补全缺失或为空字符串的字段；"
-        "输出仍是 JSON 数组，行数与输入一致。",
-    ]
-    if body.fields:
-        sections.append(f"本次仅补全以下字段：{'、'.join(body.fields)}。")
-    if body.instruction:
-        sections.append(f"补全侧重点：{body.instruction}")
-    return system, "\n\n".join(sections)
-
-
-def _filter_fill_items(items: list[dict], body: CaseAiFillIn) -> list[dict]:
-    """过滤模型输出：仅保留请求内的用例 id；指定 fields 时剔除字段外 key。"""
-    allowed_ids = set(body.case_ids)
-    allowed_fields = set(body.fields) if body.fields else None
-    result: list[dict] = []
-    for item in items:
-        item_id = item.get("id")
-        if not item_id or item_id not in allowed_ids:
-            continue
-        if allowed_fields is not None:
-            item = {k: v for k, v in item.items() if k == "id" or k in allowed_fields}
-        result.append(item)
-    return result
-
-
 def _build_xlsx(case_set: CaseSet, cases: list[CaseItem]) -> bytes:
     """生成 Excel 工作簿字节流：固定列 + column_schema 声明的扩展列。"""
     workbook = Workbook()
@@ -529,21 +402,9 @@ def ai_generate_cases(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """按 6 大策略配比生成候选用例；只返回未落库候选，不创建用例集。"""
-    weights = _normalize_strategy_weights(body.strategy_weights)
-    source_sections: list[str] = []
-    if body.source_doc_id:
-        stored = db.query(StoredFile).filter(StoredFile.id == body.source_doc_id).first()
-        if not stored:
-            raise AppError(ErrorCode.NOT_FOUND, "来源文档不存在")
-        doc_text = _read_source_doc_text(stored)
-        source_sections.append(f"来源文档《{stored.filename}》内容：\n{doc_text}")
-    if body.source_text and body.source_text.strip():
-        source_sections.append(f"需求原文：\n{body.source_text.strip()}")
-    system, user_prompt = _build_ai_generate_prompts(body, weights, source_sections)
-    text = call_agent_model(db, system, user_prompt, max_tokens=4096)
-    items = parse_json_candidates(text)
-    return {"items": _rebalance_by_strategy(items, weights, body.max_count)}
+    """模型调用层重建设计期间，暂不生成候选用例。"""
+    _ = db, user, body
+    raise AppError(ErrorCode.VALIDATION, "模型调用层正在重建设计")
 
 
 @router.get("/import-template")
@@ -813,14 +674,9 @@ def ai_fill_cases(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """行级 AI 补全：仅返回未落库候选值，前端确认后必须再走 PUT cases 保存。"""
-    case_set = _get_case_set_or_404(db, set_id)
-    _assert_editable(case_set)
-    cases = _get_cases_by_ids(db, case_set, body.case_ids)
-    system, user_prompt = _build_ai_fill_prompts(case_set, cases, body)
-    text = call_agent_model(db, system, user_prompt, max_tokens=4096)
-    items = parse_json_candidates(text)
-    return {"items": _filter_fill_items(items, body)}
+    """模型调用层重建设计期间，暂不补全用例。"""
+    _ = db, user, set_id, body
+    raise AppError(ErrorCode.VALIDATION, "模型调用层正在重建设计")
 
 
 @router.post("/{set_id}/import")

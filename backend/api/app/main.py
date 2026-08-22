@@ -77,9 +77,6 @@ async def lifespan(app: FastAPI):
     # 表结构由 Alembic 管理（启动前执行 alembic upgrade head），此处只做引导数据
     _bootstrap_admin()
     _bootstrap_preview()
-    from .harness.app import configure_runtime
-
-    configure_runtime()
     yield
 
 

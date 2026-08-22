@@ -1,1 +1,0 @@
-"""MCP Streamable HTTP 适配器。后续阶段落地；阶段 0 不实现。"""

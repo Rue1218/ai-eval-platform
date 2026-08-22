@@ -1,8 +1,0 @@
-# 提示词模板版本清单。阶段 0 仅登记 schema，人设仍由 api.agent.persona 提供。
-current: "react-output.v1"
-templates:
-  react-output.v1:
-    schema: react-output.schema.json
-    system: system.yaml
-  planner-output.v1:
-    schema: planner-output.schema.json

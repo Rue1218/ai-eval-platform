@@ -1,1 +1,1 @@
-"""Harness 六层 ReAct 运行时。阶段 0 活路径仍在 app.agent；请从 contracts 导入契约。"""
+"""Harness 新运行时的空包边界；具体契约与执行模型待重新设计。"""

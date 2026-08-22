@@ -17,11 +17,9 @@ from fastapi import APIRouter, Depends, File, Query, UploadFile
 from fastapi import Request as FastApiRequest
 from sqlalchemy.orm import Session
 
-from ..agent.persona import page_ai_system
 from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
-from ..llm import call_agent_model, parse_json_candidates
 from ..models import AuditLog, Dataset, DatasetFolder, DatasetRow, User
 from ..schemas import (
     AiGenerateIn,
@@ -51,14 +49,6 @@ _RESERVED_EXTRA_KEYS = {
     "r",
     "c",
 }
-
-# 非 fill_missing 的三种生成模式中文描述，用于 prompt 组装
-_AI_MODE_DESC = {
-    "scene": "按场景描述生成",
-    "seed": "按种子样本扩写",
-    "doc": "从 PRD / 参考文档中提取",
-}
-
 
 def _request_ip(request: FastApiRequest) -> str | None:
     """提取审计日志的请求来源 IP。"""
@@ -137,39 +127,6 @@ def _upsert_row(db: Session, dataset: Dataset, row_in: DatasetRowIn, row: Datase
     # question / reference 任一缺失即视为待补全，评分时不计入分母
     row.pending_complete = not (row.question or "").strip() or not (row.reference or "").strip()
     return row
-
-
-def _build_ai_prompts(dataset: Dataset, body: AiGenerateIn) -> tuple[str, str]:
-    """组装候选生成的中文 system / user prompt。"""
-    columns = dataset.column_schema or []
-    column_desc = "、".join(f"{col.get('key')}（{col.get('name')}）" for col in columns) or "无"
-    system = page_ai_system(
-        "你是评测数据集构建助手，负责为大模型评测数据集生成候选数据行。"
-        "每行必须包含 q（问题）、r（标准答案）、c（上下文，可为 null）三个字段，"
-        f"并可按需包含以下扩展列字段：{column_desc}。"
-        "只输出一个 JSON 数组，不要输出任何解释文字或 markdown 代码围栏。"
-    )
-    if body.mode == "fill_missing":
-        rows_text = json.dumps(body.rows, ensure_ascii=False, indent=2)
-        user_prompt = (
-            "以下是数据集中待补全的行（JSON 数组），请补全每行缺失的字段后原样返回：\n"
-            f"{rows_text}\n"
-            "要求：保留每行已有的 row_no 与非空字段不变，仅补全缺失或为空字符串的字段；"
-            "输出仍是 JSON 数组，行数与输入一致。"
-        )
-        return system, user_prompt
-    sections = [
-        f"生成模式：{_AI_MODE_DESC[body.mode]}。",
-        f"目标数据集：{dataset.name}（评判口径 {dataset.metric}）。",
-    ]
-    if body.instruction:
-        sections.append(f"场景/指令：{body.instruction}")
-    if body.seed:
-        sections.append(f"种子样本：\n{body.seed}")
-    if body.source_text:
-        sections.append(f"参考文档：\n{body.source_text}")
-    sections.append(f"请生成不超过 {body.max_count} 行候选数据。")
-    return system, "\n\n".join(sections)
 
 
 @router.get("")
@@ -412,15 +369,9 @@ def ai_generate_rows(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """生成未落库候选行；前端人工删改后经 PUT rows 保存，本接口不写数据集版本。"""
-    dataset = _get_dataset_or_404(db, body.dataset_id)
-    system, user_prompt = _build_ai_prompts(dataset, body)
-    text = call_agent_model(db, system, user_prompt)
-    items = parse_json_candidates(text)
-    if body.mode != "fill_missing":
-        # 模型超量输出时截断到 max_count；fill_missing 行数必须与输入一致，不截断
-        items = items[: body.max_count]
-    return {"items": items}
+    """模型调用层重建设计期间，暂不生成候选数据。"""
+    _ = db, user, body
+    raise AppError(ErrorCode.VALIDATION, "模型调用层正在重建设计")
 
 
 @folders_router.get("")
