@@ -276,7 +276,7 @@ def test_stream_agent_json_callback_then_parse_body(sample_profile: ProtocolProf
     fake_db = _FakeDb(settings=[setting], profiles=[sample_profile])
     chunks: list[str] = []
     monkeypatch.setattr(
-        "app.harness.llm.client.stream_agent_model",
+        "app.llm.stream_agent_model",
         lambda *_a, **_k: iter([("reasoning", "先判断闲聊"), ("content", '{"loop":"chat"}')]),
     )
     result = stream_agent_json(
@@ -297,7 +297,7 @@ def test_stream_agent_json_empty_content_is_upstream(sample_profile: ProtocolPro
     setting = Setting(key="agent_profile_id", value=sample_profile.id, updated_by="user-admin")
     fake_db = _FakeDb(settings=[setting], profiles=[sample_profile])
     monkeypatch.setattr(
-        "app.harness.llm.client.stream_agent_model",
+        "app.llm.stream_agent_model",
         lambda *_a, **_k: iter([("reasoning", "只想不说")]),
     )
     with pytest.raises(AppError) as exc:
