@@ -19,8 +19,8 @@
           :key="item.path"
           :to="item.path"
           class="nav-item"
-          :class="{ active: currentPath === item.path }"
-          :style="currentPath === item.path ? { '--t': item.t, '--c': item.c } : {}"
+          :class="{ active: isRouteActive(item.path) }"
+          :style="isRouteActive(item.path) ? { '--t': item.t, '--c': item.c } : {}"
           @click="closeMobileNavigation"
         >
           <span class="nav-ico">
@@ -36,8 +36,8 @@
           :key="item.path"
           :to="item.path"
           class="nav-item"
-          :class="{ active: currentPath === item.path }"
-          :style="currentPath === item.path ? { '--t': item.t, '--c': item.c } : {}"
+          :class="{ active: isRouteActive(item.path) }"
+          :style="isRouteActive(item.path) ? { '--t': item.t, '--c': item.c } : {}"
           @click="closeMobileNavigation"
         >
           <span class="nav-ico">
@@ -294,7 +294,7 @@ const evalRoutes = computed(() => {
 
   return [
     { path: '/agent', label: '智能体', icon: IconAgent, t: 'var(--t-agent)', c: 'var(--c-agent)' },
-    { path: '/dispatch', label: '调度中心', icon: IconDispatch, t: 'var(--t-agent)', c: 'var(--c-agent)' },
+    { path: '/dispatch', label: '调度中心', icon: IconDispatch, t: 'var(--t-dispatch)', c: 'var(--c-dispatch)' },
     { path: '/tasks', label: '任务中心', icon: IconTasks, t: 'var(--t-tasks)', c: 'var(--c-tasks)' },
     { path: '/reports', label: '评测报告', icon: IconReports, t: 'var(--t-reports)', c: 'var(--c-reports)' },
     modeAsset,
@@ -307,6 +307,14 @@ const adminRoutes = [
   { path: '/admin/stress', label: '压测治理', icon: IconStress, t: 'var(--t-stress)', c: 'var(--c-stress)' },
   { path: '/admin/users', label: '账号', icon: IconUsers, t: 'var(--t-users)', c: 'var(--c-users)' },
 ]
+
+/** 当前路由激活状态匹配判定 */
+function isRouteActive(itemPath: string): boolean {
+  if (itemPath === '/agent') {
+    return route.path === '/agent' || route.path.startsWith('/agent/')
+  }
+  return route.path === itemPath || route.path.startsWith(itemPath + '/')
+}
 
 const currentPath = computed(() => route.path)
 const currentTitle = computed(() => {
@@ -459,20 +467,25 @@ async function submitChangePassword() {
 }
 
 .nav-item {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 12px;
   height: 44px;
   padding: 0 12px;
-  border-radius: 14px;
+  border-radius: 12px;
   color: var(--text-secondary);
   font-size: 14px;
   font-weight: 500;
-  transition: all 0.15s ease;
+  transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: hidden;
 }
 .nav-item:hover {
   background: var(--row-hover);
   color: var(--text-primary);
+}
+.nav-item:active {
+  transform: scale(0.985);
 }
 .nav-item .nav-ico {
   width: 20px;
@@ -480,6 +493,7 @@ async function submitChangePassword() {
   flex: 0 0 20px;
   display: grid;
   place-items: center;
+  transition: transform 0.18s ease, color 0.18s ease;
 }
 .nav-item .nav-ico svg {
   width: 18px;
@@ -496,6 +510,22 @@ async function submitChangePassword() {
   background: var(--t, var(--t-tasks));
   color: var(--c, var(--c-tasks));
   font-weight: 600;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+}
+.nav-item.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 4px;
+  height: 20px;
+  background: var(--c, var(--c-tasks));
+  border-radius: 0 4px 4px 0;
+}
+.nav-item.active .nav-ico {
+  color: var(--c, var(--c-tasks));
+  transform: scale(1.06);
 }
 
 .sidebar-foot {
