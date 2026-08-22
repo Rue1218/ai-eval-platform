@@ -15,7 +15,7 @@
 | 1 | [阶段1-单调用路径](docs/AI测试与评估平台-Harness阶段1-单调用路径.md) V1.3 | `feat/harness-single-call` | 编排/执行/反馈接管单工具循环 | 验收完成，已合入 `main` |
 | 2 | [阶段2-链路追踪与取消](docs/AI测试与评估平台-Harness阶段2-链路追踪与取消.md) V1.3 | `feat/harness-trace-cancel` | 强制 trace/cancel + 三张审计表 | 验收完成，已合入 `main` |
 | 3 | [阶段3-并行与流式收尾](docs/AI测试与评估平台-Harness阶段3-并行与流式收尾.md) V1.6 | 原实现 `feat/harness-parallel-streaming`；修复 `fix/harness-stage3-comments` | 批次并行能力默认关；流式终态 | 3 个 P1、1 个 P2 已修复，PR #73 已合入 `main` |
-| 4 | [阶段4-记忆层接入](docs/AI测试与评估平台-Harness阶段4-记忆层接入.md) V1.5 | `fix/memory-activation` | MemoryPort + Redis/pgvector；不接 LightRAG | 阶段 4.1 已修复首批 4 个 P1、1 个 P2 并接入 PG 对话归档；pgvector/容器联调未完成，**阶段 4 未验收** |
+| 4 | [阶段4-记忆层接入](docs/AI测试与评估平台-Harness阶段4-记忆层接入.md) V1.5 | `fix/memory-activation` | MemoryPort + Redis/pgvector；不接 LightRAG | 审查确认 PG 对话归档已接入，但仍有两个 P1：`/compact` 边界未保留、Redis 没有生产写入；PR #67 **不得合入**，且 pgvector/容器联调未完成 |
 
 规则：
 
