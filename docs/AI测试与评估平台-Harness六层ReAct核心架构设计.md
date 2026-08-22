@@ -3,7 +3,7 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 六层 ReAct 核心架构设计 |
-| 版本 | V1.12（目标架构 + 阶段 0–4 需求分析索引 + 首期覆盖矩阵） |
+| 版本 | V1.13（目标架构 + 阶段 0–4 需求分析索引 + 首期覆盖矩阵） |
 | 审查日期 | 2026-08-22 |
 | 目标运行时 | Python 3.12 / `asyncio` / Pydantic v2 或等价 JSON Schema 校验器 |
 | 适用范围 | 高性能、多轮 ReAct Agent、MCP 工具与 Eval-Core 等远程执行服务 |
@@ -32,6 +32,8 @@
 > **V1.11 定向修订定位**：阶段 4.1 修复首批归属 ACL、消息角色、Redis 依赖/撤权容错并接入 PG 对话归档活路径；消息 trace 溯源和记忆撤权字段经 Alembic 管理。pgvector 与容器联调仍未完成，阶段 4 尚未验收。
 
 > **V1.12 定向修订定位**：阶段 4.1 修复独立审查发现的 `/compact` 召回边界与提交后短期记忆写入两个 P1；用户和助手消息以同一来源标识写入组合 Port，PG/Redis 去重召回，PG 写入侧会复核真实 session owner。pgvector 与容器联调仍未完成，阶段 4 尚未验收。
+
+> **V1.13 定向修订定位**：阶段 4.2 新增同库 pgvector 知识表与 `MemoryPort` 适配器；向量召回在数据库先过滤 tenant、资源、user/session、白名单 ACL 与撤权，再按余弦距离排序。真实 PostgreSQL/Redis 服务测试成为 PR CI 门禁；外部 Embedding 与 forget REST/WS 均未新增，阶段 4 仍须独立验收。
 
 ---
 
@@ -988,9 +990,9 @@ Agent 开发文档（`docs/AI测试与评估平台-Agent开发文档.md`）定�
 
 ---
 
-## 第十一章：阶段 4 需求分析索引（V1.12）
+## 第十一章：阶段 4 需求分析索引（V1.13）
 
-权威展开见 [`docs/AI测试与评估平台-Harness阶段4-记忆层接入.md`](docs/AI测试与评估平台-Harness阶段4-记忆层接入.md) V1.6。阶段 4.1 已把 `app/agent/` 规划历史接入组合 Port，保留 user/assistant 角色并对 conversation 强制 tenant/user/session；消息 trace 溯源与记忆撤权经 Alembic 管理。此前两个活路径 P1 均已修复：PG 召回先按 `/compact` 的 `compact_keep_from` 截断，且用户/助手消息提交后会以同一 `message:{id}` 来源写入组合 Port，Redis 与 PG 可去重召回。pgvector 知识存储及 Redis/PG 容器联调仍未完成，故阶段 4 不构成验收。
+权威展开见 [`docs/AI测试与评估平台-Harness阶段4-记忆层接入.md`](docs/AI测试与评估平台-Harness阶段4-记忆层接入.md) V1.7。阶段 4.1 已把 `app/agent/` 规划历史接入组合 Port，保留 user/assistant 角色并对 conversation 强制 tenant/user/session；消息 trace 溯源与记忆撤权经 Alembic 管理。阶段 4.2 新增 `memory_knowledge` pgvector 表、向量校验、知识 ACL/撤权 Port，并由运行时组合 Port 装配；真实 Redis/PG 服务测试已加入 PR CI。外部 Embedding 生成和 forget 对外产品入口未在本阶段扩充，且当前分支必须先通过真实服务门禁，故阶段 4 不构成验收。
 
 | ID | 需求 | 本文出处 | 阶段 4 文档 |
 | :--- | :--- | :--- | :--- |
@@ -1072,14 +1074,14 @@ Agent 开发文档（`docs/AI测试与评估平台-Agent开发文档.md`）定�
 
 ## 本次文档变更范围
 
-V1.12：阶段 3 评论修复已随 PR #73 合入 `main`。阶段 4.1 已修复独立审查的两个 P1：`/compact` 边界传递至 PG 召回，以及消息提交后调用 `append()` 写入 Redis/PG。修复包含 user/assistant、压缩边界和助手交付调用点回归；完整本地门禁已通过，当前分支仍须 PR 审查。pgvector 与容器联调仍未完成。
+V1.13：阶段 3 评论修复已随 PR #73 合入 `main`。阶段 4.2 新增同库 pgvector 知识表、向量/ACL/撤权适配器、运行时组合装配和真实 PostgreSQL/Redis CI 服务测试；本地 392 项 pytest 已通过，容器用例仅因本机无 Docker 跳过。当前分支仍须通过 PR 的真实服务门禁；不新增外部 Embedding 或 forget REST/WS 产品入口，阶段 4 仍未验收。
 
 | 文件 | 作用 |
 | :--- | :--- |
-| `docs/AI测试与评估平台-Harness六层ReAct核心架构设计.md` | V1.12：阶段 4.1 两个 P1 修复、回归与剩余边界 |
-| `docs/AI测试与评估平台-Harness分阶段实施总册.md` | V1.10：阶段 3 合入与阶段 4.1 两个 P1 修复状态 |
+| `docs/AI测试与评估平台-Harness六层ReAct核心架构设计.md` | V1.13：阶段 4.2 pgvector、容器 CI 与未授权产品入口边界 |
+| `docs/AI测试与评估平台-Harness分阶段实施总册.md` | V1.11：阶段 4.2 门禁状态 |
 | `docs/AI测试与评估平台-Harness阶段0-契约骨架.md` | V1.3：Schema / MemoryQuery 前向债务 |
 | `docs/AI测试与评估平台-Harness阶段1-单调用路径.md` | V1.3：映射例外与不做表 |
 | `docs/AI测试与评估平台-Harness阶段2-链路追踪与取消.md` | V1.3：链路追踪与取消验收状态 |
 | `docs/AI测试与评估平台-Harness阶段3-并行与流式收尾.md` | V1.6：四项评论修复已合入 `main` |
-| `docs/AI测试与评估平台-Harness阶段4-记忆层接入.md` | V1.6：阶段 4.1 两个 P1 修复、回归与剩余验收项 |
+| `docs/AI测试与评估平台-Harness阶段4-记忆层接入.md` | V1.7：阶段 4.2 实现、服务测试与剩余边界 |

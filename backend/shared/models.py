@@ -24,6 +24,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import declarative_base
+from sqlalchemy.types import UserDefinedType
 
 Base = declarative_base()
 
@@ -36,6 +37,16 @@ def utcnow() -> datetime:
 def uuid_str() -> str:
     """生成与 API 契约一致的 UUID 字符串主键。"""
     return str(uuid.uuid4())
+
+
+class PgVector(UserDefinedType):
+    """pgvector 原生列类型；向量绑定与检索只在记忆适配器内完成。"""
+
+    cache_ok = True
+
+    def get_col_spec(self, **_kwargs: object) -> str:
+        """让 SQLAlchemy DDL 使用 pgvector 扩展提供的未定维 vector 类型。"""
+        return "vector"
 
 
 class User(Base):
@@ -122,6 +133,36 @@ class Message(Base):
     # forget 只禁止进入模型记忆，不删除用户可回放的产品消息和审计链路。
     memory_forgotten = Column(Boolean, nullable=False, default=False, server_default=text("false"))
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class MemoryKnowledge(Base):
+    """pgvector 长期知识记忆；撤权只禁止召回，不删除来源和审计溯源。"""
+
+    __tablename__ = "memory_knowledge"
+    __table_args__ = (
+        CheckConstraint("version >= 1", name="ck_memory_knowledge_version"),
+        UniqueConstraint("source_id", "version", name="uq_memory_knowledge_source_version"),
+        Index("ix_memory_knowledge_scope_source", "tenant_id", "source_id"),
+        Index("ix_memory_knowledge_recall_scope", "tenant_id", "memory_forgotten"),
+    )
+
+    record_id = Column(String, primary_key=True, default=uuid_str)
+    source_id = Column(String, nullable=False)
+    version = Column(Integer, nullable=False, default=1)
+    tenant_id = Column(String, nullable=False)
+    user_id = Column(String, nullable=True)
+    session_id = Column(String, nullable=True)
+    # 空数组代表同租户内的任意已授权资源调用者；非空时必须命中当前用户。
+    allowed_user_ids = Column(JSONB, nullable=False, default=list)
+    content = Column(Text, nullable=False)
+    embedding = Column(PgVector(), nullable=False)
+    acl = Column(String, nullable=False, default="resource")
+    origin_trace_id = Column(String, nullable=True, index=True)
+    origin_span_id = Column(String, nullable=True)
+    metadata_json = Column("metadata", JSONB, nullable=False, default=dict)
+    memory_forgotten = Column(Boolean, nullable=False, default=False, server_default=text("false"))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
 
 
 class WsEvent(Base):

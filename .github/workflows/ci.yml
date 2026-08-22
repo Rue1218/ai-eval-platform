@@ -30,6 +30,58 @@ jobs:
       - name: Test (pytest)
         run: pytest
 
+  memory-integration:
+    name: Memory integration
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend/api
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.0-pg16
+        env:
+          POSTGRES_USER: aieval
+          POSTGRES_PASSWORD: aieval_pass
+          POSTGRES_DB: aieval
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U aieval -d aieval"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Migrate and verify memory containers
+        env:
+          DATABASE_URL: postgresql://aieval:aieval_pass@localhost:5432/aieval
+          MEMORY_INTEGRATION_DATABASE_URL: postgresql://aieval:aieval_pass@localhost:5432/aieval
+          MEMORY_INTEGRATION_REDIS_URL: redis://localhost:6379/0
+          RUN_MEMORY_CONTAINER_TESTS: "1"
+        run: |
+          alembic upgrade head
+          pytest tests/integration/test_memory_containers.py
+
   worker:
     runs-on: ubuntu-latest
     defaults:

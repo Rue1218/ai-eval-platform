@@ -2,6 +2,9 @@
 # ".." 使共享包 backend/shared 可导入（shared.models）
 pythonpath = [".", ".."]
 testpaths = ["tests"]
+markers = [
+  "memory_integration: 需要真实 PostgreSQL(pgvector) 与 Redis 容器的阶段 4 集成验收",
+]
 
 [tool.ruff]
 target-version = "py312"

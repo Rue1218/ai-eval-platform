@@ -14,6 +14,7 @@ EXPECTED_TABLES = {
     "users",
     "sessions",
     "messages",
+    "memory_knowledge",
     "ws_events",
     "protocol_profiles",
     "files",

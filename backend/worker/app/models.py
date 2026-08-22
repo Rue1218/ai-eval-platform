@@ -12,6 +12,8 @@ from shared.models import (  # noqa: F401
     Dataset,
     DatasetRow,
     EvalItem,
+    MemoryKnowledge,
+    PgVector,
     ProtocolProfile,
     Report,
     Session,

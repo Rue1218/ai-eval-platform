@@ -1,1 +1,5 @@
-"""知识库写入/撤权。阶段 4 实现；阶段 0 不实现。"""
+"""知识记忆公开实现入口；具体 SQL 保持在 pgvector 适配器内。"""
+
+from .long_term_pgvector import PgvectorKnowledgeMemoryPort
+
+__all__ = ["PgvectorKnowledgeMemoryPort"]

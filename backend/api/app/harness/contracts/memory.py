@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -9,6 +10,17 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.errors import AppError, ErrorCode
 
 from .trace import TraceContext
+
+
+def _validate_embedding(value: list[float] | None) -> list[float] | None:
+    """拒绝空、非有限或超长向量，避免把异常输入传递给 pgvector。"""
+    if value is None:
+        return None
+    if not value or len(value) > 16_000:
+        raise ValueError("记忆向量维度无效")
+    if any(not math.isfinite(item) for item in value):
+        raise ValueError("记忆向量必须是有限数值")
+    return value
 
 
 class MemoryQuery(BaseModel):
@@ -36,6 +48,12 @@ class MemoryQuery(BaseModel):
             raise ValueError("MemoryQuery.trace_id 不可为空")
         return value
 
+    @field_validator("query_embedding")
+    @classmethod
+    def _require_valid_query_embedding(cls, value: list[float] | None) -> list[float] | None:
+        """仅允许有限的查询向量进入长期知识检索。"""
+        return _validate_embedding(value)
+
 
 class MemoryRecord(BaseModel):
     """候选记忆；缺少 source_id 的文本不得作为高可信事实。"""
@@ -52,7 +70,15 @@ class MemoryRecord(BaseModel):
     acl: str = "session"
     origin_trace_id: str | None = None
     origin_span_id: str | None = None
+    # 仅知识记录使用；对话归档仍以 messages 表为唯一正文来源。
+    embedding: list[float] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("embedding")
+    @classmethod
+    def _require_valid_record_embedding(cls, value: list[float] | None) -> list[float] | None:
+        """写入 pgvector 前统一收紧记录向量格式。"""
+        return _validate_embedding(value)
 
 
 def validate_memory_query(query: MemoryQuery, trace: TraceContext) -> None:

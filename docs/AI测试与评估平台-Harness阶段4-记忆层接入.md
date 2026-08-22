@@ -3,14 +3,14 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 阶段 4 — 记忆层接入 |
-| 版本 | V1.6 |
+| 版本 | V1.7 |
 | 审查日期 | 2026-08-22 |
-| 文档性质 | **施工中分析与交付状态文档**；阶段 4.1 已修复 `/compact` 边界和 Redis 生产写入两个 P1，仍未完成 pgvector 与容器级集成验收 |
+| 文档性质 | **施工中分析与交付状态文档**；阶段 4.2 已实现 pgvector 知识存储与容器集成测试，当前分支仍须通过该真实服务 CI 验收 |
 | 对应目标架构 | 架构文档 §2.1 / §3.1 / §5.2 / §5.3 / §5.4（消息表溯源列） |
 | 前置阶段权威 | 阶段 0 已冻结 `MemoryPort` / `MemoryQuery` / `CompiledContext`（`trace_id` 必填）；阶段 3 评论修复已随 PR #73 合入 `main`，阶段 4 仍须独立验收 |
 | 产品/协议裁决 | API.md `GET /api/sessions/{id}/messages` 的 `context_meter` 字段冻结；PRD 确认卡默认值不变 |
 | 分支 | `fix/memory-activation` |
-| 阶段 4.1 合入门禁 | 阶段 4 基础组件已按用户指令合入 `main`；当前 `fix/memory-activation` 的两个 P1 已补回归，完整本地门禁已通过，待 PR 审查后方可合入；阶段 3 已合入不替代阶段 4 的验收 |
+| 阶段 4.2 合入门禁 | 阶段 4.1 两个 P1 已补回归；阶段 4.2 的 pgvector 迁移与真实 Redis/PG CI 已加入本分支。必须通过该 CI，且不得把受限 `forget` 的产品入口自行扩成新 REST/WS 契约，方可进行阶段验收审查 |
 | 后续 | LightRAG / RAG 评测 **不在本阶段**；独立评审。禁止创建 `long_term_lightrag.py` |
 
 ---
@@ -184,7 +184,7 @@
 6. `context.py` / compact 接线；ContextMeter 兼容。
 7. grep 隔离 + 全量 API/Agent 测试。
 
-**当前进度（2026-08-22，阶段 4.1）**：已完成内存 Port、Redis 依赖声明与适配器单元回归、PG `ConversationMemoryPort`、消息 trace/撤权 Alembic、运行时 Port 装配及 `agent/context.py` 薄适配；`history_for_plan()` 已通过 `compile_context → MemoryPort` 获取历史，`context_meter` REST JSON 键未改。`ConversationMemoryPort.retrieve()` 现先按 `compact_keep_from` 截断完整时序，再过滤撤权消息；用户消息在 Harness 入口获得真实 trace 后、助手消息在提交后，均会经统一适配器写入组合 Port，Redis 与 PG 使用同一 `message:{id}` 来源。仍未完成 pgvector/知识存储、真实 Redis/PG 容器集成测试与阶段 4 总验收。
+**当前进度（2026-08-22，阶段 4.2）**：已完成内存 Port、Redis 依赖声明与适配器单元回归、PG `ConversationMemoryPort`、消息 trace/撤权 Alembic、运行时 Port 装配及 `agent/context.py` 薄适配；`history_for_plan()` 已通过 `compile_context → MemoryPort` 获取历史，`context_meter` REST JSON 键未改。`ConversationMemoryPort.retrieve()` 先按 `compact_keep_from` 截断完整时序，再过滤撤权消息；用户消息在 Harness 入口获得真实 trace 后、助手消息在提交后，均会经统一适配器写入组合 Port，Redis 与 PG 使用同一 `message:{id}` 来源。阶段 4.2 新增同库 `memory_knowledge`（pgvector）迁移、`PgvectorKnowledgeMemoryPort`、向量格式校验与运行时组合装配；数据库在 `memory_forgotten`、tenant、资源、user/session 与白名单 ACL 过滤后才按余弦距离排序。专用 CI 服务会运行完整 Alembic 迁移，并实测 pgvector 召回/撤权和 Redis TTL；本机无 Docker 时该用例只跳过，不伪造通过。
 
 ### 5.3 代码落点
 
@@ -259,15 +259,15 @@
 - [x] 内存 Port 单测覆盖 retrieve/append/forget
 - [x] 活路径在 user/assistant 消息提交后调用组合 Port `append()`；Redis 与 PG 复用 `message:{id}` 来源
 - [x] `/compact` 后只召回 `compact_keep_from` 及之后的原文；已覆盖压缩边界回归
-- [~] Redis 适配器单元覆盖 TTL、重复写、损坏记录撤权及活路径写入；真实 Redis TTL 过期待容器集成测试
-- [~] Alembic 消息溯源列可逆并通过离线 SQL 校验；知识向量表仍未实现
+- [~] Redis 适配器单元覆盖 TTL、重复写、损坏记录撤权及活路径写入；真实 Redis TTL 由 `memory-integration` CI 服务测试验收
+- [x] Alembic 消息溯源列与 `memory_knowledge` pgvector 表均可生成离线 SQL；知识检索先做数据库 ACL/撤权过滤再相似度排序
 - [x] 最小窗口布局：System 在前、observation 靠近用户问题、无 source_id 不进知识槽
 - [x] retrieve 空租户/会话不得冒充召回成功；缺归属 conversation 不可见
 - [x] ContextMeter REST 字段与现网一致
 - [x] 无 `long_term_lightrag.py`；rag 任务不得 mock succeeded
 - [x] 审计三表仍在 PG；`/stop` registry 仍未伪装成已多副本
 - [x] `execution/mcp/`、`security/`、`file_sandbox` 仍未被活路径引用
-- [x] 后端 `ruff` + 389 项 pytest 与前端 `npm run build` 全绿
+- [~] 后端 `ruff` + 392 项 pytest（1 项容器用例因本机无 Docker 跳过）与前端 `npm run build` 已通过；PR 容器 CI 待本轮提交后复核
 
 ---
 
@@ -285,11 +285,17 @@
 1. **已修复：`/compact` 语义。** `ConversationMemoryPort.retrieve()` 先取得完整时间序列，按 `session.compact_keep_from` 截断后再过滤 `memory_forgotten`，不会因游标消息撤权而丢失边界。新增测试覆盖压缩后仅召回游标及之后的消息。
 2. **已修复：Redis 生产写入。** 运行时新增“已提交消息 → `MemoryRecord`”适配器；Harness 入口在用户消息拥有真实 trace 后调用，`_deliver_sentence()` 在助手消息提交后调用。短期 Redis 与 PG 对话归档使用相同 `record_id/source_id=message:{id}`，组合 Port 可正确去重。新增测试覆盖 user、assistant 两种角色及助手交付的实际调用点。
 
-剩余阶段 4 工作包括 pgvector 知识存储、受限 forget 的产品入口设计，以及真实 Redis/PG 容器联调。这些项目未完成前，阶段 4 仍不得宣告验收完成。
+阶段 4.2 已实现 pgvector 知识存储与真实 Redis/PG 容器联调脚本；当前提交仍必须由 PR CI 实际执行该服务测试。受限 `forget` 尚无对外产品入口，若要增加 REST/WS 必须先更新 PRD/API.md，禁止在本阶段自行扩展。阶段验收前不得将“测试已接入”表述为“容器 CI 已通过”。
 
 上述问题与阶段 3 已合入的修复彼此独立；阶段 4 不得因基础组件和首批评论已修复而提前宣告验收或合入。
 
 ---
+
+## 7.2 阶段 4.2 交付结论（V1.7）
+
+本轮在既有 `pgvector/pgvector:0.8.0-pg16` Compose 镜像上补齐可迁移的 `memory_knowledge` 表，不新增向量库容器、不调用外部 Embedding 服务、不增加 REST/WS 字段。`MemoryRecord.embedding` 和 `MemoryQuery.query_embedding` 均拒绝空、非有限或超长向量；知识 Port 只在调用方同时提供查询向量与已授权 `permitted_resource_ids` 时检索。写入、召回和撤权均保留 `source_id`、version、trace 与 ACL 归属；运行时组合 Port 已装配知识实现。
+
+真实服务验收放在 GitHub Actions `memory-integration` 任务：使用同版本 PostgreSQL/pgvector、Redis 容器，执行 `alembic upgrade head` 后验证扩展、向量 ACL、撤权和 Redis TTL。该任务是当前 PR 的合入门禁；本机因 Docker 不可用仅运行单元回归并明确 skip，不能替代 CI 结果。
 
 ## 8. 本阶段交付后（V1.0 六层首期闭环）
 
@@ -305,13 +311,14 @@ security/ 三文件、reflect/plan 迁入、persona YAML、外部 MCP 生态、�
 
 ## 修改代码文件与作用清单
 
-V1.6：修复此前审查提出的两个 P1。PG 召回恢复 `/compact` 游标语义；新增统一消息记忆适配器，并在用户回合入口及助手交付提交后写入组合 Port。对话归档 `append()` 额外复核实际 session owner，避免伪造 metadata 越权写入。新增回归覆盖压缩边界、user/assistant 两角色写入、助手交付实际调用点和写入侧 ACL；pgvector 与容器级联调仍为未完成项。
+V1.7：在 V1.6 两个 P1 修复之上实现阶段 4.2：新增同库 `memory_knowledge` pgvector 迁移与 Port，数据库优先过滤撤权和 ACL，再按余弦距离召回；运行时组合 Port 接入知识存储。新增真实 PostgreSQL/Redis 容器测试并接入 CI，当前提交等待该必经任务实际验收；不增加 forget REST/WS 入口，不接入 LightRAG。
 
 | 文件 | 作用 |
 | :--- | :--- |
 | `backend/api/app/harness/contracts/context.py`、`context/compiler.py`、`window_manager.py`、`reranker.py` | 保留 user/assistant 角色、对话时序与纯 Context 编译 |
 | `backend/api/app/harness/memory/ports.py`、`short_term_redis.py`、`conversation_store.py`、`runtime.py` | Redis 短期适配、PG 对话归档与运行时组合 Port；V1.6 恢复压缩游标、提供统一消息写入适配器并复核写入侧 session owner |
+| `backend/api/app/harness/memory/long_term_pgvector.py`、`knowledge_store.py`、`contracts/memory.py` | V1.7：pgvector 知识写入、向量 ACL 召回与撤权；校验记录/查询向量，不在 Context 调用 Embedding SDK |
 | `backend/api/app/agent/context.py`、`agent/harness.py`、`routers/ws.py` | 将规划历史接入 MemoryPort，并给新消息回填真实 trace 溯源；V1.6 在用户入口和助手提交后写入记忆 |
-| `backend/shared/models.py`、`backend/api/migrations/versions/c650ba766b96_消息记忆溯源与撤权字段.py` | Message 溯源列与记忆撤权标记及可逆 Alembic 迁移 |
-| `backend/api/requirements.txt`、`backend/api/tests/harness/memory/test_memory_activation.py` | Redis 运行依赖及阶段 4.1 回归测试（含两个 P1 与写入侧 ACL） |
-| `docs/AI测试与评估平台-Harness阶段4-记忆层接入.md` | V1.6：两个 P1 修复、回归覆盖与剩余边界 |
+| `backend/shared/models.py`、`backend/api/migrations/versions/c650ba766b96_消息记忆溯源与撤权字段.py`、`d6f2a91be430_新增记忆知识向量表.py` | Message 溯源列、知识向量表与撤权标记；pgvector 扩展在迁移内幂等启用 |
+| `backend/api/tests/harness/memory/test_memory_activation.py`、`test_pgvector_knowledge.py`、`tests/integration/test_memory_containers.py`、`.github/workflows/ci.yml` | V1.7：记忆单元回归及真实 PostgreSQL/Redis 容器 CI 门禁 |
+| `docs/AI测试与评估平台-Harness阶段4-记忆层接入.md` | V1.7：阶段 4.2 实现范围、容器验收方式与未授权产品入口边界 |

@@ -13,6 +13,7 @@ from app.models import Message
 from app.models import Session as AgentSession
 
 from .conversation_store import ConversationMemoryPort
+from .knowledge_store import PgvectorKnowledgeMemoryPort
 from .ports import CompositeMemoryPort
 from .retention import MemoryRetention
 from .short_term_redis import RedisMemoryPort
@@ -40,6 +41,7 @@ def memory_port_for_session(db: DbSession) -> MemoryPort:
     return CompositeMemoryPort(
         short_term=_SHORT_TERM_PORT,
         conversation=ConversationMemoryPort(db=db, tenant_id=settings.memory_tenant_id),
+        knowledge=PgvectorKnowledgeMemoryPort(db=db, tenant_id=settings.memory_tenant_id),
     )
 
 
