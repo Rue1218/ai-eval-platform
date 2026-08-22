@@ -1,12 +1,1 @@
-"""最终回复交付状态：模型正文由独立 ``app.llm`` 层提供。"""
-
-from __future__ import annotations
-
-from app.harness.contracts.trace import TraceContext
-from app.harness.contracts.turn import TurnStatus
-from app.harness.feedback.publisher import publisher
-
-
-def begin_finalizing_delivery(*, trace: TraceContext) -> None:
-    """在最终助手消息真正交付前进入收尾；外层只在消息持久化成功后结束 Turn。"""
-    publisher().set_turn_status(trace, status=TurnStatus.FINALIZING_STREAM)
+"""阶段 3 流式收尾暂缓；阶段 1 只保留现网消息交付语义。"""

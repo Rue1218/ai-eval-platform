@@ -3,7 +3,7 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 分阶段实施总册 |
-| 版本 | V1.8 |
+| 版本 | V1.9 |
 | 审查日期 | 2026-08-22 |
 | 用法 | 每个阶段先读对应施工文档的五块分析（与阶段 0 同一模板），再开分支写代码。架构文档第七至十一章只做需求索引；**第十二章为覆盖矩阵与挂起项** |
 
@@ -14,7 +14,7 @@
 | 0 | [阶段0-契约骨架](docs/AI测试与评估平台-Harness阶段0-契约骨架.md) V1.3 | `feat/harness-contracts` | 契约 + tracing；活路径不动 | 验收完成，已合入 `main` |
 | 1 | [阶段1-单调用路径](docs/AI测试与评估平台-Harness阶段1-单调用路径.md) V1.3 | `feat/harness-single-call` | 编排/执行/反馈接管单工具循环 | 验收完成，已合入 `main` |
 | 2 | [阶段2-链路追踪与取消](docs/AI测试与评估平台-Harness阶段2-链路追踪与取消.md) V1.3 | `feat/harness-trace-cancel` | 强制 trace/cancel + 三张审计表 | 验收完成，已合入 `main` |
-| 3 | [阶段3-并行与流式收尾](docs/AI测试与评估平台-Harness阶段3-并行与流式收尾.md) V1.5 | 原实现 `feat/harness-parallel-streaming`；修复 `fix/harness-stage3-comments` | 批次并行能力默认关；流式终态 | 3 个 P1、1 个 P2 的代码与定向回归已完成，**待修复 PR 复审与合入**；阶段 4 仍须独立验收 |
+| 3 | [阶段3-并行与流式收尾](docs/AI测试与评估平台-Harness阶段3-并行与流式收尾.md) V1.5 | 暂缓，不进入当前阶段 0/1 活路径 | 批次并行能力、流式终态 | 当前分支按第十二章止血：并发门面、批次归并和流式收尾保持空壳，待阶段 3 单独 PR |
 | 4 | [阶段4-记忆层接入](docs/AI测试与评估平台-Harness阶段4-记忆层接入.md) V1.4 | `feat/harness-memory-port` | MemoryPort + Redis/pgvector；不接 LightRAG | 用户明确授权受控启动；第一批基础组件已推送，但未接入活路径且有 4 个 P1、1 个 P2，**未验收、不得合入** |
 
 规则：
@@ -63,10 +63,10 @@
 
 ## 本次文档变更范围
 
-V1.8：同步阶段 3 评论修复进度。默认串行批次归并、最终交付状态时序、ErrorClass observation 回填和参数失败 span 审计均已在 `fix/harness-stage3-comments` 完成并通过定向回归，待 PR 复审与合入；阶段 4 状态、对外协议和挂起项均未改变。
+V1.9：按第十二章执行紧急止血。阶段 0/1 保留单调用活路径；阶段 3 的批次解析、`ParallelFacade`、`merge_batch`、`FINALIZING_STREAM` 从当前活路径撤下并留待独立 PR；MCP Transport、security、Alembic、Redis/pgvector、确认卡与规划模块均未改动。
 
 | 文件 | 作用 |
 | :--- | :--- |
-| `docs/AI测试与评估平台-Harness分阶段实施总册.md` | V1.8：更新阶段 3 评论修复进度与 PR 合入门禁 |
+| `docs/AI测试与评估平台-Harness分阶段实施总册.md` | V1.9：记录阶段 3 暂缓与当前分支止血边界 |
 | `docs/AI测试与评估平台-Harness阶段3-并行与流式收尾.md` | V1.5：记录四项评论修复、定向回归和复审条件 |
 | `docs/AI测试与评估平台-Harness阶段4-记忆层接入.md` | V1.4：同步阶段 3 修复 PR 状态；阶段 4 已实现范围和阻塞项不变 |

@@ -9,7 +9,7 @@ from typing import Any
 
 from app.agent.defaults import SHORT_TOOLS, TOOL_TITLES, WRITE_TOOLS, is_long_tool
 from app.agent.log import agent_trace
-from app.harness.contracts.tool_call import ToolCall, ToolCallBatch
+from app.harness.contracts.tool_call import ToolCall
 from app.harness.contracts.trace import TraceContext
 
 _SCHEMA_PATH = Path(__file__).resolve().parents[1] / "prompts" / "react-output.schema.json"
@@ -36,7 +36,7 @@ class McpStep:
             self.model_done = self.done
 
 
-ReactDecision = McpStep | ToolCallBatch
+ReactDecision = McpStep
 
 
 def _schema() -> dict[str, Any]:
@@ -173,42 +173,13 @@ def tool_call_from_step(step: McpStep) -> ToolCall:
     )
 
 
-def parse_model_payload(raw: dict[str, Any], *, trace: TraceContext) -> ReactDecision:
-    """解析模型结构化输出并绑定 Turn；批次 span 仅由编排执行阶段创建。"""
+def parse_model_payload(
+    raw: dict[str, Any], *, trace: TraceContext | None = None
+) -> ReactDecision:
+    """解析阶段 1 单调用 JSON；保留 trace 参数仅为旧测试桩兼容，不在 Parser 绑定 trace。"""
+    _ = trace
     validated = validate_react_output(raw)
-    if "tool_calls" not in validated:
-        return parse_mcp_step(validated)
-
-    calls: list[ToolCall] = []
-    for item in validated.get("tool_calls") or []:
-        # 复用产品工具裁剪：未知工具/长任务保持既有不执行语义。
-        step = parse_mcp_step(
-            {
-                "thought": validated.get("thought") or "",
-                "tool": item.get("tool"),
-                "arguments": item.get("arguments"),
-                "done": False,
-                "reply": "",
-            }
-        )
-        if not step.tool or step.done:
-            continue
-        call_payload: dict[str, Any] = {
-            "tool": step.tool,
-            "arguments": step.arguments,
-            "thought": str(validated.get("thought") or ""),
-            "done": False,
-            "reply": "",
-            "trace_id": trace.trace_id,
-        }
-        if str(item.get("call_id") or "").strip():
-            call_payload["call_id"] = str(item["call_id"])
-        calls.append(ToolCall(**call_payload))
-
-    return ToolCallBatch(
-        turn_id=trace.turn_id,
-        thought=str(validated.get("thought") or ""),
-        done=bool(validated.get("done")),
-        reply=str(validated.get("reply") or ""),
-        tool_calls=calls,
-    )
+    if "tool_calls" in validated:
+        # 阶段 3 批次 schema 不得提前进入阶段 1 活路径。
+        raise ValueError("阶段 1 不支持 tool_calls[] 批量调用")
+    return parse_mcp_step(validated)

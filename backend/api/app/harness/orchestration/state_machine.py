@@ -16,9 +16,7 @@ _ALLOWED_TRANSITIONS: dict[TurnStatus, frozenset[TurnStatus]] = {
     TurnStatus.PARSED: frozenset(
         {
             TurnStatus.EXECUTING,
-            TurnStatus.PARALLEL_EXECUTING,
             TurnStatus.FEEDBACK_READY,
-            TurnStatus.FINALIZING_STREAM,
             TurnStatus.CANCELLING,
             TurnStatus.FAILED_STOP,
         }
@@ -26,19 +24,12 @@ _ALLOWED_TRANSITIONS: dict[TurnStatus, frozenset[TurnStatus]] = {
     TurnStatus.EXECUTING: frozenset(
         {TurnStatus.FEEDBACK_READY, TurnStatus.CANCELLING, TurnStatus.FAILED_STOP}
     ),
-    TurnStatus.PARALLEL_EXECUTING: frozenset(
-        {TurnStatus.FEEDBACK_READY, TurnStatus.CANCELLING, TurnStatus.FAILED_STOP}
-    ),
     TurnStatus.FEEDBACK_READY: frozenset(
         {
             TurnStatus.PARSED,
-            TurnStatus.FINALIZING_STREAM,
             TurnStatus.CANCELLING,
             TurnStatus.FAILED_STOP,
         }
-    ),
-    TurnStatus.FINALIZING_STREAM: frozenset(
-        {TurnStatus.FINISHED, TurnStatus.CANCELLING, TurnStatus.FAILED_STOP}
     ),
     TurnStatus.CANCELLING: frozenset({TurnStatus.CANCELLED, TurnStatus.FAILED_STOP}),
     TurnStatus.CANCELLED: frozenset(),

@@ -1,40 +1,12 @@
 {
-  "oneOf": [
-    {
-      "type": "object",
-      "required": ["thought", "tool", "arguments", "done"],
-      "additionalProperties": false,
-      "properties": {
-        "thought": { "type": "string", "maxLength": 512 },
-        "tool": { "type": ["string", "null"] },
-        "arguments": { "type": "object" },
-        "done": { "type": "boolean" },
-        "reply": { "type": "string", "maxLength": 4000 }
-      }
-    },
-    {
-      "type": "object",
-      "required": ["thought", "tool_calls", "done"],
-      "additionalProperties": false,
-      "properties": {
-        "thought": { "type": "string", "maxLength": 512 },
-        "done": { "type": "boolean" },
-        "reply": { "type": "string", "maxLength": 4000 },
-        "tool_calls": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "required": ["tool", "arguments"],
-            "additionalProperties": false,
-            "properties": {
-              "call_id": { "type": "string" },
-              "batch_index": { "type": "integer", "minimum": 0 },
-              "tool": { "type": "string" },
-              "arguments": { "type": "object" }
-            }
-          }
-        }
-      }
-    }
-  ]
+  "type": "object",
+  "required": ["thought", "tool", "arguments", "done"],
+  "additionalProperties": false,
+  "properties": {
+    "thought": { "type": "string", "maxLength": 512 },
+    "tool": { "type": ["string", "null"] },
+    "arguments": { "type": "object" },
+    "done": { "type": "boolean" },
+    "reply": { "type": "string", "maxLength": 4000 }
+  }
 }

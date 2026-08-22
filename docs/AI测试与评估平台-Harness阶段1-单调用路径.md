@@ -3,7 +3,7 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 阶段 1 — 单调用路径 |
-| 版本 | V1.5 |
+| 版本 | V1.6 |
 | 审查日期 | 2026-08-21 |
 | 文档性质 | **开工前分析文档**（需求分析、功能点、实现路径、技术难点与对策）；代码必须按本文验收，不得超出范围 |
 | 对应目标架构 | [`docs/AI测试与评估平台-Harness六层ReAct核心架构设计.md`](docs/AI测试与评估平台-Harness六层ReAct核心架构设计.md) **第八章为需求索引**；展开以本文为准 |
@@ -408,6 +408,8 @@ parse_mcp_step / execute_short_tool / redact_secrets 测试 import 仍可用
 ---
 
 ## 修改代码文件与作用清单
+
+V1.6：紧急止血——按第十二章收回阶段 3 活路径；单调用 Schema、Parser、ReAct、Facade、normalize 保持阶段 1，`parallel_facade.py` / `streaming.py` 留空，批次归并不进入当前分支。
 
 V1.5：审查修复——活路径改为 `execute(..., *, trace)`，`normalize` 的 ToolResult 回填观察；`execute_short_tool` 仅作测试 tuple 与 monkeypatch 锚点。
 
