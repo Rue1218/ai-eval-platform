@@ -1,33 +1,35 @@
 <template>
   <div class="login-wrapper">
-    <div class="login-card scanline">
+    <div class="login-card">
       <div class="login-brand">
         <div class="login-mark">A</div>
-        <div class="eyebrow" style="margin-bottom: 8px">SECURE ACCESS · V1.6.3</div>
-        <div class="login-title">AI 测试与评估平台</div>
-        <!-- L4 副标题文案对齐原型 login.html:37 -->
+        <div class="login-eyebrow">SECURE ACCESS · V1.6.3</div>
+        <h1 class="login-title">AI 测试与评估平台</h1>
         <div class="login-desc">
           对话完成：用例（可选）→ Benchmark 和 / 或 RAG →（可选）压测 → 报告
         </div>
-        <div class="row" style="justify-content: center; margin-top: 14px; gap: 8px">
-          <span class="ai-badge"><i class="ai-dot"></i>AGENT 后端</span>
-          <!-- L3 后端状态行：优先显示 Agent 模型名，获取失败时仅显示连接状态 -->
-          <span class="small tertiary mono" style="font-size: 11px">{{ agentStatusText }}</span>
+        <div class="login-status-row">
+          <span class="status-badge">
+            <span class="status-dot"></span>
+            AGENT 后端
+          </span>
+          <span class="status-text">{{ agentStatusText }}</span>
         </div>
       </div>
 
       <div class="login-form">
-        <div class="field">
+        <div class="form-field">
           <label class="field-label">用户名</label>
           <n-input
             v-model:value="username"
             size="large"
             placeholder="admin / alice / boss"
+            :theme-overrides="inputThemeOverrides"
             @keydown.enter="submitLogin"
           />
         </div>
 
-        <div class="field">
+        <div class="form-field">
           <label class="field-label">密码</label>
           <n-input
             v-model:value="password"
@@ -35,6 +37,7 @@
             show-password-on="click"
             size="large"
             placeholder="不少于 8 位，含字母和数字"
+            :theme-overrides="inputThemeOverrides"
             @keydown.enter="submitLogin"
           />
         </div>
@@ -48,17 +51,14 @@
           <span>{{ errorMsg }}</span>
         </div>
 
-        <button class="btn btn-sign login-btn" :disabled="loading" @click="submitLogin">
+        <button class="login-btn" :disabled="loading" @click="submitLogin">
           {{ loading ? '登录中...' : '登 录' }}
         </button>
       </div>
 
-      <!-- L5 演示账号提示对齐原型 login.html:55-58；
-           注意：live 环境仅初始管理员 admin / admin123 有效（由 BOOTSTRAP_ADMIN_PASSWORD 注入），
-           alice / bob / boss 为原型演示账号，仅作展示 -->
-      <div class="login-foot mono">
-        <span>原型演示账号（单一角色，全员同权）：admin / admin123（首登强制改密）</span>
-        <span>alice / Alice123 · bob / Bob12345 · boss / Boss1234</span>
+      <div class="login-foot">
+        <div>原型演示账号（单一角色，全员同权）：admin / admin123（首登强制改密）</div>
+        <div>alice / Alice123 · bob / Bob12345 · boss / Boss1234</div>
       </div>
     </div>
   </div>
@@ -67,9 +67,10 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { useMessage } from 'naive-ui'
+import { useMessage, type InputProps } from 'naive-ui'
 import { useAuthStore } from '../stores/auth'
-import { api } from '../api/http'
+
+type InputThemeOverrides = NonNullable<InputProps['themeOverrides']>
 
 const router = useRouter()
 const message = useMessage()
@@ -80,7 +81,23 @@ const password = ref('admin123')
 const loading = ref(false)
 const errorMsg = ref('')
 
-// L3 后端状态行：默认仅显示连接状态，成功获取设置后前置 Agent 模型名
+// Naive UI Input 定制样式以完美契合原型
+const inputThemeOverrides: InputThemeOverrides = {
+  heightLarge: '46px',
+  borderRadius: '12px',
+  border: '1px solid #e2e8f0',
+  borderHover: '1px solid #94a3b8',
+  borderFocus: '1px solid #6366f1',
+  boxShadowFocus: '0 0 0 3px rgba(99, 102, 241, 0.12)',
+  color: '#ffffff',
+  textColor: '#0f172a',
+  placeholderColor: '#94a3b8',
+  fontSizeLarge: '14px',
+  iconColor: '#94a3b8',
+  iconColorHover: '#475569',
+}
+
+// 状态行：默认显示连接状态
 const agentStatusText = ref('连接正常 · 调度器运行中')
 
 /** 登录页健康探测：未登录状态下调用免密公网健康接口，避免触发受保护接口 401 日志 */
@@ -119,29 +136,41 @@ onMounted(loadAgentStatus)
 
 <style scoped>
 .login-wrapper {
+  position: relative;
   display: grid;
   place-items: center;
-  height: 100vh;
-  padding: 20px;
+  min-height: 100vh;
+  padding: 24px;
+  background-color: #f3faf6;
+  background-image:
+    radial-gradient(1000px 600px at 50% 12%, rgba(16, 185, 129, 0.12), transparent 70%),
+    radial-gradient(800px 500px at 85% 85%, rgba(94, 234, 212, 0.15), transparent 60%),
+    radial-gradient(800px 500px at 15% 85%, rgba(16, 185, 129, 0.1), transparent 60%),
+    linear-gradient(to right, rgba(16, 185, 129, 0.08) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(16, 185, 129, 0.08) 1px, transparent 1px);
+  background-size: 100% 100%, 100% 100%, 100% 100%, 30px 30px, 30px 30px;
+  overflow: hidden;
 }
 
 .login-card {
-  width: 420px;
-  max-width: 100%;
-  /* L2 玻璃拟态（对齐原型 login.html 12-19）：半透明白底 + 20px 背景模糊 */
-  background: rgba(255, 255, 255, 0.78);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid rgba(255, 255, 255, 0.8);
-  border-radius: 20px;
-  padding: 36px 32px 28px;
-  box-shadow: 0 24px 64px rgba(17, 24, 39, 0.12);
-  animation: card-in 0.3s cubic-bezier(0.2, 0.9, 0.3, 1);
+  width: 440px;
+  max-width: calc(100vw - 32px);
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.95);
+  border-radius: 28px;
+  padding: 40px 36px 32px;
+  box-shadow:
+    0 24px 60px -12px rgba(15, 23, 42, 0.08),
+    0 1px 3px rgba(0, 0, 0, 0.03);
+  animation: card-in 0.35s cubic-bezier(0.16, 1, 0.3, 1);
 }
+
 @keyframes card-in {
   from {
     opacity: 0;
-    transform: translateY(16px);
+    transform: translateY(20px) scale(0.98);
   }
   to {
     opacity: 1;
@@ -150,92 +179,185 @@ onMounted(loadAgentStatus)
 }
 
 .login-brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   text-align: center;
-  margin-bottom: 28px;
+  margin-bottom: 24px;
 }
+
 .login-mark {
-  width: 44px;
-  height: 44px;
-  margin: 0 auto 14px;
-  border-radius: 12px;
-  background: var(--text-primary);
-  color: var(--bg-main);
+  width: 48px;
+  height: 48px;
+  margin: 0 auto 16px;
+  border-radius: 14px;
+  background: #0f172a;
+  color: #ffffff;
   font-family: var(--font-display);
   font-weight: 700;
-  font-size: 24px;
+  font-size: 26px;
   display: grid;
   place-items: center;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.15);
+  user-select: none;
 }
+
+.login-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  color: #94a3b8;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+
 .login-title {
-  font-size: 20px;
+  font-family: var(--font-body);
+  font-size: 22px;
   font-weight: 700;
-  letter-spacing: -0.02em;
-  color: var(--text-primary);
+  letter-spacing: -0.01em;
+  color: #0f172a;
+  margin: 0;
+  line-height: 1.3;
 }
+
 .login-desc {
-  font-size: 12.5px;
-  color: var(--text-secondary);
-  margin-top: 6px;
-  line-height: 1.5;
+  font-size: 12px;
+  color: #64748b;
+  margin-top: 8px;
+  line-height: 1.6;
+  max-width: 340px;
+}
+
+.login-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 16px;
+  gap: 10px;
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px 3px 8px;
+  background: rgba(238, 242, 255, 0.95);
+  border: 1px solid rgba(199, 210, 254, 0.8);
+  border-radius: 999px;
+  color: #4f46e5;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.status-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #6366f1;
+  box-shadow: 0 0 6px #6366f1;
+  animation: dot-pulse 2s infinite ease-in-out;
+}
+
+@keyframes dot-pulse {
+  0%, 100% { transform: scale(1); opacity: 0.9; }
+  50% { transform: scale(1.35); opacity: 1; }
+}
+
+.status-text {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: #64748b;
+  letter-spacing: 0.01em;
 }
 
 .login-form {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 16px;
 }
-.field {
+
+.form-field {
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
+
 .field-label {
   font-size: 13px;
   font-weight: 500;
-  color: var(--text-secondary);
+  color: #334155;
 }
 
 .login-error {
   display: flex;
   align-items: center;
   gap: 6px;
-  color: var(--accent-error);
+  color: #ef4444;
   font-size: 12.5px;
-  padding: 6px 10px;
+  padding: 8px 12px;
   background: #fef2f2;
-  border-radius: 8px;
+  border: 1px solid #fee2e2;
+  border-radius: 10px;
 }
 
 .login-btn {
   width: 100%;
-  height: 42px;
+  height: 46px;
   font-size: 15px;
   font-weight: 600;
-  margin-top: 6px;
+  letter-spacing: 0.25em;
+  margin-top: 4px;
   border-radius: 12px;
+  background: #0f172a;
+  color: #ffffff;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.login-btn:hover:not(:disabled) {
+  background: #1e293b;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px -2px rgba(15, 23, 42, 0.2);
+}
+
+.login-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.login-btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
 }
 
 .login-foot {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
   text-align: center;
+  font-family: var(--font-mono);
   font-size: 11px;
-  color: var(--text-tertiary);
+  color: #94a3b8;
   margin-top: 24px;
-  padding-top: 14px;
-  border-top: 1px dashed var(--border-subtle);
-  line-height: 1.9;
+  padding-top: 16px;
+  border-top: 1px dashed #e2e8f0;
+  line-height: 1.8;
 }
 
 @media (max-width: 700px) {
   .login-wrapper {
-    height: 100dvh;
-    padding: 14px;
+    padding: 16px;
   }
   .login-card {
-    padding: 28px 20px 22px;
-    border-radius: 16px;
+    padding: 32px 22px 24px;
+    border-radius: 20px;
   }
 }
 </style>
+
