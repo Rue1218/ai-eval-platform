@@ -449,4 +449,17 @@ function onDragStart(event: DragEvent, type: WorkflowNodeType) {
   border-color: var(--accent-ai);
   transform: scale(1.08);
 }
+
+@media (max-width: 768px) {
+  .wf-palette {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    z-index: 45;
+    background: var(--bg-main);
+    box-shadow: 8px 0 32px rgba(0, 0, 0, 0.22);
+    max-width: min(280px, 85vw);
+  }
+}
 </style>
