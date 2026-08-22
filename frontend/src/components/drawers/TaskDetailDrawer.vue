@@ -1,5 +1,5 @@
 <template>
-  <n-drawer :show="show" :width="520" @update:show="$emit('update:show', $event)">
+  <n-drawer :show="show" :width="drawerWidth" @update:show="$emit('update:show', $event)">
     <n-drawer-content title="任务详情" closable>
       <div v-if="task" class="task-detail">
         <!-- 头部概览 -->
@@ -124,6 +124,14 @@ defineEmits<{
 
 const showConfig = ref(false)
 const events = ref<TaskEvent[]>([])
+
+/** 移动端自适应抽屉宽度 */
+const drawerWidth = computed(() => {
+  if (typeof window !== 'undefined' && window.innerWidth <= 640) {
+    return '100%'
+  }
+  return 520
+})
 
 const progressPercent = computed(() => {
   if (!props.task?.progress) return 0
