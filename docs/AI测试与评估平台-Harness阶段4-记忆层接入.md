@@ -267,16 +267,16 @@
 - [x] 无 `long_term_lightrag.py`；rag 任务不得 mock succeeded
 - [x] 审计三表仍在 PG；`/stop` registry 仍未伪装成已多副本
 - [x] `execution/mcp/`、`security/`、`file_sandbox` 仍未被活路径引用
-- [x] 后端 `ruff` + 383 项 pytest 与前端 `npm run build` 全绿
+- [x] 后端 `ruff` + 389 项 pytest 与前端 `npm run build` 全绿
 
 ---
 
 ## 7.1 阶段 4.1 代码审查结论（V1.6）
 
-本次审查 `fix/memory-activation` 相对 `main` 的修复实现；后端 `ruff`、386 项 `pytest` 与前端 `npm run build` 已通过，阶段 4.1 记忆回归包含在全量测试中；Alembic 离线 SQL 已验证可生成消息溯源与撤权字段。API 容器入口会执行 `alembic upgrade head`，本轮未发现迁移漏跑。以下已落实项可保留：
+本次审查 `fix/memory-activation` 相对 `main` 的修复实现；后端 `ruff`、389 项 `pytest` 与前端 `npm run build` 已通过，阶段 4.1 记忆回归包含在全量测试中；Alembic 离线 SQL 已验证可生成消息溯源与撤权字段。API 容器入口会执行 `alembic upgrade head`，本轮未发现迁移漏跑。以下已落实项可保留：
 
 1. **已落实：角色和顺序。** `ContextItem` 显式保存 role；assistant 历史保留为 assistant，对话按时间正序进入 history 槽。
-2. **已落实：归属 ACL。** conversation 召回要求 tenant/user/session；手工注入的缺归属记录会被拒绝。
+2. **已落实：归属 ACL。** conversation 召回和 `append()` 均复核实际 session owner 的 tenant/user/session；手工注入的缺归属或伪造 owner 记录会被拒绝。
 3. **已落实：部署与迁移链路。** Redis 依赖与 API 启动迁移均已声明；消息 trace/撤权字段由可逆 Alembic 管理。
 4. **已落实：Redis 适配器容错。** 重复 `append` 覆盖同 `record_id`；`forget` 会跳过并记录损坏序列化项。
 
@@ -305,13 +305,13 @@ security/ 三文件、reflect/plan 迁入、persona YAML、外部 MCP 生态、�
 
 ## 修改代码文件与作用清单
 
-V1.6：修复此前审查提出的两个 P1。PG 召回恢复 `/compact` 游标语义；新增统一消息记忆适配器，并在用户回合入口及助手交付提交后写入组合 Port。新增回归覆盖压缩边界、user/assistant 两角色写入和助手交付实际调用点；pgvector 与容器级联调仍为未完成项。
+V1.6：修复此前审查提出的两个 P1。PG 召回恢复 `/compact` 游标语义；新增统一消息记忆适配器，并在用户回合入口及助手交付提交后写入组合 Port。对话归档 `append()` 额外复核实际 session owner，避免伪造 metadata 越权写入。新增回归覆盖压缩边界、user/assistant 两角色写入、助手交付实际调用点和写入侧 ACL；pgvector 与容器级联调仍为未完成项。
 
 | 文件 | 作用 |
 | :--- | :--- |
 | `backend/api/app/harness/contracts/context.py`、`context/compiler.py`、`window_manager.py`、`reranker.py` | 保留 user/assistant 角色、对话时序与纯 Context 编译 |
-| `backend/api/app/harness/memory/ports.py`、`short_term_redis.py`、`conversation_store.py`、`runtime.py` | Redis 短期适配、PG 对话归档与运行时组合 Port；V1.6 恢复压缩游标并提供统一消息写入适配器 |
+| `backend/api/app/harness/memory/ports.py`、`short_term_redis.py`、`conversation_store.py`、`runtime.py` | Redis 短期适配、PG 对话归档与运行时组合 Port；V1.6 恢复压缩游标、提供统一消息写入适配器并复核写入侧 session owner |
 | `backend/api/app/agent/context.py`、`agent/harness.py`、`routers/ws.py` | 将规划历史接入 MemoryPort，并给新消息回填真实 trace 溯源；V1.6 在用户入口和助手提交后写入记忆 |
 | `backend/shared/models.py`、`backend/api/migrations/versions/c650ba766b96_消息记忆溯源与撤权字段.py` | Message 溯源列与记忆撤权标记及可逆 Alembic 迁移 |
-| `backend/api/requirements.txt`、`backend/api/tests/harness/memory/test_memory_activation.py` | Redis 运行依赖及阶段 4.1 回归测试（含两个 P1） |
+| `backend/api/requirements.txt`、`backend/api/tests/harness/memory/test_memory_activation.py` | Redis 运行依赖及阶段 4.1 回归测试（含两个 P1 与写入侧 ACL） |
 | `docs/AI测试与评估平台-Harness阶段4-记忆层接入.md` | V1.6：两个 P1 修复、回归覆盖与剩余边界 |

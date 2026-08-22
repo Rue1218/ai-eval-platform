@@ -292,6 +292,27 @@ def test_conversation_store_enforces_owner_and_emits_provenance() -> None:
     asyncio.run(body())
 
 
+def test_conversation_store_append_rejects_foreign_owner() -> None:
+    """写入侧必须复核会话 owner，不能仅相信 MemoryRecord 的 metadata。"""
+
+    async def body() -> None:
+        trace = _trace()
+        row = SimpleNamespace(
+            id="m-foreign",
+            session_id="session-1",
+            origin_trace_id=None,
+            origin_span_id=None,
+        )
+        db = _FakeDb(SimpleNamespace(user_id="owner-2"), [row])
+        port = ConversationMemoryPort(db, tenant_id="internal")
+        with pytest.raises(AppError) as exc:
+            await port.append(_conversation("m-foreign", "不得越权写入"), trace=trace)
+        assert exc.value.code == ErrorCode.UNAUTHORIZED
+        assert db.commits == 0
+
+    asyncio.run(body())
+
+
 def test_conversation_store_respects_compact_boundary_before_recall() -> None:
     """压缩后只从 compact_keep_from 召回，不能把已归入摘要的原文放回规划历史。"""
     async def body() -> None:

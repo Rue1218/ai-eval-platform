@@ -119,18 +119,32 @@ class ConversationMemoryPort(MemoryPort):
         ]
 
     async def append(self, record: MemoryRecord, *, trace: TraceContext) -> None:
-        """为既有消息补回 trace 溯源；消息正文仍只由正常会话流程写入。"""
+        """为已授权会话的既有消息补回 trace 溯源；消息正文仍只由正常流程写入。"""
         metadata = record.metadata if isinstance(record.metadata, dict) else {}
         query = _metadata_scope(metadata, trace=trace)
         validate_memory_query(query, trace)
+        if query.tenant_id != self.tenant_id:
+            raise AppError(ErrorCode.UNAUTHORIZED, "无权写入其他租户的对话记忆")
         message_id = _message_id_from_source(record.source_id)
         try:
+            session = (
+                self.db.query(AgentSession)
+                .filter(
+                    AgentSession.id == query.session_id,
+                    AgentSession.user_id == query.user_id,
+                    AgentSession.deleted_at.is_(None),
+                )
+                .first()
+            )
+            # 写入侧与 retrieve 使用同一 owner 校验，不能只相信调用方构造的 metadata。
+            if session is None or str(session.user_id) != query.user_id:
+                raise AppError(ErrorCode.UNAUTHORIZED, "无权写入该会话的对话记忆")
             row = (
                 self.db.query(Message)
                 .filter(Message.id == message_id, Message.session_id == query.session_id)
                 .first()
             )
-            if row is None:
+            if row is None or str(row.session_id) != query.session_id:
                 raise AppError(ErrorCode.NOT_FOUND, "对话记忆来源不存在")
             row.origin_trace_id = record.origin_trace_id or trace.trace_id
             row.origin_span_id = record.origin_span_id or trace.span_id

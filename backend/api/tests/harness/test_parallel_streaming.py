@@ -349,7 +349,9 @@ def test_batch_parameter_failure_persists_child_span_and_error_class(monkeypatch
     asyncio.run(_body())
 
 
-def test_final_reply_finalizes_before_emit_and_finishes_after_commit():
+def test_final_reply_finalizes_before_emit_and_finishes_after_commit(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """最终交付先进入 FINALIZING_STREAM，消息落库提交后才允许由总控写 FINISHED。"""
 
     async def _body() -> None:
@@ -363,6 +365,11 @@ def test_final_reply_finalizes_before_emit_and_finishes_after_commit():
             statuses_at_emit.append(store.turns[0]["status"])
             return 1
 
+        async def _append_memory(*_args, **_kwargs) -> None:
+            """本用例只验证阶段 3 状态时序，不接入阶段 4 的记忆适配器。"""
+            return None
+
+        monkeypatch.setattr("app.agent.harness.append_persisted_conversation_message", _append_memory)
         with using_trace(trace):
             await _deliver_sentence(db, "session-stage3", _emit, "已完成")
         assert statuses_at_emit == [TurnStatus.FINALIZING_STREAM]
