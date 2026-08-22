@@ -17,7 +17,7 @@
         'is-success-exit': isSuccessExit,
       }"
     >
-      <!-- 左侧：AI 品牌介绍与科技插画区域 -->
+      <!-- 左侧：AI 品牌介绍与科技插画区域（桌面端展示） -->
       <div class="login-left-pane">
         <!-- 品牌标识与版本 -->
         <div class="left-brand-row stagger-item stagger-1">
@@ -87,33 +87,27 @@
         <div class="left-ai-graphic stagger-item stagger-7" :style="graphicParallaxStyle">
           <svg class="ai-svg" viewBox="0 0 340 180" fill="none" xmlns="http://www.w3.org/2000/svg">
             <defs>
-              <!-- 底座呼吸光晕 -->
               <radialGradient id="baseGlow" cx="50%" cy="50%" r="50%">
                 <stop offset="0%" stop-color="#10b981" stop-opacity="0.22" />
                 <stop offset="60%" stop-color="#34d399" stop-opacity="0.08" />
                 <stop offset="100%" stop-color="#10b981" stop-opacity="0" />
               </radialGradient>
-              <!-- 立方体顶面渐变 -->
               <linearGradient id="cubeTop" x1="0%" y1="0%" x2="100%" y2="100%">
                 <stop offset="0%" stop-color="#d1fae5" stop-opacity="0.9" />
                 <stop offset="100%" stop-color="#6ee7b7" stop-opacity="0.75" />
               </linearGradient>
-              <!-- 立方体左面渐变 -->
               <linearGradient id="cubeLeft" x1="0%" y1="0%" x2="100%" y2="100%">
                 <stop offset="0%" stop-color="#10b981" stop-opacity="0.85" />
                 <stop offset="100%" stop-color="#047857" stop-opacity="0.95" />
               </linearGradient>
-              <!-- 立方体右面渐变 -->
               <linearGradient id="cubeRight" x1="0%" y1="0%" x2="100%" y2="100%">
                 <stop offset="0%" stop-color="#34d399" stop-opacity="0.9" />
                 <stop offset="100%" stop-color="#059669" stop-opacity="0.9" />
               </linearGradient>
-              <!-- 底座顶面渐变 -->
               <linearGradient id="baseTop" x1="0%" y1="0%" x2="100%" y2="100%">
                 <stop offset="0%" stop-color="#ffffff" stop-opacity="0.95" />
                 <stop offset="100%" stop-color="#e6f4ea" stop-opacity="0.9" />
               </linearGradient>
-              <!-- 粒子发光渐变 -->
               <radialGradient id="particleGlow" cx="35%" cy="35%" r="65%">
                 <stop offset="0%" stop-color="#ecfdf5" />
                 <stop offset="45%" stop-color="#34d399" />
@@ -137,31 +131,24 @@
 
             <!-- 核心底座平台 (呼吸动效) -->
             <g class="ai-base-pedestal">
-              <!-- 下层平台 -->
               <path d="M120 148 L170 123 L220 148 L170 173 Z" fill="url(#baseTop)" stroke="#a7f3d0" stroke-width="1.5" />
               <path d="M120 148 L170 173 L170 180 L120 155 Z" fill="#9fe2be" />
               <path d="M170 173 L220 148 L220 155 L170 180 Z" fill="#6ee7b7" />
 
-              <!-- 上层发光平台台阶 -->
               <path d="M132 138 L170 119 L208 138 L170 157 Z" fill="#f0fdf4" stroke="#6ee7b7" stroke-width="1" />
               <path d="M132 138 L170 157 L170 162 L132 143 Z" fill="#a7f3d0" />
               <path d="M170 157 L208 138 L208 143 L170 162 Z" fill="#6ee7b7" />
             </g>
 
-            <!-- AI 悬浮核心立方体 (独立上下浮动) -->
+            <!-- AI 悬浮核心立方体 -->
             <g class="ai-core-cube">
-              <!-- 立方体顶面 -->
               <path d="M170 48 L206 66 L170 84 L134 66 Z" fill="url(#cubeTop)" stroke="rgba(255,255,255,0.8)" stroke-width="1.2" />
-              <!-- 立方体左面 -->
               <path d="M134 66 L170 84 L170 126 L134 108 Z" fill="url(#cubeLeft)" stroke="rgba(255,255,255,0.4)" stroke-width="0.8" />
-              <!-- 立方体右面 -->
               <path d="M170 84 L206 66 L206 108 L170 126 Z" fill="url(#cubeRight)" stroke="rgba(255,255,255,0.4)" stroke-width="0.8" />
               
-              <!-- 核心正面 "AI" 发光文字 -->
               <g transform="translate(170, 95) skewY(16) scale(0.9, 0.95)">
                 <text x="-16" y="6" fill="#ffffff" font-family="'JetBrains Mono', 'Segoe UI', sans-serif" font-weight="900" font-size="20" letter-spacing="1">AI</text>
               </g>
-              <!-- 高光棱角边线 -->
               <path d="M170 48 L170 84" stroke="rgba(255, 255, 255, 0.9)" stroke-width="1.5" />
             </g>
 
@@ -176,6 +163,23 @@
 
       <!-- 右侧：登录操作面板 -->
       <div class="login-right-pane">
+        <!-- 移动端专属品牌顶部栏（仅在窄屏下展示，保持平台品牌识别度） -->
+        <div class="mobile-brand-header">
+          <div class="mobile-brand-row">
+            <div class="brand-badge-box">
+              <span class="brand-mark">A</span>
+              <span class="brand-name">SECURE ACCESS</span>
+            </div>
+            <span class="brand-ver-tag">v1.6.3</span>
+          </div>
+          <h1 class="mobile-brand-title">
+            <span class="ai-text">AI</span> 测试与评估平台
+          </h1>
+          <p class="mobile-brand-desc">
+            基准评测 · 知识库 RAG · 自动化压测
+          </p>
+        </div>
+
         <!-- 欢迎标语 -->
         <div class="right-header">
           <h2 class="right-title">欢迎回来</h2>
@@ -283,7 +287,7 @@
                     @click="togglePasswordVisible"
                   >
                     <svg v-if="showPassword" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8z"></path>
                       <circle cx="12" cy="12" r="3"></circle>
                     </svg>
                     <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -329,7 +333,7 @@
                 <span>{{ globalErrorMsg }}</span>
               </div>
 
-              <!-- 核心登录提交按钮（具备多阶段状态机） -->
+              <!-- 核心登录提交按钮 -->
               <button
                 type="submit"
                 class="login-submit-btn"
@@ -340,12 +344,9 @@
                 :disabled="loading || isLoginSuccess"
                 tabindex="5"
               >
-                <!-- 阶段 1：普通状态 -->
                 <span v-if="!loading && !isLoginSuccess" class="btn-inner-text">
                   登 录
                 </span>
-
-                <!-- 阶段 2：正在验证 / AI 服务连接中 -->
                 <span v-else-if="loading" class="btn-inner-loading">
                   <svg class="spinner-icon" viewBox="0 0 24 24" fill="none">
                     <circle cx="12" cy="12" r="10" stroke="rgba(255, 255, 255, 0.25)" stroke-width="3"></circle>
@@ -353,8 +354,6 @@
                   </svg>
                   <span>{{ aiStepText }}</span>
                 </span>
-
-                <!-- 阶段 3：登录成功 -->
                 <span v-else-if="isLoginSuccess" class="btn-inner-success">
                   <svg class="success-check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
                     <polyline points="20 6 9 17 4 12"></polyline>
@@ -461,7 +460,7 @@
       preset="card"
       title="找回密码 / 账号指引"
       class="custom-dialog-modal"
-      style="width: 480px; max-width: 90vw;"
+      style="width: 480px; max-width: calc(100vw - 32px);"
     >
       <div class="dialog-content-body">
         <p class="dialog-p">本平台为内部评测系统，初始环境已内置以下演示账号（全员同权）：</p>
@@ -499,7 +498,7 @@
       preset="card"
       title="账号申请与注册"
       class="custom-dialog-modal"
-      style="width: 440px; max-width: 90vw;"
+      style="width: 440px; max-width: calc(100vw - 32px);"
     >
       <div class="dialog-content-body">
         <p class="dialog-p">AI 测试与评估平台采用内部安全接入授权机制，不开放公网自助注册。</p>
@@ -520,7 +519,7 @@
       :mask-closable="false"
       :closable="false"
       class="custom-dialog-modal"
-      style="width: 440px; max-width: 90vw;"
+      style="width: 440px; max-width: calc(100vw - 32px);"
     >
       <div class="force-change-form">
         <p class="dialog-p">首次登录系统必须修改初始密码。新密码长度不少于 8 位，须包含字母和数字。</p>
@@ -632,7 +631,6 @@ function handleMouseMove(e: MouseEvent) {
   if (window.innerWidth < 768) return // 移动端关闭视差
   const centerX = window.innerWidth / 2
   const centerY = window.innerHeight / 2
-  // 归一化并在 [-1, 1] 之间微幅变化
   const normX = (e.clientX - centerX) / centerX
   const normY = (e.clientY - centerY) / centerY
   mouseX.value = Math.max(-1, Math.min(1, normX))
@@ -696,7 +694,6 @@ function wait(ms: number) {
 
 /** 核心登录提交 */
 async function submitLogin() {
-  // 1. 表单空数据校验
   let hasError = false
   const trimmedUser = username.value.trim()
 
@@ -721,39 +718,32 @@ async function submitLogin() {
     return
   }
 
-  // 2. 进入多阶段 AI 验证流程
   globalErrorMsg.value = ''
   loading.value = true
   isLoginSuccess.value = false
   aiStepText.value = '正在验证身份...'
 
   try {
-    // 阶段 1：验证账号密码
     const loginPromise = auth.login(trimmedUser, password.value)
     await wait(320)
 
-    // 阶段 2：连接 Agent 服务
     aiStepText.value = '正在连接 Agent 服务...'
     const user = await loginPromise
     await wait(300)
 
-    // 阶段 3：加载工作空间
     aiStepText.value = '正在加载工作空间...'
     await wait(280)
 
-    // 阶段 4：验证成功动画
     loading.value = false
     isLoginSuccess.value = true
     message.success(`欢迎回来，${user.username}`)
 
-    // 首次登入强制改密判断
     if (user.must_change_password) {
       showForceChangeModal.value = true
       isLoginSuccess.value = false
       return
     }
 
-    // 阶段 5：平滑退出卡片并跳转
     await wait(320)
     isSuccessExit.value = true
     await wait(300)
@@ -780,7 +770,7 @@ async function handleForceChangePassword() {
     forceChangeError.value = '新密码长度不能少于 8 位'
     return
   }
-  if (!/[a-zA-Z]/.test(forceNewPassword.value) || !/\d/.test(forceNewPassword.value)) {
+  if (!/[a-zA-Z]/.test(forceNewPassword.value) || !/d/.test(forceNewPassword.value)) {
     forceChangeError.value = '新密码必须同时包含字母和数字'
     return
   }
@@ -827,7 +817,7 @@ onUnmounted(() => {
   --ease-in: cubic-bezier(0.4, 0, 1, 1);
 }
 
-/* 页面背景主容器 */
+/* 页面背景主容器：支持 100dvh 与响应式安全内边距 */
 .login-wrapper {
   position: relative;
   display: flex;
@@ -835,7 +825,8 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   min-height: 100vh;
-  padding: 32px 20px;
+  min-height: 100dvh;
+  padding: clamp(16px, 3.5vh, 32px) 16px;
   background:
     radial-gradient(900px 520px at 12% -8%, rgba(16, 185, 129, 0.16), transparent 60%),
     radial-gradient(1100px 640px at 88% 108%, rgba(94, 234, 212, 0.18), transparent 62%),
@@ -843,6 +834,7 @@ onUnmounted(() => {
   background-attachment: fixed;
   animation: page-fade-in 400ms cubic-bezier(0, 0, 0.2, 1) forwards;
   overflow-x: hidden;
+  box-sizing: border-box;
 }
 
 /* 浅绿色数据工程双层网格：缓慢移动模拟数据流动 */
@@ -885,18 +877,20 @@ onUnmounted(() => {
 /* 顶部状态浮条 */
 .login-status-floating {
   position: absolute;
-  top: 24px;
-  right: 32px;
+  top: 20px;
+  right: 28px;
   z-index: 10;
   display: inline-flex;
   align-items: center;
   gap: 8px;
   padding: 4px 12px;
-  background: rgba(255, 255, 255, 0.85);
+  background: rgba(255, 255, 255, 0.88);
   backdrop-filter: blur(12px);
-  border: 1px solid rgba(226, 232, 240, 0.8);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(226, 232, 240, 0.85);
   border-radius: 999px;
   box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
+  transition: all 180ms ease;
 }
 
 .status-badge {
@@ -944,7 +938,7 @@ onUnmounted(() => {
   display: grid;
   grid-template-columns: 1.15fr 1fr;
   width: 960px;
-  max-width: calc(100vw - 40px);
+  max-width: 100%;
   min-height: 560px;
   background: rgba(255, 255, 255, 0.94);
   backdrop-filter: blur(20px);
@@ -957,6 +951,7 @@ onUnmounted(() => {
   overflow: hidden;
   animation: card-enter 450ms cubic-bezier(0.16, 1, 0.3, 1) 100ms both;
   transition: transform 180ms cubic-bezier(0.4, 0, 0.2, 1), opacity 300ms ease;
+  box-sizing: border-box;
 }
 
 @keyframes card-enter {
@@ -970,13 +965,11 @@ onUnmounted(() => {
   }
 }
 
-/* 登录成功退出卡片动画 */
 .login-main-card.is-success-exit {
   opacity: 0;
   transform: translateY(-8px) scale(0.99);
 }
 
-/* 错误时轻微晃动 */
 .login-main-card.is-shaking {
   animation: card-shake 180ms cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
 }
@@ -987,7 +980,6 @@ onUnmounted(() => {
   75% { transform: translateX(3px); }
 }
 
-/* 流光扫描线效果 */
 .scanline::after {
   content: '';
   position: absolute;
@@ -1007,7 +999,7 @@ onUnmounted(() => {
 }
 
 /* ==========================================================================
-   左侧品牌与特性展示区
+   左侧品牌与特性展示区 (桌面端)
    ========================================================================== */
 .login-left-pane {
   position: relative;
@@ -1018,7 +1010,6 @@ onUnmounted(() => {
   border-right: 1px solid rgba(226, 232, 240, 0.65);
 }
 
-/* Stagger 级联进入动画 */
 .stagger-item {
   animation: stagger-in 360ms cubic-bezier(0, 0, 0.2, 1) both;
 }
@@ -1068,6 +1059,7 @@ onUnmounted(() => {
   border-radius: 8px;
   box-shadow: 0 2px 6px rgba(15, 23, 42, 0.15);
   transition: transform 180ms ease;
+  user-select: none;
 }
 
 .brand-mark:hover {
@@ -1114,7 +1106,6 @@ onUnmounted(() => {
   line-height: 1.6;
 }
 
-/* 特性列表 */
 .left-feature-list {
   display: flex;
   flex-direction: column;
@@ -1170,7 +1161,6 @@ onUnmounted(() => {
   line-height: 1.5;
 }
 
-/* 底部科技插画容器 */
 .left-ai-graphic {
   position: relative;
   margin-top: auto;
@@ -1189,63 +1179,44 @@ onUnmounted(() => {
   overflow: visible;
 }
 
-/* AI 立方体上下漂浮 (5s 周期) */
 .ai-core-cube {
   animation: ai-cube-float 5s ease-in-out infinite;
   transform-origin: center center;
 }
 
 @keyframes ai-cube-float {
-  0%, 100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-6px);
-  }
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
 }
 
-/* AI 底座呼吸 (4s 周期) */
 .ai-base-pedestal {
   animation: ai-base-breathe 4s ease-in-out infinite;
 }
 
 @keyframes ai-base-breathe {
-  0%, 100% {
-    opacity: 0.94;
-  }
-  50% {
-    opacity: 1;
-  }
+  0%, 100% { opacity: 0.94; }
+  50% { opacity: 1; }
 }
 
-/* 周围小粒子异步浮动 */
-.ai-particle-1 {
-  animation: particle-float-1 4s ease-in-out infinite;
-}
+.ai-particle-1 { animation: particle-float-1 4s ease-in-out infinite; }
 @keyframes particle-float-1 {
   0%, 100% { transform: translate(0, 0); }
   50% { transform: translate(4px, -6px); }
 }
 
-.ai-particle-2 {
-  animation: particle-float-2 5s ease-in-out infinite;
-}
+.ai-particle-2 { animation: particle-float-2 5s ease-in-out infinite; }
 @keyframes particle-float-2 {
   0%, 100% { transform: translate(0, 0); }
   50% { transform: translate(-3px, -5px); }
 }
 
-.ai-particle-3 {
-  animation: particle-float-3 6s ease-in-out infinite;
-}
+.ai-particle-3 { animation: particle-float-3 6s ease-in-out infinite; }
 @keyframes particle-float-3 {
   0%, 100% { transform: translate(0, 0); }
   50% { transform: translate(3px, -7px); }
 }
 
-.ai-particle-4 {
-  animation: particle-float-4 7s ease-in-out infinite;
-}
+.ai-particle-4 { animation: particle-float-4 7s ease-in-out infinite; }
 @keyframes particle-float-4 {
   0%, 100% { transform: translate(0, 0); }
   50% { transform: translate(-4px, -4px); }
@@ -1259,6 +1230,39 @@ onUnmounted(() => {
   flex-direction: column;
   padding: 44px 44px 32px;
   background: #ffffff;
+  box-sizing: border-box;
+}
+
+/* 移动端专属品牌顶部栏：桌面端默认隐藏 */
+.mobile-brand-header {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px dashed #e2e8f0;
+}
+
+.mobile-brand-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.mobile-brand-title {
+  font-size: 20px;
+  font-weight: 800;
+  color: #0f172a;
+  margin: 0 0 4px 0;
+  letter-spacing: -0.01em;
+}
+
+.mobile-brand-desc {
+  font-size: 11.5px;
+  color: #64748b;
+  margin: 0;
 }
 
 .right-header {
@@ -1312,6 +1316,7 @@ onUnmounted(() => {
   justify-content: center;
   gap: 6px;
   padding: 8px 12px;
+  min-height: 38px;
   font-size: 13px;
   font-weight: 500;
   color: #64748b;
@@ -1320,6 +1325,8 @@ onUnmounted(() => {
   cursor: pointer;
   border-radius: 9px;
   transition: color 180ms ease, font-weight 180ms ease;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .tab-switch-btn.is-active {
@@ -1331,7 +1338,6 @@ onUnmounted(() => {
   flex-shrink: 0;
 }
 
-/* Tab 内容切换区域 */
 .tab-content-wrapper {
   position: relative;
 }
@@ -1351,7 +1357,7 @@ onUnmounted(() => {
   }
 }
 
-/* 表单字段通用样式 */
+/* 表单字段样式 */
 .login-form {
   display: flex;
   flex-direction: column;
@@ -1402,6 +1408,7 @@ onUnmounted(() => {
   color: #94a3b8;
   margin-right: 8px;
   transition: opacity 160ms ease, transform 160ms ease, color 160ms ease;
+  flex-shrink: 0;
 }
 
 .input-shell.is-focused .input-prefix-icon {
@@ -1416,7 +1423,7 @@ onUnmounted(() => {
   border: none;
   outline: none;
   background: transparent;
-  font-size: 13.5px;
+  font-size: 14px;
   color: #0f172a;
 }
 
@@ -1430,10 +1437,13 @@ onUnmounted(() => {
   background: transparent;
   border: none;
   color: #94a3b8;
-  padding: 4px;
+  min-width: 36px;
+  min-height: 36px;
   cursor: pointer;
   border-radius: 6px;
   transition: color 150ms ease, transform 160ms cubic-bezier(0.4, 0, 0.2, 1);
+  -webkit-tap-highlight-color: transparent;
+  flex-shrink: 0;
 }
 
 .password-toggle-btn:hover {
@@ -1461,7 +1471,7 @@ onUnmounted(() => {
   }
 }
 
-/* 辅助操作行（记住我 & 忘记密码） */
+/* 辅助操作行 */
 .form-aux-row {
   display: flex;
   align-items: center;
@@ -1475,6 +1485,8 @@ onUnmounted(() => {
   gap: 7px;
   cursor: pointer;
   user-select: none;
+  padding: 4px 0;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .native-checkbox {
@@ -1493,6 +1505,7 @@ onUnmounted(() => {
   background: #ffffff;
   color: #ffffff;
   transition: transform 180ms cubic-bezier(0.34, 1.56, 0.64, 1), background-color 150ms ease, border-color 150ms ease;
+  flex-shrink: 0;
 }
 
 .custom-checkbox.is-checked {
@@ -1519,7 +1532,9 @@ onUnmounted(() => {
   background: transparent;
   border: none;
   cursor: pointer;
+  padding: 4px 0;
   transition: opacity 150ms ease, transform 150ms ease;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .forgot-link-btn:hover {
@@ -1527,7 +1542,6 @@ onUnmounted(() => {
   transform: translateY(-1px);
 }
 
-/* 全局错误警告条 */
 .login-error-banner {
   display: flex;
   align-items: center;
@@ -1559,6 +1573,7 @@ onUnmounted(() => {
   justify-content: center;
   box-shadow: 0 4px 12px rgba(15, 23, 42, 0.12);
   transition: transform 160ms cubic-bezier(0.4, 0, 0.2, 1), background-color 160ms ease, box-shadow 160ms ease;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .login-submit-btn:hover:not(:disabled) {
@@ -1658,6 +1673,7 @@ onUnmounted(() => {
   justify-content: center;
   box-shadow: 0 4px 12px rgba(16, 185, 129, 0.2);
   transition: background-color 160ms ease, transform 160ms ease;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .sso-submit-btn:hover:not(:disabled) {
@@ -1669,7 +1685,7 @@ onUnmounted(() => {
   transform: scale(0.985);
 }
 
-/* 其他登录方式分割线 */
+/* 社交登录分割线 */
 .social-divider {
   display: flex;
   align-items: center;
@@ -1688,7 +1704,6 @@ onUnmounted(() => {
   color: #94a3b8;
 }
 
-/* 社交登录图标组 */
 .social-login-row {
   display: flex;
   align-items: center;
@@ -1708,6 +1723,7 @@ onUnmounted(() => {
   cursor: pointer;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.02);
   transition: transform 180ms cubic-bezier(0.4, 0, 0.2, 1), border-color 180ms ease, box-shadow 180ms ease;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .social-btn:hover {
@@ -1724,7 +1740,7 @@ onUnmounted(() => {
   color: #0284c7;
 }
 
-/* 注册引导 */
+/* 注册引导行 */
 .register-prompt-row {
   display: flex;
   align-items: center;
@@ -1741,15 +1757,15 @@ onUnmounted(() => {
   color: #10b981;
   font-weight: 600;
   cursor: pointer;
-  padding: 0;
+  padding: 4px;
   transition: opacity 150ms ease;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .register-link-btn:hover {
   opacity: 0.85;
 }
 
-/* 页脚版权声明 */
 .login-page-footer {
   margin-top: 24px;
   font-size: 12px;
@@ -1823,23 +1839,128 @@ onUnmounted(() => {
 }
 
 /* ==========================================================================
-   响应式折叠适配
+   移动端与平板多级响应式适配 (Mobile Responsive Breakpoints)
    ========================================================================== */
+
+/* 平板 & 窄屏桌面 (<= 900px)：收起左侧宽栏，显示移动端顶部品牌标识 */
 @media (max-width: 900px) {
   .login-main-card {
     grid-template-columns: 1fr;
     width: 480px;
+    max-width: 100%;
+    min-height: auto;
+    border-radius: 20px;
   }
   .login-left-pane {
-    display: none; /* 移动端/窄屏聚焦右侧登录表单 */
+    display: none;
+  }
+  .mobile-brand-header {
+    display: flex;
   }
   .login-right-pane {
-    padding: 36px 28px 28px;
+    padding: 32px 32px 28px;
   }
   .login-status-floating {
     top: 16px;
-    right: 16px;
+    right: 20px;
+  }
+}
+
+/* 手机端 (<= 640px)：精细化触控尺寸与安全间距适配 */
+@media (max-width: 640px) {
+  .login-wrapper {
+    padding: 16px 12px;
+    justify-content: flex-start;
+  }
+  .login-status-floating {
+    position: static;
+    margin-bottom: 14px;
+    align-self: center;
+    padding: 3px 10px;
+  }
+  .login-main-card {
+    width: 100%;
+    max-width: 440px;
+    border-radius: 18px;
+    box-shadow:
+      0 12px 32px -8px rgba(15, 23, 42, 0.08),
+      0 2px 6px rgba(0, 0, 0, 0.02);
+  }
+  .login-right-pane {
+    padding: 24px 20px 22px;
+  }
+  .mobile-brand-header {
+    margin-bottom: 16px;
+    padding-bottom: 14px;
+  }
+  .mobile-brand-title {
+    font-size: 19px;
+  }
+  .right-header {
+    margin-bottom: 16px;
+    text-align: center;
+  }
+  .right-title {
+    font-size: 22px;
+  }
+  .tab-switch-container {
+    margin-bottom: 18px;
+  }
+  .tab-switch-btn {
+    min-height: 40px;
+    font-size: 13px;
+  }
+  .input-shell {
+    height: 46px;
+  }
+  .native-input {
+    font-size: 15px;
+  }
+  .login-submit-btn,
+  .sso-submit-btn {
+    height: 46px;
+    font-size: 15px;
+  }
+  .social-divider {
+    margin: 18px 0 14px;
+  }
+  .social-login-row {
+    gap: 14px;
+  }
+  .social-btn {
+    width: 42px;
+    height: 42px;
+  }
+  .register-prompt-row {
+    margin-top: 16px;
+  }
+  .login-page-footer {
+    margin-top: 18px;
+    font-size: 11px;
+  }
+}
+
+/* 超窄屏手机 (<= 380px)：极窄视口紧凑排版 */
+@media (max-width: 380px) {
+  .login-wrapper {
+    padding: 12px 8px;
+  }
+  .login-right-pane {
+    padding: 20px 14px 18px;
+  }
+  .mobile-brand-title {
+    font-size: 17.5px;
+  }
+  .right-title {
+    font-size: 20px;
+  }
+  .tab-switch-btn {
+    font-size: 12px;
+    gap: 4px;
+    padding: 6px 8px;
+  }
+  .account-pill-list {
+    grid-template-columns: 1fr;
   }
 }
 </style>
-
