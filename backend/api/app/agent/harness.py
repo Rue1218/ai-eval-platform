@@ -26,7 +26,6 @@ from app.harness.contracts.turn import TurnStatus
 from app.harness.feedback.publisher import publisher
 from app.harness.memory.runtime import build_memory_port
 from app.harness.orchestration.budgets import wall_clock_s
-from app.harness.orchestration.streaming import begin_finalizing_delivery
 
 from ..db import SessionLocal
 from ..errors import AppError, ErrorCode
@@ -260,10 +259,6 @@ async def _deliver_sentence(
     payload: dict[str, Any] = {"text": text}
     if latency_ms is not None:
         payload["reply_latency_ms"] = latency_ms
-    trace = current_trace()
-    if trace is not None:
-        # 仅在最终回复实际发出并即将落库时进入收尾，外层 finally 在提交后写 FINISHED。
-        begin_finalizing_delivery(trace=trace)
     await emit("thought", payload, task_id=task_id)
     agent_trace(f"交付助手回复 chars={len(text)} latency={latency_ms or 0}ms")
     trace = current_trace() or TraceContext.for_turn(component="feedback.persist")

@@ -120,22 +120,28 @@ def test_execution_and_feedback_do_not_import_llm():
 
 
 def test_react_output_schema_forbids_trace_and_cot():
-    """静态 Schema 不含 trace，也不含 CoT 指令。"""
+    """阶段 1 单调用 Schema 不含 trace、批次字段或 CoT 指令。"""
     path = HARNESS_ROOT / "prompts" / "react-output.schema.json"
     raw = path.read_text(encoding="utf-8")
     assert "请逐步" not in raw
     assert "chain of thought" not in raw.lower()
     schema = json.loads(raw)
-    variants = schema["oneOf"]
-    single = next(item for item in variants if "arguments" in item["properties"])
-    batch = next(item for item in variants if "tool_calls" in item["properties"])
-    assert "trace_id" not in single["properties"]
-    assert "span_id" not in single["properties"]
-    assert single["properties"]["arguments"]["type"] == "object"
-    items = batch["properties"]["tool_calls"]["items"]
-    assert items.get("additionalProperties") is False
-    assert "trace_id" not in items["properties"]
-    assert "span_id" not in items["properties"]
+    assert schema["type"] == "object"
+    assert "tool_calls" not in schema["properties"]
+    assert "trace_id" not in schema["properties"]
+    assert "span_id" not in schema["properties"]
+    assert schema["properties"]["arguments"]["type"] == "object"
+
+
+def test_phase1_does_not_activate_parallel_or_transport_layers():
+    """首期单调用路径不得依赖并发门面或 MCP Transport 实现。"""
+    react_loop = (HARNESS_ROOT / "orchestration" / "react_loop.py").read_text(encoding="utf-8")
+    parallel = (HARNESS_ROOT / "orchestration" / "parallel_facade.py").read_text(encoding="utf-8")
+    assert "parallel_facade" not in react_loop
+    assert "merge_batch" not in react_loop
+    assert "def " not in parallel
+    for path in (HARNESS_ROOT / "execution" / "mcp").glob("*.py"):
+        assert "def " not in path.read_text(encoding="utf-8"), path.name
 
 
 def test_memory_query_requires_trace_id():
