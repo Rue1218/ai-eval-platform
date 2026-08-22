@@ -91,16 +91,23 @@ class ConversationMemoryPort(MemoryPort):
             # SQL 条件和结果值双重核对：测试桩或异常 ORM 行为也不能越过 owner 边界。
             if session is None or str(session.user_id) != query.user_id:
                 return []
+            # 先保留完整时序再应用 /compact 游标：若仅在 SQL 中排除 forgotten，
+            # 游标消息本身被撤权时会丢失边界，进而把已压缩的旧原文重新召回。
             rows = (
                 self.db.query(Message)
                 .filter(
                     Message.session_id == query.session_id,
                     Message.role.in_(("user", "assistant")),
-                    Message.memory_forgotten.is_(False),
                 )
                 .order_by(Message.created_at.asc(), Message.id.asc())
                 .all()
             )
+            keep_from = str(getattr(session, "compact_keep_from", "") or "").strip()
+            if keep_from:
+                hit_index = next((i for i, row in enumerate(rows) if str(row.id) == keep_from), None)
+                if hit_index is not None:
+                    rows = rows[hit_index:]
+            rows = [row for row in rows if not bool(getattr(row, "memory_forgotten", False))]
         except AppError:
             raise
         except Exception as exc:

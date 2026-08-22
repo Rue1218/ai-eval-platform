@@ -22,6 +22,7 @@ from app.harness.contracts.cancellation import CancellationToken, TurnCancelled
 from app.harness.contracts.trace import TraceContext, current_trace, using_trace
 from app.harness.contracts.turn import TurnStatus
 from app.harness.feedback.publisher import publisher
+from app.harness.memory.runtime import append_persisted_conversation_message
 from app.harness.orchestration.budgets import wall_clock_s
 from app.harness.orchestration.streaming import begin_finalizing_delivery
 
@@ -263,17 +264,19 @@ async def _deliver_sentence(
     await emit("thought", payload, task_id=task_id)
     agent_trace(f"交付助手回复 chars={len(text)} latency={latency_ms or 0}ms")
     trace = current_trace()
-    db.add(
-        Message(
-            session_id=session_id,
-            role="assistant",
-            content=text,
-            latency_ms=latency_ms,
-            origin_trace_id=trace.trace_id if trace else None,
-            origin_span_id=trace.span_id if trace else None,
-        )
+    message = Message(
+        session_id=session_id,
+        role="assistant",
+        content=text,
+        latency_ms=latency_ms,
+        origin_trace_id=trace.trace_id if trace else None,
+        origin_span_id=trace.span_id if trace else None,
     )
+    db.add(message)
     db.commit()
+    # 生产 Turn 必有 trace；测试或旧入口无 trace 时保留既有消息落库行为。
+    if trace is not None:
+        await append_persisted_conversation_message(db, message, trace=trace)
 
 
 async def after_reflect(*_args: Any, **_kwargs: Any) -> None:
@@ -852,13 +855,22 @@ async def _harness_entry(
                     .filter(Message.id == message_id, Message.session_id == session_id)
                     .first()
                 )
-                if message is not None:
-                    message.origin_trace_id = trace.trace_id
-                    message.origin_span_id = trace.span_id
-                    db.commit()
             except Exception as exc:
                 db.rollback()
-                agent_trace(f"message trace回填异常 type={type(exc).__name__}")
+                agent_trace(f"message trace查询异常 type={type(exc).__name__}")
+            else:
+                if message is not None:
+                    try:
+                        message.origin_trace_id = trace.trace_id
+                        message.origin_span_id = trace.span_id
+                        db.commit()
+                    except Exception as exc:
+                        db.rollback()
+                        agent_trace(f"message trace回填异常 type={type(exc).__name__}")
+                    else:
+                        # 用户消息已先由 WS 持久化；在获得本 Turn trace 后补写组合记忆。
+                        # 记忆服务故障必须继续向外层抬升，不能伪装成本轮正常召回。
+                        await append_persisted_conversation_message(db, message, trace=trace)
         emit = emit_factory(db)
         publisher().start_turn(trace, session_id=session_id, status=TurnStatus.INIT)
 

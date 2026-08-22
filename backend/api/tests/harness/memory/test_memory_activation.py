@@ -9,13 +9,15 @@ from types import SimpleNamespace
 import pytest
 
 from app.agent.context import history_for_plan
+from app.agent.harness import _deliver_sentence
 from app.errors import AppError, ErrorCode
 from app.harness.context.compiler import compile_context
 from app.harness.contracts.memory import MemoryQuery, MemoryRecord
-from app.harness.contracts.trace import TraceContext
+from app.harness.contracts.trace import TraceContext, using_trace
 from app.harness.memory.conversation_store import ConversationMemoryPort
 from app.harness.memory.ports import InMemoryMemoryPort
 from app.harness.memory.retention import MemoryRetention
+from app.harness.memory.runtime import append_persisted_conversation_message
 from app.harness.memory.short_term_redis import RedisMemoryPort
 from app.models import Message
 from app.models import Session as AgentSession
@@ -169,6 +171,7 @@ class _FakeDb:
     def __init__(self, session: object | None, messages: list[object]) -> None:
         self.session = session
         self.messages = messages
+        self.added: list[object] = []
         self.commits = 0
         self.rollbacks = 0
 
@@ -180,6 +183,9 @@ class _FakeDb:
 
     def commit(self) -> None:
         self.commits += 1
+
+    def add(self, row: object) -> None:
+        self.added.append(row)
 
     def rollback(self) -> None:
         self.rollbacks += 1
@@ -282,6 +288,85 @@ def test_conversation_store_enforces_owner_and_emits_provenance() -> None:
             _FakeDb(SimpleNamespace(user_id="owner-2"), [row]), tenant_id="internal"
         )
         assert await foreign_port.retrieve(_query(trace), trace=trace) == []
+
+    asyncio.run(body())
+
+
+def test_conversation_store_respects_compact_boundary_before_recall() -> None:
+    """压缩后只从 compact_keep_from 召回，不能把已归入摘要的原文放回规划历史。"""
+    async def body() -> None:
+        trace = _trace()
+        rows = [
+            SimpleNamespace(
+                id=f"m-{index}",
+                role="user" if index % 2 else "assistant",
+                content=f"消息 {index}",
+                created_at=datetime(2026, 8, 22, 0, index, tzinfo=UTC),
+                origin_trace_id=None,
+                origin_span_id=None,
+                memory_forgotten=False,
+            )
+            for index in range(1, 4)
+        ]
+        session = SimpleNamespace(user_id="owner-1", compact_keep_from="m-2")
+        records = await ConversationMemoryPort(_FakeDb(session, rows), tenant_id="internal").retrieve(
+            _query(trace), trace=trace
+        )
+        assert [record.source_id for record in records] == ["message:m-2", "message:m-3"]
+
+    asyncio.run(body())
+
+
+def test_persisted_message_is_written_to_memory_port(monkeypatch: pytest.MonkeyPatch) -> None:
+    """已提交的 user/assistant 消息必须携带归属和 trace 写入组合记忆。"""
+    async def body() -> None:
+        trace = _trace()
+        port = InMemoryMemoryPort()
+        monkeypatch.setattr("app.harness.memory.runtime.memory_port_for_session", lambda _db: port)
+        session = SimpleNamespace(id="session-1", user_id="owner-1")
+        db = _FakeDb(session, [])
+        for message_id, role in (("m-user", "user"), ("m-assistant", "assistant")):
+            message = SimpleNamespace(
+                id=message_id,
+                session_id="session-1",
+                role=role,
+                content=f"{role} 需要进入短期记忆",
+                created_at=datetime(2026, 8, 22, tzinfo=UTC),
+                origin_trace_id=trace.trace_id,
+                origin_span_id=trace.span_id,
+            )
+            await append_persisted_conversation_message(db, message, trace=trace)
+        assert [
+            (record.record_id, record.metadata["role"], record.origin_trace_id)
+            for record in port.records
+        ] == [
+            ("message:m-user", "user", trace.trace_id),
+            ("message:m-assistant", "assistant", trace.trace_id),
+        ]
+
+    asyncio.run(body())
+
+
+def test_deliver_sentence_writes_assistant_message_after_commit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """助手交付句提交成功后必须进入记忆适配器，不能只写 messages 表。"""
+    async def body() -> None:
+        trace = _trace()
+        db = _FakeDb(SimpleNamespace(id="session-1", user_id="owner-1"), [])
+        captured: list[tuple[object, int, TraceContext]] = []
+
+        async def append_message(_db: object, message: object, *, trace: TraceContext) -> None:
+            captured.append((message, db.commits, trace))
+
+        async def emit(_event: str, _payload: dict, *, task_id: str | None = None) -> int:
+            return 1
+
+        monkeypatch.setattr("app.agent.harness.append_persisted_conversation_message", append_message)
+        with using_trace(trace):
+            await _deliver_sentence(db, "session-1", emit, "助手回复")
+        assert len(db.added) == 1
+        assert [(message.role, message.content, commits, item_trace) for message, commits, item_trace in captured] == [
+            ("assistant", "助手回复", 1, trace)
+        ]
 
     asyncio.run(body())
 

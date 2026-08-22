@@ -3,14 +3,14 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 阶段 4 — 记忆层接入 |
-| 版本 | V1.5 |
+| 版本 | V1.6 |
 | 审查日期 | 2026-08-22 |
-| 文档性质 | **施工中分析与交付状态文档**；阶段 4.1 已接入 PG 对话归档，但本轮审查仍发现两个阻断合入的 P1（`/compact` 边界、Redis 生产写入），且未完成 pgvector 与容器级集成验收 |
+| 文档性质 | **施工中分析与交付状态文档**；阶段 4.1 已修复 `/compact` 边界和 Redis 生产写入两个 P1，仍未完成 pgvector 与容器级集成验收 |
 | 对应目标架构 | 架构文档 §2.1 / §3.1 / §5.2 / §5.3 / §5.4（消息表溯源列） |
 | 前置阶段权威 | 阶段 0 已冻结 `MemoryPort` / `MemoryQuery` / `CompiledContext`（`trace_id` 必填）；阶段 3 评论修复已随 PR #73 合入 `main`，阶段 4 仍须独立验收 |
 | 产品/协议裁决 | API.md `GET /api/sessions/{id}/messages` 的 `context_meter` 字段冻结；PRD 确认卡默认值不变 |
 | 分支 | `fix/memory-activation` |
-| 阶段 4.1 合入门禁 | 阶段 4 基础组件已按用户指令合入 `main`；当前 `fix/memory-activation` 必须先修复本章 §7.1 的两个 P1、补齐回归测试并经 PR 审查后方可合入。阶段 3 已合入不替代阶段 4 的验收 |
+| 阶段 4.1 合入门禁 | 阶段 4 基础组件已按用户指令合入 `main`；当前 `fix/memory-activation` 的两个 P1 已补回归，完整本地门禁已通过，待 PR 审查后方可合入；阶段 3 已合入不替代阶段 4 的验收 |
 | 后续 | LightRAG / RAG 评测 **不在本阶段**；独立评审。禁止创建 `long_term_lightrag.py` |
 
 ---
@@ -184,7 +184,7 @@
 6. `context.py` / compact 接线；ContextMeter 兼容。
 7. grep 隔离 + 全量 API/Agent 测试。
 
-**当前进度（2026-08-22，阶段 4.1）**：已完成内存 Port、Redis 依赖声明与适配器单元回归、PG `ConversationMemoryPort`、消息 trace/撤权 Alembic、运行时 Port 装配及 `agent/context.py` 薄适配；`history_for_plan()` 已通过 `compile_context → MemoryPort` 获取历史，`context_meter` REST JSON 键未改。审查确认：活路径尚未在 user/assistant 消息提交后调用组合 Port 的 `append()`，Redis 因此没有生产写入；同时 PG 召回未沿用 `/compact` 的 `compact_keep_from` 边界。两项 P1 修复前，不能把该接线记为完整的短期记忆或压缩语义迁移。仍未完成 pgvector/知识存储、真实 Redis/PG 容器集成测试与阶段 4 总验收。
+**当前进度（2026-08-22，阶段 4.1）**：已完成内存 Port、Redis 依赖声明与适配器单元回归、PG `ConversationMemoryPort`、消息 trace/撤权 Alembic、运行时 Port 装配及 `agent/context.py` 薄适配；`history_for_plan()` 已通过 `compile_context → MemoryPort` 获取历史，`context_meter` REST JSON 键未改。`ConversationMemoryPort.retrieve()` 现先按 `compact_keep_from` 截断完整时序，再过滤撤权消息；用户消息在 Harness 入口获得真实 trace 后、助手消息在提交后，均会经统一适配器写入组合 Port，Redis 与 PG 使用同一 `message:{id}` 来源。仍未完成 pgvector/知识存储、真实 Redis/PG 容器集成测试与阶段 4 总验收。
 
 ### 5.3 代码落点
 
@@ -257,9 +257,9 @@
 - [x] `harness/context/` 生产代码不 import redis / sqlalchemy / LightRAG
 - [x] `MemoryQuery` 缺 `trace_id` 无法构造
 - [x] 内存 Port 单测覆盖 retrieve/append/forget
-- [ ] 活路径在 user/assistant 消息提交后调用组合 Port `append()`；目前仅有 Port 内部转发，Redis 没有生产写入
-- [ ] `/compact` 后只召回 `compact_keep_from` 及之后的原文；当前 PG 召回会重新注入已被压缩的历史
-- [~] Redis 适配器单元覆盖 TTL、重复写和损坏记录撤权；真实 Redis TTL 过期及活路径写入待容器集成测试
+- [x] 活路径在 user/assistant 消息提交后调用组合 Port `append()`；Redis 与 PG 复用 `message:{id}` 来源
+- [x] `/compact` 后只召回 `compact_keep_from` 及之后的原文；已覆盖压缩边界回归
+- [~] Redis 适配器单元覆盖 TTL、重复写、损坏记录撤权及活路径写入；真实 Redis TTL 过期待容器集成测试
 - [~] Alembic 消息溯源列可逆并通过离线 SQL 校验；知识向量表仍未实现
 - [x] 最小窗口布局：System 在前、observation 靠近用户问题、无 source_id 不进知识槽
 - [x] retrieve 空租户/会话不得冒充召回成功；缺归属 conversation 不可见
@@ -271,21 +271,21 @@
 
 ---
 
-## 7.1 阶段 4.1 代码审查结论（V1.5）
+## 7.1 阶段 4.1 代码审查结论（V1.6）
 
-本次审查 `fix/memory-activation` 相对 `main` 的修复实现；后端 `ruff` 通过，383 项 pytest 全绿，Alembic 离线 SQL 已验证可生成消息溯源与撤权字段，PR #67 的 backend / worker CI 均已通过。API 容器入口会执行 `alembic upgrade head`，本轮未发现迁移漏跑。以下已落实项可保留：
+本次审查 `fix/memory-activation` 相对 `main` 的修复实现；后端 `ruff`、386 项 `pytest` 与前端 `npm run build` 已通过，阶段 4.1 记忆回归包含在全量测试中；Alembic 离线 SQL 已验证可生成消息溯源与撤权字段。API 容器入口会执行 `alembic upgrade head`，本轮未发现迁移漏跑。以下已落实项可保留：
 
 1. **已落实：角色和顺序。** `ContextItem` 显式保存 role；assistant 历史保留为 assistant，对话按时间正序进入 history 槽。
 2. **已落实：归属 ACL。** conversation 召回要求 tenant/user/session；手工注入的缺归属记录会被拒绝。
 3. **已落实：部署与迁移链路。** Redis 依赖与 API 启动迁移均已声明；消息 trace/撤权字段由可逆 Alembic 管理。
 4. **已落实：Redis 适配器容错。** 重复 `append` 覆盖同 `record_id`；`forget` 会跳过并记录损坏序列化项。
 
-仍有两个 **P1，当前 PR 不得合入**：
+此前两个 **P1 已修复并有回归覆盖**：
 
-1. **P1：`/compact` 语义回退。** `window_rows()` 会从 `session.compact_keep_from` 截断原文，但 `ConversationMemoryPort.retrieve()` 只按会话取全部消息再取末尾 `top_k_recall`。`history_for_plan()` 切换到 Port 后，会把已由 `compact_summary` 覆盖的旧原文重新放回规划上下文，导致压缩摘要与原文重复，并破坏既有窗口边界。修复必须保持压缩边界，并覆盖“压缩后再规划”的回归测试。
-2. **P1：Redis 没有生产写入。** `memory_port_for_session()` 仅装配 `CompositeMemoryPort`；user/assistant 消息提交路径未调用该 Port 的 `append()`，代码库中唯一的 `await target.append(...)` 是组合 Port 的内部转发。因此 Redis 将持续为空，不能满足 R4-4 的短期回合状态/索引职责。修复必须在带 trace 的正常消息持久化后写入，并覆盖 user 与 assistant 两类消息及 Redis 召回的集成测试。
+1. **已修复：`/compact` 语义。** `ConversationMemoryPort.retrieve()` 先取得完整时间序列，按 `session.compact_keep_from` 截断后再过滤 `memory_forgotten`，不会因游标消息撤权而丢失边界。新增测试覆盖压缩后仅召回游标及之后的消息。
+2. **已修复：Redis 生产写入。** 运行时新增“已提交消息 → `MemoryRecord`”适配器；Harness 入口在用户消息拥有真实 trace 后调用，`_deliver_sentence()` 在助手消息提交后调用。短期 Redis 与 PG 对话归档使用相同 `record_id/source_id=message:{id}`，组合 Port 可正确去重。新增测试覆盖 user、assistant 两种角色及助手交付的实际调用点。
 
-除上述两个 P1 外，剩余阶段 4 工作还包括 pgvector 知识存储、受限 forget 的产品入口设计，以及真实 Redis/PG 容器联调。这些项目未完成前，阶段 4 仍不得宣告验收完成。
+剩余阶段 4 工作包括 pgvector 知识存储、受限 forget 的产品入口设计，以及真实 Redis/PG 容器联调。这些项目未完成前，阶段 4 仍不得宣告验收完成。
 
 上述问题与阶段 3 已合入的修复彼此独立；阶段 4 不得因基础组件和首批评论已修复而提前宣告验收或合入。
 
@@ -305,13 +305,13 @@ security/ 三文件、reflect/plan 迁入、persona YAML、外部 MCP 生态、�
 
 ## 修改代码文件与作用清单
 
-V1.5：本次为审查结论与文档对齐，未修改业务代码。保留已验证的 PG 对话归档、角色/ACL 与可逆 Alembic；撤销“阶段 4.1 已完整接入短期记忆”的表述，新增两个未解决 P1：`/compact` 边界未传递到 PG 召回，以及活路径未调用 `append()` 导致 Redis 无生产写入。pgvector 与容器级联调仍为未完成项。
+V1.6：修复此前审查提出的两个 P1。PG 召回恢复 `/compact` 游标语义；新增统一消息记忆适配器，并在用户回合入口及助手交付提交后写入组合 Port。新增回归覆盖压缩边界、user/assistant 两角色写入和助手交付实际调用点；pgvector 与容器级联调仍为未完成项。
 
 | 文件 | 作用 |
 | :--- | :--- |
 | `backend/api/app/harness/contracts/context.py`、`context/compiler.py`、`window_manager.py`、`reranker.py` | 保留 user/assistant 角色、对话时序与纯 Context 编译 |
-| `backend/api/app/harness/memory/ports.py`、`short_term_redis.py`、`conversation_store.py`、`runtime.py` | Redis 短期适配、PG 对话归档与运行时组合 Port；V1.5 审查确认需补压缩边界与生产写入 |
-| `backend/api/app/agent/context.py`、`agent/harness.py`、`routers/ws.py` | 将规划历史接入 MemoryPort，并给新消息回填真实 trace 溯源；V1.5 审查确认尚未在提交后调用记忆 `append()` |
+| `backend/api/app/harness/memory/ports.py`、`short_term_redis.py`、`conversation_store.py`、`runtime.py` | Redis 短期适配、PG 对话归档与运行时组合 Port；V1.6 恢复压缩游标并提供统一消息写入适配器 |
+| `backend/api/app/agent/context.py`、`agent/harness.py`、`routers/ws.py` | 将规划历史接入 MemoryPort，并给新消息回填真实 trace 溯源；V1.6 在用户入口和助手提交后写入记忆 |
 | `backend/shared/models.py`、`backend/api/migrations/versions/c650ba766b96_消息记忆溯源与撤权字段.py` | Message 溯源列与记忆撤权标记及可逆 Alembic 迁移 |
-| `backend/api/requirements.txt`、`backend/api/tests/harness/memory/test_memory_activation.py` | Redis 运行依赖及阶段 4.1 回归测试 |
-| `docs/AI测试与评估平台-Harness阶段4-记忆层接入.md` | V1.5：阶段 4.1 审查结论、两个 P1 合入门禁与剩余边界 |
+| `backend/api/requirements.txt`、`backend/api/tests/harness/memory/test_memory_activation.py` | Redis 运行依赖及阶段 4.1 回归测试（含两个 P1） |
+| `docs/AI测试与评估平台-Harness阶段4-记忆层接入.md` | V1.6：两个 P1 修复、回归覆盖与剩余边界 |
