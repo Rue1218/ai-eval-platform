@@ -3,7 +3,7 @@
     :show="show"
     preset="card"
     :title="`上传黄金 QA 问答集至「${kb?.name}」`"
-    style="width: 500px"
+    style="width: 500px; max-width: calc(100vw - 24px)"
     @update:show="$emit('update:show', $event)"
   >
     <div class="upload-form">

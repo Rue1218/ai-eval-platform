@@ -3,7 +3,7 @@
     :show="show"
     preset="card"
     title="导入 Excel 用例"
-    style="width: 560px"
+    style="width: 560px; max-width: calc(100vw - 24px)"
     @update:show="$emit('update:show', $event)"
   >
     <div class="import-form">

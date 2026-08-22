@@ -3,7 +3,7 @@
     :show="show"
     preset="card"
     :title="isOverride ? `覆盖上传「${dataset?.name}」` : '上传新评测数据集'"
-    style="width: 520px"
+    style="width: 520px; max-width: calc(100vw - 24px)"
     @update:show="$emit('update:show', $event)"
   >
     <div class="upload-form">
