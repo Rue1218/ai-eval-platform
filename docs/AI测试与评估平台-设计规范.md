@@ -3,10 +3,10 @@
 | 项目 | 内容 |
 | --- | --- |
 | 文档版本 | V1.3 |
-| 对应 PRD | V1.7.1（唯一产品权威） |
-| 对应开发计划 | V1.3 |
+| 对应 PRD | V1.8（唯一产品权威） |
+| 对应开发计划 | V1.5 |
 | 撰写日期 | 2026-08-17 |
-| 最近修订 | 2026-08-21：协议档增加 Embedding / Reranker 独立 URL、模型 ID、Key 配置，仍按 profile 环境文件隔离持久化 |
+| 最近修订 | 2026-08-23：对齐 LangGraph 单轮 Agent、WS 基础事件和 Harness 冻结边界；2026-08-21：协议档增加 Embedding / Reranker 独立 URL、模型 ID、Key 配置，仍按 profile 环境文件隔离持久化 |
 | 技术栈（PRD） | Vue3 + Naive UI、Python FastAPI、PostgreSQL、WebSocket、Docker Compose、go-stress-testing |
 | 适用范围 | V1.0 前端 `frontend/` |
 
@@ -16,7 +16,7 @@
 
 | 层级 | 文档 | 管什么 | 不管什么 |
 | --- | --- | --- | --- |
-| **L0 产品** | `AI测试与评估平台-PRD.md` V1.6.3 | 范围、模块、角色、状态机、确认卡字段、WS 事件、MCP 工具、REST、路由表、验收 | 像素、配色、动画曲线 |
+| **L0 产品** | `AI测试与评估平台-PRD.md` V1.8 | 范围、模块、角色、状态机、确认卡字段、WS 事件、MCP 工具、REST、路由表、验收 | 像素、配色、动画曲线 |
 | **L1 视觉参考** | `VUE-PROTOTYPE-DESIGN.md`、`DESIGN-SPEC.md`、`AGENT-TOOL-DESIGN.md` | 薄荷绿毛玻璃、深空蓝暗色、对话气泡/思考卡/工具卡形态、侧栏骨架、令牌与动画节奏 | 不得引入其产品能力 |
 | **L2 本文** | 本设计规范 | 把 L0 的页面画成 L1 的样子；Naive 主题；确认卡与表单同一套字段 | 不得扩范围、不得改字段名 |
 

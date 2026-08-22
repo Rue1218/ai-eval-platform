@@ -2,14 +2,14 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.4 |
-| 对应 PRD | V1.6.3（功能唯一权威） |
+| 文档版本 | V1.5 |
+| 对应 PRD | V1.8（功能唯一权威） |
 | 对应设计规范 | V1.2（仅约束对外字段 / 错误码 / 事件名，不约束像素） |
 | 对应总计划 | V1.0（日历与门禁） |
-| 对应前端计划 | V1.3（契约消费者） |
-| 对应 API | V1.3（路径/JSON 唯一冻结） |
+| 对应前端计划 | V1.5（契约消费者） |
+| 对应 API | V1.16（路径/JSON 唯一冻结） |
 | 撰写日期 | 2026-08-17 |
-| 最近修订 | 2026-08-19：M1 核心交付验收；M2 提前启动（评测域建表、benchmark 真实执行器、样本明细接口） |
+| 最近修订 | 2026-08-23：M1 Agent 基线切换为 LangGraph 单轮图与 WebSocket 异步桥接；Harness、MCP、确认卡和长任务暂冻结；M2 提前启动（评测域建表、benchmark 真实执行器、样本明细接口） |
 | 计划起点 | 2026-08-18 |
 | V1.0 目标发布 | 2026-12-04 |
 | 总工期 | **16 周**（与总计划同一日历） |
@@ -26,6 +26,16 @@
 
 若只有 2 人（后端兼 Go）：按总计划改为 20 周，不在本文内偷偷砍 M3/M4 范围。
 
+### 1.4 Agent 首期实现边界（V1.5）
+
+当前后端唯一 Agent 链路为：
+
+```text
+WS 短票 -> ws.py -> LangGraphAgent -> ModelGateway -> adapters.py
+```
+
+首期 API 进程只实现单轮模型调用、会话消息/事件落库、历史补发、心跳和流式 `thought` 投影。`app/agent/` 不恢复旧 ReAct/Harness；`app/harness/`、MCP、确认卡、任务控制和记忆层保持空边界。后续长任务仍只能由 PostgreSQL 队列和 Worker 承载。
+
 ### 1.3 V1.3 权限口径校正
 
 PRD 2.1 冻结为单一 `member`、全员同权。本文不实现 RBAC、`admin`、`engineer`、`readonly` 或角色变更；保留 `/api/admin/*` 仅为历史路径命名，不代表角色鉴权。任务取消限创建者；`prod` 会签由非创建者正常成员完成；所有敏感修改写审计。
@@ -34,7 +44,7 @@ PRD 2.1 冻结为单一 `member`、全员同权。本文不实现 RBAC、`admin`
 
 | 做（V1.0 后端） | 不做 |
 | --- | --- |
-| FastAPI REST + WS Agent Host；内部 MCP；PG + worker | 外部 MCP 连接；改系统提示词接口 |
+| FastAPI REST + WS Agent Host；LangGraph Agent + ModelGateway；PG + worker（后续长任务） | 外部 MCP 连接；改系统提示词接口 |
 | 三协议适配器；规则评分；用例 Skill（自研对齐，不拷源码） | HumanEval 沙箱；被测走 WS；内置公开集 |
 | LightRAG 原生 `query` 适配 + 外部 OpenAI Chat RAG | 把 LightRAG 伪装成 Chat Completions |
 | 先评后压：worker 下发 **stress 容器**（go-stress-testing 扩展） | api 进程内 Python 压测替代；分布式压测；评测与压测并行 |
@@ -45,14 +55,19 @@ PRD 2.1 冻结为单一 `member`、全员同权。本文不实现 RBAC、`admin`
 
 ```
 浏览器
-  /agent  ──WS── api（Agent Host：短 MCP + task.create）
-  其它页 ──REST─┘
+  /agent  ──WS── api（WS Bridge）
                     │
                     ▼
-              PostgreSQL（tasks 队列）
+              LangGraph Agent
                     │
                     ▼
-              worker（长 MCP：评测 / RAG / 用例；压测只下发）
+              ModelGateway -> 三协议适配器
+
+  其它页 ──REST─┐
+                └── PostgreSQL（sessions / messages / ws_events / tasks）
+                                      │
+                                      ▼
+              worker（后续长任务：评测 / RAG / 用例；压测只下发）
                  │         │              │
                  ▼         ▼              ▼
            三协议适配   lightrag       stress（go-stress-testing）
@@ -61,7 +76,7 @@ PRD 2.1 冻结为单一 `member`、全员同权。本文不实现 RBAC、`admin`
 
 | 进程 | 可以 | 不可以 |
 | --- | --- | --- |
-| **api** | 鉴权、CRUD、WS 会话、短工具、写 queued 任务、推送 `task_events` | 自己跑完 Benchmark/RAG/压测；长期 JWT 进 WS query |
+| **api** | 鉴权、CRUD、WS 会话、LangGraph 单轮回合、写消息/事件 | 自己跑完 Benchmark/RAG/压测；首期不执行 MCP；长期 JWT 进 WS query |
 | **worker** | 调长 MCP；按样本续跑；质量 succeeded 且 `with_stress` 时入队压测子任务；向 stress 下发 | 向用户闲聊；自己打满压测连接 |
 | **stress** | 发压、暴露 `/metrics`、收到取消立即停发 | 读用户 Cookie；改质量报告 |
 | **lightrag** | 索引 + 原生 query | 被当成 OpenAI Chat 网关 |
@@ -87,7 +102,7 @@ PRD 2.1 冻结为单一 `member`、全员同权。本文不实现 RBAC、`admin`
 
 ```
 backend/
-├── api/       FastAPI、WS、MCP Host、REST
+├── api/       FastAPI、WS Bridge、LangGraph Agent、REST
 ├── worker/    长任务执行器
 ├── lightrag/  LightRAG 适配（M3 接入真实内核）
 └── stress/    go-stress-testing 扩展（Go/Infra）
@@ -164,6 +179,11 @@ deploy/        compose、env 样例、Grafana dashboard JSON
 
 服务 → 客户端：`thought` `tool_call` `tool_result` `confirm` `progress` `report` `error` `pong`。  
 客户端 → 服务：`user_message` `{text, attachments[]?}`，`confirm_ack` `{ok, patch?}`，`cancel_task` `{task_id}`。
+
+**当前首期实现**：服务端已启用 `message`、`thought`、`error`、`pong`；`thought` 支持
+`stream=chunk|think|think_final`。`tool_call`、`tool_result`、`confirm`、`progress`、`report`
+以及 `confirm_ack` / `cancel_task` 保留为后续 Harness/Worker 阶段，当前统一返回
+`VALIDATION` 能力未启用，不生成伪造任务或报告。
 
 - `confirm` 的 payload = 确认卡 JSON（5.1.2）。未 `confirm_ack.ok=true` **不得** `INSERT` queued。  
 - 心跳 30s；重连用 `session_id` + `last_event_id` 从 `ws_events` 补发。  
@@ -263,6 +283,8 @@ Python 与 Go/Infra 分列。前端 mock 不挡后端单测。
 
 #### W4  任务状态机 + worker + 短 MCP（Python）
 
+> 当前状态：任务状态机与 Worker 属于后续长任务阶段；首期 Agent 不调用 MCP、不创建任务。
+
 | 工作项 | 完成标准 |
 | --- | --- |
 | 表 `tasks` `task_events`；状态机 3.3 | 取消权限 2.1 |
@@ -274,6 +296,8 @@ Python 与 Go/Infra 分列。前端 mock 不挡后端单测。
 | 冻结短工具 JSON Schema；实现 `/api/sessions`（API 方案 A） | 以 API V1.3 为准 |
 
 #### W5  WebSocket Agent + 确认卡（M1 门禁周）
+
+> 当前状态：WS 短票、会话回放、后台单轮 LangGraph 调用、心跳和流式事件已交付；确认卡、短 MCP、任务下单和 Worker 事件等待 Harness/任务阶段重新评审。
 
 | 工作项 | 完成标准 |
 | --- | --- |
@@ -495,7 +519,7 @@ W13 先冻结指标名；Grafana dashboard JSON 可在 W12–W14 微调。
 最长链（与总计划相同，后端视角）：
 
 ```
-账号/任务表 → WS Agent + 确认卡 → worker 状态机
+账号/协议档 → WS LangGraph Agent → Harness/确认卡 → worker 状态机
   → 三协议真调用 + 规则评分（M2 门禁）
   → 质量 succeeded 才能派生子任务
   → stress 继承父任务 endpoint（M4 门禁）

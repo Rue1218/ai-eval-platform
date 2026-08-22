@@ -2,15 +2,15 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.4 |
-| 对应 PRD | V1.6.3（功能唯一权威） |
-| 对应 API | V1.3（路径与 JSON 契约唯一权威） |
+| 文档版本 | V1.5 |
+| 对应 PRD | V1.8（功能唯一权威） |
+| 对应 API | V1.16（路径与 JSON 契约唯一权威） |
 | 对应规范 | AGENTS.md V1.0（AI 行为准则、全中文注释、Naive UI 主题令牌与构建门禁） |
 | 对应设计规范 | V1.2（页面 / 组件 / 浮层 / 令牌） |
-| 对应总计划 | V1.3（日历与门禁） |
-| 对应后端计划 | V1.4（契约提供方） |
+| 对应总计划 | V1.5（日历与门禁） |
+| 对应后端计划 | V1.5（契约提供方） |
 | 撰写日期 | 2026-08-17 |
-| 最近修订 | 2026-08-19：M1 页面全部对接真实 API（含流式思考卡/打字机渲染）；M2 数据集/用例/报告页提前落地 |
+| 最近修订 | 2026-08-23：对齐 LangGraph 单轮 Agent 与 WS 首期事件边界；2026-08-19：M1 页面全部对接真实 API（含流式思考卡/打字机渲染）；M2 数据集/用例/报告页提前落地 |
 | 计划起点 | 2026-08-18 |
 | V1.0 目标发布 | 2026-12-04 |
 | 总工期 | **16 周**（与总计划同一日历） |
@@ -30,7 +30,7 @@
 | 做（V1.0 前端） | 不做 |
 | --- | --- |
 | PRD 5.8 全部路由；设计规范 AppShell / 令牌 / Naive 主题 | 新增业务路由（含 `/reports` 列表、改系统提示词页、审计独立页） |
-| `/agent`：会话列表 + 对话流 + 确认卡 + 进度坞 + WS | Ask/Plan/Bypass、切模型、外部 MCP、SSE/socket.io 旧事件名 |
+| `/agent`：会话列表 + LangGraph 单轮对话流 + 思考卡 + WS | 首期确认卡/工具卡/进度坞为冻结占位；Ask/Plan/Bypass、切模型、外部 MCP、SSE/socket.io 旧事件名 |
 | 工作台：任务 / 报告 / 数据集 / 用例 / KB / 三块管理页 | Tailwind、UnoCSS、Element Plus、ECharts |
 | 浮层：`n-message` / `n-dialog` / `n-modal` / `n-drawer` | `window.alert`；把确认卡做成 `n-modal` |
 | 表单双入口与确认卡同一 field schema（F-AGT-07） | Open API 控制台（F-CM-08 / V1.1） |
@@ -145,7 +145,11 @@ frontend/src/
 
 登录后 `POST /api/auth/ws-ticket`（5 分钟）→ `GET /ws/agent?ticket=`。心跳 30s。重连带 `session_id` + `last_event_id`。
 
-**服务 → 前端**（事件名不可改）：`thought` `tool_call` `tool_result` `confirm` `progress` `report` `error` `pong`。  
+首期前端只消费服务端 `message`、`thought`、`error`、`pong`。`thought` 的 `stream=chunk`
+用于正文打字机，`stream=think` 用于发起连接的推理卡，`stream=think_final` 用于历史回放；
+`tool_call`、`tool_result`、`confirm`、`progress`、`report` 等事件保留类型但等待 Harness/Worker 阶段启用。
+
+**服务 → 前端**（事件名不可改）：`message` `thought` `tool_call` `tool_result` `confirm` `progress` `report` `error` `pong`。
 **前端 → 服务**：`user_message` `{text, attachments[]?}`、`confirm_ack` `{ok, patch?}`、`cancel_task` `{task_id}`。
 
 禁止参考文档的 `thinking` / `token` / `chat:send` / `tool_call_start`。
@@ -180,6 +184,10 @@ frontend/src/
 | Drawer | §14.5 | 任务详情；发起评测（M2/M3） |
 
 ### 4.2 Agent（M1，M4 增强）
+
+当前首期以 LangGraph 单轮文本流为验收范围：`SessionList`、用户消息、助手交付句、
+`ThoughtCard`、错误态和 WS 重连必须可用；`ToolCard`、`ConfirmCard`、`ProgressDock`、
+`ReportCard` 保留页面契约和视觉骨架，但不得假设后端已经启用对应事件。
 
 | 组件 | PRD / 规范 | 阶段 |
 | --- | --- | --- |
@@ -275,6 +283,8 @@ frontend/src/
 | 复制为新任务 → `POST /api/tasks/{id}/rerun` | F-AGT-09；写操作均有 loading 与错误态 |
 
 #### W5  WebSocket Agent + 确认卡（M1 门禁周）
+
+> 当前状态：短票、重连补发、单轮流式消息和思考卡已具备；确认卡、工具卡、进度和报告事件等待后续 Harness/Worker 阶段，不在首期前端验收中宣称完成。
 
 | 工作项 | 完成标准 |
 | --- | --- |

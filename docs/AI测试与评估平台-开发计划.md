@@ -2,12 +2,12 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.4 |
-| 对应 PRD | V1.6.3（功能唯一权威） |
-| 对应 API | V1.3（路径与 JSON 契约唯一权威） |
+| 文档版本 | V1.5 |
+| 对应 PRD | V1.8（功能唯一权威） |
+| 对应 API | V1.16（路径与 JSON 契约唯一权威） |
 | 对应规范 | AGENTS.md V1.0（AI 行为准则、全中文注释与提交门禁） |
 | 撰写日期 | 2026-08-17 |
-| 最近修订 | 2026-08-19：M1 核心交付验收与 M2 提前启动（benchmark 真实执行器、评测域建表、样本明细接口落地） |
+| 最近修订 | 2026-08-23：M1 Agent 运行基线切换为 LangGraph 单轮图与 WebSocket 异步桥接；2026-08-19：M1 核心交付验收与 M2 提前启动（benchmark 真实执行器、评测域建表、样本明细接口落地） |
 | 计划起点 | 2026-08-18 |
 | V1.0 目标发布 | 2026-12-04 |
 | 总工期 | **16 周**（含 1 周启动 + 1 周硬化缓冲） |
@@ -28,11 +28,16 @@
 2. **M2 提前启动**：数据集域（目录树/数据行/扩展列）、用例域（用例集/用例行/目录树）、报告分享与基线冻结已建表迁移；**benchmark 真实执行器**（三协议真调用 + 五种规则评分 + 预算熔断 + 断点续跑 + 批内并发）与 `eval_items`/`usage_ledger` 评测域两张表、`GET /api/reports/{id}/samples` 样本明细接口已落地。
 3. **仍按计划待做**：用例生成 Skill（W8）、表单双入口联调（W9）、RAG（M3）、压测（M4）。
 
+**V1.5 补充（2026-08-23）**：
+1. Agent 首期唯一运行链路为 `WebSocket -> LangGraph Agent -> ModelGateway -> 三协议适配器`；模型调用与 Agent 图已从旧框架迁出。
+2. 当前首期只验收短票、会话回放、后台单轮调用、`message/thought/error/pong` 和正文/推理流式事件。
+3. Harness、ReAct/MCP、确认卡、任务下单、Worker 长任务、记忆和并发规划不在本轮实现；相关 M1 计划项顺延到重新评审后的阶段。
+
 ### 1.1 范围边界
 
 | 做（V1.0） | 不做（见 PRD 4.2） |
 | --- | --- |
-| Agent（WS + 内部 MCP Host） | 外部 MCP、改系统提示词 |
+| Agent（WS + LangGraph；内部 MCP 为后续 Harness 能力） | 外部 MCP、改系统提示词 |
 | Benchmark 三协议 + 规则评分 | 多租户、多模态、内置公开集 |
 | 用例 Skill（自研对齐 testcase-tools） | TMS 同步、报告审批流 |
 | RAG：LightRAG + 外部 OpenAI Chat | HumanEval 沙箱、被测走 WS |
@@ -45,7 +50,7 @@
 
 | 角色 | 人数 | 主责 |
 | --- | --- | --- |
-| Python 后端 | 1 | FastAPI、Agent Host、MCP、worker、协议适配、评测/RAG、PG |
+| Python 后端 | 1 | FastAPI、LangGraph Agent、ModelGateway、worker、协议适配、评测/RAG、PG |
 | Vue 前端 | 1 | Naive UI 工作台、WS 会话、确认卡、任务/报告/管理页 |
 | Go / 基础设施 | 1 | go-stress-testing 扩展、Compose、Prometheus 对齐、部分联调 |
 
@@ -67,7 +72,7 @@
 | 阶段 | 周次 | 日期 | 状态 | 主题 | 演示门禁（摘自 PRD） |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **M0** | W1 | 08-18 ~ 08-24 | **✅ 已完成** | 工程启动 | Compose 六件套正常运行；CI/CD 自动部署就绪；AGENTS.md 规范落地 |
-| **M1** | W2–W5 | 08-25 ~ 09-21 | **✅ 核心已交付**（08-19 验收，W5 门禁演示待排期） | 底座 + Agent | 登录后对话下单空跑；断线按 event_id 续；模型协议档与数据集元数据 CRUD |
+| **M1** | W2–W5 | 08-25 ~ 09-21 | **🔄 Agent 基础链路已交付，任务/Harness 范围冻结** | 底座 + LangGraph Agent | 登录后单轮流式对话；断线按 event_id 续；模型协议档与会话回放；任务下单待后续阶段 |
 | **M2** | W6–W9 | 09-22 ~ 10-19 | **🚀 提前启动**（数据域/评测域建表、benchmark 与用例生成真实执行器、72h 扫描、基线 Δ 对比已落地） | Benchmark + 用例 + 表单 | 两协议档 + ≥20 条 JSONL，对话出 contain 对比报告 |
 | **M3** | W10–W12 | 10-20 ~ 11-09 | 待启动 | RAG | LightRAG hybrid Hit Rate@5；外部 Chat RAG 出 contain |
 | **M4** | W13–W15 | 11-10 ~ 11-30 | 待启动 | 先评后压 | test 白名单压 2 分钟；平台曲线与 Grafana 同 task_id |
@@ -80,7 +85,7 @@
 最长依赖链（不能并行压缩）：
 
 ```text
-账号/任务表 → WS Agent + 确认卡 → worker 状态机
+账号/协议档 → WS LangGraph Agent 基础链路 → Harness/确认卡 → worker 状态机
     → 三协议真调用 + 规则评分（M2 门禁）
     → 质量 succeeded 才能派生子任务
     → stress 继承父任务 endpoint（M4 门禁）
@@ -104,7 +109,7 @@
 | 阶段 | Python | Vue | Go/Infra | 状态 |
 | :--- | :--- | :--- | :--- | :--- |
 | **M0** | 仓库、Compose、Alembic、鉴权骨架、AGENTS.md | Vite + Naive 壳、登录页、原型对齐 | Compose 六件套、CI/CD 自动部署、自愈脚本 | ✅ 100% 验收 |
-| **M1** | Agent Host (WS)、短 MCP、确认卡生成、协议档 CRUD | `/agent` 会话流、确认卡交互、`/tasks` 列表 | 容器健康检查、内存限制与构建缓存优化 | ✅ 核心交付（08-19） |
+| **M1** | LangGraph Agent（WS）、ModelGateway、协议档 CRUD、会话回放 | `/agent` 单轮会话流、思考卡、错误态；确认卡/短 MCP 暂冻结 | 容器健康检查、内存限制与构建缓存优化 | 🔄 基础链路已交付（08-23） |
 | **M2** | 评测 worker、评分、报告、预算、用例 Skill | 数据集/用例确认/报告对比/表单下单 | 开始 fork go-stress-testing，先打通本地 HTTP 压测 | 🚀 提前启动（数据域/评测域建表、benchmark 真实执行器、评分器与样本明细接口已落地） |
 | **M3** | LightRAG 适配、外部 RAG、黄金 QA、Judge | `/kb`、RAG 报告、退化标红 | LightRAG 服务稳定、索引卷、内网 DNS | 待启动 |
 | **M4** | 先评后压编排、会签、费用估算、解读、通知 | 压测曲线、会签 UI、通知开关 | 指标、立即停、`/metrics`、Prometheus 抓取 | 待启动 |
@@ -130,7 +135,9 @@
 
 ---
 
-### M1 底座 + Agent（W2–W5，08-25 ~ 09-21）—— [🚀 进行中]
+### M1 底座 + Agent（W2–W5，08-25 ~ 09-21）—— [🔄 基础链路已交付，范围重新切分]
+
+当前 M1 门禁只验收 LangGraph 单轮 Agent 与 WebSocket 基础协议。短 MCP、确认卡、任务队列和 Worker 长任务不再作为本轮“已完成”条件，待 Harness 设计评审后重新排期。
 
 **目标**：登录后对话下单空跑；断线按 `last_event_id` 续；协议档与数据集元数据 CRUD 全面打通。
 
@@ -465,4 +472,4 @@ V1.0 **明确延期到 V1.1**（不占本周期人力，除非门禁已全绿）
 4. 准备至少两套测试用协议档（可用兼容 OpenAI 的本地 mock）。
 5. 按本计划 W1 清单开工，周五只验收「环境能起、登录页能开」。
 
-本计划与 PRD 冲突时 **以 PRD V1.6.3 为准**，改计划不改范围；若要改范围，先改 PRD 再改本日历。
+本计划与 PRD 冲突时 **以 PRD V1.8 为准**，改计划不改范围；若要改范围，先改 PRD 再改本日历。

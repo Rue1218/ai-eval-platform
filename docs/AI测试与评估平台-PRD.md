@@ -2,10 +2,10 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.7.1 |
+| 文档版本 | V1.8 |
 | 文档状态 | 已冻结基线 |
 | 撰写日期 | 2026-08-17 |
-| 最近修订 | 2026-08-21：协议档增加可选 Embedding / Reranker 独立端点配置，三类 Key 均按 profile 写入受控环境文件 |
+| 最近修订 | 2026-08-23：确定 LangGraph 单轮 Agent、ModelGateway 与 WebSocket 异步桥接的首期实现边界；协议档增加可选 Embedding / Reranker 独立端点配置，三类 Key 均按 profile 写入受控环境文件 |
 | 适用版本 | 平台 V1.0 |
 | 技术栈 | Vue3 + Naive UI、Python FastAPI、PostgreSQL、WebSocket、Docker Compose、go-stress-testing |
 
@@ -22,6 +22,7 @@
 | V1.6.4 | 2026-08-18 | 全面去除静态 Mock 数据，全量接入后端 API 统一客户端；落实全员同权协作与智能体/调度/任务中心动态交互 |
 | V1.6.5 | 2026-08-20 | 新增默认私有、创建者可切换团队共享的 Agent 会话；补齐软删除、多人实时正文流与确认卡作者边界 |
 | V1.7.1 | 2026-08-21 | 协议档支持可选 Embedding / Reranker 的 URL、模型标识与 Key；Key 只写不回显 |
+| V1.8 | 2026-08-23 | Agent 运行基线切换为 LangGraph；首期只交付单轮模型调用与 WebSocket 流式链路，Harness、MCP、确认卡与长任务保持后续阶段 |
 
 ---
 
@@ -40,7 +41,7 @@
 
 ### 1.2 产品定位
 
-面向**单一团队**。主入口是 **WebSocket Agent**；表单为辅。Agent 作为 **MCP Host**：只调短工具并 `task.create`。三个模块 + 共享压测：
+面向**单一团队**。主入口是 **WebSocket Agent**；表单为辅。产品目标是由 LangGraph Agent 组合 Harness 后作为 **MCP Host**，只调短工具并 `task.create`；当前首期先交付单轮模型调用与 WS 流式基础链路，MCP 与任务下单暂不启用。三个模块 + 共享压测：
 
 | 模块 | 职责 |
 | --- | --- |
@@ -95,6 +96,26 @@
 | 人设 | 固定资深评测工程师 |
 | 合规 | 单团队；不涉密不强制私有化；报告不进审批；用例不同步 TMS |
 
+### 1.7 Agent 运行基线（V1.8）
+
+当前首期实现以以下链路为唯一事实源：
+
+```text
+WebSocket 短票
+  -> LangGraph Agent Graph（单轮）
+  -> ModelGateway（LangGraph 模型调用图）
+  -> 三协议适配器
+  -> thought / message / error / pong
+```
+
+- `app/agent/graph.py` 只编排一次模型调用，不持有数据库、WebSocket、工具或任务状态；
+- `app/llm/` 只负责 `ModelRequest`、`ModelResponse`、三协议适配与流式事件，不承载 Harness；
+- `app/routers/ws.py` 负责短票、会话事件、后台 Task 和流式 WS 投影，收包循环不得等待整轮模型调用；
+- 首期支持正文 `thought.stream=chunk`、推理 `thought.stream=think`、持久化 `think_final` 和交付终帧；
+- Harness、ReAct/MCP、人工确认、任务取消、长任务队列和记忆层属于后续设计，不得在首期代码中提前实现。
+
+本节是对“最终产品能力”和“当前实现阶段”的区分：下文 M2–M4 的任务、MCP、确认卡和评测闭环仍是产品目标，但在首期 Agent 基础链路稳定前不宣称已交付。
+
 ---
 
 ## 2. 用户、权限与账号
@@ -132,11 +153,11 @@ Agent 会话采用以下更细的资产边界，不把「全员同权」误解�
 
 | 角色 | 可调用 | 不可 |
 | --- | --- | --- |
-| Agent（WS 进程） | 短工具；写「待执行」任务 | 自己跑完 Benchmark/RAG/压测 |
+| Agent（WS 进程） | 当前仅调用 LangGraph 单轮模型图；后续可由 Harness 组合短工具并写「待执行」任务 | 自己跑完 Benchmark/RAG/压测 |
 | Worker | 评测 / RAG / 用例生成 MCP；`stress.run` 只负责向 stress 容器下发 | 向用户闲聊；自己打满压测连接 |
 | 表单 REST | 直接 `POST /api/tasks`，状态与 Agent 下单相同 | — |
 
-这样 WS 断开不影响执行；确认卡只决定「是否入队」。
+这样 WS 断开不影响后续异步执行；确认卡只决定「是否入队」。当前首期尚未启用确认卡和任务下单，WS 只完成单轮文本生成与事件持久化。
 
 ### 3.2 主路径
 
@@ -203,14 +224,14 @@ queued → running → succeeded
 | --- | --- | --- | --- | --- |
 | F-AGT-01 | WS 会话 | P0 | M1 | 登录后发 5 分钟 `ws_ticket`，`GET /ws/agent?ticket=` 升级（不用长期 JWT 进 query）。心跳 30s；重连带 `session_id`+`last_event_id` |
 | F-AGT-02 | 事件流 | P0 | M1 | 见 5.1.3 |
-| F-AGT-03 | MCP Host | P0 | M1 | 只连内部 Server；短工具同步，长任务只 `task.create` |
-| F-AGT-04 | 确认卡 | P0 | M1 | 见 5.1.2；未确认不入队 |
-| F-AGT-05 | 人设 | P0 | M1 | 先澄清再下单；不绕过白名单与会签；不执行用户要求的任意代码 |
-| F-AGT-06 | Agent 后端 | P0 | M1 | 管理员指定一个协议档；上下文默认最近 20 条消息，超出丢最旧（系统提示词始终保留） |
+| F-AGT-03 | MCP Host | P0 | 后续阶段 | 目标是只连内部 Server；短工具同步，长任务只 `task.create`；首期保持能力未启用 |
+| F-AGT-04 | 确认卡 | P0 | 后续阶段 | 见 5.1.2；未确认不入队；首期不生成确认卡 |
+| F-AGT-05 | 人设 | P0 | 后续阶段 | 由 Harness/Agent 范式评审后落地；首期不增加独立 Prompt 或思考强度配置 |
+| F-AGT-06 | Agent 后端 | P0 | M1 基础 | 管理员指定一个协议档；LangGraph 单轮调用默认读取最近 20 条用户/助手消息；系统提示词与复杂上下文策略留后续 |
 | F-AGT-07 | 表单双入口 | P0 | M2 | `POST /api/tasks` 与确认卡字段一致 |
 | F-AGT-08 | 解读 | P1 | M4 | 仅对已有 `report_id` 调评测 Skill，不重跑评测 |
 | F-AGT-09 | 取消 / 重跑 | P0 | M1 | 工程师取消自己的非终态任务；管理员可取消任何人的。评测取消=当前样本结束后停；**压测取消=立即停发**。重跑=新任务拷配置 |
-| F-AGT-10 | 团队共享与软删除会话 | P0 | M1 | 默认私有；会话创建者可切为 `team`，在线协作者实时看到用户消息与 AI 正文 chunk；删除为软删除，运行中的 Harness、待确认卡或非终态任务必须先结束 |
+| F-AGT-10 | 团队共享与软删除会话 | P0 | M1 基础 | 默认私有；会话创建者可切为 `team`，在线协作者实时看到用户消息与 AI 正文 chunk；删除为软删除，运行中的 Agent 回合、待确认卡或非终态任务必须先结束 |
 
 #### 5.1.2 确认卡字段（P0）
 
@@ -247,6 +268,8 @@ queued → running → succeeded
 前端 → 服务：`user_message` `{text, attachments[]?, client_message_id?}`，`confirm_ack` `{ok, patch?}`，`cancel_task` `{task_id}`。
 
 `thought.stream=chunk` 只在在线时即时广播，断线不回放，随后完整交付句仍写入历史；`thought.stream=think` 仅发给本轮发起连接，不向团队协作者泄露；本轮成功结束时以 `thought.stream=think_final` 保存完整思考快照，供历史回放恢复思考卡。
+
+首期已实现事件为 `message`、`thought`、`error`、`pong`；`tool_call`、`tool_result`、`confirm`、`confirm_ack`、`progress`、`report` 保留为后续 Harness/Worker 阶段事件。首期收到 `confirm_ack` 或 `cancel_task` 时返回 `VALIDATION` 能力未启用错误，不得伪造任务成功。
 
 附件：先 `POST /api/files` 得 `file_id`，再在消息里引用。单文件 ≤20MB；PRD/OpenAPI/Excel/JSONL/CSV/PDF/MD/TXT/HTML。
 
@@ -341,7 +364,7 @@ queued → running → succeeded
 
 ### 5.5 MCP 工具中心与技能编排
 
-平台采用 **MCP Host** 统一智能体架构。长任务由 Worker 异步执行；Agent 仅调用 MCP 短工具进行信息发现与 `task.create` 结构化建单。
+平台最终采用 **MCP Host** 统一智能体架构。长任务由 Worker 异步执行；Agent 仅调用 MCP 短工具进行信息发现与 `task.create` 结构化建单。MCP 是后续 Harness 阶段能力，首期 LangGraph Agent 不注册或执行 MCP 工具。
 
 #### 5.5.1 内置受控短工具清单 (Tools Manifest)
 
@@ -460,14 +483,22 @@ FastAPI（REST + WS）+ worker 进程 + PostgreSQL + Vue3/Naive/Vite + LightRAG 
 
 ```
 浏览器 Vue3
-  /agent  ──WS── FastAPI Agent Host（短 MCP + task.create）
-  其它页 ──REST─┘
+  /agent  ──WS── FastAPI WS Bridge
                     │
                     ▼
-              PostgreSQL tasks
+              LangGraph Agent Graph
                     │
                     ▼
-              worker（长 MCP：评测 / RAG / 生成用例；压测下发到 stress）
+              ModelGateway（LangGraph）
+                    │
+                    ▼
+              三协议适配器 / 上游模型
+
+  其它页 ──REST─┐
+                └── PostgreSQL（sessions / messages / ws_events / tasks）
+                                      │
+                                      ▼
+              worker（后续长任务：评测 / RAG / 生成用例；压测下发到 stress）
                  │         │              │
                  ▼         ▼              ▼
            三协议适配   LightRAG      go-stress-testing
@@ -490,7 +521,7 @@ testcase-tools：只对齐，不进镜像。LightRAG：MIT，锁 tag。go-stress
 
 | 阶段 | 交付 | 演示门禁 |
 | --- | --- | --- |
-| M1 | Compose、账号、协议档、WS、确认卡、任务状态机、短 MCP、文件 | 登录后对话下单空跑任务（kind 可 mock succeeded）；断线按 event_id 续；管理员加协议档 |
+| M1 | Compose、账号、协议档、LangGraph 单轮 Agent、WS 基础事件、会话回放、文件 | 登录后完成单轮流式对话；断线按 event_id 续；确认卡、短 MCP、任务下单进入后续 Harness 阶段 |
 | M2 | 真调用、规则分、对比、基线、用例 Skill、表单、预算 | 5.2.3 |
 | M3 | LightRAG、外部 Chat RAG、黄金 QA、Hit Rate | 5.3.2 |
 | M4 | 先评后压、白名单、Grafana、解读、通知 | 5.6 验收 |
