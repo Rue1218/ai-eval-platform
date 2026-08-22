@@ -3,14 +3,14 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 阶段 3 — 并行与流式收尾 |
-| 版本 | V1.4 |
+| 版本 | V1.5 |
 | 审查日期 | 2026-08-22 |
 | 文档性质 | **施工与验收文档**（需求分析、功能点、实现路径、技术难点与对策）；阶段 4 仅可在本阶段验收通过后开工 |
-| 当前验收状态 | **实现审查未通过**：3 个 P1、1 个 P2 待修复；阶段 4 不得开工 |
+| 当前验收状态 | **审查评论修复完成，待 PR 复审与合入**：4 项（3 个 P1、1 个 P2）均有代码和回归验证；阶段 4 仍须独立验收 |
 | 对应目标架构 | 架构文档 §3.2.1 / §3.2.2 / §3.5 末段 / §5.3 |
 | 前置阶段权威 | 阶段 2 强制 trace/cancel；阶段 0 **禁止错误 merge_batch**（伪造 parent 绕过 Fail-fast） |
 | 产品/协议裁决 | API.md；Agent §5.6 第一阶段串行保证 `tool_call`/`tool_result` 成对。本阶段实现能力，**默认行为仍串行** |
-| 分支 | `feat/harness-parallel-streaming` |
+| 分支 | 原实现 `feat/harness-parallel-streaming`；评论修复 `fix/harness-stage3-comments` |
 | 前置依赖 | 阶段 2 验收通过 |
 | 后续阶段 | 阶段 4 记忆层接入 |
 
@@ -246,7 +246,7 @@ Feedback merge span F-01        parent=O-01（或 X-batch，文档冻结为：no
 
 ### 难点 9：`streaming.py` 与 `harness/llm` 流式正文双实现
 
-**对策**：`orchestration/streaming.py` 只做状态（`FINALIZING_STREAM`）与取消订阅；字节流仍走阶段 1 的 `harness/llm` 唯一正文。禁止再写一套 Provider 读取。
+**对策**：`orchestration/streaming.py` 只在最终助手消息实际交付前写入 `FINALIZING_STREAM`；取消仍沿阶段 2 的令牌链传播，字节流仍走阶段 1 的 `harness/llm` 唯一正文。禁止再写一套 Provider 读取。
 
 ---
 
@@ -254,25 +254,25 @@ Feedback merge span F-01        parent=O-01（或 X-batch，文档冻结为：no
 
 - [x] 默认串行：四项多媒体 `parallel_safe=false`；现网测试全绿
 - [x] 桩工具并行：gather 局部失败保留成功项
-- [ ] `ordered_results` 按 `batch_index`；`results_by_call_id` 可反查（仅并行路径覆盖；默认串行批次未进入批次归并）
-- [ ] `merge_batch` mismatch 熔断；无伪造 parent（独立单测通过；默认串行批次未建立批次 span 树）
-- [ ] `done=true` 单测经过 `FINALIZING_STREAM`，且仅在流结束、消息持久化成功后进入 `FINISHED`
-- [ ] `DONE_TOOL_CONFLICT` 不执行工具且 ErrorClass 进入下一轮内部 observation
-- [ ] `MISSING_TOOL` 覆盖空工具且 ErrorClass 进入下一轮内部 observation；未知工具静默语义仍在
+- [x] `ordered_results` 按 `batch_index`；`results_by_call_id` 可反查；默认串行与并行共用 `merge_batch`
+- [x] `merge_batch` mismatch 熔断；无伪造 parent；默认串行批次也建立批次 span 树
+- [x] `done=true` 在最终助手消息发出前经过 `FINALIZING_STREAM`，消息持久化成功后才由总控写 `FINISHED`
+- [x] `DONE_TOOL_CONFLICT` 不执行工具且 ErrorClass 进入下一轮内部 observation
+- [x] `MISSING_TOOL` 覆盖空工具且 ErrorClass 进入下一轮内部 observation；未知工具静默语义仍在
 - [x] Schema `oneOf`：无顶层 `tool` 的批次示例可通过
 - [x] 开关打开且批次不安全 → 不执行、不悄悄串行
 - [x] WS 事件名/字段不变；无新 REST
 - [x] 无 Alembic 业务新表（本阶段不改记忆表）；无 Redis；无 LightRAG；无 MCP Transport
 - [x] `ruff` + `pytest tests/harness tests/test_harness.py` 等全绿
 
-### 7.1 2026-08-22 实现审查待修项
+### 7.1 2026-08-22 审查评论修复验证
 
-1. **P1：默认串行批次绕过批次归并。** `PARALLEL_READONLY_TOOLS=false` 时，`react_loop.py` 逐项走单调用路径，未创建批次执行 span、未调用 `merge_batch`，因此无法保证默认批次的 `batch_index`、`call_id` 反查和批次父子 span 契约。
-2. **P1：`FINALIZING_STREAM` 未包住实际交付边界。** ReAct 刚收到 `done=true` 即写入该状态；之后仍可能重规划、复核或发送确认卡。最终 `FINISHED` 由 Harness 的 `finish_turn` 直接写入，未在消息流结束并持久化后经状态机转移。
-3. **P1：内部 ErrorClass 未回填到下一轮。** `DONE_TOOL_CONFLICT`、`MISSING_TOOL` 与并行策略错误虽会创建 `ToolResult`，但 observation 摘要只保留错误文案，下一轮模型看不到受控的 `error_class`。
-4. **P2：参数校验失败的执行 span 未持久化。** 该 Outcome 引用了批次 child span，但异常分支未记录该 span，审计链不完整。
+1. **P1：默认串行批次绕过批次归并。** 已将开关关闭分支改为同一 `_emit_and_run_batch(..., execute_in_parallel=False)`；按原顺序执行，但统一创建 `execution.batch`、每项 `execution.facade`，再调用 `merge_batch`。回归断言两个默认串行子 span 和一个批次归并 span。
+2. **P1：`FINALIZING_STREAM` 进入过早、`FINISHED` 未对齐持久化。** 已从 ReAct 判定环移除提前状态写入，仅在 `_deliver_sentence` 实际 emit 最终助手消息并即将持久化前标记 `FINALIZING_STREAM`；外层 Harness 的 `finally` 只能在该函数提交成功返回后写 `FINISHED`。回归断言 emit 时状态为 `FINALIZING_STREAM`，并在提交完成后才模拟总控结束回合。
+3. **P1：内部 ErrorClass 未回填到下一轮。** observation 摘要失败时写入受控 `error_class` 值；单调用、批次、`DONE_TOOL_CONFLICT`、`MISSING_TOOL` 和拒绝工具路径均传入 `ToolResult.error_class`。回归断言冲突与缺工具分类可出现在下一轮输入中。
+4. **P2：参数校验失败的执行 span 未持久化。** 批次绑定异常现在立即记录该 `execution.facade` child span，再进入同一批次 `merge_batch`。回归断言失败项仍有子 span，且 observation 为 `ARGUMENT_VALIDATION_ERROR`。
 
-修复后须新增端到端 Harness 回归：默认串行批次也经过批次归并；最终回复完成并落库后才 `FINISHED`；下一轮输入保留 ErrorClass；参数校验失败的 span 可在审计中查询。当前独立单测手工调用 `finish_turn`，不能替代以上边界验证。
+本修复不新增 REST/WS 字段、不改变默认串行开关、不增加迁移或存储依赖。所有四项仍需随本分支 PR 再次审查；在 PR 合入前不得把“修复完成”表述为 `main` 已验收。
 
 ---
 
@@ -285,13 +285,13 @@ Feedback merge span F-01        parent=O-01（或 X-batch，文档冻结为：no
 阶段 2 取消链接到并行子任务
 ```
 
-阶段 4 **不得开工**，直到 §7.1 的 P1/P2 修复、端到端回归通过且本阶段重新验收；通过后阶段 4 仍不得改并行门禁与 WS 字段，只把 Context 换成 MemoryPort。
+§7.1 的代码与定向回归已完成，待本修复 PR 复审合入后才可关闭阶段 3 审查债务。阶段 4 已按用户授权受控启动，但必须独立验收，且不得改并行门禁与 WS 字段。
 
 ---
 
 ## 修改代码文件与作用清单
 
-V1.4：根据代码质量审查校正验收状态。批次 Schema `oneOf`、三分支并行门禁和并行路径的归并实现已存在，但默认串行批次归并、最终交付状态机、ErrorClass observation 回填及参数失败 span 审计尚未满足本文件 R3-5～R3-8 的完整验收；无 REST/WS 契约扩展。
+V1.5：修复审查提出的 3 个 P1、1 个 P2。默认串行批次改为复用批次归并；最终交付状态移到消息 emit/持久化边界；下一轮 observation 保留内部 `ErrorClass`；参数绑定失败也持久化 child span。无 REST/WS 契约扩展、无迁移、无新增依赖。
 
 | 文件 | 作用 |
 | :--- | :--- |
@@ -300,7 +300,10 @@ V1.4：根据代码质量审查校正验收状态。批次 Schema `oneOf`、三�
 | `backend/api/app/harness/orchestration/parser.py` | 批次解析、模型完成/空工具语义保留与编排绑定 Turn |
 | `backend/api/app/harness/orchestration/parallel_facade.py` | 并行三分支门禁、`gather(return_exceptions=True)` 与顺序收敛 |
 | `backend/api/app/harness/feedback/normalizer.py` | `merge_batch` 的批次父子 span Fail-fast 校验 |
-| `backend/api/app/harness/orchestration/{react_loop,state_machine,streaming}.py` | 批次执行、内部状态机、最终交付前流式收尾状态 |
+| `backend/api/app/harness/orchestration/react_loop.py` | 默认串行与并行共用批次归并、参数失败 span 审计、ErrorClass observation 回填 |
+| `backend/api/app/harness/orchestration/streaming.py` | 最终助手消息实际交付前的 `FINALIZING_STREAM` 标记 |
+| `backend/api/app/harness/feedback/observation.py` | observation 失败时保留受控 `error_class` 摘要 |
+| `backend/api/app/agent/harness.py` | 最终消息 emit/持久化边界接入收尾状态；提交成功后外层才结束回合 |
 | `backend/api/app/harness/contracts/turn.py` | 批次与流式收尾内部状态枚举 |
 | `backend/api/tests/harness/test_parallel_streaming.py` | 批次解析、门禁、局部失败、归并与默认串行回归 |
 | `backend/api/tests/harness/tracing/{test_contracts,test_trace}.py` | 阶段 3 Schema 与 `merge_batch` 可用性断言 |

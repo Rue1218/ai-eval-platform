@@ -3,14 +3,14 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 阶段 4 — 记忆层接入 |
-| 版本 | V1.3 |
+| 版本 | V1.4 |
 | 审查日期 | 2026-08-22 |
 | 文档性质 | **施工中分析与交付状态文档**；当前仅完成第一批可单测的基础组件，未勾验收前禁止把 Redis/pgvector 当「已经迁完六层」 |
 | 对应目标架构 | 架构文档 §2.1 / §3.1 / §5.2 / §5.3 / §5.4（消息表溯源列） |
-| 前置阶段权威 | 阶段 0 已冻结 `MemoryPort` / `MemoryQuery` / `CompiledContext`（`trace_id` 必填）；阶段 3 仍未通过审查，待修项不因本阶段启动而失效 |
+| 前置阶段权威 | 阶段 0 已冻结 `MemoryPort` / `MemoryQuery` / `CompiledContext`（`trace_id` 必填）；阶段 3 评论修复 PR 待复审合入，阶段 4 不得将其表述为 `main` 已验收 |
 | 产品/协议裁决 | API.md `GET /api/sessions/{id}/messages` 的 `context_meter` 字段冻结；PRD 确认卡默认值不变 |
 | 分支 | `feat/harness-memory-port` |
-| 启动裁决 | 用户于 2026-08-22 明确授权受控启动阶段 4；该授权不解除阶段 3 的未验收结论，阶段 4 在完成自身验收前不得合入 `main` |
+| 启动裁决 | 用户于 2026-08-22 明确授权受控启动阶段 4；该授权不替代阶段 3 修复 PR 的复审，阶段 4 在完成自身验收前不得合入 `main` |
 | 后续 | LightRAG / RAG 评测 **不在本阶段**；独立评审。禁止创建 `long_term_lightrag.py` |
 
 ---
@@ -279,7 +279,7 @@
 4. **P1：Redis 适配器不可部署。** `RedisMemoryPort.from_url()` 依赖 `redis` 包，但项目依赖清单尚未声明该运行依赖，也没有 Redis TTL / 故障路径测试。
 5. **P2：撤权容错不一致。** Redis `forget()` 遇到一条损坏的序列化记录会整体失败；retrieve 已选择跳过损坏记录，两处行为应统一，并记录受限服务端诊断。
 
-上述问题与阶段 3 的待修项彼此独立；阶段 3 仍不得合入，阶段 4 也不得因基础组件已存在而提前合入。
+上述问题与阶段 3 的修复 PR 彼此独立；在该 PR 合入前，阶段 3 不得表述为 `main` 已验收，阶段 4 也不得因基础组件已存在而提前合入。
 
 ---
 
@@ -297,7 +297,7 @@ security/ 三文件、reflect/plan 迁入、persona YAML、外部 MCP 生态、�
 
 ## 修改代码文件与作用清单
 
-V1.3：根据已推送的第一批阶段 4 实现与代码审查更新真实交付状态。已实现内存 Port、Redis 适配器骨架、纯 Context 编译和基础单测；未实现运行时接线、PG/pgvector、Alembic、ContextMeter 对齐与 Redis 集成测试，且存在本章 §7.1 的合入阻塞项。
+V1.4：同步阶段 3 评论修复 PR 的复审状态；不改变阶段 4 已实现范围、§7.1 的自身阻塞项、对外协议或存储范围。阶段 3 修复未合入前，阶段 4 不得把前置阶段表述为已在 `main` 验收。
 
 | 文件 | 作用 |
 | :--- | :--- |
@@ -305,4 +305,4 @@ V1.3：根据已推送的第一批阶段 4 实现与代码审查更新真实交�
 | `backend/api/app/harness/memory/ports.py`、`retention.py`、`short_term_redis.py` | 内存/组合 Port、保留期和 Redis 短期适配器骨架 |
 | `backend/api/app/harness/context/compiler.py`、`window_manager.py`、`policies.py`、`provenance.py`、`reranker.py`、`retriever_facade.py`、`summarizer.py` | 纯 Context 召回、筛选、压缩、重排和窗口构建 |
 | `backend/api/tests/harness/memory/test_memory_context.py` | 内存 Port 与基础窗口单测 |
-| `docs/AI测试与评估平台-Harness阶段4-记忆层接入.md` | V1.3：施工实际状态、审查阻塞项和代码作用清单 |
+| `docs/AI测试与评估平台-Harness阶段4-记忆层接入.md` | V1.4：同步前置阶段修复 PR 状态；施工范围与阻塞项不变 |

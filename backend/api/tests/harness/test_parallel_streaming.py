@@ -8,7 +8,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.agent.harness import _deliver_sentence
 from app.agent.plan import PlanArtifact
+from app.errors import AppError, ErrorCode
 from app.harness.contracts.cancellation import CancellationToken
 from app.harness.contracts.errors import ErrorClass, TraceMismatch
 from app.harness.contracts.tool_call import (
@@ -17,7 +19,7 @@ from app.harness.contracts.tool_call import (
     ToolCall,
     ToolCallBatch,
 )
-from app.harness.contracts.trace import TraceContext
+from app.harness.contracts.trace import TraceContext, using_trace
 from app.harness.contracts.turn import TurnStatus
 from app.harness.feedback.normalizer import merge_batch
 from app.harness.feedback.publisher import InMemoryPublisher, publisher, reset_publisher
@@ -27,11 +29,27 @@ from app.harness.orchestration.parallel_facade import (
     execute_parallel,
 )
 from app.harness.orchestration.parser import McpStep, parse_model_payload, validate_react_output
-from app.harness.orchestration.react_loop import _run_mcp_react_loop
+from app.harness.orchestration.react_loop import _emit_and_run_batch, _run_mcp_react_loop
 
 
 class _Db:
     """无真实数据库依赖的 ReAct 循环测试桩。"""
+
+
+class _DeliveryDb:
+    """记录最终回复落库顺序的最小数据库测试桩。"""
+
+    def __init__(self) -> None:
+        self.rows: list[object] = []
+        self.commits = 0
+
+    def add(self, row: object) -> None:
+        """记录待持久化的助手消息。"""
+        self.rows.append(row)
+
+    def commit(self) -> None:
+        """模拟消息提交完成。"""
+        self.commits += 1
 
 
 @dataclass(frozen=True)
@@ -187,15 +205,14 @@ def test_merge_batch_sorts_by_batch_index_and_rejects_wrong_parent():
         )
 
 
-def test_default_batch_path_stays_serial_and_final_reply_enters_finalizing_stream(monkeypatch):
-    """默认关闭并行时按原顺序调用；done 回复先写 FINALIZING_STREAM，再由总控结束。"""
+def test_default_batch_path_stays_serial_and_keeps_batch_audit(monkeypatch):
+    """默认串行逐项执行，但仍保留统一 batch、child span 与 merge 审计。"""
 
     async def _body() -> None:
         trace = TraceContext.for_turn()
         cancel = CancellationToken(turn_id=trace.turn_id)
         store = reset_publisher(store=InMemoryPublisher())
         store.start_turn(trace, session_id="session-stage3")
-        calls: list[str] = []
         decisions = [
             ToolCallBatch(
                 turn_id=trace.turn_id,
@@ -211,12 +228,12 @@ def test_default_batch_path_stays_serial_and_final_reply_enters_finalizing_strea
         async def _step(**_kwargs):
             return decisions.pop(0)
 
-        async def _serial(_db, _react, *, name, **_kwargs):
-            calls.append(name)
-            return True
+        def _bind(_db, _name, arguments, **_kwargs):
+            """绕过数据库协议档校验，保留调用原始参数。"""
+            return arguments
 
         monkeypatch.setattr("app.harness.orchestration.react_loop.PARALLEL_READONLY_TOOLS", False)
-        monkeypatch.setattr("app.harness.orchestration.react_loop.emit_and_run_tool", _serial)
+        monkeypatch.setattr("app.harness.orchestration.react_loop.bind_arguments", _bind)
         plan = PlanArtifact(
             intent="chat",
             skill_id=None,
@@ -237,7 +254,11 @@ def test_default_batch_path_stays_serial_and_final_reply_enters_finalizing_strea
             proposed_spec=None,
         )
 
-        async def _emit(_event: str, _payload: dict, **_kwargs) -> int:
+        events: list[tuple[str, str]] = []
+
+        async def _emit(event: str, payload: dict, **_kwargs) -> int:
+            if event.startswith("tool_"):
+                events.append((event, str(payload.get("name") or "")))
             return 1
 
         await _run_mcp_react_loop(
@@ -260,8 +281,93 @@ def test_default_batch_path_stays_serial_and_final_reply_enters_finalizing_strea
             trace=trace,
             cancel=cancel,
         )
-        assert calls == ["image.generate", "audio.speech_synthesis"]
+        assert events == [
+            ("tool_call", "image.generate"),
+            ("tool_result", "image.generate"),
+            ("tool_call", "audio.speech_synthesis"),
+            ("tool_result", "audio.speech_synthesis"),
+        ]
+        assert [item["name"] for item in react.observations] == [
+            "image.generate",
+            "audio.speech_synthesis",
+        ]
+        assert [span["component"] for span in store.spans].count("execution.batch") == 1
+        assert [span["component"] for span in store.spans].count("execution.facade") == 2
+        assert [span["component"] for span in store.spans].count("feedback.merge_batch") == 1
         assert react.reply_text == "已完成"
+        reset_publisher()
+
+    asyncio.run(_body())
+
+
+def test_batch_parameter_failure_persists_child_span_and_error_class(monkeypatch):
+    """同批参数失败也必须有 execution child span，供下一轮读取结构化错误分类。"""
+
+    async def _body() -> None:
+        trace = TraceContext.for_turn()
+        cancel = CancellationToken(turn_id=trace.turn_id)
+        store = reset_publisher(store=InMemoryPublisher())
+        store.start_turn(trace, session_id="session-stage3")
+        batch = _batch(trace)
+        react = SimpleNamespace(observations=[], known_ids=[])
+
+        def _bind(_db, name, arguments, **_kwargs):
+            """第二项模拟协议参数绑定失败。"""
+            if name == "test.second":
+                raise AppError(ErrorCode.VALIDATION, "第二项参数不合法")
+            return arguments
+
+        events: list[str] = []
+
+        async def _emit(event: str, _payload: dict, **_kwargs) -> int:
+            events.append(event)
+            return len(events)
+
+        monkeypatch.setattr("app.harness.orchestration.react_loop.bind_arguments", _bind)
+        await _emit_and_run_batch(
+            _Db(),
+            react,
+            batch=batch,
+            user_id="u1",
+            emit=_emit,
+            text="测试",
+            attachments=[],
+            execute_short_tool=lambda *_args, **_kwargs: (True, {"id": "first"}, None, 1),
+            execute_isolated=lambda *_args, **_kwargs: (True, {}, None, 0),
+            trace=trace,
+            cancel=cancel,
+            max_calls=4,
+            execute_in_parallel=False,
+        )
+        assert events == ["tool_call", "tool_result"]
+        assert [span["component"] for span in store.spans].count("execution.facade") == 2
+        assert react.observations[1]["data_summary"]["error_class"] == (
+            ErrorClass.ARGUMENT_VALIDATION_ERROR.value
+        )
+        reset_publisher()
+
+    asyncio.run(_body())
+
+
+def test_final_reply_finalizes_before_emit_and_finishes_after_commit():
+    """最终交付先进入 FINALIZING_STREAM，消息落库提交后才允许由总控写 FINISHED。"""
+
+    async def _body() -> None:
+        trace = TraceContext.for_turn()
+        store = reset_publisher(store=InMemoryPublisher())
+        store.start_turn(trace, session_id="session-stage3")
+        db = _DeliveryDb()
+        statuses_at_emit: list[str] = []
+
+        async def _emit(_event: str, _payload: dict, **_kwargs) -> int:
+            statuses_at_emit.append(store.turns[0]["status"])
+            return 1
+
+        with using_trace(trace):
+            await _deliver_sentence(db, "session-stage3", _emit, "已完成")
+        assert statuses_at_emit == [TurnStatus.FINALIZING_STREAM]
+        assert len(db.rows) == 1
+        assert db.commits == 1
         assert store.turns[0]["status"] == TurnStatus.FINALIZING_STREAM
         publisher().finish_turn(trace, status=TurnStatus.FINISHED)
         assert store.turns[0]["status"] == TurnStatus.FINISHED
@@ -336,6 +442,10 @@ def test_done_tool_conflict_and_missing_tool_never_execute(monkeypatch):
         )
         assert not {"tool_call", "tool_result"} & set(events)
         assert len(react.observations) == 2
+        assert [item["data_summary"]["error_class"] for item in react.observations] == [
+            ErrorClass.DONE_TOOL_CONFLICT.value,
+            ErrorClass.MISSING_TOOL.value,
+        ]
         assert react.reply_text == "完成"
 
     asyncio.run(_body())
