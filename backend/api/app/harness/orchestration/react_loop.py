@@ -26,7 +26,13 @@ from app.agent.plan import PlanArtifact, parse_json_object
 from app.errors import AppError, ErrorCode
 from app.harness.contracts.cancellation import CancellationToken, TurnCancelled
 from app.harness.contracts.errors import ErrorClass, MissingTraceContext, TraceMismatch
-from app.harness.contracts.tool_call import ExecutionOutcome, OutcomeStatus, ToolCall, ToolCallBatch
+from app.harness.contracts.tool_call import (
+    ExecutionOutcome,
+    OutcomeStatus,
+    ToolCall,
+    ToolCallBatch,
+    ToolResult,
+)
 from app.harness.contracts.trace import TraceContext, using_trace
 from app.harness.contracts.turn import TurnStatus
 from app.harness.execution.facade import bind_arguments
@@ -53,7 +59,6 @@ from app.harness.orchestration.parser import (
     parse_model_payload,
 )
 from app.harness.orchestration.state_machine import TurnStateMachine
-from app.harness.orchestration.streaming import begin_finalizing_stream
 
 EmitFn = Callable[..., Awaitable[int]]
 AbortCheck = Callable[[], None]
@@ -93,21 +98,48 @@ async def emit_and_run_tool(
         error = f"「{name}」是长任务，只能入队后由 Worker 执行"
         await emit("tool_call", {"name": name, "arguments": {}})
         await emit("tool_result", {"name": name, "ok": False, "error": error, "latency_ms": 0})
-        react.observations.append(summarize_observation(name, False, None, error, 0))
+        react.observations.append(
+            summarize_observation(
+                name,
+                False,
+                None,
+                error,
+                0,
+                error_class=ErrorClass.TOOL_NOT_ALLOWED,
+            )
+        )
         agent_trace(f"ToolCall 拒绝长任务 name={name}")
         return False
     if name not in SHORT_TOOLS:
         error = f"未知短工具「{name}」"
         await emit("tool_call", {"name": name, "arguments": arguments})
         await emit("tool_result", {"name": name, "ok": False, "error": error, "latency_ms": 0})
-        react.observations.append(summarize_observation(name, False, None, error, 0))
+        react.observations.append(
+            summarize_observation(
+                name,
+                False,
+                None,
+                error,
+                0,
+                error_class=ErrorClass.TOOL_NOT_ALLOWED,
+            )
+        )
         agent_trace(f"ToolCall 拒绝未知工具 name={name}")
         return False
     if name == "task.create":
         error = "task.create 只允许在确认卡 ack 之后执行"
         await emit("tool_call", {"name": name, "arguments": {}})
         await emit("tool_result", {"name": name, "ok": False, "error": error, "latency_ms": 0})
-        react.observations.append(summarize_observation(name, False, None, error, 0))
+        react.observations.append(
+            summarize_observation(
+                name,
+                False,
+                None,
+                error,
+                0,
+                error_class=ErrorClass.TOOL_NOT_ALLOWED,
+            )
+        )
         agent_trace("ToolCall 拒绝 task.create（须 ack 后）")
         return False
 
@@ -167,7 +199,14 @@ async def emit_and_run_tool(
             )
     await emit("tool_result", payload)
     react.observations.append(
-        summarize_observation(result.tool, result.ok, result.data, result.error, result.latency_ms)
+        summarize_observation(
+            result.tool,
+            result.ok,
+            result.data,
+            result.error,
+            result.latency_ms,
+            error_class=result.error_class,
+        )
     )
     if result.status in {OutcomeStatus.CANCELLED, OutcomeStatus.CANCEL_REQUESTED}:
         raise TurnCancelled(cancel.reason or "cancelled")
@@ -207,11 +246,32 @@ def _append_internal_error(
     publisher().record_span(execution_span)
     publisher().record_span(feedback_span)
     react.observations.append(
-        summarize_observation(result.tool, result.ok, result.data, result.error, result.latency_ms)
+        summarize_observation(
+            result.tool,
+            result.ok,
+            result.data,
+            result.error,
+            result.latency_ms,
+            error_class=result.error_class,
+        )
     )
 
 
-async def _emit_and_run_parallel_batch(
+def _tool_result_payload(result: ToolResult) -> dict[str, Any]:
+    """把已脱敏的内部结果映射为既有 WS 工具结果事件，不扩展对外字段。"""
+    payload: dict[str, Any] = {
+        "name": result.tool,
+        "ok": result.ok,
+        "latency_ms": result.latency_ms,
+    }
+    if result.ok:
+        payload["data"] = result.data
+    else:
+        payload["error"] = result.error or "该能力未启用"
+    return payload
+
+
+async def _emit_and_run_batch(
     db: Session,
     react: Any,
     *,
@@ -225,12 +285,14 @@ async def _emit_and_run_parallel_batch(
     trace: TraceContext,
     cancel: CancellationToken,
     max_calls: int,
+    execute_in_parallel: bool,
 ) -> bool:
-    """并发执行一批已过门禁的调用；批次 span 是每个执行 Outcome 的唯一父节点。"""
+    """执行一批已过门禁调用；串行和并行都必须经过同一批次 span 与反馈归并。"""
     batch_execution_span = trace.child("execution.batch")
     prepared: list[PreparedBatchCall] = []
     outcomes_by_call_id: dict[str, ExecutionOutcome] = {}
     emitted_call_ids: set[str] = set()
+    feedback_span = trace.child("feedback.merge_batch")
 
     for call in batch.tool_calls:
         execution_span = batch_execution_span.child("execution.facade")
@@ -252,6 +314,8 @@ async def _emit_and_run_parallel_batch(
                 span_id=execution_span.span_id,
                 parent_span_id=batch_execution_span.span_id,
             )
+            # 没有进入执行门面也必须留下真实 child span，审计才能解释该项为何未执行。
+            publisher().record_span(execution_span)
             continue
         bound_call = call.model_copy(
             update={
@@ -261,8 +325,6 @@ async def _emit_and_run_parallel_batch(
             }
         )
         prepared.append(PreparedBatchCall(call=bound_call, trace=execution_span))
-        emitted_call_ids.add(bound_call.call_id)
-        await emit("tool_call", {"name": bound_call.tool, "arguments": bound})
 
     async def _run_one(prepared_call: PreparedBatchCall) -> ExecutionOutcome:
         return await execute_tool(
@@ -275,16 +337,45 @@ async def _emit_and_run_parallel_batch(
             run_isolated=execute_isolated,
         )
 
-    outcomes = await execute_parallel(
-        prepared,
-        cancel=cancel,
-        run_call=_run_one,
-        max_calls=max_calls,
-    )
+    if execute_in_parallel:
+        for prepared_call in prepared:
+            emitted_call_ids.add(prepared_call.call.call_id)
+            await emit(
+                "tool_call",
+                {"name": prepared_call.call.tool, "arguments": prepared_call.call.arguments},
+            )
+        outcomes = await execute_parallel(
+            prepared,
+            cancel=cancel,
+            run_call=_run_one,
+            max_calls=max_calls,
+        )
+    else:
+        outcomes = []
+        for prepared_call in prepared:
+            cancel.raise_if_cancelled()
+            emitted_call_ids.add(prepared_call.call.call_id)
+            await emit(
+                "tool_call",
+                {"name": prepared_call.call.tool, "arguments": prepared_call.call.arguments},
+            )
+            outcome = await _run_one(prepared_call)
+            try:
+                # 默认串行必须保持既有的一项调用紧跟一项结果事件，同时仍以批次父 span 校验。
+                serial_result = normalize(
+                    outcome,
+                    trace=feedback_span,
+                    batch_index=prepared_call.call.batch_index,
+                    batch_execution_span=batch_execution_span,
+                )
+            except (MissingTraceContext, TraceMismatch) as exc:
+                agent_trace(f"ReAct 串行批次 normalize Fail-fast type={type(exc).__name__}")
+                raise AppError(ErrorCode.INTERNAL, "操作失败") from exc
+            await emit("tool_result", _tool_result_payload(serial_result))
+            outcomes.append(outcome)
     outcomes_by_call_id.update({outcome.call_id: outcome for outcome in outcomes})
     ordered_outcomes = [outcomes_by_call_id[call.call_id] for call in batch.tool_calls]
 
-    feedback_span = trace.child("feedback.merge_batch")
     try:
         result_batch = merge_batch(
             batch,
@@ -301,23 +392,21 @@ async def _emit_and_run_parallel_batch(
     all_ok = True
     cancelled = False
     for result in result_batch.ordered_results:
-        if result.call_id in emitted_call_ids:
-            payload: dict[str, Any] = {
-                "name": result.tool,
-                "ok": result.ok,
-                "latency_ms": result.latency_ms,
-            }
-            if result.ok:
-                payload["data"] = result.data
-            else:
-                payload["error"] = result.error or "该能力未启用"
-            await emit("tool_result", payload)
+        if execute_in_parallel and result.call_id in emitted_call_ids:
+            await emit("tool_result", _tool_result_payload(result))
         if result.ok:
             react.known_ids.extend(collect_ids(result.data))
         else:
             all_ok = False
         react.observations.append(
-            summarize_observation(result.tool, result.ok, result.data, result.error, result.latency_ms)
+            summarize_observation(
+                result.tool,
+                result.ok,
+                result.data,
+                result.error,
+                result.latency_ms,
+                error_class=result.error_class,
+            )
         )
         cancelled = cancelled or result.status in {
             OutcomeStatus.CANCELLED,
@@ -582,8 +671,6 @@ async def _run_mcp_react_loop(
                     state.transition(TurnStatus.FEEDBACK_READY)
                     publisher().set_turn_status(trace, status=TurnStatus.FEEDBACK_READY)
                     continue
-                else:
-                    begin_finalizing_stream(trace=trace, cancel=cancel, state=state)
                 break
             react.rounds_used += 1
             if not decision.tool_calls:
@@ -607,21 +694,21 @@ async def _run_mcp_react_loop(
             if not PARALLEL_READONLY_TOOLS:
                 state.transition(TurnStatus.EXECUTING)
                 publisher().set_turn_status(trace, status=TurnStatus.EXECUTING)
-                for call in decision.tool_calls:
-                    await emit_and_run_tool(
-                        db,
-                        react,
-                        name=call.tool or "",
-                        arguments=call.arguments,
-                        user_id=user_id,
-                        emit=emit,
-                        text=text,
-                        attachments=attachments,
-                        execute_short_tool=execute_short_tool,
-                        execute_isolated=execute_isolated,
-                        trace=trace,
-                        cancel=cancel,
-                    )
+                await _emit_and_run_batch(
+                    db,
+                    react,
+                    batch=decision,
+                    user_id=user_id,
+                    emit=emit,
+                    text=text,
+                    attachments=attachments,
+                    execute_short_tool=execute_short_tool,
+                    execute_isolated=execute_isolated,
+                    trace=trace,
+                    cancel=cancel,
+                    max_calls=max_parallel_calls(),
+                    execute_in_parallel=False,
+                )
                 state.transition(TurnStatus.FEEDBACK_READY)
                 publisher().set_turn_status(trace, status=TurnStatus.FEEDBACK_READY)
                 continue
@@ -639,7 +726,7 @@ async def _run_mcp_react_loop(
 
             state.transition(TurnStatus.PARALLEL_EXECUTING)
             publisher().set_turn_status(trace, status=TurnStatus.PARALLEL_EXECUTING)
-            await _emit_and_run_parallel_batch(
+            await _emit_and_run_batch(
                 db,
                 react,
                 batch=decision,
@@ -652,6 +739,7 @@ async def _run_mcp_react_loop(
                 trace=trace,
                 cancel=cancel,
                 max_calls=max_parallel_calls(),
+                execute_in_parallel=True,
             )
             state.transition(TurnStatus.FEEDBACK_READY)
             publisher().set_turn_status(trace, status=TurnStatus.FEEDBACK_READY)
@@ -693,8 +781,6 @@ async def _run_mcp_react_loop(
             publisher().set_turn_status(trace, status=TurnStatus.FEEDBACK_READY)
             continue
         if not raw_tool or step.done:
-            if step.model_done and not raw_tool:
-                begin_finalizing_stream(trace=trace, cancel=cancel, state=state)
             break
 
         args_key = json.dumps(step.arguments, ensure_ascii=False, sort_keys=True)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.harness.contracts.errors import ErrorClass
 from app.harness.feedback.redaction import LIST_SUMMARY_LIMIT
 
 
@@ -25,8 +26,16 @@ def collect_ids(data: Any) -> list[str]:
     return ids
 
 
-def summarize_observation(name: str, ok: bool, data: Any, error: str | None, latency_ms: int) -> dict:
-    """构造 ReactArtifact.observations 条目。"""
+def summarize_observation(
+    name: str,
+    ok: bool,
+    data: Any,
+    error: str | None,
+    latency_ms: int,
+    *,
+    error_class: ErrorClass | None = None,
+) -> dict:
+    """构造 ReactArtifact.observations 条目，失败时保留可供下一轮决策的错误分类。"""
     ids = collect_ids(data) if ok else []
     summary: dict[str, Any] = {"ids": ids[:LIST_SUMMARY_LIMIT]}
     if ok and isinstance(data, dict) and isinstance(data.get("items"), list):
@@ -40,6 +49,8 @@ def summarize_observation(name: str, ok: bool, data: Any, error: str | None, lat
             summary["names"] = names
     if not ok and error:
         summary["error"] = error
+    if not ok and error_class is not None:
+        summary["error_class"] = error_class.value
     return {
         "name": name,
         "ok": ok,
