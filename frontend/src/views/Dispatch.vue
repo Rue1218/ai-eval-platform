@@ -2722,37 +2722,151 @@ onBeforeUnmount(() => {
   line-height: 1.3;
 }
 
-/* 移动端：浮坞收窄、甘特行压缩、分段标签可横滚 */
-@media (max-width: 700px) {
+/* ═══ 多级响应式适配 (Mobile & Tablet Responsive Breakpoints) ═══ */
+
+/* 平板中屏设备 (<= 1024px) */
+@media (max-width: 1024px) {
+  .kpi-grid {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+  }
+  .dock-left {
+    width: 260px;
+  }
+  .dock-right {
+    width: 280px;
+  }
+}
+
+/* 平板小屏与手机横屏 (<= 768px) */
+@media (max-width: 768px) {
+  .dispatch-page {
+    padding-bottom: 20px;
+  }
+  .kpi-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+  }
   .dispatch-view-tabs {
     flex-direction: column;
     align-items: stretch;
-    gap: 8px;
+    gap: 10px;
   }
   .tab-pill-group {
-    overflow-x: auto;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    width: 100%;
+    box-sizing: border-box;
   }
   .tab-pill-btn {
+    justify-content: center;
+    font-size: 12.5px;
+    padding: 7px 10px;
     white-space: nowrap;
+  }
+  .immersive-topo-wrap {
+    height: 62vh;
+    min-height: 420px;
   }
   .dock-left,
   .dock-right {
-    width: min(260px, calc(100vw - 60px));
+    width: min(320px, calc(100vw - 32px));
+    z-index: 40;
+    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.28);
+  }
+  .dock-left {
+    left: 12px;
+    top: 12px;
+  }
+  .dock-right {
+    right: 12px;
+    top: 12px;
   }
   .dock-scroll-content {
-    max-height: 38dvh;
+    max-height: 44vh;
   }
   .dock-bottom {
-    max-height: 200px;
+    left: 10px;
+    right: 10px;
+    bottom: 10px;
+    max-height: 220px;
+    z-index: 35;
+  }
+  .dock-bottom-header {
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 8px 10px;
+  }
+  .dock-bottom-header .row {
+    display: none;
   }
   .gantt-row {
-    grid-template-columns: 104px 1fr;
+    grid-template-columns: 100px 1fr;
   }
   .gantt-axis {
-    padding-left: 104px;
+    padding-left: 100px;
   }
   .gantt-name {
+    font-size: 10px;
+  }
+}
+
+/* 主流手机屏 (<= 640px) */
+@media (max-width: 640px) {
+  .kpi-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 6px;
+  }
+  .kpi {
+    padding: 8px 10px;
+  }
+  .kpi-num {
+    font-size: 18px;
+  }
+  .kpi-label {
     font-size: 10.5px;
+  }
+  .tab-pill-btn {
+    font-size: 12px;
+    gap: 4px;
+    padding: 6px 8px;
+  }
+  .tab-badge {
+    display: none;
+  }
+  .immersive-topo-wrap {
+    height: 56vh;
+    min-height: 380px;
+    border-radius: 10px;
+  }
+  .panel-title {
+    font-size: 14px;
+  }
+  .panel-title .small {
+    display: none;
+  }
+  .zoom-ctrl {
+    display: none;
+  }
+  .dock-left,
+  .dock-right {
+    width: calc(100vw - 24px);
+    left: 12px;
+    right: 12px;
+  }
+}
+
+/* 超窄屏手机 (<= 380px) */
+@media (max-width: 380px) {
+  .kpi-num {
+    font-size: 16px;
+  }
+  .tab-pill-btn {
+    font-size: 11px;
+    padding: 6px 4px;
+  }
+  .tab-icon {
+    font-size: 12px;
   }
 }
 </style>

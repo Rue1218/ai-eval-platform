@@ -1458,4 +1458,90 @@ async function runWorkflow() {
   width: 100%;
   height: 100%;
 }
+
+/* ═══ 多级响应式适配 (Workflow Designer Responsive Breakpoints) ═══ */
+
+@media (max-width: 900px) {
+  .wf-designer-root {
+    height: calc(100vh - 190px);
+    min-height: 520px;
+  }
+  .edge-status-legend {
+    display: none;
+  }
+}
+
+@media (max-width: 768px) {
+  .wf-designer-root {
+    height: 65vh;
+    min-height: 440px;
+    border-radius: 10px;
+  }
+  .designer-toolbar {
+    height: auto;
+    min-height: 44px;
+    padding: 6px 8px;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .toolbar-left {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .toolbar-center {
+    display: none;
+  }
+  .toolbar-right {
+    margin-left: auto;
+    gap: 4px;
+  }
+  .select-tpl {
+    max-width: 120px;
+    font-size: 11px;
+    padding: 0 4px;
+  }
+  .toolbar-btn {
+    padding: 0 6px !important;
+    font-size: 11px !important;
+  }
+  .toolbar-btn span:not(.tool-icon) {
+    display: none;
+  }
+  .run-btn {
+    font-size: 11.5px;
+    padding: 0 8px !important;
+  }
+  .validation-pill {
+    font-size: 10px;
+    padding: 0 6px;
+  }
+  .canvas-hints {
+    display: none;
+  }
+  .canvas-minimap {
+    width: 90px;
+    height: 60px;
+    bottom: 8px;
+    right: 8px;
+  }
+  .execution-hud-bar {
+    top: 10px;
+    width: calc(100% - 20px);
+    padding: 6px 10px;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+}
+
+@media (max-width: 480px) {
+  .canvas-minimap {
+    display: none;
+  }
+  .wf-title-badge .badge-sub {
+    display: none;
+  }
+  .run-btn span {
+    font-size: 11px;
+  }
+}
 </style>

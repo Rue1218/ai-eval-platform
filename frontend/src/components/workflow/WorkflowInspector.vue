@@ -912,4 +912,16 @@ function testSingleNode() {
   border-top: 1px solid var(--border-subtle);
   background: var(--bg-elevated);
 }
+
+@media (max-width: 768px) {
+  .wf-inspector {
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    z-index: 50;
+    width: min(350px, 92vw);
+    box-shadow: -8px 0 32px rgba(0, 0, 0, 0.25);
+  }
+}
 </style>
