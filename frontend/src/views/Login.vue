@@ -1,6 +1,6 @@
 <template>
   <div class="login-wrapper">
-    <div class="login-card">
+    <div class="login-card scanline">
       <div class="login-brand">
         <div class="login-mark">A</div>
         <div class="login-eyebrow">SECURE ACCESS · V1.6.3</div>
@@ -81,7 +81,7 @@ const password = ref('admin123')
 const loading = ref(false)
 const errorMsg = ref('')
 
-// Naive UI Input 定制样式以完美契合原型
+// Naive UI Input 定制样式
 const inputThemeOverrides: InputThemeOverrides = {
   heightLarge: '46px',
   borderRadius: '12px',
@@ -141,30 +141,50 @@ onMounted(loadAgentStatus)
   place-items: center;
   min-height: 100vh;
   padding: 24px;
-  background-color: #f3faf6;
-  background-image:
-    radial-gradient(1000px 600px at 50% 12%, rgba(16, 185, 129, 0.12), transparent 70%),
-    radial-gradient(800px 500px at 85% 85%, rgba(94, 234, 212, 0.15), transparent 60%),
-    radial-gradient(800px 500px at 15% 85%, rgba(16, 185, 129, 0.1), transparent 60%),
-    linear-gradient(to right, rgba(16, 185, 129, 0.08) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(16, 185, 129, 0.08) 1px, transparent 1px);
-  background-size: 100% 100%, 100% 100%, 100% 100%, 30px 30px, 30px 30px;
+  background:
+    radial-gradient(900px 520px at 12% -8%, rgba(16, 185, 129, 0.16), transparent 60%),
+    radial-gradient(1100px 640px at 88% 108%, rgba(94, 234, 212, 0.18), transparent 62%),
+    linear-gradient(158deg, #e7f4ec 0%, #f4f8f8 34%, #e9f5f0 58%, #eef7ec 82%, #e4f2ef 100%);
+  background-attachment: fixed;
+  animation: mint-breathe 9s ease-in-out infinite;
   overflow: hidden;
 }
 
+@keyframes mint-breathe {
+  0%, 100% { filter: saturate(1); }
+  50% { filter: saturate(1.15); }
+}
+
+/* 双层工程网格纹理：120px 主格 + 24px 细格 */
+.login-wrapper::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(16, 185, 129, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(16, 185, 129, 0.08) 1px, transparent 1px),
+    linear-gradient(rgba(16, 185, 129, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(16, 185, 129, 0.035) 1px, transparent 1px);
+  background-size: 120px 120px, 120px 120px, 24px 24px, 24px 24px;
+}
+
 .login-card {
+  position: relative;
+  z-index: 1;
   width: 440px;
   max-width: calc(100vw - 32px);
-  background: rgba(255, 255, 255, 0.94);
+  background: rgba(255, 255, 255, 0.88);
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
   border: 1px solid rgba(255, 255, 255, 0.95);
   border-radius: 28px;
   padding: 40px 36px 32px;
   box-shadow:
-    0 24px 60px -12px rgba(15, 23, 42, 0.08),
-    0 1px 3px rgba(0, 0, 0, 0.03);
-  animation: card-in 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+    0 24px 60px -12px rgba(15, 23, 42, 0.1),
+    0 2px 6px rgba(0, 0, 0, 0.03);
+  animation: card-in 0.4s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 @keyframes card-in {
@@ -176,6 +196,30 @@ onMounted(loadAgentStatus)
     opacity: 1;
     transform: none;
   }
+}
+
+/* 扫描线光效：流光扫过卡片 */
+.scanline {
+  position: relative;
+  overflow: hidden;
+}
+
+.scanline::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 160px;
+  pointer-events: none;
+  background: linear-gradient(100deg, transparent, rgba(94, 234, 212, 0.2) 45%, rgba(99, 102, 241, 0.16) 58%, transparent);
+  transform: translateX(-200px);
+  animation: scan-x 5.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+@keyframes scan-x {
+  0% { transform: translateX(-200px); }
+  60%, 100% { transform: translateX(800px); }
 }
 
 .login-brand {
@@ -200,6 +244,11 @@ onMounted(loadAgentStatus)
   place-items: center;
   box-shadow: 0 4px 12px rgba(15, 23, 42, 0.15);
   user-select: none;
+  transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.login-mark:hover {
+  transform: scale(1.06) rotate(-2deg);
 }
 
 .login-eyebrow {
@@ -253,17 +302,25 @@ onMounted(loadAgentStatus)
 }
 
 .status-dot {
-  width: 5px;
-  height: 5px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: #6366f1;
-  box-shadow: 0 0 6px #6366f1;
+  box-shadow: 0 0 8px rgba(99, 102, 241, 0.8);
   animation: dot-pulse 2s infinite ease-in-out;
 }
 
 @keyframes dot-pulse {
-  0%, 100% { transform: scale(1); opacity: 0.9; }
-  50% { transform: scale(1.35); opacity: 1; }
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.85;
+    box-shadow: 0 0 4px rgba(99, 102, 241, 0.6);
+  }
+  50% {
+    transform: scale(1.4);
+    opacity: 1;
+    box-shadow: 0 0 10px rgba(99, 102, 241, 0.9);
+  }
 }
 
 .status-text {
@@ -318,17 +375,19 @@ onMounted(loadAgentStatus)
   display: flex;
   align-items: center;
   justify-content: center;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.15);
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .login-btn:hover:not(:disabled) {
   background: #1e293b;
-  transform: translateY(-1px);
-  box-shadow: 0 6px 16px -2px rgba(15, 23, 42, 0.2);
+  transform: translateY(-1.5px);
+  box-shadow: 0 8px 20px -2px rgba(15, 23, 42, 0.25);
 }
 
 .login-btn:active:not(:disabled) {
   transform: translateY(0);
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.15);
 }
 
 .login-btn:disabled {
