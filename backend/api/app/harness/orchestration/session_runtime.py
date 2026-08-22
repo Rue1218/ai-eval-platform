@@ -18,21 +18,8 @@ from typing import Any
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.harness.contracts.cancellation import CancellationToken, TurnCancelled
-from app.harness.contracts.trace import TraceContext, current_trace, using_trace
-from app.harness.contracts.turn import TurnStatus
-from app.harness.feedback.publisher import publisher
-from app.harness.memory.runtime import append_persisted_conversation_message
-from app.harness.orchestration.budgets import wall_clock_s
-from app.harness.orchestration.streaming import begin_finalizing_delivery
-
-from ..db import SessionLocal
-from ..errors import AppError, ErrorCode
-from ..models import AuditLog, Dataset, Message, ProtocolProfile, Task, TaskEvent, User
-from ..models import Session as AgentSession
-from ..schemas import TaskCreate
-from .context import history_for_plan, run_compact
-from .defaults import (
+from app.agent.context import history_for_plan, run_compact
+from app.agent.defaults import (
     ACTIVE_STATUSES,
     MAX_MODEL_CALLS,
     NO_TITLE_COMMANDS,
@@ -40,20 +27,26 @@ from .defaults import (
     STREAM_TIMEOUT_S,
     TERMINAL_STATUSES,
 )
-from .log import agent_exception, agent_trace
-from .persona import chat_system, turn_system
-from .plan import AUDIO_CLARIFY_RE, PlanArtifact, TurnBudget, merge_replan, run_plan, run_replan
-from .prefs import load_prefs, save_prefs_from_spec
-from .react import run_react
-from .reflect import ReflectArtifact, maybe_model_check, run_gates
-from .slash import (
+from app.agent.log import agent_exception, agent_trace
+from app.agent.persona import chat_system, turn_system
+from app.agent.plan import (
+    AUDIO_CLARIFY_RE,
+    PlanArtifact,
+    TurnBudget,
+    merge_replan,
+    run_plan,
+    run_replan,
+)
+from app.agent.prefs import load_prefs, save_prefs_from_spec
+from app.agent.reflect import ReflectArtifact, maybe_model_check, run_gates
+from app.agent.slash import (
     assert_command_enabled,
     enabled_help_text,
     is_unknown_slash,
     parse_slash,
     unknown_command_text,
 )
-from .turn_mode import (
+from app.agent.turn_mode import (
     TurnMode,
     allows_model_check,
     allows_replan,
@@ -61,7 +54,21 @@ from .turn_mode import (
     resolve_turn_mode,
     uses_react_llm,
 )
-from .voiceclone import VOICECLONE_CLARIFY_RE
+from app.agent.voiceclone import VOICECLONE_CLARIFY_RE
+from app.db import SessionLocal
+from app.errors import AppError, ErrorCode
+from app.harness.contracts.cancellation import CancellationToken, TurnCancelled
+from app.harness.contracts.trace import TraceContext, current_trace, using_trace
+from app.harness.contracts.turn import TurnStatus
+from app.harness.feedback.publisher import publisher
+from app.harness.memory.runtime import append_persisted_conversation_message
+from app.harness.orchestration.budgets import wall_clock_s
+from app.harness.orchestration.streaming import begin_finalizing_delivery
+from app.models import AuditLog, Dataset, Message, ProtocolProfile, Task, TaskEvent, User
+from app.models import Session as AgentSession
+from app.schemas import TaskCreate
+
+from .react_adapter import run_react
 
 EmitFn = Callable[..., Awaitable[int]]
 
@@ -755,7 +762,7 @@ async def _chat_reply(
     loop = asyncio.get_running_loop()
 
     def _producer() -> tuple[str, str]:
-        from ..llm import stream_agent_model
+        from app.llm import stream_agent_model
 
         cancel.raise_if_cancelled()
         tdb = SessionLocal()

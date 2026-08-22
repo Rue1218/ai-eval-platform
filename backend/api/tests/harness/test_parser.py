@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from app.agent.react import parse_mcp_step
 from app.harness.orchestration.parser import tool_call_from_step, validate_react_output
+from app.harness.orchestration.react_adapter import parse_mcp_step
 
 
 def test_schema_rejects_model_supplied_trace_id():

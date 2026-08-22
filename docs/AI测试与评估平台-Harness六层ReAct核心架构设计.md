@@ -35,6 +35,8 @@
 
 > **V1.13 定向修订定位**：阶段 4.2 新增同库 pgvector 知识表与 `MemoryPort` 适配器；向量召回在数据库先过滤 tenant、资源、user/session、白名单 ACL 与撤权，再按余弦距离排序。真实 PostgreSQL/Redis 服务测试成为 PR CI 门禁；外部 Embedding 与 forget REST/WS 均未新增，阶段 4 仍须独立验收。
 
+> **V1.14 定向修订定位**：架构联调确认旧 `agent/harness.py` 仍是 WS 实际总控，构成与六层并排的双轨实现。现已将会话总控迁至 `harness/orchestration/session_runtime.py`、ReAct 产品适配迁至 `harness/orchestration/react_adapter.py`，路由直接接入新总控并删除旧文件；WS/REST JSON 契约未变。`plan.py` / `reflect.py` 等未列入首期的 Agent 依赖仍保持原位置。
+
 ---
 
 ## 第一章：总体架构分层图解
@@ -730,8 +732,8 @@ ToolCall
 
 | 现有模块 | 目标落点 | 迁移动作 |
 | :--- | :--- | :--- |
-| `agent/react.py` | `harness/orchestration/react_loop.py` + `parser.py` + `budgets.py` | 拆分为循环、严格解析与预算三件；禁止整文件搬运后继续内联解析。 |
-| `agent/harness.py` | 首期总控仍留 `agent/harness.py` | 斜杠/确认卡/TurnMode 不进六层。阶段 2 只在此注入 token；具名状态机与 `finalizer` 由阶段 3 增量填入，不把整个总控搬进 `app.py`。 |
+| `agent/react.py`（已删除） | `harness/orchestration/react_adapter.py` + `react_loop.py` + `parser.py` + `budgets.py` | 产品规格组装适配器和循环均归入编排层；循环、严格解析与预算保持拆分，禁止恢复旧 Agent 入口。 |
+| `agent/harness.py`（已删除） | `harness/orchestration/session_runtime.py` | WS 会话总控、斜杠、确认卡、TurnMode 与流式收尾由该编排入口统一持有；`routers/ws.py` / `routers/sessions.py` 直接导入它，不经兼容壳。 |
 | `agent/context.py` | `harness/context/compiler.py` + `window_manager.py` | 现有上下文装配逻辑迁入，补充 token 账本与槽位优先级。 |
 | `agent/mcp_registry.py` / `agent/mcp_tools.py` | `harness/execution/tool_registry.py`（再导出薄封装） | 工具元数据补 `parallel_safe`（缺省 false）、`idempotency`、`timeout` 字段。`execution/adapters/` 留给挂起的 MCP/文件适配，阶段 1 不填。 |
 | `agent/imagegen.py` / `agent/voiceclone.py` / `agent/mimo_audio.py` | 仍留 `agent/`，经 `harness/execution/tool_registry.py` 分派 | 现网四项多媒体工具行为原样保留；**禁止复制第二份正文到 `execution/adapters/`**（阶段 1 映射例外）。`adapters/` 留给挂起的 MCP/文件适配。 |
@@ -768,6 +770,8 @@ ToolCall
 ```
 
 每个阶段独立开 `feat/` 分支、独立 PR 合入 `main`；阶段内必须保持 `app/agent/` 与 `harness/` 不存在同一职责的双实现（迁移完成即删旧路径）。
+
+**迁移收口（V1.14）**：阶段性薄桥接已经结束。任何生产路径、测试或动态导入均不得重新引用 `app.agent.harness` / `app.agent.react`；`tests/harness/tracing/test_contracts.py` 必须同时断言旧文件不存在且 WS 路由导入 `harness.orchestration.session_runtime`。这是内部目录迁移，不改变 API.md 定义的 REST/WS 字段或事件。
 
 **阶段 0 开工前必须先完成第七章分析**（需求、功能点、实现、难点与对策），再写代码。后续阶段同样：先在对应阶段文档补齐这五块，再开分支。
 
@@ -990,9 +994,9 @@ Agent 开发文档（`docs/AI测试与评估平台-Agent开发文档.md`）定�
 
 ---
 
-## 第十一章：阶段 4 需求分析索引（V1.13）
+## 第十一章：阶段 4 需求分析索引（V1.14）
 
-权威展开见 [`docs/AI测试与评估平台-Harness阶段4-记忆层接入.md`](docs/AI测试与评估平台-Harness阶段4-记忆层接入.md) V1.7。阶段 4.1 已把 `app/agent/` 规划历史接入组合 Port，保留 user/assistant 角色并对 conversation 强制 tenant/user/session；消息 trace 溯源与记忆撤权经 Alembic 管理。阶段 4.2 新增 `memory_knowledge` pgvector 表、向量校验、知识 ACL/撤权 Port，并由运行时组合 Port 装配；真实 Redis/PG 服务测试已在 PR #67 通过。外部 Embedding 生成和 forget 对外产品入口未在本阶段扩充，故阶段 4 不构成验收。
+权威展开见 [`docs/AI测试与评估平台-Harness阶段4-记忆层接入.md`](docs/AI测试与评估平台-Harness阶段4-记忆层接入.md) V1.8。阶段 4.1 已把 `app/agent/` 规划历史接入组合 Port，保留 user/assistant 角色并对 conversation 强制 tenant/user/session；消息 trace 溯源与记忆撤权经 Alembic 管理。阶段 4.2 新增 `memory_knowledge` pgvector 表、向量校验、知识 ACL/撤权 Port，并由运行时组合 Port 装配；真实 Redis/PG 服务测试已在 PR #67 通过。随后完成旧会话协调器的架构收口，WS 活路径改由 `session_runtime.py` 承接，旧 Agent Harness / ReAct 文件已删除。外部 Embedding 生成和 forget 对外产品入口未在本阶段扩充，故阶段 4 不构成验收。
 
 | ID | 需求 | 本文出处 | 阶段 4 文档 |
 | :--- | :--- | :--- | :--- |
@@ -1074,11 +1078,14 @@ Agent 开发文档（`docs/AI测试与评估平台-Agent开发文档.md`）定�
 
 ## 本次文档变更范围
 
-V1.13：阶段 3 评论修复已随 PR #73 合入 `main`。阶段 4.2 新增同库 pgvector 知识表、向量/ACL/撤权适配器、运行时组合装配和真实 PostgreSQL/Redis CI 服务测试；本地 392 项 pytest 已通过，容器用例仅因本机无 Docker 跳过，PR #67 的真实服务门禁已通过。不新增外部 Embedding 或 forget REST/WS 产品入口，阶段 4 仍未验收。
+V1.14：在阶段 4.2 的记忆运行时基础上完成旧 Harness 架构收口：删除 `agent/harness.py` 与 `agent/react.py`，由 `harness/orchestration/session_runtime.py` / `react_adapter.py` 接管；WS 和会话 REST 直连新总控，并以契约测试禁止旧路径回流。该内部迁移不增加 API 字段；阶段 4 的 forget 产品入口边界仍不变。
 
 | 文件 | 作用 |
 | :--- | :--- |
-| `docs/AI测试与评估平台-Harness六层ReAct核心架构设计.md` | V1.13：阶段 4.2 pgvector、容器 CI 与未授权产品入口边界 |
+| `backend/api/app/harness/orchestration/session_runtime.py`、`react_adapter.py`、`react_loop.py` | V1.14：删除旧 Agent 协调器后承接会话总控、ReAct 产品适配及循环内动态依赖 |
+| `backend/api/app/routers/ws.py`、`routers/sessions.py`、`agent/reflect.py` | V1.14：线上入口和复核类型依赖改为新编排模块 |
+| `backend/api/tests/harness/tracing/test_contracts.py` 及 Harness 回归测试 | V1.14：验证旧文件不存在、WS 直连新总控，并保留取消、流式、确认卡与媒体工具回归 |
+| `docs/AI测试与评估平台-Harness六层ReAct核心架构设计.md` | V1.14：更新模块映射、迁移收口约束与实际运行路径 |
 | `docs/AI测试与评估平台-Harness分阶段实施总册.md` | V1.11：阶段 4.2 门禁状态 |
 | `docs/AI测试与评估平台-Harness阶段0-契约骨架.md` | V1.3：Schema / MemoryQuery 前向债务 |
 | `docs/AI测试与评估平台-Harness阶段1-单调用路径.md` | V1.3：映射例外与不做表 |

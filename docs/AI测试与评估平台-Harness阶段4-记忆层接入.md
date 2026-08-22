@@ -3,13 +3,13 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 阶段 4 — 记忆层接入 |
-| 版本 | V1.7 |
+| 版本 | V1.8 |
 | 审查日期 | 2026-08-22 |
-| 文档性质 | **施工中分析与交付状态文档**；阶段 4.2 已实现 pgvector 知识存储并通过真实 Redis/PG 服务 CI 验收；阶段 4 总体验收仍受对外 forget 产品入口范围约束 |
+| 文档性质 | **施工中分析与交付状态文档**；阶段 4.2 已实现 pgvector 知识存储并通过真实 Redis/PG 服务 CI 验收，随后已删除旧 Harness 双轨；阶段 4 总体验收仍受对外 forget 产品入口范围约束 |
 | 对应目标架构 | 架构文档 §2.1 / §3.1 / §5.2 / §5.3 / §5.4（消息表溯源列） |
 | 前置阶段权威 | 阶段 0 已冻结 `MemoryPort` / `MemoryQuery` / `CompiledContext`（`trace_id` 必填）；阶段 3 评论修复已随 PR #73 合入 `main`，阶段 4 仍须独立验收 |
 | 产品/协议裁决 | API.md `GET /api/sessions/{id}/messages` 的 `context_meter` 字段冻结；PRD 确认卡默认值不变 |
-| 分支 | `fix/memory-activation` |
+| 分支 | `fix/memory-activation` → `refactor/harness-cutover` |
 | 阶段 4.2 合入门禁 | 阶段 4.1 两个 P1 已补回归；阶段 4.2 的 pgvector 迁移与真实 Redis/PG CI 已在 PR #67 通过。后续变更必须保持该 CI 绿色，且不得把受限 `forget` 的产品入口自行扩成新 REST/WS 契约 |
 | 后续 | LightRAG / RAG 评测 **不在本阶段**；独立评审。禁止创建 `long_term_lightrag.py` |
 
@@ -297,11 +297,17 @@
 
 真实服务验收放在 GitHub Actions `memory-integration` 任务：使用同版本 PostgreSQL/pgvector、Redis 容器，执行 `alembic upgrade head` 后验证扩展、向量 ACL、撤权和 Redis TTL。该任务已在 PR #67 成功执行，并继续作为后续提交的合入门禁；本机因 Docker 不可用仅运行单元回归并明确 skip，不能替代 CI 结果。
 
+## 7.3 旧 Harness 架构收口（V1.8）
+
+阶段 4.2 联调发现 `agent/harness.py` 仍被 `routers/ws.py` 和 `routers/sessions.py` 直接引用，`agent/react.py` 仍被 ReAct 循环的动态导入使用。这会令新六层运行时与旧 Agent 协调器并行存在，违反架构文档的“同一职责不保留双实现”约束。
+
+本次只迁移内部模块位置，不改变任何 REST/WS 事件或字段：`session_runtime.py` 承接会话 registry、取消、确认卡和流式交付；`react_adapter.py` 承接产品规格组装及 ReAct 入口；路由和复核模块改为直接导入新位置，`react_loop.py` 的动态依赖也同步改线。旧 `agent/harness.py` 与 `agent/react.py` 不保留兼容壳。`test_contracts.py` 断言旧文件不存在且 WS 入口已导入新总控，并由取消、并行流式、记忆、媒体工具和确认卡回归覆盖行为不变。
+
 ## 8. 本阶段交付后（V1.0 六层首期闭环）
 
 ```text
 六层运行时：契约 + 单调用 + 强制追踪取消 + 可选并行 + MemoryPort
-仍不包含（见总册覆盖矩阵）：LightRAG、多副本 abort、MCP Transport / file_sandbox、
+会话总控与 ReAct 产品适配已位于 `harness/orchestration/`，不再保留 Agent 双轨。仍不包含（见总册覆盖矩阵）：LightRAG、多副本 abort、MCP Transport / file_sandbox、
 security/ 三文件、reflect/plan 迁入、persona YAML、外部 MCP 生态、自定义系统提示词
 ```
 
@@ -311,14 +317,16 @@ security/ 三文件、reflect/plan 迁入、persona YAML、外部 MCP 生态、�
 
 ## 修改代码文件与作用清单
 
-V1.7：在 V1.6 两个 P1 修复之上实现阶段 4.2：新增同库 `memory_knowledge` pgvector 迁移与 Port，数据库优先过滤撤权和 ACL，再按余弦距离召回；运行时组合 Port 接入知识存储。真实 PostgreSQL/Redis 容器测试已接入并通过 PR CI；不增加 forget REST/WS 入口，不接入 LightRAG。
+V1.8：在 V1.7 阶段 4.2 记忆实现之上收口旧 Harness：`agent/harness.py` / `agent/react.py` 已删除，生产 WS 与会话路由直连 `harness/orchestration/session_runtime.py`，ReAct 产品适配迁入 `react_adapter.py`；契约与回归测试禁止旧路径回流。不增加 REST/WS 字段，不接入 LightRAG，也不扩充 forget 产品入口。
 
 | 文件 | 作用 |
 | :--- | :--- |
 | `backend/api/app/harness/contracts/context.py`、`context/compiler.py`、`window_manager.py`、`reranker.py` | 保留 user/assistant 角色、对话时序与纯 Context 编译 |
 | `backend/api/app/harness/memory/ports.py`、`short_term_redis.py`、`conversation_store.py`、`runtime.py` | Redis 短期适配、PG 对话归档与运行时组合 Port；V1.6 恢复压缩游标、提供统一消息写入适配器并复核写入侧 session owner |
 | `backend/api/app/harness/memory/long_term_pgvector.py`、`knowledge_store.py`、`contracts/memory.py` | V1.7：pgvector 知识写入、向量 ACL 召回与撤权；校验记录/查询向量，不在 Context 调用 Embedding SDK |
-| `backend/api/app/agent/context.py`、`agent/harness.py`、`routers/ws.py` | 将规划历史接入 MemoryPort，并给新消息回填真实 trace 溯源；V1.6 在用户入口和助手提交后写入记忆 |
+| `backend/api/app/agent/context.py`、`harness/orchestration/session_runtime.py`、`routers/ws.py` | 将规划历史接入 MemoryPort，并给新消息回填真实 trace 溯源；V1.8 删除旧协调器后由新会话总控承接写入时机 |
 | `backend/shared/models.py`、`backend/api/migrations/env.py`、`backend/api/migrations/versions/c650ba766b96_消息记忆溯源与撤权字段.py`、`d6f2a91be430_新增记忆知识向量表.py` | Message 溯源列、知识向量表与撤权标记；Alembic 同时识别 API 与共享模型根目录，pgvector 扩展在迁移内幂等启用 |
 | `backend/api/tests/harness/memory/test_memory_activation.py`、`test_pgvector_knowledge.py`、`tests/integration/test_memory_containers.py`、`.github/workflows/ci.yml` | V1.7：记忆单元回归及真实 PostgreSQL/Redis 容器 CI 门禁 |
-| `docs/AI测试与评估平台-Harness阶段4-记忆层接入.md` | V1.7：阶段 4.2 实现范围、容器验收方式与未授权产品入口边界 |
+| `backend/api/app/harness/orchestration/react_adapter.py`、`react_loop.py`、`session_runtime.py`、`agent/reflect.py` | V1.8：删除旧 ReAct / 会话协调器，并改造循环动态依赖与复核类型依赖 |
+| `backend/api/app/routers/ws.py`、`routers/sessions.py`、`tests/harness/tracing/test_contracts.py` | V1.8：线上路由直连新总控，测试禁止旧文件或旧模块引用回流 |
+| `docs/AI测试与评估平台-Harness阶段4-记忆层接入.md` | V1.8：阶段 4.2 实现范围、旧 Harness 收口与未授权产品入口边界 |

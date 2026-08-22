@@ -587,7 +587,11 @@ async def _run_mcp_react_loop(
     cancel: CancellationToken,
 ) -> None:
     """多轮 MCP ReAct：思考卡 → 一个短工具 → 观察 → 再思考。"""
-    from app.agent.react import _missing_for_kind, _redirect_creative_tool, build_proposed_spec
+    from app.harness.orchestration.react_adapter import (
+        _missing_for_kind,
+        _redirect_creative_tool,
+        build_proposed_spec,
+    )
 
     system = turn_system(
         react_system(),
@@ -852,7 +856,11 @@ async def _run_tool_queue(
     cancel: CancellationToken,
 ) -> None:
     """按规划队列串行执行尚未跑过的短工具。"""
-    from app.agent.react import _missing_for_kind, _redirect_creative_tool, build_proposed_spec
+    from app.harness.orchestration.react_adapter import (
+        _missing_for_kind,
+        _redirect_creative_tool,
+        build_proposed_spec,
+    )
 
     executed = set(_executed_names(react))
     pending = [name for name in queue if name and name not in executed]
@@ -932,7 +940,7 @@ async def run_react_loop(
     cancel: CancellationToken,
 ) -> Any:
     """ReAct 行动：优先 MCP JSON 多轮循环，失败则按 tools_needed 串行。"""
-    from app.agent.react import _missing_for_kind, build_proposed_spec
+    from app.harness.orchestration.react_adapter import _missing_for_kind, build_proposed_spec
 
     react = prior or new_artifact()
     _ = PARALLEL_READONLY_TOOLS

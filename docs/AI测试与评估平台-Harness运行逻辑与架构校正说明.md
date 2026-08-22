@@ -3,8 +3,8 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 运行逻辑与架构校正说明 |
-| 版本 | V1.0 |
-| 审查日期 | 2026-08-21 |
+| 版本 | V1.1 |
+| 审查日期 | 2026-08-22 |
 | 适用范围 | `/agent` 的提示词、上下文、记忆、编排、工具执行与反馈闭环 |
 | 事实来源 | 现行 `backend/api/app/agent/`、`routers/ws.py` 及 Agent 开发文档 |
 
@@ -486,12 +486,12 @@ Plan-and-Solve 组出规格
 
 | 文件 | 在本架构中的角色 |
 | :--- | :--- |
-| `backend/api/app/agent/harness.py` | 单回合编排、事件交付、确认边界和 `/stop` 协作 |
+| `backend/api/app/harness/orchestration/session_runtime.py` | 单回合编排、事件交付、确认边界和 `/stop` 协作 |
 | `backend/api/app/agent/persona.py` | 固定系统策略、阶段协议与上下文装配函数 |
 | `backend/api/app/agent/context.py` | 最近消息窗口、ContextMeter 与手动摘要压缩 |
 | `backend/api/app/agent/plan.py` | PlanArtifact、模型规划、解析失败降级 |
 | `backend/api/app/agent/turn_mode.py` | Direct / Chat / ReAct 等模式路由；当前业务编排关闭开关 |
-| `backend/api/app/agent/react.py` | Think-Act-Observe 循环、observation、超时与事件 |
+| `backend/api/app/harness/orchestration/react_adapter.py` / `react_loop.py` | Think-Act-Observe 循环、observation、超时与事件 |
 | `backend/api/app/agent/mcp_registry.py` | 工具元数据、附件参数绑定与唯一执行分派 |
 | `backend/api/app/agent/reflect.py` | 规则门禁与预留的模型辅助复核 |
 | `backend/api/app/routers/ws.py` | 用户消息、确认回执、事件持久化与断线重放 |
@@ -510,8 +510,8 @@ Plan-and-Solve 组出规格
 
 ## 13. 本次文档变更范围
 
-本次仅新增架构说明，不改变 API、数据库、前端行为或 Agent 运行代码。
+V1.1：旧 Agent Harness / ReAct 文件已删除，以上映射同步为当前运行位置；该内部迁移不改变 API、数据库、前端行为或 REST/WS JSON。
 
 | 文件 | 作用 |
 | :--- | :--- |
-| `docs/AI测试与评估平台-Harness运行逻辑与架构校正说明.md` | 依据 Harness/ReAct 分层图解释运行逻辑，校正提示词、上下文、记忆、RAG、ReAct 与编排的概念边界，并标明当前最小 MCP 内核状态。 |
+| `docs/AI测试与评估平台-Harness运行逻辑与架构校正说明.md` | V1.1：同步新会话总控 / ReAct 适配位置，解释运行逻辑并校正提示词、上下文、记忆、RAG、ReAct 与编排的概念边界。 |

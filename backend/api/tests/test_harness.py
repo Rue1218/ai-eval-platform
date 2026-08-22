@@ -11,12 +11,6 @@ import pytest
 
 from app.agent.context import run_compact
 from app.agent.defaults import HARD_MAX_TOOL_ROUNDS, MAX_MODEL_CALLS, is_long_tool
-from app.agent.harness import (
-    _chat_reply,
-    handle_cancel_task,
-    handle_confirm_ack,
-    should_emit_stage_thoughts,
-)
 from app.agent.mcp_tools import redact_secrets, truncate_tool_data
 from app.agent.persona import PERSONA_SYSTEM, turn_system
 from app.agent.plan import (
@@ -34,7 +28,6 @@ from app.agent.plan import (
     run_replan,
     sanitize_plan,
 )
-from app.agent.react import McpStep, ReactArtifact, build_proposed_spec, parse_mcp_step, run_react
 from app.agent.reflect import ReflectArtifact, maybe_model_check, run_gates
 from app.agent.slash import (
     is_unknown_slash,
@@ -54,6 +47,19 @@ from app.errors import AppError, ErrorCode
 from app.harness.contracts.cancellation import CancellationToken, TurnCancelled
 from app.harness.contracts.trace import TraceContext
 from app.harness.llm.client import AgentJsonStreamResult
+from app.harness.orchestration.react_adapter import (
+    McpStep,
+    ReactArtifact,
+    build_proposed_spec,
+    parse_mcp_step,
+    run_react,
+)
+from app.harness.orchestration.session_runtime import (
+    _chat_reply,
+    handle_cancel_task,
+    handle_confirm_ack,
+    should_emit_stage_thoughts,
+)
 from app.models import Dataset, ProtocolProfile, Task, User
 from app.models import Session as AgentSession
 
@@ -77,7 +83,7 @@ def test_chat_reply_persists_completed_reasoning_snapshot(monkeypatch):
         yield "answer", "你好"
 
     monkeypatch.setattr("app.llm.stream_agent_model", _stream)
-    monkeypatch.setattr("app.agent.harness.SessionLocal", lambda: _Db())
+    monkeypatch.setattr("app.harness.orchestration.session_runtime.SessionLocal", lambda: _Db())
     events: list[tuple[str, dict]] = []
 
     async def _emit(event: str, payload: dict, **_kwargs) -> int:
@@ -122,7 +128,7 @@ def test_stream_mcp_step_emits_native_reasoning(monkeypatch):
         events.append((event, payload))
         return len(events)
 
-    from app.agent.react import _stream_mcp_step
+    from app.harness.orchestration.react_adapter import _stream_mcp_step
 
     step = asyncio.run(
         _stream_mcp_step(
@@ -164,7 +170,7 @@ def test_stream_mcp_step_think_arrives_before_slow_content(monkeypatch):
             think_at.append(time.perf_counter() - started)
         return 1
 
-    from app.agent.react import _stream_mcp_step
+    from app.harness.orchestration.react_adapter import _stream_mcp_step
 
     step = asyncio.run(
         _stream_mcp_step(
@@ -1030,7 +1036,7 @@ def test_run_react_continuation_respects_rounds_used(monkeypatch):
     def _fake_exec(_db, name, _arguments, *, user_id, allow_create=False):
         return True, {"items": []}, None, 1
 
-    monkeypatch.setattr("app.agent.react.execute_short_tool", _fake_exec)
+    monkeypatch.setattr("app.harness.orchestration.react_adapter.execute_short_tool", _fake_exec)
     plan = PlanArtifact(
         intent="benchmark",
         skill_id="skill-benchmark",
@@ -1146,7 +1152,7 @@ def test_run_react_stops_at_five_rounds(monkeypatch):
     def _fake_exec(_db, name, _arguments, *, user_id, allow_create=False):
         return True, {"items": []}, None, 1
 
-    monkeypatch.setattr("app.agent.react.execute_short_tool", _fake_exec)
+    monkeypatch.setattr("app.harness.orchestration.react_adapter.execute_short_tool", _fake_exec)
     plan = PlanArtifact(
         intent="benchmark",
         skill_id="skill-benchmark",
@@ -1206,8 +1212,8 @@ def test_run_react_mcp_loop_executes_one_tool_per_round(monkeypatch):
             return True, {"items": [{"id": "p1", "name": "a"}]}, None, 1
         return True, {"items": [{"id": "d1", "name": "ds"}]}, None, 1
 
-    monkeypatch.setattr("app.agent.react._stream_mcp_step", _fake_step)
-    monkeypatch.setattr("app.agent.react.execute_short_tool", _fake_exec)
+    monkeypatch.setattr("app.harness.orchestration.react_adapter._stream_mcp_step", _fake_step)
+    monkeypatch.setattr("app.harness.orchestration.react_adapter.execute_short_tool", _fake_exec)
     plan = PlanArtifact(
         intent="chat",
         skill_id=None,
@@ -1254,8 +1260,8 @@ def test_run_react_long_tool_does_not_execute(monkeypatch):
     def _fake_exec(*_args, **_kwargs):
         raise AssertionError("长任务不得在 ReAct 循环内执行")
 
-    monkeypatch.setattr("app.agent.react._stream_mcp_step", _fake_step)
-    monkeypatch.setattr("app.agent.react.execute_short_tool", _fake_exec)
+    monkeypatch.setattr("app.harness.orchestration.react_adapter._stream_mcp_step", _fake_step)
+    monkeypatch.setattr("app.harness.orchestration.react_adapter.execute_short_tool", _fake_exec)
     plan = PlanArtifact(
         intent="benchmark",
         skill_id="skill-benchmark",
@@ -1299,8 +1305,8 @@ def test_run_react_llm_unavailable_falls_back_to_tools_needed(monkeypatch):
     def _fake_exec(_db, name, _arguments, *, user_id, allow_create=False):
         return True, {"items": [{"id": "p1", "name": "a"}]}, None, 1
 
-    monkeypatch.setattr("app.agent.react._stream_mcp_step", _fail)
-    monkeypatch.setattr("app.agent.react.execute_short_tool", _fake_exec)
+    monkeypatch.setattr("app.harness.orchestration.react_adapter._stream_mcp_step", _fail)
+    monkeypatch.setattr("app.harness.orchestration.react_adapter.execute_short_tool", _fake_exec)
     plan = PlanArtifact(
         intent="benchmark",
         skill_id="skill-benchmark",
@@ -1351,8 +1357,8 @@ def test_run_react_llm_stop_does_not_drain_tools_needed(monkeypatch):
     def _fake_exec(*_args, **_kwargs):
         raise AssertionError("模型停止后不应再执行规划清单")
 
-    monkeypatch.setattr("app.agent.react._stream_mcp_step", _fake_step)
-    monkeypatch.setattr("app.agent.react.execute_short_tool", _fake_exec)
+    monkeypatch.setattr("app.harness.orchestration.react_adapter._stream_mcp_step", _fake_step)
+    monkeypatch.setattr("app.harness.orchestration.react_adapter.execute_short_tool", _fake_exec)
     plan = PlanArtifact(
         intent="benchmark",
         skill_id="skill-benchmark",

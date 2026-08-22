@@ -9,7 +9,6 @@ from types import SimpleNamespace
 import pytest
 
 from app.agent.context import history_for_plan
-from app.agent.harness import _deliver_sentence
 from app.errors import AppError, ErrorCode
 from app.harness.context.compiler import compile_context
 from app.harness.contracts.memory import MemoryQuery, MemoryRecord
@@ -19,6 +18,7 @@ from app.harness.memory.ports import InMemoryMemoryPort
 from app.harness.memory.retention import MemoryRetention
 from app.harness.memory.runtime import append_persisted_conversation_message
 from app.harness.memory.short_term_redis import RedisMemoryPort
+from app.harness.orchestration.session_runtime import _deliver_sentence
 from app.models import Message
 from app.models import Session as AgentSession
 
@@ -381,7 +381,10 @@ def test_deliver_sentence_writes_assistant_message_after_commit(monkeypatch: pyt
         async def emit(_event: str, _payload: dict, *, task_id: str | None = None) -> int:
             return 1
 
-        monkeypatch.setattr("app.agent.harness.append_persisted_conversation_message", append_message)
+        monkeypatch.setattr(
+            "app.harness.orchestration.session_runtime.append_persisted_conversation_message",
+            append_message,
+        )
         with using_trace(trace):
             await _deliver_sentence(db, "session-1", emit, "助手回复")
         assert len(db.added) == 1

@@ -7,10 +7,10 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from ..agent.context import context_meter
-from ..agent.harness import abort_running_turn, session_harness
 from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
+from ..harness.orchestration.session_runtime import abort_running_turn, session_harness
 from ..models import AuditLog, Message, Task, User, WsEvent
 from ..models import Session as AgentSession
 from ..schemas import SessionCreate, SessionOut, SessionSharingUpdate

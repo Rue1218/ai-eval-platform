@@ -3,7 +3,8 @@
 契约依据：docs/AI测试与评估平台-API.md §4 与 PRD 5.1.3。事件统一使用
 ``{"event", "session_id", "task_id", "event_id", "ts", "payload"}`` 公共头，
 上行仅 ``user_message`` / ``confirm_ack`` / ``cancel_task`` 三类消息。
-长任务规划/工具/复核由 ``agent.harness`` 在 asyncio.Task 中执行，本模块收包循环不得 await 整轮。
+长任务规划/工具/复核由 ``harness.orchestration.session_runtime`` 在 asyncio.Task 中执行，
+本模块收包循环不得 await 整轮。
 """
 
 import asyncio
@@ -19,17 +20,17 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..agent.harness import (
+from ..agent.log import agent_trace
+from ..agent.plan import classify_intent_l0
+from ..db import SessionLocal
+from ..errors import AppError
+from ..harness.orchestration.session_runtime import (
     abort_running_turn,
     deep_merge,
     dispatch_user_message,
     handle_cancel_task,
     handle_confirm_ack,
 )
-from ..agent.log import agent_trace
-from ..agent.plan import classify_intent_l0
-from ..db import SessionLocal
-from ..errors import AppError
 from ..models import (
     Message,
     Setting,

@@ -14,10 +14,10 @@ from app.agent.imagegen import (
 )
 from app.agent.mcp_tools import collect_ids, execute_short_tool
 from app.agent.plan import PlanArtifact, l0_plan
-from app.agent.react import run_react
 from app.errors import AppError, ErrorCode
 from app.harness.contracts.cancellation import CancellationToken
 from app.harness.contracts.trace import TraceContext
+from app.harness.orchestration.react_adapter import run_react
 from app.models import StoredFile
 
 
@@ -200,7 +200,10 @@ def test_run_react_passes_imagegen_arguments(tmp_path, monkeypatch):
         captured.update(name=name, arguments=arguments, user_id=user_id)
         return True, {"file_id": "out-1", "content_url": "/api/files/out-1/content"}, None, 12
 
-    monkeypatch.setattr("app.agent.react._execute_short_tool_isolated", _fake_isolated)
+    monkeypatch.setattr(
+        "app.harness.orchestration.react_adapter._execute_short_tool_isolated",
+        _fake_isolated,
+    )
     plan = PlanArtifact(
         intent="chat",
         skill_id=None,
@@ -247,7 +250,10 @@ def test_react_redirects_eval_inventory_when_user_asks_for_photo(monkeypatch):
         captured.append(name)
         return True, {"file_id": "out-1"}, None, 8
 
-    monkeypatch.setattr("app.agent.react._execute_short_tool_isolated", _fake_isolated)
+    monkeypatch.setattr(
+        "app.harness.orchestration.react_adapter._execute_short_tool_isolated",
+        _fake_isolated,
+    )
     plan = PlanArtifact(
         intent="benchmark",
         skill_id="skill-benchmark",

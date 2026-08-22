@@ -9,8 +9,6 @@ from types import SimpleNamespace
 import pytest
 
 from app.agent.defaults import HARD_MAX_TOOL_ROUNDS, TURN_WALL_CLOCK_S
-from app.agent.harness import SessionHarness, abort_running_turn, session_harness
-from app.agent.react import run_react
 from app.harness.contracts.cancellation import (
     DEFAULT_PROPAGATION_BUDGET_MS,
     CancellationToken,
@@ -28,7 +26,13 @@ from app.harness.orchestration.budgets import (
     same_call_fingerprint_cap,
     turn_deadline_s,
 )
+from app.harness.orchestration.react_adapter import run_react
 from app.harness.orchestration.react_loop import emit_and_run_tool, run_react_loop, stream_mcp_step
+from app.harness.orchestration.session_runtime import (
+    SessionHarness,
+    abort_running_turn,
+    session_harness,
+)
 from app.models import Base
 
 
@@ -91,7 +95,7 @@ def test_abort_running_turn_dispatches_within_100ms():
             trace=trace,
             task=task,
         )
-        from app.agent import harness as harness_mod
+        from app.harness.orchestration import session_runtime as harness_mod
 
         harness_mod._HARNESS_BY_SESSION["sess-stop"] = handle
         store = reset_publisher(store=InMemoryPublisher())

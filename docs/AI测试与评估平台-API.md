@@ -2,14 +2,14 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.14 |
+| 文档版本 | V1.15 |
 | 对应 PRD | V1.7.1（功能唯一权威） |
 | 对应设计规范 | V1.3（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | V1.4（Harness / 斜杠 / 上下文算法；JSON 仍以本文为准） |
 | 对应前端计划 | V1.3 |
 | 对应后端计划 | V1.3 |
 | 撰写日期 | 2026-08-18 |
-| 最近修订 | 2026-08-21：V1.14 `audio.speech_synthesis` 支持朗读稿抽取与 TTS 意图词表扩充；V1.13 增加 MiMo STT/TTS 短工具、意图优先级、音频事件交付与安全展示；V1.12 协议档支持独立 Embedding / Reranker 端点配置，三类 API Key 均只写入受控环境文件且不回显；V1.11 通过内部 `mcp_tools` 接入 Qwen Image 图文生图；V1.9 短工具 `audio.voiceclone` 与文件播放；V1.8 助手回复耗时展示 |
+| 最近修订 | 2026-08-22：V1.15 同步 Harness 内部编排模块迁移（无 REST/WS JSON 变更）；2026-08-21：V1.14 `audio.speech_synthesis` 支持朗读稿抽取与 TTS 意图词表扩充；V1.13 增加 MiMo STT/TTS 短工具、意图优先级、音频事件交付与安全展示；V1.12 协议档支持独立 Embedding / Reranker 端点配置，三类 API Key 均只写入受控环境文件且不回显；V1.11 通过内部 `mcp_tools` 接入 Qwen Image 图文生图；V1.9 短工具 `audio.voiceclone` 与文件播放；V1.8 助手回复耗时展示 |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
 ---
@@ -1648,6 +1648,15 @@ MCP 浏览器不调：与 PRD 3.1、前端计划「禁止把 MCP 当 REST」一�
 
 ## 13. 本次修订代码文件与作用清单（2026-08-21）
 
+**V1.15（2026-08-22）— Harness 内部编排迁移（无协议变更）**
+
+`agent/harness.py` 与 `agent/react.py` 已删除，WS 和会话 REST 改为直接使用 `harness/orchestration/session_runtime.py`；事件名、字段、鉴权和错误码均未变化，故本文接口契约仅同步内部代码定位。
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/harness/orchestration/session_runtime.py`、`react_adapter.py` | 承接会话总控与 ReAct 产品适配，保持本文列出的 WS 事件语义不变 |
+| `backend/api/app/routers/ws.py`、`routers/sessions.py` | 直接导入新编排总控，不再经旧 Agent 模块桥接 |
+
 **V1.14（2026-08-21）— 语音合成朗读稿抽取与 TTS 意图词表扩充**
 
 `audio.speech_synthesis` 当模型未显式给出朗读稿时，从用户原话剥离「帮我输出音频 / 朗读一下」等命令前缀与引号、冒号后抽取播报文本，避免把整句命令当朗读稿；`SPEECH_SYNTHESIS_HINTS` 扩充「输出音频 / 生成音频 / 读出来 / 念出来 / 帮我朗读」等中文表达。
@@ -1660,7 +1669,7 @@ MCP 浏览器不调：与 PRD 3.1、前端计划「禁止把 MCP 当 REST」一�
 
 | 文件 | 作用 |
 | --- | --- |
-| `backend/api/app/agent/harness.py` | 保存完整 `think_final` 思考快照；确认/取消确认卡写入 `confirm_ack` 事件 |
+| `backend/api/app/harness/orchestration/session_runtime.py` | 保存完整 `think_final` 思考快照；确认/取消确认卡写入 `confirm_ack` 事件 |
 | `backend/api/app/agent/context.py` | 从持久化事件恢复技能与短 MCP 工具计数，刷新 ContextMeter 不归零 |
 | `backend/api/app/routers/sessions.py` | 历史接口返回 `compact_summary`，恢复压缩后的模型上下文 |
 | `frontend/src/views/Agent.vue` | 回放思考快照、确认回执与历史工具资产，并修正确认卡状态 |
@@ -1679,7 +1688,7 @@ MCP 浏览器不调：与 PRD 3.1、前端计划「禁止把 MCP 当 REST」一�
 | --- | --- |
 | `backend/shared/models.py` | `messages.latency_ms` 字段：assistant 交付句回复耗时（毫秒） |
 | `backend/api/migrations/versions/cf9e2d5b7a01_助手消息增加回复耗时字段.py` | Alembic 迁移：新增 `messages.latency_ms` 列 |
-| `backend/api/app/agent/harness.py` | 回合计时：`_ROUND_STARTED_AT` contextvar 记录回合起点，`_deliver_sentence` 计算耗时并写入 Message，交付 thought 终帧带 `reply_latency_ms` |
+| `backend/api/app/harness/orchestration/session_runtime.py` | 回合计时：`_ROUND_STARTED_AT` contextvar 记录回合起点，`_deliver_sentence` 计算耗时并写入 Message，交付 thought 终帧带 `reply_latency_ms` |
 | `backend/api/app/routers/sessions.py` | `GET /sessions/{id}/messages` 返回 `messages[].latency_ms` |
 | `frontend/src/api/types.ts` | `SessionMessage` 补 `latency_ms` 字段 |
 | `frontend/src/views/Agent.vue` | 历史回放/实时交付帧把 `latency_ms` 落到助手气泡，气泡下方展示「耗时 x 秒」 |

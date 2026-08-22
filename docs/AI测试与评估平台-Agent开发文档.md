@@ -3,9 +3,9 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Agent 独立开发说明书 |
-| 版本 | V1.11 |
+| 版本 | V1.12 |
 | 日期 | 2026-08-22 |
-| 最近修订 | 2026-08-22：自然语言按 CoT 同一轮逐步推理再出结果；不再先打规划 JSON 判定 loop。断线取消只停本轮生成。 |
+| 最近修订 | 2026-08-22：V1.12 删除旧 Agent Harness / ReAct 入口，WS 直连六层编排总控；自然语言按 CoT 同一轮逐步推理再出结果；不再先打规划 JSON 判定 loop。断线取消只停本轮生成。 |
 | 用法 | **实现 `/agent` 以本文为准（Harness / 斜杠 / 窗口算法）。** REST/WS JSON 以 API.md V1.6 为准。完成某项后勾选文末 Task，并在「最近修订」追加一行。 |
 
 本文是评测平台 **Agent 子系统** 的完整开发说明书：目标、边界、运行时骨架、协议、模块、代码落点与验收任务都写在这里。与 PRD / API.md 冲突时，字段名与事件名以那两份为准；Harness、斜杠、上下文算法以本文 §16 为准。§4.6 所列增量已收入 **API.md V1.6**。
@@ -1530,3 +1530,18 @@ CoT（Wei 2022 / 流式 reasoning）：**同一轮生成**里先逐步吐出中�
 | `backend/api/tests/test_harness.py` | 问候/离题/人像改为断言不打规划模型 |
 | `backend/api/tests/test_voiceclone.py` | 问候+音频仍 inject，但不 mock 规划模型 |
 | `docs/AI测试与评估平台-Agent开发文档.md` | §5 / §6 改为同一轮 CoT |
+
+## 37. Harness 编排入口收口（2026-08-22）
+
+旧 `app.agent.harness` 和 `app.agent.react` 已删除，不保留导入兼容壳。下面映射覆盖本文早期变更记录中出现的历史路径；历史章节描述的是当时改动，当前线上代码必须以本表为准。该迁移不改变 API.md 定义的 WS/REST JSON。
+
+| 历史路径 | 当前路径 | 职责 |
+| :--- | :--- | :--- |
+| `backend/api/app/agent/harness.py` | `backend/api/app/harness/orchestration/session_runtime.py` | 单回合编排、异步调度、确认卡、确认回执、`/stop` 与流式交付 |
+| `backend/api/app/agent/react.py` | `backend/api/app/harness/orchestration/react_adapter.py` | ReAct 产品规格组装、循环入口和测试适配锚点 |
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/harness/orchestration/session_runtime.py`、`react_adapter.py`、`react_loop.py` | 删除旧 Agent 双轨后承接运行总控、ReAct 产品适配和循环动态依赖 |
+| `backend/api/app/routers/ws.py`、`routers/sessions.py`、`agent/reflect.py` | 路由和复核模块直接依赖新编排层 |
+| `backend/api/tests/harness/tracing/test_contracts.py` | 断言旧模块不存在且 WS 必须接入新会话总控 |

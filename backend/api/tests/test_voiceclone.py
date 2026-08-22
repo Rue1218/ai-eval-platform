@@ -9,7 +9,6 @@ import pytest
 
 from app.agent.mcp_tools import collect_ids, execute_short_tool
 from app.agent.plan import PlanArtifact, TurnBudget, l0_plan, run_plan
-from app.agent.react import run_react
 from app.agent.slash import parse_slash
 from app.agent.voiceclone import (
     _completions_url,
@@ -20,6 +19,7 @@ from app.agent.voiceclone import (
 from app.errors import AppError, ErrorCode
 from app.harness.contracts.cancellation import CancellationToken
 from app.harness.contracts.trace import TraceContext
+from app.harness.orchestration.react_adapter import run_react
 from app.models import StoredFile
 from app.routers.files import _validate_filename
 
@@ -196,7 +196,10 @@ def test_run_react_passes_voiceclone_arguments(tmp_path, monkeypatch):
         captured["user_id"] = user_id
         return True, {"file_id": "out-1", "content_url": "/api/files/out-1/content"}, None, 12
 
-    monkeypatch.setattr("app.agent.react._execute_short_tool_isolated", _fake_isolated)
+    monkeypatch.setattr(
+        "app.harness.orchestration.react_adapter._execute_short_tool_isolated",
+        _fake_isolated,
+    )
     plan = PlanArtifact(
         intent="chat",
         skill_id=None,

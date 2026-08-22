@@ -1,4 +1,4 @@
-"""阶段 0 契约隔离：内部 ErrorClass、静态 Schema、活路径零引用。"""
+"""Harness 架构契约：内部 ErrorClass、静态 Schema 与线上入口归属。"""
 
 from __future__ import annotations
 
@@ -16,15 +16,9 @@ from app.harness.contracts.memory import MemoryQuery
 API_ROOT = Path(__file__).resolve().parents[3]
 HARNESS_ROOT = API_ROOT / "app" / "harness"
 FORBIDDEN_MODULES = {"redis", "sqlalchemy", "app.llm", "app.adapters", "app.models"}
-LIVE_PATHS_MUST_NOT_IMPORT_HARNESS = (
-    "app/routers/ws.py",
-)
-LIVE_PATHS_MUST_REEXPORT_HARNESS = (
-    "app/llm.py",
-    "app/agent/mcp_tools.py",
-    "app/agent/mcp_registry.py",
-    "app/agent/react.py",
+LEGACY_COORDINATOR_PATHS = (
     "app/agent/harness.py",
+    "app/agent/react.py",
 )
 
 
@@ -87,18 +81,29 @@ def test_app_py_does_not_assemble_runtime():
     assert "build_runtime" not in functions
 
 
-def test_ws_and_session_harness_do_not_import_harness():
-    """WS 收包循环不直接引用六层包；总控经 agent.harness 注入 token。"""
-    for rel in LIVE_PATHS_MUST_NOT_IMPORT_HARNESS:
-        text = (API_ROOT / rel).read_text(encoding="utf-8")
-        assert "app.harness" not in text, rel
+def test_ws_routes_to_new_session_runtime():
+    """线上 WS 入口必须直接使用新编排总控，不能再经旧 Agent 桥接。"""
+    imported = _imported_modules(API_ROOT / "app" / "routers" / "ws.py")
+    assert "harness.orchestration.session_runtime" in imported
 
 
-def test_phase1_reexport_modules_import_harness():
-    """阶段 1 薄再导出必须指向 harness 正文。"""
-    for rel in LIVE_PATHS_MUST_REEXPORT_HARNESS:
-        text = (API_ROOT / rel).read_text(encoding="utf-8")
-        assert "app.harness" in text, rel
+def test_legacy_agent_harness_modules_are_removed():
+    """旧 Harness / ReAct 协调器不得以兼容壳残留，防止双轨重新出现。"""
+    for rel in LEGACY_COORDINATOR_PATHS:
+        assert not (API_ROOT / rel).exists(), rel
+
+    for path in (API_ROOT / "app").rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        assert "app.agent.harness" not in text, path
+        assert "app.agent.react" not in text, path
+        tree = ast.parse(text)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom):
+                continue
+            assert node.module not in {"app.agent.harness", "app.agent.react"}, path
+            if node.module == "app.agent":
+                imported_names = {alias.name for alias in node.names}
+                assert not ({"harness", "react"} & imported_names), path
 
 
 def test_execution_and_feedback_do_not_import_llm():

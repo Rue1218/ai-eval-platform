@@ -8,7 +8,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.agent.harness import _deliver_sentence
 from app.agent.plan import PlanArtifact
 from app.errors import AppError, ErrorCode
 from app.harness.contracts.cancellation import CancellationToken
@@ -30,6 +29,7 @@ from app.harness.orchestration.parallel_facade import (
 )
 from app.harness.orchestration.parser import McpStep, parse_model_payload, validate_react_output
 from app.harness.orchestration.react_loop import _emit_and_run_batch, _run_mcp_react_loop
+from app.harness.orchestration.session_runtime import _deliver_sentence
 
 
 class _Db:
@@ -369,7 +369,10 @@ def test_final_reply_finalizes_before_emit_and_finishes_after_commit(
             """本用例只验证阶段 3 状态时序，不接入阶段 4 的记忆适配器。"""
             return None
 
-        monkeypatch.setattr("app.agent.harness.append_persisted_conversation_message", _append_memory)
+        monkeypatch.setattr(
+            "app.harness.orchestration.session_runtime.append_persisted_conversation_message",
+            _append_memory,
+        )
         with using_trace(trace):
             await _deliver_sentence(db, "session-stage3", _emit, "已完成")
         assert statuses_at_emit == [TurnStatus.FINALIZING_STREAM]

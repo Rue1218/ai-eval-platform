@@ -7,8 +7,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.agent.harness import handle_confirm_ack
 from app.errors import AppError, ErrorCode
+from app.harness.orchestration.session_runtime import handle_confirm_ack
 from app.models import AuditLog, Task, User
 from app.models import Session as AgentSession
 from app.routers.sessions import delete_session

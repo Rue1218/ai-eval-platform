@@ -3,7 +3,7 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 分阶段实施总册 |
-| 版本 | V1.11 |
+| 版本 | V1.12 |
 | 审查日期 | 2026-08-22 |
 | 用法 | 每个阶段先读对应施工文档的五块分析（与阶段 0 同一模板），再开分支写代码。架构文档第七至十一章只做需求索引；**第十二章为覆盖矩阵与挂起项** |
 
@@ -15,7 +15,7 @@
 | 1 | [阶段1-单调用路径](docs/AI测试与评估平台-Harness阶段1-单调用路径.md) V1.3 | `feat/harness-single-call` | 编排/执行/反馈接管单工具循环 | 验收完成，已合入 `main` |
 | 2 | [阶段2-链路追踪与取消](docs/AI测试与评估平台-Harness阶段2-链路追踪与取消.md) V1.3 | `feat/harness-trace-cancel` | 强制 trace/cancel + 三张审计表 | 验收完成，已合入 `main` |
 | 3 | [阶段3-并行与流式收尾](docs/AI测试与评估平台-Harness阶段3-并行与流式收尾.md) V1.6 | 原实现 `feat/harness-parallel-streaming`；修复 `fix/harness-stage3-comments` | 批次并行能力默认关；流式终态 | 3 个 P1、1 个 P2 已修复，PR #73 已合入 `main` |
-| 4 | [阶段4-记忆层接入](docs/AI测试与评估平台-Harness阶段4-记忆层接入.md) V1.7 | `fix/memory-activation` | MemoryPort + Redis/pgvector；不接 LightRAG | 阶段 4.2 已补 pgvector 知识表/ACL Port 并通过真实 Redis/PG CI 服务测试；未授权扩充 forget REST/WS，**阶段 4 未验收** |
+| 4 | [阶段4-记忆层接入](docs/AI测试与评估平台-Harness阶段4-记忆层接入.md) V1.8 | `fix/memory-activation` → `refactor/harness-cutover` | MemoryPort + Redis/pgvector；收口 WS 到新编排总控；不接 LightRAG | 阶段 4.2 已补 pgvector 知识表/ACL Port 并通过真实 Redis/PG CI 服务测试；旧 Harness 双轨已删除。未授权扩充 forget REST/WS，**阶段 4 未验收** |
 
 规则：
 
@@ -63,10 +63,11 @@
 
 ## 本次文档变更范围
 
-V1.11：阶段 3 评论修复已随 PR #73 合入 `main`；阶段 4.1 的首批 P1/P2 和独立审查两个 P1 均已在 `fix/memory-activation` 修复。阶段 4.2 新增同库 pgvector 知识表、向量 ACL/撤权 Port、运行时组合装配和 PostgreSQL/Redis CI 服务测试；本机 392 项 pytest 通过（容器用例因无 Docker 跳过），PR #67 的真实服务任务已通过。forget 仍无对外产品入口，阶段 4 不构成验收。
+V1.12：在阶段 4.2 的记忆实现之后，`refactor/harness-cutover` 完成生产 WS 总控切换并删除 `agent/harness.py` / `agent/react.py`，消除旧新双轨；由架构契约测试防止回流。该项不改变阶段 4 的产品验收边界：forget 仍无对外产品入口，阶段 4 不构成验收。
 
 | 文件 | 作用 |
 | :--- | :--- |
-| `docs/AI测试与评估平台-Harness分阶段实施总册.md` | V1.11：同步阶段 4.2 pgvector 与容器 CI 门禁状态 |
+| `docs/AI测试与评估平台-Harness分阶段实施总册.md` | V1.12：同步旧 Harness 删除、WS 切换与阶段边界 |
+| `docs/AI测试与评估平台-Harness六层ReAct核心架构设计.md` | V1.14：更新现状映射和禁止双轨回流的架构约束 |
 | `docs/AI测试与评估平台-Harness阶段3-并行与流式收尾.md` | V1.6：记录四项评论修复已合入 `main` |
-| `docs/AI测试与评估平台-Harness阶段4-记忆层接入.md` | V1.7：记录阶段 4.2 实现、容器验收与产品入口边界 |
+| `docs/AI测试与评估平台-Harness阶段4-记忆层接入.md` | V1.8：记录阶段 4.2 实现、旧 Harness 收口与产品入口边界 |
