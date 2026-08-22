@@ -3,9 +3,9 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Agent 独立开发说明书 |
-| 版本 | V1.11 |
+| 版本 | V1.12 |
 | 日期 | 2026-08-22 |
-| 最近修订 | 2026-08-22：自然语言按 CoT 同一轮逐步推理再出结果；不再先打规划 JSON 判定 loop。断线取消只停本轮生成。 |
+| 最近修订 | 2026-08-22：自然语言按 CoT 同一轮逐步推理再出结果；不再先打规划 JSON 判定 loop。断线取消只停本轮生成；大模型调用层独立到 `app/llm/`，Harness 仅通过公开门面调用。 |
 | 用法 | **实现 `/agent` 以本文为准（Harness / 斜杠 / 窗口算法）。** REST/WS JSON 以 API.md V1.6 为准。完成某项后勾选文末 Task，并在「最近修订」追加一行。 |
 
 本文是评测平台 **Agent 子系统** 的完整开发说明书：目标、边界、运行时骨架、协议、模块、代码落点与验收任务都写在这里。与 PRD / API.md 冲突时，字段名与事件名以那两份为准；Harness、斜杠、上下文算法以本文 §16 为准。§4.6 所列增量已收入 **API.md V1.6**。
@@ -526,7 +526,7 @@ ChatHead 右侧（或输入框上方）常驻，压缩或新消息后立刻更�
 | 路径 | 负责 |
 | :--- | :--- |
 | `backend/api/app/routers/ws.py` | 连接、落库、发事件；业务应逐步交给 Harness |
-| `backend/api/app/llm.py` | 三协议调用；已返回 `latency_ms`（WS 事件与卡片展示仍见 AGT-LLM-02） |
+| `backend/api/app/llm/` | 三协议调用；已返回 `latency_ms`（WS 事件与卡片展示仍见 AGT-LLM-02） |
 | `backend/api/app/routers/sessions.py` | 会话与回放 |
 | `backend/api/app/routers/mcp.py` | 短工具清单 |
 | `backend/api/app/routers/tasks.py` | REST 下单 / 取消 / 重跑 |
@@ -1228,7 +1228,7 @@ except AppError as exc:
 | `backend/api/app/agent/log.py` | `agent_trace` → stderr `[agent] ...` |
 | `backend/api/app/agent/lightrag_stub.py` | `LIGHTRAG_ENABLED=False`；`assert_lightrag_ready` / `query_lightrag` 抛 `VALIDATION` |
 | `backend/api/app/agent/long_tasks.py` | Agent 调 `benchmark.run` 等长工具抛 `VALIDATION` |
-| `backend/api/app/llm.py` | 打印协议/模型/耗时；已返回 `latency_ms`；失败归一 UPSTREAM/TIMEOUT |
+| `backend/api/app/llm/` | 打印协议/模型/耗时；已返回 `latency_ms`；失败归一 UPSTREAM/TIMEOUT |
 | `backend/api/app/routers/ws.py` | RAG 意图走 stub；`user_message`/`confirm_ack` 捕获 AppError |
 | `backend/worker/app/main.py` | `kind=rag` **不得 mock 成功**，failed + 控制台 `[worker] skip rag` |
 

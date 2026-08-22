@@ -1668,7 +1668,7 @@ MCP 浏览器不调：与 PRD 3.1、前端计划「禁止把 MCP 当 REST」一�
 | `backend/api/app/profile_env.py` | 按 profile 生成环境变量名，在 bind mount 文件上加锁刷新/删除/回滚 URL、模型 ID、API Key |
 | `backend/api/app/routers/profiles.py` | 协议档 CRUD 改为环境文件存储，旧密文迁移，连通性检查读取环境参数 |
 | `backend/api/app/routers/admin.py` | 切换 Agent 协议档时同步兼容 `LLM_*` 环境别名 |
-| `backend/api/app/llm.py` | Agent 调用优先读取 profile 环境变量，兼容旧全局 LLM 环境变量 |
+| `backend/api/app/llm/` | Agent 调用优先读取 profile 环境变量，兼容旧全局 LLM 环境变量 |
 | `backend/worker/app/profile_env.py` | Worker 只读共享环境文件并隔离多供应商配置 |
 | `backend/worker/app/benchmark.py` / `backend/worker/app/testcase.py` | 评测与用例生成调用改读环境文件参数 |
 | `docker-compose.yml` / `.env.example` | API 可写、Worker 只读挂载服务器 `.env`，新增 `PROFILE_ENV_FILE` |

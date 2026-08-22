@@ -1,10 +1,14 @@
-"""Agent 协议档的短同步调用助手；正文在 harness.llm，本模块只再导出。"""
+"""独立大模型调用层公开门面。
 
-from __future__ import annotations
+本门面只暴露模型协议调用、流式读取、协议档信息和结构化解析；
+Agent Harness、ReAct、确认卡、事件和 Worker 均不得在此实现。
+"""
 
 from app.adapters import call_protocol, stream_protocol
-from app.harness.llm.client import (
+
+from .client import (
     CALL_TIMEOUT_S,
+    STREAM_TIMEOUT_S,
     AgentCallResult,
     AgentJsonStreamResult,
     AgentProfilePublicInfo,
@@ -15,12 +19,11 @@ from app.harness.llm.client import (
     stream_agent_json,
     stream_agent_model,
 )
-from app.harness.llm.structured import parse_json_candidates
-
-_resolve_agent_profile = resolve_agent_profile
+from .structured import parse_json_candidates
 
 __all__ = [
     "CALL_TIMEOUT_S",
+    "STREAM_TIMEOUT_S",
     "AgentCallResult",
     "AgentJsonStreamResult",
     "AgentProfilePublicInfo",

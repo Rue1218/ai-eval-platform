@@ -20,7 +20,6 @@ LIVE_PATHS_MUST_NOT_IMPORT_HARNESS = (
     "app/routers/ws.py",
 )
 LIVE_PATHS_MUST_REEXPORT_HARNESS = (
-    "app/llm.py",
     "app/agent/mcp_tools.py",
     "app/agent/mcp_registry.py",
     "app/agent/react.py",
@@ -95,10 +94,19 @@ def test_ws_and_session_harness_do_not_import_harness():
 
 
 def test_phase1_reexport_modules_import_harness():
-    """阶段 1 薄再导出必须指向 harness 正文。"""
+    """阶段 1 Agent 兼容模块仍必须指向 Harness 正文。"""
     for rel in LIVE_PATHS_MUST_REEXPORT_HARNESS:
         text = (API_ROOT / rel).read_text(encoding="utf-8")
         assert "app.harness" in text, rel
+
+
+def test_llm_layer_isolated_from_harness_and_agent():
+    """独立模型调用层不得反向依赖 Harness 或 Agent 编排实现。"""
+    llm_root = API_ROOT / "app" / "llm"
+    for path in llm_root.rglob("*.py"):
+        imported = _imported_modules(path)
+        assert "app.harness" not in imported, path.name
+        assert "app.agent" not in imported, path.name
 
 
 def test_execution_and_feedback_do_not_import_llm():

@@ -1,4 +1,4 @@
-"""最终回复交付状态：正文读取仍由 ``harness.llm`` 唯一正文负责。"""
+"""最终回复交付状态：模型正文由独立 ``app.llm`` 层提供。"""
 
 from __future__ import annotations
 

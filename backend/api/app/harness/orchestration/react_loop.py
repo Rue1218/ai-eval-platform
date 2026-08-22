@@ -429,7 +429,7 @@ def _call_mcp_step(
 ) -> ReactDecision:
     """同步调用模型，只要 JSON 决策，不走 function calling。
 
-    经 ``app.llm`` 再导出以保留 monkeypatch 锚点；正文在 ``harness.llm.client``。
+    通过独立 ``app.llm`` 调用层获取模型正文；本模块只负责解析和循环控制。
     """
     from app.llm import call_agent_model_detailed
 
@@ -462,7 +462,7 @@ async def stream_mcp_step(
 ) -> ReactDecision:
     """流式跑一轮 MCP 决策：推理链走 thought.stream=think，正文只解析 JSON。
 
-    ``trace`` / ``cancel`` 不可缺省。经 ``app.llm`` 再导出以保留 monkeypatch 锚点。
+    ``trace`` / ``cancel`` 不可缺省；模型流由独立 ``app.llm`` 层提供。
     """
     from app.db import SessionLocal
     from app.llm import stream_agent_model

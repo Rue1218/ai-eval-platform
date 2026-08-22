@@ -11,7 +11,7 @@ def _prefixed(message: str) -> str:
     if message.startswith("trace_id="):
         return message
     try:
-        from app.harness.contracts.trace import current_trace, format_trace_prefix
+        from app.runtime.trace import current_trace, format_trace_prefix
 
         trace = current_trace()
         if trace is not None:

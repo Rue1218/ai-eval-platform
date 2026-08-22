@@ -3,16 +3,27 @@
 | 属性 | 内容 |
 | :--- | :--- |
 | **文档名称** | Agent 子系统大模型接入与耗时技术方案 |
-| **文档版本** | V1.2 (全量审查与修改记录归档) |
+| **文档版本** | V1.3 (模型调用层独立隔离) |
 | **基线参考** | 《AGENTS.md》最高规范、《Agent开发文档》§6 / §4.6 / §5.2.1 / §16.7、API.md V1.4、PRD 6.2 |
-| **责任模块** | 后端 `backend/api/app/llm.py` + `ws.py` + `adapters.py` + 前端 `frontend/src/*` |
-| **审查日期** | 2026-08-19 |
+| **责任模块** | 后端 `backend/api/app/llm/` + `runtime/` + `adapters.py`；调用方为 Harness/REST/WS |
+| **审查日期** | 2026-08-22 |
 
 ---
 
 ## 1. 方案背景与设计边界
 
 本技术方案针对评测平台 Agent 子系统的 **「大模型接入」** 与 **「三层耗时感知」** 进行完整的架构设计、接口契约冻结与落地指导，对应 Task 编号 `AGT-LLM-01` 与 `AGT-LLM-02`。
+
+### 1.3 当前模型调用层边界（2026-08-22）
+
+本次架构调整将「受控 Agent Harness、流式 ReAct、人工确认、事件驱动异步任务队列」视为上层业务编排，不再放入大模型调用层。独立调用层只保留：
+
+1. 协议档解析、API Key 读取与脱敏的模型连接配置；
+2. OpenAI Chat、OpenAI Responses、Anthropic Messages 三协议的同步/流式适配；
+3. `AgentCallResult`、流式 reasoning/content 分片和 JSON 候选解析；
+4. 超时、取消、上游异常到统一 `AppError` 的归一化，以及模型协议/名称/耗时日志。
+
+模型层禁止依赖 `app.agent`、`app.harness`、确认卡、工具白名单、WS 事件、任务表和 Worker。`app/harness/llm/` 仅保留兼容导出，正文唯一位于 `backend/api/app/llm/`；取消令牌与链路追踪放在无业务依赖的 `backend/api/app/runtime/`。
 
 ### 1.1 核心设计目标
 1. **单一 Agent 驱动模型**：由系统全局设置 `settings.agent_profile_id` 绑定唯一的模型协议档，驱动 Agent 意图识别、规划拆解与页面 AI 候选生成；
@@ -52,7 +63,7 @@ FastAPI Agent Host
 
 ## 3. 大模型接入层设计
 
-### 3.1 协议档检索与单模型绑定 (`backend/api/app/llm.py`)
+### 3.1 协议档检索与单模型绑定 (`backend/api/app/llm/`)
 
 Agent 复用平台的 `protocol_profiles` 协议档系统，通过系统设置项指定驱动源。
 
@@ -323,7 +334,7 @@ agent_trace(f"模型调用完成 protocol={profile.protocol} model={profile.mode
 
 | 序号 | 代码文件路径 | 变更类型 | 核心作用与改动说明 |
 | :--- | :--- | :---: | :--- |
-| 1 | `backend/api/app/llm.py` | **修改** | **Agent 核心大模型接入层**：<br>1. 实现 `resolve_agent_profile(db)`：从 `settings.agent_profile_id` 解析唯一绑定的驱动协议档，未配置时统一抛出 `AppError(VALIDATION)`（400）；<br>2. 实现 `get_agent_profile_public_info(db)`：提取公开只读脱敏信息（ID/名称/模型名/协议名）；<br>3. 定义 `AgentCallResult` 出参数据结构（包含 `text`, `latency_ms`, `usage`, `raw`）；<br>4. 实现 `call_agent_model` 与 `call_agent_model_detailed`：经由三协议统一适配器发起调用，精确计量端到端毫秒耗时并完成日志安全脱敏；<br>5. 异常严格归一化为 10 大标准错误码（`VALIDATION`/`UPSTREAM`/`TIMEOUT`/`INTERNAL`）。 |
+| 1 | `backend/api/app/llm/` | **修改/拆分** | **独立 Agent 核心大模型调用层**：协议档解析、公开脱敏信息、`AgentCallResult`、同步/流式三协议调用、JSON 解析、真实耗时与 10 大错误码归一；不再承载 Harness、ReAct、确认或任务队列。 |
 | 2 | `backend/api/app/adapters.py` | **修改** | **三协议适配器与流式模型调用层**：<br>1. 增强 `stream_protocol` 中 `delta_of` 的思考字段自适应提取：同时兼容 `reasoning_content`、`reasoning` 与 `thought` 字段名，全面覆盖 DeepSeek、Mimo、Qwen、Ollama 等各品牌推理模型的思考链解析；<br>2. 增强非思考流式与单块（non-SSE）响应兜底机制，保障上游网关不丢字。 |
 | 3 | `backend/api/app/routers/ws.py` | **修改** | **WebSocket 智能体双向通信与意图分发中枢**：<br>1. **解除回复长度限制**：重构 `_LLM_SYSTEM` 系统提示词，移除「一句话简洁回复」强制约束，明确指示模型严格按照用户要求的篇幅（如 500 字）展开，严禁在回复中暴露「输出结构化JSON」等元指令话术；<br>2. **流式 Token 与超时扩容**：将 `_stream_llm_plan` 的 `max_tokens` 从 512 扩大至 4096，`timeout_s` 扩大至 45.0s，避免推理模型在长思考链（Reasoning）后耗尽 Token 截断正文；<br>3. **纯文本降级容错**：`_parse_llm_json` 增加非 JSON 纯文本自动提取为 `chat` 意图机制，确保模型输出自然语言时绝不丢字、不报错；<br>4. **全链路真实耗时透传**：在 `_call_tool`、`_stream_llm_plan`、`_handle_user_message` 与 `_handle_rule_intent` 中全面计算并下发 `latency_ms` 字段至 `thought` 终帧与 `tool_result` 事件；<br>5. **历史上下文消息去重**：从数据库加载前 20 条历史时排除刚落库的当前用户消息，避免 Prompt 中历史尾部重复灌入当前消息；<br>6. **意图分类分流**：区分 `chat` 闲聊问候与 `benchmark`/`testcase`/`rag`/`report`，闲聊仅自然语言交互，绝不出确认卡、不调短工具；<br>7. **控制台断点日志追踪**：在 WS 接收、流式分发、工具调用、耗时计算各关键节点打齐脱敏的 `agent_trace`。 |
 | 4 | `backend/api/tests/test_agent_llm.py` | **新建** | **大模型接入与耗时计算自动化单测**：包含 9 个专项单测，覆盖模型正常调用、耗时返回、未配置协议档报错、上游 502/超时归一化、敏感密钥脱敏校验以及公开信息接口验证。 |
@@ -348,3 +359,19 @@ agent_trace(f"模型调用完成 protocol={profile.protocol} model={profile.mode
 - **代码静态扫描**：`ruff check .` 0 警告 0 错误通过；
 - **前端生产构建**：`npm run build` Vite 生产打包 0 错误通过；
 - **发布状态**：代码已全部合入 `main` 分支并推送到远程仓库，通过 GitHub Actions CD 自动部署至生产环境。
+
+---
+
+## 11. V1.3 修改代码文件与作用清单（2026-08-22）
+
+| 文件 | 作用 |
+| --- | --- |
+| `backend/api/app/llm/__init__.py` | 独立模型调用层公开门面，暴露同步/流式调用、协议适配和结构化解析，不承载 Agent 编排。 |
+| `backend/api/app/llm/client.py` | 从 Harness 中迁出的协议档解析、三协议调用、流式 reasoning/content 分片、耗时和错误归一。 |
+| `backend/api/app/llm/structured.py` | 独立的候选 JSON 数组解析。 |
+| `backend/api/app/llm/log.py` | 模型层脱敏日志，不依赖 Agent 日志模块。 |
+| `backend/api/app/runtime/cancellation.py` | 跨层取消令牌和统一取消异常。 |
+| `backend/api/app/runtime/trace.py` | 跨层 TraceContext 与日志上下文。 |
+| `backend/api/app/harness/llm/client.py` | 仅保留指向 `app.llm` 的兼容导出，避免旧调用方一次性断裂。 |
+| `backend/api/app/harness/contracts/{cancellation,trace}.py` | 仅保留 `app.runtime` 兼容导出，移除模型层对 Harness 契约的反向依赖。 |
+| `backend/api/tests/harness/tracing/test_contracts.py` | 增加模型层不得导入 Harness/Agent 的静态隔离门禁。 |
