@@ -3,14 +3,14 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 阶段 4 — 记忆层接入 |
-| 版本 | V1.2 |
-| 审查日期 | 2026-08-21 |
-| 文档性质 | **开工前分析文档**（需求分析、功能点、实现路径、技术难点与对策）；未勾验收前禁止把 Redis/pgvector 当「已经迁完六层」 |
+| 版本 | V1.3 |
+| 审查日期 | 2026-08-22 |
+| 文档性质 | **施工中分析与交付状态文档**；当前仅完成第一批可单测的基础组件，未勾验收前禁止把 Redis/pgvector 当「已经迁完六层」 |
 | 对应目标架构 | 架构文档 §2.1 / §3.1 / §5.2 / §5.3 / §5.4（消息表溯源列） |
-| 前置阶段权威 | 阶段 0 已冻结 `MemoryPort` / `MemoryQuery` / `CompiledContext`（`trace_id` 必填）；阶段 3 状态机稳定 |
+| 前置阶段权威 | 阶段 0 已冻结 `MemoryPort` / `MemoryQuery` / `CompiledContext`（`trace_id` 必填）；阶段 3 仍未通过审查，待修项不因本阶段启动而失效 |
 | 产品/协议裁决 | API.md `GET /api/sessions/{id}/messages` 的 `context_meter` 字段冻结；PRD 确认卡默认值不变 |
 | 分支 | `feat/harness-memory-port` |
-| 前置依赖 | 阶段 3 验收通过 |
+| 启动裁决 | 用户于 2026-08-22 明确授权受控启动阶段 4；该授权不解除阶段 3 的未验收结论，阶段 4 在完成自身验收前不得合入 `main` |
 | 后续 | LightRAG / RAG 评测 **不在本阶段**；独立评审。禁止创建 `long_term_lightrag.py` |
 
 ---
@@ -184,6 +184,8 @@
 6. `context.py` / compact 接线；ContextMeter 兼容。
 7. grep 隔离 + 全量 API/Agent 测试。
 
+**当前进度（2026-08-22）**：已完成第 3 步的内存 Port 基础测试，以及第 5 步的纯 Context 编译、窗口、溯源和重排基础实现；Redis 适配器已写入骨架代码，但尚未完成依赖声明、集成测试和运行时装配。第 2、4、6、7 步仍未完成。
+
 ### 5.3 代码落点
 
 | 功能点 | 文件 |
@@ -267,6 +269,20 @@
 
 ---
 
+## 7.1 当前代码审查结论（V1.3）
+
+本次仅审查 `feat/harness-memory-port` 相对 `origin/main` 的第一批实现；`ruff` 通过，`tests/harness/memory/test_memory_context.py` 的 4 项单测通过。该结果不构成阶段 4 验收，以下问题必须在合入前处理：
+
+1. **P1：未接入活路径。** `compile_context()`、`CompositeMemoryPort` 和 `RedisMemoryPort` 没有被 `app/agent/` 或运行时装配引用，现网仍直接使用 `agent/context.py` 的数据库查询；因此记忆与窗口能力尚未对真实请求生效。
+2. **P1：历史消息角色被改写。** `window_manager.py` 当前把除 system/session_state 外的所有 `ContextItem` 都输出为 `user`，未来接入后会把 assistant 历史和工具 observation 错当用户消息，破坏对话语义。
+3. **P1：会话记录的归属校验可被缺失 metadata 绕过。** `is_record_visible()` 将缺少 tenant/user/session 的字段视作允许；对 conversation 记录而言，一条没有归属 metadata 的记录会被任意已通过 Query 校验的租户、用户和会话召回。必须按记录类型强制最小归属字段，并补跨租户/跨会话的拒绝测试。
+4. **P1：Redis 适配器不可部署。** `RedisMemoryPort.from_url()` 依赖 `redis` 包，但项目依赖清单尚未声明该运行依赖，也没有 Redis TTL / 故障路径测试。
+5. **P2：撤权容错不一致。** Redis `forget()` 遇到一条损坏的序列化记录会整体失败；retrieve 已选择跳过损坏记录，两处行为应统一，并记录受限服务端诊断。
+
+上述问题与阶段 3 的待修项彼此独立；阶段 3 仍不得合入，阶段 4 也不得因基础组件已存在而提前合入。
+
+---
+
 ## 8. 本阶段交付后（V1.0 六层首期闭环）
 
 ```text
@@ -281,8 +297,12 @@ security/ 三文件、reflect/plan 迁入、persona YAML、外部 MCP 生态、�
 
 ## 修改代码文件与作用清单
 
-V1.2：窗口最小布局升 P0、MemoryQuery 行为收紧、标明阶段 4 结束后仍挂起的 MCP/security。**尚未写业务代码**。
+V1.3：根据已推送的第一批阶段 4 实现与代码审查更新真实交付状态。已实现内存 Port、Redis 适配器骨架、纯 Context 编译和基础单测；未实现运行时接线、PG/pgvector、Alembic、ContextMeter 对齐与 Redis 集成测试，且存在本章 §7.1 的合入阻塞项。
 
 | 文件 | 作用 |
 | :--- | :--- |
-| `docs/AI测试与评估平台-Harness阶段4-记忆层接入.md` | 本文 |
+| `backend/api/app/harness/contracts/memory.py` | 收紧检索归属和 trace 校验契约 |
+| `backend/api/app/harness/memory/ports.py`、`retention.py`、`short_term_redis.py` | 内存/组合 Port、保留期和 Redis 短期适配器骨架 |
+| `backend/api/app/harness/context/compiler.py`、`window_manager.py`、`policies.py`、`provenance.py`、`reranker.py`、`retriever_facade.py`、`summarizer.py` | 纯 Context 召回、筛选、压缩、重排和窗口构建 |
+| `backend/api/tests/harness/memory/test_memory_context.py` | 内存 Port 与基础窗口单测 |
+| `docs/AI测试与评估平台-Harness阶段4-记忆层接入.md` | V1.3：施工实际状态、审查阻塞项和代码作用清单 |
