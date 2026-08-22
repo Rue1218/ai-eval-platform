@@ -1,11 +1,12 @@
 """三协议档的安全 CRUD 和真实连通性检查接口。"""
 
+import logging
+
 from fastapi import APIRouter, Depends
 from fastapi import Request as FastApiRequest
 from sqlalchemy.orm import Session
 
 from ..adapters import call_protocol, fetch_remote_models
-from ..agent.log import agent_trace
 from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
@@ -24,6 +25,7 @@ from ..schemas import FetchModelsIn, ProfileCreate, ProfileOut, ProfileUpdate
 from ..security import decrypt_secret
 
 router = APIRouter(prefix="/api/profiles", tags=["profiles"])
+logger = logging.getLogger("ai-eval.profiles")
 
 
 def _legacy_api_key(profile: ProtocolProfile) -> str | None:
@@ -35,7 +37,7 @@ def _legacy_api_key(profile: ProtocolProfile) -> str | None:
     except AppError:
         raise
     except Exception as exc:
-        agent_trace(f"协议档历史密文解密失败 type={type(exc).__name__}")
+        logger.warning("协议档历史密文解密失败 type=%s", type(exc).__name__)
         raise AppError(ErrorCode.INTERNAL, "协议档凭据读取失败") from exc
 
 
@@ -68,7 +70,7 @@ def _profile_connection(
     except AppError:
         raise
     except Exception as exc:
-        agent_trace(f"协议档环境配置读取失败 type={type(exc).__name__}")
+        logger.warning("协议档环境配置读取失败 type=%s", type(exc).__name__)
         raise AppError(ErrorCode.INTERNAL, "协议档环境配置读取失败") from exc
 
 
@@ -109,7 +111,7 @@ def _profile_out(profile: ProtocolProfile, connection: tuple[str, str, str | Non
     except AppError:
         raise
     except Exception as exc:
-        agent_trace(f"协议档响应环境读取失败 type={type(exc).__name__}")
+        logger.warning("协议档响应环境读取失败 type=%s", type(exc).__name__)
         raise AppError(ErrorCode.INTERNAL, "协议档环境配置读取失败") from exc
     return ProfileOut(
         id=profile.id,

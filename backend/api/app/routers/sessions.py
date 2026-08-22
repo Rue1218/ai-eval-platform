@@ -6,8 +6,6 @@ from fastapi import APIRouter, Depends, Response
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from ..agent.context import context_meter
-from ..agent.harness import abort_running_turn, session_harness
 from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
@@ -136,7 +134,6 @@ def get_session_messages(
         }
         for row in authors
     }
-    meter = context_meter(db, session)
     return {
         "messages": [
             {
@@ -166,10 +163,9 @@ def get_session_messages(
         "pending_confirm": session.pending_confirm,
         "pending_confirm_author_id": session.pending_confirm_author_id,
         "pending_confirm_author": author_map.get(session.pending_confirm_author_id),
-        # 压缩摘要是模型窗口的一部分，历史接口必须与 context_meter 一起返回，
-        # 否则刷新后前端只能看到裁剪后的消息，无法恢复完整上下文状态。
+        # 新 Agent 上下文模型尚未确定，暂时不计算旧 ContextMeter。
         "compact_summary": session.compact_summary,
-        "context_meter": meter.as_dict(),
+        "context_meter": None,
     }
 
 
@@ -181,9 +177,6 @@ async def delete_session(
 ) -> Response:
     """软删除空闲会话，不物理删除审计消息、事件、任务或报告。"""
     session = require_session_owner(db, session_id, user.id, lock=True)
-    running_harness = session_harness(session.id)
-    if running_harness and running_harness.task and not running_harness.task.done():
-        raise AppError(ErrorCode.VALIDATION, "正在生成回复，请先停止生成后再删除会话")
     if session.pending_confirm:
         raise AppError(ErrorCode.VALIDATION, "存在待确认任务，请先确认或取消后再删除会话")
     active_task = (
@@ -205,7 +198,6 @@ async def delete_session(
         )
     )
     db.commit()
-    # 删除完成后统一断开 owner 与协作者，并取消仍在跑的 Harness 回合。
-    abort_running_turn(session.id, reason="session_close")
+    # 删除完成后统一断开 owner 与协作者。
     await SESSION_CONNECTION_HUB.close_all(session.id)
     return Response(status_code=204)

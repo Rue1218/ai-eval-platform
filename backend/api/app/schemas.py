@@ -565,11 +565,7 @@ class RowsPayload(ApiModel):
 
 
 class AiGenerateIn(ApiModel):
-    """AI 候选生成请求；仅返回未落库候选行。
-
-    model / temperature 按契约透传接收，但实际模型与采样参数以 Agent 协议档
-    配置为准（call_agent_model 固定实现），这两个字段当前为契约预留。
-    """
+    """AI 候选生成请求；模型调用层重建设计期间仅保留接口契约。"""
 
     dataset_id: str = Field(min_length=1, max_length=64)
     mode: Literal["scene", "seed", "doc", "fill_missing"]

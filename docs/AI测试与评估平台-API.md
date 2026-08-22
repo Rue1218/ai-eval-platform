@@ -2,14 +2,14 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.14 |
+| 文档版本 | V1.15 |
 | 对应 PRD | V1.7.1（功能唯一权威） |
 | 对应设计规范 | V1.3（错误码文案、确认卡字段名、调度中心规范） |
-| 对应 Agent 说明书 | V1.4（Harness / 斜杠 / 上下文算法；JSON 仍以本文为准） |
+| 对应 Agent 说明书 | `AI测试与评估平台-Agent重设计工作区.md` V0.1（实现冻结；JSON 仍以本文为准） |
 | 对应前端计划 | V1.3 |
 | 对应后端计划 | V1.3 |
 | 撰写日期 | 2026-08-18 |
-| 最近修订 | 2026-08-21：V1.14 `audio.speech_synthesis` 支持朗读稿抽取与 TTS 意图词表扩充；V1.13 增加 MiMo STT/TTS 短工具、意图优先级、音频事件交付与安全展示；V1.12 协议档支持独立 Embedding / Reranker 端点配置，三类 API Key 均只写入受控环境文件且不回显；V1.11 通过内部 `mcp_tools` 接入 Qwen Image 图文生图；V1.9 短工具 `audio.voiceclone` 与文件播放；V1.8 助手回复耗时展示 |
+| 最近修订 | 2026-08-22：V1.15 清空旧 Agent/Harness/模型调用/Runtime 实现、相关测试与阶段文档，保留 API 路径作为重建设计期间的明确占位；2026-08-21：V1.14 `audio.speech_synthesis` 支持朗读稿抽取与 TTS 意图词表扩充；V1.13 增加 MiMo STT/TTS 短工具、意图优先级、音频事件交付与安全展示；V1.12 协议档支持独立 Embedding / Reranker 端点配置，三类 API Key 均只写入受控环境文件且不回显；V1.11 通过内部 `mcp_tools` 接入 Qwen Image 图文生图；V1.9 短工具 `audio.voiceclone` 与文件播放；V1.8 助手回复耗时展示 |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
 ---
@@ -1709,7 +1709,6 @@ MCP 浏览器不调：与 PRD 3.1、前端计划「禁止把 MCP 当 REST」一�
 | `backend/api/app/config.py` / `.env.example` / `docker-compose.yml` | MIMO TTS 环境变量 |
 | `backend/api/tests/test_voiceclone.py` | 规划注入与假上游落盘单测 |
 | `frontend/src/views/Agent.vue` | 附件白名单、工具卡播放器 |
-| `docs/AI测试与评估平台-Agent开发文档.md` | 短工具表与墙钟 180s |
 
 **V1.10（2026-08-20）— 独立 Qwen Image MCP 工具中心可见性**
 
@@ -1744,4 +1743,16 @@ Qwen Image 通过与 `audio.voiceclone` 相同的 Agent 内部短工具链路执
 | `frontend/src/api/http.ts` / `frontend/src/components/modals/ProfileModal.vue` / `frontend/src/views/AdminProfiles.vue` | 协议档新增 Embedding / Reranker 可选配置表单、列表标识，并按空值保留规则提交；客户端请求类型同步收紧 |
 | `frontend/src/api/types.ts` | 补齐协议档附加模型配置与脱敏状态字段 |
 | `backend/api/tests/test_profile_env.py` / `backend/api/tests/test_profile_schemas.py` | 覆盖多端点环境变量隔离、删除回滚及请求校验 |
+
+**V1.15（2026-08-22）— Agent 骨架重置**
+
+旧 Agent、Harness、模型调用层和 Runtime 实现已清空，避免旧实现与新设计并存。`/ws/agent`、Agent 偏好、MCP 工具清单以及数据集/用例 AI 候选入口暂由 API 保留路径但返回统一的 `VALIDATION` 能力未启用错误；核心 CRUD、Worker、数据库模型与迁移不受本次重置影响。后续实现边界以 [`AI测试与评估平台-Agent重设计工作区.md`](AI测试与评估平台-Agent重设计工作区.md) 为准。
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/agent/`、`harness/`、`llm/`、`runtime/` | 仅保留包边界文件，等待模型调用层、Harness 与 Agent 范式重新评审 |
+| `backend/api/app/routers/ws.py` | 拒绝旧 Agent WebSocket 会话，防止新旧运行时并存 |
+| `backend/api/app/routers/agent_prefs.py` / `mcp.py` | 保留路由形状，返回重建设计占位 |
+| `backend/api/app/routers/datasets.py` / `cases.py` | 暂停模型生成入口，不调用旧模型客户端 |
+| `backend/api/tests/` | 移除依赖旧 Agent/Harness/MCP 实现的测试，保留平台核心测试 |
 
