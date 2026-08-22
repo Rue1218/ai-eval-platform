@@ -255,4 +255,25 @@ onMounted(() => {
 @keyframes cursor-blink {
   50% { opacity: 0; }
 }
+
+@media (max-width: 640px) {
+  .thought-head {
+    gap: 5px;
+    padding: 6px 10px;
+  }
+  .thought-title {
+    font-size: 12.5px;
+  }
+  .thought-badge {
+    font-size: 10px;
+    padding: 1px 4px;
+  }
+  .thought-body {
+    padding: 4px 8px 10px;
+  }
+  :deep(.thought-markdown),
+  :deep(.thought-markdown .md-p) {
+    font-size: 12.5px !important;
+  }
+}
 </style>

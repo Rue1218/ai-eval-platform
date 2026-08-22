@@ -1,6 +1,6 @@
 <template>
   <!-- 双圆环上下文容量指示器与两层折叠 Popover 视图（纯圆环触发器，上弹卡片） -->
-  <n-popover trigger="click" placement="top-start" :width="340" raw :show-arrow="false">
+  <n-popover trigger="click" placement="top-start" raw :show-arrow="false" :style="{ width: 'min(340px, calc(100vw - 24px))' }">
     <template #trigger>
       <button
         class="context-ring-btn"

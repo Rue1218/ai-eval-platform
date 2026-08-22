@@ -564,4 +564,24 @@ defineExpose({
   color: var(--accent-ai, #6366f1);
   padding: 0 2px;
 }
+
+@media (max-width: 640px) {
+  .slash-palette-wrap {
+    left: 0;
+    right: 0;
+    width: auto;
+    max-width: 100%;
+    max-height: 320px;
+    border-radius: 12px;
+  }
+  .slash-palette-kbd-group {
+    display: none;
+  }
+  .slash-item {
+    padding: 8px 10px;
+  }
+  .slash-item-hint {
+    max-width: 160px;
+  }
+}
 </style>

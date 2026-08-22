@@ -161,4 +161,26 @@ function handleCancel() {
 .mini-series .ms-err {
   color: var(--accent-error);
 }
+
+@media (max-width: 640px) {
+  .progress-dock {
+    padding: 8px 12px;
+  }
+  .progress-dock-inner {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .progress-bar {
+    order: 2;
+    width: 100%;
+    flex: 1 0 100%;
+  }
+  .progress-msg {
+    max-width: 140px;
+    font-size: 11.5px;
+  }
+  .progress-nums {
+    font-size: 11.5px;
+  }
+}
 </style>
