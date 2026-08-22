@@ -6,6 +6,8 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.errors import AppError, ErrorCode
+
 from .trace import TraceContext
 
 
@@ -23,6 +25,8 @@ class MemoryQuery(BaseModel):
     record_types: list[str] = Field(default_factory=lambda: ["conversation", "knowledge"])
     time_range: tuple[str, str] | None = None
     top_k_recall: int = 20
+    # 向量由编排或 Embedding 适配器生成；Context 本身禁止调用模型。
+    query_embedding: list[float] | None = None
     trace_id: str
 
     @field_validator("trace_id")
@@ -49,6 +53,19 @@ class MemoryRecord(BaseModel):
     origin_trace_id: str | None = None
     origin_span_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+def validate_memory_query(query: MemoryQuery, trace: TraceContext) -> None:
+    """收紧阶段 0 类型债务，拒绝无归属召回与跨 trace 的 Port 调用。"""
+    missing = [
+        name
+        for name in ("tenant_id", "user_id", "session_id")
+        if not str(getattr(query, name) or "").strip()
+    ]
+    if missing:
+        raise AppError(ErrorCode.VALIDATION, "记忆检索缺少归属信息")
+    if query.trace_id != trace.trace_id:
+        raise AppError(ErrorCode.INTERNAL, "操作失败")
 
 
 class MemoryPort(Protocol):
