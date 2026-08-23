@@ -1,4 +1,0 @@
-# 独立图像生成 MCP 的运行依赖；不并入现有 API/Worker 镜像。
-mcp>=1.13,<2
-httpx>=0.28,<1
-python-dotenv>=1.0,<2
