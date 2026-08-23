@@ -1,10 +1,10 @@
 # AI 测试与评估平台 Agent 开发文档
 
-> 版本：V0.2
+> 版本：V0.3
 > 状态：首期 LangGraph 单轮 Agent 与 WebSocket 流式事件语义已拆分
 > 审查日期：2026-08-23
-> 对应需求：`AI测试与评估平台-PRD.md` V1.9
-> 对应接口：`AI测试与评估平台-API.md` V1.17
+> 对应需求：`AI测试与评估平台-PRD.md` V1.10
+> 对应接口：`AI测试与评估平台-API.md` V1.18
 
 ## 1. 当前唯一运行链路
 
@@ -30,7 +30,7 @@
 - 校验会话可见性，支持首次连接创建私有会话；
 - 保存 `messages` 与 `ws_events`，按 `last_event_id` 补发历史事件；
 - 在后台 Task 中启动单轮 Agent，不阻塞 WebSocket `receive` 循环；
-- 将 LangGraph 流事件投影为 `thought`、`message`、`error`、`pong`。
+- 将 LangGraph 流事件投影为 `user_message`、`thought`、`assistant_delta`、`assistant_message`、`response.completed`、`error`、`pong`。
 
 路由不得直接调用 `app.adapters`，不得执行 Benchmark、RAG、用例生成或压测。
 
@@ -63,11 +63,11 @@ START -> stream_model -> END
 
 | 事件 | 作用 |
 | --- | --- |
-| `message` | `role=user` 的用户消息落库并向会话在线成员广播 |
+| `user_message` | `role=user` 的用户消息落库并向会话在线成员广播；服务端不再使用含义不明确的 `message` |
 | `thought` | 思考摘要/阶段状态；`stream=think` 推理增量、`stream=think_final` 思考快照，不承载助手正文 |
 | `assistant_delta` | 助手正文瞬态增量，仅向在线会话成员广播，不占事件号 |
 | `assistant_message` | 助手完整交付句，落库并占用会话事件号 |
-| `done` | 本轮生成结束，携带 `finish_reason` 并可回放 |
+| `response.completed` | 本轮生成结束，携带 `finish_reason` 和 `role=assistant` 并可回放 |
 | `error` | 脱敏后的 `ErrorCode` 与用户可见消息 |
 | `pong` | 应用层心跳，不占用持久化事件号，可与业务事件交错到达 |
 
@@ -101,5 +101,12 @@ START -> stream_model -> END
 - `backend/api/app/session_connections.py`：会话内事件和流增量广播；
 - `backend/api/tests/test_agent_graph.py`：Agent 图回归测试；
 - `frontend/src/api/ws.ts`：识别 `assistant_delta` 瞬态帧并跳过事件号去重；
-- `frontend/src/api/types.ts`：补充 `assistant_delta`、`assistant_message`、`done` 事件类型；
+- `frontend/src/api/types.ts`：补充 `user_message`、`assistant_delta`、`assistant_message`、`response.completed` 事件类型；
 - `frontend/src/views/Agent.vue`：分离思考卡、助手正文增量、最终助手消息和结束状态。
+
+### V0.3（2026-08-23）修改代码文件与作用清单
+
+- `backend/api/app/routers/ws.py`：用户回显改发 `user_message`，回合完成改发 `response.completed`，保留 `session_id` / `task_id` 公共头；
+- `frontend/src/api/types.ts`：同步新事件类型并保留旧事件类型兼容历史数据；
+- `frontend/src/views/Agent.vue`：监听新用户回显与完成事件，思考卡不再消费助手正文；
+- `README.md`、`docs/AI测试与评估平台-API.md`、`docs/AI测试与评估平台-PRD.md`：同步事件生命周期与客户端渲染契约。

@@ -3,8 +3,8 @@
 | 项目 | 内容 |
 | --- | --- |
 | 文档版本 | V1.5 |
-| 对应 PRD | V1.8（功能唯一权威） |
-| 对应 API | V1.16（路径与 JSON 契约唯一权威） |
+| 对应 PRD | V1.10（功能唯一权威） |
+| 对应 API | V1.18（路径与 JSON 契约唯一权威） |
 | 对应规范 | AGENTS.md V1.0（AI 行为准则、全中文注释、Naive UI 主题令牌与构建门禁） |
 | 对应设计规范 | V1.2（页面 / 组件 / 浮层 / 令牌） |
 | 对应总计划 | V1.5（日历与门禁） |
@@ -145,11 +145,12 @@ frontend/src/
 
 登录后 `POST /api/auth/ws-ticket`（5 分钟）→ `GET /ws/agent?ticket=`。心跳 30s。重连带 `session_id` + `last_event_id`。
 
-首期前端只消费服务端 `message`、`thought`、`error`、`pong`。`thought` 的 `stream=chunk`
-用于正文打字机，`stream=think` 用于发起连接的推理卡，`stream=think_final` 用于历史回放；
+首期前端只消费服务端 `user_message`、`thought`、`assistant_delta`、`assistant_message`、
+`response.completed`、`error`、`pong`。正文只来自 `assistant_delta` / `assistant_message`，
+`thought` 只用于思考摘要和阶段状态，`response.completed` 用于收尾。
 `tool_call`、`tool_result`、`confirm`、`progress`、`report` 等事件保留类型但等待 Harness/Worker 阶段启用。
 
-**服务 → 前端**（事件名不可改）：`message` `thought` `tool_call` `tool_result` `confirm` `progress` `report` `error` `pong`。
+**服务 → 前端**（事件名不可改）：`user_message` `thought` `assistant_delta` `assistant_message` `response.completed` `tool_call` `tool_result` `confirm` `progress` `report` `error` `pong`。
 **前端 → 服务**：`user_message` `{text, attachments[]?}`、`confirm_ack` `{ok, patch?}`、`cancel_task` `{task_id}`。
 
 禁止参考文档的 `thinking` / `token` / `chat:send` / `tool_call_start`。

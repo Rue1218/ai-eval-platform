@@ -1,6 +1,6 @@
 # AI 测试与评估平台 — 模型调用层 LangGraph 重设计
 
-> 版本：V0.3
+> 版本：V0.4
 > 状态：已接入 LangGraph 单轮 Agent 与 WebSocket 流式桥接
 > 审查日期：2026-08-23
 
@@ -31,7 +31,7 @@
 `START -> call_model / stream_model -> END` 两条单轮图路径。`backend/api/app/routers/ws.py`
 负责短票鉴权、会话事件落库和后台回合调度，不直接调用 `app.adapters`；模型流被投影为
 `content` 被投影为 WebSocket `assistant_delta`，`reasoning` 被投影为
-`thought.stream=think`，最终响应由 `assistant_message` 与 `done` 事件收尾。
+`thought.stream=think`，最终响应由 `assistant_message` 与 `response.completed` 事件收尾。
 
 模型层的 `StreamAborted` 保持为受控取消信号，由 Agent 回合决定如何交付停止结果，不能
 被误报为 `INTERNAL` 或把上游异常原文发送给浏览器。

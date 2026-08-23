@@ -23,7 +23,7 @@ WebSocket 短票
   -> backend/api/app/agent/graph.py（LangGraph 单轮图）
   -> backend/api/app/llm/gateway.py（LangGraph 模型调用图）
   -> 三协议 adapters.py
-  -> thought/message/error/pong WebSocket 事件
+  -> user_message/thought/assistant_delta/assistant_message/response.completed/error/pong WebSocket 事件
 ```
 
 Agent 图只接收 `ModelRequest`，并投影 `content`、`reasoning`、`completed` 事件。WS 路由负责短票消费、会话可见性、消息与事件落库、历史补发、心跳和后台任务创建；收包循环不等待模型整轮完成。

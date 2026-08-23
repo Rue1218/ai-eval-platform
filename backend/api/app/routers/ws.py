@@ -193,7 +193,7 @@ def _author_payload(user: User) -> dict[str, Any]:
 
 
 def _message_payload(row: Message, user: User) -> dict[str, Any]:
-    """构造与 REST 历史回放一致的 message 事件 payload。"""
+    """构造与 REST 历史回放一致的 user_message 事件 payload。"""
     return {
         "id": row.id,
         "role": row.role,
@@ -402,8 +402,8 @@ async def _run_turn(
             websocket,
             state,
             session_id,
-            "done",
-            {"finish_reason": "stop"},
+            "response.completed",
+            {"finish_reason": "stop", "role": "assistant"},
         )
     except StreamAborted:
         db.rollback()
@@ -413,8 +413,8 @@ async def _run_turn(
             websocket,
             state,
             session_id,
-            "done",
-            {"finish_reason": "cancelled"},
+            "response.completed",
+            {"finish_reason": "cancelled", "role": "assistant"},
         )
     except AppError as exc:
         db.rollback()
@@ -425,8 +425,8 @@ async def _run_turn(
             websocket,
             state,
             session_id,
-            "done",
-            {"finish_reason": "error"},
+            "response.completed",
+            {"finish_reason": "error", "role": "assistant"},
         )
     except Exception as exc:
         db.rollback()
@@ -443,8 +443,8 @@ async def _run_turn(
             websocket,
             state,
             session_id,
-            "done",
-            {"finish_reason": "error"},
+            "response.completed",
+            {"finish_reason": "error", "role": "assistant"},
         )
     finally:
         db.close()
@@ -510,7 +510,7 @@ async def _handle_user_message(
         websocket,
         state,
         session.id,
-        "message",
+        "user_message",
         _message_payload(row, user),
     )
     abort = asyncio.Event()

@@ -3,11 +3,11 @@
 | 项目 | 内容 |
 | --- | --- |
 | 文档版本 | V1.5 |
-| 对应 PRD | V1.8（功能唯一权威） |
+| 对应 PRD | V1.10（功能唯一权威） |
 | 对应设计规范 | V1.2（仅约束对外字段 / 错误码 / 事件名，不约束像素） |
 | 对应总计划 | V1.0（日历与门禁） |
 | 对应前端计划 | V1.5（契约消费者） |
-| 对应 API | V1.16（路径/JSON 唯一冻结） |
+| 对应 API | V1.18（路径/JSON 唯一冻结） |
 | 撰写日期 | 2026-08-17 |
 | 最近修订 | 2026-08-23：M1 Agent 基线切换为 LangGraph 单轮图与 WebSocket 异步桥接；Harness、MCP、确认卡和长任务暂冻结；M2 提前启动（评测域建表、benchmark 真实执行器、样本明细接口） |
 | 计划起点 | 2026-08-18 |
@@ -180,8 +180,8 @@ deploy/        compose、env 样例、Grafana dashboard JSON
 服务 → 客户端：`thought` `tool_call` `tool_result` `confirm` `progress` `report` `error` `pong`。  
 客户端 → 服务：`user_message` `{text, attachments[]?}`，`confirm_ack` `{ok, patch?}`，`cancel_task` `{task_id}`。
 
-**当前首期实现**：服务端已启用 `message`、`thought`、`error`、`pong`；`thought` 支持
-`stream=chunk|think|think_final`。`tool_call`、`tool_result`、`confirm`、`progress`、`report`
+**当前首期实现**：服务端已启用 `user_message`、`thought`、`assistant_delta`、`assistant_message`、
+`response.completed`、`error`、`pong`；`thought` 支持 `stream=think|think_final`。`tool_call`、`tool_result`、`confirm`、`progress`、`report`
 以及 `confirm_ack` / `cancel_task` 保留为后续 Harness/Worker 阶段，当前统一返回
 `VALIDATION` 能力未启用，不生成伪造任务或报告。
 

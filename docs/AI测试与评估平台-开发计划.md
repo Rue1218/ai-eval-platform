@@ -3,8 +3,8 @@
 | 项目 | 内容 |
 | --- | --- |
 | 文档版本 | V1.5 |
-| 对应 PRD | V1.8（功能唯一权威） |
-| 对应 API | V1.16（路径与 JSON 契约唯一权威） |
+| 对应 PRD | V1.10（功能唯一权威） |
+| 对应 API | V1.18（路径与 JSON 契约唯一权威） |
 | 对应规范 | AGENTS.md V1.0（AI 行为准则、全中文注释与提交门禁） |
 | 撰写日期 | 2026-08-17 |
 | 最近修订 | 2026-08-23：M1 Agent 运行基线切换为 LangGraph 单轮图与 WebSocket 异步桥接；2026-08-19：M1 核心交付验收与 M2 提前启动（benchmark 真实执行器、评测域建表、样本明细接口落地） |
@@ -30,7 +30,7 @@
 
 **V1.5 补充（2026-08-23）**：
 1. Agent 首期唯一运行链路为 `WebSocket -> LangGraph Agent -> ModelGateway -> 三协议适配器`；模型调用与 Agent 图已从旧框架迁出。
-2. 当前首期只验收短票、会话回放、后台单轮调用、`message/thought/error/pong` 和正文/推理流式事件。
+2. 当前首期只验收短票、会话回放、后台单轮调用、`user_message/thought/assistant_delta/assistant_message/response.completed/error/pong` 和正文/推理流式事件。
 3. Harness、ReAct/MCP、确认卡、任务下单、Worker 长任务、记忆和并发规划不在本轮实现；相关 M1 计划项顺延到重新评审后的阶段。
 
 ### 1.1 范围边界
