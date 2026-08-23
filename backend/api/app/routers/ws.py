@@ -206,6 +206,17 @@ def _message_payload(row: Message, user: User) -> dict[str, Any]:
     }
 
 
+def _assistant_message_payload(row: Message) -> dict[str, Any]:
+    """构造助手最终交付事件；正文与用户消息回显使用不同事件类型。"""
+    return {
+        "id": row.id,
+        "role": "assistant",
+        "text": row.content,
+        "reply_latency_ms": row.latency_ms,
+        "created_at": _iso(row.created_at),
+    }
+
+
 def _heartbeat_interval(db: Session) -> int:
     """读取运行时心跳秒数；配置缺失或异常时回退 15 秒。"""
     row = db.query(Setting).filter(Setting.key == "runtime").first()
@@ -329,9 +340,9 @@ async def _run_turn(
                     session_id,
                     lambda cursor, text=event.text: _frame(
                         session_id,
-                        "thought",
+                        "assistant_delta",
                         cursor,
-                        {"text": text, "stream": "chunk"},
+                        {"role": "assistant", "text": text},
                     ),
                 )
             elif event.kind == "reasoning" and event.text:
@@ -383,8 +394,16 @@ async def _run_turn(
             websocket,
             state,
             session_id,
-            "thought",
-            {"text": response.text, "reply_latency_ms": latency_ms},
+            "assistant_message",
+            _assistant_message_payload(assistant),
+        )
+        await _emit_persistent(
+            db,
+            websocket,
+            state,
+            session_id,
+            "done",
+            {"finish_reason": "stop"},
         )
     except StreamAborted:
         db.rollback()
@@ -394,13 +413,21 @@ async def _run_turn(
             websocket,
             state,
             session_id,
-            "thought",
-            {"text": "已停止生成"},
+            "done",
+            {"finish_reason": "cancelled"},
         )
     except AppError as exc:
         db.rollback()
         logger.info("Agent 回合失败 session=%s code=%s", session_id, exc.code.value)
         await _emit_error(db, websocket, state, session_id, exc)
+        await _emit_persistent(
+            db,
+            websocket,
+            state,
+            session_id,
+            "done",
+            {"finish_reason": "error"},
+        )
     except Exception as exc:
         db.rollback()
         logger.error("Agent 回合内部异常 session=%s type=%s", session_id, type(exc).__name__)
@@ -410,6 +437,14 @@ async def _run_turn(
             state,
             session_id,
             AppError(ErrorCode.INTERNAL, "Agent 调用失败"),
+        )
+        await _emit_persistent(
+            db,
+            websocket,
+            state,
+            session_id,
+            "done",
+            {"finish_reason": "error"},
         )
     finally:
         db.close()

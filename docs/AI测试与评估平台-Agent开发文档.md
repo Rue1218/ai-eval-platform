@@ -1,10 +1,10 @@
 # AI 测试与评估平台 Agent 开发文档
 
-> 版本：V0.1
-> 状态：首期 LangGraph 单轮 Agent 与 WebSocket 基础链路已实现
+> 版本：V0.2
+> 状态：首期 LangGraph 单轮 Agent 与 WebSocket 流式事件语义已拆分
 > 审查日期：2026-08-23
-> 对应需求：`AI测试与评估平台-PRD.md` V1.8
-> 对应接口：`AI测试与评估平台-API.md` V1.16
+> 对应需求：`AI测试与评估平台-PRD.md` V1.9
+> 对应接口：`AI测试与评估平台-API.md` V1.17
 
 ## 1. 当前唯一运行链路
 
@@ -63,10 +63,13 @@ START -> stream_model -> END
 
 | 事件 | 作用 |
 | --- | --- |
-| `message` | 用户消息落库并向会话在线成员广播 |
-| `thought` | `stream=chunk` 正文增量、`stream=think` 推理增量、`stream=think_final` 推理快照和最终交付句 |
+| `message` | `role=user` 的用户消息落库并向会话在线成员广播 |
+| `thought` | 思考摘要/阶段状态；`stream=think` 推理增量、`stream=think_final` 思考快照，不承载助手正文 |
+| `assistant_delta` | 助手正文瞬态增量，仅向在线会话成员广播，不占事件号 |
+| `assistant_message` | 助手完整交付句，落库并占用会话事件号 |
+| `done` | 本轮生成结束，携带 `finish_reason` 并可回放 |
 | `error` | 脱敏后的 `ErrorCode` 与用户可见消息 |
-| `pong` | 应用层心跳，不占用持久化事件号 |
+| `pong` | 应用层心跳，不占用持久化事件号，可与业务事件交错到达 |
 
 保留但未启用的上行事件：`confirm_ack`、`cancel_task`。当前收到后返回 `VALIDATION` 能力未启用错误。
 
@@ -96,4 +99,7 @@ START -> stream_model -> END
 - `backend/api/app/llm/gateway.py`：LangGraph 模型调用与流式投影；
 - `backend/api/app/routers/ws.py`：WebSocket 鉴权、会话事件与后台 Agent 回合；
 - `backend/api/app/session_connections.py`：会话内事件和流增量广播；
-- `backend/api/tests/test_agent_graph.py`：Agent 图回归测试。
+- `backend/api/tests/test_agent_graph.py`：Agent 图回归测试；
+- `frontend/src/api/ws.ts`：识别 `assistant_delta` 瞬态帧并跳过事件号去重；
+- `frontend/src/api/types.ts`：补充 `assistant_delta`、`assistant_message`、`done` 事件类型；
+- `frontend/src/views/Agent.vue`：分离思考卡、助手正文增量、最终助手消息和结束状态。

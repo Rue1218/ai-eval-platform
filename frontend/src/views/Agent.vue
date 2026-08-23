@@ -2434,28 +2434,23 @@ async function loadSessionHistory(sid: string): Promise<number> {
             noAnim: true,
           },
         })
-      } else if (ev.event === 'thought' && !p.stream) {
-        // 交付终帧判定：无 stage / skill_id / latency 的 thought 落库事件即助手交付句，
-        // 其正文已随 messages.role=assistant 回放成气泡；若再渲染成思考卡会造成
-        // 「已思考 N 字」重复卡（原条件 p.stage !== null 对 undefined 恒真，属逻辑缺陷）。
-        const isDeliveryFrame = !p.stage && !p.skill_id && p.latency_ms === undefined
-        if (!isDeliveryFrame && p.text) {
-          rawList.push({
-            time: t,
-            priority: 2,
-            eventId: eid,
-            item: {
-              type: 'thought',
-              text: p.text || '',
-              done: true,
-              collapsed: true,
-              noAnim: true,
-              latency_ms: p.latency_ms,
-              stage: p.stage,
-              skill_id: p.skill_id,
-            },
-          })
-        }
+      } else if (ev.event === 'thought' && !p.stream && (p.stage || p.skill_id) && p.text) {
+        // 无 stream 的 thought 只表示阶段摘要；助手最终回答由 messages.role=assistant 回放。
+        rawList.push({
+          time: t,
+          priority: 2,
+          eventId: eid,
+          item: {
+            type: 'thought',
+            text: p.text || '',
+            done: true,
+            collapsed: true,
+            noAnim: true,
+            latency_ms: p.latency_ms,
+            stage: p.stage,
+            skill_id: p.skill_id,
+          },
+        })
       } else if (ev.event === 'tool_call') {
         rawList.push({
           time: t,
@@ -2914,6 +2909,7 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
         break
       }
       if (p.stream === 'chunk') {
+        // 兼容旧服务端事件：新协议使用 assistant_delta，历史回放期间仍可收到旧 chunk。
         const delta = String(p.text || '')
         if (!delta) break
         let target = turnStreamingAgent(buf)
@@ -2944,26 +2940,56 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
         markGenerating(sid, true)
         break
       }
+      // 新协议中 thought 只承载思考摘要；助手正文由 assistant_delta / assistant_message 承载。
+      break
+    }
+    case 'assistant_delta': {
+      const delta = String(p.text || '')
+      if (!delta) break
+      let target = turnStreamingAgent(buf)
+      if (!target) {
+        target = { type: 'agent', raw: '', text: '', streaming: true }
+        buf.push(target)
+      }
+      target.raw = (target.raw || '') + delta
+      target.text = renderBubbleHtml(target.raw)
+      target.streaming = true
+      markGenerating(sid, true)
+      break
+    }
+    case 'assistant_message': {
+      const text = String(p.text || '')
       finishBufferThought(buf)
+      const streaming = turnStreamingAgent(buf)
       if (text) {
-        const streaming = turnStreamingAgent(buf)
         if (streaming) {
           streaming.raw = text
           streaming.text = renderBubbleHtml(text)
           streaming.streaming = false
+          if (typeof p.reply_latency_ms === 'number') streaming.latency_ms = p.reply_latency_ms
         } else {
-          buf.push({ type: 'agent', raw: text, text: renderBubbleHtml(text), streaming: false })
+          buf.push({
+            type: 'agent',
+            raw: text,
+            text: renderBubbleHtml(text),
+            streaming: false,
+            latency_ms: typeof p.reply_latency_ms === 'number' ? p.reply_latency_ms : undefined,
+          })
         }
-        markGenerating(sid, false)
-        rt.harnessStage = ''
-        void refreshContextMeter(sid)
-      } else {
-        const orphan = turnStreamingAgent(buf)
-        if (orphan) orphan.streaming = false
-        markGenerating(sid, false)
-        rt.harnessStage = ''
-        void refreshContextMeter(sid)
+      } else if (streaming) {
+        streaming.streaming = false
       }
+      markGenerating(sid, false)
+      rt.harnessStage = ''
+      void refreshContextMeter(sid)
+      break
+    }
+    case 'done': {
+      finishBufferThought(buf)
+      const orphan = turnStreamingAgent(buf)
+      if (orphan) orphan.streaming = false
+      markGenerating(sid, false)
+      rt.harnessStage = ''
       break
     }
     case 'tool_call':
@@ -3177,7 +3203,7 @@ function handleWsEvent(ev: WsServerEvent) {
         }
         break
       }
-      // 流式增量帧（瞬态，服务端不落库）：追加到当前流式气泡，无则新建
+      // 兼容旧服务端事件：新协议使用 assistant_delta。
       if (p.stream === 'chunk') {
         const delta = String(p.text || '')
         if (delta) {
@@ -3219,41 +3245,59 @@ function handleWsEvent(ev: WsServerEvent) {
         if (text) scrollToBottom()
         break
       }
-      // 交付终帧：先收尾思考卡，正文走打字机气泡，不得覆盖 reasoning / ReAct 卡
-      finishLiveThought()
-      console.debug('[Agent] 助手回复交付', {
-        chars: text.length,
-        latency: p.latency_ms ? `${p.latency_ms}ms` : '未知',
-      })
-      if (text) {
-        const streaming = turnStreamingAgent(events.value)
-        const agentItem = streaming
-        // 交付终帧的 reply_latency_ms 即本轮回复耗时，落到气泡供「耗时 x 秒」展示
-        if (agentItem && typeof p.reply_latency_ms === 'number') agentItem.latency_ms = p.reply_latency_ms
-        if (streaming) {
-          typewriteTo(streaming, text)
-        } else {
-          const item: StreamItem = reactive({
-            type: 'agent',
-            raw: '',
-            text: '',
-            streaming: true,
-            latency_ms: typeof p.reply_latency_ms === 'number' ? p.reply_latency_ms : undefined,
-          })
-          events.value.push(item)
-          typewriteTo(item, text)
-        }
-        setCurrentGenerating(false)
-        harnessStage.value = ''
-        if (currentSessionId.value) void refreshContextMeter(currentSessionId.value)
-      } else {
-        const orphan = turnStreamingAgent(events.value)
-        if (orphan) orphan.streaming = false
-        setCurrentGenerating(false)
-        harnessStage.value = ''
-        if (currentSessionId.value) void refreshContextMeter(currentSessionId.value)
+      // 新协议中 thought 只承载思考摘要；助手正文由 assistant_delta / assistant_message 承载。
+      break
+    }
+    case 'assistant_delta': {
+      const delta = String(p.text || '')
+      if (!delta) break
+      let target = turnStreamingAgent(events.value)
+      if (!target) {
+        // reactive 包装：首个正文增量到达时立即创建可响应的助手气泡。
+        target = reactive({ type: 'agent', raw: '', text: '', streaming: true }) as StreamItem
+        events.value.push(target)
       }
+      target.raw = (target.raw || '') + delta
+      target.text = renderBubbleHtml(target.raw)
+      target.streaming = true
+      scrollToBottom()
+      setCurrentGenerating(true)
+      break
+    }
+    case 'assistant_message': {
+      const text = String(p.text || '')
+      finishLiveThought()
+      const streaming = turnStreamingAgent(events.value)
+      if (text) {
+        if (streaming) {
+          streaming.raw = text
+          streaming.text = renderBubbleHtml(text)
+          streaming.streaming = false
+          if (typeof p.reply_latency_ms === 'number') streaming.latency_ms = p.reply_latency_ms
+        } else {
+          events.value.push(reactive({
+            type: 'agent',
+            raw: text,
+            text: renderBubbleHtml(text),
+            streaming: false,
+            latency_ms: typeof p.reply_latency_ms === 'number' ? p.reply_latency_ms : undefined,
+          }))
+        }
+      } else if (streaming) {
+        streaming.streaming = false
+      }
+      setCurrentGenerating(false)
+      harnessStage.value = ''
+      if (currentSessionId.value) void refreshContextMeter(currentSessionId.value)
       if (text) scrollToBottom()
+      break
+    }
+    case 'done': {
+      finishLiveThought()
+      const orphan = turnStreamingAgent(events.value)
+      if (orphan) orphan.streaming = false
+      setCurrentGenerating(false)
+      harnessStage.value = ''
       break
     }
     case 'tool_call': {
