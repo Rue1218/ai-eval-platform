@@ -1,14 +1,14 @@
-"""Benchmark 真实执行器（M2 W6–W7：三协议真调用 + 规则评分 + 预算熔断 + 断点续跑）。
+"""Benchmark 执行器（使用 LangGraph 状态图工作流编排评测流水线）。
 
 执行流程（PRD 5.2.2 / 后端开发计划 §12.4）：
 1. 载入任务快照 → 数据集可用行（待补全行不进分母）→ 协议档；
-2. 逐 profile 分批并发调用被测（批大小 = min(run.concurrency, max_inflight_model_calls)）；
-3. 每样本落 ``eval_items``（唯一键 task+profile+row_no，Worker 重启按行号续跑）；
-4. 逐调用累加 ``usage_ledger``，费用超 ``default_max_usd`` 即停 → failed + BUDGET_EXCEEDED；
+2. 构建并调用 LangGraph 评测图，逐 profile 分批并发调用被测（批大小 = min(run.concurrency, max_inflight_model_calls)）；
+3. 每样本落 `eval_items`（唯一键 task+profile+row_no，Worker 重启按行号续跑）；
+4. 逐调用累加 `usage_ledger`，费用超 `default_max_usd` 即停 → failed + BUDGET_EXCEEDED；
 5. 取消为协作式：每批完成后检查任务状态，当前样本（批）结束后停止；
 6. 全部完成写报告 metrics（scores / sample_items）并置 succeeded。
 
-失败样本记 ``eval_items.error`` 不中断整次评测；报告由 Worker 写入，
+失败样本记 `eval_items.error` 不中断整次评测；报告由 Worker 写入，
 浏览器仅做只读回放，不在前端拼接成功报告。
 """
 
@@ -16,12 +16,12 @@ from __future__ import annotations
 
 import json
 import logging
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
 from .db import SessionLocal
+from .eval_graph import BenchmarkEvalPipeline, BenchmarkGraphState
 from .events import push_ws
 from .models import (
     Dataset,
@@ -34,9 +34,8 @@ from .models import (
     TaskEvent,
     UsageLedger,
 )
-from .protocol import ProtocolCallError, call_protocol
 from .profile_env import profile_connection
-from .scoring import DEFAULT_METRIC, score_answer, score_exact, score_rouge_l
+from .scoring import DEFAULT_METRIC
 from .task_state import claim_running_task_for_terminal_write
 
 logger = logging.getLogger("worker.benchmark")
@@ -91,13 +90,6 @@ def _max_inflight(db: Session) -> int:
     return DEFAULT_MAX_INFLIGHT
 
 
-def _build_user_message(row: DatasetRow) -> str:
-    """组装单样本用户消息：question 为正文，context 作为背景前置。"""
-    if row.context and row.context.strip():
-        return f"背景信息:\n{row.context.strip()}\n\n问题:{row.question}"
-    return row.question or ""
-
-
 def _truncate_raw(raw: dict) -> dict:
     """上游原始响应截断到 32KB；超长降级为文本前缀，保证 JSONB 始终合法。"""
     try:
@@ -107,78 +99,6 @@ def _truncate_raw(raw: dict) -> dict:
     if len(text.encode("utf-8")) <= RAW_MAX_BYTES:
         return raw
     return {"truncated": True, "text": text[:RAW_MAX_BYTES]}
-
-
-def _eval_one(call_kwargs: dict, row: DatasetRow, retry: int, metric: str) -> dict:
-    """调用被测模型并按主指标评分；重试耗尽后返回错误样本（不中断整次评测）。"""
-    messages = [{"role": "user", "content": _build_user_message(row)}]
-    reference = row.reference or ""
-    last_error = ""
-    for _ in range(max(1, retry + 1)):
-        try:
-            result = call_protocol(messages=messages, **call_kwargs)
-        except ProtocolCallError as exc:
-            last_error = f"{exc.code}: {exc.message}"
-            continue
-        output = result.text or ""
-        return {
-            "ok": True,
-            "output": output,
-            "score": score_answer(metric, output, reference),
-            "exact": score_exact(output, reference),
-            "rouge_l": score_rouge_l(output, reference),
-            "latency_ms": result.latency_ms,
-            "usage": result.usage,
-            "raw": _truncate_raw(result.raw),
-        }
-    return {"ok": False, "error": last_error or "UPSTREAM: 调用失败"}
-
-
-def _save_item(db: Session, task: Task, profile_id: str, row: DatasetRow, result: dict) -> None:
-    """落一行样本结果；question/reference/context 按执行时点快照保存。"""
-    db.add(
-        EvalItem(
-            task_id=task.id,
-            profile_id=profile_id,
-            row_no=row.row_no,
-            question=row.question or "",
-            reference=row.reference or "",
-            context=row.context,
-            output=result.get("output") or "",
-            score=result.get("score"),
-            exact=result.get("exact"),
-            rouge_l=result.get("rouge_l"),
-            latency_ms=result.get("latency_ms"),
-            error=result.get("error"),
-            raw=result.get("raw"),
-            usage=result.get("usage"),
-        )
-    )
-
-
-def _upsert_ledger(db: Session, task_id: str, profile_id: str, totals: dict) -> None:
-    """按「任务 × 协议档」累加 upsert 用量台账行。"""
-    row = (
-        db.query(UsageLedger)
-        .filter(UsageLedger.task_id == task_id, UsageLedger.profile_id == profile_id)
-        .first()
-    )
-    if row is None:
-        db.add(
-            UsageLedger(
-                task_id=task_id,
-                profile_id=profile_id,
-                prompt_tokens=totals["prompt_tokens"],
-                completion_tokens=totals["completion_tokens"],
-                total_tokens=totals["total_tokens"],
-                est_cost_usd=totals["est_cost_usd"],
-            )
-        )
-    else:
-        row.prompt_tokens = totals["prompt_tokens"]
-        row.completion_tokens = totals["completion_tokens"]
-        row.total_tokens = totals["total_tokens"]
-        row.est_cost_usd = totals["est_cost_usd"]
 
 
 def _load_usage(db: Session, task_id: str) -> dict[str, dict]:
@@ -340,7 +260,7 @@ def _finish(db: Session, task: Task, dataset: Dataset, metric: str, total: int) 
 
 
 def run_benchmark(task_id: str) -> None:
-    """Benchmark 任务真实执行入口：由 main._run_task 在领取任务后调用。"""
+    """Benchmark 任务执行入口：通过 LangGraph 工作流编排执行。"""
     db = SessionLocal()
     task: Task | None = None
     try:
@@ -404,84 +324,94 @@ def run_benchmark(task_id: str) -> None:
             return
         _progress(db, task, done, total, "执行中")
 
-        # ─── 逐 profile 分批执行 ───
         usage_totals = _load_usage(db, task.id)
-        cost_usd = sum(t["est_cost_usd"] for t in usage_totals.values())
-        for profile in profiles:
-            # 断点续跑：跳过该 profile 已落库的行号
-            finished_nos = {
-                row_no
-                for (row_no,) in db.query(EvalItem.row_no).filter(
-                    EvalItem.task_id == task.id, EvalItem.profile_id == profile.id
-                ).all()
+
+        # 整理传递给 LangGraph 的纯字典结构数据
+        rows_data = [
+            {
+                "row_no": r.row_no,
+                "question": r.question,
+                "reference": r.reference,
+                "context": r.context,
             }
-            pending = [row for row in rows if row.row_no not in finished_nos]
-            if not pending:
-                continue
-
-            base_url, model, api_key = profile_connection(profile)
-            if not api_key:
-                # 无 Key 档位：全部样本记 VALIDATION 错误，不中断其它档评测
-                for row in pending:
-                    _save_item(
-                        db, task, profile.id, row, {"ok": False, "error": "VALIDATION: 协议档未配置 API Key"}
-                    )
-                    done += 1
-                db.commit()
-                _progress(db, task, done, total, "执行中")
-                continue
-
-            call_kwargs = dict(
-                protocol=profile.protocol,
-                base_url=base_url,
-                model=model,
-                api_key=api_key,
-                anthropic_version=profile.anthropic_version,
-                system=system_prompt,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                timeout_s=timeout_s,
+            for r in rows
+        ]
+        profiles_data = []
+        for p in profiles:
+            base_url, model, api_key = profile_connection(p)
+            profiles_data.append(
+                {
+                    "id": p.id,
+                    "name": p.name,
+                    "protocol": p.protocol,
+                    "base_url": base_url,
+                    "model": model,
+                    "api_key": api_key,
+                    "anthropic_version": p.anthropic_version,
+                }
             )
-            for start in range(0, len(pending), batch_size):
-                batch = pending[start : start + batch_size]
-                # 批内按并发上限并行调用被测（批大小 = min(run.concurrency, max_inflight)）；
-                # 单线程池随批创建随批回收，取消/预算检查发生在批与批之间
-                with ThreadPoolExecutor(max_workers=len(batch)) as pool:
-                    results = list(
-                        pool.map(lambda row: _eval_one(call_kwargs, row, retry, metric), batch)
-                    )
-                for row, result in zip(batch, results):
-                    # 失败样本记 error 落库，不中断整次评测（PRD 5.2.2）
-                    _save_item(db, task, profile.id, row, result)
-                    done += 1
-                    usage = result.get("usage")
-                    if usage:
-                        totals = usage_totals.setdefault(
-                            profile.id,
-                            {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "est_cost_usd": 0.0},
-                        )
-                        totals["prompt_tokens"] += int(usage.get("prompt_tokens") or 0)
-                        totals["completion_tokens"] += int(usage.get("completion_tokens") or 0)
-                        totals["total_tokens"] += int(usage.get("total_tokens") or 0)
-                        totals["est_cost_usd"] = totals["total_tokens"] / 1000 * price
-                        _upsert_ledger(db, task.id, profile.id, totals)
-                db.commit()
-                cost_usd = sum(t["est_cost_usd"] for t in usage_totals.values())
-                _progress(db, task, done, total, "执行中")
 
-                # 协作式取消：当前批结束后检查（PRD 2.1：评测=当前样本结束后停）
-                if _is_cancelled(db, task_id):
-                    logger.info("benchmark task %s cancelled mid-run (done=%s/%s)", task_id, done, total)
-                    return
-                # 预算熔断：费用超限立即停止后续派发（BUDGET_EXCEEDED）
-                if cost_usd > max_usd:
-                    _fail(
-                        db,
-                        task,
-                        "BUDGET_EXCEEDED",
-                        f"费用估算 {cost_usd:.2f} USD 超过上限 {max_usd:.2f} USD，任务已停止",
-                    )
-                    return
+        pipeline = BenchmarkEvalPipeline(
+            db_factory=SessionLocal,
+            push_progress_fn=lambda t, d, tot, msg: _progress(db, t, d, tot, msg),
+            truncate_raw_fn=_truncate_raw,
+            is_cancelled_fn=_is_cancelled,
+        )
+
+        initial_state: BenchmarkGraphState = {
+            "task_id": task.id,
+            "dataset_id": dataset.id,
+            "metric": metric,
+            "rows_data": rows_data,
+            "profiles_data": profiles_data,
+            "run_params": {
+                "retry": retry,
+                "timeout_s": timeout_s,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "system_prompt": system_prompt,
+            },
+            "max_usd": max_usd,
+            "price_per_1k": price,
+            "batch_size": batch_size,
+            "total_samples": total,
+            "done_samples": done,
+            "usage_totals": usage_totals,
+            "is_cancelled": False,
+            "is_budget_exceeded": False,
+            "completed": False,
+        }
+
+        # 调用 LangGraph 执行评测工作流
+        final_state = pipeline.run(initial_state)
+
+        # 检查取消或预算熔断等终态分支
+        if final_state.get("is_cancelled"):
+            logger.info(
+                "benchmark task %s cancelled mid-run (done=%s/%s)",
+                task_id,
+                final_state.get("done_samples", done),
+                total,
+            )
+            return
+
+        if final_state.get("is_budget_exceeded") or final_state.get("error_code") == "BUDGET_EXCEEDED":
+            _fail(
+                db,
+                task,
+                "BUDGET_EXCEEDED",
+                final_state.get("error_message") or "费用超限，任务已停止",
+            )
+            return
+
+        if final_state.get("error_code"):
+            _fail(
+                db,
+                task,
+                final_state["error_code"],
+                final_state.get("error_message") or "评测执行异常",
+            )
+            return
 
         _finish(db, task, dataset, metric, total)
     except Exception as exc:

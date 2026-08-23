@@ -4,3 +4,5 @@ psycopg2-binary==2.9.10
 cryptography==44.0.0
 # testcase 任务解析 Excel 来源文档，版本与 api 容器保持一致
 openpyxl==3.1.5
+# 引入 LangGraph 用于评测流水线工作流图编排，版本与 api 容器保持一致
+langgraph==1.2.10
