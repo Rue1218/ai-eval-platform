@@ -2,11 +2,11 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.3 |
+| 文档版本 | V1.4 |
 | 对应 PRD | V1.8（唯一产品权威） |
 | 对应开发计划 | V1.5 |
 | 撰写日期 | 2026-08-17 |
-| 最近修订 | 2026-08-23：对齐 LangGraph 单轮 Agent、WS 基础事件和 Harness 冻结边界；2026-08-21：协议档增加 Embedding / Reranker 独立 URL、模型 ID、Key 配置，仍按 profile 环境文件隔离持久化 |
+| 最近修订 | 2026-08-23：协议档供应商卡片改用本地品牌标识并补充 Gemini 归类；2026-08-23：对齐 LangGraph 单轮 Agent、WS 基础事件和 Harness 冻结边界；2026-08-21：协议档增加 Embedding / Reranker 独立 URL、模型 ID、Key 配置，仍按 profile 环境文件隔离持久化 |
 | 技术栈（PRD） | Vue3 + Naive UI、Python FastAPI、PostgreSQL、WebSocket、Docker Compose、go-stress-testing |
 | 适用范围 | V1.0 前端 `frontend/` |
 
@@ -690,6 +690,13 @@ Agent 页允许的 Dialog **只有**：取消当前长任务、退出登录。�
 | `frontend/src/views/AdminProfiles.vue` | 在协议档卡片和表格中标识已配置的 Embedding / Reranker 模型 |
 | `frontend/src/api/types.ts` | 补齐附加模型配置及密钥存在性字段 |
 
+## 本次修订代码文件与作用清单（2026-08-23）
+
+| 文件 | 作用 |
+| --- | --- |
+| `frontend/src/components/ProviderLogo.vue` | 使用本地内联品牌图形渲染供应商标识；没有稳定图形的供应商使用文字标记，不依赖运行时外链 |
+| `frontend/src/views/AdminProfiles.vue` | `/admin/profiles` 供应商卡片改用品牌标识，并独立识别 Google Gemini |
+
 ---
 
-*V1.4.1：补齐 Embedding / Reranker 协议档配置的表单字段与列表标识。产品以 PRD 为准。*
+*V1.4：补齐 Embedding / Reranker 协议档配置的表单字段与列表标识，并统一供应商卡片品牌标识。产品以 PRD 为准。*
