@@ -8,7 +8,15 @@
     :aria-label="logo.label"
   >
     <svg v-if="logo.path" viewBox="0 0 24 24" aria-hidden="true">
-      <path :d="logo.path" :fill="logo.pathColor || 'currentColor'" />
+      <defs v-if="logo.gradient">
+        <linearGradient :id="gradientId" x1="0%" y1="100%" x2="100%" y2="0%">
+          <stop offset="0%" stop-color="#F9AB00" />
+          <stop offset="34%" stop-color="#34A853" />
+          <stop offset="66%" stop-color="#4285F4" />
+          <stop offset="100%" stop-color="#A142F4" />
+        </linearGradient>
+      </defs>
+      <path :d="logo.path" :fill="logo.gradient ? `url(#${gradientId})` : (logo.pathColor || 'currentColor')" />
     </svg>
     <span v-else aria-hidden="true">{{ logo.mark }}</span>
   </span>
@@ -29,6 +37,7 @@ interface ProviderLogoDefinition {
   path?: string
   pathColor?: string
   background?: string
+  gradient?: boolean
 }
 
 // 图形来源于 Simple Icons 的品牌图标；未提供稳定图形的供应商使用文字标记，避免伪造品牌图案。
@@ -50,7 +59,7 @@ const LOGOS: Record<ProviderLogoKey, ProviderLogoDefinition> = {
     path: 'M17.3041 3.541h-3.6718l6.696 16.918H24Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.5409Zm-.3712 10.2232 2.2914-5.9456 2.2914 5.9456Z',
   },
   gemini: {
-    label: 'Google Gemini', color: '#7C5CFC', mark: '✦',
+    label: 'Google Gemini', color: '#7C5CFC', mark: '✦', gradient: true,
     path: 'M11.04 19.32Q12 21.51 12 24q0-2.49.93-4.68.96-2.19 2.58-3.81t3.81-2.55Q21.51 12 24 12q-2.49 0-4.68-.93a12.3 12.3 0 0 1-3.81-2.58a12.3 12.3 0 0 1-2.58-3.81Q12 2.49 12 0q0 2.49-.96 4.68-.93 2.19-2.55 3.81a12.3 12.3 0 0 1-3.81 2.58Q2.49 12 0 12q2.49 0 4.68.96 2.19.93 3.81 2.55t2.55 3.81',
   },
   deepseek: {
@@ -99,6 +108,7 @@ const LOGOS: Record<ProviderLogoKey, ProviderLogoDefinition> = {
 }
 
 const logo = computed(() => LOGOS[props.provider])
+const gradientId = computed(() => `provider-logo-gradient-${props.provider}`)
 </script>
 
 <style scoped>
@@ -109,9 +119,9 @@ const logo = computed(() => LOGOS[props.provider])
   flex: 0 0 28px;
   align-items: center;
   justify-content: center;
-  border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
-  border-radius: 8px;
-  background: color-mix(in srgb, currentColor 10%, transparent);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .provider-logo svg {
@@ -129,7 +139,7 @@ const logo = computed(() => LOGOS[props.provider])
   width: 16px;
   height: 16px;
   flex-basis: 16px;
-  border-radius: 4px;
+  border-radius: 0;
 }
 
 .provider-logo-compact svg {

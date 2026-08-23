@@ -536,13 +536,29 @@
               class="msg-agent"
               :class="{ 'no-anim': item.noAnim, 'streaming-bubble': item.streaming }"
             >
-              <MarkdownView
-                :content="item.raw || item.text || ''"
-                :is-streaming="item.streaming"
-              />
-              <!-- 回复耗时：交付终帧 / 历史回放携带 latency_ms，生成中与无效值不显示 -->
-              <div v-if="!item.streaming && formatLatency(item.latency_ms)" class="reply-latency mono">
-                耗时 {{ formatLatency(item.latency_ms) }}
+              <div class="assistant-message-layout">
+                <ProviderLogo
+                  class="assistant-message-logo"
+                  :provider="item.providerLogoKey || agentProfileLogoKey"
+                />
+                <div class="assistant-message-main">
+                  <div class="assistant-message-header">
+                    <div class="assistant-message-model">
+                      {{ item.modelName || agentDisplayModelName }}<span v-if="item.profileName || agentProfileDisplayName" class="assistant-message-profile"> | {{ item.profileName || agentProfileDisplayName }}</span>
+                    </div>
+                    <div v-if="formatAgentMessageTime(item.createdAt)" class="assistant-message-time mono">
+                      {{ formatAgentMessageTime(item.createdAt) }}
+                    </div>
+                  </div>
+                  <MarkdownView
+                    :content="item.raw || item.text || ''"
+                    :is-streaming="item.streaming"
+                  />
+                  <!-- 回复耗时：交付终帧 / 历史回放携带 latency_ms，生成中与无效值不显示 -->
+                  <div v-if="!item.streaming && formatLatency(item.latency_ms)" class="reply-latency mono">
+                    耗时 {{ formatLatency(item.latency_ms) }}
+                  </div>
+                </div>
               </div>
             </div>
           </template>
@@ -895,11 +911,15 @@ const showJumpBottom = ref(false)
 const agentModelName = ref('')
 const currentAgentProfileId = ref<string>('')
 const allProfiles = ref<Profile[]>([])
-const agentProfileLogoKey = computed<ProviderLogoKey>(() => {
+const activeAgentProfile = computed(() => {
   const activeId = currentAgentProfileId.value || allProfiles.value[0]?.id
-  const profile = allProfiles.value.find((item) => item.id === activeId)
-  return profile ? getProviderLogoKey(profile) : 'custom'
+  return allProfiles.value.find((item) => item.id === activeId) || null
 })
+const agentProfileLogoKey = computed<ProviderLogoKey>(() => {
+  return activeAgentProfile.value ? getProviderLogoKey(activeAgentProfile.value) : 'custom'
+})
+const agentDisplayModelName = computed(() => activeAgentProfile.value?.model || agentModelName.value || 'Agent')
+const agentProfileDisplayName = computed(() => activeAgentProfile.value?.name || '')
 
 // 上下文度量与斜杠命令面板状态
 const currentContextMeter = ref<ContextMeterData | null>(null)
@@ -1139,6 +1159,11 @@ interface StreamItem {
   noAnim?: boolean
   // S3 思考卡流式打字：fullText 为应显示全文，复用上方 streaming 标记表示打字机进行中
   fullText?: string
+  // 助手消息头元数据：用于展示本轮使用的供应商 Logo、模型和协议档名称。
+  providerLogoKey?: ProviderLogoKey
+  modelName?: string
+  profileName?: string
+  createdAt?: string
   // F8 确认卡内联校验错误（字段名 → 红字文案）
   fieldErrors?: Record<string, string>
 }
@@ -1179,6 +1204,28 @@ function userMessageAuthorLabel(item: StreamItem): string {
 /** 判断用户气泡是否来自当前成员以外的团队协作者。 */
 function isRemoteUserMessage(item: StreamItem): boolean {
   return Boolean(item.author?.id && authStore.user?.id && item.author.id !== authStore.user.id)
+}
+
+/** 将助手消息时间格式化为原型中的 MM/DD HH:mm。 */
+function formatAgentMessageTime(dateStr?: string): string {
+  if (!dateStr) return ''
+  const date = new Date(dateStr)
+  if (Number.isNaN(date.getTime())) return ''
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  const hours = String(date.getHours()).padStart(2, '0')
+  const minutes = String(date.getMinutes()).padStart(2, '0')
+  return `${month}/${day} ${hours}:${minutes}`
+}
+
+/** 记录本轮助手消息头所需的供应商、模型和协议档信息。 */
+function currentAgentMessageMeta(): Pick<StreamItem, 'providerLogoKey' | 'modelName' | 'profileName' | 'createdAt'> {
+  return {
+    providerLogoKey: agentProfileLogoKey.value,
+    modelName: agentDisplayModelName.value,
+    profileName: agentProfileDisplayName.value,
+    createdAt: new Date().toISOString(),
+  }
 }
 
 /** 判断当前成员是否是待确认卡的唯一作者；兼容迁移前无作者字段的历史卡。 */
@@ -2415,6 +2462,10 @@ async function loadSessionHistory(sid: string): Promise<number> {
             text: m.content || '',
             raw: m.content || '',
             latency_ms: m.latency_ms ?? undefined,
+            providerLogoKey: agentProfileLogoKey.value,
+            modelName: agentDisplayModelName.value,
+            profileName: agentProfileDisplayName.value,
+            createdAt: m.created_at,
             noAnim: true,
           },
         })
@@ -2923,7 +2974,7 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
         if (!delta) break
         let target = turnStreamingAgent(buf)
         if (!target) {
-          target = { type: 'agent', raw: '', text: '', streaming: true }
+          target = { type: 'agent', raw: '', text: '', streaming: true, ...currentAgentMessageMeta() }
           buf.push(target)
         }
         target.raw = (target.raw || '') + delta
@@ -2957,7 +3008,7 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
       if (!delta) break
       let target = turnStreamingAgent(buf)
       if (!target) {
-        target = { type: 'agent', raw: '', text: '', streaming: true }
+        target = { type: 'agent', raw: '', text: '', streaming: true, ...currentAgentMessageMeta() }
         buf.push(target)
       }
       target.raw = (target.raw || '') + delta
@@ -2983,6 +3034,7 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
             text: renderBubbleHtml(text),
             streaming: false,
             latency_ms: typeof p.reply_latency_ms === 'number' ? p.reply_latency_ms : undefined,
+            ...currentAgentMessageMeta(),
           })
         }
       } else if (streaming) {
@@ -3221,7 +3273,7 @@ function handleWsEvent(ev: WsServerEvent) {
           let target = turnStreamingAgent(events.value)
           if (!target) {
             // reactive 包装：新建后立即修改 raw/text，原始对象不触发渲染会丢首帧
-            target = reactive({ type: 'agent', raw: '', text: '', streaming: true }) as StreamItem
+            target = reactive({ type: 'agent', raw: '', text: '', streaming: true, ...currentAgentMessageMeta() }) as StreamItem
             events.value.push(target)
           }
           target.raw = (target.raw || '') + delta
@@ -3265,7 +3317,7 @@ function handleWsEvent(ev: WsServerEvent) {
       let target = turnStreamingAgent(events.value)
       if (!target) {
         // reactive 包装：首个正文增量到达时立即创建可响应的助手气泡。
-        target = reactive({ type: 'agent', raw: '', text: '', streaming: true }) as StreamItem
+        target = reactive({ type: 'agent', raw: '', text: '', streaming: true, ...currentAgentMessageMeta() }) as StreamItem
         events.value.push(target)
       }
       target.raw = (target.raw || '') + delta
@@ -3292,6 +3344,7 @@ function handleWsEvent(ev: WsServerEvent) {
             text: renderBubbleHtml(text),
             streaming: false,
             latency_ms: typeof p.reply_latency_ms === 'number' ? p.reply_latency_ms : undefined,
+            ...currentAgentMessageMeta(),
           }))
         }
       } else if (streaming) {
@@ -3476,7 +3529,8 @@ function formatRelativeTime(dateStr?: string) {
 onMounted(async () => {
   await loadSessions()
   // 顶栏/输入框的 Agent 模型名改为按后端协议档动态解析，不再硬编码
-  resolveAgentModelName()
+  // 先解析协议档，再回放历史消息，保证助手消息头能显示正确供应商 Logo 与模型名称。
+  await resolveAgentModelName()
   if (sessions.value.length > 0) {
     // selectSession 内部完成历史回放对齐、WS 建立与侧轨展开（F4/F17）
     selectSession(sessions.value[0].id)
@@ -3585,6 +3639,46 @@ onBeforeUnmount(() => {
   color: var(--text-tertiary);
   font-size: 11px;
   font-weight: 600;
+}
+
+/* 助手消息头：用真实供应商图形对齐模型名和协议档名称。 */
+.assistant-message-layout {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.assistant-message-logo {
+  margin-top: 2px;
+}
+
+.assistant-message-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.assistant-message-header {
+  margin-bottom: 7px;
+  line-height: 1.25;
+}
+
+.assistant-message-model {
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.assistant-message-profile {
+  color: var(--text-secondary);
+  font-weight: 650;
+}
+
+.assistant-message-time {
+  margin-top: 3px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  line-height: 1.2;
 }
 
 /* 顶部与输入框模型选择胶囊按钮 */
