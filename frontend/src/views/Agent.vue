@@ -192,15 +192,16 @@
               <span class="tdot"></span><span class="tdot"></span><span class="tdot"></span>
             </div>
 
-            <!-- 2.2 思考卡：深度思考链流式展示，完成后自动折叠，可展开/收起 -->
-            <ThoughtCard
-              v-else-if="item.type === 'thought'"
-              :text="item.text || ''"
-              :done="item.done"
-              :latency-ms="item.latency_ms"
-              :skill-id="item.skill_id"
-              :stage="item.stage"
-            />
+            <!-- 2.2 思考卡兜底：深度思考链流式展示（带左侧头像对齐偏移） -->
+            <div v-else-if="item.type === 'thought'" class="msg-agent-standalone-thought">
+              <ThoughtCard
+                :text="item.text || ''"
+                :done="item.done"
+                :latency-ms="item.latency_ms"
+                :skill-id="item.skill_id"
+                :stage="item.stage"
+              />
+            </div>
 
             <!-- 2.3 ToolCall 卡片：WS 事件 tool_call/tool_result，执行走内部短工具 -->
             <ToolCard
@@ -3829,6 +3830,12 @@ onBeforeUnmount(() => {
   color: var(--text-tertiary);
   font-size: 10px;
   line-height: 1.2;
+}
+
+/* 独立/兜底思考卡片左侧对齐（与助手正文垂线严格一致） */
+.msg-agent-standalone-thought {
+  margin-left: 38px;
+  max-width: calc(100% - 38px);
 }
 
 /* 顶部与输入框模型选择胶囊按钮 */
