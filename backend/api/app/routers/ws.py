@@ -333,6 +333,28 @@ def _history_messages(db: Session, session_id: str) -> list[dict[str, str]]:
     ]
 
 
+def _infer_provider(profile: ProtocolProfile | None) -> str | None:
+    """根据协议档的模型名、名称、URL 与协议类型推断供应商标识，供前端精准呈现 ProviderLogo。"""
+    if profile is None:
+        return None
+    model = (profile.model or "").lower()
+    name = (profile.name or "").lower()
+    url = (profile.base_url or "").lower()
+    if "deepseek" in model or "deepseek" in name or "deepseek" in url:
+        return "deepseek"
+    if "gemini" in model or "gemini" in name or "google" in url:
+        return "gemini"
+    if "qwen" in model or "tongyi" in name or "aliyun" in url:
+        return "qwen"
+    if "claude" in model or "anthropic" in name or "anthropic" in url or profile.protocol == "anthropic_messages":
+        return "anthropic"
+    if "gpt" in model or "openai" in name or "openai" in url:
+        return "openai"
+    if "ollama" in url or "ollama" in name:
+        return "ollama"
+    return profile.protocol
+
+
 async def _run_turn(
     session_id: str,
     websocket: WebSocket,
@@ -402,7 +424,7 @@ async def _run_turn(
             model_name=profile.model or profile.name if profile else None,
             profile_id=profile.id if profile else None,
             profile_name=profile.name if profile else None,
-            provider=profile.provider or profile.protocol if profile else None,
+            provider=_infer_provider(profile),
             source_id="pending",
             source_version=1,
         )
@@ -451,7 +473,7 @@ async def _run_turn(
         )
     except Exception as exc:
         db.rollback()
-        logger.error("Agent 回合内部异常 session=%s type=%s", session_id, type(exc).__name__)
+        logger.exception("Agent 回合内部异常 session=%s exc=%s", session_id, exc)
         await _emit_error(
             db,
             websocket,
