@@ -695,7 +695,7 @@
                   type="button"
                   title="点击切换当前 Agent 驱动模型"
                 >
-                  <span class="head-model-dot"></span>
+                  <ProviderLogo :provider="agentProfileLogoKey" compact />
                   <span class="model-name mono">Agent · {{ agentModelName || '选择模型' }}</span>
                   <svg class="chevron-icon" width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5">
                     <path d="M3 4.5l3 3 3-3" stroke-linecap="round" stroke-linejoin="round" />
@@ -823,6 +823,8 @@ import { getDefaultRunConfig, getDefaultStressConfig } from '../schemas/confirmC
 import { useModeStore } from '../stores/mode'
 import { useAuthStore } from '../stores/auth'
 import KindTag from '../components/common/KindTag.vue'
+import ProviderLogo from '../components/ProviderLogo.vue'
+import { getProviderLogoKey, type ProviderLogoKey } from '../utils/providerLogo'
 import { formatLatency } from '../utils/format'
 import { skillLabel } from '../agent/skillLabels'
 import SkillBadge from '../components/agent/SkillBadge.vue'
@@ -893,6 +895,11 @@ const showJumpBottom = ref(false)
 const agentModelName = ref('')
 const currentAgentProfileId = ref<string>('')
 const allProfiles = ref<Profile[]>([])
+const agentProfileLogoKey = computed<ProviderLogoKey>(() => {
+  const activeId = currentAgentProfileId.value || allProfiles.value[0]?.id
+  const profile = allProfiles.value.find((item) => item.id === activeId)
+  return profile ? getProviderLogoKey(profile) : 'custom'
+})
 
 // 上下文度量与斜杠命令面板状态
 const currentContextMeter = ref<ContextMeterData | null>(null)
@@ -945,6 +952,7 @@ const agentProfileDropdownOptions = computed<DropdownOption[]>(() => {
       label: `${p.name} (${p.model || p.protocol})${isCurrent ? ' ✓' : ''}`,
       key: p.id,
       disabled: isCurrent,
+      icon: () => h(ProviderLogo, { provider: getProviderLogoKey(p), compact: true }),
     }
   })
   return [
@@ -3630,13 +3638,6 @@ onBeforeUnmount(() => {
   border-radius: 4px;
   margin-left: 2px;
 }
-.head-model-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--accent-ai);
-}
-
 /* 底部输入框整体容器（固定吸附于对话流底部，不随会话滚动消失） */
 .composer {
   padding: 6px 20px 14px;
