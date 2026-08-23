@@ -3,13 +3,15 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 团队开发与联调规划 |
-| 版本 | V1.0 |
+| 版本 | V1.1 |
 | 审查日期 | 2026-08-23 |
 | 文档性质 | 施工排期与协作规范（指导性文档） |
 | 适用范围 | Harness 运行时阶段 1–4 的 2 人团队分工、模块分配、联调时序与验收闸门 |
 | 事实来源 | [`docs/AI测试与评估平台-Harness需求文档.md`](AI测试与评估平台-Harness需求文档.md) §9.3 文件生成清单 + 10 份模块设计文档（M1–M10） |
 
 > **阅读关系**：本文是 Harness 需求文档 §9.3 施工蓝图的**团队协作落地版**，回答"谁在哪个阶段做哪些文件、何时联调、验收什么"；模块签名与红线以 10 份模块设计文档与 Harness 需求文档 §7 为准，本文不新增任何契约或字段。
+
+> **V1.1 修订定位**：新增 §3「模块分配总表」，按"谁主导"汇总 A/B 两人各模块归属（M3/M4/M7 跨阶段分担处拆到子文件级），作为 §4 阶段分工明细的总览索引。不改需求范围，不新增对外字段。
 
 ---
 
@@ -86,9 +88,41 @@ flowchart TD
 
 ---
 
-## 3. 2 人分工明细
+## 3. 模块分配总表（按主导人汇总）
 
-### 3.1 阶段 1（基础攻坚，配对为主）
+> 下表按"谁主导"汇总 A/B 两人各模块归属。M3 / M4 / M7 跨阶段由两人分担，已拆到子文件级标注主写人。本表是 §4 阶段分工明细的总览索引。
+
+| 模块 | 主导人 | 文件 | 阶段 |
+| :--- | :--- | :--- | :--- |
+| M1 提示词工程层 | **B** | `system.py` / `protocols.py` / `safety.py` | 1（system/protocols）→ 4（safety） |
+| M2 上下文工程层 | **B** | `window.py` / `assembly.py` / `observation.py` / `compact.py` / `meter.py` | 1→2→3 |
+| M3 记忆层 | **A + B** | `state.py`（A）· `working.py`/`episodic.py`（B）· `compressed.py`/`preference.py`（B） | 1→3 |
+| M4 编排层 | **A 骨架 + B 扩展** | `router.py`/`routing.py`/`confirm.py`（A）· `budget.py`/`gates.py`/`react.py`/`clarify.py`/`plan.py`/`plan_solve.py`/`reflect.py`（B） | 1→2→3→4 |
+| M5 执行层 | **A** | `registry.py` / `binding.py` / `toolnode.py` / `dispatch.py` / `worker_bridge.py` / `session_guard.py` | 2→4 |
+| M6 反馈层 | **B** | `observation.py` / `rules.py` / `review.py` / `budget.py` / `isolation.py` | 2→4 |
+| M7 跨层契约层 | **A** | `events.py` / `artifacts.py` 早波（A）· `artifacts.py` 晚波（B 主写） | 1→2→4 |
+| M8 跨层安全 | **A** | `secrets.py` / `auth.py` | 2→4 |
+| M9 运行时基础设施 | **A** | `checkpoint.py` / `cleanup.py` + Alembic | 3 |
+| M10 技能体系 | **B** | `SKILL_KIND_MAP` + 4 评测域 SkillHint | 2→4 |
+
+**一句话分工**：
+
+- **A（架构 + 执行 + 安全 + 运行时）**：M7 契约、M3 状态、M4 编排骨架、M5 执行、M8 安全、M9 运行时 —— 负责"骨架与底座"，先行为他人铺路。
+- **B（提示词 + 上下文 + 反馈 + 技能 + 编排扩展）**：M1 提示词、M2 上下文、M6 反馈、M10 技能、M4 扩展节点 —— 负责"模型交互与业务能力"。
+
+**交接点**（仅 3 处，每日站会同步）：
+
+| 交接模块 | A 负责 | B 负责 | 同步时机 |
+| :--- | :--- | :--- | :--- |
+| M3 记忆 | `state.py`（GraphState 定义） | `working.py`/`episodic.py`/`compressed.py`/`preference.py` | 阶段 1 state.py 定稿后 |
+| M4 编排 | `router.py`/`routing.py`/`confirm.py` | `budget.py`/`gates.py`/`react.py`/`clarify.py`/`plan.py`/`plan_solve.py`/`reflect.py` | 每阶段接入新节点前 |
+| M7 契约 | `events.py` + `artifacts.py` 早波 | `artifacts.py` 晚波（PlanArtifact/SkillHint） | 阶段 2 早波定稿 / 阶段 4 晚波启动 |
+
+---
+
+## 4. 2 人分工明细
+
+### 4.1 阶段 1（基础攻坚，配对为主）
 
 > 因技能不熟，前半程 A/B 配对攻克 M7 + M3 + M4 骨架（同坐或频繁 review），后半程分头。
 
@@ -104,7 +138,7 @@ flowchart TD
 
 **联调点 M1**：StateGraph 跑通 Chat（无工具）+ Direct（斜杠）路径，事件桥接断言（节点不持 WS 连接、事件均经统一广播发出），`backend/api/tests/test_agent_graph.py` 路由断言绿色。
 
-### 3.2 阶段 2（ReAct + 工具注册表，可并行）
+### 4.2 阶段 2（ReAct + 工具注册表，可并行）
 
 | 人 | 模块 | 文件 |
 | :--- | :--- | :--- |
@@ -117,7 +151,7 @@ flowchart TD
 
 **联调点 M2**：ReAct 循环跑通（agent → ToolNode → agent），每轮至多执行一个短工具（OR-4），预算 / 门禁拦截长工具（OR-6），脱敏断言（CX-3）。
 
-### 3.3 阶段 3（Checkpointer + 澄清卡，可并行）
+### 4.3 阶段 3（Checkpointer + 澄清卡，可并行）
 
 | 人 | 模块 | 文件 |
 | :--- | :--- | :--- |
@@ -129,7 +163,7 @@ flowchart TD
 
 **联调点 M3**：断线重连按 `thread_id` 恢复图执行状态（检查点），澄清卡 `interrupt` → 暂停 → 用户回复 → `Command(resume)` 恢复，断言不建任务 / 不占回合预算；`/compact` 摘要 + ContextMeter 投影。
 
-### 3.4 阶段 4（Plan-Solve + 确认卡 + Reflexion，可并行）
+### 4.4 阶段 4（Plan-Solve + 确认卡 + Reflexion，可并行）
 
 | 人 | 模块 | 文件 |
 | :--- | :--- | :--- |
@@ -146,7 +180,7 @@ flowchart TD
 
 ---
 
-## 4. 联调时序与验收闸门
+## 5. 联调时序与验收闸门
 
 每阶段末设统一联调日，2 人合分支跑全链路。联调日禁止新功能合入，只修 bug。
 
@@ -159,7 +193,7 @@ flowchart TD
 
 ---
 
-## 5. 分支与协作规范
+## 6. 分支与协作规范
 
 - **分支模型**：每阶段开 1 条主干分支（如 `feat/agent-stage1`），2 人在其下开个人子分支（`feat/agent-stage1-A` / `feat/agent-stage1-B`），阶段末合到主干分支再提 1 个 PR 到 `main`。`main` 只接受已审查合并，禁止在 `main` 上直接开发。
 - **契约同步**：每日站会同步依赖契约变更。M7（contracts）与 M3（state.py）的改动需 A/B 双方对齐后再合入，避免下游 ImportError。
@@ -171,10 +205,10 @@ flowchart TD
 
 ---
 
-## 6. 修改代码文件与作用清单
+## 7. 修改代码文件与作用清单
 
 | 文件 | 操作 | 作用 |
 | :--- | :--- | :--- |
-| `docs/AI测试与评估平台-Harness团队开发与联调规划.md` | 新增（V1.0） | 把 Harness 需求文档 §9.3 施工蓝图落地为 2 人团队的可执行排期：模块依赖图、阶段内 A/B 分工明细、4 个联调验收闸门、分支与协作规范。本文不新增任何对外 REST/WS 字段，不改变已落地基线，模块签名以 10 份模块设计文档为准。 |
+| `docs/AI测试与评估平台-Harness团队开发与联调规划.md` | 新增（V1.0）→ 修订 V1.1 | V1.0 把 Harness 需求文档 §9.3 施工蓝图落地为 2 人团队的可执行排期：模块依赖图、阶段内 A/B 分工明细、4 个联调验收闸门、分支与协作规范。V1.1 新增 §3「模块分配总表」：按"谁主导"汇总 A/B 各模块归属（M3/M4/M7 跨阶段分担处拆到子文件级），并给出 3 处交接点同步时机，作为 §4 阶段分工明细的总览索引。本文不新增任何对外 REST/WS 字段，不改变已落地基线，模块签名以 10 份模块设计文档为准。 |
 
 本次仅新增排期文档，不改变任何 API、数据库、前端或 Agent 运行代码。
