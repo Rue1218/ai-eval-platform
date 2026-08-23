@@ -81,11 +81,39 @@ def _apply_openai_reasoning(
         body["reasoning_effort"] = selected
 
 
-def _apply_compatible_thinking(body: dict, base: str, model: str, enabled: bool) -> None:
+def _apply_compatible_thinking(
+    body: dict,
+    base: str,
+    model: str,
+    enabled: bool,
+    effort: str = "medium",
+) -> None:
     """为已知 OpenAI 兼容推理端点设置 thinking 开关。"""
     target = f"{base} {model}".lower()
     if "xiaomimimo" in target:
         body["thinking"] = {"type": "enabled" if enabled else "disabled"}
+        return
+
+    # Gemini 的 OpenAI 兼容接口不会仅凭模型名把思考摘要放进流；必须
+    # 显式传入 Google 扩展字段。这里使用 REST 请求所需的 extra_body
+    # 结构，避免把供应商专用字段误发给普通 OpenAI 兼容模型。
+    if "gemini" in model.strip().lower() and enabled:
+        level = {
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            # 平台的更高档位映射为 Gemini 支持的最高 thinking_level。
+            "xhigh": "high",
+            "max": "high",
+        }.get(effort, "medium")
+        body["extra_body"] = {
+            "google": {
+                "thinking_config": {
+                    "thinking_level": level,
+                    "include_thoughts": True,
+                }
+            }
+        }
 
 
 def _anthropic_thinking_budget(max_tokens: int, effort: str) -> int:
@@ -292,7 +320,7 @@ def call_protocol(
         }
         # 非流式调用默认关闭 Mimo 思考，避免规划 JSON 被 reasoning 占满；Agent
         # 若显式打开则由 ModelGateway 传入 reasoning_enabled=True。
-        _apply_compatible_thinking(body, base, model, reasoning_enabled)
+        _apply_compatible_thinking(body, base, model, reasoning_enabled, reasoning_effort)
         _apply_openai_reasoning(
             body,
             model=model,
@@ -410,7 +438,7 @@ def stream_protocol(
             "max_tokens": max_tokens,
         }
         # 流式思考是否开启由 Agent 设置控制；默认值保持 Mimo 旧行为（开启）。
-        _apply_compatible_thinking(body, base, model, reasoning_enabled)
+        _apply_compatible_thinking(body, base, model, reasoning_enabled, reasoning_effort)
         _apply_openai_reasoning(
             body,
             model=model,
@@ -423,7 +451,12 @@ def stream_protocol(
         def delta_of(data: dict) -> tuple[str, str]:
             choices = data.get("choices") or [{}]
             delta = choices[0].get("delta") or {}
-            reasoning = delta.get("reasoning_content") or delta.get("reasoning") or delta.get("thought")
+            reasoning = (
+                delta.get("reasoning_content")
+                or delta.get("reasoning")
+                or delta.get("thought")
+                or delta.get("thinking")
+            )
             if reasoning:
                 # 推理模型的思考链增量（deepseek/mimo/qwen 等风格）
                 return ("reasoning", str(reasoning))

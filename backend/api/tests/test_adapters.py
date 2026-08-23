@@ -289,6 +289,42 @@ def test_stream_mimo_keeps_thinking_enabled(monkeypatch):
     assert seen["body"]["thinking"] == {"type": "enabled"}
 
 
+def test_stream_gemini_includes_thought_summaries(monkeypatch):
+    """Gemini OpenAI 兼容流式请求开启 Google thought summary 与强度。"""
+    seen = _capture_stream(monkeypatch, ['data: {"choices":[{"delta":{"content":"ok"}}]}'])
+    kwargs = _kwargs("openai_chat") | {
+        "model": "gemini-3.5-flash-lite",
+        "reasoning_effort": "high",
+    }
+    list(stream_protocol(**kwargs))
+
+    assert seen["body"]["extra_body"] == {
+        "google": {
+            "thinking_config": {
+                "thinking_level": "high",
+                "include_thoughts": True,
+            }
+        }
+    }
+
+
+def test_stream_gemini_thinking_delta_is_reasoning(monkeypatch):
+    """Gemini 兼容网关返回 thinking 增量时归一为 reasoning。"""
+    _capture_stream(
+        monkeypatch,
+        [
+            'data: {"choices":[{"delta":{"thinking":"先分析"}}]}',
+            'data: {"choices":[{"delta":{"content":"答案"}}]}',
+        ],
+    )
+    kwargs = _kwargs("openai_chat") | {"model": "gemini-3.5-flash-lite"}
+
+    assert list(stream_protocol(**kwargs)) == [
+        ("reasoning", "先分析"),
+        ("content", "答案"),
+    ]
+
+
 def test_stream_mimo_can_disable_thinking(monkeypatch):
     """关闭思考设置时，Mimo 流式请求明确发送 disabled。"""
     seen = _capture_stream(monkeypatch, ['data: {"choices":[{"delta":{"content":"ok"}}]}'])

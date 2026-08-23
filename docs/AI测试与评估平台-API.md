@@ -2,14 +2,14 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.19 |
-| 对应 PRD | V1.11（功能唯一权威） |
+| 文档版本 | V1.20 |
+| 对应 PRD | V1.12（功能唯一权威） |
 | 对应设计规范 | V1.3（错误码文案、确认卡字段名、调度中心规范） |
-| 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V0.4（LangGraph 单轮 Agent 与 WS 桥接；JSON 仍以本文为准） |
+| 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V0.5（LangGraph 单轮 Agent 与 WS 桥接；JSON 仍以本文为准） |
 | 对应前端计划 | V1.5 |
 | 对应后端计划 | V1.5 |
 | 撰写日期 | 2026-08-18 |
-| 最近修订 | 2026-08-23：V1.19 增加 Agent 思考摘要开关与 `low/medium/high/xhigh/max` 思考强度配置，按三协议映射模型请求；V1.18 将用户回显固定为 `user_message`，将回合完成固定为 `response.completed`，保留 `message` / `done` 仅用于旧客户端兼容；V1.17 拆分 WebSocket 用户消息、思考摘要、助手正文增量、助手最终消息和 done 事件；V1.16 接入 LangGraph 单轮 Agent 与 WebSocket 异步桥接；2026-08-22：V1.15 清空旧 Agent/Harness/模型调用/Runtime 实现、相关测试与阶段文档，保留 API 路径作为重建设计期间的明确占位；V1.14 及更早版本沿用历史修订记录。 |
+| 最近修订 | 2026-08-23：V1.20 补齐 Gemini OpenAI 兼容端点的 `extra_body.google.thinking_config` 与思考增量归一化；V1.19 增加 Agent 思考摘要开关与 `low/medium/high/xhigh/max` 思考强度配置，按三协议映射模型请求；V1.18 将用户回显固定为 `user_message`，将回合完成固定为 `response.completed`，保留 `message` / `done` 仅用于旧客户端兼容；V1.17 拆分 WebSocket 用户消息、思考摘要、助手正文增量、助手最终消息和 done 事件；V1.16 接入 LangGraph 单轮 Agent 与 WebSocket 异步桥接；2026-08-22：V1.15 清空旧 Agent/Harness/模型调用/Runtime 实现、相关测试与阶段文档，保留 API 路径作为重建设计期间的明确占位；V1.14 及更早版本沿用历史修订记录。 |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
 ---
@@ -1109,7 +1109,7 @@ RAG：同 kb + gold 版本。
 }
 ```
 
-`agent_reasoning` 由 Agent 新回合读取。`enabled=true` 时请求模型生成并流式返回可展示的 reasoning summary；前端以 `thought` 折叠卡显示，助手正文仍只走 `assistant_delta` / `assistant_message`。`effort` 支持 `low`、`medium`、`high`、`xhigh`、`max`，具体可用值由上游模型决定；普通不支持推理控制的模型不会发送未知专用字段。关闭时网关过滤 reasoning 增量，支持显式关闭的模型同时发送关闭参数。该配置不暴露隐藏思维链，不改变公共事件头中的 `session_id` / `task_id`。
+`agent_reasoning` 由 Agent 新回合读取。`enabled=true` 时请求模型生成并流式返回可展示的 reasoning summary；前端以 `thought` 折叠卡显示，助手正文仍只走 `assistant_delta` / `assistant_message`。`effort` 支持 `low`、`medium`、`high`、`xhigh`、`max`，具体可用值由上游模型决定；普通不支持推理控制的模型不会发送未知专用字段。Gemini 3.x 通过 OpenAI 兼容接口时，适配器发送 `extra_body.google.thinking_config.thinking_level` 与 `include_thoughts=true`，`xhigh/max` 映射为 Gemini 的 `high`；返回的 `reasoning_content`、`reasoning`、`thought` 或 `thinking` 增量统一归入 `thought`。关闭时网关过滤 reasoning 增量，支持显式关闭的模型同时发送关闭参数；Gemini 3.x 即使关闭展示，也不额外请求 thought summary。该配置不暴露隐藏思维链，不改变公共事件头中的 `session_id` / `task_id`。
 
 `notify` 的 URL/Token 仅 PUT 写入、GET 只给布尔或掩码。M1 可只返回 `agent_profile_id` 与并发默认；其余 M4 补齐。
 
@@ -1790,6 +1790,13 @@ Qwen Image 通过与 `audio.voiceclone` 相同的 Agent 内部短工具链路执
 | `frontend/src/api/types.ts` | 增加新事件类型并保留历史事件兼容 |
 | `frontend/src/views/Agent.vue` | 分离用户、思考、助手增量、最终消息和完成状态 |
 | `backend/api/tests/test_ws_protocol.py` | 回归验证用户回显事件与完成事件公共头 |
+
+**V1.20（2026-08-23）— Gemini 思考摘要兼容**
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/adapters.py` | 为 Gemini OpenAI 兼容流式请求发送 `thinking_config.include_thoughts`，映射思考强度，并归一化 `thinking` 思考增量 |
+| `backend/api/tests/test_adapters.py` | 回归验证 Gemini 思考参数与思考增量分类 |
 
 **V1.19（2026-08-23）— Agent 思考摘要与强度设置**
 
