@@ -3,11 +3,11 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 跨层契约层模块设计 |
-| 版本 | V0.4 |
+| 版本 | V0.4.1 |
 | 审查日期 | 2026-08-23 |
 | 文档性质 | 模块设计说明书（需求发散 + 架构设计） |
 | 适用模块 | M7 跨层契约层（`app/harness/contracts/`） |
-| 上游权威 | Harness 需求文档 V1.4.4 §2.5、§4 各层、§7、§9；API.md V1.21 §4.3/§4.4/§5；PRD §5.1.3 |
+| 上游权威 | Harness 需求文档 V1.4.4 §2.5、§4 各层、§7、§9；API.md V1.22 §4.3/§4.4/§5；PRD §5.1.3 |
 
 > **阅读关系**：本文是 Harness 需求文档 §9.2「跨层契约」行的展开。GraphState 主体不在此层（归 M3 记忆层，`app/harness/memory/state.py`），本文只定义被 GraphState 引用的契约类型。
 
@@ -142,7 +142,7 @@ app/harness/contracts/
 ```python
 from typing import Literal, Mapping, TypedDict
 
-# 与 API.md §4.3 持久化事件 1:1（瞬态帧 assistant_delta/thought.stream=think 不在此）
+# 节点产出的持久化事件（与 API.md §4.3 对齐；confirm_ack 由收包循环直产非节点产出，progress 不入 messages 故不在此）
 # V0.4：新增 clarify/plan（对齐 API.md V1.21 §4.3）
 NodeEventKind = Literal[
     "user_message", "thought", "tool_call", "tool_result",
@@ -329,7 +329,7 @@ def validate_plan_artifact(data: dict) -> PlanArtifact:
 
 | 文件 | 操作 | 作用 |
 | :--- | :--- | :--- |
-| `docs/AI测试与评估平台-Harness-跨层契约层.md` | 新增 V0.1 → 修订 V0.2 → 修订 V0.3 → 修订 V0.4 | V0.1 M7 跨层契约层模块设计：定义契约边界、需求发散、架构设计与 TDD 验收；V0.2 升级到接口签名级：补 `NodeEventKind` 枚举、`NodeEvent` TypedDict、各 dataclass 字段、构造/校验函数签名；V0.3 开放问题闭环：`NodeEvent.payload` 统一 Mapping、`Observation.source` 复用 messages `source_id` 格式、`PlanArtifact.budget` count-only、`NodeEvent` 加 `event_version` 字段；V0.4 对齐 API.md V1.21：`NodeEventKind` 枚举新增 `clarify`/`plan`，新增 §8「前端联调」章节列出 events/artifacts 对应的前端组件、文件、契约与验收点。 |
+| `docs/AI测试与评估平台-Harness-跨层契约层.md` | 新增 V0.1 → 修订 V0.2 → 修订 V0.3 → 修订 V0.4 → 修订 V0.4.1 | V0.1 M7 跨层契约层模块设计：定义契约边界、需求发散、架构设计与 TDD 验收；V0.2 升级到接口签名级：补 `NodeEventKind` 枚举、`NodeEvent` TypedDict、各 dataclass 字段、构造/校验函数签名；V0.3 开放问题闭环：`NodeEvent.payload` 统一 Mapping、`Observation.source` 复用 messages `source_id` 格式、`PlanArtifact.budget` count-only、`NodeEvent` 加 `event_version` 字段；V0.4 对齐 API.md V1.21：`NodeEventKind` 枚举新增 `clarify`/`plan`，新增 §8「前端联调」章节；V0.4.1 配合 API.md V1.22：§3.6.1 `NodeEventKind` 注释修正（不再称「与 §4.3 持久化事件 1:1」，改为「节点产出的持久化事件子集」）。 |
 
 本文档仅设计契约层，不改变任何 API、数据库、前端或 Agent 运行代码。
 

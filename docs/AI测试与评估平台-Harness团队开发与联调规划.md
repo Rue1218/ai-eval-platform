@@ -3,17 +3,19 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 团队开发与联调规划 |
-| 版本 | V1.2 |
+| 版本 | V1.3 |
 | 审查日期 | 2026-08-23 |
 | 文档性质 | 施工排期与协作规范（指导性文档） |
 | 适用范围 | Harness 运行时阶段 1–4 的 2 人后端分工 + 前端联调任务、模块分配、联调时序与验收闸门 |
-| 事实来源 | [`docs/AI测试与评估平台-Harness需求文档.md`](AI测试与评估平台-Harness需求文档.md) §9.3 文件生成清单 + 10 份模块设计文档（M1–M10） + [`docs/AI测试与评估平台-API.md`](AI测试与评估平台-API.md) V1.21 |
+| 事实来源 | [`docs/AI测试与评估平台-Harness需求文档.md`](AI测试与评估平台-Harness需求文档.md) §9.3 文件生成清单 + 10 份模块设计文档（M1–M10） + [`docs/AI测试与评估平台-API.md`](AI测试与评估平台-API.md) V1.22 |
 
 > **阅读关系**：本文是 Harness 需求文档 §9.3 施工蓝图的**团队协作落地版**，回答"谁在哪个阶段做哪些文件、何时联调、验收什么"；模块签名与红线以 10 份模块设计文档与 Harness 需求文档 §7 为准，本文不新增任何契约或字段。
 
 > **V1.1 修订定位**：新增 §3「模块分配总表」，按"谁主导"汇总 A/B 两人各模块归属（M3/M4/M7 跨阶段分担处拆到子文件级），作为 §4 阶段分工明细的总览索引。不改需求范围，不新增对外字段。
 
 > **V1.2 修订定位**：新增 §5「前端联调任务（按阶段）」—— 前端工作由 **陈东超** 独立负责（区别于 A/B 后端分工），按阶段 1–4 列出前端改动文件、对接契约（API.md V1.21）、验收点与阻塞依赖；§6 联调验收闸门补前端验收点；新增 §5.5「阶段 4 前置：补建 `backend/api/app/agent/defaults.py`」消除前后端确认卡默认值漂移。本次同步回写 API.md V1.21（clarify/plan 事件、tool_result/context_meter 扩展字段、clarify_reply 上行）。
+
+> **V1.3 修订定位**：配合 API.md V1.22 修复 V1.21 遗留契约裂缝——§5.1 斜杠注册拆分（`/help` 返回帮助文本，`/compact`/`/cancel`/`/stress`/未知斜杠阶段 1 返回 `VALIDATION`，补漏 `/compact`）；§5.4 M8 引用 `§3.6.2` 修正为 `§3.4.2`；§5 契约引用同步对齐 API.md V1.22（`tool_result.source` 改为溯源标识字符串，非 short\|long 枚举）。M4/M5/M7 模块文档同步升 V0.4.1。
 
 ---
 
@@ -198,7 +200,7 @@ flowchart TD
 
 | 任务 | 文件 | 对接契约 | 验收 |
 | :--- | :--- | :--- | :--- |
-| 补 `/help` `/cancel` `/stress` 系统斜杠注册（占位，命中由后端返回 `VALIDATION`） | `frontend/src/agent/slashRegistry.ts` | API.md §4.4 + M4 §3.6 | 面板可见三条命令；命中后 Toast 显示后端 `message` |
+| 补 `/help` `/compact` `/cancel` `/stress` 系统斜杠注册（占位） | `frontend/src/agent/slashRegistry.ts` | API.md §4.4 + M4 §3.6 | `/help` 命中返回帮助文本（`assistant_message`）；`/compact`/`/cancel`/`/stress`/未知斜杠阶段 1 命中返回 `VALIDATION`（Toast 显示后端 `message`） |
 | 未知斜杠 `error` 事件文案对齐 | `frontend/src/api/types.ts` `ERROR_MESSAGES` | API.md §4.3 `error` | `error` 分支优先用 `payload.message`，`ERROR_MESSAGES` 仅作中性 fallback |
 | `/stop` 在新图拓扑下中断流式回归验证 | — | API.md §4.4 `/stop` + M4 §3.4 | `/stop` 仍能中止 `assistant_delta` 流，不取消已 queued 任务 |
 
@@ -229,8 +231,8 @@ flowchart TD
 | `harnessStage` 补 `plan_solve` 档 | `frontend/src/views/Agent.vue:878,884` | M4 §3.5 模式路由 + M7 `NodeEventKind` | stage 显示「Plan-Solve 执行中」 |
 | **PlanArtifact 展示（完整可见）** | 新增 `frontend/src/components/agent/PlanCard.vue`；改 `Agent.vue` `handleWsEvent` 加 `plan` 分支；`api/types.ts` 加 `PlanEvent` 类型 | API.md §4.3 `plan`（V1.21 新增）+ M7 §3.6.2 `PlanArtifact` | PlanCard 展示 intent/skill_id/slots/tools_needed/budget/delivery/allows_replan；用户可查看无需 ack |
 | `confirm_ack` 阶段 4 联调验证 | — | API.md §4.4 + M4 §3.9.5 `handle_confirm_ack` | `confirm_ack` 事件回执 `task_id` 被前端正确忽略（只读 `ok`） |
-| 非 owner 确认 `UNAUTHORIZED` 文案对齐 | `frontend/src/api/types.ts` | M8 §3.6.2 `assert_confirm_owner` + API.md §1.3 | fallback 中性化，场景文案由后端 `message` 提供 |
-| 并发确认 `CONCURRENCY` 场景化文案 | `frontend/src/api/types.ts` | M8 §3.6.2 + API.md §1.3 | 确认卡场景文案为「确认卡已被他人处理」，不与「平台并发已满」混淆 |
+| 非 owner 确认 `UNAUTHORIZED` 文案对齐 | `frontend/src/api/types.ts` | M8 §3.4.2 `assert_confirm_owner` + API.md §1.3 | fallback 中性化，场景文案由后端 `message` 提供 |
+| 并发确认 `CONCURRENCY` 场景化文案 | `frontend/src/api/types.ts` | M8 §3.4.2 + API.md §1.3 | 确认卡场景文案为「确认卡已被他人处理」，不与「平台并发已满」混淆 |
 | `SkillHint.summary` 展示 | `frontend/src/agent/skillLabels.ts`、`frontend/src/components/agent/SkillBadge.vue`、`frontend/src/components/modals/SkillDetailModal.vue` | M7 §3.6.2 `SkillHint` + API.md §4.3 `thought.skill_id` | 技能徽标 hover/点击展示一句话 summary |
 | `/api/slash-commands` 自定义命令对接 | `frontend/src/components/agent/SlashPalette.vue`、`frontend/src/api/http.ts` | API.md §3.4 | 调 `GET /api/slash-commands` 渲染下区「我的命令」；M1 桩返回 `VALIDATION` 时隐藏 |
 | `/api/agent/prefs` 确认卡预填 | `frontend/src/views/Agent.vue` | API.md §3.4 | 新建会话首单预填上次选择 |
@@ -299,5 +301,10 @@ flowchart TD
 | `docs/AI测试与评估平台-Harness-技能体系.md` | 修订 V0.3 → V0.4 | 对齐 API.md V1.21：新增 §8「前端联调」章节列出 SkillHint/assert_skill_enabled/list_hints 对应的前端组件、契约与验收点（含 `skill_id` 一致性、summary 展示、未接入 skill 不 mock、`/api/slash-commands` 对接）。 |
 | `docs/AI测试与评估平台-Harness-提示词工程层.md` | 修订 V0.3 → V0.4 | 对齐 API.md V1.21：新增 §8「前端联调」章节说明 M1 对前端为间接影响（protocols 输出格式决定 thought/plan 事件字段），前端无直接契约，仅联调验证字段对齐。 |
 | `docs/AI测试与评估平台-Harness-记忆层.md` | 修订 V0.3 → V0.4 | 对齐 API.md V1.21：新增 §8「前端联调」章节说明 M3 对前端为间接影响（preference.py 经 /api/agent/prefs 预填确认卡，GraphState 投影经 M4 事件影响 stage），前端无直接契约。 |
+| `docs/AI测试与评估平台-API.md` | 修订 V1.21 → V1.22 | 修复 V1.21 遗留：§4.4 标题「仅此三条」改「仅此四条」、§9 禁止清单「第四种上行事件」改「第五种」并补四类上行事件枚举、§4.3 `tool_result.source` 语义对齐 M7 `Observation.source`（溯源标识字符串，非 short\|long 枚举）、§4.3 共享流规则补 clarify/plan/confirm 持久化广播说明、§4.4 clarify 多副本限制注明、§9 Ask/Plan 补注非 Harness plan 事件。 |
+| `docs/AI测试与评估平台-Harness团队开发与联调规划.md` | 修订 V1.2 → V1.3 | 配合 API.md V1.22：§5.1 斜杠注册拆分（`/help` 返回帮助文本，`/compact`/`/cancel`/`/stress`/未知斜杠阶段 1 返回 `VALIDATION`，补漏 `/compact`）；§5.4 M8 引用 `§3.6.2` 修正为 `§3.4.2`；§5 契约引用同步对齐 API.md V1.22。 |
+| `docs/AI测试与评估平台-Harness-编排层.md` | 修订 V0.4 → V0.4.1 | §3.9.6 补 `clarify.py` 接口签名（`clarify_node` + `interrupt()` + `id` uuid4 语义）；§8.1 修正引用（`clarify.py`/`plan.py`/`plan_solve.py` 章节号拆分）；上游权威对齐 API.md V1.22。 |
+| `docs/AI测试与评估平台-Harness-执行层.md` | 修订 V0.4 → V0.4.1 | §8.1/§8.2 修正 `source` 字段语义（对齐 M7 `Observation.source` 溯源标识字符串，删除 `source="long"` 矛盾表述）；上游权威对齐 API.md V1.22。 |
+| `docs/AI测试与评估平台-Harness-跨层契约层.md` | 修订 V0.4 → V0.4.1 | §3.6.1 `NodeEventKind` 注释修正（不再称「与 §4.3 持久化事件 1:1」，改为「节点产出的持久化事件子集」）；上游权威对齐 API.md V1.22。 |
 
-本次仅修订文档（API.md 契约回写 + 团队规划增补前端联调章节 + 10 份模块文档新增 §8 前端联调），不改变任何后端/前端/数据库运行代码。
+本次仅修订文档（API.md 契约修复 + 团队规划引用修正 + M4/M5/M7 模块文档修正），不改变任何后端/前端/数据库运行代码。

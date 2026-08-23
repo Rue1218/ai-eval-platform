@@ -2,14 +2,14 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.21 |
+| 文档版本 | V1.22 |
 | 对应 PRD | V1.12（功能唯一权威） |
 | 对应设计规范 | V1.3（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V0.5（LangGraph 单轮 Agent 与 WS 桥接；JSON 仍以本文为准） |
 | 对应前端计划 | V1.5 |
 | 对应后端计划 | V1.5 |
 | 撰写日期 | 2026-08-18 |
-| 最近修订 | 2026-08-23：V1.21 配合 Harness 阶段 3/4 前端联调回写契约：§4.3 新增 `clarify`（澄清卡，不建任务/不写 pending_confirm）、`plan`（PlanArtifact 完整下发）事件，扩展 `tool_result` 加 `truncated`/`source`/`redacted` 三可选字段，§3.4 `context_meter` 加 `compacted` bool；§4.4 新增 `clarify_reply` 上行事件并明确四类上行事件边界；V1.20 补齐 Gemini OpenAI 兼容端点的 `extra_body.google.thinking_config` 与思考增量归一化；V1.19 增加 Agent 思考摘要开关与 `low/medium/high/xhigh/max` 思考强度配置，按三协议映射模型请求；V1.18 将用户回显固定为 `user_message`，将回合完成固定为 `response.completed`，保留 `message` / `done` 仅用于旧客户端兼容；V1.17 拆分 WebSocket 用户消息、思考摘要、助手正文增量、助手最终消息和 done 事件；V1.16 接入 LangGraph 单轮 Agent 与 WebSocket 异步桥接；2026-08-22：V1.15 清空旧 Agent/Harness/模型调用/Runtime 实现、相关测试与阶段文档，保留 API 路径作为重建设计期间的明确占位；V1.14 及更早版本沿用历史修订记录。 |
+| 最近修订 | 2026-08-23：V1.22 修复 V1.21 遗留：§4.4 标题「仅此三条」改「仅此四条」、§9 禁止清单「第四种」改「第五种」并补四类上行事件枚举、§4.3 `tool_result.source` 语义对齐 M7 `Observation.source`（溯源标识字符串，非 short\|long 枚举）、§4.3 共享流规则补 clarify/plan/confirm 持久化广播说明、§4.4 clarify 多副本限制注明、§9 Ask/Plan 补注非 Harness plan 事件；V1.21 配合 Harness 阶段 3/4 前端联调回写契约：§4.3 新增 `clarify`（澄清卡，不建任务/不写 pending_confirm）、`plan`（PlanArtifact 完整下发）事件，扩展 `tool_result` 加 `truncated`/`source`/`redacted` 三可选字段，§3.4 `context_meter` 加 `compacted` bool；§4.4 新增 `clarify_reply` 上行事件并明确四类上行事件边界；V1.20 补齐 Gemini OpenAI 兼容端点的 `extra_body.google.thinking_config` 与思考增量归一化；V1.19 增加 Agent 思考摘要开关与 `low/medium/high/xhigh/max` 思考强度配置，按三协议映射模型请求；V1.18 将用户回显固定为 `user_message`，将回合完成固定为 `response.completed`，保留 `message` / `done` 仅用于旧客户端兼容；V1.17 拆分 WebSocket 用户消息、思考摘要、助手正文增量、助手最终消息和 done 事件；V1.16 接入 LangGraph 单轮 Agent 与 WebSocket 异步桥接；2026-08-22：V1.15 清空旧 Agent/Harness/模型调用/Runtime 实现、相关测试与阶段文档，保留 API 路径作为重建设计期间的明确占位；V1.14 及更早版本沿用历史修订记录。 |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
 ---
@@ -1271,7 +1271,7 @@ Harness 回合必须丢到后台 Task，**不得**在 `receive` 循环里 `await
 | `assistant_message` | `{ "id", "role":"assistant", "text":"完整回答", "reply_latency_ms?", "created_at" }`；助手最终交付句，落库、占 event_id，可通过历史消息回放 | AssistantBubble |
 | `response.completed` | `{ "finish_reason":"stop\|cancelled\|error", "role":"assistant" }`；本轮生成结束，落库、占 event_id | 结束流式状态 |
 | `tool_call` | `{ "name": "model.list", "arguments": {} }` | ToolCard pending；标题用中文名；副标题「MCP · 短工具」 |
-| `tool_result` | `{ "name": "model.list", "ok": true, "data": {} }` 或 `{ "ok": false, "error": "..." }`；可选 `latency_ms`、`truncated`(bool，结果是否被截断)、`source`("short"\|"long"，工具来源)、`redacted`(bool，是否已脱敏) | ToolCard done；`truncated`/`redacted` 为 true 时展示截断/脱敏徽标 |
+| `tool_result` | `{ "name": "model.list", "ok": true, "data": {} }` 或 `{ "ok": false, "error": "..." }`；可选 `latency_ms`、`truncated`(bool，结果是否被截断)、`source`(溯源标识字符串，对齐 M7 `Observation.source`，如 `"file:uuid"`，可选)、`redacted`(bool，是否已脱敏) | ToolCard done；`truncated`/`redacted` 为 true 时展示截断/脱敏徽标 |
 | `clarify` | `{ "id":"uuid", "question":"...", "options":["..."]?, "context":"..."? }`；落库、占 event_id；澄清卡不建任务、不写 `sessions.pending_confirm`，仅暂停图等待用户回复 | ClarifyCard（独立组件，区别于 ConfirmCard）；用户回复后上行 `clarify_reply` 恢复图 |
 | `plan` | PlanArtifact `{ "intent":"...", "skill_id":"skill-benchmark", "slots":{...}, "tools_needed":["..."], "delivery":"...", "budget":{...}, "allows_replan":bool, "notes":"..."? }`；落库、占 event_id；Plan-Solve 规划产物对用户完全可见 | PlanCard（展示规划意图/技能/工具/预算/交付物）；用户可查看但无需 ack |
 | `confirm` | TaskSpec（§5 / §6）+ 非 TaskSpec 元数据 `confirm_author:{id,username,display_name?}` | ConfirmCard，等 `confirm_ack`；仅 `confirm_author.id` 可操作 |
@@ -1287,6 +1287,7 @@ Harness 回合必须丢到后台 Task，**不得**在 `receive` 循环里 `await
 `thought.stream="think"` 只发送给本轮发起连接，不向协作者广播。两类瞬态增量不落库、
 不占单调事件号；中途加入/断线重连者从后续增量继续看，最终完整交付句、`response.completed` 与
 `thought.stream="think_final"` 思考快照可从历史回放。
+`clarify`、`plan`、`confirm` 为持久化事件（落库 `ws_events`、占 event_id），向同一会话所有在线成员广播，断线重连按 `last_event_id` 补发。
 旧客户端可继续识别 `message` / `done`，但服务端不再发送这两个含义不明确的事件名。
 当前 Compose 只有单 API 副本，assistant_delta 广播为进程内 Hub；多 API 副本时必须改为进程外
 Pub/Sub，不能假定跨进程实时可见。
@@ -1311,7 +1312,7 @@ Pub/Sub，不能假定跨进程实时可见。
 
 长工具不由 Agent 进程跑完；前端只收 `progress` / `report` / `error`。
 
-### 4.4 前端 → 服务（仅此三条 JSON）
+### 4.4 前端 → 服务（仅此四条 JSON）
 
 ```json
 { "event": "user_message", "payload": { "text": "帮我下一单 Benchmark", "attachments": [ { "file_id": "uuid" } ], "client_message_id": "browser-uuid" } }
@@ -1335,7 +1336,7 @@ Pub/Sub，不能假定跨进程实时可见。
 - `ok=true`：`patch` 与原 confirm 深合并后按 §5 校验，通过才 `task.create`。  
 - `client_message_id` 可选，非空时最长 128 字符；同一会话同一键重复发送只回显已保存消息，不会启动第二轮 Harness。
 - 同一会话同一时刻最多一张待确认卡（落库 `sessions.pending_confirm`，禁止只靠进程内字典）；仅 `confirm_author` 可以确认、拒绝或提交 patch，前端提交 patch 必须剥离该元数据。
-- `clarify` 与 `confirm` 互斥语义：澄清卡不建任务、不占回合预算、不写 `pending_confirm`；同一会话同一时刻最多一张待回复澄清卡（进程内追踪，断线重连后由 `ws_events` 回放重建 UI 状态）。`clarify_reply.id` 必须匹配最近一张待回复澄清卡，否则忽略并返回 `error`(`VALIDATION`)。
+- `clarify` 与 `confirm` 互斥语义：澄清卡不建任务、不占回合预算、不写 `pending_confirm`；同一会话同一时刻最多一张待回复澄清卡（进程内追踪，断线重连后由 `ws_events` 回放重建 UI 状态；多 API 副本时需网关按 `session_id` 粘性路由，与 §1.2 单副本前提一致）。`clarify_reply.id` 必须匹配最近一张待回复澄清卡，否则忽略并返回 `error`(`VALIDATION`)。
 - `cancel_task` 权限与 REST cancel 相同；斜杠 `/cancel` 只取消**本会话**非终态任务。  
 - 斜杠（含 `/stop` `/compact` `/help`）全部走 `user_message`，**没有第五种上行事件**（上行事件仅 `user_message` / `confirm_ack` / `cancel_task` / `clarify_reply` 四类）。  
 - `/stop`：中止本轮 Harness 生成，不取消已 queued/running 任务；abort 为**会话级**（双标签同停）。共享会话仅本轮发起成员可执行。
@@ -1467,8 +1468,8 @@ JSON Schema 冻结点：短工具 M1 W4；音频工具输入以本节为准，�
 | --- | --- |
 | 对外 Open API / 长期 API Token | F-CM-08 V1.1 |
 | `/api/chat/completions`、把 LightRAG 伪装成 Chat | F-RAG-01 |
-| 改系统提示词、外部 MCP 管理、Ask/Plan | PRD 4.2 |
-| 第四种 WS 上行事件（斜杠必须走 `user_message`） | F-AGT-02 |
+| 改系统提示词、外部 MCP 管理、Ask/Plan（指产品级 Ask/Plan 功能，非 Harness 内部 `plan` 事件/PlanArtifact 下发） | PRD 4.2 |
+| 第五种 WS 上行事件（斜杠必须走 `user_message`；上行事件仅 `user_message` / `confirm_ack` / `cancel_task` / `clarify_reply` 四类） | F-AGT-02 |
 | 删除会话 | PRD 未要求 |
 | 独立审计页对应的写操作以外的产品 UI | 仅 `GET /api/admin/audit-logs` |
 | 浏览器直连 MCP 或 `/metrics` | 安全边界 |
