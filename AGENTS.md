@@ -1,6 +1,7 @@
 # AI 测试与评估平台 — AI Agent 行为规范与工程指南 (AGENTS.md)
 
 > **最高指示**：本文件是面向所有参与本项目的 **AI Agent 与开发者** 的最高行动指南。在编写或修改代码前，**必须严格遵守本文档所规定的架构边界、开发契约与行为红线**。
+> 版本：V1.1 ｜ 审查日期：2026-08-21
 
 ---
 
@@ -46,6 +47,36 @@
 2. **文档闭环更新**：功能迭代或契约演进后，必须在对应技术文档末尾同步追加「修改代码文件与作用清单」，并在文档头部更新版本号（如 `V1.1`、`V1.2`）与审查日期；
 3. **提交与分支规范**：纯文档变更使用 `docs(<scope>): <中文描述>` 格式提交，重要文档改造建议拉出 `docs/<scope>-简述` 分支。
 
+### 1.5 运行时数据流与实现状态地图
+
+**任务状态机与 Worker 领取**（`tasks` 表 `queued→running→succeeded/failed/cancelled`）：
+- Worker 主循环（`backend/worker/app/main.py`）用 `SELECT ... FOR UPDATE SKIP LOCKED` 领取 `queued` 任务，受 `settings.max_running_tasks` 并发闸门约束（默认 3）；
+- `uq_tasks_active_session` 部分唯一索引在创建侧保证**同一会话内任务串行**（防止确认卡重复提交）；
+- 执行器（benchmark / testcase）自管数据库 Session，主循环只负责领取与终态兜底；**禁止跨 Session 传 ORM 对象**（会触发 `InvalidRequestError`，导致任务永久卡 `running`）。
+
+**WS 事件机制**（`backend/api/app/routers/ws.py` + `session_connections.py`）：
+- 持久事件统一写入 `ws_events` 表并带公共头 `{event, session_id, task_id, event_id, ts, payload}`；
+- `_emit` 在连接锁内完成「取号 → 落库 → 发送 → 推进游标」；`_forward_loop` 后台循环按游标增量把 **Worker 进程外**写入的事件推送到当前连接；
+- 断线重连按 `last_event_id` 补发；流式帧（`stream=chunk/think`）与心跳 `pong` 为瞬态帧，**不落库、不占事件号**；
+- 关闭码 `4401`=重新领票，`4404`=会话不存在/共享被收回。
+
+**Agent Harness 并发模型**（`routers/ws.py` + `agent/harness.py`）：
+- 收包循环**不得 await 整轮 Harness**，`dispatch_user_message` 必须丢 `asyncio.Task` 执行；
+- 会话级 abort 是进程内 dict（单副本或网关按 `session_id` 粘性路由的前提）；
+- L0 规则意图 → LLM 规划 → DIRECT/CHAT/ReAct/Plan-and-Solve 调度 → 反射门禁，全部收敛在 `backend/api/app/agent/` 包内。
+
+**模型单一事实源**：`backend/shared/models.py` 由 api 与 worker 共用（`api/app/models.py` 仅为 re-export）；改表必须 `alembic revision --autogenerate`，禁止双副本漂移。
+
+**实现状态地图（真实现 vs Mock）**：
+
+| 模块 | 状态 | 位置 |
+| :--- | :--- | :--- |
+| benchmark 基准评测 | 真实执行器（三协议调用、规则评分、预算熔断、断点续跑） | `backend/worker/app/benchmark.py` |
+| testcase 用例生成 | 真实执行器（六策略 LLM 生成、72h 确认超时扫描） | `backend/worker/app/testcase.py` |
+| rag 知识库评测 | **必须失败**：LightRAG 未接入，禁止 mock `succeeded` | `backend/worker/app/main.py` |
+| stress 压测 | 骨架 mock（M4 替换） | `backend/worker/app/main.py` |
+| Agent 短工具 | 已接 image.generate、MIMO TTS 音色克隆/音频、LightRAG stub | `backend/api/app/agent/imagegen.py` 等 |
+
 ---
 
 ## 2. 项目结构 (Project Structure)
@@ -67,6 +98,27 @@ ai-eval-platform/
 ├── Web-Prototype/               # 静态 HTML 原型（视觉与交互参考）
 └── docker-compose.yml           # 全栈六件套容器编排文件
 ```
+
+### 2.1 常用开发命令（工作目录 = 命令所在目录）
+
+后端 API（`backend/api/`）：
+- 安装依赖：`pip install -r requirements.txt -r requirements-dev.txt`
+- Lint：`ruff check . ../shared`（CI 会连同 `backend/shared` 一起检查）
+- 全部测试：`pytest`
+- 单个文件：`pytest tests/test_ws_agent.py`
+- 单个用例：`pytest tests/test_ws_agent.py -k "confirm_ack"`
+- 生成迁移：`alembic revision --autogenerate -m "中文描述"`
+- 应用迁移：`alembic upgrade head`（api 容器启动时自动执行）
+
+后端 Worker（`backend/worker/`）：
+- 测试：`PYTHONPATH=.:.. pytest`（依赖共享包 `backend/shared`；Windows 用 `set PYTHONPATH=.;..`）
+
+前端（`frontend/`）：
+- 开发热更：`npm run dev`（http://localhost:5173，`/api` 与 `/ws` 代理到 :8000）
+- 类型检查：`npm run typecheck`（`vue-tsc --noEmit`；注意 `npm run build` **不包含**类型检查）
+- 构建：`npm run build`
+
+全栈一键启动：`docker compose up -d --build`（前端 http://localhost，API http://localhost:8000/api/health，Swagger http://localhost:8000/docs）
 
 ---
 
@@ -115,7 +167,7 @@ main（保护，仅 PR 合入）
 - **提交格式**：`<type>(<scope>): <中文简述>`
 - **常见 Type**：`feat`（新功能）、`fix`（修缺陷）、`docs`（文档）、`style`（格式）、`refactor`（重构）、`test`（测试）、`ci`（CI/CD）、`chore`（杂项）。
 - **常用 Scope**：`api`、`worker`、`web`、`mcp`、`rag`、`stress`、`auth`、`dataset`、`profile`、`task`、`report`、`agent`、`deploy`。
-- **提交前强制门禁**：提交代码前**必须在本地先完成构建与自检**（`npm run build`、`ruff check .`、`pytest`），确保 0 错误后方可执行 `git commit`。
+- **提交前强制门禁**：提交代码前**必须在本地先完成构建与自检**，确保 0 错误后方可执行 `git commit`：后端 `cd backend/api && ruff check . ../shared && pytest`、`cd backend/worker && PYTHONPATH=.:.. pytest`；前端 `cd frontend && npm run typecheck && npm run build`。
 - **中文示例**：
   - `feat(api): 新增 WebSocket 短票鉴权接口`
   - `fix(worker): 修复大模型裁判调用超时重试逻辑`
@@ -217,7 +269,7 @@ except AppError as exc:
 ### 5.3 前端规范 (Vue 3 / TypeScript / Naive UI)
 1. **统一架构**：采用 `<script setup lang="ts">` + `naive-ui`，严格遵循薄荷绿/深空蓝设计令牌 (`naive-theme.ts`)。
 2. **通信与重连**：API 使用相对路径 `/api/*`；WS 使用相对路径 `/ws/agent?ticket=${ticket}`，支持断线按 `last_event_id` 自动补发事件流。关闭码 `4401` 重新领票，`4404` 视为会话不存在。
-3. **确认卡默认值** 与 API.md §5 / PRD 5.2.2 同一份，禁止前端另备 sample_size=20 等第二套默认。
+3. **确认卡默认值** 与 API.md §5 / PRD 5.2.2 同一份，禁止前端另备 sample_size=20 等第二套默认；后端侧默认值唯一来源在 `backend/api/app/agent/defaults.py`，前后端各存一份，改默认值必须双端同步。
 4. ContextMeter 只读 `GET /api/sessions/{id}/messages` 的 `context_meter`；自定义斜杠只请求 `/api/slash-commands`。
 
 ---
@@ -240,6 +292,6 @@ except AppError as exc:
 ### 🟢 推荐操作五步法
 1. **先查后改、先开分支**：查阅 PRD、API.md、Agent 开发文档；从 `origin/main` 拉出 `<type>/<scope>-简述` 再写代码；
 2. **中文注释**：编写规范的中文 docstring 与代码注释；
-3. **本地先构建与自检**：提交前必须在本地执行 `npm run build`（前端打包与类型校验）和 `ruff check .` / `pytest`（后端），验证 100% 通过；
+3. **本地先构建与自检**：提交前必须在本地执行 §2.1 的门禁命令：前端 `npm run typecheck && npm run build`、后端 `ruff check . ../shared` / `pytest`，验证 100% 通过；
 4. **规范中文提交**：严格采用 `<type>(<scope>): <中文描述>` 格式在**功能分支**上原子化提交，再开 PR；
 5. **监控部署**：PR 合入 `main` 后关注 GitHub Actions CI/CD 流水线，异常时按 SOP 处置。
