@@ -105,7 +105,7 @@ const props = withDefaults(
   }>(),
   {
     connected: true,
-    agentModelName: 'Agent · 主模型',
+    agentModelName: '主模型',
     showChips: true,
   },
 )

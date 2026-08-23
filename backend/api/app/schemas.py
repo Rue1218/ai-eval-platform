@@ -218,6 +218,11 @@ class MessageOut(OrmOut):
     attachments: list[str]
     author_id: str | None = None
     client_message_id: str | None = None
+    latency_ms: int | None = None
+    model_name: str | None = None
+    profile_id: str | None = None
+    profile_name: str | None = None
+    provider: str | None = None
     created_at: Any
 
 

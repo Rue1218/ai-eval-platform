@@ -151,6 +151,11 @@ class Message(Base):
     # assistant 交付句的回复生成耗时（毫秒）：从本轮 user_message 入 Harness 到交付的墙钟时长。
     # 仅 assistant 消息非空，user/system 保持 NULL；历史回放供前端气泡展示「耗时 x 秒」。
     latency_ms = Column(Integer, nullable=True)
+    # 消息生成元数据快照（仅 assistant 消息记录实际生成该回答的模型与协议档快照，切换全局模型时不漂移）。
+    model_name = Column(String(255), nullable=True)
+    profile_id = Column(String(64), nullable=True)
+    profile_name = Column(String(255), nullable=True)
+    provider = Column(String(64), nullable=True)
     # 记忆层溯源：历史存量回填为 message:{id}，新消息由写入方一次性指定。
     source_id = Column(String, nullable=False, index=True)
     source_version = Column(Integer, nullable=False, default=1)

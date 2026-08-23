@@ -213,6 +213,10 @@ def _assistant_message_payload(row: Message) -> dict[str, Any]:
         "role": "assistant",
         "text": row.content,
         "reply_latency_ms": row.latency_ms,
+        "model_name": row.model_name,
+        "profile_id": row.profile_id,
+        "profile_name": row.profile_name,
+        "provider": row.provider,
         "created_at": _iso(row.created_at),
     }
 
@@ -275,8 +279,8 @@ async def _replay_events(
             return
 
 
-def _selected_model_config(db: Session) -> ModelConfig:
-    """从 Agent 设置与协议档构造模型调用配置，禁止使用隐式旧客户端。"""
+def _selected_model_config(db: Session) -> tuple[ModelConfig, ProtocolProfile]:
+    """从 Agent 设置与协议档构造模型调用配置与协议档实体，禁止使用隐式旧客户端。"""
     setting = db.query(Setting).filter(Setting.key == "agent_profile_id").first()
     profile_id = setting.value if setting else None
     if not isinstance(profile_id, str) or not profile_id:
@@ -299,7 +303,7 @@ def _selected_model_config(db: Session) -> ModelConfig:
         reasoning_enabled = True
     if reasoning_effort not in {"low", "medium", "high", "xhigh", "max"}:
         reasoning_effort = "medium"
-    return ModelConfig(
+    config = ModelConfig(
         protocol=profile.protocol,
         base_url=base_url,
         model=model,
@@ -311,6 +315,7 @@ def _selected_model_config(db: Session) -> ModelConfig:
         reasoning_enabled=reasoning_enabled,
         reasoning_effort=reasoning_effort,
     )
+    return config, profile
 
 
 def _history_messages(db: Session, session_id: str) -> list[dict[str, str]]:
@@ -338,7 +343,7 @@ async def _run_turn(
     db = SessionLocal()
     started = time.perf_counter()
     try:
-        config = _selected_model_config(db)
+        config, profile = _selected_model_config(db)
         request = ModelRequest.from_messages(
             config,
             _history_messages(db, session_id),
@@ -394,6 +399,10 @@ async def _run_turn(
             author_id=None,
             client_message_id=None,
             latency_ms=latency_ms,
+            model_name=profile.model or profile.name if profile else None,
+            profile_id=profile.id if profile else None,
+            profile_name=profile.name if profile else None,
+            provider=profile.provider or profile.protocol if profile else None,
             source_id="pending",
             source_version=1,
         )
