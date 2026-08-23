@@ -2618,14 +2618,22 @@ async function loadSessionHistory(sid: string): Promise<number> {
     }
 
     // 2. 收集 WS 事件流（思考过程、短工具、确认卡、报告卡等）
+    function findRelatedAgent(eventTime: number): StreamItem | undefined {
+      // 优先匹配在事件发生时刻之后（或 10 秒时间差内）最近的助手消息
+      const after = rawList.find((x) => x.item.type === 'agent' && x.time >= eventTime - 10000)?.item
+      if (after) return after
+      // 兜底归属到历史记录中最接近的一条助手消息
+      return [...rawList].reverse().find((x) => x.item.type === 'agent')?.item
+    }
+
     for (const ev of history.events || []) {
       const p = ev.payload || {}
       const t = ev.ts ? new Date(ev.ts).getTime() : 0
       const eid = Number(ev.event_id) || 0
 
       if (ev.event === 'thought' && p.stream === 'think_final') {
-        // 推理增量不逐 token 落库；服务端在终帧保存快照，优先挂载到紧随其后的助手消息
-        const targetAgent = rawList.find((x) => x.item.type === 'agent' && x.time >= t)?.item
+        // 推理增量不逐 token 落库；服务端在终帧保存快照，聚合挂载到对应助手消息内部
+        const targetAgent = findRelatedAgent(t)
         if (targetAgent) {
           if (!targetAgent.thoughts) targetAgent.thoughts = []
           targetAgent.thoughts.push({
@@ -2635,24 +2643,10 @@ async function loadSessionHistory(sid: string): Promise<number> {
             collapsed: true,
             streamThink: true,
           })
-        } else {
-          rawList.push({
-            time: t,
-            priority: 2,
-            eventId: eid,
-            item: {
-              type: 'thought',
-              text: p.text || '',
-              done: true,
-              collapsed: true,
-              streamThink: true,
-              noAnim: true,
-            },
-          })
         }
       } else if (ev.event === 'thought' && !p.stream && (p.stage || p.skill_id) && p.text) {
-        // 阶段思考卡：优先挂载到对应的助手消息内部
-        const targetAgent = rawList.find((x) => x.item.type === 'agent' && x.time >= t)?.item
+        // 阶段思考卡：聚合挂载到对应的助手消息内部
+        const targetAgent = findRelatedAgent(t)
         if (targetAgent) {
           if (!targetAgent.thoughts) targetAgent.thoughts = []
           targetAgent.thoughts.push({
@@ -2663,25 +2657,9 @@ async function loadSessionHistory(sid: string): Promise<number> {
             stage: p.stage,
             skill_id: p.skill_id,
           })
-        } else {
-          rawList.push({
-            time: t,
-            priority: 2,
-            eventId: eid,
-            item: {
-              type: 'thought',
-              text: p.text || '',
-              done: true,
-              collapsed: true,
-              noAnim: true,
-              latency_ms: p.latency_ms,
-              stage: p.stage,
-              skill_id: p.skill_id,
-            },
-          })
         }
       } else if (ev.event === 'tool_call') {
-        const targetAgent = rawList.find((x) => x.item.type === 'agent' && x.time >= t)?.item
+        const targetAgent = findRelatedAgent(t)
         if (targetAgent) {
           if (!targetAgent.tools) targetAgent.tools = []
           targetAgent.tools.push({
