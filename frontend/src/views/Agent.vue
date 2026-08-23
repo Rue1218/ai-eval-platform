@@ -542,10 +542,10 @@
                   :provider="item.providerLogoKey || 'custom'"
                 />
                 <div class="assistant-message-main">
-                  <!-- 顶部模型与时间标识 -->
+                  <!-- 顶部模型与时间标识（仅展示 Provider 图标、模型标识与发送时间） -->
                   <div class="assistant-message-header">
                     <div class="assistant-message-model">
-                      {{ item.modelName || 'Agent' }}<span v-if="item.profileName" class="assistant-message-profile"> | {{ item.profileName }}</span>
+                      {{ item.modelName || 'Agent' }}
                     </div>
                     <div v-if="formatAgentMessageTime(item.createdAt)" class="assistant-message-time mono">
                       {{ formatAgentMessageTime(item.createdAt) }}
