@@ -577,6 +577,10 @@ export interface SessionMessage {
   client_message_id?: string | null
   // assistant 交付句的回复生成耗时（毫秒），仅 assistant 非空，气泡展示「耗时 x 秒」。
   latency_ms?: number | null
+  model_name?: string | null
+  profile_id?: string | null
+  profile_name?: string | null
+  provider?: string | null
   created_at: string
 }
 

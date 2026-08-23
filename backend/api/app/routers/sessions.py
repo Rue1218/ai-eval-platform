@@ -146,6 +146,10 @@ def get_session_messages(
                 "client_message_id": row.client_message_id,
                 # assistant 交付句回复耗时（毫秒），仅 assistant 非空；前端气泡展示「耗时 x 秒」。
                 "latency_ms": row.latency_ms,
+                "model_name": row.model_name,
+                "profile_id": row.profile_id,
+                "profile_name": row.profile_name,
+                "provider": row.provider,
                 "created_at": row.created_at,
             }
             for row in messages
