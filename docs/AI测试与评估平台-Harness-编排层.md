@@ -3,11 +3,11 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 编排层模块设计 |
-| 版本 | V0.4 |
+| 版本 | V0.4.1 |
 | 审查日期 | 2026-08-23 |
 | 文档性质 | 模块设计说明书（需求发散 + 架构设计） |
 | 适用模块 | M4 编排层（`app/harness/orchestration/` + `app/agent/`） |
-| 上游权威 | Harness 需求文档 V1.4.4 §2.3/§2.4/§2.5、§4.4、§7、§9；API.md V1.21 §4.3/§4.4/§5；PRD §5.1.2/§5.1.3 |
+| 上游权威 | Harness 需求文档 V1.4.4 §2.3/§2.4/§2.5、§4.4、§7、§9；API.md V1.22 §4.3/§4.4/§5；PRD §5.1.2/§5.1.3 |
 
 > **阅读关系**：本文是 Harness §9.2「层 4 编排」行的展开，定义图拓扑、模式路由、GraphState 引用、`should_abort` 全链路迁移与 Direct 路径。GraphState 主体在 M3（`memory/state.py`），事件契约在 M7（`contracts/events.py`），本文只引用不重定义。
 
@@ -428,13 +428,21 @@ def build_plan(raw: str) -> PlanArtifact:
     失败重试一次，仍失败走 L0 规则降级；降级产物必须经 reflect 复核（FB-2）。"""
 ```
 
-#### 3.9.6 阶段 2/4 子图签名（`app/agent/react.py` / `plan_solve.py` / `reflect.py`）
+#### 3.9.6 阶段 2/4 子图签名（`app/agent/react.py` / `clarify.py` / `plan_solve.py` / `reflect.py`）
 
 ```python
 # react.py —— ReAct 子图（阶段 2）
 def build_react_subgraph(tool_node) -> StateGraph:
     """agent 节点（LLM + 严格 JSON 解析）→ 条件边 → ToolNode（M5）→ 回 agent。
     受 budget.consume_tool_turn 约束；重复工具调用抑制（OR-4）。"""
+
+# clarify.py —— 澄清卡 interrupt() 节点（阶段 3）
+def clarify_node(state: GraphState) -> dict:
+    """澄清卡节点：产出 NodeEvent(kind='clarify', payload={'id': str, 'question': str,
+    'options': list[str] | None, 'context': str | None})，调用 LangGraph `interrupt()` 暂停图。
+    不建任务、不占回合预算、不写 sessions.pending_confirm（与 confirm 互斥）。
+    `id` 为本次澄清的唯一标识（uuid4），用于匹配前端 `clarify_reply.id`。
+    用户回复后由 ws.py 转 `Command(resume, update={'clarify_answer': answer})` 恢复图（M9 §3.5.1）。"""
 
 # plan_solve.py —— Plan-and-Solve 执行子图（阶段 4）
 def build_plan_solve_subgraph() -> StateGraph:
@@ -549,7 +557,7 @@ def reflect_node(state: GraphState) -> dict:
 | `gates.py`（§3.9.5） | `error(VALIDATION)`/`error(CONCURRENCY)`（长工具门禁） | ErrorStrip + Toast | `api/types.ts` | 阶段 2 |
 | `react.py`（§3.9.6） | `thought(stage=react)`/`tool_call`/`tool_result` | ThoughtCard + ToolCard | `components/agent/ThoughtCard.vue`/`ToolCard.vue` | 阶段 2 |
 | `clarify.py`（§3.9.6） | `clarify`（`interrupt()` 暂停） | **ClarifyCard**（新增） | 新增 `components/agent/ClarifyCard.vue`；`api/ws.ts` `sendClarifyReply` | 阶段 3 |
-| `plan.py` + `plan_solve.py`（§3.9.6） | `plan`（PlanArtifact）+ `thought(stage=plan_solve)` | **PlanCard**（新增）+ stage 档 | 新增 `components/agent/PlanCard.vue`；`views/Agent.vue` `harnessStage` 补 `plan_solve` | 阶段 4 |
+| `plan.py`（§3.9.5）+ `plan_solve.py`（§3.9.6） | `plan`（PlanArtifact）+ `thought(stage=plan_solve)` | **PlanCard**（新增）+ stage 档 | 新增 `components/agent/PlanCard.vue`；`views/Agent.vue` `harnessStage` 补 `plan_solve` | 阶段 4 |
 | `reflect.py`（§3.9.6） | `thought(stage=reflect)` | ThoughtCard「复核中」/「已复核」 | `components/agent/ThoughtCard.vue` | 阶段 4 |
 | `confirm.py` `handle_confirm_ack`（§3.9.5） | `confirm`（下发）+ `confirm_ack`（回执） | ConfirmCard | `views/Agent.vue`；`components/agent/ConfirmCard.vue`；`api/ws.ts` `sendConfirmAck` | 阶段 4 |
 
@@ -565,6 +573,6 @@ def reflect_node(state: GraphState) -> dict:
 
 | 文件 | 操作 | 作用 |
 | :--- | :--- | :--- |
-| `docs/AI测试与评估平台-Harness-编排层.md` | 新增 V0.1 → 修订 V0.2 → 修订 V0.3 → 修订 V0.4 | V0.1 M4 编排层模块设计：定义图拓扑、模式路由、`should_abort` 全链路迁移、Direct L0 路由、事件桥接、确认卡回执；V0.2 升级到接口签名级：补枚举/GraphState 引用/路由节点/`should_abort` 迁移/编排辅助模块/阶段 2-4 子图签名；V0.3 开放问题闭环：路由 hybrid 策略、`should_abort` 走 `configurable["abort"]["should_abort"]` 命名空间、`pending_events` 每节点消费图外清空、`/help` 阶段 1 硬编码、`handle_confirm_ack` 同事务、子图复用阶段 4 再定；V0.4 对齐 API.md V1.21：新增 §8「前端联调」章节列出路由/节点/子图对应的前端事件、组件、文件与验收点（含 ClarifyCard/PlanCard 新组件、`harnessStage` 补 `plan_solve`、斜杠注册、错误码文案中性化）。 |
+| `docs/AI测试与评估平台-Harness-编排层.md` | 新增 V0.1 → 修订 V0.2 → 修订 V0.3 → 修订 V0.4 → 修订 V0.4.1 | V0.1 M4 编排层模块设计：定义图拓扑、模式路由、`should_abort` 全链路迁移、Direct L0 路由、事件桥接、确认卡回执；V0.2 升级到接口签名级：补枚举/GraphState 引用/路由节点/`should_abort` 迁移/编排辅助模块/阶段 2-4 子图签名；V0.3 开放问题闭环：路由 hybrid 策略、`should_abort` 走 `configurable["abort"]["should_abort"]` 命名空间、`pending_events` 每节点消费图外清空、`/help` 阶段 1 硬编码、`handle_confirm_ack` 同事务、子图复用阶段 4 再定；V0.4 对齐 API.md V1.21：新增 §8「前端联调」章节；V0.4.1 配合 API.md V1.22：§3.9.6 补 `clarify.py` 接口签名（`clarify_node` + `interrupt()` + `id` uuid4 语义），§8.1 修正 `clarify.py`/`plan.py`/`plan_solve.py` 章节号引用。 |
 
 本文档仅设计编排层，不改变任何 API、数据库、前端或 Agent 运行代码。
