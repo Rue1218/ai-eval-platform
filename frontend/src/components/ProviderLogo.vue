@@ -1,7 +1,7 @@
 <template>
   <span
     class="provider-logo"
-    :class="{ 'provider-logo-mark': !logo.path }"
+    :class="{ 'provider-logo-mark': !logo.path, 'provider-logo-compact': props.compact }"
     :style="{ color: logo.color, backgroundColor: logo.background }"
     :title="logo.label"
     role="img"
@@ -16,13 +16,11 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import type { ProviderLogoKey } from '../utils/providerLogo'
 
-export type ProviderLogoKey =
-  | 'nvidia' | 'mimo' | 'openai' | 'anthropic' | 'gemini' | 'deepseek'
-  | 'siliconflow' | 'qwen' | 'volcengine' | 'qianfan' | 'hunyuan'
-  | 'groq' | 'ollama' | 'zhipu' | 'moonshot' | 'mistral' | 'together' | 'custom'
+export type { ProviderLogoKey } from '../utils/providerLogo'
 
-const props = defineProps<{ provider: ProviderLogoKey }>()
+const props = defineProps<{ provider: ProviderLogoKey; compact?: boolean }>()
 
 interface ProviderLogoDefinition {
   label: string
@@ -125,5 +123,21 @@ const logo = computed(() => LOGOS[props.provider])
   font-size: 12px;
   font-weight: 800;
   letter-spacing: -0.04em;
+}
+
+.provider-logo-compact {
+  width: 16px;
+  height: 16px;
+  flex-basis: 16px;
+  border-radius: 4px;
+}
+
+.provider-logo-compact svg {
+  width: 12px;
+  height: 12px;
+}
+
+.provider-logo-compact.provider-logo-mark {
+  font-size: 8px;
 }
 </style>
