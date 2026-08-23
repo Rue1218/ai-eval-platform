@@ -288,6 +288,16 @@ flowchart TD
 | 文件 | 操作 | 作用 |
 | :--- | :--- | :--- |
 | `docs/AI测试与评估平台-API.md` | 修订 V1.20 → V1.21 | 配合 Harness 阶段 3/4 前端联调回写契约：§4.3 新增 `clarify`（澄清卡，不建任务/不写 pending_confirm）、`plan`（PlanArtifact 完整下发）事件，扩展 `tool_result` 加 `truncated`/`source`/`redacted` 三可选字段；§3.4 `context_meter` 加 `compacted` bool 并补说明；§4.4 新增 `clarify_reply` 上行事件并明确四类上行事件边界（`user_message`/`confirm_ack`/`cancel_task`/`clarify_reply`）。解除前端澄清卡/PlanArtifact/截断脱敏徽标实现的契约阻塞。 |
-| `docs/AI测试与评估平台-Harness团队开发与联调规划.md` | 修订 V1.1 → V1.2 | V1.1 把 Harness 需求文档 §9.3 施工蓝图落地为 2 人团队的可执行排期。V1.2 新增 §5「前端联调任务（按阶段）」：前端工作由陈东超独立负责（区别于 A/B 后端分工），按阶段 1–4 列出前端改动文件、对接契约（API.md V1.21）、验收点与阻塞依赖；§6 联调验收闸门拆分后端/前端验收点；新增 §5.5「阶段 4 前置：补建 `backend/api/app/agent/defaults.py`」消除前后端确认卡默认值漂移；§7 分支规范补前端子分支与前端自检门禁。本次同步回写 API.md V1.21。本文不新增任何对外 REST/WS 字段（API.md 回写部分除外），模块签名以 10 份模块设计文档为准。 |
+| `docs/AI测试与评估平台-Harness团队开发与联调规划.md` | 修订 V1.1 → V1.2 | V1.1 把 Harness 需求文档 §9.3 施工蓝图落地为 2 人团队的可执行排期。V1.2 新增 §5「前端联调任务（按阶段）」：前端工作由陈东超独立负责（区别于 A/B 后端分工），按阶段 1–4 列出前端改动文件、对接契约（API.md V1.21）、验收点与阻塞依赖；§6 联调验收闸门拆分后端/前端验收点；新增 §5.5「阶段 4 前置：补建 `backend/api/app/agent/defaults.py`」消除前后端确认卡默认值漂移；§7 分支规范补前端子分支与前端自检门禁；§8 修改清单补 10 份模块文档的 §8 前端联调章节。本文不新增任何对外 REST/WS 字段（API.md 回写部分除外），模块签名以 10 份模块设计文档为准。 |
+| `docs/AI测试与评估平台-Harness-跨层契约层.md` | 修订 V0.3 → V0.4 | 对齐 API.md V1.21：`NodeEventKind` 枚举新增 `clarify`/`plan`（与 §4.3 持久化事件 1:1）；新增 §8「前端联调」章节列出 events/artifacts 对应的前端组件、文件、契约与验收点。 |
+| `docs/AI测试与评估平台-Harness-编排层.md` | 修订 V0.3 → V0.4 | 对齐 API.md V1.21：新增 §8「前端联调」章节列出路由/节点/子图对应的前端事件、组件、文件与验收点（含 ClarifyCard/PlanCard 新组件、`harnessStage` 补 `plan_solve`、斜杠注册、错误码文案中性化）。 |
+| `docs/AI测试与评估平台-Harness-上下文工程层.md` | 修订 V0.3 → V0.4 | 对齐 API.md V1.21：新增 §8「前端联调」章节列出 meter/compact/observation 对应的前端组件、契约与验收点（含 `context_meter.compacted` 字段、`/compact` owner 校验、ToolCard 截断/脱敏徽标）。 |
+| `docs/AI测试与评估平台-Harness-执行层.md` | 修订 V0.3 → V0.4 | 对齐 API.md V1.21：新增 §8「前端联调」章节列出 toolnode/dispatch/worker_bridge 对应的前端组件、契约与验收点（含长任务事件边界、`source` 字段区分、ToolCard 中文名表）。 |
+| `docs/AI测试与评估平台-Harness-反馈层.md` | 修订 V0.3 → V0.4 | 对齐 API.md V1.21：新增 §8「前端联调」章节列出 observation/rules/review/budget 对应的前端组件、契约与验收点（含脱敏标记透出、clarify 降级语义、错误码文案中性化）。 |
+| `docs/AI测试与评估平台-Harness-跨层安全.md` | 修订 V0.3 → V0.4 | 对齐 API.md V1.21：新增 §8「前端联调」章节列出 auth/secrets 对应的前端处理、契约与验收点（含 owner 校验双层、4401/4404 关闭码显式处理、错误码文案中性化）。 |
+| `docs/AI测试与评估平台-Harness-运行时基础设施.md` | 修订 V0.3 → V0.4 | 对齐 API.md V1.21：新增 §8「前端联调」章节列出 checkpoint/interrupt/cleanup 对应的前端验证任务与验收点（含断线重连不依赖 thread_id、澄清卡回放、4404 清理）。 |
+| `docs/AI测试与评估平台-Harness-技能体系.md` | 修订 V0.3 → V0.4 | 对齐 API.md V1.21：新增 §8「前端联调」章节列出 SkillHint/assert_skill_enabled/list_hints 对应的前端组件、契约与验收点（含 `skill_id` 一致性、summary 展示、未接入 skill 不 mock、`/api/slash-commands` 对接）。 |
+| `docs/AI测试与评估平台-Harness-提示词工程层.md` | 修订 V0.3 → V0.4 | 对齐 API.md V1.21：新增 §8「前端联调」章节说明 M1 对前端为间接影响（protocols 输出格式决定 thought/plan 事件字段），前端无直接契约，仅联调验证字段对齐。 |
+| `docs/AI测试与评估平台-Harness-记忆层.md` | 修订 V0.3 → V0.4 | 对齐 API.md V1.21：新增 §8「前端联调」章节说明 M3 对前端为间接影响（preference.py 经 /api/agent/prefs 预填确认卡，GraphState 投影经 M4 事件影响 stage），前端无直接契约。 |
 
-本次仅修订文档（API.md 契约回写 + 团队规划增补前端联调章节），不改变任何后端/前端/数据库运行代码。
+本次仅修订文档（API.md 契约回写 + 团队规划增补前端联调章节 + 10 份模块文档新增 §8 前端联调），不改变任何后端/前端/数据库运行代码。
