@@ -83,7 +83,7 @@
             <button class="btn btn-secondary btn-sm" :disabled="!hasUnsavedChanges || savingCases" title="快捷键 Ctrl/⌘ + S" @click="persistCases">
               {{ savingCases ? '保存中…' : '保存修改' }}
             </button>
-            <button class="btn btn-secondary btn-sm" @click="openImportModal">导入 Excel</button>
+            <button class="btn btn-secondary btn-sm" @click="openImportModal()">导入 Excel</button>
             <button class="btn btn-secondary btn-sm" @click="exportXlsx">导出 xlsx</button>
             <button class="btn btn-secondary btn-sm" @click="exportXmind">导出 xmind</button>
             <button
@@ -273,7 +273,7 @@
           </div>
           <div class="row" style="gap: 8px; align-items: center; margin-left: auto; flex-wrap: wrap; justify-content: flex-end">
             <button class="btn btn-ai btn-sm" @click="openAiGenWizard">✨ AI 生成用例集</button>
-            <button class="btn btn-secondary btn-sm" @click="openImportModal">导入 Excel</button>
+            <button class="btn btn-secondary btn-sm" @click="openImportModal()">导入 Excel</button>
             <button class="btn btn-sign btn-sm" @click="handleCreateCaseSet()">+ 新建空用例集</button>
           </div>
         </div>

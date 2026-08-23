@@ -344,7 +344,11 @@ async function handleRunLiveToolCall() {
     } else if (toolName === 'dataset.list') {
       const res = await api.datasets.list()
       rawData = {
-        items: res.map((d) => ({ id: d.id, name: d.name, version: d.version, row_count: d.row_count, format: d.format })),
+        // 数据集列表契约未固定 format，保留后端可能返回的扩展字段。
+        items: res.map((d) => {
+          const dataset = d as typeof d & { format?: string }
+          return { id: dataset.id, name: dataset.name, version: dataset.version, row_count: dataset.row_count, format: dataset.format }
+        }),
         total: res.length,
       }
     } else if (toolName === 'dispatch.overview') {
@@ -361,7 +365,9 @@ async function handleRunLiveToolCall() {
       const taskWithReport = res.find((t) => t.report_id)
       if (taskWithReport && taskWithReport.report_id) {
         const report = await api.reports.get(taskWithReport.report_id)
-        rawData = { report_id: report.id, task_id: report.task_id, kind: report.kind, metrics: report.metrics }
+        // 报告按评测类型返回不同指标，metrics 属于兼容扩展字段。
+        const reportWithMetrics = report as typeof report & { metrics?: Record<string, unknown> }
+        rawData = { report_id: report.id, task_id: report.task_id, kind: report.kind, metrics: reportWithMetrics.metrics }
       } else {
         rawData = { report_id: 'rep-mock-01', metrics: { accuracy: 0.92, latency_p95_ms: 280 } }
       }
