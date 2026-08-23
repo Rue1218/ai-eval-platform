@@ -1,7 +1,7 @@
 # AI 测试与评估平台 Agent 框架 LangGraph 与 WebSocket 重设计
 
-> 版本：V0.1
-> 状态：首期最小链路已实现
+> 版本：V0.2
+> 状态：首期最小链路与流式事件语义已实现
 > 审查日期：2026-08-23
 
 ## 1. 目标
@@ -43,8 +43,8 @@ START -> call_model / stream_model -> END
 - 校验会话可见性，支持无 `session_id` 时创建私有会话；
 - 按 `last_event_id` 补发 `ws_events`；
 - 将 `user_message` 写入 `messages`，然后用后台 Task 启动 Agent 回合；
-- 将正文增量发送为 `thought.stream=chunk`，推理增量发送为 `thought.stream=think`；
-- 将最终推理快照写为 `think_final`，助手交付句写入 `messages` 并发送无 `stream` 的 `thought` 终帧；
+- 将正文增量发送为瞬态 `assistant_delta`，推理摘要发送为 `thought.stream=think`；
+- 将最终推理摘要写为 `think_final`，助手交付句写入 `messages` 并发送 `assistant_message`，回合结束发送 `done`；
 - 在 receive 循环之外发送应用层 `pong`。
 
 模型回合不会在 WebSocket 收包循环中同步等待。会话内在线连接通过进程内 Hub 接收持久化事件和正文增量；多 API 副本部署前必须替换为进程外 Pub/Sub。
@@ -54,7 +54,10 @@ START -> call_model / stream_model -> END
 | 事件 | 首期行为 |
 | --- | --- |
 | `message` | 用户消息落库并实时广播 |
-| `thought` | 正文/推理流式增量、`think_final` 和交付终帧 |
+| `thought` | 思考摘要/阶段状态与 `think_final`，不承载助手正文 |
+| `assistant_delta` | 助手正文瞬态增量，不落库、不占事件号 |
+| `assistant_message` | 助手完整交付句，落库并占事件号 |
+| `done` | 本轮生成结束信号，携带 `finish_reason` |
 | `error` | 业务错误统一映射为十类 `ErrorCode` |
 | `pong` | 服务端应用层心跳 |
 | `confirm_ack` | 保留上行协议名，返回能力未启用 |

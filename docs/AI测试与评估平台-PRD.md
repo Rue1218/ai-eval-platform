@@ -2,10 +2,10 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.8 |
+| 文档版本 | V1.9 |
 | 文档状态 | 已冻结基线 |
 | 撰写日期 | 2026-08-17 |
-| 最近修订 | 2026-08-23：确定 LangGraph 单轮 Agent、ModelGateway 与 WebSocket 异步桥接的首期实现边界；协议档增加可选 Embedding / Reranker 独立端点配置，三类 Key 均按 profile 写入受控环境文件 |
+| 最近修订 | 2026-08-23：拆分 WebSocket 用户消息、思考摘要、助手正文增量、助手最终消息和 done 事件；确定 LangGraph 单轮 Agent、ModelGateway 与 WebSocket 异步桥接的首期实现边界；协议档增加可选 Embedding / Reranker 独立端点配置，三类 Key 均按 profile 写入受控环境文件 |
 | 适用版本 | 平台 V1.0 |
 | 技术栈 | Vue3 + Naive UI、Python FastAPI、PostgreSQL、WebSocket、Docker Compose、go-stress-testing |
 
@@ -23,6 +23,7 @@
 | V1.6.5 | 2026-08-20 | 新增默认私有、创建者可切换团队共享的 Agent 会话；补齐软删除、多人实时正文流与确认卡作者边界 |
 | V1.7.1 | 2026-08-21 | 协议档支持可选 Embedding / Reranker 的 URL、模型标识与 Key；Key 只写不回显 |
 | V1.8 | 2026-08-23 | Agent 运行基线切换为 LangGraph；首期只交付单轮模型调用与 WebSocket 流式链路，Harness、MCP、确认卡与长任务保持后续阶段 |
+| V1.9 | 2026-08-23 | 拆分用户消息、思考摘要、助手正文增量、助手最终消息和 done 事件，明确 `pong` 为独立心跳 |
 
 ---
 
@@ -105,13 +106,13 @@ WebSocket 短票
   -> LangGraph Agent Graph（单轮）
   -> ModelGateway（LangGraph 模型调用图）
   -> 三协议适配器
-  -> thought / message / error / pong
+  -> thought / message / assistant_delta / assistant_message / done / error / pong
 ```
 
 - `app/agent/graph.py` 只编排一次模型调用，不持有数据库、WebSocket、工具或任务状态；
 - `app/llm/` 只负责 `ModelRequest`、`ModelResponse`、三协议适配与流式事件，不承载 Harness；
 - `app/routers/ws.py` 负责短票、会话事件、后台 Task 和流式 WS 投影，收包循环不得等待整轮模型调用；
-- 首期支持正文 `thought.stream=chunk`、推理 `thought.stream=think`、持久化 `think_final` 和交付终帧；
+- 首期支持 `message(role=user)`、`thought` 思考摘要、`assistant_delta` 正文增量、`assistant_message` 最终交付句和 `done` 结束信号；`pong` 为独立应用层心跳；
 - Harness、ReAct/MCP、人工确认、任务取消、长任务队列和记忆层属于后续设计，不得在首期代码中提前实现。
 
 本节是对“最终产品能力”和“当前实现阶段”的区分：下文 M2–M4 的任务、MCP、确认卡和评测闭环仍是产品目标，但在首期 Agent 基础链路稳定前不宣称已交付。
@@ -267,7 +268,7 @@ queued → running → succeeded
 
 前端 → 服务：`user_message` `{text, attachments[]?, client_message_id?}`，`confirm_ack` `{ok, patch?}`，`cancel_task` `{task_id}`。
 
-`thought.stream=chunk` 只在在线时即时广播，断线不回放，随后完整交付句仍写入历史；`thought.stream=think` 仅发给本轮发起连接，不向团队协作者泄露；本轮成功结束时以 `thought.stream=think_final` 保存完整思考快照，供历史回放恢复思考卡。
+`assistant_delta` 只在在线时即时广播，断线不回放；`thought.stream=think` 仅发给本轮发起连接，不向团队协作者泄露；本轮成功结束时以 `thought.stream=think_final` 保存完整思考摘要，`assistant_message` 保存完整助手交付句，`done` 标记本轮结束，三者均可供历史回放恢复状态。
 
 首期已实现事件为 `message`、`thought`、`error`、`pong`；`tool_call`、`tool_result`、`confirm`、`confirm_ack`、`progress`、`report` 保留为后续 Harness/Worker 阶段事件。首期收到 `confirm_ack` 或 `cancel_task` 时返回 `VALIDATION` 能力未启用错误，不得伪造任务成功。
 

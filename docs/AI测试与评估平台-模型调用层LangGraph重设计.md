@@ -1,6 +1,6 @@
 # AI 测试与评估平台 — 模型调用层 LangGraph 重设计
 
-> 版本：V0.2
+> 版本：V0.3
 > 状态：已接入 LangGraph 单轮 Agent 与 WebSocket 流式桥接
 > 审查日期：2026-08-23
 
@@ -30,7 +30,8 @@
 `backend/api/app/agent/graph.py` 只依赖本文件定义的 `ModelGateway` 与模型契约，提供
 `START -> call_model / stream_model -> END` 两条单轮图路径。`backend/api/app/routers/ws.py`
 负责短票鉴权、会话事件落库和后台回合调度，不直接调用 `app.adapters`；模型流被投影为
-`thought.stream=chunk|think`，最终响应由 `completed` 事件收尾。
+`content` 被投影为 WebSocket `assistant_delta`，`reasoning` 被投影为
+`thought.stream=think`，最终响应由 `assistant_message` 与 `done` 事件收尾。
 
 模型层的 `StreamAborted` 保持为受控取消信号，由 Agent 回合决定如何交付停止结果，不能
 被误报为 `INTERNAL` 或把上游异常原文发送给浏览器。
@@ -53,6 +54,7 @@ Harness 与 Agent 只能依赖 `ModelGateway` 与上述契约，不能直接导�
 - `backend/api/app/llm/__init__.py`：模型层公开导出；
 - `backend/api/app/agent/graph.py`：只组合模型层契约的单轮 Agent 图；
 - `backend/api/app/routers/ws.py`：把模型流映射到 WebSocket 事件，不复制协议调用；
+- `frontend/src/api/ws.ts` / `frontend/src/api/types.ts` / `frontend/src/views/Agent.vue`：同步 WebSocket 流式事件类型、瞬态帧去重和前端渲染分流；
 - `backend/api/requirements.txt`：锁定 `langgraph==1.2.10`；
 - `backend/api/tests/test_llm_graph.py`：图调用、异步调用、流式事件、取消和错误脱敏测试；
 - `backend/api/tests/test_agent_graph.py`：Agent 图非流式与流式事件顺序测试。

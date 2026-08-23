@@ -605,6 +605,9 @@ export interface WsServerEvent {
   event:
     | 'thought'
     | 'message'
+    | 'assistant_delta'
+    | 'assistant_message'
+    | 'done'
     | 'tool_call'
     | 'tool_result'
     | 'confirm'

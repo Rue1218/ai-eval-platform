@@ -2,14 +2,14 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.16 |
-| 对应 PRD | V1.8（功能唯一权威） |
+| 文档版本 | V1.17 |
+| 对应 PRD | V1.9（功能唯一权威） |
 | 对应设计规范 | V1.3（错误码文案、确认卡字段名、调度中心规范） |
-| 对应 Agent 说明书 | `AI测试与评估平台-Agent重设计工作区.md` V0.3（LangGraph 单轮 Agent 与 WS 桥接；JSON 仍以本文为准） |
+| 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V0.2（LangGraph 单轮 Agent 与 WS 桥接；JSON 仍以本文为准） |
 | 对应前端计划 | V1.5 |
 | 对应后端计划 | V1.5 |
 | 撰写日期 | 2026-08-18 |
-| 最近修订 | 2026-08-23：V1.16 接入 LangGraph 单轮 Agent 与 WebSocket 异步桥接；2026-08-22：V1.15 清空旧 Agent/Harness/模型调用/Runtime 实现、相关测试与阶段文档，保留 API 路径作为重建设计期间的明确占位；2026-08-21：V1.14 `audio.speech_synthesis` 支持朗读稿抽取与 TTS 意图词表扩充；V1.13 增加 MiMo STT/TTS 短工具、意图优先级、音频事件交付与安全展示；V1.12 协议档支持独立 Embedding / Reranker 端点配置，三类 API Key 均只写入受控环境文件且不回显；V1.11 通过内部 `mcp_tools` 接入 Qwen Image 图文生图；V1.9 短工具 `audio.voiceclone` 与文件播放；V1.8 助手回复耗时展示 |
+| 最近修订 | 2026-08-23：V1.17 拆分 WebSocket 用户消息、思考摘要、助手正文增量、助手最终消息和 done 事件；V1.16 接入 LangGraph 单轮 Agent 与 WebSocket 异步桥接；2026-08-22：V1.15 清空旧 Agent/Harness/模型调用/Runtime 实现、相关测试与阶段文档，保留 API 路径作为重建设计期间的明确占位；2026-08-21：V1.14 `audio.speech_synthesis` 支持朗读稿抽取与 TTS 意图词表扩充；V1.13 增加 MiMo STT/TTS 短工具、意图优先级、音频事件交付与安全展示；V1.12 协议档支持独立 Embedding / Reranker 端点配置，三类 API Key 均只写入受控环境文件且不回显；V1.11 通过内部 `mcp_tools` 接入 Qwen Image 图文生图；V1.9 短工具 `audio.voiceclone` 与文件播放；V1.8 助手回复耗时展示 |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
 ---
@@ -1254,12 +1254,15 @@ Harness 回合必须丢到后台 Task，**不得**在 `receive` 循环里 `await
 
 `event_id` 在会话内单调递增。`task_id` 在入队后才有。
 
-### 4.3 服务 → 前端（事件名冻结，V1.6 增加 `message`、`confirm_ack`）
+### 4.3 服务 → 前端（事件名冻结，V1.17 拆分助手流式事件）
 
 | event | payload | 前端渲染 |
 | --- | --- | --- |
-| `thought` | `{ "text": "..." }`；可选 `latency_ms` `stage`（`plan\|react\|reflect`）`skill_id`。流式扩展：回复生成期间可发送瞬态增量帧 `{ "text": "增量", "stream": "chunk" }`（回复正文增量）与 `{ "text": "增量", "stream": "think" }`（推理模型思考链增量，前端渲染进可折叠思考卡），两种增量均不落库、不占事件号；本轮成功结束时发送 `{ "text": "完整思考链", "stream": "think_final" }`，该快照落库并可历史回放。随后发送不带 `stream` 的完整文本终帧。交付终帧可选 `reply_latency_ms`（本轮回复墙钟耗时 ms，与各阶段 `latency_ms` 区分，实时气泡展示「耗时 x 秒」）；历史回放不依赖该字段，耗时从 `GET /sessions/{id}/messages` 的 `messages[].latency_ms` 读取 | ThoughtCard |
+| `thought` | 思考摘要或阶段状态 `{ "text": "..." }`；可选 `latency_ms`、`stage`（`plan\|react\|reflect`）、`skill_id`。推理增量使用 `stream="think"`，思考快照使用 `stream="think_final"`；仅承载思考信息，不承载助手正文 | ThoughtCard |
 | `message` | `{ "id", "role":"user", "content", "attachments", "author_id", "author":{id,username,display_name?}, "client_message_id?", "created_at" }`；落库、占 event_id，用于协作者实时补用户气泡 | UserBubble |
+| `assistant_delta` | `{ "role":"assistant", "text":"增量" }`；助手正文瞬态增量，不落库、不占事件号，仅用于在线连接的流式气泡 | AssistantBubble |
+| `assistant_message` | `{ "id", "role":"assistant", "text":"完整回答", "reply_latency_ms?", "created_at" }`；助手最终交付句，落库、占 event_id，可通过历史消息回放 | AssistantBubble |
+| `done` | `{ "finish_reason":"stop\|cancelled\|error" }`；本轮生成结束，落库、占 event_id | 结束流式状态 |
 | `tool_call` | `{ "name": "model.list", "arguments": {} }` | ToolCard pending；标题用中文名；副标题「MCP · 短工具」 |
 | `tool_result` | `{ "name": "model.list", "ok": true, "data": {} }` 或 `{ "ok": false, "error": "..." }`；可选 `latency_ms` | ToolCard done |
 | `confirm` | TaskSpec（§5 / §6）+ 非 TaskSpec 元数据 `confirm_author:{id,username,display_name?}` | ConfirmCard，等 `confirm_ack`；仅 `confirm_author.id` 可操作 |
@@ -1271,11 +1274,11 @@ Harness 回合必须丢到后台 Task，**不得**在 `receive` 循环里 `await
 
 禁止：`thinking` `token` `chat:send` `tool_call_start` 及任何参考文档旧名。
 
-共享流规则：`thought.stream="chunk"` 仅向同一 `team` 会话内的**在线**成员广播；
+共享流规则：`assistant_delta` 仅向同一 `team` 会话内的**在线**成员广播；
 `thought.stream="think"` 只发送给本轮发起连接，不向协作者广播。两类瞬态增量不落库、
-不占单调事件号；中途加入/断线重连者从后续增量继续看，最终完整交付句与
+不占单调事件号；中途加入/断线重连者从后续增量继续看，最终完整交付句、`done` 与
 `thought.stream="think_final"` 思考快照可从历史回放。
-当前 Compose 只有单 API 副本，chunk 广播为进程内 Hub；多 API 副本时必须改为进程外
+当前 Compose 只有单 API 副本，assistant_delta 广播为进程内 Hub；多 API 副本时必须改为进程外
 Pub/Sub，不能假定跨进程实时可见。
 
 短工具中文名（ToolCard 标题）：
