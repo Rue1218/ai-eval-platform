@@ -109,7 +109,7 @@ onMounted(() => {
   border-radius: 12px;
   background: var(--bg-elevated, rgba(30, 41, 59, 0.45));
   overflow: hidden;
-  max-width: 88%;
+  max-width: 100%;
   margin: 6px 0;
   transition: all 0.25s cubic-bezier(0.2, 0.9, 0.3, 1);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
@@ -202,26 +202,136 @@ onMounted(() => {
 }
 
 .thought-body {
-  padding: 4px 12px 12px;
+  padding: 6px 14px 14px;
   border-top: 1px dashed var(--border-subtle, rgba(255, 255, 255, 0.06));
 }
 
 .thought-guide-line {
-  border-left: 2px solid color-mix(in srgb, var(--accent-ai, #10b981) 40%, transparent);
-  padding-left: 10px;
+  border-left: 2px solid color-mix(in srgb, var(--accent-ai, #10b981) 35%, transparent);
+  padding-left: 12px;
   margin-top: 6px;
 }
 
+/* 思考过程专用全局统一排版体系（全面覆盖 Markdown 各级元素，防止字号忽大忽小） */
 :deep(.thought-markdown) {
-  font-size: 13.5px !important;
-  line-height: 1.7 !important;
+  font-size: 12.5px !important;
+  line-height: 1.65 !important;
   color: var(--text-secondary, #94a3b8) !important;
+  letter-spacing: 0.01em;
 }
 
 :deep(.thought-markdown .md-p) {
-  font-size: 13.5px !important;
-  line-height: 1.7 !important;
-  margin-bottom: 8px !important;
+  font-size: 12.5px !important;
+  line-height: 1.65 !important;
+  color: var(--text-secondary, #94a3b8) !important;
+  margin-bottom: 6px !important;
+}
+
+:deep(.thought-markdown .md-p:last-child) {
+  margin-bottom: 0 !important;
+}
+
+/* 思考过程标题收敛（微粗体，字号收敛至 13px，杜绝巨型标题） */
+:deep(.thought-markdown .md-h1),
+:deep(.thought-markdown .md-h2),
+:deep(.thought-markdown .md-h3),
+:deep(.thought-markdown .md-h4),
+:deep(.thought-markdown .md-h5),
+:deep(.thought-markdown .md-h6) {
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  line-height: 1.5 !important;
+  color: var(--text-primary, #e2e8f0) !important;
+  margin: 10px 0 4px !important;
+  padding-bottom: 0 !important;
+  border-bottom: none !important;
+}
+
+/* 思考过程列表统一（序号与圆点字号统一收敛为 12.5px） */
+:deep(.thought-markdown .md-ul) {
+  margin: 4px 0 6px 16px !important;
+  padding: 0 !important;
+}
+
+:deep(.thought-markdown .md-li-bullet),
+:deep(.thought-markdown .md-li-num) {
+  font-size: 12.5px !important;
+  line-height: 1.65 !important;
+  color: var(--text-secondary, #94a3b8) !important;
+  margin-bottom: 4px !important;
+}
+
+:deep(.thought-markdown .md-li-bullet::marker) {
+  font-size: 11.5px !important;
+  color: var(--accent-ai, #10b981) !important;
+}
+
+:deep(.thought-markdown .md-li-num::marker) {
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  color: var(--accent-ai, #10b981) !important;
+}
+
+/* 行内加粗与强调 */
+:deep(.thought-markdown strong),
+:deep(.thought-markdown b) {
+  font-weight: 600 !important;
+  color: var(--text-primary, #f1f5f9) !important;
+}
+
+:deep(.thought-markdown em),
+:deep(.thought-markdown i) {
+  color: var(--text-secondary, #cbd5e1) !important;
+}
+
+/* 思考过程行内代码块 */
+:deep(.thought-markdown .md-inline-code) {
+  font-size: 11.5px !important;
+  padding: 1px 4px !important;
+  border-radius: 4px !important;
+  color: var(--accent-ai, #10b981) !important;
+  background: rgba(16, 185, 129, 0.08) !important;
+  border: 1px solid rgba(16, 185, 129, 0.2) !important;
+}
+
+/* 思考过程引用块 */
+:deep(.thought-markdown .md-quote) {
+  font-size: 12px !important;
+  line-height: 1.5 !important;
+  margin: 6px 0 !important;
+  padding: 6px 10px !important;
+  border-left: 2.5px solid var(--accent-ai, #10b981) !important;
+  background: rgba(255, 255, 255, 0.02) !important;
+  color: var(--text-tertiary, #64748b) !important;
+}
+
+/* 思考过程代码块卡片收敛 */
+:deep(.thought-markdown .md-code-card) {
+  margin: 6px 0 !important;
+  font-size: 11.5px !important;
+}
+
+:deep(.thought-markdown .md-code-head) {
+  padding: 4px 10px !important;
+}
+
+:deep(.thought-markdown .md-code-block) {
+  padding: 8px 10px !important;
+  font-size: 11.5px !important;
+}
+
+/* 思考过程表格收敛 */
+:deep(.thought-markdown .md-table-wrap) {
+  margin: 6px 0 !important;
+}
+
+:deep(.thought-markdown .md-table) {
+  font-size: 11.5px !important;
+}
+
+:deep(.thought-markdown .md-th),
+:deep(.thought-markdown .md-td) {
+  padding: 4px 8px !important;
 }
 
 .thought-cursor {
@@ -229,7 +339,7 @@ onMounted(() => {
   color: var(--accent-ai, #10b981);
   animation: cursor-blink 0.9s step-end infinite;
   margin-left: 2px;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 @keyframes slow-spin {
@@ -262,7 +372,7 @@ onMounted(() => {
     padding: 6px 10px;
   }
   .thought-title {
-    font-size: 12.5px;
+    font-size: 12px;
   }
   .thought-badge {
     font-size: 10px;
@@ -272,8 +382,10 @@ onMounted(() => {
     padding: 4px 8px 10px;
   }
   :deep(.thought-markdown),
-  :deep(.thought-markdown .md-p) {
-    font-size: 12.5px !important;
+  :deep(.thought-markdown .md-p),
+  :deep(.thought-markdown .md-li-bullet),
+  :deep(.thought-markdown .md-li-num) {
+    font-size: 11.5px !important;
   }
 }
 </style>
