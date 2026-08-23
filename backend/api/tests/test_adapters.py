@@ -118,6 +118,18 @@ def test_openai_responses_request_shape(monkeypatch):
     assert seen["body"]["max_output_tokens"] == 16
 
 
+def test_openai_responses_reasoning_settings(monkeypatch):
+    """Responses API 的思考强度与摘要开关映射到标准 reasoning 对象。"""
+    seen = _capture(monkeypatch, OPENAI_RESPONSES_OK)
+    call_protocol(
+        **(_kwargs("openai_responses") | {"model": "gpt-5.2"}),
+        reasoning_enabled=True,
+        reasoning_effort="high",
+    )
+
+    assert seen["body"]["reasoning"] == {"effort": "high", "summary": "auto"}
+
+
 def test_anthropic_request_shape(monkeypatch):
     """anthropic_messages：system 独立字段、x-api-key + anthropic-version 鉴权头。"""
     seen = _capture(monkeypatch, ANTHROPIC_OK)
@@ -274,7 +286,19 @@ def test_stream_mimo_keeps_thinking_enabled(monkeypatch):
     kwargs = _kwargs("openai_chat") | {"base_url": "https://xiaomimimo.example.com"}
     list(stream_protocol(**kwargs))
 
-    assert "thinking" not in seen["body"]
+    assert seen["body"]["thinking"] == {"type": "enabled"}
+
+
+def test_stream_mimo_can_disable_thinking(monkeypatch):
+    """关闭思考设置时，Mimo 流式请求明确发送 disabled。"""
+    seen = _capture_stream(monkeypatch, ['data: {"choices":[{"delta":{"content":"ok"}}]}'])
+    kwargs = _kwargs("openai_chat") | {
+        "base_url": "https://xiaomimimo.example.com",
+        "reasoning_enabled": False,
+    }
+    list(stream_protocol(**kwargs))
+
+    assert seen["body"]["thinking"] == {"type": "disabled"}
 
 
 def test_call_mimo_still_disables_thinking(monkeypatch):

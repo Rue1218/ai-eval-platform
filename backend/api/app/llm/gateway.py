@@ -52,6 +52,8 @@ def _default_invoke_transport(request: ModelRequest) -> AdapterResult:
         max_tokens=config.max_tokens,
         anthropic_version=config.anthropic_version,
         timeout_s=config.timeout_s,
+        reasoning_enabled=config.reasoning_enabled,
+        reasoning_effort=config.reasoning_effort,
     )
 
 
@@ -70,6 +72,8 @@ def _default_stream_transport(request: ModelRequest) -> Iterator[tuple[str, str]
         anthropic_version=config.anthropic_version,
         timeout_s=config.timeout_s,
         should_abort=request.should_abort,
+        reasoning_enabled=config.reasoning_enabled,
+        reasoning_effort=config.reasoning_effort,
     )
 
 
@@ -187,6 +191,9 @@ class ModelGateway:
         try:
             for kind, delta in self._stream_transport(request):
                 if not delta:
+                    continue
+                # 关闭思考摘要时，即使上游仍返回 reasoning_content，也不得投影到 WS。
+                if kind == "reasoning" and not request.config.reasoning_enabled:
                     continue
                 if kind != "reasoning":
                     kind = "content"

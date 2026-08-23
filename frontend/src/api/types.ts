@@ -52,6 +52,14 @@ export interface WsTicketOut {
 // 协议类型
 export type ProtocolType = 'openai_chat' | 'openai_responses' | 'anthropic_messages'
 
+// Agent 思考强度；具体模型不支持某档位时由上游返回统一 UPSTREAM 错误。
+export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+
+export interface AgentReasoningSettings {
+  enabled: boolean
+  effort: ReasoningEffort
+}
+
 // 协议档用途
 export type ProfileUsage = 'target' | 'agent' | 'judge'
 
@@ -504,6 +512,7 @@ export interface Report {
 // 管理员设置
 export interface AdminSettings {
   agent_profile_id: string
+  agent_reasoning: AgentReasoningSettings
   max_running_tasks: number
   max_inflight_model_calls: number
   default_max_usd: number

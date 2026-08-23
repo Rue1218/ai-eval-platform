@@ -62,6 +62,8 @@ class RagModelsIn(ApiModel):
 
 DEFAULT_SETTINGS: dict[str, Any] = {
     "agent_profile_id": None,
+    # Agent 模型推理控制：只允许展示上游返回的 reasoning summary，不暴露隐藏思维链。
+    "agent_reasoning": {"enabled": True, "effort": "medium"},
     "max_running_tasks": 3,
     "max_inflight_model_calls": 8,
     "default_max_usd": 5,
@@ -104,6 +106,14 @@ def _validate_settings(body: dict[str, Any], db: Session) -> None:
             raise AppError(ErrorCode.VALIDATION, f"{key} 必须为正整数")
     if "default_max_usd" in body and (not isinstance(body["default_max_usd"], int | float) or body["default_max_usd"] <= 0):
         raise AppError(ErrorCode.VALIDATION, "default_max_usd 必须大于 0")
+    if "agent_reasoning" in body:
+        reasoning = body["agent_reasoning"]
+        if not isinstance(reasoning, dict):
+            raise AppError(ErrorCode.VALIDATION, "agent_reasoning 必须为对象")
+        if not isinstance(reasoning.get("enabled"), bool):
+            raise AppError(ErrorCode.VALIDATION, "agent_reasoning.enabled 必须为布尔值")
+        if reasoning.get("effort") not in {"low", "medium", "high", "xhigh", "max"}:
+            raise AppError(ErrorCode.VALIDATION, "agent_reasoning.effort 不受支持")
     if "runtime" in body:
         runtime = body["runtime"]
         if not isinstance(runtime, dict):

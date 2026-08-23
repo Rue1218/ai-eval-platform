@@ -180,6 +180,7 @@ export const MOCK_USERS: AuthUser[] = [
 
 export const MOCK_SETTINGS: AdminSettings = {
   agent_profile_id: 'p-agent',
+  agent_reasoning: { enabled: true, effort: 'medium' },
   max_running_tasks: 3,
   max_inflight_model_calls: 8,
   default_max_usd: 5,

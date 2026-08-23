@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 ProtocolName = Literal["openai_chat", "openai_responses", "anthropic_messages"]
+ReasoningEffort = Literal["low", "medium", "high", "xhigh", "max"]
 StreamAbort = Callable[[], bool]
 
 
@@ -30,6 +31,9 @@ class ModelConfig:
     temperature: float = 0.2
     max_tokens: int = 1024
     timeout_s: float = 30.0
+    # 是否请求并向上层投影模型返回的思考摘要；不等同于暴露隐藏思维链。
+    reasoning_enabled: bool = True
+    reasoning_effort: ReasoningEffort = "medium"
 
 
 Message = Mapping[str, object]

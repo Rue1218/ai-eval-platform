@@ -1,15 +1,15 @@
 # AI 测试与评估平台
 
-基于 PRD V1.10 的单团队大模型测试与评估平台。当前首期采用 LangGraph 实现单轮 Agent
+基于 PRD V1.11 的单团队大模型测试与评估平台。当前首期采用 LangGraph 实现单轮 Agent
 与模型调用层，并通过 FastAPI WebSocket 提供流式对话；用户消息、思考摘要、助手正文
 增量、最终助手消息和结束信号已拆分为独立事件。Harness、人工确认和长任务按阶段冻结，
 避免多套运行时并存。
 
 > 开发规范：[AGENTS.md](AGENTS.md)
 >
-> 需求：[PRD V1.10](docs/AI测试与评估平台-PRD.md) · 接口：[API V1.18](docs/AI测试与评估平台-API.md)
+> 需求：[PRD V1.11](docs/AI测试与评估平台-PRD.md) · 接口：[API V1.19](docs/AI测试与评估平台-API.md)
 >
-> Agent：[Agent 开发文档 V0.3](docs/AI测试与评估平台-Agent开发文档.md) · [LangGraph + WebSocket 设计](docs/AI测试与评估平台-Agent框架LangGraph与WebSocket重设计.md)
+> Agent：[Agent 开发文档 V0.4](docs/AI测试与评估平台-Agent开发文档.md) · [LangGraph + WebSocket 设计](docs/AI测试与评估平台-Agent框架LangGraph与WebSocket重设计.md)
 
 技术栈：Vue 3 + TypeScript + Naive UI / Python 3.12 + FastAPI / LangGraph / PostgreSQL /
 WebSocket / Docker Compose / LightRAG / go-stress-testing。
@@ -51,7 +51,7 @@ WebSocket 建连流程：
 | 模块 | 当前状态 |
 | --- | --- |
 | LangGraph Agent | 单轮 `invoke` / 流式 `astream`，只组合 `ModelGateway` |
-| 模型调用层 | 三协议统一配置、同步/异步调用、正文/推理流和取消信号 |
+| 模型调用层 | 三协议统一配置、思考开关/强度、同步/异步调用、正文/推理流和取消信号 |
 | WebSocket | 短票、会话可见性、心跳 `pong`、事件回放、后台单轮回合 |
 | WS 事件 | `user_message`、`thought`、`assistant_delta`、`assistant_message`、`response.completed`、`error`、`pong` |
 | 会话 | 私有/团队可见性、消息与事件持久化、断线补发 |
@@ -164,9 +164,9 @@ sudo -u deploy bash /opt/ai-eval-platform/deploy/deploy.sh
 
 ## 文档索引
 
-- [产品需求 PRD V1.10](docs/AI测试与评估平台-PRD.md)
-- [API 契约 V1.18](docs/AI测试与评估平台-API.md)
-- [Agent 开发文档 V0.3](docs/AI测试与评估平台-Agent开发文档.md)
+- [产品需求 PRD V1.11](docs/AI测试与评估平台-PRD.md)
+- [API 契约 V1.19](docs/AI测试与评估平台-API.md)
+- [Agent 开发文档 V0.4](docs/AI测试与评估平台-Agent开发文档.md)
 - [Agent 重设计工作区 V0.3](docs/AI测试与评估平台-Agent重设计工作区.md)
 - [LangGraph + WebSocket 设计](docs/AI测试与评估平台-Agent框架LangGraph与WebSocket重设计.md)
 - [模型调用层 LangGraph 设计](docs/AI测试与评估平台-模型调用层LangGraph重设计.md)

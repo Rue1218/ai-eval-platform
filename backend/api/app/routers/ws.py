@@ -289,6 +289,16 @@ def _selected_model_config(db: Session) -> ModelConfig:
     base_url, model, api_key = _profile_connection(profile, allow_global_alias=True)
     if not base_url or not model:
         raise AppError(ErrorCode.VALIDATION, "Agent 协议档配置不完整")
+    reasoning_row = db.query(Setting).filter(Setting.key == "agent_reasoning").first()
+    reasoning = reasoning_row.value if reasoning_row else {}
+    if not isinstance(reasoning, dict):
+        reasoning = {}
+    reasoning_enabled = reasoning.get("enabled", True)
+    reasoning_effort = reasoning.get("effort", "medium")
+    if not isinstance(reasoning_enabled, bool):
+        reasoning_enabled = True
+    if reasoning_effort not in {"low", "medium", "high", "xhigh", "max"}:
+        reasoning_effort = "medium"
     return ModelConfig(
         protocol=profile.protocol,
         base_url=base_url,
@@ -298,6 +308,8 @@ def _selected_model_config(db: Session) -> ModelConfig:
         temperature=0.2,
         max_tokens=1024,
         timeout_s=30.0,
+        reasoning_enabled=reasoning_enabled,
+        reasoning_effort=reasoning_effort,
     )
 
 

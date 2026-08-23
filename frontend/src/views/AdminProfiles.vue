@@ -16,7 +16,7 @@
     <!-- 顶部指定 Agent 后端设置 -->
     <div class="panel mb16">
       <div class="panel-title">智能体后台模型配置 (Agent Backend)</div>
-      <div class="row" style="gap: 16px">
+      <div class="row wrap" style="gap: 16px">
         <div style="font-size: 13px; color: var(--text-secondary)">
           指定系统唯一的 Agent 决策后台协议档：
         </div>
@@ -28,6 +28,29 @@
         />
         <span class="mono" style="font-size: 12px; color: var(--text-tertiary)">
           (保存即刻全局生效)
+        </span>
+      </div>
+      <div class="row wrap" style="gap: 16px; margin-top: 14px; align-items: flex-end">
+        <div class="field" style="width: 180px">
+          <span class="field-label">思考摘要输出</span>
+          <label class="row" style="gap: 8px; cursor: pointer; height: 34px">
+            <n-switch v-model:value="agentReasoningForm.enabled" />
+            <span>{{ agentReasoningForm.enabled ? '开启' : '关闭' }}</span>
+          </label>
+        </div>
+        <div class="field" style="width: 180px">
+          <span class="field-label">思考强度</span>
+          <n-select
+            v-model:value="agentReasoningForm.effort"
+            :options="reasoningEffortOptions"
+            :disabled="!agentReasoningForm.enabled"
+          />
+        </div>
+        <button class="btn btn-secondary btn-sm" :disabled="reasoningSaving" @click="saveAgentReasoning">
+          {{ reasoningSaving ? '保存中…' : '保存思考设置' }}
+        </button>
+        <span class="field-hint" style="max-width: 560px">
+          仅展示模型返回的 reasoning summary / thinking 增量，不展示隐藏思维链；不支持该能力的模型会自动忽略专用参数。
         </span>
       </div>
     </div>
@@ -1270,7 +1293,7 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { useMessage, useDialog, NSelect, NInput, NInputNumber, NSwitch } from 'naive-ui'
 import { api } from '../api/http'
-import type { Profile, ProfileCheckOut, McpTool } from '../api/types'
+import type { AgentReasoningSettings, Profile, ProfileCheckOut, McpTool } from '../api/types'
 import EmptyState from '../components/common/EmptyState.vue'
 import ProfileModal from '../components/modals/ProfileModal.vue'
 import CheckResultModal from '../components/modals/CheckResultModal.vue'
@@ -1571,6 +1594,17 @@ function handleOpenAddSkillNotice() {
 // 运行时治理表单（settings.runtime）
 const runtimeForm = ref({ ws_ping_s: 15, ws_timeout_s: 45, strict_session_slot: true })
 const runtimeSaving = ref(false)
+
+// Agent 模型推理设置：默认开启摘要、使用中等强度，保存后新回合立即读取。
+const agentReasoningForm = ref<AgentReasoningSettings>({ enabled: true, effort: 'medium' })
+const reasoningSaving = ref(false)
+const reasoningEffortOptions = [
+  { label: '低 · 更快', value: 'low' },
+  { label: '中 · 平衡', value: 'medium' },
+  { label: '高 · 更充分', value: 'high' },
+  { label: '极高 · 更深入', value: 'xhigh' },
+  { label: '最大 · 质量优先', value: 'max' },
+]
 
 // 视图模式：'cards' (供应商分类多卡片视图) | 'table' (详细表格视图)
 const viewMode = ref<'cards' | 'table'>('cards')
@@ -1949,6 +1983,9 @@ async function loadProfiles() {
       const settings = settingsRes.value
       selectedAgentProfileId.value = settings?.agent_profile_id || null
       lastSavedAgentProfileId.value = selectedAgentProfileId.value
+      if (settings?.agent_reasoning) {
+        agentReasoningForm.value = { ...agentReasoningForm.value, ...settings.agent_reasoning }
+      }
       if (settings?.runtime) runtimeForm.value = { ...settings.runtime }
     }
     if (toolsRes.status === 'fulfilled') {
@@ -1971,6 +2008,20 @@ async function saveRuntime() {
     message.error(err.message || '运行时参数保存失败')
   } finally {
     runtimeSaving.value = false
+  }
+}
+
+/** 保存 Agent 思考摘要与强度；配置按 Setting JSON 存储，不新增表字段。 */
+async function saveAgentReasoning() {
+  reasoningSaving.value = true
+  try {
+    const settings = await api.admin.updateSettings({ agent_reasoning: { ...agentReasoningForm.value } })
+    if (settings.agent_reasoning) agentReasoningForm.value = { ...settings.agent_reasoning }
+    message.success('思考设置已保存，新对话回合立即生效')
+  } catch (err: any) {
+    message.error(err.message || '思考设置保存失败')
+  } finally {
+    reasoningSaving.value = false
   }
 }
 
