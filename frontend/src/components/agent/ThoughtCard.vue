@@ -106,13 +106,22 @@ onMounted(() => {
 <style scoped>
 .thought-card {
   border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
-  border-radius: 12px;
+  border-radius: 10px;
   background: var(--bg-elevated, rgba(30, 41, 59, 0.45));
   overflow: hidden;
   max-width: 100%;
-  margin: 6px 0;
+  width: 100%;
+  margin: 6px 0 10px 0;
+  box-sizing: border-box;
   transition: all 0.25s cubic-bezier(0.2, 0.9, 0.3, 1);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+}
+
+.thought-card.collapsed {
+  display: inline-flex;
+  width: auto;
+  max-width: 100%;
+  margin: 4px 0 8px 0;
 }
 
 .thought-card.done {
