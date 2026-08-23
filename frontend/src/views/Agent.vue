@@ -2852,6 +2852,7 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
   const buf = rt.events
   const p = ev.payload || {}
   switch (ev.event) {
+    case 'user_message':
     case 'message': {
       const messageId = String(p.id || '')
       const clientMessageId = typeof p.client_message_id === 'string' ? p.client_message_id : ''
@@ -2984,6 +2985,7 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
       void refreshContextMeter(sid)
       break
     }
+    case 'response.completed':
     case 'done': {
       finishBufferThought(buf)
       const orphan = turnStreamingAgent(buf)
@@ -3117,9 +3119,9 @@ function typewriteTo(rawItem: StreamItem, fullText: string) {
 }
 
 function handleWsEvent(ev: WsServerEvent) {
-  // 用户自己的 message 回显不是「本轮已出结果」。过早移除打字占位时，
+  // 用户自己的 user_message 回显不是「本轮已出结果」。过早移除打字占位时，
   // 规划/流式开始前对话区只剩用户气泡，看起来像模型没有回复。
-  if (ev.event !== 'pong' && ev.event !== 'message') {
+  if (ev.event !== 'pong' && ev.event !== 'message' && ev.event !== 'user_message') {
     dismissTyping()
     const isStream = ev.payload && typeof ev.payload.stream === 'string'
     if (!isStream) {
@@ -3128,6 +3130,7 @@ function handleWsEvent(ev: WsServerEvent) {
   }
   const p = ev.payload || {}
   switch (ev.event) {
+    case 'user_message':
     case 'message': {
       // 用户消息已同时存在于 REST 历史与 WS 事件中；按服务端 ID 或浏览器幂等键合并。
       const messageId = String(p.id || '')
@@ -3292,6 +3295,7 @@ function handleWsEvent(ev: WsServerEvent) {
       if (text) scrollToBottom()
       break
     }
+    case 'response.completed':
     case 'done': {
       finishLiveThought()
       const orphan = turnStreamingAgent(events.value)

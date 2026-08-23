@@ -604,9 +604,11 @@ export interface SessionHistory {
 export interface WsServerEvent {
   event:
     | 'thought'
+    | 'user_message'
     | 'message'
     | 'assistant_delta'
     | 'assistant_message'
+    | 'response.completed'
     | 'done'
     | 'tool_call'
     | 'tool_result'
