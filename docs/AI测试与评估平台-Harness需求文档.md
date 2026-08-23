@@ -3,7 +3,7 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 需求文档 |
-| 版本 | V1.4 |
+| 版本 | V1.4.4 |
 | 审查日期 | 2026-08-23 |
 | 文档性质 | 需求规格说明书（需求先行） |
 | 适用范围 | `/agent` 对话智能体的 Harness 运行时：六层职责、七种模式组合、LangGraph 框架选型、技能体系与验收标准 |
@@ -12,6 +12,14 @@
 > **阅读关系**：本文是**需求层**，回答"Harness 应具备哪些能力、按什么标准验收"；实现结构以《Agent重设计工作区》与《模型调用层LangGraph重设计》为准，运行行为以《Agent框架LangGraph与WebSocket重设计》为准，产品状态机与字段以 PRD / API.md 为准。本文不新增任何对外 REST/WS 字段。
 
 > **V1.4 修订定位**：远程 `main` 已完成 LangGraph 重构——旧 `app/agent/` 自研实现（react/harness/plan/reflect/mcp_registry 等）全部移除，替换为 `app/llm/`（ModelGateway 双图）+ `app/agent/graph.py`（单轮 Agent 图）+ `app/routers/ws.py`（WS 桥接）；`app/harness/`、`app/runtime/` 保持空包边界。本版把「现状」更新为**LangGraph 最小单轮链路**，需求目标（六层、七模式、澄清卡、检查点治理）保持 V1.3 裁决不变。
+
+> **V1.4.1 修订定位**：评审补丁版，不改需求范围——① 补充阶段 3 接入 Checkpointer 前的 GraphState 可序列化迁移路径（`should_abort` 等回调不得入 State）；② OR-2 冻结字段补登 `allows_replan`，消除 §6 悬空引用；③ 显式声明阶段 3 允许新增 `langgraph-checkpoint-postgres` 依赖；④ 标注 `handle_confirm_ack` 为规划中函数（阶段 4 落地）。
+
+> **V1.4.2 修订定位**：架构落地补丁版，不改需求范围——新增 §9「架构文件树与待生成代码清单」，把六层职责（§4）与演进阶段（§2.3）映射到 `app/harness/`、`app/agent/`、`app/runtime/` 的具体包/文件骨架，明确每阶段需生成的代码文件、所属层与对应需求编号，作为阶段 1–4 逐层填充的施工蓝图。本版不新增任何对外 REST/WS 字段，不改变已落地基线。
+
+> **V1.4.3 修订定位**：模块设计回写版，不改需求范围——① §7 新增「内部短 MCP 允许 + 基础工具集为通用能力」裁决行（对齐 M5-D4，澄清 `web_search`/`web_fetch` 等基础工具由平台内置适配器实现，非外部 MCP 服务器，不触碰「禁止外部 MCP」红线）；② §9.1/§9.2/§9.3 把 `state.py` 从 `app/harness/orchestration/` 移到 `app/harness/memory/`（对齐 M3-D1，GraphState 归记忆层所有）。本版不新增任何对外 REST/WS 字段，不改变已落地基线。
+
+> **V1.4.4 修订定位**：契约分期修正版，不改需求范围——§9.1/§9.2/§9.3 把 `contracts/artifacts.py` 由「阶段 4 整体落地」修正为**两波分期**：阶段 2 早波（`ToolCall`/`ToolResult`/`Observation`，供 M5/M6/M2 阶段 2 消费）+ 阶段 4 晚波（`PlanArtifact`/`SkillHint`，供 M4/M10 阶段 4 消费）。消除原分期下 M5/M6 阶段 2 引用尚未生成的 artifact 契约导致的 ImportError 阶段倒挂。本版不新增任何对外 REST/WS 字段，不改变已落地基线。
 
 ---
 
@@ -84,17 +92,19 @@ LangGraph 定位为**六层全覆盖框架**（V1.3 裁决）：提示词装配�
 
 ### 2.4 依赖与红线
 
-- 依赖已锁定 `langgraph==1.2.10`（`backend/api/requirements.txt`）；**禁止**引入 langchain 全家桶、外部 MCP 或 LangGraph 云服务。
+- 依赖已锁定 `langgraph==1.2.10`（`backend/api/requirements.txt`）；**禁止**引入 langchain 全家桶、外部 MCP 或 LangGraph 云服务。阶段 3 接入 `PostgresSaver` 时**允许**新增 `langgraph-checkpoint-postgres`（`PostgresSaver` 所在独立包，非 langchain 全家桶），引入时同步更新 `requirements.txt` 并在 PR 说明。
 - **排除 `create_react_agent`**：其 tool-calling 消息格式让模型直接传参，会绕过参数绑定与白名单门禁。只允许自建 `StateGraph` 复刻"严格 JSON → 注册表校验 → 参数系统绑定 → 脱敏执行"链路。
 - `ToolNode` 必须包装工具注册表：附件参数绑定、白名单/超时、脱敏保持为节点内逻辑，**不得**被框架默认行为绕过。
 - `interrupt()` 仅用于**澄清卡场景**（§2.5）；**不得**用于确认卡等待、长任务忙等。评测长任务必须走 PG 队列交 Worker。
-- 状态值必须为可序列化 JSON（PG 检查点兼容）；禁止把 DB Session、WebSocket 连接等不可序列化对象写入 GraphState。
+- 状态值必须为可序列化 JSON（PG 检查点兼容）；禁止把 DB Session、WebSocket 连接等不可序列化对象写入 GraphState。**阶段 3 前置迁移路径**：当前 `_AgentState` 携带的 `ModelRequest`（含 `should_abort` 回调）与 `ModelResponse` 为 dataclass，不可序列化；接入 Checkpointer 前须先把 `should_abort` 等回调移出 State（改由节点闭包或 `RunnableConfig` 注入），State 内只保留 JSON 可序列化的请求/响应字段。
 - 共享会话并发：保留"单会话单活动回合"约束，Checkpointer 写入不得覆盖并发回合。
 - **检查点表治理**：`PostgresSaver` 产生的检查点表**必须经 Alembic 迁移建表**（红线 4），不得依赖框架运行时自动建表；保留策略为 TTL + 会话软删除联动，过期清理由后台任务执行。
 
 ### 2.5 确认卡、澄清卡与事件桥接裁决
 
 **确认卡（方案①，收包循环直连）**：
+
+> 下文 `handle_confirm_ack` 为**规划中函数名**（阶段 4 落地）；当前 `confirm_ack` 由收包循环直接拒绝并返回 `VALIDATION`（"尚未启用任务控制"），与 §4.4 现状一致。
 
 ```text
 confirm_ack 收包 → 行锁读 sessions.pending_confirm
@@ -200,7 +210,7 @@ confirm_ack 收包 → 行锁读 sessions.pending_confirm
 | 需求编号 | 需求条目 | 验收标准 |
 | :--- | :--- | :--- |
 | OR-1 | 模式路由：斜杠 → Direct；无工具 → Chat；短工具 → ReAct；多槽位业务 → Plan-and-Solve | 路由断言 |
-| OR-2 | `PlanArtifact` 冻结字段：intent/skill_id/slots/tools_needed/delivery/budget/notes | 规划 JSON schema 校验 |
+| OR-2 | `PlanArtifact` 冻结字段：intent/skill_id/slots/tools_needed/delivery/budget/allows_replan/notes | 规划 JSON schema 校验 |
 | OR-3 | 规划解析失败重试一次，仍失败走 L0 规则降级，降级后必须经复核 | 异常路径单测覆盖 |
 | OR-4 | 每轮**至多执行一个短工具**，重复调用抑制 | ReAct 循环断言 |
 | OR-5 | 模型调用预算受控（规划+重试+补规划+可选核对 ≤4 次；工具轮次默认 4、上限 5） | 预算消费断言 |
@@ -284,6 +294,7 @@ P0-LG 阶段引入新依赖时须同步更新 `backend/api/requirements.txt`；P
 | 事件桥接 | 图节点只返回纯数据；事件由收包循环统一发出，节点内禁止持有 WS 连接/emit 回调 |
 | LangGraph 依赖范围 | 仅 `langgraph==1.2.10`；禁止 langchain 全家桶、LangGraph 云服务、外部 MCP |
 | 外部 MCP / 用户自定义系统提示词 | 明确不做，防越权与提示词污染 |
+| 内部短 MCP + 基础工具集 | **允许**：`web_search`/`web_fetch` 等基础工具集为**通用能力**，由平台内置适配器实现（**内部短 MCP**，非外部 MCP 服务器）；`app/harness/execution/mcp/` 保留包边界但**不做外部 MCP 接入**。不触碰「禁止外部 MCP」红线 |
 | RAG 语义记忆 | 未接入前 `kind=rag` 必须失败；pgvector/LightRAG 为演进项 |
 | GraphState 可序列化 | 状态只放 JSON 可序列化值；DB Session / WS 连接不得入 State |
 | 新 REST/WS 字段 | 必须先改 API.md，禁止私自扩充 |
@@ -294,7 +305,7 @@ P0-LG 阶段引入新依赖时须同步更新 `backend/api/requirements.txt`；P
 ## 8. 验收与测试策略
 
 - 已落地基线测试：`backend/api/tests/test_llm_graph.py`（图调用/异步/流式/取消/错误脱敏）、`test_agent_graph.py`（Agent 图事件顺序）。
-- **LangGraph 专项**：用 `graph.invoke` / `graph.astream` 断言图拓扑与状态转移；用 Memory 版 Checkpointer 验证 `thread_id` 状态恢复；检查点表建表/清理用 Alembic 迁移测试 + TTL 用例验证。
+- **LangGraph 专项**：用 `graph.invoke` / `graph.astream` 断言图拓扑与状态转移；用 Memory 版 Checkpointer（`MemorySaver`，来自 `langgraph.checkpoint.memory`，主包内置、无新依赖）验证 `thread_id` 状态恢复；检查点表建表/清理用 Alembic 迁移测试 + TTL 用例验证。
 - **行为对齐**：新增能力只增节点/边，禁止第二条 Agent 循环；对外事件与错误码回归保持绿色。
 - **事件桥接验收**：图节点返回纯数据，收包循环统一发出（§2.5）——断言节点内不持有 WS 连接、事件均经统一广播发出。
 - **确认卡回归**：确认回执仍走收包循环直连；`confirm_ack` 路径保持绿色。
@@ -304,10 +315,191 @@ P0-LG 阶段引入新依赖时须同步更新 `backend/api/requirements.txt`；P
 
 ---
 
-## 9. 修改代码文件与作用清单
+## 9. 架构文件树与待生成代码清单
+
+本节是 §4 六层职责与 §2.3 演进阶段的**施工蓝图**：把需求条目落到 `app/harness/`、`app/agent/`、`app/runtime/` 的具体包/文件骨架上，明确每阶段需生成的代码文件、所属层与对应需求编号。**红线**：本节只规定文件骨架与职责边界，不规定具体实现；任何文件落地必须先满足 §7 红线（不私自扩字段、不跳 Alembic、不 mock `rag` 成功、GraphState 可序列化等）。
+
+### 9.1 总体文件树（已落地 + 待生成）
+
+> **图例**：✅ 已落地 ｜ 🟡 部分落地 ｜ 🚫 冻结/待生成（按阶段填充）。
+
+**模型层稳定基线（阶段 0 已落地，不再膨胀）**：
+
+- `app/llm/__init__.py` — re-export ModelConfig/Request/Response/StreamEvent/Gateway
+- `app/llm/contracts.py` ✅ — 模型层契约（frozen dataclass）
+- `app/llm/gateway.py` ✅ — ModelGateway 双图（invoke + stream）
+
+**Agent 图（阶段 0 单轮已落地；阶段 1–4 扩展图拓扑）**：
+
+- `app/agent/__init__.py` — re-export LangGraphAgent（+ 后续路由/子图入口）
+- `app/agent/graph.py` ✅ — 单轮 Agent 图（call_model / stream_model）
+- `app/agent/routing.py` 🚫 阶段 1 — 模式路由节点（斜杠→Direct / 无工具→Chat）
+- `app/agent/react.py` 🚫 阶段 2 — ReAct 子图（agent 节点 + ToolNode 条件边）
+- `app/agent/clarify.py` 🚫 阶段 3 — 澄清卡 interrupt() / Command(resume) 节点
+- `app/agent/plan_solve.py` 🚫 阶段 4 — Plan-and-Solve 执行子图（图内复用节点）
+- `app/agent/reflect.py` 🚫 阶段 4 — reflect 节点（pass/clarify/reject 条件边）
+
+**Harness 六层包（空包边界，按层填充）**：
+
+- `app/harness/contracts/` — 层间契约（跨层共用 dataclass / TypedDict）
+  - `__init__.py`
+  - `artifacts.py` 🚫 阶段 2（早：ToolCall/ToolResult/Observation）→ 阶段 4（晚：PlanArtifact/SkillHint）— 跨层 artifact 契约
+  - `events.py` 🚫 阶段 1 — 图节点返回的纯数据结构（事件意图 + payload）
+- `app/harness/prompts/` — 层 1 提示词工程（§4.1）
+  - `__init__.py`
+  - `system.py` 🚫 阶段 1 — 固定系统策略（角色/安全/确认/长短任务/密钥）PR-1
+  - `protocols.py` 🚫 阶段 1 — 各阶段输出协议（严格 JSON）PR-2/PR-3
+  - `safety.py` 🚫 阶段 4 — 注入测试与 system/user 边界 PR-4
+- `app/harness/context/` — 层 2 上下文工程（§4.2）
+  - `__init__.py`
+  - `window.py` 🚫 阶段 1 — 最近消息窗口算法（末尾 20 + compact_keep_from）CX-1/2
+  - `observation.py` 🚫 阶段 2 — 脱敏/截断/带来源 observation 摘要 CX-3
+  - `assembly.py` 🚫 阶段 1 — 装配顺序 + 按需工具定义注入 CX-4/5
+  - `compact.py` 🚫 阶段 3 — /compact 可控摘要 CX-6
+  - `meter.py` 🚫 阶段 3 — ContextMeter 投影 CX-7
+- `app/harness/memory/` — 层 3 记忆（§4.3）
+  - `__init__.py`
+  - `working.py` 🚫 阶段 1 — 工作记忆（GraphState 暂态）MEM-1
+  - `episodic.py` 🟡 阶段 1 — 情景记忆（ws_events 重放已落地；会话/任务表扩展）MEM-2
+  - `compressed.py` 🚫 阶段 3 — 压缩记忆（摘要派生状态）MEM-3
+  - `preference.py` 🚫 阶段 3 — 偏好记忆（确认成功后写入）MEM-4
+  - `semantic.py` 🚫 M2/M3 — 语义/知识记忆（pgvector + LightRAG，演进项）MEM-5
+  - `acl.py` 🚫 M2/M3 — 权限过滤与溯源（source_id/版本/ACL）MEM-6
+  - `state.py` 🚫 阶段 1 — GraphState 定义（JSON 可序列化；回调不入 State；归记忆层所有，M3-D1）
+- `app/harness/orchestration/` — 层 4 编排（§4.4）
+  - `__init__.py`
+  - `router.py` 🚫 阶段 1 — 模式路由（条件边）OR-1
+  - `plan.py` 🚫 阶段 4 — PlanArtifact + 规划解析 + 重试降级 OR-2/3
+  - `budget.py` 🚫 阶段 2 — 模型调用预算 + 工具轮次预算 OR-5
+  - `gates.py` 🚫 阶段 2 — 长工具/占槽/会话活动门禁 OR-6/7
+  - `confirm.py` 🚫 阶段 4 — 确认卡回执（handle_confirm_ack）OR-8
+- `app/harness/execution/` — 层 5 执行（§4.5）
+  - `__init__.py`
+  - `registry.py` 🚫 阶段 2 — 工具注册表（元数据/白名单/分派唯一源）EX-1/5
+  - `binding.py` 🚫 阶段 2 — 附件参数系统绑定 EX-2
+  - `toolnode.py` 🚫 阶段 2 — ToolNode 包装（LangGraph 节点，包装注册表）EX-1
+  - `dispatch.py` 🚫 阶段 2 — 短工具分派 + 超时 + 脱敏日志 EX-3
+  - `worker_bridge.py` 🚫 阶段 4 — 长任务入队（PG 队列 → Worker）EX-4
+  - `session_guard.py` 🚫 阶段 4 — Worker 自管 Session 守卫 EX-6
+  - `adapters/` — 占位：执行适配器边界（保留边界，按需填充）
+  - `mcp/` — 占位：MCP 边界（明确不做外部 MCP，保留包边界）
+- `app/harness/feedback/` — 层 6 反馈（§4.6）
+  - `__init__.py`
+  - `observation.py` 🚫 阶段 2 — 工具结果归一为 observation FB-1
+  - `rules.py` 🚫 阶段 2 — 规则门禁先行 FB-2
+  - `review.py` 🚫 阶段 4 — 模型辅助核对（pass→clarify 降级）FB-3
+  - `budget.py` 🚫 阶段 4 — 失败反馈预算约束 FB-4
+  - `isolation.py` 🚫 阶段 4 — Worker 事件不污染消息窗口 FB-5
+- `app/harness/security/` — 跨层安全（确认卡 owner / 脱敏）
+  - `__init__.py`
+  - `auth.py` 🚫 阶段 4 — 确认卡 owner 校验 + 行锁
+  - `secrets.py` 🚫 阶段 2 — 递归脱敏（api_key/token/password/secret/cookie）
+
+**运行时基础设施（阶段 3 起填充）**：
+
+- `app/runtime/__init__.py`
+- `app/runtime/checkpoint.py` 🚫 阶段 3 — PostgresSaver + thread_id=session_id
+- `app/runtime/cleanup.py` 🚫 阶段 3 — 检查点 TTL + 会话删除联动后台任务
+
+**WS 桥接层（阶段 0 已落地，阶段 1/4 接入图输出与确认回执）**：
+
+- `app/routers/ws.py` ✅ — WS 事件桥接（收包循环 + `_emit` 广播 + `ws_events` 重放）；阶段 1 接图输出统一 emit，阶段 4 接 `handle_confirm_ack`
+
+### 9.2 六层 → 包映射
+
+| 层 | 需求章节 | 主包 | 关键文件 | 阶段 |
+| :--- | :--- | :--- | :--- | :--- |
+| 层 1 提示词工程 | §4.1 | `app/harness/prompts/` | `system.py` / `protocols.py` / `safety.py` | 阶段 1（system/protocols）→ 阶段 4（safety） |
+| 层 2 上下文工程 | §4.2 | `app/harness/context/` | `window.py` / `observation.py` / `assembly.py` / `compact.py` / `meter.py` | 阶段 1（window/assembly）→ 阶段 2（observation）→ 阶段 3（compact/meter） |
+| 层 3 记忆 | §4.3 | `app/harness/memory/` | `state.py` / `working.py` / `episodic.py` / `compressed.py` / `preference.py` / `semantic.py` / `acl.py` | 阶段 1（state/working）→ 阶段 3（compressed/preference）→ M2/M3（semantic/acl） |
+| 层 4 编排 | §4.4 | `app/harness/orchestration/` + `app/agent/` | `router.py` / `plan.py` / `budget.py` / `gates.py` / `confirm.py` + `agent/routing.py` / `plan_solve.py` / `reflect.py` | 阶段 1（router/routing）→ 阶段 2（budget/gates）→ 阶段 4（plan/confirm/plan_solve/reflect） |
+| 层 5 执行 | §4.5 | `app/harness/execution/` + `app/agent/react.py` | `registry.py` / `binding.py` / `toolnode.py` / `dispatch.py` / `worker_bridge.py` / `session_guard.py` | 阶段 2（registry/binding/toolnode/dispatch + react）→ 阶段 4（worker_bridge/session_guard） |
+| 层 6 反馈 | §4.6 | `app/harness/feedback/` + `app/agent/reflect.py` | `observation.py` / `rules.py` / `review.py` / `budget.py` / `isolation.py` | 阶段 2（observation/rules）→ 阶段 4（review/budget/isolation） |
+| 跨层契约 | §4 各层 | `app/harness/contracts/` | `artifacts.py` / `events.py` | 阶段 1（events）→ 阶段 2（artifacts 早：ToolCall/ToolResult/Observation）→ 阶段 4（artifacts 晚：PlanArtifact/SkillHint） |
+| 跨层安全 | §4.4/4.5/4.6 | `app/harness/security/` | `auth.py` / `secrets.py` | 阶段 2（secrets）→ 阶段 4（auth） |
+| 运行时基础设施 | §2.3 阶段 3 | `app/runtime/` | `checkpoint.py` / `cleanup.py` | 阶段 3 |
+
+### 9.3 演进阶段 → 文件生成清单
+
+每阶段独立开 `feat/` 分支、独立 PR；阶段内不得出现"双 Agent 循环"并存。
+
+**阶段 1（P0-LG 近期）：StateGraph 承载 Chat/Direct + 事件桥接契约**
+
+| 文件 | 操作 | 所属层 | 对应需求 |
+| :--- | :--- | :--- | :--- |
+| `app/harness/contracts/events.py` | 新增 | 契约 | §2.5 事件桥接契约 |
+| `app/harness/memory/state.py` | 新增 | 层 3 | GraphState 可序列化（§2.4 红线；归记忆层，M3-D1） |
+| `app/harness/orchestration/router.py` | 新增 | 层 4 | OR-1 |
+| `app/harness/prompts/system.py` | 新增 | 层 1 | PR-1 |
+| `app/harness/prompts/protocols.py` | 新增 | 层 1 | PR-2/PR-3 |
+| `app/harness/context/window.py` | 新增 | 层 2 | CX-1/CX-2 |
+| `app/harness/context/assembly.py` | 新增 | 层 2 | CX-4/CX-5 |
+| `app/harness/memory/working.py` | 新增 | 层 3 | MEM-1 |
+| `app/harness/memory/episodic.py` | 修改 | 层 3 | MEM-2（会话/任务表扩展） |
+| `app/agent/routing.py` | 新增 | 层 4 | OR-1（路由节点 + 条件边） |
+| `app/agent/graph.py` | 修改 | 层 4 | 接入路由节点，保留单轮 Chat 路径 |
+| `app/routers/ws.py` | 修改 | 桥接 | 图输出 → 收包循环统一 `_emit` |
+| `backend/api/tests/test_agent_graph.py` | 修改 | 测试 | 路由断言 + 事件桥接断言 |
+
+**阶段 2（P0-LG）：ReAct + ToolNode + 工具注册表**
+
+| 文件 | 操作 | 所属层 | 对应需求 |
+| :--- | :--- | :--- | :--- |
+| `app/harness/contracts/artifacts.py` | 新增（早） | 契约 | EX-1/EX-2 ToolCall/ToolResult、FB-1 Observation（阶段 2 早波，供 M5/M6/M2 消费） |
+| `app/harness/execution/registry.py` | 新增 | 层 5 | EX-1/EX-5 |
+| `app/harness/execution/binding.py` | 新增 | 层 5 | EX-2 |
+| `app/harness/execution/toolnode.py` | 新增 | 层 5 | EX-1（ToolNode 包装） |
+| `app/harness/execution/dispatch.py` | 新增 | 层 5 | EX-3 |
+| `app/harness/feedback/observation.py` | 新增 | 层 6 | FB-1 |
+| `app/harness/feedback/rules.py` | 新增 | 层 6 | FB-2 |
+| `app/harness/security/secrets.py` | 新增 | 安全 | CX-3 脱敏递归 |
+| `app/harness/context/observation.py` | 新增 | 层 2 | CX-3 |
+| `app/harness/orchestration/budget.py` | 新增 | 层 4 | OR-4/OR-5 |
+| `app/harness/orchestration/gates.py` | 新增 | 层 4 | OR-6 |
+| `app/agent/react.py` | 新增 | 层 4 | ReAct 子图 |
+| `app/agent/graph.py` | 修改 | 层 4 | 接入 ReAct 条件边 |
+
+**阶段 3（P1）：Checkpointer + 澄清卡**
+
+| 文件 | 操作 | 所属层 | 对应需求 |
+| :--- | :--- | :--- | :--- |
+| `app/runtime/checkpoint.py` | 新增 | 运行时 | §2.3 阶段 3（PostgresSaver） |
+| `app/runtime/cleanup.py` | 新增 | 运行时 | §2.4 检查点 TTL + 会话删除联动 |
+| `app/agent/clarify.py` | 新增 | 层 4 | §2.5 澄清卡 interrupt() |
+| `app/harness/memory/compressed.py` | 新增 | 层 3 | MEM-3 |
+| `app/harness/memory/preference.py` | 新增 | 层 3 | MEM-4 |
+| `app/harness/context/compact.py` | 新增 | 层 2 | CX-6 |
+| `app/harness/context/meter.py` | 新增 | 层 2 | CX-7 |
+| `backend/api/migrations/versions/xxxx_add_checkpointer_tables.py` | 新增 | 迁移 | §2.4 检查点表经 Alembic 建表 |
+| `backend/api/requirements.txt` | 修改 | 依赖 | 新增 `langgraph-checkpoint-postgres` |
+
+**阶段 4（P1 / M1）：Plan-and-Solve + 确认卡入队 + reflect**
+
+| 文件 | 操作 | 所属层 | 对应需求 |
+| :--- | :--- | :--- | :--- |
+| `app/harness/contracts/artifacts.py` | 修改（补晚波） | 契约 | OR-2 PlanArtifact、SK-1 SkillHint（阶段 4 晚波） |
+| `app/harness/orchestration/plan.py` | 新增 | 层 4 | OR-2/OR-3 |
+| `app/harness/orchestration/confirm.py` | 新增 | 层 4 | OR-8（handle_confirm_ack） |
+| `app/harness/execution/worker_bridge.py` | 新增 | 层 5 | EX-4 |
+| `app/harness/execution/session_guard.py` | 新增 | 层 5 | EX-6 |
+| `app/harness/feedback/review.py` | 新增 | 层 6 | FB-3 |
+| `app/harness/feedback/budget.py` | 新增 | 层 6 | FB-4 |
+| `app/harness/feedback/isolation.py` | 新增 | 层 6 | FB-5 |
+| `app/harness/security/auth.py` | 新增 | 安全 | OR-8 owner 校验 + 行锁 |
+| `app/harness/prompts/safety.py` | 新增 | 层 1 | PR-4 注入测试 |
+| `app/agent/plan_solve.py` | 新增 | 层 4 | Plan-and-Solve 执行子图 |
+| `app/agent/reflect.py` | 新增 | 层 4 | reflect 节点 |
+| `app/agent/graph.py` | 修改 | 层 4 | 接入 plan_solve / reflect 条件边 |
+| `app/routers/ws.py` | 修改 | 桥接 | 接入 `handle_confirm_ack` 收包循环直连 |
+
+> **M2/M3 演进项**（不在本蓝图阶段内）：`app/harness/memory/semantic.py`、`app/harness/memory/acl.py`（pgvector + LightRAG 接入评审后启动）。
+
+---
+
+## 10. 修改代码文件与作用清单
 
 | 文件 | 操作 | 作用 |
 | :--- | :--- | :--- |
-| `docs/AI测试与评估平台-Harness需求文档.md` | 新增（V1.0）→ 修订至 V1.3 → **修订 V1.4** | V1.0–V1.3 确立六层/七模式/LangGraph 选型与评审裁决；V1.4 同步远程 `main` 重构：现状改为「LLM 层双图 + Agent 单轮图 + WS 桥接」，`app/harness/` 空包待按本文逐层填充，依赖锁定 `langgraph==1.2.10`，测试基线更新为 `test_llm_graph.py` / `test_agent_graph.py`。 |
+| `docs/AI测试与评估平台-Harness需求文档.md` | 新增（V1.0）→ 修订至 V1.3 → 修订 V1.4 → 修订 V1.4.1 → 修订 V1.4.2 → 修订 V1.4.3 → **修订 V1.4.4** | V1.0–V1.3 确立六层/七模式/LangGraph 选型与评审裁决；V1.4 同步远程 `main` 重构：现状改为「LLM 层双图 + Agent 单轮图 + WS 桥接」，`app/harness/` 空包待按本文逐层填充，依赖锁定 `langgraph==1.2.10`，测试基线更新为 `test_llm_graph.py` / `test_agent_graph.py`；V1.4.1 评审补丁：补 GraphState 可序列化迁移路径、OR-2 补登 `allows_replan`、声明 `langgraph-checkpoint-postgres` 依赖白名单、标注 `handle_confirm_ack` 为规划中函数；V1.4.2 架构落地补丁：新增 §9「架构文件树与待生成代码清单」，把六层职责与演进阶段映射到 `app/harness/`、`app/agent/`、`app/runtime/` 的包/文件骨架，给出阶段 1–4 的文件生成清单与所属层/需求编号；V1.4.3 模块设计回写：§7 新增「内部短 MCP 允许 + 基础工具集为通用能力」裁决行（M5-D4），§9.1/§9.2/§9.3 把 `state.py` 从 `orchestration/` 移到 `memory/`（M3-D1，GraphState 归记忆层所有）；V1.4.4 契约分期修正：§9.1/§9.2/§9.3 把 `contracts/artifacts.py` 改为两波分期（阶段 2 早波 ToolCall/ToolResult/Observation + 阶段 4 晚波 PlanArtifact/SkillHint），消除 M5/M6 阶段 2 引用未生成契约的 ImportError 阶段倒挂。 |
 
 本次仅修订需求文档，不改变任何 API、数据库、前端或 Agent 运行代码。
