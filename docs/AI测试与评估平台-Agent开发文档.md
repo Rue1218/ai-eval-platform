@@ -1,10 +1,10 @@
 # AI 测试与评估平台 Agent 开发文档
 
-> 版本：V0.3
-> 状态：首期 LangGraph 单轮 Agent 与 WebSocket 流式事件语义已拆分
+> 版本：V0.4
+> 状态：首期 LangGraph 单轮 Agent、WebSocket 流式事件与思考设置已拆分
 > 审查日期：2026-08-23
-> 对应需求：`AI测试与评估平台-PRD.md` V1.10
-> 对应接口：`AI测试与评估平台-API.md` V1.18
+> 对应需求：`AI测试与评估平台-PRD.md` V1.11
+> 对应接口：`AI测试与评估平台-API.md` V1.19
 
 ## 1. 当前唯一运行链路
 
@@ -49,13 +49,19 @@ START -> stream_model -> END
 
 `app/llm/` 提供：
 
-- `ModelConfig`：协议、Base URL、模型、采样和超时配置；
+- `ModelConfig`：协议、Base URL、模型、采样、超时和 reasoning 开关/强度配置；
 - `ModelRequest`：不可变消息列表、系统提示词和可选取消回调；
 - `ModelResponse`：正文、用量、原始响应和耗时；
 - `ModelStreamEvent`：`content`、`reasoning`、`completed`；
 - `ModelGateway`：基于 LangGraph 的同步、异步和流式调用入口。
 
 三协议 HTTP 细节只允许存在于 `app/adapters.py`。API Key 不得出现在日志、事件、异常消息或模型层对象的默认 repr 中。
+
+Agent 思考配置从 `Setting(key="agent_reasoning")` 读取，结构为
+`{"enabled": true, "effort": "medium"}`。开启时，OpenAI Responses 使用
+`reasoning.effort` 与 `reasoning.summary="auto"`，OpenAI Chat / 兼容端点和
+Anthropic 使用各自的思考字段；前端只渲染上游提供的摘要/增量，不把助手正文写入
+`thought`。关闭时网关过滤 reasoning 事件，并对已知支持显式关闭的端点发送关闭参数。
 
 ## 3. 首期 WebSocket 事件
 
@@ -110,3 +116,12 @@ START -> stream_model -> END
 - `frontend/src/api/types.ts`：同步新事件类型并保留旧事件类型兼容历史数据；
 - `frontend/src/views/Agent.vue`：监听新用户回显与完成事件，思考卡不再消费助手正文；
 - `README.md`、`docs/AI测试与评估平台-API.md`、`docs/AI测试与评估平台-PRD.md`：同步事件生命周期与客户端渲染契约。
+
+### V0.4（2026-08-23）修改代码文件与作用清单
+
+- `backend/api/app/routers/admin.py`：新增 Agent 思考开关与强度的配置默认值、校验和读取入口；
+- `backend/api/app/routers/ws.py`：将 `agent_reasoning` 注入每轮 `ModelConfig`；
+- `backend/api/app/llm/contracts.py` / `gateway.py`：扩展 reasoning 配置并支持关闭时过滤思考流；
+- `backend/api/app/adapters.py`：按 OpenAI Chat/Responses、Mimo、Anthropic 协议映射思考参数；
+- `frontend/src/views/AdminProfiles.vue` / `frontend/src/api/types.ts` / `frontend/src/api/mockData.ts`：增加管理页设置、类型与 Mock 数据；
+- `backend/api/tests/test_adapters.py` / `backend/api/tests/test_llm_graph.py`：覆盖思考强度映射和关闭行为。

@@ -68,6 +68,26 @@ def test_stream_projects_content_reasoning_and_completion() -> None:
     assert events[-1].response.text == "最终答案"
 
 
+def test_stream_filters_reasoning_when_disabled() -> None:
+    """关闭思考摘要时，网关仍保留正文但不向上层投影 reasoning。"""
+    request = ModelRequest.from_messages(
+        ModelConfig(
+            protocol="openai_chat",
+            base_url="https://model.example.com",
+            model="test-model",
+            reasoning_enabled=False,
+        ),
+        [{"role": "user", "content": "你好"}],
+    )
+    gateway = ModelGateway(
+        stream_transport=lambda _request: iter([("reasoning", "隐藏摘要"), ("content", "答案")])
+    )
+
+    events = list(gateway.stream(request))
+
+    assert [(event.kind, event.text) for event in events] == [("content", "答案"), ("completed", "")]
+
+
 def test_astream_projects_same_events() -> None:
     """异步流式入口保持与同步事件顺序一致。"""
     gateway = ModelGateway(

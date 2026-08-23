@@ -2,14 +2,14 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.18 |
-| 对应 PRD | V1.10（功能唯一权威） |
+| 文档版本 | V1.19 |
+| 对应 PRD | V1.11（功能唯一权威） |
 | 对应设计规范 | V1.3（错误码文案、确认卡字段名、调度中心规范） |
-| 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V0.3（LangGraph 单轮 Agent 与 WS 桥接；JSON 仍以本文为准） |
+| 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V0.4（LangGraph 单轮 Agent 与 WS 桥接；JSON 仍以本文为准） |
 | 对应前端计划 | V1.5 |
 | 对应后端计划 | V1.5 |
 | 撰写日期 | 2026-08-18 |
-| 最近修订 | 2026-08-23：V1.18 将用户回显固定为 `user_message`，将回合完成固定为 `response.completed`，保留 `message` / `done` 仅用于旧客户端兼容；V1.17 拆分 WebSocket 用户消息、思考摘要、助手正文增量、助手最终消息和 done 事件；V1.16 接入 LangGraph 单轮 Agent 与 WebSocket 异步桥接；2026-08-22：V1.15 清空旧 Agent/Harness/模型调用/Runtime 实现、相关测试与阶段文档，保留 API 路径作为重建设计期间的明确占位；V1.14 及更早版本沿用历史修订记录。 |
+| 最近修订 | 2026-08-23：V1.19 增加 Agent 思考摘要开关与 `low/medium/high/xhigh/max` 思考强度配置，按三协议映射模型请求；V1.18 将用户回显固定为 `user_message`，将回合完成固定为 `response.completed`，保留 `message` / `done` 仅用于旧客户端兼容；V1.17 拆分 WebSocket 用户消息、思考摘要、助手正文增量、助手最终消息和 done 事件；V1.16 接入 LangGraph 单轮 Agent 与 WebSocket 异步桥接；2026-08-22：V1.15 清空旧 Agent/Harness/模型调用/Runtime 实现、相关测试与阶段文档，保留 API 路径作为重建设计期间的明确占位；V1.14 及更早版本沿用历史修订记录。 |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
 ---
@@ -1088,6 +1088,10 @@ RAG：同 kb + gold 版本。
 ```json
 {
   "agent_profile_id": "uuid",
+  "agent_reasoning": {
+    "enabled": true,
+    "effort": "medium"
+  },
   "max_running_tasks": 3,
   "max_inflight_model_calls": 8,
   "default_max_usd": 5,
@@ -1104,6 +1108,8 @@ RAG：同 kb + gold 版本。
   }
 }
 ```
+
+`agent_reasoning` 由 Agent 新回合读取。`enabled=true` 时请求模型生成并流式返回可展示的 reasoning summary；前端以 `thought` 折叠卡显示，助手正文仍只走 `assistant_delta` / `assistant_message`。`effort` 支持 `low`、`medium`、`high`、`xhigh`、`max`，具体可用值由上游模型决定；普通不支持推理控制的模型不会发送未知专用字段。关闭时网关过滤 reasoning 增量，支持显式关闭的模型同时发送关闭参数。该配置不暴露隐藏思维链，不改变公共事件头中的 `session_id` / `task_id`。
 
 `notify` 的 URL/Token 仅 PUT 写入、GET 只给布尔或掩码。M1 可只返回 `agent_profile_id` 与并发默认；其余 M4 补齐。
 
@@ -1784,4 +1790,15 @@ Qwen Image 通过与 `audio.voiceclone` 相同的 Agent 内部短工具链路执
 | `frontend/src/api/types.ts` | 增加新事件类型并保留历史事件兼容 |
 | `frontend/src/views/Agent.vue` | 分离用户、思考、助手增量、最终消息和完成状态 |
 | `backend/api/tests/test_ws_protocol.py` | 回归验证用户回显事件与完成事件公共头 |
+
+**V1.19（2026-08-23）— Agent 思考摘要与强度设置**
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/routers/admin.py` | 增加 `agent_reasoning.enabled/effort` 默认值与校验；不涉及数据库迁移 |
+| `backend/api/app/routers/ws.py` | 每个 Agent 回合读取思考设置并写入 `ModelConfig` |
+| `backend/api/app/llm/contracts.py` / `gateway.py` | 扩展模型调用契约，并在关闭时过滤 reasoning 流 |
+| `backend/api/app/adapters.py` | 映射 OpenAI Chat/Responses、Mimo 和 Anthropic 的思考参数 |
+| `frontend/src/views/AdminProfiles.vue` / `frontend/src/api/types.ts` / `frontend/src/api/mockData.ts` | 增加管理页思考开关、强度选择和类型夹具 |
+| `backend/api/tests/test_adapters.py` / `backend/api/tests/test_llm_graph.py` | 回归验证思考参数映射与关闭过滤 |
 

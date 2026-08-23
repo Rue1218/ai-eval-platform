@@ -34,6 +34,74 @@ CONNECT_TIMEOUT_S = 15.0
 # 读流切片：到期后检查取消与总时限，再继续等下一刀。
 STREAM_READ_SLICE_S = 2.0
 
+# 仅对已知支持 reasoning 控制的模型发送 OpenAI 专用字段，避免普通模型因未知字段报错。
+_OPENAI_REASONING_PREFIXES = ("o1", "o3", "o4", "gpt-5")
+_REASONING_EFFORTS = {"low", "medium", "high", "xhigh", "max"}
+
+
+def _is_openai_reasoning_model(model: str) -> bool:
+    """判断模型名是否属于 OpenAI/o 系列或明确的推理模型。"""
+    normalized = model.strip().lower()
+    return normalized.startswith(_OPENAI_REASONING_PREFIXES) or any(
+        marker in normalized for marker in ("reasoner", "reasoning", "deepseek-r1")
+    )
+
+
+def _openai_reasoning_effort(model: str, enabled: bool, effort: str) -> str | None:
+    """返回可发送的 OpenAI effort；普通模型不携带推理专用字段。"""
+    if not _is_openai_reasoning_model(model):
+        return None
+    if enabled and effort in _REASONING_EFFORTS:
+        return effort
+    # 当前新一代 GPT-5/o4 模型支持 none；老模型关闭时仅由网关过滤摘要。
+    normalized = model.strip().lower()
+    if normalized.startswith(("gpt-5", "o4")):
+        return "none"
+    return None
+
+
+def _apply_openai_reasoning(
+    body: dict,
+    *,
+    model: str,
+    enabled: bool,
+    effort: str,
+    responses: bool,
+) -> None:
+    """按 Chat Completions / Responses 的字段差异写入推理控制参数。"""
+    selected = _openai_reasoning_effort(model, enabled, effort)
+    if selected is None:
+        return
+    if responses:
+        body["reasoning"] = {"effort": selected}
+        if enabled:
+            # Responses API 返回的是可展示的 reasoning summary，而非隐藏思维链。
+            body["reasoning"]["summary"] = "auto"
+    else:
+        body["reasoning_effort"] = selected
+
+
+def _apply_compatible_thinking(body: dict, base: str, model: str, enabled: bool) -> None:
+    """为已知 OpenAI 兼容推理端点设置 thinking 开关。"""
+    target = f"{base} {model}".lower()
+    if "xiaomimimo" in target:
+        body["thinking"] = {"type": "enabled" if enabled else "disabled"}
+
+
+def _anthropic_thinking_budget(max_tokens: int, effort: str) -> int:
+    """把平台强度映射为 Anthropic thinking budget，并限制在输出预算内。"""
+    ratio = {"low": 0.2, "medium": 0.4, "high": 0.6, "xhigh": 0.75, "max": 0.8}.get(effort, 0.4)
+    return max(256, min(max_tokens - 1, round(max_tokens * ratio)))
+
+
+def _supports_anthropic_thinking(model: str) -> bool:
+    """仅对已知支持 extended thinking 的 Claude 型号发送 thinking 字段。"""
+    normalized = model.strip().lower()
+    return any(
+        marker in normalized
+        for marker in ("claude-3-7", "claude-sonnet-4", "claude-opus-4", "claude-haiku-4")
+    )
+
 
 class StreamAborted(Exception):
     """本地取消令牌在读上游时触发；由调用层转成 TurnCancelled，不发给浏览器。"""
@@ -198,6 +266,8 @@ def call_protocol(
     max_tokens: int = 1024,
     anthropic_version: str | None = None,
     timeout_s: float = DEFAULT_TIMEOUT_S,
+    reasoning_enabled: bool = False,
+    reasoning_effort: str = "medium",
 ) -> AdapterResult:
     """按协议适配调用上游模型并返回统一结构的结果对象。
 
@@ -220,10 +290,16 @@ def call_protocol(
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
-        # mimo-v2.5 默认会先出 reasoning_content。规划/核对等非流式 JSON 调用
-        # 仍关闭思考，避免占满 max_tokens 导致正文为空；对话与 ReAct 走流式并保留思考。
-        if "xiaomimimo" in base:
-            body["thinking"] = {"type": "disabled"}
+        # 非流式调用默认关闭 Mimo 思考，避免规划 JSON 被 reasoning 占满；Agent
+        # 若显式打开则由 ModelGateway 传入 reasoning_enabled=True。
+        _apply_compatible_thinking(body, base, model, reasoning_enabled)
+        _apply_openai_reasoning(
+            body,
+            model=model,
+            enabled=reasoning_enabled,
+            effort=reasoning_effort,
+            responses=False,
+        )
         headers["Authorization"] = f"Bearer {api_key}"
 
     elif protocol == "openai_responses":
@@ -231,6 +307,13 @@ def call_protocol(
         body = {"model": model, "input": list(messages), "max_output_tokens": max_tokens}
         if system:
             body["instructions"] = system
+        _apply_openai_reasoning(
+            body,
+            model=model,
+            enabled=reasoning_enabled,
+            effort=reasoning_effort,
+            responses=True,
+        )
         headers["Authorization"] = f"Bearer {api_key}"
 
     else:  # anthropic_messages
@@ -243,6 +326,13 @@ def call_protocol(
         }
         if system:
             body["system"] = system
+        if reasoning_enabled and _supports_anthropic_thinking(model):
+            body["thinking"] = {
+                "type": "enabled",
+                "budget_tokens": _anthropic_thinking_budget(max_tokens, reasoning_effort),
+            }
+            # Anthropic extended thinking 要求 temperature 使用默认值 1。
+            body["temperature"] = 1.0
         headers["x-api-key"] = api_key
         headers["anthropic-version"] = anthropic_version or "2023-06-01"
 
@@ -287,6 +377,8 @@ def stream_protocol(
     anthropic_version: str | None = None,
     timeout_s: float = DEFAULT_TIMEOUT_S,
     should_abort: Callable[[], bool] | None = None,
+    reasoning_enabled: bool = True,
+    reasoning_effort: str = "medium",
 ) -> Iterator[tuple[str, str]]:
     """按协议流式调用上游模型，逐块 yield ``(kind, text)`` 增量（SSE）。
 
@@ -317,8 +409,15 @@ def stream_protocol(
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
-        # 流式必须保留推理链：前端 thought.stream=think 依赖 reasoning_content。
-        # 不传 thinking.disabled；mimo 默认开启思考。JSON 规划仍走 call_protocol。
+        # 流式思考是否开启由 Agent 设置控制；默认值保持 Mimo 旧行为（开启）。
+        _apply_compatible_thinking(body, base, model, reasoning_enabled)
+        _apply_openai_reasoning(
+            body,
+            model=model,
+            enabled=reasoning_enabled,
+            effort=reasoning_effort,
+            responses=False,
+        )
         headers["Authorization"] = f"Bearer {api_key}"
 
         def delta_of(data: dict) -> tuple[str, str]:
@@ -335,6 +434,13 @@ def stream_protocol(
         body = {"model": model, "input": list(messages), "stream": True, "max_output_tokens": max_tokens}
         if system:
             body["instructions"] = system
+        _apply_openai_reasoning(
+            body,
+            model=model,
+            enabled=reasoning_enabled,
+            effort=reasoning_effort,
+            responses=True,
+        )
         headers["Authorization"] = f"Bearer {api_key}"
 
         def delta_of(data: dict) -> tuple[str, str]:  # noqa: F811  （各分支同名提取器，互斥定义）
@@ -356,6 +462,12 @@ def stream_protocol(
         }
         if system:
             body["system"] = system
+        if reasoning_enabled and _supports_anthropic_thinking(model):
+            body["thinking"] = {
+                "type": "enabled",
+                "budget_tokens": _anthropic_thinking_budget(max_tokens, reasoning_effort),
+            }
+            body["temperature"] = 1.0
         headers["x-api-key"] = api_key
         headers["anthropic-version"] = anthropic_version or "2023-06-01"
 
@@ -580,4 +692,3 @@ def fetch_remote_models(
             raise AppError(ErrorCode.UPSTREAM, f"连接上游端点失败: {getattr(last_error, 'reason', last_error)}") from last_error
         raise AppError(ErrorCode.UPSTREAM, f"无法从端点获取模型列表: {last_error}") from last_error
     raise AppError(ErrorCode.UPSTREAM, "端点未返回可解析的模型列表，请检查端点地址或手动输入模型标识名")
-
