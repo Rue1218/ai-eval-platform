@@ -3395,10 +3395,12 @@ function handleWsEvent(ev: WsServerEvent) {
       break
     }
     case 'thought': {
+      const agent = getOrCreateTurnAgent(events.value)
+      if (!agent.thoughts) agent.thoughts = []
       if (p.stream === 'think_final') {
         const fullText = String(p.text || '')
         if (!fullText) break
-        const target = [...events.value].reverse().find(e => e.type === 'thought' && !e.done)
+        const target = [...agent.thoughts].reverse().find((e) => !e.done)
         if (target) {
           target.text = fullText
           target.fullText = fullText
@@ -3406,8 +3408,7 @@ function handleWsEvent(ev: WsServerEvent) {
           target.collapsed = true
           target.streamThink = true
         } else {
-          events.value.push(reactive({
-            type: 'thought',
+          agent.thoughts.push(reactive({
             text: fullText,
             fullText,
             done: true,
@@ -3418,17 +3419,16 @@ function handleWsEvent(ev: WsServerEvent) {
         scrollToBottom()
         break
       }
-      // 思考链增量帧（瞬态）：追加到可展开/收起的思考卡，无则新建
+      // 思考链增量帧（瞬态）：追加到当前助手消息内部的思考卡
       if (p.stream === 'think') {
         const delta = String(p.text || '')
         if (delta) {
-          const target = [...events.value].reverse().find(e => e.type === 'thought' && !e.done)
+          const target = [...agent.thoughts].reverse().find((e) => !e.done)
           if (target) {
             target.text = (target.text || '') + delta
           } else {
             console.debug('[Agent] 思考链增量')
-            // reactive 包装：push 后的增量追加必须走响应式代理，否则首帧之后的修改不触发渲染
-            events.value.push(reactive({ type: 'thought', text: delta, done: false, collapsed: false, streamThink: true }))
+            agent.thoughts.push(reactive({ text: delta, done: false, collapsed: false, streamThink: true }))
           }
           scrollToBottom()
           setCurrentGenerating(true)
@@ -3439,20 +3439,15 @@ function handleWsEvent(ev: WsServerEvent) {
       if (p.stream === 'chunk') {
         const delta = String(p.text || '')
         if (delta) {
-          let target = turnStreamingAgent(events.value)
-          if (!target) {
-            // reactive 包装：新建后立即修改 raw/text，原始对象不触发渲染会丢首帧
-            target = reactive({ type: 'agent', raw: '', text: '', streaming: true, ...currentAgentMessageMeta() }) as StreamItem
-            events.value.push(target)
-          }
-          target.raw = (target.raw || '') + delta
-          target.text = renderBubbleHtml(target.raw)
+          agent.raw = (agent.raw || '') + delta
+          agent.text = renderBubbleHtml(agent.raw)
+          agent.streaming = true
           scrollToBottom()
           setCurrentGenerating(true)
         }
         break
       }
-      // 阶段思考卡（规划 / MCP ReAct / 复核）：每轮一张，禁止叠进上一张未完成卡
+      // 阶段思考卡（规划 / MCP ReAct / 复核）：每轮一张，归属当前助手消息
       const text = String(p.text || '').trim()
       const stage = p.stage as StreamItem['stage'] | undefined
       if (typeof p.latency_ms === 'number') turnLatencyMs.value += p.latency_ms
@@ -3460,8 +3455,7 @@ function handleWsEvent(ev: WsServerEvent) {
         finishLiveThought()
         harnessStage.value = stage
         setCurrentGenerating(true)
-        events.value.push(reactive({
-          type: 'thought',
+        agent.thoughts.push(reactive({
           text,
           done: false,
           collapsed: false,
@@ -3483,12 +3477,7 @@ function handleWsEvent(ev: WsServerEvent) {
     case 'assistant_delta': {
       const delta = String(p.text || '')
       if (!delta) break
-      let target = turnStreamingAgent(events.value)
-      if (!target) {
-        // reactive 包装：首个正文增量到达时立即创建可响应的助手气泡。
-        target = reactive({ type: 'agent', raw: '', text: '', streaming: true, ...currentAgentMessageMeta() }) as StreamItem
-        events.value.push(target)
-      }
+      const target = getOrCreateTurnAgent(events.value)
       target.raw = (target.raw || '') + delta
       target.text = renderBubbleHtml(target.raw)
       target.streaming = true
@@ -3499,25 +3488,17 @@ function handleWsEvent(ev: WsServerEvent) {
     case 'assistant_message': {
       const text = String(p.text || '')
       finishLiveThought()
-      const streaming = turnStreamingAgent(events.value)
+      const target = getOrCreateTurnAgent(events.value)
       if (text) {
-        if (streaming) {
-          streaming.raw = text
-          streaming.text = renderBubbleHtml(text)
-          streaming.streaming = false
-          if (typeof p.reply_latency_ms === 'number') streaming.latency_ms = p.reply_latency_ms
-        } else {
-          events.value.push(reactive({
-            type: 'agent',
-            raw: text,
-            text: renderBubbleHtml(text),
-            streaming: false,
-            latency_ms: typeof p.reply_latency_ms === 'number' ? p.reply_latency_ms : undefined,
-            ...currentAgentMessageMeta(),
-          }))
-        }
-      } else if (streaming) {
-        streaming.streaming = false
+        target.raw = text
+        target.text = renderBubbleHtml(text)
+        target.streaming = false
+        if (typeof p.reply_latency_ms === 'number') target.latency_ms = p.reply_latency_ms
+        if (p.model_name) target.modelName = p.model_name
+        if (p.profile_name) target.profileName = p.profile_name
+        if (p.provider) target.providerLogoKey = p.provider as ProviderLogoKey
+      } else {
+        target.streaming = false
       }
       setCurrentGenerating(false)
       harnessStage.value = ''
