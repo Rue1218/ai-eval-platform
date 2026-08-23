@@ -3,11 +3,11 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 技能体系模块设计 |
-| 版本 | V0.3 |
+| 版本 | V0.4 |
 | 审查日期 | 2026-08-23 |
 | 文档性质 | 模块设计说明书（需求发散 + 架构设计 + 接口签名） |
 | 适用模块 | M10 技能体系（MoE + Progressive Disclosure，§5） |
-| 上游权威 | Harness 需求文档 V1.4.4 §5、§2.2、§4.4、§7、§9；API.md V1.4+ §4.3；PRD §5.1.2 |
+| 上游权威 | Harness 需求文档 V1.4.4 §5、§2.2、§4.4、§7、§9；API.md V1.21 §4.3；PRD §5.1.2 |
 
 > **阅读关系**：本文是 Harness §5「技能体系需求」与 §9.2「技能体系」行的展开。`SkillHint` 契约在 M7 `contracts/artifacts.py`；技能路由节点在 M4 `orchestration/router.py`；本模块定义技能目录与按需装配策略。当前全部冻结未实现，属 M2/M3 演进项。
 
@@ -237,11 +237,31 @@ def list_hints() -> list[SkillHint]:
 
 ---
 
-## 8. 修改代码文件与作用清单
+## 8. 前端联调
+
+> 本模块前端联调由 **陈东超** 独立负责，契约以 API.md V1.21 §4.3 为唯一真理。M10 的 `SkillHint`（skill_id/name/summary）经 M4 路由节点写入 `thought` 事件 `skill_id` 字段下发，前端 SkillBadge 渲染技能徽标；`/api/slash-commands` 自定义命令对接也属本模块前端联调范围。前端不臆造字段，发现契约缺失先回写 API.md 再实现。
+
+### 8.1 对应前端组件与任务
+
+| M10 能力 | 前端渲染 | 前端文件 | 对接契约 | 落地阶段 | 验收点 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `SKILL_CATALOG` 4 个评测域 SkillHint（benchmark/testcase/rag/stress） | SkillBadge 技能徽标 | `components/agent/SkillBadge.vue`；`agent/skillLabels.ts` | API.md §4.3 `thought.skill_id` + M7 §3.6.2 `SkillHint` + M10 §3.5 | 阶段 2/4 | `skill_id` 与 `skillLabels.ts` 4 个 key（`skill-benchmark`/`skill-rag`/`skill-testcase`/`skill-stress`）匹配 |
+| `SkillHint.summary` 一句话描述 | SkillBadge hover/点击 summary | `components/agent/SkillBadge.vue`；`components/modals/SkillDetailModal.vue` | M7 §3.6.2 `SkillHint.summary` | 阶段 4 | 技能徽标 hover/点击展示一句话 summary（当前 `skillLabels.ts` 只有硬编码标签名，无 summary，需补） |
+| `assert_skill_enabled` 未接入 skill 返回 `VALIDATION` | ErrorStrip + Toast | `api/types.ts` | API.md §1.3 + M10 §3.5 | 阶段 4 | `rag` 未接入时返回 `VALIDATION`，前端 Toast 显示后端 `message`，禁止 mock 成功 |
+| `list_hints` 对齐 `/api/slash-commands` | 自定义斜杠面板下区 | `components/agent/SlashPalette.vue`；`api/http.ts` | API.md §3.4 `/api/slash-commands` + M10 §3.5 | 阶段 4 | 调 `GET /api/slash-commands` 渲染「我的命令」；M1 桩返回 `VALIDATION` 时隐藏 |
+
+### 8.2 前端验收要点
+
+- **`skill_id` 一致性**：前端 `skillLabels.ts` 的 4 个 key 必须与 M10 `SKILL_CATALOG` 的 `skill_id` 完全一致，否则 SkillBadge 渲染 fallback。
+- **summary 展示**：当前 `skillLabels.ts` 缺 `summary` 字段，需补一句话描述（对齐 M10 `SkillHint.summary`），SkillBadge hover 或 SkillDetailModal 展示。
+- **未接入 skill 不 mock**：`rag` 等未接入 skill 返回 `VALIDATION`，前端不得显示成功状态。
+- **`/api/slash-commands` 对接**：自定义命令从服务端拉取，不硬编码；M1 阶段桩返回 `VALIDATION` 时前端隐藏下区。
+
+## 9. 修改代码文件与作用清单
 
 | 文件 | 操作 | 作用 |
 | :--- | :--- | :--- |
-| `docs/AI测试与评估平台-Harness-技能体系.md` | 新增 V0.3 | M10 技能体系模块设计：定义 4 个评测域 SkillHint 目录（benchmark/testcase/rag/stress）、`skill_id ↔ kind` 映射、Progressive Disclosure 按需装配、MoE 路由、未接入 skill 返回 `VALIDATION`；含接口签名级（`SKILL_CATALOG`/`SKILL_KIND_MAP`/`DISABLED_SKILLS`/`get_hint`/`skill_to_kind`/`assert_skill_enabled`/`list_hints`）与 TDD 验收；标注无独立包，目录数据位置待定。 |
+| `docs/AI测试与评估平台-Harness-技能体系.md` | 新增 V0.3 → 修订 V0.4 | V0.3 M10 技能体系模块设计：定义 4 个评测域 SkillHint 目录（benchmark/testcase/rag/stress）、`skill_id ↔ kind` 映射、Progressive Disclosure 按需装配、MoE 路由、未接入 skill 返回 `VALIDATION`；含接口签名级与 TDD 验收；标注无独立包，目录数据位置待定；V0.4 对齐 API.md V1.21：新增 §8「前端联调」章节列出 SkillHint/assert_skill_enabled/list_hints 对应的前端组件、契约与验收点（含 `skill_id` 一致性、summary 展示、未接入 skill 不 mock、`/api/slash-commands` 对接）。 |
 
 本文档仅设计技能体系，不改变任何 API、数据库、前端或 Agent 运行代码。
 

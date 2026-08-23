@@ -3,11 +3,11 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 编排层模块设计 |
-| 版本 | V0.3 |
+| 版本 | V0.4 |
 | 审查日期 | 2026-08-23 |
 | 文档性质 | 模块设计说明书（需求发散 + 架构设计） |
 | 适用模块 | M4 编排层（`app/harness/orchestration/` + `app/agent/`） |
-| 上游权威 | Harness 需求文档 V1.4.4 §2.3/§2.4/§2.5、§4.4、§7、§9；API.md V1.4+ §4.4/§5；PRD §5.1.2/§5.1.3 |
+| 上游权威 | Harness 需求文档 V1.4.4 §2.3/§2.4/§2.5、§4.4、§7、§9；API.md V1.21 §4.3/§4.4/§5；PRD §5.1.2/§5.1.3 |
 
 > **阅读关系**：本文是 Harness §9.2「层 4 编排」行的展开，定义图拓扑、模式路由、GraphState 引用、`should_abort` 全链路迁移与 Direct 路径。GraphState 主体在 M3（`memory/state.py`），事件契约在 M7（`contracts/events.py`），本文只引用不重定义。
 
@@ -534,10 +534,37 @@ def reflect_node(state: GraphState) -> dict:
 
 ---
 
-## 8. 修改代码文件与作用清单
+## 8. 前端联调
+
+> 本模块前端联调由 **陈东超** 独立负责，契约以 API.md V1.21 §4.3/§4.4 为唯一真理。M4 是前端交互事件的主要产出方：路由节点、子图节点、确认卡/澄清卡/Plan-Solve 节点产出的 `NodeEvent` 经 `ws.py` 翻译为 WS 事件，前端据此渲染。前端不臆造字段，发现契约缺失先回写 API.md 再实现。
+
+### 8.1 路由与节点对应前端事件
+
+| M4 节点/模块 | 产出 NodeEvent | 前端渲染 | 前端文件 | 落地阶段 |
+| :--- | :--- | :--- | :--- | :--- |
+| Direct 路径 L0 路由（§3.6） | `assistant_message`（`/help`）/ `error(VALIDATION)`（未知斜杠、`/compact`/`/cancel`/`/stress` 阶段 1） | AssistantBubble / ErrorStrip+Toast | `views/Agent.vue` `handleWsEvent`；`agent/slashRegistry.ts` | 阶段 1 |
+| Chat 节点（§3.3） | `assistant_delta`/`assistant_message`/`response.completed`/`thought` | AssistantBubble + ThoughtCard | `views/Agent.vue`；`components/agent/ThoughtCard.vue` | 阶段 1 |
+| `should_abort` 迁移（§3.4） | `/stop` 中止流式 | 流式中断 | `api/ws.ts`（`/stop` 走 user_message） | 阶段 1（回归） |
+| `budget.py`（§3.9.5） | `error(BUDGET_EXCEEDED)` | ErrorStrip + Toast | `api/types.ts` `ERROR_MESSAGES`（文案中性化，预算为次数非美元） | 阶段 2 |
+| `gates.py`（§3.9.5） | `error(VALIDATION)`/`error(CONCURRENCY)`（长工具门禁） | ErrorStrip + Toast | `api/types.ts` | 阶段 2 |
+| `react.py`（§3.9.6） | `thought(stage=react)`/`tool_call`/`tool_result` | ThoughtCard + ToolCard | `components/agent/ThoughtCard.vue`/`ToolCard.vue` | 阶段 2 |
+| `clarify.py`（§3.9.6） | `clarify`（`interrupt()` 暂停） | **ClarifyCard**（新增） | 新增 `components/agent/ClarifyCard.vue`；`api/ws.ts` `sendClarifyReply` | 阶段 3 |
+| `plan.py` + `plan_solve.py`（§3.9.6） | `plan`（PlanArtifact）+ `thought(stage=plan_solve)` | **PlanCard**（新增）+ stage 档 | 新增 `components/agent/PlanCard.vue`；`views/Agent.vue` `harnessStage` 补 `plan_solve` | 阶段 4 |
+| `reflect.py`（§3.9.6） | `thought(stage=reflect)` | ThoughtCard「复核中」/「已复核」 | `components/agent/ThoughtCard.vue` | 阶段 4 |
+| `confirm.py` `handle_confirm_ack`（§3.9.5） | `confirm`（下发）+ `confirm_ack`（回执） | ConfirmCard | `views/Agent.vue`；`components/agent/ConfirmCard.vue`；`api/ws.ts` `sendConfirmAck` | 阶段 4 |
+
+### 8.2 前端验收要点
+
+- **斜杠注册**：`slashRegistry.ts` 补 `/help`/`/cancel`/`/stress`（占位，命中由后端返回 `VALIDATION`），与 §3.6 Direct 路由规则对齐。
+- **`harnessStage` 补档**：`views/Agent.vue` `harnessStage` 由 `'plan'|'react'|'reflect'|''` 补 `'plan_solve'`，`harnessStageLabel` 补「Plan-Solve 执行中」，对齐 §3.5 模式路由。
+- **澄清卡 vs 确认卡 UI 区分**：澄清卡（`clarify`）只显示「回复」输入，不显示「确认入队」按钮，不写 `pending_confirm`；确认卡（`confirm`）显示确认/取消/patch。`clarify_reply.id` 必须匹配最近待回复澄清卡。
+- **错误码文案中性化**：`BUDGET_EXCEEDED` fallback 改中性（预算为次数预算非美元），`CONCURRENCY` 确认卡场景文案为「确认卡已被他人处理」，场景文案由后端 `message` 透传。
+- **`/stop` 回归**：`should_abort` 迁移到 `RunnableConfig` 后，`/stop` 仍能中止 `assistant_delta` 流，不取消已 queued 任务。
+
+## 9. 修改代码文件与作用清单
 
 | 文件 | 操作 | 作用 |
 | :--- | :--- | :--- |
-| `docs/AI测试与评估平台-Harness-编排层.md` | 新增 V0.1 → 修订 V0.2 → 修订 V0.3 | V0.1 M4 编排层模块设计：定义图拓扑、模式路由、`should_abort` 全链路迁移、Direct L0 路由、事件桥接、确认卡回执；V0.2 升级到接口签名级：补枚举/GraphState 引用/路由节点/`should_abort` 迁移/编排辅助模块/阶段 2-4 子图签名；V0.3 开放问题闭环：路由 hybrid 策略、`should_abort` 走 `configurable["abort"]["should_abort"]` 命名空间、`pending_events` 每节点消费图外清空、`/help` 阶段 1 硬编码、`handle_confirm_ack` 同事务、子图复用阶段 4 再定。 |
+| `docs/AI测试与评估平台-Harness-编排层.md` | 新增 V0.1 → 修订 V0.2 → 修订 V0.3 → 修订 V0.4 | V0.1 M4 编排层模块设计：定义图拓扑、模式路由、`should_abort` 全链路迁移、Direct L0 路由、事件桥接、确认卡回执；V0.2 升级到接口签名级：补枚举/GraphState 引用/路由节点/`should_abort` 迁移/编排辅助模块/阶段 2-4 子图签名；V0.3 开放问题闭环：路由 hybrid 策略、`should_abort` 走 `configurable["abort"]["should_abort"]` 命名空间、`pending_events` 每节点消费图外清空、`/help` 阶段 1 硬编码、`handle_confirm_ack` 同事务、子图复用阶段 4 再定；V0.4 对齐 API.md V1.21：新增 §8「前端联调」章节列出路由/节点/子图对应的前端事件、组件、文件与验收点（含 ClarifyCard/PlanCard 新组件、`harnessStage` 补 `plan_solve`、斜杠注册、错误码文案中性化）。 |
 
 本文档仅设计编排层，不改变任何 API、数据库、前端或 Agent 运行代码。

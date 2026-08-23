@@ -3,11 +3,11 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 记忆层模块设计 |
-| 版本 | V0.3 |
+| 版本 | V0.4 |
 | 审查日期 | 2026-08-23 |
 | 文档性质 | 模块设计说明书（需求发散 + 架构设计 + 接口签名） |
 | 适用模块 | M3 记忆层（`app/harness/memory/`，含 GraphState 主体 `state.py`） |
-| 上游权威 | Harness 需求文档 V1.4.4 §4.3、§2.4、§2.5、§7、§9；API.md V1.4+ §3.4；PRD §5.1.3 |
+| 上游权威 | Harness 需求文档 V1.4.4 §4.3、§2.4、§2.5、§7、§9；API.md V1.21 §3.4；PRD §5.1.3 |
 
 > **阅读关系**：本文是 Harness §9.2「层 3 记忆」行的展开。**GraphState 主体归本层**（`state.py`，按决策从 `orchestration/` 移入）；事件契约在 M7，本层只引用；`pending_events` 的 append reducer + 图外清空策略对齐 M4-Q3 裁决。
 
@@ -346,11 +346,30 @@ def annotate_source(record: dict) -> dict:
 
 ---
 
-## 8. 修改代码文件与作用清单
+## 8. 前端联调
+
+> 本模块前端联调由 **陈东超** 独立负责，契约以 API.md V1.21 §3.4 为唯一真理。M3 是后端内部状态层，**前端无直接对接**：GraphState、工作记忆、情景记忆、压缩记忆均为后端内部状态，不下发前端。M3 对前端的影响是**间接的**——`preference.py` 写入的 `agent_prefs` 经 `GET /api/agent/prefs` 下发，前端用于确认卡预填；GraphState 投影字段（`mode`/`verdict`/`budget`）经 M4 节点产出的事件影响前端 stage 展示。前端不臆造字段，发现契约缺失先回写 API.md 再实现。
+
+### 8.1 对应前端组件与任务
+
+| M3 文件 | 前端影响 | 前端文件 | 对接契约 | 落地阶段 | 验收点 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `preference.py` `write_prefs`/`get_prefs` | 确认卡预填上次选择 | `views/Agent.vue` | API.md §3.4 `GET /api/agent/prefs` | 阶段 3/4 | 新建会话首单预填上次选择；`confirm_ack.ok=true` 后服务端写 prefs |
+| `state.py` GraphState 投影（`mode`/`verdict`/`budget`） | 间接影响 `harnessStage` 与错误码 | `views/Agent.vue` `harnessStage`；`api/types.ts` | M3 §3.9.1 + M4 §3.5 | 阶段 1/2/4 | `mode='plan_solve'` 投影为前端 `harnessStage='plan_solve'`；`budget` 超限投影为 `BUDGET_EXCEEDED` |
+| `compressed.py` `write_summary` | 间接影响 `compact_summary` 展示 | `components/agent/ContextMeter.vue` | API.md §3.4 `compact_summary` + M2 §3.5 | 阶段 3 | 前端只读 `compact_summary`，不解析压缩记忆内部 |
+| `working.py`/`episodic.py` | 后端内部（无前端对接） | — | — | 阶段 1 | 前端无直接对接 |
+
+### 8.2 前端验收要点
+
+- **`/api/agent/prefs` 预填**：前端调 `GET /api/agent/prefs` 预填确认卡，prefs 由 M3 `preference.py` 写入（`confirm_ack.ok=true` 后）。
+- **GraphState 投影不直传**：前端不读取 GraphState，只通过 M4 节点产出的 WS 事件感知 `mode`/`verdict`/`budget` 投影。
+- **压缩记忆不泄漏**：前端只读 `compact_summary` 文本，不获取压缩记忆内部提示词（AGENTS.md：避免把压缩提示词泄漏到浏览器）。
+
+## 9. 修改代码文件与作用清单
 
 | 文件 | 操作 | 作用 |
 | :--- | :--- | :--- |
-| `docs/AI测试与评估平台-Harness-记忆层.md` | 新增 V0.3 | M3 记忆层模块设计：定义 GraphState 主体（`state.py`，从 orchestration 移入）+ `SerializableRequest`、工作记忆/情景/压缩/偏好/语义/ACL 六类记忆；含接口签名级（`GraphState`/`SerializableRequest`/`reset_working`/`replay_events`/`write_summary`/`write_prefs`/`retrieve`/`filter_visible`）与 TDD 验收；标注 `pending_events` 检查点恢复语义为阶段 3 待定项。 |
+| `docs/AI测试与评估平台-Harness-记忆层.md` | 新增 V0.3 → 修订 V0.4 | V0.3 M3 记忆层模块设计：定义 GraphState 主体（`state.py`，从 orchestration 移入）+ `SerializableRequest`、工作记忆/情景/压缩/偏好/语义/ACL 六类记忆；含接口签名级与 TDD 验收；标注 `pending_events` 检查点恢复语义为阶段 3 待定项；V0.4 对齐 API.md V1.21：新增 §8「前端联调」章节说明 M3 对前端为间接影响（preference.py 经 /api/agent/prefs 预填确认卡，GraphState 投影经 M4 事件影响 stage），前端无直接契约。 |
 
 本文档仅设计记忆层，不改变任何 API、数据库、前端或 Agent 运行代码。
 

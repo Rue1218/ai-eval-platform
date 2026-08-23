@@ -3,11 +3,11 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 跨层契约层模块设计 |
-| 版本 | V0.3 |
+| 版本 | V0.4 |
 | 审查日期 | 2026-08-23 |
 | 文档性质 | 模块设计说明书（需求发散 + 架构设计） |
 | 适用模块 | M7 跨层契约层（`app/harness/contracts/`） |
-| 上游权威 | Harness 需求文档 V1.4.4 §2.5、§4 各层、§7、§9；API.md V1.4+ §4.4/§5；PRD §5.1.3 |
+| 上游权威 | Harness 需求文档 V1.4.4 §2.5、§4 各层、§7、§9；API.md V1.21 §4.3/§4.4/§5；PRD §5.1.3 |
 
 > **阅读关系**：本文是 Harness 需求文档 §9.2「跨层契约」行的展开。GraphState 主体不在此层（归 M3 记忆层，`app/harness/memory/state.py`），本文只定义被 GraphState 引用的契约类型。
 
@@ -143,9 +143,10 @@ app/harness/contracts/
 from typing import Literal, Mapping, TypedDict
 
 # 与 API.md §4.3 持久化事件 1:1（瞬态帧 assistant_delta/thought.stream=think 不在此）
+# V0.4：新增 clarify/plan（对齐 API.md V1.21 §4.3）
 NodeEventKind = Literal[
     "user_message", "thought", "tool_call", "tool_result",
-    "confirm", "progress", "report", "error",
+    "confirm", "clarify", "plan", "progress", "report", "error",
     "assistant_message", "response.completed",
 ]
 
@@ -286,11 +287,49 @@ def validate_plan_artifact(data: dict) -> PlanArtifact:
 
 ---
 
-## 8. 修改代码文件与作用清单
+## 8. 前端联调
+
+> 本模块前端联调由 **陈东超** 独立负责，契约以 API.md V1.21 §4.3/§4.4 为唯一真理。M7 是前端事件分发的契约源头：`events.py` 的 `NodeEventKind` 与 API.md §4.3 持久化事件 1:1，`artifacts.py` 的 dataclass 字段即前端渲染数据来源。前端不臆造字段，发现契约缺失先回写 API.md 再实现。
+
+### 8.1 events.py 对应前端事件分发
+
+| NodeEventKind | 前端渲染组件 | 前端文件 | 对接契约 | 落地阶段 |
+| :--- | :--- | :--- | :--- | :--- |
+| `user_message` | UserBubble | `views/Agent.vue` `handleWsEvent` | API.md §4.3 | 阶段 1 |
+| `thought` | ThoughtCard | `components/agent/ThoughtCard.vue` | API.md §4.3（`stage`/`skill_id`/`stream`） | 阶段 1（plan）/2（react）/4（reflect） |
+| `tool_call` | ToolCard pending | `components/agent/ToolCard.vue` | API.md §4.3 + M7 §3.6.2 `ToolCall` | 阶段 2 |
+| `tool_result` | ToolCard done | `components/agent/ToolCard.vue` | API.md §4.3（V1.21 加 `truncated`/`source`/`redacted`）+ M7 §3.6.2 `Observation` | 阶段 2 |
+| `confirm` | ConfirmCard | `views/Agent.vue` 内联卡 / `components/agent/ConfirmCard.vue` | API.md §4.3 + §5/§6 + M7 §3.6.2 | 阶段 4 |
+| `clarify`（V0.4 新增） | **ClarifyCard**（新增独立组件） | 新增 `components/agent/ClarifyCard.vue`；`Agent.vue` `handleWsEvent` 加 `clarify` 分支 | API.md §4.3 `clarify`（V1.21 新增）+ M7 §3.6.1 | 阶段 3 |
+| `plan`（V0.4 新增） | **PlanCard**（新增独立组件） | 新增 `components/agent/PlanCard.vue`；`Agent.vue` `handleWsEvent` 加 `plan` 分支 | API.md §4.3 `plan`（V1.21 新增）+ M7 §3.6.2 `PlanArtifact` | 阶段 4 |
+| `progress` | ProgressDock | `components/agent/ProgressDock.vue` | API.md §4.3 | 阶段 4 |
+| `report` | ReportCard | `components/agent/ReportCard.vue` | API.md §4.3 | 阶段 4 |
+| `error` | ErrorStrip + Toast | `components/common/ErrorStrip.vue` | API.md §4.3 + §1.3 错误码 | 全阶段 |
+| `assistant_message` | AssistantBubble | `views/Agent.vue` | API.md §4.3 | 阶段 1 |
+| `response.completed` | 结束流式状态 | `views/Agent.vue` | API.md §4.3 | 阶段 1 |
+
+### 8.2 artifacts.py 对应前端渲染数据
+
+| 契约类型 | 前端用途 | 前端文件 | 验收点 |
+| :--- | :--- | :--- | :--- |
+| `ToolCall`（name/arguments） | ToolCard 标题 + 参数展示 | `components/agent/ToolCard.vue` | 中文名映射（API.md §4.3 短工具中文名表） |
+| `ToolResult`（name/ok/data/error） | ToolCard done 三态 | `components/agent/ToolCard.vue` | `ok=false` 显示 `error` 文案 |
+| `Observation`（truncated/source/redacted） | ToolCard 截断/脱敏徽标 | `components/agent/ToolCard.vue` | `truncated=true` 显示「结果已截断」；`redacted=true` 显示「已脱敏」 |
+| `PlanArtifact`（intent/skill_id/slots/tools_needed/delivery/budget/allows_replan/notes） | PlanCard 完整展示 | 新增 `components/agent/PlanCard.vue` | 用户可查看无需 ack；字段 1:1 对齐 |
+| `SkillHint`（skill_id/name/summary） | SkillBadge + summary 展示 | `components/agent/SkillBadge.vue`、`agent/skillLabels.ts`、`components/modals/SkillDetailModal.vue` | `skill_id` 与 `skillLabels.ts` 4 个 key 匹配；summary 一句话展示 |
+
+### 8.3 前端验收要点
+
+- `handleWsEvent` 覆盖全部 `NodeEventKind`（含 V0.4 新增 `clarify`/`plan`），无遗漏分支。
+- `clarify` 与 `confirm` 互斥语义在前端 UI 区分：澄清卡不显示「确认入队」按钮，只显示「回复」输入。
+- `PlanArtifact` 字段前端不裁剪，完整展示（用户决策：完全可见）。
+- `Observation` 的 `truncated`/`source`/`redacted` 三字段前端均渲染徽标，不静默丢弃。
+
+## 9. 修改代码文件与作用清单
 
 | 文件 | 操作 | 作用 |
 | :--- | :--- | :--- |
-| `docs/AI测试与评估平台-Harness-跨层契约层.md` | 新增 V0.1 → 修订 V0.2 → 修订 V0.3 | V0.1 M7 跨层契约层模块设计：定义契约边界、需求发散、架构设计与 TDD 验收；V0.2 升级到接口签名级：补 `NodeEventKind` 枚举、`NodeEvent` TypedDict、各 dataclass 字段、构造/校验函数签名；V0.3 开放问题闭环：`NodeEvent.payload` 统一 Mapping、`Observation.source` 复用 messages `source_id` 格式、`PlanArtifact.budget` count-only、`NodeEvent` 加 `event_version` 字段。 |
+| `docs/AI测试与评估平台-Harness-跨层契约层.md` | 新增 V0.1 → 修订 V0.2 → 修订 V0.3 → 修订 V0.4 | V0.1 M7 跨层契约层模块设计：定义契约边界、需求发散、架构设计与 TDD 验收；V0.2 升级到接口签名级：补 `NodeEventKind` 枚举、`NodeEvent` TypedDict、各 dataclass 字段、构造/校验函数签名；V0.3 开放问题闭环：`NodeEvent.payload` 统一 Mapping、`Observation.source` 复用 messages `source_id` 格式、`PlanArtifact.budget` count-only、`NodeEvent` 加 `event_version` 字段；V0.4 对齐 API.md V1.21：`NodeEventKind` 枚举新增 `clarify`/`plan`，新增 §8「前端联调」章节列出 events/artifacts 对应的前端组件、文件、契约与验收点。 |
 
 本文档仅设计契约层，不改变任何 API、数据库、前端或 Agent 运行代码。
 
