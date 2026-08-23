@@ -111,7 +111,7 @@
           <div class="vendor-group-header">
             <div class="vendor-info">
               <div class="vendor-title-row">
-                <span class="vendor-badge">{{ group.icon }}</span>
+                <ProviderLogo :provider="group.logoKey" />
                 <span class="vendor-name">{{ group.name }}</span>
                 <span class="vendor-count-badge">{{ group.profiles.length }} 个模型</span>
               </div>
@@ -1295,6 +1295,7 @@ import { useMessage, useDialog, NSelect, NInput, NInputNumber, NSwitch } from 'n
 import { api } from '../api/http'
 import type { AgentReasoningSettings, Profile, ProfileCheckOut, McpTool } from '../api/types'
 import EmptyState from '../components/common/EmptyState.vue'
+import ProviderLogo, { type ProviderLogoKey } from '../components/ProviderLogo.vue'
 import ProfileModal from '../components/modals/ProfileModal.vue'
 import CheckResultModal from '../components/modals/CheckResultModal.vue'
 import McpToolModal from '../components/modals/McpToolModal.vue'
@@ -1637,7 +1638,7 @@ const agentProfileOptions = computed(() =>
 interface VendorGroup {
   key: string
   name: string
-  icon: string
+  logoKey: ProviderLogoKey
   base_url: string
   protocol: any
   profiles: Profile[]
@@ -1654,79 +1655,88 @@ const vendorGroups = computed<VendorGroup[]>(() => {
 
     let key = 'custom'
     let vName = '自定义端点 / 内部代理'
-    let icon = '🌐'
+    let logoKey: ProviderLogoKey = 'custom'
 
     if (url.includes('nvidia') || name.includes('nvidia') || model.includes('nvidia')) {
       key = 'nvidia'
       vName = 'NVIDIA NIM'
-      icon = '🟢'
+      logoKey = 'nvidia'
     } else if (url.includes('xiaomimimo') || name.includes('mimo') || model.includes('mimo')) {
       key = 'mimo'
       vName = 'Xiaomi Mimo'
-      icon = '⚡'
+      logoKey = 'mimo'
+    } else if (
+      url.includes('googleapis.com')
+      || url.includes('generativelanguage')
+      || name.includes('gemini')
+      || model.startsWith('gemini-')
+    ) {
+      key = 'gemini'
+      vName = 'Google Gemini'
+      logoKey = 'gemini'
     } else if (url.includes('openai.com') || name.includes('openai') || model.startsWith('gpt-')) {
       key = 'openai'
       vName = 'OpenAI'
-      icon = '🤖'
+      logoKey = 'openai'
     } else if (url.includes('anthropic.com') || name.includes('claude') || model.startsWith('claude-')) {
       key = 'anthropic'
       vName = 'Anthropic Claude'
-      icon = '🔮'
+      logoKey = 'anthropic'
     } else if (url.includes('deepseek') || name.includes('deepseek') || model.includes('deepseek')) {
       key = 'deepseek'
       vName = 'DeepSeek'
-      icon = '🐋'
+      logoKey = 'deepseek'
     } else if (url.includes('siliconflow') || name.includes('silicon') || name.includes('硅基')) {
       key = 'siliconflow'
       vName = 'SiliconFlow (硅基流动)'
-      icon = '⚡'
+      logoKey = 'siliconflow'
     } else if (url.includes('aliyuncs') || url.includes('dashscope') || name.includes('qwen') || model.includes('qwen')) {
       key = 'qwen'
       vName = 'Alibaba Qwen (通义千问)'
-      icon = '☁️'
+      logoKey = 'qwen'
     } else if (url.includes('volces.com') || name.includes('doubao') || name.includes('火山') || name.includes('豆包')) {
       key = 'volcengine'
       vName = 'ByteDance Doubao (火山引擎)'
-      icon = '🌋'
+      logoKey = 'volcengine'
     } else if (url.includes('qianfan') || url.includes('baidubce') || name.includes('ernie') || name.includes('文心') || name.includes('千帆')) {
       key = 'qianfan'
       vName = 'Baidu Qianfan (百度千帆)'
-      icon = '🐻'
+      logoKey = 'qianfan'
     } else if (url.includes('hunyuan') || name.includes('混元')) {
       key = 'hunyuan'
       vName = 'Tencent Hunyuan (腾讯混元)'
-      icon = '🐧'
+      logoKey = 'hunyuan'
     } else if (url.includes('groq') || name.includes('groq')) {
       key = 'groq'
       vName = 'Groq'
-      icon = '⚡'
+      logoKey = 'groq'
     } else if (url.includes('11434') || url.includes('ollama') || name.includes('ollama')) {
       key = 'ollama'
       vName = 'Ollama (本地私有)'
-      icon = '🦙'
+      logoKey = 'ollama'
     } else if (url.includes('bigmodel.cn') || name.includes('glm') || model.includes('glm') || name.includes('智谱')) {
       key = 'zhipu'
       vName = 'Zhipu GLM (智谱清言)'
-      icon = '🌟'
+      logoKey = 'zhipu'
     } else if (url.includes('moonshot') || name.includes('kimi') || name.includes('moonshot') || name.includes('月之暗面')) {
       key = 'moonshot'
       vName = 'Moonshot (月之暗面)'
-      icon = '🌙'
+      logoKey = 'moonshot'
     } else if (url.includes('mistral') || name.includes('mistral')) {
       key = 'mistral'
       vName = 'Mistral AI'
-      icon = '🌪️'
+      logoKey = 'mistral'
     } else if (url.includes('together') || name.includes('together')) {
       key = 'together'
       vName = 'Together AI'
-      icon = '🤝'
+      logoKey = 'together'
     }
 
     if (!groups[key]) {
       groups[key] = {
         key,
         name: vName,
-        icon,
+        logoKey,
         base_url: p.base_url,
         protocol: p.protocol,
         profiles: [],
@@ -2160,12 +2170,6 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-.vendor-badge {
-  font-size: 20px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
 }
 .vendor-name {
   font-size: 15px;
