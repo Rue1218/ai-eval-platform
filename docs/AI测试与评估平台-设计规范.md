@@ -2,11 +2,11 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.5 |
+| 文档版本 | V1.6 |
 | 对应 PRD | V1.8（唯一产品权威） |
 | 对应开发计划 | V1.5 |
 | 撰写日期 | 2026-08-17 |
-| 最近修订 | 2026-08-23：Agent 输入框模型选择器增加供应商 Logo；2026-08-23：协议档供应商卡片改用本地品牌标识并补充 Gemini 归类；2026-08-23：对齐 LangGraph 单轮 Agent、WS 基础事件和 Harness 冻结边界；2026-08-21：协议档增加 Embedding / Reranker 独立 URL、模型 ID、Key 配置，仍按 profile 环境文件隔离持久化 |
+| 最近修订 | 2026-08-23：Agent 对话助手消息增加供应商 Logo、模型名、协议档名和时间；2026-08-23：Agent 输入框模型选择器增加供应商 Logo；2026-08-23：协议档供应商卡片改用本地品牌标识并补充 Gemini 归类；2026-08-23：对齐 LangGraph 单轮 Agent、WS 基础事件和 Harness 冻结边界；2026-08-21：协议档增加 Embedding / Reranker 独立 URL、模型 ID、Key 配置，仍按 profile 环境文件隔离持久化 |
 | 技术栈（PRD） | Vue3 + Naive UI、Python FastAPI、PostgreSQL、WebSocket、Docker Compose、go-stress-testing |
 | 适用范围 | V1.0 前端 `frontend/` |
 
@@ -705,6 +705,13 @@ Agent 页允许的 Dialog **只有**：取消当前长任务、退出登录。�
 | `frontend/src/utils/providerLogo.ts` | 统一按协议档 URL、名称和模型 ID 识别供应商 Logo 类型 |
 | `frontend/src/views/Agent.vue` | 在当前 Agent 模型按钮和模型下拉菜单项中显示对应供应商 Logo |
 
+## 本次修订代码文件与作用清单（2026-08-23 · Agent 助手消息头）
+
+| 文件 | 作用 |
+| --- | --- |
+| `frontend/src/components/ProviderLogo.vue` | 使用无边框的本地供应商图形；Gemini 使用 Google 风格多色渐变标识 |
+| `frontend/src/views/Agent.vue` | 在助手消息中显示供应商 Logo、模型名称、协议档名称和 `MM/DD HH:mm` 时间，并为历史消息与流式消息补齐元数据 |
+
 ---
 
-*V1.5：在 Agent 输入框模型选择器中补充供应商 Logo，并复用协议档页面的本地品牌标识。产品以 PRD 为准。*
+*V1.6：在 Agent 对话助手消息头中补充供应商 Logo、模型名称、协议档名称和时间，并复用本地品牌标识。产品以 PRD 为准。*
