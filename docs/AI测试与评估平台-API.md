@@ -2,14 +2,14 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.22 |
-| 对应 PRD | V1.12（功能唯一权威） |
+| 文档版本 | V1.23 |
+| 对应 PRD | V1.13（功能唯一权威） |
 | 对应设计规范 | V1.3（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V0.5（LangGraph 单轮 Agent 与 WS 桥接；JSON 仍以本文为准） |
 | 对应前端计划 | V1.5 |
 | 对应后端计划 | V1.5 |
 | 撰写日期 | 2026-08-18 |
-| 最近修订 | 2026-08-23：V1.22 修复 V1.21 遗留：§4.4 标题「仅此三条」改「仅此四条」、§9 禁止清单「第四种」改「第五种」并补四类上行事件枚举、§4.3 `tool_result.source` 语义对齐 M7 `Observation.source`（溯源标识字符串，非 short\|long 枚举）、§4.3 共享流规则补 clarify/plan/confirm 持久化广播说明、§4.4 clarify 多副本限制注明、§9 Ask/Plan 补注非 Harness plan 事件；V1.21 配合 Harness 阶段 3/4 前端联调回写契约：§4.3 新增 `clarify`（澄清卡，不建任务/不写 pending_confirm）、`plan`（PlanArtifact 完整下发）事件，扩展 `tool_result` 加 `truncated`/`source`/`redacted` 三可选字段，§3.4 `context_meter` 加 `compacted` bool；§4.4 新增 `clarify_reply` 上行事件并明确四类上行事件边界；V1.20 补齐 Gemini OpenAI 兼容端点的 `extra_body.google.thinking_config` 与思考增量归一化；V1.19 增加 Agent 思考摘要开关与 `low/medium/high/xhigh/max` 思考强度配置，按三协议映射模型请求；V1.18 将用户回显固定为 `user_message`，将回合完成固定为 `response.completed`，保留 `message` / `done` 仅用于旧客户端兼容；V1.17 拆分 WebSocket 用户消息、思考摘要、助手正文增量、助手最终消息和 done 事件；V1.16 接入 LangGraph 单轮 Agent 与 WebSocket 异步桥接；2026-08-22：V1.15 清空旧 Agent/Harness/模型调用/Runtime 实现、相关测试与阶段文档，保留 API 路径作为重建设计期间的明确占位；V1.14 及更早版本沿用历史修订记录。 |
+| 最近修订 | 2026-08-24：V1.23 扩展 Agent 附件契约，支持图片、Word 文档与多附件拖拽上传；保留 `POST /api/files` 后再以既有 `file_id` 引用的消息链路，补充图片缩略图、PDF/文本预览与 Office 文件打开/下载说明。V1.22 修复 V1.21 遗留：§4.4 标题「仅此三条」改「仅此四条」、§9 禁止清单「第四种」改「第五种」并补四类上行事件枚举、§4.3 `tool_result.source` 语义对齐 M7 `Observation.source`（溯源标识字符串，非 short\|long 枚举）、§4.3 共享流规则补 clarify/plan/confirm 持久化广播说明、§4.4 clarify 多副本限制注明、§9 Ask/Plan 补注非 Harness plan 事件；V1.21 配合 Harness 阶段 3/4 前端联调回写契约：§4.3 新增 `clarify`（澄清卡，不建任务/不写 pending_confirm）、`plan`（PlanArtifact 完整下发）事件，扩展 `tool_result` 加 `truncated`/`source`/`redacted` 三可选字段，§3.4 `context_meter` 加 `compacted` bool；§4.4 新增 `clarify_reply` 上行事件并明确四类上行事件边界；V1.20 补齐 Gemini OpenAI 兼容端点的 `extra_body.google.thinking_config` 与思考增量归一化；V1.19 增加 Agent 思考摘要开关与 `low/medium/high/xhigh/max` 思考强度配置，按三协议映射模型请求；V1.18 将用户回显固定为 `user_message`，将回合完成固定为 `response.completed`，保留 `message` / `done` 仅用于旧客户端兼容；V1.17 拆分 WebSocket 用户消息、思考摘要、助手正文增量、助手最终消息和 done 事件；V1.16 接入 LangGraph 单轮 Agent 与 WebSocket 异步桥接；2026-08-22：V1.15 清空旧 Agent/Harness/模型调用/Runtime 实现、相关测试与阶段文档，保留 API 路径作为重建设计期间的明确占位；V1.14 及更早版本沿用历史修订记录。 |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
 ---
@@ -111,7 +111,7 @@ WS `error` 事件 payload 与上表同一套 `code` + `message`（可带 `fields
 | `metric` | `exact` `contain` `regex` `rouge_l` `bleu` |
 | `rag_mode` | `naive` `local` `global` `hybrid` |
 | `stress_env` | `dev` `test` `staging` `prod` |
-| `file_kind` 扩展名 | `.md` `.txt` `.html` `.pdf` `.json` `.yaml` `.yml` `.xlsx` `.xls` `.csv` `.jsonl` `.wav` `.mp3` |
+| `file_kind` 扩展名 | `.md` `.txt` `.html` `.pdf` `.json` `.yaml` `.yml` `.xlsx` `.xls` `.csv` `.jsonl` `.doc` `.docx` `.wav` `.mp3` `.png` `.jpg` `.jpeg` `.webp` `.gif` |
 
 ---
 
@@ -486,7 +486,7 @@ body：`{ "name", "hint", "template" }`。
 
 #### `GET /api/files/{id}/content`
 
-登录后返回文件二进制（`Content-Disposition: inline`），供浏览器 `<audio>` 播放或下载。未登录 `UNAUTHORIZED`；不存在 `NOT_FOUND`。路径不回显内部存储位置。Agent 音色克隆短工具的 `content_url` 指向本接口。
+登录后返回文件二进制（`Content-Disposition: inline`），供浏览器图片、PDF、文本预览，以及 Office/表格/音频打开或下载。未登录 `UNAUTHORIZED`；不存在 `NOT_FOUND`。路径不回显内部存储位置。Agent 音色克隆短工具的 `content_url` 指向本接口。
 
 ---
 
@@ -1817,4 +1817,14 @@ Qwen Image 通过与 `audio.voiceclone` 相同的 Agent 内部短工具链路执
 | `backend/api/app/adapters.py` | 映射 OpenAI Chat/Responses、Mimo 和 Anthropic 的思考参数 |
 | `frontend/src/views/AdminProfiles.vue` / `frontend/src/api/types.ts` / `frontend/src/api/mockData.ts` | 增加管理页思考开关、强度选择和类型夹具 |
 | `backend/api/tests/test_adapters.py` / `backend/api/tests/test_llm_graph.py` | 回归验证思考参数映射与关闭过滤 |
+
+**V1.23（2026-08-24）— Agent 多附件上传与预览**
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/routers/files.py` | 扩展 Agent 附件白名单，允许图片与 DOC/DOCX 文件；沿用 20MB 限制和同源内容接口 |
+| `backend/api/tests/test_files.py` | 覆盖图片、Markdown、PDF、Word、Excel 扩展名校验及非法格式拒绝 |
+| `frontend/src/api/http.ts` | 文件上传响应类型补充可选 `content_type`，用于本地预览识别 |
+| `frontend/src/components/agent/AttachmentPreview.vue` | 新增图片缩略图、PDF/文本预览、Office 类型卡片和打开/下载入口 |
+| `frontend/src/views/Agent.vue` | Agent 输入区支持多附件选择、拖拽上传、上传状态、附件移除与消息内预览卡片 |
 

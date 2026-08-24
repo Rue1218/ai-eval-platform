@@ -175,16 +175,14 @@
             >
               <div v-if="item.author" class="user-author">{{ userMessageAuthorLabel(item) }}</div>
               <div class="bubble-user">{{ item.text }}</div>
-              <template v-if="item.files && item.files.length">
-                <span v-for="f in item.files" :key="f.name" class="attach-chip">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-                    <path d="M6 3h9l4 4v14H6Z" />
-                    <path d="M14 3v5h5" />
-                  </svg>
-                  <span>{{ f.name }}</span>
-                  <span class="mono">{{ f.size }}</span>
-                </span>
-              </template>
+              <div v-if="item.files && item.files.length" class="message-attachments">
+                <AttachmentPreview
+                  v-for="f in item.files"
+                  :key="f.localId || f.id || f.file_id || f.name"
+                  :attachment="f"
+                  compact
+                />
+              </div>
             </div>
 
             <!-- 2.1.1 打字占位气泡：LLM 意图识别期间的即时反馈（收到事件后由 dismissTyping 移除） -->
@@ -686,20 +684,31 @@
           </button>
         </div>
 
-        <!-- 附件暂存架（与输入区同宽居中对齐） -->
-        <div v-if="stagedFiles.length" class="attach-stage" style="display: flex; gap: 8px; flex-wrap: wrap; max-width: 760px; margin: 0 auto 8px">
-          <span v-for="(f, i) in stagedFiles" :key="f.name" class="attach-chip">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-              <path d="M6 3h9l4 4v14H6Z" />
-              <path d="M14 3v5h5" />
-            </svg>
-            <span>{{ f.name }}</span>
-            <span class="mono">{{ f.size }}</span>
-            <button class="link-btn" style="padding: 0 2px" @click="stagedFiles.splice(i, 1)">✕</button>
-          </span>
+        <!-- 附件预览架：图片显示缩略图，文档显示类型卡片，可点击预览或打开。 -->
+        <div v-if="stagedFiles.length" class="attach-stage">
+          <AttachmentPreview
+            v-for="f in stagedFiles"
+            :key="f.localId"
+            :attachment="f"
+            removable
+            @remove="removeStagedFile(f.localId)"
+          />
         </div>
 
-        <div class="composer-card" :class="{ generating: isGenerating }" style="position: relative;">
+        <div
+          class="composer-card"
+          :class="{ generating: isGenerating, 'drag-active': isDragActive }"
+          style="position: relative;"
+          @dragenter.prevent="handleDragEnter"
+          @dragover.prevent="handleDragOver"
+          @dragleave.prevent="handleDragLeave"
+          @drop.prevent="handleDrop"
+        >
+          <div v-if="isDragActive" class="composer-drop-hint">
+            <span class="composer-drop-icon">＋</span>
+            <strong>松开以上传附件</strong>
+            <span>支持图片、Markdown、PDF、Word、Excel 等格式</span>
+          </div>
           <!-- 斜杠命令悬浮面板 (宽 380px，键入 / 触发) -->
           <SlashPalette
             ref="slashPaletteRef"
@@ -728,7 +737,7 @@
           <div class="composer-bottom-bar">
             <div class="composer-left-actions">
               <!-- 添加附件按钮 -->
-              <button class="composer-action-btn" title="添加附件（≤20MB，支持 PRD/OpenAPI/Excel/CSV/PDF/wav/mp3/png/jpg 等）" @click="triggerFileInput">
+              <button class="composer-action-btn" type="button" title="添加附件（≤20MB，支持图片、Markdown、PDF、Word、Excel 等）" @click="triggerFileInput">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
                   <line x1="12" y1="5" x2="12" y2="19"></line>
                   <line x1="5" y1="12" x2="19" y2="12"></line>
@@ -738,7 +747,8 @@
                 ref="fileInputRef"
                 type="file"
                 hidden
-                accept=".md,.txt,.html,.pdf,.json,.yaml,.yml,.xlsx,.xls,.csv,.jsonl,.wav,.mp3,.png,.jpg,.jpeg,.webp,.gif"
+                accept=".md,.txt,.html,.pdf,.json,.yaml,.yml,.xlsx,.xls,.csv,.jsonl,.doc,.docx,.wav,.mp3,.png,.jpg,.jpeg,.webp,.gif"
+                multiple
                 @change="handleFileUpload"
               />
 
@@ -769,7 +779,7 @@
             <button
               class="composer-send-btn"
               :class="{ active: isGenerating || inputText.trim().length > 0 || stagedFiles.length > 0 }"
-              :disabled="!isGenerating && inputText.trim().length === 0 && stagedFiles.length === 0"
+              :disabled="!isGenerating && (isUploadingAttachments || (inputText.trim().length === 0 && !hasUploadedAttachments))"
               :title="isGenerating ? '暂停生成（不取消已入队任务）' : '发送 (Enter)'"
               @click="handleSendClick"
             >
@@ -890,6 +900,7 @@ import ClarifyCard from '../components/agent/ClarifyCard.vue'
 import ThoughtCard from '../components/agent/ThoughtCard.vue'
 import ToolCard from '../components/agent/ToolCard.vue'
 import MediaPreview from '../components/agent/MediaPreview.vue'
+import AttachmentPreview from '../components/agent/AttachmentPreview.vue'
 import MarkdownView from '../components/agent/MarkdownView.vue'
 import SlashPalette from '../components/agent/SlashPalette.vue'
 import { SYSTEM_SLASH_COMMANDS } from '../agent/slashRegistry'
@@ -1037,7 +1048,25 @@ const allDeletableSessionsSelected = computed(() => {
   return deletableIds.length > 0 && deletableIds.every((id) => selectedSessionIds.value.includes(id))
 })
 const inputText = ref('')
-const stagedFiles = ref<any[]>([])
+
+interface StagedAttachment {
+  localId: string
+  id: string
+  name: string
+  size: number
+  contentType: string
+  previewUrl: string
+  file: File
+  uploading: boolean
+  error: boolean
+}
+
+const stagedFiles = ref<StagedAttachment[]>([])
+const isDragActive = ref(false)
+const isUploadingAttachments = computed(() => stagedFiles.value.some((file) => file.uploading))
+const hasUploadedAttachments = computed(() => stagedFiles.value.some((file) => Boolean(file.id) && !file.error))
+let dragDepth = 0
+const localAttachmentUrls = new Set<string>()
 const activeTask = ref<Task | null>(null)
 // 取消请求发送后等待服务端确认，避免重复提交且不提前伪造 cancelled。
 const cancellingTaskId = ref<string | null>(null)
@@ -1861,34 +1890,112 @@ function triggerFileInput() {
   fileInputRef.value?.click()
 }
 
-/** 附件选择后立即调 api.files.upload 换取 file_id，发送消息时随 WS attachments 回传（对齐原型）。 */
+const ALLOWED_ATTACHMENT_SUFFIXES = new Set([
+  '.md', '.txt', '.html', '.pdf', '.json', '.yaml', '.yml', '.xlsx', '.xls', '.csv', '.jsonl',
+  '.doc', '.docx', '.wav', '.mp3', '.png', '.jpg', '.jpeg', '.webp', '.gif',
+])
+
+function hasAllowedAttachmentSuffix(file: File): boolean {
+  const dotIndex = file.name.lastIndexOf('.')
+  return dotIndex >= 0 && ALLOWED_ATTACHMENT_SUFFIXES.has(file.name.slice(dotIndex).toLowerCase())
+}
+
+function createAttachmentPreviewUrl(file: File): string {
+  const url = URL.createObjectURL(file)
+  localAttachmentUrls.add(url)
+  return url
+}
+
+function releaseAttachmentPreviewUrl(file: Pick<StagedAttachment, 'previewUrl'>) {
+  if (!file.previewUrl || !localAttachmentUrls.has(file.previewUrl)) return
+  URL.revokeObjectURL(file.previewUrl)
+  localAttachmentUrls.delete(file.previewUrl)
+}
+
+/** 把文件加入暂存架并立即上传，发送时只把成功换取的 file_id 写入 WS 消息。 */
+async function stageAttachmentFiles(files: File[]) {
+  const validFiles: File[] = []
+  let invalidCount = 0
+  for (const file of files) {
+    if (file.size > 20 * 1024 * 1024 || !hasAllowedAttachmentSuffix(file)) {
+      invalidCount += 1
+      continue
+    }
+    validFiles.push(file)
+  }
+  if (invalidCount) {
+    message.error('有附件格式不支持或超过 20MB，请检查后重试')
+  }
+
+  await Promise.all(validFiles.map(async (file) => {
+    const staged: StagedAttachment = {
+      localId: createClientMessageId(),
+      id: '',
+      name: file.name,
+      size: file.size,
+      contentType: file.type,
+      previewUrl: createAttachmentPreviewUrl(file),
+      file,
+      uploading: true,
+      error: false,
+    }
+    stagedFiles.value.push(staged)
+    try {
+      const res = await api.files.upload(file)
+      const current = stagedFiles.value.find((item) => item.localId === staged.localId)
+      if (!current) return
+      current.id = res.id
+      current.contentType = res.content_type || file.type
+      current.uploading = false
+      message.success(`附件 ${file.name} 已上传`)
+    } catch {
+      const current = stagedFiles.value.find((item) => item.localId === staged.localId)
+      if (!current) return
+      current.uploading = false
+      current.error = true
+      message.error(`附件 ${file.name} 上传失败`)
+    }
+  }))
+}
+
+/** 文件选择支持多选，与拖拽上传共用同一校验和上传流程。 */
 async function handleFileUpload(e: Event) {
   const target = e.target as HTMLInputElement
-  const f = target.files?.[0]
-  if (!f) return
+  const files = Array.from(target.files || [])
   target.value = ''
-  if (f.size > 20 * 1024 * 1024) {
-    message.error('单文件不超过 20MB')
-    return
-  }
-  // 先上传拿到 file_id，消息内仅引用 id（契约：attachments = [{ file_id }]）
-  const staged = {
-    name: f.name,
-    size: f.size > 1048576 ? `${(f.size / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(f.size / 1024))} KB`,
-    file: f,
-    id: '',
-    uploading: true,
-  }
-  stagedFiles.value.push(staged)
-  try {
-    const res = await api.files.upload(f)
-    staged.id = res.id
-    staged.uploading = false
-    message.success('附件已上传')
-  } catch {
-    staged.uploading = false
-    message.error('附件上传失败，发送时将被忽略')
-  }
+  if (files.length) await stageAttachmentFiles(files)
+}
+
+/** 拖拽进入时用深度计数避免经过子节点触发闪烁。 */
+function handleDragEnter(e: DragEvent) {
+  if (!e.dataTransfer?.types.includes('Files')) return
+  dragDepth += 1
+  isDragActive.value = true
+}
+
+function handleDragOver(e: DragEvent) {
+  if (!e.dataTransfer?.types.includes('Files')) return
+  e.dataTransfer.dropEffect = 'copy'
+  isDragActive.value = true
+}
+
+function handleDragLeave() {
+  dragDepth = Math.max(0, dragDepth - 1)
+  if (dragDepth === 0) isDragActive.value = false
+}
+
+function handleDrop(e: DragEvent) {
+  dragDepth = 0
+  isDragActive.value = false
+  const files = Array.from(e.dataTransfer?.files || [])
+  if (files.length) void stageAttachmentFiles(files)
+}
+
+function removeStagedFile(localId: string) {
+  const index = stagedFiles.value.findIndex((file) => file.localId === localId)
+  if (index < 0) return
+  const [removed] = stagedFiles.value.splice(index, 1)
+  if (removed) releaseAttachmentPreviewUrl(removed)
 }
 
 /** 键盘事件监听：SlashPalette 导航、Enter 发送，Shift + Enter 换行，Backspace 删除命令 Tag */
@@ -1952,7 +2059,8 @@ function handleSendClick() {
   }
   const rawInput = inputText.value.trim()
   const text = selectedSlashCmd.value ? `/${selectedSlashCmd.value}${rawInput ? ' ' + rawInput : ''}` : rawInput
-  if (!text && stagedFiles.value.length === 0) return
+  if (isUploadingAttachments.value) return
+  if (!text && !hasUploadedAttachments.value) return
 
   const files = [...stagedFiles.value]
   stagedFiles.value = []
@@ -3823,6 +3931,8 @@ onBeforeUnmount(() => {
   }
   sockets.clear()
   agentWs = null
+  for (const url of localAttachmentUrls) URL.revokeObjectURL(url)
+  localAttachmentUrls.clear()
 })
 </script>
 
@@ -3967,6 +4077,20 @@ onBeforeUnmount(() => {
   background: var(--bg-main);
 }
 
+/* 用户消息与输入区共用附件卡片布局，图片优先给出可识别的缩略图。 */
+.message-attachments,
+.attach-stage {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.attach-stage {
+  max-width: 780px;
+  margin: 0 auto 8px;
+}
+
 /* 输入卡片：上部多行文本，下部操作底栏（对齐 Gemini / Cursor / Claude 对话框） */
 .composer-card {
   max-width: 780px;
@@ -3985,6 +4109,45 @@ onBeforeUnmount(() => {
 .composer-card:focus-within {
   border-color: var(--accent-ai);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-ai) 15%, transparent), 0 4px 18px rgba(0, 0, 0, 0.06);
+}
+
+.composer-card.drag-active {
+  border-color: var(--accent-ai);
+  background: color-mix(in srgb, var(--accent-ai) 5%, var(--bg-main));
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent-ai) 13%, transparent);
+}
+
+.composer-drop-hint {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--bg-main) 92%, var(--accent-ai));
+  color: var(--text-primary);
+  font-size: 13px;
+  pointer-events: none;
+}
+
+.composer-drop-hint span:last-child {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.composer-drop-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--t-agent);
+  color: var(--c-agent);
+  font-size: 17px;
+  line-height: 1;
 }
 
 /* 运行生成中的动态环绕光束特效 (Border Beam) */
@@ -4248,6 +4411,11 @@ onBeforeUnmount(() => {
   }
   .composer-card {
     border-radius: 14px;
+  }
+  .composer-drop-hint {
+    flex-wrap: wrap;
+    padding: 12px 24px;
+    text-align: center;
   }
   .composer-model-dropdown-btn .model-name {
     max-width: 100px;
