@@ -121,10 +121,13 @@ _REACT_EDIT = (
 
 def test_react_budget_exhausted_emits_error() -> None:
     """OR-5：model_calls 预算耗尽 → error 收尾，不进入死循环。"""
-    # 交替工具避开重复抑制；默认预算 model_calls=6，第 7 次调用即超限
+    # 交替工具避开重复抑制（无沙箱目录时工具 ok=False，守卫不触发）；
+    # 默认预算 model_calls=12，第 13 次调用即超限
     script = [
         _REACT_READ, _REACT_WRITE, _REACT_EDIT, _REACT_READ,
-        _REACT_WRITE, _REACT_EDIT, _REACT_READ,
+        _REACT_WRITE, _REACT_EDIT, _REACT_READ, _REACT_WRITE,
+        _REACT_EDIT, _REACT_READ, _REACT_WRITE, _REACT_EDIT,
+        _REACT_READ,
     ]
     gateway = _ScriptGateway(script)
     events = _collect(LangGraphAgent(gateway, build_default_registry()), _serializable())
@@ -132,8 +135,8 @@ def test_react_budget_exhausted_emits_error() -> None:
     assert kinds.count("error") == 1
     codes = [event["payload"].get("code") for event in _pending_events(events)]
     assert "BUDGET_EXCEEDED" in codes
-    # 无死循环：模型调用次数有界（预算 6 + 首次调用）
-    assert len(gateway.calls) <= 7
+    # 无死循环：模型调用次数有界（预算 12 + 首次调用）
+    assert len(gateway.calls) <= 13
 
 
 def test_react_repeat_call_suppressed_after_correction() -> None:
