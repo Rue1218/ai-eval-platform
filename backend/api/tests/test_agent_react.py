@@ -185,6 +185,7 @@ def test_react_read_repeat_allowed_no_guard() -> None:
     """OR-4 豁免：read 为只读幂等工具，重复相同读取直接执行，不触发纠正/硬错误。
 
     用户场景回归：模型重读同一文件不再报"工具 read 连续调用未推进，已终止"。
+    （上限内重复：READONLY_REPEAT_LIMIT=3，3 次相同 read 全部执行）
     """
     with tempfile.TemporaryDirectory() as tmp:
         with open(f"{tmp}/a.txt", "w", encoding="utf-8") as handle:
@@ -202,6 +203,48 @@ def test_react_read_repeat_allowed_no_guard() -> None:
     assert kinds.count("tool_call") == 3
     assert kinds.count("tool_result") == 3
     assert kinds[-2:] == ["assistant_message", "response.completed"]
+
+
+def test_react_read_repeat_capped_after_limit() -> None:
+    """OR-4：read 相同参数超过 READONLY_REPEAT_LIMIT 后注入纠正（不再执行），
+    模型改 done 收尾则干净完成，不报错。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        with open(f"{tmp}/a.txt", "w", encoding="utf-8") as handle:
+            handle.write("hello")
+        gateway = _ScriptGateway([_REACT_READ, _REACT_READ, _REACT_READ, _REACT_READ])
+        events = _collect(
+            LangGraphAgent(gateway, build_default_registry(), sandbox_dir=tmp),
+            _serializable(),
+        )
+    kinds = [event["kind"] for event in _pending_events(events)]
+    assert kinds.count("error") == 0
+    messages = [event["payload"].get("message", "") for event in _pending_events(events)]
+    assert not any("连续调用" in message for message in messages)
+    # 前 3 次相同 read 执行，第 4 次被纠正拦截（不执行）；脚本耗尽回退 done 收尾
+    assert kinds.count("tool_call") == 3
+    assert kinds[-2:] == ["assistant_message", "response.completed"]
+    assert len(gateway.calls) == 5
+
+
+def test_react_read_repeat_capped_hard_error_after_correction() -> None:
+    """OR-4：read 超限纠正后仍用相同参数调用 → 硬错误收尾，不裸抛、不无限重读。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        with open(f"{tmp}/a.txt", "w", encoding="utf-8") as handle:
+            handle.write("hello")
+        gateway = _ScriptGateway(
+            [_REACT_READ, _REACT_READ, _REACT_READ, _REACT_READ, _REACT_READ]
+        )
+        events = _collect(
+            LangGraphAgent(gateway, build_default_registry(), sandbox_dir=tmp),
+            _serializable(),
+        )
+    kinds = [event["kind"] for event in _pending_events(events)]
+    assert kinds.count("error") == 1
+    messages = [event["payload"].get("message", "") for event in _pending_events(events)]
+    assert any("连续调用" in message for message in messages)
+    # 前 3 次执行，第 4 次纠正，第 5 次仍相同 → 硬错误；共 5 次模型调用，无死循环
+    assert kinds.count("tool_call") == 3
+    assert len(gateway.calls) == 5
 
 
 def test_react_read_toolname_with_newline_exempt_from_guard() -> None:

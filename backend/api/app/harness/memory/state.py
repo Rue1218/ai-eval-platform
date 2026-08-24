@@ -73,6 +73,12 @@ def _append_events(left: list[NodeEvent] | None, right: list[NodeEvent] | None) 
     return list(left or []) + list(right or [])
 
 
+def _append_observations(left: list[object] | None, right: list[object] | None) -> list[object]:
+    """LangGraph reducer：累积工具观察（OR-4 防重复需统计全部历史相同调用，
+    此前仅保留最近一条导致相同 read 循环无法被守卫识别）。"""
+    return list(left or []) + list(right or [])
+
+
 class GraphState(TypedDict, total=False):
     """LangGraph 图状态容器；全部字段 JSON 可序列化，主体归本层。
 
@@ -84,7 +90,7 @@ class GraphState(TypedDict, total=False):
     mode: AgentMode  # 路由节点写，条件边读
     pending_events: Annotated[list[NodeEvent], _append_events]  # 节点 append，ws.py 图外消费清空
     plan: object | None  # 阶段 4：PlanArtifact（M7 晚波）投影
-    observations: list[object]  # 阶段 2：Observation（M7 早波）
+    observations: Annotated[list[object], _append_observations]  # 阶段 2：Observation（M7 早波），append 累积
     pending_tool: Mapping[str, object] | None  # 阶段 2：ToolCall 投影（react 条件边分流）
     stop_flag: bool  # 节点写，条件边读（阶段 2）
     repeat_retry: bool  # 阶段 2：OR-4 首次重复纠正后置位，react 条件边回环重试

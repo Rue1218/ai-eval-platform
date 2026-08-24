@@ -49,14 +49,27 @@ READ_OBSERVATION_MAX_CHARS = 9_000
 # 若有副作用工具（write/edit/bash）才会被守卫约束；死循环由模型调用预算兜底。
 READONLY_TOOLS: frozenset[str] = frozenset({"read", "web_fetch"})
 
+# 只读工具「相同参数」成功调用的容忍上限：允许少量重读（内容确认无害），
+# 但无进展的反复相同调用（如 DeepSeek 反复 read 同一文件不传 offset）必须
+# 收敛——超限注入纠正观察（提示传 offset 或直接作答），纠正后仍重复才硬错误。
+READONLY_REPEAT_LIMIT = 3
+
 # ReAct 协议解析失败纠正重试上限：模型输出非有效 JSON 时注入纠正观察并回环
 # 一次（OR-4 同一回环边），仍失败才硬错误收尾；由模型调用预算兜底防死循环。
 MAX_PARSE_RETRIES = 2
 
+# 上下文注入最近观察条数上限：observations 已改为累积（OR-4 守卫需全量），
+# 但注入系统提示只需最近若干条，避免长任务上下文无限膨胀（守卫仍看全量）。
+INJECT_OBSERVATIONS_MAX = 6
+
 
 def _inject_observations(state: GraphState) -> str:
-    """把 observations 归一为摘要文本（M2 to_observation，脱敏在注入前）。"""
-    observations = state.get("observations") or []
+    """把 observations 归一为摘要文本（M2 to_observation，脱敏在注入前）。
+
+    只注入最近 ``INJECT_OBSERVATIONS_MAX`` 条：模型作答依赖最近工具结果即可，
+    守卫（identical_runs）仍消费全量累积观察。
+    """
+    observations = (state.get("observations") or [])[-INJECT_OBSERVATIONS_MAX:]
     if not observations:
         return ""
     lines = [
@@ -194,7 +207,8 @@ def build_react_nodes(
                     "repeat_retry": True,
                     "parse_retries": parse_retries + 1,
                     "pending_events": [],
-                    "observations": list(state.get("observations") or []) + [correction],
+                    # observations 为 append reducer，只返回本条新增，不重复携带旧列表
+                    "observations": [correction],
                     "budget": budget.to_dict(),
                 }
             thought = _extract_thought(response.text)
@@ -250,6 +264,44 @@ def build_react_nodes(
             identical_runs = [
                 obs for obs in observations if _same_call(obs) and getattr(obs, "ok", False)
             ]
+            if identical_runs and tool in READONLY_TOOLS and len(identical_runs) >= READONLY_REPEAT_LIMIT:
+                # 只读工具无进展重复：相同参数已成功执行多次（返回内容必然相同），
+                # 模型既未传 offset 继续读取也未作答，判定为循环。注入纠正观察
+                # （提示传 offset 或直接作答）；纠正后仍重复相同调用才硬错误。
+                if state.get("repeat_retry"):
+                    return {
+                        "pending_events": thought_events
+                        + [
+                            make_event(
+                                "error",
+                                {"code": "VALIDATION", "message": f"工具 {tool} 连续调用未推进，已终止"},
+                            )
+                        ],
+                        "pending_tool": None,
+                        "repeat_retry": False,
+                        "budget": budget.to_dict(),
+                    }
+                return {
+                    "pending_tool": None,
+                    "repeat_retry": True,
+                    "pending_events": thought_events,
+                    # observations 为 append reducer，只返回本条新增纠正观察
+                    "observations": [
+                        Observation(
+                            tool=tool,
+                            text=(
+                                f"系统提示：工具 {tool} 已用相同参数成功执行 {len(identical_runs)} 次，"
+                                "返回内容完全相同，继续相同调用不会得到新信息。"
+                                "如需读取未读部分：请改用不同参数（如 read 传 offset/limit 分段读取）；"
+                                "如已读内容足够：请直接 done=true 完成回答，不要再用相同参数调用。"
+                            ),
+                            ok=False,
+                            redacted=True,
+                            arguments=arguments,
+                        )
+                    ],
+                    "budget": budget.to_dict(),
+                }
             if identical_runs and tool not in READONLY_TOOLS:
                 if state.get("repeat_retry"):
                     # 已给过一次纠正仍重复相同调用：判定未推进，硬错误收尾；
@@ -273,8 +325,8 @@ def build_react_nodes(
                     "pending_tool": None,
                     "repeat_retry": True,
                     "pending_events": thought_events,
-                    "observations": list(observations)
-                    + [
+                    # observations 为 append reducer，只返回本条新增纠正观察
+                    "observations": [
                         Observation(
                             tool=tool,
                             text=(
