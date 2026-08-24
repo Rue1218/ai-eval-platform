@@ -540,7 +540,7 @@
               </div>
             </div>
 
-            <!-- 2.7 Agent 文本回复（每个 ReAct 回合独立渲染，保持工具前后顺序） -->
+            <!-- 2.7 Agent 回合：模型头部固定在最前，后续块严格按 ReAct 顺序排列 -->
             <div
               v-else-if="item.type === 'agent'"
               class="msg-agent"
@@ -562,28 +562,64 @@
                     </div>
                   </div>
 
-                  <!-- 当前 ReAct 回合的思考卡片：位于本回合正文之前 -->
-                  <template v-if="item.thoughts && item.thoughts.length">
+                  <!-- ReAct 内容块：thought → tool_call/tool_result → thought → assistant -->
+                  <template v-for="(block, blockIdx) in item.blocks" :key="blockIdx">
                     <ThoughtCard
-                      v-for="(th, tIdx) in item.thoughts"
-                      :key="tIdx"
-                      :text="th.text || ''"
-                      :done="th.done"
-                      :latency-ms="th.latency_ms"
-                      :skill-id="th.skill_id"
-                      :stage="th.stage"
+                      v-if="block.type === 'thought'"
+                      :text="block.text || ''"
+                      :done="block.done"
+                      :latency-ms="block.latency_ms"
+                      :skill-id="block.skill_id"
+                      :stage="block.stage"
                     />
+                    <ToolCard
+                      v-else-if="block.type === 'tool'"
+                      :tool="block.tool || ''"
+                      :args="block.args"
+                      :result="block.result"
+                      :status="block.status || 'pending'"
+                      :latency-ms="block.latency_ms"
+                      :truncated="block.truncated"
+                      :source="block.source"
+                      :redacted="block.redacted"
+                      :default-open="block.status === 'pending' || block.open"
+                      :no-anim="block.noAnim"
+                    />
+                    <MediaPreview
+                      v-else-if="block.type === 'media' && block.contentUrl"
+                      :src="block.contentUrl"
+                      :filename="block.filename"
+                      :no-anim="block.noAnim"
+                    />
+                    <div v-else-if="block.type === 'assistant'">
+                      <MarkdownView
+                        v-if="block.raw || block.text"
+                        :content="block.raw || block.text || ''"
+                        :is-streaming="block.streaming"
+                      />
+                      <div v-if="!block.streaming && formatLatency(block.latency_ms)" class="reply-latency mono">
+                        耗时 {{ formatLatency(block.latency_ms) }}
+                      </div>
+                    </div>
+                    <div v-else-if="block.type === 'error'" class="error-strip" :class="{ 'no-anim': block.noAnim }">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                        <circle cx="12" cy="12" r="9" />
+                        <path d="M12 7.5v5.5" />
+                        <circle cx="12" cy="16.4" r=".4" fill="currentColor" />
+                      </svg>
+                      <div><b>{{ block.code || 'ERROR' }}</b> · {{ block.message }}</div>
+                    </div>
                   </template>
 
-                  <!-- 回答正文 -->
+                  <!-- 兼容历史旧缓存：没有 blocks 时仍渲染原助手正文。 -->
                   <MarkdownView
-                    v-if="item.raw || item.text"
+                    v-if="!item.blocks?.length && (item.raw || item.text)"
                     :content="item.raw || item.text || ''"
                     :is-streaming="item.streaming"
                   />
 
-                  <!-- 回复耗时：交付终帧 / 历史回放携带 latency_ms，生成中与无效值不显示 -->
-                  <div v-if="!item.streaming && formatLatency(item.latency_ms)" class="reply-latency mono">
+                  <!-- 兼容历史旧缓存的回复耗时。 -->
+                  <div v-if="!item.blocks?.length && !item.streaming && formatLatency(item.latency_ms)" class="reply-latency mono">
                     耗时 {{ formatLatency(item.latency_ms) }}
                   </div>
                 </div>
@@ -1185,7 +1221,54 @@ export interface AgentThoughtItem {
   stage?: 'plan' | 'react' | 'reflect'
   skill_id?: string
   streamThink?: boolean
+  streaming?: boolean
 }
+
+type ThoughtLike = AgentThoughtItem & { streaming?: boolean }
+
+export interface AgentToolItem {
+  tool: string
+  args?: any
+  result?: any
+  status?: 'pending' | 'ok' | 'fail'
+  latency_ms?: number
+  truncated?: boolean
+  source?: string
+  redacted?: boolean
+  open?: boolean
+  noAnim?: boolean
+}
+
+interface AgentAssistantItem {
+  type: 'assistant'
+  raw?: string
+  text?: string
+  streaming?: boolean
+  latency_ms?: number
+}
+
+interface AgentMediaItem {
+  type: 'media'
+  mediaKind?: 'image'
+  contentUrl?: string
+  filename?: string
+  fileId?: string
+  noAnim?: boolean
+}
+
+interface AgentErrorItem {
+  type: 'error'
+  code?: string
+  message?: string
+  noAnim?: boolean
+}
+
+type AgentBlock =
+  | (AgentThoughtItem & { type: 'thought' })
+  | (AgentToolItem & { type: 'tool' })
+  | AgentAssistantItem
+  | AgentMediaItem
+  | AgentErrorItem
 
 interface StreamItem {
   type: 'user' | 'agent' | 'thought' | 'tool' | 'media' | 'confirm' | 'clarify' | 'report' | 'error' | 'typing'
@@ -1243,8 +1326,8 @@ interface StreamItem {
   modelName?: string
   profileName?: string
   createdAt?: string
-  // 当前 ReAct 回合的思考链；工具调用以顶层事件项渲染，保持调用顺序
-  thoughts?: AgentThoughtItem[]
+  // 一个助手回合的有序内容块；模型头部只在回合容器顶部展示一次
+  blocks?: AgentBlock[]
   // F8 确认卡内联校验错误（字段名 → 红字文案）
   fieldErrors?: Record<string, string>
 }
@@ -1311,11 +1394,12 @@ function currentAgentMessageMeta(): Pick<StreamItem, 'providerLogoKey' | 'modelN
 
 /** 追加本地演示助手消息，并同步当前 Agent 的供应商 Logo 与模型元数据。 */
 function pushAgentMessage(text: string) {
-  events.value.push({
-    type: 'agent',
-    text,
-    ...currentAgentMessageMeta(),
-  })
+  const agent = getOrCreateTurnAgent(events.value)
+  const block = getOrCreateAssistantBlock(agent)
+  block.raw = text
+  block.text = text
+  block.streaming = false
+  agent.streaming = false
 }
 
 /** 解析历史消息中的供应商 Logo 标识，优先使用快照字段。 */
@@ -1354,8 +1438,8 @@ function resolveMessageProfileName(m: { profile_name?: string | null; profile_id
   return ''
 }
 
-/** 获取或创建当前 ReAct 步骤的助手片段；工具卡之后必须新建片段以保持时序。 */
-function getOrCreateTurnAgent(list: StreamItem[], meta?: Partial<StreamItem>): StreamItem {
+/** 返回当前用户回合的助手容器；确认卡、错误等顶层事件会结束当前容器。 */
+function getCurrentTurnAgent(list: StreamItem[]): StreamItem | undefined {
   let from = -1
   for (let i = list.length - 1; i >= 0; i--) {
     if (list[i].type === 'user') {
@@ -1364,14 +1448,19 @@ function getOrCreateTurnAgent(list: StreamItem[], meta?: Partial<StreamItem>): S
     }
   }
   const lastItem = list[list.length - 1]
-  if (lastItem && lastItem.type === 'agent' && list.length - 1 > from) return lastItem
+  return lastItem && lastItem.type === 'agent' && list.length - 1 > from ? lastItem : undefined
+}
+
+/** 获取或创建一个 ReAct 回合容器；所有思考、工具和助手正文都追加到其 blocks。 */
+function getOrCreateTurnAgent(list: StreamItem[], meta?: Partial<StreamItem>): StreamItem {
+  const current = getCurrentTurnAgent(list)
+  if (current) return current
   const defaultMeta = currentAgentMessageMeta()
   const newAgent = reactive({
     type: 'agent',
-    raw: '',
-    text: '',
+    blocks: [] as AgentBlock[],
     streaming: true,
-    thoughts: [],
+    noAnim: meta?.noAnim,
     providerLogoKey: meta?.providerLogoKey || defaultMeta.providerLogoKey,
     modelName: meta?.modelName || defaultMeta.modelName,
     profileName: meta?.profileName || defaultMeta.profileName,
@@ -1379,6 +1468,65 @@ function getOrCreateTurnAgent(list: StreamItem[], meta?: Partial<StreamItem>): S
   }) as StreamItem
   list.push(newAgent)
   return newAgent
+}
+
+/** 返回或创建当前回合的最后一个助手正文块，保证工具后的最终回答仍在工具之后。 */
+function getOrCreateAssistantBlock(agent: StreamItem): AgentAssistantItem {
+  const blocks = agent.blocks || (agent.blocks = [])
+  const last = blocks[blocks.length - 1]
+  if (last?.type === 'assistant') return last
+  const block = reactive({ type: 'assistant', raw: '', text: '', streaming: true }) as AgentAssistantItem
+  blocks.push(block)
+  agent.streaming = true
+  return block
+}
+
+/** 返回当前回合仍在生成的思考块。 */
+function getActiveThoughtBlock(agent: StreamItem): AgentThoughtItem | undefined {
+  const blocks = agent.blocks || []
+  // 只认最后一个块：工具结果到达后即使旧思考卡仍在收尾动画，也不能把下一轮思考并回旧卡。
+  const last = blocks[blocks.length - 1]
+  return last?.type === 'thought' && !last.done ? last as AgentThoughtItem : undefined
+}
+
+/** 追加一个思考块；同一思考流的增量帧复用最近未完成块。 */
+function appendThoughtBlock(agent: StreamItem, block: AgentThoughtItem): AgentThoughtItem {
+  const active = getActiveThoughtBlock(agent)
+  if (active) return active
+  const next = reactive({ type: 'thought', ...block }) as AgentBlock
+  const blocks = agent.blocks || (agent.blocks = [])
+  blocks.push(next)
+  return next as AgentThoughtItem
+}
+
+/** 追加一个待执行工具块，工具结果只更新该块，不改变其在回合中的位置。 */
+function appendToolBlock(agent: StreamItem, tool: AgentToolItem): AgentToolItem {
+  const next = reactive({ type: 'tool', ...tool }) as AgentBlock
+  const blocks = agent.blocks || (agent.blocks = [])
+  blocks.push(next)
+  agent.streaming = true
+  return next as AgentToolItem
+}
+
+/** 查找当前回合中最近的同名 pending 工具，兼容连续调用同一工具。 */
+function findPendingToolBlock(agent: StreamItem, name: unknown): AgentToolItem | undefined {
+  const blocks = agent.blocks || []
+  return [...blocks].reverse().find(
+    (block) => block.type === 'tool' && block.tool === name && block.status === 'pending',
+  ) as AgentToolItem | undefined
+}
+
+/** 把工具生成的媒体结果插入当前 ReAct 回合，保持其位于工具结果之后。 */
+function appendMediaBlock(agent: StreamItem, media: StreamItem) {
+  const blocks = agent.blocks || (agent.blocks = [])
+  blocks.push(reactive({
+    type: 'media',
+    mediaKind: media.mediaKind,
+    contentUrl: media.contentUrl,
+    filename: media.filename,
+    fileId: media.fileId,
+    noAnim: media.noAnim,
+  }) as AgentBlock)
 }
 
 /** 判断当前成员是否是待确认卡的唯一作者；兼容迁移前无作者字段的历史卡。 */
@@ -1757,7 +1905,7 @@ function finishCancelledTask(taskId: string) {
 const REDUCED_MOTION = typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
 
 /** S3 打字机推进：26ms 追加 2 字直至逼近 fullText；计时器登记为 flow，暂停/切会话即中断。 */
-function pumpThought(item: StreamItem) {
+function pumpThought(item: ThoughtLike) {
   const full = item.fullText ?? item.text ?? ''
   if (REDUCED_MOTION) { item.text = full; return }
   if (item.done || item.streaming) return
@@ -1775,7 +1923,7 @@ function pumpThought(item: StreamItem) {
 }
 
 /** S3 思考卡收尾：补齐全文 → 200ms 置 done → 再 800ms 自动折叠（对齐原型 finishThought 两段延迟）。 */
-function finishThought(item: StreamItem | AgentThoughtItem) {
+function finishThought(item: ThoughtLike) {
   if (item.done) return
   item.text = item.fullText ?? item.text ?? ''
   if ('streaming' in item) item.streaming = false
@@ -1789,8 +1937,8 @@ function finishThought(item: StreamItem | AgentThoughtItem) {
 function finishLiveThought() {
   for (let i = events.value.length - 1; i >= 0; i--) {
     const item = events.value[i]
-    if (item.type === 'agent' && item.thoughts && item.thoughts.length) {
-      const activeTh = [...item.thoughts].reverse().find((t) => !t.done)
+    if (item.type === 'agent') {
+      const activeTh = getActiveThoughtBlock(item)
       if (activeTh) {
         finishThought(activeTh)
         return
@@ -1805,8 +1953,8 @@ function finishLiveThought() {
 function finishBufferThought(buf: StreamItem[]) {
   for (let i = buf.length - 1; i >= 0; i--) {
     const item = buf[i]
-    if (item.type === 'agent' && item.thoughts && item.thoughts.length) {
-      const activeTh = [...item.thoughts].reverse().find((t) => !t.done)
+    if (item.type === 'agent') {
+      const activeTh = getActiveThoughtBlock(item)
       if (activeTh) {
         activeTh.done = true
         activeTh.collapsed = true
@@ -2030,6 +2178,7 @@ function handleSendClick() {
   if (isGenerating.value) {
     // /stop：只停本轮生成，走 user_message，不清 queued 任务
     flowTimers.forEach(id => clearTracked(id))
+    finishLiveThought()
     events.value.forEach(ev => { if (ev.type === 'thought' && !ev.done) finishThought(ev) })
     if (agentWs?.isConnected) {
       agentWs.sendUserMessage('/stop', [], createClientMessageId())
@@ -2144,29 +2293,26 @@ function simulateAgentFlow(text: string, files: any[]) {
 }
 
 function runBenchmarkFlow(withStress = false) {
-  const th: StreamItem = {
-    type: 'thought',
+  const turn = getOrCreateTurnAgent(events.value)
+  const th = appendThoughtBlock(turn, {
     text: '',
     fullText: '正在梳理评测目标：对比被测协议档在同一数据集上的规则分。先列出可用协议档与数据集…',
     done: false,
     collapsed: false,
-  }
-  events.value.push(th)
+  })
   pumpThought(th)
   scrollToBottom()
 
   trackTimeout(() => {
     finishThought(th)
-    events.value.push({
-      type: 'tool',
+    appendToolBlock(turn, {
       tool: 'model.list',
       args: {},
       result: { items: availableProfiles.value },
       status: 'ok',
       open: false,
     })
-    events.value.push({
-      type: 'tool',
+    appendToolBlock(turn, {
       tool: 'dataset.list',
       args: {},
       result: { items: availableDatasets.value },
@@ -2194,21 +2340,19 @@ function runBenchmarkFlow(withStress = false) {
 }
 
 function runRagFlow() {
-  const th: StreamItem = {
-    type: 'thought',
+  const turn = getOrCreateTurnAgent(events.value)
+  const th = appendThoughtBlock(turn, {
     text: '',
     fullText: '目标是评估知识库检索质量。需要知识库与黄金 QA，先列出现有库…',
     done: false,
     collapsed: false,
-  }
-  events.value.push(th)
+  })
   pumpThought(th)
   scrollToBottom()
 
   trackTimeout(() => {
     finishThought(th)
-    events.value.push({
-      type: 'tool',
+    appendToolBlock(turn, {
       tool: 'kb.list',
       args: {},
       result: { items: availableKbs.value },
@@ -2237,14 +2381,13 @@ function runRagFlow() {
 }
 
 function runTestCaseFlow(file?: any) {
-  const th: StreamItem = {
-    type: 'thought',
+  const turn = getOrCreateTurnAgent(events.value)
+  const th = appendThoughtBlock(turn, {
     text: '',
     fullText: '解析输入材料，按正向 / 反向 / 边界 / 等价 / 状态 / 场景策略生成用例，规模按 PRD 复杂度上限控制…',
     done: false,
     collapsed: false,
-  }
-  events.value.push(th)
+  })
   pumpThought(th)
   scrollToBottom()
 
@@ -2330,8 +2473,8 @@ function handleConfirmAck(item: StreamItem, confirmed: boolean) {
 
 
   // Mock 模式：本地模拟入队与进度，便于无后端环境演示。
-  events.value.push({
-    type: 'tool',
+  const turn = getOrCreateTurnAgent(events.value)
+  appendToolBlock(turn, {
     tool: 'task.create',
     args: item.card,
     result: { task_id: 't-' + Date.now().toString(16).slice(4), status: 'queued' },
@@ -2493,20 +2636,18 @@ function handleInterpretReport(reportId: string) {
     return
   }
 
-  const th: StreamItem = {
-    type: 'thought',
+  const turn = getOrCreateTurnAgent(events.value)
+  const th = appendThoughtBlock(turn, {
     text: '',
     fullText: `读取报告 ${reportId} 的指标摘要与失败样本，进行关键退化原因归因…`,
     done: false,
     collapsed: false,
-  }
-  events.value.push(th)
+  })
   pumpThought(th)
 
   trackTimeout(() => {
     finishThought(th)
-    events.value.push({
-      type: 'tool',
+    appendToolBlock(turn, {
       tool: 'report.get',
       args: { report_id: reportId },
       result: { scores: [{ profile: 'gpt-test', score: 0.86 }, { profile: 'claude-x', score: 0.79 }] },
@@ -2527,34 +2668,31 @@ function handleFailDemo() {
     text: '对比一下 gpt-test 和 claude-x 在 smoke-20 上的表现',
   })
   setCurrentGenerating(true)
-  const th: StreamItem = {
-    type: 'thought',
+  const turn = getOrCreateTurnAgent(events.value)
+  const th = appendThoughtBlock(turn, {
     text: '',
     fullText: '目标明确：Benchmark 对比。准备创建任务并检查协议档连通性…',
     done: false,
-  }
-  events.value.push(th)
+  })
   pumpThought(th)
   scrollToBottom(true)
 
   trackTimeout(() => {
     finishThought(th)
-    const toolItem: StreamItem = {
-      type: 'tool',
+    const toolItem = appendToolBlock(turn, {
       tool: 'task.create',
       args: { kind: 'benchmark', profile_ids: ['p-gpt', 'p-claude'], dataset_id: 'ds-smoke' },
       status: 'pending',
-    }
-    events.value.push(toolItem)
+    })
 
     trackTimeout(() => {
       toolItem.status = 'fail'
       toolItem.result = 'UPSTREAM 502: bad gateway（gpt-test 网关超时）'
-      events.value.push({
+      turn.blocks!.push(reactive({
         type: 'error',
         code: 'UPSTREAM',
         message: '被测协议档 gpt-test 返回 502，任务未入队',
-      })
+      }) as AgentBlock)
       pushAgentMessage('<p>创建失败：<b>UPSTREAM 502</b>（gpt-test 网关错误），与模型能力无关。建议先到「协议档」页对 gpt-test 做连通性检查，恢复后重新发送目标即可。</p>')
       setCurrentGenerating(false)
       scrollToBottom()
@@ -2657,8 +2795,7 @@ async function handleSelectAgentModel(key: string) {
   }
 }
 
-/** F4 会话历史回放：拉取历史 user/assistant 消息与事件流，严格按时间序与优先级排列
- *  保证思考卡 (ThoughtCard) 与 ToolCall 卡 (ToolCard) 永远在 AI 回复内容 (Agent Message) 的上方。 */
+/** F4 会话历史回放：按回合容器恢复模型头部与 ReAct 内容块的顺序。 */
 async function loadSessionHistory(sid: string): Promise<number> {
   if (deletingSessionIds.has(sid)) return 0
   try {
@@ -2854,7 +2991,57 @@ async function loadSessionHistory(sid: string): Promise<number> {
       return a.priority - b.priority
     })
 
-    const replay = rawList.map((x) => x.item)
+    // 4. 将事件块折叠进同一助手回合，模型名称和时间只渲染一次。
+    const replay: StreamItem[] = []
+    let activeTurn: StreamItem | null = null
+    const ensureReplayTurn = (source: StreamItem, time: number): StreamItem => {
+      if (!activeTurn) {
+        activeTurn = getOrCreateTurnAgent(replay, {
+          providerLogoKey: source.providerLogoKey,
+          modelName: source.modelName,
+          profileName: source.profileName,
+          createdAt: source.createdAt || (time > 0 ? new Date(time).toISOString() : undefined),
+          noAnim: true,
+        })
+        activeTurn.noAnim = true
+        activeTurn.streaming = false
+      }
+      return activeTurn
+    }
+
+    for (const timeline of rawList) {
+      const item = timeline.item
+      if (item.type === 'user') {
+        replay.push(item)
+        activeTurn = null
+        continue
+      }
+      if (item.type === 'thought' || item.type === 'tool' || item.type === 'media') {
+        const turn = ensureReplayTurn(item, timeline.time)
+        turn.blocks!.push(item as unknown as AgentBlock)
+        continue
+      }
+      if (item.type === 'agent') {
+        const turn = ensureReplayTurn(item, timeline.time)
+        turn.providerLogoKey = item.providerLogoKey || turn.providerLogoKey
+        turn.modelName = item.modelName || turn.modelName
+        turn.profileName = item.profileName || turn.profileName
+        turn.createdAt = item.createdAt || turn.createdAt
+        if (item.raw || item.text) {
+          const block = getOrCreateAssistantBlock(turn)
+          block.raw = item.raw || item.text || ''
+          block.text = item.text || item.raw || ''
+          block.latency_ms = item.latency_ms
+          block.streaming = false
+        }
+        turn.streaming = false
+        continue
+      }
+      replay.push(item)
+      if (item.type === 'confirm' || item.type === 'clarify' || item.type === 'error' || item.type === 'report') {
+        activeTurn = null
+      }
+    }
 
     if (history.pending_confirm) {
       const card = normalizeConfirmCard({
@@ -3143,7 +3330,13 @@ function turnStreamingAgent(list: StreamItem[]): StreamItem | undefined {
 function stopFlowAnimations() {
   flowTimers.forEach((id) => clearTracked(id))
   events.value.forEach((item) => {
-    if (item.type === 'agent' && item.streaming) item.streaming = false
+    if (item.type === 'agent') {
+      if (item.streaming) item.streaming = false
+      for (const block of item.blocks || []) {
+        if (block.type === 'thought' && !block.done) block.streaming = false
+        if (block.type === 'assistant' && block.streaming) block.streaming = false
+      }
+    }
     if (item.type === 'thought' && item.streaming) item.streaming = false
   })
 }
@@ -3204,12 +3397,11 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
       break
     }
     case 'thought': {
+      const agent = getOrCreateTurnAgent(buf)
       if (p.stream === 'think_final') {
         const fullText = String(p.text || '')
         if (!fullText) break
-        const agent = getOrCreateTurnAgent(buf)
-        if (!agent.thoughts) agent.thoughts = []
-        const target = [...agent.thoughts].reverse().find((e) => !e.done)
+        const target = getActiveThoughtBlock(agent)
         if (target) {
           target.text = fullText
           target.fullText = fullText
@@ -3217,7 +3409,7 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
           target.collapsed = true
           target.streamThink = true
         } else {
-          agent.thoughts.push({
+          appendThoughtBlock(agent, {
             text: fullText,
             fullText,
             done: true,
@@ -3230,11 +3422,9 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
       if (p.stream === 'think') {
         const delta = String(p.text || '')
         if (!delta) break
-        const agent = getOrCreateTurnAgent(buf)
-        if (!agent.thoughts) agent.thoughts = []
-        const target = [...agent.thoughts].reverse().find((e) => !e.done)
+        const target = getActiveThoughtBlock(agent)
         if (target) target.text = (target.text || '') + delta
-        else agent.thoughts.push({ text: delta, done: false, collapsed: false, streamThink: true })
+        else appendThoughtBlock(agent, { text: delta, done: false, collapsed: false, streamThink: true })
         markGenerating(sid, true)
         rt.harnessStage = rt.harnessStage || 'plan'
         break
@@ -3243,10 +3433,11 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
         // 兼容旧服务端事件：新协议使用 assistant_delta，历史回放期间仍可收到旧 chunk。
         const delta = String(p.text || '')
         if (!delta) break
-        const target = getOrCreateTurnAgent(buf)
+        const target = getOrCreateAssistantBlock(agent)
         target.raw = (target.raw || '') + delta
         target.text = renderBubbleHtml(target.raw)
         target.streaming = true
+        agent.streaming = true
         markGenerating(sid, true)
         break
       }
@@ -3256,9 +3447,7 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
         // 每轮 Harness 阶段单独一张卡（规划 / MCP ReAct / 复核），禁止叠进上一轮。
         finishBufferThought(buf)
         rt.harnessStage = stage
-        const agent = getOrCreateTurnAgent(buf)
-        if (!agent.thoughts) agent.thoughts = []
-        agent.thoughts.push({
+        appendThoughtBlock(agent, {
           text,
           done: false,
           collapsed: false,
@@ -3275,30 +3464,34 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
     case 'assistant_delta': {
       const delta = String(p.text || '')
       if (!delta) break
-      const target = getOrCreateTurnAgent(buf)
+      const agent = getOrCreateTurnAgent(buf)
+      const target = getOrCreateAssistantBlock(agent)
       target.raw = (target.raw || '') + delta
       target.text = renderBubbleHtml(target.raw)
       target.streaming = true
+      agent.streaming = true
       markGenerating(sid, true)
       break
     }
     case 'assistant_message': {
       const text = String(p.text || '')
       finishBufferThought(buf)
-      const target = getOrCreateTurnAgent(buf)
+      const targetAgent = getOrCreateTurnAgent(buf)
+      const target = getOrCreateAssistantBlock(targetAgent)
       if (text) {
         target.raw = text
         target.text = renderBubbleHtml(text)
         target.streaming = false
         if (typeof p.reply_latency_ms === 'number') target.latency_ms = p.reply_latency_ms
-        if (p.model_name) target.modelName = p.model_name
-        if (p.profile_name) target.profileName = p.profile_name
+        if (p.model_name) targetAgent.modelName = p.model_name
+        if (p.profile_name) targetAgent.profileName = p.profile_name
         if (p.provider || p.model_name) {
-          target.providerLogoKey = getProviderLogoKey({ name: p.provider, model: p.model_name || target.modelName })
+          targetAgent.providerLogoKey = getProviderLogoKey({ name: p.provider, model: p.model_name || targetAgent.modelName })
         }
       } else {
         target.streaming = false
       }
+      targetAgent.streaming = false
       markGenerating(sid, false)
       rt.harnessStage = ''
       void refreshContextMeter(sid)
@@ -3307,6 +3500,8 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
     case 'response.completed':
     case 'done': {
       finishBufferThought(buf)
+      const agent = getCurrentTurnAgent(buf)
+      if (agent) agent.streaming = false
       const orphan = turnStreamingAgent(buf)
       if (orphan) orphan.streaming = false
       markGenerating(sid, false)
@@ -3317,10 +3512,16 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
       markGenerating(sid, true)
       rt.harnessStage = 'react'
       finishBufferThought(buf)
-      buf.push({ type: 'tool', tool: p.name, args: p.arguments, status: 'pending', open: true })
+      appendToolBlock(getOrCreateTurnAgent(buf), {
+        tool: p.name,
+        args: p.arguments,
+        status: 'pending',
+        open: true,
+      })
       break
     case 'tool_result': {
-      const target = [...buf].reverse().find((x) => x.type === 'tool' && x.tool === p.name)
+      const agent = getCurrentTurnAgent(buf)
+      const target = agent ? findPendingToolBlock(agent, p.name) : undefined
       if (target) {
         target.result = p.ok ? p.data : p.error
         target.status = p.ok ? 'ok' : 'fail'
@@ -3335,7 +3536,7 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
       }
       if (p.ok) {
         const media = mediaItemFromToolResult(p.name, p.data)
-        if (media) buf.push(media)
+        if (media && agent) appendMediaBlock(agent, media)
         hydrateToolResult(p.name, p.data)
       }
       if (p.ok && p.name === 'task.create') {
@@ -3503,11 +3704,10 @@ function handleWsEvent(ev: WsServerEvent) {
     }
     case 'thought': {
       const agent = getOrCreateTurnAgent(events.value)
-      if (!agent.thoughts) agent.thoughts = []
       if (p.stream === 'think_final') {
         const fullText = String(p.text || '')
         if (!fullText) break
-        const target = [...agent.thoughts].reverse().find((e) => !e.done)
+        const target = getActiveThoughtBlock(agent)
         if (target) {
           target.text = fullText
           target.fullText = fullText
@@ -3515,13 +3715,13 @@ function handleWsEvent(ev: WsServerEvent) {
           target.collapsed = true
           target.streamThink = true
         } else {
-          agent.thoughts.push(reactive({
+          appendThoughtBlock(agent, {
             text: fullText,
             fullText,
             done: true,
             collapsed: true,
             streamThink: true,
-          }))
+          })
         }
         scrollToBottom()
         break
@@ -3530,12 +3730,12 @@ function handleWsEvent(ev: WsServerEvent) {
       if (p.stream === 'think') {
         const delta = String(p.text || '')
         if (delta) {
-          const target = [...agent.thoughts].reverse().find((e) => !e.done)
+          const target = getActiveThoughtBlock(agent)
           if (target) {
             target.text = (target.text || '') + delta
           } else {
             console.debug('[Agent] 思考链增量')
-            agent.thoughts.push(reactive({ text: delta, done: false, collapsed: false, streamThink: true }))
+            appendThoughtBlock(agent, { text: delta, done: false, collapsed: false, streamThink: true })
           }
           scrollToBottom()
           setCurrentGenerating(true)
@@ -3546,8 +3746,10 @@ function handleWsEvent(ev: WsServerEvent) {
       if (p.stream === 'chunk') {
         const delta = String(p.text || '')
         if (delta) {
-          agent.raw = (agent.raw || '') + delta
-          agent.text = renderBubbleHtml(agent.raw)
+          const target = getOrCreateAssistantBlock(agent)
+          target.raw = (target.raw || '') + delta
+          target.text = renderBubbleHtml(target.raw)
+          target.streaming = true
           agent.streaming = true
           scrollToBottom()
           setCurrentGenerating(true)
@@ -3562,14 +3764,14 @@ function handleWsEvent(ev: WsServerEvent) {
         finishLiveThought()
         harnessStage.value = stage
         setCurrentGenerating(true)
-        agent.thoughts.push(reactive({
+        appendThoughtBlock(agent, {
           text,
           done: false,
           collapsed: false,
           latency_ms: p.latency_ms,
           stage,
           skill_id: p.skill_id,
-        }))
+        })
         console.log('%c[Agent] 💡 阶段思考卡:', 'color: #10b981; font-weight: bold;', {
           stage,
           skill: p.skill_id || '-',
@@ -3584,10 +3786,12 @@ function handleWsEvent(ev: WsServerEvent) {
     case 'assistant_delta': {
       const delta = String(p.text || '')
       if (!delta) break
-      const target = getOrCreateTurnAgent(events.value)
+      const agent = getOrCreateTurnAgent(events.value)
+      const target = getOrCreateAssistantBlock(agent)
       target.raw = (target.raw || '') + delta
       target.text = renderBubbleHtml(target.raw)
       target.streaming = true
+      agent.streaming = true
       scrollToBottom()
       setCurrentGenerating(true)
       break
@@ -3595,20 +3799,22 @@ function handleWsEvent(ev: WsServerEvent) {
     case 'assistant_message': {
       const text = String(p.text || '')
       finishLiveThought()
-      const target = getOrCreateTurnAgent(events.value)
+      const targetAgent = getOrCreateTurnAgent(events.value)
+      const target = getOrCreateAssistantBlock(targetAgent)
       if (text) {
         target.raw = text
         target.text = renderBubbleHtml(text)
         target.streaming = false
         if (typeof p.reply_latency_ms === 'number') target.latency_ms = p.reply_latency_ms
-        if (p.model_name) target.modelName = p.model_name
-        if (p.profile_name) target.profileName = p.profile_name
+        if (p.model_name) targetAgent.modelName = p.model_name
+        if (p.profile_name) targetAgent.profileName = p.profile_name
         if (p.provider || p.model_name) {
-          target.providerLogoKey = getProviderLogoKey({ name: p.provider, model: p.model_name || target.modelName })
+          targetAgent.providerLogoKey = getProviderLogoKey({ name: p.provider, model: p.model_name || targetAgent.modelName })
         }
       } else {
         target.streaming = false
       }
+      targetAgent.streaming = false
       setCurrentGenerating(false)
       harnessStage.value = ''
       if (currentSessionId.value) void refreshContextMeter(currentSessionId.value)
@@ -3633,13 +3839,12 @@ function handleWsEvent(ev: WsServerEvent) {
       harnessStage.value = 'react'
       lastToolTitle.value = getToolDisplayName(p.name)
       setCurrentGenerating(true)
-      events.value.push(reactive({
-        type: 'tool',
+      appendToolBlock(getOrCreateTurnAgent(events.value), {
         tool: p.name,
         args: p.arguments,
         status: 'pending',
         open: true,
-      }))
+      })
       scrollToBottom()
       break
     }
@@ -3649,7 +3854,8 @@ function handleWsEvent(ev: WsServerEvent) {
         ok: Boolean(p.ok),
         latency: `${p.latency_ms || 0}ms`,
       })
-      const target = [...events.value].reverse().find(x => x.type === 'tool' && x.tool === p.name)
+      const agent = getCurrentTurnAgent(events.value)
+      const target = agent ? findPendingToolBlock(agent, p.name) : undefined
       if (target) {
         target.result = p.ok ? p.data : p.error
         target.status = p.ok ? 'ok' : 'fail'
@@ -3664,7 +3870,7 @@ function handleWsEvent(ev: WsServerEvent) {
       }
       if (p.ok) {
         const media = mediaItemFromToolResult(p.name, p.data)
-        if (media) events.value.push(reactive(media))
+        if (media && agent) appendMediaBlock(agent, media)
         hydrateToolResult(p.name, p.data)
         if (p.name === 'task.cancel' && p.data?.task_id) {
           finishCancelledTask(p.data.task_id)
