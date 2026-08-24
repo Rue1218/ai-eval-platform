@@ -40,3 +40,23 @@ def test_worker_protocol_url_accepts_optional_v1_suffix(monkeypatch, protocol_na
     )
 
     assert seen["url"] == f"https://upstream.example.com{endpoint}"
+
+
+def test_worker_protocol_disables_thinking_on_aliyun_maas(monkeypatch):
+    """阿里云 MaaS 网关的推理模型默认输出 thinking 块，小预算下正文为空；
+    与 xiaomimimo 一致，显式关闭思考保证评测与裁判能拿到 text 正文。"""
+    seen: dict = {}
+
+    def fake_post(url, body, headers, timeout_s):
+        seen["body"] = body
+        return {"content": [{"type": "text", "text": "ok"}]}
+
+    monkeypatch.setattr(protocol, "_post_json", fake_post)
+    protocol.call_protocol(
+        protocol="anthropic_messages",
+        base_url="https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic",
+        model="glm-5.2",
+        api_key="sk-test",
+        messages=[{"role": "user", "content": "ping"}],
+    )
+    assert seen["body"]["thinking"] == {"type": "disabled"}

@@ -128,8 +128,9 @@ def call_protocol(
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
-        # mimo-v2.5 系列是推理模型，与 api 侧一致：显式关闭思考提速并避免正文为空
-        if "xiaomimimo" in base:
+        # 推理模型默认输出 thinking 块，小预算下会吃掉全部输出 tokens 导致正文为空。
+        # 与 api 侧一致：xiaomimimo 系列与阿里云 MaaS 网关（deepseek-v4 / glm 等）显式关闭思考提速并避免正文为空
+        if "xiaomimimo" in base or "maas.aliyuncs.com" in base:
             body["thinking"] = {"type": "disabled"}
         headers["Authorization"] = f"Bearer {api_key}"
 
@@ -150,6 +151,10 @@ def call_protocol(
         }
         if system:
             body["system"] = system
+        # 推理模型默认输出 thinking 块，小预算下会吃掉全部输出 tokens 导致正文为空。
+        # 阿里云 MaaS 网关（deepseek-v4 / glm 等）显式关闭思考，保证评测正文非空
+        if "maas.aliyuncs.com" in base:
+            body["thinking"] = {"type": "disabled"}
         headers["x-api-key"] = api_key
         headers["anthropic-version"] = anthropic_version or "2023-06-01"
 

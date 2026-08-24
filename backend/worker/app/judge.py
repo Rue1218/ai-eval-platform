@@ -7,8 +7,8 @@
 - ``judge_single_sample`` 调 ``call_protocol`` 完成单样本裁判，失败样本
   ``judge_score=None`` 且 ``error`` 非空，与目标调用失败语义一致。
 
-裁判调用参数：``temperature=0`` 保证可复现；``max_tokens`` 收紧为 100
-（只输出 JSON 分数）；``timeout_s`` 沿用任务 run 配置。
+裁判调用参数：``temperature=0`` 保证可复现；``max_tokens`` 收紧（默认 300，
+只输出 JSON 分数）；``timeout_s`` 沿用任务 run 配置。
 """
 
 from __future__ import annotations
@@ -20,8 +20,9 @@ from typing import Any
 
 from .protocol import ProtocolCallError, call_protocol
 
-# 裁判默认输出上限：只允许 JSON 分数对象，无需长文本
-JUDGE_MAX_TOKENS = 100
+# 裁判默认输出上限：只允许 JSON 分数对象，无需长文本。
+# 推理模型即使禁用 thinking 也可能输出稍长理由，留 300 token 余量
+JUDGE_MAX_TOKENS = 300
 
 JUDGE_SYSTEM_PROMPT = """你是严谨的问答质量评审员。请根据标准参考答案，对模型回答评 0-100 的整数分。
 评分锚点：

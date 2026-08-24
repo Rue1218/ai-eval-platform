@@ -151,7 +151,7 @@ def test_build_judge_call_kwargs():
     )
     assert kwargs["system"]
     assert kwargs["temperature"] == 0
-    assert kwargs["max_tokens"] == 100
+    assert kwargs["max_tokens"] == 300
     assert kwargs["timeout_s"] == 15.0
 
 
