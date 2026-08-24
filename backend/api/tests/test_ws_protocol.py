@@ -42,7 +42,7 @@ async def test_user_echo_uses_user_message_event(monkeypatch):
         emitted.append(event)
         return True
 
-    async def fake_run_turn(*_args):
+    async def fake_run_turn(*_args, **_kwargs):
         return None
 
     monkeypatch.setattr(ws, "_emit_persistent", fake_emit)

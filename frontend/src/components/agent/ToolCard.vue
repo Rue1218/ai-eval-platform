@@ -31,6 +31,9 @@
 
       <div class="tool-meta-right">
         <span v-if="formattedLatency" class="tool-latency mono">{{ formattedLatency }}</span>
+        <span v-if="redacted" class="tool-flag">已脱敏</span>
+        <span v-if="truncated" class="tool-flag">已截断</span>
+        <span v-if="source" class="tool-source mono" :title="source">{{ source }}</span>
         <span class="tool-state-text" :class="statusClass">
           {{ stateText }}
         </span>
@@ -78,6 +81,9 @@ const props = withDefaults(
     result?: any
     status?: 'pending' | 'ok' | 'fail'
     latencyMs?: number
+    truncated?: boolean
+    source?: string
+    redacted?: boolean
     defaultOpen?: boolean
     noAnim?: boolean
   }>(),
@@ -141,6 +147,9 @@ const toolChineseName = computed(() => {
 })
 
 const formattedLatency = computed(() => formatLatency(props.latencyMs))
+const truncated = computed(() => props.truncated === true)
+const source = computed(() => props.source || '')
+const redacted = computed(() => props.redacted === true)
 const isAudioOutput = computed(() => ['audio.speech_synthesis', 'audio.voiceclone'].includes(props.tool))
 
 const playUrl = computed(() => {
@@ -256,6 +265,18 @@ function formatJson(val: any): string {
   background: var(--bg-elevated);
   padding: 1px 6px;
   border-radius: 4px;
+}
+.tool-flag,
+.tool-source {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  background: var(--bg-elevated);
+  padding: 1px 5px;
+  border-radius: 4px;
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .tool-state-text {
   font-size: 12px;

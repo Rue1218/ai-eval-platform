@@ -1,7 +1,7 @@
 """基于 LangGraph Agent 的 WebSocket 单轮对话入口。
 
-本路由只负责短票鉴权、会话事件持久化和流式传输；Agent 图负责单轮模型调用。
-工具、人工确认、长任务和 Harness 运行时暂不在本轮恢复，避免旧框架重新混入。
+本路由负责短票鉴权、会话事件持久化和流式传输；Agent 图负责单轮模型调用与
+短工具 ReAct，长任务仍通过任务队列交给 Worker，避免耗时执行阻塞 API 进程。
 """
 
 from __future__ import annotations
@@ -44,7 +44,10 @@ logger = logging.getLogger("ai-eval.agent-ws")
 # 当前为 InMemoryCheckpointer（单副本进程内 dict + 容量上限），PG 引擎
 # （PgCheckpointer）接入后由 get_default_checkpointer() 无感切换；
 # 每回合独立 thread_id 隔离回合，检查点不跨回合复用。
-_AGENT = LangGraphAgent(checkpointer=get_default_checkpointer())
+_AGENT = LangGraphAgent(
+    checkpointer=get_default_checkpointer(),
+    db_factory=SessionLocal,
+)
 _USED_WS_TICKETS: set[str] = set()
 _TICKET_LOCK = threading.Lock()
 # 会话级 abort 事件注册表（/stop 即时中断；单副本进程内 dict，见 AGENTS.md）
@@ -503,6 +506,7 @@ async def _run_turn(
     state: _ConnectionState,
     abort: asyncio.Event,
     *,
+    user_id: str,
     resume: dict | None = None,
 ) -> None:
     """后台执行一轮 LangGraph Agent，并把图输出统一投影为 WS 事件。
@@ -544,7 +548,10 @@ async def _run_turn(
                 # 每回合独立 thread_id：检查点按回合隔离（M3 阶段 3）
                 "thread_id": thread_id,
                 "abort": {"should_abort": abort.is_set},
-                "credentials": {"api_key": config.api_key or ""},
+                "credentials": {
+                    "api_key": config.api_key or "",
+                    "user_id": user_id,
+                },
                 "session": {"id": session_id},
                 # 沙箱引擎与资源限制（bash 工具经 bwrap 执行；engine="off" 时 fail-closed）
                 "sandbox": {
@@ -784,6 +791,7 @@ async def _handle_clarify_reply(
             websocket,
             state,
             abort,
+            user_id=session.user_id,
             resume={"thread_id": pending["thread_id"], "answer": answer.strip()},
         ),
         name=f"agent-turn-{session.id}",
@@ -865,7 +873,7 @@ async def _handle_user_message(
     abort = asyncio.Event()
     _SESSION_ABORTS[session.id] = abort
     task = asyncio.create_task(
-        _run_turn(session.id, websocket, state, abort),
+        _run_turn(session.id, websocket, state, abort, user_id=user.id),
         name=f"agent-turn-{session.id}",
     )
     task.add_done_callback(

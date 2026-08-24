@@ -208,6 +208,9 @@
               :result="item.result"
               :status="item.status || 'pending'"
               :latency-ms="item.latency_ms"
+              :truncated="item.truncated"
+              :source="item.source"
+              :redacted="item.redacted"
               :default-open="item.status === 'pending' || item.open"
               :no-anim="item.noAnim"
             />
@@ -582,6 +585,9 @@
                       :result="tl.result"
                       :status="tl.status || 'pending'"
                       :latency-ms="tl.latency_ms"
+                      :truncated="tl.truncated"
+                      :source="tl.source"
+                      :redacted="tl.redacted"
                       :default-open="tl.status === 'pending' || tl.open"
                       :no-anim="tl.noAnim"
                     />
@@ -1205,6 +1211,9 @@ export interface AgentToolItem {
   result?: any
   status?: 'pending' | 'ok' | 'fail'
   latency_ms?: number
+  truncated?: boolean
+  source?: string
+  redacted?: boolean
   open?: boolean
   noAnim?: boolean
 }
@@ -1219,6 +1228,9 @@ interface StreamItem {
   options?: string[] | null
   collapsed?: boolean
   latency_ms?: number
+  truncated?: boolean
+  source?: string
+  redacted?: boolean
   stage?: 'plan' | 'react' | 'reflect'
   skill_id?: string
   // 推理思考链标记：由 stream=think 瞬态增量帧创建，终帧只结束折叠、不得覆盖其内容
@@ -2814,6 +2826,9 @@ async function loadSessionHistory(sid: string): Promise<number> {
           foundTool.result = p.ok ? p.data : p.error
           foundTool.status = p.ok ? 'ok' : 'fail'
           foundTool.latency_ms = p.latency_ms
+          foundTool.truncated = p.truncated === true
+          foundTool.source = typeof p.source === 'string' ? p.source : undefined
+          foundTool.redacted = p.redacted === true
           if (
             p.ok
             && ['audio.speech_recognition', 'audio.speech_synthesis', 'audio.voiceclone'].includes(p.name)
@@ -3369,6 +3384,9 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
         target.result = p.ok ? p.data : p.error
         target.status = p.ok ? 'ok' : 'fail'
         if (p.latency_ms !== undefined) target.latency_ms = p.latency_ms
+        target.truncated = p.truncated === true
+        target.source = typeof p.source === 'string' ? p.source : undefined
+        target.redacted = p.redacted === true
         if (
           p.ok
           && ['audio.speech_recognition', 'audio.speech_synthesis', 'audio.voiceclone'].includes(p.name)
@@ -3698,6 +3716,9 @@ function handleWsEvent(ev: WsServerEvent) {
           target.latency_ms = p.latency_ms
           turnLatencyMs.value += p.latency_ms
         }
+        target.truncated = p.truncated === true
+        target.source = typeof p.source === 'string' ? p.source : undefined
+        target.redacted = p.redacted === true
         target.open = p.ok && ['audio.speech_recognition', 'audio.speech_synthesis', 'audio.voiceclone'].includes(p.name)
       }
       if (p.ok) {
