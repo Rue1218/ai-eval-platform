@@ -23,6 +23,7 @@ from .routers import (
     slash_commands,
     tasks,
     users,
+    workspaces,
     ws,
 )
 from .security import hash_password
@@ -106,6 +107,7 @@ app.include_router(datasets.folders_router)
 app.include_router(cases.router)
 app.include_router(cases.folders_router)
 app.include_router(admin.router)
+app.include_router(workspaces.router)
 app.include_router(dispatch.router)
 app.include_router(mcp.router)
 app.include_router(reports.router)

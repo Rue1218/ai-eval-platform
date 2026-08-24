@@ -286,6 +286,12 @@ const IconUsers = () =>
     h('path', { d: 'M16 8.5h5M18.5 6v5' }),
   ])
 
+const IconWorkspaces = () =>
+  h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round' }, [
+    h('path', { d: 'M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2Z' }),
+    h('path', { d: 'M9 13h6M12 10v6' }),
+  ])
+
 const evalRoutes = computed(() => {
   // 两类评测共享智能体、调度、任务、报告和用例；资产入口则严格随顶栏模式切换。
   const modeAsset = modeStore.mode === 'rag'
@@ -306,6 +312,7 @@ const adminRoutes = [
   { path: '/admin/profiles', label: '协议档', icon: IconProfiles, t: 'var(--t-profiles)', c: 'var(--c-profiles)' },
   { path: '/admin/stress', label: '压测治理', icon: IconStress, t: 'var(--t-stress)', c: 'var(--c-stress)' },
   { path: '/admin/users', label: '账号', icon: IconUsers, t: 'var(--t-users)', c: 'var(--c-users)' },
+  { path: '/admin/workspaces', label: '工作区', icon: IconWorkspaces, t: 'var(--t-workspaces)', c: 'var(--c-workspaces)' },
 ]
 
 /** 当前路由激活状态匹配判定 */

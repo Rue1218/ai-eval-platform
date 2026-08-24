@@ -713,3 +713,43 @@ export interface WorkflowTemplate {
   edges: WorkflowEdge[]
 }
 
+
+// ─── 管理端 · 工作区（会话 → 沙箱文件夹） ───
+export interface WorkspaceFolder {
+  name: string
+  path: string
+  exists: boolean
+  file_count: number
+  total_bytes: number
+  updated_at?: string | null
+}
+
+export interface WorkspaceSession {
+  session_id: string
+  title: string
+  owner?: string | null
+  visibility: SessionVisibility
+  deleted: boolean
+  created_at?: string | null
+  updated_at?: string | null
+  folder: WorkspaceFolder | null
+}
+
+export interface WorkspaceOverview {
+  root: string
+  items: WorkspaceSession[]
+  orphans: WorkspaceFolder[]
+}
+
+export interface WorkspaceFile {
+  name: string
+  size: number
+  updated_at: string
+}
+
+export interface WorkspaceFileList {
+  session_id: string
+  path: string
+  files: WorkspaceFile[]
+  total: number
+}

@@ -34,6 +34,8 @@ import {
   type AgentSession,
   type SessionHistory,
   type SessionVisibility,
+  type WorkspaceOverview,
+  type WorkspaceFileList,
 } from './types'
 import {
   MOCK_PROFILES,
@@ -1039,6 +1041,23 @@ export const api = {
     },
     async checkRagModel(payload: { target: 'embedding' | 'reranker'; base_url?: string; model?: string; api_key?: string }): Promise<{ ok: boolean; latency_ms?: number; model?: string; message?: string }> {
       const { data } = await http.post('/api/admin/rag-models/check', payload)
+      return data
+    },
+    // 管理端 · 工作区（会话 → 沙箱文件夹）
+    async listWorkspaces(): Promise<WorkspaceOverview> {
+      const { data } = await http.get('/api/admin/workspaces')
+      return data
+    },
+    async listWorkspaceFiles(sessionId: string): Promise<WorkspaceFileList> {
+      const { data } = await http.get(`/api/admin/workspaces/${sessionId}/files`)
+      return data
+    },
+    async deleteWorkspace(sessionId: string): Promise<{ ok: boolean; path: string }> {
+      const { data } = await http.delete(`/api/admin/workspaces/${sessionId}`)
+      return data
+    },
+    async deleteOrphan(folderName: string): Promise<{ ok: boolean; path: string }> {
+      const { data } = await http.delete(`/api/admin/workspaces/orphans/${folderName}`)
       return data
     },
   },

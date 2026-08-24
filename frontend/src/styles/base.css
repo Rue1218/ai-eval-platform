@@ -28,6 +28,7 @@
   --t-profiles: #FEF3C7; --c-profiles: #B45309;
   --t-stress: #FCE7F3;   --c-stress: #BE185D;
   --t-users: #F3F4F6;    --c-users: #4B5563;
+  --t-workspaces: #ECFCCB; --c-workspaces: #3F6212;
 
   /* 字体（规范 §8.3） */
   --font-display: 'Noto Serif SC', 'Space Grotesk', Georgia, serif;
@@ -60,6 +61,7 @@
   --t-profiles: rgba(180, 83, 9, 0.25);  --c-profiles: #FBBF24;
   --t-stress: rgba(190, 24, 93, 0.25);   --c-stress: #F472B6;
   --t-users: rgba(75, 85, 99, 0.25);     --c-users: #9CA3AF;
+  --t-workspaces: rgba(63, 98, 18, 0.25); --c-workspaces: #A3E635;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
