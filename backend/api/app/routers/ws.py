@@ -10,7 +10,6 @@ import asyncio
 import json
 import logging
 import threading
-import time
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -20,9 +19,14 @@ from sqlalchemy.orm import Session
 
 from ..adapters import StreamAborted
 from ..agent import LangGraphAgent
+from ..agent.graph import iter_pending_events
 from ..db import SessionLocal
 from ..errors import AppError, ErrorCode
-from ..llm import ModelConfig, ModelRequest, ModelResponse
+from ..harness.context import recent_window, summarize
+from ..harness.memory import get_default_checkpointer, to_serializable_request, write_summary
+from ..harness.orchestration import handle_confirm_ack
+from ..harness.prompts import build_system_prompt
+from ..llm import ModelConfig, ModelRequest
 from ..models import Message, ProtocolProfile, Setting, User, WsEvent
 from ..models import Session as AgentSession
 from ..security import TOKEN_TYPE_WS, decode_token
@@ -33,9 +37,15 @@ from .profiles import _profile_connection
 router = APIRouter(tags=["ws"])
 logger = logging.getLogger("ai-eval.agent-ws")
 
-_AGENT = LangGraphAgent()
+# 生产 Agent 图：挂载默认 Checkpointer（阶段 3，M3-D4）。
+# 当前为 InMemoryCheckpointer（单副本进程内 dict + 容量上限），PG 引擎
+# （PgCheckpointer）接入后由 get_default_checkpointer() 无感切换；
+# 每回合独立 thread_id 隔离回合，检查点不跨回合复用。
+_AGENT = LangGraphAgent(checkpointer=get_default_checkpointer())
 _USED_WS_TICKETS: set[str] = set()
 _TICKET_LOCK = threading.Lock()
+# 会话级 abort 事件注册表（/stop 即时中断；单副本进程内 dict，见 AGENTS.md）
+_SESSION_ABORTS: dict[str, asyncio.Event] = {}
 
 
 class _ConnectionState:
@@ -318,18 +328,34 @@ def _selected_model_config(db: Session) -> tuple[ModelConfig, ProtocolProfile]:
     return config, profile
 
 
-def _history_messages(db: Session, session_id: str) -> list[dict[str, str]]:
-    """读取最近 20 条用户/助手消息，转换为模型层稳定消息格式。"""
+def _window_messages(db: Session, session_id: str) -> list[dict]:
+    """读取会话消息，经 Harness 窗口算法（CX-1）投影（含 source_id）。
+
+    ``compact_keep_from`` 指定保留起点时截断更早消息；思考/工具/确认/进度
+    事件不进窗口（CX-2）。窗口算法唯一来源为
+    ``app.harness.context.window.recent_window``。
+    """
+    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+    keep_from = session.compact_keep_from if session else None
     rows = (
         db.query(Message)
         .filter(Message.session_id == session_id, Message.role.in_(("user", "assistant")))
         .order_by(Message.created_at.desc(), Message.id.desc())
-        .limit(20)
+        .limit(200)
         .all()
     )
-    return [
-        {"role": row.role, "content": row.content}
+    ordered = [
+        {"role": row.role, "content": row.content, "source_id": row.source_id}
         for row in reversed(rows)
+    ]
+    return recent_window(ordered, limit=20, keep_from=keep_from)
+
+
+def _history_messages(db: Session, session_id: str) -> list[dict[str, str]]:
+    """模型层稳定消息格式（窗口投影，去掉 source_id）。"""
+    return [
+        {"role": item["role"], "content": item["content"]}
+        for item in _window_messages(db, session_id)
     ]
 
 
@@ -355,72 +381,32 @@ def _infer_provider(profile: ProtocolProfile | None) -> str | None:
     return profile.protocol
 
 
-async def _run_turn(
-    session_id: str,
+async def _translate_event(
+    db: Session,
     websocket: WebSocket,
     state: _ConnectionState,
-    abort: asyncio.Event,
+    session_id: str,
+    profile: ProtocolProfile | None,
+    event: dict,
 ) -> None:
-    """后台执行一轮 LangGraph Agent，并把模型流投影为 WS 事件。"""
-    db = SessionLocal()
-    started = time.perf_counter()
-    try:
-        config, profile = _selected_model_config(db)
-        request = ModelRequest.from_messages(
-            config,
-            _history_messages(db, session_id),
-            should_abort=abort.is_set,
-        )
-        thinking: list[str] = []
-        response: ModelResponse | None = None
-        async for event in _AGENT.astream(request):
-            if event.kind == "content" and event.text:
-                await SESSION_CONNECTION_HUB.broadcast_chunk(
-                    session_id,
-                    lambda cursor, text=event.text: _frame(
-                        session_id,
-                        "assistant_delta",
-                        cursor,
-                        {"role": "assistant", "text": text},
-                    ),
-                )
-            elif event.kind == "reasoning" and event.text:
-                thinking.append(event.text)
-                await _send(
-                    websocket,
-                    state,
-                    _frame(
-                        session_id,
-                        "thought",
-                        state.cursor,
-                        {"text": event.text, "stream": "think"},
-                    ),
-                )
-            elif event.kind == "completed":
-                response = event.response
+    """把图节点产出的 NodeEvent 翻译为 ws event（落库 + 统一 emit）。
 
-        if response is None:
-            raise AppError(ErrorCode.INTERNAL, "Agent 未产生有效响应")
-        latency_ms = round((time.perf_counter() - started) * 1000)
-
-        if thinking:
-            await _emit_persistent(
-                db,
-                websocket,
-                state,
-                session_id,
-                "thought",
-                {"text": "".join(thinking), "stream": "think_final"},
-            )
-
+    事件桥接契约（§2.5）：节点只返回纯数据，持久化事件全部经本函数落
+    ``ws_events`` 并广播；``assistant_message`` 需先落库 Message 再构造对外
+    payload（对齐 REST 历史回放格式）。
+    """
+    kind = event["kind"]
+    payload = event.get("payload") or {}
+    task_id = event.get("task_id")
+    if kind == "assistant_message":
         assistant = Message(
             session_id=session_id,
             role="assistant",
-            content=response.text,
+            content=str(payload.get("text") or ""),
             attachments=[],
             author_id=None,
             client_message_id=None,
-            latency_ms=latency_ms,
+            latency_ms=int(payload.get("latency_ms") or 0),
             model_name=profile.model or profile.name if profile else None,
             profile_id=profile.id if profile else None,
             profile_name=profile.name if profile else None,
@@ -439,15 +425,106 @@ async def _run_turn(
             session_id,
             "assistant_message",
             _assistant_message_payload(assistant),
+            task_id=task_id,
         )
+        return
+    if kind == "error":
         await _emit_persistent(
             db,
             websocket,
             state,
             session_id,
-            "response.completed",
-            {"finish_reason": "stop", "role": "assistant"},
+            "error",
+            {
+                "code": str(payload.get("code") or "validation"),
+                "message": str(payload.get("message") or "操作失败"),
+            },
+            task_id=task_id,
         )
+        return
+    await _emit_persistent(
+        db,
+        websocket,
+        state,
+        session_id,
+        kind,
+        dict(payload),
+        task_id=task_id,
+    )
+
+
+async def _run_turn(
+    session_id: str,
+    websocket: WebSocket,
+    state: _ConnectionState,
+    abort: asyncio.Event,
+) -> None:
+    """后台执行一轮 LangGraph Agent，并把图输出统一投影为 WS 事件。
+
+    图节点只返回纯数据（custom 瞬态帧 + pending_events 事件意图）；本函数
+    消费 ``astream`` 输出后统一 emit（§2.5 事件桥接）。``should_abort`` 与
+    api_key 经 ``RunnableConfig.configurable`` 注入（O-12 迁移），不入 State。
+    """
+    db = SessionLocal()
+    try:
+        config, profile = _selected_model_config(db)
+        history = _history_messages(db, session_id)
+        system_prompt = build_system_prompt()
+        serializable = to_serializable_request(
+            ModelRequest.from_messages(config, history, system=system_prompt)
+        )
+        graph_config = {
+            "configurable": {
+                # 每回合独立 thread_id：检查点按回合隔离（M3 阶段 3）
+                "thread_id": f"{session_id}:{uuid4().hex}",
+                "abort": {"should_abort": abort.is_set},
+                "credentials": {"api_key": config.api_key or ""},
+                "session": {"id": session_id},
+            }
+        }
+        thinking: list[str] = []
+        async for mode, chunk in _AGENT.astream(serializable, config=graph_config):
+            if mode == "custom":
+                kind = chunk["kind"]
+                text = chunk["text"]
+                if kind == "content" and text:
+                    await SESSION_CONNECTION_HUB.broadcast_chunk(
+                        session_id,
+                        lambda cursor, text=text: _frame(
+                            session_id,
+                            "assistant_delta",
+                            cursor,
+                            {"role": "assistant", "text": text},
+                        ),
+                    )
+                elif kind == "reasoning" and text:
+                    thinking.append(text)
+                    await _send(
+                        websocket,
+                        state,
+                        _frame(
+                            session_id,
+                            "thought",
+                            state.cursor,
+                            {"text": text, "stream": "think"},
+                        ),
+                    )
+                continue
+            # updates 模式：按节点边界消费 pending_events，统一 emit
+            for event in iter_pending_events(chunk):
+                await _translate_event(
+                    db, websocket, state, session_id, profile, event
+                )
+
+        if thinking:
+            await _emit_persistent(
+                db,
+                websocket,
+                state,
+                session_id,
+                "thought",
+                {"text": "".join(thinking), "stream": "think_final"},
+            )
     except StreamAborted:
         db.rollback()
         logger.info("Agent 回合已中止 session=%s", session_id)
@@ -491,6 +568,71 @@ async def _run_turn(
         )
     finally:
         db.close()
+
+
+async def _handle_stop(
+    db: Session,
+    websocket: WebSocket,
+    state: _ConnectionState,
+    session_id: str,
+    active_turn: asyncio.Task[None] | None,
+) -> None:
+    """/stop 即时中断：置位会话 abort 并取消当前回合（不可恢复，§2.5）。
+
+    ``interrupt()`` 是可恢复暂停，不替代取消；/stop 不取消已入队的任务。
+    """
+    abort = _SESSION_ABORTS.get(session_id)
+    if abort:
+        abort.set()
+    if active_turn and not active_turn.done():
+        active_turn.cancel()
+    await _emit_persistent(
+        db,
+        websocket,
+        state,
+        session_id,
+        "response.completed",
+        {"finish_reason": "cancelled", "role": "assistant"},
+    )
+
+
+async def _handle_compact(
+    db: Session,
+    websocket: WebSocket,
+    state: _ConnectionState,
+    session: AgentSession,
+    user: User,
+) -> None:
+    """/compact：会话级上下文副作用，仅会话 owner 可执行（API.md §4.4）。
+
+    M2 ``summarize`` 产出摘要（保留最近 6 条、≤2000 字符、不删除原始记录），
+    M3 ``write_summary`` 写 ``sessions.compact_summary``，窗口游标
+    ``compact_keep_from`` 指向保留起点（CX-6/MEM-3 原始优先）。
+    """
+    if session.user_id != user.id:
+        raise AppError(ErrorCode.UNAUTHORIZED, "仅会话负责人可执行 /compact")
+    rows = (
+        db.query(Message)
+        .filter(Message.session_id == session.id, Message.role.in_(("user", "assistant")))
+        .order_by(Message.created_at.asc(), Message.id.asc())
+        .all()
+    )
+    messages = [
+        {"role": row.role, "content": row.content, "source_id": row.source_id}
+        for row in rows
+    ]
+    summary, kept_ids = summarize([dict(message) for message in messages])
+    write_summary(db, session.id, summary)
+    session.compact_keep_from = kept_ids[0] if kept_ids else None
+    db.commit()
+    await _emit_persistent(
+        db,
+        websocket,
+        state,
+        session.id,
+        "assistant_message",
+        {"text": "会话已压缩：保留最近 6 条原始消息，更早内容已生成摘要。", "role": "assistant"},
+    )
 
 
 async def _handle_user_message(
@@ -557,9 +699,13 @@ async def _handle_user_message(
         _message_payload(row, user),
     )
     abort = asyncio.Event()
+    _SESSION_ABORTS[session.id] = abort
     task = asyncio.create_task(
         _run_turn(session.id, websocket, state, abort),
         name=f"agent-turn-{session.id}",
+    )
+    task.add_done_callback(
+        lambda _task: _SESSION_ABORTS.pop(session.id, None)
     )
     return task
 
@@ -652,6 +798,25 @@ async def agent_websocket(websocket: WebSocket) -> None:
             event = message.get("event")
             try:
                 if event == "user_message":
+                    payload = message.get("payload")
+                    if isinstance(payload, dict):
+                        text = payload.get("text")
+                        if isinstance(text, str):
+                            stripped = text.strip()
+                            if stripped.startswith("/stop"):
+                                # /stop 即时中断：不进图，直接取消当前回合（§2.5）
+                                await _handle_stop(
+                                    db,
+                                    websocket,
+                                    state,
+                                    session.id,
+                                    active_turn,
+                                )
+                                continue
+                            if stripped.startswith("/compact"):
+                                # /compact 会话级副作用：仅 owner 可执行（API.md §4.4）
+                                await _handle_compact(db, websocket, state, session, user)
+                                continue
                     active_turn = await _handle_user_message(
                         db,
                         websocket,
@@ -661,7 +826,23 @@ async def agent_websocket(websocket: WebSocket) -> None:
                         message.get("payload"),
                         active_turn,
                     )
-                elif event == "confirm_ack" or event == "cancel_task":
+                elif event == "confirm_ack":
+                    # 确认卡回执：收包循环直连，不唤醒图（OR-8）
+                    result = handle_confirm_ack(
+                        db,
+                        session.id,
+                        user.id,
+                        message.get("payload") if isinstance(message.get("payload"), dict) else {},
+                    )
+                    await _emit_persistent(
+                        db,
+                        websocket,
+                        state,
+                        session.id,
+                        "confirm_ack",
+                        {"ok": result.ok, "task_id": result.task_id, "message": result.message},
+                    )
+                elif event == "cancel_task":
                     raise AppError(ErrorCode.VALIDATION, "当前 LangGraph Agent 尚未启用任务控制")
                 else:
                     raise AppError(ErrorCode.VALIDATION, "不支持的 WebSocket 事件")

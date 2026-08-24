@@ -52,7 +52,7 @@ def test_ainvoke_runs_through_graph() -> None:
 def test_stream_projects_content_reasoning_and_completion() -> None:
     """流式节点把正文、推理和 completed 收尾事件分开投影。"""
     gateway = ModelGateway(
-        stream_transport=lambda _request: iter(
+        stream_transport=lambda _request, _abort=None: iter(
             [("reasoning", "先判断"), ("content", "最终答案")]
         )
     )
@@ -80,7 +80,9 @@ def test_stream_filters_reasoning_when_disabled() -> None:
         [{"role": "user", "content": "你好"}],
     )
     gateway = ModelGateway(
-        stream_transport=lambda _request: iter([("reasoning", "隐藏摘要"), ("content", "答案")])
+        stream_transport=lambda _request, _abort=None: iter(
+            [("reasoning", "隐藏摘要"), ("content", "答案")]
+        )
     )
 
     events = list(gateway.stream(request))
@@ -91,7 +93,7 @@ def test_stream_filters_reasoning_when_disabled() -> None:
 def test_astream_projects_same_events() -> None:
     """异步流式入口保持与同步事件顺序一致。"""
     gateway = ModelGateway(
-        stream_transport=lambda _request: iter([("content", "异步答案")])
+        stream_transport=lambda _request, _abort=None: iter([("content", "异步答案")])
     )
 
     async def collect() -> list:
@@ -106,13 +108,35 @@ def test_astream_projects_same_events() -> None:
 
 def test_stream_abort_is_not_mapped_to_internal_error() -> None:
     """流式取消保持受控异常，交由 Agent 回合决定停止后的交付。"""
-    def abort(_request: ModelRequest):
+    def abort(_request: ModelRequest, _abort: object | None = None):
         raise StreamAborted()
 
     gateway = ModelGateway(stream_transport=abort)
 
     with pytest.raises(StreamAborted):
         list(gateway.stream(_request()))
+
+
+def test_should_abort_injected_via_runnable_config() -> None:
+    """O-12 迁移：should_abort 经 RunnableConfig.configurable 注入并生效。"""
+    seen: list[object | None] = []
+
+    def transport(_request: ModelRequest, should_abort: object | None = None):
+        seen.append(should_abort)
+        return iter([("content", "ok")])
+
+    gateway = ModelGateway(stream_transport=transport)
+    events = list(
+        gateway.stream(
+            _request(),
+            config={"configurable": {"abort": {"should_abort": lambda: True}}},
+        )
+    )
+
+    assert len(seen) == 1
+    assert seen[0] is not None
+    assert seen[0]() is True
+    assert events[-1].kind == "completed"
 
 
 def test_unexpected_transport_error_is_redacted() -> None:
