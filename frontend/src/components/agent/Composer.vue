@@ -151,8 +151,8 @@ async function handleFileChange(e: Event) {
   const file = target.files?.[0]
   if (!file) return
 
-  if (file.size > 20 * 1024 * 1024) {
-    message.error('单文件大小不能超过 20MB')
+  if (!file.size || file.size > 20 * 1024 * 1024) {
+    message.error(!file.size ? '文件不能为空' : '单文件大小不能超过 20MB')
     target.value = ''
     return
   }

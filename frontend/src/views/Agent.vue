@@ -2053,14 +2053,14 @@ async function stageAttachmentFiles(files: File[]) {
   const validFiles: File[] = []
   let invalidCount = 0
   for (const file of files) {
-    if (file.size > 20 * 1024 * 1024 || !hasAllowedAttachmentSuffix(file)) {
+    if (!file.size || file.size > 20 * 1024 * 1024 || !hasAllowedAttachmentSuffix(file)) {
       invalidCount += 1
       continue
     }
     validFiles.push(file)
   }
   if (invalidCount) {
-    message.error('有附件格式不支持或超过 20MB，请检查后重试')
+    message.error('有附件为空、格式不支持或超过 20MB，请检查后重试')
   }
 
   await Promise.all(validFiles.map(async (file) => {

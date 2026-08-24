@@ -1,6 +1,7 @@
 """本地文件卷的上传与元数据查询接口。"""
 
 import hashlib
+import logging
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, UploadFile
@@ -13,6 +14,8 @@ from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
 from ..models import StoredFile, User, uuid_str
 from ..schemas import FileOut
+
+logger = logging.getLogger("ai-eval.api.files")
 
 router = APIRouter(prefix="/api/files", tags=["files"])
 
@@ -45,6 +48,7 @@ def _validate_filename(filename: str | None) -> str:
     """校验上传文件名和 V1.0 扩展名白名单。"""
     name = Path(filename or "").name
     if not name or Path(name).suffix.lower() not in ALLOWED_SUFFIXES:
+        logger.warning("附件上传拒绝：类型不支持 filename=%r", filename)
         raise AppError(ErrorCode.VALIDATION, "不支持的文件类型")
     return name
 
@@ -59,8 +63,12 @@ async def upload_file(
     filename = _validate_filename(file.filename)
     content = await file.read(MAX_FILE_BYTES + 1)
     if not content:
+        logger.warning("附件上传拒绝：空文件 filename=%r user=%s", filename, user.id)
         raise AppError(ErrorCode.VALIDATION, "文件不能为空")
     if len(content) > MAX_FILE_BYTES:
+        logger.warning(
+            "附件上传拒绝：超过 20MB filename=%r size=%s", filename, len(content)
+        )
         raise AppError(ErrorCode.VALIDATION, "单文件不能超过 20MB")
 
     file_id = uuid_str()
