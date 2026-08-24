@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -37,6 +37,57 @@ STREAM_READ_SLICE_S = 2.0
 # 仅对已知支持 reasoning 控制的模型发送 OpenAI 专用字段，避免普通模型因未知字段报错。
 _OPENAI_REASONING_PREFIXES = ("o1", "o3", "o4", "gpt-5")
 _REASONING_EFFORTS = {"low", "medium", "high", "xhigh", "max"}
+
+
+def _adapt_message_content(content: object, protocol: str) -> object:
+    """把 Agent 内部内容块转换成目标协议的图文消息格式。"""
+    if not isinstance(content, list):
+        return content
+    result: list[dict[str, object]] = []
+    for part in content:
+        if not isinstance(part, Mapping):
+            continue
+        kind = part.get("type")
+        if kind == "text":
+            text = str(part.get("text") or "")
+            if protocol == "openai_responses":
+                result.append({"type": "input_text", "text": text})
+            else:
+                result.append({"type": "text", "text": text})
+            continue
+        if kind != "image_url" or not isinstance(part.get("image_url"), Mapping):
+            continue
+        url = str(part["image_url"].get("url") or "")
+        if not url:
+            continue
+        if protocol == "anthropic_messages" and url.startswith("data:"):
+            header, encoded = url.split(",", 1)
+            media_type = header[5:].split(";", 1)[0] or "image/jpeg"
+            result.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type,
+                        "data": encoded,
+                    },
+                }
+            )
+        elif protocol == "openai_responses":
+            result.append({"type": "input_image", "image_url": url})
+        else:
+            result.append({"type": "image_url", "image_url": {"url": url}})
+    return result
+
+
+def _adapt_messages(messages: list[dict], protocol: str) -> list[dict]:
+    """复制消息并按协议映射图文内容，避免修改 Harness 共享请求。"""
+    adapted: list[dict] = []
+    for message in messages:
+        item = dict(message)
+        item["content"] = _adapt_message_content(item.get("content"), protocol)
+        adapted.append(item)
+    return adapted
 
 
 def _is_openai_reasoning_model(model: str) -> bool:
@@ -311,7 +362,7 @@ def call_protocol(
 
     if protocol == "openai_chat":
         url = f"{base}/v1/chat/completions"
-        chat: list[dict] = ([{"role": "system", "content": system}] if system else []) + list(messages)
+        chat: list[dict] = ([{"role": "system", "content": system}] if system else []) + _adapt_messages(messages, protocol)
         body: dict = {
             "model": model,
             "messages": chat,
@@ -332,7 +383,7 @@ def call_protocol(
 
     elif protocol == "openai_responses":
         url = f"{base}/v1/responses"
-        body = {"model": model, "input": list(messages), "max_output_tokens": max_tokens}
+        body = {"model": model, "input": _adapt_messages(messages, protocol), "max_output_tokens": max_tokens}
         if system:
             body["instructions"] = system
         _apply_openai_reasoning(
@@ -348,7 +399,7 @@ def call_protocol(
         url = f"{base}/v1/messages"
         body = {
             "model": model,
-            "messages": list(messages),
+            "messages": _adapt_messages(messages, protocol),
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
@@ -429,7 +480,7 @@ def stream_protocol(
 
     if protocol == "openai_chat":
         url = f"{base}/v1/chat/completions"
-        chat: list[dict] = ([{"role": "system", "content": system}] if system else []) + list(messages)
+        chat: list[dict] = ([{"role": "system", "content": system}] if system else []) + _adapt_messages(messages, protocol)
         body: dict = {
             "model": model,
             "messages": chat,
@@ -464,7 +515,7 @@ def stream_protocol(
 
     elif protocol == "openai_responses":
         url = f"{base}/v1/responses"
-        body = {"model": model, "input": list(messages), "stream": True, "max_output_tokens": max_tokens}
+        body = {"model": model, "input": _adapt_messages(messages, protocol), "stream": True, "max_output_tokens": max_tokens}
         if system:
             body["instructions"] = system
         _apply_openai_reasoning(
@@ -488,7 +539,7 @@ def stream_protocol(
         url = f"{base}/v1/messages"
         body = {
             "model": model,
-            "messages": list(messages),
+            "messages": _adapt_messages(messages, protocol),
             "stream": True,
             "max_tokens": max_tokens,
             "temperature": temperature,

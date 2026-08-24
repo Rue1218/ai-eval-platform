@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from ..adapters import StreamAborted
 from ..agent import LangGraphAgent
+from ..agent.attachments import model_content_for_message, normalize_attachment_refs
 from ..agent.graph import iter_pending_events
 from ..config import settings
 from ..db import SessionLocal
@@ -356,7 +357,11 @@ def _window_messages(db: Session, session_id: str) -> list[dict]:
         .all()
     )
     ordered = [
-        {"role": row.role, "content": row.content, "source_id": row.source_id}
+        {
+            "role": row.role,
+            "content": model_content_for_message(db, row) if row.role == "user" else row.content,
+            "source_id": row.source_id,
+        }
         for row in reversed(rows)
     ]
     return recent_window(ordered, limit=20, keep_from=keep_from)
@@ -802,8 +807,8 @@ async def _handle_user_message(
     if not isinstance(payload, dict):
         raise AppError(ErrorCode.VALIDATION, "user_message payload 必须是对象")
     text = payload.get("text")
-    if not isinstance(text, str) or not text.strip():
-        raise AppError(ErrorCode.VALIDATION, "消息内容不能为空")
+    if not isinstance(text, str):
+        raise AppError(ErrorCode.VALIDATION, "消息内容格式不正确")
     if active_turn and not active_turn.done():
         raise AppError(ErrorCode.CONCURRENCY, "上一轮 Agent 仍在生成")
 
@@ -813,6 +818,9 @@ async def _handle_user_message(
         for item in attachments
     ):
         raise AppError(ErrorCode.VALIDATION, "attachments 格式不正确")
+    if not text.strip() and not attachments:
+        raise AppError(ErrorCode.VALIDATION, "消息内容不能为空")
+    normalized_attachments = normalize_attachment_refs(db, attachments, owner_id=user.id)
     client_message_id = payload.get("client_message_id")
     if client_message_id is not None and (
         not isinstance(client_message_id, str) or not client_message_id or len(client_message_id) > 128
@@ -834,7 +842,7 @@ async def _handle_user_message(
         session_id=session.id,
         role="user",
         content=text.strip(),
-        attachments=attachments,
+        attachments=normalized_attachments,
         author_id=user.id,
         client_message_id=client_message_id,
         source_id="pending",

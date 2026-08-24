@@ -174,7 +174,6 @@
               :class="{ 'no-anim': item.noAnim, remote: isRemoteUserMessage(item) }"
             >
               <div v-if="item.author" class="user-author">{{ userMessageAuthorLabel(item) }}</div>
-              <div class="bubble-user">{{ item.text }}</div>
               <div v-if="item.files && item.files.length" class="message-attachments">
                 <AttachmentPreview
                   v-for="f in item.files"
@@ -183,6 +182,7 @@
                   compact
                 />
               </div>
+              <div v-if="item.text" class="bubble-user">{{ item.text }}</div>
             </div>
 
             <!-- 2.1.1 打字占位气泡：LLM 意图识别期间的即时反馈（收到事件后由 dismissTyping 移除） -->
@@ -684,17 +684,6 @@
           </button>
         </div>
 
-        <!-- 附件预览架：图片显示缩略图，文档显示类型卡片，可点击预览或打开。 -->
-        <div v-if="stagedFiles.length" class="attach-stage">
-          <AttachmentPreview
-            v-for="f in stagedFiles"
-            :key="f.localId"
-            :attachment="f"
-            removable
-            @remove="removeStagedFile(f.localId)"
-          />
-        </div>
-
         <div
           class="composer-card"
           :class="{ generating: isGenerating, 'drag-active': isDragActive }"
@@ -704,6 +693,17 @@
           @dragleave.prevent="handleDragLeave"
           @drop.prevent="handleDrop"
         >
+          <!-- 待发送附件固定在输入框内部，位于正文输入区上方。 -->
+          <div v-if="stagedFiles.length" class="attach-stage">
+            <AttachmentPreview
+              v-for="f in stagedFiles"
+              :key="f.localId"
+              :attachment="f"
+              compact
+              removable
+              @remove="removeStagedFile(f.localId)"
+            />
+          </div>
           <div v-if="isDragActive" class="composer-drop-hint">
             <span class="composer-drop-icon">＋</span>
             <strong>松开以上传附件</strong>
@@ -720,6 +720,13 @@
 
           <!-- 上半区：行内命令纯文本强调色前缀 + 正常黑色多行文本域 -->
           <div class="composer-input-row">
+            <!-- 添加附件按钮紧贴输入内容左侧，保持在输入框边界内。 -->
+            <button class="composer-action-btn composer-attach-btn" type="button" title="添加附件（≤20MB，支持图片、Markdown、PDF、Word、Excel 等）" @click="triggerFileInput">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="12" y1="5" x2="12" y2="19"></line>
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+              </svg>
+            </button>
             <span v-if="selectedSlashCmd" class="composer-cmd-prefix mono">/{{ selectedSlashCmd }}&nbsp;</span>
             <textarea
               ref="textareaRef"
@@ -736,13 +743,6 @@
           <!-- 下半区：操作底栏（附件 + 只读模型标识 + 发送按钮） -->
           <div class="composer-bottom-bar">
             <div class="composer-left-actions">
-              <!-- 添加附件按钮 -->
-              <button class="composer-action-btn" type="button" title="添加附件（≤20MB，支持图片、Markdown、PDF、Word、Excel 等）" @click="triggerFileInput">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-                  <line x1="12" y1="5" x2="12" y2="19"></line>
-                  <line x1="5" y1="12" x2="19" y2="12"></line>
-                </svg>
-              </button>
               <input
                 ref="fileInputRef"
                 type="file"
@@ -4062,12 +4062,20 @@ onBeforeUnmount(() => {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 8px;
+}
+
+.message-attachments {
+  justify-content: flex-end;
+}
+
+.msg-user.remote .message-attachments {
+  justify-content: flex-start;
 }
 
 .attach-stage {
-  max-width: 780px;
-  margin: 0 auto 8px;
+  width: 100%;
+  max-width: none;
+  margin: 0 0 2px;
 }
 
 /* 输入卡片：上部多行文本，下部操作底栏（对齐 Gemini / Cursor / Claude 对话框） */
@@ -4193,7 +4201,7 @@ onBeforeUnmount(() => {
 .composer-input-row {
   display: flex;
   align-items: flex-start;
-  gap: 0;
+  gap: 2px;
   width: 100%;
   min-height: 38px;
 }
@@ -4269,8 +4277,8 @@ onBeforeUnmount(() => {
 
 /* 附件小按钮 (+) */
 .composer-action-btn {
-  width: 26px;
-  height: 26px;
+  width: 22px;
+  height: 22px;
   border-radius: 6px;
   border: none;
   background: transparent;
@@ -4280,6 +4288,11 @@ onBeforeUnmount(() => {
   justify-content: center;
   cursor: pointer;
   transition: all 0.15s ease;
+}
+
+.composer-attach-btn {
+  flex: 0 0 22px;
+  margin-top: 5px;
 }
 
 .composer-action-btn:hover {

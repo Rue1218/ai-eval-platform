@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Response
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from ..agent.attachments import normalize_history_attachments
 from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
@@ -140,7 +141,7 @@ def get_session_messages(
                 "id": row.id,
                 "role": row.role,
                 "content": row.content,
-                "attachments": row.attachments,
+                "attachments": normalize_history_attachments(db, row.attachments),
                 "author_id": row.author_id,
                 "author": author_map.get(row.author_id),
                 "client_message_id": row.client_message_id,
