@@ -23,7 +23,7 @@ from app.harness.orchestration import (
     consume_tool_turn,
     from_dict,
 )
-from app.harness.prompts import build_system_prompt, parse_react
+from app.harness.prompts import SystemVars, build_system_prompt, parse_react
 from app.llm import ModelRequest
 
 # 阶段输入：ReAct 协议说明（M1 阶段输入，随节点注入，不做持久化）
@@ -85,7 +85,16 @@ def build_react_nodes(
         else:
             stage_input = REACT_STAGE_INPUT + "（无可用工具）"
         observations_text = _inject_observations(state)
-        system = build_system_prompt()
+        # 把本回合可用工具接入 skill_hints，避免系统策略"可见技能：（无）"
+        # 与 ReAct 工具列表矛盾，导致模型误判工具未启用而拒绝调用。
+        system = build_system_prompt(
+            SystemVars(
+                skill_hints=tuple(
+                    f"{definition['name']}：{definition['description']}"
+                    for definition in tool_defs
+                )
+            )
+        )
         if observations_text:
             system = system + "\n\n" + observations_text
         request = ModelRequest(

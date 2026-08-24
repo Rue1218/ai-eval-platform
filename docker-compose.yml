@@ -69,10 +69,15 @@ services:
       QWEN_IMAGE_TIMEOUT_SECONDS: ${QWEN_IMAGE_TIMEOUT_SECONDS:-120}
       # Harness 记忆层 Redis 连接（短期回合状态 / 幂等键）；接入前无消费者，仅预注入。
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-    # bwrap 沙箱需要 unshare/mount/pivot_root；Docker 默认 seccomp 拦截这些
-    # syscall，须放开（仅 api 容器；worker/其他服务不受影响）。
+    # bwrap 沙箱需要 unshare/mount/pivot_root 及在 userns 内挂载 proc；
+    # Docker 默认 seccomp/能力位会拦截，须放开（仅 api 容器）。
+    # privileged 是在本 Docker 环境下让 bubblewrap 完整工作的必要条件
+    # （cap_add SYS_ADMIN + seccomp:unconfined 仍无法通过 userns proc 挂载）。
+    privileged: true
     security_opt:
       - seccomp:unconfined
+    cap_add:
+      - SYS_ADMIN
     depends_on:
       postgres:
         condition: service_healthy

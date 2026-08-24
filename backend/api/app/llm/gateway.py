@@ -105,14 +105,18 @@ class ModelGateway:
         """返回已编译的流式调用图，供上层接入 SSE/WebSocket 投影。"""
         return self._stream_graph
 
-    def invoke(self, request: ModelRequest) -> ModelResponse:
-        """执行一次非流式模型调用并返回统一响应。"""
-        result = self._invoke_graph.invoke({"request": request})
+    def invoke(self, request: ModelRequest, config: dict | None = None) -> ModelResponse:
+        """执行一次非流式模型调用并返回统一响应。
+
+        ``config``（RunnableConfig）可选透传：与 ``stream`` 签名一致，使上层
+        Agent 图把含 ``configurable`` 的配置注入节点后再传入（O-12 迁移）。
+        """
+        result = self._invoke_graph.invoke({"request": request}, config=config or {})
         return self._response_from_state(result)
 
-    async def ainvoke(self, request: ModelRequest) -> ModelResponse:
+    async def ainvoke(self, request: ModelRequest, config: dict | None = None) -> ModelResponse:
         """异步执行一次模型调用；LangGraph 负责调度同步适配器节点。"""
-        result = await self._invoke_graph.ainvoke({"request": request})
+        result = await self._invoke_graph.ainvoke({"request": request}, config=config or {})
         return self._response_from_state(result)
 
     def stream(
