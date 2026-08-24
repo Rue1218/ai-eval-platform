@@ -116,6 +116,7 @@ def build_tool_node(
             observation = normalize_exception(
                 AppError(ErrorCode.TIMEOUT, "工具执行超时"),
                 tool=call.name,
+                arguments=dict(call.arguments or {}),
             )
         latency_ms = round((time.perf_counter() - started) * 1000)
         result_payload: dict[str, object] = {

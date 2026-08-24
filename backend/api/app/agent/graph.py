@@ -74,9 +74,12 @@ class LangGraphAgent:
         graph.add_node("reflect", reflect_node)
         graph.add_edge(START, "routing")
         graph.add_conditional_edges("routing", route, _ROUTE_TARGETS)
-        # ReAct 循环：pending_tool 存在 → tools；否则图结束
+        # ReAct 循环：pending_tool 存在 → tools；repeat_retry → 回环 react_agent
+        # （OR-4 首次重复纠正后重试）；否则图结束
         graph.add_conditional_edges(
-            "react_agent", react_route, {"tools": "tools", "end": END}
+            "react_agent",
+            react_route,
+            {"tools": "tools", "end": END, "react_agent": "react_agent"},
         )
         graph.add_edge("tools", "react_agent")
         graph.add_edge("direct", END)

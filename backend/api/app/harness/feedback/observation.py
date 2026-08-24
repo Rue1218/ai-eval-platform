@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from app.harness.contracts import Observation, ToolResult
 
 
@@ -25,6 +27,7 @@ def normalize(
     *,
     tool: str,
     source: str | None = None,
+    arguments: Mapping[str, object] | None = None,
 ) -> Observation:
     """工具结果归一为 Observation（FB-1）：
 
@@ -40,6 +43,7 @@ def normalize(
             ok=False,
             redacted=True,
             source=source,
+            arguments=arguments,
         )
     if raw is None:
         return Observation(
@@ -48,6 +52,7 @@ def normalize(
             ok=False,
             redacted=True,
             source=source,
+            arguments=arguments,
         )
     data = raw.data or {}
     text = str(data.get("summary") or data.get("text") or "执行成功")
@@ -59,9 +64,12 @@ def normalize(
         truncated=bool(data.get("truncated", False)),
         source=source or error.get("source"),
         redacted=True,
+        arguments=arguments,
     )
 
 
-def normalize_exception(exc: Exception, *, tool: str) -> Observation:
+def normalize_exception(
+    exc: Exception, *, tool: str, arguments: Mapping[str, object] | None = None
+) -> Observation:
     """异常专归一：返回 ok=False observation，不抛出（F-A1）。"""
-    return normalize(None, exc, tool=tool)
+    return normalize(None, exc, tool=tool, arguments=arguments)

@@ -16,7 +16,7 @@ from langgraph.config import get_config
 
 from app.errors import AppError
 from app.harness.context import to_observation
-from app.harness.contracts import make_event
+from app.harness.contracts import Observation, make_event
 from app.harness.memory import GraphState, rebuild_model_config
 from app.harness.orchestration import (
     consume_model_call,
@@ -33,6 +33,7 @@ REACT_STAGE_INPUT = """\
 {"protocol": "react", "version": "react.v1", "thought": "简述本轮判断", "tool": "工具名或null", "arguments": {}, "done": false}
 - 需要工具：tool 填工具名，arguments 填参数，done=false；
 - 任务完成：tool=null，arguments={}，done=true。
+- 禁止用完全相同参数重复调用已执行过的工具；如需继续，请换用不同命令，或直接 done=true 收尾。
 可用工具（名称 + 参数要求）："""
 
 
@@ -132,6 +133,12 @@ def build_react_nodes(
             budget = consume_model_call(budget)
             result = parse_react(response.text)
             fields = result["fields"]
+            # 每轮 ReAct 决策的 thought 透出为 thought 事件（PR-3：只回显不触发动作），
+            # 让用户在工具调用过程中看到模型的思考过程。
+            thought = _extract_thought(response.text)
+            thought_events = (
+                [make_event("thought", {"text": thought, "stream": "think"})] if thought else []
+            )
             if fields["done"]:
                 # 对话路径收尾：assistant_message + response.completed
                 # （thought 只回显不触发动作，PR-3）
@@ -158,18 +165,59 @@ def build_react_nodes(
             tool = str(fields.get("tool") or "")
             arguments = dict(fields.get("arguments") or {})
             observations = state.get("observations") or []
-            if observations and getattr(observations[-1], "tool", None) == tool:
+            # 仅当「工具名 + 参数」与已执行过的调用完全相同才视为重复；
+            # 只比较工具名会把合法的连续 bash 调用（如 ls 后再 cat）误杀。
+            def _same_call(obs: object) -> bool:
+                return (
+                    getattr(obs, "tool", None) == tool
+                    and dict(getattr(obs, "arguments", None) or {}) == arguments
+                )
+
+            identical_runs = [obs for obs in observations if _same_call(obs)]
+            if identical_runs:
+                if state.get("repeat_retry"):
+                    # 已给过一次纠正仍重复相同调用：判定未推进，硬错误收尾
+                    return {
+                        "pending_events": thought_events
+                        + [
+                            make_event(
+                                "error",
+                                {"code": "VALIDATION", "message": f"工具 {tool} 连续调用未推进，已终止"},
+                            )
+                        ],
+                        "pending_tool": None,
+                        "budget": budget.to_dict(),
+                    }
+                # 首次重复：注入纠正观察（不执行工具）并置 repeat_retry，
+                # react_route 据此回环到 react_agent 让模型基于反馈换命令或收尾。
                 return {
-                    "pending_events": [
-                        make_event(
-                            "error",
-                            {"code": "VALIDATION", "message": f"工具 {tool} 连续调用未推进，已终止"},
+                    "pending_tool": None,
+                    "repeat_retry": True,
+                    "pending_events": thought_events,
+                    "observations": list(observations)
+                    + [
+                        Observation(
+                            tool=tool,
+                            text=(
+                                f"系统提示：工具 {tool} 已用相同参数执行过（结果见上）。"
+                                "请勿重复相同调用；请改用不同命令继续，或直接 done=true 完成回答。"
+                            ),
+                            ok=False,
+                            redacted=True,
+                            arguments=arguments,
                         )
                     ],
-                    "pending_tool": None,
                     "budget": budget.to_dict(),
                 }
             budget = consume_tool_turn(budget)  # 可能抛 BUDGET_EXCEEDED
+            if state.get("repeat_retry"):
+                # 重试回合中模型已换新调用，清除回环标记后正常执行
+                return {
+                    "pending_tool": {"name": tool, "arguments": arguments},
+                    "repeat_retry": False,
+                    "pending_events": thought_events,
+                    "budget": budget.to_dict(),
+                }
         except AppError as exc:
             # 协议解析失败/预算耗尽：转 error 收尾（不裸抛给用户堆栈）
             return {
@@ -184,6 +232,7 @@ def build_react_nodes(
             }
         return {
             "pending_tool": {"name": tool, "arguments": arguments},
+            "pending_events": thought_events,
             "budget": budget.to_dict(),
         }
 
@@ -191,7 +240,10 @@ def build_react_nodes(
 
 
 def react_route(state: GraphState) -> str:
-    """ReAct 条件边：pending_tool 存在 → 'tools'，否则图结束。"""
+    """ReAct 条件边：pending_tool → 'tools'；repeat_retry → 回环 react_agent
+    （OR-4 首次重复纠正后让模型基于反馈重试）；否则图结束。"""
     if state.get("pending_tool"):
         return "tools"
+    if state.get("repeat_retry"):
+        return "react_agent"
     return "end"

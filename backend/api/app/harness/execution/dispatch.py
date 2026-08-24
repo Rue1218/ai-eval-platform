@@ -157,7 +157,7 @@ def execute(
             ok=True,
             data={"summary": str(result), "latency_ms": latency_ms},
         )
-        return normalize(raw, None, tool=call.name)
+        return normalize(raw, None, tool=call.name, arguments=dict(call.arguments or {}))
     except AppError as exc:
         logger.info(
             "工具执行失败 name=%s code=%s args=%s",
@@ -165,7 +165,7 @@ def execute(
             exc.code.value,
             redact_for_log(dict(call.arguments or {})),
         )
-        return normalize(None, exc, tool=call.name)
+        return normalize(None, exc, tool=call.name, arguments=dict(call.arguments or {}))
     except Exception as exc:
         logger.warning(
             "工具执行内部异常 name=%s type=%s args=%s",
@@ -173,4 +173,4 @@ def execute(
             type(exc).__name__,
             redact_for_log(dict(call.arguments or {})),
         )
-        return normalize(None, exc, tool=call.name)
+        return normalize(None, exc, tool=call.name, arguments=dict(call.arguments or {}))

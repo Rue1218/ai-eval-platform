@@ -70,6 +70,7 @@ class Observation:
     truncated: bool = False
     source: str | None = None  # 溯源标识，复用 messages 表 source_id 格式（如 "file:uuid" / "message:uuid"）
     redacted: bool = True  # 默认已脱敏
+    arguments: Mapping[str, object] | None = None  # 本次调用参数（OR-4 防重复判断用）
 
 
 T = TypeVar("T")
