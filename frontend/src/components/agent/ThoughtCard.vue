@@ -117,25 +117,25 @@ onMounted(() => {
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
 }
 
+.thought-card.done:not(.collapsed) {
+  border-color: var(--border-subtle, rgba(255, 255, 255, 0.06));
+  background: var(--bg-elevated, rgba(30, 41, 59, 0.28));
+}
+
+.thought-card:not(.done):not(.collapsed) {
+  border-color: color-mix(in srgb, var(--accent-ai, #10b981) 35%, transparent);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--accent-ai, #10b981) 8%, transparent);
+}
+
+/* 折叠状态（无外框无背景，与正文及模型头首字基准线完全对齐） */
 .thought-card.collapsed {
   display: inline-flex;
   width: auto;
   max-width: 100%;
   margin: 2px 0 8px 0;
-  border: none;
-  background: transparent;
-  box-shadow: none;
-}
-
-.thought-card.done {
-  border-color: var(--border-subtle, rgba(255, 255, 255, 0.06));
-  background: var(--bg-elevated, rgba(30, 41, 59, 0.28));
-  opacity: 1;
-}
-
-.thought-card:not(.done) {
-  border-color: color-mix(in srgb, var(--accent-ai, #10b981) 35%, transparent);
-  box-shadow: 0 0 12px color-mix(in srgb, var(--accent-ai, #10b981) 8%, transparent);
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
 }
 
 .thought-head {
@@ -150,8 +150,8 @@ onMounted(() => {
 }
 
 .thought-card.collapsed .thought-head {
-  padding: 3px 8px;
-  margin-left: -8px;
+  padding: 3px 8px 3px 0;
+  margin-left: 0;
   gap: 6px;
   border-radius: 6px;
   border: 1px solid transparent;
@@ -164,6 +164,8 @@ onMounted(() => {
 .thought-card.collapsed .thought-head:hover {
   background: var(--bg-elevated, rgba(255, 255, 255, 0.06));
   border-color: var(--border-subtle, rgba(255, 255, 255, 0.08));
+  padding-left: 6px;
+  margin-left: -6px;
 }
 
 .thought-icon-wrap {
