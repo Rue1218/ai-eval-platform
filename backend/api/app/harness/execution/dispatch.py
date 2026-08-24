@@ -1,42 +1,49 @@
-"""Harness 执行层：短工具分派 + 超时 + 脱敏日志（M5 阶段 2，EX-3）。
+"""Harness 执行层：短工具分派 + 超时 + 脱敏日志（M5 阶段 3，EX-3/EX-6）。
 
 ``execute`` 按 call.name 分派到注册表 handler，带超时；超时返回 ``timeout``
-observation；日志脱敏（调 M8）。含受控目录文件工具（read/write/edit）与
-web 内部短 MCP 适配器（web_search/web_fetch，不走外部 MCP 服务器）。
+observation；日志脱敏（调 M8）。含受控目录文件工具（read/write/edit）、
+web 内部短 MCP 适配器（web_search/web_fetch）与 **bwrap 沙箱 bash**
+（阶段 3 开放通用 bash，安全边界见 ``sandbox.py``）。
 
-**⚠️ bash 安全边界（V0.4.2 评审闭环）**：命令黑名单 + 工作目录限定 + 超时
-**不构成可靠安全沙箱**（可被解释器/绝对路径/重定向/脚本文件绕过），阶段 2
-**不开放通用 bash**——``run_bash`` 仅提供黑名单校验实现供测试（X-A7），
-注册表不登记 bash，未注册即被白名单拒绝。
+**bash 安全边界（阶段 3 bwrap 闭环）**：命令黑名单（纵深防御）+ 一次性
+bwrap 沙箱（无网络、工作区唯一可写、资源受限、超时整树清理）；黑名单与
+沙箱均失败即拒绝，**禁止降级为裸 subprocess**。
 """
 
 from __future__ import annotations
 
 import logging
 import os
-import subprocess
 import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from app.errors import AppError, ErrorCode
 from app.harness.contracts import Observation, ToolCall, ToolResult
+from app.harness.execution.sandbox import SandboxLimits, run_sandboxed
 from app.harness.feedback.observation import normalize
 from app.harness.security.secrets import redact_for_log
 
 logger = logging.getLogger("ai-eval.harness.dispatch")
 
-# bash 命令黑名单（阶段 2 不开放通用 bash；X-A7 断言）
+# bash 命令黑名单（纵深防御；bwrap 沙箱之外的第二道防线，禁止命令开头命中）
 BASH_BLOCKLIST: frozenset[str] = frozenset(
     {"rm", "sudo", "curl", "wget", "nc", "ssh", "scp", "chmod", "chown"}
 )
 
 
-def run_bash(cmd: str, *, sandbox_dir: str, timeout_s: float) -> str:
-    """subprocess + 受限环境：工作目录限定、超时、命令黑名单校验。
+def run_bash(
+    cmd: str,
+    *,
+    sandbox_dir: str,
+    timeout_s: float,
+    limits: SandboxLimits | None = None,
+) -> str:
+    """bwrap 沙箱 + 黑名单双防护执行 shell 命令（阶段 3 开放通用 bash）。
 
-    黑名单命中抛 AppError(VALIDATION)。
-    ⚠️ 当前方案仅为受限执行，不构成安全沙箱，阶段 2 不开放通用 bash。
+    黑名单命中抛 AppError(VALIDATION)；其余经 ``run_sandboxed`` 在一次性
+    bwrap 沙箱内执行（无网络、会话工作区唯一可写、资源受限、超时整树清理）；
+    bwrap 不可用时 fail-closed，禁止降级为裸 subprocess。
     """
     command = cmd.strip()
     if not command:
@@ -44,21 +51,12 @@ def run_bash(cmd: str, *, sandbox_dir: str, timeout_s: float) -> str:
     first = command.split()[0]
     if first in BASH_BLOCKLIST:
         raise AppError(ErrorCode.VALIDATION, f"bash 命令命中黑名单：{first}")
-    try:
-        result = subprocess.run(
-            command,
-            shell=True,
-            cwd=sandbox_dir,
-            capture_output=True,
-            text=True,
-            timeout=timeout_s,
-        )
-    except subprocess.TimeoutExpired as exc:
-        logger.info("bash 执行超时 cmd=%.64s", command)
-        raise AppError(ErrorCode.TIMEOUT, "命令执行超时") from exc
-    if result.returncode != 0:
-        raise AppError(ErrorCode.INTERNAL, f"命令执行失败（{result.returncode}）")
-    return result.stdout.strip() or "（无输出）"
+    return run_sandboxed(
+        command,
+        sandbox_dir=sandbox_dir,
+        timeout_s=timeout_s,
+        limits=limits,
+    )
 
 
 def _resolve_safe_path(path: str, root: str) -> str:

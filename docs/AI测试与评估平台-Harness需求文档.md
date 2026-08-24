@@ -3,7 +3,7 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 需求文档 |
-| 版本 | V1.4.6 |
+| 版本 | V1.5.0 |
 | 审查日期 | 2026-08-24 |
 | 文档性质 | 需求规格说明书（需求先行） |
 | 适用范围 | `/agent` 对话智能体的 Harness 运行时：六层职责、七种模式组合、LangGraph 框架选型、技能体系与验收标准 |
@@ -300,7 +300,7 @@ P0-LG 阶段引入新依赖时须同步更新 `backend/api/requirements.txt`；P
 | LangGraph 依赖范围 | 仅 `langgraph==1.2.10`；禁止 langchain 全家桶、LangGraph 云服务、外部 MCP |
 | 外部 MCP / 用户自定义系统提示词 | 明确不做，防越权与提示词污染 |
 | 内部短 MCP + 基础工具集 | **允许**：`web_search`/`web_fetch` 等基础工具集为**通用能力**，由平台内置适配器实现（**内部短 MCP**，非外部 MCP 服务器）；`app/harness/execution/mcp/` 保留包边界但**不做外部 MCP 接入**。不触碰「禁止外部 MCP」红线 |
-| 通用 `bash` 工具（V1.4.5 新增） | **阶段 2 不开放**：命令黑名单 + 工作目录限定 + 超时**不构成安全沙箱**（可被解释器、绝对路径、重定向/管道、脚本文件、环境变量绕过；无网络隔离、资源限制、进程树清理与多用户隔离）。落地前必须先评审独立容器/沙箱方案并回写本表；`read`/`write`/`edit` 须基于受控文件 ID/根目录 |
+| 通用 `bash` 工具（V1.5.0 bwrap 闭环） | **阶段 3 开放通用 bash**：一次性 **bwrap 进程级沙箱**（`--unshare-net` 无网络、会话工作区唯一可写、ulimit 内存/进程数/CPU 限制、`--die-with-parent` + 墙钟超时整树清理）；命令黑名单（rm/sudo/curl 等）为**纵深防御**；bwrap 不可用或引擎关闭时 **fail-closed（VALIDATION）**，禁止降级为裸 subprocess。`read`/`write`/`edit` 仍基于受控文件 ID/根目录 |
 | RAG 语义记忆 | 未接入前 `kind=rag` 必须失败；pgvector/LightRAG 为演进项 |
 | GraphState 可序列化 | 状态只放 JSON 可序列化值；DB Session / WS 连接不得入 State |
 | 新 REST/WS 字段 | 必须先改 API.md，禁止私自扩充 |
@@ -511,3 +511,62 @@ P0-LG 阶段引入新依赖时须同步更新 `backend/api/requirements.txt`；P
 | 实现代码（阶段 1–4，分支 `feat/agent-stage1`） | 新增 | `app/harness/contracts/`（events/artifacts）、`app/harness/memory/`（state/working/episodic/compressed/preference/semantic/checkpoint/cleanup）、`app/harness/prompts/`（system/protocols/safety）、`app/harness/context/`（window/assembly/observation/compact/meter）、`app/harness/orchestration/`（router/budget/gates/plan/confirm）、`app/harness/execution/`（registry/binding/dispatch/toolnode/worker_bridge）、`app/harness/feedback/`（observation/rules/review/budget/isolation）、`app/harness/security/`（secrets/auth）、`app/harness/skills/`（registry）、`app/agent/`（routing/react/clarify/plan_solve/reflect + graph 改造）、`app/llm/`（contracts/gateway should_abort 迁移）、`app/routers/ws.py`（事件桥接 + /stop + /compact + confirm_ack）、`migrations/versions/a1f3c5e7b9d1_新增harness检查点表.py`、`tests/`（新增 8 个测试文件 + 改造 test_agent_graph/test_llm_graph 等） | 按 §9.3 六层 × 阶段清单逐文件落地，全部 TDD 验收点（O-A*/X-A*/E-A*/F-A*/P-A*/C-A*）有对应测试覆盖；`should_abort` 不入 GraphState；`api_key` 不入 SerializableRequest；节点不持 WS 连接；长工具门禁拦截；`rag` 未接入必失败。 |
 
 本次修订含需求文档版本闭环与 `feat/agent-stage1` 分支的实现代码清单；不改变任何 API、数据库表结构（新增 harness 检查点表迁移）、前端或 Worker 运行契约。
+
+### V1.4.7 澄清卡链路实现闭环（main 直接迭代，2026-08-24）
+
+按 §3.9.6 / M9 §3.5.1 补齐澄清卡前后端缺口：
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/agent/graph.py` | `LangGraphAgent.astream` 增加 `resume` 参数：`Command(resume=answer)` 恢复被澄清卡中断的图（thread_id 与中断时一致） |
+| `backend/api/app/routers/ws.py` | 新增 `_SESSION_CLARIFY` 待回复澄清卡注册表；`_run_turn` 支持 `resume` 模式（复用 thread_id、不构造新请求）；消费 `__interrupt__` 帧翻译为 `clarify` 事件（`_handle_clarify_interrupt`）；收包循环新增 `clarify_reply` 分支（`_handle_clarify_reply`：id 匹配校验/空回复拒绝/回合串行 CONCURRENCY，`Command(resume)` 恢复）；新用户消息作废旧澄清卡 |
+| `frontend/src/api/ws.ts` | 新增 `sendClarifyReply(id, answer)`；`types.ts` 事件联合类型补 `'clarify'` |
+| `frontend/src/components/agent/ClarifyCard.vue` | 新增澄清卡组件：问题 + 可选选项 chips + 回复输入 + 发送（**仅回复，无确认入队**，与 ConfirmCard 互斥） |
+| `frontend/src/views/Agent.vue` | StreamItem 补 `clarify` 项；模板渲染 ClarifyCard；三处事件分支（live/replay/buffer）处理 `clarify`；`handleClarifyReply` 发送并盖章；`harnessStage` 类型与标签补 `plan_solve`（「Plan-Solve 执行中」） |
+| `backend/api/tests/test_ws_clarify.py` | 新增 6 项链路测试（中断注册/无待回复/失效 id/空回复/恢复同 thread/并发拒绝） |
+
+验收：`ruff check . ../shared` 全绿；后端 pytest **303 项全绿**；前端 `npm run typecheck` + `npm run build` 通过。澄清卡仅回复输入、不建任务、不写 pending_confirm（M4 §3.9.6）。
+
+### V1.4.8 验收文案修正（2026-08-24）
+
+生产验收（47.119.132.83）发现 `/help` 帮助文本仍标注「/compact 后续版本开放」，与事实不符（`/compact` 已由 ws.py 收包循环直连实现）。修正：
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/agent/routing.py` | `HELP_TEXT` 更新：`/compact：压缩本会话模型窗口（仅会话负责人）`，`/cancel、/stress：后续版本开放`；`direct_node` 的 `/compact` 分支移出「未启用」集合，改为不可达路径防御提示「由平台会话控制处理」（WS 拦截为唯一入口，图节点不持 DB） |
+| `backend/api/tests/test_agent_routing.py` | 更新 `test_unimplemented_slash_returns_validation`（/compact 断言变更）；新增 `test_help_text_mentions_compact_available`（帮助文本与现状一致性回归） |
+
+验收：routing 9 项测试全过、ruff 全绿；生产 WS 层 T3 `/compact` 实测通过。
+
+### V1.4.9 会话工作区隔离（2026-08-24）
+
+实现「每个会话一个独立文件夹（工作区）」：会话级沙箱根目录 `{root}/{session_id}`，`read`/`write`/`edit` 与后续 `bash` 均以工作区为根天然隔离。
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/harness/execution/workspace.py`（新增） | `get_workspace_root()`（env `AGENT_WORKSPACE_ROOT` 优先 → 容器 `/data/workspaces`（`./data` 持久卷挂载）→ 本地 `data/workspaces`）；`session_workspace_dir()`（session_id 严格校验 UUID 安全字符集，**防路径穿越**，M5-D7 目录侧闭环）；`ensure_session_workspace()`（mkdir -p 幂等） |
+| `backend/api/app/routers/ws.py` | `_run_turn` 每回合 `ensure_session_workspace(session_id)` 并注入 `configurable["sandbox"]["dir"]`（toolnode 已有读取路径，优先于构造默认值） |
+| `backend/api/app/harness/execution/__init__.py` | 导出 workspace 三函数 |
+| `backend/api/tests/test_harness_workspace.py`（新增） | 5 项测试：目录创建、双会话隔离、非法 id 拒绝（路径穿越/空/超长）、根解析、toolnode 集成（`configurable['sandbox']['dir']` 生效 + 跨工作区读取被拒） |
+
+说明：不新增任何对外 REST/WS 字段（sandbox 仅内部 `RunnableConfig.configurable`）；`bash` 命令仍按红线不注册（阶段 2 不开放通用 bash），工作区目录即后续 bash 的 cwd 边界。验收：ruff 全绿、相关 20 项测试全过。
+
+### V1.5.0 bwrap 沙箱开放通用 bash（2026-08-24）
+
+把 V1.4.5 起冻结的「bash 不开放」升级为**阶段 3 bwrap 进程级沙箱**：每次 bash 调用起一次性沙箱，无网络、会话工作区唯一可写、资源受限（ulimit 内存/进程数/CPU）、超时整树清理；黑名单保留为纵深防御，bwrap 不可用/引擎关闭时 fail-closed。§7「通用 bash 工具」红线行已回写。
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/harness/execution/sandbox.py`（新增） | `SandboxLimits`（memory/nproc/cpu）；`_build_bwrap_argv`（`--unshare-*` + 最小只读 bind + `--bind` 工作区到 `/work` + `--tmpfs /tmp /run` + clearenv）；`run_sandboxed`（Popen + `start_new_session`，超时 `killpg(SIGKILL)` 整树清理，非零退出码归一 INTERNAL，bwrap 缺失/启动失败归一 VALIDATION fail-closed）；`probe_sandbox`（冒烟探测 + 进程内缓存） |
+| `backend/api/app/harness/execution/dispatch.py` | `run_bash` 保留 `BASH_BLOCKLIST` 首词校验（纵深防御），执行体改走 `run_sandboxed`；模块头部安全边界更新 |
+| `backend/api/app/harness/execution/registry.py` | 注册 `bash` 工具（`permission="sandbox.bash"`、`timeout_s=15.0`）；`_bash_handler` 读 Settings 构造 `SandboxLimits`，引擎非 `bwrap` 时 fail-closed |
+| `backend/api/app/harness/feedback/rules.py` | 门禁 #3 bash 黑名单语义更新为「纵深防御（bwrap 之外第二道防线）」，集合保留 |
+| `backend/api/app/config.py` | 新增 `sandbox_engine/memory_mb/nproc/cpu_s/bwrap_bin` Settings |
+| `backend/api/app/routers/ws.py` | `configurable["sandbox"]` 扩展为 `{dir, engine, limits}`（仍仅内部配置，无对外字段） |
+| `backend/api/app/harness/execution/toolnode.py` | `tool_node` 转 **async 节点**，`execute` 经 `asyncio.to_thread` 线程池执行（防 15s bash 阻塞 api 事件循环） |
+| `backend/api/Dockerfile` | apt 安装 `bubblewrap` |
+| `docker-compose.yml` | api 服务加 `security_opt: [seccomp:unconfined]`（Docker 默认 seccomp 拦截 bwrap 所需的 unshare/mount/pivot_root） |
+| `backend/api/tests/test_harness_execution.py` | 注册表断言改为含 bash；新增 mock `run_sandboxed`、fail-closed、引擎 off 用例 |
+| `backend/api/tests/test_harness_sandbox.py`（新增） | 集成测试（`skipif not probe_sandbox()`）：正常执行/工作区可写/系统目录只读/敏感路径遮蔽/跨会话隔离/超时整树清理/内存超限/无网络/fork 炸弹受限 |
+
+说明：不新增任何对外 REST/WS 字段（sandbox 仅内部 `RunnableConfig.configurable`，API.md 契约不变）；无 Alembic 迁移（无表变更）；`bash` 沙箱在 api 容器内以 root 运行，依赖 compose `seccomp:unconfined`，更严格的自定义 seccomp profile 列为后续项。验收：ruff 全绿、API 全量 314 项测试过、worker 12 项测试过。

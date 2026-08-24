@@ -3,11 +3,11 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 反馈层模块设计 |
-| 版本 | V0.4.1 |
+| 版本 | V0.5.0 |
 | 审查日期 | 2026-08-24 |
 | 文档性质 | 模块设计说明书（需求发散 + 架构设计 + 接口签名） |
 | 适用模块 | M6 反馈层（`app/harness/feedback/`；`reflect_node` 归 M4 `app/agent/reflect.py`，本层仅提供库函数供其调用） |
-| 上游权威 | Harness 需求文档 V1.4.4 §4.6、§2.5、§7、§9；API.md V1.22 §4.3；PRD §5.1.3 |
+| 上游权威 | Harness 需求文档 V1.5.0 §4.6、§2.5、§7、§9；API.md V1.22 §4.3；PRD §5.1.3 |
 
 > **阅读关系**：本文是 Harness §9.2「层 6 反馈」行的展开。`Observation` 归一逻辑归本层（M5 `dispatch` 执行后调本层归一）；规则门禁先行；模型辅助核对只能 `pass→clarify` 降级（FB-3）；Worker 事件不污染消息窗口（FB-5，与 M2 协作）。
 
@@ -62,7 +62,7 @@
 | :--- | :--- | :--- |
 | 长工具 | `call.name ∈ LONG_TOOLS` → 拒绝图内执行 | `VALIDATION` |
 | 白名单 | `call.name` 未注册 | `VALIDATION` |
-| 任意代码 | `bash` 命中黑名单 | `VALIDATION` |
+| 任意代码 | `bash` 命中黑名单（纵深防御；bwrap 沙箱之外第二道防线） | `VALIDATION` |
 | 一单一 kind | 确认卡 `kind` 四选一，不混跑 | `VALIDATION` |
 | 必填槽位 | PlanArtifact 缺必填字段 | `VALIDATION` |
 | 资产溯源 | file_id 非归属 | `VALIDATION` |
@@ -355,6 +355,7 @@ def assert_not_in_messages(event: str) -> None:
 | 文件 | 操作 | 作用 |
 | :--- | :--- | :--- |
 | `docs/AI测试与评估平台-Harness-反馈层.md` | 新增 V0.3 → 修订 V0.4 → 修订 V0.4.1 | V0.3 M6 反馈层模块设计：定义工具结果归一（异常不裸抛）、规则门禁先行（8 类）、模型辅助核对（仅 pass→clarify 降级）、失败反馈预算、Worker 事件隔离；含接口签名级（`normalize`/`check_gates`/`review`/`FeedbackBudget`/`isolate_worker_event`/`reflect_node`）与 TDD 验收；明确与 M5/M2/M4 的归一/门禁/预算分层边界；V0.4 对齐 API.md V1.21：新增 §8「前端联调」章节列出 observation/rules/review/budget 对应的前端组件、契约与验收点（含脱敏标记透出、clarify 降级语义、错误码文案中性化）；V0.4.1 契约收敛版：统一上游权威与 §8 契约为 API.md V1.22；§3.8.5 补充 Worker 事件归属边界（progress/report/error 为 WS 持久化事件，task.* 为任务事件，均非图节点产出、不进 NodeEventKind）。 |
+| `docs/AI测试与评估平台-Harness-反馈层.md` | 修订 V0.5.0 | V0.5.0 bwrap 沙箱配套：§2.2 门禁表「任意代码」标注 `bash` 黑名单为**纵深防御**（bwrap 沙箱之外第二道防线），语义与执行层 §3.5/sandbox.py 对齐；上游权威同步 Harness 需求文档 V1.5.0。 |
 
 本文档仅设计反馈层，不改变任何 API、数据库、前端或 Agent 运行代码。
 

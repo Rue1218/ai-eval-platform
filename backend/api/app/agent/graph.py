@@ -109,15 +109,28 @@ class LangGraphAgent:
         self,
         request: SerializableRequest,
         config: dict | None = None,
+        *,
+        resume: object | None = None,
     ) -> AsyncIterator[tuple[str, dict]]:
         """执行一轮流式 Agent 调用。
 
         产出 ``(mode, chunk)`` 二元组：
         - ``mode="custom"``：模型正文/推理增量（瞬态帧，Chat 路径）；
-        - ``mode="updates"``：节点增量（含 pending_events，收包循环统一 emit）。
+        - ``mode="updates"``：节点增量（含 pending_events，收包循环统一 emit），
+          澄清卡中断时含 ``__interrupt__`` 键（收包循环翻译为 clarify 事件）。
+
+        ``resume`` 非 None 时以 ``Command(resume=...)`` 恢复被澄清卡中断的图
+        （thread_id 必须与中断时一致，M9 §3.5.1）。
         """
+        from langgraph.types import Command
+
+        graph_input: object
+        if resume is not None:
+            graph_input = Command(resume=resume)
+        else:
+            graph_input = {"request": request}
         async for mode, chunk in self._graph.astream(
-            {"request": request},
+            graph_input,
             config=config or {},
             stream_mode=["custom", "updates"],
         ):

@@ -197,9 +197,9 @@ export const api = {
 
   // 2. 文件上传
   files: {
-    async upload(file: File): Promise<{ id: string; filename: string; size: number }> {
+    async upload(file: File): Promise<{ id: string; filename: string; size: number; content_type?: string | null }> {
       if (getDataMode() === 'mock') {
-        return { id: 'file-' + Date.now(), filename: file.name, size: file.size }
+        return { id: 'file-' + Date.now(), filename: file.name, size: file.size, content_type: file.type }
       }
       const formData = new FormData()
       formData.append('file', file)

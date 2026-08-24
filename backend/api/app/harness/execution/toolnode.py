@@ -1,17 +1,20 @@
-"""Harness 执行层：ToolNode 包装（M5 阶段 2，EX-1）。
+"""Harness 执行层：ToolNode 包装（M5 阶段 3，EX-1）。
 
-``build_tool_node`` 返回 LangGraph 节点函数：消费 ``GraphState.pending_tool``
+``build_tool_node`` 返回 LangGraph 异步节点函数：消费 ``GraphState.pending_tool``
 （ToolCall 投影），经门禁 → 绑定 → 分派 → 归一为 ``Observation``，写回
 ``observations`` + ``tool_call/tool_result`` 事件意图；不直接 emit（事件桥接
 契约）。``pending_tool`` 图外不持久化，回合结束随工作记忆清除（MEM-1）。
 
 会话上下文（session_id/user_id/附件归属/沙箱目录）经
 ``RunnableConfig.configurable`` 注入（M4-Q2 命名空间约定），不入 GraphState。
+节点为异步：``execute`` 经 ``asyncio.to_thread`` 在线程池执行，避免 15s bash
+沙箱调用阻塞 api 事件循环（影响其他 WS 连接心跳）。
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import asyncio
+from collections.abc import Awaitable, Callable
 
 from langgraph.config import get_config
 
@@ -30,15 +33,15 @@ def build_tool_node(
     db_factory: Callable[[], object] | None = None,
     sandbox_dir: str | None = None,
     user_id: str = "",
-) -> Callable[[GraphState], dict]:
-    """构造 ToolNode 节点函数（EX-1）。
+) -> Callable[[GraphState], Awaitable[dict]]:
+    """构造 ToolNode 异步节点函数（EX-1）。
 
     ``db_factory`` 延迟提供 DB Session（节点内按需获取，避免跨 Session 传
     ORM 对象）；``sandbox_dir``/``user_id`` 为平台注入的默认值（模型不可传），
     优先读 ``RunnableConfig.configurable``（session/credentials/sandbox 命名空间）。
     """
 
-    def tool_node(state: GraphState) -> dict:
+    async def tool_node(state: GraphState) -> dict:
         pending = state.get("pending_tool")
         if not pending:
             return {"pending_events": []}
@@ -51,7 +54,8 @@ def build_tool_node(
         session_id = str(configurable.get("session", {}).get("id") or "")
         current_user = str(configurable.get("credentials", {}).get("user_id") or user_id)
         owned_file_ids = frozenset(configurable.get("assets", {}).get("file_ids") or ())
-        sandbox = str(configurable.get("sandbox", {}).get("dir") or sandbox_dir or "")
+        sandbox_box = configurable.get("sandbox") or {}
+        sandbox = str(sandbox_box.get("dir") or sandbox_dir or "")
         definition = registry.get(call.name)  # 未注册抛 VALIDATION
         # 1. 门禁（FB-2）：长工具/白名单/资产溯源/占槽等
         context = GateContext(
@@ -89,7 +93,9 @@ def build_tool_node(
             if db is not None:
                 db.close()
         # 3. 分派（EX-3）：超时 + 脱敏日志 → 归一 Observation
-        observation = execute(
+        # 异步节点经 to_thread 执行：避免 bash 等同步工具阻塞事件循环
+        observation = await asyncio.to_thread(
+            execute,
             ToolCall(name=call.name, arguments=safe_args),
             timeout_s=definition.timeout_s,
             permission=definition.permission,

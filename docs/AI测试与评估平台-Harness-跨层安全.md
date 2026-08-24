@@ -3,11 +3,11 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 跨层安全模块设计 |
-| 版本 | V0.4.1 |
+| 版本 | V0.5.0 |
 | 审查日期 | 2026-08-24 |
 | 文档性质 | 模块设计说明书（需求发散 + 架构设计 + 接口签名） |
 | 适用模块 | M8 跨层安全（`app/harness/security/`） |
-| 上游权威 | Harness 需求文档 V1.4.4 §4.2/§4.4/§4.5/§5.2.1/§7；API.md V1.22 §4.1/§4.4/§5；PRD §5.1.2 |
+| 上游权威 | Harness 需求文档 V1.5.0 §4.2/§4.4/§4.5/§5.2.1/§7；API.md V1.22 §4.1/§4.4/§5；PRD §5.1.2 |
 
 > **阅读关系**：本文是 Harness §9.2「跨层安全」行的展开。`secrets.py` 递归脱敏供 M2/M5/M6 调用（CX-3）；`auth.py` 确认卡 owner 校验 + 行锁供 M4 `confirm.py` 调用（OR-8）。本层不含用户鉴权（通用 `security.py`）与 WS 短票（`ws.py`）。
 
@@ -213,6 +213,7 @@ def assert_no_concurrent_confirm(pending: PendingConfirm) -> None:
 | M8-D3 | owner 校验文案 | 不泄露"非作者"具体原因，统一"无权操作确认卡" |
 | M8-D4 | 行锁方式 | `SELECT ... FOR UPDATE` 行锁读 `sessions.pending_confirm` |
 | M8-D5 | 脱敏键集合 | 5 类（api_key/token/password/secret/cookie）大小写不敏感 |
+| M8-D6（V0.5.0） | bash 沙箱边界 | 阶段 3 开放通用 bash：**bwrap 进程级沙箱**（`sandbox.py`）——`--unshare-user/net/pid/ipc/uts` 命名空间隔离、最小只读 bind（`/usr`/`/bin`/`/sbin`/`/lib*`/`/etc`，**不暴露** `/app`、`/run/config/.env`、`/data` 下其他会话工作区）、`--bind` 会话工作区到 `/work`（唯一可写面）、`--tmpfs /tmp /run`、`--clearenv` + 最小 PATH；`ulimit` 内存（256MB）/进程数（32）/CPU（10s）+ 墙钟超时（15s）`killpg` 整树清理（`--die-with-parent`）。命令黑名单为**纵深防御**；bwrap 不可用/引擎 `off` 时 **fail-closed（VALIDATION）**，禁止降级为裸 subprocess。威胁模型：防跨会话/宿主逃逸与资源耗尽（fork 炸弹/内存），不防会话内自毁（工作区文件由模型操作）。部署依赖 api 容器 `security_opt: seccomp:unconfined`；更严格的自定义 seccomp profile 列为后续项 |
 
 ---
 
@@ -241,6 +242,7 @@ def assert_no_concurrent_confirm(pending: PendingConfirm) -> None:
 | 文件 | 操作 | 作用 |
 | :--- | :--- | :--- |
 | `docs/AI测试与评估平台-Harness-跨层安全.md` | 新增 V0.3 → 修订 V0.4 → 修订 V0.4.1 | V0.3 M8 跨层安全模块设计：定义递归脱敏（`redact`/`redact_for_log`，5 类键）与确认卡 owner 校验 + 行锁（`assert_confirm_owner`/`lock_pending_confirm`）；含接口签名级与 TDD 验收；明确与通用 `security.py`（用户鉴权）的边界；V0.4 对齐 API.md V1.21：新增 §8「前端联调」章节列出 auth/secrets 对应的前端处理、契约与验收点（含 owner 校验双层、4401/4404 关闭码显式处理、错误码文案中性化）；V0.4.1 契约收敛版：统一上游权威与 §8 契约为 API.md V1.22；补充现状标记（本层当前冻结未实现，`app/harness/security/` 为空包边界）。 |
+| `docs/AI测试与评估平台-Harness-跨层安全.md` | 修订 V0.5.0 | V0.5.0 bwrap 沙箱配套：§7 新增 M8-D6「bash 沙箱边界」裁决（bwrap 进程级隔离、fail-closed、部署依赖 seccomp:unconfined、威胁模型）；上游权威同步 Harness 需求文档 V1.5.0。 |
 
 本文档仅设计跨层安全，不改变任何 API、数据库、前端或 Agent 运行代码。
 

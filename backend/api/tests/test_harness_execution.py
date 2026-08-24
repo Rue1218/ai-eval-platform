@@ -65,12 +65,15 @@ def test_registry_get_unregistered_rejected() -> None:
     assert error.value.code == ErrorCode.VALIDATION
 
 
-def test_default_registry_excludes_bash() -> None:
-    """阶段 2 不开放通用 bash：默认注册表不含 bash。"""
+def test_default_registry_includes_bash() -> None:
+    """阶段 3 开放通用 bash（bwrap 沙箱）：默认注册表含 bash。"""
     registry = build_default_registry()
-    assert registry.is_registered("bash") is False
+    assert registry.is_registered("bash") is True
+    bash_def = registry.get_def("bash")
+    assert bash_def is not None
+    assert bash_def["permission"] == "sandbox.bash"
     names = {definition["name"] for definition in registry.all_defs()}
-    assert names == {"read", "write", "edit", "web_search", "web_fetch"}
+    assert names == {"read", "write", "edit", "web_search", "web_fetch", "bash"}
 
 
 def test_all_defs_serializable_without_handler() -> None:
@@ -87,6 +90,52 @@ def test_bash_blocklist_rejects_dangerous_commands() -> None:
             run_bash(command, sandbox_dir=".", timeout_s=1.0)
         assert error.value.code == ErrorCode.VALIDATION
     assert "rm" in BASH_BLOCKLIST
+
+
+def test_run_bash_delegates_to_sandbox(monkeypatch) -> None:
+    """EX-6：bash 执行走 bwrap 沙箱内核，而非裸 subprocess。"""
+    import app.harness.execution.dispatch as dispatch
+
+    captured: dict[str, object] = {}
+
+    def fake_run_sandboxed(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["sandbox_dir"] = kwargs["sandbox_dir"]
+        captured["timeout_s"] = kwargs["timeout_s"]
+        return "沙箱输出"
+
+    monkeypatch.setattr(dispatch, "run_sandboxed", fake_run_sandboxed)
+    result = run_bash("echo hi", sandbox_dir="/tmp/ws", timeout_s=15.0)
+    assert result == "沙箱输出"
+    assert captured["cmd"] == "echo hi"
+    assert captured["sandbox_dir"] == "/tmp/ws"
+    assert captured["timeout_s"] == 15.0
+
+
+def test_run_bash_fail_closed_when_sandbox_unavailable(monkeypatch) -> None:
+    """EX-6：沙箱引擎不可用（bwrap 缺失/seccomp 拦截）时 fail-closed。"""
+    import app.harness.execution.dispatch as dispatch
+
+    def fake_run_sandboxed(*_args, **_kwargs):
+        raise AppError(ErrorCode.VALIDATION, "沙箱引擎不可用")
+
+    monkeypatch.setattr(dispatch, "run_sandboxed", fake_run_sandboxed)
+    with pytest.raises(AppError) as error:
+        run_bash("echo hi", sandbox_dir="/tmp/ws", timeout_s=15.0)
+    assert error.value.code == ErrorCode.VALIDATION
+    assert "沙箱引擎不可用" in error.value.message
+
+
+def test_bash_handler_engine_off_rejected(monkeypatch) -> None:
+    """EX-6：引擎开关为 off 时 bash 工具 fail-closed。"""
+    from app.config import settings
+    from app.harness.execution.registry import _bash_handler
+
+    monkeypatch.setattr(settings, "sandbox_engine", "off")
+    with pytest.raises(AppError) as error:
+        _bash_handler({"command": "echo hi"}, "/tmp/ws")
+    assert error.value.code == ErrorCode.VALIDATION
+    assert "沙箱引擎未启用" in error.value.message
 
 
 def test_read_write_edit_sandbox_escape_rejected() -> None:

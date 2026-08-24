@@ -41,6 +41,13 @@ class Settings(BaseSettings):
     qwen_image_api_key: str = ""
     qwen_image_model: str = ""
     qwen_image_timeout_seconds: float = 120.0
+    # Harness 沙箱（bash 工具）：bwrap 一次性进程级沙箱。engine 为 "bwrap" 时
+    # 开放通用 bash；bwrap 不可用或 engine 为 "off" 时 bash 工具 fail-closed。
+    sandbox_engine: str = "bwrap"
+    sandbox_memory_mb: int = 256  # 沙箱虚拟内存上限（MB）
+    sandbox_nproc: int = 32  # 沙箱最大进程数（防 fork 炸弹）
+    sandbox_cpu_s: int = 10  # 沙箱 CPU 时间上限（秒）
+    sandbox_bwrap_bin: str = "/usr/bin/bwrap"
 
     @property
     def cors_origin_list(self) -> list[str]:

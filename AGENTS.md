@@ -1,7 +1,7 @@
 # AI 测试与评估平台 — AI Agent 行为规范与工程指南 (AGENTS.md)
 
 > **最高指示**：本文件是面向所有参与本项目的 **AI Agent 与开发者** 的最高行动指南。在编写或修改代码前，**必须严格遵守本文档所规定的架构边界、开发契约与行为红线**。
-> 版本：V1.1 ｜ 审查日期：2026-08-21
+> 版本：V1.2 ｜ 审查日期：2026-08-24
 
 ---
 
@@ -76,6 +76,7 @@
 | rag 知识库评测 | **必须失败**：LightRAG 未接入，禁止 mock `succeeded` | `backend/worker/app/main.py` |
 | stress 压测 | 骨架 mock（M4 替换） | `backend/worker/app/main.py` |
 | Agent 短工具 | 已接 image.generate、MIMO TTS 音色克隆/音频、LightRAG stub | `backend/api/app/agent/imagegen.py` 等 |
+| bash 工具 | **真实 bwrap 沙箱**（阶段 3）：一次性进程级沙箱（无网络、会话工作区唯一可写、ulimit 资源限制、超时整树清理）+ 黑名单纵深防御；bwrap 不可用/引擎 `off` 时 fail-closed | `backend/api/app/harness/execution/sandbox.py`、`dispatch.py`、`registry.py` |
 
 ---
 
@@ -288,6 +289,7 @@ except AppError as exc:
 - 禁止在 WS 收包循环里 `await` 整轮 Harness；禁止在 api 进程跑完长 MCP；
 - 禁止 LightRAG 未接入时把 RAG 任务 mock 成成功；
 - 禁止 `except Exception` 后把异常原文或堆栈发给浏览器。
+- **bash 必须走 bwrap 沙箱**（`sandbox.py`），禁止降级为裸 subprocess 或绕过沙箱执行命令（V1.2 红线）。
 
 ### 🟢 推荐操作五步法
 1. **先查后改、先开分支**：查阅 PRD、API.md、Agent 开发文档；从 `origin/main` 拉出 `<type>/<scope>-简述` 再写代码；

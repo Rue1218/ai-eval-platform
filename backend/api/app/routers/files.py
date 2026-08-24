@@ -29,6 +29,8 @@ ALLOWED_SUFFIXES = {
     ".xls",
     ".csv",
     ".jsonl",
+    ".doc",
+    ".docx",
     ".wav",
     ".mp3",
     ".png",

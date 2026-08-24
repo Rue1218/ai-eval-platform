@@ -69,6 +69,10 @@ services:
       QWEN_IMAGE_TIMEOUT_SECONDS: ${QWEN_IMAGE_TIMEOUT_SECONDS:-120}
       # Harness 记忆层 Redis 连接（短期回合状态 / 幂等键）；接入前无消费者，仅预注入。
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    # bwrap 沙箱需要 unshare/mount/pivot_root；Docker 默认 seccomp 拦截这些
+    # syscall，须放开（仅 api 容器；worker/其他服务不受影响）。
+    security_opt:
+      - seccomp:unconfined
     depends_on:
       postgres:
         condition: service_healthy

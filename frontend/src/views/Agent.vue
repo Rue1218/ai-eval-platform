@@ -175,16 +175,14 @@
             >
               <div v-if="item.author" class="user-author">{{ userMessageAuthorLabel(item) }}</div>
               <div class="bubble-user">{{ item.text }}</div>
-              <template v-if="item.files && item.files.length">
-                <span v-for="f in item.files" :key="f.name" class="attach-chip">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-                    <path d="M6 3h9l4 4v14H6Z" />
-                    <path d="M14 3v5h5" />
-                  </svg>
-                  <span>{{ f.name }}</span>
-                  <span class="mono">{{ f.size }}</span>
-                </span>
-              </template>
+              <div v-if="item.files && item.files.length" class="message-attachments">
+                <AttachmentPreview
+                  v-for="f in item.files"
+                  :key="f.localId || f.id || f.file_id || f.name"
+                  :attachment="f"
+                  compact
+                />
+              </div>
             </div>
 
             <!-- 2.1.1 打字占位气泡：LLM 意图识别期间的即时反馈（收到事件后由 dismissTyping 移除） -->
@@ -481,6 +479,15 @@
               </div>
             </div>
 
+            <!-- 2.4.1 澄清卡：interrupt() 暂停图后等待用户补充信息（仅回复，不建任务） -->
+            <ClarifyCard
+              v-else-if="item.type === 'clarify'"
+              :question="item.question || ''"
+              :options="item.options || null"
+              :is-acked="item.isAcked"
+              @reply="handleClarifyReply(item, $event)"
+            />
+
             <!-- 2.5 评测报告卡片 -->
             <div
               v-else-if="item.type === 'report'"
@@ -677,20 +684,31 @@
           </button>
         </div>
 
-        <!-- 附件暂存架（与输入区同宽居中对齐） -->
-        <div v-if="stagedFiles.length" class="attach-stage" style="display: flex; gap: 8px; flex-wrap: wrap; max-width: 760px; margin: 0 auto 8px">
-          <span v-for="(f, i) in stagedFiles" :key="f.name" class="attach-chip">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-              <path d="M6 3h9l4 4v14H6Z" />
-              <path d="M14 3v5h5" />
-            </svg>
-            <span>{{ f.name }}</span>
-            <span class="mono">{{ f.size }}</span>
-            <button class="link-btn" style="padding: 0 2px" @click="stagedFiles.splice(i, 1)">✕</button>
-          </span>
+        <!-- 附件预览架：图片显示缩略图，文档显示类型卡片，可点击预览或打开。 -->
+        <div v-if="stagedFiles.length" class="attach-stage">
+          <AttachmentPreview
+            v-for="f in stagedFiles"
+            :key="f.localId"
+            :attachment="f"
+            removable
+            @remove="removeStagedFile(f.localId)"
+          />
         </div>
 
-        <div class="composer-card" :class="{ generating: isGenerating }" style="position: relative;">
+        <div
+          class="composer-card"
+          :class="{ generating: isGenerating, 'drag-active': isDragActive }"
+          style="position: relative;"
+          @dragenter.prevent="handleDragEnter"
+          @dragover.prevent="handleDragOver"
+          @dragleave.prevent="handleDragLeave"
+          @drop.prevent="handleDrop"
+        >
+          <div v-if="isDragActive" class="composer-drop-hint">
+            <span class="composer-drop-icon">＋</span>
+            <strong>松开以上传附件</strong>
+            <span>支持图片、Markdown、PDF、Word、Excel 等格式</span>
+          </div>
           <!-- 斜杠命令悬浮面板 (宽 380px，键入 / 触发) -->
           <SlashPalette
             ref="slashPaletteRef"
@@ -719,7 +737,7 @@
           <div class="composer-bottom-bar">
             <div class="composer-left-actions">
               <!-- 添加附件按钮 -->
-              <button class="composer-action-btn" title="添加附件（≤20MB，支持 PRD/OpenAPI/Excel/CSV/PDF/wav/mp3/png/jpg 等）" @click="triggerFileInput">
+              <button class="composer-action-btn" type="button" title="添加附件（≤20MB，支持图片、Markdown、PDF、Word、Excel 等）" @click="triggerFileInput">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
                   <line x1="12" y1="5" x2="12" y2="19"></line>
                   <line x1="5" y1="12" x2="19" y2="12"></line>
@@ -729,7 +747,8 @@
                 ref="fileInputRef"
                 type="file"
                 hidden
-                accept=".md,.txt,.html,.pdf,.json,.yaml,.yml,.xlsx,.xls,.csv,.jsonl,.wav,.mp3,.png,.jpg,.jpeg,.webp,.gif"
+                accept=".md,.txt,.html,.pdf,.json,.yaml,.yml,.xlsx,.xls,.csv,.jsonl,.doc,.docx,.wav,.mp3,.png,.jpg,.jpeg,.webp,.gif"
+                multiple
                 @change="handleFileUpload"
               />
 
@@ -760,7 +779,7 @@
             <button
               class="composer-send-btn"
               :class="{ active: isGenerating || inputText.trim().length > 0 || stagedFiles.length > 0 }"
-              :disabled="!isGenerating && inputText.trim().length === 0 && stagedFiles.length === 0"
+              :disabled="!isGenerating && (isUploadingAttachments || (inputText.trim().length === 0 && !hasUploadedAttachments))"
               :title="isGenerating ? '暂停生成（不取消已入队任务）' : '发送 (Enter)'"
               @click="handleSendClick"
             >
@@ -877,9 +896,11 @@ import { getProviderLogoKey, type ProviderLogoKey } from '../utils/providerLogo'
 import { formatLatency } from '../utils/format'
 import { skillLabel } from '../agent/skillLabels'
 import SkillBadge from '../components/agent/SkillBadge.vue'
+import ClarifyCard from '../components/agent/ClarifyCard.vue'
 import ThoughtCard from '../components/agent/ThoughtCard.vue'
 import ToolCard from '../components/agent/ToolCard.vue'
 import MediaPreview from '../components/agent/MediaPreview.vue'
+import AttachmentPreview from '../components/agent/AttachmentPreview.vue'
 import MarkdownView from '../components/agent/MarkdownView.vue'
 import SlashPalette from '../components/agent/SlashPalette.vue'
 import { SYSTEM_SLASH_COMMANDS } from '../agent/slashRegistry'
@@ -926,7 +947,7 @@ function toggleDispatchRail() {
 
 const isWsOnline = ref(true)
 const isGenerating = ref(false)
-const harnessStage = ref<'plan' | 'react' | 'reflect' | ''>('')
+const harnessStage = ref<'plan' | 'react' | 'reflect' | 'plan_solve' | ''>('')
 const lastToolTitle = ref('')
 const turnLatencyMs = ref(0)
 const awaitingConfirm = computed(() =>
@@ -934,6 +955,7 @@ const awaitingConfirm = computed(() =>
 )
 const harnessStageLabel = computed(() => {
   if (harnessStage.value === 'plan') return '规划中'
+  if (harnessStage.value === 'plan_solve') return 'Plan-Solve 执行中'
   if (harnessStage.value === 'reflect') return '复核中'
   if (harnessStage.value === 'react' && lastToolTitle.value) return `ToolCall「${lastToolTitle.value}」`
   if (harnessStage.value === 'react') return 'ToolCall 中'
@@ -1026,7 +1048,25 @@ const allDeletableSessionsSelected = computed(() => {
   return deletableIds.length > 0 && deletableIds.every((id) => selectedSessionIds.value.includes(id))
 })
 const inputText = ref('')
-const stagedFiles = ref<any[]>([])
+
+interface StagedAttachment {
+  localId: string
+  id: string
+  name: string
+  size: number
+  contentType: string
+  previewUrl: string
+  file: File
+  uploading: boolean
+  error: boolean
+}
+
+const stagedFiles = ref<StagedAttachment[]>([])
+const isDragActive = ref(false)
+const isUploadingAttachments = computed(() => stagedFiles.value.some((file) => file.uploading))
+const hasUploadedAttachments = computed(() => stagedFiles.value.some((file) => Boolean(file.id) && !file.error))
+let dragDepth = 0
+const localAttachmentUrls = new Set<string>()
 const activeTask = ref<Task | null>(null)
 // 取消请求发送后等待服务端确认，避免重复提交且不提前伪造 cancelled。
 const cancellingTaskId = ref<string | null>(null)
@@ -1170,9 +1210,13 @@ export interface AgentToolItem {
 }
 
 interface StreamItem {
-  type: 'user' | 'agent' | 'thought' | 'tool' | 'media' | 'confirm' | 'report' | 'error' | 'typing'
+  type: 'user' | 'agent' | 'thought' | 'tool' | 'media' | 'confirm' | 'clarify' | 'report' | 'error' | 'typing'
   text?: string
   done?: boolean
+  // 澄清卡（M4 §3.9.6：id 匹配 clarify_reply，仅回复输入）
+  id?: string
+  question?: string
+  options?: string[] | null
   collapsed?: boolean
   latency_ms?: number
   stage?: 'plan' | 'react' | 'reflect'
@@ -1285,15 +1329,27 @@ function currentAgentMessageMeta(): Pick<StreamItem, 'providerLogoKey' | 'modelN
   }
 }
 
+/** 追加本地演示助手消息，并同步当前 Agent 的供应商 Logo 与模型元数据。 */
+function pushAgentMessage(text: string) {
+  events.value.push({
+    type: 'agent',
+    text,
+    ...currentAgentMessageMeta(),
+  })
+}
+
 /** 解析历史消息中的供应商 Logo 标识，优先使用快照字段。 */
 function resolveMessageLogoKey(m: { provider?: string | null; profile_id?: string | null; model_name?: string | null }): ProviderLogoKey {
-  if (m.provider) return m.provider as ProviderLogoKey
+  if (m.model_name) {
+    const key = getProviderLogoKey({ model: m.model_name })
+    if (key !== 'custom') return key
+  }
   if (m.profile_id) {
     const prof = allProfiles.value.find((p) => p.id === m.profile_id)
     if (prof) return getProviderLogoKey(prof)
   }
-  if (m.model_name) {
-    return getProviderLogoKey({ model: m.model_name })
+  if (m.provider) {
+    return getProviderLogoKey({ name: m.provider, model: m.model_name || '' })
   }
   return agentProfileLogoKey.value || 'custom'
 }
@@ -1374,7 +1430,7 @@ let lastConfirmKind = 'benchmark'
 interface SessionRuntime {
   events: StreamItem[]
   isGenerating: boolean
-  harnessStage: 'plan' | 'react' | 'reflect' | ''
+  harnessStage: 'plan' | 'react' | 'reflect' | 'plan_solve' | ''
   lastToolTitle: string
   turnLatencyMs: number
   activeTask: any
@@ -1843,34 +1899,112 @@ function triggerFileInput() {
   fileInputRef.value?.click()
 }
 
-/** 附件选择后立即调 api.files.upload 换取 file_id，发送消息时随 WS attachments 回传（对齐原型）。 */
+const ALLOWED_ATTACHMENT_SUFFIXES = new Set([
+  '.md', '.txt', '.html', '.pdf', '.json', '.yaml', '.yml', '.xlsx', '.xls', '.csv', '.jsonl',
+  '.doc', '.docx', '.wav', '.mp3', '.png', '.jpg', '.jpeg', '.webp', '.gif',
+])
+
+function hasAllowedAttachmentSuffix(file: File): boolean {
+  const dotIndex = file.name.lastIndexOf('.')
+  return dotIndex >= 0 && ALLOWED_ATTACHMENT_SUFFIXES.has(file.name.slice(dotIndex).toLowerCase())
+}
+
+function createAttachmentPreviewUrl(file: File): string {
+  const url = URL.createObjectURL(file)
+  localAttachmentUrls.add(url)
+  return url
+}
+
+function releaseAttachmentPreviewUrl(file: Pick<StagedAttachment, 'previewUrl'>) {
+  if (!file.previewUrl || !localAttachmentUrls.has(file.previewUrl)) return
+  URL.revokeObjectURL(file.previewUrl)
+  localAttachmentUrls.delete(file.previewUrl)
+}
+
+/** 把文件加入暂存架并立即上传，发送时只把成功换取的 file_id 写入 WS 消息。 */
+async function stageAttachmentFiles(files: File[]) {
+  const validFiles: File[] = []
+  let invalidCount = 0
+  for (const file of files) {
+    if (file.size > 20 * 1024 * 1024 || !hasAllowedAttachmentSuffix(file)) {
+      invalidCount += 1
+      continue
+    }
+    validFiles.push(file)
+  }
+  if (invalidCount) {
+    message.error('有附件格式不支持或超过 20MB，请检查后重试')
+  }
+
+  await Promise.all(validFiles.map(async (file) => {
+    const staged: StagedAttachment = {
+      localId: createClientMessageId(),
+      id: '',
+      name: file.name,
+      size: file.size,
+      contentType: file.type,
+      previewUrl: createAttachmentPreviewUrl(file),
+      file,
+      uploading: true,
+      error: false,
+    }
+    stagedFiles.value.push(staged)
+    try {
+      const res = await api.files.upload(file)
+      const current = stagedFiles.value.find((item) => item.localId === staged.localId)
+      if (!current) return
+      current.id = res.id
+      current.contentType = res.content_type || file.type
+      current.uploading = false
+      message.success(`附件 ${file.name} 已上传`)
+    } catch {
+      const current = stagedFiles.value.find((item) => item.localId === staged.localId)
+      if (!current) return
+      current.uploading = false
+      current.error = true
+      message.error(`附件 ${file.name} 上传失败`)
+    }
+  }))
+}
+
+/** 文件选择支持多选，与拖拽上传共用同一校验和上传流程。 */
 async function handleFileUpload(e: Event) {
   const target = e.target as HTMLInputElement
-  const f = target.files?.[0]
-  if (!f) return
+  const files = Array.from(target.files || [])
   target.value = ''
-  if (f.size > 20 * 1024 * 1024) {
-    message.error('单文件不超过 20MB')
-    return
-  }
-  // 先上传拿到 file_id，消息内仅引用 id（契约：attachments = [{ file_id }]）
-  const staged = {
-    name: f.name,
-    size: f.size > 1048576 ? `${(f.size / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(f.size / 1024))} KB`,
-    file: f,
-    id: '',
-    uploading: true,
-  }
-  stagedFiles.value.push(staged)
-  try {
-    const res = await api.files.upload(f)
-    staged.id = res.id
-    staged.uploading = false
-    message.success('附件已上传')
-  } catch {
-    staged.uploading = false
-    message.error('附件上传失败，发送时将被忽略')
-  }
+  if (files.length) await stageAttachmentFiles(files)
+}
+
+/** 拖拽进入时用深度计数避免经过子节点触发闪烁。 */
+function handleDragEnter(e: DragEvent) {
+  if (!e.dataTransfer?.types.includes('Files')) return
+  dragDepth += 1
+  isDragActive.value = true
+}
+
+function handleDragOver(e: DragEvent) {
+  if (!e.dataTransfer?.types.includes('Files')) return
+  e.dataTransfer.dropEffect = 'copy'
+  isDragActive.value = true
+}
+
+function handleDragLeave() {
+  dragDepth = Math.max(0, dragDepth - 1)
+  if (dragDepth === 0) isDragActive.value = false
+}
+
+function handleDrop(e: DragEvent) {
+  dragDepth = 0
+  isDragActive.value = false
+  const files = Array.from(e.dataTransfer?.files || [])
+  if (files.length) void stageAttachmentFiles(files)
+}
+
+function removeStagedFile(localId: string) {
+  const index = stagedFiles.value.findIndex((file) => file.localId === localId)
+  if (index < 0) return
+  const [removed] = stagedFiles.value.splice(index, 1)
+  if (removed) releaseAttachmentPreviewUrl(removed)
 }
 
 /** 键盘事件监听：SlashPalette 导航、Enter 发送，Shift + Enter 换行，Backspace 删除命令 Tag */
@@ -1924,17 +2058,15 @@ function handleSendClick() {
       agentWs.sendUserMessage('/stop', [], createClientMessageId())
     } else {
       setCurrentGenerating(false)
-      events.value.push({
-        type: 'agent',
-        text: '<p class="muted">已暂停生成。已入队的任务不受影响。</p>',
-      })
+      pushAgentMessage('<p class="muted">已暂停生成。已入队的任务不受影响。</p>')
     }
     scrollToBottom()
     return
   }
   const rawInput = inputText.value.trim()
   const text = selectedSlashCmd.value ? `/${selectedSlashCmd.value}${rawInput ? ' ' + rawInput : ''}` : rawInput
-  if (!text && stagedFiles.value.length === 0) return
+  if (isUploadingAttachments.value) return
+  if (!text && !hasUploadedAttachments.value) return
 
   const files = [...stagedFiles.value]
   stagedFiles.value = []
@@ -2064,10 +2196,7 @@ function runBenchmarkFlow(withStress = false) {
       status: 'ok',
       open: false,
     })
-    events.value.push({
-      type: 'agent',
-      text: `<p>找到 <b>${availableProfiles.value.length}</b> 个被测协议档与 <b>${availableDatasets.value.length}</b> 个数据集。建议用 <b>smoke-20 v3</b>（20 行，主指标 contain）做对比。请确认评测单${withStress ? '；已按「先评后压」预开压测开关' : ''}：</p>`,
-    })
+    pushAgentMessage(`<p>找到 <b>${availableProfiles.value.length}</b> 个被测协议档与 <b>${availableDatasets.value.length}</b> 个数据集。建议用 <b>smoke-20 v3</b>（20 行，主指标 contain）做对比。请确认评测单${withStress ? '；已按「先评后压」预开压测开关' : ''}：</p>`)
     events.value.push({
       type: 'confirm',
       card: normalizeConfirmCard({
@@ -2109,10 +2238,7 @@ function runRagFlow() {
       status: 'ok',
       open: false,
     })
-    events.value.push({
-      type: 'agent',
-      text: '<p>内置库 <b>default</b>（LightRAG，12 篇文档）配有黄金 QA <b>qa-v1 v2</b>（20 条）。默认用 hybrid 模式、K=5。请确认：</p>',
-    })
+    pushAgentMessage('<p>内置库 <b>default</b>（LightRAG，12 篇文档）配有黄金 QA <b>qa-v1 v2</b>（20 条）。默认用 hybrid 模式、K=5。请确认：</p>')
     events.value.push({
       type: 'confirm',
       card: normalizeConfirmCard({
@@ -2147,10 +2273,7 @@ function runTestCaseFlow(file?: any) {
 
   trackTimeout(() => {
     finishThought(th)
-    events.value.push({
-      type: 'agent',
-      text: '<p>将基于「支付」模块 PRD 生成用例，预计 40 条（中等复杂度上限 45）。生成后进入 <b>awaiting_case_confirm</b>，需你在 72h 内确认入库。请确认：</p>',
-    })
+    pushAgentMessage('<p>将基于「支付」模块 PRD 生成用例，预计 40 条（中等复杂度上限 45）。生成后进入 <b>awaiting_case_confirm</b>，需你在 72h 内确认入库。请确认：</p>')
     events.value.push({
       type: 'confirm',
       card: normalizeConfirmCard({
@@ -2223,13 +2346,11 @@ function handleConfirmAck(item: StreamItem, confirmed: boolean) {
 
   // 显式 mock 模式：本地演示入队与进度。
   if (!confirmed) {
-    events.value.push({
-      type: 'agent',
-      text: '<p>已取消，未创建任务。需要调整目标可以继续说。</p>',
-    })
+    pushAgentMessage('<p>已取消，未创建任务。需要调整目标可以继续说。</p>')
     scrollToBottom()
     return
   }
+
 
   // Mock 模式：本地模拟入队与进度，便于无后端环境演示。
   events.value.push({
@@ -2283,14 +2404,23 @@ function handleConfirmAck(item: StreamItem, confirmed: boolean) {
   }, 1000, true)
 }
 
+/** 澄清卡回复：发送 clarify_reply（id 匹配服务端最近待回复澄清卡）并盖章。 */
+function handleClarifyReply(item: StreamItem, answer: string) {
+  if (item.type !== 'clarify' || item.isAcked) return
+  if (!agentWs || !agentWs.isConnected || !item.id) {
+    message.error('Agent 连接未就绪，暂不能发送回复')
+    return
+  }
+  item.isAcked = true
+  agentWs.sendClarifyReply(item.id, answer)
+  scrollToBottom()
+}
+
 /** 派生压测子任务（mock 演示）：agent 说明 → stress 进度坞实时序列 → prod 会签 → 压测报告卡。 */
 function runStressChild(card: any) {
   const env = card.stress_env || card.stress?.env || 'test'
   const qps = card.stress_qps || card.stress?.qps || 20
-  events.value.push({
-    type: 'agent',
-    text: `<p>质量评测 <b>succeeded</b>，已按「先评后压」自动派生共享压测子任务（env=${env} · ${qps} QPS）。</p>`,
-  })
+  pushAgentMessage(`<p>质量评测 <b>succeeded</b>，已按「先评后压」自动派生共享压测子任务（env=${env} · ${qps} QPS）。</p>`)
   activeTask.value = {
     id: 't-stress-' + Math.random().toString(16).slice(2, 6),
     kind: 'stress',
@@ -2345,15 +2475,9 @@ function runStressChild(card: any) {
 
   if (env === 'prod') {
     // prod 生产压测需双人会签：模拟会签通过后开始发压
-    events.value.push({
-      type: 'agent',
-      text: '<p>⚠ <b>NEED_APPROVAL</b>：prod 环境压测需双人会签，子任务已挂起等待审批。</p>',
-    })
+    pushAgentMessage('<p>⚠ <b>NEED_APPROVAL</b>：prod 环境压测需双人会签，子任务已挂起等待审批。</p>')
     trackTimeout(() => {
-      events.value.push({
-        type: 'agent',
-        text: '<p>prod 会签已通过（双人确认），压测子任务开始发压。</p>',
-      })
+      pushAgentMessage('<p>prod 会签已通过（双人确认），压测子任务开始发压。</p>')
       startStress()
     }, 2600, true)
   } else {
@@ -2412,10 +2536,7 @@ function handleInterpretReport(reportId: string) {
       status: 'ok',
       open: false,
     })
-    events.value.push({
-      type: 'agent',
-      text: '<p><b>解读（基于已有报告，不重跑）：</b>gpt-test 以 contain 0.86 领先 claude-x 0.79，失败率 2% 对 5%。两条失败样本分别为 UPSTREAM 502 与超时，与模型能力无关，建议复跑失败行后再冻结基线。</p>',
-    })
+    pushAgentMessage('<p><b>解读（基于已有报告，不重跑）：</b>gpt-test 以 contain 0.86 领先 claude-x 0.79，失败率 2% 对 5%。两条失败样本分别为 UPSTREAM 502 与超时，与模型能力无关，建议复跑失败行后再冻结基线。</p>')
     setCurrentGenerating(false)
     scrollToBottom()
   }, 1000, true)
@@ -2457,10 +2578,7 @@ function handleFailDemo() {
         code: 'UPSTREAM',
         message: '被测协议档 gpt-test 返回 502，任务未入队',
       })
-      events.value.push({
-        type: 'agent',
-        text: '<p>创建失败：<b>UPSTREAM 502</b>（gpt-test 网关错误），与模型能力无关。建议先到「协议档」页对 gpt-test 做连通性检查，恢复后重新发送目标即可。</p>',
-      })
+      pushAgentMessage('<p>创建失败：<b>UPSTREAM 502</b>（gpt-test 网关错误），与模型能力无关。建议先到「协议档」页对 gpt-test 做连通性检查，恢复后重新发送目标即可。</p>')
       setCurrentGenerating(false)
       scrollToBottom()
     }, 800, true)
@@ -2742,6 +2860,20 @@ async function loadSessionHistory(sid: string): Promise<number> {
           confirm.item.ackResult = Boolean(p.ok)
           confirm.item.open = false
         }
+      } else if (ev.event === 'clarify') {
+        rawList.push({
+          time: t,
+          priority: 4,
+          eventId: eid,
+          item: {
+            type: 'clarify',
+            id: String(p.id || ''),
+            question: String(p.question || '需要补充信息'),
+            options: Array.isArray(p.options) ? p.options : null,
+            isAcked: false,
+            noAnim: true,
+          },
+        })
       } else if (ev.event === 'error') {
         rawList.push({
           time: t,
@@ -3205,7 +3337,9 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
         if (typeof p.reply_latency_ms === 'number') target.latency_ms = p.reply_latency_ms
         if (p.model_name) target.modelName = p.model_name
         if (p.profile_name) target.profileName = p.profile_name
-        if (p.provider) target.providerLogoKey = p.provider as ProviderLogoKey
+        if (p.provider || p.model_name) {
+          target.providerLogoKey = getProviderLogoKey({ name: p.provider, model: p.model_name || target.modelName })
+        }
       } else {
         target.streaming = false
       }
@@ -3273,6 +3407,20 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
         if (!p.ok) confirm.summary = ''
       }
       void refreshContextMeter(sid)
+      break
+    }
+    case 'clarify': {
+      // 澄清卡：interrupt() 暂停图，等待用户补充信息（M4 §3.9.6）
+      markGenerating(sid, false)
+      rt.harnessStage = ''
+      finishBufferThought(buf)
+      buf.push({
+        type: 'clarify',
+        id: String(p.id || ''),
+        question: String(p.question || '需要补充信息'),
+        options: Array.isArray(p.options) ? p.options : null,
+        isAcked: false,
+      })
       break
     }
     case 'error':
@@ -3496,7 +3644,9 @@ function handleWsEvent(ev: WsServerEvent) {
         if (typeof p.reply_latency_ms === 'number') target.latency_ms = p.reply_latency_ms
         if (p.model_name) target.modelName = p.model_name
         if (p.profile_name) target.profileName = p.profile_name
-        if (p.provider) target.providerLogoKey = p.provider as ProviderLogoKey
+        if (p.provider || p.model_name) {
+          target.providerLogoKey = getProviderLogoKey({ name: p.provider, model: p.model_name || target.modelName })
+        }
       } else {
         target.streaming = false
       }
@@ -3590,6 +3740,21 @@ function handleWsEvent(ev: WsServerEvent) {
         isAcked: false,
         summary: '',
         open: true,
+      })
+      scrollToBottom()
+      break
+    }
+    case 'clarify': {
+      // 澄清卡：interrupt() 暂停图，等待用户补充信息（仅回复，不建任务）
+      finishLiveThought()
+      setCurrentGenerating(false)
+      harnessStage.value = ''
+      events.value.push({
+        type: 'clarify',
+        id: String(p.id || ''),
+        question: String(p.question || '需要补充信息'),
+        options: Array.isArray(p.options) ? p.options : null,
+        isAcked: false,
       })
       scrollToBottom()
       break
@@ -3745,6 +3910,8 @@ onBeforeUnmount(() => {
   }
   sockets.clear()
   agentWs = null
+  for (const url of localAttachmentUrls) URL.revokeObjectURL(url)
+  localAttachmentUrls.clear()
 })
 </script>
 
@@ -3889,6 +4056,20 @@ onBeforeUnmount(() => {
   background: var(--bg-main);
 }
 
+/* 用户消息与输入区共用附件卡片布局，图片优先给出可识别的缩略图。 */
+.message-attachments,
+.attach-stage {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.attach-stage {
+  max-width: 780px;
+  margin: 0 auto 8px;
+}
+
 /* 输入卡片：上部多行文本，下部操作底栏（对齐 Gemini / Cursor / Claude 对话框） */
 .composer-card {
   max-width: 780px;
@@ -3907,6 +4088,45 @@ onBeforeUnmount(() => {
 .composer-card:focus-within {
   border-color: var(--accent-ai);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-ai) 15%, transparent), 0 4px 18px rgba(0, 0, 0, 0.06);
+}
+
+.composer-card.drag-active {
+  border-color: var(--accent-ai);
+  background: color-mix(in srgb, var(--accent-ai) 5%, var(--bg-main));
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent-ai) 13%, transparent);
+}
+
+.composer-drop-hint {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--bg-main) 92%, var(--accent-ai));
+  color: var(--text-primary);
+  font-size: 13px;
+  pointer-events: none;
+}
+
+.composer-drop-hint span:last-child {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.composer-drop-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--t-agent);
+  color: var(--c-agent);
+  font-size: 17px;
+  line-height: 1;
 }
 
 /* 运行生成中的动态环绕光束特效 (Border Beam) */
@@ -4170,6 +4390,11 @@ onBeforeUnmount(() => {
   }
   .composer-card {
     border-radius: 14px;
+  }
+  .composer-drop-hint {
+    flex-wrap: wrap;
+    padding: 12px 24px;
+    text-align: center;
   }
   .composer-model-dropdown-btn .model-name {
     max-width: 100px;

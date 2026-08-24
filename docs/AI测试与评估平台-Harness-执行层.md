@@ -3,11 +3,11 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 执行层模块设计 |
-| 版本 | V0.4.2 |
+| 版本 | V0.5.0 |
 | 审查日期 | 2026-08-24 |
 | 文档性质 | 模块设计说明书（需求发散 + 架构设计 + 接口签名） |
 | 适用模块 | M5 执行层（`app/harness/execution/` + `app/agent/react.py`） |
-| 上游权威 | Harness 需求文档 V1.4.4 §4.5、§2.4、§7、§9；API.md V1.22 §4.3；PRD §5.1.3 |
+| 上游权威 | Harness 需求文档 V1.5.0 §4.5、§2.4、§7、§9；API.md V1.22 §4.3；PRD §5.1.3 |
 
 > **阅读关系**：本文是 Harness §9.2「层 5 执行」行的展开。工具注册表为工具元数据唯一源；`ToolNode` 包装注册表（禁用 `create_react_agent`）；长任务经 PG 队列交 Worker（M4 `worker_bridge` 阶段 4）；`Observation` 归一交 M6 反馈层。
 
@@ -71,7 +71,7 @@
 | `read` | 文件读 | 阶段 2 | 受限工作目录、只读 |
 | `write` | 文件写（新建） | 阶段 2 | 受限工作目录 |
 | `edit` | 文件编辑（改） | 阶段 2 | 受限工作目录、原子替换 |
-| `bash` | 命令执行 | 阶段 2 | subprocess + 受限环境（工作目录/超时/命令黑名单） |
+| `bash` | 命令执行 | 阶段 3 | bwrap 进程级沙箱（无网络/工作区唯一可写/资源受限/超时整树清理）+ 命令黑名单纵深防御 |
 | `web_search` | 网络检索 | 阶段 2 | 内部短 MCP 适配器（平台自实现） |
 | `web_fetch` | 网页抓取 | 阶段 2 | 内部短 MCP 适配器（平台自实现） |
 | `task.create`/`task.cancel`/`testcase.confirm`/`dispatch.overview` | 评测域 | 阶段 4 | 随确认卡入队（API.md §4.3） |
@@ -139,12 +139,11 @@ app/agent/react.py     # 阶段 2：ReAct 子图（agent 节点 + ToolNode 条�
 
 **职责**：短工具分派 + 超时 + 脱敏日志（EX-3）。
 
-- `execute(call, *, timeout_s, permission)`：按 `call.name` 分派到 handler，带超时；超时返回 `timeout` observation；日志脱敏（调 M8）。
-- **bash 沙箱**（subprocess + 受限环境）：
-  - 工作目录限定（会话沙箱目录）；
-  - 超时（工具 `timeout_s`）；
-  - 命令黑名单（`rm`/`sudo`/网络类等危险命令拒绝）；
-  - 不给 root、不写宿主敏感路径。
+- `execute(call, *, timeout_s, permission)`：按 `call.name` 分派到 handler，带超时；超时返回 `timeout` observation；日志脱敏（调 M8）。`ToolNode` 为异步节点，`execute` 经 `asyncio.to_thread` 在线程池执行（防 bash 等同步工具阻塞事件循环）。
+- **bash 沙箱**（阶段 3 bwrap 进程级隔离，`sandbox.py`）：
+  - 一次性 bwrap 沙箱：`--unshare-net`（无网络）、会话工作区唯一可写（其余只读 bind）、`--tmpfs /tmp /run`（遮蔽 `/run/config/.env` 等敏感路径）；
+  - 资源限制：`ulimit` 内存（默认 256MB）/进程数（32，防 fork 炸弹）/CPU（10s）+ 墙钟超时（15s）整树 `killpg` 清理（`--die-with-parent`）；
+  - 命令黑名单（`rm`/`sudo`/网络类等）为**纵深防御**；bwrap 不可用/引擎关闭时 **fail-closed（VALIDATION）**，禁止降级为裸 subprocess。
 - **web 内部短 MCP**（`web_search`/`web_fetch`）：
   - 平台自实现适配器（`dispatch.py` 内或 `adapters/` 子模块），**不走外部 MCP 服务器**；
   - `web_search`：调内部检索后端；`web_fetch`：内部抓取 + 脱敏；
@@ -230,15 +229,17 @@ def execute(call: ToolCall, *, timeout_s: float, permission: str,
     """按 call.name 分派到 handler，带超时；超时返回 timeout observation；
     日志脱敏（调 M8）。sandbox_dir 限 bash 工作目录。"""
 
-# bash 沙箱（⚠️ 安全边界待定，见 §3.8.4 后注——阶段 2 不开放通用 bash）
+# bash 沙箱（阶段 3 bwrap 进程级隔离；黑名单为纵深防御，见 sandbox.py）
 BASH_BLOCKLIST: frozenset[str] = frozenset(
     {"rm", "sudo", "curl", "wget", "nc", "ssh", "scp", "chmod", "chown"}
 )
 
-def run_bash(cmd: str, *, sandbox_dir: str, timeout_s: float) -> str:
-    """subprocess + 受限环境：工作目录限定、超时、命令黑名单校验。
-    黑名单命中抛 AppError(VALIDATION)。
-    ⚠️ 当前方案仅为受限执行，不构成安全沙箱，阶段 2 不开放通用 bash。"""
+def run_bash(cmd: str, *, sandbox_dir: str, timeout_s: float,
+             limits: SandboxLimits | None = None) -> str:
+    """bwrap 沙箱 + 命令黑名单双防护执行 shell 命令。
+    黑名单命中抛 AppError(VALIDATION)；其余经 run_sandboxed 在一次性 bwrap
+    沙箱内执行（无网络/工作区唯一可写/资源受限/超时整树清理）；
+    bwrap 不可用时 fail-closed，禁止降级为裸 subprocess。"""
 
 # web 内部短 MCP 适配器
 def web_search(query: str, *, timeout_s: float) -> str:
@@ -248,7 +249,7 @@ def web_fetch(url: str, *, timeout_s: float) -> str:
     """内部抓取适配器 + 脱敏（不走外部 MCP 服务器）。"""
 ```
 
-> **⚠️ `bash` 安全待定项（V0.4.2 评审闭环）**：命令黑名单 + 工作目录限定 + 超时**不构成可靠安全沙箱**——黑名单可被解释器（如 `python -c`、`perl -e`）、绝对路径、重定向/管道、脚本文件、环境变量等方式绕过；也未定义网络隔离、CPU/内存/进程数限制、子进程树清理与多用户并发隔离，且 Windows 与 Linux 行为存在差异。**阶段 2 不开放通用 `bash` 执行**。如后续需落地，方案必须改为独立容器/沙箱（只读挂载、无网络、资源限制、超时强杀、路径/命令白名单），并先回写 Harness §7 安全红线再实现。`read`/`write`/`edit` 同样必须基于受控文件 ID/根目录，禁止仅依赖字符串路径。
+> **`bash` 安全边界（V0.5.0 bwrap 闭环）**：阶段 3 已落地 **bwrap 进程级沙箱**（`sandbox.py`）——`--unshare-*` 命名空间隔离 + 最小只读 bind（不暴露 `/app`、`/run/config/.env`、其他会话工作区）+ `--bind` 会话工作区到 `/work` + `--tmpfs /tmp /run`；`ulimit` 内存/进程数/CPU + 墙钟超时 `killpg` 整树清理（`--die-with-parent`）。黑名单（`BASH_BLOCKLIST`）保留为**纵深防御**（首词校验），防黑名单语义覆盖；bwrap 缺失/被 seccomp 拦截/引擎 `off` 时 **fail-closed（VALIDATION）**，禁止降级为裸 subprocess。部署依赖 api 容器 `security_opt: seccomp:unconfined`（Docker 默认 seccomp 拦截 `unshare/mount/pivot_root`），更严格的自定义 seccomp profile 列为后续项。`read`/`write`/`edit` 基于受控文件 ID/根目录，禁止仅依赖字符串路径。
 
 #### 3.8.5 worker_bridge.py
 
@@ -357,7 +358,7 @@ def assert_no_orm_leak(obj: object) -> None:
 | 编号 | 问题 | 裁决 |
 | :--- | :--- | :--- |
 | M5-D1 | 工具集范围 | 阶段 2 先做基础 6 工具（read/write/edit/bash/web_search/web_fetch），评测工具阶段 4 随确认卡入队 |
-| M5-D2 | bash 安全边界 | subprocess + 受限环境（工作目录限定/超时/命令黑名单 `BASH_BLOCKLIST`） |
+| M5-D2 | bash 安全边界 | 阶段 3 bwrap 进程级沙箱（`sandbox.py`：无网络/工作区唯一可写/ulimit 资源限制/超时整树清理）+ 命令黑名单 `BASH_BLOCKLIST` 纵深防御；bwrap 不可用/引擎 `off` 时 fail-closed |
 | M5-D3 | web 工具实现 | 内部短 MCP（平台自实现适配器，不走外部 MCP 服务器，不碰 §7 红线） |
 | M5-D4 | 定位扩展声明 | 基础工具集为通用能力；已回写 Harness V1.4.3 §7 |
 | M5-D5 | ToolNode 实现 | 自建包装注册表，禁用 `create_react_agent`（Harness §2.4） |
@@ -393,6 +394,7 @@ def assert_no_orm_leak(obj: object) -> None:
 | 文件 | 操作 | 作用 |
 | :--- | :--- | :--- |
 | `docs/AI测试与评估平台-Harness-执行层.md` | 新增 V0.3 → 修订 V0.4 → 修订 V0.4.1 → 修订 V0.4.2 | V0.3 M5 执行层模块设计：定义工具注册表、附件参数绑定、ToolNode 包装（禁 `create_react_agent`）、短工具分派（含 bash 沙箱 + web 内部短 MCP）、长任务入队、Worker 自管 Session 守卫；含定位扩展声明（基础工具集为通用能力，已回写 Harness V1.4.3 §7）与接口签名级与 TDD 验收；V0.4 对齐 API.md V1.21：新增 §8「前端联调」章节；V0.4.1 配合 API.md V1.22：§8.1/§8.2 修正 `source` 字段语义（对齐 M7 `Observation.source` 溯源标识字符串，删除 `source="long"` 矛盾表述）；V0.4.2 评审收敛版：§8 契约为 API.md V1.22；**标注 `bash` 黑名单非安全沙箱，阶段 2 不开放通用 bash**（补充待定安全项详注与红线），`read`/`write`/`edit` 须基于受控文件 ID/根目录。 |
+| `docs/AI测试与评估平台-Harness-执行层.md` | 修订 V0.5.0 | V0.5.0 bwrap 沙箱闭环：§3.5 与伪代码更新为 **bwrap 进程级沙箱**（`--unshare-*`/最小只读 bind/`--tmpfs /tmp /run`/ulimit 资源限制/超时整树清理），`run_bash` 签名增 `limits`；§7 M5-D2 裁决更新；`bash` 安全待定项后注改写为已闭环，明确 fail-closed 与 `seccomp:unconfined` 部署依赖；§2.2 工具表 bash 由「阶段 2」改为「阶段 3」。 |
 
 本文档仅设计执行层，不改变任何 API、数据库、前端或 Agent 运行代码。
 

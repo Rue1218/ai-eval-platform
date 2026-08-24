@@ -20,9 +20,11 @@ from sqlalchemy.orm import Session
 from ..adapters import StreamAborted
 from ..agent import LangGraphAgent
 from ..agent.graph import iter_pending_events
+from ..config import settings
 from ..db import SessionLocal
 from ..errors import AppError, ErrorCode
 from ..harness.context import recent_window, summarize
+from ..harness.execution import ensure_session_workspace
 from ..harness.memory import get_default_checkpointer, to_serializable_request, write_summary
 from ..harness.orchestration import handle_confirm_ack
 from ..harness.prompts import build_system_prompt
@@ -46,6 +48,8 @@ _USED_WS_TICKETS: set[str] = set()
 _TICKET_LOCK = threading.Lock()
 # 会话级 abort 事件注册表（/stop 即时中断；单副本进程内 dict，见 AGENTS.md）
 _SESSION_ABORTS: dict[str, asyncio.Event] = {}
+# 会话级待回复澄清卡注册表（interrupt() 暂停后保存，clarify_reply 恢复图用）
+_SESSION_CLARIFY: dict[str, dict] = {}
 
 
 class _ConnectionState:
@@ -373,19 +377,47 @@ def _infer_provider(profile: ProtocolProfile | None) -> str | None:
     model = (profile.model or "").lower()
     name = (profile.name or "").lower()
     url = (profile.base_url or "").lower()
+
+    # 1. 优先匹配模型名归属（支持托管在聚合平台的特定模型）
+    if "stepfun" in model or "step-" in model or "stepfun" in name or "阶跃" in name or "stepfun" in url:
+        return "stepfun"
     if "deepseek" in model or "deepseek" in name or "deepseek" in url:
         return "deepseek"
-    if "gemini" in model or "gemini" in name or "google" in url:
-        return "gemini"
-    if "qwen" in model or "tongyi" in name or "aliyun" in url:
+    if "qwen" in model or "tongyi" in name or "aliyun" in url or "dashscope" in url:
         return "qwen"
-    if "claude" in model or "anthropic" in name or "anthropic" in url or profile.protocol == "anthropic_messages":
+    if model.startswith("claude-") or "claude" in model or "anthropic" in name or "anthropic" in url or profile.protocol == "anthropic_messages":
         return "anthropic"
-    if "gpt" in model or "openai" in name or "openai" in url:
+    if model.startswith(("gpt-", "o1-", "o3-", "o4-")) or "openai" in name or "openai" in url:
         return "openai"
-    if "ollama" in url or "ollama" in name:
+    if model.startswith("gemini-") or "gemini" in model or "google" in url or "generativelanguage" in url:
+        return "gemini"
+    if "glm" in model or "zhipu" in name or "智谱" in name or "bigmodel.cn" in url:
+        return "zhipu"
+    if "kimi" in model or "moonshot" in model or "kimi" in name or "月之暗面" in name or "moonshot" in url:
+        return "moonshot"
+    if "mistral" in model or "mistral" in name or "mistral" in url:
+        return "mistral"
+    if "doubao" in model or "火山" in name or "豆包" in name or "volces.com" in url:
+        return "volcengine"
+    if "ernie" in model or "qianfan" in name or "文心" in name or "千帆" in name or "qianfan" in url or "baidubce" in url:
+        return "qianfan"
+    if "hunyuan" in model or "混元" in name or "tencent" in url:
+        return "hunyuan"
+
+    # 2. 匹配托管服务与端点平台
+    if "nvidia" in url or "nvidia" in name or "nvidia" in model:
+        return "nvidia"
+    if "xiaomimimo" in url or "mimo" in name or "mimo" in model:
+        return "mimo"
+    if "siliconflow" in url or "silicon" in name or "硅基" in name:
+        return "siliconflow"
+    if "groq" in url or "groq" in name:
+        return "groq"
+    if "11434" in url or "ollama" in url or "ollama" in name:
         return "ollama"
-    return profile.protocol
+    if "together" in url or "together" in name:
+        return "together"
+    return "custom"
 
 
 async def _translate_event(
@@ -465,12 +497,17 @@ async def _run_turn(
     websocket: WebSocket,
     state: _ConnectionState,
     abort: asyncio.Event,
+    *,
+    resume: dict | None = None,
 ) -> None:
     """后台执行一轮 LangGraph Agent，并把图输出统一投影为 WS 事件。
 
     图节点只返回纯数据（custom 瞬态帧 + pending_events 事件意图）；本函数
     消费 ``astream`` 输出后统一 emit（§2.5 事件桥接）。``should_abort`` 与
     api_key 经 ``RunnableConfig.configurable`` 注入（O-12 迁移），不入 State。
+
+    ``resume`` 非 None 时为澄清卡恢复模式：以 ``Command(resume=answer)``
+    恢复同一 thread_id 的图（M9 §3.5.1），不再构造新请求。
     """
     db = SessionLocal()
     try:
@@ -483,20 +520,43 @@ async def _run_turn(
             if (system_row and isinstance(system_row.value, str) and system_row.value.strip())
             else build_system_prompt()
         )
-        serializable = to_serializable_request(
-            ModelRequest.from_messages(config, history, system=system_prompt)
-        )
+        if resume is not None:
+            # 恢复模式：复用中断时的 thread_id，不构造新请求
+            serializable = None
+            thread_id = str(resume["thread_id"])
+            resume_answer = resume.get("answer")
+        else:
+            serializable = to_serializable_request(
+                ModelRequest.from_messages(config, history, system=system_prompt)
+            )
+            thread_id = f"{session_id}:{uuid4().hex}"
+            resume_answer = None
+        # 会话工作区：每个会话一个独立文件夹（read/write/edit 与 bash 的
+        # 沙箱根，经 configurable 注入，toolnode 优先读取此值）
+        sandbox_dir = ensure_session_workspace(session_id)
         graph_config = {
             "configurable": {
                 # 每回合独立 thread_id：检查点按回合隔离（M3 阶段 3）
-                "thread_id": f"{session_id}:{uuid4().hex}",
+                "thread_id": thread_id,
                 "abort": {"should_abort": abort.is_set},
                 "credentials": {"api_key": config.api_key or ""},
                 "session": {"id": session_id},
+                # 沙箱引擎与资源限制（bash 工具经 bwrap 执行；engine="off" 时 fail-closed）
+                "sandbox": {
+                    "dir": sandbox_dir,
+                    "engine": settings.sandbox_engine,
+                    "limits": {
+                        "memory_mb": settings.sandbox_memory_mb,
+                        "nproc": settings.sandbox_nproc,
+                        "cpu_s": settings.sandbox_cpu_s,
+                    },
+                },
             }
         }
         thinking: list[str] = []
-        async for mode, chunk in _AGENT.astream(serializable, config=graph_config):
+        async for mode, chunk in _AGENT.astream(
+            serializable, config=graph_config, resume=resume_answer
+        ):
             if mode == "custom":
                 kind = chunk["kind"]
                 text = chunk["text"]
@@ -521,6 +581,14 @@ async def _run_turn(
                             state.cursor,
                             {"text": text, "stream": "think"},
                         ),
+                    )
+                continue
+            # 澄清卡 interrupt() 中断帧：翻译为 clarify 事件并保存待恢复状态
+            if isinstance(chunk, dict) and "__interrupt__" in chunk:
+                payload = chunk["__interrupt__"][0].value
+                if isinstance(payload, dict) and payload.get("type") == "clarify":
+                    await _handle_clarify_interrupt(
+                        db, websocket, state, session_id, thread_id, payload
                     )
                 continue
             # updates 模式：按节点边界消费 pending_events，统一 emit
@@ -648,6 +716,79 @@ async def _handle_compact(
     )
 
 
+async def _handle_clarify_interrupt(
+    db: Session,
+    websocket: WebSocket,
+    state: _ConnectionState,
+    session_id: str,
+    thread_id: str,
+    payload: dict,
+) -> None:
+    """澄清卡中断帧翻译：持久化 clarify 事件并保存待恢复状态。
+
+    图已 ``interrupt()`` 暂停（回合自然结束）；``_SESSION_CLARIFY`` 保存
+    ``{id, thread_id}``，待 ``clarify_reply`` 到达后以 ``Command(resume)``
+    恢复同一 thread（M9 §3.5.1）。澄清卡不建任务、不写 pending_confirm。
+    """
+    clarify_id = str(payload.get("id") or "")
+    _SESSION_CLARIFY[session_id] = {
+        "id": clarify_id,
+        "thread_id": thread_id,
+    }
+    await _emit_persistent(
+        db,
+        websocket,
+        state,
+        session_id,
+        "clarify",
+        {
+            "id": clarify_id,
+            "question": str(payload.get("question") or ""),
+            "options": payload.get("options"),
+        },
+    )
+
+
+async def _handle_clarify_reply(
+    db: Session,
+    websocket: WebSocket,
+    state: _ConnectionState,
+    session: AgentSession,
+    payload: Any,
+    active_turn: asyncio.Task[None] | None,
+) -> asyncio.Task[None] | None:
+    """澄清卡回复：校验 id 匹配后以 Command(resume) 恢复图（不唤醒 confirm）。"""
+    if not isinstance(payload, dict):
+        raise AppError(ErrorCode.VALIDATION, "clarify_reply payload 必须是对象")
+    pending = _SESSION_CLARIFY.get(session.id)
+    if pending is None:
+        raise AppError(ErrorCode.VALIDATION, "无待回复的澄清卡")
+    if str(payload.get("id") or "") != pending["id"]:
+        raise AppError(ErrorCode.VALIDATION, "澄清卡已失效，请刷新后重试")
+    answer = payload.get("answer")
+    if not isinstance(answer, str) or not answer.strip():
+        raise AppError(ErrorCode.VALIDATION, "回复内容不能为空")
+    if active_turn and not active_turn.done():
+        raise AppError(ErrorCode.CONCURRENCY, "上一轮 Agent 仍在生成")
+    _SESSION_CLARIFY.pop(session.id, None)
+    abort = asyncio.Event()
+    _SESSION_ABORTS[session.id] = abort
+    task = asyncio.create_task(
+        _run_turn(
+            session.id,
+            websocket,
+            state,
+            abort,
+            resume={"thread_id": pending["thread_id"], "answer": answer.strip()},
+        ),
+        name=f"agent-turn-{session.id}",
+    )
+    task.add_done_callback(
+        lambda _task: _SESSION_ABORTS.pop(session.id, None)
+    )
+    return task
+
+
 async def _handle_user_message(
     db: Session,
     websocket: WebSocket,
@@ -711,6 +852,8 @@ async def _handle_user_message(
         "user_message",
         _message_payload(row, user),
     )
+    # 新用户消息作废未回复的澄清卡（澄清与新一轮输入互斥）
+    _SESSION_CLARIFY.pop(session.id, None)
     abort = asyncio.Event()
     _SESSION_ABORTS[session.id] = abort
     task = asyncio.create_task(
@@ -836,6 +979,16 @@ async def agent_websocket(websocket: WebSocket) -> None:
                         state,
                         session,
                         user,
+                        message.get("payload"),
+                        active_turn,
+                    )
+                elif event == "clarify_reply":
+                    # 澄清卡回复：校验 id 后以 Command(resume) 恢复图
+                    active_turn = await _handle_clarify_reply(
+                        db,
+                        websocket,
+                        state,
+                        session,
                         message.get("payload"),
                         active_turn,
                     )

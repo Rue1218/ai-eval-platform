@@ -79,11 +79,11 @@ class ToolRegistry:
 
 
 def build_default_registry() -> ToolRegistry:
-    """阶段 2 默认注册（基础工具）。
+    """阶段 3 默认注册（基础工具 + 沙箱 bash）。
 
-    注册 read/write/edit/web_search/web_fetch；**bash 不注册**——黑名单 +
-    目录限定 + 超时不构成安全沙箱（M5 §3.8.4 后注），阶段 2 不开放通用
-    bash（未注册即被白名单拒绝）。
+    注册 read/write/edit/web_search/web_fetch/bash；bash 在一次性 bwrap 沙箱内
+    执行（无网络、工作区唯一可写、资源受限、超时整树清理），黑名单为纵深防御
+    （M5 §3.8.4 阶段 3 闭环），bwrap 不可用时 fail-closed 拒绝。
     """
     registry = ToolRegistry()
     registry.register(
@@ -169,6 +169,22 @@ def build_default_registry() -> ToolRegistry:
             handler=_web_fetch_handler,
         )
     )
+    registry.register(
+        ToolDef(
+            name="bash",
+            description="在 bwrap 沙箱内执行 shell 命令（相对路径、无网络、受资源限制）",
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string"},
+                },
+                "required": ["command"],
+            },
+            permission="sandbox.bash",
+            timeout_s=15.0,
+            handler=_bash_handler,
+        )
+    )
     return registry
 
 
@@ -219,3 +235,29 @@ def _web_fetch_handler(arguments: Mapping[str, object], _sandbox_dir: str | None
     from .dispatch import web_fetch
 
     return web_fetch(str(arguments.get("url", "")), timeout_s=15.0)
+
+
+def _bash_handler(arguments: Mapping[str, object], sandbox_dir: str | None = None) -> str:
+    """bash 工具 handler：bwrap 沙箱内执行（阶段 3 开放通用 bash）。
+
+    资源限制读 Settings（内存/进程数/CPU），``sandbox_dir`` 由平台注入，
+    禁止模型传参（M5-D7 红线）；引擎为 "off" 或 bwrap 不可用时 fail-closed
+    （VALIDATION），禁止降级为裸 subprocess。
+    """
+    from app.config import settings
+    from app.harness.execution.dispatch import run_bash
+    from app.harness.execution.sandbox import SandboxLimits
+
+    if settings.sandbox_engine != "bwrap":
+        raise AppError(ErrorCode.VALIDATION, "沙箱引擎未启用")
+    limits = SandboxLimits(
+        memory_kb=settings.sandbox_memory_mb * 1024,
+        nproc=settings.sandbox_nproc,
+        cpu_s=settings.sandbox_cpu_s,
+    )
+    return run_bash(
+        str(arguments.get("command", "")),
+        sandbox_dir=sandbox_dir or "",
+        timeout_s=15.0,
+        limits=limits,
+    )

@@ -18,7 +18,7 @@ from app.harness.contracts import ToolCall
 # 确认卡 kind 白名单（一单一 kind 门禁）
 CONFIRM_KINDS: frozenset[str] = frozenset({"benchmark", "testcase", "rag", "stress"})
 
-# 任意代码黑名单前缀（bash 门禁；阶段 2 不开放通用 bash，白名单已拦截，本集合防御）
+# 任意代码黑名单前缀（bash 门禁；bwrap 沙箱之外的第二道防线，禁止命令开头命中）
 BASH_BLOCK_PREFIXES: tuple[str, ...] = (
     "rm ",
     "sudo ",
@@ -76,7 +76,7 @@ def check_gates(call: ToolCall, ctx: GateContext) -> GateResult:
     # 2. 白名单：未注册即拒绝（EX-5）
     if ctx.registered_names and name not in ctx.registered_names:
         return GateResult(False, "VALIDATION", f"工具未注册：{name}")
-    # 3. 任意代码：bash 黑名单防御（阶段 2 不开放通用 bash）
+    # 3. 任意代码：bash 黑名单纵深防御（bwrap 沙箱之外的第二道防线）
     command = arguments.get("command")
     if name == "bash" and isinstance(command, str):
         stripped = command.lstrip()
