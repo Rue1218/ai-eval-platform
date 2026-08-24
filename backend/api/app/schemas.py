@@ -271,6 +271,8 @@ class RunConfig(ApiModel):
     system_prompt: str | None = Field(default=None, max_length=20_000)
     k: int | None = Field(default=None, ge=1, le=20)
     use_judge: bool = False
+    # LLM 裁判协议档（usages 需含 "judge"）：use_judge=True 时必填
+    judge_profile_id: str | None = Field(default=None, max_length=64)
 
 
 class StressConfig(ApiModel):
@@ -339,6 +341,8 @@ class TaskCreate(ApiModel):
                 raise ValueError("benchmark 需要 dataset_id")
             if not self.run:
                 raise ValueError("benchmark 需要 run")
+            if self.run.use_judge and not self.run.judge_profile_id:
+                raise ValueError("启用 LLM 裁判时需要 judge_profile_id")
         elif self.kind == "rag":
             if not self.kb_id or not self.gold_qa_id:
                 raise ValueError("rag 需要 kb_id 和 gold_qa_id")

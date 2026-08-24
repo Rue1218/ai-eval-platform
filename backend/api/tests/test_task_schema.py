@@ -49,3 +49,49 @@ def test_stress_requires_successful_parent_reference_field():
                 "stress": {"env": "test", "qps": 10, "duration_s": 60},
             }
         )
+
+
+def test_run_config_accepts_judge_profile_id():
+    """RunConfig 支持 LLM 裁判字段，兼容双模型对比测评任务。"""
+    task = TaskCreate.model_validate(
+        {
+            "kind": "benchmark",
+            "profile_ids": ["profile-1", "profile-2"],
+            "dataset_id": "dataset-1",
+            "run": {
+                "sample_size": 20,
+                "use_judge": True,
+                "judge_profile_id": "profile-judge",
+            },
+        }
+    )
+    assert task.run is not None
+    assert task.run.use_judge is True
+    assert task.run.judge_profile_id == "profile-judge"
+
+
+def test_run_config_use_judge_requires_judge_profile():
+    """use_judge=True 时必须提供裁判协议档，否则校验失败。"""
+    with pytest.raises(ValidationError):
+        TaskCreate.model_validate(
+            {
+                "kind": "benchmark",
+                "profile_ids": ["profile-1", "profile-2"],
+                "dataset_id": "dataset-1",
+                "run": {"sample_size": 20, "use_judge": True},
+            }
+        )
+
+
+def test_run_config_judge_profile_ignored_without_use_judge():
+    """use_judge=False 时携带 judge_profile_id 不报错（向后兼容）。"""
+    task = TaskCreate.model_validate(
+        {
+            "kind": "benchmark",
+            "profile_ids": ["profile-1"],
+            "dataset_id": "dataset-1",
+            "run": {"sample_size": 20, "judge_profile_id": "profile-judge"},
+        }
+    )
+    assert task.run is not None
+    assert task.run.use_judge is False

@@ -305,6 +305,9 @@ def report_samples(
                         "exact": p.exact,
                         "rouge_l": p.rouge_l,
                         "latency_ms": p.latency_ms,
+                        "usage": p.usage,
+                        "judge_score": p.judge_score,
+                        "judge_reason": p.judge_reason,
                         "error": p.error,
                         "raw": p.raw,
                     }

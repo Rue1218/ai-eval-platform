@@ -16,13 +16,15 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
 from .db import SessionLocal
 from .eval_graph import BenchmarkEvalPipeline, BenchmarkGraphState
 from .events import push_ws
+from .judge import build_judge_call_kwargs, judge_single_sample
 from .models import (
     Dataset,
     DatasetRow,
@@ -56,7 +58,7 @@ _TERMINAL = {"succeeded", "failed", "cancelled"}
 
 def _now() -> datetime:
     """统一使用 UTC 时间戳。"""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _setting_value(db: Session, key: str):
@@ -69,7 +71,7 @@ def _price_per_1k(db: Session) -> float:
     """读取单价（USD / 1k tokens）；缺失或非法时回退默认 0.002。"""
     stress = _setting_value(db, "stress")
     value = stress.get("price_per_1k_tokens") if isinstance(stress, dict) else None
-    if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+    if isinstance(value, int | float) and not isinstance(value, bool) and value > 0:
         return float(value)
     return DEFAULT_PRICE_PER_1K
 
@@ -77,7 +79,7 @@ def _price_per_1k(db: Session) -> float:
 def _max_usd(db: Session) -> float:
     """读取单任务预算上限（USD）；缺失或非法时回退默认 5。"""
     value = _setting_value(db, "default_max_usd")
-    if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+    if isinstance(value, int | float) and not isinstance(value, bool) and value > 0:
         return float(value)
     return DEFAULT_MAX_USD
 
@@ -158,6 +160,150 @@ def _avg(values: list) -> float | None:
     return round(sum(nums) / len(nums), 4)
 
 
+def _persist_usage(db: Session, task_id: str, usage_totals: dict[str, dict]) -> None:
+    """按 (task_id, profile_id) upsert UsageLedger。
+
+    既有缺口：eval_graph 仅在进程内累加 usage_totals，从未落库，导致报告
+    usage/est_cost_usd 恒为 0。此 helper 将目标与裁判 usage 一并写回台账，
+    纯增量，不改打分语义。
+    """
+    for profile_id, totals in usage_totals.items():
+        row = (
+            db.query(UsageLedger)
+            .filter(UsageLedger.task_id == task_id, UsageLedger.profile_id == profile_id)
+            .first()
+        )
+        values = {
+            "prompt_tokens": int(totals.get("prompt_tokens") or 0),
+            "completion_tokens": int(totals.get("completion_tokens") or 0),
+            "total_tokens": int(totals.get("total_tokens") or 0),
+            "est_cost_usd": float(totals.get("est_cost_usd") or 0.0),
+        }
+        if row:
+            row.prompt_tokens = values["prompt_tokens"]
+            row.completion_tokens = values["completion_tokens"]
+            row.total_tokens = values["total_tokens"]
+            row.est_cost_usd = values["est_cost_usd"]
+        else:
+            db.add(
+                UsageLedger(task_id=task_id, profile_id=profile_id, **values)
+            )
+    db.commit()
+
+
+def _run_judge(
+    db: Session,
+    task: Task,
+    judge_profile: ProtocolProfile,
+    run_params: dict,
+    batch_size: int,
+    max_usd: float,
+    price: float,
+    usage_totals: dict[str, dict],
+) -> dict:
+    """对全部目标成功样本执行 LLM 裁判打分（pipeline 完成后、写报告前）。
+
+    1) 查询本任务目标调用成功（无 error 且输出非空）的样本；
+    2) 按 batch_size 分批并发调裁判协议档，逐样本回写 judge_score/judge_reason；
+    3) judge usage 累加进 usage_totals（计入预算与费用口径，与目标阶段一致）；
+    4) 每批后检查协作式取消与预算熔断。
+    """
+    task_id = task.id
+    samples = (
+        db.query(EvalItem)
+        .filter(
+            EvalItem.task_id == task_id,
+            EvalItem.error.is_(None),
+            EvalItem.output != "",
+        )
+        .order_by(EvalItem.row_no.asc())
+        .all()
+    )
+    if not samples:
+        return {"judged": 0, "failed": 0}
+
+    base_url, model, api_key = profile_connection(judge_profile)
+    if not api_key:
+        logger.warning(
+            "benchmark task %s judge profile %s missing API key; judge skipped",
+            task_id,
+            judge_profile.id,
+        )
+        return {"judged": 0, "failed": len(samples), "error": "VALIDATION: 裁判协议档未配置 API Key"}
+
+    judge_kwargs = build_judge_call_kwargs(
+        protocol=judge_profile.protocol,
+        base_url=base_url,
+        model=model,
+        api_key=api_key,
+        anthropic_version=judge_profile.anthropic_version,
+        timeout_s=float(run_params.get("timeout_s") or 30.0),
+    )
+    total = len(samples)
+    done = 0
+    judged = 0
+    failed = 0
+
+    for start in range(0, total, batch_size):
+        batch = samples[start : start + batch_size]
+        items_data = [
+            {
+                "question": s.question,
+                "reference": s.reference,
+                "context": s.context,
+                "output": s.output,
+            }
+            for s in batch
+        ]
+        with ThreadPoolExecutor(max_workers=len(batch)) as pool:
+            results = list(
+                pool.map(
+                    lambda item_data: judge_single_sample(
+                        judge_kwargs, item_data, _truncate_raw
+                    ),
+                    items_data,
+                )
+            )
+        for sample, result in zip(batch, results):
+            done += 1
+            if result.get("ok"):
+                sample.judge_score = result.get("judge_score")
+                sample.judge_reason = result.get("judge_reason")
+                judged += 1
+            else:
+                failed += 1
+            usage = result.get("usage")
+            if usage:
+                totals = usage_totals.setdefault(
+                    judge_profile.id,
+                    {
+                        "prompt_tokens": 0,
+                        "completion_tokens": 0,
+                        "total_tokens": 0,
+                        "est_cost_usd": 0.0,
+                    },
+                )
+                totals["prompt_tokens"] += int(usage.get("prompt_tokens") or 0)
+                totals["completion_tokens"] += int(usage.get("completion_tokens") or 0)
+                totals["total_tokens"] += int(usage.get("total_tokens") or 0)
+                totals["est_cost_usd"] = totals["total_tokens"] / 1000 * price
+        db.commit()
+        cost_usd = sum(t["est_cost_usd"] for t in usage_totals.values())
+        _progress(db, task, done, total, "裁判打分中")
+
+        if _is_cancelled(db, task_id):
+            logger.info("benchmark task %s cancelled during judge (judged=%s)", task_id, judged)
+            return {"judged": judged, "failed": failed, "cancelled": True}
+        if cost_usd > max_usd:
+            return {
+                "judged": judged,
+                "failed": failed,
+                "budget_exceeded": True,
+                "message": f"裁判阶段费用估算 {cost_usd:.2f} USD 超过上限 {max_usd:.2f} USD，任务已停止",
+            }
+    return {"judged": judged, "failed": failed}
+
+
 def _finish(db: Session, task: Task, dataset: Dataset, metric: str, total: int) -> bool:
     """汇总各 profile 指标并安全置 succeeded；已取消时不写报告。"""
     task_id = task.id
@@ -197,6 +343,8 @@ def _finish(db: Session, task: Task, dataset: Dataset, metric: str, total: int) 
                 "score": _avg([item.score for item in ok_items]),
                 "exact": _avg([item.exact for item in ok_items]),
                 "rouge_l": _avg([item.rouge_l for item in ok_items]),
+                # LLM 裁判均值：仅对成功打分的样本求均值，未启用/未判样本为 None
+                "judge": _avg([item.judge_score for item in ok_items]),
                 "fail_rate": (
                     round((len(items) - len(ok_items)) / len(items), 4) if items else None
                 ),
@@ -222,6 +370,37 @@ def _finish(db: Session, task: Task, dataset: Dataset, metric: str, total: int) 
             for item in items
         )
 
+    # ─── LLM 裁判信息块（仅 use_judge 任务存在） ───
+    judge_block: dict | None = None
+    judge_profile_id = (config.get("run") or {}).get("judge_profile_id")
+    if judge_profile_id:
+        judge_profile_row = (
+            db.query(ProtocolProfile).filter(ProtocolProfile.id == judge_profile_id).first()
+        )
+        _judge_base, judge_model, _judge_key = (
+            profile_connection(judge_profile_row) if judge_profile_row else (None, None, None)
+        )
+        judge_ledger = (
+            db.query(UsageLedger)
+            .filter(UsageLedger.task_id == task.id, UsageLedger.profile_id == judge_profile_id)
+            .first()
+        )
+        all_items = db.query(EvalItem).filter(EvalItem.task_id == task.id).all()
+        judged_count = len([item for item in all_items if item.judge_score is not None])
+        judge_block = {
+            "profile_id": judge_profile_id,
+            "profile_name": judge_profile_row.name if judge_profile_row else None,
+            "model": judge_model,
+            "usage": {
+                "prompt_tokens": judge_ledger.prompt_tokens if judge_ledger else 0,
+                "completion_tokens": judge_ledger.completion_tokens if judge_ledger else 0,
+                "total_tokens": judge_ledger.total_tokens if judge_ledger else 0,
+            },
+            "est_cost_usd": round(judge_ledger.est_cost_usd, 4) if judge_ledger else 0.0,
+            "judged_count": judged_count,
+            "failed_count": max(0, len(all_items) - judged_count),
+        }
+
     report = Report(
         task_id=task.id,
         kind="benchmark",
@@ -231,13 +410,15 @@ def _finish(db: Session, task: Task, dataset: Dataset, metric: str, total: int) 
             "dataset_name": dataset.name,
             "dataset_version": dataset.version,
             # 分母口径在报告内可见（前端页脚同文案）
-            "denominator_note": "待补全行（question/reference 缺失）不进评分分母；失败样本不计入主指标均值",
+            "denominator_note": "待补全行（question/reference 缺失）不进评分分母；失败样本不计入主指标均值；裁判分仅对调用成功且成功打分的样本求均值",
             "scores": scores,
             # 报告内只放前 50 条摘要，完整逐题比对走 /api/reports/{id}/samples
             "sample_items": sample_items[:50],
             "sample_total": total,
         },
     )
+    if judge_block:
+        report.metrics["judge"] = judge_block  # type: ignore[index]
     db.add(report)
     db.flush()
     task.status = "succeeded"
@@ -307,11 +488,11 @@ def run_benchmark(task_id: str) -> None:
         concurrency = concurrency if isinstance(concurrency, int) and concurrency >= 1 else DEFAULT_CONCURRENCY
         batch_size = max(1, min(concurrency, _max_inflight(db)))
         timeout_s = run.get("timeout_s")
-        timeout_s = float(timeout_s) if isinstance(timeout_s, (int, float)) else DEFAULT_TIMEOUT_S
+        timeout_s = float(timeout_s) if isinstance(timeout_s, int | float) else DEFAULT_TIMEOUT_S
         retry = run.get("retry")
         retry = retry if isinstance(retry, int) and retry >= 0 else 0
         temperature = run.get("temperature")
-        temperature = float(temperature) if isinstance(temperature, (int, float)) else 0.2
+        temperature = float(temperature) if isinstance(temperature, int | float) else 0.2
         max_tokens = run.get("max_tokens")
         max_tokens = int(max_tokens) if isinstance(max_tokens, int) and max_tokens >= 1 else 1024
         system_prompt = run.get("system_prompt") or None
@@ -412,6 +593,42 @@ def run_benchmark(task_id: str) -> None:
                 final_state.get("error_message") or "评测执行异常",
             )
             return
+
+        # 目标阶段用量写回台账（修复 UsageLedger 从未落库的缺口）
+        _persist_usage(db, task.id, final_state.get("usage_totals") or usage_totals)
+
+        # ─── LLM 裁判阶段（可选）：pipeline 正常完成后、写报告前 ───
+        run = config.get("run") or {}
+        if run.get("use_judge") and run.get("judge_profile_id"):
+            judge_profile = (
+                db.query(ProtocolProfile)
+                .filter(ProtocolProfile.id == run["judge_profile_id"])
+                .first()
+            )
+            if not judge_profile:
+                _fail(db, task, "VALIDATION", "裁判协议档不存在或已删除")
+                return
+            judge_result = _run_judge(
+                db,
+                task,
+                judge_profile,
+                initial_state["run_params"],
+                batch_size,
+                max_usd,
+                price,
+                usage_totals,
+            )
+            if judge_result.get("cancelled"):
+                return  # 取消不写报告，与目标阶段一致
+            if judge_result.get("budget_exceeded"):
+                _fail(
+                    db,
+                    task,
+                    "BUDGET_EXCEEDED",
+                    judge_result.get("message") or "裁判阶段费用超限，任务已停止",
+                )
+                return
+            _persist_usage(db, task.id, usage_totals)
 
         _finish(db, task, dataset, metric, total)
     except Exception as exc:

@@ -247,6 +247,12 @@ const IconReports = () =>
     h('path', { d: 'M5 20V10M12 20V4M19 20v-7' }),
   ])
 
+const IconModelCompare = () =>
+  h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round' }, [
+    h('path', { d: 'M5 20V8M12 20V4M19 20v-7' }),
+    h('path', { d: 'M3 20h18' }),
+  ])
+
 const IconDatasets = () =>
   h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round' }, [
     h('ellipse', { cx: '12', cy: '6', rx: '7', ry: '3' }),
@@ -301,6 +307,7 @@ const evalRoutes = computed(() => {
   return [
     { path: '/agent', label: '智能体', icon: IconAgent, t: 'var(--t-agent)', c: 'var(--c-agent)' },
     { path: '/dispatch', label: '调度中心', icon: IconDispatch, t: 'var(--t-dispatch)', c: 'var(--c-dispatch)' },
+    { path: '/model-compare', label: '模型对比', icon: IconModelCompare, t: 'var(--t-reports)', c: 'var(--c-reports)' },
     { path: '/tasks', label: '任务中心', icon: IconTasks, t: 'var(--t-tasks)', c: 'var(--c-tasks)' },
     { path: '/reports', label: '评测报告', icon: IconReports, t: 'var(--t-reports)', c: 'var(--c-reports)' },
     modeAsset,

@@ -36,6 +36,7 @@ import {
   type SessionVisibility,
   type WorkspaceOverview,
   type WorkspaceFileList,
+  type CompareSampleRow,
 } from './types'
 import {
   MOCK_PROFILES,
@@ -975,6 +976,12 @@ export const api = {
     async freezeBaseline(id: string): Promise<void> {
       if (getDataMode() === 'mock') return
       await http.post(`/api/reports/${id}/baseline`)
+    },
+    // 逐题样本比对（模型对比页用）：按行聚合各 profile 预测
+    async samples(id: string, params: { filter?: 'all' | 'diff' | 'fail'; offset?: number; limit?: number } = {}): Promise<{ items: CompareSampleRow[]; total: number }> {
+      if (getDataMode() === 'mock') return { items: [], total: 0 }
+      const { data } = await http.get(`/api/reports/${id}/samples`, { params })
+      return data
     },
   },
 

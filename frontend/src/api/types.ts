@@ -265,6 +265,7 @@ export interface Task {
   config: TaskSpec
   progress?: TaskProgress
   report_id?: string | null
+  result?: { error_code?: string; error_message?: string; metric?: string; profile_count?: number; sample_total?: number } | null
   parent_task_id?: string | null
   child_stress_task_id?: string | null
   with_stress?: boolean
@@ -421,21 +422,68 @@ export interface KbChunk {
 
 // 评测报告
 export interface BenchmarkScore {
-  profile: string
+  // Worker 实际输出字段（benchmark _finish）
+  profile_id?: string
   profile_name?: string
-  contain?: number
+  model?: string
+  metric?: string
+  score?: number
   exact?: number
-  regex?: number
   rouge_l?: number
-  bleu?: number
-  fail_rate: number
-  latency: string | number
   judge?: number
+  fail_rate?: number
+  latency_ms_avg?: number
+  sample_total?: number
+  sample_failed?: number
+  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }
+  est_cost_usd?: number
+  // 兼容旧 spec（seed / Report.vue 旧模板）
+  profile: string
+  contain?: number
+  regex?: number
+  bleu?: number
+  latency: string | number
   judge_breakdown?: {
     accuracy?: number
     completeness?: number
     logic?: number
   }
+}
+
+export interface ReportJudgeInfo {
+  profile_id?: string | null
+  profile_name?: string | null
+  model?: string | null
+  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }
+  est_cost_usd?: number
+  judged_count?: number
+  failed_count?: number
+}
+
+// 模型对比页：逐题样本
+export interface ComparePrediction {
+  profile_id: string
+  profile_name: string | null
+  model: string | null
+  output: string
+  score: number | null
+  exact: number | null
+  rouge_l: number | null
+  judge_score: number | null
+  judge_reason?: string | null
+  latency_ms: number | null
+  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | null
+  error?: string | null
+  raw?: any
+}
+
+export interface CompareSampleRow {
+  row_no: number
+  question: string
+  reference: string
+  context?: string | null
+  diff: boolean
+  predictions: ComparePrediction[]
 }
 
 export interface FailedSample {
@@ -485,6 +533,14 @@ export interface Report {
   // Benchmark 报告
   scores?: BenchmarkScore[]
   failed_items?: FailedSample[]
+  metric?: string
+  denominator_note?: string
+  judge?: ReportJudgeInfo | null
+  // 报告内嵌数据集元信息与样本总量（worker 写入 metrics 并平铺到报告响应）
+  dataset_id?: string
+  dataset_name?: string
+  dataset_version?: number
+  sample_total?: number
   // RAG 报告
   k?: number
   modes?: Array<'naive' | 'local' | 'global' | 'hybrid'>

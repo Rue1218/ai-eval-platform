@@ -20,6 +20,7 @@ export function getDefaultRunConfig(): RunConfig {
     system_prompt: '',
     k: 5,
     use_judge: false,
+    judge_profile_id: undefined,
   }
 }
 

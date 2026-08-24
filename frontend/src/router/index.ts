@@ -26,6 +26,7 @@ const routes: RouteRecordRaw[] = [
       { path: '', redirect: '/agent' },
       { path: 'agent', component: () => import('../views/Agent.vue'), meta: { title: '智能体' } },
       { path: 'dispatch', component: () => import('../views/Dispatch.vue'), meta: { title: '调度中心' } },
+      { path: 'model-compare', component: () => import('../views/ModelCompare.vue'), meta: { title: '模型对比' } },
       { path: 'tasks', component: () => import('../views/Tasks.vue'), meta: { title: '任务中心' } },
       { path: 'reports', component: () => import('../views/Report.vue'), meta: { title: '评测报告' } },
       { path: 'reports/:id', component: () => import('../views/Report.vue'), meta: { title: '评测报告' } },

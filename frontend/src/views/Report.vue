@@ -83,45 +83,45 @@
             <thead>
               <tr>
                 <th style="width: 160px">评估维度 / 指标</th>
-                <th v-for="s in report.scores" :key="s.profile" class="mono" style="font-size: 13px; font-weight: 600">
+                <th v-for="s in normalizedScores" :key="s.profile" class="mono" style="font-size: 13px; font-weight: 600">
                   {{ s.profile_name || s.profile }}
                 </th>
               </tr>
             </thead>
             <tbody>
               <tr>
-                <td style="font-weight: 600">主指标 (Contain 包含率)</td>
-                <td v-for="s in report.scores" :key="s.profile" class="mono kpi-num" style="font-size: 22px; color: var(--c-datasets)">
+                <td style="font-weight: 600">主指标 ({{ report.metric || 'contain' }})</td>
+                <td v-for="s in normalizedScores" :key="s.profile" class="mono kpi-num" style="font-size: 22px; color: var(--c-datasets)">
                   {{ s.contain !== undefined ? s.contain.toFixed(2) : '—' }}
                 </td>
               </tr>
               <tr>
                 <td style="font-weight: 500">全等率 (Exact Match)</td>
-                <td v-for="s in report.scores" :key="s.profile" class="mono" style="font-size: 14px">
+                <td v-for="s in normalizedScores" :key="s.profile" class="mono" style="font-size: 14px">
                   {{ s.exact !== undefined ? s.exact.toFixed(2) : '—' }}
                 </td>
               </tr>
               <tr>
                 <td style="font-weight: 500">ROUGE-L 相似度</td>
-                <td v-for="s in report.scores" :key="s.profile" class="mono" style="font-size: 14px">
+                <td v-for="s in normalizedScores" :key="s.profile" class="mono" style="font-size: 14px">
                   {{ s.rouge_l !== undefined ? s.rouge_l.toFixed(2) : '—' }}
                 </td>
               </tr>
               <tr>
                 <td style="font-weight: 500">请求失败率</td>
-                <td v-for="s in report.scores" :key="s.profile" class="mono" style="font-size: 14px" :style="s.fail_rate > 0.05 ? 'color: var(--accent-error)' : ''">
+                <td v-for="s in normalizedScores" :key="s.profile" class="mono" style="font-size: 14px" :style="(s.fail_rate ?? 0) > 0.05 ? 'color: var(--accent-error)' : ''">
                   {{ s.fail_rate !== undefined ? (s.fail_rate * 100).toFixed(1) + '%' : '—' }}
                 </td>
               </tr>
               <tr>
                 <td style="font-weight: 500">平均端到端延迟</td>
-                <td v-for="s in report.scores" :key="s.profile" class="mono" style="font-size: 14px">
+                <td v-for="s in normalizedScores" :key="s.profile" class="mono" style="font-size: 14px">
                   {{ s.latency ?? '—' }}
                 </td>
               </tr>
               <tr v-if="report.scores?.some((s) => s.judge !== undefined)">
                 <td style="font-weight: 600">大模型裁判打分 (Judge)</td>
-                <td v-for="s in report.scores" :key="s.profile" class="mono" style="font-size: 16px; font-weight: 700; color: var(--c-agent)">
+                <td v-for="s in normalizedScores" :key="s.profile" class="mono" style="font-size: 16px; font-weight: 700; color: var(--c-agent)">
                   {{ s.judge !== undefined ? s.judge + ' 分' : '—' }}
                 </td>
               </tr>
@@ -438,6 +438,16 @@ const reportId = computed(() => (route.params.id as string) || '')
 // 报告数据仅来自服务端 / Mock 夹具，加载失败时保持 null 并展示空态
 const report = ref<Report | null>(null)
 const loading = ref(true)
+
+// 兼容 Worker 实际输出（score/latency_ms_avg）与旧 seed 字段（contain/latency）：
+// Worker 写主指标均值到 score，前端指标表按 contain 展示，此处归一化
+const normalizedScores = computed(() =>
+  (report.value?.scores || []).map((s) => ({
+    ...s,
+    contain: s.score ?? s.contain,
+    latency: s.latency_ms_avg ?? s.latency,
+  })),
+)
 
 const showShareModal = ref(false)
 const shareUrl = ref('')

@@ -543,6 +543,10 @@ class EvalItem(Base):
     raw = Column(JSONB, nullable=True)
     # 归一后的 token 用量 {prompt_tokens, completion_tokens, total_tokens}
     usage = Column(JSONB, nullable=True)
+    # LLM 裁判打分（0-100 整数）：仅 use_judge 任务启用；未启用/未判样本为 None
+    judge_score = Column(Integer, nullable=True)
+    # 裁判评分理由（≤500 字），仅裁判打分成功样本非空
+    judge_reason = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
