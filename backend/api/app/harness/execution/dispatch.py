@@ -12,10 +12,13 @@ bwrap 沙箱（无网络、工作区唯一可写、资源受限、超时整树�
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import os
+import socket
 import time
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from app.errors import AppError, ErrorCode
@@ -30,6 +33,69 @@ logger = logging.getLogger("ai-eval.harness.dispatch")
 BASH_BLOCKLIST: frozenset[str] = frozenset(
     {"rm", "sudo", "curl", "wget", "nc", "ssh", "scp", "chmod", "chown"}
 )
+
+# SSRF 防护：web_fetch 抓取目标命中以下内网/回环/链路本地/保留地址段即拒绝。
+# 含 IPv4 保留段、IPv6 回环/ULA/链路本地/多播与文档地址（RFC 1918/6890/3849 等）。
+BLOCKED_NETWORKS: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = (
+    ipaddress.ip_network("0.0.0.0/8"),
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.0.0.0/24"),
+    ipaddress.ip_network("192.0.2.0/24"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("198.18.0.0/15"),
+    ipaddress.ip_network("198.51.100.0/24"),
+    ipaddress.ip_network("203.0.113.0/24"),
+    ipaddress.ip_network("224.0.0.0/4"),
+    ipaddress.ip_network("240.0.0.0/4"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("::/128"),
+    ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("fe80::/10"),
+    ipaddress.ip_network("2001:db8::/32"),
+    ipaddress.ip_network("ff00::/8"),
+)
+
+
+def _is_blocked_ip(ip: str) -> bool:
+    """判定 IP 是否命中内网/回环/保留地址段；无法识别一律拒绝（fail-closed）。
+
+    IPv4 映射 IPv6（``::ffff:127.0.0.1``）先还原为 IPv4 再判定，防止绕过。
+    """
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return True
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        addr = addr.ipv4_mapped
+    return any(addr in network for network in BLOCKED_NETWORKS)
+
+
+def _reject_internal_target(host: str) -> None:
+    """SSRF 防护：主机名/IP 解析结果命中内网地址即拒绝（web_fetch 前置校验）。
+
+    覆盖 IP 字面量（含十进制/十六进制/八进制等非标准写法）、域名解析结果与
+    IPv4 映射 IPv6；域名先解析校验再发起请求，阻止直连容器内网/回环服务。
+    （解析与请求间存在极小 DNS 重绑定窗口，属可接受的残余风险。）
+    """
+    try:
+        ipaddress.ip_address(host)  # host 本身是 IP 字面量
+    except ValueError:
+        try:
+            infos = socket.getaddrinfo(host, None)
+        except OSError:
+            raise AppError(ErrorCode.UPSTREAM, "域名解析失败") from None
+        resolved = {info[4][0] for info in infos}
+        if not resolved:
+            raise AppError(ErrorCode.UPSTREAM, "域名解析失败")
+        if any(_is_blocked_ip(ip) for ip in resolved):
+            raise AppError(ErrorCode.VALIDATION, "禁止访问内网/回环地址")
+        return
+    if _is_blocked_ip(host):
+        raise AppError(ErrorCode.VALIDATION, "禁止访问内网/回环地址")
 
 
 def run_bash(
@@ -138,9 +204,13 @@ def web_search(query: str, *, timeout_s: float) -> str:
 
 
 def web_fetch(url: str, *, timeout_s: float) -> str:
-    """内部抓取适配器 + 脱敏（不走外部 MCP 服务器）。"""
+    """内部抓取适配器 + 脱敏 + SSRF 防护（不走外部 MCP 服务器）。"""
     if not url.startswith(("http://", "https://")):
         raise AppError(ErrorCode.VALIDATION, "仅支持 http/https 地址")
+    host = urlparse(url).hostname
+    if not host:
+        raise AppError(ErrorCode.VALIDATION, "URL 缺少主机名")
+    _reject_internal_target(host)
     request = Request(url, headers={"User-Agent": "ai-eval-platform/1.0"})
     try:
         with urlopen(request, timeout=timeout_s) as response:  # noqa: S310

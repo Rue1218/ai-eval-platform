@@ -3,7 +3,9 @@
 import asyncio
 import json
 import tempfile
+import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 from sqlalchemy.orm import Session
@@ -185,6 +187,167 @@ def test_read_file_safe_supports_offset_and_limit() -> None:
         # 恰好读到末尾：无标记
         tail = read_file_safe("long.txt", root, offset=7)
         assert tail == "789"
+
+
+def test_web_fetch_rejects_internal_targets(monkeypatch) -> None:
+    """SSRF 防护：web_fetch 拒绝回环/内网/保留地址（IP 字面量、域名与非标准写法）。
+
+    ``urlopen`` 被替换为必然失败的桩：若 SSRF 校验漏拦任一 URL，urlopen 被调用
+    即触发 AssertionError，保证校验确实在发起请求前生效。
+    """
+    from app.harness.execution import dispatch
+
+    def fake_urlopen(*_args, **_kwargs):
+        raise AssertionError("SSRF 校验未拦截，urlopen 不应被调用")
+
+    monkeypatch.setattr(dispatch, "urlopen", fake_urlopen)
+    blocked_urls = (
+        "http://127.0.0.1:8000/api/health",
+        "http://localhost:8000/api/health",
+        "http://[::1]:8000/",
+        "http://10.0.0.1/",
+        "http://192.168.1.1/",
+        "http://172.16.0.1/",
+        "http://172.31.255.254/",
+        "http://169.254.169.254/",
+        "http://0.0.0.0/",
+        "http://[fc00::1]/",
+        "http://[fe80::1]/",
+        # 非标准 IP 写法（十进制/十六进制/省略段），解析后仍命中回环
+        "http://2130706433/",
+        "http://0x7f000001/",
+        "http://127.1/",
+        # IPv4 映射 IPv6
+        "http://[::ffff:127.0.0.1]:8000/",
+    )
+    for url in blocked_urls:
+        with pytest.raises(AppError) as error:
+            dispatch.web_fetch(url, timeout_s=1.0)
+        assert error.value.code in (ErrorCode.VALIDATION, ErrorCode.UPSTREAM), url
+
+
+def test_web_fetch_allows_public_target(monkeypatch) -> None:
+    """SSRF 防护不误伤公网地址。"""
+    from app.harness.execution import dispatch
+
+    class _FakeResponse:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+
+        def __enter__(self) -> "_FakeResponse":
+            return self
+
+        def __exit__(self, *_exc: object) -> bool:
+            return False
+
+        def read(self, _n: int = -1) -> bytes:
+            return self._body
+
+    monkeypatch.setattr(
+        dispatch, "urlopen", lambda *_a, **_k: _FakeResponse(b"<html>public</html>")
+    )
+    # 公网 IP 字面量：无需 DNS，直接放行
+    assert "public" in dispatch.web_fetch("http://93.184.216.34/", timeout_s=1.0)
+    # 公网域名：SSRF 校验不应以 VALIDATION 拦截（无 DNS 环境的解析失败不算拦截）
+    try:
+        result = dispatch.web_fetch("http://example.com/", timeout_s=1.0)
+        assert "public" in result
+    except AppError as error:
+        assert error.value.code != ErrorCode.VALIDATION
+
+
+class _RecordingHandler(BaseHTTPRequestHandler):
+    """回环集成测试用 HTTP handler：记录请求路径、返回固定内容、不刷日志。"""
+
+    requests: list[str] = []
+
+    def do_GET(self) -> None:  # noqa: N802
+        type(self).requests.append(self.path)
+        body = b"integration-ok"
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, _format: str, *_args: object) -> None:
+        return
+
+
+@pytest.fixture()
+def loopback_server() -> str:
+    """启动一个真实可达的回环 HTTP 服务器（127.0.0.1 随机端口），返回其 URL。
+
+    用作集成测试的"内部可达目标"：若 SSRF 校验缺失，web_fetch 必然能抓到它。
+    """
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _RecordingHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    _RecordingHandler.requests = []
+    yield f"http://127.0.0.1:{server.server_address[1]}/health"
+    server.shutdown()
+    thread.join(timeout=5)
+
+
+def test_web_fetch_integration_blocks_reachable_loopback(loopback_server) -> None:
+    """集成：SSRF 校验先于网络请求——回环服务真实可达也拦截，且服务端未收到请求。"""
+    from app.harness.execution import dispatch
+
+    with pytest.raises(AppError) as error:
+        dispatch.web_fetch(loopback_server, timeout_s=3.0)
+    assert error.value.code == ErrorCode.VALIDATION
+    assert _RecordingHandler.requests == []
+
+
+def test_web_fetch_integration_execute_path_observation(loopback_server) -> None:
+    """集成：经 execute 分派路径，SSRF 拦截归一为 ok=False observation。"""
+    registry = build_default_registry()
+    observation = execute(
+        ToolCall(name="web_fetch", arguments={"url": loopback_server}),
+        timeout_s=5.0,
+        permission=registry.get("web_fetch").permission,
+        handler=registry.get("web_fetch").handler,
+    )
+    assert observation.ok is False
+    assert observation.text == "操作失败（VALIDATION）"
+    assert _RecordingHandler.requests == []
+
+
+def test_web_fetch_integration_toolnode_event(loopback_server) -> None:
+    """集成：经 ToolNode 全链路（门禁→绑定→分派→归一），产出 ok=False tool_result 事件。"""
+    registry = build_default_registry()
+    node = build_tool_node(registry)
+    state: GraphState = {
+        "request": {"config": {}, "messages": ()},
+        "pending_tool": {"name": "web_fetch", "arguments": {"url": loopback_server}},
+    }
+
+    class _FakeConfig:
+        def get(self, key: str, default: object = None) -> object:
+            return {"configurable": {}}.get(key, default)
+
+    original = toolnode_mod.get_config
+    toolnode_mod.get_config = lambda: _FakeConfig()
+    try:
+        out = asyncio.run(node(state))
+    finally:
+        toolnode_mod.get_config = original
+
+    result = next(event for event in out["pending_events"] if event["kind"] == "tool_result")
+    payload = result["payload"]
+    assert payload["ok"] is False
+    assert payload["error"] == "操作失败（VALIDATION）"
+    assert payload["latency_ms"] >= 0
+    assert _RecordingHandler.requests == []
+
+
+def test_web_fetch_integration_reachable_when_guard_disabled(loopback_server, monkeypatch) -> None:
+    """集成对照：绕过 SSRF 校验后同一回环服务可正常抓取，证明拦截来自校验本身而非环境。"""
+    from app.harness.execution import dispatch
+
+    monkeypatch.setattr(dispatch, "_reject_internal_target", lambda _host: None)
+    result = dispatch.web_fetch(loopback_server, timeout_s=3.0)
+    assert "integration-ok" in result
+    assert _RecordingHandler.requests == ["/health"]
 
 
 def test_execute_normalizes_exception_to_observation() -> None:
