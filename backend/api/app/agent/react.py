@@ -117,6 +117,7 @@ def build_react_nodes(
                     )
                 ],
                 "pending_tool": None,
+                "repeat_retry": False,
             }
         except Exception:
             return {
@@ -127,6 +128,7 @@ def build_react_nodes(
                     )
                 ],
                 "pending_tool": None,
+                "repeat_retry": False,
             }
         latency_ms = round((time.perf_counter() - started) * 1000)
         try:
@@ -159,6 +161,7 @@ def build_react_nodes(
                         "usage": dict(response.usage),
                         "latency_ms": latency_ms,
                     },
+                    "repeat_retry": False,  # 清除回环标记，react_route 据此正常结束
                     "budget": budget.to_dict(),
                 }
             # 工具路径：重复调用抑制（OR-4）→ 预算 → 写 pending_tool
@@ -228,6 +231,7 @@ def build_react_nodes(
                     )
                 ],
                 "pending_tool": None,
+                "repeat_retry": False,
                 "budget": budget.to_dict(),
             }
         return {

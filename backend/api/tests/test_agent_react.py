@@ -126,16 +126,30 @@ def test_react_budget_exhausted_emits_error() -> None:
     assert len(gateway.calls) <= 5
 
 
-def test_react_repeat_call_suppressed() -> None:
-    """OR-4：同一工具连续调用未推进 → 抑制并 error 收尾。"""
-    gateway = _ScriptGateway([_REACT_READ, _REACT_READ])
+def test_react_repeat_call_suppressed_after_correction() -> None:
+    """OR-4：首次相同调用给纠正机会；纠正后仍重复相同调用才 error 收尾。"""
+    # 第三次相同调用（纠正回环后仍重复）才触发硬错误
+    gateway = _ScriptGateway([_REACT_READ, _REACT_READ, _REACT_READ])
     events = _collect(LangGraphAgent(gateway, build_default_registry()), _serializable())
     kinds = [event["kind"] for event in _pending_events(events)]
     assert kinds.count("error") == 1
     messages = [event["payload"].get("message", "") for event in _pending_events(events)]
     assert any("连续调用" in message for message in messages)
-    # 仅第 1 轮产出 tool_call（第 2 轮被抑制，未产出第二个）
+    # 首次相同调用被纠正（不执行），仅 1 轮产出 tool_call
     assert kinds.count("tool_call") == 1
+
+
+def test_react_repeat_first_gives_correction_then_done_cleanly() -> None:
+    """OR-4 回归：相同调用触发纠正后，模型 done 收尾不得再回环触发错误。"""
+    gateway = _ScriptGateway([_REACT_READ, _REACT_READ, _REACT_DONE])
+    events = _collect(LangGraphAgent(gateway, build_default_registry()), _serializable())
+    kinds = [event["kind"] for event in _pending_events(events)]
+    # 无 error、无多余工具执行，干净收尾
+    assert kinds.count("error") == 0
+    assert kinds.count("tool_call") == 1
+    assert kinds[-2:] == ["assistant_message", "response.completed"]
+    # 纠正环节透出 thought（思考过程可见）
+    assert kinds.count("thought") >= 1
 
 
 def test_react_parse_failure_emits_error() -> None:
