@@ -481,6 +481,15 @@
               </div>
             </div>
 
+            <!-- 2.4.1 澄清卡：interrupt() 暂停图后等待用户补充信息（仅回复，不建任务） -->
+            <ClarifyCard
+              v-else-if="item.type === 'clarify'"
+              :question="item.question || ''"
+              :options="item.options || null"
+              :is-acked="item.isAcked"
+              @reply="handleClarifyReply(item, $event)"
+            />
+
             <!-- 2.5 评测报告卡片 -->
             <div
               v-else-if="item.type === 'report'"
@@ -877,6 +886,7 @@ import { getProviderLogoKey, type ProviderLogoKey } from '../utils/providerLogo'
 import { formatLatency } from '../utils/format'
 import { skillLabel } from '../agent/skillLabels'
 import SkillBadge from '../components/agent/SkillBadge.vue'
+import ClarifyCard from '../components/agent/ClarifyCard.vue'
 import ThoughtCard from '../components/agent/ThoughtCard.vue'
 import ToolCard from '../components/agent/ToolCard.vue'
 import MediaPreview from '../components/agent/MediaPreview.vue'
@@ -926,7 +936,7 @@ function toggleDispatchRail() {
 
 const isWsOnline = ref(true)
 const isGenerating = ref(false)
-const harnessStage = ref<'plan' | 'react' | 'reflect' | ''>('')
+const harnessStage = ref<'plan' | 'react' | 'reflect' | 'plan_solve' | ''>('')
 const lastToolTitle = ref('')
 const turnLatencyMs = ref(0)
 const awaitingConfirm = computed(() =>
@@ -934,6 +944,7 @@ const awaitingConfirm = computed(() =>
 )
 const harnessStageLabel = computed(() => {
   if (harnessStage.value === 'plan') return '规划中'
+  if (harnessStage.value === 'plan_solve') return 'Plan-Solve 执行中'
   if (harnessStage.value === 'reflect') return '复核中'
   if (harnessStage.value === 'react' && lastToolTitle.value) return `ToolCall「${lastToolTitle.value}」`
   if (harnessStage.value === 'react') return 'ToolCall 中'
@@ -1170,9 +1181,13 @@ export interface AgentToolItem {
 }
 
 interface StreamItem {
-  type: 'user' | 'agent' | 'thought' | 'tool' | 'media' | 'confirm' | 'report' | 'error' | 'typing'
+  type: 'user' | 'agent' | 'thought' | 'tool' | 'media' | 'confirm' | 'clarify' | 'report' | 'error' | 'typing'
   text?: string
   done?: boolean
+  // 澄清卡（M4 §3.9.6：id 匹配 clarify_reply，仅回复输入）
+  id?: string
+  question?: string
+  options?: string[] | null
   collapsed?: boolean
   latency_ms?: number
   stage?: 'plan' | 'react' | 'reflect'
@@ -1374,7 +1389,7 @@ let lastConfirmKind = 'benchmark'
 interface SessionRuntime {
   events: StreamItem[]
   isGenerating: boolean
-  harnessStage: 'plan' | 'react' | 'reflect' | ''
+  harnessStage: 'plan' | 'react' | 'reflect' | 'plan_solve' | ''
   lastToolTitle: string
   turnLatencyMs: number
   activeTask: any
@@ -2231,6 +2246,7 @@ function handleConfirmAck(item: StreamItem, confirmed: boolean) {
     return
   }
 
+
   // Mock 模式：本地模拟入队与进度，便于无后端环境演示。
   events.value.push({
     type: 'tool',
@@ -2281,6 +2297,18 @@ function handleConfirmAck(item: StreamItem, confirmed: boolean) {
       }, 600, true)
     }
   }, 1000, true)
+}
+
+/** 澄清卡回复：发送 clarify_reply（id 匹配服务端最近待回复澄清卡）并盖章。 */
+function handleClarifyReply(item: StreamItem, answer: string) {
+  if (item.type !== 'clarify' || item.isAcked) return
+  if (!agentWs || !agentWs.isConnected || !item.id) {
+    message.error('Agent 连接未就绪，暂不能发送回复')
+    return
+  }
+  item.isAcked = true
+  agentWs.sendClarifyReply(item.id, answer)
+  scrollToBottom()
 }
 
 /** 派生压测子任务（mock 演示）：agent 说明 → stress 进度坞实时序列 → prod 会签 → 压测报告卡。 */
@@ -2742,6 +2770,20 @@ async function loadSessionHistory(sid: string): Promise<number> {
           confirm.item.ackResult = Boolean(p.ok)
           confirm.item.open = false
         }
+      } else if (ev.event === 'clarify') {
+        rawList.push({
+          time: t,
+          priority: 4,
+          eventId: eid,
+          item: {
+            type: 'clarify',
+            id: String(p.id || ''),
+            question: String(p.question || '需要补充信息'),
+            options: Array.isArray(p.options) ? p.options : null,
+            isAcked: false,
+            noAnim: true,
+          },
+        })
       } else if (ev.event === 'error') {
         rawList.push({
           time: t,
@@ -3275,6 +3317,20 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
       void refreshContextMeter(sid)
       break
     }
+    case 'clarify': {
+      // 澄清卡：interrupt() 暂停图，等待用户补充信息（M4 §3.9.6）
+      markGenerating(sid, false)
+      rt.harnessStage = ''
+      finishBufferThought(buf)
+      buf.push({
+        type: 'clarify',
+        id: String(p.id || ''),
+        question: String(p.question || '需要补充信息'),
+        options: Array.isArray(p.options) ? p.options : null,
+        isAcked: false,
+      })
+      break
+    }
     case 'error':
       markGenerating(sid, false)
       rt.activeTask = null
@@ -3590,6 +3646,21 @@ function handleWsEvent(ev: WsServerEvent) {
         isAcked: false,
         summary: '',
         open: true,
+      })
+      scrollToBottom()
+      break
+    }
+    case 'clarify': {
+      // 澄清卡：interrupt() 暂停图，等待用户补充信息（仅回复，不建任务）
+      finishLiveThought()
+      setCurrentGenerating(false)
+      harnessStage.value = ''
+      events.value.push({
+        type: 'clarify',
+        id: String(p.id || ''),
+        question: String(p.question || '需要补充信息'),
+        options: Array.isArray(p.options) ? p.options : null,
+        isAcked: false,
       })
       scrollToBottom()
       break

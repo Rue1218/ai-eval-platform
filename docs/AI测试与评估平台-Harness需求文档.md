@@ -3,7 +3,7 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 需求文档 |
-| 版本 | V1.4.6 |
+| 版本 | V1.4.7 |
 | 审查日期 | 2026-08-24 |
 | 文档性质 | 需求规格说明书（需求先行） |
 | 适用范围 | `/agent` 对话智能体的 Harness 运行时：六层职责、七种模式组合、LangGraph 框架选型、技能体系与验收标准 |
@@ -511,3 +511,18 @@ P0-LG 阶段引入新依赖时须同步更新 `backend/api/requirements.txt`；P
 | 实现代码（阶段 1–4，分支 `feat/agent-stage1`） | 新增 | `app/harness/contracts/`（events/artifacts）、`app/harness/memory/`（state/working/episodic/compressed/preference/semantic/checkpoint/cleanup）、`app/harness/prompts/`（system/protocols/safety）、`app/harness/context/`（window/assembly/observation/compact/meter）、`app/harness/orchestration/`（router/budget/gates/plan/confirm）、`app/harness/execution/`（registry/binding/dispatch/toolnode/worker_bridge）、`app/harness/feedback/`（observation/rules/review/budget/isolation）、`app/harness/security/`（secrets/auth）、`app/harness/skills/`（registry）、`app/agent/`（routing/react/clarify/plan_solve/reflect + graph 改造）、`app/llm/`（contracts/gateway should_abort 迁移）、`app/routers/ws.py`（事件桥接 + /stop + /compact + confirm_ack）、`migrations/versions/a1f3c5e7b9d1_新增harness检查点表.py`、`tests/`（新增 8 个测试文件 + 改造 test_agent_graph/test_llm_graph 等） | 按 §9.3 六层 × 阶段清单逐文件落地，全部 TDD 验收点（O-A*/X-A*/E-A*/F-A*/P-A*/C-A*）有对应测试覆盖；`should_abort` 不入 GraphState；`api_key` 不入 SerializableRequest；节点不持 WS 连接；长工具门禁拦截；`rag` 未接入必失败。 |
 
 本次修订含需求文档版本闭环与 `feat/agent-stage1` 分支的实现代码清单；不改变任何 API、数据库表结构（新增 harness 检查点表迁移）、前端或 Worker 运行契约。
+
+### V1.4.7 澄清卡链路实现闭环（main 直接迭代，2026-08-24）
+
+按 §3.9.6 / M9 §3.5.1 补齐澄清卡前后端缺口：
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/agent/graph.py` | `LangGraphAgent.astream` 增加 `resume` 参数：`Command(resume=answer)` 恢复被澄清卡中断的图（thread_id 与中断时一致） |
+| `backend/api/app/routers/ws.py` | 新增 `_SESSION_CLARIFY` 待回复澄清卡注册表；`_run_turn` 支持 `resume` 模式（复用 thread_id、不构造新请求）；消费 `__interrupt__` 帧翻译为 `clarify` 事件（`_handle_clarify_interrupt`）；收包循环新增 `clarify_reply` 分支（`_handle_clarify_reply`：id 匹配校验/空回复拒绝/回合串行 CONCURRENCY，`Command(resume)` 恢复）；新用户消息作废旧澄清卡 |
+| `frontend/src/api/ws.ts` | 新增 `sendClarifyReply(id, answer)`；`types.ts` 事件联合类型补 `'clarify'` |
+| `frontend/src/components/agent/ClarifyCard.vue` | 新增澄清卡组件：问题 + 可选选项 chips + 回复输入 + 发送（**仅回复，无确认入队**，与 ConfirmCard 互斥） |
+| `frontend/src/views/Agent.vue` | StreamItem 补 `clarify` 项；模板渲染 ClarifyCard；三处事件分支（live/replay/buffer）处理 `clarify`；`handleClarifyReply` 发送并盖章；`harnessStage` 类型与标签补 `plan_solve`（「Plan-Solve 执行中」） |
+| `backend/api/tests/test_ws_clarify.py` | 新增 6 项链路测试（中断注册/无待回复/失效 id/空回复/恢复同 thread/并发拒绝） |
+
+验收：`ruff check . ../shared` 全绿；后端 pytest **303 项全绿**；前端 `npm run typecheck` + `npm run build` 通过。澄清卡仅回复输入、不建任务、不写 pending_confirm（M4 §3.9.6）。

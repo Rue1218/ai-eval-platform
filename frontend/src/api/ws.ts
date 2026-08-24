@@ -189,6 +189,20 @@ export class AgentWebSocket {
     this.ws.send(JSON.stringify(payload))
   }
 
+  /** 发送澄清卡回复（clarify_reply.id 必须匹配最近待回复澄清卡，M4 §3.9.6）。 */
+  public sendClarifyReply(id: string, answer: string): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      console.warn('WebSocket not open, cannot send clarify_reply')
+      return
+    }
+    this.ws.send(
+      JSON.stringify({
+        event: 'clarify_reply',
+        payload: { id, answer },
+      }),
+    )
+  }
+
   public sendCancelTask(taskId: string): boolean {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       console.warn('WebSocket not open, cannot send cancel_task')

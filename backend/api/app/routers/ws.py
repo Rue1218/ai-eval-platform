@@ -46,6 +46,8 @@ _USED_WS_TICKETS: set[str] = set()
 _TICKET_LOCK = threading.Lock()
 # 会话级 abort 事件注册表（/stop 即时中断；单副本进程内 dict，见 AGENTS.md）
 _SESSION_ABORTS: dict[str, asyncio.Event] = {}
+# 会话级待回复澄清卡注册表（interrupt() 暂停后保存，clarify_reply 恢复图用）
+_SESSION_CLARIFY: dict[str, dict] = {}
 
 
 class _ConnectionState:
@@ -465,12 +467,17 @@ async def _run_turn(
     websocket: WebSocket,
     state: _ConnectionState,
     abort: asyncio.Event,
+    *,
+    resume: dict | None = None,
 ) -> None:
     """后台执行一轮 LangGraph Agent，并把图输出统一投影为 WS 事件。
 
     图节点只返回纯数据（custom 瞬态帧 + pending_events 事件意图）；本函数
     消费 ``astream`` 输出后统一 emit（§2.5 事件桥接）。``should_abort`` 与
     api_key 经 ``RunnableConfig.configurable`` 注入（O-12 迁移），不入 State。
+
+    ``resume`` 非 None 时为澄清卡恢复模式：以 ``Command(resume=answer)``
+    恢复同一 thread_id 的图（M9 §3.5.1），不再构造新请求。
     """
     db = SessionLocal()
     try:
@@ -483,20 +490,30 @@ async def _run_turn(
             if (system_row and isinstance(system_row.value, str) and system_row.value.strip())
             else build_system_prompt()
         )
-        serializable = to_serializable_request(
-            ModelRequest.from_messages(config, history, system=system_prompt)
-        )
+        if resume is not None:
+            # 恢复模式：复用中断时的 thread_id，不构造新请求
+            serializable = None
+            thread_id = str(resume["thread_id"])
+            resume_answer = resume.get("answer")
+        else:
+            serializable = to_serializable_request(
+                ModelRequest.from_messages(config, history, system=system_prompt)
+            )
+            thread_id = f"{session_id}:{uuid4().hex}"
+            resume_answer = None
         graph_config = {
             "configurable": {
                 # 每回合独立 thread_id：检查点按回合隔离（M3 阶段 3）
-                "thread_id": f"{session_id}:{uuid4().hex}",
+                "thread_id": thread_id,
                 "abort": {"should_abort": abort.is_set},
                 "credentials": {"api_key": config.api_key or ""},
                 "session": {"id": session_id},
             }
         }
         thinking: list[str] = []
-        async for mode, chunk in _AGENT.astream(serializable, config=graph_config):
+        async for mode, chunk in _AGENT.astream(
+            serializable, config=graph_config, resume=resume_answer
+        ):
             if mode == "custom":
                 kind = chunk["kind"]
                 text = chunk["text"]
@@ -521,6 +538,14 @@ async def _run_turn(
                             state.cursor,
                             {"text": text, "stream": "think"},
                         ),
+                    )
+                continue
+            # 澄清卡 interrupt() 中断帧：翻译为 clarify 事件并保存待恢复状态
+            if isinstance(chunk, dict) and "__interrupt__" in chunk:
+                payload = chunk["__interrupt__"][0].value
+                if isinstance(payload, dict) and payload.get("type") == "clarify":
+                    await _handle_clarify_interrupt(
+                        db, websocket, state, session_id, thread_id, payload
                     )
                 continue
             # updates 模式：按节点边界消费 pending_events，统一 emit
@@ -648,6 +673,79 @@ async def _handle_compact(
     )
 
 
+async def _handle_clarify_interrupt(
+    db: Session,
+    websocket: WebSocket,
+    state: _ConnectionState,
+    session_id: str,
+    thread_id: str,
+    payload: dict,
+) -> None:
+    """澄清卡中断帧翻译：持久化 clarify 事件并保存待恢复状态。
+
+    图已 ``interrupt()`` 暂停（回合自然结束）；``_SESSION_CLARIFY`` 保存
+    ``{id, thread_id}``，待 ``clarify_reply`` 到达后以 ``Command(resume)``
+    恢复同一 thread（M9 §3.5.1）。澄清卡不建任务、不写 pending_confirm。
+    """
+    clarify_id = str(payload.get("id") or "")
+    _SESSION_CLARIFY[session_id] = {
+        "id": clarify_id,
+        "thread_id": thread_id,
+    }
+    await _emit_persistent(
+        db,
+        websocket,
+        state,
+        session_id,
+        "clarify",
+        {
+            "id": clarify_id,
+            "question": str(payload.get("question") or ""),
+            "options": payload.get("options"),
+        },
+    )
+
+
+async def _handle_clarify_reply(
+    db: Session,
+    websocket: WebSocket,
+    state: _ConnectionState,
+    session: AgentSession,
+    payload: Any,
+    active_turn: asyncio.Task[None] | None,
+) -> asyncio.Task[None] | None:
+    """澄清卡回复：校验 id 匹配后以 Command(resume) 恢复图（不唤醒 confirm）。"""
+    if not isinstance(payload, dict):
+        raise AppError(ErrorCode.VALIDATION, "clarify_reply payload 必须是对象")
+    pending = _SESSION_CLARIFY.get(session.id)
+    if pending is None:
+        raise AppError(ErrorCode.VALIDATION, "无待回复的澄清卡")
+    if str(payload.get("id") or "") != pending["id"]:
+        raise AppError(ErrorCode.VALIDATION, "澄清卡已失效，请刷新后重试")
+    answer = payload.get("answer")
+    if not isinstance(answer, str) or not answer.strip():
+        raise AppError(ErrorCode.VALIDATION, "回复内容不能为空")
+    if active_turn and not active_turn.done():
+        raise AppError(ErrorCode.CONCURRENCY, "上一轮 Agent 仍在生成")
+    _SESSION_CLARIFY.pop(session.id, None)
+    abort = asyncio.Event()
+    _SESSION_ABORTS[session.id] = abort
+    task = asyncio.create_task(
+        _run_turn(
+            session.id,
+            websocket,
+            state,
+            abort,
+            resume={"thread_id": pending["thread_id"], "answer": answer.strip()},
+        ),
+        name=f"agent-turn-{session.id}",
+    )
+    task.add_done_callback(
+        lambda _task: _SESSION_ABORTS.pop(session.id, None)
+    )
+    return task
+
+
 async def _handle_user_message(
     db: Session,
     websocket: WebSocket,
@@ -711,6 +809,8 @@ async def _handle_user_message(
         "user_message",
         _message_payload(row, user),
     )
+    # 新用户消息作废未回复的澄清卡（澄清与新一轮输入互斥）
+    _SESSION_CLARIFY.pop(session.id, None)
     abort = asyncio.Event()
     _SESSION_ABORTS[session.id] = abort
     task = asyncio.create_task(
@@ -836,6 +936,16 @@ async def agent_websocket(websocket: WebSocket) -> None:
                         state,
                         session,
                         user,
+                        message.get("payload"),
+                        active_turn,
+                    )
+                elif event == "clarify_reply":
+                    # 澄清卡回复：校验 id 后以 Command(resume) 恢复图
+                    active_turn = await _handle_clarify_reply(
+                        db,
+                        websocket,
+                        state,
+                        session,
                         message.get("payload"),
                         active_turn,
                     )
