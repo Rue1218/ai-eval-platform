@@ -293,12 +293,12 @@
               <div class="row" style="gap: 8px; align-items: center">
                 <span class="mcp-main-title">🛠 MCP (Model Context Protocol) 工具中心</span>
                 <span class="tag-soft mcp-badge-host">Host 模式 · V1.0 受控沙箱</span>
-                <span class="badge" :class="disabledMcpToolsCount ? 'badge-warning' : 'badge-succeeded'">
-                  {{ disabledMcpToolsCount ? `${disabledMcpToolsCount} 项能力未挂载` : '全短工具就绪' }}
+                <span class="badge" :class="mcpBadgeClass">
+                  {{ mcpBadgeText }}
                 </span>
               </div>
               <div class="small tertiary mt4" style="line-height: 1.5">
-                Agent 作为 MCP Host 运行时，通过短工具完成资产发现与建单；禁止挂载长耗时阻塞工具。
+                Agent 进程内通过受控短工具完成资产发现与建单；浏览器只读取清单，不直接执行内部 ToolCall。
               </div>
             </div>
 
@@ -357,12 +357,12 @@
 
             <div class="mcp-kpi-card">
               <div class="mcp-kpi-top">
-                <span class="mcp-kpi-label">MCP Host 宿主状态</span>
+                <span class="mcp-kpi-label">受控工具清单接口</span>
                 <span class="mcp-kpi-icon">⚡</span>
               </div>
               <div class="mcp-kpi-val mono">Eval-Core <span class="unit">Host</span></div>
               <div class="mcp-kpi-sub mono text-info">
-                {{ mcpServerPingState?.latencyMs !== null && mcpServerPingState?.latencyMs !== undefined ? `● 探活 ${mcpServerPingState.latencyMs}ms (在线)` : '● 内存直连 / 0ms (在线)' }}
+                {{ mcpServerStatusText }}
               </div>
             </div>
 
@@ -381,24 +381,24 @@
         <div class="panel mb16">
           <div class="row-between mb12">
             <div class="row" style="gap: 8px; align-items: center">
-              <span class="panel-title" style="margin: 0">已挂载 MCP 服务节点 (MCP Servers)</span>
-              <span class="tag-soft">1 个内置宿主 · 0 个外部扩展</span>
+              <span class="panel-title" style="margin: 0">内部工具宿主与清单接口</span>
+              <span class="tag-soft">受控只读 · 0 个外部扩展</span>
             </div>
             <span class="small tertiary">智能体环境运行时直连</span>
           </div>
 
           <div class="mcp-servers-grid">
-            <!-- Eval-Core MCP Server (内置) -->
+            <!-- Eval-Core 内部工具宿主（浏览器只读检查清单接口） -->
             <div class="mcp-server-card builtin-server">
               <div class="server-card-head">
                 <div class="row" style="gap: 8px; align-items: center">
                   <span class="server-icon">🏛️</span>
                   <div>
                     <div class="row" style="gap: 6px; align-items: center">
-                      <span class="server-name">Eval-Core MCP Server</span>
+                      <span class="server-name">Eval-Core 内部工具宿主</span>
                       <span class="tag-soft" style="color: var(--accent-ai)">内置系统服务</span>
                     </div>
-                    <div class="mono small tertiary">http://api:8000/api/mcp/tools (v1)</div>
+                    <div class="mono small tertiary">GET /api/mcp/tools · 只读清单</div>
                   </div>
                 </div>
 
@@ -406,17 +406,17 @@
                   <span
                     class="ping-badge"
                     :class="mcpServerPingState?.ok !== false ? 'ok' : 'err'"
-                    title="点击重新探活"
+                    title="点击重新检查清单接口"
                     @click="handlePingMcpServer"
                   >
-                    {{ mcpServerPingState ? (mcpServerPingState.ok ? `● 在线 (${mcpServerPingState.latencyMs}ms)` : '✕ 连接异常') : '● 在线 (直连)' }}
+                    {{ mcpServerPingState ? (mcpServerPingState.ok ? `● 清单可读 (${mcpServerPingState.latencyMs}ms)` : '✕ 接口异常') : '— 未检查' }}
                   </span>
                   <button
                     class="btn btn-secondary btn-xs"
                     :disabled="mcpServerPinging"
                     @click="handlePingMcpServer"
                   >
-                    {{ mcpServerPinging ? '探活中…' : '探活 Ping' }}
+                    {{ mcpServerPinging ? '检查中…' : '检查接口' }}
                   </button>
                 </div>
               </div>
@@ -424,15 +424,15 @@
               <div class="server-card-meta">
                 <div class="server-meta-item">
                   <span class="meta-k">传输协议:</span>
-                  <span class="meta-v mono">Streamable HTTP / In-Process</span>
+                  <span class="meta-v mono">同源 REST / 进程内工具</span>
                 </div>
                 <div class="server-meta-item">
                   <span class="meta-k">挂载短工具:</span>
                   <span class="meta-v mono font-bold text-success">{{ mcpTools.length }} 个受控短工具</span>
                 </div>
                 <div class="server-meta-item">
-                  <span class="meta-k">鉴权模式:</span>
-                  <span class="meta-v">短票 ws-ticket + JWT 校验</span>
+                  <span class="meta-k">浏览器权限:</span>
+                  <span class="meta-v">Cookie 鉴权，仅读取清单</span>
                 </div>
                 <div class="server-meta-item">
                   <span class="meta-k">隔离等级:</span>
@@ -587,7 +587,7 @@
             </div>
 
             <div v-if="filteredMcpTools.length === 0" class="empty-state-wrap" style="grid-column: 1 / -1">
-              <EmptyState title="未找到匹配的 MCP 工具" description="请尝试清空搜索条件或重置筛选器" />
+              <EmptyState :title="mcpEmptyTitle" :description="mcpEmptyDescription" />
             </div>
           </div>
 
@@ -644,7 +644,7 @@
 
                 <tr v-if="filteredMcpTools.length === 0">
                   <td colspan="8">
-                    <EmptyState title="未找到匹配的 MCP 工具" description="请尝试清空搜索条件或重置筛选器" />
+                    <EmptyState :title="mcpEmptyTitle" :description="mcpEmptyDescription" />
                   </td>
                 </tr>
               </tbody>
@@ -1290,7 +1290,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useMessage, useDialog, NSelect, NInput, NInputNumber, NSwitch } from 'naive-ui'
 import { api } from '../api/http'
 import type { AgentReasoningSettings, Profile, ProfileCheckOut, McpTool } from '../api/types'
@@ -1340,6 +1340,9 @@ const mcpSearchKeyword = ref('')
 const mcpLoading = ref(false)
 const mcpServerPingState = ref<{ ok: boolean; latencyMs: number | null } | null>(null)
 const mcpServerPinging = ref(false)
+type McpRequestState = 'idle' | 'loading' | 'success' | 'error'
+const mcpRequestState = ref<McpRequestState>('idle')
+const mcpRequestError = ref('')
 const selectedMcpTool = ref<McpTool | null>(null)
 const showMcpModal = ref(false)
 
@@ -1375,6 +1378,50 @@ const writeToolsCount = computed(() => mcpTools.value.filter((t) => t.permission
 const enabledMcpToolsCount = computed(() => mcpTools.value.filter((t) => t.enabled !== false).length)
 const disabledMcpToolsCount = computed(() => mcpTools.value.filter((t) => t.enabled === false).length)
 
+/** 根据真实接口状态生成页面状态徽标，避免空清单被误报为“全部就绪”。 */
+const mcpBadgeClass = computed(() => {
+  return mcpRequestState.value === 'success' && mcpTools.value.length > 0
+    ? 'badge-succeeded'
+    : 'badge-warning'
+})
+
+const mcpBadgeText = computed(() => {
+  if (mcpRequestState.value === 'idle') return '尚未检查'
+  if (mcpRequestState.value === 'loading') return '检查中…'
+  if (mcpRequestState.value === 'error') return '清单接口不可用'
+  if (mcpTools.value.length === 0) return '接口在线 · 清单为空'
+  return disabledMcpToolsCount.value ? `${disabledMcpToolsCount.value} 项能力未挂载` : '清单已加载'
+})
+
+const mcpServerStatusText = computed(() => {
+  if (mcpRequestState.value === 'loading') return '● 正在读取清单…'
+  if (mcpRequestState.value === 'error') return '✕ 清单接口不可用'
+  if (mcpRequestState.value === 'success') {
+    return mcpTools.value.length > 0
+      ? `● 清单可读 · ${mcpTools.value.length} 项`
+      : '● 接口在线 · 0 项清单'
+  }
+  return '— 尚未检查'
+})
+
+const mcpEmptyTitle = computed(() => {
+  if (mcpRequestState.value === 'loading') return '正在读取工具清单'
+  if (mcpRequestState.value === 'error') return '工具清单接口调用失败'
+  if (mcpRequestState.value === 'success' && mcpTools.value.length === 0) {
+    return '接口已连通，但服务端未返回工具清单'
+  }
+  return '未找到匹配的 MCP 工具'
+})
+
+const mcpEmptyDescription = computed(() => {
+  if (mcpRequestState.value === 'loading') return '正在调用 GET /api/mcp/tools，请稍候…'
+  if (mcpRequestState.value === 'error') return mcpRequestError.value || '请确认登录状态与 API 服务是否正常。'
+  if (mcpRequestState.value === 'success' && mcpTools.value.length === 0) {
+    return '当前接口返回 0 项；这不等于工具已就绪。内部 Harness 工具不通过浏览器直接执行。'
+  }
+  return '请尝试清空搜索条件或重置筛选器'
+})
+
 /** 多维过滤后的 MCP 工具清单 */
 const filteredMcpTools = computed(() => {
   return mcpTools.value.filter((t) => {
@@ -1400,48 +1447,61 @@ const filteredMcpTools = computed(() => {
 /** 刷新 MCP 工具清单（真实调用 GET /api/mcp/tools） */
 async function handleRefreshMcpTools() {
   mcpLoading.value = true
+  mcpRequestState.value = 'loading'
+  mcpRequestError.value = ''
   const start = performance.now()
   try {
     const res = await api.mcp.tools()
+    if (!res || !Array.isArray(res.items)) {
+      throw new Error('工具清单接口返回格式不正确')
+    }
     const latency = Math.round(performance.now() - start)
-    mcpTools.value = res.items || []
+    mcpTools.value = res.items
+    mcpRequestState.value = 'success'
     mcpServerPingState.value = { ok: true, latencyMs: Math.max(1, latency) }
-    message.success(`已从服务端加载 ${enabledMcpToolsCount.value} 个已挂载短工具（共 ${mcpTools.value.length} 项清单，耗时 ${mcpServerPingState.value.latencyMs}ms）`)
+    if (mcpTools.value.length > 0) {
+      message.success(`清单接口调用成功 · 已加载 ${enabledMcpToolsCount.value} 个已挂载工具 · 耗时 ${mcpServerPingState.value.latencyMs}ms`)
+    } else {
+      message.warning('清单接口调用成功，但服务端返回 0 项；当前没有可供页面展示的工具')
+    }
   } catch (err: any) {
+    mcpRequestState.value = 'error'
+    mcpRequestError.value = err.message || '调用 /api/mcp/tools 接口失败'
+    mcpTools.value = []
     mcpServerPingState.value = { ok: false, latencyMs: null }
-    message.error(err.message || '调用 /api/mcp/tools 接口失败')
+    message.error(mcpRequestError.value)
   } finally {
     mcpLoading.value = false
   }
 }
 
-/** 探活 Eval-Core MCP Host 宿主直连延迟（真实调用 GET /api/mcp/tools） */
+/** 检查 Eval-Core 清单接口延迟（真实调用 GET /api/mcp/tools）。 */
 async function handlePingMcpServer() {
   mcpServerPinging.value = true
+  mcpRequestState.value = 'loading'
+  mcpRequestError.value = ''
   const start = performance.now()
   try {
     const res = await api.mcp.tools()
+    if (!res || !Array.isArray(res.items)) {
+      throw new Error('工具清单接口返回格式不正确')
+    }
     const latency = Math.round(performance.now() - start)
-    mcpTools.value = res.items || []
+    mcpTools.value = res.items
+    mcpRequestState.value = 'success'
     mcpServerPingState.value = { ok: true, latencyMs: Math.max(1, latency) }
-    message.success(`[Eval-Core MCP Server] 探活成功 · 延迟 ${mcpServerPingState.value.latencyMs}ms · 挂载 ${enabledMcpToolsCount.value} 个短工具`)
+    message.success(`清单接口检查成功 · 延迟 ${mcpServerPingState.value.latencyMs}ms · 返回 ${mcpTools.value.length} 项`)
   } catch (err: any) {
+    mcpRequestState.value = 'error'
+    mcpRequestError.value = err.message || '网络连接异常'
+    mcpTools.value = []
     mcpServerPingState.value = { ok: false, latencyMs: null }
-    message.error(`[Eval-Core MCP Server] 探活失败: ${err.message || '网络连接异常'}`)
+    message.error(`清单接口检查失败: ${mcpRequestError.value}`)
   } finally {
     mcpServerPinging.value = false
   }
 }
 
-/** 监听 activeTab 变化以保证 MCP Tab 即刻调用真实后端 API */
-watch(
-  () => activeTab.value,
-  (newTab) => {
-    if (newTab === 'mcp' && mcpTools.value.length === 0) {
-      handleRefreshMcpTools()
-    }
-  },
-)
 
 /** 安全失焦辅助函数，避免弹窗在 aria-hidden 生效时子元素保留 focus 产生警告 */
 function safeBlur() {
@@ -1925,10 +1985,9 @@ async function saveRagModels() {
 async function loadProfiles() {
   loading.value = true
   try {
-    const [pListRes, settingsRes, toolsRes] = await Promise.allSettled([
+    const [pListRes, settingsRes] = await Promise.allSettled([
       api.profiles.list(),
       api.admin.getSettings(),
-      api.mcp.tools(),
     ])
     if (pListRes.status === 'fulfilled') {
       profiles.value = pListRes.value || []
@@ -1941,9 +2000,6 @@ async function loadProfiles() {
         agentReasoningForm.value = { ...agentReasoningForm.value, ...settings.agent_reasoning }
       }
       if (settings?.runtime) runtimeForm.value = { ...settings.runtime }
-    }
-    if (toolsRes.status === 'fulfilled') {
-      mcpTools.value = toolsRes.value?.items || []
     }
   } catch (err: any) {
     message.error(err.message || '加载配置失败')

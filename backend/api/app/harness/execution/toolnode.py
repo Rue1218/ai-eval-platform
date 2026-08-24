@@ -14,11 +14,14 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Awaitable, Callable
 
 from langgraph.config import get_config
 
+from app.errors import AppError, ErrorCode
 from app.harness.contracts import ToolCall, make_event
+from app.harness.feedback.observation import normalize_exception
 from app.harness.feedback.rules import GateContext, check_gates
 from app.harness.memory import GraphState
 
@@ -94,24 +97,43 @@ def build_tool_node(
                 db.close()
         # 3. 分派（EX-3）：超时 + 脱敏日志 → 归一 Observation
         # 异步节点经 to_thread 执行：避免 bash 等同步工具阻塞事件循环
-        observation = await asyncio.to_thread(
-            execute,
-            ToolCall(name=call.name, arguments=safe_args),
-            timeout_s=definition.timeout_s,
-            permission=definition.permission,
-            sandbox_dir=sandbox,
-            handler=definition.handler,
-        )
-        events.append(
-            make_event(
-                "tool_result",
-                {
-                    "name": call.name,
-                    "ok": observation.ok,
-                    "text": observation.text,
-                    "truncated": observation.truncated,
-                },
+        started = time.perf_counter()
+        try:
+            observation = await asyncio.wait_for(
+                asyncio.to_thread(
+                    execute,
+                    ToolCall(name=call.name, arguments=safe_args),
+                    timeout_s=definition.timeout_s,
+                    permission=definition.permission,
+                    sandbox_dir=sandbox,
+                    handler=definition.handler,
+                ),
+                timeout=max(0.001, float(definition.timeout_s)),
             )
+        except TimeoutError:
+            # 节点级超时兜底；bash/web_fetch 自身仍有进程/网络超时，避免
+            # 通用工具忘记实现超时时把 WS 回合永久挂起。
+            observation = normalize_exception(
+                AppError(ErrorCode.TIMEOUT, "工具执行超时"),
+                tool=call.name,
+            )
+        latency_ms = round((time.perf_counter() - started) * 1000)
+        result_payload: dict[str, object] = {
+            "name": call.name,
+            "ok": observation.ok,
+            "latency_ms": latency_ms,
+            "truncated": observation.truncated,
+            "redacted": observation.redacted,
+        }
+        if observation.source:
+            result_payload["source"] = observation.source
+        if observation.ok:
+            # 前端 ToolCard 与 API.md §4.3 读取 data；摘要保持脱敏后的文本。
+            result_payload["data"] = {"summary": observation.text}
+        else:
+            result_payload["error"] = observation.text
+        events.append(
+            make_event("tool_result", result_payload)
         )
         return {
             "pending_tool": None,

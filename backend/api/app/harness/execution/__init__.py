@@ -12,6 +12,7 @@ from .dispatch import (
     write_file_safe,
 )
 from .registry import ToolDef, ToolRegistry, build_default_registry
+from .session_guard import assert_no_orm_leak, with_managed_session
 from .toolnode import build_tool_node
 from .worker_bridge import LONG_TOOLS, TASK_KINDS, enqueue_long_task
 from .workspace import (
@@ -36,7 +37,9 @@ __all__ = [
     "get_workspace_root",
     "read_file_safe",
     "run_bash",
+    "assert_no_orm_leak",
     "session_workspace_dir",
+    "with_managed_session",
     "web_fetch",
     "web_search",
     "write_file_safe",

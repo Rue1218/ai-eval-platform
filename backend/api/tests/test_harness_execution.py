@@ -1,10 +1,14 @@
 """M5 执行层单测（X-A4/X-A7/EX-5 等）；不依赖 DB。"""
 
+import asyncio
 import json
 import tempfile
+import time
 
 import pytest
+from sqlalchemy.orm import Session
 
+import app.harness.execution.toolnode as toolnode_mod
 from app.errors import AppError, ErrorCode
 from app.harness.contracts import ToolCall
 from app.harness.execution import (
@@ -12,13 +16,16 @@ from app.harness.execution import (
     ToolDef,
     ToolRegistry,
     build_default_registry,
+    build_tool_node,
     edit_file_safe,
     execute,
     read_file_safe,
     run_bash,
     write_file_safe,
 )
+from app.harness.execution.session_guard import assert_no_orm_leak
 from app.harness.execution.worker_bridge import LONG_TOOLS, TASK_KINDS
+from app.harness.memory import GraphState
 
 
 def _handler_factory(name: str):
@@ -197,6 +204,65 @@ def test_execute_rejects_without_handler() -> None:
     )
     assert observation.ok is False
     assert observation.text == "操作失败（VALIDATION）"
+
+
+def test_toolnode_timeout_and_frontend_event_payload() -> None:
+    """ToolNode 超时后仍返回 API.md 规定的前端 ToolCard 字段。"""
+    registry = ToolRegistry()
+
+    def slow_handler(_arguments: dict, _sandbox_dir: str | None = None) -> str:
+        time.sleep(0.05)
+        return "不应在超时后展示"
+
+    registry.register(
+        ToolDef(
+            name="slow",
+            description="慢工具",
+            parameters_schema={},
+            permission="test.read",
+            timeout_s=0.01,
+            handler=slow_handler,
+        )
+    )
+    node = build_tool_node(registry)
+    state: GraphState = {
+        "request": {"config": {}, "messages": ()},
+        "pending_tool": {"name": "slow", "arguments": {}},
+    }
+
+    class _FakeConfig:
+        def get(self, key: str, default=None):
+            return {"configurable": {}}.get(key, default)
+
+    original = toolnode_mod.get_config
+    toolnode_mod.get_config = lambda: _FakeConfig()
+    try:
+        out = asyncio.run(node(state))
+    finally:
+        toolnode_mod.get_config = original
+
+    result = next(event for event in out["pending_events"] if event["kind"] == "tool_result")
+    payload = result["payload"]
+    assert payload["ok"] is False
+    assert payload["error"] == "操作失败（TIMEOUT）"
+    assert isinstance(payload["latency_ms"], int)
+    assert payload["redacted"] is True
+    assert payload["truncated"] is False
+
+
+def test_assert_no_orm_leak_rejects_bound_instance() -> None:
+    """EX-6：已绑定 Session 的 ORM 对象不得跨执行器边界传递。"""
+    from app.models import User
+
+    db = Session()
+    try:
+        user = User(id="u-session-guard", username="guard", password_hash="hash")
+        db.add(user)
+        with pytest.raises(AppError) as error:
+            assert_no_orm_leak({"user": user})
+        assert error.value.code == ErrorCode.INTERNAL
+    finally:
+        db.close()
 
 
 def test_worker_bridge_constants() -> None:

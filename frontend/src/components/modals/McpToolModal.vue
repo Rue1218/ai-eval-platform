@@ -4,7 +4,7 @@
     preset="card"
     :trap-focus="false"
     :auto-focus="false"
-    :title="`MCP ToolCall 详情 · ${tool?.name || ''}`"
+    :title="`受控工具清单详情 · ${tool?.name || ''}`"
     style="width: 760px; max-width: 95vw; border-radius: 14px"
     @update:show="$emit('update:show', $event)"
   >
@@ -53,7 +53,7 @@
           :class="{ active: activeModalTab === 'live_test' }"
           @click="handleSwitchToLiveTest"
         >
-          ⚡ 在线 ToolCall 实时测试 (Live Test)
+          ⚡ 在线接口检查 (Live Check)
         </button>
       </div>
 
@@ -117,11 +117,11 @@
         <!-- 调用示例与返回报文 -->
         <div class="section-block mt12">
           <div class="section-title">
-            <span>📤 ToolCall 请求与返回报文示例</span>
+            <span>📤 工具请求与返回报文示例</span>
           </div>
           <div class="code-box-tabs">
             <div class="code-preview-wrap">
-              <div class="code-label">Agent ToolCall 请求示例:</div>
+              <div class="code-label">Agent 工具请求示例:</div>
               <pre class="json-code"><code>{{ meta.exampleRequest }}</code></pre>
             </div>
             <div class="code-preview-wrap">
@@ -210,19 +210,19 @@
         </div>
       </div>
 
-      <!-- ═════════════════ Tab 3: 在线 ToolCall 实时测试 ═════════════════ -->
+      <!-- ═════════════════ Tab 3: 在线接口检查 ═════════════════ -->
       <div v-else class="tab-pane">
         <div class="live-test-header row-between">
           <div>
-            <span style="font-weight: 700; font-size: 13.5px">⚡ ToolCall 实时在线调用测试</span>
-            <div class="small tertiary">直接向服务端真实接口发起请求，验证返回载荷与延迟。</div>
+            <span style="font-weight: 700; font-size: 13.5px">⚡ 真实接口在线检查</span>
+            <div class="small tertiary">浏览器只检查受控清单或同源 REST 接口，不直接执行内部 ToolCall。</div>
           </div>
           <button
             class="btn btn-sign btn-sm"
             :disabled="testing"
             @click="handleRunLiveToolCall"
           >
-            {{ testing ? '调用中…' : '▶ 真实在线调用 (Execute ToolCall)' }}
+            {{ testing ? '检查中…' : '▶ 真实在线检查' }}
           </button>
         </div>
 
@@ -230,7 +230,7 @@
         <div v-if="testResult" class="test-status-bar" :class="{ ok: testResult.ok, err: !testResult.ok }">
           <div class="row" style="gap: 8px; align-items: center">
             <span class="status-indicator">{{ testResult.ok ? '●' : '✕' }}</span>
-            <span class="font-bold">{{ testResult.ok ? 'ToolCall 执行成功 (HTTP 200 OK)' : 'ToolCall 执行失败' }}</span>
+            <span class="font-bold">{{ testResult.ok ? '接口检查成功 (HTTP 200 OK)' : '接口检查失败' }}</span>
           </div>
           <div class="row" style="gap: 12px; align-items: center">
             <span class="mono small">耗时: {{ testResult.latencyMs }}ms</span>
@@ -241,7 +241,7 @@
         <!-- 真实返回数据展示 -->
         <div class="section-block mt12">
           <div class="row-between">
-            <span class="section-title">📦 服务端真实返回载荷 (tool_result.payload.data):</span>
+          <span class="section-title">📦 服务端真实返回载荷:</span>
             <button
               v-if="testResult"
               class="link-btn small"
@@ -257,7 +257,7 @@
 
     <template #footer>
       <div class="row-between" style="width: 100%">
-        <span class="small tertiary mono">MCP Protocol Specification · V1.0 Internal Sandbox</span>
+        <span class="small tertiary mono">受控工具清单 · 浏览器只读检查</span>
         <button class="btn btn-secondary btn-sm" @click="$emit('update:show', false)">关闭</button>
       </div>
     </template>
@@ -326,7 +326,7 @@ watch(
   },
 )
 
-/** 真实在线模拟执行 ToolCall */
+/** 真实在线检查同源接口；浏览器不绕过边界直接执行内部 ToolCall。 */
 async function handleRunLiveToolCall() {
   if (!props.tool) return
   testing.value = true
@@ -375,7 +375,7 @@ async function handleRunLiveToolCall() {
       // 通用从 /api/mcp/tools 取真实元数据
       const toolsRes = await api.mcp.tools()
       const current = toolsRes.items.find((x) => x.name === toolName)
-      rawData = { tool: current || props.tool, status: 'mounted_and_ready' }
+      rawData = { tool: current || props.tool, status: current ? 'manifest_available' : 'not_in_manifest' }
     }
 
     const latency = Math.round(performance.now() - start)
@@ -386,7 +386,7 @@ async function handleRunLiveToolCall() {
       itemCount: count,
       data: rawData,
     }
-    message.success(`ToolCall [${toolName}] 执行成功 (${testResult.value.latencyMs}ms)`)
+    message.success(`接口检查 [${toolName}] 成功 (${testResult.value.latencyMs}ms)`)
   } catch (err: any) {
     const latency = Math.round(performance.now() - start)
     testResult.value = {
@@ -395,7 +395,7 @@ async function handleRunLiveToolCall() {
       itemCount: 0,
       data: { error: err.message || '调用失败', code: 'INTERNAL_ERROR' },
     }
-    message.error(`ToolCall 执行失败: ${err.message || '网络异常'}`)
+    message.error(`在线接口检查失败: ${err.message || '网络异常'}`)
   } finally {
     testing.value = false
   }

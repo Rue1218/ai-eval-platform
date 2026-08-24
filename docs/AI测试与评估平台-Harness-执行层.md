@@ -3,7 +3,7 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 执行层模块设计 |
-| 版本 | V0.5.0 |
+| 版本 | V0.5.1 |
 | 审查日期 | 2026-08-24 |
 | 文档性质 | 模块设计说明书（需求发散 + 架构设计 + 接口签名） |
 | 适用模块 | M5 执行层（`app/harness/execution/` + `app/agent/react.py`） |
@@ -395,6 +395,12 @@ def assert_no_orm_leak(obj: object) -> None:
 | :--- | :--- | :--- |
 | `docs/AI测试与评估平台-Harness-执行层.md` | 新增 V0.3 → 修订 V0.4 → 修订 V0.4.1 → 修订 V0.4.2 | V0.3 M5 执行层模块设计：定义工具注册表、附件参数绑定、ToolNode 包装（禁 `create_react_agent`）、短工具分派（含 bash 沙箱 + web 内部短 MCP）、长任务入队、Worker 自管 Session 守卫；含定位扩展声明（基础工具集为通用能力，已回写 Harness V1.4.3 §7）与接口签名级与 TDD 验收；V0.4 对齐 API.md V1.21：新增 §8「前端联调」章节；V0.4.1 配合 API.md V1.22：§8.1/§8.2 修正 `source` 字段语义（对齐 M7 `Observation.source` 溯源标识字符串，删除 `source="long"` 矛盾表述）；V0.4.2 评审收敛版：§8 契约为 API.md V1.22；**标注 `bash` 黑名单非安全沙箱，阶段 2 不开放通用 bash**（补充待定安全项详注与红线），`read`/`write`/`edit` 须基于受控文件 ID/根目录。 |
 | `docs/AI测试与评估平台-Harness-执行层.md` | 修订 V0.5.0 | V0.5.0 bwrap 沙箱闭环：§3.5 与伪代码更新为 **bwrap 进程级沙箱**（`--unshare-*`/最小只读 bind/`--tmpfs /tmp /run`/ulimit 资源限制/超时整树清理），`run_bash` 签名增 `limits`；§7 M5-D2 裁决更新；`bash` 安全待定项后注改写为已闭环，明确 fail-closed 与 `seccomp:unconfined` 部署依赖；§2.2 工具表 bash 由「阶段 2」改为「阶段 3」。 |
+| `backend/api/app/harness/execution/toolnode.py` | 修订 V0.5.1 | 为短工具调用增加节点级超时兜底、延迟统计及 API.md/ToolCard 兼容的 `data`/`error`/`latency_ms`/`truncated`/`source`/`redacted` 结果字段；超时统一归一为 `TIMEOUT`。 |
+| `backend/api/app/harness/execution/session_guard.py` | 新增 V0.5.1 | 提供执行器自管 Session 上下文及 ORM 跨 Session 泄漏断言，落实 M5-D7 的运行时守卫。 |
+| `backend/api/app/routers/ws.py` | 修订 V0.5.1 | 生产 Agent 图注入 `SessionLocal` 和当前用户 ID，使附件归属校验与 ToolNode 绑定链路在真实 WS 中生效。 |
+| `backend/api/app/agent/__init__.py` / `backend/api/app/agent/graph.py` | 修订 V0.5.1 | 更新 Agent 图运行入口说明，明确短工具 ReAct、确认恢复、记忆检查点和长任务事件桥接均已接入公开图。 |
+| `frontend/src/components/agent/ToolCard.vue` / `frontend/src/views/Agent.vue` | 修订 V0.5.1 | 对接 ToolNode 结果契约，展示工具延迟、来源、脱敏和截断状态，并兼容历史回放与实时事件。 |
+| `frontend/src/views/AdminProfiles.vue` / `frontend/src/components/modals/McpToolModal.vue` | 修订 V0.5.1 | 管理页通过同源 `/api/mcp/tools` 读取工具清单，区分加载、失败、空清单和成功状态；浏览器不直接执行内部 ToolCall。 |
 
 本文档仅设计执行层，不改变任何 API、数据库、前端或 Agent 运行代码。
 

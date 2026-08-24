@@ -55,7 +55,7 @@ class LangGraphAgent:
         self._graph = self._build_graph()
 
     def _build_graph(self):
-        """构建阶段 2 图：路由 → Direct/Chat/ReAct 循环。"""
+        """构建完整 Harness 图：路由 → Direct/Chat/ReAct/Plan-Solve。"""
         tool_node = build_tool_node(
             self._registry,
             db_factory=self._db_factory,
