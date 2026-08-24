@@ -89,11 +89,13 @@ def build_default_registry() -> ToolRegistry:
     registry.register(
         ToolDef(
             name="read",
-            description="读取沙箱目录内的文本文件（相对路径）",
+            description="读取沙箱目录内的文本文件（相对路径）；单次最多返回 20000 字符，文件未读完会附带截断标记和 offset 提示，请按提示继续分段读取",
             parameters_schema={
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "相对路径"},
+                    "offset": {"type": "integer", "description": "起始字符偏移，默认 0", "minimum": 0},
+                    "limit": {"type": "integer", "description": "最多返回字符数，默认 20000", "minimum": 1},
                 },
                 "required": ["path"],
             },
@@ -191,11 +193,17 @@ def build_default_registry() -> ToolRegistry:
 def _read_handler(arguments: Mapping[str, object], sandbox_dir: str | None = None) -> str:
     """read 工具 handler：受控目录内读取相对路径（防目录穿越）。
 
-    ``sandbox_dir`` 由平台经 dispatch 注入，**禁止模型传参**（M5-D7 红线）。
+    ``sandbox_dir`` 由平台经 dispatch 注入，**禁止模型传参**（M5-D7 红线）；
+    ``offset``/``limit`` 支持长文本分段读取。
     """
     from .dispatch import read_file_safe
 
-    return read_file_safe(str(arguments.get("path", "")), sandbox_dir or "")
+    return read_file_safe(
+        str(arguments.get("path", "")),
+        sandbox_dir or "",
+        offset=arguments.get("offset"),
+        limit=arguments.get("limit"),
+    )
 
 
 def _write_handler(arguments: Mapping[str, object], sandbox_dir: str | None = None) -> str:

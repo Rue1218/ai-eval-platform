@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import base64
 import mimetypes
+import os
+import shutil
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -20,6 +22,8 @@ MAX_TEXT_CHARS_PER_FILE = 12_000
 MAX_CONTEXT_CHARS = 32_000
 MAX_IMAGE_BYTES = 4 * 1024 * 1024
 TEXT_SUFFIXES = {".md", ".txt", ".html", ".json", ".yaml", ".yml", ".csv", ".jsonl"}
+# 懒加载附件：staging 进会话工作区，由模型用 read 工具按需读取（省 token）
+TEXT_LAZY_SUFFIXES = {".txt", ".md"}
 
 
 def _file_id(item: object) -> str:
@@ -114,6 +118,40 @@ def normalize_history_attachments(db: Session, attachments: object) -> list[obje
             }
         )
     return result
+
+
+def _workspace_attachment_path(file_id: str, filename: str) -> str:
+    """会话工作区内附件相对路径（file_id 前缀防重名，原始名便于模型识别）。"""
+    return f"attachments/{file_id}-{Path(filename).name}"
+
+
+def stage_attachments(session_id: str, files: list[StoredFile]) -> None:
+    """把 txt/md 附件放入会话工作区，供 read 工具读取（幂等）。
+
+    - 目标相对路径 ``attachments/{file_id}-{name}``（沙箱内，防目录穿越边界不变）；
+    - 优先 ``os.link`` 零拷贝（数据卷与工作区同文件系统），跨设备回退复制；
+    - 目标已存在时跳过（幂等），不覆盖模型可能已改写的文件。
+    """
+    from ..harness.execution.workspace import ensure_session_workspace
+
+    if not files:
+        return
+    workspace = ensure_session_workspace(session_id)
+    attach_dir = os.path.join(workspace, "attachments")
+    os.makedirs(attach_dir, exist_ok=True)
+    for stored in files:
+        if Path(stored.filename).suffix.lower() not in TEXT_LAZY_SUFFIXES:
+            continue
+        source = Path(stored.storage_path)
+        if not source.is_file():
+            continue
+        target = os.path.join(attach_dir, _workspace_attachment_path(stored.id, stored.filename))
+        if os.path.exists(target):
+            continue
+        try:
+            os.link(source, target)
+        except OSError:
+            shutil.copyfile(source, target)
 
 
 def _read_limited(path: Path) -> bytes:
@@ -229,8 +267,19 @@ def _image_part(stored: StoredFile) -> dict[str, Any] | None:
     }
 
 
-def build_model_content(prompt: str, files: list[StoredFile]) -> str | list[dict[str, Any]]:
-    """把用户正文、可解析文档和图片合成一次模型请求内容。"""
+def build_model_content(
+    prompt: str,
+    files: list[StoredFile],
+    *,
+    workspace_dir: str | None = None,
+) -> str | list[dict[str, Any]]:
+    """把用户正文、可解析文档和图片合成一次模型请求内容。
+
+    txt/md 附件在 ``workspace_dir`` 可用时改为「路径清单」形式：模型用 read
+    工具按需读取（懒加载省 token）；未提供工作区（历史/离线上下文）时回退
+    内联注入。图片仍以内部图片块附加；pdf/docx/xlsx 等保持内联抽取（后续
+    版本再迁移到 read 工具路径）。
+    """
     text = prompt.strip() or "请阅读并处理以下附件。"
     if not files:
         return text
@@ -248,6 +297,14 @@ def build_model_content(prompt: str, files: list[StoredFile]) -> str | list[dict
             else:
                 sections.append(f"- {label}（图片过大或读取失败，本轮未传给模型）")
             continue
+        if suffix in TEXT_LAZY_SUFFIXES and workspace_dir:
+            rel = _workspace_attachment_path(stored.id, stored.filename)
+            sections.append(
+                f"### {label}\n"
+                f"（文本附件已放入会话工作区，相对路径 {rel}。"
+                f"请用 read 工具读取该文件内容后再回答；长内容请用 offset/limit 分段读取。）"
+            )
+            continue
         body = _truncate(_extract_document(stored))
         sections.append(f"### {label}\n{body or '（未提取到可读正文。）'}")
 
@@ -261,6 +318,15 @@ def build_model_content(prompt: str, files: list[StoredFile]) -> str | list[dict
 
 
 def model_content_for_message(db: Session, row: Message) -> str | list[dict[str, Any]]:
-    """读取一条 user 消息的附件，并生成只供模型使用的上下文内容。"""
+    """读取一条 user 消息的附件，并生成只供模型使用的上下文内容。
+
+    同时把 txt/md 附件 staging 进会话工作区（幂等），使 read 工具可读。
+    """
     files = load_message_files(db, row.attachments or [], owner_id=row.author_id)
-    return build_model_content(row.content, files)
+    workspace_dir: str | None = None
+    if files:
+        from ..harness.execution.workspace import ensure_session_workspace
+
+        workspace_dir = ensure_session_workspace(row.session_id)
+        stage_attachments(row.session_id, files)
+    return build_model_content(row.content, files, workspace_dir=workspace_dir)

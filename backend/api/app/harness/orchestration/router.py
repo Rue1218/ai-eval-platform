@@ -36,15 +36,16 @@ def decide_mode(
     *,
     has_tool_intent: bool = False,
     has_multi_slots: bool = False,
+    has_attachments: bool = False,
 ) -> AgentMode:
     """模式路由判定（OR-1）。
 
     阶段 2：hybrid 策略第一阶段——斜杠 → direct；规则启发式（关键词匹配）
-    判工具意图 → react；否则 → chat。第二阶段（轻量模型确认）与
-    has_multi_slots → plan_solve 留阶段 4（OR-1 演进）。
+    判工具意图 → react；否则 → chat。带附件时强制 react（模型需用 read 工具
+    读取附件内容，chat 路径无工具注入）。has_multi_slots → plan_solve 留阶段 4。
     """
     if text.strip().startswith("/"):
         return "direct"
-    if has_tool_intent or any(keyword in text for keyword in TOOL_INTENT_KEYWORDS):
+    if has_attachments or has_tool_intent or any(keyword in text for keyword in TOOL_INTENT_KEYWORDS):
         return "react"
     return "chat"

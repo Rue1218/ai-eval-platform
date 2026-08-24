@@ -50,14 +50,27 @@ def _user_text(state: GraphState) -> str:
     return ""
 
 
+def _config_has_attachments() -> bool:
+    """从 configurable.assets.file_ids 判断当前回合是否带附件（触发 react）。"""
+    configurable = (get_config() or {}).get("configurable") or {}
+    return bool(configurable.get("assets", {}).get("file_ids") or ())
+
+
 def routing_node(state: GraphState) -> dict:
-    """路由节点：写 state['mode']，不调模型（OR-1）。"""
-    return {"mode": decide_mode(_user_text(state))}
+    """路由节点：写 state['mode']，不调模型（OR-1）。
+
+    带附件时强制 react（模型需 read 工具读取附件，chat 路径无工具注入）。
+    """
+    return {
+        "mode": decide_mode(_user_text(state), has_attachments=_config_has_attachments())
+    }
 
 
 def route(state: GraphState) -> AgentMode:
     """路由条件边函数：读 routing_node 写入的 mode，返回分流模式。"""
-    return state.get("mode") or decide_mode(_user_text(state))
+    return state.get("mode") or decide_mode(
+        _user_text(state), has_attachments=_config_has_attachments()
+    )
 
 
 def direct_node(state: GraphState) -> dict:

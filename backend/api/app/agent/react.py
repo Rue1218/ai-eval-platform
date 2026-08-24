@@ -16,6 +16,7 @@ from langgraph.config import get_config
 
 from app.errors import AppError
 from app.harness.context import to_observation
+from app.harness.context.observation import DEFAULT_MAX_CHARS
 from app.harness.contracts import Observation, make_event
 from app.harness.memory import GraphState, rebuild_model_config
 from app.harness.orchestration import (
@@ -37,12 +38,23 @@ REACT_STAGE_INPUT = """\
 可用工具（名称 + 参数要求）："""
 
 
+# read 工具懒读取需要把文件内容完整送进模型上下文，突破默认 2000 字符观察截断；
+# 上限略高于 read 默认 limit(20000)，保证截断标记（约 40 字符）不被二次截掉
+READ_OBSERVATION_MAX_CHARS = 21_000
+
+
 def _inject_observations(state: GraphState) -> str:
     """把 observations 归一为摘要文本（M2 to_observation，脱敏在注入前）。"""
     observations = state.get("observations") or []
     if not observations:
         return ""
-    lines = [to_observation(observation) for observation in observations]
+    lines = [
+        to_observation(
+            observation,
+            max_chars=READ_OBSERVATION_MAX_CHARS if observation.tool == "read" else DEFAULT_MAX_CHARS,
+        )
+        for observation in observations
+    ]
     return "【工具结果】\n" + "\n".join(lines)
 
 

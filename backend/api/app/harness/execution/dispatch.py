@@ -72,13 +72,30 @@ def _resolve_safe_path(path: str, root: str) -> str:
     return target
 
 
-def read_file_safe(path: str, sandbox_dir: str) -> str:
-    """受控目录内读取文本文件（防目录穿越）。"""
+def read_file_safe(
+    path: str,
+    sandbox_dir: str,
+    *,
+    offset: object | None = None,
+    limit: object | None = None,
+) -> str:
+    """受控目录内读取文本文件（防目录穿越）。
+
+    ``offset``（起始字符偏移）与 ``limit``（最多返回字符数，默认 20000）支持
+    长文件分段读取；非法负值被钳制，不抛错。**文件未读完时在末尾追加截断
+    标记并提示下一起始偏移**，避免模型误以为已读完全文。
+    """
     target = _resolve_safe_path(path, sandbox_dir)
     if not os.path.isfile(target):
         raise AppError(ErrorCode.NOT_FOUND, "文件不存在")
+    start = max(0, int(offset or 0))
+    size = max(1, int(limit or 20000))
     with open(target, encoding="utf-8", errors="replace") as handle:
-        return handle.read()[:20000]
+        content = handle.read()
+    chunk = content[start : start + size]
+    if start + size < len(content):
+        chunk += f"\n…[文件未读完，剩余内容可用 offset={start + len(chunk)} 继续读取]"
+    return chunk
 
 
 def write_file_safe(path: str, content: str, sandbox_dir: str) -> None:

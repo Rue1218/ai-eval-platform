@@ -168,6 +168,25 @@ def test_read_write_edit_roundtrip() -> None:
             write_file_safe("a.txt", "x", root)
 
 
+def test_read_file_safe_supports_offset_and_limit() -> None:
+    """read 工具 offset/limit 分段读取长文本，未读完带截断标记。"""
+    with tempfile.TemporaryDirectory() as root:
+        write_file_safe("long.txt", "0123456789", root)
+        assert read_file_safe("long.txt", root) == "0123456789"
+        assert read_file_safe("long.txt", root, offset=4) == "456789"
+        assert read_file_safe("long.txt", root, offset=100) == ""
+        # 未读完：内容 + 截断标记，标记含下一段 offset 提示
+        first = read_file_safe("long.txt", root, limit=3)
+        assert first.startswith("012")
+        assert "offset=3" in first
+        second = read_file_safe("long.txt", root, offset=2, limit=3)
+        assert second.startswith("234")
+        assert "offset=5" in second
+        # 恰好读到末尾：无标记
+        tail = read_file_safe("long.txt", root, offset=7)
+        assert tail == "789"
+
+
 def test_execute_normalizes_exception_to_observation() -> None:
     """分派异常不裸抛：归一为 ok=False observation（X-A4）。"""
     def boom(_arguments: dict, _sandbox_dir: str | None = None) -> str:

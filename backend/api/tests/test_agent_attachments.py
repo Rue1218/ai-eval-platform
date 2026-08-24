@@ -7,11 +7,12 @@ from app.adapters import _adapt_message_content
 from app.agent.attachments import build_model_content
 
 
-def _stored(tmp_path: Path, filename: str, content: bytes, content_type: str):
+def _stored(tmp_path: Path, filename: str, content: bytes, content_type: str, file_id: str = "file-test"):
     """构造带临时二进制路径的最小文件实体。"""
     path = tmp_path / filename
     path.write_bytes(content)
     return SimpleNamespace(
+        id=file_id,
         filename=filename,
         content_type=content_type,
         size_bytes=len(content),
@@ -19,15 +20,28 @@ def _stored(tmp_path: Path, filename: str, content: bytes, content_type: str):
     )
 
 
-def test_text_attachment_is_injected_into_model_content(tmp_path: Path) -> None:
-    """Markdown 正文应和用户提示词一起进入模型内容。"""
+def test_text_attachment_lazy_read_manifest(tmp_path: Path) -> None:
+    """有工作区时 txt/md 附件输出路径清单，正文留给 read 工具懒读取。"""
+    stored = _stored(tmp_path, "brief.md", "# 评测目标\n比较两个模型。".encode(), "text/markdown")
+
+    result = build_model_content("请总结附件", [stored], workspace_dir=str(tmp_path / "ws"))
+
+    assert isinstance(result, str)
+    assert "请总结附件" in result
+    assert "brief.md" in result
+    assert f"attachments/{stored.id}-brief.md" in result
+    assert "read" in result
+    assert "比较两个模型" not in result  # 正文不再内联，留给 read 工具读取
+
+
+def test_text_attachment_inline_fallback_without_workspace(tmp_path: Path) -> None:
+    """无工作区（历史/离线上下文）时回退内联注入，兼容旧行为。"""
     stored = _stored(tmp_path, "brief.md", "# 评测目标\n比较两个模型。".encode(), "text/markdown")
 
     result = build_model_content("请总结附件", [stored])
 
     assert isinstance(result, str)
     assert "请总结附件" in result
-    assert "brief.md" in result
     assert "比较两个模型" in result
 
 

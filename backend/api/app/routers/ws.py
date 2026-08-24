@@ -543,6 +543,22 @@ async def _run_turn(
         # 会话工作区：每个会话一个独立文件夹（read/write/edit 与 bash 的
         # 沙箱根，经 configurable 注入，toolnode 优先读取此值）
         sandbox_dir = ensure_session_workspace(session_id)
+        # 资产溯源：窗口内用户消息的附件 file_ids 注入 configurable，供
+        # routing_node 强制 react（本轮或历史轮带附件均走 react，模型才能用
+        # read 工具）与 toolnode 附件归属门禁读取
+        recent_users = (
+            db.query(Message)
+            .filter(Message.session_id == session_id, Message.role == "user")
+            .order_by(Message.created_at.desc(), Message.id.desc())
+            .limit(200)
+            .all()
+        )
+        owned_file_ids: list[str] = []
+        for row in recent_users:
+            for item in row.attachments or []:
+                if isinstance(item, dict) and isinstance(item.get("file_id"), str):
+                    if item["file_id"] not in owned_file_ids:
+                        owned_file_ids.append(item["file_id"])
         graph_config = {
             "configurable": {
                 # 每回合独立 thread_id：检查点按回合隔离（M3 阶段 3）
@@ -553,6 +569,7 @@ async def _run_turn(
                     "user_id": user_id,
                 },
                 "session": {"id": session_id},
+                "assets": {"file_ids": owned_file_ids},
                 # 沙箱引擎与资源限制（bash 工具经 bwrap 执行；engine="off" 时 fail-closed）
                 "sandbox": {
                     "dir": sandbox_dir,
