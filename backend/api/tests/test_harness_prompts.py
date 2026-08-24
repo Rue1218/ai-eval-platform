@@ -101,6 +101,13 @@ def test_react_parse_fenced_json() -> None:
     assert result["fields"]["tool"] == "web_search"
 
 
+def test_react_parse_json_with_surrounding_prose() -> None:
+    """ReAct 解析容忍 JSON 前后附加自然语言说明（模型常见输出形态）。"""
+    result = parse_react(f"好的，我先读取文件。\n{_REACT_RAW}\n然后继续分析。")
+    assert result["fields"]["tool"] == "web_search"
+    assert result["fields"]["done"] is False
+
+
 def test_protocol_version_mismatch_raises_validation() -> None:
     """P-A5：协议版本不匹配抛 VALIDATION（严格不兼容）。"""
     stale = _REACT_RAW.replace('"version": "react.v1"', '"version": "react.v0"')

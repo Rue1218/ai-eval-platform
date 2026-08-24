@@ -49,6 +49,10 @@ READ_OBSERVATION_MAX_CHARS = 9_000
 # 若有副作用工具（write/edit/bash）才会被守卫约束；死循环由模型调用预算兜底。
 READONLY_TOOLS: frozenset[str] = frozenset({"read", "web_fetch"})
 
+# ReAct 协议解析失败纠正重试上限：模型输出非有效 JSON 时注入纠正观察并回环
+# 一次（OR-4 同一回环边），仍失败才硬错误收尾；由模型调用预算兜底防死循环。
+MAX_PARSE_RETRIES = 2
+
 
 def _inject_observations(state: GraphState) -> str:
     """把 observations 归一为摘要文本（M2 to_observation，脱敏在注入前）。"""
@@ -152,10 +156,47 @@ def build_react_nodes(
         latency_ms = round((time.perf_counter() - started) * 1000)
         try:
             budget = consume_model_call(budget)
-            result = parse_react(response.text)
-            fields = result["fields"]
-            # 每轮 ReAct 决策的 thought 透出为 thought 事件（PR-3：只回显不触发动作），
-            # 让用户在工具调用过程中看到模型的思考过程。
+            try:
+                result = parse_react(response.text)
+                fields = result["fields"]
+            except AppError as exc:
+                # 模型输出不符合 ReAct 协议（非有效 JSON/缺字段/类型错/版本不符）：
+                # 注入纠正观察并回环重试（有界），而非直接硬错误收尾。
+                parse_retries = int(state.get("parse_retries") or 0)
+                if parse_retries >= MAX_PARSE_RETRIES:
+                    return {
+                        "pending_events": [
+                            make_event(
+                                "error",
+                                {"code": exc.code.value, "message": exc.message},
+                            )
+                        ],
+                        "pending_tool": None,
+                        "repeat_retry": False,
+                        "parse_retries": parse_retries,
+                        "budget": budget.to_dict(),
+                    }
+                snippet = response.text.strip()
+                correction = Observation(
+                    tool="__parse__",
+                    text=(
+                        f"系统提示：上一轮输出无法解析为 ReAct 协议（{exc.message}）。"
+                        f"你输出的原文是：{snippet[:500]!r}。"
+                        "请只输出协议 JSON，不要附加说明文字、不要用代码块："
+                        '{"protocol": "react", "version": "react.v1", "thought": "简述本轮判断", '
+                        '"tool": "工具名或null", "arguments": {}, "done": false}'
+                    ),
+                    ok=False,
+                    redacted=True,
+                )
+                return {
+                    "pending_tool": None,
+                    "repeat_retry": True,
+                    "parse_retries": parse_retries + 1,
+                    "pending_events": [],
+                    "observations": list(state.get("observations") or []) + [correction],
+                    "budget": budget.to_dict(),
+                }
             thought = _extract_thought(response.text)
             thought_events = (
                 [
@@ -280,7 +321,7 @@ def build_react_nodes(
 
 def react_route(state: GraphState) -> str:
     """ReAct 条件边：pending_tool → 'tools'；repeat_retry → 回环 react_agent
-    （OR-4 首次重复纠正后让模型基于反馈重试）；否则图结束。"""
+    （OR-4 重复纠正 / 协议解析失败纠正后让模型基于反馈重试）；否则图结束。"""
     if state.get("pending_tool"):
         return "tools"
     if state.get("repeat_retry"):

@@ -248,12 +248,34 @@ def test_react_retry_after_failed_call_allowed() -> None:
     assert kinds[-2:] == ["assistant_message", "response.completed"]
 
 
-def test_react_parse_failure_emits_error() -> None:
-    """协议解析失败 → error 收尾，不裸抛。"""
-    gateway = _ScriptGateway(["不是 JSON"])
+def test_react_parse_failure_recovers_with_correction() -> None:
+    """协议解析失败 → 注入纠正观察回环一次，模型改输出协议 JSON 后正常收尾（不报错）。
+
+    用户场景回归：模型输出非有效 JSON（"不是 JSON"）不再直接 error 收尾。
+    """
+    gateway = _ScriptGateway(["不是 JSON", _REACT_DONE])
     events = _collect(LangGraphAgent(gateway, build_default_registry()), _serializable())
     kinds = [event["kind"] for event in _pending_events(events)]
-    assert kinds == ["error"]
+    assert kinds.count("error") == 0
+    assert kinds[-2:] == ["assistant_message", "response.completed"]
+    # 模型调用 2 次：首次输出坏 JSON 被纠正，第二次 done 收尾
+    assert len(gateway.calls) == 2
+    # 纠正观察进入第二次调用的系统上下文（模型能看到自己上轮的坏输出）
+    assert "不是 JSON" in gateway.calls[1].system
+
+
+def test_react_parse_failure_exhausts_retries_then_error() -> None:
+    """协议解析失败达到 MAX_PARSE_RETRIES 上限 → 硬错误收尾，不裸抛、不死循环。"""
+    gateway = _ScriptGateway(["不是 JSON", "还是不对", "依旧不是 JSON", _REACT_DONE])
+    events = _collect(LangGraphAgent(gateway, build_default_registry()), _serializable())
+    kinds = [event["kind"] for event in _pending_events(events)]
+    assert kinds.count("error") == 1
+    codes = [event["payload"].get("code") for event in _pending_events(events)]
+    assert "VALIDATION" in codes
+    messages = [event["payload"].get("message", "") for event in _pending_events(events)]
+    assert any("不是有效 JSON" in message for message in messages)
+    # 上限 2 次纠正 + 首次坏输出 = 3 次模型调用后硬错误，无死循环
+    assert len(gateway.calls) == 3
 
 
 def test_react_observations_injected_into_next_call() -> None:

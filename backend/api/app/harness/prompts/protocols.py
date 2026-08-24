@@ -89,16 +89,56 @@ REFLECT_SCHEMA: dict = {
 _FENCE_RE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL)
 
 
+def _extract_json_object(text: str) -> str | None:
+    """从含前后自然语言的文本中提取第一个平衡的 ``{...}`` 对象。
+
+    模型常在协议 JSON 前后附加说明文字（如"好的，我先读取文件。{...} 然后继续"）。
+    逐字符扫描保持字符串内 ``{}`` 与转义正确，避免 ``re`` 的贪婪/非贪婪误截。
+    提取不到返回 None，由调用方回退为原错误路径。
+    """
+    start = text.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    in_string = False
+    escaped = False
+    for i in range(start, len(text)):
+        char = text[i]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return None
+
+
 def _loads_strict(raw: str) -> dict:
-    """严格 JSON 解析；容忍首尾空白与 ```json 代码块包裹。"""
+    """严格 JSON 解析；容忍首尾空白、```json 代码块包裹与前后说明文字。"""
     text = raw.strip()
     match = _FENCE_RE.match(text)
     if match:
         text = match.group(1).strip()
     try:
         data = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise AppError(ErrorCode.VALIDATION, "模型输出不是有效 JSON") from exc
+    except json.JSONDecodeError:
+        candidate = _extract_json_object(text)
+        if candidate is None:
+            raise AppError(ErrorCode.VALIDATION, "模型输出不是有效 JSON")
+        try:
+            data = json.loads(candidate)
+        except json.JSONDecodeError as exc:
+            raise AppError(ErrorCode.VALIDATION, "模型输出不是有效 JSON") from exc
     if not isinstance(data, dict):
         raise AppError(ErrorCode.VALIDATION, "模型输出必须是 JSON 对象")
     return data

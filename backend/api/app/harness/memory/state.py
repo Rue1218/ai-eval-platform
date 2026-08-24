@@ -88,6 +88,7 @@ class GraphState(TypedDict, total=False):
     pending_tool: Mapping[str, object] | None  # 阶段 2：ToolCall 投影（react 条件边分流）
     stop_flag: bool  # 节点写，条件边读（阶段 2）
     repeat_retry: bool  # 阶段 2：OR-4 首次重复纠正后置位，react 条件边回环重试
+    parse_retries: int  # 阶段 2：ReAct 协议解析失败纠正重试计数（有界，防死循环）
     budget: Mapping[str, int]  # 阶段 2：Budget count-only 投影
     clarify_answer: str | None  # 阶段 3：澄清卡 interrupt() 恢复后写（M4 clarify.py）
     clarify_id: str | None  # 阶段 3：澄清唯一标识（匹配前端 clarify_reply.id）
