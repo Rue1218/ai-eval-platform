@@ -1,9 +1,0 @@
-feat(agent): 澄清卡链路前后端闭环与 Plan-Solve 阶段档
-
-- 后端 graph.py：LangGraphAgent.astream 增加 resume 参数（Command(resume) 恢复被澄清卡中断的图，thread_id 与中断时一致）
-- 后端 ws.py：新增 _SESSION_CLARIFY 待回复注册表；_run_turn 支持 resume 模式；消费 __interrupt__ 帧翻译为 clarify 事件；收包循环新增 clarify_reply 分支（id 匹配/空回复拒绝/回合串行 CONCURRENCY）；新用户消息作废旧澄清卡
-- 前端 ws.ts/types.ts：sendClarifyReply(id, answer) + 事件类型补 'clarify'
-- 前端 ClarifyCard.vue：新增澄清卡组件（问题 + 选项 chips + 回复输入，仅回复不建任务，与 ConfirmCard 互斥）
-- 前端 Agent.vue：StreamItem 补 clarify 项；三处事件分支（live/replay/buffer）处理 clarify；handleClarifyReply 发送盖章；harnessStage 类型与标签补 plan_solve
-- 测试：新增 test_ws_clarify.py 6 项链路测试；后端 303 pytest 全绿、ruff 全绿；前端 typecheck + build 通过
-- 文档：Harness 需求文档 V1.4.7 闭环（修改代码文件与作用清单）

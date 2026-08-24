@@ -3,7 +3,7 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 需求文档 |
-| 版本 | V1.4.7 |
+| 版本 | V1.4.8 |
 | 审查日期 | 2026-08-24 |
 | 文档性质 | 需求规格说明书（需求先行） |
 | 适用范围 | `/agent` 对话智能体的 Harness 运行时：六层职责、七种模式组合、LangGraph 框架选型、技能体系与验收标准 |
@@ -526,3 +526,14 @@ P0-LG 阶段引入新依赖时须同步更新 `backend/api/requirements.txt`；P
 | `backend/api/tests/test_ws_clarify.py` | 新增 6 项链路测试（中断注册/无待回复/失效 id/空回复/恢复同 thread/并发拒绝） |
 
 验收：`ruff check . ../shared` 全绿；后端 pytest **303 项全绿**；前端 `npm run typecheck` + `npm run build` 通过。澄清卡仅回复输入、不建任务、不写 pending_confirm（M4 §3.9.6）。
+
+### V1.4.8 验收文案修正（2026-08-24）
+
+生产验收（47.119.132.83）发现 `/help` 帮助文本仍标注「/compact 后续版本开放」，与事实不符（`/compact` 已由 ws.py 收包循环直连实现）。修正：
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/agent/routing.py` | `HELP_TEXT` 更新：`/compact：压缩本会话模型窗口（仅会话负责人）`，`/cancel、/stress：后续版本开放`；`direct_node` 的 `/compact` 分支移出「未启用」集合，改为不可达路径防御提示「由平台会话控制处理」（WS 拦截为唯一入口，图节点不持 DB） |
+| `backend/api/tests/test_agent_routing.py` | 更新 `test_unimplemented_slash_returns_validation`（/compact 断言变更）；新增 `test_help_text_mentions_compact_available`（帮助文本与现状一致性回归） |
+
+验收：routing 9 项测试全过、ruff 全绿；生产 WS 层 T3 `/compact` 实测通过。

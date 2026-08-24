@@ -118,14 +118,30 @@ def test_unknown_slash_returns_validation() -> None:
 
 
 def test_unimplemented_slash_returns_validation() -> None:
-    """阶段 1：/compact /cancel /stress 未启用返回 VALIDATION。"""
-    for command in ("/compact", "/cancel", "/stress"):
+    """/cancel /stress 未启用返回 VALIDATION；/compact 由会话控制层处理。"""
+    for command in ("/cancel", "/stress"):
         gateway = _FakeGateway()
         events = _collect(LangGraphAgent(gateway), _serializable(command))
         assert gateway.stream_calls == []
         assert _error_payloads(events) == [
             {"code": "VALIDATION", "message": f"{command} 能力未启用，将在后续版本开放"}
         ]
+    # /compact：ws.py 收包循环直连为唯一入口（图内为不可达防御提示）
+    gateway = _FakeGateway()
+    events = _collect(LangGraphAgent(gateway), _serializable("/compact"))
+    assert gateway.stream_calls == []
+    assert _error_payloads(events) == [
+        {"code": "VALIDATION", "message": "/compact 由平台会话控制处理，无需发送"}
+    ]
+
+
+def test_help_text_mentions_compact_available() -> None:
+    """/help 帮助文本与现状一致：/compact 已开放，/cancel /stress 未开放。"""
+    from app.agent.routing import HELP_TEXT
+
+    assert "/compact：压缩本会话模型窗口" in HELP_TEXT
+    assert "/cancel、/stress：后续版本开放" in HELP_TEXT
+    assert "后续版本开放" not in HELP_TEXT.split("/compact")[0]
 
 
 def test_graph_state_has_no_should_abort_field() -> None:

@@ -25,7 +25,8 @@ HELP_TEXT = (
     "可用命令：\n"
     "- /help：查看帮助\n"
     "- /stop：中断当前生成\n"
-    "- /compact、/cancel、/stress：后续版本开放"
+    "- /compact：压缩本会话模型窗口（仅会话负责人）\n"
+    "- /cancel、/stress：后续版本开放"
 )
 
 
@@ -70,7 +71,18 @@ def direct_node(state: GraphState) -> dict:
                 )
             ]
         }
-    if command in ("/compact", "/cancel", "/stress"):
+    if command == "/compact":
+        # /compact 为会话级副作用（仅 owner，写 compact_summary），唯一入口是
+        # ws.py 收包循环直连；图节点不持 DB，此处为不可达路径的防御提示。
+        return {
+            "pending_events": [
+                make_event(
+                    "error",
+                    {"code": "VALIDATION", "message": "/compact 由平台会话控制处理，无需发送"},
+                )
+            ]
+        }
+    if command in ("/cancel", "/stress"):
         return {
             "pending_events": [
                 make_event(
