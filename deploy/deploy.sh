@@ -368,7 +368,8 @@ docker images --format '{{.Repository}}:{{.Tag}}' \
     | grep '^ghcr.io/rue1218/ai-eval-platform-' \
     | while read -r old_image; do
         grep -qx "$old_image" <<<"$KEEP_IMAGES" || docker rmi "$old_image" >/dev/null 2>&1 || true
-    done
+    done || true
+# 本地构建路径不存在 ghcr 镜像时 grep 无匹配返回 1，必须 `|| true` 避免 pipefail 误报部署失败。
 # 构建缓存只清 7 天前的：服务器本地构建（手动部署回退路径）仍可复用近期层，
 # 又避免历史缓存无限堆积（2026-08-21 实测曾积到 4.6GB）。
 docker builder prune -f --filter "until=168h" >/dev/null 2>&1 || true
