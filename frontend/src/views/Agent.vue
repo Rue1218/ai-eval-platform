@@ -1489,6 +1489,29 @@ function getActiveThoughtBlock(agent: StreamItem): AgentThoughtItem | undefined 
   return last?.type === 'thought' && !last.done ? last as AgentThoughtItem : undefined
 }
 
+/** 倒序查找最后一个未完成的思考块（收尾专用）：
+ *  正文块（assistant_delta）会追加在思考卡之后，若只认最后一个块，
+ *  活跃思考卡会被"顶掉"，导致永远收不了尾、并出现重复的 think_final 卡。
+ *  注意：此函数仅供"收尾/回填"使用，增量拼接仍走 getActiveThoughtBlock（防并回旧卡）。 */
+function findLastActiveThoughtBlock(agent: StreamItem): AgentThoughtItem | undefined {
+  const blocks = agent.blocks || []
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const block = blocks[i]
+    if (block.type === 'thought' && !block.done) return block as AgentThoughtItem
+  }
+  return undefined
+}
+
+/** 倒序查找最后一个思考块（含已收尾的），用于 think_final 快照回填已有卡，避免重复建卡。 */
+function findLastThoughtBlock(agent: StreamItem): AgentThoughtItem | undefined {
+  const blocks = agent.blocks || []
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const block = blocks[i]
+    if (block.type === 'thought') return block as AgentThoughtItem
+  }
+  return undefined
+}
+
 /** 追加一个思考块；同一思考流的增量帧复用最近未完成块。 */
 function appendThoughtBlock(agent: StreamItem, block: AgentThoughtItem): AgentThoughtItem {
   const active = getActiveThoughtBlock(agent)
@@ -1940,7 +1963,7 @@ function finishLiveThought() {
   for (let i = events.value.length - 1; i >= 0; i--) {
     const item = events.value[i]
     if (item.type === 'agent') {
-      const activeTh = getActiveThoughtBlock(item)
+      const activeTh = findLastActiveThoughtBlock(item)
       if (activeTh) {
         finishThought(activeTh)
         return
@@ -1956,7 +1979,7 @@ function finishBufferThought(buf: StreamItem[]) {
   for (let i = buf.length - 1; i >= 0; i--) {
     const item = buf[i]
     if (item.type === 'agent') {
-      const activeTh = getActiveThoughtBlock(item)
+      const activeTh = findLastActiveThoughtBlock(item)
       if (activeTh) {
         activeTh.done = true
         activeTh.collapsed = true
@@ -3403,7 +3426,7 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
       if (p.stream === 'think_final') {
         const fullText = String(p.text || '')
         if (!fullText) break
-        const target = getActiveThoughtBlock(agent)
+        const target = findLastActiveThoughtBlock(agent)
         if (target) {
           target.text = fullText
           target.fullText = fullText
@@ -3411,13 +3434,23 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
           target.collapsed = true
           target.streamThink = true
         } else {
-          appendThoughtBlock(agent, {
-            text: fullText,
-            fullText,
-            done: true,
-            collapsed: true,
-            streamThink: true,
-          })
+          // 实时流中 think_final 之前必有 think 增量建卡；找不到未完成思考块，
+          // 说明该卡已被收尾（assistant_message/tool_call 触发），只回填完整文本，
+          // 不要新建重复卡（否则同一段思考会被渲染成两张卡）。
+          const last = findLastThoughtBlock(agent)
+          if (last) {
+            last.text = fullText
+            last.fullText = fullText
+            last.streamThink = true
+          } else {
+            appendThoughtBlock(agent, {
+              text: fullText,
+              fullText,
+              done: true,
+              collapsed: true,
+              streamThink: true,
+            })
+          }
         }
         break
       }
@@ -3709,7 +3742,7 @@ function handleWsEvent(ev: WsServerEvent) {
       if (p.stream === 'think_final') {
         const fullText = String(p.text || '')
         if (!fullText) break
-        const target = getActiveThoughtBlock(agent)
+        const target = findLastActiveThoughtBlock(agent)
         if (target) {
           target.text = fullText
           target.fullText = fullText
@@ -3717,13 +3750,23 @@ function handleWsEvent(ev: WsServerEvent) {
           target.collapsed = true
           target.streamThink = true
         } else {
-          appendThoughtBlock(agent, {
-            text: fullText,
-            fullText,
-            done: true,
-            collapsed: true,
-            streamThink: true,
-          })
+          // 实时流中 think_final 之前必有 think 增量建卡；找不到未完成思考块，
+          // 说明该卡已被收尾（assistant_message/tool_call 触发），只回填完整文本，
+          // 不要新建重复卡（否则同一段思考会被渲染成两张卡）。
+          const last = findLastThoughtBlock(agent)
+          if (last) {
+            last.text = fullText
+            last.fullText = fullText
+            last.streamThink = true
+          } else {
+            appendThoughtBlock(agent, {
+              text: fullText,
+              fullText,
+              done: true,
+              collapsed: true,
+              streamThink: true,
+            })
+          }
         }
         scrollToBottom()
         break
