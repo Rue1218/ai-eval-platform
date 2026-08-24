@@ -23,6 +23,7 @@ from ..agent.graph import iter_pending_events
 from ..db import SessionLocal
 from ..errors import AppError, ErrorCode
 from ..harness.context import recent_window, summarize
+from ..harness.execution import ensure_session_workspace
 from ..harness.memory import get_default_checkpointer, to_serializable_request, write_summary
 from ..harness.orchestration import handle_confirm_ack
 from ..harness.prompts import build_system_prompt
@@ -529,6 +530,9 @@ async def _run_turn(
             )
             thread_id = f"{session_id}:{uuid4().hex}"
             resume_answer = None
+        # 会话工作区：每个会话一个独立文件夹（read/write/edit 与后续 bash 的
+        # 沙箱根，经 configurable 注入，toolnode 优先读取此值）
+        sandbox_dir = ensure_session_workspace(session_id)
         graph_config = {
             "configurable": {
                 # 每回合独立 thread_id：检查点按回合隔离（M3 阶段 3）
@@ -536,6 +540,7 @@ async def _run_turn(
                 "abort": {"should_abort": abort.is_set},
                 "credentials": {"api_key": config.api_key or ""},
                 "session": {"id": session_id},
+                "sandbox": {"dir": sandbox_dir},
             }
         }
         thinking: list[str] = []

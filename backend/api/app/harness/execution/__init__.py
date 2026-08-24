@@ -14,6 +14,11 @@ from .dispatch import (
 from .registry import ToolDef, ToolRegistry, build_default_registry
 from .toolnode import build_tool_node
 from .worker_bridge import LONG_TOOLS, TASK_KINDS, enqueue_long_task
+from .workspace import (
+    ensure_session_workspace,
+    get_workspace_root,
+    session_workspace_dir,
+)
 
 __all__ = [
     "BASH_BLOCKLIST",
@@ -26,9 +31,12 @@ __all__ = [
     "build_tool_node",
     "edit_file_safe",
     "enqueue_long_task",
+    "ensure_session_workspace",
     "execute",
+    "get_workspace_root",
     "read_file_safe",
     "run_bash",
+    "session_workspace_dir",
     "web_fetch",
     "web_search",
     "write_file_safe",

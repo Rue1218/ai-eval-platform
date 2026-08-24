@@ -3,7 +3,7 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 需求文档 |
-| 版本 | V1.4.8 |
+| 版本 | V1.4.9 |
 | 审查日期 | 2026-08-24 |
 | 文档性质 | 需求规格说明书（需求先行） |
 | 适用范围 | `/agent` 对话智能体的 Harness 运行时：六层职责、七种模式组合、LangGraph 框架选型、技能体系与验收标准 |
@@ -537,3 +537,16 @@ P0-LG 阶段引入新依赖时须同步更新 `backend/api/requirements.txt`；P
 | `backend/api/tests/test_agent_routing.py` | 更新 `test_unimplemented_slash_returns_validation`（/compact 断言变更）；新增 `test_help_text_mentions_compact_available`（帮助文本与现状一致性回归） |
 
 验收：routing 9 项测试全过、ruff 全绿；生产 WS 层 T3 `/compact` 实测通过。
+
+### V1.4.9 会话工作区隔离（2026-08-24）
+
+实现「每个会话一个独立文件夹（工作区）」：会话级沙箱根目录 `{root}/{session_id}`，`read`/`write`/`edit` 与后续 `bash` 均以工作区为根天然隔离。
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/harness/execution/workspace.py`（新增） | `get_workspace_root()`（env `AGENT_WORKSPACE_ROOT` 优先 → 容器 `/data/workspaces`（`./data` 持久卷挂载）→ 本地 `data/workspaces`）；`session_workspace_dir()`（session_id 严格校验 UUID 安全字符集，**防路径穿越**，M5-D7 目录侧闭环）；`ensure_session_workspace()`（mkdir -p 幂等） |
+| `backend/api/app/routers/ws.py` | `_run_turn` 每回合 `ensure_session_workspace(session_id)` 并注入 `configurable["sandbox"]["dir"]`（toolnode 已有读取路径，优先于构造默认值） |
+| `backend/api/app/harness/execution/__init__.py` | 导出 workspace 三函数 |
+| `backend/api/tests/test_harness_workspace.py`（新增） | 5 项测试：目录创建、双会话隔离、非法 id 拒绝（路径穿越/空/超长）、根解析、toolnode 集成（`configurable['sandbox']['dir']` 生效 + 跨工作区读取被拒） |
+
+说明：不新增任何对外 REST/WS 字段（sandbox 仅内部 `RunnableConfig.configurable`）；`bash` 命令仍按红线不注册（阶段 2 不开放通用 bash），工作区目录即后续 bash 的 cwd 边界。验收：ruff 全绿、相关 20 项测试全过。
