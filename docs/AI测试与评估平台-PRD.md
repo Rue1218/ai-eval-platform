@@ -2,10 +2,10 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.12 |
+| 文档版本 | V1.13 |
 | 文档状态 | 已冻结基线 |
 | 撰写日期 | 2026-08-17 |
-| 最近修订 | 2026-08-23：补齐 Gemini OpenAI 兼容端点的思考摘要请求与增量归一化；增加 Agent 思考摘要开关与思考强度设置；将用户回显固定为 `user_message`，将完成信号固定为 `response.completed`，明确 `thought` 不承载助手正文；协议档增加可选 Embedding / Reranker 独立端点配置，三类 Key 均按 profile 写入受控环境文件 |
+| 最近修订 | 2026-08-24：补充 Agent 多附件交互：支持图片（PNG/JPG/JPEG/WEBP/GIF）、Markdown/TXT/HTML/JSON/YAML、PDF、Word（DOC/DOCX）、Excel（XLS/XLSX）、CSV/JSONL 与音频；输入区支持文件选择和拖拽上传，图片显示缩略图，PDF/文本支持预览，Office 文件显示类型卡片并可打开/下载。2026-08-23：补齐 Gemini OpenAI 兼容端点的思考摘要请求与增量归一化；增加 Agent 思考摘要开关与思考强度设置；将用户回显固定为 `user_message`，将完成信号固定为 `response.completed`，明确 `thought` 不承载助手正文；协议档增加可选 Embedding / Reranker 独立端点配置，三类 Key 均按 profile 写入受控环境文件 |
 | 适用版本 | 平台 V1.0 |
 | 技术栈 | Vue3 + Naive UI、Python FastAPI、PostgreSQL、WebSocket、Docker Compose、go-stress-testing |
 
@@ -275,7 +275,7 @@ queued → running → succeeded
 
 首期已实现事件为 `user_message`、`thought`、`assistant_delta`、`assistant_message`、`response.completed`、`error`、`pong`；`tool_call`、`tool_result`、`confirm`、`confirm_ack`、`progress`、`report` 保留为后续 Harness/Worker 阶段事件。首期收到 `confirm_ack` 或 `cancel_task` 时返回 `VALIDATION` 能力未启用错误，不得伪造任务成功。
 
-附件：先 `POST /api/files` 得 `file_id`，再在消息里引用。单文件 ≤20MB；PRD/OpenAPI/Excel/JSONL/CSV/PDF/MD/TXT/HTML。
+附件：先 `POST /api/files` 得 `file_id`，再在消息里引用。单文件 ≤20MB；支持图片（PNG/JPG/JPEG/WEBP/GIF）、PRD/OpenAPI/Markdown/TXT/HTML/JSON/YAML、PDF、Word（DOC/DOCX）、Excel（XLS/XLSX）、JSONL/CSV 与 wav/mp3。Agent 输入区支持多选和拖拽上传；本地暂存阶段图片显示缩略图，PDF/文本支持预览，Office 文件显示文件类型卡片并可打开/下载。
 
 ---
 
@@ -665,3 +665,13 @@ testcase-tools：只对齐，不进镜像。LightRAG：MIT，锁 tag。go-stress
 | `backend/api/app/schemas.py` / `backend/api/app/profile_env.py` | 定义附加端点字段及按 profile 隔离的环境变量写入契约 |
 | `backend/api/app/routers/profiles.py` / `backend/worker/app/profile_env.py` | CRUD 保存、脱敏返回与 Worker 只读解析 |
 | `frontend/src/components/modals/ProfileModal.vue` / `frontend/src/views/AdminProfiles.vue` | 配置表单和协议档列表标识 |
+
+### Agent 附件交互修订（2026-08-24）
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/routers/files.py` | 扩展图片与 DOC/DOCX 上传白名单，继续执行单文件 20MB 校验 |
+| `frontend/src/components/agent/AttachmentPreview.vue` | 提供图片缩略图、PDF/文本预览和 Office 文件类型卡片 |
+| `frontend/src/views/Agent.vue` | 支持多选/拖拽上传、附件暂存、移除、上传状态与消息内展示 |
+| `frontend/src/api/http.ts` | 同步文件上传响应的内容类型字段 |
+| `backend/api/tests/test_files.py` | 增加附件扩展名白名单回归测试 |
