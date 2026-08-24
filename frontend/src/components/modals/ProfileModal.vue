@@ -201,11 +201,13 @@ const protocolOptions = [
 ]
 
 const vendorOptions = [
+  { label: 'Google Gemini (官方端点 / OpenAI 兼容)', value: 'gemini' },
   { label: 'NVIDIA NIM (英伟达推理云)', value: 'nvidia' },
   { label: 'Xiaomi Mimo (小米 Mimo 端点)', value: 'mimo' },
   { label: 'OpenAI (官方端点)', value: 'openai' },
   { label: 'Anthropic Claude (官方端点)', value: 'anthropic' },
   { label: 'DeepSeek (深度求索)', value: 'deepseek' },
+  { label: 'StepFun (阶跃星辰)', value: 'stepfun' },
   { label: 'SiliconFlow (硅基流动)', value: 'siliconflow' },
   { label: 'Alibaba Qwen (通义千问 / 阿里云百炼)', value: 'qwen' },
   { label: 'ByteDance Doubao (火山引擎豆包)', value: 'volcengine' },
@@ -222,11 +224,13 @@ const vendorOptions = [
 ]
 
 const VENDOR_MAP: Record<string, { name: string; base_url: string; protocol: ProtocolType; model: string }> = {
+  gemini: { name: 'Google Gemini', base_url: 'https://generativelanguage.googleapis.com/v1beta/openai/', protocol: 'openai_chat', model: 'gemini-2.5-flash' },
   nvidia: { name: 'NVIDIA NIM', base_url: 'https://integrate.api.nvidia.com/v1', protocol: 'openai_chat', model: 'meta/llama-3.3-70b-instruct' },
   mimo: { name: 'Xiaomi Mimo', base_url: 'https://token-plan-cn.xiaomimimo.com', protocol: 'openai_chat', model: 'mimo-v2.5-pro' },
   openai: { name: 'OpenAI', base_url: 'https://api.openai.com/v1', protocol: 'openai_chat', model: 'gpt-4o' },
   anthropic: { name: 'Anthropic Claude', base_url: 'https://api.anthropic.com', protocol: 'anthropic_messages', model: 'claude-3-7-sonnet-20250219' },
   deepseek: { name: 'DeepSeek', base_url: 'https://api.deepseek.com/v1', protocol: 'openai_chat', model: 'deepseek-chat' },
+  stepfun: { name: 'StepFun 阶跃星辰', base_url: 'https://api.stepfun.com/v1', protocol: 'openai_chat', model: 'step-2-16k' },
   siliconflow: { name: 'SiliconFlow', base_url: 'https://api.siliconflow.cn/v1', protocol: 'openai_chat', model: 'deepseek-ai/DeepSeek-V3' },
   qwen: { name: 'Alibaba Qwen', base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', protocol: 'openai_chat', model: 'qwen-plus' },
   volcengine: { name: 'ByteDance Doubao', base_url: 'https://ark.cn-beijing.volces.com/api/v3', protocol: 'openai_chat', model: 'doubao-pro-32k' },
