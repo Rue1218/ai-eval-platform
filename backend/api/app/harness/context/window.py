@@ -14,7 +14,7 @@ class WindowMessage(TypedDict, total=False):
     """窗口内消息的最小投影；只含 user/assistant。"""
 
     role: str  # "user" | "assistant"
-    content: str
+    content: object
     source_id: str | None
 
 

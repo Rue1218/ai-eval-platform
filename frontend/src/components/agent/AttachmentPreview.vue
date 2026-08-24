@@ -173,7 +173,21 @@ async function openPreview() {
 }
 
 .attachment-preview-card.compact {
-  width: min(230px, 100%);
+  width: min(210px, 100%);
+  grid-template-columns: 54px minmax(0, 1fr);
+}
+
+.attachment-preview-card.compact .attachment-visual {
+  width: 54px;
+  height: 48px;
+}
+
+.attachment-preview-card.compact .attachment-file-action {
+  max-width: 52px;
+}
+
+.attachment-preview-card.compact .attachment-name {
+  font-size: 11px;
 }
 
 .attachment-visual {

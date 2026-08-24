@@ -1,10 +1,10 @@
 # AI 测试与评估平台 Agent 开发文档
 
-> 版本：V0.5.1
+> 版本：V0.5.2
 > 状态：首期 LangGraph 单轮 Agent、WebSocket 流式事件与多协议思考摘要已拆分
 > 审查日期：2026-08-24
 > 对应需求：`AI测试与评估平台-PRD.md` V1.12
-> 对应接口：`AI测试与评估平台-API.md` V1.22
+> 对应接口：`AI测试与评估平台-API.md` V1.24
 
 ## 1. 当前唯一运行链路
 
@@ -136,3 +136,11 @@ Agent 思考配置从 `Setting(key="agent_reasoning")` 读取，结构为
 ### V0.5.1（2026-08-24）修改代码文件与作用清单
 
 - `docs/AI测试与评估平台-Agent开发文档.md`：头部版本与对应接口同步为 API.md V1.22（Harness 契约收敛，纯文档变更，无功能改动）。
+
+### V0.5.2（2026-08-24）修改代码文件与作用清单
+
+- `backend/api/app/agent/attachments.py`：校验消息附件归属，解析文本、PDF、DOCX、XLSX，并把图片转换为内部图文内容块；解析结果只进入模型请求，不覆盖用户原文。
+- `backend/api/app/routers/ws.py`：将用户消息附件注入 Harness 模型窗口，支持附件-only 消息并持久化安全预览元数据。
+- `backend/api/app/adapters.py`：将内部图文内容块适配为 OpenAI Chat/Responses 与 Anthropic Messages 请求格式。
+- `backend/api/app/routers/sessions.py` / `frontend/src/api/types.ts`：历史回放返回并消费附件文件名、大小、类型和内容地址，刷新后仍可预览。
+- `backend/api/tests/test_agent_attachments.py`：覆盖文本注入、图片内容块和三协议格式转换。

@@ -52,11 +52,9 @@ interface ProviderLogoDefinition {
 // 图形来源于 Simple Icons 或供应商官网公开品牌资源；未提供可验证独立图形的供应商使用文字标记，避免借用母公司 Logo。
 const LOGOS: Record<ProviderLogoKey, ProviderLogoDefinition> = {
   stepfun: {
-    label: '阶跃星辰 StepFun', color: '#111827', mark: '阶', viewBox: '0 0 20 20', round: true,
-    background: '#111827',
-    // 来源：https://www.stepfun.com/step_favicon.svg，保留官网圆形底与阶梯方块结构。
+    label: '阶跃星辰 StepFun', color: '#111827', mark: '阶', viewBox: '0 0 20 20',
+    // 来源：https://www.stepfun.com/step_favicon.svg，紧凑态还原图二的黑色阶梯方块标记。
     paths: [
-      { d: 'M10 0C4.48 0 0 4.48 0 10s4.48 10 10 10 10-4.48 10-10S15.52 0 10 0Z', fill: '#FFFFFF' },
       { d: 'M3.65 12.69h3.65v3.65H3.65zM8.17 12.69h3.65v3.65H8.17zM8.17 8.17h3.65v3.66H8.17zM8.17 3.66h3.65v3.65H8.17zM12.69 3.65h3.65v3.66h-3.65z', fill: '#111827' },
     ],
   },

@@ -215,7 +215,7 @@ class MessageOut(OrmOut):
     id: str
     role: str
     content: str
-    attachments: list[str]
+    attachments: list[str | dict[str, Any]]
     author_id: str | None = None
     client_message_id: str | None = None
     latency_ms: int | None = None

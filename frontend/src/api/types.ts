@@ -554,6 +554,14 @@ export interface SessionAuthor {
   display_name?: string | null
 }
 
+export interface AttachmentReference {
+  file_id: string
+  filename?: string
+  size?: number
+  content_type?: string | null
+  content_url?: string
+}
+
 export interface AgentSession {
   id: string
   title: string
@@ -571,7 +579,7 @@ export interface SessionMessage {
   id: string
   role: 'user' | 'assistant' | 'system'
   content: string
-  attachments: string[]
+  attachments: Array<string | AttachmentReference>
   author_id?: string | null
   author?: SessionAuthor | null
   client_message_id?: string | null

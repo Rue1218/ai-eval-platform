@@ -39,6 +39,14 @@ def _user_text(state: GraphState) -> str:
             content = message.get("content")
             if isinstance(content, str) and content.strip():
                 return content.strip()
+            if isinstance(content, list):
+                text = "\n".join(
+                    str(part.get("text") or "")
+                    for part in content
+                    if isinstance(part, dict) and part.get("type") == "text"
+                ).strip()
+                if text:
+                    return text
     return ""
 
 
