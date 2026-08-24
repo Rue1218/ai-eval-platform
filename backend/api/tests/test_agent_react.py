@@ -226,8 +226,9 @@ def test_react_read_repeat_capped_after_limit() -> None:
     assert len(gateway.calls) == 5
 
 
-def test_react_read_repeat_capped_hard_error_after_correction() -> None:
-    """OR-4：read 超限纠正后仍用相同参数调用 → 硬错误收尾，不裸抛、不无限重读。"""
+def test_react_read_repeat_capped_graceful_end_after_correction() -> None:
+    """OR-4：read 超限纠正后仍用相同参数调用 → 基于已读内容优雅收尾（assistant_message），
+    不再抛硬错误——弱模型纠正无效时保证用户拿到内容而非报错。"""
     with tempfile.TemporaryDirectory() as tmp:
         with open(f"{tmp}/a.txt", "w", encoding="utf-8") as handle:
             handle.write("hello")
@@ -239,12 +240,16 @@ def test_react_read_repeat_capped_hard_error_after_correction() -> None:
             _serializable(),
         )
     kinds = [event["kind"] for event in _pending_events(events)]
-    assert kinds.count("error") == 1
-    messages = [event["payload"].get("message", "") for event in _pending_events(events)]
-    assert any("连续调用" in message for message in messages)
-    # 前 3 次执行，第 4 次纠正，第 5 次仍相同 → 硬错误；共 5 次模型调用，无死循环
+    assert kinds.count("error") == 0
+    # 前 3 次执行，第 4 次纠正，第 5 次仍相同 → 自动收尾；共 5 次模型调用，无死循环
     assert kinds.count("tool_call") == 3
     assert len(gateway.calls) == 5
+    assert kinds[-2:] == ["assistant_message", "response.completed"]
+    # 收尾消息回显已读内容（模型拿不到的内容由系统补上）
+    final = [
+        e["payload"].get("text", "") for e in _pending_events(events) if e["kind"] == "assistant_message"
+    ]
+    assert any("hello" in message for message in final)
 
 
 def test_react_read_toolname_with_newline_exempt_from_guard() -> None:

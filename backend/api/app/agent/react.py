@@ -266,17 +266,41 @@ def build_react_nodes(
             ]
             if identical_runs and tool in READONLY_TOOLS and len(identical_runs) >= READONLY_REPEAT_LIMIT:
                 # 只读工具无进展重复：相同参数已成功执行多次（返回内容必然相同），
-                # 模型既未传 offset 继续读取也未作答，判定为循环。注入纠正观察
-                # （提示传 offset 或直接作答）；纠正后仍重复相同调用才硬错误。
+                # 模型既未传 offset 继续读取也未作答，判定为循环。先注入纠正观察
+                # （提示传 offset 或直接作答）；纠正后仍重复相同调用则基于已读内容
+                # 优雅收尾——弱模型（如 DeepSeek V4 Flash）纠正无效、无法收敛到
+                # done，硬错误只会让用户拿到报错而非内容。
                 if state.get("repeat_retry"):
+                    content = next(
+                        (
+                            obs.text
+                            for obs in reversed(observations)
+                            if _same_call(obs) and getattr(obs, "ok", False)
+                        ),
+                        "",
+                    )
+                    text = (
+                        f"已读取附件内容（模型在读取环节反复重复调用，系统已自动结束本轮）：\n\n{content}"
+                        if content
+                        else f"模型反复以相同参数调用工具 {tool} 未能继续，系统已自动结束本轮。"
+                    )
                     return {
                         "pending_events": thought_events
                         + [
                             make_event(
-                                "error",
-                                {"code": "VALIDATION", "message": f"工具 {tool} 连续调用未推进，已终止"},
-                            )
+                                "assistant_message",
+                                {"text": text, "role": "assistant", "latency_ms": latency_ms},
+                            ),
+                            make_event(
+                                "response.completed",
+                                {"finish_reason": "stop", "role": "assistant"},
+                            ),
                         ],
+                        "response": {
+                            "text": text,
+                            "usage": dict(response.usage),
+                            "latency_ms": latency_ms,
+                        },
                         "pending_tool": None,
                         "repeat_retry": False,
                         "budget": budget.to_dict(),
