@@ -29,8 +29,8 @@ class ModelConfig:
     api_key: str = field(default="", repr=False)
     anthropic_version: str | None = None
     temperature: float = 0.2
-    max_tokens: int = 8192
-    timeout_s: float = 60.0
+    max_tokens: int = 1024
+    timeout_s: float = 30.0
     # 是否请求并向上层投影模型返回的思考摘要；不等同于暴露隐藏思维链。
     reasoning_enabled: bool = True
     reasoning_effort: ReasoningEffort = "medium"
