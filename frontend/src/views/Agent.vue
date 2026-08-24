@@ -1302,13 +1302,15 @@ function currentAgentMessageMeta(): Pick<StreamItem, 'providerLogoKey' | 'modelN
 
 /** 解析历史消息中的供应商 Logo 标识，优先使用快照字段。 */
 function resolveMessageLogoKey(m: { provider?: string | null; profile_id?: string | null; model_name?: string | null }): ProviderLogoKey {
-  if (m.provider) return m.provider as ProviderLogoKey
   if (m.profile_id) {
     const prof = allProfiles.value.find((p) => p.id === m.profile_id)
     if (prof) return getProviderLogoKey(prof)
   }
   if (m.model_name) {
     return getProviderLogoKey({ model: m.model_name })
+  }
+  if (m.provider) {
+    return getProviderLogoKey({ name: m.provider, model: m.provider })
   }
   return agentProfileLogoKey.value || 'custom'
 }

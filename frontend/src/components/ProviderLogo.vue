@@ -28,7 +28,7 @@ import type { ProviderLogoKey } from '../utils/providerLogo'
 
 export type { ProviderLogoKey } from '../utils/providerLogo'
 
-const props = defineProps<{ provider: ProviderLogoKey; compact?: boolean }>()
+const props = defineProps<{ provider?: ProviderLogoKey | string | null; compact?: boolean }>()
 
 interface ProviderLogoDefinition {
   label: string
@@ -107,8 +107,11 @@ const LOGOS: Record<ProviderLogoKey, ProviderLogoDefinition> = {
   custom: { label: '自定义端点 / 内部代理', color: '#64748B', mark: '↗' },
 }
 
-const logo = computed(() => LOGOS[props.provider])
-const gradientId = computed(() => `provider-logo-gradient-${props.provider}`)
+const logo = computed(() => {
+  const key = props.provider as ProviderLogoKey
+  return (key && LOGOS[key]) ? LOGOS[key] : LOGOS.custom
+})
+const gradientId = computed(() => `provider-logo-gradient-${props.provider || 'custom'}`)
 </script>
 
 <style scoped>
