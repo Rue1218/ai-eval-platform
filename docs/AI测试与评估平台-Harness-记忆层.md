@@ -3,11 +3,11 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 记忆层模块设计 |
-| 版本 | V0.4 |
-| 审查日期 | 2026-08-23 |
+| 版本 | V0.4.1 |
+| 审查日期 | 2026-08-24 |
 | 文档性质 | 模块设计说明书（需求发散 + 架构设计 + 接口签名） |
 | 适用模块 | M3 记忆层（`app/harness/memory/`，含 GraphState 主体 `state.py`） |
-| 上游权威 | Harness 需求文档 V1.4.4 §4.3、§2.4、§2.5、§7、§9；API.md V1.21 §3.4；PRD §5.1.3 |
+| 上游权威 | Harness 需求文档 V1.4.4 §4.3、§2.4、§2.5、§7、§9；API.md V1.22 §3.4；PRD §5.1.3 |
 
 > **阅读关系**：本文是 Harness §9.2「层 3 记忆」行的展开。**GraphState 主体归本层**（`state.py`，按决策从 `orchestration/` 移入）；事件契约在 M7，本层只引用；`pending_events` 的 append reducer + 图外清空策略对齐 M4-Q3 裁决。
 
@@ -338,17 +338,17 @@ def annotate_source(record: dict) -> dict:
 | M3-D1 | GraphState 主体归属 | 归本层 `memory/state.py`（从 orchestration 移入） |
 | M3-D2 | `SerializableRequest` 定义 | 本层定义，`ModelRequest` 移除 `should_abort` 后的投影；`api_key` 不入 State |
 | M3-D3 | `pending_events` reducer | append reducer（`Annotated[list, _append_events]`），图内累积，图外 ws.py 消费清空 |
-| M3-D4 | `pending_events` 检查点恢复语义 | **留阶段 3 接 Checkpointer 时定**：累积 vs 每节点清空对断线重放的影响需评估（当前阶段 0/1 进程内会话注册表承载，不涉及检查点） |
+| M3-D4 | `pending_events` 检查点恢复语义 | **已闭环**（V0.4.1 同步 M9-D3 裁决）：检查点保存图终态累积的 `pending_events`，但**恢复时重置为空**——事件已由 `ws_events` 持久化，断线重放走 `ws_events`，不依赖检查点，避免重复 emit；仅恢复 `mode`/`plan`/`verdict` 等控制字段 |
 | M3-D5 | `semantic.py` 未接入行为 | 直接抛 `VALIDATION`，禁止 mock `succeeded` |
 | M3-D6 | 偏好写入时机 | 仅 `confirm_ack.ok=true` 入队后写 `settings:agent_prefs:{user_id}` |
 
-> **M3-D4 是本模块唯一遗留待定项**：`pending_events` 在 Checkpointer 下的恢复语义需阶段 3 评估——若累积则断线重放可能重复 emit，若每节点清空则需图内清空节点（与 M4-Q3"图外清空"裁决需复核）。阶段 3 启动时优先定此项。
+> **M3-D4 原「阶段 3 待定」已闭环**：由 M9（运行时基础设施）§7 M9-D3 承接解决——检查点保存累积 `pending_events`，恢复时重置为空，对外事件一律走 `ws_events` 断线重放，不依赖检查点。本模块不再保留检查点恢复待定项。
 
 ---
 
 ## 8. 前端联调
 
-> 本模块前端联调由 **陈东超** 独立负责，契约以 API.md V1.21 §3.4 为唯一真理。M3 是后端内部状态层，**前端无直接对接**：GraphState、工作记忆、情景记忆、压缩记忆均为后端内部状态，不下发前端。M3 对前端的影响是**间接的**——`preference.py` 写入的 `agent_prefs` 经 `GET /api/agent/prefs` 下发，前端用于确认卡预填；GraphState 投影字段（`mode`/`verdict`/`budget`）经 M4 节点产出的事件影响前端 stage 展示。前端不臆造字段，发现契约缺失先回写 API.md 再实现。
+> 本模块前端联调由 **陈东超** 独立负责，契约以 API.md V1.22 §3.4 为唯一真理。M3 是后端内部状态层，**前端无直接对接**：GraphState、工作记忆、情景记忆、压缩记忆均为后端内部状态，不下发前端。M3 对前端的影响是**间接的**——`preference.py` 写入的 `agent_prefs` 经 `GET /api/agent/prefs` 下发，前端用于确认卡预填；GraphState 投影字段（`mode`/`verdict`/`budget`）经 M4 节点产出的事件影响前端 stage 展示。前端不臆造字段，发现契约缺失先回写 API.md 再实现。
 
 ### 8.1 对应前端组件与任务
 
@@ -369,7 +369,7 @@ def annotate_source(record: dict) -> dict:
 
 | 文件 | 操作 | 作用 |
 | :--- | :--- | :--- |
-| `docs/AI测试与评估平台-Harness-记忆层.md` | 新增 V0.3 → 修订 V0.4 | V0.3 M3 记忆层模块设计：定义 GraphState 主体（`state.py`，从 orchestration 移入）+ `SerializableRequest`、工作记忆/情景/压缩/偏好/语义/ACL 六类记忆；含接口签名级与 TDD 验收；标注 `pending_events` 检查点恢复语义为阶段 3 待定项；V0.4 对齐 API.md V1.21：新增 §8「前端联调」章节说明 M3 对前端为间接影响（preference.py 经 /api/agent/prefs 预填确认卡，GraphState 投影经 M4 事件影响 stage），前端无直接契约。 |
+| `docs/AI测试与评估平台-Harness-记忆层.md` | 新增 V0.3 → 修订 V0.4 → 修订 V0.4.1 | V0.3 M3 记忆层模块设计：定义 GraphState 主体（`state.py`，从 orchestration 移入）+ `SerializableRequest`、工作记忆/情景/压缩/偏好/语义/ACL 六类记忆；含接口签名级与 TDD 验收；标注 `pending_events` 检查点恢复语义为阶段 3 待定项；V0.4 对齐 API.md V1.21：新增 §8「前端联调」章节说明 M3 对前端为间接影响（preference.py 经 /api/agent/prefs 预填确认卡，GraphState 投影经 M4 事件影响 stage），前端无直接契约；V0.4.1 契约收敛版：统一上游权威与 §8 契约为 API.md V1.22；§7 M3-D4 检查点恢复待定项闭环（同步 M9-D3 裁决：恢复时 `pending_events` 重置为空，事件走 `ws_events`）。 |
 
 本文档仅设计记忆层，不改变任何 API、数据库、前端或 Agent 运行代码。
 

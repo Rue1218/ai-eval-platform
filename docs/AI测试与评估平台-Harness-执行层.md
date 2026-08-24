@@ -3,8 +3,8 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 执行层模块设计 |
-| 版本 | V0.4.1 |
-| 审查日期 | 2026-08-23 |
+| 版本 | V0.4.2 |
+| 审查日期 | 2026-08-24 |
 | 文档性质 | 模块设计说明书（需求发散 + 架构设计 + 接口签名） |
 | 适用模块 | M5 执行层（`app/harness/execution/` + `app/agent/react.py`） |
 | 上游权威 | Harness 需求文档 V1.4.4 §4.5、§2.4、§7、§9；API.md V1.22 §4.3；PRD §5.1.3 |
@@ -230,14 +230,15 @@ def execute(call: ToolCall, *, timeout_s: float, permission: str,
     """按 call.name 分派到 handler，带超时；超时返回 timeout observation；
     日志脱敏（调 M8）。sandbox_dir 限 bash 工作目录。"""
 
-# bash 沙箱
+# bash 沙箱（⚠️ 安全边界待定，见 §3.8.4 后注——阶段 2 不开放通用 bash）
 BASH_BLOCKLIST: frozenset[str] = frozenset(
     {"rm", "sudo", "curl", "wget", "nc", "ssh", "scp", "chmod", "chown"}
 )
 
 def run_bash(cmd: str, *, sandbox_dir: str, timeout_s: float) -> str:
     """subprocess + 受限环境：工作目录限定、超时、命令黑名单校验。
-    黑名单命中抛 AppError(VALIDATION)。"""
+    黑名单命中抛 AppError(VALIDATION)。
+    ⚠️ 当前方案仅为受限执行，不构成安全沙箱，阶段 2 不开放通用 bash。"""
 
 # web 内部短 MCP 适配器
 def web_search(query: str, *, timeout_s: float) -> str:
@@ -246,6 +247,8 @@ def web_search(query: str, *, timeout_s: float) -> str:
 def web_fetch(url: str, *, timeout_s: float) -> str:
     """内部抓取适配器 + 脱敏（不走外部 MCP 服务器）。"""
 ```
+
+> **⚠️ `bash` 安全待定项（V0.4.2 评审闭环）**：命令黑名单 + 工作目录限定 + 超时**不构成可靠安全沙箱**——黑名单可被解释器（如 `python -c`、`perl -e`）、绝对路径、重定向/管道、脚本文件、环境变量等方式绕过；也未定义网络隔离、CPU/内存/进程数限制、子进程树清理与多用户并发隔离，且 Windows 与 Linux 行为存在差异。**阶段 2 不开放通用 `bash` 执行**。如后续需落地，方案必须改为独立容器/沙箱（只读挂载、无网络、资源限制、超时强杀、路径/命令白名单），并先回写 Harness §7 安全红线再实现。`read`/`write`/`edit` 同样必须基于受控文件 ID/根目录，禁止仅依赖字符串路径。
 
 #### 3.8.5 worker_bridge.py
 
@@ -344,7 +347,8 @@ def assert_no_orm_leak(obj: object) -> None:
   - Worker 自管 Session，禁跨 Session 传 ORM；
   - 禁用 `create_react_agent`，ToolNode 必须包装注册表；
   - web 走内部短 MCP，禁外部 MCP；
-  - `rag` 未接入禁 mock。
+  - `rag` 未接入禁 mock；
+  - **`bash` 黑名单非沙箱，阶段 2 不开放通用 bash**（待定项见 §3.8.4 后注）。
 
 ---
 
@@ -366,14 +370,14 @@ def assert_no_orm_leak(obj: object) -> None:
 
 ## 8. 前端联调
 
-> 本模块前端联调由 **陈东超** 独立负责，契约以 API.md V1.21 §4.3 为唯一真理。M5 产出的 `tool_call`/`tool_result` 事件是前端 ToolCard 的数据来源；长任务经 `worker_bridge` 入队后，前端只收 `progress`/`report`/`error`（API.md §4.3 末尾）。前端不臆造字段，发现契约缺失先回写 API.md 再实现。
+> 本模块前端联调由 **陈东超** 独立负责，契约以 API.md V1.22 §4.3 为唯一真理。M5 产出的 `tool_call`/`tool_result` 事件是前端 ToolCard 的数据来源；长任务经 `worker_bridge` 入队后，前端只收 `progress`/`report`/`error`（API.md §4.3 末尾）。前端不臆造字段，发现契约缺失先回写 API.md 再实现。
 
 ### 8.1 对应前端组件与任务
 
 | M5 文件 | 产出事件 | 前端渲染 | 前端文件 | 对接契约 | 落地阶段 | 验收点 |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | `toolnode.py` `build_tool_node` | `tool_call`/`tool_result` | ToolCard pending→done | `components/agent/ToolCard.vue` | API.md §4.3 + M7 §3.6.2 | 阶段 2 | 三态正常；`latency_ms` 展示；中文名映射（API.md §4.3 短工具中文名表） |
-| `dispatch.py` `execute`（短工具） | `tool_result`（含 `truncated`/`source`/`redacted`） | ToolCard done + 徽标 | `components/agent/ToolCard.vue` | API.md §4.3（V1.21 扩展字段）+ M7 §3.6.2 `Observation` | 阶段 2 | `source` 为溯源标识字符串（对齐 M7）；`truncated`/`redacted` 徽标渲染 |
+| `dispatch.py` `execute`（短工具） | `tool_result`（含 `truncated`/`source`/`redacted`） | ToolCard done + 徽标 | `components/agent/ToolCard.vue` | API.md §4.3（V1.22 扩展字段）+ M7 §3.6.2 `Observation` | 阶段 2 | `source` 为溯源标识字符串（对齐 M7）；`truncated`/`redacted` 徽标渲染 |
 | `worker_bridge.py` `enqueue_long_task` | `progress`/`report`/`error`（长任务） | ProgressDock + ReportCard + ErrorStrip | `components/agent/ProgressDock.vue`/`ReportCard.vue` | API.md §4.3 末尾「长工具不由 Agent 进程跑完；前端只收 progress/report/error」 | 阶段 4 | 前端不直接收长任务 `tool_result`，只收 `progress`/`report`/`error` |
 | `registry.py` `ToolRegistry` | 工具元数据（间接） | ToolCard 中文名 | — | API.md §4.3 短工具中文名表 | 阶段 2 | 前端中文名表与注册表 `name` 对齐 |
 | `session_guard.py` | Worker 自管 Session（后端内部） | — | — | — | 阶段 4 | 前端无直接对接 |
@@ -388,7 +392,7 @@ def assert_no_orm_leak(obj: object) -> None:
 
 | 文件 | 操作 | 作用 |
 | :--- | :--- | :--- |
-| `docs/AI测试与评估平台-Harness-执行层.md` | 新增 V0.3 → 修订 V0.4 → 修订 V0.4.1 | V0.3 M5 执行层模块设计：定义工具注册表、附件参数绑定、ToolNode 包装（禁 `create_react_agent`）、短工具分派（含 bash 沙箱 + web 内部短 MCP）、长任务入队、Worker 自管 Session 守卫；含定位扩展声明（基础工具集为通用能力，已回写 Harness V1.4.3 §7）与接口签名级与 TDD 验收；V0.4 对齐 API.md V1.21：新增 §8「前端联调」章节；V0.4.1 配合 API.md V1.22：§8.1/§8.2 修正 `source` 字段语义（对齐 M7 `Observation.source` 溯源标识字符串，删除 `source="long"` 矛盾表述）。 |
+| `docs/AI测试与评估平台-Harness-执行层.md` | 新增 V0.3 → 修订 V0.4 → 修订 V0.4.1 → 修订 V0.4.2 | V0.3 M5 执行层模块设计：定义工具注册表、附件参数绑定、ToolNode 包装（禁 `create_react_agent`）、短工具分派（含 bash 沙箱 + web 内部短 MCP）、长任务入队、Worker 自管 Session 守卫；含定位扩展声明（基础工具集为通用能力，已回写 Harness V1.4.3 §7）与接口签名级与 TDD 验收；V0.4 对齐 API.md V1.21：新增 §8「前端联调」章节；V0.4.1 配合 API.md V1.22：§8.1/§8.2 修正 `source` 字段语义（对齐 M7 `Observation.source` 溯源标识字符串，删除 `source="long"` 矛盾表述）；V0.4.2 评审收敛版：§8 契约为 API.md V1.22；**标注 `bash` 黑名单非安全沙箱，阶段 2 不开放通用 bash**（补充待定安全项详注与红线），`read`/`write`/`edit` 须基于受控文件 ID/根目录。 |
 
 本文档仅设计执行层，不改变任何 API、数据库、前端或 Agent 运行代码。
 

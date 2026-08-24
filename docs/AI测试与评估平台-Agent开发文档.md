@@ -1,10 +1,10 @@
 # AI 测试与评估平台 Agent 开发文档
 
-> 版本：V0.5
+> 版本：V0.5.1
 > 状态：首期 LangGraph 单轮 Agent、WebSocket 流式事件与多协议思考摘要已拆分
-> 审查日期：2026-08-23
+> 审查日期：2026-08-24
 > 对应需求：`AI测试与评估平台-PRD.md` V1.12
-> 对应接口：`AI测试与评估平台-API.md` V1.20
+> 对应接口：`AI测试与评估平台-API.md` V1.22
 
 ## 1. 当前唯一运行链路
 
@@ -132,3 +132,7 @@ Agent 思考配置从 `Setting(key="agent_reasoning")` 读取，结构为
 - `backend/api/app/adapters.py`：按 OpenAI Chat/Responses、Mimo、Anthropic 协议映射思考参数；
 - `frontend/src/views/AdminProfiles.vue` / `frontend/src/api/types.ts` / `frontend/src/api/mockData.ts`：增加管理页设置、类型与 Mock 数据；
 - `backend/api/tests/test_adapters.py` / `backend/api/tests/test_llm_graph.py`：覆盖思考强度映射和关闭行为。
+
+### V0.5.1（2026-08-24）修改代码文件与作用清单
+
+- `docs/AI测试与评估平台-Agent开发文档.md`：头部版本与对应接口同步为 API.md V1.22（Harness 契约收敛，纯文档变更，无功能改动）。

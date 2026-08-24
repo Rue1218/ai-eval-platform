@@ -3,8 +3,8 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 团队开发与联调规划 |
-| 版本 | V1.3 |
-| 审查日期 | 2026-08-23 |
+| 版本 | V1.4 |
+| 审查日期 | 2026-08-24 |
 | 文档性质 | 施工排期与协作规范（指导性文档） |
 | 适用范围 | Harness 运行时阶段 1–4 的 2 人后端分工 + 前端联调任务、模块分配、联调时序与验收闸门 |
 | 事实来源 | [`docs/AI测试与评估平台-Harness需求文档.md`](AI测试与评估平台-Harness需求文档.md) §9.3 文件生成清单 + 10 份模块设计文档（M1–M10） + [`docs/AI测试与评估平台-API.md`](AI测试与评估平台-API.md) V1.22 |
@@ -17,17 +17,19 @@
 
 > **V1.3 修订定位**：配合 API.md V1.22 修复 V1.21 遗留契约裂缝——§5.1 斜杠注册拆分（`/help` 返回帮助文本，`/compact`/`/cancel`/`/stress`/未知斜杠阶段 1 返回 `VALIDATION`，补漏 `/compact`）；§5.4 M8 引用 `§3.6.2` 修正为 `§3.4.2`；§5 契约引用同步对齐 API.md V1.22（`tool_result.source` 改为溯源标识字符串，非 short\|long 枚举）。M4/M5/M7 模块文档同步升 V0.4.1。
 
+> **V1.4 修订定位**（2026-08-24 评审收敛）：全文活跃契约引用统一为 API.md V1.22（§1 角色边界、§1 权威依据、§5 前端联调任务）；§6 阶段 3 闸门（M3 行）阻塞条件补充阻断验收项——`should_abort` 未迁出 GraphState、Worker 事件实时转发（M9-D8）未落地，均不得进入阶段 3 联调；同步 M1–M10 模块文档契约收敛升版（M1/M2/M3/M6/M8/M9/M10 → V0.4.1，M4/M5/M7 → V0.4.2，主文档 → V1.4.5）。
+
 ---
 
 ## 1. 团队与约束
 
 - **团队规模**：后端 2 人（下文记为 A、B，均不熟悉 LangGraph / LLM 提示词工程 / FastAPI WebSocket / PostgreSQL 检查点 / 工具沙箱安全）+ **前端联调负责人 1 人（陈东超）**，独立承担 `frontend/` 全部 Harness 联调改动。
-- **角色边界**：A/B 只改 `backend/`（`app/harness/`、`app/agent/`、`app/routers/ws.py`、迁移、测试）；陈东超只改 `frontend/src/`（`views/Agent.vue`、`api/ws.ts`、`api/types.ts`、`components/agent/`、`agent/`、`schemas/`）。跨端契约以 API.md V1.21 为唯一真理，前端不臆造字段，后端不私扩事件。
+- **角色边界**：A/B 只改 `backend/`（`app/harness/`、`app/agent/`、`app/routers/ws.py`、迁移、测试）；陈东超只改 `frontend/src/`（`views/Agent.vue`、`api/ws.ts`、`api/types.ts`、`components/agent/`、`agent/`、`schemas/`）。跨端契约以 API.md V1.22 为唯一真理，前端不臆造字段，后端不私扩事件。
 - **施工基线**：阶段 0 已落地（`app/llm/` 双图 + `app/agent/graph.py` 单轮 Agent 图 + `app/routers/ws.py` 事件桥接 + `ws_events` 断线重放），从阶段 1 起填充 `app/harness/` 空包。
 - **权威依据**：
   - [`docs/AI测试与评估平台-Harness需求文档.md`](AI测试与评估平台-Harness需求文档.md) §9.3 阶段 1–4 文件生成清单（施工蓝图）；
   - 10 份模块设计文档（M1 提示词工程层 … M10 技能体系），签名级 sketch + TDD 验收 + 裁决闭环；
-  - [`docs/AI测试与评估平台-API.md`](AI测试与评估平台-API.md) V1.21（REST/WS 契约，含本次回写的 `clarify`/`plan`/`clarify_reply`）。
+  - [`docs/AI测试与评估平台-API.md`](AI测试与评估平台-API.md) V1.22（REST/WS 契约，含 `clarify`/`plan`/`clarify_reply` 与 `tool_result` 扩展字段）。
 - **铁律**（继承 Harness 需求文档 §7 与 AGENTS.md）：
   - 每阶段独立 `feat/` 分支 + PR，阶段内禁"双 Agent 循环"并存；
   - 改 Model 必须配 Alembic 迁移，禁止跳迁移手改库；
@@ -117,7 +119,7 @@ flowchart TD
 
 - **A（架构 + 执行 + 安全 + 运行时）**：M7 契约、M3 状态、M4 编排骨架、M5 执行、M8 安全、M9 运行时 —— 负责"骨架与底座"，先行为他人铺路。
 - **B（提示词 + 上下文 + 反馈 + 技能 + 编排扩展）**：M1 提示词、M2 上下文、M6 反馈、M10 技能、M4 扩展节点 —— 负责"模型交互与业务能力"。
-- **陈东超（前端联调负责人）**：`frontend/` 全部 Harness 联调改动 —— 负责"前后端契约对接与 UI 渲染"，依赖 API.md V1.21 契约与 A/B 后端阶段交付物。
+- **陈东超（前端联调负责人）**：`frontend/` 全部 Harness 联调改动 —— 负责"前后端契约对接与 UI 渲染"，依赖 API.md V1.22 契约与 A/B 后端阶段交付物。
 
 **交接点**（A/B 间 3 处 + 前端 3 处，每日站会同步）：
 
@@ -194,7 +196,7 @@ flowchart TD
 
 ## 5. 前端联调任务（按阶段）
 
-> 本节由 **陈东超** 独立负责，与 §4 的 A/B 后端分工并行推进。所有前端改动以 API.md V1.21 契约为唯一真理，前端不臆造字段；发现契约缺失先回写 API.md 再实现。每阶段前端任务在对应后端阶段交付后启动联调，不阻塞后端开发。
+> 本节由 **陈东超** 独立负责，与 §4 的 A/B 后端分工并行推进。所有前端改动以 API.md V1.22 契约为唯一真理，前端不臆造字段；发现契约缺失先回写 API.md 再实现。每阶段前端任务在对应后端阶段交付后启动联调，不阻塞后端开发。
 
 ### 5.1 阶段 1 前端（StateGraph Chat/Direct 路由）
 
@@ -210,18 +212,18 @@ flowchart TD
 | :--- | :--- | :--- | :--- |
 | `thought.stage='react'` + `skill_id` 渲染联调 | `frontend/src/components/agent/ThoughtCard.vue`、`frontend/src/agent/skillLabels.ts` | API.md §4.3 `thought` + M7 §3.6.1 | 思考卡显示「正在使用技能」/「已完成 ToolCall」；`skill_id` 与 `skillLabels.ts` 4 个 key 匹配 |
 | `tool_call`/`tool_result` 字段对齐验证 | — | API.md §4.3 + M7 §3.6.2 | ToolCard pending→done 三态正常；`latency_ms` 展示 |
-| `tool_result` 截断/脱敏徽标 | `frontend/src/components/agent/ToolCard.vue` | API.md §4.3 `tool_result`（V1.21 新增 `truncated`/`source`/`redacted`） | `truncated=true` 显示「结果已截断」徽标；`redacted=true` 显示「已脱敏」徽标 |
+| `tool_result` 截断/脱敏徽标 | `frontend/src/components/agent/ToolCard.vue` | API.md §4.3 `tool_result`（V1.22 新增 `truncated`/`source`/`redacted`） | `truncated=true` 显示「结果已截断」徽标；`redacted=true` 显示「已脱敏」徽标 |
 | `BUDGET_EXCEEDED` 文案修正 | `frontend/src/api/types.ts` | API.md §1.3 + M4 §3.9.5 `Budget` | fallback 文案改为中性（如「操作未完成，详见提示」），场景文案由后端 `message` 提供（预算为次数预算非美元） |
 
 ### 5.3 阶段 3 前端（Checkpointer + 澄清卡 + ContextMeter + /compact）
 
 | 任务 | 文件 | 对接契约 | 验收 |
 | :--- | :--- | :--- | :--- |
-| **澄清卡 UI（独立 ClarifyCard 组件）** | 新增 `frontend/src/components/agent/ClarifyCard.vue`；改 `frontend/src/views/Agent.vue` `handleWsEvent` 加 `clarify` 分支；`frontend/src/api/types.ts` 加 `ClarifyEvent`/`ClarifyReply` 类型 | API.md §4.3 `clarify` + §4.4 `clarify_reply`（V1.21 新增）+ M4 §3.9.6 + M9 §3.5.1 | 澄清卡渲染 question/options；用户回复上行 `clarify_reply`；断线重连后由 `ws_events` 回放重建卡；不建任务、不写 `pending_confirm` |
+| **澄清卡 UI（独立 ClarifyCard 组件）** | 新增 `frontend/src/components/agent/ClarifyCard.vue`；改 `frontend/src/views/Agent.vue` `handleWsEvent` 加 `clarify` 分支；`frontend/src/api/types.ts` 加 `ClarifyEvent`/`ClarifyReply` 类型 | API.md §4.3 `clarify` + §4.4 `clarify_reply`（V1.22 新增）+ M4 §3.9.6 + M9 §3.5.1 | 澄清卡渲染 question/options；用户回复上行 `clarify_reply`；断线重连后由 `ws_events` 回放重建卡；不建任务、不写 `pending_confirm` |
 | `clarify_reply` 上行实现 | `frontend/src/api/ws.ts` 加 `sendClarifyReply(id, answer)` | API.md §4.4 | `id` 匹配最近待回复澄清卡；不匹配时后端返回 `error(VALIDATION)`，前端 Toast |
 | `/compact` owner 客户端预校验 + 执行后刷新 | `frontend/src/views/Agent.vue` `handleSlashSelect` | API.md §4.4 `/compact` owner 限制 + M2 §3.5 | 非 owner 提交时 Toast「仅会话 owner 可压缩」；执行后刷新 `currentCompactSummary` 与 `context_meter` |
 | ContextMeter `compact_summary` 展示 | `frontend/src/components/agent/ContextMeter.vue` | API.md §3.4 `compact_summary` + M2 §3.5 | 摘要存在时显示压缩徽标/提示 |
-| ContextMeter `compacted` 字段对接 | `frontend/src/components/agent/ContextMeter.vue` `ContextMeterData` | API.md §3.4 `context_meter.compacted`（V1.21 新增）+ M2 §3.7.5 | `compacted=true` 时展示「已压缩」状态徽标 |
+| ContextMeter `compacted` 字段对接 | `frontend/src/components/agent/ContextMeter.vue` `ContextMeterData` | API.md §3.4 `context_meter.compacted`（V1.22 新增）+ M2 §3.7.5 | `compacted=true` 时展示「已压缩」状态徽标 |
 | 检查点断线重连验证（前端无感） | — | M9 §3.2 + API.md §4.1 | `last_event_id` 补发仍生效；澄清卡 `interrupt()` 期间断线重连后能回放看到澄清卡 |
 
 ### 5.4 阶段 4 前端（Plan-Solve + 确认卡 confirm_ack + reflect + 技能）
@@ -229,7 +231,7 @@ flowchart TD
 | 任务 | 文件 | 对接契约 | 验收 |
 | :--- | :--- | :--- | :--- |
 | `harnessStage` 补 `plan_solve` 档 | `frontend/src/views/Agent.vue:878,884` | M4 §3.5 模式路由 + M7 `NodeEventKind` | stage 显示「Plan-Solve 执行中」 |
-| **PlanArtifact 展示（完整可见）** | 新增 `frontend/src/components/agent/PlanCard.vue`；改 `Agent.vue` `handleWsEvent` 加 `plan` 分支；`api/types.ts` 加 `PlanEvent` 类型 | API.md §4.3 `plan`（V1.21 新增）+ M7 §3.6.2 `PlanArtifact` | PlanCard 展示 intent/skill_id/slots/tools_needed/budget/delivery/allows_replan；用户可查看无需 ack |
+| **PlanArtifact 展示（完整可见）** | 新增 `frontend/src/components/agent/PlanCard.vue`；改 `Agent.vue` `handleWsEvent` 加 `plan` 分支；`api/types.ts` 加 `PlanEvent` 类型 | API.md §4.3 `plan`（V1.22 新增）+ M7 §3.6.2 `PlanArtifact` | PlanCard 展示 intent/skill_id/slots/tools_needed/budget/delivery/allows_replan；用户可查看无需 ack |
 | `confirm_ack` 阶段 4 联调验证 | — | API.md §4.4 + M4 §3.9.5 `handle_confirm_ack` | `confirm_ack` 事件回执 `task_id` 被前端正确忽略（只读 `ok`） |
 | 非 owner 确认 `UNAUTHORIZED` 文案对齐 | `frontend/src/api/types.ts` | M8 §3.4.2 `assert_confirm_owner` + API.md §1.3 | fallback 中性化，场景文案由后端 `message` 提供 |
 | 并发确认 `CONCURRENCY` 场景化文案 | `frontend/src/api/types.ts` | M8 §3.4.2 + API.md §1.3 | 确认卡场景文案为「确认卡已被他人处理」，不与「平台并发已满」混淆 |
@@ -267,7 +269,7 @@ flowchart TD
 | :--- | :--- | :--- | :--- | :--- |
 | M1 | 阶段 1 末 | Chat / Direct 路由 + 事件桥接 + `test_agent_graph.py` 绿 | `/help`/`/cancel`/`/stress` 斜杠可见；未知斜杠 Toast 显示后端 `message` | 节点持 WS 连接 / 事件不经统一 `_emit` / 前端臆造字段 |
 | M2 | 阶段 2 末 | ReAct 循环 + 工具注册表 + 脱敏 + 预算 / 门禁 | `thought.stage='react'` 思考卡正常；`tool_result` 截断/脱敏徽标；`BUDGET_EXCEEDED` 文案中性 | 长工具被同步执行 / 重复调用未抑制 / 前端展示美元预算 |
-| M3 | 阶段 3 末 | Checkpointer 恢复 + 澄清卡 + compact / meter | 澄清卡 UI 渲染 + `clarify_reply` 上行；`/compact` owner 校验；ContextMeter `compact_summary`/`compacted` 展示 | 检查点表未走 Alembic / 澄清卡建任务 / `compacted` 字段未对接 |
+| M3 | 阶段 3 末 | Checkpointer 恢复 + 澄清卡 + compact / meter + Worker 事件实时转发 | 澄清卡 UI 渲染 + `clarify_reply` 上行；`/compact` owner 校验；ContextMeter `compact_summary`/`compacted` 展示；`progress`/`report`/`error` 实时到达 | 检查点表未走 Alembic / 澄清卡建任务 / `compacted` 字段未对接 / **`should_abort` 未迁出 GraphState** / **Worker 事件实时转发未落地（M9-D8）** |
 | M4 | 阶段 4 末 | Plan-Solve + 确认卡入队 + reflect + 技能 | `plan_solve` stage 档；PlanCard 完整展示 PlanArtifact；`/api/slash-commands` 对接；`/api/agent/prefs` 预填；`defaults.py` 前置完成 | `rag` 被 mock 成功 / 确认卡无 owner 校验 / `defaults.py` 缺失致前后端默认值漂移 |
 
 ---
@@ -302,6 +304,7 @@ flowchart TD
 | `docs/AI测试与评估平台-Harness-提示词工程层.md` | 修订 V0.3 → V0.4 | 对齐 API.md V1.21：新增 §8「前端联调」章节说明 M1 对前端为间接影响（protocols 输出格式决定 thought/plan 事件字段），前端无直接契约，仅联调验证字段对齐。 |
 | `docs/AI测试与评估平台-Harness-记忆层.md` | 修订 V0.3 → V0.4 | 对齐 API.md V1.21：新增 §8「前端联调」章节说明 M3 对前端为间接影响（preference.py 经 /api/agent/prefs 预填确认卡，GraphState 投影经 M4 事件影响 stage），前端无直接契约。 |
 | `docs/AI测试与评估平台-API.md` | 修订 V1.21 → V1.22 | 修复 V1.21 遗留：§4.4 标题「仅此三条」改「仅此四条」、§9 禁止清单「第四种上行事件」改「第五种」并补四类上行事件枚举、§4.3 `tool_result.source` 语义对齐 M7 `Observation.source`（溯源标识字符串，非 short\|long 枚举）、§4.3 共享流规则补 clarify/plan/confirm 持久化广播说明、§4.4 clarify 多副本限制注明、§9 Ask/Plan 补注非 Harness plan 事件。 |
+| `docs/AI测试与评估平台-Harness团队开发与联调规划.md` | 修订 V1.3 → V1.4 | V1.4 评审收敛版：全文活跃契约引用统一为 API.md V1.22（§1 角色边界/权威依据、§5 前端联调任务含 tool_result/clarify/context_meter/plan 契约引用）；§6 M3 闸门阻塞条件补充阶段 3 阻断验收项（`should_abort` 未迁出 GraphState、Worker 事件实时转发 M9-D8 未落地）；同步 M1–M10 模块文档契约收敛升版（M1/M2/M3/M6/M8/M9/M10 → V0.4.1，M4/M5/M7 → V0.4.2，主文档 → V1.4.5）。 |
 | `docs/AI测试与评估平台-Harness团队开发与联调规划.md` | 修订 V1.2 → V1.3 | 配合 API.md V1.22：§5.1 斜杠注册拆分（`/help` 返回帮助文本，`/compact`/`/cancel`/`/stress`/未知斜杠阶段 1 返回 `VALIDATION`，补漏 `/compact`）；§5.4 M8 引用 `§3.6.2` 修正为 `§3.4.2`；§5 契约引用同步对齐 API.md V1.22。 |
 | `docs/AI测试与评估平台-Harness-编排层.md` | 修订 V0.4 → V0.4.1 | §3.9.6 补 `clarify.py` 接口签名（`clarify_node` + `interrupt()` + `id` uuid4 语义）；§8.1 修正引用（`clarify.py`/`plan.py`/`plan_solve.py` 章节号拆分）；上游权威对齐 API.md V1.22。 |
 | `docs/AI测试与评估平台-Harness-执行层.md` | 修订 V0.4 → V0.4.1 | §8.1/§8.2 修正 `source` 字段语义（对齐 M7 `Observation.source` 溯源标识字符串，删除 `source="long"` 矛盾表述）；上游权威对齐 API.md V1.22。 |
