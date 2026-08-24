@@ -1329,6 +1329,15 @@ function currentAgentMessageMeta(): Pick<StreamItem, 'providerLogoKey' | 'modelN
   }
 }
 
+/** 追加本地演示助手消息，并同步当前 Agent 的供应商 Logo 与模型元数据。 */
+function pushAgentMessage(text: string) {
+  events.value.push({
+    type: 'agent',
+    text,
+    ...currentAgentMessageMeta(),
+  })
+}
+
 /** 解析历史消息中的供应商 Logo 标识，优先使用快照字段。 */
 function resolveMessageLogoKey(m: { provider?: string | null; profile_id?: string | null; model_name?: string | null }): ProviderLogoKey {
   if (m.model_name) {
@@ -2049,10 +2058,7 @@ function handleSendClick() {
       agentWs.sendUserMessage('/stop', [], createClientMessageId())
     } else {
       setCurrentGenerating(false)
-      events.value.push({
-        type: 'agent',
-        text: '<p class="muted">已暂停生成。已入队的任务不受影响。</p>',
-      })
+      pushAgentMessage('<p class="muted">已暂停生成。已入队的任务不受影响。</p>')
     }
     scrollToBottom()
     return
@@ -2190,10 +2196,7 @@ function runBenchmarkFlow(withStress = false) {
       status: 'ok',
       open: false,
     })
-    events.value.push({
-      type: 'agent',
-      text: `<p>找到 <b>${availableProfiles.value.length}</b> 个被测协议档与 <b>${availableDatasets.value.length}</b> 个数据集。建议用 <b>smoke-20 v3</b>（20 行，主指标 contain）做对比。请确认评测单${withStress ? '；已按「先评后压」预开压测开关' : ''}：</p>`,
-    })
+    pushAgentMessage(`<p>找到 <b>${availableProfiles.value.length}</b> 个被测协议档与 <b>${availableDatasets.value.length}</b> 个数据集。建议用 <b>smoke-20 v3</b>（20 行，主指标 contain）做对比。请确认评测单${withStress ? '；已按「先评后压」预开压测开关' : ''}：</p>`)
     events.value.push({
       type: 'confirm',
       card: normalizeConfirmCard({
@@ -2235,10 +2238,7 @@ function runRagFlow() {
       status: 'ok',
       open: false,
     })
-    events.value.push({
-      type: 'agent',
-      text: '<p>内置库 <b>default</b>（LightRAG，12 篇文档）配有黄金 QA <b>qa-v1 v2</b>（20 条）。默认用 hybrid 模式、K=5。请确认：</p>',
-    })
+    pushAgentMessage('<p>内置库 <b>default</b>（LightRAG，12 篇文档）配有黄金 QA <b>qa-v1 v2</b>（20 条）。默认用 hybrid 模式、K=5。请确认：</p>')
     events.value.push({
       type: 'confirm',
       card: normalizeConfirmCard({
@@ -2273,10 +2273,7 @@ function runTestCaseFlow(file?: any) {
 
   trackTimeout(() => {
     finishThought(th)
-    events.value.push({
-      type: 'agent',
-      text: '<p>将基于「支付」模块 PRD 生成用例，预计 40 条（中等复杂度上限 45）。生成后进入 <b>awaiting_case_confirm</b>，需你在 72h 内确认入库。请确认：</p>',
-    })
+    pushAgentMessage('<p>将基于「支付」模块 PRD 生成用例，预计 40 条（中等复杂度上限 45）。生成后进入 <b>awaiting_case_confirm</b>，需你在 72h 内确认入库。请确认：</p>')
     events.value.push({
       type: 'confirm',
       card: normalizeConfirmCard({
@@ -2349,10 +2346,7 @@ function handleConfirmAck(item: StreamItem, confirmed: boolean) {
 
   // 显式 mock 模式：本地演示入队与进度。
   if (!confirmed) {
-    events.value.push({
-      type: 'agent',
-      text: '<p>已取消，未创建任务。需要调整目标可以继续说。</p>',
-    })
+    pushAgentMessage('<p>已取消，未创建任务。需要调整目标可以继续说。</p>')
     scrollToBottom()
     return
   }
@@ -2426,10 +2420,7 @@ function handleClarifyReply(item: StreamItem, answer: string) {
 function runStressChild(card: any) {
   const env = card.stress_env || card.stress?.env || 'test'
   const qps = card.stress_qps || card.stress?.qps || 20
-  events.value.push({
-    type: 'agent',
-    text: `<p>质量评测 <b>succeeded</b>，已按「先评后压」自动派生共享压测子任务（env=${env} · ${qps} QPS）。</p>`,
-  })
+  pushAgentMessage(`<p>质量评测 <b>succeeded</b>，已按「先评后压」自动派生共享压测子任务（env=${env} · ${qps} QPS）。</p>`)
   activeTask.value = {
     id: 't-stress-' + Math.random().toString(16).slice(2, 6),
     kind: 'stress',
@@ -2484,15 +2475,9 @@ function runStressChild(card: any) {
 
   if (env === 'prod') {
     // prod 生产压测需双人会签：模拟会签通过后开始发压
-    events.value.push({
-      type: 'agent',
-      text: '<p>⚠ <b>NEED_APPROVAL</b>：prod 环境压测需双人会签，子任务已挂起等待审批。</p>',
-    })
+    pushAgentMessage('<p>⚠ <b>NEED_APPROVAL</b>：prod 环境压测需双人会签，子任务已挂起等待审批。</p>')
     trackTimeout(() => {
-      events.value.push({
-        type: 'agent',
-        text: '<p>prod 会签已通过（双人确认），压测子任务开始发压。</p>',
-      })
+      pushAgentMessage('<p>prod 会签已通过（双人确认），压测子任务开始发压。</p>')
       startStress()
     }, 2600, true)
   } else {
@@ -2551,10 +2536,7 @@ function handleInterpretReport(reportId: string) {
       status: 'ok',
       open: false,
     })
-    events.value.push({
-      type: 'agent',
-      text: '<p><b>解读（基于已有报告，不重跑）：</b>gpt-test 以 contain 0.86 领先 claude-x 0.79，失败率 2% 对 5%。两条失败样本分别为 UPSTREAM 502 与超时，与模型能力无关，建议复跑失败行后再冻结基线。</p>',
-    })
+    pushAgentMessage('<p><b>解读（基于已有报告，不重跑）：</b>gpt-test 以 contain 0.86 领先 claude-x 0.79，失败率 2% 对 5%。两条失败样本分别为 UPSTREAM 502 与超时，与模型能力无关，建议复跑失败行后再冻结基线。</p>')
     setCurrentGenerating(false)
     scrollToBottom()
   }, 1000, true)
@@ -2596,10 +2578,7 @@ function handleFailDemo() {
         code: 'UPSTREAM',
         message: '被测协议档 gpt-test 返回 502，任务未入队',
       })
-      events.value.push({
-        type: 'agent',
-        text: '<p>创建失败：<b>UPSTREAM 502</b>（gpt-test 网关错误），与模型能力无关。建议先到「协议档」页对 gpt-test 做连通性检查，恢复后重新发送目标即可。</p>',
-      })
+      pushAgentMessage('<p>创建失败：<b>UPSTREAM 502</b>（gpt-test 网关错误），与模型能力无关。建议先到「协议档」页对 gpt-test 做连通性检查，恢复后重新发送目标即可。</p>')
       setCurrentGenerating(false)
       scrollToBottom()
     }, 800, true)
