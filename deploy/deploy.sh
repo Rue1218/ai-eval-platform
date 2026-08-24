@@ -10,7 +10,8 @@ set -euo pipefail
 # 4. 镜像构建完成后，执行 docker compose 原子滚动替换，避免数据库与前端闪断
 # ============================================================
 
-APP_DIR=/opt/ai-eval-platform
+# 部署目录可被环境变量覆盖（本机部署于 /root/ai-eval-platform，GitHub Actions 使用 /opt 默认值）
+APP_DIR=${APP_DIR:-/opt/ai-eval-platform}
 GIT_REPO=${GIT_REPO:-git@github.com:Rue1218/ai-eval-platform.git}
 BRANCH=${BRANCH:-main}
 # CI 会传入精确提交；手动部署未传入时仍保持部署 main 分支的原有行为。
