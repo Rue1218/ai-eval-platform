@@ -376,19 +376,47 @@ def _infer_provider(profile: ProtocolProfile | None) -> str | None:
     model = (profile.model or "").lower()
     name = (profile.name or "").lower()
     url = (profile.base_url or "").lower()
+
+    # 1. 优先匹配模型名归属（支持托管在聚合平台的特定模型）
+    if "stepfun" in model or "step-" in model or "stepfun" in name or "阶跃" in name or "stepfun" in url:
+        return "stepfun"
     if "deepseek" in model or "deepseek" in name or "deepseek" in url:
         return "deepseek"
-    if "gemini" in model or "gemini" in name or "google" in url:
-        return "gemini"
-    if "qwen" in model or "tongyi" in name or "aliyun" in url:
+    if "qwen" in model or "tongyi" in name or "aliyun" in url or "dashscope" in url:
         return "qwen"
-    if "claude" in model or "anthropic" in name or "anthropic" in url or profile.protocol == "anthropic_messages":
+    if model.startswith("claude-") or "claude" in model or "anthropic" in name or "anthropic" in url or profile.protocol == "anthropic_messages":
         return "anthropic"
-    if "gpt" in model or "openai" in name or "openai" in url:
+    if model.startswith(("gpt-", "o1-", "o3-", "o4-")) or "openai" in name or "openai" in url:
         return "openai"
-    if "ollama" in url or "ollama" in name:
+    if model.startswith("gemini-") or "gemini" in model or "google" in url or "generativelanguage" in url:
+        return "gemini"
+    if "glm" in model or "zhipu" in name or "智谱" in name or "bigmodel.cn" in url:
+        return "zhipu"
+    if "kimi" in model or "moonshot" in model or "kimi" in name or "月之暗面" in name or "moonshot" in url:
+        return "moonshot"
+    if "mistral" in model or "mistral" in name or "mistral" in url:
+        return "mistral"
+    if "doubao" in model or "火山" in name or "豆包" in name or "volces.com" in url:
+        return "volcengine"
+    if "ernie" in model or "qianfan" in name or "文心" in name or "千帆" in name or "qianfan" in url or "baidubce" in url:
+        return "qianfan"
+    if "hunyuan" in model or "混元" in name or "tencent" in url:
+        return "hunyuan"
+
+    # 2. 匹配托管服务与端点平台
+    if "nvidia" in url or "nvidia" in name or "nvidia" in model:
+        return "nvidia"
+    if "xiaomimimo" in url or "mimo" in name or "mimo" in model:
+        return "mimo"
+    if "siliconflow" in url or "silicon" in name or "硅基" in name:
+        return "siliconflow"
+    if "groq" in url or "groq" in name:
+        return "groq"
+    if "11434" in url or "ollama" in url or "ollama" in name:
         return "ollama"
-    return profile.protocol
+    if "together" in url or "together" in name:
+        return "together"
+    return "custom"
 
 
 async def _translate_event(

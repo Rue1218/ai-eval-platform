@@ -1296,6 +1296,7 @@ import { api } from '../api/http'
 import type { AgentReasoningSettings, Profile, ProfileCheckOut, McpTool } from '../api/types'
 import EmptyState from '../components/common/EmptyState.vue'
 import ProviderLogo, { type ProviderLogoKey } from '../components/ProviderLogo.vue'
+import { getProviderLogoKey } from '../utils/providerLogo'
 import ProfileModal from '../components/modals/ProfileModal.vue'
 import CheckResultModal from '../components/modals/CheckResultModal.vue'
 import McpToolModal from '../components/modals/McpToolModal.vue'
@@ -1644,93 +1645,36 @@ interface VendorGroup {
   profiles: Profile[]
 }
 
+const VENDOR_NAMES: Record<ProviderLogoKey, string> = {
+  gemini: 'Google Gemini',
+  nvidia: 'NVIDIA NIM',
+  mimo: 'Xiaomi Mimo',
+  openai: 'OpenAI',
+  anthropic: 'Anthropic Claude',
+  deepseek: 'DeepSeek',
+  stepfun: 'StepFun (阶跃星辰)',
+  siliconflow: 'SiliconFlow (硅基流动)',
+  qwen: 'Alibaba Qwen (通义千问)',
+  volcengine: 'ByteDance Doubao (火山引擎)',
+  qianfan: 'Baidu Qianfan (百度千帆)',
+  hunyuan: 'Tencent Hunyuan (腾讯混元)',
+  groq: 'Groq',
+  ollama: 'Ollama (本地私有)',
+  zhipu: 'Zhipu GLM (智谱清言)',
+  moonshot: 'Moonshot (月之暗面)',
+  mistral: 'Mistral AI',
+  together: 'Together AI',
+  custom: '自定义端点 / 内部代理',
+}
+
 /** 智能归类供应商分组 */
 const vendorGroups = computed<VendorGroup[]>(() => {
   const groups: Record<string, VendorGroup> = {}
 
   for (const p of profiles.value) {
-    const url = (p.base_url || '').toLowerCase()
-    const name = (p.name || '').toLowerCase()
-    const model = (p.model || '').toLowerCase()
-
-    let key = 'custom'
-    let vName = '自定义端点 / 内部代理'
-    let logoKey: ProviderLogoKey = 'custom'
-
-    if (url.includes('nvidia') || name.includes('nvidia') || model.includes('nvidia')) {
-      key = 'nvidia'
-      vName = 'NVIDIA NIM'
-      logoKey = 'nvidia'
-    } else if (url.includes('xiaomimimo') || name.includes('mimo') || model.includes('mimo')) {
-      key = 'mimo'
-      vName = 'Xiaomi Mimo'
-      logoKey = 'mimo'
-    } else if (
-      url.includes('googleapis.com')
-      || url.includes('generativelanguage')
-      || name.includes('gemini')
-      || model.startsWith('gemini-')
-    ) {
-      key = 'gemini'
-      vName = 'Google Gemini'
-      logoKey = 'gemini'
-    } else if (url.includes('openai.com') || name.includes('openai') || model.startsWith('gpt-')) {
-      key = 'openai'
-      vName = 'OpenAI'
-      logoKey = 'openai'
-    } else if (url.includes('anthropic.com') || name.includes('claude') || model.startsWith('claude-')) {
-      key = 'anthropic'
-      vName = 'Anthropic Claude'
-      logoKey = 'anthropic'
-    } else if (url.includes('deepseek') || name.includes('deepseek') || model.includes('deepseek')) {
-      key = 'deepseek'
-      vName = 'DeepSeek'
-      logoKey = 'deepseek'
-    } else if (url.includes('siliconflow') || name.includes('silicon') || name.includes('硅基')) {
-      key = 'siliconflow'
-      vName = 'SiliconFlow (硅基流动)'
-      logoKey = 'siliconflow'
-    } else if (url.includes('aliyuncs') || url.includes('dashscope') || name.includes('qwen') || model.includes('qwen')) {
-      key = 'qwen'
-      vName = 'Alibaba Qwen (通义千问)'
-      logoKey = 'qwen'
-    } else if (url.includes('volces.com') || name.includes('doubao') || name.includes('火山') || name.includes('豆包')) {
-      key = 'volcengine'
-      vName = 'ByteDance Doubao (火山引擎)'
-      logoKey = 'volcengine'
-    } else if (url.includes('qianfan') || url.includes('baidubce') || name.includes('ernie') || name.includes('文心') || name.includes('千帆')) {
-      key = 'qianfan'
-      vName = 'Baidu Qianfan (百度千帆)'
-      logoKey = 'qianfan'
-    } else if (url.includes('hunyuan') || name.includes('混元')) {
-      key = 'hunyuan'
-      vName = 'Tencent Hunyuan (腾讯混元)'
-      logoKey = 'hunyuan'
-    } else if (url.includes('groq') || name.includes('groq')) {
-      key = 'groq'
-      vName = 'Groq'
-      logoKey = 'groq'
-    } else if (url.includes('11434') || url.includes('ollama') || name.includes('ollama')) {
-      key = 'ollama'
-      vName = 'Ollama (本地私有)'
-      logoKey = 'ollama'
-    } else if (url.includes('bigmodel.cn') || name.includes('glm') || model.includes('glm') || name.includes('智谱')) {
-      key = 'zhipu'
-      vName = 'Zhipu GLM (智谱清言)'
-      logoKey = 'zhipu'
-    } else if (url.includes('moonshot') || name.includes('kimi') || name.includes('moonshot') || name.includes('月之暗面')) {
-      key = 'moonshot'
-      vName = 'Moonshot (月之暗面)'
-      logoKey = 'moonshot'
-    } else if (url.includes('mistral') || name.includes('mistral')) {
-      key = 'mistral'
-      vName = 'Mistral AI'
-      logoKey = 'mistral'
-    } else if (url.includes('together') || name.includes('together')) {
-      key = 'together'
-      vName = 'Together AI'
-      logoKey = 'together'
-    }
+    const logoKey = getProviderLogoKey(p)
+    const key = logoKey
+    const vName = VENDOR_NAMES[logoKey] || '自定义端点 / 内部代理'
 
     if (!groups[key]) {
       groups[key] = {

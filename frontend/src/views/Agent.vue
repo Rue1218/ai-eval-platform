@@ -1302,13 +1302,16 @@ function currentAgentMessageMeta(): Pick<StreamItem, 'providerLogoKey' | 'modelN
 
 /** 解析历史消息中的供应商 Logo 标识，优先使用快照字段。 */
 function resolveMessageLogoKey(m: { provider?: string | null; profile_id?: string | null; model_name?: string | null }): ProviderLogoKey {
-  if (m.provider) return m.provider as ProviderLogoKey
+  if (m.model_name) {
+    const key = getProviderLogoKey({ model: m.model_name })
+    if (key !== 'custom') return key
+  }
   if (m.profile_id) {
     const prof = allProfiles.value.find((p) => p.id === m.profile_id)
     if (prof) return getProviderLogoKey(prof)
   }
-  if (m.model_name) {
-    return getProviderLogoKey({ model: m.model_name })
+  if (m.provider) {
+    return getProviderLogoKey({ name: m.provider, model: m.model_name || '' })
   }
   return agentProfileLogoKey.value || 'custom'
 }
@@ -3247,7 +3250,9 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
         if (typeof p.reply_latency_ms === 'number') target.latency_ms = p.reply_latency_ms
         if (p.model_name) target.modelName = p.model_name
         if (p.profile_name) target.profileName = p.profile_name
-        if (p.provider) target.providerLogoKey = p.provider as ProviderLogoKey
+        if (p.provider || p.model_name) {
+          target.providerLogoKey = getProviderLogoKey({ name: p.provider, model: p.model_name || target.modelName })
+        }
       } else {
         target.streaming = false
       }
@@ -3552,7 +3557,9 @@ function handleWsEvent(ev: WsServerEvent) {
         if (typeof p.reply_latency_ms === 'number') target.latency_ms = p.reply_latency_ms
         if (p.model_name) target.modelName = p.model_name
         if (p.profile_name) target.profileName = p.profile_name
-        if (p.provider) target.providerLogoKey = p.provider as ProviderLogoKey
+        if (p.provider || p.model_name) {
+          target.providerLogoKey = getProviderLogoKey({ name: p.provider, model: p.model_name || target.modelName })
+        }
       } else {
         target.streaming = false
       }
