@@ -540,7 +540,7 @@
               </div>
             </div>
 
-            <!-- 2.7 Agent 文本回复（置顶身份头部，再显示思考卡片，最后是正文与耗时） -->
+            <!-- 2.7 Agent 文本回复（每个 ReAct 回合独立渲染，保持工具前后顺序） -->
             <div
               v-else-if="item.type === 'agent'"
               class="msg-agent"
@@ -562,7 +562,7 @@
                     </div>
                   </div>
 
-                  <!-- 思考卡片：流式思考与折叠（位于模型标识之后，正文之前） -->
+                  <!-- 当前 ReAct 回合的思考卡片：位于本回合正文之前 -->
                   <template v-if="item.thoughts && item.thoughts.length">
                     <ThoughtCard
                       v-for="(th, tIdx) in item.thoughts"
@@ -572,24 +572,6 @@
                       :latency-ms="th.latency_ms"
                       :skill-id="th.skill_id"
                       :stage="th.stage"
-                    />
-                  </template>
-
-                  <!-- 工具调用卡片（若本回合有短工具调用） -->
-                  <template v-if="item.tools && item.tools.length">
-                    <ToolCard
-                      v-for="(tl, tlIdx) in item.tools"
-                      :key="tlIdx"
-                      :tool="tl.tool || ''"
-                      :args="tl.args"
-                      :result="tl.result"
-                      :status="tl.status || 'pending'"
-                      :latency-ms="tl.latency_ms"
-                      :truncated="tl.truncated"
-                      :source="tl.source"
-                      :redacted="tl.redacted"
-                      :default-open="tl.status === 'pending' || tl.open"
-                      :no-anim="tl.noAnim"
                     />
                   </template>
 
@@ -1205,19 +1187,6 @@ export interface AgentThoughtItem {
   streamThink?: boolean
 }
 
-export interface AgentToolItem {
-  tool: string
-  args?: any
-  result?: any
-  status?: 'pending' | 'ok' | 'fail'
-  latency_ms?: number
-  truncated?: boolean
-  source?: string
-  redacted?: boolean
-  open?: boolean
-  noAnim?: boolean
-}
-
 interface StreamItem {
   type: 'user' | 'agent' | 'thought' | 'tool' | 'media' | 'confirm' | 'clarify' | 'report' | 'error' | 'typing'
   text?: string
@@ -1274,9 +1243,8 @@ interface StreamItem {
   modelName?: string
   profileName?: string
   createdAt?: string
-  // 助手消息内部承载的思考链与工具调用卡片（保证头部置顶）
+  // 当前 ReAct 回合的思考链；工具调用以顶层事件项渲染，保持调用顺序
   thoughts?: AgentThoughtItem[]
-  tools?: AgentToolItem[]
   // F8 确认卡内联校验错误（字段名 → 红字文案）
   fieldErrors?: Record<string, string>
 }
@@ -1386,7 +1354,7 @@ function resolveMessageProfileName(m: { profile_name?: string | null; profile_id
   return ''
 }
 
-/** 获取或创建当前本轮用户消息之后的助手消息容器（确保头部信息置顶且思考卡/工具调用挂载在内） */
+/** 获取或创建当前 ReAct 步骤的助手片段；工具卡之后必须新建片段以保持时序。 */
 function getOrCreateTurnAgent(list: StreamItem[], meta?: Partial<StreamItem>): StreamItem {
   let from = -1
   for (let i = list.length - 1; i >= 0; i--) {
@@ -1395,10 +1363,8 @@ function getOrCreateTurnAgent(list: StreamItem[], meta?: Partial<StreamItem>): S
       break
     }
   }
-  for (let i = list.length - 1; i > from; i--) {
-    const item = list[i]
-    if (item.type === 'agent') return item
-  }
+  const lastItem = list[list.length - 1]
+  if (lastItem && lastItem.type === 'agent' && list.length - 1 > from) return lastItem
   const defaultMeta = currentAgentMessageMeta()
   const newAgent = reactive({
     type: 'agent',
@@ -1406,7 +1372,6 @@ function getOrCreateTurnAgent(list: StreamItem[], meta?: Partial<StreamItem>): S
     text: '',
     streaming: true,
     thoughts: [],
-    tools: [],
     providerLogoKey: meta?.providerLogoKey || defaultMeta.providerLogoKey,
     modelName: meta?.modelName || defaultMeta.modelName,
     profileName: meta?.profileName || defaultMeta.profileName,
@@ -2739,89 +2704,65 @@ async function loadSessionHistory(sid: string): Promise<number> {
             modelName: modelName,
             profileName: profileName,
             createdAt: m.created_at,
-            thoughts: [],
-            tools: [],
             noAnim: true,
           },
         })
       }
     }
 
-    // 2. 收集 WS 事件流（思考过程、短工具、确认卡、报告卡等）
-    function findRelatedAgent(eventTime: number): StreamItem | undefined {
-      // 优先匹配在事件发生时刻之后（或 10 秒时间差内）最近的助手消息
-      const after = rawList.find((x) => x.item.type === 'agent' && x.time >= eventTime - 10000)?.item
-      if (after) return after
-      // 兜底归属到历史记录中最接近的一条助手消息
-      return [...rawList].reverse().find((x) => x.item.type === 'agent')?.item
-    }
-
+    // 2. 收集 WS 事件流：ReAct 的 thought → tool_call → tool_result 必须保持顶层顺序
     for (const ev of history.events || []) {
       const p = ev.payload || {}
       const t = ev.ts ? new Date(ev.ts).getTime() : 0
       const eid = Number(ev.event_id) || 0
 
       if (ev.event === 'thought' && p.stream === 'think_final') {
-        // 推理增量不逐 token 落库；服务端在终帧保存快照，聚合挂载到对应助手消息内部
-        const targetAgent = findRelatedAgent(t)
-        if (targetAgent) {
-          if (!targetAgent.thoughts) targetAgent.thoughts = []
-          targetAgent.thoughts.push({
-            text: p.text || '',
-            fullText: p.text || '',
-            done: true,
-            collapsed: true,
-            streamThink: true,
+        // 推理增量不逐 token 落库；服务端在终帧保存快照，作为当前步骤独立思考卡回放
+        if (p.text) {
+          rawList.push({
+            time: t,
+            priority: 2,
+            eventId: eid,
+            item: {
+              type: 'thought',
+              text: p.text || '',
+              fullText: p.text || '',
+              done: true,
+              collapsed: true,
+              streamThink: true,
+              noAnim: true,
+            },
           })
         }
       } else if (ev.event === 'thought' && !p.stream && (p.stage || p.skill_id) && p.text) {
-        // 阶段思考卡：聚合挂载到对应的助手消息内部
-        const targetAgent = findRelatedAgent(t)
-        if (targetAgent) {
-          if (!targetAgent.thoughts) targetAgent.thoughts = []
-          targetAgent.thoughts.push({
+        // 阶段思考卡也按事件位置回放，不能聚合到助手回复末尾
+        rawList.push({
+          time: t,
+          priority: 2,
+          eventId: eid,
+          item: {
+            type: 'thought',
             text: p.text || '',
             done: true,
             collapsed: true,
             latency_ms: p.latency_ms,
             stage: p.stage,
             skill_id: p.skill_id,
-          })
-        }
-      } else if (ev.event === 'tool_call') {
-        const targetAgent = findRelatedAgent(t)
-        if (targetAgent) {
-          if (!targetAgent.tools) targetAgent.tools = []
-          targetAgent.tools.push({
-            tool: p.name,
-            args: p.arguments,
-            status: 'pending',
-            open: true,
             noAnim: true,
-          })
-        } else {
-          rawList.push({
-            time: t,
-            priority: 3,
-            eventId: eid,
-            item: { type: 'tool', tool: p.name, args: p.arguments, status: 'pending', open: true, noAnim: true },
-          })
-        }
+          },
+        })
+      } else if (ev.event === 'tool_call') {
+        rawList.push({
+          time: t,
+          priority: 3,
+          eventId: eid,
+          item: { type: 'tool', tool: p.name, args: p.arguments, status: 'pending', open: true, noAnim: true },
+        })
       } else if (ev.event === 'tool_result') {
-        let foundTool: AgentToolItem | StreamItem | undefined
-        for (const r of rawList) {
-          if (r.item.type === 'agent' && r.item.tools) {
-            const tl = [...r.item.tools].reverse().find((x) => x.tool === p.name && x.status === 'pending')
-            if (tl) {
-              foundTool = tl
-              break
-            }
-          }
-        }
-        if (!foundTool) {
-          const target = [...rawList].reverse().find((x) => x.item.type === 'tool' && x.item.tool === p.name && x.item.status === 'pending')
-          if (target) foundTool = target.item
-        }
+        // ReAct 工具按同名调用的最近未完成项回填，连续调用同一工具也不会串卡
+        const foundTool = [...rawList].reverse().find(
+          (x) => x.item.type === 'tool' && x.item.tool === p.name && x.item.status === 'pending',
+        )?.item
         if (foundTool) {
           foundTool.result = p.ok ? p.data : p.error
           foundTool.status = p.ok ? 'ok' : 'fail'
@@ -2906,10 +2847,10 @@ async function loadSessionHistory(sid: string): Promise<number> {
       }
     }
 
-    // 3. 严格按时间戳递增排序；若时间戳相同则按优先级排列 (user:1 -> thought:2 -> tool:3 -> confirm:4 -> agent:5 -> report:6 -> error:7)
+    // 3. 持久化事件优先按 event_id 排序；消息与事件之间按时间戳，再按展示优先级兜底
     rawList.sort((a, b) => {
-      if (a.time !== b.time) return a.time - b.time
       if (a.eventId && b.eventId) return a.eventId - b.eventId
+      if (a.time !== b.time) return a.time - b.time
       return a.priority - b.priority
     })
 
