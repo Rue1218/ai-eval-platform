@@ -23,7 +23,8 @@ from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
 from ..harness.execution.workspace import get_workspace_root, session_workspace_dir
-from ..models import AuditLog, Session as AgentSession, User
+from ..models import AuditLog, User
+from ..models import Session as AgentSession
 
 router = APIRouter(prefix="/api/admin/workspaces", tags=["admin-workspaces"])
 
