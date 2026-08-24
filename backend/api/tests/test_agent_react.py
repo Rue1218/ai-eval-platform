@@ -127,7 +127,11 @@ def test_react_budget_exhausted_emits_error() -> None:
 
 
 def test_react_repeat_call_suppressed_after_correction() -> None:
-    """OR-4：首次相同调用给纠正机会；纠正后仍重复相同调用才 error 收尾。"""
+    """OR-4：首次相同调用给纠正机会；纠正后仍重复相同调用才 error 收尾。
+
+    回归：硬错误分支曾漏清 repeat_retry，导致 react_route 再次回环 react_agent，
+    脚本耗尽回退 done 才掩盖了死循环；修复后硬错误直接收尾（仅 3 次模型调用）。
+    """
     # 第三次相同调用（纠正回环后仍重复）才触发硬错误
     gateway = _ScriptGateway([_REACT_READ, _REACT_READ, _REACT_READ])
     events = _collect(LangGraphAgent(gateway, build_default_registry()), _serializable())
@@ -137,6 +141,8 @@ def test_react_repeat_call_suppressed_after_correction() -> None:
     assert any("连续调用" in message for message in messages)
     # 首次相同调用被纠正（不执行），仅 1 轮产出 tool_call
     assert kinds.count("tool_call") == 1
+    # 硬错误后不再回环调模型：模型调用次数恰好为脚本长度 3
+    assert len(gateway.calls) == 3
 
 
 def test_react_repeat_first_gives_correction_then_done_cleanly() -> None:

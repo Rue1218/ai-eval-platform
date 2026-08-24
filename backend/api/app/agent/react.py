@@ -38,9 +38,10 @@ REACT_STAGE_INPUT = """\
 可用工具（名称 + 参数要求）："""
 
 
-# read 工具懒读取需要把文件内容完整送进模型上下文，突破默认 2000 字符观察截断；
-# 上限略高于 read 默认 limit(20000)，保证截断标记（约 40 字符）不被二次截掉
-READ_OBSERVATION_MAX_CHARS = 21_000
+# read 工具懒读取需要把文件内容完整送进模型上下文，突破默认 2000 字符观察截断。
+# 上限与 read 默认 limit(8000) + 截断标记对齐，避免超大观察塞爆系统提示词
+# 导致模型重复调用/不跟随协议。
+READ_OBSERVATION_MAX_CHARS = 9_000
 
 
 def _inject_observations(state: GraphState) -> str:
@@ -198,7 +199,9 @@ def build_react_nodes(
             identical_runs = [obs for obs in observations if _same_call(obs)]
             if identical_runs:
                 if state.get("repeat_retry"):
-                    # 已给过一次纠正仍重复相同调用：判定未推进，硬错误收尾
+                    # 已给过一次纠正仍重复相同调用：判定未推进，硬错误收尾；
+                    # 必须清 repeat_retry，否则 react_route 见到 True 会再次回环
+                    # react_agent，模型调用预算被死循环耗尽（BUDGET_EXCEEDED）。
                     return {
                         "pending_events": thought_events
                         + [
@@ -208,6 +211,7 @@ def build_react_nodes(
                             )
                         ],
                         "pending_tool": None,
+                        "repeat_retry": False,
                         "budget": budget.to_dict(),
                     }
                 # 首次重复：注入纠正观察（不执行工具）并置 repeat_retry，

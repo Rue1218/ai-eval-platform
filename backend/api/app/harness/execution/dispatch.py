@@ -89,7 +89,7 @@ def read_file_safe(
     if not os.path.isfile(target):
         raise AppError(ErrorCode.NOT_FOUND, "文件不存在")
     start = max(0, int(offset or 0))
-    size = max(1, int(limit or 20000))
+    size = max(1, int(limit or 8000))
     with open(target, encoding="utf-8", errors="replace") as handle:
         content = handle.read()
     chunk = content[start : start + size]
