@@ -89,7 +89,7 @@ def build_default_registry() -> ToolRegistry:
     registry.register(
         ToolDef(
             name="read",
-            description="读取沙箱目录内的文本文件（相对路径）；单次最多返回 8000 字符，文件未读完会附带截断标记和 offset 提示，请按提示继续分段读取",
+            description="读取沙箱目录内的文本文件（相对路径）；单次最多返回 8000 字符，内容较长会附截断说明并提示可基于已返回内容直接回答（如需完整内容再传 offset 分段）",
             parameters_schema={
                 "type": "object",
                 "properties": {

@@ -34,6 +34,7 @@ REACT_STAGE_INPUT = """\
 {"protocol": "react", "version": "react.v1", "thought": "简述本轮判断", "tool": "工具名或null", "arguments": {}, "done": false}
 - 需要工具：tool 填工具名，arguments 填参数，done=false；
 - 任务完成：tool=null，arguments={}，done=true。
+- 工具已返回内容即可基于内容直接作答；内容未读完也可直接 done=true 回答，不必强行读完。
 - 禁止用完全相同参数重复调用已执行过的工具；如需继续，请换用不同命令，或直接 done=true 收尾。
 可用工具（名称 + 参数要求）："""
 

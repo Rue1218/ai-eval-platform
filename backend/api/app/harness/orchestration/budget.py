@@ -13,7 +13,8 @@ from dataclasses import dataclass
 from app.errors import AppError, ErrorCode
 
 # 阶段 2 默认预算（LLM 往返 / 工具轮次上限）
-DEFAULT_BUDGET = {"model_calls": 4, "tool_turns": 4}
+# 附件懒读取场景：read + 作答至少 2 轮，容错重试留余量，故 4 提至 6
+DEFAULT_BUDGET = {"model_calls": 6, "tool_turns": 6}
 
 
 @dataclass(frozen=True, slots=True)

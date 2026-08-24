@@ -94,7 +94,11 @@ def read_file_safe(
         content = handle.read()
     chunk = content[start : start + size]
     if start + size < len(content):
-        chunk += f"\n…[文件未读完，剩余内容可用 offset={start + len(chunk)} 继续读取]"
+        # 标记语义：明确"可直接作答"，避免弱模型为了"读完"反复重试同一调用
+        chunk += (
+            f"\n…[内容较长，以上为前 {start + len(chunk)} 字符；"
+            f"可直接基于以上内容回答，如需完整内容可传 offset={start + len(chunk)} 继续读取]"
+        )
     return chunk
 
 
