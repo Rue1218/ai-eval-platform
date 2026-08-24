@@ -3,8 +3,8 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 编排层模块设计 |
-| 版本 | V0.4.1 |
-| 审查日期 | 2026-08-23 |
+| 版本 | V0.4.2 |
+| 审查日期 | 2026-08-24 |
 | 文档性质 | 模块设计说明书（需求发散 + 架构设计） |
 | 适用模块 | M4 编排层（`app/harness/orchestration/` + `app/agent/`） |
 | 上游权威 | Harness 需求文档 V1.4.4 §2.3/§2.4/§2.5、§4.4、§7、§9；API.md V1.22 §4.3/§4.4/§5；PRD §5.1.2/§5.1.3 |
@@ -70,7 +70,7 @@
 
 | 来源 | 需求 | 发散 |
 | :--- | :--- | :--- |
-| §2.4 | 接入 Checkpointer 前须先把 `should_abort` 等回调移出 State | O-12：阶段 1 全链路迁移 `should_abort` 至 `RunnableConfig.configurable`（Agent 图 + ModelGateway + adapters） |
+| §2.4 | 接入 Checkpointer 前须先把 `should_abort` 等回调移出 State | O-12：阶段 1 启动全链路迁移 `should_abort` 至 `RunnableConfig.configurable`（Agent 图 + ModelGateway + adapters）；**阶段 3 接入 Checkpointer 前必须完成（阻断验收项，见 §3.4）** |
 
 ### 2.4 验收标准（TDD 先行）
 
@@ -150,7 +150,7 @@ START
 
 **Chat 节点职责**：沿用现有 `_stream_model_node` / `_call_model_node`，但 `should_abort` 改从 `RunnableConfig` 读取（§3.4），产出 `NodeEvent` 写入 `pending_events`。
 
-### 3.4 `should_abort` 全链路迁移（阶段 1）
+### 3.4 `should_abort` 全链路迁移（阶段 1 启动，阶段 3 阻断）
 
 **现状**：`ModelRequest.should_abort: StreamAbort | None`（`llm/contracts.py:49`），由 `ws.py:_run_turn` 闭包 `abort.is_set` 注入；`_AgentState.request: ModelRequest` 把含回调的 `ModelRequest` 塞进 State——违反 §2.4 可序列化红线。
 
@@ -169,6 +169,13 @@ START
 **关键约束**：`RunnableConfig` 不是 GraphState，不进 Checkpointer 检查点，回调放此处安全。`ModelRequest` 移除 `should_abort` 后变为纯数据，可序列化。
 
 **向后兼容**：本次迁移是阶段 1 一次性完成，不留双路径；测试 `test_llm_graph.py` / `test_agent_graph.py` 同步改造（夹具改用 `RunnableConfig` 注入回调）。
+
+**阶段 3 阻断验收项（V0.4.2 评审闭环）**：`should_abort` 迁移是接入 Checkpointer 的**硬前置条件**，不得当作普通后续优化。阶段 3 PR 合入前必须全部满足，否则不得引入 `PostgresSaver`：
+
+1. `ModelRequest` 不含任何回调字段（反射断言，O-A2）；
+2. GraphState 全字段 `json.dumps` 通过（对齐 M3 E-A1/E-A2）；
+3. 取消回调经 `RunnableConfig.configurable["abort"]["should_abort"]` 注入，`/stop` 仍触发 `StreamAborted`（O-A3）；
+4. `test_llm_graph.py` / `test_agent_graph.py` 夹具全部改用 `RunnableConfig` 注入，无遗留 `should_abort` 传参。
 
 ### 3.5 模式路由（OR-1，跨阶段演进）
 
@@ -224,6 +231,8 @@ START
 **与现有 `ws.py:_run_turn` 的关系**：当前 `_run_turn` 在 WS 层直接调 `_AGENT.astream` 并投影流事件。阶段 1 改造后，`_run_turn` 仍负责消费 `astream` 输出，但改为读 `pending_events` 统一 emit，节点内不再持有 `websocket`。瞬态帧（`assistant_delta`）仍由节点 `get_stream_writer` 投影，`_run_turn` 通过 `stream_mode=["custom","updates"]` 接收——沿用现有机制。
 
 **`pending_events` 消费时机（已决）**：每节点完成即消费（流式友好），通过 `astream` 的 `updates` 模式按节点边界读取 `pending_events`；清空由**图外收包循环**完成（消费后置空，不依赖图内下一节点）。`pending_events` 在 GraphState 用 append reducer 累积，收包循环消费后通过图外置空（非图内节点清空）。
+
+**事件生产者归属（V0.4.2 收敛，对齐 M7 §3.6.1 归属矩阵）**：`pending_events` 只承载**图节点**产出的事件意图；`user_message`（用户上行）由 `ws.py` 收包循环直产，`progress`/`report`/`error`（Worker 链路）由 Worker `push_ws` 直产并实时转发（见 M9）——图节点不得与直产方重复 emit 同名事件。`confirm_ack` 回执由收包循环直连（O-10），不进 `pending_events`。
 
 **`/stop` 拦截点**：`/stop` 在 `ws.py` 收包循环识别（`text.startswith("/stop")`），直接 `abort.set()` + 取消 `active_turn`，不进图。与 Direct 节点不冲突（`/stop` 不路由到图）。
 
@@ -544,7 +553,7 @@ def reflect_node(state: GraphState) -> dict:
 
 ## 8. 前端联调
 
-> 本模块前端联调由 **陈东超** 独立负责，契约以 API.md V1.21 §4.3/§4.4 为唯一真理。M4 是前端交互事件的主要产出方：路由节点、子图节点、确认卡/澄清卡/Plan-Solve 节点产出的 `NodeEvent` 经 `ws.py` 翻译为 WS 事件，前端据此渲染。前端不臆造字段，发现契约缺失先回写 API.md 再实现。
+> 本模块前端联调由 **陈东超** 独立负责，契约以 API.md V1.22 §4.3/§4.4 为唯一真理。M4 是前端交互事件的主要产出方：路由节点、子图节点、确认卡/澄清卡/Plan-Solve 节点产出的 `NodeEvent` 经 `ws.py` 翻译为 WS 事件，前端据此渲染。前端不臆造字段，发现契约缺失先回写 API.md 再实现。
 
 ### 8.1 路由与节点对应前端事件
 
@@ -573,6 +582,6 @@ def reflect_node(state: GraphState) -> dict:
 
 | 文件 | 操作 | 作用 |
 | :--- | :--- | :--- |
-| `docs/AI测试与评估平台-Harness-编排层.md` | 新增 V0.1 → 修订 V0.2 → 修订 V0.3 → 修订 V0.4 → 修订 V0.4.1 | V0.1 M4 编排层模块设计：定义图拓扑、模式路由、`should_abort` 全链路迁移、Direct L0 路由、事件桥接、确认卡回执；V0.2 升级到接口签名级：补枚举/GraphState 引用/路由节点/`should_abort` 迁移/编排辅助模块/阶段 2-4 子图签名；V0.3 开放问题闭环：路由 hybrid 策略、`should_abort` 走 `configurable["abort"]["should_abort"]` 命名空间、`pending_events` 每节点消费图外清空、`/help` 阶段 1 硬编码、`handle_confirm_ack` 同事务、子图复用阶段 4 再定；V0.4 对齐 API.md V1.21：新增 §8「前端联调」章节；V0.4.1 配合 API.md V1.22：§3.9.6 补 `clarify.py` 接口签名（`clarify_node` + `interrupt()` + `id` uuid4 语义），§8.1 修正 `clarify.py`/`plan.py`/`plan_solve.py` 章节号引用。 |
+| `docs/AI测试与评估平台-Harness-编排层.md` | 新增 V0.1 → 修订 V0.2 → 修订 V0.3 → 修订 V0.4 → 修订 V0.4.1 → 修订 V0.4.2 | V0.1 M4 编排层模块设计：定义图拓扑、模式路由、`should_abort` 全链路迁移、Direct L0 路由、事件桥接、确认卡回执；V0.2 升级到接口签名级：补枚举/GraphState 引用/路由节点/`should_abort` 迁移/编排辅助模块/阶段 2-4 子图签名；V0.3 开放问题闭环：路由 hybrid 策略、`should_abort` 走 `configurable["abort"]["should_abort"]` 命名空间、`pending_events` 每节点消费图外清空、`/help` 阶段 1 硬编码、`handle_confirm_ack` 同事务、子图复用阶段 4 再定；V0.4 对齐 API.md V1.21：新增 §8「前端联调」章节；V0.4.1 配合 API.md V1.22：§3.9.6 补 `clarify.py` 接口签名（`clarify_node` + `interrupt()` + `id` uuid4 语义），§8.1 修正 `clarify.py`/`plan.py`/`plan_solve.py` 章节号引用；V0.4.2 评审收敛版：O-12 与 §3.4 明确 `should_abort` 迁移为**阶段 3 阻断验收项**（含 4 条验收清单）；§3.7 补充事件生产者归属（pending_events 仅承载图节点事件，user_message/progress/report 由各自直产方产出，对齐 M7 §3.6.1 归属矩阵）。 |
 
 本文档仅设计编排层，不改变任何 API、数据库、前端或 Agent 运行代码。

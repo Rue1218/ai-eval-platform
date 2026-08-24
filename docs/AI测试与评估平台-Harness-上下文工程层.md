@@ -3,11 +3,11 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 上下文工程层模块设计 |
-| 版本 | V0.4 |
-| 审查日期 | 2026-08-23 |
+| 版本 | V0.4.1 |
+| 审查日期 | 2026-08-24 |
 | 文档性质 | 模块设计说明书（需求发散 + 架构设计 + 接口签名） |
 | 适用模块 | M2 上下文工程层（`app/harness/context/`） |
-| 上游权威 | Harness 需求文档 V1.4.4 §4.2、§2.4、§7、§9；API.md V1.21 §3.4（context_meter）；PRD §5.1.3 |
+| 上游权威 | Harness 需求文档 V1.4.4 §4.2、§2.4、§7、§9；API.md V1.22 §3.4（context_meter）；PRD §5.1.3 |
 
 > **阅读关系**：本文是 Harness §9.2「层 2 上下文工程」行的展开。装配顺序对齐 M1 提示词工程层（Persona → Skill Hint → 摘要 → 阶段输入 → 用户消息，CX-4）；`Observation` 脱敏摘要消费 M7 契约 + M8 安全层脱敏函数；`CompactProtocol` 由 M1 移归本层（M1-Q5 裁决）。
 
@@ -128,11 +128,13 @@ app/harness/context/
 
 ### 3.6 meter.py（阶段 3 落地）
 
+**现状**：`GET /api/sessions/{id}/messages` 当前固定返回 `context_meter: null`（`routers/sessions.py`），服务端投影未实现。阶段 3 实现 `meter.py` 前，`context_meter` 保持**未启用**状态：前端按 API 契约读取该字段，`null` 时不渲染容量仪表，禁止自行按 `messages` 条数估算。
+
 **职责**：ContextMeter 投影，只读 `GET /api/sessions/{id}/messages` 的 `context_meter` 字段（CX-7）。
 
-- **数据源**：会话 messages 的 `context_meter`（token 用量、窗口占比、摘要标记）。
+- **数据源**：服务端按实际发往模型的消息窗口与 token 用量计算 `context_meter`（token 用量、窗口占比、摘要标记）。
 - **投影**：返回前端可读的 meter 字段；前端不自行计算窗口（CX-7）。
-- **不计算**：本层只投影，不重算 token / 窗口占比（由数据源提供）。
+- **不计算**：本层只投影，不重算 token / 窗口占比（由服务端数据源提供）。
 
 ### 3.7 接口签名规格（签名级）
 
@@ -324,22 +326,22 @@ def project_meter(context_meter: Mapping[str, object]) -> ContextMeter:
 
 ## 8. 前端联调
 
-> 本模块前端联调由 **陈东超** 独立负责，契约以 API.md V1.21 §3.4 为唯一真理。M2 是前端 ContextMeter 与 `/compact` 的数据源头：`meter.py` 投影的 `context_meter` 经 `GET /api/sessions/{id}/messages` 下发，前端只读不重算（CX-7）；`compact.py` 执行 `/compact` 会话级副作用。前端不臆造字段，发现契约缺失先回写 API.md 再实现。
+> 本模块前端联调由 **陈东超** 独立负责，契约以 API.md V1.22 §3.4 为唯一真理。M2 是前端 ContextMeter 与 `/compact` 的数据源头：`meter.py` 投影的 `context_meter` 经 `GET /api/sessions/{id}/messages` 下发，前端只读不重算（CX-7）；`compact.py` 执行 `/compact` 会话级副作用。前端不臆造字段，发现契约缺失先回写 API.md 再实现。
 
 ### 8.1 对应前端组件与任务
 
 | M2 文件 | 前端用途 | 前端文件 | 对接契约 | 落地阶段 | 验收点 |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| `meter.py` `project_meter` | ContextMeter 双圆环 + 明细 | `components/agent/ContextMeter.vue` | API.md §3.4 `context_meter`（V1.21 加 `compacted`）+ M2 §3.7.5 | 阶段 3 | `compacted=true` 显示「已压缩」徽标；`compact_summary` 存在时显示摘要提示；只读服务端数字，禁止按 messages 条数自减 |
+| `meter.py` `project_meter` | ContextMeter 双圆环 + 明细 | `components/agent/ContextMeter.vue` | API.md §3.4 `context_meter`（V1.22 加 `compacted`）+ M2 §3.7.5 | 阶段 3 | `compacted=true` 显示「已压缩」徽标；`compact_summary` 存在时显示摘要提示；只读服务端数字，禁止按 messages 条数自减 |
 | `compact.py` `summarize` | `/compact` 斜杠执行 | `views/Agent.vue` `handleSlashSelect`；`agent/slashRegistry.ts` | API.md §4.4 `/compact` owner 限制 + M2 §3.5 | 阶段 3 | 非 owner 提交 Toast「仅会话 owner 可压缩」；执行后刷新 `currentCompactSummary` 与 `context_meter` |
-| `observation.py` `to_observation` | ToolCard 截断/脱敏徽标 | `components/agent/ToolCard.vue` | API.md §4.3 `tool_result`（V1.21 加 `truncated`/`source`/`redacted`）+ M2 §3.7.2 | 阶段 2 | `truncated=true` 显示「结果已截断」；`redacted=true` 显示「已脱敏」（M6 标记脱敏，M2 调 M8 递归脱敏） |
+| `observation.py` `to_observation` | ToolCard 截断/脱敏徽标 | `components/agent/ToolCard.vue` | API.md §4.3 `tool_result`（V1.22 加 `truncated`/`source`/`redacted`）+ M2 §3.7.2 | 阶段 2 | `truncated=true` 显示「结果已截断」；`redacted=true` 显示「已脱敏」（M6 标记脱敏，M2 调 M8 递归脱敏） |
 | `assembly.py` `select_tool_defs` | 工具定义装配（间接） | — | — | 阶段 1/2 | 前端无直接对接，仅 ToolCard 中文名映射由 API.md §4.3 短工具中文名表提供 |
 | `window.py` `recent_window` | 消息窗口（间接） | — | — | 阶段 1 | 前端无直接对接，ContextMeter 的 `messages`/`window` 字段反映窗口状态 |
 
 ### 8.2 前端验收要点
 
 - **ContextMeter 数据源唯一性**：只读 `GET /api/sessions/{id}/messages` 的 `context_meter`，禁止 localStorage / admin settings 冒充（AGENTS.md §5.3.3）。
-- **`compacted` 字段对接**：`ContextMeterData` 类型加 `compacted: boolean`，与 API.md V1.21 §3.4 一致。
+- **`compacted` 字段对接**：`ContextMeterData` 类型加 `compacted: boolean`，与 API.md V1.22 §3.4 一致。
 - **`/compact` owner 预校验**：客户端先判 owner，非 owner 直接 Toast，不发上行。
 - **截断/脱敏徽标**：`ToolCard` 渲染 `truncated`/`redacted` 徽标，不静默丢弃 M6 标记的脱敏信息。
 
@@ -347,7 +349,7 @@ def project_meter(context_meter: Mapping[str, object]) -> ContextMeter:
 
 | 文件 | 操作 | 作用 |
 | :--- | :--- | :--- |
-| `docs/AI测试与评估平台-Harness-上下文工程层.md` | 新增 V0.3 → 修订 V0.4 | V0.3 M2 上下文工程层模块设计：定义窗口算法、observation 脱敏摘要、装配顺序、`/compact` 可控摘要（含 M1 移入的 `CompactProtocol`）、ContextMeter 投影；含接口签名级（`recent_window`/`to_observation`/`assemble`/`select_tool_defs`/`parse_compact`/`summarize`/`project_meter`）与 TDD 验收；V0.4 对齐 API.md V1.21：新增 §8「前端联调」章节列出 meter/compact/observation 对应的前端组件、契约与验收点（含 `context_meter.compacted` 字段、`/compact` owner 校验、ToolCard 截断/脱敏徽标）。 |
+| `docs/AI测试与评估平台-Harness-上下文工程层.md` | 新增 V0.3 → 修订 V0.4 → 修订 V0.4.1 | V0.3 M2 上下文工程层模块设计：定义窗口算法、observation 脱敏摘要、装配顺序、`/compact` 可控摘要（含 M1 移入的 `CompactProtocol`）、ContextMeter 投影；含接口签名级（`recent_window`/`to_observation`/`assemble`/`select_tool_defs`/`parse_compact`/`summarize`/`project_meter`）与 TDD 验收；V0.4 对齐 API.md V1.21：新增 §8「前端联调」章节列出 meter/compact/observation 对应的前端组件、契约与验收点（含 `context_meter.compacted` 字段、`/compact` owner 校验、ToolCard 截断/脱敏徽标）；V0.4.1 契约收敛版：统一上游权威与 §8 契约为 API.md V1.22；§3.6 补充 `context_meter` 当前实现状态（服务端返回 `null`，阶段 3 前未启用，前端不估算）。 |
 
 本文档仅设计上下文工程层，不改变任何 API、数据库、前端或 Agent 运行代码。
 

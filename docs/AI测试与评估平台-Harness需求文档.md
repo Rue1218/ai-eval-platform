@@ -3,8 +3,8 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 需求文档 |
-| 版本 | V1.4.4 |
-| 审查日期 | 2026-08-23 |
+| 版本 | V1.4.5 |
+| 审查日期 | 2026-08-24 |
 | 文档性质 | 需求规格说明书（需求先行） |
 | 适用范围 | `/agent` 对话智能体的 Harness 运行时：六层职责、七种模式组合、LangGraph 框架选型、技能体系与验收标准 |
 | 事实来源 | `backend/api/app/llm/`、`app/agent/graph.py`、`app/routers/ws.py`、`app/adapters.py`；《Agent框架LangGraph与WebSocket重设计》（V0.1）、《Agent重设计工作区》（V0.3）、《模型调用层LangGraph重设计》（V0.2）；PRD、API.md |
@@ -20,6 +20,8 @@
 > **V1.4.3 修订定位**：模块设计回写版，不改需求范围——① §7 新增「内部短 MCP 允许 + 基础工具集为通用能力」裁决行（对齐 M5-D4，澄清 `web_search`/`web_fetch` 等基础工具由平台内置适配器实现，非外部 MCP 服务器，不触碰「禁止外部 MCP」红线）；② §9.1/§9.2/§9.3 把 `state.py` 从 `app/harness/orchestration/` 移到 `app/harness/memory/`（对齐 M3-D1，GraphState 归记忆层所有）。本版不新增任何对外 REST/WS 字段，不改变已落地基线。
 
 > **V1.4.4 修订定位**：契约分期修正版，不改需求范围——§9.1/§9.2/§9.3 把 `contracts/artifacts.py` 由「阶段 4 整体落地」修正为**两波分期**：阶段 2 早波（`ToolCall`/`ToolResult`/`Observation`，供 M5/M6/M2 阶段 2 消费）+ 阶段 4 晚波（`PlanArtifact`/`SkillHint`，供 M4/M10 阶段 4 消费）。消除原分期下 M5/M6 阶段 2 引用尚未生成的 artifact 契约导致的 ImportError 阶段倒挂。本版不新增任何对外 REST/WS 字段，不改变已落地基线。
+
+> **V1.4.5 修订定位**：评审收敛版（2026-08-24）——① 全部模块文档（M1–M10）上游权威与前端联调契约统一为 API.md V1.22；② §2.5 收敛**事件生产者归属**（图节点 / `ws.py` 收包循环直产 / Worker 直产三类 producer，归属矩阵唯一源见 M7 §3.6.1）；③ `should_abort` 全链路迁移（O-12）与 Worker 事件实时转发（M9-D8）列为**阶段 3 阻断验收项**（§8）；④ §7 标注 `bash` 命令黑名单**非安全沙箱**，阶段 2 不开放通用 bash；⑤ `pending_events` 检查点恢复语义闭环（M9-D3：恢复时重置为空，事件走 `ws_events`）。本次不新增任何对外 REST/WS 字段，不改变已落地基线。
 
 ---
 
@@ -84,7 +86,8 @@ LangGraph 定位为**六层全覆盖框架**（V1.3 裁决）：提示词装配�
         定义图节点返回纯数据 → WS 层统一 emit 的事件桥接契约（§2.5）
 阶段 2  🚫 以 StateGraph + ToolNode 承载 ReAct（短工具），引入工具注册表
 阶段 3  🚫 接入 Checkpointer（PostgresSaver，thread_id=session_id；检查点表经 Alembic 建表，
-        保留策略 TTL/会话删除联动）；确认卡保持收包循环直连（§2.5）
+        保留策略 TTL/会话删除联动）；确认卡保持收包循环直连（§2.5）；
+        前置阻断项：`should_abort` 迁移 + GraphState 可序列化 + Worker 事件实时转发（§8）
 阶段 4  🚫 Plan-and-Solve 执行子图 + reflect 节点恢复评测业务 Workflow（M1 确认卡入队）
 ```
 
@@ -136,6 +139,8 @@ confirm_ack 收包 → 行锁读 sessions.pending_confirm
 ```
 
 阶段 0/1（无 Checkpointer）期间，图状态在进程内由会话注册表承载；图节点返回值即事件来源，避免节点内注入 WS 连接违反 GraphState 可序列化红线。
+
+> **事件生产者归属（V1.4.5 收敛）**：`pending_events` 只承载**图节点**产出的事件意图；`user_message`（用户上行）与 `confirm_ack`（回执）由 `ws.py` 收包循环直产，`progress`/`report`/`error` 由 Worker `push_ws` 直产并实时转发（阶段 3 阻断项，M9-D8）——三者不得由图节点重复产出。归属矩阵唯一源见 M7 §3.6.1。
 
 ---
 
@@ -295,6 +300,7 @@ P0-LG 阶段引入新依赖时须同步更新 `backend/api/requirements.txt`；P
 | LangGraph 依赖范围 | 仅 `langgraph==1.2.10`；禁止 langchain 全家桶、LangGraph 云服务、外部 MCP |
 | 外部 MCP / 用户自定义系统提示词 | 明确不做，防越权与提示词污染 |
 | 内部短 MCP + 基础工具集 | **允许**：`web_search`/`web_fetch` 等基础工具集为**通用能力**，由平台内置适配器实现（**内部短 MCP**，非外部 MCP 服务器）；`app/harness/execution/mcp/` 保留包边界但**不做外部 MCP 接入**。不触碰「禁止外部 MCP」红线 |
+| 通用 `bash` 工具（V1.4.5 新增） | **阶段 2 不开放**：命令黑名单 + 工作目录限定 + 超时**不构成安全沙箱**（可被解释器、绝对路径、重定向/管道、脚本文件、环境变量绕过；无网络隔离、资源限制、进程树清理与多用户隔离）。落地前必须先评审独立容器/沙箱方案并回写本表；`read`/`write`/`edit` 须基于受控文件 ID/根目录 |
 | RAG 语义记忆 | 未接入前 `kind=rag` 必须失败；pgvector/LightRAG 为演进项 |
 | GraphState 可序列化 | 状态只放 JSON 可序列化值；DB Session / WS 连接不得入 State |
 | 新 REST/WS 字段 | 必须先改 API.md，禁止私自扩充 |
@@ -311,6 +317,7 @@ P0-LG 阶段引入新依赖时须同步更新 `backend/api/requirements.txt`；P
 - **确认卡回归**：确认回执仍走收包循环直连；`confirm_ack` 路径保持绿色。
 - **澄清卡专项**：`interrupt()` 触发澄清卡 → 暂停写检查点 → 用户回复 → `Command(resume)` 恢复，断言不建任务、不占回合预算。
 - 新增能力必须配套：模式路由单测、门禁用例、WS 事件回放用例、预算/超时/脱敏用例。
+- **阶段 3 阻断验收（V1.4.5 评审收敛）**：接入 `PostgresSaver` 前必须完成——① `should_abort` 全链路迁移至 `RunnableConfig.configurable`（O-12，含反射断言）；② GraphState 全字段 `json.dumps` 通过；③ Worker 事件实时转发落地（M9-D8，在线连接实时收 `progress`/`report`/`error` 且断线补发不重复）。未满足不得进入阶段 3 联调。
 - 本地自检：`cd backend/api && ruff check . ../shared && pytest`；`cd backend/worker && PYTHONPATH=.:.. pytest`。
 
 ---
@@ -500,6 +507,6 @@ P0-LG 阶段引入新依赖时须同步更新 `backend/api/requirements.txt`；P
 
 | 文件 | 操作 | 作用 |
 | :--- | :--- | :--- |
-| `docs/AI测试与评估平台-Harness需求文档.md` | 新增（V1.0）→ 修订至 V1.3 → 修订 V1.4 → 修订 V1.4.1 → 修订 V1.4.2 → 修订 V1.4.3 → **修订 V1.4.4** | V1.0–V1.3 确立六层/七模式/LangGraph 选型与评审裁决；V1.4 同步远程 `main` 重构：现状改为「LLM 层双图 + Agent 单轮图 + WS 桥接」，`app/harness/` 空包待按本文逐层填充，依赖锁定 `langgraph==1.2.10`，测试基线更新为 `test_llm_graph.py` / `test_agent_graph.py`；V1.4.1 评审补丁：补 GraphState 可序列化迁移路径、OR-2 补登 `allows_replan`、声明 `langgraph-checkpoint-postgres` 依赖白名单、标注 `handle_confirm_ack` 为规划中函数；V1.4.2 架构落地补丁：新增 §9「架构文件树与待生成代码清单」，把六层职责与演进阶段映射到 `app/harness/`、`app/agent/`、`app/runtime/` 的包/文件骨架，给出阶段 1–4 的文件生成清单与所属层/需求编号；V1.4.3 模块设计回写：§7 新增「内部短 MCP 允许 + 基础工具集为通用能力」裁决行（M5-D4），§9.1/§9.2/§9.3 把 `state.py` 从 `orchestration/` 移到 `memory/`（M3-D1，GraphState 归记忆层所有）；V1.4.4 契约分期修正：§9.1/§9.2/§9.3 把 `contracts/artifacts.py` 改为两波分期（阶段 2 早波 ToolCall/ToolResult/Observation + 阶段 4 晚波 PlanArtifact/SkillHint），消除 M5/M6 阶段 2 引用未生成契约的 ImportError 阶段倒挂。 |
+| `docs/AI测试与评估平台-Harness需求文档.md` | 新增（V1.0）→ 修订至 V1.3 → 修订 V1.4 → 修订 V1.4.1 → 修订 V1.4.2 → 修订 V1.4.3 → 修订 V1.4.4 → **修订 V1.4.5** | V1.0–V1.3 确立六层/七模式/LangGraph 选型与评审裁决；V1.4 同步远程 `main` 重构：现状改为「LLM 层双图 + Agent 单轮图 + WS 桥接」，`app/harness/` 空包待按本文逐层填充，依赖锁定 `langgraph==1.2.10`，测试基线更新为 `test_llm_graph.py` / `test_agent_graph.py`；V1.4.1 评审补丁：补 GraphState 可序列化迁移路径、OR-2 补登 `allows_replan`、声明 `langgraph-checkpoint-postgres` 依赖白名单、标注 `handle_confirm_ack` 为规划中函数；V1.4.2 架构落地补丁：新增 §9「架构文件树与待生成代码清单」，把六层职责与演进阶段映射到 `app/harness/`、`app/agent/`、`app/runtime/` 的包/文件骨架，给出阶段 1–4 的文件生成清单与所属层/需求编号；V1.4.3 模块设计回写：§7 新增「内部短 MCP 允许 + 基础工具集为通用能力」裁决行（M5-D4），§9.1/§9.2/§9.3 把 `state.py` 从 `orchestration/` 移到 `memory/`（M3-D1，GraphState 归记忆层所有）；V1.4.4 契约分期修正：§9.1/§9.2/§9.3 把 `contracts/artifacts.py` 改为两波分期（阶段 2 早波 ToolCall/ToolResult/Observation + 阶段 4 晚波 PlanArtifact/SkillHint），消除 M5/M6 阶段 2 引用未生成契约的 ImportError 阶段倒挂；V1.4.5 评审收敛：§2.5 收敛事件生产者归属（图节点/收包循环/Worker 三类，唯一源 M7 §3.6.1）；§7 新增「通用 bash 阶段 2 不开放」红线；§8 新增阶段 3 阻断验收（`should_abort` 迁移 + GraphState 序列化 + Worker 事件实时转发）。 |
 
 本次仅修订需求文档，不改变任何 API、数据库、前端或 Agent 运行代码。

@@ -3,8 +3,8 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 跨层契约层模块设计 |
-| 版本 | V0.4.1 |
-| 审查日期 | 2026-08-23 |
+| 版本 | V0.4.2 |
+| 审查日期 | 2026-08-24 |
 | 文档性质 | 模块设计说明书（需求发散 + 架构设计） |
 | 适用模块 | M7 跨层契约层（`app/harness/contracts/`） |
 | 上游权威 | Harness 需求文档 V1.4.4 §2.5、§4 各层、§7、§9；API.md V1.22 §4.3/§4.4/§5；PRD §5.1.3 |
@@ -44,7 +44,7 @@
 
 | 来源 | 需求 | 发散为本模块子需求 |
 | :--- | :--- | :--- |
-| §2.5 事件桥接契约 | 图节点只返回纯数据，事件由收包循环统一发出 | C-1：定义 `NodeEvent` TypedDict + `NodeEventKind` 枚举，覆盖 API.md §4.3 全部持久化事件 |
+| §2.5 事件桥接契约 | 图节点只返回纯数据，事件由收包循环统一发出 | C-1：定义 `NodeEvent` TypedDict + `NodeEventKind` 枚举，覆盖 API.md §4.3 持久化事件中的图节点产出子集（归属矩阵见 §3.6.1） |
 | §2.5 | 节点内禁止持有 WS 连接/emit 回调 | C-2：契约类型不得引用 `WebSocket` / `Callable` |
 | §4.4 OR-2 | `PlanArtifact` 冻结字段 | C-3：`PlanArtifact` 字段 = intent/skill_id/slots/tools_needed/delivery/budget/allows_replan/notes |
 | §4.5 EX-1 | 工具元数据唯一来源为注册表 | C-4：`ToolCall` / `ToolResult` 契约与注册表元数据对齐（元数据本身在 M5） |
@@ -54,7 +54,7 @@
 
 ### 2.2 从 API.md §4.3 对齐的事件集合
 
-持久化事件（落 `ws_events`，可回放）：`user_message` / `thought`(think_final) / `tool_call` / `tool_result` / `confirm` / `confirm_ack` / `progress` / `report` / `error` / `assistant_message` / `response.completed`。
+持久化事件（落 `ws_events`，可回放）：`user_message` / `thought`(think_final) / `tool_call` / `tool_result` / `confirm` / `confirm_ack` / `clarify` / `plan` / `progress` / `report` / `error` / `assistant_message` / `response.completed`。
 
 > 注：`confirm_ack` 属持久化事件（API.md §4.3 落库可回放），但由 `ws.py` 收包循环直连 emit（确认卡回执，非图节点产出），**不进 `NodeEventKind` 枚举**——`NodeEvent` 只覆盖图节点返回的事件意图。
 
@@ -66,7 +66,7 @@
 
 | 编号 | 验收点 | 测试形态 |
 | :--- | :--- | :--- |
-| C-A1 | `NodeEvent` 全部 kind 与 API.md §4.3 持久化事件 1:1 | 枚举集合断言 |
+| C-A1 | `NodeEvent` kind 与 API.md §4.3 持久化事件对齐（图节点产出子集），且生产者归属矩阵与 §3.6.1 一致 | 枚举集合断言 + 归属矩阵断言 |
 | C-A2 | 所有契约 `to_dict` → `from_dict` 往返相等 | 属性测试 |
 | C-A3 | 契约类型 `json.dumps` 不抛 `TypeError` | 序列化断言 |
 | C-A4 | `NodeEvent` 不含 `Callable` / `WebSocket` 字段 | 反射断言 |
@@ -91,7 +91,7 @@ app/harness/contracts/
 
 **核心类型（设计意图，非签名）**：
 
-- `NodeEventKind`：字符串字面量枚举，取值 = API.md §4.3 持久化事件集合。
+- `NodeEventKind`：字符串字面量枚举，取值 = API.md §4.3 持久化事件中**图节点可产出**的子集（生产者归属矩阵见 §3.6.1）。
 - `NodeEvent`：TypedDict，字段 `kind: NodeEventKind` + `payload: Mapping[str, object]` + 可选 `task_id: str | None`。
 - 节点返回 `NodeEvent | list[NodeEvent]`，由 M4 编排层 / `ws.py` 统一 `_emit_persistent`。
 
@@ -142,7 +142,13 @@ app/harness/contracts/
 ```python
 from typing import Literal, Mapping, TypedDict
 
-# 节点产出的持久化事件（与 API.md §4.3 对齐；confirm_ack 由收包循环直产非节点产出，progress 不入 messages 故不在此）
+# 图节点产出的持久化事件意图（与 API.md §4.3 持久化事件对齐；confirm_ack 由收包循环直产非节点产出）
+# 生产者归属矩阵（V0.4.2 收敛，消除「progress 不入 messages 故不在此」与枚举含 progress 的矛盾）：
+#   - 图节点产出：thought / tool_call / tool_result / confirm / clarify / plan / error / assistant_message / response.completed
+#   - ws.py 收包循环直产：user_message（用户上行）、confirm_ack（回执）
+#   - Worker 直产：progress / report / error（push_ws 写 ws_events，实时转发见 M9）
+#   - 节点确需表达 user_message/progress/report 意图时允许产出，但禁止与直产方重复 emit
+#   - task.created / task.succeeded / task.failed 为任务事件（写 task_events），不入本枚举
 # V0.4：新增 clarify/plan（对齐 API.md V1.21 §4.3）
 NodeEventKind = Literal[
     "user_message", "thought", "tool_call", "tool_result",
@@ -289,7 +295,7 @@ def validate_plan_artifact(data: dict) -> PlanArtifact:
 
 ## 8. 前端联调
 
-> 本模块前端联调由 **陈东超** 独立负责，契约以 API.md V1.21 §4.3/§4.4 为唯一真理。M7 是前端事件分发的契约源头：`events.py` 的 `NodeEventKind` 与 API.md §4.3 持久化事件 1:1，`artifacts.py` 的 dataclass 字段即前端渲染数据来源。前端不臆造字段，发现契约缺失先回写 API.md 再实现。
+> 本模块前端联调由 **陈东超** 独立负责，契约以 API.md V1.22 §4.3/§4.4 为唯一真理。M7 是前端事件分发的契约源头：`events.py` 的 `NodeEventKind` 与 API.md §4.3 持久化事件对齐（图节点产出子集，归属矩阵见 §3.6.1），`artifacts.py` 的 dataclass 字段即前端渲染数据来源。前端不臆造字段，发现契约缺失先回写 API.md 再实现。
 
 ### 8.1 events.py 对应前端事件分发
 
@@ -298,10 +304,10 @@ def validate_plan_artifact(data: dict) -> PlanArtifact:
 | `user_message` | UserBubble | `views/Agent.vue` `handleWsEvent` | API.md §4.3 | 阶段 1 |
 | `thought` | ThoughtCard | `components/agent/ThoughtCard.vue` | API.md §4.3（`stage`/`skill_id`/`stream`） | 阶段 1（plan）/2（react）/4（reflect） |
 | `tool_call` | ToolCard pending | `components/agent/ToolCard.vue` | API.md §4.3 + M7 §3.6.2 `ToolCall` | 阶段 2 |
-| `tool_result` | ToolCard done | `components/agent/ToolCard.vue` | API.md §4.3（V1.21 加 `truncated`/`source`/`redacted`）+ M7 §3.6.2 `Observation` | 阶段 2 |
+| `tool_result` | ToolCard done | `components/agent/ToolCard.vue` | API.md §4.3（V1.22 加 `truncated`/`source`/`redacted`）+ M7 §3.6.2 `Observation` | 阶段 2 |
 | `confirm` | ConfirmCard | `views/Agent.vue` 内联卡 / `components/agent/ConfirmCard.vue` | API.md §4.3 + §5/§6 + M7 §3.6.2 | 阶段 4 |
-| `clarify`（V0.4 新增） | **ClarifyCard**（新增独立组件） | 新增 `components/agent/ClarifyCard.vue`；`Agent.vue` `handleWsEvent` 加 `clarify` 分支 | API.md §4.3 `clarify`（V1.21 新增）+ M7 §3.6.1 | 阶段 3 |
-| `plan`（V0.4 新增） | **PlanCard**（新增独立组件） | 新增 `components/agent/PlanCard.vue`；`Agent.vue` `handleWsEvent` 加 `plan` 分支 | API.md §4.3 `plan`（V1.21 新增）+ M7 §3.6.2 `PlanArtifact` | 阶段 4 |
+| `clarify`（V0.4 新增） | **ClarifyCard**（新增独立组件） | 新增 `components/agent/ClarifyCard.vue`；`Agent.vue` `handleWsEvent` 加 `clarify` 分支 | API.md §4.3 `clarify`（V1.22 新增）+ M7 §3.6.1 | 阶段 3 |
+| `plan`（V0.4 新增） | **PlanCard**（新增独立组件） | 新增 `components/agent/PlanCard.vue`；`Agent.vue` `handleWsEvent` 加 `plan` 分支 | API.md §4.3 `plan`（V1.22 新增）+ M7 §3.6.2 `PlanArtifact` | 阶段 4 |
 | `progress` | ProgressDock | `components/agent/ProgressDock.vue` | API.md §4.3 | 阶段 4 |
 | `report` | ReportCard | `components/agent/ReportCard.vue` | API.md §4.3 | 阶段 4 |
 | `error` | ErrorStrip + Toast | `components/common/ErrorStrip.vue` | API.md §4.3 + §1.3 错误码 | 全阶段 |
@@ -329,7 +335,7 @@ def validate_plan_artifact(data: dict) -> PlanArtifact:
 
 | 文件 | 操作 | 作用 |
 | :--- | :--- | :--- |
-| `docs/AI测试与评估平台-Harness-跨层契约层.md` | 新增 V0.1 → 修订 V0.2 → 修订 V0.3 → 修订 V0.4 → 修订 V0.4.1 | V0.1 M7 跨层契约层模块设计：定义契约边界、需求发散、架构设计与 TDD 验收；V0.2 升级到接口签名级：补 `NodeEventKind` 枚举、`NodeEvent` TypedDict、各 dataclass 字段、构造/校验函数签名；V0.3 开放问题闭环：`NodeEvent.payload` 统一 Mapping、`Observation.source` 复用 messages `source_id` 格式、`PlanArtifact.budget` count-only、`NodeEvent` 加 `event_version` 字段；V0.4 对齐 API.md V1.21：`NodeEventKind` 枚举新增 `clarify`/`plan`，新增 §8「前端联调」章节；V0.4.1 配合 API.md V1.22：§3.6.1 `NodeEventKind` 注释修正（不再称「与 §4.3 持久化事件 1:1」，改为「节点产出的持久化事件子集」）。 |
+| `docs/AI测试与评估平台-Harness-跨层契约层.md` | 新增 V0.1 → 修订 V0.2 → 修订 V0.3 → 修订 V0.4 → 修订 V0.4.1 → 修订 V0.4.2 | V0.1 M7 跨层契约层模块设计：定义契约边界、需求发散、架构设计与 TDD 验收；V0.2 升级到接口签名级：补 `NodeEventKind` 枚举、`NodeEvent` TypedDict、各 dataclass 字段、构造/校验函数签名；V0.3 开放问题闭环：`NodeEvent.payload` 统一 Mapping、`Observation.source` 复用 messages `source_id` 格式、`PlanArtifact.budget` count-only、`NodeEvent` 加 `event_version` 字段；V0.4 对齐 API.md V1.21：`NodeEventKind` 枚举新增 `clarify`/`plan`，新增 §8「前端联调」章节；V0.4.1 配合 API.md V1.22：§3.6.1 `NodeEventKind` 注释修正（不再称「与 §4.3 持久化事件 1:1」，改为「节点产出的持久化事件子集」）；V0.4.2 评审收敛版：§8 契约为 API.md V1.22；§2.2 持久化事件列表补齐 `clarify`/`plan`；§3.6.1 新增**生产者归属矩阵**（图节点/收包循环/Worker 三类 producer，消除注释与枚举自相矛盾），C-A1 验收改为归属矩阵断言。 |
 
 本文档仅设计契约层，不改变任何 API、数据库、前端或 Agent 运行代码。
 

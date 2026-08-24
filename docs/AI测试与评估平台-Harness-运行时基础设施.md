@@ -3,11 +3,11 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 运行时基础设施模块设计 |
-| 版本 | V0.4 |
-| 审查日期 | 2026-08-23 |
+| 版本 | V0.4.1 |
+| 审查日期 | 2026-08-24 |
 | 文档性质 | 模块设计说明书（需求发散 + 架构设计 + 接口签名） |
 | 适用模块 | M9 运行时基础设施（`app/runtime/`） |
-| 上游权威 | Harness 需求文档 V1.4.4 §2.3/§2.4/§2.5/§7、§9；API.md V1.21 §4.1 |
+| 上游权威 | Harness 需求文档 V1.4.4 §2.3/§2.4/§2.5/§7、§9；API.md V1.22 §4.1 |
 
 > **阅读关系**：本文是 Harness §9.2「运行时基础设施」行的展开。阶段 3 落地：`PostgresSaver`（`thread_id=session_id`）只存图内部执行状态；检查点表经 Alembic 建表（红线 4）；保留策略 TTL + 会话软删除联动；对外事件与断线重放仍由 `ws_events` 承担。本模块同时解决 M3-D4 遗留待定项（`pending_events` 检查点恢复语义）。
 
@@ -54,12 +54,14 @@
 | §2.4 | 允许 `langgraph-checkpoint-postgres` | R-5：`requirements.txt` 新增依赖 | 阶段 3 |
 | §2.5 | 检查点只存图内部状态，对外事件走 ws_events | R-6：`checkpoint.py` 不写 ws 事件 | 阶段 3 |
 | M3-D4 | `pending_events` 检查点恢复语义 | R-7：本模块定 `pending_events` 恢复策略 | 阶段 3 |
+| §2.5 | Worker 写入 `ws_events` 的事件须实时推送到在线连接 | R-8（V0.4.1 新增）：WS 连接级**后台转发循环**——按 `last_event_id` 增量查询 `ws_events`，在连接锁内发送并推进游标；多 API 副本时改用 Redis Pub/Sub 进程外总线 | 阶段 3（阻断项） |
 
 ### 2.2 验收标准（TDD 先行）
 
 | 编号 | 验收点 | 测试形态 |
 | :--- | :--- | :--- |
 | R-A1 | `PostgresSaver` 按 `thread_id=session_id` 保存与恢复 GraphState | 检查点往返断言 |
+| R-A8（V0.4.1 新增） | Worker `push_ws` 写入 `progress`/`report`/`error` 后，在线 WS 连接实时收到，断线补发不重复、不丢事件 | 集成测试（Worker 真实写入 + 在线连接断言 + 断线重连断言） |
 | R-A2 | 检查点表由 Alembic 迁移创建，非框架自动建表 | 迁移测试 |
 | R-A3 | TTL 过期检查点被后台任务清理 | TTL 用例 |
 | R-A4 | 会话软删除联动清理该会话检查点 | 联动断言 |
@@ -212,7 +214,8 @@ def downgrade() -> None:
   - GraphState 可序列化，回调不入检查点；
   - 单会话单活动回合，Checkpointer 不得覆盖并发回合；
   - TTL + 会话软删除联动，后台任务清理；
-  - 新增依赖须在 PR 说明。
+  - 新增依赖须在 PR 说明；
+  - **Worker 事件实时转发为阶段 3 阻断项（M9-D8）**：未落地不得进入阶段 3 联调。
 
 ---
 
@@ -227,6 +230,7 @@ def downgrade() -> None:
 | M9-D5 | 保留策略 | TTL（默认 7 天）+ 会话软删除联动（`cleanup_session`） |
 | M9-D6 | 后台清理调度载体 | **阶段 3 实现时定**：候选为 Worker 周期任务或独立定时任务，倾向 Worker 复用（避免新增进程） |
 | M9-D7 | 新增依赖 | `langgraph-checkpoint-postgres`（V1.4.1 白名单），PR 内说明 |
+| M9-D8（V0.4.1 新增） | **Worker 事件实时转发** | **阶段 3 阻断项**：WS 连接生命周期内启动后台转发循环——按 `last_event_id` 增量查询 `ws_events`，在连接级发送锁内发送并推进游标；查询/发送/游标推进同一锁；多 API 副本时改 Redis Pub/Sub 进程外总线。未落地不得进入阶段 3 联调 |
 
 > **M9-D6 是本模块唯一遗留待定项**：后台清理调度载体（Worker 周期任务 vs 独立定时任务）需阶段 3 实现时定。M3-D4 已在本模块解决（D3）。
 
@@ -234,14 +238,14 @@ def downgrade() -> None:
 
 ## 8. 前端联调
 
-> 本模块前端联调由 **陈东超** 独立负责，契约以 API.md V1.21 §4.1 为唯一真理。M9 对前端**基本无感**：`PostgresSaver` 按 `thread_id=session_id` 只存图内部执行状态，对外事件与断线重放仍由 `ws_events` + `last_event_id` 承担（M9 §3.2）。前端现有 `ws.ts` 的 `last_event_id` 补发机制已足够，无需感知 `thread_id`。前端只需联调验证澄清卡 `interrupt()` 期间断线重连后能通过 `ws_events` 回放看到澄清卡。
+> 本模块前端联调由 **陈东超** 独立负责，契约以 API.md V1.22 §4.1 为唯一真理。M9 对前端**基本无感**：`PostgresSaver` 按 `thread_id=session_id` 只存图内部执行状态，对外事件与断线重放仍由 `ws_events` + `last_event_id` 承担（M9 §3.2）。前端现有 `ws.ts` 的 `last_event_id` 补发机制已足够，无需感知 `thread_id`。前端只需联调验证澄清卡 `interrupt()` 期间断线重连后能通过 `ws_events` 回放看到澄清卡。
 
 ### 8.1 对应前端验证任务
 
 | M9 能力 | 前端影响 | 前端文件 | 对接契约 | 落地阶段 | 验收点 |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | `checkpoint.py` `PostgresSaver`（`thread_id=session_id`） | 无感（前端不感知 thread_id） | — | M9 §3.2 + API.md §4.1 | 阶段 3 | `last_event_id` 补发仍生效，无需改动 |
-| `interrupt()`/`Command(resume)`（澄清卡暂停/恢复） | 澄清卡断线重连回放 | `api/ws.ts`；`views/Agent.vue` `handleWsEvent` `clarify` 分支 | API.md §4.3 `clarify`（V1.21）+ M9 §3.5.1 | 阶段 3 | 澄清卡 `interrupt()` 期间断线重连后，`ws_events` 回放重建 ClarifyCard UI 状态 |
+| `interrupt()`/`Command(resume)`（澄清卡暂停/恢复） | 澄清卡断线重连回放 | `api/ws.ts`；`views/Agent.vue` `handleWsEvent` `clarify` 分支 | API.md §4.3 `clarify`（V1.22）+ M9 §3.5.1 | 阶段 3 | 澄清卡 `interrupt()` 期间断线重连后，`ws_events` 回放重建 ClarifyCard UI 状态 |
 | `pending_events` 检查点恢复重置为空 | 无感（事件走 ws_events 不重发） | — | M9 §3.2（M3-D4 裁决） | 阶段 3 | 重连后无重复事件，前端 `event_id` 单调去重仍生效 |
 | `cleanup.py` TTL + 软删除联动 | 会话失效后 4404 | `api/ws.ts` `onclose` 4404 分支 | API.md §4.1 | 阶段 3 | 会话被清理后重连收到 4404，前端停止重连 + 清理 UI |
 
@@ -255,7 +259,7 @@ def downgrade() -> None:
 
 | 文件 | 操作 | 作用 |
 | :--- | :--- | :--- |
-| `docs/AI测试与评估平台-Harness-运行时基础设施.md` | 新增 V0.3 → 修订 V0.4 | V0.3 M9 运行时基础设施模块设计：定义 `PostgresSaver` 接入（`thread_id=session_id`）、Alembic 建表、TTL + 会话软删除联动清理、`interrupt()`/`Command(resume)` 检查点读写；**解决 M3-D4**：`pending_events` 检查点恢复时重置为空（事件走 ws_events，避免重复 emit）；含接口签名级与 TDD 验收；V0.4 对齐 API.md V1.21：新增 §8「前端联调」章节列出 checkpoint/interrupt/cleanup 对应的前端验证任务与验收点（含断线重连不依赖 thread_id、澄清卡回放、4404 清理）。 |
+| `docs/AI测试与评估平台-Harness-运行时基础设施.md` | 新增 V0.3 → 修订 V0.4 → 修订 V0.4.1 | V0.3 M9 运行时基础设施模块设计：定义 `PostgresSaver` 接入（`thread_id=session_id`）、Alembic 建表、TTL + 会话软删除联动清理、`interrupt()`/`Command(resume)` 检查点读写；**解决 M3-D4**：`pending_events` 检查点恢复时重置为空（事件走 ws_events，避免重复 emit）；含接口签名级与 TDD 验收；V0.4 对齐 API.md V1.21：新增 §8「前端联调」章节列出 checkpoint/interrupt/cleanup 对应的前端验证任务与验收点（含断线重连不依赖 thread_id、澄清卡回放、4404 清理）；V0.4.1 评审收敛版：统一上游权威与 §8 契约为 API.md V1.22；**新增 M9-D8 裁决**：Worker 事件实时转发（后台转发循环 + 连接锁 + 游标推进）列为**阶段 3 阻断项**（R-8/R-A8），未落地不得进入阶段 3 联调。 |
 
 本文档仅设计运行时基础设施，不改变任何 API、数据库、前端或 Agent 运行代码。
 

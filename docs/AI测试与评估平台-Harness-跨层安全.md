@@ -3,11 +3,11 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 跨层安全模块设计 |
-| 版本 | V0.4 |
-| 审查日期 | 2026-08-23 |
+| 版本 | V0.4.1 |
+| 审查日期 | 2026-08-24 |
 | 文档性质 | 模块设计说明书（需求发散 + 架构设计 + 接口签名） |
 | 适用模块 | M8 跨层安全（`app/harness/security/`） |
-| 上游权威 | Harness 需求文档 V1.4.4 §4.2/§4.4/§4.5/§5.2.1/§7；API.md V1.21 §4.1/§4.4/§5；PRD §5.1.2 |
+| 上游权威 | Harness 需求文档 V1.4.4 §4.2/§4.4/§4.5/§5.2.1/§7；API.md V1.22 §4.1/§4.4/§5；PRD §5.1.2 |
 
 > **阅读关系**：本文是 Harness §9.2「跨层安全」行的展开。`secrets.py` 递归脱敏供 M2/M5/M6 调用（CX-3）；`auth.py` 确认卡 owner 校验 + 行锁供 M4 `confirm.py` 调用（OR-8）。本层不含用户鉴权（通用 `security.py`）与 WS 短票（`ws.py`）。
 
@@ -218,7 +218,7 @@ def assert_no_concurrent_confirm(pending: PendingConfirm) -> None:
 
 ## 8. 前端联调
 
-> 本模块前端联调由 **陈东超** 独立负责，契约以 API.md V1.21 §4.1/§4.4 为唯一真理。M8 影响前端的两个点：`auth.py` 确认卡 owner 校验（前端 `canConfirmItem` 预校验 + 服务端 `UNAUTHORIZED`/`CONCURRENCY` 拒绝）与 WS 关闭码 4401/4404（前端重连策略）；`secrets.py` 脱敏标记经 M2/M5 流到前端 ToolCard。前端不臆造字段，发现契约缺失先回写 API.md 再实现。
+> 本模块前端联调由 **陈东超** 独立负责，契约以 API.md V1.22 §4.1/§4.4 为唯一真理。M8 影响前端的两个点：`auth.py` 确认卡 owner 校验（前端 `canConfirmItem` 预校验 + 服务端 `UNAUTHORIZED`/`CONCURRENCY` 拒绝）与 WS 关闭码 4401/4404（前端重连策略）；`secrets.py` 脱敏标记经 M2/M5 流到前端 ToolCard。前端不臆造字段，发现契约缺失先回写 API.md 再实现。
 
 ### 8.1 对应前端组件与任务
 
@@ -227,7 +227,7 @@ def assert_no_concurrent_confirm(pending: PendingConfirm) -> None:
 | `auth.py` `assert_confirm_owner` | `error(UNAUTHORIZED)`（非 owner） | ErrorStrip + Toast | `views/Agent.vue` `canConfirmItem`；`api/types.ts` `ERROR_MESSAGES` | API.md §1.3 + M8 §3.4.2 | 阶段 4 | 客户端预校验 + 服务端拒绝 fallback 文案中性化（「无权操作确认卡」由后端 `message` 透传） |
 | `auth.py` `assert_no_concurrent_confirm` | `error(CONCURRENCY)`（并发确认） | ErrorStrip + Toast | `api/types.ts` `ERROR_MESSAGES` | API.md §1.3 + M8 §3.4.2 | 阶段 4 | 场景化文案「确认卡已被他人处理」，不与「平台并发已满」混淆 |
 | `auth.py` `lock_pending_confirm` | 确认卡行锁（后端内部） | 确认卡按钮禁用 | `views/Agent.vue` | API.md §4.4 | 阶段 4 | 会话有非终态任务时旧卡确认按钮禁用 |
-| `secrets.py` `redact` | `Observation.redacted=true` | ToolCard「已脱敏」徽标 | `components/agent/ToolCard.vue` | API.md §4.3 `tool_result.redacted`（V1.21）+ M8 §3.4.1 | 阶段 2 | `redacted=true` 渲染徽标，不静默丢弃 |
+| `secrets.py` `redact` | `Observation.redacted=true` | ToolCard「已脱敏」徽标 | `components/agent/ToolCard.vue` | API.md §4.3 `tool_result.redacted`（V1.22）+ M8 §3.4.1 | 阶段 2 | `redacted=true` 渲染徽标，不静默丢弃 |
 | WS 关闭码 4401/4404 | 短票过期 / 会话不存在 | 重连策略 + UI 清理 | `api/ws.ts` `onclose`；`views/Agent.vue` `onClosed` | API.md §4.1 | 全阶段 | 4401 显式分支 + Toast「短票过期，重新连接中」+ 重新领票；4404 停止重连 + `currentSessionId=null` + 跳转会话列表 |
 
 ### 8.2 前端验收要点
@@ -240,7 +240,7 @@ def assert_no_concurrent_confirm(pending: PendingConfirm) -> None:
 
 | 文件 | 操作 | 作用 |
 | :--- | :--- | :--- |
-| `docs/AI测试与评估平台-Harness-跨层安全.md` | 新增 V0.3 → 修订 V0.4 | V0.3 M8 跨层安全模块设计：定义递归脱敏（`redact`/`redact_for_log`，5 类键）与确认卡 owner 校验 + 行锁（`assert_confirm_owner`/`lock_pending_confirm`）；含接口签名级与 TDD 验收；明确与通用 `security.py`（用户鉴权）的边界；V0.4 对齐 API.md V1.21：新增 §8「前端联调」章节列出 auth/secrets 对应的前端处理、契约与验收点（含 owner 校验双层、4401/4404 关闭码显式处理、错误码文案中性化）。 |
+| `docs/AI测试与评估平台-Harness-跨层安全.md` | 新增 V0.3 → 修订 V0.4 → 修订 V0.4.1 | V0.3 M8 跨层安全模块设计：定义递归脱敏（`redact`/`redact_for_log`，5 类键）与确认卡 owner 校验 + 行锁（`assert_confirm_owner`/`lock_pending_confirm`）；含接口签名级与 TDD 验收；明确与通用 `security.py`（用户鉴权）的边界；V0.4 对齐 API.md V1.21：新增 §8「前端联调」章节列出 auth/secrets 对应的前端处理、契约与验收点（含 owner 校验双层、4401/4404 关闭码显式处理、错误码文案中性化）；V0.4.1 契约收敛版：统一上游权威与 §8 契约为 API.md V1.22；补充现状标记（本层当前冻结未实现，`app/harness/security/` 为空包边界）。 |
 
 本文档仅设计跨层安全，不改变任何 API、数据库、前端或 Agent 运行代码。
 

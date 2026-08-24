@@ -3,11 +3,11 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 技能体系模块设计 |
-| 版本 | V0.4 |
-| 审查日期 | 2026-08-23 |
+| 版本 | V0.4.1 |
+| 审查日期 | 2026-08-24 |
 | 文档性质 | 模块设计说明书（需求发散 + 架构设计 + 接口签名） |
 | 适用模块 | M10 技能体系（MoE + Progressive Disclosure，§5） |
-| 上游权威 | Harness 需求文档 V1.4.4 §5、§2.2、§4.4、§7、§9；API.md V1.21 §4.3；PRD §5.1.2 |
+| 上游权威 | Harness 需求文档 V1.4.4 §5、§2.2、§4.4、§7、§9；API.md V1.22 §4.3；PRD §5.1.2 |
 
 > **阅读关系**：本文是 Harness §5「技能体系需求」与 §9.2「技能体系」行的展开。`SkillHint` 契约在 M7 `contracts/artifacts.py`；技能路由节点在 M4 `orchestration/router.py`；本模块定义技能目录与按需装配策略。当前全部冻结未实现，属 M2/M3 演进项。
 
@@ -239,7 +239,7 @@ def list_hints() -> list[SkillHint]:
 
 ## 8. 前端联调
 
-> 本模块前端联调由 **陈东超** 独立负责，契约以 API.md V1.21 §4.3 为唯一真理。M10 的 `SkillHint`（skill_id/name/summary）经 M4 路由节点写入 `thought` 事件 `skill_id` 字段下发，前端 SkillBadge 渲染技能徽标；`/api/slash-commands` 自定义命令对接也属本模块前端联调范围。前端不臆造字段，发现契约缺失先回写 API.md 再实现。
+> 本模块前端联调由 **陈东超** 独立负责，契约以 API.md V1.22 §4.3 为唯一真理。M10 的 `SkillHint`（skill_id/name/summary）经 M4 路由节点写入 `thought` 事件 `skill_id` 字段下发，前端 SkillBadge 渲染技能徽标；`/api/slash-commands` 自定义命令对接也属本模块前端联调范围。前端不臆造字段，发现契约缺失先回写 API.md 再实现。
 
 ### 8.1 对应前端组件与任务
 
@@ -261,7 +261,7 @@ def list_hints() -> list[SkillHint]:
 
 | 文件 | 操作 | 作用 |
 | :--- | :--- | :--- |
-| `docs/AI测试与评估平台-Harness-技能体系.md` | 新增 V0.3 → 修订 V0.4 | V0.3 M10 技能体系模块设计：定义 4 个评测域 SkillHint 目录（benchmark/testcase/rag/stress）、`skill_id ↔ kind` 映射、Progressive Disclosure 按需装配、MoE 路由、未接入 skill 返回 `VALIDATION`；含接口签名级与 TDD 验收；标注无独立包，目录数据位置待定；V0.4 对齐 API.md V1.21：新增 §8「前端联调」章节列出 SkillHint/assert_skill_enabled/list_hints 对应的前端组件、契约与验收点（含 `skill_id` 一致性、summary 展示、未接入 skill 不 mock、`/api/slash-commands` 对接）。 |
+| `docs/AI测试与评估平台-Harness-技能体系.md` | 新增 V0.3 → 修订 V0.4 → 修订 V0.4.1 | V0.3 M10 技能体系模块设计：定义 4 个评测域 SkillHint 目录（benchmark/testcase/rag/stress）、`skill_id ↔ kind` 映射、Progressive Disclosure 按需装配、MoE 路由、未接入 skill 返回 `VALIDATION`；含接口签名级与 TDD 验收；标注无独立包，目录数据位置待定；V0.4 对齐 API.md V1.21：新增 §8「前端联调」章节列出 SkillHint/assert_skill_enabled/list_hints 对应的前端组件、契约与验收点（含 `skill_id` 一致性、summary 展示、未接入 skill 不 mock、`/api/slash-commands` 对接）；V0.4.1 契约收敛版：统一上游权威与 §8 契约为 API.md V1.22。 |
 
 本文档仅设计技能体系，不改变任何 API、数据库、前端或 Agent 运行代码。
 

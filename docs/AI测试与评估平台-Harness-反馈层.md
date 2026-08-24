@@ -3,11 +3,11 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 反馈层模块设计 |
-| 版本 | V0.4 |
-| 审查日期 | 2026-08-23 |
+| 版本 | V0.4.1 |
+| 审查日期 | 2026-08-24 |
 | 文档性质 | 模块设计说明书（需求发散 + 架构设计 + 接口签名） |
 | 适用模块 | M6 反馈层（`app/harness/feedback/`；`reflect_node` 归 M4 `app/agent/reflect.py`，本层仅提供库函数供其调用） |
-| 上游权威 | Harness 需求文档 V1.4.4 §4.6、§2.5、§7、§9；API.md V1.21 §4.3；PRD §5.1.3 |
+| 上游权威 | Harness 需求文档 V1.4.4 §4.6、§2.5、§7、§9；API.md V1.22 §4.3；PRD §5.1.3 |
 
 > **阅读关系**：本文是 Harness §9.2「层 6 反馈」行的展开。`Observation` 归一逻辑归本层（M5 `dispatch` 执行后调本层归一）；规则门禁先行；模型辅助核对只能 `pass→clarify` 降级（FB-3）；Worker 事件不污染消息窗口（FB-5，与 M2 协作）。
 
@@ -237,7 +237,10 @@ def is_exhausted(b: FeedbackBudget) -> bool:
 WORKER_EVENTS: frozenset[str] = frozenset(
     {"progress", "report", "error", "task.created", "task.succeeded", "task.failed"}
 )
-# 注：Worker 错误事件归 "error"（与 M7 持久化事件集合一致）；task.failed 为任务终态失败。
+# 注：Worker 错误事件归 "error"（与 API.md §4.3 持久化事件一致）；task.failed 为任务终态失败。
+# 归属边界（V0.4.1 收敛）：progress/report/error 为 WS 持久化事件（Worker push_ws 写 ws_events，
+# 由 WS 连接后台转发循环实时推送，见 M9）；task.created/task.succeeded/task.failed 为任务事件
+# （写 task_events，非 WS 持久化事件）。Worker 事件一律不是图节点产出，不进 M7 NodeEventKind。
 
 def isolate_worker_event(event: str) -> bool:
     """判定事件是否属 Worker 链路（FB-5）。
@@ -329,15 +332,15 @@ def assert_not_in_messages(event: str) -> None:
 
 ## 8. 前端联调
 
-> 本模块前端联调由 **陈东超** 独立负责，契约以 API.md V1.21 §4.3 为唯一真理。M6 是 `Observation` 归一与规则门禁的产出方：`observation.py` 归一后的 `truncated`/`redacted` 标记经 M2/M5 流到前端 ToolCard；`review.py` 模型核对产出 `clarify` 降级（经 M4 `reflect_node`）。前端不臆造字段，发现契约缺失先回写 API.md 再实现。
+> 本模块前端联调由 **陈东超** 独立负责，契约以 API.md V1.22 §4.3 为唯一真理。M6 是 `Observation` 归一与规则门禁的产出方：`observation.py` 归一后的 `truncated`/`redacted` 标记经 M2/M5 流到前端 ToolCard；`review.py` 模型核对产出 `clarify` 降级（经 M4 `reflect_node`）。前端不臆造字段，发现契约缺失先回写 API.md 再实现。
 
 ### 8.1 对应前端组件与任务
 
 | M6 文件 | 产出 | 前端渲染 | 前端文件 | 对接契约 | 落地阶段 | 验收点 |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| `observation.py` `normalize` | `Observation`（含 `truncated`/`source`/`redacted`） | ToolCard 截断/脱敏徽标 | `components/agent/ToolCard.vue` | API.md §4.3 `tool_result`（V1.21 扩展字段）+ M6 §3.8.1 | 阶段 2 | `redacted=true` 显示「已脱敏」徽标；`truncated=true` 显示「结果已截断」 |
+| `observation.py` `normalize` | `Observation`（含 `truncated`/`source`/`redacted`） | ToolCard 截断/脱敏徽标 | `components/agent/ToolCard.vue` | API.md §4.3 `tool_result`（V1.22 扩展字段）+ M6 §3.8.1 | 阶段 2 | `redacted=true` 显示「已脱敏」徽标；`truncated=true` 显示「结果已截断」 |
 | `rules.py` `check_gates` | `error(VALIDATION)`/`error(CONCURRENCY)`（门禁拦截） | ErrorStrip + Toast | `api/types.ts` `ERROR_MESSAGES` | API.md §1.3 + M6 §3.8.2 | 阶段 2 | fallback 文案中性化，场景文案由后端 `message` 透传 |
-| `review.py`（M4 `reflect_node` 调用） | `clarify` 降级（pass→clarify） | **ClarifyCard**（新增） | 新增 `components/agent/ClarifyCard.vue` | API.md §4.3 `clarify`（V1.21）+ M6 §3.8.3 | 阶段 4 | 模型核对只降级不放行；clarify 卡显示核对问题 |
+| `review.py`（M4 `reflect_node` 调用） | `clarify` 降级（pass→clarify） | **ClarifyCard**（新增） | 新增 `components/agent/ClarifyCard.vue` | API.md §4.3 `clarify`（V1.22）+ M6 §3.8.3 | 阶段 4 | 模型核对只降级不放行；clarify 卡显示核对问题 |
 | `budget.py` `FeedbackBudget` | `error(BUDGET_EXCEEDED)`（反馈预算超限） | ErrorStrip + Toast | `api/types.ts` | API.md §1.3 + M6 §3.8.4 | 阶段 4 | 文案中性化（次数预算非美元） |
 | `isolation.py` `isolate_worker_event` | Worker 事件隔离（后端内部） | — | — | — | 阶段 4 | 前端无直接对接，Worker 事件不污染消息窗口 |
 
@@ -351,7 +354,7 @@ def assert_not_in_messages(event: str) -> None:
 
 | 文件 | 操作 | 作用 |
 | :--- | :--- | :--- |
-| `docs/AI测试与评估平台-Harness-反馈层.md` | 新增 V0.3 → 修订 V0.4 | V0.3 M6 反馈层模块设计：定义工具结果归一（异常不裸抛）、规则门禁先行（8 类）、模型辅助核对（仅 pass→clarify 降级）、失败反馈预算、Worker 事件隔离；含接口签名级（`normalize`/`check_gates`/`review`/`FeedbackBudget`/`isolate_worker_event`/`reflect_node`）与 TDD 验收；明确与 M5/M2/M4 的归一/门禁/预算分层边界；V0.4 对齐 API.md V1.21：新增 §8「前端联调」章节列出 observation/rules/review/budget 对应的前端组件、契约与验收点（含脱敏标记透出、clarify 降级语义、错误码文案中性化）。 |
+| `docs/AI测试与评估平台-Harness-反馈层.md` | 新增 V0.3 → 修订 V0.4 → 修订 V0.4.1 | V0.3 M6 反馈层模块设计：定义工具结果归一（异常不裸抛）、规则门禁先行（8 类）、模型辅助核对（仅 pass→clarify 降级）、失败反馈预算、Worker 事件隔离；含接口签名级（`normalize`/`check_gates`/`review`/`FeedbackBudget`/`isolate_worker_event`/`reflect_node`）与 TDD 验收；明确与 M5/M2/M4 的归一/门禁/预算分层边界；V0.4 对齐 API.md V1.21：新增 §8「前端联调」章节列出 observation/rules/review/budget 对应的前端组件、契约与验收点（含脱敏标记透出、clarify 降级语义、错误码文案中性化）；V0.4.1 契约收敛版：统一上游权威与 §8 契约为 API.md V1.22；§3.8.5 补充 Worker 事件归属边界（progress/report/error 为 WS 持久化事件，task.* 为任务事件，均非图节点产出、不进 NodeEventKind）。 |
 
 本文档仅设计反馈层，不改变任何 API、数据库、前端或 Agent 运行代码。
 
