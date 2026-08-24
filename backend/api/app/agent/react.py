@@ -191,7 +191,9 @@ def build_react_nodes(
                     "budget": budget.to_dict(),
                 }
             # 工具路径：重复调用抑制（OR-4）→ 预算 → 写 pending_tool
-            tool = str(fields.get("tool") or "")
+            # strip 兜底：模型输出工具名偶带尾随空白/换行（如 "read\n"），
+            # 归一化后才能命中注册表与 READONLY_TOOLS 豁免，避免误报未注册。
+            tool = str(fields.get("tool") or "").strip()
             arguments = dict(fields.get("arguments") or {})
             observations = state.get("observations") or []
             # 仅当「工具名 + 参数」与已执行过的调用完全相同才视为重复；

@@ -17,6 +17,12 @@ _REACT_READ = (
     '{"protocol": "react", "version": "react.v1", "thought": "需要读取文件", '
     '"tool": "read", "arguments": {"path": "a.txt"}, "done": false}'
 )
+# 模型输出工具名偶带尾随换行/空白（如 "read\n"）：strip 归一化后才能命中豁免。
+# 注意 JSON 内须为转义序列 \n（Python 源码中写作 \\n），解析后工具名才是真实换行结尾。
+_REACT_READ_NL = (
+    '{"protocol": "react", "version": "react.v1", "thought": "需要读取文件", '
+    '"tool": "read\\n", "arguments": {"path": "a.txt"}, "done": false}'
+)
 
 
 def _serializable(text: str = "帮我读取文件") -> SerializableRequest:
@@ -190,6 +196,32 @@ def test_react_read_repeat_allowed_no_guard() -> None:
     messages = [event["payload"].get("message", "") for event in _pending_events(events)]
     assert not any("连续调用" in message for message in messages)
     # 三次相同 read 全部执行（不豁免会只有 1 次 tool_call）
+    assert kinds.count("tool_call") == 3
+    assert kinds.count("tool_result") == 3
+    assert kinds[-2:] == ["assistant_message", "response.completed"]
+
+
+def test_react_read_toolname_with_newline_exempt_from_guard() -> None:
+    """OR-4 豁免 + strip 兜底：模型输出工具名带尾随换行（"read\n"）时，
+    归一化后命中 READONLY_TOOLS，重复相同读取仍直接执行，不报
+    「工具 read 连续调用未推进，已终止」。
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        with open(f"{tmp}/a.txt", "w", encoding="utf-8") as handle:
+            handle.write("hello")
+        gateway = _ScriptGateway(
+            [_REACT_READ_NL, _REACT_READ_NL, _REACT_READ_NL, _REACT_DONE]
+        )
+        events = _collect(
+            LangGraphAgent(gateway, build_default_registry(), sandbox_dir=tmp),
+            _serializable(),
+        )
+    kinds = [event["kind"] for event in _pending_events(events)]
+    assert kinds.count("error") == 0
+    messages = [event["payload"].get("message", "") for event in _pending_events(events)]
+    assert not any("连续调用" in message for message in messages)
+    assert not any("未注册" in message for message in messages)
+    # 三次相同 read 全部执行（strip 前 "read\n" 不命中豁免会被守卫拦截）
     assert kinds.count("tool_call") == 3
     assert kinds.count("tool_result") == 3
     assert kinds[-2:] == ["assistant_message", "response.completed"]
