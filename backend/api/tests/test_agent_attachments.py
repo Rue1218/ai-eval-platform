@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from app.adapters import _adapt_message_content
-from app.agent.attachments import build_model_content
+from app.agent.attachments import build_model_content, stage_attachments
 
 
 def _stored(tmp_path: Path, filename: str, content: bytes, content_type: str, file_id: str = "file-test"):
@@ -43,6 +43,27 @@ def test_text_attachment_inline_fallback_without_workspace(tmp_path: Path) -> No
     assert isinstance(result, str)
     assert "请总结附件" in result
     assert "比较两个模型" in result
+
+
+def test_stage_attachments_path_matches_manifest(tmp_path: Path, monkeypatch) -> None:
+    """txt/md staging 落在 {workspace}/attachments/{file_id}-{name}，且与清单路径一致。
+
+    回归：曾把带 attachments/ 前缀的路径再次 join 到 attach_dir 上，产生
+    attachments/attachments/{file_id}-{name} 双重前缀，os.link/copyfile 均
+    因父目录缺失抛 FileNotFoundError，整轮 Agent 挂掉。
+    """
+    session_id = "b68eddc9-2b37-4883-b90c-3756035fbc5e"
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    stored = _stored(tmp_path, "brief.md", "正文内容".encode(), "text/markdown", file_id="file-abc")
+
+    stage_attachments(session_id, [stored])
+
+    staged = tmp_path / "ws" / session_id / "attachments" / "file-abc-brief.md"
+    assert staged.is_file()
+    assert staged.read_text(encoding="utf-8") == "正文内容"
+    # 清单相对路径必须与 staging 目标一致（read 工具按沙箱根解析）
+    result = build_model_content("分析", [stored], workspace_dir=str(tmp_path / "ws" / session_id))
+    assert "attachments/file-abc-brief.md" in result
 
 
 def test_image_attachment_is_projected_as_internal_image_part(tmp_path: Path) -> None:

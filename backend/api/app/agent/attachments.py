@@ -121,8 +121,8 @@ def normalize_history_attachments(db: Session, attachments: object) -> list[obje
 
 
 def _workspace_attachment_path(file_id: str, filename: str) -> str:
-    """会话工作区内附件相对路径（file_id 前缀防重名，原始名便于模型识别）。"""
-    return f"attachments/{file_id}-{Path(filename).name}"
+    """会话工作区内附件文件名（file_id 前缀防重名，原始名便于模型识别）。"""
+    return f"{file_id}-{Path(filename).name}"
 
 
 def stage_attachments(session_id: str, files: list[StoredFile]) -> None:
@@ -298,7 +298,7 @@ def build_model_content(
                 sections.append(f"- {label}（图片过大或读取失败，本轮未传给模型）")
             continue
         if suffix in TEXT_LAZY_SUFFIXES and workspace_dir:
-            rel = _workspace_attachment_path(stored.id, stored.filename)
+            rel = f"attachments/{_workspace_attachment_path(stored.id, stored.filename)}"
             sections.append(
                 f"### {label}\n"
                 f"（文本附件已放入会话工作区，相对路径 {rel}。"
