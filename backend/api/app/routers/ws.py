@@ -310,8 +310,8 @@ def _selected_model_config(db: Session) -> tuple[ModelConfig, ProtocolProfile]:
         api_key=api_key or "",
         anthropic_version=profile.anthropic_version,
         temperature=0.2,
-        max_tokens=1024,
-        timeout_s=30.0,
+        max_tokens=8192,
+        timeout_s=60.0,
         reasoning_enabled=reasoning_enabled,
         reasoning_effort=reasoning_effort,
     )

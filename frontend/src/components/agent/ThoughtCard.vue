@@ -121,10 +121,9 @@ onMounted(() => {
   display: inline-flex;
   width: auto;
   max-width: 100%;
-  margin: 2px 0 8px -6px;
-  border-radius: 7px;
-  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
-  background: var(--bg-elevated, rgba(30, 41, 59, 0.32));
+  margin: 2px 0 8px 0;
+  border: none;
+  background: transparent;
   box-shadow: none;
 }
 
@@ -151,17 +150,20 @@ onMounted(() => {
 }
 
 .thought-card.collapsed .thought-head {
-  padding: 3.5px 8px 3.5px 6px;
+  padding: 3px 8px;
+  margin-left: -8px;
   gap: 6px;
+  border-radius: 6px;
+  border: 1px solid transparent;
 }
 
 .thought-head:hover {
   background: rgba(255, 255, 255, 0.03);
 }
 
-.thought-card.collapsed:hover {
-  background: var(--bg-elevated, rgba(30, 41, 59, 0.52));
-  border-color: var(--border-subtle, rgba(255, 255, 255, 0.15));
+.thought-card.collapsed .thought-head:hover {
+  background: var(--bg-elevated, rgba(255, 255, 255, 0.06));
+  border-color: var(--border-subtle, rgba(255, 255, 255, 0.08));
 }
 
 .thought-icon-wrap {
