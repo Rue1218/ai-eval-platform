@@ -1,6 +1,7 @@
 """M4 ReAct 循环单测（OR-2/OR-4/OR-5）；不触碰 WS/DB/真实模型。"""
 
 import asyncio
+import tempfile
 
 from app.agent import LangGraphAgent
 from app.agent.graph import iter_pending_events
@@ -130,14 +131,20 @@ def test_react_budget_exhausted_emits_error() -> None:
 
 
 def test_react_repeat_call_suppressed_after_correction() -> None:
-    """OR-4：首次相同调用给纠正机会；纠正后仍重复相同调用才 error 收尾。
+    """OR-4：有副作用工具首次相同调用给纠正机会；纠正后仍重复相同调用才 error 收尾。
 
+    read/web_fetch 为只读幂等工具，豁免 OR-4（见 test_react_read_repeat_allowed_no_guard）；
+    本用例用 write（有副作用）验证守卫仍生效。
     回归：硬错误分支曾漏清 repeat_retry，导致 react_route 再次回环 react_agent，
     脚本耗尽回退 done 才掩盖了死循环；修复后硬错误直接收尾（仅 3 次模型调用）。
     """
     # 第三次相同调用（纠正回环后仍重复）才触发硬错误
-    gateway = _ScriptGateway([_REACT_READ, _REACT_READ, _REACT_READ])
-    events = _collect(LangGraphAgent(gateway, build_default_registry()), _serializable())
+    with tempfile.TemporaryDirectory() as tmp:
+        gateway = _ScriptGateway([_REACT_WRITE, _REACT_WRITE, _REACT_WRITE])
+        events = _collect(
+            LangGraphAgent(gateway, build_default_registry(), sandbox_dir=tmp),
+            _serializable(),
+        )
     kinds = [event["kind"] for event in _pending_events(events)]
     assert kinds.count("error") == 1
     messages = [event["payload"].get("message", "") for event in _pending_events(events)]
@@ -149,9 +156,13 @@ def test_react_repeat_call_suppressed_after_correction() -> None:
 
 
 def test_react_repeat_first_gives_correction_then_done_cleanly() -> None:
-    """OR-4 回归：相同调用触发纠正后，模型 done 收尾不得再回环触发错误。"""
-    gateway = _ScriptGateway([_REACT_READ, _REACT_READ, _REACT_DONE])
-    events = _collect(LangGraphAgent(gateway, build_default_registry()), _serializable())
+    """OR-4 回归：有副作用工具相同调用触发纠正后，模型 done 收尾不得再回环触发错误。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        gateway = _ScriptGateway([_REACT_WRITE, _REACT_WRITE, _REACT_DONE])
+        events = _collect(
+            LangGraphAgent(gateway, build_default_registry(), sandbox_dir=tmp),
+            _serializable(),
+        )
     kinds = [event["kind"] for event in _pending_events(events)]
     # 无 error、无多余工具执行，干净收尾
     assert kinds.count("error") == 0
@@ -159,6 +170,50 @@ def test_react_repeat_first_gives_correction_then_done_cleanly() -> None:
     assert kinds[-2:] == ["assistant_message", "response.completed"]
     # 纠正环节透出 thought（思考过程可见）
     assert kinds.count("thought") >= 1
+
+
+def test_react_read_repeat_allowed_no_guard() -> None:
+    """OR-4 豁免：read 为只读幂等工具，重复相同读取直接执行，不触发纠正/硬错误。
+
+    用户场景回归：模型重读同一文件不再报"工具 read 连续调用未推进，已终止"。
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        with open(f"{tmp}/a.txt", "w", encoding="utf-8") as handle:
+            handle.write("hello")
+        gateway = _ScriptGateway([_REACT_READ, _REACT_READ, _REACT_READ, _REACT_DONE])
+        events = _collect(
+            LangGraphAgent(gateway, build_default_registry(), sandbox_dir=tmp),
+            _serializable(),
+        )
+    kinds = [event["kind"] for event in _pending_events(events)]
+    assert kinds.count("error") == 0
+    messages = [event["payload"].get("message", "") for event in _pending_events(events)]
+    assert not any("连续调用" in message for message in messages)
+    # 三次相同 read 全部执行（不豁免会只有 1 次 tool_call）
+    assert kinds.count("tool_call") == 3
+    assert kinds.count("tool_result") == 3
+    assert kinds[-2:] == ["assistant_message", "response.completed"]
+
+
+def test_react_retry_after_failed_call_allowed() -> None:
+    """OR-4 回归：先前相同调用「失败」时，模型重试是合法行为，不触发重复守卫。
+
+    edit 目标不存在 → NOT_FOUND(ok=False)；模型重试同一 edit 应正常执行而非被拦。
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        gateway = _ScriptGateway([_REACT_EDIT, _REACT_EDIT, _REACT_DONE])
+        events = _collect(
+            LangGraphAgent(gateway, build_default_registry(), sandbox_dir=tmp),
+            _serializable(),
+        )
+    kinds = [event["kind"] for event in _pending_events(events)]
+    assert kinds.count("error") == 0
+    messages = [event["payload"].get("message", "") for event in _pending_events(events)]
+    assert not any("连续调用" in message for message in messages)
+    # 两次 edit 都执行了（失败后重试不被判为"未推进"）
+    assert kinds.count("tool_call") == 2
+    assert kinds.count("tool_result") == 2
+    assert kinds[-2:] == ["assistant_message", "response.completed"]
 
 
 def test_react_parse_failure_emits_error() -> None:

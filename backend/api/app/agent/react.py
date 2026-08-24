@@ -44,6 +44,11 @@ REACT_STAGE_INPUT = """\
 # 导致模型重复调用/不跟随协议。
 READ_OBSERVATION_MAX_CHARS = 9_000
 
+# 只读幂等工具：重复调用不判定"未推进"（OR-4 防重复守卫豁免）。
+# read/web_fetch 重读/重抓无害且常是模型合法行为（如确认内容、重新获取），
+# 若有副作用工具（write/edit/bash）才会被守卫约束；死循环由模型调用预算兜底。
+READONLY_TOOLS: frozenset[str] = frozenset({"read", "web_fetch"})
+
 
 def _inject_observations(state: GraphState) -> str:
     """把 observations 归一为摘要文本（M2 to_observation，脱敏在注入前）。"""
@@ -197,8 +202,12 @@ def build_react_nodes(
                     and dict(getattr(obs, "arguments", None) or {}) == arguments
                 )
 
-            identical_runs = [obs for obs in observations if _same_call(obs)]
-            if identical_runs:
+            # 只统计先前「成功」的相同调用：失败后的重试是模型合法行为
+            # （工具瞬时失败/沙箱抖动时应有权重试），不应触发 OR-4。
+            identical_runs = [
+                obs for obs in observations if _same_call(obs) and getattr(obs, "ok", False)
+            ]
+            if identical_runs and tool not in READONLY_TOOLS:
                 if state.get("repeat_retry"):
                     # 已给过一次纠正仍重复相同调用：判定未推进，硬错误收尾；
                     # 必须清 repeat_retry，否则 react_route 见到 True 会再次回环

@@ -11,6 +11,7 @@
 """
 
 import asyncio
+import tempfile
 
 from app.adapters import AdapterResult
 from app.agent import LangGraphAgent
@@ -30,6 +31,11 @@ _REACT_LS = (
 _REACT_CAT = (
     '{"protocol": "react", "version": "react.v1", "thought": "再读取文件内容", '
     '"tool": "bash", "arguments": {"command": "cat probe.txt"}, "done": false}'
+)
+# 有副作用工具（write）用于验证 OR-4 重复守卫：无需 bwrap，测试环境确定性成功。
+_REACT_WRITE = (
+    '{"protocol": "react", "version": "react.v1", "thought": "需要写入文件", '
+    '"tool": "write", "arguments": {"path": "b.txt", "content": "x"}, "done": false}'
 )
 
 
@@ -87,9 +93,16 @@ def _pending_events(events: list[tuple[str, dict]]) -> list[dict]:
 
 
 def _run(script: list[str], text: str = "请读取工作区文件列表") -> list[dict]:
-    """驱动一次完整多轮图执行，返回全部事件。"""
+    """驱动一次完整多轮图执行，返回全部事件。
+
+    注入临时沙箱目录：write 等受控目录工具确定性成功（不依赖 bwrap）。
+    """
     gateway = _ScriptGateway(script)
-    events = _collect(LangGraphAgent(gateway, build_default_registry()), _serializable(text))
+    with tempfile.TemporaryDirectory() as tmp:
+        events = _collect(
+            LangGraphAgent(gateway, build_default_registry(), sandbox_dir=tmp),
+            _serializable(text),
+        )
     return gateway, _pending_events(events)
 
 
@@ -121,7 +134,7 @@ def test_consecutive_different_bash_calls_allowed() -> None:
 
 def test_identical_repeat_corrected_then_different_command() -> None:
     """回归：相同调用触发纠正（不执行）→ 模型换新命令执行 → 干净收尾。"""
-    gateway, events = _run([_REACT_LS, _REACT_LS, _REACT_CAT, _REACT_DONE])
+    gateway, events = _run([_REACT_WRITE, _REACT_WRITE, _REACT_CAT, _REACT_DONE])
     kinds = [event["kind"] for event in events]
     assert kinds.count("error") == 0
     # 首次相同调用被纠正不执行；换命令后真正执行一次
@@ -132,7 +145,7 @@ def test_identical_repeat_corrected_then_different_command() -> None:
 
 def test_identical_repeat_corrected_then_done_clean_end() -> None:
     """回归（用户场景）：相同调用纠正后模型直接 done 收尾，不得再回环报错。"""
-    gateway, events = _run([_REACT_LS, _REACT_LS, _REACT_DONE])
+    gateway, events = _run([_REACT_WRITE, _REACT_WRITE, _REACT_DONE])
     kinds = [event["kind"] for event in events]
     assert kinds.count("error") == 0
     assert kinds.count("tool_call") == 1
@@ -141,7 +154,7 @@ def test_identical_repeat_corrected_then_done_clean_end() -> None:
 
 def test_identical_repeat_twice_hard_error() -> None:
     """兜底：纠正后仍重复相同调用才硬错误终止。"""
-    gateway, events = _run([_REACT_LS, _REACT_LS, _REACT_LS])
+    gateway, events = _run([_REACT_WRITE, _REACT_WRITE, _REACT_WRITE])
     kinds = [event["kind"] for event in events]
     assert kinds.count("error") == 1
     messages = [event["payload"].get("message", "") for event in events]
