@@ -151,7 +151,14 @@ def build_react_nodes(
             # 让用户在工具调用过程中看到模型的思考过程。
             thought = _extract_thought(response.text)
             thought_events = (
-                [make_event("thought", {"text": thought, "stream": "think"})] if thought else []
+                [
+                    make_event(
+                        "thought",
+                        {"text": thought, "stream": "think", "stage": "react"},
+                    )
+                ]
+                if thought
+                else []
             )
             if fields["done"]:
                 # 对话路径收尾：assistant_message + response.completed

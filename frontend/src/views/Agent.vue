@@ -1927,9 +1927,11 @@ function finishThought(item: ThoughtLike) {
   if (item.done) return
   item.text = item.fullText ?? item.text ?? ''
   if ('streaming' in item) item.streaming = false
+  // react 阶段的工具调用思考保持展开，让用户看到思考过程；其余深度思考自动折叠。
+  const keepOpen = item.stage === 'react'
   trackTimeout(() => {
     item.done = true
-    trackTimeout(() => { item.collapsed = true }, 800)
+    if (!keepOpen) trackTimeout(() => { item.collapsed = true }, 800)
   }, 200)
 }
 
@@ -3424,7 +3426,7 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
         if (!delta) break
         const target = getActiveThoughtBlock(agent)
         if (target) target.text = (target.text || '') + delta
-        else appendThoughtBlock(agent, { text: delta, done: false, collapsed: false, streamThink: true })
+        else appendThoughtBlock(agent, { text: delta, done: false, collapsed: false, streamThink: true, stage: p.stage })
         markGenerating(sid, true)
         rt.harnessStage = rt.harnessStage || 'plan'
         break
@@ -3735,7 +3737,7 @@ function handleWsEvent(ev: WsServerEvent) {
             target.text = (target.text || '') + delta
           } else {
             console.debug('[Agent] 思考链增量')
-            appendThoughtBlock(agent, { text: delta, done: false, collapsed: false, streamThink: true })
+            appendThoughtBlock(agent, { text: delta, done: false, collapsed: false, streamThink: true, stage: p.stage })
           }
           scrollToBottom()
           setCurrentGenerating(true)
