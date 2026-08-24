@@ -124,9 +124,20 @@ def _is_cancelled(db: Session, task_id: str) -> bool:
 
 
 def _progress(db: Session, task: Task, done: int, total: int, message: str) -> None:
-    """更新任务进度字段并推送 WS progress 事件（契约字段：percent/done/total/message）。"""
+    """更新任务进度字段并推送 WS progress 事件（契约字段：percent/done/total/message）。
+
+    同时写一条 TaskEvent 进度日志，供任务详情/模型对比页的运行日志窗口展示。
+    """
     percent = round(done * 100 / total) if total else 100
     task.progress = {"percent": percent, "done": done, "total": total, "message": message}
+    db.add(
+        TaskEvent(
+            task_id=task.id,
+            event="progress",
+            message=f"{message}（{done}/{total}）",
+            payload={"percent": percent, "done": done, "total": total},
+        )
+    )
     db.commit()
     push_ws(
         task.session_id,
@@ -221,6 +232,15 @@ def _run_judge(
     )
     if not samples:
         return {"judged": 0, "failed": 0}
+
+    db.add(
+        TaskEvent(
+            task_id=task_id,
+            event="log",
+            message=f"开始 LLM 裁判打分（{len(samples)} 条样本）",
+            payload={"profile_id": judge_profile.id, "judged": 0, "total": len(samples)},
+        )
+    )
 
     base_url, model, api_key = profile_connection(judge_profile)
     if not api_key:

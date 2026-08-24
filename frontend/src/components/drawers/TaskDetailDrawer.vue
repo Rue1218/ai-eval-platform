@@ -43,11 +43,11 @@
           <div v-if="events && events.length" class="timeline">
             <div
               v-for="ev in events"
-              :key="ev.id || ev.created_at"
+              :key="ev.id || ev.ts"
               class="tl-item"
-              :class="ev.event_type === 'failed' ? 'err' : ev.event_type === 'succeeded' ? 'ok' : 'info'"
+              :class="ev.level === 'error' ? 'err' : ev.level === 'ok' || ev.event === 'finish' ? 'ok' : 'info'"
             >
-              <div class="tl-time">{{ ev.created_at }}</div>
+              <div class="tl-time">{{ ev.ts }}</div>
               <div style="font-weight: 500; font-size: 13px">{{ ev.message }}</div>
             </div>
           </div>
@@ -152,7 +152,7 @@ async function loadDetail() {
   try {
     const full = await api.tasks.get(props.task.id)
     events.value = full.events || props.task.events || [
-      { id: '1', task_id: props.task.id, event_type: 'queued', message: '任务入队', created_at: formatDate(props.task.created_at) },
+      { id: 0, task_id: props.task.id, event: 'queued', level: 'info', message: '任务入队', payload: {}, ts: props.task.created_at },
     ]
   } catch (err) {
     events.value = props.task.events || []

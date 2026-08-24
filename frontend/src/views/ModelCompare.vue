@@ -116,6 +116,24 @@
         />
         <div v-if="taskFailedText" class="field-error" style="margin-top: 12px">{{ taskFailedText }}</div>
       </div>
+
+      <!-- 运行日志窗口 -->
+      <div class="run-log-panel" style="margin-top: 14px">
+        <div class="row-between" style="margin-bottom: 6px">
+          <span class="panel-title" style="margin: 0">运行日志</span>
+          <span class="small tertiary">{{ logEntries.length }} 条</span>
+        </div>
+        <div ref="logBox" class="run-log-box">
+          <div v-for="entry in logEntries" :key="entry.id" class="log-line" :class="logClass(entry)">
+            <span class="log-time mono">{{ formatLogTime(entry.ts) }}</span>
+            <span class="log-event mono">{{ entry.event }}</span>
+            <span class="log-msg">{{ entry.message || '—' }}</span>
+          </div>
+          <div v-if="!logEntries.length" class="small tertiary" style="text-align: center; padding: 14px">
+            等待任务日志…
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- ═══════════ 结果对比 ═══════════ -->
@@ -255,16 +273,36 @@
           </tbody>
         </table>
       </div>
+
+      <!-- 运行日志窗口（结果保留可回溯） -->
+      <div class="panel glow" style="--glow-c: var(--c-reports)">
+        <div class="panel-title">
+          <div class="row">
+            <span>运行日志</span>
+            <span class="small tertiary">{{ logEntries.length }} 条</span>
+          </div>
+        </div>
+        <div ref="logBox" class="run-log-box">
+          <div v-for="entry in logEntries" :key="entry.id" class="log-line" :class="logClass(entry)">
+            <span class="log-time mono">{{ formatLogTime(entry.ts) }}</span>
+            <span class="log-event mono">{{ entry.event }}</span>
+            <span class="log-msg">{{ entry.message || '—' }}</span>
+          </div>
+          <div v-if="!logEntries.length" class="small tertiary" style="text-align: center; padding: 14px">
+            无运行日志
+          </div>
+        </div>
+      </div>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import { api } from '../api/http'
-import type { Profile, Dataset, Task, Report, BenchmarkScore, CompareSampleRow, TaskStatus } from '../api/types'
+import type { Profile, Dataset, Task, Report, BenchmarkScore, CompareSampleRow, TaskStatus, TaskEvent } from '../api/types'
 
 const message = useMessage()
 const router = useRouter()
@@ -296,6 +334,35 @@ const samples = ref<CompareSampleRow[]>([])
 const samplesTotal = ref(0)
 const sampleFilter = ref<'all' | 'diff' | 'fail'>('all')
 const pollTimer = ref<number | null>(null)
+
+// 运行日志窗口
+const logEntries = ref<TaskEvent[]>([])
+const logBox = ref<HTMLElement | null>(null)
+
+function mergeEvents(events?: TaskEvent[] | null) {
+  if (!events?.length) return
+  const existing = new Set(logEntries.value.map(e => e.id))
+  const fresh = events.filter(e => !existing.has(e.id))
+  if (!fresh.length) return
+  logEntries.value.push(...fresh)
+  if (logEntries.value.length > 300) logEntries.value = logEntries.value.slice(-300)
+  nextTick(() => {
+    if (logBox.value) logBox.value.scrollTop = logBox.value.scrollHeight
+  })
+}
+
+function logClass(ev: TaskEvent): string {
+  if (ev.level === 'error') return 'err'
+  if (ev.event === 'finish') return 'ok'
+  if (ev.event === 'progress') return 'progress'
+  if (ev.event === 'log') return 'log'
+  return 'info'
+}
+
+function formatLogTime(ts?: string): string {
+  if (!ts) return ''
+  return new Date(ts).toLocaleTimeString('zh-CN', { hour12: false })
+}
 
 const targetOptions = computed(() =>
   profiles.value
@@ -437,6 +504,7 @@ async function launch() {
       },
     })
     taskId.value = task.id
+    logEntries.value = []
     startPolling()
   } catch (e: any) {
     message.error(e.message || '创建任务失败')
@@ -451,6 +519,7 @@ function startPolling() {
     if (!taskId.value) return
     try {
       task.value = await api.tasks.get(taskId.value)
+      mergeEvents(task.value.events)
       if (task.value.status === 'succeeded') {
         stopPolling()
         await loadResult()
@@ -503,6 +572,7 @@ function goBack() {
   report.value = null
   samples.value = []
   samplesTotal.value = 0
+  logEntries.value = []
 }
 
 function resetForm() {
@@ -627,5 +697,55 @@ onUnmounted(stopPolling)
 }
 .row-diff {
   background: color-mix(in srgb, var(--accent-warning) 6%, transparent);
+}
+/* 运行日志窗口 */
+.run-log-box {
+  max-height: 260px;
+  overflow-y: auto;
+  background: color-mix(in srgb, var(--bg-main) 60%, var(--bg-elevated));
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.log-line {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 2px 0;
+  border-bottom: 1px dashed color-mix(in srgb, var(--border-subtle) 50%, transparent);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.log-line:last-child {
+  border-bottom: none;
+}
+.log-time {
+  color: var(--text-tertiary);
+  flex: 0 0 auto;
+}
+.log-event {
+  color: var(--text-tertiary);
+  width: 64px;
+  flex: 0 0 auto;
+}
+.log-msg {
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.log-line.progress .log-event {
+  color: var(--c-reports);
+}
+.log-line.log .log-event {
+  color: var(--accent-info);
+}
+.log-line.ok .log-event {
+  color: var(--accent-success);
+}
+.log-line.err .log-event {
+  color: var(--accent-error);
 }
 </style>

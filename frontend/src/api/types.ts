@@ -61,7 +61,8 @@ export interface AgentReasoningSettings {
 }
 
 // 协议档用途
-export type ProfileUsage = 'target' | 'agent' | 'judge'
+// benchmark 为 legacy usage 值（种子协议档使用），后端仍接受
+export type ProfileUsage = 'target' | 'agent' | 'judge' | 'benchmark'
 
 export interface Profile {
   id: string
@@ -250,12 +251,13 @@ export interface TaskProgress {
 }
 
 export interface TaskEvent {
-  id: string
+  id: number
   task_id: string
-  event_type: string
-  message: string
-  data?: any
-  created_at: string
+  event: string
+  level: string
+  message: string | null
+  payload: any
+  ts: string
 }
 
 export interface Task {

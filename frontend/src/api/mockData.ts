@@ -273,9 +273,9 @@ export const MOCK_TASKS: Task[] = [
     report_id: null,
     parent_task_id: null,
     events: [
-      { id: 'e1', task_id: 'a1f3c2', event_type: 'queued', message: '任务已入队排队中', created_at: '12:00:00' },
-      { id: 'e2', task_id: 'a1f3c2', event_type: 'running', message: '任务开始执行', created_at: '12:00:05' },
-      { id: 'e3', task_id: 'a1f3c2', event_type: 'progress', message: '40/100 正在调用被测 gpt-test', created_at: '12:01:20' },
+      { id: 1, task_id: 'a1f3c2', event: 'queued', level: 'info', message: '任务已入队排队中', payload: {}, ts: '2026-08-24T12:00:00Z' },
+      { id: 2, task_id: 'a1f3c2', event: 'start', level: 'info', message: '任务开始执行', payload: {}, ts: '2026-08-24T12:00:05Z' },
+      { id: 3, task_id: 'a1f3c2', event: 'progress', level: 'info', message: '执行中（40/100）', payload: {}, ts: '2026-08-24T12:01:20Z' },
     ],
   },
   {

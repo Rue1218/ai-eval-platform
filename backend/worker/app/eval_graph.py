@@ -10,15 +10,16 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from langgraph.graph import END, START, StateGraph
 from sqlalchemy.orm import Session
 from typing_extensions import TypedDict
 
-from .models import EvalItem, Task
+from .models import EvalItem, Task, TaskEvent
 from .protocol import ProtocolCallError, call_protocol
 from .scoring import score_answer, score_exact, score_rouge_l
 
@@ -190,6 +191,16 @@ class BenchmarkEvalPipeline:
                 pending = [r for r in rows_data if r["row_no"] not in finished_nos]
                 if not pending:
                     continue
+
+                # 运行日志：记录每个被测模型的评测起点（供前端运行日志窗口展示）
+                db.add(
+                    TaskEvent(
+                        task_id=task_id,
+                        event="log",
+                        message=f"开始评测 {p_dict.get('name') or profile_id}（{len(pending)} 条样本）",
+                        payload={"profile_id": profile_id, "pending": len(pending)},
+                    )
+                )
 
                 api_key = p_dict.get("api_key")
                 if not api_key:
