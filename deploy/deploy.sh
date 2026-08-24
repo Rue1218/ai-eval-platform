@@ -177,7 +177,8 @@ else
     for service in "${BUILD_SERVICES[@]}"; do
         if [ "$service" = "web" ]; then
             # 服务器本地构建收紧 Vite 堆，避免与运行中容器争抢内存后持续 swap（CI 构建不受影响）。
-            NODE_BUILD_MEMORY=768 BUILDKIT_PROGRESS=plain docker compose build "$service"
+            # 内存充足的机器可通过 NODE_BUILD_MEMORY 环境变量调高（本机 16G 用 2048）。
+            NODE_BUILD_MEMORY="${NODE_BUILD_MEMORY:-768}" BUILDKIT_PROGRESS=plain docker compose build "$service"
         else
             BUILDKIT_PROGRESS=plain docker compose build "$service"
         fi
