@@ -279,6 +279,13 @@ async def _replay_events(
             return
 
 
+DEFAULT_AGENT_SYSTEM = (
+    "你是 AI 测试与评估平台的智能助手。保持客观、精炼、专业，使用中文进行逻辑思考与交流。"
+    "在思考问题时，请使用中文分步骤分析用户输入与目标，并给出清晰、专业的中文回复。"
+    "你的职责是协助研发与评测团队完成大模型基准评测、知识库评估、测试用例生成与压测等任务。"
+)
+
+
 def _selected_model_config(db: Session) -> tuple[ModelConfig, ProtocolProfile]:
     """从 Agent 设置与协议档构造模型调用配置与协议档实体，禁止使用隐式旧客户端。"""
     setting = db.query(Setting).filter(Setting.key == "agent_profile_id").first()
@@ -310,8 +317,8 @@ def _selected_model_config(db: Session) -> tuple[ModelConfig, ProtocolProfile]:
         api_key=api_key or "",
         anthropic_version=profile.anthropic_version,
         temperature=0.2,
-        max_tokens=1024,
-        timeout_s=30.0,
+        max_tokens=8192,
+        timeout_s=60.0,
         reasoning_enabled=reasoning_enabled,
         reasoning_effort=reasoning_effort,
     )
@@ -366,9 +373,16 @@ async def _run_turn(
     started = time.perf_counter()
     try:
         config, profile = _selected_model_config(db)
+        system_row = db.query(Setting).filter(Setting.key == "agent_system_prompt").first()
+        system_prompt = (
+            system_row.value
+            if (system_row and isinstance(system_row.value, str) and system_row.value.strip())
+            else DEFAULT_AGENT_SYSTEM
+        )
         request = ModelRequest.from_messages(
             config,
             _history_messages(db, session_id),
+            system=system_prompt,
             should_abort=abort.is_set,
         )
         thinking: list[str] = []
