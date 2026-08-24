@@ -672,7 +672,28 @@ p { margin: 0; text-wrap: pretty; }
 .think-card.done .think-body { opacity: .75; }
 .think-cursor { color: var(--c-agent, #10b981); animation: blink-cursor 1s step-end infinite; }
 
-/* 思考卡组件样式收敛于 components/agent/ThoughtCard.vue */
+.thought-card {
+  border: 1px solid var(--border-subtle); border-radius: 14px;
+  background: var(--bg-elevated);
+  overflow: hidden; max-width: 92%;
+  transition: opacity .5s ease;
+}
+.thought-card.done { opacity: .55; }
+.thought-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 14px; font-size: 12px; font-weight: 600; color: var(--c-agent);
+  cursor: pointer; user-select: none;
+}
+.thought-body { padding: 0 14px 12px; font-size: 13px; color: var(--text-secondary); line-height: 1.7; }
+.thought-card.collapsed .thought-body { display: none; }
+.thought-head .chev { margin-left: auto; transition: transform .18s ease; color: var(--text-tertiary); }
+.thought-card.collapsed .chev { transform: rotate(-90deg); }
+.thought-card:not(.done) .thought-body::after {
+  content: ''; display: inline-block; width: 2px; height: 13px;
+  background: var(--c-agent); margin-left: 3px; vertical-align: -2px;
+  animation: caret-blink .8s steps(2, jump-none) infinite;
+}
+@keyframes caret-blink { 50% { opacity: 0; } }
 
 .tool-card {
   border: 1px solid var(--border-subtle); border-radius: 14px;

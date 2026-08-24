@@ -105,29 +105,39 @@ onMounted(() => {
 
 <style scoped>
 .thought-card {
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  border-radius: 12px;
+  background: var(--bg-elevated, rgba(30, 41, 59, 0.45));
+  overflow: hidden;
   max-width: 100%;
-  width: 100%;
-  margin: 4px 0 8px 0;
-  box-sizing: border-box;
-  background: transparent;
-  border: none;
+  margin: 6px 0;
+  transition: all 0.25s cubic-bezier(0.2, 0.9, 0.3, 1);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+}
+
+.thought-card.done {
+  border-color: var(--border-subtle, rgba(255, 255, 255, 0.06));
+  background: var(--bg-elevated, rgba(30, 41, 59, 0.28));
+}
+
+.thought-card:not(.done) {
+  border-color: color-mix(in srgb, var(--accent-ai, #10b981) 35%, transparent);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--accent-ai, #10b981) 8%, transparent);
 }
 
 .thought-head {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 3px 8px 3px 0;
+  gap: 8px;
+  padding: 8px 12px;
   cursor: pointer;
   user-select: none;
-  border-radius: 6px;
-  transition: background 0.15s ease, padding 0.15s ease, margin 0.15s ease;
+  background: transparent;
+  transition: background 0.15s ease;
 }
 
 .thought-head:hover {
-  background: var(--bg-elevated, rgba(255, 255, 255, 0.05));
-  padding-left: 6px;
-  margin-left: -6px;
+  background: rgba(255, 255, 255, 0.03);
 }
 
 .thought-icon-wrap {
@@ -135,8 +145,8 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
   color: var(--accent-ai, #10b981);
 }
 
@@ -151,8 +161,8 @@ onMounted(() => {
 
 .thought-pulse-ring {
   position: absolute;
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
   border: 1.5px solid var(--accent-ai, #10b981);
   animation: pulse-ring 1.8s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
@@ -173,18 +183,18 @@ onMounted(() => {
   font-size: 11px;
   font-weight: 500;
   color: var(--text-tertiary, #64748b);
-  background: var(--bg-elevated, rgba(255, 255, 255, 0.04));
-  padding: 1px 5px;
+  background: var(--bg-main, rgba(15, 23, 42, 0.6));
+  padding: 1.5px 6px;
   border-radius: 4px;
-  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.06));
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.05));
 }
 
 .thought-head .chev {
-  margin-left: 2px;
+  margin-left: auto;
   transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   color: var(--text-tertiary, #64748b);
-  display: inline-flex;
-  align-items: center;
+  display: grid;
+  place-items: center;
 }
 
 .thought-head .chev.open {
@@ -192,14 +202,14 @@ onMounted(() => {
 }
 
 .thought-body {
-  margin: 6px 0 10px 0;
-  padding: 0;
+  padding: 6px 14px 14px;
+  border-top: 1px dashed var(--border-subtle, rgba(255, 255, 255, 0.06));
 }
 
 .thought-guide-line {
   border-left: 2px solid color-mix(in srgb, var(--accent-ai, #10b981) 35%, transparent);
   padding-left: 12px;
-  margin-left: 7px;
+  margin-top: 6px;
 }
 
 /* 思考过程专用全局统一排版体系（全面覆盖 Markdown 各级元素，防止字号忽大忽小） */
