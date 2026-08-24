@@ -24,6 +24,13 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt -r requirements-dev.txt
 
+      - name: Install sandbox runtime (bubblewrap)
+        # bwrap 沙箱集成测试依赖 bubblewrap；未安装/被 userns 限制时
+        # probe_sandbox 探测失败 → 集成测试自动 skip，不会误红。
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bubblewrap
+
       - name: Lint (ruff)
         run: ruff check . ../shared
 
