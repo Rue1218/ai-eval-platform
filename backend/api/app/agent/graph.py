@@ -1,113 +1,145 @@
-"""基于 LangGraph 的最小单轮 Agent 图。
+"""基于 LangGraph 的 Harness Agent 图（阶段 4：Chat + Direct + ReAct + Plan-Solve）。
 
-Agent 图只负责把一次用户消息交给 ``ModelGateway``，并将模型层流事件向上
-投影。WebSocket、数据库和平台任务队列由路由层负责，避免图节点持有外部资源。
+图拓扑：``START → routing → (direct | chat_stream | react_agent | plan_solve)``；
+ReAct 循环：``react_agent → (tools | END)``，``tools → react_agent``；
+Plan-Solve：``plan_solve → reflect → END``（reflect 复核节点，规划产物门禁）。
+节点只返回纯数据（mode / pending_events / pending_tool / response 投影），
+WebSocket、数据库与平台任务队列由路由层（ws.py）负责，节点内不持有外部资源
+（§2.5 事件桥接契约）。
 """
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 
-from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
-from typing_extensions import TypedDict
 
 from ..errors import AppError, ErrorCode
-from ..llm import ModelGateway, ModelRequest, ModelResponse, ModelStreamEvent
+from ..harness.execution import ToolRegistry, build_default_registry, build_tool_node
+from ..harness.memory import GraphState, SerializableRequest
+from ..llm import ModelGateway, ModelResponse
+from .plan_solve import build_plan_solve_subgraph
+from .react import build_react_nodes, react_route
+from .reflect import reflect_node
+from .routing import chat_stream_node, direct_node, route, routing_node
 
-
-class _AgentState(TypedDict, total=False):
-    """单轮 Agent 图状态；不包含会话、数据库或工具执行状态。"""
-
-    request: ModelRequest
-    response: ModelResponse
+# 条件边分流映射（阶段 4 含 plan_solve；reflect 复核节点备用）
+_ROUTE_TARGETS: dict[str, str] = {
+    "chat": "chat_stream",
+    "direct": "direct",
+    "react": "react_agent",
+    "plan_solve": "plan_solve",
+}
 
 
 class LangGraphAgent:
-    """单轮模型 Agent；后续 Harness 只能组合该公开入口。"""
+    """Harness Agent 图；后续 Plan-Solve 只能扩展该公开入口。"""
 
-    def __init__(self, gateway: ModelGateway | None = None) -> None:
-        """创建 Agent 图；网关可注入测试夹具或不同模型路由。"""
+    def __init__(
+        self,
+        gateway: ModelGateway | None = None,
+        registry: ToolRegistry | None = None,
+        *,
+        db_factory: object | None = None,
+        sandbox_dir: str | None = None,
+        user_id: str = "",
+        checkpointer: object | None = None,
+    ) -> None:
+        """创建 Agent 图；网关/注册表/检查点可注入测试夹具或不同模型路由。"""
         self._gateway = gateway or ModelGateway()
-        self._invoke_graph = self._build_invoke_graph()
-        self._stream_graph = self._build_stream_graph()
+        self._registry = registry or build_default_registry()
+        self._db_factory = db_factory
+        self._sandbox_dir = sandbox_dir
+        self._user_id = user_id
+        self._checkpointer = checkpointer
+        self._graph = self._build_graph()
 
-    def invoke(self, request: ModelRequest) -> ModelResponse:
-        """执行一轮非流式 Agent 调用。"""
-        state = self._invoke_graph.invoke({"request": request})
+    def _build_graph(self):
+        """构建阶段 2 图：路由 → Direct/Chat/ReAct 循环。"""
+        tool_node = build_tool_node(
+            self._registry,
+            db_factory=self._db_factory,
+            sandbox_dir=self._sandbox_dir,
+            user_id=self._user_id,
+        )
+        react_nodes = build_react_nodes(self._gateway, self._registry)
+        plan_solve_nodes = build_plan_solve_subgraph()
+        graph = StateGraph(GraphState)
+        graph.add_node("routing", routing_node)
+        graph.add_node("direct", direct_node)
+        graph.add_node("chat_stream", self._make_chat_node())
+        graph.add_node("react_agent", react_nodes["react_agent"])
+        graph.add_node("tools", tool_node)
+        graph.add_node("plan_solve", plan_solve_nodes["plan_solve"])
+        graph.add_node("reflect", reflect_node)
+        graph.add_edge(START, "routing")
+        graph.add_conditional_edges("routing", route, _ROUTE_TARGETS)
+        # ReAct 循环：pending_tool 存在 → tools；否则图结束
+        graph.add_conditional_edges(
+            "react_agent", react_route, {"tools": "tools", "end": END}
+        )
+        graph.add_edge("tools", "react_agent")
+        graph.add_edge("direct", END)
+        graph.add_edge("chat_stream", END)
+        # Plan-Solve 产物经 reflect 复核（阶段 4：pass/clarify/reject 条件边后续接线）
+        graph.add_edge("plan_solve", "reflect")
+        graph.add_edge("reflect", END)
+        # 阶段 3：Checkpointer 按 thread_id 隔离回合（M3-D4 恢复语义）
+        if self._checkpointer is not None:
+            return graph.compile(checkpointer=self._checkpointer)
+        return graph.compile()
+
+    def _make_chat_node(self):
+        """闭包绑定网关的 Chat 流式节点（节点签名只接收 state）。"""
+        gateway = self._gateway
+
+        def node(state: GraphState) -> dict:
+            return chat_stream_node(state, gateway)
+
+        return node
+
+    def invoke(self, request: SerializableRequest, config: dict | None = None) -> ModelResponse:
+        """执行一轮非流式 Agent 调用（Chat/ReAct 路径产生模型响应）。"""
+        state = self._graph.invoke({"request": request}, config=config or {})
+        if state.get("mode") not in ("chat", "react"):
+            raise AppError(ErrorCode.VALIDATION, "Direct 路径不产生模型响应")
         return self._response_from_state(state)
 
-    async def astream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
-        """执行一轮流式 Agent 调用并投影模型正文/推理事件。"""
-        final_response: ModelResponse | None = None
-        async for mode, chunk in self._stream_graph.astream(
-            {"request": request}, stream_mode=["custom", "updates"]
+    async def astream(
+        self,
+        request: SerializableRequest,
+        config: dict | None = None,
+    ) -> AsyncIterator[tuple[str, dict]]:
+        """执行一轮流式 Agent 调用。
+
+        产出 ``(mode, chunk)`` 二元组：
+        - ``mode="custom"``：模型正文/推理增量（瞬态帧，Chat 路径）；
+        - ``mode="updates"``：节点增量（含 pending_events，收包循环统一 emit）。
+        """
+        async for mode, chunk in self._graph.astream(
+            {"request": request},
+            config=config or {},
+            stream_mode=["custom", "updates"],
         ):
-            if mode == "custom":
-                yield ModelStreamEvent(kind=chunk["kind"], text=chunk["text"])
-                continue
-            response = self._response_from_update(chunk)
-            if response is not None:
-                final_response = response
-        if final_response is None:
-            raise AppError(ErrorCode.INTERNAL, "Agent 未产生有效响应")
-        yield ModelStreamEvent(kind="completed", response=final_response)
-
-    def _build_invoke_graph(self):
-        """构建单轮调用图：入口 → 模型节点 → 结束。"""
-        graph = StateGraph(_AgentState)
-        graph.add_node("call_model", self._call_model_node)
-        graph.add_edge(START, "call_model")
-        graph.add_edge("call_model", END)
-        return graph.compile()
-
-    def _build_stream_graph(self):
-        """构建把 ModelGateway 事件转成 Agent custom stream 的图。"""
-        graph = StateGraph(_AgentState)
-        graph.add_node("stream_model", self._stream_model_node)
-        graph.add_edge(START, "stream_model")
-        graph.add_edge("stream_model", END)
-        return graph.compile()
-
-    def _call_model_node(self, state: _AgentState) -> dict[str, ModelResponse]:
-        """Agent 非流式节点；模型协议细节由 ModelGateway 隔离。"""
-        request = self._request_from_state(state)
-        return {"response": self._gateway.invoke(request)}
-
-    def _stream_model_node(self, state: _AgentState) -> dict[str, ModelResponse]:
-        """Agent 流式节点；只转发模型层事件，不解释模型内容。"""
-        request = self._request_from_state(state)
-        writer = get_stream_writer()
-        final_response: ModelResponse | None = None
-        for event in self._gateway.stream(request):
-            if event.kind == "completed":
-                final_response = event.response
-                continue
-            writer({"kind": event.kind, "text": event.text})
-        if final_response is None:
-            raise AppError(ErrorCode.INTERNAL, "模型层未产生完整响应")
-        return {"response": final_response}
-
-    @staticmethod
-    def _request_from_state(state: _AgentState) -> ModelRequest:
-        """校验 Agent 图入口状态。"""
-        request = state.get("request")
-        if request is None:
-            raise AppError(ErrorCode.VALIDATION, "Agent 请求不能为空")
-        return request
+            yield mode, chunk
 
     @staticmethod
     def _response_from_state(state: dict) -> ModelResponse:
-        """从图终态提取模型响应。"""
+        """从图终态提取模型响应（state.response 为可序列化投影）。"""
         response = state.get("response")
-        if not isinstance(response, ModelResponse):
+        if not isinstance(response, dict):
             raise AppError(ErrorCode.INTERNAL, "Agent 未产生有效响应")
-        return response
+        return ModelResponse(
+            text=str(response.get("text", "")),
+            usage=response.get("usage") or {},
+            latency_ms=int(response.get("latency_ms", 0)),
+        )
 
-    @staticmethod
-    def _response_from_update(update: dict) -> ModelResponse | None:
-        """从 LangGraph updates 事件提取 Agent 收尾响应。"""
-        for value in update.values():
-            if isinstance(value, dict) and isinstance(value.get("response"), ModelResponse):
-                return value["response"]
-        return None
+
+def iter_pending_events(update: dict) -> Iterator[dict]:
+    """从 LangGraph updates 增量中提取节点产出的 pending_events（图外消费）。"""
+    for value in update.values():
+        if isinstance(value, dict):
+            events = value.get("pending_events")
+            if isinstance(events, list):
+                yield from events

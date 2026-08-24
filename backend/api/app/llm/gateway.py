@@ -11,7 +11,7 @@ import logging
 import time
 from collections.abc import AsyncIterator, Callable, Iterator
 
-from langgraph.config import get_stream_writer
+from langgraph.config import get_config, get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from typing_extensions import TypedDict
 
@@ -23,12 +23,13 @@ from ..adapters import (
     stream_protocol,
 )
 from ..errors import AppError, ErrorCode
-from .contracts import ModelRequest, ModelResponse, ModelStreamEvent
+from .contracts import ModelRequest, ModelResponse, ModelStreamEvent, StreamAbort
 
 logger = logging.getLogger("ai-eval.llm")
 
 InvokeTransport = Callable[[ModelRequest], AdapterResult]
-StreamTransport = Callable[[ModelRequest], Iterator[tuple[str, str]]]
+# 流式 transport：should_abort 回调经节点从 RunnableConfig 读取后传入（不入 State）
+StreamTransport = Callable[[ModelRequest, StreamAbort | None], Iterator[tuple[str, str]]]
 
 
 class _ModelCallState(TypedDict, total=False):
@@ -57,7 +58,9 @@ def _default_invoke_transport(request: ModelRequest) -> AdapterResult:
     )
 
 
-def _default_stream_transport(request: ModelRequest) -> Iterator[tuple[str, str]]:
+def _default_stream_transport(
+    request: ModelRequest, should_abort: StreamAbort | None = None
+) -> Iterator[tuple[str, str]]:
     """把模型层契约映射到现有三协议 SSE 适配器。"""
     config = request.config
     yield from stream_protocol(
@@ -71,7 +74,7 @@ def _default_stream_transport(request: ModelRequest) -> Iterator[tuple[str, str]
         max_tokens=config.max_tokens,
         anthropic_version=config.anthropic_version,
         timeout_s=config.timeout_s,
-        should_abort=request.should_abort,
+        should_abort=should_abort,
         reasoning_enabled=config.reasoning_enabled,
         reasoning_effort=config.reasoning_effort,
     )
@@ -112,11 +115,22 @@ class ModelGateway:
         result = await self._invoke_graph.ainvoke({"request": request})
         return self._response_from_state(result)
 
-    def stream(self, request: ModelRequest) -> Iterator[ModelStreamEvent]:
-        """消费 LangGraph custom stream，最后发出一个 completed 事件。"""
+    def stream(
+        self,
+        request: ModelRequest,
+        config: dict | None = None,
+    ) -> Iterator[ModelStreamEvent]:
+        """消费 LangGraph custom stream，最后发出一个 completed 事件。
+
+        ``config``（RunnableConfig）可选透传：上层 Agent 图把含
+        ``configurable.abort.should_abort`` 的配置注入到节点后，再透传给内部
+        图，使取消回调在模型层生效（O-12 迁移）。
+        """
         final_response: ModelResponse | None = None
         for mode, chunk in self._stream_graph.stream(
-            {"request": request}, stream_mode=["custom", "updates"]
+            {"request": request},
+            config=config or {},
+            stream_mode=["custom", "updates"],
         ):
             if mode == "custom":
                 yield ModelStreamEvent(kind=chunk["kind"], text=chunk["text"])
@@ -127,11 +141,17 @@ class ModelGateway:
         if final_response is not None:
             yield ModelStreamEvent(kind="completed", response=final_response)
 
-    async def astream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
+    async def astream(
+        self,
+        request: ModelRequest,
+        config: dict | None = None,
+    ) -> AsyncIterator[ModelStreamEvent]:
         """异步消费 LangGraph custom stream，保持与同步 stream 相同的事件契约。"""
         final_response: ModelResponse | None = None
         async for mode, chunk in self._stream_graph.astream(
-            {"request": request}, stream_mode=["custom", "updates"]
+            {"request": request},
+            config=config or {},
+            stream_mode=["custom", "updates"],
         ):
             if mode == "custom":
                 yield ModelStreamEvent(kind=chunk["kind"], text=chunk["text"])
@@ -183,13 +203,19 @@ class ModelGateway:
         return {"response": response}
 
     def _stream_node(self, state: _ModelCallState) -> dict[str, ModelResponse]:
-        """将协议适配器的增量写入 LangGraph custom stream。"""
+        """将协议适配器的增量写入 LangGraph custom stream。
+
+        ``should_abort`` 从 ``RunnableConfig.configurable`` 读取（O-12 迁移：
+        回调不入 State、不进 Checkpointer 检查点）。
+        """
         request = self._validated_request(state)
+        configurable = (get_config() or {}).get("configurable") or {}
+        should_abort = configurable.get("abort", {}).get("should_abort")
         writer = get_stream_writer()
         content: list[str] = []
         started = time.perf_counter()
         try:
-            for kind, delta in self._stream_transport(request):
+            for kind, delta in self._stream_transport(request, should_abort):
                 if not delta:
                     continue
                 # 关闭思考摘要时，即使上游仍返回 reasoning_content，也不得投影到 WS。

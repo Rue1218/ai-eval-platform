@@ -1,1 +1,30 @@
-"""Harness 上下文边界占位；上下文策略待重新设计。"""
+"""Harness 上下文工程层（M2）：窗口/装配/observation 摘要/compact 摘要/meter。"""
+
+from .assembly import assemble, select_tool_defs
+from .compact import (
+    COMPACT_SCHEMA,
+    COMPACT_VERSION,
+    CompactProtocolResult,
+    parse_compact,
+    summarize,
+)
+from .meter import ContextMeter, project_meter
+from .observation import to_observation, truncate_with_marker
+from .window import WindowMessage, is_window_eligible, recent_window
+
+__all__ = [
+    "COMPACT_SCHEMA",
+    "COMPACT_VERSION",
+    "CompactProtocolResult",
+    "ContextMeter",
+    "WindowMessage",
+    "assemble",
+    "is_window_eligible",
+    "parse_compact",
+    "project_meter",
+    "recent_window",
+    "select_tool_defs",
+    "summarize",
+    "to_observation",
+    "truncate_with_marker",
+]

@@ -12,6 +12,7 @@ from typing import Literal
 
 ProtocolName = Literal["openai_chat", "openai_responses", "anthropic_messages"]
 ReasoningEffort = Literal["low", "medium", "high", "xhigh", "max"]
+# 流式取消回调；仅经 RunnableConfig.configurable 注入（O-12 迁移），不入任何 State
 StreamAbort = Callable[[], bool]
 
 
@@ -41,12 +42,18 @@ Message = Mapping[str, object]
 
 @dataclass(frozen=True, slots=True)
 class ModelRequest:
-    """模型调用请求；消息与系统提示词不参与默认 repr，避免日志泄露正文。"""
+    """模型调用请求；消息与系统提示词不参与默认 repr，避免日志泄露正文。
+
+    纯数据契约（不含 ``should_abort`` 回调——回调已迁移至
+    ``RunnableConfig.configurable["abort"]["should_abort"]``，见 M4 §3.4）。
+    """
 
     config: ModelConfig
     messages: tuple[Message, ...] = field(default_factory=tuple, repr=False)
     system: str | None = field(default=None, repr=False)
-    should_abort: StreamAbort | None = field(default=None, repr=False, compare=False)
+    tools: tuple[Mapping[str, object], ...] = field(
+        default_factory=tuple, repr=False
+    )  # M2 assemble 产出的工具定义（CX-5）
 
     @classmethod
     def from_messages(
@@ -55,14 +62,14 @@ class ModelRequest:
         messages: list[Message] | tuple[Message, ...],
         *,
         system: str | None = None,
-        should_abort: StreamAbort | None = None,
+        tools: list[Mapping[str, object]] | tuple[Mapping[str, object], ...] | None = None,
     ) -> ModelRequest:
         """从普通消息列表构造不可变请求，防止图节点间修改共享输入。"""
         return cls(
             config=config,
             messages=tuple(messages),
             system=system,
-            should_abort=should_abort,
+            tools=tuple(tools or ()),
         )
 
 
