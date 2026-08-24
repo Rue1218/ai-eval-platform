@@ -189,6 +189,32 @@ def test_read_file_safe_supports_offset_and_limit() -> None:
         assert tail == "789"
 
 
+def test_read_file_safe_default_limit_covers_larger_files() -> None:
+    """read 默认单次上限 24000：超过旧 8000 的中等附件一次读完，无截断标记。
+
+    用户场景回归：DeepSeek 不会分段读取（不带 offset），>8000 字符附件截断后
+    会陷入相同 read 循环；默认上限提高后中小附件一次返回即可作答。
+    """
+    with tempfile.TemporaryDirectory() as root:
+        body = "内容" * 6000  # 12000 字符 > 旧默认 8000，< 新默认 24000
+        write_file_safe("big.txt", body, root)
+        result = read_file_safe("big.txt", root)
+        assert result == body
+        assert "offset=" not in result
+
+
+def test_read_file_safe_truncates_beyond_default_limit() -> None:
+    """超过 24000 字符仍截断并提示下一段 offset，超大文件走分段读取。"""
+    with tempfile.TemporaryDirectory() as root:
+        write_file_safe("huge.txt", "y" * 30000, root)
+        result = read_file_safe("huge.txt", root)
+        assert "offset=24000" in result
+        # 显式传 limit 仍可分段拿到后半段
+        second = read_file_safe("huge.txt", root, offset=24000)
+        assert len(second) == 6000
+        assert "offset=" not in second
+
+
 def test_web_fetch_rejects_internal_targets(monkeypatch) -> None:
     """SSRF 防护：web_fetch 拒绝回环/内网/保留地址（IP 字面量、域名与非标准写法）。
 

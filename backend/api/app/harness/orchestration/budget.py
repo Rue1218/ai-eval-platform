@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from app.errors import AppError, ErrorCode
 
 # 阶段 2 默认预算（LLM 往返 / 工具轮次上限）
-# 附件懒读取场景：大附件需多次 read（单次上限 8000 字符）+ 作答，弱模型
+# 附件懒读取场景：大附件需多次 read（单次上限 24000 字符）+ 作答，弱模型
 # 还有失败重试/解析纠正开销，6 轮会 BUDGET_EXCEEDED 中断；提至 12 留足余量，
 # 死循环仍由预算兜底（OR-4 只读工具豁免 + 解析纠正均为有界消耗）。
 DEFAULT_BUDGET = {"model_calls": 12, "tool_turns": 12}
