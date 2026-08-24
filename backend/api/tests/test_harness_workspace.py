@@ -106,7 +106,9 @@ def test_sandbox_injected_via_configurable(tmp_root) -> None:
 
 
 def _run_node(node, state: dict, configurable: dict) -> dict:
-    """在 mock configurable 下执行 tool_node（toolnode 经 get_config 读取）。"""
+    """在 mock configurable 下执行 tool_node（toolnode 经 get_config 读取；节点为 async）。"""
+    import asyncio
+
     import app.harness.execution.toolnode as toolnode_mod
 
     class _FakeConfig:
@@ -119,6 +121,6 @@ def _run_node(node, state: dict, configurable: dict) -> dict:
     original = toolnode_mod.get_config
     toolnode_mod.get_config = lambda: _FakeConfig({"configurable": configurable})
     try:
-        return node(state)
+        return asyncio.run(node(state))
     finally:
         toolnode_mod.get_config = original

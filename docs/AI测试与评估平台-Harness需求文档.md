@@ -3,7 +3,7 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 需求文档 |
-| 版本 | V1.4.9 |
+| 版本 | V1.5.0 |
 | 审查日期 | 2026-08-24 |
 | 文档性质 | 需求规格说明书（需求先行） |
 | 适用范围 | `/agent` 对话智能体的 Harness 运行时：六层职责、七种模式组合、LangGraph 框架选型、技能体系与验收标准 |
@@ -300,7 +300,7 @@ P0-LG 阶段引入新依赖时须同步更新 `backend/api/requirements.txt`；P
 | LangGraph 依赖范围 | 仅 `langgraph==1.2.10`；禁止 langchain 全家桶、LangGraph 云服务、外部 MCP |
 | 外部 MCP / 用户自定义系统提示词 | 明确不做，防越权与提示词污染 |
 | 内部短 MCP + 基础工具集 | **允许**：`web_search`/`web_fetch` 等基础工具集为**通用能力**，由平台内置适配器实现（**内部短 MCP**，非外部 MCP 服务器）；`app/harness/execution/mcp/` 保留包边界但**不做外部 MCP 接入**。不触碰「禁止外部 MCP」红线 |
-| 通用 `bash` 工具（V1.4.5 新增） | **阶段 2 不开放**：命令黑名单 + 工作目录限定 + 超时**不构成安全沙箱**（可被解释器、绝对路径、重定向/管道、脚本文件、环境变量绕过；无网络隔离、资源限制、进程树清理与多用户隔离）。落地前必须先评审独立容器/沙箱方案并回写本表；`read`/`write`/`edit` 须基于受控文件 ID/根目录 |
+| 通用 `bash` 工具（V1.5.0 bwrap 闭环） | **阶段 3 开放通用 bash**：一次性 **bwrap 进程级沙箱**（`--unshare-net` 无网络、会话工作区唯一可写、ulimit 内存/进程数/CPU 限制、`--die-with-parent` + 墙钟超时整树清理）；命令黑名单（rm/sudo/curl 等）为**纵深防御**；bwrap 不可用或引擎关闭时 **fail-closed（VALIDATION）**，禁止降级为裸 subprocess。`read`/`write`/`edit` 仍基于受控文件 ID/根目录 |
 | RAG 语义记忆 | 未接入前 `kind=rag` 必须失败；pgvector/LightRAG 为演进项 |
 | GraphState 可序列化 | 状态只放 JSON 可序列化值；DB Session / WS 连接不得入 State |
 | 新 REST/WS 字段 | 必须先改 API.md，禁止私自扩充 |
@@ -550,3 +550,23 @@ P0-LG 阶段引入新依赖时须同步更新 `backend/api/requirements.txt`；P
 | `backend/api/tests/test_harness_workspace.py`（新增） | 5 项测试：目录创建、双会话隔离、非法 id 拒绝（路径穿越/空/超长）、根解析、toolnode 集成（`configurable['sandbox']['dir']` 生效 + 跨工作区读取被拒） |
 
 说明：不新增任何对外 REST/WS 字段（sandbox 仅内部 `RunnableConfig.configurable`）；`bash` 命令仍按红线不注册（阶段 2 不开放通用 bash），工作区目录即后续 bash 的 cwd 边界。验收：ruff 全绿、相关 20 项测试全过。
+
+### V1.5.0 bwrap 沙箱开放通用 bash（2026-08-24）
+
+把 V1.4.5 起冻结的「bash 不开放」升级为**阶段 3 bwrap 进程级沙箱**：每次 bash 调用起一次性沙箱，无网络、会话工作区唯一可写、资源受限（ulimit 内存/进程数/CPU）、超时整树清理；黑名单保留为纵深防御，bwrap 不可用/引擎关闭时 fail-closed。§7「通用 bash 工具」红线行已回写。
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/harness/execution/sandbox.py`（新增） | `SandboxLimits`（memory/nproc/cpu）；`_build_bwrap_argv`（`--unshare-*` + 最小只读 bind + `--bind` 工作区到 `/work` + `--tmpfs /tmp /run` + clearenv）；`run_sandboxed`（Popen + `start_new_session`，超时 `killpg(SIGKILL)` 整树清理，非零退出码归一 INTERNAL，bwrap 缺失/启动失败归一 VALIDATION fail-closed）；`probe_sandbox`（冒烟探测 + 进程内缓存） |
+| `backend/api/app/harness/execution/dispatch.py` | `run_bash` 保留 `BASH_BLOCKLIST` 首词校验（纵深防御），执行体改走 `run_sandboxed`；模块头部安全边界更新 |
+| `backend/api/app/harness/execution/registry.py` | 注册 `bash` 工具（`permission="sandbox.bash"`、`timeout_s=15.0`）；`_bash_handler` 读 Settings 构造 `SandboxLimits`，引擎非 `bwrap` 时 fail-closed |
+| `backend/api/app/harness/feedback/rules.py` | 门禁 #3 bash 黑名单语义更新为「纵深防御（bwrap 之外第二道防线）」，集合保留 |
+| `backend/api/app/config.py` | 新增 `sandbox_engine/memory_mb/nproc/cpu_s/bwrap_bin` Settings |
+| `backend/api/app/routers/ws.py` | `configurable["sandbox"]` 扩展为 `{dir, engine, limits}`（仍仅内部配置，无对外字段） |
+| `backend/api/app/harness/execution/toolnode.py` | `tool_node` 转 **async 节点**，`execute` 经 `asyncio.to_thread` 线程池执行（防 15s bash 阻塞 api 事件循环） |
+| `backend/api/Dockerfile` | apt 安装 `bubblewrap` |
+| `docker-compose.yml` | api 服务加 `security_opt: [seccomp:unconfined]`（Docker 默认 seccomp 拦截 bwrap 所需的 unshare/mount/pivot_root） |
+| `backend/api/tests/test_harness_execution.py` | 注册表断言改为含 bash；新增 mock `run_sandboxed`、fail-closed、引擎 off 用例 |
+| `backend/api/tests/test_harness_sandbox.py`（新增） | 集成测试（`skipif not probe_sandbox()`）：正常执行/工作区可写/系统目录只读/敏感路径遮蔽/跨会话隔离/超时整树清理/内存超限/无网络/fork 炸弹受限 |
+
+说明：不新增任何对外 REST/WS 字段（sandbox 仅内部 `RunnableConfig.configurable`，API.md 契约不变）；无 Alembic 迁移（无表变更）；`bash` 沙箱在 api 容器内以 root 运行，依赖 compose `seccomp:unconfined`，更严格的自定义 seccomp profile 列为后续项。验收：ruff 全绿、API 全量 314 项测试过、worker 12 项测试过。

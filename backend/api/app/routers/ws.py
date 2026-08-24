@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from ..adapters import StreamAborted
 from ..agent import LangGraphAgent
 from ..agent.graph import iter_pending_events
+from ..config import settings
 from ..db import SessionLocal
 from ..errors import AppError, ErrorCode
 from ..harness.context import recent_window, summarize
@@ -530,7 +531,7 @@ async def _run_turn(
             )
             thread_id = f"{session_id}:{uuid4().hex}"
             resume_answer = None
-        # 会话工作区：每个会话一个独立文件夹（read/write/edit 与后续 bash 的
+        # 会话工作区：每个会话一个独立文件夹（read/write/edit 与 bash 的
         # 沙箱根，经 configurable 注入，toolnode 优先读取此值）
         sandbox_dir = ensure_session_workspace(session_id)
         graph_config = {
@@ -540,7 +541,16 @@ async def _run_turn(
                 "abort": {"should_abort": abort.is_set},
                 "credentials": {"api_key": config.api_key or ""},
                 "session": {"id": session_id},
-                "sandbox": {"dir": sandbox_dir},
+                # 沙箱引擎与资源限制（bash 工具经 bwrap 执行；engine="off" 时 fail-closed）
+                "sandbox": {
+                    "dir": sandbox_dir,
+                    "engine": settings.sandbox_engine,
+                    "limits": {
+                        "memory_mb": settings.sandbox_memory_mb,
+                        "nproc": settings.sandbox_nproc,
+                        "cpu_s": settings.sandbox_cpu_s,
+                    },
+                },
             }
         }
         thinking: list[str] = []
