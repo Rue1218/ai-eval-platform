@@ -3,7 +3,7 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Agent 混合范式与架构完善 |
-| 版本 | V0.3.1 |
+| 版本 | V0.3.2 |
 | 审查日期 | 2026-08-25 |
 | 文档性质 | 演进规划（范式冻结 + 架构完善 + 分阶段接线，**本版不改对外契约**） |
 | 适用范围 | `/agent` 对话智能体：LangGraph 单图、Harness 六层、WebSocket 事件桥、短工具与长任务分离 |
@@ -85,7 +85,7 @@
 
 | 层 | 谁主导 | 输入 | 输出 | 禁止 |
 | :--- | :--- | :--- | :--- | :--- |
-| **Planner** | 代码选模式；仅复杂任务调 LLM（**现状未接线**，见 §4.1） | 用户文本、附件、活动任务、上一轮失败原因 | `mode`；可选 3–7 步 `PlanArtifact`（可经 `task` 显式清单） | 在对话回合同步跑评测 / 压测；另起子 Agent 循环 |
+| **Planner** | 代码选模式；仅复杂任务调 LLM（V0.3.2 已接线，见 §4.1） | 用户文本、附件、活动任务、上一轮失败原因 | `mode`；可选 3–7 步 `PlanArtifact`（可经 `task` 显式清单） | 在对话回合同步跑评测 / 压测；另起子 Agent 循环 |
 | **Executor** | 代码循环；模型只出 Thought + ToolCall | 当前步、Observe 集合、工具 schema | `tool_call` 或阶段 / 最终正文 | 跳过 Schema / 门禁 / 沙箱；并行无门禁执行 |
 | **Reflexion** | 代码分级；模型核对只能降级 | 计划、Observation、预算、重复计数 | `pass` / `clarify` / `reject`；可选打回 Planner | `reject→pass`；无预算的无限重规划 |
 
@@ -166,6 +166,7 @@ START → routing
                       ▼
                    reflexion
                       ├─ pass     → 最终 assistant_message → END
+                      ├─ repair   → Executor（首次失败注入修复观察再试一次，V0.3.2）
                       ├─ clarify  → interrupt()（人补槽，不建任务）
                       └─ retry    → planner（仅 allows_replan 且预算未尽）
 ```
@@ -265,8 +266,8 @@ response.completed
 
 规则：
 
-- 规划解析失败重试一次，仍失败走 L0 关键词降级，降级产物必须经 Reflexion（现 `build_plan` 已具备，需真正被路由调用）。
-- **LLM 规划未接线（实现现状）**：`build_plan` 目前只对用户原始文本做严格 JSON 解析（几乎必然失败）后走 L0 关键词降级，`plan_solve` 全程无模型调用。§2.1 的「仅复杂任务调 LLM」与 Q3 的短模型生成 JSON 计划仍是目标态；接线时须把上一轮 Reflexion 失败原因一并传入规划输入，避免重规划拿不到新信息。
+- 规划解析失败单次尝试即走 L0 关键词降级（解析为纯函数，无效重试已移除），降级产物必须经 Reflexion（现 `build_plan` 已具备，需真正被路由调用）。
+- **LLM 规划已接线（V0.3.2，Q3 落地）**：复杂任务由 `plan_solve` 发起一次短模型调用生成 `plan.v1` JSON；上游异常 / 产物解析失败 / 预算耗尽均降级 L0 关键词规则，不另起第二条规划循环；重规划时上一轮 `replan_reason` 注入规划提示词与 L0 notes（不参与关键词匹配）。
 - `delivery=confirm` 时不得缺工具；对话路径不得直接发起压测确认卡（系统策略已写，规划器必须遵守）。
 - 计划步数 3–7；超出则合并，不足且无多槽则降为单圈 ReAct。
 
@@ -300,17 +301,16 @@ Executor **不**负责宣布最终成功；最终交付由 Reflexion `pass` 或�
 | L2 | 计算验证 | 代码 | 预算、重复次数、文件是否读完、todos 是否卡住、活动任务占槽 | 纠正观察或 `retry` |
 | L3 | 推理验证 | 仅当有验收标准时调 `review()` | 计划与 Observation 是否回答了用户问题 | 只允许 `pass→clarify` |
 
-连续失败阈值（目标阶梯，实现时写入 `Budget` / 常量，禁止魔法数散落）：
+连续失败阈值（阶梯已按此实现，常量收敛在 `reflect.py`：`MAX_REPAIRS=1` / `MAX_REPLANS=2`，禁止魔法数散落）：
 
-- 同一步 L2 失败 2 次 → 注入 `repair_hint` 后再给 Executor 一次；
+- 同一步首次工具失败 → 注入含 `repair_hint` 的修复观察后再给 Executor 一次（`verdict=repair`）；
 - 仍失败且 `allows_replan=true` 且重规划次数 &lt; 2 → 回到 Planner，notes 带失败原因；
 - 否则 `reject` / `error(VALIDATION)` 收尾，向用户说明卡在哪一步。
 
-**实现现状（P2 已落地，与上述阶梯的差异）**：
+**实现现状（V0.3.2 已对齐阶梯，仅余下列差异）**：
 
-- `reflect_node` 在工具首次失败且 `allows_replan` 且重规划次数 < 2 时**直接 `retry` 重规划**，尚无「先注入 `repair_hint` 再回 Executor 一次」的中间档；
-- 重规划未把上一轮失败原因传入 `build_plan`，两次重规划可能产出相同计划，仅靠次数上限兜底（P2 遗留项）；
-- 重规划计数为 GraphState 独立字段 `replan_count` + `MAX_REPLANS=2` 常量，未并入 `Budget` dataclass（语义等价，后续如需统一预算口径再合并）；
+- 阶梯已落地：`reflect_node` 首次工具失败注入含 `repair_hint` 的修复观察并回 Executor 再试一次（`verdict=repair`，图边 `reflect → react_agent`）；再失败才重规划，且 `replan_reason` 已注入规划输入；
+- 重规划计数仍为 GraphState 独立字段 `replan_count` + `MAX_REPLANS=2` 常量，未并入 `Budget` dataclass（语义等价，后续如需统一预算口径再合并）；
 - `allows_replan=false` 且工具失败时，`review` 对 `not obs.ok` 返回 `clarify`，即澄清卡兼作失败兜底出口（行为合理，与「澄清=人补槽」原语义略有扩张）。
 
 `reflect.py` 今日对无 `plan` 直接 `pass`，且 `review(model_call=None)` 跳过推理。接线后：无计划的纯 ReAct 仍可跳过 L3；有 `PlanArtifact` 必须跑 L1+L2。
@@ -323,7 +323,7 @@ Executor **不**负责宣布最终成功；最终交付由 Reflexion `pass` 或�
 | :--- | :--- | :--- |
 | REST/WS 字段、事件名、`call_id`、`read` 投影 | API.md V1.32+ | 本版不改；P1 中间多条 `assistant_message` 必须先改 API.md |
 | 产品范围、确认卡字段、先评后压 | PRD | 不扩大到外部 MCP、多租户、自定义系统提示词 |
-| 当前已实现链路 | Agent 开发文档 V1.4.1 | P0–P2 已接线；LLM Planner（Q3）与「先回 Executor 再重规划」阶梯仍属目标 |
+| 当前已实现链路 | Agent 开发文档 V1.4.1 | P0–P2 已接线；V0.3.2 补接 LLM Planner 与失败阶梯；仅「重规划计数并入 Budget」仍属可选优化 |
 | 六层职责、GraphState、门禁 | Harness 各层模块文档 | 本文只规定完善项与挂载点 |
 | 《Agent 重设计工作区》V0.3 仍写「Harness 冻结」 | 已被开发文档 / 六层架构取代 | 以开发文档与本文为准，工作区文档视为历史快照 |
 
@@ -459,7 +459,7 @@ Buy / Build（本平台已选定，本文只重申）：
 | :--- | :--- | :--- | :--- |
 | Q1 | 中间叙述是否对 `legacy` 协议档也强制 | 否，仅 native；legacy 保持收尾一条正文 | 产品 + 协议档负责人 |
 | Q2 | todos 用现有 `plan` 事件还是 `task` 的 `tool_result` | 先复用 `task` 结果 + 会话投影，避免新事件 | 实施 P1 时对照 API.md |
-| Q3 | Planner 复杂任务是否用一次短模型调用生成 JSON 计划 | 是，失败走 L0；不得用多 Agent 辩论 | 架构 |
+| Q3 | Planner 复杂任务是否用一次短模型调用生成 JSON 计划 | 是，失败走 L0；不得用多 Agent 辩论（**V0.3.2 已接线**） | 架构 |
 | Q4 | 阶段叙述字数上限 | 建议 200 字，超出截断并记 `truncated` 仅服务端 | P1 契约 |
 | Q5 | 何时切 `PgCheckpointer` | 多副本或澄清卡跨进程恢复成为需求时 | 运维 + 架构 |
 | Q6 | 关键词路由（`detect_plan_intent`）的召回边界：同组关键词共现（如「评测 + benchmark」）不算多技能，可能漏升 `plan_solve` | P0 确定性启发式可接受；LLM Planner 接线后由模型规划兜底 | 架构 |
@@ -481,7 +481,7 @@ Buy / Build（本平台已选定，本文只重申）：
 
 ## 修改代码文件与作用清单
 
-V0.1.0 为规划文档。V0.2.0 记录 P0 / P0+ 已接线。V0.2.1 收口审查缺口。V0.3.0 记录 P1 / P2 接线。V0.3.1 为架构审查后的状态校准（纯文档，无代码改动）。
+V0.1.0 为规划文档。V0.2.0 记录 P0 / P0+ 已接线。V0.2.1 收口审查缺口。V0.3.0 记录 P1 / P2 接线。V0.3.1 为架构审查后的状态校准（纯文档，无代码改动）。V0.3.2 接线 LLM Planner 与 Reflexion 失败阶梯（Q3 落地）。
 
 - `docs/AI测试与评估平台-Agent混合范式与架构完善.md`：V0.1.0 冻结混合三层与 P0–P3 计划；V0.2.0 将 Plan-and-Execute 改为 `plan_solve → react → reflect`；V0.2.1 记录失败收尾与预算接线。
 - `backend/api/app/harness/orchestration/plan.py` / `agent/plan_solve.py` / `graph.py` / `react.py` / `reflect.py`：P0+ 规划合并、执行接线；硬错误 `completed(error)`、清空非法 plan、`plan.budget` 写入图状态、`invoke` 接受 `plan_solve`、L0 中英别名、reflect 非法 plan 兜底。
@@ -489,3 +489,4 @@ V0.1.0 为规划文档。V0.2.0 记录 P0 / P0+ 已接线。V0.2.1 收口审查�
 - `docs/AI测试与评估平台-Harness-编排层.md` / `Harness-六层架构.md`：OR-4 串行多调用、默认预算 12/12、范式映射回写。
 - V0.3.0：P1 中间叙述与清单、P2 澄清/有界重规划已接线；P3 检查点默认 memory，`AGENT_CHECKPOINTER=postgres` 可选。涉及：`backend/api/app/agent/react.py`（native 同轮阶段叙述 + `interim`）、`agent/reflect.py`（有界重规划 / 非法 plan 兜底）、`agent/clarify.py`（澄清卡 interrupt）、`agent/graph.py`（`reflect → clarify`、`clarify → plan_solve` 边）、`app/config.py` + `app/harness/memory/checkpoint.py`（`AGENT_CHECKPOINTER` 开关）、`docs/AI测试与评估平台-API.md`（V1.33 多条 `assistant_message`）。
 - `docs/AI测试与评估平台-Agent混合范式与架构完善.md`（V0.3.1）：校准滞后陈述——§2.3 `has_multi_slots` 已接线、§3.1 `clarify` 图边已挂载；§2.1 / §4.1 明确 LLM Planner 未接线、当前为纯规则解析 + L0 降级；§4.3 拆分目标阶梯与实现现状（首次失败即重规划、`replan_count` 独立于 `Budget`、澄清卡兼作失败兜底）；§3.4 标注 `Observation.progress` 待加；§5 开发文档引用统一为 V1.4.1；§10 新增 Q6 关键词路由召回边界；删除文末误留的孤立右括号。
+- V0.3.2：LLM Planner 接线（Q3）与 Reflexion 失败阶梯。涉及：`backend/api/app/agent/plan_solve.py`（复杂任务一次短模型调用生成 `plan.v1` JSON，上游异常 / 解析失败 / 预算耗尽降级 L0；`replan_reason` 注入规划输入并在返回中清空；规划调用计入 `Budget.model_calls` 派生扣减）、`agent/reflect.py`（失败阶梯：首次工具失败注入含修复建议的 Observation `verdict=repair` 回 Executor，再失败才 `retry` 带 `replan_reason` 有界重规划，满 `MAX_REPLANS` 收尾 `reject`）、`agent/graph.py`（`build_plan_solve_subgraph` 注入 gateway、`reflect → react_agent` repair 回边）、`app/harness/memory/state.py`（`ReflectVerdict` 新增 `repair`，GraphState 新增 `step_fail_count` / `replan_reason`）、`app/harness/orchestration/plan.py`（`build_plan` 新增 `fail_reason`：只写 notes 不参与关键词匹配，防失败文本误命中技能）；测试更新 `tests/test_agent_routing.py`（`_PlanAwareGateway` 模型计划采用、上游失败降级 L0）、`tests/test_harness_phase4.py`（repair / retry / clarify 降级 / fail_reason 隔离四组用例）。同日质量审查追加：`build_plan` 移除纯函数无效重试（单次尝试即降级，省一次 JSON 解析）；`reflect.py` 新增 `MAX_REPAIRS` 常量收敛首档阈值；§3.1 拓扑补 `repair` 回边、§4.1 / §4.3 阶梯描述对齐实现。
