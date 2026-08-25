@@ -113,6 +113,25 @@ def test_parse_strategy_and_priority_aliases():
     assert cases[2]["strategy"] == "反向" and cases[2]["priority"] == "FHX"
 
 
+def test_parse_legacy_seed_strategy_aliases():
+    # 旧种子/历史文件的策略名在 Excel 导入时归一为六规范策略，与批量数据迁移口径一致
+    raw = _xlsx_from_rows(
+        [
+            ["策略", "优先级", "用例名称"],
+            ["功能正向", "P0", "旧正向"],
+            ["异常容错", "P1", "异常重试"],
+            ["安全合规", "P1", "密码锁定"],
+            ["边界值", "P2", "金额边界"],
+            ["兼容性", "P1", "多浏览器"],
+            ["性能效率", "P2", "高峰压测"],
+        ]
+    )
+    cases, fmt, _skipped = parse_cases_xlsx(raw)
+    assert fmt == "platform"
+    expected = [("正向", "HX"), ("反向", "FHX"), ("反向", "FHX"), ("边界", "FHX"), ("场景", "FHX"), ("场景", "FHX")]
+    assert [(c["strategy"], c["priority"]) for c in cases] == expected
+
+
 def test_parse_extra_columns_go_to_extras():
     raw = _xlsx_from_rows(
         [
