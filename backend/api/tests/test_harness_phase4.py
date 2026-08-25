@@ -73,7 +73,7 @@ def test_build_plan_parses_valid_protocol() -> None:
 
 
 def test_build_plan_falls_back_to_l0_rule() -> None:
-    """解析失败重试一次后走 L0 规则降级（带 notes 标记须复核）。"""
+    """解析失败单次尝试即走 L0 规则降级（带 notes 标记须复核）。"""
     plan = build_plan("帮我评测一下大模型")
     assert plan.intent == "运行基准评测"
     assert "L0" in plan.notes
@@ -119,8 +119,8 @@ def test_reflect_emits_completed_after_plan() -> None:
     assert confirm["payload"]["run"]["max_tokens"] == 1024
 
 
-def test_reflect_failed_observation_replans() -> None:
-    """工具失败且允许重规划时不发 completed，verdict=retry。"""
+def test_reflect_first_failure_repairs_with_observation() -> None:
+    """失败阶梯首档：首次工具失败注入修复观察回 Executor，不重规划不收尾。"""
     out = reflect_node(
         {
             "plan": to_dict(_plan(tools_needed=("task",), allows_replan=True)),
@@ -128,10 +128,46 @@ def test_reflect_failed_observation_replans() -> None:
             "replan_count": 0,
         }
     )
+    assert out["verdict"] == "repair"
+    assert out["step_fail_count"] == 1
+    assert "force_replan" not in out
+    repairs = out["observations"]
+    assert len(repairs) == 1
+    assert repairs[0].ok is False
+    assert "执行失败" in repairs[0].text
+    kinds = [event["kind"] for event in out["pending_events"]]
+    assert "response.completed" not in kinds
+
+
+def test_reflect_failed_observation_replans() -> None:
+    """失败阶梯次档：修复后仍失败且允许重规划时 verdict=retry，携带失败原因。"""
+    out = reflect_node(
+        {
+            "plan": to_dict(_plan(tools_needed=("task",), allows_replan=True)),
+            "observations": [_obs(ok=False)],
+            "replan_count": 0,
+            "step_fail_count": 1,
+        }
+    )
     assert out["verdict"] == "retry"
     assert out["force_replan"] is True
     assert out["replan_count"] == 1
+    assert out["step_fail_count"] == 0
+    assert "benchmark.run" in out["replan_reason"]
     assert "response.completed" not in [event["kind"] for event in out["pending_events"]]
+
+
+def test_reflect_failure_without_replan_downgrades_to_clarify() -> None:
+    """禁止重规划且修复后仍失败：review 对失败观察降级为 clarify（兜底出口）。"""
+    out = reflect_node(
+        {
+            "plan": to_dict(_plan(tools_needed=("task",), allows_replan=False)),
+            "observations": [_obs(ok=False)],
+            "replan_count": 0,
+            "step_fail_count": 1,
+        }
+    )
+    assert out["verdict"] == "clarify"
 
 
 def test_reflect_stops_after_max_replans() -> None:
@@ -141,6 +177,7 @@ def test_reflect_stops_after_max_replans() -> None:
             "plan": to_dict(_plan(tools_needed=("task",), allows_replan=True)),
             "observations": [_obs(ok=False)],
             "replan_count": 2,
+            "step_fail_count": 1,
         }
     )
     assert out["verdict"] == "reject"
@@ -148,7 +185,8 @@ def test_reflect_stops_after_max_replans() -> None:
 
 
 def test_reflect_route_clarify_and_retry() -> None:
-    """P2：clarify 进澄清卡，retry 回规划，其余结束。"""
+    """P2：repair 回 Executor，clarify 进澄清卡，retry 回规划，其余结束。"""
+    assert reflect_route({"verdict": "repair"}) == "executor"
     assert reflect_route({"verdict": "clarify"}) == "clarify"
     assert reflect_route({"verdict": "retry"}) == "plan_solve"
     assert reflect_route({"verdict": "pass"}) == "end"
@@ -205,6 +243,18 @@ def test_build_plan_unrecognized_raises() -> None:
     with pytest.raises(AppError) as error:
         build_plan("随便聊聊天气")
     assert error.value.code == ErrorCode.VALIDATION
+
+
+def test_build_plan_fail_reason_goes_to_notes_not_keywords() -> None:
+    """fail_reason 只入 notes，不参与技能关键词匹配（避免失败文本误命中）。"""
+    plan = build_plan(
+        "帮我评测一下大模型",
+        fail_reason="工具 task 执行失败：知识库评测与压测均不可用",
+    )
+    assert "上次执行失败" in plan.notes
+    # 失败原因里的「知识库 / 压测」不得新增技能：仍为单技能基准评测计划
+    assert plan.intent == "运行基准评测"
+    assert plan.skill_id == "skill-benchmark"
 
 
 def test_budget_for_plan_uses_plan_budget() -> None:

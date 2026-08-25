@@ -211,8 +211,10 @@ def test_routing_multi_skill_plans_then_react_then_reflect() -> None:
     gateway = _FakeGateway()
     events = _collect(LangGraphAgent(gateway), _serializable("帮我做基准评测并生成测试用例"))
     assert gateway.stream_calls == []
-    assert len(gateway.invoke_calls) == 1
-    assert "【当前规划】" in str(gateway.invoke_calls[0].system)
+    # LLM Planner 已接线：规划一次短调用（产物非法降级 L0）+ ReAct 一次控制调用；
+    # 桩网关返回 react JSON 无法解析为 plan.v1，计划仍由 L0 规则产出。
+    assert len(gateway.invoke_calls) == 2
+    assert "【当前规划】" in str(gateway.invoke_calls[1].system)
     pending = [
         event
         for mode, chunk in events
@@ -249,7 +251,8 @@ def test_routing_multi_skill_plans_then_react_then_reflect() -> None:
         if isinstance(value, dict) and isinstance(value.get("budget"), dict)
     ]
     assert budget_updates
-    assert budget_updates[0]["model_calls"] == plan_payload["budget"]["model_calls"]
+    # 规划短调用已消费一次：首次预算投影为计划预算扣减 1
+    assert budget_updates[0]["model_calls"] == plan_payload["budget"]["model_calls"] - 1
 
 
 def test_routing_plan_react_error_completes_with_error() -> None:
@@ -288,6 +291,78 @@ def test_invoke_plan_solve_returns_model_response() -> None:
         _serializable("帮我做基准评测并生成测试用例")
     )
     assert "确认卡" in response.text
+
+
+class _PlanAwareGateway(_FakeGateway):
+    """规划阶段返回合法 plan.v1 JSON，其余调用沿用 ReAct done JSON。"""
+
+    def invoke(self, request: ModelRequest, config: dict | None = None) -> ModelResponse:
+        self.invoke_calls.append(request)
+        if "任务规划" in str(request.messages):
+            return ModelResponse(
+                text=(
+                    '{"protocol": "plan", "version": "plan.v1", '
+                    '"intent": "模型规划意图", "skill_id": "skill-benchmark", '
+                    '"slots": {"steps": ["一步", "两步", "三步"]}, '
+                    '"tools_needed": ["task"], "delivery": "confirm", '
+                    '"budget": {"model_calls": 6, "tool_turns": 6}, '
+                    '"allows_replan": true, "notes": ""}'
+                ),
+                latency_ms=2,
+            )
+        return super().invoke(request, config)
+
+
+def test_plan_solve_uses_llm_planner_artifact() -> None:
+    """LLM Planner：规划短调用产出合法 plan.v1 时，图直接采用模型计划。"""
+    gateway = _PlanAwareGateway()
+    events = _collect(
+        LangGraphAgent(gateway),
+        _serializable("帮我做基准评测并生成测试用例"),
+    )
+    pending = [
+        event
+        for mode, chunk in events
+        if mode == "updates"
+        for event in iter_pending_events(chunk)
+    ]
+    kinds = [event["kind"] for event in pending]
+    assert "error" not in kinds
+    assert kinds.count("response.completed") == 1
+    plan_payload = next(event["payload"] for event in pending if event["kind"] == "plan")
+    assert plan_payload["intent"] == "模型规划意图"
+    assert plan_payload["slots"]["steps"] == ["一步", "两步", "三步"]
+    # 规划短调用 + ReAct 控制调用 + done 后无工具最终回答调用（基线行为，非本次新增）
+    assert len(gateway.invoke_calls) == 3
+    final_message = next(event for event in pending if event["kind"] == "assistant_message")
+    # 收尾正文来自无工具最终回答（桩网关回 react JSON 无正文 → 中性兑底），非 Observation 原文
+    assert "一步" not in final_message["payload"]["text"]
+
+
+def test_plan_solve_fallback_on_upstream_error() -> None:
+    """规划短调用上游异常：降级 L0 规则，整轮仍正常收尾（Q3 失败走 L0）。"""
+
+    class _PlanFailGateway(_FakeGateway):
+        def invoke(self, request: ModelRequest, config: dict | None = None) -> ModelResponse:
+            if "任务规划" in str(request.messages):
+                self.invoke_calls.append(request)
+                raise AppError(ErrorCode.UPSTREAM, "上游失败")
+            return super().invoke(request, config)
+
+    events = _collect(
+        LangGraphAgent(_PlanFailGateway()),
+        _serializable("帮我做基准评测并生成测试用例"),
+    )
+    pending = [
+        event
+        for mode, chunk in events
+        if mode == "updates"
+        for event in iter_pending_events(chunk)
+    ]
+    kinds = [event["kind"] for event in pending]
+    assert "plan" in kinds
+    assert "error" not in kinds
+    assert kinds[-1] == "response.completed"
 
 
 def test_plan_solve_illegal_plan_clears_and_stops() -> None:

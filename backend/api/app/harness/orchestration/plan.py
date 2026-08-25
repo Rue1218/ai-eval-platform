@@ -1,11 +1,13 @@
 """Harness 编排层：规划解析（M4 / P0+）。
 
-``build_plan`` 严格 JSON 解析为 ``PlanArtifact``；失败重试一次，仍失败走
-L0 规则降级。降级时合并全部命中技能（不再先命中先返回），步骤控制在
+``build_plan`` 严格 JSON 解析为 ``PlanArtifact``；解析是纯函数，单次尝试，
+失败即走 L0 规则降级。降级时合并全部命中技能（不再先命中先返回），步骤控制在
 3–7 步；长工具不写入 ``tools_needed``（对话内只允许短工具 ``task``）。
 """
 
 from __future__ import annotations
+
+from dataclasses import replace
 
 from app.errors import AppError, ErrorCode
 from app.harness.contracts import PlanArtifact, validate_plan_artifact
@@ -102,21 +104,28 @@ def _l0_fallback(raw: str) -> PlanArtifact | None:
     )
 
 
-def build_plan(raw: str) -> PlanArtifact:
-    """严格 JSON 解析为 PlanArtifact；失败重试一次，仍失败走 L0 降级。
+def build_plan(raw: str, fail_reason: str = "") -> PlanArtifact:
+    """严格 JSON 解析为 PlanArtifact；失败走 L0 降级。
 
+    解析为纯函数（输入不变结果不变），单次尝试即降级，不做无效重试。
     降级产物必须经 reflect 复核（FB-2）；无法降级时抛
     AppError(VALIDATION, "无法识别任务意图")。
+
+    ``fail_reason`` 为上一轮 Reflexion 打回的失败原因：只写入 notes（供模型 /
+    复核消费），**不参与** L0 关键词匹配，避免失败文本里的词误命中技能。
     """
-    parse_errors: list[str] = []
-    for _ in range(2):  # 重试一次
-        try:
-            result = parse_plan_protocol(raw)
-            return validate_plan_artifact(dict(result["fields"]))
-        except AppError as exc:
-            parse_errors.append(exc.message)
+    try:
+        result = parse_plan_protocol(raw)
+        return validate_plan_artifact(dict(result["fields"]))
+    except AppError:
+        pass
     fallback = _l0_fallback(raw)
     if fallback is not None:
+        if fail_reason:
+            fallback = replace(
+                fallback,
+                notes=f"{fallback.notes}；上次执行失败：{fail_reason[:200]}",
+            )
         return fallback
     raise AppError(ErrorCode.VALIDATION, "无法识别任务意图")
 

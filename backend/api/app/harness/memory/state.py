@@ -21,8 +21,9 @@ from app.harness.contracts import NodeEvent
 # 路由模式（等价 M4 AgentMode；条件边消费）
 AgentMode = Literal["chat", "direct", "react", "plan_solve"]
 
-# 复核结论（等价 M4 ReflectVerdict；阶段 4 reflect 节点写）
-ReflectVerdict = Literal["pass", "clarify", "reject", "retry"]
+# 复核结论（等价 M4 ReflectVerdict；阶段 4 reflect 节点写；
+# repair 为失败阶梯首档：注入修复观察后回 Executor 再试一次）
+ReflectVerdict = Literal["pass", "clarify", "reject", "retry", "repair"]
 
 # ModelConfig 投影允许保留的键（api_key 密钥保护，不入 State）
 _CONFIG_KEYS: tuple[str, ...] = (
@@ -108,6 +109,8 @@ class GraphState(TypedDict, total=False):
     turn_failed: bool  # 有 plan 时 ReAct 硬错误：禁止再进 reflect，避免 completed(stop)
     replan_count: int  # P2：有界重规划已用次数，上限 2
     force_replan: bool  # P2：reflect 打回规划时强制重建 PlanArtifact
+    step_fail_count: int  # 失败阶梯：同一步连续工具失败次数（首档注入修复观察，再失败才重规划）
+    replan_reason: str | None  # 失败阶梯：最近一次失败原因，重规划时注入规划输入
     parse_retries: int  # 阶段 2：ReAct 协议解析失败纠正重试计数（有界，防死循环）
     budget: Mapping[str, int]  # 阶段 2：Budget count-only 投影
     clarify_answer: str | None  # 阶段 3：澄清卡 interrupt() 恢复后写（M4 clarify.py）
