@@ -337,18 +337,20 @@ def web_fetch(url: str, *, timeout_s: float) -> str:
     return body[:20000]
 
 
-def execute(
+def execute_raw(
     call: ToolCall,
     *,
     timeout_s: float,
     permission: str,
     sandbox_dir: str | None = None,
     handler: object | None = None,
-) -> Observation:
-    """按 call.name 分派到 handler，带超时；超时返回 timeout observation。
+) -> ToolResult:
+    """按 call.name 分派到 handler，返回 ``ToolResult``（不抛，错误归一）。
 
-    日志脱敏（调 M8 ``redact_for_log``，不含密钥/敏感参数，X-A4）；
-    异常归一为 ok=False observation（FB-1），不裸抛、不导致 Agent 崩溃。
+    成功：``ok=True`` + 受控 data（read 用 ``ReadResult.to_tool_data``）；
+    ``AppError`` → ``ok=False`` + error{code, message=中性文案}；未知异常 →
+    INTERNAL。日志脱敏（调 M8 ``redact_for_log``，X-A4）。结果仍须由调用方
+    经 ``normalize`` 转为 Observation（ToolResult 与 Observation 分离，§5.4）。
     """
     started = time.perf_counter()
     try:
@@ -361,12 +363,7 @@ def execute(
             "display": {"summary": str(result)},
         }
         data["latency_ms"] = latency_ms
-        raw = ToolResult(
-            name=call.name,
-            ok=True,
-            data=data,
-        )
-        return normalize(raw, None, tool=call.name, arguments=dict(call.arguments or {}))
+        return ToolResult(name=call.name, ok=True, data=data, call_id=call.call_id)
     except AppError as exc:
         logger.info(
             "工具执行失败 name=%s code=%s args=%s",
@@ -374,7 +371,13 @@ def execute(
             exc.code.value,
             redact_for_log(dict(call.arguments or {})),
         )
-        return normalize(None, exc, tool=call.name, arguments=dict(call.arguments or {}))
+        code = exc.code.value
+        return ToolResult(
+            name=call.name,
+            ok=False,
+            error={"code": code, "message": f"操作失败（{code}）"},
+            call_id=call.call_id,
+        )
     except Exception as exc:
         logger.warning(
             "工具执行内部异常 name=%s type=%s args=%s",
@@ -382,4 +385,36 @@ def execute(
             type(exc).__name__,
             redact_for_log(dict(call.arguments or {})),
         )
-        return normalize(None, exc, tool=call.name, arguments=dict(call.arguments or {}))
+        return ToolResult(
+            name=call.name,
+            ok=False,
+            error={"code": "INTERNAL", "message": "操作失败（INTERNAL）"},
+            call_id=call.call_id,
+        )
+
+
+def execute(
+    call: ToolCall,
+    *,
+    timeout_s: float,
+    permission: str,
+    sandbox_dir: str | None = None,
+    handler: object | None = None,
+) -> Observation:
+    """按 call.name 分派到 handler，带超时；归一为 observation（FB-1）。
+
+    委托 ``execute_raw`` 获取 ToolResult 后经 ``normalize`` 归一；异常不裸抛、
+    不导致 Agent 崩溃（对外只暴露 10 大 ErrorCode 语义，§5.2.1）。
+    """
+    return normalize(
+        execute_raw(
+            call,
+            timeout_s=timeout_s,
+            permission=permission,
+            sandbox_dir=sandbox_dir,
+            handler=handler,
+        ),
+        None,
+        tool=call.name,
+        arguments=dict(call.arguments or {}),
+    )

@@ -2,16 +2,20 @@
 
 工具元数据、白名单与执行分派的**唯一来源**：新增工具必须登记并走统一执行
 入口；未注册工具调用一律拒绝（VALIDATION），禁止假成功。``ToolDef.handler``
-为运行时执行函数（不入 GraphState，仅注册表持有）。
+为运行时执行函数（不入 GraphState，仅注册表持有）；``ToolDef`` 同时是内部
+MCP 目录（server/风险/策略）的唯一来源，经 ``to_descriptor`` 投影给
+``harness/execution/mcp`` 消费。
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
+from typing import Literal
 
 from app.errors import AppError, ErrorCode
+from app.harness.contracts import ToolDescriptor
 
 # 工具参数只接受平台已实现、可本地确定解释的 JSON Schema 子集。新增 MCP 工具
 # 不得静默携带未校验的组合/引用规则；需要扩展时先实现校验语义并补测试。
@@ -38,7 +42,12 @@ _SUPPORTED_JSON_TYPES = frozenset(
 
 @dataclass(frozen=True, slots=True)
 class ToolDef:
-    """工具元数据（注册表唯一源）。"""
+    """工具元数据（注册表唯一源）。
+
+    ``server_id``/``display_name``/``risk_level``/``execution_mode`` 等描述符
+    字段为内部 MCP 目录投影所需；带默认值以兼容既有构造点。``tool_id`` 由
+    ``server_id + name`` 派生，模型参数中不得携带。
+    """
 
     name: str  # 如 "read"/"web_search"
     description: str
@@ -46,6 +55,34 @@ class ToolDef:
     permission: str  # 权限标识
     timeout_s: float  # 执行超时
     handler: Callable[..., object]  # 执行函数（不入 GraphState，仅运行时）
+    server_id: str = ""  # 如 "platform.files"（空则目录按名称推断归属）
+    display_name: str = ""  # 如 "读取文件"
+    risk_level: Literal["read", "modify", "network", "code", "long"] = "read"
+    execution_mode: Literal["short", "long"] = "short"
+    requires_confirmation: bool = False
+    supports_streaming: bool = False
+
+    @property
+    def tool_id(self) -> str:
+        """内部目录唯一 ID：``{server_id}.{name}``；空 server 回退短名。"""
+        return f"{self.server_id}.{self.name}" if self.server_id else self.name
+
+    def to_descriptor(self) -> ToolDescriptor:
+        """投影为可序列化描述符（MCP 目录 / 风险 / 策略唯一源，不含 handler）。"""
+        return ToolDescriptor(
+            tool_id=self.tool_id,
+            server_id=self.server_id,
+            name=self.name,
+            display_name=self.display_name or self.name,
+            description=self.description,
+            input_schema=dict(self.parameters_schema),
+            permission=self.permission,
+            risk_level=self.risk_level,
+            execution_mode=self.execution_mode,
+            timeout_s=float(self.timeout_s),
+            requires_confirmation=self.requires_confirmation,
+            supports_streaming=self.supports_streaming,
+        )
 
 
 class ToolRegistry:
@@ -77,6 +114,14 @@ class ToolRegistry:
     def names(self) -> tuple[str, ...]:
         """返回已登记工具名，供 Gate 构造白名单。"""
         return tuple(self._defs)
+
+    def iter_defs(self) -> Iterator[ToolDef]:
+        """返回底层 ``ToolDef`` 对象（含 handler，供内部 MCP provider 使用）。
+
+        仅限执行层内部（catalog/provider）消费；对外可序列化投影仍走
+        ``all_defs``/``get_def``，避免 handler 泄漏到模型或前端。
+        """
+        return iter(self._defs.values())
 
     def all_defs(self) -> list[Mapping[str, object]]:
         """返回全部工具定义（可序列化投影，供 M2 select_tool_defs 最小注入）。
@@ -328,6 +373,9 @@ def build_default_registry() -> ToolRegistry:
             permission="sandbox.read",
             timeout_s=10.0,
             handler=_read_handler,
+            server_id="platform.files",
+            display_name="读取文件",
+            risk_level="read",
         )
     )
     registry.register(
@@ -346,6 +394,9 @@ def build_default_registry() -> ToolRegistry:
             permission="sandbox.write",
             timeout_s=10.0,
             handler=_write_handler,
+            server_id="platform.files",
+            display_name="写入文件",
+            risk_level="modify",
         )
     )
     registry.register(
@@ -365,6 +416,9 @@ def build_default_registry() -> ToolRegistry:
             permission="sandbox.write",
             timeout_s=10.0,
             handler=_edit_handler,
+            server_id="platform.files",
+            display_name="编辑文件",
+            risk_level="modify",
         )
     )
     registry.register(
@@ -382,6 +436,9 @@ def build_default_registry() -> ToolRegistry:
             permission="web.search",
             timeout_s=15.0,
             handler=_web_search_handler,
+            server_id="platform.web",
+            display_name="网页检索",
+            risk_level="network",
         )
     )
     registry.register(
@@ -399,6 +456,9 @@ def build_default_registry() -> ToolRegistry:
             permission="web.fetch",
             timeout_s=15.0,
             handler=_web_fetch_handler,
+            server_id="platform.web",
+            display_name="网页抓取",
+            risk_level="network",
         )
     )
     registry.register(
@@ -416,6 +476,9 @@ def build_default_registry() -> ToolRegistry:
             permission="sandbox.bash",
             timeout_s=15.0,
             handler=_bash_handler,
+            server_id="platform.sandbox",
+            display_name="沙箱命令",
+            risk_level="code",
         )
     )
     return registry

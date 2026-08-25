@@ -2,7 +2,7 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.27 |
+| 文档版本 | V1.29 |
 | 对应 PRD | V1.13（功能唯一权威） |
 | 对应设计规范 | V1.3（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V0.5（LangGraph 单轮 Agent 与 WS 桥接；JSON 仍以本文为准） |
@@ -19,6 +19,8 @@
 > V1.27（2026-08-25）：协议档新增 `tool_call_mode`。仅显式选择 `native` 的 Agent 协议档向上游发送 `tools`；`legacy` 固定走严格 JSON-ReAct，禁止根据一次上游 4xx 静默猜测降级。
 >
 > V1.28（2026-08-25）：工具调用模式默认改为 `legacy`，存量协议档也以兼容模式迁移；只有人工验证支持 Function Calling 后才可显式切换为 `native`。原生 ToolCall 的空/重复 `call_id` 一律归一为 `UPSTREAM`，不进入工具队列。
+>
+> V1.29（2026-08-25）：§3.6.1 `GET /api/mcp/tools` 从音频/图像占位清单改为**平台 allowlist 内部短工具目录**（6 项：read/write/edit/web_search/web_fetch/bash），`name` 使用唯一 `tool_id`，新增可选 `tool_id`/`server_id`/`short_name`/`display_name`/`risk_level`/`execution_mode`/`timeout_s`/`requires_confirmation`/`supports_streaming` 字段；仅只读展示，不含任何连接命令或凭据。
 
 ---
 
@@ -582,20 +584,39 @@ Embedding 与 Reranker 的 URL、模型和 Key 与主模型使用相同的“按
 
 ---
 
-### 3.6.1 MCP 工具中心（V1.0 只读）
+### 3.6.1 MCP 工具中心（只读目录）
 
 #### `GET /api/mcp/tools`
 
-获取当前智能体环境中受控的短工具注册清单（`audio.speech_recognition`, `audio.speech_synthesis`, `audio.voiceclone`, `image.generate`）及权限级别（`write`）。四项能力均通过内部注册表挂载到 Eval-Core Host，`enabled=true`、`source=builtin`；STT 只接收本轮 wav/mp3 附件，TTS 只接收本轮文本与受控参数。
+获取当前智能体环境中平台 allowlist 的**内部短工具目录**（只读）。首期 6 项：`read`、`write`、`edit`（会话 workspace 文件，`platform.files`）、`web_search`、`web_fetch`（内部适配器 + SSRF 防护，`platform.web`）、`bash`（bwrap 沙箱，`platform.sandbox`）。仅展示元数据，**不展示任何 MCP Server 连接命令、环境变量、工作目录或凭据**，也不展示内部 handler 细节。
+
+`name` 为唯一 `tool_id`（`{server_id}.{short_name}`）；`permission` 由风险等级映射：`read`/`network` → `read`，`modify`/`code`/`long` → `write`。
 
 ```json
 {
   "items": [
-    { "name": "dataset.list", "desc": "查询数据集版本和行数", "permission": "read", "enabled": true, "source": "builtin" }
+    {
+      "name": "platform.files.read",
+      "desc": "按行读取沙箱目录内的文本文件（相对路径）……",
+      "permission": "read",
+      "enabled": true,
+      "source": "builtin",
+      "tool_id": "platform.files.read",
+      "server_id": "platform.files",
+      "short_name": "read",
+      "display_name": "读取文件",
+      "risk_level": "read",
+      "execution_mode": "short",
+      "timeout_s": 10.0,
+      "requires_confirmation": false,
+      "supports_streaming": false
+    }
   ],
   "total": 1
 }
 ```
+
+首期字段：必填 `name`（tool_id）、`desc`、`permission`（`read`/`write`）、`enabled`（恒 `true`）、`source`（恒 `builtin`）；可选 `tool_id`、`server_id`、`short_name`、`display_name`、`risk_level`（`read`/`modify`/`network`/`code`/`long`）、`execution_mode`（`short`/`long`）、`timeout_s`、`requires_confirmation`、`supports_streaming`。
 
 V1.0 不接入外部 MCP Server，也不让浏览器创建、删除、探活或动态发现外部工具。原型中的 MCP Server 管理按钮须显示“能力未启用”说明；不得请求或假装成功调用 `/api/mcp/servers*`。
 

@@ -1,14 +1,15 @@
 """Harness 执行层：ToolNode 包装（M5 阶段 3，EX-1）。
 
 ``build_tool_node`` 返回 LangGraph 异步节点函数：消费 ``GraphState.pending_tool``
-（ToolCall 投影），经门禁 → 绑定 → 分派 → 归一为 ``Observation``，写回
-``observations`` + ``tool_call/tool_result`` 事件意图；不直接 emit（事件桥接
-契约）。``pending_tool`` 图外不持久化，回合结束随工作记忆清除（MEM-1）。
+（ToolCall 投影），经门禁 → 绑定 → **内部 MCP Host** → 归一为 ``Observation``，
+写回 ``observations`` + ``tool_call/tool_result`` 事件意图；不直接 emit（事件
+桥接契约）。``pending_tool`` 图外不持久化，回合结束随工作记忆清除（MEM-1）。
 
 会话上下文（session_id/user_id/附件归属/沙箱目录）经
 ``RunnableConfig.configurable`` 注入（M4-Q2 命名空间约定），不入 GraphState。
-节点为异步：``execute`` 经 ``asyncio.to_thread`` 在线程池执行，避免 15s bash
-沙箱调用阻塞 api 事件循环（影响其他 WS 连接心跳）。
+执行统一经 ``MCPClientManager``（阶段 D：内部 MCP Host），节点不再直接持有
+handler；同步工具经 ``asyncio.to_thread`` 线程池执行，避免 15s bash 沙箱调用
+阻塞 api 事件循环（影响其他 WS 连接心跳）。
 """
 
 from __future__ import annotations
@@ -21,15 +22,14 @@ from uuid import uuid4
 
 from langgraph.config import get_config
 
-from app.agent.log import agent_trace
 from app.errors import AppError, ErrorCode
 from app.harness.contracts import ToolCall, make_event
-from app.harness.feedback.observation import normalize_exception
+from app.harness.feedback.observation import normalize, normalize_exception
 from app.harness.feedback.rules import GateContext, check_gates
 from app.harness.memory import GraphState
 
 from .binding import bind_attachments
-from .dispatch import execute
+from .mcp import MCPClientManager, ToolExecutionContext
 from .native_results import NativeToolResultStore, runtime_thread_id
 from .registry import ToolRegistry, required_parameter_names, validate_tool_arguments
 
@@ -41,14 +41,19 @@ def build_tool_node(
     sandbox_dir: str | None = None,
     user_id: str = "",
     native_tool_results: NativeToolResultStore | None = None,
+    manager: MCPClientManager | None = None,
 ) -> Callable[[GraphState], Awaitable[dict]]:
     """构造 ToolNode 异步节点函数（EX-1）。
 
     ``db_factory`` 延迟提供 DB Session（节点内按需获取，避免跨 Session 传
     ORM 对象）；``sandbox_dir``/``user_id`` 为平台注入的默认值（模型不可传），
     优先读 ``RunnableConfig.configurable``（session/credentials/sandbox 命名空间）。
-    ``native_tool_results`` 是不参与序列化的单回合原文存储。
+    ``native_tool_results`` 是不参与序列化的单回合原文存储。``manager`` 为
+    内部 MCP Host；缺省时按注册表自建（既有调用方兼容）。
     """
+
+    if manager is None:
+        manager = MCPClientManager.build_from_registry(registry)
 
     async def tool_node(state: GraphState) -> dict:
         pending = state.get("pending_tool")
@@ -147,31 +152,40 @@ def build_tool_node(
         except Exception as exc:
             if db is not None:
                 db.rollback()
+            from app.agent.log import agent_trace
+
             agent_trace(f"工具附件绑定异常 type={type(exc).__name__}")
             return rejected("INTERNAL", "附件绑定失败")
         finally:
             if db is not None:
                 db.close()
-        # 3. 分派（EX-3）：超时 + 脱敏日志 → 归一 Observation
-        # 异步节点经 to_thread 执行：避免 bash 等同步工具阻塞事件循环
+        # 3. 执行（EX-3/阶段 D）：经内部 MCP Host 调用，超时/错误由 Host 归一
+        # MCPClientManager 内部经 to_thread 线程池执行，避免 bash 等同步工具
+        # 阻塞事件循环；结果（ToolResult）在此归一为 Observation。
         started = time.perf_counter()
+        context = ToolExecutionContext(
+            session_id=session_id,
+            user_id=current_user,
+            thread_id=thread_id,
+            sandbox_dir=sandbox,
+            owned_file_ids=owned_file_ids,
+            call_id=call.call_id,
+        )
         try:
-            observation = await asyncio.wait_for(
-                asyncio.to_thread(
-                    execute,
-                    ToolCall(name=call.name, arguments=safe_args, call_id=call.call_id),
-                    timeout_s=definition.timeout_s,
-                    permission=definition.permission,
-                    sandbox_dir=sandbox,
-                    handler=definition.handler,
-                ),
-                timeout=max(0.001, float(definition.timeout_s)),
-            )
-        except TimeoutError:
-            # 节点级超时兜底；bash/web_fetch 自身仍有进程/网络超时，避免
-            # 通用工具忘记实现超时时把 WS 回合永久挂起。
+            raw = await manager.call_tool(definition.tool_id, safe_args, context)
+        except asyncio.CancelledError:
+            # /stop 等上游取消：穿透给图运行，不吞掉取消。
+            raise
+        except Exception:
             observation = normalize_exception(
-                AppError(ErrorCode.TIMEOUT, "工具执行超时"),
+                AppError(ErrorCode.INTERNAL, "工具执行失败"),
+                tool=call.name,
+                arguments=dict(call.arguments or {}),
+            )
+        else:
+            observation = normalize(
+                raw,
+                None,
                 tool=call.name,
                 arguments=dict(call.arguments or {}),
             )
@@ -202,6 +216,8 @@ def build_tool_node(
             if native_tool_results is None or not native_tool_results.put(
                 thread_id, call.call_id, observation.text
             ):
+                from app.agent.log import agent_trace
+
                 agent_trace("原生工具结果临时存储失败")
                 return rejected("INTERNAL", "工具临时上下文不可用")
             checkpoint_observation = replace(

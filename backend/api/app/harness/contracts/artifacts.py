@@ -64,6 +64,29 @@ class ToolResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ToolDescriptor:
+    """内部标准工具描述符（MCP 目录 / 风险 / 策略唯一源投影）。
+
+    ``tool_id`` 与 ``server_id`` 由平台目录决定，模型参数中不得携带；模型只
+    接收 ``name``（短名）与 ``input_schema``。全部字段 JSON 可序列化，禁止嵌
+    Callable / 连接 / DB Session。
+    """
+
+    tool_id: str  # 如 "platform.files.read"
+    server_id: str  # 如 "platform.files"
+    name: str  # 对模型稳定暴露的短名，如 "read"
+    display_name: str  # 如 "读取文件"
+    description: str
+    input_schema: Mapping[str, object]  # JSON Schema
+    permission: str  # 如 "sandbox.read"；必须参与策略判定
+    risk_level: Literal["read", "modify", "network", "code", "long"]
+    execution_mode: Literal["short", "long"]
+    timeout_s: float
+    requires_confirmation: bool
+    supports_streaming: bool
+
+
+@dataclass(frozen=True, slots=True)
 class Observation:
     """工具结果归一（FB-1），分离模型观察与浏览器展示投影。"""
 

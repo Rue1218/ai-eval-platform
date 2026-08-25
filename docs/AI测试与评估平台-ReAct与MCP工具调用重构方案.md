@@ -2,8 +2,8 @@
 
 | 项 | 内容 |
 | --- | --- |
-| 文档版本 | V0.6.0 |
-| 状态 | P0/P1、P2-A（完整原生 ToolCall）与 P2-B（流式参数累积、网关投影、两回合收敛）已实施；P3 内部 MCP Host 待实施 |
+| 文档版本 | V0.7.0 |
+| 状态 | P0/P1、P2-A（完整原生 ToolCall）、P2-B（流式参数累积、网关投影、两回合收敛）与 P3（内部 MCP Host）已实施；P4 长任务与沙箱 Runner 待实施 |
 | 审查日期 | 2026-08-25 |
 | 适用范围 | `backend/api/app/agent/`、`app/harness/`、`app/llm/`、`app/routers/ws.py` 与内部短工具 |
 | 上游权威 | `AI测试与评估平台-PRD.md`、`AI测试与评估平台-API.md`、`AGENTS.md` |
@@ -584,13 +584,13 @@ artifact_id / workspace 相对路径 / sha256 / 行范围 / 可见预算
 6. **P2-A/P2-B 已完成**：Agent 图可在工具结果后继续调用或直接流式进入自然回答收敛；同轮多调用先串行执行；
 7. 严格 JSON 保留为临时兼容路径；在协议档能力标记上线后再确定淘汰日期。
 
-### 阶段 D：内部 MCP Host（P3）
+### 阶段 D：内部 MCP Host（P3）✅ 已实施
 
-1. 新建 `harness/execution/mcp/manager.py`、`catalog.py`、`provider.py`；
-2. 先将现有 read/write/edit/web/bash 包装为内部 provider；
-3. ToolRegistry 转为目录、风险和策略唯一源，Agent 不再直接持有 handler；
-4. 为 `tools/list`/`tools/call`、超时、取消、错误归一、工具名冲突和目录刷新补测试；
-5. `/api/mcp/tools` 在 API.md 更新后只读展示平台允许的目录，不展示连接命令或凭据。
+1. ✅ 新建 `harness/execution/mcp/manager.py`、`catalog.py`、`provider.py`；
+2. ✅ 先将现有 read/write/edit/web/bash 包装为内部 in-process provider；
+3. ✅ ToolRegistry 转为目录、风险和策略唯一源（`ToolDef` 扩展 server/风险/展示元数据 + `iter_defs`/`to_descriptor`），Agent 不再直接持有 handler（ToolNode 统一经 `MCPClientManager`）；
+4. ✅ 为 `tools/list`/`tools/call`、超时、取消、错误归一、工具名冲突和目录刷新补测试（`tests/test_harness_mcp.py` 15 项）；
+5. ✅ `/api/mcp/tools` 在 API.md §3.6.1（V1.29）更新后只读展示平台允许的目录，不展示连接命令或凭据。
 
 ### 阶段 E：长任务与沙箱 Runner（P4）
 
@@ -654,7 +654,7 @@ artifact_id / workspace 相对路径 / sha256 / 行范围 / 可见预算
 | `backend/api/app/harness/execution/registry.py` | 从 handler 注册表演进为目录、风险、schema 和策略唯一源。 |
 | `backend/api/app/harness/execution/toolnode.py` | 执行 ToolPolicy 和 MCP Host，而非直接 handler。 |
 | `backend/api/app/harness/execution/dispatch.py` | 将 read 改为行级结果；保留路径、SSRF 与 bwrap 安全边界。 |
-| `backend/api/app/harness/execution/mcp/` | 新增内部 MCP Client Manager、catalog、provider 和 transport 适配。 |
+| `backend/api/app/harness/execution/mcp/` | ✅ 已实施：内部 MCP Client Manager（`manager.py`）、目录（`catalog.py`）与 in-process provider（`provider.py`）；首期无 stdio transport（外部/浏览器直连 MCP 仍不在范围） |
 | `backend/api/app/harness/execution/worker_bridge.py` | 作为 `platform.tasks` 的唯一长任务入队桥接。 |
 | `backend/api/app/routers/ws.py` | 继续仅负责事件桥接；按 API 契约投影 ToolCall 事件。 |
 | `backend/api/app/routers/mcp.py` | API.md 更新后展示只读内部工具目录。 |
@@ -704,3 +704,17 @@ artifact_id / workspace 相对路径 / sha256 / 行范围 / 可见预算
 - ReAct 的 native 工具结果回合直接复用流式模型调用：自然语言正文立即显示，继续调用工具时仍回到既有 ToolNode。简单工具读取和总结由三次模型调用降为两次；`legacy` JSON-ReAct 兼容分支保持原有行为。
 - 本次未实施：内部 MCP Host/transport、外部 MCP、浏览器直连 MCP、长任务 MCP bridge、真正并行工具调用与独立沙箱 Runner；P3/P4 的安全边界不变。
 - 修改文件：`backend/api/app/adapters.py`、`backend/api/app/llm/gateway.py`、`backend/api/app/agent/react.py`、`backend/api/tests/test_adapters.py`、`backend/api/tests/test_llm_graph.py`、`backend/api/tests/test_agent_react.py`。
+
+### V0.7.0（2026-08-25）实施记录
+
+- **P3 内部 MCP Host 已实施**（阶段 D 全部 5 项闭环）：
+  - 新增 `harness/execution/mcp/`：`catalog.py`（`ToolCatalog`：tool_id/短名双索引，tool_id 重复与短名跨 server 冲突抛 VALIDATION，refresh 重建）、`provider.py`（`InProcessProvider`：in-process 包装注册表 handler，委托 `execute_raw` 保持既有沙箱/脱敏/错误归一边界）、`manager.py`（`MCPClientManager`：`refresh_catalog`/`call_tool`/`cancel_call`/`close`，同步 handler 经 `asyncio.to_thread` 线程池，超时 cancel + TIMEOUT，`/stop` 取消经 `CancelledError` 穿透，`ToolExecutionContext` 不入 GraphState）。
+  - `ToolDef` 扩展 `server_id`/`display_name`/`risk_level`/`execution_mode`/`requires_confirmation`/`supports_streaming`（带默认值）+ `tool_id` 属性 + `to_descriptor()` + `ToolRegistry.iter_defs()`；`build_default_registry` 补 platform.files/web/sandbox 归属与风险等级。
+  - `dispatch.py` 拆分 `execute_raw`（返回 ToolResult，不抛、错误归一）与 `execute`（委托 normalize）；`normalize` 在 data 为空时回退 `error.message`。
+  - `toolnode.py` `build_tool_node(registry, *, manager=None, ...)`：执行统一经 manager，不再访问 `definition.handler`；顺带修复 execution↔agent 模块加载循环（`agent_trace` 改函数内延迟导入）。
+  - `agent/graph.py` 构建 `MCPClientManager` 传入 ToolNode；Agent 图只依赖 manager。
+  - `routers/mcp.py` `GET /api/mcp/tools` 改为真实只读目录（API.md §3.6.1 先行更新至 V1.29）：6 项描述符投影，`name=tool_id`，不含命令/凭据。
+- 测试：新增 `tests/test_harness_mcp.py` 15 项（catalog list/refresh/冲突、manager 成功/失败/未知/超时/取消/close、router 目录、toolnode 显式/自建 manager 等价与失败 payload）；既有执行层测试签名兼容无改动。
+- 验收：`ruff check . ../shared` 全绿；api pytest **411 passed/16 skipped**，worker pytest **34 passed**。
+- 本次仍未实施：`platform.tasks` 长任务 MCP bridge、独立沙箱 Runner/容器（bash MCP Server 迁出 api 容器）、真正并行工具调用；P4 安全边界不变，`platform.tasks` 工具不入当前目录。
+- 修改文件：`contracts/artifacts.py`+`__init__.py`、`execution/registry.py`、`execution/dispatch.py`、`execution/toolnode.py`、`execution/mcp/`（新增）、`agent/graph.py`、`routers/mcp.py`、`feedback/observation.py`、`execution/__init__.py`、`tests/test_harness_mcp.py`（新增）、`docs/AI测试与评估平台-API.md`（V1.29）。

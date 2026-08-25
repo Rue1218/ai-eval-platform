@@ -12,6 +12,9 @@ from .dispatch import (
     web_search,
     write_file_safe,
 )
+
+# 内部 MCP Host（阶段 D，P3）：依赖 dispatch/registry，须在其之后导入。
+from .mcp import InProcessProvider, MCPClientManager, ToolCatalog, ToolExecutionContext
 from .native_results import NativeToolResultStore, runtime_thread_id
 from .registry import (
     ToolDef,
@@ -32,11 +35,15 @@ from .workspace import (
 
 __all__ = [
     "BASH_BLOCKLIST",
-    "ReadResult",
+    "InProcessProvider",
     "LONG_TOOLS",
+    "MCPClientManager",
     "NativeToolResultStore",
+    "ReadResult",
     "TASK_KINDS",
+    "ToolCatalog",
     "ToolDef",
+    "ToolExecutionContext",
     "ToolRegistry",
     "bind_attachments",
     "build_default_registry",
