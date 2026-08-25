@@ -103,6 +103,10 @@ jobs:
               # 共享包 backend/shared/ 被 api/worker/runner 打进镜像，变更须同时重建
               if any(path.startswith("backend/shared/") for path in changed):
                   selected += [s for s in ("api", "worker", "runner") if s not in selected]
+              # runner 是平台核心服务（bash 沙箱执行体），始终纳入构建，
+              # 保证目标机任何时候都有 runner 镜像（避免 Docker Hub 不可达时回退拉取失败）
+              if "runner" not in selected:
+                  selected.append("runner")
 
           matrix = {"include": [definitions[service] for service in selected]}
           print(f"动态构建服务：{', '.join(selected) if selected else '无'}")

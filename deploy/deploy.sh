@@ -142,6 +142,13 @@ else
             *) BUILD_SERVICES+=(runner) ;;
         esac
     fi
+    # runner 是平台核心服务（P4-3：bash 沙箱执行体），必须始终纳入构建/拉取列表：
+    # 否则目标机首次部署或镜像清理后缺 runner 镜像（且 Docker Hub 不可达）时，
+    # compose up 会以 "No such image: ai-eval-platform-runner" 失败。
+    case " ${BUILD_SERVICES[*]} " in
+        *' runner '*) ;;
+        *) BUILD_SERVICES+=(runner) ;;
+    esac
 fi
 
 # 恢复上一轮各服务使用的不可变镜像引用，未变化服务不会回退到旧镜像。
