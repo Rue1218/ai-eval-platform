@@ -908,13 +908,41 @@ function syncDatasetTree(list: Dataset[]) {
     root = { id: 'datasets', name: '数据集', open: true, items: [] }
     folders.value.unshift(root)
   }
-  root.items = list.map(dataset => ({
+  const toNode = (dataset: Dataset) => ({
     id: dataset.id,
     name: dataset.name,
     version: dataset.version,
     isGoldQa: false,
     pending_complete_count: dataset.pending_complete_count,
-  }))
+  })
+  root.items = []
+  // 按 folder_id 把数据集归入对应子目录，未归类的留在根目录。
+  folders.value.forEach(folder => {
+    if (folder.id !== 'datasets') folder.items = []
+  })
+  list.forEach(dataset => {
+    const folder = dataset.folder_id ? folders.value.find(f => f.id === dataset.folder_id) : undefined
+    if (folder && folder.id !== 'datasets') folder.items.push(toNode(dataset))
+    else root!.items.push(toNode(dataset))
+  })
+}
+
+/** 从后端加载目录树（根目录 + 子目录），目录增删改均持久化到 /api/dataset-folders。 */
+async function loadFolders() {
+  try {
+    const folderList = await api.datasets.listFolders()
+    const root = folders.value.find(folder => folder.id === 'datasets') || { id: 'datasets', name: '数据集', open: true, items: [] }
+    folders.value = [
+      root,
+      ...folderList
+        .slice()
+        .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+        .map(folder => ({ id: folder.id, name: folder.name, open: true, items: [] })),
+    ]
+    if (datasets.value.length) syncDatasetTree(datasets.value)
+  } catch {
+    // 目录接口异常时保持本地结构，不影响数据集浏览。
+  }
 }
 
 // 黄金 QA 目录树节点由知识库资产接口组装（M3 前行级数据不可得，仅元信息入树）。
@@ -1337,7 +1365,7 @@ function confirmDeleteDataset(dataset: Dataset) {
   })
 }
 
-/** 文件夹右键动作：目录树为前端本地结构，除「新建数据集」走接口外均为本地 mock 操作。 */
+/** 文件夹右键动作：目录树与后端 /api/dataset-folders 同步，增删改均持久化。 */
 async function handleFolderCtxAction(key: string, folderId: string) {
   const folder = folders.value.find(item => item.id === folderId)
   if (!folder) return
@@ -1347,9 +1375,14 @@ async function handleFolderCtxAction(key: string, folderId: string) {
       createEmptyDataset()
       break
     case 'new-folder':
-      openNameDialog('新建子文件夹', '文件夹名称', '新建文件夹', (val) => {
-        folders.value.push({ id: `f-${Date.now()}`, name: val, open: true, items: [] })
-        message.success('已创建子文件夹（本地目录）')
+      openNameDialog('新建子文件夹', '文件夹名称', '新建文件夹', async (val) => {
+        try {
+          await api.datasets.createFolder({ name: val })
+          await loadFolders()
+          message.success(`已创建子文件夹「${val}」`)
+        } catch (err: any) {
+          message.error(err.message || '创建子文件夹失败')
+        }
       })
       break
     case 'rename-folder':
@@ -1358,9 +1391,14 @@ async function handleFolderCtxAction(key: string, folderId: string) {
         message.warning('系统目录不可重命名')
         return
       }
-      openNameDialog('重命名目录', '目录名称', folder.name, (val) => {
-        folder.name = val
-        message.success('已更新目录名')
+      openNameDialog('重命名目录', '目录名称', folder.name, async (val) => {
+        try {
+          await api.datasets.updateFolder(folderId, { name: val })
+          await loadFolders()
+          message.success(`已更新目录名「${val}」`)
+        } catch (err: any) {
+          message.error(err.message || '重命名失败')
+        }
       })
       break
     case 'delete-folder':
@@ -1378,9 +1416,14 @@ async function handleFolderCtxAction(key: string, folderId: string) {
         content: `确认删除空目录「${folder.name}」？`,
         positiveText: '删除',
         negativeText: '取消',
-        onPositiveClick: () => {
-          folders.value = folders.value.filter(item => item.id !== folderId)
-          message.success(`已删除目录「${folder.name}」`)
+        onPositiveClick: async () => {
+          try {
+            await api.datasets.deleteFolder(folderId)
+            await loadFolders()
+            message.success(`已删除目录「${folder.name}」`)
+          } catch (err: any) {
+            message.error(err.message || '删除目录失败')
+          }
         },
       })
       break
@@ -1917,6 +1960,7 @@ onMounted(() => {
   // 基准数据只在大模型模式加载，避免 RAG 模式访问后展示错误资产。
   if (modeStore.mode === 'llm') {
     void loadDatasets()
+    void loadFolders()
     void loadGoldQas()
   }
   window.addEventListener('keydown', onGlobalKeydown)
@@ -1930,6 +1974,7 @@ onUnmounted(() => {
 watch(() => modeStore.mode, (mode) => {
   if (mode === 'llm' && !datasets.value.length) {
     void loadDatasets()
+    void loadFolders()
     void loadGoldQas()
   }
 })

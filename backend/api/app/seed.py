@@ -18,6 +18,9 @@ from .models import (
     DatasetRow,
     DispatchEvent,
     DispatchWorker,
+    GoldQa,
+    GoldQaItem,
+    KnowledgeBase,
     ProtocolProfile,
     Report,
     Setting,
@@ -344,6 +347,41 @@ def _seed_tasks_and_reports(
     logger.info("已播种先评后压演示任务链与 3 份报告")
 
 
+def _seed_kb(db: Session, admin: User) -> KnowledgeBase | None:
+    """种子默认知识库与黄金 QA（不种子文档文件），保证黄金 QA 树首屏有数据。"""
+    if db.query(KnowledgeBase).count():
+        return None
+    kb = KnowledgeBase(
+        name="默认知识库",
+        kind="lightrag",
+        is_core=True,
+        created_by=admin.id,
+    )
+    db.add(kb)
+    db.flush()
+    qa = GoldQa(kb_id=kb.id, name="smoke-qa", version=1, created_by=admin.id)
+    db.add(qa)
+    db.flush()
+    rows = [
+        ("退款多久到账？", "退款一般在 1-3 个工作日内原路退回。", []),
+        ("如何修改绑定的手机号？", "在安全中心验证身份后即可更换绑定手机号。", []),
+        ("会员过期后权益如何处理？", "会员过期后当月权益保留至月底，续费后恢复全部权益。", []),
+    ]
+    for row_no, (question, reference, expected) in enumerate(rows, start=1):
+        db.add(
+            GoldQaItem(
+                gold_qa_id=qa.id,
+                row_no=row_no,
+                question=question,
+                reference=reference,
+                expected_doc_ids=expected,
+            )
+        )
+    qa.row_count = len(rows)
+    logger.info("已播种知识库与黄金 QA 预览数据")
+    return kb
+
+
 def bootstrap_preview_data(db: Session, admin: User) -> None:
     """按域幂等播种预览数据；任一域已有数据即跳过该域。"""
     profiles = _seed_profiles(db, admin)
@@ -351,6 +389,7 @@ def bootstrap_preview_data(db: Session, admin: User) -> None:
         profiles = list(db.query(ProtocolProfile).order_by(ProtocolProfile.created_at.asc()).all())
     dataset = _seed_datasets(db, admin)
     _seed_cases(db, admin)
+    _seed_kb(db, admin)
     workers = _seed_workers(db)
     _seed_tasks_and_reports(db, admin, dataset, workers, profiles)
     db.commit()

@@ -16,6 +16,7 @@ from .routers import (
     datasets,
     dispatch,
     files,
+    kb,
     mcp,
     profiles,
     reports,
@@ -109,6 +110,7 @@ app.include_router(cases.folders_router)
 app.include_router(admin.router)
 app.include_router(workspaces.router)
 app.include_router(dispatch.router)
+app.include_router(kb.router)
 app.include_router(mcp.router)
 app.include_router(reports.router)
 app.include_router(ws.router)

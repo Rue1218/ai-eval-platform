@@ -1,7 +1,7 @@
 """Worker 主循环：轮询 PG 任务队列并按 kind 分发执行器。
 
 - ``benchmark`` / ``testcase``：真实执行器（见 benchmark.py / testcase.py）；
-- ``rag``：LightRAG 未接入前必须失败，禁止 mock ``succeeded``；
+- ``rag``：真实执行器（见 rag.py：LightRAG 检索优先，本地关键词兜底）；
 - ``stress``：仍为骨架 mock（M4 替换为真实实现），与真实执行保持同一领取入口。
 
 主循环同时承担 72h 用例确认超时扫描（PRD 3.3 / 5.4.1）：generated 状态的
@@ -16,6 +16,7 @@ from .benchmark import run_benchmark
 from .db import SessionLocal
 from .events import push_ws
 from .models import CaseSet, Report, Setting, Task, TaskEvent
+from .rag import run_rag
 from .task_state import claim_running_task_for_terminal_write
 from .testcase import run_testcase
 
@@ -66,25 +67,11 @@ def _run_task(task_id: str) -> None:
         print(f"[worker] start task={task.id} kind={task.kind}", flush=True)
 
         if task.kind == "rag":
-            # LightRAG 未接入：禁止 mock succeeded，避免对话里出现假报告
-            task = claim_running_task_for_terminal_write(db, task.id)
-            if not task:
-                logger.info("task %s skipped rag failure because it is no longer running", task_id)
-                return
-            message = "RAG / LightRAG 尚未接入（计划 M3），当前请使用基准评测"
-            print(f"[worker] skip rag lightrag_not_ready task={task.id}", flush=True)
-            logger.warning("拒绝 rag 任务 %s：LightRAG 未接入", task.id)
-            task.status = "failed"
-            task.finished_at = datetime.now(timezone.utc)
-            task.result = {"code": "VALIDATION", "feature": "lightrag"}
-            db.add(TaskEvent(task_id=task.id, event="error", payload={"message": message}))
-            db.commit()
-            push_ws(
-                task.session_id,
-                "error",
-                {"code": "VALIDATION", "message": message},
-                task_id=task.id,
-            )
+            # M3 真实执行：LightRAG 检索优先，本地关键词检索兜底；
+            # 执行器自管数据库会话与任务终态，这里提前释放本层会话
+            db.close()
+            logger.info("task %s (rag) dispatch to real executor", task_id)
+            run_rag(task_id)
             return
 
         if task.kind == "benchmark":

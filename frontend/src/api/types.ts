@@ -352,6 +352,14 @@ export interface CaseFolder {
   created_at: string
 }
 
+export interface DatasetFolder {
+  id: string
+  name: string
+  parent_id?: string | null
+  sort_order: number
+  created_at: string
+}
+
 export interface CaseImportResult {
   ok: boolean
   format: 'platform' | 'standard' | 'simple'

@@ -22,6 +22,7 @@ import {
   type AdminSettings,
   type CaseSet,
   type CaseFolder,
+  type DatasetFolder,
   type CaseImportResult,
   type TestCase,
   type WhitelistItem,
@@ -585,6 +586,30 @@ export const api = {
       }
       const { data } = await http.post('/api/datasets/ai-generate', payload)
       return Array.isArray(data) ? data : data.items || []
+    },
+    // 数据集目录树：与用例目录一致，直接读写后端 /api/dataset-folders。
+    async listFolders(): Promise<DatasetFolder[]> {
+      if (getDataMode() === 'mock') return []
+      const { data } = await http.get('/api/dataset-folders')
+      return Array.isArray(data) ? data : data.items || []
+    },
+    async createFolder(payload: { name: string; parent_id?: string | null }): Promise<DatasetFolder> {
+      if (getDataMode() === 'mock') {
+        return { id: 'f-' + Date.now(), name: payload.name, parent_id: payload.parent_id || null, sort_order: 0, created_at: new Date().toISOString() }
+      }
+      const { data } = await http.post('/api/dataset-folders', payload)
+      return data
+    },
+    async updateFolder(id: string, payload: { name?: string }): Promise<DatasetFolder> {
+      if (getDataMode() === 'mock') {
+        return { id, name: payload.name || '目录', sort_order: 0, created_at: new Date().toISOString() }
+      }
+      const { data } = await http.put(`/api/dataset-folders/${id}`, payload)
+      return data
+    },
+    async deleteFolder(id: string): Promise<void> {
+      if (getDataMode() === 'mock') return
+      await http.delete(`/api/dataset-folders/${id}`)
     },
   },
 

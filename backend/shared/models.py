@@ -573,6 +573,79 @@ class UsageLedger(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
 
 
+class KnowledgeBase(Base):
+    """知识库资产：LightRAG 原生库或挂在协议档下的外部 RAG 服务。"""
+
+    __tablename__ = "knowledge_bases"
+
+    id = Column(String, primary_key=True, default=uuid_str)
+    name = Column(String, nullable=False)
+    # lightrag（原生 query + 切块） | external_chat（外部 RAG 服务，挂在 profile）
+    kind = Column(String, nullable=False, default="lightrag")
+    # external_chat 时指向协议档 ID；lightrag 内置评测可不填
+    profile_id = Column(String, nullable=True)
+    # 核心库标记：整平台至多一个（由路由层维护互斥）
+    is_core = Column(Boolean, nullable=False, default=False)
+    created_by = Column(String, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+
+class KbDocument(Base):
+    """知识库文档：保留文本正文用于服务端切块预览与本地检索兜底。"""
+
+    __tablename__ = "kb_documents"
+    __table_args__ = (Index("ix_kb_documents_kb_id", "kb_id"),)
+
+    id = Column(String, primary_key=True, default=uuid_str)
+    kb_id = Column(String, ForeignKey("knowledge_bases.id"), nullable=False)
+    filename = Column(String, nullable=False)
+    size = Column(Integer, nullable=False, default=0)
+    mime = Column(String, nullable=False, default="")
+    # 提取出的纯文本（切块与本地检索的数据源）；二进制文档解码失败时为空
+    text = Column(Text, nullable=False, default="")
+    status = Column(String, nullable=False, default="indexed")
+    # 原始文件在磁盘上的路径（data/kb/{kb_id}/{doc_id}），二进制文档仍落盘
+    storage_path = Column(String, nullable=True)
+    created_by = Column(String, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class GoldQa(Base):
+    """黄金 QA 集元信息：同名覆盖上传时 version 递增。"""
+
+    __tablename__ = "gold_qas"
+    __table_args__ = (Index("ix_gold_qas_kb_id", "kb_id"),)
+
+    id = Column(String, primary_key=True, default=uuid_str)
+    kb_id = Column(String, ForeignKey("knowledge_bases.id"), nullable=False)
+    name = Column(String, nullable=False)
+    version = Column(Integer, nullable=False, default=1)
+    row_count = Column(Integer, nullable=False, default=0)
+    created_by = Column(String, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+
+class GoldQaItem(Base):
+    """黄金 QA 行：question/reference 快照 + 期望命中文档 ID 列表。"""
+
+    __tablename__ = "gold_qa_items"
+    __table_args__ = (
+        UniqueConstraint("gold_qa_id", "row_no", name="uq_gold_qa_items_qa_row_no"),
+        Index("ix_gold_qa_items_gold_qa_id", "gold_qa_id"),
+    )
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    gold_qa_id = Column(String, ForeignKey("gold_qas.id"), nullable=False)
+    row_no = Column(Integer, nullable=False)
+    question = Column(Text, nullable=False, default="")
+    reference = Column(Text, nullable=False, default="")
+    # 期望命中文档 ID 数组；空数组样本不进 Hit Rate 评估分母
+    expected_doc_ids = Column(JSONB, nullable=False, default=list)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
 class HarnessTurn(Base):
     """Harness 用户 Turn 审计：一个 Turn 一行，供链路回放。
 

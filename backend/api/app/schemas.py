@@ -746,3 +746,93 @@ class CaseAiFillIn(ApiModel):
     instruction: str | None = Field(default=None, max_length=20_000)
     # 缺省时补全所有缺失字段；提供时仅补全指定字段（含扩展列 key）
     fields: list[str] | None = Field(default=None, max_length=64)
+
+
+class KbCreate(ApiModel):
+    """知识库创建输入：kind 区分 LightRAG 原生库与外部 RAG 服务。"""
+
+    name: str = Field(min_length=1, max_length=100)
+    kind: Literal["lightrag", "external_chat"] = "lightrag"
+    profile_id: str | None = Field(default=None, max_length=64)
+
+
+class KbUpdate(ApiModel):
+    """知识库更新输入：仅修改提供的字段，拒绝契约外字段落库。"""
+
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    kind: Literal["lightrag", "external_chat"] | None = None
+    profile_id: str | None = Field(default=None, max_length=64)
+    is_core: bool | None = None
+
+
+class KbOut(ApiModel):
+    """知识库响应：doc_count / owner / capabilities 为派生字段，手动构造。"""
+
+    id: str
+    name: str
+    kind: str
+    doc_count: int | None = None
+    is_core: bool = False
+    owner: str = ""
+    profile_id: str | None = None
+    capabilities: dict = Field(default_factory=lambda: {"projection": False, "rerank_compare": False})
+    created_at: Any | None = None
+
+
+class KbDocOut(ApiModel):
+    """知识库文档响应：size 为格式化展示串（如 "12.4 KB"）。"""
+
+    doc_id: str
+    filename: str
+    status: str
+    size: str = ""
+    created_at: Any | None = None
+
+
+class KbChunkOut(ApiModel):
+    """切块预览响应。"""
+
+    chunk_id: str
+    doc_id: str
+    text: str
+    tokens: int
+
+
+class KbQueryIn(ApiModel):
+    """检索 Playground 请求。"""
+
+    query: str = Field(min_length=1, max_length=20_000)
+    mode: Literal["naive", "local", "global", "hybrid"] = "hybrid"
+    k: int = Field(default=5, ge=1, le=20)
+
+
+class KbQueryItemOut(ApiModel):
+    """检索结果单条：hit 标记该切块文档是否命中黄金 QA 期望文档。"""
+
+    chunk_id: str
+    doc_name: str = ""
+    similarity: float | None = None
+    text: str = ""
+    hit: bool = False
+
+
+class KbQueryOut(ApiModel):
+    """检索 Playground 响应：指标按「question 匹配的黄金 QA 行」计算。"""
+
+    query: str
+    mode: str
+    items: list[KbQueryItemOut] = Field(default_factory=list)
+    reranked_ids: list[str] = Field(default_factory=list)
+    metrics: dict = Field(default_factory=lambda: {"hit_rate": 0.0, "mrr": 0.0, "recall": 0.0, "contain": 0.0})
+
+
+class GoldQaOut(ApiModel):
+    """黄金 QA 集响应。"""
+
+    id: str
+    kb_id: str
+    name: str
+    version: int
+    row_count: int
+    owner: str = ""
+    created_at: Any | None = None
