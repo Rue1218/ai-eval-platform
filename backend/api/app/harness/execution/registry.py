@@ -377,8 +377,8 @@ def build_default_registry() -> ToolRegistry:
                 "适用：查看附件、工作区文件、确认 edit 前的原文。"
                 "不适用：创建文件（用 write）、改文件（用 edit）、执行命令（用 bash）。"
                 "前置：path 必须是沙箱相对路径。offset/limit 均为 0-based 行，"
-                "单次最多 2000 行和 8000 字符（对齐模型可见上限）；未读完时用返回的 "
-                "next_offset 继续，不要用相同 offset 重复读取。大文件只解码当前窗口。"
+                "单次最多 2000 行和 8000 字符（对齐模型可见上限）；未读完时把返回的 "
+                "next_offset 填到下一次 offset，不要用相同 offset 重复读取。大文件只解码当前窗口。"
             ),
             parameters_schema={
                 "type": "object",
@@ -386,6 +386,11 @@ def build_default_registry() -> ToolRegistry:
                 "properties": {
                     "path": {"type": "string", "description": "相对路径"},
                     "offset": {"type": "integer", "description": "起始行号，0-based，默认 0", "minimum": 0},
+                    "next_offset": {
+                        "type": "integer",
+                        "description": "与 offset 同义；可把上次返回的 next_offset 填到这里",
+                        "minimum": 0,
+                    },
                     "limit": {"type": "integer", "description": "最多读取行数，默认/上限 2000", "minimum": 1, "maximum": 2000},
                 },
                 "required": ["path"],
@@ -640,12 +645,12 @@ def _read_handler(arguments: Mapping[str, object], sandbox_dir: str | None = Non
     ``sandbox_dir`` 由平台经 dispatch 注入，**禁止模型传参**（M5-D7 红线）；
     ``offset``/``limit`` 支持长文本分段读取。
     """
-    from .dispatch import read_file_safe
+    from .dispatch import read_file_safe, resolve_read_offset
 
     return read_file_safe(
         str(arguments.get("path", "")),
         sandbox_dir or "",
-        offset=arguments.get("offset"),
+        offset=resolve_read_offset(arguments),
         limit=arguments.get("limit"),
     )
 

@@ -937,6 +937,7 @@ import KindTag from '../components/common/KindTag.vue'
 import ProviderLogo from '../components/ProviderLogo.vue'
 import { getProviderLogoKey, type ProviderLogoKey } from '../utils/providerLogo'
 import { formatLatency } from '../utils/format'
+import { shouldKeepToolCardOpen } from '../utils/toolCard'
 import { skillLabel } from '../agent/skillLabels'
 import SkillBadge from '../components/agent/SkillBadge.vue'
 import ClarifyCard from '../components/agent/ClarifyCard.vue'
@@ -2996,10 +2997,7 @@ async function loadSessionHistory(sid: string): Promise<number> {
           foundTool.truncated = p.truncated === true
           foundTool.source = typeof p.source === 'string' ? p.source : undefined
           foundTool.redacted = p.redacted === true
-          if (
-            p.ok
-            && ['audio.speech_recognition', 'audio.speech_synthesis', 'audio.voiceclone'].includes(p.name)
-          ) foundTool.open = true
+          if (p.ok && shouldKeepToolCardOpen(String(p.name || ''))) foundTool.open = true
         }
         if (p.ok) {
           const media = mediaItemFromToolResult(p.name, p.data, { noAnim: true })
@@ -3642,10 +3640,7 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
         target.truncated = p.truncated === true
         target.source = typeof p.source === 'string' ? p.source : undefined
         target.redacted = p.redacted === true
-        if (
-          p.ok
-          && ['audio.speech_recognition', 'audio.speech_synthesis', 'audio.voiceclone'].includes(p.name)
-        ) target.open = true
+        if (p.ok && shouldKeepToolCardOpen(String(p.name || ''))) target.open = true
       }
       if (p.ok) {
         const media = mediaItemFromToolResult(p.name, p.data)
@@ -3997,7 +3992,7 @@ function handleWsEvent(ev: WsServerEvent) {
         target.truncated = p.truncated === true
         target.source = typeof p.source === 'string' ? p.source : undefined
         target.redacted = p.redacted === true
-        target.open = p.ok && ['audio.speech_recognition', 'audio.speech_synthesis', 'audio.voiceclone'].includes(p.name)
+        target.open = p.ok && shouldKeepToolCardOpen(String(p.name || ''))
       }
       if (p.ok) {
         const media = mediaItemFromToolResult(p.name, p.data)

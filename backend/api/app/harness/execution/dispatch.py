@@ -42,8 +42,11 @@ logger = logging.getLogger("ai-eval.harness.dispatch")
 READ_DEFAULT_LIMIT = 2_000
 READ_MAX_LIMIT = 2_000
 READ_MAX_CHARS = MODEL_TOOL_RESULT_MAX_CHARS
+# 预留未读完提示，避免 model_text + 前缀再被截断半行。
+READ_UNREAD_HINT_RESERVE = 180
+READ_CONTENT_BUDGET = max(1, READ_MAX_CHARS - READ_UNREAD_HINT_RESERVE)
 READ_MAX_BYTES = 10 * 1024 * 1024
-READ_PREVIEW_CHARS = 500
+READ_PREVIEW_CHARS = 4_000
 # 剩余正文按块统计行数/字符，避免对未返回内容逐行建 Python 字符串导致超时。
 READ_SCAN_CHUNK = 256 * 1024
 WRITE_MAX_BYTES = 2 * 1024 * 1024
@@ -182,9 +185,8 @@ class ReadResult:
     source: str
 
     def to_tool_data(self) -> dict[str, object]:
-        """生成 API.md V1.25 允许写入 ToolCard 的受控数据。"""
-        preview = self.content[:READ_PREVIEW_CHARS]
-        preview_truncated = len(self.content) > len(preview)
+        """生成 API.md 允许写入 ToolCard 的受控数据。"""
+        preview, preview_truncated = clip_at_line_boundary(self.content, READ_PREVIEW_CHARS)
         status = "已读完" if self.is_complete else "未读完"
         summary = (
             f"已读取 {self.path} 第 {self.start_line + 1}–{self.end_line} 行"
@@ -194,8 +196,11 @@ class ReadResult:
         if not self.is_complete and self.next_offset is not None:
             model_text = (
                 f"{self.content.rstrip()}\n"
-                f"…[未读完] 请用 next_offset={self.next_offset} 继续 read，不要重复相同 offset。"
+                f"…[未读完] 下一页请传 offset={self.next_offset}"
+                f"（参数名是 offset，不要重复本次 offset={self.start_line}）。"
             )
+        if len(model_text) > READ_MAX_CHARS:
+            model_text, _ = clip_at_line_boundary(model_text, READ_MAX_CHARS)
         return {
             "summary": summary,
             # 只在 normalize() 内部取用，ToolNode 绝不能投影此字段到 ws_events。
@@ -219,6 +224,26 @@ class ReadResult:
                 },
             },
         }
+
+
+def resolve_read_offset(arguments: Mapping[str, object] | None) -> object | None:
+    """取 read 起始行：优先 ``offset``，否则接受模型回填的 ``next_offset``。"""
+    raw = arguments or {}
+    offset = raw.get("offset")
+    return raw.get("next_offset") if offset is None else offset
+
+
+def clip_at_line_boundary(text: str, max_chars: int) -> tuple[str, bool]:
+    """按字符预算截取，只保留完整行；单行超长才截断该行。"""
+    if max_chars <= 0:
+        return "", True
+    if len(text) <= max_chars:
+        return text, False
+    window = text[:max_chars]
+    last_nl = window.rfind("\n")
+    if last_nl >= 0:
+        return window[: last_nl + 1], True
+    return window, True
 
 
 def _read_non_negative_int(value: object | None, *, name: str, default: int) -> int:
@@ -322,9 +347,12 @@ def read_file_safe(
             line = handle.readline()
             if not line:
                 break
-            if chars_used + len(line) > READ_MAX_CHARS:
+            if chars_used + len(line) > READ_CONTENT_BUDGET:
                 if not selected:
-                    raise AppError(ErrorCode.VALIDATION, "单行内容超过 read 的 8000 字符上限")
+                    raise AppError(
+                        ErrorCode.VALIDATION,
+                        f"单行内容超过 read 的 {READ_MAX_CHARS} 字符上限",
+                    )
                 hit_character_limit = True
                 overflow_line = line
                 break

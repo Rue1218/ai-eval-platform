@@ -31,6 +31,7 @@ from app.harness.context import (
 from app.harness.context.observation import MODEL_TOOL_RESULT_MAX_CHARS, truncate_with_marker
 from app.harness.contracts import Observation, make_event
 from app.harness.execution import NativeToolResultStore, runtime_thread_id
+from app.harness.execution.dispatch import resolve_read_offset
 from app.harness.memory import GraphState, rebuild_model_config
 from app.harness.orchestration import (
     consume_model_call,
@@ -63,21 +64,18 @@ NATIVE_TOOL_STAGE_INPUT = """\
 如需访问平台工具，请使用模型协议提供的原生函数调用能力，并只从本轮提供的工具
 schema 中选择。工具结果会以对应的 tool_call_id 返回。
 同一请求中的多个函数调用会由平台依次执行，每一个调用都经过权限门禁和沙箱。
+read 未读完时，把返回的 next_offset 填到下一次的 offset，禁止用相同 offset 重读。
 """
 
 
 # 所有原生工具回传给模型的正文共用同一上限；超出只保留摘要并提示分页。
-# ToolCard 另走 500 字符受控预览，不走这条通道。
+# ToolCard 另走行级受控预览，不走这条通道。
 
-# 只读幂等工具：重复调用不判定"未推进"（OR-4 防重复守卫豁免）。
-# read/web_fetch 重读/重抓无害且常是模型合法行为（如确认内容、重新获取），
-# 若有副作用工具（write/edit/bash）才会被守卫约束；死循环由模型调用预算兜底。
+# 只读工具：相同参数成功一次后禁止再执行（OR-4）。read 必须换 offset 才能继续。
 READONLY_TOOLS: frozenset[str] = frozenset({"read", "web_fetch"})
 
-# 只读工具「相同参数」成功调用的容忍上限：允许少量重读（内容确认无害），
-# 但无进展的反复相同调用（如 DeepSeek 反复 read 同一文件不传 offset）必须
-# 收敛——超限注入纠正观察（提示传 offset 或直接作答），纠正后仍重复才硬错误。
-READONLY_REPEAT_LIMIT = 3
+# 只读工具「相同参数」成功调用的容忍上限：1 次即拦截重复读同一窗口。
+READONLY_REPEAT_LIMIT = 1
 
 # ReAct 协议解析失败纠正重试上限：模型输出非有效 JSON 时注入纠正观察并回环
 # 一次（OR-4 同一回环边），仍失败才硬错误收尾；由模型调用预算兜底防死循环。
@@ -119,6 +117,137 @@ def _stage_narration(text: str) -> str:
     return cleaned
 
 logger = logging.getLogger("ai-eval.agent-react")
+
+
+def _normalized_tool_arguments(name: str, arguments: Mapping[str, object] | None) -> dict[str, object]:
+    """归一化工具参数，避免 offset/next_offset 别名导致重复读无法识别。"""
+    raw = dict(arguments or {})
+    if name != "read":
+        return raw
+    offset = resolve_read_offset(raw)
+    try:
+        normalized_offset = int(offset) if offset is not None else 0
+    except (TypeError, ValueError):
+        normalized_offset = 0
+    normalized: dict[str, object] = {"path": str(raw.get("path") or ""), "offset": normalized_offset}
+    if raw.get("limit") is not None:
+        try:
+            normalized["limit"] = int(raw["limit"])
+        except (TypeError, ValueError):
+            pass
+    return normalized
+
+
+def _readonly_call_key(name: str, arguments: Mapping[str, object] | None) -> tuple[object, ...]:
+    """只读调用指纹：工具名 + 归一化参数，供历史比对与同批去重。"""
+    return (name, tuple(sorted(_normalized_tool_arguments(name, arguments).items())))
+
+
+def _identical_success_count(
+    state: GraphState,
+    name: str,
+    arguments: Mapping[str, object] | None,
+    *,
+    limit: int | None = None,
+) -> int:
+    """统计相同参数且成功的历史调用次数；``limit`` 到达即短路（OR-4）。"""
+    wanted = _normalized_tool_arguments(name, arguments)
+    count = 0
+    for observation in state.get("observations") or []:
+        if getattr(observation, "tool", None) != name:
+            continue
+        if not getattr(observation, "ok", False):
+            continue
+        if _normalized_tool_arguments(name, getattr(observation, "arguments", None)) != wanted:
+            continue
+        count += 1
+        if limit is not None and count >= limit:
+            return count
+    return count
+
+
+def _repeat_correction_observation(tool: str, arguments: Mapping[str, object], runs: int) -> Observation:
+    """只读工具重复调用的纠正观察，不执行工具。"""
+    return Observation(
+        tool=tool,
+        text=(
+            f"系统提示：工具 {tool} 已用相同参数成功执行 {runs} 次，"
+            "返回内容完全相同，继续相同调用不会得到新信息。"
+            "如需读取未读部分：请把上次的 next_offset 填到 offset 再读；"
+            "如已读内容足够：请直接用自然语言作答，不要再用相同参数调用。"
+        ),
+        ok=False,
+        redacted=True,
+        arguments=dict(arguments),
+    )
+
+
+def _split_native_readonly_repeats(
+    state: GraphState, calls: tuple[NativeToolCall, ...]
+) -> tuple[tuple[NativeToolCall, ...], NativeToolCall | None, int]:
+    """拆出可执行的原生调用与被 OR-4 拦截的只读重复调用。
+
+    同时拦截「历史已成功」与「同一响应内相同指纹」两类重复，避免同批
+    多个相同 read 在 ToolNode 串行执行时绕过守卫。
+    """
+    allowed: list[NativeToolCall] = []
+    skipped: NativeToolCall | None = None
+    skipped_runs = 0
+    seen: set[tuple[object, ...]] = set()
+    for call in calls:
+        if call.name in READONLY_TOOLS:
+            key = _readonly_call_key(call.name, call.arguments)
+            runs = _identical_success_count(
+                state, call.name, call.arguments, limit=READONLY_REPEAT_LIMIT
+            )
+            if key in seen or runs >= READONLY_REPEAT_LIMIT:
+                skipped = call
+                skipped_runs = max(runs, 1)
+                continue
+            seen.add(key)
+        allowed.append(call)
+    return tuple(allowed), skipped, skipped_runs
+
+
+def _forced_repeat_completion(
+    *,
+    gateway: object,
+    request: ModelRequest,
+    model_run_config: dict,
+    system: str,
+    budget: object,
+    started: float,
+    pending_events: list,
+    close_turn: bool,
+    response: ModelResponse,
+) -> dict:
+    """只读重复纠正无效后，走无工具最终回答，不回显 Observation 原文。"""
+    budget = consume_model_call(budget)
+    final_response = _generate_final_answer(
+        gateway,
+        request,
+        model_run_config,
+        system=system,
+        extra_instruction=FORCED_FINAL_ANSWER_INPUT,
+    )
+    text = (
+        final_response.text
+        if final_response is not None and final_response.text.strip()
+        else FINAL_ANSWER_EMPTY_TEXT
+    )
+    finished = _assistant_completion(
+        text,
+        usage=(
+            dict(final_response.usage)
+            if final_response is not None
+            else dict(response.usage)
+        ),
+        latency_ms=round((time.perf_counter() - started) * 1000),
+        pending_events=pending_events,
+        close_turn=close_turn,
+    )
+    finished["budget"] = budget.to_dict()
+    return finished
 
 
 def _inject_observations(state: GraphState) -> str:
@@ -618,6 +747,52 @@ def build_react_nodes(
                 # ToolNode 仍逐项走既有 gate/binding/dispatch/bwrap 边界，不把模型
                 # 参数直接送入 handler。
                 native_calls = _validated_native_tool_calls(tuple(response.tool_calls))
+                native_calls, skipped_repeat, skipped_runs = _split_native_readonly_repeats(
+                    state, native_calls
+                )
+                if not native_calls and skipped_repeat is not None:
+                    narration = _stage_narration(response.text)
+                    thought_events = (
+                        [
+                            make_event(
+                                "assistant_message",
+                                {
+                                    "text": narration,
+                                    "role": "assistant",
+                                    "interim": True,
+                                    "latency_ms": latency_ms,
+                                },
+                            )
+                        ]
+                        if narration
+                        else []
+                    )
+                    if state.get("repeat_retry"):
+                        return _forced_repeat_completion(
+                            gateway=gateway,
+                            request=request,
+                            model_run_config=model_run_config,
+                            system=system,
+                            budget=budget,
+                            started=started,
+                            pending_events=thought_events,
+                            close_turn=close_turn,
+                            response=response,
+                        )
+                    return {
+                        "pending_tool": None,
+                        "pending_tools": [],
+                        "repeat_retry": True,
+                        "pending_events": thought_events,
+                        "observations": [
+                            _repeat_correction_observation(
+                                skipped_repeat.name,
+                                dict(skipped_repeat.arguments),
+                                skipped_runs,
+                            )
+                        ],
+                        "budget": budget.to_dict(),
+                    }
                 for _ in native_calls:
                     budget = consume_tool_turn(budget)
                 pending_calls = [
@@ -763,78 +938,37 @@ def build_react_nodes(
             # 兼容 JSON ReAct 没有上游调用 ID，统一由平台生成，保证同名连续
             # 调用也能通过 call_id 在前端与 tool_result 精确配对。
             legacy_call_id = f"toolcall_{uuid4().hex}"
-            observations = state.get("observations") or []
             # 仅当「工具名 + 参数」与已执行过的调用完全相同才视为重复；
             # 只比较工具名会把合法的连续 bash 调用（如 ls 后再 cat）误杀。
-            def _same_call(obs: object) -> bool:
-                return (
-                    getattr(obs, "tool", None) == tool
-                    and dict(getattr(obs, "arguments", None) or {}) == arguments
-                )
-
             # 只统计先前「成功」的相同调用：失败后的重试是模型合法行为
             # （工具瞬时失败/沙箱抖动时应有权重试），不应触发 OR-4。
-            identical_runs = [
-                obs for obs in observations if _same_call(obs) and getattr(obs, "ok", False)
-            ]
-            if identical_runs and tool in READONLY_TOOLS and len(identical_runs) >= READONLY_REPEAT_LIMIT:
-                # 只读工具无进展重复：相同参数已成功执行多次（返回内容必然相同），
-                # 模型既未传 offset 继续读取也未作答，判定为循环。先注入纠正观察
-                # （提示传 offset 或直接作答）；纠正后仍重复相同调用则基于已读内容
-                # 优雅收尾——弱模型（如 DeepSeek V4 Flash）纠正无效、无法收敛到
-                # done，硬错误只会让用户拿到报错而非内容。
+            identical_count = _identical_success_count(
+                state, tool, arguments, limit=READONLY_REPEAT_LIMIT
+            )
+            if identical_count and tool in READONLY_TOOLS:
+                # 只读工具无进展重复：相同窗口已成功读过，继续相同调用不会得到新信息。
                 if state.get("repeat_retry"):
-                    # 第二次仍重复时停止工具循环，但必须交由无工具模型回合生成
-                    # 最终答案。禁止把 Observation.text（尤其是 read 原文）直接写成
-                    # assistant_message，否则会绕过用户要求的分析、推理和总结。
-                    budget = consume_model_call(budget)
-                    final_response = _generate_final_answer(
-                        gateway,
-                        request,
-                        model_run_config,
+                    return _forced_repeat_completion(
+                        gateway=gateway,
+                        request=request,
+                        model_run_config=model_run_config,
                         system=system,
-                        extra_instruction=FORCED_FINAL_ANSWER_INPUT,
-                    )
-                    text = (
-                        final_response.text
-                        if final_response is not None and final_response.text.strip()
-                        else FINAL_ANSWER_EMPTY_TEXT
-                    )
-                    finished = _assistant_completion(
-                        text,
-                        usage=(
-                            dict(final_response.usage)
-                            if final_response is not None
-                            else dict(response.usage)
-                        ),
-                        latency_ms=latency_ms,
+                        budget=budget,
+                        started=started,
                         pending_events=thought_events,
                         close_turn=close_turn,
+                        response=response,
                     )
-                    finished["budget"] = budget.to_dict()
-                    return finished
                 return {
                     "pending_tool": None,
                     "repeat_retry": True,
                     "pending_events": thought_events,
-                    # observations 为 append reducer，只返回本条新增纠正观察
                     "observations": [
-                        Observation(
-                            tool=tool,
-                            text=(
-                                f"系统提示：工具 {tool} 已用相同参数成功执行 {len(identical_runs)} 次，"
-                                "返回内容完全相同，继续相同调用不会得到新信息。"
-                                "如需读取未读部分：请改用不同参数（如 read 传 offset/limit 分段读取）；"
-                                "如已读内容足够：请直接 done=true 完成回答，不要再用相同参数调用。"
-                            ),
-                            ok=False,
-                            redacted=True,
-                            arguments=arguments,
-                        )
+                        _repeat_correction_observation(tool, arguments, identical_count)
                     ],
                     "budget": budget.to_dict(),
                 }
-            if identical_runs and tool not in READONLY_TOOLS:
+            if identical_count and tool not in READONLY_TOOLS:
                 if state.get("repeat_retry"):
                     # 已给过一次纠正仍重复相同调用：判定未推进，硬错误收尾；
                     # 必须清 repeat_retry，否则 react_route 见到 True 会再次回环

@@ -1,10 +1,10 @@
 # AI 测试与评估平台 Agent 开发文档
 
-> 版本：V1.5.2
-> 状态：LangGraph Harness 已启用混合范式 P0–P2：Plan-and-Solve → ReAct → reflect；native 中间叙述；clarify interrupt 与有界重规划；检查点默认 memory；reflect 产出确认卡；ContextMeter 服务端计算；assemble 接线 CX-4/CX-5
+> 版本：V1.5.3
+> 状态：LangGraph Harness 已启用混合范式 P0–P2：Plan-and-Solve → ReAct → reflect；native 中间叙述；clarify interrupt 与有界重规划；检查点默认 memory；reflect 产出确认卡；ContextMeter 服务端计算；assemble 接线 CX-4/CX-5；read 防重复与行级 ToolCard
 > 审查日期：2026-08-26
 > 对应需求：`AI测试与评估平台-PRD.md` V1.12
-> 对应接口：`AI测试与评估平台-API.md` V1.36
+> 对应接口：`AI测试与评估平台-API.md` V1.37
 
 ## 1. 当前唯一运行链路
 
@@ -87,7 +87,7 @@ Agent 思考配置从 `Setting(key="agent_reasoning")` 读取，结构为
 | `assistant_message` | 助手完整交付句，落库并占用会话事件号 |
 | `response.completed` | 本轮生成结束，携带 `finish_reason` 和 `role=assistant` 并可回放 |
 | `tool_call` | 已解析的短工具 `call_id`、名称与参数；创建 ToolCard，不直接执行业务长任务 |
-| `tool_result` | 与 `tool_call.call_id` 相同的短工具受控结果；`read` 仅包含行范围、文件统计与 500 字符预览，完整正文不进入 WS 事件 |
+| `tool_result` | 与 `tool_call.call_id` 相同的短工具受控结果；`read` 仅包含行范围、文件统计与完整行预览（≤4000 字符），完整正文不进入 WS 事件 |
 | `confirm` | 质量任务确认卡（TaskSpec）；`kind` 不得为 `stress`；落 `sessions.pending_confirm` |
 | `error` | 脱敏后的 `ErrorCode` 与用户可见消息 |
 | `pong` | 应用层心跳，不占用持久化事件号，可与业务事件交错到达 |
@@ -284,3 +284,12 @@ Agent 思考配置从 `Setting(key="agent_reasoning")` 读取，结构为
 - `backend/api/app/routers/ws.py`：常驻 Skill Hint 写入默认 Persona；`compact_summary` 注入 configurable。
 - `backend/api/app/harness/skills/registry.py`：补 `get_hint`。
 - `docs/AI测试与评估平台-Harness-上下文工程层.md`：V0.4.3。
+
+### V1.5.3（2026-08-26）修改代码文件与作用清单
+
+- `backend/api/app/agent/react.py`：原生 ToolCall 拦截相同窗口重复 read（含同批去重）；`READONLY_REPEAT_LIMIT=1`。
+- `backend/api/app/harness/execution/dispatch.py`：预览按完整行截取；模型正文预留未读完提示。
+- `backend/api/app/harness/execution/registry.py`：`next_offset` 作为 `offset` 别名。
+- `frontend/src/components/agent/ToolCard.vue`：输入字段、行号、命令/文件内容与 Markdown 渲染。
+- `frontend/src/utils/toolCard.ts`：成功后默认展开的工具名单。
+- `docs/AI测试与评估平台-API.md`：V1.37。

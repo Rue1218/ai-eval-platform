@@ -263,6 +263,53 @@ def test_native_tool_calls_keep_call_id_and_stream_final_answer() -> None:
     ]
 
 
+def test_native_read_repeat_same_offset_is_blocked() -> None:
+    """原生 ToolCall 路径同样拦截相同 offset 的重复 read。"""
+
+    class _RepeatReadGateway:
+        def __init__(self) -> None:
+            self.calls: list[object] = []
+
+        def invoke(self, request: object, config: dict | None = None):
+            self.calls.append(request)
+            if getattr(request, "tools", ()) == ():
+                return ModelResponse(text="已根据文件内容作答。", latency_ms=1)
+            return ModelResponse(
+                text="",
+                latency_ms=1,
+                tool_calls=(
+                    NativeToolCall(
+                        f"call_read_{len(self.calls)}",
+                        "read",
+                        {"path": "a.txt"},
+                    ),
+                ),
+            )
+
+        def stream(self, request: object, config: dict | None = None):
+            return iter(
+                [
+                    ModelStreamEvent(
+                        kind="completed",
+                        response=ModelResponse(text="已根据文件内容作答。", latency_ms=1),
+                    )
+                ]
+            )
+
+    gateway = _RepeatReadGateway()
+    with tempfile.TemporaryDirectory() as tmp:
+        with open(f"{tmp}/a.txt", "w", encoding="utf-8") as handle:
+            handle.write("hello")
+        events = _collect(
+            LangGraphAgent(gateway, build_default_registry(), sandbox_dir=tmp),
+            _serializable(),
+        )
+    kinds = [event["kind"] for event in _pending_events(events)]
+    assert kinds.count("tool_call") == 1
+    assert kinds.count("error") == 0
+    assert kinds[-2:] == ["assistant_message", "response.completed"]
+
+
 def test_native_tool_calls_emit_interim_narration() -> None:
     """P1：native 同轮正文 + ToolCall 先发 interim 阶段叙述，不是 Observation。"""
 
@@ -413,7 +460,7 @@ def test_react_budget_exhausted_emits_error() -> None:
 def test_react_repeat_call_suppressed_after_correction() -> None:
     """OR-4：有副作用工具首次相同调用给纠正机会；纠正后仍重复相同调用才 error 收尾。
 
-    read/web_fetch 为只读幂等工具，豁免 OR-4（见 test_react_read_repeat_allowed_no_guard）；
+    read 相同窗口只执行一次（见 test_react_read_repeat_blocked_after_first_success）；
     本用例用 write（有副作用）验证守卫仍生效。
     回归：硬错误分支曾漏清 repeat_retry，导致 react_route 再次回环 react_agent，
     脚本耗尽回退 done 才掩盖了死循环；修复后硬错误直接收尾（仅 3 次模型调用）。
@@ -452,16 +499,12 @@ def test_react_repeat_first_gives_correction_then_done_cleanly() -> None:
     assert kinds.count("thought") >= 1
 
 
-def test_react_read_repeat_allowed_no_guard() -> None:
-    """OR-4 豁免：read 为只读幂等工具，重复相同读取直接执行，不触发纠正/硬错误。
-
-    用户场景回归：模型重读同一文件不再报"工具 read 连续调用未推进，已终止"。
-    （上限内重复：READONLY_REPEAT_LIMIT=3，3 次相同 read 全部执行）
-    """
+def test_react_read_repeat_blocked_after_first_success() -> None:
+    """OR-4：相同 offset 的 read 只执行一次，第二次纠正后模型 done 收尾。"""
     with tempfile.TemporaryDirectory() as tmp:
         with open(f"{tmp}/a.txt", "w", encoding="utf-8") as handle:
             handle.write("hello")
-        gateway = _ScriptGateway([_REACT_READ, _REACT_READ, _REACT_READ, _REACT_DONE])
+        gateway = _ScriptGateway([_REACT_READ, _REACT_READ, _REACT_DONE])
         events = _collect(
             LangGraphAgent(gateway, build_default_registry(), sandbox_dir=tmp),
             _serializable(),
@@ -470,33 +513,36 @@ def test_react_read_repeat_allowed_no_guard() -> None:
     assert kinds.count("error") == 0
     messages = [event["payload"].get("message", "") for event in _pending_events(events)]
     assert not any("连续调用" in message for message in messages)
-    # 三次相同 read 全部执行（不豁免会只有 1 次 tool_call）
-    assert kinds.count("tool_call") == 3
-    assert kinds.count("tool_result") == 3
+    assert kinds.count("tool_call") == 1
+    assert kinds.count("tool_result") == 1
     assert kinds[-2:] == ["assistant_message", "response.completed"]
 
 
-def test_react_read_repeat_capped_after_limit() -> None:
-    """OR-4：read 相同参数超过 READONLY_REPEAT_LIMIT 后注入纠正（不再执行），
-    模型改 done 收尾则干净完成，不报错。"""
-    with tempfile.TemporaryDirectory() as tmp:
-        with open(f"{tmp}/a.txt", "w", encoding="utf-8") as handle:
-            handle.write("hello")
-        gateway = _ScriptGateway([_REACT_READ, _REACT_READ, _REACT_READ, _REACT_READ])
-        events = _collect(
-            LangGraphAgent(gateway, build_default_registry(), sandbox_dir=tmp),
-            _serializable(),
-        )
-    kinds = [event["kind"] for event in _pending_events(events)]
-    assert kinds.count("error") == 0
-    messages = [event["payload"].get("message", "") for event in _pending_events(events)]
-    assert not any("连续调用" in message for message in messages)
-    # 前 3 次相同 read 执行，第 4 次被纠正拦截；随后控制模型 done，再进行
-    # 一次无工具最终回答。
-    assert kinds.count("tool_call") == 3
-    assert kinds[-2:] == ["assistant_message", "response.completed"]
-    assert len(gateway.calls) == 6
-    assert gateway.calls[-1].tools == ()
+def test_read_offset_aliases_normalize_to_same_call() -> None:
+    """缺省 offset、offset=0 与 next_offset=0 视为同一窗口，避免漏拦重复读。"""
+    from app.agent.react import _normalized_tool_arguments
+
+    missing = _normalized_tool_arguments("read", {"path": "a.txt"})
+    explicit = _normalized_tool_arguments("read", {"path": "a.txt", "offset": 0})
+    alias = _normalized_tool_arguments("read", {"path": "a.txt", "next_offset": 0})
+    assert missing == explicit == alias == {"path": "a.txt", "offset": 0}
+
+
+def test_split_native_readonly_repeats_dedups_same_batch() -> None:
+    """同一响应内相同 path+offset 只保留第一次，bash 等写工具不受影响。"""
+    from app.agent.react import _split_native_readonly_repeats
+
+    first = NativeToolCall(call_id="1", name="read", arguments={"path": "a.txt"})
+    alias = NativeToolCall(call_id="2", name="read", arguments={"path": "a.txt", "next_offset": 0})
+    later = NativeToolCall(call_id="3", name="read", arguments={"path": "a.txt", "offset": 40})
+    bash = NativeToolCall(call_id="4", name="bash", arguments={"command": "ls"})
+    allowed, skipped, runs = _split_native_readonly_repeats(
+        {"observations": []},
+        (first, alias, later, bash),
+    )
+    assert [call.call_id for call in allowed] == ["1", "3", "4"]
+    assert skipped is not None and skipped.call_id == "2"
+    assert runs == 1
 
 
 def test_react_read_repeat_capped_uses_model_summary_after_correction() -> None:
@@ -509,8 +555,6 @@ def test_react_read_repeat_capped_uses_model_summary_after_correction() -> None:
                 _REACT_READ,
                 _REACT_READ,
                 _REACT_READ,
-                _REACT_READ,
-                _REACT_READ,
                 "文件内容已用于完成分析；建议继续按需求核对。",
             ]
         )
@@ -520,11 +564,8 @@ def test_react_read_repeat_capped_uses_model_summary_after_correction() -> None:
         )
     kinds = [event["kind"] for event in _pending_events(events)]
     assert kinds.count("error") == 0
-    # 前 3 次执行，第 4 次纠正，第 5 次仍相同后进入无工具最终回答；共 6 次模型调用。
-    assert kinds.count("tool_call") == 3
-    assert len(gateway.calls) == 6
+    assert kinds.count("tool_call") == 1
     assert kinds[-2:] == ["assistant_message", "response.completed"]
-    # 最终正文来自无工具模型回合，不得直接回显 read 的原文 "hello"。
     final = [
         e["payload"].get("text", "") for e in _pending_events(events) if e["kind"] == "assistant_message"
     ]
@@ -533,17 +574,12 @@ def test_react_read_repeat_capped_uses_model_summary_after_correction() -> None:
     assert gateway.calls[-1].tools == ()
 
 
-def test_react_read_toolname_with_newline_exempt_from_guard() -> None:
-    """OR-4 豁免 + strip 兜底：模型输出工具名带尾随换行（"read\n"）时，
-    归一化后命中 READONLY_TOOLS，重复相同读取仍直接执行，不报
-    「工具 read 连续调用未推进，已终止」。
-    """
+def test_react_read_toolname_with_newline_still_normalized() -> None:
+    """strip 兜底：工具名带尾随换行仍识别为 read，重复相同窗口只执行一次。"""
     with tempfile.TemporaryDirectory() as tmp:
         with open(f"{tmp}/a.txt", "w", encoding="utf-8") as handle:
             handle.write("hello")
-        gateway = _ScriptGateway(
-            [_REACT_READ_NL, _REACT_READ_NL, _REACT_READ_NL, _REACT_DONE]
-        )
+        gateway = _ScriptGateway([_REACT_READ_NL, _REACT_READ_NL, _REACT_DONE])
         events = _collect(
             LangGraphAgent(gateway, build_default_registry(), sandbox_dir=tmp),
             _serializable(),
@@ -553,9 +589,8 @@ def test_react_read_toolname_with_newline_exempt_from_guard() -> None:
     messages = [event["payload"].get("message", "") for event in _pending_events(events)]
     assert not any("连续调用" in message for message in messages)
     assert not any("未注册" in message for message in messages)
-    # 三次相同 read 全部执行（strip 前 "read\n" 不命中豁免会被守卫拦截）
-    assert kinds.count("tool_call") == 3
-    assert kinds.count("tool_result") == 3
+    assert kinds.count("tool_call") == 1
+    assert kinds.count("tool_result") == 1
     assert kinds[-2:] == ["assistant_message", "response.completed"]
 
 
