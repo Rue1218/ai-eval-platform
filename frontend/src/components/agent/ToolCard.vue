@@ -26,7 +26,7 @@
 
       <div class="tool-title-wrap">
         <div class="tool-name">{{ toolChineseName }}</div>
-        <div class="tool-sub-tag">ToolCall · {{ tool }}</div>
+        <div class="tool-sub-tag" :title="headerHint">{{ headerHint }}</div>
       </div>
 
       <div class="tool-meta-right">
@@ -59,12 +59,40 @@
         <div class="transcript-text">{{ transcriptText }}</div>
       </div>
       <div class="td-block">
-        <div class="td-label">输入 arguments</div>
-        <pre class="code">{{ formatJson(args ?? {}) }}</pre>
+        <div class="td-label">输入</div>
+        <dl v-if="inputFields.length" class="td-fields">
+          <div v-for="(field, fieldIdx) in inputFields" :key="`${field.label}-${fieldIdx}`" class="td-field">
+            <dt>{{ field.label }}</dt>
+            <dd :class="{ mono: field.mono, cmd: field.cmd }">{{ field.value }}</dd>
+          </div>
+        </dl>
+        <pre v-else class="code">{{ formatJson(args ?? {}) }}</pre>
       </div>
       <div class="td-block">
-        <div class="td-label">{{ status === 'fail' ? '输出 error' : '输出 result' }}</div>
-        <pre class="code">{{ outputText }}</pre>
+        <div class="td-label">{{ status === 'fail' ? '输出' : '结果' }}</div>
+        <p v-if="resultSummary && !readMeta" class="td-summary">{{ resultSummary }}</p>
+        <div v-if="readMeta" class="td-meta mono">
+          第 {{ readMeta.start }}–{{ readMeta.end }} 行 / 共 {{ readMeta.total }} 行
+          <span v-if="readMeta.next != null"> · 下一页 offset={{ readMeta.next }}</span>
+          <span v-else> · 已读完</span>
+        </div>
+        <div v-if="isMarkdownFile && previewText && status === 'ok'" class="td-tabs">
+          <button type="button" class="td-tab" :class="{ active: previewMode === 'render' }" @click="previewMode = 'render'">渲染</button>
+          <button type="button" class="td-tab" :class="{ active: previewMode === 'source' }" @click="previewMode = 'source'">源码</button>
+        </div>
+        <MarkdownView
+          v-if="showMarkdownOutput"
+          :content="previewText"
+          custom-class="tool-md"
+        />
+        <div v-else-if="previewLines.length && status === 'ok'" class="line-block" role="region" aria-label="文件内容">
+          <div v-for="line in previewLines" :key="line.n" class="ln-row">
+            <span class="ln-no mono">{{ line.n }}</span>
+            <span class="ln-text">{{ line.text }}</span>
+          </div>
+        </div>
+        <pre v-else-if="previewText && status === 'ok'" class="code">{{ previewText }}</pre>
+        <pre v-else class="code">{{ outputText }}</pre>
       </div>
     </div>
   </div>
@@ -73,6 +101,8 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import { formatLatency } from '../../utils/format'
+import { shouldKeepToolCardOpen } from '../../utils/toolCard'
+import MarkdownView from './MarkdownView.vue'
 
 const props = withDefaults(
   defineProps<{
@@ -103,7 +133,7 @@ watch(
       isOpen.value = true
       return
     }
-    if (status === 'ok' && ['audio.speech_recognition', 'audio.speech_synthesis', 'audio.voiceclone'].includes(props.tool)) {
+    if (status === 'ok' && shouldKeepToolCardOpen(props.tool)) {
       isOpen.value = true
       return
     }
@@ -158,6 +188,126 @@ const truncated = computed(() => props.truncated === true)
 const source = computed(() => props.source || '')
 const redacted = computed(() => props.redacted === true)
 const isAudioOutput = computed(() => ['audio.speech_synthesis', 'audio.voiceclone'].includes(props.tool))
+const previewMode = ref<'render' | 'source'>('render')
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null
+}
+
+function stringField(value: unknown): string {
+  return typeof value === 'string' ? value : value == null ? '' : String(value)
+}
+
+function asNonNegInt(value: unknown, fallback = 0): number {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.trunc(parsed) : fallback
+}
+
+const argsRecord = computed(() => asRecord(props.args) || {})
+const resultRecord = computed(() => asRecord(props.result))
+
+const headerHint = computed(() => {
+  const path = stringField(argsRecord.value.path)
+  const command = stringField(argsRecord.value.command)
+  if (props.tool === 'read' && path) return path
+  if (props.tool === 'bash' && command) return command
+  if ((props.tool === 'write' || props.tool === 'edit') && path) return path
+  return `ToolCall · ${props.tool}`
+})
+
+type InputField = { label: string; value: string; mono?: boolean; cmd?: boolean }
+
+const inputFields = computed(() => {
+  const args = argsRecord.value
+  const fields: InputField[] = []
+  if (props.tool === 'read') {
+    if (args.path) fields.push({ label: '文件', value: stringField(args.path), mono: true })
+    const offset = args.offset ?? args.next_offset ?? 0
+    fields.push({ label: '起始行', value: String(asNonNegInt(offset) + 1) })
+    if (args.limit != null) fields.push({ label: '行数', value: String(args.limit) })
+    return fields
+  }
+  if (props.tool === 'bash' && args.command) {
+    fields.push({ label: '命令', value: stringField(args.command), mono: true, cmd: true })
+    return fields
+  }
+  if ((props.tool === 'write' || props.tool === 'edit') && args.path) {
+    fields.push({ label: '文件', value: stringField(args.path), mono: true })
+    if (props.tool === 'edit' && args.old) {
+      fields.push({ label: '查找', value: stringField(args.old) })
+    }
+    return fields
+  }
+  if (props.tool === 'web_search' && args.query) {
+    fields.push({ label: '关键词', value: stringField(args.query) })
+    return fields
+  }
+  if (props.tool === 'web_fetch' && args.url) {
+    fields.push({ label: '网址', value: stringField(args.url), mono: true })
+    return fields
+  }
+  return Object.entries(args)
+    .filter(([, value]) => value !== undefined)
+    .slice(0, 8)
+    .map(([key, value]): InputField => ({
+      label: key,
+      value: typeof value === 'string' ? value : formatJson(value),
+      mono: true,
+    }))
+})
+
+const readMeta = computed(() => {
+  const data = resultRecord.value
+  const read = asRecord(data?.read)
+  if (!read) return null
+  return {
+    start: asNonNegInt(read.start_line) + 1,
+    end: asNonNegInt(read.end_line),
+    total: asNonNegInt(read.total_lines),
+    next: read.next_offset,
+  }
+})
+
+const previewText = computed(() => {
+  const data = resultRecord.value
+  const read = asRecord(data?.read)
+  if (read && typeof read.preview === 'string') return read.preview
+  if (props.tool === 'bash') {
+    if (typeof props.result === 'string') return props.result
+    if (typeof data?.summary === 'string') return data.summary
+  }
+  const web = asRecord(data?.web)
+  if (web && typeof web.preview === 'string') return web.preview
+  return ''
+})
+
+const previewLines = computed(() => {
+  if (props.tool !== 'read' || !previewText.value) return []
+  const start = asNonNegInt(asRecord(resultRecord.value?.read)?.start_line)
+  return previewText.value.replace(/\n$/, '').split('\n').map((text, index) => ({
+    n: start + index + 1,
+    text,
+  }))
+})
+
+const isMarkdownFile = computed(() => {
+  const path = stringField(argsRecord.value.path || asRecord(resultRecord.value?.read)?.path)
+  return /\.(md|markdown|mdx)$/i.test(path)
+})
+
+const showMarkdownOutput = computed(
+  () =>
+    props.status === 'ok' &&
+    !!previewText.value &&
+    isMarkdownFile.value &&
+    previewMode.value === 'render',
+)
+
+const resultSummary = computed(() => {
+  const data = resultRecord.value
+  if (typeof data?.summary === 'string') return data.summary
+  return ''
+})
 
 const playUrl = computed(() => {
   const result = props.result
@@ -187,21 +337,6 @@ const stateText = computed(() => {
 const outputText = computed(() => {
   if (props.status === 'pending') return '…'
   if (props.result === undefined || props.result === null || props.result === '') return '{}'
-  if (props.tool === 'read' && typeof props.result === 'object') {
-    const data = props.result as Record<string, unknown>
-    const read = data.read
-    if (read && typeof read === 'object') {
-      const meta = read as Record<string, unknown>
-      const start = Number(meta.start_line ?? 0) + 1
-      const end = Number(meta.end_line ?? 0)
-      const total = Number(meta.total_lines ?? 0)
-      const next = meta.next_offset
-      const summary = typeof data.summary === 'string' ? data.summary : '文件读取完成'
-      const preview = typeof meta.preview === 'string' ? meta.preview : ''
-      const page = next === null || next === undefined ? '已读完' : `下一页 offset=${next}`
-      return `${summary}\n范围：第 ${start}–${end} 行 / 共 ${total} 行\n状态：${page}${preview ? `\n\n受控预览：\n${preview}` : ''}`
-    }
-  }
   if (props.tool === 'task' && typeof props.result === 'object') {
     const data = props.result as Record<string, unknown>
     const task = data.task
@@ -393,7 +528,115 @@ pre.code {
   font-size: 11.5px;
   line-height: 1.6;
   overflow: auto;
-  max-height: 200px;
+  max-height: 320px;
+}
+.td-fields {
+  margin: 0;
+  display: grid;
+  gap: 6px;
+}
+.td-field {
+  display: grid;
+  grid-template-columns: 56px 1fr;
+  gap: 8px;
+  align-items: start;
+}
+.td-field dt {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  padding-top: 1px;
+}
+.td-field dd {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 12.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.td-field dd.mono,
+.td-field dd.cmd {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.td-field dd.cmd {
+  background: #0f172a;
+  color: #e2e8f0;
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+.td-summary {
+  margin: 0 0 6px;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.td-meta {
+  margin-bottom: 8px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+.td-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.td-tab {
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-main);
+  color: var(--text-secondary);
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.td-tab.active {
+  color: var(--accent-success);
+  border-color: color-mix(in srgb, var(--accent-success) 40%, var(--border-subtle));
+  background: color-mix(in srgb, var(--accent-success) 10%, var(--bg-main));
+}
+.line-block {
+  max-height: 360px;
+  overflow: auto;
+  background: #0f172a;
+  color: #e2e8f0;
+  border-radius: 8px;
+  padding: 6px 0;
+}
+.ln-row {
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  gap: 8px;
+  min-height: 20px;
+}
+.ln-no {
+  color: #64748b;
+  text-align: right;
+  font-size: 11px;
+  line-height: 1.65;
+  user-select: none;
+}
+.ln-text {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding-right: 10px;
+}
+.tool-card :deep(.tool-md) {
+  font-size: 13.5px;
+  line-height: 1.65;
+  max-height: 360px;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--bg-main);
+}
+.tool-card :deep(.tool-md .md-p),
+.tool-card :deep(.tool-md .md-li-bullet),
+.tool-card :deep(.tool-md .md-li-num) {
+  font-size: 13.5px;
 }
 .tool-card.no-anim {
   animation: none;

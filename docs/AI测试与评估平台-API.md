@@ -2,7 +2,7 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.36 |
+| 文档版本 | V1.37 |
 | 对应 PRD | V1.13（功能唯一权威） |
 | 对应设计规范 | V1.3（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V0.5（LangGraph 单轮 Agent 与 WS 桥接；JSON 仍以本文为准） |
@@ -29,6 +29,8 @@
 > V1.32（2026-08-25）：基础 `read`、`write`、`edit`、`bash`、`web_search`、`web_fetch` 与对话拆解 `task` 改为模型原生 Function Calling 直连；仅评测任务桥 `platform.tasks` 继续作为 MCP 扩展。新增 Firecrawl 服务端配置、网页抓取安全投影和原子文件写入边界。
 >
 > V1.33（2026-08-25）：单回合允许多条 `assistant_message`；`response.completed` 仍为整轮结束。可选 `interim=true` 表示阶段叙述（计划/下一步），不是 Observation 原文，不得结束生成态。清单复用 `plan.slots.steps` 与 `task` 的 `tool_result`，不新事件。
+>
+> V1.37（2026-08-26）：`read` 预览按完整行截取（最多 4000 字符），禁止半行截断；`next_offset` 可作为 `offset` 别名。相同窗口重复 read 只执行一次。
 >
 > V1.36（2026-08-25）：`GET /api/sessions/{id}/messages.context_meter` 由服务端按窗口消息计算，不再返回 `null`。字段仍为 §3.4 既有形状（`messages`/`window`/`total_tokens`/`max_tokens`/`compacted` 等）；前端只读，禁止按条数自算。
 >
@@ -625,7 +627,7 @@ Embedding 与 Reranker 的 URL、模型和 Key 与主模型使用相同的“按
 
 | 函数 | 用途与上限 | 执行/结果边界 |
 | --- | --- | --- |
-| `read(path, offset?, limit?)` | workspace 相对路径；0-based 分页；最多 2,000 行、8,000 字符、10MB 文件 | 单次流式扫描；模型可见片段 ≤8,000 字符，未读完带 `next_offset`；ToolCard 仅显示行范围和 ≤500 字符预览 |
+| `read(path, offset?, limit?)` | workspace 相对路径；0-based 分页；最多 2,000 行、8,000 字符、10MB 文件 | 单次流式扫描；模型可见片段 ≤8,000 字符，未读完带 `next_offset`（可回填为下次 `offset`）；ToolCard 显示行号与 ≤4000 字符完整行预览 |
 | `write(path, content)` / `edit(path, old, new)` | 新建最多 2MB UTF-8 文件 / 精确单次替换 | `write` 使用 O_EXCL 防覆盖竞争；`edit` fsync 后 `os.replace` 原子提交；不回显写入正文 |
 | `bash(command)` | 会话 workspace 内的短命令 | 始终经 bwrap：无网络、唯一可写目录、资源上限、超时整树清理；引擎不可用 fail-closed |
 | `web_search(query, limit?)` | 关键词 ≤500 字符、1–10 条 | API 容器用环境变量中的 Firecrawl REST Key；未配置返回 `VALIDATION`，不伪造结果；结果结构化并脱敏 |
@@ -1380,14 +1382,14 @@ Harness 回合必须丢到后台 Task，**不得**在 `receive` 循环里 `await
     "is_complete": false,
     "next_offset": 2000,
     "content_truncated": false,
-    "preview": "前 500 字符以内的受控预览",
+    "preview": "按完整行截取的受控预览，最多 4000 字符",
     "preview_truncated": true
   }
 }
 ```
 
 - `offset` / `limit` 的单位为行，均为 0-based；`end_line` 为排他上界，故示例表示第 1–2000 行；
-- `preview` 最多 500 字符，仅用于 ToolCard；**完整 `content` 只作为服务端 Observation 供下一模型回合使用，禁止出现在 `tool_result`、`ws_events`、历史回放或日志中**；
+- `preview` 最多 4000 字符且停在完整行，仅用于 ToolCard；**完整 `content` 只作为服务端 Observation 供下一模型回合使用，禁止出现在 `tool_result`、`ws_events`、历史回放或日志中**；
 - `truncated=true` 表示本次未读完整文件或受服务端内容预算限制；`content_truncated=true` 仅表示完整内容被截断，首期按整行裁剪，禁止截断半行；
 - `source` 使用不暴露宿主绝对路径的 `workspace:<相对路径>` 标识。
 
@@ -2007,4 +2009,16 @@ LangGraph `reflect` 在规划 `delivery=confirm` 且复核通过后发出确认�
 | `backend/api/app/routers/sessions.py` | 历史接口下发真实 `context_meter` |
 | `frontend/src/components/agent/ContextMeter.vue` | 已压缩徽标；圆环底色略加深 |
 | `docs/AI测试与评估平台-Harness-上下文工程层.md` | V0.4.2 校准计量已接线 |
+
+**V1.37（2026-08-26）— read 防重复与 ToolCard 行级预览**
+
+相同 `path+offset` 的 `read` 只执行一次（JSON ReAct 与原生 ToolCall 同一守卫）。预览按完整行截取，最多 4000 字符；`next_offset` 可作为下次 `offset` 别名。ToolCard 展示输入字段、行号与 Markdown 渲染。
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/agent/react.py` | 原生路径 OR-4；`READONLY_REPEAT_LIMIT=1`；`next_offset` 归一 |
+| `backend/api/app/harness/execution/dispatch.py` / `registry.py` | 完整行预览、内容预算预留、`next_offset` 别名 |
+| `frontend/src/components/agent/ToolCard.vue` | 字段/行号/命令/文件内容 + MarkdownView |
+| `frontend/src/utils/toolCard.ts` | 成功后默认展开的工具名单 |
+| `docs/AI测试与评估平台-API.md` | §4.3 `read` 预览契约 |
 

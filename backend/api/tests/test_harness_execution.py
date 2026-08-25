@@ -335,7 +335,7 @@ def test_read_file_safe_default_limit_returns_first_2000_lines() -> None:
         assert result.is_complete is False
         assert result.content.splitlines()[0] == "x"
         assert result.content.splitlines()[-1] == "x"
-        assert "next_offset=2000" in result.to_tool_data()["model_text"]
+        assert "offset=2000" in result.to_tool_data()["model_text"]
 
 
 def test_read_file_safe_stops_on_character_budget_at_line_boundary() -> None:
@@ -349,6 +349,34 @@ def test_read_file_safe_stops_on_character_budget_at_line_boundary() -> None:
         assert result.next_offset == result.lines_read
         assert result.content.endswith("\n")
         assert result.content_truncated is True
+        model_text = str(result.to_tool_data()["model_text"])
+        assert len(model_text) <= 8000
+        display = result.to_tool_data()["display"]["read"]
+        preview = str(display["preview"])
+        assert preview.endswith("\n") or preview == result.content
+
+
+def test_clip_at_line_boundary_keeps_full_lines() -> None:
+    """预览截断停在换行处，不切开当前行。"""
+    from app.harness.execution.dispatch import clip_at_line_boundary
+
+    text = "alpha\nbeta-is-long\ngamma\n"
+    clipped, truncated = clip_at_line_boundary(text, 12)
+    assert truncated is True
+    assert clipped == "alpha\n"
+    assert not clipped.endswith("beta")
+
+
+def test_read_handler_accepts_next_offset_alias() -> None:
+    """模型把上次 next_offset 填回参数时，按 offset 继续读，不重读首页。"""
+    from app.harness.execution.registry import _read_handler
+
+    with tempfile.TemporaryDirectory() as root:
+        write_file_safe("page.txt", "one\ntwo\nthree\nfour", root)
+        first = _read_handler({"path": "page.txt", "limit": 2}, root)
+        assert first.content == "one\ntwo\n"
+        second = _read_handler({"path": "page.txt", "next_offset": first.next_offset, "limit": 2}, root)
+        assert second.content == "three\nfour"
 
 
 def test_read_file_safe_large_file_pages_without_line_scan_timeout() -> None:
@@ -400,7 +428,7 @@ def test_read_result_hides_full_content_from_display_data() -> None:
         assert isinstance(display, dict)
         assert "model_text" in data
         assert "model_text" not in display
-        assert len(display["read"]["preview"]) <= 500
+        assert len(display["read"]["preview"]) <= 4000
 
 
 def test_task_plan_is_transient_and_never_creates_platform_task() -> None:
