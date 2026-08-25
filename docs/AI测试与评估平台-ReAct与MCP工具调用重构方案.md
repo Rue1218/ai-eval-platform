@@ -2,8 +2,8 @@
 
 | 项 | 内容 |
 | --- | --- |
-| 文档版本 | V0.5.0 |
-| 状态 | P0/P1 与 P2-A（完整原生 ToolCall）已实施并完成兼容默认、`call_id`、Schema、失败事件、原文隔离与 Anthropic 多结果加固；P2-B（参数增量流）与 P3 内部 MCP Host 待实施 |
+| 文档版本 | V0.6.0 |
+| 状态 | P0/P1、P2-A（完整原生 ToolCall）与 P2-B（流式参数累积、网关投影、两回合收敛）已实施；P3 内部 MCP Host 待实施 |
 | 审查日期 | 2026-08-25 |
 | 适用范围 | `backend/api/app/agent/`、`app/harness/`、`app/llm/`、`app/routers/ws.py` 与内部短工具 |
 | 上游权威 | `AI测试与评估平台-PRD.md`、`AI测试与评估平台-API.md`、`AGENTS.md` |
@@ -180,17 +180,17 @@ P2-A 已不再要求支持 Function Calling 的模型输出 `react.v1` JSON，�
 | Anthropic Messages | `tools` + `input_schema` | `tool_use` 内容块 | `tool_result` 内容块 |
 | 非标准兼容网关 | 协议档显式设为 `native` 后才启用 | 按已验证映射处理 | 设为 `legacy` 时不发送 `tools`，固定走受控 JSON 分支 |
 
-所有适配器必须产出同一内部事件序列：
+所有适配器先在内部累计协议特有的参数片段，再产出同一可执行事件序列：
 
 ```text
-content_delta* → tool_call_delta* → tool_call_completed(call_id)
+content_delta* → tool_call_completed(call_id, name, arguments)
 ```
 
-参数在 `tool_call_completed` 前只可用于展示“准备调用”，不得执行。仅当参数 JSON 完整、schema 校验通过且 ToolPolicy 放行后，才进入 ToolNode。`call_id` 必须从模型消息到 ToolResult、审计记录与前端 ToolCard 全程保持不变。
+参数片段只存在于协议适配器的调用内存，既不投影为 WebSocket 事件，也不得执行。仅当参数 JSON 完整、schema 校验通过且 ToolPolicy 放行后，才进入 ToolNode。`call_id` 必须从模型消息到 ToolResult、审计记录与前端 ToolCard 全程保持不变。
 
 **当前实施边界（P2-A）**：三协议的非流式完整 ToolCall 已双向映射；`tool_call_mode` 默认 `legacy`，只有经人工验证后显式设置为 `native` 的协议档发送 `ModelRequest.tools`。`ModelResponse.tool_calls` 已回到 LangGraph；空、空白、重复 `call_id` 或无效工具名/参数会归一为 `UPSTREAM`，不进入工具队列。同一有效响应的多个调用以队列串行执行，每一项先经过注册期受限 JSON Schema、Gate、附件绑定、`dispatch` 和 bwrap。未知工具、参数错误、Gate/绑定拒绝、超时和执行失败均发送与原始调用相同 `call_id` 的 `tool_result`，前端优先按 ID 回填卡片。原始工具正文只保留在 Agent 实例内、按 `thread_id` 隔离的单回合存储；GraphState、RunnableConfig、WS 事件和检查点均不保存 120,000 字符 read 原文。
 
-**尚未实施（P2-B）**：上游 SSE 的参数增量仍未投影为内部 `tool_call_delta`，因此当前只在参数完整时产生 `tool_call`；这是 API.md 已允许的保守行为，不新增浏览器事件。工具结果后的“是否继续调用”先由一个原生模型回合判定；判定为自然语言后，为保证 P0 的最终正文仍真实流式展示，当前实现再发起一个无工具流式回答回合。P2-B 才会把第二回合的原生 ToolCall/正文增量直接流出，从而消除这一次额外回合。
+**P2-B 实施边界**：OpenAI Chat Completions 按 `index` 累积 `tool_calls[].function.arguments`，OpenAI Responses 累积 `response.function_call_arguments.delta` 并以 `done` 收尾，Anthropic Messages 累积 `input_json_delta` 并以 `content_block_stop` 收尾。适配器仅在可解析为 JSON 对象时创建 `AdapterStreamEvent(tool_call)`；无效参数统一为 `UPSTREAM`。`ModelGateway` 将其归一为 `ModelStreamEvent(tool_call)` 与最终 `ModelResponse.tool_calls`，不增加对外 WS 事件。原生工具结果后的下一模型回合直接使用该流式能力：自然语言正文立即投影；若继续请求工具，则仍由既有 ToolNode 产生 `tool_call`/`tool_result`。因此简单“工具 → 结论”路径为两次模型调用；`legacy` JSON-ReAct 兼容分支仍保留三回合收敛路径。
 
 ### 4.3 状态机
 
@@ -526,7 +526,7 @@ report
 | `content_delta` | `assistant_delta` | 只能来自模型自然语言正文；可发生在工具调用前或工具结果后的下一模型回合。 |
 | `tool_call_completed` | `tool_call` | payload 必须含稳定 `call_id`、工具名和已经完成校验的参数。 |
 | `ToolResult` | `tool_result` | 与 `call_id` 关联；只放受控摘要、状态、耗时和 artifact 引用。 |
-| 无 ToolCall 的模型回合结束 | `assistant_message` + `response.completed` | 收敛为本轮最终答案；P2-A 在工具后为保持正文 token 流，仍会使用无工具流式回答回合，P2-B 再消除此额外调用。 |
+| 无 ToolCall 的模型回合结束 | `assistant_message` + `response.completed` | 收敛为本轮最终答案；native 工具结果后的第二回合直接投影正文，不再补发无工具模型调用。 |
 
 `assistant_delta` 是瞬态帧，仍不落库；每个模型消息段完成时必须以现有 `assistant_message` 形式保存完整受控文本，供断线重连和历史消息恢复。若 API.md 当前 `assistant_message` 契约无法区分中间段与最终段，必须先更新 API.md 再实现，不得私自加字段。
 
@@ -579,9 +579,9 @@ artifact_id / workspace 相对路径 / sha256 / 行范围 / 可见预算
 1. 保留 LangGraph 的 `routing → react_agent → tools → react_agent` 条件边，不新增第二套 Agent 框架；
 2. **P2-A 已完成**：扩展 `app/llm/contracts.py` 的完整 ToolCall、ToolResultMessage 和“无 ToolCall 的最终正文”；
 3. **P2-A 已完成**：三协议适配器映射工具定义、完整 ToolCall 与工具结果，并维护稳定 `call_id`；
-4. **P2-B 待完成**：`ModelGateway` 流式投影 ToolCall 参数增量与正文，不把协议差异带到 Agent 图；
-5. **P2-A 已完成 / P2-B 待完成**：协议档已有 `native|legacy` 的已验证原生调用开关；参数流、真正并行调用等细粒度能力标记仍待 P2-B，且不支持的网关不可静默降级；
-6. **P2-A 已完成**：Agent 图可在工具结果后继续调用或进入自然回答收敛；同轮多调用先串行执行；
+4. **P2-B 已完成**：`ModelGateway` 流式投影完整 ToolCall 与正文；参数片段只在适配器内累计，不把协议差异或不完整参数带到 Agent 图；
+5. **P2-A/P2-B 已完成**：协议档已有 `native|legacy` 的已验证原生调用开关；真正并行调用等细粒度能力标记仍不在本阶段范围，且不支持的网关不可静默降级；
+6. **P2-A/P2-B 已完成**：Agent 图可在工具结果后继续调用或直接流式进入自然回答收敛；同轮多调用先串行执行；
 7. 严格 JSON 保留为临时兼容路径；在协议档能力标记上线后再确定淘汰日期。
 
 ### 阶段 D：内部 MCP Host（P3）
@@ -607,7 +607,7 @@ artifact_id / workspace 相对路径 / sha256 / 行范围 / 可见预算
 
 - 给定“读取文件并总结风险”，`read` 成功后最终助手消息必须包含分析结论，不能等于或大段复制工具原文；
 - 同一 `read(path, offset, limit)` 重复两次以上，不得直接回显文件内容；
-- P2-A 的完整小文件读取、收敛判定和最终流式总结最多三次模型回合；P2-B 验收目标是降为两次；
+- native 模式下完整小文件读取与最终流式总结最多两次模型回合；legacy JSON-ReAct 兼容路径最多三次；
 - 多页读取时，下一页必须使用上一页 `next_offset`，不能从 0 重读；
 - 工具失败、模型解析失败、预算耗尽均返回中性错误，不泄露内部原文或堆栈。
 - 原生 ToolCall 的 `call_id` 从模型请求、`tool_call`、`tool_result` 到下一轮 ToolResultMessage 均一致；
@@ -644,11 +644,11 @@ artifact_id / workspace 相对路径 / sha256 / 行范围 / 可见预算
 
 | 文件/目录 | 预计作用 |
 | --- | --- |
-| `backend/api/app/agent/react.py` | P0/P1 已删除原文直出；P2-A 已接入原生 ToolCall 与兼容回退，P2-B 再接入参数增量流。 |
+| `backend/api/app/agent/react.py` | P0/P1 已删除原文直出；P2-A 已接入原生 ToolCall 与兼容回退；P2-B 在工具结果后的下一原生回合直接流式收敛。 |
 | `backend/api/app/agent/graph.py` | P2-A 已支持 ToolCall 队列的串行条件边与最终正文分流。 |
-| `backend/api/app/llm/contracts.py` | P2-A 已定义完整 ToolCall、模型回合和工具结果输入契约；P2-B 再实现增量。 |
-| `backend/api/app/llm/gateway.py` | 归一模型工具增量，不执行工具。 |
-| `backend/api/app/adapters.py` | P2-A 已实现三协议的工具定义、完整工具调用和工具结果映射；P2-B 再实现 SSE 参数增量。 |
+| `backend/api/app/llm/contracts.py` | P2-A 已定义完整 ToolCall、模型回合和工具结果输入契约；P2-B 复用完整 ToolCall 作为流式收尾契约。 |
+| `backend/api/app/llm/gateway.py` | P2-B 将适配器已完成 ToolCall 投影为流事件及收尾响应，不执行工具。 |
+| `backend/api/app/adapters.py` | P2-A 已实现三协议的工具定义、完整工具调用和工具结果映射；P2-B 已实现 SSE 参数累计与完整性校验。 |
 | `backend/api/app/harness/context/assembly.py` | 以独立观察装配模型输入，执行预算裁剪。 |
 | `backend/api/app/harness/contracts/artifacts.py` | 扩展 ToolDescriptor/ToolCall/ToolResult/Observation/artifact 引用。 |
 | `backend/api/app/harness/execution/registry.py` | 从 handler 注册表演进为目录、风险、schema 和策略唯一源。 |
@@ -667,7 +667,7 @@ artifact_id / workspace 相对路径 / sha256 / 行范围 / 可见预算
 
 | 文件 | 操作 | 作用 |
 | --- | --- | --- |
-| `docs/AI测试与评估平台-ReAct与MCP工具调用重构方案.md` | 新增并更新至 V0.5.0 | 固化故障调查与主流 Agent 事件流调研结论，明确保留 LangGraph、接入原生 ToolCall、内部 MCP、行级 read、Worker、沙箱的重构边界、迁移阶段和验收标准；记录 P0/P1/P2-A 实施与加固状态。 |
+| `docs/AI测试与评估平台-ReAct与MCP工具调用重构方案.md` | 新增并更新至 V0.6.0 | 固化故障调查与主流 Agent 事件流调研结论，明确保留 LangGraph、接入原生 ToolCall、内部 MCP、行级 read、Worker、沙箱的重构边界、迁移阶段和验收标准；记录 P0/P1/P2-A/P2-B 实施与加固状态。 |
 | `backend/api/app/harness/execution/native_results.py` | 新增 | 提供按 Agent 回合隔离、结束即清理的原生 ToolResult 临时内存，避免原文进入 Config、State、事件或检查点。 |
 
 ### V0.2.1（2026-08-25）实施记录
@@ -696,3 +696,11 @@ artifact_id / workspace 相对路径 / sha256 / 行范围 / 可见预算
 - 原生 ToolCall 在 ReAct 入队前校验 `call_id` 非空且同轮唯一，并校验工具名与参数对象；异常统一为 `UPSTREAM`，不触发 ToolNode。
 - 完整原生 ToolResult 从 RunnableConfig 移至 Agent 实例私有、按回合隔离的内存存储；模型网关仅透传取消回调，回合结束立即清理正文。
 - 受限 JSON Schema 在工具注册时拒绝未实现关键字；ToolNode 不再访问注册表私有字段，附件绑定未知异常记录脱敏类型轨迹。
+
+### V0.6.0（2026-08-25）实施记录
+
+- P2-B 已实施：OpenAI Chat Completions、OpenAI Responses 与 Anthropic Messages 的 SSE 工具参数分别在适配器内累计，并只在参数构成 JSON 对象后输出完整 ToolCall；流末兼容补齐缺失的完成帧，无效参数统一为 `UPSTREAM`。
+- `ModelGateway.stream/astream` 已将完整调用投影为内部 `ModelStreamEvent(tool_call)`，同时写入收尾 `ModelResponse.tool_calls`；对外 WebSocket 仍只使用既有 `tool_call`、`tool_result`，不新增参数增量事件，也不暴露不完整参数。
+- ReAct 的 native 工具结果回合直接复用流式模型调用：自然语言正文立即显示，继续调用工具时仍回到既有 ToolNode。简单工具读取和总结由三次模型调用降为两次；`legacy` JSON-ReAct 兼容分支保持原有行为。
+- 本次未实施：内部 MCP Host/transport、外部 MCP、浏览器直连 MCP、长任务 MCP bridge、真正并行工具调用与独立沙箱 Runner；P3/P4 的安全边界不变。
+- 修改文件：`backend/api/app/adapters.py`、`backend/api/app/llm/gateway.py`、`backend/api/app/agent/react.py`、`backend/api/tests/test_adapters.py`、`backend/api/tests/test_llm_graph.py`、`backend/api/tests/test_agent_react.py`。

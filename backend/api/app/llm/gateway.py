@@ -18,6 +18,7 @@ from typing_extensions import TypedDict
 from ..adapters import (
     SUPPORTED_PROTOCOLS,
     AdapterResult,
+    AdapterStreamEvent,
     StreamAborted,
     call_protocol,
     stream_protocol,
@@ -35,7 +36,10 @@ logger = logging.getLogger("ai-eval.llm")
 
 InvokeTransport = Callable[[ModelRequest], AdapterResult]
 # 流式 transport：should_abort 回调经节点从 RunnableConfig 读取后传入（不入 State）
-StreamTransport = Callable[[ModelRequest, StreamAbort | None], Iterator[tuple[str, str]]]
+StreamTransport = Callable[
+    [ModelRequest, StreamAbort | None],
+    Iterator[tuple[str, str] | AdapterStreamEvent],
+]
 
 
 class _ModelCallState(TypedDict, total=False):
@@ -67,7 +71,7 @@ def _default_invoke_transport(request: ModelRequest) -> AdapterResult:
 
 def _default_stream_transport(
     request: ModelRequest, should_abort: StreamAbort | None = None
-) -> Iterator[tuple[str, str]]:
+) -> Iterator[tuple[str, str] | AdapterStreamEvent]:
     """把模型层契约映射到现有三协议 SSE 适配器。"""
     config = request.config
     yield from stream_protocol(
@@ -84,6 +88,7 @@ def _default_stream_transport(
         should_abort=should_abort,
         reasoning_enabled=config.reasoning_enabled,
         reasoning_effort=config.reasoning_effort,
+        tools=[dict(tool) for tool in request.tools],
     )
 
 
@@ -144,6 +149,12 @@ class ModelGateway:
             stream_mode=["custom", "updates"],
         ):
             if mode == "custom":
+                if chunk["kind"] == "tool_call":
+                    tool_call = chunk.get("tool_call")
+                    if not isinstance(tool_call, NativeToolCall):
+                        raise AppError(ErrorCode.INTERNAL, "模型流式工具调用无效")
+                    yield ModelStreamEvent(kind="tool_call", tool_call=tool_call)
+                    continue
                 yield ModelStreamEvent(kind=chunk["kind"], text=chunk["text"])
                 continue
             response = self._response_from_update(chunk)
@@ -165,6 +176,12 @@ class ModelGateway:
             stream_mode=["custom", "updates"],
         ):
             if mode == "custom":
+                if chunk["kind"] == "tool_call":
+                    tool_call = chunk.get("tool_call")
+                    if not isinstance(tool_call, NativeToolCall):
+                        raise AppError(ErrorCode.INTERNAL, "模型流式工具调用无效")
+                    yield ModelStreamEvent(kind="tool_call", tool_call=tool_call)
+                    continue
                 yield ModelStreamEvent(kind=chunk["kind"], text=chunk["text"])
                 continue
             response = self._response_from_update(chunk)
@@ -232,9 +249,22 @@ class ModelGateway:
         should_abort = configurable.get("abort", {}).get("should_abort")
         writer = get_stream_writer()
         content: list[str] = []
+        tool_calls: list[NativeToolCall] = []
         started = time.perf_counter()
         try:
-            for kind, delta in self._stream_transport(request, should_abort):
+            for chunk in self._stream_transport(request, should_abort):
+                if isinstance(chunk, AdapterStreamEvent):
+                    if chunk.kind != "tool_call" or chunk.tool_call is None:
+                        raise AppError(ErrorCode.UPSTREAM, "上游流式工具调用结构异常")
+                    tool_call = NativeToolCall(
+                        call_id=chunk.tool_call.call_id,
+                        name=chunk.tool_call.name,
+                        arguments=dict(chunk.tool_call.arguments),
+                    )
+                    tool_calls.append(tool_call)
+                    writer({"kind": "tool_call", "tool_call": tool_call})
+                    continue
+                kind, delta = chunk
                 if not delta:
                     continue
                 # 关闭思考摘要时，即使上游仍返回 reasoning_content，也不得投影到 WS。
@@ -263,6 +293,7 @@ class ModelGateway:
                 usage={},
                 raw={},
                 latency_ms=round((time.perf_counter() - started) * 1000),
+                tool_calls=tuple(tool_calls),
             )
         }
 

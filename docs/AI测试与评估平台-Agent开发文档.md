@@ -1,7 +1,7 @@
 # AI 测试与评估平台 Agent 开发文档
 
-> 版本：V0.9.0
-> 状态：LangGraph Harness 已启用 ReAct P0/P1 与加固后的 P2-A（兼容模式默认、原生 `call_id` 拒绝闭环、注册期 Schema 门禁、单回合原文隔离、同轮串行队列）；内部 MCP Host 与原生 ToolCall 参数增量流仍未实施
+> 版本：V1.0.0
+> 状态：LangGraph Harness 已启用 ReAct P0/P1、加固后的 P2-A 与 P2-B（流式参数累计、完整 ToolCall 投影、native 两回合收敛）；内部 MCP Host 仍未实施
 > 审查日期：2026-08-25
 > 对应需求：`AI测试与评估平台-PRD.md` V1.12
 > 对应接口：`AI测试与评估平台-API.md` V1.28
@@ -60,6 +60,8 @@ tools -> (tools | react_agent)
 
 三协议 HTTP 细节只允许存在于 `app/adapters.py`。API Key 不得出现在日志、事件、异常消息或模型层对象的默认 repr 中。
 
+流式工具参数只能在 `app/adapters.py` 的单次调用内累计：OpenAI Chat 按调用索引、OpenAI Responses 按输出项、Anthropic 按内容块累计，只有 JSON 对象完整后才产生 `ModelStreamEvent(kind="tool_call")`。该内部事件用于 Agent 控制流和最终 `ModelResponse.tool_calls`，浏览器继续只接收既有的完整 `tool_call`/`tool_result`，不得新增或透传参数片段。
+
 Agent 思考配置从 `Setting(key="agent_reasoning")` 读取，结构为
 `{"enabled": true, "effort": "medium"}`。开启时，OpenAI Responses 使用
 `reasoning.effort` 与 `reasoning.summary="auto"`，Gemini OpenAI 兼容端点使用
@@ -89,7 +91,7 @@ Agent 思考配置从 `Setting(key="agent_reasoning")` 读取，结构为
 
 以下内容仍不属于当前已实施范围，不得绕过契约提前加入：
 
-- 外部 MCP、浏览器直连 MCP、原生 ToolCall 参数增量流和真正并行执行；
+- 外部 MCP、浏览器直连 MCP 和真正并行执行；
 - 内部 MCP Server/Transport、外部 MCP、浏览器直连 MCP；
 - 人工确认卡、权限策略、consent、安全门禁；
 - Redis/pgvector 记忆、检查点和复杂上下文压缩；
@@ -191,3 +193,10 @@ Agent 思考配置从 `Setting(key="agent_reasoning")` 读取，结构为
 - `backend/api/app/agent/react.py`：在原生 ToolCall 入队前拒绝空、空白、重复 ID、空工具名和非对象参数，归一 `UPSTREAM`。
 - `backend/api/app/harness/execution/registry.py` / `toolnode.py` / `agent/log.py`：Schema 在注册期拒绝未实现关键字；ToolNode 改用注册表公开查询接口，并对附件绑定未知异常输出脱敏 `agent_trace`。
 - `backend/api/tests/test_agent_react.py` / `test_harness_execution.py` / `test_profile_schemas.py`：覆盖原始结果配置隔离、空/重复 `call_id`、Schema 注册拒绝与默认兼容模式。
+
+### V1.0.0（2026-08-25）修改代码文件与作用清单
+
+- `backend/api/app/adapters.py`：三协议流式请求透传已验证的工具 schema，在适配器内累计工具参数片段，仅输出完整 JSON 对象的 ToolCall；无效参数归一为 `UPSTREAM`。
+- `backend/api/app/llm/gateway.py`：将适配器完整 ToolCall 投影为 `ModelStreamEvent(tool_call)`，并保留到流式收尾的 `ModelResponse.tool_calls`。
+- `backend/api/app/agent/react.py`：native 模式在 ToolResult 后直接使用第二个流式模型回合收敛正文或继续工具调用，消除简单路径的第三次无工具调用；不改变 WebSocket 事件契约。
+- `backend/api/tests/test_adapters.py` / `test_llm_graph.py` / `test_agent_react.py`：覆盖三协议参数累计、网关工具事件、`call_id` 保留及 native 两回合流式收敛。

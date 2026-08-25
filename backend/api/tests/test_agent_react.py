@@ -89,7 +89,7 @@ class _StreamingAfterToolGateway(_ScriptGateway):
 
 
 class _NativeToolCallGateway:
-    """模拟支持原生 ToolCall 的模型，验证队列、回传消息与最终流式回答。"""
+    """模拟支持原生 ToolCall 的模型，验证回传结果后的流式收敛。"""
 
     def __init__(self) -> None:
         self.calls: list[object] = []
@@ -197,7 +197,7 @@ def test_react_tool_then_done_streams_final_answer() -> None:
 
 
 def test_native_tool_calls_keep_call_id_and_stream_final_answer() -> None:
-    """P2：同轮原生多 ToolCall 逐项执行，结果按 call_id 回传并流式收尾。"""
+    """P2-B：同轮原生多 ToolCall 回传后，以第二次模型调用流式收敛。"""
     gateway = _NativeToolCallGateway()
     checkpointer = InMemoryCheckpointer()
     with tempfile.TemporaryDirectory() as tmp:
@@ -229,15 +229,16 @@ def test_native_tool_calls_keep_call_id_and_stream_final_answer() -> None:
     assert [payload["call_id"] for payload in results] == ["call_read_a", "call_read_b"]
     assert [payload["name"] for payload in calls] == ["read", "read"]
     assert all(payload["ok"] is True for payload in results)
-    assert len(gateway.calls) == 2
+    # 首轮仅调用一次非流式模型；携带 ToolResult 的第二轮改走原生工具流。
+    assert len(gateway.calls) == 1
     # 第二轮模型可见标准 assistant ToolCall + 两条对应 role=tool 结果，非 Observation 拼接。
-    native_messages = gateway.calls[1].messages[-3:]
+    native_messages = gateway.stream_calls[0].messages[-3:]
     assert native_messages[0]["role"] == "assistant"
     assert [call["call_id"] for call in native_messages[0]["tool_calls"]] == ["call_read_a", "call_read_b"]
     assert [message["tool_call_id"] for message in native_messages[1:]] == ["call_read_a", "call_read_b"]
     assert [message["content"] for message in native_messages[1:]] == ["A 文件内容", "B 文件内容"]
     # 完整文件正文和凭据均不得沿 RunnableConfig 传入模型网关。
-    assert gateway.configs == [{"configurable": {}}, {"configurable": {}}]
+    assert gateway.configs == [{"configurable": {}}]
     assert len(gateway.stream_calls) == 1
     assert gateway.stream_configs == [{"configurable": {}}]
     # 原文必须只存在于当次模型输入，不能随图状态写入检查点。
@@ -254,7 +255,7 @@ def test_native_tool_calls_keep_call_id_and_stream_final_answer() -> None:
     ]
     assert saved_tool_messages
     assert all(message.get("content") == "" for message in saved_tool_messages)
-    assert gateway.stream_calls[0].tools == ()
+    assert gateway.stream_calls[0].tools
     custom = [chunk for mode, chunk in events if mode == "custom"]
     assert [(chunk["kind"], chunk["text"]) for chunk in custom] == [
         ("content", "两个文件的共同结论是："),

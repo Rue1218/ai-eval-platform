@@ -4,7 +4,8 @@ import asyncio
 
 import pytest
 
-from app.adapters import AdapterResult, StreamAborted
+import app.llm.gateway as gateway_module
+from app.adapters import AdapterResult, AdapterStreamEvent, AdapterToolCall, StreamAborted
 from app.errors import AppError, ErrorCode
 from app.llm import ModelConfig, ModelGateway, ModelRequest
 
@@ -66,6 +67,64 @@ def test_stream_projects_content_reasoning_and_completion() -> None:
     assert events[-1].kind == "completed"
     assert events[-1].response is not None
     assert events[-1].response.text == "最终答案"
+
+
+def test_stream_projects_complete_native_tool_call() -> None:
+    """P2-B：适配器完成工具参数后，网关先投影调用再在收尾响应保留它。"""
+    gateway = ModelGateway(
+        stream_transport=lambda _request, _abort=None: iter(
+            [
+                AdapterStreamEvent(
+                    kind="tool_call",
+                    tool_call=AdapterToolCall(
+                        call_id="call_read_1",
+                        name="read",
+                        arguments={"path": "a.txt"},
+                    ),
+                )
+            ]
+        )
+    )
+
+    events = list(gateway.stream(_request()))
+
+    assert [event.kind for event in events] == ["tool_call", "completed"]
+    assert events[0].tool_call is not None
+    assert events[0].tool_call.arguments == {"path": "a.txt"}
+    assert events[-1].response is not None
+    assert events[-1].response.tool_calls == (events[0].tool_call,)
+
+
+def test_default_stream_transport_sends_native_tool_schema(monkeypatch) -> None:
+    """P2-B：流式入口必须和非流式入口一样向适配器透传工具定义。"""
+    seen: dict = {}
+
+    def fake_stream_protocol(**kwargs):
+        seen.update(kwargs)
+        return iter([("content", "ok")])
+
+    monkeypatch.setattr(gateway_module, "stream_protocol", fake_stream_protocol)
+    request = ModelRequest.from_messages(
+        _request().config,
+        [{"role": "user", "content": "读取文件"}],
+        tools=[
+            {
+                "name": "read",
+                "description": "读取文件",
+                "parameters_schema": {"type": "object"},
+            }
+        ],
+    )
+
+    list(ModelGateway().stream(request))
+
+    assert seen["tools"] == [
+        {
+            "name": "read",
+            "description": "读取文件",
+            "parameters_schema": {"type": "object"},
+        }
+    ]
 
 
 def test_stream_filters_reasoning_when_disabled() -> None:
