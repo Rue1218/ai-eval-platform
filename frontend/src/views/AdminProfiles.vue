@@ -1417,7 +1417,7 @@ const mcpEmptyDescription = computed(() => {
   if (mcpRequestState.value === 'loading') return '正在调用 GET /api/mcp/tools，请稍候…'
   if (mcpRequestState.value === 'error') return mcpRequestError.value || '请确认登录状态与 API 服务是否正常。'
   if (mcpRequestState.value === 'success' && mcpTools.value.length === 0) {
-    return '当前无 MCP 扩展属正常状态：read/write/bash/web/task 使用原生 ToolCall 直连；评测与 RAG 扩展后续才会在此展示。'
+    return '当前无 MCP 扩展属正常状态：read/write/bash/web 与对话拆解 task 使用原生 ToolCall 直连；任务队列或后续 RAG 扩展会在此展示。'
   }
   return '请尝试清空搜索条件或重置筛选器'
 })

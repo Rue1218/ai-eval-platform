@@ -1,10 +1,10 @@
 # AI 测试与评估平台 Agent 开发文档
 
-> 版本：V1.1.0
-> 状态：LangGraph Harness 已启用 ReAct P0/P1、P2-A/P2-B（流式参数累计、完整 ToolCall 投影、native 两回合收敛）、P3 MCP 扩展 Host 与 P3.1 原生基础工具直连
+> 版本：V1.2.0
+> 状态：LangGraph Harness 已启用 ReAct P0/P1、P2-A/P2-B（流式参数累计、完整 ToolCall 投影、native 两回合收敛）、P3 MCP 扩展 Host、P3.1 原生基础工具直连与 P4 platform.tasks/熔断/独立沙箱 Runner
 > 审查日期：2026-08-25
 > 对应需求：`AI测试与评估平台-PRD.md` V1.12
-> 对应接口：`AI测试与评估平台-API.md` V1.30
+> 对应接口：`AI测试与评估平台-API.md` V1.32
 
 ## 1. 当前唯一运行链路
 
@@ -45,7 +45,7 @@ react_agent -> (tools | END)
 tools -> (tools | react_agent)
 ```
 
-图节点不持有数据库 Session、WebSocket 或任务队列。ToolNode 只消费可序列化 `pending_tool` / `pending_tools`、执行既有门禁与沙箱工具，并返回 Observation；同一模型响应的多个 ToolCall 在节点内串行消费，不绕过任一调用的门禁。`transport=native` 的 read/write/edit/bash/web_search/web_fetch/task 经 NativeToolExecutor 直连受控 handler；仅 `transport=mcp` 的未来评测/RAG 扩展经 MCPClientManager。路由层仍负责事件持久化与投影。
+图节点不持有数据库 Session、WebSocket 或任务队列。ToolNode 只消费可序列化 `pending_tool` / `pending_tools`、执行既有门禁与沙箱工具，并返回 Observation；同一模型响应的多个 ToolCall 在节点内串行消费，不绕过任一调用的门禁。`transport=native` 的 read/write/edit/bash/web_search/web_fetch/task 经 NativeToolExecutor 直连受控 handler；`transport=mcp` 的 `platform.tasks.task.create/status/cancel` 和后续评测/RAG 扩展经 MCPClientManager。路由层仍负责事件持久化与投影。
 
 ### 2.3 ModelGateway
 
@@ -205,6 +205,13 @@ Agent 思考配置从 `Setting(key="agent_reasoning")` 读取，结构为
 - `backend/api/app/harness/execution/context.py` / `native.py`：把工具运行时上下文从 MCP manager 中抽离，并新增原生基础工具直连执行器；同步 handler 进入线程池，超时/取消与 MCP 保持同一 ToolResult 契约。
 - `backend/api/app/harness/execution/registry.py` / `toolnode.py` / `agent/graph.py`：新增 `transport=native|mcp`。默认 read/write/edit/bash/web_search/web_fetch/task 走 native；只有评测/RAG 等未来扩展有 `transport=mcp` 时才构建 MCP manager。
 - `backend/api/app/harness/execution/dispatch.py`：read 改为不保留整文件副本的单次扫描；write/edit 使用排他/原子写；web_search 使用 API 容器 Firecrawl Key，web_fetch 每跳重检 SSRF；task 仅产出会话内计划。
-- `backend/api/app/routers/mcp.py` / `frontend/src/views/AdminProfiles.vue`：MCP 清单只展示扩展；当前空数组表示无扩展已挂载，不表示基础工具不可用。
+- `backend/api/app/routers/mcp.py` / `frontend/src/views/AdminProfiles.vue`：MCP 清单只展示扩展；基础工具不在目录中。
 - `frontend/src/components/agent/ToolCard.vue`：补基础工具中文名称和 task/web 的受控卡片展示。
 - `backend/api/tests/test_harness_execution.py` / `test_harness_mcp.py`：覆盖原生直连与 MCP 目录隔离、Firecrawl、安全抓取、原子写入和任务拆解。
+
+### V1.2.0（2026-08-25）修改代码文件与作用清单
+
+- `backend/api/app/harness/execution/registry.py`：在七项原生基础工具外保留 `transport=mcp` 的 `platform.tasks.task.create/status/cancel`，避免将对话拆解和评测任务队列混为同一能力。
+- `backend/api/app/harness/execution/task_tools.py` / `mcp/metrics.py`：评测任务 MCP 的会话归属、队列门禁、配额、审计、熔断和度量继续生效。
+- `backend/api/app/harness/execution/sandbox.py` / `backend/runner/`：bash 仍由独立 Runner 调用 bwrap，API 不降级为裸 subprocess。
+- `backend/api/app/routers/mcp.py` / `frontend/src/views/AdminProfiles.vue`：目录仅展示当前 `platform.tasks` 与未来扩展，基础工具仍走原生调用。

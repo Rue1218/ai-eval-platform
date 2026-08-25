@@ -11,10 +11,8 @@ WORKDIR /app
 COPY api/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Harness 沙箱（bash 工具）：bwrap 进程级隔离（无网络/工作区唯一可写/资源受限）
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends bubblewrap \
-    && rm -rf /var/lib/apt/lists/*
+# 沙箱 bwrap 已迁出：P4-2 起由独立 runner 容器执行，api 不再安装 bubblewrap、
+# 不再需要 privileged/seccomp:unconfined/SYS_ADMIN（见 docker-compose.yml）。
 
 COPY shared ./shared
 COPY api/app ./app

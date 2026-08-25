@@ -23,6 +23,26 @@ LONG_TOOLS: frozenset[str] = frozenset(
     {"benchmark.run", "testcase.generate", "rag.evaluate", "stress.run"}
 )
 
+# 活动任务状态（与 M3 episodic.get_active_tasks 同源）
+_ACTIVE_STATUSES: tuple[str, ...] = ("queued", "running", "awaiting_case_confirm")
+
+
+def count_active_tasks(
+    db,
+    *,
+    user_id: str | None = None,
+    session_id: str | None = None,
+) -> int:
+    """统计活动任务数（P4-2 资源配额）；按用户或会话过滤。"""
+    from app.models import Task
+
+    query = db.query(Task).filter(Task.status.in_(_ACTIVE_STATUSES))
+    if user_id:
+        query = query.filter(Task.created_by == user_id)
+    if session_id:
+        query = query.filter(Task.session_id == session_id)
+    return query.count()
+
 
 def enqueue_long_task(
     db,
@@ -37,17 +57,18 @@ def enqueue_long_task(
 
     不阻塞对话回合。kind 取 Task.kind 短名 ∈ TASK_KINDS，否则抛
     AppError(VALIDATION)。``rag`` 未接入时禁止 mock succeeded（MEM-5，
-    由 Worker 侧保证失败）。
+    由 Worker 侧保证失败）。spec 写入 ``config``，``user_id`` 写入
+    ``created_by``（对齐 REST create_task 语义）。
     """
     if kind not in TASK_KINDS:
         raise AppError(ErrorCode.VALIDATION, f"未知任务类型：{kind}")
     task = Task(
         id=uuid4().hex,
         session_id=session_id,
-        user_id=user_id,
+        created_by=user_id,
         kind=kind,
         status="queued",
-        spec=spec,
+        config=spec,
         parent_task_id=parent_task_id,
     )
     db.add(task)

@@ -115,7 +115,7 @@ BUILD_SERVICES=()
 # 先计算本次真正受影响的服务；CI 拉取与手动本地构建共用同一结果。
 if [ -z "$DEPLOY_BASE_COMMIT" ] || ! git cat-file -e "${DEPLOY_BASE_COMMIT}^{commit}" 2>/dev/null; then
     echo "==> 未找到有效部署基准，本次全量构建"
-    BUILD_SERVICES=(web api worker lightrag stress)
+    BUILD_SERVICES=(web api worker lightrag stress runner)
 else
     echo "==> 对比上次成功部署：${DEPLOY_BASE_COMMIT:0:8}..${BUILD_VERSION}"
     CHANGED_FILES=$(git diff --name-only "$DEPLOY_BASE_COMMIT" "$DEPLOY_COMMIT")
@@ -126,7 +126,8 @@ else
     grep -q '^backend/worker/' <<<"$CHANGED_FILES" && BUILD_SERVICES+=(worker)
     grep -q '^backend/lightrag/' <<<"$CHANGED_FILES" && BUILD_SERVICES+=(lightrag)
     grep -q '^backend/stress/' <<<"$CHANGED_FILES" && BUILD_SERVICES+=(stress)
-    # 共享模型包 backend/shared/ 被 api 与 worker 打进镜像，变更须同时重建（缺谁补谁）。
+    grep -q '^backend/runner/' <<<"$CHANGED_FILES" && BUILD_SERVICES+=(runner)
+    # 共享包 backend/shared/ 被 api/worker/runner 打进镜像，变更须同时重建（缺谁补谁）。
     if grep -q '^backend/shared/' <<<"$CHANGED_FILES"; then
         case " ${BUILD_SERVICES[*]} " in
             *' api '*) ;;
@@ -136,7 +137,18 @@ else
             *' worker '*) ;;
             *) BUILD_SERVICES+=(worker) ;;
         esac
+        case " ${BUILD_SERVICES[*]} " in
+            *' runner '*) ;;
+            *) BUILD_SERVICES+=(runner) ;;
+        esac
     fi
+    # runner 是平台核心服务（P4-3：bash 沙箱执行体），必须始终纳入构建/拉取列表：
+    # 否则目标机首次部署或镜像清理后缺 runner 镜像（且 Docker Hub 不可达）时，
+    # compose up 会以 "No such image: ai-eval-platform-runner" 失败。
+    case " ${BUILD_SERVICES[*]} " in
+        *' runner '*) ;;
+        *) BUILD_SERVICES+=(runner) ;;
+    esac
 fi
 
 # 恢复上一轮各服务使用的不可变镜像引用，未变化服务不会回退到旧镜像。
@@ -158,6 +170,7 @@ if [ -n "$IMAGE_PREFIX" ] && [ -n "$IMAGE_TAG" ] && [ -n "$GHCR_ACTOR" ] && [ -n
             worker) export WORKER_IMAGE="${IMAGE_PREFIX}-worker:${IMAGE_TAG}" ;;
             lightrag) export LIGHTRAG_IMAGE="${IMAGE_PREFIX}-lightrag:${IMAGE_TAG}" ;;
             stress) export STRESS_IMAGE="${IMAGE_PREFIX}-stress:${IMAGE_TAG}" ;;
+            runner) export RUNNER_IMAGE="${IMAGE_PREFIX}-runner:${IMAGE_TAG}" ;;
         esac
     done
 

@@ -6,6 +6,7 @@
 """
 
 import asyncio
+import json
 import os
 import tempfile
 import time
@@ -76,11 +77,16 @@ def _tool_result_event(out: dict) -> dict:
 # —— catalog ——
 
 
-def test_catalog_excludes_default_native_tools() -> None:
+def test_catalog_only_exposes_platform_task_mcp_extensions() -> None:
     catalog = ToolCatalog.build(build_default_registry())
     descriptors = catalog.all_descriptors()
-    assert descriptors == ()
-    assert catalog.servers() == ()
+    assert {descriptor.tool_id for descriptor in descriptors} == {
+        "platform.tasks.task.create",
+        "platform.tasks.task.status",
+        "platform.tasks.task.cancel",
+    }
+    assert catalog.servers() == ("platform.tasks",)
+    assert catalog.resolve_name("task.create") == "platform.tasks.task.create"
     assert catalog.resolve_name("read") is None
     assert catalog.resolve_name("bash") is None
     assert catalog.get("nope") is None
@@ -269,8 +275,8 @@ def test_manager_close_is_idempotent_and_rejects_new_calls() -> None:
         await manager.close()
         await manager.close()  # 幂等
         result = await manager.call_tool(
-            "platform.files.read",
-            {"path": "a.txt"},
+            "platform.tasks.task.status",
+            {"task_id": "task-1"},
             ToolExecutionContext(call_id="c6"),
         )
         assert result.ok is False
@@ -286,7 +292,37 @@ def test_mcp_tools_router_lists_internal_catalog() -> None:
     from app.routers.mcp import list_tools
 
     payload = list_tools(user=None)
-    assert payload == {"items": [], "total": 0}
+    assert payload["total"] == 3
+    items = payload["items"]
+    names = {item["name"] for item in items}
+    assert names == {
+        "platform.tasks.task.create",
+        "platform.tasks.task.status",
+        "platform.tasks.task.cancel",
+    }
+    # 只读目录：不含连接命令/凭据/内部 handler 细节
+    serialized = json.dumps(items)
+    assert "api_key" not in serialized
+    assert "password" not in serialized
+    assert "command" not in serialized
+    assert "handler" not in serialized
+    for item in items:
+        assert set(item) == {
+            "name",
+            "desc",
+            "permission",
+            "enabled",
+            "source",
+            "tool_id",
+            "server_id",
+            "short_name",
+            "display_name",
+            "risk_level",
+            "execution_mode",
+            "timeout_s",
+            "requires_confirmation",
+            "supports_streaming",
+        }
 
 
 # —— ToolNode 经 manager 执行 ——
@@ -309,11 +345,12 @@ def test_toolnode_native_tool_ignores_mcp_manager() -> None:
         out_builtin = _run_toolnode(builtin, state, configurable)
     payload_explicit = _tool_result_event(out_explicit)["payload"]
     payload_builtin = _tool_result_event(out_builtin)["payload"]
-    # call_id 和耗时随回合变化；其余事件 payload 必须一致，证明没有经过 manager。
-    assert {
-        key: value for key, value in payload_explicit.items() if key not in {"call_id", "latency_ms"}
-    } == {
-        key: value for key, value in payload_builtin.items() if key not in {"call_id", "latency_ms"}
+    # call_id 每次运行随机生成；latency_ms 为实测耗时（毫秒取整），两次独立执行
+    # 必然存在亚毫秒抖动（CI 上曾出现 0 vs 1）。其余 payload 必须一致
+    # （证明两条执行路径等价）。
+    excluded = {"call_id", "latency_ms"}
+    assert {key: value for key, value in payload_explicit.items() if key not in excluded} == {
+        key: value for key, value in payload_builtin.items() if key not in excluded
     }
     assert payload_explicit["ok"] is True
     assert payload_explicit["name"] == "read"

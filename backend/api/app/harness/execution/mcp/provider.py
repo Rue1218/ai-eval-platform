@@ -26,13 +26,15 @@ class InProcessProvider:
         self,
         tool_id: str,
         arguments: dict,
-        sandbox_dir: str | None = None,
+        context: object | None = None,
         call_id: str = "",
     ) -> ToolResult:
         """执行短工具，返回 ToolResult（不抛，错误归一）。
 
         未登记 tool_id 属防御路径（正常由 catalog 先行解析）；其余委托
-        ``execute_raw`` 保持既有超时/脱敏/错误归一语义。
+        ``execute_raw`` 保持既有超时/脱敏/错误归一语义。``contextual`` 工具
+        （如 platform.tasks）把 ``ToolExecutionContext`` 透传给 handler；
+        非 contextual 工具只取其中的 sandbox_dir。
         """
         definition = self._defs.get(tool_id)
         if definition is None:
@@ -42,10 +44,16 @@ class InProcessProvider:
                 error={"code": "VALIDATION", "message": f"工具未注册：{tool_id}"},
                 call_id=call_id,
             )
+        sandbox_dir = getattr(context, "sandbox_dir", None) if context is not None else None
+        kwargs: dict[str, object] = {
+            "timeout_s": definition.timeout_s,
+            "permission": definition.permission,
+            "sandbox_dir": sandbox_dir,
+            "handler": definition.handler,
+        }
+        if definition.contextual:
+            kwargs["context"] = context
         return execute_raw(
             ToolCall(name=definition.name, arguments=arguments, call_id=call_id),
-            timeout_s=definition.timeout_s,
-            permission=definition.permission,
-            sandbox_dir=sandbox_dir,
-            handler=definition.handler,
+            **kwargs,  # type: ignore[arg-type]
         )

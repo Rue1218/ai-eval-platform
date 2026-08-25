@@ -2,7 +2,7 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.30 |
+| 文档版本 | V1.32 |
 | 对应 PRD | V1.13（功能唯一权威） |
 | 对应设计规范 | V1.3（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V0.5（LangGraph 单轮 Agent 与 WS 桥接；JSON 仍以本文为准） |
@@ -22,7 +22,11 @@
 >
 > V1.29（2026-08-25）：§3.6.1 `GET /api/mcp/tools` 从音频/图像占位清单改为**平台 allowlist 内部短工具目录**（6 项：read/write/edit/web_search/web_fetch/bash），`name` 使用唯一 `tool_id`，新增可选 `tool_id`/`server_id`/`short_name`/`display_name`/`risk_level`/`execution_mode`/`timeout_s`/`requires_confirmation`/`supports_streaming` 字段；仅只读展示，不含任何连接命令或凭据。
 >
-> V1.30（2026-08-25）：基础工具改为模型原生 Function Calling 直连：`read`、`write`、`edit`、`bash`、`web_search`、`web_fetch`、`task` 不经过 MCP Host；`GET /api/mcp/tools` 仅展示未来评测/RAG MCP 扩展，当前返回真实空清单。新增 Firecrawl 服务端配置与网页抓取安全投影；`task` 仅拆解当前回合，不创建数据库任务或绕过确认卡。
+> V1.30（2026-08-25）：§3.6.1 新增 `platform.tasks` 长任务桥接三工具（`task.create`/`task.status`/`task.cancel`），目录 6→9 项、server 4 组。三工具只入 PG 队列或查询，不等待 Worker 终态；`task.create` 直接入队返回 `queued` + `task_id`，会话/用户归属由平台注入（模型不可传）。
+>
+> V1.31（2026-08-25）：§3.6.1 新增 `GET /api/mcp/metrics`（admin 只读）——内部 MCP Host 的调用度量（按 tool_id 计数/耗时）与服务器熔断状态（按 server_id，INTERNAL/TIMEOUT/UPSTREAM 连续失败超阈值即 open，冷却自动恢复）。任务创建新增每用户活动任务配额 `max_active_tasks_per_user`（默认 5），MCP 与 REST 同一规则，超限返回 `CONCURRENCY` 并写 `task_quota_rejected` 审计。
+>
+> V1.32（2026-08-25）：基础 `read`、`write`、`edit`、`bash`、`web_search`、`web_fetch` 与对话拆解 `task` 改为模型原生 Function Calling 直连；仅评测任务桥 `platform.tasks` 继续作为 MCP 扩展。新增 Firecrawl 服务端配置、网页抓取安全投影和原子文件写入边界。
 
 ---
 
@@ -590,14 +594,20 @@ Embedding 与 Reranker 的 URL、模型和 Key 与主模型使用相同的“按
 
 #### `GET /api/mcp/tools`
 
-获取当前智能体环境中平台 allowlist 的**MCP 扩展目录**（只读）。基础工具不属于目录：模型以原生 Function Calling 生成 ToolCall，ToolNode 完成 Schema、权限、附件和长任务门禁后，直接交 `NativeToolExecutor` 在线程池执行；因此不会产生 MCP catalog、provider 或 transport 的额外路由开销。
+获取当前智能体环境中平台 allowlist 的**MCP 扩展目录**（只读）。`read`、`write`、`edit`、`bash`、`web_search`、`web_fetch` 与对话拆解 `task` 不属于目录：模型以原生 Function Calling 生成 ToolCall，ToolNode 完成 Schema、权限、附件门禁后，直接交 `NativeToolExecutor` 在线程池执行，不产生 MCP catalog/provider 路由开销。
 
-当前尚未挂载评测/RAG MCP 扩展，响应固定为真实空清单：
+当前已挂载的 MCP 扩展仅为评测任务桥 `platform.tasks`；RAG、报告等其它扩展仍须按 allowlist 和契约另行登记。目录只展示元数据，**不展示任何 MCP Server 连接命令、环境变量、工作目录或凭据**，也不展示内部 handler 细节。
+
+`platform.tasks` 三工具只入 PG 队列或查询，**不等待 Worker 终态**：`task.create` 校验通过后直接入队返回 `queued` + `task_id`；`task.status` 只读当前状态不轮询；`task.cancel` 行锁取消非终态任务。真实进度/报告/错误由 Worker 写入 `task_events`/`ws_events` 转发。
 
 ```json
 {
-  "items": [],
-  "total": 0
+  "items": [
+    { "name": "platform.tasks.task.create", "short_name": "task.create", "permission": "write" },
+    { "name": "platform.tasks.task.status", "short_name": "task.status", "permission": "read" },
+    { "name": "platform.tasks.task.cancel", "short_name": "task.cancel", "permission": "write" }
+  ],
+  "total": 3
 }
 ```
 
@@ -615,6 +625,26 @@ Embedding 与 Reranker 的 URL、模型和 Key 与主模型使用相同的“按
 | `task(goal, steps)` | 1–12 个 `pending/in_progress/completed` 步骤 | 只生成当前回合任务清单和 ToolCard；**不创建 `Task` 行、不入队、不调用 Worker、不替代 `confirm_ack`** |
 
 V1.0 不接入外部 MCP Server，也不让浏览器创建、删除、探活或动态发现外部工具。原型中的 MCP Server 管理按钮须显示“能力未启用”说明；不得请求或假装成功调用 `/api/mcp/servers*`。
+
+#### `GET /api/mcp/metrics`
+
+获取内部 MCP Host 的**调用度量与服务器熔断状态**（只读，进程内快照）。按 `tool_id` 记录调用计数与耗时，按 `server_id` 维护失败熔断：`INTERNAL`/`TIMEOUT`/`UPSTREAM` 连续失败 ≥ 阈值（默认 5）即 `open`，冷却期（默认 30s）后自动恢复 `closed`；熔断 open 期间 `tool_call` 以 `VALIDATION`（「服务器工具暂时不可用（熔断）」）快速拒绝，不进入执行器。
+
+```json
+{
+  "tools": [
+    { "tool_id": "platform.tasks.task.status", "total": 12, "success": 11, "failure": 1, "timeout": 0,
+      "avg_latency_ms": 8, "last_latency_ms": 6, "last_error_code": null }
+  ],
+  "circuits": [
+    { "server_id": "platform.tasks", "state": "open", "consecutive_failures": 5,
+      "failure_threshold": 5, "cooldown_s": 30.0, "opened_at": 1756080000.0 }
+  ],
+  "summary": { "total_calls": 12, "total_failures": 1, "total_timeouts": 0, "open_servers": ["platform.tasks"] }
+}
+```
+
+只读展示，不含任何请求参数、工具结果原文或凭据。任务创建（MCP `task.create` 与 REST `POST /api/tasks` 共用）受每用户活动任务配额 `max_active_tasks_per_user`（默认 5）约束，超限返回 `CONCURRENCY` 并写 `AuditLog(action="task_quota_rejected")`。
 
 ---
 
@@ -1371,8 +1401,9 @@ Pub/Sub，不能假定跨进程实时可见。
 | `kb.list` | 列出知识库 |
 | `task.get` | 查询任务 |
 | `report.get` | 读取报告 |
-| `task.create` | 创建任务 |
-| `task.cancel` | 取消任务 |
+| `task.create` | 创建评测任务 |
+| `task.status` | 查询任务状态 |
+| `task.cancel` | 取消评测任务 |
 | `testcase.confirm` | 确认用例入库 |
 | `dispatch.overview` | 调度概览 |
 | `audio.speech_recognition` | 语音识别转写 |
@@ -1478,14 +1509,17 @@ Pub/Sub，不能假定跨进程实时可见。
 
 ## 6. 内部 MCP 扩展（浏览器不调用）
 
-MCP 预留给评测、RAG 和 Worker 协作扩展；基础工具清单与直连边界以 §3.6.1 为准。入参/出参与 PRD 5.5 一致，错误码同 §1.3；当前没有已挂载的 MCP 扩展，不得将此表的未来项伪装为可调用能力。
+MCP 预留给评测、RAG 和 Worker 协作扩展；基础工具清单与直连边界以 §3.6.1 为准。入参/出参与 PRD 5.5 一致，错误码同 §1.3；当前只挂载 `platform.tasks`，其余条目均为未来能力，不得伪装为可调用。
 
 | 工具 | 类型 | 入参 | 出参 | 阶段 |
 | --- | --- | --- | --- | --- |
 | `model.list` | 短 | — | `{items:[{id,name,protocol,model}]}` 无 Key（`model` 仅供展示） | M1 |
 | `dataset.list` | 短 | — | `{items:[{id,name,version,row_count}]}` | M2 |
 | `kb.list` | 短 | — | `{items:[{id,name,doc_count}]}` | M3 |
+| `task.status` | 短 | `task_id` | 当前 `status`、`progress`、`report_id`（只读，不等待终态） | M1 |
 | `report.get` | 短 | `report_id` | 摘要 + 下载路径 | M2 |
+| `task.create` | 短 | TaskSpec（`kind` 必填） | `{status: queued, task_id, kind}`；经门禁直接入队，会话/用户归属平台注入 | M1 |
+| `task.cancel` | 短 | `task_id` | 取消非终态；终态幂等返回现状 | M1 |
 | `dispatch.overview` | 短 | — | Worker 数 / 队列 / 策略（与 `GET /api/dispatch/overview` 同源摘要） | M1 迷你轨 |
 | `audio.speech_recognition` | 短 | `file_id`（本轮 wav/mp3 音频，由系统绑定）；`language?`（`auto|zh|en`，默认 `auto`） | `{transcript, language, model, file_id, filename, content_type, size}`；禁止回传音频 Base64 | 对话同步 |
 | `audio.speech_synthesis` | 短 | `text`（必填；模型未给时从用户原话剥离「帮我输出音频」等命令前缀/引号/冒号后抽取朗读稿）；`mode?`（`preset|voicedesign`）；`style?`；`model?`；`voice?` | `{file_id, filename, content_type, size, model, mode, content_url}`；`content_url` 为 `/api/files/{id}/content`，禁止回传音频 Base64 | 对话同步 |
@@ -1497,7 +1531,7 @@ MCP 预留给评测、RAG 和 Worker 协作扩展；基础工具清单与直连�
 | `rag.evaluate` | 长 | TaskSpec RAG 段 | `report_id` | M3 |
 | `stress.run` | 长 | `parent_task_id` + `stress` | `report_id` | M4 |
 
-确认卡是唯一入队入口：`confirm_ack.ok=true` 后由服务端桥接创建任务；原生 `task` 仅用于对话内拆解。长工具（`benchmark.run` `rag.evaluate` `testcase.generate` `stress.run`）由 Worker 执行，Agent 进程同步调用必须 `VALIDATION`。`stress.run` 只下发 stress 容器。LightRAG 未接入时 `kind=rag` **不得** mock succeeded。
+Agent **只**调短工具：原生 `task` 仅用于对话内拆解；MCP `task.create` 经 kind、数据集、占槽和先评后压门禁后直接入队返回 `queued`，确认卡路径仍由 `confirm_ack` 驱动，二者复用 `enqueue_long_task`。长工具（`benchmark.run`、`rag.evaluate`、`testcase.generate`、`stress.run`）由 Worker 执行，Agent 进程同步调用必须 `VALIDATION`。`stress.run` 只下发 stress 容器。LightRAG 未接入时 `kind=rag` **不得** mock succeeded。
 
 JSON Schema 冻结点：短工具 M1 W4；音频工具输入以本节为准，结果只回安全文本/文件元数据；评测长工具 M2 W6；RAG M3 W10；stress M4 W13。禁止新增 REST 代理或浏览器直连上游音频服务。
 
@@ -1906,20 +1940,20 @@ Qwen Image 通过与 `audio.voiceclone` 相同的 Agent 内部短工具链路执
 | `frontend/src/components/ProviderLogo.vue` / `frontend/src/api/types.ts` | StepFun 图标对齐图二，历史附件类型支持安全元数据 |
 | `backend/api/tests/test_agent_attachments.py` | 覆盖文档正文注入、图片内容块和三协议图文转换 |
 
-**V1.30（2026-08-25）— 原生基础工具直连与 MCP 扩展收敛**
+**V1.32（2026-08-25）— 原生基础工具直连与 MCP 扩展收敛**
 
 基础工具从内部 MCP Host 迁回模型原生 Function Calling 的受控直连路径：
 `read`、`write`、`edit`、`bash`、`web_search`、`web_fetch`、`task` 均不经 MCP
-catalog/provider；`GET /api/mcp/tools` 只保留未来评测/RAG 扩展目录，当前真实返回
-空清单。既有 WebSocket `tool_call`、`tool_result`、`call_id` 与错误码不变。
+catalog/provider；`GET /api/mcp/tools` 只保留评测/RAG 扩展目录，当前展示
+`platform.tasks.task.create/status/cancel`。既有 WebSocket `tool_call`、`tool_result`、`call_id` 与错误码不变。
 
 | 文件 | 作用 |
 | :--- | :--- |
 | `backend/api/app/harness/execution/context.py` / `native.py` | 抽离运行时上下文，新增基础工具直连的异步、超时与取消边界。 |
 | `backend/api/app/harness/execution/registry.py` / `toolnode.py` / `agent/graph.py` | 以 `transport=native|mcp` 分流；默认图不再构建基础工具 MCP Host。 |
-| `backend/api/app/harness/execution/dispatch.py` | 流式 read、排他/原子写入、bwrap 命令链检查、Firecrawl 搜索、安全网页抓取和会话内 task 清单。 |
+| `backend/api/app/harness/execution/dispatch.py` | 流式 read、排他/原子写入、Runner/bwrap 命令链检查、Firecrawl 搜索、安全网页抓取和会话内 task 清单。 |
 | `backend/api/app/config.py` / `.env.example` / `docker-compose.yml` | 新增仅 API 容器可见的 `FIRECRAWL_API_URL` / `FIRECRAWL_API_KEY`。 |
-| `backend/api/app/routers/mcp.py` / `frontend/src/views/AdminProfiles.vue` | MCP 清单只展示扩展，空清单具有明确、非错误的 UI 语义。 |
+| `backend/api/app/routers/mcp.py` / `frontend/src/views/AdminProfiles.vue` | MCP 清单只展示 `platform.tasks` 与未来扩展，不混入原生基础工具。 |
 | `frontend/src/components/agent/ToolCard.vue` | 基础工具中文标题与 read/web/task 的受控结果投影。 |
 | `backend/api/tests/test_harness_execution.py` / `test_harness_mcp.py` | 覆盖基础直连不进 MCP、Firecrawl、SSRF、任务拆解、原子读写和扩展 MCP 回归。 |
 

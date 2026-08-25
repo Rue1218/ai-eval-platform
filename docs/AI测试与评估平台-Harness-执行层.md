@@ -249,7 +249,7 @@ def web_fetch(url: str, *, timeout_s: float) -> str:
     """内部抓取适配器 + 脱敏（不走外部 MCP 服务器）。"""
 ```
 
-> **`bash` 安全边界（V0.5.0 bwrap 闭环）**：阶段 3 已落地 **bwrap 进程级沙箱**（`sandbox.py`）——`--unshare-*` 命名空间隔离 + 最小只读 bind（不暴露 `/app`、`/run/config/.env`、其他会话工作区）+ `--bind` 会话工作区到 `/work` + `--tmpfs /tmp /run`；`ulimit` 内存/进程数/CPU + 墙钟超时 `killpg` 整树清理（`--die-with-parent`）。黑名单（`BASH_BLOCKLIST`）保留为**纵深防御**（首词校验），防黑名单语义覆盖；bwrap 缺失/被 seccomp 拦截/引擎 `off` 时 **fail-closed（VALIDATION）**，禁止降级为裸 subprocess。部署依赖 api 容器 `security_opt: seccomp:unconfined`（Docker 默认 seccomp 拦截 `unshare/mount/pivot_root`），更严格的自定义 seccomp profile 列为后续项。`read`/`write`/`edit` 基于受控文件 ID/根目录，禁止仅依赖字符串路径。
+> **`bash` 安全边界（V0.5.0 bwrap 闭环）**：阶段 3 已落地 **bwrap 进程级沙箱**（`sandbox.py`）——`--unshare-*` 命名空间隔离 + 最小只读 bind（不暴露 `/app`、`/run/config/.env`、其他会话工作区）+ `--bind` 会话工作区到 `/work` + `--tmpfs /tmp /run`；`ulimit` 内存/进程数/CPU + 墙钟超时 `killpg` 整树清理（`--die-with-parent`）。黑名单（`BASH_BLOCKLIST`）保留为**纵深防御**（首词校验），防黑名单语义覆盖；bwrap 缺失/被 seccomp 拦截/引擎 `off` 时 **fail-closed（VALIDATION）**，禁止降级为裸 subprocess。部署依赖 runner 容器 `security_opt: seccomp:unconfined` + `privileged` + `SYS_ADMIN`（P4-2 起 bash 由独立 runner 容器执行，api 容器已移除特权与 bubblewrap；Docker 默认 seccomp 拦截 `unshare/mount/pivot_root`），更严格的自定义 seccomp profile 列为后续项。`read`/`write`/`edit` 基于受控文件 ID/根目录，禁止仅依赖字符串路径。
 
 #### 3.8.5 worker_bridge.py
 

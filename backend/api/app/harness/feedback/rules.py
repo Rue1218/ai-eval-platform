@@ -96,8 +96,10 @@ def check_gates(call: ToolCall, ctx: GateContext) -> GateResult:
     file_id = arguments.get("file_id")
     if file_id is not None and ctx.owned_file_ids and file_id not in ctx.owned_file_ids:
         return GateResult(False, "VALIDATION", "附件不属于当前用户")
-    # 7. 占槽：会话存在活动任务时禁止再发确认卡（OR-7）
-    if ctx.has_active_task and name in {"task.create", "task.cancel"}:
+    # 7. 占槽：会话存在活动任务时禁止再入队新任务（OR-7）。
+    # task.cancel 不在此列：取消非终态任务正是其用途（API.md §3.6.1），
+    # 须放行以释放占槽；task.status 只读同样不受限。
+    if ctx.has_active_task and name == "task.create":
         return GateResult(False, "CONCURRENCY", "会话存在活动任务")
     # 8. 先评后压：stress 须由质量任务 succeeded 派生
     if name == "task.create" and kind == "stress":

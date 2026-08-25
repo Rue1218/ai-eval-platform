@@ -2,8 +2,8 @@
 
 | 项 | 内容 |
 | --- | --- |
-| 文档版本 | V0.8.0 |
-| 状态 | P0/P1、P2-A（完整原生 ToolCall）、P2-B（流式参数累积、网关投影、两回合收敛）、P3（内部 MCP Host）与 P3.1（原生基础工具直连）已实施；评测/RAG MCP 扩展待按契约接入 |
+| 文档版本 | V0.11.0 |
+| 状态 | P0/P1、P2-A、P2-B、P3、P3.1（原生基础工具直连）、P4-1（platform.tasks MCP bridge）、P4-2（取消传播/资源配额/审计/熔断）与 P4-3（独立沙箱 Runner）已实施；P4-4（生产验证后新 Server 评估）待实施 |
 | 审查日期 | 2026-08-25 |
 | 适用范围 | `backend/api/app/agent/`、`app/harness/`、`app/llm/`、`app/routers/ws.py` 与内部短工具 |
 | 上游权威 | `AI测试与评估平台-PRD.md`、`AI测试与评估平台-API.md`、`AGENTS.md` |
@@ -594,10 +594,10 @@ artifact_id / workspace 相对路径 / sha256 / 行范围 / 可见预算
 
 ### 阶段 E：长任务与沙箱 Runner（P4）
 
-1. 接入 `platform.tasks` MCP，统一入队和状态查询；
-2. 把 bash MCP Server 放入独立 Runner/容器，保留 bwrap fail-closed；
-3. 补充取消传播、资源配额、审计和熔断指标；
-4. 在生产验证后，再评估是否需要任何新内部 MCP Server；外部 MCP 仍不在本范围。
+1. ✅ **platform.tasks MCP 已实施（P4-1）**：接入 `platform.tasks` MCP（`task.create`/`task.status`/`task.cancel`），统一入队和状态查询；只入 PG 队列或查询，不等待 Worker 终态。`task.create` 采用**直接入队**语义（门禁：kind/数据集/待确认卡/占槽/先评后压），返回 `{status: queued, task_id, kind}`（§7.4 契约）。任务工具为 contextual handler（经 `ToolExecutionContext` 接收平台注入的 session/user），DB Session 自管。
+2. ✅ **独立 Runner/容器已实施（P4-3）**：bash bwrap 内核迁至 `backend/shared/sandbox_kernel.py`，由新增 `runner` 容器执行（唯一持有 privileged/seccomp:unconfined/SYS_ADMIN），api 容器移除特权与 bubblewrap，经 HTTP JSON（`/run`/`/probe`/`/health`）调用 runner，保留 bwrap fail-closed。见 V0.10.0 实施记录；
+3. ✅ **取消传播/资源配额/审计/熔断指标已实施（P4-2）**：见 V0.9.0 实施记录；
+4. 🚫 在生产验证后，再评估是否需要任何新内部 MCP Server；外部 MCP 仍不在本范围。
 
 ---
 
@@ -719,78 +719,72 @@ artifact_id / workspace 相对路径 / sha256 / 行范围 / 可见预算
 - 本次仍未实施：`platform.tasks` 长任务 MCP bridge、独立沙箱 Runner/容器（bash MCP Server 迁出 api 容器）、真正并行工具调用；P4 安全边界不变，`platform.tasks` 工具不入当前目录。
 - 修改文件：`contracts/artifacts.py`+`__init__.py`、`execution/registry.py`、`execution/dispatch.py`、`execution/toolnode.py`、`execution/mcp/`（新增）、`agent/graph.py`、`routers/mcp.py`、`feedback/observation.py`、`execution/__init__.py`、`tests/test_harness_mcp.py`（新增）、`docs/AI测试与评估平台-API.md`（V1.29）。
 
-### V0.8.0（2026-08-25）实施记录 — 原生基础工具直连（本版裁决）
+### V0.8.0（2026-08-25）实施记录
 
-本节覆盖并替代本文此前“所有短工具均经 P3 MCP Host”的实现描述。P3 的
-catalog、provider、manager 继续保留，但职责收窄为**未来评测/RAG MCP 扩展**；
-它不再包裹基础工具。
+- **P4-1 platform.tasks 长任务 MCP bridge 已实施**（阶段 E 第 1 项闭环）：
+  - `harness/execution/task_tools.py`（新增）：`create_task_safe` / `status_task_safe` / `cancel_task_safe` 三个平台.tasks 工具执行体。`task.create` **直接入队**（用户裁决）返回 `{status: queued, task_id, kind}`（§7.4 契约），门禁：kind ∈ TASK_KINDS、`require_visible_session` 会话归属、无待确认卡（防绕过）、会话无活动任务（占槽）、stress 须由已成功 benchmark/rag 父任务派生（先评后压）、非 stress 须带 `dataset_id`、唯一索引冲突 → CONCURRENCY；`task.status` 只读当前状态（归属校验，不轮询）；`task.cancel` 行锁取消非终态（终态幂等返回现状）+ TaskEvent + AuditLog。DB Session 用 `with_managed_session` 语义自管，handler 内 lazy import。
+  - **上下文透传**：`ToolDef` 新增 `contextual: bool`；`dispatch.execute_raw`/`execute` 增 `context=None`（非 None 时以第三位置参数调 handler）；`InProcessProvider.invoke` 改为接收 `ToolExecutionContext` 并对 contextual 工具透传；`MCPClientManager.call_tool` 传完整 context。非 contextual 2 参 handler 完全兼容（既有测试零改动）。
+  - `registry.py` 注册 `platform.tasks` 三工具（contextual=True，risk：status=read、create/cancel=modify）；`toolnode.py` 在 task.create/task.cancel 时经 db_factory 查会话活动任务填入 GateContext（OR-7 占槽门禁接线）。
+  - **修复潜伏 bug**：`worker_bridge.enqueue_long_task` 用 `user_id=`/`spec=` 构造 Task，而 Task 模型实际字段为 `created_by`/`config` → 直接调用必抛 TypeError（confirm_ack 路径从未触发故未暴露）；已改为 `created_by=user_id`、`config=spec`，与 REST create_task 对齐。
+  - API.md §3.6.1 先行更新至 V1.30：目录 6→9 项、server 4 组，补 platform.tasks 语义；§4.6 短工具表 task.create/status/cancel 行同步。
+- 测试：新增 `tests/test_task_tools.py` 19 项（create 门禁 8 项、status 3 项、cancel 3 项、上下文透传 2 项、toolnode 占槽 2 项、enqueue 修复回归）；更新 `test_harness_mcp.py`/`test_harness_execution.py` 工具集合断言（6→9）。
+- 验收：`ruff check . ../shared` 全绿；api pytest **430 passed/16 skipped**，worker pytest **34 passed**。
+- 本次仍未实施：P4-2 独立沙箱 Runner/容器（bash MCP Server 迁出 api 容器）、P4-3 取消传播/资源配额/审计/熔断指标、P4-4 生产验证后的新内部 Server 评估；外部 MCP 与浏览器直连 MCP 始终不在范围。
+- 修改文件：`harness/execution/task_tools.py`（新增）、`harness/execution/registry.py`、`harness/execution/dispatch.py`、`harness/execution/worker_bridge.py`、`harness/execution/toolnode.py`、`harness/execution/mcp/provider.py`、`harness/execution/mcp/manager.py`、`tests/test_task_tools.py`（新增）、`tests/test_harness_mcp.py`、`tests/test_harness_execution.py`、`docs/AI测试与评估平台-API.md`（V1.30）。
 
-#### 1. 最终分层与完整工作链路
+### V0.9.0（2026-08-25）实施记录
+
+- **P4-2 取消传播 / 资源配额 / 审计 / 熔断指标已实施**（阶段 E 第 3 项闭环）：
+  - **熔断与度量**：新增 `harness/execution/mcp/metrics.py` —— `ToolMetrics` 按 `tool_id` 记录调用计数/耗时（§10.4「记录并可查询」），按 `server_id` 维护失败熔断（§7.2）。熔断**只统计基础设施错误码**（`INTERNAL`/`TIMEOUT`/`UPSTREAM`），业务性 `VALIDATION`/`NOT_FOUND` 不计入（避免 web_search「未接入」等误熔断）；连续失败 ≥ `circuit_failure_threshold`（默认 5）→ open，`circuit_cooldown_s`（默认 30s）冷却自动恢复 closed；open 期间 `call_tool` 以 `VALIDATION`「服务器工具暂时不可用（熔断）」快速拒绝。`get_default_metrics()` 进程级单例（生产 agent 与 `/api/mcp/metrics` 共享）。`MCPClientManager(metrics=None)` 集成熔断检查与度量记录（latency/成功/失败/超时）。
+  - **资源配额**：`Settings.max_active_tasks_per_user`（默认 5）——每用户活动任务上限；MCP `task.create` 与 REST `POST /api/tasks` 共用 `worker_bridge.count_active_tasks` 强制，超限 `CONCURRENCY`。
+  - **审计**：新增 `task_quota_rejected` AuditLog（MCP 与 REST 超限均写）；任务 create/cancel 审计沿用既有。
+  - **取消传播（Worker）**：`worker/task_state.py` 新增 `is_cancelled(db, task_id)`；`testcase.py` LLM 调用前、`rag.py` 逐条循环内检查取消 → 提前停止不烧 token（终态写入仍由 `claim_running_task_for_terminal_write` 行锁保护）。api 侧 `/stop`/`cancel_call` 已在 P3 实现。
+  - `GET /api/mcp/metrics` 只读端点（API.md §3.6.1 V1.31 先行更新）。
+- 测试：新增 `tests/test_harness_metrics.py` 14 项（ToolMetrics 计数/阈值/冷却/业务错误不计入/快照、manager 熔断快速拒绝/度量记录、MCP+REST 配额拒绝+审计、worker is_cancelled）。
+- 验收：`ruff check . ../shared` 全绿；api pytest **455 passed/16 skipped**，worker pytest **34 passed**。
+- 本次仍未实施：P4-3 独立沙箱 Runner/容器（bash MCP Server 迁出 api 容器）、P4-4 生产验证后的新内部 Server 评估；外部 MCP 与浏览器直连 MCP 始终不在范围。
+- 修改文件：`harness/execution/mcp/metrics.py`（新增）、`harness/execution/mcp/manager.py`、`harness/execution/mcp/__init__.py`、`harness/execution/worker_bridge.py`、`harness/execution/task_tools.py`、`app/config.py`、`app/routers/tasks.py`、`app/routers/mcp.py`、`worker/app/task_state.py`、`worker/app/testcase.py`、`worker/app/rag.py`、`tests/test_harness_metrics.py`（新增）、`tests/test_task_tools.py`、`docs/AI测试与评估平台-API.md`（V1.31）。
+
+### V0.10.0（2026-08-25）实施记录
+
+- **P4-3 独立沙箱 Runner/容器已实施**（阶段 E 第 2 项闭环，bash MCP Server 迁出 api 容器）：
+  - **共享内核**：新增 `backend/shared/sandbox_kernel.py` —— 从 `api/app/harness/execution/sandbox.py` 迁移 bwrap 内核（`SandboxLimits`/`build_bwrap_argv`/`run_sandboxed`/`probe_sandbox`），去除 `app.*` 依赖，错误改抛 `SandboxError(code ∈ TIMEOUT/VALIDATION/INTERNAL)`；新增 `check_bash_blocklist`（runner 独立黑名单纵深防御）与 `is_valid_session_workspace`（工作区路径强校验：根下直接安全标识子目录、非符号链接）。
+  - **runner 服务**：新增 `backend/runner/` —— stdlib `http.server.ThreadingHTTPServer`（零依赖、攻击面最小）：`POST /run`（校验命令非空/黑名单/工作区路径 → 调内核 → `{ok,output}` 或 `{ok:false,error:{code,message}}`）、`POST /probe`、`GET /health`；日志静默不打命令；仅 compose 内网（`0.0.0.0:8001`，不发布主机端口）。
+  - **api 远程客户端**：`api/app/harness/execution/sandbox.py` 改为远程客户端（对外签名不变：`run_sandboxed`/`probe_sandbox`/`SandboxLimits`/`reset_probe_cache`）——经 `SANDBOX_RUNNER_URL`（config 新增 `sandbox_runner_url`，默认 `http://runner:8001`）POST `/run`；TIMEOUT/VALIDATION/INTERNAL 错误码映射；**fail-closed**：runner 不可达/超时/响应损坏 → `VALIDATION`「沙箱引擎不可用」，禁止降级为裸 subprocess。config 删除 `sandbox_bwrap_bin`（bwrap 路径由 runner env 决定，api 不可指定——安全边界）。
+  - **容器与部署**：api 容器移除 `privileged`/`seccomp:unconfined`/`cap_add SYS_ADMIN` 与 bubblewrap 安装；新增 `runner` 容器（privileged + seccomp:unconfined + SYS_ADMIN，挂载 `./data:/data`，`SANDBOX_WORKSPACE_ROOT=/data/workspaces`）；`deploy.sh` 与 `.github/workflows/deploy.yml` 构建矩阵加 `runner`（`backend/shared/` 变更联动重建 api/worker/runner）。
+- 测试：`backend/runner/tests/test_runner.py` 9 项（/run 正常/空命令/黑名单/非法路径/SandboxError 映射/兜底 INTERNAL//probe//health）；api 新增 `tests/test_sandbox_runner_client.py` 8 项（payload 构造/错误码映射/网络失败 fail-closed/空命令前置拒绝/probe）；`tests/test_harness_sandbox.py` 改测 `shared.sandbox_kernel`（9 项真实 bwrap 集成，宿主机无 bwrap 时 skip）。
+- 验收：runner pytest 9 passed；api 沙箱相关 38 passed/9 skipped；ruff 全绿。**注**：api 全量 suite 在 P4-2（并发实施）的 `test_harness_metrics.py` 仍有 3 项失败待其收敛（与本实施无关）。
+- 本次仍未实施：P4-4 生产验证后的新内部 Server 评估；外部 MCP 与浏览器直连 MCP 始终不在范围。
+- 修改文件：`backend/shared/sandbox_kernel.py`（新增）、`backend/runner/`（新增：main.py/Dockerfile/pyproject.toml/tests）、`api/app/harness/execution/sandbox.py`、`api/app/config.py`、`api/Dockerfile`、`api/tests/test_harness_sandbox.py`、`api/tests/test_sandbox_runner_client.py`（新增）、`docker-compose.yml`、`deploy/deploy.sh`、`.github/workflows/deploy.yml`。
+
+### V0.11.0（2026-08-25）实施记录 — 原生基础工具与 MCP 扩展分层
+
+本版把 P3.1 与已实施的 P4 能力统一到同一执行边界：`read`、`write`、`edit`、`bash`、`web_search`、`web_fetch` 和对话拆解 `task` 为 `transport=native`；`platform.tasks.task.create/status/cancel` 为 `transport=mcp` 的评测任务桥。它们名称相近但副作用不同：原生 `task` 只生成 1–12 步内存清单，`task.*` 才经门禁访问任务队列。
 
 ```text
-用户输入 / 附件
-  → ws.py：鉴权、会话、工作区和 RunnableConfig 注入（不 await 整轮 Harness）
-  → LangGraph routing → react.py：三协议原生 Function Calling
-  → NativeToolCall(call_id, name, arguments)
-  → ToolNode：Schema → Gate → 附件绑定 → 选择 transport
-       ├─ transport=native（read/write/edit/bash/web_search/web_fetch/task）
-       │    → NativeToolExecutor（asyncio.to_thread + 超时/取消）
-       │    → 受控 handler / dispatch / bwrap 或 Firecrawl REST
-       └─ transport=mcp（未来 benchmark / rag 等扩展）
-            → MCPClientManager → catalog → provider → 扩展工具
-  → ToolResult → Observation（模型正文与 ToolCard 投影分离）
-  → tool_result(call_id) 写 WS 事件；完整正文不落库
-  → react.py 第二模型回合：继续调用工具或流式输出分析结论
-  → assistant_delta* → assistant_message → response.completed
+模型原生 ToolCall
+  → ToolNode：Schema → Gate → 附件绑定 → transport 分流
+  ├─ native：NativeToolExecutor → handler → 受控 Observation
+  │    ├─ 文件：会话 workspace 路径边界、流式读取、原子写入/编辑
+  │    ├─ bash：API → Runner → bwrap（无网络、资源限制、fail-closed）
+  │    ├─ 网络：Firecrawl 或 SSRF 防护直接抓取
+  │    └─ task：仅当前回合拆解
+  └─ mcp：MCPClientManager → catalog/provider → platform.tasks
+       （度量、熔断、配额、审计；仅入队/查询/取消，不等待 Worker）
+  → ToolResult → Observation → 下一轮 ReAct 分析或继续调用
+  → ToolCard 安全投影 + WS 事件；完整正文不持久化
 ```
 
-基础工具直连只删除 MCP catalog/provider/短名路由这一层，**不删除** Schema、
-权限、附件、重复调用抑制、超时、错误归一、Observation、call_id、二次模型
-收敛或 WebSocket 事件。因此工具成功后仍必定回到模型分析，而不是把文件或网页
-原文直接交付给用户。
+基础工具直连只移除 catalog/provider/短名路由，不移除 Schema、权限、附件校验、超时、错误归一、Observation、call_id 或工具后的第二模型回合。因此工具成功后必须继续回到模型分析，不能把文件或网页原文直接作为最终答复。
 
-#### 2. 工具能力、性能与安全边界
-
-| 工具 | 原生实现与性能优化 | 安全与结果投影 |
-| --- | --- | --- |
-| `read` | 0-based 分页，最多 2,000 行/120,000 字符；扫描文件时不再 `readlines()` 保留整文件副本 | realpath/workspace 校验；模型拿完整片段，ToolCard 只拿行统计和 ≤500 字符预览 |
-| `write` | `O_EXCL` 排他新建，减少先检查再写入的竞争；单次 ≤2MB | 只写会话 workspace；拒绝覆盖；fsync；不回显写入正文 |
-| `edit` | 精确替换一次，在同目录临时文件 fsync 后 `os.replace` 原子提交 | 路径受控；old 不匹配即拒绝；失败不留下临时文件 |
-| `bash` | 原生异步线程调度，不经过 MCP provider；仍保留 15 秒工具预算 | bwrap 无网络、唯一可写工作区、资源上限、超时杀整棵进程树；黑名单检查命令链段；引擎不可用 fail-closed |
-| `web_search` | 服务端 Firecrawl REST，查询 1–10 条、20 秒预算；不再是成功占位 | Key 只来自 API 环境变量；未配置返回 `VALIDATION`；模型只见结构化标题/URL/摘要 |
-| `web_fetch` | 优先 Firecrawl Markdown；未配置 Key 时受控 HTTP 文本抓取；正文上限 20,000 字符 | 仅 http/https，拒绝 URL 凭据、内网和保留 IP；初始 URL 与每次重定向均做 SSRF 校验；ToolCard 只看短预览 |
-| `task` | 1–12 步会话内清单，低延迟纯内存计算 | 不是 ORM `Task`；不入队、不建 Worker 任务、不绕过确认卡和 `confirm_ack` |
-
-#### 3. MCP 留给什么，不能做什么
-
-1. 默认注册表的基础工具全部标记 `transport=native`，因此 `/api/mcp/tools`
-   返回空数组是“没有扩展已挂载”的真实状态，不是能力失败。
-2. 后续 Benchmark、RAG、报告、数据集等需要跨服务协议、异步队列或 Worker
-   协作的工具，才登记 `transport=mcp` 并提供 `server_id`/`tool_id`。
-3. `task` 拆解不等于创建评测任务。真正入队仍固定为“确认卡 →
-   `confirm_ack.ok=true` → `enqueue_long_task`/Worker”；API 进程不得等待终态。
-4. MCP 不是沙箱：任何未来 MCP 里的命令执行仍必须复用 bwrap，不能因 transport
-   改造降级成裸 subprocess；模型和浏览器均不能提供连接命令、环境变量或密钥。
-
-#### 4. 回归验收
-
-- `tests/test_harness_execution.py`：覆盖行级读取、字符边界、原子写入/编辑、
-  bash fail-closed、SSRF、Firecrawl 未配置/结构化结果、task 拆解；
-- `tests/test_harness_mcp.py`：验证默认基础工具不进入 catalog、显式 MCP 扩展仍
-  支持目录/超时/取消/错误归一，并验证基础 `read` 忽略 MCP manager；
-- `tests/test_agent_react.py`：保持原生 ToolCall 后第二模型回合流式分析的契约。
-
-#### 5. 本版修改文件与作用清单
-
-| 文件 | 作用 |
+| 边界 | 当前实现 |
 | --- | --- |
-| `backend/api/app/harness/execution/context.py` | 提取只在运行时存在的 ToolExecutionContext，禁止进入 State/检查点/模型参数。 |
-| `backend/api/app/harness/execution/native.py` | 新增 NativeToolExecutor：基础工具直连、线程隔离、超时与取消。 |
-| `backend/api/app/harness/execution/registry.py` | 新增 `transport=native|mcp`，默认注册 7 个原生基础工具。 |
-| `backend/api/app/harness/execution/toolnode.py` / `agent/graph.py` | 按 transport 分流；没有 MCP 扩展时不构建 manager。 |
-| `backend/api/app/harness/execution/dispatch.py` | 读写、编辑、bash、搜索、抓取和 task 的性能、安全与受控 Observation 投影。 |
-| `backend/api/app/harness/execution/mcp/*` / `routers/mcp.py` | MCP 目录只收显式扩展；默认返回真实空目录。 |
-| `backend/api/app/config.py` / `.env.example` / `docker-compose.yml` | 增加仅 API 容器可见的 Firecrawl 环境变量。 |
-| `frontend/src/components/agent/ToolCard.vue` / `views/AdminProfiles.vue` | 显示基础工具中文卡片与受控结果；说明 MCP 空目录的真实含义。 |
-| `backend/api/tests/test_harness_execution.py` / `test_harness_mcp.py` | 覆盖直连边界、Firecrawl、SSRF、task 和未来 MCP 回归。 |
-| `docs/AI测试与评估平台-API.md` / `AI测试与评估平台-Agent开发文档.md` | 升级对外目录契约和运行时分层说明。 |
+| `read` | 0-based 分页，最多 2,000 行 / 120,000 字符；模型接收完整片段，ToolCard 只展示预览。 |
+| `write` / `edit` | 2MB 上限；`O_EXCL` 新建与 fsync + `os.replace` 原子编辑；仅会话工作区。 |
+| `bash` | 原生调用但**必须**走独立 Runner 的 bwrap；Runner 不可用即拒绝，禁止裸 subprocess。 |
+| `web_search` / `web_fetch` | Firecrawl Key 仅服务端可见；抓取执行 URL、DNS/IP、重定向 SSRF 校验与长度投影。 |
+| `task` | 纯内存拆解，不建 ORM `Task`、不入队、不调用 Worker。 |
+| `platform.tasks` | 当前唯一 MCP 扩展；短调用返回队列状态，Worker 执行真实长任务。 |
+
+- 回归：默认 MCP catalog 只含 `platform.tasks` 三工具；原生基础工具即使传入 manager 也不经 manager；P4 的 Runner、任务桥、熔断和配额测试保留。
+- 修改文件与作用：`context.py`/`native.py` 建立原生运行时边界；`registry.py` 按 `transport` 区分七个基础工具与三项任务 MCP；`toolnode.py`/`graph.py` 分流；`dispatch.py` 提供文件、网络、任务拆解的安全实现；`config.py`/`.env.example`/`docker-compose.yml` 注入 Firecrawl；`routers/mcp.py`、前端 ToolCard 和 API/Agent 文档同步新目录语义。

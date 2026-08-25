@@ -720,6 +720,7 @@ def execute_raw(
     permission: str,
     sandbox_dir: str | None = None,
     handler: object | None = None,
+    context: object | None = None,
 ) -> ToolResult:
     """按 call.name 分派到 handler，返回 ``ToolResult``（不抛，错误归一）。
 
@@ -727,18 +728,33 @@ def execute_raw(
     ``AppError`` → ``ok=False`` + error{code, message=中性文案}；未知异常 →
     INTERNAL。日志脱敏（调 M8 ``redact_for_log``，X-A4）。结果仍须由调用方
     经 ``normalize`` 转为 Observation（ToolResult 与 Observation 分离，§5.4）。
+
+    ``context`` 为 ``ToolExecutionContext``（仅 contextual 工具由 provider
+    透传）；非 None 时以第三位置参数传给 handler（platform 注入的会话/用户
+    上下文，模型不可传）。
     """
     started = time.perf_counter()
     try:
         if handler is None:
             raise AppError(ErrorCode.VALIDATION, f"工具未注册：{call.name}")
-        result = handler(call.arguments, sandbox_dir)  # type: ignore[call-arg]
+        if context is None:
+            result = handler(call.arguments, sandbox_dir)  # type: ignore[call-arg]
+        else:
+            result = handler(call.arguments, sandbox_dir, context)  # type: ignore[call-arg]
         latency_ms = round((time.perf_counter() - started) * 1000)
         to_tool_data = getattr(result, "to_tool_data", None)
-        data = to_tool_data() if callable(to_tool_data) else {
-            "summary": str(result),
-            "display": {"summary": str(result)},
-        }
+        if callable(to_tool_data):
+            data = to_tool_data()
+        elif isinstance(result, Mapping):
+            # 结构化结果（如 platform.tasks 三工具返回 dict）序列化为 JSON 文本，
+            # 模型可直接解析；不暴露 Python repr。
+            summary = json.dumps(dict(result), ensure_ascii=False)
+            data = {"summary": summary, "display": {"summary": summary}}
+        else:
+            data = {
+                "summary": str(result),
+                "display": {"summary": str(result)},
+            }
         data["latency_ms"] = latency_ms
         return ToolResult(name=call.name, ok=True, data=data, call_id=call.call_id)
     except AppError as exc:
@@ -777,6 +793,7 @@ def execute(
     permission: str,
     sandbox_dir: str | None = None,
     handler: object | None = None,
+    context: object | None = None,
 ) -> Observation:
     """按 call.name 分派到 handler，带超时；归一为 observation（FB-1）。
 
@@ -790,6 +807,7 @@ def execute(
             permission=permission,
             sandbox_dir=sandbox_dir,
             handler=handler,
+            context=context,
         ),
         None,
         tool=call.name,

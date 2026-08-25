@@ -85,7 +85,18 @@ def test_default_registry_includes_bash() -> None:
     assert bash_def is not None
     assert bash_def["permission"] == "sandbox.bash"
     names = {definition["name"] for definition in registry.all_defs()}
-    assert names == {"read", "write", "edit", "web_search", "web_fetch", "bash", "task"}
+    assert names == {
+        "read",
+        "write",
+        "edit",
+        "web_search",
+        "web_fetch",
+        "bash",
+        "task",
+        "task.create",
+        "task.status",
+        "task.cancel",
+    }
 
 
 def test_tool_schema_validation_rejects_invalid_and_extra_arguments() -> None:
@@ -608,6 +619,7 @@ def test_toolnode_timeout_and_frontend_event_payload() -> None:
             permission="test.read",
             timeout_s=0.01,
             handler=slow_handler,
+            transport="native",
         )
     )
     node = build_tool_node(registry)
