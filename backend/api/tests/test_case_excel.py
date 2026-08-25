@@ -63,7 +63,7 @@ def test_parse_standard_testcase_tools_headers():
 
 
 def test_parse_simple_module_name_steps_expected():
-    # PRD 简化列：模块 / 名称 / 步骤 / 预期；缺策略默认正向、缺优先级默认 P1
+    # PRD 简化列：模块 / 名称 / 步骤 / 预期；缺策略默认正向、缺优先级默认 FHX
     raw = _xlsx_from_rows(
         [
             ["模块", "名称", "步骤", "预期"],
@@ -78,7 +78,7 @@ def test_parse_simple_module_name_steps_expected():
     assert cases[0]["steps"] == "选择余额并确认"
     assert cases[0]["expected"] == "订单核销成功"
     assert cases[0]["strategy"] == "正向"
-    assert cases[0]["priority"] == "P1"
+    assert cases[0]["priority"] == "FHX"
 
 
 def test_parse_header_not_on_first_row_and_skip_empty_name():
@@ -108,9 +108,9 @@ def test_parse_strategy_and_priority_aliases():
     )
     cases, fmt, _skipped = parse_cases_xlsx(raw)
     assert fmt == "platform"
-    assert cases[0]["strategy"] == "等价类" and cases[0]["priority"] == "P0"
-    assert cases[1]["strategy"] == "状态迁移" and cases[1]["priority"] == "P1"
-    assert cases[2]["strategy"] == "反向" and cases[2]["priority"] == "P2"
+    assert cases[0]["strategy"] == "等价类" and cases[0]["priority"] == "HX"
+    assert cases[1]["strategy"] == "状态迁移" and cases[1]["priority"] == "FHX"
+    assert cases[2]["strategy"] == "反向" and cases[2]["priority"] == "FHX"
 
 
 def test_parse_extra_columns_go_to_extras():

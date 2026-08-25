@@ -24,7 +24,7 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
-from .casegen import (
+from shared.casegen import (
     MAX_COUNT,
     SOURCE_MAX_CHARS,
     TARGET_COUNT,
@@ -107,7 +107,8 @@ def _read_source(db: Session, case_source: dict) -> str:
 def _to_case_items(case_set_id: str, cases: list[dict]) -> list[CaseItem]:
     """把模型输出的用例字典转换为待落库的 CaseItem 行（固定字段 + 透传扩展键）。"""
     fixed = {
-        "strategy", "priority", "module", "name", "precondition", "steps", "expected", "test_type"
+        "strategy", "priority", "module", "submodule", "feature_point",
+        "name", "precondition", "steps", "expected", "test_type",
     }
     items: list[CaseItem] = []
     for index, case in enumerate(cases):
@@ -116,8 +117,10 @@ def _to_case_items(case_set_id: str, cases: list[dict]) -> list[CaseItem]:
             CaseItem(
                 case_set_id=case_set_id,
                 strategy=str(case.get("strategy") or "正向"),
-                priority=str(case.get("priority") or "P1"),
+                priority=str(case.get("priority") or "FHX"),
                 module=str(case.get("module") or ""),
+                submodule=str(case.get("submodule") or ""),
+                feature_point=str(case.get("feature_point") or ""),
                 name=str(case.get("name") or ""),
                 precondition=str(case.get("precondition") or ""),
                 steps=str(case.get("steps") or ""),

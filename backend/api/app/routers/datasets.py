@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
+from ..llm_client import call_agent_model, extract_json_array
 from ..models import AuditLog, Dataset, DatasetFolder, DatasetRow, User
 from ..schemas import (
     AiGenerateIn,
@@ -369,9 +370,83 @@ def ai_generate_rows(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """模型调用层重建设计期间，暂不生成候选数据。"""
-    _ = db, user, body
-    raise AppError(ErrorCode.VALIDATION, "模型调用层正在重建设计")
+    """按模式调用 Agent 协议档生成候选问答样本；候选不落库，前端确认后经 rows 保存。"""
+    _ = user
+    mode = body.mode
+    if mode not in {"scene", "seed", "doc", "fill_missing"}:
+        raise AppError(ErrorCode.VALIDATION, "不支持的生成模式")
+
+    temperature = body.temperature if body.temperature is not None else 0.5
+    if mode == "fill_missing":
+        if not body.rows:
+            raise AppError(ErrorCode.VALIDATION, "fill_missing 模式需要提供待补全行 rows")
+        user_prompt = (
+            f"请补全以下评测样本中缺失的字段（question 问题 / reference 参考答案 / context 上下文），"
+            f"已填写的字段保持原样，必须保留 row_no，最多补全 {body.max_count} 条。\n\n"
+            f"样本：\n{json.dumps(body.rows, ensure_ascii=False)}"
+        )
+    else:
+        if mode == "scene":
+            material = "\n".join(
+                part for part in (body.instruction, body.source_text) if part and part.strip()
+            )
+            hint = "请基于上述场景与要求，设计可评测的问答样本"
+        elif mode == "seed":
+            material = body.seed or ""
+            hint = "请参考上述种子样本的主题、风格与难度，生成同类问答样本"
+        else:  # doc
+            material = body.source_text or ""
+            hint = "请阅读上述文档，抽取可作为评测基准的知识点问答"
+        if not material.strip():
+            raise AppError(ErrorCode.VALIDATION, "该模式需要提供 instruction/source_text/seed 至少一项")
+        user_prompt = (
+            f"{hint}，生成不超过 {body.max_count} 条，每条含 question（问题）、"
+            f"reference（参考答案）、context（上下文，可空），可附 tags/difficulty 等扩展字段。\n\n"
+            f"参考材料：\n{material[:_SOURCE_MAX_CHARS]}"
+        )
+
+    result = call_agent_model(db, _AI_GENERATE_SYSTEM, user_prompt, temperature=temperature)
+    data = extract_json_array(result.text)
+    fallback_row_nos = [row.get("row_no") for row in body.rows] if mode == "fill_missing" else None
+    rows: list[dict[str, Any]] = []
+    for idx, item in enumerate(data):
+        if not isinstance(item, dict):
+            continue
+        if not (item.get("question") or item.get("q")):
+            continue
+        rows.append(_normalize_generated_row(item, idx + 1, fallback_row_nos))
+    if not rows:
+        raise AppError(ErrorCode.UPSTREAM, "模型未返回有效问答样本，请调整输入后重试")
+    return {"items": rows}
+
+
+_SOURCE_MAX_CHARS = 20_000
+
+_AI_GENERATE_SYSTEM = (
+    "你是测试数据集生成专家，负责为 AI 评测设计高质量问答样本。"
+    "只输出一个 JSON 数组，不要输出任何解释文字或 markdown 代码围栏；"
+    "每条样本包含 question（问题）、reference（参考答案）、context（上下文，可空），"
+    "可附加 tags、difficulty 等字段。"
+)
+
+
+def _normalize_generated_row(
+    item: dict[str, Any], idx: int, fallback_row_nos: list[Any] | None = None
+) -> dict[str, Any]:
+    """把模型输出的一行归一化为前端可编辑行（q/r/c + 扩展键透传）。"""
+    row_no = item.get("row_no")
+    if row_no is None and fallback_row_nos and idx - 1 < len(fallback_row_nos):
+        row_no = fallback_row_nos[idx - 1]
+    row: dict[str, Any] = {
+        "row_no": row_no or idx,
+        "q": str(item.get("question") or item.get("q") or ""),
+        "r": str(item.get("reference") or item.get("r") or ""),
+        "c": item.get("context", item.get("c")),
+    }
+    for key in ("tags", "difficulty"):
+        if item.get(key) is not None:
+            row[key] = item[key]
+    return row
 
 
 @folders_router.get("")

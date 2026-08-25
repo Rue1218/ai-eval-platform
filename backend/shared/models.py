@@ -494,6 +494,9 @@ class CaseItem(Base):
     strategy = Column(String, nullable=False)
     priority = Column(String, nullable=False)
     module = Column(String, nullable=False, default="")
+    # 用例八字段格式扩展：子模块 / 功能点（PRD 用例模板）
+    submodule = Column(String, nullable=False, default="")
+    feature_point = Column(String, nullable=False, default="")
     name = Column(String, nullable=False)
     precondition = Column(Text, nullable=False, default="")
     steps = Column(Text, nullable=False, default="")

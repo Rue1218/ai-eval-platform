@@ -4,8 +4,6 @@
 返回固定检索结果，验证 hit_rate/mrr/recall 计算、样本落库与任务终态。
 """
 
-from types import SimpleNamespace
-
 from app import rag as rag_module
 from app.models import EvalItem, GoldQa, GoldQaItem, KnowledgeBase, Report, Task
 

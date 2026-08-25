@@ -685,7 +685,7 @@ export const api = {
         return [{
           id: 'c-ai-' + Date.now(),
           strategy: '反向',
-          priority: 'P1',
+          priority: 'FHX',
           module: '通用',
           name: 'AI 候选：异常输入校验',
           expected: '系统拒绝无效输入并返回明确错误信息',

@@ -33,6 +33,8 @@ EXPORT_FIXED_COLUMNS: list[tuple[str, str]] = [
     ("strategy", "策略"),
     ("priority", "优先级"),
     ("module", "模块"),
+    ("submodule", "子模块"),
+    ("feature_point", "功能点"),
     ("name", "用例名称"),
     ("precondition", "前置条件"),
     ("steps", "步骤"),
@@ -63,6 +65,11 @@ _HEADER_ALIASES: dict[str, str] = {
     "所属模块": "module",
     "功能模块": "module",
     "module": "module",
+    "子模块": "submodule",
+    "submodule": "submodule",
+    "功能点": "feature_point",
+    "feature_point": "feature_point",
+    "测试点": "name",
     "用例名称": "name",
     "用例标题": "name",
     "名称": "name",
@@ -113,17 +120,32 @@ _STRATEGY_ALIASES: dict[str, str] = {
 }
 
 _PRIORITY_ALIASES: dict[str, str] = {
-    "p0": "P0",
-    "p1": "P1",
-    "p2": "P2",
-    "p3": "P3",
-    "0": "P0",
-    "1": "P1",
-    "2": "P2",
-    "3": "P3",
-    "高": "P0",
-    "中": "P1",
-    "低": "P2",
+    # 新六档：HX 核心 / FHX 非核心 / BJ 边界问题 / YC 异常 / ZD 中断 / BL 遍历
+    "hx": "HX",
+    "核心": "HX",
+    "fhx": "FHX",
+    "非核心": "FHX",
+    "bj": "BJ",
+    "边界": "BJ",
+    "边界问题": "BJ",
+    "yc": "YC",
+    "异常": "YC",
+    "zd": "ZD",
+    "中断": "ZD",
+    "bl": "BL",
+    "遍历": "BL",
+    # 兼容旧档位/高-中-低：P0→核心，其余归非核心
+    "p0": "HX",
+    "0": "HX",
+    "高": "HX",
+    "p1": "FHX",
+    "p2": "FHX",
+    "p3": "FHX",
+    "1": "FHX",
+    "2": "FHX",
+    "3": "FHX",
+    "中": "FHX",
+    "低": "FHX",
 }
 
 _INSTRUCTION_SHEET = "填写说明"
@@ -179,13 +201,13 @@ def _normalize_strategy(raw: str) -> str:
 
 
 def _normalize_priority(raw: str) -> str:
-    """优先级归一到 P0–P3；空值默认 P1。"""
+    """优先级归一到 HX/FHX/BJ/YC/ZD/BL；空值或未知默认 FHX。"""
     text = _norm_header(raw)
     if not text:
-        return "P1"
-    if text.upper() in {"P0", "P1", "P2", "P3"}:
+        return "FHX"
+    if text.upper() in {"HX", "FHX", "BJ", "YC", "ZD", "BL"}:
         return text.upper()
-    return _PRIORITY_ALIASES.get(text, "P1")
+    return _PRIORITY_ALIASES.get(text, "FHX")
 
 
 def _row_values(sheet: Worksheet, row_idx: int) -> list[Any]:
@@ -300,8 +322,10 @@ def build_import_template() -> bytes:
         [
             "",
             "正向",
-            "P0",
+            "HX",
             "登录",
+            "认证",
+            "账密登录",
             "账密正确登录",
             "已注册账号处于正常状态",
             "1. 打开登录页\n2. 输入正确账密并提交",

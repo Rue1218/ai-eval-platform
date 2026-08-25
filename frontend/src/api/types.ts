@@ -328,9 +328,11 @@ export interface TestCase {
   id: string
   // 6 类用例策略：正向 / 反向 / 边界 / 状态 / 场景 / 等价（后端亦可能回写 等价类 / 状态迁移）
   strategy: '正向' | '反向' | '边界' | '状态' | '场景' | '等价'
-  // 优先级支持 P0–P3 四档
-  priority: 'P0' | 'P1' | 'P2' | 'P3'
+  // 优先级六档：HX 核心 / FHX 非核心 / BJ 边界问题 / YC 异常 / ZD 中断 / BL 遍历
+  priority: 'HX' | 'FHX' | 'BJ' | 'YC' | 'ZD' | 'BL'
   module: string
+  submodule?: string
+  feature_point?: string
   name: string
   expected: string
   precondition?: string

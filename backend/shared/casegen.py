@@ -33,15 +33,31 @@ STRATEGY_NAMES = {
     "scenario": "场景",
 }
 
+# 优先级六档（PRD 用例模板）：核心/非核心/边界问题/异常/中断/遍历
+PRIORITY_VALUES = ("HX", "FHX", "BJ", "YC", "ZD", "BL")
+PRIORITY_LABELS = {
+    "HX": "核心",
+    "FHX": "非核心",
+    "BJ": "边界问题",
+    "YC": "异常",
+    "ZD": "中断",
+    "BL": "遍历",
+}
 
-def build_prompts(source_text: str, target_count: int) -> tuple[str, str]:
+
+def build_prompts(
+    source_text: str, target_count: int, weights: dict[str, int] | None = None
+) -> tuple[str, str]:
     """组装六策略用例生成的中文 system / user prompt（口径对齐 api ai-generate）。"""
-    ratio_desc = "、".join(f"{STRATEGY_NAMES[key]} {value}%" for key, value in STRATEGY_WEIGHTS.items())
+    weights = weights or STRATEGY_WEIGHTS
+    ratio_desc = "、".join(f"{STRATEGY_NAMES[key]} {value}%" for key, value in weights.items())
+    priority_desc = "、".join(f"{value}（{PRIORITY_LABELS[value]}）" for value in PRIORITY_VALUES)
     system = (
         "你是资深测试设计专家，负责根据需求文档设计软件测试用例。"
         "每条用例必须包含 strategy（策略，取值限于 正向/反向/边界/等价类/状态迁移/场景）、"
-        "priority（优先级，P0/P1/P2）、module（所属模块）、name（用例名称）、"
-        "expected（预期结果）、precondition（前置条件）、"
+        f"priority（优先级，取值限于 {priority_desc}）、"
+        "module（模块）、submodule（子模块）、feature_point（功能点）、"
+        "name（测试点/用例名称）、expected（预期结果）、precondition（前置条件）、"
         "test_type（测试类型，如 核心业务/异常处理/兼容性），可选 steps（操作步骤）。"
         "只输出一个 JSON 数组，不要输出任何解释文字或 markdown 代码围栏。"
     )
@@ -93,12 +109,12 @@ def selfcheck(cases: list[dict]) -> list[dict]:
     core_positives = [
         case
         for case in positives
-        if case.get("priority") == "P0" or "核心" in str(case.get("test_type") or "")
+        if case.get("priority") == "HX" or "核心" in str(case.get("test_type") or "")
     ]
     if not positives:
         checks.append({"level": "error", "code": "no_core_positive", "message": "自检未通过：未生成任何正向策略用例"})
     elif not core_positives:
-        checks.append({"level": "error", "code": "no_core_positive", "message": "自检未通过：正向用例中没有 P0 核心用例"})
+        checks.append({"level": "error", "code": "no_core_positive", "message": "自检未通过：正向用例中没有 HX 核心用例"})
     negatives = [case for case in cases if case.get("strategy") == "反向"]
     if not negatives:
         checks.append({"level": "error", "code": "missing_constraint_negative", "message": "自检未通过：缺少反向（约束/异常）策略用例"})

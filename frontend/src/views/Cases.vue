@@ -120,6 +120,8 @@
                 <th style="width: 75px">策略</th>
                 <th style="width: 65px">级别</th>
                 <th style="min-width: 90px">模块</th>
+                <th style="min-width: 90px">子模块</th>
+                <th style="min-width: 100px">功能点</th>
                 <th style="min-width: 180px">用例名称 <i class="req" style="color: var(--accent-error)">*</i></th>
                 <th style="min-width: 220px">预期结果 <i class="req" style="color: var(--accent-error)">*</i></th>
                 <th style="min-width: 140px">前置条件</th>
@@ -179,6 +181,30 @@
                     @keyup.esc="cancelEditing"
                   />
                   <span v-else>{{ c.module }}</span>
+                </td>
+                <td class="cell-edit" @click="editCell(c, 'submodule')">
+                  <input
+                    v-if="editingCell?.row === c && editingCell?.field === 'submodule'"
+                    v-model="c.submodule"
+                    class="cell-input"
+                    autofocus
+                    @blur="finishEditing"
+                    @keyup.enter="finishEditing"
+                    @keyup.esc="cancelEditing"
+                  />
+                  <span v-else>{{ c.submodule || '' }}</span>
+                </td>
+                <td class="cell-edit" @click="editCell(c, 'feature_point')">
+                  <input
+                    v-if="editingCell?.row === c && editingCell?.field === 'feature_point'"
+                    v-model="c.feature_point"
+                    class="cell-input"
+                    autofocus
+                    @blur="finishEditing"
+                    @keyup.enter="finishEditing"
+                    @keyup.esc="cancelEditing"
+                  />
+                  <span v-else>{{ c.feature_point || '' }}</span>
                 </td>
                 <td class="cell-edit" @click="editCell(c, 'name')">
                   <input
@@ -293,6 +319,8 @@
                 <th style="width: 75px">策略</th>
                 <th style="width: 65px">级别</th>
                 <th style="min-width: 90px">模块</th>
+                <th style="min-width: 90px">子模块</th>
+                <th style="min-width: 100px">功能点</th>
                 <th style="min-width: 180px">用例名称 <i class="req" style="color: var(--accent-error)">*</i></th>
                 <th style="min-width: 220px">预期结果 <i class="req" style="color: var(--accent-error)">*</i></th>
                 <th style="min-width: 140px">前置条件</th>
@@ -363,7 +391,17 @@
           <n-input v-model:value="editDraft.module" placeholder="如 登录 / 支付" />
         </div>
         <div class="field">
-          <label class="field-label">用例名称 / 测试目的 <span class="req">*</span></label>
+          <label class="field-label">子模块</label>
+          <n-input v-model:value="editDraft.submodule" placeholder="可选，如 认证 / 结算" />
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="field">
+          <label class="field-label">功能点</label>
+          <n-input v-model:value="editDraft.feature_point" placeholder="可选，如 验证码 / 余额扣减" />
+        </div>
+        <div class="field">
+          <label class="field-label">用例名称 / 测试点 <span class="req">*</span></label>
           <n-input v-model:value="editDraft.name" placeholder="一句话描述被测目标" />
         </div>
       </div>
@@ -462,7 +500,7 @@
               <n-checkbox v-model:checked="aiStruct.precondition">前置条件</n-checkbox>
               <n-checkbox v-model:checked="aiStruct.steps">测试执行步骤</n-checkbox>
               <n-checkbox v-model:checked="aiStruct.expected">预期断言</n-checkbox>
-              <n-checkbox v-model:checked="aiStruct.autoPriority">P0-P3 自动定级</n-checkbox>
+              <n-checkbox v-model:checked="aiStruct.autoPriority">HX/FHX 自动定级</n-checkbox>
             </div>
           </div>
         </div>
@@ -583,11 +621,12 @@ interface CustomCol {
 // AI 候选用例：在 TestCase 契约字段上叠加向导勾选态
 type AiCandidate = TestCase & { selected: boolean }
 
-// 契约冻结的 6 类用例策略与 P0-P3 优先级档位（以 types.ts TestCase 枚举为准）
+// 契约冻结的 6 类用例策略与 HX/FHX/BJ/YC/ZD/BL 六档优先级（以 types.ts TestCase 枚举为准）
 const STRATEGY_LIST: Array<TestCase['strategy']> = ['正向', '反向', '边界', '等价', '状态', '场景']
-const PRIORITY_LIST: Array<TestCase['priority']> = ['P0', 'P1', 'P2', 'P3']
+const PRIORITY_LIST: Array<TestCase['priority']> = ['HX', 'FHX', 'BJ', 'YC', 'ZD', 'BL']
+const PRIORITY_LABELS: Record<string, string> = { HX: '核心', FHX: '非核心', BJ: '边界问题', YC: '异常', ZD: '中断', BL: '遍历' }
 const strategyOptions = STRATEGY_LIST.map(s => ({ label: s, value: s }))
-const priorityOptions = PRIORITY_LIST.map(p => ({ label: p, value: p }))
+const priorityOptions = PRIORITY_LIST.map(p => ({ label: `${p} ${PRIORITY_LABELS[p]}`, value: p }))
 
 const message = useMessage()
 const dialog = useDialog()
@@ -655,7 +694,7 @@ const editingExtraCell = ref<{ row: TestCase; key: string; original: string } | 
 // C2：结构化编辑弹窗状态；草稿在打开时从行数据拷贝，保存时才写回表格
 const showEditCaseModal = ref(false)
 const editCaseIdx = ref(-1)
-const editDraft = ref<TestCase & Record<string, unknown>>({ id: '', strategy: '正向', priority: 'P1', module: '', name: '', expected: '', precondition: '' })
+const editDraft = ref<TestCase & Record<string, unknown>>({ id: '', strategy: '正向', priority: 'FHX', module: '', name: '', expected: '', precondition: '' })
 
 // C4：新增扩展列弹窗状态
 const showAddColModal = ref(false)
@@ -980,7 +1019,7 @@ function addCase() {
   const item: TestCase = {
     id: `c-${Date.now()}`,
     strategy: '正向',
-    priority: 'P1',
+    priority: 'FHX',
     module: '通用',
     name: '',
     expected: '',
@@ -1098,8 +1137,8 @@ function buildLocalCandidates(count: number): AiCandidate[] {
       result.push({
         id: `c-ai-${Date.now()}-${seq}`,
         strategy: s,
-        // 自动定级开启时按序号梯度分配 P0/P1/P2，否则统一 P2
-        priority: aiStruct.autoPriority ? (seq <= Math.ceil(count * 0.25) ? 'P0' : seq <= Math.ceil(count * 0.7) ? 'P1' : 'P2') : 'P2',
+        // 自动定级开启时前 25% 为核心 HX，其余非核心 FHX；否则统一 FHX
+        priority: aiStruct.autoPriority ? (seq <= Math.ceil(count * 0.25) ? 'HX' : 'FHX') : 'FHX',
         module: MODULE_POOL[seq % MODULE_POOL.length],
         name: `${s}用例 #${seq}：${hint.name}`,
         expected: aiStruct.expected ? hint.expected : '',
@@ -1151,7 +1190,7 @@ async function generateAiCandidates() {
         ...item,
         id: item.id || `c-ai-${Date.now()}-${index + 1}`,
         strategy: item.strategy || '正向',
-        priority: item.priority || 'P2',
+        priority: item.priority || 'FHX',
         module: item.module || '未分类',
         name: item.name || `候选用例 #${index + 1}`,
         expected: item.expected || '',
@@ -1591,7 +1630,7 @@ function insertCaseAt(at: number) {
   const item: TestCase = {
     id: `c-${Date.now()}`,
     strategy: '正向',
-    priority: 'P1',
+    priority: 'FHX',
     module: neighbor?.module || '通用',
     name: '',
     expected: '',
@@ -1968,10 +2007,12 @@ watch(() => modeStore.mode, () => {
   padding: 1px 6px;
   border-radius: 4px;
 }
-.prio-P0 { background: #FEE2E2; color: #DC2626; }
-.prio-P1 { background: #FEF3C7; color: #D97706; }
-.prio-P2 { background: #E0E7FF; color: #4F46E5; }
-.prio-P3 { background: #F3F4F6; color: #6B7280; }
+.prio-HX { background: #FEE2E2; color: #DC2626; }
+.prio-FHX { background: #FEF3C7; color: #D97706; }
+.prio-BJ { background: #E0E7FF; color: #4F46E5; }
+.prio-YC { background: #FCE7F3; color: #C026D3; }
+.prio-ZD { background: #EDE9FE; color: #7C3AED; }
+.prio-BL { background: #D1FAE5; color: #059669; }
 .st-ok {
   color: var(--accent-success);
 }

@@ -673,6 +673,8 @@ class CaseIn(ApiModel):
     strategy: str = Field(min_length=1, max_length=32)
     priority: str = Field(min_length=1, max_length=16)
     module: str = Field(default="", max_length=100)
+    submodule: str | None = Field(default=None, max_length=100)
+    feature_point: str | None = Field(default=None, max_length=100)
     name: str = Field(min_length=1, max_length=200)
     precondition: str | None = Field(default=None, max_length=100_000)
     steps: str | None = Field(default=None, max_length=100_000)

@@ -1,15 +1,15 @@
 """用例生成 Skill 纯函数单测（M2 W8 / PRD 5.4.1）。
 
-正本位于 worker 包（纯函数零依赖），按文件路径加载，CI 覆盖 worker
-生成口径；覆盖 prompt 组装、容错解析、配比校正与自检红字规则。
+正本位于 shared 包（纯函数零依赖），按文件路径加载，CI 覆盖 worker
+与 api 共用的生成口径；覆盖 prompt 组装、容错解析、配比校正与自检红字规则。
 """
 
 import importlib.util
 from pathlib import Path
 
-# worker 侧用例生成纯函数路径：backend/worker/app/casegen.py
-_CASEGEN_PATH = Path(__file__).resolve().parents[2] / "worker" / "app" / "casegen.py"
-_spec = importlib.util.spec_from_file_location("worker_casegen", _CASEGEN_PATH)
+# 共用用例生成纯函数路径：backend/shared/casegen.py
+_CASEGEN_PATH = Path(__file__).resolve().parents[2] / "shared" / "casegen.py"
+_spec = importlib.util.spec_from_file_location("shared_casegen", _CASEGEN_PATH)
 casegen = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(casegen)
 
@@ -76,9 +76,9 @@ def test_selfcheck_flags_positive_without_core():
 
 
 def test_selfcheck_passes_with_core_positive_and_negative():
-    # P0 正向 + 反向齐全：无红字
+    # HX 正向 + 反向齐全：无红字
     cases = [
-        {"name": "核心登录", "strategy": "正向", "priority": "P0"},
+        {"name": "核心登录", "strategy": "正向", "priority": "HX"},
         {"name": "密码错误", "strategy": "反向"},
     ]
     assert casegen.selfcheck(cases) == []

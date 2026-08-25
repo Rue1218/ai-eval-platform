@@ -12,6 +12,7 @@ awaiting_case_confirm 时写入（+72h），本域不主动维护。
 """
 
 import io
+import json
 import time
 import zipfile
 from typing import Any
@@ -22,6 +23,13 @@ from fastapi import APIRouter, Depends, File, Query, Response, UploadFile
 from fastapi import Request as FastApiRequest
 from openpyxl import Workbook
 from pydantic import ValidationError
+from shared.casegen import (
+    SOURCE_MAX_CHARS,
+    STRATEGY_WEIGHTS,
+    build_prompts,
+    parse_cases,
+    rebalance_by_strategy,
+)
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -35,6 +43,7 @@ from ..case_excel import (
 from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
+from ..llm_client import call_agent_model, extract_json_array
 from ..models import (
     AuditLog,
     CaseFolder,
@@ -42,6 +51,7 @@ from ..models import (
     CaseSet,
     Dataset,
     DatasetRow,
+    StoredFile,
     Task,
     User,
     utcnow,
@@ -73,6 +83,8 @@ _RESERVED_EXTRA_KEYS = {
     "strategy",
     "priority",
     "module",
+    "submodule",
+    "feature_point",
     "name",
     "precondition",
     "steps",
@@ -151,6 +163,8 @@ def _case_to_item(case: CaseItem) -> dict[str, Any]:
         "strategy": case.strategy,
         "priority": case.priority,
         "module": case.module or "",
+        "submodule": case.submodule or "",
+        "feature_point": case.feature_point or "",
         "name": case.name,
         "precondition": case.precondition or "",
         "steps": case.steps or "",
@@ -206,6 +220,8 @@ def _upsert_case(
             strategy=case_in.strategy,
             priority=case_in.priority,
             module=case_in.module,
+            submodule=case_in.submodule or "",
+            feature_point=case_in.feature_point or "",
             name=case_in.name,
             precondition=case_in.precondition or "",
             steps=case_in.steps or "",
@@ -219,6 +235,10 @@ def _upsert_case(
         case.priority = case_in.priority
         case.module = case_in.module
         case.name = case_in.name
+        if "submodule" in provided:
+            case.submodule = case_in.submodule or ""
+        if "feature_point" in provided:
+            case.feature_point = case_in.feature_point or ""
         if "precondition" in provided:
             case.precondition = case_in.precondition or ""
         if "steps" in provided:
@@ -256,12 +276,12 @@ def _selfcheck_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     core_positives = [
         item
         for item in positives
-        if item.get("priority") == "P0" or "核心" in str(item.get("test_type") or "")
+        if item.get("priority") == "HX" or "核心" in str(item.get("test_type") or "")
     ]
     if not positives:
         checks.append({"level": "error", "code": "no_core_positive", "message": "自检未通过：未导入任何正向策略用例"})
     elif not core_positives:
-        checks.append({"level": "error", "code": "no_core_positive", "message": "自检未通过：正向用例中没有 P0 核心用例"})
+        checks.append({"level": "error", "code": "no_core_positive", "message": "自检未通过：正向用例中没有 HX 核心用例"})
     if not any(item.get("strategy") == "反向" for item in items):
         checks.append({"level": "error", "code": "missing_constraint_negative", "message": "自检未通过：缺少反向（约束/异常）策略用例"})
     return checks
@@ -402,9 +422,53 @@ def ai_generate_cases(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """模型调用层重建设计期间，暂不生成候选用例。"""
-    _ = db, user, body
-    raise AppError(ErrorCode.VALIDATION, "模型调用层正在重建设计")
+    """按 Agent 协议档生成候选用例（新八字段格式 + 新优先级）；候选不落库。"""
+    _ = user
+    source_text = body.source_text or ""
+    if body.source_doc_id:
+        source_text = _read_stored_file_text(db, body.source_doc_id)
+    if not source_text.strip():
+        raise AppError(ErrorCode.VALIDATION, "需要提供需求文档内容 source_text 或来源文档 source_doc_id")
+    source_text = source_text[:SOURCE_MAX_CHARS]
+
+    weights = body.strategy_weights or STRATEGY_WEIGHTS
+    max_count = min(body.max_count, 80)
+    system, user_prompt = build_prompts(source_text, max_count, weights=weights)
+    result = call_agent_model(db, system, user_prompt, temperature=0.3, max_tokens=8192)
+    try:
+        cases = parse_cases(result.text)
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise AppError(ErrorCode.UPSTREAM, f"模型输出无法解析为用例：{exc}") from exc
+    cases = rebalance_by_strategy(cases, max_count)
+    return {"items": cases}
+
+
+def _read_stored_file_text(db: Session, file_id: str) -> str:
+    """读取来源文档正文（文本/xlsx），用于 AI 用例生成的素材。"""
+    from pathlib import Path
+
+    stored = db.query(StoredFile).filter(StoredFile.id == file_id).first()
+    if not stored or not stored.storage_path:
+        raise AppError(ErrorCode.NOT_FOUND, "来源文档不存在或已删除")
+    path = Path(stored.storage_path)
+    if not path.exists():
+        raise AppError(ErrorCode.NOT_FOUND, "来源文档已从磁盘移除")
+    suffix = path.suffix.lower()
+    if suffix in {".xlsx", ".xlsm"}:
+        from openpyxl import load_workbook
+
+        lines: list[str] = []
+        wb = load_workbook(path, read_only=True, data_only=True)
+        try:
+            for sheet in wb.worksheets:
+                for row in sheet.iter_rows(values_only=True):
+                    line = " ".join(str(cell) for cell in row if cell is not None)
+                    if line.strip():
+                        lines.append(line)
+        finally:
+            wb.close()
+        return "\n".join(lines)[:SOURCE_MAX_CHARS]
+    return path.read_bytes().decode("utf-8", errors="ignore")[:SOURCE_MAX_CHARS]
 
 
 @router.get("/import-template")
@@ -674,9 +738,55 @@ def ai_fill_cases(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """模型调用层重建设计期间，暂不补全用例。"""
-    _ = db, user, set_id, body
-    raise AppError(ErrorCode.VALIDATION, "模型调用层正在重建设计")
+    """按 Agent 协议档补全指定用例缺失字段；返回 {id, ...补全字段} 候选，不直接落库。"""
+    _ = user
+    _get_case_set_or_404(db, set_id)
+    cases = (
+        db.query(CaseItem)
+        .filter(CaseItem.case_set_id == set_id, CaseItem.id.in_(body.case_ids))
+        .all()
+    )
+    if len(cases) != len(set(body.case_ids)):
+        raise AppError(ErrorCode.VALIDATION, "部分用例不存在")
+
+    payload = json.dumps(
+        [
+            {
+                "id": case.id,
+                "strategy": case.strategy,
+                "priority": case.priority,
+                "module": case.module,
+                "submodule": case.submodule,
+                "feature_point": case.feature_point,
+                "name": case.name,
+                "precondition": case.precondition,
+                "steps": case.steps,
+                "expected": case.expected,
+                "test_type": case.test_type,
+                **(case.extras or {}),
+            }
+            for case in sorted(cases, key=lambda c: c.sort_order)
+        ],
+        ensure_ascii=False,
+    )
+    fields_hint = (
+        "、".join(body.fields) if body.fields else "name/expected/precondition/steps/module/submodule/feature_point/test_type/priority"
+    )
+    instruction = body.instruction or "请结合用例已有内容，补全缺失字段"
+    system = (
+        "你是资深测试设计专家，负责补全测试用例。只输出一个 JSON 数组，"
+        "每条必须含 id 与补全后的字段，保持字段名与输入一致，不要输出解释文字或代码围栏。"
+    )
+    user_prompt = (
+        f"{instruction}。请补全以下用例中缺失的 {fields_hint} 字段，"
+        f"已有内容保持不变，只输出 JSON 数组（每条含 id）。\n\n用例：\n{payload}"
+    )
+    result = call_agent_model(db, system, user_prompt, temperature=0.2, max_tokens=8192)
+    items = extract_json_array(result.text)
+    filled = [item for item in items if isinstance(item, dict) and item.get("id")]
+    if not filled:
+        raise AppError(ErrorCode.UPSTREAM, "模型未返回可识别的补全结果")
+    return {"items": filled}
 
 
 @router.post("/{set_id}/import")

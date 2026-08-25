@@ -251,14 +251,14 @@ export const MOCK_CASE_SETS: CaseSet[] = [
 ]
 
 export const MOCK_TEST_CASES: TestCase[] = [
-  { id: 'c-001', strategy: '正向', priority: 'P0', module: '登录', name: '正确账密登录成功', expected: '进入工作台首页', mapped: true, pending: false, selected: true },
-  { id: 'c-002', strategy: '正向', priority: 'P0', module: '支付', name: '余额充足时支付成功', expected: '订单状态变为已支付', mapped: true, pending: false, selected: true },
-  { id: 'c-003', strategy: '反向', priority: 'P1', module: '登录', name: '错误密码登录', expected: '提示用户名或密码错误', mapped: false, pending: true, selected: false },
-  { id: 'c-004', strategy: '反向', priority: 'P1', module: '支付', name: '余额不足支付', expected: '返回余额不足错误码', mapped: true, pending: false, selected: true },
-  { id: 'c-005', strategy: '边界', priority: 'P1', module: '支付', name: '支付金额为 0.01', expected: '允许最小金额支付', mapped: true, pending: false, selected: true },
-  { id: 'c-006', strategy: '边界', priority: 'P2', module: '支付', name: '支付金额达单笔上限', expected: '按限额规则拦截', mapped: false, pending: true, selected: false },
-  { id: 'c-007', strategy: '状态', priority: 'P1', module: '订单', name: '重复提交支付请求', expected: '幂等返回同一订单', mapped: true, pending: false, selected: true },
-  { id: 'c-008', strategy: '场景', priority: 'P2', module: '支付', name: '支付中断网重试', expected: '恢复后可查询最终状态', mapped: true, pending: false, selected: true },
+  { id: 'c-001', strategy: '正向', priority: 'HX', module: '登录', name: '正确账密登录成功', expected: '进入工作台首页', mapped: true, pending: false, selected: true },
+  { id: 'c-002', strategy: '正向', priority: 'HX', module: '支付', name: '余额充足时支付成功', expected: '订单状态变为已支付', mapped: true, pending: false, selected: true },
+  { id: 'c-003', strategy: '反向', priority: 'YC', module: '登录', name: '错误密码登录', expected: '提示用户名或密码错误', mapped: false, pending: true, selected: false },
+  { id: 'c-004', strategy: '反向', priority: 'YC', module: '支付', name: '余额不足支付', expected: '返回余额不足错误码', mapped: true, pending: false, selected: true },
+  { id: 'c-005', strategy: '边界', priority: 'BJ', module: '支付', name: '支付金额为 0.01', expected: '允许最小金额支付', mapped: true, pending: false, selected: true },
+  { id: 'c-006', strategy: '边界', priority: 'BJ', module: '支付', name: '支付金额达单笔上限', expected: '按限额规则拦截', mapped: false, pending: true, selected: false },
+  { id: 'c-007', strategy: '状态', priority: 'FHX', module: '订单', name: '重复提交支付请求', expected: '幂等返回同一订单', mapped: true, pending: false, selected: true },
+  { id: 'c-008', strategy: '场景', priority: 'FHX', module: '支付', name: '支付中断网重试', expected: '恢复后可查询最终状态', mapped: true, pending: false, selected: true },
 ]
 
 export const MOCK_TASKS: Task[] = [
