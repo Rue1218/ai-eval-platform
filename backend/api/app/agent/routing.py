@@ -15,7 +15,7 @@ from langgraph.config import get_config, get_stream_writer
 from app.errors import AppError, ErrorCode
 from app.harness.contracts import make_event
 from app.harness.memory import GraphState, SerializableRequest, rebuild_model_config
-from app.harness.orchestration import AgentMode, decide_mode
+from app.harness.orchestration import AgentMode, decide_mode, detect_plan_intent
 from app.llm import ModelRequest
 
 # /help 帮助文本（阶段 1 硬编码占位，M4-Q4 裁决；后续从 M1 system.py 读取）
@@ -30,7 +30,7 @@ HELP_TEXT = (
 )
 
 
-def _user_text(state: GraphState) -> str:
+def user_text_from_state(state: GraphState) -> str:
     """从可序列化请求投影中取最近一条 user 消息文本（不含回调）。"""
     request = state.get("request") or {}
     messages = request.get("messages") or ()
@@ -57,19 +57,28 @@ def _config_has_attachments() -> bool:
 
 
 def routing_node(state: GraphState) -> dict:
-    """路由节点：写 state['mode']，不调模型（OR-1）。
+    """路由节点：写 state['mode']，不调模型（OR-1 / P0）。
 
     带附件时强制 react（模型需 read 工具读取附件，chat 路径无工具注入）。
+    多技能/确认卡/显式清单走 plan_solve，由规划节点调用 ``build_plan``。
     """
+    text = user_text_from_state(state)
     return {
-        "mode": decide_mode(_user_text(state), has_attachments=_config_has_attachments())
+        "mode": decide_mode(
+            text,
+            has_attachments=_config_has_attachments(),
+            has_multi_slots=detect_plan_intent(text),
+        )
     }
 
 
 def route(state: GraphState) -> AgentMode:
     """路由条件边函数：读 routing_node 写入的 mode，返回分流模式。"""
+    text = user_text_from_state(state)
     return state.get("mode") or decide_mode(
-        _user_text(state), has_attachments=_config_has_attachments()
+        text,
+        has_attachments=_config_has_attachments(),
+        has_multi_slots=detect_plan_intent(text),
     )
 
 
@@ -81,7 +90,7 @@ def direct_node(state: GraphState) -> dict:
     - /compact /cancel /stress（阶段 1 未启用）→ error(VALIDATION)
     - 未知斜杠 → error(VALIDATION)
     """
-    text = _user_text(state)
+    text = user_text_from_state(state)
     command = text.split()[0].lower() if text else ""
     if command == "/help":
         return {

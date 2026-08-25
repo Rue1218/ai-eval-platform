@@ -10,7 +10,7 @@ WebSocket、DB Session；提供 to_dict / from_dict 往返与最小校验。
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import MISSING, dataclass, field, fields
 from typing import Literal, TypeVar, cast
 
 # —— 阶段 4 晚波 ——
@@ -99,6 +99,8 @@ class Observation:
     arguments: Mapping[str, object] | None = None  # 本次调用参数（OR-4 防重复判断用）
     # 写入 ToolCard 的受控数据。不得放完整 read 内容；模型可见正文仍只在 text。
     display_data: Mapping[str, object] = field(default_factory=dict)
+    # 失败时给模型的可操作修复建议；禁止写入 tool_result / assistant_message。
+    repair_hint: str = ""
 
 
 T = TypeVar("T")
@@ -119,20 +121,30 @@ def _plain(value: object) -> object:
 
 
 def from_dict(cls: type[T], data: dict) -> T:
-    """从 dict 重建契约；字段缺失/多余抛 ValueError。"""
-    expected = set(getattr(cls, "__dataclass_fields__", {}).keys())
-    actual = set(data.keys())
-    if actual != expected:
-        missing = sorted(expected - actual)
-        extra = sorted(actual - expected)
-        raise ValueError(f"{cls.__name__} 字段不匹配 missing={missing} extra={extra}")
+    """从 dict 重建契约。
+
+    多余字段拒绝；缺必填字段拒绝；带默认值的新字段（如 ``repair_hint``）
+    可缺省，避免检查点/旧投影因字段演进断裂。
+    """
+    declared = {item.name: item for item in fields(cls)}
+    extra = sorted(set(data.keys()) - set(declared))
+    if extra:
+        raise ValueError(f"{cls.__name__} 字段不匹配 missing=[] extra={extra}")
     kwargs: dict[str, object] = {}
-    for name in expected:
-        value = data[name]
-        if name in {"tools_needed"}:
-            kwargs[name] = tuple(value)
+    missing: list[str] = []
+    for name, item in declared.items():
+        if name in data:
+            value = data[name]
+            kwargs[name] = tuple(value) if name == "tools_needed" else value
+            continue
+        if item.default is not MISSING:
+            kwargs[name] = item.default
+        elif item.default_factory is not MISSING:  # type: ignore[misc]
+            kwargs[name] = item.default_factory()
         else:
-            kwargs[name] = value
+            missing.append(name)
+    if missing:
+        raise ValueError(f"{cls.__name__} 字段不匹配 missing={sorted(missing)} extra=[]")
     return cast(T, cls(**kwargs))
 
 

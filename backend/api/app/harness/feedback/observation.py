@@ -44,6 +44,7 @@ def normalize(
             redacted=True,
             source=source,
             arguments=arguments,
+            repair_hint=_repair_hint_from_error(None, exc),
         )
     if raw is None:
         return Observation(
@@ -83,7 +84,24 @@ def normalize(
         redacted=True,
         arguments=arguments,
         display_data=dict(display),
+        repair_hint="" if raw.ok else _repair_hint_from_error(error, None),
     )
+
+
+def _repair_hint_from_error(
+    error: Mapping[str, object] | None,
+    exc: Exception | None,
+) -> str:
+    """提取模型可见的修复建议；缺省为空，不把内部栈写进去。"""
+    if error and error.get("repair_hint"):
+        return str(error.get("repair_hint") or "")[:500]
+    fields = getattr(exc, "fields", None)
+    if isinstance(fields, Mapping) and fields.get("repair_hint"):
+        return str(fields.get("repair_hint") or "")[:500]
+    message = str(getattr(exc, "message", "") or "")
+    if message and message not in {"操作失败", "操作失败（INTERNAL）"}:
+        return message[:500]
+    return ""
 
 
 def normalize_exception(

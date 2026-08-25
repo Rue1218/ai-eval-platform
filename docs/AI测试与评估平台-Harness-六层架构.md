@@ -3,8 +3,8 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 六层架构 |
-| 版本 | V0.1.0 |
-| 审查日期 | 2026-08-24 |
+| 版本 | V0.1.1 |
+| 审查日期 | 2026-08-25 |
 | 文档性质 | 架构总览（六层职责 + 跨层数据流 + 范式映射 + 模块导航） |
 | 适用范围 | `/agent` 对话智能体的 Harness 运行时：提示词 / 上下文 / 记忆 / 编排 / 执行 / 反馈六层 |
 | 事实来源 | `backend/api/app/harness/`、`app/agent/`、`app/llm/`、`app/routers/ws.py`；各层模块设计文档；Harness 需求文档 V1.5.0 |
@@ -107,13 +107,13 @@ Harness 把 Agent 运行时拆成六层，每层解决一个维度的问题；�
 | :--- | :--- | :--- |
 | `orchestration/router.py` | `decide_mode`：斜杠→direct；工具关键词或 **has_attachments→react**（V0.1.0 新增，带附件必须进 react 才有 read 工具）；否则 chat | OR-1 |
 | `agent/routing.py` | `routing_node`/`route` 从 `configurable.assets.file_ids` 读附件存在性 → 强制 react | OR-1 |
-| `orchestration/budget.py` | 计数型预算 `model_calls=4 / tool_turns=4`，耗尽抛 `BUDGET_EXCEEDED` | OR-5 |
+| `orchestration/budget.py` | 计数型预算默认 `model_calls=12 / tool_turns=12`，耗尽抛 `BUDGET_EXCEEDED` | OR-5 |
 | `orchestration/gates.py` | 长工具判定 + 会话占槽（DB 事实填入 GateContext） | OR-6 / OR-7 |
-| `orchestration/plan.py` | `PlanArtifact` 规划解析（重试降级） | OR-2 / OR-3 |
+| `orchestration/plan.py` | `PlanArtifact` 规划解析（重试降级；L0 合并全部命中技能，3–7 步） | OR-2 / OR-3 |
 | `orchestration/confirm.py` | 确认卡回执（OR-8）：行锁 + owner 校验 + patch 深合并 + 二次校验 + 入队，收包循环直连 | OR-8 |
-| `agent/graph.py` | LangGraph 状态机 `START → routing → (direct\|chat_stream\|react_agent⇄tools\|plan_solve→reflect) → END`；Checkpointer 回合隔离 | 图拓扑 |
-| `agent/react.py` | ReAct 循环：system（五段策略+工具清单+observations）→ 模型严格 JSON → `parse_react` → pending_tool/done；**OR-4 重复抑制**（相同 tool+args 首次纠正、二次硬错误）；read 观察放开 21000 | OR-4 / ReAct |
-| `agent/plan_solve.py` / `reflect.py` | Plan-and-Solve 执行子图（图内复用节点）+ reflect 复核节点（pass/clarify/reject 条件边） | Plan-Solve / Reflexion |
+| `agent/graph.py` | LangGraph 状态机 `START → routing → (direct\|chat_stream\|react_agent⇄tools\|plan_solve→react→reflect) → END`；Checkpointer 回合隔离 | 图拓扑 |
+| `agent/react.py` | ReAct 循环：system（策略+工具清单+规划约束+observations）→ 模型严格 JSON / 原生 ToolCall → `parse_react` → pending_tool/done；**OR-4 重复抑制**；有 plan 时不发 `response.completed` | OR-4 / ReAct |
+| `agent/plan_solve.py` / `reflect.py` | 规划节点产出完整 PlanArtifact 后交 ReAct；reflect 复核并在有计划回合发出唯一 `response.completed` | Plan-Solve / Reflexion |
 
 ### 层5 执行（`app/harness/execution/`）
 
@@ -153,8 +153,8 @@ Harness 需求文档 §2.2 定义了七种设计模式，本项目当前落地�
 | ReAct | `react_agent ⇄ tools` 严格 JSON 协议循环（自建 StateGraph，**禁用 create_react_agent**） | ✅ 落地 |
 | Direct | 斜杠命令 L0 路由（不调模型） | ✅ 落地 |
 | Chat | 无工具流式回答 | ✅ 落地 |
-| Plan-and-Execute | `plan_solve` 执行子图（图内复用节点）+ `reflect` 复核 | 🟡 阶段 4 最小实现（工具执行未接线） |
-| Reflexion | OR-4 重复抑制（首次纠正/二次硬错误）+ reflect 复核 | 🟡 浅层版 |
+| Plan-and-Execute | 多技能/确认卡进入 `plan_solve` → ReAct 执行短工具 → `reflect` 收尾 | 🟢 已接线（中间叙述 / 有界重规划未做） |
+| Reflexion | OR-4 重复抑制 + reflect 确定性门禁与 `response.completed` 收尾 | 🟡 浅层版（clarify interrupt / 重规划属后续） |
 | Orchestrator-Worker | 进程级：确认卡回执 → PG 队列 → Worker（**禁止 LLM 子代理**） | ✅ 进程级 |
 | Mixture of Experts / Progressive Disclosure | `skills/registry.py` 技能目录（名称+一句话描述常驻）+ 附件/工具定义按需加载 | 🟡 技能为轻量 hint，非长文档专家 |
 
@@ -214,6 +214,6 @@ Harness 需求文档 §2.2 定义了七种设计模式，本项目当前落地�
 
 | 文件 | 操作 | 作用 |
 | :--- | :--- | :--- |
-| `docs/AI测试与评估平台-Harness-六层架构.md` | 新增（V0.1.0） | 六层架构总览与导航：职责/关键文件/跨层数据流/范式映射/文档索引；同步记录 2026-08-24 附件懒加载改动（txt/md staging + read offset/limit + has_attachments 强制 react + 截断标记） |
+| `docs/AI测试与评估平台-Harness-六层架构.md` | 新增（V0.1.0）→ 修订 V0.1.1 | V0.1.0 六层架构总览与导航。V0.1.1 回写：默认预算 12/12；`plan_solve → react → reflect` 已接线；Plan-and-Execute 从「工具未接线」改为已接线（中间叙述与有界重规划仍属后续）。 |
 
 本次修订不改变任何 API、数据库表结构、前端或 Worker 运行契约。

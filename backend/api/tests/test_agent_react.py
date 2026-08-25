@@ -562,3 +562,13 @@ def test_react_observations_injected_into_next_call() -> None:
     second_system = gateway.calls[1].system
     assert "【工具结果】" in second_system
     assert "read" in second_system
+
+
+def test_react_stage_input_uses_observe_think_act() -> None:
+    """P0：ReAct / native 阶段输入写明先观察再思考再行动。"""
+    from app.agent.react import NATIVE_TOOL_STAGE_INPUT, REACT_STAGE_INPUT
+
+    assert "Observe → Think → Act" in REACT_STAGE_INPUT
+    assert "【工具结果】" in REACT_STAGE_INPUT
+    assert "Observe → Think → Act" in NATIVE_TOOL_STAGE_INPUT
+    assert "不要把工具原文粘贴成助手正文" in NATIVE_TOOL_STAGE_INPUT

@@ -1,8 +1,9 @@
 """基于 LangGraph 的 Harness Agent 图（阶段 4：Chat + Direct + ReAct + Plan-Solve）。
 
 图拓扑：``START → routing → (direct | chat_stream | react_agent | plan_solve)``；
-ReAct 循环：``react_agent → (tools | END)``，``tools → react_agent``；
-Plan-Solve：``plan_solve → reflect → END``（reflect 复核节点，规划产物门禁）。
+ReAct 循环：``react_agent → (tools | reflect | END)``，``tools → react_agent``；
+Plan-Solve：``plan_solve → react_agent``（失败则 END）；有 ``plan`` 的 ReAct
+收尾进入 ``reflect``，由 reflect 发出 ``response.completed``。
 节点只返回纯数据（mode / pending_events / pending_tool / response 投影），
 WebSocket、数据库与平台任务队列由路由层（ws.py）负责，节点内不持有外部资源
 （§2.5 事件桥接契约）。
@@ -27,12 +28,12 @@ from ..harness.execution import (
 )
 from ..harness.memory import GraphState, SerializableRequest
 from ..llm import ModelGateway, ModelResponse
-from .plan_solve import build_plan_solve_subgraph
+from .plan_solve import build_plan_solve_subgraph, plan_solve_route
 from .react import build_react_nodes, react_route
 from .reflect import reflect_node
 from .routing import chat_stream_node, direct_node, route, routing_node
 
-# 条件边分流映射（阶段 4 含 plan_solve；reflect 复核节点备用）
+# 条件边分流映射：复杂任务进 plan_solve，成功后再进 react / reflect
 _ROUTE_TARGETS: dict[str, str] = {
     "chat": "chat_stream",
     "direct": "direct",
@@ -104,7 +105,12 @@ class LangGraphAgent:
         graph.add_conditional_edges(
             "react_agent",
             react_route,
-            {"tools": "tools", "end": END, "react_agent": "react_agent"},
+            {
+                "tools": "tools",
+                "end": END,
+                "react_agent": "react_agent",
+                "reflect": "reflect",
+            },
         )
         # 原生 ToolCall 同轮可返回多个调用；ToolNode 串行消费队列，全部完成后
         # 才回到模型，既不绕过门禁/沙箱，也不丢弃并发调用。
@@ -115,8 +121,11 @@ class LangGraphAgent:
         )
         graph.add_edge("direct", END)
         graph.add_edge("chat_stream", END)
-        # Plan-Solve 产物经 reflect 复核（阶段 4：pass/clarify/reject 条件边后续接线）
-        graph.add_edge("plan_solve", "reflect")
+        graph.add_conditional_edges(
+            "plan_solve",
+            plan_solve_route,
+            {"react_agent": "react_agent", "end": END},
+        )
         graph.add_edge("reflect", END)
         # 阶段 3：Checkpointer 按 thread_id 隔离回合（M3-D4 恢复语义）
         if self._checkpointer is not None:
@@ -133,11 +142,11 @@ class LangGraphAgent:
         return node
 
     def invoke(self, request: SerializableRequest, config: dict | None = None) -> ModelResponse:
-        """执行一轮非流式 Agent 调用（Chat/ReAct 路径产生模型响应）。"""
+        """执行一轮非流式 Agent 调用（Chat/ReAct/Plan-Solve 路径产生模型响应）。"""
         run_config, thread_id = self._prepare_run_config(config)
         try:
             state = self._graph.invoke({"request": request}, config=run_config)
-            if state.get("mode") not in ("chat", "react"):
+            if state.get("mode") not in ("chat", "react", "plan_solve"):
                 raise AppError(ErrorCode.VALIDATION, "Direct 路径不产生模型响应")
             return self._response_from_state(state)
         finally:

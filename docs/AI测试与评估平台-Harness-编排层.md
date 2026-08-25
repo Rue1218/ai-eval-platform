@@ -3,8 +3,8 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 编排层模块设计 |
-| 版本 | V0.4.2 |
-| 审查日期 | 2026-08-24 |
+| 版本 | V0.4.3 |
+| 审查日期 | 2026-08-25 |
 | 文档性质 | 模块设计说明书（需求发散 + 架构设计） |
 | 适用模块 | M4 编排层（`app/harness/orchestration/` + `app/agent/`） |
 | 上游权威 | Harness 需求文档 V1.4.4 §2.3/§2.4/§2.5、§4.4、§7、§9；API.md V1.22 §4.3/§4.4/§5；PRD §5.1.2/§5.1.3 |
@@ -52,8 +52,8 @@
 | OR-1 | 模式路由：斜杠→Direct；无工具→Chat；短工具→ReAct；多槽位业务→Plan-and-Solve | O-1：路由节点按 `text` 前缀与 PlanArtifact 分流 | 阶段 1（Direct/Chat）→2（ReAct）→4（Plan-Solve） |
 | OR-2 | `PlanArtifact` 冻结字段（含 `allows_replan`） | O-2：`plan.py` 产出 PlanArtifact（类型在 M7） | 阶段 4 |
 | OR-3 | 规划解析失败重试一次，仍失败走 L0 规则降级，降级后必须经复核 | O-3：规划解析重试 + L0 降级 + 复核门禁 | 阶段 4 |
-| OR-4 | 每轮至多执行一个短工具，重复调用抑制 | O-4：ReAct 循环内重复工具抑制 | 阶段 2 |
-| OR-5 | 模型调用预算（规划+重试+补规划+核对 ≤4；工具轮次默认 4、上限 5） | O-5：`budget.py` 预算计数与熔断 | 阶段 2 |
+| OR-4 | 同轮多个原生 ToolCall **串行**过门禁，禁止无门禁并行；legacy 每轮至多一个短工具；重复调用抑制 | O-4：ReAct 循环内串行执行 + 重复抑制 | 阶段 2 |
+| OR-5 | 默认模型调用 / 工具轮次均为 12（`budget.py`）；计划可派生收紧；死循环由预算兜底 | O-5：`budget.py` 预算计数与熔断 | 阶段 2 |
 | OR-6 | 长任务不得在对话回合内同步执行 | O-6：`gates.py` `is_long_tool` 门禁 | 阶段 2 |
 | OR-7 | 会话存在活动任务时禁止再发确认卡 | O-7：`gates.py` 占槽门禁返回 `CONCURRENCY` | 阶段 4 |
 | OR-8 | `task.create` 只在 `confirm_ack.ok=true` 且 patch 合并后二次校验通过时发生 | O-8：`confirm.py` `handle_confirm_ack` 事务 | 阶段 4 |
@@ -249,20 +249,19 @@ routing → mode="react"
          → 回 agent 节点（受 budget.py 轮次预算约束，OR-4/5）
 ```
 
-- `budget.py`：工具轮次默认 4、上限 5；模型调用预算 ≤4（规划+重试+补规划+核对）。
+- `budget.py`：默认 `model_calls=12` / `tool_turns=12`；计划可派生收紧，死循环仍由预算兜底。
 - `gates.py`：`is_long_tool` 门禁拦截 benchmark/testcase/rag/stress（OR-6）。
-- 重复工具调用抑制（OR-4）在 react 子图内实现。
+- 重复工具调用抑制（OR-4）在 react 子图内实现；native 同轮多 ToolCall 必须逐个过门禁后串行执行。
 
-**阶段 4（Plan-and-Solve + reflect + 确认卡）**：
+**阶段 4（Plan-and-Solve + reflect；确认卡仍 WS 直连）**：
 
 ```text
 routing → mode="plan_solve"
-  → plan 节点（plan.py：产出 PlanArtifact，解析失败重试一次→L0 降级→复核）
-  → plan_solve 子图（app/agent/plan_solve.py，图内复用节点，无独立 LLM 循环）
-  → reflect 节点（app/agent/reflect.py：pass/clarify/reject 条件边）
-       pass → confirm 卡（写 sessions.pending_confirm）
-       clarify → 澄清卡 interrupt()（阶段 3 落地后）
-       reject → 失败反馈
+  → plan_solve（build_plan：解析失败重试一次→L0 合并全部命中技能，3–7 步）
+  → react_agent ⇄ tools（按【当前规划】执行短工具；长任务只说明确认卡入队）
+  → reflect（确定性门禁 + 可选 review；发出本轮唯一 response.completed）
+       pass / clarify → completed(stop)（clarify interrupt 属后续阶段）
+       reject → error + completed(error)
 ```
 
 - `confirm.py` `handle_confirm_ack`（OR-8）：在 `ws.py` 收包循环直连，不唤醒图：
@@ -582,6 +581,6 @@ def reflect_node(state: GraphState) -> dict:
 
 | 文件 | 操作 | 作用 |
 | :--- | :--- | :--- |
-| `docs/AI测试与评估平台-Harness-编排层.md` | 新增 V0.1 → 修订 V0.2 → 修订 V0.3 → 修订 V0.4 → 修订 V0.4.1 → 修订 V0.4.2 | V0.1 M4 编排层模块设计：定义图拓扑、模式路由、`should_abort` 全链路迁移、Direct L0 路由、事件桥接、确认卡回执；V0.2 升级到接口签名级：补枚举/GraphState 引用/路由节点/`should_abort` 迁移/编排辅助模块/阶段 2-4 子图签名；V0.3 开放问题闭环：路由 hybrid 策略、`should_abort` 走 `configurable["abort"]["should_abort"]` 命名空间、`pending_events` 每节点消费图外清空、`/help` 阶段 1 硬编码、`handle_confirm_ack` 同事务、子图复用阶段 4 再定；V0.4 对齐 API.md V1.21：新增 §8「前端联调」章节；V0.4.1 配合 API.md V1.22：§3.9.6 补 `clarify.py` 接口签名（`clarify_node` + `interrupt()` + `id` uuid4 语义），§8.1 修正 `clarify.py`/`plan.py`/`plan_solve.py` 章节号引用；V0.4.2 评审收敛版：O-12 与 §3.4 明确 `should_abort` 迁移为**阶段 3 阻断验收项**（含 4 条验收清单）；§3.7 补充事件生产者归属（pending_events 仅承载图节点事件，user_message/progress/report 由各自直产方产出，对齐 M7 §3.6.1 归属矩阵）。 |
+| `docs/AI测试与评估平台-Harness-编排层.md` | 新增 V0.1 → 修订 V0.2 → 修订 V0.3 → 修订 V0.4 → 修订 V0.4.1 → 修订 V0.4.2 → 修订 V0.4.3 | V0.1–V0.4.2 见既有设计演进。V0.4.3 回写运行事实：OR-4 为同轮串行多 ToolCall + 重复抑制；默认预算 12/12；`plan_solve → react ⇄ tools → reflect`，`response.completed` 由 reflect 在有计划回合发出。 |
 
 本文档仅设计编排层，不改变任何 API、数据库、前端或 Agent 运行代码。

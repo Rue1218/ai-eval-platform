@@ -105,6 +105,7 @@ class GraphState(TypedDict, total=False):
     native_messages: Annotated[list[Mapping[str, object]], _append_native_messages]  # 原生 assistant/tool 往返消息
     stop_flag: bool  # 节点写，条件边读（阶段 2）
     repeat_retry: bool  # 阶段 2：OR-4 首次重复纠正后置位，react 条件边回环重试
+    turn_failed: bool  # 有 plan 时 ReAct 硬错误：禁止再进 reflect，避免 completed(stop)
     parse_retries: int  # 阶段 2：ReAct 协议解析失败纠正重试计数（有界，防死循环）
     budget: Mapping[str, int]  # 阶段 2：Budget count-only 投影
     clarify_answer: str | None  # 阶段 3：澄清卡 interrupt() 恢复后写（M4 clarify.py）

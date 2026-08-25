@@ -352,6 +352,27 @@ def write_file_safe(path: str, content: str, sandbox_dir: str) -> WriteResult:
     return WriteResult(path=path, bytes_written=bytes_written)
 
 
+def _edit_mismatch_hint(content: str, old: str, *, preview_chars: int = 80) -> str:
+    """构造 edit 失败的模型修复建议：邻近行号 + 短预览，不含全文。"""
+    lines = content.splitlines() or [""]
+    needle = (old or "").strip()[:24]
+    target = 0
+    if needle:
+        for index, line in enumerate(lines):
+            if needle[:8] and needle[:8] in line:
+                target = index
+                break
+    start = max(0, target - 1)
+    end = min(len(lines), target + 2)
+    nearby = "\n".join(lines[start:end])
+    if len(nearby) > preview_chars:
+        nearby = nearby[:preview_chars] + "…"
+    return (
+        f"edit 失败：未找到匹配文本；文件第 {target + 1} 行附近内容为：{nearby}。"
+        "请先 read 确认 old 与文件完全一致后再 edit。"
+    )
+
+
 def edit_file_safe(path: str, old: str, new: str, sandbox_dir: str) -> EditResult:
     """受控目录内精确原子替换（防目录穿越；不匹配则拒绝）。"""
     target = _resolve_safe_path(path, sandbox_dir)
@@ -360,7 +381,11 @@ def edit_file_safe(path: str, old: str, new: str, sandbox_dir: str) -> EditResul
     with open(target, encoding="utf-8") as handle:
         content = handle.read()
     if old not in content:
-        raise AppError(ErrorCode.VALIDATION, "原文不匹配，编辑已拒绝")
+        raise AppError(
+            ErrorCode.VALIDATION,
+            "原文不匹配，编辑已拒绝",
+            fields={"repair_hint": _edit_mismatch_hint(content, old)},
+        )
     replacement = content.replace(old, new, 1)
     _ensure_write_size(replacement)
     descriptor, temporary_path = tempfile.mkstemp(prefix=".agent-edit-", dir=os.path.dirname(target), text=True)
@@ -765,10 +790,14 @@ def execute_raw(
             redact_for_log(dict(call.arguments or {})),
         )
         code = exc.code.value
+        error: dict[str, object] = {"code": code, "message": f"操作失败（{code}）"}
+        hint = (exc.fields or {}).get("repair_hint") if exc.fields else None
+        if hint:
+            error["repair_hint"] = str(hint)[:500]
         return ToolResult(
             name=call.name,
             ok=False,
-            error={"code": code, "message": f"操作失败（{code}）"},
+            error=error,
             call_id=call.call_id,
         )
     except Exception as exc:
