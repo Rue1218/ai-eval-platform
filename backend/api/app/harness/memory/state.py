@@ -22,7 +22,7 @@ from app.harness.contracts import NodeEvent
 AgentMode = Literal["chat", "direct", "react", "plan_solve"]
 
 # 复核结论（等价 M4 ReflectVerdict；阶段 4 reflect 节点写）
-ReflectVerdict = Literal["pass", "clarify", "reject"]
+ReflectVerdict = Literal["pass", "clarify", "reject", "retry"]
 
 # ModelConfig 投影允许保留的键（api_key 密钥保护，不入 State）
 _CONFIG_KEYS: tuple[str, ...] = (
@@ -105,6 +105,9 @@ class GraphState(TypedDict, total=False):
     native_messages: Annotated[list[Mapping[str, object]], _append_native_messages]  # 原生 assistant/tool 往返消息
     stop_flag: bool  # 节点写，条件边读（阶段 2）
     repeat_retry: bool  # 阶段 2：OR-4 首次重复纠正后置位，react 条件边回环重试
+    turn_failed: bool  # 有 plan 时 ReAct 硬错误：禁止再进 reflect，避免 completed(stop)
+    replan_count: int  # P2：有界重规划已用次数，上限 2
+    force_replan: bool  # P2：reflect 打回规划时强制重建 PlanArtifact
     parse_retries: int  # 阶段 2：ReAct 协议解析失败纠正重试计数（有界，防死循环）
     budget: Mapping[str, int]  # 阶段 2：Budget count-only 投影
     clarify_answer: str | None  # 阶段 3：澄清卡 interrupt() 恢复后写（M4 clarify.py）

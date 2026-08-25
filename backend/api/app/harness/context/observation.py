@@ -38,6 +38,10 @@ def to_observation(
     text, truncated = truncate_with_marker(text, max_chars=max_chars)
     prefix = "✅" if obs.ok else "⚠️"
     line = f"{prefix} [{obs.tool}] {text}"
+    hint = str(getattr(obs, "repair_hint", "") or "").strip()
+    if hint:
+        hint_text, _ = truncate_with_marker(str(redact(hint) or ""), max_chars=min(400, max_chars))
+        line += f" 修复建议：{hint_text}"
     if truncated or obs.truncated:
         line += " [内容已截断]"
     origin = source or obs.source  # 溯源复用 source_id 格式（file:uuid / message:uuid）

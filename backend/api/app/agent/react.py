@@ -35,6 +35,8 @@ from app.llm import ModelRequest, ModelResponse, NativeToolCall
 # 阶段输入：ReAct 协议说明（M1 阶段输入，随节点注入，不做持久化）
 REACT_STAGE_INPUT = """\
 【当前阶段：ReAct 循环】
+控制语义是 Observe → Think → Act：先阅读【工具结果】与修复建议，再思考，再决定
+是否调用工具。禁止把工具原文当作最终回答。
 每轮输出严格 JSON（ReAct 协议 v1），禁止输出其他内容：
 {"protocol": "react", "version": "react.v1", "thought": "简述本轮判断", "tool": "工具名或null", "arguments": {}, "done": false}
 - 需要工具：tool 填工具名，arguments 填参数，done=false；
@@ -48,9 +50,10 @@ REACT_STAGE_INPUT = """\
 # 仍由下方兼容分支解析，便于逐个协议档迁移。
 NATIVE_TOOL_STAGE_INPUT = """\
 【当前阶段：原生工具调用】
+控制语义是 Observe → Think → Act：先观察已返回的工具结果与修复建议，再思考，
+再决定下一轮函数调用或给出自然语言结论。不要把工具原文粘贴成助手正文。
 如需访问平台工具，请使用模型协议提供的原生函数调用能力，并只从本轮提供的工具
-schema 中选择。工具结果会以对应的 tool_call_id 返回；请基于结果继续调用必要工具，
-或直接给出自然语言结论。不要在正文中伪造工具调用 JSON、不要逐字回显工具原文。
+schema 中选择。工具结果会以对应的 tool_call_id 返回。
 同一请求中的多个函数调用会由平台依次执行，每一个调用都经过权限门禁和沙箱。
 """
 
@@ -94,6 +97,19 @@ FORCED_FINAL_ANSWER_INPUT = """\
 完成回答；不得再次请求工具，也不得逐字粘贴工具原文。"""
 
 FINAL_ANSWER_EMPTY_TEXT = "工具已执行，但未生成可展示的最终回答。"
+
+# P1 阶段叙述字数上限（API.md V1.33）；超出截断，禁止写入 Observation 原文。
+NARRATION_MAX_CHARS = 200
+
+
+def _stage_narration(text: str) -> str:
+    """把模型旁白压成阶段叙述，不含工具原文。"""
+    cleaned = " ".join((text or "").split())
+    if not cleaned:
+        return ""
+    if len(cleaned) > NARRATION_MAX_CHARS:
+        return cleaned[:NARRATION_MAX_CHARS] + "…"
+    return cleaned
 
 logger = logging.getLogger("ai-eval.agent-react")
 
@@ -211,27 +227,83 @@ def _validated_native_tool_calls(
     return tuple(normalized)
 
 
+def _has_active_plan(state: GraphState) -> bool:
+    """当前回合是否带规划产物（有 plan 时由 reflect 统一发 completed）。"""
+    return isinstance(state.get("plan"), dict)
+
+
+def _plan_stage_input(state: GraphState) -> str:
+    """把 PlanArtifact 投影成模型可见的规划约束，不把 Observation 原文写入。"""
+    plan = state.get("plan")
+    if not isinstance(plan, dict):
+        return ""
+    steps = plan.get("slots", {}).get("steps") if isinstance(plan.get("slots"), dict) else None
+    step_lines = ""
+    if isinstance(steps, list) and steps:
+        step_lines = "\n".join(f"{index}. {item}" for index, item in enumerate(steps, start=1))
+    tools = "、".join(str(item) for item in (plan.get("tools_needed") or ())) or "task"
+    return (
+        "【当前规划】\n"
+        f"意图：{plan.get('intent') or ''}\n"
+        f"交付：{plan.get('delivery') or 'chat'}\n"
+        f"短工具：{tools}\n"
+        "请先观察已有工具结果，再按步骤行动；长任务（评测/用例/压测/知识库）"
+        "不得在对话内同步执行，应说明需经确认卡入队。\n"
+        f"{step_lines}"
+    ).strip()
+
+
+def _react_error_state(
+    state: GraphState,
+    *,
+    code: str,
+    message: str,
+    extra_events: list[dict] | None = None,
+    **updates: object,
+) -> dict[str, object]:
+    """硬错误收尾：有 plan 时自带 completed(error)，并禁止再进 reflect。"""
+    events = list(extra_events or [])
+    events.append(make_event("error", {"code": code, "message": message}))
+    if _has_active_plan(state):
+        events.append(
+            make_event(
+                "response.completed",
+                {"finish_reason": "error", "role": "assistant"},
+            )
+        )
+    result: dict[str, object] = {
+        "pending_events": events,
+        "pending_tool": None,
+        "repeat_retry": False,
+        "turn_failed": True,
+    }
+    result.update(updates)
+    return result
+
+
 def _assistant_completion(
     text: str,
     *,
     usage: dict[str, int] | object,
     latency_ms: int,
     pending_events: list[dict] | None = None,
+    close_turn: bool = True,
 ) -> dict[str, object]:
     """统一构造自然语言收尾投影，避免原生/兼容路径产生不同事件契约。"""
     events = list(pending_events or [])
-    events.extend(
-        [
-            make_event(
-                "assistant_message",
-                {"text": text, "role": "assistant", "latency_ms": latency_ms},
-            ),
+    events.append(
+        make_event(
+            "assistant_message",
+            {"text": text, "role": "assistant", "latency_ms": latency_ms},
+        )
+    )
+    if close_turn:
+        events.append(
             make_event(
                 "response.completed",
                 {"finish_reason": "stop", "role": "assistant"},
-            ),
-        ]
-    )
+            )
+        )
     return {
         "pending_events": events,
         "response": {"text": text, "usage": dict(usage or {}), "latency_ms": latency_ms},
@@ -462,6 +534,10 @@ def build_react_nodes(
         )
         if tool_hints:
             system += "\n\n【本轮可用平台工具】\n" + tool_hints
+        plan_input = _plan_stage_input(state)
+        if plan_input:
+            system += "\n\n" + plan_input
+        close_turn = not _has_active_plan(state)
         state_native_messages = tuple(state.get("native_messages") or ())
         native_messages = _hydrate_native_messages(
             state, native_tool_results, thread_id
@@ -489,27 +565,9 @@ def build_react_nodes(
             if response is None:
                 response = gateway.invoke(request, config=model_run_config)  # type: ignore[attr-defined]
         except AppError as exc:
-            return {
-                "pending_events": [
-                    make_event(
-                        "error",
-                        {"code": exc.code.value, "message": exc.message},
-                    )
-                ],
-                "pending_tool": None,
-                "repeat_retry": False,
-            }
+            return _react_error_state(state, code=exc.code.value, message=exc.message)
         except Exception:
-            return {
-                "pending_events": [
-                    make_event(
-                        "error",
-                        {"code": "INTERNAL", "message": "模型调用失败"},
-                    )
-                ],
-                "pending_tool": None,
-                "repeat_retry": False,
-            }
+            return _react_error_state(state, code="INTERNAL", message="模型调用失败")
         latency_ms = round((time.perf_counter() - started) * 1000)
         try:
             budget = consume_model_call(budget)
@@ -529,11 +587,27 @@ def build_react_nodes(
                     }
                     for call in native_calls
                 ]
+                narration = _stage_narration(response.text)
+                pending_events = (
+                    [
+                        make_event(
+                            "assistant_message",
+                            {
+                                "text": narration,
+                                "role": "assistant",
+                                "interim": True,
+                                "latency_ms": latency_ms,
+                            },
+                        )
+                    ]
+                    if narration
+                    else []
+                )
                 return {
                     "pending_tool": pending_calls[0],
                     "pending_tools": pending_calls[1:],
                     "native_messages": [_native_tool_message(native_calls, response.text)],
-                    "pending_events": [],
+                    "pending_events": pending_events,
                     "repeat_retry": False,
                     "budget": budget.to_dict(),
                 }
@@ -550,6 +624,7 @@ def build_react_nodes(
                     text,
                     usage=response.usage,
                     latency_ms=round((time.perf_counter() - started) * 1000),
+                    close_turn=close_turn,
                 )
                 completed["budget"] = budget.to_dict()
                 return completed
@@ -562,18 +637,13 @@ def build_react_nodes(
                 # 注入纠正观察并回环重试（有界），而非直接硬错误收尾。
                 parse_retries = int(state.get("parse_retries") or 0)
                 if parse_retries >= MAX_PARSE_RETRIES:
-                    return {
-                        "pending_events": [
-                            make_event(
-                                "error",
-                                {"code": exc.code.value, "message": exc.message},
-                            )
-                        ],
-                        "pending_tool": None,
-                        "repeat_retry": False,
-                        "parse_retries": parse_retries,
-                        "budget": budget.to_dict(),
-                    }
+                    return _react_error_state(
+                        state,
+                        code=exc.code.value,
+                        message=exc.message,
+                        parse_retries=parse_retries,
+                        budget=budget.to_dict(),
+                    )
                 snippet = response.text.strip()
                 correction = Observation(
                     tool="__parse__",
@@ -635,25 +705,14 @@ def build_react_nodes(
                     if final_response is not None
                     else dict(response.usage)
                 )
-                return {
-                    "pending_events": [
-                        make_event(
-                            "assistant_message",
-                            {"text": text, "role": "assistant", "latency_ms": latency_ms},
-                        ),
-                        make_event(
-                            "response.completed",
-                            {"finish_reason": "stop", "role": "assistant"},
-                        ),
-                    ],
-                    "response": {
-                        "text": text,
-                        "usage": final_usage,
-                        "latency_ms": latency_ms,
-                    },
-                    "repeat_retry": False,  # 清除回环标记，react_route 据此正常结束
-                    "budget": budget.to_dict(),
-                }
+                finished = _assistant_completion(
+                    text,
+                    usage=final_usage,
+                    latency_ms=latency_ms,
+                    close_turn=close_turn,
+                )
+                finished["budget"] = budget.to_dict()
+                return finished
             # 工具路径：重复调用抑制（OR-4）→ 预算 → 写 pending_tool
             # strip 兜底：模型输出工具名偶带尾随空白/换行（如 "read\n"），
             # 归一化后才能命中注册表与 READONLY_TOOLS 豁免，避免误报未注册。
@@ -699,31 +758,19 @@ def build_react_nodes(
                         if final_response is not None and final_response.text.strip()
                         else FINAL_ANSWER_EMPTY_TEXT
                     )
-                    return {
-                        "pending_events": thought_events
-                        + [
-                            make_event(
-                                "assistant_message",
-                                {"text": text, "role": "assistant", "latency_ms": latency_ms},
-                            ),
-                            make_event(
-                                "response.completed",
-                                {"finish_reason": "stop", "role": "assistant"},
-                            ),
-                        ],
-                        "response": {
-                            "text": text,
-                            "usage": (
-                                dict(final_response.usage)
-                                if final_response is not None
-                                else dict(response.usage)
-                            ),
-                            "latency_ms": latency_ms,
-                        },
-                        "pending_tool": None,
-                        "repeat_retry": False,
-                        "budget": budget.to_dict(),
-                    }
+                    finished = _assistant_completion(
+                        text,
+                        usage=(
+                            dict(final_response.usage)
+                            if final_response is not None
+                            else dict(response.usage)
+                        ),
+                        latency_ms=latency_ms,
+                        pending_events=thought_events,
+                        close_turn=close_turn,
+                    )
+                    finished["budget"] = budget.to_dict()
+                    return finished
                 return {
                     "pending_tool": None,
                     "repeat_retry": True,
@@ -750,18 +797,13 @@ def build_react_nodes(
                     # 已给过一次纠正仍重复相同调用：判定未推进，硬错误收尾；
                     # 必须清 repeat_retry，否则 react_route 见到 True 会再次回环
                     # react_agent，模型调用预算被死循环耗尽（BUDGET_EXCEEDED）。
-                    return {
-                        "pending_events": thought_events
-                        + [
-                            make_event(
-                                "error",
-                                {"code": "VALIDATION", "message": f"工具 {tool} 连续调用未推进，已终止"},
-                            )
-                        ],
-                        "pending_tool": None,
-                        "repeat_retry": False,
-                        "budget": budget.to_dict(),
-                    }
+                    return _react_error_state(
+                        state,
+                        code="VALIDATION",
+                        message=f"工具 {tool} 连续调用未推进，已终止",
+                        extra_events=thought_events,
+                        budget=budget.to_dict(),
+                    )
                 # 首次重复：注入纠正观察（不执行工具）并置 repeat_retry，
                 # react_route 据此回环到 react_agent 让模型基于反馈换命令或收尾。
                 return {
@@ -800,17 +842,12 @@ def build_react_nodes(
                 }
         except AppError as exc:
             # 协议解析失败/预算耗尽：转 error 收尾（不裸抛给用户堆栈）
-            return {
-                "pending_events": [
-                    make_event(
-                        "error",
-                        {"code": exc.code.value, "message": exc.message},
-                    )
-                ],
-                "pending_tool": None,
-                "repeat_retry": False,
-                "budget": budget.to_dict(),
-            }
+            return _react_error_state(
+                state,
+                code=exc.code.value,
+                message=exc.message,
+                budget=budget.to_dict(),
+            )
         return {
             "pending_tool": {
                 "call_id": legacy_call_id,
@@ -827,10 +864,15 @@ def build_react_nodes(
 
 
 def react_route(state: GraphState) -> str:
-    """ReAct 条件边：pending_tool → 'tools'；repeat_retry → 回环 react_agent
-    （OR-4 重复纠正 / 协议解析失败纠正后让模型基于反馈重试）；否则图结束。"""
+    """ReAct 条件边：pending_tool → tools；repeat_retry → 回环；
+    turn_failed → 结束（有 plan 时已由本节点发出 completed(error)）；
+    带 plan 则进入 reflect 统一收尾；否则图结束。"""
     if state.get("pending_tool"):
         return "tools"
     if state.get("repeat_retry"):
         return "react_agent"
+    if state.get("turn_failed"):
+        return "end"
+    if _has_active_plan(state):
+        return "reflect"
     return "end"

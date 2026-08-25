@@ -21,7 +21,15 @@ CLARIFY_INTERRUPT_TYPE = "clarify"
 
 
 def _clarify_question(state: GraphState) -> str:
-    """从请求中提取澄清问题（阶段 3 默认问题；阶段 4 plan 补槽位后细化）。"""
+    """从规划产物提取澄清问题；缺省用通用补槽提示。"""
+    plan = state.get("plan")
+    if isinstance(plan, dict):
+        intent = str(plan.get("intent") or "").strip()
+        notes = str(plan.get("notes") or "").strip()
+        if intent:
+            return f"规划「{intent}」还缺必要信息，请补充数据集、协议档或范围后再继续。"
+        if notes:
+            return f"需要补充信息后才能继续：{notes[:120]}"
     return "需要补充信息后才能继续，请回复以下问题："
 
 
@@ -46,4 +54,5 @@ def clarify_node(state: GraphState) -> dict:
     return {
         "clarify_answer": str(answer) if answer is not None else "",
         "clarify_id": clarify_id,
+        "force_replan": True,
     }

@@ -372,7 +372,14 @@ def build_default_registry() -> ToolRegistry:
     registry.register(
         ToolDef(
             name="read",
-            description="按行读取沙箱目录内的文本文件（相对路径）；offset/limit 均为 0-based 行，单次最多 2000 行和 120000 字符。结果会返回下一页 next_offset；优先基于已读片段总结，仅在确有必要时继续读取。",
+            description=(
+                "按行读取沙箱目录内的文本文件（相对路径）。"
+                "适用：查看附件、工作区文件、确认 edit 前的原文。"
+                "不适用：创建文件（用 write）、改文件（用 edit）、执行命令（用 bash）。"
+                "前置：path 必须是沙箱相对路径。offset/limit 均为 0-based 行，"
+                "单次最多 2000 行和 120000 字符；未读完时用返回的 next_offset 继续，"
+                "不要用相同 offset 重复读取。"
+            ),
             parameters_schema={
                 "type": "object",
                 "additionalProperties": False,
@@ -415,7 +422,13 @@ def build_default_registry() -> ToolRegistry:
     registry.register(
         ToolDef(
             name="edit",
-            description="在沙箱目录内编辑文本文件（原子替换）",
+            description=(
+                "在沙箱目录内对已有文本文件做精确字符串替换。"
+                "适用：修改已存在文件的一小段原文。"
+                "不适用：新建文件（用 write）、查看内容（用 read）。"
+                "前置：必须先 read 确认 old 与文件中的文本完全一致（含空白）；"
+                "old 在文件中必须能唯一匹配，否则会失败并返回邻近行修复建议。"
+            ),
             parameters_schema={
                 "type": "object",
                 "additionalProperties": False,
@@ -499,7 +512,13 @@ def build_default_registry() -> ToolRegistry:
     registry.register(
         ToolDef(
             name="task",
-            description="维护本回合的执行清单：把复杂需求拆解为有限步骤并标注状态。该工具不创建评测任务、不写数据库、不绕过确认卡或 Worker。",
+            description=(
+                "维护本回合的执行清单：把复杂需求拆成有限步骤并标注状态。"
+                "适用：多步评测/用例/压测前先列出 3–7 步计划。"
+                "不适用：真正创建评测任务（用确认卡或 platform.tasks.task.create）、"
+                "查询/取消已入队任务（用 task.status / task.cancel）。"
+                "前置：goal 与 steps 必填；不写数据库、不绕过确认卡或 Worker。"
+            ),
             parameters_schema={
                 "type": "object",
                 "additionalProperties": False,

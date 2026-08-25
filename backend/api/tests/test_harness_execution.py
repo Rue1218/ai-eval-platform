@@ -257,8 +257,43 @@ def test_read_write_edit_roundtrip() -> None:
         with pytest.raises(AppError) as error:
             edit_file_safe("a.txt", "不存在", "x", root)
         assert error.value.code == ErrorCode.VALIDATION
+        assert error.value.fields
+        assert "行" in str(error.value.fields.get("repair_hint") or "")
         with pytest.raises(AppError):
             write_file_safe("a.txt", "x", root)
+
+
+def test_edit_mismatch_observation_keeps_repair_hint() -> None:
+    """edit 失败经 execute 归一后，repair_hint 含行号或邻近文本，且不进展示正文。"""
+    from app.harness.execution.registry import _edit_handler
+
+    with tempfile.TemporaryDirectory() as root:
+        write_file_safe("note.txt", "alpha\nhello world\nomega\n", root)
+        observation = execute(
+            ToolCall(
+                name="edit",
+                arguments={"path": "note.txt", "old": "不存在的片段", "new": "x"},
+            ),
+            timeout_s=10.0,
+            permission="sandbox.write",
+            sandbox_dir=root,
+            handler=_edit_handler,
+        )
+    assert observation.ok is False
+    assert "行" in observation.repair_hint
+    assert "hello" in observation.repair_hint
+    assert observation.text == "操作失败（VALIDATION）"
+
+
+def test_read_edit_task_descriptions_include_preconditions() -> None:
+    """P0：read/edit/task 描述写清适用、不适用与前置条件。"""
+    registry = build_default_registry()
+    read_def = registry.find("read")
+    edit_def = registry.find("edit")
+    task_def = registry.find("task")
+    assert read_def is not None and "适用" in read_def.description and "前置" in read_def.description
+    assert edit_def is not None and "先 read" in edit_def.description
+    assert task_def is not None and "不适用" in task_def.description
 
 
 def test_read_file_safe_supports_offset_and_limit() -> None:

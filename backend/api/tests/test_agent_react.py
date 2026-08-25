@@ -263,6 +263,40 @@ def test_native_tool_calls_keep_call_id_and_stream_final_answer() -> None:
     ]
 
 
+def test_native_tool_calls_emit_interim_narration() -> None:
+    """P1：native 同轮正文 + ToolCall 先发 interim 阶段叙述，不是 Observation。"""
+
+    class _NarratingGateway(_NativeToolCallGateway):
+        def invoke(self, request: object, config: dict | None = None):
+            response = super().invoke(request, config)
+            if response.tool_calls:
+                return ModelResponse(
+                    text="先读取两个附件再汇总",
+                    latency_ms=1,
+                    tool_calls=response.tool_calls,
+                )
+            return response
+
+    gateway = _NarratingGateway()
+    with tempfile.TemporaryDirectory() as tmp:
+        with open(f"{tmp}/a.txt", "w", encoding="utf-8") as handle:
+            handle.write("A 文件内容")
+        with open(f"{tmp}/b.txt", "w", encoding="utf-8") as handle:
+            handle.write("B 文件内容")
+        events = _collect(
+            LangGraphAgent(gateway, build_default_registry(), sandbox_dir=tmp),
+            _serializable(),
+        )
+    messages = [
+        event
+        for event in _pending_events(events)
+        if event["kind"] == "assistant_message"
+    ]
+    assert messages[0]["payload"]["interim"] is True
+    assert messages[0]["payload"]["text"] == "先读取两个附件再汇总"
+    assert "A 文件内容" not in messages[0]["payload"]["text"]
+
+
 @pytest.mark.parametrize("call_ids", [("", "second"), ("duplicated", "duplicated")])
 def test_native_tool_calls_reject_empty_or_duplicate_call_id(call_ids: tuple[str, str]) -> None:
     """上游空/重复 call_id 必须在 ReAct 入队前归一为 UPSTREAM。"""
@@ -562,3 +596,13 @@ def test_react_observations_injected_into_next_call() -> None:
     second_system = gateway.calls[1].system
     assert "【工具结果】" in second_system
     assert "read" in second_system
+
+
+def test_react_stage_input_uses_observe_think_act() -> None:
+    """P0：ReAct / native 阶段输入写明先观察再思考再行动。"""
+    from app.agent.react import NATIVE_TOOL_STAGE_INPUT, REACT_STAGE_INPUT
+
+    assert "Observe → Think → Act" in REACT_STAGE_INPUT
+    assert "【工具结果】" in REACT_STAGE_INPUT
+    assert "Observe → Think → Act" in NATIVE_TOOL_STAGE_INPUT
+    assert "不要把工具原文粘贴成助手正文" in NATIVE_TOOL_STAGE_INPUT

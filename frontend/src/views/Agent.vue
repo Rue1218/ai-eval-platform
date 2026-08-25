@@ -482,6 +482,21 @@
               </div>
             </div>
 
+            <!-- 2.4.0 规划清单：复用 plan.slots.steps，不新增 WS 事件 -->
+            <div
+              v-else-if="item.type === 'plan'"
+              class="plan-card"
+              :class="{ 'no-anim': item.noAnim }"
+            >
+              <div class="row" style="gap: 8px">
+                <span class="badge"><i class="bdot"></i>规划清单</span>
+                <span class="small tertiary">{{ item.planIntent || '本轮步骤' }}</span>
+              </div>
+              <ol class="plan-steps">
+                <li v-for="(step, idx) in item.planSteps || []" :key="`${idx}-${step}`">{{ step }}</li>
+              </ol>
+            </div>
+
             <!-- 2.4.1 澄清卡：interrupt() 暂停图后等待用户补充信息（仅回复，不建任务） -->
             <ClarifyCard
               v-else-if="item.type === 'clarify'"
@@ -1273,13 +1288,15 @@ type AgentBlock =
   | AgentErrorItem
 
 interface StreamItem {
-  type: 'user' | 'agent' | 'thought' | 'tool' | 'media' | 'confirm' | 'clarify' | 'report' | 'error' | 'typing'
+  type: 'user' | 'agent' | 'thought' | 'tool' | 'media' | 'confirm' | 'clarify' | 'plan' | 'report' | 'error' | 'typing'
   text?: string
   done?: boolean
   // 澄清卡（M4 §3.9.6：id 匹配 clarify_reply，仅回复输入）
   id?: string
   question?: string
   options?: string[] | null
+  planIntent?: string
+  planSteps?: string[]
   collapsed?: boolean
   latency_ms?: number
   truncated?: boolean
@@ -1473,15 +1490,27 @@ function getOrCreateTurnAgent(list: StreamItem[], meta?: Partial<StreamItem>): S
   return newAgent
 }
 
-/** 返回或创建当前回合的最后一个助手正文块，保证工具后的最终回答仍在工具之后。 */
+/** 返回或创建当前回合的助手正文块。已落库的段落不再覆盖，保证中间叙述另起一段。 */
 function getOrCreateAssistantBlock(agent: StreamItem): AgentAssistantItem {
   const blocks = agent.blocks || (agent.blocks = [])
   const last = blocks[blocks.length - 1]
-  if (last?.type === 'assistant') return last
+  if (last?.type === 'assistant' && (last.streaming || !last.raw)) return last
   const block = reactive({ type: 'assistant', raw: '', text: '', streaming: true }) as AgentAssistantItem
   blocks.push(block)
   agent.streaming = true
   return block
+}
+
+function planItemFromPayload(payload: Record<string, unknown>, noAnim = false): StreamItem {
+  const slots = payload.slots && typeof payload.slots === 'object' ? payload.slots as Record<string, unknown> : {}
+  const rawSteps = slots.steps
+  const planSteps = Array.isArray(rawSteps) ? rawSteps.map((step) => String(step)) : []
+  return {
+    type: 'plan',
+    planIntent: String(payload.intent || ''),
+    planSteps,
+    noAnim,
+  }
 }
 
 /** 返回当前回合仍在生成的思考块。 */
@@ -3009,6 +3038,13 @@ async function loadSessionHistory(sid: string): Promise<number> {
           confirm.item.ackResult = Boolean(p.ok)
           confirm.item.open = false
         }
+      } else if (ev.event === 'plan') {
+        rawList.push({
+          time: t,
+          priority: 3,
+          eventId: eid,
+          item: planItemFromPayload(p, true),
+        })
       } else if (ev.event === 'clarify') {
         rawList.push({
           time: t,
@@ -3094,7 +3130,7 @@ async function loadSessionHistory(sid: string): Promise<number> {
         continue
       }
       replay.push(item)
-      if (item.type === 'confirm' || item.type === 'clarify' || item.type === 'error' || item.type === 'report') {
+      if (item.type === 'confirm' || item.type === 'clarify' || item.type === 'plan' || item.type === 'error' || item.type === 'report') {
         activeTurn = null
       }
     }
@@ -3541,6 +3577,7 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
     }
     case 'assistant_message': {
       const text = String(p.text || '')
+      const interim = p.interim === true
       finishBufferThought(buf)
       const targetAgent = getOrCreateTurnAgent(buf)
       const target = getOrCreateAssistantBlock(targetAgent)
@@ -3557,12 +3594,17 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
       } else {
         target.streaming = false
       }
-      targetAgent.streaming = false
-      markGenerating(sid, false)
-      rt.harnessStage = ''
+      targetAgent.streaming = interim
+      markGenerating(sid, interim)
+      rt.harnessStage = interim ? (rt.harnessStage || 'react') : ''
       void refreshContextMeter(sid)
       break
     }
+    case 'plan':
+      markGenerating(sid, true)
+      rt.harnessStage = 'plan_solve'
+      buf.push(planItemFromPayload(p))
+      break
     case 'response.completed':
     case 'done': {
       finishBufferThought(buf)
@@ -3875,6 +3917,7 @@ function handleWsEvent(ev: WsServerEvent) {
     }
     case 'assistant_message': {
       const text = String(p.text || '')
+      const interim = p.interim === true
       finishLiveThought()
       const targetAgent = getOrCreateTurnAgent(events.value)
       const target = getOrCreateAssistantBlock(targetAgent)
@@ -3891,13 +3934,19 @@ function handleWsEvent(ev: WsServerEvent) {
       } else {
         target.streaming = false
       }
-      targetAgent.streaming = false
-      setCurrentGenerating(false)
-      harnessStage.value = ''
+      targetAgent.streaming = interim
+      setCurrentGenerating(interim)
+      harnessStage.value = interim ? (harnessStage.value || 'react') : ''
       if (currentSessionId.value) void refreshContextMeter(currentSessionId.value)
       if (text) scrollToBottom()
       break
     }
+    case 'plan':
+      harnessStage.value = 'plan_solve'
+      setCurrentGenerating(true)
+      events.value.push(planItemFromPayload(p))
+      scrollToBottom()
+      break
     case 'response.completed':
     case 'done': {
       finishLiveThought()
@@ -4676,5 +4725,19 @@ onBeforeUnmount(() => {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
   }
+}
+.plan-card {
+  border: 1px solid var(--border, #2a3344);
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: var(--surface, #121826);
+}
+.plan-steps {
+  margin: 8px 0 0 18px;
+  padding: 0;
+  color: var(--text, #e8edf5);
+}
+.plan-steps li {
+  margin: 4px 0;
 }
 </style>

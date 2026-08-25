@@ -2,7 +2,11 @@
 
 from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata
 
-from app.harness.memory import InMemoryCheckpointer, cleanup_orphaned_checkpoints
+from app.harness.memory import (
+    InMemoryCheckpointer,
+    cleanup_orphaned_checkpoints,
+    get_default_checkpointer,
+)
 
 
 def _checkpoint(cp_id: str, ts: str = "2026-08-24T00:00:00Z") -> Checkpoint:
@@ -143,3 +147,8 @@ def test_cleanup_removes_orphaned_threads() -> None:
     assert removed == 1
     assert checkpointer.get_tuple({"configurable": {"thread_id": "old"}}) is None
     assert checkpointer.get_tuple({"configurable": {"thread_id": "new"}}) is not None
+
+
+def test_default_checkpointer_stays_in_memory() -> None:
+    """P3：默认 AGENT_CHECKPOINTER=memory，不在生产默认打开 PgCheckpointer。"""
+    assert isinstance(get_default_checkpointer(), InMemoryCheckpointer)

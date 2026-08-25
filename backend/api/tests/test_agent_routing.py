@@ -7,7 +7,10 @@ import pytest
 from app.adapters import StreamAborted
 from app.agent import LangGraphAgent
 from app.agent.graph import iter_pending_events
+from app.agent.plan_solve import build_plan_solve_subgraph, plan_solve_route
+from app.errors import AppError, ErrorCode
 from app.harness.memory import GraphState, SerializableRequest
+from app.harness.orchestration import decide_mode, detect_plan_intent
 from app.llm import ModelRequest, ModelResponse, ModelStreamEvent
 
 
@@ -24,10 +27,23 @@ def _serializable(text: str = "你好") -> SerializableRequest:
 
 
 class _FakeGateway:
-    """记录调用并返回固定流事件的网关桩。"""
+    """记录调用并返回固定流事件 / ReAct 收尾 JSON 的网关桩。"""
 
     def __init__(self) -> None:
         self.stream_calls: list[ModelRequest] = []
+        self.invoke_calls: list[ModelRequest] = []
+
+    def invoke(self, request: ModelRequest, config: dict | None = None) -> ModelResponse:
+        """规划后的 ReAct 控制回合走 invoke，返回合法 done JSON。"""
+        self.invoke_calls.append(request)
+        return ModelResponse(
+            text=(
+                '{"protocol":"react","version":"react.v1",'
+                '"thought":"按规划向用户说明确认卡入队","tool":null,'
+                '"arguments":{},"done":true}'
+            ),
+            latency_ms=2,
+        )
 
     def stream(self, request: ModelRequest, config: dict | None = None):
         """记录请求并返回推理/正文事件（可注入取消回调）。"""
@@ -166,6 +182,123 @@ def test_should_abort_not_triggered_when_absent() -> None:
     gateway = _FakeGateway()
     events = _collect(LangGraphAgent(gateway), _serializable("你好"))
     assert _event_kinds(events) == ["assistant_message", "response.completed"]
+
+
+def test_detect_plan_intent_requires_multi_skill_or_confirm() -> None:
+    """P0：单技能闲聊不升级规划；多技能/确认卡/显式清单才为 True。"""
+    assert detect_plan_intent("帮我评测一下") is False
+    assert detect_plan_intent("读取这个文件") is False
+    assert detect_plan_intent("评测 Qwen 并生成测试用例") is True
+    assert detect_plan_intent("先评后压") is True
+    assert detect_plan_intent("按任务清单做知识库评测") is True
+    assert detect_plan_intent("run benchmark and testcase") is True
+
+
+def test_decide_mode_plan_solve_and_react_priority() -> None:
+    """P0：多槽走 plan_solve；单工具关键词仍 ReAct；附件强制 react。"""
+    assert decide_mode("评测并生成用例", has_multi_slots=True) == "plan_solve"
+    assert decide_mode("读取这个文件") == "react"
+    assert decide_mode(
+        "评测并生成用例",
+        has_multi_slots=True,
+        has_attachments=True,
+    ) == "react"
+    assert decide_mode("你好") == "chat"
+
+
+def test_routing_multi_skill_plans_then_react_then_reflect() -> None:
+    """多技能：完整 PlanArtifact → ReAct 注入规划 → reflect 统一发 completed。"""
+    gateway = _FakeGateway()
+    events = _collect(LangGraphAgent(gateway), _serializable("帮我做基准评测并生成测试用例"))
+    assert gateway.stream_calls == []
+    assert len(gateway.invoke_calls) == 1
+    assert "【当前规划】" in str(gateway.invoke_calls[0].system)
+    pending = [
+        event
+        for mode, chunk in events
+        if mode == "updates"
+        for event in iter_pending_events(chunk)
+    ]
+    kinds = [event["kind"] for event in pending]
+    assert kinds.count("response.completed") == 1
+    assert kinds[-1] == "response.completed"
+    assert kinds.index("plan") < kinds.index("assistant_message")
+    assert kinds.index("assistant_message") < kinds.index("response.completed")
+    assert "tool_call" not in kinds
+    assert "error" not in kinds
+    plan_payload = next(event["payload"] for event in pending if event["kind"] == "plan")
+    assert {"intent", "slots", "budget", "notes", "tools_needed", "delivery"} <= set(
+        plan_payload
+    )
+    steps = plan_payload["slots"]["steps"]
+    assert 3 <= len(steps) <= 7
+    assert plan_payload["tools_needed"] == ["task"]
+    reflect_thoughts = [
+        event
+        for event in pending
+        if event["kind"] == "thought" and event["payload"].get("stage") == "reflect"
+    ]
+    assert reflect_thoughts
+    assert kinds.index("plan") < kinds.index("response.completed")
+    assert pending.index(reflect_thoughts[0]) < len(pending) - 1
+    budget_updates = [
+        value.get("budget")
+        for mode, chunk in events
+        if mode == "updates"
+        for value in chunk.values()
+        if isinstance(value, dict) and isinstance(value.get("budget"), dict)
+    ]
+    assert budget_updates
+    assert budget_updates[0]["model_calls"] == plan_payload["budget"]["model_calls"]
+
+
+def test_routing_plan_react_error_completes_with_error() -> None:
+    """规划后 ReAct 硬错误：completed(error)，不再进 reflect 发 stop。"""
+
+    class _BoomGateway(_FakeGateway):
+        def invoke(self, request: ModelRequest, config: dict | None = None) -> ModelResponse:
+            self.invoke_calls.append(request)
+            raise AppError(ErrorCode.UPSTREAM, "上游失败")
+
+    events = _collect(
+        LangGraphAgent(_BoomGateway()),
+        _serializable("帮我做基准评测并生成测试用例"),
+    )
+    pending = [
+        event
+        for mode, chunk in events
+        if mode == "updates"
+        for event in iter_pending_events(chunk)
+    ]
+    kinds = [event["kind"] for event in pending]
+    assert "error" in kinds
+    assert kinds.count("response.completed") == 1
+    assert kinds[-1] == "response.completed"
+    completed = next(event for event in pending if event["kind"] == "response.completed")
+    assert completed["payload"]["finish_reason"] == "error"
+    assert not any(
+        event["kind"] == "thought" and event["payload"].get("stage") == "reflect"
+        for event in pending
+    )
+
+
+def test_invoke_plan_solve_returns_model_response() -> None:
+    """非流式入口对规划回合返回 ReAct 正文，不再误判为 Direct。"""
+    response = LangGraphAgent(_FakeGateway()).invoke(
+        _serializable("帮我做基准评测并生成测试用例")
+    )
+    assert "确认卡" in response.text
+
+
+def test_plan_solve_illegal_plan_clears_and_stops() -> None:
+    """非法存量 plan 必须清空，条件边不得再进 ReAct。"""
+    out = build_plan_solve_subgraph()["plan_solve"]({"plan": {"intent": "坏的"}})
+    assert out["plan"] is None
+    assert plan_solve_route({"plan": out["plan"]}) == "end"
+    assert [event["kind"] for event in out["pending_events"]] == [
+        "error",
+        "response.completed",
+    ]
 
 
 def test_node_events_emitted_via_pending_events() -> None:

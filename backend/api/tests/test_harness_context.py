@@ -119,6 +119,19 @@ def test_to_observation_marks_ok_and_failed() -> None:
     assert "[read]" in ok
 
 
+def test_to_observation_appends_repair_hint() -> None:
+    """失败 Observation 的 repair_hint 注入模型摘要，不单独当正文。"""
+    line = to_observation(
+        Observation(
+            tool="edit",
+            text="原文不匹配，编辑已拒绝",
+            ok=False,
+            repair_hint="文件第 2 行附近内容为：hello",
+        )
+    )
+    assert "修复建议：文件第 2 行附近内容为：hello" in line
+
+
 def test_compact_summarize_keeps_recent_six() -> None:
     """X-A6：/compact 保留最近 6 条、摘要 ≤2000 字符、原始记录保留。"""
     messages = _messages(20)

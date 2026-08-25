@@ -1,10 +1,10 @@
 # AI 测试与评估平台 Agent 开发文档
 
-> 版本：V1.2.0
-> 状态：LangGraph Harness 已启用 ReAct P0/P1、P2-A/P2-B（流式参数累计、完整 ToolCall 投影、native 两回合收敛）、P3 MCP 扩展 Host、P3.1 原生基础工具直连与 P4 platform.tasks/熔断/独立沙箱 Runner
+> 版本：V1.4.0
+> 状态：LangGraph Harness 已启用混合范式 P0–P2：Plan-and-Solve → ReAct → reflect；native 中间叙述；clarify interrupt 与有界重规划；检查点默认 memory
 > 审查日期：2026-08-25
 > 对应需求：`AI测试与评估平台-PRD.md` V1.12
-> 对应接口：`AI测试与评估平台-API.md` V1.32
+> 对应接口：`AI测试与评估平台-API.md` V1.33
 
 ## 1. 当前唯一运行链路
 
@@ -40,10 +40,15 @@
 `app/agent/graph.py` 保持一个 LangGraph 图，模型调用只依赖 `app.llm` 的公开契约：
 
 ```text
-START -> routing -> (direct | chat_stream | react_agent)
-react_agent -> (tools | END)
+START -> routing -> (direct | chat_stream | react_agent | plan_solve)
+react_agent -> (tools | reflect | END)
 tools -> (tools | react_agent)
+plan_solve -> react_agent   # 规划失败则 END
+reflect -> (clarify | plan_solve | END)
+clarify -> plan_solve
 ```
+
+`decide_mode` 为代码主导：斜杠 → Direct；附件 → ReAct；多技能/确认卡/显式清单 → Plan-and-Solve（`build_plan`，失败 L0 降级并合并全部命中技能，步骤 3–7）；工具关键词 → ReAct；否则 Chat。`plan_solve` 下发完整 `PlanArtifact`（`plan` 事件含 `slots`/`budget`/`notes`），不伪造未执行的 `tool_call`，也不在规划节点发 `response.completed`。有 `plan` 的回合由 ReAct 执行短工具后进入 `reflect`，由 reflect 发出本轮唯一 `response.completed`。中间多条 `assistant_message`、澄清卡 interrupt 与有界重规划仍属后续阶段。
 
 图节点不持有数据库 Session、WebSocket 或任务队列。ToolNode 只消费可序列化 `pending_tool` / `pending_tools`、执行既有门禁与沙箱工具，并返回 Observation；同一模型响应的多个 ToolCall 在节点内串行消费，不绕过任一调用的门禁。`transport=native` 的 read/write/edit/bash/web_search/web_fetch/task 经 NativeToolExecutor 直连受控 handler；`transport=mcp` 的 `platform.tasks.task.create/status/cancel` 和后续评测/RAG 扩展经 MCPClientManager。路由层仍负责事件持久化与投影。
 
@@ -95,7 +100,7 @@ Agent 思考配置从 `Setting(key="agent_reasoning")` 读取，结构为
 - 人工确认卡、权限策略、consent、安全门禁；
 - Redis/pgvector 记忆、检查点和复杂上下文压缩；
 - PostgreSQL 长任务入队、Worker 执行和 stress 派生；
-- 未经模型变更、Alembic 自动生成与审阅的新迁移，以及 `plan.py` / `reflect.py` 等挂起模块。
+- 未经模型变更、Alembic 自动生成与审阅的新迁移；中间多条 `assistant_message`、Reflexion 有界重规划与澄清卡 interrupt 仍属后续阶段。
 
 ## 5. 后续扩展门禁
 
@@ -215,3 +220,29 @@ Agent 思考配置从 `Setting(key="agent_reasoning")` 读取，结构为
 - `backend/api/app/harness/execution/task_tools.py` / `mcp/metrics.py`：评测任务 MCP 的会话归属、队列门禁、配额、审计、熔断和度量继续生效。
 - `backend/api/app/harness/execution/sandbox.py` / `backend/runner/`：bash 仍由独立 Runner 调用 bwrap，API 不降级为裸 subprocess。
 - `backend/api/app/routers/mcp.py` / `frontend/src/views/AdminProfiles.vue`：目录仅展示当前 `platform.tasks` 与未来扩展，基础工具仍走原生调用。
+
+### V1.3.0（2026-08-25）修改代码文件与作用清单
+
+- `backend/api/app/harness/orchestration/router.py`：`detect_plan_intent` + `decide_mode` 接线 `plan_solve`；附件仍强制 ReAct。
+- `backend/api/app/agent/routing.py` / `plan_solve.py`：路由传入多槽判定；规划节点调用 `build_plan`，禁止假 `tool_call`。
+- `backend/api/app/agent/react.py`：ReAct / native 阶段输入改为 Observe → Think → Act。
+- `backend/api/app/harness/contracts/artifacts.py` / `feedback/observation.py` / `context/observation.py`：`Observation.repair_hint` 只进模型摘要。
+- `backend/api/app/harness/execution/dispatch.py` / `registry.py`：edit 失败带邻近行修复建议；read/edit/task 描述补适用与前置条件。
+- `backend/api/tests/test_agent_routing.py` / `test_agent_react.py` / `test_harness_*.py`：覆盖分流、规划事件、OTA 提示词与 repair_hint。
+
+### V1.3.1（2026-08-25）修改代码文件与作用清单
+
+- `backend/api/app/harness/orchestration/plan.py`：L0 合并全部命中技能，产出 3–7 步；`tools_needed` 只含短工具 `task`。
+- `backend/api/app/agent/plan_solve.py` / `graph.py`：成功规划后进入 ReAct；失败就地 `response.completed`；`plan` 事件下发完整 PlanArtifact。
+- `backend/api/app/agent/react.py`：有 `plan` 时注入【当前规划】且不发 `response.completed`；`react_route` 收尾进 reflect。
+- `backend/api/app/agent/reflect.py`：有计划回合由本节点发出唯一 `response.completed`（reject 为 `finish_reason=error`）。
+- `backend/api/tests/test_agent_routing.py` / `test_harness_phase4.py`：覆盖规划→执行→复核事件序与多技能合并。
+- 审查修复：规划路径 ReAct 硬错误发 `completed(error)` 且不再进 reflect；失败规划清空 `plan`；`plan.budget` 写入图预算；`LangGraphAgent.invoke` 接受 `plan_solve`。
+
+### V1.4.0（2026-08-25）修改代码文件与作用清单
+
+- `docs/AI测试与评估平台-API.md`：V1.33 单回合多条 `assistant_message` + `interim`。
+- `backend/api/app/agent/react.py`：native 同轮正文+ToolCall 先发阶段叙述。
+- `backend/api/app/agent/reflect.py` / `graph.py` / `clarify.py` / `plan_solve.py`：clarify interrupt、有界重规划回 `plan_solve`。
+- `backend/api/app/config.py` / `harness/memory/checkpoint.py`：`AGENT_CHECKPOINTER` 默认 memory。
+- `frontend/src/views/Agent.vue`：多段助手正文与 `plan.slots.steps` 清单回放。

@@ -5,8 +5,9 @@
 
 import pytest
 
+from app.agent.reflect import reflect_node, reflect_route
 from app.errors import AppError, ErrorCode
-from app.harness.contracts import Observation, PlanArtifact, SkillHint
+from app.harness.contracts import Observation, PlanArtifact, SkillHint, to_dict
 from app.harness.feedback import (
     FeedbackBudget,
     consume_failure,
@@ -76,6 +77,89 @@ def test_build_plan_falls_back_to_l0_rule() -> None:
     plan = build_plan("帮我评测一下大模型")
     assert plan.intent == "运行基准评测"
     assert "L0" in plan.notes
+    assert 3 <= len(plan.slots["steps"]) <= 7
+    assert plan.tools_needed == ("task",)
+    assert plan.delivery == "confirm"
+
+
+def test_build_plan_merges_multi_skills() -> None:
+    """L0 合并全部命中技能，不再先命中先返回。"""
+    plan = build_plan("评测 Qwen 并生成测试用例，再按先评后压")
+    assert "运行基准评测" in plan.intent
+    assert "生成测试用例" in plan.intent
+    assert "运行压测" in plan.intent
+    steps = plan.slots["steps"]
+    assert 3 <= len(steps) <= 7
+    assert plan.tools_needed == ("task",)
+    assert plan.skill_id is None
+    assert any("先评后压" in str(step) for step in steps)
+
+
+def test_build_plan_recognizes_english_skill_aliases() -> None:
+    """L0 英文别名与路由技能组对齐，避免规划节点无法降级。"""
+    plan = build_plan("run benchmark and generate testcase")
+    assert "运行基准评测" in plan.intent
+    assert "生成测试用例" in plan.intent
+    assert 3 <= len(plan.slots["steps"]) <= 7
+
+
+def test_reflect_emits_completed_after_plan() -> None:
+    """有计划时由 reflect 发出唯一 completed。"""
+    out = reflect_node({"plan": to_dict(_plan(tools_needed=("task",)))})
+    kinds = [event["kind"] for event in out["pending_events"]]
+    assert out["verdict"] == "pass"
+    assert kinds[-1] == "response.completed"
+    assert out["pending_events"][-1]["payload"]["finish_reason"] == "stop"
+
+
+def test_reflect_failed_observation_replans() -> None:
+    """工具失败且允许重规划时不发 completed，verdict=retry。"""
+    out = reflect_node(
+        {
+            "plan": to_dict(_plan(tools_needed=("task",), allows_replan=True)),
+            "observations": [_obs(ok=False)],
+            "replan_count": 0,
+        }
+    )
+    assert out["verdict"] == "retry"
+    assert out["force_replan"] is True
+    assert out["replan_count"] == 1
+    assert "response.completed" not in [event["kind"] for event in out["pending_events"]]
+
+
+def test_reflect_stops_after_max_replans() -> None:
+    """重规划满 2 次后必须收尾，不得继续空转。"""
+    out = reflect_node(
+        {
+            "plan": to_dict(_plan(tools_needed=("task",), allows_replan=True)),
+            "observations": [_obs(ok=False)],
+            "replan_count": 2,
+        }
+    )
+    assert out["verdict"] == "reject"
+    assert out["pending_events"][-1]["payload"]["finish_reason"] == "error"
+
+
+def test_reflect_route_clarify_and_retry() -> None:
+    """P2：clarify 进澄清卡，retry 回规划，其余结束。"""
+    assert reflect_route({"verdict": "clarify"}) == "clarify"
+    assert reflect_route({"verdict": "retry"}) == "plan_solve"
+    assert reflect_route({"verdict": "pass"}) == "end"
+
+
+def test_reflect_illegal_plan_completes_with_error() -> None:
+    """非法 PlanArtifact 不得裸抛，应 reject + completed(error)。"""
+    out = reflect_node({"plan": {"intent": "坏的"}})
+    assert out["verdict"] == "reject"
+    assert out["pending_events"][-1]["payload"]["finish_reason"] == "error"
+
+
+def test_reflect_reject_completes_with_error() -> None:
+    """confirm 缺工具清单：reject + completed(error)。"""
+    out = reflect_node({"plan": to_dict(_plan(tools_needed=(), delivery="confirm"))})
+    assert out["verdict"] == "reject"
+    assert out["pending_events"][-1]["kind"] == "response.completed"
+    assert out["pending_events"][-1]["payload"]["finish_reason"] == "error"
 
 
 def test_build_plan_unrecognized_raises() -> None:

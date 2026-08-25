@@ -162,3 +162,12 @@ def test_observation_redacted_default_true() -> None:
     """Observation 默认已脱敏（FB-1 语义）。"""
     observation = Observation(tool="web_search", text="摘要", ok=True)
     assert observation.redacted is True
+    assert observation.repair_hint == ""
+
+
+def test_observation_from_dict_allows_missing_repair_hint() -> None:
+    """新增 repair_hint 对旧投影缺省为空，不把旧检查点判非法。"""
+    data = to_dict(Observation(tool="web_search", text="摘要", ok=True))
+    data.pop("repair_hint")
+    restored = from_dict(Observation, data)
+    assert restored.repair_hint == ""
