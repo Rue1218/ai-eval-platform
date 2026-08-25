@@ -193,7 +193,9 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
           envs: DEPLOY_COMMIT,DEPLOY_BASE_COMMIT,GHCR_TOKEN,GHCR_ACTOR,IMAGE_PREFIX,IMAGE_TAG
-          command_timeout: 20m
+          # 生产机首次拉取或镜像缓存被清理后，多个业务镜像可能在低带宽下持续重试；
+          # 超时需覆盖完整拉取和滚动更新，不能在下载正常进行时中断旧容器的平滑部署。
+          command_timeout: 45m
           script: |
             set -e
             APP_DIR=/opt/ai-eval-platform
