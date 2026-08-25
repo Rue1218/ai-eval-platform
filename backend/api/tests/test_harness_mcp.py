@@ -348,9 +348,12 @@ def test_toolnode_explicit_manager_equals_self_built() -> None:
         out_builtin = _run_toolnode(builtin, state, configurable)
     payload_explicit = _tool_result_event(out_explicit)["payload"]
     payload_builtin = _tool_result_event(out_builtin)["payload"]
-    # call_id 每次运行随机生成；其余事件 payload 必须一致（证明两条执行路径等价）。
-    assert {key: value for key, value in payload_explicit.items() if key != "call_id"} == {
-        key: value for key, value in payload_builtin.items() if key != "call_id"
+    # call_id 每次运行随机生成；latency_ms 为实测耗时（毫秒取整），两次独立执行
+    # 必然存在亚毫秒抖动（CI 上曾出现 0 vs 1）。其余 payload 必须一致
+    # （证明两条执行路径等价）。
+    excluded = {"call_id", "latency_ms"}
+    assert {key: value for key, value in payload_explicit.items() if key not in excluded} == {
+        key: value for key, value in payload_builtin.items() if key not in excluded
     }
     assert payload_explicit["ok"] is True
     assert payload_explicit["name"] == "read"
