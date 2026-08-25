@@ -85,7 +85,7 @@ def test_default_registry_includes_bash() -> None:
     assert bash_def is not None
     assert bash_def["permission"] == "sandbox.bash"
     names = {definition["name"] for definition in registry.all_defs()}
-    assert names == {"read", "write", "edit", "web_search", "web_fetch", "bash"}
+    assert names == {"read", "write", "edit", "web_search", "web_fetch", "bash", "task"}
 
 
 def test_tool_schema_validation_rejects_invalid_and_extra_arguments() -> None:
@@ -299,7 +299,7 @@ def test_read_file_safe_stops_on_character_budget_at_line_boundary() -> None:
         assert result.end_line == result.lines_read
         assert result.next_offset == result.lines_read
         assert result.content.endswith("\n")
-        assert result.content_truncated is False
+        assert result.content_truncated is True
 
 
 def test_read_result_hides_full_content_from_display_data() -> None:
@@ -313,6 +313,67 @@ def test_read_result_hides_full_content_from_display_data() -> None:
         assert "model_text" in data
         assert "model_text" not in display
         assert len(display["read"]["preview"]) <= 500
+
+
+def test_task_plan_is_transient_and_never_creates_platform_task() -> None:
+    """task 原生工具只生成本回合清单，不产生数据库/Worker 副作用。"""
+    from app.harness.execution import build_task_plan
+
+    result = build_task_plan(
+        {
+            "goal": "审查工具链路",
+            "steps": [
+                {"title": "读取注册表", "status": "completed"},
+                {"title": "总结风险", "status": "in_progress"},
+            ],
+        }
+    )
+    data = result.to_tool_data()
+    assert "不创建评测任务" in data["summary"]
+    assert data["display"]["task"]["steps"][1]["status"] == "in_progress"
+    assert "Task(" not in data["model_text"]
+
+
+def test_web_search_requires_server_side_service_configuration(monkeypatch) -> None:
+    """未配置 Firecrawl Key 时明确拒绝，禁止用占位文本伪造搜索成功。"""
+    from app.config import settings
+    from app.harness.execution import dispatch
+
+    monkeypatch.setattr(settings, "firecrawl_api_key", "")
+    with pytest.raises(AppError) as error:
+        dispatch.web_search("ReAct 原理", timeout_s=1.0)
+    assert error.value.code == ErrorCode.VALIDATION
+
+
+def test_web_search_projects_safe_structured_results(monkeypatch) -> None:
+    """真实搜索适配器只把受控结果交给模型与 ToolCard，不泄露服务端密钥。"""
+    from app.config import settings
+    from app.harness.execution import dispatch
+
+    class _FakeResponse:
+        def __enter__(self) -> "_FakeResponse":
+            return self
+
+        def __exit__(self, *_exc: object) -> bool:
+            return False
+
+        def read(self, _n: int = -1) -> bytes:
+            return b'{"data":[{"title":"LangGraph","url":"https://example.com/a","description":"agent graph"}]}'
+
+    captured: dict[str, object] = {}
+
+    def fake_urlopen(request: object, **_kwargs: object) -> _FakeResponse:
+        captured["request"] = request
+        return _FakeResponse()
+
+    monkeypatch.setattr(settings, "firecrawl_api_key", "private-key")
+    monkeypatch.setattr(dispatch, "urlopen", fake_urlopen)
+    result = dispatch.web_search("LangGraph", limit=1, timeout_s=1.0)
+    data = result.to_tool_data()
+    assert result.results[0]["title"] == "LangGraph"
+    assert data["display"]["search"]["results"][0]["url"] == "https://example.com/a"
+    assert "private-key" not in json.dumps(data, ensure_ascii=False)
+    assert captured["request"] is not None
 
 
 def test_web_fetch_rejects_internal_targets(monkeypatch) -> None:
@@ -356,6 +417,13 @@ def test_web_fetch_allows_public_target(monkeypatch) -> None:
     """SSRF 防护不误伤公网地址。"""
     from app.harness.execution import dispatch
 
+    class _FakeHeaders:
+        def get_content_type(self) -> str:
+            return "text/html"
+
+        def get_content_charset(self) -> str:
+            return "utf-8"
+
     class _FakeResponse:
         def __init__(self, body: bytes) -> None:
             self._body = body
@@ -369,15 +437,25 @@ def test_web_fetch_allows_public_target(monkeypatch) -> None:
         def read(self, _n: int = -1) -> bytes:
             return self._body
 
-    monkeypatch.setattr(
-        dispatch, "urlopen", lambda *_a, **_k: _FakeResponse(b"<html>public</html>")
-    )
+        @property
+        def headers(self) -> _FakeHeaders:
+            return _FakeHeaders()
+
+        def geturl(self) -> str:
+            return "http://93.184.216.34/"
+
+    class _FakeOpener:
+        def open(self, _request: object, timeout: float) -> _FakeResponse:
+            assert timeout == 1.0
+            return _FakeResponse(b"<html>public</html>")
+
+    monkeypatch.setattr(dispatch, "build_opener", lambda *_a, **_k: _FakeOpener())
     # 公网 IP 字面量：无需 DNS，直接放行
-    assert "public" in dispatch.web_fetch("http://93.184.216.34/", timeout_s=1.0)
+    assert "public" in dispatch.web_fetch("http://93.184.216.34/", timeout_s=1.0).content
     # 公网域名：SSRF 校验不应以 VALIDATION 拦截（无 DNS 环境的解析失败不算拦截）
     try:
         result = dispatch.web_fetch("http://example.com/", timeout_s=1.0)
-        assert "public" in result
+        assert "public" in result.content
     except AppError as error:
         assert error.value.code != ErrorCode.VALIDATION
 
@@ -472,7 +550,7 @@ def test_web_fetch_integration_reachable_when_guard_disabled(loopback_server, mo
 
     monkeypatch.setattr(dispatch, "_reject_internal_target", lambda _host: None)
     result = dispatch.web_fetch(loopback_server, timeout_s=3.0)
-    assert "integration-ok" in result
+    assert "integration-ok" in result.content
     assert _RecordingHandler.requests == ["/health"]
 
 

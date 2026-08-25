@@ -1,9 +1,16 @@
 """Harness 执行层（M5）：工具注册表与统一执行入口。"""
 
 from .binding import bind_attachments
+from .context import ToolExecutionContext
 from .dispatch import (
     BASH_BLOCKLIST,
+    EditResult,
     ReadResult,
+    TaskPlanResult,
+    WebFetchResult,
+    WebSearchResult,
+    WriteResult,
+    build_task_plan,
     edit_file_safe,
     execute,
     read_file_safe,
@@ -13,8 +20,9 @@ from .dispatch import (
     write_file_safe,
 )
 
-# 内部 MCP Host（阶段 D，P3）：依赖 dispatch/registry，须在其之后导入。
-from .mcp import InProcessProvider, MCPClientManager, ToolCatalog, ToolExecutionContext
+# 内部 MCP 扩展 Host（阶段 D，P3）：依赖 dispatch/registry，须在其之后导入。
+from .mcp import InProcessProvider, MCPClientManager, ToolCatalog
+from .native import NativeToolExecutor
 from .native_results import NativeToolResultStore, runtime_thread_id
 from .registry import (
     ToolDef,
@@ -35,18 +43,25 @@ from .workspace import (
 
 __all__ = [
     "BASH_BLOCKLIST",
+    "EditResult",
     "InProcessProvider",
     "LONG_TOOLS",
     "MCPClientManager",
+    "NativeToolExecutor",
     "NativeToolResultStore",
     "ReadResult",
+    "TaskPlanResult",
     "TASK_KINDS",
     "ToolCatalog",
     "ToolDef",
     "ToolExecutionContext",
     "ToolRegistry",
+    "WebFetchResult",
+    "WebSearchResult",
+    "WriteResult",
     "bind_attachments",
     "build_default_registry",
+    "build_task_plan",
     "required_parameter_names",
     "build_tool_node",
     "edit_file_safe",

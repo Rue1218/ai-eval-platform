@@ -12,32 +12,18 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import replace
 
 from app.harness.contracts import ToolDescriptor, ToolResult
 
+from ..context import ToolExecutionContext
 from ..registry import ToolDef, ToolRegistry
 from .catalog import ToolCatalog
 from .provider import InProcessProvider
 
 
-@dataclass(frozen=True, slots=True)
-class ToolExecutionContext:
-    """MCP 工具调用上下文（仅运行时，不入 GraphState / 检查点）。
-
-    ``sandbox_dir``/``owned_file_ids`` 等由平台注入，模型参数中不得携带。
-    """
-
-    session_id: str = ""
-    user_id: str = ""
-    thread_id: str = ""
-    sandbox_dir: str | None = None
-    owned_file_ids: frozenset[str] = frozenset()
-    call_id: str = ""
-
-
 class MCPClientManager:
-    """内部 MCP Host：目录发现 + 工具调用 + 超时/取消/错误归一。"""
+    """内部 MCP 扩展 Host：目录发现 + 工具调用 + 超时/取消/错误归一。"""
 
     def __init__(self) -> None:
         self._catalog = ToolCatalog()

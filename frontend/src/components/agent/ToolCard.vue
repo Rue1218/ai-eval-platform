@@ -128,6 +128,12 @@ const toolNameMap: Record<string, string> = {
   'audio.voiceclone': '音色克隆配音',
   'image.generate': 'Qwen Image 生图',
   read: '读取文件',
+  write: '写入文件',
+  edit: '编辑文件',
+  bash: '运行沙箱命令',
+  web_search: '网络搜索',
+  web_fetch: '抓取网页',
+  task: '拆解任务',
   // 兼容旧下划线命名
   list_profiles: '列出协议档',
   get_profile: '获取协议档详情',
@@ -194,6 +200,45 @@ const outputText = computed(() => {
       const preview = typeof meta.preview === 'string' ? meta.preview : ''
       const page = next === null || next === undefined ? '已读完' : `下一页 offset=${next}`
       return `${summary}\n范围：第 ${start}–${end} 行 / 共 ${total} 行\n状态：${page}${preview ? `\n\n受控预览：\n${preview}` : ''}`
+    }
+  }
+  if (props.tool === 'task' && typeof props.result === 'object') {
+    const data = props.result as Record<string, unknown>
+    const task = data.task
+    if (task && typeof task === 'object') {
+      const meta = task as Record<string, unknown>
+      const goal = typeof meta.goal === 'string' ? meta.goal : '未命名目标'
+      const steps = Array.isArray(meta.steps) ? meta.steps : []
+      const summary = typeof data.summary === 'string' ? data.summary : '任务已拆解'
+      const lines = steps.map((step, index) => {
+        if (!step || typeof step !== 'object') return `${index + 1}. 无效步骤`
+        const item = step as Record<string, unknown>
+        return `${index + 1}. [${String(item.status || 'pending')}] ${String(item.title || '')}`
+      })
+      return `${summary}\n目标：${goal}${lines.length ? `\n${lines.join('\n')}` : ''}`
+    }
+  }
+  if ((props.tool === 'web_search' || props.tool === 'web_fetch') && typeof props.result === 'object') {
+    const data = props.result as Record<string, unknown>
+    const summary = typeof data.summary === 'string' ? data.summary : '网络工具已完成'
+    const web = data.web
+    if (web && typeof web === 'object') {
+      const meta = web as Record<string, unknown>
+      const title = typeof meta.title === 'string' && meta.title ? meta.title : '网页正文'
+      const preview = typeof meta.preview === 'string' ? meta.preview : ''
+      return `${summary}\n${title}${preview ? `\n\n受控预览：\n${preview}` : ''}`
+    }
+    const search = data.search
+    if (search && typeof search === 'object') {
+      const meta = search as Record<string, unknown>
+      const query = typeof meta.query === 'string' ? meta.query : ''
+      const results = Array.isArray(meta.results) ? meta.results : []
+      const lines = results.map((result, index) => {
+        if (!result || typeof result !== 'object') return `${index + 1}. 无效结果`
+        const item = result as Record<string, unknown>
+        return `${index + 1}. ${String(item.title || item.url || '')}`
+      })
+      return `${summary}${query ? `\n关键词：${query}` : ''}${lines.length ? `\n${lines.join('\n')}` : ''}`
     }
   }
   return formatJson(props.result)

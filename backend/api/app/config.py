@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     qwen_image_api_key: str = ""
     qwen_image_model: str = ""
     qwen_image_timeout_seconds: float = 120.0
+    # 原生网络工具：仅 API 容器读取 Firecrawl REST 凭据，模型、WS 事件与日志
+    # 均不回显。未配置 Key 时 web_search 明确返回 VALIDATION；web_fetch 仍可走
+    # SSRF 防护后的最小直接文本抓取。
+    firecrawl_api_url: str = "https://api.firecrawl.dev/v1"
+    firecrawl_api_key: str = ""
     # Harness 沙箱（bash 工具）：bwrap 一次性进程级沙箱。engine 为 "bwrap" 时
     # 开放通用 bash；bwrap 不可用或 engine 为 "off" 时 bash 工具 fail-closed。
     sandbox_engine: str = "bwrap"

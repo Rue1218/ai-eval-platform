@@ -1,12 +1,11 @@
 """内部 MCP Host（阶段 D，P3）测试。
 
-覆盖：catalog（tools/list / refresh / 名称冲突）、manager（tools/call 成功/
-失败/未知/超时/取消/close）、/api/mcp/tools 只读目录、ToolNode 经 manager
-执行的事件 payload 与显式/自建 manager 等价。不依赖数据库连接。
+覆盖：MCP 扩展 catalog（tools/list / refresh / 名称冲突）、manager（tools/call
+成功/失败/未知/超时/取消/close）、/api/mcp/tools 的真实空目录，以及原生基础
+工具不经过 manager 的隔离边界。不依赖数据库连接。
 """
 
 import asyncio
-import json
 import os
 import tempfile
 import time
@@ -35,6 +34,7 @@ def _def(
     handler=None,
     timeout_s: float = 5.0,
     risk_level: str = "read",
+    transport: str = "mcp",
 ) -> ToolDef:
     return ToolDef(
         name=name,
@@ -47,6 +47,7 @@ def _def(
         permission="test.read",
         timeout_s=timeout_s,
         handler=handler or (lambda args, sandbox_dir=None: f"ok:{name}"),
+        transport=transport,  # type: ignore[arg-type]
         server_id=server_id,
         display_name=name,
         risk_level=risk_level,  # type: ignore[arg-type]
@@ -75,15 +76,13 @@ def _tool_result_event(out: dict) -> dict:
 # —— catalog ——
 
 
-def test_catalog_builds_default_6_tools_3_servers() -> None:
+def test_catalog_excludes_default_native_tools() -> None:
     catalog = ToolCatalog.build(build_default_registry())
     descriptors = catalog.all_descriptors()
-    assert len(descriptors) == 6
-    assert set(catalog.servers()) == {"platform.files", "platform.web", "platform.sandbox"}
-    assert catalog.get("platform.files.read") is not None
-    assert catalog.get("platform.files.read").name == "read"
-    assert catalog.resolve_name("read") == "platform.files.read"
-    assert catalog.resolve_name("bash") == "platform.sandbox.bash"
+    assert descriptors == ()
+    assert catalog.servers() == ()
+    assert catalog.resolve_name("read") is None
+    assert catalog.resolve_name("bash") is None
     assert catalog.get("nope") is None
 
 
@@ -97,6 +96,13 @@ def test_catalog_refresh_reflects_newly_registered_tool() -> None:
     catalog.refresh(registry)
     assert catalog.get("platform.files.b") is not None
     assert len(catalog.all_descriptors()) == 2
+
+
+def test_catalog_ignores_native_definition_with_server_metadata() -> None:
+    """MCP 目录按 transport 过滤，不能因 server_id 误暴露基础工具。"""
+    registry = ToolRegistry()
+    registry.register(_def("native", transport="native"))
+    assert ToolCatalog.build(registry).all_descriptors() == ()
 
 
 def test_catalog_rejects_duplicate_tool_id() -> None:
@@ -130,36 +136,41 @@ def test_catalog_infers_server_for_unscoped_tool() -> None:
 
 
 def test_manager_call_success_returns_tool_result() -> None:
+    registry = ToolRegistry()
+    registry.register(_def("ping", server_id="platform.test", handler=lambda *_args: "hello world"))
+
     async def run() -> None:
-        manager = MCPClientManager.build_from_registry(build_default_registry())
-        with tempfile.TemporaryDirectory() as tmp:
-            with open(os.path.join(tmp, "a.txt"), "w", encoding="utf-8") as handle:
-                handle.write("hello world")
-            result = await manager.call_tool(
-                "platform.files.read",
-                {"path": "a.txt"},
-                ToolExecutionContext(sandbox_dir=tmp, call_id="c1"),
-            )
-            assert result.ok is True
-            assert result.call_id == "c1"
-            assert "hello world" in result.data["model_text"]
+        manager = MCPClientManager.build_from_registry(registry)
+        result = await manager.call_tool(
+            "platform.test.ping",
+            {},
+            ToolExecutionContext(call_id="c1"),
+        )
+        assert result.ok is True
+        assert result.call_id == "c1"
+        assert result.data["summary"] == "hello world"
         await manager.close()
 
     asyncio.run(run())
 
 
 def test_manager_call_app_error_normalized_not_found() -> None:
+    def missing(*_args: object) -> str:
+        raise AppError(ErrorCode.NOT_FOUND, "不存在")
+
+    registry = ToolRegistry()
+    registry.register(_def("lookup", server_id="platform.test", handler=missing))
+
     async def run() -> None:
-        manager = MCPClientManager.build_from_registry(build_default_registry())
-        with tempfile.TemporaryDirectory() as tmp:
-            result = await manager.call_tool(
-                "platform.files.read",
-                {"path": "missing.txt"},
-                ToolExecutionContext(sandbox_dir=tmp, call_id="c2"),
-            )
-            assert result.ok is False
-            assert result.error["code"] == "NOT_FOUND"
-            assert result.call_id == "c2"
+        manager = MCPClientManager.build_from_registry(registry)
+        result = await manager.call_tool(
+            "platform.test.lookup",
+            {},
+            ToolExecutionContext(call_id="c2"),
+        )
+        assert result.ok is False
+        assert result.error["code"] == "NOT_FOUND"
+        assert result.call_id == "c2"
         await manager.close()
 
     asyncio.run(run())
@@ -275,55 +286,14 @@ def test_mcp_tools_router_lists_internal_catalog() -> None:
     from app.routers.mcp import list_tools
 
     payload = list_tools(user=None)
-    assert payload["total"] == 6
-    items = payload["items"]
-    names = {item["name"] for item in items}
-    assert names == {
-        "platform.files.read",
-        "platform.files.write",
-        "platform.files.edit",
-        "platform.web.web_search",
-        "platform.web.web_fetch",
-        "platform.sandbox.bash",
-    }
-    read_item = next(item for item in items if item["name"] == "platform.files.read")
-    assert read_item["permission"] == "read"
-    assert read_item["source"] == "builtin"
-    assert read_item["enabled"] is True
-    assert read_item["risk_level"] == "read"
-    assert read_item["execution_mode"] == "short"
-    bash_item = next(item for item in items if item["name"] == "platform.sandbox.bash")
-    assert bash_item["permission"] == "write"
-    # 只读目录：不含连接命令/凭据/内部 handler 细节
-    serialized = json.dumps(items)
-    assert "api_key" not in serialized
-    assert "password" not in serialized
-    assert "command" not in serialized
-    assert "handler" not in serialized
-    for item in items:
-        assert set(item) == {
-            "name",
-            "desc",
-            "permission",
-            "enabled",
-            "source",
-            "tool_id",
-            "server_id",
-            "short_name",
-            "display_name",
-            "risk_level",
-            "execution_mode",
-            "timeout_s",
-            "requires_confirmation",
-            "supports_streaming",
-        }
+    assert payload == {"items": [], "total": 0}
 
 
 # —— ToolNode 经 manager 执行 ——
 
 
-def test_toolnode_explicit_manager_equals_self_built() -> None:
-    """显式传入 manager 与自建 manager 的成功路径事件 payload 一致。"""
+def test_toolnode_native_tool_ignores_mcp_manager() -> None:
+    """基础 read 走直连执行器，传入空 MCP manager 也不会改变执行结果。"""
     registry = build_default_registry()
     explicit = build_tool_node(registry, manager=MCPClientManager.build_from_registry(registry))
     builtin = build_tool_node(registry)
@@ -339,9 +309,11 @@ def test_toolnode_explicit_manager_equals_self_built() -> None:
         out_builtin = _run_toolnode(builtin, state, configurable)
     payload_explicit = _tool_result_event(out_explicit)["payload"]
     payload_builtin = _tool_result_event(out_builtin)["payload"]
-    # call_id 每次运行随机生成；其余事件 payload 必须一致（证明两条执行路径等价）。
-    assert {key: value for key, value in payload_explicit.items() if key != "call_id"} == {
-        key: value for key, value in payload_builtin.items() if key != "call_id"
+    # call_id 和耗时随回合变化；其余事件 payload 必须一致，证明没有经过 manager。
+    assert {
+        key: value for key, value in payload_explicit.items() if key not in {"call_id", "latency_ms"}
+    } == {
+        key: value for key, value in payload_builtin.items() if key not in {"call_id", "latency_ms"}
     }
     assert payload_explicit["ok"] is True
     assert payload_explicit["name"] == "read"

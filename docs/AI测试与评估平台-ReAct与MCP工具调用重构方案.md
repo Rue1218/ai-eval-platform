@@ -2,13 +2,13 @@
 
 | 项 | 内容 |
 | --- | --- |
-| 文档版本 | V0.7.0 |
-| 状态 | P0/P1、P2-A（完整原生 ToolCall）、P2-B（流式参数累积、网关投影、两回合收敛）与 P3（内部 MCP Host）已实施；P4 长任务与沙箱 Runner 待实施 |
+| 文档版本 | V0.8.0 |
+| 状态 | P0/P1、P2-A（完整原生 ToolCall）、P2-B（流式参数累积、网关投影、两回合收敛）、P3（内部 MCP Host）与 P3.1（原生基础工具直连）已实施；评测/RAG MCP 扩展待按契约接入 |
 | 审查日期 | 2026-08-25 |
 | 适用范围 | `backend/api/app/agent/`、`app/harness/`、`app/llm/`、`app/routers/ws.py` 与内部短工具 |
 | 上游权威 | `AI测试与评估平台-PRD.md`、`AI测试与评估平台-API.md`、`AGENTS.md` |
 
-> 本文只定义主项目的**内部 MCP Host、ToolCall、ReAct 收敛和短工具**重构方向。它不授权接入外部 MCP Server、浏览器直连 MCP、让 API 同步执行 Benchmark/RAG/Testcase/Stress，或绕过 bwrap 沙箱。对外 REST/WS 字段变更须先更新 API.md；本文本身不改变现有接口。
+> 本文定义主项目的**原生 ToolCall、ReAct 收敛、基础工具直连与内部 MCP 扩展边界**。它不授权接入外部 MCP Server、浏览器直连 MCP、让 API 同步执行 Benchmark/RAG/Testcase/Stress，或绕过 bwrap 沙箱。对外 REST/WS 字段变更须先更新 API.md。
 
 ---
 
@@ -56,11 +56,11 @@ user_message
 
 1. **“正文与工具卡交错出现”是成熟 Agent 的常见交互能力，但不是 LangGraph 的自动效果。** 标准回合是“模型消息（可含 ToolCall）→ 工具结果消息 → 下一轮模型消息”；实现该体验还需要模型流、工具生命周期事件和前端按 `call_id` 合并状态。
 2. **LangGraph 正是本项目应保留的编排层。** 它可分别流出模型 token、节点状态和自定义数据；项目现有 `astream(stream_mode=["custom", "updates"])` 已具备 WebSocket 投影基础。改造对象是 `react_agent` 的模型协议，不是替换 LangGraph 或再引入第二个 Agent 框架。
-3. **原生 ToolCall 不等于模型直连 MCP。** 模型只接收平台投影出的 ToolDescriptor，并返回结构化调用；ToolNode 仍须执行门禁、确认、附件绑定、脱敏与超时控制，再由内部 MCP Host 调用平台 allowlist 内的工具。
+3. **原生 ToolCall 不等于模型直连 MCP。** 模型只接收平台投影出的工具 schema，并返回结构化调用；ToolNode 仍须执行门禁、确认、附件绑定、脱敏与超时控制。基础工具由原生执行器调用，只有显式 MCP 扩展才交内部 Host。
 4. **模型不保证在 ToolCall 前输出正文。** 有些模型会只返回工具调用；因此“正在读取/检索”的可信展示必须来自 `tool_call`、`tool_result` 与工具进度，而非要求模型虚构工具已成功的叙述。
 5. **MCP 进度只表示工具执行进度，不会让模型在等待工具时继续生成正文。** 短工具结束后要重新进入模型回合；长任务则由 Worker 与 WebSocket 推送真实进度。
 
-本项目采用“原生 ToolCall + 内部 MCP Host”的组合，而不采用“上游模型服务直接调用远程 MCP Server”。这同时满足原生模型工具协议、项目仅内部 MCP 的产品边界以及 bwrap fail-closed 的安全红线。
+本项目采用“**原生 ToolCall + 原生基础工具执行器 + 内部 MCP 扩展 Host**”的组合，而不采用“上游模型服务直接调用远程 MCP Server”。read/write/edit/bash/web_search/web_fetch/task 直接执行；只有后续评测/RAG 扩展经内部 MCP Host。这同时满足原生模型工具协议、项目仅内部 MCP 的产品边界以及 bwrap fail-closed 的安全红线。
 
 调研依据：
 
@@ -78,7 +78,7 @@ user_message
 1. 工具成功后，模型必须基于工具观察继续判断：继续调用工具，或直接交付面向用户的分析结果。
 2. 任意兜底路径不得把工具原始内容伪装成助手结论。
 3. `read` 支持按行读取，默认可覆盖前 2,000 行，并保留字符和上下文预算上限。
-4. 建立 API 内部 MCP Host：Agent 和 Worker 经同一工具目录调用内部 MCP 工具；浏览器只看 ToolCard 事件。
+4. 建立 API 内部 MCP 扩展 Host：评测/RAG 等跨服务能力经受控目录调用；基础工具不增加 MCP 路由；浏览器只看 ToolCard 事件。
 5. 保留当前 ToolNode 的白名单、附件绑定、规则门禁、Worker 长任务边界、脱敏和 bwrap fail-closed 机制。
 6. 保持图节点不持有 WebSocket、DB Session、裸密钥或不可序列化对象。
 
@@ -718,3 +718,79 @@ artifact_id / workspace 相对路径 / sha256 / 行范围 / 可见预算
 - 验收：`ruff check . ../shared` 全绿；api pytest **411 passed/16 skipped**，worker pytest **34 passed**。
 - 本次仍未实施：`platform.tasks` 长任务 MCP bridge、独立沙箱 Runner/容器（bash MCP Server 迁出 api 容器）、真正并行工具调用；P4 安全边界不变，`platform.tasks` 工具不入当前目录。
 - 修改文件：`contracts/artifacts.py`+`__init__.py`、`execution/registry.py`、`execution/dispatch.py`、`execution/toolnode.py`、`execution/mcp/`（新增）、`agent/graph.py`、`routers/mcp.py`、`feedback/observation.py`、`execution/__init__.py`、`tests/test_harness_mcp.py`（新增）、`docs/AI测试与评估平台-API.md`（V1.29）。
+
+### V0.8.0（2026-08-25）实施记录 — 原生基础工具直连（本版裁决）
+
+本节覆盖并替代本文此前“所有短工具均经 P3 MCP Host”的实现描述。P3 的
+catalog、provider、manager 继续保留，但职责收窄为**未来评测/RAG MCP 扩展**；
+它不再包裹基础工具。
+
+#### 1. 最终分层与完整工作链路
+
+```text
+用户输入 / 附件
+  → ws.py：鉴权、会话、工作区和 RunnableConfig 注入（不 await 整轮 Harness）
+  → LangGraph routing → react.py：三协议原生 Function Calling
+  → NativeToolCall(call_id, name, arguments)
+  → ToolNode：Schema → Gate → 附件绑定 → 选择 transport
+       ├─ transport=native（read/write/edit/bash/web_search/web_fetch/task）
+       │    → NativeToolExecutor（asyncio.to_thread + 超时/取消）
+       │    → 受控 handler / dispatch / bwrap 或 Firecrawl REST
+       └─ transport=mcp（未来 benchmark / rag 等扩展）
+            → MCPClientManager → catalog → provider → 扩展工具
+  → ToolResult → Observation（模型正文与 ToolCard 投影分离）
+  → tool_result(call_id) 写 WS 事件；完整正文不落库
+  → react.py 第二模型回合：继续调用工具或流式输出分析结论
+  → assistant_delta* → assistant_message → response.completed
+```
+
+基础工具直连只删除 MCP catalog/provider/短名路由这一层，**不删除** Schema、
+权限、附件、重复调用抑制、超时、错误归一、Observation、call_id、二次模型
+收敛或 WebSocket 事件。因此工具成功后仍必定回到模型分析，而不是把文件或网页
+原文直接交付给用户。
+
+#### 2. 工具能力、性能与安全边界
+
+| 工具 | 原生实现与性能优化 | 安全与结果投影 |
+| --- | --- | --- |
+| `read` | 0-based 分页，最多 2,000 行/120,000 字符；扫描文件时不再 `readlines()` 保留整文件副本 | realpath/workspace 校验；模型拿完整片段，ToolCard 只拿行统计和 ≤500 字符预览 |
+| `write` | `O_EXCL` 排他新建，减少先检查再写入的竞争；单次 ≤2MB | 只写会话 workspace；拒绝覆盖；fsync；不回显写入正文 |
+| `edit` | 精确替换一次，在同目录临时文件 fsync 后 `os.replace` 原子提交 | 路径受控；old 不匹配即拒绝；失败不留下临时文件 |
+| `bash` | 原生异步线程调度，不经过 MCP provider；仍保留 15 秒工具预算 | bwrap 无网络、唯一可写工作区、资源上限、超时杀整棵进程树；黑名单检查命令链段；引擎不可用 fail-closed |
+| `web_search` | 服务端 Firecrawl REST，查询 1–10 条、20 秒预算；不再是成功占位 | Key 只来自 API 环境变量；未配置返回 `VALIDATION`；模型只见结构化标题/URL/摘要 |
+| `web_fetch` | 优先 Firecrawl Markdown；未配置 Key 时受控 HTTP 文本抓取；正文上限 20,000 字符 | 仅 http/https，拒绝 URL 凭据、内网和保留 IP；初始 URL 与每次重定向均做 SSRF 校验；ToolCard 只看短预览 |
+| `task` | 1–12 步会话内清单，低延迟纯内存计算 | 不是 ORM `Task`；不入队、不建 Worker 任务、不绕过确认卡和 `confirm_ack` |
+
+#### 3. MCP 留给什么，不能做什么
+
+1. 默认注册表的基础工具全部标记 `transport=native`，因此 `/api/mcp/tools`
+   返回空数组是“没有扩展已挂载”的真实状态，不是能力失败。
+2. 后续 Benchmark、RAG、报告、数据集等需要跨服务协议、异步队列或 Worker
+   协作的工具，才登记 `transport=mcp` 并提供 `server_id`/`tool_id`。
+3. `task` 拆解不等于创建评测任务。真正入队仍固定为“确认卡 →
+   `confirm_ack.ok=true` → `enqueue_long_task`/Worker”；API 进程不得等待终态。
+4. MCP 不是沙箱：任何未来 MCP 里的命令执行仍必须复用 bwrap，不能因 transport
+   改造降级成裸 subprocess；模型和浏览器均不能提供连接命令、环境变量或密钥。
+
+#### 4. 回归验收
+
+- `tests/test_harness_execution.py`：覆盖行级读取、字符边界、原子写入/编辑、
+  bash fail-closed、SSRF、Firecrawl 未配置/结构化结果、task 拆解；
+- `tests/test_harness_mcp.py`：验证默认基础工具不进入 catalog、显式 MCP 扩展仍
+  支持目录/超时/取消/错误归一，并验证基础 `read` 忽略 MCP manager；
+- `tests/test_agent_react.py`：保持原生 ToolCall 后第二模型回合流式分析的契约。
+
+#### 5. 本版修改文件与作用清单
+
+| 文件 | 作用 |
+| --- | --- |
+| `backend/api/app/harness/execution/context.py` | 提取只在运行时存在的 ToolExecutionContext，禁止进入 State/检查点/模型参数。 |
+| `backend/api/app/harness/execution/native.py` | 新增 NativeToolExecutor：基础工具直连、线程隔离、超时与取消。 |
+| `backend/api/app/harness/execution/registry.py` | 新增 `transport=native|mcp`，默认注册 7 个原生基础工具。 |
+| `backend/api/app/harness/execution/toolnode.py` / `agent/graph.py` | 按 transport 分流；没有 MCP 扩展时不构建 manager。 |
+| `backend/api/app/harness/execution/dispatch.py` | 读写、编辑、bash、搜索、抓取和 task 的性能、安全与受控 Observation 投影。 |
+| `backend/api/app/harness/execution/mcp/*` / `routers/mcp.py` | MCP 目录只收显式扩展；默认返回真实空目录。 |
+| `backend/api/app/config.py` / `.env.example` / `docker-compose.yml` | 增加仅 API 容器可见的 Firecrawl 环境变量。 |
+| `frontend/src/components/agent/ToolCard.vue` / `views/AdminProfiles.vue` | 显示基础工具中文卡片与受控结果；说明 MCP 空目录的真实含义。 |
+| `backend/api/tests/test_harness_execution.py` / `test_harness_mcp.py` | 覆盖直连边界、Firecrawl、SSRF、task 和未来 MCP 回归。 |
+| `docs/AI测试与评估平台-API.md` / `AI测试与评估平台-Agent开发文档.md` | 升级对外目录契约和运行时分层说明。 |

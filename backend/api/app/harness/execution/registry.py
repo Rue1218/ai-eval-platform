@@ -2,9 +2,9 @@
 
 工具元数据、白名单与执行分派的**唯一来源**：新增工具必须登记并走统一执行
 入口；未注册工具调用一律拒绝（VALIDATION），禁止假成功。``ToolDef.handler``
-为运行时执行函数（不入 GraphState，仅注册表持有）；``ToolDef`` 同时是内部
-MCP 目录（server/风险/策略）的唯一来源，经 ``to_descriptor`` 投影给
-``harness/execution/mcp`` 消费。
+为运行时执行函数（不入 GraphState，仅注册表持有）。基础文件、网络、沙箱与
+任务拆解工具固定为 ``transport=native``；只有评测/RAG 等后续扩展工具才允许
+显式标记为 ``transport=mcp`` 并投影到内部 MCP 目录。
 """
 
 from __future__ import annotations
@@ -44,9 +44,9 @@ _SUPPORTED_JSON_TYPES = frozenset(
 class ToolDef:
     """工具元数据（注册表唯一源）。
 
-    ``server_id``/``display_name``/``risk_level``/``execution_mode`` 等描述符
-    字段为内部 MCP 目录投影所需；带默认值以兼容既有构造点。``tool_id`` 由
-    ``server_id + name`` 派生，模型参数中不得携带。
+    ``transport`` 决定执行边界：原生工具由 ``NativeToolExecutor`` 直连 handler；
+    MCP 工具才由 ``MCPClientManager`` 通过受控目录调用。``server_id`` 与
+    ``tool_id`` 仅对 MCP 工具有路由含义，模型参数中不得携带。
     """
 
     name: str  # 如 "read"/"web_search"
@@ -55,6 +55,7 @@ class ToolDef:
     permission: str  # 权限标识
     timeout_s: float  # 执行超时
     handler: Callable[..., object]  # 执行函数（不入 GraphState，仅运行时）
+    transport: Literal["native", "mcp"] = "native"  # 执行通道
     server_id: str = ""  # 如 "platform.files"（空则目录按名称推断归属）
     display_name: str = ""  # 如 "读取文件"
     risk_level: Literal["read", "modify", "network", "code", "long"] = "read"
@@ -115,13 +116,21 @@ class ToolRegistry:
         """返回已登记工具名，供 Gate 构造白名单。"""
         return tuple(self._defs)
 
-    def iter_defs(self) -> Iterator[ToolDef]:
-        """返回底层 ``ToolDef`` 对象（含 handler，供内部 MCP provider 使用）。
+    def iter_defs(self, *, transport: Literal["native", "mcp"] | None = None) -> Iterator[ToolDef]:
+        """返回底层 ``ToolDef`` 对象（含 handler，限执行层内部消费）。
 
-        仅限执行层内部（catalog/provider）消费；对外可序列化投影仍走
-        ``all_defs``/``get_def``，避免 handler 泄漏到模型或前端。
+        ``transport`` 非空时只返回指定执行通道，供 MCP 目录和 provider 排除
+        原生基础工具；对外可序列化投影仍走 ``all_defs``/``get_def``，避免
+        handler 泄漏到模型或前端。
         """
-        return iter(self._defs.values())
+        definitions = self._defs.values()
+        if transport is None:
+            return iter(definitions)
+        return (definition for definition in definitions if definition.transport == transport)
+
+    def has_transport(self, transport: Literal["native", "mcp"]) -> bool:
+        """判断是否存在指定执行通道的工具，避免空 MCP Host 的构建开销。"""
+        return any(definition.transport == transport for definition in self._defs.values())
 
     def all_defs(self) -> list[Mapping[str, object]]:
         """返回全部工具定义（可序列化投影，供 M2 select_tool_defs 最小注入）。
@@ -349,11 +358,11 @@ def _matches_json_type(value: object, expected: str) -> bool:
 
 
 def build_default_registry() -> ToolRegistry:
-    """阶段 3 默认注册（基础工具 + 沙箱 bash）。
+    """注册默认原生基础工具（文件、网络、沙箱与任务拆解）。
 
-    注册 read/write/edit/web_search/web_fetch/bash；bash 在一次性 bwrap 沙箱内
-    执行（无网络、工作区唯一可写、资源受限、超时整树清理），黑名单为纵深防御
-    （M5 §3.8.4 阶段 3 闭环），bwrap 不可用时 fail-closed 拒绝。
+    注册 read/write/edit/web_search/web_fetch/bash/task。它们经原生 ToolCall
+    直连执行，不进入 MCP 目录；bash 仍在一次性 bwrap 沙箱内执行（无网络、
+    工作区唯一可写、资源受限、超时整树清理），引擎不可用时 fail-closed。
     """
     registry = ToolRegistry()
     registry.register(
@@ -373,7 +382,6 @@ def build_default_registry() -> ToolRegistry:
             permission="sandbox.read",
             timeout_s=10.0,
             handler=_read_handler,
-            server_id="platform.files",
             display_name="读取文件",
             risk_level="read",
         )
@@ -394,7 +402,6 @@ def build_default_registry() -> ToolRegistry:
             permission="sandbox.write",
             timeout_s=10.0,
             handler=_write_handler,
-            server_id="platform.files",
             display_name="写入文件",
             risk_level="modify",
         )
@@ -416,7 +423,6 @@ def build_default_registry() -> ToolRegistry:
             permission="sandbox.write",
             timeout_s=10.0,
             handler=_edit_handler,
-            server_id="platform.files",
             display_name="编辑文件",
             risk_level="modify",
         )
@@ -429,14 +435,14 @@ def build_default_registry() -> ToolRegistry:
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "query": {"type": "string"},
+                    "query": {"type": "string", "minLength": 1, "maxLength": 500},
+                    "limit": {"type": "integer", "description": "返回结果数，默认 5，最大 10", "minimum": 1, "maximum": 10},
                 },
                 "required": ["query"],
             },
             permission="web.search",
-            timeout_s=15.0,
+            timeout_s=20.0,
             handler=_web_search_handler,
-            server_id="platform.web",
             display_name="网页检索",
             risk_level="network",
         )
@@ -449,14 +455,14 @@ def build_default_registry() -> ToolRegistry:
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "url": {"type": "string"},
+                    "url": {"type": "string", "minLength": 8, "maxLength": 2048},
+                    "format": {"type": "string", "enum": ["markdown", "text"], "description": "优先返回 Markdown，默认 markdown"},
                 },
                 "required": ["url"],
             },
             permission="web.fetch",
-            timeout_s=15.0,
+            timeout_s=20.0,
             handler=_web_fetch_handler,
-            server_id="platform.web",
             display_name="网页抓取",
             risk_level="network",
         )
@@ -476,9 +482,39 @@ def build_default_registry() -> ToolRegistry:
             permission="sandbox.bash",
             timeout_s=15.0,
             handler=_bash_handler,
-            server_id="platform.sandbox",
             display_name="沙箱命令",
             risk_level="code",
+        )
+    )
+    registry.register(
+        ToolDef(
+            name="task",
+            description="维护本回合的执行清单：把复杂需求拆解为有限步骤并标注状态。该工具不创建评测任务、不写数据库、不绕过确认卡或 Worker。",
+            parameters_schema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "goal": {"type": "string", "minLength": 1, "maxLength": 500, "description": "本轮目标"},
+                    "steps": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "title": {"type": "string", "minLength": 1, "maxLength": 300},
+                                "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]},
+                            },
+                            "required": ["title"],
+                        },
+                    },
+                },
+                "required": ["goal", "steps"],
+            },
+            permission="task.plan",
+            timeout_s=2.0,
+            handler=_task_handler,
+            display_name="拆解任务",
+            risk_level="read",
         )
     )
     return registry
@@ -500,43 +536,56 @@ def _read_handler(arguments: Mapping[str, object], sandbox_dir: str | None = Non
     )
 
 
-def _write_handler(arguments: Mapping[str, object], sandbox_dir: str | None = None) -> str:
+def _write_handler(arguments: Mapping[str, object], sandbox_dir: str | None = None) -> object:
     """write 工具 handler：受控目录内写入相对路径（防目录穿越）。"""
     from .dispatch import write_file_safe
 
-    write_file_safe(
+    return write_file_safe(
         str(arguments.get("path", "")),
         str(arguments.get("content", "")),
         sandbox_dir or "",
     )
-    return "写入完成"
 
 
-def _edit_handler(arguments: Mapping[str, object], sandbox_dir: str | None = None) -> str:
+def _edit_handler(arguments: Mapping[str, object], sandbox_dir: str | None = None) -> object:
     """edit 工具 handler：受控目录内原子替换（防目录穿越）。"""
     from .dispatch import edit_file_safe
 
-    edit_file_safe(
+    return edit_file_safe(
         str(arguments.get("path", "")),
         str(arguments.get("old", "")),
         str(arguments.get("new", "")),
         sandbox_dir or "",
     )
-    return "编辑完成"
 
 
-def _web_search_handler(arguments: Mapping[str, object], _sandbox_dir: str | None = None) -> str:
-    """web_search 工具 handler：内部短 MCP 适配器（不走外部 MCP 服务器）。"""
+def _web_search_handler(arguments: Mapping[str, object], _sandbox_dir: str | None = None) -> object:
+    """web_search 原生 handler：服务端 Firecrawl REST 适配器。"""
     from .dispatch import web_search
 
-    return web_search(str(arguments.get("query", "")), timeout_s=15.0)
+    return web_search(
+        str(arguments.get("query", "")),
+        limit=arguments.get("limit"),
+        timeout_s=20.0,
+    )
 
 
-def _web_fetch_handler(arguments: Mapping[str, object], _sandbox_dir: str | None = None) -> str:
-    """web_fetch 工具 handler：内部抓取适配器 + 脱敏（不走外部 MCP 服务器）。"""
+def _web_fetch_handler(arguments: Mapping[str, object], _sandbox_dir: str | None = None) -> object:
+    """web_fetch 原生 handler：带 SSRF 防护的服务端抓取器。"""
     from .dispatch import web_fetch
 
-    return web_fetch(str(arguments.get("url", "")), timeout_s=15.0)
+    return web_fetch(
+        str(arguments.get("url", "")),
+        format=str(arguments.get("format") or "markdown"),
+        timeout_s=20.0,
+    )
+
+
+def _task_handler(arguments: Mapping[str, object], _sandbox_dir: str | None = None) -> object:
+    """task 原生 handler：仅生成本回合任务清单，不触发平台长任务副作用。"""
+    from .dispatch import build_task_plan
+
+    return build_task_plan(arguments)
 
 
 def _bash_handler(arguments: Mapping[str, object], sandbox_dir: str | None = None) -> str:
