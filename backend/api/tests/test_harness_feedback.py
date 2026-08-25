@@ -23,7 +23,7 @@ def _ctx(**overrides: object) -> GateContext:
         "user_id": "u1",
         "has_active_task": False,
         "owned_file_ids": frozenset({"file-1"}),
-        "registered_names": frozenset({"read", "web_search", "task.create"}),
+        "registered_names": frozenset({"read", "web_search", "task.create", "task.cancel"}),
         "required_slots": {"task.create": ("kind", "dataset")},
     }
     base.update(overrides)
@@ -121,7 +121,7 @@ def test_gate_file_not_owned_rejected() -> None:
 
 
 def test_gate_active_task_blocks_confirm() -> None:
-    """F-A2：会话存在活动任务时禁止再发确认卡（占槽，CONCURRENCY 语义）。"""
+    """F-A2：会话存在活动任务时禁止再入队新任务（占槽，CONCURRENCY 语义）。"""
     result = check_gates(
         _call("task.create", kind="benchmark", dataset="d"), _ctx(has_active_task=True)
     )
@@ -129,6 +129,14 @@ def test_gate_active_task_blocks_confirm() -> None:
     assert result.failed_code == "CONCURRENCY"
     # 非确认卡工具不受占槽限制
     assert check_gates(_call("read", path="a.txt"), _ctx(has_active_task=True)).passed
+
+
+def test_gate_active_task_allows_cancel() -> None:
+    """F-A2：占槽只拦再入队，task.cancel 用于取消活动任务须放行（释放占槽）。"""
+    result = check_gates(
+        _call("task.cancel", task_id="t1"), _ctx(has_active_task=True)
+    )
+    assert result.passed is True
 
 
 def test_gate_stress_requires_quality_derivation() -> None:

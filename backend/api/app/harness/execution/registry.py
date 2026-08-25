@@ -61,6 +61,7 @@ class ToolDef:
     execution_mode: Literal["short", "long"] = "short"
     requires_confirmation: bool = False
     supports_streaming: bool = False
+    contextual: bool = False  # True 时 handler 接收 (arguments, sandbox_dir, ToolExecutionContext)
 
     @property
     def tool_id(self) -> str:
@@ -349,11 +350,13 @@ def _matches_json_type(value: object, expected: str) -> bool:
 
 
 def build_default_registry() -> ToolRegistry:
-    """阶段 3 默认注册（基础工具 + 沙箱 bash）。
+    """默认注册（基础工具 + 沙箱 bash + platform.tasks 长任务桥）。
 
-    注册 read/write/edit/web_search/web_fetch/bash；bash 在一次性 bwrap 沙箱内
-    执行（无网络、工作区唯一可写、资源受限、超时整树清理），黑名单为纵深防御
-    （M5 §3.8.4 阶段 3 闭环），bwrap 不可用时 fail-closed 拒绝。
+    注册 read/write/edit/web_search/web_fetch/bash + task.create/task.status/
+    task.cancel。bash 在一次性 bwrap 沙箱内执行（无网络、工作区唯一可写、资源
+    受限、超时整树清理），黑名单为纵深防御（M5 §3.8.4 阶段 3 闭环），bwrap
+    不可用时 fail-closed 拒绝。task.* 只入 PG 队列或查询，不等待 Worker 终态
+    （P4-1，platform.tasks MCP），handler 为 contextual（接收执行上下文）。
     """
     registry = ToolRegistry()
     registry.register(
@@ -481,6 +484,87 @@ def build_default_registry() -> ToolRegistry:
             risk_level="code",
         )
     )
+    # ── platform.tasks 长任务 MCP（P4-1）：只入队/查询/取消，不等待终态 ──
+    registry.register(
+        ToolDef(
+            name="task.create",
+            description="创建评测任务并入队（benchmark/testcase/rag/stress），由 Worker 异步执行；返回 queued + task_id，不等待终态。",
+            parameters_schema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "enum": ["benchmark", "testcase", "rag", "stress"],
+                        "description": "任务类型",
+                    },
+                    "dataset_id": {"type": "string", "description": "数据集 ID（非 stress 必填）"},
+                    "profile_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "模型协议档 ID 列表",
+                    },
+                    "kb_id": {"type": "string", "description": "知识库 ID（rag）"},
+                    "gold_qa_id": {"type": "string", "description": "黄金 QA ID（rag）"},
+                    "rag_mode": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "enum": ["naive", "local", "global", "hybrid"],
+                        },
+                    },
+                    "with_stress": {"type": "boolean"},
+                    "parent_task_id": {"type": "string", "description": "压测父任务 ID（kind=stress 必填）"},
+                },
+                "required": ["kind"],
+            },
+            permission="task.create",
+            timeout_s=10.0,
+            handler=_task_create_handler,
+            server_id="platform.tasks",
+            display_name="创建评测任务",
+            risk_level="modify",
+            contextual=True,
+        )
+    )
+    registry.register(
+        ToolDef(
+            name="task.status",
+            description="查询评测任务当前状态（kind/status/progress/report_id），不等待完成",
+            parameters_schema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {"task_id": {"type": "string"}},
+                "required": ["task_id"],
+            },
+            permission="task.status",
+            timeout_s=10.0,
+            handler=_task_status_handler,
+            server_id="platform.tasks",
+            display_name="查询任务状态",
+            risk_level="read",
+            contextual=True,
+        )
+    )
+    registry.register(
+        ToolDef(
+            name="task.cancel",
+            description="取消非终态评测任务（终态任务幂等返回现状）",
+            parameters_schema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {"task_id": {"type": "string"}},
+                "required": ["task_id"],
+            },
+            permission="task.cancel",
+            timeout_s=10.0,
+            handler=_task_cancel_handler,
+            server_id="platform.tasks",
+            display_name="取消评测任务",
+            risk_level="modify",
+            contextual=True,
+        )
+    )
     return registry
 
 
@@ -563,3 +647,41 @@ def _bash_handler(arguments: Mapping[str, object], sandbox_dir: str | None = Non
         timeout_s=15.0,
         limits=limits,
     )
+
+
+def _task_create_handler(
+    arguments: Mapping[str, object],
+    sandbox_dir: str | None = None,
+    context: object | None = None,
+) -> object:
+    """task.create 工具 handler：长任务直接入队（platform.tasks MCP，P4-1）。
+
+    会话/用户来自 ``ToolExecutionContext``（平台注入，模型不可传）；经
+    ``task_tools.create_task_safe`` 校验并 ``enqueue_long_task``，返回
+    ``{status: queued, task_id, kind}``，不等待 Worker 终态。
+    """
+    from .task_tools import create_task_safe
+
+    return create_task_safe(arguments, context)
+
+
+def _task_status_handler(
+    arguments: Mapping[str, object],
+    sandbox_dir: str | None = None,
+    context: object | None = None,
+) -> object:
+    """task.status 工具 handler：只读查询任务状态（platform.tasks MCP，P4-1）。"""
+    from .task_tools import status_task_safe
+
+    return status_task_safe(arguments, context)
+
+
+def _task_cancel_handler(
+    arguments: Mapping[str, object],
+    sandbox_dir: str | None = None,
+    context: object | None = None,
+) -> object:
+    """task.cancel 工具 handler：行锁取消非终态任务（platform.tasks MCP，P4-1）。"""
+    from .task_tools import cancel_task_safe
+
+    return cancel_task_safe(arguments, context)

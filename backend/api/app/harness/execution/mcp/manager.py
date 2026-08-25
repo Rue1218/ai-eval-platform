@@ -113,7 +113,7 @@ class MCPClientManager:
                 provider.invoke,
                 tool_id,
                 dict(arguments),
-                context.sandbox_dir,
+                context,
                 context.call_id,
             )
         )

@@ -37,17 +37,18 @@ def enqueue_long_task(
 
     不阻塞对话回合。kind 取 Task.kind 短名 ∈ TASK_KINDS，否则抛
     AppError(VALIDATION)。``rag`` 未接入时禁止 mock succeeded（MEM-5，
-    由 Worker 侧保证失败）。
+    由 Worker 侧保证失败）。spec 写入 ``config``，``user_id`` 写入
+    ``created_by``（对齐 REST create_task 语义）。
     """
     if kind not in TASK_KINDS:
         raise AppError(ErrorCode.VALIDATION, f"未知任务类型：{kind}")
     task = Task(
         id=uuid4().hex,
         session_id=session_id,
-        user_id=user_id,
+        created_by=user_id,
         kind=kind,
         status="queued",
-        spec=spec,
+        config=spec,
         parent_task_id=parent_task_id,
     )
     db.add(task)

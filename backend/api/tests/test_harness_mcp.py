@@ -75,15 +75,21 @@ def _tool_result_event(out: dict) -> dict:
 # —— catalog ——
 
 
-def test_catalog_builds_default_6_tools_3_servers() -> None:
+def test_catalog_builds_default_9_tools_4_servers() -> None:
     catalog = ToolCatalog.build(build_default_registry())
     descriptors = catalog.all_descriptors()
-    assert len(descriptors) == 6
-    assert set(catalog.servers()) == {"platform.files", "platform.web", "platform.sandbox"}
+    assert len(descriptors) == 9
+    assert set(catalog.servers()) == {
+        "platform.files",
+        "platform.web",
+        "platform.sandbox",
+        "platform.tasks",
+    }
     assert catalog.get("platform.files.read") is not None
     assert catalog.get("platform.files.read").name == "read"
     assert catalog.resolve_name("read") == "platform.files.read"
     assert catalog.resolve_name("bash") == "platform.sandbox.bash"
+    assert catalog.resolve_name("task.create") == "platform.tasks.task.create"
     assert catalog.get("nope") is None
 
 
@@ -275,7 +281,7 @@ def test_mcp_tools_router_lists_internal_catalog() -> None:
     from app.routers.mcp import list_tools
 
     payload = list_tools(user=None)
-    assert payload["total"] == 6
+    assert payload["total"] == 9
     items = payload["items"]
     names = {item["name"] for item in items}
     assert names == {
@@ -285,6 +291,9 @@ def test_mcp_tools_router_lists_internal_catalog() -> None:
         "platform.web.web_search",
         "platform.web.web_fetch",
         "platform.sandbox.bash",
+        "platform.tasks.task.create",
+        "platform.tasks.task.status",
+        "platform.tasks.task.cancel",
     }
     read_item = next(item for item in items if item["name"] == "platform.files.read")
     assert read_item["permission"] == "read"

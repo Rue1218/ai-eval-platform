@@ -2,8 +2,8 @@
 
 | 项 | 内容 |
 | --- | --- |
-| 文档版本 | V0.7.0 |
-| 状态 | P0/P1、P2-A（完整原生 ToolCall）、P2-B（流式参数累积、网关投影、两回合收敛）与 P3（内部 MCP Host）已实施；P4 长任务与沙箱 Runner 待实施 |
+| 文档版本 | V0.8.0 |
+| 状态 | P0/P1、P2-A（完整原生 ToolCall）、P2-B（流式参数累积、网关投影、两回合收敛）、P3（内部 MCP Host）与 P4-1（platform.tasks 长任务 MCP bridge）已实施；P4-2～P4-4（独立沙箱 Runner、取消/配额/审计/熔断指标、生产验证）待实施 |
 | 审查日期 | 2026-08-25 |
 | 适用范围 | `backend/api/app/agent/`、`app/harness/`、`app/llm/`、`app/routers/ws.py` 与内部短工具 |
 | 上游权威 | `AI测试与评估平台-PRD.md`、`AI测试与评估平台-API.md`、`AGENTS.md` |
@@ -594,10 +594,10 @@ artifact_id / workspace 相对路径 / sha256 / 行范围 / 可见预算
 
 ### 阶段 E：长任务与沙箱 Runner（P4）
 
-1. 接入 `platform.tasks` MCP，统一入队和状态查询；
-2. 把 bash MCP Server 放入独立 Runner/容器，保留 bwrap fail-closed；
-3. 补充取消传播、资源配额、审计和熔断指标；
-4. 在生产验证后，再评估是否需要任何新内部 MCP Server；外部 MCP 仍不在本范围。
+1. ✅ **platform.tasks MCP 已实施（P4-1）**：接入 `platform.tasks` MCP（`task.create`/`task.status`/`task.cancel`），统一入队和状态查询；只入 PG 队列或查询，不等待 Worker 终态。`task.create` 采用**直接入队**语义（门禁：kind/数据集/待确认卡/占槽/先评后压），返回 `{status: queued, task_id, kind}`（§7.4 契约）。任务工具为 contextual handler（经 `ToolExecutionContext` 接收平台注入的 session/user），DB Session 自管。
+2. 🚫 把 bash MCP Server 放入独立 Runner/容器，保留 bwrap fail-closed；
+3. 🚫 补充取消传播、资源配额、审计和熔断指标；
+4. 🚫 在生产验证后，再评估是否需要任何新内部 MCP Server；外部 MCP 仍不在本范围。
 
 ---
 
@@ -718,3 +718,16 @@ artifact_id / workspace 相对路径 / sha256 / 行范围 / 可见预算
 - 验收：`ruff check . ../shared` 全绿；api pytest **411 passed/16 skipped**，worker pytest **34 passed**。
 - 本次仍未实施：`platform.tasks` 长任务 MCP bridge、独立沙箱 Runner/容器（bash MCP Server 迁出 api 容器）、真正并行工具调用；P4 安全边界不变，`platform.tasks` 工具不入当前目录。
 - 修改文件：`contracts/artifacts.py`+`__init__.py`、`execution/registry.py`、`execution/dispatch.py`、`execution/toolnode.py`、`execution/mcp/`（新增）、`agent/graph.py`、`routers/mcp.py`、`feedback/observation.py`、`execution/__init__.py`、`tests/test_harness_mcp.py`（新增）、`docs/AI测试与评估平台-API.md`（V1.29）。
+
+### V0.8.0（2026-08-25）实施记录
+
+- **P4-1 platform.tasks 长任务 MCP bridge 已实施**（阶段 E 第 1 项闭环）：
+  - `harness/execution/task_tools.py`（新增）：`create_task_safe` / `status_task_safe` / `cancel_task_safe` 三个平台.tasks 工具执行体。`task.create` **直接入队**（用户裁决）返回 `{status: queued, task_id, kind}`（§7.4 契约），门禁：kind ∈ TASK_KINDS、`require_visible_session` 会话归属、无待确认卡（防绕过）、会话无活动任务（占槽）、stress 须由已成功 benchmark/rag 父任务派生（先评后压）、非 stress 须带 `dataset_id`、唯一索引冲突 → CONCURRENCY；`task.status` 只读当前状态（归属校验，不轮询）；`task.cancel` 行锁取消非终态（终态幂等返回现状）+ TaskEvent + AuditLog。DB Session 用 `with_managed_session` 语义自管，handler 内 lazy import。
+  - **上下文透传**：`ToolDef` 新增 `contextual: bool`；`dispatch.execute_raw`/`execute` 增 `context=None`（非 None 时以第三位置参数调 handler）；`InProcessProvider.invoke` 改为接收 `ToolExecutionContext` 并对 contextual 工具透传；`MCPClientManager.call_tool` 传完整 context。非 contextual 2 参 handler 完全兼容（既有测试零改动）。
+  - `registry.py` 注册 `platform.tasks` 三工具（contextual=True，risk：status=read、create/cancel=modify）；`toolnode.py` 在 task.create/task.cancel 时经 db_factory 查会话活动任务填入 GateContext（OR-7 占槽门禁接线）。
+  - **修复潜伏 bug**：`worker_bridge.enqueue_long_task` 用 `user_id=`/`spec=` 构造 Task，而 Task 模型实际字段为 `created_by`/`config` → 直接调用必抛 TypeError（confirm_ack 路径从未触发故未暴露）；已改为 `created_by=user_id`、`config=spec`，与 REST create_task 对齐。
+  - API.md §3.6.1 先行更新至 V1.30：目录 6→9 项、server 4 组，补 platform.tasks 语义；§4.6 短工具表 task.create/status/cancel 行同步。
+- 测试：新增 `tests/test_task_tools.py` 19 项（create 门禁 8 项、status 3 项、cancel 3 项、上下文透传 2 项、toolnode 占槽 2 项、enqueue 修复回归）；更新 `test_harness_mcp.py`/`test_harness_execution.py` 工具集合断言（6→9）。
+- 验收：`ruff check . ../shared` 全绿；api pytest **430 passed/16 skipped**，worker pytest **34 passed**。
+- 本次仍未实施：P4-2 独立沙箱 Runner/容器（bash MCP Server 迁出 api 容器）、P4-3 取消传播/资源配额/审计/熔断指标、P4-4 生产验证后的新内部 Server 评估；外部 MCP 与浏览器直连 MCP 始终不在范围。
+- 修改文件：`harness/execution/task_tools.py`（新增）、`harness/execution/registry.py`、`harness/execution/dispatch.py`、`harness/execution/worker_bridge.py`、`harness/execution/toolnode.py`、`harness/execution/mcp/provider.py`、`harness/execution/mcp/manager.py`、`tests/test_task_tools.py`（新增）、`tests/test_harness_mcp.py`、`tests/test_harness_execution.py`、`docs/AI测试与评估平台-API.md`（V1.30）。

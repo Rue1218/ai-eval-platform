@@ -2,7 +2,7 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.29 |
+| 文档版本 | V1.30 |
 | 对应 PRD | V1.13（功能唯一权威） |
 | 对应设计规范 | V1.3（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V0.5（LangGraph 单轮 Agent 与 WS 桥接；JSON 仍以本文为准） |
@@ -21,6 +21,8 @@
 > V1.28（2026-08-25）：工具调用模式默认改为 `legacy`，存量协议档也以兼容模式迁移；只有人工验证支持 Function Calling 后才可显式切换为 `native`。原生 ToolCall 的空/重复 `call_id` 一律归一为 `UPSTREAM`，不进入工具队列。
 >
 > V1.29（2026-08-25）：§3.6.1 `GET /api/mcp/tools` 从音频/图像占位清单改为**平台 allowlist 内部短工具目录**（6 项：read/write/edit/web_search/web_fetch/bash），`name` 使用唯一 `tool_id`，新增可选 `tool_id`/`server_id`/`short_name`/`display_name`/`risk_level`/`execution_mode`/`timeout_s`/`requires_confirmation`/`supports_streaming` 字段；仅只读展示，不含任何连接命令或凭据。
+>
+> V1.30（2026-08-25）：§3.6.1 新增 `platform.tasks` 长任务桥接三工具（`task.create`/`task.status`/`task.cancel`），目录 6→9 项、server 4 组。三工具只入 PG 队列或查询，不等待 Worker 终态；`task.create` 直接入队返回 `queued` + `task_id`，会话/用户归属由平台注入（模型不可传）。
 
 ---
 
@@ -588,9 +590,11 @@ Embedding 与 Reranker 的 URL、模型和 Key 与主模型使用相同的“按
 
 #### `GET /api/mcp/tools`
 
-获取当前智能体环境中平台 allowlist 的**内部短工具目录**（只读）。首期 6 项：`read`、`write`、`edit`（会话 workspace 文件，`platform.files`）、`web_search`、`web_fetch`（内部适配器 + SSRF 防护，`platform.web`）、`bash`（bwrap 沙箱，`platform.sandbox`）。仅展示元数据，**不展示任何 MCP Server 连接命令、环境变量、工作目录或凭据**，也不展示内部 handler 细节。
+获取当前智能体环境中平台 allowlist 的**内部短工具目录**（只读）。首期 9 项：`read`、`write`、`edit`（会话 workspace 文件，`platform.files`）、`web_search`、`web_fetch`（内部适配器 + SSRF 防护，`platform.web`）、`bash`（bwrap 沙箱，`platform.sandbox`）、`task.create`、`task.status`、`task.cancel`（长任务桥接，`platform.tasks`）。仅展示元数据，**不展示任何 MCP Server 连接命令、环境变量、工作目录或凭据**，也不展示内部 handler 细节。
 
 `name` 为唯一 `tool_id`（`{server_id}.{short_name}`）；`permission` 由风险等级映射：`read`/`network` → `read`，`modify`/`code`/`long` → `write`。
+
+`platform.tasks` 三工具只入 PG 队列或查询，**不等待 Worker 终态**：`task.create` 校验通过后直接入队返回 `queued` + `task_id`；`task.status` 只读当前状态不轮询；`task.cancel` 行锁取消非终态任务。真实进度/报告/错误由 Worker 写入 `task_events`/`ws_events` 转发。
 
 ```json
 {
@@ -1375,8 +1379,9 @@ Pub/Sub，不能假定跨进程实时可见。
 | `kb.list` | 列出知识库 |
 | `task.get` | 查询任务 |
 | `report.get` | 读取报告 |
-| `task.create` | 创建任务 |
-| `task.cancel` | 取消任务 |
+| `task.create` | 创建评测任务 |
+| `task.status` | 查询任务状态 |
+| `task.cancel` | 取消评测任务 |
 | `testcase.confirm` | 确认用例入库 |
 | `dispatch.overview` | 调度概览 |
 | `audio.speech_recognition` | 语音识别转写 |
@@ -1489,10 +1494,10 @@ Agent Host 与 worker 共用。入参/出参与 PRD 5.5 一致。错误码同 §
 | `model.list` | 短 | — | `{items:[{id,name,protocol,model}]}` 无 Key（`model` 仅供展示） | M1 |
 | `dataset.list` | 短 | — | `{items:[{id,name,version,row_count}]}` | M2 |
 | `kb.list` | 短 | — | `{items:[{id,name,doc_count}]}` | M3 |
-| `task.get` | 短 | `task_id` | 状态、进度、`report_id` | M1 |
+| `task.status` | 短 | `task_id` | 当前 `status`、`progress`、`report_id`（只读，不等待终态） | M1 |
 | `report.get` | 短 | `report_id` | 摘要 + 下载路径 | M2 |
-| `task.create` | 短 | TaskSpec | `task_id`；仅 `confirm_ack.ok=true` 后 | M1 |
-| `task.cancel` | 短 | `task_id` | `{ok}` | M1 |
+| `task.create` | 短 | TaskSpec（`kind` 必填） | `{status: queued, task_id, kind}`；经门禁直接入队，会话/用户归属平台注入 | M1 |
+| `task.cancel` | 短 | `task_id` | 取消非终态；终态幂等返回现状 | M1 |
 | `dispatch.overview` | 短 | — | Worker 数 / 队列 / 策略（与 `GET /api/dispatch/overview` 同源摘要） | M1 迷你轨 |
 | `audio.speech_recognition` | 短 | `file_id`（本轮 wav/mp3 音频，由系统绑定）；`language?`（`auto|zh|en`，默认 `auto`） | `{transcript, language, model, file_id, filename, content_type, size}`；禁止回传音频 Base64 | 对话同步 |
 | `audio.speech_synthesis` | 短 | `text`（必填；模型未给时从用户原话剥离「帮我输出音频」等命令前缀/引号/冒号后抽取朗读稿）；`mode?`（`preset|voicedesign`）；`style?`；`model?`；`voice?` | `{file_id, filename, content_type, size, model, mode, content_url}`；`content_url` 为 `/api/files/{id}/content`，禁止回传音频 Base64 | 对话同步 |
@@ -1504,7 +1509,7 @@ Agent Host 与 worker 共用。入参/出参与 PRD 5.5 一致。错误码同 §
 | `rag.evaluate` | 长 | TaskSpec RAG 段 | `report_id` | M3 |
 | `stress.run` | 长 | `parent_task_id` + `stress` | `report_id` | M4 |
 
-Agent **只**调短工具；`task.create` 仅 ack 后。长工具（`benchmark.run` `rag.evaluate` `testcase.generate` `stress.run`）由 worker 执行，Agent 进程调用必须 `VALIDATION`。`stress.run` 只下发 stress 容器。LightRAG 未接入时 `kind=rag` **不得** mock succeeded。
+Agent **只**调短工具；`task.create` 经门禁（kind/数据集/占槽/先评后压）**直接入队**返回 `queued`，用户确认卡路径仍由 `confirm_ack` 驱动（二者共用 `enqueue_long_task`）。长工具（`benchmark.run` `rag.evaluate` `testcase.generate` `stress.run`）由 worker 执行，Agent 进程调用必须 `VALIDATION`。`stress.run` 只下发 stress 容器。LightRAG 未接入时 `kind=rag` **不得** mock succeeded。
 
 JSON Schema 冻结点：短工具 M1 W4；音频工具输入以本节为准，结果只回安全文本/文件元数据；评测长工具 M2 W6；RAG M3 W10；stress M4 W13。禁止新增 REST 代理或浏览器直连上游音频服务。
 

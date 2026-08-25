@@ -85,7 +85,17 @@ def test_default_registry_includes_bash() -> None:
     assert bash_def is not None
     assert bash_def["permission"] == "sandbox.bash"
     names = {definition["name"] for definition in registry.all_defs()}
-    assert names == {"read", "write", "edit", "web_search", "web_fetch", "bash"}
+    assert names == {
+        "read",
+        "write",
+        "edit",
+        "web_search",
+        "web_fetch",
+        "bash",
+        "task.create",
+        "task.status",
+        "task.cancel",
+    }
 
 
 def test_tool_schema_validation_rejects_invalid_and_extra_arguments() -> None:

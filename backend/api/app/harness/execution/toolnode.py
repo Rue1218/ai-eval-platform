@@ -28,6 +28,9 @@ from app.harness.feedback.observation import normalize, normalize_exception
 from app.harness.feedback.rules import GateContext, check_gates
 from app.harness.memory import GraphState
 
+# 会话级占槽门禁（OR-7）：task.create/task.cancel 前查询会话活动任务
+from app.harness.orchestration.gates import check_session_active_task
+
 from .binding import bind_attachments
 from .mcp import MCPClientManager, ToolExecutionContext
 from .native_results import NativeToolResultStore, runtime_thread_id
@@ -131,9 +134,19 @@ def build_tool_node(
         if schema_error:
             return rejected("VALIDATION", schema_error)
         # 1. 门禁（FB-2）：长工具/白名单/资产溯源/占槽等
+        # 占槽门禁（OR-7）需要 DB 事实：task.create/task.cancel 时查询会话活动任务；
+        # 无 db_factory（测试/纯内存路径）时保持 False，handler 内仍有兜底校验。
+        has_active_task = False
+        if call.name in {"task.create", "task.cancel"} and db_factory is not None:
+            gate_db = db_factory()
+            try:
+                has_active_task = check_session_active_task(gate_db, session_id)
+            finally:
+                gate_db.close()
         context = GateContext(
             session_id=session_id,
             user_id=current_user,
+            has_active_task=has_active_task,
             owned_file_ids=owned_file_ids,
             registered_names=frozenset(registry.names()),
             required_slots={call.name: required_parameter_names(definition.parameters_schema)},
