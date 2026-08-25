@@ -1515,13 +1515,24 @@ function findLastThoughtBlock(agent: StreamItem): AgentThoughtItem | undefined {
   return undefined
 }
 
+/** 将块追加进回合 blocks：思考卡必须位于助手正文之上（回复后不允许出现思考卡）。 */
+function pushTurnBlock(agent: StreamItem, block: AgentBlock) {
+  const blocks = agent.blocks || (agent.blocks = [])
+  if (block.type === 'thought') {
+    const assistantIdx = blocks.findIndex((b) => b.type === 'assistant')
+    if (assistantIdx === -1) blocks.push(block)
+    else blocks.splice(assistantIdx, 0, block)
+  } else {
+    blocks.push(block)
+  }
+}
+
 /** 追加一个思考块；同一思考流的增量帧复用最近未完成块。 */
 function appendThoughtBlock(agent: StreamItem, block: AgentThoughtItem): AgentThoughtItem {
   const active = getActiveThoughtBlock(agent)
   if (active) return active
   const next = reactive({ type: 'thought', ...block }) as AgentBlock
-  const blocks = agent.blocks || (agent.blocks = [])
-  blocks.push(next)
+  pushTurnBlock(agent, next)
   return next as AgentThoughtItem
 }
 
@@ -3063,7 +3074,7 @@ async function loadSessionHistory(sid: string): Promise<number> {
       }
       if (item.type === 'thought' || item.type === 'tool' || item.type === 'media') {
         const turn = ensureReplayTurn(item, timeline.time)
-        turn.blocks!.push(item as unknown as AgentBlock)
+        pushTurnBlock(turn, item as unknown as AgentBlock)
         continue
       }
       if (item.type === 'agent') {
