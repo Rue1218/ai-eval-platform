@@ -52,6 +52,7 @@ def enqueue_long_task(
     spec: dict,
     *,
     parent_task_id: str | None = None,
+    commit: bool = True,
 ) -> str:
     """创建 queued Task + AuditLog，交 Worker 消费；返回 task_id。
 
@@ -59,6 +60,9 @@ def enqueue_long_task(
     AppError(VALIDATION)。``rag`` 未接入时禁止 mock succeeded（MEM-5，
     由 Worker 侧保证失败）。spec 写入 ``config``，``user_id`` 写入
     ``created_by``（对齐 REST create_task 语义）。
+
+    ``commit=False`` 时只 flush，由调用方在同一事务内继续写（例如确认卡
+    清卡）后再一次 commit，避免入队成功、卡标未清的半提交。
     """
     if kind not in TASK_KINDS:
         raise AppError(ErrorCode.VALIDATION, f"未知任务类型：{kind}")
@@ -82,5 +86,6 @@ def enqueue_long_task(
             detail={"kind": kind},
         )
     )
-    db.commit()
+    if commit:
+        db.commit()
     return task.id

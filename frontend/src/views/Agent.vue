@@ -361,7 +361,7 @@
                 <div v-if="['benchmark', 'rag'].includes(item.card.kind)" class="fold-card" :class="{ open: item.showRunConfig }">
                   <div class="fold-head" @click="item.showRunConfig = !item.showRunConfig">
                     <span class="fold-title">高级运行参数</span>
-                    <span class="small tertiary mono">sample 20 · 并发 4 · 超时 60s · 重试 1 · T=0.2 · 2048 tokens</span>
+                    <span class="small tertiary mono">sample {{ item.card.run?.sample_size ?? 1000 }} · 并发 {{ item.card.run?.concurrency ?? 4 }} · 超时 {{ item.card.run?.timeout_s ?? 60 }}s · 重试 {{ item.card.run?.retry ?? 1 }} · T={{ item.card.run?.temperature ?? 0 }} · {{ item.card.run?.max_tokens ?? 1024 }} tokens</span>
                     <svg class="chev" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
                       <path d="m6 9 6 6 6-6" />
                     </svg>
@@ -370,7 +370,7 @@
                     <div class="form-row">
                       <div class="field">
                         <span class="field-label">sample_size（抽样行数）</span>
-                        <n-input-number v-model:value="item.card.run.sample_size" :min="1" :max="1000" placeholder="默认 20" size="small" />
+                        <n-input-number v-model:value="item.card.run.sample_size" :min="1" :max="1000" placeholder="默认 1000" size="small" />
                       </div>
                       <div class="field">
                         <span class="field-label">concurrency（并发数）</span>
@@ -390,11 +390,11 @@
                     <div class="form-row">
                       <div class="field">
                         <span class="field-label">temperature（采样温度）</span>
-                        <n-input-number v-model:value="item.card.run.temperature" :min="0" :max="2" :step="0.1" placeholder="默认 0.2" size="small" />
+                        <n-input-number v-model:value="item.card.run.temperature" :min="0" :max="2" :step="0.1" placeholder="默认 0" size="small" />
                       </div>
                       <div class="field">
                         <span class="field-label">max_tokens（最大生成 tokens）</span>
-                        <n-input-number v-model:value="item.card.run.max_tokens" :min="1" placeholder="默认 2048" size="small" />
+                        <n-input-number v-model:value="item.card.run.max_tokens" :min="1" placeholder="默认 1024" size="small" />
                       </div>
                     </div>
                     <div class="field">
@@ -4079,8 +4079,9 @@ function handleWsEvent(ev: WsServerEvent) {
         } else {
           activeTask.value.progress = progress
         }
-        // 无报告的任务类型（如 testcase 骨架）以 100% 进度作为坞收尾信号
-        if ((progress.percent ?? 0) >= 100) finishDock('任务已完成')
+        // 用例生成进入 awaiting_case_confirm 时 Worker 也会推 percent=100，坞需保持以便取消
+        const awaitingCase = String(progress.message || '').includes('等待确认入库')
+        if ((progress.percent ?? 0) >= 100 && !awaitingCase) finishDock('任务已完成')
       }
       break
     }

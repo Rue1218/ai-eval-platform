@@ -29,7 +29,7 @@
           <div class="form-row-3">
             <div class="field">
               <label class="field-label">采样数</label>
-              <n-input-number v-model:value="spec.run!.sample_size" :min="1" :max="10000" />
+              <n-input-number v-model:value="spec.run!.sample_size" :min="1" :max="1000" />
             </div>
             <div class="field">
               <label class="field-label">并发数</label>

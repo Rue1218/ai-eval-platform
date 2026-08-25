@@ -438,7 +438,7 @@ def ai_generate_cases(
     try:
         cases = parse_cases(result.text)
     except (ValueError, json.JSONDecodeError) as exc:
-        raise AppError(ErrorCode.UPSTREAM, f"模型输出无法解析为用例：{exc}") from exc
+        raise AppError(ErrorCode.UPSTREAM, "模型输出无法解析为用例") from exc
     cases = rebalance_by_strategy(cases, max_count)
     return {"items": cases}
 

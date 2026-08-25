@@ -34,6 +34,8 @@ from .models import (
     Task,
     TaskEvent,
 )
+from .sampling import clamp_sample_size
+from .stress_spawn import maybe_spawn_stress
 from .task_state import claim_running_task_for_terminal_write, is_cancelled
 
 logger = logging.getLogger("worker.rag")
@@ -118,9 +120,8 @@ def run_rag(task_id: str) -> None:
             .order_by(GoldQaItem.row_no.asc())
             .all()
         )
-        sample_size = run.get("sample_size")
-        if isinstance(sample_size, int) and not isinstance(sample_size, bool) and sample_size > 0:
-            items = items[:sample_size]
+        sample_size = clamp_sample_size(run.get("sample_size"), len(items))
+        items = items[:sample_size]
         if not items:
             _fail(db, task, "VALIDATION", "黄金 QA 没有可评测的行")
             return
@@ -245,12 +246,13 @@ def run_rag(task_id: str) -> None:
             task_id=task.id,
         )
         logger.info("rag task %s succeeded (samples=%s modes=%s)", task.id, len(items), modes)
+        maybe_spawn_stress(db, task)
     except Exception as exc:  # noqa: BLE001
         logger.exception("rag task %s unexpected failure", task_id)
         try:
             task = db.query(Task).filter(Task.id == task_id).first()
             if task and task.status in {"queued", "running"}:
-                _fail(db, task, "INTERNAL", f"RAG 评测异常：{exc}")
+                _fail(db, task, "INTERNAL", f"RAG 评测异常({type(exc).__name__})")
         except Exception:  # noqa: BLE001
             db.rollback()
     finally:

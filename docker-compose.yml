@@ -143,6 +143,8 @@ services:
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       # RAG 评测检索的 LightRAG 服务地址；stub 空返回时共享检索层自动回退本地关键词。
       LIGHTRAG_BASE_URL: ${LIGHTRAG_BASE_URL:-http://lightrag:9621}
+      # 压测引擎（容器内网）；Worker 只下发 / 轮询，不在本进程发压。
+      STRESS_URL: ${STRESS_URL:-http://stress:19090}
     depends_on:
       postgres:
         condition: service_healthy
@@ -150,6 +152,8 @@ services:
         condition: service_healthy
       api:
         condition: service_healthy
+      stress:
+        condition: service_started
     volumes:
       - ./data:/data
       - ./.env:/run/config/.env:ro

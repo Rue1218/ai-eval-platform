@@ -154,6 +154,22 @@ def test_create_missing_dataset(monkeypatch) -> None:
     assert "数据集" in error.value.message
 
 
+def test_create_rag_requires_kb_and_gold(monkeypatch) -> None:
+    monkeypatch.setattr("app.db.SessionLocal", lambda: _FakeDb(session_row=_SessionRow(), task_query=[]))
+    with pytest.raises(AppError) as error:
+        create_task_safe({"kind": "rag"}, _ctx())
+    assert error.value.code == ErrorCode.VALIDATION
+    assert "知识库" in error.value.message
+
+
+def test_create_rag_ok_without_dataset(monkeypatch) -> None:
+    db = _FakeDb(session_row=_SessionRow(), task_query=[])
+    monkeypatch.setattr("app.db.SessionLocal", lambda: db)
+    result = create_task_safe({"kind": "rag", "kb_id": "kb1", "gold_qa_id": "g1"}, _ctx())
+    assert result["status"] == "queued"
+    assert result["kind"] == "rag"
+
+
 def test_create_pending_confirm_rejected(monkeypatch) -> None:
     db = _FakeDb(session_row=_SessionRow(pending_confirm={"kind": "benchmark"}), task_query=[])
     monkeypatch.setattr("app.db.SessionLocal", lambda: db)

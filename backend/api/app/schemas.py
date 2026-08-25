@@ -267,7 +267,7 @@ class DatasetOut(OrmOut):
 class RunConfig(ApiModel):
     """Benchmark 与 RAG 的可复现实行配置。"""
 
-    sample_size: int | None = Field(default=None, ge=1, le=20_000)
+    sample_size: int | None = Field(default=None, ge=1, le=1000)
     concurrency: int | None = Field(default=None, ge=1, le=100)
     timeout_s: int | None = Field(default=None, ge=1, le=600)
     retry: int | None = Field(default=None, ge=0, le=5)

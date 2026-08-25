@@ -123,11 +123,14 @@ def create_task(
         if parent.kind not in {"benchmark", "rag"}:
             raise AppError(ErrorCode.VALIDATION, "仅质量任务可派生压测")
 
+    snapshot = body.snapshot()
+    if body.kind == "stress" and body.stress and body.stress.env == "prod":
+        snapshot["need_approval"] = True
     task = Task(
         kind=body.kind,
         session_id=body.session_id,
         parent_task_id=body.parent_task_id,
-        config=body.snapshot(),
+        config=snapshot,
         progress={"done": 0, "total": 0, "message": "任务已入队"},
         created_by=user.id,
         status="queued",

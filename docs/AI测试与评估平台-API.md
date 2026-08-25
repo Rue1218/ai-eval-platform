@@ -2,7 +2,7 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.34 |
+| 文档版本 | V1.35 |
 | 对应 PRD | V1.13（功能唯一权威） |
 | 对应设计规范 | V1.3（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V0.5（LangGraph 单轮 Agent 与 WS 桥接；JSON 仍以本文为准） |
@@ -29,6 +29,8 @@
 > V1.32（2026-08-25）：基础 `read`、`write`、`edit`、`bash`、`web_search`、`web_fetch` 与对话拆解 `task` 改为模型原生 Function Calling 直连；仅评测任务桥 `platform.tasks` 继续作为 MCP 扩展。新增 Firecrawl 服务端配置、网页抓取安全投影和原子文件写入边界。
 >
 > V1.33（2026-08-25）：单回合允许多条 `assistant_message`；`response.completed` 仍为整轮结束。可选 `interim=true` 表示阶段叙述（计划/下一步），不是 Observation 原文，不得结束生成态。清单复用 `plan.slots.steps` 与 `task` 的 `tool_result`，不新事件。
+>
+> V1.35（2026-08-25）：对话确认卡由 LangGraph `reflect` 在 `delivery=confirm` 时发出（TaskSpec，`kind` 不得为 `stress`）；WS 短票 jti 用 Redis 单次消费；压测由 Worker 下发 stress 容器，曲线仍只走 `GET /api/tasks/{id}/stress-series`。
 >
 > V1.34（2026-08-25）：原生工具回传模型的单条结果上限统一为 8,000 字符（`read`/`bash`/`web_*` 对齐）；未读完时模型正文携带 `next_offset`。ToolCard 预览与 WS 投影不变。
 
@@ -1981,4 +1983,15 @@ catalog/provider；`GET /api/mcp/tools` 只保留评测/RAG 扩展目录，当�
 | `backend/api/app/harness/context/observation.py` | 冻结 `MODEL_TOOL_RESULT_MAX_CHARS=8000` |
 | `backend/api/app/harness/execution/dispatch.py` / `sandbox.py` / `registry.py` | read/web/bash 窗口对齐；read 大文件按块统计剩余行 |
 | `backend/api/app/agent/react.py` / `toolnode.py` | 回传截断 + 工具/模型耗时与 payload 字符数追踪 |
+
+**V1.35（2026-08-25）— 确认卡、短票 Redis、真实压测下发**
+
+LangGraph `reflect` 在规划 `delivery=confirm` 且复核通过后发出确认卡（默认 `sample_size=1000` / `temperature=0` / `max_tokens=1024`），对话路径不得 `kind=stress`。WS 短票 `jti` 使用 Redis `SET NX` + JWT 剩余 TTL，进程重启后未过期票据不可复用；Redis 不可用时回退进程内存。压测由 Worker HTTP 下发 `stress` 容器，取消立即停发，报告 `time_series` 供 `GET /api/tasks/{id}/stress-series`。
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/harness/orchestration/confirm_spec.py` / `app/agent/reflect.py` | 从规划拼装 TaskSpec 并在 reflect 发出 `confirm` |
+| `backend/api/app/ws_tickets.py` / `app/routers/ws.py` | 短票单次消费与确认卡作者元数据 |
+| `backend/worker/app/stress.py` / `backend/stress/main.go` | Worker 下发真实发压、可取消、写曲线 |
+| `docker-compose.yml` | Worker `STRESS_URL=http://stress:19090` |
 
