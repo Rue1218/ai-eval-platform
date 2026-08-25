@@ -1,8 +1,9 @@
-"""内部 MCP 目录（阶段 D，P3）：平台 allowlist 工具的唯一目录/风险/策略来源。
+"""内部 MCP 扩展目录（阶段 D，P3）。
 
-``ToolCatalog`` 从 ``ToolRegistry`` 投影 ``ToolDescriptor``，提供 tool_id 与
-短名双索引；工具名冲突（同短名跨 server）与 tool_id 重复在登记时即拒绝
-（VALIDATION）。目录只含可序列化描述符，不含 handler。
+``ToolCatalog`` 只从 ``ToolRegistry`` 中 ``transport=mcp`` 的扩展工具投影
+``ToolDescriptor``，提供 tool_id 与短名双索引；read/write/bash/web/task 等
+基础工具固定为原生 ToolCall，绝不进入此目录。目录只含可序列化描述符，不含
+handler。
 """
 
 from __future__ import annotations
@@ -46,7 +47,7 @@ class ToolCatalog:
         """重建目录；注册表新增工具后调用即可反映。冲突立即拒绝。"""
         self._descriptors.clear()
         self._by_name.clear()
-        for definition in registry.iter_defs():
+        for definition in registry.iter_defs(transport="mcp"):
             self.add(definition.to_descriptor())
 
     def add(self, descriptor: ToolDescriptor) -> None:

@@ -352,6 +352,6 @@ def test_is_cancelled_detects_terminated_status() -> None:
         assert is_cancelled(db, "t1") is expected
 
 
-def test_build_default_registry_still_9_tools() -> None:
+def test_build_default_registry_includes_native_task_plan_and_mcp_task_bridge() -> None:
     registry = build_default_registry()
-    assert len(registry.names()) == 9
+    assert len(registry.names()) == 10

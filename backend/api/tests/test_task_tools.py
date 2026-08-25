@@ -347,7 +347,11 @@ def test_toolnode_task_create_rejected_when_active_task() -> None:
     registry = build_default_registry()
     active = Task(id="t-active", kind="benchmark", status="running", config={}, created_by="u1", session_id="s1")
     db = _FakeDb(session_row=_SessionRow(), task_query=[active])
-    node = build_tool_node(registry, db_factory=lambda: db)
+    node = build_tool_node(
+        registry,
+        manager=MCPClientManager.build_from_registry(registry),
+        db_factory=lambda: db,
+    )
     state = {
         "request": {"config": {}, "messages": ()},
         "pending_tool": {"name": "task.create", "arguments": {"kind": "benchmark", "dataset_id": "d1"}},
@@ -365,7 +369,11 @@ def test_toolnode_task_status_passes_gate_without_active_task(monkeypatch) -> No
     db = _FakeDb(session_row=_SessionRow(), task_query=[])
     # task.status 处理器自管 Session：monkeypatch app.db.SessionLocal（lazy import）
     monkeypatch.setattr("app.db.SessionLocal", lambda: db)
-    node = build_tool_node(registry, db_factory=lambda: db)
+    node = build_tool_node(
+        registry,
+        manager=MCPClientManager.build_from_registry(registry),
+        db_factory=lambda: db,
+    )
     state = {
         "request": {"config": {}, "messages": ()},
         "pending_tool": {"name": "task.status", "arguments": {"task_id": "missing"}},
@@ -384,7 +392,11 @@ def test_toolnode_task_cancel_passes_gate_with_active_task(monkeypatch) -> None:
     task = Task(id="t1", kind="benchmark", status="running", config={}, created_by="u1")
     db = _FakeDb(session_row=_SessionRow(), task_query=[task], tasks={"t1": task})
     monkeypatch.setattr("app.db.SessionLocal", lambda: db)
-    node = build_tool_node(registry, db_factory=lambda: db)
+    node = build_tool_node(
+        registry,
+        manager=MCPClientManager.build_from_registry(registry),
+        db_factory=lambda: db,
+    )
     state = {
         "request": {"config": {}, "messages": ()},
         "pending_tool": {"name": "task.cancel", "arguments": {"task_id": "t1"}},

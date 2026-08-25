@@ -2,7 +2,7 @@
 
 ``execute`` 按 call.name 分派到注册表 handler，带超时；超时返回 ``timeout``
 observation；日志脱敏（调 M8）。含受控目录文件工具（read/write/edit）、
-web 内部短 MCP 适配器（web_search/web_fetch）与 **bwrap 沙箱 bash**
+原生网络适配器（web_search/web_fetch）与 **bwrap 沙箱 bash**
 （阶段 3 开放通用 bash，安全边界见 ``sandbox.py``）。
 
 **bash 安全边界（阶段 3 bwrap 闭环）**：命令黑名单（纵深防御）+ 一次性
@@ -16,14 +16,18 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import socket
+import tempfile
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
+from html.parser import HTMLParser
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener, urlopen
 
+from app.config import settings
 from app.errors import AppError, ErrorCode
 from app.harness.contracts import Observation, ToolCall, ToolResult
 from app.harness.execution.sandbox import SandboxLimits, run_sandboxed
@@ -39,11 +43,17 @@ READ_MAX_LIMIT = 2_000
 READ_MAX_CHARS = 120_000
 READ_MAX_BYTES = 10 * 1024 * 1024
 READ_PREVIEW_CHARS = 500
+WRITE_MAX_BYTES = 2 * 1024 * 1024
+WEB_MAX_CONTENT_CHARS = 20_000
+WEB_PREVIEW_CHARS = 500
+WEB_MAX_SEARCH_RESULTS = 10
+WEB_RESPONSE_MAX_BYTES = 256 * 1024
 
 # bash 命令黑名单（纵深防御；bwrap 沙箱之外的第二道防线，禁止命令开头命中）
 BASH_BLOCKLIST: frozenset[str] = frozenset(
     {"rm", "sudo", "curl", "wget", "nc", "ssh", "scp", "chmod", "chown"}
 )
+_BASH_COMMAND_SEPARATOR = re.compile(r"(?:&&|\|\||[;|&\n])")
 
 # SSRF 防护：web_fetch 抓取目标命中以下内网/回环/链路本地/保留地址段即拒绝。
 # 含 IPv4 保留段、IPv6 回环/ULA/链路本地/多播与文档地址（RFC 1918/6890/3849 等）。
@@ -125,9 +135,12 @@ def run_bash(
     command = cmd.strip()
     if not command:
         raise AppError(ErrorCode.VALIDATION, "bash 命令为空")
-    first = command.split()[0]
-    if first in BASH_BLOCKLIST:
-        raise AppError(ErrorCode.VALIDATION, f"bash 命令命中黑名单：{first}")
+    # 不只检查整条命令首词，避免 ``echo ok; rm ...`` 绕过纵深防御；bwrap 仍是
+    # 最终隔离边界，黑名单不能替代沙箱。
+    for segment in _BASH_COMMAND_SEPARATOR.split(command):
+        first = segment.strip().split(maxsplit=1)[0] if segment.strip() else ""
+        if first in BASH_BLOCKLIST:
+            raise AppError(ErrorCode.VALIDATION, f"bash 命令命中黑名单：{first}")
     return run_sandboxed(
         command,
         sandbox_dir=sandbox_dir,
@@ -238,10 +251,25 @@ def read_file_safe(
     if requested_limit == 0:
         raise AppError(ErrorCode.VALIDATION, "limit 必须大于 0")
     size = min(requested_limit, READ_MAX_LIMIT)
+    # 流式扫描而非 readlines()：即使接近 10MB 上限也不会额外保留整文件副本。
+    selected: list[str] = []
+    chars_used = 0
+    total_lines = 0
+    total_chars = 0
+    hit_character_limit = False
     with open(target, encoding="utf-8", errors="replace") as handle:
-        lines = handle.readlines()
-    total_lines = len(lines)
-    total_chars = sum(len(line) for line in lines)
+        for line_index, line in enumerate(handle):
+            total_lines += 1
+            total_chars += len(line)
+            if line_index < start or len(selected) >= size or hit_character_limit:
+                continue
+            if chars_used + len(line) > READ_MAX_CHARS:
+                if not selected:
+                    raise AppError(ErrorCode.VALIDATION, "单行内容超过 read 的 120000 字符上限")
+                hit_character_limit = True
+                continue
+            selected.append(line)
+            chars_used += len(line)
     if start >= total_lines:
         return ReadResult(
             path=path,
@@ -256,16 +284,6 @@ def read_file_safe(
             content_truncated=False,
             source=f"workspace:{path}",
         )
-
-    selected: list[str] = []
-    chars_used = 0
-    for line in lines[start : start + size]:
-        if chars_used + len(line) > READ_MAX_CHARS:
-            if not selected:
-                raise AppError(ErrorCode.VALIDATION, "单行内容超过 read 的 120000 字符上限")
-            break
-        selected.append(line)
-        chars_used += len(line)
     end_line = start + len(selected)
     is_complete = end_line >= total_lines
     return ReadResult(
@@ -278,23 +296,64 @@ def read_file_safe(
         is_complete=is_complete,
         next_offset=None if is_complete else end_line,
         content="".join(selected),
-        content_truncated=False,
+        content_truncated=hit_character_limit,
         source=f"workspace:{path}",
     )
 
 
-def write_file_safe(path: str, content: str, sandbox_dir: str) -> None:
-    """受控目录内新建文本文件（防目录穿越；不覆盖已有文件）。"""
+@dataclass(frozen=True, slots=True)
+class WriteResult:
+    """write 的结构化成功结果，避免把写入正文回显给模型或浏览器。"""
+
+    path: str
+    bytes_written: int
+
+    def to_tool_data(self) -> dict[str, object]:
+        """生成模型摘要与 ToolCard 安全展示投影。"""
+        summary = f"已新建 {self.path}（{self.bytes_written} 字节）"
+        return {"summary": summary, "display": {"summary": summary}}
+
+
+@dataclass(frozen=True, slots=True)
+class EditResult:
+    """edit 的结构化成功结果，记录一次精确原子替换。"""
+
+    path: str
+    old_length: int
+    new_length: int
+
+    def to_tool_data(self) -> dict[str, object]:
+        """生成模型摘要与 ToolCard 安全展示投影。"""
+        summary = f"已编辑 {self.path}（替换 {self.old_length}→{self.new_length} 字符）"
+        return {"summary": summary, "display": {"summary": summary}}
+
+
+def _ensure_write_size(content: str) -> int:
+    """限制单次写入大小，避免模型一次工具调用耗尽会话工作区。"""
+    content_bytes = len(content.encode("utf-8"))
+    if content_bytes > WRITE_MAX_BYTES:
+        raise AppError(ErrorCode.VALIDATION, "写入内容超过单次允许的 2MB 上限")
+    return content_bytes
+
+
+def write_file_safe(path: str, content: str, sandbox_dir: str) -> WriteResult:
+    """受控目录内原子新建文本文件（防目录穿越与覆盖竞争）。"""
     target = _resolve_safe_path(path, sandbox_dir)
-    if os.path.exists(target):
-        raise AppError(ErrorCode.VALIDATION, "文件已存在，请使用 edit")
+    bytes_written = _ensure_write_size(content)
     os.makedirs(os.path.dirname(target), exist_ok=True)
-    with open(target, "w", encoding="utf-8") as handle:
+    try:
+        descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError as exc:
+        raise AppError(ErrorCode.VALIDATION, "文件已存在，请使用 edit") from exc
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
         handle.write(content)
+        handle.flush()
+        os.fsync(handle.fileno())
+    return WriteResult(path=path, bytes_written=bytes_written)
 
 
-def edit_file_safe(path: str, old: str, new: str, sandbox_dir: str) -> None:
-    """受控目录内原子替换（防目录穿越；不匹配则拒绝）。"""
+def edit_file_safe(path: str, old: str, new: str, sandbox_dir: str) -> EditResult:
+    """受控目录内精确原子替换（防目录穿越；不匹配则拒绝）。"""
     target = _resolve_safe_path(path, sandbox_dir)
     if not os.path.isfile(target):
         raise AppError(ErrorCode.NOT_FOUND, "文件不存在")
@@ -302,41 +361,356 @@ def edit_file_safe(path: str, old: str, new: str, sandbox_dir: str) -> None:
         content = handle.read()
     if old not in content:
         raise AppError(ErrorCode.VALIDATION, "原文不匹配，编辑已拒绝")
-    with open(target, "w", encoding="utf-8") as handle:
-        handle.write(content.replace(old, new, 1))
-
-
-def web_search(query: str, *, timeout_s: float) -> str:
-    """内部检索适配器（平台自实现，不走外部 MCP 服务器）。
-
-    当前为占位实现：返回受限的检索说明；真实后端接入后替换内部端点。
-    """
-    if not query.strip():
-        raise AppError(ErrorCode.VALIDATION, "检索关键词不能为空")
-    logger.info("web_search query=%.64s timeout=%s", query, timeout_s)
-    # 占位：内部检索后端未接入时明确失败，禁止假成功（对齐 EX-5）
-    raise AppError(ErrorCode.VALIDATION, "内部检索后端未接入")
-
-
-def web_fetch(url: str, *, timeout_s: float) -> str:
-    """内部抓取适配器 + 脱敏 + SSRF 防护（不走外部 MCP 服务器）。"""
-    if not url.startswith(("http://", "https://")):
-        raise AppError(ErrorCode.VALIDATION, "仅支持 http/https 地址")
-    host = urlparse(url).hostname
-    if not host:
-        raise AppError(ErrorCode.VALIDATION, "URL 缺少主机名")
-    _reject_internal_target(host)
-    request = Request(url, headers={"User-Agent": "ai-eval-platform/1.0"})
+    replacement = content.replace(old, new, 1)
+    _ensure_write_size(replacement)
+    descriptor, temporary_path = tempfile.mkstemp(prefix=".agent-edit-", dir=os.path.dirname(target), text=True)
     try:
-        with urlopen(request, timeout=timeout_s) as response:  # noqa: S310
-            body = response.read(20000).decode("utf-8", errors="replace")
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(replacement)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, target)
+    except Exception:
+        try:
+            os.unlink(temporary_path)
+        except FileNotFoundError:
+            pass
+        raise
+    return EditResult(path=path, old_length=len(old), new_length=len(new))
+
+
+@dataclass(frozen=True, slots=True)
+class WebSearchResult:
+    """网页搜索结果：模型正文与 ToolCard 投影分离。"""
+
+    query: str
+    results: tuple[dict[str, str], ...]
+
+    def to_tool_data(self) -> dict[str, object]:
+        """返回受控搜索结果，完整描述仅保留给下一模型回合。"""
+        lines: list[str] = [f"搜索关键词：{self.query}"]
+        for index, result in enumerate(self.results, start=1):
+            lines.append(f"[{index}] {result['title']}\nURL: {result['url']}\n{result['description']}")
+        model_text = "\n\n".join(lines)[:WEB_MAX_CONTENT_CHARS]
+        summary = f"网络搜索完成，返回 {len(self.results)} 条结果"
+        return {
+            "summary": summary,
+            "model_text": model_text,
+            "truncated": len("\n\n".join(lines)) > len(model_text),
+            "source": "web:search",
+            "display": {
+                "summary": summary,
+                "search": {"query": self.query, "results": list(self.results)},
+            },
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class WebFetchResult:
+    """网页抓取结果：正文仅进入 Observation，浏览器只看元数据与短预览。"""
+
+    url: str
+    title: str
+    content: str
+    format: str
+    truncated: bool
+
+    def to_tool_data(self) -> dict[str, object]:
+        """返回模型正文和受控 ToolCard 投影。"""
+        title = self.title or urlparse(self.url).hostname or "网页"
+        summary = f"已抓取 {title}"
+        return {
+            "summary": summary,
+            "model_text": self.content,
+            "truncated": self.truncated,
+            "source": f"web:{urlparse(self.url).hostname or 'unknown'}",
+            "display": {
+                "summary": summary,
+                "web": {
+                    "url": self.url,
+                    "title": self.title,
+                    "format": self.format,
+                    "preview": self.content[:WEB_PREVIEW_CHARS],
+                    "preview_truncated": len(self.content) > WEB_PREVIEW_CHARS,
+                },
+            },
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class TaskPlanResult:
+    """会话内任务拆解结果，不对应数据库 Task 或 Worker 队列。"""
+
+    goal: str
+    steps: tuple[dict[str, str], ...]
+
+    def to_tool_data(self) -> dict[str, object]:
+        """返回模型可读清单和 ToolCard 摘要。"""
+        lines = [f"目标：{self.goal}"]
+        for index, step in enumerate(self.steps, start=1):
+            lines.append(f"{index}. [{step['status']}] {step['title']}")
+        model_text = "\n".join(lines)
+        summary = f"已拆解为 {len(self.steps)} 个步骤（仅当前会话，不创建评测任务）"
+        return {
+            "summary": summary,
+            "model_text": model_text,
+            "source": "session:task-plan",
+            "display": {"summary": summary, "task": {"goal": self.goal, "steps": list(self.steps)}},
+        }
+
+
+class _TextExtractor(HTMLParser):
+    """最小 HTML 正文提取器，供未配置抓取服务时的安全降级使用。"""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._title: list[str] = []
+        self._parts: list[str] = []
+        self._ignored_depth = 0
+        self._in_title = False
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        """忽略脚本/样式等非正文节点，并记录页面标题。"""
+        _ = attrs
+        lower = tag.lower()
+        if lower in {"script", "style", "noscript", "svg"}:
+            self._ignored_depth += 1
+        elif lower == "title":
+            self._in_title = True
+        elif lower in {"p", "div", "br", "li", "h1", "h2", "h3", "tr"}:
+            self._parts.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        """结束忽略节点或标题节点。"""
+        lower = tag.lower()
+        if lower in {"script", "style", "noscript", "svg"} and self._ignored_depth:
+            self._ignored_depth -= 1
+        elif lower == "title":
+            self._in_title = False
+
+    def handle_data(self, data: str) -> None:
+        """保留正文可见文本，丢弃脚本与样式文本。"""
+        if self._ignored_depth:
+            return
+        if self._in_title:
+            self._title.append(data)
+        self._parts.append(data)
+
+    def result(self) -> tuple[str, str]:
+        """输出去除空白后的标题和正文。"""
+        title = " ".join("".join(self._title).split())
+        body = "\n".join(line.strip() for line in "".join(self._parts).splitlines() if line.strip())
+        return title, body
+
+
+def _validate_public_url(url: str) -> str:
+    """校验 HTTP(S) URL、拒绝凭据和内网目标，供首次与重定向请求共用。"""
+    parsed = urlparse(url.strip())
+    if parsed.scheme not in {"http", "https"}:
+        raise AppError(ErrorCode.VALIDATION, "仅支持 http/https 地址")
+    if not parsed.hostname:
+        raise AppError(ErrorCode.VALIDATION, "URL 缺少主机名")
+    if parsed.username or parsed.password:
+        raise AppError(ErrorCode.VALIDATION, "URL 不允许包含访问凭据")
+    _reject_internal_target(parsed.hostname)
+    return parsed.geturl()
+
+
+class _SafeRedirectHandler(HTTPRedirectHandler):
+    """在每次 HTTP 重定向前重新执行 SSRF 校验，阻断 DNS/跳转绕过。"""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001,D102
+        _ = (fp, code, msg, headers)
+        _validate_public_url(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _read_limited_response(response) -> tuple[bytes, bool]:
+    """读取上游响应的受控字节窗口，并保留是否截断标识。"""
+    body = response.read(WEB_RESPONSE_MAX_BYTES + 1)
+    return body[:WEB_RESPONSE_MAX_BYTES], len(body) > WEB_RESPONSE_MAX_BYTES
+
+
+def _request_firecrawl(path: str, payload: dict[str, object], *, timeout_s: float) -> object:
+    """调用服务端配置的 Firecrawl REST，不向模型、日志或事件暴露密钥。"""
+    api_key = settings.firecrawl_api_key.strip()
+    if not api_key:
+        raise AppError(ErrorCode.VALIDATION, "网络搜索服务未配置")
+    request = Request(
+        f"{settings.firecrawl_api_url.rstrip('/')}/{path.lstrip('/')}",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "ai-eval-platform/1.0",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=timeout_s) as response:  # noqa: S310 - 固定服务端配置地址
+            raw, _ = _read_limited_response(response)
+    except HTTPError as exc:
+        if exc.code == 401:
+            raise AppError(ErrorCode.UPSTREAM, "网络搜索服务鉴权失败") from exc
+        if exc.code == 429:
+            raise AppError(ErrorCode.UPSTREAM, "网络搜索服务繁忙，请稍后重试") from exc
+        raise AppError(ErrorCode.UPSTREAM, "网络搜索服务请求失败") from exc
+    except URLError as exc:
+        raise AppError(ErrorCode.UPSTREAM, "网络搜索服务不可达") from exc
+    except TimeoutError as exc:
+        raise AppError(ErrorCode.TIMEOUT, "网络搜索服务超时") from exc
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise AppError(ErrorCode.UPSTREAM, "网络搜索服务返回无效数据") from exc
+
+
+def _coerce_limit(value: object | None) -> int:
+    """解析搜索结果数，避免布尔和异常类型穿透到上游请求。"""
+    if value is None:
+        return 5
+    if isinstance(value, bool):
+        raise AppError(ErrorCode.VALIDATION, "搜索结果数量必须为整数")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise AppError(ErrorCode.VALIDATION, "搜索结果数量必须为整数") from exc
+    if not 1 <= parsed <= WEB_MAX_SEARCH_RESULTS:
+        raise AppError(ErrorCode.VALIDATION, "搜索结果数量必须在 1 到 10 之间")
+    return parsed
+
+
+def web_search(query: str, *, limit: object | None = None, timeout_s: float) -> WebSearchResult:
+    """通过服务端 Firecrawl REST 执行真实网络搜索（非 MCP transport）。"""
+    normalized_query = query.strip()
+    if not normalized_query:
+        raise AppError(ErrorCode.VALIDATION, "检索关键词不能为空")
+    result_limit = _coerce_limit(limit)
+    response = _request_firecrawl(
+        "search",
+        {"query": normalized_query, "limit": result_limit},
+        timeout_s=timeout_s,
+    )
+    raw_items = response.get("data", []) if isinstance(response, dict) else response
+    if not isinstance(raw_items, list):
+        raise AppError(ErrorCode.UPSTREAM, "网络搜索服务返回格式无效")
+    results: list[dict[str, str]] = []
+    for item in raw_items[:result_limit]:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or item.get("link") or "").strip()
+        if not url:
+            continue
+        results.append(
+            {
+                "title": str(item.get("title") or item.get("name") or url)[:300],
+                "url": url[:2048],
+                "description": str(item.get("description") or item.get("snippet") or item.get("summary") or "")[:500],
+            }
+        )
+    logger.info("web_search completed query_length=%d result_count=%d", len(normalized_query), len(results))
+    return WebSearchResult(query=normalized_query, results=tuple(results))
+
+
+def _fetch_via_firecrawl(url: str, format: str, *, timeout_s: float) -> WebFetchResult:
+    """使用已配置的 Firecrawl 提取网页 Markdown，复用真实搜索服务配额。"""
+    response = _request_firecrawl(
+        "scrape",
+        {"url": url, "formats": ["markdown" if format == "markdown" else "html"]},
+        timeout_s=timeout_s,
+    )
+    data = response.get("data", response) if isinstance(response, dict) else {}
+    if not isinstance(data, dict):
+        raise AppError(ErrorCode.UPSTREAM, "网页抓取服务返回格式无效")
+    metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+    raw_content = data.get("markdown" if format == "markdown" else "html")
+    if not isinstance(raw_content, str) or not raw_content.strip():
+        raise AppError(ErrorCode.UPSTREAM, "网页抓取服务未返回正文")
+    content = raw_content[:WEB_MAX_CONTENT_CHARS]
+    return WebFetchResult(
+        url=url,
+        title=str(metadata.get("title") or "")[:300],
+        content=content,
+        format=format,
+        truncated=len(raw_content) > len(content),
+    )
+
+
+def _fetch_direct(url: str, format: str, *, timeout_s: float) -> WebFetchResult:
+    """未配置 Firecrawl 时，以受控 HTTP 文本抓取提供最小可用降级。"""
+    opener = build_opener(_SafeRedirectHandler(), ProxyHandler({}))
+    request = Request(
+        url,
+        headers={
+            "Accept": "text/html, text/plain, application/json;q=0.9, */*;q=0.1",
+            "User-Agent": "ai-eval-platform/1.0",
+        },
+    )
+    try:
+        with opener.open(request, timeout=timeout_s) as response:  # noqa: S310 - 已在入口/重定向校验
+            raw, truncated_by_bytes = _read_limited_response(response)
+            content_type = response.headers.get_content_type()
+            charset = response.headers.get_content_charset() or "utf-8"
+            final_url = _validate_public_url(response.geturl())
     except HTTPError as exc:
         raise AppError(ErrorCode.UPSTREAM, f"抓取失败（HTTP {exc.code}）") from exc
     except URLError as exc:
         raise AppError(ErrorCode.UPSTREAM, "抓取失败（网络错误）") from exc
     except TimeoutError as exc:
         raise AppError(ErrorCode.TIMEOUT, "抓取超时") from exc
-    return body[:20000]
+    if not (content_type.startswith("text/") or content_type in {"application/json", "application/xml"}):
+        raise AppError(ErrorCode.VALIDATION, "仅支持抓取文本或 HTML 页面")
+    decoded = raw.decode(charset, errors="replace")
+    title = ""
+    content = decoded
+    if content_type == "text/html":
+        extractor = _TextExtractor()
+        extractor.feed(decoded)
+        title, content = extractor.result()
+    if not content.strip():
+        raise AppError(ErrorCode.UPSTREAM, "页面未返回可读取正文")
+    content = content[:WEB_MAX_CONTENT_CHARS]
+    return WebFetchResult(
+        url=final_url,
+        title=title,
+        content=content,
+        # 没有 Firecrawl 时只提取受控文本；不能把文本降级伪称 Markdown。
+        format="text",
+        truncated=truncated_by_bytes or len(decoded) > len(content),
+    )
+
+
+def web_fetch(url: str, *, format: str = "markdown", timeout_s: float) -> WebFetchResult:
+    """抓取单页正文：优先 Firecrawl，未配置时走受控直接抓取，不走 MCP。"""
+    if format not in {"markdown", "text"}:
+        raise AppError(ErrorCode.VALIDATION, "抓取格式仅支持 markdown 或 text")
+    normalized_url = _validate_public_url(url)
+    if settings.firecrawl_api_key.strip():
+        return _fetch_via_firecrawl(normalized_url, format, timeout_s=timeout_s)
+    return _fetch_direct(normalized_url, format, timeout_s=timeout_s)
+
+
+def build_task_plan(arguments: Mapping[str, object]) -> TaskPlanResult:
+    """构造会话内任务清单；它不是 ``Task`` ORM 行，也不会触发 Worker。"""
+    goal = str(arguments.get("goal") or "").strip()
+    raw_steps = arguments.get("steps")
+    if not goal:
+        raise AppError(ErrorCode.VALIDATION, "任务目标不能为空")
+    if not isinstance(raw_steps, list) or not 1 <= len(raw_steps) <= 12:
+        raise AppError(ErrorCode.VALIDATION, "任务步骤数量必须在 1 到 12 之间")
+    steps: list[dict[str, str]] = []
+    for index, raw_step in enumerate(raw_steps, start=1):
+        if not isinstance(raw_step, Mapping):
+            raise AppError(ErrorCode.VALIDATION, f"第 {index} 个任务步骤格式无效")
+        title = str(raw_step.get("title") or "").strip()
+        status = str(raw_step.get("status") or "pending")
+        if not title or len(title) > 300:
+            raise AppError(ErrorCode.VALIDATION, f"第 {index} 个任务步骤标题无效")
+        if status not in {"pending", "in_progress", "completed"}:
+            raise AppError(ErrorCode.VALIDATION, f"第 {index} 个任务步骤状态无效")
+        steps.append({"title": title, "status": status})
+    return TaskPlanResult(goal=goal, steps=tuple(steps))
 
 
 def execute_raw(
@@ -368,8 +742,9 @@ def execute_raw(
         else:
             result = handler(call.arguments, sandbox_dir, context)  # type: ignore[call-arg]
         latency_ms = round((time.perf_counter() - started) * 1000)
-        if isinstance(result, ReadResult):
-            data = result.to_tool_data()
+        to_tool_data = getattr(result, "to_tool_data", None)
+        if callable(to_tool_data):
+            data = to_tool_data()
         elif isinstance(result, Mapping):
             # 结构化结果（如 platform.tasks 三工具返回 dict）序列化为 JSON 文本，
             # 模型可直接解析；不暴露 Python repr。

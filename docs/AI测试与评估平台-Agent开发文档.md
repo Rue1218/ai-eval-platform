@@ -1,10 +1,10 @@
 # AI 测试与评估平台 Agent 开发文档
 
-> 版本：V1.0.0
-> 状态：LangGraph Harness 已启用 ReAct P0/P1、加固后的 P2-A 与 P2-B（流式参数累计、完整 ToolCall 投影、native 两回合收敛）；内部 MCP Host 仍未实施
+> 版本：V1.2.0
+> 状态：LangGraph Harness 已启用 ReAct P0/P1、P2-A/P2-B（流式参数累计、完整 ToolCall 投影、native 两回合收敛）、P3 MCP 扩展 Host、P3.1 原生基础工具直连与 P4 platform.tasks/熔断/独立沙箱 Runner
 > 审查日期：2026-08-25
 > 对应需求：`AI测试与评估平台-PRD.md` V1.12
-> 对应接口：`AI测试与评估平台-API.md` V1.28
+> 对应接口：`AI测试与评估平台-API.md` V1.32
 
 ## 1. 当前唯一运行链路
 
@@ -13,7 +13,7 @@
   -> WebSocket /ws/agent（五分钟单次短票）
   -> app/routers/ws.py
   -> app/agent/graph.py（LangGraph 路由 + ReAct 图）
-  -> react.py（原生 ToolCall，严格 JSON 兼容回退）→ toolnode.py（短工具）→ react.py（模型收敛）
+  -> react.py（原生 ToolCall，严格 JSON 兼容回退）→ toolnode.py（原生基础工具 / MCP 扩展）→ react.py（模型收敛）
   -> app/llm/gateway.py（LangGraph 模型调用图）
   -> app/adapters.py（三协议 HTTP 适配）
   -> 上游模型
@@ -45,7 +45,7 @@ react_agent -> (tools | END)
 tools -> (tools | react_agent)
 ```
 
-图节点不持有数据库 Session、WebSocket 或任务队列。ToolNode 只消费可序列化 `pending_tool` / `pending_tools`、执行既有门禁与沙箱工具，并返回 Observation；同一模型响应的多个 ToolCall 在节点内串行消费，不绕过任一调用的门禁。路由层仍负责事件持久化与投影。
+图节点不持有数据库 Session、WebSocket 或任务队列。ToolNode 只消费可序列化 `pending_tool` / `pending_tools`、执行既有门禁与沙箱工具，并返回 Observation；同一模型响应的多个 ToolCall 在节点内串行消费，不绕过任一调用的门禁。`transport=native` 的 read/write/edit/bash/web_search/web_fetch/task 经 NativeToolExecutor 直连受控 handler；`transport=mcp` 的 `platform.tasks.task.create/status/cancel` 和后续评测/RAG 扩展经 MCPClientManager。路由层仍负责事件持久化与投影。
 
 ### 2.3 ModelGateway
 
@@ -91,8 +91,7 @@ Agent 思考配置从 `Setting(key="agent_reasoning")` 读取，结构为
 
 以下内容仍不属于当前已实施范围，不得绕过契约提前加入：
 
-- 外部 MCP、浏览器直连 MCP 和真正并行执行；
-- 内部 MCP Server/Transport、外部 MCP、浏览器直连 MCP；
+- 外部 MCP、浏览器直连 MCP、动态加载未知 MCP Server 与真正并行执行；
 - 人工确认卡、权限策略、consent、安全门禁；
 - Redis/pgvector 记忆、检查点和复杂上下文压缩；
 - PostgreSQL 长任务入队、Worker 执行和 stress 派生；
@@ -200,3 +199,19 @@ Agent 思考配置从 `Setting(key="agent_reasoning")` 读取，结构为
 - `backend/api/app/llm/gateway.py`：将适配器完整 ToolCall 投影为 `ModelStreamEvent(tool_call)`，并保留到流式收尾的 `ModelResponse.tool_calls`。
 - `backend/api/app/agent/react.py`：native 模式在 ToolResult 后直接使用第二个流式模型回合收敛正文或继续工具调用，消除简单路径的第三次无工具调用；不改变 WebSocket 事件契约。
 - `backend/api/tests/test_adapters.py` / `test_llm_graph.py` / `test_agent_react.py`：覆盖三协议参数累计、网关工具事件、`call_id` 保留及 native 两回合流式收敛。
+
+### V1.1.0（2026-08-25）修改代码文件与作用清单
+
+- `backend/api/app/harness/execution/context.py` / `native.py`：把工具运行时上下文从 MCP manager 中抽离，并新增原生基础工具直连执行器；同步 handler 进入线程池，超时/取消与 MCP 保持同一 ToolResult 契约。
+- `backend/api/app/harness/execution/registry.py` / `toolnode.py` / `agent/graph.py`：新增 `transport=native|mcp`。默认 read/write/edit/bash/web_search/web_fetch/task 走 native；只有评测/RAG 等未来扩展有 `transport=mcp` 时才构建 MCP manager。
+- `backend/api/app/harness/execution/dispatch.py`：read 改为不保留整文件副本的单次扫描；write/edit 使用排他/原子写；web_search 使用 API 容器 Firecrawl Key，web_fetch 每跳重检 SSRF；task 仅产出会话内计划。
+- `backend/api/app/routers/mcp.py` / `frontend/src/views/AdminProfiles.vue`：MCP 清单只展示扩展；基础工具不在目录中。
+- `frontend/src/components/agent/ToolCard.vue`：补基础工具中文名称和 task/web 的受控卡片展示。
+- `backend/api/tests/test_harness_execution.py` / `test_harness_mcp.py`：覆盖原生直连与 MCP 目录隔离、Firecrawl、安全抓取、原子写入和任务拆解。
+
+### V1.2.0（2026-08-25）修改代码文件与作用清单
+
+- `backend/api/app/harness/execution/registry.py`：在七项原生基础工具外保留 `transport=mcp` 的 `platform.tasks.task.create/status/cancel`，避免将对话拆解和评测任务队列混为同一能力。
+- `backend/api/app/harness/execution/task_tools.py` / `mcp/metrics.py`：评测任务 MCP 的会话归属、队列门禁、配额、审计、熔断和度量继续生效。
+- `backend/api/app/harness/execution/sandbox.py` / `backend/runner/`：bash 仍由独立 Runner 调用 bwrap，API 不降级为裸 subprocess。
+- `backend/api/app/routers/mcp.py` / `frontend/src/views/AdminProfiles.vue`：目录仅展示当前 `platform.tasks` 与未来扩展，基础工具仍走原生调用。

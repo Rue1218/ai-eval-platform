@@ -1,15 +1,15 @@
 """Harness 执行层：ToolNode 包装（M5 阶段 3，EX-1）。
 
 ``build_tool_node`` 返回 LangGraph 异步节点函数：消费 ``GraphState.pending_tool``
-（ToolCall 投影），经门禁 → 绑定 → **内部 MCP Host** → 归一为 ``Observation``，
+（ToolCall 投影），经门禁 → 绑定 → **原生执行器或内部 MCP Host** → 归一为 ``Observation``，
 写回 ``observations`` + ``tool_call/tool_result`` 事件意图；不直接 emit（事件
 桥接契约）。``pending_tool`` 图外不持久化，回合结束随工作记忆清除（MEM-1）。
 
 会话上下文（session_id/user_id/附件归属/沙箱目录）经
 ``RunnableConfig.configurable`` 注入（M4-Q2 命名空间约定），不入 GraphState。
-执行统一经 ``MCPClientManager``（阶段 D：内部 MCP Host），节点不再直接持有
-handler；同步工具经 ``asyncio.to_thread`` 线程池执行，避免 15s bash 沙箱调用
-阻塞 api 事件循环（影响其他 WS 连接心跳）。
+基础工具经 ``NativeToolExecutor`` 直连受控 handler；只有评测/RAG 等显式 MCP
+扩展才经 ``MCPClientManager``。两条路径均经线程池执行同步工具，避免 15s bash
+沙箱调用阻塞 api 事件循环（影响其他 WS 连接心跳）。
 """
 
 from __future__ import annotations
@@ -32,7 +32,9 @@ from app.harness.memory import GraphState
 from app.harness.orchestration.gates import check_session_active_task
 
 from .binding import bind_attachments
-from .mcp import MCPClientManager, ToolExecutionContext
+from .context import ToolExecutionContext
+from .mcp import MCPClientManager
+from .native import NativeToolExecutor
 from .native_results import NativeToolResultStore, runtime_thread_id
 from .registry import ToolRegistry, required_parameter_names, validate_tool_arguments
 
@@ -44,6 +46,7 @@ def build_tool_node(
     sandbox_dir: str | None = None,
     user_id: str = "",
     native_tool_results: NativeToolResultStore | None = None,
+    native_executor: NativeToolExecutor | None = None,
     manager: MCPClientManager | None = None,
 ) -> Callable[[GraphState], Awaitable[dict]]:
     """构造 ToolNode 异步节点函数（EX-1）。
@@ -51,12 +54,12 @@ def build_tool_node(
     ``db_factory`` 延迟提供 DB Session（节点内按需获取，避免跨 Session 传
     ORM 对象）；``sandbox_dir``/``user_id`` 为平台注入的默认值（模型不可传），
     优先读 ``RunnableConfig.configurable``（session/credentials/sandbox 命名空间）。
-    ``native_tool_results`` 是不参与序列化的单回合原文存储。``manager`` 为
-    内部 MCP Host；缺省时按注册表自建（既有调用方兼容）。
+    ``native_tool_results`` 是不参与序列化的单回合原文存储；``native_executor``
+    负责默认基础工具直连；``manager`` 只负责显式 MCP 扩展。缺少 MCP manager
+    时基础工具不受影响，且不会隐式构建空 MCP Host。
     """
 
-    if manager is None:
-        manager = MCPClientManager.build_from_registry(registry)
+    executor = native_executor or NativeToolExecutor()
 
     async def tool_node(state: GraphState) -> dict:
         pending = state.get("pending_tool")
@@ -172,9 +175,8 @@ def build_tool_node(
         finally:
             if db is not None:
                 db.close()
-        # 3. 执行（EX-3/阶段 D）：经内部 MCP Host 调用，超时/错误由 Host 归一
-        # MCPClientManager 内部经 to_thread 线程池执行，避免 bash 等同步工具
-        # 阻塞事件循环；结果（ToolResult）在此归一为 Observation。
+        # 3. 执行（EX-3）：基础工具直连原生执行器；未来 MCP 扩展才经 Host。
+        # 两条路径均在工作线程执行同步 handler，不阻塞 API 事件循环。
         started = time.perf_counter()
         context = ToolExecutionContext(
             session_id=session_id,
@@ -185,7 +187,13 @@ def build_tool_node(
             call_id=call.call_id,
         )
         try:
-            raw = await manager.call_tool(definition.tool_id, safe_args, context)
+            if definition.transport == "native":
+                raw = await executor.call(definition, safe_args, context)
+            elif manager is None:
+                raw = None
+                raise AppError(ErrorCode.INTERNAL, "MCP 工具执行器不可用")
+            else:
+                raw = await manager.call_tool(definition.tool_id, safe_args, context)
         except asyncio.CancelledError:
             # /stop 等上游取消：穿透给图运行，不吞掉取消。
             raise

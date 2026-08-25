@@ -1331,7 +1331,7 @@ function switchTab(key: TabKey) {
 // ═══════════════════════════════════════════════════════════════
 // MCP 工具中心状态与交互管理
 // ═══════════════════════════════════════════════════════════════
-// MCP 内置短工具清单（只读，来自 /api/mcp/tools）
+// MCP 扩展工具清单（只读，来自 /api/mcp/tools；基础工具不在此目录）
 const mcpTools = ref<McpTool[]>([])
 const mcpViewMode = ref<'cards' | 'table'>('cards')
 const mcpPermFilter = ref<'all' | 'read' | 'write'>('all')
@@ -1408,7 +1408,7 @@ const mcpEmptyTitle = computed(() => {
   if (mcpRequestState.value === 'loading') return '正在读取工具清单'
   if (mcpRequestState.value === 'error') return '工具清单接口调用失败'
   if (mcpRequestState.value === 'success' && mcpTools.value.length === 0) {
-    return '接口已连通，但服务端未返回工具清单'
+    return '接口已连通，暂未挂载 MCP 扩展工具'
   }
   return '未找到匹配的 MCP 工具'
 })
@@ -1417,7 +1417,7 @@ const mcpEmptyDescription = computed(() => {
   if (mcpRequestState.value === 'loading') return '正在调用 GET /api/mcp/tools，请稍候…'
   if (mcpRequestState.value === 'error') return mcpRequestError.value || '请确认登录状态与 API 服务是否正常。'
   if (mcpRequestState.value === 'success' && mcpTools.value.length === 0) {
-    return '当前接口返回 0 项；这不等于工具已就绪。内部 Harness 工具不通过浏览器直接执行。'
+    return '当前无 MCP 扩展属正常状态：read/write/bash/web 与对话拆解 task 使用原生 ToolCall 直连；任务队列或后续 RAG 扩展会在此展示。'
   }
   return '请尝试清空搜索条件或重置筛选器'
 })

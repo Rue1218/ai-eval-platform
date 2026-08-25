@@ -73,6 +73,7 @@ def test_sandbox_injected_via_configurable(tmp_root) -> None:
             permission="sandbox.read",
             timeout_s=10.0,
             handler=_read_handler,
+            transport="native",
         )
     )
     registry.register(
@@ -91,6 +92,7 @@ def test_sandbox_injected_via_configurable(tmp_root) -> None:
             permission="sandbox.write",
             timeout_s=10.0,
             handler=_write_handler,
+            transport="native",
         )
     )
     node = build_tool_node(registry)

@@ -18,6 +18,7 @@ from langgraph.graph import END, START, StateGraph
 from ..errors import AppError, ErrorCode
 from ..harness.execution import (
     MCPClientManager,
+    NativeToolExecutor,
     NativeToolResultStore,
     ToolRegistry,
     build_default_registry,
@@ -66,11 +67,17 @@ class LangGraphAgent:
 
     def _build_graph(self):
         """构建完整 Harness 图：路由 → Direct/Chat/ReAct/Plan-Solve。"""
-        # 阶段 D（P3）：Agent 图只依赖内部 MCP Host，不再直接持有 handler。
-        manager = MCPClientManager.build_from_registry(self._registry)
+        # 基础工具为原生 ToolCall 直连；只有显式 MCP 扩展才创建 Host，避免每个
+        # Agent 图为 read/write/bash/web/task 额外构建 catalog/provider 路径。
+        manager = (
+            MCPClientManager.build_from_registry(self._registry)
+            if self._registry.has_transport("mcp")
+            else None
+        )
         tool_node = build_tool_node(
             self._registry,
             manager=manager,
+            native_executor=NativeToolExecutor(),
             db_factory=self._db_factory,
             sandbox_dir=self._sandbox_dir,
             user_id=self._user_id,
