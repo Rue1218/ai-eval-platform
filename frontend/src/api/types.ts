@@ -63,6 +63,7 @@ export interface AgentReasoningSettings {
 // 协议档用途
 // benchmark 为 legacy usage 值（种子协议档使用），后端仍接受
 export type ProfileUsage = 'target' | 'agent' | 'judge' | 'benchmark'
+export type ToolCallMode = 'native' | 'legacy'
 
 export interface Profile {
   id: string
@@ -81,6 +82,7 @@ export interface Profile {
   anthropic_version?: string
   usages?: ProfileUsage[]
   context_window?: number // 上下文窗口容量 (Tokens)
+  tool_call_mode?: ToolCallMode
   created_at: string
   updated_at?: string
 }
@@ -100,6 +102,7 @@ export interface ProfileCreateIn {
   anthropic_version?: string
   usages?: ProfileUsage[]
   context_window?: number
+  tool_call_mode?: ToolCallMode
 }
 
 export interface ProfileUpdateIn {
@@ -117,6 +120,7 @@ export interface ProfileUpdateIn {
   anthropic_version?: string
   usages?: ProfileUsage[]
   context_window?: number
+  tool_call_mode?: ToolCallMode
 }
 
 export interface ProfileCheckOut {

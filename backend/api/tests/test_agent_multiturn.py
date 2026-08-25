@@ -60,7 +60,13 @@ class _ScriptGateway:
 
     def invoke(self, request: object, config: dict | None = None):
         self.calls.append(request)
-        text = self.script.pop(0) if self.script else _REACT_DONE
+        if self.script:
+            text = self.script.pop(0)
+        elif getattr(request, "tools", ()) == ():
+            # 工具链收敛后的无工具请求应返回自然语言，而非复用 ReAct 控制 JSON。
+            text = "工具结果已整理。"
+        else:
+            text = _REACT_DONE
         return _model_response(text)
 
 
@@ -116,7 +122,8 @@ def test_single_tool_then_clean_done_no_stale_loop() -> None:
     assert kinds.count("error") == 0
     assert kinds.count("tool_call") == 1
     assert kinds[-2:] == ["assistant_message", "response.completed"]
-    assert len(gateway.calls) == 2
+    assert len(gateway.calls) == 3
+    assert gateway.calls[-1].tools == ()
 
 
 def test_consecutive_different_bash_calls_allowed() -> None:

@@ -35,6 +35,7 @@ _CONFIG_KEYS: tuple[str, ...] = (
     "timeout_s",
     "reasoning_enabled",
     "reasoning_effort",
+    "tool_call_mode",
 )
 
 
@@ -79,6 +80,14 @@ def _append_observations(left: list[object] | None, right: list[object] | None) 
     return list(left or []) + list(right or [])
 
 
+def _append_native_messages(
+    left: list[Mapping[str, object]] | None,
+    right: list[Mapping[str, object]] | None,
+) -> list[Mapping[str, object]]:
+    """LangGraph reducer：追加原生 ToolCall 往返消息，保持调用与结果顺序。"""
+    return list(left or []) + list(right or [])
+
+
 class GraphState(TypedDict, total=False):
     """LangGraph 图状态容器；全部字段 JSON 可序列化，主体归本层。
 
@@ -92,6 +101,8 @@ class GraphState(TypedDict, total=False):
     plan: object | None  # 阶段 4：PlanArtifact（M7 晚波）投影
     observations: Annotated[list[object], _append_observations]  # 阶段 2：Observation（M7 早波），append 累积
     pending_tool: Mapping[str, object] | None  # 阶段 2：ToolCall 投影（react 条件边分流）
+    pending_tools: list[Mapping[str, object]]  # 原生 ToolCall 同轮队列；ToolNode 逐项执行，避免丢弃并发调用
+    native_messages: Annotated[list[Mapping[str, object]], _append_native_messages]  # 原生 assistant/tool 往返消息
     stop_flag: bool  # 节点写，条件边读（阶段 2）
     repeat_retry: bool  # 阶段 2：OR-4 首次重复纠正后置位，react 条件边回环重试
     parse_retries: int  # 阶段 2：ReAct 协议解析失败纠正重试计数（有界，防死循环）
@@ -127,4 +138,5 @@ def rebuild_model_config(
         timeout_s=float(config.get("timeout_s", 60.0)),
         reasoning_enabled=bool(config.get("reasoning_enabled", True)),
         reasoning_effort=config.get("reasoning_effort", "medium"),  # type: ignore[arg-type]
+        tool_call_mode=config.get("tool_call_mode", "legacy"),  # type: ignore[arg-type]
     )

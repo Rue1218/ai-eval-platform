@@ -12,6 +12,7 @@ from typing import Literal
 
 ProtocolName = Literal["openai_chat", "openai_responses", "anthropic_messages"]
 ReasoningEffort = Literal["low", "medium", "high", "xhigh", "max"]
+ToolCallMode = Literal["native", "legacy"]
 # 流式取消回调；仅经 RunnableConfig.configurable 注入（O-12 迁移），不入任何 State
 StreamAbort = Callable[[], bool]
 
@@ -35,9 +36,25 @@ class ModelConfig:
     # 是否请求并向上层投影模型返回的思考摘要；不等同于暴露隐藏思维链。
     reasoning_enabled: bool = True
     reasoning_effort: ReasoningEffort = "medium"
+    # 兼容优先：只有经人工验证的协议档才发送上游 tools；其余走 react.v1 JSON。
+    tool_call_mode: ToolCallMode = "legacy"
 
 
 Message = Mapping[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class NativeToolCall:
+    """模型协议原生函数调用的统一投影。
+
+    ``call_id`` 由上游返回；兼容端点省略时由适配器生成平台唯一值。该标识
+    必须原样贯穿 ToolNode、``tool_call``/``tool_result`` 事件和下一轮
+    ``tool`` 消息，禁止再用工具名猜测配对关系。
+    """
+
+    call_id: str
+    name: str
+    arguments: Mapping[str, object]
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,9 +98,10 @@ class ModelResponse:
     usage: Mapping[str, int] = field(default_factory=dict)
     raw: Mapping[str, object] = field(default_factory=dict, repr=False)
     latency_ms: int = 0
+    tool_calls: tuple[NativeToolCall, ...] = field(default_factory=tuple)
 
 
-StreamEventKind = Literal["content", "reasoning", "completed"]
+StreamEventKind = Literal["content", "reasoning", "tool_call", "completed"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,3 +111,4 @@ class ModelStreamEvent:
     kind: StreamEventKind
     text: str = ""
     response: ModelResponse | None = field(default=None, repr=False)
+    tool_call: NativeToolCall | None = field(default=None, repr=False)

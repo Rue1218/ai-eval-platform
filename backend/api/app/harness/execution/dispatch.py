@@ -17,6 +17,7 @@ import logging
 import os
 import socket
 import time
+from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -29,9 +30,13 @@ from app.harness.security.secrets import redact_for_log
 
 logger = logging.getLogger("ai-eval.harness.dispatch")
 
-# read 单次默认返回字符上限：弱模型分段读取（传 offset）不可靠，中小附件一次
-# 返回即可作答；超大文件仍走 offset 分段并由 OR-4 read 重复上限兜底。
-READ_DEFAULT_LIMIT = 24_000
+# read 的行级窗口与内容硬上限。模型不能通过 arguments 扩大字符预算，避免大文件
+# 直接填满模型上下文或 WebSocket 持久化事件。
+READ_DEFAULT_LIMIT = 2_000
+READ_MAX_LIMIT = 2_000
+READ_MAX_CHARS = 120_000
+READ_MAX_BYTES = 10 * 1024 * 1024
+READ_PREVIEW_CHARS = 500
 
 # bash 命令黑名单（纵深防御；bwrap 沙箱之外的第二道防线，禁止命令开头命中）
 BASH_BLOCKLIST: frozenset[str] = frozenset(
@@ -142,36 +147,138 @@ def _resolve_safe_path(path: str, root: str) -> str:
     return target
 
 
+@dataclass(frozen=True, slots=True)
+class ReadResult:
+    """read 的行级结构化结果：正文与浏览器展示投影严格分离。"""
+
+    path: str
+    total_lines: int
+    total_chars: int
+    start_line: int
+    end_line: int
+    lines_read: int
+    is_complete: bool
+    next_offset: int | None
+    content: str
+    content_truncated: bool
+    source: str
+
+    def to_tool_data(self) -> dict[str, object]:
+        """生成 API.md V1.25 允许写入 ToolCard 的受控数据。"""
+        preview = self.content[:READ_PREVIEW_CHARS]
+        preview_truncated = len(self.content) > len(preview)
+        status = "已读完" if self.is_complete else "未读完"
+        summary = (
+            f"已读取 {self.path} 第 {self.start_line + 1}–{self.end_line} 行"
+            f"（共 {self.total_lines} 行，{status}）"
+        )
+        return {
+            "summary": summary,
+            # 只在 normalize() 内部取用，ToolNode 绝不能投影此字段到 ws_events。
+            "model_text": self.content,
+            "truncated": not self.is_complete,
+            "source": self.source,
+            "display": {
+                "summary": summary,
+                "read": {
+                    "path": self.path,
+                    "total_lines": self.total_lines,
+                    "total_chars": self.total_chars,
+                    "start_line": self.start_line,
+                    "end_line": self.end_line,
+                    "lines_read": self.lines_read,
+                    "is_complete": self.is_complete,
+                    "next_offset": self.next_offset,
+                    "content_truncated": self.content_truncated,
+                    "preview": preview,
+                    "preview_truncated": preview_truncated,
+                },
+            },
+        }
+
+
+def _read_non_negative_int(value: object | None, *, name: str, default: int) -> int:
+    """解析 read 分页参数；布尔、负数和非整数一律受控拒绝。"""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        raise AppError(ErrorCode.VALIDATION, f"{name} 必须为非负整数")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise AppError(ErrorCode.VALIDATION, f"{name} 必须为非负整数") from exc
+    if parsed < 0:
+        raise AppError(ErrorCode.VALIDATION, f"{name} 必须为非负整数")
+    return parsed
+
+
 def read_file_safe(
     path: str,
     sandbox_dir: str,
     *,
     offset: object | None = None,
     limit: object | None = None,
-) -> str:
-    """受控目录内读取文本文件（防目录穿越）。
+) -> ReadResult:
+    """受控目录内按行读取文本文件（防目录穿越与半行截断）。
 
-    ``offset``（起始字符偏移）与 ``limit``（最多返回字符数，默认 24000）支持
-    长文件分段读取；非法负值被钳制，不抛错。**文件未读完时在末尾追加截断
-    标记并提示下一起始偏移**，避免模型误以为已读完全文。
-    默认上限取 24000：弱模型分段读取（传 offset）不可靠，中小附件一次返回
-    即可作答；超大文件仍走 offset 分段并由 OR-4 read 重复上限兜底。
+    ``offset`` 与 ``limit`` 统一为 0-based 行号/行数。单次最多 2,000 行、
+    120,000 字符；达到字符预算时仅在完整行边界停止，返回准确的
+    ``next_offset``。完整正文只留在 ``ReadResult.content``，调用方必须投影为
+    Observation，不能直接写进 WebSocket 事件。
     """
     target = _resolve_safe_path(path, sandbox_dir)
     if not os.path.isfile(target):
         raise AppError(ErrorCode.NOT_FOUND, "文件不存在")
-    start = max(0, int(offset or 0))
-    size = max(1, int(limit or READ_DEFAULT_LIMIT))
+    if os.path.getsize(target) > READ_MAX_BYTES:
+        raise AppError(ErrorCode.VALIDATION, "文件超过 read 单次允许的 10MB 上限")
+    start = _read_non_negative_int(offset, name="offset", default=0)
+    requested_limit = _read_non_negative_int(limit, name="limit", default=READ_DEFAULT_LIMIT)
+    if requested_limit == 0:
+        raise AppError(ErrorCode.VALIDATION, "limit 必须大于 0")
+    size = min(requested_limit, READ_MAX_LIMIT)
     with open(target, encoding="utf-8", errors="replace") as handle:
-        content = handle.read()
-    chunk = content[start : start + size]
-    if start + size < len(content):
-        # 标记语义：明确"可直接作答"，避免弱模型为了"读完"反复重试同一调用
-        chunk += (
-            f"\n…[内容较长，以上为前 {start + len(chunk)} 字符；"
-            f"可直接基于以上内容回答，如需完整内容可传 offset={start + len(chunk)} 继续读取]"
+        lines = handle.readlines()
+    total_lines = len(lines)
+    total_chars = sum(len(line) for line in lines)
+    if start >= total_lines:
+        return ReadResult(
+            path=path,
+            total_lines=total_lines,
+            total_chars=total_chars,
+            start_line=start,
+            end_line=start,
+            lines_read=0,
+            is_complete=True,
+            next_offset=None,
+            content="",
+            content_truncated=False,
+            source=f"workspace:{path}",
         )
-    return chunk
+
+    selected: list[str] = []
+    chars_used = 0
+    for line in lines[start : start + size]:
+        if chars_used + len(line) > READ_MAX_CHARS:
+            if not selected:
+                raise AppError(ErrorCode.VALIDATION, "单行内容超过 read 的 120000 字符上限")
+            break
+        selected.append(line)
+        chars_used += len(line)
+    end_line = start + len(selected)
+    is_complete = end_line >= total_lines
+    return ReadResult(
+        path=path,
+        total_lines=total_lines,
+        total_chars=total_chars,
+        start_line=start,
+        end_line=end_line,
+        lines_read=len(selected),
+        is_complete=is_complete,
+        next_offset=None if is_complete else end_line,
+        content="".join(selected),
+        content_truncated=False,
+        source=f"workspace:{path}",
+    )
 
 
 def write_file_safe(path: str, content: str, sandbox_dir: str) -> None:
@@ -249,10 +356,15 @@ def execute(
             raise AppError(ErrorCode.VALIDATION, f"工具未注册：{call.name}")
         result = handler(call.arguments, sandbox_dir)  # type: ignore[call-arg]
         latency_ms = round((time.perf_counter() - started) * 1000)
+        data = result.to_tool_data() if isinstance(result, ReadResult) else {
+            "summary": str(result),
+            "display": {"summary": str(result)},
+        }
+        data["latency_ms"] = latency_ms
         raw = ToolResult(
             name=call.name,
             ok=True,
-            data={"summary": str(result), "latency_ms": latency_ms},
+            data=data,
         )
         return normalize(raw, None, tool=call.name, arguments=dict(call.arguments or {}))
     except AppError as exc:

@@ -1,10 +1,10 @@
 # AI 测试与评估平台 Agent 开发文档
 
-> 版本：V0.5.2
-> 状态：首期 LangGraph 单轮 Agent、WebSocket 流式事件与多协议思考摘要已拆分
-> 审查日期：2026-08-24
+> 版本：V0.9.0
+> 状态：LangGraph Harness 已启用 ReAct P0/P1 与加固后的 P2-A（兼容模式默认、原生 `call_id` 拒绝闭环、注册期 Schema 门禁、单回合原文隔离、同轮串行队列）；内部 MCP Host 与原生 ToolCall 参数增量流仍未实施
+> 审查日期：2026-08-25
 > 对应需求：`AI测试与评估平台-PRD.md` V1.12
-> 对应接口：`AI测试与评估平台-API.md` V1.24
+> 对应接口：`AI测试与评估平台-API.md` V1.28
 
 ## 1. 当前唯一运行链路
 
@@ -12,13 +12,14 @@
 浏览器
   -> WebSocket /ws/agent（五分钟单次短票）
   -> app/routers/ws.py
-  -> app/agent/graph.py（LangGraph 单轮 Agent）
+  -> app/agent/graph.py（LangGraph 路由 + ReAct 图）
+  -> react.py（原生 ToolCall，严格 JSON 兼容回退）→ toolnode.py（短工具）→ react.py（模型收敛）
   -> app/llm/gateway.py（LangGraph 模型调用图）
   -> app/adapters.py（三协议 HTTP 适配）
   -> 上游模型
 ```
 
-本链路只有一个 Agent 入口和一个模型调用入口。禁止恢复旧 `react.py`、旧 Harness 循环或第二套模型客户端。
+本链路只有一个 Agent 入口和一个模型调用入口。ReAct 只能作为该 LangGraph 图的子图，禁止复制第二套 Harness 循环或模型客户端。
 
 ## 2. 分层边界
 
@@ -36,14 +37,15 @@
 
 ### 2.2 Agent Graph
 
-`app/agent/graph.py` 只依赖 `app.llm` 的公开契约：
+`app/agent/graph.py` 保持一个 LangGraph 图，模型调用只依赖 `app.llm` 的公开契约：
 
 ```text
-START -> call_model -> END
-START -> stream_model -> END
+START -> routing -> (direct | chat_stream | react_agent)
+react_agent -> (tools | END)
+tools -> (tools | react_agent)
 ```
 
-图状态只有 `ModelRequest` 与 `ModelResponse`。图节点不持有数据库 Session、WebSocket、工具注册、确认状态或任务队列。
+图节点不持有数据库 Session、WebSocket 或任务队列。ToolNode 只消费可序列化 `pending_tool` / `pending_tools`、执行既有门禁与沙箱工具，并返回 Observation；同一模型响应的多个 ToolCall 在节点内串行消费，不绕过任一调用的门禁。路由层仍负责事件持久化与投影。
 
 ### 2.3 ModelGateway
 
@@ -51,8 +53,9 @@ START -> stream_model -> END
 
 - `ModelConfig`：协议、Base URL、模型、采样、超时和 reasoning 开关/强度配置；
 - `ModelRequest`：不可变消息列表、系统提示词和可选取消回调；
-- `ModelResponse`：正文、用量、原始响应和耗时；
-- `ModelStreamEvent`：`content`、`reasoning`、`completed`；
+- `NativeToolCall`：统一的 `call_id`、工具名与 JSON 参数；
+- `ModelResponse`：正文、用量、原始响应、耗时和完整原生 ToolCall；
+- `ModelStreamEvent`：`content`、`reasoning`、`tool_call`、`completed`；
 - `ModelGateway`：基于 LangGraph 的同步、异步和流式调用入口。
 
 三协议 HTTP 细节只允许存在于 `app/adapters.py`。API Key 不得出现在日志、事件、异常消息或模型层对象的默认 repr 中。
@@ -75,6 +78,8 @@ Agent 思考配置从 `Setting(key="agent_reasoning")` 读取，结构为
 | `assistant_delta` | 助手正文瞬态增量，仅向在线会话成员广播，不占事件号 |
 | `assistant_message` | 助手完整交付句，落库并占用会话事件号 |
 | `response.completed` | 本轮生成结束，携带 `finish_reason` 和 `role=assistant` 并可回放 |
+| `tool_call` | 已解析的短工具 `call_id`、名称与参数；创建 ToolCard，不直接执行业务长任务 |
+| `tool_result` | 与 `tool_call.call_id` 相同的短工具受控结果；`read` 仅包含行范围、文件统计与 500 字符预览，完整正文不进入 WS 事件 |
 | `error` | 脱敏后的 `ErrorCode` 与用户可见消息 |
 | `pong` | 应用层心跳，不占用持久化事件号，可与业务事件交错到达 |
 
@@ -82,14 +87,14 @@ Agent 思考配置从 `Setting(key="agent_reasoning")` 读取，结构为
 
 ## 4. 当前冻结范围
 
-以下内容不属于首期实现，不得在 Agent 图或 WebSocket 路由中提前加入：
+以下内容仍不属于当前已实施范围，不得绕过契约提前加入：
 
-- ReAct、Plan/Reflect、并行 Facade 或多 Agent 编排；
-- Harness、MCP Server/Transport、工具调用和工具结果；
+- 外部 MCP、浏览器直连 MCP、原生 ToolCall 参数增量流和真正并行执行；
+- 内部 MCP Server/Transport、外部 MCP、浏览器直连 MCP；
 - 人工确认卡、权限策略、consent、安全门禁；
 - Redis/pgvector 记忆、检查点和复杂上下文压缩；
 - PostgreSQL 长任务入队、Worker 执行和 stress 派生；
-- Alembic 新迁移以及 `plan.py` / `reflect.py` 等挂起模块。
+- 未经模型变更、Alembic 自动生成与审阅的新迁移，以及 `plan.py` / `reflect.py` 等挂起模块。
 
 ## 5. 后续扩展门禁
 
@@ -144,3 +149,45 @@ Agent 思考配置从 `Setting(key="agent_reasoning")` 读取，结构为
 - `backend/api/app/adapters.py`：将内部图文内容块适配为 OpenAI Chat/Responses 与 Anthropic Messages 请求格式。
 - `backend/api/app/routers/sessions.py` / `frontend/src/api/types.ts`：历史回放返回并消费附件文件名、大小、类型和内容地址，刷新后仍可预览。
 - `backend/api/tests/test_agent_attachments.py`：覆盖文本注入、图片内容块和三协议格式转换。
+
+### V0.5.3（2026-08-25）修改代码文件与作用清单
+
+- `backend/api/app/agent/react.py`：工具调用完成且 ReAct 判定收敛后，切换无工具自然语言流式调用，将最终正文通过 `assistant_delta` 投影；保留仅有 `invoke` 网关的非流式兜底。
+- `backend/api/tests/test_agent_react.py`：增加工具调用后最终回答流式增量与完整收尾事件回归测试。
+
+### V0.6.0（2026-08-25）修改代码文件与作用清单
+
+- `backend/api/app/agent/react.py`：重复 `read` 达到收敛阈值时改走无工具模型总结，禁止把 Observation 原文作为 `assistant_message`；read Observation 上限提升到 120,000 字符。
+- `backend/api/app/harness/execution/dispatch.py` / `registry.py`：read 改为 0-based 行级分页（默认/上限 2,000 行、120,000 字符、10MB 文件），输出结构化 `ReadResult` 与正确 `next_offset`。
+- `backend/api/app/harness/contracts/artifacts.py` / `feedback/observation.py` / `execution/toolnode.py`：分离模型可见正文与 ToolCard 展示数据，完整 read 内容不写入 `ws_events`。
+- `frontend/src/components/agent/ToolCard.vue`：read 卡片显示行范围、分页状态与受控预览。
+- `backend/api/tests/test_agent_react.py` / `test_harness_execution.py` / `test_harness_workspace.py`：覆盖最终模型总结、行级分页、字符上限和 ToolNode 不泄露 `model_text`。
+- `docs/AI测试与评估平台-API.md`：升级 V1.25，冻结 read 的 `tool_result.data` 受控投影。
+
+### V0.7.0（2026-08-25）修改代码文件与作用清单
+
+- `backend/api/app/llm/contracts.py` / `gateway.py`：增加统一 `NativeToolCall` 和 `ModelResponse.tool_calls`，把 `ModelRequest.tools` 透传给模型协议适配器。
+- `backend/api/app/adapters.py`：实现 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 的工具 schema、完整 ToolCall 和 ToolResultMessage 双向映射；上游缺少 ID 时生成 `toolcall_<uuid>`。
+- `backend/api/app/agent/react.py` / `graph.py`：原生 ToolCall 优先，保留严格 `react.v1` JSON 兼容回退；同轮多调用以队列串行执行，结果作为标准 `assistant.tool_calls` / `role=tool` 消息回传模型，工具后最终正文继续走无工具模型流式回合。
+- `backend/api/app/harness/memory/state.py` / `contracts/artifacts.py` / `execution/toolnode.py`：将 `call_id` 写入可序列化状态、`tool_call`、成功/拒绝/超时失败的 `tool_result`；不修改既有 Gate、附件绑定、dispatch 或 bwrap 安全边界。
+- `frontend/src/views/Agent.vue`：ToolCard 按 `call_id` 回填，只有旧历史事件缺失 ID 时才退回“同名最近 pending”兼容逻辑。
+- `backend/api/tests/test_adapters.py` / `test_agent_react.py`：覆盖三协议原生 ToolCall、协议化 ToolResult 回填、同轮两个 `read` 的队列执行、`call_id` 顺序与工具后最终正文流式输出。
+- `docs/AI测试与评估平台-API.md`：升级 V1.26，冻结 `tool_call` / `tool_result` 的 `call_id` 规则。
+
+### V0.8.0（2026-08-25）修改代码文件与作用清单
+
+- `backend/shared/models.py` / `migrations/versions/998e913697fe_新增协议档工具调用模式.py` / `schemas.py` / `routers/profiles.py`：协议档增加 `tool_call_mode=native|legacy`；迁移由 Alembic 自动生成，已有档案默认兼容模式。
+- `backend/api/migrations/env.py`：仅在显式设置 `ALEMBIC_AUTOGEN_TABLES` 时按表收窄 autogenerate 对比范围，供缺少可选扩展的隔离开发库生成迁移；正常 upgrade 与生产运行不受影响。
+- `backend/api/app/agent/react.py` / `harness/memory/state.py` / `routers/ws.py`：仅 `native` 协议档发送 `ModelRequest.tools`；`legacy` 固定走严格 JSON-ReAct。ReAct 保留 `agent_system_prompt`，原生工具正文仅保存在单回合临时上下文，检查点只保存关联元数据与受控 Observation。
+- `backend/api/app/harness/execution/registry.py` / `toolnode.py`：执行前校验受限 JSON Schema；未知工具、参数错误、Gate 与附件绑定失败均产生带原 `call_id` 的 `tool_result`，不进入 handler、dispatch 或 bwrap。
+- `backend/api/app/adapters.py`：Anthropic 同一 assistant 的多个 ToolResult 合并为一个 user 消息，符合多 `tool_use` 返回序列。
+- `frontend/src/components/modals/ProfileModal.vue` / `frontend/src/api/types.ts`：协议档编辑界面暴露工具调用模式，默认兼容模式。
+- `backend/api/tests/test_harness_execution.py` / `test_adapters.py` / `test_agent_react.py` / `test_profile_schemas.py`：新增模式降级、schema 拒绝、call_id 闭环、多结果适配、系统提示词和临时结果回灌回归。
+
+### V0.9.0（2026-08-25）修改代码文件与作用清单
+
+- `backend/shared/models.py` / `migrations/versions/998e913697fe_新增协议档工具调用模式.py` / `schemas.py` / `routers/profiles.py` / `ProfileModal.vue`：将 `tool_call_mode` 默认值统一收紧为 `legacy`；存量协议档不会在未验证时发送上游 `tools`。
+- `backend/api/app/agent/react.py` / `graph.py` / `harness/execution/native_results.py` / `routers/ws.py`：完整原生 ToolResult 改存 Agent 实例内、按 `thread_id` 隔离的单回合内存；回合结束清理。模型网关仅接收取消回调配置，不接收正文、凭据或会话上下文。
+- `backend/api/app/agent/react.py`：在原生 ToolCall 入队前拒绝空、空白、重复 ID、空工具名和非对象参数，归一 `UPSTREAM`。
+- `backend/api/app/harness/execution/registry.py` / `toolnode.py` / `agent/log.py`：Schema 在注册期拒绝未实现关键字；ToolNode 改用注册表公开查询接口，并对附件绑定未知异常输出脱敏 `agent_trace`。
+- `backend/api/tests/test_agent_react.py` / `test_harness_execution.py` / `test_profile_schemas.py`：覆盖原始结果配置隔离、空/重复 `call_id`、Schema 注册拒绝与默认兼容模式。

@@ -1,5 +1,8 @@
 """协议档多模型端点配置的输入校验测试。"""
 
+import pytest
+from pydantic import ValidationError
+
 from app.schemas import ProfileCreate, ProfileUpdate
 
 
@@ -32,3 +35,17 @@ def test_profile_update_keeps_endpoint_configs_optional():
     assert profile.model == "chat-model-v2"
     assert profile.embedding_model is None
     assert profile.reranker_model is None
+
+
+def test_profile_tool_call_mode_defaults_to_legacy_and_allows_native():
+    """协议档必须显式区分原生 ToolCall 与受控 JSON 回退。"""
+    profile = ProfileCreate(
+        name="legacy-agent",
+        protocol="openai_chat",
+        base_url="https://gateway.example.test/v1",
+        model="legacy-model",
+    )
+    assert profile.tool_call_mode == "legacy"
+    assert ProfileUpdate(tool_call_mode="native").tool_call_mode == "native"
+    with pytest.raises(ValidationError):
+        ProfileUpdate(tool_call_mode="auto")

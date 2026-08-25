@@ -15,6 +15,7 @@ from app.errors import AppError, ErrorCode
 from app.harness.contracts import ToolCall
 from app.harness.execution import (
     BASH_BLOCKLIST,
+    NativeToolResultStore,
     ToolDef,
     ToolRegistry,
     build_default_registry,
@@ -23,6 +24,8 @@ from app.harness.execution import (
     execute,
     read_file_safe,
     run_bash,
+    validate_tool_arguments,
+    validate_tool_schema,
     write_file_safe,
 )
 from app.harness.execution.session_guard import assert_no_orm_leak
@@ -83,6 +86,83 @@ def test_default_registry_includes_bash() -> None:
     assert bash_def["permission"] == "sandbox.bash"
     names = {definition["name"] for definition in registry.all_defs()}
     assert names == {"read", "write", "edit", "web_search", "web_fetch", "bash"}
+
+
+def test_tool_schema_validation_rejects_invalid_and_extra_arguments() -> None:
+    """ToolNode 前的 schema 校验拒绝类型错误、缺字段和未声明参数。"""
+    read_schema = build_default_registry().get("read").parameters_schema
+    assert validate_tool_arguments(read_schema, {"path": 1}) == "参数 path 类型无效，应为 string"
+    assert validate_tool_arguments(read_schema, {"offset": 0}) == "缺少必填参数：path"
+    assert validate_tool_arguments(read_schema, {"path": "a.txt", "unsafe": True}) == "包含未允许的参数：unsafe"
+
+
+def test_registry_rejects_unsupported_tool_schema_keywords() -> None:
+    """未知 JSON Schema 关键字必须在注册期失败，不能运行时静默放行。"""
+    assert validate_tool_schema({"type": "object", "$ref": "#/defs/input"})
+    registry = ToolRegistry()
+    with pytest.raises(AppError) as error:
+        registry.register(
+            ToolDef(
+                name="invalid-schema",
+                description="不支持的 Schema",
+                parameters_schema={"type": "object", "oneOf": []},
+                permission="test.read",
+                timeout_s=1.0,
+                handler=_handler_factory("invalid-schema"),
+            )
+        )
+    assert error.value.code == ErrorCode.VALIDATION
+    assert "oneOf" in error.value.message
+
+
+def test_toolnode_rejection_keeps_native_call_id_and_skips_dispatch() -> None:
+    """未知工具与 schema 拒绝均产出关联的 ToolCard 结果，不进入执行器。"""
+    registry = build_default_registry()
+    result_store = NativeToolResultStore()
+    node = build_tool_node(registry, native_tool_results=result_store)
+    configurable = {"thread_id": "toolnode-native-test"}
+
+    original = toolnode_mod.get_config
+    toolnode_mod.get_config = lambda: {"configurable": configurable}
+    try:
+        unknown = asyncio.run(
+            node(
+                {
+                    "request": {"config": {}, "messages": ()},
+                    "pending_tool": {
+                        "call_id": "unknown_call",
+                        "name": "not_registered",
+                        "arguments": {},
+                        "native": True,
+                    },
+                }
+            )
+        )
+        invalid = asyncio.run(
+            node(
+                {
+                    "request": {"config": {}, "messages": ()},
+                    "pending_tool": {
+                        "call_id": "invalid_call",
+                        "name": "read",
+                        "arguments": {"path": 1},
+                        "native": True,
+                    },
+                }
+            )
+        )
+    finally:
+        toolnode_mod.get_config = original
+
+    for out, call_id in ((unknown, "unknown_call"), (invalid, "invalid_call")):
+        events = out["pending_events"]
+        assert [event["kind"] for event in events] == ["tool_call", "tool_result", "error"]
+        assert events[0]["payload"]["call_id"] == call_id
+        assert events[1]["payload"]["call_id"] == call_id
+        assert events[1]["payload"]["ok"] is False
+        assert out["native_messages"][0]["content"] == ""
+    assert result_store.get("toolnode-native-test", "unknown_call") == "工具未注册：not_registered"
+    assert "类型无效" in str(result_store.get("toolnode-native-test", "invalid_call"))
 
 
 def test_all_defs_serializable_without_handler() -> None:
@@ -160,9 +240,9 @@ def test_read_write_edit_roundtrip() -> None:
     """受控目录 read/write/edit 正常往返。"""
     with tempfile.TemporaryDirectory() as root:
         write_file_safe("a.txt", "hello", root)
-        assert read_file_safe("a.txt", root) == "hello"
+        assert read_file_safe("a.txt", root).content == "hello"
         edit_file_safe("a.txt", "hello", "hello world", root)
-        assert read_file_safe("a.txt", root) == "hello world"
+        assert read_file_safe("a.txt", root).content == "hello world"
         with pytest.raises(AppError) as error:
             edit_file_safe("a.txt", "不存在", "x", root)
         assert error.value.code == ErrorCode.VALIDATION
@@ -171,48 +251,68 @@ def test_read_write_edit_roundtrip() -> None:
 
 
 def test_read_file_safe_supports_offset_and_limit() -> None:
-    """read 工具 offset/limit 分段读取长文本，未读完带截断标记。"""
+    """read 工具按行分页，未读完返回准确 next_offset。"""
     with tempfile.TemporaryDirectory() as root:
-        write_file_safe("long.txt", "0123456789", root)
-        assert read_file_safe("long.txt", root) == "0123456789"
-        assert read_file_safe("long.txt", root, offset=4) == "456789"
-        assert read_file_safe("long.txt", root, offset=100) == ""
-        # 未读完：内容 + 截断标记，标记含下一段 offset 提示
+        write_file_safe("long.txt", "zero\none\ntwo\nthree\nfour", root)
+        all_lines = read_file_safe("long.txt", root)
+        assert all_lines.content == "zero\none\ntwo\nthree\nfour"
+        assert all_lines.total_lines == 5
+        assert all_lines.is_complete is True
+        assert read_file_safe("long.txt", root, offset=4).content == "four"
+        beyond = read_file_safe("long.txt", root, offset=100)
+        assert beyond.content == ""
+        assert beyond.is_complete is True
+        # 未读完时只返回完整行，next_offset 指向下一行。
         first = read_file_safe("long.txt", root, limit=3)
-        assert first.startswith("012")
-        assert "offset=3" in first
+        assert first.content == "zero\none\ntwo\n"
+        assert first.start_line == 0
+        assert first.end_line == 3
+        assert first.next_offset == 3
+        assert first.is_complete is False
         second = read_file_safe("long.txt", root, offset=2, limit=3)
-        assert second.startswith("234")
-        assert "offset=5" in second
-        # 恰好读到末尾：无标记
-        tail = read_file_safe("long.txt", root, offset=7)
-        assert tail == "789"
+        assert second.content == "two\nthree\nfour"
+        assert second.next_offset is None
 
 
-def test_read_file_safe_default_limit_covers_larger_files() -> None:
-    """read 默认单次上限 24000：超过旧 8000 的中等附件一次读完，无截断标记。
-
-    用户场景回归：DeepSeek 不会分段读取（不带 offset），>8000 字符附件截断后
-    会陷入相同 read 循环；默认上限提高后中小附件一次返回即可作答。
-    """
+def test_read_file_safe_default_limit_returns_first_2000_lines() -> None:
+    """read 默认返回前 2000 行，并用 next_offset 指向后续内容。"""
     with tempfile.TemporaryDirectory() as root:
-        body = "内容" * 6000  # 12000 字符 > 旧默认 8000，< 新默认 24000
+        body = "\n".join(f"第{index}行" for index in range(3000))
         write_file_safe("big.txt", body, root)
         result = read_file_safe("big.txt", root)
-        assert result == body
-        assert "offset=" not in result
+        assert result.total_lines == 3000
+        assert result.lines_read == 2000
+        assert result.start_line == 0
+        assert result.end_line == 2000
+        assert result.next_offset == 2000
+        assert result.is_complete is False
+        assert result.content.splitlines()[0] == "第0行"
+        assert result.content.splitlines()[-1] == "第1999行"
 
 
-def test_read_file_safe_truncates_beyond_default_limit() -> None:
-    """超过 24000 字符仍截断并提示下一段 offset，超大文件走分段读取。"""
+def test_read_file_safe_stops_on_character_budget_at_line_boundary() -> None:
+    """字符预算触发时不截断半行，next_offset 与实际结束行一致。"""
     with tempfile.TemporaryDirectory() as root:
-        write_file_safe("huge.txt", "y" * 30000, root)
+        write_file_safe("huge.txt", "\n".join("y" * 100 for _ in range(2000)), root)
         result = read_file_safe("huge.txt", root)
-        assert "offset=24000" in result
-        # 显式传 limit 仍可分段拿到后半段
-        second = read_file_safe("huge.txt", root, offset=24000)
-        assert len(second) == 6000
-        assert "offset=" not in second
+        assert result.lines_read < 2000
+        assert result.end_line == result.lines_read
+        assert result.next_offset == result.lines_read
+        assert result.content.endswith("\n")
+        assert result.content_truncated is False
+
+
+def test_read_result_hides_full_content_from_display_data() -> None:
+    """完整正文只给 Observation；ToolCard 数据仅包含受控预览。"""
+    with tempfile.TemporaryDirectory() as root:
+        write_file_safe("secret.txt", "机密内容" * 200, root)
+        result = read_file_safe("secret.txt", root)
+        data = result.to_tool_data()
+        display = data["display"]
+        assert isinstance(display, dict)
+        assert "model_text" in data
+        assert "model_text" not in display
+        assert len(display["read"]["preview"]) <= 500
 
 
 def test_web_fetch_rejects_internal_targets(monkeypatch) -> None:

@@ -127,6 +127,7 @@ const toolNameMap: Record<string, string> = {
   'audio.speech_synthesis': '语音合成',
   'audio.voiceclone': '音色克隆配音',
   'image.generate': 'Qwen Image 生图',
+  read: '读取文件',
   // 兼容旧下划线命名
   list_profiles: '列出协议档',
   get_profile: '获取协议档详情',
@@ -180,6 +181,21 @@ const stateText = computed(() => {
 const outputText = computed(() => {
   if (props.status === 'pending') return '…'
   if (props.result === undefined || props.result === null || props.result === '') return '{}'
+  if (props.tool === 'read' && typeof props.result === 'object') {
+    const data = props.result as Record<string, unknown>
+    const read = data.read
+    if (read && typeof read === 'object') {
+      const meta = read as Record<string, unknown>
+      const start = Number(meta.start_line ?? 0) + 1
+      const end = Number(meta.end_line ?? 0)
+      const total = Number(meta.total_lines ?? 0)
+      const next = meta.next_offset
+      const summary = typeof data.summary === 'string' ? data.summary : '文件读取完成'
+      const preview = typeof meta.preview === 'string' ? meta.preview : ''
+      const page = next === null || next === undefined ? '已读完' : `下一页 offset=${next}`
+      return `${summary}\n范围：第 ${start}–${end} 行 / 共 ${total} 行\n状态：${page}${preview ? `\n\n受控预览：\n${preview}` : ''}`
+    }
+  }
   return formatJson(props.result)
 })
 

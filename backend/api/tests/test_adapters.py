@@ -209,6 +209,174 @@ def test_missing_usage_counts_as_zero(monkeypatch):
     assert result.usage == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
 
+@pytest.mark.parametrize(
+    "protocol,payload,expected_tool",
+    [
+        (
+            "openai_chat",
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "chat_read_1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "read",
+                                        "arguments": '{"path":"a.txt"}',
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ]
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "read",
+                    "description": "读取文件",
+                    "parameters": {"type": "object", "properties": {"path": {"type": "string"}}},
+                },
+            },
+        ),
+        (
+            "openai_responses",
+            {
+                "output": [
+                    {
+                        "type": "function_call",
+                        "call_id": "responses_read_1",
+                        "name": "read",
+                        "arguments": '{"path":"a.txt"}',
+                    }
+                ]
+            },
+            {
+                "type": "function",
+                "name": "read",
+                "description": "读取文件",
+                "parameters": {"type": "object", "properties": {"path": {"type": "string"}}},
+            },
+        ),
+        (
+            "anthropic_messages",
+            {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "anthropic_read_1",
+                        "name": "read",
+                        "input": {"path": "a.txt"},
+                    }
+                ]
+            },
+            {
+                "name": "read",
+                "description": "读取文件",
+                "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}},
+            },
+        ),
+    ],
+)
+def test_native_tool_call_roundtrip(monkeypatch, protocol, payload, expected_tool):
+    """P2：三协议均能发送内部 schema 并回收原生 ToolCall。"""
+    seen = _capture(monkeypatch, payload)
+    result = call_protocol(
+        **_kwargs(protocol),
+        tools=[
+            {
+                "name": "read",
+                "description": "读取文件",
+                "parameters_schema": {"type": "object", "properties": {"path": {"type": "string"}}},
+            }
+        ],
+    )
+
+    assert seen["body"]["tools"] == [expected_tool]
+    assert len(result.tool_calls) == 1
+    assert result.tool_calls[0].name == "read"
+    assert result.tool_calls[0].arguments == {"path": "a.txt"}
+    assert result.tool_calls[0].call_id.endswith("read_1")
+
+
+@pytest.mark.parametrize("protocol,payload,_want_text,_want_usage", SUCCESS_CASES)
+def test_native_tool_result_messages_follow_protocol(monkeypatch, protocol, payload, _want_text, _want_usage):
+    """P2：下一轮 assistant ToolCall 与 tool_result 必须保留同一 call_id。"""
+    seen = _capture(monkeypatch, payload)
+    call_protocol(
+        **(_kwargs(protocol) | {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": "我先读取文件。",
+                    "tool_calls": [
+                        {"call_id": "call_read_1", "name": "read", "arguments": {"path": "a.txt"}}
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_read_1",
+                    "name": "read",
+                    "content": "文件正文",
+                },
+            ]
+        }),
+    )
+
+    if protocol == "openai_chat":
+        messages = seen["body"]["messages"]
+        assert messages[1]["tool_calls"][0]["id"] == "call_read_1"
+        assert messages[2] == {"role": "tool", "tool_call_id": "call_read_1", "content": "文件正文"}
+    elif protocol == "openai_responses":
+        assert seen["body"]["input"] == [
+            {"role": "assistant", "content": "我先读取文件。"},
+            {"type": "function_call", "call_id": "call_read_1", "name": "read", "arguments": '{"path": "a.txt"}'},
+            {"type": "function_call_output", "call_id": "call_read_1", "output": "文件正文"},
+        ]
+    else:
+        messages = seen["body"]["messages"]
+        assert messages[0]["content"][1]["id"] == "call_read_1"
+        assert messages[1] == {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "call_read_1", "content": "文件正文"}],
+        }
+
+
+def test_anthropic_multiple_tool_results_share_one_user_message(monkeypatch):
+    """同一 assistant 的多个 tool_use 必须由一条 user 消息中的多个结果响应。"""
+    seen = _capture(monkeypatch, ANTHROPIC_OK)
+    call_protocol(
+        **(_kwargs("anthropic_messages") | {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": "并行读取两个文件。",
+                    "tool_calls": [
+                        {"call_id": "call_a", "name": "read", "arguments": {"path": "a.txt"}},
+                        {"call_id": "call_b", "name": "read", "arguments": {"path": "b.txt"}},
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_a", "name": "read", "content": "A"},
+                {"role": "tool", "tool_call_id": "call_b", "name": "read", "content": "B"},
+            ]
+        }),
+    )
+
+    messages = seen["body"]["messages"]
+    assert len(messages) == 2
+    assert [block["id"] for block in messages[0]["content"][1:]] == ["call_a", "call_b"]
+    assert messages[1] == {
+        "role": "user",
+        "content": [
+            {"type": "tool_result", "tool_use_id": "call_a", "content": "A"},
+            {"type": "tool_result", "tool_use_id": "call_b", "content": "B"},
+        ],
+    }
+
+
 # ---------------------------------------------------------------------------
 # stream_protocol：三协议 SSE 流式解析夹具
 # ---------------------------------------------------------------------------

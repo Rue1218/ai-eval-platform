@@ -3,6 +3,7 @@
 from .binding import bind_attachments
 from .dispatch import (
     BASH_BLOCKLIST,
+    ReadResult,
     edit_file_safe,
     execute,
     read_file_safe,
@@ -11,7 +12,15 @@ from .dispatch import (
     web_search,
     write_file_safe,
 )
-from .registry import ToolDef, ToolRegistry, build_default_registry
+from .native_results import NativeToolResultStore, runtime_thread_id
+from .registry import (
+    ToolDef,
+    ToolRegistry,
+    build_default_registry,
+    required_parameter_names,
+    validate_tool_arguments,
+    validate_tool_schema,
+)
 from .session_guard import assert_no_orm_leak, with_managed_session
 from .toolnode import build_tool_node
 from .worker_bridge import LONG_TOOLS, TASK_KINDS, enqueue_long_task
@@ -23,12 +32,15 @@ from .workspace import (
 
 __all__ = [
     "BASH_BLOCKLIST",
+    "ReadResult",
     "LONG_TOOLS",
+    "NativeToolResultStore",
     "TASK_KINDS",
     "ToolDef",
     "ToolRegistry",
     "bind_attachments",
     "build_default_registry",
+    "required_parameter_names",
     "build_tool_node",
     "edit_file_safe",
     "enqueue_long_task",
@@ -37,10 +49,13 @@ __all__ = [
     "get_workspace_root",
     "read_file_safe",
     "run_bash",
+    "runtime_thread_id",
     "assert_no_orm_leak",
     "session_workspace_dir",
     "with_managed_session",
     "web_fetch",
     "web_search",
+    "validate_tool_arguments",
+    "validate_tool_schema",
     "write_file_safe",
 ]

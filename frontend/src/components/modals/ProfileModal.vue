@@ -102,6 +102,17 @@
       </div>
 
       <div class="field">
+        <label class="field-label">Agent 工具调用模式</label>
+        <n-radio-group v-model:value="form.tool_call_mode" name="tool_call_mode_group" size="small">
+          <n-space :size="8">
+            <n-radio-button value="native">原生 ToolCall（已验证）</n-radio-button>
+            <n-radio-button value="legacy">兼容 JSON-ReAct（默认）</n-radio-button>
+          </n-space>
+        </n-radio-group>
+        <span class="small tertiary">仅当目标网关已验证支持 tools 字段时使用原生模式；兼容模式不会向上游发送 tools。</span>
+      </div>
+
+      <div class="field">
         <label class="field-label">用途标签</label>
         <n-checkbox-group v-model:value="form.usages">
           <n-space>
@@ -146,7 +157,7 @@ import {
   NModal,
 } from 'naive-ui'
 import { api } from '../../api/http'
-import type { Profile, ProfileCreateIn, ProfileUpdateIn, ProtocolType, ProfileUsage } from '../../api/types'
+import type { Profile, ProfileCreateIn, ProfileUpdateIn, ProtocolType, ProfileUsage, ToolCallMode } from '../../api/types'
 import FetchModelsModal from './FetchModelsModal.vue'
 
 const props = defineProps<{
@@ -183,6 +194,7 @@ const form = ref<{
   anthropic_version?: string
   usages: ProfileUsage[]
   context_window: number
+  tool_call_mode: ToolCallMode
 }>({
   name: '',
   protocol: 'openai_chat',
@@ -192,6 +204,7 @@ const form = ref<{
   anthropic_version: '2023-06-01',
   usages: ['target'],
   context_window: 200000,
+  tool_call_mode: 'legacy',
 })
 
 const protocolOptions = [
@@ -311,6 +324,7 @@ async function onBatchCreate(modelIds: string[]) {
         anthropic_version: form.value.anthropic_version?.trim() || undefined,
         usages: form.value.usages,
         context_window: form.value.context_window,
+        tool_call_mode: form.value.tool_call_mode,
       })
       count++
     }
@@ -339,6 +353,7 @@ watch(
           anthropic_version: profileVal.anthropic_version || '2023-06-01',
           usages: profileVal.usages ? [...profileVal.usages] : ['target'],
           context_window: profileVal.context_window || 200000,
+          tool_call_mode: profileVal.tool_call_mode || 'legacy',
         }
       } else if (props.initialData) {
         form.value = {
@@ -350,6 +365,7 @@ watch(
           anthropic_version: '2023-06-01',
           usages: ['target'],
           context_window: 200000,
+          tool_call_mode: 'legacy',
         }
       } else {
         form.value = {
@@ -361,6 +377,7 @@ watch(
           anthropic_version: '2023-06-01',
           usages: ['target'],
           context_window: 200000,
+          tool_call_mode: 'legacy',
         }
       }
     }
@@ -389,6 +406,7 @@ async function handleSave() {
         anthropic_version: form.value.anthropic_version?.trim() || undefined,
         usages: form.value.usages,
         context_window: form.value.context_window,
+        tool_call_mode: form.value.tool_call_mode,
       }
       if (form.value.api_key.trim()) {
         payload.api_key = form.value.api_key.trim()
@@ -405,6 +423,7 @@ async function handleSave() {
         anthropic_version: form.value.anthropic_version?.trim() || undefined,
         usages: form.value.usages,
         context_window: form.value.context_window,
+        tool_call_mode: form.value.tool_call_mode,
       }
       await api.profiles.create(payload)
       message.success('协议档创建成功')

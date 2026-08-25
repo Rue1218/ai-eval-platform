@@ -48,6 +48,8 @@ class ToolCall:
 
     name: str
     arguments: Mapping[str, object]
+    # 仅为兼容旧的内部构造点保留空默认值；进入 ToolNode 后必须补齐并对外发送。
+    call_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,11 +60,12 @@ class ToolResult:
     ok: bool
     data: Mapping[str, object] = field(default_factory=dict)
     error: Mapping[str, object] = field(default_factory=dict)
+    call_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)
 class Observation:
-    """工具结果归一（FB-1），带脱敏/截断/来源标记。"""
+    """工具结果归一（FB-1），分离模型观察与浏览器展示投影。"""
 
     tool: str
     text: str  # 脱敏 + 截断后的摘要
@@ -71,6 +74,8 @@ class Observation:
     source: str | None = None  # 溯源标识，复用 messages 表 source_id 格式（如 "file:uuid" / "message:uuid"）
     redacted: bool = True  # 默认已脱敏
     arguments: Mapping[str, object] | None = None  # 本次调用参数（OR-4 防重复判断用）
+    # 写入 ToolCard 的受控数据。不得放完整 read 内容；模型可见正文仍只在 text。
+    display_data: Mapping[str, object] = field(default_factory=dict)
 
 
 T = TypeVar("T")

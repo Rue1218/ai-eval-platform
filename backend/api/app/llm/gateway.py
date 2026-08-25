@@ -23,7 +23,13 @@ from ..adapters import (
     stream_protocol,
 )
 from ..errors import AppError, ErrorCode
-from .contracts import ModelRequest, ModelResponse, ModelStreamEvent, StreamAbort
+from .contracts import (
+    ModelRequest,
+    ModelResponse,
+    ModelStreamEvent,
+    NativeToolCall,
+    StreamAbort,
+)
 
 logger = logging.getLogger("ai-eval.llm")
 
@@ -55,6 +61,7 @@ def _default_invoke_transport(request: ModelRequest) -> AdapterResult:
         timeout_s=config.timeout_s,
         reasoning_enabled=config.reasoning_enabled,
         reasoning_effort=config.reasoning_effort,
+        tools=[dict(tool) for tool in request.tools],
     )
 
 
@@ -203,6 +210,14 @@ class ModelGateway:
             usage=adapter_result.usage,
             raw=adapter_result.raw,
             latency_ms=adapter_result.latency_ms or round((time.perf_counter() - started) * 1000),
+            tool_calls=tuple(
+                NativeToolCall(
+                    call_id=tool_call.call_id,
+                    name=tool_call.name,
+                    arguments=dict(tool_call.arguments),
+                )
+                for tool_call in adapter_result.tool_calls
+            ),
         )
         return {"response": response}
 
