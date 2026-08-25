@@ -690,6 +690,7 @@ export interface SessionHistory {
     mcp_tools_max?: number
     memory_files_count?: number
     memory_files_max?: number
+    compacted?: boolean
   }
 }
 

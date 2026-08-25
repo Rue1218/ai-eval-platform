@@ -7,12 +7,15 @@ from app.harness.context import (
     COMPACT_VERSION,
     WindowMessage,
     assemble,
+    compute_meter,
+    estimate_tokens,
     is_window_eligible,
     parse_compact,
     project_meter,
     recent_window,
     summarize,
     to_observation,
+    truncate_with_marker,
 )
 from app.harness.contracts import Observation
 
@@ -58,6 +61,14 @@ def test_window_filters_non_user_assistant() -> None:
     assert is_window_eligible("tool_call") is False
     assert is_window_eligible("confirm") is False
     assert is_window_eligible("progress") is False
+    mixed: list[WindowMessage] = [
+        {"role": "thought", "content": "规划", "source_id": "e1"},
+        {"role": "user", "content": "你好", "source_id": "m1"},
+        {"role": "tool_call", "content": "read", "source_id": "e2"},
+        {"role": "assistant", "content": "收到", "source_id": "m2"},
+    ]
+    window = recent_window(mixed)
+    assert [item["role"] for item in window] == ["user", "assistant"]
 
 
 def test_assemble_order_persona_skill_summary_stage_messages() -> None:
@@ -93,6 +104,16 @@ def test_assemble_injects_tool_defs() -> None:
         tool_defs=[{"name": "web_search", "description": "搜索"}],
     )
     assert result["tools"] == [{"name": "web_search", "description": "搜索"}]
+
+
+def test_truncate_with_marker_keeps_head_and_tail() -> None:
+    """X-D2：超长截断保留头尾，并带截断标记。"""
+    text = "HEAD" + ("x" * 80) + "TAIL"
+    clipped, truncated = truncate_with_marker(text, max_chars=20)
+    assert truncated is True
+    assert clipped.startswith("HEAD")
+    assert clipped.endswith("TAIL")
+    assert "[截断]" in clipped
 
 
 def test_to_observation_redacts_and_truncates_with_source() -> None:
@@ -171,12 +192,47 @@ def test_project_meter_matches_context_meter() -> None:
     meter = project_meter(
         {"token_used": 3000, "token_limit": 8192, "window_ratio": 0.37, "compacted": True}
     )
-    assert meter == {
-        "token_used": 3000,
-        "token_limit": 8192,
-        "window_ratio": 0.37,
-        "compacted": True,
-    }
-    # null 不渲染
+    assert meter is not None
+    assert meter["token_used"] == 3000
+    assert meter["token_limit"] == 8192
+    assert meter["total_tokens"] == 3000
+    assert meter["max_tokens"] == 8192
+    assert meter["window_ratio"] == 0.37
+    assert meter["compacted"] is True
     assert project_meter(None) is None
     assert project_meter({}) is None
+
+
+def test_compute_meter_from_window_messages() -> None:
+    """X-A7：服务端按窗口消息计算 token / 条数 / 余量，不依赖前端估算。"""
+    messages = [
+        {"role": "user", "content": "你好，请评测这两个模型", "source_id": "m1"},
+        {"role": "assistant", "content": "请先确认数据集与协议档", "source_id": "m2"},
+    ]
+    meter = compute_meter(messages, max_tokens=200_000, skills_text="基准评测：执行大模型基准评测")
+    assert meter["messages"] == 2
+    assert meter["window"] == 20
+    assert meter["headroom"] == 18
+    assert meter["skills"] == 1
+    assert meter["summary"] == 0
+    assert meter["compacted"] is False
+    assert meter["max_tokens"] == 200_000
+    assert meter["messages_tokens"] == estimate_tokens(
+        "你好，请评测这两个模型\n请先确认数据集与协议档"
+    )
+    assert meter["skills_tokens"] > 0
+    assert meter["total_tokens"] == meter["messages_tokens"] + meter["skills_tokens"]
+    assert meter["free_tokens"] == 200_000 - meter["total_tokens"]
+    assert 0 <= meter["used_percent"] <= 100
+
+
+def test_compute_meter_marks_compacted_summary() -> None:
+    """已压缩会话：summary/compacted 置位，摘要计入 token。"""
+    meter = compute_meter(
+        [{"role": "user", "content": "继续", "source_id": "m9"}],
+        compact_summary="此前已完成基准评测规划",
+        max_tokens=1000,
+    )
+    assert meter["compacted"] is True
+    assert meter["summary"] == 1
+    assert meter["total_tokens"] > meter["messages_tokens"]

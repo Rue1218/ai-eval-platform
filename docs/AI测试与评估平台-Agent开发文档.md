@@ -1,10 +1,10 @@
 # AI 测试与评估平台 Agent 开发文档
 
-> 版本：V1.5.0
-> 状态：LangGraph Harness 已启用混合范式 P0–P2：Plan-and-Solve → ReAct → reflect；native 中间叙述；clarify interrupt 与有界重规划；检查点默认 memory；reflect 产出确认卡
+> 版本：V1.5.1
+> 状态：LangGraph Harness 已启用混合范式 P0–P2：Plan-and-Solve → ReAct → reflect；native 中间叙述；clarify interrupt 与有界重规划；检查点默认 memory；reflect 产出确认卡；ContextMeter 服务端计算
 > 审查日期：2026-08-25
 > 对应需求：`AI测试与评估平台-PRD.md` V1.12
-> 对应接口：`AI测试与评估平台-API.md` V1.35
+> 对应接口：`AI测试与评估平台-API.md` V1.36
 
 ## 1. 当前唯一运行链路
 
@@ -267,3 +267,12 @@ Agent 思考配置从 `Setting(key="agent_reasoning")` 读取，结构为
 - `backend/stress/main.go`：真实 HTTP 发压、`/status` `/stop`、Prometheus 指标。
 - `docker-compose.yml` / `.env.example`：Worker 注入 `STRESS_URL`。
 - `backend/api/tests/test_harness_phase4.py` / `test_ws_tickets.py` / `backend/worker/tests/test_stress.py`：确认卡、短票、压测映射回归。
+
+### V1.5.1（2026-08-25）修改代码文件与作用清单
+
+- `backend/api/app/harness/context/meter.py`：`compute_meter` 按窗口消息估算 token，字段对齐 API.md §3.4。
+- `backend/api/app/routers/sessions.py`：`GET .../messages` 下发真实 `context_meter`，不再返回 `null`。
+- `frontend/src/components/agent/ContextMeter.vue` / `api/types.ts`：`compacted` 徽标与类型。
+- `docs/AI测试与评估平台-API.md`：V1.36。
+- `docs/AI测试与评估平台-Harness-上下文工程层.md`：V0.4.2。
+- `backend/api/tests/test_harness_context.py`：覆盖窗口计量与压缩标记。

@@ -28,7 +28,10 @@
     <div class="context-popover-card">
       <!-- 头部：上下文窗口 + 已用量 / 上限 + （当前上下文） + 折叠箭头（点击可展开/折叠） -->
       <div class="popover-header" @click="isExpanded = !isExpanded">
-        <span class="header-title">上下文窗口</span>
+        <span class="header-title">
+          上下文窗口
+          <span v-if="isCompacted" class="compacted-badge">已压缩</span>
+        </span>
         <div class="header-right">
           <span class="header-tokens mono">{{ formattedTotalTokens }} / {{ formattedMaxTokens }}</span>
           <span class="header-sub">（当前上下文）</span>
@@ -144,6 +147,7 @@ export interface ContextMeterData {
   mcp_tools_max?: number
   memory_files_count?: number
   memory_files_max?: number
+  compacted?: boolean
 
   // 兼容旧版消息条数字段
   messages?: number
@@ -165,78 +169,17 @@ const isExpanded = ref(true)
 const CIRCUMFERENCE = 87.9646
 const strokeDasharray = `${CIRCUMFERENCE} ${CIRCUMFERENCE}`
 
-// 最大 Token 上限（默认 200k）
-const maxTokens = computed(() => {
-  return props.meter?.max_tokens || 200000
-})
-
-// 已使用 Token 总数（优先读取 total_tokens，若无则从条数计算）
-const totalTokens = computed(() => {
-  if (props.meter?.total_tokens !== undefined) {
-    return props.meter.total_tokens
-  }
-  const m = props.meter?.messages || 0
-  const s = props.meter?.skills || 0
-  return (m * 4200) + (s * 2000)
-})
-
-// 消息与技能 Token 拆分
-const messagesTokens = computed(() => {
-  if (props.meter?.messages_tokens !== undefined) {
-    return props.meter.messages_tokens
-  }
-  const m = props.meter?.messages || 0
-  return m * 4200
-})
-
-const skillsTokens = computed(() => {
-  if (props.meter?.skills_tokens !== undefined) {
-    return props.meter.skills_tokens
-  }
-  const s = props.meter?.skills || 0
-  return s > 0 ? 2000 : 0
-})
-
-// 剩余可用 Token
-const freeTokens = computed(() => {
-  if (props.meter?.free_tokens !== undefined) {
-    return props.meter.free_tokens
-  }
-  return Math.max(0, maxTokens.value - totalTokens.value)
-})
-
-// 百分比计算
-const usedPercent = computed(() => {
-  if (props.meter?.used_percent !== undefined) {
-    return props.meter.used_percent
-  }
-  return Math.min(100, Math.max(0, (totalTokens.value / maxTokens.value) * 100))
-})
-
-const clampedPercent = computed(() => {
-  return Math.min(100, Math.max(0, usedPercent.value))
-})
-
-const messagesPercent = computed(() => {
-  if (props.meter?.messages_percent !== undefined) {
-    return props.meter.messages_percent
-  }
-  return Math.min(100, (messagesTokens.value / maxTokens.value) * 100)
-})
-
-const skillsPercent = computed(() => {
-  if (props.meter?.skills_percent !== undefined) {
-    return props.meter.skills_percent
-  }
-  return Math.min(100, (skillsTokens.value / maxTokens.value) * 100)
-})
-
-const freePercent = computed(() => {
-  if (props.meter?.free_percent !== undefined) {
-    return props.meter.free_percent
-  }
-  return Math.max(0, 100 - clampedPercent.value)
-})
+// CX-7：只读服务端数字，禁止按 messages 条数估算（如 4200/条）。
+const maxTokens = computed(() => props.meter?.max_tokens ?? 0)
+const totalTokens = computed(() => props.meter?.total_tokens ?? 0)
+const messagesTokens = computed(() => props.meter?.messages_tokens ?? 0)
+const skillsTokens = computed(() => props.meter?.skills_tokens ?? 0)
+const freeTokens = computed(() => props.meter?.free_tokens ?? 0)
+const usedPercent = computed(() => props.meter?.used_percent ?? 0)
+const clampedPercent = computed(() => Math.min(100, Math.max(0, usedPercent.value)))
+const messagesPercent = computed(() => props.meter?.messages_percent ?? 0)
+const skillsPercent = computed(() => props.meter?.skills_percent ?? 0)
+const freePercent = computed(() => props.meter?.free_percent ?? Math.max(0, 100 - clampedPercent.value))
 
 // 工具与记忆资源项
 const mcpToolsCount = computed(() => props.meter?.mcp_tools_count ?? 0)
@@ -281,6 +224,7 @@ const formattedMaxTokens = computed(() => formatTokens(maxTokens.value))
 const formattedMessagesTokens = computed(() => formatTokens(messagesTokens.value))
 const formattedSkillsTokens = computed(() => formatTokens(skillsTokens.value))
 const formattedFreeTokens = computed(() => formatTokens(freeTokens.value))
+const isCompacted = computed(() => Boolean(props.meter?.compacted || props.compactSummary))
 </script>
 
 <style scoped>
@@ -320,7 +264,7 @@ const formattedFreeTokens = computed(() => formatTokens(freeTokens.value))
 
 .ring-bg {
   fill: none;
-  stroke: #e2e8f0;
+  stroke: #cbd5e1;
   stroke-width: 4.2;
 }
 
@@ -367,10 +311,27 @@ const formattedFreeTokens = computed(() => formatTokens(freeTokens.value))
   font-size: 13px;
   font-weight: 600;
   color: var(--text-primary, #1e293b);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.compacted-badge {
+  font-size: 10px;
+  font-weight: 600;
+  color: #0f766e;
+  background: rgba(15, 118, 110, 0.1);
+  border-radius: 999px;
+  padding: 1px 6px;
 }
 
 [data-theme='dark'] .header-title {
   color: #f8fafc;
+}
+
+[data-theme='dark'] .compacted-badge {
+  color: #5eead4;
+  background: rgba(45, 212, 191, 0.16);
 }
 
 .header-right {

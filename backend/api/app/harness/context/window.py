@@ -33,13 +33,18 @@ def recent_window(
 
     ``keep_from``（compact_keep_from）指定保留起点 source_id 时，截断该起点
     之前的消息；起点本身不在列表中时忽略该参数（原始记录保留在 DB，不删除）。
-    事件（thought/tool/confirm/progress）已在调用方过滤。
+    本函数再按 ``is_window_eligible`` 过滤一遍（CX-2 纵深防御）。
     """
+    eligible = [
+        message
+        for message in messages
+        if is_window_eligible(str(message.get("role") or ""))
+    ]
     # 先按 keep_from 截断更早消息（若命中）
     if keep_from:
-        for index, message in enumerate(messages):
+        for index, message in enumerate(eligible):
             if message.get("source_id") == keep_from:
-                messages = messages[index:]
+                eligible = eligible[index:]
                 break
     # 再取末尾 limit 条（保持原始时间顺序）
-    return messages[-limit:] if limit > 0 else []
+    return eligible[-limit:] if limit > 0 else []
