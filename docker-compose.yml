@@ -71,31 +71,56 @@ services:
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       # 检索 Playground / RAG 评测的 LightRAG 服务地址；stub 空返回时共享检索层自动回退本地关键词。
       LIGHTRAG_BASE_URL: ${LIGHTRAG_BASE_URL:-http://lightrag:9621}
-    # bwrap 沙箱需要 unshare/mount/pivot_root 及在 userns 内挂载 proc；
-    # Docker 默认 seccomp/能力位会拦截，须放开（仅 api 容器）。
-    # privileged 是在本 Docker 环境下让 bubblewrap 完整工作的必要条件
-    # （cap_add SYS_ADMIN + seccomp:unconfined 仍无法通过 userns proc 挂载）。
-    privileged: true
-    security_opt:
-      - seccomp:unconfined
-    cap_add:
-      - SYS_ADMIN
+    # Harness 沙箱（bash 工具）：bwrap 已迁至独立 runner 容器（P4-2），
+    # api 不再需要 privileged/seccomp:unconfined/SYS_ADMIN/bubblewrap。
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      runner:
+        condition: service_started
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
       - ./data:/data
       - ./.env:/run/config/.env
+    environment:
+      # 沙箱 runner（compose 内网，不发布主机端口）
+      SANDBOX_RUNNER_URL: ${SANDBOX_RUNNER_URL:-http://runner:8001}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
       interval: 10s
       timeout: 5s
       retries: 6
       start_period: 10s
+
+  runner:
+    # 独立沙箱 Runner（P4-2）：bash bwrap 内核执行体，唯一持有
+    # privileged + seccomp:unconfined + SYS_ADMIN 的容器（api 已移除）。
+    image: ${RUNNER_IMAGE:-ai-eval-platform-runner}
+    build:
+      context: ./backend
+      dockerfile: runner/Dockerfile
+    restart: unless-stopped
+    privileged: true
+    security_opt:
+      - seccomp:unconfined
+    cap_add:
+      - SYS_ADMIN
+    environment:
+      # 工作区根（与 api 同挂 ./data:/data，路径两侧一致）
+      SANDBOX_WORKSPACE_ROOT: /data/workspaces
+      RUNNER_HOST: 0.0.0.0
+      RUNNER_PORT: "8001"
+    volumes:
+      - ./data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,json; print(json.load(urllib.request.urlopen('http://localhost:8001/health')))"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
 
   worker:
     image: ${WORKER_IMAGE:-ai-eval-platform-worker}

@@ -68,6 +68,7 @@ jobs:
               "worker": {"service": "worker", "context": "backend", "dockerfile": "backend/worker/Dockerfile"},
               "lightrag": {"service": "lightrag", "context": "backend/lightrag", "dockerfile": "backend/lightrag/Dockerfile"},
               "stress": {"service": "stress", "context": "backend/stress", "dockerfile": "backend/stress/Dockerfile"},
+              "runner": {"service": "runner", "context": "backend", "dockerfile": "backend/runner/Dockerfile"},
           }
           path_prefixes = {
               "web": "frontend/",
@@ -75,6 +76,7 @@ jobs:
               "worker": "backend/worker/",
               "lightrag": "backend/lightrag/",
               "stress": "backend/stress/",
+              "runner": "backend/runner/",
           }
 
           base = os.environ.get("BASE_SHA", "")
@@ -98,9 +100,9 @@ jobs:
                   for service, prefix in path_prefixes.items()
                   if any(path.startswith(prefix) for path in changed)
               ]
-              # 共享模型包 backend/shared/ 被 api 与 worker 打进镜像，变更须同时重建
+              # 共享包 backend/shared/ 被 api/worker/runner 打进镜像，变更须同时重建
               if any(path.startswith("backend/shared/") for path in changed):
-                  selected += [s for s in ("api", "worker") if s not in selected]
+                  selected += [s for s in ("api", "worker", "runner") if s not in selected]
 
           matrix = {"include": [definitions[service] for service in selected]}
           print(f"动态构建服务：{', '.join(selected) if selected else '无'}")

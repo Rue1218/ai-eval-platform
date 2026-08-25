@@ -1,7 +1,9 @@
-"""bwrap 沙箱集成测试（真实沙箱环境，M5 阶段 3，EX-6）。
+"""bwrap 沙箱内核集成测试（真实沙箱环境，M5 阶段 3，EX-6 / P4-2）。
 
-覆盖：正常执行、会话目录隔离、系统目录只读、敏感路径遮蔽、超时整树清理、
-内存超限、无网络。宿主机无 bwrap / 被 seccomp 拦截时自动跳过（不假成功）。
+P4-2 起 bash 由独立 runner 容器执行，api 侧不再持有 bwrap；本测试直接验证
+``shared.sandbox_kernel``（api 与 runner 共用内核）。覆盖：正常执行、会话目录
+隔离、系统目录只读、敏感路径遮蔽、超时整树清理、内存超限、无网络。宿主机无
+bwrap / 被 seccomp 拦截时自动跳过（不假成功）。
 """
 
 import os
@@ -9,9 +11,7 @@ import tempfile
 import time
 
 import pytest
-
-from app.errors import AppError, ErrorCode
-from app.harness.execution.sandbox import SandboxLimits, probe_sandbox, run_sandboxed
+from shared.sandbox_kernel import SandboxError, SandboxLimits, probe_sandbox, run_sandboxed
 
 pytestmark = pytest.mark.skipif(
     not probe_sandbox(),
@@ -46,9 +46,9 @@ def test_sandbox_workspace_writable() -> None:
 
 def test_sandbox_system_dirs_readonly() -> None:
     """系统目录只读：/usr 不可写（沙箱内唯一可写面为工作区）。"""
-    with pytest.raises(AppError) as error:
+    with pytest.raises(SandboxError) as error:
         _run("touch /usr/x.txt")
-    assert error.value.code == ErrorCode.INTERNAL
+    assert error.value.code == "INTERNAL"
 
 
 def test_sandbox_sensitive_paths_shielded() -> None:
@@ -76,24 +76,24 @@ def test_sandbox_other_session_workspace_hidden() -> None:
 
 
 def test_sandbox_timeout_kills_process_tree() -> None:
-    """超时：wall-clock 超时抛 AppError(TIMEOUT)，进程树被清理。"""
-    with pytest.raises(AppError) as error:
+    """超时：wall-clock 超时抛 SandboxError(TIMEOUT)，进程树被清理。"""
+    with pytest.raises(SandboxError) as error:
         _run("sleep 5", timeout_s=1.0)
-    assert error.value.code == ErrorCode.TIMEOUT
+    assert error.value.code == "TIMEOUT"
 
 
 def test_sandbox_memory_limit_enforced() -> None:
     """内存超限：分配超 256MB 虚拟内存的命令失败（非零退出码）。"""
-    with pytest.raises(AppError) as error:
+    with pytest.raises(SandboxError) as error:
         _run("python3 -c 'a=[0]*10**8'")
-    assert error.value.code == ErrorCode.INTERNAL
+    assert error.value.code == "INTERNAL"
 
 
 def test_sandbox_no_network() -> None:
     """无网络：--unshare-net 下外部连接失败（即使 curl 二进制存在）。"""
-    with pytest.raises(AppError) as error:
+    with pytest.raises(SandboxError) as error:
         _run("curl -s --connect-timeout 2 http://example.com")
-    assert error.value.code == ErrorCode.INTERNAL
+    assert error.value.code == "INTERNAL"
 
 
 def test_sandbox_fork_bomb_blocked() -> None:
@@ -101,7 +101,7 @@ def test_sandbox_fork_bomb_blocked() -> None:
     started = time.monotonic()
     try:
         _run(":(){ :|:& };:", timeout_s=3.0)
-    except AppError:
+    except SandboxError:
         return  # 超时或命令失败均视为受限
     # 未抛错时也必须快速返回（fork 被 ulimit -u 32 拦截），证明未无限派生进程
     assert time.monotonic() - started < 3.0

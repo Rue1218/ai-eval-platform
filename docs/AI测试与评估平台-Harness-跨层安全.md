@@ -213,7 +213,7 @@ def assert_no_concurrent_confirm(pending: PendingConfirm) -> None:
 | M8-D3 | owner 校验文案 | 不泄露"非作者"具体原因，统一"无权操作确认卡" |
 | M8-D4 | 行锁方式 | `SELECT ... FOR UPDATE` 行锁读 `sessions.pending_confirm` |
 | M8-D5 | 脱敏键集合 | 5 类（api_key/token/password/secret/cookie）大小写不敏感 |
-| M8-D6（V0.5.0） | bash 沙箱边界 | 阶段 3 开放通用 bash：**bwrap 进程级沙箱**（`sandbox.py`）——`--unshare-user/net/pid/ipc/uts` 命名空间隔离、最小只读 bind（`/usr`/`/bin`/`/sbin`/`/lib*`/`/etc`，**不暴露** `/app`、`/run/config/.env`、`/data` 下其他会话工作区）、`--bind` 会话工作区到 `/work`（唯一可写面）、`--tmpfs /tmp /run`、`--clearenv` + 最小 PATH；`ulimit` 内存（256MB）/进程数（32）/CPU（10s）+ 墙钟超时（15s）`killpg` 整树清理（`--die-with-parent`）。命令黑名单为**纵深防御**；bwrap 不可用/引擎 `off` 时 **fail-closed（VALIDATION）**，禁止降级为裸 subprocess。威胁模型：防跨会话/宿主逃逸与资源耗尽（fork 炸弹/内存），不防会话内自毁（工作区文件由模型操作）。部署依赖 api 容器 `security_opt: seccomp:unconfined`；更严格的自定义 seccomp profile 列为后续项 |
+| M8-D6（V0.5.0） | bash 沙箱边界 | 阶段 3 开放通用 bash：**bwrap 进程级沙箱**（`sandbox.py`）——`--unshare-user/net/pid/ipc/uts` 命名空间隔离、最小只读 bind（`/usr`/`/bin`/`/sbin`/`/lib*`/`/etc`，**不暴露** `/app`、`/run/config/.env`、`/data` 下其他会话工作区）、`--bind` 会话工作区到 `/work`（唯一可写面）、`--tmpfs /tmp /run`、`--clearenv` + 最小 PATH；`ulimit` 内存（256MB）/进程数（32）/CPU（10s）+ 墙钟超时（15s）`killpg` 整树清理（`--die-with-parent`）。命令黑名单为**纵深防御**；bwrap 不可用/引擎 `off` 时 **fail-closed（VALIDATION）**，禁止降级为裸 subprocess。威胁模型：防跨会话/宿主逃逸与资源耗尽（fork 炸弹/内存），不防会话内自毁（工作区文件由模型操作）。部署依赖 runner 容器 `security_opt: seccomp:unconfined` + `privileged` + `SYS_ADMIN`（P4-2 起 bash 由独立 runner 容器执行，api 容器已移除特权与 bubblewrap）；更严格的自定义 seccomp profile 列为后续项 |
 
 ---
 
