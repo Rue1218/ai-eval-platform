@@ -2,7 +2,7 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.33 |
+| 文档版本 | V1.34 |
 | 对应 PRD | V1.13（功能唯一权威） |
 | 对应设计规范 | V1.3（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V0.5（LangGraph 单轮 Agent 与 WS 桥接；JSON 仍以本文为准） |
@@ -29,6 +29,8 @@
 > V1.32（2026-08-25）：基础 `read`、`write`、`edit`、`bash`、`web_search`、`web_fetch` 与对话拆解 `task` 改为模型原生 Function Calling 直连；仅评测任务桥 `platform.tasks` 继续作为 MCP 扩展。新增 Firecrawl 服务端配置、网页抓取安全投影和原子文件写入边界。
 >
 > V1.33（2026-08-25）：单回合允许多条 `assistant_message`；`response.completed` 仍为整轮结束。可选 `interim=true` 表示阶段叙述（计划/下一步），不是 Observation 原文，不得结束生成态。清单复用 `plan.slots.steps` 与 `task` 的 `tool_result`，不新事件。
+>
+> V1.34（2026-08-25）：原生工具回传模型的单条结果上限统一为 8,000 字符（`read`/`bash`/`web_*` 对齐）；未读完时模型正文携带 `next_offset`。ToolCard 预览与 WS 投影不变。
 
 ---
 
@@ -619,7 +621,7 @@ Embedding 与 Reranker 的 URL、模型和 Key 与主模型使用相同的“按
 
 | 函数 | 用途与上限 | 执行/结果边界 |
 | --- | --- | --- |
-| `read(path, offset?, limit?)` | workspace 相对路径；0-based 分页；最多 2,000 行、120,000 字符、10MB 文件 | 单次流式扫描；完整片段只进下一模型回合，ToolCard 仅显示行范围和 ≤500 字符预览 |
+| `read(path, offset?, limit?)` | workspace 相对路径；0-based 分页；最多 2,000 行、8,000 字符、10MB 文件 | 单次流式扫描；模型可见片段 ≤8,000 字符，未读完带 `next_offset`；ToolCard 仅显示行范围和 ≤500 字符预览 |
 | `write(path, content)` / `edit(path, old, new)` | 新建最多 2MB UTF-8 文件 / 精确单次替换 | `write` 使用 O_EXCL 防覆盖竞争；`edit` fsync 后 `os.replace` 原子提交；不回显写入正文 |
 | `bash(command)` | 会话 workspace 内的短命令 | 始终经 bwrap：无网络、唯一可写目录、资源上限、超时整树清理；引擎不可用 fail-closed |
 | `web_search(query, limit?)` | 关键词 ≤500 字符、1–10 条 | API 容器用环境变量中的 Firecrawl REST Key；未配置返回 `VALIDATION`，不伪造结果；结果结构化并脱敏 |
@@ -1969,4 +1971,14 @@ catalog/provider；`GET /api/mcp/tools` 只保留评测/RAG 扩展目录，当�
 | `docs/AI测试与评估平台-API.md` | §4.3 `assistant_message` 允许多条 + `interim` |
 | `backend/api/app/agent/react.py` | native 同轮正文+ToolCall 先发阶段叙述 |
 | `frontend/src/views/Agent.vue` | 按事件序另开助手气泡；渲染 plan 步骤清单 |
+
+**V1.34（2026-08-25）— 原生工具模型可见结果上限**
+
+所有原生 ToolCall 回传模型的单条正文统一 ≤8,000 字符，避免大文档/长 bash/网页正文拖垮下一轮预填充。`read` 字符窗口与该上限对齐；未读完时 `model_text` 携带 `next_offset`。浏览器 `tool_result.data` 预览仍 ≤500 字符。
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/harness/context/observation.py` | 冻结 `MODEL_TOOL_RESULT_MAX_CHARS=8000` |
+| `backend/api/app/harness/execution/dispatch.py` / `sandbox.py` / `registry.py` | read/web/bash 窗口对齐；read 大文件按块统计剩余行 |
+| `backend/api/app/agent/react.py` / `toolnode.py` | 回传截断 + 工具/模型耗时与 payload 字符数追踪 |
 

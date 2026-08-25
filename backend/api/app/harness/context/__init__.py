@@ -9,7 +9,12 @@ from .compact import (
     summarize,
 )
 from .meter import ContextMeter, project_meter
-from .observation import to_observation, truncate_with_marker
+from .observation import (
+    DEFAULT_MAX_CHARS,
+    MODEL_TOOL_RESULT_MAX_CHARS,
+    to_observation,
+    truncate_with_marker,
+)
 from .window import WindowMessage, is_window_eligible, recent_window
 
 __all__ = [
@@ -17,6 +22,8 @@ __all__ = [
     "COMPACT_VERSION",
     "CompactProtocolResult",
     "ContextMeter",
+    "DEFAULT_MAX_CHARS",
+    "MODEL_TOOL_RESULT_MAX_CHARS",
     "WindowMessage",
     "assemble",
     "is_window_eligible",

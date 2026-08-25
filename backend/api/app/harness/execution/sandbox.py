@@ -23,6 +23,7 @@ from shared.sandbox_kernel import SandboxLimits  # noqa: F401  （对外兼容�
 
 from app.config import settings
 from app.errors import AppError, ErrorCode
+from app.harness.context.observation import MODEL_TOOL_RESULT_MAX_CHARS
 
 logger = logging.getLogger("ai-eval.harness.sandbox")
 
@@ -49,7 +50,7 @@ def run_sandboxed(
     timeout_s: float,
     limits: SandboxLimits | None = None,
     bwrap_bin: str = "/usr/bin/bwrap",
-    max_output_chars: int = 20000,
+    max_output_chars: int = MODEL_TOOL_RESULT_MAX_CHARS,
 ) -> str:
     """经 runner 在一次性 bwrap 沙箱内执行命令，返回 stdout；失败归一为 AppError。
 

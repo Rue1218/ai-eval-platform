@@ -606,3 +606,25 @@ def test_react_stage_input_uses_observe_think_act() -> None:
     assert "【工具结果】" in REACT_STAGE_INPUT
     assert "Observe → Think → Act" in NATIVE_TOOL_STAGE_INPUT
     assert "不要把工具原文粘贴成助手正文" in NATIVE_TOOL_STAGE_INPUT
+
+
+def test_hydrate_native_messages_clips_overlong_tool_result() -> None:
+    """原生 ToolResult 回传模型时按统一上限截断，避免预填充超时。"""
+    from app.agent.react import _hydrate_native_messages
+    from app.harness.context.observation import MODEL_TOOL_RESULT_MAX_CHARS
+    from app.harness.execution import NativeToolResultStore
+
+    store = NativeToolResultStore()
+    store.put("t1", "c1", "x" * (MODEL_TOOL_RESULT_MAX_CHARS + 800))
+    hydrated = _hydrate_native_messages(
+        {
+            "native_messages": [
+                {"role": "tool", "tool_call_id": "c1", "name": "bash", "content": ""},
+            ]
+        },
+        store,
+        "t1",
+    )
+    content = str(hydrated[0]["content"])
+    assert "截断" in content
+    assert len(content) < MODEL_TOOL_RESULT_MAX_CHARS + 80
