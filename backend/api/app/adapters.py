@@ -389,6 +389,15 @@ class AdapterToolCall:
 
 
 @dataclass(frozen=True)
+class AdapterStreamEvent:
+    """流式适配器的内部事件；工具调用只在参数完整后发出。"""
+
+    kind: str
+    text: str = ""
+    tool_call: AdapterToolCall | None = None
+
+
+@dataclass(frozen=True)
 class AdapterResult:
     """三协议统一调用结果。
 
@@ -553,6 +562,26 @@ def _full_tool_calls(protocol: str, data: dict) -> tuple[AdapterToolCall, ...]:
             )
         )
     return tuple(calls)
+
+
+def _complete_stream_tool_call(
+    raw_id: object,
+    raw_name: object,
+    raw_arguments: object,
+) -> AdapterToolCall | None:
+    """把已累计完成的流式参数转换为可执行调用，拒绝不完整 JSON。"""
+    name = str(raw_name or "").strip()
+    if not name:
+        return None
+    try:
+        arguments = _tool_call_arguments(raw_arguments)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise AppError(ErrorCode.UPSTREAM, "上游工具调用参数结构异常") from exc
+    return AdapterToolCall(
+        call_id=str(raw_id or "").strip() or _new_call_id(),
+        name=name,
+        arguments=arguments,
+    )
 
 
 def _service_base_url(base_url: str) -> str:
@@ -720,7 +749,8 @@ def stream_protocol(
     should_abort: Callable[[], bool] | None = None,
     reasoning_enabled: bool = True,
     reasoning_effort: str = "medium",
-) -> Iterator[tuple[str, str]]:
+    tools: list[dict] | None = None,
+) -> Iterator[tuple[str, str] | AdapterStreamEvent]:
     """按协议流式调用上游模型，逐块 yield ``(kind, text)`` 增量（SSE）。
 
     ``kind`` 为增量类别：``"content"`` 是正式回复正文，``"reasoning"``
@@ -732,13 +762,40 @@ def stream_protocol(
     读体按 ``STREAM_READ_SLICE_S`` 切片以便 ``should_abort`` 生效。
     超时归一为 TIMEOUT，上游 4xx/5xx 归一为 UPSTREAM。若网关忽略
     ``stream`` 参数直接返回完整 JSON（非 SSE），则兜底解析全文并作为
-    单块 content yield，保证调用方拿到正确结果而非空流降级。
+    单块 content yield，保证调用方拿到正确结果而非空流降级。原生工具参数
+    会在适配器内累积，只有完整 JSON 才以 ``AdapterStreamEvent(tool_call)`` 发出。
     """
     if protocol not in SUPPORTED_PROTOCOLS:
         raise AppError(ErrorCode.VALIDATION, f"协议不受支持：{protocol}")
 
     base = _service_base_url(base_url)
     headers = {"Content-Type": "application/json"}
+
+    def complete_stream_call(
+        raw_id: object, raw_name: object, raw_arguments: object
+    ) -> list[AdapterToolCall]:
+        """把单项完成调用包装为列表，便于三个协议统一消费。"""
+        call = _complete_stream_tool_call(raw_id, raw_name, raw_arguments)
+        return [call] if call is not None else []
+
+    def drain_tool_calls(states: dict[str, dict[str, object]]) -> list[AdapterToolCall]:
+        """在完成信号或流结束时一次性输出所有已累计调用。"""
+        completed: list[AdapterToolCall] = []
+        for key in tuple(states):
+            state = states.pop(key)
+            parts = state.get("arguments")
+            raw_arguments = (
+                "".join(str(part) for part in parts)
+                if isinstance(parts, list)
+                else ""
+            )
+            raw_arguments = raw_arguments or state.get("input")
+            completed.extend(
+                complete_stream_call(
+                    state.get("call_id"), state.get("name"), raw_arguments
+                )
+            )
+        return completed
 
     if protocol == "openai_chat":
         url = f"{base}/v1/chat/completions"
@@ -750,6 +807,9 @@ def stream_protocol(
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
+        native_tools = _adapt_tools(tools, protocol)
+        if native_tools:
+            body["tools"] = native_tools
         # 流式思考是否开启由 Agent 设置控制；默认值保持 Mimo 旧行为（开启）。
         _apply_compatible_thinking(body, base, model, reasoning_enabled, reasoning_effort)
         _apply_openai_reasoning(
@@ -775,9 +835,42 @@ def stream_protocol(
                 return ("reasoning", str(reasoning))
             return ("content", str(delta.get("content") or ""))
 
+        chat_calls: dict[str, dict[str, object]] = {}
+
+        def tool_events_of(data: dict) -> list[AdapterToolCall]:
+            """累计 Chat Completions 的 indexed tool_calls，完成信号后再输出。"""
+            choices = data.get("choices") or [{}]
+            choice = choices[0] if isinstance(choices[0], Mapping) else {}
+            delta = choice.get("delta") or {}
+            raw_calls = delta.get("tool_calls") if isinstance(delta, Mapping) else None
+            if isinstance(raw_calls, list):
+                for index, raw_call in enumerate(raw_calls):
+                    if not isinstance(raw_call, Mapping):
+                        continue
+                    key = str(raw_call.get("index", index))
+                    state = chat_calls.setdefault(key, {"arguments": []})
+                    if raw_call.get("id"):
+                        state["call_id"] = raw_call["id"]
+                    function = raw_call.get("function") or {}
+                    if isinstance(function, Mapping):
+                        if function.get("name"):
+                            state["name"] = function["name"]
+                        arguments = function.get("arguments")
+                        if arguments:
+                            state["arguments"].append(str(arguments))
+            if choice.get("finish_reason") not in {"tool_calls", "function_call"}:
+                return []
+            return drain_tool_calls(chat_calls)
+
+        def flush_tool_events() -> list[AdapterToolCall]:
+            return drain_tool_calls(chat_calls)
+
     elif protocol == "openai_responses":
         url = f"{base}/v1/responses"
         body = {"model": model, "input": _adapt_messages(messages, protocol), "stream": True, "max_output_tokens": max_tokens}
+        native_tools = _adapt_tools(tools, protocol)
+        if native_tools:
+            body["tools"] = native_tools
         if system:
             body["instructions"] = system
         _apply_openai_reasoning(
@@ -797,6 +890,54 @@ def stream_protocol(
                 return ("content", str(data.get("delta") or ""))
             return ("content", "")
 
+        response_calls: dict[str, dict[str, object]] = {}
+
+        def tool_events_of(data: dict) -> list[AdapterToolCall]:
+            """累计 Responses 函数参数 delta，并优先使用官方 done 事件完成调用。"""
+            event_type = str(data.get("type") or "")
+            raw_key = data.get("item_id")
+            if raw_key is None:
+                raw_key = data.get("output_index")
+            key = str(raw_key) if raw_key is not None else ""
+            if event_type == "response.function_call_arguments.delta" and key:
+                state = response_calls.setdefault(key, {"arguments": []})
+                if data.get("delta"):
+                    state["arguments"].append(str(data["delta"]))
+                return []
+            if event_type == "response.function_call_arguments.done":
+                state = response_calls.pop(key, {})
+                return complete_stream_call(
+                    data.get("call_id") or state.get("call_id") or key,
+                    data.get("name") or state.get("name"),
+                    data.get("arguments")
+                    if data.get("arguments") is not None
+                    else "".join(state.get("arguments", [])),
+                )
+            if event_type in {"response.output_item.added", "response.output_item.done"}:
+                item = data.get("item") or {}
+                if isinstance(item, Mapping) and item.get("type") == "function_call":
+                    item_key = str(item.get("id") or item.get("call_id") or key)
+                    if event_type.endswith("added"):
+                        response_calls.setdefault(
+                            item_key,
+                            {
+                                "call_id": item.get("call_id") or item.get("id"),
+                                "name": item.get("name"),
+                                "arguments": [],
+                            },
+                        )
+                        return []
+                    response_calls.pop(item_key, None)
+                    return complete_stream_call(
+                        item.get("call_id") or item.get("id"),
+                        item.get("name"),
+                        item.get("arguments"),
+                    )
+            return []
+
+        def flush_tool_events() -> list[AdapterToolCall]:
+            return drain_tool_calls(response_calls)
+
     else:  # anthropic_messages
         url = f"{base}/v1/messages"
         body = {
@@ -806,6 +947,9 @@ def stream_protocol(
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
+        native_tools = _adapt_tools(tools, protocol)
+        if native_tools:
+            body["tools"] = native_tools
         if system:
             body["system"] = system
         if reasoning_enabled and _supports_anthropic_thinking(model):
@@ -825,6 +969,41 @@ def stream_protocol(
                 if delta.get("type") == "text_delta":
                     return ("content", str(delta.get("text") or ""))
             return ("content", "")
+
+        anthropic_calls: dict[str, dict[str, object]] = {}
+
+        def tool_events_of(data: dict) -> list[AdapterToolCall]:
+            """累计 Anthropic input_json_delta，在 content_block_stop 时完成调用。"""
+            event_type = str(data.get("type") or "")
+            raw_index = data.get("index")
+            index = str(raw_index) if raw_index is not None else ""
+            if event_type == "content_block_start":
+                block = data.get("content_block") or {}
+                if isinstance(block, Mapping) and block.get("type") == "tool_use":
+                    anthropic_calls[index] = {
+                        "call_id": block.get("id"),
+                        "name": block.get("name"),
+                        "arguments": [],
+                        "input": block.get("input"),
+                    }
+                return []
+            if event_type == "content_block_delta" and index in anthropic_calls:
+                delta = data.get("delta") or {}
+                if isinstance(delta, Mapping) and delta.get("type") == "input_json_delta":
+                    partial = delta.get("partial_json")
+                    if partial:
+                        anthropic_calls[index]["arguments"].append(str(partial))
+                return []
+            if event_type == "content_block_stop" and index in anthropic_calls:
+                state = anthropic_calls.pop(index)
+                raw_arguments = "".join(state.get("arguments", [])) or state.get("input")
+                return complete_stream_call(
+                    state.get("call_id"), state.get("name"), raw_arguments
+                )
+            return []
+
+        def flush_tool_events() -> list[AdapterToolCall]:
+            return drain_tool_calls(anthropic_calls)
 
     if should_abort is not None and should_abort():
         raise StreamAborted()
@@ -875,6 +1054,9 @@ def stream_protocol(
                 if text:
                     yielded = True
                     yield (kind, text)
+                for tool_call in tool_events_of(data):
+                    yielded = True
+                    yield AdapterStreamEvent(kind="tool_call", tool_call=tool_call)
     except StreamAborted:
         raise
     except TimeoutError as exc:
@@ -882,6 +1064,11 @@ def stream_protocol(
     except OSError as exc:
         # 读流中连接中断（对端重置等）：统一归一为 UPSTREAM
         raise AppError(ErrorCode.UPSTREAM, "上游连接中断") from exc
+
+    # 有些兼容网关不发送 finish/done 事件；流自然结束后补齐未完成调用。
+    for tool_call in flush_tool_events():
+        yielded = True
+        yield AdapterStreamEvent(kind="tool_call", tool_call=tool_call)
 
     # 兜底：SSE 流中无任何增量且响应体是完整 JSON —— 网关按非流式返回了结果，
     # 用非流式提取器解析全文作为单块 content，避免调用方拿到空流而错误降级。
@@ -895,14 +1082,18 @@ def stream_protocol(
             if isinstance(data, dict):
                 try:
                     text = _full_text(protocol, data)
-                except (KeyError, IndexError, TypeError, AttributeError):
+                    tool_calls = _full_tool_calls(protocol, data)
+                except (KeyError, IndexError, TypeError, AttributeError, ValueError):
                     text = ""
+                    tool_calls = ()
                 if text:
                     # 网关忽略 stream 参数：记录一次便于排查上游流式支持情况
                     logging.getLogger(__name__).info(
                         "上游 %s 忽略 stream 参数返回完整 JSON，走非 SSE 兜底", base
                     )
                     yield ("content", text)
+                for tool_call in tool_calls:
+                    yield AdapterStreamEvent(kind="tool_call", tool_call=tool_call)
 
 
 def fetch_remote_models(

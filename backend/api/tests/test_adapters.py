@@ -11,7 +11,7 @@ from urllib.error import HTTPError
 import pytest
 
 from app import adapters
-from app.adapters import call_protocol, stream_protocol
+from app.adapters import AdapterStreamEvent, call_protocol, stream_protocol
 from app.errors import AppError, ErrorCode
 
 API_KEY = "sk-secret-key-123"
@@ -430,6 +430,113 @@ def test_stream_openai_chat_chunks(monkeypatch):
     assert chunks == [("content", "你"), ("content", "好")]
     assert seen["body"]["stream"] is True
     assert seen["headers"]["authorization"] == f"Bearer {API_KEY}"
+
+
+@pytest.mark.parametrize(
+    "protocol,lines,expected_tool",
+    [
+        (
+            "openai_chat",
+            [
+                'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"chat_read_1","function":{"name":"read","arguments":"{\\"path\\":"}}]}}]}',
+                'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"a.txt\\"}"}}]}}]}',
+                'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}',
+                "data: [DONE]",
+            ],
+            {
+                "type": "function",
+                "function": {
+                    "name": "read",
+                    "description": "读取文件",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                    },
+                },
+            },
+        ),
+        (
+            "openai_responses",
+            [
+                'data: {"type":"response.output_item.added","item":{"id":"fc_1","type":"function_call","call_id":"responses_read_1","name":"read"}}',
+                'data: {"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":"{\\"path\\":"}',
+                'data: {"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":"\\"a.txt\\"}"}',
+                'data: {"type":"response.function_call_arguments.done","item_id":"fc_1","call_id":"responses_read_1","name":"read","arguments":"{\\"path\\":\\"a.txt\\"}"}',
+            ],
+            {
+                "type": "function",
+                "name": "read",
+                "description": "读取文件",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                },
+            },
+        ),
+        (
+            "anthropic_messages",
+            [
+                'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"anthropic_read_1","name":"read","input":{}}}',
+                'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"path\\":"}}',
+                'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"\\"a.txt\\"}"}}',
+                'data: {"type":"content_block_stop","index":0}',
+            ],
+            {
+                "name": "read",
+                "description": "读取文件",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                },
+            },
+        ),
+    ],
+)
+def test_stream_native_tool_calls_accumulate_until_complete(
+    monkeypatch, protocol, lines, expected_tool
+):
+    """P2-B：三协议的工具参数增量必须完整后才交给模型网关。"""
+    seen = _capture_stream(monkeypatch, lines)
+    chunks = list(
+        stream_protocol(
+            **_kwargs(protocol),
+            tools=[
+                {
+                    "name": "read",
+                    "description": "读取文件",
+                    "parameters_schema": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                    },
+                }
+            ],
+        )
+    )
+
+    assert seen["body"]["tools"] == [expected_tool]
+    assert len(chunks) == 1
+    assert isinstance(chunks[0], AdapterStreamEvent)
+    assert chunks[0].kind == "tool_call"
+    assert chunks[0].tool_call is not None
+    assert chunks[0].tool_call.name == "read"
+    assert chunks[0].tool_call.arguments == {"path": "a.txt"}
+
+
+def test_stream_rejects_incomplete_tool_arguments(monkeypatch):
+    """P2-B：完成帧上的不完整工具 JSON 必须失败，绝不能猜测执行参数。"""
+    _capture_stream(
+        monkeypatch,
+        [
+            'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"chat_read_1","function":{"name":"read","arguments":"{\\"path\\":"}}]}}]}',
+            'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}',
+        ],
+    )
+
+    with pytest.raises(AppError) as error:
+        list(stream_protocol(**_kwargs("openai_chat")))
+
+    assert error.value.code == ErrorCode.UPSTREAM
+    assert error.value.message == "上游工具调用参数结构异常"
 
 
 def test_stream_openai_chat_reasoning_chunks(monkeypatch):

@@ -323,6 +323,62 @@ def _stream_final_answer(
     return final_response
 
 
+def _stream_native_tool_round(
+    gateway: object,
+    request: ModelRequest,
+    run_config: dict,
+) -> ModelResponse | None:
+    """流式执行原生工具回合，并把最终自然语言增量投影到外层 Agent。"""
+    stream = getattr(gateway, "stream", None)
+    if not callable(stream):
+        return None
+
+    writer = get_stream_writer()
+    content: list[str] = []
+    final_response: ModelResponse | None = None
+    started = time.perf_counter()
+    try:
+        for event in stream(request, config=run_config):
+            if event.kind == "completed":
+                final_response = event.response
+                continue
+            if event.kind == "tool_call":
+                # 上游工具参数只在网关确认完整后返回；实际 ToolCard 仍由 ToolNode
+                # 的既有事件投影，避免新增 WebSocket 事件契约。
+                continue
+            if not event.text:
+                continue
+            if event.kind == "reasoning":
+                writer({"kind": "reasoning", "text": event.text})
+            elif event.kind == "content":
+                content.append(event.text)
+                writer({"kind": "content", "text": event.text})
+    except StreamAborted:
+        raise
+    except AppError:
+        raise
+    except Exception as exc:
+        logger.info("ReAct 原生工具回合流式调用异常 type=%s", type(exc).__name__)
+        raise AppError(ErrorCode.INTERNAL, "原生工具回合生成失败") from exc
+
+    if final_response is None:
+        return ModelResponse(
+            text="".join(content),
+            usage={},
+            latency_ms=round((time.perf_counter() - started) * 1000),
+        )
+    if not final_response.text and content:
+        # 避免兼容网关遗漏收尾正文时覆盖已输出的增量，同时保留完整 ToolCall。
+        return ModelResponse(
+            text="".join(content),
+            usage=final_response.usage,
+            raw=final_response.raw,
+            latency_ms=final_response.latency_ms,
+            tool_calls=final_response.tool_calls,
+        )
+    return final_response
+
+
 def _generate_final_answer(
     gateway: object,
     request: ModelRequest,
@@ -423,7 +479,15 @@ def build_react_nodes(
         budget = from_dict(state.get("budget") or {})
         started = time.perf_counter()
         try:
-            response = gateway.invoke(request, config=model_run_config)  # type: ignore[attr-defined]
+            # 工具结果后的原生回合直接走流式网关：若模型收敛为自然语言，正文立即
+            # 投影；若继续请求工具，完整 ToolCall 会在收尾响应中回到下方 ToolNode。
+            response = (
+                _stream_native_tool_round(gateway, request, model_run_config)
+                if native_tool_mode and state_native_messages
+                else None
+            )
+            if response is None:
+                response = gateway.invoke(request, config=model_run_config)  # type: ignore[attr-defined]
         except AppError as exc:
             return {
                 "pending_events": [
@@ -474,30 +538,17 @@ def build_react_nodes(
                     "budget": budget.to_dict(),
                 }
 
-            if state_native_messages and not _looks_like_legacy_react(response.text):
-                # 支持原生调用的模型在工具结果后会直接返回自然语言。为保持工具后
-                # 正文可流式展示，先把它作为收敛判断，再追加一轮无工具流式回答；
-                # 首轮无工具时则直接采用该回答，避免无意义的双调用。
-                has_native_tool_result = any(
-                    str(message.get("role") or "") == "tool" for message in native_messages
-                )
-                final_response = None
-                if has_native_tool_result:
-                    budget = consume_model_call(budget)
-                    final_response = _generate_final_answer(
-                        gateway,
-                        request,
-                        model_run_config,
-                        system=system,
-                    )
-                text = (
-                    final_response.text
-                    if final_response is not None and final_response.text.strip()
-                    else response.text.strip() or FINAL_ANSWER_EMPTY_TEXT
-                )
+            if (
+                native_tool_mode
+                and state_native_messages
+                and not _looks_like_legacy_react(response.text)
+            ):
+                # 此回合已由 _stream_native_tool_round 输出正文，不再追加第三次
+                # 无工具模型调用；简单 "工具 → 结论" 路径因此固定为两次模型调用。
+                text = response.text.strip() or FINAL_ANSWER_EMPTY_TEXT
                 completed = _assistant_completion(
                     text,
-                    usage=(final_response.usage if final_response is not None else response.usage),
+                    usage=response.usage,
                     latency_ms=round((time.perf_counter() - started) * 1000),
                 )
                 completed["budget"] = budget.to_dict()
