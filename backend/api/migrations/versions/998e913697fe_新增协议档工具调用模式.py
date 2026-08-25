@@ -1,7 +1,7 @@
 """新增协议档工具调用模式
 
 Revision ID: 998e913697fe
-Revises: a2b4c6d8e0f2
+Revises: d5b2f7e9a3c1
 Create Date: 2026-08-25 12:31:51.407639
 
 """
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = "998e913697fe"
-down_revision: str | None = "a2b4c6d8e0f2"
+down_revision: str | None = "d5b2f7e9a3c1"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
