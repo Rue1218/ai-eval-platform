@@ -4,7 +4,7 @@
 - OR-4 守卫：不同命令的连续工具调用不被误杀（原只比较工具名）
 - OR-4 纠正机制：首次相同调用给纠正机会，done 收尾不再回环触发错误
 - gateway.invoke/ainvoke 接受 config 参数（原 react 路径 TypeError）
-- skill_hints 接入工具列表（系统提示词不再显示"可见技能：（无）"）
+- assemble 常驻 Skill Hint（系统提示词不再显示"可见技能：（无）"）
 - 每轮 ReAct thought 透出为 thought 事件
 
 不触碰 WS/DB/真实模型；用脚本化网关桩驱动完整多轮图。
@@ -179,7 +179,7 @@ def test_tool_path_emits_thought_events() -> None:
 
 
 def test_react_system_prompt_skill_hints_list_tools() -> None:
-    """回归：skill_hints 接入工具列表，系统提示词不再显示"（无）"。"""
+    """回归：assemble 注入常驻 Skill Hint 与本轮短工具，不再显示"（无）"。"""
     gateway = _ScriptGateway([_REACT_DONE])
     agent = LangGraphAgent(gateway, build_default_registry())
     _collect(agent, _serializable())
@@ -187,6 +187,7 @@ def test_react_system_prompt_skill_hints_list_tools() -> None:
     assert "（无）" not in system
     assert "bash" in system
     assert "read" in system
+    assert "基准评测" in system
 
 
 # —— gateway config 参数回归 ——

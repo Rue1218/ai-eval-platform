@@ -332,14 +332,36 @@ def test_legacy_profile_does_not_send_native_tools() -> None:
 
 
 def test_react_preserves_configured_system_prompt() -> None:
-    """ReAct 必须保留 ws.py 注入的系统提示词，再追加工具约束。"""
+    """ReAct 必须保留 ws.py 注入的系统提示词，再按 CX-4 装配工具约束。"""
     gateway = _ScriptGateway([_REACT_DONE])
     _collect(
         LangGraphAgent(gateway, build_default_registry()),
         _serializable(system="【自定义平台规则】读取后必须先总结。"),
     )
-    assert "【自定义平台规则】读取后必须先总结。" in gateway.calls[0].system
-    assert "【本轮可用平台工具】" in gateway.calls[0].system
+    system = gateway.calls[0].system
+    assert "【自定义平台规则】读取后必须先总结。" in system
+    assert "【本轮可用平台工具】" in system
+    assert system.index("【自定义平台规则】") < system.index("【可见技能】")
+    assert system.index("【可见技能】") < system.index("【当前阶段】")
+    names = {item["name"] for item in gateway.calls[0].tools}
+    assert "read" in names
+    assert "task.create" not in names
+
+
+def test_react_assemble_injects_compact_summary() -> None:
+    """CX-4：configurable.session.compact_summary 装配到【会话摘要】。"""
+    gateway = _ScriptGateway([_REACT_DONE])
+    _collect(
+        LangGraphAgent(gateway, build_default_registry()),
+        _serializable(system="【Persona】评测助手"),
+        config={"configurable": {"session": {"compact_summary": "此前已完成基准评测规划"}}},
+    )
+    system = gateway.calls[0].system
+    assert "【会话摘要】" in system
+    assert "此前已完成基准评测规划" in system
+    assert system.index("【Persona】") < system.index("【可见技能】")
+    assert system.index("【可见技能】") < system.index("【会话摘要】")
+    assert system.index("【会话摘要】") < system.index("【当前阶段】")
 
 
 def test_react_done_immediately() -> None:

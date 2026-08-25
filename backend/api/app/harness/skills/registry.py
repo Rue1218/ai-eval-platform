@@ -39,6 +39,14 @@ def assert_skill_enabled(skill_id: str) -> None:
         raise AppError(ErrorCode.VALIDATION, "技能未启用")
 
 
+def get_hint(skill_id: str) -> SkillHint:
+    """取单个 SkillHint；未注册抛 AppError(VALIDATION)。"""
+    entry = SKILL_CATALOG.get(skill_id)
+    if entry is None:
+        raise AppError(ErrorCode.VALIDATION, f"未知技能：{skill_id}")
+    return SkillHint(skill_id=skill_id, name=entry[0], summary=entry[1])
+
+
 def list_hints() -> list[SkillHint]:
     """返回全部 SkillHint（M7 晚波契约），供 M4 路由注入与
     `/api/slash-commands` 对齐（SK-5）。"""

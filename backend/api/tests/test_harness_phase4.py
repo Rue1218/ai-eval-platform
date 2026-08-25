@@ -29,6 +29,7 @@ from app.harness.security import (
 from app.harness.skills import (
     DISABLED_SKILLS,
     assert_skill_enabled,
+    get_hint,
     list_hints,
     skill_to_kind,
 )
@@ -377,3 +378,14 @@ def test_list_hints_returns_skill_hints() -> None:
     assert len(hints) >= 4
     assert all(isinstance(hint, SkillHint) for hint in hints)
     assert all(hint.skill_id and hint.name and hint.summary for hint in hints)
+
+
+def test_get_hint_returns_catalog_entry() -> None:
+    """get_hint 按 skill_id 取常驻 Hint；未知技能抛 VALIDATION。"""
+    hint = get_hint("skill-benchmark")
+    assert hint.skill_id == "skill-benchmark"
+    assert hint.name == "基准评测"
+    assert hint.summary
+    with pytest.raises(AppError) as error:
+        get_hint("skill-unknown")
+    assert error.value.code == ErrorCode.VALIDATION
