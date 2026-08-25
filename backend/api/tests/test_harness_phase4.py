@@ -5,7 +5,7 @@
 
 import pytest
 
-from app.agent.reflect import reflect_node
+from app.agent.reflect import reflect_node, reflect_route
 from app.errors import AppError, ErrorCode
 from app.harness.contracts import Observation, PlanArtifact, SkillHint, to_dict
 from app.harness.feedback import (
@@ -110,6 +110,41 @@ def test_reflect_emits_completed_after_plan() -> None:
     assert out["verdict"] == "pass"
     assert kinds[-1] == "response.completed"
     assert out["pending_events"][-1]["payload"]["finish_reason"] == "stop"
+
+
+def test_reflect_failed_observation_replans() -> None:
+    """工具失败且允许重规划时不发 completed，verdict=retry。"""
+    out = reflect_node(
+        {
+            "plan": to_dict(_plan(tools_needed=("task",), allows_replan=True)),
+            "observations": [_obs(ok=False)],
+            "replan_count": 0,
+        }
+    )
+    assert out["verdict"] == "retry"
+    assert out["force_replan"] is True
+    assert out["replan_count"] == 1
+    assert "response.completed" not in [event["kind"] for event in out["pending_events"]]
+
+
+def test_reflect_stops_after_max_replans() -> None:
+    """重规划满 2 次后必须收尾，不得继续空转。"""
+    out = reflect_node(
+        {
+            "plan": to_dict(_plan(tools_needed=("task",), allows_replan=True)),
+            "observations": [_obs(ok=False)],
+            "replan_count": 2,
+        }
+    )
+    assert out["verdict"] == "reject"
+    assert out["pending_events"][-1]["payload"]["finish_reason"] == "error"
+
+
+def test_reflect_route_clarify_and_retry() -> None:
+    """P2：clarify 进澄清卡，retry 回规划，其余结束。"""
+    assert reflect_route({"verdict": "clarify"}) == "clarify"
+    assert reflect_route({"verdict": "retry"}) == "plan_solve"
+    assert reflect_route({"verdict": "pass"}) == "end"
 
 
 def test_reflect_illegal_plan_completes_with_error() -> None:

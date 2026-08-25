@@ -2,7 +2,7 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.32 |
+| 文档版本 | V1.33 |
 | 对应 PRD | V1.13（功能唯一权威） |
 | 对应设计规范 | V1.3（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V0.5（LangGraph 单轮 Agent 与 WS 桥接；JSON 仍以本文为准） |
@@ -27,6 +27,8 @@
 > V1.31（2026-08-25）：§3.6.1 新增 `GET /api/mcp/metrics`（admin 只读）——内部 MCP Host 的调用度量（按 tool_id 计数/耗时）与服务器熔断状态（按 server_id，INTERNAL/TIMEOUT/UPSTREAM 连续失败超阈值即 open，冷却自动恢复）。任务创建新增每用户活动任务配额 `max_active_tasks_per_user`（默认 5），MCP 与 REST 同一规则，超限返回 `CONCURRENCY` 并写 `task_quota_rejected` 审计。
 >
 > V1.32（2026-08-25）：基础 `read`、`write`、`edit`、`bash`、`web_search`、`web_fetch` 与对话拆解 `task` 改为模型原生 Function Calling 直连；仅评测任务桥 `platform.tasks` 继续作为 MCP 扩展。新增 Firecrawl 服务端配置、网页抓取安全投影和原子文件写入边界。
+>
+> V1.33（2026-08-25）：单回合允许多条 `assistant_message`；`response.completed` 仍为整轮结束。可选 `interim=true` 表示阶段叙述（计划/下一步），不是 Observation 原文，不得结束生成态。清单复用 `plan.slots.steps` 与 `task` 的 `tool_result`，不新事件。
 
 ---
 
@@ -1334,7 +1336,7 @@ Harness 回合必须丢到后台 Task，**不得**在 `receive` 循环里 `await
 | `thought` | 思考摘要或阶段状态 `{ "text": "..." }`；可选 `latency_ms`、`stage`（`plan\|react\|reflect`）、`skill_id`。推理增量使用 `stream="think"`，思考快照使用 `stream="think_final"`；仅承载思考信息，不承载助手正文 | ThoughtCard |
 | `user_message` | `{ "id", "role":"user", "content", "attachments", "author_id", "author":{id,username,display_name?}, "client_message_id?", "created_at" }`；落库、占 event_id，用于协作者实时补用户气泡；不使用 `message` 避免与助手正文歧义 | UserBubble |
 | `assistant_delta` | `{ "role":"assistant", "text":"增量" }`；助手正文瞬态增量，不落库、不占事件号，仅用于在线连接的流式气泡 | AssistantBubble |
-| `assistant_message` | `{ "id", "role":"assistant", "text":"完整回答", "reply_latency_ms?", "created_at" }`；助手最终交付句，落库、占 event_id，可通过历史消息回放 | AssistantBubble |
+| `assistant_message` | `{ "id", "role":"assistant", "text":"完整回答", "reply_latency_ms?", "created_at", "interim"? }`；落库、占 event_id，可通过历史回放。**同一回合可多条**：工具前后的阶段叙述与最终交付句按事件序各成一段，前端不得把后续叙述并进第一条。`interim=true` 为阶段叙述（建议 ≤200 字），不结束本轮生成态；缺省或 `false` 为可展示交付句。`text` 禁止是 Observation / `read` 全文。`response.completed` 仍是整轮结束 | AssistantBubble |
 | `response.completed` | `{ "finish_reason":"stop\|cancelled\|error", "role":"assistant" }`；本轮生成结束，落库、占 event_id | 结束流式状态 |
 | `tool_call` | `{ "call_id":"toolcall_xxx", "name": "model.list", "arguments": {} }`；`call_id` 为本轮模型生成或平台补齐的稳定非空字符串 | ToolCard pending；标题用中文名；副标题「ToolCall · 短工具」 |
 | `tool_result` | `{ "call_id":"toolcall_xxx", "name": "model.list", "ok": true, "data": {} }` 或 `{ "call_id":"toolcall_xxx", "name":"model.list", "ok": false, "error": "..." }`；`call_id` 必须与对应 `tool_call` 相同。可选 `latency_ms`、`truncated`(bool，结果是否被截断)、`source`(溯源标识字符串，对齐 M7 `Observation.source`，如 `"file:uuid"`，可选)、`redacted`(bool，是否已脱敏)。`name="read"` 成功时 `data` 使用本节下方的受控投影 | ToolCard done；按 `call_id` 原地更新；`truncated`/`redacted` 为 true 时展示截断/脱敏徽标 |
@@ -1956,4 +1958,15 @@ catalog/provider；`GET /api/mcp/tools` 只保留评测/RAG 扩展目录，当�
 | `backend/api/app/routers/mcp.py` / `frontend/src/views/AdminProfiles.vue` | MCP 清单只展示 `platform.tasks` 与未来扩展，不混入原生基础工具。 |
 | `frontend/src/components/agent/ToolCard.vue` | 基础工具中文标题与 read/web/task 的受控结果投影。 |
 | `backend/api/tests/test_harness_execution.py` / `test_harness_mcp.py` | 覆盖基础直连不进 MCP、Firecrawl、SSRF、任务拆解、原子读写和扩展 MCP 回归。 |
+
+**V1.33（2026-08-25）— 单回合多条 assistant_message**
+
+同一回合可落多条阶段叙述与最终交付句；`response.completed` 仍为整轮结束。
+可选 `interim=true` 不结束生成态。清单复用 `plan.slots.steps`，不新增事件名。
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `docs/AI测试与评估平台-API.md` | §4.3 `assistant_message` 允许多条 + `interim` |
+| `backend/api/app/agent/react.py` | native 同轮正文+ToolCall 先发阶段叙述 |
+| `frontend/src/views/Agent.vue` | 按事件序另开助手气泡；渲染 plan 步骤清单 |
 

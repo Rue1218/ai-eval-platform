@@ -98,6 +98,19 @@ FORCED_FINAL_ANSWER_INPUT = """\
 
 FINAL_ANSWER_EMPTY_TEXT = "工具已执行，但未生成可展示的最终回答。"
 
+# P1 阶段叙述字数上限（API.md V1.33）；超出截断，禁止写入 Observation 原文。
+NARRATION_MAX_CHARS = 200
+
+
+def _stage_narration(text: str) -> str:
+    """把模型旁白压成阶段叙述，不含工具原文。"""
+    cleaned = " ".join((text or "").split())
+    if not cleaned:
+        return ""
+    if len(cleaned) > NARRATION_MAX_CHARS:
+        return cleaned[:NARRATION_MAX_CHARS] + "…"
+    return cleaned
+
 logger = logging.getLogger("ai-eval.agent-react")
 
 
@@ -574,11 +587,27 @@ def build_react_nodes(
                     }
                     for call in native_calls
                 ]
+                narration = _stage_narration(response.text)
+                pending_events = (
+                    [
+                        make_event(
+                            "assistant_message",
+                            {
+                                "text": narration,
+                                "role": "assistant",
+                                "interim": True,
+                                "latency_ms": latency_ms,
+                            },
+                        )
+                    ]
+                    if narration
+                    else []
+                )
                 return {
                     "pending_tool": pending_calls[0],
                     "pending_tools": pending_calls[1:],
                     "native_messages": [_native_tool_message(native_calls, response.text)],
-                    "pending_events": [],
+                    "pending_events": pending_events,
                     "repeat_retry": False,
                     "budget": budget.to_dict(),
                 }

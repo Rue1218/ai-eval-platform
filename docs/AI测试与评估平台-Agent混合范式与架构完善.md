@@ -3,12 +3,12 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Agent 混合范式与架构完善 |
-| 版本 | V0.2.1 |
+| 版本 | V0.3.0 |
 | 审查日期 | 2026-08-25 |
 | 文档性质 | 演进规划（范式冻结 + 架构完善 + 分阶段接线，**本版不改对外契约**） |
 | 适用范围 | `/agent` 对话智能体：LangGraph 单图、Harness 六层、WebSocket 事件桥、短工具与长任务分离 |
 | 事实来源 | `backend/api/app/agent/`、`app/harness/`、`app/llm/`、`app/routers/ws.py`；前端 `Agent.vue` / `ToolCard.vue` |
-| 上游权威 | PRD V1.12（产品范围）；API.md V1.32（REST/WS 字段唯一真理）；Agent 开发文档 V1.3.1（当前运行链路）；Harness 六层架构 V0.1.1、编排层 V0.4.3 |
+| 上游权威 | PRD V1.12（产品范围）；API.md V1.33（REST/WS 字段唯一真理）；Agent 开发文档 V1.4.0（当前运行链路）；Harness 六层架构 V0.1.1、编排层 V0.4.3 |
 | 参考实现 | Claude Code 设计指南第 7 章（两层状态）、第 9 章（原子工具与 ToolResult 回灌）；业界 Plan-and-Execute / Reflexion |
 
 > **阅读关系**：本文是「当前已跑通的受控 ReAct」到「可规划、可中间叙述、可有界重规划」的**完善规划**。六层职责仍以《Harness 六层架构》为准；图节点与路由细节以《编排层》为准；JSON 字段名与 WS 事件以 API.md 为准。本文**不新增** REST/WS 字段；若后续阶段需要新事件或放宽 `assistant_message` 语义，必须先改 API.md / PRD，再改代码。
@@ -380,7 +380,8 @@ Executor **不**负责宣布最终成功；最终交付由 Reflexion `pass` 或�
 | 前端 | `Agent.vue` 按事件序插入多段助手正文，不把后续叙述并进第一条 |
 | 状态 | 会话级 todos 与 `PlanArtifact.steps` 同源；刷新后能回放 |
 | 验收 | 出现「叙述 → 工具卡 → 叙述 → 工具卡 → 最终回答」；刷新不丢阶段句；read 全文仍不进历史 |
-| 建议分支 | `feat/agent-hybrid-p1-narration`（契约用 `docs/api-agent-mid-narration` 先行） |
+| 建议分支 | `feat/agent-hybrid-p1-p2` |
+| 状态 | **已落地**（API.md V1.33；native 阶段叙述；`plan.slots.steps` 清单） |
 
 ### P2 — Reflexion 回边
 
@@ -391,13 +392,16 @@ Executor **不**负责宣布最终成功；最终交付由 Reflexion `pass` 或�
 | 图 | `react` / `plan_solve` 后进入 `reflect`；`verdict=clarify` 挂 `interrupt`；`retry` 回 `planner` |
 | 预算 | 重规划次数计入 `Budget`，上限 2 |
 | 验收 | 缺槽澄清可 resume；故意重复失败会重规划一次后收尾，不会打满 12 轮空转 |
-| 建议分支 | `feat/agent-hybrid-p2-reflexion` |
+| 建议分支 | `feat/agent-hybrid-p1-p2` |
+| 状态 | **已落地**（`verdict=clarify` 挂 interrupt；失败且 `allows_replan` 重规划 ≤2） |
 
 ### P3 — 记忆与检查点（独立评审）
 
 **目标**：按需切换 `PgCheckpointer`；压缩摘要与 todos 联动；仍禁止 Observation 全文持久化。
 
-本阶段不默认开工，须单独评估多副本粘性路由与 `harness_checkpoints` 运维。语义记忆 / LightRAG 仍 fail-closed。
+本阶段不默认开工。代码提供 `AGENT_CHECKPOINTER=memory|postgres`，**默认 memory**；切 postgres 须单独评估多副本粘性路由与 `harness_checkpoints` 运维。语义记忆 / LightRAG 仍 fail-closed。
+
+| 状态 | **可选能力已接线，默认关闭** |
 
 ---
 
@@ -473,4 +477,5 @@ V0.1.0 为规划文档。V0.2.0 记录 P0 / P0+ 已接线。V0.2.1 收口审查�
 - `backend/api/app/harness/orchestration/plan.py` / `agent/plan_solve.py` / `graph.py` / `react.py` / `reflect.py`：P0+ 规划合并、执行接线；硬错误 `completed(error)`、清空非法 plan、`plan.budget` 写入图状态、`invoke` 接受 `plan_solve`、L0 中英别名、reflect 非法 plan 兜底。
 - `docs/AI测试与评估平台-Agent开发文档.md`：V1.3.1 拓扑回写。
 - `docs/AI测试与评估平台-Harness-编排层.md` / `Harness-六层架构.md`：OR-4 串行多调用、默认预算 12/12、范式映射回写。
+- V0.3.0：P1 中间叙述与清单、P2 澄清/有界重规划已接线；P3 检查点默认 memory，`AGENT_CHECKPOINTER=postgres` 可选。
 )

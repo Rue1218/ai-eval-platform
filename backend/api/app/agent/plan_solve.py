@@ -47,7 +47,12 @@ def build_plan_solve_subgraph() -> dict:
     """构造 Plan-Solve 节点：``{'plan_solve': <node>}``。"""
 
     def plan_solve_node(state: GraphState) -> dict:
-        plan_data = state.get("plan")
+        force_replan = bool(state.get("force_replan"))
+        plan_data = None if force_replan else state.get("plan")
+        extra = str(state.get("clarify_answer") or "").strip()
+        raw = user_text_from_state(state)
+        if extra:
+            raw = f"{raw}\n用户补充：{extra}"
         if isinstance(plan_data, dict):
             try:
                 plan = from_dict(PlanArtifact, dict(plan_data))
@@ -55,13 +60,14 @@ def build_plan_solve_subgraph() -> dict:
                 return _failed("VALIDATION", "规划产物非法")
         else:
             try:
-                plan = build_plan(user_text_from_state(state))
+                plan = build_plan(raw)
             except AppError as exc:
                 return _failed(exc.code.value, exc.message)
         payload = to_dict(plan)
         return {
             "plan": payload,
             "budget": budget_for_plan(plan).to_dict(),
+            "force_replan": False,
             "pending_events": [
                 make_event("thought", {"stage": "plan", "text": _plan_summary(plan)}),
                 make_event("plan", payload),

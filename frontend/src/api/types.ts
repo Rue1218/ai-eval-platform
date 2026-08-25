@@ -708,6 +708,7 @@ export interface WsServerEvent {
     | 'confirm'
     | 'confirm_ack'
     | 'clarify'
+    | 'plan'
     | 'progress'
     | 'report'
     | 'error'

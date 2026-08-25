@@ -263,6 +263,40 @@ def test_native_tool_calls_keep_call_id_and_stream_final_answer() -> None:
     ]
 
 
+def test_native_tool_calls_emit_interim_narration() -> None:
+    """P1：native 同轮正文 + ToolCall 先发 interim 阶段叙述，不是 Observation。"""
+
+    class _NarratingGateway(_NativeToolCallGateway):
+        def invoke(self, request: object, config: dict | None = None):
+            response = super().invoke(request, config)
+            if response.tool_calls:
+                return ModelResponse(
+                    text="先读取两个附件再汇总",
+                    latency_ms=1,
+                    tool_calls=response.tool_calls,
+                )
+            return response
+
+    gateway = _NarratingGateway()
+    with tempfile.TemporaryDirectory() as tmp:
+        with open(f"{tmp}/a.txt", "w", encoding="utf-8") as handle:
+            handle.write("A 文件内容")
+        with open(f"{tmp}/b.txt", "w", encoding="utf-8") as handle:
+            handle.write("B 文件内容")
+        events = _collect(
+            LangGraphAgent(gateway, build_default_registry(), sandbox_dir=tmp),
+            _serializable(),
+        )
+    messages = [
+        event
+        for event in _pending_events(events)
+        if event["kind"] == "assistant_message"
+    ]
+    assert messages[0]["payload"]["interim"] is True
+    assert messages[0]["payload"]["text"] == "先读取两个附件再汇总"
+    assert "A 文件内容" not in messages[0]["payload"]["text"]
+
+
 @pytest.mark.parametrize("call_ids", [("", "second"), ("duplicated", "duplicated")])
 def test_native_tool_calls_reject_empty_or_duplicate_call_id(call_ids: tuple[str, str]) -> None:
     """上游空/重复 call_id 必须在 ReAct 入队前归一为 UPSTREAM。"""

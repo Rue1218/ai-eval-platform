@@ -28,9 +28,10 @@ from ..harness.execution import (
 )
 from ..harness.memory import GraphState, SerializableRequest
 from ..llm import ModelGateway, ModelResponse
+from .clarify import clarify_node
 from .plan_solve import build_plan_solve_subgraph, plan_solve_route
 from .react import build_react_nodes, react_route
-from .reflect import reflect_node
+from .reflect import reflect_node, reflect_route
 from .routing import chat_stream_node, direct_node, route, routing_node
 
 # 条件边分流映射：复杂任务进 plan_solve，成功后再进 react / reflect
@@ -98,6 +99,7 @@ class LangGraphAgent:
         graph.add_node("tools", tool_node)
         graph.add_node("plan_solve", plan_solve_nodes["plan_solve"])
         graph.add_node("reflect", reflect_node)
+        graph.add_node("clarify", clarify_node)
         graph.add_edge(START, "routing")
         graph.add_conditional_edges("routing", route, _ROUTE_TARGETS)
         # ReAct 循环：pending_tool 存在 → tools；repeat_retry → 回环 react_agent
@@ -126,7 +128,13 @@ class LangGraphAgent:
             plan_solve_route,
             {"react_agent": "react_agent", "end": END},
         )
-        graph.add_edge("reflect", END)
+        graph.add_conditional_edges(
+            "reflect",
+            reflect_route,
+            {"clarify": "clarify", "plan_solve": "plan_solve", "end": END},
+        )
+        # 澄清恢复后强制重规划，把用户补充并入 PlanArtifact
+        graph.add_edge("clarify", "plan_solve")
         # 阶段 3：Checkpointer 按 thread_id 隔离回合（M3-D4 恢复语义）
         if self._checkpointer is not None:
             return graph.compile(checkpointer=self._checkpointer)

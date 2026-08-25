@@ -1,10 +1,10 @@
 # AI 测试与评估平台 Agent 开发文档
 
-> 版本：V1.3.1
-> 状态：LangGraph Harness 已启用 ReAct P0/P1、P2-A/P2-B、P3 MCP、P3.1 原生基础工具、P4 platform.tasks；混合范式已接线 Plan-and-Solve → ReAct → reflect，OTA 提示词与 Observation.repair_hint 生效
+> 版本：V1.4.0
+> 状态：LangGraph Harness 已启用混合范式 P0–P2：Plan-and-Solve → ReAct → reflect；native 中间叙述；clarify interrupt 与有界重规划；检查点默认 memory
 > 审查日期：2026-08-25
 > 对应需求：`AI测试与评估平台-PRD.md` V1.12
-> 对应接口：`AI测试与评估平台-API.md` V1.32
+> 对应接口：`AI测试与评估平台-API.md` V1.33
 
 ## 1. 当前唯一运行链路
 
@@ -44,7 +44,8 @@ START -> routing -> (direct | chat_stream | react_agent | plan_solve)
 react_agent -> (tools | reflect | END)
 tools -> (tools | react_agent)
 plan_solve -> react_agent   # 规划失败则 END
-reflect -> END
+reflect -> (clarify | plan_solve | END)
+clarify -> plan_solve
 ```
 
 `decide_mode` 为代码主导：斜杠 → Direct；附件 → ReAct；多技能/确认卡/显式清单 → Plan-and-Solve（`build_plan`，失败 L0 降级并合并全部命中技能，步骤 3–7）；工具关键词 → ReAct；否则 Chat。`plan_solve` 下发完整 `PlanArtifact`（`plan` 事件含 `slots`/`budget`/`notes`），不伪造未执行的 `tool_call`，也不在规划节点发 `response.completed`。有 `plan` 的回合由 ReAct 执行短工具后进入 `reflect`，由 reflect 发出本轮唯一 `response.completed`。中间多条 `assistant_message`、澄清卡 interrupt 与有界重规划仍属后续阶段。
@@ -237,3 +238,11 @@ Agent 思考配置从 `Setting(key="agent_reasoning")` 读取，结构为
 - `backend/api/app/agent/reflect.py`：有计划回合由本节点发出唯一 `response.completed`（reject 为 `finish_reason=error`）。
 - `backend/api/tests/test_agent_routing.py` / `test_harness_phase4.py`：覆盖规划→执行→复核事件序与多技能合并。
 - 审查修复：规划路径 ReAct 硬错误发 `completed(error)` 且不再进 reflect；失败规划清空 `plan`；`plan.budget` 写入图预算；`LangGraphAgent.invoke` 接受 `plan_solve`。
+
+### V1.4.0（2026-08-25）修改代码文件与作用清单
+
+- `docs/AI测试与评估平台-API.md`：V1.33 单回合多条 `assistant_message` + `interim`。
+- `backend/api/app/agent/react.py`：native 同轮正文+ToolCall 先发阶段叙述。
+- `backend/api/app/agent/reflect.py` / `graph.py` / `clarify.py` / `plan_solve.py`：clarify interrupt、有界重规划回 `plan_solve`。
+- `backend/api/app/config.py` / `harness/memory/checkpoint.py`：`AGENT_CHECKPOINTER` 默认 memory。
+- `frontend/src/views/Agent.vue`：多段助手正文与 `plan.slots.steps` 清单回放。

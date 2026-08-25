@@ -495,7 +495,15 @@ class PgCheckpointer(_AsyncBridgeMixin, BaseCheckpointSaver):
 def get_default_checkpointer() -> BaseCheckpointSaver:
     """生产默认 Checkpointer。
 
-    当前返回线程隔离的内存实现（单副本运行安全）；PG 持久化引擎接入后
-    返回 ``PgCheckpointer``（表结构迁移已就绪）。
+    默认 ``memory``（单副本、每回合独立 thread_id）。仅当
+    ``AGENT_CHECKPOINTER=postgres`` 时启用 ``PgCheckpointer``；恢复时
+    ``pending_events`` 仍须由图外清空，事件重放只走 ``ws_events``。
     """
+    from app.config import settings
+
+    mode = str(getattr(settings, "agent_checkpointer", "memory") or "memory").strip().lower()
+    if mode == "postgres":
+        from app.db import engine
+
+        return PgCheckpointer(engine)
     return InMemoryCheckpointer()
