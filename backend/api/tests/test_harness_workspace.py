@@ -64,7 +64,12 @@ def test_sandbox_injected_via_configurable(tmp_root) -> None:
         ToolDef(
             name="read",
             description="read",
-            parameters_schema={"path": "string"},
+            parameters_schema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
+            },
             permission="sandbox.read",
             timeout_s=10.0,
             handler=_read_handler,
@@ -74,7 +79,15 @@ def test_sandbox_injected_via_configurable(tmp_root) -> None:
         ToolDef(
             name="write",
             description="write",
-            parameters_schema={"path": "string", "content": "string"},
+            parameters_schema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "path": {"type": "string"},
+                    "content": {"type": "string"},
+                },
+                "required": ["path", "content"],
+            },
             permission="sandbox.write",
             timeout_s=10.0,
             handler=_write_handler,
@@ -94,6 +107,18 @@ def test_sandbox_injected_via_configurable(tmp_root) -> None:
     events = [e for e in out["pending_events"] if e["kind"] == "tool_result"]
     assert events and events[0]["payload"]["ok"] is True
     assert os.path.isfile(os.path.join(workspace, "hello.txt"))
+
+    # read 的完整正文仅供下一模型回合使用；持久化 ToolCard 事件只保留受控预览。
+    state_read: GraphState = {
+        "request": {"config": {}, "messages": ()},
+        "pending_tool": {"name": "read", "arguments": {"path": "hello.txt"}},
+    }
+    out_read = _run_node(node, state_read, {"sandbox": {"dir": workspace}})
+    read_event = next(e for e in out_read["pending_events"] if e["kind"] == "tool_result")
+    read_data = read_event["payload"]["data"]
+    assert "model_text" not in read_data
+    assert read_data["read"]["preview"] == "内容"
+    assert read_data["read"]["total_lines"] == 1
 
     # 跨工作区读取被拒（会话隔离 + 防目录穿越）
     state2: GraphState = {

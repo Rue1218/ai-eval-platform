@@ -1227,6 +1227,8 @@ export interface AgentThoughtItem {
 type ThoughtLike = AgentThoughtItem & { streaming?: boolean }
 
 export interface AgentToolItem {
+  /** 后端工具调用唯一标识；tool_result 必须按此字段回填。 */
+  callId?: string
   tool: string
   args?: any
   result?: any
@@ -1291,6 +1293,7 @@ interface StreamItem {
   streaming?: boolean
   // 已显示的纯文本进度（流式增量与打字机共用，text 为其渲染后的 HTML）
   raw?: string
+  callId?: string
   tool?: string
   args?: any
   result?: any
@@ -1531,9 +1534,14 @@ function appendToolBlock(agent: StreamItem, tool: AgentToolItem): AgentToolItem 
   return next as AgentToolItem
 }
 
-/** 查找当前回合中最近的同名 pending 工具，兼容连续调用同一工具。 */
-function findPendingToolBlock(agent: StreamItem, name: unknown): AgentToolItem | undefined {
+/** 按 call_id 查找待完成工具；历史事件缺失时才兼容旧的同名回退。 */
+function findPendingToolBlock(agent: StreamItem, name: unknown, callId?: unknown): AgentToolItem | undefined {
   const blocks = agent.blocks || []
+  if (typeof callId === 'string' && callId) {
+    return [...blocks].reverse().find(
+      (block) => block.type === 'tool' && block.callId === callId && block.status === 'pending',
+    ) as AgentToolItem | undefined
+  }
   return [...blocks].reverse().find(
     (block) => block.type === 'tool' && block.tool === name && block.status === 'pending',
   ) as AgentToolItem | undefined
@@ -2918,12 +2926,24 @@ async function loadSessionHistory(sid: string): Promise<number> {
           time: t,
           priority: 3,
           eventId: eid,
-          item: { type: 'tool', tool: p.name, args: p.arguments, status: 'pending', open: true, noAnim: true },
+          item: {
+            type: 'tool',
+            callId: typeof p.call_id === 'string' ? p.call_id : undefined,
+            tool: p.name,
+            args: p.arguments,
+            status: 'pending',
+            open: true,
+            noAnim: true,
+          },
         })
       } else if (ev.event === 'tool_result') {
-        // ReAct 工具按同名调用的最近未完成项回填，连续调用同一工具也不会串卡
+        // 新事件按 call_id 精确回填；缺失该字段的历史数据才退回同名最近项。
         const foundTool = [...rawList].reverse().find(
-          (x) => x.item.type === 'tool' && x.item.tool === p.name && x.item.status === 'pending',
+          (x) => x.item.type === 'tool'
+            && x.item.status === 'pending'
+            && (typeof p.call_id === 'string' && p.call_id
+              ? x.item.callId === p.call_id
+              : x.item.tool === p.name),
         )?.item
         if (foundTool) {
           foundTool.result = p.ok ? p.data : p.error
@@ -3548,6 +3568,7 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
       rt.harnessStage = 'react'
       finishBufferThought(buf)
       appendToolBlock(getOrCreateTurnAgent(buf), {
+        callId: typeof p.call_id === 'string' ? p.call_id : undefined,
         tool: p.name,
         args: p.arguments,
         status: 'pending',
@@ -3556,7 +3577,7 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
       break
     case 'tool_result': {
       const agent = getCurrentTurnAgent(buf)
-      const target = agent ? findPendingToolBlock(agent, p.name) : undefined
+      const target = agent ? findPendingToolBlock(agent, p.name, p.call_id) : undefined
       if (target) {
         target.result = p.ok ? p.data : p.error
         target.status = p.ok ? 'ok' : 'fail'
@@ -3885,6 +3906,7 @@ function handleWsEvent(ev: WsServerEvent) {
       lastToolTitle.value = getToolDisplayName(p.name)
       setCurrentGenerating(true)
       appendToolBlock(getOrCreateTurnAgent(events.value), {
+        callId: typeof p.call_id === 'string' ? p.call_id : undefined,
         tool: p.name,
         args: p.arguments,
         status: 'pending',
@@ -3900,7 +3922,7 @@ function handleWsEvent(ev: WsServerEvent) {
         latency: `${p.latency_ms || 0}ms`,
       })
       const agent = getCurrentTurnAgent(events.value)
-      const target = agent ? findPendingToolBlock(agent, p.name) : undefined
+      const target = agent ? findPendingToolBlock(agent, p.name, p.call_id) : undefined
       if (target) {
         target.result = p.ok ? p.data : p.error
         target.status = p.ok ? 'ok' : 'fail'

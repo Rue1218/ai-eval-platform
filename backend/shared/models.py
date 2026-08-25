@@ -230,6 +230,10 @@ class ProtocolProfile(Base):
     anthropic_version = Column(String, nullable=True)
     encrypted_key = Column(Text, nullable=True)
     context_window = Column(Integer, nullable=False, default=200000)
+    # 兼容优先：只有经人工验证的协议档才显式开启上游原生 tools。
+    tool_call_mode = Column(
+        String, nullable=False, default="legacy", server_default="legacy"
+    )
     created_by = Column(String, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)

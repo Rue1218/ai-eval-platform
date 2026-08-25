@@ -2,7 +2,7 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.24 |
+| 文档版本 | V1.27 |
 | 对应 PRD | V1.13（功能唯一权威） |
 | 对应设计规范 | V1.3（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V0.5（LangGraph 单轮 Agent 与 WS 桥接；JSON 仍以本文为准） |
@@ -11,6 +11,14 @@
 | 撰写日期 | 2026-08-18 |
 | 最近修订 | 2026-08-24：V1.24 修复 Agent 附件上下文链路：服务端校验文件归属并在模型窗口解析文本、PDF、DOCX、XLSX，图片按三协议图文内容块发送；历史消息附件补齐安全元数据，前端可在刷新后继续预览。同步调整输入框内附件按钮与用户消息附件位序。V1.23 扩展 Agent 附件契约，支持图片、Word 文档与多附件拖拽上传；保留 `POST /api/files` 后再以既有 `file_id` 引用的消息链路，补充图片缩略图、PDF/文本预览与 Office 文件打开/下载说明。V1.22 修复 V1.21 遗留：§4.4 标题「仅此三条」改「仅此四条」、§9 禁止清单「第四种」改「第五种」并补四类上行事件枚举、§4.3 `tool_result.source` 语义对齐 M7 `Observation.source`（溯源标识字符串，非 short\|long 枚举）、§4.3 共享流规则补 clarify/plan/confirm 持久化广播说明、§4.4 clarify 多副本限制注明、§9 Ask/Plan 补注非 Harness plan 事件；V1.21 配合 Harness 阶段 3/4 前端联调回写契约：§4.3 新增 `clarify`（澄清卡，不建任务/不写 pending_confirm）、`plan`（PlanArtifact 完整下发）事件，扩展 `tool_result` 加 `truncated`/`source`/`redacted` 三可选字段，§3.4 `context_meter` 加 `compacted` bool；§4.4 新增 `clarify_reply` 上行事件并明确四类上行事件边界；V1.20 补齐 Gemini OpenAI 兼容端点的 `extra_body.google.thinking_config` 与思考增量归一化；V1.19 增加 Agent 思考摘要开关与 `low/medium/high/xhigh/max` 思考强度配置，按三协议映射模型请求；V1.18 将用户回显固定为 `user_message`，将回合结束固定为 `response.completed`，保留 `message` / `done` 仅用于旧客户端兼容；V1.17 拆分 WebSocket 用户消息、思考摘要、助手正文增量、助手最终消息和 done 事件；V1.16 接入 LangGraph 单轮 Agent 与 WebSocket 异步桥接；2026-08-22：V1.15 清空旧 Agent/Harness/模型调用/Runtime 实现、相关测试与阶段文档，保留 API 路径作为重建设计期间的明确占位；V1.14 及更早版本沿用历史修订记录。 |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
+
+> V1.25（2026-08-25）：细化 ReAct `read` 的 `tool_result.data`，新增受控行范围、文件统计与短预览投影。完整 `content` 仅供服务端下一模型回合使用，禁止写入 WebSocket 事件或 ToolCard。
+>
+> V1.26（2026-08-25）：原生 ToolCall 为既有 `tool_call` / `tool_result` 增加必填 `call_id`，前端必须以该值关联卡片；不新增事件名，不向浏览器暴露上游协议字段或 MCP 连接信息。
+>
+> V1.27（2026-08-25）：协议档新增 `tool_call_mode`。仅显式选择 `native` 的 Agent 协议档向上游发送 `tools`；`legacy` 固定走严格 JSON-ReAct，禁止根据一次上游 4xx 静默猜测降级。
+>
+> V1.28（2026-08-25）：工具调用模式默认改为 `legacy`，存量协议档也以兼容模式迁移；只有人工验证支持 Function Calling 后才可显式切换为 `native`。原生 ToolCall 的空/重复 `call_id` 一律归一为 `UPSTREAM`，不进入工具队列。
 
 ---
 
@@ -521,8 +529,9 @@ AI_PROFILE_<PROFILE_ID_NORMALIZED>_RERANKER_API_KEY
 
 全员可列（无 Key），供确认卡和 RAG 上下文工程使用。除主模型外，Embedding 与 Reranker
 端点均为可选；响应只返回 URL、模型标识和 `has_*_api_key` 布尔值，不返回任何 Key。
-item：`id, name, protocol, base_url, model, usages[], embedding_base_url, embedding_model,
-has_embedding_api_key, reranker_base_url, reranker_model, has_reranker_api_key, created_at`
+item：`id, name, protocol, base_url, model, usages[], context_window, tool_call_mode,
+embedding_base_url, embedding_model, has_embedding_api_key, reranker_base_url, reranker_model,
+has_reranker_api_key, created_at`
 
 #### `POST /api/profiles`  已登录成员
 
@@ -539,7 +548,8 @@ has_embedding_api_key, reranker_base_url, reranker_model, has_reranker_api_key, 
   "reranker_base_url": "https://reranker.example.com/v1",
   "reranker_model": "bge-reranker-v2-m3",
   "reranker_api_key": "rk-...",
-  "usages": ["target"]
+  "usages": ["target"],
+  "tool_call_mode": "legacy"
 }
 ```
 
@@ -547,6 +557,12 @@ has_embedding_api_key, reranker_base_url, reranker_model, has_reranker_api_key, 
 `has_api_key`、`has_embedding_api_key`、`has_reranker_api_key` 仅表示环境文件中是否存在对应 Key。
 Embedding 与 Reranker 的 URL、模型和 Key 与主模型使用相同的“按协议档隔离、受控环境文件写入、空 Key 保留旧值”规则；
 更新时只提交需要修改的字段，三类 Key 留空均表示不修改既有密文。
+
+`tool_call_mode` 仅允许 `native` / `legacy`，默认 `legacy`：
+
+- `native`：仅在管理员已验证目标网关支持 Function Calling 后显式选择。API 按 `protocol` 映射并发送原生 `tools`，接收完整 ToolCall 后才进入 ToolNode；
+- `legacy`：默认模式。API 不向上游发送 `tools`，仅使用严格 `react.v1` JSON 兼容分支；适用于尚未验证 Function Calling 的兼容网关；
+- 切换模式只影响 Agent ReAct 工具路径，不影响 benchmark、judge、Embedding 或 Reranker 调用。
 
 #### `PUT /api/profiles/{id}` / `DELETE /api/profiles/{id}`
 
@@ -1273,8 +1289,8 @@ Harness 回合必须丢到后台 Task，**不得**在 `receive` 循环里 `await
 | `assistant_delta` | `{ "role":"assistant", "text":"增量" }`；助手正文瞬态增量，不落库、不占事件号，仅用于在线连接的流式气泡 | AssistantBubble |
 | `assistant_message` | `{ "id", "role":"assistant", "text":"完整回答", "reply_latency_ms?", "created_at" }`；助手最终交付句，落库、占 event_id，可通过历史消息回放 | AssistantBubble |
 | `response.completed` | `{ "finish_reason":"stop\|cancelled\|error", "role":"assistant" }`；本轮生成结束，落库、占 event_id | 结束流式状态 |
-| `tool_call` | `{ "name": "model.list", "arguments": {} }` | ToolCard pending；标题用中文名；副标题「MCP · 短工具」 |
-| `tool_result` | `{ "name": "model.list", "ok": true, "data": {} }` 或 `{ "ok": false, "error": "..." }`；可选 `latency_ms`、`truncated`(bool，结果是否被截断)、`source`(溯源标识字符串，对齐 M7 `Observation.source`，如 `"file:uuid"`，可选)、`redacted`(bool，是否已脱敏) | ToolCard done；`truncated`/`redacted` 为 true 时展示截断/脱敏徽标 |
+| `tool_call` | `{ "call_id":"toolcall_xxx", "name": "model.list", "arguments": {} }`；`call_id` 为本轮模型生成或平台补齐的稳定非空字符串 | ToolCard pending；标题用中文名；副标题「ToolCall · 短工具」 |
+| `tool_result` | `{ "call_id":"toolcall_xxx", "name": "model.list", "ok": true, "data": {} }` 或 `{ "call_id":"toolcall_xxx", "name":"model.list", "ok": false, "error": "..." }`；`call_id` 必须与对应 `tool_call` 相同。可选 `latency_ms`、`truncated`(bool，结果是否被截断)、`source`(溯源标识字符串，对齐 M7 `Observation.source`，如 `"file:uuid"`，可选)、`redacted`(bool，是否已脱敏)。`name="read"` 成功时 `data` 使用本节下方的受控投影 | ToolCard done；按 `call_id` 原地更新；`truncated`/`redacted` 为 true 时展示截断/脱敏徽标 |
 | `clarify` | `{ "id":"uuid", "question":"...", "options":["..."]?, "context":"..."? }`；落库、占 event_id；澄清卡不建任务、不写 `sessions.pending_confirm`，仅暂停图等待用户回复 | ClarifyCard（独立组件，区别于 ConfirmCard）；用户回复后上行 `clarify_reply` 恢复图 |
 | `plan` | PlanArtifact `{ "intent":"...", "skill_id":"skill-benchmark", "slots":{...}, "tools_needed":["..."], "delivery":"...", "budget":{...}, "allows_replan":bool, "notes":"..."? }`；落库、占 event_id；Plan-Solve 规划产物对用户完全可见 | PlanCard（展示规划意图/技能/工具/预算/交付物）；用户可查看但无需 ack |
 | `confirm` | TaskSpec（§5 / §6）+ 非 TaskSpec 元数据 `confirm_author:{id,username,display_name?}` | ConfirmCard，等 `confirm_ack`；仅 `confirm_author.id` 可操作 |
@@ -1285,6 +1301,40 @@ Harness 回合必须丢到后台 Task，**不得**在 `receive` 循环里 `await
 | `pong` | `{}` | 不渲染 |
 
 禁止：`thinking` `token` `chat:send` `tool_call_start` 及任何参考文档旧名。
+
+`call_id` 规则：
+
+- 仅在模型 ToolCall 参数完整、通过平台解析后发出 `tool_call`；参数增量不向浏览器新增事件；
+- 同一回合可有多个不同 `call_id`，禁止按工具名匹配，否则并行或连续同名调用会串卡；
+- 上游未提供 ID 时由 API 进程生成 `toolcall_<uuid>`；该 ID 只在当前回合内稳定，不等同于 MCP Server、任务或数据库资源 ID；
+- 上游返回空、空白或同一模型响应内重复的 `call_id` 时，API 以 `UPSTREAM` 结束该轮，禁止发送任何 `tool_call` 或进入 ToolNode；
+- 策略拒绝、工具超时和执行失败也必须发出带原 `call_id` 的 `tool_result`，不得把异常转换为无关联的助手正文。
+
+`read` 的成功 `tool_result.data` 契约：
+
+```json
+{
+  "summary": "已读取 attachments/requirements.md 第 1–2000 行（共 3560 行，未读完）",
+  "read": {
+    "path": "attachments/requirements.md",
+    "total_lines": 3560,
+    "total_chars": 180423,
+    "start_line": 0,
+    "end_line": 2000,
+    "lines_read": 2000,
+    "is_complete": false,
+    "next_offset": 2000,
+    "content_truncated": false,
+    "preview": "前 500 字符以内的受控预览",
+    "preview_truncated": true
+  }
+}
+```
+
+- `offset` / `limit` 的单位为行，均为 0-based；`end_line` 为排他上界，故示例表示第 1–2000 行；
+- `preview` 最多 500 字符，仅用于 ToolCard；**完整 `content` 只作为服务端 Observation 供下一模型回合使用，禁止出现在 `tool_result`、`ws_events`、历史回放或日志中**；
+- `truncated=true` 表示本次未读完整文件或受服务端内容预算限制；`content_truncated=true` 仅表示完整内容被截断，首期按整行裁剪，禁止截断半行；
+- `source` 使用不暴露宿主绝对路径的 `workspace:<相对路径>` 标识。
 
 共享流规则：`assistant_delta` 仅向同一 `team` 会话内的**在线**成员广播；
 `thought.stream="think"` 只发送给本轮发起连接，不向协作者广播。两类瞬态增量不落库、

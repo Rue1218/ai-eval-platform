@@ -18,9 +18,10 @@ import json
 import logging
 import time
 from collections.abc import Callable, Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from uuid import uuid4
 
 from .errors import AppError, ErrorCode
 
@@ -80,13 +81,205 @@ def _adapt_message_content(content: object, protocol: str) -> object:
     return result
 
 
+def _tool_call_arguments(raw: object) -> dict[str, object]:
+    """把上游函数参数归一为对象，拒绝无效 JSON 而不猜测执行参数。"""
+    if isinstance(raw, Mapping):
+        return {str(key): value for key, value in raw.items()}
+    if raw in (None, ""):
+        return {}
+    if not isinstance(raw, str):
+        raise ValueError("工具参数不是 JSON 对象")
+    parsed = json.loads(raw)
+    if not isinstance(parsed, dict):
+        raise ValueError("工具参数不是 JSON 对象")
+    return {str(key): value for key, value in parsed.items()}
+
+
+def _internal_tool_calls(message: Mapping[str, object]) -> list[dict[str, object]]:
+    """提取 Harness 规范的工具调用消息，过滤不完整项目。"""
+    raw_calls = message.get("tool_calls")
+    if not isinstance(raw_calls, list | tuple):
+        return []
+    calls: list[dict[str, object]] = []
+    for raw in raw_calls:
+        if not isinstance(raw, Mapping):
+            continue
+        call_id = str(raw.get("call_id") or raw.get("id") or "").strip()
+        name = str(raw.get("name") or "").strip()
+        arguments = raw.get("arguments")
+        if not call_id or not name:
+            continue
+        try:
+            calls.append(
+                {
+                    "call_id": call_id,
+                    "name": name,
+                    "arguments": _tool_call_arguments(arguments),
+                }
+            )
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+    return calls
+
+
 def _adapt_messages(messages: list[dict], protocol: str) -> list[dict]:
-    """复制消息并按协议映射图文内容，避免修改 Harness 共享请求。"""
+    """把 Harness 消息映射为三协议的图文与 ToolCall/ToolResult 结构。
+
+    内部规范只使用 ``assistant.tool_calls`` 与 ``role=tool`` 两种表示；
+    本函数在边界转换为各供应商的不同字段，调用方无需感知协议差异。
+    """
     adapted: list[dict] = []
+    anthropic_tool_results: list[dict[str, object]] = []
+
+    def flush_anthropic_tool_results() -> None:
+        """把同一 assistant 的多个 ToolResult 合并为一条 user 消息。"""
+        if anthropic_tool_results:
+            adapted.append({"role": "user", "content": list(anthropic_tool_results)})
+            anthropic_tool_results.clear()
+
     for message in messages:
+        role = str(message.get("role") or "user")
+        calls = _internal_tool_calls(message)
+        content = message.get("content")
+
+        if role == "tool":
+            call_id = str(message.get("tool_call_id") or "").strip()
+            if not call_id:
+                continue
+            if protocol == "openai_responses":
+                adapted.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": call_id,
+                        "output": str(content or ""),
+                    }
+                )
+            elif protocol == "anthropic_messages":
+                anthropic_tool_results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": call_id,
+                        "content": str(content or ""),
+                    }
+                )
+            else:
+                adapted.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call_id,
+                        "content": str(content or ""),
+                    }
+                )
+            continue
+
+        if protocol == "anthropic_messages":
+            flush_anthropic_tool_results()
+
+        if calls and role == "assistant":
+            if protocol == "openai_responses":
+                if content:
+                    adapted.append(
+                        {
+                            "role": "assistant",
+                            "content": _adapt_message_content(content, protocol),
+                        }
+                    )
+                adapted.extend(
+                    {
+                        "type": "function_call",
+                        "call_id": call["call_id"],
+                        "name": call["name"],
+                        "arguments": json.dumps(call["arguments"], ensure_ascii=False),
+                    }
+                    for call in calls
+                )
+                continue
+            if protocol == "anthropic_messages":
+                blocks: list[object] = []
+                if content:
+                    blocks.append({"type": "text", "text": str(content)})
+                blocks.extend(
+                    {
+                        "type": "tool_use",
+                        "id": call["call_id"],
+                        "name": call["name"],
+                        "input": call["arguments"],
+                    }
+                    for call in calls
+                )
+                adapted.append({"role": "assistant", "content": blocks})
+                continue
+            adapted.append(
+                {
+                    "role": "assistant",
+                    "content": _adapt_message_content(content, protocol),
+                    "tool_calls": [
+                        {
+                            "id": call["call_id"],
+                            "type": "function",
+                            "function": {
+                                "name": call["name"],
+                                "arguments": json.dumps(call["arguments"], ensure_ascii=False),
+                            },
+                        }
+                        for call in calls
+                    ],
+                }
+            )
+            continue
+
         item = dict(message)
-        item["content"] = _adapt_message_content(item.get("content"), protocol)
+        item.pop("tool_calls", None)
+        item["content"] = _adapt_message_content(content, protocol)
         adapted.append(item)
+    if protocol == "anthropic_messages":
+        flush_anthropic_tool_results()
+    return adapted
+
+
+def _adapt_tools(tools: list[dict] | None, protocol: str) -> list[dict]:
+    """把内部 JSON Schema 工具定义映射为三种原生 ToolCall 描述。"""
+    adapted: list[dict] = []
+    for definition in tools or []:
+        name = str(definition.get("name") or "").strip()
+        if not name:
+            continue
+        description = str(definition.get("description") or "")
+        schema = definition.get("parameters_schema") or definition.get("parameters") or {
+            "type": "object",
+            "properties": {},
+        }
+        if not isinstance(schema, Mapping):
+            continue
+        parameters = dict(schema)
+        if protocol == "openai_chat":
+            adapted.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "description": description,
+                        "parameters": parameters,
+                    },
+                }
+            )
+        elif protocol == "openai_responses":
+            adapted.append(
+                {
+                    "type": "function",
+                    "name": name,
+                    "description": description,
+                    "parameters": parameters,
+                }
+            )
+        else:
+            adapted.append(
+                {
+                    "name": name,
+                    "description": description,
+                    "input_schema": parameters,
+                }
+            )
     return adapted
 
 
@@ -187,6 +380,15 @@ class StreamAborted(Exception):
 
 
 @dataclass(frozen=True)
+class AdapterToolCall:
+    """协议适配器输出的原生工具调用（不依赖 LangGraph 契约包）。"""
+
+    call_id: str
+    name: str
+    arguments: Mapping[str, object]
+
+
+@dataclass(frozen=True)
 class AdapterResult:
     """三协议统一调用结果。
 
@@ -199,6 +401,7 @@ class AdapterResult:
     usage: dict
     raw: dict
     latency_ms: int
+    tool_calls: tuple[AdapterToolCall, ...] = field(default_factory=tuple)
 
 
 def _close_quietly(response: object) -> None:
@@ -305,6 +508,53 @@ def _full_text(protocol: str, data: dict) -> str:
     return "".join(str(block.get("text") or "") for block in data["content"] if block.get("type") == "text")
 
 
+def _new_call_id() -> str:
+    """为未提供调用 ID 的兼容端点生成稳定的本轮关联标识。"""
+    return f"toolcall_{uuid4().hex}"
+
+
+def _full_tool_calls(protocol: str, data: dict) -> tuple[AdapterToolCall, ...]:
+    """从三协议完整响应提取函数调用并统一参数与调用 ID。"""
+    raw_calls: list[tuple[object, object, object]] = []
+    if protocol == "openai_chat":
+        message = (data.get("choices") or [{}])[0].get("message") or {}
+        calls = message.get("tool_calls") or []
+        if not calls and isinstance(message.get("function_call"), Mapping):
+            calls = [{"id": "", "function": message["function_call"]}]
+        for call in calls:
+            if not isinstance(call, Mapping):
+                continue
+            function = call.get("function") or {}
+            if isinstance(function, Mapping):
+                raw_calls.append((call.get("id"), function.get("name"), function.get("arguments")))
+    elif protocol == "openai_responses":
+        for item in data.get("output") or []:
+            if isinstance(item, Mapping) and item.get("type") == "function_call":
+                raw_calls.append(
+                    (item.get("call_id") or item.get("id"), item.get("name"), item.get("arguments"))
+                )
+    else:
+        for block in data.get("content") or []:
+            if isinstance(block, Mapping) and block.get("type") == "tool_use":
+                raw_calls.append((block.get("id"), block.get("name"), block.get("input")))
+
+    calls: list[AdapterToolCall] = []
+    for raw_id, raw_name, raw_arguments in raw_calls:
+        name = str(raw_name or "").strip()
+        if not name:
+            # 少数兼容网关会在普通文本响应里附带不完整的 tool_use 占位块；
+            # 它不构成可执行调用，忽略而不是把正常正文升级为上游错误。
+            continue
+        calls.append(
+            AdapterToolCall(
+                call_id=str(raw_id or "").strip() or _new_call_id(),
+                name=name,
+                arguments=_tool_call_arguments(raw_arguments),
+            )
+        )
+    return tuple(calls)
+
+
 def _service_base_url(base_url: str) -> str:
     """规范化协议服务根地址，智能剥离常见后缀（如 /v1/models、/models、/chat/completions、/messages 等）。
 
@@ -347,6 +597,7 @@ def call_protocol(
     timeout_s: float = DEFAULT_TIMEOUT_S,
     reasoning_enabled: bool = False,
     reasoning_effort: str = "medium",
+    tools: list[dict] | None = None,
 ) -> AdapterResult:
     """按协议适配调用上游模型并返回统一结构的结果对象。
 
@@ -369,6 +620,9 @@ def call_protocol(
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
+        native_tools = _adapt_tools(tools, protocol)
+        if native_tools:
+            body["tools"] = native_tools
         # 非流式调用默认关闭 Mimo 思考，避免规划 JSON 被 reasoning 占满；Agent
         # 若显式打开则由 ModelGateway 传入 reasoning_enabled=True。
         _apply_compatible_thinking(body, base, model, reasoning_enabled, reasoning_effort)
@@ -384,6 +638,9 @@ def call_protocol(
     elif protocol == "openai_responses":
         url = f"{base}/v1/responses"
         body = {"model": model, "input": _adapt_messages(messages, protocol), "max_output_tokens": max_tokens}
+        native_tools = _adapt_tools(tools, protocol)
+        if native_tools:
+            body["tools"] = native_tools
         if system:
             body["instructions"] = system
         _apply_openai_reasoning(
@@ -403,6 +660,9 @@ def call_protocol(
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
+        native_tools = _adapt_tools(tools, protocol)
+        if native_tools:
+            body["tools"] = native_tools
         if system:
             body["system"] = system
         if reasoning_enabled and _supports_anthropic_thinking(model):
@@ -432,7 +692,8 @@ def call_protocol(
     latency_ms = round((time.perf_counter() - started) * 1000)
     try:
         text = _full_text(protocol, data)
-    except (KeyError, IndexError, TypeError, AttributeError) as exc:
+        tool_calls = _full_tool_calls(protocol, data)
+    except (KeyError, IndexError, TypeError, AttributeError, ValueError) as exc:
         raise AppError(ErrorCode.UPSTREAM, "上游响应结构异常") from exc
 
     return AdapterResult(
@@ -440,6 +701,7 @@ def call_protocol(
         usage=_norm_usage(data, anthropic=protocol == "anthropic_messages"),
         raw=data,
         latency_ms=latency_ms,
+        tool_calls=tool_calls,
     )
 
 

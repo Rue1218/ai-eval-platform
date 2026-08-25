@@ -4,7 +4,13 @@
 人工确认或异步任务调度；这些能力由后续 Harness 与 Agent 层组合。
 """
 
-from .contracts import ModelConfig, ModelRequest, ModelResponse, ModelStreamEvent
+from .contracts import (
+    ModelConfig,
+    ModelRequest,
+    ModelResponse,
+    ModelStreamEvent,
+    NativeToolCall,
+)
 from .gateway import ModelGateway
 
 __all__ = [
@@ -13,4 +19,5 @@ __all__ = [
     "ModelRequest",
     "ModelResponse",
     "ModelStreamEvent",
+    "NativeToolCall",
 ]

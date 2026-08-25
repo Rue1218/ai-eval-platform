@@ -7,10 +7,33 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 from app.errors import AppError, ErrorCode
+
+# 工具参数只接受平台已实现、可本地确定解释的 JSON Schema 子集。新增 MCP 工具
+# 不得静默携带未校验的组合/引用规则；需要扩展时先实现校验语义并补测试。
+_SUPPORTED_SCHEMA_KEYWORDS = frozenset(
+    {
+        "type",
+        "description",
+        "properties",
+        "required",
+        "additionalProperties",
+        "enum",
+        "items",
+        "minLength",
+        "maxLength",
+        "pattern",
+        "minimum",
+        "maximum",
+    }
+)
+_SUPPORTED_JSON_TYPES = frozenset(
+    {"object", "array", "string", "integer", "number", "boolean", "null"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,14 +58,25 @@ class ToolRegistry:
         """登记工具；重名登记抛 VALIDATION（防止覆盖导致分派漂移）。"""
         if def_.name in self._defs:
             raise AppError(ErrorCode.VALIDATION, f"工具已登记：{def_.name}")
+        schema_error = validate_tool_schema(def_.parameters_schema)
+        if schema_error:
+            raise AppError(ErrorCode.VALIDATION, f"工具参数 Schema 无效：{schema_error}")
         self._defs[def_.name] = def_
 
     def get(self, name: str) -> ToolDef:
         """取定义；未注册抛 AppError(VALIDATION)。"""
-        definition = self._defs.get(name)
+        definition = self.find(name)
         if definition is None:
             raise AppError(ErrorCode.VALIDATION, f"工具未注册：{name}")
         return definition
+
+    def find(self, name: str) -> ToolDef | None:
+        """按名称查询运行时定义；未注册返回 ``None``。"""
+        return self._defs.get(name)
+
+    def names(self) -> tuple[str, ...]:
+        """返回已登记工具名，供 Gate 构造白名单。"""
+        return tuple(self._defs)
 
     def all_defs(self) -> list[Mapping[str, object]]:
         """返回全部工具定义（可序列化投影，供 M2 select_tool_defs 最小注入）。
@@ -62,7 +96,7 @@ class ToolRegistry:
 
     def get_def(self, name: str) -> Mapping[str, object] | None:
         """按名取可序列化定义（M2 select_tool_defs 消费）；未注册返回 None。"""
-        definition = self._defs.get(name)
+        definition = self.find(name)
         if definition is None:
             return None
         return {
@@ -78,6 +112,197 @@ class ToolRegistry:
         return name in self._defs
 
 
+def required_parameter_names(schema: Mapping[str, object]) -> tuple[str, ...]:
+    """提取工具 JSON Schema 的必填参数名，供既有 Gate 保持同一事实来源。
+
+    完整的类型与范围校验由 ``validate_tool_arguments`` 完成；这里仅向既有
+    Gate 提供必填字段投影，避免工具注册表与门禁各自维护一份 required 列表。
+    """
+    required = schema.get("required")
+    if not isinstance(required, list | tuple):
+        return ()
+    return tuple(str(name) for name in required if isinstance(name, str) and name)
+
+
+def validate_tool_schema(schema: Mapping[str, object]) -> str | None:
+    """在注册期拒绝执行器尚未实现语义的 JSON Schema 关键字。"""
+    return _validate_schema_definition(schema, "arguments")
+
+
+def _validate_schema_definition(schema: Mapping[str, object], path: str) -> str | None:
+    """递归验证 Schema 子集本身，避免运行时对未知规则静默放行。"""
+    unsupported = sorted(str(key) for key in schema if key not in _SUPPORTED_SCHEMA_KEYWORDS)
+    if unsupported:
+        return f"{path} 包含不支持的关键字：{', '.join(unsupported)}"
+
+    expected = schema.get("type")
+    expected_types = (expected,) if isinstance(expected, str) else expected
+    if expected is not None:
+        if not isinstance(expected_types, list | tuple) or not expected_types:
+            return f"{path}.type 必须是受支持的类型或非空类型列表"
+        invalid_types = [str(item) for item in expected_types if item not in _SUPPORTED_JSON_TYPES]
+        if invalid_types:
+            return f"{path}.type 包含不支持的类型：{', '.join(invalid_types)}"
+
+    properties = schema.get("properties")
+    if properties is not None:
+        if not isinstance(properties, Mapping):
+            return f"{path}.properties 必须是对象"
+        for key, child in properties.items():
+            if not isinstance(key, str) or not key:
+                return f"{path}.properties 包含无效参数名"
+            if not isinstance(child, Mapping):
+                return f"{path}.{key} 必须是 Schema 对象"
+            error = _validate_schema_definition(child, f"{path}.{key}")
+            if error:
+                return error
+
+    required = schema.get("required")
+    if required is not None:
+        if not isinstance(required, list | tuple) or any(
+            not isinstance(name, str) or not name for name in required
+        ):
+            return f"{path}.required 必须是非空字符串列表"
+        if len(set(required)) != len(required):
+            return f"{path}.required 不能包含重复参数"
+
+    additional = schema.get("additionalProperties")
+    if additional is not None and not isinstance(additional, bool):
+        return f"{path}.additionalProperties 仅支持布尔值"
+
+    enum = schema.get("enum")
+    if enum is not None and not isinstance(enum, list | tuple):
+        return f"{path}.enum 必须是数组"
+
+    items = schema.get("items")
+    if items is not None:
+        if not isinstance(items, Mapping):
+            return f"{path}.items 必须是 Schema 对象"
+        error = _validate_schema_definition(items, f"{path}.items")
+        if error:
+            return error
+
+    for key in ("minLength", "maxLength"):
+        value = schema.get(key)
+        if value is not None and (not isinstance(value, int) or isinstance(value, bool) or value < 0):
+            return f"{path}.{key} 必须是非负整数"
+    min_length = schema.get("minLength")
+    max_length = schema.get("maxLength")
+    if isinstance(min_length, int) and isinstance(max_length, int) and min_length > max_length:
+        return f"{path}.minLength 不能大于 maxLength"
+
+    pattern = schema.get("pattern")
+    if pattern is not None:
+        if not isinstance(pattern, str):
+            return f"{path}.pattern 必须是字符串"
+        try:
+            re.compile(pattern)
+        except re.error:
+            return f"{path}.pattern 不是有效正则表达式"
+
+    for key in ("minimum", "maximum"):
+        value = schema.get(key)
+        if value is not None and (
+            not isinstance(value, int | float) or isinstance(value, bool)
+        ):
+            return f"{path}.{key} 必须是数字"
+    minimum = schema.get("minimum")
+    maximum = schema.get("maximum")
+    if (
+        isinstance(minimum, int | float)
+        and not isinstance(minimum, bool)
+        and isinstance(maximum, int | float)
+        and not isinstance(maximum, bool)
+        and minimum > maximum
+    ):
+        return f"{path}.minimum 不能大于 maximum"
+    return None
+
+
+def validate_tool_arguments(schema: Mapping[str, object], arguments: Mapping[str, object]) -> str | None:
+    """校验内部工具使用的受限 JSON Schema，失败返回脱敏中文原因。
+
+    平台工具当前只需要 object/properties/required、基础标量类型、枚举和范围
+    约束。校验器刻意不执行 schema 中的任意代码，也不支持远程 ``$ref``，从而
+    保证模型参数只能在 ToolNode 的受控本地边界内被解释。
+    """
+    return _validate_schema_value(arguments, schema, "arguments")
+
+
+def _validate_schema_value(value: object, schema: Mapping[str, object], path: str) -> str | None:
+    """递归校验一个 JSON 值，覆盖内部短工具声明的安全子集。"""
+    expected = schema.get("type")
+    expected_types = (expected,) if isinstance(expected, str) else expected
+    if isinstance(expected_types, list | tuple) and expected_types:
+        if not any(_matches_json_type(value, str(item)) for item in expected_types):
+            labels = "/".join(str(item) for item in expected_types)
+            return f"参数 {path} 类型无效，应为 {labels}"
+
+    enum = schema.get("enum")
+    if isinstance(enum, list | tuple) and value not in enum:
+        return f"参数 {path} 不在允许范围内"
+
+    if isinstance(value, Mapping):
+        required = required_parameter_names(schema)
+        missing = [name for name in required if name not in value]
+        if missing:
+            return f"缺少必填参数：{', '.join(missing)}"
+        properties = schema.get("properties")
+        properties_map = properties if isinstance(properties, Mapping) else {}
+        if schema.get("additionalProperties") is False:
+            unexpected = [str(key) for key in value if key not in properties_map]
+            if unexpected:
+                return f"包含未允许的参数：{', '.join(unexpected)}"
+        for key, child in value.items():
+            child_schema = properties_map.get(key)
+            if not isinstance(child_schema, Mapping):
+                continue
+            error = _validate_schema_value(child, child_schema, str(key))
+            if error:
+                return error
+
+    if isinstance(value, list):
+        item_schema = schema.get("items")
+        if isinstance(item_schema, Mapping):
+            for index, child in enumerate(value):
+                error = _validate_schema_value(child, item_schema, f"{path}[{index}]")
+                if error:
+                    return error
+
+    if isinstance(value, str):
+        min_length = schema.get("minLength")
+        max_length = schema.get("maxLength")
+        if isinstance(min_length, int) and len(value) < min_length:
+            return f"参数 {path} 长度不能小于 {min_length}"
+        if isinstance(max_length, int) and len(value) > max_length:
+            return f"参数 {path} 长度不能大于 {max_length}"
+        pattern = schema.get("pattern")
+        if isinstance(pattern, str) and not re.search(pattern, value):
+            return f"参数 {path} 格式无效"
+
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        minimum = schema.get("minimum")
+        maximum = schema.get("maximum")
+        if isinstance(minimum, int | float) and value < minimum:
+            return f"参数 {path} 不能小于 {minimum}"
+        if isinstance(maximum, int | float) and value > maximum:
+            return f"参数 {path} 不能大于 {maximum}"
+    return None
+
+
+def _matches_json_type(value: object, expected: str) -> bool:
+    """避免 Python ``bool`` 被误判为 JSON integer。"""
+    return {
+        "object": isinstance(value, Mapping),
+        "array": isinstance(value, list),
+        "string": isinstance(value, str),
+        "integer": isinstance(value, int) and not isinstance(value, bool),
+        "number": isinstance(value, int | float) and not isinstance(value, bool),
+        "boolean": isinstance(value, bool),
+        "null": value is None,
+    }.get(expected, False)
+
+
 def build_default_registry() -> ToolRegistry:
     """阶段 3 默认注册（基础工具 + 沙箱 bash）。
 
@@ -89,13 +314,14 @@ def build_default_registry() -> ToolRegistry:
     registry.register(
         ToolDef(
             name="read",
-            description="读取沙箱目录内的文本文件（相对路径）；单次最多返回 24000 字符，内容较长会附截断说明并提示可基于已返回内容直接回答（如需完整内容再传 offset 分段）",
+            description="按行读取沙箱目录内的文本文件（相对路径）；offset/limit 均为 0-based 行，单次最多 2000 行和 120000 字符。结果会返回下一页 next_offset；优先基于已读片段总结，仅在确有必要时继续读取。",
             parameters_schema={
                 "type": "object",
+                "additionalProperties": False,
                 "properties": {
                     "path": {"type": "string", "description": "相对路径"},
-                    "offset": {"type": "integer", "description": "起始字符偏移，默认 0", "minimum": 0},
-                    "limit": {"type": "integer", "description": "最多返回字符数，默认 24000", "minimum": 1},
+                    "offset": {"type": "integer", "description": "起始行号，0-based，默认 0", "minimum": 0},
+                    "limit": {"type": "integer", "description": "最多读取行数，默认/上限 2000", "minimum": 1, "maximum": 2000},
                 },
                 "required": ["path"],
             },
@@ -110,6 +336,7 @@ def build_default_registry() -> ToolRegistry:
             description="在沙箱目录内新建文本文件（相对路径）",
             parameters_schema={
                 "type": "object",
+                "additionalProperties": False,
                 "properties": {
                     "path": {"type": "string"},
                     "content": {"type": "string"},
@@ -127,6 +354,7 @@ def build_default_registry() -> ToolRegistry:
             description="在沙箱目录内编辑文本文件（原子替换）",
             parameters_schema={
                 "type": "object",
+                "additionalProperties": False,
                 "properties": {
                     "path": {"type": "string"},
                     "old": {"type": "string"},
@@ -145,6 +373,7 @@ def build_default_registry() -> ToolRegistry:
             description="内部搜索引擎检索（平台自实现适配器，不走外部 MCP）",
             parameters_schema={
                 "type": "object",
+                "additionalProperties": False,
                 "properties": {
                     "query": {"type": "string"},
                 },
@@ -161,6 +390,7 @@ def build_default_registry() -> ToolRegistry:
             description="内部网页抓取（平台自实现适配器 + 脱敏，不走外部 MCP）",
             parameters_schema={
                 "type": "object",
+                "additionalProperties": False,
                 "properties": {
                     "url": {"type": "string"},
                 },
@@ -177,6 +407,7 @@ def build_default_registry() -> ToolRegistry:
             description="在 bwrap 沙箱内执行 shell 命令（相对路径、无网络、受资源限制）",
             parameters_schema={
                 "type": "object",
+                "additionalProperties": False,
                 "properties": {
                     "command": {"type": "string"},
                 },
@@ -190,7 +421,7 @@ def build_default_registry() -> ToolRegistry:
     return registry
 
 
-def _read_handler(arguments: Mapping[str, object], sandbox_dir: str | None = None) -> str:
+def _read_handler(arguments: Mapping[str, object], sandbox_dir: str | None = None) -> object:
     """read 工具 handler：受控目录内读取相对路径（防目录穿越）。
 
     ``sandbox_dir`` 由平台经 dispatch 注入，**禁止模型传参**（M5-D7 红线）；

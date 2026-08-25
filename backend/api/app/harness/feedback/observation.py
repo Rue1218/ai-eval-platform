@@ -55,16 +55,23 @@ def normalize(
             arguments=arguments,
         )
     data = raw.data or {}
-    text = str(data.get("summary") or data.get("text") or "执行成功")
+    # ``model_text`` 仅在服务端进入 Observation，不能透传到 ToolCard。read 以此
+    # 保留按行读取的完整片段，``display`` 则是浏览器可见的短预览和元数据。
+    text = str(data.get("model_text") or data.get("summary") or data.get("text") or "执行成功")
+    display = data.get("display")
+    if not isinstance(display, Mapping):
+        display = {"summary": str(data.get("summary") or data.get("text") or "执行成功")}
+    data_source = data.get("source")
     error = raw.error if isinstance(raw.error, dict) else {}
     return Observation(
         tool=tool,
         text=text,
         ok=raw.ok,
         truncated=bool(data.get("truncated", False)),
-        source=source or error.get("source"),
+        source=source or (str(data_source) if data_source else None) or error.get("source"),
         redacted=True,
         arguments=arguments,
+        display_data=dict(display),
     )
 
 

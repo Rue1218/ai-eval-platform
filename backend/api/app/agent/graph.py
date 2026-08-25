@@ -11,11 +11,18 @@ WebSocket、数据库与平台任务队列由路由层（ws.py）负责，节点
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterator
+from uuid import uuid4
 
 from langgraph.graph import END, START, StateGraph
 
 from ..errors import AppError, ErrorCode
-from ..harness.execution import ToolRegistry, build_default_registry, build_tool_node
+from ..harness.execution import (
+    NativeToolResultStore,
+    ToolRegistry,
+    build_default_registry,
+    build_tool_node,
+    runtime_thread_id,
+)
 from ..harness.memory import GraphState, SerializableRequest
 from ..llm import ModelGateway, ModelResponse
 from .plan_solve import build_plan_solve_subgraph
@@ -52,6 +59,8 @@ class LangGraphAgent:
         self._sandbox_dir = sandbox_dir
         self._user_id = user_id
         self._checkpointer = checkpointer
+        # 完整原生工具结果仅在本 Agent 实例的一轮图运行中存在，禁止进入 Config/State。
+        self._native_tool_results = NativeToolResultStore()
         self._graph = self._build_graph()
 
     def _build_graph(self):
@@ -61,8 +70,13 @@ class LangGraphAgent:
             db_factory=self._db_factory,
             sandbox_dir=self._sandbox_dir,
             user_id=self._user_id,
+            native_tool_results=self._native_tool_results,
         )
-        react_nodes = build_react_nodes(self._gateway, self._registry)
+        react_nodes = build_react_nodes(
+            self._gateway,
+            self._registry,
+            native_tool_results=self._native_tool_results,
+        )
         plan_solve_nodes = build_plan_solve_subgraph()
         graph = StateGraph(GraphState)
         graph.add_node("routing", routing_node)
@@ -81,7 +95,13 @@ class LangGraphAgent:
             react_route,
             {"tools": "tools", "end": END, "react_agent": "react_agent"},
         )
-        graph.add_edge("tools", "react_agent")
+        # 原生 ToolCall 同轮可返回多个调用；ToolNode 串行消费队列，全部完成后
+        # 才回到模型，既不绕过门禁/沙箱，也不丢弃并发调用。
+        graph.add_conditional_edges(
+            "tools",
+            lambda state: "tools" if state.get("pending_tool") else "react_agent",
+            {"tools": "tools", "react_agent": "react_agent"},
+        )
         graph.add_edge("direct", END)
         graph.add_edge("chat_stream", END)
         # Plan-Solve 产物经 reflect 复核（阶段 4：pass/clarify/reject 条件边后续接线）
@@ -103,10 +123,14 @@ class LangGraphAgent:
 
     def invoke(self, request: SerializableRequest, config: dict | None = None) -> ModelResponse:
         """执行一轮非流式 Agent 调用（Chat/ReAct 路径产生模型响应）。"""
-        state = self._graph.invoke({"request": request}, config=config or {})
-        if state.get("mode") not in ("chat", "react"):
-            raise AppError(ErrorCode.VALIDATION, "Direct 路径不产生模型响应")
-        return self._response_from_state(state)
+        run_config, thread_id = self._prepare_run_config(config)
+        try:
+            state = self._graph.invoke({"request": request}, config=run_config)
+            if state.get("mode") not in ("chat", "react"):
+                raise AppError(ErrorCode.VALIDATION, "Direct 路径不产生模型响应")
+            return self._response_from_state(state)
+        finally:
+            self._native_tool_results.clear(thread_id)
 
     async def astream(
         self,
@@ -132,12 +156,28 @@ class LangGraphAgent:
             graph_input = Command(resume=resume)
         else:
             graph_input = {"request": request}
-        async for mode, chunk in self._graph.astream(
-            graph_input,
-            config=config or {},
-            stream_mode=["custom", "updates"],
-        ):
-            yield mode, chunk
+        run_config, thread_id = self._prepare_run_config(config)
+        try:
+            async for mode, chunk in self._graph.astream(
+                graph_input,
+                config=run_config,
+                stream_mode=["custom", "updates"],
+            ):
+                yield mode, chunk
+        finally:
+            self._native_tool_results.clear(thread_id)
+
+    @staticmethod
+    def _prepare_run_config(config: dict | None) -> tuple[dict, str]:
+        """复制运行配置并保证每一轮都有不可冲突的临时存储键。"""
+        run_config = dict(config or {})
+        configurable = dict(run_config.get("configurable") or {})
+        thread_id = runtime_thread_id(configurable)
+        if not thread_id:
+            thread_id = f"agent:{uuid4().hex}"
+            configurable["thread_id"] = thread_id
+        run_config["configurable"] = configurable
+        return run_config, thread_id
 
     @staticmethod
     def _response_from_state(state: dict) -> ModelResponse:

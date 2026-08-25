@@ -339,6 +339,7 @@ def _selected_model_config(db: Session) -> tuple[ModelConfig, ProtocolProfile]:
         timeout_s=60.0,
         reasoning_enabled=reasoning_enabled,
         reasoning_effort=reasoning_effort,
+        tool_call_mode=getattr(profile, "tool_call_mode", "legacy") or "legacy",
     )
     return config, profile
 

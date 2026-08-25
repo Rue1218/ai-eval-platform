@@ -129,6 +129,7 @@ def _profile_out(profile: ProtocolProfile, connection: tuple[str, str, str | Non
         reranker_model=env_values.reranker_model,
         has_reranker_api_key=bool(env_values.reranker_api_key),
         context_window=getattr(profile, "context_window", 200000) or 200000,
+        tool_call_mode=getattr(profile, "tool_call_mode", "legacy") or "legacy",
         created_at=profile.created_at,
         updated_at=profile.updated_at,
     )
@@ -210,6 +211,7 @@ def create_profile(
         # API Key 严禁写入数据库；这里只保留数据库模型兼容列的空值。
         encrypted_key=None,
         context_window=body.context_window,
+        tool_call_mode=body.tool_call_mode,
         created_by=user.id,
     )
     db.add(profile)
