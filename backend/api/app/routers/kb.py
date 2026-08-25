@@ -14,6 +14,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi import Request as FastApiRequest
+from shared.kb import chunk_text, compute_metrics, retrieve
 from sqlalchemy.orm import Session
 
 from ..config import settings
@@ -36,11 +37,10 @@ from ..schemas import (
     KbDocOut,
     KbOut,
     KbQueryIn,
-    KbQueryOut,
     KbQueryItemOut,
+    KbQueryOut,
     KbUpdate,
 )
-from shared.kb import chunk_text, compute_metrics, retrieve
 
 logger = logging.getLogger("ai-eval.api.kb")
 

@@ -16,6 +16,8 @@ logger = logging.getLogger("ai-eval.kb")
 
 # 检索返回的最大切块数上限（对齐前端 k ≤ 20 约束）
 MAX_K = 20
+# 检索默认 Top-K
+DEFAULT_K = 5
 # 单次切块预览的最大分块数，防止超大文档一次生成海量切块
 MAX_CHUNK_PREVIEW = 200
 # 调用 LightRAG /query 的超时（秒）：stub 或不可达时快速回退本地检索

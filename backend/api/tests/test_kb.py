@@ -56,7 +56,7 @@ def test_parse_gold_qa_jsonl():
         '{"question":"退款多久到账？","reference":"1-3 个工作日","expected_doc_ids":["d-01"]}\n'
         "\n"
         '{"question":"如何改绑手机号？","reference":"安全中心"}\n'
-    ).encode("utf-8")
+    ).encode()
     rows = _parse_gold_qa(content, "qa.jsonl")
     assert len(rows) == 2
     assert rows[0]["question"] == "退款多久到账？"
@@ -65,16 +65,14 @@ def test_parse_gold_qa_jsonl():
 
 
 def test_parse_gold_qa_skips_lines_without_question():
-    content = '{"reference":"仅参考"}\n{"question":"有效行","reference":"r"}\n'.encode("utf-8")
+    content = '{"reference":"仅参考"}\n{"question":"有效行","reference":"r"}\n'.encode()
     rows = _parse_gold_qa(content, "qa.jsonl")
     assert len(rows) == 1
     assert rows[0]["question"] == "有效行"
 
 
 def test_parse_gold_qa_json_array():
-    content = '[{"question":"q1","expected_doc_ids":["d-1","d-2"]},{"question":"q2","reference":"r2"}]'.encode(
-        "utf-8"
-    )
+    content = b'[{"question":"q1","expected_doc_ids":["d-1","d-2"]},{"question":"q2","reference":"r2"}]'
     rows = _parse_gold_qa(content, "qa.json")
     assert len(rows) == 2
     assert rows[0]["expected_doc_ids"] == ["d-1", "d-2"]
@@ -97,7 +95,7 @@ def test_parse_expected_normalizes_variants():
 
 
 def test_decode_text_tries_encodings():
-    assert _decode_text("你好".encode("utf-8")) == "你好"
+    assert _decode_text("你好".encode()) == "你好"
     assert _decode_text("中文".encode("gbk")) == "中文"
     # 二进制内容（三套解码均失败）返回空串，文档状态落 failed
     assert _decode_text(bytes([0xC3, 0x28, 0xFF])) == ""
