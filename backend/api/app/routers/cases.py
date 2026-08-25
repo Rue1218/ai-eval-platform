@@ -562,6 +562,11 @@ def save_cases(
         case.id: case
         for case in db.query(CaseItem).filter(CaseItem.case_set_id == case_set.id).all()
     }
+    # 当前视图保存语义：载荷中未包含的现有用例视为已删除（前端"批量删除→保存修改"依赖此行为）
+    payload_ids = {case_in.id for case_in in body.cases if case_in.id}
+    for case_id, case in existing.items():
+        if case_id not in payload_ids:
+            db.delete(case)
     for index, case_in in enumerate(body.cases):
         target = existing.get(case_in.id) if case_in.id else None
         if case_in.id and target is None:

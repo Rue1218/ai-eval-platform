@@ -350,6 +350,11 @@ def save_dataset_rows(
         row.row_no: row
         for row in db.query(DatasetRow).filter(DatasetRow.dataset_id == dataset.id).all()
     }
+    # 当前视图保存语义：载荷中未包含的现有行视为已删除（前端批量删除行依赖此行为）
+    payload_row_nos = {row_in.row_no for row_in in body.rows}
+    for row_no, row in existing.items():
+        if row_no not in payload_row_nos:
+            db.delete(row)
     for row_in in body.rows:
         _upsert_row(db, dataset, row_in, existing.get(row_in.row_no))
     db.flush()
