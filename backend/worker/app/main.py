@@ -2,7 +2,7 @@
 
 - ``benchmark`` / ``testcase``：真实执行器（见 benchmark.py / testcase.py）；
 - ``rag``：真实执行器（见 rag.py：LightRAG 检索优先，本地关键词兜底）；
-- ``stress``：仍为骨架 mock（M4 替换为真实实现），与真实执行保持同一领取入口。
+- ``stress``：下发 stress 容器发压，轮询取消并写 time_series 报告。
 
 主循环同时承担 72h 用例确认超时扫描（PRD 3.3 / 5.4.1）：generated 状态的
 用例集过期后联动 awaiting_case_confirm 任务与用例集双双置 cancelled。
@@ -12,11 +12,14 @@ import logging
 import time
 from datetime import datetime, timezone
 
+from sqlalchemy import not_
+
 from .benchmark import run_benchmark
 from .db import SessionLocal
 from .events import push_ws
-from .models import CaseSet, Report, Setting, Task, TaskEvent
+from .models import CaseSet, Setting, Task, TaskEvent
 from .rag import run_rag
+from .stress import run_stress
 from .task_state import claim_running_task_for_terminal_write
 from .testcase import run_testcase
 
@@ -90,34 +93,32 @@ def _run_task(task_id: str) -> None:
             run_testcase(task_id)
             return
 
-        # ─── 以下为骨架 mock 流程（stress，M4 替换） ───
-        time.sleep(2)
-
-        # 期间若被取消则停止；行锁避免取消与完成路径互相覆盖终态。
-        task = claim_running_task_for_terminal_write(db, task_id)
-        if not task:
-            logger.info("task %s skipped mock completion because it is no longer running", task_id)
+        if task.kind == "stress":
+            db.close()
+            logger.info("task %s (stress) dispatch to stress engine", task_id)
+            run_stress(task_id)
             return
 
-        report_id = None
-        if task.kind == "stress":
-            report = Report(task_id=task.id, kind=task.kind, metrics={"mock": True})
-            db.add(report)
-            db.flush()
-            report_id = report.id
-
-        task.status = "succeeded"
+        logger.error("task %s unknown kind=%s", task_id, task.kind)
+        task = claim_running_task_for_terminal_write(db, task_id)
+        if not task:
+            return
+        task.status = "failed"
         task.finished_at = datetime.now(timezone.utc)
-        task.report_id = report_id
-        task.result = {"mock": True, "kind": task.kind}
-        db.add(TaskEvent(task_id=task.id, event="finish", payload={"status": "succeeded"}))
+        db.add(
+            TaskEvent(
+                task_id=task.id,
+                event="error",
+                payload={"message": "未知任务类型"},
+            )
+        )
         db.commit()
-
-        push_ws(task.session_id, "progress", {"percent": 100, "done": 1, "total": 1, "message": "任务已完成"}, task_id=task.id)
-        if report_id:
-            push_ws(task.session_id, "report", {"report_id": report_id}, task_id=task.id)
-        logger.info("task %s (%s) succeeded (mock)", task.id, task.kind)
-        print(f"[worker] succeeded task={task.id} kind={task.kind}", flush=True)
+        push_ws(
+            task.session_id,
+            "error",
+            {"code": "VALIDATION", "message": "未知任务类型"},
+            task_id=task.id,
+        )
     except Exception as exc:
         db.rollback()
         # 详细堆栈只进服务端日志;给浏览器/事件流的失败原因仅透出异常类名辅助定位
@@ -224,6 +225,7 @@ def loop() -> None:
                 task = (
                     db.query(Task)
                     .filter(Task.status == "queued")
+                    .filter(not_(Task.config.contains({"need_approval": True})))
                     .order_by(Task.created_at.asc())
                     .with_for_update(skip_locked=True)
                     .first()

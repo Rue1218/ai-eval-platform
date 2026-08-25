@@ -111,7 +111,7 @@
           <div class="form-row-3">
             <div class="field">
               <label class="field-label">采样样本数</label>
-              <n-input-number v-model:value="form.run!.sample_size" :min="1" :max="10000" :disabled="isAcked" />
+              <n-input-number v-model:value="form.run!.sample_size" :min="1" :max="1000" :disabled="isAcked" />
             </div>
             <div class="field">
               <label class="field-label">并发数</label>

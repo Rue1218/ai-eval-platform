@@ -37,7 +37,9 @@ from .models import (
     UsageLedger,
 )
 from .profile_env import profile_connection
+from .sampling import clamp_sample_size
 from .scoring import DEFAULT_METRIC
+from .stress_spawn import maybe_spawn_stress
 from .task_state import claim_running_task_for_terminal_write
 
 logger = logging.getLogger("worker.benchmark")
@@ -123,11 +125,15 @@ def _is_cancelled(db: Session, task_id: str) -> bool:
     return bool(row) and row[0] in {"cancelled", "failed"}
 
 
-def _progress(db: Session, task: Task, done: int, total: int, message: str) -> None:
+def _progress(db: Session, task_id: str, done: int, total: int, message: str) -> None:
     """更新任务进度字段并推送 WS progress 事件（契约字段：percent/done/total/message）。
 
-    同时写一条 TaskEvent 进度日志，供任务详情/模型对比页的运行日志窗口展示。
+    必须按 task_id 在本 Session 内重新加载 ORM，禁止把其它 Session 的 Task
+    实例传进来（跨 Session 赋值不会进入脏检查，tasks.progress 会停在初值）。
     """
+    task = db.query(Task).filter(Task.id == task_id).first()
+    if not task:
+        return
     percent = round(done * 100 / total) if total else 100
     task.progress = {"percent": percent, "done": done, "total": total, "message": message}
     db.add(
@@ -309,7 +315,7 @@ def _run_judge(
                 totals["est_cost_usd"] = totals["total_tokens"] / 1000 * price
         db.commit()
         cost_usd = sum(t["est_cost_usd"] for t in usage_totals.values())
-        _progress(db, task, done, total, "裁判打分中")
+        _progress(db, task_id, done, total, "裁判打分中")
 
         if _is_cancelled(db, task_id):
             logger.info("benchmark task %s cancelled during judge (judged=%s)", task_id, judged)
@@ -457,6 +463,7 @@ def _finish(db: Session, task: Task, dataset: Dataset, metric: str, total: int) 
     )
     push_ws(task.session_id, "report", {"report_id": report.id}, task_id=task.id)
     logger.info("benchmark task %s succeeded (report=%s)", task.id, report.id)
+    maybe_spawn_stress(db, task)
     return True
 
 
@@ -483,10 +490,8 @@ def run_benchmark(task_id: str) -> None:
             .order_by(DatasetRow.row_no.asc())
             .all()
         )
-        sample_size = run.get("sample_size")
-        if isinstance(sample_size, int) and not isinstance(sample_size, bool) and sample_size > 0:
-            # 确定性抽样：按行号升序取前 N 条，续跑时抽样口径不漂移
-            rows = rows[:sample_size]
+        sample_size = clamp_sample_size(run.get("sample_size"), len(rows))
+        rows = rows[:sample_size]
         if not rows:
             _fail(db, task, "VALIDATION", "数据集没有可评测的有效行（待补全行不计入分母）")
             return
@@ -523,7 +528,7 @@ def run_benchmark(task_id: str) -> None:
             # 极端续跑场景：样本已全部落库，直接汇总出报告
             _finish(db, task, dataset, metric, total)
             return
-        _progress(db, task, done, total, "执行中")
+        _progress(db, task.id, done, total, "执行中")
 
         usage_totals = _load_usage(db, task.id)
 
@@ -554,7 +559,7 @@ def run_benchmark(task_id: str) -> None:
 
         pipeline = BenchmarkEvalPipeline(
             db_factory=SessionLocal,
-            push_progress_fn=lambda t, d, tot, msg: _progress(db, t, d, tot, msg),
+            push_progress_fn=lambda tid, d, tot, msg: _progress(db, tid, d, tot, msg),
             truncate_raw_fn=_truncate_raw,
             is_cancelled_fn=_is_cancelled,
         )
@@ -640,6 +645,14 @@ def run_benchmark(task_id: str) -> None:
             )
             if judge_result.get("cancelled"):
                 return  # 取消不写报告，与目标阶段一致
+            if judge_result.get("error"):
+                _fail(
+                    db,
+                    task,
+                    "VALIDATION",
+                    str(judge_result.get("error") or "裁判失败").removeprefix("VALIDATION: "),
+                )
+                return
             if judge_result.get("budget_exceeded"):
                 _fail(
                     db,

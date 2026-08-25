@@ -1,10 +1,10 @@
 # AI 测试与评估平台 Agent 开发文档
 
-> 版本：V1.4.1
-> 状态：LangGraph Harness 已启用混合范式 P0–P2：Plan-and-Solve → ReAct → reflect；native 中间叙述；clarify interrupt 与有界重规划；检查点默认 memory
+> 版本：V1.5.0
+> 状态：LangGraph Harness 已启用混合范式 P0–P2：Plan-and-Solve → ReAct → reflect；native 中间叙述；clarify interrupt 与有界重规划；检查点默认 memory；reflect 产出确认卡
 > 审查日期：2026-08-25
 > 对应需求：`AI测试与评估平台-PRD.md` V1.12
-> 对应接口：`AI测试与评估平台-API.md` V1.34
+> 对应接口：`AI测试与评估平台-API.md` V1.35
 
 ## 1. 当前唯一运行链路
 
@@ -27,11 +27,12 @@
 
 `app/routers/ws.py` 只负责：
 
-- 消费 `POST /api/auth/ws-ticket` 签发的五分钟单次票据；
+- 消费 `POST /api/auth/ws-ticket` 签发的五分钟单次票据（Redis `SET NX` + TTL，Redis 不可用时回退进程内存）；
 - 校验会话可见性，支持首次连接创建私有会话；
 - 保存 `messages` 与 `ws_events`，按 `last_event_id` 补发历史事件；
 - 在后台 Task 中启动单轮 Agent，不阻塞 WebSocket `receive` 循环；
-- 将 LangGraph 流事件投影为 `user_message`、`thought`、`assistant_delta`、`assistant_message`、`response.completed`、`error`、`pong`。
+- 将 LangGraph 流事件投影为 `user_message`、`thought`、`assistant_delta`、`assistant_message`、`confirm`、`response.completed`、`error`、`pong`。
+- `confirm_ack` / `cancel_task` 由收包循环直连，不在 api 进程执行评测或压测。
 
 路由不得直接调用 `app.adapters`，不得执行 Benchmark、RAG、用例生成或压测。
 
@@ -87,20 +88,20 @@ Agent 思考配置从 `Setting(key="agent_reasoning")` 读取，结构为
 | `response.completed` | 本轮生成结束，携带 `finish_reason` 和 `role=assistant` 并可回放 |
 | `tool_call` | 已解析的短工具 `call_id`、名称与参数；创建 ToolCard，不直接执行业务长任务 |
 | `tool_result` | 与 `tool_call.call_id` 相同的短工具受控结果；`read` 仅包含行范围、文件统计与 500 字符预览，完整正文不进入 WS 事件 |
+| `confirm` | 质量任务确认卡（TaskSpec）；`kind` 不得为 `stress`；落 `sessions.pending_confirm` |
 | `error` | 脱敏后的 `ErrorCode` 与用户可见消息 |
 | `pong` | 应用层心跳，不占用持久化事件号，可与业务事件交错到达 |
 
-保留但未启用的上行事件：`confirm_ack`、`cancel_task`。当前收到后返回 `VALIDATION` 能力未启用错误。
+上行已启用：`user_message`、`confirm_ack`（直连入队/取消卡）、`cancel_task`、`clarify_reply`。
 
 ## 4. 当前冻结范围
 
 以下内容仍不属于当前已实施范围，不得绕过契约提前加入：
 
 - 外部 MCP、浏览器直连 MCP、动态加载未知 MCP Server 与真正并行执行；
-- 人工确认卡、权限策略、consent、安全门禁；
-- Redis/pgvector 记忆、检查点和复杂上下文压缩；
-- PostgreSQL 长任务入队、Worker 执行和 stress 派生；
-- 未经模型变更、Alembic 自动生成与审阅的新迁移；中间多条 `assistant_message`、Reflexion 有界重规划与澄清卡 interrupt 仍属后续阶段。
+- 外部通知渠道（企微/邮件/Webhook）与 Grafana 抓取编排；
+- PostgreSQL Checkpointer 多副本粘性路由（默认仍为 memory）；
+- 未经模型变更、Alembic 自动生成与审阅的新迁移。
 
 ## 5. 后续扩展门禁
 
@@ -256,3 +257,13 @@ Agent 思考配置从 `Setting(key="agent_reasoning")` 读取，结构为
 - `backend/api/app/agent/react.py` / `toolnode.py`：hydrate 截断兜底；追踪工具耗时、模型耗时与 payload 字符数。
 - `docs/AI测试与评估平台-API.md`：V1.34。
 - `backend/api/tests/test_harness_execution.py` / `test_agent_react.py`：覆盖大文档分页、回传截断。
+
+### V1.5.0（2026-08-25）修改代码文件与作用清单
+
+- `backend/api/app/harness/orchestration/confirm_spec.py` / `app/agent/reflect.py`：`delivery=confirm` 且复核通过后发出 TaskSpec 确认卡；`kind` 不得为 `stress`。
+- `backend/api/app/routers/ws.py`：确认卡补 `confirm_author`；短票 jti 走 Redis 单次消费。
+- `backend/api/app/ws_tickets.py`：`SET NX` + TTL，Redis 不可用回退进程内存。
+- `backend/worker/app/stress.py` / `main.py`：压测下发 stress 容器，取消立即停发，报告含 `time_series`。
+- `backend/stress/main.go`：真实 HTTP 发压、`/status` `/stop`、Prometheus 指标。
+- `docker-compose.yml` / `.env.example`：Worker 注入 `STRESS_URL`。
+- `backend/api/tests/test_harness_phase4.py` / `test_ws_tickets.py` / `backend/worker/tests/test_stress.py`：确认卡、短票、压测映射回归。

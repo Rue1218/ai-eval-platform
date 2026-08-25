@@ -108,7 +108,7 @@ class BenchmarkEvalPipeline:
     def __init__(
         self,
         db_factory: Callable[[], Session],
-        push_progress_fn: Callable[[Task, int, int, str], None],
+        push_progress_fn: Callable[[str, int, int, str], None],
         truncate_raw_fn: Callable[[dict[str, Any]], dict[str, Any]],
         is_cancelled_fn: Callable[[Session, str], bool],
     ) -> None:
@@ -218,7 +218,7 @@ class BenchmarkEvalPipeline:
                         )
                         done += 1
                     db.commit()
-                    self.push_progress_fn(task, done, total, "执行中")
+                    self.push_progress_fn(task_id, done, total, "执行中")
                     continue
 
                 call_kwargs = dict(
@@ -283,7 +283,7 @@ class BenchmarkEvalPipeline:
 
                     db.commit()
                     cost_usd = sum(t["est_cost_usd"] for t in usage_totals.values())
-                    self.push_progress_fn(task, done, total, "执行中")
+                    self.push_progress_fn(task_id, done, total, "执行中")
 
                     # 协作式取消检查
                     if self.is_cancelled_fn(db, task_id):

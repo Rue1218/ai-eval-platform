@@ -110,6 +110,13 @@ def test_reflect_emits_completed_after_plan() -> None:
     assert out["verdict"] == "pass"
     assert kinds[-1] == "response.completed"
     assert out["pending_events"][-1]["payload"]["finish_reason"] == "stop"
+    assert "confirm" in kinds
+    confirm = next(event for event in out["pending_events"] if event["kind"] == "confirm")
+    assert confirm["payload"]["kind"] == "benchmark"
+    assert confirm["payload"]["kind"] != "stress"
+    assert confirm["payload"]["run"]["sample_size"] == 1000
+    assert confirm["payload"]["run"]["temperature"] == 0
+    assert confirm["payload"]["run"]["max_tokens"] == 1024
 
 
 def test_reflect_failed_observation_replans() -> None:
@@ -160,6 +167,37 @@ def test_reflect_reject_completes_with_error() -> None:
     assert out["verdict"] == "reject"
     assert out["pending_events"][-1]["kind"] == "response.completed"
     assert out["pending_events"][-1]["payload"]["finish_reason"] == "error"
+
+
+def test_reflect_confirm_never_uses_kind_stress() -> None:
+    """对话确认卡不得 kind=stress；压测意图收成 benchmark + with_stress。"""
+    out = reflect_node(
+        {
+            "plan": to_dict(
+                _plan(
+                    skill_id="skill-stress",
+                    intent="运行压测",
+                    tools_needed=("task",),
+                    delivery="confirm",
+                )
+            )
+        }
+    )
+    confirm = next(event for event in out["pending_events"] if event["kind"] == "confirm")
+    assert confirm["payload"]["kind"] == "benchmark"
+    assert confirm["payload"]["with_stress"] is True
+    assert confirm["payload"]["stress"]["qps"] == 10
+    assert confirm["payload"]["stress"]["duration_s"] == 120
+
+
+def test_reflect_chat_delivery_skips_confirm() -> None:
+    """普通闲聊交付不发卡。"""
+    out = reflect_node(
+        {"plan": to_dict(_plan(delivery="chat", tools_needed=("task",)))}
+    )
+    kinds = [event["kind"] for event in out["pending_events"]]
+    assert "confirm" not in kinds
+    assert kinds[-1] == "response.completed"
 
 
 def test_build_plan_unrecognized_raises() -> None:

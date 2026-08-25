@@ -46,7 +46,7 @@
         <div class="form-grid">
           <div class="field">
             <label class="field-label">抽样条数</label>
-            <n-input-number v-model:value="form.sampleSize" :min="1" :max="10000" style="width: 100%" />
+            <n-input-number v-model:value="form.sampleSize" :min="1" :max="1000" style="width: 100%" />
           </div>
           <div class="field">
             <label class="field-label">并发数</label>

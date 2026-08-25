@@ -15,6 +15,7 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..adapters import StreamAborted
@@ -26,6 +27,8 @@ from ..db import SessionLocal
 from ..errors import AppError, ErrorCode
 from ..harness.context import recent_window, summarize
 from ..harness.execution import ensure_session_workspace
+from ..harness.execution.context import ToolExecutionContext
+from ..harness.execution.task_tools import cancel_task_safe
 from ..harness.memory import get_default_checkpointer, to_serializable_request, write_summary
 from ..harness.orchestration import handle_confirm_ack
 from ..harness.prompts import build_system_prompt
@@ -35,6 +38,7 @@ from ..models import Session as AgentSession
 from ..security import TOKEN_TYPE_WS, decode_token
 from ..session_access import require_visible_session
 from ..session_connections import SESSION_CONNECTION_HUB
+from ..ws_tickets import consume_ws_jti, ttl_from_jwt_payload
 from .profiles import _profile_connection
 
 router = APIRouter(tags=["ws"])
@@ -48,7 +52,6 @@ _AGENT = LangGraphAgent(
     checkpointer=get_default_checkpointer(),
     db_factory=SessionLocal,
 )
-_USED_WS_TICKETS: set[str] = set()
 _TICKET_LOCK = threading.Lock()
 # 会话级 abort 事件注册表（/stop 即时中断；单副本进程内 dict，见 AGENTS.md）
 _SESSION_ABORTS: dict[str, asyncio.Event] = {}
@@ -121,10 +124,11 @@ def _consume_ws_ticket(db: Session, ticket: str | None) -> User:
         raise AppError(ErrorCode.UNAUTHORIZED, "WebSocket 短票无效", status_code=401)
 
     jti = str(payload["jti"])
+    ttl_seconds = ttl_from_jwt_payload(payload)
     with _TICKET_LOCK:
-        if jti in _USED_WS_TICKETS:
-            raise AppError(ErrorCode.UNAUTHORIZED, "WebSocket 短票已使用", status_code=401)
-        _USED_WS_TICKETS.add(jti)
+        first_use = consume_ws_jti(jti, ttl_seconds)
+    if not first_use:
+        raise AppError(ErrorCode.UNAUTHORIZED, "WebSocket 短票已使用", status_code=401)
 
     user = db.query(User).filter(User.id == payload.get("sub")).first()
     if not user or user.disabled or payload.get("av") != user.auth_version:
@@ -133,7 +137,15 @@ def _consume_ws_ticket(db: Session, ticket: str | None) -> User:
 
 
 def _next_event_id(db: Session, session_id: str) -> int:
-    """计算会话内下一个单调事件号；当前 API 单副本同步事务内无 await。"""
+    """计算会话内下一个单调事件号；先锁会话行，避免与 Worker 撞号。"""
+    locked = (
+        db.query(AgentSession.id)
+        .filter(AgentSession.id == session_id)
+        .with_for_update()
+        .first()
+    )
+    if not locked:
+        return 1
     row = (
         db.query(WsEvent.event_id)
         .filter(WsEvent.session_id == session_id)
@@ -154,26 +166,44 @@ async def _emit_persistent(
     task_id: str | None = None,
 ) -> bool:
     """写入 ws_events 并发送持久化事件；事件号由数据库历史决定。"""
-    event_id = _next_event_id(db, session_id)
-    row = WsEvent(
-        session_id=session_id,
-        task_id=task_id,
-        event_id=event_id,
-        event=event,
-        payload=payload,
-        ts=datetime.now(UTC),
-    )
-    try:
-        db.add(row)
-        db.commit()
-    except Exception as exc:
-        db.rollback()
-        logger.error(
-            "Agent WS 事件写入失败 session=%s event=%s type=%s",
-            session_id,
-            event,
-            type(exc).__name__,
+    row: WsEvent | None = None
+    event_id = 0
+    for attempt in range(2):
+        event_id = _next_event_id(db, session_id)
+        row = WsEvent(
+            session_id=session_id,
+            task_id=task_id,
+            event_id=event_id,
+            event=event,
+            payload=payload,
+            ts=datetime.now(UTC),
         )
+        try:
+            db.add(row)
+            db.commit()
+            break
+        except IntegrityError:
+            db.rollback()
+            if attempt == 0:
+                continue
+            logger.error(
+                "Agent WS 事件号冲突 session=%s event=%s",
+                session_id,
+                event,
+            )
+            return False
+        except Exception as exc:
+            db.rollback()
+            logger.error(
+                "Agent WS 事件写入失败 session=%s event=%s type=%s",
+                session_id,
+                event,
+                type(exc).__name__,
+            )
+            return False
+    else:
+        return False
+    if row is None:
         return False
     state.cursor = max(state.cursor, event_id)
     frame = _frame(session_id, event, event_id, payload, task_id=task_id, ts=row.ts)
@@ -429,6 +459,38 @@ def _infer_provider(profile: ProtocolProfile | None) -> str | None:
     return "custom"
 
 
+def _persist_pending_confirm(db: Session, session_id: str, payload: dict[str, Any]) -> None:
+    """把确认卡 TaskSpec 写入 sessions.pending_confirm，供 confirm_ack 二次校验。
+
+    ``confirm_author`` 只作归属元数据，不进入卡标 JSON（前端提交 patch 须剥离）。
+    """
+    spec = dict(payload)
+    author = spec.pop("confirm_author", None)
+    author_id = author.get("id") if isinstance(author, dict) else None
+    session = (
+        db.query(AgentSession)
+        .filter(AgentSession.id == session_id)
+        .with_for_update()
+        .first()
+    )
+    if not session:
+        return
+    session.pending_confirm = spec
+    session.pending_confirm_author_id = str(author_id) if author_id else session.user_id
+    db.commit()
+
+
+def _confirm_author_payload(user: User | None) -> dict[str, str] | None:
+    """确认卡作者元数据；不进卡标 JSON，仅供前端展示与 pending_confirm_author_id。"""
+    if user is None or not user.id:
+        return None
+    return {
+        "id": str(user.id),
+        "username": str(user.username or ""),
+        "display_name": str(user.display_name or user.username or ""),
+    }
+
+
 async def _translate_event(
     db: Session,
     websocket: WebSocket,
@@ -436,6 +498,8 @@ async def _translate_event(
     session_id: str,
     profile: ProtocolProfile | None,
     event: dict,
+    *,
+    user: User | None = None,
 ) -> None:
     """把图节点产出的 NodeEvent 翻译为 ws event（落库 + 统一 emit）。
 
@@ -490,6 +554,13 @@ async def _translate_event(
             task_id=task_id,
         )
         return
+    if kind == "confirm":
+        outgoing = dict(payload)
+        author = _confirm_author_payload(user)
+        if author and "confirm_author" not in outgoing:
+            outgoing["confirm_author"] = author
+        _persist_pending_confirm(db, session_id, outgoing)
+        payload = outgoing
     await _emit_persistent(
         db,
         websocket,
@@ -522,6 +593,7 @@ async def _run_turn(
     db = SessionLocal()
     try:
         config, profile = _selected_model_config(db)
+        turn_user = db.query(User).filter(User.id == user_id).first()
         history = _history_messages(db, session_id)
         # 系统提示词：agent_system_prompt 设置行优先，回退 Harness 五段策略（#101）
         system_row = db.query(Setting).filter(Setting.key == "agent_system_prompt").first()
@@ -624,7 +696,13 @@ async def _run_turn(
             # updates 模式：按节点边界消费 pending_events，统一 emit
             for event in iter_pending_events(chunk):
                 await _translate_event(
-                    db, websocket, state, session_id, profile, event
+                    db,
+                    websocket,
+                    state,
+                    session_id,
+                    profile,
+                    event,
+                    user=turn_user,
                 )
 
         if thinking:
@@ -1043,7 +1121,37 @@ async def agent_websocket(websocket: WebSocket) -> None:
                         {"ok": result.ok, "task_id": result.task_id, "message": result.message},
                     )
                 elif event == "cancel_task":
-                    raise AppError(ErrorCode.VALIDATION, "当前 LangGraph Agent 尚未启用任务控制")
+                    payload = (
+                        message.get("payload")
+                        if isinstance(message.get("payload"), dict)
+                        else {}
+                    )
+                    result = cancel_task_safe(
+                        payload,
+                        ToolExecutionContext(
+                            session_id=session.id,
+                            user_id=user.id,
+                            thread_id=session.id,
+                            call_id="ws-cancel",
+                        ),
+                    )
+                    await _emit_persistent(
+                        db,
+                        websocket,
+                        state,
+                        session.id,
+                        "tool_result",
+                        {
+                            "name": "task.cancel",
+                            "ok": True,
+                            "data": {
+                                "task_id": result.get("task_id"),
+                                "status": result.get("status"),
+                                "kind": result.get("kind"),
+                            },
+                        },
+                        task_id=str(result.get("task_id") or "") or None,
+                    )
                 else:
                     raise AppError(ErrorCode.VALIDATION, "不支持的 WebSocket 事件")
             except AppError as exc:

@@ -1,7 +1,8 @@
 """reflect 节点（M4 / P2 Reflexion）。
 
 确定性门禁先行 → 可选 M6 ``review``（只允许 ``pass→clarify`` 降级）。
-有计划的成功/拒绝路径由本节点发出 ``response.completed``；``clarify`` 挂
+有计划的成功/拒绝路径由本节点发出 ``response.completed``；``delivery=confirm``
+且复核通过时先发 ``confirm``（TaskSpec，``kind`` 不得为 stress）。``clarify`` 挂
 interrupt，``retry`` 回规划（``allows_replan`` 且重规划次数 < 2）。
 """
 
@@ -12,6 +13,7 @@ from typing import Literal
 from app.harness.contracts import Observation, PlanArtifact, from_dict, make_event
 from app.harness.feedback.review import review
 from app.harness.memory import GraphState
+from app.harness.orchestration.confirm_spec import build_confirm_payload
 
 ReflectVerdict = Literal["pass", "clarify", "reject", "retry"]
 MAX_REPLANS = 2
@@ -117,5 +119,14 @@ def reflect_node(state: GraphState) -> dict:
         )
         events.append(_completed("error"))
         return {"verdict": verdict, "pending_events": events}
+    if plan.delivery == "confirm":
+        payload = build_confirm_payload(plan, state.get("observations"))
+        if payload is None:
+            # 规划要确认卡但拼不出质量任务 kind：收窄为澄清，避免发一张必失败的卡。
+            return {
+                "verdict": "clarify",
+                "pending_events": events,
+            }
+        events.append(make_event("confirm", payload))
     events.append(_completed("stop"))
     return {"verdict": "pass", "pending_events": events}

@@ -34,8 +34,8 @@ def create_task_safe(arguments: Mapping[str, object], context: object) -> dict:
     返回 ``{status: "queued", task_id, kind}``（§7.4 契约），真实进度/报告/错误
     由 Worker 写 ``ws_events``。门禁：kind 合法；会话归属可见；无待确认卡
     （防绕过确认）；会话无活动任务（占槽）；stress 须由已成功的 benchmark/rag
-    父任务派生（先评后压）；非 stress 须带 ``dataset_id``；唯一索引冲突 →
-    CONCURRENCY。
+    父任务派生（先评后压）；benchmark 须 ``dataset_id``，rag 须 kb/黄金 QA，
+    testcase 须 ``case_source``；唯一索引冲突 → CONCURRENCY。
     """
     session_id, user_id = _context_ids(context)
     kind = str(arguments.get("kind") or "")
@@ -80,8 +80,14 @@ def create_task_safe(arguments: Mapping[str, object], context: object) -> dict:
                 or parent.kind not in {"benchmark", "rag"}
             ):
                 raise AppError(ErrorCode.VALIDATION, "压测任务须由已成功的质量任务派生")
-        elif not arguments.get("dataset_id"):
+        elif kind == "benchmark" and not arguments.get("dataset_id"):
             raise AppError(ErrorCode.VALIDATION, "缺少数据集")
+        elif kind == "rag" and (
+            not arguments.get("kb_id") or not arguments.get("gold_qa_id")
+        ):
+            raise AppError(ErrorCode.VALIDATION, "缺少知识库或黄金 QA")
+        elif kind == "testcase" and not arguments.get("case_source"):
+            raise AppError(ErrorCode.VALIDATION, "缺少用例来源")
         spec = {key: value for key, value in arguments.items() if key != "kind"}
         parent_task_id = spec.pop("parent_task_id", None)
         try:

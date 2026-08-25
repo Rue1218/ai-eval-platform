@@ -95,3 +95,16 @@ def test_run_config_judge_profile_ignored_without_use_judge():
     )
     assert task.run is not None
     assert task.run.use_judge is False
+
+
+def test_run_config_sample_size_capped_at_1000():
+    """API.md：sample_size 上限 1000，超过必须在入队前拒绝。"""
+    with pytest.raises(ValidationError):
+        TaskCreate.model_validate(
+            {
+                "kind": "benchmark",
+                "profile_ids": ["profile-1"],
+                "dataset_id": "dataset-1",
+                "run": {"sample_size": 1001},
+            }
+        )
