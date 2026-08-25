@@ -3,8 +3,8 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 上下文工程层模块设计 |
-| 版本 | V0.4.1 |
-| 审查日期 | 2026-08-24 |
+| 版本 | V0.4.2 |
+| 审查日期 | 2026-08-25 |
 | 文档性质 | 模块设计说明书（需求发散 + 架构设计 + 接口签名） |
 | 适用模块 | M2 上下文工程层（`app/harness/context/`） |
 | 上游权威 | Harness 需求文档 V1.4.4 §4.2、§2.4、§7、§9；API.md V1.22 §3.4（context_meter）；PRD §5.1.3 |
@@ -128,13 +128,13 @@ app/harness/context/
 
 ### 3.6 meter.py（阶段 3 落地）
 
-**现状**：`GET /api/sessions/{id}/messages` 当前固定返回 `context_meter: null`（`routers/sessions.py`），服务端投影未实现。阶段 3 实现 `meter.py` 前，`context_meter` 保持**未启用**状态：前端按 API 契约读取该字段，`null` 时不渲染容量仪表，禁止自行按 `messages` 条数估算。
+**现状（V0.4.2）**：`GET /api/sessions/{id}/messages` 已由 `meter.compute_meter` 计算并返回 `context_meter`（窗口条数、token 估算、`compacted`）。前端只读该字段，禁止按 `messages` 总条数估算（CX-7）。未选会话时前端可渲染空环，选中会话后必须用服务端数字。
 
-**职责**：ContextMeter 投影，只读 `GET /api/sessions/{id}/messages` 的 `context_meter` 字段（CX-7）。
+**职责**：ContextMeter 计算与投影，经 `GET /api/sessions/{id}/messages` 的 `context_meter` 下发（CX-7）。
 
-- **数据源**：服务端按实际发往模型的消息窗口与 token 用量计算 `context_meter`（token 用量、窗口占比、摘要标记）。
-- **投影**：返回前端可读的 meter 字段；前端不自行计算窗口（CX-7）。
-- **不计算**：本层只投影，不重算 token / 窗口占比（由服务端数据源提供）。
+- **数据源**：`recent_window` 产出的 user/assistant 窗口 + `compact_summary` + 常驻 Skill Hint + Agent 协议档 `context_window`。
+- **计算**：`compute_meter` 估算 token（CJK 1.5 字/token，其余 4 字符/token），字段对齐 API.md §3.4。
+- **投影**：`project_meter` 兼容早期 `token_used`/`token_limit` 键；`null`/空仍返回 None。
 
 ### 3.7 接口签名规格（签名级）
 
@@ -177,7 +177,7 @@ def to_observation(
     产出可注入上下文的 Observation（redacted=True）。归一逻辑 owner 是 M6（M6-D1）。"""
 
 def truncate_with_marker(text: str, max_chars: int) -> tuple[str, bool]:
-    """超长截断，保留头尾；返回 (text, truncated)。"""
+    """超长截断，保留头尾 + 截断标记（X-D2）；返回 (text, truncated)。"""
 ```
 
 #### 3.7.3 assembly.py
@@ -349,7 +349,7 @@ def project_meter(context_meter: Mapping[str, object]) -> ContextMeter:
 
 | 文件 | 操作 | 作用 |
 | :--- | :--- | :--- |
-| `docs/AI测试与评估平台-Harness-上下文工程层.md` | 新增 V0.3 → 修订 V0.4 → 修订 V0.4.1 | V0.3 M2 上下文工程层模块设计：定义窗口算法、observation 脱敏摘要、装配顺序、`/compact` 可控摘要（含 M1 移入的 `CompactProtocol`）、ContextMeter 投影；含接口签名级（`recent_window`/`to_observation`/`assemble`/`select_tool_defs`/`parse_compact`/`summarize`/`project_meter`）与 TDD 验收；V0.4 对齐 API.md V1.21：新增 §8「前端联调」章节列出 meter/compact/observation 对应的前端组件、契约与验收点（含 `context_meter.compacted` 字段、`/compact` owner 校验、ToolCard 截断/脱敏徽标）；V0.4.1 契约收敛版：统一上游权威与 §8 契约为 API.md V1.22；§3.6 补充 `context_meter` 当前实现状态（服务端返回 `null`，阶段 3 前未启用，前端不估算）。 |
+| `docs/AI测试与评估平台-Harness-上下文工程层.md` | 新增 V0.3 → 修订 V0.4 → 修订 V0.4.1 → 修订 V0.4.2 | V0.3–V0.4.1 见上；V0.4.2：`meter.compute_meter` 按窗口消息计算 `context_meter`，`sessions.py` 不再返回 `null`；字段对齐 API.md §3.4（含 token 拆分与 `compacted`）。 |
 
 本文档仅设计上下文工程层，不改变任何 API、数据库、前端或 Agent 运行代码。
 

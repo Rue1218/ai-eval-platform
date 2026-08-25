@@ -19,10 +19,18 @@ _TRUNCATE_MARKER = "…[截断]"
 
 
 def truncate_with_marker(text: str, max_chars: int = DEFAULT_MAX_CHARS) -> tuple[str, bool]:
-    """超长文本截断并带标记；未超长原样返回。"""
+    """超长截断，保留头尾并带标记（X-D2）；未超长原样返回。"""
+    if max_chars <= 0:
+        return _TRUNCATE_MARKER, True
     if len(text) <= max_chars:
         return text, False
-    return text[:max_chars] + _TRUNCATE_MARKER, True
+    marker = _TRUNCATE_MARKER
+    budget = max(0, max_chars - len(marker))
+    if budget <= 1:
+        return (text[:max_chars] + marker)[: max_chars + len(marker)], True
+    head = max(1, budget // 2)
+    tail = max(1, budget - head)
+    return text[:head] + marker + text[-tail:], True
 
 
 def to_observation(

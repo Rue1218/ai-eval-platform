@@ -8,7 +8,7 @@ from .compact import (
     parse_compact,
     summarize,
 )
-from .meter import ContextMeter, project_meter
+from .meter import ContextMeter, compute_meter, estimate_tokens, project_meter
 from .observation import (
     DEFAULT_MAX_CHARS,
     MODEL_TOOL_RESULT_MAX_CHARS,
@@ -26,6 +26,8 @@ __all__ = [
     "MODEL_TOOL_RESULT_MAX_CHARS",
     "WindowMessage",
     "assemble",
+    "compute_meter",
+    "estimate_tokens",
     "is_window_eligible",
     "parse_compact",
     "project_meter",

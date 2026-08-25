@@ -810,8 +810,12 @@
                 </button>
               </n-dropdown>
 
-              <!-- 上下文容量小圆环指示器（紧邻模型选择器右侧） -->
-              <ContextMeter :meter="currentContextMeter" :compact-summary="currentCompactSummary" />
+              <!-- 上下文容量小圆环：只读服务端 context_meter，null 不渲染（CX-7） -->
+              <ContextMeter
+                v-if="currentContextMeter"
+                :meter="currentContextMeter"
+                :compact-summary="currentCompactSummary"
+              />
             </div>
 
             <!-- 右侧圆形发送/暂停按钮 -->

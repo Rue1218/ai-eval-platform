@@ -2,7 +2,7 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.35 |
+| 文档版本 | V1.36 |
 | 对应 PRD | V1.13（功能唯一权威） |
 | 对应设计规范 | V1.3（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V0.5（LangGraph 单轮 Agent 与 WS 桥接；JSON 仍以本文为准） |
@@ -29,6 +29,8 @@
 > V1.32（2026-08-25）：基础 `read`、`write`、`edit`、`bash`、`web_search`、`web_fetch` 与对话拆解 `task` 改为模型原生 Function Calling 直连；仅评测任务桥 `platform.tasks` 继续作为 MCP 扩展。新增 Firecrawl 服务端配置、网页抓取安全投影和原子文件写入边界。
 >
 > V1.33（2026-08-25）：单回合允许多条 `assistant_message`；`response.completed` 仍为整轮结束。可选 `interim=true` 表示阶段叙述（计划/下一步），不是 Observation 原文，不得结束生成态。清单复用 `plan.slots.steps` 与 `task` 的 `tool_result`，不新事件。
+>
+> V1.36（2026-08-25）：`GET /api/sessions/{id}/messages.context_meter` 由服务端按窗口消息计算，不再返回 `null`。字段仍为 §3.4 既有形状（`messages`/`window`/`total_tokens`/`max_tokens`/`compacted` 等）；前端只读，禁止按条数自算。
 >
 > V1.35（2026-08-25）：对话确认卡由 LangGraph `reflect` 在 `delivery=confirm` 时发出（TaskSpec，`kind` 不得为 `stress`）；WS 短票 jti 用 Redis 单次消费；压测由 Worker 下发 stress 容器，曲线仍只走 `GET /api/tasks/{id}/stress-series`。
 >
@@ -1994,4 +1996,15 @@ LangGraph `reflect` 在规划 `delivery=confirm` 且复核通过后发出确认�
 | `backend/api/app/ws_tickets.py` / `app/routers/ws.py` | 短票单次消费与确认卡作者元数据 |
 | `backend/worker/app/stress.py` / `backend/stress/main.go` | Worker 下发真实发压、可取消、写曲线 |
 | `docker-compose.yml` | Worker `STRESS_URL=http://stress:19090` |
+
+**V1.36（2026-08-25）— ContextMeter 服务端计算**
+
+`GET /api/sessions/{id}/messages` 的 `context_meter` 按 `recent_window`（末尾 20 条 user/assistant）+ 协议档 `context_window` + 常驻 Skill Hint + `compact_summary` 计算 token 与窗口占比。不再返回 `null`；前端圆环只读该对象。
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/harness/context/meter.py` | `compute_meter` / `estimate_tokens` |
+| `backend/api/app/routers/sessions.py` | 历史接口下发真实 `context_meter` |
+| `frontend/src/components/agent/ContextMeter.vue` | 已压缩徽标；圆环底色略加深 |
+| `docs/AI测试与评估平台-Harness-上下文工程层.md` | V0.4.2 校准计量已接线 |
 

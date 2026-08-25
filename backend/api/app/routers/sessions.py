@@ -10,7 +10,9 @@ from ..agent.attachments import normalize_history_attachments
 from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
-from ..models import AuditLog, Message, Task, User, WsEvent
+from ..harness.context import compute_meter, is_window_eligible, recent_window
+from ..harness.context.meter import DEFAULT_MAX_TOKENS, DEFAULT_MCP_TOOLS_MAX
+from ..models import AuditLog, Message, ProtocolProfile, Setting, Task, User, WsEvent
 from ..models import Session as AgentSession
 from ..schemas import SessionCreate, SessionOut, SessionSharingUpdate
 from ..session_access import require_session_owner, require_visible_session
@@ -18,6 +20,66 @@ from ..session_connections import SESSION_CONNECTION_HUB
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 ACTIVE_STATUSES = {"queued", "running", "awaiting_case_confirm"}
+
+
+def _agent_context_window(db: Session) -> int:
+    """读当前 Agent 协议档的上下文窗口；未配置回退 200k。"""
+    setting = db.query(Setting).filter(Setting.key == "agent_profile_id").first()
+    profile_id = setting.value if setting else None
+    if not isinstance(profile_id, str) or not profile_id:
+        return DEFAULT_MAX_TOKENS
+    profile = db.query(ProtocolProfile).filter(ProtocolProfile.id == profile_id).first()
+    if profile is None:
+        return DEFAULT_MAX_TOKENS
+    return int(getattr(profile, "context_window", 0) or DEFAULT_MAX_TOKENS)
+
+
+def _skills_hint_text() -> str:
+    """常驻 Skill Hint 正文（名称 + 一句话），供仪表估算技能段。"""
+    from ..harness.skills import list_hints
+
+    return "\n".join(f"{hint.name}：{hint.summary}" for hint in list_hints())
+
+
+def _mcp_tools_count() -> int:
+    """当前注册表工具数（原生 + 内部短 MCP）。"""
+    from ..harness.execution.registry import build_default_registry
+
+    return len(build_default_registry().names())
+
+
+def build_session_context_meter(
+    db: Session,
+    session: AgentSession,
+    messages: list[Message],
+) -> dict:
+    """按窗口算法计算 ``context_meter``（CX-7，前端只读）。"""
+    eligible = [
+        {
+            "role": row.role,
+            "content": row.content or "",
+            "source_id": row.source_id or row.id,
+        }
+        for row in messages
+        if is_window_eligible(row.role)
+    ]
+    windowed = recent_window(
+        eligible,
+        limit=20,
+        keep_from=session.compact_keep_from,
+    )
+    compact_summary = session.compact_summary or ""
+    return dict(
+        compute_meter(
+            windowed,
+            max_tokens=_agent_context_window(db),
+            compact_summary=compact_summary,
+            skills_text=_skills_hint_text(),
+            mcp_tools_count=_mcp_tools_count(),
+            mcp_tools_max=DEFAULT_MCP_TOOLS_MAX,
+            memory_files_count=1 if compact_summary.strip() else 0,
+        )
+    )
 
 
 def _session_out(db: Session, row: AgentSession, user: User) -> dict:
@@ -168,9 +230,8 @@ def get_session_messages(
         "pending_confirm": session.pending_confirm,
         "pending_confirm_author_id": session.pending_confirm_author_id,
         "pending_confirm_author": author_map.get(session.pending_confirm_author_id),
-        # 新 Agent 上下文模型尚未确定，暂时不计算旧 ContextMeter。
         "compact_summary": session.compact_summary,
-        "context_meter": None,
+        "context_meter": build_session_context_meter(db, session, messages),
     }
 
 
