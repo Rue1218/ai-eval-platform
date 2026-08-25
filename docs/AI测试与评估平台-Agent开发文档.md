@@ -1,10 +1,10 @@
 # AI 测试与评估平台 Agent 开发文档
 
-> 版本：V1.0.0
-> 状态：LangGraph Harness 已启用 ReAct P0/P1、加固后的 P2-A 与 P2-B（流式参数累计、完整 ToolCall 投影、native 两回合收敛）；内部 MCP Host 仍未实施
+> 版本：V1.1.0
+> 状态：LangGraph Harness 已启用 ReAct P0/P1、P2-A/P2-B（流式参数累计、完整 ToolCall 投影、native 两回合收敛）与 P3 内部 MCP Host（受控目录、in-process provider）；P4 长任务 MCP bridge 与独立沙箱 Runner 待实施
 > 审查日期：2026-08-25
 > 对应需求：`AI测试与评估平台-PRD.md` V1.12
-> 对应接口：`AI测试与评估平台-API.md` V1.28
+> 对应接口：`AI测试与评估平台-API.md` V1.29
 
 ## 1. 当前唯一运行链路
 
@@ -13,7 +13,8 @@
   -> WebSocket /ws/agent（五分钟单次短票）
   -> app/routers/ws.py
   -> app/agent/graph.py（LangGraph 路由 + ReAct 图）
-  -> react.py（原生 ToolCall，严格 JSON 兼容回退）→ toolnode.py（短工具）→ react.py（模型收敛）
+  -> react.py（原生 ToolCall，严格 JSON 兼容回退）→ toolnode.py（Gate / 参数绑定）
+  -> 内部 MCP Manager（tool_id 路由）→ in-process provider（短工具；bash 仍走 bwrap）→ react.py（模型收敛）
   -> app/llm/gateway.py（LangGraph 模型调用图）
   -> app/adapters.py（三协议 HTTP 适配）
   -> 上游模型
@@ -45,7 +46,7 @@ react_agent -> (tools | END)
 tools -> (tools | react_agent)
 ```
 
-图节点不持有数据库 Session、WebSocket 或任务队列。ToolNode 只消费可序列化 `pending_tool` / `pending_tools`、执行既有门禁与沙箱工具，并返回 Observation；同一模型响应的多个 ToolCall 在节点内串行消费，不绕过任一调用的门禁。路由层仍负责事件持久化与投影。
+图节点不持有数据库 Session、WebSocket 或任务队列，也不直接执行工具 handler。ToolNode 只消费可序列化 `pending_tool` / `pending_tools`，先完成既有门禁与附件绑定，再通过内部 MCP Manager 按 `tool_id` 调用 provider，并将受控 `ToolResult` 归一为 Observation；同一模型响应的多个 ToolCall 在节点内串行消费，不绕过任一调用的门禁。路由层仍负责事件持久化与投影。
 
 ### 2.3 ModelGateway
 
@@ -92,11 +93,13 @@ Agent 思考配置从 `Setting(key="agent_reasoning")` 读取，结构为
 以下内容仍不属于当前已实施范围，不得绕过契约提前加入：
 
 - 外部 MCP、浏览器直连 MCP 和真正并行执行；
-- 内部 MCP Server/Transport、外部 MCP、浏览器直连 MCP；
+- 外部 MCP、浏览器直连 MCP、内部 MCP Server 的 stdio/HTTP transport；
 - 人工确认卡、权限策略、consent、安全门禁；
 - Redis/pgvector 记忆、检查点和复杂上下文压缩；
 - PostgreSQL 长任务入队、Worker 执行和 stress 派生；
 - 未经模型变更、Alembic 自动生成与审阅的新迁移，以及 `plan.py` / `reflect.py` 等挂起模块。
+
+P3 已冻结的首期目录仅包含 `platform.files`（read/write/edit）、`platform.web`（search/fetch）与 `platform.sandbox`（bash）。目录由服务端注册表构建，浏览器与模型都不能注册工具、指定连接命令、环境变量、工作目录或凭据；`platform.tasks`、Worker 入队桥接、独立 sandbox Runner、配额/审计/熔断属于 P4。
 
 ## 5. 后续扩展门禁
 
@@ -200,3 +203,10 @@ Agent 思考配置从 `Setting(key="agent_reasoning")` 读取，结构为
 - `backend/api/app/llm/gateway.py`：将适配器完整 ToolCall 投影为 `ModelStreamEvent(tool_call)`，并保留到流式收尾的 `ModelResponse.tool_calls`。
 - `backend/api/app/agent/react.py`：native 模式在 ToolResult 后直接使用第二个流式模型回合收敛正文或继续工具调用，消除简单路径的第三次无工具调用；不改变 WebSocket 事件契约。
 - `backend/api/tests/test_adapters.py` / `test_llm_graph.py` / `test_agent_react.py`：覆盖三协议参数累计、网关工具事件、`call_id` 保留及 native 两回合流式收敛。
+
+### V1.1.0（2026-08-25）修改代码文件与作用清单
+
+- `backend/api/app/harness/contracts/artifacts.py` / `execution/registry.py`：内部 MCP 目录以可序列化 `ToolDescriptor` 投影工具 ID、逻辑域、schema、权限、风险、执行模式与超时；handler 不进入目录、模型请求或浏览器响应。
+- `backend/api/app/harness/execution/mcp/catalog.py` / `manager.py` / `provider.py`：Manager 聚合平台 allowlist，按稳定 `tool_id` 路由 in-process provider，覆盖目录刷新、冲突拒绝、超时、取消和关闭；不启用外部 MCP transport。
+- `backend/api/app/agent/graph.py` / `harness/execution/toolnode.py` / `dispatch.py`：ToolNode 在既有 Schema、Gate、附件绑定后调用 Manager，保持 ToolCard 事件、受控 Observation 与 bwrap fail-closed 边界不变。
+- `backend/api/app/routers/mcp.py` / `backend/api/tests/test_harness_mcp.py`：只读 API 展示 6 项内部短工具目录；测试覆盖目录、调用、错误归一、超时、取消、关闭和 ToolNode 集成。
