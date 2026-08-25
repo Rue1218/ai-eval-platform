@@ -43,10 +43,13 @@ def create_task_safe(arguments: Mapping[str, object], context: object) -> dict:
         raise AppError(ErrorCode.VALIDATION, f"未知任务类型：{kind}")
     from sqlalchemy.exc import IntegrityError
 
+    from app.config import settings
     from app.db import SessionLocal
     from app.harness.memory.episodic import get_active_tasks
-    from app.models import Task
+    from app.models import AuditLog, Task
     from app.session_access import require_visible_session
+
+    from .worker_bridge import count_active_tasks
 
     db = SessionLocal()
     try:
@@ -55,6 +58,19 @@ def create_task_safe(arguments: Mapping[str, object], context: object) -> dict:
             raise AppError(ErrorCode.CONCURRENCY, "会话存在待确认任务，请先确认或取消")
         if get_active_tasks(db, session_id):
             raise AppError(ErrorCode.CONCURRENCY, "会话已有未完成任务")
+        # P4-2 资源配额：每用户活动任务上限（审计拒绝事件）
+        if count_active_tasks(db, user_id=user_id) >= settings.max_active_tasks_per_user:
+            db.add(
+                AuditLog(
+                    user_id=user_id,
+                    action="task_quota_rejected",
+                    target_type="user",
+                    target_id=user_id,
+                    detail={"kind": kind, "limit": settings.max_active_tasks_per_user},
+                )
+            )
+            db.commit()
+            raise AppError(ErrorCode.CONCURRENCY, "达到个人任务配额上限，请等待现有任务结束后再发起")
         if kind == "stress":
             parent_id = str(arguments.get("parent_task_id") or "")
             parent = db.get(Task, parent_id) if parent_id else None

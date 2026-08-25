@@ -10,6 +10,7 @@ tools/list + tools/call + 超时/取消/错误归一）。
 
 from .catalog import ToolCatalog
 from .manager import MCPClientManager, ToolExecutionContext
+from .metrics import ToolMetrics, get_default_metrics
 from .provider import InProcessProvider
 
 __all__ = [
@@ -17,4 +18,6 @@ __all__ = [
     "MCPClientManager",
     "ToolCatalog",
     "ToolExecutionContext",
+    "ToolMetrics",
+    "get_default_metrics",
 ]

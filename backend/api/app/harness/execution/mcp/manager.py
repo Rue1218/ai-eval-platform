@@ -11,6 +11,7 @@ cancel + TIMEOUT；``/stop`` 取消经 ``CancelledError`` 穿透给图运行；
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 
@@ -18,6 +19,7 @@ from app.harness.contracts import ToolDescriptor, ToolResult
 
 from ..registry import ToolDef, ToolRegistry
 from .catalog import ToolCatalog
+from .metrics import ToolMetrics, get_default_metrics
 from .provider import InProcessProvider
 
 
@@ -37,19 +39,26 @@ class ToolExecutionContext:
 
 
 class MCPClientManager:
-    """内部 MCP Host：目录发现 + 工具调用 + 超时/取消/错误归一。"""
+    """内部 MCP Host：目录发现 + 工具调用 + 超时/取消/错误归一 + 熔断/度量。"""
 
-    def __init__(self) -> None:
+    def __init__(self, metrics: ToolMetrics | None = None) -> None:
         self._catalog = ToolCatalog()
         self._providers: dict[str, InProcessProvider] = {}
         self._registry: ToolRegistry | None = None
         self._inflight: dict[str, asyncio.Future] = {}
         self._closed = False
+        # 熔断与工具度量（P4-2）：缺省用进程级收集器，测试可注入独立实例。
+        self._metrics = metrics if metrics is not None else get_default_metrics()
 
     @classmethod
-    def build_from_registry(cls, registry: ToolRegistry) -> MCPClientManager:
+    def build_from_registry(
+        cls,
+        registry: ToolRegistry,
+        *,
+        metrics: ToolMetrics | None = None,
+    ) -> MCPClientManager:
         """按 server 分组构建 in-process provider，并建立目录索引。"""
-        manager = cls()
+        manager = cls(metrics=metrics)
         manager._registry = registry
         manager._rebuild(registry)
         return manager
@@ -108,6 +117,18 @@ class MCPClientManager:
                 error={"code": "INTERNAL", "message": "工具执行器不可用"},
                 call_id=context.call_id,
             )
+        # P4-2 熔断：服务器 open 期间快速拒绝，不进入 handler。
+        if self._metrics.is_open(descriptor.server_id):
+            self._metrics.record_call(
+                tool_id, descriptor.server_id, ok=False, error_code="CIRCUIT_OPEN"
+            )
+            return ToolResult(
+                name=descriptor.name,
+                ok=False,
+                error={"code": "VALIDATION", "message": "服务器工具暂时不可用（熔断），请稍后重试"},
+                call_id=context.call_id,
+            )
+        started = time.perf_counter()
         future = asyncio.ensure_future(
             asyncio.to_thread(
                 provider.invoke,
@@ -126,6 +147,14 @@ class MCPClientManager:
             )
         except TimeoutError:
             future.cancel()
+            self._metrics.record_call(
+                tool_id,
+                descriptor.server_id,
+                ok=False,
+                timeout=True,
+                error_code="TIMEOUT",
+                latency_ms=round((time.perf_counter() - started) * 1000),
+            )
             return ToolResult(
                 name=descriptor.name,
                 ok=False,
@@ -139,6 +168,19 @@ class MCPClientManager:
             self._inflight.pop(key, None)
         if not result.call_id:
             result = replace(result, call_id=context.call_id)
+        latency_ms = round((time.perf_counter() - started) * 1000)
+        if result.ok:
+            self._metrics.record_call(tool_id, descriptor.server_id, ok=True, latency_ms=latency_ms)
+        else:
+            code = str((result.error or {}).get("code") or "INTERNAL")
+            self._metrics.record_call(
+                tool_id,
+                descriptor.server_id,
+                ok=False,
+                timeout=(code == "TIMEOUT"),
+                error_code=code,
+                latency_ms=latency_ms,
+            )
         return result
 
     def cancel_call(self, call_id: str) -> bool:

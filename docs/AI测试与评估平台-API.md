@@ -2,7 +2,7 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.30 |
+| 文档版本 | V1.31 |
 | 对应 PRD | V1.13（功能唯一权威） |
 | 对应设计规范 | V1.3（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V0.5（LangGraph 单轮 Agent 与 WS 桥接；JSON 仍以本文为准） |
@@ -23,6 +23,8 @@
 > V1.29（2026-08-25）：§3.6.1 `GET /api/mcp/tools` 从音频/图像占位清单改为**平台 allowlist 内部短工具目录**（6 项：read/write/edit/web_search/web_fetch/bash），`name` 使用唯一 `tool_id`，新增可选 `tool_id`/`server_id`/`short_name`/`display_name`/`risk_level`/`execution_mode`/`timeout_s`/`requires_confirmation`/`supports_streaming` 字段；仅只读展示，不含任何连接命令或凭据。
 >
 > V1.30（2026-08-25）：§3.6.1 新增 `platform.tasks` 长任务桥接三工具（`task.create`/`task.status`/`task.cancel`），目录 6→9 项、server 4 组。三工具只入 PG 队列或查询，不等待 Worker 终态；`task.create` 直接入队返回 `queued` + `task_id`，会话/用户归属由平台注入（模型不可传）。
+>
+> V1.31（2026-08-25）：§3.6.1 新增 `GET /api/mcp/metrics`（admin 只读）——内部 MCP Host 的调用度量（按 tool_id 计数/耗时）与服务器熔断状态（按 server_id，INTERNAL/TIMEOUT/UPSTREAM 连续失败超阈值即 open，冷却自动恢复）。任务创建新增每用户活动任务配额 `max_active_tasks_per_user`（默认 5），MCP 与 REST 同一规则，超限返回 `CONCURRENCY` 并写 `task_quota_rejected` 审计。
 
 ---
 
@@ -623,6 +625,26 @@ Embedding 与 Reranker 的 URL、模型和 Key 与主模型使用相同的“按
 首期字段：必填 `name`（tool_id）、`desc`、`permission`（`read`/`write`）、`enabled`（恒 `true`）、`source`（恒 `builtin`）；可选 `tool_id`、`server_id`、`short_name`、`display_name`、`risk_level`（`read`/`modify`/`network`/`code`/`long`）、`execution_mode`（`short`/`long`）、`timeout_s`、`requires_confirmation`、`supports_streaming`。
 
 V1.0 不接入外部 MCP Server，也不让浏览器创建、删除、探活或动态发现外部工具。原型中的 MCP Server 管理按钮须显示“能力未启用”说明；不得请求或假装成功调用 `/api/mcp/servers*`。
+
+#### `GET /api/mcp/metrics`
+
+获取内部 MCP Host 的**调用度量与服务器熔断状态**（只读，进程内快照）。按 `tool_id` 记录调用计数与耗时，按 `server_id` 维护失败熔断：`INTERNAL`/`TIMEOUT`/`UPSTREAM` 连续失败 ≥ 阈值（默认 5）即 `open`，冷却期（默认 30s）后自动恢复 `closed`；熔断 open 期间 `tool_call` 以 `VALIDATION`（「服务器工具暂时不可用（熔断）」）快速拒绝，不进入执行器。
+
+```json
+{
+  "tools": [
+    { "tool_id": "platform.files.read", "total": 12, "success": 11, "failure": 1, "timeout": 0,
+      "avg_latency_ms": 8, "last_latency_ms": 6, "last_error_code": null }
+  ],
+  "circuits": [
+    { "server_id": "platform.web", "state": "open", "consecutive_failures": 5,
+      "failure_threshold": 5, "cooldown_s": 30.0, "opened_at": 1756080000.0 }
+  ],
+  "summary": { "total_calls": 12, "total_failures": 1, "total_timeouts": 0, "open_servers": ["platform.web"] }
+}
+```
+
+只读展示，不含任何请求参数、工具结果原文或凭据。任务创建（MCP `task.create` 与 REST `POST /api/tasks` 共用）受每用户活动任务配额 `max_active_tasks_per_user`（默认 5）约束，超限返回 `CONCURRENCY` 并写 `AuditLog(action="task_quota_rejected")`。
 
 ---
 

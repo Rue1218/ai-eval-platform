@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends
 
 from ..deps import get_current_user
 from ..harness.execution import ToolCatalog, build_default_registry
+from ..harness.execution.mcp import get_default_metrics
 from ..models import User
 
 router = APIRouter(prefix="/api/mcp", tags=["mcp"])
@@ -51,3 +52,14 @@ def list_tools(user: User = Depends(get_current_user)):
     _ = user
     items = [_project(descriptor) for descriptor in _get_default_catalog().all_descriptors()]
     return {"items": items, "total": len(items)}
+
+
+@router.get("/metrics", summary="MCP 工具度量与熔断状态（只读）")
+def tool_metrics(user: User = Depends(get_current_user)):
+    """内部 MCP Host 调用度量与服务器熔断状态（P4-2，进程内快照）。
+
+    按 ``tool_id`` 的调用计数/耗时与按 ``server_id`` 的熔断状态，只读展示，
+    不含任何请求参数、工具结果原文或凭据。
+    """
+    _ = user
+    return get_default_metrics().snapshot()

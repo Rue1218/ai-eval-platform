@@ -99,6 +99,23 @@ def create_task(
         if existing:
             raise AppError(ErrorCode.VALIDATION, "会话已有未完成任务")
 
+    # P4-2 资源配额：每用户活动任务上限（与 MCP task.create 同一规则 + 审计）
+    from app.config import settings
+    from app.harness.execution.worker_bridge import count_active_tasks
+
+    if count_active_tasks(db, user_id=user.id) >= settings.max_active_tasks_per_user:
+        db.add(
+            AuditLog(
+                user_id=user.id,
+                action="task_quota_rejected",
+                target_type="user",
+                target_id=user.id,
+                detail={"kind": body.kind, "limit": settings.max_active_tasks_per_user},
+            )
+        )
+        db.commit()
+        raise AppError(ErrorCode.CONCURRENCY, "达到个人任务配额上限，请等待现有任务结束后再发起")
+
     if body.kind == "stress":
         parent = db.query(Task).filter(Task.id == body.parent_task_id).first()
         if not parent or parent.status != "succeeded":

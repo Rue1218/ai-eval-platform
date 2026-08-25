@@ -62,6 +62,11 @@ class _Query:
             return self._result
         return [self._result] if self._result is not None else []
 
+    def count(self):
+        if isinstance(self._result, list):
+            return len(self._result)
+        return 1 if self._result is not None else 0
+
 
 class _FakeDb:
     """覆盖 task_tools 所需 query/get/add/flush/commit/rollback/close 的最小会话桩。"""

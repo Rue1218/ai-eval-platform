@@ -34,7 +34,7 @@ from .models import (
     Task,
     TaskEvent,
 )
-from .task_state import claim_running_task_for_terminal_write
+from .task_state import claim_running_task_for_terminal_write, is_cancelled
 
 logger = logging.getLogger("worker.rag")
 
@@ -142,6 +142,11 @@ def run_rag(task_id: str) -> None:
         primary_mode = modes[0]
 
         for item in items:
+            # P4-2 取消传播：逐条检查任务是否取消，提前停止不烧 token；
+            # 终态写入另有 claim_running_task_for_terminal_write 行锁保护。
+            if is_cancelled(db, task.id):
+                logger.info("rag task %s cancelled mid-run (done=%s/%s), skip", task_id, done, total)
+                break
             expected = list(item.expected_doc_ids or [])
             reference = item.reference or ""
             row_metrics: dict[str, dict] = {}

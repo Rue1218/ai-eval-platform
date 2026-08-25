@@ -2,8 +2,8 @@
 
 | 项 | 内容 |
 | --- | --- |
-| 文档版本 | V0.8.0 |
-| 状态 | P0/P1、P2-A（完整原生 ToolCall）、P2-B（流式参数累积、网关投影、两回合收敛）、P3（内部 MCP Host）与 P4-1（platform.tasks 长任务 MCP bridge）已实施；P4-2～P4-4（独立沙箱 Runner、取消/配额/审计/熔断指标、生产验证）待实施 |
+| 文档版本 | V0.10.0 |
+| 状态 | P0/P1、P2-A、P2-B、P3、P4-1（platform.tasks MCP bridge）、P4-2（取消传播/资源配额/审计/熔断指标）与 P4-3（独立沙箱 Runner/容器）已实施；P4-4（生产验证后新 Server 评估）待实施 |
 | 审查日期 | 2026-08-25 |
 | 适用范围 | `backend/api/app/agent/`、`app/harness/`、`app/llm/`、`app/routers/ws.py` 与内部短工具 |
 | 上游权威 | `AI测试与评估平台-PRD.md`、`AI测试与评估平台-API.md`、`AGENTS.md` |
@@ -595,8 +595,8 @@ artifact_id / workspace 相对路径 / sha256 / 行范围 / 可见预算
 ### 阶段 E：长任务与沙箱 Runner（P4）
 
 1. ✅ **platform.tasks MCP 已实施（P4-1）**：接入 `platform.tasks` MCP（`task.create`/`task.status`/`task.cancel`），统一入队和状态查询；只入 PG 队列或查询，不等待 Worker 终态。`task.create` 采用**直接入队**语义（门禁：kind/数据集/待确认卡/占槽/先评后压），返回 `{status: queued, task_id, kind}`（§7.4 契约）。任务工具为 contextual handler（经 `ToolExecutionContext` 接收平台注入的 session/user），DB Session 自管。
-2. 🚫 把 bash MCP Server 放入独立 Runner/容器，保留 bwrap fail-closed；
-3. 🚫 补充取消传播、资源配额、审计和熔断指标；
+2. ✅ **独立 Runner/容器已实施（P4-3）**：bash bwrap 内核迁至 `backend/shared/sandbox_kernel.py`，由新增 `runner` 容器执行（唯一持有 privileged/seccomp:unconfined/SYS_ADMIN），api 容器移除特权与 bubblewrap，经 HTTP JSON（`/run`/`/probe`/`/health`）调用 runner，保留 bwrap fail-closed。见 V0.10.0 实施记录；
+3. ✅ **取消传播/资源配额/审计/熔断指标已实施（P4-2）**：见 V0.9.0 实施记录；
 4. 🚫 在生产验证后，再评估是否需要任何新内部 MCP Server；外部 MCP 仍不在本范围。
 
 ---
@@ -731,3 +731,28 @@ artifact_id / workspace 相对路径 / sha256 / 行范围 / 可见预算
 - 验收：`ruff check . ../shared` 全绿；api pytest **430 passed/16 skipped**，worker pytest **34 passed**。
 - 本次仍未实施：P4-2 独立沙箱 Runner/容器（bash MCP Server 迁出 api 容器）、P4-3 取消传播/资源配额/审计/熔断指标、P4-4 生产验证后的新内部 Server 评估；外部 MCP 与浏览器直连 MCP 始终不在范围。
 - 修改文件：`harness/execution/task_tools.py`（新增）、`harness/execution/registry.py`、`harness/execution/dispatch.py`、`harness/execution/worker_bridge.py`、`harness/execution/toolnode.py`、`harness/execution/mcp/provider.py`、`harness/execution/mcp/manager.py`、`tests/test_task_tools.py`（新增）、`tests/test_harness_mcp.py`、`tests/test_harness_execution.py`、`docs/AI测试与评估平台-API.md`（V1.30）。
+
+### V0.9.0（2026-08-25）实施记录
+
+- **P4-2 取消传播 / 资源配额 / 审计 / 熔断指标已实施**（阶段 E 第 3 项闭环）：
+  - **熔断与度量**：新增 `harness/execution/mcp/metrics.py` —— `ToolMetrics` 按 `tool_id` 记录调用计数/耗时（§10.4「记录并可查询」），按 `server_id` 维护失败熔断（§7.2）。熔断**只统计基础设施错误码**（`INTERNAL`/`TIMEOUT`/`UPSTREAM`），业务性 `VALIDATION`/`NOT_FOUND` 不计入（避免 web_search「未接入」等误熔断）；连续失败 ≥ `circuit_failure_threshold`（默认 5）→ open，`circuit_cooldown_s`（默认 30s）冷却自动恢复 closed；open 期间 `call_tool` 以 `VALIDATION`「服务器工具暂时不可用（熔断）」快速拒绝。`get_default_metrics()` 进程级单例（生产 agent 与 `/api/mcp/metrics` 共享）。`MCPClientManager(metrics=None)` 集成熔断检查与度量记录（latency/成功/失败/超时）。
+  - **资源配额**：`Settings.max_active_tasks_per_user`（默认 5）——每用户活动任务上限；MCP `task.create` 与 REST `POST /api/tasks` 共用 `worker_bridge.count_active_tasks` 强制，超限 `CONCURRENCY`。
+  - **审计**：新增 `task_quota_rejected` AuditLog（MCP 与 REST 超限均写）；任务 create/cancel 审计沿用既有。
+  - **取消传播（Worker）**：`worker/task_state.py` 新增 `is_cancelled(db, task_id)`；`testcase.py` LLM 调用前、`rag.py` 逐条循环内检查取消 → 提前停止不烧 token（终态写入仍由 `claim_running_task_for_terminal_write` 行锁保护）。api 侧 `/stop`/`cancel_call` 已在 P3 实现。
+  - `GET /api/mcp/metrics` 只读端点（API.md §3.6.1 V1.31 先行更新）。
+- 测试：新增 `tests/test_harness_metrics.py` 14 项（ToolMetrics 计数/阈值/冷却/业务错误不计入/快照、manager 熔断快速拒绝/度量记录、MCP+REST 配额拒绝+审计、worker is_cancelled）。
+- 验收：`ruff check . ../shared` 全绿；api pytest **455 passed/16 skipped**，worker pytest **34 passed**。
+- 本次仍未实施：P4-3 独立沙箱 Runner/容器（bash MCP Server 迁出 api 容器）、P4-4 生产验证后的新内部 Server 评估；外部 MCP 与浏览器直连 MCP 始终不在范围。
+- 修改文件：`harness/execution/mcp/metrics.py`（新增）、`harness/execution/mcp/manager.py`、`harness/execution/mcp/__init__.py`、`harness/execution/worker_bridge.py`、`harness/execution/task_tools.py`、`app/config.py`、`app/routers/tasks.py`、`app/routers/mcp.py`、`worker/app/task_state.py`、`worker/app/testcase.py`、`worker/app/rag.py`、`tests/test_harness_metrics.py`（新增）、`tests/test_task_tools.py`、`docs/AI测试与评估平台-API.md`（V1.31）。
+
+### V0.10.0（2026-08-25）实施记录
+
+- **P4-3 独立沙箱 Runner/容器已实施**（阶段 E 第 2 项闭环，bash MCP Server 迁出 api 容器）：
+  - **共享内核**：新增 `backend/shared/sandbox_kernel.py` —— 从 `api/app/harness/execution/sandbox.py` 迁移 bwrap 内核（`SandboxLimits`/`build_bwrap_argv`/`run_sandboxed`/`probe_sandbox`），去除 `app.*` 依赖，错误改抛 `SandboxError(code ∈ TIMEOUT/VALIDATION/INTERNAL)`；新增 `check_bash_blocklist`（runner 独立黑名单纵深防御）与 `is_valid_session_workspace`（工作区路径强校验：根下直接安全标识子目录、非符号链接）。
+  - **runner 服务**：新增 `backend/runner/` —— stdlib `http.server.ThreadingHTTPServer`（零依赖、攻击面最小）：`POST /run`（校验命令非空/黑名单/工作区路径 → 调内核 → `{ok,output}` 或 `{ok:false,error:{code,message}}`）、`POST /probe`、`GET /health`；日志静默不打命令；仅 compose 内网（`0.0.0.0:8001`，不发布主机端口）。
+  - **api 远程客户端**：`api/app/harness/execution/sandbox.py` 改为远程客户端（对外签名不变：`run_sandboxed`/`probe_sandbox`/`SandboxLimits`/`reset_probe_cache`）——经 `SANDBOX_RUNNER_URL`（config 新增 `sandbox_runner_url`，默认 `http://runner:8001`）POST `/run`；TIMEOUT/VALIDATION/INTERNAL 错误码映射；**fail-closed**：runner 不可达/超时/响应损坏 → `VALIDATION`「沙箱引擎不可用」，禁止降级为裸 subprocess。config 删除 `sandbox_bwrap_bin`（bwrap 路径由 runner env 决定，api 不可指定——安全边界）。
+  - **容器与部署**：api 容器移除 `privileged`/`seccomp:unconfined`/`cap_add SYS_ADMIN` 与 bubblewrap 安装；新增 `runner` 容器（privileged + seccomp:unconfined + SYS_ADMIN，挂载 `./data:/data`，`SANDBOX_WORKSPACE_ROOT=/data/workspaces`）；`deploy.sh` 与 `.github/workflows/deploy.yml` 构建矩阵加 `runner`（`backend/shared/` 变更联动重建 api/worker/runner）。
+- 测试：`backend/runner/tests/test_runner.py` 9 项（/run 正常/空命令/黑名单/非法路径/SandboxError 映射/兜底 INTERNAL//probe//health）；api 新增 `tests/test_sandbox_runner_client.py` 8 项（payload 构造/错误码映射/网络失败 fail-closed/空命令前置拒绝/probe）；`tests/test_harness_sandbox.py` 改测 `shared.sandbox_kernel`（9 项真实 bwrap 集成，宿主机无 bwrap 时 skip）。
+- 验收：runner pytest 9 passed；api 沙箱相关 38 passed/9 skipped；ruff 全绿。**注**：api 全量 suite 在 P4-2（并发实施）的 `test_harness_metrics.py` 仍有 3 项失败待其收敛（与本实施无关）。
+- 本次仍未实施：P4-4 生产验证后的新内部 Server 评估；外部 MCP 与浏览器直连 MCP 始终不在范围。
+- 修改文件：`backend/shared/sandbox_kernel.py`（新增）、`backend/runner/`（新增：main.py/Dockerfile/pyproject.toml/tests）、`api/app/harness/execution/sandbox.py`、`api/app/config.py`、`api/Dockerfile`、`api/tests/test_harness_sandbox.py`、`api/tests/test_sandbox_runner_client.py`（新增）、`docker-compose.yml`、`deploy/deploy.sh`、`.github/workflows/deploy.yml`。

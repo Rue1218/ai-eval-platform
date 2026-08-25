@@ -38,7 +38,7 @@ from .events import push_ws
 from .models import CaseItem, CaseSet, ProtocolProfile, Setting, StoredFile, Task, TaskEvent
 from .protocol import ProtocolCallError, call_protocol
 from .profile_env import profile_connection
-from .task_state import claim_running_task_for_terminal_write
+from .task_state import claim_running_task_for_terminal_write, is_cancelled
 
 logger = logging.getLogger("worker.testcase")
 
@@ -184,6 +184,11 @@ def run_testcase(task_id: str) -> None:
         db.add(TaskEvent(task_id=task.id, event="progress", message="正在按六策略生成用例"))
         db.commit()
         push_ws(task.session_id, "progress", {"percent": 20, "done": 0, "total": 1, "message": "正在生成用例"}, task_id=task.id)
+
+        # P4-2 取消传播：发起 LLM 调用前检查任务是否已取消（避免烧 token）
+        if is_cancelled(db, task.id):
+            logger.info("testcase task %s cancelled before LLM call, skip", task_id)
+            return
 
         system, user = build_prompts(source_text, TARGET_COUNT)
         try:

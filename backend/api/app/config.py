@@ -41,13 +41,19 @@ class Settings(BaseSettings):
     qwen_image_api_key: str = ""
     qwen_image_model: str = ""
     qwen_image_timeout_seconds: float = 120.0
-    # Harness 沙箱（bash 工具）：bwrap 一次性进程级沙箱。engine 为 "bwrap" 时
-    # 开放通用 bash；bwrap 不可用或 engine 为 "off" 时 bash 工具 fail-closed。
+    # Harness 沙箱（bash 工具）：bwrap 内核由独立 runner 容器执行（P4-2），
+    # api 不再持有 privileged/bubblewrap。engine 为 "bwrap" 时开放通用 bash；
+    # engine 为 "off" 时 bash 工具 fail-closed。
     sandbox_engine: str = "bwrap"
     sandbox_memory_mb: int = 256  # 沙箱虚拟内存上限（MB）
     sandbox_nproc: int = 32  # 沙箱最大进程数（防 fork 炸弹）
     sandbox_cpu_s: int = 10  # 沙箱 CPU 时间上限（秒）
-    sandbox_bwrap_bin: str = "/usr/bin/bwrap"
+    # 独立沙箱 runner 服务（compose 内网，默认 runner:8001，不发布主机端口）
+    sandbox_runner_url: str = "http://runner:8001"
+    # P4-2：资源配额与熔断
+    max_active_tasks_per_user: int = 5  # 每用户活动任务（queued/running/awaiting_case_confirm）上限
+    circuit_failure_threshold: int = 5  # 服务器连续基础设施失败阈值，达到即熔断 open
+    circuit_cooldown_s: float = 30.0  # 熔断冷却时长（秒），到期自动恢复 closed
 
     @property
     def cors_origin_list(self) -> list[str]:
