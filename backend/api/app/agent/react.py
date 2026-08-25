@@ -18,9 +18,10 @@ from uuid import uuid4
 from langgraph.config import get_config, get_stream_writer
 
 from app.adapters import StreamAborted
+from app.agent.log import agent_trace
 from app.errors import AppError, ErrorCode
 from app.harness.context import to_observation
-from app.harness.context.observation import DEFAULT_MAX_CHARS
+from app.harness.context.observation import MODEL_TOOL_RESULT_MAX_CHARS, truncate_with_marker
 from app.harness.contracts import Observation, make_event
 from app.harness.execution import NativeToolResultStore, runtime_thread_id
 from app.harness.memory import GraphState, rebuild_model_config
@@ -58,9 +59,8 @@ schema 中选择。工具结果会以对应的 tool_call_id 返回。
 """
 
 
-# read 工具以整行返回、最多 120000 字符；完整片段只进入模型 Observation，
-# ToolCard 另走 500 字符受控预览。后续由 profile 上下文预算动态收紧。
-READ_OBSERVATION_MAX_CHARS = 120_000
+# 所有原生工具回传给模型的正文共用同一上限；超出只保留摘要并提示分页。
+# ToolCard 另走 500 字符受控预览，不走这条通道。
 
 # 只读幂等工具：重复调用不判定"未推进"（OR-4 防重复守卫豁免）。
 # read/web_fetch 重读/重抓无害且常是模型合法行为（如确认内容、重新获取），
@@ -126,7 +126,7 @@ def _inject_observations(state: GraphState) -> str:
     lines = [
         to_observation(
             observation,
-            max_chars=READ_OBSERVATION_MAX_CHARS if observation.tool == "read" else DEFAULT_MAX_CHARS,
+            max_chars=MODEL_TOOL_RESULT_MAX_CHARS,
         )
         for observation in observations
     ]
@@ -191,7 +191,13 @@ def _hydrate_native_messages(
                 if native_tool_results is not None
                 else None
             )
-            message["content"] = content or "工具结果在当前会话中不可用，请向用户说明并请求重试。"
+            if content is None:
+                message["content"] = "工具结果在当前会话中不可用，请向用户说明并请求重试。"
+            else:
+                clipped, truncated = truncate_with_marker(content, MODEL_TOOL_RESULT_MAX_CHARS)
+                if truncated:
+                    clipped += " 请用更小范围继续调用（如 read 传 next_offset），不要重复相同参数。"
+                message["content"] = clipped
         hydrated.append(message)
     return tuple(hydrated)
 
@@ -552,6 +558,15 @@ def build_react_nodes(
             system=system + "\n\n" + stage_input,
             tools=tool_defs if native_tool_mode else (),
         )
+        tool_payload_chars = sum(
+            len(str(message.get("content") or ""))
+            for message in native_messages
+            if str(message.get("role") or "") == "tool"
+        )
+        agent_trace(
+            f"model native_round tool_payload_chars={tool_payload_chars} "
+            f"native_msgs={len(native_messages)} tools={len(tool_defs)}"
+        )
         budget = from_dict(state.get("budget") or {})
         started = time.perf_counter()
         try:
@@ -569,6 +584,7 @@ def build_react_nodes(
         except Exception:
             return _react_error_state(state, code="INTERNAL", message="模型调用失败")
         latency_ms = round((time.perf_counter() - started) * 1000)
+        agent_trace(f"model native_round latency_ms={latency_ms} has_tool_calls={bool(response.tool_calls)}")
         try:
             budget = consume_model_call(budget)
             if response.tool_calls and native_tool_mode:

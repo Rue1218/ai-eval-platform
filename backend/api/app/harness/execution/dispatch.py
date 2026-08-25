@@ -29,6 +29,7 @@ from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_ope
 
 from app.config import settings
 from app.errors import AppError, ErrorCode
+from app.harness.context.observation import MODEL_TOOL_RESULT_MAX_CHARS
 from app.harness.contracts import Observation, ToolCall, ToolResult
 from app.harness.execution.sandbox import SandboxLimits, run_sandboxed
 from app.harness.feedback.observation import normalize
@@ -40,11 +41,13 @@ logger = logging.getLogger("ai-eval.harness.dispatch")
 # 直接填满模型上下文或 WebSocket 持久化事件。
 READ_DEFAULT_LIMIT = 2_000
 READ_MAX_LIMIT = 2_000
-READ_MAX_CHARS = 120_000
+READ_MAX_CHARS = MODEL_TOOL_RESULT_MAX_CHARS
 READ_MAX_BYTES = 10 * 1024 * 1024
 READ_PREVIEW_CHARS = 500
+# 剩余正文按块统计行数/字符，避免对未返回内容逐行建 Python 字符串导致超时。
+READ_SCAN_CHUNK = 256 * 1024
 WRITE_MAX_BYTES = 2 * 1024 * 1024
-WEB_MAX_CONTENT_CHARS = 20_000
+WEB_MAX_CONTENT_CHARS = MODEL_TOOL_RESULT_MAX_CHARS
 WEB_PREVIEW_CHARS = 500
 WEB_MAX_SEARCH_RESULTS = 10
 WEB_RESPONSE_MAX_BYTES = 256 * 1024
@@ -187,10 +190,16 @@ class ReadResult:
             f"已读取 {self.path} 第 {self.start_line + 1}–{self.end_line} 行"
             f"（共 {self.total_lines} 行，{status}）"
         )
+        model_text = self.content
+        if not self.is_complete and self.next_offset is not None:
+            model_text = (
+                f"{self.content.rstrip()}\n"
+                f"…[未读完] 请用 next_offset={self.next_offset} 继续 read，不要重复相同 offset。"
+            )
         return {
             "summary": summary,
             # 只在 normalize() 内部取用，ToolNode 绝不能投影此字段到 ws_events。
-            "model_text": self.content,
+            "model_text": model_text,
             "truncated": not self.is_complete,
             "source": self.source,
             "display": {
@@ -227,6 +236,32 @@ def _read_non_negative_int(value: object | None, *, name: str, default: int) -> 
     return parsed
 
 
+def _count_remaining_text(handle: object, prefix: str = "") -> tuple[int, int]:
+    """按块统计窗口之后的行数与字符数，不保留剩余全文、不逐行建对象。
+
+    与文本模式 ``readline`` 同一套通用换行语义；``prefix`` 用于字符预算触发时
+    把未选中的当前行计入总量。
+    """
+    extra_lines = 0
+    extra_chars = 0
+    ends_with_newline = True
+    if prefix:
+        extra_chars += len(prefix)
+        extra_lines += prefix.count("\n")
+        ends_with_newline = prefix.endswith("\n")
+    read = getattr(handle, "read")
+    while True:
+        chunk = read(READ_SCAN_CHUNK)
+        if not chunk:
+            break
+        extra_chars += len(chunk)
+        extra_lines += chunk.count("\n")
+        ends_with_newline = chunk.endswith("\n")
+    if extra_chars and not ends_with_newline:
+        extra_lines += 1
+    return extra_lines, extra_chars
+
+
 def read_file_safe(
     path: str,
     sandbox_dir: str,
@@ -237,9 +272,11 @@ def read_file_safe(
     """受控目录内按行读取文本文件（防目录穿越与半行截断）。
 
     ``offset`` 与 ``limit`` 统一为 0-based 行号/行数。单次最多 2,000 行、
-    120,000 字符；达到字符预算时仅在完整行边界停止，返回准确的
-    ``next_offset``。完整正文只留在 ``ReadResult.content``，调用方必须投影为
-    Observation，不能直接写进 WebSocket 事件。
+    8,000 字符（与模型可见上限对齐）；达到字符预算时仅在完整行边界停止，
+    返回准确的 ``next_offset``。窗口收齐后不再对剩余正文逐行迭代，只按块累计
+    ``total_lines`` / ``total_chars``，避免大文档在工具超时内扫不完。
+    完整正文只留在 ``ReadResult.content``，调用方必须投影为 Observation，
+    不能直接写进 WebSocket 事件。
     """
     target = _resolve_safe_path(path, sandbox_dir)
     if not os.path.isfile(target):
@@ -251,25 +288,53 @@ def read_file_safe(
     if requested_limit == 0:
         raise AppError(ErrorCode.VALIDATION, "limit 必须大于 0")
     size = min(requested_limit, READ_MAX_LIMIT)
-    # 流式扫描而非 readlines()：即使接近 10MB 上限也不会额外保留整文件副本。
     selected: list[str] = []
     chars_used = 0
     total_lines = 0
     total_chars = 0
     hit_character_limit = False
+    overflow_line = ""
+    extra_lines = 0
     with open(target, encoding="utf-8", errors="replace") as handle:
-        for line_index, line in enumerate(handle):
+        skipped = 0
+        while skipped < start:
+            line = handle.readline()
+            if not line:
+                break
             total_lines += 1
             total_chars += len(line)
-            if line_index < start or len(selected) >= size or hit_character_limit:
-                continue
+            skipped += 1
+        if skipped < start:
+            return ReadResult(
+                path=path,
+                total_lines=total_lines,
+                total_chars=total_chars,
+                start_line=start,
+                end_line=start,
+                lines_read=0,
+                is_complete=True,
+                next_offset=None,
+                content="",
+                content_truncated=False,
+                source=f"workspace:{path}",
+            )
+        while len(selected) < size:
+            line = handle.readline()
+            if not line:
+                break
             if chars_used + len(line) > READ_MAX_CHARS:
                 if not selected:
-                    raise AppError(ErrorCode.VALIDATION, "单行内容超过 read 的 120000 字符上限")
+                    raise AppError(ErrorCode.VALIDATION, "单行内容超过 read 的 8000 字符上限")
                 hit_character_limit = True
-                continue
+                overflow_line = line
+                break
             selected.append(line)
             chars_used += len(line)
+            total_lines += 1
+            total_chars += len(line)
+        extra_lines, extra_chars = _count_remaining_text(handle, overflow_line)
+        total_lines += extra_lines
+        total_chars += extra_chars
     if start >= total_lines:
         return ReadResult(
             path=path,
@@ -285,7 +350,7 @@ def read_file_safe(
             source=f"workspace:{path}",
         )
     end_line = start + len(selected)
-    is_complete = end_line >= total_lines
+    is_complete = extra_lines == 0 and not hit_character_limit
     return ReadResult(
         path=path,
         total_lines=total_lines,

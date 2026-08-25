@@ -10,8 +10,10 @@ from __future__ import annotations
 from app.harness.contracts import Observation
 from app.harness.security.secrets import redact
 
-# 默认截断长度（CX-3：2000 字符）
-DEFAULT_MAX_CHARS = 2000
+# 注入模型的单条工具结果上限。超过会拖慢预填充、挤占上下文并触发 TIMEOUT。
+# ToolCard 仍走各自 preview；磁盘/沙箱窗口与此对齐，避免模型只看到半页却拿到错误 next_offset。
+MODEL_TOOL_RESULT_MAX_CHARS = 8_000
+DEFAULT_MAX_CHARS = MODEL_TOOL_RESULT_MAX_CHARS
 
 _TRUNCATE_MARKER = "…[截断]"
 

@@ -211,6 +211,12 @@ def build_tool_node(
                 arguments=dict(call.arguments or {}),
             )
         latency_ms = round((time.perf_counter() - started) * 1000)
+        from app.agent.log import agent_trace
+
+        agent_trace(
+            f"tool done name={call.name} latency_ms={latency_ms} "
+            f"model_chars={len(observation.text)} ok={observation.ok}"
+        )
         result_payload: dict[str, object] = {
             "call_id": call.call_id,
             "name": call.name,
@@ -232,8 +238,8 @@ def build_tool_node(
         )
         checkpoint_observation = observation
         if is_native:
-            # read 可达 120,000 字符；完整观察只供当前图运行期的下一模型回合使用，
-            # 不能与 native_messages 一起持久化到 LangGraph checkpoint。
+            # 模型可见正文已按 MODEL_TOOL_RESULT_MAX_CHARS 收口；完整观察只供
+            # 当前图运行期的下一模型回合使用，不能与 native_messages 一起持久化。
             if native_tool_results is None or not native_tool_results.put(
                 thread_id, call.call_id, observation.text
             ):

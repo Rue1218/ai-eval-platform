@@ -64,7 +64,7 @@ def test_run_ok_sends_payload_and_returns_output(monkeypatch) -> None:
     assert payload["sandbox_dir"] == f"/data/workspaces/{_UUID}"
     assert payload["timeout_s"] == 5.0
     assert payload["limits"] == {"memory_kb": 262144, "nproc": 32, "cpu_s": 10}
-    assert payload["max_output_chars"] == 20000
+    assert payload["max_output_chars"] == 8000
     assert capture["request"].get_method() == "POST"
     assert "/run" in capture["request"].full_url
     assert capture["timeout"] >= 5.0

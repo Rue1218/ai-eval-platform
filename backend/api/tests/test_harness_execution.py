@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import tempfile
 import threading
 import time
@@ -323,7 +324,7 @@ def test_read_file_safe_supports_offset_and_limit() -> None:
 def test_read_file_safe_default_limit_returns_first_2000_lines() -> None:
     """read 默认返回前 2000 行，并用 next_offset 指向后续内容。"""
     with tempfile.TemporaryDirectory() as root:
-        body = "\n".join(f"第{index}行" for index in range(3000))
+        body = "\n".join("x" for _ in range(3000))
         write_file_safe("big.txt", body, root)
         result = read_file_safe("big.txt", root)
         assert result.total_lines == 3000
@@ -332,8 +333,9 @@ def test_read_file_safe_default_limit_returns_first_2000_lines() -> None:
         assert result.end_line == 2000
         assert result.next_offset == 2000
         assert result.is_complete is False
-        assert result.content.splitlines()[0] == "第0行"
-        assert result.content.splitlines()[-1] == "第1999行"
+        assert result.content.splitlines()[0] == "x"
+        assert result.content.splitlines()[-1] == "x"
+        assert "next_offset=2000" in result.to_tool_data()["model_text"]
 
 
 def test_read_file_safe_stops_on_character_budget_at_line_boundary() -> None:
@@ -342,10 +344,50 @@ def test_read_file_safe_stops_on_character_budget_at_line_boundary() -> None:
         write_file_safe("huge.txt", "\n".join("y" * 100 for _ in range(2000)), root)
         result = read_file_safe("huge.txt", root)
         assert result.lines_read < 2000
+        assert result.total_lines == 2000
         assert result.end_line == result.lines_read
         assert result.next_offset == result.lines_read
         assert result.content.endswith("\n")
         assert result.content_truncated is True
+
+
+def test_read_file_safe_large_file_pages_without_line_scan_timeout() -> None:
+    """大文档只解码当前窗口：总量仍准确，且不会因逐行扫完全文而超时。"""
+    with tempfile.TemporaryDirectory() as root:
+        line = "文档行内容0123456789\n"
+        total = 80_000
+        with open(os.path.join(root, "huge.md"), "w", encoding="utf-8") as handle:
+            handle.writelines(line for _ in range(total))
+        started = time.perf_counter()
+        first = read_file_safe("huge.md", root, limit=8)
+        elapsed = time.perf_counter() - started
+        assert elapsed < 1.0
+        assert first.lines_read == 8
+        assert first.total_lines == total
+        assert first.total_chars == len(line) * total
+        assert first.is_complete is False
+        assert first.next_offset == 8
+        assert first.content == line * 8
+        second = read_file_safe("huge.md", root, offset=79_995, limit=20)
+        assert second.lines_read == 5
+        assert second.total_lines == total
+        assert second.is_complete is True
+        assert second.next_offset is None
+
+
+def test_read_file_safe_counts_final_line_without_newline() -> None:
+    """无行尾换行的最后一行仍计入 total_lines，且分页 next_offset 正确。"""
+    with tempfile.TemporaryDirectory() as root:
+        with open(os.path.join(root, "tail.txt"), "w", encoding="utf-8") as handle:
+            handle.write("alpha\nbeta\ngamma")
+        first = read_file_safe("tail.txt", root, limit=1)
+        assert first.content == "alpha\n"
+        assert first.total_lines == 3
+        assert first.next_offset == 1
+        last = read_file_safe("tail.txt", root, offset=2)
+        assert last.content == "gamma"
+        assert last.total_lines == 3
+        assert last.is_complete is True
 
 
 def test_read_result_hides_full_content_from_display_data() -> None:

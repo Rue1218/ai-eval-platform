@@ -1,10 +1,10 @@
 # AI 测试与评估平台 Agent 开发文档
 
-> 版本：V1.4.0
+> 版本：V1.4.1
 > 状态：LangGraph Harness 已启用混合范式 P0–P2：Plan-and-Solve → ReAct → reflect；native 中间叙述；clarify interrupt 与有界重规划；检查点默认 memory
 > 审查日期：2026-08-25
 > 对应需求：`AI测试与评估平台-PRD.md` V1.12
-> 对应接口：`AI测试与评估平台-API.md` V1.33
+> 对应接口：`AI测试与评估平台-API.md` V1.34
 
 ## 1. 当前唯一运行链路
 
@@ -246,3 +246,13 @@ Agent 思考配置从 `Setting(key="agent_reasoning")` 读取，结构为
 - `backend/api/app/agent/reflect.py` / `graph.py` / `clarify.py` / `plan_solve.py`：clarify interrupt、有界重规划回 `plan_solve`。
 - `backend/api/app/config.py` / `harness/memory/checkpoint.py`：`AGENT_CHECKPOINTER` 默认 memory。
 - `frontend/src/views/Agent.vue`：多段助手正文与 `plan.slots.steps` 清单回放。
+
+### V1.4.1（2026-08-25）修改代码文件与作用清单
+
+- `backend/api/app/harness/execution/dispatch.py`：`read` 窗口收齐后按块统计剩余行/字符，不再对大文档逐行扫完全文。
+- `backend/api/app/harness/execution/registry.py`：`read` 超时 10s→20s，描述标明大文件分页。
+- `backend/api/app/harness/context/observation.py`：原生工具回传模型统一 8,000 字符上限。
+- `backend/api/app/harness/execution/sandbox.py` / `dispatch.py`：bash/web 窗口与该上限对齐；`read` 未读完时 `model_text` 带 `next_offset`。
+- `backend/api/app/agent/react.py` / `toolnode.py`：hydrate 截断兜底；追踪工具耗时、模型耗时与 payload 字符数。
+- `docs/AI测试与评估平台-API.md`：V1.34。
+- `backend/api/tests/test_harness_execution.py` / `test_agent_react.py`：覆盖大文档分页、回传截断。
