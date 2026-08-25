@@ -13,9 +13,15 @@ import time
 from langgraph.config import get_config, get_stream_writer
 
 from app.errors import AppError, ErrorCode
+from app.harness.context import (
+    assemble,
+    compact_summary_from_configurable,
+    skill_hint_lines,
+)
 from app.harness.contracts import make_event
 from app.harness.memory import GraphState, SerializableRequest, rebuild_model_config
 from app.harness.orchestration import AgentMode, decide_mode, detect_plan_intent
+from app.harness.prompts import SystemVars, build_system_prompt
 from app.llm import ModelRequest
 
 # /help 帮助文本（阶段 1 硬编码占位，M4-Q4 裁决；后续从 M1 system.py 读取）
@@ -141,8 +147,9 @@ def direct_node(state: GraphState) -> dict:
 
 
 def chat_stream_node(state: GraphState, gateway: object) -> dict:
-    """Chat 流式节点：重建 ModelRequest → ModelGateway → 投影增量 + pending_events。
+    """Chat 流式节点：``assemble`` 装配上下文 → ModelGateway → 投影增量 + pending_events。
 
+    - CX-4：Persona → Skill Hint → 摘要 → 用户消息；CX-5：不注入工具定义；
     - ``should_abort`` 从 ``RunnableConfig.configurable["abort"]`` 读取（O-12）；
     - ``api_key`` 从 ``configurable["credentials"]`` 即时注入，不进 State（M3-D2）；
     - 正文/推理增量经 ``get_stream_writer`` 投影（瞬态帧，不落库）；
@@ -153,11 +160,20 @@ def chat_stream_node(state: GraphState, gateway: object) -> dict:
     configurable = (run_config or {}).get("configurable") or {}
     api_key = str(configurable.get("credentials", {}).get("api_key") or "")
     model_config = rebuild_model_config(serializable, api_key=api_key)
+    persona = str(serializable.get("system") or "").strip() or build_system_prompt(
+        SystemVars(skill_hints=tuple(skill_hint_lines()))
+    )
+    assembled = assemble(
+        system=persona,
+        skill_hints=skill_hint_lines(),
+        summary=compact_summary_from_configurable(configurable),
+        messages=list(serializable.get("messages") or ()),
+    )
     request = ModelRequest(
         config=model_config,  # type: ignore[arg-type]
-        messages=serializable.get("messages") or (),
-        system=serializable.get("system"),
-        tools=serializable.get("tools") or (),
+        messages=tuple(assembled["messages"]),
+        system=assembled["system"],
+        tools=(),  # CX-5：Chat 路径不注入工具定义
     )
     writer = get_stream_writer()
     final_response = None

@@ -3,8 +3,8 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 上下文工程层模块设计 |
-| 版本 | V0.4.2 |
-| 审查日期 | 2026-08-25 |
+| 版本 | V0.4.3 |
+| 审查日期 | 2026-08-26 |
 | 文档性质 | 模块设计说明书（需求发散 + 架构设计 + 接口签名） |
 | 适用模块 | M2 上下文工程层（`app/harness/context/`） |
 | 上游权威 | Harness 需求文档 V1.4.4 §4.2、§2.4、§7、§9；API.md V1.22 §3.4（context_meter）；PRD §5.1.3 |
@@ -205,7 +205,8 @@ def select_tool_defs(
     tools_needed: tuple[str, ...] = (),
 ) -> list[Mapping[str, object]]:
     """按本轮 mode 与 tools_needed 从注册表取工具定义（CX-5）。
-    未注册不返回；Chat 路径返回空。"""
+    Chat/Direct 返回空。ReAct 注入已注册短原生工具并并入 tools_needed；
+    未注册不返回；MCP 长工具不默认注入。"""
 ```
 
 #### 3.7.4 compact.py
@@ -349,9 +350,16 @@ def project_meter(context_meter: Mapping[str, object]) -> ContextMeter:
 
 | 文件 | 操作 | 作用 |
 | :--- | :--- | :--- |
-| `docs/AI测试与评估平台-Harness-上下文工程层.md` | 新增 V0.3 → 修订 V0.4 → 修订 V0.4.1 → 修订 V0.4.2 | V0.3–V0.4.1 见上；V0.4.2：`meter.compute_meter` 按窗口消息计算 `context_meter`，`sessions.py` 不再返回 `null`；字段对齐 API.md §3.4（含 token 拆分与 `compacted`）。 |
+| `docs/AI测试与评估平台-Harness-上下文工程层.md` | 新增 V0.3 → 修订 V0.4 → 修订 V0.4.1 → 修订 V0.4.2 → 修订 V0.4.3 | V0.3–V0.4.2 见上；V0.4.3：`assemble`/`select_tool_defs` 接入 ReAct 与 Chat 节点；ReAct 按 CX-5 注入短原生工具；`compact_summary` 经 `configurable.session` 装配。 |
 
-本文档仅设计上下文工程层，不改变任何 API、数据库、前端或 Agent 运行代码。
+| 文件 | 操作 | 作用 |
+| :--- | :--- | :--- |
+| `backend/api/app/harness/context/assembly.py` | 修改 | `select_tool_defs` 对 ReAct 注入 native 短工具；新增 `skill_hint_lines` / `compact_summary_from_configurable` |
+| `backend/api/app/agent/react.py` | 修改 | `react_agent_node` 走 `assemble`，不再 `all_defs()` 全量注入 |
+| `backend/api/app/agent/routing.py` | 修改 | `chat_stream_node` 走 `assemble`，Chat 不注入工具 |
+| `backend/api/app/routers/ws.py` | 修改 | 默认 Persona 填常驻 Skill Hint；`compact_summary` 注入 configurable |
+| `backend/api/app/harness/skills/registry.py` | 修改 | 补 `get_hint` |
+| `backend/api/tests/test_harness_context.py` / `test_agent_react.py` / `test_agent_routing.py` / `test_agent_multiturn.py` / `test_harness_phase4.py` | 修改 | CX-4/CX-5 与 `get_hint` 回归 |
 
 
 

@@ -25,13 +25,13 @@ from ..agent.graph import iter_pending_events
 from ..config import settings
 from ..db import SessionLocal
 from ..errors import AppError, ErrorCode
-from ..harness.context import recent_window, summarize
+from ..harness.context import recent_window, skill_hint_lines, summarize
 from ..harness.execution import ensure_session_workspace
 from ..harness.execution.context import ToolExecutionContext
 from ..harness.execution.task_tools import cancel_task_safe
 from ..harness.memory import get_default_checkpointer, to_serializable_request, write_summary
 from ..harness.orchestration import handle_confirm_ack
-from ..harness.prompts import build_system_prompt
+from ..harness.prompts import SystemVars, build_system_prompt
 from ..llm import ModelConfig, ModelRequest
 from ..models import Message, ProtocolProfile, Setting, User, WsEvent
 from ..models import Session as AgentSession
@@ -600,8 +600,10 @@ async def _run_turn(
         system_prompt = (
             system_row.value
             if (system_row and isinstance(system_row.value, str) and system_row.value.strip())
-            else build_system_prompt()
+            else build_system_prompt(SystemVars(skill_hints=tuple(skill_hint_lines())))
         )
+        session_row = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+        compact_summary = (session_row.compact_summary or "") if session_row else ""
         if resume is not None:
             # 恢复模式：复用中断时的 thread_id，不构造新请求
             serializable = None
@@ -641,7 +643,11 @@ async def _run_turn(
                     "api_key": config.api_key or "",
                     "user_id": user_id,
                 },
-                "session": {"id": session_id},
+                "session": {
+                    "id": session_id,
+                    # compact 摘要供 M2 assemble 注入【会话摘要】，不入 GraphState
+                    "compact_summary": compact_summary,
+                },
                 "assets": {"file_ids": owned_file_ids},
                 # 沙箱引擎与资源限制（bash 工具经 bwrap 执行；engine="off" 时 fail-closed）
                 "sandbox": {

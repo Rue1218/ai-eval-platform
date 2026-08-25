@@ -1,7 +1,8 @@
 """ReAct 循环子图节点（M4 阶段 2，OR-2/OR-4）。
 
-``react_agent_node`` 每轮：装配上下文（系统策略 + 阶段输入 + observations 摘要
-+ 工具定义最小注入）→ 结构化模型调用 → ``parse_react`` 严格解析 → 写
+``react_agent_node`` 每轮：经 ``assemble`` 按 CX-4 装配上下文（Persona →
+Skill Hint → 摘要 → 阶段输入 + observations）并用 ``select_tool_defs``
+最小注入短原生工具（CX-5）→ 结构化模型调用 → ``parse_react`` 严格解析 → 写
 ``pending_tool``（工具路径）或完成后切换到自然语言流式回答（对话路径）。
 ``react_route`` 条件边按 ``pending_tool`` 分流；预算在节点内消费（count-only，
 OR-5）；重复调用/长路径抑制（OR-4）由「最近一次 tool 相同」检测并转 error
@@ -20,7 +21,13 @@ from langgraph.config import get_config, get_stream_writer
 from app.adapters import StreamAborted
 from app.agent.log import agent_trace
 from app.errors import AppError, ErrorCode
-from app.harness.context import to_observation
+from app.harness.context import (
+    assemble,
+    compact_summary_from_configurable,
+    select_tool_defs,
+    skill_hint_lines,
+    to_observation,
+)
 from app.harness.context.observation import MODEL_TOOL_RESULT_MAX_CHARS, truncate_with_marker
 from app.harness.contracts import Observation, make_event
 from app.harness.execution import NativeToolResultStore, runtime_thread_id
@@ -236,6 +243,15 @@ def _validated_native_tool_calls(
 def _has_active_plan(state: GraphState) -> bool:
     """当前回合是否带规划产物（有 plan 时由 reflect 统一发 completed）。"""
     return isinstance(state.get("plan"), dict)
+
+
+def _plan_tools_needed(state: GraphState) -> tuple[str, ...]:
+    """从 PlanArtifact 投影取出本轮点名的短工具名（未注册项由 select_tool_defs 丢弃）。"""
+    plan = state.get("plan")
+    if not isinstance(plan, dict):
+        return ()
+    raw = plan.get("tools_needed") or ()
+    return tuple(str(item) for item in raw if str(item).strip())
 
 
 def _plan_stage_input(state: GraphState) -> str:
@@ -510,9 +526,14 @@ def build_react_nodes(
         model_run_config = _model_gateway_config(run_config)
         api_key = str(configurable.get("credentials", {}).get("api_key") or "")
         model_config = rebuild_model_config(serializable, api_key=api_key)
+        # CX-5：ReAct 只注入短原生工具 + plan.tools_needed，不默认全量 MCP 长工具。
         tool_defs = [
             dict(definition)
-            for definition in (registry.all_defs() if hasattr(registry, "all_defs") else [])
+            for definition in select_tool_defs(
+                registry,
+                mode="react",
+                tools_needed=_plan_tools_needed(state),
+            )
         ]
         native_tool_mode = model_config.tool_call_mode == "native"
         if tool_defs and native_tool_mode:
@@ -525,24 +546,20 @@ def build_react_nodes(
             ) + "\n（本轮无可用工具，请直接回答。）"
         observations_text = _inject_observations(state)
         # ws.py 的 agent_system_prompt 是协议档/平台配置的唯一入口，ReAct 只能在
-        # 其后追加本轮工具约束，不能重建固定 system 覆盖用户配置。
+        # 其后按 CX-4 装配 Skill Hint / 摘要 / 阶段输入，不能用固定 Persona 覆盖。
         configured_system = str(serializable.get("system") or "").strip()
+        persona = configured_system or build_system_prompt(
+            SystemVars(skill_hints=tuple(skill_hint_lines()))
+        )
         tool_hints = "\n".join(
             f"- {definition['name']}：{definition['description']}" for definition in tool_defs
         )
-        system = configured_system or build_system_prompt(
-            SystemVars(
-                skill_hints=tuple(
-                    f"{definition['name']}：{definition['description']}"
-                    for definition in tool_defs
-                )
-            )
-        )
+        stage_parts = [stage_input]
         if tool_hints:
-            system += "\n\n【本轮可用平台工具】\n" + tool_hints
+            stage_parts.append("【本轮可用平台工具】\n" + tool_hints)
         plan_input = _plan_stage_input(state)
         if plan_input:
-            system += "\n\n" + plan_input
+            stage_parts.append(plan_input)
         close_turn = not _has_active_plan(state)
         state_native_messages = tuple(state.get("native_messages") or ())
         native_messages = _hydrate_native_messages(
@@ -551,12 +568,21 @@ def build_react_nodes(
         # 原生 ToolResult 已作为 role=tool 消息传给模型，不能再把完整正文复制进
         # system；兼容 JSON ReAct 仍沿用 Observation 注入，保证旧协议档不回归。
         if observations_text and not state_native_messages:
-            system = system + "\n\n" + observations_text
+            stage_parts.append(observations_text)
+        assembled = assemble(
+            system=persona,
+            skill_hints=skill_hint_lines(),
+            summary=compact_summary_from_configurable(configurable),
+            stage_input="\n\n".join(part for part in stage_parts if part),
+            messages=list(serializable.get("messages") or ()),
+            tool_defs=tool_defs if native_tool_mode else None,
+        )
+        system = str(assembled["system"])
         request = ModelRequest(
             config=model_config,  # type: ignore[arg-type]
-            messages=tuple(serializable.get("messages") or ()) + native_messages,
-            system=system + "\n\n" + stage_input,
-            tools=tool_defs if native_tool_mode else (),
+            messages=tuple(assembled["messages"]) + native_messages,
+            system=system,
+            tools=assembled["tools"] if native_tool_mode else (),
         )
         tool_payload_chars = sum(
             len(str(message.get("content") or ""))

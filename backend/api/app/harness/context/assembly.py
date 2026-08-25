@@ -1,13 +1,32 @@
 """Harness 上下文工程层：上下文装配 + 按需工具注入（M2 阶段 1/2，CX-4/CX-5）。
 
 装配顺序固定：Persona → Skill Hint → 摘要 → 阶段输入 → 用户消息（CX-4）。
-工具定义按本轮能力最小注入（CX-5）：未注册工具不注入、本轮未选工具不注入；
-阶段 1 Chat 路径不注入工具定义。
+工具定义按本轮能力最小注入（CX-5）：Chat/Direct 不注入；ReAct 注入已注册的
+短原生工具，并并入 ``tools_needed`` 中已注册项；未注册与未点名的 MCP 长工具
+不默认注入。
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+
+
+def skill_hint_lines() -> list[str]:
+    """常驻 Skill Hint 目录（SK-1）；不注入历史技能卡正文（SK-2）。"""
+    from app.harness.skills import list_hints
+
+    return [f"{hint.name}：{hint.summary}" for hint in list_hints()]
+
+
+def compact_summary_from_configurable(
+    configurable: Mapping[str, object] | None,
+) -> str | None:
+    """从 RunnableConfig.configurable.session 读取 compact 摘要（可空）。"""
+    session = (configurable or {}).get("session") if isinstance(configurable, Mapping) else None
+    if not isinstance(session, Mapping):
+        return None
+    summary = str(session.get("compact_summary") or "").strip()
+    return summary or None
 
 
 def assemble(
@@ -46,16 +65,25 @@ def select_tool_defs(
 ) -> list[Mapping[str, object]]:
     """按本轮 mode 与 tools_needed 从注册表取工具定义（CX-5）。
 
-    未注册不返回；Chat 路径返回空（阶段 1 不注入工具定义）。阶段 2 起注册表
-    提供 ``get_def(name)`` 查询接口。
+    Chat/Direct 返回空。ReAct 默认注入 ``transport=native`` 短工具（本轮执行
+    能力），并并入 ``tools_needed`` 中已注册项；未注册不返回；MCP 长工具
+    （如 ``task.create``）不默认注入。无 ``iter_defs`` 的测试桩仅消费
+    ``tools_needed``。
     """
     if mode != "react":
         return []
     get_def = getattr(registry, "get_def", None)
     if get_def is None:
         return []
-    definitions: list[Mapping[str, object]] = []
+    names: list[str] = []
+    iter_defs = getattr(registry, "iter_defs", None)
+    if callable(iter_defs):
+        names.extend(definition.name for definition in iter_defs(transport="native"))
     for name in tools_needed:
+        if name and name not in names:
+            names.append(name)
+    definitions: list[Mapping[str, object]] = []
+    for name in names:
         definition = get_def(name)
         if definition is not None:
             definitions.append(definition)

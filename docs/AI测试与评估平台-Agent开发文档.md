@@ -1,8 +1,8 @@
 # AI 测试与评估平台 Agent 开发文档
 
-> 版本：V1.5.1
-> 状态：LangGraph Harness 已启用混合范式 P0–P2：Plan-and-Solve → ReAct → reflect；native 中间叙述；clarify interrupt 与有界重规划；检查点默认 memory；reflect 产出确认卡；ContextMeter 服务端计算
-> 审查日期：2026-08-25
+> 版本：V1.5.2
+> 状态：LangGraph Harness 已启用混合范式 P0–P2：Plan-and-Solve → ReAct → reflect；native 中间叙述；clarify interrupt 与有界重规划；检查点默认 memory；reflect 产出确认卡；ContextMeter 服务端计算；assemble 接线 CX-4/CX-5
+> 审查日期：2026-08-26
 > 对应需求：`AI测试与评估平台-PRD.md` V1.12
 > 对应接口：`AI测试与评估平台-API.md` V1.36
 
@@ -276,3 +276,11 @@ Agent 思考配置从 `Setting(key="agent_reasoning")` 读取，结构为
 - `docs/AI测试与评估平台-API.md`：V1.36。
 - `docs/AI测试与评估平台-Harness-上下文工程层.md`：V0.4.2。
 - `backend/api/tests/test_harness_context.py`：覆盖窗口计量与压缩标记。
+
+### V1.5.2（2026-08-26）修改代码文件与作用清单
+
+- `backend/api/app/harness/context/assembly.py`：`select_tool_defs` 对 ReAct 注入短原生工具；Chat 仍为空。
+- `backend/api/app/agent/react.py` / `routing.py`：节点走 `assemble`（Persona → Skill Hint → 摘要 → 阶段输入）。
+- `backend/api/app/routers/ws.py`：常驻 Skill Hint 写入默认 Persona；`compact_summary` 注入 configurable。
+- `backend/api/app/harness/skills/registry.py`：补 `get_hint`。
+- `docs/AI测试与评估平台-Harness-上下文工程层.md`：V0.4.3。

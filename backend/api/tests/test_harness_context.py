@@ -7,17 +7,21 @@ from app.harness.context import (
     COMPACT_VERSION,
     WindowMessage,
     assemble,
+    compact_summary_from_configurable,
     compute_meter,
     estimate_tokens,
     is_window_eligible,
     parse_compact,
     project_meter,
     recent_window,
+    select_tool_defs,
+    skill_hint_lines,
     summarize,
     to_observation,
     truncate_with_marker,
 )
 from app.harness.contracts import Observation
+from app.harness.execution import build_default_registry
 
 
 def _messages(count: int) -> list[WindowMessage]:
@@ -94,6 +98,60 @@ def test_assemble_omits_empty_sections() -> None:
     """X-A4：空的可选段不占位。"""
     result = assemble(system="【Persona】", messages=[{"role": "user", "content": "hi"}])
     assert result["system"] == "【Persona】"
+
+
+def test_select_tool_defs_unregistered_excluded() -> None:
+    """X-A5：未注册工具名不注入。"""
+
+    class _StubRegistry:
+        def get_def(self, name: str):
+            return {"name": "read"} if name == "read" else None
+
+    definitions = select_tool_defs(
+        _StubRegistry(), mode="react", tools_needed=("read", "not_exist")
+    )
+    assert [item["name"] for item in definitions] == ["read"]
+
+
+def test_select_tool_defs_chat_returns_empty() -> None:
+    """X-A5：Chat 路径不注入任何工具定义。"""
+
+    class _StubRegistry:
+        def get_def(self, name: str):
+            return {"name": name}
+
+    assert select_tool_defs(_StubRegistry(), mode="chat", tools_needed=("read",)) == []
+    assert select_tool_defs(_StubRegistry(), mode="direct", tools_needed=("read",)) == []
+
+
+def test_select_tool_defs_react_native_excludes_mcp() -> None:
+    """CX-5：ReAct 默认只注入短原生工具，不默认注入 MCP 长工具。"""
+    names = {item["name"] for item in select_tool_defs(build_default_registry(), mode="react")}
+    assert {"read", "write", "edit", "bash", "task"} <= names
+    assert "task.create" not in names
+    assert "task.status" not in names
+    named = {
+        item["name"]
+        for item in select_tool_defs(
+            build_default_registry(), mode="react", tools_needed=("task.create",)
+        )
+    }
+    assert "task.create" in named
+    assert "read" in named
+
+
+def test_skill_hint_lines_are_catalog_directory() -> None:
+    """SK-1：常驻 Skill Hint 为名称 + 一句话，不含完整工作流。"""
+    lines = skill_hint_lines()
+    assert any("基准评测" in line for line in lines)
+    assert all("：" in line for line in lines)
+
+
+def test_compact_summary_from_configurable() -> None:
+    """assemble 从 configurable.session 读取 compact 摘要。"""
+    assert compact_summary_from_configurable({"session": {"compact_summary": " 已压缩 "}}) == "已压缩"
+    assert compact_summary_from_configurable({"session": {"compact_summary": ""}}) is None
+    assert compact_summary_from_configurable({}) is None
 
 
 def test_assemble_injects_tool_defs() -> None:

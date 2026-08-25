@@ -184,6 +184,22 @@ def test_should_abort_not_triggered_when_absent() -> None:
     assert _event_kinds(events) == ["assistant_message", "response.completed"]
 
 
+def test_chat_assemble_injects_skill_hints_without_tools() -> None:
+    """CX-4/CX-5：Chat 走 assemble，常驻 Skill Hint，不注入工具定义。"""
+    gateway = _FakeGateway()
+    _collect(
+        LangGraphAgent(gateway),
+        _serializable("你好"),
+        config={"configurable": {"session": {"compact_summary": "上次已闲聊问好"}}},
+    )
+    request = gateway.stream_calls[0]
+    assert request.tools == ()
+    assert "【可见技能】" in (request.system or "")
+    assert "基准评测" in (request.system or "")
+    assert "【会话摘要】" in (request.system or "")
+    assert "上次已闲聊问好" in (request.system or "")
+
+
 def test_detect_plan_intent_requires_multi_skill_or_confirm() -> None:
     """P0：单技能闲聊不升级规划；多技能/确认卡/显式清单才为 True。"""
     assert detect_plan_intent("帮我评测一下") is False
