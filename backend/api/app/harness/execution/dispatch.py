@@ -20,7 +20,7 @@ import re
 import socket
 import tempfile
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from urllib.error import HTTPError, URLError
@@ -34,6 +34,8 @@ from app.harness.contracts import Observation, ToolCall, ToolResult
 from app.harness.execution.sandbox import SandboxLimits, run_sandboxed
 from app.harness.feedback.observation import normalize
 from app.harness.security.secrets import redact_for_log
+
+from .policy import DEFAULT_RECOVERY_POLICY, ToolRecoveryPolicy
 
 logger = logging.getLogger("ai-eval.harness.dispatch")
 
@@ -54,6 +56,9 @@ WEB_MAX_CONTENT_CHARS = MODEL_TOOL_RESULT_MAX_CHARS
 WEB_PREVIEW_CHARS = 500
 WEB_MAX_SEARCH_RESULTS = 10
 WEB_RESPONSE_MAX_BYTES = 256 * 1024
+
+# handler 可在受控输出生成时调用回调；回调由 ToolNode 注入，未运行在图内时为 None。
+ToolOutputCallback = Callable[[str, str, int | None], None]
 
 # bash 命令黑名单（纵深防御；bwrap 沙箱之外的第二道防线，禁止命令开头命中）
 BASH_BLOCKLIST: frozenset[str] = frozenset(
@@ -131,6 +136,7 @@ def run_bash(
     sandbox_dir: str,
     timeout_s: float,
     limits: SandboxLimits | None = None,
+    on_output: ToolOutputCallback | None = None,
 ) -> str:
     """bwrap 沙箱 + 黑名单双防护执行 shell 命令（阶段 3 开放通用 bash）。
 
@@ -152,6 +158,11 @@ def run_bash(
         sandbox_dir=sandbox_dir,
         timeout_s=timeout_s,
         limits=limits,
+        on_output=(
+            (lambda chunk: on_output("stdout", chunk, None))
+            if on_output is not None
+            else None
+        ),
     )
 
 
@@ -293,6 +304,7 @@ def read_file_safe(
     *,
     offset: object | None = None,
     limit: object | None = None,
+    on_output: ToolOutputCallback | None = None,
 ) -> ReadResult:
     """受控目录内按行读取文本文件（防目录穿越与半行截断）。
 
@@ -315,6 +327,17 @@ def read_file_safe(
     size = min(requested_limit, READ_MAX_LIMIT)
     selected: list[str] = []
     chars_used = 0
+    preview_chars = 0
+    stream_lines: list[str] = []
+    stream_start: int | None = None
+
+    def flush_stream() -> None:
+        """按完整行输出当前浏览器安全预览块，绝不超出 4000 字符。"""
+        nonlocal stream_lines, stream_start
+        if on_output is not None and stream_lines and stream_start is not None:
+            on_output("document", "".join(stream_lines), stream_start)
+        stream_lines = []
+        stream_start = None
     total_lines = 0
     total_chars = 0
     hit_character_limit = False
@@ -360,6 +383,15 @@ def read_file_safe(
             chars_used += len(line)
             total_lines += 1
             total_chars += len(line)
+            # read 的实时输出与最终 ToolCard 同一安全边界：最多 4000 字符、完整行。
+            if on_output is not None and preview_chars + len(line) <= READ_PREVIEW_CHARS:
+                if stream_start is None:
+                    stream_start = start + len(selected)
+                stream_lines.append(line)
+                preview_chars += len(line)
+                if len("".join(stream_lines)) >= 700:
+                    flush_stream()
+        flush_stream()
         extra_lines, extra_chars = _count_remaining_text(handle, overflow_line)
         total_lines += extra_lines
         total_chars += extra_chars
@@ -400,11 +432,26 @@ class WriteResult:
 
     path: str
     bytes_written: int
+    lines_written: int
+    preview: str
+    preview_truncated: bool
 
     def to_tool_data(self) -> dict[str, object]:
         """生成模型摘要与 ToolCard 安全展示投影。"""
-        summary = f"已新建 {self.path}（{self.bytes_written} 字节）"
-        return {"summary": summary, "display": {"summary": summary}}
+        summary = f"已新建 {self.path}（{self.lines_written} 行，{self.bytes_written} 字节）"
+        return {
+            "summary": summary,
+            "display": {
+                "summary": summary,
+                "write": {
+                    "path": self.path,
+                    "bytes_written": self.bytes_written,
+                    "lines_written": self.lines_written,
+                    "preview": self.preview,
+                    "preview_truncated": self.preview_truncated,
+                },
+            },
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -418,7 +465,44 @@ class EditResult:
     def to_tool_data(self) -> dict[str, object]:
         """生成模型摘要与 ToolCard 安全展示投影。"""
         summary = f"已编辑 {self.path}（替换 {self.old_length}→{self.new_length} 字符）"
-        return {"summary": summary, "display": {"summary": summary}}
+        return {
+            "summary": summary,
+            "display": {
+                "summary": summary,
+                "edit": {
+                    "path": self.path,
+                    "replacements": 1,
+                    "old_length": self.old_length,
+                    "new_length": self.new_length,
+                },
+            },
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class BashResult:
+    """bash 的结构化安全投影，正文按行号显示且不持久化完整输出。"""
+
+    output: str
+
+    def to_tool_data(self) -> dict[str, object]:
+        """把沙箱输出限制为 ToolCard 可见预览，完整片段仅供当前模型回合。"""
+        preview, preview_truncated = clip_at_line_boundary(self.output, READ_PREVIEW_CHARS)
+        summary = "沙箱命令执行完成"
+        return {
+            "summary": summary,
+            "model_text": self.output[:MODEL_TOOL_RESULT_MAX_CHARS],
+            "truncated": len(self.output) > MODEL_TOOL_RESULT_MAX_CHARS,
+            "source": "sandbox:bash",
+            "display": {
+                "summary": summary,
+                "bash": {
+                    "exit_code": 0,
+                    "preview": preview,
+                    "preview_truncated": preview_truncated,
+                },
+            },
+        }
 
 
 def _ensure_write_size(content: str) -> int:
@@ -442,7 +526,15 @@ def write_file_safe(path: str, content: str, sandbox_dir: str) -> WriteResult:
         handle.write(content)
         handle.flush()
         os.fsync(handle.fileno())
-    return WriteResult(path=path, bytes_written=bytes_written)
+    preview, preview_truncated = clip_at_line_boundary(content, READ_PREVIEW_CHARS)
+    lines_written = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
+    return WriteResult(
+        path=path,
+        bytes_written=bytes_written,
+        lines_written=lines_written,
+        preview=preview,
+        preview_truncated=preview_truncated,
+    )
 
 
 def _edit_mismatch_hint(content: str, old: str, *, preview_chars: int = 80) -> str:
@@ -839,6 +931,7 @@ def execute_raw(
     sandbox_dir: str | None = None,
     handler: object | None = None,
     context: object | None = None,
+    recovery_policy: ToolRecoveryPolicy = DEFAULT_RECOVERY_POLICY,
 ) -> ToolResult:
     """按 call.name 分派到 handler，返回 ``ToolResult``（不抛，错误归一）。
 
@@ -887,6 +980,7 @@ def execute_raw(
         hint = (exc.fields or {}).get("repair_hint") if exc.fields else None
         if hint:
             error["repair_hint"] = str(hint)[:500]
+        error["recovery"] = recovery_policy.to_payload(code, str(hint or ""))
         return ToolResult(
             name=call.name,
             ok=False,
@@ -903,7 +997,11 @@ def execute_raw(
         return ToolResult(
             name=call.name,
             ok=False,
-            error={"code": "INTERNAL", "message": "操作失败（INTERNAL）"},
+            error={
+                "code": "INTERNAL",
+                "message": "操作失败（INTERNAL）",
+                "recovery": recovery_policy.to_payload("INTERNAL"),
+            },
             call_id=call.call_id,
         )
 
@@ -916,6 +1014,7 @@ def execute(
     sandbox_dir: str | None = None,
     handler: object | None = None,
     context: object | None = None,
+    recovery_policy: ToolRecoveryPolicy = DEFAULT_RECOVERY_POLICY,
 ) -> Observation:
     """按 call.name 分派到 handler，带超时；归一为 observation（FB-1）。
 
@@ -930,6 +1029,7 @@ def execute(
             sandbox_dir=sandbox_dir,
             handler=handler,
             context=context,
+            recovery_policy=recovery_policy,
         ),
         None,
         tool=call.name,

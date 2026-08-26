@@ -180,7 +180,11 @@ def test_react_tool_then_done_streams_final_answer() -> None:
     gateway = _StreamingAfterToolGateway([_REACT_READ, _REACT_DONE])
     events = _collect(LangGraphAgent(gateway, build_default_registry()), _serializable())
 
-    custom = [chunk for mode, chunk in events if mode == "custom"]
+    custom = [
+        chunk
+        for mode, chunk in events
+        if mode == "custom" and chunk.get("kind") == "content"
+    ]
     assert [(chunk["kind"], chunk["text"]) for chunk in custom] == [
         ("content", "工具结果"),
         ("content", "已整理"),
@@ -256,7 +260,11 @@ def test_native_tool_calls_keep_call_id_and_stream_final_answer() -> None:
     assert saved_tool_messages
     assert all(message.get("content") == "" for message in saved_tool_messages)
     assert gateway.stream_calls[0].tools
-    custom = [chunk for mode, chunk in events if mode == "custom"]
+    custom = [
+        chunk
+        for mode, chunk in events
+        if mode == "custom" and chunk.get("kind") == "content"
+    ]
     assert [(chunk["kind"], chunk["text"]) for chunk in custom] == [
         ("content", "两个文件的共同结论是："),
         ("content", "都可用于后续评测。"),

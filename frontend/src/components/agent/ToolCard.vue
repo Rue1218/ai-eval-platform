@@ -5,7 +5,7 @@
       open: isOpen,
       'no-anim': noAnim,
       'is-pending': status === 'pending',
-      'is-streaming': isStreamingOutput,
+      'is-streaming': isStreamingOutput || hasLiveOutput,
     }"
     :data-tool="tool"
   >
@@ -90,12 +90,34 @@
       <div class="td-block">
         <div class="td-label-row">
           <div class="td-label">输出</div>
-          <div v-if="isStreamingOutput" class="td-stream-state">
+          <div v-if="isStreamingOutput || hasLiveOutput" class="td-stream-state">
             <span class="td-stream-dot" aria-hidden="true"></span>
-            正在流式呈现
+            {{ hasLiveOutput ? '正在接收输出' : '正在流式呈现' }}
           </div>
         </div>
-        <div v-if="status === 'pending'" class="tool-output-loading" role="status">
+        <div
+          v-if="hasLiveOutput"
+          class="line-block is-streaming-output"
+          role="region"
+          aria-label="工具实时输出"
+        >
+          <div v-for="line in liveOutputLines" :key="`${line.n}-${line.text}`" class="ln-row">
+            <span class="ln-no mono">{{ line.n }}</span>
+            <span class="ln-text">{{ line.text }}</span>
+          </div>
+          <div class="stream-tail mono"><span class="stream-cursor">▋</span></div>
+          <div v-if="status === 'fail'" class="tool-recovery" role="alert">
+            <div class="tool-recovery-title">{{ resolvedOutputText }}</div>
+            <p v-if="recoveryHint" class="tool-recovery-hint">{{ recoveryHint }}</p>
+            <span v-if="recoveryAction" class="tool-recovery-action mono">建议：{{ recoveryAction }}</span>
+          </div>
+        </div>
+        <div v-else-if="status === 'fail'" class="tool-recovery" role="alert">
+          <div class="tool-recovery-title">{{ resolvedOutputText }}</div>
+          <p v-if="recoveryHint" class="tool-recovery-hint">{{ recoveryHint }}</p>
+          <span v-if="recoveryAction" class="tool-recovery-action mono">建议：{{ recoveryAction }}</span>
+        </div>
+        <div v-else-if="status === 'pending'" class="tool-output-loading" role="status">
           <div class="tool-loading-copy">
             <span class="tool-loading-orbit" aria-hidden="true"></span>
             {{ toolDisplayName }} 正在执行，等待安全输出…
@@ -158,6 +180,9 @@ const props = withDefaults(
     truncated?: boolean
     source?: string
     redacted?: boolean
+    progress?: { stage: string; message: string }
+    streamOutput?: { text: string; channel: string; startLine: number; seq: number }
+    recovery?: { retryable?: boolean; suggested_action?: string; repair_hint?: string; max_auto_repairs?: number }
     defaultOpen?: boolean
     noAnim?: boolean
   }>(),
@@ -236,8 +261,8 @@ const source = computed(() => props.source || '')
 const redacted = computed(() => props.redacted === true)
 const isAudioOutput = computed(() => ['audio.speech_synthesis', 'audio.voiceclone'].includes(props.tool))
 const previewMode = ref<'render' | 'source'>('render')
-// 服务端仍只下发受控的完整 tool_result；组件按帧增量展示，既不新增 WS 协议，
-// 也不会把完整 Observation 或未脱敏输出带到浏览器。
+// 最终 tool_result 仍是唯一持久化终态；运行中的 output_delta 只来自服务端
+// 4KB 受控窗口，不含完整 Observation、历史正文或未脱敏错误。
 const displayedOutputText = ref('')
 const isStreamingOutput = ref(false)
 
@@ -256,6 +281,11 @@ function asNonNegInt(value: unknown, fallback = 0): number {
 
 const argsRecord = computed(() => asRecord(props.args) || {})
 const resultRecord = computed(() => asRecord(props.result))
+const liveOutputText = computed(() => props.streamOutput?.text || '')
+const hasLiveOutput = computed(() => !!liveOutputText.value)
+const liveOutputLines = computed(() => toLineItems(liveOutputText.value, props.streamOutput?.startLine || 1))
+const recoveryHint = computed(() => props.recovery?.repair_hint || '')
+const recoveryAction = computed(() => props.recovery?.suggested_action || '')
 
 const headerHint = computed(() => {
   // 收起态只标识这是一次 ToolCall，具体路径、命令和内容统一放到展开区。
@@ -348,8 +378,12 @@ const previewText = computed(() => {
   const data = resultRecord.value
   const read = asRecord(data?.read)
   if (read && typeof read.preview === 'string') return read.preview
+  const write = asRecord(data?.write)
+  if (write && typeof write.preview === 'string') return write.preview
   if (props.tool === 'bash') {
     if (typeof props.result === 'string') return props.result
+    const bash = asRecord(data?.bash)
+    if (bash && typeof bash.preview === 'string') return bash.preview
     if (typeof data?.summary === 'string') return data.summary
   }
   const web = asRecord(data?.web)
@@ -360,7 +394,7 @@ const previewText = computed(() => {
 const displayedPreviewText = computed(() => (previewText.value ? displayedOutputText.value : ''))
 
 const outputLines = computed(() => {
-  if (!displayedPreviewText.value || !['read', 'bash', 'web_fetch'].includes(props.tool)) return []
+  if (!displayedPreviewText.value || !['read', 'write', 'bash', 'web_fetch'].includes(props.tool)) return []
   const start = props.tool === 'read'
     ? asNonNegInt(asRecord(resultRecord.value?.read)?.start_line) + 1
     : 1
@@ -407,7 +441,7 @@ const transcriptText = computed(() => {
 const statusClass = computed(() => props.status)
 
 const stateText = computed(() => {
-  if (props.status === 'pending') return '执行中'
+  if (props.status === 'pending') return props.progress?.message || '执行中'
   if (isStreamingOutput.value) return '输出呈现中'
   if (props.status === 'fail') return '调用失败'
   return '调用成功'
@@ -810,6 +844,28 @@ pre.code {
   color: var(--text-secondary);
   font-size: 12.5px;
   line-height: 1.5;
+}
+.tool-recovery {
+  display: grid;
+  gap: 6px;
+  padding: 10px 11px;
+  border: 1px solid color-mix(in srgb, var(--accent-error) 28%, var(--border-subtle));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent-error) 5%, var(--bg-main));
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.tool-recovery-title {
+  color: var(--accent-error);
+  font-weight: 600;
+}
+.tool-recovery-hint {
+  margin: 0;
+}
+.tool-recovery-action {
+  color: var(--text-tertiary);
+  font-size: 10px;
 }
 .tool-output-loading {
   padding: 11px 12px;

@@ -19,6 +19,8 @@ import os
 import re
 import signal
 import subprocess
+import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 
 logger = logging.getLogger("ai-eval.sandbox_kernel")
@@ -140,6 +142,7 @@ def run_sandboxed(
     limits: SandboxLimits | None = None,
     bwrap_bin: str = "/usr/bin/bwrap",
     max_output_chars: int = 20000,
+    on_output: Callable[[str], None] | None = None,
 ) -> str:
     """在一次性 bwrap 沙箱内执行命令，返回 stdout；失败抛 SandboxError。
 
@@ -174,17 +177,48 @@ def run_sandboxed(
     except OSError as exc:
         # userns/seccomp 拒绝等启动失败：fail-closed
         raise SandboxError("VALIDATION", "沙箱引擎不可用") from exc
+    output_parts: list[str] = []
+    output_chars = 0
+
+    def drain_stdout() -> None:
+        """逐行排空 stdout；即使超出展示上限仍持续读取以避免子进程阻塞。"""
+        nonlocal output_chars
+        stdout = started.stdout
+        if stdout is None:
+            return
+        try:
+            for chunk in iter(stdout.readline, ""):
+                remaining = max_output_chars - output_chars
+                if remaining <= 0:
+                    continue
+                safe_chunk = chunk[:remaining]
+                if not safe_chunk:
+                    continue
+                output_parts.append(safe_chunk)
+                output_chars += len(safe_chunk)
+                if on_output is not None:
+                    try:
+                        on_output(safe_chunk)
+                    except Exception:  # noqa: BLE001 —— 客户端断开不应影响沙箱清理
+                        logger.info("bash 输出回调失败，继续执行并回收沙箱")
+        finally:
+            stdout.close()
+
+    reader = threading.Thread(target=drain_stdout, name="sandbox-stdout", daemon=True)
+    reader.start()
     try:
-        output, _ = started.communicate(timeout=timeout_s)
+        started.wait(timeout=timeout_s)
     except subprocess.TimeoutExpired:
         # 超时：整进程组强杀，防孤儿进程残留
         try:
             os.killpg(started.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-        started.communicate()
+        started.wait()
+        reader.join(timeout=1.0)
         raise SandboxError("TIMEOUT", "命令执行超时") from None
-    stdout = (output or "")[:max_output_chars]
+    reader.join(timeout=1.0)
+    stdout = "".join(output_parts)
     if started.returncode != 0:
         # 附截断 stderr 摘要便于模型迭代；退出码归位 INTERNAL
         detail = stdout.strip().splitlines()

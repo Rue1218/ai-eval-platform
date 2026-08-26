@@ -1,10 +1,10 @@
 # AI 测试与评估平台 Agent 开发文档
 
-> 版本：V1.5.8
-> 状态：LangGraph Harness 已启用混合范式 P0–P2：Plan-and-Solve → ReAct → reflect；native 中间叙述；clarify interrupt 与有界重规划；检查点默认 memory；reflect 产出确认卡；ContextMeter 服务端计算；assemble 接线 CX-4/CX-5；read 防重复与行级 ToolCard；Direct `/help` 发 `response.completed`；思考增量合并与隐藏 CoT 摘要；技能工作流 Progressive Disclosure
+> 版本：V1.5.9
+> 状态：LangGraph Harness 已启用混合范式 P0–P2：Plan-and-Solve → ReAct → reflect；native 中间叙述；clarify interrupt 与有界重规划；检查点默认 memory；reflect 产出确认卡；ContextMeter 服务端计算；assemble 接线 CX-4/CX-5；read 防重复与行级 ToolCard；ToolCall 进度/安全输出流；Direct `/help` 发 `response.completed`；思考增量合并与隐藏 CoT 摘要；技能工作流 Progressive Disclosure
 > 审查日期：2026-08-26
 > 对应需求：`AI测试与评估平台-PRD.md` V1.12
-> 对应接口：`AI测试与评估平台-API.md` V1.44
+> 对应接口：`AI测试与评估平台-API.md` V1.45
 
 ## 1. 当前唯一运行链路
 
@@ -31,7 +31,7 @@
 - 校验会话可见性，支持首次连接创建私有会话；
 - 保存 `messages` 与 `ws_events`，按 `last_event_id` 补发历史事件；
 - 在后台 Task 中启动单轮 Agent，不阻塞 WebSocket `receive` 循环；
-- 将 LangGraph 流事件投影为 `user_message`、`thought`、`assistant_delta`、`assistant_message`、`confirm`、`response.completed`、`error`、`pong`。思考增量 `thought.stream=think` 按间隔合并；有思考链时 `think_final` 在 `response.completed` 之前。
+- 将 LangGraph 流事件投影为 `user_message`、`thought`、`assistant_delta`、`tool_progress`、`tool_output_delta`、`assistant_message`、`confirm`、`response.completed`、`error`、`pong`。思考增量 `thought.stream=think` 按间隔合并；工具流只允许受控输出窗口；有思考链时 `think_final` 在 `response.completed` 之前。
 - `confirm_ack` / `cancel_task` 由收包循环直连，不在 api 进程执行评测或压测。
 
 路由不得直接调用 `app.adapters`，不得执行 Benchmark、RAG、用例生成或压测。
@@ -66,7 +66,7 @@ clarify -> plan_solve
 
 三协议 HTTP 细节只允许存在于 `app/adapters.py`。API Key 不得出现在日志、事件、异常消息或模型层对象的默认 repr 中。
 
-流式工具参数只能在 `app/adapters.py` 的单次调用内累计：OpenAI Chat 按调用索引、OpenAI Responses 按输出项、Anthropic 按内容块累计，只有 JSON 对象完整后才产生 `ModelStreamEvent(kind="tool_call")`。该内部事件用于 Agent 控制流和最终 `ModelResponse.tool_calls`，浏览器继续只接收既有的完整 `tool_call`/`tool_result`，不得新增或透传参数片段。
+流式工具参数只能在 `app/adapters.py` 的单次调用内累计：OpenAI Chat 按调用索引、OpenAI Responses 按输出项、Anthropic 按内容块累计，只有 JSON 对象完整后才产生 `ModelStreamEvent(kind="tool_call")`。该内部事件用于 Agent 控制流和最终 `ModelResponse.tool_calls`，浏览器不得接收或透传参数片段；工具执行期间仅允许 ToolNode 发出已脱敏、受限额的 `tool_progress`/`tool_output_delta`，最终状态仍以完整 `tool_result` 为准。
 
 Agent 思考配置从 `Setting(key="agent_reasoning")` 读取，结构为
 `{"enabled": true, "effort": "medium"}`。开启时，OpenAI Responses 使用
@@ -87,6 +87,8 @@ Agent 思考配置从 `Setting(key="agent_reasoning")` 读取，结构为
 | `assistant_message` | 助手完整交付句，落库并占用会话事件号 |
 | `response.completed` | 本轮生成结束，携带 `finish_reason` 和 `role=assistant` 并可回放 |
 | `tool_call` | 已解析的短工具 `call_id`、名称与参数；创建 ToolCard，不直接执行业务长任务 |
+| `tool_progress` | ToolNode 校验/执行/收尾的瞬态阶段；按 `call_id` 原地更新卡片，不落库、不补发 |
+| `tool_output_delta` | 服务端受控输出块；`bash` 逐完整行、`read` 按完整行块、`write` 仅在原子写成功后下发预览；单次调用累计≤4000字符，不落库、不补发 |
 | `tool_result` | 与 `tool_call.call_id` 相同的短工具受控结果；`read` 仅包含行范围、文件统计与完整行预览（≤4000 字符），完整正文不进入 WS 事件 |
 | `confirm` | 质量任务确认卡（TaskSpec）；`kind` 不得为 `stress`；落 `sessions.pending_confirm` |
 | `error` | 脱敏后的 `ErrorCode` 与用户可见消息 |
@@ -317,14 +319,25 @@ Agent 思考配置从 `Setting(key="agent_reasoning")` 读取，结构为
 
 ### V1.5.7（2026-08-26）修改代码文件与作用清单
 
+- `backend/api/app/harness/execution/registry.py` / `policy.py`：工具描述、输入/安全输出 Schema、可执行权限边界与恢复策略统一登记。
+- `backend/api/app/agent/react.py` / `harness/execution/toolnode.py`：ToolCall 在执行前落库；ToolNode 经 LangGraph custom 通道下发进度与受控输出，最终仍以 `tool_result` 持久化。
+- `backend/shared/sandbox_kernel.py` / `backend/runner/main.py` / `backend/api/app/harness/execution/sandbox.py`：Runner NDJSON 逐行转发 bwrap stdout，API 仅转发受控窗口且 Runner 不可用仍 fail-closed。
+- `backend/api/app/harness/execution/dispatch.py` / `context.py` / `native.py` / `feedback/observation.py`：read/write/bash 输出投影、运行期回调与结构化恢复信息。
+- `backend/api/app/routers/ws.py`：`tool_progress`、`tool_output_delta` 仅向在线会话成员转发，不落库、不补发。
+- `frontend/src/views/Agent.vue` / `components/agent/ToolCard.vue` / `api/types.ts`：实时行号输出、阶段加载态、失败恢复建议及 `call_id`/`seq` 去重。
+- `docs/AI测试与评估平台-API.md`：V1.44，冻结工具流、输出、权限与恢复契约。
+- `backend/api/tests/test_harness_execution.py` / `test_sandbox_runner_client.py` / `backend/runner/tests/test_runner.py`：覆盖工具策略登记、ToolNode custom 帧与 Runner NDJSON 端点。
+
+### V1.5.8（2026-08-26）修改代码文件与作用清单
+
 - `backend/api/app/harness/skills/workflows.py`：启用技能完整工作流正文，按 `skill_id` 按需加载。
 - `backend/api/app/harness/context/assembly.py`：`skill_hints_for_turn`；`assemble` 可选【当前技能工作流】。
 - `backend/api/app/agent/react.py` / `plan_solve.py`：选中技能注入正文；`skill-rag` 规划即 VALIDATION。
 - `backend/api/tests/test_harness_skills.py`：K-A1~K-A5。
 
-### V1.5.8（2026-08-26）修改代码文件与作用清单
+### V1.5.9（2026-08-26）修改代码文件与作用清单
 
 - `backend/api/app/agent/think_stream.py`：隐藏 CoT 收成可展示摘要；流式暂扣包装头。
 - `backend/api/app/routers/ws.py`：think / think_final 走 `sanitize_reasoning`。
 - `backend/api/tests/test_think_stream.py` / `test_harness_probe_l2.py`：替换与探针拒绝原文。
-- `docs/AI测试与评估平台-API.md`：V1.44。
+- `docs/AI测试与评估平台-API.md`：V1.45。

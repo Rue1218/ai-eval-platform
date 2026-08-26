@@ -20,7 +20,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from uuid import uuid4
 
-from langgraph.config import get_config
+from langgraph.config import get_config, get_stream_writer
 
 from app.errors import AppError, ErrorCode
 from app.harness.contracts import ToolCall, make_event
@@ -37,6 +37,7 @@ from .context import ToolExecutionContext
 from .mcp import MCPClientManager
 from .native import NativeToolExecutor
 from .native_results import NativeToolResultStore, runtime_thread_id
+from .policy import DEFAULT_RECOVERY_POLICY, TOOL_STREAM_CHUNK_CHARS, TOOL_STREAM_MAX_CHARS
 from .registry import ToolRegistry, required_parameter_names, validate_tool_arguments
 
 
@@ -108,14 +109,83 @@ def build_tool_node(
         owned_file_ids = frozenset(configurable.get("assets", {}).get("file_ids") or ())
         sandbox_box = configurable.get("sandbox") or {}
         sandbox = str(sandbox_box.get("dir") or sandbox_dir or "")
-        events = [
-            make_event(
-                "tool_call",
-                {"call_id": call.call_id, "name": call.name, "arguments": call.arguments},
+        # ToolCall 已在 ReAct 节点进入 ToolNode 前持久化，才能让本节点的瞬态
+        # 进度/输出帧总是按 call_id 找到既有卡片。纯单测未运行图时允许没有 writer。
+        events: list[dict] = []
+        try:
+            writer = get_stream_writer()
+        except Exception:  # noqa: BLE001 —— 图外单测/同步调用没有 LangGraph writer
+            writer = None
+        loop = asyncio.get_running_loop()
+        stream_chars = 0
+        stream_seq = 0
+        stream_line = 1
+
+        def emit_stream(frame: dict[str, object]) -> None:
+            """在线程安全地投影 LangGraph custom 帧；缺少 writer 时静默降级。"""
+            if writer is None:
+                return
+            loop.call_soon_threadsafe(writer, frame)
+
+        def emit_progress(stage: str, message: str) -> None:
+            """发送不落库的工具阶段状态，前端仅原地更新已有 ToolCard。"""
+            emit_stream(
+                {
+                    "kind": "tool_progress",
+                    "call_id": call.call_id,
+                    "name": call.name,
+                    "stage": stage,
+                    "message": message[:160],
+                }
             )
-        ]
+
+        def emit_output(channel: str, text: str, start_line: int | None = None) -> None:
+            """按块发送受控输出；总量 4KB，不能把完整 Observation 带入浏览器。"""
+            nonlocal stream_chars, stream_seq, stream_line
+            remaining = TOOL_STREAM_MAX_CHARS - stream_chars
+            if remaining <= 0 or not text:
+                return
+            visible = text[:remaining]
+            if len(visible) < len(text) and "\n" in visible:
+                visible = visible[: visible.rfind("\n") + 1]
+            if not visible:
+                return
+            line = start_line if start_line is not None else stream_line
+            for index in range(0, len(visible), TOOL_STREAM_CHUNK_CHARS):
+                chunk = visible[index : index + TOOL_STREAM_CHUNK_CHARS]
+                if not chunk:
+                    continue
+                stream_seq += 1
+                emit_stream(
+                    {
+                        "kind": "tool_output_delta",
+                        "call_id": call.call_id,
+                        "name": call.name,
+                        "seq": stream_seq,
+                        "channel": channel,
+                        "text": chunk,
+                        "start_line": line,
+                    }
+                )
+                line += chunk.count("\n")
+                stream_chars += len(chunk)
+            stream_line = line
+
+        def display_preview(data: object) -> tuple[str, str, int | None]:
+            """提取已经过 handler 投影的预览，供不支持原生回调的工具补发一次。"""
+            if not isinstance(data, dict):
+                return "", "result", None
+            for key, channel in (("read", "document"), ("write", "document"), ("bash", "stdout"), ("web", "document")):
+                section = data.get(key)
+                if isinstance(section, dict) and isinstance(section.get("preview"), str):
+                    raw_start = section.get("start_line")
+                    return str(section["preview"]), channel, int(raw_start) + 1 if isinstance(raw_start, int) else 1
+            return "", "result", None
+
+        emit_progress("validating", "正在校验工具参数与权限边界")
         remaining = [dict(item) for item in (state.get("pending_tools") or [])]
         next_pending = remaining.pop(0) if remaining else None
+        recovery_policy = DEFAULT_RECOVERY_POLICY
 
         def rejected(code: str, message: str) -> dict:
             """所有拒绝路径均补齐同 call_id 的结果，供模型与 ToolCard 收敛。"""
@@ -132,6 +202,7 @@ def build_tool_node(
                             "latency_ms": 0,
                             "truncated": False,
                             "redacted": True,
+                            "recovery": recovery_policy.to_payload(code, message),
                         },
                     ),
                     make_event("error", {"code": code, "message": message}),
@@ -167,6 +238,7 @@ def build_tool_node(
                 rejected("VALIDATION", f"工具未注册：{call.name}"),
                 state,
             )
+        recovery_policy = definition.recovery_policy
         schema_error = validate_tool_arguments(definition.parameters_schema, call.arguments)
         if schema_error:
             return seal_budget_if_exhausted(rejected("VALIDATION", schema_error), state)
@@ -214,6 +286,7 @@ def build_tool_node(
                 db.close()
         # 3. 执行（EX-3）：基础工具直连原生执行器；未来 MCP 扩展才经 Host。
         # 两条路径均在工作线程执行同步 handler，不阻塞 API 事件循环。
+        emit_progress("executing", "工具正在受控执行")
         started = time.perf_counter()
         context = ToolExecutionContext(
             session_id=session_id,
@@ -222,6 +295,8 @@ def build_tool_node(
             sandbox_dir=sandbox,
             owned_file_ids=owned_file_ids,
             call_id=call.call_id,
+            report_progress=emit_progress,
+            report_output=emit_output,
         )
         try:
             if definition.transport == "native":
@@ -248,6 +323,7 @@ def build_tool_node(
                 arguments=dict(call.arguments or {}),
             )
         latency_ms = round((time.perf_counter() - started) * 1000)
+        emit_progress("finalizing", "正在整理安全输出")
         from app.agent.log import agent_trace
 
         agent_trace(
@@ -268,8 +344,15 @@ def build_tool_node(
             # 前端 ToolCard 只接收受控展示投影；完整 read 正文保留在 Observation，
             # 仅供下一轮模型使用，禁止进入 ws_events。
             result_payload["data"] = dict(observation.display_data)
+            # web_fetch 等没有执行期回调的工具，仍按同一受控预览发送一段增量。
+            if stream_chars == 0 and definition.supports_streaming:
+                preview, channel, start_line = display_preview(observation.display_data)
+                emit_output(channel, preview, start_line)
         else:
             result_payload["error"] = observation.text
+            result_payload["recovery"] = dict(observation.recovery) or recovery_policy.to_payload(
+                observation.error_code or "INTERNAL", observation.repair_hint
+            )
         events.append(
             make_event("tool_result", result_payload)
         )

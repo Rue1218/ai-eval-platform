@@ -70,6 +70,43 @@ def test_run_ok_sends_payload_and_returns_output(monkeypatch) -> None:
     assert capture["timeout"] >= 5.0
 
 
+def test_run_stream_forwards_ndjson_output(monkeypatch) -> None:
+    """bash Runner 流式端点逐块转发 stdout，最终帧只确认状态不重复正文。"""
+    capture: dict = {}
+
+    class _StreamingResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc: object) -> bool:
+            return False
+
+        def __iter__(self):
+            frames = [
+                {"type": "output", "chunk": "第一行\n"},
+                {"type": "output", "chunk": "第二行\n"},
+                {"type": "result", "ok": True},
+            ]
+            return iter([json.dumps(frame, ensure_ascii=False).encode("utf-8") + b"\n" for frame in frames])
+
+    def fake_urlopen(request, timeout: float = 0.0):  # noqa: ANN001
+        capture["request"] = request
+        capture["timeout"] = timeout
+        return _StreamingResponse()
+
+    monkeypatch.setattr(sandbox_mod, "urlopen", fake_urlopen)
+    chunks: list[str] = []
+    result = sandbox_mod.run_sandboxed(
+        "echo stream",
+        sandbox_dir=f"/data/workspaces/{_UUID}",
+        timeout_s=5.0,
+        on_output=chunks.append,
+    )
+    assert result == "第一行\n第二行"
+    assert chunks == ["第一行\n", "第二行\n"]
+    assert "/run/stream" in capture["request"].full_url
+
+
 def test_run_empty_command_rejected_before_http(monkeypatch) -> None:
     called: dict = {"hit": False}
 

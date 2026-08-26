@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 from app.errors import AppError, ErrorCode
 from app.harness.contracts import ToolDescriptor
+
+from .policy import DEFAULT_RECOVERY_POLICY, ToolPermissionPolicy, ToolRecoveryPolicy
 
 # 工具参数只接受平台已实现、可本地确定解释的 JSON Schema 子集。新增 MCP 工具
 # 不得静默携带未校验的组合/引用规则；需要扩展时先实现校验语义并补测试。
@@ -55,6 +57,11 @@ class ToolDef:
     permission: str  # 权限标识
     timeout_s: float  # 执行超时
     handler: Callable[..., object]  # 执行函数（不入 GraphState，仅运行时）
+    # 输出、权限与恢复策略与输入 Schema 同属工具契约，禁止在前端或 handler
+    # 分别维护第二份规则。默认值仅兼容历史测试/内部扩展，新工具必须显式声明。
+    output_schema: Mapping[str, object] = field(default_factory=dict)  # 浏览器安全投影 Schema
+    permission_policy: ToolPermissionPolicy = ToolPermissionPolicy()
+    recovery_policy: ToolRecoveryPolicy = DEFAULT_RECOVERY_POLICY
     # 为既有内部扩展保持 MCP 默认值；基础工具在 build_default_registry 中显式
     # 标为 native，避免因默认值变化误入 MCP。
     transport: Literal["native", "mcp"] = "mcp"  # 执行通道
@@ -80,7 +87,15 @@ class ToolDef:
             display_name=self.display_name or self.name,
             description=self.description,
             input_schema=dict(self.parameters_schema),
+            output_schema=dict(self.output_schema or {}),
             permission=self.permission,
+            permission_policy=self.permission_policy.to_payload(),
+            recovery_policy={
+                "retryable_codes": sorted(self.recovery_policy.retryable_codes),
+                "suggested_action": self.recovery_policy.suggested_action,
+                "default_hint": self.recovery_policy.default_hint,
+                "max_auto_repairs": self.recovery_policy.max_auto_repairs,
+            },
             risk_level=self.risk_level,
             execution_mode=self.execution_mode,
             timeout_s=float(self.timeout_s),
@@ -102,6 +117,9 @@ class ToolRegistry:
         schema_error = validate_tool_schema(def_.parameters_schema)
         if schema_error:
             raise AppError(ErrorCode.VALIDATION, f"工具参数 Schema 无效：{schema_error}")
+        output_schema_error = validate_tool_schema(def_.output_schema)
+        if output_schema_error:
+            raise AppError(ErrorCode.VALIDATION, f"工具输出 Schema 无效：{output_schema_error}")
         self._defs[def_.name] = def_
 
     def get(self, name: str) -> ToolDef:
@@ -145,7 +163,15 @@ class ToolRegistry:
                 "name": definition.name,
                 "description": definition.description,
                 "parameters_schema": dict(definition.parameters_schema),
+                "output_schema": dict(definition.output_schema or {}),
                 "permission": definition.permission,
+                "permission_policy": definition.permission_policy.to_payload(),
+                "recovery_policy": {
+                    "retryable_codes": sorted(definition.recovery_policy.retryable_codes),
+                    "suggested_action": definition.recovery_policy.suggested_action,
+                    "default_hint": definition.recovery_policy.default_hint,
+                    "max_auto_repairs": definition.recovery_policy.max_auto_repairs,
+                },
                 "timeout_s": definition.timeout_s,
             }
             for definition in self._defs.values()
@@ -160,7 +186,15 @@ class ToolRegistry:
             "name": definition.name,
             "description": definition.description,
             "parameters_schema": dict(definition.parameters_schema),
+            "output_schema": dict(definition.output_schema or {}),
             "permission": definition.permission,
+            "permission_policy": definition.permission_policy.to_payload(),
+            "recovery_policy": {
+                "retryable_codes": sorted(definition.recovery_policy.retryable_codes),
+                "suggested_action": definition.recovery_policy.suggested_action,
+                "default_hint": definition.recovery_policy.default_hint,
+                "max_auto_repairs": definition.recovery_policy.max_auto_repairs,
+            },
             "timeout_s": definition.timeout_s,
         }
 
@@ -398,9 +432,34 @@ def build_default_registry() -> ToolRegistry:
             permission="sandbox.read",
             timeout_s=20.0,
             handler=_read_handler,
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "summary": {"type": "string"},
+                    "read": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "total_lines": {"type": "integer"},
+                            "start_line": {"type": "integer"},
+                            "end_line": {"type": "integer"},
+                            "next_offset": {"type": ["integer", "null"]},
+                            "preview": {"type": "string"},
+                        },
+                    },
+                },
+            },
+            permission_policy=ToolPermissionPolicy(workspace="read"),
+            recovery_policy=ToolRecoveryPolicy(
+                retryable_codes=frozenset({"TIMEOUT"}),
+                suggested_action="read_next_page",
+                default_hint="请检查相对路径，或使用 next_offset 读取下一页。",
+            ),
             transport="native",
             display_name="读取文件",
             risk_level="read",
+            supports_streaming=True,
+            contextual=True,
         )
     )
     registry.register(
@@ -419,9 +478,32 @@ def build_default_registry() -> ToolRegistry:
             permission="sandbox.write",
             timeout_s=10.0,
             handler=_write_handler,
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "summary": {"type": "string"},
+                    "write": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "bytes_written": {"type": "integer"},
+                            "lines_written": {"type": "integer"},
+                            "preview": {"type": "string"},
+                        },
+                    },
+                },
+            },
+            permission_policy=ToolPermissionPolicy(workspace="write"),
+            recovery_policy=ToolRecoveryPolicy(
+                suggested_action="choose_new_path",
+                default_hint="文件不会被覆盖；请改用新路径，或先 read 后使用 edit。",
+                max_auto_repairs=0,
+            ),
             transport="native",
             display_name="写入文件",
             risk_level="modify",
+            supports_streaming=True,
+            contextual=True,
         )
     )
     registry.register(
@@ -447,9 +529,31 @@ def build_default_registry() -> ToolRegistry:
             permission="sandbox.write",
             timeout_s=10.0,
             handler=_edit_handler,
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "summary": {"type": "string"},
+                    "edit": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "replacements": {"type": "integer"},
+                            "old_length": {"type": "integer"},
+                            "new_length": {"type": "integer"},
+                        },
+                    },
+                },
+            },
+            permission_policy=ToolPermissionPolicy(workspace="write"),
+            recovery_policy=ToolRecoveryPolicy(
+                suggested_action="read_then_edit",
+                default_hint="请先 read 确认 old 与文件原文完全一致后再编辑。",
+                max_auto_repairs=1,
+            ),
             transport="native",
             display_name="编辑文件",
             risk_level="modify",
+            contextual=True,
         )
     )
     registry.register(
@@ -468,6 +572,16 @@ def build_default_registry() -> ToolRegistry:
             permission="web.search",
             timeout_s=20.0,
             handler=_web_search_handler,
+            output_schema={
+                "type": "object",
+                "properties": {"summary": {"type": "string"}, "search": {"type": "object"}},
+            },
+            permission_policy=ToolPermissionPolicy(network="public_only"),
+            recovery_policy=ToolRecoveryPolicy(
+                retryable_codes=frozenset({"TIMEOUT", "UPSTREAM"}),
+                suggested_action="retry_query",
+                default_hint="请稍后重试，或缩短并调整搜索关键词。",
+            ),
             transport="native",
             display_name="网页检索",
             risk_level="network",
@@ -489,9 +603,21 @@ def build_default_registry() -> ToolRegistry:
             permission="web.fetch",
             timeout_s=20.0,
             handler=_web_fetch_handler,
+            output_schema={
+                "type": "object",
+                "properties": {"summary": {"type": "string"}, "web": {"type": "object"}},
+            },
+            permission_policy=ToolPermissionPolicy(network="public_only"),
+            recovery_policy=ToolRecoveryPolicy(
+                retryable_codes=frozenset({"TIMEOUT", "UPSTREAM"}),
+                suggested_action="retry_public_url",
+                default_hint="请确认 URL 可公开访问；内网与回环地址不会重试。",
+            ),
             transport="native",
             display_name="网页抓取",
             risk_level="network",
+            supports_streaming=True,
+            contextual=True,
         )
     )
     registry.register(
@@ -509,9 +635,32 @@ def build_default_registry() -> ToolRegistry:
             permission="sandbox.bash",
             timeout_s=15.0,
             handler=_bash_handler,
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "summary": {"type": "string"},
+                    "bash": {
+                        "type": "object",
+                        "properties": {
+                            "exit_code": {"type": "integer"},
+                            "preview": {"type": "string"},
+                            "preview_truncated": {"type": "boolean"},
+                        },
+                    },
+                },
+            },
+            permission_policy=ToolPermissionPolicy(workspace="write"),
+            recovery_policy=ToolRecoveryPolicy(
+                retryable_codes=frozenset({"TIMEOUT"}),
+                suggested_action="reduce_command_scope",
+                default_hint="请缩小命令处理范围；沙箱或安全策略拒绝时不得绕过重试。",
+                max_auto_repairs=0,
+            ),
             transport="native",
             display_name="沙箱命令",
             risk_level="code",
+            supports_streaming=True,
+            contextual=True,
         )
     )
     registry.register(
@@ -547,6 +696,15 @@ def build_default_registry() -> ToolRegistry:
             permission="task.plan",
             timeout_s=2.0,
             handler=_task_handler,
+            output_schema={
+                "type": "object",
+                "properties": {"summary": {"type": "string"}, "task": {"type": "object"}},
+            },
+            permission_policy=ToolPermissionPolicy(),
+            recovery_policy=ToolRecoveryPolicy(
+                suggested_action="adjust_plan",
+                default_hint="请补充目标或将步骤缩减为可执行的有限清单。",
+            ),
             transport="native",
             display_name="拆解任务",
             risk_level="read",
@@ -639,7 +797,11 @@ def build_default_registry() -> ToolRegistry:
     return registry
 
 
-def _read_handler(arguments: Mapping[str, object], sandbox_dir: str | None = None) -> object:
+def _read_handler(
+    arguments: Mapping[str, object],
+    sandbox_dir: str | None = None,
+    context: object | None = None,
+) -> object:
     """read 工具 handler：受控目录内读取相对路径（防目录穿越）。
 
     ``sandbox_dir`` 由平台经 dispatch 注入，**禁止模型传参**（M5-D7 红线）；
@@ -652,21 +814,34 @@ def _read_handler(arguments: Mapping[str, object], sandbox_dir: str | None = Non
         sandbox_dir or "",
         offset=resolve_read_offset(arguments),
         limit=arguments.get("limit"),
+        on_output=getattr(context, "report_output", None),
     )
 
 
-def _write_handler(arguments: Mapping[str, object], sandbox_dir: str | None = None) -> object:
+def _write_handler(
+    arguments: Mapping[str, object],
+    sandbox_dir: str | None = None,
+    context: object | None = None,
+) -> object:
     """write 工具 handler：受控目录内写入相对路径（防目录穿越）。"""
     from .dispatch import write_file_safe
 
-    return write_file_safe(
+    result = write_file_safe(
         str(arguments.get("path", "")),
         str(arguments.get("content", "")),
         sandbox_dir or "",
     )
+    reporter = getattr(context, "report_output", None)
+    if callable(reporter) and result.preview:
+        reporter("document", result.preview, 1)
+    return result
 
 
-def _edit_handler(arguments: Mapping[str, object], sandbox_dir: str | None = None) -> object:
+def _edit_handler(
+    arguments: Mapping[str, object],
+    sandbox_dir: str | None = None,
+    _context: object | None = None,
+) -> object:
     """edit 工具 handler：受控目录内原子替换（防目录穿越）。"""
     from .dispatch import edit_file_safe
 
@@ -678,7 +853,11 @@ def _edit_handler(arguments: Mapping[str, object], sandbox_dir: str | None = Non
     )
 
 
-def _web_search_handler(arguments: Mapping[str, object], _sandbox_dir: str | None = None) -> object:
+def _web_search_handler(
+    arguments: Mapping[str, object],
+    _sandbox_dir: str | None = None,
+    _context: object | None = None,
+) -> object:
     """web_search 原生 handler：服务端 Firecrawl REST 适配器。"""
     from .dispatch import web_search
 
@@ -689,7 +868,11 @@ def _web_search_handler(arguments: Mapping[str, object], _sandbox_dir: str | Non
     )
 
 
-def _web_fetch_handler(arguments: Mapping[str, object], _sandbox_dir: str | None = None) -> object:
+def _web_fetch_handler(
+    arguments: Mapping[str, object],
+    _sandbox_dir: str | None = None,
+    _context: object | None = None,
+) -> object:
     """web_fetch 原生 handler：带 SSRF 防护的服务端抓取器。"""
     from .dispatch import web_fetch
 
@@ -700,14 +883,22 @@ def _web_fetch_handler(arguments: Mapping[str, object], _sandbox_dir: str | None
     )
 
 
-def _task_handler(arguments: Mapping[str, object], _sandbox_dir: str | None = None) -> object:
+def _task_handler(
+    arguments: Mapping[str, object],
+    _sandbox_dir: str | None = None,
+    _context: object | None = None,
+) -> object:
     """task 原生 handler：仅生成本回合任务清单，不触发平台长任务副作用。"""
     from .dispatch import build_task_plan
 
     return build_task_plan(arguments)
 
 
-def _bash_handler(arguments: Mapping[str, object], sandbox_dir: str | None = None) -> str:
+def _bash_handler(
+    arguments: Mapping[str, object],
+    sandbox_dir: str | None = None,
+    context: object | None = None,
+) -> object:
     """bash 工具 handler：bwrap 沙箱内执行（阶段 3 开放通用 bash）。
 
     资源限制读 Settings（内存/进程数/CPU），``sandbox_dir`` 由平台注入，
@@ -715,7 +906,7 @@ def _bash_handler(arguments: Mapping[str, object], sandbox_dir: str | None = Non
     （VALIDATION），禁止降级为裸 subprocess。
     """
     from app.config import settings
-    from app.harness.execution.dispatch import run_bash
+    from app.harness.execution.dispatch import BashResult, run_bash
     from app.harness.execution.sandbox import SandboxLimits
 
     if settings.sandbox_engine != "bwrap":
@@ -725,12 +916,14 @@ def _bash_handler(arguments: Mapping[str, object], sandbox_dir: str | None = Non
         nproc=settings.sandbox_nproc,
         cpu_s=settings.sandbox_cpu_s,
     )
-    return run_bash(
+    output = run_bash(
         str(arguments.get("command", "")),
         sandbox_dir=sandbox_dir or "",
         timeout_s=15.0,
         limits=limits,
+        on_output=getattr(context, "report_output", None),
     )
+    return BashResult(output)
 
 
 def _task_create_handler(
