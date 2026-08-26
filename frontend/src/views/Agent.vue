@@ -4513,6 +4513,18 @@ onBeforeUnmount(() => {
   color: var(--accent-warning);
 }
 
+.session-meta-right .nav-dot {
+  position: static;
+  margin: 0;
+  display: inline-block;
+  flex: 0 0 7px;
+  width: 7px;
+  height: 7px;
+  min-width: 7px;
+  min-height: 7px;
+  border-radius: 50%;
+}
+
 /* 移动端：顶栏 58px 且无外边距，对话区高度改用 dvh；头部操作收紧与安全区适配 */
 @media (max-width: 768px) {
   .agent-layout {
