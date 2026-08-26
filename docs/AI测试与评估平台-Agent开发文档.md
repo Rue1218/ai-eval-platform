@@ -1,10 +1,10 @@
 # AI 测试与评估平台 Agent 开发文档
 
-> 版本：V1.5.5
-> 状态：LangGraph Harness 已启用混合范式 P0–P2：Plan-and-Solve → ReAct → reflect；native 中间叙述；clarify interrupt 与有界重规划；检查点默认 memory；reflect 产出确认卡；ContextMeter 服务端计算；assemble 接线 CX-4/CX-5；read 防重复与行级 ToolCard；Direct `/help` 发 `response.completed`
+> 版本：V1.5.6
+> 状态：LangGraph Harness 已启用混合范式 P0–P2：Plan-and-Solve → ReAct → reflect；native 中间叙述；clarify interrupt 与有界重规划；检查点默认 memory；reflect 产出确认卡；ContextMeter 服务端计算；assemble 接线 CX-4/CX-5；read 防重复与行级 ToolCard；Direct `/help` 发 `response.completed`；思考增量合并
 > 审查日期：2026-08-26
 > 对应需求：`AI测试与评估平台-PRD.md` V1.12
-> 对应接口：`AI测试与评估平台-API.md` V1.42
+> 对应接口：`AI测试与评估平台-API.md` V1.43
 
 ## 1. 当前唯一运行链路
 
@@ -31,7 +31,7 @@
 - 校验会话可见性，支持首次连接创建私有会话；
 - 保存 `messages` 与 `ws_events`，按 `last_event_id` 补发历史事件；
 - 在后台 Task 中启动单轮 Agent，不阻塞 WebSocket `receive` 循环；
-- 将 LangGraph 流事件投影为 `user_message`、`thought`、`assistant_delta`、`assistant_message`、`confirm`、`response.completed`、`error`、`pong`。
+- 将 LangGraph 流事件投影为 `user_message`、`thought`、`assistant_delta`、`assistant_message`、`confirm`、`response.completed`、`error`、`pong`。思考增量 `thought.stream=think` 按间隔合并；有思考链时 `think_final` 在 `response.completed` 之前。
 - `confirm_ack` / `cancel_task` 由收包循环直连，不在 api 进程执行评测或压测。
 
 路由不得直接调用 `app.adapters`，不得执行 Benchmark、RAG、用例生成或压测。
@@ -307,3 +307,10 @@ Agent 思考配置从 `Setting(key="agent_reasoning")` 读取，结构为
 - `backend/api/tests/test_agent_routing.py`：`/help` / 未知斜杠 / 图内防御断言末帧 completed。
 - `docs/AI测试与评估平台-API.md`：V1.42。
 - `docs/AI测试与评估平台-Harness-编排层.md`：V0.4.6。
+
+### V1.5.6（2026-08-26）修改代码文件与作用清单
+
+- `backend/api/app/agent/think_stream.py`：思考增量合并器，首帧立即下发，后续按间隔与字数节流。
+- `backend/api/app/routers/ws.py`：合并 `thought.stream=think`；`think_final` 插入 `response.completed` 之前。
+- `backend/api/tests/test_think_stream.py`：覆盖首帧与合并。
+- `docs/AI测试与评估平台-API.md`：V1.43。

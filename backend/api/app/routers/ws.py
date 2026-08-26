@@ -22,6 +22,7 @@ from ..adapters import StreamAborted
 from ..agent import LangGraphAgent
 from ..agent.attachments import model_content_for_message, normalize_attachment_refs
 from ..agent.graph import iter_pending_events
+from ..agent.think_stream import ThinkStreamCoalescer
 from ..config import settings
 from ..db import SessionLocal
 from ..errors import AppError, ErrorCode
@@ -740,6 +741,27 @@ async def _run_turn(
             }
         }
         thinking: list[str] = []
+        coalescer = ThinkStreamCoalescer()
+        deferred_completed: list[dict] = []
+
+        async def _emit_think_delta(text: str) -> None:
+            """下发合并后的 thought.stream=think 瞬态帧。"""
+            await _send(
+                websocket,
+                state,
+                _frame(
+                    session_id,
+                    "thought",
+                    state.cursor,
+                    {"text": text, "stream": "think"},
+                ),
+            )
+
+        async def _flush_think() -> None:
+            chunk = coalescer.flush()
+            if chunk:
+                await _emit_think_delta(chunk)
+
         async for mode, chunk in _AGENT.astream(
             serializable, config=graph_config, resume=resume_answer
         ):
@@ -747,6 +769,7 @@ async def _run_turn(
                 kind = chunk["kind"]
                 text = chunk["text"]
                 if kind == "content" and text:
+                    await _flush_think()
                     await SESSION_CONNECTION_HUB.broadcast_chunk(
                         session_id,
                         lambda cursor, text=text: _frame(
@@ -758,16 +781,9 @@ async def _run_turn(
                     )
                 elif kind == "reasoning" and text:
                     thinking.append(text)
-                    await _send(
-                        websocket,
-                        state,
-                        _frame(
-                            session_id,
-                            "thought",
-                            state.cursor,
-                            {"text": text, "stream": "think"},
-                        ),
-                    )
+                    merged = coalescer.push(text)
+                    if merged:
+                        await _emit_think_delta(merged)
                 continue
             # 澄清卡 interrupt() 中断帧：翻译为 clarify 事件并保存待恢复状态
             if isinstance(chunk, dict) and "__interrupt__" in chunk:
@@ -779,6 +795,11 @@ async def _run_turn(
                 continue
             # updates 模式：按节点边界消费 pending_events，统一 emit
             for event in iter_pending_events(chunk):
+                if event.get("kind") == "response.completed":
+                    # completed 必须是本轮最后一条持久事件；think_final 要插在它前面。
+                    deferred_completed.append(event)
+                    continue
+                await _flush_think()
                 await _translate_event(
                     db,
                     websocket,
@@ -789,6 +810,7 @@ async def _run_turn(
                     user=turn_user,
                 )
 
+        await _flush_think()
         if thinking:
             await _emit_persistent(
                 db,
@@ -797,6 +819,16 @@ async def _run_turn(
                 session_id,
                 "thought",
                 {"text": "".join(thinking), "stream": "think_final"},
+            )
+        for event in deferred_completed:
+            await _translate_event(
+                db,
+                websocket,
+                state,
+                session_id,
+                profile,
+                event,
+                user=turn_user,
             )
     except StreamAborted:
         db.rollback()
