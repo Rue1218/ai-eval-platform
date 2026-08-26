@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from app.harness.contracts import Observation, PlanArtifact, from_dict, make_event
+from app.harness.contracts import Observation, PlanArtifact, TaskSessionState, from_dict, make_event
 from app.harness.feedback.review import review
 from app.harness.memory import GraphState
 from app.harness.orchestration.confirm_spec import build_confirm_payload
@@ -95,6 +95,47 @@ def reflect_node(state: GraphState) -> dict:
         verdict = "pass"
     if verdict == "pass":
         verdict = review(plan, observation, model_call=None)
+
+    task_state_data = state.get("task_state")
+    if verdict == "pass" and isinstance(task_state_data, dict):
+        try:
+            task_state = TaskSessionState.from_dict(task_state_data)
+            has_tool_obs = any(
+                str(getattr(obs, "tool", "") or "") not in ("", "__parse__", "__reflect__", "plan")
+                for obs in (state.get("observations") or [])
+            )
+            if (
+                plan.delivery == "chat"
+                and has_tool_obs
+                and not task_state.can_deliver
+                and task_state.missing_info
+                and fail_count < MAX_REPAIRS
+            ):
+                missing_preview = "、".join(task_state.missing_info[:3])
+                repair_text = (
+                    f"【任务状态门禁拦截】：任务关键信息尚未闭环（尚缺：{missing_preview}），"
+                    "当前禁止提前交付最终结论！请继续调用工具探查以补齐信息缺口。"
+                )
+                return {
+                    "verdict": "repair",
+                    "step_fail_count": fail_count + 1,
+                    "observations": [
+                        Observation(
+                            tool="__reflect__",
+                            text=repair_text,
+                            ok=False,
+                            redacted=True,
+                        )
+                    ],
+                    "pending_events": [
+                        make_event(
+                            "thought",
+                            {"stage": "reflect", "text": "任务信息缺口未闭环，驳回提前收尾"},
+                        )
+                    ],
+                }
+        except Exception:
+            pass
     tool_failed = (
         not observation.ok and observation.tool not in {"plan", "__parse__"}
     )

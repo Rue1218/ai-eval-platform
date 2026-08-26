@@ -26,6 +26,7 @@ from app.harness.orchestration import (
     build_plan,
     consume_model_call,
     is_budget_exhausted,
+    task_state_from_plan,
 )
 from app.harness.orchestration import from_dict as budget_from_dict
 from app.llm import ModelRequest
@@ -167,9 +168,14 @@ def build_plan_solve_subgraph(gateway: object | None = None) -> dict:
         if used_llm:
             # 规划模型调用已消费一次：派生预算同步扣减，保持计数口径一致
             budget = Budget(max(0, budget.model_calls - 1), budget.tool_turns)
+        task_state = task_state_from_plan(plan)
         payload = to_dict(plan)
+        slots_dict = dict(payload.get("slots") or {})
+        slots_dict["task_state"] = task_state.to_dict()
+        payload["slots"] = slots_dict
         return {
             "plan": payload,
+            "task_state": task_state.to_dict(),
             "budget": budget.to_dict(),
             "force_replan": False,
             "replan_reason": None,
