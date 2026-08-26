@@ -113,9 +113,10 @@
         </div>
       </div>
 
-      <!-- 2. 我的命令（团队自定义命令） -->
-      <div v-if="customCommands.length > 0" class="slash-group custom-group">
+      <!-- 2. 我的命令：只打 /api/slash-commands；VALIDATION 展示后端文案，禁止空列表冒充已启用 -->
+      <div v-if="customCommands.length > 0 || customDisabledHint" class="slash-group custom-group">
         <div class="slash-group-label">我的命令</div>
+        <div v-if="customDisabledHint" class="slash-disabled-hint">{{ customDisabledHint }}</div>
         <div
           v-for="cmd in customCommands"
           :key="cmd.id"
@@ -148,6 +149,8 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import { SYSTEM_SLASH_COMMANDS, type SlashCommandDef } from '../../agent/slashRegistry'
+import { api, ApiError } from '../../api/http'
+import { ErrorCode, type SlashCommandItem } from '../../api/types'
 
 const props = withDefaults(
   defineProps<{
@@ -167,7 +170,8 @@ const emit = defineEmits<{
 
 const bodyRef = ref<HTMLDivElement | null>(null)
 const activeName = ref<string>('benchmark')
-const customCommands = ref<any[]>([])
+const customCommands = ref<SlashCommandItem[]>([])
+const customDisabledHint = ref('')
 
 const GROUP_LABELS: Record<string, string> = {
   order: '评测与执行',
@@ -257,9 +261,18 @@ watch(
   },
 )
 
-onMounted(() => {
-  // M1 阶段使用内置 15 条命令，自定义命令在 M2 开放
+onMounted(async () => {
   customCommands.value = []
+  customDisabledHint.value = ''
+  try {
+    const data = await api.slashCommands.list()
+    customCommands.value = data.items || []
+  } catch (err) {
+    customCommands.value = []
+    if (err instanceof ApiError && err.code === ErrorCode.VALIDATION) {
+      customDisabledHint.value = err.message || '自定义命令未启用'
+    }
+  }
 })
 
 /**
@@ -426,6 +439,11 @@ defineExpose({
   color: var(--text-tertiary, #9ca3af);
   padding: 6px 10px 3px;
   letter-spacing: 0.3px;
+}
+.slash-disabled-hint {
+  font-size: 12px;
+  color: var(--text-tertiary, #9ca3af);
+  padding: 4px 10px 8px;
 }
 
 .slash-item {

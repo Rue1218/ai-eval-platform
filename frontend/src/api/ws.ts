@@ -41,7 +41,7 @@ export class AgentWebSocket {
     return () => this.statusHandlers.delete(handler)
   }
 
-  /** 透出服务端关闭码，调用方可在 4404 时移除已不可访问的会话。 */
+  /** 透出服务端关闭码：4401 重新领票，4404 清理不可访问会话。 */
   public onClosed(handler: WsCloseHandler) {
     this.closeHandlers.add(handler)
     return () => this.closeHandlers.delete(handler)
@@ -108,7 +108,8 @@ export class AgentWebSocket {
         console.log('%c[Agent WS] 🔴 WebSocket 智能体长连接已断开', 'color: #f59e0b; font-weight: bold;')
         this.notifyStatus(false)
         this.notifyClosed(event.code)
-        // 4404 表示会话已删除或权限被收回；继续重连只会形成无效循环。
+        // 4401 短票过期：重新领票并重连（connect() 每次都会 POST /api/auth/ws-ticket）。
+        // 4404 会话已删除或权限被收回：继续重连只会形成无效循环。
         if (event.code === 4404) {
           this.isExplicitlyClosed = true
           this.stopSilenceWatch()
