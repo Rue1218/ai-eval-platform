@@ -781,11 +781,16 @@ def test_stream_aborts_before_connect(monkeypatch):
     assert called["n"] == 0
 
 
-def test_stream_aborts_during_read_timeout_slice(monkeypatch):
-    """读体切片超时后检查 should_abort，不必等到整体 timeout_s。"""
-    reads = {"n": 0}
+def test_stream_read_silence_times_out_without_retry(monkeypatch):
+    """读体静默触发读超时:按 TIMEOUT 归一,不再依赖「超时后重试同一 socket」。
 
-    class _TimeoutThenBlock:
+    CPython socket 一次读超时后即进入 timed-out 状态（后续 read 抛
+    OSError("cannot read from timed out object")），旧实现「2 秒切片超时 →
+    continue 重试」在真实 socket 上必挂；新契约把读超时对齐总 deadline，
+    静默即超时。取消检查保留在行粒度。
+    """
+
+    class _SilentResponse:
         def __enter__(self):
             return self
 
@@ -796,16 +801,31 @@ def test_stream_aborts_during_read_timeout_slice(monkeypatch):
             return self
 
         def __next__(self):
-            reads["n"] += 1
             raise TimeoutError()
 
-    monkeypatch.setattr(adapters, "urlopen", lambda request, timeout: _TimeoutThenBlock())
-    with pytest.raises(adapters.StreamAborted):
-        list(
-            stream_protocol(
-                **_kwargs("openai_chat"),
-                should_abort=lambda: reads["n"] >= 1,
-            )
-        )
+    monkeypatch.setattr(adapters, "urlopen", lambda request, timeout: _SilentResponse())
+    with pytest.raises(AppError) as exc_info:
+        list(stream_protocol(**_kwargs("openai_chat"), should_abort=lambda: False))
+    assert exc_info.value.code == ErrorCode.TIMEOUT
 
-    assert reads["n"] >= 1
+
+def test_stream_poisoned_socket_times_out(monkeypatch):
+    """socket timed-out 状态的 OSError 同样按 TIMEOUT 归一,不再误报连接中断。"""
+
+    class _PoisonedResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            raise OSError("cannot read from timed out object")
+
+    monkeypatch.setattr(adapters, "urlopen", lambda request, timeout: _PoisonedResponse())
+    with pytest.raises(AppError) as exc_info:
+        list(stream_protocol(**_kwargs("openai_chat"), should_abort=lambda: False))
+    assert exc_info.value.code == ErrorCode.TIMEOUT

@@ -442,6 +442,11 @@ def _is_wait_timeout(exc: BaseException) -> bool:
     return type(exc).__name__ in {"timeout", "TimeoutError"}
 
 
+def _is_poisoned_socket(exc: BaseException) -> bool:
+    """socket 在一次读超时后进入 timed-out 状态，后续 read 立即抛此错。"""
+    return isinstance(exc, OSError) and "timed out object" in str(exc)
+
+
 def _iter_stream_lines(
     response: object,
     *,
@@ -449,8 +454,15 @@ def _iter_stream_lines(
     should_abort: Callable[[], bool] | None,
     slice_s: float = STREAM_READ_SLICE_S,
 ) -> Iterator[bytes]:
-    """按切片读取 SSE 行：总时限内可中断，取消后立即停读。"""
-    _arm_read_timeout(response, slice_s)
+    """逐行读取 SSE 流：读超时对齐总 deadline，取消检查在行粒度进行。
+
+    CPython socket 一旦发生一次读超时即进入 timed-out 状态，之后任何 read
+    都抛 ``OSError("cannot read from timed out object")``，同一 socket 无法
+    「短切片超时后 continue 重试」。因此读超时直接按总时限到点处理；取消
+    （should_abort）退化为行间检查——流式响应的行通常很密集，仅上游长时间
+    静默（如大上下文 prefill）时停止响应会延迟到首字节。
+    """
+    _arm_read_timeout(response, max(0.5, deadline - time.monotonic()))
     iterator = iter(response)  # type: ignore[arg-type]
     while True:
         if should_abort is not None and should_abort():
@@ -464,8 +476,9 @@ def _iter_stream_lines(
         except StopIteration:
             break
         except Exception as exc:
-            if _is_wait_timeout(exc):
-                continue
+            if _is_wait_timeout(exc) or _is_poisoned_socket(exc):
+                _close_quietly(response)
+                raise TimeoutError("stream read timed out") from exc
             raise
         yield raw_line
 
