@@ -207,7 +207,9 @@
                   compact
                 />
               </div>
-              <div v-if="item.text" class="bubble-user">{{ item.text }}</div>
+              <div v-if="item.text" class="bubble-user">
+                <MarkdownView :content="item.text" custom-class="bubble-user-markdown" />
+              </div>
             </div>
 
             <!-- 2.1.1 打字占位气泡：LLM 意图识别期间的即时反馈（收到事件后由 dismissTyping 移除） -->
@@ -4094,6 +4096,109 @@ onBeforeUnmount(() => {
   border-bottom-left-radius: 6px;
   border-bottom-right-radius: 20px;
   color: var(--text-primary);
+}
+
+.bubble-user-markdown {
+  color: #ffffff;
+  word-break: break-word;
+}
+
+.bubble-user-markdown :deep(.markdown-content) {
+  font-size: 15px;
+  line-height: 1.65;
+  color: #ffffff;
+  tab-size: 4;
+  -moz-tab-size: 4;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.bubble-user-markdown :deep(.md-p) {
+  margin: 0;
+  line-height: 1.65;
+  color: inherit;
+  font-size: 15px;
+  white-space: pre-wrap;
+}
+
+.bubble-user-markdown :deep(.md-p + .md-p) {
+  margin-top: 10px;
+}
+
+.bubble-user-markdown :deep(strong) {
+  color: #ffffff;
+  font-weight: 700;
+}
+
+.bubble-user-markdown :deep(em) {
+  color: #ffffff;
+  font-style: italic;
+}
+
+.bubble-user-markdown :deep(.md-inline-code) {
+  background: rgba(255, 255, 255, 0.22);
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 4px;
+  padding: 1.5px 6px;
+  font-family: var(--font-mono);
+  font-size: 13.5px;
+  white-space: pre-wrap;
+}
+
+.bubble-user-markdown :deep(.md-code-card) {
+  margin: 8px 0;
+  background: rgba(15, 23, 42, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  text-align: left;
+}
+
+.bubble-user-markdown :deep(.md-code-body) {
+  color: #f1f5f9;
+  font-size: 13.5px;
+}
+
+.bubble-user-markdown :deep(.md-ul) {
+  padding-left: 20px;
+  margin: 6px 0;
+}
+
+.bubble-user-markdown :deep(.md-li-bullet),
+.bubble-user-markdown :deep(.md-li-num) {
+  color: #ffffff;
+  margin-bottom: 4px;
+  line-height: 1.6;
+  font-size: 15px;
+}
+
+.bubble-user-markdown :deep(.md-li-bullet::marker),
+.bubble-user-markdown :deep(.md-li-num::marker) {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.bubble-user-markdown :deep(.md-quote) {
+  border-left-color: rgba(255, 255, 255, 0.6);
+  background: rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.95);
+  margin: 8px 0;
+  padding: 6px 12px;
+}
+
+/* 远端协作者用户气泡颜色自适应 */
+.msg-user.remote .bubble-user-markdown,
+.msg-user.remote .bubble-user-markdown :deep(.markdown-content),
+.msg-user.remote .bubble-user-markdown :deep(.md-p),
+.msg-user.remote .bubble-user-markdown :deep(strong),
+.msg-user.remote .bubble-user-markdown :deep(.md-li-bullet),
+.msg-user.remote .bubble-user-markdown :deep(.md-li-num) {
+  color: var(--text-primary);
+}
+
+.msg-user.remote .bubble-user-markdown :deep(.md-inline-code) {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--accent-ai);
+  border-color: var(--border-subtle);
 }
 
 .user-author {
