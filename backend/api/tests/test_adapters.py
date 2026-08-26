@@ -522,6 +522,53 @@ def test_stream_native_tool_calls_accumulate_until_complete(
     assert chunks[0].tool_call.arguments == {"path": "a.txt"}
 
 
+@pytest.mark.parametrize(
+    "protocol,lines",
+    [
+        (
+            "openai_chat",
+            [
+                'data: {"choices":[{"delta":{"content":"我先读配置"}}]}',
+                'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"chat_read_1","function":{"name":"read","arguments":"{\\"path\\":\\"a.txt\\"}"}}]}}]}',
+                'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}',
+                "data: [DONE]",
+            ],
+        ),
+        (
+            "openai_responses",
+            [
+                'data: {"type":"response.output_text.delta","delta":"我先读配置"}',
+                'data: {"type":"response.output_item.added","item":{"id":"fc_1","type":"function_call","call_id":"responses_read_1","name":"read"}}',
+                'data: {"type":"response.function_call_arguments.done","item_id":"fc_1","call_id":"responses_read_1","name":"read","arguments":"{\\"path\\":\\"a.txt\\"}"}',
+            ],
+        ),
+        (
+            "anthropic_messages",
+            [
+                'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+                'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"我先读配置"}}',
+                'data: {"type":"content_block_stop","index":0}',
+                'data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"anthropic_read_1","name":"read","input":{}}}',
+                'data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\\"path\\":\\"a.txt\\"}"}}',
+                'data: {"type":"content_block_stop","index":1}',
+            ],
+        ),
+    ],
+)
+def test_stream_text_then_complete_tool_call(monkeypatch, protocol, lines):
+    """P1：三协议交错块必须先交出正文增量，参数完整后才产生 ToolCall。"""
+    _capture_stream(monkeypatch, lines)
+    chunks = list(stream_protocol(**_kwargs(protocol)))
+
+    assert chunks[0] == ("content", "我先读配置")
+    assert isinstance(chunks[1], AdapterStreamEvent)
+    assert chunks[1].kind == "tool_call"
+    assert chunks[1].tool_call is not None
+    assert chunks[1].tool_call.name == "read"
+    assert chunks[1].tool_call.arguments == {"path": "a.txt"}
+    assert len(chunks) == 2
+
+
 def test_stream_rejects_incomplete_tool_arguments(monkeypatch):
     """P2-B：完成帧上的不完整工具 JSON 必须失败，绝不能猜测执行参数。"""
     _capture_stream(

@@ -69,6 +69,35 @@ def test_stream_projects_content_reasoning_and_completion() -> None:
     assert events[-1].response.text == "最终答案"
 
 
+def test_stream_keeps_text_before_complete_native_tool_call() -> None:
+    """P1：同一响应内先投影正文增量，完整 ToolCall 后出现且收尾响应保序。"""
+    gateway = ModelGateway(
+        stream_transport=lambda _request, _abort=None: iter(
+            [
+                ("content", "我先读取配置"),
+                AdapterStreamEvent(
+                    kind="tool_call",
+                    tool_call=AdapterToolCall(
+                        call_id="call_read_1",
+                        name="read",
+                        arguments={"path": "a.txt"},
+                    ),
+                ),
+            ]
+        )
+    )
+
+    events = list(gateway.stream(_request()))
+
+    assert [event.kind for event in events] == ["content", "tool_call", "completed"]
+    assert events[0].text == "我先读取配置"
+    assert events[1].tool_call is not None
+    assert events[1].tool_call.arguments == {"path": "a.txt"}
+    assert events[-1].response is not None
+    assert events[-1].response.text == "我先读取配置"
+    assert events[-1].response.tool_calls == (events[1].tool_call,)
+
+
 def test_stream_projects_complete_native_tool_call() -> None:
     """P2-B：适配器完成工具参数后，网关先投影调用再在收尾响应保留它。"""
     gateway = ModelGateway(

@@ -1,10 +1,10 @@
 # AI 测试与评估平台 Agent 开发文档
 
-> 版本：V1.5.9
-> 状态：LangGraph Harness 已启用混合范式 P0–P2：Plan-and-Solve → ReAct → reflect；native 中间叙述；clarify interrupt 与有界重规划；检查点默认 memory；reflect 产出确认卡；ContextMeter 服务端计算；assemble 接线 CX-4/CX-5；read 防重复与行级 ToolCard；ToolCall 进度/安全输出流；Direct `/help` 发 `response.completed`；思考增量合并与隐藏 CoT 摘要；技能工作流 Progressive Disclosure
+> 版本：V1.5.15
+> 状态：LangGraph Harness 已启用混合范式 P0–P2：Plan-and-Solve → ReAct → reflect；native 首轮流式可按协议档回滚；同轮 ToolBatch 保序回填；受控只读并行需总开关+白名单；关联错乱每回合只记一笔终态；P3 集成测试覆盖 bwrap 屏障 / WS 重连 / team 瞬态广播 / ToolCard 乱序；中间叙述；clarify interrupt 与有界重规划；检查点默认 memory；reflect 产出确认卡；ContextMeter 服务端计算；assemble 接线 CX-4/CX-5；read 防重复与行级 ToolCard；ToolCall 进度/安全输出流；Direct `/help` 发 `response.completed`；思考增量合并与隐藏 CoT 摘要；技能工作流 Progressive Disclosure
 > 审查日期：2026-08-26
 > 对应需求：`AI测试与评估平台-PRD.md` V1.12
-> 对应接口：`AI测试与评估平台-API.md` V1.45
+> 对应接口：`AI测试与评估平台-API.md` V1.48
 
 ## 1. 当前唯一运行链路
 
@@ -51,7 +51,7 @@ clarify -> plan_solve
 
 `decide_mode` 为代码主导：斜杠 → Direct；附件 → ReAct；多技能、两个及以上不同短工具、确认卡或显式清单 → Plan-and-Solve（`build_plan`，失败 L0 降级并合并全部命中能力，步骤 3–7）；单工具关键词 → ReAct；否则 Chat。`plan_solve` 下发完整 `PlanArtifact`（`plan` 事件含 `slots`/`budget`/`notes`），不伪造未执行的 `tool_call`，也不在规划节点发 `response.completed`。有 `plan` 的回合由 ReAct 执行短工具后进入 `reflect`，由 reflect 发出本轮唯一 `response.completed`。Direct 不经 reflect，由 `direct_node` 在业务事件后发出本轮唯一 `response.completed`（`/help` 为 `stop`，校验/防御为 `error`）。用户消息不得接管 `<PLAN>`、ReAct 或 ToolCall 控制格式；这些协议仅由平台内部图生成。思考链只下发可展示摘要，英文隐藏 CoT 由服务端替换。
 
-图节点不持有数据库 Session、WebSocket 或任务队列。ToolNode 只消费可序列化 `pending_tool` / `pending_tools`、执行既有门禁与沙箱工具，并返回 Observation；同一模型响应的多个 ToolCall 在节点内串行消费，不绕过任一调用的门禁。`transport=native` 的 read/write/edit/bash/web_search/web_fetch/task 经 NativeToolExecutor 直连受控 handler；`transport=mcp` 的 `platform.tasks.task.create/status/cancel` 和后续评测/RAG 扩展经 MCPClientManager。路由层仍负责事件持久化与投影。
+图节点不持有数据库 Session、WebSocket 或任务队列。ToolNode 只消费可序列化 `pending_tool` / `pending_tools` / `pending_tool_batch`、执行既有门禁与沙箱工具，并返回 Observation；同一模型响应的多个 ToolCall 以 ToolBatch 保序。默认一次访问只执行一项。只读并行须同时满足：`AGENT_PARALLEL_TOOL_BATCH_ENABLED=true`、`AGENT_PARALLEL_TOOL_BATCH_PROFILE_IDS` 命中当前协议档（空名单不开，`*` 表示全部）、进程内脚踢线未触发。可并行工具仍仅 `read` / `web_search` / `web_fetch`。`write` / `edit` / `bash` / `task.create` / `task.cancel` 始终串行屏障；`task` / `task.status` 仍串行。灰度与度量见 `GET /api/agent/metrics`。并发类不投影给模型或浏览器。并行不得绕过 Schema、Gate、附件绑定、权限或 bwrap；每项自建/关闭 DB Session。一批全部终态后才按原始 `call_id` 顺序组装 `role=tool` 回填消息。`transport=native` 的 read/write/edit/bash/web_search/web_fetch/task 经 NativeToolExecutor 直连受控 handler；`transport=mcp` 的 `platform.tasks.task.create/status/cancel` 和后续评测/RAG 扩展经 MCPClientManager。路由层仍负责事件持久化与投影。
 
 ### 2.3 ModelGateway
 
@@ -67,6 +67,8 @@ clarify -> plan_solve
 三协议 HTTP 细节只允许存在于 `app/adapters.py`。API Key 不得出现在日志、事件、异常消息或模型层对象的默认 repr 中。
 
 流式工具参数只能在 `app/adapters.py` 的单次调用内累计：OpenAI Chat 按调用索引、OpenAI Responses 按输出项、Anthropic 按内容块累计，只有 JSON 对象完整后才产生 `ModelStreamEvent(kind="tool_call")`。该内部事件用于 Agent 控制流和最终 `ModelResponse.tool_calls`，浏览器不得接收或透传参数片段；工具执行期间仅允许 ToolNode 发出已脱敏、受限额的 `tool_progress`/`tool_output_delta`，最终状态仍以完整 `tool_result` 为准。
+
+`tool_call_mode=native` 时，首轮与工具结果回填后的模型回合默认走 `ModelGateway.stream()`：`text` 块立即投影为 `assistant_delta`，完整 ToolCall 只在该次上游响应结束后写入 `pending_tool_batch` 并落卡。可用 `AGENT_NATIVE_STREAM_ENABLED=false` 或协议档白名单立即回退 `invoke`，不改历史事件。一次上游响应在发出 ToolCall 后即结束；执行工具并回填 `tool_result` 后才会发起下一次模型请求。同轮多个调用由 ToolBatch 保序；并行另需总开关 + 协议档白名单。`legacy` 继续走严格 `react.v1` JSON-ReAct。
 
 Agent 思考配置从 `Setting(key="agent_reasoning")` 读取，结构为
 `{"enabled": true, "effort": "medium"}`。开启时，OpenAI Responses 使用
@@ -100,7 +102,7 @@ Agent 思考配置从 `Setting(key="agent_reasoning")` 读取，结构为
 
 以下内容仍不属于当前已实施范围，不得绕过契约提前加入：
 
-- 外部 MCP、浏览器直连 MCP、动态加载未知 MCP Server 与真正并行执行；
+- 外部 MCP、浏览器直连 MCP、动态加载未知 MCP Server；未命中白名单或未开 flag 时的工具并行；写/bash/任务类工具并行；
 - 外部通知渠道（企微/邮件/Webhook）与 Grafana 抓取编排；
 - PostgreSQL Checkpointer 多副本粘性路由（默认仍为 memory）；
 - 未经模型变更、Alembic 自动生成与审阅的新迁移。
@@ -341,3 +343,47 @@ Agent 思考配置从 `Setting(key="agent_reasoning")` 读取，结构为
 - `backend/api/app/routers/ws.py`：think / think_final 走 `sanitize_reasoning`。
 - `backend/api/tests/test_think_stream.py` / `test_harness_probe_l2.py`：替换与探针拒绝原文。
 - `docs/AI测试与评估平台-API.md`：V1.45。
+
+### V1.5.10（2026-08-26）修改代码文件与作用清单
+
+- `backend/api/app/agent/react.py`：native 首轮改走 `gateway.stream()`，工具前正文实时投影，完整 ToolCall 仍在响应结束后入队。
+- `backend/api/tests/test_agent_react.py` / `test_llm_graph.py` / `test_adapters.py`：覆盖首轮交错流、三协议 text→tool_call 夹具。
+- `docs/AI测试与评估平台-API.md`：V1.46，冻结「ToolCall 结束当前上游响应」。
+- `docs/AI测试与评估平台-Agent内容块交错流式调用规划.md`：V0.2，P1 落地对照。
+
+### V1.5.11（2026-08-26）修改代码文件与作用清单
+
+- `backend/api/app/harness/execution/batch.py`：可序列化 ToolBatch（batch_id / block_index / 终态）。
+- `backend/api/app/harness/execution/toolnode.py` / `memory/state.py` / `agent/react.py`：同轮调用入批次，全部终态后按原顺序一次性回填；执行仍串行。
+- `backend/api/tests/test_harness_execution.py` / `test_agent_react.py`：覆盖乱序标记保序、失败+成功同批、read+write 回填。
+- `docs/AI测试与评估平台-Agent内容块交错流式调用规划.md`：V0.3，P2 落地。
+
+### V1.5.12（2026-08-26）修改代码文件与作用清单
+
+- `backend/api/app/config.py` / `.env.example` / `docker-compose.yml`：`AGENT_PARALLEL_TOOL_BATCH_ENABLED` 默认 false，`MAX_PARALLEL_TOOL_CALLS` 默认 3。
+- `backend/api/app/harness/execution/registry.py`：`ToolDef.concurrency_class` / `requires_prior_result`；不投影到 `all_defs` / `to_descriptor`。
+- `backend/api/app/harness/execution/batch.py` / `toolnode.py`：规范化路径资源键、只读波次 `TaskGroup`、单项失败隔离；无批次时仍一次一项。
+- `backend/api/tests/test_harness_execution.py`：开关关闭串行、独立 read 重叠、失败不取消同组、bash/写/task.create 屏障。
+- `docs/AI测试与评估平台-Agent内容块交错流式调用规划.md`：V0.4，P3 落地、flag 默认关。
+
+### V1.5.13（2026-08-26）修改代码文件与作用清单
+
+- `backend/api/app/harness/execution/stream_policy.py` / `stream_metrics.py`：协议档白名单、脱敏指标、并行脚踢线（冷却恢复，不改历史事件）。
+- `backend/api/app/config.py` / `.env.example` / `docker-compose.yml`：`AGENT_NATIVE_STREAM_*` 与 `AGENT_PARALLEL_TOOL_BATCH_PROFILE_IDS`。
+- `backend/api/app/agent/react.py` / `harness/execution/toolnode.py` / `routers/ws.py`：按协议档决定流式/并行；`configurable.profile.id`。
+- `backend/api/app/routers/agent_prefs.py`：`GET /api/agent/metrics`。
+- `backend/api/tests/test_stream_rollout.py` / `test_agent_react.py` / `test_harness_execution.py`：灰度、脚踢、invoke 回退。
+- `docs/AI测试与评估平台-API.md`：V1.47；规划稿 V0.5。
+
+### V1.5.14（2026-08-26）修改代码文件与作用清单
+
+- `backend/api/app/agent/react.py`：流式成功不再提前 `record_stream`；call_id 校验后再记一笔终态，关联错乱可累计脚踢。
+- `backend/api/tests/test_stream_rollout.py` / `test_agent_react.py`：连续 associate_error 触发脚踢；流式空 call_id 两轮 `rounds==2`。
+- `docs/AI测试与评估平台-API.md`：V1.48，§4.3 默认串行、灰度只读并行。
+- `docs/AI测试与评估平台-Agent内容块交错流式调用规划.md`：V0.6。
+
+### V1.5.15（2026-08-26）修改代码文件与作用清单
+
+- `backend/api/tests/test_stream_p3_integration.py`：真实 bwrap bash 串行屏障、`last_event_id` 重连不补瞬态、team 会话瞬态广播范围、ToolCard call_id 乱序回填契约。
+- `frontend/src/utils/toolCard.ts` / `views/Agent.vue`：直播与历史回放共用 `findPendingToolItem`，禁止同名工具串卡。
+- `docs/AI测试与评估平台-Agent内容块交错流式调用规划.md`：V0.7。

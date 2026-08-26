@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from uuid import uuid4
 
 from langgraph.config import get_config, get_stream_writer
@@ -31,7 +32,10 @@ from app.harness.context import (
 from app.harness.context.observation import MODEL_TOOL_RESULT_MAX_CHARS, truncate_with_marker
 from app.harness.contracts import Observation, TaskSessionState, evolve_task_state, make_event
 from app.harness.execution import NativeToolResultStore, runtime_thread_id
+from app.harness.execution.batch import build_tool_batch
 from app.harness.execution.dispatch import resolve_read_offset
+from app.harness.execution.stream_metrics import get_default_stream_metrics
+from app.harness.execution.stream_policy import native_stream_allowed, profile_id_from_configurable
 from app.harness.memory import GraphState, rebuild_model_config
 from app.harness.orchestration import (
     consume_model_call,
@@ -107,6 +111,33 @@ FINAL_ANSWER_EMPTY_TEXT = "工具已执行，但未生成可展示的最终回�
 
 # P1 阶段叙述字数上限（API.md V1.33）；超出截断，禁止写入 Observation 原文。
 NARRATION_MAX_CHARS = 200
+
+
+@dataclass(frozen=True, slots=True)
+class _NativeRoundTrace:
+    """单次模型回合的脱敏计时；成功/失败只允许记一笔终态。"""
+
+    first_delta_ms: int | None = None
+    tool_call_parse_ms: int | None = None
+    invoke_fallback: bool = False
+
+
+def _record_native_round(
+    trace: _NativeRoundTrace,
+    *,
+    associate_error: bool = False,
+    upstream: bool = False,
+    incomplete: bool = False,
+) -> None:
+    """每个模型回合只记一笔，避免成功流把关联错乱的脚踢计数清零。"""
+    get_default_stream_metrics().record_stream(
+        first_delta_ms=trace.first_delta_ms,
+        tool_call_parse_ms=trace.tool_call_parse_ms,
+        invoke_fallback=trace.invoke_fallback,
+        associate_error=associate_error,
+        upstream=upstream,
+        incomplete=incomplete,
+    )
 
 
 def _stage_narration(text: str) -> str:
@@ -510,6 +541,8 @@ def _react_error_state(
     result: dict[str, object] = {
         "pending_events": events,
         "pending_tool": None,
+        "pending_tools": [],
+        "pending_tool_batch": None,
         "repeat_retry": False,
         "turn_failed": True,
     }
@@ -545,6 +578,7 @@ def _assistant_completion(
         "response": {"text": text, "usage": dict(usage or {}), "latency_ms": latency_ms},
         "pending_tool": None,
         "pending_tools": [],
+        "pending_tool_batch": None,
         "repeat_retry": False,
     }
 
@@ -635,56 +669,106 @@ def _stream_native_tool_round(
     gateway: object,
     request: ModelRequest,
     run_config: dict,
-) -> ModelResponse | None:
-    """流式执行原生工具回合，并把最终自然语言增量投影到外层 Agent。"""
+) -> tuple[ModelResponse, _NativeRoundTrace] | None:
+    """流式执行原生工具回合（含首轮），投影正文增量，响应结束后才交出 ToolCall。
+
+    工具参数碎片不投影到外层；完整 ``tool_call`` 事件只用于拼回收尾响应，
+    由调用方在上游响应结束后再写入 ``pending_tool(s)`` 并落卡。
+    成功路径不记账，由调用方在 call_id 校验后再记终态。
+    """
     stream = getattr(gateway, "stream", None)
     if not callable(stream):
         return None
 
     writer = get_stream_writer()
     content: list[str] = []
+    collected_calls: list[NativeToolCall] = []
     final_response: ModelResponse | None = None
     started = time.perf_counter()
+    first_delta_ms: int | None = None
+    tool_call_parse_ms: int | None = None
+    metrics = get_default_stream_metrics()
     try:
         for event in stream(request, config=run_config):
             if event.kind == "completed":
                 final_response = event.response
                 continue
             if event.kind == "tool_call":
-                # 上游工具参数只在网关确认完整后返回；实际 ToolCard 仍由 ToolNode
-                # 的既有事件投影，避免新增 WebSocket 事件契约。
+                # 上游工具参数只在网关确认完整后返回；实际 ToolCard 仍由
+                # 响应结束后的 pending_events 投影，避免半截参数出站。
+                if event.tool_call is not None:
+                    if tool_call_parse_ms is None:
+                        tool_call_parse_ms = round((time.perf_counter() - started) * 1000)
+                    collected_calls.append(event.tool_call)
                 continue
             if not event.text:
                 continue
             if event.kind == "reasoning":
                 writer({"kind": "reasoning", "text": event.text})
             elif event.kind == "content":
+                if first_delta_ms is None:
+                    first_delta_ms = round((time.perf_counter() - started) * 1000)
                 content.append(event.text)
                 writer({"kind": "content", "text": event.text})
     except StreamAborted:
+        metrics.record_stream(
+            first_delta_ms=first_delta_ms,
+            tool_call_parse_ms=tool_call_parse_ms,
+            cancelled=True,
+        )
         raise
-    except AppError:
+    except AppError as exc:
+        metrics.record_stream(
+            first_delta_ms=first_delta_ms,
+            tool_call_parse_ms=tool_call_parse_ms,
+            incomplete=exc.code in {ErrorCode.UPSTREAM, ErrorCode.TIMEOUT},
+            upstream=exc.code == ErrorCode.UPSTREAM,
+        )
         raise
     except Exception as exc:
         logger.info("ReAct 原生工具回合流式调用异常 type=%s", type(exc).__name__)
+        metrics.record_stream(
+            first_delta_ms=first_delta_ms,
+            tool_call_parse_ms=tool_call_parse_ms,
+            incomplete=True,
+        )
         raise AppError(ErrorCode.INTERNAL, "原生工具回合生成失败") from exc
 
+    agent_trace(
+        f"native_stream first_delta_ms={first_delta_ms} "
+        f"tool_call_parse_ms={tool_call_parse_ms} tools={len(collected_calls)}"
+    )
+    trace = _NativeRoundTrace(
+        first_delta_ms=first_delta_ms,
+        tool_call_parse_ms=tool_call_parse_ms,
+    )
+
+    merged_text = "".join(content)
+    merged_calls = tuple(collected_calls)
     if final_response is None:
-        return ModelResponse(
-            text="".join(content),
-            usage={},
-            latency_ms=round((time.perf_counter() - started) * 1000),
+        return (
+            ModelResponse(
+                text=merged_text,
+                usage={},
+                latency_ms=round((time.perf_counter() - started) * 1000),
+                tool_calls=merged_calls,
+            ),
+            trace,
         )
-    if not final_response.text and content:
-        # 避免兼容网关遗漏收尾正文时覆盖已输出的增量，同时保留完整 ToolCall。
-        return ModelResponse(
-            text="".join(content),
+    text = final_response.text or merged_text
+    tool_calls = final_response.tool_calls or merged_calls
+    if text == final_response.text and tool_calls == final_response.tool_calls:
+        return final_response, trace
+    return (
+        ModelResponse(
+            text=text,
             usage=final_response.usage,
             raw=final_response.raw,
             latency_ms=final_response.latency_ms,
-            tool_calls=final_response.tool_calls,
-        )
-    return final_response
+            tool_calls=tool_calls,
+        ),
+        trace,
+    )
 
 
 def _generate_final_answer(
@@ -764,6 +848,8 @@ def build_react_nodes(
             )
         ]
         native_tool_mode = model_config.tool_call_mode == "native"
+        profile_id = profile_id_from_configurable(configurable)
+        use_native_stream = native_stream_allowed(profile_id, model_config.tool_call_mode)
         if tool_defs and native_tool_mode:
             stage_input = NATIVE_TOOL_STAGE_INPUT
         elif tool_defs:
@@ -843,21 +929,32 @@ def build_react_nodes(
         )
         agent_trace(
             f"model native_round tool_payload_chars={tool_payload_chars} "
-            f"native_msgs={len(native_messages)} tools={len(tool_defs)}"
+            f"native_msgs={len(native_messages)} tools={len(tool_defs)} "
+            f"stream={int(use_native_stream)}"
         )
         budget = from_dict(state.get("budget") or {})
         started = time.perf_counter()
+        stream_attempted = False
+        round_trace = _NativeRoundTrace()
         try:
-            # 工具结果后的原生回合直接走流式网关：若模型收敛为自然语言，正文立即
-            # 投影；若继续请求工具，完整 ToolCall 会在收尾响应中回到下方 ToolNode。
-            response = (
-                _stream_native_tool_round(gateway, request, model_run_config)
-                if native_tool_mode and state_native_messages
-                else None
-            )
+            # native 每一轮（含首轮）优先走流式网关：工具前正文立即投影；完整
+            # ToolCall 只在响应结束后进入下方 ToolNode。无 stream 的测试桩、
+            # 灰度未覆盖的协议档回退 invoke。
+            response = None
+            if use_native_stream:
+                stream_attempted = True
+                streamed = _stream_native_tool_round(gateway, request, model_run_config)
+                if streamed is not None:
+                    response, round_trace = streamed
             if response is None:
+                stream_attempted = False
+                round_trace = _NativeRoundTrace(invoke_fallback=native_tool_mode)
                 response = gateway.invoke(request, config=model_run_config)  # type: ignore[attr-defined]
         except AppError as exc:
+            if exc.code == ErrorCode.UPSTREAM and not stream_attempted:
+                _record_native_round(
+                    round_trace, incomplete=True, upstream=True
+                )
             return _react_error_state(state, code=exc.code.value, message=exc.message)
         except Exception:
             return _react_error_state(state, code="INTERNAL", message="模型调用失败")
@@ -867,9 +964,18 @@ def build_react_nodes(
             budget = consume_model_call(budget)
             if response.tool_calls and native_tool_mode:
                 # 原生 ToolCall：同一响应允许多个函数调用。图状态保存首项 + 队列，
-                # ToolNode 仍逐项走既有 gate/binding/dispatch/bwrap 边界，不把模型
-                # 参数直接送入 handler。
-                native_calls = _validated_native_tool_calls(tuple(response.tool_calls))
+                # ToolNode 按批次保序；只读波次在灰度开启时才并行，写/bash/任务仍串行。
+                try:
+                    native_calls = _validated_native_tool_calls(tuple(response.tool_calls))
+                except AppError as exc:
+                    if exc.code == ErrorCode.UPSTREAM:
+                        _record_native_round(
+                            round_trace, associate_error=True, upstream=True
+                        )
+                    return _react_error_state(
+                        state, code=exc.code.value, message=exc.message
+                    )
+                _record_native_round(round_trace)
                 native_calls, skipped_repeat, skipped_runs = _split_native_readonly_repeats(
                     state, native_calls
                 )
@@ -905,6 +1011,7 @@ def build_react_nodes(
                     return {
                         "pending_tool": None,
                         "pending_tools": [],
+                        "pending_tool_batch": None,
                         "repeat_retry": True,
                         "pending_events": thought_events,
                         "observations": [
@@ -949,6 +1056,7 @@ def build_react_nodes(
                 result_payload = {
                     "pending_tool": pending_calls[0],
                     "pending_tools": pending_calls[1:],
+                    "pending_tool_batch": build_tool_batch(pending_calls),
                     "native_messages": [_native_tool_message(native_calls, response.text)],
                     "pending_events": pending_events,
                     "repeat_retry": False,
@@ -957,6 +1065,9 @@ def build_react_nodes(
                 if current_task_state is not None:
                     result_payload["task_state"] = current_task_state.to_dict()
                 return result_payload
+
+            if native_tool_mode:
+                _record_native_round(round_trace)
 
             if (
                 native_tool_mode

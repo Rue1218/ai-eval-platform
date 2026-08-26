@@ -228,6 +228,427 @@ def test_toolnode_rejection_keeps_native_call_id_and_skips_dispatch() -> None:
     assert "类型无效" in str(result_store.get("toolnode-native-test", "invalid_call"))
 
 
+def test_tool_batch_refill_keeps_original_block_order() -> None:
+    """P2：即使后完成的项先标记终态，回填仍按原始 block_index。"""
+    from app.harness.execution.batch import (
+        batch_is_complete,
+        build_tool_batch,
+        mark_batch_item,
+        native_result_messages,
+    )
+
+    batch = build_tool_batch(
+        [
+            {"call_id": "call_read", "name": "read", "arguments": {"path": "a.txt"}, "native": True},
+            {
+                "call_id": "call_write",
+                "name": "write",
+                "arguments": {"path": "b.txt", "content": "x"},
+                "native": True,
+            },
+        ],
+        batch_id="batch_order",
+    )
+    # 模拟乱序完成：write 先成功、read 后失败，回填仍必须是 read → write。
+    updated = mark_batch_item(batch, "call_write", "succeeded")
+    updated = mark_batch_item(updated, "call_read", "failed")
+    assert batch_is_complete(updated)
+    assert [message["tool_call_id"] for message in native_result_messages(updated)] == [
+        "call_read",
+        "call_write",
+    ]
+
+
+def test_toolnode_batch_flushes_native_messages_once_in_original_order() -> None:
+    """P2：失败+成功同批时，中间项不回填，全部终态后按原 call_id 组装。"""
+    registry = build_default_registry()
+    result_store = NativeToolResultStore()
+    from app.harness.execution.batch import build_tool_batch
+
+    unknown = {
+        "call_id": "call_unknown",
+        "name": "not_registered",
+        "arguments": {},
+        "native": True,
+    }
+    read_call = {
+        "call_id": "call_read",
+        "name": "read",
+        "arguments": {"path": "a.txt"},
+        "native": True,
+    }
+    batch = build_tool_batch([unknown, read_call], batch_id="batch_fail_ok")
+    configurable = {"thread_id": "toolnode-batch-test"}
+    original = toolnode_mod.get_config
+    toolnode_mod.get_config = lambda: {"configurable": configurable}
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "a.txt"), "w", encoding="utf-8") as handle:
+                handle.write("batch-ok")
+            node = build_tool_node(
+                registry, native_tool_results=result_store, sandbox_dir=tmp
+            )
+            first = asyncio.run(
+                node(
+                    {
+                        "request": {"config": {}, "messages": ()},
+                        "pending_tool": unknown,
+                        "pending_tools": [read_call],
+                        "pending_tool_batch": batch,
+                    }
+                )
+            )
+            assert "native_messages" not in first
+            assert first["pending_tool"]["call_id"] == "call_read"
+            second = asyncio.run(
+                node(
+                    {
+                        "request": {"config": {}, "messages": ()},
+                        "pending_tool": first["pending_tool"],
+                        "pending_tools": first["pending_tools"],
+                        "pending_tool_batch": first["pending_tool_batch"],
+                    }
+                )
+            )
+    finally:
+        toolnode_mod.get_config = original
+
+    assert second["pending_tool"] is None
+    assert [message["tool_call_id"] for message in second["native_messages"]] == [
+        "call_unknown",
+        "call_read",
+    ]
+    assert result_store.get("toolnode-batch-test", "call_unknown") == "工具未注册：not_registered"
+    assert "batch-ok" in str(result_store.get("toolnode-batch-test", "call_read"))
+
+
+def test_select_execution_wave_serial_when_flag_off() -> None:
+    """开关关闭时即使两个独立 read 也只切出一项。"""
+    from app.harness.execution.batch import select_execution_wave
+
+    items = [
+        {"call_id": "a", "name": "read", "arguments": {"path": "a.txt"}},
+        {"call_id": "b", "name": "read", "arguments": {"path": "b.txt"}},
+    ]
+    wave = select_execution_wave(
+        items, class_of={"read": "path_scoped"}, enabled=False, max_parallel=3
+    )
+    assert [item["call_id"] for item in wave] == ["a"]
+
+
+def test_select_execution_wave_parallel_reads_and_barriers() -> None:
+    """P3：独立 read/web 可并行；同路径写、bash、task.create 做屏障。"""
+    from app.harness.execution.batch import (
+        normalize_workspace_path,
+        select_execution_wave,
+    )
+
+    class_of = {
+        "read": "path_scoped",
+        "web_search": "read_only",
+        "web_fetch": "read_only",
+        "write": "path_scoped",
+        "bash": "exclusive",
+        "task.create": "session_exclusive",
+    }
+    reads = [
+        {"call_id": "r1", "name": "read", "arguments": {"path": "a.txt"}},
+        {"call_id": "r2", "name": "read", "arguments": {"path": "./a.txt"}},
+        {"call_id": "w1", "name": "web_search", "arguments": {"query": "x"}},
+        {"call_id": "w2", "name": "write", "arguments": {"path": "b.txt", "content": "x"}},
+    ]
+    wave = select_execution_wave(reads, class_of=class_of, enabled=True, max_parallel=3)
+    assert [item["call_id"] for item in wave] == ["r1", "r2", "w1"]
+    assert normalize_workspace_path("a.txt") == normalize_workspace_path("./a.txt")
+    assert normalize_workspace_path("foo/../a.txt") == normalize_workspace_path("a.txt")
+
+    mixed = [
+        {"call_id": "r1", "name": "read", "arguments": {"path": "a.txt"}},
+        {"call_id": "wr", "name": "write", "arguments": {"path": "a.txt", "content": "x"}},
+    ]
+    assert [item["call_id"] for item in select_execution_wave(
+        mixed, class_of=class_of, enabled=True, max_parallel=3
+    )] == ["r1"]
+
+    bash_first = [
+        {"call_id": "b1", "name": "bash", "arguments": {"command": "ls"}},
+        {"call_id": "r1", "name": "read", "arguments": {"path": "a.txt"}},
+    ]
+    assert [item["call_id"] for item in select_execution_wave(
+        bash_first, class_of=class_of, enabled=True, max_parallel=3
+    )] == ["b1"]
+
+    create_first = [
+        {"call_id": "c1", "name": "task.create", "arguments": {"kind": "benchmark"}},
+        {"call_id": "r1", "name": "read", "arguments": {"path": "a.txt"}},
+    ]
+    assert [item["call_id"] for item in select_execution_wave(
+        create_first, class_of=class_of, enabled=True, max_parallel=3
+    )] == ["c1"]
+
+    four_reads = [
+        {"call_id": f"r{i}", "name": "read", "arguments": {"path": f"{i}.txt"}}
+        for i in range(4)
+    ]
+    assert len(select_execution_wave(
+        four_reads, class_of=class_of, enabled=True, max_parallel=3
+    )) == 3
+
+    class_of["task.status"] = "read_only"
+    status_after_read = [
+        {"call_id": "r1", "name": "read", "arguments": {"path": "a.txt"}},
+        {"call_id": "s1", "name": "task.status", "arguments": {"task_id": "t1"}},
+    ]
+    assert [item["call_id"] for item in select_execution_wave(
+        status_after_read, class_of=class_of, enabled=True, max_parallel=3
+    )] == ["r1"]
+
+
+def test_toolnode_flag_off_still_one_call_per_visit() -> None:
+    """默认关闭并行时，一次 ToolNode 访问只执行批次头一项。"""
+    registry = build_default_registry()
+    result_store = NativeToolResultStore()
+    from app.harness.execution.batch import build_tool_batch
+
+    first = {
+        "call_id": "call_a",
+        "name": "read",
+        "arguments": {"path": "a.txt"},
+        "native": True,
+    }
+    second = {
+        "call_id": "call_b",
+        "name": "read",
+        "arguments": {"path": "b.txt"},
+        "native": True,
+    }
+    batch = build_tool_batch([first, second], batch_id="batch_serial")
+    configurable = {"thread_id": "toolnode-serial-wave"}
+    original = toolnode_mod.get_config
+    toolnode_mod.get_config = lambda: {"configurable": configurable}
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            for name, text in (("a.txt", "A"), ("b.txt", "B")):
+                with open(os.path.join(tmp, name), "w", encoding="utf-8") as handle:
+                    handle.write(text)
+            node = build_tool_node(
+                registry, native_tool_results=result_store, sandbox_dir=tmp
+            )
+            out = asyncio.run(
+                node(
+                    {
+                        "request": {"config": {}, "messages": ()},
+                        "pending_tool": first,
+                        "pending_tools": [second],
+                        "pending_tool_batch": batch,
+                    }
+                )
+            )
+    finally:
+        toolnode_mod.get_config = original
+
+    results = [event for event in out["pending_events"] if event["kind"] == "tool_result"]
+    assert [event["payload"]["call_id"] for event in results] == ["call_a"]
+    assert out["pending_tool"]["call_id"] == "call_b"
+    assert "native_messages" not in out
+
+
+def test_toolnode_parallel_reads_one_visit(monkeypatch) -> None:
+    """打开并行后，两个独立 read 在一次访问内完成，且真正重叠执行。"""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "agent_parallel_tool_batch_enabled", True)
+    monkeypatch.setattr(settings, "agent_parallel_tool_batch_profile_ids", "*")
+    from app.harness.execution.stream_metrics import get_default_stream_metrics
+
+    get_default_stream_metrics().reset()
+    barrier = threading.Barrier(2, timeout=2)
+
+    def overlapping_read(arguments, sandbox_dir, context) -> str:
+        barrier.wait()
+        path = os.path.join(sandbox_dir or "", str(arguments.get("path") or ""))
+        with open(path, encoding="utf-8") as handle:
+            return handle.read()
+
+    registry = ToolRegistry()
+    registry.register(
+        ToolDef(
+            name="read",
+            description="并行读",
+            parameters_schema={
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
+                "additionalProperties": False,
+            },
+            permission="sandbox.read",
+            timeout_s=3.0,
+            handler=overlapping_read,
+            transport="native",
+            contextual=True,
+            concurrency_class="path_scoped",
+        )
+    )
+    result_store = NativeToolResultStore()
+    from app.harness.execution.batch import build_tool_batch
+
+    first = {
+        "call_id": "call_a",
+        "name": "read",
+        "arguments": {"path": "a.txt"},
+        "native": True,
+    }
+    second = {
+        "call_id": "call_b",
+        "name": "read",
+        "arguments": {"path": "b.txt"},
+        "native": True,
+    }
+    batch = build_tool_batch([first, second], batch_id="batch_parallel")
+    configurable = {"thread_id": "toolnode-parallel-wave"}
+    original = toolnode_mod.get_config
+    toolnode_mod.get_config = lambda: {"configurable": configurable}
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            for name, text in (("a.txt", "A"), ("b.txt", "B")):
+                with open(os.path.join(tmp, name), "w", encoding="utf-8") as handle:
+                    handle.write(text)
+            node = build_tool_node(
+                registry, native_tool_results=result_store, sandbox_dir=tmp
+            )
+            out = asyncio.run(
+                node(
+                    {
+                        "request": {"config": {}, "messages": ()},
+                        "pending_tool": first,
+                        "pending_tools": [second],
+                        "pending_tool_batch": batch,
+                    }
+                )
+            )
+    finally:
+        toolnode_mod.get_config = original
+
+    results = [event for event in out["pending_events"] if event["kind"] == "tool_result"]
+    assert [event["payload"]["call_id"] for event in results] == ["call_a", "call_b"]
+    assert all(event["payload"]["ok"] is True for event in results)
+    assert out["pending_tool"] is None
+    assert [message["tool_call_id"] for message in out["native_messages"]] == [
+        "call_a",
+        "call_b",
+    ]
+    assert result_store.get("toolnode-parallel-wave", "call_a") == "A"
+    assert result_store.get("toolnode-parallel-wave", "call_b") == "B"
+
+
+def test_toolnode_parallel_failure_does_not_cancel_sibling(monkeypatch) -> None:
+    """并行组内单项失败不取消同组其他只读调用。"""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "agent_parallel_tool_batch_enabled", True)
+    monkeypatch.setattr(settings, "agent_parallel_tool_batch_profile_ids", "*")
+    from app.harness.execution.stream_metrics import get_default_stream_metrics
+
+    get_default_stream_metrics().reset()
+
+    def boom(_arguments, _sandbox_dir=None, _context=None) -> str:
+        raise RuntimeError("boom")
+
+    def ok(_arguments, _sandbox_dir=None, _context=None) -> str:
+        return "ok"
+
+    registry = ToolRegistry()
+    registry.register(
+        ToolDef(
+            name="read",
+            description="会失败的读",
+            parameters_schema={
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
+                "additionalProperties": False,
+            },
+            permission="sandbox.read",
+            timeout_s=2.0,
+            handler=boom,
+            transport="native",
+            contextual=True,
+            concurrency_class="path_scoped",
+        )
+    )
+    registry.register(
+        ToolDef(
+            name="web_fetch",
+            description="独立抓取",
+            parameters_schema={
+                "type": "object",
+                "properties": {"url": {"type": "string"}},
+                "required": ["url"],
+                "additionalProperties": False,
+            },
+            permission="web.fetch",
+            timeout_s=2.0,
+            handler=ok,
+            transport="native",
+            concurrency_class="read_only",
+        )
+    )
+    result_store = NativeToolResultStore()
+    from app.harness.execution.batch import build_tool_batch
+
+    first = {
+        "call_id": "call_read",
+        "name": "read",
+        "arguments": {"path": "a.txt"},
+        "native": True,
+    }
+    second = {
+        "call_id": "call_web",
+        "name": "web_fetch",
+        "arguments": {"url": "https://example.com"},
+        "native": True,
+    }
+    batch = build_tool_batch([first, second], batch_id="batch_isolate")
+    configurable = {"thread_id": "toolnode-parallel-isolate"}
+    original = toolnode_mod.get_config
+    toolnode_mod.get_config = lambda: {"configurable": configurable}
+    try:
+        node = build_tool_node(registry, native_tool_results=result_store, sandbox_dir=".")
+        out = asyncio.run(
+            node(
+                {
+                    "request": {"config": {}, "messages": ()},
+                    "pending_tool": first,
+                    "pending_tools": [second],
+                    "pending_tool_batch": batch,
+                }
+            )
+        )
+    finally:
+        toolnode_mod.get_config = original
+
+    results = [event for event in out["pending_events"] if event["kind"] == "tool_result"]
+    by_id = {event["payload"]["call_id"]: event["payload"] for event in results}
+    assert by_id["call_read"]["ok"] is False
+    assert by_id["call_web"]["ok"] is True
+    assert [message["tool_call_id"] for message in out["native_messages"]] == [
+        "call_read",
+        "call_web",
+    ]
+
+
+def test_default_registry_concurrency_classes_not_in_all_defs() -> None:
+    """并发类只留在运行时 ToolDef，不投影给模型或目录。"""
+    registry = build_default_registry()
+    assert registry.get("read").concurrency_class == "path_scoped"
+    assert registry.get("web_search").concurrency_class == "read_only"
+    assert registry.get("bash").concurrency_class == "exclusive"
+    assert registry.get("task.create").concurrency_class == "session_exclusive"
+    assert registry.get("task.status").concurrency_class == "read_only"
+    assert all("concurrency_class" not in item for item in registry.all_defs())
+    assert not hasattr(registry.get("read").to_descriptor(), "concurrency_class")
+
+
 def test_toolnode_streams_scoped_progress_and_output(monkeypatch) -> None:
     """工具流只经 custom 通道输出受控块，持久终态仍保持 tool_result。"""
     registry = ToolRegistry()

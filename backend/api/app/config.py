@@ -62,6 +62,15 @@ class Settings(BaseSettings):
     # P3：检查点引擎。默认 memory（每回合独立 thread_id）；postgres 需单独评审
     # 多副本粘性路由后再开，禁止把 Observation 全文写入检查点。
     agent_checkpointer: str = "memory"
+    # P1/P4：native 首轮流式。默认开启（已落地）；false 回退 invoke，不改历史事件。
+    agent_native_stream_enabled: bool = True
+    # 逗号分隔协议档 ID；空 = 全部 native。``*`` 同样表示全部。
+    agent_native_stream_profile_ids: str = ""
+    # P3/P4：同轮只读 ToolBatch 并行。默认关闭。
+    agent_parallel_tool_batch_enabled: bool = False
+    max_parallel_tool_calls: int = 3
+    # 并行灰度白名单：空 = 不开任何协议档；``*`` = 全部；否则仅列出的 ID。
+    agent_parallel_tool_batch_profile_ids: str = ""
 
     @property
     def cors_origin_list(self) -> list[str]:

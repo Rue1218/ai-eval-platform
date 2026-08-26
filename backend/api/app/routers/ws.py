@@ -731,6 +731,8 @@ async def _run_turn(
                     # compact 摘要供 M2 assemble 注入【会话摘要】，不入 GraphState
                     "compact_summary": compact_summary,
                 },
+                # P4 灰度只读协议档 ID，不含密钥；ToolNode/ReAct 据此判定并行与流式。
+                "profile": {"id": profile.id},
                 "assets": {"file_ids": owned_file_ids},
                 # 沙箱引擎与资源限制（bash 工具经 bwrap 执行；engine="off" 时 fail-closed）
                 "sandbox": {
