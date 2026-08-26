@@ -3,8 +3,8 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 编排层模块设计 |
-| 版本 | V0.4.3 |
-| 审查日期 | 2026-08-25 |
+| 版本 | V0.4.4 |
+| 审查日期 | 2026-08-26 |
 | 文档性质 | 模块设计说明书（需求发散 + 架构设计） |
 | 适用模块 | M4 编排层（`app/harness/orchestration/` + `app/agent/`） |
 | 上游权威 | Harness 需求文档 V1.4.4 §2.3/§2.4/§2.5、§4.4、§7、§9；API.md V1.22 §4.3/§4.4/§5；PRD §5.1.2/§5.1.3 |
@@ -206,12 +206,12 @@ START
 | :--- | :--- | :--- | :--- |
 | `/stop` | `ws.py` 收包循环拦截（不进图） | 阶段 0 已落地 | `asyncio` 取消 + `response.completed(cancelled)` |
 | `/compact` | M2 上下文层（会话级副作用，仅 owner） | 阶段 3 | `NodeEvent(progress)` + 上下文摘要 |
-| `/cancel` | `ws.py` 收包循环（取消本会话非终态任务） | 阶段 4 | `task.cancel` + `NodeEvent` |
-| `/stress` | 对话路径不得发 `kind=stress` 确认卡 | 阶段 4 | `NodeEvent(error, validation)` |
+| `/cancel` | `ws.py` 收包循环（取消本会话非终态任务） | 阶段 4 已落地 | `tool_result(task.cancel)` |
+| `/stress` | `ws.py` 收包循环；对话路径不得发 `kind=stress` | 阶段 4 已落地 | `confirm`（质量任务 + `with_stress=true`） |
 | `/help` | Direct 节点直接返回帮助文本 | 阶段 1 | `NodeEvent(assistant_message)` |
 | 未知 `/xxx` | Direct 节点 | 阶段 1 | `NodeEvent(error, validation)` |
 
-**阶段 1 Direct 节点最小实现**：只处理 `/help`（返回帮助文本）与未知斜杠（`VALIDATION`）；`/stop` 仍由 `ws.py` 拦截；`/compact` `/cancel` `/stress` 留阶段 3/4 填充，阶段 1 命中时返回 `VALIDATION`（"能力未启用"）。
+**Direct 节点现状**：只处理 `/help`（返回帮助文本）与未知斜杠（`VALIDATION`）；`/stop` `/compact` `/cancel` `/stress` 由 `ws.py` 收包循环拦截，图内命中仅返回防御提示「由平台会话控制处理」。
 
 **与系统斜杠 15 条的关系**：API.md 规定系统 15 条命令前端本地注册表，不走 Agent；Agent 侧只处理上表控制类斜杠。两者不重叠。
 
@@ -558,7 +558,7 @@ def reflect_node(state: GraphState) -> dict:
 
 | M4 节点/模块 | 产出 NodeEvent | 前端渲染 | 前端文件 | 落地阶段 |
 | :--- | :--- | :--- | :--- | :--- |
-| Direct 路径 L0 路由（§3.6） | `assistant_message`（`/help`）/ `error(VALIDATION)`（未知斜杠、`/compact`/`/cancel`/`/stress` 阶段 1） | AssistantBubble / ErrorStrip+Toast | `views/Agent.vue` `handleWsEvent`；`agent/slashRegistry.ts` | 阶段 1 |
+| Direct 路径 L0 路由（§3.6） | `assistant_message`（`/help`）/ `error(VALIDATION)`（未知斜杠；会话控制斜杠图内防御提示） | AssistantBubble / ErrorStrip+Toast | `views/Agent.vue` `handleWsEvent`；`agent/slashRegistry.ts` | 阶段 4 |
 | Chat 节点（§3.3） | `assistant_delta`/`assistant_message`/`response.completed`/`thought` | AssistantBubble + ThoughtCard | `views/Agent.vue`；`components/agent/ThoughtCard.vue` | 阶段 1 |
 | `should_abort` 迁移（§3.4） | `/stop` 中止流式 | 流式中断 | `api/ws.ts`（`/stop` 走 user_message） | 阶段 1（回归） |
 | `budget.py`（§3.9.5） | `error(BUDGET_EXCEEDED)` | ErrorStrip + Toast | `api/types.ts` `ERROR_MESSAGES`（文案中性化，预算为次数非美元） | 阶段 2 |
@@ -571,7 +571,7 @@ def reflect_node(state: GraphState) -> dict:
 
 ### 8.2 前端验收要点
 
-- **斜杠注册**：`slashRegistry.ts` 补 `/help`/`/cancel`/`/stress`（占位，命中由后端返回 `VALIDATION`），与 §3.6 Direct 路由规则对齐。
+- **斜杠注册**：`slashRegistry.ts` 的 `/help` `/stop` `/compact` `/cancel` `/stress` 均已开放；`/cancel` `/stress` 由 `ws.py` 拦截，不进图。
 - **`harnessStage` 补档**：`views/Agent.vue` `harnessStage` 由 `'plan'|'react'|'reflect'|''` 补 `'plan_solve'`，`harnessStageLabel` 补「Plan-Solve 执行中」，对齐 §3.5 模式路由。
 - **澄清卡 vs 确认卡 UI 区分**：澄清卡（`clarify`）只显示「回复」输入，不显示「确认入队」按钮，不写 `pending_confirm`；确认卡（`confirm`）显示确认/取消/patch。`clarify_reply.id` 必须匹配最近待回复澄清卡。
 - **错误码文案中性化**：`BUDGET_EXCEEDED` fallback 改中性（预算为次数预算非美元），`CONCURRENCY` 确认卡场景文案为「确认卡已被他人处理」，场景文案由后端 `message` 透传。
@@ -581,6 +581,6 @@ def reflect_node(state: GraphState) -> dict:
 
 | 文件 | 操作 | 作用 |
 | :--- | :--- | :--- |
-| `docs/AI测试与评估平台-Harness-编排层.md` | 新增 V0.1 → 修订 V0.2 → 修订 V0.3 → 修订 V0.4 → 修订 V0.4.1 → 修订 V0.4.2 → 修订 V0.4.3 | V0.1–V0.4.2 见既有设计演进。V0.4.3 回写运行事实：OR-4 为同轮串行多 ToolCall + 重复抑制；默认预算 12/12；`plan_solve → react ⇄ tools → reflect`，`response.completed` 由 reflect 在有计划回合发出。 |
+| `docs/AI测试与评估平台-Harness-编排层.md` | 新增 V0.1 → 修订 V0.2 → 修订 V0.3 → 修订 V0.4 → 修订 V0.4.1 → 修订 V0.4.2 → 修订 V0.4.3 → 修订 V0.4.4 | V0.1–V0.4.3 见既有设计演进。V0.4.4：`/cancel` `/stress` 由 `ws.py` 收包循环落地；Direct 节点仅防御提示。 |
 
 本文档仅设计编排层，不改变任何 API、数据库、前端或 Agent 运行代码。

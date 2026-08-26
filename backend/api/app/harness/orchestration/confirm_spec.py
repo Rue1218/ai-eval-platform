@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from app.agent.defaults import DEFAULT_RAG_MODE, DEFAULT_RUN, DEFAULT_STRESS
+from app.agent.defaults import DEFAULT_RAG_MODE, DEFAULT_RUN, DEFAULT_STRESS, default_task_spec
 from app.errors import AppError
 from app.harness.contracts import Observation, PlanArtifact, from_dict
 from app.harness.skills import skill_to_kind
@@ -210,4 +210,30 @@ def build_confirm_payload(
     if kind in {"benchmark", "rag"} and wants_stress(plan):
         spec["with_stress"] = True
     _prefill_from_observations(spec, _observations(observations))
+    return spec
+
+
+def build_slash_stress_spec(prefs: Mapping[str, object] | None = None) -> dict[str, Any]:
+    """``/stress`` 确认卡：质量任务 + ``with_stress=true``，``kind`` 永不为 ``stress``。
+
+    空槽用偏好预填（MEM-4）；``last_kind`` 仅接受 ``benchmark`` / ``rag``，
+    其它值（含 ``testcase`` / ``stress``）回退 ``benchmark``。
+    """
+    raw = dict(prefs or {})
+    last_kind = raw.get("last_kind")
+    kind = last_kind if last_kind in {"benchmark", "rag"} else "benchmark"
+    spec = default_task_spec(str(kind))
+    spec["with_stress"] = True
+    profiles = raw.get("last_profile_ids")
+    if not spec.get("profile_ids") and isinstance(profiles, list):
+        spec["profile_ids"] = [str(item) for item in profiles if item][:5]
+    if kind == "benchmark" and not spec.get("dataset_id") and raw.get("last_dataset_id"):
+        spec["dataset_id"] = str(raw["last_dataset_id"])
+    if kind == "rag":
+        if not spec.get("kb_id") and raw.get("last_kb_id"):
+            spec["kb_id"] = str(raw["last_kb_id"])
+        if not spec.get("gold_qa_id") and raw.get("last_gold_qa_id"):
+            spec["gold_qa_id"] = str(raw["last_gold_qa_id"])
+    spec["kind"] = kind
+    spec["with_stress"] = True
     return spec

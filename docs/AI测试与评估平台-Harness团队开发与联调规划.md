@@ -3,7 +3,7 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 团队开发与联调规划 |
-| 版本 | V1.7 |
+| 版本 | V1.8 |
 | 审查日期 | 2026-08-26 |
 | 文档性质 | 施工排期与协作规范（指导性文档） |
 | 适用范围 | Harness 运行时阶段 1–4 的 2 人后端分工 + 前端联调任务、模块分配、联调时序与验收闸门 |
@@ -16,6 +16,8 @@
 > **V1.2 修订定位**：新增 §5「前端联调任务（按阶段）」—— 前端工作由 **陈东超** 独立负责（区别于 A/B 后端分工），按阶段 1–4 列出前端改动文件、对接契约（API.md V1.21）、验收点与阻塞依赖；§6 联调验收闸门补前端验收点；新增 §5.5「阶段 4 前置：补建 `backend/api/app/agent/defaults.py`」消除前后端确认卡默认值漂移。本次同步回写 API.md V1.21（clarify/plan 事件、tool_result/context_meter 扩展字段、clarify_reply 上行）。
 
 > **V1.3 修订定位**：配合 API.md V1.22 修复 V1.21 遗留契约裂缝——§5.1 斜杠注册拆分（`/help` 返回帮助文本，`/compact`/`/cancel`/`/stress`/未知斜杠阶段 1 返回 `VALIDATION`，补漏 `/compact`）；§5.4 M8 引用 `§3.6.2` 修正为 `§3.4.2`；§5 契约引用同步对齐 API.md V1.22（`tool_result.source` 改为溯源标识字符串，非 short\|long 枚举）。M4/M5/M7 模块文档同步升 V0.4.1。
+
+> **V1.8 修订定位**（2026-08-26 优先项落地）：确认卡以内联 Agent 卡为事实源合并到 `ConfirmCard.vue`；按 API.md §4.4 解禁 `/cancel`（本会话非终态任务）与 `/stress`（质量任务卡 + `with_stress=true`）。不新增对外字段。
 
 > **V1.7 修订定位**（2026-08-26 需求收口）：`should_abort` 已全链路走 `RunnableConfig`（O-12，规划文档此前误标为未迁出）；落地 `GET /api/agent/prefs` + `confirm_ack` 入队写偏好（MEM-4）；落地 slash-commands M2 CRUD。不新增对外字段。
 
@@ -357,3 +359,14 @@ flowchart TD
 | `docs/AI测试与评估平台-API.md` | 修订 V1.38 → V1.39 | prefs / slash-commands 实现状态回写 |
 
 本次 V1.7 为需求收口，不新增任何对外 REST/WS 字段。
+
+| `docs/AI测试与评估平台-Harness团队开发与联调规划.md` | 修订 V1.7 → V1.8 | 记录确认卡合并与 `/cancel` `/stress` 解禁。 |
+| `frontend/src/components/agent/ConfirmCard.vue` | 修改 | 以内联 Agent 卡为事实源（chip 选档、外部 RAG、8 项 run、owner/占槽） |
+| `frontend/src/views/Agent.vue` | 修改 | 确认卡改接 ConfirmCard；保留校验/ack/prefs 预填 |
+| `frontend/src/agent/slashRegistry.ts` | 修改 | `/cancel` `/stress` 开放 |
+| `backend/api/app/routers/ws.py` | 修改 | 收包循环拦截 `/cancel` `/stress` |
+| `backend/api/app/harness/orchestration/confirm_spec.py` | 修改 | `build_slash_stress_spec` |
+| `backend/api/app/agent/routing.py` | 修改 | HELP_TEXT；图内防御提示 |
+| `docs/AI测试与评估平台-API.md` | 修订 V1.39 → V1.40 | 回写斜杠解禁实现状态 |
+
+本次 V1.8 为优先项落地，不新增任何对外 REST/WS 字段。

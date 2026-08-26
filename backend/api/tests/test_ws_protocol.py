@@ -234,3 +234,135 @@ def test_confirm_author_payload_uses_display_name() -> None:
         "display_name": "Alice",
     }
     assert ws._confirm_author_payload(None) is None
+
+
+@pytest.mark.asyncio
+async def test_handle_cancel_slash_cancels_session_task(monkeypatch):
+    """/cancel 只取消本会话活动任务，并下发 task.cancel tool_result。"""
+    emitted: list[tuple[str, dict]] = []
+
+    async def fake_emit(_db, _websocket, _state, _session_id, event, payload, task_id=None):
+        emitted.append((event, payload))
+        return True
+
+    monkeypatch.setattr(ws, "_emit_persistent", fake_emit)
+    monkeypatch.setattr(
+        ws,
+        "cancel_task_safe",
+        lambda arguments, _context: {
+            "task_id": arguments["task_id"],
+            "status": "cancelled",
+            "kind": "benchmark",
+        },
+    )
+
+    class _Db:
+        def query(self, *_args):
+            return self
+
+        def filter(self, *_args):
+            return self
+
+        def all(self):
+            return [type("Task", (), {"id": "t-1"})()]
+
+    session = AgentSession(id="s-1", user_id="u-1", title="测", visibility="private")
+    await ws._handle_cancel(
+        _Db(),
+        object(),
+        ws._ConnectionState(),
+        session,
+        User(id="u-1", username="alice"),
+    )
+    assert emitted == [
+        (
+            "tool_result",
+            {
+                "name": "task.cancel",
+                "ok": True,
+                "data": {"task_id": "t-1", "status": "cancelled", "kind": "benchmark"},
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_handle_cancel_slash_without_active_task():
+    """无活动任务时 /cancel 返回 VALIDATION。"""
+    from app.errors import AppError, ErrorCode
+
+    class _Db:
+        def query(self, *_args):
+            return self
+
+        def filter(self, *_args):
+            return self
+
+        def all(self):
+            return []
+
+    with pytest.raises(AppError) as exc:
+        await ws._handle_cancel(
+            _Db(),
+            object(),
+            ws._ConnectionState(),
+            AgentSession(id="s-1", user_id="u-1", title="测", visibility="private"),
+            User(id="u-1", username="alice"),
+        )
+    assert exc.value.code == ErrorCode.VALIDATION
+    assert "没有可取消" in exc.value.message
+
+
+@pytest.mark.asyncio
+async def test_handle_stress_slash_emits_quality_confirm(monkeypatch):
+    """/stress 发出质量任务确认卡且 with_stress=true。"""
+    emitted: list[tuple[str, dict]] = []
+    persisted: list[dict] = []
+
+    async def fake_emit(_db, _websocket, _state, _session_id, event, payload, task_id=None):
+        emitted.append((event, payload))
+        return True
+
+    def fake_persist(_db, _session_id, payload):
+        persisted.append(payload)
+
+    class _Query:
+        def filter(self, *_args):
+            return self
+
+        def with_for_update(self):
+            return self
+
+        def first(self):
+            session = AgentSession(id="s-1", user_id="u-1", title="测", visibility="private")
+            session.pending_confirm = None
+            return session
+
+        def all(self):
+            return []
+
+    class _Db:
+        def query(self, *_args):
+            return _Query()
+
+    monkeypatch.setattr(ws, "_emit_persistent", fake_emit)
+    monkeypatch.setattr(ws, "_persist_pending_confirm", fake_persist)
+
+    from app.harness import memory as memory_pkg
+
+    monkeypatch.setattr(memory_pkg, "read_prefs", lambda _db, _user_id: {"last_kind": "rag"})
+
+    await ws._handle_stress(
+        _Db(),
+        object(),
+        ws._ConnectionState(),
+        AgentSession(id="s-1", user_id="u-1", title="测", visibility="private"),
+        User(id="u-1", username="alice", display_name="Alice"),
+    )
+    assert len(emitted) == 1
+    event, payload = emitted[0]
+    assert event == "confirm"
+    assert payload["kind"] == "rag"
+    assert payload["with_stress"] is True
+    assert payload["kind"] != "stress"
+    assert persisted and persisted[0]["kind"] == "rag"
