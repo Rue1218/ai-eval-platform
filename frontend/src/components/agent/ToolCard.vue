@@ -1,5 +1,14 @@
 <template>
-  <div class="tool-card" :class="{ open: isOpen, 'no-anim': noAnim }" :data-tool="tool">
+  <div
+    class="tool-card"
+    :class="{
+      open: isOpen,
+      'no-anim': noAnim,
+      'is-pending': status === 'pending',
+      'is-streaming': isStreamingOutput,
+    }"
+    :data-tool="tool"
+  >
     <div class="tool-head" @click="isOpen = !isOpen">
       <div class="tool-status" :class="statusClass">
         <!-- pending 旋转 -->
@@ -37,6 +46,7 @@
         <span class="tool-state-text" :class="statusClass">
           {{ stateText }}
         </span>
+        <span v-if="status === 'pending'" class="tool-pulse" aria-hidden="true"></span>
       </div>
 
       <div class="chev">
@@ -46,7 +56,8 @@
       </div>
     </div>
 
-    <div v-show="isOpen" class="tool-detail">
+    <Transition name="tool-detail">
+    <div v-if="isOpen" class="tool-detail">
       <audio
         v-if="isAudioOutput && status === 'ok' && playUrl"
         class="tool-audio"
@@ -77,37 +88,62 @@
         </div>
       </div>
       <div class="td-block">
-        <div class="td-label">输出</div>
-        <p v-if="resultSummary && !previewText && status === 'ok'" class="td-summary">{{ resultSummary }}</p>
-        <div v-if="readMeta" class="td-meta mono">
-          第 {{ readMeta.start }}–{{ readMeta.end }} 行 · 本次 {{ readMeta.count }} 行 / 共 {{ readMeta.total }} 行
-          <span v-if="readMeta.next != null"> · 下一页 offset={{ readMeta.next }}</span>
-          <span v-else> · 已读完</span>
-        </div>
-        <div v-if="isMarkdownFile && previewText && status === 'ok'" class="td-tabs">
-          <button type="button" class="td-tab" :class="{ active: previewMode === 'render' }" @click="previewMode = 'render'">渲染</button>
-          <button type="button" class="td-tab" :class="{ active: previewMode === 'source' }" @click="previewMode = 'source'">源码</button>
-        </div>
-        <MarkdownView
-          v-if="showMarkdownOutput"
-          :content="previewText"
-          custom-class="tool-md"
-        />
-        <div v-else-if="outputLines.length && status === 'ok'" class="line-block" role="region" aria-label="工具输出">
-          <div v-for="line in outputLines" :key="line.n" class="ln-row">
-            <span class="ln-no mono">{{ line.n }}</span>
-            <span class="ln-text">{{ line.text }}</span>
+        <div class="td-label-row">
+          <div class="td-label">输出</div>
+          <div v-if="isStreamingOutput" class="td-stream-state">
+            <span class="td-stream-dot" aria-hidden="true"></span>
+            正在流式呈现
           </div>
         </div>
-        <pre v-else-if="previewText && status === 'ok'" class="code">{{ previewText }}</pre>
-        <pre v-else class="code">{{ outputText }}</pre>
+        <div v-if="status === 'pending'" class="tool-output-loading" role="status">
+          <div class="tool-loading-copy">
+            <span class="tool-loading-orbit" aria-hidden="true"></span>
+            {{ toolDisplayName }} 正在执行，等待安全输出…
+          </div>
+          <div class="tool-loading-lines" aria-hidden="true">
+            <span></span><span></span><span></span>
+          </div>
+        </div>
+        <template v-else>
+          <p v-if="resultSummary && !previewText && status === 'ok'" class="td-summary">{{ resultSummary }}</p>
+          <div v-if="readMeta" class="td-meta mono">
+            第 {{ readMeta.start }}–{{ readMeta.end }} 行 · 本次 {{ readMeta.count }} 行 / 共 {{ readMeta.total }} 行
+            <span v-if="readMeta.next != null"> · 下一页 offset={{ readMeta.next }}</span>
+            <span v-else> · 已读完</span>
+          </div>
+          <div v-if="isMarkdownFile && previewText && status === 'ok'" class="td-tabs">
+            <button type="button" class="td-tab" :class="{ active: previewMode === 'render' }" @click="previewMode = 'render'">渲染</button>
+            <button type="button" class="td-tab" :class="{ active: previewMode === 'source' }" @click="previewMode = 'source'">源码</button>
+          </div>
+          <MarkdownView
+            v-if="showMarkdownOutput"
+            :content="previewText"
+            custom-class="tool-md"
+          />
+          <div
+            v-else-if="outputLines.length && status === 'ok'"
+            class="line-block"
+            :class="{ 'is-streaming-output': isStreamingOutput }"
+            role="region"
+            aria-label="工具输出"
+          >
+            <div v-for="line in outputLines" :key="line.n" class="ln-row">
+              <span class="ln-no mono">{{ line.n }}</span>
+              <span class="ln-text">{{ line.text }}</span>
+            </div>
+            <div v-if="isStreamingOutput" class="stream-tail mono"><span class="stream-cursor">▋</span></div>
+          </div>
+          <pre v-else-if="displayedPreviewText && status === 'ok'" class="code">{{ displayedPreviewText }}<span v-if="isStreamingOutput" class="stream-cursor">▋</span></pre>
+          <pre v-else class="code">{{ status === 'ok' ? displayedOutputText : resolvedOutputText }}<span v-if="isStreamingOutput" class="stream-cursor">▋</span></pre>
+        </template>
       </div>
     </div>
+    </Transition>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { formatLatency } from '../../utils/format'
 import { shouldKeepToolCardOpen } from '../../utils/toolCard'
 import MarkdownView from './MarkdownView.vue'
@@ -200,6 +236,10 @@ const source = computed(() => props.source || '')
 const redacted = computed(() => props.redacted === true)
 const isAudioOutput = computed(() => ['audio.speech_synthesis', 'audio.voiceclone'].includes(props.tool))
 const previewMode = ref<'render' | 'source'>('render')
+// 服务端仍只下发受控的完整 tool_result；组件按帧增量展示，既不新增 WS 协议，
+// 也不会把完整 Observation 或未脱敏输出带到浏览器。
+const displayedOutputText = ref('')
+const isStreamingOutput = ref(false)
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null
@@ -317,12 +357,14 @@ const previewText = computed(() => {
   return ''
 })
 
+const displayedPreviewText = computed(() => (previewText.value ? displayedOutputText.value : ''))
+
 const outputLines = computed(() => {
-  if (!previewText.value || !['read', 'bash', 'web_fetch'].includes(props.tool)) return []
+  if (!displayedPreviewText.value || !['read', 'bash', 'web_fetch'].includes(props.tool)) return []
   const start = props.tool === 'read'
     ? asNonNegInt(asRecord(resultRecord.value?.read)?.start_line) + 1
     : 1
-  return toLineItems(previewText.value, start)
+  return toLineItems(displayedPreviewText.value, start)
 })
 
 const isMarkdownFile = computed(() => {
@@ -335,7 +377,8 @@ const showMarkdownOutput = computed(
     props.status === 'ok' &&
     !!previewText.value &&
     isMarkdownFile.value &&
-    previewMode.value === 'render',
+    previewMode.value === 'render' &&
+    !isStreamingOutput.value,
 )
 
 const resultSummary = computed(() => {
@@ -364,13 +407,13 @@ const transcriptText = computed(() => {
 const statusClass = computed(() => props.status)
 
 const stateText = computed(() => {
-  if (props.status === 'pending') return '调用中'
+  if (props.status === 'pending') return '执行中'
+  if (isStreamingOutput.value) return '输出呈现中'
   if (props.status === 'fail') return '调用失败'
   return '调用成功'
 })
 
-const outputText = computed(() => {
-  if (props.status === 'pending') return '…'
+const resolvedOutputText = computed(() => {
   if (props.result === undefined || props.result === null || props.result === '') return '{}'
   if (props.tool === 'task' && typeof props.result === 'object') {
     const data = props.result as Record<string, unknown>
@@ -422,6 +465,84 @@ function formatJson(val: any): string {
     return String(val)
   }
 }
+
+const streamSourceText = computed(() => {
+  if (props.status !== 'ok') return ''
+  return previewText.value || resolvedOutputText.value
+})
+
+let streamFrame: number | undefined
+let streamVersion = 0
+
+/** 停止旧结果的渲染帧，避免连续 ToolCall 回填时串写到下一张卡片。 */
+function stopOutputStream(): void {
+  streamVersion += 1
+  if (streamFrame !== undefined) {
+    window.cancelAnimationFrame(streamFrame)
+    streamFrame = undefined
+  }
+}
+
+function prefersReducedMotion(): boolean {
+  if (typeof window === 'undefined') return false
+  return window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches === true
+}
+
+/** 将已脱敏的 ToolCard 输出按帧渐显，保留行号和可读性。 */
+function revealOutput(text: string): void {
+  stopOutputStream()
+  if (!text) {
+    displayedOutputText.value = ''
+    isStreamingOutput.value = false
+    return
+  }
+  const shouldAnimate = !props.noAnim
+    && !prefersReducedMotion()
+    && !isAudioOutput.value
+    && props.tool !== 'image.generate'
+  if (!shouldAnimate) {
+    displayedOutputText.value = text
+    isStreamingOutput.value = false
+    return
+  }
+
+  const version = streamVersion
+  const duration = Math.min(1400, Math.max(420, text.length * 4))
+  const startedAt = performance.now()
+  displayedOutputText.value = ''
+  isStreamingOutput.value = true
+  isOpen.value = true
+
+  const step = (now: number) => {
+    if (version !== streamVersion) return
+    const progress = Math.min(1, (now - startedAt) / duration)
+    const chars = Math.max(1, Math.ceil(text.length * progress))
+    displayedOutputText.value = text.slice(0, chars)
+    if (progress < 1) {
+      streamFrame = window.requestAnimationFrame(step)
+      return
+    }
+    streamFrame = undefined
+    isStreamingOutput.value = false
+  }
+  streamFrame = window.requestAnimationFrame(step)
+}
+
+watch(
+  streamSourceText,
+  (text) => {
+    if (props.status !== 'ok') {
+      stopOutputStream()
+      displayedOutputText.value = ''
+      isStreamingOutput.value = false
+      return
+    }
+    revealOutput(text)
+  },
+  { immediate: true },
+)
+
+onBeforeUnmount(stopOutputStream)
 </script>
 
 <style scoped>
@@ -432,7 +553,17 @@ function formatJson(val: any): string {
   overflow: hidden;
   max-width: 92%;
   box-shadow: 0 1px 2px rgba(17, 24, 39, 0.04);
-  animation: msg-in 0.26s cubic-bezier(0.2, 0.9, 0.3, 1);
+  transform-origin: 28px 100%;
+  will-change: transform, opacity;
+  animation: tool-card-pop 0.42s cubic-bezier(0.22, 0.9, 0.28, 1);
+  transition: border-color 0.24s ease, box-shadow 0.24s ease, background 0.24s ease;
+}
+.tool-card.is-pending {
+  border-color: color-mix(in srgb, var(--accent-info) 34%, var(--border-subtle));
+  box-shadow: 0 7px 22px color-mix(in srgb, var(--accent-info) 12%, transparent);
+}
+.tool-card.is-streaming {
+  border-color: color-mix(in srgb, var(--accent-success) 30%, var(--border-subtle));
 }
 .tool-head {
   display: flex;
@@ -456,9 +587,25 @@ function formatJson(val: any): string {
   color: var(--accent-info);
   animation: spin 1.2s linear infinite;
 }
+.tool-pulse {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--accent-info);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent-info) 50%, transparent);
+  animation: tool-pulse 1.45s ease-out infinite;
+}
 @keyframes spin {
   to {
     transform: rotate(360deg);
+  }
+}
+@keyframes tool-pulse {
+  70% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
   }
 }
 .tool-status.ok {
@@ -538,6 +685,30 @@ function formatJson(val: any): string {
   border-top: 1px solid var(--border-subtle);
   padding: 12px 14px;
   background: var(--bg-elevated);
+  overflow: hidden;
+}
+.tool-detail-enter-active,
+.tool-detail-leave-active {
+  transition: max-height 0.28s cubic-bezier(0.22, 0.9, 0.28, 1), opacity 0.18s ease, transform 0.28s ease, padding 0.28s ease;
+}
+.tool-detail-enter-from,
+.tool-detail-leave-to {
+  max-height: 0;
+  opacity: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  transform: translateY(-6px);
+}
+.tool-detail-enter-to,
+.tool-detail-leave-from {
+  max-height: 760px;
+  opacity: 1;
+  transform: translateY(0);
+}
+.td-label-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 .td-label {
   font-family: var(--font-mono);
@@ -546,6 +717,31 @@ function formatJson(val: any): string {
   text-transform: uppercase;
   color: var(--text-tertiary);
   margin-bottom: 5px;
+}
+.td-label-row .td-label {
+  margin-bottom: 5px;
+}
+.td-stream-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 5px;
+  color: var(--accent-success);
+  font-size: 10px;
+  font-weight: 600;
+}
+.td-stream-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: stream-dot 0.9s ease-in-out infinite;
+}
+@keyframes stream-dot {
+  50% {
+    opacity: 0.35;
+    transform: scale(0.65);
+  }
 }
 .td-block {
   margin-bottom: 8px;
@@ -615,6 +811,54 @@ pre.code {
   font-size: 12.5px;
   line-height: 1.5;
 }
+.tool-output-loading {
+  padding: 11px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent-info) 18%, var(--border-subtle));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent-info) 5%, var(--bg-main));
+}
+.tool-loading-copy {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.tool-loading-orbit {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+  border: 2px solid color-mix(in srgb, var(--accent-info) 24%, transparent);
+  border-top-color: var(--accent-info);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+.tool-loading-lines {
+  display: grid;
+  gap: 6px;
+  margin-top: 11px;
+}
+.tool-loading-lines span {
+  display: block;
+  height: 7px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--bg-elevated) 20%, color-mix(in srgb, var(--accent-info) 14%, var(--bg-elevated)) 45%, var(--bg-elevated) 70%);
+  background-size: 220% 100%;
+  animation: output-shimmer 1.3s ease-in-out infinite;
+}
+.tool-loading-lines span:nth-child(2) {
+  width: 82%;
+  animation-delay: 0.12s;
+}
+.tool-loading-lines span:nth-child(3) {
+  width: 60%;
+  animation-delay: 0.24s;
+}
+@keyframes output-shimmer {
+  to {
+    background-position: -220% 0;
+  }
+}
 .td-meta {
   margin-bottom: 8px;
   color: var(--text-tertiary);
@@ -647,6 +891,9 @@ pre.code {
   border-radius: 8px;
   padding: 6px 0;
 }
+.line-block.is-streaming-output {
+  border: 1px solid color-mix(in srgb, var(--accent-success) 26%, transparent);
+}
 .tool-call-code {
   max-height: 300px;
 }
@@ -670,6 +917,23 @@ pre.code {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   padding-right: 10px;
+}
+.stream-tail {
+  min-height: 20px;
+  padding-left: 52px;
+  color: var(--accent-success);
+  font-size: 12px;
+}
+.stream-cursor {
+  display: inline-block;
+  margin-left: 1px;
+  color: var(--accent-success);
+  animation: stream-cursor-blink 0.78s steps(2, start) infinite;
+}
+@keyframes stream-cursor-blink {
+  50% {
+    opacity: 0;
+  }
 }
 .tool-card :deep(.tool-md) {
   font-size: 13.5px;
@@ -715,14 +979,35 @@ pre.code {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-@keyframes msg-in {
+@keyframes tool-card-pop {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translateY(14px) scale(0.98);
+  }
+  65% {
+    opacity: 1;
+    transform: translateY(-1px) scale(1.005);
   }
   to {
     opacity: 1;
-    transform: none;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tool-card,
+  .tool-status.pending,
+  .tool-pulse,
+  .tool-loading-orbit,
+  .tool-loading-lines span,
+  .td-stream-dot,
+  .stream-cursor {
+    animation: none;
+  }
+  .tool-detail-enter-active,
+  .tool-detail-leave-active,
+  .tool-head .chev {
+    transition: none;
   }
 }
 

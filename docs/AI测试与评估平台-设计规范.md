@@ -2,11 +2,11 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.8 |
+| 文档版本 | V1.9 |
 | 对应 PRD | V1.8（唯一产品权威） |
 | 对应开发计划 | V1.5 |
 | 撰写日期 | 2026-08-17 |
-| 最近修订 | 2026-08-26：ToolCard 原生工具收起态统一显示 ToolCall，不回显文件路径、命令和写入内容；展开区继续展示详细参数与行号内容。2026-08-26：ToolCard 原生工具改用英文工具名，展开区统一使用 ToolCall/输出分区，文件、命令和代码/文档结果使用行号展示；2026-08-23：Agent 对话助手消息增加供应商 Logo、模型名、协议档名和时间；2026-08-23：Agent 输入框模型选择器增加供应商 Logo；2026-08-23：协议档供应商卡片改用本地品牌标识并补充 Gemini 归类；2026-08-23：对齐 LangGraph 单轮 Agent、WS 基础事件和 Harness 冻结边界；2026-08-21：协议档增加 Embedding / Reranker 独立 URL、模型 ID、Key 配置，仍按 profile 环境文件隔离持久化 |
+| 最近修订 | 2026-08-26：ToolCard 在 ToolCall 后立即显示执行加载态，ToolResult 的安全投影按帧渐显，并加入卡片弹出与展开动画；动效遵从系统减少动态效果设置。2026-08-26：ToolCard 原生工具收起态统一显示 ToolCall，不回显文件路径、命令和写入内容；展开区继续展示详细参数与行号内容。2026-08-26：ToolCard 原生工具改用英文工具名，展开区统一使用 ToolCall/输出分区，文件、命令和代码/文档结果使用行号展示；2026-08-23：Agent 对话助手消息增加供应商 Logo、模型名、协议档名和时间；2026-08-23：Agent 输入框模型选择器增加供应商 Logo；2026-08-23：协议档供应商卡片改用本地品牌标识并补充 Gemini 归类；2026-08-23：对齐 LangGraph 单轮 Agent、WS 基础事件和 Harness 冻结边界；2026-08-21：协议档增加 Embedding / Reranker 独立 URL、模型 ID、Key 配置，仍按 profile 环境文件隔离持久化 |
 | 技术栈（PRD） | Vue3 + Naive UI、Python FastAPI、PostgreSQL、WebSocket、Docker Compose、go-stress-testing |
 | 适用范围 | V1.0 前端 `frontend/` |
 
@@ -729,4 +729,11 @@ Agent 页允许的 Dialog **只有**：取消当前长任务、退出登录。�
 
 ---
 
-*V1.8：补充原生 ToolCall 收起态隐藏文件路径、命令和写入内容的展示约定。产品以 PRD 为准。*
+## 本次修订代码文件与作用清单（2026-08-26 · ToolCard 流式反馈）
+
+| 文件 | 作用 |
+| --- | --- |
+| frontend/src/components/agent/ToolCard.vue | ToolCall 到达后展示执行加载态和脉冲状态；ToolResult 的既有脱敏投影按帧渐显，保持 read/bash/web_fetch 的行号；新增卡片弹出、展开/收起、输出光标等动效，并适配 prefers-reduced-motion。不新增 WebSocket 事件或回传完整 Observation。 |
+| docs/AI测试与评估平台-设计规范.md | 记录 ToolCard 的加载、渐显和动效边界，明确结果仍受 API 既有安全投影约束。 |
+
+*V1.9：补充 ToolCard 的加载态、受控输出渐显与动效约定。产品以 PRD 为准。*
