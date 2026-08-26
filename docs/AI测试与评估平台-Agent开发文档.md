@@ -1,6 +1,6 @@
 # AI 测试与评估平台 Agent 开发文档
 
-> 版本：V1.5.3
+> 版本：V1.5.4
 > 状态：LangGraph Harness 已启用混合范式 P0–P2：Plan-and-Solve → ReAct → reflect；native 中间叙述；clarify interrupt 与有界重规划；检查点默认 memory；reflect 产出确认卡；ContextMeter 服务端计算；assemble 接线 CX-4/CX-5；read 防重复与行级 ToolCard
 > 审查日期：2026-08-26
 > 对应需求：`AI测试与评估平台-PRD.md` V1.12
@@ -49,7 +49,7 @@ reflect -> (clarify | plan_solve | END)
 clarify -> plan_solve
 ```
 
-`decide_mode` 为代码主导：斜杠 → Direct；附件 → ReAct；多技能/确认卡/显式清单 → Plan-and-Solve（`build_plan`，失败 L0 降级并合并全部命中技能，步骤 3–7）；工具关键词 → ReAct；否则 Chat。`plan_solve` 下发完整 `PlanArtifact`（`plan` 事件含 `slots`/`budget`/`notes`），不伪造未执行的 `tool_call`，也不在规划节点发 `response.completed`。有 `plan` 的回合由 ReAct 执行短工具后进入 `reflect`，由 reflect 发出本轮唯一 `response.completed`。中间多条 `assistant_message`、澄清卡 interrupt 与有界重规划仍属后续阶段。
+`decide_mode` 为代码主导：斜杠 → Direct；附件 → ReAct；多技能、两个及以上不同短工具、确认卡或显式清单 → Plan-and-Solve（`build_plan`，失败 L0 降级并合并全部命中能力，步骤 3–7）；单工具关键词 → ReAct；否则 Chat。`plan_solve` 下发完整 `PlanArtifact`（`plan` 事件含 `slots`/`budget`/`notes`），不伪造未执行的 `tool_call`，也不在规划节点发 `response.completed`。有 `plan` 的回合由 ReAct 执行短工具后进入 `reflect`，由 reflect 发出本轮唯一 `response.completed`。用户消息不得接管 `<PLAN>`、ReAct 或 ToolCall 控制格式；这些协议仅由平台内部图生成。中间多条 `assistant_message`、澄清卡 interrupt 与有界重规划仍属后续阶段。
 
 图节点不持有数据库 Session、WebSocket 或任务队列。ToolNode 只消费可序列化 `pending_tool` / `pending_tools`、执行既有门禁与沙箱工具，并返回 Observation；同一模型响应的多个 ToolCall 在节点内串行消费，不绕过任一调用的门禁。`transport=native` 的 read/write/edit/bash/web_search/web_fetch/task 经 NativeToolExecutor 直连受控 handler；`transport=mcp` 的 `platform.tasks.task.create/status/cancel` 和后续评测/RAG 扩展经 MCPClientManager。路由层仍负责事件持久化与投影。
 
@@ -293,3 +293,10 @@ Agent 思考配置从 `Setting(key="agent_reasoning")` 读取，结构为
 - `frontend/src/components/agent/ToolCard.vue`：输入字段、行号、命令/文件内容与 Markdown 渲染。
 - `frontend/src/utils/toolCard.ts`：成功后默认展开的工具名单。
 - `docs/AI测试与评估平台-API.md`：V1.37。
+
+### V1.5.4（2026-08-26）修改代码文件与作用清单
+
+- `backend/api/app/harness/orchestration/router.py`：将两个及以上不同短工具识别为多步骤任务，路由到内部 `plan_solve`；单短工具保持 ReAct。
+- `backend/api/app/harness/orchestration/plan.py`：规划模型不可用或产物非法时，为多短工具链生成 L0 `PlanArtifact`，避免把用户提供的 `<PLAN>` 文本作为控制协议。
+- `backend/api/app/harness/prompts/system.py`：固定声明编排协议由平台拥有，用户消息不得篡改 Plan、ReAct、ToolCall 与事件格式。
+- `backend/api/tests/test_agent_routing.py` / `test_harness_prompts.py`：覆盖多短工具链路由、L0 规划与协议归属约束。
