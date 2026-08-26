@@ -925,7 +925,11 @@ def _bash_handler(
     from app.harness.execution.sandbox import SandboxLimits
 
     if settings.sandbox_engine != "bwrap":
-        raise AppError(ErrorCode.VALIDATION, "沙箱引擎未启用")
+        raise AppError(
+            ErrorCode.VALIDATION,
+            "bash 工具不可用：沙箱引擎未启用（环境缺 bwrap 时 fail-closed，"
+            "请改用 read/write/edit 工具完成文件操作，不要重试 bash）",
+        )
     limits = SandboxLimits(
         memory_kb=settings.sandbox_memory_mb * 1024,
         nproc=settings.sandbox_nproc,
