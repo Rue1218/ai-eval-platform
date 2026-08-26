@@ -897,7 +897,7 @@ async def _run_turn(
         )
     except Exception as exc:
         db.rollback()
-        logger.exception("Agent 回合内部异常 session=%s exc=%s", session_id, exc)
+        logger.exception("Agent 回合内部异常 session=%s type=%s", session_id, type(exc).__name__)
         await _emit_error(
             db,
             websocket,

@@ -155,8 +155,12 @@ def put_settings(
                 write_global_aliases=True,
                 remove_global_api_key=not bool(api_key),
             )
+        # 批量加载已存在的设置行，避免逐 key 查询造成 N+1
+        existing_settings = {
+            row.key: row for row in db.query(Setting).filter(Setting.key.in_(list(body))).all()
+        }
         for key, value in body.items():
-            row = db.query(Setting).filter(Setting.key == key).first()
+            row = existing_settings.get(key)
             if row:
                 row.value = value
                 row.updated_by = user.id
