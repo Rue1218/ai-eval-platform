@@ -2267,7 +2267,6 @@ function handleUserSend(text: string, files: any[] = []) {
   // 竞态窗口内 agentWs 仍指旧会话——此时发送会把消息写进旧会话且回复被后台分流，
   // 当前视图永远等不到事件（表现为打字占位/空光标气泡卡住）。
   if (agentWs?.isConnected && (!agentWs.sessionId || agentWs.sessionId === currentSessionId.value)) {
-    console.debug('[Agent] 发送用户消息', { chars: text.length, attachments: files.filter(f => f.id).length })
     // 打字占位气泡：服务端 LLM 意图识别期间给用户即时反馈，收到任意事件后移除
     events.value.push({ type: 'typing' })
     scrollToBottom()
@@ -3724,10 +3723,6 @@ function handleWsEvent(ev: WsServerEvent) {
   // 规划/流式开始前对话区只剩用户气泡，看起来像模型没有回复。
   if (ev.event !== 'pong' && ev.event !== 'message' && ev.event !== 'user_message') {
     dismissTyping()
-    const isStream = ev.payload && typeof ev.payload.stream === 'string'
-    if (!isStream) {
-      console.debug('[Agent WS] 收到事件', { event: ev.event, eventId: ev.event_id })
-    }
   }
   const p = ev.payload || {}
   switch (ev.event) {
@@ -3808,7 +3803,6 @@ function handleWsEvent(ev: WsServerEvent) {
           if (target) {
             target.text = (target.text || '') + delta
           } else {
-            console.debug('[Agent] 思考链增量')
             appendThoughtBlock(agent, { text: delta, done: false, collapsed: false, streamThink: true, stage: p.stage })
           }
           scrollToBottom()
@@ -3845,11 +3839,6 @@ function handleWsEvent(ev: WsServerEvent) {
           latency_ms: p.latency_ms,
           stage,
           skill_id: p.skill_id,
-        })
-        console.log('%c[Agent] 💡 阶段思考卡:', 'color: #10b981; font-weight: bold;', {
-          stage,
-          skill: p.skill_id || '-',
-          chars: text.length,
         })
         if (text) scrollToBottom()
         break
@@ -3912,10 +3901,6 @@ function handleWsEvent(ev: WsServerEvent) {
       break
     }
     case 'tool_call': {
-      console.debug('[Agent] ToolCall', {
-        name: p.name,
-        argumentKeys: p.arguments && typeof p.arguments === 'object' ? Object.keys(p.arguments) : [],
-      })
       finishLiveThought()
       harnessStage.value = 'react'
       lastToolTitle.value = getToolDisplayName(p.name)
@@ -3940,11 +3925,6 @@ function handleWsEvent(ev: WsServerEvent) {
       break
     }
     case 'tool_result': {
-      console.debug('[Agent] ToolCall 完成', {
-        name: p.name,
-        ok: Boolean(p.ok),
-        latency: `${p.latency_ms || 0}ms`,
-      })
       const agent = getCurrentTurnAgent(events.value)
       const target = agent ? findPendingToolBlock(agent, p.name, p.call_id) : undefined
       if (target) {
@@ -3989,7 +3969,6 @@ function handleWsEvent(ev: WsServerEvent) {
       break
     }
     case 'confirm': {
-      console.debug('[Agent] 确认卡到达', { kind: p.kind || 'unknown' })
       lastConfirmKind = p.kind || 'benchmark'
       finishLiveThought()
       setCurrentGenerating(false)

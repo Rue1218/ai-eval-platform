@@ -196,17 +196,18 @@ def _expire_stale_case_confirmations(db) -> int:
                 )
             )
     db.commit()
-    # 推送放事务外：逐个任务通知（扫描量小，逐条推送成本可控）
+    # 推送放事务外：批量加载关联任务后逐个通知，避免逐条查询造成 N+1
+    task_ids = [case_set.task_id for case_set in stale if case_set.task_id]
+    tasks_by_id = {task.id: task for task in db.query(Task).filter(Task.id.in_(task_ids)).all()}
     for case_set in stale:
-        if case_set.task_id:
-            task = db.query(Task).filter(Task.id == case_set.task_id).first()
-            if task and task.session_id:
-                push_ws(
-                    task.session_id,
-                    "progress",
-                    {"percent": 100, "done": 1, "total": 1, "message": "用例确认超时，任务已自动取消"},
-                    task_id=task.id,
-                )
+        task = tasks_by_id.get(case_set.task_id)
+        if task and task.session_id:
+            push_ws(
+                task.session_id,
+                "progress",
+                {"percent": 100, "done": 1, "total": 1, "message": "用例确认超时，任务已自动取消"},
+                task_id=task.id,
+            )
     logger.info("expired %d stale case set(s)", len(stale))
     return len(stale)
 

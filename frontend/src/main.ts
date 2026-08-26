@@ -23,13 +23,16 @@ const beijingTime = buildDate.toLocaleString('zh-CN', {
   second: '2-digit',
 })
 
-console.log(
-  '%cAI 测试与评估平台',
-  'background:#6366F1;color:#fff;padding:4px 10px;border-radius:4px;font-weight:700;font-size:13px',
-)
-console.log(`版本（Git Commit）：${__BUILD_VERSION__}`)
-console.log(`构建时间（UTC）：${utcTime}`)
-console.log(`构建时间（北京时间）：${beijingTime}`)
+// 仅开发环境打印构建信息，生产环境不暴露版本与构建时间
+if (import.meta.env.DEV) {
+  console.log(
+    '%cAI 测试与评估平台',
+    'background:#6366F1;color:#fff;padding:4px 10px;border-radius:4px;font-weight:700;font-size:13px',
+  )
+  console.log(`版本（Git Commit）：${__BUILD_VERSION__}`)
+  console.log(`构建时间（UTC）：${utcTime}`)
+  console.log(`构建时间（北京时间）：${beijingTime}`)
+}
 
 const app = createApp(App)
 const pinia = createPinia()

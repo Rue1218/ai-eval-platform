@@ -98,14 +98,12 @@ export class AgentWebSocket {
       this.ws = new WebSocket(url)
 
       this.ws.onopen = () => {
-        console.log('%c[Agent WS] 🟢 WebSocket 智能体长连接已就绪 (sessionId=' + this.sessionId + ')', 'color: #10b981; font-weight: bold;')
         this.lastReceiveAt = Date.now()
         this.startSilenceWatch()
         this.notifyStatus(true)
       }
 
       this.ws.onclose = (event) => {
-        console.log('%c[Agent WS] 🔴 WebSocket 智能体长连接已断开', 'color: #f59e0b; font-weight: bold;')
         this.notifyStatus(false)
         this.notifyClosed(event.code)
         // 4401 短票过期：重新领票并重连（connect() 每次都会 POST /api/auth/ws-ticket）。

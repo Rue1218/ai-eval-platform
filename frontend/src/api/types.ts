@@ -524,6 +524,13 @@ export interface StressSeriesPoint {
   error_rate: number
 }
 
+/** 压测时序接口响应：报告内嵌 series 或独立 stress-series 接口均可返回 points/series。 */
+export interface StressSeriesResponse {
+  task_id?: string
+  points?: StressSeriesPoint[]
+  series?: StressSeriesPoint[]
+}
+
 export interface Report {
   id: string
   task_id: string
