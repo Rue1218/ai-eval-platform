@@ -229,6 +229,69 @@ def _repeat_correction_observation(tool: str, arguments: Mapping[str, object], r
     )
 
 
+def _cached_replay_text(state: GraphState, name: str, arguments: Mapping[str, object]) -> str | None:
+    """取最近一次相同参数成功调用的结果正文，供重复调用缓存回放。"""
+    wanted = _normalized_tool_arguments(name, arguments)
+    for observation in reversed(state.get("observations") or []):
+        if getattr(observation, "tool", None) != name:
+            continue
+        if not getattr(observation, "ok", False):
+            continue
+        if _normalized_tool_arguments(name, getattr(observation, "arguments", None)) != wanted:
+            continue
+        text = str(getattr(observation, "text", "") or "")
+        if text:
+            return text
+    return None
+
+
+def _cached_native_replay_text(
+    state: GraphState,
+    store: NativeToolResultStore | None,
+    thread_id: str,
+    name: str,
+    arguments: Mapping[str, object] | None,
+) -> str | None:
+    """native 路径的缓存回放正文：观察里只留摘要，正文在本回合结果存储。
+
+    沿 ``native_messages`` 回溯相同参数的 assistant tool_call，再按 call_id
+    从单回合 store 取回完整正文；存储不可用或已失效时返回 None。
+    """
+    if store is None:
+        return None
+    wanted = _normalized_tool_arguments(name, arguments)
+    for raw in reversed(state.get("native_messages") or ()):
+        if str(raw.get("role") or "") != "assistant":
+            continue
+        for call in raw.get("tool_calls") or ():
+            if not isinstance(call, Mapping):
+                continue
+            if str(call.get("name") or "") != name:
+                continue
+            if _normalized_tool_arguments(name, call.get("arguments")) != wanted:
+                continue
+            text = store.get(thread_id, str(call.get("call_id") or ""))
+            if text:
+                return text
+    return None
+
+
+def _repeat_replay_observation(
+    tool: str, arguments: Mapping[str, object], cached_text: str, runs: int
+) -> Observation:
+    """只读工具重复调用的缓存回放观察（legacy 注入路径）。"""
+    return Observation(
+        tool=tool,
+        text=(
+            f"(系统提示：本次调用与第 {runs} 次成功执行参数相同，"
+            "以下为缓存回放，内容与上次完全一致；如需新内容请换参数，"
+            "否则请直接基于该内容作答。)\n" + cached_text
+        ),
+        ok=True,
+        arguments=dict(arguments),
+    )
+
+
 def _split_native_readonly_repeats(
     state: GraphState, calls: tuple[NativeToolCall, ...]
 ) -> tuple[tuple[NativeToolCall, ...], NativeToolCall | None, int]:
@@ -1029,6 +1092,48 @@ def build_react_nodes(
                             close_turn=close_turn,
                             response=response,
                         )
+                    # 只读重复调用优先缓存回放：模型直接拿到与上次一致的内容，
+                    # 省一轮「纠正→重试」往返；回放后仍无进展才升级为强制收尾。
+                    cached_text = _cached_native_replay_text(
+                        state, native_tool_results, thread_id,
+                        skipped_repeat.name, skipped_repeat.arguments,
+                    )
+                    if (
+                        cached_text
+                        and native_tool_results is not None
+                        and native_tool_results.put(
+                            thread_id, skipped_repeat.call_id, cached_text
+                        )
+                    ):
+                        return {
+                            "pending_tool": None,
+                            "pending_tools": [],
+                            "pending_tool_batch": None,
+                            "repeat_retry": True,
+                            "native_messages": [
+                                _native_tool_message((skipped_repeat,), response.text),
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": skipped_repeat.call_id,
+                                    "name": skipped_repeat.name,
+                                    "content": "",
+                                },
+                            ],
+                            "pending_events": thought_events,
+                            # 观察只留摘要（完整正文仅进单回合 store，不入检查点）
+                            "observations": [
+                                Observation(
+                                    tool=skipped_repeat.name,
+                                    text=(
+                                        f"工具 {skipped_repeat.name} 重复调用已缓存回放，"
+                                        "内容与上次成功执行完全一致。"
+                                    ),
+                                    ok=True,
+                                    arguments=dict(skipped_repeat.arguments),
+                                )
+                            ],
+                            "budget": budget.to_dict(),
+                        }
                     return {
                         "pending_tool": None,
                         "pending_tools": [],
@@ -1211,7 +1316,8 @@ def build_react_nodes(
                 state, tool, arguments, limit=READONLY_REPEAT_LIMIT
             )
             if identical_count and tool in READONLY_TOOLS:
-                # 只读工具无进展重复：相同窗口已成功读过，继续相同调用不会得到新信息。
+                # 只读工具无进展重复：优先缓存回放（省一轮纠正往返），
+                # 无缓存才退回纠正观察。
                 if state.get("repeat_retry"):
                     return _forced_repeat_completion(
                         gateway=gateway,
@@ -1224,6 +1330,17 @@ def build_react_nodes(
                         close_turn=close_turn,
                         response=response,
                     )
+                cached_text = _cached_replay_text(state, tool, arguments)
+                if cached_text:
+                    return {
+                        "pending_tool": None,
+                        "repeat_retry": True,
+                        "pending_events": thought_events,
+                        "observations": [
+                            _repeat_replay_observation(tool, arguments, cached_text, identical_count)
+                        ],
+                        "budget": budget.to_dict(),
+                    }
                 return {
                     "pending_tool": None,
                     "repeat_retry": True,

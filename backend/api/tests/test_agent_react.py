@@ -365,6 +365,64 @@ def test_native_read_returns_1000_line_txt_in_one_call() -> None:
     assert "截断" not in content and "未读完" not in content
 
 
+def test_native_read_repeat_replays_cached_result() -> None:
+    """只读重复调用缓存回放：模型拿到与上次一致的内容，不执行工具。"""
+
+    class _RepeatThenAnswerGateway:
+        def __init__(self) -> None:
+            self.stream_calls: list[object] = []
+
+        def invoke(self, request: object, config: dict | None = None):
+            raise AssertionError("native 路径应走 stream")
+
+        def stream(self, request: object, config: dict | None = None):
+            self.stream_calls.append(request)
+            has_tools = bool(getattr(request, "tools", ()))
+            round_no = len(self.stream_calls)
+            if has_tools and round_no <= 2:
+                call = NativeToolCall(f"call_read_{round_no}", "read", {"path": "a.txt"})
+                response = ModelResponse(text="", latency_ms=1, tool_calls=(call,))
+                return iter(
+                    [
+                        ModelStreamEvent(kind="tool_call", tool_call=call),
+                        ModelStreamEvent(kind="completed", response=response),
+                    ]
+                )
+            return iter(
+                [
+                    ModelStreamEvent(
+                        kind="completed",
+                        response=ModelResponse(text="已根据文件内容作答。", latency_ms=1),
+                    )
+                ]
+            )
+
+    gateway = _RepeatThenAnswerGateway()
+    with tempfile.TemporaryDirectory() as tmp:
+        with open(f"{tmp}/a.txt", "w", encoding="utf-8") as handle:
+            handle.write("hello cached")
+        events = _collect(
+            LangGraphAgent(gateway, build_default_registry(), sandbox_dir=tmp),
+            _serializable(),
+        )
+
+    kinds = [event["kind"] for event in _pending_events(events)]
+    # 只执行第一次 read；重复调用不执行、不产生工具事件。
+    assert kinds.count("tool_call") == 1
+    assert kinds.count("tool_result") == 1
+    assert kinds.count("error") == 0
+    assert kinds[-2:] == ["assistant_message", "response.completed"]
+    # 第三轮模型输入包含被回放的缓存正文（两条 tool 消息内容一致）。
+    tool_contents = [
+        str(message.get("content") or "")
+        for message in gateway.stream_calls[2].messages
+        if message.get("role") == "tool"
+    ]
+    assert len(tool_contents) == 2
+    assert all("hello cached" in content for content in tool_contents)
+    assert tool_contents[0] == tool_contents[1]
+
+
 def test_native_read_repeat_same_offset_is_blocked() -> None:
     """原生 ToolCall 路径同样拦截相同 offset 的重复 read。"""
 
