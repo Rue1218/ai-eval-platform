@@ -179,10 +179,11 @@ p { margin: 0; text-wrap: pretty; }
 .app.folded .nav-item { justify-content: center; padding: 0; }
 .app.folded .nav-item .nav-label { display: none; }
 .nav-item.active { background: var(--t, var(--t-tasks)); color: var(--c, var(--c-tasks)); font-weight: 600; }
-.nav-dot { width: 7px; height: 7px; border-radius: 50%; margin-left: auto; flex: 0 0 7px; }
+.nav-dot { width: 7px; height: 7px; border-radius: 50%; margin-left: auto; flex: 0 0 7px; background: var(--accent-success); }
 .app.folded .nav-dot { position: absolute; top: 8px; right: 8px; margin: 0; }
-.nav-dot.running { background: var(--accent-info); animation: dot-breathe 1.6s ease-in-out infinite; }
+.nav-dot.ready,
 .nav-dot.succeeded { background: var(--accent-success); }
+.nav-dot.running { background: var(--accent-info); animation: dot-breathe 1.6s ease-in-out infinite; }
 .nav-dot.failed { background: var(--accent-error); }
 .nav-dot.offline { background: var(--accent-warning); }
 @keyframes dot-breathe { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
@@ -525,6 +526,7 @@ p { margin: 0; text-wrap: pretty; }
 .session-select { flex: 0 0 auto; }
 .session-title-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-meta-right { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; margin-left: auto; }
+.session-meta-right .nav-dot { position: static; margin: 0; }
 .session-del {
   flex: 0 0 auto; display: none; align-items: center; justify-content: center;
   width: 22px; height: 22px; border: none; border-radius: 6px; cursor: pointer;

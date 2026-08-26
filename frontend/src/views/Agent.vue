@@ -56,8 +56,8 @@
             <span class="session-title-text">{{ s.title || '新会话' }}</span>
             <span v-if="s.visibility === 'team'" class="session-team-badge">团队</span>
             <div class="session-meta-right">
-              <!-- D5 会话状态点多态：running / succeeded / failed -->
-              <i v-if="sessionDotClass(s)" class="nav-dot" :class="sessionDotClass(s)" :title="sessionDotTooltip(s)"></i>
+              <!-- D5 会话状态点多态：常驻显示 ready(就绪) / running(进行中) / succeeded(成功) / failed(失败) / offline(断线) -->
+              <i class="nav-dot" :class="sessionDotClass(s)" :title="sessionDotTooltip(s)"></i>
               <button
                 v-if="s.can_delete"
                 class="session-del"
@@ -1951,22 +1951,44 @@ function hydrateToolResult(name: unknown, data: any) {
   if (name === 'kb.list') availableKbs.value = items
 }
 
-/** D5 会话列表状态点多态：按 status / active_task / 本轮生成中 映射 nav-dot 样式。 */
-function sessionDotClass(s: any): string | null {
-  if (generatingBySession.value[s.id] || (s.id === currentSessionId.value && isGenerating.value)) return 'running'
-  if (s.active_task || s.status === 'running' || s.status === 'queued') return 'running'
-  if (s.status === 'succeeded') return 'succeeded'
+/** D5 会话列表状态点多态：按 status / active_task / 本轮生成中 / 断线重连 映射 nav-dot 样式，常驻显示就绪状态。 */
+function sessionDotClass(s: any): string {
+  const rt = sessionRuntimes.get(s.id)
+  const isGen = generatingBySession.value[s.id] || (s.id === currentSessionId.value && isGenerating.value) || rt?.isGenerating
+  if (isGen) return 'running'
+
+  const task = (s.id === currentSessionId.value ? activeTask.value : null) || rt?.activeTask || s.active_task
+  if (task) {
+    if (task.status === 'running' || task.status === 'queued') return 'running'
+    if (task.status === 'failed') return 'failed'
+    if (task.status === 'succeeded') return 'succeeded'
+    if (task.status === 'cancelled') return 'offline'
+  }
+  if (s.status === 'running' || s.status === 'queued') return 'running'
   if (s.status === 'failed') return 'failed'
-  return null
+  if (s.status === 'succeeded') return 'succeeded'
+  if (s.id === currentSessionId.value && !isWsOnline.value) return 'offline'
+  return 'ready'
 }
 
 /** 会话状态提示语（鼠标悬停指示点时展示）。 */
 function sessionDotTooltip(s: any): string {
-  if (generatingBySession.value[s.id] || (s.id === currentSessionId.value && isGenerating.value)) return '正在生成…'
-  if (s.active_task || s.status === 'running' || s.status === 'queued') return '任务进行中…'
-  if (s.status === 'succeeded') return '任务评测成功 (succeeded)'
+  const rt = sessionRuntimes.get(s.id)
+  const isGen = generatingBySession.value[s.id] || (s.id === currentSessionId.value && isGenerating.value) || rt?.isGenerating
+  if (isGen) return '智能体正在思考生成中…'
+
+  const task = (s.id === currentSessionId.value ? activeTask.value : null) || rt?.activeTask || s.active_task
+  if (task) {
+    if (task.status === 'running' || task.status === 'queued') return '评测任务进行中…'
+    if (task.status === 'failed') return '任务执行失败 (failed)'
+    if (task.status === 'succeeded') return '任务评测成功 (succeeded)'
+    if (task.status === 'cancelled') return '任务已取消 (cancelled)'
+  }
+  if (s.status === 'running' || s.status === 'queued') return '评测任务进行中…'
   if (s.status === 'failed') return '任务执行失败 (failed)'
-  return '会话就绪'
+  if (s.status === 'succeeded') return '任务评测成功 (succeeded)'
+  if (s.id === currentSessionId.value && !isWsOnline.value) return 'WebSocket 已断开，正在重连…'
+  return '智能体就绪 (在线)'
 }
 
 /** HTML 转义：历史 assistant 消息纯文本安全注入气泡（对齐原型 AE.esc）。 */
