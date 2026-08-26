@@ -11,3 +11,28 @@ const KEEP_OPEN_TOOLS = new Set([
 export function shouldKeepToolCardOpen(name: string): boolean {
   return KEEP_OPEN_TOOLS.has(name)
 }
+
+/** 可按 call_id 关联的工具块；直播与历史回放共用同一套匹配规则。 */
+export interface ToolMatchable {
+  type?: string
+  callId?: string
+  tool?: string
+  status?: string
+}
+
+/** 按 call_id 查找待完成工具；历史事件缺失该字段时才兼容旧的同名回退。 */
+export function findPendingToolItem<T extends ToolMatchable>(
+  items: T[],
+  name: unknown,
+  callId?: unknown,
+): T | undefined {
+  const reversed = [...items].reverse()
+  if (typeof callId === 'string' && callId) {
+    return reversed.find(
+      (item) => item.type === 'tool' && item.callId === callId && item.status === 'pending',
+    )
+  }
+  return reversed.find(
+    (item) => item.type === 'tool' && item.tool === name && item.status === 'pending',
+  )
+}

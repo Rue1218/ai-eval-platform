@@ -2,17 +2,21 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.45 |
+| 文档版本 | V1.48 |
 | 对应 PRD | V1.13（功能唯一权威） |
 | 对应设计规范 | V1.10（错误码文案、确认卡字段名、调度中心规范） |
-| 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.5.9（LangGraph 单轮 Agent 与 WS 桥接；JSON 仍以本文为准） |
+| 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.5.15（LangGraph 单轮 Agent 与 WS 桥接；JSON 仍以本文为准） |
 | 对应前端计划 | V1.5 |
 | 对应后端计划 | V1.5 |
 | 撰写日期 | 2026-08-18 |
-| 本轮修订 | 2026-08-26：V1.45 思考链只下发可展示摘要，隐藏 CoT 由服务端替换；承接 V1.44 ToolCall 真实流式、权限与恢复契约。 |
-| 最近修订 | 2026-08-26：V1.45 思考链只下发可展示摘要，隐藏 CoT（`Here's a thinking process` / `Analyze User Input`）由服务端替换，不原样推给前端。V1.44 ToolCall 在执行前持久化，新增瞬态 `tool_progress` / `tool_output_delta`，并冻结原生工具的输出 Schema、权限边界和失败恢复字段。V1.43 思考增量允许合并下发；有思考链时 `think_final` 在 `response.completed` 之前。V1.42 Direct `/help`、未知斜杠与图内防御提示在业务事件后必须再发 `response.completed`（成功 `stop`，校验/防御 `error`），结束整轮生成态。V1.41 确认卡预填与 `confirm_ack` 入队前丢掉已删除的协议档/数据集/知识库 ID，避免 Worker 再报「协议档不存在或已删除」。V1.40 `/cancel` 与 `/stress` 按 §4.4 解禁（仍走 `user_message`）：`/cancel` 取消本会话非终态任务，`/stress` 发出质量任务确认卡且 `with_stress=true`，禁止 `kind=stress`。V1.39 原生工具卡片收起态副标题统一为 `ToolCall`，不在卡片摘要区回显文件路径、命令或写入内容；详细参数仍在展开区展示。V1.38 明确原生基础 ToolCall 卡片使用英文工具名，展开区统一显示 `ToolCall` 与 `输出`，文件、命令和代码/文档结果使用行号展示；MCP/平台短工具仍按下方中文名映射。2026-08-24：V1.24 修复 Agent 附件上下文链路：服务端校验文件归属并在模型窗口解析文本、PDF、DOCX、XLSX，图片按三协议图文内容块发送；历史消息附件补齐安全元数据，前端可在刷新后继续预览。同步调整输入框内附件按钮与用户消息附件位序。V1.23 扩展 Agent 附件契约，支持图片、Word 文档与多附件拖拽上传；保留 `POST /api/files` 后再以既有 `file_id` 引用的消息链路，补充图片缩略图、PDF/文本预览与 Office 文件打开/下载说明。V1.22 修复 V1.21 遗留：§4.4 标题「仅此三条」改「仅此四条」、§9 禁止清单「第四种」改「第五种」并补四类上行事件枚举、§4.3 `tool_result.source` 语义对齐 M7 `Observation.source`（溯源标识字符串，非 short\|long 枚举）、§4.3 共享流规则补 clarify/plan/confirm 持久化广播说明、§4.4 clarify 多副本限制注明、§9 Ask/Plan 补注非 Harness plan 事件；V1.21 配合 Harness 阶段 3/4 前端联调回写契约：§3.4 `context_meter` 加 `compacted` bool；§4.4 新增 `clarify_reply` 上行事件并明确四类上行事件边界。V1.20 及更早版本沿用历史修订记录。 |
+| 本轮修订 | 2026-08-26：V1.48 明确同轮多调用默认串行，只读白名单在灰度开启后可并行；模型回填仍按原始 `call_id` 顺序。 |
+| 最近修订 | 2026-08-26：V1.48 同轮多调用默认串行，灰度开启后仅 `read`/`web_search`/`web_fetch` 可并行，回填按原始 `call_id`。V1.47 新增 `GET /api/agent/metrics`，不含正文/参数，不新增 WS 事件。V1.46 明确 native 一次 ToolCall 结束当前上游响应，结果回填后再请求，不新增事件名。V1.45 思考链只下发可展示摘要，隐藏 CoT（`Here's a thinking process` / `Analyze User Input`）由服务端替换，不原样推给前端。V1.44 ToolCall 在执行前持久化，新增瞬态 `tool_progress` / `tool_output_delta`，并冻结原生工具的输出 Schema、权限边界和失败恢复字段。V1.43 思考增量允许合并下发；有思考链时 `think_final` 在 `response.completed` 之前。V1.42 Direct `/help`、未知斜杠与图内防御提示在业务事件后必须再发 `response.completed`（成功 `stop`，校验/防御 `error`），结束整轮生成态。V1.41 确认卡预填与 `confirm_ack` 入队前丢掉已删除的协议档/数据集/知识库 ID，避免 Worker 再报「协议档不存在或已删除」。V1.40 `/cancel` 与 `/stress` 按 §4.4 解禁（仍走 `user_message`）：`/cancel` 取消本会话非终态任务，`/stress` 发出质量任务确认卡且 `with_stress=true`，禁止 `kind=stress`。V1.39 原生工具卡片收起态副标题统一为 `ToolCall`，不在卡片摘要区回显文件路径、命令或写入内容；详细参数仍在展开区展示。V1.38 明确原生基础 ToolCall 卡片使用英文工具名，展开区统一显示 `ToolCall` 与 `输出`，文件、命令和代码/文档结果使用行号展示；MCP/平台短工具仍按下方中文名映射。2026-08-24：V1.24 修复 Agent 附件上下文链路：服务端校验文件归属并在模型窗口解析文本、PDF、DOCX、XLSX，图片按三协议图文内容块发送；历史消息附件补齐安全元数据，前端可在刷新后继续预览。同步调整输入框内附件按钮与用户消息附件位序。V1.23 扩展 Agent 附件契约，支持图片、Word 文档与多附件拖拽上传；保留 `POST /api/files` 后再以既有 `file_id` 引用的消息链路，补充图片缩略图、PDF/文本预览与 Office 文件打开/下载说明。V1.22 修复 V1.21 遗留：§4.4 标题「仅此三条」改「仅此四条」、§9 禁止清单「第四种」改「第五种」并补四类上行事件枚举、§4.3 `tool_result.source` 语义对齐 M7 `Observation.source`（溯源标识字符串，非 short\|long 枚举）、§4.3 共享流规则补 clarify/plan/confirm 持久化广播说明、§4.4 clarify 多副本限制注明、§9 Ask/Plan 补注非 Harness plan 事件；V1.21 配合 Harness 阶段 3/4 前端联调回写契约：§3.4 `context_meter` 加 `compacted` bool；§4.4 新增 `clarify_reply` 上行事件并明确四类上行事件边界。V1.20 及更早版本沿用历史修订记录。 |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
+> V1.48（2026-08-26）：§4.3 同轮多个调用默认串行；仅当并行总开关与协议档白名单命中且脚踢线未触发时，`read` / `web_search` / `web_fetch` 可同波并行。`write` / `edit` / `bash` / `task.create` / `task.cancel` 始终串行。模型回填仍按原始 `call_id` 顺序。不新增 WS 字段。
+>
+> V1.47（2026-08-26）：§3.4 新增 `GET /api/agent/metrics`（进程内交错流/批次度量，不含正文与参数）；不新增 WS 字段，`segment_id` 仍不进入公共契约。
+>
 > V1.25（2026-08-25）：细化 ReAct `read` 的 `tool_result.data`，新增受控行范围、文件统计与短预览投影。完整 `content` 仅供服务端下一模型回合使用，禁止写入 WebSocket 事件或 ToolCard。
 >
 > V1.26（2026-08-25）：原生 ToolCall 为既有 `tool_call` / `tool_result` 增加必填 `call_id`，前端必须以该值关联卡片；不新增事件名，不向浏览器暴露上游协议字段或 MCP 连接信息。
@@ -453,6 +457,47 @@ WS 不再可访问，但 `messages`、`ws_events`、tasks、reports 均保留审
 
 ---
 
+#### `GET /api/agent/metrics`
+
+进程内只读快照：native 交错流与 ToolBatch 调度度量（登录成员可读，与 `GET /api/mcp/metrics` 同鉴权）。**不含**助手正文、工具参数、Observation、API Key。不落库；多副本各自独立。不新增 WebSocket 字段，`segment_id` 仍不进入公共契约。
+
+```json
+{
+  "stream": {
+    "rounds": 12,
+    "invoke_fallbacks": 1,
+    "first_delta_avg_ms": 180,
+    "tool_call_parse_avg_ms": 420,
+    "incomplete": 0,
+    "incomplete_ratio": 0.0,
+    "cancelled": 1,
+    "upstream": 0,
+    "associate_errors": 0
+  },
+  "batch": {
+    "count": 4,
+    "duration_avg_ms": 90,
+    "parallel_waves": 1,
+    "wave_size_avg": 2,
+    "max_wave_size": 3
+  },
+  "rollout": {
+    "native_stream_enabled": true,
+    "parallel_enabled": false,
+    "parallel_profile_allowlist": [],
+    "parallel_disabled": false,
+    "parallel_disable_reason": null,
+    "consecutive_incidents": 0,
+    "failure_threshold": 5,
+    "cooldown_s": 30.0
+  }
+}
+```
+
+`rollout.parallel_disabled=true` 表示进程内脚踢线暂时关闭只读并行（连续 `UPSTREAM` / 关联错乱达阈值）；冷却后自动恢复。运维回滚并行仍关 `AGENT_PARALLEL_TOOL_BATCH_ENABLED` 或清空 `AGENT_PARALLEL_TOOL_BATCH_PROFILE_IDS`；回滚 P1 流式关 `AGENT_NATIVE_STREAM_ENABLED`。关闭开关**不得**改写已落库事件。
+
+---
+
 #### `GET /api/slash-commands`
 
 自定义斜杠（下区「我的命令」）。**系统 15 条命令不走本接口**，前端本地注册表即可。
@@ -579,7 +624,7 @@ Embedding 与 Reranker 的 URL、模型和 Key 与主模型使用相同的“按
 
 `tool_call_mode` 仅允许 `native` / `legacy`，默认 `legacy`：
 
-- `native`：仅在管理员已验证目标网关支持 Function Calling 后显式选择。API 按 `protocol` 映射并发送原生 `tools`，接收完整 ToolCall 后才进入 ToolNode；
+- `native`：仅在管理员已验证目标网关支持 Function Calling 后显式选择。API 按 `protocol` 映射并发送原生 `tools`，流式接收正文增量与完整 ToolCall；**一次上游响应在发出 ToolCall 后即结束**，平台执行工具并回填 `tool_result` 后才会发起下一次模型请求。工具结果依赖的正文不可能出现在同一条上游响应中。参数不完整不得进入 ToolNode；
 - `legacy`：默认模式。API 不向上游发送 `tools`，仅使用严格 `react.v1` JSON 兼容分支；适用于尚未验证 Function Calling 的兼容网关；
 - 切换模式只影响 Agent ReAct 工具路径，不影响 benchmark、judge、Embedding 或 Reranker 调用。
 
@@ -1365,7 +1410,9 @@ Harness 回合必须丢到后台 Task，**不得**在 `receive` 循环里 `await
 `call_id` 规则：
 
 - 仅在模型 ToolCall 参数完整、通过平台解析后发出 `tool_call`；参数增量不向浏览器新增事件；
-- 同一回合可有多个不同 `call_id`，禁止按工具名匹配，否则并行或连续同名调用会串卡；
+- `native` 下一次上游模型响应可交错输出正文块与多个完整 ToolCall，但该响应对运行时而言在 ToolCall 处结束；回填全部 `tool_result` 后才发起下一次请求。`legacy` 不得把半截 JSON 当作正文或参数执行；
+- 同一回合可有多个不同 `call_id`，禁止按工具名匹配，否则并行或连续同名调用会串卡；浏览器按 `call_id` 各更新一张卡；
+- 同轮多个调用**默认串行**。仅当 `AGENT_PARALLEL_TOOL_BATCH_ENABLED=true`、当前协议档命中 `AGENT_PARALLEL_TOOL_BATCH_PROFILE_IDS`（空名单不开，`*` 表示全部）且进程内脚踢线未触发时，白名单只读工具 `read` / `web_search` / `web_fetch` 可同波并行；`write` / `edit` / `bash` / `task.create` / `task.cancel` 始终串行。模型回填仍按原始 `call_id` 顺序，与完成顺序无关；
 - 上游未提供 ID 时由 API 进程生成 `toolcall_<uuid>`；该 ID 只在当前回合内稳定，不等同于 MCP Server、任务或数据库资源 ID；
 - 上游返回空、空白或同一模型响应内重复的 `call_id` 时，API 以 `UPSTREAM` 结束该轮，禁止发送任何 `tool_call` 或进入 ToolNode；
 - 策略拒绝、工具超时和执行失败也必须发出带原 `call_id` 的 `tool_result`，不得把异常转换为无关联的助手正文。
@@ -2121,4 +2168,35 @@ LangGraph `reflect` 在规划 `delivery=confirm` 且复核通过后发出确认�
 | `backend/api/app/agent/think_stream.py` | `sanitize_reasoning` / `ReasoningDisplayFilter` |
 | `backend/api/app/routers/ws.py` | 流式与 think_final 走摘要过滤 |
 | `backend/api/tests/test_think_stream.py` / `test_harness_probe_l2.py` | 隐藏 CoT 替换与探针拒绝原文 |
+
+**V1.46（2026-08-26）— native 内容块交错流：ToolCall 结束当前上游响应**
+
+不新增事件名或字段。`native` 首轮与回填后回合均流式推送 `assistant_delta`；完整 `tool_call` 只在该次上游响应结束后持久化。一次 ToolCall 终止当前上游响应，结果回填后才发起下一请求。同轮多调用仍串行；`legacy` 行为不变。
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `docs/AI测试与评估平台-API.md` | §3.5 `tool_call_mode`、§4.3 `call_id` 规则补充响应结束语义 |
+| `backend/api/app/agent/react.py` | native 首轮改走 `gateway.stream()` |
+| `backend/api/tests/test_agent_react.py` / `test_llm_graph.py` / `test_adapters.py` | 首轮交错流与三协议 text→tool_call 夹具 |
+
+**V1.47（2026-08-26）— Agent 交错流灰度度量**
+
+新增 `GET /api/agent/metrics`：进程内首 delta / ToolCall 解析延迟、批次并发、取消与不完整流比例。不含正文与参数。不新增 WS 事件或 `segment_id`。
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `docs/AI测试与评估平台-API.md` | §3.4 `GET /api/agent/metrics` |
+| `backend/api/app/harness/execution/stream_metrics.py` / `stream_policy.py` | 脱敏计数、协议档白名单、并行脚踢线 |
+| `backend/api/app/routers/agent_prefs.py` | 只读度量入口 |
+| `backend/api/tests/test_stream_rollout.py` | 白名单、脚踢冷却、快照不含载荷 |
+
+**V1.48（2026-08-26）— 同轮多调用默认串行，灰度只读并行**
+
+覆盖 V1.46「同轮多调用仍串行」的绝对表述。默认仍串行；灰度开启后仅 `read` / `web_search` / `web_fetch` 可同波并行。模型 `role=tool` 回填始终按原始 `call_id` 顺序。关联错乱与 `UPSTREAM` 每模型回合只记一笔终态，避免成功流把脚踢计数清零。不新增 WS 事件。
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `docs/AI测试与评估平台-API.md` | §4.3 `call_id` 规则：默认串行 + 灰度只读并行 |
+| `backend/api/app/agent/react.py` | 每回合只记一笔流式终态；关联错乱可累计脚踢 |
+| `backend/api/tests/test_stream_rollout.py` / `test_agent_react.py` | 连续 associate_error 触发脚踢；流式空 call_id 两轮 rounds=2 |
 

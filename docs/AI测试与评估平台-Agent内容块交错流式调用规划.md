@@ -2,12 +2,12 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V0.1（规划稿） |
-| 状态 | 待评审；不是 API 契约，未授权任何接口或行为变更 |
+| 文档版本 | V0.7 |
+| 状态 | P1–P4 已落地；并行默认关且须协议档白名单；P1 流式可一键回退；关联错乱每回合只记一笔终态；P3 集成测试已补 |
 | 撰写日期 | 2026-08-26 |
 | 对应 PRD | `AI测试与评估平台-PRD.md`（L0 产品权威） |
-| 对应接口 | `AI测试与评估平台-API.md` V1.44（L1 JSON/WS 契约权威） |
-| 对应 Agent 文档 | `AI测试与评估平台-Agent开发文档.md` V1.5.7 |
+| 对应接口 | `AI测试与评估平台-API.md` V1.48（L1 JSON/WS 契约权威） |
+| 对应 Agent 文档 | `AI测试与评估平台-Agent开发文档.md` V1.5.15 |
 | 目标范围 | 仅 Agent 原生工具调用（`tool_call_mode=native`）的流式控制流与受控并发 |
 
 > **裁决说明**：本文定义未来实现的技术路线和验收条件。任何新增 REST/WS 字段、状态或产品行为，必须先回写 PRD 与 API.md；实现中的字段名、路径和错误码仍以 API.md 为准。
@@ -33,6 +33,16 @@ Anthropic 的 Messages 流原生使用 content block 事件表达文本和 tool 
 - [Anthropic Client Tool Use](https://platform.claude.com/docs/en/agents-and-tools/tool-use/server-tools)
 - [OpenAI Responses Streaming Events](https://platform.openai.com/docs/api-reference/responses-streaming/response/refusal/delta?lang=curl)
 
+### 1.1 与通用 Agent「内容块交错」描述的对照
+
+通用描述成立的部分：一次上游响应是按序内容块（`text` / `tool_use`）；运行时把 `text` 边生成边推；完整 `tool_use` 执行后把 `tool_result` 回填，再发下一次模型请求；直到某次响应不再含工具调用，本回合才结束。同一次上游响应里，工具执行前可以先说再调；工具跑完后的正文一定来自下一次请求。
+
+本平台必须改写的三点：
+
+1. 完整 ToolCall **要**持久化并推给浏览器（ToolCard），不是对用户不可见；只有参数碎片不出站。传输是 WebSocket，不是 SSE。
+2. 一条响应里多个 `tool_use` 只表示同批，不表示默认可并行。依赖由注册表判定，不由模型自然语言维护。`write` / `edit` / `bash` / `task.create` / `task.cancel` 始终串行。
+3. 没有对话内短工具 `rag_query`。大文件走 `read` 的 `offset`/`limit` 分页；完整 Observation 只进单回合临时存储，不出浏览器。
+
 ---
 
 ## 2. 现状基线
@@ -42,21 +52,21 @@ Anthropic 的 Messages 流原生使用 content block 事件表达文本和 tool 
 | 层级 | 当前能力 | 约束 |
 | --- | --- | --- |
 | `app/adapters.py` | 归一 OpenAI Chat、OpenAI Responses、Anthropic Messages；流内累计工具参数，参数完整后产生 ToolCall | 不向浏览器暴露参数增量 |
-| `ModelGateway` | `content` / `reasoning` / `tool_call` / `completed` 的内部流事件 | 现有首轮 ReAct 原生调用仍可能走非流式 `invoke` |
-| ReAct / ToolNode | `tool_call` 先持久化；ToolCard 执行中可收到 `tool_progress` 与 `tool_output_delta` | 同轮多个 `pending_tools` 当前逐项消费 |
+| `ModelGateway` | `content` / `reasoning` / `tool_call` / `completed` 的内部流事件 | native 无 `stream` 的测试桩仍回退 `invoke` |
+| ReAct / ToolNode | native 首轮与回填后回合均走 `gateway.stream()`；`pending_tool_batch` 保序；flag 关闭时一次一项；打开后只读波次可 `TaskGroup` 并行 | `write`/`edit`/`bash`/`task.create`/`task.cancel` 始终串行；`task`/`task.status` P3 仍串行 |
 | 工具执行 | read、write、bash 的受控行级输出；最终以 `tool_result` 收敛 | 浏览器单 ToolCall 累计最多 4,000 字符；完整 Observation 不可出站 |
 | WebSocket | `assistant_delta`、工具进度和工具输出为瞬态；`assistant_message`、`tool_call`、`tool_result`、`response.completed` 可回放 | 瞬态帧不占 `event_id`，断线不补发 |
 
 ### 2.2 当前缺口
 
 ```text
-当前 native 首轮：invoke 完整响应 → 提取 ToolCall → 串行 ToolNode → 工具结果后才 stream 正文
-目标 native 首轮：stream 文本块 → ToolCall 完整后落卡 → 批量执行 → stream 下一模型响应
+P4 已落地：stream/invoke 由协议档灰度决定 → ToolBatch → 白名单+脚踢线后只读并行可选 → 批次终态后按原顺序回填
+segment_id 仍不进入公共 WS 契约
 ```
 
-1. 首轮原生调用没有统一走 `gateway.stream()`，工具前叙述无法实时展示。
+1. ~~首轮原生调用没有统一走 `gateway.stream()`~~（P1 已改；无 `stream` 的测试桩仍回退 `invoke`）。
 2. `ModelResponse(text, tool_calls)` 主要保留汇总文本和调用列表，缺少完整的内容块次序信息。
-3. ToolNode 以 `pending_tool` / `pending_tools` 队列串行执行；没有批次、依赖或冲突模型。
+3. ~~ToolNode 以 `pending_tools` 隐式队列串行执行；没有批次、依赖或冲突模型~~（P2 批次 + P3 注册表并发类与只读波次；flag 默认关）。
 4. 现有 `assistant_delta` 只承载正文增量，未定义「本次模型响应中的第几个正文片段」的可选关联信息。
 5. 断线后只应由持久化的阶段叙述、ToolCall、ToolResult 恢复；不能尝试补发半截正文或半截工具输出。
 
@@ -292,7 +302,7 @@ MODEL_STREAMING
 
 完成门槛：文档评审通过，所有现有 API/Agent/适配器测试为绿。
 
-### P1：首轮原生内容块流
+### P1：首轮原生内容块流（已落地）
 
 目标：`native` 首轮也使用流式网关，实时显示工具前正文，但执行模型不变为串行。
 
@@ -304,7 +314,7 @@ MODEL_STREAMING
 
 完成门槛：三协议 fixture 均能展示「文本 → ToolCard → 结果后文本」，旧 `legacy` 模式行为不变。
 
-### P2：ToolBatch 与安全串行屏障
+### P2：ToolBatch 与安全串行屏障（已落地）
 
 目标：将同一模型响应的一组调用作为显式批次调度，但初期仍可全部串行。
 
@@ -315,25 +325,28 @@ MODEL_STREAMING
 
 完成门槛：同轮两次 `read`、一次 read+一次 write、一次失败+一次成功的结果都能按原 `call_id` 关联且模型回填顺序正确。
 
-### P3：受控只读并行
+### P3：受控只读并行（已落地，flag 默认关）
 
 目标：只为明确独立的调用降低等待时间。
 
-- 在注册表增加 `concurrency_class` 和资源键解析；
-- 用 `asyncio.TaskGroup` 或等价受控机制执行只读组，限制并发数；
-- 组内单项失败隔离，取消时正确回收子任务；
-- 启用指标和 feature flag：`agent_parallel_tool_batch_enabled` 默认关闭。
+- 在注册表增加 `concurrency_class` 和资源键解析；路径必须规范化比较；
+- 用 `asyncio.TaskGroup` 执行只读组，限制 `max_parallel_tool_calls`（默认 3）；
+- 组内单项失败隔离，不取消同组其他项；无显式批次时仍一次一项；
+- feature flag `agent_parallel_tool_batch_enabled` 默认关闭。P3 不新增 WS 字段，也不把并发类投影给模型。
 
-完成门槛：两个独立 read/web 调用的墙钟时间接近较慢单项；同路径写、bash、task.create/cancel 始终未并行；所有 Gate 与 bwrap 回归通过。
+首批可并行：仅 `read`、`web_search`、`web_fetch`。完成门槛：两个独立 read/web 可重叠执行；同路径写、bash、task.create/cancel 始终未并行；现有 Gate 与串行回归保持绿色。
 
-### P4：灰度、观测与回滚
+### P4：灰度、观测与回滚（已落地）
 
-目标：按协议档逐步启用，出现上游兼容问题可立即退回现有串行路径。
+目标：按协议档逐步启用，出现上游兼容问题可立即退回现有串行/非流式路径。
 
-- 仅对白名单 `native` 协议档启用 P1；并行能力从单个内部测试协议档开始；
-- 记录不含正文/参数的指标：首 delta 延迟、ToolCall 解析延迟、批次时长、并发数、取消数、上游不完整流比例；
-- 发生 `UPSTREAM`、关联错乱、重复正文或资源冲突时关闭 feature flag，不修改历史事件；
-- 在灰度稳定后再评估是否将 `segment_id` 写入公共 WS 契约。
+- native 流式（P1）默认对全部 `tool_call_mode=native` 开放；`AGENT_NATIVE_STREAM_ENABLED=false` 或白名单立即回退 `invoke`；
+- 并行须 `AGENT_PARALLEL_TOOL_BATCH_ENABLED=true` **且** `AGENT_PARALLEL_TOOL_BATCH_PROFILE_IDS` 命中（空=不开，`*`=全部）；
+- 进程内记录不含正文/参数的指标：首 delta 延迟、ToolCall 解析延迟、批次时长、并发波次、取消数、不完整流比例；只读入口 `GET /api/agent/metrics`；
+- 连续 `UPSTREAM` / 关联错乱达阈值时进程内暂时禁用并行，冷却后恢复；运维关环境变量即可全局回滚。**不修改历史事件**；
+- `segment_id` 仍不写入公共 WS 契约。
+
+完成门槛：关闭任一开关后行为回到串行/invoke；快照不含参数与正文；现有回归保持绿色。
 
 ---
 
@@ -347,14 +360,14 @@ MODEL_STREAMING
 | A4 | 兼容网关返回非 SSE 完整 JSON | 降级为完整块，不空流、不漏 ToolCall |
 | A5 | 工具前文本 | 在线收到 `assistant_delta`；片段结束最多一条 `interim` 持久消息 |
 | A6 | 工具后最终文本 | 不重复显示；`assistant_message` 在 `response.completed` 前且只一次 |
-| A7 | 两个独立 read | P2 串行正确；P3 开启后可并行，结果按原调用顺序回填模型 |
+| A7 | 两个独立 read | flag 关闭串行正确；开启后可并行，结果按原调用顺序回填模型 |
 | A8 | read 与同路径 write / 两个 write / bash | 始终串行，不出现竞争或越权 |
 | A9 | 一项工具失败 | 失败 ToolResult 含原 call_id 与 recovery；独立项仍可完成 |
 | A10 | `/stop`、WS 断线、上游断流 | 不执行半截参数；不泄露内容；终态和重连行为符合 API.md |
 | A11 | 输出边界 | 浏览器不出现完整文件、完整 Observation、密钥、绝对路径或超过 4KB 的工具增量 |
 | A12 | legacy 协议档 | 不发送 native tools，不改变既有 JSON-ReAct 输出 |
 
-除单元测试外，P3 必须增加以下集成测试：真实 bwrap 特权容器中的 bash 串行屏障、WebSocket `last_event_id` 重连、同 team 在线成员的瞬态广播范围，以及前端 ToolCard 在多个 call_id 完成顺序不同情况下的稳定渲染。
+除单元测试外，P3 必须增加以下集成测试：真实 bwrap 特权容器中的 bash 串行屏障、WebSocket `last_event_id` 重连、同 team 在线成员的瞬态广播范围，以及前端 ToolCard 在多个 call_id 完成顺序不同情况下的稳定渲染。落地位置：`backend/api/tests/test_stream_p3_integration.py`；前端关联规则收口于 `frontend/src/utils/toolCard.ts` 的 `findPendingToolItem`。
 
 ---
 
@@ -378,11 +391,11 @@ MODEL_STREAMING
 
 1. P1 是否将工具前文本全部持久化为 `interim`，还是仅持久化受长度限制的阶段叙述？
 2. P2 的批次字段是否进入 GraphState，还是仅在单次 ReAct 节点局部保存？
-3. P3 的首批可并行工具是否限定为 `read`、`web_search`、`web_fetch`，以及并发上限是否为 3？
+3. ~~P3 的首批可并行工具是否限定为 `read`、`web_search`、`web_fetch`，以及并发上限是否为 3？~~（已按此落地；`task`/`task.status` 仍串行。）
 4. 是否需要为 `assistant_delta` 增加 `segment_id` / `seq`；若需要，先完成 API.md 版本演进和旧客户端兼容设计。
 5. 当前单 API 实例可承载 P1/P3；若未来扩为多副本，是否先建设进程外实时广播与会话粘性？
 
-未决项未被批准前，P3 不得开始；P1/P2 也不得通过修改提示词模拟并行或绕过现有 ToolNode/Gate/bwrap 边界。
+P3 实现不得通过修改提示词模拟并行，也不得绕过现有 ToolNode/Gate/bwrap 边界。P4 灰度与指标已落地；`segment_id` 仍待稳定后再评估。
 
 ---
 
@@ -394,9 +407,9 @@ MODEL_STREAMING
 | --- | --- |
 | `backend/api/app/adapters.py` | 三协议内容块、工具参数完成和顺序归一。 |
 | `backend/api/app/llm/contracts.py` / `gateway.py` | 内部内容块/回合收集契约与首轮流式投影。 |
-| `backend/api/app/agent/react.py` / `graph.py` | 首轮流式、阶段叙述持久化、ToolBatch 生成与下一轮循环。 |
-| `backend/api/app/harness/memory/state.py` | 如评审批准，将批次稳定元数据纳入可序列化状态。 |
-| `backend/api/app/harness/execution/registry.py` / `toolnode.py` | 并发类别、资源冲突判断和受控批次执行。 |
+| `backend/api/app/agent/react.py` / `graph.py` | P1 首轮流式已接线；P2 写入 `pending_tool_batch`。 |
+| `backend/api/app/harness/memory/state.py` | `pending_tool_batch` 已纳入可序列化状态。 |
+| `backend/api/app/harness/execution/batch.py` / `toolnode.py` | P2 批次保序；P3 并发类、规范化路径键与只读 TaskGroup。 |
 | `backend/api/app/routers/ws.py` | 复用现有瞬态/持久事件顺序，必要时处理批准后的可选字段。 |
 | `frontend/src/views/Agent.vue` / `components/agent/ToolCard.vue` | 多正文片段和多 ToolCard 乱序完成的渲染回归。 |
 | `backend/api/tests/test_adapters.py` / `test_agent_react.py` / `test_harness_execution.py` | 协议交错、批次调度、安全边界和取消回归。 |
@@ -405,6 +418,24 @@ MODEL_STREAMING
 
 | 文件 | 作用 |
 | --- | --- |
-| `docs/AI测试与评估平台-Agent内容块交错流式调用规划.md` | 固化内容块交错流、ToolBatch、受控并行、状态机、阶段路线、验收和风险，供后续评审后实施。 |
+| `docs/AI测试与评估平台-Agent内容块交错流式调用规划.md` | V0.1 规划；V0.2 机制对照与 P1；V0.3 标记 P2 落地；V0.4 标记 P3 落地；V0.5 标记 P4 落地；V0.6 脚踢记账与契约对齐；V0.7 P3 集成测试。 |
+| `backend/api/app/agent/react.py` | native 首轮 `gateway.stream()`；同轮调用写入 ToolBatch。 |
+| `backend/api/app/harness/execution/batch.py` | 可序列化批次、block_index 保序、一次性 tool 回填消息。 |
+| `backend/api/app/harness/execution/toolnode.py` / `memory/state.py` | 消费批次、中间项不回填、终态后按原顺序组装。 |
+| `backend/api/tests/test_agent_react.py` / `test_llm_graph.py` / `test_adapters.py` / `test_harness_execution.py` | 首轮交错流、三协议夹具、批次保序与 read+write。 |
+| `docs/AI测试与评估平台-API.md` | V1.46，冻结「ToolCall 结束当前上游响应」。 |
+| `docs/AI测试与评估平台-Agent开发文档.md` | V1.5.13，记录流式/并行灰度与度量入口。 |
+| `backend/api/app/config.py` / `.env.example` / `docker-compose.yml` | `AGENT_PARALLEL_TOOL_BATCH_ENABLED` 默认 false；并行须白名单。 |
+| `backend/api/app/harness/execution/registry.py` | 运行时并发类；不进入模型目录。 |
+| `backend/api/app/harness/execution/stream_policy.py` / `stream_metrics.py` | 协议档灰度、脱敏指标、并行脚踢线。 |
+| `backend/api/app/routers/agent_prefs.py` | `GET /api/agent/metrics`。 |
+| `docs/AI测试与评估平台-API.md` | V1.47。 |
+| `backend/api/app/agent/react.py` | V0.6：每模型回合只记一笔流式终态，关联错乱可累计脚踢。 |
+| `backend/api/tests/test_stream_rollout.py` / `test_agent_react.py` | 连续 associate_error；流式空 call_id 两轮 rounds=2。 |
+| `docs/AI测试与评估平台-API.md` | V1.48，§4.3 默认串行、灰度只读并行。 |
+| `docs/AI测试与评估平台-Agent开发文档.md` | V1.5.14。 |
+| `backend/api/tests/test_stream_p3_integration.py` | V0.7：真实 bwrap bash 屏障、WS 重连、team 瞬态广播、ToolCard 乱序契约。 |
+| `frontend/src/utils/toolCard.ts` / `views/Agent.vue` | 直播与历史回放共用 call_id 匹配。 |
+| `docs/AI测试与评估平台-Agent开发文档.md` | V1.5.15。 |
 
-*V0.1：首版规划稿。本文不替代 PRD、API.md 或 Agent 开发文档中的已冻结契约。*
+*V0.7：补齐 §8 P3 集成测试（真实 bwrap 屏障、`last_event_id` 重连、team 瞬态广播、ToolCard 乱序 call_id）。本文不替代 PRD、API.md 或 Agent 开发文档中的已冻结契约。*

@@ -726,7 +726,7 @@ import KindTag from '../components/common/KindTag.vue'
 import ProviderLogo from '../components/ProviderLogo.vue'
 import { getProviderLogoKey, type ProviderLogoKey } from '../utils/providerLogo'
 import { formatLatency } from '../utils/format'
-import { shouldKeepToolCardOpen } from '../utils/toolCard'
+import { findPendingToolItem, shouldKeepToolCardOpen } from '../utils/toolCard'
 import ClarifyCard from '../components/agent/ClarifyCard.vue'
 import ConfirmCard from '../components/agent/ConfirmCard.vue'
 import PlanCard from '../components/agent/PlanCard.vue'
@@ -1464,15 +1464,7 @@ function appendToolBlock(agent: StreamItem, tool: AgentToolItem): AgentToolItem 
 
 /** 按 call_id 查找待完成工具；历史事件缺失时才兼容旧的同名回退。 */
 function findPendingToolBlock(agent: StreamItem, name: unknown, callId?: unknown): AgentToolItem | undefined {
-  const blocks = agent.blocks || []
-  if (typeof callId === 'string' && callId) {
-    return [...blocks].reverse().find(
-      (block) => block.type === 'tool' && block.callId === callId && block.status === 'pending',
-    ) as AgentToolItem | undefined
-  }
-  return [...blocks].reverse().find(
-    (block) => block.type === 'tool' && block.tool === name && block.status === 'pending',
-  ) as AgentToolItem | undefined
+  return findPendingToolItem(agent.blocks || [], name, callId) as AgentToolItem | undefined
 }
 
 /** 用瞬态进度原地更新待执行 ToolCard；历史回放只依赖最终 tool_result。 */
@@ -2938,13 +2930,11 @@ async function loadSessionHistory(sid: string): Promise<number> {
         })
       } else if (ev.event === 'tool_result') {
         // 新事件按 call_id 精确回填；缺失该字段的历史数据才退回同名最近项。
-        const foundTool = [...rawList].reverse().find(
-          (x) => x.item.type === 'tool'
-            && x.item.status === 'pending'
-            && (typeof p.call_id === 'string' && p.call_id
-              ? x.item.callId === p.call_id
-              : x.item.tool === p.name),
-        )?.item
+        const foundTool = findPendingToolItem(
+          rawList.map((entry) => entry.item),
+          p.name,
+          p.call_id,
+        )
         if (foundTool) {
           foundTool.result = p.ok ? p.data : p.error
           foundTool.status = p.ok ? 'ok' : 'fail'

@@ -6,7 +6,7 @@ ReAct 循环：``react_agent → (tools | reflect | END)``，
 Plan-Solve：``plan_solve → react_agent``（失败则 END）；有 ``plan`` 的 ReAct
 收尾进入 ``reflect``，由 reflect 发出 ``response.completed``；工具失败阶梯：
 ``reflect → react_agent``（repair 首档）/ ``reflect → plan_solve``（retry 重规划）。
-节点只返回纯数据（mode / pending_events / pending_tool / response 投影），
+节点只返回纯数据（mode / pending_events / pending_tool / pending_tool_batch / response 投影），
 WebSocket、数据库与平台任务队列由路由层（ws.py）负责，节点内不持有外部资源
 （§2.5 事件桥接契约）。
 """
@@ -116,8 +116,8 @@ class LangGraphAgent:
                 "reflect": "reflect",
             },
         )
-        # 原生 ToolCall 同轮可返回多个调用；ToolNode 串行消费队列，全部完成后
-        # 才回到模型。预算耗尽必须 END，避免第 13 次模型调用撞 recursion_limit。
+        # 原生 ToolCall 同轮可返回多个调用；ToolNode 按批次保序，默认一次一项，
+        # 全部完成后才回到模型。预算耗尽必须 END，避免第 13 次模型调用撞 recursion_limit。
         graph.add_conditional_edges(
             "tools",
             tools_route,

@@ -1,6 +1,7 @@
 """M4 ReAct 循环单测（OR-2/OR-4/OR-5）；不触碰 WS/DB/真实模型。"""
 
 import asyncio
+import os
 import tempfile
 
 import pytest
@@ -74,7 +75,10 @@ class _StreamingAfterToolGateway(_ScriptGateway):
         self.stream_calls: list[object] = []
 
     def stream(self, request: object, config: dict | None = None):
-        """模拟最终回答的推理/正文增量与 completed 收尾。"""
+        """带工具的 native 回合降级为一次 completed；无工具才流式最终回答。"""
+        if getattr(request, "tools", ()):
+            response = self.invoke(request, config)
+            return iter([ModelStreamEvent(kind="completed", response=response)])
         self.stream_calls.append(request)
         return iter(
             [
@@ -89,7 +93,10 @@ class _StreamingAfterToolGateway(_ScriptGateway):
 
 
 class _NativeToolCallGateway:
-    """模拟支持原生 ToolCall 的模型，验证回传结果后的流式收敛。"""
+    """模拟支持原生 ToolCall 的模型：首轮流式正文 + 完整调用，结果后再流式收敛。"""
+
+    FIRST_TEXT = "先读取两个附件再汇总"
+    FINAL_PARTS = ("两个文件的共同结论是：", "都可用于后续评测。")
 
     def __init__(self) -> None:
         self.calls: list[object] = []
@@ -97,30 +104,54 @@ class _NativeToolCallGateway:
         self.stream_calls: list[object] = []
         self.stream_configs: list[dict | None] = []
 
+    @staticmethod
+    def _first_tool_calls() -> tuple[NativeToolCall, NativeToolCall]:
+        return (
+            NativeToolCall("call_read_a", "read", {"path": "a.txt"}),
+            NativeToolCall("call_read_b", "read", {"path": "b.txt"}),
+        )
+
     def invoke(self, request: object, config: dict | None = None):
         self.calls.append(request)
         self.configs.append(config)
         if len(self.calls) == 1:
             return ModelResponse(
-                text="",
+                text=self.FIRST_TEXT,
                 latency_ms=1,
-                tool_calls=(
-                    NativeToolCall("call_read_a", "read", {"path": "a.txt"}),
-                    NativeToolCall("call_read_b", "read", {"path": "b.txt"}),
-                ),
+                tool_calls=self._first_tool_calls(),
             )
         return ModelResponse(text="两个文件已读取，开始汇总。", latency_ms=1)
 
     def stream(self, request: object, config: dict | None = None):
         self.stream_calls.append(request)
         self.stream_configs.append(config)
+        if len(self.stream_calls) == 1:
+            calls = self._first_tool_calls()
+            return iter(
+                [
+                    ModelStreamEvent(kind="content", text=self.FIRST_TEXT),
+                    *(
+                        ModelStreamEvent(kind="tool_call", tool_call=call)
+                        for call in calls
+                    ),
+                    ModelStreamEvent(
+                        kind="completed",
+                        response=ModelResponse(
+                            text=self.FIRST_TEXT,
+                            latency_ms=1,
+                            tool_calls=calls,
+                        ),
+                    ),
+                ]
+            )
+        final_text = "".join(self.FINAL_PARTS)
         return iter(
             [
-                ModelStreamEvent(kind="content", text="两个文件的共同结论是："),
-                ModelStreamEvent(kind="content", text="都可用于后续评测。"),
+                ModelStreamEvent(kind="content", text=self.FINAL_PARTS[0]),
+                ModelStreamEvent(kind="content", text=self.FINAL_PARTS[1]),
                 ModelStreamEvent(
                     kind="completed",
-                    response=ModelResponse(text="两个文件的共同结论是：都可用于后续评测。", latency_ms=2),
+                    response=ModelResponse(text=final_text, latency_ms=2),
                 ),
             ]
         )
@@ -233,18 +264,18 @@ def test_native_tool_calls_keep_call_id_and_stream_final_answer() -> None:
     assert [payload["call_id"] for payload in results] == ["call_read_a", "call_read_b"]
     assert [payload["name"] for payload in calls] == ["read", "read"]
     assert all(payload["ok"] is True for payload in results)
-    # 首轮仅调用一次非流式模型；携带 ToolResult 的第二轮改走原生工具流。
-    assert len(gateway.calls) == 1
+    # 首轮与回填后的第二轮都走原生工具流，不再先 invoke 再 stream。
+    assert gateway.calls == []
+    assert len(gateway.stream_calls) == 2
     # 第二轮模型可见标准 assistant ToolCall + 两条对应 role=tool 结果，非 Observation 拼接。
-    native_messages = gateway.stream_calls[0].messages[-3:]
+    native_messages = gateway.stream_calls[1].messages[-3:]
     assert native_messages[0]["role"] == "assistant"
     assert [call["call_id"] for call in native_messages[0]["tool_calls"]] == ["call_read_a", "call_read_b"]
     assert [message["tool_call_id"] for message in native_messages[1:]] == ["call_read_a", "call_read_b"]
     assert [message["content"] for message in native_messages[1:]] == ["A 文件内容", "B 文件内容"]
     # 完整文件正文和凭据均不得沿 RunnableConfig 传入模型网关。
-    assert gateway.configs == [{"configurable": {}}]
-    assert len(gateway.stream_calls) == 1
-    assert gateway.stream_configs == [{"configurable": {}}]
+    assert gateway.configs == []
+    assert gateway.stream_configs == [{"configurable": {}}, {"configurable": {}}]
     # 原文必须只存在于当次模型输入，不能随图状态写入检查点。
     checkpoints = [item.checkpoint for item in checkpointer.list()]
     saved_native_messages = [
@@ -260,12 +291,14 @@ def test_native_tool_calls_keep_call_id_and_stream_final_answer() -> None:
     assert saved_tool_messages
     assert all(message.get("content") == "" for message in saved_tool_messages)
     assert gateway.stream_calls[0].tools
+    assert gateway.stream_calls[1].tools
     custom = [
         chunk
         for mode, chunk in events
         if mode == "custom" and chunk.get("kind") == "content"
     ]
     assert [(chunk["kind"], chunk["text"]) for chunk in custom] == [
+        ("content", "先读取两个附件再汇总"),
         ("content", "两个文件的共同结论是："),
         ("content", "都可用于后续评测。"),
     ]
@@ -295,6 +328,14 @@ def test_native_read_repeat_same_offset_is_blocked() -> None:
             )
 
         def stream(self, request: object, config: dict | None = None):
+            if getattr(request, "tools", ()):
+                response = self.invoke(request, config)
+                events = [
+                    ModelStreamEvent(kind="tool_call", tool_call=call)
+                    for call in response.tool_calls
+                ]
+                events.append(ModelStreamEvent(kind="completed", response=response))
+                return iter(events)
             return iter(
                 [
                     ModelStreamEvent(
@@ -320,19 +361,7 @@ def test_native_read_repeat_same_offset_is_blocked() -> None:
 
 def test_native_tool_calls_emit_interim_narration() -> None:
     """P1：native 同轮正文 + ToolCall 先发 interim 阶段叙述，不是 Observation。"""
-
-    class _NarratingGateway(_NativeToolCallGateway):
-        def invoke(self, request: object, config: dict | None = None):
-            response = super().invoke(request, config)
-            if response.tool_calls:
-                return ModelResponse(
-                    text="先读取两个附件再汇总",
-                    latency_ms=1,
-                    tool_calls=response.tool_calls,
-                )
-            return response
-
-    gateway = _NarratingGateway()
+    gateway = _NativeToolCallGateway()
     with tempfile.TemporaryDirectory() as tmp:
         with open(f"{tmp}/a.txt", "w", encoding="utf-8") as handle:
             handle.write("A 文件内容")
@@ -350,6 +379,131 @@ def test_native_tool_calls_emit_interim_narration() -> None:
     assert messages[0]["payload"]["interim"] is True
     assert messages[0]["payload"]["text"] == "先读取两个附件再汇总"
     assert "A 文件内容" not in messages[0]["payload"]["text"]
+    # 首轮正文增量必须出现在 ToolCard 持久化之前，且只渲染一次。
+    first_content = next(
+        index
+        for index, (mode, chunk) in enumerate(events)
+        if mode == "custom" and chunk.get("kind") == "content"
+    )
+    first_tool_call = next(
+        index
+        for index, (mode, chunk) in enumerate(events)
+        if mode == "updates"
+        and any(event["kind"] == "tool_call" for event in iter_pending_events(chunk))
+    )
+    assert first_content < first_tool_call
+
+
+def test_native_read_then_write_refills_in_original_call_order() -> None:
+    """P2：同轮 read+write 串行执行，模型回填顺序与原始 call_id 一致。"""
+
+    class _ReadWriteGateway:
+        def __init__(self) -> None:
+            self.stream_calls: list[object] = []
+
+        def stream(self, request: object, config: dict | None = None):
+            self.stream_calls.append(request)
+            if len(self.stream_calls) == 1:
+                calls = (
+                    NativeToolCall("call_read", "read", {"path": "a.txt"}),
+                    NativeToolCall(
+                        "call_write",
+                        "write",
+                        {"path": "out.txt", "content": "from-read"},
+                    ),
+                )
+                return iter(
+                    [
+                        ModelStreamEvent(kind="tool_call", tool_call=calls[0]),
+                        ModelStreamEvent(kind="tool_call", tool_call=calls[1]),
+                        ModelStreamEvent(
+                            kind="completed",
+                            response=ModelResponse(text="", latency_ms=1, tool_calls=calls),
+                        ),
+                    ]
+                )
+            return iter(
+                [
+                    ModelStreamEvent(kind="content", text="已完成读写"),
+                    ModelStreamEvent(
+                        kind="completed",
+                        response=ModelResponse(text="已完成读写", latency_ms=1),
+                    ),
+                ]
+            )
+
+    gateway = _ReadWriteGateway()
+    with tempfile.TemporaryDirectory() as tmp:
+        with open(f"{tmp}/a.txt", "w", encoding="utf-8") as handle:
+            handle.write("source")
+        events = _collect(
+            LangGraphAgent(gateway, build_default_registry(), sandbox_dir=tmp),
+            _serializable(),
+        )
+        assert os.path.isfile(os.path.join(tmp, "out.txt"))
+
+    pending = _pending_events(events)
+    calls = [event["payload"]["call_id"] for event in pending if event["kind"] == "tool_call"]
+    results = [event["payload"]["call_id"] for event in pending if event["kind"] == "tool_result"]
+    assert calls == ["call_read", "call_write"]
+    assert results == ["call_read", "call_write"]
+    native_messages = gateway.stream_calls[1].messages[-3:]
+    assert native_messages[0]["role"] == "assistant"
+    assert [call["call_id"] for call in native_messages[0]["tool_calls"]] == [
+        "call_read",
+        "call_write",
+    ]
+    assert [message["tool_call_id"] for message in native_messages[1:]] == [
+        "call_read",
+        "call_write",
+    ]
+
+
+def test_native_stream_associate_error_trips_after_two_rounds(monkeypatch) -> None:
+    """流式空 call_id 每回合只记一笔终态；连续两笔关联错乱触发脚踢。
+
+    旧实现先记成功流再记 associate，连续事故永远 0→1，rounds 会变成 4。
+    """
+    from app.harness.execution.stream_metrics import StreamMetrics
+
+    metrics = StreamMetrics(failure_threshold=2, cooldown_s=60.0)
+    monkeypatch.setattr("app.agent.react.get_default_stream_metrics", lambda: metrics)
+
+    class _InvalidStreamGateway:
+        def invoke(self, _request: object, config: dict | None = None):
+            raise AssertionError("有 stream 时不应回退 invoke")
+
+        def stream(self, _request: object, config: dict | None = None):
+            calls = (
+                NativeToolCall("", "read", {"path": "a.txt"}),
+                NativeToolCall("second", "read", {"path": "b.txt"}),
+            )
+            return iter(
+                [
+                    ModelStreamEvent(kind="content", text="准备读取"),
+                    *(ModelStreamEvent(kind="tool_call", tool_call=call) for call in calls),
+                    ModelStreamEvent(
+                        kind="completed",
+                        response=ModelResponse(
+                            text="准备读取", latency_ms=1, tool_calls=calls
+                        ),
+                    ),
+                ]
+            )
+
+    for _ in range(2):
+        events = _collect(
+            LangGraphAgent(_InvalidStreamGateway(), build_default_registry()),
+            _serializable(),
+        )
+        pending = _pending_events(events)
+        assert [event["kind"] for event in pending] == ["error"]
+        assert pending[0]["payload"]["code"] == "UPSTREAM"
+
+    snap = metrics.snapshot()
+    assert snap["stream"]["rounds"] == 2
+    assert snap["stream"]["associate_errors"] == 2
+    assert metrics.is_parallel_disabled() is True
 
 
 @pytest.mark.parametrize("call_ids", [("", "second"), ("duplicated", "duplicated")])
@@ -373,6 +527,28 @@ def test_native_tool_calls_reject_empty_or_duplicate_call_id(call_ids: tuple[str
     pending = _pending_events(events)
     assert [event["kind"] for event in pending] == ["error"]
     assert pending[0]["payload"]["code"] == "UPSTREAM"
+
+
+def test_native_stream_kill_switch_uses_invoke(monkeypatch) -> None:
+    """P4：关闭 native 流式开关后走 invoke，不调用 stream。"""
+    from app.config import settings
+    from app.harness.execution.stream_metrics import get_default_stream_metrics
+
+    monkeypatch.setattr(settings, "agent_native_stream_enabled", False)
+    get_default_stream_metrics().reset()
+    gateway = _NativeToolCallGateway()
+    with tempfile.TemporaryDirectory() as tmp:
+        with open(f"{tmp}/a.txt", "w", encoding="utf-8") as handle:
+            handle.write("A")
+        with open(f"{tmp}/b.txt", "w", encoding="utf-8") as handle:
+            handle.write("B")
+        _collect(
+            LangGraphAgent(gateway, build_default_registry(), sandbox_dir=tmp),
+            _serializable(),
+        )
+    assert gateway.stream_calls == []
+    assert gateway.calls
+    assert get_default_stream_metrics().snapshot()["stream"]["invoke_fallbacks"] >= 1
 
 
 def test_legacy_profile_does_not_send_native_tools() -> None:

@@ -72,6 +72,11 @@ class ToolDef:
     requires_confirmation: bool = False
     supports_streaming: bool = False
     contextual: bool = False  # True 时 handler 接收 (arguments, sandbox_dir, ToolExecutionContext)
+    # 仅执行层调度使用，不投影到模型 tools、MCP 目录或浏览器。
+    concurrency_class: Literal["read_only", "path_scoped", "exclusive", "session_exclusive"] = (
+        "exclusive"
+    )
+    requires_prior_result: bool = False
 
     @property
     def tool_id(self) -> str:
@@ -460,6 +465,7 @@ def build_default_registry() -> ToolRegistry:
             risk_level="read",
             supports_streaming=True,
             contextual=True,
+            concurrency_class="path_scoped",
         )
     )
     registry.register(
@@ -504,6 +510,7 @@ def build_default_registry() -> ToolRegistry:
             risk_level="modify",
             supports_streaming=True,
             contextual=True,
+            concurrency_class="path_scoped",
         )
     )
     registry.register(
@@ -554,6 +561,7 @@ def build_default_registry() -> ToolRegistry:
             display_name="编辑文件",
             risk_level="modify",
             contextual=True,
+            concurrency_class="path_scoped",
         )
     )
     registry.register(
@@ -585,6 +593,7 @@ def build_default_registry() -> ToolRegistry:
             transport="native",
             display_name="网页检索",
             risk_level="network",
+            concurrency_class="read_only",
         )
     )
     registry.register(
@@ -618,6 +627,7 @@ def build_default_registry() -> ToolRegistry:
             risk_level="network",
             supports_streaming=True,
             contextual=True,
+            concurrency_class="read_only",
         )
     )
     registry.register(
@@ -661,6 +671,7 @@ def build_default_registry() -> ToolRegistry:
             risk_level="code",
             supports_streaming=True,
             contextual=True,
+            concurrency_class="exclusive",
         )
     )
     registry.register(
@@ -708,6 +719,7 @@ def build_default_registry() -> ToolRegistry:
             transport="native",
             display_name="拆解任务",
             risk_level="read",
+            concurrency_class="read_only",
         )
     )
     # ── platform.tasks 长任务 MCP：只入队/查询/取消，不等待终态 ──
@@ -752,6 +764,7 @@ def build_default_registry() -> ToolRegistry:
             display_name="创建评测任务",
             risk_level="modify",
             contextual=True,
+            concurrency_class="session_exclusive",
         )
     )
     registry.register(
@@ -772,6 +785,7 @@ def build_default_registry() -> ToolRegistry:
             display_name="查询任务状态",
             risk_level="read",
             contextual=True,
+            concurrency_class="read_only",
         )
     )
     registry.register(
@@ -792,6 +806,7 @@ def build_default_registry() -> ToolRegistry:
             display_name="取消评测任务",
             risk_level="modify",
             contextual=True,
+            concurrency_class="session_exclusive",
         )
     )
     return registry

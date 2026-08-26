@@ -71,6 +71,12 @@ services:
       FIRECRAWL_API_URL: ${FIRECRAWL_API_URL:-https://api.firecrawl.dev/v1}
       FIRECRAWL_API_KEY: ${FIRECRAWL_API_KEY:-}
       AGENT_CHECKPOINTER: ${AGENT_CHECKPOINTER:-memory}
+      # native 首轮流式；默认开启。并行默认关，且必须填写协议档白名单或 *。
+      AGENT_NATIVE_STREAM_ENABLED: ${AGENT_NATIVE_STREAM_ENABLED:-true}
+      AGENT_NATIVE_STREAM_PROFILE_IDS: ${AGENT_NATIVE_STREAM_PROFILE_IDS:-}
+      AGENT_PARALLEL_TOOL_BATCH_ENABLED: ${AGENT_PARALLEL_TOOL_BATCH_ENABLED:-false}
+      MAX_PARALLEL_TOOL_CALLS: ${MAX_PARALLEL_TOOL_CALLS:-3}
+      AGENT_PARALLEL_TOOL_BATCH_PROFILE_IDS: ${AGENT_PARALLEL_TOOL_BATCH_PROFILE_IDS:-}
       # Harness 记忆层 Redis 连接（短期回合状态 / 幂等键）；接入前无消费者，仅预注入。
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       # 检索 Playground / RAG 评测的 LightRAG 服务地址；stub 空返回时共享检索层自动回退本地关键词。
