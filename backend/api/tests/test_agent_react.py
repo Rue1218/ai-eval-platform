@@ -363,6 +363,18 @@ def test_native_read_returns_1000_line_txt_in_one_call() -> None:
     assert "已读完" in first_line and "共 1000 行" in first_line
     assert "LONG_LINE_1000:" in content
     assert "截断" not in content and "未读完" not in content
+    # turn 级观测指标随 assistant_message 事件输出：轮数/工具计数/用量。
+    stats_events = [
+        event["payload"].get("turn_stats")
+        for event in _pending_events(events)
+        if event["kind"] == "assistant_message"
+    ]
+    assert stats_events and stats_events[-1]
+    stats = stats_events[-1]
+    assert stats["tool_calls"] == 2  # a.txt + b.txt 两次 read
+    assert stats["tool_failures"] == 0
+    assert stats["model_calls"] >= 2
+    assert "prompt_tokens" in stats and "completion_tokens" in stats
 
 
 def test_native_read_repeat_replays_cached_result() -> None:

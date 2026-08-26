@@ -151,6 +151,9 @@ class Message(Base):
     # assistant 交付句的回复生成耗时（毫秒）：从本轮 user_message 入 Harness 到交付的墙钟时长。
     # 仅 assistant 消息非空，user/system 保持 NULL；历史回放供前端气泡展示「耗时 x 秒」。
     latency_ms = Column(Integer, nullable=True)
+    # turn 级观测指标快照（仅 assistant 消息）：模型轮数/token 用量/工具成败计数，
+    # 由 react 收尾时随 assistant_message 事件写入，供前端气泡与性能归因展示。
+    turn_stats = Column(JSONB, nullable=True)
     # 消息生成元数据快照（仅 assistant 消息记录实际生成该回答的模型与协议档快照，切换全局模型时不漂移）。
     model_name = Column(String(255), nullable=True)
     profile_id = Column(String(64), nullable=True)

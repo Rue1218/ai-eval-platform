@@ -38,6 +38,7 @@ from app.harness.execution.stream_metrics import get_default_stream_metrics
 from app.harness.execution.stream_policy import native_stream_allowed, profile_id_from_configurable
 from app.harness.memory import GraphState, rebuild_model_config
 from app.harness.orchestration import (
+    DEFAULT_BUDGET,
     consume_model_call,
     consume_tool_turn,
     from_dict,
@@ -321,6 +322,7 @@ def _split_native_readonly_repeats(
 
 def _forced_repeat_completion(
     *,
+    state: GraphState,
     gateway: object,
     request: ModelRequest,
     model_run_config: dict,
@@ -345,16 +347,18 @@ def _forced_repeat_completion(
         if final_response is not None and final_response.text.strip()
         else FINAL_ANSWER_EMPTY_TEXT
     )
+    forced_usage = (
+        dict(final_response.usage)
+        if final_response is not None
+        else dict(response.usage)
+    )
     finished = _assistant_completion(
         text,
-        usage=(
-            dict(final_response.usage)
-            if final_response is not None
-            else dict(response.usage)
-        ),
+        usage=forced_usage,
         latency_ms=round((time.perf_counter() - started) * 1000),
         pending_events=pending_events,
         close_turn=close_turn,
+        turn_stats=_turn_stats(state, budget, forced_usage),
     )
     finished["budget"] = budget.to_dict()
     return finished
@@ -634,6 +638,38 @@ def _react_error_state(
     return result
 
 
+def _turn_stats(
+    state: GraphState,
+    budget: object,
+    usage: dict[str, int] | object,
+) -> dict[str, object]:
+    """turn 级观测指标：模型轮数 / token 用量 / 工具成败计数。
+
+    随 ``assistant_message`` 事件广播并落库（messages.turn_stats），供前端
+    与运维做性能归因；禁止包含正文、参数等敏感内容。
+    """
+    observations = [
+        item
+        for item in (state.get("observations") or [])
+        if getattr(item, "tool", "") != "__parse__"
+    ]
+    tool_total = len(observations)
+    tool_failures = sum(1 for item in observations if not getattr(item, "ok", False))
+    usage_dict = dict(usage) if isinstance(usage, dict) else {}
+    budget_dict = budget.to_dict() if hasattr(budget, "to_dict") else {}
+    model_calls_used = max(
+        0, DEFAULT_BUDGET["model_calls"] - int(budget_dict.get("model_calls", DEFAULT_BUDGET["model_calls"]))
+    )
+    return {
+        "model_calls": model_calls_used,
+        "tool_calls": tool_total,
+        "tool_failures": tool_failures,
+        "prompt_tokens": usage_dict.get("prompt_tokens"),
+        "completion_tokens": usage_dict.get("completion_tokens"),
+        "total_tokens": usage_dict.get("total_tokens"),
+    }
+
+
 def _assistant_completion(
     text: str,
     *,
@@ -641,13 +677,17 @@ def _assistant_completion(
     latency_ms: int,
     pending_events: list[dict] | None = None,
     close_turn: bool = True,
+    turn_stats: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """统一构造自然语言收尾投影，避免原生/兼容路径产生不同事件契约。"""
     events = list(pending_events or [])
+    message_payload: dict[str, object] = {"text": text, "role": "assistant", "latency_ms": latency_ms}
+    if turn_stats is not None:
+        message_payload["turn_stats"] = turn_stats
     events.append(
         make_event(
             "assistant_message",
-            {"text": text, "role": "assistant", "latency_ms": latency_ms},
+            message_payload,
         )
     )
     if close_turn:
@@ -1082,6 +1122,7 @@ def build_react_nodes(
                     )
                     if state.get("repeat_retry"):
                         return _forced_repeat_completion(
+                            state=state,
                             gateway=gateway,
                             request=request,
                             model_run_config=model_run_config,
@@ -1208,6 +1249,7 @@ def build_react_nodes(
                     usage=response.usage,
                     latency_ms=round((time.perf_counter() - started) * 1000),
                     close_turn=close_turn,
+                    turn_stats=_turn_stats(state, budget, response.usage),
                 )
                 completed["budget"] = budget.to_dict()
                 if current_task_state is not None:
@@ -1295,6 +1337,7 @@ def build_react_nodes(
                     usage=final_usage,
                     latency_ms=latency_ms,
                     close_turn=close_turn,
+                    turn_stats=_turn_stats(state, budget, final_usage),
                 )
                 finished["budget"] = budget.to_dict()
                 if current_task_state is not None:
@@ -1320,6 +1363,7 @@ def build_react_nodes(
                 # 无缓存才退回纠正观察。
                 if state.get("repeat_retry"):
                     return _forced_repeat_completion(
+                        state=state,
                         gateway=gateway,
                         request=request,
                         model_run_config=model_run_config,
