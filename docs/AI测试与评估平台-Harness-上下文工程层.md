@@ -3,7 +3,7 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 上下文工程层模块设计 |
-| 版本 | V0.4.3 |
+| 版本 | V0.4.4 |
 | 审查日期 | 2026-08-26 |
 | 文档性质 | 模块设计说明书（需求发散 + 架构设计 + 接口签名） |
 | 适用模块 | M2 上下文工程层（`app/harness/context/`） |
@@ -34,7 +34,7 @@
 
 - 思考/工具/确认/进度事件**不进消息窗口**，只入 `ws_events` 供回放（CX-2）。
 - 工具结果为脱敏、截断、带来源 observation 摘要，**不原样注入**（CX-3）。
-- 上下文装配顺序固定：Persona → Skill Hint → 摘要 → 阶段输入（CX-4）。
+- 上下文装配顺序固定：Persona → Skill Hint → 技能工作流（可选）→ 摘要 → 阶段输入（CX-4 / SK-1）。
 - 工具定义按本轮能力最小注入，**不默认全量注入**（CX-5）。
 - `/compact` 保留最近 6 条、摘要 ≤2000 字符、**不删除原始记录**（CX-6）。
 - ContextMeter 只读 `GET /api/sessions/{id}/messages` 的 `context_meter`，前端不自行计算（CX-7）。
@@ -51,7 +51,7 @@
 | CX-1 | 最近消息窗口为唯一窗口算法（默认末尾 20 条，`compact_keep_from` 截断） | X-1：`window.py` 提供 `recent_window(messages, limit=20, keep_from=None)` | 阶段 1 |
 | CX-2 | 思考/工具/确认/进度事件不进消息窗口，只入 `ws_events` | X-2：`window.py` 只取 `role in (user,assistant)` 消息，过滤事件 | 阶段 1 |
 | CX-3 | 工具结果为脱敏、截断、带来源 observation 摘要 | X-3：`observation.py` 调 M8 脱敏 + 截断 + 标 `truncated`/`source` | 阶段 2 |
-| CX-4 | 上下文装配顺序固定：Persona → Skill Hint → 摘要 → 阶段输入 | X-4：`assembly.py` `assemble(system, skill_hints, summary, stage_input, messages)` | 阶段 1 |
+| CX-4 | 上下文装配顺序固定：Persona → Skill Hint → 摘要 → 阶段输入 | X-4：`assembly.py` `assemble(..., skill_workflow=)` 在 Hint 后按需插入技能工作流（SK-1） | 阶段 1 / 技能按需 |
 | CX-5 | 工具定义按本轮能力最小注入，不默认全量注入 | X-5：`assembly.py` 按本轮 `mode`/`plan.tools_needed` 选工具定义 | 阶段 2 |
 | CX-6 | `/compact` 为可控摘要：保留最近 6 条、摘要 ≤2000 字符、不删除原始记录 | X-6：`compact.py` `summarize(messages, keep_recent=6)` + `CompactProtocol` | 阶段 3 |
 | CX-7 | ContextMeter 只读 `GET .../messages` 的 `context_meter` | X-7：`meter.py` 投影 token/窗口占比，数据源为会话 messages | 阶段 3 |
@@ -73,7 +73,7 @@
 | X-A1 | `recent_window` 默认取末尾 20 条，`compact_keep_from` 截断生效 | 窗口算法断言 |
 | X-A2 | 窗口只含 user/assistant 消息，工具/思考事件被过滤 | 过滤断言 |
 | X-A3 | observation 含 `truncated`/`source`/`redacted` 标记，密钥被脱敏 | 脱敏 + 截断断言 |
-| X-A4 | 装配顺序输出为 Persona → Skill Hint → 摘要 → 阶段输入 → 消息 | 顺序断言 |
+| X-A4 | 装配顺序输出为 Persona → Skill Hint → 技能工作流 → 摘要 → 阶段输入 → 消息 | 顺序断言 |
 | X-A5 | 未注册工具不出现在注入清单；本轮未选工具不注入 | 最小注入断言 |
 | X-A6 | `/compact` 保留最近 6 条、摘要 ≤2000 字符、原始记录保留 | 摘要断言 |
 | X-A7 | ContextMeter 投影字段与 `context_meter` 一致，前端不自行计算 | 投影断言 |
@@ -350,16 +350,10 @@ def project_meter(context_meter: Mapping[str, object]) -> ContextMeter:
 
 | 文件 | 操作 | 作用 |
 | :--- | :--- | :--- |
-| `docs/AI测试与评估平台-Harness-上下文工程层.md` | 新增 V0.3 → 修订 V0.4 → 修订 V0.4.1 → 修订 V0.4.2 → 修订 V0.4.3 | V0.3–V0.4.2 见上；V0.4.3：`assemble`/`select_tool_defs` 接入 ReAct 与 Chat 节点；ReAct 按 CX-5 注入短原生工具；`compact_summary` 经 `configurable.session` 装配。 |
-
-| 文件 | 操作 | 作用 |
-| :--- | :--- | :--- |
-| `backend/api/app/harness/context/assembly.py` | 修改 | `select_tool_defs` 对 ReAct 注入 native 短工具；新增 `skill_hint_lines` / `compact_summary_from_configurable` |
-| `backend/api/app/agent/react.py` | 修改 | `react_agent_node` 走 `assemble`，不再 `all_defs()` 全量注入 |
-| `backend/api/app/agent/routing.py` | 修改 | `chat_stream_node` 走 `assemble`，Chat 不注入工具 |
-| `backend/api/app/routers/ws.py` | 修改 | 默认 Persona 填常驻 Skill Hint；`compact_summary` 注入 configurable |
-| `backend/api/app/harness/skills/registry.py` | 修改 | 补 `get_hint` |
-| `backend/api/tests/test_harness_context.py` / `test_agent_react.py` / `test_agent_routing.py` / `test_agent_multiturn.py` / `test_harness_phase4.py` | 修改 | CX-4/CX-5 与 `get_hint` 回归 |
+| `docs/AI测试与评估平台-Harness-上下文工程层.md` | 新增 V0.3 → 修订 V0.4 → 修订 V0.4.1 → 修订 V0.4.2 → 修订 V0.4.3 → 修订 V0.4.4 | V0.3–V0.4.3 见上；V0.4.4：`assemble` 增加可选【当前技能工作流】段，`skill_hints_for_turn` 按本轮 `skill_id` 选 Hint。 |
+| `backend/api/app/harness/context/assembly.py` | 修改 | `skill_hints_for_turn`；`assemble(skill_workflow=)` 插入 Hint 之后 |
+| `backend/api/app/agent/react.py` / `routing.py` | 修改 | Chat 常驻 Hint；ReAct 按 `plan.skill_id` 注入工作流 |
+| `backend/api/tests/test_harness_context.py` / `test_harness_skills.py` | 修改 / 新增 | 装配顺序与相邻回合不污染 |
 
 
 

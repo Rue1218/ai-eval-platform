@@ -1,12 +1,14 @@
 """Harness 技能体系：技能目录与启用门禁（M10 阶段 4，SK-4/SK-5）。
 
-``SKILL_CATALOG`` 为技能目录单一事实源（`/api/slash-commands` 同源引用，
+``SKILL_CATALOG`` 为技能目录单一事实源（前端 ``skillLabels.ts`` 同源对齐，
 非同步副本）；``DISABLED_SKILLS`` 为未接入技能集（LightRAG 未接入时
 ``rag`` 必须失败，禁止 mock succeeded，SK-4/MEM-5）。``list_hints`` 返回
-全部 SkillHint（M7 晚波契约）供 M4 路由注入。
+全部 SkillHint（M7 晚波契约）供 M4 路由注入；完整工作流见 ``workflows.py``。
 """
 
 from __future__ import annotations
+
+from collections.abc import Mapping
 
 from app.errors import AppError, ErrorCode
 from app.harness.contracts import SkillHint
@@ -49,8 +51,25 @@ def get_hint(skill_id: str) -> SkillHint:
 
 def list_hints() -> list[SkillHint]:
     """返回全部 SkillHint（M7 晚波契约），供 M4 路由注入与
-    `/api/slash-commands` 对齐（SK-5）。"""
+    前端 ``skillLabels.ts`` 对齐（SK-5）。"""
     return [
         SkillHint(skill_id=skill_id, name=entry[0], summary=entry[1])
         for skill_id, entry in SKILL_CATALOG.items()
     ]
+
+
+def plan_skill_id(state: Mapping[str, object] | None) -> str | None:
+    """从 GraphState.plan 取本轮 skill_id 索引；空串视为未选中。
+
+    只返回索引，不返回工作流正文（Progressive Disclosure / SK-1）。
+    """
+    if not isinstance(state, Mapping):
+        return None
+    plan = state.get("plan")
+    if not isinstance(plan, Mapping):
+        return None
+    raw = plan.get("skill_id")
+    if not isinstance(raw, str):
+        return None
+    text = raw.strip()
+    return text or None

@@ -76,10 +76,11 @@ def test_window_filters_non_user_assistant() -> None:
 
 
 def test_assemble_order_persona_skill_summary_stage_messages() -> None:
-    """X-A4：装配顺序 Persona → Skill Hint → 摘要 → 阶段输入 → 消息。"""
+    """X-A4：装配顺序 Persona → Skill Hint → 工作流 → 摘要 → 阶段输入 → 消息。"""
     result = assemble(
         system="【Persona】评测助手",
         skill_hints=("技能A：基准评测",),
+        skill_workflow="三协议调用、规则评分",
         summary="已评测 mmlu",
         stage_input="请输出规划 JSON",
         messages=[{"role": "user", "content": "你好"}],
@@ -87,9 +88,10 @@ def test_assemble_order_persona_skill_summary_stage_messages() -> None:
     system = result["system"]
     persona_index = system.index("【Persona】")
     skill_index = system.index("技能A")
+    workflow_index = system.index("三协议调用")
     summary_index = system.index("已评测 mmlu")
     stage_index = system.index("请输出规划 JSON")
-    assert persona_index < skill_index < summary_index < stage_index
+    assert persona_index < skill_index < workflow_index < summary_index < stage_index
     assert result["messages"] == [{"role": "user", "content": "你好"}]
     assert result["tools"] == []
 

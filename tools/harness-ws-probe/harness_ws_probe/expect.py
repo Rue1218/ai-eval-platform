@@ -192,6 +192,17 @@ class ExpectMatcher:
                 raise ProbeAssertion(
                     f"思考增量疑似一字一帧：{tiny}/{len(thinks)} 帧不超过 2 字"
                 )
+        hidden_needles = (
+            "here's a thinking process",
+            "analyze user input",
+            "identify key points",
+        )
+        for item in [*thinks, *finals]:
+            blob = str(_payload(item).get("text") or "").lower()
+            if any(needle in blob for needle in hidden_needles):
+                raise ProbeAssertion(
+                    "thought 不得暴露隐藏思维链（Here's a thinking process / Analyze User Input）"
+                )
 
     def completed_once(self, *, after_frame: int = 0) -> None:
         done = [

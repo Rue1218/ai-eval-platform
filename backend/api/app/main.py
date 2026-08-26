@@ -1,5 +1,6 @@
+import asyncio
 import logging
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -79,7 +80,15 @@ async def lifespan(app: FastAPI):
     # 表结构由 Alembic 管理（启动前执行 alembic upgrade head），此处只做引导数据
     _bootstrap_admin()
     _bootstrap_preview()
-    yield
+    from .runtime import checkpoint_ttl_loop
+
+    cleanup_task = asyncio.create_task(checkpoint_ttl_loop())
+    try:
+        yield
+    finally:
+        cleanup_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await cleanup_task
 
 
 app = FastAPI(title="AI 测试与评估平台", version=APP_VERSION, lifespan=lifespan)

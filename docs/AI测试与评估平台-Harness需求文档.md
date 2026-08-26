@@ -3,8 +3,8 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 需求文档 |
-| 版本 | V1.5.0 |
-| 审查日期 | 2026-08-24 |
+| 版本 | V1.5.2 |
+| 审查日期 | 2026-08-26 |
 | 文档性质 | 需求规格说明书（需求先行） |
 | 适用范围 | `/agent` 对话智能体的 Harness 运行时：六层职责、七种模式组合、LangGraph 框架选型、技能体系与验收标准 |
 | 事实来源 | `backend/api/app/llm/`、`app/agent/graph.py`、`app/routers/ws.py`、`app/adapters.py`；《Agent框架LangGraph与WebSocket重设计》（V0.1）、《Agent重设计工作区》（V0.3）、《模型调用层LangGraph重设计》（V0.2）；PRD、API.md |
@@ -71,7 +71,7 @@ LangGraph 定位为**六层全覆盖框架**（V1.3 裁决）：提示词装配�
 | Plan-and-Execute | `plan` 节点生成 `PlanArtifact` → 条件边选 `chat/react/plan_solve`；plan_solve 进入执行子图（图内复用节点，无独立 LLM 循环） | 🚫 冻结 |
 | Orchestrator-Worker | **仅进程级**：确认回执由收包循环 `handle_confirm_ack` 直连创建 `queued` 任务 → PG 队列 → Worker → 事件回写。不引入 LLM 子代理 | 🟡 Worker 进程级链路已存在；Agent 确认回执未实现 |
 | Mixture of Experts | skill 路由节点：按 `intent/skill_id` 选择 Skill Hint 注入上下文；评测域 Skills 体系待建 | 🚫 冻结 |
-| Progressive Disclosure | 图状态只携带 Skill Hint 索引，完整技能文档由节点按需装配 | 🚫 冻结 |
+| Progressive Disclosure | 图状态只携带 Skill Hint 索引，完整技能文档由节点按需装配 | 🟢 已落地：`skills/workflows.py` 按 `plan.skill_id` 装配 |
 | Reflexion | `reflect` 节点：确定性门禁（规则先行）→ 条件边 pass/clarify/reject；可选模型核对只降级不放行 | 🚫 冻结 |
 | Tool-Augmented | `ToolNode` 包装工具注册表（参数绑定/白名单/超时/脱敏）；Worker 长工具不走 ToolNode | 🚫 冻结：无工具注册表 |
 
@@ -268,7 +268,7 @@ confirm_ack 收包 → 行锁读 sessions.pending_confirm
 | SK-4 | 未实现 skill（如 rag）返回 `VALIDATION`，不得伪装成功 | 未实现路径断言 |
 | SK-5 | 前端自定义斜杠只请求 `/api/slash-commands`，与后端技能注册一致 | 前后端 skill 清单一致 |
 
-**现状**：全部**冻结未实现**（`app/harness/` 空包边界）。六专家分工（planner/generator/executor/healer/reporter/scenario）如需落地为独立 skill，须作为需求变更提交评审。
+**现状**：Skill Hint 目录、`skill_id ↔ kind` 与 `skill-rag` 启用门禁已落地。SK-1 Progressive Disclosure（完整工作流按 `plan.skill_id` 按需加载、不进 GraphState）已接线；六专家分工如需落地为独立 skill，须作为需求变更提交评审。
 
 ---
 
@@ -570,3 +570,28 @@ P0-LG 阶段引入新依赖时须同步更新 `backend/api/requirements.txt`；P
 | `backend/api/tests/test_harness_sandbox.py`（新增） | 集成测试（`skipif not probe_sandbox()`）：正常执行/工作区可写/系统目录只读/敏感路径遮蔽/跨会话隔离/超时整树清理/内存超限/无网络/fork 炸弹受限 |
 
 说明：不新增任何对外 REST/WS 字段（sandbox 仅内部 `RunnableConfig.configurable`，API.md 契约不变）；无 Alembic 迁移（无表变更）；`bash` 沙箱在 api 容器内以 root 运行，依赖 compose `seccomp:unconfined`，更严格的自定义 seccomp profile 列为后续项。验收：ruff 全绿、API 全量 314 项测试过、worker 12 项测试过。
+
+### V1.5.1 Progressive Disclosure 技能工作流按需加载（2026-08-26）
+
+落地 SK-1：Skill Hint 常驻目录，完整工作流不进 GraphState，由本轮 `plan.skill_id` 按需装配进【当前技能工作流】；相邻回合互不污染（SK-2）；`skill-rag` 规划即 `VALIDATION`（SK-4）。不新增对外 REST/WS 字段。
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/harness/skills/workflows.py` | 启用技能工作流正文；`load_skill_workflow` |
+| `backend/api/app/harness/skills/registry.py` | `plan_skill_id` 只返回索引 |
+| `backend/api/app/harness/context/assembly.py` | `skill_hints_for_turn`；`assemble(skill_workflow=)` |
+| `backend/api/app/agent/react.py` / `plan_solve.py` / `routing.py` | ReAct 按需注入；规划拦截未启用 skill |
+| `backend/api/tests/test_harness_skills.py` | K-A1~K-A5 |
+
+### V1.5.2 检查点 TTL + 会话软删除联动（2026-08-26）
+
+闭环 §2.4 / M9-D5 / M9-D6：会话软删除按 `{session_id}:` 前缀（兼容裸 `session_id`）清理检查点；TTL 默认 7 天，由 **API 进程 lifespan** 每 6 小时执行（默认 memory 引擎只存在于 API 进程，不新增 Worker 职责）。不改默认 Checkpointer 为 postgres，不新增对外 REST/WS 字段。
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/harness/memory/checkpoint.py` | 内存检查点改为进程内锁；`get_default_checkpointer` 进程单例 |
+| `backend/api/app/harness/memory/cleanup.py` | `cleanup_session_checkpoints` / `purge_session_checkpoints` |
+| `backend/api/app/runtime/cleanup.py` | TTL 后台循环（M9-D6） |
+| `backend/api/app/routers/sessions.py` | `DELETE /api/sessions/{id}` 软删除后联动清理 |
+| `backend/api/app/main.py` | lifespan 挂载 TTL 任务 |
+| `backend/api/tests/test_checkpointer.py` / `test_runtime_checkpoint.py` | R-A3 / R-A4 |

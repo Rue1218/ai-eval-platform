@@ -16,7 +16,7 @@ from app.errors import AppError, ErrorCode
 from app.harness.context import (
     assemble,
     compact_summary_from_configurable,
-    skill_hint_lines,
+    skill_hints_for_turn,
 )
 from app.harness.contracts import NodeEvent, make_event
 from app.harness.memory import GraphState, SerializableRequest, rebuild_model_config
@@ -176,11 +176,11 @@ def chat_stream_node(state: GraphState, gateway: object) -> dict:
     api_key = str(configurable.get("credentials", {}).get("api_key") or "")
     model_config = rebuild_model_config(serializable, api_key=api_key)
     persona = str(serializable.get("system") or "").strip() or build_system_prompt(
-        SystemVars(skill_hints=tuple(skill_hint_lines()))
+        SystemVars(skill_hints=tuple(skill_hints_for_turn()))
     )
     assembled = assemble(
         system=persona,
-        skill_hints=skill_hint_lines(),
+        skill_hints=skill_hints_for_turn(),
         summary=compact_summary_from_configurable(configurable),
         messages=list(serializable.get("messages") or ()),
     )

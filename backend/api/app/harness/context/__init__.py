@@ -5,6 +5,7 @@ from .assembly import (
     compact_summary_from_configurable,
     select_tool_defs,
     skill_hint_lines,
+    skill_hints_for_turn,
 )
 from .compact import (
     COMPACT_SCHEMA,
@@ -40,6 +41,7 @@ __all__ = [
     "recent_window",
     "select_tool_defs",
     "skill_hint_lines",
+    "skill_hints_for_turn",
     "summarize",
     "to_observation",
     "truncate_with_marker",
