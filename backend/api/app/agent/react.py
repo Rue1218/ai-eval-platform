@@ -4,9 +4,9 @@
 Skill Hint → 摘要 → 阶段输入 + observations）并用 ``select_tool_defs``
 最小注入短原生工具（CX-5）→ 结构化模型调用 → ``parse_react`` 严格解析 → 写
 ``pending_tool``（工具路径）或完成后切换到自然语言流式回答（对话路径）。
-``react_route`` 条件边按 ``pending_tool`` 分流；预算在节点内消费（count-only，
-OR-5）；重复调用/长路径抑制（OR-4）由「最近一次 tool 相同」检测并转 error
-收尾。
+``react_route`` 条件边按 ``pending_tool`` 分流；``tools_route`` 在预算耗尽时
+END（避免撞 ``recursion_limit``）；预算在节点内消费（count-only，OR-5）；
+重复调用/长路径抑制（OR-4）由「最近一次 tool 相同」检测并转 error 收尾。
 """
 
 from __future__ import annotations
@@ -37,6 +37,7 @@ from app.harness.orchestration import (
     consume_model_call,
     consume_tool_turn,
     from_dict,
+    is_budget_exhausted,
 )
 from app.harness.prompts import SystemVars, build_system_prompt, parse_react
 from app.llm import ModelRequest, ModelResponse, NativeToolCall
@@ -648,6 +649,20 @@ def build_react_nodes(
     """构造 ReAct 节点：{'react_agent': ...}；条件边路由见 ``react_route``。"""
 
     def react_agent_node(state: GraphState) -> dict:
+        # 工具回边若漏判耗尽，这里再挡一次：不再调模型，直接 error 收尾。
+        budget = from_dict(state.get("budget") or {})
+        if is_budget_exhausted(budget):
+            message = (
+                "模型调用次数预算耗尽"
+                if budget.model_calls <= 0
+                else "工具轮次预算耗尽"
+            )
+            return _react_error_state(
+                state,
+                code=ErrorCode.BUDGET_EXCEEDED.value,
+                message=message,
+                budget=budget.to_dict(),
+            )
         serializable = state["request"]
         run_config = get_config()
         configurable = (run_config or {}).get("configurable") or {}
@@ -1052,3 +1067,21 @@ def react_route(state: GraphState) -> str:
     if _has_active_plan(state):
         return "reflect"
     return "end"
+
+
+def tools_route(state: GraphState) -> str:
+    """ToolNode 条件边：队列未空继续 tools；预算耗尽或回合失败则结束。
+
+    默认预算 12/12 时 ``routing + n×(react+tools)`` 约 25 步，恰好顶到
+    LangGraph 默认 ``recursion_limit=25``。若工具后再无条件回 ``react_agent``，
+    第 13 次 ``consume_model_call`` 来不及抛 ``BUDGET_EXCEEDED`` 就会
+    ``GraphRecursionError``。
+    """
+    if state.get("pending_tool"):
+        return "tools"
+    if state.get("turn_failed"):
+        return "end"
+    budget = from_dict(state.get("budget") or {})
+    if is_budget_exhausted(budget):
+        return "end"
+    return "react_agent"

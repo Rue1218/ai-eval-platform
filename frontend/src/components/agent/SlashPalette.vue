@@ -114,7 +114,7 @@
       </div>
 
       <!-- 2. 我的命令：只打 /api/slash-commands；VALIDATION 展示后端文案，禁止空列表冒充已启用 -->
-      <div v-if="customCommands.length > 0 || customDisabledHint" class="slash-group custom-group">
+      <div class="slash-group custom-group">
         <div class="slash-group-label">我的命令</div>
         <div v-if="customDisabledHint" class="slash-disabled-hint">{{ customDisabledHint }}</div>
         <div
@@ -138,9 +138,17 @@
             </div>
           </div>
           <div class="slash-item-right">
+            <button type="button" class="slash-item-delete" title="删除" @click.stop="removeCustom(cmd)">删除</button>
             <span v-if="activeName === cmd.name" class="slash-item-arrow">↵</span>
           </div>
         </div>
+        <form v-if="!customDisabledHint" class="slash-add" @submit.prevent="saveCustom">
+          <input v-model="draftName" class="slash-add-input" maxlength="32" placeholder="英文名" @mousedown.stop>
+          <input v-model="draftHint" class="slash-add-input" maxlength="128" placeholder="说明" @mousedown.stop>
+          <input v-model="draftTemplate" class="slash-add-input slash-add-template" maxlength="2000" placeholder="预填到输入框的文本" @mousedown.stop>
+          <button type="submit" class="slash-add-btn" :disabled="savingCustom">添加</button>
+          <div v-if="addError" class="slash-disabled-hint">{{ addError }}</div>
+        </form>
       </div>
     </div>
   </div>
@@ -172,6 +180,11 @@ const bodyRef = ref<HTMLDivElement | null>(null)
 const activeName = ref<string>('benchmark')
 const customCommands = ref<SlashCommandItem[]>([])
 const customDisabledHint = ref('')
+const draftName = ref('')
+const draftHint = ref('')
+const draftTemplate = ref('')
+const addError = ref('')
+const savingCustom = ref(false)
 
 const GROUP_LABELS: Record<string, string> = {
   order: '评测与执行',
@@ -261,7 +274,7 @@ watch(
   },
 )
 
-onMounted(async () => {
+async function loadCustom() {
   customCommands.value = []
   customDisabledHint.value = ''
   try {
@@ -273,6 +286,40 @@ onMounted(async () => {
       customDisabledHint.value = err.message || '自定义命令未启用'
     }
   }
+}
+
+async function saveCustom() {
+  addError.value = ''
+  savingCustom.value = true
+  try {
+    await api.slashCommands.create({
+      name: draftName.value.trim(),
+      hint: draftHint.value.trim(),
+      template: draftTemplate.value,
+    })
+    draftName.value = ''
+    draftHint.value = ''
+    draftTemplate.value = ''
+    await loadCustom()
+  } catch (err) {
+    addError.value = err instanceof ApiError ? err.message : '添加失败'
+  } finally {
+    savingCustom.value = false
+  }
+}
+
+async function removeCustom(cmd: SlashCommandItem) {
+  addError.value = ''
+  try {
+    await api.slashCommands.remove(cmd.id)
+    await loadCustom()
+  } catch (err) {
+    addError.value = err instanceof ApiError ? err.message : '删除失败'
+  }
+}
+
+onMounted(() => {
+  void loadCustom()
 })
 
 /**
@@ -581,6 +628,55 @@ defineExpose({
   font-weight: bold;
   color: var(--accent-ai, #6366f1);
   padding: 0 2px;
+}
+
+.slash-item-delete {
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary, #9ca3af);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.slash-item-delete:hover {
+  color: #dc2626;
+}
+
+.slash-add {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 6px;
+  padding: 8px 10px 4px;
+}
+
+.slash-add-input {
+  width: 100%;
+  border: 1px solid var(--border-subtle, #e5e7eb);
+  border-radius: 6px;
+  background: var(--bg-main, #ffffff);
+  color: var(--text-primary, #111827);
+  font-size: 12px;
+  padding: 5px 8px;
+}
+
+.slash-add-template {
+  grid-column: 1 / -2;
+}
+
+.slash-add-btn {
+  grid-column: -2 / -1;
+  border: 1px solid var(--border-subtle, #e5e7eb);
+  border-radius: 6px;
+  background: var(--bg-elevated, #f4f8f8);
+  color: var(--text-primary, #111827);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.slash-add-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 @media (max-width: 640px) {

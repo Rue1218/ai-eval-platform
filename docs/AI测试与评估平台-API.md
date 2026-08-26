@@ -454,9 +454,7 @@ WS 不再可访问，但 `messages`、`ws_events`、tasks、reports 均保留审
 
 自定义斜杠（下区「我的命令」）。**系统 15 条命令不走本接口**，前端本地注册表即可。
 
-M1 未交付：`VALIDATION`（400），`message` 为「自定义命令未启用」，面板下区展示该句；禁止 200 空列表冒充已启用，禁止 localStorage 冒充已保存。
-
-M2 成功 200：
+M2 已交付：成功 200。无命令时返回 `items=[]`（能力已启用，不是未启用桩）。禁止 localStorage 冒充已保存。
 
 ```json
 {
@@ -1566,7 +1564,7 @@ JSON Schema 冻结点：短工具 M1 W4；音频工具输入以本节为准，�
 | 阶段 | 必须就绪 | 门禁相关 |
 | --- | --- | --- |
 | M0 | `GET /api/health` | Compose |
-| M1 | 认证、me、users、files、profiles、check、sessions（含 messages+events+pending_confirm+context_meter）、tasks CRUD/cancel/rerun、WS 全事件、settings（agent_profile_id）、`GET /api/agent/prefs`、slash-commands **桩**（未启用 `VALIDATION`） | 对话下单 mock；断线补发；协议档 |
+| M1 | 认证、me、users、files、profiles、check、sessions（含 messages+events+pending_confirm+context_meter）、tasks CRUD/cancel/rerun、WS 全事件、settings（agent_profile_id）、`GET /api/agent/prefs` | 对话下单 mock；断线补发；协议档 |
 | M2 | datasets、rows、case-sets confirm/export/map(dataset)、reports、share、baseline、budget 停、slash-commands 完整 CRUD | 对比报告；待补全；表单 POST /tasks；自定义斜杠 |
 | M3 | kb、docs、gold-qa、map(gold_qa)、RAG 报告字段、Judge 可选 | Hit Rate@5 |
 | M4 | settings.stress/notify、approve-stress、stress-series、解读只读 report_id | 先评后压；Grafana 同 task_id |
@@ -1684,7 +1682,7 @@ MCP 浏览器不调：与 PRD 3.1、前端计划「禁止把 MCP 当 REST」一�
 | --- | --- |
 | `GET .../messages` 必带 `events`，增 `pending_confirm` `context_meter` | §3.4 |
 | `GET /api/agent/prefs`（只读，ack 后服务端写） | §3.4 |
-| `GET/POST/DELETE /api/slash-commands`（M1 桩 `VALIDATION`） | §3.4 |
+| `GET/POST/DELETE /api/slash-commands`（M2 CRUD） | §3.4 |
 | `thought`/`tool_result` 可选 `latency_ms`；`thought` 可选 `stage` `skill_id` | §4.3 |
 | WS 关闭码 4401/4404；`/stop` 走 `user_message` | §4.1 / §4.4 |
 | 对话不得发 `kind=stress` 确认卡；短工具含 `dispatch.overview` | §5 / §6 |
@@ -2021,4 +2019,16 @@ LangGraph `reflect` 在规划 `delivery=confirm` 且复核通过后发出确认�
 | `frontend/src/components/agent/ToolCard.vue` | 字段/行号/命令/文件内容 + MarkdownView |
 | `frontend/src/utils/toolCard.ts` | 成功后默认展开的工具名单 |
 | `docs/AI测试与评估平台-API.md` | §4.3 `read` 预览契约 |
+
+**V1.39（2026-08-26）— 下单偏好与自定义斜杠落地**
+
+`GET /api/agent/prefs` 改为读取 `settings.agent_prefs:{user_id}`；仅 `confirm_ack.ok=true` 且任务已入队后写入。`GET/POST/DELETE /api/slash-commands` 完成 M2 CRUD（按用户存 `settings.slash_commands:{user_id}`），空列表表示已启用无命令。
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/harness/memory/preference.py` | 偏好投影、入队后抽取允许字段 |
+| `backend/api/app/harness/memory/slash_store.py` | 自定义斜杠校验与存取 |
+| `backend/api/app/routers/agent_prefs.py` / `slash_commands.py` | REST 入口 |
+| `backend/api/app/harness/orchestration/confirm.py` | 入队成功写偏好 |
+| `frontend/src/components/agent/SlashPalette.vue` | 添加/删除我的命令 |
 

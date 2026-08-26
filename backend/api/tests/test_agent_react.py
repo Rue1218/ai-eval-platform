@@ -437,6 +437,37 @@ _REACT_EDIT = (
 )
 
 
+def test_tools_route_ends_when_budget_exhausted() -> None:
+    """工具回边：队列未空继续；预算耗尽或回合失败必须 END，不能再进模型。"""
+    from app.agent.react import tools_route
+
+    assert (
+        tools_route(
+            {
+                "pending_tool": {"name": "read"},
+                "budget": {"model_calls": 0, "tool_turns": 0},
+            }
+        )
+        == "tools"
+    )
+    assert tools_route({"pending_tool": None, "budget": {"model_calls": 0, "tool_turns": 1}}) == "end"
+    assert tools_route({"pending_tool": None, "budget": {"model_calls": 3, "tool_turns": 0}}) == "end"
+    assert (
+        tools_route(
+            {
+                "pending_tool": None,
+                "turn_failed": True,
+                "budget": {"model_calls": 3, "tool_turns": 3},
+            }
+        )
+        == "end"
+    )
+    assert (
+        tools_route({"pending_tool": None, "budget": {"model_calls": 3, "tool_turns": 3}})
+        == "react_agent"
+    )
+
+
 def test_react_budget_exhausted_emits_error() -> None:
     """OR-5：model_calls 预算耗尽 → error 收尾，不进入死循环。"""
     # 交替工具避开重复抑制（无沙箱目录时工具 ok=False，守卫不触发）；

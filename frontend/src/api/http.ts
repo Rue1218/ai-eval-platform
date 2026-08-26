@@ -1154,6 +1154,13 @@ export const api = {
       const { data } = await http.get('/api/slash-commands')
       return data
     },
+    async create(body: { name: string; hint: string; template: string }): Promise<SlashCommandItem> {
+      const { data } = await http.post('/api/slash-commands', body)
+      return data
+    },
+    async remove(id: string): Promise<void> {
+      await http.delete(`/api/slash-commands/${id}`)
+    },
   },
   agent: {
     async getPrefs(): Promise<AgentPrefs> {

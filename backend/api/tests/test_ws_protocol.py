@@ -1,5 +1,7 @@
 """WebSocket 流式事件语义回归测试。"""
 
+import asyncio
+
 import pytest
 
 from app.models import Session as AgentSession
@@ -152,6 +154,75 @@ def test_persist_pending_confirm_strips_author_meta():
     assert session.pending_confirm == {"kind": "benchmark", "dataset_id": "d1"}
     assert session.pending_confirm_author_id == "u-author"
     assert db.committed is True
+
+
+def test_should_forward_worker_event() -> None:
+    """转发循环只推 Worker 直产：progress/report，以及带 task_id 的 error。"""
+    assert ws._should_forward_worker_event("progress", None) is True
+    assert ws._should_forward_worker_event("report", "t-1") is True
+    assert ws._should_forward_worker_event("error", "t-1") is True
+    assert ws._should_forward_worker_event("error", None) is False
+    assert ws._should_forward_worker_event("assistant_message", None) is False
+
+
+@pytest.mark.asyncio
+async def test_forward_loop_pushes_worker_events_and_skips_agent_error(monkeypatch):
+    """M9-D8：按游标增量推送 Worker 事件，对话内 error 只推进游标不重发。"""
+
+    class _Row:
+        def __init__(self, event_id: int, event: str, payload: dict, task_id: str | None):
+            self.event_id = event_id
+            self.event = event
+            self.payload = payload
+            self.task_id = task_id
+            self.ts = None
+
+    batches = [
+        [
+            _Row(5, "progress", {"percent": 10}, "t-1"),
+            _Row(6, "error", {"code": "INTERNAL", "message": "对话失败"}, None),
+            _Row(7, "report", {"report_id": "r-1"}, "t-1"),
+        ],
+        [],
+    ]
+
+    class _Query:
+        def filter(self, *_args):
+            return self
+
+        def order_by(self, *_args):
+            return self
+
+        def all(self):
+            return batches.pop(0) if batches else []
+
+    class _Db:
+        def query(self, *_args):
+            return _Query()
+
+        def close(self) -> None:
+            pass
+
+    sent: list[dict] = []
+
+    class _WS:
+        async def send_json(self, frame: dict) -> None:
+            sent.append(frame)
+
+    monkeypatch.setattr(ws, "SessionLocal", lambda: _Db())
+    monkeypatch.setattr(ws, "_FORWARD_POLL_S", 0.01)
+    state = ws._ConnectionState()
+    state.cursor = 4
+    stop = asyncio.Event()
+
+    async def _stop_soon() -> None:
+        await asyncio.sleep(0.05)
+        stop.set()
+
+    await asyncio.gather(ws._forward_loop(_WS(), state, "s-1", stop), _stop_soon())
+    assert [frame["event"] for frame in sent] == ["progress", "report"]
+    assert [frame["event_id"] for frame in sent] == [5, 7]
+    assert state.cursor == 7
 
 
 def test_confirm_author_payload_uses_display_name() -> None:

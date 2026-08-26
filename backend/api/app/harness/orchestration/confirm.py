@@ -15,6 +15,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.errors import AppError, ErrorCode
 from app.harness.execution.worker_bridge import TASK_KINDS, enqueue_long_task
+from app.harness.memory import prefs_from_task_spec, write_prefs
 from app.harness.security.auth import (
     assert_confirm_owner,
     assert_no_concurrent_confirm,
@@ -176,6 +177,17 @@ def handle_confirm_ack(
     except AppError:
         db.rollback()
         raise
+    if confirmed and task_id:
+        # 入队成功后写偏好；失败不影响已入队任务（闲聊/取消不写）。
+        try:
+            write_prefs(db, user_id, prefs_from_task_spec(task_spec))
+        except AppError:
+            raise
+        except Exception as exc:
+            db.rollback()
+            from app.agent.log import agent_trace
+
+            agent_trace(f"写偏好失败 type={type(exc).__name__}")
     return ConfirmAckResult(
         ok=confirmed,
         task_id=task_id,

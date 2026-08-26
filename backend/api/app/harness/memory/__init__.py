@@ -8,7 +8,7 @@ from .checkpoint import (
 from .cleanup import cleanup_orphaned_checkpoints
 from .compressed import get_summary, write_summary
 from .episodic import append_event, get_active_tasks, next_event_id, replay_events
-from .preference import read_prefs, write_prefs
+from .preference import prefs_from_task_spec, public_prefs, read_prefs, write_prefs
 from .semantic import retrieve
 from .state import (
     AgentMode,
@@ -36,6 +36,8 @@ __all__ = [
     "get_summary",
     "new_working",
     "next_event_id",
+    "prefs_from_task_spec",
+    "public_prefs",
     "read_prefs",
     "rebuild_model_config",
     "replay_events",
