@@ -5,6 +5,7 @@ from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata
 from app.harness.memory import (
     InMemoryCheckpointer,
     cleanup_orphaned_checkpoints,
+    cleanup_session_checkpoints,
     get_default_checkpointer,
 )
 
@@ -152,3 +153,81 @@ def test_cleanup_removes_orphaned_threads() -> None:
 def test_default_checkpointer_stays_in_memory() -> None:
     """P3：默认 AGENT_CHECKPOINTER=memory，不在生产默认打开 PgCheckpointer。"""
     assert isinstance(get_default_checkpointer(), InMemoryCheckpointer)
+
+
+def test_default_checkpointer_is_process_singleton() -> None:
+    """WS / 会话删除 / TTL 必须共用同一 Checkpointer 实例。"""
+    assert get_default_checkpointer() is get_default_checkpointer()
+
+
+def test_inmemory_visible_across_threads() -> None:
+    """进程内共享存储：后台线程写入后，调用方可读（非 threading.local）。"""
+    import threading
+
+    checkpointer = InMemoryCheckpointer()
+    config = {"configurable": {"thread_id": "cross-thread", "checkpoint_ns": ""}}
+
+    def _writer() -> None:
+        checkpointer.put(config, _checkpoint("cp-thread"), _metadata(1), {})
+
+    worker = threading.Thread(target=_writer)
+    worker.start()
+    worker.join()
+    assert checkpointer.get_tuple(config) is not None
+
+
+def test_cleanup_session_removes_prefixed_threads() -> None:
+    """R-A4：会话软删除清掉 `{session_id}:*` 与裸 session_id，保留其他会话。"""
+    checkpointer = InMemoryCheckpointer()
+    session_id = "11111111-1111-4111-8111-111111111111"
+    other_id = "22222222-2222-4222-8222-222222222222"
+    checkpointer.put(
+        {"configurable": {"thread_id": f"{session_id}:turn-a", "checkpoint_ns": ""}},
+        _checkpoint("cp-a"),
+        _metadata(1),
+        {},
+    )
+    checkpointer.put(
+        {"configurable": {"thread_id": session_id, "checkpoint_ns": ""}},
+        _checkpoint("cp-bare"),
+        _metadata(1),
+        {},
+    )
+    checkpointer.put(
+        {"configurable": {"thread_id": f"{other_id}:turn-b", "checkpoint_ns": ""}},
+        _checkpoint("cp-b"),
+        _metadata(1),
+        {},
+    )
+    removed = cleanup_session_checkpoints(checkpointer, session_id)
+    assert removed == 2
+    assert checkpointer.get_tuple(
+        {"configurable": {"thread_id": f"{session_id}:turn-a"}}
+    ) is None
+    assert checkpointer.get_tuple({"configurable": {"thread_id": session_id}}) is None
+    assert checkpointer.get_tuple(
+        {"configurable": {"thread_id": f"{other_id}:turn-b"}}
+    ) is not None
+
+
+def test_cleanup_session_does_not_match_prefix_sibling() -> None:
+    """短前缀不得误删更长 session_id 的检查点。"""
+    checkpointer = InMemoryCheckpointer()
+    checkpointer.put(
+        {"configurable": {"thread_id": "s10:turn", "checkpoint_ns": ""}},
+        _checkpoint("cp-keep"),
+        _metadata(1),
+        {},
+    )
+    assert cleanup_session_checkpoints(checkpointer, "s1") == 0
+    assert checkpointer.get_tuple({"configurable": {"thread_id": "s10:turn"}}) is not None
+
+
+def test_cleanup_session_blank_id_is_noop() -> None:
+    """空 session_id 不得清全部检查点。"""
+    checkpointer = InMemoryCheckpointer()
+    config = {"configurable": {"thread_id": "keep", "checkpoint_ns": ""}}
+    checkpointer.put(config, _checkpoint("cp-keep"), _metadata(1), {})
+    assert cleanup_session_checkpoints(checkpointer, "") == 0
+    assert cleanup_session_checkpoints(checkpointer, "   ") == 0
+    assert checkpointer.get_tuple(config) is not None

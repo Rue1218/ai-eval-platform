@@ -3,7 +3,7 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 需求文档 |
-| 版本 | V1.5.1 |
+| 版本 | V1.5.2 |
 | 审查日期 | 2026-08-26 |
 | 文档性质 | 需求规格说明书（需求先行） |
 | 适用范围 | `/agent` 对话智能体的 Harness 运行时：六层职责、七种模式组合、LangGraph 框架选型、技能体系与验收标准 |
@@ -582,3 +582,16 @@ P0-LG 阶段引入新依赖时须同步更新 `backend/api/requirements.txt`；P
 | `backend/api/app/harness/context/assembly.py` | `skill_hints_for_turn`；`assemble(skill_workflow=)` |
 | `backend/api/app/agent/react.py` / `plan_solve.py` / `routing.py` | ReAct 按需注入；规划拦截未启用 skill |
 | `backend/api/tests/test_harness_skills.py` | K-A1~K-A5 |
+
+### V1.5.2 检查点 TTL + 会话软删除联动（2026-08-26）
+
+闭环 §2.4 / M9-D5 / M9-D6：会话软删除按 `{session_id}:` 前缀（兼容裸 `session_id`）清理检查点；TTL 默认 7 天，由 **API 进程 lifespan** 每 6 小时执行（默认 memory 引擎只存在于 API 进程，不新增 Worker 职责）。不改默认 Checkpointer 为 postgres，不新增对外 REST/WS 字段。
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/harness/memory/checkpoint.py` | 内存检查点改为进程内锁；`get_default_checkpointer` 进程单例 |
+| `backend/api/app/harness/memory/cleanup.py` | `cleanup_session_checkpoints` / `purge_session_checkpoints` |
+| `backend/api/app/runtime/cleanup.py` | TTL 后台循环（M9-D6） |
+| `backend/api/app/routers/sessions.py` | `DELETE /api/sessions/{id}` 软删除后联动清理 |
+| `backend/api/app/main.py` | lifespan 挂载 TTL 任务 |
+| `backend/api/tests/test_checkpointer.py` / `test_runtime_checkpoint.py` | R-A3 / R-A4 |

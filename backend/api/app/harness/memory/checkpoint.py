@@ -1,7 +1,7 @@
 """Harness 记忆层：LangGraph Checkpointer（M3 阶段 3）。
 
-- ``InMemoryCheckpointer``：线程隔离的内存实现（threading.local），供测试与
-  单副本无 PG 场景；
+- ``InMemoryCheckpointer``：进程内共享的内存实现（实例锁保护），供测试与
+  单副本无 PG 场景；WS 回合、REST 会话删除与 TTL 后台任务必须看见同一份检查点；
 - ``PgCheckpointer``：PostgreSQL 持久化（``harness_checkpoints`` +
   ``harness_checkpoint_writes``，迁移见 migrations）。
 
@@ -92,31 +92,33 @@ class _AsyncBridgeMixin:
 
 
 class InMemoryCheckpointer(_AsyncBridgeMixin, BaseCheckpointSaver):
-    """线程隔离的内存 Checkpointer（threading.local，不入进程共享状态）。
+    """进程内共享的内存 Checkpointer（实例锁，跨线程可见）。
 
     带容量上限（``max_checkpoints``，默认 512）：超限按 checkpoint_id 淘汰
     最旧检查点，防止长运行进程内存膨胀（配合 ``cleanup_orphaned_checkpoints``
-    超龄清理）。
+    超龄清理）。会话软删除与 TTL 后台任务依赖这份进程内可见性。
     """
 
     def __init__(self, max_checkpoints: int = 512) -> None:
         super().__init__(serde=JsonPlusSerializer())
-        self._local = threading.local()
+        self._lock = threading.RLock()
+        self._checkpoints: dict = {}
+        self._pending_writes: dict = {}
         self._max_checkpoints = max(1, max_checkpoints)
 
-    def _storage(self) -> dict:
-        return self._local.__dict__.setdefault("checkpoints", {})
-
-    def _writes(self) -> dict:
-        return self._local.__dict__.setdefault("writes", {})
+    def iter_thread_ids(self) -> list[str]:
+        """返回当前存储中的去重 thread_id（供会话前缀清理）。"""
+        with self._lock:
+            return sorted({str(key[0]) for key in self._checkpoints})
 
     def delete_thread(self, thread_id: str) -> None:
-        """删除某 thread 的全部检查点与待写入（线程隔离存储内）。"""
+        """删除某 thread 的全部检查点与待写入。"""
         target = str(thread_id)
-        for key in [item for item in self._storage() if item[0] == target]:
-            del self._storage()[key]
-        for key in [item for item in self._writes() if item[0] == target]:
-            del self._writes()[key]
+        with self._lock:
+            for key in [item for item in self._checkpoints if item[0] == target]:
+                del self._checkpoints[key]
+            for key in [item for item in self._pending_writes if item[0] == target]:
+                del self._pending_writes[key]
 
     def put(
         self,
@@ -128,16 +130,18 @@ class InMemoryCheckpointer(_AsyncBridgeMixin, BaseCheckpointSaver):
         thread_id, checkpoint_ns = _thread_key(config)
         checkpoint_id = str(checkpoint["id"])
         parent_id = _checkpoint_id(config)
-        storage = self._storage()
-        storage[(thread_id, checkpoint_ns, checkpoint_id)] = (
-            checkpoint,
-            metadata,
-            parent_id,
-        )
-        # 容量保护：超限淘汰最旧检查点（按 checkpoint_id 排序，优先淘汰最早）
-        if len(storage) > self._max_checkpoints:
-            for key in sorted(storage, key=lambda item: item[2])[: len(storage) // 4]:
-                del storage[key]
+        with self._lock:
+            self._checkpoints[(thread_id, checkpoint_ns, checkpoint_id)] = (
+                checkpoint,
+                metadata,
+                parent_id,
+            )
+            # 容量保护：超限淘汰最旧检查点（按 checkpoint_id 排序，优先淘汰最早）
+            if len(self._checkpoints) > self._max_checkpoints:
+                for key in sorted(self._checkpoints, key=lambda item: item[2])[
+                    : len(self._checkpoints) // 4
+                ]:
+                    del self._checkpoints[key]
         return {
             "configurable": {
                 "thread_id": thread_id,
@@ -154,28 +158,40 @@ class InMemoryCheckpointer(_AsyncBridgeMixin, BaseCheckpointSaver):
         task_path: str = "",
     ) -> None:
         thread_id, checkpoint_ns = _thread_key(config)
-        checkpoint_id = _checkpoint_id(config)
-        if checkpoint_id is None:
-            # config 未指定 checkpoint_id 时，写入当前 thread 最新检查点
-            latest = self.get_tuple(config)
-            checkpoint_id = (
-                latest.config["configurable"]["checkpoint_id"] if latest else ""
+        with self._lock:
+            checkpoint_id = _checkpoint_id(config)
+            if checkpoint_id is None:
+                # config 未指定 checkpoint_id 时，写入当前 thread 最新检查点
+                latest = self.get_tuple(config)
+                checkpoint_id = (
+                    latest.config["configurable"]["checkpoint_id"] if latest else ""
+                )
+            self._pending_writes[(thread_id, checkpoint_ns, checkpoint_id, task_id)] = (
+                list(writes)
             )
-        self._writes()[(thread_id, checkpoint_ns, checkpoint_id, task_id)] = list(writes)
 
     def get_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
         thread_id, checkpoint_ns = _thread_key(config)
-        storage = self._storage()
+        with self._lock:
+            return self._get_tuple_locked(config, thread_id, checkpoint_ns)
+
+    def _get_tuple_locked(
+        self,
+        config: RunnableConfig,
+        thread_id: str,
+        checkpoint_ns: str,
+    ) -> CheckpointTuple | None:
+        """持锁读取最新或指定检查点（供 get_tuple / put_writes 复用）。"""
         target_id = _checkpoint_id(config)
         if target_id is not None:
-            item = storage.get((thread_id, checkpoint_ns, target_id))
+            item = self._checkpoints.get((thread_id, checkpoint_ns, target_id))
             if item is None:
                 return None
             checkpoint, metadata, parent_id = item
         else:
             matches = [
                 (key, value)
-                for key, value in storage.items()
+                for key, value in self._checkpoints.items()
                 if key[:2] == (thread_id, checkpoint_ns)
             ]
             if not matches:
@@ -194,7 +210,7 @@ class InMemoryCheckpointer(_AsyncBridgeMixin, BaseCheckpointSaver):
             }
         pending_writes = [
             (key[3], channel, value)
-            for key, writes in self._writes().items()
+            for key, writes in self._pending_writes.items()
             if key[:3] == (thread_id, checkpoint_ns, target_id)
             for channel, value in writes
         ]
@@ -222,8 +238,8 @@ class InMemoryCheckpointer(_AsyncBridgeMixin, BaseCheckpointSaver):
         before: RunnableConfig | None = None,
         limit: int | None = None,
     ) -> Iterator[CheckpointTuple]:
-        storage = self._storage()
-        items = sorted(storage.items(), key=lambda kv: kv[0][2])
+        with self._lock:
+            items = sorted(self._checkpoints.items(), key=lambda kv: kv[0][2])
         count = 0
         for (thread_id, checkpoint_ns, _), (checkpoint, metadata, parent_id) in items:
             if before is not None and checkpoint["id"] >= (_checkpoint_id(before) or ""):
@@ -428,6 +444,15 @@ class PgCheckpointer(_AsyncBridgeMixin, BaseCheckpointSaver):
             pending_writes=pending_writes,
         )
 
+    def iter_thread_ids(self) -> list[str]:
+        """返回检查点表中的去重 thread_id（供会话前缀清理）。"""
+        sqlalchemy = __import__("sqlalchemy")
+        with self.engine.connect() as conn:
+            rows = conn.execute(
+                sqlalchemy.text("SELECT DISTINCT thread_id FROM harness_checkpoints")
+            ).all()
+        return [str(row.thread_id) for row in rows if row.thread_id]
+
     def delete_thread(self, thread_id: str) -> None:
         """删除某 thread 的全部检查点与待写入（SQL DELETE）。"""
         sqlalchemy = __import__("sqlalchemy")
@@ -492,18 +517,32 @@ class PgCheckpointer(_AsyncBridgeMixin, BaseCheckpointSaver):
                     break
 
 
+_default_checkpointer: BaseCheckpointSaver | None = None
+_default_checkpointer_lock = threading.Lock()
+
+
 def get_default_checkpointer() -> BaseCheckpointSaver:
-    """生产默认 Checkpointer。
+    """生产默认 Checkpointer（进程内单例）。
 
     默认 ``memory``（单副本、每回合独立 thread_id）。仅当
     ``AGENT_CHECKPOINTER=postgres`` 时启用 ``PgCheckpointer``；恢复时
     ``pending_events`` 仍须由图外清空，事件重放只走 ``ws_events``。
+
+    单例保证 WS 图、会话软删除与 TTL 后台任务操作同一份检查点；
+    禁止默认改为 postgres（多副本粘性需单独评审）。
     """
-    from app.config import settings
+    global _default_checkpointer
+    with _default_checkpointer_lock:
+        if _default_checkpointer is None:
+            from app.config import settings
 
-    mode = str(getattr(settings, "agent_checkpointer", "memory") or "memory").strip().lower()
-    if mode == "postgres":
-        from app.db import engine
+            mode = str(
+                getattr(settings, "agent_checkpointer", "memory") or "memory"
+            ).strip().lower()
+            if mode == "postgres":
+                from app.db import engine
 
-        return PgCheckpointer(engine)
-    return InMemoryCheckpointer()
+                _default_checkpointer = PgCheckpointer(engine)
+            else:
+                _default_checkpointer = InMemoryCheckpointer()
+        return _default_checkpointer

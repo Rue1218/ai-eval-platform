@@ -3,7 +3,7 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 运行时基础设施模块设计 |
-| 版本 | V0.4.2 |
+| 版本 | V0.4.3 |
 | 审查日期 | 2026-08-26 |
 | 文档性质 | 模块设计说明书（需求发散 + 架构设计 + 接口签名） |
 | 适用模块 | M9 运行时基础设施（`app/runtime/`） |
@@ -99,10 +99,9 @@ backend/api/requirements.txt                                      # 阶段 3：�
 
 **职责**：检查点 TTL + 会话软删除联动清理。
 
-- `run_cleanup(db, *, ttl_seconds)`：删除超过 TTL 的检查点记录。
-- `cleanup_session(db, session_id)`：会话软删除时联动清理该会话全部检查点（`thread_id=session_id`）。
-- **后台任务**：周期调度 `run_cleanup`（如每 6 小时），由 Worker 或独立定时任务承载（具体调度在阶段 3 实现时定，见 §7）。
-- 与 `sessions.deleted_at` 联动：会话软删除触发 `cleanup_session`。
+- `cleanup_orphaned_checkpoints` / `cleanup_session_checkpoints`：TTL 与会话软删除联动（实现位于 `app/harness/memory/cleanup.py`）。
+- **后台任务**（M9-D6 已决）：API 进程 `lifespan` 周期调度 `checkpoint_ttl_loop`（默认 6 小时），见 `app/runtime/cleanup.py`。默认 memory 引擎检查点只存在于 API 进程，不把清理塞进 Worker。
+- 与 `sessions.deleted_at` 联动：`DELETE /api/sessions/{id}` 提交软删除后调用 `purge_session_checkpoints`；`thread_id` 现行约定为 `{session_id}:{turn_id}`，同时兼容裸 `session_id`。
 
 ### 3.4 Alembic 迁移（阶段 3 落地）
 
@@ -228,11 +227,11 @@ def downgrade() -> None:
 | M9-D3 | **M3-D4 解决：`pending_events` 检查点恢复语义** | 检查点保存累积 `pending_events`，但**恢复时重置为空**——事件已由 `ws_events` 持久化，断线重放走 `ws_events`，不依赖检查点，避免重复 emit；仅恢复 `mode`/`plan`/`verdict` 控制字段 |
 | M9-D4 | `should_abort` 与检查点 | 回调走 `RunnableConfig`，不进检查点内容（R-A7 反射断言） |
 | M9-D5 | 保留策略 | TTL（默认 7 天）+ 会话软删除联动（`cleanup_session`） |
-| M9-D6 | 后台清理调度载体 | **阶段 3 实现时定**：候选为 Worker 周期任务或独立定时任务，倾向 Worker 复用（避免新增进程） |
+| M9-D6 | 后台清理调度载体 | **已决（V0.4.3）**：API 进程 `lifespan` 周期任务（`app/runtime/cleanup.py` `checkpoint_ttl_loop`，默认 6 小时）。默认 memory 引擎只能在 API 进程内清理；postgres 引擎同库删除幂等。不新增 Worker 进程、不改默认 Checkpointer 为 postgres |
 | M9-D7 | 新增依赖 | `langgraph-checkpoint-postgres`（V1.4.1 白名单），PR 内说明 |
 | M9-D8（V0.4.1 新增 / V0.4.2 落地） | **Worker 事件实时转发** | WS 连接生命周期内启动 `_forward_loop`：按游标增量查询 `ws_events`，在连接级发送锁内发送并推进游标；只转发 Worker 直产（`progress`/`report`、带 `task_id` 的 `error`）。多 API 副本时改 Redis Pub/Sub 进程外总线 |
 
-> **M9-D6 是本模块唯一遗留待定项**：后台清理调度载体（Worker 周期任务 vs 独立定时任务）需阶段 3 实现时定。M3-D4 已在本模块解决（D3）。
+> **M9-D6 已闭环（V0.4.3）**：后台清理调度载体定为 API 进程 lifespan 周期任务。M3-D4 已在本模块解决（D3）。
 
 ---
 
@@ -259,7 +258,12 @@ def downgrade() -> None:
 
 | 文件 | 操作 | 作用 |
 | :--- | :--- | :--- |
-| `docs/AI测试与评估平台-Harness-运行时基础设施.md` | 新增 V0.3 → 修订 V0.4 → 修订 V0.4.1 → **修订 V0.4.2** | V0.3–V0.4.1 为设计与裁决；**V0.4.2 记录 M9-D8 落地**：`backend/api/app/routers/ws.py` 新增 `_forward_loop`，在线连接实时收 Worker `progress`/`report`/`error`，断线仍走 `last_event_id` 补发。 |
-| `backend/api/app/routers/ws.py` | 修改 | 连接生命周期挂载 `_forward_loop`；查询/发送/游标同一把连接锁 |
-| `backend/api/tests/test_ws_protocol.py` | 修改 | 补充转发循环与 Worker 事件过滤单测 |
+| `docs/AI测试与评估平台-Harness-运行时基础设施.md` | 新增 V0.3 → 修订 V0.4 → 修订 V0.4.1 → 修订 V0.4.2 → **修订 V0.4.3** | V0.3–V0.4.1 为设计与裁决；V0.4.2 记录 M9-D8 落地；**V0.4.3 闭环 M9-D6**：API lifespan TTL + 会话软删除按 `{session_id}:` 前缀清理检查点。 |
+| `backend/api/app/harness/memory/checkpoint.py` | 修改 | 内存检查点进程内共享；默认 Checkpointer 单例 |
+| `backend/api/app/harness/memory/cleanup.py` | 修改 | `cleanup_session_checkpoints` |
+| `backend/api/app/runtime/cleanup.py` | 新增 | TTL 后台循环 |
+| `backend/api/app/routers/sessions.py` | 修改 | 软删除联动 |
+| `backend/api/app/main.py` | 修改 | lifespan 挂载 TTL |
+| `backend/api/tests/test_checkpointer.py` | 修改 | R-A4 会话前缀清理 |
+| `backend/api/tests/test_runtime_checkpoint.py` | 新增 | R-A3 后台循环可取消 |
 

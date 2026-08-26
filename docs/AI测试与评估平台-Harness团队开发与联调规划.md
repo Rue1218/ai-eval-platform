@@ -3,7 +3,7 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 团队开发与联调规划 |
-| 版本 | V1.12 |
+| 版本 | V1.13 |
 | 审查日期 | 2026-08-26 |
 | 文档性质 | 施工排期与协作规范（指导性文档） |
 | 适用范围 | Harness 运行时阶段 1–4 的 2 人后端分工 + 前端联调任务、模块分配、联调时序与验收闸门 |
@@ -16,6 +16,8 @@
 > **V1.2 修订定位**：新增 §5「前端联调任务（按阶段）」—— 前端工作由 **陈东超** 独立负责（区别于 A/B 后端分工），按阶段 1–4 列出前端改动文件、对接契约（API.md V1.21）、验收点与阻塞依赖；§6 联调验收闸门补前端验收点；新增 §5.5「阶段 4 前置：补建 `backend/api/app/agent/defaults.py`」消除前后端确认卡默认值漂移。本次同步回写 API.md V1.21（clarify/plan 事件、tool_result/context_meter 扩展字段、clarify_reply 上行）。
 
 > **V1.3 修订定位**：配合 API.md V1.22 修复 V1.21 遗留契约裂缝——§5.1 斜杠注册拆分（`/help` 返回帮助文本，`/compact`/`/cancel`/`/stress`/未知斜杠阶段 1 返回 `VALIDATION`，补漏 `/compact`）；§5.4 M8 引用 `§3.6.2` 修正为 `§3.4.2`；§5 契约引用同步对齐 API.md V1.22（`tool_result.source` 改为溯源标识字符串，非 short\|long 枚举）。M4/M5/M7 模块文档同步升 V0.4.1。
+
+> **V1.13 修订定位**（2026-08-26 检查点 TTL + 会话软删除联动）：会话软删除按 `{session_id}:` 前缀清理检查点；API lifespan 每 6 小时跑 TTL。不新增对外字段。
 
 > **V1.12 修订定位**（2026-08-26 隐藏 CoT 摘要）：思考链只下发可展示摘要，英文隐藏思维链由服务端替换。不新增对外字段。
 
@@ -410,3 +412,13 @@ flowchart TD
 | `docs/AI测试与评估平台-API.md` | 修订 V1.43 → V1.44 | 回写可展示摘要 |
 
 本次 V1.12 为实现 API.md「不暴露隐藏思维链」，不新增任何对外 REST/WS 字段。
+
+| `docs/AI测试与评估平台-Harness团队开发与联调规划.md` | 修订 V1.12 → V1.13 | 记录检查点 TTL 与会话软删除联动。 |
+| `backend/api/app/harness/memory/checkpoint.py` | 修改 | 进程内共享存储 + Checkpointer 单例 |
+| `backend/api/app/harness/memory/cleanup.py` | 修改 | 会话前缀清理 |
+| `backend/api/app/runtime/cleanup.py` | 新增 | API lifespan TTL 循环 |
+| `backend/api/app/routers/sessions.py` | 修改 | 软删除联动清检查点 |
+| `backend/api/app/main.py` | 修改 | 启动 TTL 后台任务 |
+| `backend/api/tests/test_checkpointer.py` / `test_runtime_checkpoint.py` | 修改/新增 | R-A3 / R-A4 |
+
+本次 V1.13 为阶段 3 检查点治理收口，不新增任何对外 REST/WS 字段。

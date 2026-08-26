@@ -5,7 +5,11 @@ from .checkpoint import (
     PgCheckpointer,
     get_default_checkpointer,
 )
-from .cleanup import cleanup_orphaned_checkpoints
+from .cleanup import (
+    cleanup_orphaned_checkpoints,
+    cleanup_session_checkpoints,
+    purge_session_checkpoints,
+)
 from .compressed import get_summary, write_summary
 from .episodic import append_event, get_active_tasks, next_event_id, replay_events
 from .preference import prefs_from_task_spec, public_prefs, read_prefs, write_prefs
@@ -31,12 +35,14 @@ __all__ = [
     "append_event",
     "assert_serializable",
     "cleanup_orphaned_checkpoints",
+    "cleanup_session_checkpoints",
     "get_active_tasks",
     "get_default_checkpointer",
     "get_summary",
     "new_working",
     "next_event_id",
     "prefs_from_task_spec",
+    "purge_session_checkpoints",
     "public_prefs",
     "read_prefs",
     "rebuild_model_config",

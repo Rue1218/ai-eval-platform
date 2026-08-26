@@ -7,11 +7,13 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from ..agent.attachments import normalize_history_attachments
+from ..agent.log import agent_trace
 from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
 from ..harness.context import compute_meter, is_window_eligible, recent_window
 from ..harness.context.meter import DEFAULT_MAX_TOKENS, DEFAULT_MCP_TOOLS_MAX
+from ..harness.memory import purge_session_checkpoints
 from ..models import AuditLog, Message, ProtocolProfile, Setting, Task, User, WsEvent
 from ..models import Session as AgentSession
 from ..schemas import SessionCreate, SessionOut, SessionSharingUpdate
@@ -264,6 +266,13 @@ async def delete_session(
         )
     )
     db.commit()
+    # 软删除后联动清该会话检查点（失败不影响 204，TTL 后台任务会兜底）。
+    try:
+        removed = purge_session_checkpoints(session.id)
+        if removed:
+            agent_trace(f"session checkpoint cleanup removed={removed}")
+    except Exception as exc:
+        agent_trace(f"session checkpoint cleanup failed type={type(exc).__name__}")
     # 删除完成后统一断开 owner 与协作者。
     await SESSION_CONNECTION_HUB.close_all(session.id)
     return Response(status_code=204)
