@@ -7,6 +7,28 @@
           <button class="btn btn-secondary session-create-btn" @click="handleCreateSession">
             + 新建会话
           </button>
+          <!-- 对话状态筛选下拉菜单 -->
+          <n-dropdown
+            trigger="click"
+            :options="sessionStatusFilterOptions"
+            @select="handleSelectSessionStatusFilter"
+          >
+            <button
+              class="session-filter-btn"
+              type="button"
+              :class="{ active: sessionStatusFilter !== 'all' }"
+              :title="`会话状态筛选：当前为 ${currentSessionStatusFilterLabel}`"
+            >
+              <i v-if="sessionStatusFilter !== 'all'" class="nav-dot" :class="sessionStatusFilter"></i>
+              <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon>
+              </svg>
+              <span class="filter-label">{{ currentSessionStatusFilterLabel }}</span>
+              <svg class="chevron-icon" width="9" height="9" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M3 4.5l3 3 3-3" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            </button>
+          </n-dropdown>
           <button
             class="session-drawer-close-btn mobile-only"
             title="关闭会话列表"
@@ -37,7 +59,7 @@
 
       <div class="session-items">
         <div
-          v-for="s in sessions"
+          v-for="s in filteredSessions"
           :key="s.id"
           class="session-item"
           :class="{ active: currentSessionId === s.id }"
@@ -73,6 +95,9 @@
           <div class="row-between" style="margin-top: 2px">
             <span class="session-time">{{ formatRelativeTime(s.created_at) }}</span>
           </div>
+        </div>
+        <div v-if="filteredSessions.length === 0" class="session-empty-filter">
+          <span>暂无匹配状态的会话</span>
         </div>
       </div>
     </aside>
@@ -1076,13 +1101,63 @@ const agentProfileDropdownOptions = computed<DropdownOption[]>(() => {
 })
 
 const sessions = ref<AgentSession[]>([])
+/** 会话状态筛选当前选项：all | running | ready | succeeded | failed */
+const sessionStatusFilter = ref<string>('all')
+
+/** 会话状态筛选下拉菜单配置项 */
+const sessionStatusFilterOptions = computed<DropdownOption[]>(() => [
+  { label: '全部状态', key: 'all' },
+  {
+    label: '进行中 (running)',
+    key: 'running',
+    icon: () => h('i', { class: 'nav-dot running', style: { display: 'inline-block', width: '7px', height: '7px', borderRadius: '50%' } }),
+  },
+  {
+    label: '就绪待命 (ready)',
+    key: 'ready',
+    icon: () => h('i', { class: 'nav-dot ready', style: { display: 'inline-block', width: '7px', height: '7px', borderRadius: '50%' } }),
+  },
+  {
+    label: '评测成功 (succeeded)',
+    key: 'succeeded',
+    icon: () => h('i', { class: 'nav-dot succeeded', style: { display: 'inline-block', width: '7px', height: '7px', borderRadius: '50%' } }),
+  },
+  {
+    label: '评测失败 (failed)',
+    key: 'failed',
+    icon: () => h('i', { class: 'nav-dot failed', style: { display: 'inline-block', width: '7px', height: '7px', borderRadius: '50%' } }),
+  },
+])
+
+/** 当前选中的状态筛选展示文案 */
+const currentSessionStatusFilterLabel = computed(() => {
+  switch (sessionStatusFilter.value) {
+    case 'running': return '进行中'
+    case 'ready': return '就绪'
+    case 'succeeded': return '成功'
+    case 'failed': return '失败'
+    default: return '状态'
+  }
+})
+
+/** 切换会话状态筛选 */
+function handleSelectSessionStatusFilter(key: string) {
+  sessionStatusFilter.value = key
+}
+
+/** 按状态筛选后的会话列表 */
+const filteredSessions = computed(() => {
+  if (sessionStatusFilter.value === 'all') return sessions.value
+  return sessions.value.filter((s) => sessionDotClass(s) === sessionStatusFilter.value)
+})
+
 const selectedSessionIds = ref<string[]>([])
 const deletingSessionIds = new Set<string>()
 const currentSessionId = ref<string>('')
 const currentSession = computed(() => sessions.value.find(s => s.id === currentSessionId.value) || sessions.value[0] || null)
-const deletableSessionCount = computed(() => sessions.value.filter((session) => session.can_delete).length)
+const deletableSessionCount = computed(() => filteredSessions.value.filter((session) => session.can_delete).length)
 const allDeletableSessionsSelected = computed(() => {
-  const deletableIds = sessions.value.filter((session) => session.can_delete).map((session) => session.id)
+  const deletableIds = filteredSessions.value.filter((session) => session.can_delete).map((session) => session.id)
   return deletableIds.length > 0 && deletableIds.every((id) => selectedSessionIds.value.includes(id))
 })
 const inputText = ref('')
@@ -1782,7 +1857,7 @@ function toggleSessionSelected(sid: string) {
 function handleSelectAllChange(event: Event) {
   const checked = (event.target as HTMLInputElement).checked
   selectedSessionIds.value = checked
-    ? sessions.value.filter((session) => session.can_delete).map((session) => session.id)
+    ? filteredSessions.value.filter((session) => session.can_delete).map((session) => session.id)
     : []
 }
 
@@ -3322,6 +3397,7 @@ async function selectSession(sid: string) {
 }
 
 async function handleCreateSession() {
+  sessionStatusFilter.value = 'all'
   try {
     const newSession = await api.sessions.create('新会话')
     sessions.value.unshift(newSession)
