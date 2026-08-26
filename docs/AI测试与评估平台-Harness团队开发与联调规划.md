@@ -3,7 +3,7 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 团队开发与联调规划 |
-| 版本 | V1.5 |
+| 版本 | V1.7 |
 | 审查日期 | 2026-08-26 |
 | 文档性质 | 施工排期与协作规范（指导性文档） |
 | 适用范围 | Harness 运行时阶段 1–4 的 2 人后端分工 + 前端联调任务、模块分配、联调时序与验收闸门 |
@@ -16,6 +16,10 @@
 > **V1.2 修订定位**：新增 §5「前端联调任务（按阶段）」—— 前端工作由 **陈东超** 独立负责（区别于 A/B 后端分工），按阶段 1–4 列出前端改动文件、对接契约（API.md V1.21）、验收点与阻塞依赖；§6 联调验收闸门补前端验收点；新增 §5.5「阶段 4 前置：补建 `backend/api/app/agent/defaults.py`」消除前后端确认卡默认值漂移。本次同步回写 API.md V1.21（clarify/plan 事件、tool_result/context_meter 扩展字段、clarify_reply 上行）。
 
 > **V1.3 修订定位**：配合 API.md V1.22 修复 V1.21 遗留契约裂缝——§5.1 斜杠注册拆分（`/help` 返回帮助文本，`/compact`/`/cancel`/`/stress`/未知斜杠阶段 1 返回 `VALIDATION`，补漏 `/compact`）；§5.4 M8 引用 `§3.6.2` 修正为 `§3.4.2`；§5 契约引用同步对齐 API.md V1.22（`tool_result.source` 改为溯源标识字符串，非 short\|long 枚举）。M4/M5/M7 模块文档同步升 V0.4.1。
+
+> **V1.7 修订定位**（2026-08-26 需求收口）：`should_abort` 已全链路走 `RunnableConfig`（O-12，规划文档此前误标为未迁出）；落地 `GET /api/agent/prefs` + `confirm_ack` 入队写偏好（MEM-4）；落地 slash-commands M2 CRUD。不新增对外字段。
+
+> **V1.6 修订定位**（2026-08-26 Harness 加固）：修复 ReAct 默认预算 12/12 撞 LangGraph `recursion_limit=25` 导致 `BUDGET_EXCEEDED` 发不出的缺陷（`tools_route` 耗尽 END + ToolNode 补 error + 默认 `recursion_limit=80`）；落地 M9-D8 Worker 事件实时转发（`ws.py` `_forward_loop`）。不改对外 REST/WS 字段。
 
 > **V1.5 修订定位**（2026-08-26 前端联调落地）：补建 `backend/api/app/agent/defaults.py` 作为确认卡预填单一源（`sample_size=1000` 对齐 PRD §5.2.2，REST `RunConfig` 缺省仍为 None）；前端新增 `PlanCard.vue` 完整展示 PlanArtifact；斜杠面板对接 `GET /api/slash-commands`（VALIDATION 展示后端文案）；`/api/agent/prefs` 空槽预填（能力未启用时静默跳过）；关闭码 4401 Toast；10 大错误码 fallback 中性化；`SkillHint.summary` 经 `skillLabels.ts` 透出。不改对外 REST/WS 字段。
 
@@ -271,7 +275,7 @@ flowchart TD
 | :--- | :--- | :--- | :--- | :--- |
 | M1 | 阶段 1 末 | Chat / Direct 路由 + 事件桥接 + `test_agent_graph.py` 绿 | `/help`/`/cancel`/`/stress` 斜杠可见；未知斜杠 Toast 显示后端 `message` | 节点持 WS 连接 / 事件不经统一 `_emit` / 前端臆造字段 |
 | M2 | 阶段 2 末 | ReAct 循环 + 工具注册表 + 脱敏 + 预算 / 门禁 | `thought.stage='react'` 思考卡正常；`tool_result` 截断/脱敏徽标；`BUDGET_EXCEEDED` 文案中性 | 长工具被同步执行 / 重复调用未抑制 / 前端展示美元预算 |
-| M3 | 阶段 3 末 | Checkpointer 恢复 + 澄清卡 + compact / meter + Worker 事件实时转发 | 澄清卡 UI 渲染 + `clarify_reply` 上行；`/compact` owner 校验；ContextMeter `compact_summary`/`compacted` 展示；`progress`/`report`/`error` 实时到达 | 检查点表未走 Alembic / 澄清卡建任务 / `compacted` 字段未对接 / **`should_abort` 未迁出 GraphState** / **Worker 事件实时转发未落地（M9-D8）** |
+| M3 | 阶段 3 末 | Checkpointer 恢复 + 澄清卡 + compact / meter + Worker 事件实时转发 | 澄清卡 UI 渲染 + `clarify_reply` 上行；`/compact` owner 校验；ContextMeter `compact_summary`/`compacted` 展示；`progress`/`report`/`error` 实时到达 | 检查点表未走 Alembic / 澄清卡建任务 / `compacted` 字段未对接（`should_abort` 已迁出 GraphState；M9-D8 `_forward_loop` 已落地） |
 | M4 | 阶段 4 末 | Plan-Solve + 确认卡入队 + reflect + 技能 | `plan_solve` stage 档；PlanCard 完整展示 PlanArtifact；`/api/slash-commands` 对接；`/api/agent/prefs` 预填；`defaults.py` 前置完成 | `rag` 被 mock 成功 / 确认卡无 owner 校验 / `defaults.py` 缺失致前后端默认值漂移 |
 
 ---
@@ -329,3 +333,27 @@ flowchart TD
 | `frontend/src/components/modals/SkillDetailModal.vue` | 修改 | 展示一句话 summary |
 
 本次 V1.5 为阶段 4 前端联调落地，不新增任何对外 REST/WS 字段。
+
+| `docs/AI测试与评估平台-Harness团队开发与联调规划.md` | 修订 V1.5 → V1.6 | 记录预算耗尽路由修复与 M9-D8 `_forward_loop` 落地；§6 M3 闸门去掉「转发未落地」阻塞。 |
+| `backend/api/app/agent/react.py` | 修改 | 新增 `tools_route`；节点入口再挡一次预算耗尽 |
+| `backend/api/app/agent/graph.py` | 修改 | tools 条件边接 `tools_route`；默认 `recursion_limit=80` |
+| `backend/api/app/harness/execution/toolnode.py` | 修改 | `seal_budget_if_exhausted` 在回边 END 前补 `BUDGET_EXCEEDED` |
+| `backend/api/app/routers/ws.py` | 修改 | 连接生命周期挂载 `_forward_loop`（M9-D8） |
+| `backend/api/tests/test_agent_react.py` | 修改 | `tools_route` 单测；预算耗尽回归 |
+| `backend/api/tests/test_harness_execution.py` | 修改 | `seal_budget_if_exhausted` 单测 |
+| `backend/api/tests/test_ws_protocol.py` | 修改 | 转发循环与 Worker 事件过滤单测 |
+| `docs/AI测试与评估平台-Harness-运行时基础设施.md` | 修订 V0.4.1 → V0.4.2 | 记录 M9-D8 落地 |
+
+本次 V1.6 为 Harness 加固，不新增任何对外 REST/WS 字段。
+
+| `docs/AI测试与评估平台-Harness团队开发与联调规划.md` | 修订 V1.6 → V1.7 | 关闭 should_abort 虚假阻断；记录 prefs / 自定义斜杠落地。 |
+| `backend/api/app/harness/memory/preference.py` | 修改 | 对外投影 + 入队后抽取允许字段 |
+| `backend/api/app/harness/memory/slash_store.py` | 新增 | 自定义斜杠校验与 settings 存取 |
+| `backend/api/app/routers/agent_prefs.py` | 修改 | GET 读真实偏好 |
+| `backend/api/app/routers/slash_commands.py` | 修改 | M2 CRUD |
+| `backend/api/app/harness/orchestration/confirm.py` | 修改 | 入队成功写偏好，取消不写 |
+| `frontend/src/api/http.ts` | 修改 | slash create/delete |
+| `frontend/src/components/agent/SlashPalette.vue` | 修改 | 我的命令添加/删除 |
+| `docs/AI测试与评估平台-API.md` | 修订 V1.38 → V1.39 | prefs / slash-commands 实现状态回写 |
+
+本次 V1.7 为需求收口，不新增任何对外 REST/WS 字段。

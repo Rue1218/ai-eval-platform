@@ -1,7 +1,8 @@
 """基于 LangGraph 的 Harness Agent 图（阶段 4：Chat + Direct + ReAct + Plan-Solve）。
 
 图拓扑：``START → routing → (direct | chat_stream | react_agent | plan_solve)``；
-ReAct 循环：``react_agent → (tools | reflect | END)``，``tools → react_agent``；
+ReAct 循环：``react_agent → (tools | reflect | END)``，
+``tools → (tools | react_agent | END)``（队列未空继续、预算耗尽结束）；
 Plan-Solve：``plan_solve → react_agent``（失败则 END）；有 ``plan`` 的 ReAct
 收尾进入 ``reflect``，由 reflect 发出 ``response.completed``；工具失败阶梯：
 ``reflect → react_agent``（repair 首档）/ ``reflect → plan_solve``（retry 重规划）。
@@ -31,7 +32,7 @@ from ..harness.memory import GraphState, SerializableRequest
 from ..llm import ModelGateway, ModelResponse
 from .clarify import clarify_node
 from .plan_solve import build_plan_solve_subgraph, plan_solve_route
-from .react import build_react_nodes, react_route
+from .react import build_react_nodes, react_route, tools_route
 from .reflect import reflect_node, reflect_route
 from .routing import chat_stream_node, direct_node, route, routing_node
 
@@ -116,11 +117,11 @@ class LangGraphAgent:
             },
         )
         # 原生 ToolCall 同轮可返回多个调用；ToolNode 串行消费队列，全部完成后
-        # 才回到模型，既不绕过门禁/沙箱，也不丢弃并发调用。
+        # 才回到模型。预算耗尽必须 END，避免第 13 次模型调用撞 recursion_limit。
         graph.add_conditional_edges(
             "tools",
-            lambda state: "tools" if state.get("pending_tool") else "react_agent",
-            {"tools": "tools", "react_agent": "react_agent"},
+            tools_route,
+            {"tools": "tools", "react_agent": "react_agent", "end": END},
         )
         graph.add_edge("direct", END)
         graph.add_edge("chat_stream", END)
@@ -211,6 +212,9 @@ class LangGraphAgent:
             thread_id = f"agent:{uuid4().hex}"
             configurable["thread_id"] = thread_id
         run_config["configurable"] = configurable
+        # 默认 12/12 预算约 2n+1 步，再加上 routing / reflect / clarify；
+        # LangGraph 默认 25 会在预算耗尽前先抛 GraphRecursionError。
+        run_config.setdefault("recursion_limit", 80)
         return run_config, thread_id
 
     @staticmethod

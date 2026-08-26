@@ -91,6 +91,11 @@ def test_handle_confirm_ack_passes_commit_false(monkeypatch) -> None:
         "app.harness.orchestration.confirm.enqueue_long_task",
         fake_enqueue,
     )
+    written: list[dict] = []
+    monkeypatch.setattr(
+        "app.harness.orchestration.confirm.write_prefs",
+        lambda db, user_id, prefs, **_kwargs: written.append({"user_id": user_id, **prefs}),
+    )
     db = MagicMock()
     result = handle_confirm_ack(db, "s1", "u1", {"ok": True, "patch": {}})
     assert result.ok is True
@@ -98,6 +103,17 @@ def test_handle_confirm_ack_passes_commit_false(monkeypatch) -> None:
     assert seen.get("commit") is False
     db.commit.assert_called_once()
     db.rollback.assert_not_called()
+    assert written == [
+        {
+            "user_id": "u1",
+            "last_kind": "benchmark",
+            "last_profile_ids": ["p1"],
+            "last_dataset_id": "d1",
+            "last_kb_id": None,
+            "last_gold_qa_id": None,
+            "last_with_stress": False,
+        }
+    ]
 
 
 def test_handle_confirm_ack_invalid_keeps_card(monkeypatch) -> None:
@@ -121,3 +137,21 @@ def test_handle_confirm_ack_invalid_keeps_card(monkeypatch) -> None:
     enqueue.assert_not_called()
     db.rollback.assert_called()
     db.commit.assert_not_called()
+
+
+def test_handle_confirm_ack_cancel_does_not_write_prefs(monkeypatch) -> None:
+    """取消确认不写入跨会话偏好。"""
+    monkeypatch.setattr(
+        "app.harness.orchestration.confirm.lock_pending_confirm",
+        lambda db, session_id: PendingConfirm(pending=_benchmark_spec(), author_id="u1"),
+    )
+    monkeypatch.setattr(
+        "app.harness.orchestration.confirm.enqueue_long_task",
+        MagicMock(side_effect=AssertionError("取消不得入队")),
+    )
+    write = MagicMock()
+    monkeypatch.setattr("app.harness.orchestration.confirm.write_prefs", write)
+    db = MagicMock()
+    result = handle_confirm_ack(db, "s1", "u1", {"ok": False})
+    assert result.ok is False
+    write.assert_not_called()

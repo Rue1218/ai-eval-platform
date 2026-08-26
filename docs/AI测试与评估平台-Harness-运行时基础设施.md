@@ -3,8 +3,8 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 运行时基础设施模块设计 |
-| 版本 | V0.4.1 |
-| 审查日期 | 2026-08-24 |
+| 版本 | V0.4.2 |
+| 审查日期 | 2026-08-26 |
 | 文档性质 | 模块设计说明书（需求发散 + 架构设计 + 接口签名） |
 | 适用模块 | M9 运行时基础设施（`app/runtime/`） |
 | 上游权威 | Harness 需求文档 V1.4.4 §2.3/§2.4/§2.5/§7、§9；API.md V1.22 §4.1 |
@@ -215,7 +215,7 @@ def downgrade() -> None:
   - 单会话单活动回合，Checkpointer 不得覆盖并发回合；
   - TTL + 会话软删除联动，后台任务清理；
   - 新增依赖须在 PR 说明；
-  - **Worker 事件实时转发为阶段 3 阻断项（M9-D8）**：未落地不得进入阶段 3 联调。
+  - **Worker 事件实时转发（M9-D8）已落地**：`ws.py` `_forward_loop` 按游标增量推送 `progress`/`report`/带 `task_id` 的 `error`；查询/发送/游标推进同一把连接锁。
 
 ---
 
@@ -230,7 +230,7 @@ def downgrade() -> None:
 | M9-D5 | 保留策略 | TTL（默认 7 天）+ 会话软删除联动（`cleanup_session`） |
 | M9-D6 | 后台清理调度载体 | **阶段 3 实现时定**：候选为 Worker 周期任务或独立定时任务，倾向 Worker 复用（避免新增进程） |
 | M9-D7 | 新增依赖 | `langgraph-checkpoint-postgres`（V1.4.1 白名单），PR 内说明 |
-| M9-D8（V0.4.1 新增） | **Worker 事件实时转发** | **阶段 3 阻断项**：WS 连接生命周期内启动后台转发循环——按 `last_event_id` 增量查询 `ws_events`，在连接级发送锁内发送并推进游标；查询/发送/游标推进同一锁；多 API 副本时改 Redis Pub/Sub 进程外总线。未落地不得进入阶段 3 联调 |
+| M9-D8（V0.4.1 新增 / V0.4.2 落地） | **Worker 事件实时转发** | WS 连接生命周期内启动 `_forward_loop`：按游标增量查询 `ws_events`，在连接级发送锁内发送并推进游标；只转发 Worker 直产（`progress`/`report`、带 `task_id` 的 `error`）。多 API 副本时改 Redis Pub/Sub 进程外总线 |
 
 > **M9-D6 是本模块唯一遗留待定项**：后台清理调度载体（Worker 周期任务 vs 独立定时任务）需阶段 3 实现时定。M3-D4 已在本模块解决（D3）。
 
@@ -259,7 +259,7 @@ def downgrade() -> None:
 
 | 文件 | 操作 | 作用 |
 | :--- | :--- | :--- |
-| `docs/AI测试与评估平台-Harness-运行时基础设施.md` | 新增 V0.3 → 修订 V0.4 → 修订 V0.4.1 | V0.3 M9 运行时基础设施模块设计：定义 `PostgresSaver` 接入（`thread_id=session_id`）、Alembic 建表、TTL + 会话软删除联动清理、`interrupt()`/`Command(resume)` 检查点读写；**解决 M3-D4**：`pending_events` 检查点恢复时重置为空（事件走 ws_events，避免重复 emit）；含接口签名级与 TDD 验收；V0.4 对齐 API.md V1.21：新增 §8「前端联调」章节列出 checkpoint/interrupt/cleanup 对应的前端验证任务与验收点（含断线重连不依赖 thread_id、澄清卡回放、4404 清理）；V0.4.1 评审收敛版：统一上游权威与 §8 契约为 API.md V1.22；**新增 M9-D8 裁决**：Worker 事件实时转发（后台转发循环 + 连接锁 + 游标推进）列为**阶段 3 阻断项**（R-8/R-A8），未落地不得进入阶段 3 联调。 |
-
-本文档仅设计运行时基础设施，不改变任何 API、数据库、前端或 Agent 运行代码。
+| `docs/AI测试与评估平台-Harness-运行时基础设施.md` | 新增 V0.3 → 修订 V0.4 → 修订 V0.4.1 → **修订 V0.4.2** | V0.3–V0.4.1 为设计与裁决；**V0.4.2 记录 M9-D8 落地**：`backend/api/app/routers/ws.py` 新增 `_forward_loop`，在线连接实时收 Worker `progress`/`report`/`error`，断线仍走 `last_event_id` 补发。 |
+| `backend/api/app/routers/ws.py` | 修改 | 连接生命周期挂载 `_forward_loop`；查询/发送/游标同一把连接锁 |
+| `backend/api/tests/test_ws_protocol.py` | 修改 | 补充转发循环与 Worker 事件过滤单测 |
 

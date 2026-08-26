@@ -27,6 +27,7 @@ from app.harness.contracts import ToolCall, make_event
 from app.harness.feedback.observation import normalize, normalize_exception
 from app.harness.feedback.rules import GateContext, check_gates
 from app.harness.memory import GraphState
+from app.harness.orchestration.budget import from_dict, is_budget_exhausted
 
 # 会话级占槽门禁（OR-7）：task.create/task.cancel 前查询会话活动任务
 from app.harness.orchestration.gates import check_session_active_task
@@ -37,6 +38,33 @@ from .mcp import MCPClientManager
 from .native import NativeToolExecutor
 from .native_results import NativeToolResultStore, runtime_thread_id
 from .registry import ToolRegistry, required_parameter_names, validate_tool_arguments
+
+
+def seal_budget_if_exhausted(result: dict, state: GraphState) -> dict:
+    """工具队列清空后若预算耗尽，补发 BUDGET_EXCEEDED 并结束回合。
+
+    消费发生在 ``react_agent``；本函数只负责在回边 END 前补齐 error 事件，
+    避免调用方看到「图静默结束」或再撞 ``GraphRecursionError``。
+    拒绝路径若已有 error，只置 ``turn_failed``，不叠第二条。
+    """
+    if result.get("pending_tool"):
+        return result
+    budget = from_dict(state.get("budget") or {})
+    if not is_budget_exhausted(budget):
+        return result
+    events = list(result.get("pending_events") or [])
+    if not any(event.get("kind") == "error" for event in events):
+        message = (
+            "模型调用次数预算耗尽"
+            if budget.model_calls <= 0
+            else "工具轮次预算耗尽"
+        )
+        events.append(
+            make_event("error", {"code": "BUDGET_EXCEEDED", "message": message})
+        )
+        result["pending_events"] = events
+    result["turn_failed"] = True
+    return result
 
 
 def build_tool_node(
@@ -129,13 +157,19 @@ def build_tool_node(
             return result
 
         if is_native and (native_tool_results is None or not thread_id):
-            return rejected("INTERNAL", "工具临时上下文不可用")
+            return seal_budget_if_exhausted(
+                rejected("INTERNAL", "工具临时上下文不可用"),
+                state,
+            )
         definition = registry.find(call.name)
         if definition is None:
-            return rejected("VALIDATION", f"工具未注册：{call.name}")
+            return seal_budget_if_exhausted(
+                rejected("VALIDATION", f"工具未注册：{call.name}"),
+                state,
+            )
         schema_error = validate_tool_arguments(definition.parameters_schema, call.arguments)
         if schema_error:
-            return rejected("VALIDATION", schema_error)
+            return seal_budget_if_exhausted(rejected("VALIDATION", schema_error), state)
         # 1. 门禁（FB-2）：长工具/白名单/资产溯源/占槽等
         # 占槽门禁（OR-7）需要 DB 事实：task.create/task.cancel 时查询会话活动任务；
         # 无 db_factory（测试/纯内存路径）时保持 False，handler 内仍有兜底校验。
@@ -156,7 +190,10 @@ def build_tool_node(
         )
         gate = check_gates(call, context)
         if not gate.passed:
-            return rejected(gate.failed_code or "VALIDATION", gate.failed_message or "门禁未通过")
+            return seal_budget_if_exhausted(
+                rejected(gate.failed_code or "VALIDATION", gate.failed_message or "门禁未通过"),
+                state,
+            )
         # 2. 绑定（EX-2）：附件归属校验（db_factory 提供会话）
         db = db_factory() if db_factory else None
         try:
@@ -164,14 +201,14 @@ def build_tool_node(
         except AppError as exc:
             if db is not None:
                 db.rollback()
-            return rejected(exc.code.value, exc.message)
+            return seal_budget_if_exhausted(rejected(exc.code.value, exc.message), state)
         except Exception as exc:
             if db is not None:
                 db.rollback()
             from app.agent.log import agent_trace
 
             agent_trace(f"工具附件绑定异常 type={type(exc).__name__}")
-            return rejected("INTERNAL", "附件绑定失败")
+            return seal_budget_if_exhausted(rejected("INTERNAL", "附件绑定失败"), state)
         finally:
             if db is not None:
                 db.close()
@@ -246,7 +283,10 @@ def build_tool_node(
                 from app.agent.log import agent_trace
 
                 agent_trace("原生工具结果临时存储失败")
-                return rejected("INTERNAL", "工具临时上下文不可用")
+                return seal_budget_if_exhausted(
+                    rejected("INTERNAL", "工具临时上下文不可用"),
+                    state,
+                )
             checkpoint_observation = replace(
                 observation,
                 text=f"工具 {call.name} 已执行；完整结果仅在当前回合供模型使用。",
@@ -266,6 +306,6 @@ def build_tool_node(
                     "content": "",
                 }
             ]
-        return result
+        return seal_budget_if_exhausted(result, state)
 
     return tool_node

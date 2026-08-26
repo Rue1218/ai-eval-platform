@@ -296,6 +296,83 @@ async def _heartbeat_loop(
             )
 
 
+# Worker 进程外写入的事件轮询间隔（秒）；过短打库，过长进度卡顿。
+_FORWARD_POLL_S = 0.4
+# Worker 直产事件（M6-D5 / M9-D8）；图节点事件已由 _emit_persistent 即时广播。
+_WORKER_FORWARD_EVENTS = frozenset({"progress", "report", "error"})
+
+
+def _should_forward_worker_event(event: str, task_id: str | None) -> bool:
+    """判断一条 ws_events 是否应由转发循环推给在线连接。
+
+    ``error`` 无 ``task_id`` 多为对话内 Agent 错误，已由 ``_emit_persistent``
+    发出；带 ``task_id`` 的才是 Worker 任务失败。
+    """
+    if event in {"progress", "report"}:
+        return True
+    return event == "error" and bool(task_id)
+
+
+async def _forward_loop(
+    websocket: WebSocket,
+    state: _ConnectionState,
+    session_id: str,
+    stop: asyncio.Event,
+) -> None:
+    """按游标增量把 Worker 写入的 ws_events 推到当前连接（M9-D8）。
+
+    查询 / 发送 / 游标推进在同一把连接锁内，避免与 ``_emit_persistent``
+    并发重复推送。使用独立 Session，不占用收包循环的 ``db``。
+    """
+    while not stop.is_set():
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=_FORWARD_POLL_S)
+            return
+        except TimeoutError:
+            pass
+        db = SessionLocal()
+        try:
+            async with state.lock:
+                rows = (
+                    db.query(WsEvent)
+                    .filter(
+                        WsEvent.session_id == session_id,
+                        WsEvent.event_id > state.cursor,
+                        WsEvent.event.in_(_WORKER_FORWARD_EVENTS),
+                    )
+                    .order_by(WsEvent.event_id)
+                    .all()
+                )
+                for row in rows:
+                    if not _should_forward_worker_event(row.event, row.task_id):
+                        # 已由本连接 _emit 发出的对话错误：只推进游标，避免每轮重扫。
+                        state.cursor = max(state.cursor, row.event_id)
+                        continue
+                    frame = _frame(
+                        session_id,
+                        row.event,
+                        row.event_id,
+                        row.payload or {},
+                        task_id=row.task_id,
+                        ts=row.ts,
+                    )
+                    try:
+                        await websocket.send_json(frame)
+                        state.cursor = max(state.cursor, row.event_id)
+                    except (WebSocketDisconnect, RuntimeError):
+                        return
+                    except Exception as exc:
+                        logger.info(
+                            "Agent WS 转发发送失败 type=%s",
+                            type(exc).__name__,
+                        )
+                        return
+        except Exception as exc:
+            logger.info("Agent WS 转发查询失败 type=%s", type(exc).__name__)
+        finally:
+            db.close()
+
+
 async def _replay_events(
     db: Session,
     websocket: WebSocket,
@@ -994,6 +1071,7 @@ async def agent_websocket(websocket: WebSocket) -> None:
     connection_id = uuid4().hex
     heartbeat_stop = asyncio.Event()
     heartbeat_task: asyncio.Task[None] | None = None
+    forward_task: asyncio.Task[None] | None = None
     active_turn: asyncio.Task[None] | None = None
     try:
         try:
@@ -1044,6 +1122,11 @@ async def agent_websocket(websocket: WebSocket) -> None:
                 heartbeat_stop,
             ),
             name=f"agent-heartbeat-{session.id}",
+        )
+        # Worker 进程外写入的 progress/report/error：在线连接靠本循环实时推送。
+        forward_task = asyncio.create_task(
+            _forward_loop(websocket, state, session.id, heartbeat_stop),
+            name=f"agent-forward-{session.id}",
         )
 
         while True:
@@ -1168,6 +1251,8 @@ async def agent_websocket(websocket: WebSocket) -> None:
         heartbeat_stop.set()
         if heartbeat_task:
             heartbeat_task.cancel()
+        if forward_task:
+            forward_task.cancel()
         if session:
             SESSION_CONNECTION_HUB.unregister(session.id, connection_id)
         db.close()

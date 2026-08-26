@@ -127,6 +127,37 @@ def test_registry_rejects_unsupported_tool_schema_keywords() -> None:
     assert "oneOf" in error.value.message
 
 
+def test_seal_budget_if_exhausted_appends_error_once() -> None:
+    """工具队列清空且预算耗尽时补一条 BUDGET_EXCEEDED，已有 error 不叠第二条。"""
+    from app.harness.execution.toolnode import seal_budget_if_exhausted
+
+    empty = seal_budget_if_exhausted(
+        {"pending_tool": None, "pending_events": [{"kind": "tool_result"}]},
+        {"budget": {"model_calls": 0, "tool_turns": 1}},
+    )
+    kinds = [event["kind"] for event in empty["pending_events"]]
+    assert kinds.count("error") == 1
+    assert empty["pending_events"][-1]["payload"]["code"] == "BUDGET_EXCEEDED"
+    assert empty["turn_failed"] is True
+
+    queued = seal_budget_if_exhausted(
+        {"pending_tool": {"name": "read"}, "pending_events": []},
+        {"budget": {"model_calls": 0, "tool_turns": 0}},
+    )
+    assert queued.get("turn_failed") is None
+    assert queued["pending_events"] == []
+
+    already = seal_budget_if_exhausted(
+        {
+            "pending_tool": None,
+            "pending_events": [{"kind": "error", "payload": {"code": "VALIDATION"}}],
+        },
+        {"budget": {"model_calls": 0, "tool_turns": 0}},
+    )
+    assert [event["kind"] for event in already["pending_events"]] == ["error"]
+    assert already["turn_failed"] is True
+
+
 def test_toolnode_rejection_keeps_native_call_id_and_skips_dispatch() -> None:
     """未知工具与 schema 拒绝均产出关联的 ToolCard 结果，不进入执行器。"""
     registry = build_default_registry()
