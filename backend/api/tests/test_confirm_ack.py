@@ -55,6 +55,14 @@ def test_validate_confirmed_rag_does_not_require_dataset() -> None:
     )
 
 
+def test_validate_confirmed_ignores_empty_case_source_on_benchmark() -> None:
+    """质量任务卡带上空 case_source 不得误报缺少用例来源。"""
+    assert (
+        _validate_confirmed(_benchmark_spec(case_source={"text": ""}))
+        == "benchmark"
+    )
+
+
 def test_validate_confirmed_testcase_requires_case_source() -> None:
     with pytest.raises(AppError) as error:
         _validate_confirmed({"kind": "testcase"})

@@ -116,6 +116,12 @@ def _validate_confirmed(task_spec: dict) -> str:
         raise AppError(ErrorCode.VALIDATION, f"未知任务类型：{kind}")
     try:
         cleaned = {key: value for key, value in task_spec.items() if key in _TASK_SPEC_KEYS}
+        # 质量任务卡不得带空 case_source，否则 CaseSource 二选一门禁误报「缺少用例来源」。
+        source = cleaned.get("case_source")
+        if kind != "testcase" and isinstance(source, dict):
+            text = str(source.get("text") or "").strip()
+            if not source.get("file_id") and not text:
+                cleaned.pop("case_source", None)
         TaskCreate.model_validate(cleaned)
     except ValidationError as exc:
         raise AppError(ErrorCode.VALIDATION, _confirm_validation_message(exc)) from exc
