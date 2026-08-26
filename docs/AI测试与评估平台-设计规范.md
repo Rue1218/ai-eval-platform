@@ -2,10 +2,11 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.9 |
+| 文档版本 | V1.10 |
 | 对应 PRD | V1.8（唯一产品权威） |
 | 对应开发计划 | V1.5 |
 | 撰写日期 | 2026-08-17 |
+| 本轮修订 | 2026-08-26：ToolCard 接收真实 `tool_progress` / `tool_output_delta`，执行期间持续展示带行号的受控输出，终态仍以持久化 ToolResult 收敛；失败卡展示安全恢复建议。 |
 | 最近修订 | 2026-08-26：ToolCard 在 ToolCall 后立即显示执行加载态，ToolResult 的安全投影按帧渐显，并加入卡片弹出与展开动画；动效遵从系统减少动态效果设置。2026-08-26：ToolCard 原生工具收起态统一显示 ToolCall，不回显文件路径、命令和写入内容；展开区继续展示详细参数与行号内容。2026-08-26：ToolCard 原生工具改用英文工具名，展开区统一使用 ToolCall/输出分区，文件、命令和代码/文档结果使用行号展示；2026-08-23：Agent 对话助手消息增加供应商 Logo、模型名、协议档名和时间；2026-08-23：Agent 输入框模型选择器增加供应商 Logo；2026-08-23：协议档供应商卡片改用本地品牌标识并补充 Gemini 归类；2026-08-23：对齐 LangGraph 单轮 Agent、WS 基础事件和 Harness 冻结边界；2026-08-21：协议档增加 Embedding / Reranker 独立 URL、模型 ID、Key 配置，仍按 profile 环境文件隔离持久化 |
 | 技术栈（PRD） | Vue3 + Naive UI、Python FastAPI、PostgreSQL、WebSocket、Docker Compose、go-stress-testing |
 | 适用范围 | V1.0 前端 `frontend/` |
@@ -588,7 +589,7 @@ AgentView
 
 **思考卡**（`thought`）：参考原型 ThinkCard。标题「思考」；流式追加短文本；结束后 800ms 收起 `opacity:.55`。不是系统提示词，用户不能编辑。
 
-**工具卡**（`tool_call` / `tool_result`）：参考原型 ToolCall。pending 旋转 +「调用中」→ done 绿/红。默认折叠，展开见 arguments / data。标题用 §7.3 中文。失败：`ok=false` 红徽章，error 给 Agent 下一轮，用户也能看见。
+**工具卡**（`tool_call` / `tool_progress` / `tool_output_delta` / `tool_result`）：参考原型 ToolCall。`tool_call` 先创建持久卡片；`tool_progress` 在 pending 阶段更新「校验中 / 执行中 / 收尾中」文案；`tool_output_delta` 仅追加服务端受控的 4KB 行级预览，按 `seq` 去重、按 `start_line` 显示行号。`tool_result` 是唯一持久终态，成功后以其安全投影收敛，失败则保留已收到的流式输出并显示 `recovery.suggested_action`。默认折叠，展开见 ToolCall 参数与输出。原生基础工具标题显示英文 `read` / `write` / `bash` 等；失败不回显堆栈、密钥、绝对路径或完整 Observation。卡片初次出现与展开采用 160–220ms 缓动；`prefers-reduced-motion` 时取消位移、光标闪烁和脉冲。
 
 **确认卡**：对话流内，不是 Dialog。规格 §6。未 `confirm_ack` 前可改 `patch`；确认后变只读灰底。同一时刻每会话最多一张待确认卡。
 
@@ -737,3 +738,14 @@ Agent 页允许的 Dialog **只有**：取消当前长任务、退出登录。�
 | docs/AI测试与评估平台-设计规范.md | 记录 ToolCard 的加载、渐显和动效边界，明确结果仍受 API 既有安全投影约束。 |
 
 *V1.9：补充 ToolCard 的加载态、受控输出渐显与动效约定。产品以 PRD 为准。*
+
+## 本次修订代码文件与作用清单（2026-08-26 · ToolCall 真实流式）
+
+| 文件 | 作用 |
+| --- | --- |
+| `frontend/src/views/Agent.vue` | 接收 `tool_progress`、`tool_output_delta`，按 `call_id` / `seq` 更新对应 ToolCard 的瞬态状态。 |
+| `frontend/src/components/agent/ToolCard.vue` | 展示阶段加载文案、带行号的流式输出与脱敏恢复建议，并保持既有弹出/展开动效。 |
+| `backend/api/app/harness/execution/toolnode.py` | 在工具执行时推送受限进度与输出块，终态仍写入 `tool_result`。 |
+| `docs/AI测试与评估平台-API.md` | 冻结瞬态工具流事件、输出范围与恢复字段的接口契约。 |
+
+*V1.10：补充 ToolCall 真实流式输出、加载状态与失败恢复的展示约定。产品以 PRD 为准。*

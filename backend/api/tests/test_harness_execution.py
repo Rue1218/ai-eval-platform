@@ -85,6 +85,9 @@ def test_default_registry_includes_bash() -> None:
     bash_def = registry.get_def("bash")
     assert bash_def is not None
     assert bash_def["permission"] == "sandbox.bash"
+    assert bash_def["output_schema"]["type"] == "object"
+    assert bash_def["permission_policy"]["workspace"] == "write"
+    assert bash_def["recovery_policy"]["suggested_action"] == "reduce_command_scope"
     names = {definition["name"] for definition in registry.all_defs()}
     assert names == {
         "read",
@@ -124,6 +127,21 @@ def test_registry_rejects_unsupported_tool_schema_keywords() -> None:
             )
         )
     assert error.value.code == ErrorCode.VALIDATION
+
+    with pytest.raises(AppError) as output_error:
+        registry.register(
+            ToolDef(
+                name="bad_output",
+                description="d",
+                parameters_schema={},
+                output_schema={"$ref": "#/defs/output"},
+                permission="p",
+                timeout_s=1.0,
+                handler=_handler_factory("bad_output"),
+            )
+        )
+    assert output_error.value.code == ErrorCode.VALIDATION
+    assert "输出 Schema" in output_error.value.message
     assert "oneOf" in error.value.message
 
 
@@ -199,13 +217,68 @@ def test_toolnode_rejection_keeps_native_call_id_and_skips_dispatch() -> None:
 
     for out, call_id in ((unknown, "unknown_call"), (invalid, "invalid_call")):
         events = out["pending_events"]
-        assert [event["kind"] for event in events] == ["tool_call", "tool_result", "error"]
+        # ToolCall 已由 ReAct 在进入 ToolNode 前持久化，避免瞬态工具输出先于
+        # 卡片到达；ToolNode 拒绝路径只补齐关联结果与错误。
+        assert [event["kind"] for event in events] == ["tool_result", "error"]
         assert events[0]["payload"]["call_id"] == call_id
-        assert events[1]["payload"]["call_id"] == call_id
-        assert events[1]["payload"]["ok"] is False
+        assert events[0]["payload"]["ok"] is False
+        assert events[1]["payload"]["code"] == "VALIDATION"
         assert out["native_messages"][0]["content"] == ""
     assert result_store.get("toolnode-native-test", "unknown_call") == "工具未注册：not_registered"
     assert "类型无效" in str(result_store.get("toolnode-native-test", "invalid_call"))
+
+
+def test_toolnode_streams_scoped_progress_and_output(monkeypatch) -> None:
+    """工具流只经 custom 通道输出受控块，持久终态仍保持 tool_result。"""
+    registry = ToolRegistry()
+
+    def stream_handler(_arguments, _sandbox_dir, context) -> str:
+        assert context.report_progress is not None
+        assert context.report_output is not None
+        context.report_progress("executing", "正在生成测试输出")
+        context.report_output("stdout", "第一行\n第二行\n", None)
+        return "完成"
+
+    registry.register(
+        ToolDef(
+            name="stream_test",
+            description="流式测试工具",
+            parameters_schema={"type": "object", "additionalProperties": False},
+            permission="test.read",
+            timeout_s=1.0,
+            handler=stream_handler,
+            transport="native",
+            supports_streaming=True,
+            contextual=True,
+        )
+    )
+    frames: list[dict] = []
+    monkeypatch.setattr(
+        toolnode_mod,
+        "get_config",
+        lambda: {"configurable": {"thread_id": "stream-test"}},
+    )
+    monkeypatch.setattr(toolnode_mod, "get_stream_writer", lambda: frames.append)
+    out = asyncio.run(
+        build_tool_node(registry, native_tool_results=NativeToolResultStore())(
+            {
+                "request": {"config": {}, "messages": ()},
+                "pending_tool": {
+                    "call_id": "stream-call",
+                    "name": "stream_test",
+                    "arguments": {},
+                    "native": True,
+                },
+            }
+        )
+    )
+
+    assert [event["kind"] for event in out["pending_events"]] == ["tool_result"]
+    assert any(frame["kind"] == "tool_progress" and frame["call_id"] == "stream-call" for frame in frames)
+    output = next(frame for frame in frames if frame["kind"] == "tool_output_delta")
+    assert output["text"] == "第一行\n第二行\n"
+    assert output["seq"] == 1
+    assert output["start_line"] == 1
 
 
 def test_all_defs_serializable_without_handler() -> None:

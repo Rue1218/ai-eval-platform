@@ -739,6 +739,8 @@ export interface WsServerEvent {
     | 'response.completed'
     | 'done'
     | 'tool_call'
+    | 'tool_progress'
+    | 'tool_output_delta'
     | 'tool_result'
     | 'confirm'
     | 'confirm_ack'
