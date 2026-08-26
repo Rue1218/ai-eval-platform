@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
 # 路由模式（写入 GraphState.mode，条件边消费）
@@ -40,17 +41,36 @@ _SKILL_GROUPS: tuple[tuple[str, ...], ...] = (
 _CONFIRM_PHRASES: tuple[str, ...] = ("确认卡", "先评后压", "先评再压", "评完再压")
 _LIST_PHRASES: tuple[str, ...] = ("任务清单", "分步", "拆成步骤", "分几步")
 
+# 短工具链也属于需要规划的复杂任务。仅命中一个工具时仍走 ReAct，避免把普通
+# 读取或单条诊断命令过度升级；两个及以上不同工具才进入 Plan-and-Solve。
+_SHORT_TOOL_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("read", re.compile(r"读取|读文件|\bread\b", re.IGNORECASE)),
+    ("write", re.compile(r"写入|创建文件|\bwrite\b", re.IGNORECASE)),
+    ("edit", re.compile(r"编辑|修改文件|\bedit\b", re.IGNORECASE)),
+    ("bash", re.compile(r"shell|终端命令|命令行|\bbash\b", re.IGNORECASE)),
+    ("web_search", re.compile(r"网页搜索|\bweb[ _-]?search\b", re.IGNORECASE)),
+    ("web_fetch", re.compile(r"网页抓取|抓取网页|\bweb[ _-]?fetch\b", re.IGNORECASE)),
+)
+
+
+def short_tool_names(text: str) -> tuple[str, ...]:
+    """提取用户任务中点名的不同短工具，供路由与 L0 规划使用。"""
+    return tuple(name for name, pattern in _SHORT_TOOL_PATTERNS if pattern.search(text))
+
 
 def detect_plan_intent(text: str) -> bool:
-    """确定性多槽/多技能/确认卡意图（P0）。
+    """确定性多槽/多技能/多短工具链/确认卡意图（P0）。
 
-    单技能闲聊（如「评测一下」）不升级为 plan_solve，避免把简单问题拆成 3–7 步。
-    「测试」过宽，不单独成组，避免「测试一下搜索」误入规划。
+    单技能或单短工具闲聊（如「评测一下」「读取文件」）不升级为 plan_solve，
+    避免把简单问题拆成 3–7 步。「测试」过宽，不单独成组，避免「测试一下搜索」
+    误入规划。
     """
     stripped = text.strip()
     if not stripped:
         return False
     if any(phrase in stripped for phrase in _CONFIRM_PHRASES):
+        return True
+    if len(short_tool_names(stripped)) >= 2:
         return True
     groups = sum(1 for group in _SKILL_GROUPS if any(keyword in stripped for keyword in group))
     if groups >= 2:

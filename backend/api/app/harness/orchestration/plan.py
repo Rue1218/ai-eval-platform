@@ -12,6 +12,7 @@ from dataclasses import replace
 from app.errors import AppError, ErrorCode
 from app.harness.contracts import PlanArtifact, validate_plan_artifact
 from app.harness.orchestration.budget import Budget, from_dict
+from app.harness.orchestration.router import short_tool_names
 from app.harness.prompts import parse_plan_protocol
 from app.harness.skills import DISABLED_SKILLS
 
@@ -28,6 +29,17 @@ _L0_SKILLS: tuple[tuple[str, str, str, str], ...] = (
     ("stress", "运行压测", "skill-stress", "确认压测仅能在评测成功后经确认卡派生"),
 )
 _STRESS_PHRASES: tuple[str, ...] = ("先评后压", "先评再压", "评完再压")
+
+# 多短工具链的 L0 规划模板。规划模型不可用时仍可让内部图保留“先规划、再执行”
+# 的边界，不把用户提供的 <PLAN> / ReAct 文本当作平台控制协议。
+_SHORT_TOOL_STEPS: dict[str, str] = {
+    "read": "使用 read 定位并读取所需文件或日志",
+    "write": "使用 write 生成或更新交付文件",
+    "edit": "使用 edit 修改目标文件并核对变更",
+    "bash": "使用 bash 执行受控诊断或统计命令",
+    "web_search": "使用 web_search 搜集所需公开信息",
+    "web_fetch": "使用 web_fetch 抓取并核对目标网页",
+}
 
 
 def _dedupe(items: tuple[str, ...]) -> tuple[str, ...]:
@@ -59,9 +71,12 @@ def _matched_skills(raw: str) -> list[tuple[str, str, str]]:
     return unique
 
 
-def _build_steps(skills: list[tuple[str, str, str]], raw: str) -> list[str]:
+def _build_steps(
+    skills: list[tuple[str, str, str]], short_tools: tuple[str, ...], raw: str
+) -> list[str]:
     """生成 3–7 步清单：先落 task，再按技能确认槽位，最后说明长任务入队。"""
     steps = ["用 task 列出本轮步骤"]
+    steps.extend(_SHORT_TOOL_STEPS[name] for name in short_tools)
     steps.extend(item[2] for item in skills)
     if any(item[1] == "skill-stress" for item in skills) or any(
         phrase in raw for phrase in _STRESS_PHRASES
@@ -79,10 +94,13 @@ def _build_steps(skills: list[tuple[str, str, str]], raw: str) -> list[str]:
 def _l0_fallback(raw: str) -> PlanArtifact | None:
     """L0 规则降级：合并全部命中技能，产出 3–7 步 PlanArtifact（须经 reflect）。"""
     skills = _matched_skills(raw)
-    if not skills:
+    short_tools = short_tool_names(raw)
+    if not skills and len(short_tools) < 2:
         return None
-    steps = _build_steps(skills, raw)
-    intents = _dedupe(tuple(item[0] for item in skills))
+    steps = _build_steps(skills, short_tools, raw)
+    intents = _dedupe(
+        (("执行多短工具链",) if short_tools else ()) + tuple(item[0] for item in skills)
+    )
     skill_ids = _dedupe(tuple(item[1] for item in skills))
     needs_confirm = any(
         skill_id in {"skill-benchmark", "skill-testcase", "skill-rag", "skill-stress"}
@@ -92,7 +110,7 @@ def _l0_fallback(raw: str) -> PlanArtifact | None:
         intent="，并".join(intents),
         skill_id=skill_ids[0] if len(skill_ids) == 1 else None,
         slots={"steps": steps},
-        tools_needed=("task",),
+        tools_needed=_dedupe(("task",) + short_tools),
         delivery="confirm" if needs_confirm else "chat",
         budget={
             "model_calls": min(12, max(4, 2 + len(steps))),

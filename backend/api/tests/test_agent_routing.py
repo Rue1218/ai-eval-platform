@@ -194,19 +194,23 @@ def test_chat_assemble_injects_skill_hints_without_tools() -> None:
     assert "上次已闲聊问好" in (request.system or "")
 
 
-def test_detect_plan_intent_requires_multi_skill_or_confirm() -> None:
-    """P0：单技能闲聊不升级规划；多技能/确认卡/显式清单才为 True。"""
+def test_detect_plan_intent_requires_complex_intent() -> None:
+    """P0：单工具不升级；多技能、多短工具链、确认卡或清单才为 True。"""
     assert detect_plan_intent("帮我评测一下") is False
     assert detect_plan_intent("读取这个文件") is False
     assert detect_plan_intent("评测 Qwen 并生成测试用例") is True
     assert detect_plan_intent("先评后压") is True
     assert detect_plan_intent("按任务清单做知识库评测") is True
     assert detect_plan_intent("run benchmark and testcase") is True
+    assert detect_plan_intent("先 read 日志，再用 bash 统计，最后 write 报告") is True
 
 
 def test_decide_mode_plan_solve_and_react_priority() -> None:
-    """P0：多槽走 plan_solve；单工具关键词仍 ReAct；附件强制 react。"""
+    """P0：多槽或多短工具链走 plan_solve；单工具仍 ReAct；附件强制 react。"""
     assert decide_mode("评测并生成用例", has_multi_slots=True) == "plan_solve"
+    assert decide_mode(
+        "先 read 日志，再用 bash 统计，最后 write 报告", has_multi_slots=True
+    ) == "plan_solve"
     assert decide_mode("读取这个文件") == "react"
     assert decide_mode(
         "评测并生成用例",
@@ -214,6 +218,57 @@ def test_decide_mode_plan_solve_and_react_priority() -> None:
         has_attachments=True,
     ) == "react"
     assert decide_mode("你好") == "chat"
+
+
+def test_routing_short_tool_chain_plans_then_reacts() -> None:
+    """多短工具链：规划模型降级后仍产出内部 PlanArtifact，不输出用户协议正文。"""
+    gateway = _FakeGateway()
+    request = _serializable("先 read 日志，再用 bash 统计，最后 write 报告")
+    events = _collect(LangGraphAgent(gateway), request)
+    pending = [
+        event
+        for mode, chunk in events
+        if mode == "updates"
+        for event in iter_pending_events(chunk)
+    ]
+    plan = next(event["payload"] for event in pending if event["kind"] == "plan")
+    assert plan["intent"] == "执行多短工具链"
+    assert plan["tools_needed"] == ["task", "read", "write", "bash"]
+    assert "<PLAN>" not in str(plan)
+
+
+def test_short_tool_chain_rejects_user_style_plan_wrapper() -> None:
+    """规划器返回用户式 <PLAN> 时，必须降级平台计划而非透传为助手正文。"""
+
+    class _WrappedPlanGateway(_FakeGateway):
+        def invoke(self, request: ModelRequest, config: dict | None = None) -> ModelResponse:
+            if "任务规划" in str(request.messages):
+                self.invoke_calls.append(request)
+                return ModelResponse(
+                    text='<PLAN>{"steps":[{"action":"bash","input":"ls"}]}</PLAN>',
+                    latency_ms=2,
+                )
+            return super().invoke(request, config)
+
+    gateway = _WrappedPlanGateway()
+    events = _collect(
+        LangGraphAgent(gateway),
+        _serializable("先 read 日志，再用 bash 统计，最后 write 报告"),
+    )
+    pending = [
+        event
+        for mode, chunk in events
+        if mode == "updates"
+        for event in iter_pending_events(chunk)
+    ]
+    plan = next(event["payload"] for event in pending if event["kind"] == "plan")
+    messages = [
+        str(event["payload"].get("text") or "")
+        for event in pending
+        if event["kind"] == "assistant_message"
+    ]
+    assert plan["intent"] == "执行多短工具链"
+    assert not any("<PLAN>" in text for text in messages)
 
 
 def test_routing_multi_skill_plans_then_react_then_reflect() -> None:

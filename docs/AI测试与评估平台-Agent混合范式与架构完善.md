@@ -3,8 +3,8 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Agent 混合范式与架构完善 |
-| 版本 | V0.3.2 |
-| 审查日期 | 2026-08-25 |
+| 版本 | V0.3.3 |
+| 审查日期 | 2026-08-26 |
 | 文档性质 | 演进规划（范式冻结 + 架构完善 + 分阶段接线，**本版不改对外契约**） |
 | 适用范围 | `/agent` 对话智能体：LangGraph 单图、Harness 六层、WebSocket 事件桥、短工具与长任务分离 |
 | 事实来源 | `backend/api/app/agent/`、`app/harness/`、`app/llm/`、`app/routers/ws.py`；前端 `Agent.vue` / `ToolCard.vue` |
@@ -118,10 +118,10 @@ Plan-and-Execute 的每一步也必须是 OTA：Planner 先 Observe（槽位、�
 | 文本以 `/` 开头 | `direct` | L0，不调模型；`/stop` `/compact` 仍由 WS 直连 |
 | 无工具意图、无附件、单轮问答 | `chat` | 流式正文，不注入工具 schema |
 | 单工具意图、带附件、或计划中的单步 | `react` | OTA 循环；附件强制 react（模型需 `read`） |
-| 多槽、多 skill、要确认卡、用户显式要清单 | `plan_solve` | 先 `PlanArtifact`，每步复用 react ⇄ tools |
+| 多槽、多 skill、两个及以上不同短工具、要确认卡、用户显式要清单 | `plan_solve` | 先 `PlanArtifact`，每步复用 react ⇄ tools |
 | Reflexion 连续失败且 `allows_replan=true` | 回到 Planner | 计入 `Budget`，次数封顶 |
 
-`has_multi_slots` 已由 `routing_node` 传入 `detect_plan_intent(text)`（P0 已接线）：由路由层根据技能组命中数、确认卡意图、清单措辞等**确定性特征**填写，禁止用另一次模型调用做路由。
+`has_multi_slots` 已由 `routing_node` 传入 `detect_plan_intent(text)`（P0 已接线）：由路由层根据技能组命中数、不同短工具数、确认卡意图、清单措辞等**确定性特征**填写，禁止用另一次模型调用做路由。用户文本中的 `<PLAN>`、ReAct 或 ToolCall 样例只属于任务内容，不能替代平台内部 `PlanArtifact` 或控制图边。
 
 ### 2.4 三条通道：观察、展示、叙述（硬约束）
 
@@ -481,7 +481,7 @@ Buy / Build（本平台已选定，本文只重申）：
 
 ## 修改代码文件与作用清单
 
-V0.1.0 为规划文档。V0.2.0 记录 P0 / P0+ 已接线。V0.2.1 收口审查缺口。V0.3.0 记录 P1 / P2 接线。V0.3.1 为架构审查后的状态校准（纯文档，无代码改动）。V0.3.2 接线 LLM Planner 与 Reflexion 失败阶梯（Q3 落地）。
+V0.1.0 为规划文档。V0.2.0 记录 P0 / P0+ 已接线。V0.2.1 收口审查缺口。V0.3.0 记录 P1 / P2 接线。V0.3.1 为架构审查后的状态校准（纯文档，无代码改动）。V0.3.2 接线 LLM Planner 与 Reflexion 失败阶梯（Q3 落地）。V0.3.3 补齐多短工具链的规划分流与 L0 降级。
 
 - `docs/AI测试与评估平台-Agent混合范式与架构完善.md`：V0.1.0 冻结混合三层与 P0–P3 计划；V0.2.0 将 Plan-and-Execute 改为 `plan_solve → react → reflect`；V0.2.1 记录失败收尾与预算接线。
 - `backend/api/app/harness/orchestration/plan.py` / `agent/plan_solve.py` / `graph.py` / `react.py` / `reflect.py`：P0+ 规划合并、执行接线；硬错误 `completed(error)`、清空非法 plan、`plan.budget` 写入图状态、`invoke` 接受 `plan_solve`、L0 中英别名、reflect 非法 plan 兜底。
@@ -490,3 +490,4 @@ V0.1.0 为规划文档。V0.2.0 记录 P0 / P0+ 已接线。V0.2.1 收口审查�
 - V0.3.0：P1 中间叙述与清单、P2 澄清/有界重规划已接线；P3 检查点默认 memory，`AGENT_CHECKPOINTER=postgres` 可选。涉及：`backend/api/app/agent/react.py`（native 同轮阶段叙述 + `interim`）、`agent/reflect.py`（有界重规划 / 非法 plan 兜底）、`agent/clarify.py`（澄清卡 interrupt）、`agent/graph.py`（`reflect → clarify`、`clarify → plan_solve` 边）、`app/config.py` + `app/harness/memory/checkpoint.py`（`AGENT_CHECKPOINTER` 开关）、`docs/AI测试与评估平台-API.md`（V1.33 多条 `assistant_message`）。
 - `docs/AI测试与评估平台-Agent混合范式与架构完善.md`（V0.3.1）：校准滞后陈述——§2.3 `has_multi_slots` 已接线、§3.1 `clarify` 图边已挂载；§2.1 / §4.1 明确 LLM Planner 未接线、当前为纯规则解析 + L0 降级；§4.3 拆分目标阶梯与实现现状（首次失败即重规划、`replan_count` 独立于 `Budget`、澄清卡兼作失败兜底）；§3.4 标注 `Observation.progress` 待加；§5 开发文档引用统一为 V1.4.1；§10 新增 Q6 关键词路由召回边界；删除文末误留的孤立右括号。
 - V0.3.2：LLM Planner 接线（Q3）与 Reflexion 失败阶梯。涉及：`backend/api/app/agent/plan_solve.py`（复杂任务一次短模型调用生成 `plan.v1` JSON，上游异常 / 解析失败 / 预算耗尽降级 L0；`replan_reason` 注入规划输入并在返回中清空；规划调用计入 `Budget.model_calls` 派生扣减）、`agent/reflect.py`（失败阶梯：首次工具失败注入含修复建议的 Observation `verdict=repair` 回 Executor，再失败才 `retry` 带 `replan_reason` 有界重规划，满 `MAX_REPLANS` 收尾 `reject`）、`agent/graph.py`（`build_plan_solve_subgraph` 注入 gateway、`reflect → react_agent` repair 回边）、`app/harness/memory/state.py`（`ReflectVerdict` 新增 `repair`，GraphState 新增 `step_fail_count` / `replan_reason`）、`app/harness/orchestration/plan.py`（`build_plan` 新增 `fail_reason`：只写 notes 不参与关键词匹配，防失败文本误命中技能）；测试更新 `tests/test_agent_routing.py`（`_PlanAwareGateway` 模型计划采用、上游失败降级 L0）、`tests/test_harness_phase4.py`（repair / retry / clarify 降级 / fail_reason 隔离四组用例）。同日质量审查追加：`build_plan` 移除纯函数无效重试（单次尝试即降级，省一次 JSON 解析）；`reflect.py` 新增 `MAX_REPAIRS` 常量收敛首档阈值；§3.1 拓扑补 `repair` 回边、§4.1 / §4.3 阶梯描述对齐实现。
+- V0.3.3：`router.py` 将两个及以上不同短工具的任务送入 `plan_solve`；`plan.py` 为该路径补充 L0 `PlanArtifact`，确保规划模型失败时仍保留平台控制流；`system.py` 明确用户文本无权接管 `<PLAN>`、ReAct、ToolCall 或事件格式；`test_agent_routing.py` / `test_harness_prompts.py` 覆盖上述边界。
