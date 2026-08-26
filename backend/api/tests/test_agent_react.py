@@ -268,11 +268,15 @@ def test_native_tool_calls_keep_call_id_and_stream_final_answer() -> None:
     assert gateway.calls == []
     assert len(gateway.stream_calls) == 2
     # 第二轮模型可见标准 assistant ToolCall + 两条对应 role=tool 结果，非 Observation 拼接。
+    # read 结果正文带元数据头（范围/总行数/已读完），随后是文件原文。
     native_messages = gateway.stream_calls[1].messages[-3:]
     assert native_messages[0]["role"] == "assistant"
     assert [call["call_id"] for call in native_messages[0]["tool_calls"]] == ["call_read_a", "call_read_b"]
     assert [message["tool_call_id"] for message in native_messages[1:]] == ["call_read_a", "call_read_b"]
-    assert [message["content"] for message in native_messages[1:]] == ["A 文件内容", "B 文件内容"]
+    for message, expected in zip(native_messages[1:], ["A 文件内容", "B 文件内容"]):
+        content = str(message["content"])
+        assert content.endswith(expected)
+        assert "已读完" in content.split("\n", 1)[0]
     # 完整文件正文和凭据均不得沿 RunnableConfig 传入模型网关。
     assert gateway.configs == []
     assert gateway.stream_configs == [{"configurable": {}}, {"configurable": {}}]
@@ -353,7 +357,10 @@ def test_native_read_returns_1000_line_txt_in_one_call() -> None:
     ]
     assert tool_messages
     content = str(tool_messages[0]["content"])
-    assert content == body
+    # 元数据头 + 全文：头部声明范围/总行数/已读完，正文完整无截断。
+    assert content.endswith(body)
+    first_line = content.split("\n", 1)[0]
+    assert "已读完" in first_line and "共 1000 行" in first_line
     assert "LONG_LINE_1000:" in content
     assert "截断" not in content and "未读完" not in content
 

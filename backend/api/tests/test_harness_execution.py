@@ -904,6 +904,9 @@ def test_read_file_safe_reads_1000_lines_with_long_lines_in_one_call() -> None:
         assert len(result.content) < READ_MAX_CHARS
         model_text = str(result.to_tool_data()["model_text"])
         assert "…[未读完]" not in model_text
+        # 元数据头：读取范围 + 总行数 + 已读完，随正文注入模型。
+        first_line = model_text.split("\n", 1)[0]
+        assert "已读完" in first_line and "共 1000 行" in first_line
         assert "LONG_LINE_1000:" in model_text
         assert model_text.rstrip().endswith("x")
 

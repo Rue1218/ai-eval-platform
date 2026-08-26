@@ -47,8 +47,8 @@ READ_DEFAULT_LIMIT = 2_000
 READ_MAX_LIMIT = 2_000
 # read 专属字符预算：覆盖 1000 行量级的长文件（含少量超长行）一次读完。
 READ_MAX_CHARS = 600_000
-# 预留未读完提示，避免 model_text + 前缀再被截断半行。
-READ_UNREAD_HINT_RESERVE = 180
+# 预留元数据头与未读完提示，避免 model_text + 前缀/后缀再被截断半行。
+READ_UNREAD_HINT_RESERVE = 320
 READ_CONTENT_BUDGET = max(1, READ_MAX_CHARS - READ_UNREAD_HINT_RESERVE)
 READ_MAX_BYTES = 10 * 1024 * 1024
 READ_PREVIEW_CHARS = 4_000
@@ -206,10 +206,13 @@ class ReadResult:
             f"已读取 {self.path} 第 {self.start_line + 1}–{self.end_line} 行"
             f"（共 {self.total_lines} 行，{status}）"
         )
-        model_text = self.content
+        # 元数据头随正文一起注入模型（native tool_result 与 legacy 观察注入
+        # 同源）：让模型明确知道读取范围、总行数与是否读完，避免读完后再
+        # 发确认性重读或绕路 bash 核实行数。
+        model_text = f"{summary}\n{self.content}"
         if not self.is_complete and self.next_offset is not None:
             model_text = (
-                f"{self.content.rstrip()}\n"
+                f"{model_text.rstrip()}\n"
                 f"…[未读完] 下一页请传 offset={self.next_offset}"
                 f"（参数名是 offset，不要重复本次 offset={self.start_line}）。"
             )
