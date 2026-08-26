@@ -103,11 +103,19 @@ def _error_payloads(events: list[tuple[str, dict]]) -> list[dict]:
 
 
 def test_routing_slash_goes_direct_no_model_call() -> None:
-    """O-A1：斜杠 text 进 Direct 分支，不调模型。"""
+    """O-A1：斜杠 text 进 Direct 分支，不调模型；/help 必须发 completed 收尾。"""
     gateway = _FakeGateway()
     events = _collect(LangGraphAgent(gateway), _serializable("/help"))
     assert gateway.stream_calls == []
-    assert _event_kinds(events) == ["assistant_message"]
+    assert _event_kinds(events) == ["assistant_message", "response.completed"]
+    completed = [
+        event["payload"]
+        for mode, chunk in events
+        if mode == "updates"
+        for event in iter_pending_events(chunk)
+        if event["kind"] == "response.completed"
+    ]
+    assert completed == [{"finish_reason": "stop", "role": "assistant"}]
 
 
 def test_routing_plain_text_goes_chat() -> None:
@@ -124,17 +132,26 @@ def test_routing_plain_text_goes_chat() -> None:
 
 
 def test_unknown_slash_returns_validation() -> None:
-    """O-A1：未知斜杠返回 VALIDATION error 事件，不调模型。"""
+    """O-A1：未知斜杠返回 VALIDATION error 事件，不调模型，并以 completed(error) 收尾。"""
     gateway = _FakeGateway()
     events = _collect(LangGraphAgent(gateway), _serializable("/nope"))
     assert gateway.stream_calls == []
     assert _error_payloads(events) == [
         {"code": "VALIDATION", "message": "未知斜杠命令：/nope"}
     ]
+    assert _event_kinds(events) == ["error", "response.completed"]
+    completed = [
+        event["payload"]
+        for mode, chunk in events
+        if mode == "updates"
+        for event in iter_pending_events(chunk)
+        if event["kind"] == "response.completed"
+    ]
+    assert completed == [{"finish_reason": "error", "role": "assistant"}]
 
 
 def test_session_control_slash_returns_defense_hint() -> None:
-    """/cancel /stress /compact 由 ws.py 直连；图内仅防御提示。"""
+    """/cancel /stress /compact 由 ws.py 直连；图内仅防御提示 + completed(error)。"""
     for command in ("/cancel", "/stress", "/compact"):
         gateway = _FakeGateway()
         events = _collect(LangGraphAgent(gateway), _serializable(command))
@@ -142,6 +159,7 @@ def test_session_control_slash_returns_defense_hint() -> None:
         assert _error_payloads(events) == [
             {"code": "VALIDATION", "message": f"{command} 由平台会话控制处理，无需发送"}
         ]
+        assert _event_kinds(events) == ["error", "response.completed"]
 
 
 def test_help_text_lists_cancel_and_stress() -> None:

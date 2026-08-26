@@ -18,7 +18,7 @@ from app.harness.context import (
     compact_summary_from_configurable,
     skill_hint_lines,
 )
-from app.harness.contracts import make_event
+from app.harness.contracts import NodeEvent, make_event
 from app.harness.memory import GraphState, SerializableRequest, rebuild_model_config
 from app.harness.orchestration import AgentMode, decide_mode, detect_plan_intent
 from app.harness.prompts import SystemVars, build_system_prompt
@@ -89,63 +89,76 @@ def route(state: GraphState) -> AgentMode:
     )
 
 
+def _direct_done(*events: NodeEvent, finish_reason: str) -> dict:
+    """Direct 出口：业务事件后追加本轮唯一 ``response.completed``。
+
+    Direct 不经 reflect，必须自己收尾；否则前端生成态与协议探针会一直等
+    ``response.completed``（API.md §4.3：该事件才是整轮结束）。
+    ``finish_reason`` 与 Chat/ReAct 对齐：成功 ``stop``，校验/防御 ``error``。
+    """
+    return {
+        "pending_events": [
+            *events,
+            make_event(
+                "response.completed",
+                {"finish_reason": finish_reason, "role": "assistant"},
+            ),
+        ]
+    }
+
+
 def direct_node(state: GraphState) -> dict:
     """Direct 节点：L0 规则匹配已知斜杠，不调模型（M4 §3.6）。
 
-    返回 {'pending_events': [NodeEvent, ...]}：
-    - /help → assistant_message（帮助文本）
-    - /compact /cancel /stress /stop → 防御提示（真实入口在 ws.py 收包循环）
-    - 未知斜杠 → error(VALIDATION)
+    返回 ``{'pending_events': [NodeEvent, ...]}``，末帧恒为 ``response.completed``：
+    - /help → assistant_message（帮助文本）+ completed(stop)
+    - /compact /cancel /stress /stop → 防御提示（真实入口在 ws.py 收包循环）+ completed(error)
+    - 未知斜杠 → error(VALIDATION) + completed(error)
     """
     text = user_text_from_state(state)
     command = text.split()[0].lower() if text else ""
     if command == "/help":
-        return {
-            "pending_events": [
-                make_event(
-                    "assistant_message",
-                    {"text": HELP_TEXT, "role": "assistant"},
-                )
-            ]
-        }
+        return _direct_done(
+            make_event(
+                "assistant_message",
+                {"text": HELP_TEXT, "role": "assistant"},
+            ),
+            finish_reason="stop",
+        )
     if command == "/compact":
         # /compact 为会话级副作用（仅 owner，写 compact_summary），唯一入口是
         # ws.py 收包循环直连；图节点不持 DB，此处为不可达路径的防御提示。
-        return {
-            "pending_events": [
-                make_event(
-                    "error",
-                    {"code": "VALIDATION", "message": "/compact 由平台会话控制处理，无需发送"},
-                )
-            ]
-        }
-    if command in ("/cancel", "/stress"):
-        # /cancel /stress 由 ws.py 收包循环直连；图节点不持 DB，此处为不可达防御。
-        return {
-            "pending_events": [
-                make_event(
-                    "error",
-                    {"code": "VALIDATION", "message": f"{command} 由平台会话控制处理，无需发送"},
-                )
-            ]
-        }
-    if command == "/stop":
-        return {
-            "pending_events": [
-                make_event(
-                    "error",
-                    {"code": "VALIDATION", "message": "/stop 由平台即时中断处理，无需发送"},
-                )
-            ]
-        }
-    return {
-        "pending_events": [
+        return _direct_done(
             make_event(
                 "error",
-                {"code": "VALIDATION", "message": f"未知斜杠命令：{command or '（空）'}"},
-            )
-        ]
-    }
+                {"code": "VALIDATION", "message": "/compact 由平台会话控制处理，无需发送"},
+            ),
+            finish_reason="error",
+        )
+    if command in ("/cancel", "/stress"):
+        # /cancel /stress 由 ws.py 收包循环直连；图节点不持 DB，此处为不可达防御。
+        return _direct_done(
+            make_event(
+                "error",
+                {"code": "VALIDATION", "message": f"{command} 由平台会话控制处理，无需发送"},
+            ),
+            finish_reason="error",
+        )
+    if command == "/stop":
+        return _direct_done(
+            make_event(
+                "error",
+                {"code": "VALIDATION", "message": "/stop 由平台即时中断处理，无需发送"},
+            ),
+            finish_reason="error",
+        )
+    return _direct_done(
+        make_event(
+            "error",
+            {"code": "VALIDATION", "message": f"未知斜杠命令：{command or '（空）'}"},
+        ),
+        finish_reason="error",
+    )
 
 
 def chat_stream_node(state: GraphState, gateway: object) -> dict:

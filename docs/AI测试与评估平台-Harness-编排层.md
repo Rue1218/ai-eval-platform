@@ -3,11 +3,11 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 编排层模块设计 |
-| 版本 | V0.4.5 |
+| 版本 | V0.4.6 |
 | 审查日期 | 2026-08-26 |
 | 文档性质 | 模块设计说明书（需求发散 + 架构设计） |
 | 适用模块 | M4 编排层（`app/harness/orchestration/` + `app/agent/`） |
-| 上游权威 | Harness 需求文档 V1.4.4 §2.3/§2.4/§2.5、§4.4、§7、§9；API.md V1.22 §4.3/§4.4/§5；PRD §5.1.2/§5.1.3 |
+| 上游权威 | Harness 需求文档 V1.4.4 §2.3/§2.4/§2.5、§4.4、§7、§9；API.md V1.42 §4.3/§4.4/§5；PRD §5.1.2/§5.1.3 |
 
 > **阅读关系**：本文是 Harness §9.2「层 4 编排」行的展开，定义图拓扑、模式路由、GraphState 引用、`should_abort` 全链路迁移与 Direct 路径。GraphState 主体在 M3（`memory/state.py`），事件契约在 M7（`contracts/events.py`），本文只引用不重定义。
 
@@ -130,7 +130,7 @@ GraphState 由 M3 定义，本模块只**消费/写入**字段，不重定义。
 START
   → routing（路由节点：读 text 前缀）
        ├─ text 以 "/" 开头 → direct 分支（L0 规则，不调模型）
-       │      → 产出 NodeEvent（控制动作 / VALIDATION）→ END
+       │      → 产出 NodeEvent（业务事件 + 本轮唯一 response.completed）→ END
        └─ 否则 → chat 分支（沿用现有 call_model / stream_model）
               → 产出 NodeEvent（assistant_message / response.completed）→ END
 ```
@@ -208,10 +208,10 @@ START
 | `/compact` | M2 上下文层（会话级副作用，仅 owner） | 阶段 3 | `NodeEvent(progress)` + 上下文摘要 |
 | `/cancel` | `ws.py` 收包循环（取消本会话非终态任务） | 阶段 4 已落地 | `tool_result(task.cancel)` |
 | `/stress` | `ws.py` 收包循环；对话路径不得发 `kind=stress` | 阶段 4 已落地 | `confirm`（质量任务 + `with_stress=true`） |
-| `/help` | Direct 节点直接返回帮助文本 | 阶段 1 | `NodeEvent(assistant_message)` |
-| 未知 `/xxx` | Direct 节点 | 阶段 1 | `NodeEvent(error, validation)` |
+| `/help` | Direct 节点直接返回帮助文本 | 阶段 1 | `assistant_message` + `response.completed(stop)` |
+| 未知 `/xxx` | Direct 节点 | 阶段 1 | `error(VALIDATION)` + `response.completed(error)` |
 
-**Direct 节点现状**：只处理 `/help`（返回帮助文本）与未知斜杠（`VALIDATION`）；`/stop` `/compact` `/cancel` `/stress` 由 `ws.py` 收包循环拦截，图内命中仅返回防御提示「由平台会话控制处理」。
+**Direct 节点现状**：只处理 `/help`（帮助文本 + `completed(stop)`）与未知斜杠（`VALIDATION` + `completed(error)`）；`/stop` `/compact` `/cancel` `/stress` 由 `ws.py` 收包循环拦截，图内命中仅返回防御提示「由平台会话控制处理」并以 `completed(error)` 收尾。Direct 不经 reflect，必须自己发本轮唯一 `response.completed`，否则前端生成态与协议探针会一直等待。
 
 **与系统斜杠 15 条的关系**：API.md 规定系统 15 条命令前端本地注册表，不走 Agent；Agent 侧只处理上表控制类斜杠。两者不重叠。
 
@@ -329,8 +329,8 @@ def direct_node(state: GraphState) -> dict:
     """Direct 节点：L0 规则匹配已知斜杠，不调模型。
     返回 {'pending_events': [NodeEvent, ...]}。
     未知斜杠 → NodeEvent(kind='error', payload={'code':'validation','message':'未知斜杠命令'})。
-    /help → NodeEvent(kind='assistant_message', payload={...})。
-    /compact /cancel /stress（阶段 1 未启用）→ NodeEvent(kind='error', validation)。"""
+    /help → assistant_message + response.completed(stop)。
+    /compact /cancel /stress /stop（图内防御）与未知斜杠 → error + response.completed(error)。"""
 
 def chat_stream_node(state: GraphState) -> dict:
     """Chat 流式节点（沿用现有 _stream_model_node，改造回调来源）。
@@ -552,13 +552,13 @@ def reflect_node(state: GraphState) -> dict:
 
 ## 8. 前端联调
 
-> 本模块前端联调由 **陈东超** 独立负责，契约以 API.md V1.22 §4.3/§4.4 为唯一真理。M4 是前端交互事件的主要产出方：路由节点、子图节点、确认卡/澄清卡/Plan-Solve 节点产出的 `NodeEvent` 经 `ws.py` 翻译为 WS 事件，前端据此渲染。前端不臆造字段，发现契约缺失先回写 API.md 再实现。
+> 本模块前端联调由 **陈东超** 独立负责，契约以 API.md V1.42 §4.3/§4.4 为唯一真理。M4 是前端交互事件的主要产出方：路由节点、子图节点、确认卡/澄清卡/Plan-Solve 节点产出的 `NodeEvent` 经 `ws.py` 翻译为 WS 事件，前端据此渲染。前端不臆造字段，发现契约缺失先回写 API.md 再实现。
 
 ### 8.1 路由与节点对应前端事件
 
 | M4 节点/模块 | 产出 NodeEvent | 前端渲染 | 前端文件 | 落地阶段 |
 | :--- | :--- | :--- | :--- | :--- |
-| Direct 路径 L0 路由（§3.6） | `assistant_message`（`/help`）/ `error(VALIDATION)`（未知斜杠；会话控制斜杠图内防御提示） | AssistantBubble / ErrorStrip+Toast | `views/Agent.vue` `handleWsEvent`；`agent/slashRegistry.ts` | 阶段 4 |
+| Direct 路径 L0 路由（§3.6） | `assistant_message`（`/help`）/ `error(VALIDATION)`（未知斜杠；会话控制斜杠图内防御提示）+ 末帧 `response.completed` | AssistantBubble / ErrorStrip+Toast；生成态随 completed 结束 | `views/Agent.vue` `handleWsEvent`；`agent/slashRegistry.ts` | 阶段 4 |
 | Chat 节点（§3.3） | `assistant_delta`/`assistant_message`/`response.completed`/`thought` | AssistantBubble + ThoughtCard | `views/Agent.vue`；`components/agent/ThoughtCard.vue` | 阶段 1 |
 | `should_abort` 迁移（§3.4） | `/stop` 中止流式 | 流式中断 | `api/ws.ts`（`/stop` 走 user_message） | 阶段 1（回归） |
 | `budget.py`（§3.9.5） | `error(BUDGET_EXCEEDED)` | ErrorStrip + Toast | `api/types.ts` `ERROR_MESSAGES`（文案中性化，预算为次数非美元） | 阶段 2 |
@@ -581,8 +581,8 @@ def reflect_node(state: GraphState) -> dict:
 
 | 文件 | 操作 | 作用 |
 | :--- | :--- | :--- |
-| `docs/AI测试与评估平台-Harness-编排层.md` | 新增 V0.1 → 修订 V0.2 → 修订 V0.3 → 修订 V0.4 → 修订 V0.4.1 → 修订 V0.4.2 → 修订 V0.4.3 → 修订 V0.4.4 → 修订 V0.4.5 | V0.1–V0.4.4 见既有设计演进。V0.4.5：`drop_stale_asset_ids` 在发卡/入队前丢掉已删除协议档等资产 ID。 |
-| `backend/api/app/harness/orchestration/confirm.py` | 修改 | `drop_stale_asset_ids`：入队前过滤已删除资产 |
-| `backend/api/app/routers/ws.py` | 修改 | `/stress` 发卡前调用过滤 |
+| `docs/AI测试与评估平台-Harness-编排层.md` | 新增 V0.1 → 修订 V0.2 → 修订 V0.3 → 修订 V0.4 → 修订 V0.4.1 → 修订 V0.4.2 → 修订 V0.4.3 → 修订 V0.4.4 → 修订 V0.4.5 → 修订 V0.4.6 | V0.1–V0.4.5 见既有设计演进。V0.4.6：Direct 所有出口补本轮唯一 `response.completed`（`/help` 为 `stop`，校验/防御为 `error`）。 |
+| `backend/api/app/agent/routing.py` | 修改 | `direct_node` 业务事件后追加 `response.completed` |
+| `backend/api/tests/test_agent_routing.py` | 修改 | `/help` / 未知斜杠 / 图内防御均断言末帧 completed |
 
 本文档仅设计编排层，不新增对外 REST/WS 字段。
