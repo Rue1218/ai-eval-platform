@@ -7,6 +7,7 @@ import pytest
 from app.errors import AppError, ErrorCode
 from app.harness.orchestration.confirm import (
     _validate_confirmed,
+    drop_stale_asset_ids,
     handle_confirm_ack,
 )
 from app.harness.security.auth import PendingConfirm
@@ -145,6 +146,69 @@ def test_handle_confirm_ack_invalid_keeps_card(monkeypatch) -> None:
     enqueue.assert_not_called()
     db.rollback.assert_called()
     db.commit.assert_not_called()
+
+
+def _entity_name(col) -> str:
+    """从 ``db.query(Model.id)`` 解析模型名，按表返回仍存在的 ID。"""
+    owner = getattr(col, "class_", None)
+    if owner is not None and hasattr(owner, "__name__"):
+        return owner.__name__
+    parent = getattr(col, "parent", None)
+    entity = getattr(parent, "entity", None) if parent is not None else None
+    inner = getattr(entity, "class_", entity)
+    return getattr(inner, "__name__", "") or str(col)
+
+
+class _ExistingDb:
+    """按模型名返回仍存在的主键，模拟协议档/数据集硬删除。"""
+
+    def __init__(self, existing: dict[str, set[str]]) -> None:
+        self.existing = existing
+
+    def query(self, col):
+        name = _entity_name(col)
+        ids = self.existing.get(name, set())
+
+        class _Query:
+            def filter(self, *_args):
+                return self
+
+            def all(self):
+                return [(item,) for item in ids]
+
+        return _Query()
+
+
+def test_drop_stale_asset_ids_keeps_live_profiles() -> None:
+    """偏好里混入已删除协议档时，只保留现网仍在的 ID。"""
+    spec = {
+        "profile_ids": ["live-p", "deleted-p"],
+        "dataset_id": "live-d",
+        "kb_id": None,
+    }
+    drop_stale_asset_ids(
+        _ExistingDb({"ProtocolProfile": {"live-p"}, "Dataset": {"live-d"}}),
+        spec,
+    )
+    assert spec["profile_ids"] == ["live-p"]
+    assert spec["dataset_id"] == "live-d"
+
+
+def test_drop_stale_asset_ids_clears_missing_dataset() -> None:
+    spec = {"profile_ids": ["p1"], "dataset_id": "gone-d"}
+    drop_stale_asset_ids(
+        _ExistingDb({"ProtocolProfile": {"p1"}, "Dataset": set()}),
+        spec,
+    )
+    assert spec["dataset_id"] is None
+
+
+def test_drop_stale_asset_ids_skips_unusable_query() -> None:
+    """MagicMock 查询不可用时不得误删，交给后续校验。"""
+    spec = {"profile_ids": ["p1"], "dataset_id": "d1"}
+    drop_stale_asset_ids(MagicMock(), spec)
+    assert spec["profile_ids"] == ["p1"]
+    assert spec["dataset_id"] == "d1"
 
 
 def test_handle_confirm_ack_cancel_does_not_write_prefs(monkeypatch) -> None:

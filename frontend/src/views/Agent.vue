@@ -1701,6 +1701,34 @@ function validateConfirmCard(item: StreamItem): boolean {
   return Object.keys(errors).length === 0
 }
 
+/** 现网列表加载后，丢掉确认卡上已删除、chip 点不掉的资产 ID。 */
+function sanitizeConfirmAssets(card: any) {
+  if (!card || typeof card !== 'object') return card
+  const liveProfiles = new Set(availableProfiles.value.map((p) => p.id))
+  if (liveProfiles.size && Array.isArray(card.profile_ids)) {
+    card.profile_ids = card.profile_ids.filter((id: string) => liveProfiles.has(String(id)))
+  }
+  const liveDatasets = new Set(availableDatasets.value.map((d) => d.id))
+  if (liveDatasets.size && card.dataset_id && !liveDatasets.has(card.dataset_id)) {
+    card.dataset_id = null
+  }
+  const liveKbs = new Set(availableKbs.value.map((k) => k.id))
+  if (liveKbs.size && card.kb_id && !liveKbs.has(card.kb_id)) {
+    card.kb_id = null
+    card.gold_qa_id = null
+  }
+  return card
+}
+
+/** 选项列表到达后，再滤一遍未 ack 确认卡上的失效 ID。 */
+function sanitizeOpenConfirmCards() {
+  for (const item of events.value) {
+    if (item?.type === 'confirm' && item.card && !item.isAcked) {
+      sanitizeConfirmAssets(item.card)
+    }
+  }
+}
+
 /** 确认卡规范化：补齐 run / stress / case_source 默认值，保证折叠区 v-model 绑定路径始终存在（对齐 TaskSpec 契约）。 */
 function normalizeConfirmCard(card: any) {
   if (!card) return card
@@ -1724,7 +1752,7 @@ function normalizeConfirmCard(card: any) {
   if (card.kind === 'testcase') {
     card.case_source = { text: '', ...(card.case_source || {}) }
   }
-  return card
+  return sanitizeConfirmAssets(card)
 }
 
 /** 将历史短工具结果恢复到当前会话的确认卡选项，保证刷新前后 MCP 上下文一致。 */
@@ -1734,6 +1762,9 @@ function hydrateToolResult(name: unknown, data: any) {
   if (name === 'model.list') availableProfiles.value = items
   if (name === 'dataset.list') availableDatasets.value = items
   if (name === 'kb.list') availableKbs.value = items
+  if (name === 'model.list' || name === 'dataset.list' || name === 'kb.list') {
+    sanitizeOpenConfirmCards()
+  }
 }
 
 /** D5 会话列表状态点多态：按 status / active_task / 本轮生成中 / 断线重连 映射 nav-dot 样式，常驻显示就绪状态。 */
@@ -2690,6 +2721,7 @@ async function loadConfirmOptions() {
     if (profiles?.length) availableProfiles.value = profiles
     if (datasets?.length) availableDatasets.value = datasets
     if (kbs?.length) availableKbs.value = kbs
+    sanitizeOpenConfirmCards()
   } catch {
     // 选项留空，确认时仍走卡内校验，不阻断会话
   }

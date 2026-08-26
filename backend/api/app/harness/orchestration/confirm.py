@@ -68,6 +68,72 @@ _TASK_SPEC_KEYS = frozenset(
 )
 
 
+def _existing_ids(db, model, ids: list[str]) -> set[str] | None:
+    """返回库中仍存在的 ID；查询结果不可用时返回 None（不改 spec）。"""
+    if not ids:
+        return set()
+    query = getattr(db, "query", None)
+    if not callable(query):
+        return None
+    try:
+        rows = query(model.id).filter(model.id.in_(ids)).all()
+    except Exception:
+        return None
+    if not isinstance(rows, list | tuple):
+        return None
+    exist: set[str] = set()
+    for row in rows:
+        if row is None:
+            continue
+        if isinstance(row, list | tuple):
+            exist.add(str(row[0]))
+            continue
+        value = getattr(row, "id", None)
+        if value is None:
+            try:
+                value = row[0]
+            except Exception:
+                continue
+        exist.add(str(value))
+    return exist
+
+
+def drop_stale_asset_ids(db, spec: dict) -> dict:
+    """丢掉偏好/规划里已删除的协议档、数据集、知识库、黄金 QA ID。
+
+    协议档硬删除后 chip 列表没有对应项，用户点不掉；Worker 会再报
+    「协议档不存在或已删除」。发卡与 ``confirm_ack`` 入队前先滤一层。
+    查询结果不可用（单测 MagicMock）时保持原值，交给后续校验。
+    """
+    from app.models import Dataset, GoldQa, KnowledgeBase, ProtocolProfile
+
+    ids = [str(item) for item in (spec.get("profile_ids") or []) if item]
+    if ids:
+        exist = _existing_ids(db, ProtocolProfile, ids)
+        if exist is not None:
+            spec["profile_ids"] = [item for item in ids if item in exist]
+
+    dataset_id = spec.get("dataset_id")
+    if dataset_id:
+        exist = _existing_ids(db, Dataset, [str(dataset_id)])
+        if exist is not None and str(dataset_id) not in exist:
+            spec["dataset_id"] = None
+
+    kb_id = spec.get("kb_id")
+    if kb_id:
+        exist = _existing_ids(db, KnowledgeBase, [str(kb_id)])
+        if exist is not None and str(kb_id) not in exist:
+            spec["kb_id"] = None
+            spec["gold_qa_id"] = None
+
+    gold_id = spec.get("gold_qa_id")
+    if gold_id and spec.get("kb_id"):
+        exist = _existing_ids(db, GoldQa, [str(gold_id)])
+        if exist is not None and str(gold_id) not in exist:
+            spec["gold_qa_id"] = None
+    return spec
+
+
 def _confirm_validation_message(exc: ValidationError) -> str:
     """把 Pydantic 校验错误归一为确认卡中文提示，不把校验器原文甩给浏览器。"""
     texts: list[str] = []
@@ -150,6 +216,7 @@ def handle_confirm_ack(
     task_spec = _deep_merge(base, patch)
     try:
         if confirmed:
+            drop_stale_asset_ids(db, task_spec)
             kind = _validate_confirmed(task_spec)
             spec = {
                 key: value

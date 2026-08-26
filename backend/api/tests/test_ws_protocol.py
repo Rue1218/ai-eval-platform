@@ -4,8 +4,8 @@ import asyncio
 
 import pytest
 
+from app.models import Dataset, ProtocolProfile, User
 from app.models import Session as AgentSession
-from app.models import User
 from app.routers import ws
 
 
@@ -366,3 +366,63 @@ async def test_handle_stress_slash_emits_quality_confirm(monkeypatch):
     assert payload["with_stress"] is True
     assert payload["kind"] != "stress"
     assert persisted and persisted[0]["kind"] == "rag"
+
+
+@pytest.mark.asyncio
+async def test_handle_stress_drops_deleted_pref_profiles(monkeypatch):
+    """偏好里的已删除协议档不得写进 /stress 确认卡。"""
+    emitted: list[tuple[str, dict]] = []
+
+    async def fake_emit(_db, _websocket, _state, _session_id, event, payload, task_id=None):
+        emitted.append((event, payload))
+        return True
+
+    class _Db:
+        def query(self, target):
+            class _Query:
+                def filter(self, *_args):
+                    return self
+
+                def with_for_update(self):
+                    return self
+
+                def first(self):
+                    session = AgentSession(id="s-1", user_id="u-1", title="测", visibility="private")
+                    session.pending_confirm = None
+                    return session
+
+                def all(self):
+                    owner = getattr(target, "class_", None)
+                    if owner is ProtocolProfile:
+                        return [("live-p",)]
+                    if owner is Dataset:
+                        return [("d1",)]
+                    return []
+
+            return _Query()
+
+    monkeypatch.setattr(ws, "_emit_persistent", fake_emit)
+    monkeypatch.setattr(ws, "_persist_pending_confirm", lambda *_args: None)
+
+    from app.harness import memory as memory_pkg
+
+    monkeypatch.setattr(
+        memory_pkg,
+        "read_prefs",
+        lambda _db, _user_id: {
+            "last_kind": "benchmark",
+            "last_profile_ids": ["gone-p", "live-p"],
+            "last_dataset_id": "d1",
+        },
+    )
+
+    await ws._handle_stress(
+        _Db(),
+        object(),
+        ws._ConnectionState(),
+        AgentSession(id="s-1", user_id="u-1", title="测", visibility="private"),
+        User(id="u-1", username="alice", display_name="Alice"),
+    )
+    payload = emitted[0][1]
+    assert payload["profile_ids"] == ["live-p"]
+    assert payload["dataset_id"] == "d1"
