@@ -3,11 +3,11 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 编排层模块设计 |
-| 版本 | V0.4.6 |
+| 版本 | V0.4.7 |
 | 审查日期 | 2026-08-26 |
 | 文档性质 | 模块设计说明书（需求发散 + 架构设计） |
 | 适用模块 | M4 编排层（`app/harness/orchestration/` + `app/agent/`） |
-| 上游权威 | Harness 需求文档 V1.4.4 §2.3/§2.4/§2.5、§4.4、§7、§9；API.md V1.42 §4.3/§4.4/§5；PRD §5.1.2/§5.1.3 |
+| 上游权威 | Harness 需求文档 V1.4.4 §2.3/§2.4/§2.5、§4.4、§7、§9；API.md V1.43 §4.3/§4.4/§5；PRD §5.1.2/§5.1.3 |
 
 > **阅读关系**：本文是 Harness §9.2「层 4 编排」行的展开，定义图拓扑、模式路由、GraphState 引用、`should_abort` 全链路迁移与 Direct 路径。GraphState 主体在 M3（`memory/state.py`），事件契约在 M7（`contracts/events.py`），本文只引用不重定义。
 
@@ -228,7 +228,7 @@ START
   → 消费后清空 pending_events
 ```
 
-**与现有 `ws.py:_run_turn` 的关系**：当前 `_run_turn` 在 WS 层直接调 `_AGENT.astream` 并投影流事件。阶段 1 改造后，`_run_turn` 仍负责消费 `astream` 输出，但改为读 `pending_events` 统一 emit，节点内不再持有 `websocket`。瞬态帧（`assistant_delta`）仍由节点 `get_stream_writer` 投影，`_run_turn` 通过 `stream_mode=["custom","updates"]` 接收——沿用现有机制。
+**与现有 `ws.py:_run_turn` 的关系**：当前 `_run_turn` 在 WS 层直接调 `_AGENT.astream` 并投影流事件。阶段 1 改造后，`_run_turn` 仍负责消费 `astream` 输出，但改为读 `pending_events` 统一 emit，节点内不再持有 `websocket`。瞬态帧（`assistant_delta` / `thought.stream=think`）仍由节点 `get_stream_writer` 投影；`thought.stream=think` 在 `_run_turn` 内按间隔合并后再发。有思考链时先发 `think_final` 再发 `response.completed`。
 
 **`pending_events` 消费时机（已决）**：每节点完成即消费（流式友好），通过 `astream` 的 `updates` 模式按节点边界读取 `pending_events`；清空由**图外收包循环**完成（消费后置空，不依赖图内下一节点）。`pending_events` 在 GraphState 用 append reducer 累积，收包循环消费后通过图外置空（非图内节点清空）。
 
@@ -581,8 +581,9 @@ def reflect_node(state: GraphState) -> dict:
 
 | 文件 | 操作 | 作用 |
 | :--- | :--- | :--- |
-| `docs/AI测试与评估平台-Harness-编排层.md` | 新增 V0.1 → 修订 V0.2 → 修订 V0.3 → 修订 V0.4 → 修订 V0.4.1 → 修订 V0.4.2 → 修订 V0.4.3 → 修订 V0.4.4 → 修订 V0.4.5 → 修订 V0.4.6 | V0.1–V0.4.5 见既有设计演进。V0.4.6：Direct 所有出口补本轮唯一 `response.completed`（`/help` 为 `stop`，校验/防御为 `error`）。 |
-| `backend/api/app/agent/routing.py` | 修改 | `direct_node` 业务事件后追加 `response.completed` |
-| `backend/api/tests/test_agent_routing.py` | 修改 | `/help` / 未知斜杠 / 图内防御均断言末帧 completed |
+| `docs/AI测试与评估平台-Harness-编排层.md` | 新增 V0.1 → 修订 V0.2 → 修订 V0.3 → 修订 V0.4 → 修订 V0.4.1 → 修订 V0.4.2 → 修订 V0.4.3 → 修订 V0.4.4 → 修订 V0.4.5 → 修订 V0.4.6 → 修订 V0.4.7 | V0.1–V0.4.6 见既有设计演进。V0.4.7：思考增量合并下发；`think_final` 在 `response.completed` 之前。 |
+| `backend/api/app/agent/think_stream.py` | 新增 | 思考增量合并器（首帧立即、后续节流） |
+| `backend/api/app/routers/ws.py` | 修改 | 合并 `thought.stream=think`；延迟 completed 到 think_final 之后 |
+| `backend/api/tests/test_think_stream.py` | 新增 | 合并器单测 |
 
 本文档仅设计编排层，不新增对外 REST/WS 字段。
