@@ -218,11 +218,8 @@ const argsRecord = computed(() => asRecord(props.args) || {})
 const resultRecord = computed(() => asRecord(props.result))
 
 const headerHint = computed(() => {
-  const path = stringField(argsRecord.value.path)
-  const command = stringField(argsRecord.value.command)
-  if (props.tool === 'read' && path) return path
-  if (props.tool === 'bash' && command) return command
-  if ((props.tool === 'write' || props.tool === 'edit') && path) return path
+  // 收起态只标识这是一次 ToolCall，具体路径、命令和内容统一放到展开区。
+  if (nativeToolNames.has(props.tool)) return 'ToolCall'
   return `ToolCall · ${props.tool}`
 })
 

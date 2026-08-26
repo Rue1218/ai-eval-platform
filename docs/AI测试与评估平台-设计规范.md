@@ -2,11 +2,11 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.7 |
+| 文档版本 | V1.8 |
 | 对应 PRD | V1.8（唯一产品权威） |
 | 对应开发计划 | V1.5 |
 | 撰写日期 | 2026-08-17 |
-| 最近修订 | 2026-08-26：ToolCard 原生工具改用英文工具名，展开区统一使用 ToolCall/输出分区，文件、命令和代码/文档结果使用行号展示；2026-08-23：Agent 对话助手消息增加供应商 Logo、模型名、协议档名和时间；2026-08-23：Agent 输入框模型选择器增加供应商 Logo；2026-08-23：协议档供应商卡片改用本地品牌标识并补充 Gemini 归类；2026-08-23：对齐 LangGraph 单轮 Agent、WS 基础事件和 Harness 冻结边界；2026-08-21：协议档增加 Embedding / Reranker 独立 URL、模型 ID、Key 配置，仍按 profile 环境文件隔离持久化 |
+| 最近修订 | 2026-08-26：ToolCard 原生工具收起态统一显示 ToolCall，不回显文件路径、命令和写入内容；展开区继续展示详细参数与行号内容。2026-08-26：ToolCard 原生工具改用英文工具名，展开区统一使用 ToolCall/输出分区，文件、命令和代码/文档结果使用行号展示；2026-08-23：Agent 对话助手消息增加供应商 Logo、模型名、协议档名和时间；2026-08-23：Agent 输入框模型选择器增加供应商 Logo；2026-08-23：协议档供应商卡片改用本地品牌标识并补充 Gemini 归类；2026-08-23：对齐 LangGraph 单轮 Agent、WS 基础事件和 Harness 冻结边界；2026-08-21：协议档增加 Embedding / Reranker 独立 URL、模型 ID、Key 配置，仍按 profile 环境文件隔离持久化 |
 | 技术栈（PRD） | Vue3 + Naive UI、Python FastAPI、PostgreSQL、WebSocket、Docker Compose、go-stress-testing |
 | 适用范围 | V1.0 前端 `frontend/` |
 
@@ -720,6 +720,13 @@ Agent 页允许的 Dialog **只有**：取消当前长任务、退出登录。�
 | `frontend/src/utils/toolCard.ts` | 保持 read/bash 成功后默认展开，便于直接查看带行号的文件或命令输出 |
 | `docs/AI测试与评估平台-API.md` | 固化原生基础工具英文标题及 ToolCall/输出展示边界，不改变 WS 事件字段 |
 
+## 本次修订代码文件与作用清单（2026-08-26 · ToolCall 收起态）
+
+| 文件 | 作用 |
+| --- | --- |
+| `frontend/src/components/agent/ToolCard.vue` | 原生工具收起态副标题统一显示 `ToolCall`，隐藏文件路径、bash 命令和 write 内容；展开态保留详细参数展示 |
+| `docs/AI测试与评估平台-API.md` | 固化 ToolCall 收起态不回显参数内容的展示边界 |
+
 ---
 
-*V1.7：补充原生 ToolCall 的英文工具名、ToolCall/输出分区和行号展示约定。产品以 PRD 为准。*
+*V1.8：补充原生 ToolCall 收起态隐藏文件路径、命令和写入内容的展示约定。产品以 PRD 为准。*
