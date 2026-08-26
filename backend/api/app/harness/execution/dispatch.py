@@ -39,11 +39,14 @@ from .policy import DEFAULT_RECOVERY_POLICY, ToolRecoveryPolicy
 
 logger = logging.getLogger("ai-eval.harness.dispatch")
 
-# read 的行级窗口与内容硬上限。模型不能通过 arguments 扩大字符预算，避免大文件
-# 直接填满模型上下文或 WebSocket 持久化事件。
+# read 的行级窗口与内容硬上限。行数上限 2000 不变；字符预算与全局
+# MODEL_TOOL_RESULT_MAX_CHARS 解耦（2026-08-26 调整：旧 8000 字符预算导致
+# 1000 行文件必须分几十次读完）。模型不能通过 arguments 扩大字符预算，
+# 避免大文件直接填满模型上下文或 WebSocket 持久化事件。
 READ_DEFAULT_LIMIT = 2_000
 READ_MAX_LIMIT = 2_000
-READ_MAX_CHARS = MODEL_TOOL_RESULT_MAX_CHARS
+# read 专属字符预算：覆盖 1000 行量级的长文件（含少量超长行）一次读完。
+READ_MAX_CHARS = 600_000
 # 预留未读完提示，避免 model_text + 前缀再被截断半行。
 READ_UNREAD_HINT_RESERVE = 180
 READ_CONTENT_BUDGET = max(1, READ_MAX_CHARS - READ_UNREAD_HINT_RESERVE)
@@ -309,7 +312,7 @@ def read_file_safe(
     """受控目录内按行读取文本文件（防目录穿越与半行截断）。
 
     ``offset`` 与 ``limit`` 统一为 0-based 行号/行数。单次最多 2,000 行、
-    8,000 字符（与模型可见上限对齐）；达到字符预算时仅在完整行边界停止，
+    600,000 字符；达到字符预算时仅在完整行边界停止，
     返回准确的 ``next_offset``。窗口收齐后不再对剩余正文逐行迭代，只按块累计
     ``total_lines`` / ``total_chars``，避免大文档在工具超时内扫不完。
     完整正文只留在 ``ReadResult.content``，调用方必须投影为 Observation，

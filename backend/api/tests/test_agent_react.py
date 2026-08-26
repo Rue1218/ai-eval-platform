@@ -304,6 +304,60 @@ def test_native_tool_calls_keep_call_id_and_stream_final_answer() -> None:
     ]
 
 
+def test_native_read_returns_1000_line_txt_in_one_call() -> None:
+    """1000 行、含 8000 字符超长行的 .txt 一次 read 读完，第二轮模型可见全文。
+
+    覆盖 txt/md 附件懒加载链路：附件 staged 进工作区后，模型 read 相对路径
+    即可在单次工具调用内拿全正文，不受全局 8000 字符工具结果上限影响。
+    """
+    lines = []
+    for i in range(1000):
+        if i % 20 == 19:
+            lines.append("LONG_LINE_%d:" % (i + 1) + "x" * 8000)
+        else:
+            lines.append("LINE_%04d: normal content" % (i + 1))
+    body = "\n".join(lines) + "\n"
+    assert len(body) > 100_000  # 远超旧 8000 字符工具结果上限
+
+    gateway = _NativeToolCallGateway()
+    with tempfile.TemporaryDirectory() as tmp:
+        with open(f"{tmp}/a.txt", "w", encoding="utf-8") as handle:
+            handle.write(body)
+        with open(f"{tmp}/b.txt", "w", encoding="utf-8") as handle:
+            handle.write("B 文件内容")
+        agent = LangGraphAgent(
+            gateway,
+            build_default_registry(),
+            sandbox_dir=tmp,
+        )
+        events = _collect(
+            agent,
+            _serializable(),
+            {
+                "configurable": {
+                    "thread_id": "read-1000-lines-test",
+                    "credentials": {"api_key": "test-secret"},
+                }
+            },
+        )
+
+    pending = _pending_events(events)
+    results = [event["payload"] for event in pending if event["kind"] == "tool_result"]
+    read_results = [payload for payload in results if payload["name"] == "read"]
+    assert read_results and all(payload["ok"] is True for payload in read_results)
+    # 第二轮模型输入中的 tool 消息承载全文：无截断标记、包含末行。
+    tool_messages = [
+        message
+        for message in gateway.stream_calls[1].messages
+        if message.get("role") == "tool" and message.get("tool_call_id") == "call_read_a"
+    ]
+    assert tool_messages
+    content = str(tool_messages[0]["content"])
+    assert content == body
+    assert "LONG_LINE_1000:" in content
+    assert "截断" not in content and "未读完" not in content
+
+
 def test_native_read_repeat_same_offset_is_blocked() -> None:
     """原生 ToolCall 路径同样拦截相同 offset 的重复 read。"""
 
@@ -1009,3 +1063,28 @@ def test_hydrate_native_messages_clips_overlong_tool_result() -> None:
     content = str(hydrated[0]["content"])
     assert "截断" in content
     assert len(content) < MODEL_TOOL_RESULT_MAX_CHARS + 80
+
+
+def test_hydrate_native_messages_keeps_full_read_result() -> None:
+    """read 的 ToolResult 回传模型时不按全局 8000 裁剪，1000 行量级一次可见。"""
+    from app.agent.react import _hydrate_native_messages
+    from app.harness.context.observation import MODEL_TOOL_RESULT_MAX_CHARS
+    from app.harness.execution import NativeToolResultStore
+
+    body = "\n".join("line-%04d" % i for i in range(1000)) + "\n"
+    assert len(body) > MODEL_TOOL_RESULT_MAX_CHARS
+    store = NativeToolResultStore()
+    store.put("t1", "c1", body)
+    hydrated = _hydrate_native_messages(
+        {
+            "native_messages": [
+                {"role": "tool", "tool_call_id": "c1", "name": "read", "content": ""},
+            ]
+        },
+        store,
+        "t1",
+    )
+    content = str(hydrated[0]["content"])
+    assert "截断" not in content
+    assert content == body
+    assert "line-0999" in content

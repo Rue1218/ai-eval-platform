@@ -865,8 +865,11 @@ def test_read_file_safe_default_limit_returns_first_2000_lines() -> None:
 
 def test_read_file_safe_stops_on_character_budget_at_line_boundary() -> None:
     """字符预算触发时不截断半行，next_offset 与实际结束行一致。"""
+    from app.harness.execution.dispatch import READ_MAX_CHARS
+
     with tempfile.TemporaryDirectory() as root:
-        write_file_safe("huge.txt", "\n".join("y" * 100 for _ in range(2000)), root)
+        # 2000 行 × 400 字符 = 800k > 600k 预算，触发字符边界停止。
+        write_file_safe("huge.txt", "\n".join("y" * 400 for _ in range(2000)), root)
         result = read_file_safe("huge.txt", root)
         assert result.lines_read < 2000
         assert result.total_lines == 2000
@@ -875,10 +878,34 @@ def test_read_file_safe_stops_on_character_budget_at_line_boundary() -> None:
         assert result.content.endswith("\n")
         assert result.content_truncated is True
         model_text = str(result.to_tool_data()["model_text"])
-        assert len(model_text) <= 8000
+        assert len(model_text) <= READ_MAX_CHARS
         display = result.to_tool_data()["display"]["read"]
         preview = str(display["preview"])
         assert preview.endswith("\n") or preview == result.content
+
+
+def test_read_file_safe_reads_1000_lines_with_long_lines_in_one_call() -> None:
+    """1000 行、含超长行的文件一次读完：不触发字符预算，无截断标记。"""
+    from app.harness.execution.dispatch import READ_MAX_CHARS
+
+    with tempfile.TemporaryDirectory() as root:
+        lines = []
+        for i in range(1000):
+            if i % 20 == 19:
+                lines.append("LONG_LINE_%d:" % (i + 1) + "x" * 8000)
+            else:
+                lines.append("LINE_%04d: normal content" % (i + 1))
+        write_file_safe("big_mix.txt", "\n".join(lines), root)
+        result = read_file_safe("big_mix.txt", root)
+        assert result.is_complete is True
+        assert result.next_offset is None
+        assert result.lines_read == 1000
+        assert result.content_truncated is False
+        assert len(result.content) < READ_MAX_CHARS
+        model_text = str(result.to_tool_data()["model_text"])
+        assert "…[未读完]" not in model_text
+        assert "LONG_LINE_1000:" in model_text
+        assert model_text.rstrip().endswith("x")
 
 
 def test_clip_at_line_boundary_keeps_full_lines() -> None:

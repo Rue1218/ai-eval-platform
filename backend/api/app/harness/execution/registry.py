@@ -416,7 +416,7 @@ def build_default_registry() -> ToolRegistry:
                 "适用：查看附件、工作区文件、确认 edit 前的原文。"
                 "不适用：创建文件（用 write）、改文件（用 edit）、执行命令（用 bash）。"
                 "前置：path 必须是沙箱相对路径。offset/limit 均为 0-based 行，"
-                "单次最多 2000 行和 8000 字符（对齐模型可见上限）；未读完时把返回的 "
+                "单次最多 2000 行和 600000 字符；未读完时把返回的 "
                 "next_offset 填到下一次 offset，不要用相同 offset 重复读取。大文件只解码当前窗口。"
             ),
             parameters_schema={

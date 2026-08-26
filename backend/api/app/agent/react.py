@@ -33,7 +33,7 @@ from app.harness.context.observation import MODEL_TOOL_RESULT_MAX_CHARS, truncat
 from app.harness.contracts import Observation, TaskSessionState, evolve_task_state, make_event
 from app.harness.execution import NativeToolResultStore, runtime_thread_id
 from app.harness.execution.batch import build_tool_batch
-from app.harness.execution.dispatch import resolve_read_offset
+from app.harness.execution.dispatch import READ_MAX_CHARS, resolve_read_offset
 from app.harness.execution.stream_metrics import get_default_stream_metrics
 from app.harness.execution.stream_policy import native_stream_allowed, profile_id_from_configurable
 from app.harness.memory import GraphState, rebuild_model_config
@@ -307,9 +307,11 @@ def _inject_observations(state: GraphState) -> str:
     if not observations:
         return ""
     lines = [
+        # read 的正文可达 READ_MAX_CHARS（1000 行量级一次读完），其余工具
+        # 仍用全局 8000 字符预算，避免 bash/web 输出挤占上下文。
         to_observation(
             observation,
-            max_chars=MODEL_TOOL_RESULT_MAX_CHARS,
+            max_chars=READ_MAX_CHARS if observation.tool == "read" else MODEL_TOOL_RESULT_MAX_CHARS,
         )
         for observation in observations
     ]
@@ -365,10 +367,23 @@ def _hydrate_native_messages(
     进程在回合中断后无法恢复临时内容，明确告知模型结果不可用，禁止编造结论。
     """
     hydrated: list[dict[str, object]] = []
+    # call_id → 工具名兜底映射（部分消息的 name 字段可能缺失）：
+    # read 的 ToolResult 正文可达 READ_MAX_CHARS，其余工具维持全局 8000 裁剪。
+    tool_names: dict[str, str] = {}
+    for raw in state.get("native_messages") or ():
+        if str(raw.get("role") or "") != "assistant":
+            continue
+        for call in raw.get("tool_calls") or ():
+            if isinstance(call, Mapping):
+                call_id = str(call.get("call_id") or "")
+                name = str(call.get("name") or "")
+                if call_id and name:
+                    tool_names[call_id] = name
     for raw in state.get("native_messages") or ():
         message = dict(raw)
         if str(message.get("role") or "") == "tool":
             call_id = str(message.get("tool_call_id") or "")
+            tool_name = str(message.get("name") or "") or tool_names.get(call_id, "")
             content = (
                 native_tool_results.get(thread_id, call_id)
                 if native_tool_results is not None
@@ -377,7 +392,12 @@ def _hydrate_native_messages(
             if content is None:
                 message["content"] = "工具结果在当前会话中不可用，请向用户说明并请求重试。"
             else:
-                clipped, truncated = truncate_with_marker(content, MODEL_TOOL_RESULT_MAX_CHARS)
+                budget = (
+                    READ_MAX_CHARS
+                    if tool_name == "read"
+                    else MODEL_TOOL_RESULT_MAX_CHARS
+                )
+                clipped, truncated = truncate_with_marker(content, budget)
                 if truncated:
                     clipped += " 请用更小范围继续调用（如 read 传 next_offset），不要重复相同参数。"
                 message["content"] = clipped
