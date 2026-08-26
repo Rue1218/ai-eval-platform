@@ -37,6 +37,8 @@ def test_default_task_spec_skeleton() -> None:
     assert spec["with_stress"] is DEFAULT_WITH_STRESS
     assert spec["rag_mode"] == DEFAULT_RAG_MODE
     assert spec["stress"]["env"] == "test"
+    assert "case_source" not in spec
+    assert default_task_spec("testcase")["case_source"] == {"text": ""}
 
 
 def test_slash_stress_spec_never_kind_stress() -> None:
@@ -60,3 +62,6 @@ def test_slash_stress_spec_never_kind_stress() -> None:
     testcase = build_slash_stress_spec({"last_kind": "testcase"})
     assert testcase["kind"] == "benchmark"
     assert testcase["with_stress"] is True
+    assert "case_source" not in spec
+    assert "case_source" not in rag
+    assert "case_source" not in testcase

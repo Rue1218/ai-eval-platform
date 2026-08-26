@@ -2676,6 +2676,23 @@ async function loadSessions() {
   }
 }
 
+/** 实时模式预装确认卡选项；/stress 不经短工具，否则 chip/下拉为空无法确认。 */
+async function loadConfirmOptions() {
+  if (api.isMock()) return
+  try {
+    const [profiles, datasets, kbs] = await Promise.all([
+      api.profiles.list().catch(() => []),
+      api.datasets.list().catch(() => []),
+      api.kb.list().catch(() => []),
+    ])
+    if (profiles?.length) availableProfiles.value = profiles
+    if (datasets?.length) availableDatasets.value = datasets
+    if (kbs?.length) availableKbs.value = kbs
+  } catch {
+    // 选项留空，确认时仍走卡内校验，不阻断会话
+  }
+}
+
 /** 加载全部接入协议档并解析当前 Agent 驱动模型 */
 async function resolveAgentModelName() {
   try {
@@ -3990,6 +4007,7 @@ onMounted(async () => {
   // 顶栏/输入框的 Agent 模型名改为按后端协议档动态解析，不再硬编码
   // 先解析协议档，再回放历史消息，保证助手消息头能显示正确供应商 Logo 与模型名称。
   await resolveAgentModelName()
+  await loadConfirmOptions()
   if (sessions.value.length > 0) {
     // selectSession 内部完成历史回放对齐、WS 建立与侧轨展开（F4/F17）
     selectSession(sessions.value[0].id)

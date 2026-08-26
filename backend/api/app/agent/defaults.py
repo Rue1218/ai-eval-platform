@@ -40,8 +40,12 @@ DEFAULT_RAG_MODE: list[str] = ["hybrid"]
 
 
 def default_task_spec(kind: str = "benchmark") -> dict[str, Any]:
-    """返回确认卡 TaskSpec 预填骨架（缺资产 ID，由用户或规划槽位补齐）。"""
-    return {
+    """返回确认卡 TaskSpec 预填骨架（缺资产 ID，由用户或规划槽位补齐）。
+
+    ``case_source`` 只挂在 ``testcase`` 上：空 ``{text: ""}`` 会触发
+    ``CaseSource`` 二选一门禁，质量任务确认时误报「缺少用例来源」。
+    """
+    spec: dict[str, Any] = {
         "kind": kind,
         "profile_ids": [],
         "dataset_id": None,
@@ -51,5 +55,7 @@ def default_task_spec(kind: str = "benchmark") -> dict[str, Any]:
         "run": dict(DEFAULT_RUN),
         "with_stress": DEFAULT_WITH_STRESS,
         "stress": dict(DEFAULT_STRESS),
-        "case_source": {"text": ""},
     }
+    if kind == "testcase":
+        spec["case_source"] = {"text": ""}
+    return spec

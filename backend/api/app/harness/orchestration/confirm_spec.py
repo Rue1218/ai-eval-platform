@@ -236,4 +236,5 @@ def build_slash_stress_spec(prefs: Mapping[str, object] | None = None) -> dict[s
             spec["gold_qa_id"] = str(raw["last_gold_qa_id"])
     spec["kind"] = kind
     spec["with_stress"] = True
+    spec.pop("case_source", None)
     return spec
