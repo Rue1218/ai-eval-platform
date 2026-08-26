@@ -10,29 +10,10 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from app.agent.defaults import DEFAULT_RAG_MODE, DEFAULT_RUN, DEFAULT_STRESS
 from app.errors import AppError
 from app.harness.contracts import Observation, PlanArtifact, from_dict
 from app.harness.skills import skill_to_kind
-
-# 与 PRD 5.2.2 / API.md §5 / frontend confirmCard.ts 同一份默认值
-DEFAULT_RUN: dict[str, Any] = {
-    "sample_size": 1000,
-    "concurrency": 4,
-    "timeout_s": 60,
-    "retry": 1,
-    "temperature": 0,
-    "max_tokens": 1024,
-    "system_prompt": "",
-    "k": 5,
-    "use_judge": False,
-}
-
-DEFAULT_STRESS: dict[str, Any] = {
-    "env": "test",
-    "qps": 10,
-    "duration_s": 120,
-    "sla_p99_ms": None,
-}
 
 _QUALITY_KINDS = frozenset({"benchmark", "rag", "testcase"})
 
@@ -215,7 +196,7 @@ def build_confirm_payload(
         "dataset_id": _looks_ref(slots.get("dataset_id")),
         "kb_id": _looks_ref(slots.get("kb_id")),
         "gold_qa_id": _looks_ref(slots.get("gold_qa_id")),
-        "rag_mode": ["hybrid"],
+        "rag_mode": list(DEFAULT_RAG_MODE),
         "run": _merge_run(slots),
         "with_stress": False,
         "stress": _merge_stress(slots),

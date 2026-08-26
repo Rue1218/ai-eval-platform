@@ -18,17 +18,18 @@ export enum ErrorCode {
 }
 
 // 错误码中文映射表（规范 §7.3）
+// 10 大码中性 fallback；场景文案一律优先用后端 payload.message（API.md §1.3）
 export const ERROR_MESSAGES: Record<ErrorCode | string, string> = {
-  [ErrorCode.UNAUTHORIZED]: '没有权限执行此操作',
-  [ErrorCode.VALIDATION]: '请检查表单标红字段',
-  [ErrorCode.NOT_FOUND]: '请求的资源不存在或已删除',
-  [ErrorCode.BUDGET_EXCEEDED]: '已达到任务预算上限 ($5)',
-  [ErrorCode.CONCURRENCY]: '平台并发已满，任务保持排队中',
-  [ErrorCode.WHITELIST]: '目标主机不在压测白名单中',
-  [ErrorCode.NEED_APPROVAL]: '等待管理员会签后才能对生产发压',
-  [ErrorCode.UPSTREAM]: '被测服务接口调用失败，请查看样本错误详情',
-  [ErrorCode.TIMEOUT]: '请求或执行超时',
-  [ErrorCode.INTERNAL]: '平台内部错误，请重试或联系维护人员',
+  [ErrorCode.UNAUTHORIZED]: '操作未完成，详见提示',
+  [ErrorCode.VALIDATION]: '操作未完成，详见提示',
+  [ErrorCode.NOT_FOUND]: '操作未完成，详见提示',
+  [ErrorCode.BUDGET_EXCEEDED]: '操作未完成，详见提示',
+  [ErrorCode.CONCURRENCY]: '操作未完成，详见提示',
+  [ErrorCode.WHITELIST]: '操作未完成，详见提示',
+  [ErrorCode.NEED_APPROVAL]: '操作未完成，详见提示',
+  [ErrorCode.UPSTREAM]: '操作未完成，详见提示',
+  [ErrorCode.TIMEOUT]: '操作未完成，详见提示',
+  [ErrorCode.INTERNAL]: '操作未完成，详见提示',
 }
 
 // 用户角色（PRD 2.1 冻结为单一角色 member，全员同权）
@@ -692,6 +693,39 @@ export interface SessionHistory {
     memory_files_max?: number
     compacted?: boolean
   }
+}
+
+/** PlanArtifact（API.md §4.3 `plan` / M7 晚波），用户可查看无需 ack */
+export interface PlanArtifact {
+  intent: string
+  skill_id?: string | null
+  slots: Record<string, unknown>
+  tools_needed: string[]
+  delivery: string
+  budget: Record<string, number>
+  allows_replan: boolean
+  notes?: string
+}
+
+/** 跨会话下单偏好（API.md §3.4 GET /api/agent/prefs） */
+export interface AgentPrefs {
+  last_kind?: string | null
+  last_profile_ids?: string[] | null
+  last_dataset_id?: string | null
+  last_kb_id?: string | null
+  last_gold_qa_id?: string | null
+  last_with_stress?: boolean | null
+  updated_at?: string | null
+}
+
+/** 自定义斜杠（API.md §3.4 GET /api/slash-commands） */
+export interface SlashCommandItem {
+  id: string
+  name: string
+  hint: string
+  template: string
+  created_by?: string
+  created_at?: string
 }
 
 // WS 事件公共头（API.md §4.2）：payload 嵌套，task_id 入队后才有

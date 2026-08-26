@@ -1,6 +1,7 @@
 /**
  * AI 测试与评估平台 — 任务规格 TaskSpec 校验与默认值构建
- * 依据：PRD 5.1.2、F-AGT-04/07、设计规范 §6
+ * 依据：PRD 5.2.2、API.md §5、`backend/api/app/agent/defaults.py`
+ * 确认卡预填与后端 DEFAULT_RUN / DEFAULT_STRESS 必须双端同步。
  */
 import type { TaskSpec, TaskKind, StressConfig, RunConfig } from '../api/types'
 

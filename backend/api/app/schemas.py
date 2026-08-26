@@ -265,7 +265,11 @@ class DatasetOut(OrmOut):
 
 
 class RunConfig(ApiModel):
-    """Benchmark 与 RAG 的可复现实行配置。"""
+    """Benchmark 与 RAG 的可复现实行配置。
+
+    字段缺省 ``None`` 表示 REST 请求可省略该键。确认卡预填默认值不在本模型，
+    单一事实源见 ``app.agent.defaults.DEFAULT_RUN``（PRD §5.2.2）。
+    """
 
     sample_size: int | None = Field(default=None, ge=1, le=1000)
     concurrency: int | None = Field(default=None, ge=1, le=100)

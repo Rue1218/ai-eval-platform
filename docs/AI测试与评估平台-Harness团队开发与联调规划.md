@@ -3,8 +3,8 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 团队开发与联调规划 |
-| 版本 | V1.4 |
-| 审查日期 | 2026-08-24 |
+| 版本 | V1.5 |
+| 审查日期 | 2026-08-26 |
 | 文档性质 | 施工排期与协作规范（指导性文档） |
 | 适用范围 | Harness 运行时阶段 1–4 的 2 人后端分工 + 前端联调任务、模块分配、联调时序与验收闸门 |
 | 事实来源 | [`docs/AI测试与评估平台-Harness需求文档.md`](AI测试与评估平台-Harness需求文档.md) §9.3 文件生成清单 + 10 份模块设计文档（M1–M10） + [`docs/AI测试与评估平台-API.md`](AI测试与评估平台-API.md) V1.22 |
@@ -16,6 +16,8 @@
 > **V1.2 修订定位**：新增 §5「前端联调任务（按阶段）」—— 前端工作由 **陈东超** 独立负责（区别于 A/B 后端分工），按阶段 1–4 列出前端改动文件、对接契约（API.md V1.21）、验收点与阻塞依赖；§6 联调验收闸门补前端验收点；新增 §5.5「阶段 4 前置：补建 `backend/api/app/agent/defaults.py`」消除前后端确认卡默认值漂移。本次同步回写 API.md V1.21（clarify/plan 事件、tool_result/context_meter 扩展字段、clarify_reply 上行）。
 
 > **V1.3 修订定位**：配合 API.md V1.22 修复 V1.21 遗留契约裂缝——§5.1 斜杠注册拆分（`/help` 返回帮助文本，`/compact`/`/cancel`/`/stress`/未知斜杠阶段 1 返回 `VALIDATION`，补漏 `/compact`）；§5.4 M8 引用 `§3.6.2` 修正为 `§3.4.2`；§5 契约引用同步对齐 API.md V1.22（`tool_result.source` 改为溯源标识字符串，非 short\|long 枚举）。M4/M5/M7 模块文档同步升 V0.4.1。
+
+> **V1.5 修订定位**（2026-08-26 前端联调落地）：补建 `backend/api/app/agent/defaults.py` 作为确认卡预填单一源（`sample_size=1000` 对齐 PRD §5.2.2，REST `RunConfig` 缺省仍为 None）；前端新增 `PlanCard.vue` 完整展示 PlanArtifact；斜杠面板对接 `GET /api/slash-commands`（VALIDATION 展示后端文案）；`/api/agent/prefs` 空槽预填（能力未启用时静默跳过）；关闭码 4401 Toast；10 大错误码 fallback 中性化；`SkillHint.summary` 经 `skillLabels.ts` 透出。不改对外 REST/WS 字段。
 
 > **V1.4 修订定位**（2026-08-24 评审收敛）：全文活跃契约引用统一为 API.md V1.22（§1 角色边界、§1 权威依据、§5 前端联调任务）；§6 阶段 3 闸门（M3 行）阻塞条件补充阻断验收项——`should_abort` 未迁出 GraphState、Worker 事件实时转发（M9-D8）未落地，均不得进入阶段 3 联调；同步 M1–M10 模块文档契约收敛升版（M1/M2/M3/M6/M8/M9/M10 → V0.4.1，M4/M5/M7 → V0.4.2，主文档 → V1.4.5）。
 
@@ -242,7 +244,7 @@ flowchart TD
 
 ### 5.5 阶段 4 前置：补建 `backend/api/app/agent/defaults.py`
 
-> AGENTS.md §5.3.3 声明「确认卡默认值唯一来源在 `backend/api/app/agent/defaults.py`」，但该文件当前**不存在**，导致前端 `confirmCard.ts` `getDefaultRunConfig`（`sample_size=1000`）与后端 `schemas.py` `RunConfig`（`sample_size=None`）漂移。本项为阶段 4 启动前的硬前置，由 **A** 负责（属后端 M4 编排范畴）。
+> AGENTS.md §5.3.3 声明「确认卡默认值唯一来源在 `backend/api/app/agent/defaults.py`」。V1.5 已补建该文件；`sample_size` 预填为 `1000`（PRD §5.2.2），与 REST `RunConfig` 字段缺省 `None`（请求可省略）分层，不再视为漂移。
 
 | 任务 | 文件 | 验收 |
 | :--- | :--- | :--- |
@@ -310,4 +312,20 @@ flowchart TD
 | `docs/AI测试与评估平台-Harness-执行层.md` | 修订 V0.4 → V0.4.1 | §8.1/§8.2 修正 `source` 字段语义（对齐 M7 `Observation.source` 溯源标识字符串，删除 `source="long"` 矛盾表述）；上游权威对齐 API.md V1.22。 |
 | `docs/AI测试与评估平台-Harness-跨层契约层.md` | 修订 V0.4 → V0.4.1 | §3.6.1 `NodeEventKind` 注释修正（不再称「与 §4.3 持久化事件 1:1」，改为「节点产出的持久化事件子集」）；上游权威对齐 API.md V1.22。 |
 
-本次仅修订文档（API.md 契约修复 + 团队规划引用修正 + M4/M5/M7 模块文档修正），不改变任何后端/前端/数据库运行代码。
+| `docs/AI测试与评估平台-Harness团队开发与联调规划.md` | 修订 V1.4 → V1.5 | 记录阶段 4 前端联调落地：defaults.py 单一源、PlanCard、斜杠/prefs/关闭码/错误文案/技能 summary。不新增对外字段。 |
+| `backend/api/app/agent/defaults.py` | 新增 | 确认卡预填单一事实源（DEFAULT_RUN/DEFAULT_STRESS/default_task_spec） |
+| `backend/api/app/harness/orchestration/confirm_spec.py` | 修改 | 改引用 defaults.py，删除第二套默认值 |
+| `backend/api/app/schemas.py` | 修改 | RunConfig 注明 REST 缺省与确认卡预填分层 |
+| `backend/api/tests/test_agent_defaults.py` | 新增 | 默认值单一源回归 |
+| `frontend/src/components/agent/PlanCard.vue` | 新增 | PlanArtifact 完整展示（intent/skill/slots/tools/budget/delivery/allows_replan） |
+| `frontend/src/views/Agent.vue` | 修改 | plan 事件改接 PlanCard；4401 Toast；/compact owner 预校验；prefs 空槽预填 |
+| `frontend/src/schemas/confirmCard.ts` | 修改 | 注释对齐 defaults.py（sample_size=1000 保持） |
+| `frontend/src/api/types.ts` | 修改 | PlanArtifact/AgentPrefs/SlashCommandItem；ERROR_MESSAGES 中性化 |
+| `frontend/src/api/http.ts` | 修改 | 补 `api.agent.getPrefs`；slash-commands 类型收紧 |
+| `frontend/src/api/ws.ts` | 修改 | 关闭码 4401 注释与重连语义 |
+| `frontend/src/agent/skillLabels.ts` | 修改 | 补 SKILL_SUMMARIES 对齐 M10 |
+| `frontend/src/components/agent/SkillBadge.vue` | 修改 | hover 展示 SkillHint.summary |
+| `frontend/src/components/agent/SlashPalette.vue` | 修改 | GET /api/slash-commands；VALIDATION 下区展示后端文案 |
+| `frontend/src/components/modals/SkillDetailModal.vue` | 修改 | 展示一句话 summary |
+
+本次 V1.5 为阶段 4 前端联调落地，不新增任何对外 REST/WS 字段。

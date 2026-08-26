@@ -35,6 +35,8 @@ import {
   type AgentSession,
   type SessionHistory,
   type SessionVisibility,
+  type AgentPrefs,
+  type SlashCommandItem,
   type WorkspaceOverview,
   type WorkspaceFileList,
   type CompareSampleRow,
@@ -1147,9 +1149,26 @@ export const api = {
     },
   },
   slashCommands: {
-    async list(): Promise<{ items: any[]; total: number }> {
+    async list(): Promise<{ items: SlashCommandItem[]; total: number }> {
       if (getDataMode() === 'mock') return { items: [], total: 0 }
       const { data } = await http.get('/api/slash-commands')
+      return data
+    },
+  },
+  agent: {
+    async getPrefs(): Promise<AgentPrefs> {
+      if (getDataMode() === 'mock') {
+        return {
+          last_kind: null,
+          last_profile_ids: [],
+          last_dataset_id: null,
+          last_kb_id: null,
+          last_gold_qa_id: null,
+          last_with_stress: false,
+          updated_at: null,
+        }
+      }
+      const { data } = await http.get('/api/agent/prefs')
       return data
     },
   },
