@@ -14,7 +14,7 @@ sys.path.insert(0, str(PROBE_ROOT))
 
 from harness_ws_probe.client import ProbeClient, connect_expect_close  # noqa: E402
 from harness_ws_probe.expect import ExpectMatcher, ProbeAssertion  # noqa: E402
-from harness_ws_probe.protocol import FORBIDDEN_DOWNLINK  # noqa: E402
+from harness_ws_probe.protocol import FORBIDDEN_DOWNLINK, is_transient  # noqa: E402
 from harness_ws_probe.recorder import TraceRecorder  # noqa: E402
 from harness_ws_probe.redact import redact  # noqa: E402
 from harness_ws_probe.scenarios import l0  # noqa: E402
@@ -45,6 +45,45 @@ def test_forbidden_event_name() -> None:
     with pytest.raises(ProbeAssertion, match="禁止的旧事件名"):
         ExpectMatcher(trace).event_whitelist()
     assert "message" in FORBIDDEN_DOWNLINK
+
+
+def test_tool_stream_events_are_transient() -> None:
+    """V1.44：tool_progress / tool_output_delta 为瞬态帧，不落库、不占 event_id。"""
+    for event in ("tool_progress", "tool_output_delta"):
+        assert is_transient({"event": event, "payload": {}}) is True
+    # 工具终态 tool_result 为持久事件，不得误判为瞬态
+    assert is_transient({"event": "tool_result", "payload": {}}) is False
+
+
+def test_tool_call_start_is_forbidden() -> None:
+    """API.md §4.3 明确禁止旧事件名 tool_call_start。"""
+    assert "tool_call_start" in FORBIDDEN_DOWNLINK
+    trace = TraceRecorder()
+    trace.record_down(
+        {
+            "event": "tool_call_start",
+            "session_id": "s",
+            "task_id": None,
+            "event_id": 1,
+            "ts": "t",
+            "payload": {},
+        }
+    )
+    with pytest.raises(ProbeAssertion, match="禁止的旧事件名"):
+        ExpectMatcher(trace).event_whitelist()
+
+
+def test_tool_stream_events_whitelisted_and_skipped_by_event_id() -> None:
+    """tool_progress / tool_output_delta 属白名单事件，且不参与 event_id 单调性检查。"""
+    trace = TraceRecorder()
+    base = {"session_id": "s", "task_id": None, "ts": "t", "payload": {}}
+    trace.record_down({**base, "event": "tool_progress", "event_id": None})
+    trace.record_down({**base, "event": "tool_output_delta", "event_id": None})
+    trace.record_down({**base, "event": "tool_result", "event_id": 5})
+    matcher = ExpectMatcher(trace)
+    matcher.event_whitelist()
+    # 瞬态帧没有 event_id 也不得报「缺少 event_id」；持久 tool_result 照常校验
+    matcher.event_ids_monotonic()
 
 
 def test_monotonic_event_id() -> None:
