@@ -7,7 +7,7 @@
       :title="previewLabel"
       @click="openPreview"
     >
-      <img v-if="isImage && source" :src="source" :alt="filename" class="attachment-image" />
+      <img v-if="isImage && source" :src="source" :alt="filename" class="attachment-image" loading="lazy" decoding="async" />
       <span v-else class="attachment-file-visual">
         <span class="attachment-file-mark">{{ extension }}</span>
         <span class="attachment-file-action">{{ previewLabel }}</span>
@@ -51,7 +51,7 @@
           </a>
         </div>
 
-        <img v-if="isImage && source" :src="source" :alt="filename" class="attachment-lightbox-image" />
+        <img v-if="isImage && source" :src="source" :alt="filename" class="attachment-lightbox-image" decoding="async" />
         <iframe v-else-if="previewKind === 'pdf' && source" :src="source" :title="filename" class="attachment-lightbox-document" />
         <pre v-else-if="previewKind === 'text'" class="attachment-lightbox-text">{{ textContent }}</pre>
         <div v-else class="attachment-unsupported">

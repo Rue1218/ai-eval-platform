@@ -1,7 +1,7 @@
 <template>
   <div class="media-preview" :class="{ 'no-anim': noAnim }">
     <button type="button" class="media-frame" @click="open = true">
-      <img :src="src" :alt="filename || '生成图片'" class="media-img" />
+      <img :src="src" :alt="filename || '生成图片'" class="media-img" loading="lazy" decoding="async" />
       <span class="media-hint">点击预览</span>
     </button>
     <div class="media-actions">
@@ -15,7 +15,7 @@
   <Teleport to="body">
     <div v-if="open" class="media-lightbox" @click.self="open = false">
       <button type="button" class="media-close" aria-label="关闭预览" @click="open = false">×</button>
-      <img :src="src" :alt="filename || '生成图片'" class="media-full" />
+      <img :src="src" :alt="filename || '生成图片'" class="media-full" decoding="async" />
     </div>
   </Teleport>
 </template>

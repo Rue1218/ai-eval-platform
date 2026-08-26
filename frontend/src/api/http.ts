@@ -37,6 +37,7 @@ import {
   type SessionVisibility,
   type AgentPrefs,
   type SlashCommandItem,
+  type StressSeriesResponse,
   type WorkspaceOverview,
   type WorkspaceFileList,
   type CompareSampleRow,
@@ -420,7 +421,7 @@ export const api = {
       }
       await http.post(`/api/tasks/${id}/approve-stress`)
     },
-    async getStressSeries(id: string): Promise<any> {
+    async getStressSeries(id: string): Promise<StressSeriesResponse> {
       if (getDataMode() === 'mock') {
         return {
           task_id: id,
