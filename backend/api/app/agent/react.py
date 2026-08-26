@@ -77,8 +77,9 @@ read 未读完时，把返回的 next_offset 填到下一次的 offset，禁止�
 # 所有原生工具回传给模型的正文共用同一上限；超出只保留摘要并提示分页。
 # ToolCard 另走行级受控预览，不走这条通道。
 
-# 只读工具：相同参数成功一次后禁止再执行（OR-4）。read 必须换 offset 才能继续。
-READONLY_TOOLS: frozenset[str] = frozenset({"read", "web_fetch"})
+# 只读工具：相同参数成功一次后禁止再执行（OR-4）。read 必须换 offset 才能继续；
+# web_search / web_fetch 用相同 query / url 重复调用不会得到新信息，同样拦截。
+READONLY_TOOLS: frozenset[str] = frozenset({"read", "web_search", "web_fetch"})
 
 # 只读工具「相同参数」成功调用的容忍上限：1 次即拦截重复读同一窗口。
 READONLY_REPEAT_LIMIT = 1

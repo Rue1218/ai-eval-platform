@@ -619,6 +619,10 @@ _REACT_EDIT = (
     '{"protocol": "react", "version": "react.v1", "thought": "需要编辑文件", '
     '"tool": "edit", "arguments": {"path": "b.txt", "old": "x", "new": "y"}, "done": false}'
 )
+_REACT_WEB_SEARCH = (
+    '{"protocol": "react", "version": "react.v1", "thought": "需要联网搜索", '
+    '"tool": "web_search", "arguments": {"query": "ReAct 原理"}, "done": false}'
+)
 
 
 def test_tools_route_ends_when_budget_exhausted() -> None:
@@ -733,6 +737,95 @@ def test_react_read_repeat_blocked_after_first_success() -> None:
     assert kinds[-2:] == ["assistant_message", "response.completed"]
 
 
+def test_react_web_search_repeat_blocked_after_first_success(monkeypatch) -> None:
+    """OR-4：相同 query 的 web_search 只执行一次，第二次纠正后模型 done 收尾。
+
+    回归：READONLY_TOOLS 曾漏收 web_search，导致相同关键词重复搜索不被拦截。
+    """
+    from app.harness.execution import dispatch
+    from app.harness.execution.dispatch import WebSearchResult
+
+    def fake_search(
+        query: str, *, limit: object | None = None, timeout_s: float = 20.0
+    ) -> WebSearchResult:
+        return WebSearchResult(
+            query=query,
+            results=({"title": "ReAct", "url": "https://example.com/react", "description": "推理与行动"},),
+        )
+
+    monkeypatch.setattr(dispatch, "web_search", fake_search)
+    gateway = _ScriptGateway([_REACT_WEB_SEARCH, _REACT_WEB_SEARCH, _REACT_DONE])
+    events = _collect(LangGraphAgent(gateway, build_default_registry()), _serializable())
+    kinds = [event["kind"] for event in _pending_events(events)]
+    assert kinds.count("error") == 0
+    messages = [event["payload"].get("message", "") for event in _pending_events(events)]
+    assert not any("连续调用" in message for message in messages)
+    assert kinds.count("tool_call") == 1
+    assert kinds.count("tool_result") == 1
+    assert kinds[-2:] == ["assistant_message", "response.completed"]
+
+
+def test_native_web_search_repeat_same_query_is_blocked(monkeypatch) -> None:
+    """原生 ToolCall 路径同样拦截相同 query 的重复 web_search。"""
+    from app.harness.execution import dispatch
+    from app.harness.execution.dispatch import WebSearchResult
+
+    def fake_search(
+        query: str, *, limit: object | None = None, timeout_s: float = 20.0
+    ) -> WebSearchResult:
+        return WebSearchResult(
+            query=query,
+            results=({"title": "ReAct", "url": "https://example.com/react", "description": "推理与行动"},),
+        )
+
+    monkeypatch.setattr(dispatch, "web_search", fake_search)
+
+    class _RepeatSearchGateway:
+        def __init__(self) -> None:
+            self.calls: list[object] = []
+
+        def invoke(self, request: object, config: dict | None = None):
+            self.calls.append(request)
+            if getattr(request, "tools", ()) == ():
+                return ModelResponse(text="已根据搜索结果作答。", latency_ms=1)
+            return ModelResponse(
+                text="",
+                latency_ms=1,
+                tool_calls=(
+                    NativeToolCall(
+                        f"call_search_{len(self.calls)}",
+                        "web_search",
+                        {"query": "ReAct"},
+                    ),
+                ),
+            )
+
+        def stream(self, request: object, config: dict | None = None):
+            if getattr(request, "tools", ()):
+                response = self.invoke(request, config)
+                events = [
+                    ModelStreamEvent(kind="tool_call", tool_call=call)
+                    for call in response.tool_calls
+                ]
+                events.append(ModelStreamEvent(kind="completed", response=response))
+                return iter(events)
+            return iter(
+                [
+                    ModelStreamEvent(
+                        kind="completed",
+                        response=ModelResponse(text="已根据搜索结果作答。", latency_ms=1),
+                    )
+                ]
+            )
+
+    gateway = _RepeatSearchGateway()
+    events = _collect(LangGraphAgent(gateway, build_default_registry()), _serializable())
+    kinds = [event["kind"] for event in _pending_events(events)]
+    assert kinds.count("tool_call") == 1
+    assert kinds.count("error") == 0
+    assert kinds[-2:] == ["assistant_message", "response.completed"]
+
+
 def test_read_offset_aliases_normalize_to_same_call() -> None:
     """缺省 offset、offset=0 与 next_offset=0 视为同一窗口，避免漏拦重复读。"""
     from app.agent.react import _normalized_tool_arguments
@@ -756,6 +849,22 @@ def test_split_native_readonly_repeats_dedups_same_batch() -> None:
         (first, alias, later, bash),
     )
     assert [call.call_id for call in allowed] == ["1", "3", "4"]
+    assert skipped is not None and skipped.call_id == "2"
+    assert runs == 1
+
+
+def test_split_native_readonly_repeats_dedups_web_search() -> None:
+    """同一响应内相同 query 的 web_search 只保留第一次（OR-4 同批去重）。"""
+    from app.agent.react import _split_native_readonly_repeats
+
+    first = NativeToolCall(call_id="1", name="web_search", arguments={"query": "ReAct"})
+    alias = NativeToolCall(call_id="2", name="web_search", arguments={"query": "ReAct"})
+    later = NativeToolCall(call_id="3", name="web_search", arguments={"query": "LangGraph"})
+    allowed, skipped, runs = _split_native_readonly_repeats(
+        {"observations": []},
+        (first, alias, later),
+    )
+    assert [call.call_id for call in allowed] == ["1", "3"]
     assert skipped is not None and skipped.call_id == "2"
     assert runs == 1
 
