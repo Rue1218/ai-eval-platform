@@ -25,7 +25,7 @@
       </div>
 
       <div class="tool-title-wrap">
-        <div class="tool-name">{{ toolChineseName }}</div>
+        <div class="tool-name">{{ toolDisplayName }}</div>
         <div class="tool-sub-tag" :title="headerHint">{{ headerHint }}</div>
       </div>
 
@@ -59,20 +59,28 @@
         <div class="transcript-text">{{ transcriptText }}</div>
       </div>
       <div class="td-block">
-        <div class="td-label">输入</div>
+        <div class="td-label">ToolCall</div>
         <dl v-if="inputFields.length" class="td-fields">
           <div v-for="(field, fieldIdx) in inputFields" :key="`${field.label}-${fieldIdx}`" class="td-field">
             <dt>{{ field.label }}</dt>
             <dd :class="{ mono: field.mono, cmd: field.cmd }">{{ field.value }}</dd>
           </div>
         </dl>
-        <pre v-else class="code">{{ formatJson(args ?? {}) }}</pre>
+        <div v-if="toolCallLines.length" class="tool-call-code-wrap">
+          <div v-if="toolCallCodeLabel" class="td-code-caption mono">{{ toolCallCodeLabel }}</div>
+          <div class="line-block tool-call-code" role="region" aria-label="ToolCall 参数">
+            <div v-for="line in toolCallLines" :key="line.n" class="ln-row">
+              <span class="ln-no mono">{{ line.n }}</span>
+              <span class="ln-text">{{ line.text }}</span>
+            </div>
+          </div>
+        </div>
       </div>
       <div class="td-block">
-        <div class="td-label">{{ status === 'fail' ? '输出' : '结果' }}</div>
-        <p v-if="resultSummary && !readMeta" class="td-summary">{{ resultSummary }}</p>
+        <div class="td-label">输出</div>
+        <p v-if="resultSummary && !previewText && status === 'ok'" class="td-summary">{{ resultSummary }}</p>
         <div v-if="readMeta" class="td-meta mono">
-          第 {{ readMeta.start }}–{{ readMeta.end }} 行 / 共 {{ readMeta.total }} 行
+          第 {{ readMeta.start }}–{{ readMeta.end }} 行 · 本次 {{ readMeta.count }} 行 / 共 {{ readMeta.total }} 行
           <span v-if="readMeta.next != null"> · 下一页 offset={{ readMeta.next }}</span>
           <span v-else> · 已读完</span>
         </div>
@@ -85,8 +93,8 @@
           :content="previewText"
           custom-class="tool-md"
         />
-        <div v-else-if="previewLines.length && status === 'ok'" class="line-block" role="region" aria-label="文件内容">
-          <div v-for="line in previewLines" :key="line.n" class="ln-row">
+        <div v-else-if="outputLines.length && status === 'ok'" class="line-block" role="region" aria-label="工具输出">
+          <div v-for="line in outputLines" :key="line.n" class="ln-row">
             <span class="ln-no mono">{{ line.n }}</span>
             <span class="ln-text">{{ line.text }}</span>
           </div>
@@ -179,7 +187,10 @@ const toolNameMap: Record<string, string> = {
   get_report: '读取评测报告',
 }
 
-const toolChineseName = computed(() => {
+const nativeToolNames = new Set(['read', 'write', 'edit', 'bash', 'web_search', 'web_fetch', 'task'])
+
+const toolDisplayName = computed(() => {
+  if (nativeToolNames.has(props.tool)) return props.tool
   return toolNameMap[props.tool] || props.tool
 })
 
@@ -227,10 +238,7 @@ const inputFields = computed(() => {
     if (args.limit != null) fields.push({ label: '行数', value: String(args.limit) })
     return fields
   }
-  if (props.tool === 'bash' && args.command) {
-    fields.push({ label: '命令', value: stringField(args.command), mono: true, cmd: true })
-    return fields
-  }
+  if (props.tool === 'bash') return fields
   if ((props.tool === 'write' || props.tool === 'edit') && args.path) {
     fields.push({ label: '文件', value: stringField(args.path), mono: true })
     if (props.tool === 'edit' && args.old) {
@@ -256,6 +264,36 @@ const inputFields = computed(() => {
     }))
 })
 
+/** 工具卡代码/文档预览的行号与正文，避免长文本失去定位上下文。 */
+type LineItem = { n: number; text: string }
+
+/** 将工具入参或受控输出按完整行拆分，保留 read 的实际起始行号。 */
+function toLineItems(text: string, start = 1): LineItem[] {
+  if (!text) return []
+  return text.replace(/\r\n?/g, '\n').replace(/\n$/, '').split('\n').map((line, index) => ({
+    n: start + index,
+    text: line,
+  }))
+}
+
+const toolCallText = computed(() => {
+  const args = argsRecord.value
+  if (props.tool === 'bash') return stringField(args.command)
+  if (props.tool === 'write') return stringField(args.content)
+  if (props.tool === 'edit') return stringField(args.new)
+  if (inputFields.value.length) return ''
+  return formatJson(props.args ?? {})
+})
+
+const toolCallLines = computed(() => toLineItems(toolCallText.value))
+
+const toolCallCodeLabel = computed(() => {
+  if (props.tool === 'bash') return 'command'
+  if (props.tool === 'write') return 'content'
+  if (props.tool === 'edit') return 'new'
+  return ''
+})
+
 const readMeta = computed(() => {
   const data = resultRecord.value
   const read = asRecord(data?.read)
@@ -264,6 +302,7 @@ const readMeta = computed(() => {
     start: asNonNegInt(read.start_line) + 1,
     end: asNonNegInt(read.end_line),
     total: asNonNegInt(read.total_lines),
+    count: asNonNegInt(read.lines_read),
     next: read.next_offset,
   }
 })
@@ -281,13 +320,12 @@ const previewText = computed(() => {
   return ''
 })
 
-const previewLines = computed(() => {
-  if (props.tool !== 'read' || !previewText.value) return []
-  const start = asNonNegInt(asRecord(resultRecord.value?.read)?.start_line)
-  return previewText.value.replace(/\n$/, '').split('\n').map((text, index) => ({
-    n: start + index + 1,
-    text,
-  }))
+const outputLines = computed(() => {
+  if (!previewText.value || !['read', 'bash', 'web_fetch'].includes(props.tool)) return []
+  const start = props.tool === 'read'
+    ? asNonNegInt(asRecord(resultRecord.value?.read)?.start_line) + 1
+    : 1
+  return toLineItems(previewText.value, start)
 })
 
 const isMarkdownFile = computed(() => {
@@ -535,6 +573,15 @@ pre.code {
   display: grid;
   gap: 6px;
 }
+.tool-call-code-wrap {
+  margin-top: 8px;
+}
+.td-code-caption {
+  margin: 0 0 4px 2px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
 .td-field {
   display: grid;
   grid-template-columns: 56px 1fr;
@@ -602,6 +649,9 @@ pre.code {
   color: #e2e8f0;
   border-radius: 8px;
   padding: 6px 0;
+}
+.tool-call-code {
+  max-height: 300px;
 }
 .ln-row {
   display: grid;

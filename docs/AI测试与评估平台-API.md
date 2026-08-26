@@ -2,14 +2,14 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.37 |
+| 文档版本 | V1.38 |
 | 对应 PRD | V1.13（功能唯一权威） |
 | 对应设计规范 | V1.3（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V0.5（LangGraph 单轮 Agent 与 WS 桥接；JSON 仍以本文为准） |
 | 对应前端计划 | V1.5 |
 | 对应后端计划 | V1.5 |
 | 撰写日期 | 2026-08-18 |
-| 最近修订 | 2026-08-24：V1.24 修复 Agent 附件上下文链路：服务端校验文件归属并在模型窗口解析文本、PDF、DOCX、XLSX，图片按三协议图文内容块发送；历史消息附件补齐安全元数据，前端可在刷新后继续预览。同步调整输入框内附件按钮与用户消息附件位序。V1.23 扩展 Agent 附件契约，支持图片、Word 文档与多附件拖拽上传；保留 `POST /api/files` 后再以既有 `file_id` 引用的消息链路，补充图片缩略图、PDF/文本预览与 Office 文件打开/下载说明。V1.22 修复 V1.21 遗留：§4.4 标题「仅此三条」改「仅此四条」、§9 禁止清单「第四种」改「第五种」并补四类上行事件枚举、§4.3 `tool_result.source` 语义对齐 M7 `Observation.source`（溯源标识字符串，非 short\|long 枚举）、§4.3 共享流规则补 clarify/plan/confirm 持久化广播说明、§4.4 clarify 多副本限制注明、§9 Ask/Plan 补注非 Harness plan 事件；V1.21 配合 Harness 阶段 3/4 前端联调回写契约：§4.3 新增 `clarify`（澄清卡，不建任务/不写 pending_confirm）、`plan`（PlanArtifact 完整下发）事件，扩展 `tool_result` 加 `truncated`/`source`/`redacted` 三可选字段，§3.4 `context_meter` 加 `compacted` bool；§4.4 新增 `clarify_reply` 上行事件并明确四类上行事件边界；V1.20 补齐 Gemini OpenAI 兼容端点的 `extra_body.google.thinking_config` 与思考增量归一化；V1.19 增加 Agent 思考摘要开关与 `low/medium/high/xhigh/max` 思考强度配置，按三协议映射模型请求；V1.18 将用户回显固定为 `user_message`，将回合结束固定为 `response.completed`，保留 `message` / `done` 仅用于旧客户端兼容；V1.17 拆分 WebSocket 用户消息、思考摘要、助手正文增量、助手最终消息和 done 事件；V1.16 接入 LangGraph 单轮 Agent 与 WebSocket 异步桥接；2026-08-22：V1.15 清空旧 Agent/Harness/模型调用/Runtime 实现、相关测试与阶段文档，保留 API 路径作为重建设计期间的明确占位；V1.14 及更早版本沿用历史修订记录。 |
+| 最近修订 | 2026-08-26：V1.38 明确原生基础 ToolCall 卡片使用英文工具名，展开区统一显示 `ToolCall` 与 `输出`，文件、命令和代码/文档结果使用行号展示；MCP/平台短工具仍按下方中文名映射。2026-08-24：V1.24 修复 Agent 附件上下文链路：服务端校验文件归属并在模型窗口解析文本、PDF、DOCX、XLSX，图片按三协议图文内容块发送；历史消息附件补齐安全元数据，前端可在刷新后继续预览。同步调整输入框内附件按钮与用户消息附件位序。V1.23 扩展 Agent 附件契约，支持图片、Word 文档与多附件拖拽上传；保留 `POST /api/files` 后再以既有 `file_id` 引用的消息链路，补充图片缩略图、PDF/文本预览与 Office 文件打开/下载说明。V1.22 修复 V1.21 遗留：§4.4 标题「仅此三条」改「仅此四条」、§9 禁止清单「第四种」改「第五种」并补四类上行事件枚举、§4.3 `tool_result.source` 语义对齐 M7 `Observation.source`（溯源标识字符串，非 short\|long 枚举）、§4.3 共享流规则补 clarify/plan/confirm 持久化广播说明、§4.4 clarify 多副本限制注明、§9 Ask/Plan 补注非 Harness plan 事件；V1.21 配合 Harness 阶段 3/4 前端联调回写契约：§4.3 新增 `clarify`（澄清卡，不建任务/不写 pending_confirm）、`plan`（PlanArtifact 完整下发）事件，扩展 `tool_result` 加 `truncated`/`source`/`redacted` 三可选字段，§3.4 `context_meter` 加 `compacted` bool；§4.4 新增 `clarify_reply` 上行事件并明确四类上行事件边界；V1.20 补齐 Gemini OpenAI 兼容端点的 `extra_body.google.thinking_config` 与思考增量归一化；V1.19 增加 Agent 思考摘要开关与 `low/medium/high/xhigh/max` 思考强度配置，按三协议映射模型请求；V1.18 将用户回显固定为 `user_message`，将回合结束固定为 `response.completed`，保留 `message` / `done` 仅用于旧客户端兼容；V1.17 拆分 WebSocket 用户消息、思考摘要、助手正文增量、助手最终消息和 done 事件；V1.16 接入 LangGraph 单轮 Agent 与 WebSocket 异步桥接；2026-08-22：V1.15 清空旧 Agent/Harness/模型调用/Runtime 实现、相关测试与阶段文档，保留 API 路径作为重建设计期间的明确占位；V1.14 及更早版本沿用历史修订记录。 |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
 > V1.25（2026-08-25）：细化 ReAct `read` 的 `tool_result.data`，新增受控行范围、文件统计与短预览投影。完整 `content` 仅供服务端下一模型回合使用，禁止写入 WebSocket 事件或 ToolCard。
@@ -1346,7 +1346,7 @@ Harness 回合必须丢到后台 Task，**不得**在 `receive` 循环里 `await
 | `assistant_delta` | `{ "role":"assistant", "text":"增量" }`；助手正文瞬态增量，不落库、不占事件号，仅用于在线连接的流式气泡 | AssistantBubble |
 | `assistant_message` | `{ "id", "role":"assistant", "text":"完整回答", "reply_latency_ms?", "created_at", "interim"? }`；落库、占 event_id，可通过历史回放。**同一回合可多条**：工具前后的阶段叙述与最终交付句按事件序各成一段，前端不得把后续叙述并进第一条。`interim=true` 为阶段叙述（建议 ≤200 字），不结束本轮生成态；缺省或 `false` 为可展示交付句。`text` 禁止是 Observation / `read` 全文。`response.completed` 仍是整轮结束 | AssistantBubble |
 | `response.completed` | `{ "finish_reason":"stop\|cancelled\|error", "role":"assistant" }`；本轮生成结束，落库、占 event_id | 结束流式状态 |
-| `tool_call` | `{ "call_id":"toolcall_xxx", "name": "model.list", "arguments": {} }`；`call_id` 为本轮模型生成或平台补齐的稳定非空字符串 | ToolCard pending；标题用中文名；副标题「ToolCall · 短工具」 |
+| `tool_call` | `{ "call_id":"toolcall_xxx", "name": "model.list", "arguments": {} }`；`call_id` 为本轮模型生成或平台补齐的稳定非空字符串 | ToolCard pending；原生基础工具标题直接使用英文 `name`；MCP/平台短工具按下方中文名映射；展开区显示 `ToolCall` |
 | `tool_result` | `{ "call_id":"toolcall_xxx", "name": "model.list", "ok": true, "data": {} }` 或 `{ "call_id":"toolcall_xxx", "name":"model.list", "ok": false, "error": "..." }`；`call_id` 必须与对应 `tool_call` 相同。可选 `latency_ms`、`truncated`(bool，结果是否被截断)、`source`(溯源标识字符串，对齐 M7 `Observation.source`，如 `"file:uuid"`，可选)、`redacted`(bool，是否已脱敏)。`name="read"` 成功时 `data` 使用本节下方的受控投影 | ToolCard done；按 `call_id` 原地更新；`truncated`/`redacted` 为 true 时展示截断/脱敏徽标 |
 | `clarify` | `{ "id":"uuid", "question":"...", "options":["..."]?, "context":"..."? }`；落库、占 event_id；澄清卡不建任务、不写 `sessions.pending_confirm`，仅暂停图等待用户回复 | ClarifyCard（独立组件，区别于 ConfirmCard）；用户回复后上行 `clarify_reply` 恢复图 |
 | `plan` | PlanArtifact `{ "intent":"...", "skill_id":"skill-benchmark", "slots":{...}, "tools_needed":["..."], "delivery":"...", "budget":{...}, "allows_replan":bool, "notes":"..."? }`；落库、占 event_id；Plan-Solve 规划产物对用户完全可见 | PlanCard（展示规划意图/技能/工具/预算/交付物）；用户可查看但无需 ack |
@@ -1402,7 +1402,7 @@ Harness 回合必须丢到后台 Task，**不得**在 `receive` 循环里 `await
 当前 Compose 只有单 API 副本，assistant_delta 广播为进程内 Hub；多 API 副本时必须改为进程外
 Pub/Sub，不能假定跨进程实时可见。
 
-短工具中文名（ToolCard 标题）：
+MCP/平台短工具中文名（ToolCard 标题；原生基础工具 `read` / `write` / `edit` / `bash` / `web_search` / `web_fetch` / `task` 直接显示英文 `name`）：
 
 | name | 标题 |
 | --- | --- |
