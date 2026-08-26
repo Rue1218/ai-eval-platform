@@ -31,6 +31,7 @@ from ..harness.execution.context import ToolExecutionContext
 from ..harness.execution.task_tools import cancel_task_safe
 from ..harness.memory import get_default_checkpointer, to_serializable_request, write_summary
 from ..harness.orchestration import handle_confirm_ack
+from ..harness.orchestration.confirm_spec import build_slash_stress_spec
 from ..harness.prompts import SystemVars, build_system_prompt
 from ..llm import ModelConfig, ModelRequest
 from ..models import Message, ProtocolProfile, Setting, User, WsEvent
@@ -907,6 +908,82 @@ async def _handle_compact(
     )
 
 
+async def _handle_cancel(
+    db: Session,
+    websocket: WebSocket,
+    state: _ConnectionState,
+    session: AgentSession,
+    user: User,
+) -> None:
+    """/cancel：取消本会话非终态任务（权限同 REST cancel，API.md §4.4）。"""
+    from ..harness.memory.episodic import get_active_tasks
+
+    actives = get_active_tasks(db, session.id)
+    if not actives:
+        raise AppError(ErrorCode.VALIDATION, "当前会话没有可取消的任务")
+    task = actives[0]
+    result = cancel_task_safe(
+        {"task_id": task.id},
+        ToolExecutionContext(
+            session_id=session.id,
+            user_id=user.id,
+            thread_id=session.id,
+            call_id="ws-slash-cancel",
+        ),
+    )
+    await _emit_persistent(
+        db,
+        websocket,
+        state,
+        session.id,
+        "tool_result",
+        {
+            "name": "task.cancel",
+            "ok": True,
+            "data": {
+                "task_id": result.get("task_id"),
+                "status": result.get("status"),
+                "kind": result.get("kind"),
+            },
+        },
+        task_id=str(result.get("task_id") or "") or None,
+    )
+
+
+async def _handle_stress(
+    db: Session,
+    websocket: WebSocket,
+    state: _ConnectionState,
+    session: AgentSession,
+    user: User,
+) -> None:
+    """/stress：发出质量任务确认卡且 with_stress=true，禁止 kind=stress。"""
+    from ..harness.memory import read_prefs
+    from ..harness.memory.episodic import get_active_tasks
+
+    fresh = (
+        db.query(AgentSession)
+        .filter(AgentSession.id == session.id)
+        .with_for_update()
+        .first()
+    )
+    if not fresh:
+        raise AppError(ErrorCode.NOT_FOUND, "会话不存在")
+    if fresh.pending_confirm:
+        raise AppError(ErrorCode.CONCURRENCY, "会话存在待确认任务，请先确认或取消")
+    if get_active_tasks(db, session.id):
+        raise AppError(ErrorCode.CONCURRENCY, "会话已有未完成任务")
+    spec = build_slash_stress_spec(read_prefs(db, user.id))
+    if spec.get("kind") == "stress":
+        raise AppError(ErrorCode.VALIDATION, "对话路径不得发出压测确认卡")
+    outgoing = dict(spec)
+    author = _confirm_author_payload(user)
+    if author:
+        outgoing["confirm_author"] = author
+    _persist_pending_confirm(db, session.id, outgoing)
+    await _emit_persistent(db, websocket, state, session.id, "confirm", outgoing)
+
+
 async def _handle_clarify_interrupt(
     db: Session,
     websocket: WebSocket,
@@ -1173,6 +1250,14 @@ async def agent_websocket(websocket: WebSocket) -> None:
                             if stripped.startswith("/compact"):
                                 # /compact 会话级副作用：仅 owner 可执行（API.md §4.4）
                                 await _handle_compact(db, websocket, state, session, user)
+                                continue
+                            if stripped.startswith("/cancel"):
+                                # /cancel：只取消本会话非终态任务，不进图
+                                await _handle_cancel(db, websocket, state, session, user)
+                                continue
+                            if stripped.startswith("/stress"):
+                                # /stress：质量任务卡 + with_stress，禁止 kind=stress
+                                await _handle_stress(db, websocket, state, session, user)
                                 continue
                     active_turn = await _handle_user_message(
                         db,

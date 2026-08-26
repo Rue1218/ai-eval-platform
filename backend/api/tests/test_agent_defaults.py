@@ -9,6 +9,7 @@ from app.agent.defaults import (
 )
 from app.harness.orchestration.confirm_spec import DEFAULT_RUN as SPEC_RUN
 from app.harness.orchestration.confirm_spec import DEFAULT_STRESS as SPEC_STRESS
+from app.harness.orchestration.confirm_spec import build_slash_stress_spec
 
 
 def test_confirm_spec_reexports_defaults() -> None:
@@ -36,3 +37,26 @@ def test_default_task_spec_skeleton() -> None:
     assert spec["with_stress"] is DEFAULT_WITH_STRESS
     assert spec["rag_mode"] == DEFAULT_RAG_MODE
     assert spec["stress"]["env"] == "test"
+
+
+def test_slash_stress_spec_never_kind_stress() -> None:
+    """/stress 必须是质量任务卡且 with_stress=true，禁止 kind=stress。"""
+    spec = build_slash_stress_spec({"last_kind": "stress", "last_with_stress": False})
+    assert spec["kind"] == "benchmark"
+    assert spec["with_stress"] is True
+    rag = build_slash_stress_spec(
+        {
+            "last_kind": "rag",
+            "last_kb_id": "kb-1",
+            "last_gold_qa_id": "qa-1",
+            "last_profile_ids": ["p-1"],
+        }
+    )
+    assert rag["kind"] == "rag"
+    assert rag["with_stress"] is True
+    assert rag["kb_id"] == "kb-1"
+    assert rag["gold_qa_id"] == "qa-1"
+    assert rag["profile_ids"] == ["p-1"]
+    testcase = build_slash_stress_spec({"last_kind": "testcase"})
+    assert testcase["kind"] == "benchmark"
+    assert testcase["with_stress"] is True

@@ -32,7 +32,8 @@ HELP_TEXT = (
     "- /help：查看帮助\n"
     "- /stop：中断当前生成\n"
     "- /compact：压缩本会话模型窗口（仅会话负责人）\n"
-    "- /cancel、/stress：后续版本开放"
+    "- /cancel：取消本会话未完成任务\n"
+    "- /stress：打开先评后压确认卡（质量任务 + 自动压测）"
 )
 
 
@@ -93,7 +94,7 @@ def direct_node(state: GraphState) -> dict:
 
     返回 {'pending_events': [NodeEvent, ...]}：
     - /help → assistant_message（帮助文本）
-    - /compact /cancel /stress（阶段 1 未启用）→ error(VALIDATION)
+    - /compact /cancel /stress /stop → 防御提示（真实入口在 ws.py 收包循环）
     - 未知斜杠 → error(VALIDATION)
     """
     text = user_text_from_state(state)
@@ -119,11 +120,12 @@ def direct_node(state: GraphState) -> dict:
             ]
         }
     if command in ("/cancel", "/stress"):
+        # /cancel /stress 由 ws.py 收包循环直连；图节点不持 DB，此处为不可达防御。
         return {
             "pending_events": [
                 make_event(
                     "error",
-                    {"code": "VALIDATION", "message": f"{command} 能力未启用，将在后续版本开放"},
+                    {"code": "VALIDATION", "message": f"{command} 由平台会话控制处理，无需发送"},
                 )
             ]
         }

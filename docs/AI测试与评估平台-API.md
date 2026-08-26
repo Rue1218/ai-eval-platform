@@ -2,14 +2,14 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.39 |
+| 文档版本 | V1.40 |
 | 对应 PRD | V1.13（功能唯一权威） |
 | 对应设计规范 | V1.3（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V0.5（LangGraph 单轮 Agent 与 WS 桥接；JSON 仍以本文为准） |
 | 对应前端计划 | V1.5 |
 | 对应后端计划 | V1.5 |
 | 撰写日期 | 2026-08-18 |
-| 最近修订 | 2026-08-26：V1.39 原生工具卡片收起态副标题统一为 `ToolCall`，不在卡片摘要区回显文件路径、命令或写入内容；详细参数仍在展开区展示。V1.38 明确原生基础 ToolCall 卡片使用英文工具名，展开区统一显示 `ToolCall` 与 `输出`，文件、命令和代码/文档结果使用行号展示；MCP/平台短工具仍按下方中文名映射。2026-08-24：V1.24 修复 Agent 附件上下文链路：服务端校验文件归属并在模型窗口解析文本、PDF、DOCX、XLSX，图片按三协议图文内容块发送；历史消息附件补齐安全元数据，前端可在刷新后继续预览。同步调整输入框内附件按钮与用户消息附件位序。V1.23 扩展 Agent 附件契约，支持图片、Word 文档与多附件拖拽上传；保留 `POST /api/files` 后再以既有 `file_id` 引用的消息链路，补充图片缩略图、PDF/文本预览与 Office 文件打开/下载说明。V1.22 修复 V1.21 遗留：§4.4 标题「仅此三条」改「仅此四条」、§9 禁止清单「第四种」改「第五种」并补四类上行事件枚举、§4.3 `tool_result.source` 语义对齐 M7 `Observation.source`（溯源标识字符串，非 short\|long 枚举）、§4.3 共享流规则补 clarify/plan/confirm 持久化广播说明、§4.4 clarify 多副本限制注明、§9 Ask/Plan 补注非 Harness plan 事件；V1.21 配合 Harness 阶段 3/4 前端联调回写契约：§4.3 新增 `clarify`（澄清卡，不建任务/不写 pending_confirm）、`plan`（PlanArtifact 完整下发）事件，扩展 `tool_result` 加 `truncated`/`source`/`redacted` 三可选字段，§3.4 `context_meter` 加 `compacted` bool；§4.4 新增 `clarify_reply` 上行事件并明确四类上行事件边界；V1.20 补齐 Gemini OpenAI 兼容端点的 `extra_body.google.thinking_config` 与思考增量归一化；V1.19 增加 Agent 思考摘要开关与 `low/medium/high/xhigh/max` 思考强度配置，按三协议映射模型请求；V1.18 将用户回显固定为 `user_message`，将回合结束固定为 `response.completed`，保留 `message` / `done` 仅用于旧客户端兼容；V1.17 拆分 WebSocket 用户消息、思考摘要、助手正文增量、助手最终消息和 done 事件；V1.16 接入 LangGraph 单轮 Agent 与 WebSocket 异步桥接；2026-08-22：V1.15 清空旧 Agent/Harness/模型调用/Runtime 实现、相关测试与阶段文档，保留 API 路径作为重建设计期间的明确占位；V1.14 及更早版本沿用历史修订记录。 |
+| 最近修订 | 2026-08-26：V1.40 `/cancel` 与 `/stress` 按 §4.4 解禁（仍走 `user_message`）：`/cancel` 取消本会话非终态任务，`/stress` 发出质量任务确认卡且 `with_stress=true`，禁止 `kind=stress`。V1.39 原生工具卡片收起态副标题统一为 `ToolCall`，不在卡片摘要区回显文件路径、命令或写入内容；详细参数仍在展开区展示。V1.38 明确原生基础 ToolCall 卡片使用英文工具名，展开区统一显示 `ToolCall` 与 `输出`，文件、命令和代码/文档结果使用行号展示；MCP/平台短工具仍按下方中文名映射。2026-08-24：V1.24 修复 Agent 附件上下文链路：服务端校验文件归属并在模型窗口解析文本、PDF、DOCX、XLSX，图片按三协议图文内容块发送；历史消息附件补齐安全元数据，前端可在刷新后继续预览。同步调整输入框内附件按钮与用户消息附件位序。V1.23 扩展 Agent 附件契约，支持图片、Word 文档与多附件拖拽上传；保留 `POST /api/files` 后再以既有 `file_id` 引用的消息链路，补充图片缩略图、PDF/文本预览与 Office 文件打开/下载说明。V1.22 修复 V1.21 遗留：§4.4 标题「仅此三条」改「仅此四条」、§9 禁止清单「第四种」改「第五种」并补四类上行事件枚举、§4.3 `tool_result.source` 语义对齐 M7 `Observation.source`（溯源标识字符串，非 short\|long 枚举）、§4.3 共享流规则补 clarify/plan/confirm 持久化广播说明、§4.4 clarify 多副本限制注明、§9 Ask/Plan 补注非 Harness plan 事件；V1.21 配合 Harness 阶段 3/4 前端联调回写契约：§3.4 `context_meter` 加 `compacted` bool；§4.4 新增 `clarify_reply` 上行事件并明确四类上行事件边界。V1.20 及更早版本沿用历史修订记录。 |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
 > V1.25（2026-08-25）：细化 ReAct `read` 的 `tool_result.data`，新增受控行范围、文件统计与短预览投影。完整 `content` 仅供服务端下一模型回合使用，禁止写入 WebSocket 事件或 ToolCard。
@@ -2031,4 +2031,16 @@ LangGraph `reflect` 在规划 `delivery=confirm` 且复核通过后发出确认�
 | `backend/api/app/routers/agent_prefs.py` / `slash_commands.py` | REST 入口 |
 | `backend/api/app/harness/orchestration/confirm.py` | 入队成功写偏好 |
 | `frontend/src/components/agent/SlashPalette.vue` | 添加/删除我的命令 |
+
+**V1.40（2026-08-26）— `/cancel` / `/stress` 解禁**
+
+斜杠仍全部走 `user_message`，没有第五种上行事件。`/cancel` 由 `ws.py` 拦截后取消本会话非终态任务（权限同 REST cancel），下发 `task.cancel` 的 `tool_result`。`/stress` 发出质量任务确认卡且 `with_stress=true`，`kind` 不得为 `stress`；空槽用偏好预填。
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/routers/ws.py` | `/cancel` `/stress` 收包循环拦截 |
+| `backend/api/app/harness/orchestration/confirm_spec.py` | `build_slash_stress_spec` |
+| `backend/api/app/agent/routing.py` | HELP_TEXT 与图内防御提示 |
+| `frontend/src/agent/slashRegistry.ts` | 解禁 `/cancel` `/stress` |
+| `frontend/src/components/agent/ConfirmCard.vue` | 以内联卡为事实源合并确认卡 |
 
