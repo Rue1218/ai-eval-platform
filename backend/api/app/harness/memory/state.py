@@ -146,5 +146,5 @@ def rebuild_model_config(
         timeout_s=float(config.get("timeout_s", 60.0)),
         reasoning_enabled=bool(config.get("reasoning_enabled", True)),
         reasoning_effort=config.get("reasoning_effort", "medium"),  # type: ignore[arg-type]
-        tool_call_mode=config.get("tool_call_mode", "legacy"),  # type: ignore[arg-type]
+        tool_call_mode=config.get("tool_call_mode", "native"),  # type: ignore[arg-type]
     )

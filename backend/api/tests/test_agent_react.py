@@ -317,9 +317,9 @@ def test_native_read_returns_1000_line_txt_in_one_call() -> None:
     lines = []
     for i in range(1000):
         if i % 20 == 19:
-            lines.append("LONG_LINE_%d:" % (i + 1) + "x" * 8000)
+            lines.append(f"LONG_LINE_{i + 1}:" + "x" * 8000)
         else:
-            lines.append("LINE_%04d: normal content" % (i + 1))
+            lines.append(f"LINE_{i + 1:04d}: normal content")
     body = "\n".join(lines) + "\n"
     assert len(body) > 100_000  # 远超旧 8000 字符工具结果上限
 
@@ -1136,7 +1136,7 @@ def test_hydrate_native_messages_keeps_full_read_result() -> None:
     from app.harness.context.observation import MODEL_TOOL_RESULT_MAX_CHARS
     from app.harness.execution import NativeToolResultStore
 
-    body = "\n".join("line-%04d" % i for i in range(1000)) + "\n"
+    body = "\n".join(f"line-{i:04d}" for i in range(1000)) + "\n"
     assert len(body) > MODEL_TOOL_RESULT_MAX_CHARS
     store = NativeToolResultStore()
     store.put("t1", "c1", body)

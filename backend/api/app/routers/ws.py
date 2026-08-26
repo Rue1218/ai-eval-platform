@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import threading
+import time
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -417,12 +418,23 @@ DEFAULT_AGENT_SYSTEM = (
 )
 
 
+# 协议档配置快照缓存：Agent 每回合读取，TTL 内复用（省 profile+reasoning 两次
+# 查询与环境文件解析）；管理端改档/改 Key 最迟 TTL 秒后生效。缓存的 ORM 实例
+# 已 detach，仅做已加载列的属性读取（本模型无 relationship 懒加载）。
+_MODEL_CONFIG_CACHE: dict[str, tuple[float, tuple[ModelConfig, ProtocolProfile]]] = {}
+_MODEL_CONFIG_CACHE_TTL_S = 15.0
+
+
 def _selected_model_config(db: Session) -> tuple[ModelConfig, ProtocolProfile]:
     """从 Agent 设置与协议档构造模型调用配置与协议档实体，禁止使用隐式旧客户端。"""
     setting = db.query(Setting).filter(Setting.key == "agent_profile_id").first()
     profile_id = setting.value if setting else None
     if not isinstance(profile_id, str) or not profile_id:
         raise AppError(ErrorCode.VALIDATION, "尚未配置 Agent 协议档")
+    cached = _MODEL_CONFIG_CACHE.get(profile_id)
+    now = time.monotonic()
+    if cached and cached[0] > now:
+        return cached[1]
     profile = db.query(ProtocolProfile).filter(ProtocolProfile.id == profile_id).first()
     if not profile:
         raise AppError(ErrorCode.VALIDATION, "Agent 协议档不存在")
@@ -452,8 +464,9 @@ def _selected_model_config(db: Session) -> tuple[ModelConfig, ProtocolProfile]:
         timeout_s=60.0,
         reasoning_enabled=reasoning_enabled,
         reasoning_effort=reasoning_effort,
-        tool_call_mode=getattr(profile, "tool_call_mode", "legacy") or "legacy",
+        tool_call_mode=getattr(profile, "tool_call_mode", "native") or "native",
     )
+    _MODEL_CONFIG_CACHE[profile_id] = (now + _MODEL_CONFIG_CACHE_TTL_S, (config, profile))
     return config, profile
 
 

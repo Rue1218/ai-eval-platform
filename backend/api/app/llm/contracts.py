@@ -37,7 +37,7 @@ class ModelConfig:
     reasoning_enabled: bool = True
     reasoning_effort: ReasoningEffort = "medium"
     # 兼容优先：只有经人工验证的协议档才发送上游 tools；其余走 react.v1 JSON。
-    tool_call_mode: ToolCallMode = "legacy"
+    tool_call_mode: ToolCallMode = "native"
 
 
 Message = Mapping[str, object]

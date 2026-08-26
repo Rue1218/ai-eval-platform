@@ -892,9 +892,9 @@ def test_read_file_safe_reads_1000_lines_with_long_lines_in_one_call() -> None:
         lines = []
         for i in range(1000):
             if i % 20 == 19:
-                lines.append("LONG_LINE_%d:" % (i + 1) + "x" * 8000)
+                lines.append(f"LONG_LINE_{i + 1}:" + "x" * 8000)
             else:
-                lines.append("LINE_%04d: normal content" % (i + 1))
+                lines.append(f"LINE_{i + 1:04d}: normal content")
         write_file_safe("big_mix.txt", "\n".join(lines), root)
         result = read_file_safe("big_mix.txt", root)
         assert result.is_complete is True

@@ -16,11 +16,14 @@ from app.llm import ModelRequest, ModelResponse, ModelStreamEvent
 
 def _serializable(text: str = "你好") -> SerializableRequest:
     """构造可序列化请求投影（不含回调/api_key）。"""
+    # 本文件桩网关输出 legacy ReAct JSON,显式固定 legacy 模式
+    # (平台默认已切换 native,见 a9c41b7e2d10)。
     return SerializableRequest(
         config={
             "protocol": "openai_chat",
             "base_url": "https://model.example.com",
             "model": "test-model",
+            "tool_call_mode": "legacy",
         },
         messages=({"role": "user", "content": text},),
     )

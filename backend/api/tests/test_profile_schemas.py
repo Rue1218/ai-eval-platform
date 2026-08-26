@@ -37,15 +37,15 @@ def test_profile_update_keeps_endpoint_configs_optional():
     assert profile.reranker_model is None
 
 
-def test_profile_tool_call_mode_defaults_to_legacy_and_allows_native():
-    """协议档必须显式区分原生 ToolCall 与受控 JSON 回退。"""
+def test_profile_tool_call_mode_defaults_to_native_and_allows_legacy():
+    """协议档默认原生 ToolCall；不支持工具调用的模型可显式切回受控 JSON 回退。"""
     profile = ProfileCreate(
-        name="legacy-agent",
+        name="native-agent",
         protocol="openai_chat",
         base_url="https://gateway.example.test/v1",
-        model="legacy-model",
+        model="native-model",
     )
-    assert profile.tool_call_mode == "legacy"
-    assert ProfileUpdate(tool_call_mode="native").tool_call_mode == "native"
+    assert profile.tool_call_mode == "native"
+    assert ProfileUpdate(tool_call_mode="legacy").tool_call_mode == "legacy"
     with pytest.raises(ValidationError):
         ProfileUpdate(tool_call_mode="auto")

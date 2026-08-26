@@ -129,7 +129,7 @@ def _profile_out(profile: ProtocolProfile, connection: tuple[str, str, str | Non
         reranker_model=env_values.reranker_model,
         has_reranker_api_key=bool(env_values.reranker_api_key),
         context_window=getattr(profile, "context_window", 200000) or 200000,
-        tool_call_mode=getattr(profile, "tool_call_mode", "legacy") or "legacy",
+        tool_call_mode=getattr(profile, "tool_call_mode", "native") or "native",
         created_at=profile.created_at,
         updated_at=profile.updated_at,
     )
