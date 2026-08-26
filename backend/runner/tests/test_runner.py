@@ -30,8 +30,10 @@ class _Server:
         return f"http://127.0.0.1:{self.port}{path}"
 
     def close(self) -> None:
+        """停服后等待线程退出，避免 Windows 下相邻用例复用端口时偶发断连。"""
         self.server.shutdown()
         self.server.server_close()
+        self.thread.join(timeout=5)
 
 
 @pytest.fixture
@@ -89,6 +91,32 @@ def test_run_ok_passes_kernel_and_returns_output(server: _Server, monkeypatch) -
     assert captured["timeout_s"] == 5.0
     assert captured["limits"].memory_kb == 262144
     assert captured["bwrap_bin"] == "/usr/bin/bwrap"
+
+
+def test_run_stream_forwards_chunks_then_result(server: _Server, monkeypatch) -> None:
+    """流式端点按 NDJSON 逐块发送 stdout，终态帧不重复正文。"""
+
+    def fake_run(_cmd: str, **kwargs: object) -> str:
+        callback = kwargs["on_output"]
+        assert callable(callback)
+        callback("第一行\n")
+        callback("第二行\n")
+        return "第一行\n第二行\n"
+
+    monkeypatch.setattr(main, "run_sandboxed", fake_run)
+    req = Request(
+        server.url("/run/stream"),
+        data=json.dumps(_run_payload()).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urlopen(req, timeout=5) as response:
+        frames = [json.loads(line) for line in response.read().decode("utf-8").splitlines()]
+    assert frames == [
+        {"type": "output", "chunk": "第一行\n"},
+        {"type": "output", "chunk": "第二行\n"},
+        {"type": "result", "ok": True},
+    ]
 
 
 def test_run_empty_command_rejected(server: _Server) -> None:

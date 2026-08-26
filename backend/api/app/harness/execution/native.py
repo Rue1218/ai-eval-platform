@@ -48,6 +48,8 @@ class NativeToolExecutor:
                 permission=definition.permission,
                 sandbox_dir=context.sandbox_dir,
                 handler=definition.handler,
+                context=context if definition.contextual else None,
+                recovery_policy=definition.recovery_policy,
             )
         )
         key = context.call_id or definition.name
@@ -62,7 +64,11 @@ class NativeToolExecutor:
             return ToolResult(
                 name=definition.name,
                 ok=False,
-                error={"code": "TIMEOUT", "message": "操作失败（TIMEOUT）"},
+                error={
+                    "code": "TIMEOUT",
+                    "message": "操作失败（TIMEOUT）",
+                    "recovery": definition.recovery_policy.to_payload("TIMEOUT"),
+                },
                 call_id=context.call_id,
             )
         except asyncio.CancelledError:

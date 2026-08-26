@@ -238,6 +238,9 @@
               :truncated="item.truncated"
               :source="item.source"
               :redacted="item.redacted"
+              :progress="item.toolProgress"
+              :stream-output="item.streamOutput"
+              :recovery="item.recovery"
               :default-open="item.status === 'pending' || item.open"
               :no-anim="item.noAnim"
             />
@@ -372,6 +375,9 @@
                       :truncated="block.truncated"
                       :source="block.source"
                       :redacted="block.redacted"
+                      :progress="block.toolProgress"
+                      :stream-output="block.streamOutput"
+                      :recovery="block.recovery"
                       :default-open="block.status === 'pending' || block.open"
                       :no-anim="block.noAnim"
                     />
@@ -1085,6 +1091,12 @@ export interface AgentToolItem {
   truncated?: boolean
   source?: string
   redacted?: boolean
+  /** 瞬态工具执行阶段；不进入历史回放。 */
+  toolProgress?: { stage: string; message: string }
+  /** 已通过服务端受控窗口的实时输出；最终 tool_result 到达后清空。 */
+  streamOutput?: { text: string; channel: string; startLine: number; seq: number }
+  /** 失败时的可操作恢复信息，不包含上游异常或堆栈。 */
+  recovery?: { retryable?: boolean; suggested_action?: string; repair_hint?: string; max_auto_repairs?: number }
   open?: boolean
   noAnim?: boolean
 }
@@ -1149,6 +1161,9 @@ interface StreamItem {
   args?: any
   result?: any
   status?: 'pending' | 'ok' | 'fail'
+  toolProgress?: AgentToolItem['toolProgress']
+  streamOutput?: AgentToolItem['streamOutput']
+  recovery?: AgentToolItem['recovery']
   open?: boolean
   mediaKind?: 'image'
   contentUrl?: string
@@ -1442,6 +1457,37 @@ function findPendingToolBlock(agent: StreamItem, name: unknown, callId?: unknown
   return [...blocks].reverse().find(
     (block) => block.type === 'tool' && block.tool === name && block.status === 'pending',
   ) as AgentToolItem | undefined
+}
+
+/** 用瞬态进度原地更新待执行 ToolCard；历史回放只依赖最终 tool_result。 */
+function applyToolProgress(agent: StreamItem | undefined, payload: any): void {
+  if (!agent) return
+  const target = findPendingToolBlock(agent, payload?.name, payload?.call_id)
+  if (!target) return
+  target.toolProgress = {
+    stage: String(payload?.stage || 'executing'),
+    message: String(payload?.message || '工具正在执行'),
+  }
+  target.open = true
+}
+
+/** 追加服务端受控输出块；按 seq 去重，避免网络重连边缘场景造成重复行。 */
+function appendToolOutput(agent: StreamItem | undefined, payload: any): void {
+  if (!agent) return
+  const target = findPendingToolBlock(agent, payload?.name, payload?.call_id)
+  const text = typeof payload?.text === 'string' ? payload.text : ''
+  if (!target || !text) return
+  const seq = Number(payload?.seq) || 0
+  if (target.streamOutput && seq > 0 && seq <= target.streamOutput.seq) return
+  const startLine = Math.max(1, Number(payload?.start_line) || target.streamOutput?.startLine || 1)
+  target.streamOutput = {
+    text: `${target.streamOutput?.text || ''}${text}`,
+    channel: String(payload?.channel || target.streamOutput?.channel || 'result'),
+    startLine: target.streamOutput?.startLine || startLine,
+    seq,
+  }
+  target.toolProgress = { stage: 'streaming', message: '正在接收安全输出' }
+  target.open = true
 }
 
 /** 把工具生成的媒体结果插入当前 ReAct 回合，保持其位于工具结果之后。 */
@@ -3525,6 +3571,12 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
         open: true,
       })
       break
+    case 'tool_progress':
+      applyToolProgress(getCurrentTurnAgent(buf), p)
+      break
+    case 'tool_output_delta':
+      appendToolOutput(getCurrentTurnAgent(buf), p)
+      break
     case 'tool_result': {
       const agent = getCurrentTurnAgent(buf)
       const target = agent ? findPendingToolBlock(agent, p.name, p.call_id) : undefined
@@ -3535,6 +3587,9 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
         target.truncated = p.truncated === true
         target.source = typeof p.source === 'string' ? p.source : undefined
         target.redacted = p.redacted === true
+        target.recovery = p.recovery && typeof p.recovery === 'object' ? p.recovery : undefined
+        target.toolProgress = undefined
+        if (p.ok) target.streamOutput = undefined
         if (p.ok && shouldKeepToolCardOpen(String(p.name || ''))) target.open = true
       }
       if (p.ok) {
@@ -3869,6 +3924,15 @@ function handleWsEvent(ev: WsServerEvent) {
       scrollToBottom()
       break
     }
+    case 'tool_progress': {
+      applyToolProgress(getCurrentTurnAgent(events.value), p)
+      break
+    }
+    case 'tool_output_delta': {
+      appendToolOutput(getCurrentTurnAgent(events.value), p)
+      scrollToBottom()
+      break
+    }
     case 'tool_result': {
       console.debug('[Agent] ToolCall 完成', {
         name: p.name,
@@ -3887,6 +3951,9 @@ function handleWsEvent(ev: WsServerEvent) {
         target.truncated = p.truncated === true
         target.source = typeof p.source === 'string' ? p.source : undefined
         target.redacted = p.redacted === true
+        target.recovery = p.recovery && typeof p.recovery === 'object' ? p.recovery : undefined
+        target.toolProgress = undefined
+        if (p.ok) target.streamOutput = undefined
         target.open = p.ok && shouldKeepToolCardOpen(String(p.name || ''))
       }
       if (p.ok) {

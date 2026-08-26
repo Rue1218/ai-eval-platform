@@ -117,6 +117,19 @@ def _stage_narration(text: str) -> str:
         return cleaned[:NARRATION_MAX_CHARS] + "…"
     return cleaned
 
+
+def _tool_call_event(call: Mapping[str, object]) -> dict:
+    """在 ToolNode 执行前持久化 ToolCall，保证瞬态输出可关联到现有卡片。"""
+    return make_event(
+        "tool_call",
+        {
+            "call_id": str(call.get("call_id") or ""),
+            "name": str(call.get("name") or ""),
+            "arguments": dict(call.get("arguments") or {}),
+        },
+    )
+
+
 logger = logging.getLogger("ai-eval.agent-react")
 
 
@@ -835,6 +848,9 @@ def build_react_nodes(
                     if narration
                     else []
                 )
+                # ToolCall 必须早于 ToolNode 的瞬态进度/输出帧落库并广播；前端
+                # 因而可以始终按 call_id 原地更新同一张卡，而非等待工具结束才建卡。
+                pending_events.extend(_tool_call_event(call) for call in pending_calls)
                 return {
                     "pending_tool": pending_calls[0],
                     "pending_tools": pending_calls[1:],
@@ -1019,16 +1035,19 @@ def build_react_nodes(
             budget = consume_tool_turn(budget)  # 可能抛 BUDGET_EXCEEDED
             if state.get("repeat_retry"):
                 # 重试回合中模型已换新调用，清除回环标记后正常执行
+                pending_events = list(thought_events)
+                pending_call = {
+                    "call_id": legacy_call_id,
+                    "name": tool,
+                    "arguments": arguments,
+                    "native": False,
+                }
+                pending_events.append(_tool_call_event(pending_call))
                 return {
-                    "pending_tool": {
-                        "call_id": legacy_call_id,
-                        "name": tool,
-                        "arguments": arguments,
-                        "native": False,
-                    },
+                    "pending_tool": pending_call,
                     "pending_tools": [],
                     "repeat_retry": False,
-                    "pending_events": thought_events,
+                    "pending_events": pending_events,
                     "budget": budget.to_dict(),
                 }
         except AppError as exc:
@@ -1039,15 +1058,16 @@ def build_react_nodes(
                 message=exc.message,
                 budget=budget.to_dict(),
             )
+        pending_call = {
+            "call_id": legacy_call_id,
+            "name": tool,
+            "arguments": arguments,
+            "native": False,
+        }
         return {
-            "pending_tool": {
-                "call_id": legacy_call_id,
-                "name": tool,
-                "arguments": arguments,
-                "native": False,
-            },
+            "pending_tool": pending_call,
             "pending_tools": [],
-            "pending_events": thought_events,
+            "pending_events": [*thought_events, _tool_call_event(pending_call)],
             "budget": budget.to_dict(),
         }
 

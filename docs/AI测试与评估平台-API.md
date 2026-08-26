@@ -2,13 +2,14 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.43 |
+| 文档版本 | V1.44 |
 | 对应 PRD | V1.13（功能唯一权威） |
-| 对应设计规范 | V1.3（错误码文案、确认卡字段名、调度中心规范） |
-| 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V0.5（LangGraph 单轮 Agent 与 WS 桥接；JSON 仍以本文为准） |
+| 对应设计规范 | V1.10（错误码文案、确认卡字段名、调度中心规范） |
+| 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.5.7（LangGraph 单轮 Agent 与 WS 桥接；JSON 仍以本文为准） |
 | 对应前端计划 | V1.5 |
 | 对应后端计划 | V1.5 |
 | 撰写日期 | 2026-08-18 |
+| 本轮修订 | 2026-08-26：V1.44 ToolCall 在执行前持久化，新增瞬态 `tool_progress` / `tool_output_delta`，并冻结原生工具的输出 Schema、权限边界和失败恢复字段。 |
 | 最近修订 | 2026-08-26：V1.43 思考增量允许合并下发；有思考链时 `think_final` 在 `response.completed` 之前。V1.42 Direct `/help`、未知斜杠与图内防御提示在业务事件后必须再发 `response.completed`（成功 `stop`，校验/防御 `error`），结束整轮生成态。V1.41 确认卡预填与 `confirm_ack` 入队前丢掉已删除的协议档/数据集/知识库 ID，避免 Worker 再报「协议档不存在或已删除」。V1.40 `/cancel` 与 `/stress` 按 §4.4 解禁（仍走 `user_message`）：`/cancel` 取消本会话非终态任务，`/stress` 发出质量任务确认卡且 `with_stress=true`，禁止 `kind=stress`。V1.39 原生工具卡片收起态副标题统一为 `ToolCall`，不在卡片摘要区回显文件路径、命令或写入内容；详细参数仍在展开区展示。V1.38 明确原生基础 ToolCall 卡片使用英文工具名，展开区统一显示 `ToolCall` 与 `输出`，文件、命令和代码/文档结果使用行号展示；MCP/平台短工具仍按下方中文名映射。2026-08-24：V1.24 修复 Agent 附件上下文链路：服务端校验文件归属并在模型窗口解析文本、PDF、DOCX、XLSX，图片按三协议图文内容块发送；历史消息附件补齐安全元数据，前端可在刷新后继续预览。同步调整输入框内附件按钮与用户消息附件位序。V1.23 扩展 Agent 附件契约，支持图片、Word 文档与多附件拖拽上传；保留 `POST /api/files` 后再以既有 `file_id` 引用的消息链路，补充图片缩略图、PDF/文本预览与 Office 文件打开/下载说明。V1.22 修复 V1.21 遗留：§4.4 标题「仅此三条」改「仅此四条」、§9 禁止清单「第四种」改「第五种」并补四类上行事件枚举、§4.3 `tool_result.source` 语义对齐 M7 `Observation.source`（溯源标识字符串，非 short\|long 枚举）、§4.3 共享流规则补 clarify/plan/confirm 持久化广播说明、§4.4 clarify 多副本限制注明、§9 Ask/Plan 补注非 Harness plan 事件；V1.21 配合 Harness 阶段 3/4 前端联调回写契约：§3.4 `context_meter` 加 `compacted` bool；§4.4 新增 `clarify_reply` 上行事件并明确四类上行事件边界。V1.20 及更早版本沿用历史修订记录。 |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
@@ -37,6 +38,8 @@
 > V1.35（2026-08-25）：对话确认卡由 LangGraph `reflect` 在 `delivery=confirm` 时发出（TaskSpec，`kind` 不得为 `stress`）；WS 短票 jti 用 Redis 单次消费；压测由 Worker 下发 stress 容器，曲线仍只走 `GET /api/tasks/{id}/stress-series`。
 >
 > V1.34（2026-08-25）：原生工具回传模型的单条结果上限统一为 8,000 字符（`read`/`bash`/`web_*` 对齐）；未读完时模型正文携带 `next_offset`。ToolCard 预览与 WS 投影不变。
+>
+> V1.44（2026-08-26）：ToolCall 在执行前落库，新增 `tool_progress` 与 `tool_output_delta` 瞬态帧；前者表达校验/执行/收尾阶段，后者仅传输服务端受控窗口内的行级输出。它们不落库、不占 `event_id`、不参与断线补发；`tool_result` 仍是唯一持久化终态。原生工具的输出 Schema、权限边界与恢复策略以 §4.3.1 为唯一契约。
 
 ---
 
@@ -1345,7 +1348,9 @@ Harness 回合必须丢到后台 Task，**不得**在 `receive` 循环里 `await
 | `assistant_message` | `{ "id", "role":"assistant", "text":"完整回答", "reply_latency_ms?", "created_at", "interim"? }`；落库、占 event_id，可通过历史回放。**同一回合可多条**：工具前后的阶段叙述与最终交付句按事件序各成一段，前端不得把后续叙述并进第一条。`interim=true` 为阶段叙述（建议 ≤200 字），不结束本轮生成态；缺省或 `false` 为可展示交付句。`text` 禁止是 Observation / `read` 全文。`response.completed` 仍是整轮结束 | AssistantBubble |
 | `response.completed` | `{ "finish_reason":"stop\|cancelled\|error", "role":"assistant" }`；本轮生成结束，落库、占 event_id | 结束流式状态 |
 | `tool_call` | `{ "call_id":"toolcall_xxx", "name": "model.list", "arguments": {} }`；`call_id` 为本轮模型生成或平台补齐的稳定非空字符串 | ToolCard pending；原生基础工具标题直接使用英文 `name`；MCP/平台短工具按下方中文名映射；展开区显示 `ToolCall` |
-| `tool_result` | `{ "call_id":"toolcall_xxx", "name": "model.list", "ok": true, "data": {} }` 或 `{ "call_id":"toolcall_xxx", "name":"model.list", "ok": false, "error": "..." }`；`call_id` 必须与对应 `tool_call` 相同。可选 `latency_ms`、`truncated`(bool，结果是否被截断)、`source`(溯源标识字符串，对齐 M7 `Observation.source`，如 `"file:uuid"`，可选)、`redacted`(bool，是否已脱敏)。`name="read"` 成功时 `data` 使用本节下方的受控投影 | ToolCard done；按 `call_id` 原地更新；`truncated`/`redacted` 为 true 时展示截断/脱敏徽标 |
+| `tool_progress` | `{ "call_id", "name", "stage":"validating\|executing\|finalizing", "message" }`；仅在对应 `tool_call` 已落库后下发；不落库、不占 event_id、不补发 | ToolCard 保持 pending，更新加载文案与阶段状态 |
+| `tool_output_delta` | `{ "call_id", "name", "seq", "channel":"document\|stdout\|result", "text", "start_line" }`；仅服务端安全预览块可发送，单 ToolCall 累计最多 4000 字符；不落库、不占 event_id、不补发 | ToolCard 按 `call_id`、`seq` 追加带行号输出；最终由 `tool_result` 替换成功态内容 |
+| `tool_result` | `{ "call_id":"toolcall_xxx", "name": "model.list", "ok": true, "data": {} }` 或 `{ "call_id":"toolcall_xxx", "name":"model.list", "ok": false, "error": "...", "recovery": {"retryable", "suggested_action", "repair_hint", "max_auto_repairs"} }`；`call_id` 必须与对应 `tool_call` 相同。可选 `latency_ms`、`truncated`(bool，结果是否被截断)、`source`(溯源标识字符串，对齐 M7 `Observation.source`，如 `"file:uuid"`，可选)、`redacted`(bool，是否已脱敏)。`name="read"` 成功时 `data` 使用本节下方的受控投影 | ToolCard done；按 `call_id` 原地更新；失败显示脱敏恢复建议；`truncated`/`redacted` 为 true 时展示截断/脱敏徽标 |
 | `clarify` | `{ "id":"uuid", "question":"...", "options":["..."]?, "context":"..."? }`；落库、占 event_id；澄清卡不建任务、不写 `sessions.pending_confirm`，仅暂停图等待用户回复 | ClarifyCard（独立组件，区别于 ConfirmCard）；用户回复后上行 `clarify_reply` 恢复图 |
 | `plan` | PlanArtifact `{ "intent":"...", "skill_id":"skill-benchmark", "slots":{...}, "tools_needed":["..."], "delivery":"...", "budget":{...}, "allows_replan":bool, "notes":"..."? }`；落库、占 event_id；Plan-Solve 规划产物对用户完全可见 | PlanCard（展示规划意图/技能/工具/预算/交付物）；用户可查看但无需 ack |
 | `confirm` | TaskSpec（§5 / §6）+ 非 TaskSpec 元数据 `confirm_author:{id,username,display_name?}` | ConfirmCard，等 `confirm_ack`；仅 `confirm_author.id` 可操作 |
@@ -1391,8 +1396,28 @@ Harness 回合必须丢到后台 Task，**不得**在 `receive` 循环里 `await
 - `truncated=true` 表示本次未读完整文件或受服务端内容预算限制；`content_truncated=true` 仅表示完整内容被截断，首期按整行裁剪，禁止截断半行；
 - `source` 使用不暴露宿主绝对路径的 `workspace:<相对路径>` 标识。
 
-共享流规则：`assistant_delta` 仅向同一 `team` 会话内的**在线**成员广播；
-`thought.stream="think"` 只发送给本轮发起连接，不向协作者广播。思考增量允许按间隔合并后再发，避免一字一帧；两类瞬态增量不落库、
+#### 4.3.1 原生工具规格、权限与恢复（V1.44）
+
+工具注册表是 `description`、输入 Schema、浏览器安全输出 Schema、权限与恢复策略的唯一来源。模型只接收描述和输入 Schema；`output_schema` 不包含完整 Observation。所有对象参数默认 `additionalProperties=false`，未知字段在执行器前以 `VALIDATION` 拒绝。
+
+| 工具 | 输入 Schema（必填；可选） | 成功 `tool_result.data` 安全投影 | 执行权限边界 | 失败恢复 |
+| --- | --- | --- | --- | --- |
+| `read` | `path`；`offset?`/`next_offset?`、`limit?≤2000` | `read.path/total_lines/start_line/end_line/next_offset/preview` | 仅会话工作区相对路径；≤10MB；模型正文≤8000 字符、浏览器预览≤4000 字符 | 仅 `TIMEOUT` 可修复重试；路径/分页错误提示相对路径或 `next_offset` |
+| `write` | `path`、`content` | `write.path/bytes_written/lines_written/preview` | 仅会话工作区；≤2MB；排他新建 + fsync，绝不覆盖已有文件 | 不自动重试；文件存在时改用新路径或先 `read` 后 `edit` |
+| `edit` | `path`、`old`、`new` | `edit.path/replacements=1/old_length/new_length` | 仅会话工作区；原子替换；`old` 必须匹配 | 不自动重跑；不匹配时返回邻近行脱敏建议，先 `read` 再调整 |
+| `bash` | `command` | `bash.exit_code/preview/preview_truncated` | 独立 Runner 的一次性 bwrap：无网络、唯一可写工作区、CPU/内存/进程/墙钟限制；黑名单纵深防御；不可用即 fail-closed | 仅 `TIMEOUT` 表示可缩小范围后再试；黑名单、沙箱不可用与策略拒绝绝不降级或自动重跑 |
+| `web_search` | `query`；`limit?≤10` | `search.query/results` | 仅服务端配置搜索服务；Key 不入事件/日志 | `TIMEOUT`/`UPSTREAM` 可调整关键词后重试一次 |
+| `web_fetch` | `url`；`format?=markdown\|text` | `web.title/final_url/content_type/preview` | 仅公开 HTTP(S)；每次 DNS 与重定向都做 SSRF 校验；禁止凭据、内网、回环和保留地址 | 仅 `TIMEOUT`/`UPSTREAM` 可重试；SSRF/非法 URL 不重试 |
+| `task` | `goal`、`steps[]` | `task.goal/steps[]` | 仅内存清单，不写库、不入队、不绕过确认卡 | 补齐目标/有限步骤后重试 |
+
+`task.create/status/cancel` 仍是 MCP 长任务桥：会话/用户/任务归属由平台注入，`task.create` 受活动任务占槽和“先评后压”门禁，且只入队/查询/取消，绝不在对话回合等待 Worker 终态。
+
+实时输出规则：`bash` 由 Runner 在 bwrap stdout 产生完整行时逐行转发；`read` 读取时按完整行块转发；`write` 仅在原子写入成功后转发与最终结果相同的受控内容预览。所有瞬态输出按 `call_id` 关联，累计最多 4000 字符；浏览器不得把它写入本地历史、持久事件或日志。断线期间的增量不补发，客户端继续等待同一 `call_id` 的最终 `tool_result`。
+
+失败恢复字段：`recovery.retryable` 只表示可在修复参数后再次发起调用，**不代表平台自动重试副作用工具**；`max_auto_repairs` 是 Agent reflect 的有界修复上限；`repair_hint` 必须脱敏，禁止出现堆栈、SQL、密钥、绝对路径或上游原文。
+
+共享流规则：`assistant_delta`、`tool_progress` 与 `tool_output_delta` 仅向同一 `team` 会话内的**在线**成员广播；
+`thought.stream="think"` 只发送给本轮发起连接，不向协作者广播。思考、工具进度与工具输出增量允许按间隔或完整行合并后再发，避免一字一帧；这些瞬态增量不落库、
 不占单调事件号；中途加入/断线重连者从后续增量继续看。有思考链时持久事件顺序为交付句 → `thought.stream="think_final"` → `response.completed`；`response.completed` 仍是整轮结束。
 `clarify`、`plan`、`confirm` 为持久化事件（落库 `ws_events`、占 event_id），向同一会话所有在线成员广播，断线重连按 `last_event_id` 补发。
 旧客户端可继续识别 `message` / `done`，但服务端不再发送这两个含义不明确的事件名。
@@ -2073,4 +2098,17 @@ LangGraph `reflect` 在规划 `delivery=confirm` 且复核通过后发出确认�
 | `backend/api/app/agent/think_stream.py` | 思考增量合并器 |
 | `backend/api/app/routers/ws.py` | 合并下发 think；think_final 插入 completed 之前 |
 | `backend/api/tests/test_think_stream.py` | 首帧立即下发、后续按间隔合并 |
+
+**V1.44（2026-08-26）— ToolCall 真实流式、权限与恢复契约**
+
+`tool_call` 必须先持久化，随后才允许同 `call_id` 的 `tool_progress`、`tool_output_delta` 出现；两个增量事件只给在线会话成员，不落库、不补发。`tool_result` 保持唯一持久化终态，失败结果携带脱敏 `recovery`。浏览器输出只来自注册表定义的安全投影，单次调用最多 4,000 字符，禁止回传完整 Observation。
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/harness/execution/registry.py` / `policy.py` | 声明并校验工具描述、输入/输出 Schema、权限边界与恢复策略。 |
+| `backend/api/app/agent/react.py` / `harness/execution/toolnode.py` | 先创建 ToolCall，再经 custom 通道下发进度与安全输出，最终写入 ToolResult。 |
+| `backend/api/app/routers/ws.py` | 将工具瞬态帧仅广播给在线同会话成员。 |
+| `backend/api/app/harness/execution/dispatch.py` / `sandbox.py` / `backend/runner/main.py` / `backend/shared/sandbox_kernel.py` | read/write/bash 的安全投影及 bash Runner NDJSON 转发。 |
+| `frontend/src/views/Agent.vue` / `components/agent/ToolCard.vue` / `api/types.ts` | ToolCard 阶段加载、行级实时输出、恢复建议和 `call_id`/`seq` 关联。 |
+| `backend/api/tests/test_harness_execution.py` / `test_sandbox_runner_client.py` / `backend/runner/tests/test_runner.py` | 覆盖契约登记、ToolNode 流、Runner NDJSON 转发。 |
 

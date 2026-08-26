@@ -84,6 +84,9 @@ class ToolDescriptor:
     timeout_s: float
     requires_confirmation: bool
     supports_streaming: bool
+    output_schema: Mapping[str, object] = field(default_factory=dict)  # 浏览器安全投影 Schema
+    permission_policy: Mapping[str, object] = field(default_factory=dict)
+    recovery_policy: Mapping[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,8 +102,10 @@ class Observation:
     arguments: Mapping[str, object] | None = None  # 本次调用参数（OR-4 防重复判断用）
     # 写入 ToolCard 的受控数据。不得放完整 read 内容；模型可见正文仍只在 text。
     display_data: Mapping[str, object] = field(default_factory=dict)
-    # 失败时给模型的可操作修复建议；禁止写入 tool_result / assistant_message。
+    # 失败时给模型与 ToolCard 的可操作修复建议；不包含异常原文或堆栈。
     repair_hint: str = ""
+    error_code: str | None = None
+    recovery: Mapping[str, object] = field(default_factory=dict)
 
 
 T = TypeVar("T")

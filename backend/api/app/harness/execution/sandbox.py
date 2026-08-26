@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
@@ -51,6 +51,7 @@ def run_sandboxed(
     limits: SandboxLimits | None = None,
     bwrap_bin: str = "/usr/bin/bwrap",
     max_output_chars: int = MODEL_TOOL_RESULT_MAX_CHARS,
+    on_output: Callable[[str], None] | None = None,
 ) -> str:
     """经 runner 在一次性 bwrap 沙箱内执行命令，返回 stdout；失败归一为 AppError。
 
@@ -75,14 +76,17 @@ def run_sandboxed(
     # 记录脱敏摘要（命令长度与目录，不打印命令原文/密钥）
     logger.info("bash 沙箱执行 len=%d dir=%s timeout=%s", len(cmd), sandbox_dir, timeout_s)
     request = Request(
-        _runner_url("/run"),
+        _runner_url("/run/stream" if on_output is not None else "/run"),
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
         headers={"Content-Type": "application/json"},
         method="POST",
     )
     try:
         with urlopen(request, timeout=timeout_s + 5) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
+            if on_output is None:
+                body = json.loads(resp.read().decode("utf-8"))
+            else:
+                return _read_stream_response(resp, on_output)
     except (URLError, OSError, ValueError):
         # runner 不可达/超时/响应损坏：fail-closed，禁止降级为裸 subprocess
         raise AppError(ErrorCode.VALIDATION, "沙箱引擎不可用") from None
@@ -92,6 +96,40 @@ def run_sandboxed(
         message = str((error or {}).get("message") or "沙箱执行失败")
         raise AppError(_ERROR_MAP.get(code, ErrorCode.INTERNAL), message)
     return str(body.get("output") or "（无输出）")
+
+
+def _read_stream_response(response: object, on_output: Callable[[str], None]) -> str:
+    """消费 runner NDJSON 输出，转发安全片段并按最终帧判定执行结果。"""
+    chunks: list[str] = []
+    result: Mapping[str, object] | None = None
+    try:
+        iterator = iter(response)  # type: ignore[arg-type]
+        for raw in iterator:
+            if not isinstance(raw, bytes):
+                continue
+            line = raw.strip()
+            if not line:
+                continue
+            frame = json.loads(line.decode("utf-8"))
+            if not isinstance(frame, Mapping):
+                raise ValueError("runner 流式帧格式无效")
+            if frame.get("type") == "output":
+                chunk = str(frame.get("chunk") or "")
+                if chunk:
+                    chunks.append(chunk)
+                    on_output(chunk)
+            elif frame.get("type") == "result":
+                result = frame
+    except (TypeError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("runner 流式响应无效") from exc
+    if result is None:
+        raise ValueError("runner 缺少结果帧")
+    if not result.get("ok"):
+        error = result.get("error") if isinstance(result.get("error"), Mapping) else {}
+        code = str(error.get("code") or "INTERNAL")
+        message = str(error.get("message") or "沙箱执行失败")
+        raise AppError(_ERROR_MAP.get(code, ErrorCode.INTERNAL), message)
+    return "".join(chunks).strip() or "（无输出）"
 
 
 def probe_sandbox(bwrap_bin: str = "/usr/bin/bwrap", timeout_s: float = 5.0) -> bool:

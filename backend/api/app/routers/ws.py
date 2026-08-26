@@ -766,8 +766,8 @@ async def _run_turn(
             serializable, config=graph_config, resume=resume_answer
         ):
             if mode == "custom":
-                kind = chunk["kind"]
-                text = chunk["text"]
+                kind = str(chunk.get("kind") or "")
+                text = str(chunk.get("text") or "")
                 if kind == "content" and text:
                     await _flush_think()
                     await SESSION_CONNECTION_HUB.broadcast_chunk(
@@ -784,6 +784,39 @@ async def _run_turn(
                     merged = coalescer.push(text)
                     if merged:
                         await _emit_think_delta(merged)
+                elif kind == "tool_progress":
+                    # 工具进度为瞬态帧：不占 event_id、不落库；断线后只以最终
+                    # tool_result 恢复卡片，避免重放半截执行状态或敏感输出。
+                    payload = {
+                        "call_id": str(chunk.get("call_id") or ""),
+                        "name": str(chunk.get("name") or ""),
+                        "stage": str(chunk.get("stage") or "executing"),
+                        "message": str(chunk.get("message") or "工具正在执行"),
+                    }
+                    await SESSION_CONNECTION_HUB.broadcast_chunk(
+                        session_id,
+                        lambda cursor, payload=payload: _frame(
+                            session_id, "tool_progress", cursor, payload
+                        ),
+                    )
+                elif kind == "tool_output_delta":
+                    # handler 仅能通过 ToolNode 的 4KB 受控窗口写入；此处不接受
+                    # 任何模型 Observation、完整文件或未脱敏的错误正文。
+                    payload = {
+                        "call_id": str(chunk.get("call_id") or ""),
+                        "name": str(chunk.get("name") or ""),
+                        "seq": int(chunk.get("seq") or 0),
+                        "channel": str(chunk.get("channel") or "result"),
+                        "text": str(chunk.get("text") or ""),
+                        "start_line": int(chunk.get("start_line") or 1),
+                    }
+                    if payload["call_id"] and payload["text"]:
+                        await SESSION_CONNECTION_HUB.broadcast_chunk(
+                            session_id,
+                            lambda cursor, payload=payload: _frame(
+                                session_id, "tool_output_delta", cursor, payload
+                            ),
+                        )
                 continue
             # 澄清卡 interrupt() 中断帧：翻译为 clarify 事件并保存待恢复状态
             if isinstance(chunk, dict) and "__interrupt__" in chunk:

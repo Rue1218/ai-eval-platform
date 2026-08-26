@@ -10,6 +10,7 @@ api 经 HTTP JSON 调用，不再持有 ``privileged``/``seccomp:unconfined``/
   max_output_chars}`` → ``{ok:true, output}`` 或 ``{ok:false,
   error:{code,message}}``。命令黑名单 + 工作区路径强校验（纵深防御，api
   侧有同等校验）；fail-closed：bwrap 缺失/启动失败一律返回 VALIDATION。
+- ``POST /run/stream``：NDJSON 输出块 + 最终结果，仅供 API 内网转发 ToolCard。
 - ``POST /probe``：bwrap 冒烟探测 → ``{ok:bool}``。
 - ``GET /health``：``{"status":"ok"}``。
 
@@ -20,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
@@ -81,46 +83,59 @@ class _SandboxHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         if self.path == "/run":
             self._handle_run()
+        elif self.path == "/run/stream":
+            self._handle_run_stream()
         elif self.path == "/probe":
             self._send(200, {"ok": probe_sandbox(bwrap_bin=BWRAP_BIN)})
         else:
             self._send(404, {"ok": False, "error": {"code": "VALIDATION", "message": "未知端点"}})
 
+    def _run_from_payload(self, *, on_output: Callable[[str], None] | None = None) -> str:
+        """校验请求后执行 bwrap；流式和非流式端点共用同一安全边界。"""
+        payload = self._read_body()
+        command = str(payload.get("command") or "")
+        sandbox_dir = str(payload.get("sandbox_dir") or "")
+        # 命令与路径校验（纵深防御，独立于 api 侧）
+        if not command.strip():
+            raise SandboxError("VALIDATION", "bash 命令为空")
+        blocked = check_bash_blocklist(command)
+        if blocked is not None:
+            raise SandboxError("VALIDATION", "bash 命令命中黑名单")
+        if not is_valid_session_workspace(sandbox_dir, WORKSPACE_ROOT):
+            raise SandboxError("VALIDATION", "非法工作区路径")
+        try:
+            timeout_s = float(payload.get("timeout_s", 15.0))
+        except (TypeError, ValueError):
+            raise SandboxError("VALIDATION", "timeout_s 非法") from None
+        if not 0 < timeout_s <= MAX_TIMEOUT_S:
+            raise SandboxError("VALIDATION", "timeout_s 超出允许范围")
+        limits_dict = payload.get("limits") if isinstance(payload.get("limits"), dict) else {}
+        try:
+            limits = SandboxLimits(**limits_dict)  # type: ignore[arg-type]
+        except TypeError:
+            raise SandboxError("VALIDATION", "limits 字段非法") from None
+        max_output = int(payload.get("max_output_chars", MAX_OUTPUT_CHARS))
+        if max_output <= 0 or max_output > 1_000_000:
+            max_output = MAX_OUTPUT_CHARS
+        return run_sandboxed(
+            command,
+            sandbox_dir=sandbox_dir,
+            timeout_s=timeout_s,
+            limits=limits,
+            bwrap_bin=BWRAP_BIN,
+            max_output_chars=max_output,
+            on_output=on_output,
+        )
+
+    def _send_stream(self, body: dict[str, Any]) -> None:
+        """发送一条 NDJSON 瞬态帧；该端点仅暴露在 Compose 内网。"""
+        payload = json.dumps(body, ensure_ascii=False).encode("utf-8") + b"\n"
+        self.wfile.write(payload)
+        self.wfile.flush()
+
     def _handle_run(self) -> None:
         try:
-            payload = self._read_body()
-            command = str(payload.get("command") or "")
-            sandbox_dir = str(payload.get("sandbox_dir") or "")
-            # 命令与路径校验（纵深防御，独立于 api 侧）
-            if not command.strip():
-                raise SandboxError("VALIDATION", "bash 命令为空")
-            blocked = check_bash_blocklist(command)
-            if blocked is not None:
-                raise SandboxError("VALIDATION", "bash 命令命中黑名单")
-            if not is_valid_session_workspace(sandbox_dir, WORKSPACE_ROOT):
-                raise SandboxError("VALIDATION", "非法工作区路径")
-            try:
-                timeout_s = float(payload.get("timeout_s", 15.0))
-            except (TypeError, ValueError):
-                raise SandboxError("VALIDATION", "timeout_s 非法") from None
-            if not 0 < timeout_s <= MAX_TIMEOUT_S:
-                raise SandboxError("VALIDATION", "timeout_s 超出允许范围")
-            limits_dict = payload.get("limits") if isinstance(payload.get("limits"), dict) else {}
-            try:
-                limits = SandboxLimits(**limits_dict)  # type: ignore[arg-type]
-            except TypeError:
-                raise SandboxError("VALIDATION", "limits 字段非法") from None
-            max_output = int(payload.get("max_output_chars", MAX_OUTPUT_CHARS))
-            if max_output <= 0 or max_output > 1_000_000:
-                max_output = MAX_OUTPUT_CHARS
-            output = run_sandboxed(
-                command,
-                sandbox_dir=sandbox_dir,
-                timeout_s=timeout_s,
-                limits=limits,
-                bwrap_bin=BWRAP_BIN,
-                max_output_chars=max_output,
-            )
+            output = self._run_from_payload()
         except SandboxError as exc:
             self._send(200, {"ok": False, "error": {"code": exc.code, "message": exc.message}})
             return
@@ -129,6 +144,28 @@ class _SandboxHandler(BaseHTTPRequestHandler):
             return
         self._send(200, {"ok": True, "output": output})
 
+    def _handle_run_stream(self) -> None:
+        """执行 bash 并逐行输出 NDJSON；最终帧不重复回传完整正文。"""
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        try:
+            self._run_from_payload(
+                on_output=lambda chunk: self._send_stream({"type": "output", "chunk": chunk})
+            )
+        except SandboxError as exc:
+            self._send_stream(
+                {"type": "result", "ok": False, "error": {"code": exc.code, "message": exc.message}}
+            )
+            return
+        except Exception:  # noqa: BLE001 —— 流式端点同样禁止泄露内部异常
+            self._send_stream(
+                {"type": "result", "ok": False, "error": {"code": "INTERNAL", "message": "沙箱执行失败"}}
+            )
+            return
+        self._send_stream({"type": "result", "ok": True})
 
 def serve(host: str = RUNNER_HOST, port: int = RUNNER_PORT) -> None:
     """启动沙箱 runner HTTP 服务（前台阻塞）。"""

@@ -45,6 +45,7 @@ def normalize(
             source=source,
             arguments=arguments,
             repair_hint=_repair_hint_from_error(None, exc),
+            error_code=str(getattr(getattr(exc, "code", None), "value", "INTERNAL")),
         )
     if raw is None:
         return Observation(
@@ -58,6 +59,7 @@ def normalize(
     data = raw.data or {}
     error = raw.error if isinstance(raw.error, dict) else {}
     error_message = str(error.get("message") or "") if error else ""
+    recovery = error.get("recovery") if isinstance(error.get("recovery"), Mapping) else {}
     # ``model_text`` 仅在服务端进入 Observation，不能透传到 ToolCard。read 以此
     # 保留按行读取的完整片段，``display`` 则是浏览器可见的短预览和元数据。
     text = str(
@@ -85,6 +87,8 @@ def normalize(
         arguments=arguments,
         display_data=dict(display),
         repair_hint="" if raw.ok else _repair_hint_from_error(error, None),
+        error_code=None if raw.ok else str(error.get("code") or "INTERNAL"),
+        recovery=dict(recovery),
     )
 
 

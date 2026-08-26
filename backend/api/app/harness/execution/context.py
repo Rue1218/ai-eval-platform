@@ -7,7 +7,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
+
+# 回调只存在于当前 ToolNode；通过 LangGraph custom 通道发送瞬态帧，不写入
+# GraphState、数据库或模型上下文。
+ToolProgressReporter = Callable[[str, str], None]
+ToolOutputReporter = Callable[[str, str, int | None], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,3 +26,5 @@ class ToolExecutionContext:
     sandbox_dir: str | None = None
     owned_file_ids: frozenset[str] = frozenset()
     call_id: str = ""
+    report_progress: ToolProgressReporter | None = None
+    report_output: ToolOutputReporter | None = None
