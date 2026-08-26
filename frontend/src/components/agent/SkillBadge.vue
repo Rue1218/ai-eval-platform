@@ -1,6 +1,6 @@
 <template>
   <!-- 技能徽标：思考卡卡头展示（规划 / ReAct / 复核，开发说明书 §7 / §16.7 冻结） -->
-  <span v-if="label" class="skill-badge" :data-skill="skillId">
+  <span v-if="label" class="skill-badge" :data-skill="skillId" :title="summary || label">
     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
       <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
     </svg>
@@ -10,13 +10,14 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { skillLabel } from '../../agent/skillLabels'
+import { skillLabel, skillSummary } from '../../agent/skillLabels'
 
 const props = defineProps<{
   skillId?: string | null
 }>()
 
 const label = computed(() => skillLabel(props.skillId))
+const summary = computed(() => skillSummary(props.skillId))
 </script>
 
 <style scoped>

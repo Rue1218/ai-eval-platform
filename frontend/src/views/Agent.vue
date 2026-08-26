@@ -482,20 +482,12 @@
               </div>
             </div>
 
-            <!-- 2.4.0 规划清单：复用 plan.slots.steps，不新增 WS 事件 -->
-            <div
-              v-else-if="item.type === 'plan'"
-              class="plan-card"
-              :class="{ 'no-anim': item.noAnim }"
-            >
-              <div class="row" style="gap: 8px">
-                <span class="badge"><i class="bdot"></i>规划清单</span>
-                <span class="small tertiary">{{ item.planIntent || '本轮步骤' }}</span>
-              </div>
-              <ol class="plan-steps">
-                <li v-for="(step, idx) in item.planSteps || []" :key="`${idx}-${step}`">{{ step }}</li>
-              </ol>
-            </div>
+            <!-- 2.4.0 PlanArtifact：完整可见，用户无需 ack（API.md §4.3 plan） -->
+            <PlanCard
+              v-else-if="item.type === 'plan' && item.plan"
+              :plan="item.plan"
+              :no-anim="item.noAnim"
+            />
 
             <!-- 2.4.1 澄清卡：interrupt() 暂停图后等待用户补充信息（仅回复，不建任务） -->
             <ClarifyCard
@@ -928,6 +920,8 @@ import type {
   SessionAuthor,
   Task,
   TaskSpec,
+  PlanArtifact,
+  AgentPrefs,
   WsServerEvent,
 } from '../api/types'
 import { getDefaultRunConfig, getDefaultStressConfig } from '../schemas/confirmCard'
@@ -938,9 +932,8 @@ import ProviderLogo from '../components/ProviderLogo.vue'
 import { getProviderLogoKey, type ProviderLogoKey } from '../utils/providerLogo'
 import { formatLatency } from '../utils/format'
 import { shouldKeepToolCardOpen } from '../utils/toolCard'
-import { skillLabel } from '../agent/skillLabels'
-import SkillBadge from '../components/agent/SkillBadge.vue'
 import ClarifyCard from '../components/agent/ClarifyCard.vue'
+import PlanCard from '../components/agent/PlanCard.vue'
 import ThoughtCard from '../components/agent/ThoughtCard.vue'
 import ToolCard from '../components/agent/ToolCard.vue'
 import MediaPreview from '../components/agent/MediaPreview.vue'
@@ -1023,6 +1016,7 @@ const agentProfileDisplayName = computed(() => activeAgentProfile.value?.name ||
 // 上下文度量与斜杠命令面板状态
 const currentContextMeter = ref<ContextMeterData | null>(null)
 const currentCompactSummary = ref<string | null>(null)
+const agentPrefs = ref<AgentPrefs | null>(null)
 const slashPaletteRef = ref<InstanceType<typeof SlashPalette> | null>(null)
 const paletteClosedManually = ref(false)
 const selectedSlashCmd = ref<string>('')
@@ -1302,6 +1296,7 @@ interface StreamItem {
   options?: string[] | null
   planIntent?: string
   planSteps?: string[]
+  plan?: PlanArtifact
   collapsed?: boolean
   latency_ms?: number
   truncated?: boolean
@@ -1506,13 +1501,36 @@ function getOrCreateAssistantBlock(agent: StreamItem): AgentAssistantItem {
   return block
 }
 
+function parsePlanArtifact(payload: Record<string, unknown>): PlanArtifact {
+  const slots = payload.slots && typeof payload.slots === 'object'
+    ? payload.slots as Record<string, unknown>
+    : {}
+  const tools = Array.isArray(payload.tools_needed)
+    ? payload.tools_needed.map((item) => String(item))
+    : []
+  const budget = payload.budget && typeof payload.budget === 'object'
+    ? payload.budget as Record<string, number>
+    : {}
+  return {
+    intent: String(payload.intent || ''),
+    skill_id: payload.skill_id ? String(payload.skill_id) : null,
+    slots,
+    tools_needed: tools,
+    delivery: String(payload.delivery || 'chat'),
+    budget,
+    allows_replan: payload.allows_replan === true,
+    notes: payload.notes ? String(payload.notes) : '',
+  }
+}
+
 function planItemFromPayload(payload: Record<string, unknown>, noAnim = false): StreamItem {
-  const slots = payload.slots && typeof payload.slots === 'object' ? payload.slots as Record<string, unknown> : {}
-  const rawSteps = slots.steps
+  const plan = parsePlanArtifact(payload)
+  const rawSteps = plan.slots.steps
   const planSteps = Array.isArray(rawSteps) ? rawSteps.map((step) => String(step)) : []
   return {
     type: 'plan',
-    planIntent: String(payload.intent || ''),
+    plan,
+    planIntent: plan.intent,
     planSteps,
     noAnim,
   }
@@ -1901,6 +1919,20 @@ function validateConfirmCard(item: StreamItem): boolean {
 /** 确认卡规范化：补齐 run / stress / case_source 默认值，保证折叠区 v-model 绑定路径始终存在（对齐 TaskSpec 契约）。 */
 function normalizeConfirmCard(card: any) {
   if (!card) return card
+  const prefs = agentPrefs.value
+  // 首单空槽用 /api/agent/prefs 预填；后端已给的值不得覆盖
+  if (prefs) {
+    if (!card.kind && prefs.last_kind) card.kind = prefs.last_kind
+    if ((!card.profile_ids || card.profile_ids.length === 0) && prefs.last_profile_ids?.length) {
+      card.profile_ids = [...prefs.last_profile_ids]
+    }
+    if (!card.dataset_id && prefs.last_dataset_id) card.dataset_id = prefs.last_dataset_id
+    if (!card.kb_id && prefs.last_kb_id) card.kb_id = prefs.last_kb_id
+    if (!card.gold_qa_id && prefs.last_gold_qa_id) card.gold_qa_id = prefs.last_gold_qa_id
+    if (card.with_stress == null && prefs.last_with_stress != null) {
+      card.with_stress = prefs.last_with_stress
+    }
+  }
   card.run = { ...getDefaultRunConfig(), ...(card.run || {}) }
   card.stress = { ...getDefaultStressConfig(), ...(card.stress || {}) }
   // testcase 确认卡的 case_source 可能由后端缺省下发，此处兜底初始化避免模板 v-model 崩溃
@@ -2271,6 +2303,11 @@ function handleSendClick() {
   const text = selectedSlashCmd.value ? `/${selectedSlashCmd.value}${rawInput ? ' ' + rawInput : ''}` : rawInput
   if (isUploadingAttachments.value) return
   if (!text && !hasUploadedAttachments.value) return
+  // /compact 仅会话 owner 可执行；服务端仍会再校验，此处提前 Toast 避免空跑
+  if (/^\/compact(?:\s|$)/i.test(text) && currentSession.value && !currentSession.value.can_manage) {
+    message.warning('仅会话 owner 可压缩')
+    return
+  }
 
   const files = [...stagedFiles.value]
   stagedFiles.value = []
@@ -3378,6 +3415,7 @@ function initWebSocket(sessionId: string, lastEventId = 0) {
     }
   })
   ws.onClosed((code) => {
+    if (code === 4401) message.info('短票过期，重新连接中')
     if (code === 4404) removeInaccessibleSession(sessionId)
   })
   ws.onEvent((ev: WsServerEvent) => {
@@ -4137,6 +4175,11 @@ function formatRelativeTime(dateStr?: string) {
 }
 
 onMounted(async () => {
+  try {
+    agentPrefs.value = await api.agent.getPrefs()
+  } catch {
+    agentPrefs.value = null
+  }
   await loadSessions()
   // 顶栏/输入框的 Agent 模型名改为按后端协议档动态解析，不再硬编码
   // 先解析协议档，再回放历史消息，保证助手消息头能显示正确供应商 Logo 与模型名称。
@@ -4725,19 +4768,5 @@ onBeforeUnmount(() => {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
   }
-}
-.plan-card {
-  border: 1px solid var(--border, #2a3344);
-  border-radius: 12px;
-  padding: 12px 14px;
-  background: var(--surface, #121826);
-}
-.plan-steps {
-  margin: 8px 0 0 18px;
-  padding: 0;
-  color: var(--text, #e8edf5);
-}
-.plan-steps li {
-  margin: 4px 0;
 }
 </style>

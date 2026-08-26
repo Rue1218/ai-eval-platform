@@ -22,6 +22,7 @@
               </div>
               <span class="status-badge-active">● 运行就绪</span>
             </div>
+            <div v-if="hintSummary" class="skill-hint">{{ hintSummary }}</div>
             <div class="skill-desc">{{ skill.desc }}</div>
           </div>
         </div>
@@ -125,7 +126,9 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { NModal } from 'naive-ui'
+import { skillSummary } from '../../agent/skillLabels'
 
 export interface SkillDetail {
   id: string
@@ -140,7 +143,7 @@ export interface SkillDetail {
   topP: number
 }
 
-defineProps<{
+const props = defineProps<{
   show: boolean
   skill: SkillDetail | null
 }>()
@@ -148,6 +151,8 @@ defineProps<{
 defineEmits<{
   (e: 'update:show', val: boolean): void
 }>()
+
+const hintSummary = computed(() => skillSummary(props.skill?.id))
 
 function getToolSimpleDesc(toolName: string): string {
   const map: Record<string, string> = {
@@ -201,6 +206,12 @@ function getToolSimpleDesc(toolName: string): string {
   font-size: 11px;
   color: var(--accent-success, #10b981);
   font-family: var(--font-mono, monospace);
+  font-weight: 600;
+}
+.skill-hint {
+  font-size: 12px;
+  color: var(--c-agent, #10b981);
+  margin-top: 6px;
   font-weight: 600;
 }
 .skill-desc {
