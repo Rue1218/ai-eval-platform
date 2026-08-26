@@ -30,7 +30,7 @@ from ..harness.execution import ensure_session_workspace
 from ..harness.execution.context import ToolExecutionContext
 from ..harness.execution.task_tools import cancel_task_safe
 from ..harness.memory import get_default_checkpointer, to_serializable_request, write_summary
-from ..harness.orchestration import handle_confirm_ack
+from ..harness.orchestration import drop_stale_asset_ids, handle_confirm_ack
 from ..harness.orchestration.confirm_spec import build_slash_stress_spec
 from ..harness.prompts import SystemVars, build_system_prompt
 from ..llm import ModelConfig, ModelRequest
@@ -974,6 +974,7 @@ async def _handle_stress(
     if get_active_tasks(db, session.id):
         raise AppError(ErrorCode.CONCURRENCY, "会话已有未完成任务")
     spec = build_slash_stress_spec(read_prefs(db, user.id))
+    drop_stale_asset_ids(db, spec)
     if spec.get("kind") == "stress":
         raise AppError(ErrorCode.VALIDATION, "对话路径不得发出压测确认卡")
     outgoing = dict(spec)

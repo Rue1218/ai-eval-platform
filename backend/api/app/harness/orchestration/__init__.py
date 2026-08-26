@@ -8,7 +8,7 @@ from .budget import (
     from_dict,
     is_budget_exhausted,
 )
-from .confirm import ConfirmAckResult, handle_confirm_ack
+from .confirm import ConfirmAckResult, drop_stale_asset_ids, handle_confirm_ack
 from .gates import check_session_active_task, is_long_tool
 from .plan import budget_for_plan, build_plan
 from .router import AgentMode, KnownSlash, decide_mode, detect_plan_intent
@@ -26,6 +26,7 @@ __all__ = [
     "consume_tool_turn",
     "decide_mode",
     "detect_plan_intent",
+    "drop_stale_asset_ids",
     "from_dict",
     "handle_confirm_ack",
     "is_budget_exhausted",

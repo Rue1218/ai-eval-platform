@@ -3,7 +3,7 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 编排层模块设计 |
-| 版本 | V0.4.4 |
+| 版本 | V0.4.5 |
 | 审查日期 | 2026-08-26 |
 | 文档性质 | 模块设计说明书（需求发散 + 架构设计） |
 | 适用模块 | M4 编排层（`app/harness/orchestration/` + `app/agent/`） |
@@ -581,6 +581,8 @@ def reflect_node(state: GraphState) -> dict:
 
 | 文件 | 操作 | 作用 |
 | :--- | :--- | :--- |
-| `docs/AI测试与评估平台-Harness-编排层.md` | 新增 V0.1 → 修订 V0.2 → 修订 V0.3 → 修订 V0.4 → 修订 V0.4.1 → 修订 V0.4.2 → 修订 V0.4.3 → 修订 V0.4.4 | V0.1–V0.4.3 见既有设计演进。V0.4.4：`/cancel` `/stress` 由 `ws.py` 收包循环落地；Direct 节点仅防御提示。 |
+| `docs/AI测试与评估平台-Harness-编排层.md` | 新增 V0.1 → 修订 V0.2 → 修订 V0.3 → 修订 V0.4 → 修订 V0.4.1 → 修订 V0.4.2 → 修订 V0.4.3 → 修订 V0.4.4 → 修订 V0.4.5 | V0.1–V0.4.4 见既有设计演进。V0.4.5：`drop_stale_asset_ids` 在发卡/入队前丢掉已删除协议档等资产 ID。 |
+| `backend/api/app/harness/orchestration/confirm.py` | 修改 | `drop_stale_asset_ids`：入队前过滤已删除资产 |
+| `backend/api/app/routers/ws.py` | 修改 | `/stress` 发卡前调用过滤 |
 
-本文档仅设计编排层，不改变任何 API、数据库、前端或 Agent 运行代码。
+本文档仅设计编排层，不新增对外 REST/WS 字段。
