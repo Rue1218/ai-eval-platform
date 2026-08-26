@@ -208,6 +208,8 @@ def test_chat_assemble_injects_skill_hints_without_tools() -> None:
     assert request.tools == ()
     assert "【可见技能】" in (request.system or "")
     assert "基准评测" in (request.system or "")
+    assert "【当前技能工作流】" not in (request.system or "")
+    assert "三协议调用" not in (request.system or "")
     assert "【会话摘要】" in (request.system or "")
     assert "上次已闲聊问好" in (request.system or "")
 
@@ -415,11 +417,58 @@ def test_plan_solve_uses_llm_planner_artifact() -> None:
     plan_payload = next(event["payload"] for event in pending if event["kind"] == "plan")
     assert plan_payload["intent"] == "模型规划意图"
     assert plan_payload["slots"]["steps"] == ["一步", "两步", "三步"]
+    react_systems = [
+        str(call.system or "")
+        for call in gateway.invoke_calls
+        if "【当前技能工作流】" in str(call.system or "")
+    ]
+    assert react_systems, "选中 skill-benchmark 后 ReAct 须按需注入工作流"
+    assert "三协议调用" in react_systems[0]
+    assert "六策略 LLM" not in react_systems[0]
     # 规划短调用 + ReAct 控制调用 + done 后无工具最终回答调用（基线行为，非本次新增）
     assert len(gateway.invoke_calls) == 3
     final_message = next(event for event in pending if event["kind"] == "assistant_message")
     # 收尾正文来自无工具最终回答（桩网关回 react JSON 无正文 → 中性兑底），非 Observation 原文
     assert "一步" not in final_message["payload"]["text"]
+
+
+def test_plan_solve_disabled_skill_returns_validation() -> None:
+    """SK-4：规划产出 skill-rag 时整轮 VALIDATION，不得发确认卡或工作流。"""
+
+    class _RagPlanGateway(_FakeGateway):
+        def invoke(self, request: ModelRequest, config: dict | None = None) -> ModelResponse:
+            self.invoke_calls.append(request)
+            if "任务规划" in str(request.messages):
+                return ModelResponse(
+                    text=(
+                        '{"protocol": "plan", "version": "plan.v1", '
+                        '"intent": "知识库评测", "skill_id": "skill-rag", '
+                        '"slots": {"steps": ["确认知识库", "入队", "等待报告"]}, '
+                        '"tools_needed": ["task"], "delivery": "confirm", '
+                        '"budget": {"model_calls": 4, "tool_turns": 4}, '
+                        '"allows_replan": true, "notes": ""}'
+                    ),
+                    latency_ms=2,
+                )
+            return super().invoke(request, config)
+
+    events = _collect(
+        LangGraphAgent(_RagPlanGateway()),
+        _serializable("按任务清单做知识库评测"),
+    )
+    pending = [
+        event
+        for mode, chunk in events
+        if mode == "updates"
+        for event in iter_pending_events(chunk)
+    ]
+    kinds = [event["kind"] for event in pending]
+    assert "plan" not in kinds
+    assert "confirm" not in kinds
+    assert kinds.count("response.completed") == 1
+    error = next(event for event in pending if event["kind"] == "error")
+    assert error["payload"]["code"] == "VALIDATION"
+    assert "技能未启用" in error["payload"]["message"]
 
 
 def test_plan_solve_fallback_on_upstream_error() -> None:

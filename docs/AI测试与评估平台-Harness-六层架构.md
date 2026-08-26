@@ -3,8 +3,8 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 六层架构 |
-| 版本 | V0.1.1 |
-| 审查日期 | 2026-08-25 |
+| 版本 | V0.1.2 |
+| 审查日期 | 2026-08-26 |
 | 文档性质 | 架构总览（六层职责 + 跨层数据流 + 范式映射 + 模块导航） |
 | 适用范围 | `/agent` 对话智能体的 Harness 运行时：提示词 / 上下文 / 记忆 / 编排 / 执行 / 反馈六层 |
 | 事实来源 | `backend/api/app/harness/`、`app/agent/`、`app/llm/`、`app/routers/ws.py`；各层模块设计文档；Harness 需求文档 V1.5.0 |
@@ -153,10 +153,10 @@ Harness 需求文档 §2.2 定义了七种设计模式，本项目当前落地�
 | ReAct | `react_agent ⇄ tools` 严格 JSON 协议循环（自建 StateGraph，**禁用 create_react_agent**） | ✅ 落地 |
 | Direct | 斜杠命令 L0 路由（不调模型） | ✅ 落地 |
 | Chat | 无工具流式回答 | ✅ 落地 |
-| Plan-and-Execute | 多技能/确认卡进入 `plan_solve` → ReAct 执行短工具 → `reflect` 收尾 | 🟢 已接线（中间叙述 / 有界重规划未做） |
-| Reflexion | OR-4 重复抑制 + reflect 确定性门禁与 `response.completed` 收尾 | 🟡 浅层版（clarify interrupt / 重规划属后续） |
+| Plan-and-Execute | 多技能/确认卡进入 `plan_solve` → ReAct 执行短工具 → `reflect` 收尾 | 🟢 已接线（native 中间叙述 + 有界重规划 ≤2） |
+| Reflexion | OR-4 重复抑制 + reflect 确定性门禁与 `response.completed` 收尾 | 🟢 clarify interrupt / 有界重规划已接线 |
 | Orchestrator-Worker | 进程级：确认卡回执 → PG 队列 → Worker（**禁止 LLM 子代理**） | ✅ 进程级 |
-| Mixture of Experts / Progressive Disclosure | `skills/registry.py` 技能目录（名称+一句话描述常驻）+ 附件/工具定义按需加载 | 🟡 技能为轻量 hint，非长文档专家 |
+| Mixture of Experts / Progressive Disclosure | `skills/registry.py` 常驻 Hint + `skills/workflows.py` 按 `plan.skill_id` 按需加载正文；Chat 不注入工作流 | 🟢 SK-1 已接线 |
 
 ---
 
@@ -214,6 +214,6 @@ Harness 需求文档 §2.2 定义了七种设计模式，本项目当前落地�
 
 | 文件 | 操作 | 作用 |
 | :--- | :--- | :--- |
-| `docs/AI测试与评估平台-Harness-六层架构.md` | 新增（V0.1.0）→ 修订 V0.1.1 | V0.1.0 六层架构总览与导航。V0.1.1 回写：默认预算 12/12；`plan_solve → react → reflect` 已接线；Plan-and-Execute 从「工具未接线」改为已接线（中间叙述与有界重规划仍属后续）。 |
+| `docs/AI测试与评估平台-Harness-六层架构.md` | 新增（V0.1.0）→ 修订 V0.1.1 → 修订 V0.1.2 | V0.1.1 见上。V0.1.2：Progressive Disclosure 按 `skill_id` 按需加载；Plan-and-Execute / Reflexion 中间叙述与有界重规划标为已接线。 |
 
 本次修订不改变任何 API、数据库表结构、前端或 Worker 运行契约。

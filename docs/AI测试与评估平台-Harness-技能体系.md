@@ -3,13 +3,13 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 技能体系模块设计 |
-| 版本 | V0.4.2 |
+| 版本 | V0.4.3 |
 | 审查日期 | 2026-08-26 |
 | 文档性质 | 模块设计说明书（需求发散 + 架构设计 + 接口签名） |
 | 适用模块 | M10 技能体系（MoE + Progressive Disclosure，§5） |
 | 上游权威 | Harness 需求文档 V1.4.4 §5、§2.2、§4.4、§7、§9；API.md V1.22 §4.3；PRD §5.1.2 |
 
-> **阅读关系**：本文是 Harness §5「技能体系需求」与 §9.2「技能体系」行的展开。`SkillHint` 契约在 M7 `contracts/artifacts.py`；技能路由节点在 M4 `orchestration/router.py`；本模块定义技能目录与按需装配策略。当前全部冻结未实现，属 M2/M3 演进项。
+> **阅读关系**：本文是 Harness §5「技能体系需求」与 §9.2「技能体系」行的展开。`SkillHint` 契约在 M7 `contracts/artifacts.py`；技能路由节点在 M4 `orchestration/router.py`；本模块定义技能目录与按需装配策略。Skill Hint 目录与 `skill_id ↔ kind` 映射已落地；完整工作流由 `skills/workflows.py` 按需加载（SK-1 Progressive Disclosure）。
 
 ---
 
@@ -19,7 +19,7 @@
 
 技能体系按评测域组织专家能力，采用 **Mixture of Experts（MoE）** + **Progressive Disclosure**：每个 skill 对外只暴露名称 + 一句话描述（Skill Hint），完整工作流按需加载；skill 路由节点按 `intent/skill_id` 选择 Skill Hint 注入上下文。本模块定义 4 个评测域 skill（`skill-benchmark`/`skill-rag`/`skill-testcase`/`skill-stress`）的目录、`skill_id ↔ 任务 kind` 映射、按需装配策略。
 
-当前全部冻结未实现（`app/harness/` 无独立技能包，§9.2 标注"无包"）；`SkillHint` 类型由 M7 提供，技能路由由 M4 承载，本模块是技能**目录与装配策略**的定义。
+Skill Hint 目录、启用门禁与完整工作流按需加载已落地（`app/harness/skills/`）；图状态只携带 `plan.skill_id` 索引。
 
 ### 1.2 边界
 
@@ -108,8 +108,8 @@ M4 路由节点（按 intent/skill_id 选 Hint）
 
 ### 3.3 Progressive Disclosure 装配（SK-1/SK-2）
 
-- **按需注入**：M4 路由节点按当前回合 `intent/skill_id` 选 1 个 `SkillHint`，交 M2 `assembly.py` 装入上下文 Skill Hint 段。
-- **不重复注入**：相邻回合 skill 注入互不污染——每回合只注入当前选中的 1 个 Hint，历史技能卡不逐一重复注入（SK-2）。
+- **按需注入**：无 `skill_id` 时 M2 注入常驻 4 条 Hint 目录；有 `plan.skill_id` 时只注入当前 1 条 Hint，并由 `load_skill_workflow` 装配【当前技能工作流】。
+- **不重复注入**：相邻回合 skill 注入互不污染——每回合只注入当前选中的 Hint + 工作流，历史技能卡不逐一重复注入（SK-2）。
 - **图状态只携带索引**：GraphState 只存 `plan.skill_id`（M3），不存完整技能文档；完整工作流由节点按需装配（Harness §2.2）。
 
 ### 3.4 MoE 路由（SK-4）
@@ -197,10 +197,11 @@ def list_hints() -> list[SkillHint]:
 
 | 文件 | 阶段 | 操作 | 对应需求 |
 | :--- | :--- | :--- | :--- |
-| `app/harness/skills.py`（或 M4 `router.py` 内注册） | M2/M3 | 新增（待定位置，见 §7） | SK-1/SK-3、K-1/K-3 |
+| `app/harness/skills/registry.py` | 阶段 4 | 已落地 | SK-1/SK-3、K-1/K-3 |
+| `app/harness/skills/workflows.py` | 阶段 4 后 | 新增 | SK-1 完整工作流按需加载 |
 | `app/harness/contracts/artifacts.py` | 阶段 4（M7） | 已含 `SkillHint` | SK-1 |
 | `app/harness/orchestration/router.py` | 阶段 4（M4） | 修改（按 skill_id 路由） | SK-2/SK-4 |
-| `backend/api/tests/test_harness_skills.py` | M2/M3 | 新增 | K-A1~K-A5 |
+| `backend/api/tests/test_harness_skills.py` | 阶段 4 后 | 新增 | K-A1~K-A5 |
 
 > M10 无独立包（§9.2）；技能目录数据位置待定（§7-D1）。
 
@@ -226,14 +227,14 @@ def list_hints() -> list[SkillHint]:
 
 | 编号 | 问题 | 裁决 |
 | :--- | :--- | :--- |
-| M10-D1 | 技能目录数据位置 | **待定**：候选 `app/harness/skills.py`（新模块）或 M4 `router.py` 内注册；倾向独立 `skills.py`（便于 `/api/slash-commands` 对齐），M2/M3 启动时定 |
+| M10-D1 | 技能目录数据位置 | **已决**：独立 `app/harness/skills/`（`registry.py` 目录 + `workflows.py` 正文），便于与前端 `skillLabels.ts` 对齐 |
 | M10-D2 | Skill Hint 常驻范围 | 4 个评测域 Hint 常驻，正文按需加载 |
 | M10-D3 | 未接入 skill 行为 | `DISABLED_SKILLS`（当前含 `skill-rag`）抛 `VALIDATION`，禁 mock |
 | M10-D4 | `stress` skill 特殊性 | 不手选，由质量任务 `succeeded` + `with_stress=true` 派生；对话路径不得发 `kind=stress` 确认卡 |
 | M10-D5 | 六专家分工 | 当前不落地；如需独立 skill 须需求变更评审（Harness §5 现状） |
 | M10-D6 | 前后端一致性 | 后端 `list_hints` 与 `/api/slash-commands` 对齐（SK-5） |
 
-> **M10-D1 是本模块唯一遗留待定项**：技能目录数据位置（独立 `skills.py` vs M4 内注册）需 M2/M3 启动时定。
+> **M10-D1** 已落地为独立 `app/harness/skills/` 包。
 
 ---
 
@@ -261,7 +262,12 @@ def list_hints() -> list[SkillHint]:
 
 | 文件 | 操作 | 作用 |
 | :--- | :--- | :--- |
-| `docs/AI测试与评估平台-Harness-技能体系.md` | 新增 V0.3 → 修订 V0.4 → 修订 V0.4.1 → 修订 V0.4.2 | 前版见上；V0.4.2：`get_hint(skill_id)` 已实现并导出，供装配层按目录取 Hint。 |
+| `docs/AI测试与评估平台-Harness-技能体系.md` | 新增 V0.3 → 修订 V0.4 → 修订 V0.4.1 → 修订 V0.4.2 → 修订 V0.4.3 | 前版见上；V0.4.2：`get_hint(skill_id)` 已实现并导出。V0.4.3：落地 Progressive Disclosure——`workflows.py` 按 `plan.skill_id` 按需加载完整工作流；Chat 只常驻 Hint；未接入 `skill-rag` 规划即 `VALIDATION`。 |
+| `backend/api/app/harness/skills/workflows.py` | 新增 | 启用技能的完整工作流正文；`load_skill_workflow` 未启用抛 VALIDATION |
+| `backend/api/app/harness/skills/registry.py` | 修改 | `plan_skill_id` 只返回索引 |
+| `backend/api/app/harness/context/assembly.py` | 修改 | `skill_hints_for_turn`；`assemble` 可选【当前技能工作流】段 |
+| `backend/api/app/agent/react.py` / `plan_solve.py` / `routing.py` | 修改 | 规划选中技能后按需装配；`skill-rag` 规划失败 |
+| `backend/api/tests/test_harness_skills.py` | 新增 | K-A1~K-A5 |
 
 
 

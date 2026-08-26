@@ -61,3 +61,28 @@ def test_l2_rejects_one_char_think_frames() -> None:
     _down(trace, "response.completed", 4, {"finish_reason": "stop", "role": "assistant"})
     with pytest.raises(ProbeAssertion, match="一字一帧"):
         ExpectMatcher(trace).chat_turn_contract()
+
+
+def test_l2_rejects_hidden_chain_of_thought() -> None:
+    """API.md：think_final 不得下发 Here's a thinking process 隐藏稿。"""
+    trace = TraceRecorder()
+    _down(trace, "user_message", 1, {"content": "hi", "role": "user"})
+    _down(
+        trace,
+        "thought",
+        1,
+        {"text": "Here's a thinking process: Analyze User Input", "stream": "think"},
+    )
+    _down(trace, "assistant_message", 2, {"text": "ok", "role": "assistant"})
+    _down(
+        trace,
+        "thought",
+        3,
+        {
+            "text": "Here's a thinking process: Analyze User Input",
+            "stream": "think_final",
+        },
+    )
+    _down(trace, "response.completed", 4, {"finish_reason": "stop", "role": "assistant"})
+    with pytest.raises(ProbeAssertion, match="隐藏思维链"):
+        ExpectMatcher(trace).chat_turn_contract()

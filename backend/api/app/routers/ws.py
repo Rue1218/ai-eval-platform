@@ -22,7 +22,11 @@ from ..adapters import StreamAborted
 from ..agent import LangGraphAgent
 from ..agent.attachments import model_content_for_message, normalize_attachment_refs
 from ..agent.graph import iter_pending_events
-from ..agent.think_stream import ThinkStreamCoalescer
+from ..agent.think_stream import (
+    ReasoningDisplayFilter,
+    ThinkStreamCoalescer,
+    sanitize_reasoning,
+)
 from ..config import settings
 from ..db import SessionLocal
 from ..errors import AppError, ErrorCode
@@ -742,6 +746,7 @@ async def _run_turn(
         }
         thinking: list[str] = []
         coalescer = ThinkStreamCoalescer()
+        display = ReasoningDisplayFilter()
         deferred_completed: list[dict] = []
 
         async def _emit_think_delta(text: str) -> None:
@@ -781,9 +786,10 @@ async def _run_turn(
                     )
                 elif kind == "reasoning" and text:
                     thinking.append(text)
-                    merged = coalescer.push(text)
-                    if merged:
-                        await _emit_think_delta(merged)
+                    for visible in display.feed(text):
+                        merged = coalescer.push(visible)
+                        if merged:
+                            await _emit_think_delta(merged)
                 continue
             # 澄清卡 interrupt() 中断帧：翻译为 clarify 事件并保存待恢复状态
             if isinstance(chunk, dict) and "__interrupt__" in chunk:
@@ -811,14 +817,15 @@ async def _run_turn(
                 )
 
         await _flush_think()
-        if thinking:
+        final_think = sanitize_reasoning("".join(thinking))
+        if final_think:
             await _emit_persistent(
                 db,
                 websocket,
                 state,
                 session_id,
                 "thought",
-                {"text": "".join(thinking), "stream": "think_final"},
+                {"text": final_think, "stream": "think_final"},
             )
         for event in deferred_completed:
             await _translate_event(

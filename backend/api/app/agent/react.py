@@ -1,7 +1,7 @@
 """ReAct 循环子图节点（M4 阶段 2，OR-2/OR-4）。
 
 ``react_agent_node`` 每轮：经 ``assemble`` 按 CX-4 装配上下文（Persona →
-Skill Hint → 摘要 → 阶段输入 + observations）并用 ``select_tool_defs``
+Skill Hint → 技能工作流 → 摘要 → 阶段输入 + observations）并用 ``select_tool_defs``
 最小注入短原生工具（CX-5）→ 结构化模型调用 → ``parse_react`` 严格解析 → 写
 ``pending_tool``（工具路径）或完成后切换到自然语言流式回答（对话路径）。
 ``react_route`` 条件边按 ``pending_tool`` 分流；``tools_route`` 在预算耗尽时
@@ -25,7 +25,7 @@ from app.harness.context import (
     assemble,
     compact_summary_from_configurable,
     select_tool_defs,
-    skill_hint_lines,
+    skill_hints_for_turn,
     to_observation,
 )
 from app.harness.context.observation import MODEL_TOOL_RESULT_MAX_CHARS, truncate_with_marker
@@ -40,6 +40,7 @@ from app.harness.orchestration import (
     is_budget_exhausted,
 )
 from app.harness.prompts import SystemVars, build_system_prompt, parse_react
+from app.harness.skills import load_skill_workflow, plan_skill_id
 from app.llm import ModelRequest, ModelResponse, NativeToolCall
 
 # 阶段输入：ReAct 协议说明（M1 阶段输入，随节点注入，不做持久化）
@@ -689,11 +690,22 @@ def build_react_nodes(
                 NATIVE_TOOL_STAGE_INPUT if native_tool_mode else REACT_STAGE_INPUT
             ) + "\n（本轮无可用工具，请直接回答。）"
         observations_text = _inject_observations(state)
+        # SK-1：图状态只带 skill_id；完整工作流按需装配，未启用技能在此 VALIDATION。
+        skill_id = plan_skill_id(state)
+        try:
+            hints = skill_hints_for_turn(skill_id)
+            workflow = load_skill_workflow(skill_id) if skill_id else None
+        except AppError as exc:
+            return _react_error_state(
+                state,
+                code=exc.code.value,
+                message=exc.message,
+            )
         # ws.py 的 agent_system_prompt 是协议档/平台配置的唯一入口，ReAct 只能在
         # 其后按 CX-4 装配 Skill Hint / 摘要 / 阶段输入，不能用固定 Persona 覆盖。
         configured_system = str(serializable.get("system") or "").strip()
         persona = configured_system or build_system_prompt(
-            SystemVars(skill_hints=tuple(skill_hint_lines()))
+            SystemVars(skill_hints=tuple(hints))
         )
         tool_hints = "\n".join(
             f"- {definition['name']}：{definition['description']}" for definition in tool_defs
@@ -715,7 +727,8 @@ def build_react_nodes(
             stage_parts.append(observations_text)
         assembled = assemble(
             system=persona,
-            skill_hints=skill_hint_lines(),
+            skill_hints=hints,
+            skill_workflow=workflow,
             summary=compact_summary_from_configurable(configurable),
             stage_input="\n\n".join(part for part in stage_parts if part),
             messages=list(serializable.get("messages") or ()),

@@ -28,6 +28,7 @@ from app.harness.orchestration import (
     is_budget_exhausted,
 )
 from app.harness.orchestration import from_dict as budget_from_dict
+from app.harness.skills import assert_skill_enabled
 from app.llm import ModelRequest
 
 # 规划阶段输入（§2.1：仅复杂任务调 LLM，一次短调用出 plan.v1 JSON）
@@ -161,6 +162,12 @@ def build_plan_solve_subgraph(gateway: object | None = None) -> dict:
         else:
             try:
                 plan, used_llm = _generate_plan(state, raw, fail_reason, gateway)
+            except AppError as exc:
+                return _failed(exc.code.value, exc.message)
+        if plan.skill_id:
+            # SK-4：未接入 skill 不得产出规划/确认卡，禁止 mock succeeded。
+            try:
+                assert_skill_enabled(plan.skill_id)
             except AppError as exc:
                 return _failed(exc.code.value, exc.message)
         budget = budget_for_plan(plan)

@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from app.agent.think_stream import ThinkStreamCoalescer
+from app.agent.think_stream import (
+    DISPLAY_REASONING_SUMMARY,
+    ReasoningDisplayFilter,
+    ThinkStreamCoalescer,
+    sanitize_reasoning,
+)
 
 
 class _Clock:
@@ -42,3 +47,39 @@ def test_flush_emits_remainder_before_content() -> None:
     assert coalescer.push("开") == "开"
     assert coalescer.push("始") is None
     assert coalescer.flush() == "始"
+
+
+def test_sanitize_hidden_english_cot_to_summary() -> None:
+    """API.md：英文隐藏 CoT 不得原样下发，应收成可展示摘要。"""
+    raw = (
+        "Here's a thinking process:\n"
+        "Analyze User Input: The user asked 用一句话介绍你自己.\n"
+        "Identify Key Points: introduce the assistant."
+    )
+    assert sanitize_reasoning(raw) == DISPLAY_REASONING_SUMMARY
+    assert "Analyze User Input" not in sanitize_reasoning(raw)
+
+
+def test_sanitize_keeps_chinese_thought() -> None:
+    """中文思考原文保留，只剥英文包装头。"""
+    raw = "Here's a thinking process:\n用户在闲聊问好，用一句话介绍评测助手即可。"
+    out = sanitize_reasoning(raw)
+    assert "用户在闲聊问好" in out
+    assert "Here's a thinking process" not in out
+
+
+def test_display_filter_holds_wrapper_then_emits_summary_once() -> None:
+    """流式：包装头暂扣；判定隐藏后只下发一次摘要，后续英文增量丢弃。"""
+    filt = ReasoningDisplayFilter()
+    assert filt.feed("Here's a th") == []
+    visible = filt.feed("inking process:\nAnalyze User Input: hello")
+    assert visible == [DISPLAY_REASONING_SUMMARY]
+    assert filt.feed("Identify Key Points: more") == []
+
+
+def test_display_filter_flushes_held_chinese() -> None:
+    """流式：暂扣后一旦可判定为中文思考，整段放出。"""
+    filt = ReasoningDisplayFilter()
+    assert filt.feed("用") == []
+    assert filt.feed("户想了解平台能力") == ["用户想了解平台能力"]
+    assert filt.feed("，直接介绍。") == ["，直接介绍。"]

@@ -2,14 +2,14 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.43 |
+| 文档版本 | V1.44 |
 | 对应 PRD | V1.13（功能唯一权威） |
 | 对应设计规范 | V1.3（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V0.5（LangGraph 单轮 Agent 与 WS 桥接；JSON 仍以本文为准） |
 | 对应前端计划 | V1.5 |
 | 对应后端计划 | V1.5 |
 | 撰写日期 | 2026-08-18 |
-| 最近修订 | 2026-08-26：V1.43 思考增量允许合并下发；有思考链时 `think_final` 在 `response.completed` 之前。V1.42 Direct `/help`、未知斜杠与图内防御提示在业务事件后必须再发 `response.completed`（成功 `stop`，校验/防御 `error`），结束整轮生成态。V1.41 确认卡预填与 `confirm_ack` 入队前丢掉已删除的协议档/数据集/知识库 ID，避免 Worker 再报「协议档不存在或已删除」。V1.40 `/cancel` 与 `/stress` 按 §4.4 解禁（仍走 `user_message`）：`/cancel` 取消本会话非终态任务，`/stress` 发出质量任务确认卡且 `with_stress=true`，禁止 `kind=stress`。V1.39 原生工具卡片收起态副标题统一为 `ToolCall`，不在卡片摘要区回显文件路径、命令或写入内容；详细参数仍在展开区展示。V1.38 明确原生基础 ToolCall 卡片使用英文工具名，展开区统一显示 `ToolCall` 与 `输出`，文件、命令和代码/文档结果使用行号展示；MCP/平台短工具仍按下方中文名映射。2026-08-24：V1.24 修复 Agent 附件上下文链路：服务端校验文件归属并在模型窗口解析文本、PDF、DOCX、XLSX，图片按三协议图文内容块发送；历史消息附件补齐安全元数据，前端可在刷新后继续预览。同步调整输入框内附件按钮与用户消息附件位序。V1.23 扩展 Agent 附件契约，支持图片、Word 文档与多附件拖拽上传；保留 `POST /api/files` 后再以既有 `file_id` 引用的消息链路，补充图片缩略图、PDF/文本预览与 Office 文件打开/下载说明。V1.22 修复 V1.21 遗留：§4.4 标题「仅此三条」改「仅此四条」、§9 禁止清单「第四种」改「第五种」并补四类上行事件枚举、§4.3 `tool_result.source` 语义对齐 M7 `Observation.source`（溯源标识字符串，非 short\|long 枚举）、§4.3 共享流规则补 clarify/plan/confirm 持久化广播说明、§4.4 clarify 多副本限制注明、§9 Ask/Plan 补注非 Harness plan 事件；V1.21 配合 Harness 阶段 3/4 前端联调回写契约：§3.4 `context_meter` 加 `compacted` bool；§4.4 新增 `clarify_reply` 上行事件并明确四类上行事件边界。V1.20 及更早版本沿用历史修订记录。 |
+| 最近修订 | 2026-08-26：V1.44 思考链只下发可展示摘要，隐藏 CoT（`Here's a thinking process` / `Analyze User Input`）由服务端替换，不原样推给前端。V1.43 思考增量允许合并下发；有思考链时 `think_final` 在 `response.completed` 之前。V1.42 Direct `/help`、未知斜杠与图内防御提示在业务事件后必须再发 `response.completed`（成功 `stop`，校验/防御 `error`），结束整轮生成态。V1.41 确认卡预填与 `confirm_ack` 入队前丢掉已删除的协议档/数据集/知识库 ID，避免 Worker 再报「协议档不存在或已删除」。V1.40 `/cancel` 与 `/stress` 按 §4.4 解禁（仍走 `user_message`）：`/cancel` 取消本会话非终态任务，`/stress` 发出质量任务确认卡且 `with_stress=true`，禁止 `kind=stress`。V1.39 原生工具卡片收起态副标题统一为 `ToolCall`，不在卡片摘要区回显文件路径、命令或写入内容；详细参数仍在展开区展示。V1.38 明确原生基础 ToolCall 卡片使用英文工具名，展开区统一显示 `ToolCall` 与 `输出`，文件、命令和代码/文档结果使用行号展示；MCP/平台短工具仍按下方中文名映射。2026-08-24：V1.24 修复 Agent 附件上下文链路：服务端校验文件归属并在模型窗口解析文本、PDF、DOCX、XLSX，图片按三协议图文内容块发送；历史消息附件补齐安全元数据，前端可在刷新后继续预览。同步调整输入框内附件按钮与用户消息附件位序。V1.23 扩展 Agent 附件契约，支持图片、Word 文档与多附件拖拽上传；保留 `POST /api/files` 后再以既有 `file_id` 引用的消息链路，补充图片缩略图、PDF/文本预览与 Office 文件打开/下载说明。V1.22 修复 V1.21 遗留：§4.4 标题「仅此三条」改「仅此四条」、§9 禁止清单「第四种」改「第五种」并补四类上行事件枚举、§4.3 `tool_result.source` 语义对齐 M7 `Observation.source`（溯源标识字符串，非 short\|long 枚举）、§4.3 共享流规则补 clarify/plan/confirm 持久化广播说明、§4.4 clarify 多副本限制注明、§9 Ask/Plan 补注非 Harness plan 事件；V1.21 配合 Harness 阶段 3/4 前端联调回写契约：§3.4 `context_meter` 加 `compacted` bool；§4.4 新增 `clarify_reply` 上行事件并明确四类上行事件边界。V1.20 及更早版本沿用历史修订记录。 |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
 > V1.25（2026-08-25）：细化 ReAct `read` 的 `tool_result.data`，新增受控行范围、文件统计与短预览投影。完整 `content` 仅供服务端下一模型回合使用，禁止写入 WebSocket 事件或 ToolCard。
@@ -1184,7 +1184,7 @@ RAG：同 kb + gold 版本。
 }
 ```
 
-`agent_reasoning` 由 Agent 新回合读取。`enabled=true` 时请求模型生成并流式返回可展示的 reasoning summary；前端以 `thought` 折叠卡显示，助手正文仍只走 `assistant_delta` / `assistant_message`。`effort` 支持 `low`、`medium`、`high`、`xhigh`、`max`，具体可用值由上游模型决定；普通不支持推理控制的模型不会发送未知专用字段。Gemini 3.x 通过 OpenAI 兼容接口时，适配器发送 `extra_body.google.thinking_config.thinking_level` 与 `include_thoughts=true`，`xhigh/max` 映射为 Gemini 的 `high`；返回的 `reasoning_content`、`reasoning`、`thought` 或 `thinking` 增量统一归入 `thought`。关闭时网关过滤 reasoning 增量，支持显式关闭的模型同时发送关闭参数；Gemini 3.x 即使关闭展示，也不额外请求 thought summary。该配置不暴露隐藏思维链，不改变公共事件头中的 `session_id` / `task_id`。
+`agent_reasoning` 由 Agent 新回合读取。`enabled=true` 时请求模型生成并流式返回可展示的 reasoning summary；前端以 `thought` 折叠卡显示，助手正文仍只走 `assistant_delta` / `assistant_message`。若上游返回英文隐藏思维链（如 `Here's a thinking process` / `Analyze User Input`），服务端替换为短摘要后再下发 `thought.stream=think` 与 `think_final`，中文思考原文保留。`effort` 支持 `low`、`medium`、`high`、`xhigh`、`max`，具体可用值由上游模型决定；普通不支持推理控制的模型不会发送未知专用字段。Gemini 3.x 通过 OpenAI 兼容接口时，适配器发送 `extra_body.google.thinking_config.thinking_level` 与 `include_thoughts=true`，`xhigh/max` 映射为 Gemini 的 `high`；返回的 `reasoning_content`、`reasoning`、`thought` 或 `thinking` 增量统一归入 `thought`。关闭时网关过滤 reasoning 增量，支持显式关闭的模型同时发送关闭参数；Gemini 3.x 即使关闭展示，也不额外请求 thought summary。该配置不暴露隐藏思维链，不改变公共事件头中的 `session_id` / `task_id`。
 
 `notify` 的 URL/Token 仅 PUT 写入、GET 只给布尔或掩码。M1 可只返回 `agent_profile_id` 与并发默认；其余 M4 补齐。
 
@@ -2073,4 +2073,14 @@ LangGraph `reflect` 在规划 `delivery=confirm` 且复核通过后发出确认�
 | `backend/api/app/agent/think_stream.py` | 思考增量合并器 |
 | `backend/api/app/routers/ws.py` | 合并下发 think；think_final 插入 completed 之前 |
 | `backend/api/tests/test_think_stream.py` | 首帧立即下发、后续按间隔合并 |
+
+**V1.44（2026-08-26）— 思考链不暴露隐藏 CoT**
+
+`thought.stream=think` / `think_final` 只承载可展示摘要。上游英文隐藏思维链由服务端替换为短中文摘要；中文思考原文保留。不新增对外字段。
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/agent/think_stream.py` | `sanitize_reasoning` / `ReasoningDisplayFilter` |
+| `backend/api/app/routers/ws.py` | 流式与 think_final 走摘要过滤 |
+| `backend/api/tests/test_think_stream.py` / `test_harness_probe_l2.py` | 隐藏 CoT 替换与探针拒绝原文 |
 

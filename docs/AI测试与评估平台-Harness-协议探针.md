@@ -3,11 +3,11 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness WebSocket 协议探针 |
-| 版本 | V0.2 |
+| 版本 | V0.3 |
 | 审查日期 | 2026-08-26 |
 | 文档性质 | 模块设计 + 联调验收工具说明书 |
 | 适用模块 | `tools/harness-ws-probe/`（黑盒 WS 客户端） |
-| 上游权威 | API.md V1.43 §4；PRD 事件名与错误码；Harness 编排层确认卡 / 斜杠 / 思考链规则 |
+| 上游权威 | API.md V1.44 §4；PRD 事件名与错误码；Harness 编排层确认卡 / 斜杠 / 思考链规则 |
 
 > **阅读关系**：本文描述如何用与浏览器相同的四类上行 JSON 抓取 `/ws/agent` 下行公共头与事件，断言 Harness 行为。不新增对外 REST/WS 字段。内部函数单测仍由 `test_ws_protocol.py` / `test_confirm_ack.py` 负责。
 
@@ -55,7 +55,7 @@ login + ws-ticket
 | :--- | :--- | :--- | :--- |
 | L0 契约 | 否（收包循环拦截 / 校验） | 短票、关闭码、第五种事件、`/help` `/cancel` `/stress`、取消确认卡、幂等键、重连补发 | CI 必跑 matcher；真连接走 CLI 或 `HARNESS_PROBE_BASE` |
 | L1 编排 | 否（确认卡路径） | `confirm_ack` 入队（强制 `sample_size=1`、`with_stress=false`） | 需 `--allow-enqueue` |
-| L2 真模型 | 是 | 闲聊思考链：`think_final` 在 `response.completed` 之前；禁止一字一帧 | `--suite l2` / `--suite chat` |
+| L2 真模型 | 是 | 闲聊思考链：`think_final` 在 `response.completed` 之前；禁止一字一帧；禁止隐藏 CoT 原文 | `--suite l2` / `--suite chat` |
 
 L0 八条：
 
@@ -102,7 +102,9 @@ traces 不写 Cookie、ticket、API Key、完整系统提示词。`raw` 落盘�
 
 | 文件 | 操作 | 作用 |
 | :--- | :--- | :--- |
-| `docs/AI测试与评估平台-Harness-协议探针.md` | 新增 V0.1 → 修订 V0.2 | V0.2：L2 闲聊思考链契约（`think_final` 在 `completed` 之前，禁止一字一帧） |
+| `docs/AI测试与评估平台-Harness-协议探针.md` | 新增 V0.1 → 修订 V0.2 → 修订 V0.3 | V0.2：L2 闲聊思考链顺序与一字一帧。V0.3：L2 拒绝隐藏 CoT 原文。 |
+| `tools/harness-ws-probe/harness_ws_probe/expect.py` | 修改 | `chat_turn_contract` 拒绝 `Here's a thinking process` |
+| `backend/api/tests/test_harness_probe_l2.py` | 修改 | 隐藏 CoT 用例 |
 | `tools/harness-ws-probe/harness_ws_probe/` | 新增 | 客户端、录制、期望、L0/L1/L2 场景、CLI |
 | `backend/api/tests/test_harness_probe_l0.py` | 新增 | L0 契约套件 |
 | `backend/api/tests/test_harness_probe_l1.py` | 新增 | L1 入队门禁套件 |
