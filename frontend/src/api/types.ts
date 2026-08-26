@@ -707,6 +707,26 @@ export interface PlanArtifact {
   notes?: string
 }
 
+/** 结构化任务状态机（TaskSessionState 契约） */
+export interface TaskSessionState {
+  protocol?: string
+  version?: string
+  goal: string
+  phase: 'exploring' | 'verifying' | 'converging' | 'completed' | 'blocked'
+  completed_steps: string[]
+  current_step: string
+  next_actions: string[]
+  failed_steps: Array<{ step: string; reason: string; repair_hint?: string }>
+  current_hypothesis?: string
+  confirmed_facts: string[]
+  evidence: string[]
+  rejected_hypotheses: Array<{ hypothesis: string; reason: string; evidence_ref?: string }>
+  missing_info: string[]
+  can_deliver: boolean
+  blocked_reason?: string
+  notes?: string
+}
+
 /** 跨会话下单偏好（API.md §3.4 GET /api/agent/prefs） */
 export interface AgentPrefs {
   last_kind?: string | null

@@ -12,17 +12,29 @@ from .artifacts import (
     validate_plan_artifact,
 )
 from .events import EVENT_VERSION, NodeEvent, NodeEventKind, make_event
+from .task_state import (
+    FailedStep,
+    RejectedHypothesis,
+    TaskPhase,
+    TaskSessionState,
+    evolve_task_state,
+)
 
 __all__ = [
     "EVENT_VERSION",
+    "FailedStep",
     "NodeEvent",
     "NodeEventKind",
     "Observation",
     "PlanArtifact",
+    "RejectedHypothesis",
     "SkillHint",
+    "TaskPhase",
+    "TaskSessionState",
     "ToolCall",
     "ToolDescriptor",
     "ToolResult",
+    "evolve_task_state",
     "from_dict",
     "make_event",
     "to_dict",

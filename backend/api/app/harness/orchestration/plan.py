@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from app.errors import AppError, ErrorCode
-from app.harness.contracts import PlanArtifact, validate_plan_artifact
+from app.harness.contracts import PlanArtifact, TaskSessionState, validate_plan_artifact
 from app.harness.orchestration.budget import Budget, from_dict
 from app.harness.orchestration.router import short_tool_names
 from app.harness.prompts import parse_plan_protocol
@@ -155,4 +155,49 @@ def budget_for_plan(plan: PlanArtifact, base: Budget | None = None) -> Budget:
     return Budget(
         model_calls=int(plan_budget.get("model_calls", base_budget.model_calls)),
         tool_turns=int(plan_budget.get("tool_turns", base_budget.tool_turns)),
+    )
+
+
+def task_state_from_plan(plan: PlanArtifact) -> TaskSessionState:
+    """从 PlanArtifact 初始化结构化任务状态机（TaskSessionState）。
+
+    优先读取 slots 中携带的 task_state 字典；缺省时根据 intent 与 steps 自动初始化，
+    将尚未执行的步骤与信息缺口显式结构化，作为抗漂移与防提前总结的基准底座。
+    """
+    slots = plan.slots if isinstance(plan.slots, dict) else {}
+    embedded = slots.get("task_state")
+    if isinstance(embedded, dict):
+        return TaskSessionState.from_dict(embedded)
+
+    raw_steps = slots.get("steps")
+    steps: list[str] = (
+        [str(item).strip() for item in raw_steps if str(item).strip()]
+        if isinstance(raw_steps, list | tuple)
+        else []
+    )
+    current_step = steps[0] if steps else ""
+    next_actions = tuple(steps[1:]) if len(steps) > 1 else ()
+
+    # 初始关键信息缺口：将分析/诊断类步骤视为待消除信息缺口
+    missing_info = tuple(
+        s for s in steps if "说明" not in s and "列出" not in s and "确认卡" not in s
+    ) or tuple(steps)
+
+    return TaskSessionState(
+        protocol="task_state",
+        version="v1",
+        goal=plan.intent or "完成用户指定任务",
+        phase="exploring",
+        completed_steps=(),
+        current_step=current_step,
+        next_actions=next_actions,
+        failed_steps=(),
+        current_hypothesis=str(slots.get("hypothesis") or ""),
+        confirmed_facts=(),
+        evidence=(),
+        rejected_hypotheses=(),
+        missing_info=missing_info,
+        can_deliver=False,
+        blocked_reason="",
+        notes=plan.notes,
     )

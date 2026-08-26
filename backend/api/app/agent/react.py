@@ -29,7 +29,7 @@ from app.harness.context import (
     to_observation,
 )
 from app.harness.context.observation import MODEL_TOOL_RESULT_MAX_CHARS, truncate_with_marker
-from app.harness.contracts import Observation, make_event
+from app.harness.contracts import Observation, TaskSessionState, evolve_task_state, make_event
 from app.harness.execution import NativeToolResultStore, runtime_thread_id
 from app.harness.execution.dispatch import resolve_read_offset
 from app.harness.memory import GraphState, rebuild_model_config
@@ -398,12 +398,82 @@ def _plan_tools_needed(state: GraphState) -> tuple[str, ...]:
     return tuple(str(item) for item in raw if str(item).strip())
 
 
+def _format_task_state_input(task_state_data: Mapping[str, object]) -> str:
+    """把 TaskSessionState 格式化为置顶的任务状态黑板提示词。"""
+    try:
+        ts = TaskSessionState.from_dict(task_state_data)
+    except Exception:
+        return ""
+
+    parts = ["【当前规划】\n【结构化任务看板 (Session Task State)】"]
+    if ts.goal:
+        parts.append(f"🎯 终局目标：{ts.goal}")
+    parts.append(f"🚦 当前阶段：{ts.phase}")
+    if ts.current_hypothesis:
+        parts.append(f"💡 当前验证假设：{ts.current_hypothesis}")
+
+    if ts.confirmed_facts:
+        fact_lines = "\n".join(f"  - {fact}" for fact in ts.confirmed_facts[:5])
+        parts.append(f"🔍 已确立事实 ({len(ts.confirmed_facts)}项)：\n{fact_lines}")
+
+    if ts.evidence:
+        ev_lines = "\n".join(f"  - {item}" for item in ts.evidence[:5])
+        parts.append(f"📌 关键技术证据 ({len(ts.evidence)}条)：\n{ev_lines}")
+
+    if ts.rejected_hypotheses:
+        rej_lines = "\n".join(
+            f"  - {item.hypothesis}（原因：{item.reason}）"
+            for item in ts.rejected_hypotheses[:3]
+        )
+        parts.append(f"❌ 已排除/证伪方向 ({len(ts.rejected_hypotheses)}项，切勿重复踩坑)：\n{rej_lines}")
+
+    if ts.failed_steps:
+        fail_lines = "\n".join(
+            f"  - {item.step}（原因：{item.reason}）"
+            for item in ts.failed_steps[:3]
+        )
+        parts.append(f"⚠️ 曾失败步骤 ({len(ts.failed_steps)}项)：\n{fail_lines}")
+
+    if ts.missing_info:
+        missing_lines = "\n".join(f"  - {info}" for info in ts.missing_info[:5])
+        parts.append(f"⏳ 关键信息缺口 (Missing Info，严禁收尾！)：\n{missing_lines}")
+
+    if ts.current_step:
+        parts.append(f"📋 当前推进步骤：{ts.current_step}")
+    if ts.next_actions:
+        action_lines = "\n".join(f"  {idx}. {act}" for idx, act in enumerate(ts.next_actions[:3], start=1))
+        parts.append(f"⏭️ 紧随动作建议：\n{action_lines}")
+
+    parts.append(
+        "【交付与收尾门禁】：\n"
+        f"当前 can_deliver={ts.can_deliver}。"
+        + (
+            "关键信息缺口尚未闭环，严禁直接以最终结论形式交付回答！必须优先调用工具探查缺失项。"
+            if ts.missing_info or not ts.can_deliver
+            else "关键证据已完备，可组织最终交付结论。"
+        )
+    )
+    return "\n".join(parts)
+
+
 def _plan_stage_input(state: GraphState) -> str:
-    """把 PlanArtifact 投影成模型可见的规划约束，不把 Observation 原文写入。"""
+    """把 TaskSessionState 或 PlanArtifact 投影成模型可见的规划与状态约束。"""
+    task_state_data = state.get("task_state")
+    if isinstance(task_state_data, Mapping):
+        formatted = _format_task_state_input(task_state_data)
+        if formatted:
+            return formatted
+
     plan = state.get("plan")
     if not isinstance(plan, dict):
         return ""
-    steps = plan.get("slots", {}).get("steps") if isinstance(plan.get("slots"), dict) else None
+    slots = plan.get("slots") if isinstance(plan.get("slots"), dict) else {}
+    if isinstance(slots.get("task_state"), Mapping):
+        formatted = _format_task_state_input(slots["task_state"])
+        if formatted:
+            return formatted
+
+    steps = slots.get("steps") if isinstance(slots, dict) else None
     step_lines = ""
     if isinstance(steps, list) and steps:
         step_lines = "\n".join(f"{index}. {item}" for index, item in enumerate(steps, start=1))
@@ -726,6 +796,18 @@ def build_react_nodes(
         stage_parts = [stage_input]
         if tool_hints:
             stage_parts.append("【本轮可用平台工具】\n" + tool_hints)
+        task_state_data = state.get("task_state")
+        current_task_state = (
+            TaskSessionState.from_dict(task_state_data)
+            if isinstance(task_state_data, Mapping)
+            else None
+        )
+        if current_task_state is not None and state.get("observations"):
+            current_task_state = evolve_task_state(
+                current_task_state, tuple(state.get("observations") or ())
+            )
+            state["task_state"] = current_task_state.to_dict()
+
         plan_input = _plan_stage_input(state)
         if plan_input:
             stage_parts.append(plan_input)
@@ -864,7 +946,7 @@ def build_react_nodes(
                 # ToolCall 必须早于 ToolNode 的瞬态进度/输出帧落库并广播；前端
                 # 因而可以始终按 call_id 原地更新同一张卡，而非等待工具结束才建卡。
                 pending_events.extend(_tool_call_event(call) for call in pending_calls)
-                return {
+                result_payload = {
                     "pending_tool": pending_calls[0],
                     "pending_tools": pending_calls[1:],
                     "native_messages": [_native_tool_message(native_calls, response.text)],
@@ -872,6 +954,9 @@ def build_react_nodes(
                     "repeat_retry": False,
                     "budget": budget.to_dict(),
                 }
+                if current_task_state is not None:
+                    result_payload["task_state"] = current_task_state.to_dict()
+                return result_payload
 
             if (
                 native_tool_mode
@@ -888,6 +973,8 @@ def build_react_nodes(
                     close_turn=close_turn,
                 )
                 completed["budget"] = budget.to_dict()
+                if current_task_state is not None:
+                    completed["task_state"] = current_task_state.to_dict()
                 return completed
 
             try:
@@ -973,6 +1060,8 @@ def build_react_nodes(
                     close_turn=close_turn,
                 )
                 finished["budget"] = budget.to_dict()
+                if current_task_state is not None:
+                    finished["task_state"] = current_task_state.to_dict()
                 return finished
             # 工具路径：重复调用抑制（OR-4）→ 预算 → 写 pending_tool
             # strip 兜底：模型输出工具名偶带尾随空白/换行（如 "read\n"），

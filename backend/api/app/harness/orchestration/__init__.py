@@ -10,7 +10,7 @@ from .budget import (
 )
 from .confirm import ConfirmAckResult, drop_stale_asset_ids, handle_confirm_ack
 from .gates import check_session_active_task, is_long_tool
-from .plan import budget_for_plan, build_plan
+from .plan import budget_for_plan, build_plan, task_state_from_plan
 from .router import AgentMode, KnownSlash, decide_mode, detect_plan_intent
 
 __all__ = [
@@ -31,4 +31,5 @@ __all__ = [
     "handle_confirm_ack",
     "is_budget_exhausted",
     "is_long_tool",
+    "task_state_from_plan",
 ]

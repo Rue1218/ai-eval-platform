@@ -504,6 +504,12 @@
           </button>
         </div>
 
+        <!-- 任务状态机抽屉卡片（在输入框上方浮动展示任务流与动态状态，格式为 task 1 ：XXXXX） -->
+        <TaskStateDrawer
+          :plan="latestPlan"
+          :is-generating="isGenerating"
+        />
+
         <div
           class="composer-card"
           :class="{ generating: isGenerating, 'drag-active': isDragActive }"
@@ -728,6 +734,7 @@ import ThoughtCard from '../components/agent/ThoughtCard.vue'
 import ToolCard from '../components/agent/ToolCard.vue'
 import MediaPreview from '../components/agent/MediaPreview.vue'
 import AttachmentPreview from '../components/agent/AttachmentPreview.vue'
+import TaskStateDrawer from '../components/agent/TaskStateDrawer.vue'
 import MarkdownView from '../components/agent/MarkdownView.vue'
 import SlashPalette from '../components/agent/SlashPalette.vue'
 import { SYSTEM_SLASH_COMMANDS } from '../agent/slashRegistry'
@@ -780,6 +787,15 @@ const turnLatencyMs = ref(0)
 const awaitingConfirm = computed(() =>
   events.value.some((item) => item.type === 'confirm' && !item.isAcked) && !isGenerating.value
 )
+const latestPlan = computed<PlanArtifact | null>(() => {
+  for (let i = events.value.length - 1; i >= 0; i--) {
+    const it = events.value[i]
+    if (it.type === 'plan' && it.plan) {
+      return it.plan
+    }
+  }
+  return null
+})
 const harnessStageLabel = computed(() => {
   if (harnessStage.value === 'plan') return '规划中'
   if (harnessStage.value === 'plan_solve') return 'Plan-Solve 执行中'
