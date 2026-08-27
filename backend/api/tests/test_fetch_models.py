@@ -1,8 +1,8 @@
 """/api/profiles/fetch-models 端点及 fetch_remote_models 统一适配单测。"""
 
 import json
-from urllib.error import HTTPError
 from unittest.mock import MagicMock, patch
+from urllib.error import HTTPError
 
 from app.adapters import fetch_remote_models
 
