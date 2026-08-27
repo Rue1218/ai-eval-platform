@@ -791,6 +791,7 @@ export interface WsServerEvent {
     | 'progress'
     | 'report'
     | 'error'
+    | 'session_title'
     | 'pong'
   session_id: string
   task_id: string | null
