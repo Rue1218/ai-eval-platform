@@ -23,6 +23,11 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
+import anthropic
+import openai
+from anthropic import Anthropic
+from openai import OpenAI
+
 from .errors import AppError, ErrorCode
 
 # 契约支持的三种协议（与 protocol_profiles 的 CHECK 约束一致）
@@ -494,9 +499,78 @@ def _post_json(url: str, body: dict, headers: dict, timeout_s: float) -> dict:
         return json.loads(response.read().decode())
 
 
+def _openai_client(*, base_url: str, api_key: str, timeout_s: float) -> OpenAI:
+    """创建单次 OpenAI SDK 客户端，显式关闭 SDK 默认重试以保持调用语义。"""
+    return OpenAI(
+        api_key=api_key,
+        # SDK 的资源路径本身不含版本段，因此在已规范化的服务根地址后补 /v1。
+        base_url=f"{base_url.rstrip('/')}/v1",
+        timeout=timeout_s,
+        max_retries=0,
+    )
+
+
+def _anthropic_client(*, base_url: str, api_key: str, timeout_s: float) -> Anthropic:
+    """创建单次 Anthropic SDK 客户端，避免连接或限流时改变既有重试次数。"""
+    return Anthropic(
+        api_key=api_key,
+        # Anthropic SDK 自身会追加 /v1/messages，故这里只传服务根地址。
+        base_url=base_url,
+        timeout=timeout_s,
+        max_retries=0,
+    )
+
+
+def _sdk_response_dict(response: object) -> dict:
+    """把 SDK 的 Pydantic 响应转换为现有归一化函数可消费的 JSON 字典。"""
+    model_dump = getattr(response, "model_dump", None)
+    if callable(model_dump):
+        payload = model_dump(mode="json")
+    else:
+        payload = response
+    if not isinstance(payload, Mapping):
+        raise TypeError("SDK 响应不是对象")
+    return {str(key): value for key, value in payload.items()}
+
+
+def _openai_chat_create(client: object, body: dict) -> object:
+    """调用 Chat Completions，并把兼容网关私有字段经 SDK 原样合入请求体。"""
+    request = dict(body)
+    vendor_body: dict[str, object] = {}
+    if "thinking" in request:
+        vendor_body["thinking"] = request.pop("thinking")
+    if "extra_body" in request:
+        # 当前 Gemini 兼容档要求请求 JSON 中存在字面 ``extra_body`` 字段；
+        # SDK 的 extra_body 参数会合并请求体，故此处保留一层同名键。
+        vendor_body["extra_body"] = request.pop("extra_body")
+    create = client.chat.completions.create  # type: ignore[attr-defined]
+    if vendor_body:
+        return create(**request, extra_body=vendor_body)
+    return create(**request)
+
+
+def _openai_responses_create(client: object, body: dict) -> object:
+    """调用 Responses API；当前平台字段均为 SDK 公共参数，无需额外展开。"""
+    return client.responses.create(**body)  # type: ignore[attr-defined]
+
+
+def _anthropic_messages_create(
+    client: object,
+    body: dict,
+    anthropic_version: str | None,
+) -> object:
+    """调用 Messages API，并保留协议档指定的 anthropic-version 请求头。"""
+    return client.messages.create(  # type: ignore[attr-defined]
+        **body,
+        extra_headers={"anthropic-version": anthropic_version or "2023-06-01"},
+    )
+
+
 def _norm_usage(data: dict, *, anthropic: bool) -> dict:
     """把三协议各自的 usage 字段归一为统一 token 计数结构。"""
     usage = data.get("usage") or {}
+    if not isinstance(usage, Mapping):
+        usage = {}
     if anthropic:
         # Anthropic 使用 input_tokens / output_tokens 命名，total 需自行求和
         prompt = int(usage.get("input_tokens") or 0)
@@ -506,8 +580,10 @@ def _norm_usage(data: dict, *, anthropic: bool) -> dict:
             "completion_tokens": completion,
             "total_tokens": prompt + completion,
         }
-    prompt = int(usage.get("prompt_tokens") or 0)
-    completion = int(usage.get("completion_tokens") or 0)
+    # OpenAI Chat 与部分兼容网关使用 prompt/completion_tokens；官方
+    # Responses 对象使用 input/output_tokens。两种响应均需维持平台统一口径。
+    prompt = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
+    completion = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
     total = int(usage.get("total_tokens") or (prompt + completion))
     return {"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": total}
 
@@ -651,10 +727,9 @@ def call_protocol(
         raise AppError(ErrorCode.VALIDATION, f"协议不受支持：{protocol}")
 
     base = _service_base_url(base_url)
-    headers = {"Content-Type": "application/json"}
+    client: object | None = None
 
     if protocol == "openai_chat":
-        url = f"{base}/v1/chat/completions"
         chat: list[dict] = ([{"role": "system", "content": system}] if system else []) + _adapt_messages(messages, protocol)
         body: dict = {
             "model": model,
@@ -675,10 +750,7 @@ def call_protocol(
             effort=reasoning_effort,
             responses=False,
         )
-        headers["Authorization"] = f"Bearer {api_key}"
-
     elif protocol == "openai_responses":
-        url = f"{base}/v1/responses"
         body = {"model": model, "input": _adapt_messages(messages, protocol), "max_output_tokens": max_tokens}
         native_tools = _adapt_tools(tools, protocol)
         if native_tools:
@@ -692,10 +764,7 @@ def call_protocol(
             effort=reasoning_effort,
             responses=True,
         )
-        headers["Authorization"] = f"Bearer {api_key}"
-
     else:  # anthropic_messages
-        url = f"{base}/v1/messages"
         body = {
             "model": model,
             "messages": _adapt_messages(messages, protocol),
@@ -714,22 +783,30 @@ def call_protocol(
             }
             # Anthropic extended thinking 要求 temperature 使用默认值 1。
             body["temperature"] = 1.0
-        headers["x-api-key"] = api_key
-        headers["anthropic-version"] = anthropic_version or "2023-06-01"
-
     started = time.perf_counter()
     try:
-        data = _post_json(url, body, headers, timeout_s)
-    except HTTPError as exc:
-        # 仅回显状态码，绝不把请求头（含 Key）或上游原文带给浏览器
-        raise AppError(ErrorCode.UPSTREAM, f"上游返回 {exc.code}") from exc
-    except TimeoutError as exc:
+        if protocol == "openai_chat":
+            client = _openai_client(base_url=base, api_key=api_key, timeout_s=timeout_s)
+            response = _openai_chat_create(client, body)
+        elif protocol == "openai_responses":
+            client = _openai_client(base_url=base, api_key=api_key, timeout_s=timeout_s)
+            response = _openai_responses_create(client, body)
+        else:
+            client = _anthropic_client(base_url=base, api_key=api_key, timeout_s=timeout_s)
+            response = _anthropic_messages_create(client, body, anthropic_version)
+        data = _sdk_response_dict(response)
+    except (openai.APITimeoutError, anthropic.APITimeoutError) as exc:
         raise AppError(ErrorCode.TIMEOUT, "上游调用超时") from exc
-    except URLError as exc:
-        reason = str(getattr(exc, "reason", "")).lower()
-        if "timed out" in reason:
-            raise AppError(ErrorCode.TIMEOUT, "上游调用超时") from exc
+    except (openai.APIStatusError, anthropic.APIStatusError) as exc:
+        # 仅回显状态码，绝不把请求头（含 Key）或上游原文带给浏览器。
+        raise AppError(ErrorCode.UPSTREAM, f"上游返回 {exc.status_code}") from exc
+    except (openai.APIConnectionError, anthropic.APIConnectionError) as exc:
         raise AppError(ErrorCode.UPSTREAM, "上游连接失败") from exc
+    except (openai.APIError, anthropic.APIError) as exc:
+        raise AppError(ErrorCode.UPSTREAM, "上游调用失败") from exc
+    finally:
+        if client is not None:
+            _close_quietly(client)
 
     latency_ms = round((time.perf_counter() - started) * 1000)
     try:
