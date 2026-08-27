@@ -1,6 +1,6 @@
 # AI 测试与评估平台 — Agent 优化遗留项与 SDK 迁移方案
 
-> 状态:方案待实施 | 创建:2026-08-27 | 前置:eeffd77 + 3264a00 两批优化已上线
+> 版本:V1.2 | 状态:SDK 迁移两期均已实施 | 审查:2026-08-27 | 前置:eeffd77 + 3264a00 两批优化已上线
 >
 > 背景:2026-08-26~27 完成 Agent 读文件链路专项优化(read 预算/流式适配器 bug/
 > 元数据头/缓存回放/native 默认化/turn_stats 观测),本文档记录**尚未完成**的
@@ -24,7 +24,7 @@
 
 ### 2.1 现状与动机
 
-`backend/api/app/adapters.py` 手搓实现了三协议(openai_chat / openai_responses /
+迁移前，`backend/api/app/adapters.py` 手搓实现了三协议(openai_chat / openai_responses /
 anthropic_messages)的 HTTP 层:`urllib.request.urlopen` + 手写 SSE 解析
 (`_iter_stream_lines` / `_arm_read_timeout`)。历史上已因此付出代价:
 
@@ -45,38 +45,57 @@ httpx),同规模请求零调优即稳定。
    `AdapterStreamEvent`、`AdapterToolCall`、错误归一(`AppError` + ErrorCode
    语义:TIMEOUT / UPSTREAM / 参数错误)、`_norm_usage` 的 usage 归一结构。
 2. 传输层整体替换:
-   - openai_chat / openai_responses → `openai` SDK `AsyncOpenAI`
-   - anthropic_messages → `anthropic` SDK `AsyncAnthropic`
-   - 手写 `Request/urlopen`、`_post_json`、`_iter_stream_lines`、
-     `_arm_read_timeout`、`_is_wait_timeout`、`_is_poisoned_socket` 删除。
+   - openai_chat / openai_responses → `openai` 官方 SDK
+   - anthropic_messages → `anthropic` 官方 SDK
+   - 模型调用路径中的手写 `Request/urlopen`、`_post_json`、`_iter_stream_lines`、
+     `_arm_read_timeout`、`_is_wait_timeout`、`_is_poisoned_socket` 删除；独立的
+     `fetch_remote_models` 模型发现兼容探测仍保留 urllib，不属于 LLM 调用路径。
 3. 现有行为保持:超时(`timeout_s` 透传 SDK timeout)、取消
    (`should_abort` → asyncio cancel)、`_service_base_url` 后缀剥离逻辑
    (放 SDK `base_url` 参数前)。
 
+> 实施裁决：当前 `call_protocol`、`ModelGateway.stream()`、协议档探活与
+> `llm_client` 均为同步调用链。第一期使用 `OpenAI` / `Anthropic` 同步客户端，
+> 以保持内部函数签名和 LangGraph 节点不变；`AsyncOpenAI` / `AsyncAnthropic`
+> 的端到端异步化属于后续独立重构，不能混入本次传输层替换。SDK 客户端均显式
+> `max_retries=0`，避免 SDK 默认重试改变模型调用次数、延迟和成本语义。
+
 ### 2.3 分期计划
 
-**第一期:非流式(invoke 路径)**
-- `call_protocol` 三协议分支改用 SDK 的 `client.chat.completions.create` /
-  `client.responses.create` / `client.messages.create`(非流式)。
-- 保留 `_post_json` 为模块私有**过渡 seam**:全部调用点切换后删除。
-- 测试夹具:现有大量单测 monkeypatch `adapters._post_json` 注入 payload——
-  第一期把这些夹具改为 patch SDK client 工厂(`_openai_client()` /
-  `_anthropic_client()` 返回 FakeClient),响应对象用 SDK 的 pydantic 模型
-  或鸭子类型。
+**第一期:非流式(invoke 路径，已实施)**
+- `call_protocol` 三协议分支已改用 SDK 的 `client.chat.completions.create` /
+  `client.responses.create` / `client.messages.create`（非流式）。
+- 新增 `_openai_client()` / `_anthropic_client()`，按请求构造客户端、透传
+  `timeout_s`、关闭 SDK 默认重试；调用后在 `finally` 中释放客户端资源。
+- `_sdk_response_dict()` 将 SDK Pydantic 对象转换为既有 `_full_text` /
+  `_full_tool_calls` / `_norm_usage` 可消费的 JSON 字典，保持 `AdapterResult`
+  不变；Responses 的 `input_tokens` / `output_tokens` 已补充归一。
+- Mimo `thinking` 与 Gemini 的字面 `extra_body` 经 SDK `extra_body` 参数原样
+  合入请求体，不把兼容网关私有字段传成 SDK 顶级未知参数。
+- `_post_json` 已在第二期随流式手写传输层一并删除。
+- 测试夹具已改为 patch SDK 客户端工厂，并加入 `httpx.MockTransport` 级的三协议
+  路径、鉴权头和请求体回归测试，无需真实 Key 或外网。
 
-**第二期:流式(stream 路径)**
-- `stream_protocol` 改用 SDK 的 stream 迭代器(`client.messages.stream` /
-  `client.chat.completions.create(stream=True)`),SSE 解析、分块重组成
-  SDK 完成;平台只消费事件回调(thinking_delta/text_delta/tool_calls 增量)。
-- `AdapterStreamEvent` 的产出时机与语义对照现有 `_stream_anthropic` /
-  `_stream_openai` 逐事件核对(含 anthropic 的 tool_use 增量拼装
-  `content_block_start/input_json_delta/content_block_stop`)。
-- 取消语义:SDK 流支持 async with + cancel,`should_abort` 轮询退化为
-  cancel 检查点(每事件间),行为不弱于现状。
+**第二期:流式(stream 路径，已实施)**
+- `stream_protocol` 已改用同步 SDK 的事件迭代器：OpenAI 使用
+  `client.chat.completions.create(stream=True)` / `client.responses.create(stream=True)`，
+  Anthropic 使用 `client.messages.create(stream=True)`。SDK 负责 SSE 解帧和
+  Pydantic 事件反序列化，平台只消费事件对象并保持原有输出契约。
+- `AdapterStreamEvent` 的产出时机保持不变：Chat 的 indexed `tool_calls`、
+  Responses 的 `function_call_arguments`、Anthropic 的
+  `content_block_start/input_json_delta/content_block_stop` 仍须累积到参数 JSON
+  完整后才下发。
+- 取消语义保持为事件边界检查：`should_abort` 命中时立即关闭 SDK Stream 并抛出
+  `StreamAborted`；SDK 超时、状态错误、连接错误和事件结构错误分别归一为原有
+  `TIMEOUT` / `UPSTREAM` 契约。同步调用链不引入 `async with` 或异步化改造。
+- 删除手写 SSE 的完整 JSON 兜底重解析：SDK Stream 显式响应头不是
+  `text/event-stream` 时归一为 `UPSTREAM`，避免网关忽略 stream 参数后产生静默
+  空回复、二次解析或不确定降级。
 
 ### 2.4 依赖与配置
 
-- `backend/api/requirements.txt` 增加 `openai>=1.40`、`anthropic>=0.34`
+- `backend/api/requirements.txt` 已增加 `openai==2.53.0`、`anthropic==0.122.0`；
+  项目既有依赖均为精确锁定版本，禁止使用宽松 `>=` 导致 SDK 主版本漂移
   (纯 Python,镜像体积影响 <30MB;pip 走 USTC 源)。
 - 客户端按请求构造(与现状一致,不引长生命周期连接池到 api 进程;
   若压测显示握手开销显著,再评估模块级复用 + httpx 连接池)。
@@ -144,3 +163,24 @@ Settings → Billing → workflow_dispatch 手动触发;必要时给 deploy.yml
 - 协议档:DeepSeek 官方档已建(anthropic_messages,native,未激活);
   MaaS 端点 legacy 长 system 挂死已在 qwen3.6-flash 与 deepseek-v4-flash
   双实锤,native 模式规避。
+
+---
+
+## 五、V1.1 第一阶段修改代码文件与作用清单
+
+- `backend/api/requirements.txt`：锁定 OpenAI 与 Anthropic 官方 Python SDK 版本；
+- `backend/api/app/adapters.py`：非流式 `call_protocol` 改用 SDK 客户端，保留
+  三协议请求/响应归一、脱敏错误契约、超时与资源释放；
+- `backend/api/tests/test_adapters.py`：SDK 工厂夹具、MockTransport 实际请求契约、
+  SDK 异常映射和 Responses 用量字段回归测试。
+
+---
+
+## 六、V1.2 第二阶段修改代码文件与作用清单
+
+- `backend/api/app/adapters.py`：`stream_protocol` 改由 OpenAI / Anthropic 同步 SDK
+  提供事件迭代，删除手写 SSE 建连、socket 超时切片、逐行 JSON 解析与完整 JSON
+  兜底；保持 ToolCall 累积、取消、超时、脱敏错误和资源释放契约；
+- `backend/api/tests/test_adapters.py`：流式夹具改为 SDK 事件对象，增加三协议
+  `httpx.MockTransport` 的真实 SDK 请求路径、鉴权头、`stream=true` 与 SSE 解帧回归，
+  同步覆盖 SDK 超时和连接错误归一。

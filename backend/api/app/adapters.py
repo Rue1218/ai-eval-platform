@@ -15,13 +15,17 @@
 from __future__ import annotations
 
 import json
-import logging
 import time
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from uuid import uuid4
+
+import anthropic
+import openai
+from anthropic import Anthropic
+from openai import OpenAI
 
 from .errors import AppError, ErrorCode
 
@@ -30,11 +34,6 @@ SUPPORTED_PROTOCOLS = ("openai_chat", "openai_responses", "anthropic_messages")
 
 # 非流式调用被测 / Agent 模型的默认超时秒数
 DEFAULT_TIMEOUT_S = 30.0
-# 建连 + 响应头；正文首 token 在读循环里按切片等待，避免整段 timeout_s 卡死。
-CONNECT_TIMEOUT_S = 15.0
-# 读流切片：到期后检查取消与总时限，再继续等下一刀。
-STREAM_READ_SLICE_S = 2.0
-
 # 仅对已知支持 reasoning 控制的模型发送 OpenAI 专用字段，避免普通模型因未知字段报错。
 _OPENAI_REASONING_PREFIXES = ("o1", "o3", "o4", "gpt-5")
 _REASONING_EFFORTS = {"low", "medium", "high", "xhigh", "max"}
@@ -423,80 +422,98 @@ def _close_quietly(response: object) -> None:
             return
 
 
-def _arm_read_timeout(response: object, seconds: float) -> None:
-    """把已建立连接的读超时切成短片，便于块间检查取消。夹具无 socket 时跳过。"""
-    try:
-        fp = getattr(response, "fp", None)
-        raw = getattr(fp, "raw", None) if fp is not None else None
-        sock = getattr(raw, "_sock", None) if raw is not None else None
-        if sock is not None:
-            sock.settimeout(seconds)
-    except Exception:
-        return
+def _openai_client(*, base_url: str, api_key: str, timeout_s: float) -> OpenAI:
+    """创建单次 OpenAI SDK 客户端，显式关闭 SDK 默认重试以保持调用语义。"""
+    return OpenAI(
+        api_key=api_key,
+        # SDK 的资源路径本身不含版本段，因此在已规范化的服务根地址后补 /v1。
+        base_url=f"{base_url.rstrip('/')}/v1",
+        timeout=timeout_s,
+        max_retries=0,
+    )
 
 
-def _is_wait_timeout(exc: BaseException) -> bool:
-    """socket / urllib 在切片读超时后抛出的等待类异常。"""
-    if isinstance(exc, TimeoutError):
-        return True
-    return type(exc).__name__ in {"timeout", "TimeoutError"}
+def _anthropic_client(*, base_url: str, api_key: str, timeout_s: float) -> Anthropic:
+    """创建单次 Anthropic SDK 客户端，避免连接或限流时改变既有重试次数。"""
+    return Anthropic(
+        api_key=api_key,
+        # Anthropic SDK 自身会追加 /v1/messages，故这里只传服务根地址。
+        base_url=base_url,
+        timeout=timeout_s,
+        max_retries=0,
+    )
 
 
-def _is_poisoned_socket(exc: BaseException) -> bool:
-    """socket 在一次读超时后进入 timed-out 状态，后续 read 立即抛此错。"""
-    return isinstance(exc, OSError) and "timed out object" in str(exc)
+def _sdk_response_dict(response: object) -> dict:
+    """把 SDK 的 Pydantic 响应或流事件转换为既有归一化函数可消费的字典。"""
+    model_dump = getattr(response, "model_dump", None)
+    if callable(model_dump):
+        payload = model_dump(mode="json")
+    else:
+        payload = response
+    if not isinstance(payload, Mapping):
+        raise TypeError("SDK 响应不是对象")
+    return {str(key): value for key, value in payload.items()}
 
 
-def _iter_stream_lines(
-    response: object,
+def _ensure_sse_stream(stream: object) -> None:
+    """拒绝网关忽略 stream 参数时返回的完整 JSON，避免 SDK 静默产生空迭代。"""
+    response = getattr(stream, "response", None)
+    headers = getattr(response, "headers", None)
+    content_type = headers.get("content-type") if isinstance(headers, Mapping) else None
+    if content_type and "text/event-stream" not in str(content_type).lower():
+        raise AppError(ErrorCode.UPSTREAM, "上游未返回流式响应")
+
+
+def _openai_chat_create(client: object, body: dict, *, stream: bool = False) -> object:
+    """调用 Chat Completions，并把兼容网关私有字段经 SDK 原样合入请求体。"""
+    request = dict(body)
+    if stream:
+        # ``stream`` 是 SDK 的正式参数，不再作为手写 HTTP JSON 字段传递。
+        request["stream"] = True
+    vendor_body: dict[str, object] = {}
+    if "thinking" in request:
+        vendor_body["thinking"] = request.pop("thinking")
+    if "extra_body" in request:
+        # 当前 Gemini 兼容档要求请求 JSON 中存在字面 ``extra_body`` 字段；
+        # SDK 的 extra_body 参数会合并请求体，故此处保留一层同名键。
+        vendor_body["extra_body"] = request.pop("extra_body")
+    create = client.chat.completions.create  # type: ignore[attr-defined]
+    if vendor_body:
+        return create(**request, extra_body=vendor_body)
+    return create(**request)
+
+
+def _openai_responses_create(client: object, body: dict, *, stream: bool = False) -> object:
+    """调用 Responses API；流式标志通过 SDK 正式参数传入。"""
+    request = dict(body)
+    if stream:
+        request["stream"] = True
+    return client.responses.create(**request)  # type: ignore[attr-defined]
+
+
+def _anthropic_messages_create(
+    client: object,
+    body: dict,
+    anthropic_version: str | None,
     *,
-    deadline: float,
-    should_abort: Callable[[], bool] | None,
-    slice_s: float = STREAM_READ_SLICE_S,
-) -> Iterator[bytes]:
-    """逐行读取 SSE 流：读超时对齐总 deadline，取消检查在行粒度进行。
-
-    CPython socket 一旦发生一次读超时即进入 timed-out 状态，之后任何 read
-    都抛 ``OSError("cannot read from timed out object")``，同一 socket 无法
-    「短切片超时后 continue 重试」。因此读超时直接按总时限到点处理；取消
-    （should_abort）退化为行间检查——流式响应的行通常很密集，仅上游长时间
-    静默（如大上下文 prefill）时停止响应会延迟到首字节。
-    """
-    _arm_read_timeout(response, max(0.5, deadline - time.monotonic()))
-    iterator = iter(response)  # type: ignore[arg-type]
-    while True:
-        if should_abort is not None and should_abort():
-            _close_quietly(response)
-            raise StreamAborted()
-        if time.monotonic() > deadline:
-            _close_quietly(response)
-            raise TimeoutError("stream deadline exceeded")
-        try:
-            raw_line = next(iterator)
-        except StopIteration:
-            break
-        except Exception as exc:
-            if _is_wait_timeout(exc) or _is_poisoned_socket(exc):
-                _close_quietly(response)
-                raise TimeoutError("stream read timed out") from exc
-            raise
-        yield raw_line
-
-
-def _post_json(url: str, body: dict, headers: dict, timeout_s: float) -> dict:
-    """同步 POST JSON 并解析上游响应对象。
-
-    独立成函数便于夹具单测：测试通过 monkeypatch 替换本函数即可
-    注入成功 payload、4xx 异常或超时，不依赖真实上游。
-    """
-    request = Request(url, data=json.dumps(body).encode(), headers=headers, method="POST")
-    with urlopen(request, timeout=timeout_s) as response:
-        return json.loads(response.read().decode())
+    stream: bool = False,
+) -> object:
+    """调用 Messages API，并保留协议档指定的 anthropic-version 请求头。"""
+    request = dict(body)
+    if stream:
+        request["stream"] = True
+    return client.messages.create(  # type: ignore[attr-defined]
+        **request,
+        extra_headers={"anthropic-version": anthropic_version or "2023-06-01"},
+    )
 
 
 def _norm_usage(data: dict, *, anthropic: bool) -> dict:
     """把三协议各自的 usage 字段归一为统一 token 计数结构。"""
     usage = data.get("usage") or {}
+    if not isinstance(usage, Mapping):
+        usage = {}
     if anthropic:
         # Anthropic 使用 input_tokens / output_tokens 命名，total 需自行求和
         prompt = int(usage.get("input_tokens") or 0)
@@ -506,8 +523,10 @@ def _norm_usage(data: dict, *, anthropic: bool) -> dict:
             "completion_tokens": completion,
             "total_tokens": prompt + completion,
         }
-    prompt = int(usage.get("prompt_tokens") or 0)
-    completion = int(usage.get("completion_tokens") or 0)
+    # OpenAI Chat 与部分兼容网关使用 prompt/completion_tokens；官方
+    # Responses 对象使用 input/output_tokens。两种响应均需维持平台统一口径。
+    prompt = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
+    completion = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
     total = int(usage.get("total_tokens") or (prompt + completion))
     return {"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": total}
 
@@ -651,10 +670,9 @@ def call_protocol(
         raise AppError(ErrorCode.VALIDATION, f"协议不受支持：{protocol}")
 
     base = _service_base_url(base_url)
-    headers = {"Content-Type": "application/json"}
+    client: object | None = None
 
     if protocol == "openai_chat":
-        url = f"{base}/v1/chat/completions"
         chat: list[dict] = ([{"role": "system", "content": system}] if system else []) + _adapt_messages(messages, protocol)
         body: dict = {
             "model": model,
@@ -675,10 +693,7 @@ def call_protocol(
             effort=reasoning_effort,
             responses=False,
         )
-        headers["Authorization"] = f"Bearer {api_key}"
-
     elif protocol == "openai_responses":
-        url = f"{base}/v1/responses"
         body = {"model": model, "input": _adapt_messages(messages, protocol), "max_output_tokens": max_tokens}
         native_tools = _adapt_tools(tools, protocol)
         if native_tools:
@@ -692,10 +707,7 @@ def call_protocol(
             effort=reasoning_effort,
             responses=True,
         )
-        headers["Authorization"] = f"Bearer {api_key}"
-
     else:  # anthropic_messages
-        url = f"{base}/v1/messages"
         body = {
             "model": model,
             "messages": _adapt_messages(messages, protocol),
@@ -714,22 +726,30 @@ def call_protocol(
             }
             # Anthropic extended thinking 要求 temperature 使用默认值 1。
             body["temperature"] = 1.0
-        headers["x-api-key"] = api_key
-        headers["anthropic-version"] = anthropic_version or "2023-06-01"
-
     started = time.perf_counter()
     try:
-        data = _post_json(url, body, headers, timeout_s)
-    except HTTPError as exc:
-        # 仅回显状态码，绝不把请求头（含 Key）或上游原文带给浏览器
-        raise AppError(ErrorCode.UPSTREAM, f"上游返回 {exc.code}") from exc
-    except TimeoutError as exc:
+        if protocol == "openai_chat":
+            client = _openai_client(base_url=base, api_key=api_key, timeout_s=timeout_s)
+            response = _openai_chat_create(client, body)
+        elif protocol == "openai_responses":
+            client = _openai_client(base_url=base, api_key=api_key, timeout_s=timeout_s)
+            response = _openai_responses_create(client, body)
+        else:
+            client = _anthropic_client(base_url=base, api_key=api_key, timeout_s=timeout_s)
+            response = _anthropic_messages_create(client, body, anthropic_version)
+        data = _sdk_response_dict(response)
+    except (openai.APITimeoutError, anthropic.APITimeoutError) as exc:
         raise AppError(ErrorCode.TIMEOUT, "上游调用超时") from exc
-    except URLError as exc:
-        reason = str(getattr(exc, "reason", "")).lower()
-        if "timed out" in reason:
-            raise AppError(ErrorCode.TIMEOUT, "上游调用超时") from exc
+    except (openai.APIStatusError, anthropic.APIStatusError) as exc:
+        # 仅回显状态码，绝不把请求头（含 Key）或上游原文带给浏览器。
+        raise AppError(ErrorCode.UPSTREAM, f"上游返回 {exc.status_code}") from exc
+    except (openai.APIConnectionError, anthropic.APIConnectionError) as exc:
         raise AppError(ErrorCode.UPSTREAM, "上游连接失败") from exc
+    except (openai.APIError, anthropic.APIError) as exc:
+        raise AppError(ErrorCode.UPSTREAM, "上游调用失败") from exc
+    finally:
+        if client is not None:
+            _close_quietly(client)
 
     latency_ms = round((time.perf_counter() - started) * 1000)
     try:
@@ -764,25 +784,23 @@ def stream_protocol(
     reasoning_effort: str = "medium",
     tools: list[dict] | None = None,
 ) -> Iterator[tuple[str, str] | AdapterStreamEvent]:
-    """按协议流式调用上游模型，逐块 yield ``(kind, text)`` 增量（SSE）。
+    """按协议流式调用上游模型，逐块 yield ``(kind, text)`` 增量。
 
     ``kind`` 为增量类别：``"content"`` 是正式回复正文，``"reasoning"``
     是推理模型的前置思考链（deepseek 风格 ``reasoning_content`` /
     anthropic ``thinking_delta`` / responses ``reasoning_summary``），
     供前端思考卡展示；上游未产生思考链时全程只 yield content。
 
-    ``timeout_s`` 约束整体流式时长；建连用较短 ``CONNECT_TIMEOUT_S``，
-    读体按 ``STREAM_READ_SLICE_S`` 切片以便 ``should_abort`` 生效。
-    超时归一为 TIMEOUT，上游 4xx/5xx 归一为 UPSTREAM。若网关忽略
-    ``stream`` 参数直接返回完整 JSON（非 SSE），则兜底解析全文并作为
-    单块 content yield，保证调用方拿到正确结果而非空流降级。原生工具参数
-    会在适配器内累积，只有完整 JSON 才以 ``AdapterStreamEvent(tool_call)`` 发出。
+    SDK 负责 SSE 建连、解帧与事件反序列化；适配器只消费 SDK 的事件对象，
+    所以不再持有手写 ``urlopen``、逐行读取或非 SSE 重解析逻辑。``timeout_s``
+    同时配置给 SDK 并约束本地事件循环的总时长；超时归一为 TIMEOUT，上游
+    4xx/5xx 与流式解码失败归一为 UPSTREAM。原生工具参数会在适配器内累积，
+    只有完整 JSON 才以 ``AdapterStreamEvent(tool_call)`` 发出。
     """
     if protocol not in SUPPORTED_PROTOCOLS:
         raise AppError(ErrorCode.VALIDATION, f"协议不受支持：{protocol}")
 
     base = _service_base_url(base_url)
-    headers = {"Content-Type": "application/json"}
 
     def complete_stream_call(
         raw_id: object, raw_name: object, raw_arguments: object
@@ -811,12 +829,13 @@ def stream_protocol(
         return completed
 
     if protocol == "openai_chat":
-        url = f"{base}/v1/chat/completions"
-        chat: list[dict] = ([{"role": "system", "content": system}] if system else []) + _adapt_messages(messages, protocol)
+        chat: list[dict] = (
+            ([{"role": "system", "content": system}] if system else [])
+            + _adapt_messages(messages, protocol)
+        )
         body: dict = {
             "model": model,
             "messages": chat,
-            "stream": True,
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
@@ -832,7 +851,6 @@ def stream_protocol(
             effort=reasoning_effort,
             responses=False,
         )
-        headers["Authorization"] = f"Bearer {api_key}"
 
         def delta_of(data: dict) -> tuple[str, str]:
             choices = data.get("choices") or [{}]
@@ -879,8 +897,11 @@ def stream_protocol(
             return drain_tool_calls(chat_calls)
 
     elif protocol == "openai_responses":
-        url = f"{base}/v1/responses"
-        body = {"model": model, "input": _adapt_messages(messages, protocol), "stream": True, "max_output_tokens": max_tokens}
+        body = {
+            "model": model,
+            "input": _adapt_messages(messages, protocol),
+            "max_output_tokens": max_tokens,
+        }
         native_tools = _adapt_tools(tools, protocol)
         if native_tools:
             body["tools"] = native_tools
@@ -893,7 +914,6 @@ def stream_protocol(
             effort=reasoning_effort,
             responses=True,
         )
-        headers["Authorization"] = f"Bearer {api_key}"
 
         def delta_of(data: dict) -> tuple[str, str]:  # noqa: F811  （各分支同名提取器，互斥定义）
             kind = data.get("type")
@@ -952,11 +972,9 @@ def stream_protocol(
             return drain_tool_calls(response_calls)
 
     else:  # anthropic_messages
-        url = f"{base}/v1/messages"
         body = {
             "model": model,
             "messages": _adapt_messages(messages, protocol),
-            "stream": True,
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
@@ -971,8 +989,6 @@ def stream_protocol(
                 "budget_tokens": _anthropic_thinking_budget(max_tokens, reasoning_effort),
             }
             body["temperature"] = 1.0
-        headers["x-api-key"] = api_key
-        headers["anthropic-version"] = anthropic_version or "2023-06-01"
 
         def delta_of(data: dict) -> tuple[str, str]:  # noqa: F811
             if data.get("type") == "content_block_delta":
@@ -1021,92 +1037,67 @@ def stream_protocol(
     if should_abort is not None and should_abort():
         raise StreamAborted()
 
-    request = Request(url, data=json.dumps(body).encode(), headers=headers, method="POST")
     deadline = time.monotonic() + timeout_s
-    connect_timeout = min(timeout_s, CONNECT_TIMEOUT_S)
+    client: object | None = None
+    stream: object | None = None
     try:
-        response = urlopen(request, timeout=connect_timeout)
-    except HTTPError as exc:
-        raise AppError(ErrorCode.UPSTREAM, f"上游返回 {exc.code}") from exc
-    except TimeoutError as exc:
-        raise AppError(ErrorCode.TIMEOUT, "上游调用超时") from exc
-    except URLError as exc:
-        reason = str(getattr(exc, "reason", "")).lower()
-        if "timed out" in reason:
-            raise AppError(ErrorCode.TIMEOUT, "上游调用超时") from exc
-        raise AppError(ErrorCode.UPSTREAM, "上游连接失败") from exc
+        if protocol == "openai_chat":
+            client = _openai_client(base_url=base, api_key=api_key, timeout_s=timeout_s)
+            stream = _openai_chat_create(client, body, stream=True)
+        elif protocol == "openai_responses":
+            client = _openai_client(base_url=base, api_key=api_key, timeout_s=timeout_s)
+            stream = _openai_responses_create(client, body, stream=True)
+        else:
+            client = _anthropic_client(base_url=base, api_key=api_key, timeout_s=timeout_s)
+            stream = _anthropic_messages_create(
+                client,
+                body,
+                anthropic_version,
+                stream=True,
+            )
+        _ensure_sse_stream(stream)
 
-    # 非喂 SSE data 行的响应体（网关忽略 stream 参数时的完整 JSON）
-    non_sse_lines: list[str] = []
-    yielded = False
-    try:
-        with response:
-            for raw_line in _iter_stream_lines(
-                response,
-                deadline=deadline,
-                should_abort=should_abort,
-            ):
-                line = raw_line.decode("utf-8", "ignore").strip()
-                if not line.startswith("data:"):
-                    # SSE 的 event:/注释行/空行跳过；但完整 JSON 响应需收集作兜底
-                    if line:
-                        non_sse_lines.append(line)
-                    continue
-                payload = line[5:].strip()
-                if not payload:
-                    continue
-                if payload == "[DONE]":
-                    break
-                try:
-                    data = json.loads(payload)
-                except json.JSONDecodeError:
-                    continue  # 容忍个别坏帧，不中断整条流
-                if not isinstance(data, dict):
-                    continue
-                kind, text = delta_of(data)
-                if text:
-                    yielded = True
-                    yield (kind, text)
-                for tool_call in tool_events_of(data):
-                    yielded = True
-                    yield AdapterStreamEvent(kind="tool_call", tool_call=tool_call)
+        for event in stream:  # type: ignore[union-attr]
+            # SDK 只能在流事件边界响应取消；立即关闭其 Stream，避免连接悬挂。
+            if should_abort is not None and should_abort():
+                _close_quietly(stream)
+                raise StreamAborted()
+            if time.monotonic() > deadline:
+                _close_quietly(stream)
+                raise TimeoutError("stream deadline exceeded")
+
+            data = _sdk_response_dict(event)
+            kind, text = delta_of(data)
+            if text:
+                yield (kind, text)
+            for tool_call in tool_events_of(data):
+                yield AdapterStreamEvent(kind="tool_call", tool_call=tool_call)
     except StreamAborted:
         raise
-    except TimeoutError as exc:
+    except (openai.APITimeoutError, anthropic.APITimeoutError, TimeoutError) as exc:
         raise AppError(ErrorCode.TIMEOUT, "上游调用超时") from exc
+    except (openai.APIStatusError, anthropic.APIStatusError) as exc:
+        # 仅回显状态码，绝不把请求头（含 Key）或上游原文带给浏览器。
+        raise AppError(ErrorCode.UPSTREAM, f"上游返回 {exc.status_code}") from exc
+    except (openai.APIConnectionError, anthropic.APIConnectionError) as exc:
+        raise AppError(ErrorCode.UPSTREAM, "上游连接失败") from exc
+    except (openai.APIError, anthropic.APIError) as exc:
+        raise AppError(ErrorCode.UPSTREAM, "上游调用失败") from exc
     except OSError as exc:
-        # 读流中连接中断（对端重置等）：统一归一为 UPSTREAM
+        # SDK 读连接中断不向浏览器回显原始异常。
         raise AppError(ErrorCode.UPSTREAM, "上游连接中断") from exc
+    except (AttributeError, TypeError, ValueError) as exc:
+        # SDK 解帧或 Pydantic 转换失败时，不允许把上游原文带给浏览器。
+        raise AppError(ErrorCode.UPSTREAM, "上游流式响应结构异常") from exc
+    finally:
+        if stream is not None:
+            _close_quietly(stream)
+        if client is not None:
+            _close_quietly(client)
 
-    # 有些兼容网关不发送 finish/done 事件；流自然结束后补齐未完成调用。
+    # 少数兼容网关不发送 finish/done 事件；SDK 流自然结束后补齐未完成调用。
     for tool_call in flush_tool_events():
-        yielded = True
         yield AdapterStreamEvent(kind="tool_call", tool_call=tool_call)
-
-    # 兜底：SSE 流中无任何增量且响应体是完整 JSON —— 网关按非流式返回了结果，
-    # 用非流式提取器解析全文作为单块 content，避免调用方拿到空流而错误降级。
-    if not yielded and non_sse_lines:
-        joined = "\n".join(non_sse_lines).strip()
-        if joined.startswith("{"):
-            try:
-                data = json.loads(joined)
-            except json.JSONDecodeError:
-                data = None
-            if isinstance(data, dict):
-                try:
-                    text = _full_text(protocol, data)
-                    tool_calls = _full_tool_calls(protocol, data)
-                except (KeyError, IndexError, TypeError, AttributeError, ValueError):
-                    text = ""
-                    tool_calls = ()
-                if text:
-                    # 网关忽略 stream 参数：记录一次便于排查上游流式支持情况
-                    logging.getLogger(__name__).info(
-                        "上游 %s 忽略 stream 参数返回完整 JSON，走非 SSE 兜底", base
-                    )
-                    yield ("content", text)
-                for tool_call in tool_calls:
-                    yield AdapterStreamEvent(kind="tool_call", tool_call=tool_call)
 
 
 def fetch_remote_models(
