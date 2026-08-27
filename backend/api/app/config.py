@@ -71,6 +71,10 @@ class Settings(BaseSettings):
     max_parallel_tool_calls: int = 3
     # 并行灰度白名单：空 = 不开任何协议档；``*`` = 全部；否则仅列出的 ID。
     agent_parallel_tool_batch_profile_ids: str = ""
+    # 工具卡片浏览器预览上限（字符，按完整行边界截取）。默认与 read 模型窗口
+    # 预算（READ_MAX_CHARS=600_000）对齐，使 ToolCard 所见 == 模型真实读取
+    # 内容；需要收紧回旧版安全窗时设 TOOL_PREVIEW_MAX_CHARS=4000。
+    tool_preview_max_chars: int = 600_000
 
     @property
     def cors_origin_list(self) -> list[str]:

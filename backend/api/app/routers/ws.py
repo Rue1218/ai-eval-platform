@@ -851,8 +851,8 @@ async def _run_turn(
                         ),
                     )
                 elif kind == "tool_output_delta":
-                    # handler 仅能通过 ToolNode 的 4KB 受控窗口写入；此处不接受
-                    # 任何模型 Observation、完整文件或未脱敏的错误正文。
+                    # handler 仅能通过 ToolNode 的受控窗口（stream_max_chars，可
+                    # 经环境变量调整）写入；此处不接受模型 Observation 或未脱敏错误。
                     payload = {
                         "call_id": str(chunk.get("call_id") or ""),
                         "name": str(chunk.get("name") or ""),

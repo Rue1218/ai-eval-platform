@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
+from app.config import settings
+
 
 @dataclass(frozen=True, slots=True)
 class ToolPermissionPolicy:
@@ -67,6 +69,12 @@ DEFAULT_RECOVERY_POLICY = ToolRecoveryPolicy(
     max_auto_repairs=0,
 )
 
-# 浏览器瞬态工具输出的统一上限：完整 Observation 仍仅留在服务端当前回合。
-TOOL_STREAM_MAX_CHARS = 4_000
+# 浏览器瞬态工具输出上限与分发块大小：完整 Observation 仍仅留在服务端
+# 当前回合。上限读 settings（默认对齐 read 模型窗口，可经环境变量收紧），
+# 块大小保持固定以保证 WS 帧粒度稳定。
 TOOL_STREAM_CHUNK_CHARS = 800
+
+
+def stream_max_chars() -> int:
+    """单次 ToolCall 浏览器增量累计上限；部署经 TOOL_PREVIEW_MAX_CHARS 调整。"""
+    return max(1, int(settings.tool_preview_max_chars))

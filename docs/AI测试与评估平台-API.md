@@ -44,6 +44,8 @@
 > V1.34（2026-08-25）：原生工具回传模型的单条结果上限统一为 8,000 字符（`read`/`bash`/`web_*` 对齐）；未读完时模型正文携带 `next_offset`。ToolCard 预览与 WS 投影不变。
 >
 > V1.44（2026-08-26）：ToolCall 在执行前落库，新增 `tool_progress` 与 `tool_output_delta` 瞬态帧；前者表达校验/执行/收尾阶段，后者仅传输服务端受控窗口内的行级输出。它们不落库、不占 `event_id`、不参与断线补发；`tool_result` 仍是唯一持久化终态。原生工具的输出 Schema、权限边界与恢复策略以 §4.3.1 为唯一契约。
+>
+> V1.45（2026-08-27）：ToolCard 浏览器预览上限改为可配置（环境变量 `TOOL_PREVIEW_MAX_CHARS`），默认 600,000 字符并与 `read` 模型窗口同源对齐——**ToolCard 所见即模型真实读取内容**。旧 4KB 受控窗可通过设回 4000 恢复；上限值随 `read.preview_limit_chars` 下发，前端提示不硬编码数字。注意：放大后完整文件会随 `tool_output_delta`/`tool_result` 广播给会话全部在线成员并持久化进历史事件。
 
 ---
 
@@ -676,7 +678,7 @@ Embedding 与 Reranker 的 URL、模型和 Key 与主模型使用相同的“按
 
 | 函数 | 用途与上限 | 执行/结果边界 |
 | --- | --- | --- |
-| `read(path, offset?, limit?)` | workspace 相对路径；0-based 分页；最多 2,000 行、600,000 字符、20MB 文件 | 单次流式扫描；模型可见片段 ≤600,000 字符，未读完带 `next_offset`（可回填为下次 `offset`）；ToolCard 显示行号与 ≤4000 字符完整行预览 |
+| `read(path, offset?, limit?)` | workspace 相对路径；0-based 分页；最多 2,000 行、600,000 字符、20MB 文件 | 单次流式扫描；模型可见片段 ≤600,000 字符，未读完带 `next_offset`（可回填为下次 `offset`）；ToolCard 显示行号与完整行预览（上限 `TOOL_PREVIEW_MAX_CHARS`，默认与模型窗口对齐，见 V1.45） |
 | `write(path, content)` / `edit(path, old, new)` | 新建最多 2MB UTF-8 文件 / 精确单次替换 | `write` 使用 O_EXCL 防覆盖竞争；`edit` fsync 后 `os.replace` 原子提交；不回显写入正文 |
 | `bash(command)` | 会话 workspace 内的短命令 | 始终经 bwrap：无网络、唯一可写目录、资源上限、超时整树清理；引擎不可用 fail-closed |
 | `web_search(query, limit?)` | 关键词 ≤500 字符、1–10 条 | API 容器用环境变量中的 Firecrawl REST Key；未配置返回 `VALIDATION`，不伪造结果；结果结构化并脱敏 |
@@ -1397,7 +1399,7 @@ Harness 回合必须丢到后台 Task，**不得**在 `receive` 循环里 `await
 | `response.completed` | `{ "finish_reason":"stop\|cancelled\|error", "role":"assistant" }`；本轮生成结束，落库、占 event_id | 结束流式状态 |
 | `tool_call` | `{ "call_id":"toolcall_xxx", "name": "model.list", "arguments": {} }`；`call_id` 为本轮模型生成或平台补齐的稳定非空字符串 | ToolCard pending；原生基础工具标题直接使用英文 `name`；MCP/平台短工具按下方中文名映射；展开区显示 `ToolCall` |
 | `tool_progress` | `{ "call_id", "name", "stage":"validating\|executing\|finalizing", "message" }`；仅在对应 `tool_call` 已落库后下发；不落库、不占 event_id、不补发 | ToolCard 保持 pending，更新加载文案与阶段状态 |
-| `tool_output_delta` | `{ "call_id", "name", "seq", "channel":"document\|stdout\|result", "text", "start_line" }`；仅服务端安全预览块可发送，单 ToolCall 累计最多 4000 字符；不落库、不占 event_id、不补发 | ToolCard 按 `call_id`、`seq` 追加带行号输出；最终由 `tool_result` 替换成功态内容 |
+| `tool_output_delta` | `{ "call_id", "name", "seq", "channel":"document\|stdout\|result", "text", "start_line" }`；仅服务端安全预览块可发送，单 ToolCall 累计最多 `TOOL_PREVIEW_MAX_CHARS` 字符（默认 600,000，见 V1.45）；不落库、不占 event_id、不补发 | ToolCard 按 `call_id`、`seq` 追加带行号输出；最终由 `tool_result` 替换成功态内容 |
 | `tool_result` | `{ "call_id":"toolcall_xxx", "name": "model.list", "ok": true, "data": {} }` 或 `{ "call_id":"toolcall_xxx", "name":"model.list", "ok": false, "error": "...", "recovery": {"retryable", "suggested_action", "repair_hint", "max_auto_repairs"} }`；`call_id` 必须与对应 `tool_call` 相同。可选 `latency_ms`、`truncated`(bool，结果是否被截断)、`source`(溯源标识字符串，对齐 M7 `Observation.source`，如 `"file:uuid"`，可选)、`redacted`(bool，是否已脱敏)。`name="read"` 成功时 `data` 使用本节下方的受控投影 | ToolCard done；按 `call_id` 原地更新；失败显示脱敏恢复建议；`truncated`/`redacted` 为 true 时展示截断/脱敏徽标 |
 | `clarify` | `{ "id":"uuid", "question":"...", "options":["..."]?, "context":"..."? }`；落库、占 event_id；澄清卡不建任务、不写 `sessions.pending_confirm`，仅暂停图等待用户回复 | ClarifyCard（独立组件，区别于 ConfirmCard）；用户回复后上行 `clarify_reply` 恢复图 |
 | `plan` | PlanArtifact `{ "intent":"...", "skill_id":"skill-benchmark", "slots":{...}, "tools_needed":["..."], "delivery":"...", "budget":{...}, "allows_replan":bool, "notes":"..."? }`；落库、占 event_id；Plan-Solve 规划产物对用户完全可见 | PlanCard（展示规划意图/技能/工具/预算/交付物）；用户可查看但无需 ack |
@@ -1435,14 +1437,15 @@ Harness 回合必须丢到后台 Task，**不得**在 `receive` 循环里 `await
     "is_complete": false,
     "next_offset": 2000,
     "content_truncated": false,
-    "preview": "按完整行截取的受控预览，最多 4000 字符",
-    "preview_truncated": true
+    "preview": "按完整行截取的受控预览",
+    "preview_truncated": true,
+    "preview_limit_chars": 600000
   }
 }
 ```
 
 - `offset` / `limit` 的单位为行，均为 0-based；`end_line` 为排他上界，故示例表示第 1–2000 行；
-- `preview` 最多 4000 字符且停在完整行，仅用于 ToolCard；**完整 `content` 只作为服务端 Observation 供下一模型回合使用，禁止出现在 `tool_result`、`ws_events`、历史回放或日志中**；
+- `preview` 停在完整行，仅用于 ToolCard 与 WS 投影；长度受服务端 `TOOL_PREVIEW_MAX_CHARS`（V1.45 起默认 600,000，与 `read` 模型窗口同源对齐——**卡片所见即模型真实读取内容**），该值经 `preview_limit_chars` 随数据下发。设为更小值（如 4,000）可恢复「完整正文仅留在服务端 Observation、不出站到浏览器」的旧行为；
 - `truncated=true` 表示本次未读完整文件或受服务端内容预算限制；`content_truncated=true` 仅表示完整内容被截断，首期按整行裁剪，禁止截断半行；
 - `source` 使用不暴露宿主绝对路径的 `workspace:<相对路径>` 标识。
 
@@ -1452,7 +1455,7 @@ Harness 回合必须丢到后台 Task，**不得**在 `receive` 循环里 `await
 
 | 工具 | 输入 Schema（必填；可选） | 成功 `tool_result.data` 安全投影 | 执行权限边界 | 失败恢复 |
 | --- | --- | --- | --- | --- |
-| `read` | `path`；`offset?`/`next_offset?`、`limit?≤2000` | `read.path/total_lines/start_line/end_line/next_offset/preview` | 仅会话工作区相对路径；≤10MB；模型正文≤8000 字符、浏览器预览≤4000 字符 | 仅 `TIMEOUT` 可修复重试；路径/分页错误提示相对路径或 `next_offset` |
+| `read` | `path`；`offset?`/`next_offset?`、`limit?≤2000` | `read.path/total_lines/start_line/end_line/next_offset/preview` | 仅会话工作区相对路径；≤20MB；模型正文≤600,000 字符；浏览器预览≤`TOOL_PREVIEW_MAX_CHARS`（默认与窗口对齐） | 仅 `TIMEOUT` 可修复重试；路径/分页错误提示相对路径或 `next_offset` |
 | `write` | `path`、`content` | `write.path/bytes_written/lines_written/preview` | 仅会话工作区；≤2MB；排他新建 + fsync，绝不覆盖已有文件 | 不自动重试；文件存在时改用新路径或先 `read` 后 `edit` |
 | `edit` | `path`、`old`、`new` | `edit.path/replacements=1/old_length/new_length` | 仅会话工作区；原子替换；`old` 必须匹配 | 不自动重跑；不匹配时返回邻近行脱敏建议，先 `read` 再调整 |
 | `bash` | `command` | `bash.exit_code/preview/preview_truncated` | 独立 Runner 的一次性 bwrap：无网络、唯一可写工作区、CPU/内存/进程/墙钟限制；黑名单纵深防御；不可用即 fail-closed | 仅 `TIMEOUT` 表示可缩小范围后再试；黑名单、沙箱不可用与策略拒绝绝不降级或自动重跑 |
@@ -1462,7 +1465,7 @@ Harness 回合必须丢到后台 Task，**不得**在 `receive` 循环里 `await
 
 `task.create/status/cancel` 仍是 MCP 长任务桥：会话/用户/任务归属由平台注入，`task.create` 受活动任务占槽和“先评后压”门禁，且只入队/查询/取消，绝不在对话回合等待 Worker 终态。
 
-实时输出规则：`bash` 由 Runner 在 bwrap stdout 产生完整行时逐行转发；`read` 读取时按完整行块转发；`write` 仅在原子写入成功后转发与最终结果相同的受控内容预览。所有瞬态输出按 `call_id` 关联，累计最多 4000 字符；浏览器不得把它写入本地历史、持久事件或日志。断线期间的增量不补发，客户端继续等待同一 `call_id` 的最终 `tool_result`。
+实时输出规则：`bash` 由 Runner 在 bwrap stdout 产生完整行时逐行转发；`read` 读取时按完整行块转发；`write` 仅在原子写入成功后转发与最终结果相同的受控内容预览。所有瞬态输出按 `call_id` 关联，累计最多 `TOOL_PREVIEW_MAX_CHARS` 字符（默认 600,000，见 V1.45）；浏览器不得把它写入本地历史、持久事件或日志。断线期间的增量不补发，客户端继续等待同一 `call_id` 的最终 `tool_result`。
 
 失败恢复字段：`recovery.retryable` 只表示可在修复参数后再次发起调用，**不代表平台自动重试副作用工具**；`max_auto_repairs` 是 Agent reflect 的有界修复上限；`repair_hint` 必须脱敏，禁止出现堆栈、SQL、密钥、绝对路径或上游原文。
 
@@ -2085,7 +2088,7 @@ LangGraph `reflect` 在规划 `delivery=confirm` 且复核通过后发出确认�
 
 **V1.37（2026-08-26）— read 防重复与 ToolCard 行级预览**
 
-相同 `path+offset` 的 `read` 只执行一次（JSON ReAct 与原生 ToolCall 同一守卫）。预览按完整行截取，最多 4000 字符；`next_offset` 可作为下次 `offset` 别名。ToolCard 展示输入字段、行号与 Markdown 渲染。
+相同 `path+offset` 的 `read` 只执行一次（JSON ReAct 与原生 ToolCall 同一守卫）。预览按完整行截取，上限 `TOOL_PREVIEW_MAX_CHARS`（默认与模型窗口对齐）；`next_offset` 可作为下次 `offset` 别名。ToolCard 展示输入字段、行号与 Markdown 渲染。
 
 | 文件 | 作用 |
 | :--- | :--- |
@@ -2151,7 +2154,7 @@ LangGraph `reflect` 在规划 `delivery=confirm` 且复核通过后发出确认�
 
 **V1.44（2026-08-26）— ToolCall 真实流式、权限与恢复契约**
 
-`tool_call` 必须先持久化，随后才允许同 `call_id` 的 `tool_progress`、`tool_output_delta` 出现；两个增量事件只给在线会话成员，不落库、不补发。`tool_result` 保持唯一持久化终态，失败结果携带脱敏 `recovery`。浏览器输出只来自注册表定义的安全投影，单次调用最多 4,000 字符，禁止回传完整 Observation。
+`tool_call` 必须先持久化，随后才允许同 `call_id` 的 `tool_progress`、`tool_output_delta` 出现；两个增量事件只给在线会话成员，不落库、不补发。`tool_result` 保持唯一持久化终态，失败结果携带脱敏 `recovery`。浏览器输出只来自注册表定义的安全投影，单次调用最多 `TOOL_PREVIEW_MAX_CHARS` 字符（默认与模型窗口对齐），禁止回传模型上下文之外的内容（如未脱敏错误、密钥、绝对路径）。
 
 | 文件 | 作用 |
 | :--- | :--- |

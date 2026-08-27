@@ -90,8 +90,8 @@ Agent 思考配置从 `Setting(key="agent_reasoning")` 读取，结构为
 | `response.completed` | 本轮生成结束，携带 `finish_reason` 和 `role=assistant` 并可回放 |
 | `tool_call` | 已解析的短工具 `call_id`、名称与参数；创建 ToolCard，不直接执行业务长任务 |
 | `tool_progress` | ToolNode 校验/执行/收尾的瞬态阶段；按 `call_id` 原地更新卡片，不落库、不补发 |
-| `tool_output_delta` | 服务端受控输出块；`bash` 逐完整行、`read` 按完整行块、`write` 仅在原子写成功后下发预览；单次调用累计≤4000字符，不落库、不补发 |
-| `tool_result` | 与 `tool_call.call_id` 相同的短工具受控结果；`read` 仅包含行范围、文件统计与完整行预览（≤4000 字符），完整正文不进入 WS 事件 |
+| `tool_output_delta` | 服务端受控输出块；`bash` 逐完整行、`read` 按完整行块、`write` 仅在原子写成功后下发预览；单次调用累计≤`TOOL_PREVIEW_MAX_CHARS`（默认与 read 窗口对齐），不落库、不补发 |
+| `tool_result` | 与 `tool_call.call_id` 相同的短工具受控结果；`read` 包含行范围、文件统计与完整行预览（上限随部署配置，经 `preview_limit_chars` 下发） |
 | `confirm` | 质量任务确认卡（TaskSpec）；`kind` 不得为 `stress`；落 `sessions.pending_confirm` |
 | `error` | 脱敏后的 `ErrorCode` 与用户可见消息 |
 | `pong` | 应用层心跳，不占用持久化事件号，可与业务事件交错到达 |

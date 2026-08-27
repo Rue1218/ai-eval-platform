@@ -589,7 +589,7 @@ AgentView
 
 **思考卡**（`thought`）：参考原型 ThinkCard。标题「思考」；流式追加短文本；结束后 800ms 收起 `opacity:.55`。不是系统提示词，用户不能编辑。
 
-**工具卡**（`tool_call` / `tool_progress` / `tool_output_delta` / `tool_result`）：参考原型 ToolCall。`tool_call` 先创建持久卡片；`tool_progress` 在 pending 阶段更新「校验中 / 执行中 / 收尾中」文案；`tool_output_delta` 仅追加服务端受控的 4KB 行级预览，按 `seq` 去重、按 `start_line` 显示行号。`tool_result` 是唯一持久终态，成功后以其安全投影收敛，失败则保留已收到的流式输出并显示 `recovery.suggested_action`。默认折叠，展开见 ToolCall 参数与输出。原生基础工具标题显示英文 `read` / `write` / `bash` 等；失败不回显堆栈、密钥、绝对路径或完整 Observation。卡片初次出现与展开采用 160–220ms 缓动；`prefers-reduced-motion` 时取消位移、光标闪烁和脉冲。
+**工具卡**（`tool_call` / `tool_progress` / `tool_output_delta` / `tool_result`）：参考原型 ToolCall。`tool_call` 先创建持久卡片；`tool_progress` 在 pending 阶段更新「校验中 / 执行中 / 收尾中」文案；`tool_output_delta` 仅追加服务端受控窗口内的行级预览（上限随部署配置，默认与 read 模型窗口对齐），按 `seq` 去重、按 `start_line` 显示行号；预览被截断时显示「预览截断」徽标与尾部提示。`tool_result` 是唯一持久终态，成功后以其安全投影收敛，失败则保留已收到的流式输出并显示 `recovery.suggested_action`。默认折叠，展开见 ToolCall 参数与输出。原生基础工具标题显示英文 `read` / `write` / `bash` 等；失败不回显堆栈、密钥、绝对路径或完整 Observation。卡片初次出现与展开采用 160–220ms 缓动；`prefers-reduced-motion` 时取消位移、光标闪烁和脉冲。
 
 **确认卡**：对话流内，不是 Dialog。规格 §6。未 `confirm_ack` 前可改 `patch`；确认后变只读灰底。同一时刻每会话最多一张待确认卡。
 

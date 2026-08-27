@@ -980,8 +980,13 @@ def test_read_file_safe_counts_final_line_without_newline() -> None:
         assert last.is_complete is True
 
 
-def test_read_result_hides_full_content_from_display_data() -> None:
-    """完整正文只给 Observation；ToolCard 数据仅包含受控预览。"""
+def test_read_result_hides_full_content_from_display_data(monkeypatch) -> None:
+    """完整正文只给 Observation；ToolCard 数据仅包含受控预览窗口。"""
+    from app.config import settings
+
+    # 预览上限可配置（TOOL_PREVIEW_MAX_CHARS）；用小上限验证截断语义与
+    # preview_limit_chars 的下发，默认值对齐 read 模型窗口。
+    monkeypatch.setattr(settings, "tool_preview_max_chars", 100)
     with tempfile.TemporaryDirectory() as root:
         write_file_safe("secret.txt", "机密内容" * 200, root)
         result = read_file_safe("secret.txt", root)
@@ -990,7 +995,9 @@ def test_read_result_hides_full_content_from_display_data() -> None:
         assert isinstance(display, dict)
         assert "model_text" in data
         assert "model_text" not in display
-        assert len(display["read"]["preview"]) <= 4000
+        assert len(display["read"]["preview"]) <= 100
+        assert display["read"]["preview_truncated"] is True
+        assert display["read"]["preview_limit_chars"] == 100
 
 
 def test_task_plan_is_transient_and_never_creates_platform_task() -> None:
