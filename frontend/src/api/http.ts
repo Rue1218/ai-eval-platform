@@ -41,6 +41,7 @@ import {
   type WorkspaceOverview,
   type WorkspaceFileList,
   type CompareSampleRow,
+  type McpHealthCheckResponse,
 } from './types'
 import {
   MOCK_PROFILES,
@@ -484,7 +485,7 @@ export const api = {
 
   // 5.6 MCP 工具中心（API V1.3 §3.6.1，V1.0 只读）
   mcp: {
-    /** 全量工具清单（原生 ToolCall + MCP 扩展），含 transport 字段供前端分组 */
+    /** 全量工具清单（原生 ToolCall + MCP 扩展），含完整 Schema、代码与执行流契约 */
     async tools(): Promise<{ items: McpTool[]; total: number }> {
       if (getDataMode() === 'mock') {
         return { items: [...MOCK_MCP_TOOLS], total: MOCK_MCP_TOOLS.length }
@@ -497,6 +498,77 @@ export const api = {
         const { data } = await http.get('/api/mcp/tools')
         return data
       }
+    },
+
+    /** 全通道健康与连通性自检（Native 执行器、内部 MCP Server、外部网关） */
+    async healthCheck(): Promise<McpHealthCheckResponse> {
+      if (getDataMode() === 'mock') {
+        return {
+          ok: true,
+          timestamp: Date.now() / 1000,
+          total_latency_ms: 12,
+          summary: {
+            total_tools: MOCK_MCP_TOOLS.length,
+            native_tools_count: MOCK_MCP_TOOLS.filter((t) => t.transport === 'native').length,
+            internal_mcp_tools_count: MOCK_MCP_TOOLS.filter((t) => t.transport === 'mcp').length,
+            external_mcp_servers_count: 0,
+          },
+          channels: {
+            native: {
+              channel: 'native_toolcall',
+              name: 'NativeToolExecutor (原生基础工具通道)',
+              ok: true,
+              tools_count: 7,
+              tools: ['read', 'write', 'edit', 'bash', 'task', 'web_search', 'web_fetch'],
+              latency_ms: 5,
+              sandbox_mode: 'bwrap 进程级隔离 (无网络/只读根系统)',
+              bwrap_ready: true,
+              workspace_access: '读写正常',
+              message: '原生通道就绪 · 已装载 7 个基础工具 (进程内直连执行)',
+            },
+            internal_mcp: {
+              channel: 'internal_mcp',
+              name: 'platform.tasks (内部受控 MCP Server)',
+              ok: true,
+              tools_count: 3,
+              tools: ['platform.tasks.task.create', 'platform.tasks.task.status', 'platform.tasks.task.cancel'],
+              latency_ms: 6,
+              provider: 'InProcessProvider (受控 Host)',
+              task_queue_bridge: 'PostgreSQL tasks 状态机连通正常',
+              message: '内部 MCP Server 正常 · 已注册 3 个任务队列受控扩展',
+            },
+            external_gateway: {
+              channel: 'external_mcp',
+              name: 'External MCP Server Gateway',
+              ok: true,
+              status: 'controlled_standby',
+              active_external_servers: 0,
+              isolation_guard: '严格启用 (防范长延迟与越权代码注入)',
+              message: '外部网关处于受控边界保护状态 · 预留动态扩展槽位',
+            },
+          },
+        }
+      }
+      const { data } = await http.get('/api/mcp/health-check')
+      return data
+    },
+
+    /** 查看单个工具底层实现代码与链路 */
+    async code(toolName: string): Promise<any> {
+      if (getDataMode() === 'mock') {
+        const tool = MOCK_MCP_TOOLS.find((t) => t.name === toolName || t.tool_id === toolName)
+        return {
+          name: tool?.name || toolName,
+          display_name: tool?.display_name || toolName,
+          source_file: tool?.code_details?.source_file || 'backend/api/app/harness/execution/registry.py',
+          handler_function: tool?.code_details?.handler_function || `_${toolName}_handler()`,
+          code_summary: tool?.code_details?.code_summary || '受控短工具执行逻辑',
+          code_snippet: tool?.code_details?.code_snippet || `# ${toolName} 执行逻辑`,
+          pipeline_stages: tool?.pipeline?.stages || [],
+        }
+      }
+      const { data } = await http.get(`/api/mcp/tools/${encodeURIComponent(toolName)}/code`)
+      return data
     },
   },
 

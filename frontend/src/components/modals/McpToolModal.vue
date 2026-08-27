@@ -4,49 +4,61 @@
     preset="card"
     :trap-focus="false"
     :auto-focus="false"
-    :title="`受控工具清单详情 · ${tool?.name || ''}`"
-    style="width: 760px; max-width: 95vw; border-radius: 14px"
+    :title="`工具契约与代码详情 · ${tool?.display_name || tool?.name || ''}`"
+    style="width: 840px; max-width: 95vw; border-radius: 14px"
     @update:show="$emit('update:show', $event)"
   >
     <div v-if="tool" class="mcp-modal-content">
       <!-- 头部概览条 -->
       <div class="tool-modal-header">
         <div class="tool-title-row">
-          <span class="tool-icon">{{ meta.icon }}</span>
+          <span class="tool-icon">{{ toolIcon }}</span>
           <div style="flex: 1">
             <div class="row-between">
               <div class="row" style="gap: 8px; align-items: center">
-                <span class="tool-name mono">{{ tool.name }}</span>
+                <span class="tool-name">{{ tool.display_name || tool.name }}</span>
+                <span class="tool-id-tag mono">{{ tool.name }}</span>
+                <!-- 通道标识 -->
                 <span
-                  class="perm-badge"
-                  :class="tool.permission === 'write' ? 'perm-write' : 'perm-read'"
+                  class="channel-pill"
+                  :class="tool.transport === 'native' ? 'channel-native' : 'channel-mcp'"
                 >
-                  {{ tool.permission === 'write' ? '✍️ WRITE · 受控写入' : '📖 READ · 只读查询' }}
+                  {{ tool.transport === 'native' ? '⚡ 原生 ToolCall' : '🔗 内部 MCP Server' }}
                 </span>
-                <span class="domain-badge">{{ meta.domain }}</span>
+                <!-- 风险级别 -->
+                <span class="perm-badge" :class="riskBadgeClass">
+                  {{ riskBadgeLabel }}
+                </span>
               </div>
-              <span class="host-pill mono">Eval-Core · In-Process</span>
+              <span class="host-pill mono">{{ hostPillText }}</span>
             </div>
             <div class="tool-desc">{{ tool.desc }}</div>
           </div>
         </div>
       </div>
 
-      <!-- Tab 切换分段器：契约 Schema vs 后端真实链路 vs 在线实时调用测试 -->
+      <!-- 4 Tab 切换分段器 -->
       <div class="modal-sub-tabs">
         <button
           class="sub-tab-btn"
           :class="{ active: activeModalTab === 'contract' }"
           @click="activeModalTab = 'contract'"
         >
-          📜 接口契约规范 (Schema & Specs)
+          📜 输入输出参数契约 (Schema)
         </button>
         <button
           class="sub-tab-btn"
           :class="{ active: activeModalTab === 'pipeline' }"
           @click="activeModalTab = 'pipeline'"
         >
-          🔄 真实后端实现链路 (Backend Pipeline)
+          🔄 执行链路流程 (Pipeline)
+        </button>
+        <button
+          class="sub-tab-btn"
+          :class="{ active: activeModalTab === 'code' }"
+          @click="activeModalTab = 'code'"
+        >
+          💻 源码实现与 Handler (Code)
         </button>
         <button
           class="sub-tab-btn"
@@ -57,98 +69,146 @@
         </button>
       </div>
 
-      <!-- ═════════════════ Tab 1: 接口契约规范 ═════════════════ -->
+      <!-- ═════════════════ Tab 1: 接口契约规范 (Schema & Specs) ═════════════════ -->
       <div v-if="activeModalTab === 'contract'" class="tab-pane">
         <!-- 核心规格指标 -->
         <div class="spec-grid">
           <div class="spec-item">
-            <span class="spec-label">执行宿主 (Host)</span>
-            <span class="spec-value mono">Eval-Core (内置进程内)</span>
+            <span class="spec-label">执行通道 (Transport)</span>
+            <span class="spec-value mono font-bold" :class="tool.transport === 'native' ? 'text-success' : 'text-ai'">
+              {{ tool.transport === 'native' ? 'NativeToolExecutor (直连)' : 'MCPClientManager (MCP Host)' }}
+            </span>
           </div>
           <div class="spec-item">
-            <span class="spec-label">预估执行耗时</span>
-            <span class="spec-value mono text-success">{{ meta.latency }}</span>
+            <span class="spec-label">超时上限 (Timeout)</span>
+            <span class="spec-value mono text-success">{{ tool.timeout_s ? `${tool.timeout_s}s` : '默认 20s' }}</span>
           </div>
           <div class="spec-item">
-            <span class="spec-label">鉴权策略</span>
-            <span class="spec-value">JWT + ws-ticket 单次短票</span>
+            <span class="spec-label">流式支持 (Streaming)</span>
+            <span class="spec-value mono">{{ tool.supports_streaming ? '✅ 启用流式反馈' : '📦 整体返回' }}</span>
           </div>
           <div class="spec-item">
-            <span class="spec-label">长任务阻塞</span>
-            <span class="spec-value text-warning">禁止 (入队后异步执行)</span>
+            <span class="spec-label">确认卡门禁 (Confirmation)</span>
+            <span class="spec-value" :class="tool.requires_confirmation ? 'text-warning font-bold' : 'text-secondary'">
+              {{ tool.requires_confirmation ? '⚠️ 必须显式授权' : '自动安全执行' }}
+            </span>
           </div>
         </div>
 
-        <!-- 入参 JSON Schema -->
+        <!-- 1. 输入参数 JSON Schema (Input Arguments Schema) -->
         <div class="section-block mt12">
           <div class="section-title">
-            <span>📥 输入参数规范 (Input Arguments Schema)</span>
-            <span class="small tertiary mono">application/json</span>
+            <div class="row" style="gap: 6px; align-items: center">
+              <span>📥 输入参数规范 (Input Parameters Schema)</span>
+              <span class="small tertiary mono">application/json</span>
+            </div>
+            <span class="param-count-badge">{{ parsedInputParams.length }} 个参数</span>
           </div>
-          <div v-if="meta.params && meta.params.length > 0" class="params-table-wrap">
+
+          <div v-if="parsedInputParams.length > 0" class="params-table-wrap">
             <table class="params-table">
               <thead>
                 <tr>
-                  <th style="width: 140px">参数字段</th>
-                  <th style="width: 90px">类型</th>
+                  <th style="width: 150px">参数字段 (Field)</th>
+                  <th style="width: 90px">数据类型</th>
                   <th style="width: 70px">必填</th>
-                  <th>说明与约束</th>
+                  <th style="width: 140px">约束条件</th>
+                  <th>说明与描述</th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="p in meta.params" :key="p.name">
-                  <td class="mono font-bold">{{ p.name }}</td>
+                <tr v-for="p in parsedInputParams" :key="p.name">
+                  <td class="mono font-bold" style="color: var(--c-profiles)">{{ p.name }}</td>
                   <td><span class="type-tag mono">{{ p.type }}</span></td>
                   <td>
                     <span :class="p.required ? 'text-error font-bold' : 'tertiary'">
                       {{ p.required ? '是' : '否' }}
                     </span>
                   </td>
+                  <td class="mono small tertiary">{{ p.constraints || '—' }}</td>
                   <td class="small">{{ p.desc }}</td>
                 </tr>
               </tbody>
             </table>
           </div>
           <div v-else class="empty-params">
-            <span class="tertiary small">无输入参数（调用时传空对象 <code>{}</code> 即可）</span>
+            <span class="tertiary small">无输入参数（调用时直接传空参数对象 <code>{}</code> 即可）</span>
           </div>
         </div>
 
-        <!-- 调用示例与返回报文 -->
+        <!-- 2. 输出参数规范 (Output Schema & Response Fields) -->
         <div class="section-block mt12">
           <div class="section-title">
-            <span>📤 工具请求与返回报文示例</span>
+            <div class="row" style="gap: 6px; align-items: center">
+              <span>📤 输出参数结构 (Output Response Schema)</span>
+              <span class="small tertiary mono">结构化返回值规范</span>
+            </div>
+            <span class="param-count-badge">{{ parsedOutputFields.length }} 个响应字段</span>
+          </div>
+
+          <div v-if="parsedOutputFields.length > 0" class="params-table-wrap">
+            <table class="params-table">
+              <thead>
+                <tr>
+                  <th style="width: 160px">输出字段 (Key)</th>
+                  <th style="width: 100px">数据类型</th>
+                  <th>字段说明与结构</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="f in parsedOutputFields" :key="f.name">
+                  <td class="mono font-bold text-success">{{ f.name }}</td>
+                  <td><span class="type-tag mono">{{ f.type }}</span></td>
+                  <td class="small">{{ f.desc }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div v-else class="empty-params">
+            <span class="tertiary small">返回基础状态回执对象 <code>{"summary": string}</code></span>
+          </div>
+        </div>
+
+        <!-- 3. 调用示例与返回报文 -->
+        <div class="section-block mt12">
+          <div class="section-title">
+            <span>📦 请求与返回载荷示例 (JSON Payloads)</span>
           </div>
           <div class="code-box-tabs">
             <div class="code-preview-wrap">
-              <div class="code-label">Agent 工具请求示例:</div>
-              <pre class="json-code"><code>{{ meta.exampleRequest }}</code></pre>
+              <div class="code-label">Agent 工具请求示例 (Input Arguments):</div>
+              <pre class="json-code"><code>{{ exampleRequestJson }}</code></pre>
             </div>
             <div class="code-preview-wrap">
-              <div class="code-label">Host 返回报文示例 (Output):</div>
-              <pre class="json-code"><code>{{ meta.exampleResponse }}</code></pre>
+              <div class="code-label">Handler 输出报文示例 (Output Response):</div>
+              <pre class="json-code"><code>{{ exampleResponseJson }}</code></pre>
             </div>
           </div>
         </div>
 
-        <!-- 安全与风控约束 -->
+        <!-- 4. 权限与风控策略 -->
         <div class="section-block guardrail-box mt12">
-          <div class="guardrail-title">🛡️ 安全与风控契约约束</div>
-          <div class="guardrail-desc">{{ meta.securityNote }}</div>
+          <div class="guardrail-title">🛡️ 权限策略与恢复建议 (Policy & Recovery)</div>
+          <div class="guardrail-desc">
+            <div><strong>权限标识：</strong><code>{{ tool.permission || 'sandbox.default' }}</code></div>
+            <div v-if="tool.recovery_policy?.default_hint" class="mt4">
+              <strong>恢复提示：</strong>{{ tool.recovery_policy.default_hint }}
+            </div>
+          </div>
         </div>
       </div>
 
-      <!-- ═════════════════ Tab 2: 真实后端实现链路 ═════════════════ -->
+      <!-- ═════════════════ Tab 2: 真实后端实现链路 (Pipeline) ═════════════════ -->
       <div v-else-if="activeModalTab === 'pipeline'" class="tab-pane">
-        <!-- 真实实现链路看板 -->
+        <!-- 链路架构指标 -->
         <div class="pipeline-card-grid">
           <div class="pipeline-item">
             <div class="pipe-header">
               <span class="pipe-icon">📁</span>
-              <span class="pipe-title">后端源码实现位置</span>
+              <span class="pipe-title">源码实现位置</span>
             </div>
-            <div class="pipe-body mono small">{{ meta.sourceFile }}</div>
-            <div class="pipe-hint">FastAPI 进程内受控调度模块 (In-Process Short Tools)</div>
+            <div class="pipe-body mono small">{{ tool.code_details?.source_file || 'backend/api/app/harness/execution/registry.py' }}</div>
+            <div class="pipe-hint">FastAPI 进程内受控模块，严禁暴露敏感配置</div>
           </div>
 
           <div class="pipeline-item">
@@ -156,73 +216,120 @@
               <span class="pipe-icon">⚙️</span>
               <span class="pipe-title">底层执行函数</span>
             </div>
-            <div class="pipe-body mono small text-ai">{{ meta.backendFunction }}</div>
-            <div class="pipe-hint">由 execute_short_tool() 安全封装分发</div>
-          </div>
-
-          <div class="pipeline-item">
-            <div class="pipe-header">
-              <span class="pipe-icon">🗄️</span>
-              <span class="pipe-title">关联 PostgreSQL 数据实体</span>
-            </div>
-            <div class="pipe-body mono small">{{ meta.dbEntity }}</div>
-            <div class="pipe-hint">通过 SQLAlchemy ORM 快速只读检索 / 状态流转</div>
+            <div class="pipe-body mono small text-ai">{{ tool.code_details?.handler_function || `_${tool.short_name || tool.name}_handler()` }}</div>
+            <div class="pipe-hint">{{ tool.transport === 'native' ? 'NativeToolExecutor 进程内直接调用' : 'MCP InProcessProvider 桥接' }}</div>
           </div>
 
           <div class="pipeline-item">
             <div class="pipe-header">
               <span class="pipe-icon">🛡️</span>
-              <span class="pipe-title">敏感凭据脱敏保护</span>
+              <span class="pipe-title">沙箱与隔离策略</span>
             </div>
-            <div class="pipe-body mono small text-success">redact_secrets() 过滤</div>
-            <div class="pipe-hint">正则自动过滤 API Key、Token、Password，防范泄露至上下文</div>
+            <div class="pipe-body mono small text-success">
+              {{ tool.transport === 'native' ? (tool.risk_level === 'code' ? 'bwrap 沙箱 (无网络/只读根)' : '会话工作区隔离') : 'PostgreSQL 状态机解耦' }}
+            </div>
+            <div class="pipe-hint">限制运行空间与并发资源，防止越权破坏</div>
+          </div>
+
+          <div class="pipeline-item">
+            <div class="pipe-header">
+              <span class="pipe-icon">🔒</span>
+              <span class="pipe-title">凭据脱敏与防爆仓</span>
+            </div>
+            <div class="pipe-body mono small text-success">redact_secrets() + 截断保护</div>
+            <div class="pipe-hint">正则脱敏 Token/Key，超长内容生成 next_offset 引导分页</div>
           </div>
         </div>
 
-        <!-- 执行防护机制说明 -->
+        <!-- 执行流阶段 Pipeline 步骤卡片 -->
         <div class="section-block mt12">
           <div class="section-title">
-            <span>🔒 HAR-NFR-07 短工具执行防护机制</span>
+            <span>🔄 执行流程阶段 (Execution Pipeline Stages)</span>
+            <span class="small tertiary">从 Agent 意图识别到结果回填的完整生命周期</span>
           </div>
+
           <div class="pipeline-steps-box">
-            <div class="p-step">
-              <div class="step-badge">1</div>
-              <div>
-                <div class="step-title">长短任务强校验 (assert_short_tool)</div>
-                <div class="step-desc">拦截任何长时间阻塞型评测调用，耗时任务严格必须通过 task.create 入队排队。</div>
+            <div v-for="st in pipelineStages" :key="st.step" class="p-step">
+              <div class="step-badge">{{ st.step }}</div>
+              <div style="flex: 1">
+                <div class="step-title">{{ st.name }}</div>
+                <div class="step-desc">{{ st.desc }}</div>
               </div>
             </div>
-            <div class="p-step">
-              <div class="step-badge">2</div>
-              <div>
-                <div class="step-title">上下文防撑爆截断 (truncate_tool_data)</div>
-                <div class="step-desc">列表最多返回 20 条摘要，整段 JSON 超 4000 字符自动截断并标记 truncated=true。</div>
-              </div>
-            </div>
-            <div class="p-step">
-              <div class="step-badge">3</div>
-              <div>
-                <div class="step-title">复核溯源收集 (collect_ids)</div>
-                <div class="step-desc">自动从工具返回值提取任务 ID、数据集 ID 与模型 ID，供 G3 门禁防幻觉核对。</div>
-              </div>
+          </div>
+        </div>
+
+        <!-- 架构防御机制 -->
+        <div class="section-block mt12">
+          <div class="section-title">
+            <span>🔒 HAR-NFR-07 安全执行保障</span>
+          </div>
+          <div class="guardrail-box">
+            <div class="guardrail-desc" style="font-size: 11.5px; line-height: 1.6">
+              • <strong>长短任务分离</strong>：耗时评测与压测绝不直接在此执行，统一通过 <code>task.create</code> 入队排队由异步 Worker 消费。<br>
+              • <strong>防幻觉复核</strong>：自动提取关联的任务 ID、数据集 ID 与模型 ID，供 G3 门禁防幻觉核对。<br>
+              • <strong>原子操作</strong>：文件修改（write/edit）严格保证原子性，支持回滚与修复提示。
             </div>
           </div>
         </div>
       </div>
 
-      <!-- ═════════════════ Tab 3: 在线接口检查 ═════════════════ -->
+      <!-- ═════════════════ Tab 3: 底层源码与 Handler (Code) ═════════════════ -->
+      <div v-else-if="activeModalTab === 'code'" class="tab-pane">
+        <div class="section-block">
+          <div class="row-between">
+            <div class="section-title">
+              <span>💻 Python Handler 实现源码片段 (Source Code)</span>
+            </div>
+            <div class="row" style="gap: 8px">
+              <button class="link-btn small" @click="handleCopyCode">
+                📋 复制代码
+              </button>
+            </div>
+          </div>
+
+          <div class="code-meta-bar">
+            <div class="code-meta-item">
+              <span class="meta-label">文件路径:</span>
+              <span class="meta-val mono">{{ tool.code_details?.source_file || 'backend/api/app/harness/execution/registry.py' }}</span>
+            </div>
+            <div class="code-meta-item">
+              <span class="meta-label">入口函数:</span>
+              <span class="meta-val mono text-ai">{{ tool.code_details?.handler_function || `_${tool.name}_handler` }}</span>
+            </div>
+          </div>
+
+          <!-- 代码高亮预览框 -->
+          <pre class="json-code code-full-block"><code>{{ codeSnippetText }}</code></pre>
+        </div>
+
+        <div class="section-block mt12">
+          <div class="section-title">
+            <span>💡 核心执行逻辑摘要 (Implementation Summary)</span>
+          </div>
+          <div class="guardrail-box">
+            <div class="guardrail-desc">
+              {{ tool.code_details?.code_summary || '受控执行逻辑：解析参数 -> 安全门禁 -> 进程内直连执行 -> 结果脱敏与上下文截断。' }}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═════════════════ Tab 4: 在线接口检查 (Live Check) ═════════════════ -->
       <div v-else class="tab-pane">
         <div class="live-test-header row-between">
           <div>
-            <span style="font-weight: 700; font-size: 13.5px">⚡ 真实接口在线检查</span>
-            <div class="small tertiary">浏览器只检查受控清单或同源 REST 接口，不直接执行内部 ToolCall。</div>
+            <span style="font-weight: 700; font-size: 13.5px">⚡ 真实接口在线自检</span>
+            <div class="small tertiary">
+              {{ tool.transport === 'native' ? '检查 NativeToolExecutor 注册状态与参数 Schema 连通' : '检查内部 MCP Server 目录索引与接口健康' }}
+            </div>
           </div>
           <button
             class="btn btn-sign btn-sm"
             :disabled="testing"
             @click="handleRunLiveToolCall"
           >
-            {{ testing ? '检查中…' : '▶ 真实在线检查' }}
+            {{ testing ? '检查中…' : '▶ 真实在线自检' }}
           </button>
         </div>
 
@@ -230,18 +337,18 @@
         <div v-if="testResult" class="test-status-bar" :class="{ ok: testResult.ok, err: !testResult.ok }">
           <div class="row" style="gap: 8px; align-items: center">
             <span class="status-indicator">{{ testResult.ok ? '●' : '✕' }}</span>
-            <span class="font-bold">{{ testResult.ok ? '接口检查成功 (HTTP 200 OK)' : '接口检查失败' }}</span>
+            <span class="font-bold">{{ testResult.ok ? '接口自检成功 · 状态正常' : '接口自检异常' }}</span>
           </div>
           <div class="row" style="gap: 12px; align-items: center">
             <span class="mono small">耗时: {{ testResult.latencyMs }}ms</span>
-            <span class="mono small">载荷条数: {{ testResult.itemCount }} 条</span>
+            <span class="mono small">载荷大小: {{ testResult.payloadSize }} 字符</span>
           </div>
         </div>
 
         <!-- 真实返回数据展示 -->
         <div class="section-block mt12">
           <div class="row-between">
-          <span class="section-title">📦 服务端真实返回载荷:</span>
+            <span class="section-title">📦 服务端真实返回载荷 (Live Response Payload):</span>
             <button
               v-if="testResult"
               class="link-btn small"
@@ -257,7 +364,7 @@
 
     <template #footer>
       <div class="row-between" style="width: 100%">
-        <span class="small tertiary mono">受控工具清单 · 浏览器只读检查</span>
+        <span class="small tertiary mono">受控工具清单与代码详情 · 浏览器只读</span>
         <button class="btn btn-secondary btn-sm" @click="$emit('update:show', false)">关闭</button>
       </div>
     </template>
@@ -272,27 +379,6 @@ import type { McpTool } from '../../api/types'
 
 const message = useMessage()
 
-// 工具元数据与 JSON Schema 扩展定义
-interface ToolParam {
-  name: string
-  type: string
-  required: boolean
-  desc: string
-}
-
-interface ToolMeta {
-  icon: string
-  domain: string
-  latency: string
-  sourceFile: string
-  backendFunction: string
-  dbEntity: string
-  securityNote: string
-  params: ToolParam[]
-  exampleRequest: string
-  exampleResponse: string
-}
-
 const props = defineProps<{
   show: boolean
   tool: McpTool | null
@@ -302,14 +388,13 @@ defineEmits<{
   (e: 'update:show', val: boolean): void
 }>()
 
-// 模态弹窗内部 Sub-Tabs: 'contract' | 'pipeline' | 'live_test'
-const activeModalTab = ref<'contract' | 'pipeline' | 'live_test'>('contract')
+// 4 大 Sub-Tabs: 'contract' | 'pipeline' | 'code' | 'live_test'
+const activeModalTab = ref<'contract' | 'pipeline' | 'code' | 'live_test'>('contract')
 
-// 实时测试状态
+// 实时自检状态
 const testing = ref(false)
-const testResult = ref<{ ok: boolean; latencyMs: number; itemCount: number; data: any } | null>(null)
+const testResult = ref<{ ok: boolean; latencyMs: number; payloadSize: number; data: any } | null>(null)
 
-// 切换到测试 Tab 时自动触发一次测试（如果尚未测试）
 function handleSwitchToLiveTest() {
   activeModalTab.value = 'live_test'
   if (!testResult.value && !testing.value) {
@@ -317,7 +402,6 @@ function handleSwitchToLiveTest() {
   }
 }
 
-// 当弹窗打开或更换工具时重置测试结果
 watch(
   () => props.tool,
   () => {
@@ -326,342 +410,210 @@ watch(
   },
 )
 
-/** 真实在线检查同源接口；浏览器不绕过边界直接执行内部 ToolCall。 */
+/** 工具展示图标 */
+const toolIcon = computed(() => {
+  if (!props.tool) return '🛠️'
+  const name = props.tool.name
+  if (name === 'read' || name === 'write' || name === 'edit') return '📂'
+  if (name === 'web_search' || name === 'web_fetch') return '🌐'
+  if (name === 'bash') return '💻'
+  if (name === 'task') return '📋'
+  if (name.includes('task.')) return '🚀'
+  if (name.startsWith('model.')) return '🤖'
+  if (name.startsWith('dataset.')) return '📚'
+  if (name.startsWith('kb.')) return '🧠'
+  if (name.startsWith('audio.')) return '🔊'
+  if (name.startsWith('image.')) return '🖼️'
+  return '🛠️'
+})
+
+/** 风险等级标签与样式 */
+const riskBadgeLabel = computed(() => {
+  const risk = props.tool?.risk_level
+  switch (risk) {
+    case 'read': return '📖 READ · 只读'
+    case 'network': return '🌐 NET · 网络'
+    case 'modify': return '✍️ MODIFY · 写入'
+    case 'code': return '💻 CODE · 命令执行'
+    case 'long': return '⏱️ LONG · 长任务'
+    default: return '🛠️受控调用'
+  }
+})
+
+const riskBadgeClass = computed(() => {
+  const risk = props.tool?.risk_level
+  switch (risk) {
+    case 'read': return 'perm-read'
+    case 'network': return 'perm-network'
+    case 'code': return 'perm-code'
+    default: return 'perm-write'
+  }
+})
+
+const hostPillText = computed(() => {
+  if (!props.tool) return 'Eval-Core'
+  if (props.tool.transport === 'native') return 'Native Host · 进程内直连'
+  return `MCP Server · ${props.tool.server_id || 'platform.tasks'}`
+})
+
+/** 解析输入参数列表 */
+const parsedInputParams = computed(() => {
+  if (!props.tool) return []
+  const schema = props.tool.parameters_schema
+  if (!schema || !schema.properties) return []
+  const requiredList: string[] = Array.isArray(schema.required) ? schema.required : []
+  return Object.entries(schema.properties).map(([name, prop]: [string, any]) => {
+    let constraints = ''
+    if (prop.minimum !== undefined || prop.maximum !== undefined) {
+      constraints = `范围: [${prop.minimum ?? '—'}, ${prop.maximum ?? '—'}]`
+    } else if (prop.enum) {
+      constraints = `可选: ${prop.enum.join(' | ')}`
+    } else if (prop.minLength !== undefined || prop.maxLength !== undefined) {
+      constraints = `长度: [${prop.minLength ?? 0}, ${prop.maxLength ?? '—'}]`
+    }
+    return {
+      name,
+      type: prop.type || 'any',
+      required: requiredList.includes(name),
+      constraints,
+      desc: prop.description || '无详细描述',
+    }
+  })
+})
+
+/** 解析输出参数结构 */
+const parsedOutputFields = computed(() => {
+  if (!props.tool) return []
+  const schema = props.tool.output_schema
+  if (!schema || !schema.properties) {
+    return [
+      { name: 'summary', type: 'string', desc: '执行操作结果摘要文本' },
+    ]
+  }
+  const fields: { name: string; type: string; desc: string }[] = []
+  for (const [key, prop] of Object.entries(schema.properties as Record<string, any>)) {
+    if (prop.type === 'object' && prop.properties) {
+      for (const [subKey, subProp] of Object.entries(prop.properties as Record<string, any>)) {
+        fields.push({
+          name: `${key}.${subKey}`,
+          type: subProp.type || 'any',
+          desc: subProp.description || `${key} 嵌套输出属性`,
+        })
+      }
+    } else {
+      fields.push({
+        name: key,
+        type: prop.type || 'any',
+        desc: prop.description || `${key} 顶层返回字段`,
+      })
+    }
+  }
+  return fields
+})
+
+/** 执行流程步骤 */
+const pipelineStages = computed(() => {
+  if (props.tool?.pipeline?.stages && props.tool.pipeline.stages.length > 0) {
+    return props.tool.pipeline.stages
+  }
+  return [
+    { step: 1, name: '参数解析与有效性校验', desc: '基于 Pydantic / JSON Schema 严格校验输入参数' },
+    { step: 2, name: '沙箱与权限策略门禁', desc: '校验当前会话工作区访问权限与执行风险拦截' },
+    { step: 3, name: '核心 Handler 执行', desc: props.tool?.transport === 'native' ? 'NativeToolExecutor 进程内直接分派' : 'MCPClientManager 桥接执行' },
+    { step: 4, name: '凭据脱敏与防爆仓截断', desc: '自动过滤敏感 Token/Key 并保护上下文窗口' },
+    { step: 5, name: '结构化回填与状态同步', desc: '更新 GraphState 状态机并将响应投影给 Agent' },
+  ]
+})
+
+/** 源码片段展示 */
+const codeSnippetText = computed(() => {
+  if (props.tool?.code_details?.code_snippet) {
+    return props.tool.code_details.code_snippet
+  }
+  return `# ${props.tool?.name || 'tool'} 底层实现函数\ndef _${props.tool?.name || 'handler'}(arguments, sandbox_dir, context):\n    # 1. 路径校验与参数安全检查\n    # 2. 核心业务处理\n    return {"summary": "执行完成"}`
+})
+
+/** 示例请求 JSON */
+const exampleRequestJson = computed(() => {
+  if (!props.tool) return '{}'
+  const args: Record<string, any> = {}
+  const schema = props.tool.parameters_schema
+  if (schema && schema.properties) {
+    for (const [key, prop] of Object.entries(schema.properties as Record<string, any>)) {
+      if (prop.type === 'string') args[key] = key === 'path' ? 'workspace/example.txt' : (key === 'query' ? '大模型评测' : 'sample_value')
+      else if (prop.type === 'integer') args[key] = prop.minimum || 0
+      else if (prop.type === 'boolean') args[key] = true
+      else if (prop.type === 'array') args[key] = []
+      else args[key] = {}
+    }
+  }
+  return JSON.stringify({ name: props.tool.name, arguments: args }, null, 2)
+})
+
+/** 示例响应 JSON */
+const exampleResponseJson = computed(() => {
+  if (!props.tool) return '{}'
+  const res: Record<string, any> = { summary: `已成功执行 ${props.tool.display_name || props.tool.name}` }
+  const shortName = props.tool.name.includes('.') ? props.tool.name.split('.').pop()! : props.tool.name
+  if (shortName === 'read') {
+    res.read = { path: 'example.txt', total_lines: 42, preview: 'File preview text...' }
+  } else if (shortName === 'write') {
+    res.write = { path: 'example.txt', bytes_written: 1024, lines_written: 30 }
+  } else if (shortName === 'create') {
+    res.task = { task_id: 't-20260820-0012', kind: 'benchmark', status: 'queued' }
+  } else if (shortName === 'status') {
+    res.task = { task_id: 't-20260820-0012', status: 'running', progress: { done: 30, total: 50, percent: 60 } }
+  }
+  return JSON.stringify(res, null, 2)
+})
+
+const testResultJson = computed(() => {
+  if (!testResult.value) {
+    return '// 点击右上角「▶ 真实在线自检」开始执行…'
+  }
+  return JSON.stringify(testResult.value.data, null, 2)
+})
+
+function handleCopyCode() {
+  navigator.clipboard.writeText(codeSnippetText.value)
+  message.success('已复制 Python Handler 源码片段')
+}
+
+function handleCopyTestResult() {
+  if (!testResult.value) return
+  navigator.clipboard.writeText(testResultJson.value)
+  message.success('已复制返回载荷 JSON')
+}
+
+/** 在线真实自检 */
 async function handleRunLiveToolCall() {
   if (!props.tool) return
   testing.value = true
   const start = performance.now()
   try {
-    let rawData: any = null
-    const toolName = props.tool.name
-
-    if (toolName === 'model.list') {
-      const res = await api.profiles.list()
-      rawData = {
-        items: res.map((p) => ({ id: p.id, name: p.name, protocol: p.protocol, model: p.model, usages: p.usages })),
-        total: res.length,
-      }
-    } else if (toolName === 'dataset.list') {
-      const res = await api.datasets.list()
-      rawData = {
-        // 数据集列表契约未固定 format，保留后端可能返回的扩展字段。
-        items: res.map((d) => {
-          const dataset = d as typeof d & { format?: string }
-          return { id: dataset.id, name: dataset.name, version: dataset.version, row_count: dataset.row_count, format: dataset.format }
-        }),
-        total: res.length,
-      }
-    } else if (toolName === 'dispatch.overview') {
-      const res = await api.dispatch.overview()
-      rawData = res || { workers: 1, queue_depth: 0, strategy: '负载均衡' }
-    } else if (toolName === 'task.get') {
-      const res = await api.tasks.list()
-      const latestTask = res[0]
-      rawData = latestTask
-        ? { id: latestTask.id, kind: latestTask.kind, status: latestTask.status, progress: latestTask.progress, report_id: latestTask.report_id }
-        : { message: '暂无任务记录' }
-    } else if (toolName === 'report.get') {
-      const res = await api.tasks.list()
-      const taskWithReport = res.find((t) => t.report_id)
-      if (taskWithReport && taskWithReport.report_id) {
-        const report = await api.reports.get(taskWithReport.report_id)
-        // 报告按评测类型返回不同指标，metrics 属于兼容扩展字段。
-        const reportWithMetrics = report as typeof report & { metrics?: Record<string, unknown> }
-        rawData = { report_id: report.id, task_id: report.task_id, kind: report.kind, metrics: reportWithMetrics.metrics }
-      } else {
-        rawData = { report_id: 'rep-mock-01', metrics: { accuracy: 0.92, latency_p95_ms: 280 } }
-      }
-    } else {
-      // 通用从 /api/mcp/tools 取真实元数据
-      const toolsRes = await api.mcp.tools()
-      const current = toolsRes.items.find((x) => x.name === toolName)
-      rawData = { tool: current || props.tool, status: current ? 'manifest_available' : 'not_in_manifest' }
-    }
-
+    const res = await api.mcp.code(props.tool.name)
     const latency = Math.round(performance.now() - start)
-    const count = Array.isArray(rawData?.items) ? rawData.items.length : 1
+    const payloadStr = JSON.stringify(res)
     testResult.value = {
       ok: true,
       latencyMs: Math.max(1, latency),
-      itemCount: count,
-      data: rawData,
+      payloadSize: payloadStr.length,
+      data: res,
     }
-    message.success(`接口检查 [${toolName}] 成功 (${testResult.value.latencyMs}ms)`)
+    message.success(`自检 [${props.tool.display_name || props.tool.name}] 成功 (${testResult.value.latencyMs}ms)`)
   } catch (err: any) {
     const latency = Math.round(performance.now() - start)
     testResult.value = {
       ok: false,
       latencyMs: Math.max(1, latency),
-      itemCount: 0,
-      data: { error: err.message || '调用失败', code: 'INTERNAL_ERROR' },
+      payloadSize: 0,
+      data: { error: err.message || '自检异常', code: 'CHECK_FAILED' },
     }
-    message.error(`在线接口检查失败: ${err.message || '网络异常'}`)
+    message.error(`在线自检失败: ${err.message || '网络异常'}`)
   } finally {
     testing.value = false
   }
 }
-
-const testResultJson = computed(() => {
-  if (!testResult.value) {
-    return '// 点击右上角「▶ 真实在线调用」开始执行…'
-  }
-  return JSON.stringify(testResult.value.data, null, 2)
-})
-
-function handleCopyTestResult() {
-  if (!testResult.value) return
-  navigator.clipboard.writeText(testResultJson.value)
-  message.success('已复制真实返回 JSON 数据')
-}
-
-// 9 大受控内置短工具的完备规格与源码实现字典
-const TOOL_META_MAP: Record<string, ToolMeta> = {
-  'model.list': {
-    icon: '🤖',
-    domain: '模型资产治理',
-    latency: '< 20ms',
-    sourceFile: 'backend/api/app/agent/mcp_tools.py',
-    backendFunction: '_list_profiles(db: Session)',
-    dbEntity: 'ProtocolProfile (数据库表 protocol_profiles)',
-    params: [
-      { name: 'usage', type: 'string', required: false, desc: '按用途过滤：target (被测) | judge (裁判) | agent (后台)' },
-    ],
-    exampleRequest: JSON.stringify({ name: 'model.list', arguments: { usage: 'target' } }, null, 2),
-    exampleResponse: JSON.stringify({
-      items: [
-        { id: 'p-1', name: 'OpenAI GPT-4o', protocol: 'openai', model: 'gpt-4o', usages: ['target', 'agent'] },
-        { id: 'p-2', name: 'Claude 3.5 Sonnet', protocol: 'anthropic', model: 'claude-3-5-sonnet', usages: ['target'] },
-      ],
-      total: 2,
-    }, null, 2),
-    securityNote: '只读短工具。直接读取系统协议档缓存，不暴露 API Key 等机密凭据，免审批直接放行。',
-  },
-  'dataset.list': {
-    icon: '📚',
-    domain: '基准数据集',
-    latency: '< 30ms',
-    sourceFile: 'backend/api/app/agent/mcp_tools.py',
-    backendFunction: '_list_datasets(db: Session)',
-    dbEntity: 'Dataset (数据库表 datasets)',
-    params: [
-      { name: 'kind', type: 'string', required: false, desc: '评测类别：benchmark (通用) | rag (知识库) | cases (用例)' },
-      { name: 'search', type: 'string', required: false, desc: '数据集名称或标签模糊匹配关键字' },
-    ],
-    exampleRequest: JSON.stringify({ name: 'dataset.list', arguments: { kind: 'benchmark' } }, null, 2),
-    exampleResponse: JSON.stringify({
-      items: [
-        { id: 'ds-gsm8k', name: 'GSM8K-数学推理', row_count: 500, version: 'v1.0' },
-        { id: 'ds-humaneval', name: 'HumanEval-代码生成', row_count: 164, version: 'v2.1' },
-      ],
-      total: 2,
-    }, null, 2),
-    securityNote: '只读短工具。返回数据集元数据与样本量统计，不回传海量原始文本，防范上下文超限。',
-  },
-  'task.get': {
-    icon: '🔍',
-    domain: '任务中心与调度',
-    latency: '< 20ms',
-    sourceFile: 'backend/api/app/agent/mcp_tools.py',
-    backendFunction: '_task_get(db: Session, arguments: dict, user_id: str)',
-    dbEntity: 'Task (数据库表 tasks)',
-    params: [
-      { name: 'task_id', type: 'string', required: true, desc: '待查询的目标评测/压测任务唯一 ID' },
-    ],
-    exampleRequest: JSON.stringify({ name: 'task.get', arguments: { task_id: 't-20260820-0012' } }, null, 2),
-    exampleResponse: JSON.stringify({
-      id: 't-20260820-0012',
-      kind: 'benchmark',
-      status: 'running',
-      progress: { done: 30, total: 50, percent: 60, message: '正在执行被测模型推理评测 (30/50)' },
-      report_id: null,
-    }, null, 2),
-    securityNote: '只读短工具。实时读取指定任务的状态机状态、执行进度与派生压测状态。',
-  },
-  'task.create': {
-    icon: '🚀',
-    domain: '任务中心与调度',
-    latency: '< 45ms',
-    sourceFile: 'backend/api/app/agent/mcp_tools.py',
-    backendFunction: 'execute_short_tool(..., allow_create=True)',
-    dbEntity: 'Task (数据库表 tasks，创建排队记录)',
-    params: [
-      { name: 'kind', type: 'string', required: true, desc: '任务类型：benchmark | rag | testcase' },
-      { name: 'config', type: 'object', required: true, desc: '完整 TaskSpec 配置（被测模型、裁判、抽样量、压测开关等）' },
-      { name: 'with_stress', type: 'boolean', required: false, desc: '质量评测成功后是否自动派生压测任务 (默认 false)' },
-    ],
-    exampleRequest: JSON.stringify({
-      name: 'task.create',
-      arguments: {
-        kind: 'benchmark',
-        config: { target_model_ids: ['p-1', 'p-2'], dataset_id: 'ds-gsm8k', sample_size: 50 },
-        with_stress: true,
-      },
-    }, null, 2),
-    exampleResponse: JSON.stringify({
-      task_id: 't-20260820-0012',
-      status: 'queued',
-      message: '任务已成功入队排队',
-      created_at: '2026-08-20T20:45:00Z',
-    }, null, 2),
-    securityNote: '受控写入工具 (WRITE)。必须经由用户确认卡显式授权，采用 Pydantic 严格校验 TaskSpec；严禁在 Agent Host 同步执行评测。',
-  },
-  'task.cancel': {
-    icon: '🛑',
-    domain: '任务中心与调度',
-    latency: '< 20ms',
-    sourceFile: 'backend/api/app/agent/mcp_tools.py',
-    backendFunction: 'execute_short_tool(..., name="task.cancel")',
-    dbEntity: 'Task (数据库表 tasks，置状态为 cancelled)',
-    params: [
-      { name: 'task_id', type: 'string', required: true, desc: '需要取消或熔断的目标任务 ID' },
-      { name: 'reason', type: 'string', required: false, desc: '取消原因说明（用于记录操作审计日志）' },
-    ],
-    exampleRequest: JSON.stringify({ name: 'task.cancel', arguments: { task_id: 't-20260820-0012', reason: '用户手动中止' } }, null, 2),
-    exampleResponse: JSON.stringify({
-      task_id: 't-20260820-0012',
-      status: 'cancelled',
-      message: '任务已标记取消',
-    }, null, 2),
-    securityNote: '受控写入工具 (WRITE)。触发 Worker 熔断信号（质量任务当前样本后安全退出，压测任务即刻停发）。',
-  },
-  'dispatch.overview': {
-    icon: '🖥️',
-    domain: '调度与算力大盘',
-    latency: '< 25ms',
-    sourceFile: 'backend/api/app/agent/mcp_tools.py',
-    backendFunction: '_dispatch_overview(db: Session)',
-    dbEntity: 'DispatchWorker, Task (算力节点与排队深度统计)',
-    params: [],
-    exampleRequest: JSON.stringify({ name: 'dispatch.overview', arguments: {} }, null, 2),
-    exampleResponse: JSON.stringify({
-      workers: 2,
-      queue_depth: 1,
-      strategy: '负载均衡',
-      total_workers: 2,
-      heartbeat_interval_ms: 500,
-    }, null, 2),
-    securityNote: '只读短工具。实时读取 Worker 节点健康、显存负载与排队深度，为 Agent 分发建议提供决策依据。',
-  },
-  'report.get': {
-    icon: '📊',
-    domain: '评测报告解读',
-    latency: '< 35ms',
-    sourceFile: 'backend/api/app/agent/mcp_tools.py',
-    backendFunction: '_report_get(db: Session, arguments: dict)',
-    dbEntity: 'Report (数据库表 reports)',
-    params: [
-      { name: 'report_id', type: 'string', required: true, desc: '待查询的评测报告唯一标识 (UUID/ID)' },
-    ],
-    exampleRequest: JSON.stringify({ name: 'report.get', arguments: { report_id: 'rep-20260819-01' } }, null, 2),
-    exampleResponse: JSON.stringify({
-      report_id: 'rep-20260819-01',
-      summary: { accuracy: 0.885, latency_p95_ms: 320, token_tps: 45.2 },
-    }, null, 2),
-    securityNote: '只读短工具。提取报告关键指标快照与聚合分析，用于 Agent 在对话中进行多模态/多模型对比解读。',
-  },
-  'kb.list': {
-    icon: '🧠',
-    domain: '知识库与 QA 资产',
-    latency: '< 25ms',
-    sourceFile: 'backend/api/app/agent/mcp_tools.py',
-    backendFunction: 'execute_short_tool(..., name="kb.list")',
-    dbEntity: 'KnowledgeBase, GoldQA (知识库与金标资产)',
-    params: [
-      { name: 'search', type: 'string', required: false, desc: '知识库名称关键字检索' },
-    ],
-    exampleRequest: JSON.stringify({ name: 'kb.list', arguments: {} }, null, 2),
-    exampleResponse: JSON.stringify({
-      items: [
-        { id: 'kb-finance-2026', name: '2026金融合规知识库', doc_count: 12, chunk_count: 420, gold_qa_count: 85 },
-      ],
-      total: 1,
-    }, null, 2),
-    securityNote: '只读短工具。查询知识库索引与挂载的黄金 QA 概览，支持 RAG 意图识别与评测集关联。',
-  },
-  'testcase.confirm': {
-    icon: '🧪',
-    domain: '用例生成与入库',
-    latency: '< 40ms',
-    sourceFile: 'backend/api/app/agent/mcp_tools.py',
-    backendFunction: 'execute_short_tool(..., name="testcase.confirm")',
-    dbEntity: 'CaseSet, TestCase (用例集转正持久化)',
-    params: [
-      { name: 'case_set_id', type: 'string', required: true, desc: '待确认入库的用例集 ID (UUID)' },
-      { name: 'confirmed_case_ids', type: 'array', required: false, desc: '勾选确认转正的用例 ID 列表（留空默认全量确认）' },
-    ],
-    exampleRequest: JSON.stringify({ name: 'testcase.confirm', arguments: { case_set_id: 'cs-pay-01', confirmed_case_ids: ['c-1', 'c-2'] } }, null, 2),
-    exampleResponse: JSON.stringify({
-      case_set_id: 'cs-pay-01',
-      status: 'confirmed',
-      confirmed_count: 26,
-      message: '用例已成功确认并转正入库',
-    }, null, 2),
-    securityNote: '受控写入工具 (WRITE)。将 AI 提炼生成的候选 PRD 测试用例持久化转正为可复用的标准用例库。',
-  },
-  'audio.speech_recognition': {
-    icon: 'ASR',
-    domain: '语音识别',
-    latency: '< 90s',
-    sourceFile: 'backend/api/app/agent/mimo_audio.py',
-    backendFunction: 'execute_speech_recognition(db, arguments, user_id)',
-    dbEntity: 'StoredFile（本轮 wav/mp3 附件）',
-    params: [
-      { name: 'file_id', type: 'string', required: true, desc: '由系统从本轮 wav/mp3 附件绑定，模型不得编造' },
-      { name: 'language', type: 'string', required: false, desc: 'auto | zh | en，默认 auto' },
-    ],
-    exampleRequest: JSON.stringify({ name: 'audio.speech_recognition', arguments: { file_id: 'file-uuid', language: 'zh' } }, null, 2),
-    exampleResponse: JSON.stringify({ transcript: '识别出的文本', language: 'zh', file_id: 'file-uuid' }, null, 2),
-    securityNote: '受控音频工具。工具结果只返回转写文本与文件元数据，不回传 Base64；文件 ID 仅从本轮附件绑定。',
-  },
-  'audio.speech_synthesis': {
-    icon: 'TTS',
-    domain: '语音合成',
-    latency: '< 90s',
-    sourceFile: 'backend/api/app/agent/mimo_audio.py',
-    backendFunction: 'execute_speech_synthesis(db, arguments, user_id)',
-    dbEntity: 'StoredFile（合成 wav 输出）',
-    params: [
-      { name: 'text', type: 'string', required: true, desc: '要合成的文本，由本轮用户输入绑定' },
-      { name: 'mode', type: 'string', required: false, desc: 'preset | voicedesign，默认 preset' },
-      { name: 'style', type: 'string', required: false, desc: 'voicedesign 模式必填的风格描述' },
-      { name: 'voice', type: 'string', required: false, desc: 'preset 模式的受控音色标识' },
-    ],
-    exampleRequest: JSON.stringify({ name: 'audio.speech_synthesis', arguments: { text: '欢迎使用', mode: 'preset' } }, null, 2),
-    exampleResponse: JSON.stringify({ file_id: 'file-uuid', content_type: 'audio/wav', content_url: '/api/files/file-uuid/content' }, null, 2),
-    securityNote: '受控音频工具。只回 StoredFile 元数据和同源播放地址，不回传 Base64、Key 或上游原文。',
-  },
-}
-
-const meta = computed<ToolMeta>(() => {
-  if (!props.tool) {
-    return {
-      icon: '🛠️',
-      domain: '通用短工具',
-      latency: '< 30ms',
-      sourceFile: 'backend/api/app/agent/mcp_tools.py',
-      backendFunction: 'execute_short_tool()',
-      dbEntity: 'PostgreSQL 实体',
-      params: [],
-      exampleRequest: '{}',
-      exampleResponse: '{}',
-      securityNote: '受控内置短工具，严格遵循沙箱策略。',
-    }
-  }
-  return (
-    TOOL_META_MAP[props.tool.name] || {
-      icon: '🛠️',
-      domain: '系统内置',
-      latency: '< 30ms',
-      sourceFile: 'backend/api/app/agent/mcp_tools.py',
-      backendFunction: 'execute_short_tool()',
-      dbEntity: 'PostgreSQL 实体',
-      params: [],
-      exampleRequest: JSON.stringify({ name: props.tool.name, arguments: {} }, null, 2),
-      exampleResponse: JSON.stringify({ status: 'succeeded' }, null, 2),
-      securityNote: '内置短工具，遵循严格沙箱与输入校验。',
-    }
-  )
-})
 </script>
 
 <style scoped>
@@ -671,7 +623,7 @@ const meta = computed<ToolMeta>(() => {
   gap: 14px;
 }
 .tool-modal-header {
-  padding: 12px 14px;
+  padding: 12px 16px;
   background: var(--bg-elevated, #f4f8f8);
   border-radius: 10px;
   border: 1px solid var(--border-subtle, #e5e7eb);
@@ -682,13 +634,37 @@ const meta = computed<ToolMeta>(() => {
   align-items: flex-start;
 }
 .tool-icon {
-  font-size: 28px;
+  font-size: 30px;
   line-height: 1;
 }
 .tool-name {
   font-size: 16px;
   font-weight: 700;
-  color: var(--c-profiles, #b45309);
+  color: var(--text-primary, #111827);
+}
+.tool-id-tag {
+  font-size: 11.5px;
+  color: var(--text-tertiary, #9ca3af);
+  background: rgba(15, 23, 42, 0.05);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+.channel-pill {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid;
+}
+.channel-native {
+  background: rgba(16, 185, 129, 0.1);
+  color: var(--accent-success, #10b981);
+  border-color: rgba(16, 185, 129, 0.25);
+}
+.channel-mcp {
+  background: rgba(99, 102, 241, 0.1);
+  color: var(--accent-ai, #6366f1);
+  border-color: rgba(99, 102, 241, 0.25);
 }
 .perm-badge {
   font-size: 11px;
@@ -706,18 +682,19 @@ const meta = computed<ToolMeta>(() => {
   color: var(--accent-warning, #f59e0b);
   border: 1px solid rgba(245, 158, 11, 0.3);
 }
-.domain-badge {
-  font-size: 11px;
-  background: rgba(99, 102, 241, 0.08);
-  color: var(--accent-ai, #6366f1);
-  padding: 2px 8px;
-  border-radius: 6px;
-  font-weight: 500;
-  border: 1px solid rgba(99, 102, 241, 0.18);
+.perm-network {
+  background: rgba(59, 130, 246, 0.12);
+  color: #3b82f6;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+}
+.perm-code {
+  background: rgba(245, 158, 11, 0.12);
+  color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.4);
 }
 .host-pill {
-  font-size: 10.5px;
-  padding: 2px 7px;
+  font-size: 11px;
+  padding: 2px 8px;
   border-radius: 5px;
   background: rgba(15, 23, 42, 0.06);
   color: var(--text-secondary, #6b7280);
@@ -729,7 +706,7 @@ const meta = computed<ToolMeta>(() => {
   line-height: 1.5;
 }
 
-/* 弹窗内 Sub-Tabs */
+/* 4 Tab 切换 */
 .modal-sub-tabs {
   display: flex;
   gap: 6px;
@@ -737,7 +714,7 @@ const meta = computed<ToolMeta>(() => {
   padding-bottom: 8px;
 }
 .sub-tab-btn {
-  padding: 5px 12px;
+  padding: 6px 12px;
   border: 1px solid transparent;
   background: transparent;
   color: var(--text-secondary, #6b7280);
@@ -745,7 +722,7 @@ const meta = computed<ToolMeta>(() => {
   font-weight: 600;
   border-radius: 6px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.15s;
 }
 .sub-tab-btn:hover {
   background: var(--bg-elevated, #f4f8f8);
@@ -760,11 +737,12 @@ const meta = computed<ToolMeta>(() => {
 .tab-pane {
   display: flex;
   flex-direction: column;
+  gap: 12px;
 }
 
 .spec-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   gap: 10px;
 }
 .spec-item {
@@ -781,22 +759,13 @@ const meta = computed<ToolMeta>(() => {
   color: var(--text-tertiary, #9ca3af);
 }
 .spec-value {
-  font-size: 12.5px;
-  font-weight: 600;
+  font-size: 12px;
   color: var(--text-primary, #111827);
 }
-.text-success {
-  color: var(--accent-success, #10b981);
-}
-.text-warning {
-  color: var(--accent-warning, #f59e0b);
-}
-.text-error {
-  color: var(--accent-error, #ef4444);
-}
-.text-ai {
-  color: var(--accent-ai, #6366f1);
-}
+.text-success { color: var(--accent-success, #10b981); }
+.text-warning { color: var(--accent-warning, #f59e0b); }
+.text-error { color: var(--accent-error, #ef4444); }
+.text-ai { color: var(--accent-ai, #6366f1); }
 
 .section-block {
   display: flex;
@@ -811,6 +780,14 @@ const meta = computed<ToolMeta>(() => {
   font-weight: 600;
   color: var(--text-primary, #111827);
 }
+.param-count-badge {
+  font-size: 11px;
+  color: var(--text-tertiary, #9ca3af);
+  background: rgba(15, 23, 42, 0.05);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
 .params-table-wrap {
   border: 1px solid var(--border-subtle, #e5e7eb);
   border-radius: 8px;
@@ -851,6 +828,7 @@ const meta = computed<ToolMeta>(() => {
   border-radius: 8px;
   border: 1px dashed var(--border-subtle, #e5e7eb);
 }
+
 .code-box-tabs {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -880,9 +858,14 @@ const meta = computed<ToolMeta>(() => {
   font-family: var(--font-mono, monospace);
   font-size: 11.5px;
   line-height: 1.45;
-  max-height: 160px;
+  max-height: 170px;
   overflow: auto;
 }
+.code-full-block {
+  max-height: 320px;
+  color: #a5f3fc;
+}
+
 .guardrail-box {
   background: rgba(99, 102, 241, 0.05);
   border: 1px solid rgba(99, 102, 241, 0.18);
@@ -901,7 +884,28 @@ const meta = computed<ToolMeta>(() => {
   line-height: 1.5;
 }
 
-/* Tab 2 真实后端链路卡片 */
+.code-meta-bar {
+  display: flex;
+  gap: 16px;
+  padding: 6px 10px;
+  background: var(--bg-elevated, #f4f8f8);
+  border-radius: 6px;
+  font-size: 11.5px;
+}
+.code-meta-item {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.meta-label {
+  color: var(--text-tertiary, #9ca3af);
+}
+.meta-val {
+  color: var(--text-primary, #111827);
+  font-weight: 600;
+}
+
+/* Tab 2 流程卡片 */
 .pipeline-card-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -914,7 +918,7 @@ const meta = computed<ToolMeta>(() => {
   background: var(--bg-main, #ffffff);
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
 }
 .pipe-header {
   display: flex;
@@ -930,7 +934,7 @@ const meta = computed<ToolMeta>(() => {
   color: var(--text-primary, #111827);
 }
 .pipe-body {
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: 700;
   color: var(--text-primary, #111827);
 }
@@ -939,6 +943,7 @@ const meta = computed<ToolMeta>(() => {
   color: var(--text-tertiary, #9ca3af);
   line-height: 1.4;
 }
+
 .pipeline-steps-box {
   display: flex;
   flex-direction: column;
@@ -954,18 +959,18 @@ const meta = computed<ToolMeta>(() => {
   align-items: flex-start;
 }
 .step-badge {
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
   background: var(--accent-ai, #6366f1);
   color: #ffffff;
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 700;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  margin-top: 2px;
+  margin-top: 1px;
 }
 .step-title {
   font-size: 12px;
@@ -979,7 +984,7 @@ const meta = computed<ToolMeta>(() => {
   margin-top: 1px;
 }
 
-/* Tab 3 在线测试 */
+/* Tab 4 在线自检 */
 .live-test-header {
   padding: 10px 12px;
   background: var(--bg-elevated, #f4f8f8);
@@ -993,7 +998,7 @@ const meta = computed<ToolMeta>(() => {
   padding: 8px 12px;
   border-radius: 6px;
   font-size: 12px;
-  margin-top: 10px;
+  margin-top: 6px;
 }
 .test-status-bar.ok {
   background: rgba(16, 185, 129, 0.1);
@@ -1011,7 +1016,6 @@ const meta = computed<ToolMeta>(() => {
 .live-code-block {
   max-height: 220px;
 }
-.mt12 {
-  margin-top: 12px;
-}
+.mt4 { margin-top: 4px; }
+.mt12 { margin-top: 12px; }
 </style>

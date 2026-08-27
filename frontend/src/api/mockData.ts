@@ -210,64 +210,502 @@ export const MOCK_MCP_TOOLS: McpTool[] = [
   // ── 原生基础工具（transport=native）──
   {
     name: 'read', display_name: '读取文件', desc: '按行读取沙箱目录内的文本文件（相对路径）',
-    permission: 'read', enabled: true, source: 'builtin',
-    transport: 'native', server_id: 'platform.native', risk_level: 'read',
+    permission: 'sandbox.read', enabled: true, source: 'builtin',
+    transport: 'native', category: 'native_toolcall', server_id: 'platform.native', risk_level: 'read',
     timeout_s: 20, supports_streaming: true, execution_mode: 'short',
+    parameters_schema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: '相对路径' },
+        offset: { type: 'integer', description: '起始行号，0-based，默认 0', minimum: 0 },
+        limit: { type: 'integer', description: '最多读取行数，默认/上限 2000', minimum: 1, maximum: 2000 },
+      },
+      required: ['path'],
+    },
+    output_schema: {
+      type: 'object',
+      properties: {
+        summary: { type: 'string' },
+        read: {
+          type: 'object',
+          properties: {
+            path: { type: 'string' },
+            total_lines: { type: 'integer' },
+            start_line: { type: 'integer' },
+            end_line: { type: 'integer' },
+            next_offset: { type: 'integer' },
+            preview: { type: 'string' },
+          },
+        },
+      },
+    },
+    code_details: {
+      source_file: 'backend/api/app/harness/execution/registry.py',
+      handler_function: '_read_handler(arguments, sandbox_dir, context)',
+      code_summary: '相对路径安全校验 -> 读取指定文件 -> 0-based offset/limit 分页解码 -> 字符截断与上下文防爆仓保护 -> 输出 preview 摘要',
+      code_snippet: `def _read_handler(arguments: Mapping[str, object], sandbox_dir: Path | None, context: ToolExecutionContext | None) -> dict[str, object]:
+    path = _resolve_relative_path(str(arguments["path"]), sandbox_dir)
+    if not path.is_file():
+        raise AppError(ErrorCode.NOT_FOUND, f"文件不存在：{arguments['path']}")
+    offset = int(arguments.get("offset", 0))
+    limit = int(arguments.get("limit", 2000))
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        lines = f.readlines()
+    selected = lines[offset:offset + limit]
+    preview = "".join(selected)[:600000]
+    next_offset = (offset + len(selected)) if (offset + len(selected) < len(lines)) else None
+    return {"summary": f"已读取 {len(selected)} 行", "read": {"path": str(arguments["path"]), "total_lines": len(lines), "preview": preview, "next_offset": next_offset}}`,
+    },
+    pipeline: {
+      stages: [
+        { step: 1, name: '参数解析与范围校验', desc: '解析 path、offset、limit 边界' },
+        { step: 2, name: '工作区防越界检查', desc: '路径归一化，严格限制在当前会话沙箱目录内' },
+        { step: 3, name: '按行切片读取', desc: 'UTF-8 编码读取并按行截取目标窗口' },
+        { step: 4, name: '防撑爆截断保护', desc: '单次上限 600,000 字符，生成 next_offset 引导分页' },
+        { step: 5, name: '结构化结果投影', desc: '生成 summary 与 preview 结构回填 Agent 上下文' },
+      ],
+    },
   },
   {
     name: 'write', display_name: '写入文件', desc: '在沙箱目录内新建文本文件（相对路径）',
-    permission: 'write', enabled: true, source: 'builtin',
-    transport: 'native', server_id: 'platform.native', risk_level: 'modify',
+    permission: 'sandbox.write', enabled: true, source: 'builtin',
+    transport: 'native', category: 'native_toolcall', server_id: 'platform.native', risk_level: 'modify',
     timeout_s: 10, supports_streaming: true, execution_mode: 'short',
+    parameters_schema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: '相对路径' },
+        content: { type: 'string', description: '文件内容' },
+      },
+      required: ['path', 'content'],
+    },
+    output_schema: {
+      type: 'object',
+      properties: {
+        summary: { type: 'string' },
+        write: {
+          type: 'object',
+          properties: {
+            path: { type: 'string' },
+            bytes_written: { type: 'integer' },
+            lines_written: { type: 'integer' },
+            preview: { type: 'string' },
+          },
+        },
+      },
+    },
+    code_details: {
+      source_file: 'backend/api/app/harness/execution/registry.py',
+      handler_function: '_write_handler(arguments, sandbox_dir, context)',
+      code_summary: '路径沙箱检验 -> 校验非覆盖策略 -> 自动创建父目录 -> 原子写入 content 文本 -> 统计 bytes/lines',
+      code_snippet: `def _write_handler(arguments: Mapping[str, object], sandbox_dir: Path | None, context: ToolExecutionContext | None) -> dict[str, object]:
+    path = _resolve_relative_path(str(arguments["path"]), sandbox_dir)
+    if path.exists():
+        raise AppError(ErrorCode.VALIDATION, f"文件已存在，write 禁止覆盖：{arguments['path']}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(str(arguments["content"]), encoding="utf-8")
+    return {"summary": f"成功写入文件 {arguments['path']}", "write": {"path": str(arguments["path"]), "bytes_written": len(str(arguments["content"]))}}`,
+    },
+    pipeline: {
+      stages: [
+        { step: 1, name: '参数必填校验', desc: '检查 path 相对路径与 content 内容' },
+        { step: 2, name: '非覆盖安全策略', desc: '若文件已存在则拦截并引导改用 edit' },
+        { step: 3, name: '沙箱隔离约束', desc: '限制在当前会话沙箱工作区' },
+        { step: 4, name: '原子写盘', desc: '递归创建父目录并原子写盘' },
+        { step: 5, name: '写入统计回执', desc: '统计字节数与行数' },
+      ],
+    },
   },
   {
     name: 'edit', display_name: '编辑文件', desc: '在沙箱目录内对已有文本文件做精确字符串替换',
-    permission: 'write', enabled: true, source: 'builtin',
-    transport: 'native', server_id: 'platform.native', risk_level: 'modify',
+    permission: 'sandbox.write', enabled: true, source: 'builtin',
+    transport: 'native', category: 'native_toolcall', server_id: 'platform.native', risk_level: 'modify',
     timeout_s: 10, supports_streaming: false, execution_mode: 'short',
+    parameters_schema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: '相对路径' },
+        old: { type: 'string', description: '待替换的旧文本（须在文件中唯一出现）' },
+        new: { type: 'string', description: '替换后的新文本' },
+      },
+      required: ['path', 'old', 'new'],
+    },
+    output_schema: {
+      type: 'object',
+      properties: {
+        summary: { type: 'string' },
+        edit: {
+          type: 'object',
+          properties: {
+            path: { type: 'string' },
+            replacements: { type: 'integer' },
+            old_length: { type: 'integer' },
+            new_length: { type: 'integer' },
+          },
+        },
+      },
+    },
+    code_details: {
+      source_file: 'backend/api/app/harness/execution/registry.py',
+      handler_function: '_edit_handler(arguments, sandbox_dir, context)',
+      code_summary: '读取全文 -> 验证 old 字符串在文件中唯一匹配 -> 字符串精确替换为 new -> 原子写回',
+      code_snippet: `def _edit_handler(arguments: Mapping[str, object], sandbox_dir: Path | None, context: ToolExecutionContext | None) -> dict[str, object]:
+    path = _resolve_relative_path(str(arguments["path"]), sandbox_dir)
+    content = path.read_text(encoding="utf-8")
+    if content.count(str(arguments["old"])) != 1:
+        raise AppError(ErrorCode.VALIDATION, "目标文本匹配不唯一或不存在")
+    new_content = content.replace(str(arguments["old"]), str(arguments["new"]), 1)
+    path.write_text(new_content, encoding="utf-8")
+    return {"summary": "替换成功", "edit": {"path": str(arguments["path"]), "replacements": 1}}`,
+    },
+    pipeline: {
+      stages: [
+        { step: 1, name: '目标文件存在性检查', desc: '验证文件是否存在于会话沙箱' },
+        { step: 2, name: '全文精确查找', desc: '计算 old 字符串出现次数' },
+        { step: 3, name: '唯一性强约束拦截', desc: '匹配非 1 次时拦截以防误改' },
+        { step: 4, name: '单处精确替换', desc: '保留缩进与上下文结构替换' },
+        { step: 5, name: '持久化与回执', desc: '写回沙箱工作区并返回统计' },
+      ],
+    },
   },
   {
     name: 'bash', display_name: '沙箱命令', desc: '在 bwrap 沙箱内执行 shell 命令（相对路径、无网络、受资源限制）',
-    permission: 'write', enabled: true, source: 'builtin',
-    transport: 'native', server_id: 'platform.native', risk_level: 'code',
+    permission: 'sandbox.exec', enabled: true, source: 'builtin',
+    transport: 'native', category: 'native_toolcall', server_id: 'platform.native', risk_level: 'code',
     timeout_s: 15, supports_streaming: true, execution_mode: 'short',
+    parameters_schema: {
+      type: 'object',
+      properties: {
+        command: { type: 'string', description: '待执行的 shell 脚本或命令' },
+      },
+      required: ['command'],
+    },
+    output_schema: {
+      type: 'object',
+      properties: {
+        summary: { type: 'string' },
+        bash: {
+          type: 'object',
+          properties: {
+            command: { type: 'string' },
+            exit_code: { type: 'integer' },
+            stdout: { type: 'string' },
+            stderr: { type: 'string' },
+          },
+        },
+      },
+    },
+    code_details: {
+      source_file: 'backend/api/app/harness/execution/sandbox.py',
+      handler_function: '_bash_handler(arguments, sandbox_dir, context)',
+      code_summary: '静态高危黑名单拦截 -> 一次性 bwrap 沙箱创建 -> 根系统只读绑定 + 会话工作区唯一可写 -> 无网络隔离 -> ulimit 限制 + 15s 超时整树清理 -> stdout/stderr 脱敏截断',
+      code_snippet: `def _bash_handler(arguments: Mapping[str, object], sandbox_dir: Path | None, context: ToolExecutionContext | None) -> dict[str, object]:
+    command = str(arguments["command"]).strip()
+    _check_command_blacklist(command)
+    bwrap_cmd = ["bwrap", "--ro-bind", "/usr", "/usr", "--bind", str(sandbox_dir), "/workspace", "--unshare-net", "--chdir", "/workspace", "--", "bash", "-c", command]
+    proc = subprocess.run(bwrap_cmd, capture_output=True, text=True, timeout=15.0)
+    return {"summary": f"执行完成 (退出码: {proc.returncode})", "bash": {"command": command, "exit_code": proc.returncode, "stdout": redact_secrets(proc.stdout[:8000])}}`,
+    },
+    pipeline: {
+      stages: [
+        { step: 1, name: '静态安全黑名单过滤', desc: '拦截 rm -rf /、提权与破坏命令' },
+        { step: 2, name: 'bwrap 命名空间构建', desc: '--unshare-net 禁用外网通信' },
+        { step: 3, name: '只读环境与工作区挂载', desc: '系统只读，仅 /workspace 可写' },
+        { step: 4, name: '执行监控与资源约束', desc: 'ulimit 限制内存，15s 超时 SIGKILL' },
+        { step: 5, name: '凭据脱敏与输出投影', desc: '自动过滤敏感 Token 并截断' },
+      ],
+    },
   },
   {
     name: 'web_search', display_name: '网页检索', desc: '内部搜索引擎检索（平台自实现适配器，不走外部 MCP）',
-    permission: 'read', enabled: true, source: 'builtin',
-    transport: 'native', server_id: 'platform.native', risk_level: 'network',
+    permission: 'web.search', enabled: true, source: 'builtin',
+    transport: 'native', category: 'native_toolcall', server_id: 'platform.native', risk_level: 'network',
     timeout_s: 20, supports_streaming: false, execution_mode: 'short',
+    parameters_schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: '搜索关键词 (1-500字符)' },
+        limit: { type: 'integer', description: '返回结果条数，默认 5，上限 10', minimum: 1, maximum: 10 },
+      },
+      required: ['query'],
+    },
+    output_schema: {
+      type: 'object',
+      properties: {
+        summary: { type: 'string' },
+        search: {
+          type: 'object',
+          properties: {
+            query: { type: 'string' },
+            items: { type: 'array' },
+          },
+        },
+      },
+    },
+    code_details: {
+      source_file: 'backend/api/app/harness/execution/registry.py',
+      handler_function: '_web_search_handler(arguments, sandbox_dir, context)',
+      code_summary: '清洗搜索关键词 -> 内部搜索引擎客户端发起请求 -> 提取标题/摘要/URL -> 结构化 JSON 投影',
+      code_snippet: `async def _web_search_handler(arguments: Mapping[str, object], sandbox_dir: Path | None, context: ToolExecutionContext | None) -> dict[str, object]:
+    query = str(arguments["query"]).strip()
+    results = await search_engine_client.query(query=query, limit=min(int(arguments.get("limit", 5)), 10))
+    return {"summary": f"检索到 {len(results)} 条相关结果", "search": {"query": query, "items": results}}`,
+    },
+    pipeline: {
+      stages: [
+        { step: 1, name: '搜索关键词预处理', desc: '清洗 query 字符串与限制条数' },
+        { step: 2, name: '合规与敏感词过滤', desc: '校验检索词安全性与防注入拦截' },
+        { step: 3, name: '搜索引擎客户端查询', desc: '内部专有搜索引擎并发检索' },
+        { step: 4, name: '结构化抽取', desc: '提取标题、摘要及源 URL' },
+        { step: 5, name: '上下文防爆仓压缩', desc: '组织成标准 JSON 回传' },
+      ],
+    },
   },
   {
     name: 'web_fetch', display_name: '网页抓取', desc: '内部网页抓取（平台自实现适配器 + 脱敏，不走外部 MCP）',
-    permission: 'read', enabled: true, source: 'builtin',
-    transport: 'native', server_id: 'platform.native', risk_level: 'network',
+    permission: 'web.fetch', enabled: true, source: 'builtin',
+    transport: 'native', category: 'native_toolcall', server_id: 'platform.native', risk_level: 'network',
     timeout_s: 20, supports_streaming: true, execution_mode: 'short',
+    parameters_schema: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: '公开网页 URL 地址' },
+        format: { type: 'string', enum: ['markdown', 'text'], description: '返回格式，默认 markdown' },
+      },
+      required: ['url'],
+    },
+    output_schema: {
+      type: 'object',
+      properties: {
+        summary: { type: 'string' },
+        web: {
+          type: 'object',
+          properties: {
+            url: { type: 'string' },
+            format: { type: 'string' },
+            content: { type: 'string' },
+          },
+        },
+      },
+    },
+    code_details: {
+      source_file: 'backend/api/app/harness/execution/registry.py',
+      handler_function: '_web_fetch_handler(arguments, sandbox_dir, context)',
+      code_summary: 'URL 防 SSRF 检查 -> HTTP GET 请求 -> 网页 HTML 转 Markdown -> 敏感数据脱敏 -> 截断输出',
+      code_snippet: `async def _web_fetch_handler(arguments: Mapping[str, object], sandbox_dir: Path | None, context: ToolExecutionContext | None) -> dict[str, object]:
+    url = str(arguments["url"]).strip()
+    _validate_public_url(url)
+    html = await http_client.get(url, timeout=20.0)
+    markdown = html_to_markdown(html)
+    return {"summary": f"已成功抓取网页 {url}", "web": {"url": url, "content": redact_secrets(markdown[:12000])}}`,
+    },
+    pipeline: {
+      stages: [
+        { step: 1, name: 'SSRF 安全防御拦截', desc: '严禁抓取 127.0.0.1 及内网网段' },
+        { step: 2, name: '异步 HTTP 网页请求', desc: '设置 20s 超时抓取公开网页' },
+        { step: 3, name: 'HTML 转换与降噪', desc: '提取正文并转换为 Markdown' },
+        { step: 4, name: '隐私凭据脱敏', desc: '抹除正文中的 API Key 与 Token' },
+        { step: 5, name: '截断安全回传', desc: '限制最大 12,000 字符防止撑爆' },
+      ],
+    },
   },
   {
     name: 'task', display_name: '拆解任务', desc: '维护本回合的执行清单：把复杂需求拆成有限步骤并标注状态',
-    permission: 'read', enabled: true, source: 'builtin',
-    transport: 'native', server_id: 'platform.native', risk_level: 'read',
+    permission: 'task.planner', enabled: true, source: 'builtin',
+    transport: 'native', category: 'native_toolcall', server_id: 'platform.native', risk_level: 'read',
     timeout_s: 2, supports_streaming: false, execution_mode: 'short',
+    parameters_schema: {
+      type: 'object',
+      properties: {
+        tasks: {
+          type: 'array',
+          description: '任务清单项列表',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              title: { type: 'string' },
+              status: { type: 'string', enum: ['pending', 'in_progress', 'completed'] },
+            },
+          },
+        },
+      },
+      required: ['tasks'],
+    },
+    output_schema: {
+      type: 'object',
+      properties: {
+        summary: { type: 'string' },
+        task: {
+          type: 'object',
+          properties: {
+            tasks: { type: 'array' },
+            updated_at: { type: 'string' },
+          },
+        },
+      },
+    },
+    code_details: {
+      source_file: 'backend/api/app/harness/execution/registry.py',
+      handler_function: '_task_planner_handler(arguments, sandbox_dir, context)',
+      code_summary: '解析 tasks 执行步骤 -> 校验步骤状态机 (pending/in_progress/completed) -> 更新回合 GraphState',
+      code_snippet: `def _task_planner_handler(arguments: Mapping[str, object], sandbox_dir: Path | None, context: ToolExecutionContext | None) -> dict[str, object]:
+    tasks_list = list(arguments.get("tasks", []))
+    validated = [_validate_task_item(t) for t in tasks_list]
+    return {"summary": f"已更新任务清单：共 {len(validated)} 个步骤", "task": {"tasks": validated}}`,
+    },
+    pipeline: {
+      stages: [
+        { step: 1, name: '执行清单步骤解析', desc: '读取 tasks 步骤数组' },
+        { step: 2, name: '状态机跃迁合规', desc: '校验 pending -> in_progress -> completed' },
+        { step: 3, name: '回合 GraphState 同步', desc: '写入 Agent 全局记忆状态机' },
+        { step: 4, name: '前端可视化同步', desc: '触发 WS 事件实时更新任务清单' },
+      ],
+    },
   },
   // ── 内部 MCP 扩展工具（transport=mcp，server=platform.tasks）──
   {
     name: 'platform.tasks.task.create', display_name: '创建评测任务', desc: '创建评测任务并入队（benchmark/testcase/rag/stress），由 Worker 异步执行',
-    permission: 'write', enabled: true, source: 'builtin',
-    transport: 'mcp', server_id: 'platform.tasks', risk_level: 'modify',
-    timeout_s: 10, supports_streaming: false, execution_mode: 'short',
+    permission: 'task.create', enabled: true, source: 'builtin',
+    transport: 'mcp', category: 'internal_mcp', server_id: 'platform.tasks', risk_level: 'modify',
+    timeout_s: 10, supports_streaming: false, execution_mode: 'short', requires_confirmation: true,
+    parameters_schema: {
+      type: 'object',
+      properties: {
+        kind: { type: 'string', enum: ['benchmark', 'rag', 'testcase'], description: '任务类别' },
+        config: { type: 'object', description: '任务详细规格 TaskSpec' },
+        with_stress: { type: 'boolean', description: '评测成功后是否派生压测' },
+      },
+      required: ['kind', 'config'],
+    },
+    output_schema: {
+      type: 'object',
+      properties: {
+        summary: { type: 'string' },
+        task: {
+          type: 'object',
+          properties: {
+            task_id: { type: 'string' },
+            kind: { type: 'string' },
+            status: { type: 'string' },
+            created_at: { type: 'string' },
+          },
+        },
+      },
+    },
+    code_details: {
+      source_file: 'backend/api/app/harness/execution/registry.py & routers/tasks.py',
+      handler_function: '_task_create_handler(arguments, context)',
+      code_summary: 'TaskSpec 校验 -> 确认卡鉴权核准 -> 写入 PG 任务表 (status=queued) -> 唤醒 Worker 异步消费',
+      code_snippet: `def _task_create_handler(arguments: Mapping[str, object], sandbox_dir: Path | None, context: ToolExecutionContext | None) -> dict[str, object]:
+    spec = TaskCreateIn(**arguments)
+    task = Task(kind=spec.kind, config=spec.config.dict(), status="queued", with_stress=spec.with_stress, session_id=context.session_id)
+    db.add(task)
+    db.commit()
+    return {"summary": f"评测任务 {task.id} 创建成功并已入队排队", "task": {"task_id": task.id, "status": "queued"}}`,
+    },
+    pipeline: {
+      stages: [
+        { step: 1, name: '意图拆解与参数解析', desc: '解析评测类型与被测模型矩阵' },
+        { step: 2, name: 'G3 反射与用户确认卡', desc: '必须由用户在前端确认卡点击同意' },
+        { step: 3, name: 'Pydantic 规范校验', desc: '强校验样本量、裁判模型与压测参数' },
+        { step: 4, name: '写入 PostgreSQL 队列', desc: '创建 tasks 记录并开启串行保护' },
+        { step: 5, name: 'Worker 异步领取消费', desc: '后台 Worker 引擎安全抢锁消费' },
+      ],
+    },
   },
   {
     name: 'platform.tasks.task.status', display_name: '查询任务状态', desc: '查询评测任务当前状态（kind/status/progress/report_id），不等待完成',
-    permission: 'read', enabled: true, source: 'builtin',
-    transport: 'mcp', server_id: 'platform.tasks', risk_level: 'read',
+    permission: 'task.read', enabled: true, source: 'builtin',
+    transport: 'mcp', category: 'internal_mcp', server_id: 'platform.tasks', risk_level: 'read',
     timeout_s: 10, supports_streaming: false, execution_mode: 'short',
+    parameters_schema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: '待查询的目标任务 ID' },
+      },
+      required: ['task_id'],
+    },
+    output_schema: {
+      type: 'object',
+      properties: {
+        summary: { type: 'string' },
+        task: {
+          type: 'object',
+          properties: {
+            task_id: { type: 'string' },
+            kind: { type: 'string' },
+            status: { type: 'string' },
+            progress: { type: 'object' },
+            report_id: { type: 'string' },
+          },
+        },
+      },
+    },
+    code_details: {
+      source_file: 'backend/api/app/harness/execution/registry.py',
+      handler_function: '_task_status_handler(arguments, context)',
+      code_summary: '查询 PG 数据库任务记录 -> 提取当前状态机、执行进度、样本数与报告关联 ID -> 立即返回',
+      code_snippet: `def _task_status_handler(arguments: Mapping[str, object], sandbox_dir: Path | None, context: ToolExecutionContext | None) -> dict[str, object]:
+    task = db.query(Task).filter(Task.id == str(arguments["task_id"])).first()
+    return {"summary": f"任务当前状态: {task.status}", "task": {"task_id": task.id, "status": task.status, "progress": task.progress, "report_id": task.report_id}}`,
+    },
+    pipeline: {
+      stages: [
+        { step: 1, name: '任务 ID 格式校验', desc: '校验 task_id 格式合规性' },
+        { step: 2, name: '只读数据库检索', desc: '查询 PostgreSQL tasks 表最新记录' },
+        { step: 3, name: '进度与指标提取', desc: '读取完成样本数与耗时指标' },
+        { step: 4, name: '报告关联状态组装', desc: '已完成则提取 report_id' },
+        { step: 5, name: '回填 Agent 上下文', desc: '供 Agent 生成对话解读' },
+      ],
+    },
   },
   {
     name: 'platform.tasks.task.cancel', display_name: '取消评测任务', desc: '取消非终态评测任务（终态任务幂等返回现状）',
-    permission: 'write', enabled: true, source: 'builtin',
-    transport: 'mcp', server_id: 'platform.tasks', risk_level: 'modify',
+    permission: 'task.cancel', enabled: true, source: 'builtin',
+    transport: 'mcp', category: 'internal_mcp', server_id: 'platform.tasks', risk_level: 'modify',
     timeout_s: 10, supports_streaming: false, execution_mode: 'short',
+    parameters_schema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: '需要取消的目标任务 ID' },
+        reason: { type: 'string', description: '取消原因说明' },
+      },
+      required: ['task_id'],
+    },
+    output_schema: {
+      type: 'object',
+      properties: {
+        summary: { type: 'string' },
+        task: {
+          type: 'object',
+          properties: {
+            task_id: { type: 'string' },
+            status: { type: 'string' },
+          },
+        },
+      },
+    },
+    code_details: {
+      source_file: 'backend/api/app/harness/execution/registry.py',
+      handler_function: '_task_cancel_handler(arguments, context)',
+      code_summary: '校验任务有效性 -> 将非终态任务标记为 cancelled -> 触发 Worker 中断信号 -> 幂等安全返回',
+      code_snippet: `def _task_cancel_handler(arguments: Mapping[str, object], sandbox_dir: Path | None, context: ToolExecutionContext | None) -> dict[str, object]:
+    task = db.query(Task).filter(Task.id == str(arguments["task_id"])).first()
+    if task.status not in ("succeeded", "failed", "cancelled"):
+        task.status = "cancelled"
+        db.commit()
+    return {"summary": f"已取消任务 {task.id}", "task": {"task_id": task.id, "status": task.status}}`,
+    },
+    pipeline: {
+      stages: [
+        { step: 1, name: '任务鉴权确认', desc: '校验用户对目标任务的操作权限' },
+        { step: 2, name: '终态幂等检查', desc: '若已结束直接幂等返回现状' },
+        { step: 3, name: '状态流转标记', desc: '置为 cancelled 并记录审计日志' },
+        { step: 4, name: 'Worker 熔断响应', desc: 'Worker 收到信号停发并回收计算' },
+        { step: 5, name: '状态帧回执', desc: '推送 WS 事件通知工作台任务已中止' },
+      ],
+    },
   },
 ]
 

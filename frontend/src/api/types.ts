@@ -242,17 +242,74 @@ export interface RagModelsConfig {
   has_reranker_api_key?: boolean
 }
 
-// MCP 内置短工具（API V1.3 §3.6.1，只读）
+// 工具代码实现详情接口（API §3.6.1）
+export interface ToolCodeDetails {
+  source_file: string
+  handler_function: string
+  code_summary: string
+  code_snippet: string
+}
+
+// 工具执行阶段流接口
+export interface ToolPipelineStage {
+  step: number
+  name: string
+  desc: string
+}
+
+export interface ToolPipeline {
+  stages: ToolPipelineStage[]
+}
+
+// MCP 通道健康检查状态接口
+export interface McpChannelStatus {
+  channel: 'native_toolcall' | 'internal_mcp' | 'external_mcp'
+  name: string
+  ok: boolean
+  tools_count?: number
+  tools?: string[]
+  latency_ms?: number
+  sandbox_mode?: string
+  bwrap_ready?: boolean
+  workspace_access?: string
+  provider?: string
+  task_queue_bridge?: string
+  status?: string
+  active_external_servers?: number
+  isolation_guard?: string
+  message: string
+}
+
+// 全通道健康自检响应
+export interface McpHealthCheckResponse {
+  ok: boolean
+  timestamp: number
+  total_latency_ms: number
+  summary: {
+    total_tools: number
+    native_tools_count: number
+    internal_mcp_tools_count: number
+    external_mcp_servers_count: number
+  }
+  channels: {
+    native: McpChannelStatus
+    internal_mcp: McpChannelStatus
+    external_gateway: McpChannelStatus
+  }
+}
+
+// MCP 内置短工具与原生 ToolCall（API V1.3 §3.6.1，只读契约）
 // transport='native'：原生基础工具（read/write/edit/bash 等）由 NativeToolExecutor 直连执行；
 // transport='mcp'：内部 MCP 扩展工具（platform.tasks 等）通过 MCPClientManager 调用。
 export interface McpTool {
   name: string
   desc: string
-  permission: 'read' | 'write'
+  permission: string
   enabled: boolean
   source: 'builtin' | 'standalone'
-  // 扩展字段（来自 /api/mcp/all-tools，老 /api/mcp/tools 可能缺少）
+  // 扩展全量契约字段（来自 /api/mcp/all-tools）
   transport?: 'native' | 'mcp'
+  category?: 'native_toolcall' | 'internal_mcp' | 'external_mcp'
   display_name?: string
   risk_level?: 'read' | 'modify' | 'network' | 'code' | 'long'
   server_id?: string
@@ -262,6 +319,13 @@ export interface McpTool {
   supports_streaming?: boolean
   requires_confirmation?: boolean
   execution_mode?: 'short' | 'long'
+  concurrency_class?: string
+  parameters_schema?: Record<string, any>
+  output_schema?: Record<string, any>
+  permission_policy?: Record<string, any>
+  recovery_policy?: Record<string, any>
+  code_details?: ToolCodeDetails
+  pipeline?: ToolPipeline
 }
 
 export interface TaskProgress {
