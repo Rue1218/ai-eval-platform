@@ -32,6 +32,7 @@ NODE_EVENT_KINDS = frozenset(
         "confirm",
         "clarify",
         "plan",
+        "task_state",
         "progress",
         "report",
         "error",

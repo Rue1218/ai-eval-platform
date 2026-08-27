@@ -1475,6 +1475,24 @@ function planItemFromPayload(payload: Record<string, unknown>, noAnim = false): 
   }
 }
 
+/**
+ * task_state 事件：原地更新最近一个 plan 的 slots.task_state（不新增卡片），
+ * 驱动 TaskStateDrawer 随步骤演进实时刷新（completed_steps/current_step 等）。
+ */
+function applyTaskState(items: StreamItem[], payload: Record<string, unknown>) {
+  if (!payload || typeof payload !== 'object') return
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i]
+    if (it.type === 'plan' && it.plan) {
+      it.plan = {
+        ...it.plan,
+        slots: { ...(it.plan.slots || {}), task_state: payload },
+      }
+      return
+    }
+  }
+}
+
 /** 返回当前回合仍在生成的思考块。 */
 function getActiveThoughtBlock(agent: StreamItem): AgentThoughtItem | undefined {
   const blocks = agent.blocks || []
@@ -3153,6 +3171,12 @@ async function loadSessionHistory(sid: string): Promise<number> {
           eventId: eid,
           item: planItemFromPayload(p, true),
         })
+      } else if (ev.event === 'task_state') {
+        // 历史回放：按事件顺序应用演进后的状态黑板到最近一个 plan 卡
+        const plan = [...rawList].reverse().find((x) => x.item.type === 'plan' && x.item.plan)
+        if (plan) {
+          applyTaskState([plan.item], p)
+        }
       } else if (ev.event === 'clarify') {
         rawList.push({
           time: t,
@@ -3728,6 +3752,9 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
       rt.harnessStage = 'plan_solve'
       buf.push(planItemFromPayload(p))
       break
+    case 'task_state':
+      applyTaskState(buf, p)
+      break
     case 'response.completed':
     case 'done': {
       finishBufferThought(buf)
@@ -4074,6 +4101,9 @@ function handleWsEvent(ev: WsServerEvent) {
       setCurrentGenerating(true)
       events.value.push(planItemFromPayload(p))
       scrollToBottom()
+      break
+    case 'task_state':
+      applyTaskState(events.value, p)
       break
     case 'response.completed':
     case 'done': {
