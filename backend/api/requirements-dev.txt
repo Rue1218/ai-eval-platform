@@ -1,4 +1,5 @@
 # 开发 / 测试 / 静态检查依赖（CI 与本地开发使用，不进入生产镜像）
-pytest==8.3.4
+pytest==8.4.2
+pytest-asyncio==1.4.0
 httpx==0.28.1
 ruff==0.8.6
