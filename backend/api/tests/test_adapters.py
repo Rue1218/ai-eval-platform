@@ -254,6 +254,41 @@ def test_nonstream_sdk_wire_contract(monkeypatch, protocol, payload, path):
         http_client.close()
 
 
+def test_anthropic_deepseek_subpath_wire_contract(monkeypatch):
+    """DeepSeek 官方 Anthropic 端点（…/anthropic）须原样透传并 POST /anthropic/v1/messages。"""
+    seen_requests: list[httpx.Request] = []
+    seen_client_kwargs: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_requests.append(request)
+        return httpx.Response(200, request=request, json=SDK_ANTHROPIC_OK)
+
+    http_client = httpx.Client(transport=httpx.MockTransport(handler))
+    client = adapters.Anthropic(
+        api_key=API_KEY,
+        base_url="https://api.deepseek.com/anthropic",
+        max_retries=0,
+        http_client=http_client,
+    )
+
+    def fake_anthropic_client(**kwargs):
+        seen_client_kwargs.update(kwargs)
+        return client
+
+    monkeypatch.setattr(adapters, "_anthropic_client", fake_anthropic_client)
+    try:
+        kwargs = _kwargs("anthropic_messages")
+        kwargs["base_url"] = "https://api.deepseek.com/anthropic"
+        result = call_protocol(**kwargs)
+        # 服务根地址不得被子路径剥离逻辑改写；真实请求落在官方端点上
+        assert seen_client_kwargs["base_url"] == "https://api.deepseek.com/anthropic"
+        assert seen_requests[0].url.path == "/anthropic/v1/messages"
+        assert seen_requests[0].headers["x-api-key"] == API_KEY
+        assert result.text == "ok"
+    finally:
+        http_client.close()
+
+
 @pytest.mark.parametrize("protocol,payload,want_text,want_usage", SUCCESS_CASES)
 def test_protocol_success_fixture(monkeypatch, protocol, payload, want_text, want_usage):
     """成功夹具：文本提取、usage 归一、原始响应与延迟均符合统一契约。"""

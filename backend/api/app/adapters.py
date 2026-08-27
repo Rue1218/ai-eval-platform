@@ -19,6 +19,7 @@ import time
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
@@ -801,7 +802,6 @@ def stream_protocol(
         raise AppError(ErrorCode.VALIDATION, f"协议不受支持：{protocol}")
 
     base = _service_base_url(base_url)
-
     def complete_stream_call(
         raw_id: object, raw_name: object, raw_arguments: object
     ) -> list[AdapterToolCall]:
@@ -1100,6 +1100,28 @@ def stream_protocol(
         yield AdapterStreamEvent(kind="tool_call", tool_call=tool_call)
 
 
+def _anthropic_model_list_roots(base_url: str) -> list[str]:
+    """为挂在子路径上的 Anthropic 兼容网关推导宿主根模型列表候选地址。
+
+    DeepSeek（``…/anthropic``）、Kimi、智谱等官方把 Anthropic 协议发布在
+    前缀子路径下，``/v1/models`` 模型列表仍位于宿主根或上一级路径；这里只
+    生成候选 URL 供逐个尝试，不修改协议档中保存的原值。
+    """
+    parsed = urlsplit(base_url)
+    segments = [seg for seg in parsed.path.split("/") if seg]
+    if not segments:
+        return []
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    roots: list[str] = []
+    # 先去掉最后一段得到上一级路径，再回退到宿主根；重复候选由调用方去重。
+    for depth in (len(segments) - 1, 0):
+        prefix = "/" + "/".join(segments[:depth]) if depth else ""
+        candidate = f"{origin}{prefix}"
+        if candidate != base_url and candidate not in roots:
+            roots.append(candidate)
+    return roots
+
+
 def fetch_remote_models(
     *,
     protocol: str,
@@ -1140,6 +1162,12 @@ def fetch_remote_models(
             candidate_urls.append(raw_clean)
             if not raw_clean.endswith("/models"):
                 candidate_urls.append(f"{raw_clean}/models")
+        # DeepSeek /anthropic 这类子路径网关通常不在子路径下发布模型列表，
+        # 追加宿主根/上一级路径的候选（api.deepseek.com/v1/models 等）。
+        for root in _anthropic_model_list_roots(base):
+            for path in ("/v1/models", "/models"):
+                if f"{root}{path}" not in candidate_urls:
+                    candidate_urls.append(f"{root}{path}")
     else:
         candidate_urls = [
             f"{base}/v1/models",

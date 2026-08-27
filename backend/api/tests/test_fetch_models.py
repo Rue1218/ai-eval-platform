@@ -1,6 +1,7 @@
 """/api/profiles/fetch-models 端点及 fetch_remote_models 统一适配单测。"""
 
 import json
+from urllib.error import HTTPError
 from unittest.mock import MagicMock, patch
 
 from app.adapters import fetch_remote_models
@@ -117,6 +118,56 @@ def test_service_base_url_suffix_stripping():
     assert _service_base_url("https://api.openai.com/v1/models") == "https://api.openai.com"
     assert _service_base_url("https://api.openai.com/v1") == "https://api.openai.com"
     assert _service_base_url("https://dashscope.aliyuncs.com/compatible-mode/v1") == "https://dashscope.aliyuncs.com/compatible-mode"
+    # DeepSeek 官方 Anthropic 兼容端点：子路径必须保留，仅剥离端点级后缀
+    assert _service_base_url("https://api.deepseek.com/anthropic") == "https://api.deepseek.com/anthropic"
+    assert _service_base_url("https://api.deepseek.com/anthropic/v1/messages") == "https://api.deepseek.com/anthropic"
+
+
+def test_anthropic_model_list_roots():
+    """测试 Anthropic 子路径网关的宿主根候选推导（DeepSeek / 智谱形态）。"""
+    from app.adapters import _anthropic_model_list_roots
+
+    assert _anthropic_model_list_roots("https://api.deepseek.com/anthropic") == [
+        "https://api.deepseek.com"
+    ]
+    assert _anthropic_model_list_roots("https://open.bigmodel.cn/api/anthropic") == [
+        "https://open.bigmodel.cn/api",
+        "https://open.bigmodel.cn",
+    ]
+    # 已是宿主根时不产生额外候选
+    assert _anthropic_model_list_roots("https://api.anthropic.com") == []
+
+
+def test_fetch_remote_models_deepseek_anthropic_subpath_fallback():
+    """Anthropic 子路径无模型列表时，回退宿主根 /v1/models 获取（DeepSeek /anthropic 场景）。"""
+    mock_data = {
+        "data": [
+            {"id": "deepseek-v4-pro", "owned_by": "deepseek"},
+            {"id": "deepseek-v4-flash", "owned_by": "deepseek"},
+        ]
+    }
+    seen: list[str] = []
+
+    def fake_urlopen(req, timeout=None):
+        seen.append(req.full_url)
+        if "/anthropic" in req.full_url:
+            raise HTTPError(url=req.full_url, code=404, msg="Not Found", hdrs={}, fp=None)
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(mock_data).encode("utf-8")
+        mock_resp.__enter__.return_value = mock_resp
+        return mock_resp
+
+    with patch("app.adapters.urlopen", side_effect=fake_urlopen):
+        models = fetch_remote_models(
+            protocol="anthropic_messages",
+            base_url="https://api.deepseek.com/anthropic",
+            api_key="sk-ds-test",
+        )
+
+    assert {m["id"] for m in models} == {"deepseek-v4-pro", "deepseek-v4-flash"}
+    # 子路径候选失败后必须尝试宿主根
+    assert any(url.endswith("/anthropic/v1/models") for url in seen)
+    assert "https://api.deepseek.com/v1/models" in seen
 
 
 def test_fetch_remote_models_404_not_found():
