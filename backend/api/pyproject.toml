@@ -6,8 +6,9 @@ markers = [
     "live: 需要真实 API 服务在线的在线探针场景（默认由 HARNESS_PROBE_BASE 环境变量控制）",
 ]
 filterwarnings = [
-    # 测试专用短 HMAC 密钥（20 字节）触发 RFC 7518 建议，非生产配置问题
-    "ignore::jwt.warnings.InsecureKeyLengthWarning",
+    # 测试专用短 HMAC 密钥（20 字节）触发 RFC 7518 建议，非生产配置问题。
+    # 用消息匹配而非 ignore::类路径：PyJWT 2.10 无 InsecureKeyLengthWarning 类，2.11+ 才引入
+    "ignore:The HMAC key is .* bytes long, which is below the minimum recommended length:UserWarning",
     # langgraph 内部使用弃用的 asyncio.iscoroutinefunction（Python 3.16 才移除），等待上游修复
     "ignore:.*'asyncio.iscoroutinefunction' is deprecated.*:DeprecationWarning",
 ]
