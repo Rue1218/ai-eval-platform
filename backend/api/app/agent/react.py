@@ -74,7 +74,10 @@ NATIVE_TOOL_STAGE_INPUT = """\
 只有收到平台返回的工具结果后才能声称该操作已成功；未调用工具或工具失败时，
 必须如实说明，禁止口头编造执行结果或文件内容。
 如需访问平台工具，请使用模型协议提供的原生函数调用能力，并只从本轮提供的工具
-schema 中选择。工具结果会以对应的 tool_call_id 返回。
+schema 中选择。工具结果会以对应的 tool_call_id 返回；若系统同时给出【工具结果】，
+也必须先阅读再作答，禁止在未看到返回内容时重复相同 read。
+若模型无法发出原生函数调用，可改用 ReAct JSON（protocol=react.v1）；平台会执行
+其中的 tool/arguments，并在下一轮把完整返回回填为 tool 消息与【工具结果】。
 同一请求中的多个函数调用会由平台依次执行，每一个调用都经过权限门禁和沙箱。
 读文件时 read 应省略 limit 参数一次读完（单次最多 2000 行），禁止人为拆成多个小页连续多次读取。
 read 未读完时，把返回的 next_offset 填到下一次的 offset，禁止用相同 offset 重读。
@@ -444,6 +447,42 @@ def _looks_like_legacy_react(raw: str) -> bool:
     """仅在模型明显输出旧 ReAct 控制 JSON 时进入兼容解析与纠正流程。"""
     text = raw.lstrip()
     return text.startswith("{") and '"protocol"' in text[:300] and "react" in text[:300]
+
+
+def _json_react_tool_payload(
+    *,
+    native_tool_mode: bool,
+    call_id: str,
+    tool: str,
+    arguments: dict,
+    thought_events: list[dict],
+    budget: object,
+    thought_text: str = "",
+) -> dict:
+    """把 JSON ReAct 的 tool/arguments 排进 ToolNode。
+
+    native 协议档下必须标 ``native=True`` 并写入 ToolBatch / assistant ToolCall
+    消息，下一轮才能按 call_id 水合完整 Observation；否则模型只会看到空的
+    role=tool 通道，误以为 read 没有返回。
+    """
+    pending_call = {
+        "call_id": call_id,
+        "name": tool,
+        "arguments": arguments,
+        "native": native_tool_mode,
+    }
+    payload: dict = {
+        "pending_tool": pending_call,
+        "pending_tools": [],
+        "pending_events": [*thought_events, _tool_call_event(pending_call)],
+        "repeat_retry": False,
+        "budget": budget.to_dict() if hasattr(budget, "to_dict") else budget,
+    }
+    if native_tool_mode:
+        native_call = NativeToolCall(call_id, tool, arguments)
+        payload["pending_tool_batch"] = build_tool_batch([pending_call])
+        payload["native_messages"] = [_native_tool_message((native_call,), thought_text)]
+    return payload
 
 
 def _native_tool_message(tool_calls: tuple[NativeToolCall, ...], text: str) -> dict[str, object]:
@@ -898,6 +937,7 @@ def _stream_native_tool_round(
     started = time.perf_counter()
     first_delta_ms: int | None = None
     tool_call_parse_ms: int | None = None
+    hold_possible_json = False
     metrics = get_default_stream_metrics()
     try:
         for event in stream(request, config=run_config):
@@ -920,7 +960,14 @@ def _stream_native_tool_round(
                 if first_delta_ms is None:
                     first_delta_ms = round((time.perf_counter() - started) * 1000)
                 content.append(event.text)
-                writer({"kind": "content", "text": event.text})
+                preview = "".join(content).lstrip()
+                # ReAct 控制 JSON 不能当助手正文下发；先暂扣以 ``{`` 开头的增量，
+                # 收尾后若确认是 protocol=react 则丢弃投影，改由 thought/ToolCard 承接。
+                if preview.startswith("{") and not collected_calls:
+                    hold_possible_json = True
+                    continue
+                if not hold_possible_json:
+                    writer({"kind": "content", "text": event.text})
     except StreamAborted:
         metrics.record_stream(
             first_delta_ms=first_delta_ms,
@@ -956,6 +1003,8 @@ def _stream_native_tool_round(
 
     merged_text = "".join(content)
     merged_calls = tuple(collected_calls)
+    if hold_possible_json and merged_text and not _looks_like_legacy_react(merged_text):
+        writer({"kind": "content", "text": merged_text})
     if final_response is None:
         return (
             ModelResponse(
@@ -1114,7 +1163,8 @@ def build_react_nodes(
             state, native_tool_results, thread_id
         )
         # 原生 ToolResult 已作为 role=tool 消息传给模型，不能再把完整正文复制进
-        # system；兼容 JSON ReAct 仍沿用 Observation 注入，保证旧协议档不回归。
+        # system。JSON ReAct 兼容路径若未写入 native_messages，仍必须注入
+        # 【工具结果】，否则只输出协议 JSON 的模型会以为 read 没有返回。
         if observations_text and not state_native_messages:
             stage_parts.append(observations_text)
         assembled = assemble(
@@ -1541,21 +1591,15 @@ def build_react_nodes(
             budget = consume_tool_turn(budget)  # 可能抛 BUDGET_EXCEEDED
             if state.get("repeat_retry"):
                 # 重试回合中模型已换新调用，清除回环标记后正常执行
-                pending_events = list(thought_events)
-                pending_call = {
-                    "call_id": legacy_call_id,
-                    "name": tool,
-                    "arguments": arguments,
-                    "native": False,
-                }
-                pending_events.append(_tool_call_event(pending_call))
-                return {
-                    "pending_tool": pending_call,
-                    "pending_tools": [],
-                    "repeat_retry": False,
-                    "pending_events": pending_events,
-                    "budget": budget.to_dict(),
-                }
+                return _json_react_tool_payload(
+                    native_tool_mode=native_tool_mode,
+                    call_id=legacy_call_id,
+                    tool=tool,
+                    arguments=arguments,
+                    thought_events=list(thought_events),
+                    budget=budget,
+                    thought_text=thought,
+                )
         except AppError as exc:
             # 协议解析失败/预算耗尽：转 error 收尾（不裸抛给用户堆栈）
             return _react_error_state(
@@ -1564,18 +1608,18 @@ def build_react_nodes(
                 message=exc.message,
                 budget=budget.to_dict(),
             )
-        pending_call = {
-            "call_id": legacy_call_id,
-            "name": tool,
-            "arguments": arguments,
-            "native": False,
-        }
-        return {
-            "pending_tool": pending_call,
-            "pending_tools": [],
-            "pending_events": [*thought_events, _tool_call_event(pending_call)],
-            "budget": budget.to_dict(),
-        }
+        pending = _json_react_tool_payload(
+            native_tool_mode=native_tool_mode,
+            call_id=legacy_call_id,
+            tool=tool,
+            arguments=arguments,
+            thought_events=thought_events,
+            budget=budget,
+            thought_text=thought,
+        )
+        if current_task_state is not None:
+            pending["task_state"] = current_task_state.to_dict()
+        return pending
 
     return {"react_agent": react_agent_node}
 

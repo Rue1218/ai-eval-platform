@@ -243,6 +243,22 @@ def test_decide_mode_plan_solve_and_react_priority() -> None:
     assert decide_mode("你好") == "chat"
 
 
+def test_decide_mode_routes_explicit_link_fetch_to_react() -> None:
+    """明确的链接访问/爬取动作必须进入 ReAct，才能产生 web_fetch ToolCall 卡片。"""
+    assert decide_mode("帮我爬取这个链接 https://example.com") == "react"
+    assert decide_mode("访问这个网址 https://example.com") == "react"
+    # 仅提到 URL 不代表要求抓取，仍保留普通 Chat 路径。
+    assert decide_mode("参考 https://example.com 讨论这个方案") == "chat"
+
+
+def test_decide_mode_routes_explicit_basic_tools_to_react() -> None:
+    """点名单个基础工具必须进入 ReAct，才能产生对应 ToolCall 卡片。"""
+    assert decide_mode("write todo.txt，内容是待办事项") == "react"
+    assert decide_mode("编辑内容") == "react"
+    assert decide_mode("bash 执行 ls") == "react"
+    assert decide_mode("帮我拆解任务") == "react"
+
+
 def test_routing_short_tool_chain_plans_then_reacts() -> None:
     """多短工具链：规划模型降级后仍产出内部 PlanArtifact，不输出用户协议正文。"""
     gateway = _FakeGateway()

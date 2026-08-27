@@ -502,6 +502,119 @@ def test_native_read_repeat_replays_cached_result() -> None:
     assert len(tool_contents) == 2
     assert all("hello cached" in content for content in tool_contents)
     assert tool_contents[0] == tool_contents[1]
+def test_native_web_tools_emit_toolcall_cards_contract() -> None:
+    """网页原生工具必须先发完整 ToolCall，再以相同 call_id 发 tool_result。"""
+
+    class _WebToolGateway:
+        """首轮返回两个网页工具调用，后续返回无工具收尾响应。"""
+
+        def __init__(self) -> None:
+            self.calls: list[object] = []
+
+        def invoke(self, request: object, config: dict | None = None):
+            self.calls.append(request)
+            if len(self.calls) == 1:
+                return ModelResponse(
+                    text="",
+                    latency_ms=1,
+                    tool_calls=(
+                        NativeToolCall(
+                            "call_web_search",
+                            "web_search",
+                            {"query": "Firecrawl"},
+                        ),
+                        NativeToolCall(
+                            "call_web_fetch",
+                            "web_fetch",
+                            {"url": "http://127.0.0.1/", "format": "text"},
+                        ),
+                    ),
+                )
+            return ModelResponse(text="网页工具结果已处理。", latency_ms=1)
+
+    gateway = _WebToolGateway()
+    events = _collect(
+        LangGraphAgent(gateway, build_default_registry()),
+        _serializable("搜索并抓取网页", tool_call_mode="native"),
+    )
+
+    pending = _pending_events(events)
+    calls = [event["payload"] for event in pending if event["kind"] == "tool_call"]
+    results = [event["payload"] for event in pending if event["kind"] == "tool_result"]
+    assert [payload["call_id"] for payload in calls] == [
+        "call_web_search",
+        "call_web_fetch",
+    ]
+    assert [payload["name"] for payload in calls] == ["web_search", "web_fetch"]
+    assert [payload["call_id"] for payload in results] == [
+        "call_web_search",
+        "call_web_fetch",
+    ]
+    assert [payload["name"] for payload in results] == ["web_search", "web_fetch"]
+    assert {tool["name"] for tool in gateway.calls[0].tools} >= {
+        "web_search",
+        "web_fetch",
+    }
+
+
+def test_native_basic_tools_keep_toolcall_cards_on_validation_error() -> None:
+    """全部基础工具即使参数校验失败，也须按原 call_id 回传 ToolCall 结果卡。"""
+
+    class _BasicToolGateway:
+        """首轮返回全部基础工具的缺参调用，避免测试访问外部或修改工作区。"""
+
+        def __init__(self) -> None:
+            self.calls: list[object] = []
+
+        def invoke(self, request: object, config: dict | None = None):
+            self.calls.append(request)
+            if len(self.calls) == 1:
+                return ModelResponse(
+                    text="",
+                    latency_ms=1,
+                    tool_calls=tuple(
+                        NativeToolCall(f"call_{name}", name, {})
+                        for name in (
+                            "read",
+                            "write",
+                            "edit",
+                            "bash",
+                            "task",
+                            "web_search",
+                            "web_fetch",
+                        )
+                    ),
+                )
+            return ModelResponse(text="基础工具结果已处理。", latency_ms=1)
+
+    gateway = _BasicToolGateway()
+    events = _collect(
+        LangGraphAgent(gateway, build_default_registry()),
+        _serializable("读取文件", tool_call_mode="native"),
+    )
+
+    pending = _pending_events(events)
+    calls = [event["payload"] for event in pending if event["kind"] == "tool_call"]
+    results = [event["payload"] for event in pending if event["kind"] == "tool_result"]
+    expected_names = [
+        "read",
+        "write",
+        "edit",
+        "bash",
+        "task",
+        "web_search",
+        "web_fetch",
+    ]
+    assert [payload["name"] for payload in calls] == expected_names
+    assert [payload["call_id"] for payload in calls] == [
+        f"call_{name}" for name in expected_names
+    ]
+    assert [payload["name"] for payload in results] == expected_names
+    assert [payload["call_id"] for payload in results] == [
+        f"call_{name}" for name in expected_names
+    ]
+    assert all(payload["ok"] is False for payload in results)
+    assert {tool["name"] for tool in gateway.calls[0].tools} >= set(expected_names)
 
 
 def test_native_read_repeat_same_offset_is_blocked() -> None:
@@ -760,6 +873,83 @@ def test_legacy_profile_does_not_send_native_tools() -> None:
     )
     assert gateway.calls[0].tools == ()
     assert "每轮输出严格 JSON" in gateway.calls[0].system
+
+
+def test_native_stream_json_react_read_feeds_file_content() -> None:
+    """native 流式下模型若只输出 JSON ReAct，read 正文必须回填下一轮，且协议 JSON 不出站。"""
+    react_read = (
+        '{"protocol": "react", "version": "react.v1", '
+        '"thought": "用户需要总结附件 11.txt 的内容。", '
+        '"tool": "read", "arguments": {"path": "attachments/11.txt", '
+        '"offset": 0, "limit": 200}, "done": false}'
+    )
+    file_body = "FILE_BODY_UNIQUE_11TXT 这是附件正文，模型必须看见。"
+
+    class _JsonReactNativeGateway:
+        def __init__(self) -> None:
+            self.stream_calls: list[object] = []
+
+        def invoke(self, _request: object, config: dict | None = None):
+            raise AssertionError("native 流式 JSON ReAct 不应回退 invoke")
+
+        def stream(self, request: object, config: dict | None = None):
+            self.stream_calls.append(request)
+            if len(self.stream_calls) == 1:
+                return iter(
+                    [
+                        ModelStreamEvent(kind="content", text=react_read),
+                        ModelStreamEvent(
+                            kind="completed",
+                            response=ModelResponse(text=react_read, latency_ms=1),
+                        ),
+                    ]
+                )
+            return iter(
+                [
+                    ModelStreamEvent(kind="content", text="附件主要内容是："),
+                    ModelStreamEvent(kind="content", text=file_body),
+                    ModelStreamEvent(
+                        kind="completed",
+                        response=ModelResponse(
+                            text="附件主要内容是：" + file_body, latency_ms=2
+                        ),
+                    ),
+                ]
+            )
+
+    gateway = _JsonReactNativeGateway()
+    with tempfile.TemporaryDirectory() as tmp:
+        attach_dir = os.path.join(tmp, "attachments")
+        os.makedirs(attach_dir)
+        with open(os.path.join(attach_dir, "11.txt"), "w", encoding="utf-8") as handle:
+            handle.write(file_body)
+        events = _collect(
+            LangGraphAgent(gateway, build_default_registry(), sandbox_dir=tmp),
+            _serializable("帮我读取附件 11.txt"),
+            {"configurable": {"thread_id": "json-react-native-read"}},
+        )
+
+    assert len(gateway.stream_calls) == 2
+    second = gateway.stream_calls[1]
+    tool_texts = [
+        str(message.get("content") or "")
+        for message in second.messages
+        if str(message.get("role") or "") == "tool"
+    ]
+    assert tool_texts, "JSON ReAct read 必须回填为 role=tool"
+    assert any(file_body in text for text in tool_texts)
+    leaked = [
+        chunk.get("text") or ""
+        for mode, chunk in events
+        if mode == "custom" and chunk.get("kind") == "content"
+    ]
+    assert not any('"protocol"' in text and "react" in text for text in leaked)
+    pending = _pending_events(events)
+    assert any(event["kind"] == "tool_call" for event in pending)
+    assert any(
+        event["kind"] == "tool_result" and event["payload"].get("ok") is True
+        for event in pending
+    )
 
 
 def test_react_preserves_configured_system_prompt() -> None:

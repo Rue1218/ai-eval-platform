@@ -128,12 +128,14 @@ export class AgentWebSocket {
         this.lastReceiveAt = Date.now()
         try {
           const data: WsServerEvent = JSON.parse(ev.data)
-          // 瞬态帧（pong 心跳与 assistant_delta / stream:think 增量）不占用
+          // 瞬态帧（pong、assistant_delta、stream:think、工具进度/安全输出）不占用
           // 单调事件号，其 event_id 仅复用连接游标满足公共头结构，
           // 必须跳过去重，否则流式增量会因 event_id <= lastEventId 被整帧丢弃
           const transient =
             data.event === 'pong'
             || data.event === 'assistant_delta'
+            || data.event === 'tool_progress'
+            || data.event === 'tool_output_delta'
             || (data.payload && typeof data.payload.stream === 'string')
           if (!transient && 'event_id' in data && typeof data.event_id === 'number') {
             // 事件号单调递增：重放补发与服务端转发竞争可能产生重复事件，按 event_id 去重

@@ -58,6 +58,15 @@ _SKILL_GROUPS: tuple[tuple[str, ...], ...] = (
 _CONFIRM_PHRASES: tuple[str, ...] = ("确认卡", "先评后压", "先评再压", "评完再压")
 _LIST_PHRASES: tuple[str, ...] = ("任务清单", "分步", "拆成步骤", "分几步")
 
+# 网页抓取动作的窄匹配：仅在用户明确要求访问/提取链接内容时进入 ReAct，
+# 避免普通聊天中仅提到一个 URL 就意外触发网络工具。
+_WEB_FETCH_INTENT_PATTERN = re.compile(
+    r"网页抓取|抓取网页|爬取|爬虫|"
+    r"(?:访问|打开|读取|解析|提取).{0,8}(?:链接|网址)|"
+    r"(?:链接|网址).{0,8}(?:内容|正文|网页)",
+    re.IGNORECASE,
+)
+
 # 短工具链也属于需要规划的复杂任务。仅命中一个工具时仍走 ReAct，避免把普通
 # 读取或单条诊断命令过度升级；两个及以上不同工具才进入 Plan-and-Solve。
 _SHORT_TOOL_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -65,8 +74,12 @@ _SHORT_TOOL_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("write", re.compile(r"写入|创建文件|\bwrite\b", re.IGNORECASE)),
     ("edit", re.compile(r"编辑|修改文件|\bedit\b", re.IGNORECASE)),
     ("bash", re.compile(r"shell|终端命令|命令行|\bbash\b", re.IGNORECASE)),
+    ("task", re.compile(r"拆解任务|任务计划|\btask\b", re.IGNORECASE)),
     ("web_search", re.compile(r"网页搜索|\bweb[ _-]?search\b", re.IGNORECASE)),
-    ("web_fetch", re.compile(r"网页抓取|抓取网页|\bweb[ _-]?fetch\b", re.IGNORECASE)),
+    ("web_fetch", re.compile(
+        rf"(?:{_WEB_FETCH_INTENT_PATTERN.pattern})|\bweb[ _-]?fetch\b",
+        re.IGNORECASE,
+    )),
 )
 
 
@@ -107,7 +120,7 @@ def decide_mode(
     """模式路由判定（OR-1 / P0）。
 
     斜杠 → direct；带附件强制 react（模型需 read）；多槽/多技能/确认卡 →
-    plan_solve；工具关键词 → react；否则 chat。附件优先于规划，避免 P0
+    plan_solve；工具关键词或点名的短工具 → react；否则 chat。附件优先于规划，避免 P0
     规划节点尚未执行工具时丢掉附件读取。
     """
     if text.strip().startswith("/"):
@@ -116,6 +129,10 @@ def decide_mode(
         return "react"
     if has_multi_slots:
         return "plan_solve"
-    if has_tool_intent or any(keyword in text for keyword in TOOL_INTENT_KEYWORDS):
+    if (
+        has_tool_intent
+        or short_tool_names(text)
+        or any(keyword in text for keyword in TOOL_INTENT_KEYWORDS)
+    ):
         return "react"
     return "chat"
