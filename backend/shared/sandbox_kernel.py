@@ -220,10 +220,12 @@ def run_sandboxed(
     reader.join(timeout=1.0)
     stdout = "".join(output_parts)
     if started.returncode != 0:
-        # 附截断 stderr 摘要便于模型迭代；退出码归位 INTERNAL
+        # 命令已在沙箱内成功启动，非零退出码属业务失败（如写只读目录被拒），
+        # 归 VALIDATION 并把截断摘要送达模型（INTERNAL 会被 api 侧 hint 过滤
+        # 成"操作失败"，模型无法得知具体原因而盲目重试）。
         detail = stdout.strip().splitlines()
         snippet = detail[-1][:500] if detail else ""
-        raise SandboxError("INTERNAL", f"命令执行失败（退出码 {started.returncode}）：{snippet}")
+        raise SandboxError("VALIDATION", f"命令执行失败（退出码 {started.returncode}）：{snippet}")
     return stdout.strip() or "（无输出）"
 
 
