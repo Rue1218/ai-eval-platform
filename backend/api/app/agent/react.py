@@ -547,6 +547,50 @@ def _has_active_plan(state: GraphState) -> bool:
     return isinstance(state.get("plan"), dict)
 
 
+# 工具指令守卫：用户消息必须同时命中"动作词 + 工具名"才视为明确要求调用工具，
+# 避免"解释一下什么是 bash"这类提及场景误伤。
+_TOOL_ACTION_WORDS = frozenset(
+    {"工具", "调用", "使用", "运行", "执行", "读取", "写入", "编辑", "查看", "帮我"}
+)
+_USER_TOOL_NAMES = frozenset({"read", "write", "edit", "bash", "web_search", "web_fetch"})
+# 守卫纠正观察的哨兵工具名：不计入 _has_tool_observation（防放行幻觉收尾）。
+GUARD_TOOL = "__guard__"
+
+
+def _requested_tool_correction(state: GraphState) -> Observation | None:
+    """工具指令守卫：用户明确要求调用工具但本回合尚未调用任何工具。
+
+    反幻觉（生产实测）：qwen3.6-flash 对"用 write 修改文件"直接输出
+    done=true 的 ReAct JSON，thought 声称"已成功更新"，实际 0 次工具调用。
+    模型尝试收尾时注入纠正观察强制其先调用工具；已有工具结果则放行。
+    """
+    if _has_tool_observation(state):
+        return None
+    raw = state.get("request") or {}
+    messages = raw.get("messages") if isinstance(raw, Mapping) else None
+    if not messages:
+        return None
+    last = messages[-1] if isinstance(messages, list | tuple) and messages else None
+    text = str((last or {}).get("content") or "").lower()
+    if not any(word in text for word in _TOOL_ACTION_WORDS):
+        return None
+    for name in _USER_TOOL_NAMES:
+        if name in text:
+            # tool 用专用哨兵名 "__guard__"：既不触发 _has_tool_observation（防
+            # 误判为真实工具执行后放行幻觉收尾），也不进入 __parse__ 排除逻辑。
+            return Observation(
+                tool=GUARD_TOOL,
+                text=(
+                    f"系统提示：用户明确要求调用 {name} 工具，但你尚未调用任何工具。"
+                    "禁止口头声称操作已执行；必须先实际调用工具拿到真实结果，"
+                    "再基于工具结果回答。"
+                ),
+                ok=False,
+                redacted=True,
+            )
+    return None
+
+
 def _plan_tools_needed(state: GraphState) -> tuple[str, ...]:
     """从 PlanArtifact 投影取出本轮点名的短工具名（未注册项由 select_tool_defs 丢弃）。"""
     plan = state.get("plan")
@@ -747,9 +791,13 @@ def _assistant_completion(
 
 
 def _has_tool_observation(state: GraphState) -> bool:
-    """判断当前 ReAct 回合是否已经执行过真实工具。"""
+    """判断当前 ReAct 回合是否已经执行过真实工具。
+
+    ``__parse__``（协议解析纠正）与 ``__guard__``（工具指令守卫纠正）都不是
+    真实工具执行，不计入。
+    """
     return any(
-        str(getattr(observation, "tool", "") or "") not in ("", "__parse__")
+        str(getattr(observation, "tool", "") or "") not in ("", "__parse__", GUARD_TOOL)
         for observation in (state.get("observations") or [])
     )
 
@@ -1344,6 +1392,20 @@ def build_react_nodes(
                 else []
             )
             if fields["done"]:
+                # 工具指令守卫：用户明确要求调用工具但模型未调用任何工具就声称
+                # 完成（反幻觉，生产实测 qwen 把"已成功更新"写进 thought 并
+                # done=true）——拦截收尾，注入纠正观察强制先调用工具再作答。
+                guard = _requested_tool_correction(state)
+                if guard is not None:
+                    return {
+                        "pending_tool": None,
+                        # repeat_retry=True 触发 react_route 回环 react_agent，
+                        # 强制模型下一轮携带工具结果继续（否则图直接 end）。
+                        "repeat_retry": True,
+                        "pending_events": [],
+                        "observations": [guard],
+                        "budget": budget.to_dict(),
+                    }
                 # 工具已经执行过时，控制模型只负责判定收敛；再走一次无工具
                 # 自然语言流式调用，正文通过 get_stream_writer 投影为 assistant_delta。
                 final_response = None

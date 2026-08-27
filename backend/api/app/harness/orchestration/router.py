@@ -15,7 +15,9 @@ AgentMode = Literal["chat", "direct", "react", "plan_solve"]
 # 已知斜杠（Direct 节点 L0 路由匹配）
 KnownSlash = Literal["/help", "/compact", "/cancel", "/stress", "/stop"]
 
-# 工具意图启发式关键词（OR-1 规则启发式，M4-Q1 hybrid 第一阶段）
+# 工具意图启发式关键词（OR-1 规则启发式，M4-Q1 hybrid 第一阶段）。
+# 覆盖读写编辑/bash/网络全组短工具：缺词会把"用 write 工具改文件"误路由到
+# chat（无工具注入 → 模型只能口头声称已执行 → 幻觉）。
 TOOL_INTENT_KEYWORDS: tuple[str, ...] = (
     "搜索",
     "查一下",
@@ -26,9 +28,24 @@ TOOL_INTENT_KEYWORDS: tuple[str, ...] = (
     "文件",
     "抓取",
     "网页",
+    "写入",
+    "创建文件",
+    "编辑",
+    "修改",
+    "覆盖",
+    "删除",
+    "工具",
+    "命令",
+    "运行",
+    "执行",
     "fetch",
     "read",
+    "write",
+    "edit",
+    "bash",
     "search",
+    "web_search",
+    "web_fetch",
 )
 
 # 多技能/确认卡/显式清单：命中则走 Plan-and-Execute（P0，代码主导，不调模型）

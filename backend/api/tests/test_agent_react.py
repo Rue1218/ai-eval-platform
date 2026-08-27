@@ -26,6 +26,11 @@ _REACT_READ_NL = (
     '{"protocol": "react", "version": "react.v1", "thought": "需要读取文件", '
     '"tool": "read\\n", "arguments": {"path": "a.txt"}, "done": false}'
 )
+# 反幻觉：模型未调用任何工具即输出 done=true，thought 声称已成功更新文件。
+_HALLUCINATED_DONE = (
+    '{"protocol": "react", "version": "react.v1", '
+    '"thought": "已将 g.txt 的内容更新为 beta", "tool": null, "arguments": {}, "done": true}'
+)
 
 
 def _serializable(
@@ -229,6 +234,70 @@ def test_react_tool_then_done_streams_final_answer() -> None:
     assert len(gateway.calls) == 2
     assert len(gateway.stream_calls) == 1
     assert gateway.stream_calls[0].tools == ()
+
+
+def test_requested_tool_guard_returns_correction() -> None:
+    """反幻觉：用户明确要求调用工具且无工具结果时，守卫返回强制调用纠正。"""
+    from app.agent.react import GUARD_TOOL, _requested_tool_correction
+
+    state: dict = {
+        "request": {
+            "messages": ({"role": "user", "content": "用 write 工具把 g.txt 内容改为 beta"},)
+        },
+        "observations": [],
+    }
+    guard = _requested_tool_correction(state)
+    assert guard is not None
+    assert guard.tool == GUARD_TOOL
+    assert "write" in guard.text
+    assert "尚未调用任何工具" in guard.text
+
+
+def test_requested_tool_guard_passes_when_tool_result_exists() -> None:
+    """已有真实工具结果时守卫放行（不误伤正常工具链收尾）。"""
+    from app.agent.react import _requested_tool_correction
+    from app.harness.contracts import Observation
+
+    state: dict = {
+        "request": {
+            "messages": ({"role": "user", "content": "用 read 工具读取 a.txt"},)
+        },
+        "observations": [
+            Observation(tool="read", text="a.txt 内容", ok=True),
+        ],
+    }
+    assert _requested_tool_correction(state) is None
+
+
+def test_requested_tool_guard_ignores_plain_mention() -> None:
+    """仅提及工具名（无动作词）不触发守卫，避免"解释什么是 bash"误伤。"""
+    from app.agent.react import _requested_tool_correction
+
+    state: dict = {
+        "request": {
+            "messages": ({"role": "user", "content": "解释一下什么是 bash"},)
+        },
+        "observations": [],
+    }
+    assert _requested_tool_correction(state) is None
+
+
+def test_react_hallucinated_done_without_tool_is_guarded() -> None:
+    """反幻觉：模型未调工具即 done=true（thought 声称成功）→ 拦截，幻觉正文不得回显。"""
+    gateway = _ScriptGateway([_HALLUCINATED_DONE])
+    events = _collect(
+        LangGraphAgent(gateway, build_default_registry()),
+        _serializable("用 write 工具把 g.txt 内容改为 beta"),
+    )
+    # 幻觉正文（"更新为 beta"）不得作为助手消息回显
+    texts = [
+        str(event.get("payload", {}).get("text") or "")
+        for event in _pending_events(events)
+        if event.get("kind") == "assistant_message"
+    ]
+    assert not any("更新为 beta" in text for text in texts)
+    # 模型被迫再次调用（幻觉 done 被拦截后回环）
+    assert len(gateway.calls) >= 2
 
 
 def test_native_tool_calls_keep_call_id_and_stream_final_answer() -> None:
