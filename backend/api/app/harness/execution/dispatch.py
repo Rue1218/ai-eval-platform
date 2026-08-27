@@ -983,7 +983,13 @@ def execute_raw(
         )
         code = exc.code.value
         error: dict[str, object] = {"code": code, "message": f"操作失败（{code}）"}
+        # 修复建议优先取 fields.repair_hint；无则回退 exc.message（如 write 覆盖
+        # 拒绝的"文件已存在，请使用 edit"），避免模型只看到模糊错误盲目重试。
         hint = (exc.fields or {}).get("repair_hint") if exc.fields else None
+        if not hint:
+            message = str(getattr(exc, "message", "") or "")
+            if message and message not in {"操作失败", "操作失败（INTERNAL）"}:
+                hint = message
         if hint:
             error["repair_hint"] = str(hint)[:500]
         error["recovery"] = recovery_policy.to_payload(code, str(hint or ""))
