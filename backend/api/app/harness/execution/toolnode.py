@@ -43,7 +43,7 @@ from .context import ToolExecutionContext
 from .mcp import MCPClientManager
 from .native import NativeToolExecutor
 from .native_results import NativeToolResultStore, runtime_thread_id
-from .policy import DEFAULT_RECOVERY_POLICY, TOOL_STREAM_CHUNK_CHARS, TOOL_STREAM_MAX_CHARS
+from .policy import DEFAULT_RECOVERY_POLICY, TOOL_STREAM_CHUNK_CHARS, stream_max_chars
 from .registry import ToolRegistry, required_parameter_names, validate_tool_arguments
 from .stream_metrics import get_default_stream_metrics
 from .stream_policy import parallel_batch_allowed, profile_id_from_configurable
@@ -189,9 +189,10 @@ def build_tool_node(
                 )
 
             def emit_output(channel: str, text: str, start_line: int | None = None) -> None:
-                """按块发送受控输出；总量 4KB，不能把完整 Observation 带入浏览器。"""
+                """按块发送受控输出；总量受 stream_max_chars 限制，完整
+                Observation 不进入浏览器。"""
                 nonlocal stream_chars, stream_seq, stream_line
-                remaining = TOOL_STREAM_MAX_CHARS - stream_chars
+                remaining = stream_max_chars() - stream_chars
                 if remaining <= 0 or not text:
                     return
                 visible = text[:remaining]

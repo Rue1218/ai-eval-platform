@@ -52,7 +52,6 @@ READ_UNREAD_HINT_RESERVE = 320
 READ_CONTENT_BUDGET = max(1, READ_MAX_CHARS - READ_UNREAD_HINT_RESERVE)
 # 对齐 Agent 附件接口的 20MB 上限；窗口内仍只解码受控文本片段。
 READ_MAX_BYTES = 20 * 1024 * 1024
-READ_PREVIEW_CHARS = 4_000
 # 剩余正文按块统计行数/字符，避免对未返回内容逐行建 Python 字符串导致超时。
 READ_SCAN_CHUNK = 256 * 1024
 WRITE_MAX_BYTES = 2 * 1024 * 1024
@@ -60,6 +59,16 @@ WEB_MAX_CONTENT_CHARS = MODEL_TOOL_RESULT_MAX_CHARS
 WEB_PREVIEW_CHARS = 500
 WEB_MAX_SEARCH_RESULTS = 10
 WEB_RESPONSE_MAX_BYTES = 256 * 1024
+
+
+def preview_char_limit() -> int:
+    """ToolCard 浏览器预览上限（字符，完整行边界截取）。
+
+    默认与 read 模型窗口预算（READ_MAX_CHARS）同源对齐，保证「卡片所见 ==
+    模型真实读取内容」；部署经 TOOL_PREVIEW_MAX_CHARS 调整（如设 4000 收紧
+    回旧版安全窗，避免大文件进入 WS 广播与历史事件）。
+    """
+    return max(1, int(settings.tool_preview_max_chars))
 
 # handler 可在受控输出生成时调用回调；回调由 ToolNode 注入，未运行在图内时为 None。
 ToolOutputCallback = Callable[[str, str, int | None], None]
@@ -201,7 +210,8 @@ class ReadResult:
 
     def to_tool_data(self) -> dict[str, object]:
         """生成 API.md 允许写入 ToolCard 的受控数据。"""
-        preview, preview_truncated = clip_at_line_boundary(self.content, READ_PREVIEW_CHARS)
+        preview_limit = preview_char_limit()
+        preview, preview_truncated = clip_at_line_boundary(self.content, preview_limit)
         status = "已读完" if self.is_complete else "未读完"
         summary = (
             f"已读取 {self.path} 第 {self.start_line + 1}–{self.end_line} 行"
@@ -239,6 +249,8 @@ class ReadResult:
                     "content_truncated": self.content_truncated,
                     "preview": preview,
                     "preview_truncated": preview_truncated,
+                    # 生效的预览上限随数据下发，前端提示文案不硬编码数字。
+                    "preview_limit_chars": preview_limit,
                 },
             },
         }
@@ -335,11 +347,12 @@ def read_file_safe(
     selected: list[str] = []
     chars_used = 0
     preview_chars = 0
+    preview_limit = preview_char_limit()
     stream_lines: list[str] = []
     stream_start: int | None = None
 
     def flush_stream() -> None:
-        """按完整行输出当前浏览器安全预览块，绝不超出 4000 字符。"""
+        """按完整行输出当前浏览器安全预览块，不超出配置的字符上限。"""
         nonlocal stream_lines, stream_start
         if on_output is not None and stream_lines and stream_start is not None:
             on_output("document", "".join(stream_lines), stream_start)
@@ -390,8 +403,8 @@ def read_file_safe(
             chars_used += len(line)
             total_lines += 1
             total_chars += len(line)
-            # read 的实时输出与最终 ToolCard 同一安全边界：最多 4000 字符、完整行。
-            if on_output is not None and preview_chars + len(line) <= READ_PREVIEW_CHARS:
+            # read 的实时输出与最终 ToolCard 同一上限：完整行、按配置截取。
+            if on_output is not None and preview_chars + len(line) <= preview_limit:
                 if stream_start is None:
                     stream_start = start + len(selected)
                 stream_lines.append(line)
@@ -494,7 +507,7 @@ class BashResult:
 
     def to_tool_data(self) -> dict[str, object]:
         """把沙箱输出限制为 ToolCard 可见预览，完整片段仅供当前模型回合。"""
-        preview, preview_truncated = clip_at_line_boundary(self.output, READ_PREVIEW_CHARS)
+        preview, preview_truncated = clip_at_line_boundary(self.output, preview_char_limit())
         summary = "沙箱命令执行完成"
         return {
             "summary": summary,
@@ -533,7 +546,7 @@ def write_file_safe(path: str, content: str, sandbox_dir: str) -> WriteResult:
         handle.write(content)
         handle.flush()
         os.fsync(handle.fileno())
-    preview, preview_truncated = clip_at_line_boundary(content, READ_PREVIEW_CHARS)
+    preview, preview_truncated = clip_at_line_boundary(content, preview_char_limit())
     lines_written = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
     return WriteResult(
         path=path,

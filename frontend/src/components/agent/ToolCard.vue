@@ -42,7 +42,7 @@
         <span v-if="formattedLatency" class="tool-latency mono">{{ formattedLatency }}</span>
         <span v-if="redacted" class="tool-flag">已脱敏</span>
         <span v-if="truncated" class="tool-flag">已截断</span>
-        <!-- 分页级「已截断」之外的预览级截断：4KB 窗口停在了完整行 -->
+        <!-- 分页级「已截断」之外的预览级截断：受控窗口停在了完整行 -->
         <span v-if="previewCut" class="tool-flag">预览截断</span>
         <span v-if="source" class="tool-source mono" :title="source">{{ source }}</span>
         <span class="tool-state-text" :class="statusClass">
@@ -159,7 +159,7 @@
           </div>
           <pre v-else-if="displayedPreviewText && status === 'ok'" class="code">{{ displayedPreviewText }}<span v-if="isStreamingOutput" class="stream-cursor">▋</span></pre>
           <pre v-else class="code">{{ status === 'ok' ? displayedOutputText : resolvedOutputText }}<span v-if="isStreamingOutput" class="stream-cursor">▋</span></pre>
-          <!-- 服务端 4KB 受控预览停在完整行：明示截断事实，避免误判为内容丢失 -->
+          <!-- 服务端受控预览停在完整行：明示截断事实，避免误判为内容丢失 -->
           <div v-if="previewCutHint" class="td-preview-cut mono">{{ previewCutHint }}</div>
         </template>
       </div>
@@ -266,7 +266,7 @@ const redacted = computed(() => props.redacted === true)
 const isAudioOutput = computed(() => ['audio.speech_synthesis', 'audio.voiceclone'].includes(props.tool))
 const previewMode = ref<'render' | 'source'>('render')
 // 最终 tool_result 仍是唯一持久化终态；运行中的 output_delta 只来自服务端
-// 4KB 受控窗口，不含完整 Observation、历史正文或未脱敏错误。
+// 受控窗口，不含完整 Observation、历史正文或未脱敏错误。
 const displayedOutputText = ref('')
 const isStreamingOutput = ref(false)
 
@@ -397,9 +397,11 @@ const previewText = computed(() => {
 
 const displayedPreviewText = computed(() => (previewText.value ? displayedOutputText.value : ''))
 
-// 与后端 READ_PREVIEW_CHARS（harness/execution/dispatch.py）对齐：浏览器预览
-// 只承载前 4,000 字符的完整行窗口。此常量仅用于提示文案。
-const PREVIEW_MAX_CHARS_LABEL = '4,000'
+/** 服务端下发的实际预览上限（read.preview_limit_chars），提示文案不硬编码数字。 */
+const previewLimitLabel = computed(() => {
+  const limit = asNonNegInt(asRecord(resultRecord.value?.read)?.preview_limit_chars)
+  return limit > 0 ? limit.toLocaleString('en-US') : ''
+})
 
 /** read/write/bash/web 的受控预览是否停在截断边界（服务端 preview_truncated 标记）。 */
 const previewCut = computed(
@@ -413,10 +415,11 @@ const previewCut = computed(
 /** 截断尾部提示：read 说明全文行数仍已提供给模型；其余工具不夸大模型可见范围。 */
 const previewCutHint = computed(() => {
   if (!previewCut.value) return ''
+  const limit = previewLimitLabel.value
   if (props.tool === 'read' && readMeta.value?.total) {
-    return `预览已截断：仅展示前 ${PREVIEW_MAX_CHARS_LABEL} 字符，全文 ${readMeta.value.total} 行已提供给模型`
+    return `预览已截断：${limit ? `仅展示前 ${limit} 字符，` : ''}全文 ${readMeta.value.total} 行已提供给模型`
   }
-  return `预览已按 ${PREVIEW_MAX_CHARS_LABEL} 字符上限截断，超出部分不在浏览器展示`
+  return `预览已按受控上限截断${limit ? `（前 ${limit} 字符）` : ''}，超出部分不在浏览器展示`
 })
 
 const outputLines = computed(() => {
