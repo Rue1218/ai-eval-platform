@@ -393,8 +393,11 @@
                         :content="block.raw || block.text || ''"
                         :is-streaming="block.streaming"
                       />
-                      <div v-if="!block.streaming && formatLatency(block.latency_ms)" class="reply-latency mono">
-                        耗时 {{ formatLatency(block.latency_ms) }}
+                      <div v-if="!block.streaming" class="reply-latency mono">
+                        <template v-if="formatLatency(block.latency_ms)">耗时 {{ formatLatency(block.latency_ms) }}</template>
+                        <template v-if="block.turn_stats && formatTurnStats(block.turn_stats)">
+                          <template v-if="formatLatency(block.latency_ms)"> · </template>{{ formatTurnStats(block.turn_stats) }}
+                        </template>
                       </div>
                     </div>
                     <div v-else-if="block.type === 'error'" class="error-strip" :class="{ 'no-anim': block.noAnim }">
@@ -414,9 +417,12 @@
                     :is-streaming="item.streaming"
                   />
 
-                  <!-- 兼容历史旧缓存的回复耗时。 -->
-                  <div v-if="!item.blocks?.length && !item.streaming && formatLatency(item.latency_ms)" class="reply-latency mono">
-                    耗时 {{ formatLatency(item.latency_ms) }}
+                  <!-- 兼容历史旧缓存的回复耗时与 turn 级指标。 -->
+                  <div v-if="!item.blocks?.length && !item.streaming" class="reply-latency mono">
+                    <template v-if="formatLatency(item.latency_ms)">耗时 {{ formatLatency(item.latency_ms) }}</template>
+                    <template v-if="item.turn_stats && formatTurnStats(item.turn_stats)">
+                      <template v-if="formatLatency(item.latency_ms)"> · </template>{{ formatTurnStats(item.turn_stats) }}
+                    </template>
                   </div>
                 </div>
               </div>
@@ -717,6 +723,7 @@ import type {
   TaskSpec,
   PlanArtifact,
   AgentPrefs,
+  TurnStats,
   WsServerEvent,
 } from '../api/types'
 import { getDefaultRunConfig, getDefaultStressConfig } from '../schemas/confirmCard'
@@ -1124,6 +1131,8 @@ interface AgentAssistantItem {
   text?: string
   streaming?: boolean
   latency_ms?: number
+  /** turn 级观测指标：模型轮数/token/工具成败（assistant_message 事件与历史回放）。 */
+  turn_stats?: TurnStats | null
 }
 
 interface AgentMediaItem {
@@ -1162,6 +1171,8 @@ interface StreamItem {
   plan?: PlanArtifact
   collapsed?: boolean
   latency_ms?: number
+  /** turn 级观测指标（仅 agent 气泡）：模型轮数/token/工具成败。 */
+  turn_stats?: TurnStats | null
   truncated?: boolean
   source?: string
   redacted?: boolean
@@ -1286,6 +1297,22 @@ function pushAgentMessage(text: string) {
   block.text = text
   block.streaming = false
   agent.streaming = false
+}
+
+/** 格式化 turn 级观测摘要：模型轮数 · 工具成功/失败 · token 用量（无数据显示空串）。 */
+function formatTurnStats(stats?: TurnStats | null): string {
+  if (!stats || typeof stats !== 'object') return ''
+  const parts: string[] = []
+  if (typeof stats.model_calls === 'number') parts.push(`模型 ${stats.model_calls} 轮`)
+  if (typeof stats.tool_calls === 'number') {
+    const fails = typeof stats.tool_failures === 'number' ? stats.tool_failures : 0
+    parts.push(`工具 ${stats.tool_calls} 次${fails > 0 ? `（失败 ${fails}）` : ''}`)
+  }
+  if (typeof stats.total_tokens === 'number') {
+    const tokens = stats.total_tokens >= 1000 ? `${(stats.total_tokens / 1000).toFixed(1)}k` : `${stats.total_tokens}`
+    parts.push(`${tokens} tokens`)
+  }
+  return parts.join(' · ')
 }
 
 /** 解析历史消息中的供应商 Logo 标识，优先使用快照字段。 */
@@ -2867,6 +2894,7 @@ async function loadSessionHistory(sid: string): Promise<number> {
             text: m.content || '',
             raw: m.content || '',
             latency_ms: m.latency_ms ?? undefined,
+            turn_stats: m.turn_stats ?? undefined,
             providerLogoKey: logoKey,
             modelName: modelName,
             profileName: profileName,
@@ -3540,6 +3568,7 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
         target.text = renderBubbleHtml(text)
         target.streaming = false
         if (typeof p.reply_latency_ms === 'number') target.latency_ms = p.reply_latency_ms
+        if (p.turn_stats && typeof p.turn_stats === 'object') target.turn_stats = p.turn_stats
         if (p.model_name) targetAgent.modelName = p.model_name
         if (p.profile_name) targetAgent.profileName = p.profile_name
         if (p.provider || p.model_name) {
@@ -3876,6 +3905,7 @@ function handleWsEvent(ev: WsServerEvent) {
         target.text = renderBubbleHtml(text)
         target.streaming = false
         if (typeof p.reply_latency_ms === 'number') target.latency_ms = p.reply_latency_ms
+        if (p.turn_stats && typeof p.turn_stats === 'object') target.turn_stats = p.turn_stats
         if (p.model_name) targetAgent.modelName = p.model_name
         if (p.profile_name) targetAgent.profileName = p.profile_name
         if (p.provider || p.model_name) {

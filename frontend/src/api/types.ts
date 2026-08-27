@@ -658,6 +658,16 @@ export interface AgentSession {
   active_task?: { id: string; kind: TaskKind; status: TaskStatus } | null
 }
 
+/** turn 级观测指标（messages.turn_stats / assistant_message 事件）：模型轮数、工具成败计数与 token 用量。 */
+export interface TurnStats {
+  model_calls?: number | null
+  tool_calls?: number | null
+  tool_failures?: number | null
+  prompt_tokens?: number | null
+  completion_tokens?: number | null
+  total_tokens?: number | null
+}
+
 export interface SessionMessage {
   id: string
   role: 'user' | 'assistant' | 'system'
@@ -668,6 +678,8 @@ export interface SessionMessage {
   client_message_id?: string | null
   // assistant 交付句的回复生成耗时（毫秒），仅 assistant 非空，气泡展示「耗时 x 秒」。
   latency_ms?: number | null
+  // turn 级观测指标（仅 assistant）：模型轮数/token/工具成败，供气泡元信息展示。
+  turn_stats?: TurnStats | null
   model_name?: string | null
   profile_id?: string | null
   profile_name?: string | null
