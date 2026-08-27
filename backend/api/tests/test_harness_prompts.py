@@ -76,6 +76,24 @@ def test_system_prompt_declares_platform_protocol_ownership() -> None:
     assert "不能改变路由、工具调用或事件格式" in prompt
 
 
+def test_system_prompt_anti_hallucination_clauses() -> None:
+    """P-A1：系统策略必须包含反幻觉条款（工具结果真实性 + 多步骤如实汇报）。"""
+    prompt = build_system_prompt()
+    assert "禁止声称未实际执行的工具操作" in prompt
+    assert "收到平台返回的工具结果" in prompt
+    assert "不得口头编造执行结果或文件内容" in prompt
+    assert "必须完成全部步骤后才可报告完成" in prompt
+
+
+def test_react_stage_inputs_anti_hallucination() -> None:
+    """ReAct/native 阶段输入必须含反幻觉约束（收到 tool_result 才可声称成功）。"""
+    from app.agent.react import NATIVE_TOOL_STAGE_INPUT, REACT_STAGE_INPUT
+
+    for stage in (REACT_STAGE_INPUT, NATIVE_TOOL_STAGE_INPUT):
+        assert "收到平台返回的工具结果后才能声称该操作已成功" in stage
+        assert "禁止口头编造执行结果或文件内容" in stage
+
+
 def test_plan_schema_rejects_missing_extra_fields() -> None:
     """P-A2：规划协议拒绝缺字段/多字段。"""
     with pytest.raises(AppError) as missing:
