@@ -243,12 +243,25 @@ export interface RagModelsConfig {
 }
 
 // MCP 内置短工具（API V1.3 §3.6.1，只读）
+// transport='native'：原生基础工具（read/write/edit/bash 等）由 NativeToolExecutor 直连执行；
+// transport='mcp'：内部 MCP 扩展工具（platform.tasks 等）通过 MCPClientManager 调用。
 export interface McpTool {
   name: string
   desc: string
   permission: 'read' | 'write'
   enabled: boolean
-    source: 'builtin' | 'standalone'
+  source: 'builtin' | 'standalone'
+  // 扩展字段（来自 /api/mcp/all-tools，老 /api/mcp/tools 可能缺少）
+  transport?: 'native' | 'mcp'
+  display_name?: string
+  risk_level?: 'read' | 'modify' | 'network' | 'code' | 'long'
+  server_id?: string
+  short_name?: string
+  tool_id?: string
+  timeout_s?: number
+  supports_streaming?: boolean
+  requires_confirmation?: boolean
+  execution_mode?: 'short' | 'long'
 }
 
 export interface TaskProgress {

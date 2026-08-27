@@ -203,12 +203,72 @@ export const MOCK_WHITELIST: WhitelistItem[] = [
   { id: 'wl-2', host: 'api.internal.eval', scope: 'test', creator: 'admin', created_at: '2026-08-05', status: 'active' },
 ]
 
-// 内置 MCP 短工具清单（与后端 /api/mcp/tools 保持一致）
+// 全量工具清单 Mock（与后端 /api/mcp/all-tools 保持一致）
+// transport='native'：原生基础工具，NativeToolExecutor 直连执行
+// transport='mcp'：内部 MCP 扩展，platform.tasks 任务队列桥
 export const MOCK_MCP_TOOLS: McpTool[] = [
-  { name: 'audio.speech_recognition', desc: '将本轮 wav/mp3 音频识别为文本', permission: 'write', enabled: true, source: 'builtin' },
-  { name: 'audio.speech_synthesis', desc: '按文本与风格生成语音文件', permission: 'write', enabled: true, source: 'builtin' },
-  { name: 'audio.voiceclone', desc: '用本轮 wav/mp3 参考音频克隆音色并合成配音', permission: 'write', enabled: true, source: 'builtin' },
-  { name: 'image.generate', desc: 'Qwen Image 3.0 文本或参考图生图', permission: 'write', enabled: true, source: 'builtin' },
+  // ── 原生基础工具（transport=native）──
+  {
+    name: 'read', display_name: '读取文件', desc: '按行读取沙箱目录内的文本文件（相对路径）',
+    permission: 'read', enabled: true, source: 'builtin',
+    transport: 'native', server_id: 'platform.native', risk_level: 'read',
+    timeout_s: 20, supports_streaming: true, execution_mode: 'short',
+  },
+  {
+    name: 'write', display_name: '写入文件', desc: '在沙箱目录内新建文本文件（相对路径）',
+    permission: 'write', enabled: true, source: 'builtin',
+    transport: 'native', server_id: 'platform.native', risk_level: 'modify',
+    timeout_s: 10, supports_streaming: true, execution_mode: 'short',
+  },
+  {
+    name: 'edit', display_name: '编辑文件', desc: '在沙箱目录内对已有文本文件做精确字符串替换',
+    permission: 'write', enabled: true, source: 'builtin',
+    transport: 'native', server_id: 'platform.native', risk_level: 'modify',
+    timeout_s: 10, supports_streaming: false, execution_mode: 'short',
+  },
+  {
+    name: 'bash', display_name: '沙箱命令', desc: '在 bwrap 沙箱内执行 shell 命令（相对路径、无网络、受资源限制）',
+    permission: 'write', enabled: true, source: 'builtin',
+    transport: 'native', server_id: 'platform.native', risk_level: 'code',
+    timeout_s: 15, supports_streaming: true, execution_mode: 'short',
+  },
+  {
+    name: 'web_search', display_name: '网页检索', desc: '内部搜索引擎检索（平台自实现适配器，不走外部 MCP）',
+    permission: 'read', enabled: true, source: 'builtin',
+    transport: 'native', server_id: 'platform.native', risk_level: 'network',
+    timeout_s: 20, supports_streaming: false, execution_mode: 'short',
+  },
+  {
+    name: 'web_fetch', display_name: '网页抓取', desc: '内部网页抓取（平台自实现适配器 + 脱敏，不走外部 MCP）',
+    permission: 'read', enabled: true, source: 'builtin',
+    transport: 'native', server_id: 'platform.native', risk_level: 'network',
+    timeout_s: 20, supports_streaming: true, execution_mode: 'short',
+  },
+  {
+    name: 'task', display_name: '拆解任务', desc: '维护本回合的执行清单：把复杂需求拆成有限步骤并标注状态',
+    permission: 'read', enabled: true, source: 'builtin',
+    transport: 'native', server_id: 'platform.native', risk_level: 'read',
+    timeout_s: 2, supports_streaming: false, execution_mode: 'short',
+  },
+  // ── 内部 MCP 扩展工具（transport=mcp，server=platform.tasks）──
+  {
+    name: 'platform.tasks.task.create', display_name: '创建评测任务', desc: '创建评测任务并入队（benchmark/testcase/rag/stress），由 Worker 异步执行',
+    permission: 'write', enabled: true, source: 'builtin',
+    transport: 'mcp', server_id: 'platform.tasks', risk_level: 'modify',
+    timeout_s: 10, supports_streaming: false, execution_mode: 'short',
+  },
+  {
+    name: 'platform.tasks.task.status', display_name: '查询任务状态', desc: '查询评测任务当前状态（kind/status/progress/report_id），不等待完成',
+    permission: 'read', enabled: true, source: 'builtin',
+    transport: 'mcp', server_id: 'platform.tasks', risk_level: 'read',
+    timeout_s: 10, supports_streaming: false, execution_mode: 'short',
+  },
+  {
+    name: 'platform.tasks.task.cancel', display_name: '取消评测任务', desc: '取消非终态评测任务（终态任务幂等返回现状）',
+    permission: 'write', enabled: true, source: 'builtin',
+    transport: 'mcp', server_id: 'platform.tasks', risk_level: 'modify',
+    timeout_s: 10, supports_streaming: false, execution_mode: 'short',
+  },
 ]
 
 export const MOCK_CASE_SETS: CaseSet[] = [
