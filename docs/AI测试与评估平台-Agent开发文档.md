@@ -1,10 +1,10 @@
 # AI 测试与评估平台 Agent 开发文档
 
-> 版本：V1.5.17
-> 状态：LangGraph Harness 已启用混合范式 P0–P2：Plan-and-Solve → ReAct → reflect；native 首轮流式可按协议档回滚；同轮 ToolBatch 保序回填；受控只读并行需总开关+白名单；关联错乱每回合只记一笔终态；P3 集成测试覆盖 bwrap 屏障 / WS 重连 / team 瞬态广播 / ToolCard 乱序；中间叙述；clarify interrupt 与有界重规划；检查点默认 memory；reflect 产出确认卡；ContextMeter 服务端计算；assemble 接线 CX-4/CX-5；read 防重复与行级 ToolCard；read 一次读完引导与分页观察全量注入；ToolCall 进度/安全输出流；Direct `/help` 发 `response.completed`；思考增量合并与隐藏 CoT 摘要；技能工作流 Progressive Disclosure
+> 版本：V1.5.21
+> 状态：LangGraph Harness 已启用混合范式 P0–P2：Plan-and-Solve → ReAct → reflect；native 首轮流式可按协议档回滚；同轮 ToolBatch 保序回填；JSON ReAct 在 native 下流式不投影协议 JSON，read 结果按 call_id 回填；受控只读并行需总开关+白名单；关联错乱每回合只记一笔终态；P3 集成测试覆盖 bwrap 屏障 / WS 重连 / team 瞬态广播 / ToolCard 乱序；中间叙述；clarify interrupt 与有界重规划；检查点默认 memory；reflect 产出确认卡；ContextMeter 服务端计算；assemble 接线 CX-4/CX-5；read 防重复与行级 ToolCard；read 一次读完引导与分页观察全量注入；ToolCall 进度/安全输出流；Direct `/help` 发 `response.completed`；思考增量合并与隐藏 CoT 摘要；技能工作流 Progressive Disclosure
 > 审查日期：2026-08-27
 > 对应需求：`AI测试与评估平台-PRD.md` V1.12
-> 对应接口：`AI测试与评估平台-API.md` V1.48
+> 对应接口：`AI测试与评估平台-API.md` V1.50
 
 ## 1. 当前唯一运行链路
 
@@ -403,3 +403,24 @@ Agent 思考配置从 `Setting(key="agent_reasoning")` 读取，结构为
 - `frontend/src/components/modals/ProfileModal.vue`：新建协议档默认 native ToolCall；既有协议档保持保存值，需按上游能力手工选择 legacy 回退。
 - `docs/AI测试与评估平台-API.md`：升级 V1.50，同步 read 边界与附件链路契约。
 - `backend/api/tests/test_files.py` / `test_agent_attachments.py` / `test_harness_execution.py`：覆盖分块上传、结构化文本 staging、工作区副本隔离与 20MB read 契约。
+
+### V1.5.18（2026-08-26）修改代码文件与作用清单
+
+- `backend/api/app/agent/react.py`：native 流式若收到 JSON ReAct，不把协议 JSON 投影为助手正文；按 native ToolCall 排入 ToolBatch，read 完整正文按 call_id 回填下一轮。
+- `backend/api/tests/test_agent_react.py`：覆盖 native 流式 JSON ReAct read 回填附件正文。
+
+### V1.5.19（2026-08-27）修改代码文件与作用清单
+
+- `frontend/src/api/ws.ts`：将 `tool_progress` / `tool_output_delta` 按瞬态帧处理，避免复用连接游标时被 `event_id` 去重误丢。
+- `backend/api/tests/test_agent_react.py`：覆盖 `web_search` / `web_fetch` 原生 ToolCall 与同 `call_id` 的 `tool_result` 事件契约。
+
+### V1.5.20（2026-08-27）修改代码文件与作用清单
+
+- `backend/api/app/harness/orchestration/router.py`：识别明确的链接访问/爬取动作并路由到 ReAct，普通 URL 提及仍保持 Chat。
+- `backend/api/tests/test_agent_routing.py`：覆盖链接抓取路由与普通 URL 聊天不误触发工具。
+
+### V1.5.21（2026-08-27）修改代码文件与作用清单
+
+- `backend/api/app/harness/orchestration/router.py`：将点名的 `write` / `edit` / `bash` / `task` 等单个基础工具路由至 ReAct，保留多工具链走 Plan-and-Solve。
+- `backend/api/tests/test_agent_routing.py`：覆盖单个基础工具的直接路由，确保能产生 ToolCall 卡片。
+- `backend/api/tests/test_agent_react.py`：覆盖全部七个原生基础工具在参数校验失败时仍以相同 `call_id` 关联 `tool_call` 与 `tool_result`。
