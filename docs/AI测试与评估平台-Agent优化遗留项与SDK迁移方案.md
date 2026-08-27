@@ -1,6 +1,6 @@
 # AI 测试与评估平台 — Agent 优化遗留项与 SDK 迁移方案
 
-> 版本:V1.2 | 状态:SDK 迁移两期均已实施 | 审查:2026-08-27 | 前置:eeffd77 + 3264a00 两批优化已上线
+> 版本:V1.3 | 状态:SDK 迁移两期 + turn_stats 前端可视化均已实施 | 审查:2026-08-27 | 前置:eeffd77 + 3264a00 两批优化已上线
 >
 > 背景:2026-08-26~27 完成 Agent 读文件链路专项优化(read 预算/流式适配器 bug/
 > 元数据头/缓存回放/native 默认化/turn_stats 观测),本文档记录**尚未完成**的
@@ -123,13 +123,14 @@ httpx),同规模请求零调优即稳定。
 
 ## 三、其他遗留项
 
-### 3.1 turn_stats 前端可视化(P3,web 端)
+### 3.1 turn_stats 前端可视化(P3,web 端) ✅ 已实施
 
-- 数据已就绪:`assistant_message` 事件与 REST 历史回放 payload 均含
+- 数据就绪:`assistant_message` 事件与 REST 历史回放 payload 均含
   `turn_stats`(`model_calls / tool_calls / tool_failures /
   prompt_tokens / completion_tokens / total_tokens`)。
-- 建议:assistant 气泡 hover/展开显示「耗时 x 秒 · N 轮 · N 次工具 ·
-  xxx tokens」;管理端可加会话维度的聚合视图(直接查
+- 已落地:assistant 气泡元信息行展示「耗时 x 秒 · 模型 N 轮 · 工具 N 次
+  (失败 N) · xxx tokens」(实时流、断线重放与历史回放三路径全覆盖,
+  无数据自动省略);管理端会话维度聚合视图仍可后续按需扩展(直接查
   `messages.turn_stats`,无需后端改动)。
 
 ### 3.2 GitHub Actions 首推未触发排查(运维)
@@ -184,3 +185,14 @@ Settings → Billing → workflow_dispatch 手动触发;必要时给 deploy.yml
 - `backend/api/tests/test_adapters.py`：流式夹具改为 SDK 事件对象，增加三协议
   `httpx.MockTransport` 的真实 SDK 请求路径、鉴权头、`stream=true` 与 SSE 解帧回归，
   同步覆盖 SDK 超时和连接错误归一。
+
+---
+
+## 七、V1.3 turn_stats 前端可视化修改代码文件与作用清单
+
+- `frontend/src/api/types.ts`：新增 `TurnStats` 类型接口，`SessionMessage` 增加
+  `turn_stats` 字段（对齐 `messages.turn_stats` / `assistant_message` 事件契约）；
+- `frontend/src/views/Agent.vue`：`StreamItem` / `AgentAssistantItem` 增加
+  `turn_stats` 字段与 `formatTurnStats` 摘要函数；实时流、断线重放与历史回放
+  三条 `assistant_message` 路径透传 `turn_stats`；assistant 气泡元信息行展示
+  「耗时 x 秒 · 模型 N 轮 · 工具 N 次（失败 N）· xxx tokens」（无数据自动省略）。
