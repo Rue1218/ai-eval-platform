@@ -234,6 +234,7 @@ const vendorOptions = [
   { label: 'OpenAI (官方端点)', value: 'openai' },
   { label: 'Anthropic Claude (官方端点)', value: 'anthropic' },
   { label: 'DeepSeek (深度求索)', value: 'deepseek' },
+  { label: 'DeepSeek Anthropic 兼容 (官方 /anthropic 端点)', value: 'deepseek_anthropic' },
   { label: 'StepFun (阶跃星辰)', value: 'stepfun' },
   { label: 'SiliconFlow (硅基流动)', value: 'siliconflow' },
   { label: 'Alibaba Qwen (通义千问 / 阿里云百炼)', value: 'qwen' },
@@ -257,6 +258,13 @@ const VENDOR_MAP: Record<string, { name: string; base_url: string; protocol: Pro
   openai: { name: 'OpenAI', base_url: 'https://api.openai.com/v1', protocol: 'openai_chat', model: 'gpt-4o' },
   anthropic: { name: 'Anthropic Claude', base_url: 'https://api.anthropic.com', protocol: 'anthropic_messages', model: 'claude-3-7-sonnet-20250219' },
   deepseek: { name: 'DeepSeek', base_url: 'https://api.deepseek.com/v1', protocol: 'openai_chat', model: 'deepseek-chat' },
+  // DeepSeek 官方 Anthropic 兼容端点：SDK 自动追加 /v1/messages，x-api-key 完全支持
+  deepseek_anthropic: {
+    name: 'DeepSeek (Anthropic 兼容)',
+    base_url: 'https://api.deepseek.com/anthropic',
+    protocol: 'anthropic_messages',
+    model: 'deepseek-chat',
+  },
   stepfun: { name: 'StepFun 阶跃星辰', base_url: 'https://api.stepfun.com/v1', protocol: 'openai_chat', model: 'step-2-16k' },
   siliconflow: { name: 'SiliconFlow', base_url: 'https://api.siliconflow.cn/v1', protocol: 'openai_chat', model: 'deepseek-ai/DeepSeek-V3' },
   qwen: { name: 'Alibaba Qwen', base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', protocol: 'openai_chat', model: 'qwen-plus' },
