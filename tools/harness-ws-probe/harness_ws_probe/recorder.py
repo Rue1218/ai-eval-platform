@@ -16,7 +16,11 @@ Direction = Literal["up", "down"]
 
 @dataclass(slots=True)
 class TraceFrame:
-    """单帧：方向、相对毫秒、事件名、是否持久、脱敏后的 JSON。"""
+    """单帧：方向、相对毫秒、事件名、是否持久、脱敏后的 JSON。
+
+    ``frame_index`` 为该帧在 ``TraceRecorder.frames`` 中的绝对序号
+    （含上下行），供 ExpectMatcher 的 ``after_frame`` 窗口过滤使用。
+    """
 
     dir: Direction
     t_ms: int
@@ -24,6 +28,7 @@ class TraceFrame:
     event_id: int | None
     persistent: bool
     raw: dict[str, Any]
+    frame_index: int = 0
 
 
 class TraceRecorder:
@@ -45,6 +50,7 @@ class TraceRecorder:
             event_id=None,
             persistent=True,
             raw=redact(dict(message)),
+            frame_index=len(self.frames),
         )
         self.frames.append(frame)
         return frame
@@ -60,6 +66,7 @@ class TraceRecorder:
             event_id=event_id if isinstance(event_id, int) else None,
             persistent=not is_transient(payload),
             raw=redact(dict(payload)),
+            frame_index=len(self.frames),
         )
         self.frames.append(frame)
         return frame

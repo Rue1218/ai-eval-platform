@@ -37,16 +37,20 @@ class ExpectMatcher:
             if raw.get("event") != item.event:
                 raise ProbeAssertion("公共头 event 与录制事件名不一致")
 
-    def event_whitelist(self) -> None:
+    def event_whitelist(self, *, after_frame: int = 0) -> None:
         for item in self.trace.downlink():
+            if item.frame_index < after_frame:
+                continue
             if item.event in FORBIDDEN_DOWNLINK:
                 raise ProbeAssertion(f"禁止的旧事件名：{item.event}")
             if item.event and item.event not in DOWNLINK_EVENTS:
                 raise ProbeAssertion(f"未知下行事件：{item.event}")
 
-    def event_ids_monotonic(self) -> None:
+    def event_ids_monotonic(self, *, after_frame: int = 0) -> None:
         last = 0
         for item in self.trace.downlink():
+            if item.frame_index < after_frame:
+                continue
             if not item.persistent:
                 continue
             if item.event_id is None:
