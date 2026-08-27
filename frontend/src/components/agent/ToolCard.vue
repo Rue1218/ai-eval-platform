@@ -42,6 +42,8 @@
         <span v-if="formattedLatency" class="tool-latency mono">{{ formattedLatency }}</span>
         <span v-if="redacted" class="tool-flag">已脱敏</span>
         <span v-if="truncated" class="tool-flag">已截断</span>
+        <!-- 分页级「已截断」之外的预览级截断：4KB 窗口停在了完整行 -->
+        <span v-if="previewCut" class="tool-flag">预览截断</span>
         <span v-if="source" class="tool-source mono" :title="source">{{ source }}</span>
         <span class="tool-state-text" :class="statusClass">
           {{ stateText }}
@@ -157,6 +159,8 @@
           </div>
           <pre v-else-if="displayedPreviewText && status === 'ok'" class="code">{{ displayedPreviewText }}<span v-if="isStreamingOutput" class="stream-cursor">▋</span></pre>
           <pre v-else class="code">{{ status === 'ok' ? displayedOutputText : resolvedOutputText }}<span v-if="isStreamingOutput" class="stream-cursor">▋</span></pre>
+          <!-- 服务端 4KB 受控预览停在完整行：明示截断事实，避免误判为内容丢失 -->
+          <div v-if="previewCutHint" class="td-preview-cut mono">{{ previewCutHint }}</div>
         </template>
       </div>
     </div>
@@ -392,6 +396,28 @@ const previewText = computed(() => {
 })
 
 const displayedPreviewText = computed(() => (previewText.value ? displayedOutputText.value : ''))
+
+// 与后端 READ_PREVIEW_CHARS（harness/execution/dispatch.py）对齐：浏览器预览
+// 只承载前 4,000 字符的完整行窗口。此常量仅用于提示文案。
+const PREVIEW_MAX_CHARS_LABEL = '4,000'
+
+/** read/write/bash/web 的受控预览是否停在截断边界（服务端 preview_truncated 标记）。 */
+const previewCut = computed(
+  () =>
+    asRecord(resultRecord.value?.read)?.preview_truncated === true ||
+    asRecord(resultRecord.value?.write)?.preview_truncated === true ||
+    asRecord(resultRecord.value?.bash)?.preview_truncated === true ||
+    asRecord(resultRecord.value?.web)?.preview_truncated === true,
+)
+
+/** 截断尾部提示：read 说明全文行数仍已提供给模型；其余工具不夸大模型可见范围。 */
+const previewCutHint = computed(() => {
+  if (!previewCut.value) return ''
+  if (props.tool === 'read' && readMeta.value?.total) {
+    return `预览已截断：仅展示前 ${PREVIEW_MAX_CHARS_LABEL} 字符，全文 ${readMeta.value.total} 行已提供给模型`
+  }
+  return `预览已按 ${PREVIEW_MAX_CHARS_LABEL} 字符上限截断，超出部分不在浏览器展示`
+})
 
 const outputLines = computed(() => {
   if (!displayedPreviewText.value || !['read', 'write', 'bash', 'web_fetch'].includes(props.tool)) return []
@@ -917,6 +943,13 @@ pre.code {
 }
 .td-meta {
   margin-bottom: 8px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+.td-preview-cut {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border-subtle);
   color: var(--text-tertiary);
   font-size: 11px;
 }
