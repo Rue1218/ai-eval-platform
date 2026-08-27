@@ -11,6 +11,7 @@ import json
 import logging
 import threading
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -419,15 +420,33 @@ DEFAULT_AGENT_SYSTEM = (
 )
 
 
+@dataclass(frozen=True)
+class _ProfileSnapshot:
+    """协议档纯数据快照：仅含回合所需的已加载标量字段，缓存安全。
+
+    修复根因：缓存曾直接保存 detach 后的 ProtocolProfile ORM 实例；写入缓存
+    的回合随后 commit（expire_on_commit 使属性过期）并关闭 Session（实例
+    detach），命中缓存的回合访问属性时抛 DetachedInstanceError，被兜底为
+    INTERNAL「Agent 调用失败」。快照不再绑定任何 ORM 会话。
+    """
+
+    id: str
+    name: str
+    model: str
+    base_url: str
+    protocol: str
+
+
 # 协议档配置快照缓存：Agent 每回合读取，TTL 内复用（省 profile+reasoning 两次
-# 查询与环境文件解析）；管理端改档/改 Key 最迟 TTL 秒后生效。缓存的 ORM 实例
-# 已 detach，仅做已加载列的属性读取（本模型无 relationship 懒加载）。
-_MODEL_CONFIG_CACHE: dict[str, tuple[float, tuple[ModelConfig, ProtocolProfile]]] = {}
+# 查询与环境文件解析）；管理端改档/改 Key 最迟 TTL 秒后生效。缓存只存纯数据
+# 快照（_ProfileSnapshot + ModelConfig），禁止缓存 ORM 实例（detach/expire
+# 后访问属性会抛 DetachedInstanceError）。
+_MODEL_CONFIG_CACHE: dict[str, tuple[float, tuple[ModelConfig, _ProfileSnapshot]]] = {}
 _MODEL_CONFIG_CACHE_TTL_S = 15.0
 
 
-def _selected_model_config(db: Session) -> tuple[ModelConfig, ProtocolProfile]:
-    """从 Agent 设置与协议档构造模型调用配置与协议档实体，禁止使用隐式旧客户端。"""
+def _selected_model_config(db: Session) -> tuple[ModelConfig, _ProfileSnapshot]:
+    """从 Agent 设置与协议档构造模型调用配置与协议档快照，禁止使用隐式旧客户端。"""
     setting = db.query(Setting).filter(Setting.key == "agent_profile_id").first()
     profile_id = setting.value if setting else None
     if not isinstance(profile_id, str) or not profile_id:
@@ -469,8 +488,15 @@ def _selected_model_config(db: Session) -> tuple[ModelConfig, ProtocolProfile]:
         reasoning_effort=reasoning_effort,
         tool_call_mode=getattr(profile, "tool_call_mode", "native") or "native",
     )
-    _MODEL_CONFIG_CACHE[profile_id] = (now + _MODEL_CONFIG_CACHE_TTL_S, (config, profile))
-    return config, profile
+    snapshot = _ProfileSnapshot(
+        id=profile.id,
+        name=profile.name,
+        model=profile.model,
+        base_url=profile.base_url,
+        protocol=profile.protocol,
+    )
+    _MODEL_CONFIG_CACHE[profile_id] = (now + _MODEL_CONFIG_CACHE_TTL_S, (config, snapshot))
+    return config, snapshot
 
 
 def _window_messages(db: Session, session_id: str) -> list[dict]:
@@ -508,7 +534,7 @@ def _history_messages(db: Session, session_id: str) -> list[dict[str, str]]:
     ]
 
 
-def _infer_provider(profile: ProtocolProfile | None) -> str | None:
+def _infer_provider(profile: _ProfileSnapshot | None) -> str | None:
     """根据协议档的模型名、名称、URL 与协议类型推断供应商标识，供前端精准呈现 ProviderLogo。"""
     if profile is None:
         return None
@@ -595,7 +621,7 @@ async def _translate_event(
     websocket: WebSocket,
     state: _ConnectionState,
     session_id: str,
-    profile: ProtocolProfile | None,
+    profile: _ProfileSnapshot | None,
     event: dict,
     *,
     user: User | None = None,
