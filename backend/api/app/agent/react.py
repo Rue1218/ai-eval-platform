@@ -1318,6 +1318,10 @@ def build_react_nodes(
                 }
                 if current_task_state is not None:
                     result_payload["task_state"] = current_task_state.to_dict()
+                    # 演进后的状态黑板随事件下发，前端实时刷新任务看板
+                    pending_events.append(
+                        make_event("task_state", current_task_state.to_dict())
+                    )
                 return result_payload
 
             if native_tool_mode:
@@ -1341,6 +1345,9 @@ def build_react_nodes(
                 completed["budget"] = budget.to_dict()
                 if current_task_state is not None:
                     completed["task_state"] = current_task_state.to_dict()
+                    completed["pending_events"].append(
+                        make_event("task_state", current_task_state.to_dict())
+                    )
                 return completed
 
             try:
@@ -1443,6 +1450,9 @@ def build_react_nodes(
                 finished["budget"] = budget.to_dict()
                 if current_task_state is not None:
                     finished["task_state"] = current_task_state.to_dict()
+                    finished["pending_events"].append(
+                        make_event("task_state", current_task_state.to_dict())
+                    )
                 return finished
             # 工具路径：重复调用抑制（OR-4）→ 预算 → 写 pending_tool
             # strip 兜底：模型输出工具名偶带尾随空白/换行（如 "read\n"），

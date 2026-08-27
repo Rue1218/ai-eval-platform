@@ -865,6 +865,7 @@ export interface WsServerEvent {
     | 'confirm_ack'
     | 'clarify'
     | 'plan'
+    | 'task_state'
     | 'progress'
     | 'report'
     | 'error'

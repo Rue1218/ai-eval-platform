@@ -23,6 +23,7 @@ DOWNLINK_EVENTS = frozenset(
         "tool_result",
         "clarify",
         "plan",
+        "task_state",
         "confirm",
         "confirm_ack",
         "progress",
