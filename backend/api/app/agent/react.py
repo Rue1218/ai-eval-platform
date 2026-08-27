@@ -57,6 +57,7 @@ REACT_STAGE_INPUT = """\
 {"protocol": "react", "version": "react.v1", "thought": "简述本轮判断", "tool": "工具名或null", "arguments": {}, "done": false}
 - 需要工具：tool 填工具名，arguments 填参数，done=false；
 - 任务完成：tool=null，arguments={}，done=true。
+- 读文件时 read 应省略 limit 一次读完，禁止人为拆成多个小页连续多次读取。
 - 工具已返回内容即可基于内容直接作答；内容未读完也可直接 done=true 回答，不必强行读完。
 - 禁止用完全相同参数重复调用已执行过的工具；如需继续，请换用不同命令，或直接 done=true 收尾。
 可用工具（名称 + 参数要求）："""
@@ -71,6 +72,7 @@ NATIVE_TOOL_STAGE_INPUT = """\
 如需访问平台工具，请使用模型协议提供的原生函数调用能力，并只从本轮提供的工具
 schema 中选择。工具结果会以对应的 tool_call_id 返回。
 同一请求中的多个函数调用会由平台依次执行，每一个调用都经过权限门禁和沙箱。
+读文件时 read 应省略 limit 参数一次读完（单次最多 2000 行），禁止人为拆成多个小页连续多次读取。
 read 未读完时，把返回的 next_offset 填到下一次的 offset，禁止用相同 offset 重读。
 """
 
@@ -91,7 +93,12 @@ MAX_PARSE_RETRIES = 2
 
 # 上下文注入最近观察条数上限：observations 已改为累积（OR-4 守卫需全量），
 # 但注入系统提示只需最近若干条，避免长任务上下文无限膨胀（守卫仍看全量）。
+# read 观察不受此条数限制（分页读取必须全页保留到最终回答阶段），但受下方总字符熔断。
 INJECT_OBSERVATIONS_MAX = 6
+
+# 注入的 read 观察总字符熔断：分页读超大文件时防止上下文被撑爆；
+# 超预算时优先保留较新的页（尾部通常包含结论与续读线索）。
+INJECT_READ_TOTAL_MAX_CHARS = 1_200_000
 
 # 工具完成后的最终回答提示。ReAct 控制调用必须输出严格 JSON，不能直接把它的
 # 增量投影到 assistant_delta；工具链收敛后单独做一次无工具自然语言流式调用。
@@ -367,11 +374,39 @@ def _forced_repeat_completion(
 def _inject_observations(state: GraphState) -> str:
     """把 observations 归一为摘要文本（M2 to_observation，脱敏在注入前）。
 
-    只注入最近 ``INJECT_OBSERVATIONS_MAX`` 条：模型作答依赖最近工具结果即可，
-    守卫（identical_runs）仍消费全量累积观察。
+    非 read 观察只注入最近 ``INJECT_OBSERVATIONS_MAX`` 条；read 观察不受条数
+    上限：分页读取的每一页都必须保留到最终回答阶段，否则模型只能基于尾部页
+    作答导致内容不全。read 总字符受 ``INJECT_READ_TOTAL_MAX_CHARS`` 熔断，
+    超出时优先保留较新的页。守卫（identical_runs）仍消费全量累积观察。
     """
-    observations = (state.get("observations") or [])[-INJECT_OBSERVATIONS_MAX:]
-    if not observations:
+    all_observations = list(state.get("observations") or ())
+    if not all_observations:
+        return ""
+    recent_non_read_ids = {
+        id(item)
+        for item in [
+            observation
+            for observation in all_observations
+            if str(getattr(observation, "tool", "") or "") != "read"
+        ][-INJECT_OBSERVATIONS_MAX:]
+    }
+    # read 页倒序准入预算，确保超熔断时丢的是最早的页。
+    read_budget = INJECT_READ_TOTAL_MAX_CHARS
+    read_kept_ids: set[int] = set()
+    for observation in reversed(all_observations):
+        if str(getattr(observation, "tool", "") or "") != "read":
+            continue
+        cost = min(len(str(getattr(observation, "text", "") or "")), READ_MAX_CHARS)
+        if read_budget - cost < 0 and read_kept_ids:
+            break
+        read_budget -= cost
+        read_kept_ids.add(id(observation))
+    selected = [
+        observation
+        for observation in all_observations
+        if id(observation) in read_kept_ids or id(observation) in recent_non_read_ids
+    ]
+    if not selected:
         return ""
     lines = [
         # read 的正文可达 READ_MAX_CHARS（1000 行量级一次读完），其余工具
@@ -380,7 +415,7 @@ def _inject_observations(state: GraphState) -> str:
             observation,
             max_chars=READ_MAX_CHARS if observation.tool == "read" else MODEL_TOOL_RESULT_MAX_CHARS,
         )
-        for observation in observations
+        for observation in selected
     ]
     return "【工具结果】\n" + "\n".join(lines)
 

@@ -1165,3 +1165,67 @@ def test_hydrate_native_messages_keeps_full_read_result() -> None:
     assert "截断" not in content
     assert content == body
     assert "line-0999" in content
+
+
+def test_stage_inputs_forbid_small_page_reads() -> None:
+    """阶段输入必须引导模型省略 limit 一次读完，避免拆小页连续多次读取。"""
+    from app.agent.react import NATIVE_TOOL_STAGE_INPUT, REACT_STAGE_INPUT
+
+    assert "省略 limit" in REACT_STAGE_INPUT
+    assert "禁止人为拆成多个小页" in REACT_STAGE_INPUT
+    assert "省略 limit" in NATIVE_TOOL_STAGE_INPUT
+    assert "禁止人为拆成多个小页" in NATIVE_TOOL_STAGE_INPUT
+
+
+def test_read_tool_description_recommends_one_shot_read() -> None:
+    """read 工具描述与 limit 参数说明都带一次读完的正向引导（结构化约束）。"""
+    registry = build_default_registry()
+    definition = registry.get("read")
+    assert "省略 limit 一次读完" in definition.description
+    assert "禁止人为拆成" in definition.description
+    limit_schema = definition.parameters_schema["properties"]["limit"]
+    assert "建议省略" in str(limit_schema.get("description") or "")
+    assert limit_schema.get("maximum") == 2000
+
+
+def _observation(tool: str, text: str) -> object:
+    """构造观察注入用例用的最小 Observation。"""
+    from app.harness.contracts import Observation
+
+    return Observation(tool=tool, text=text, ok=True)
+
+
+def test_inject_observations_keeps_all_read_pages() -> None:
+    """read 观察不受最近 6 条条数上限；非 read 观察仍只注入最近 6 条。"""
+    from app.agent.react import _inject_observations
+
+    observations = []
+    for i in range(8):
+        observations.append(_observation("read", f"READ_PAGE_{i}"))
+        observations.append(_observation("bash", f"BASH_OUT_{i}"))
+    text = _inject_observations({"observations": observations})
+    # 8 页 read 全部保留（旧逻辑只能看到尾部页，导致回答内容不全）
+    for i in range(8):
+        assert f"READ_PAGE_{i}" in text
+    # 非 read 观察只保留最近 6 条，最早的 2 条被丢弃
+    assert "BASH_OUT_0" not in text
+    assert "BASH_OUT_1" not in text
+    for i in range(2, 8):
+        assert f"BASH_OUT_{i}" in text
+    # 时序不被打乱：第 0 页在第 7 页之前
+    assert text.index("READ_PAGE_0") < text.index("READ_PAGE_7")
+
+
+def test_inject_observations_read_budget_drops_oldest_pages(monkeypatch) -> None:
+    """read 总字符熔断超预算时丢最早的页，较新的页优先保留。"""
+    import app.agent.react as react_module
+
+    monkeypatch.setattr(react_module, "INJECT_READ_TOTAL_MAX_CHARS", 300)
+    observations = [
+        _observation("read", "PAGE_OLD_" + "a" * 200),
+        _observation("read", "PAGE_MID_" + "b" * 200),
+        _observation("read", "PAGE_NEW_" + "c" * 200),
+    ]
+    text = react_module._inject_observations({"observations": observations})
+    assert "PAGE_OLD_" not in text
+    assert "PAGE_NEW_" in text
