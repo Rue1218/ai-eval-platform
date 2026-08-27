@@ -233,6 +233,9 @@ class ProtocolProfile(Base):
     anthropic_version = Column(String, nullable=True)
     encrypted_key = Column(Text, nullable=True)
     context_window = Column(Integer, nullable=False, default=200000)
+    # 单回合模型输出上限（max_tokens）：长文档总结/导出类任务可调大，
+    # 避免回答在 8192 token 处被上游截断；未配置时回退 8192。
+    max_output_tokens = Column(Integer, nullable=False, default=8192, server_default="8192")
     # 兼容优先：只有经人工验证的协议档才显式开启上游原生 tools。
     tool_call_mode = Column(
         String, nullable=False, default="native", server_default="native"

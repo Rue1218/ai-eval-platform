@@ -461,7 +461,9 @@ def _selected_model_config(db: Session) -> tuple[ModelConfig, ProtocolProfile]:
         api_key=api_key or "",
         anthropic_version=profile.anthropic_version,
         temperature=0.2,
-        max_tokens=8192,
+        # 输出上限从协议档 max_output_tokens 读取（默认 8192）：长文档总结/
+        # 导出类任务可调大，避免回答在输出上限处被上游截断。
+        max_tokens=int(getattr(profile, "max_output_tokens", 0) or 8192),
         timeout_s=60.0,
         reasoning_enabled=reasoning_enabled,
         reasoning_effort=reasoning_effort,

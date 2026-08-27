@@ -92,6 +92,9 @@ class ProfileCreate(ApiModel):
     anthropic_version: str | None = Field(default=None, max_length=64)
     usages: list[Literal["target", "agent", "judge"]] = Field(default_factory=list)
     context_window: int = Field(default=200000, ge=1000, le=10000000, description="上下文窗口大小 (Tokens)")
+    max_output_tokens: int = Field(
+        default=8192, ge=256, le=131072, description="Agent 单回合模型输出上限 (max_tokens)"
+    )
     tool_call_mode: Literal["native", "legacy"] = Field(
         default="native", description="Agent 工具调用模式：原生 ToolCall（默认）或受控 JSON 回退"
     )
@@ -132,6 +135,9 @@ class ProfileUpdate(ApiModel):
     anthropic_version: str | None = Field(default=None, max_length=64)
     usages: list[Literal["target", "agent", "judge"]] | None = None
     context_window: int | None = Field(default=None, ge=1000, le=10000000, description="上下文窗口大小 (Tokens)")
+    max_output_tokens: int | None = Field(
+        default=None, ge=256, le=131072, description="Agent 单回合模型输出上限 (max_tokens)"
+    )
     tool_call_mode: Literal["native", "legacy"] | None = None
 
     @model_validator(mode="before")
@@ -171,6 +177,7 @@ class ProfileOut(OrmOut):
     reranker_model: str | None = None
     has_reranker_api_key: bool = False
     context_window: int = 200000
+    max_output_tokens: int = 8192
     tool_call_mode: Literal["native", "legacy"] = "native"
     created_at: Any
     updated_at: Any
