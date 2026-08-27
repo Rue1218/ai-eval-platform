@@ -2,17 +2,19 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.50 |
+| 文档版本 | V1.51 |
 | 对应 PRD | V1.13（功能唯一权威） |
 | 对应设计规范 | V1.10（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.5.17（LangGraph 单轮 Agent 与 WS 桥接；JSON 仍以本文为准） |
 | 对应前端计划 | V1.5 |
 | 对应后端计划 | V1.5 |
 | 撰写日期 | 2026-08-18 |
-| 本轮修订 | 2026-08-27：V1.50 统一 Agent 文本附件 staging 与 `read` 的 20MB 边界；`read` 模型窗口为 2,000 行 / 600,000 字符。 |
-| 最近修订 | 2026-08-27：V1.50 统一 Agent 文本附件 staging 与 `read` 的 20MB 边界；`read` 模型窗口为 2,000 行 / 600,000 字符。V1.49 协议档新增 `max_output_tokens`（256–131072，默认 8192），创建/更新/列表/详情均支持；Agent 模型调用从协议档读取输出上限，长文档总结/导出类任务可调大避免回答被截断。2026-08-26：V1.48 同轮多调用默认串行，灰度开启后仅 `read`/`web_search`/`web_fetch` 可并行，回填按原始 `call_id`。V1.47 新增 `GET /api/agent/metrics`，不含正文/参数，不新增 WS 事件。V1.46 明确 native 一次 ToolCall 结束当前上游响应，结果回填后再请求，不新增事件名。V1.45 思考链只下发可展示摘要，隐藏 CoT（`Here's a thinking process` / `Analyze User Input`）由服务端替换，不原样推给前端。V1.44 ToolCall 在执行前持久化，新增瞬态 `tool_progress` / `tool_output_delta`，并冻结原生工具的输出 Schema、权限边界和失败恢复字段。V1.43 思考增量允许合并下发；有思考链时 `think_final` 在 `response.completed` 之前。V1.42 Direct `/help`、未知斜杠与图内防御提示在业务事件后必须再发 `response.completed`（成功 `stop`，校验/防御 `error`），结束整轮生成态。V1.41 确认卡预填与 `confirm_ack` 入队前丢掉已删除的协议档/数据集/知识库 ID，避免 Worker 再报「协议档不存在或已删除」。V1.40 `/cancel` 与 `/stress` 按 §4.4 解禁（仍走 `user_message`）：`/cancel` 取消本会话非终态任务，`/stress` 发出质量任务确认卡且 `with_stress=true`，禁止 `kind=stress`。V1.39 原生工具卡片收起态副标题统一为 `ToolCall`，不在卡片摘要区回显文件路径、命令或写入内容；详细参数仍在展开区展示。V1.38 明确原生基础 ToolCall 卡片使用英文工具名，展开区统一显示 `ToolCall` 与 `输出`，文件、命令和代码/文档结果使用行号展示；MCP/平台短工具仍按下方中文名映射。2026-08-24：V1.24 修复 Agent 附件上下文链路：服务端校验文件归属并在模型窗口解析文本、PDF、DOCX、XLSX，图片按三协议图文内容块发送；历史消息附件补齐安全元数据，前端可在刷新后继续预览。同步调整输入框内附件按钮与用户消息附件位序。V1.23 扩展 Agent 附件契约，支持图片、Word 文档与多附件拖拽上传；保留 `POST /api/files` 后再以既有 `file_id` 引用的消息链路，补充图片缩略图、PDF/文本预览与 Office 文件打开/下载说明。V1.22 修复 V1.21 遗留：§4.4 标题「仅此三条」改「仅此四条」、§9 禁止清单「第四种」改「第五种」并补四类上行事件枚举、§4.3 `tool_result.source` 语义对齐 M7 `Observation.source`（溯源标识字符串，非 short\|long 枚举）、§4.3 共享流规则补 clarify/plan/confirm 持久化广播说明、§4.4 clarify 多副本限制注明、§9 Ask/Plan 补注非 Harness plan 事件；V1.20 及更早版本沿用历史修订记录。 |
+| 本轮修订 | 2026-08-27：V1.51 新增持久事件 `session_title`（§4.3）与会话标题 AI 生成契约（§4.3.2）：默认标题会话首条消息后由 Agent 协议档弱结构化生成标题并落库广播，修复标题不持久化问题。 |
+| 最近修订 | 2026-08-27：V1.51 新增持久事件 `session_title`（§4.3）与会话标题 AI 生成契约（§4.3.2）：默认标题会话首条消息后由 Agent 协议档弱结构化生成标题并落库广播，修复标题不持久化问题。V1.50 统一 Agent 文本附件 staging 与 `read` 的 20MB 边界；`read` 模型窗口为 2,000 行 / 600,000 字符。V1.49 协议档新增 `max_output_tokens`（256–131072，默认 8192），创建/更新/列表/详情均支持；Agent 模型调用从协议档读取输出上限，长文档总结/导出类任务可调大避免回答被截断。2026-08-26：V1.48 同轮多调用默认串行，灰度开启后仅 `read`/`web_search`/`web_fetch` 可并行，回填按原始 `call_id`。V1.47 新增 `GET /api/agent/metrics`，不含正文/参数，不新增 WS 事件。V1.46 明确 native 一次 ToolCall 结束当前上游响应，结果回填后再请求，不新增事件名。V1.45 思考链只下发可展示摘要，隐藏 CoT（`Here's a thinking process` / `Analyze User Input`）由服务端替换，不原样推给前端。V1.44 ToolCall 在执行前持久化，新增瞬态 `tool_progress` / `tool_output_delta`，并冻结原生工具的输出 Schema、权限边界和失败恢复字段。V1.43 思考增量允许合并下发；有思考链时 `think_final` 在 `response.completed` 之前。V1.42 Direct `/help`、未知斜杠与图内防御提示在业务事件后必须再发 `response.completed`（成功 `stop`，校验/防御 `error`），结束整轮生成态。V1.41 确认卡预填与 `confirm_ack` 入队前丢掉已删除的协议档/数据集/知识库 ID，避免 Worker 再报「协议档不存在或已删除」。V1.40 `/cancel` 与 `/stress` 按 §4.4 解禁（仍走 `user_message`）：`/cancel` 取消本会话非终态任务，`/stress` 发出质量任务确认卡且 `with_stress=true`，禁止 `kind=stress`。V1.39 原生工具卡片收起态副标题统一为 `ToolCall`，不在卡片摘要区回显文件路径、命令或写入内容；详细参数仍在展开区展示。V1.38 明确原生基础 ToolCall 卡片使用英文工具名，展开区统一显示 `ToolCall` 与 `输出`，文件、命令和代码/文档结果使用行号展示；MCP/平台短工具仍按下方中文名映射。2026-08-24：V1.24 修复 Agent 附件上下文链路：服务端校验文件归属并在模型窗口解析文本、PDF、DOCX、XLSX，图片按三协议图文内容块发送；历史消息附件补齐安全元数据，前端可在刷新后继续预览。同步调整输入框内附件按钮与用户消息附件位序。V1.23 扩展 Agent 附件契约，支持图片、Word 文档与多附件拖拽上传；保留 `POST /api/files` 后再以既有 `file_id` 引用的消息链路，补充图片缩略图、PDF/文本预览与 Office 文件打开/下载说明。V1.22 修复 V1.21 遗留：§4.4 标题「仅此三条」改「仅此四条」、§9 禁止清单「第四种」改「第五种」并补四类上行事件枚举、§4.3 `tool_result.source` 语义对齐 M7 `Observation.source`（溯源标识字符串，非 short\|long 枚举）、§4.3 共享流规则补 clarify/plan/confirm 持久化广播说明、§4.4 clarify 多副本限制注明、§9 Ask/Plan 补注非 Harness plan 事件；V1.20 及更早版本沿用历史修订记录。 |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
+> V1.51（2026-08-27）：§4.3 新增持久事件 `session_title`（`{"title", "source":"ai"}`），§4.3.2 新增会话标题 AI 生成契约：仅默认标题「新会话」在首条用户消息后触发，弱结构化（提示词约定 JSON + 代码侧强校验）生成，失败降级为消息截断且不发事件；标题先落库 `sessions.title` 再广播，不阻塞对话回合。
+>
 > V1.48（2026-08-26）：§4.3 同轮多个调用默认串行；仅当并行总开关与协议档白名单命中且脚踢线未触发时，`read` / `web_search` / `web_fetch` 可同波并行。`write` / `edit` / `bash` / `task.create` / `task.cancel` 始终串行。模型回填仍按原始 `call_id` 顺序。不新增 WS 字段。
 >
 > V1.47（2026-08-26）：§3.4 新增 `GET /api/agent/metrics`（进程内交错流/批次度量，不含正文与参数）；不新增 WS 字段，`segment_id` 仍不进入公共契约。
@@ -1407,6 +1409,7 @@ Harness 回合必须丢到后台 Task，**不得**在 `receive` 循环里 `await
 | `confirm_ack` | `{ "ok": true, "task_id": "uuid" }` 或 `{ "ok": false }` | 更新最近一张 ConfirmCard 的确认/取消状态；落库、可回放 |
 | `progress` | `{ "percent": 40, "done": 40, "total": 100, "message": "..." }` | ProgressDock。**仅这四字段**（percent 可选），不写入 `messages` |
 | `report` | `{ "report_id": "uuid" }` | ReportCard |
+| `session_title` | `{ "title": "会话标题", "source": "ai" }`；会话仍为默认标题「新会话」时，首条用户消息落库后由 Agent 协议档后台生成（结构化输出契约见 §4.3.2），先落库 `sessions.title` 再广播；落库、占 event_id、可回放，重连回放幂等。生成失败降级为消息截断且不发出本事件，禁止阻塞对话回合 | 侧边栏会话列表与头部标题同步更新 |
 | `error` | `{ "code": "UPSTREAM", "message": "..." }` | ErrorStrip + Toast |
 | `pong` | `{}` | 不渲染 |
 
@@ -1497,6 +1500,25 @@ MCP/平台短工具中文名（ToolCard 标题；原生基础工具 `read` / `wr
 | `image.generate` | Qwen Image 生图 |
 
 长工具不由 Agent 进程跑完；前端只收 `progress` / `report` / `error`。
+
+#### 4.3.2 会话标题 AI 生成契约（V1.51）
+
+触发条件（三者同时满足）：会话 `title` 仍为默认值「新会话」、本轮上行 `user_message.text` 非空、
+该会话当前没有进行中的标题生成任务。触发后由 API 进程**后台 fire-and-forget** 生成，不阻塞
+收包循环与对话回合（标题不是关键路径）。
+
+模型调用复用 Agent 协议档（`Setting.agent_profile_id`），输入为第一条用户消息（截断至 500 字符），
+输出采用**弱结构化 + 代码侧强校验**：
+
+- 提示词约定模型只输出单一 JSON 对象 `{"title": "标题"}`（6–20 字、概括意图不逐字复制、跟随用户
+  语言、无标点结尾）；不依赖三协议原生 `response_format`/`json_schema`（能力不一致）；
+- 代码侧解析管线：剥代码围栏 → 截取首个 `{` 到末个 `}` → `json.loads` → `title` 字段类型校验 →
+  压缩空白与成对包裹引号 → 40 字硬截断；
+- 任何失败（未配置协议档 / 上游 4xx5xx / 超时 / 契约不符 / 空标题）统一降级为**首条消息压缩空白后
+  前 18 字**（与前端乐观占位同规则），仅记服务端日志，不发出 `session_title`、不向前端报错。
+
+成功路径：先落库 `sessions.title`（行锁复查仍为「新会话」，不覆盖用户已改标题），再广播持久事件
+`session_title`（§4.3）。前端在事件到达前可继续展示本地乐观截断标题，刷新后以服务端为准。
 
 ### 4.4 前端 → 服务（仅此四条 JSON）
 
@@ -2217,3 +2239,19 @@ LangGraph `reflect` 在规划 `delivery=confirm` 且复核通过后发出确认�
 | `backend/api/app/routers/ws.py` | Agent 模型配置从协议档读取输出上限 |
 | `frontend/src/components/modals/ProfileModal.vue` / `src/api/types.ts` | 协议档表单与类型支持新字段 |
 
+
+**V1.51（2026-08-27）— 会话标题 AI 生成与 session_title 持久事件**
+
+修复会话标题不持久化：此前前端仅在首发消息后本地截断改标题，服务端永远是「新会话」，刷新即丢。
+现在默认标题会话在首条用户消息落库后，由 Agent 协议档后台生成标题（弱结构化输出，见 §4.3.2），
+先落库 `sessions.title` 再广播持久事件 `session_title`，团队协作成员实时同步。失败统一降级为
+消息截断，不阻塞对话回合。无数据库迁移。
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `docs/AI测试与评估平台-API.md` | §4.3 `session_title` 事件、§4.3.2 标题生成契约 |
+| `backend/api/app/agent/title.py` | 标题生成提示词、结构化输出解析管线、截断兜底 |
+| `backend/api/app/routers/ws.py` | 首条消息后 fire-and-forget 触发、行锁落库、广播事件 |
+| `backend/api/tests/test_agent_title.py` | 解析契约、降级链路与触发编排单测 |
+| `frontend/src/api/types.ts` | `WsServerEvent` 联合类型新增 `session_title` |
+| `frontend/src/views/Agent.vue` | 事件同步侧边栏标题（实时 + 后台会话两入口） |

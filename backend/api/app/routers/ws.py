@@ -24,11 +24,13 @@ from ..adapters import StreamAborted
 from ..agent import LangGraphAgent
 from ..agent.attachments import model_content_for_message, normalize_attachment_refs
 from ..agent.graph import iter_pending_events
+from ..agent.log import agent_trace
 from ..agent.think_stream import (
     ReasoningDisplayFilter,
     ThinkStreamCoalescer,
     sanitize_reasoning,
 )
+from ..agent.title import generate_title_text
 from ..config import settings
 from ..db import SessionLocal
 from ..errors import AppError, ErrorCode
@@ -65,6 +67,8 @@ _TICKET_LOCK = threading.Lock()
 _SESSION_ABORTS: dict[str, asyncio.Event] = {}
 # 会话级待回复澄清卡注册表（interrupt() 暂停后保存，clarify_reply 恢复图用）
 _SESSION_CLARIFY: dict[str, dict] = {}
+# 标题生成中去重：同一会话一次只跑一个 AI 标题任务，避免并发消息重复调模型
+_TITLE_GENERATING: set[str] = set()
 
 
 class _ConnectionState:
@@ -1176,6 +1180,59 @@ async def _handle_clarify_reply(
     return task
 
 
+def _maybe_schedule_title(
+    session: AgentSession,
+    websocket: WebSocket,
+    state: _ConnectionState,
+    text: str,
+) -> None:
+    """会话仍是默认标题时，首条消息后后台生成 AI 标题并广播。
+
+    fire-and-forget：绝不 await、绝不阻塞收包循环；生成、落库、广播任何
+    一步失败都只记 agent_trace，标题不是对话关键路径。
+    """
+    stripped = text.strip()
+    if not stripped or session.title != "新会话":
+        return
+    if session.id in _TITLE_GENERATING:
+        return
+    _TITLE_GENERATING.add(session.id)
+
+    async def _apply() -> None:
+        db = SessionLocal()
+        try:
+            title = await generate_title_text(stripped)
+            if not title:
+                return
+            # 行锁复查默认标题：避免与用户手动改名或并发任务互相覆盖
+            row = (
+                db.query(AgentSession)
+                .filter(AgentSession.id == session.id)
+                .with_for_update()
+                .first()
+            )
+            if row is None or row.title != "新会话":
+                return
+            row.title = title
+            db.commit()
+            await _emit_persistent(
+                db,
+                websocket,
+                state,
+                session.id,
+                "session_title",
+                {"title": title, "source": "ai"},
+            )
+        except Exception as exc:
+            db.rollback()
+            agent_trace(f"session title apply failed type={type(exc).__name__}")
+        finally:
+            _TITLE_GENERATING.discard(session.id)
+            db.close()
+
+    asyncio.create_task(_apply(), name=f"agent-title-{session.id}")
+
+
 async def _handle_user_message(
     db: Session,
     websocket: WebSocket,
@@ -1242,6 +1299,8 @@ async def _handle_user_message(
         "user_message",
         _message_payload(row, user),
     )
+    # 首条消息后后台生成 AI 会话标题（默认标题才触发，见 API.md §4.3）
+    _maybe_schedule_title(session, websocket, state, text)
     # 新用户消息作废未回复的澄清卡（澄清与新一轮输入互斥）
     _SESSION_CLARIFY.pop(session.id, None)
     abort = asyncio.Event()

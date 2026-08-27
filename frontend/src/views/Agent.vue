@@ -596,7 +596,7 @@
                   title="点击切换当前 Agent 驱动模型"
                 >
                   <ProviderLogo :provider="agentProfileLogoKey" compact />
-                  <span class="model-name mono">{{ agentModelName || '选择模型' }}</span>
+                  <span class="model-name mono">{{ agentDisplayModelName || '选择模型' }}</span>
                   <svg class="chevron-icon" width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5">
                     <path d="M3 4.5l3 3 3-3" stroke-linecap="round" stroke-linejoin="round" />
                   </svg>
@@ -813,7 +813,6 @@ const harnessStageLabel = computed(() => {
 })
 const turnLatencyLabel = computed(() => formatLatency(turnLatencyMs.value) || '')
 const showJumpBottom = ref(false)
-const agentModelName = ref('')
 const currentAgentProfileId = ref<string>('')
 const allProfiles = ref<Profile[]>([])
 const activeAgentProfile = computed(() => {
@@ -823,7 +822,7 @@ const activeAgentProfile = computed(() => {
 const agentProfileLogoKey = computed<ProviderLogoKey>(() => {
   return activeAgentProfile.value ? getProviderLogoKey(activeAgentProfile.value) : 'custom'
 })
-const agentDisplayModelName = computed(() => activeAgentProfile.value?.model || agentModelName.value || 'Agent')
+const agentDisplayModelName = computed(() => activeAgentProfile.value?.model || 'Agent')
 const agentProfileDisplayName = computed(() => activeAgentProfile.value?.name || '')
 
 // 上下文度量与斜杠命令面板状态
@@ -1220,6 +1219,8 @@ interface StreamItem {
   fullText?: string
   // 助手消息头元数据：用于展示本轮使用的供应商 Logo、模型和协议档名称。
   providerLogoKey?: ProviderLogoKey
+  // 助手回合实际使用的协议档 ID；不能用当前全局选择覆盖历史回合。
+  profileId?: string
   modelName?: string
   profileName?: string
   createdAt?: string
@@ -1280,9 +1281,10 @@ function formatAgentMessageTime(dateStr?: string): string {
 }
 
 /** 记录本轮助手消息头所需的供应商、模型和协议档信息。 */
-function currentAgentMessageMeta(): Pick<StreamItem, 'providerLogoKey' | 'modelName' | 'profileName' | 'createdAt'> {
+function currentAgentMessageMeta(): Pick<StreamItem, 'providerLogoKey' | 'profileId' | 'modelName' | 'profileName' | 'createdAt'> {
   return {
     providerLogoKey: agentProfileLogoKey.value,
+    profileId: currentAgentProfileId.value || activeAgentProfile.value?.id || undefined,
     modelName: agentDisplayModelName.value,
     profileName: agentProfileDisplayName.value,
     createdAt: new Date().toISOString(),
@@ -1317,13 +1319,14 @@ function formatTurnStats(stats?: TurnStats | null): string {
 
 /** 解析历史消息中的供应商 Logo 标识，优先使用快照字段。 */
 function resolveMessageLogoKey(m: { provider?: string | null; profile_id?: string | null; model_name?: string | null }): ProviderLogoKey {
-  if (m.model_name) {
-    const key = getProviderLogoKey({ model: m.model_name })
-    if (key !== 'custom') return key
-  }
+  // 同一模型可能托管在不同供应商，必须优先按消息快照的 profile_id 取图标。
   if (m.profile_id) {
     const prof = allProfiles.value.find((p) => p.id === m.profile_id)
     if (prof) return getProviderLogoKey(prof)
+  }
+  if (m.model_name) {
+    const key = getProviderLogoKey({ model: m.model_name })
+    if (key !== 'custom') return key
   }
   if (m.provider) {
     return getProviderLogoKey({ name: m.provider, model: m.model_name || '' })
@@ -1351,6 +1354,43 @@ function resolveMessageProfileName(m: { profile_name?: string | null; profile_id
   return ''
 }
 
+/** 将 assistant_message 的服务端模型快照转换为前端回合元数据。 */
+function messageMetaFromPayload(payload: Record<string, any>): Partial<StreamItem> {
+  const profileId = typeof payload.profile_id === 'string' && payload.profile_id
+    ? payload.profile_id
+    : undefined
+  const profile = profileId ? allProfiles.value.find((item) => item.id === profileId) : undefined
+  const modelName = typeof payload.model_name === 'string' && payload.model_name
+    ? payload.model_name
+    : profile?.model || profile?.name || undefined
+  const profileName = typeof payload.profile_name === 'string' && payload.profile_name
+    ? payload.profile_name
+    : profile?.name || undefined
+  const meta: Partial<StreamItem> = {
+    profileId,
+    modelName,
+    profileName,
+    createdAt: typeof payload.created_at === 'string' ? payload.created_at : undefined,
+  }
+  // 旧事件可能没有模型快照，不能用默认 custom 覆盖回合初始展示信息。
+  if (profile || modelName || typeof payload.provider === 'string') {
+    meta.providerLogoKey = profile
+      ? getProviderLogoKey(profile)
+      : getProviderLogoKey({ name: payload.provider, model: modelName })
+  }
+  return meta
+}
+
+/** 把服务端确认的模型快照应用到助手回合，避免继续使用全局当前模型。 */
+function applyAgentMessageMeta(agent: StreamItem, meta?: Partial<StreamItem>) {
+  if (!meta) return
+  if (meta.profileId) agent.profileId = meta.profileId
+  if (meta.modelName) agent.modelName = meta.modelName
+  if (meta.profileName) agent.profileName = meta.profileName
+  if (meta.providerLogoKey) agent.providerLogoKey = meta.providerLogoKey
+  if (meta.createdAt) agent.createdAt = meta.createdAt
+}
+
 /** 返回当前用户回合的助手容器；确认卡、错误等顶层事件会结束当前容器。 */
 function getCurrentTurnAgent(list: StreamItem[]): StreamItem | undefined {
   let from = -1
@@ -1367,13 +1407,17 @@ function getCurrentTurnAgent(list: StreamItem[]): StreamItem | undefined {
 /** 获取或创建一个 ReAct 回合容器；所有思考、工具和助手正文都追加到其 blocks。 */
 function getOrCreateTurnAgent(list: StreamItem[], meta?: Partial<StreamItem>): StreamItem {
   const current = getCurrentTurnAgent(list)
-  if (current) return current
+  if (current) {
+    applyAgentMessageMeta(current, meta)
+    return current
+  }
   const defaultMeta = currentAgentMessageMeta()
   const newAgent = reactive({
     type: 'agent',
     blocks: [] as AgentBlock[],
     streaming: true,
     noAnim: meta?.noAnim,
+    profileId: meta?.profileId || defaultMeta.profileId,
     providerLogoKey: meta?.providerLogoKey || defaultMeta.providerLogoKey,
     modelName: meta?.modelName || defaultMeta.modelName,
     profileName: meta?.profileName || defaultMeta.profileName,
@@ -2290,7 +2334,8 @@ function handleUserSend(text: string, files: any[] = []) {
   turnLatencyMs.value = 0
   scrollToBottom(true)
 
-  // 首发消息后以首条消息截断更新会话标题
+  // 首发消息后先用首条消息截断做乐观标题占位；服务端 AI 标题生成完成后
+  // 经 session_title 事件（API.md §4.3）覆盖，刷新后以服务端为准。
   const session = sessions.value.find(s => s.id === currentSessionId.value)
   if (session && session.title === '新会话' && text) {
     session.title = text.slice(0, 18)
@@ -2823,14 +2868,8 @@ async function resolveAgentModelName() {
     allProfiles.value = profiles || []
     const pid = settings?.agent_profile_id
     currentAgentProfileId.value = pid || ''
-    if (pid) {
-      const hit = (profiles || []).find((p) => p.id === pid)
-      agentModelName.value = hit ? hit.model || hit.name : ''
-    } else {
-      agentModelName.value = ''
-    }
   } catch {
-    agentModelName.value = ''
+    currentAgentProfileId.value = ''
   }
 }
 
@@ -2845,7 +2884,6 @@ async function handleSelectAgentModel(key: string) {
   try {
     await api.admin.updateSettings({ agent_profile_id: key })
     currentAgentProfileId.value = key
-    agentModelName.value = hit.model || hit.name
     message.success(`已将 Agent 驱动模型切换为「${hit.name}」(${hit.model || hit.protocol})`)
   } catch (err: any) {
     message.error(err.message || '切换模型失败')
@@ -2896,6 +2934,7 @@ async function loadSessionHistory(sid: string): Promise<number> {
             latency_ms: m.latency_ms ?? undefined,
             turn_stats: m.turn_stats ?? undefined,
             providerLogoKey: logoKey,
+            profileId: m.profile_id || undefined,
             modelName: modelName,
             profileName: profileName,
             createdAt: m.created_at,
@@ -3070,6 +3109,7 @@ async function loadSessionHistory(sid: string): Promise<number> {
       if (!activeTurn) {
         activeTurn = getOrCreateTurnAgent(replay, {
           providerLogoKey: source.providerLogoKey,
+          profileId: source.profileId,
           modelName: source.modelName,
           profileName: source.profileName,
           createdAt: source.createdAt || (time > 0 ? new Date(time).toISOString() : undefined),
@@ -3095,6 +3135,7 @@ async function loadSessionHistory(sid: string): Promise<number> {
       }
       if (item.type === 'agent') {
         const turn = ensureReplayTurn(item, timeline.time)
+        turn.profileId = item.profileId || turn.profileId
         turn.providerLogoKey = item.providerLogoKey || turn.providerLogoKey
         turn.modelName = item.modelName || turn.modelName
         turn.profileName = item.profileName || turn.profileName
@@ -3432,6 +3473,14 @@ async function refreshContextMeter(sid: string) {
   }
 }
 
+/** AI 生成的会话标题回写侧边栏；currentSession 是列表派生值，头部标题随之联动。 */
+function applySessionTitle(sid: string, title: string) {
+  const trimmed = title.trim()
+  if (!trimmed) return
+  const target = sessions.value.find(s => s.id === sid)
+  if (target) target.title = trimmed
+}
+
 /** 后台会话继续生成：把事件写入该会话缓存，不打断当前正在看的对话。 */
 function ingestBackground(sid: string, ev: WsServerEvent) {
   if (ev.event === 'pong') return
@@ -3561,7 +3610,9 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
       const text = String(p.text || '')
       const interim = p.interim === true
       finishBufferThought(buf)
-      const targetAgent = getOrCreateTurnAgent(buf)
+      // assistant_message 携带服务端实际使用的协议档快照；以 profile_id 覆盖
+      // 回合创建时的全局选择，保证切换模型后每个回合仍显示自己的模型。
+      const targetAgent = getOrCreateTurnAgent(buf, messageMetaFromPayload(p))
       const target = getOrCreateAssistantBlock(targetAgent)
       if (text) {
         target.raw = text
@@ -3569,11 +3620,6 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
         target.streaming = false
         if (typeof p.reply_latency_ms === 'number') target.latency_ms = p.reply_latency_ms
         if (p.turn_stats && typeof p.turn_stats === 'object') target.turn_stats = p.turn_stats
-        if (p.model_name) targetAgent.modelName = p.model_name
-        if (p.profile_name) targetAgent.profileName = p.profile_name
-        if (p.provider || p.model_name) {
-          targetAgent.providerLogoKey = getProviderLogoKey({ name: p.provider, model: p.model_name || targetAgent.modelName })
-        }
       } else {
         target.streaming = false
       }
@@ -3710,6 +3756,11 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
       }
       break
     }
+    case 'session_title': {
+      // AI 生成的会话标题（API.md §4.3）：同步侧边栏，重连回放幂等
+      applySessionTitle(ev.session_id, String(p.title || ''))
+      break
+    }
     default:
       break
   }
@@ -3756,7 +3807,13 @@ function typewriteTo(rawItem: StreamItem, fullText: string) {
 function handleWsEvent(ev: WsServerEvent) {
   // 用户自己的 user_message 回显不是「本轮已出结果」。过早移除打字占位时，
   // 规划/流式开始前对话区只剩用户气泡，看起来像模型没有回复。
-  if (ev.event !== 'pong' && ev.event !== 'message' && ev.event !== 'user_message') {
+  // session_title 在首轮规划期间到达，同样不属于回合产出，不收占位气泡。
+  if (
+    ev.event !== 'pong' &&
+    ev.event !== 'message' &&
+    ev.event !== 'user_message' &&
+    ev.event !== 'session_title'
+  ) {
     dismissTyping()
   }
   const p = ev.payload || {}
@@ -3898,7 +3955,9 @@ function handleWsEvent(ev: WsServerEvent) {
       const text = String(p.text || '')
       const interim = p.interim === true
       finishLiveThought()
-      const targetAgent = getOrCreateTurnAgent(events.value)
+      // assistant_message 携带服务端实际使用的协议档快照；以 profile_id 覆盖
+      // 回合创建时的全局选择，保证切换模型后每个回合仍显示自己的模型。
+      const targetAgent = getOrCreateTurnAgent(events.value, messageMetaFromPayload(p))
       const target = getOrCreateAssistantBlock(targetAgent)
       if (text) {
         target.raw = text
@@ -3906,11 +3965,6 @@ function handleWsEvent(ev: WsServerEvent) {
         target.streaming = false
         if (typeof p.reply_latency_ms === 'number') target.latency_ms = p.reply_latency_ms
         if (p.turn_stats && typeof p.turn_stats === 'object') target.turn_stats = p.turn_stats
-        if (p.model_name) targetAgent.modelName = p.model_name
-        if (p.profile_name) targetAgent.profileName = p.profile_name
-        if (p.provider || p.model_name) {
-          targetAgent.providerLogoKey = getProviderLogoKey({ name: p.provider, model: p.model_name || targetAgent.modelName })
-        }
       } else {
         target.streaming = false
       }
@@ -4105,6 +4159,11 @@ function handleWsEvent(ev: WsServerEvent) {
       message.error(p.message || '执行遇到错误')
       setCurrentGenerating(false)
       scrollToBottom()
+      break
+    }
+    case 'session_title': {
+      // AI 生成的会话标题（API.md §4.3）：更新侧边栏与当前会话头部
+      applySessionTitle(ev.session_id, String(p.title || ''))
       break
     }
   }
