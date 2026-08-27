@@ -2,15 +2,15 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.48 |
+| 文档版本 | V1.49 |
 | 对应 PRD | V1.13（功能唯一权威） |
 | 对应设计规范 | V1.10（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.5.15（LangGraph 单轮 Agent 与 WS 桥接；JSON 仍以本文为准） |
 | 对应前端计划 | V1.5 |
 | 对应后端计划 | V1.5 |
 | 撰写日期 | 2026-08-18 |
-| 本轮修订 | 2026-08-26：V1.48 明确同轮多调用默认串行，只读白名单在灰度开启后可并行；模型回填仍按原始 `call_id` 顺序。 |
-| 最近修订 | 2026-08-26：V1.48 同轮多调用默认串行，灰度开启后仅 `read`/`web_search`/`web_fetch` 可并行，回填按原始 `call_id`。V1.47 新增 `GET /api/agent/metrics`，不含正文/参数，不新增 WS 事件。V1.46 明确 native 一次 ToolCall 结束当前上游响应，结果回填后再请求，不新增事件名。V1.45 思考链只下发可展示摘要，隐藏 CoT（`Here's a thinking process` / `Analyze User Input`）由服务端替换，不原样推给前端。V1.44 ToolCall 在执行前持久化，新增瞬态 `tool_progress` / `tool_output_delta`，并冻结原生工具的输出 Schema、权限边界和失败恢复字段。V1.43 思考增量允许合并下发；有思考链时 `think_final` 在 `response.completed` 之前。V1.42 Direct `/help`、未知斜杠与图内防御提示在业务事件后必须再发 `response.completed`（成功 `stop`，校验/防御 `error`），结束整轮生成态。V1.41 确认卡预填与 `confirm_ack` 入队前丢掉已删除的协议档/数据集/知识库 ID，避免 Worker 再报「协议档不存在或已删除」。V1.40 `/cancel` 与 `/stress` 按 §4.4 解禁（仍走 `user_message`）：`/cancel` 取消本会话非终态任务，`/stress` 发出质量任务确认卡且 `with_stress=true`，禁止 `kind=stress`。V1.39 原生工具卡片收起态副标题统一为 `ToolCall`，不在卡片摘要区回显文件路径、命令或写入内容；详细参数仍在展开区展示。V1.38 明确原生基础 ToolCall 卡片使用英文工具名，展开区统一显示 `ToolCall` 与 `输出`，文件、命令和代码/文档结果使用行号展示；MCP/平台短工具仍按下方中文名映射。2026-08-24：V1.24 修复 Agent 附件上下文链路：服务端校验文件归属并在模型窗口解析文本、PDF、DOCX、XLSX，图片按三协议图文内容块发送；历史消息附件补齐安全元数据，前端可在刷新后继续预览。同步调整输入框内附件按钮与用户消息附件位序。V1.23 扩展 Agent 附件契约，支持图片、Word 文档与多附件拖拽上传；保留 `POST /api/files` 后再以既有 `file_id` 引用的消息链路，补充图片缩略图、PDF/文本预览与 Office 文件打开/下载说明。V1.22 修复 V1.21 遗留：§4.4 标题「仅此三条」改「仅此四条」、§9 禁止清单「第四种」改「第五种」并补四类上行事件枚举、§4.3 `tool_result.source` 语义对齐 M7 `Observation.source`（溯源标识字符串，非 short\|long 枚举）、§4.3 共享流规则补 clarify/plan/confirm 持久化广播说明、§4.4 clarify 多副本限制注明、§9 Ask/Plan 补注非 Harness plan 事件；V1.21 配合 Harness 阶段 3/4 前端联调回写契约：§3.4 `context_meter` 加 `compacted` bool；§4.4 新增 `clarify_reply` 上行事件并明确四类上行事件边界。V1.20 及更早版本沿用历史修订记录。 |
+| 本轮修订 | 2026-08-27：V1.49 协议档新增 `max_output_tokens`（Agent 单回合模型输出上限，默认 8192），WS Agent 模型调用不再硬编码输出上限。 |
+| 最近修订 | 2026-08-27：V1.49 协议档新增 `max_output_tokens`（256–131072，默认 8192），创建/更新/列表/详情均支持；Agent 模型调用从协议档读取输出上限，长文档总结/导出类任务可调大避免回答被截断。2026-08-26：V1.48 同轮多调用默认串行，灰度开启后仅 `read`/`web_search`/`web_fetch` 可并行，回填按原始 `call_id`。V1.47 新增 `GET /api/agent/metrics`，不含正文/参数，不新增 WS 事件。V1.46 明确 native 一次 ToolCall 结束当前上游响应，结果回填后再请求，不新增事件名。V1.45 思考链只下发可展示摘要，隐藏 CoT（`Here's a thinking process` / `Analyze User Input`）由服务端替换，不原样推给前端。V1.44 ToolCall 在执行前持久化，新增瞬态 `tool_progress` / `tool_output_delta`，并冻结原生工具的输出 Schema、权限边界和失败恢复字段。V1.43 思考增量允许合并下发；有思考链时 `think_final` 在 `response.completed` 之前。V1.42 Direct `/help`、未知斜杠与图内防御提示在业务事件后必须再发 `response.completed`（成功 `stop`，校验/防御 `error`），结束整轮生成态。V1.41 确认卡预填与 `confirm_ack` 入队前丢掉已删除的协议档/数据集/知识库 ID，避免 Worker 再报「协议档不存在或已删除」。V1.40 `/cancel` 与 `/stress` 按 §4.4 解禁（仍走 `user_message`）：`/cancel` 取消本会话非终态任务，`/stress` 发出质量任务确认卡且 `with_stress=true`，禁止 `kind=stress`。V1.39 原生工具卡片收起态副标题统一为 `ToolCall`，不在卡片摘要区回显文件路径、命令或写入内容；详细参数仍在展开区展示。V1.38 明确原生基础 ToolCall 卡片使用英文工具名，展开区统一显示 `ToolCall` 与 `输出`，文件、命令和代码/文档结果使用行号展示；MCP/平台短工具仍按下方中文名映射。2026-08-24：V1.24 修复 Agent 附件上下文链路：服务端校验文件归属并在模型窗口解析文本、PDF、DOCX、XLSX，图片按三协议图文内容块发送；历史消息附件补齐安全元数据，前端可在刷新后继续预览。同步调整输入框内附件按钮与用户消息附件位序。V1.23 扩展 Agent 附件契约，支持图片、Word 文档与多附件拖拽上传；保留 `POST /api/files` 后再以既有 `file_id` 引用的消息链路，补充图片缩略图、PDF/文本预览与 Office 文件打开/下载说明。V1.22 修复 V1.21 遗留：§4.4 标题「仅此三条」改「仅此四条」、§9 禁止清单「第四种」改「第五种」并补四类上行事件枚举、§4.3 `tool_result.source` 语义对齐 M7 `Observation.source`（溯源标识字符串，非 short\|long 枚举）、§4.3 共享流规则补 clarify/plan/confirm 持久化广播说明、§4.4 clarify 多副本限制注明、§9 Ask/Plan 补注非 Harness plan 事件；V1.21 配合 Harness 阶段 3/4 前端联调回写契约：§3.4 `context_meter` 加 `compacted` bool；§4.4 新增 `clarify_reply` 上行事件并明确四类上行事件边界。V1.20 及更早版本沿用历史修订记录。 |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
 > V1.48（2026-08-26）：§4.3 同轮多个调用默认串行；仅当并行总开关与协议档白名单命中且脚踢线未触发时，`read` / `web_search` / `web_fetch` 可同波并行。`write` / `edit` / `bash` / `task.create` / `task.cancel` 始终串行。模型回填仍按原始 `call_id` 顺序。不新增 WS 字段。
@@ -593,7 +593,7 @@ AI_PROFILE_<PROFILE_ID_NORMALIZED>_RERANKER_API_KEY
 
 全员可列（无 Key），供确认卡和 RAG 上下文工程使用。除主模型外，Embedding 与 Reranker
 端点均为可选；响应只返回 URL、模型标识和 `has_*_api_key` 布尔值，不返回任何 Key。
-item：`id, name, protocol, base_url, model, usages[], context_window, tool_call_mode,
+item：`id, name, protocol, base_url, model, usages[], context_window, max_output_tokens, tool_call_mode,
 embedding_base_url, embedding_model, has_embedding_api_key, reranker_base_url, reranker_model,
 has_reranker_api_key, created_at`
 
@@ -613,7 +613,8 @@ has_reranker_api_key, created_at`
   "reranker_model": "bge-reranker-v2-m3",
   "reranker_api_key": "rk-...",
   "usages": ["target"],
-  "tool_call_mode": "legacy"
+  "tool_call_mode": "legacy",
+  "max_output_tokens": 8192
 }
 ```
 
@@ -621,6 +622,8 @@ has_reranker_api_key, created_at`
 `has_api_key`、`has_embedding_api_key`、`has_reranker_api_key` 仅表示环境文件中是否存在对应 Key。
 Embedding 与 Reranker 的 URL、模型和 Key 与主模型使用相同的“按协议档隔离、受控环境文件写入、空 Key 保留旧值”规则；
 更新时只提交需要修改的字段，三类 Key 留空均表示不修改既有密文。
+
+`max_output_tokens` 为 Agent 单回合模型输出上限（映射到上游 `max_tokens` / `max_output_tokens`），取值 256–131072，默认 `8192`；仅影响 `usages` 含 `agent` 的对话调用，不影响 benchmark、judge、用例生成等离线调用。
 
 `tool_call_mode` 仅允许 `native` / `legacy`，默认 `legacy`：
 
@@ -2199,4 +2202,15 @@ LangGraph `reflect` 在规划 `delivery=confirm` 且复核通过后发出确认�
 | `docs/AI测试与评估平台-API.md` | §4.3 `call_id` 规则：默认串行 + 灰度只读并行 |
 | `backend/api/app/agent/react.py` | 每回合只记一笔流式终态；关联错乱可累计脚踢 |
 | `backend/api/tests/test_stream_rollout.py` / `test_agent_react.py` | 连续 associate_error 触发脚踢；流式空 call_id 两轮 rounds=2 |
+
+**V1.49（2026-08-27）— 协议档新增 max_output_tokens 输出上限**
+
+协议档新增 `max_output_tokens`（256–131072，默认 `8192`，存量数据回填 8192 保持既有行为）。WS Agent 模型调用从当前 Agent 协议档读取该值作为 `max_tokens`，不再硬编码 8192；长文档总结/导出类任务可调大，避免回答在输出上限处被上游截断。不影响离线评测、裁判与用例生成调用。不新增 WS 事件。
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/shared/models.py` / `migrations/versions/e7a1c3f52b48_*.py` | `protocol_profiles.max_output_tokens` 列与迁移 |
+| `backend/api/app/schemas.py` / `app/routers/profiles.py` | 创建/更新/响应支持新字段 |
+| `backend/api/app/routers/ws.py` | Agent 模型配置从协议档读取输出上限 |
+| `frontend/src/components/modals/ProfileModal.vue` / `src/api/types.ts` | 协议档表单与类型支持新字段 |
 

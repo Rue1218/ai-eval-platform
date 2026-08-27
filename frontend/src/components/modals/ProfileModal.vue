@@ -102,6 +102,18 @@
       </div>
 
       <div class="field">
+        <label class="field-label">Agent 单回合输出上限 (Max Output Tokens)</label>
+        <n-input-number
+          v-model:value="form.max_output_tokens"
+          :min="256"
+          :max="131072"
+          :step="1024"
+          style="width: 220px"
+        />
+        <span class="small tertiary">模型单回合回答的最大输出 token 数（默认 8192）；长文档总结/导出类任务可调大，避免回答被截断。</span>
+      </div>
+
+      <div class="field">
         <label class="field-label">Agent 工具调用模式</label>
         <n-radio-group v-model:value="form.tool_call_mode" name="tool_call_mode_group" size="small">
           <n-space :size="8">
@@ -194,6 +206,7 @@ const form = ref<{
   anthropic_version?: string
   usages: ProfileUsage[]
   context_window: number
+  max_output_tokens: number
   tool_call_mode: ToolCallMode
 }>({
   name: '',
@@ -204,6 +217,7 @@ const form = ref<{
   anthropic_version: '2023-06-01',
   usages: ['target'],
   context_window: 200000,
+  max_output_tokens: 8192,
   tool_call_mode: 'legacy',
 })
 
@@ -324,6 +338,7 @@ async function onBatchCreate(modelIds: string[]) {
         anthropic_version: form.value.anthropic_version?.trim() || undefined,
         usages: form.value.usages,
         context_window: form.value.context_window,
+        max_output_tokens: form.value.max_output_tokens,
         tool_call_mode: form.value.tool_call_mode,
       })
       count++
@@ -353,6 +368,7 @@ watch(
           anthropic_version: profileVal.anthropic_version || '2023-06-01',
           usages: profileVal.usages ? [...profileVal.usages] : ['target'],
           context_window: profileVal.context_window || 200000,
+          max_output_tokens: profileVal.max_output_tokens || 8192,
           tool_call_mode: profileVal.tool_call_mode || 'legacy',
         }
       } else if (props.initialData) {
@@ -365,6 +381,7 @@ watch(
           anthropic_version: '2023-06-01',
           usages: ['target'],
           context_window: 200000,
+          max_output_tokens: 8192,
           tool_call_mode: 'legacy',
         }
       } else {
@@ -377,6 +394,7 @@ watch(
           anthropic_version: '2023-06-01',
           usages: ['target'],
           context_window: 200000,
+          max_output_tokens: 8192,
           tool_call_mode: 'legacy',
         }
       }
@@ -406,6 +424,7 @@ async function handleSave() {
         anthropic_version: form.value.anthropic_version?.trim() || undefined,
         usages: form.value.usages,
         context_window: form.value.context_window,
+        max_output_tokens: form.value.max_output_tokens,
         tool_call_mode: form.value.tool_call_mode,
       }
       if (form.value.api_key.trim()) {
@@ -423,6 +442,7 @@ async function handleSave() {
         anthropic_version: form.value.anthropic_version?.trim() || undefined,
         usages: form.value.usages,
         context_window: form.value.context_window,
+        max_output_tokens: form.value.max_output_tokens,
         tool_call_mode: form.value.tool_call_mode,
       }
       await api.profiles.create(payload)

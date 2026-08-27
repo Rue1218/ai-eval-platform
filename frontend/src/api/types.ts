@@ -83,6 +83,7 @@ export interface Profile {
   anthropic_version?: string
   usages?: ProfileUsage[]
   context_window?: number // 上下文窗口容量 (Tokens)
+  max_output_tokens?: number // Agent 单回合模型输出上限 (max_tokens)
   tool_call_mode?: ToolCallMode
   created_at: string
   updated_at?: string
@@ -103,6 +104,7 @@ export interface ProfileCreateIn {
   anthropic_version?: string
   usages?: ProfileUsage[]
   context_window?: number
+  max_output_tokens?: number
   tool_call_mode?: ToolCallMode
 }
 
@@ -121,6 +123,7 @@ export interface ProfileUpdateIn {
   anthropic_version?: string
   usages?: ProfileUsage[]
   context_window?: number
+  max_output_tokens?: number
   tool_call_mode?: ToolCallMode
 }
 
