@@ -12,7 +12,7 @@
         <span class="attachment-file-mark">{{ extension }}</span>
         <span class="attachment-file-action">{{ previewLabel }}</span>
       </span>
-      <span v-if="uploading" class="attachment-uploading">上传中…</span>
+      <span v-if="uploading" class="attachment-uploading">上传中 {{ uploadProgress }}%</span>
       <span v-else-if="error" class="attachment-uploading error">上传失败</span>
     </button>
 
@@ -81,6 +81,7 @@ export interface AttachmentPreviewItem {
   previewUrl?: string
   file?: File
   uploading?: boolean
+  uploadProgress?: number
   error?: boolean
 }
 
@@ -136,6 +137,7 @@ const formattedSize = computed(() => {
   return `${(size / (1024 * 1024)).toFixed(1)} MB`
 })
 const uploading = computed(() => Boolean(props.attachment.uploading))
+const uploadProgress = computed(() => Math.min(100, Math.max(0, Number(props.attachment.uploadProgress) || 0)))
 const error = computed(() => Boolean(props.attachment.error))
 
 /** 打开图片、PDF、文本预览；Office 等格式保留清晰的不可嵌入提示。 */

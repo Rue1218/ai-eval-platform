@@ -50,7 +50,8 @@ READ_MAX_CHARS = 600_000
 # 预留元数据头与未读完提示，避免 model_text + 前缀/后缀再被截断半行。
 READ_UNREAD_HINT_RESERVE = 320
 READ_CONTENT_BUDGET = max(1, READ_MAX_CHARS - READ_UNREAD_HINT_RESERVE)
-READ_MAX_BYTES = 10 * 1024 * 1024
+# 对齐 Agent 附件接口的 20MB 上限；窗口内仍只解码受控文本片段。
+READ_MAX_BYTES = 20 * 1024 * 1024
 READ_PREVIEW_CHARS = 4_000
 # 剩余正文按块统计行数/字符，避免对未返回内容逐行建 Python 字符串导致超时。
 READ_SCAN_CHUNK = 256 * 1024
@@ -325,7 +326,7 @@ def read_file_safe(
     if not os.path.isfile(target):
         raise AppError(ErrorCode.NOT_FOUND, "文件不存在")
     if os.path.getsize(target) > READ_MAX_BYTES:
-        raise AppError(ErrorCode.VALIDATION, "文件超过 read 单次允许的 10MB 上限")
+        raise AppError(ErrorCode.VALIDATION, "文件超过 read 单次允许的 20MB 上限")
     start = _read_non_negative_int(offset, name="offset", default=0)
     requested_limit = _read_non_negative_int(limit, name="limit", default=READ_DEFAULT_LIMIT)
     if requested_limit == 0:

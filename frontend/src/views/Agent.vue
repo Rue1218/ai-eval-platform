@@ -952,6 +952,7 @@ interface StagedAttachment {
   previewUrl: string
   file: File
   uploading: boolean
+  uploadProgress: number
   error: boolean
 }
 
@@ -2073,16 +2074,21 @@ async function stageAttachmentFiles(files: File[]) {
       previewUrl: createAttachmentPreviewUrl(file),
       file,
       uploading: true,
+      uploadProgress: 0,
       error: false,
     }
     stagedFiles.value.push(staged)
     try {
-      const res = await api.files.upload(file)
+      const res = await api.files.upload(file, (percent) => {
+        const current = stagedFiles.value.find((item) => item.localId === staged.localId)
+        if (current) current.uploadProgress = percent
+      })
       const current = stagedFiles.value.find((item) => item.localId === staged.localId)
       if (!current) return
       current.id = res.id
       current.contentType = res.content_type || file.type
       current.uploading = false
+      current.uploadProgress = 100
       message.success(`附件 ${file.name} 已上传`)
     } catch {
       const current = stagedFiles.value.find((item) => item.localId === staged.localId)
