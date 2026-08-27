@@ -415,8 +415,10 @@ def build_default_registry() -> ToolRegistry:
                 "按行读取沙箱目录内的文本文件（相对路径）。"
                 "适用：查看附件、工作区文件、确认 edit 前的原文。"
                 "不适用：创建文件（用 write）、改文件（用 edit）、执行命令（用 bash）。"
-                "前置：path 必须是沙箱相对路径。offset/limit 均为 0-based 行，"
-                "单次最多 2000 行和 600000 字符；未读完时把返回的 "
+                "前置：path 必须是沙箱相对路径。offset/limit 均为 0-based 行。"
+                "推荐用法：除非只需要局部行段，否则省略 limit 一次读完——单次最多 "
+                "2000 行和 600000 字符，1000 行量级的文件一次即可读完，禁止人为拆成"
+                "多个小窗口连续多次读取。未读完时把返回的 "
                 "next_offset 填到下一次 offset，不要用相同 offset 重复读取。大文件只解码当前窗口。"
             ),
             parameters_schema={
@@ -430,7 +432,12 @@ def build_default_registry() -> ToolRegistry:
                         "description": "与 offset 同义；可把上次返回的 next_offset 填到这里",
                         "minimum": 0,
                     },
-                    "limit": {"type": "integer", "description": "最多读取行数，默认/上限 2000", "minimum": 1, "maximum": 2000},
+                    "limit": {
+                        "type": "integer",
+                        "description": "最多读取行数；建议省略以一次读完，默认/上限 2000",
+                        "minimum": 1,
+                        "maximum": 2000,
+                    },
                 },
                 "required": ["path"],
             },

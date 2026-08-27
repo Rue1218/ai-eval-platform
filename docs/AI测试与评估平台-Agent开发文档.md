@@ -1,8 +1,8 @@
 # AI 测试与评估平台 Agent 开发文档
 
-> 版本：V1.5.15
-> 状态：LangGraph Harness 已启用混合范式 P0–P2：Plan-and-Solve → ReAct → reflect；native 首轮流式可按协议档回滚；同轮 ToolBatch 保序回填；受控只读并行需总开关+白名单；关联错乱每回合只记一笔终态；P3 集成测试覆盖 bwrap 屏障 / WS 重连 / team 瞬态广播 / ToolCard 乱序；中间叙述；clarify interrupt 与有界重规划；检查点默认 memory；reflect 产出确认卡；ContextMeter 服务端计算；assemble 接线 CX-4/CX-5；read 防重复与行级 ToolCard；ToolCall 进度/安全输出流；Direct `/help` 发 `response.completed`；思考增量合并与隐藏 CoT 摘要；技能工作流 Progressive Disclosure
-> 审查日期：2026-08-26
+> 版本：V1.5.16
+> 状态：LangGraph Harness 已启用混合范式 P0–P2：Plan-and-Solve → ReAct → reflect；native 首轮流式可按协议档回滚；同轮 ToolBatch 保序回填；受控只读并行需总开关+白名单；关联错乱每回合只记一笔终态；P3 集成测试覆盖 bwrap 屏障 / WS 重连 / team 瞬态广播 / ToolCard 乱序；中间叙述；clarify interrupt 与有界重规划；检查点默认 memory；reflect 产出确认卡；ContextMeter 服务端计算；assemble 接线 CX-4/CX-5；read 防重复与行级 ToolCard；read 一次读完引导与分页观察全量注入；ToolCall 进度/安全输出流；Direct `/help` 发 `response.completed`；思考增量合并与隐藏 CoT 摘要；技能工作流 Progressive Disclosure
+> 审查日期：2026-08-27
 > 对应需求：`AI测试与评估平台-PRD.md` V1.12
 > 对应接口：`AI测试与评估平台-API.md` V1.48
 
@@ -387,3 +387,9 @@ Agent 思考配置从 `Setting(key="agent_reasoning")` 读取，结构为
 - `backend/api/tests/test_stream_p3_integration.py`：真实 bwrap bash 串行屏障、`last_event_id` 重连不补瞬态、team 会话瞬态广播范围、ToolCard call_id 乱序回填契约。
 - `frontend/src/utils/toolCard.ts` / `views/Agent.vue`：直播与历史回放共用 `findPendingToolItem`，禁止同名工具串卡。
 - `docs/AI测试与评估平台-Agent内容块交错流式调用规划.md`：V0.7。
+
+### V1.5.16（2026-08-27）修改代码文件与作用清单
+
+- `backend/api/app/harness/execution/registry.py`：read 工具描述与 `limit` 参数说明新增正向引导——除局部行段外省略 limit 一次读完（单次上限 2000 行 / 600000 字符），禁止人为拆成多个小窗口连续多次读取；治理模型自选 200 行小页分页、多轮浪费模型调用预算的行为。
+- `backend/api/app/agent/react.py`：`REACT_STAGE_INPUT` / `NATIVE_TOOL_STAGE_INPUT` 同步补一次读完约束；`_inject_observations` 对 read 观察豁免最近 6 条条数上限（分页读取全页保留到最终回答阶段，避免模型只见尾部页导致回答内容不全），新增 `INJECT_READ_TOTAL_MAX_CHARS=1_200_000` 总字符熔断，超预算优先保留较新的页；非 read 观察仍只注入最近 6 条。
+- `backend/api/tests/test_agent_react.py`：新增阶段输入/工具描述引导断言、read 观察全页注入与总字符熔断回归。
