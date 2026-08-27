@@ -31,6 +31,9 @@ data/
 .deploy-success-sha
 .deploy-images.env
 
+# Playwright 探针本地快照（tools/harness-ws-probe 运行产物）
+.playwright-cli/
+
 # IDE
 .idea/
 .vscode/
