@@ -484,12 +484,19 @@ export const api = {
 
   // 5.6 MCP 工具中心（API V1.3 §3.6.1，V1.0 只读）
   mcp: {
+    /** 全量工具清单（原生 ToolCall + MCP 扩展），含 transport 字段供前端分组 */
     async tools(): Promise<{ items: McpTool[]; total: number }> {
       if (getDataMode() === 'mock') {
         return { items: [...MOCK_MCP_TOOLS], total: MOCK_MCP_TOOLS.length }
       }
-      const { data } = await http.get('/api/mcp/tools')
-      return data
+      // 优先调用全量端点；若后端版本较旧降级到原有端点
+      try {
+        const { data } = await http.get('/api/mcp/all-tools')
+        return data
+      } catch {
+        const { data } = await http.get('/api/mcp/tools')
+        return data
+      }
     },
   },
 

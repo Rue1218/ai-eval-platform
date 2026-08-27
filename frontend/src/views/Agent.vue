@@ -941,7 +941,9 @@ const filteredSessions = computed(() => {
 const selectedSessionIds = ref<string[]>([])
 const deletingSessionIds = new Set<string>()
 const currentSessionId = ref<string>('')
-const currentSession = computed(() => sessions.value.find(s => s.id === currentSessionId.value) || sessions.value[0] || null)
+const isCreatingSession = ref(false)
+// 未绑定服务端会话时保持草稿态，不得用列表首项冒充当前会话。
+const currentSession = computed(() => sessions.value.find(s => s.id === currentSessionId.value) || null)
 const deletableSessionCount = computed(() => filteredSessions.value.filter((session) => session.can_delete).length)
 const allDeletableSessionsSelected = computed(() => {
   const deletableIds = filteredSessions.value.filter((session) => session.can_delete).map((session) => session.id)
@@ -2284,7 +2286,7 @@ function handleSendClick() {
   inputText.value = ''
   adjustTextareaHeight()
 
-  handleUserSend(text, files)
+  void handleUserSend(text, files)
 }
 
 /** 快捷芯片/能力卡点击仅填入输入框并聚焦，由用户确认后再发送（对齐原型行为）。 */
@@ -2310,7 +2312,83 @@ function sendPredefined(prompt: string) {
   })
 }
 
-function handleUserSend(text: string, files: any[] = []) {
+/** 将当前页面切换为未持久化的新会话草稿，保留其他会话的后台生成状态。 */
+function resetToDraftSession() {
+  persistCurrentRuntime()
+  stopFlowAnimations()
+  // 失效尚未完成的历史回放，避免旧会话回放结果覆盖草稿页。
+  selectEpoch += 1
+  gcIdleSockets('')
+  currentSessionId.value = ''
+  agentWs = null
+  events.value = []
+  isGenerating.value = false
+  harnessStage.value = ''
+  lastToolTitle.value = ''
+  turnLatencyMs.value = 0
+  activeTask.value = null
+  currentContextMeter.value = null
+  currentCompactSummary.value = null
+  dockClosingNote.value = ''
+  pendingAckItem.value = null
+  isRailOpen.value = false
+  // 草稿尚未绑定 WS，页面不应因为没有会话而显示离线错误。
+  isWsOnline.value = true
+}
+
+/** 将服务端新建的会话绑定到当前页面，并初始化空的运行时缓存。 */
+function activateCreatedSession(session: AgentSession) {
+  currentSessionId.value = session.id
+  const runtime = ensureRuntime(session.id)
+  events.value = runtime.events
+  isGenerating.value = runtime.isGenerating
+  harnessStage.value = runtime.harnessStage
+  lastToolTitle.value = runtime.lastToolTitle
+  turnLatencyMs.value = runtime.turnLatencyMs
+  activeTask.value = runtime.activeTask
+  currentContextMeter.value = runtime.contextMeter
+  currentCompactSummary.value = runtime.compactSummary
+  dockClosingNote.value = ''
+  agentWs = null
+  isWsOnline.value = api.isMock()
+  markGenerating(session.id, runtime.isGenerating)
+}
+
+/** 首次发送消息时才向服务端创建会话；mock 列表已由 API 层写入时避免重复插入。 */
+async function ensureActiveSession(): Promise<boolean> {
+  if (currentSessionId.value) return true
+  if (isCreatingSession.value) return false
+  isCreatingSession.value = true
+  try {
+    const newSession = await api.sessions.create('新会话')
+    if (!sessions.value.some((session) => session.id === newSession.id)) {
+      sessions.value.unshift(newSession)
+    }
+    activateCreatedSession(newSession)
+    return true
+  } catch (err: any) {
+    message.error(err?.message || '新建会话失败')
+    return false
+  } finally {
+    isCreatingSession.value = false
+  }
+}
+
+/** 确保当前会话的实时连接已建立，首次发送和报告解读共用此连接门禁。 */
+async function ensureLiveAgentSocket(): Promise<boolean> {
+  const sid = currentSessionId.value
+  if (!sid || api.isMock()) return false
+  if (agentWs?.isConnected && (!agentWs.sessionId || agentWs.sessionId === sid)) return true
+  const ws = initWebSocket(sid)
+  const connected = await waitForWebSocketConnection(ws)
+  return connected && currentSessionId.value === sid && agentWs === ws && ws.isConnected
+}
+
+async function handleUserSend(text: string, files: any[] = []) {
+  if (isCreatingSession.value) return
+  // 页面初始态是草稿，首次发送才创建持久化会话。
+  if (!currentSessionId.value && !(await ensureActiveSession())) return
+  const targetSessionId = currentSessionId.value
   const clientMessageId = createClientMessageId()
   // 新回合开始前封口上一轮打字机，避免第二轮 chunk 写进同一气泡
   events.value.forEach((item) => {
@@ -2336,15 +2414,23 @@ function handleUserSend(text: string, files: any[] = []) {
 
   // 首发消息后先用首条消息截断做乐观标题占位；服务端 AI 标题生成完成后
   // 经 session_title 事件（API.md §4.3）覆盖，刷新后以服务端为准。
-  const session = sessions.value.find(s => s.id === currentSessionId.value)
+  const session = sessions.value.find(s => s.id === targetSessionId)
   if (session && session.title === '新会话' && text) {
     session.title = text.slice(0, 18)
   }
 
-  // 会话匹配守卫：切换会话时 initWebSocket 在历史回放完成后才指向新会话，
-  // 竞态窗口内 agentWs 仍指旧会话——此时发送会把消息写进旧会话且回复被后台分流，
-  // 当前视图永远等不到事件（表现为打字占位/空光标气泡卡住）。
-  if (agentWs?.isConnected && (!agentWs.sessionId || agentWs.sessionId === currentSessionId.value)) {
+  if (!api.isMock() && !(await ensureLiveAgentSocket())) {
+    setCurrentGenerating(false)
+    harnessStage.value = ''
+    events.value.push({ type: 'error', code: 'UPSTREAM', message: 'Agent 连接未就绪，请等待重连后重试。' })
+    message.error('Agent 连接未就绪，请等待重连后重试')
+    scrollToBottom()
+    return
+  }
+
+  // 会话匹配守卫：等待连接期间若用户切换了会话，不能把消息发送到新页面的错误连接。
+  if (currentSessionId.value !== targetSessionId) return
+  if (agentWs?.isConnected && (!agentWs.sessionId || agentWs.sessionId === targetSessionId)) {
     // 打字占位气泡：服务端 LLM 意图识别期间给用户即时反馈，收到任意事件后移除
     events.value.push({ type: 'typing' })
     scrollToBottom()
@@ -2689,7 +2775,10 @@ function runStressChild(card: any) {
   }
 }
 
-function handleInterpretReport(reportId: string) {
+async function handleInterpretReport(reportId: string) {
+  if (isCreatingSession.value) return
+  if (!currentSessionId.value && !(await ensureActiveSession())) return
+  const targetSessionId = currentSessionId.value
   const clientMessageId = createClientMessageId()
   events.value.push({
     type: 'user',
@@ -2707,16 +2796,16 @@ function handleInterpretReport(reportId: string) {
   scrollToBottom(true)
 
   // 实时模式交由服务端智能体解读，结果经 WS 事件回流。
-  if (agentWs?.isConnected) {
-    agentWs.sendUserMessage(`解读报告 #${reportId}`, [], clientMessageId)
-    return
-  }
-
-  if (!api.isMock()) {
+  if (!api.isMock() && !(await ensureLiveAgentSocket())) {
     setCurrentGenerating(false)
     events.value.push({ type: 'error', code: 'UPSTREAM', message: 'Agent 连接未就绪，暂不能解读报告。' })
     message.error('Agent 连接未就绪，暂不能解读报告')
     scrollToBottom()
+    return
+  }
+  if (currentSessionId.value !== targetSessionId) return
+  if (agentWs?.isConnected && (!agentWs.sessionId || agentWs.sessionId === targetSessionId)) {
+    agentWs.sendUserMessage(`解读报告 #${reportId}`, [], clientMessageId)
     return
   }
 
@@ -3281,25 +3370,11 @@ async function selectSession(sid: string) {
   initWebSocket(sid, lastEventId)
 }
 
-async function handleCreateSession() {
+/** 打开一个新的本地草稿；服务端会话在用户真正发送消息时才创建。 */
+function handleCreateSession() {
+  if (isCreatingSession.value) return
   sessionStatusFilter.value = 'all'
-  try {
-    const newSession = await api.sessions.create('新会话')
-    sessions.value.unshift(newSession)
-    selectSession(newSession.id)
-  } catch {
-    const localS: AgentSession = {
-      id: `s-${Date.now()}`,
-      title: '新会话',
-      owner_id: authStore.user?.id || '',
-      visibility: 'private',
-      can_manage: true,
-      can_delete: true,
-      created_at: new Date().toISOString(),
-    }
-    sessions.value.unshift(localS)
-    selectSession(localS.id)
-  }
+  resetToDraftSession()
 }
 
 /** 仅 owner 可切换会话私有/团队共享范围，服务端为最终权限裁决。 */
@@ -3379,13 +3454,13 @@ function handleBatchDeleteSessions() {
   })
 }
 
-function initWebSocket(sessionId: string, lastEventId = 0) {
+function initWebSocket(sessionId: string, lastEventId = 0): AgentWebSocket {
   const reused = sockets.get(sessionId)
   if (reused) {
     agentWs = reused
     isWsOnline.value = reused.isConnected
     gcIdleSockets(sessionId)
-    return
+    return reused
   }
 
   gcIdleSockets(sessionId)
@@ -3412,6 +3487,25 @@ function initWebSocket(sessionId: string, lastEventId = 0) {
   sockets.set(sessionId, ws)
   agentWs = ws
   ws.connect()
+  return ws
+}
+
+/** 等待 WebSocket 首次连接完成，避免草稿首条消息落在连接竞态窗口内。 */
+function waitForWebSocketConnection(ws: AgentWebSocket, timeoutMs = 10000): Promise<boolean> {
+  if (ws.isConnected) return Promise.resolve(true)
+  return new Promise((resolve) => {
+    let timer: number | null = null
+    let unsubscribe = () => {}
+    const finish = (connected: boolean) => {
+      if (timer !== null) window.clearTimeout(timer)
+      unsubscribe()
+      resolve(connected)
+    }
+    unsubscribe = ws.onStatus((connected) => {
+      if (connected) finish(true)
+    })
+    timer = window.setTimeout(() => finish(ws.isConnected), timeoutMs)
+  })
 }
 
 /** 移除打字占位气泡：服务端首个事件到达即表明意图识别已出结果。 */
@@ -4189,12 +4283,8 @@ onMounted(async () => {
   // 先解析协议档，再回放历史消息，保证助手消息头能显示正确供应商 Logo 与模型名称。
   await resolveAgentModelName()
   await loadConfirmOptions()
-  if (sessions.value.length > 0) {
-    // selectSession 内部完成历史回放对齐、WS 建立与侧轨展开（F4/F17）
-    selectSession(sessions.value[0].id)
-  } else {
-    await handleCreateSession()
-  }
+  // 默认停留在未持久化草稿，只有首次发送消息时才创建服务端会话。
+  resetToDraftSession()
   // F12 拉取 prod 会签人名单用于确认卡动态提示；失败静默回退静态文案
   try {
     const settings = await api.admin.getSettings()
@@ -4218,10 +4308,14 @@ onMounted(async () => {
   const interpretId = (route.query.interpret || route.query.report_id) as string | undefined
   if (interpretId) {
     if (api.isMock()) {
-      handleInterpretReport(interpretId)
+      void handleInterpretReport(interpretId)
     } else {
       // 实时模式需等待 WS 建立连接后再发送解读请求；超时只提示连接异常，禁止伪造解读。
       // 兜底定时器与 watch 均登记在册，组件卸载时统一清理。
+      if (isWsOnline.value) {
+        void handleInterpretReport(interpretId)
+        return
+      }
       const fallbackTimer = trackTimeout(() => {
         events.value.push({ type: 'error', code: 'UPSTREAM', message: 'Agent 连接未就绪，报告解读将在重连后继续。' })
         message.warning('Agent 连接未就绪，正在等待重连')
@@ -4232,7 +4326,7 @@ onMounted(async () => {
           clearTracked(fallbackTimer)
           interpretStopWatch?.()
           interpretStopWatch = null
-          handleInterpretReport(interpretId)
+          void handleInterpretReport(interpretId)
         }
       })
     }

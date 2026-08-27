@@ -48,11 +48,57 @@ def _project(item: object) -> dict[str, object]:
     }
 
 
+def _project_native(def_: object) -> dict[str, object]:
+    """把原生 ToolDef 投影为前端展示用契约（transport=native，不含 handler）。"""
+    risk = def_.risk_level
+    return {
+        "name": def_.name,
+        "desc": def_.description,
+        "permission": "read" if risk in ("read", "network") else "write",
+        "enabled": True,
+        "source": "builtin",
+        "tool_id": def_.name,
+        "server_id": "platform.native",
+        "short_name": def_.name,
+        "display_name": def_.display_name or def_.name,
+        "risk_level": risk,
+        "execution_mode": def_.execution_mode,
+        "timeout_s": float(def_.timeout_s),
+        "requires_confirmation": def_.requires_confirmation,
+        "supports_streaming": def_.supports_streaming,
+        "transport": "native",
+    }
+
+
 @router.get("/tools", summary="MCP 工具注册清单（只读）")
 def list_tools(user: User = Depends(get_current_user)):
     """平台 allowlist 的 MCP 扩展目录（只读；无扩展时返回真实空清单）。"""
     _ = user
     items = [_project(descriptor) for descriptor in _get_default_catalog().all_descriptors()]
+    return {"items": items, "total": len(items)}
+
+
+@router.get("/all-tools", summary="全量工具清单（原生 ToolCall + MCP 扩展，只读）")
+def list_all_tools(user: User = Depends(get_current_user)):
+    """返回平台所有已注册工具（含 transport=native 与 transport=mcp），前端分组展示用。
+
+    - ``transport=native``：原生基础工具（read/write/edit/bash/web_search/web_fetch/task），
+      由 NativeToolExecutor 直连 handler，不经外部 MCP 协议。
+    - ``transport=mcp``：内部 MCP 扩展工具（platform.tasks.task.create/status/cancel），
+      由 MCPClientManager 通过受控目录调用，对应平台评测任务队列。
+    不含 handler、凭据、环境变量等内部实现细节。
+    """
+    _ = user
+    registry = build_default_registry()
+    native_items = [
+        {**_project_native(def_), "transport": "native"}
+        for def_ in registry.iter_defs(transport="native")
+    ]
+    mcp_items = [
+        {**_project(descriptor), "transport": "mcp"}
+        for descriptor in _get_default_catalog().all_descriptors()
+    ]
+    items = native_items + mcp_items
     return {"items": items, "total": len(items)}
 
 
