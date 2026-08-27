@@ -204,14 +204,21 @@ export const api = {
 
   // 2. 文件上传
   files: {
-    async upload(file: File): Promise<{ id: string; filename: string; size: number; content_type?: string | null }> {
+    async upload(
+      file: File,
+      onProgress?: (percent: number) => void,
+    ): Promise<{ id: string; filename: string; size: number; content_type?: string | null }> {
       if (getDataMode() === 'mock') {
+        onProgress?.(100)
         return { id: 'file-' + Date.now(), filename: file.name, size: file.size, content_type: file.type }
       }
       const formData = new FormData()
       formData.append('file', file)
       const { data } = await http.post('/api/files', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
+        onUploadProgress: (event) => {
+          if (event.total) onProgress?.(Math.min(100, Math.round((event.loaded * 100) / event.total)))
+        },
       })
       return data
     },

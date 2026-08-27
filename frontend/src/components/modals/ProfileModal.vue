@@ -117,11 +117,11 @@
         <label class="field-label">Agent 工具调用模式</label>
         <n-radio-group v-model:value="form.tool_call_mode" name="tool_call_mode_group" size="small">
           <n-space :size="8">
-            <n-radio-button value="native">原生 ToolCall（已验证）</n-radio-button>
-            <n-radio-button value="legacy">兼容 JSON-ReAct（默认）</n-radio-button>
+            <n-radio-button value="native">原生 ToolCall（默认）</n-radio-button>
+            <n-radio-button value="legacy">兼容 JSON-ReAct</n-radio-button>
           </n-space>
         </n-radio-group>
-        <span class="small tertiary">仅当目标网关已验证支持 tools 字段时使用原生模式；兼容模式不会向上游发送 tools。</span>
+        <span class="small tertiary">默认使用原生模式；仅在目标网关不支持 tools 字段时切换为兼容模式。已有协议档保持原设置。</span>
       </div>
 
       <div class="field">
@@ -218,7 +218,7 @@ const form = ref<{
   usages: ['target'],
   context_window: 200000,
   max_output_tokens: 8192,
-  tool_call_mode: 'legacy',
+  tool_call_mode: 'native',
 })
 
 const protocolOptions = [
@@ -377,7 +377,7 @@ watch(
           usages: profileVal.usages ? [...profileVal.usages] : ['target'],
           context_window: profileVal.context_window || 200000,
           max_output_tokens: profileVal.max_output_tokens || 8192,
-          tool_call_mode: profileVal.tool_call_mode || 'legacy',
+          tool_call_mode: profileVal.tool_call_mode || 'native',
         }
       } else if (props.initialData) {
         form.value = {
@@ -390,7 +390,7 @@ watch(
           usages: ['target'],
           context_window: 200000,
           max_output_tokens: 8192,
-          tool_call_mode: 'legacy',
+          tool_call_mode: 'native',
         }
       } else {
         form.value = {
@@ -403,7 +403,7 @@ watch(
           usages: ['target'],
           context_window: 200000,
           max_output_tokens: 8192,
-          tool_call_mode: 'legacy',
+          tool_call_mode: 'native',
         }
       }
     }

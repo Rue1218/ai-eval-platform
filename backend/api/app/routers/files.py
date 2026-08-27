@@ -2,6 +2,7 @@
 
 import hashlib
 import logging
+import os
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, UploadFile
@@ -20,6 +21,7 @@ logger = logging.getLogger("ai-eval.api.files")
 router = APIRouter(prefix="/api/files", tags=["files"])
 
 MAX_FILE_BYTES = 20 * 1024 * 1024
+UPLOAD_CHUNK_BYTES = 1024 * 1024
 ALLOWED_SUFFIXES = {
     ".md",
     ".txt",
@@ -53,35 +55,54 @@ def _validate_filename(filename: str | None) -> str:
     return name
 
 
+async def _save_upload_stream(file: UploadFile, temporary_path: Path) -> tuple[int, str]:
+    """分块写入上传文件并同步计算哈希，避免把 20MB 附件一次性留在 API 内存。"""
+    total_bytes = 0
+    digest = hashlib.sha256()
+    with temporary_path.open("xb") as target:
+        while chunk := await file.read(UPLOAD_CHUNK_BYTES):
+            total_bytes += len(chunk)
+            if total_bytes > MAX_FILE_BYTES:
+                raise AppError(ErrorCode.VALIDATION, "单文件不能超过 20MB")
+            target.write(chunk)
+            digest.update(chunk)
+        target.flush()
+        os.fsync(target.fileno())
+    return total_bytes, digest.hexdigest()
+
+
 @router.post("", response_model=FileOut, status_code=201)
 async def upload_file(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """校验后将文件写入本地卷，并持久化 SHA-256 元数据。"""
+    """校验后分块写入本地卷，并持久化 SHA-256 元数据。"""
     filename = _validate_filename(file.filename)
-    content = await file.read(MAX_FILE_BYTES + 1)
-    if not content:
-        logger.warning("附件上传拒绝：空文件 filename=%r user=%s", filename, user.id)
-        raise AppError(ErrorCode.VALIDATION, "文件不能为空")
-    if len(content) > MAX_FILE_BYTES:
-        logger.warning(
-            "附件上传拒绝：超过 20MB filename=%r size=%s", filename, len(content)
-        )
-        raise AppError(ErrorCode.VALIDATION, "单文件不能超过 20MB")
-
     file_id = uuid_str()
     storage_dir = Path(settings.data_dir) / "files"
     storage_dir.mkdir(parents=True, exist_ok=True)
     storage_path = storage_dir / file_id
-    storage_path.write_bytes(content)
+    temporary_path = storage_dir / f".{file_id}.uploading"
+    try:
+        size_bytes, sha256 = await _save_upload_stream(file, temporary_path)
+        if not size_bytes:
+            logger.warning("附件上传拒绝：空文件 filename=%r user=%s", filename, user.id)
+            raise AppError(ErrorCode.VALIDATION, "文件不能为空")
+        os.replace(temporary_path, storage_path)
+    except AppError:
+        temporary_path.unlink(missing_ok=True)
+        raise
+    except OSError as exc:
+        temporary_path.unlink(missing_ok=True)
+        logger.error("附件写入失败 filename=%r type=%s", filename, type(exc).__name__)
+        raise AppError(ErrorCode.INTERNAL, "附件保存失败") from exc
     stored = StoredFile(
         id=file_id,
         filename=filename,
         content_type=file.content_type,
-        size_bytes=len(content),
-        sha256=hashlib.sha256(content).hexdigest(),
+        size_bytes=size_bytes,
+        sha256=sha256,
         storage_path=str(storage_path),
         kind=Path(filename).suffix.lower().lstrip("."),
         uploaded_by=user.id,

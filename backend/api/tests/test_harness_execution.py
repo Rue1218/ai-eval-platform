@@ -863,6 +863,13 @@ def test_read_file_safe_default_limit_returns_first_2000_lines() -> None:
         assert "offset=2000" in result.to_tool_data()["model_text"]
 
 
+def test_read_file_safe_accepts_the_agent_attachment_size_limit(tmp_path) -> None:
+    """read 文件上限与 Agent 附件 20MB 契约一致，避免上传成功后再被拒绝。"""
+    from app.harness.execution.dispatch import READ_MAX_BYTES
+
+    assert READ_MAX_BYTES == 20 * 1024 * 1024
+
+
 def test_read_file_safe_stops_on_character_budget_at_line_boundary() -> None:
     """字符预算触发时不截断半行，next_offset 与实际结束行一致。"""
     from app.harness.execution.dispatch import READ_MAX_CHARS

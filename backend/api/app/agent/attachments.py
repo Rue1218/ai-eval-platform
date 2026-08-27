@@ -9,6 +9,7 @@ import shutil
 import zipfile
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 from xml.etree import ElementTree
 
 from sqlalchemy.orm import Session
@@ -22,8 +23,9 @@ MAX_TEXT_CHARS_PER_FILE = 12_000
 MAX_CONTEXT_CHARS = 32_000
 MAX_IMAGE_BYTES = 4 * 1024 * 1024
 TEXT_SUFFIXES = {".md", ".txt", ".html", ".json", ".yaml", ".yml", ".csv", ".jsonl"}
-# 懒加载附件：staging 进会话工作区，由模型用 read 工具按需读取（省 token）
-TEXT_LAZY_SUFFIXES = {".txt", ".md"}
+# 懒加载附件：所有可读文本 staging 进会话工作区，由模型用 read 工具按需读取。
+# 统一路径后，CSV/JSON/YAML 不再和 TXT/Markdown 走两套截断策略。
+TEXT_LAZY_SUFFIXES = TEXT_SUFFIXES
 
 
 def _file_id(item: object) -> str:
@@ -126,10 +128,11 @@ def _workspace_attachment_path(file_id: str, filename: str) -> str:
 
 
 def stage_attachments(session_id: str, files: list[StoredFile]) -> None:
-    """把 txt/md 附件放入会话工作区，供 read 工具读取（幂等）。
+    """把文本附件复制到会话工作区，供 read 工具读取（幂等）。
 
     - 目标相对路径 ``attachments/{file_id}-{name}``（沙箱内，防目录穿越边界不变）；
-    - 优先 ``os.link`` 零拷贝（数据卷与工作区同文件系统），跨设备回退复制；
+    - 复制到工作区的新 inode，避免 bash 原地写入时篡改 ``/data/files`` 原文件；
+    - 临时文件经同目录原子发布，避免并发 staging 覆盖已有的工作区文件；
     - 目标已存在时跳过（幂等），不覆盖模型可能已改写的文件。
     """
     from ..harness.execution.workspace import ensure_session_workspace
@@ -148,10 +151,26 @@ def stage_attachments(session_id: str, files: list[StoredFile]) -> None:
         target = os.path.join(attach_dir, _workspace_attachment_path(stored.id, stored.filename))
         if os.path.exists(target):
             continue
+        temporary = os.path.join(attach_dir, f".{stored.id}-{uuid4().hex}.staging")
         try:
-            os.link(source, target)
-        except OSError:
-            shutil.copyfile(source, target)
+            shutil.copyfile(source, temporary)
+            try:
+                # 同目录硬链接只用于原子占位；源文件已是副本，最终不会与上传卷共享 inode。
+                os.link(temporary, target)
+            except FileExistsError:
+                continue
+            except OSError:
+                # 极少数文件系统不支持 hard link 时，使用 O_EXCL 保留同样的不覆盖语义。
+                try:
+                    with open(temporary, "rb") as source_handle, open(target, "xb") as target_handle:
+                        shutil.copyfileobj(source_handle, target_handle)
+                except FileExistsError:
+                    continue
+        finally:
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
 
 
 def _read_limited(path: Path) -> bytes:

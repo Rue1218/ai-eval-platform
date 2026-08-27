@@ -34,6 +34,17 @@ def test_text_attachment_lazy_read_manifest(tmp_path: Path) -> None:
     assert "比较两个模型" not in result  # 正文不再内联，留给 read 工具读取
 
 
+def test_structured_text_attachment_uses_same_read_manifest(tmp_path: Path) -> None:
+    """CSV、JSON 等文本附件也必须与 Markdown 一样经 read 分页，避免内联截断。"""
+    stored = _stored(tmp_path, "cases.csv", b"question,reference\nq,a\n", "text/csv")
+
+    result = build_model_content("分析附件", [stored], workspace_dir=str(tmp_path / "ws"))
+
+    assert isinstance(result, str)
+    assert f"attachments/{stored.id}-cases.csv" in result
+    assert "question,reference" not in result
+
+
 def test_text_attachment_inline_fallback_without_workspace(tmp_path: Path) -> None:
     """无工作区（历史/离线上下文）时回退内联注入，兼容旧行为。"""
     stored = _stored(tmp_path, "brief.md", "# 评测目标\n比较两个模型。".encode(), "text/markdown")
@@ -64,6 +75,19 @@ def test_stage_attachments_path_matches_manifest(tmp_path: Path, monkeypatch) ->
     # 清单相对路径必须与 staging 目标一致（read 工具按沙箱根解析）
     result = build_model_content("分析", [stored], workspace_dir=str(tmp_path / "ws" / session_id))
     assert "attachments/file-abc-brief.md" in result
+
+
+def test_stage_attachments_isolates_uploaded_source_from_workspace_writes(tmp_path: Path, monkeypatch) -> None:
+    """工作区附件必须是独立副本，避免沙箱原地写入篡改上传文件。"""
+    session_id = "b68eddc9-2b37-4883-b90c-3756035fbc5e"
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    stored = _stored(tmp_path, "cases.json", b'{"name":"origin"}', "application/json", file_id="file-json")
+
+    stage_attachments(session_id, [stored])
+
+    staged = tmp_path / "ws" / session_id / "attachments" / "file-json-cases.json"
+    staged.write_text('{"name":"workspace"}', encoding="utf-8")
+    assert Path(stored.storage_path).read_text(encoding="utf-8") == '{"name":"origin"}'
 
 
 def test_image_attachment_is_projected_as_internal_image_part(tmp_path: Path) -> None:
