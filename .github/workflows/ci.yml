@@ -58,3 +58,29 @@ jobs:
       - name: Test (pytest)
         # ".." 使共享包 backend/shared 可导入（shared.models）
         run: PYTHONPATH=.:.. pytest
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck (vue-tsc)
+        # npm run build 不含类型检查，必须独立跑 typecheck 门禁
+        run: npm run typecheck
+
+      - name: Build (vite)
+        run: npm run build

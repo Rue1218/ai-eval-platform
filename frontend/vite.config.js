@@ -28,6 +28,30 @@ export default defineConfig({
       mermaid: 'mermaid/dist/mermaid.esm.min.mjs',
     },
   },
+  build: {
+    // 大依赖手动分包：mermaid/echarts/katex 均为低频更新的大体积库，
+    // 拆分后业务代码改动不会使其缓存失效，显著改善构建产物缓存命中率
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules')) {
+            if (id.includes('mermaid') || id.includes('cytoscape') || id.includes('dagre') || id.includes('d3-')) {
+              return 'vendor-mermaid'
+            }
+            if (id.includes('echarts') || id.includes('zrender')) {
+              return 'vendor-echarts'
+            }
+            if (id.includes('katex')) {
+              return 'vendor-katex'
+            }
+            if (id.includes('naive-ui') || id.includes('@vicons')) {
+              return 'vendor-naive'
+            }
+          }
+        },
+      },
+    },
+  },
   define: {
     __BUILD_VERSION__: JSON.stringify(gitCommit),
     __BUILD_TIME__: JSON.stringify(buildTime),
