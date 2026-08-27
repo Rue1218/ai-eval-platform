@@ -7,7 +7,6 @@ usage 归一、SDK 客户端参数与 API Key 不泄漏。非流式调用通过�
 
 import json
 from types import SimpleNamespace
-from urllib.error import HTTPError
 
 import httpx
 import openai
@@ -576,34 +575,99 @@ def test_anthropic_multiple_tool_results_share_one_user_message(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-class _FakeSSE:
-    """把 SSE 文本行包装成可迭代的假响应对象（urlopen 返回值替身）。"""
+class _FakeSdkStream:
+    """模拟 SDK 已解帧的事件迭代器，适配器测试不再依赖底层 SSE 读取实现。"""
 
-    def __init__(self, lines: list[str]):
-        self._lines = [f"{ln}\n".encode() for ln in lines]
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args):
-        return False
+    def __init__(self, seen: dict, lines: list[str]):
+        self._seen = seen
+        self._events: list[object] = []
+        for line in lines:
+            # 兼容既有夹具书写形式；这一步只在测试夹具中把已知 SSE data 转为 SDK 事件。
+            if not line.startswith("data:"):
+                continue
+            payload = line[5:].strip()
+            if not payload or payload == "[DONE]":
+                continue
+            try:
+                data = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(data, dict):
+                self._events.append(data)
+        self._index = 0
 
     def __iter__(self):
-        return iter(self._lines)
+        return self
+
+    def __next__(self):
+        """逐个返回带 model_dump 的 SDK 事件替身。"""
+        if self._index >= len(self._events):
+            raise StopIteration
+        event = self._events[self._index]
+        self._index += 1
+        if isinstance(event, Exception):
+            raise event
+        return _FakeSdkResponse(event)
+
+    def close(self) -> None:
+        """记录适配器在流结束或取消时释放了 SDK Stream。"""
+        self._seen["stream_closed"] = True
 
 
-def _capture_stream(monkeypatch, lines: list[str]) -> dict:
-    """替换 urlopen 为 SSE 夹具：记录请求并返回固定行序列。"""
+class _FakeSdkStreamClient:
+    """提供三种 SDK 资源入口并记录流式 create 调用的客户端替身。"""
+
+    def __init__(self, seen: dict, stream: _FakeSdkStream, error: Exception | None = None):
+        self._seen = seen
+        self._stream = stream
+        self._error = error
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create_chat))
+        self.responses = SimpleNamespace(create=self._create_responses)
+        self.messages = SimpleNamespace(create=self._create_messages)
+
+    def _create_chat(self, **kwargs):
+        """记录 Chat Completions 的流式 SDK 参数。"""
+        return self._record("openai_chat", kwargs)
+
+    def _create_responses(self, **kwargs):
+        """记录 Responses 的流式 SDK 参数。"""
+        return self._record("openai_responses", kwargs)
+
+    def _create_messages(self, **kwargs):
+        """记录 Anthropic Messages 的流式 SDK 参数。"""
+        return self._record("anthropic_messages", kwargs)
+
+    def _record(self, operation: str, kwargs: dict) -> _FakeSdkStream:
+        """保存 SDK 参数，并返回已解帧的事件迭代器或模拟创建失败。"""
+        self._seen["operation"] = operation
+        self._seen["body"] = dict(kwargs)
+        if self._error is not None:
+            raise self._error
+        return self._stream
+
+    def close(self) -> None:
+        """模拟 SDK 客户端释放，并供断言验证资源生命周期。"""
+        self._seen["closed"] = True
+
+
+def _capture_stream(monkeypatch, lines: list[str], *, error: Exception | None = None) -> dict:
+    """替换 SDK 客户端工厂，向流式适配器注入已经过 SDK 解码的事件夹具。"""
     seen: dict = {}
+    stream = _FakeSdkStream(seen, lines)
+    client = _FakeSdkStreamClient(seen, stream, error)
 
-    def fake_urlopen(request, timeout):
-        seen["url"] = request.full_url
-        seen["body"] = json.loads(request.data.decode())
-        seen["headers"] = {k.lower(): v for k, v in request.header_items()}
-        seen["timeout"] = timeout
-        return _FakeSSE(lines)
+    def fake_openai_client(**kwargs):
+        """记录 OpenAI SDK 工厂参数。"""
+        seen["client"] = dict(kwargs)
+        return client
 
-    monkeypatch.setattr(adapters, "urlopen", fake_urlopen)
+    def fake_anthropic_client(**kwargs):
+        """记录 Anthropic SDK 工厂参数。"""
+        seen["client"] = dict(kwargs)
+        return client
+
+    monkeypatch.setattr(adapters, "_openai_client", fake_openai_client)
+    monkeypatch.setattr(adapters, "_anthropic_client", fake_anthropic_client)
     return seen
 
 
@@ -623,7 +687,107 @@ def test_stream_openai_chat_chunks(monkeypatch):
 
     assert chunks == [("content", "你"), ("content", "好")]
     assert seen["body"]["stream"] is True
-    assert seen["headers"]["authorization"] == f"Bearer {API_KEY}"
+    assert seen["operation"] == "openai_chat"
+    assert seen["closed"] is True
+
+
+@pytest.mark.parametrize(
+    "protocol,sse_body,path,expected",
+    [
+        (
+            "openai_chat",
+            b'data: {"id":"chatcmpl_test","object":"chat.completion.chunk","created":0,"model":"test-model","choices":[{"index":0,"delta":{"role":"assistant","content":"SDK"},"finish_reason":null,"logprobs":null}]}\n\ndata: [DONE]\n\n',
+            "/v1/chat/completions",
+            [("content", "SDK")],
+        ),
+        (
+            "openai_responses",
+            b'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","sequence_number":1,"item_id":"item_1","output_index":0,"content_index":0,"delta":"SDK"}\n\n',
+            "/v1/responses",
+            [("content", "SDK")],
+        ),
+        (
+            "anthropic_messages",
+            b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"SDK"}}\n\n',
+            "/v1/messages",
+            [("content", "SDK")],
+        ),
+    ],
+)
+def test_stream_sdk_wire_contract(monkeypatch, protocol, sse_body, path, expected):
+    """真实 SDK 经 MockTransport 解帧后，适配器仍输出既有流式事件契约。"""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        """记录 SDK 实际发出的请求，并回送最小合法 SSE 响应。"""
+        seen.append(request)
+        return httpx.Response(
+            200,
+            request=request,
+            headers={"content-type": "text/event-stream"},
+            content=sse_body,
+        )
+
+    http_client = httpx.Client(transport=httpx.MockTransport(handler))
+    if protocol == "anthropic_messages":
+        client = adapters.Anthropic(
+            api_key=API_KEY,
+            base_url=BASE,
+            max_retries=0,
+            http_client=http_client,
+        )
+        monkeypatch.setattr(adapters, "_anthropic_client", lambda **_kwargs: client)
+    else:
+        client = adapters.OpenAI(
+            api_key=API_KEY,
+            base_url=f"{BASE}/v1",
+            max_retries=0,
+            http_client=http_client,
+        )
+        monkeypatch.setattr(adapters, "_openai_client", lambda **_kwargs: client)
+
+    try:
+        assert list(stream_protocol(**_kwargs(protocol))) == expected
+        request = seen[0]
+        assert request.url.path == path
+        assert json.loads(request.content)["stream"] is True
+        if protocol == "anthropic_messages":
+            assert request.headers["x-api-key"] == API_KEY
+            assert request.headers["anthropic-version"] == "2023-06-01"
+        else:
+            assert request.headers["authorization"] == f"Bearer {API_KEY}"
+    finally:
+        http_client.close()
+
+
+def test_stream_non_sse_response_maps_to_upstream(monkeypatch):
+    """网关忽略 stream 参数而返回完整 JSON 时，拒绝静默空流并归一为 UPSTREAM。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        """模拟兼容网关错误地返回非流式 JSON 响应。"""
+        return httpx.Response(
+            200,
+            request=request,
+            headers={"content-type": "application/json"},
+            json=SDK_OPENAI_CHAT_OK,
+        )
+
+    http_client = httpx.Client(transport=httpx.MockTransport(handler))
+    client = adapters.OpenAI(
+        api_key=API_KEY,
+        base_url=f"{BASE}/v1",
+        max_retries=0,
+        http_client=http_client,
+    )
+    monkeypatch.setattr(adapters, "_openai_client", lambda **_kwargs: client)
+    try:
+        with pytest.raises(AppError) as exc:
+            list(stream_protocol(**_kwargs("openai_chat")))
+        assert exc.value.code == ErrorCode.UPSTREAM
+        assert exc.value.message == "上游未返回流式响应"
+        assert API_KEY not in exc.value.message
+    finally:
+        http_client.close()
 
 
 @pytest.mark.parametrize(
@@ -802,7 +966,7 @@ def test_stream_mimo_keeps_thinking_enabled(monkeypatch):
     kwargs = _kwargs("openai_chat") | {"base_url": "https://xiaomimimo.example.com"}
     list(stream_protocol(**kwargs))
 
-    assert seen["body"]["thinking"] == {"type": "enabled"}
+    assert seen["body"]["extra_body"] == {"thinking": {"type": "enabled"}}
 
 
 def test_stream_gemini_includes_thought_summaries(monkeypatch):
@@ -815,10 +979,12 @@ def test_stream_gemini_includes_thought_summaries(monkeypatch):
     list(stream_protocol(**kwargs))
 
     assert seen["body"]["extra_body"] == {
-        "google": {
-            "thinking_config": {
-                "thinking_level": "high",
-                "include_thoughts": True,
+        "extra_body": {
+            "google": {
+                "thinking_config": {
+                    "thinking_level": "high",
+                    "include_thoughts": True,
+                }
             }
         }
     }
@@ -850,7 +1016,7 @@ def test_stream_mimo_can_disable_thinking(monkeypatch):
     }
     list(stream_protocol(**kwargs))
 
-    assert seen["body"]["thinking"] == {"type": "disabled"}
+    assert seen["body"]["extra_body"] == {"thinking": {"type": "disabled"}}
 
 
 def test_call_mimo_still_disables_thinking(monkeypatch):
@@ -860,20 +1026,6 @@ def test_call_mimo_still_disables_thinking(monkeypatch):
     call_protocol(**kwargs)
 
     assert seen["body"]["extra_body"] == {"thinking": {"type": "disabled"}}
-
-
-def test_stream_non_sse_fallback(monkeypatch):
-    """网关忽略 stream 参数返回完整 JSON：兜底解析全文作为单块 content。"""
-    _capture_stream(
-        monkeypatch,
-        [
-            '{"choices": [{"message": {"role": "assistant", "content": "完整回复"}}],',
-            ' "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3}}',
-        ],
-    )
-    chunks = list(stream_protocol(**_kwargs("openai_chat")))
-
-    assert chunks == [("content", "完整回复")]
 
 
 def test_stream_openai_responses_chunks(monkeypatch):
@@ -911,27 +1063,28 @@ def test_stream_anthropic_chunks(monkeypatch):
     assert chunks == [("reasoning", "先推理"), ("content", "基"), ("content", "准")]
 
 
-def test_stream_tolerates_bad_frames(monkeypatch):
-    """坏帧（非 JSON / 非 data 行 / 空 data）不中断整条流。"""
+def test_stream_ignores_unknown_sdk_events(monkeypatch):
+    """非目标 SDK 事件不产生增量，也不阻断后续标准文本事件。"""
     _capture_stream(
         monkeypatch,
         [
-            'event: message',
-            'data: not-json',
-            'data: ',
-            'data: {"choices":[{"delta":{"content":"ok"}}]}',
+            'data: {"type":"response.created"}',
+            'data: {"type":"response.output_text.delta","delta":"ok"}',
         ],
     )
-    assert list(stream_protocol(**_kwargs("openai_chat"))) == [("content", "ok")]
+    assert list(stream_protocol(**_kwargs("openai_responses"))) == [("content", "ok")]
 
 
 def test_stream_4xx_maps_to_upstream(monkeypatch):
     """建连即 4xx：归一为 UPSTREAM，消息仅含状态码。"""
-    monkeypatch.setattr(
-        adapters,
-        "urlopen",
-        lambda request, timeout: (_ for _ in ()).throw(
-            HTTPError("https://upstream", 429, "Too Many Requests", None, None)
+    request = httpx.Request("POST", f"{BASE}/v1/chat/completions")
+    _capture_stream(
+        monkeypatch,
+        [],
+        error=openai.APIStatusError(
+            "Too Many Requests",
+            response=httpx.Response(429, request=request),
+            body=None,
         ),
     )
     with pytest.raises(AppError) as exc:
@@ -949,77 +1102,53 @@ def test_stream_unsupported_protocol_rejected():
     assert exc.value.code == ErrorCode.VALIDATION
 
 
-def test_stream_connect_timeout_capped(monkeypatch):
-    """建连超时不得超过 CONNECT_TIMEOUT_S，避免整段 STREAM 时限卡在 urlopen。"""
+def test_stream_passes_timeout_to_sdk_client(monkeypatch):
+    """流式调用把协议档超时原样传入 SDK，不再维护手写 urllib 建连超时。"""
     seen = _capture_stream(
         monkeypatch,
         ['data: {"choices":[{"delta":{"content":"ok"}}]}'],
     )
     list(stream_protocol(**_kwargs("openai_chat"), timeout_s=45.0))
 
-    assert seen["timeout"] == adapters.CONNECT_TIMEOUT_S
+    assert seen["client"]["timeout_s"] == 45.0
 
 
 def test_stream_aborts_before_connect(monkeypatch):
-    """令牌已取消时不得发 HTTP 请求。"""
+    """令牌已取消时不得创建 SDK 客户端或发 HTTP 请求。"""
     called = {"n": 0}
 
-    def fake_urlopen(request, timeout):
+    def fake_client(**_kwargs):
         called["n"] += 1
-        raise AssertionError("已取消时不得建连")
+        raise AssertionError("已取消时不得创建客户端")
 
-    monkeypatch.setattr(adapters, "urlopen", fake_urlopen)
+    monkeypatch.setattr(adapters, "_openai_client", fake_client)
     with pytest.raises(adapters.StreamAborted):
         list(stream_protocol(**_kwargs("openai_chat"), should_abort=lambda: True))
 
     assert called["n"] == 0
 
 
-def test_stream_read_silence_times_out_without_retry(monkeypatch):
-    """读体静默触发读超时:按 TIMEOUT 归一,不再依赖「超时后重试同一 socket」。
-
-    CPython socket 一次读超时后即进入 timed-out 状态（后续 read 抛
-    OSError("cannot read from timed out object")），旧实现「2 秒切片超时 →
-    continue 重试」在真实 socket 上必挂；新契约把读超时对齐总 deadline，
-    静默即超时。取消检查保留在行粒度。
-    """
-
-    class _SilentResponse:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def __iter__(self):
-            return self
-
-        def __next__(self):
-            raise TimeoutError()
-
-    monkeypatch.setattr(adapters, "urlopen", lambda request, timeout: _SilentResponse())
+def test_stream_sdk_timeout_maps_to_timeout(monkeypatch):
+    """SDK 流式建连或读事件超时仍统一归一为 TIMEOUT。"""
+    _capture_stream(
+        monkeypatch,
+        [],
+        error=openai.APITimeoutError(httpx.Request("POST", f"{BASE}/v1/chat/completions")),
+    )
     with pytest.raises(AppError) as exc_info:
         list(stream_protocol(**_kwargs("openai_chat"), should_abort=lambda: False))
     assert exc_info.value.code == ErrorCode.TIMEOUT
 
 
-def test_stream_poisoned_socket_times_out(monkeypatch):
-    """socket timed-out 状态的 OSError 同样按 TIMEOUT 归一,不再误报连接中断。"""
-
-    class _PoisonedResponse:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def __iter__(self):
-            return self
-
-        def __next__(self):
-            raise OSError("cannot read from timed out object")
-
-    monkeypatch.setattr(adapters, "urlopen", lambda request, timeout: _PoisonedResponse())
+def test_stream_sdk_connection_error_maps_to_upstream(monkeypatch):
+    """SDK 流式连接失败归一为 UPSTREAM，避免暴露底层网络异常。"""
+    _capture_stream(
+        monkeypatch,
+        [],
+        error=openai.APIConnectionError(
+            request=httpx.Request("POST", f"{BASE}/v1/chat/completions")
+        ),
+    )
     with pytest.raises(AppError) as exc_info:
         list(stream_protocol(**_kwargs("openai_chat"), should_abort=lambda: False))
-    assert exc_info.value.code == ErrorCode.TIMEOUT
+    assert exc_info.value.code == ErrorCode.UPSTREAM
