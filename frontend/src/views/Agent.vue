@@ -4626,6 +4626,11 @@ onBeforeUnmount(() => {
   background: var(--bg-main);
 }
 
+.quick-chips {
+  max-width: 780px;
+  margin: 0 auto 8px;
+}
+
 /* 用户消息与输入区共用附件卡片布局，图片优先给出可识别的缩略图。 */
 .message-attachments,
 .attach-stage {

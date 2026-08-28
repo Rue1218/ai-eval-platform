@@ -1677,3 +1677,25 @@ td.cell-edit:hover { background: color-mix(in srgb, var(--accent-ai) 5%, transpa
   .login-wrapper { height: 100dvh; padding: 14px; }
 }
 
+/* ============================================================
+   居中弹窗与交互会话框增强 (Centered Dialogs & Modals)
+   ============================================================ */
+.n-modal-mask {
+  backdrop-filter: blur(2.5px);
+  -webkit-backdrop-filter: blur(2.5px);
+  background-color: rgba(15, 23, 42, 0.35) !important;
+}
+.n-modal-container {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  padding: 16px !important;
+}
+.center-dialog-card,
+.n-modal.n-card {
+  margin: auto !important;
+  border-radius: 10px !important;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.05) !important;
+  border: 1px solid #E2E2DC !important;
+}
+

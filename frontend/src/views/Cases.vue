@@ -1,862 +1,828 @@
 <template>
-  <div class="cases-workbench">
-    <div class="ft-layout" :style="{ '--ft-w': treeWidth + 'px' }">
-      <!-- ─── 左侧：用例集目录侧边栏 ─── -->
-      <div class="ft-sidebar">
-        <!-- 侧边栏头部 -->
-        <div class="ft-header">
-          <div class="row-between mb8">
-            <div class="ft-title">
-              <svg class="ft-title-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
-                <rect x="8" y="2" width="8" height="4" rx="1" ry="1" />
-                <path d="M9 14l2 2 4-4" />
+  <div class="cases-workbench" @keydown="onWorkbenchKeydown">
+    <div class="nordic-layout" :style="{ '--tree-w': treeWidth + 'px' }">
+      <!-- ─── 左侧：用例集资源树侧边栏 ─── -->
+      <aside class="nordic-sidebar">
+        <div class="sidebar-header">
+          <div class="sidebar-title-row">
+            <div class="sidebar-title">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="title-icon">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                <polyline points="14 2 14 8 20 8" />
+                <line x1="16" y1="13" x2="8" y2="13" />
+                <line x1="16" y1="17" x2="8" y2="17" />
+                <polyline points="10 9 9 9 8 9" />
               </svg>
-              <span>用例集目录</span>
+              <span>用例集资源</span>
             </div>
-            <!-- 新建用例集下拉触发器 -->
-            <n-dropdown trigger="click" :options="createSetMenuOptions" @select="handleCreateSetMenu">
-              <button class="btn btn-ai-soft btn-xs" aria-label="新建用例集菜单">
-                <span class="sparkle">✨</span> + 新建集
+            <div class="sidebar-actions">
+              <button class="btn btn-ghost-subtle btn-xs" title="通过 PRD 或接口需求自动推导用例集" aria-label="PRD 用例推导向导" @click="openAiGenDrawer">
+                + PRD 推导
               </button>
-            </n-dropdown>
+              <button class="btn btn-ghost-subtle btn-xs" title="新建空用例集" aria-label="新建空用例集" @click="createEmptyCaseSet">
+                + 新建
+              </button>
+            </div>
           </div>
 
           <!-- 搜索输入框 -->
-          <div class="search-input-wrapper">
-            <svg class="search-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <div class="search-box">
+            <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <circle cx="11" cy="11" r="8" />
               <line x1="21" y1="21" x2="16.65" y2="16.65" />
             </svg>
-            <input v-model="treeSearch" class="input tree-search-input" placeholder="搜索用例集..." aria-label="搜索用例集" />
+            <input v-model="treeSearch" class="search-input" placeholder="搜索用例集..." aria-label="搜索用例集" />
             <button v-if="treeSearch" class="clear-search-btn" aria-label="清空搜索" @click="treeSearch = ''">✕</button>
           </div>
         </div>
 
         <!-- 目录树内容区 -->
-        <div class="ft-tree custom-scroll">
-          <div v-for="folder in filteredFolders" :key="folder.id" class="ft-folder-group">
+        <div class="tree-content custom-scroll">
+          <div v-for="folder in filteredFolders" :key="folder.id" class="folder-group" :data-fid="folder.id">
             <!-- 文件夹节点 -->
             <div
-              class="ft-node folder"
+              class="tree-node folder-node"
               :class="{ open: folder.open }"
               @click="folder.open = !folder.open"
-              @contextmenu.prevent.stop="onFolderContextMenu($event, folder.id)"
+              @contextmenu.prevent.stop="openCtxMenu($event, 'folder', folder.id)"
             >
-              <span class="ft-chevron" :class="{ rotated: folder.open }">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <span class="chevron-icon" :class="{ rotated: folder.open }">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
                   <polyline points="9 18 15 12 9 6" />
                 </svg>
               </span>
-              <svg class="ft-folder-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <svg class="folder-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                 <path v-if="folder.open" d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" />
                 <path v-else d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
               </svg>
-              <span class="ft-folder-name">{{ folder.name }}</span>
-              <span class="ft-badge">{{ folder.items.length }}</span>
+              <span class="node-name">{{ folder.name }}</span>
+              <span class="node-badge">{{ folder.items.length }}</span>
             </div>
 
-            <!-- 用例集节点 -->
-            <div v-if="folder.open" class="ft-folder-child">
+            <!-- 用例集子项目 -->
+            <div v-if="folder.open" class="folder-children">
               <div
                 v-for="item in folder.items"
                 :key="item.id"
-                class="ft-node file"
+                class="tree-node file-node"
                 :class="{ active: activeSetId === item.id }"
-                :title="`${item.name} · ${item.status === 'confirmed' ? '已入库' : item.status === 'cancelled' ? '已废弃' : '待确认'}`"
+                :title="`${item.name} · ${item.status === 'confirmed' ? '已入库' : '草稿'}`"
                 @click="requestSelectCaseSet(item.id)"
-                @contextmenu.prevent.stop="onSetContextMenu($event, item.id)"
+                @contextmenu.prevent.stop="openCtxMenu($event, 'file', item.id)"
               >
-                <svg class="ft-file-icon case-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
-                  <rect x="8" y="2" width="8" height="4" rx="1" ry="1" />
-                </svg>
-                <span class="ft-file-name">{{ item.name }}</span>
-                <span
-                  class="status-micro-pill"
-                  :class="item.status === 'confirmed' ? 'status-confirmed' : item.status === 'cancelled' ? 'status-cancelled' : 'status-pending'"
-                >
-                  {{ item.status === 'confirmed' ? '已入库' : item.status === 'cancelled' ? '已废弃' : '待确认' }}
+                <span class="file-icon case-set" :class="`status-${item.status}`">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="9 11 12 14 22 4" />
+                    <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+                  </svg>
                 </span>
+                <span class="node-name">{{ item.name }}</span>
+                <span class="version-badge" :class="`badge-${item.status}`">
+                  {{ item.status === 'confirmed' ? '已入库' : '草稿' }}
+                </span>
+                <span v-if="item.status === 'generated'" class="pending-dot" title="AI 自动生成草稿，待确认"></span>
               </div>
             </div>
           </div>
 
-          <!-- 目录树空态 -->
-          <div v-if="!filteredFolders.length" class="ft-empty-state">
+          <div v-if="!filteredFolders.length" class="tree-empty">
             <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="empty-icon">
               <circle cx="11" cy="11" r="8" />
               <line x1="21" y1="21" x2="16.65" y2="16.65" />
             </svg>
-            <p>{{ treeSearch.trim() ? `未找到匹配「${treeSearch.trim()}」的用例集` : '暂无用例集，点击上方「+ 新建集」开始' }}</p>
+            <p>{{ treeSearch.trim() ? `无匹配结果「${treeSearch.trim()}」` : '暂无用例集，点击上方「+ PRD 推导」或「+ 新建」' }}</p>
           </div>
         </div>
 
-        <!-- 目录树调宽手柄 -->
+        <!-- 调宽手柄 -->
         <div
-          class="ft-resizer"
-          :class="{ on: treeResizing }"
-          title="拖拽调整侧边栏宽度 · 双击复位为 290px"
+          class="sidebar-resizer"
+          :class="{ active: treeResizing }"
+          title="拖拽调整侧栏宽度 · 双击复位为 280px"
           @mousedown="startTreeResize"
           @dblclick="resetTreeWidth"
         >
-          <div class="resizer-handle-line"></div>
+          <div class="resizer-bar"></div>
         </div>
-      </div>
+      </aside>
 
-      <!-- ─── 右侧：用例数据表格工作台 ─── -->
-      <div v-if="currentSet" class="workspace-main">
-        <!-- 1. 顶部工具栏 -->
-        <div class="ws-toolbar">
-          <div class="ws-title-group">
-            <div class="ws-title-row">
-              <span class="ws-dataset-title">{{ currentSet.name }}</span>
-              <span class="version-pill">生成 <b class="num mono">{{ currentSet.generated_count }}</b> 条</span>
-              <span
-                class="status-header-chip"
-                :class="currentSet.status === 'confirmed' ? 'chip-confirmed' : currentSet.status === 'cancelled' ? 'chip-cancelled' : 'chip-countdown'"
-              >
-                {{ currentSet.status === 'confirmed' ? '✓ 已确认入库' : currentSet.status === 'cancelled' ? '已废弃' : expiresLabel(currentSet) }}
-              </span>
-              <span class="kind-chip chip-cases" :style="modeTagStyle">{{ modeMappingLabel }}</span>
-            </div>
-            <!-- 面包屑路径提示 -->
-            <div class="ws-breadcrumb">
-              <span>测试用例资产</span>
-              <span class="sep">/</span>
-              <span class="cur">{{ currentSet.name }}</span>
-            </div>
-          </div>
-
-          <!-- 右侧操作区 -->
-          <div class="ws-action-group">
-            <div class="action-btn-cluster">
-              <button class="btn btn-secondary btn-sm" :disabled="currentSet.status === 'confirmed'" aria-label="新增测试用例" @click="addCase">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
-                新增用例
-              </button>
-              <button class="btn btn-secondary btn-sm" :disabled="currentSet.status === 'confirmed'" aria-label="新增自定义字段列" @click="openAddColModal">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
-                新增列
-              </button>
+      <!-- ─── 右侧：主用例工作台 ─── -->
+      <main v-if="currentSet" class="nordic-main">
+        <!-- 1. 顶栏：就地批量操作置换 (In-Toolbar Transition) -->
+        <div class="main-toolbar" :class="{ 'in-batch-mode': selectedCaseIds.length > 0 }">
+          <!-- 默认模式顶栏 -->
+          <div v-if="selectedCaseIds.length === 0" class="toolbar-default">
+            <div class="toolbar-title-group">
+              <div class="title-row">
+                <span class="main-dataset-title">{{ currentSet.name }}</span>
+                <span class="status-badge" :class="`status-${currentSet.status}`">
+                  {{ currentSet.status === 'confirmed' ? '已确认入库' : '草稿待审' }}
+                </span>
+                <span v-if="currentSet.status === 'generated' && countdownHours !== null" class="status-badge-amber">
+                  剩余 {{ countdownHours }}h 确认
+                </span>
+              </div>
+              <div class="breadcrumb-row">
+                <span>用例库</span>
+                <span class="sep">/</span>
+                <span class="cur">{{ currentSet.name }}</span>
+              </div>
             </div>
 
-            <!-- AI 增强功能区 -->
-            <div class="action-btn-cluster ai-cluster">
-              <button class="btn btn-ai btn-sm" aria-label="打开 AI 用例生成向导" @click="openAiGenWizard">
-                <span class="sparkle">✨</span> AI 生成用例集
-              </button>
-              <button class="btn btn-ai-soft btn-sm" :disabled="aiFilling || currentSet.status === 'confirmed'" aria-label="AI 智能补全断言" @click="handleAiFillCase">
-                {{ aiFilling ? 'AI 补全中…' : 'AI 补全断言' }}
-              </button>
-            </div>
-
-            <!-- 导入/导出与保存 -->
-            <div class="action-btn-cluster">
-              <button class="btn btn-secondary btn-sm" aria-label="导入 Excel 用例" @click="openImportModal()">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>
-                导入 Excel
-              </button>
-              <n-dropdown trigger="click" :options="exportOptions" @select="handleExportSelect">
-                <button class="btn btn-secondary btn-sm" aria-label="导出用例集菜单">
-                  导出 ▾
-                </button>
-              </n-dropdown>
-              <button
-                class="btn btn-primary btn-sm save-btn"
-                :class="{ dirty: hasUnsavedChanges, saved: justSaved }"
-                :disabled="!hasUnsavedChanges || savingCases || currentSet.status === 'confirmed'"
-                title="快捷键 Ctrl/⌘ + S"
-                aria-label="保存用例集修改"
-                @click="persistCases"
-              >
-                <span v-if="hasUnsavedChanges" class="dirty-indicator"></span>
-                <span v-if="justSaved" class="saved-check-icon">✓</span>
-                {{ savingCases ? '保存中…' : justSaved ? '已保存' : '保存修改' }}
-                <kbd class="shortcut-pill">⌘S</kbd>
-              </button>
-            </div>
-
-            <!-- 核心操作：确认入库 -->
-            <button
-              v-if="currentSet.status === 'generated'"
-              class="btn btn-sign btn-sm launch-btn"
-              title="确认此用例集入库并执行映射"
-              aria-label="确认用例集入库"
-              @click="confirmAllCases"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                <polyline points="20 6 9 17 4 12" />
+            <!-- 表格内即时搜索过滤框 (Instant Grid Filter) -->
+            <div class="table-search-box">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="table-search-icon">
+                <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
               </svg>
-              确认入库
-            </button>
+              <input v-model="gridSearch" class="table-search-input" placeholder="在当前用例集中极速筛选 (⌘F)..." aria-label="在当前用例集中极速筛选" />
+              <span v-if="gridSearch" class="grid-search-count mono">{{ displayedCases.length }}/{{ cases.length }}</span>
+              <button v-if="gridSearch" class="clear-search-btn" aria-label="清空表内搜索" @click="gridSearch = ''">✕</button>
+            </div>
+
+            <div class="grow"></div>
+
+            <!-- 右侧操作组 -->
+            <div class="toolbar-action-group">
+              <template v-if="currentSet.status !== 'confirmed'">
+                <div class="action-btn-group">
+                  <button class="btn btn-secondary btn-md" aria-label="新增测试用例" @click="addCase">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
+                    新增用例
+                  </button>
+                  <button class="btn btn-secondary btn-md" aria-label="新增扩展属性列" @click="openAddColModal">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
+                    新增列
+                  </button>
+                </div>
+
+                <div class="action-btn-group">
+                  <button class="btn btn-secondary btn-md" aria-label="打开 PRD 用例推导向导" @click="openAiGenDrawer">
+                    PRD 推导向导
+                  </button>
+                  <button class="btn btn-secondary btn-md" title="导出为 Excel 格式" aria-label="导出 Excel" @click="exportExcel">
+                    导出 Excel
+                  </button>
+                  <button
+                    class="btn btn-save btn-md"
+                    :class="{ dirty: hasUnsavedChanges, saved: justSaved }"
+                    :disabled="!hasUnsavedChanges || savingCases"
+                    title="快捷键 Ctrl/⌘ + S"
+                    aria-label="保存用例修改"
+                    @click="persistCases"
+                  >
+                    <span v-if="justSaved" class="saved-icon">✓</span>
+                    {{ savingCases ? '保存中…' : justSaved ? '已保存' : '保存修改' }}
+                    <kbd class="shortcut-key">⌘S</kbd>
+                  </button>
+                </div>
+
+                <button class="btn btn-primary btn-md" :loading="confirmingSet" aria-label="确认入库用例集" @click="confirmCaseSet">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                  确认入库
+                </button>
+              </template>
+
+              <!-- 已确认入库状态下 -->
+              <template v-else>
+                <button class="btn btn-secondary btn-md" @click="exportExcel">
+                  导出 Excel
+                </button>
+                <button class="btn btn-secondary btn-md" @click="exportXMind">
+                  导出 XMind
+                </button>
+                <button class="btn btn-primary btn-md" @click="openLaunchDrawer">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polygon points="5 3 19 12 5 21 5 3" />
+                  </svg>
+                  发起基准评测
+                </button>
+              </template>
+            </div>
+          </div>
+
+          <!-- 批量操作置换模式顶栏 (In-Toolbar Transition) -->
+          <div v-else class="toolbar-batch">
+            <div class="batch-info">
+              <span class="batch-count">已选择 <b>{{ selectedCaseIds.length }}</b> / {{ cases.length }} 条用例</span>
+            </div>
+
+            <div class="grow"></div>
+
+            <div class="batch-actions">
+              <button class="btn btn-secondary btn-md" aria-label="批量映射到基准数据集" @click="openBatchMapModal">
+                批量映射到数据集 ({{ selectedCaseIds.length }})
+              </button>
+              <button class="btn btn-danger btn-md" aria-label="批量删除勾选用例" @click="batchDeleteCases">
+                批量删除 ({{ selectedCaseIds.length }})
+              </button>
+              <button class="btn btn-ghost btn-md" aria-label="取消选择" @click="uncheckAllCases">
+                取消选择
+              </button>
+            </div>
           </div>
         </div>
 
-        <!-- 2. 策略覆盖分布与自检全景概览栏 (Interactive Strategy Glance Bar) -->
-        <div class="strategy-glance-bar">
-          <div class="glance-strategy-left">
-            <span class="glance-label">策略覆盖:</span>
-            <!-- 策略过滤胶囊 -->
-            <div class="strategy-pills-row">
-              <span
-                class="strategy-pill all-pill"
-                :class="{ active: selectedStrategyFilter === '' }"
-                @click="selectedStrategyFilter = ''"
-              >
-                全部 <b class="num mono">{{ cases.length }}</b>
-              </span>
-              <span
-                v-for="st in strategyCounts"
-                :key="st.name"
+        <!-- 2. 六大策略分布胶囊与状态条 -->
+        <div class="metrics-strip">
+          <div class="strip-left">
+            <span class="strip-label">策略分布:</span>
+            <div class="strategy-pills-bar">
+              <button
+                v-for="(count, st) in strategyDistribution"
+                :key="st"
                 class="strategy-pill"
-                :class="[getStrategyTagClass(st.name), { active: selectedStrategyFilter === st.name }]"
-                :title="`点击筛选 ${st.name} 策略用例`"
-                @click="toggleStrategyFilter(st.name)"
+                :class="[`pill-${st}`, { active: filterStrategy === st }]"
+                @click="filterStrategy = filterStrategy === st ? '' : st"
               >
-                {{ st.name }} <b class="num mono">{{ st.count }}</b>
-              </span>
+                {{ st }}: <b>{{ count }}</b>
+              </button>
             </div>
+
+            <span class="strip-divider"></span>
+            <span v-if="isSixStrategyCovered" class="status-indicator-success">
+              ✓ 6 大策略完备覆盖
+            </span>
+            <span v-else class="status-indicator-warning">
+              缺失个别策略覆盖
+            </span>
           </div>
 
           <div class="grow"></div>
 
-          <!-- 自检状态与采纳率提示 -->
-          <div class="glance-strategy-right">
-            <span v-if="currentSet.checks?.length" class="badge badge-failed" style="font-size: 11px">
-              ⚠ 自检: {{ currentSet.checks.map(c => c.message).join('; ') }}
-            </span>
-            <span v-else-if="allStrategiesCovered" class="achievement-pill-case small">
-              <span class="sparkle">✨</span> 六大策略完整覆盖 (100%)
-            </span>
-            <span v-else class="st-ok small">
-              ✓ 策略自检通过
-            </span>
-            <span class="adoption-rate-pill">
-              采纳率: <b class="num mono">{{ adoptionRate }}%</b>
-            </span>
+          <!-- 键盘流提示 -->
+          <div class="keyboard-flow-hint">
+            <span class="kbd-hint"><kbd>↑↓←→</kbd> 移动光标</span>
+            <span class="kbd-hint"><kbd>Enter</kbd> 就地编辑</span>
+            <span class="kbd-hint"><kbd>Space</kbd> 勾选</span>
           </div>
         </div>
 
-        <!-- 3. 用例表格数据网格 (Impeccable Cases Grid) -->
-        <div class="ws-grid-container custom-scroll">
-          <table class="ds-table impeccable-grid">
+        <!-- 3. 用例表格：高性能虚拟网格 + 居中自定义多选框 (Hyper-Speed Virtual Grid) -->
+        <div ref="tableContainerRef" class="table-container custom-scroll" tabindex="0" @scroll="onTableScroll">
+          <!-- 顶部虚拟占位 -->
+          <div v-if="virtualTopPad > 0" :style="{ height: virtualTopPad + 'px' }"></div>
+
+          <table class="nordic-table">
             <thead>
               <tr>
-                <th class="th-chk" style="width: 40px">
-                  <input v-model="allCasesChecked" type="checkbox" class="custom-checkbox" aria-label="全选所有测试用例" />
-                </th>
-                <th style="width: 80px">策略</th>
-                <th style="width: 72px">级别</th>
-                <th style="min-width: 95px">业务模块</th>
-                <th style="min-width: 90px">子模块</th>
-                <th style="min-width: 105px">功能点</th>
-                <th style="min-width: 200px">
-                  用例名称 / 测试点 <span class="req-star">*</span>
-                </th>
-                <th style="min-width: 260px">
-                  预期结果 / 断言标准 <span class="req-star">*</span>
-                </th>
-                <th style="min-width: 140px">前置条件</th>
-                <!-- 自定义扩展列表头 -->
-                <th v-for="col in customCols" :key="col.key" class="custom-col-th" style="min-width: 120px">
-                  <div class="custom-th-content">
-                    <span class="custom-th-name">{{ col.name }}</span>
-                    <span class="custom-th-key">({{ col.key }})</span>
-                    <button class="custom-th-del" title="删除扩展列" :aria-label="`删除扩展列 ${col.name}`" @click.stop="removeCustomCol(col.key)">✕</button>
+                <th class="th-chk" style="width: 48px" title="全选用例" @click.stop="toggleAllCasesDirect">
+                  <div class="clean-chk-box" :class="{ checked: allCasesChecked }" role="checkbox" :aria-checked="allCasesChecked">
+                    <svg v-if="allCasesChecked" class="chk-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
                   </div>
                 </th>
-                <th style="width: 90px">映射状态</th>
+                <th style="width: 64px">#</th>
+                <th style="width: 100px">用例编码</th>
+                <th style="min-width: 220px">用例名称 / 测试问句 <span class="req-star">*</span></th>
+                <th style="width: 120px">所属模块</th>
+                <th style="width: 90px">测试策略</th>
+                <th style="width: 80px">优先级</th>
+                <th style="min-width: 220px">前置条件 / 输入数据</th>
+                <th style="min-width: 240px">预期断言 (Reference) <span class="req-star">*</span></th>
+                <th v-for="col in customCols" :key="col.key" class="custom-th" style="min-width: 120px">
+                  <div class="th-flex">
+                    <span>{{ col.name }}</span>
+                    <button class="th-del-btn" title="删除该列" :aria-label="`删除扩展列 ${col.name}`" @click.stop="removeCustomCol(col.key)">✕</button>
+                  </div>
+                </th>
+                <th style="width: 92px">映射状态</th>
                 <th style="width: 80px; text-align: right">操作</th>
               </tr>
             </thead>
 
             <tbody>
+              <!-- 虚拟切片用例行 (50px 舒适大行高) -->
               <tr
-                v-for="(c, idx) in displayedCases"
-                :key="c.id"
-                class="grid-row"
-                :class="{ 'row-checked': selectedCaseIds.includes(c.id), 'row-incomplete': !c.name.trim() || !c.expected.trim() }"
-                @contextmenu.prevent="onRowContextMenu($event, getOriginalCaseIndex(c))"
+                v-for="(c, virtualIdx) in virtualRenderCases"
+                :key="c.id || c.code"
+                class="data-row"
+                :class="{
+                  'row-checked': isCaseChecked(c),
+                  'row-incomplete': !c.name.trim() || !c.expected_result.trim(),
+                  'row-focused': focusedCell?.rowIdx === getDisplayedIndex(c)
+                }"
+                @contextmenu.prevent="openCtxMenu($event, 'row', '', getOriginalCaseIndex(c))"
                 @dblclick="openCaseEditModal(getOriginalCaseIndex(c))"
               >
-                <!-- 勾选列 -->
-                <td class="td-chk">
-                  <input v-model="selectedCaseIds" type="checkbox" :value="c.id" class="custom-checkbox" :aria-label="`勾选用例 ${c.name || c.id}`" />
+                <!-- 居中自定义多选框列 (支持直击与 Shift 连选) -->
+                <td class="td-chk" :class="{ 'cell-cursor': isCellCursor(c, 'chk') }" @click.stop="handleCaseCheckClick(c, $event)">
+                  <div class="clean-chk-box" :class="{ checked: isCaseChecked(c) }" :title="`勾选用例 ${c.code}（支持 Shift 连选）`" role="checkbox" :aria-checked="isCaseChecked(c)">
+                    <svg v-if="isCaseChecked(c)" class="chk-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  </div>
                 </td>
 
-                <!-- 策略列 (可切换下拉) -->
-                <td class="cell-edit" @click="editCell(c, 'strategy')">
-                  <n-select
-                    v-if="editingCell?.row === c && editingCell?.field === 'strategy'"
-                    v-model:value="c.strategy"
-                    :options="strategyOptions"
-                    size="small"
-                    autofocus
-                    @update:value="finishEditing"
-                    @blur="finishEditing"
-                    @click.stop
-                  />
-                  <span v-else class="strategy-badge" :class="getStrategyTagClass(c.strategy)">{{ c.strategy }}</span>
+                <!-- 行号 -->
+                <td class="mono td-num" :class="{ 'cell-cursor': isCellCursor(c, 'row_no') }" @click="setCellCursor(c, 'row_no')">
+                  {{ getDisplayedIndex(c) + 1 }}
                 </td>
 
-                <!-- 级别列 (可切换下拉) -->
-                <td class="cell-edit" @click="editCell(c, 'priority')">
-                  <n-select
-                    v-if="editingCell?.row === c && editingCell?.field === 'priority'"
-                    v-model:value="c.priority"
-                    :options="priorityOptions"
-                    size="small"
-                    autofocus
-                    @update:value="finishEditing"
-                    @blur="finishEditing"
-                    @click.stop
-                  />
-                  <span v-else class="prio-pill" :class="`prio-${c.priority}`">{{ c.priority }}</span>
+                <!-- 用例编码 (Mono) -->
+                <td class="mono-bold" :class="{ 'cell-cursor': isCellCursor(c, 'code') }" @click="setCellCursor(c, 'code')">
+                  {{ c.code }}
                 </td>
 
-                <!-- 模块 -->
-                <td class="cell-edit" @click="editCell(c, 'module')">
-                  <input
-                    v-if="editingCell?.row === c && editingCell?.field === 'module'"
-                    v-model="c.module"
-                    class="cell-input active"
-                    placeholder="业务模块..."
-                    :aria-label="`编辑用例 ${c.id} 业务模块`"
-                    autofocus
-                    @blur="finishEditing"
-                    @keyup.enter="finishEditing"
-                    @keyup.esc="cancelEditing"
-                  />
-                  <div v-else class="cell-text font-medium">{{ c.module }}</div>
-                </td>
-
-                <!-- 子模块 -->
-                <td class="cell-edit" @click="editCell(c, 'submodule')">
-                  <input
-                    v-if="editingCell?.row === c && editingCell?.field === 'submodule'"
-                    v-model="c.submodule"
-                    class="cell-input active"
-                    placeholder="子模块..."
-                    :aria-label="`编辑用例 ${c.id} 子模块`"
-                    autofocus
-                    @blur="finishEditing"
-                    @keyup.enter="finishEditing"
-                    @keyup.esc="cancelEditing"
-                  />
-                  <div v-else class="cell-text" :class="{ empty: !c.submodule }">{{ c.submodule || '—' }}</div>
-                </td>
-
-                <!-- 功能点 -->
-                <td class="cell-edit" @click="editCell(c, 'feature_point')">
-                  <input
-                    v-if="editingCell?.row === c && editingCell?.field === 'feature_point'"
-                    v-model="c.feature_point"
-                    class="cell-input active"
-                    placeholder="功能点..."
-                    :aria-label="`编辑用例 ${c.id} 功能点`"
-                    autofocus
-                    @blur="finishEditing"
-                    @keyup.enter="finishEditing"
-                    @keyup.esc="cancelEditing"
-                  />
-                  <div v-else class="cell-text" :class="{ empty: !c.feature_point }">{{ c.feature_point || '—' }}</div>
-                </td>
-
-                <!-- 用例名称 -->
-                <td class="cell-edit" :class="{ 'cell-invalid': !c.name.trim() }" @click="editCell(c, 'name')">
+                <!-- 用例名称 / 问句 (14px 舒适字阶) -->
+                <td class="cell-edit" :class="{ 'cell-invalid': !c.name.trim(), 'cell-cursor': isCellCursor(c, 'name') }" @click="handleCellClick(c, 'name')">
                   <input
                     v-if="editingCell?.row === c && editingCell?.field === 'name'"
                     v-model="c.name"
-                    class="cell-input active"
+                    class="inline-input"
                     placeholder="输入用例名称..."
-                    :aria-label="`编辑用例 ${c.id} 名称`"
+                    :aria-label="`编辑用例 ${c.code} 名称`"
                     autofocus
                     @blur="finishEditing"
                     @keyup.enter="finishEditing"
                     @keyup.esc="cancelEditing"
                   />
-                  <div v-else class="cell-text font-semibold" :class="{ placeholder: !c.name.trim() }">
-                    {{ c.name || '（未命名的测试点）' }}
+                  <div v-else class="cell-content primary-text" :class="{ empty: !c.name.trim() }" v-html="highlightMatch(c.name || '（空用例名称 · 点击录入）')"></div>
+                </td>
+
+                <!-- 所属模块 -->
+                <td class="cell-edit" :class="{ 'cell-cursor': isCellCursor(c, 'module') }" @click="handleCellClick(c, 'module')">
+                  <input
+                    v-if="editingCell?.row === c && editingCell?.field === 'module'"
+                    v-model="c.module"
+                    class="inline-input"
+                    placeholder="所属模块..."
+                    :aria-label="`编辑用例 ${c.code} 模块`"
+                    autofocus
+                    @blur="finishEditing"
+                    @keyup.enter="finishEditing"
+                    @keyup.esc="cancelEditing"
+                  />
+                  <div v-else class="cell-content" v-html="highlightMatch(c.module || '通用')"></div>
+                </td>
+
+                <!-- 测试策略徽标 -->
+                <td class="cell-edit" :class="{ 'cell-cursor': isCellCursor(c, 'strategy') }" @click="handleCellClick(c, 'strategy')">
+                  <select
+                    v-if="editingCell?.row === c && editingCell?.field === 'strategy'"
+                    v-model="c.strategy"
+                    class="inline-select"
+                    :aria-label="`选择用例 ${c.code} 策略`"
+                    autofocus
+                    @blur="finishEditing"
+                    @change="finishEditing"
+                    @keyup.esc="cancelEditing"
+                  >
+                    <option v-for="s in STRATEGIES" :key="s" :value="s">{{ s }}</option>
+                  </select>
+                  <div v-else class="cell-content">
+                    <span class="strategy-badge" :class="`badge-${c.strategy}`">{{ c.strategy }}</span>
                   </div>
                 </td>
 
-                <!-- 预期结果 -->
-                <td class="cell-edit" :class="{ 'cell-invalid': !c.expected.trim() }" @click="editCell(c, 'expected')">
-                  <input
-                    v-if="editingCell?.row === c && editingCell?.field === 'expected'"
-                    v-model="c.expected"
-                    class="cell-input active"
-                    placeholder="预期校验结果..."
-                    :aria-label="`编辑用例 ${c.id} 预期结果`"
+                <!-- 优先级 -->
+                <td class="cell-edit" :class="{ 'cell-cursor': isCellCursor(c, 'priority') }" @click="handleCellClick(c, 'priority')">
+                  <select
+                    v-if="editingCell?.row === c && editingCell?.field === 'priority'"
+                    v-model="c.priority"
+                    class="inline-select"
+                    :aria-label="`选择用例 ${c.code} 优先级`"
                     autofocus
                     @blur="finishEditing"
-                    @keyup.enter="finishEditing"
+                    @change="finishEditing"
                     @keyup.esc="cancelEditing"
-                  />
-                  <div v-else class="cell-text" :class="{ placeholder: !c.expected.trim() }">
-                    {{ c.expected || '（待输入预期结果）' }}
+                  >
+                    <option v-for="p in PRIORITIES" :key="p" :value="p">{{ p }}</option>
+                  </select>
+                  <div v-else class="cell-content">
+                    <span class="priority-badge" :class="`prio-${c.priority}`">{{ c.priority }}</span>
                   </div>
                 </td>
 
-                <!-- 前置条件 -->
-                <td class="cell-edit" @click="editCell(c, 'precondition')">
+                <!-- 前置条件 / 输入数据 -->
+                <td class="cell-edit" :class="{ 'cell-cursor': isCellCursor(c, 'preconditions') }" @click="handleCellClick(c, 'preconditions')">
                   <input
-                    v-if="editingCell?.row === c && editingCell?.field === 'precondition'"
-                    v-model="c.precondition"
-                    class="cell-input active"
-                    placeholder="前置条件..."
-                    :aria-label="`编辑用例 ${c.id} 前置条件`"
+                    v-if="editingCell?.row === c && editingCell?.field === 'preconditions'"
+                    v-model="c.preconditions"
+                    class="inline-input"
+                    placeholder="输入前置条件..."
+                    :aria-label="`编辑用例 ${c.code} 前置条件`"
                     autofocus
                     @blur="finishEditing"
                     @keyup.enter="finishEditing"
                     @keyup.esc="cancelEditing"
                   />
-                  <div v-else class="cell-text tertiary-text">{{ c.precondition || '无' }}</div>
+                  <div v-else class="cell-content mono-sm" :class="{ placeholder: !c.preconditions }" v-html="highlightMatch(c.preconditions || '—')"></div>
+                </td>
+
+                <!-- 预期断言 (14px 舒适字阶) -->
+                <td class="cell-edit" :class="{ 'cell-invalid': !c.expected_result.trim(), 'cell-cursor': isCellCursor(c, 'expected_result') }" @click="handleCellClick(c, 'expected_result')">
+                  <input
+                    v-if="editingCell?.row === c && editingCell?.field === 'expected_result'"
+                    v-model="c.expected_result"
+                    class="inline-input"
+                    placeholder="输入预期断言..."
+                    :aria-label="`编辑用例 ${c.code} 预期断言`"
+                    autofocus
+                    @blur="finishEditing"
+                    @keyup.enter="finishEditing"
+                    @keyup.esc="cancelEditing"
+                  />
+                  <div v-else class="cell-content" :class="{ empty: !c.expected_result.trim() }" v-html="highlightMatch(c.expected_result || '（空预期断言 · 点击录入）')"></div>
                 </td>
 
                 <!-- 自定义扩展列 -->
-                <td v-for="col in customCols" :key="col.key" class="cell-edit" @click="editExtraCell(c, col.key)">
+                <td v-for="col in customCols" :key="col.key" class="cell-edit" :class="{ 'cell-cursor': isCellCursor(c, col.key) }" @click="handleCellClick(c, col.key)">
                   <input
-                    v-if="editingExtraCell?.row === c && editingExtraCell?.key === col.key"
-                    :value="getCaseExtra(c, col.key)"
-                    class="cell-input active"
-                    :placeholder="col.name"
-                    :aria-label="`编辑用例 ${c.id} ${col.name}`"
+                    v-if="editingCell?.row === c && editingCell?.field === col.key && c.extras"
+                    v-model="c.extras[col.key]"
+                    class="inline-input"
+                    :placeholder="`输入 ${col.name}...`"
+                    :aria-label="`编辑用例 ${c.code} ${col.name}`"
                     autofocus
-                    @input="setCaseExtra(c, col.key, ($event.target as HTMLInputElement).value)"
-                    @blur="finishExtraEditing"
-                    @keyup.enter="finishExtraEditing"
-                    @keyup.esc="cancelExtraEditing"
+                    @blur="finishEditing"
+                    @keyup.enter="finishEditing"
+                    @keyup.esc="cancelEditing"
                   />
-                  <div v-else class="cell-text" :class="{ empty: !getCaseExtra(c, col.key) }">
+                  <div v-else class="cell-content" :class="{ placeholder: !getCaseExtra(c, col.key) }">
                     {{ getCaseExtra(c, col.key) || '—' }}
                   </div>
                 </td>
 
                 <!-- 映射状态 -->
                 <td>
-                  <span v-if="c.mapped" class="badge badge-succeeded">
-                    <span class="bdot"></span> 已映射
-                  </span>
-                  <span v-else class="badge badge-awaiting_case_confirm">
-                    <span class="bdot"></span> 待补全
-                  </span>
+                  <span v-if="c.target_dataset_id" class="status-tag-green" title="已映射至数据集">已映射</span>
+                  <span v-else class="status-tag-clean" title="未映射">未映射</span>
                 </td>
 
                 <!-- 操作区 -->
                 <td class="td-actions">
-                  <div class="row-actions-cluster">
-                    <button class="action-btn" title="详细弹窗编辑" :aria-label="`详细弹窗编辑用例 ${c.id}`" @click.stop="openCaseEditModal(getOriginalCaseIndex(c))">
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
+                  <div class="action-links">
+                    <button class="icon-link" title="详细编辑" :aria-label="`详细编辑用例 ${c.code}`" @click.stop="openCaseEditModal(getOriginalCaseIndex(c))">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
                     </button>
-                    <button v-if="currentSet.status !== 'confirmed'" class="action-btn danger" title="删除用例" :aria-label="`删除用例 ${c.id}`" @click.stop="deleteCase(getOriginalCaseIndex(c))">
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
+                    <button class="icon-link danger" title="删除用例" :aria-label="`删除用例 ${c.code}`" @click.stop="deleteCase(getOriginalCaseIndex(c))">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
                     </button>
                   </div>
                 </td>
               </tr>
 
-              <!-- 空态 -->
+              <!-- 空列表提示 -->
               <tr v-if="!displayedCases.length">
-                <td :colspan="11 + customCols.length" class="empty-table-cell">
-                  <div class="empty-table-notice">
-                    <span v-if="selectedStrategyFilter">当前策略「{{ selectedStrategyFilter }}」暂无用例，点击上方「全部」查看所有。</span>
-                    <span v-else>当前用例集暂无用例，点击上方「新增用例」或「✨ AI 生成用例集」开始生成。</span>
+                <td :colspan="11 + customCols.length" class="empty-cell">
+                  <div class="empty-message">
+                    <span v-if="gridSearch.trim()">未找到匹配「{{ gridSearch.trim() }}」的测试用例。</span>
+                    <span v-else-if="filterStrategy">当前策略「{{ filterStrategy }}」下暂无用例。</span>
+                    <span v-else>当前用例集暂无用例，点击上方「新增用例」或「PRD 推导向导」开始录入。</span>
                   </div>
                 </td>
               </tr>
             </tbody>
           </table>
+
+          <!-- 底部虚拟占位 -->
+          <div v-if="virtualBottomPad > 0" :style="{ height: virtualBottomPad + 'px' }"></div>
         </div>
+      </main>
 
-        <!-- 4. 浮动式批量操作与资产映射坞 (Floating Batch Action & Mapping Dock) -->
-        <transition name="dock-slide">
-          <div v-if="selectedCaseIds.length > 0" class="floating-batch-dock">
-            <div class="dock-content">
-              <span class="dock-count-badge">已选 <b class="num mono">{{ selectedCaseIds.length }}</b> / {{ cases.length }} 条</span>
-              <div class="dock-divider"></div>
-
-              <!-- 批量删除 -->
-              <button
-                v-if="currentSet.status !== 'confirmed'"
-                class="btn btn-danger-soft btn-sm"
-                aria-label="批量删除勾选用例"
-                @click="batchDeleteCases"
-              >
-                批量删除 ({{ selectedCaseIds.length }})
-              </button>
-
-              <!-- 批量映射目标 -->
-              <div class="dock-map-wrapper">
-                <span class="dock-map-label">{{ modeMappingLabel }}:</span>
-                <select v-model="mapTargetId" class="select dock-map-select" :disabled="mappingTargets.length === 0" aria-label="选择映射目标">
-                  <option value="">选择目标数据集/QA</option>
-                  <option v-for="target in mappingTargets" :key="target.id" :value="target.id">{{ target.name }}</option>
-                </select>
-                <button class="btn btn-primary btn-sm" :disabled="!mapTargetId" aria-label="执行批量映射" @click="handleBatchMap">
-                  执行映射
-                </button>
-              </div>
-
-              <div class="dock-divider"></div>
-              <button class="dock-close-btn" title="取消全部勾选" aria-label="取消勾选全部用例" @click="selectedCaseIds = []">✕</button>
-            </div>
-          </div>
-        </transition>
-      </div>
-
-      <!-- ─── 空态页面引导 ─── -->
-      <div v-else class="workspace-main empty-workbench">
-        <div class="empty-workbench-container">
-          <div class="empty-workbench-icon">
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
-              <rect x="8" y="2" width="8" height="4" rx="1" ry="1" />
-              <path d="M9 14l2 2 4-4" />
+      <!-- 空态页面 -->
+      <main v-else class="nordic-main empty-main">
+        <div class="empty-box">
+          <div class="empty-icon-wrapper">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <polyline points="14 2 14 8 20 8" />
             </svg>
           </div>
-          <h3>尚未选择或创建测试用例集</h3>
-          <p class="empty-sub">你可以通过粘贴 PRD 文本由 AI 按六大策略生成候选用例，或导入已有 Excel 文件进行管理。</p>
-          <div class="empty-actions-row">
-            <button class="btn btn-ai" @click="openAiGenWizard">
-              <span class="sparkle">✨</span> AI 智能生成用例集
+          <h3>尚未选择或创建用例集</h3>
+          <p>你可以基于 PRD / 接口需求文档一键推导六大策略测试用例，或新建空集手动设计用例。</p>
+          <div class="empty-buttons">
+            <button class="btn btn-primary btn-md" @click="openAiGenDrawer">
+              PRD 用例推导向导
             </button>
-            <button class="btn btn-secondary" @click="openImportModal()">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>
-              导入 Excel 用例
-            </button>
-            <button class="btn btn-sign" @click="handleCreateCaseSet()">
+            <button class="btn btn-ghost btn-md" @click="createEmptyCaseSet">
               + 新建空用例集
             </button>
           </div>
         </div>
-      </div>
+      </main>
     </div>
 
-    <!-- ─── 弹窗与抽屉 ─── -->
-    <!-- 新建用例集弹窗 -->
-    <n-modal v-model:show="showCreateSetModal" preset="card" title="新建测试用例集" style="width: 440px; max-width: calc(100vw - 24px)">
-      <div class="field">
-        <label class="field-label">用例集名称 <span class="req">*</span></label>
-        <n-input v-model:value="newSetName" placeholder="例如：支付模块核心回归用例" autofocus @keyup.enter="createCaseSet" />
-      </div>
-      <template #footer>
-        <div style="display: flex; justify-content: flex-end; gap: 8px">
-          <n-button @click="showCreateSetModal = false">取消</n-button>
-          <n-button type="primary" :loading="creatingSet" @click="createCaseSet">立即创建</n-button>
-        </div>
-      </template>
-    </n-modal>
-
-    <!-- Excel 导入弹窗 -->
-    <ImportCasesExcelModal
-      v-model:show="showImportModal"
-      :current-set="currentSet"
-      :folder-id="importFolderId"
-      @imported="onExcelImported"
-    />
-
-    <!-- 用例结构化编辑弹窗 -->
-    <n-modal v-model:show="showEditCaseModal" preset="card" :title="`详细编辑用例 · ${editDraft.id || '新用例'}`" style="width: 660px; max-width: calc(100vw - 24px)">
-      <div class="form-row">
-        <div class="field">
-          <label class="field-label">测试策略 (Strategy) <span class="req">*</span></label>
-          <n-select v-model:value="editDraft.strategy" :options="strategyOptions" />
-        </div>
-        <div class="field">
-          <label class="field-label">优先级 (Priority) <span class="req">*</span></label>
-          <n-select v-model:value="editDraft.priority" :options="priorityOptions" />
-        </div>
-      </div>
-      <div class="form-row">
-        <div class="field">
-          <label class="field-label">所属业务模块 <span class="req">*</span></label>
-          <n-input v-model:value="editDraft.module" placeholder="如 登录 / 支付" />
-        </div>
-        <div class="field">
-          <label class="field-label">子模块</label>
-          <n-input v-model:value="editDraft.submodule" placeholder="可选，如 认证 / 结算" />
-        </div>
-      </div>
-      <div class="form-row">
-        <div class="field">
-          <label class="field-label">功能点</label>
-          <n-input v-model:value="editDraft.feature_point" placeholder="可选，如 验证码 / 余额扣减" />
-        </div>
-        <div class="field">
-          <label class="field-label">用例名称 / 测试点 <span class="req">*</span></label>
-          <n-input v-model:value="editDraft.name" placeholder="一句话描述被测目标" />
-        </div>
-      </div>
-      <div class="field">
-        <label class="field-label">预期结果 / 断言标准 (Expected Result) <span class="req">*</span></label>
-        <n-input v-model:value="editDraft.expected" type="textarea" :autosize="{ minRows: 3, maxRows: 6 }" placeholder="可校验的预期行为或断言..." />
-      </div>
-      <div class="field">
-        <label class="field-label">前置条件</label>
-        <n-input v-model:value="editDraft.precondition" placeholder="可选，如 账号状态正常" />
-      </div>
-      <!-- 自定义扩展属性区 -->
-      <template v-if="customCols.length">
-        <div class="rail-label" style="margin: 12px 0 8px">自定义扩展属性</div>
-        <div class="form-row">
-          <div v-for="col in customCols" :key="col.key" class="field">
-            <label class="field-label">{{ col.name }} ({{ col.key }})</label>
-            <n-input
-              :value="String(editDraft[col.key] ?? '')"
-              @update:value="editDraft[col.key] = $event"
-            />
+    <!-- ─── 右侧滑出抽屉：PRD 用例推导向导 ─── -->
+    <n-drawer v-model:show="aiGen.show" :width="drawerWidth" placement="right">
+      <n-drawer-content title="PRD 用例智能推导向导" closable>
+        <div class="drawer-step-bar">
+          <div class="step-badge" :class="{ active: aiGen.step === 1, done: aiGen.step === 2 }">
+            <span class="step-idx">1</span>
+            <span>PRD 需求与策略配置</span>
           </div>
-        </div>
-      </template>
-      <template #footer>
-        <div style="display: flex; justify-content: flex-end; gap: 8px">
-          <n-button @click="showEditCaseModal = false">取消</n-button>
-          <n-button type="primary" @click="saveCaseEdit">保存用例修改</n-button>
-        </div>
-      </template>
-    </n-modal>
-
-    <!-- 新增扩展字段弹窗 -->
-    <n-modal v-model:show="showAddColModal" preset="card" title="新增用例自定义字段 (Custom Field)" style="width: 460px; max-width: calc(100vw - 24px)">
-      <div class="field">
-        <label class="field-label">字段 Key (英文字母 / 下划线) <span class="req">*</span></label>
-        <n-input v-model:value="newColKey" class="mono" placeholder="如 assert_type, env_tag" />
-      </div>
-      <div class="field">
-        <label class="field-label">显示名称 <span class="req">*</span></label>
-        <n-input v-model:value="newColName" placeholder="如 断言方式, 环境要求" />
-      </div>
-      <template #footer>
-        <div style="display: flex; justify-content: flex-end; gap: 8px">
-          <n-button @click="showAddColModal = false">取消</n-button>
-          <n-button type="primary" :loading="addingCol" @click="addCustomCol">确认添加</n-button>
-        </div>
-      </template>
-    </n-modal>
-
-    <!-- 通用单输入弹窗 -->
-    <n-modal v-model:show="promptState.show" preset="card" :title="promptState.title" style="width: 420px; max-width: calc(100vw - 24px)">
-      <div class="field">
-        <n-input v-model:value="promptState.value" :placeholder="promptState.placeholder" autofocus @keyup.enter="submitPrompt" />
-      </div>
-      <template #footer>
-        <div style="display: flex; justify-content: flex-end; gap: 8px">
-          <n-button @click="promptState.show = false">取消</n-button>
-          <n-button type="primary" @click="submitPrompt">确定</n-button>
-        </div>
-      </template>
-    </n-modal>
-
-    <!-- AI 生成用例集两步向导 -->
-    <n-modal v-model:show="showAiGenModal" preset="card" title="✨ AI 智能生成测试用例集" style="width: 780px; max-width: calc(100vw - 24px)" :mask-closable="false">
-      <!-- 步骤指示器 -->
-      <div class="wizard-steps-header">
-        <div class="wizard-step-item" :class="{ active: aiStep === 'config', done: aiStep === 'preview' }">
-          <span class="step-num">1</span>
-          <span class="step-text">需求输入与六大策略配置</span>
-        </div>
-        <div class="step-line" :class="{ active: aiStep === 'preview' }"></div>
-        <div class="wizard-step-item" :class="{ active: aiStep === 'preview' }">
-          <span class="step-num">2</span>
-          <span class="step-text">候选用例审核与采纳</span>
-        </div>
-      </div>
-
-      <!-- Step 1：配置与需求输入 -->
-      <div v-show="aiStep === 'config'" class="wizard-step-body">
-        <div class="field">
-          <label class="field-label">预设 PRD 业务需求模板</label>
-          <n-select v-model:value="aiPresetIdx" :options="aiPresetOptions" />
-        </div>
-        <div class="field">
-          <label class="field-label">PRD 业务需求描述 / 接口定义 (Source Material) <span class="req">*</span></label>
-          <n-input v-model:value="aiSource" type="textarea" :autosize="{ minRows: 4, maxRows: 8 }" placeholder="支持粘贴 Markdown 文本、接口列表或业务规则描述..." />
-        </div>
-
-        <div class="rail-label" style="margin: 10px 0 8px">六大测试策略分布配比与规模控制</div>
-        <div class="ai-weights-grid">
-          <div v-for="s in STRATEGY_LIST" :key="s" class="weight-card">
-            <div class="weight-title">{{ s }}</div>
-            <n-input-number v-model:value="aiWeights[s]" :min="0" :max="100" size="small">
-              <template #suffix>%</template>
-            </n-input-number>
+          <span class="step-divider-line"></span>
+          <div class="step-badge" :class="{ active: aiGen.step === 2 }">
+            <span class="step-idx">2</span>
+            <span>候选用例审核与采纳</span>
           </div>
         </div>
 
-        <div class="form-row" style="margin-top: 10px">
+        <div v-show="aiGen.step === 1" class="drawer-body">
           <div class="field">
-            <label class="field-label">目标生成规模 (<b class="num mono">{{ aiCount }}</b> 条)</label>
-            <n-slider v-model:value="aiCount" :min="6" :max="45" :step="1" style="margin-top: 8px" />
-            <span v-if="aiCount > 30" class="field-hint" style="color: var(--accent-warning)">⚠ 大规模生成可能耗时较长，单次上限 45 条</span>
-            <span v-else class="field-hint">防爆保护：单次生成上限 45 条</span>
+            <label class="field-label">PRD 需求预设模板</label>
+            <n-select v-model:value="aiGen.preset" :options="presetOptions" @update:value="onPresetChange" />
           </div>
+
           <div class="field">
-            <label class="field-label">用例结构属性生成</label>
-            <div class="row wrap" style="gap: 12px; font-size: 12px; margin-top: 6px">
-              <n-checkbox v-model:checked="aiStruct.precondition">前置条件</n-checkbox>
-              <n-checkbox v-model:checked="aiStruct.steps">测试执行步骤</n-checkbox>
-              <n-checkbox v-model:checked="aiStruct.expected">预期断言</n-checkbox>
-              <n-checkbox v-model:checked="aiStruct.autoPriority">HX/FHX 自动定级</n-checkbox>
+            <label class="field-label">PRD 需求描述 / 业务规则 / 接口规范 <span class="req">*</span></label>
+            <n-input v-model:value="aiGen.prdText" class="mono" type="textarea" :autosize="{ minRows: 4, maxRows: 8 }" placeholder="粘贴需求文档段落、状态转移逻辑或 OpenAPI 规范..." />
+          </div>
+
+          <div class="divider-title">推导策略覆盖</div>
+          <div class="field">
+            <div class="row wrap" style="gap: 12px; font-size: 13.5px">
+              <n-checkbox v-for="s in STRATEGIES" :key="s" :checked="aiGen.strategies.includes(s)" @update:checked="toggleStrategy(s)">
+                {{ s }}策略
+              </n-checkbox>
+            </div>
+          </div>
+
+          <div class="divider-title">生成参数</div>
+          <div class="form-row-3">
+            <div class="field">
+              <label class="field-label">用例规模 (<b class="mono">{{ aiGen.count }}</b> 条)</label>
+              <n-slider v-model:value="aiGen.count" :min="4" :max="30" :step="1" />
+            </div>
+            <div class="field">
+              <label class="field-label">推理模型</label>
+              <n-select
+                v-model:value="aiGen.model"
+                :options="[
+                  { label: 'gpt-4.1 (推荐)', value: 'gpt-4.1' },
+                  { label: 'claude-sonnet-4.5', value: 'claude-sonnet-4.5' },
+                  { label: 'o4 (深度推理)', value: 'o4' },
+                ]"
+              />
+            </div>
+            <div class="field">
+              <label class="field-label">发散度 Temperature</label>
+              <n-select
+                v-model:value="aiGen.temperature"
+                :options="[
+                  { label: '0.2 (严谨收敛)', value: 0.2 },
+                  { label: '0.5 (标准)', value: 0.5 },
+                  { label: '0.8 (发散)', value: 0.8 },
+                ]"
+              />
             </div>
           </div>
         </div>
-      </div>
 
-      <!-- Step 2：候选用例策略分布与交互式预览 -->
-      <div v-show="aiStep === 'preview'" class="wizard-step-body">
-        <div class="strategy-banner mb8" style="border-radius: 8px; border: 1px solid var(--border-subtle)">
-          <span class="tertiary" style="font-weight: 600">策略分布:</span>
-          <div class="row wrap" style="gap: 6px">
-            <span v-for="st in aiStrategyCounts" :key="st.name" class="strategy-badge" :class="getStrategyTagClass(st.name)">
-              {{ st.name }} <b class="num mono">{{ st.count }}</b>
-            </span>
+        <div v-show="aiGen.step === 2" class="drawer-body">
+          <div class="row-between mb8">
+            <span class="bold" style="font-size: 13.5px">候选用例列表 (共 {{ aiGen.candidates.length }} 条)</span>
+            <button class="link-btn" @click="toggleAllCandidates">全选 / 全不选</button>
           </div>
-          <span class="grow"></span>
-          <span class="st-ok small">✓ 6 大策略覆盖</span>
+          <div class="preview-box custom-scroll">
+            <table class="nordic-table preview-table">
+              <thead>
+                <tr>
+                  <th class="th-chk" style="width: 40px" title="全选 / 全不选" @click.stop="toggleAllCandidates">
+                    <div class="clean-chk-box" :class="{ checked: aiAllSelected }">
+                      <svg v-if="aiAllSelected" class="chk-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                    </div>
+                  </th>
+                  <th style="width: 90px">策略</th>
+                  <th style="min-width: 160px">用例名称</th>
+                  <th style="min-width: 180px">预期断言</th>
+                  <th style="width: 50px">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(cand, ci) in aiGen.candidates" :key="ci">
+                  <td class="td-chk" @click.stop="cand.selected = !cand.selected">
+                    <div class="clean-chk-box" :class="{ checked: cand.selected }">
+                      <svg v-if="cand.selected" class="chk-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                    </div>
+                  </td>
+                  <td><span class="strategy-badge" :class="`badge-${cand.strategy}`">{{ cand.strategy }}</span></td>
+                  <td><input v-model="cand.name" class="inline-input-clean" /></td>
+                  <td><input v-model="cand.expected_result" class="inline-input-clean" /></td>
+                  <td><button class="link-btn danger" @click="aiGen.candidates.splice(ci, 1)">移除</button></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
-        <div class="row-between mb8">
-          <span style="font-weight: 600; font-size: 13px">候选用例列表（已生成 <b class="num mono">{{ aiCandidates.length }}</b> 条，可点击修改）</span>
-          <button class="link-btn" @click="toggleAllCandidates(!allCandidatesChecked)">全选 / 全不选</button>
+
+        <template #footer>
+          <div class="drawer-footer-row">
+            <n-button v-if="aiGen.step === 2" @click="aiGen.step = 1">← 返回调整 PRD</n-button>
+            <span v-else></span>
+            <div class="row" style="gap: 8px">
+              <n-button @click="aiGen.show = false">取消</n-button>
+              <n-button v-if="aiGen.step === 1" type="primary" :loading="aiGen.generating" @click="runAiGenerateCases">
+                {{ aiGen.generating ? '正在推导用例中…' : '推导候选用例 →' }}
+              </n-button>
+              <n-button v-else type="primary" :disabled="aiSelectedCount === 0" @click="commitAiCandidates">
+                采纳导入用例集 ({{ aiSelectedCount }} 条)
+              </n-button>
+            </div>
+          </div>
+        </template>
+      </n-drawer-content>
+    </n-drawer>
+
+    <!-- 弹窗与抽屉组件 (全居中显示) -->
+    <BenchmarkLaunchDrawer
+      v-model:show="showLaunchDrawer"
+      :default-dataset-id="(currentSet as any)?.target_dataset_id"
+      @success="handleLaunchSuccess"
+    />
+
+    <n-dropdown
+      trigger="manual"
+      placement="bottom-start"
+      :show="ctxMenu.show"
+      :x="ctxMenu.x"
+      :y="ctxMenu.y"
+      :options="ctxMenuOptions"
+      @select="handleCtxSelect"
+      @clickoutside="closeCtxMenu"
+    />
+
+    <n-modal v-model:show="caseEdit.show" preset="card" :title="`编辑用例 ${caseEdit.code}`" class="center-dialog-card" style="width: 660px; max-width: calc(100vw - 32px)">
+      <div class="form-row">
+        <div class="field">
+          <label class="field-label">用例编码</label>
+          <n-input v-model:value="caseEdit.code" class="mono" readonly />
         </div>
-        <div class="preview-table-wrapper custom-scroll">
-          <table class="ds-table">
-            <thead>
-              <tr>
-                <th style="width: 36px"><input v-model="allCandidatesChecked" type="checkbox" aria-label="全选候选列表" /></th>
-                <th style="width: 65px">策略</th>
-                <th style="width: 60px">级别</th>
-                <th style="width: 90px">模块</th>
-                <th>用例名称</th>
-                <th>预期断言结果</th>
-                <th style="width: 60px">操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="(cand, ci) in aiCandidates" :key="cand.id">
-                <td><input v-model="cand.selected" type="checkbox" :aria-label="`选择候选 ${cand.name}`" /></td>
-                <td><span class="strategy-badge" :class="getStrategyTagClass(cand.strategy)">{{ cand.strategy }}</span></td>
-                <td><span class="prio-pill" :class="`prio-${cand.priority}`">{{ cand.priority }}</span></td>
-                <td><input v-model="cand.module" class="cell-input" style="font-size: 12px" aria-label="编辑候选模块" /></td>
-                <td><input v-model="cand.name" class="cell-input" style="font-size: 12px" aria-label="编辑候选名称" /></td>
-                <td><input v-model="cand.expected" class="cell-input" style="font-size: 12px" aria-label="编辑候选预期" /></td>
-                <td><button class="link-btn danger" style="font-size: 11px" aria-label="剔除此条候选" @click="removeCandidate(ci)">剔除</button></td>
-              </tr>
-            </tbody>
-          </table>
+        <div class="field">
+          <label class="field-label">所属模块</label>
+          <n-input v-model:value="caseEdit.module" placeholder="所属业务模块" />
         </div>
       </div>
-
+      <div class="field">
+        <label class="field-label">用例名称 / 问句 <span class="req">*</span></label>
+        <n-input v-model:value="caseEdit.name" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }" placeholder="输入用例标题或测试问句..." />
+      </div>
+      <div class="form-row">
+        <div class="field">
+          <label class="field-label">测试策略</label>
+          <n-select v-model:value="caseEdit.strategy" :options="STRATEGIES.map(s => ({ label: s, value: s }))" />
+        </div>
+        <div class="field">
+          <label class="field-label">优先级</label>
+          <n-select v-model:value="caseEdit.priority" :options="PRIORITIES.map(p => ({ label: p, value: p }))" />
+        </div>
+      </div>
+      <div class="field">
+        <label class="field-label">前置条件 / 输入数据</label>
+        <n-input v-model:value="caseEdit.preconditions" class="mono" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }" placeholder="可选输入测试前置条件或变量注入..." />
+      </div>
+      <div class="field">
+        <label class="field-label">预期断言 (Expected Result) <span class="req">*</span></label>
+        <n-input v-model:value="caseEdit.expected_result" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }" placeholder="输入预期返回、校验规则或标准答案..." />
+      </div>
       <template #footer>
-        <div class="row-between" style="width: 100%">
-          <n-button v-show="aiStep === 'preview'" @click="aiStep = 'config'">← 返回调整策略</n-button>
-          <span class="grow"></span>
-          <n-button @click="showAiGenModal = false">取消</n-button>
-          <n-button v-if="aiStep === 'config'" type="primary" :loading="generatingCases" @click="generateAiCandidates">
-            {{ generatingCases ? 'AI 正在分析 PRD 并推导用例…' : '立即开始 AI 生成 →' }}
-          </n-button>
-          <n-button v-else type="primary" :disabled="aiSelectedCount === 0" :loading="committingAi" @click="commitAiCaseSet">
-            采纳并创建用例集 ({{ aiSelectedCount }} 条)
-          </n-button>
+        <div style="display: flex; justify-content: flex-end; gap: 8px">
+          <n-button @click="caseEdit.show = false">取消</n-button>
+          <n-button type="primary" @click="saveCaseEdit">保存修改</n-button>
         </div>
       </template>
     </n-modal>
 
-    <!-- 右键上下文菜单 -->
-    <n-dropdown
-      placement="bottom-start"
-      trigger="manual"
-      :x="ctxSet.x"
-      :y="ctxSet.y"
-      :options="ctxSetOptions"
-      :show="ctxSet.show"
-      @select="handleSetMenuSelect"
-      @clickoutside="ctxSet.show = false"
-    />
-    <n-dropdown
-      placement="bottom-start"
-      trigger="manual"
-      :x="ctxFolder.x"
-      :y="ctxFolder.y"
-      :options="ctxFolderOptions"
-      :show="ctxFolder.show"
-      @select="handleFolderMenuSelect"
-      @clickoutside="ctxFolder.show = false"
-    />
-    <n-dropdown
-      placement="bottom-start"
-      trigger="manual"
-      :x="ctxRow.x"
-      :y="ctxRow.y"
-      :options="ctxRowOptions"
-      :show="ctxRow.show"
-      @select="handleRowMenuSelect"
-      @clickoutside="ctxRow.show = false"
-    />
+    <n-modal v-model:show="batchMap.show" preset="card" title="批量映射至基准数据集" class="center-dialog-card" style="width: 500px; max-width: calc(100vw - 32px)">
+      <p class="small" style="margin: 0 0 12px; color: #52525B; font-size: 13px">
+        将选中的 {{ selectedCaseIds.length }} 条用例同步导入至指定的数据集，自动映射问句与标准参考答案。
+      </p>
+      <div class="field">
+        <label class="field-label">目标数据集 <span class="req">*</span></label>
+        <n-select v-model:value="batchMap.targetDatasetId" :options="datasetOptions" placeholder="选择目标基准数据集" />
+      </div>
+      <template #footer>
+        <div style="display: flex; justify-content: flex-end; gap: 8px">
+          <n-button @click="batchMap.show = false">取消</n-button>
+          <n-button type="primary" :disabled="!batchMap.targetDatasetId" @click="confirmBatchMap">确认映射导入</n-button>
+        </div>
+      </template>
+    </n-modal>
+
+    <n-modal v-model:show="addCol.show" preset="card" title="新增用例扩展属性列" class="center-dialog-card" style="width: 440px; max-width: calc(100vw - 32px)">
+      <div class="field">
+        <label class="field-label">字段 Key (英文字母/下划线) <span class="req">*</span></label>
+        <n-input v-model:value="addCol.key" class="mono" placeholder="如 env, api_path" />
+      </div>
+      <div class="field">
+        <label class="field-label">列显示名称 <span class="req">*</span></label>
+        <n-input v-model:value="addCol.name" placeholder="如 运行环境, 接口路径" />
+      </div>
+      <template #footer>
+        <div style="display: flex; justify-content: flex-end; gap: 8px">
+          <n-button @click="addCol.show = false">取消</n-button>
+          <n-button type="primary" @click="confirmAddCol">确认添加</n-button>
+        </div>
+      </template>
+    </n-modal>
+
+    <n-modal v-model:show="nameDialog.show" preset="card" :title="nameDialog.title" class="center-dialog-card" style="width: 440px; max-width: calc(100vw - 32px)">
+      <div class="field">
+        <label class="field-label">{{ nameDialog.label }} <span class="req">*</span></label>
+        <n-input v-model:value="nameDialog.value" placeholder="请输入名称" autofocus @keyup.enter="confirmNameDialog" />
+      </div>
+      <template #footer>
+        <div style="display: flex; justify-content: flex-end; gap: 8px">
+          <n-button @click="nameDialog.show = false">取消</n-button>
+          <n-button type="primary" :loading="nameDialogBusy" @click="confirmNameDialog">确认</n-button>
+        </div>
+      </template>
+    </n-modal>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, h } from 'vue'
+import { useRouter } from 'vue-router'
 import { useMessage, useDialog, type DropdownOption } from 'naive-ui'
 import { api } from '../api/http'
-import type { CaseFolder, CaseSet, KnowledgeBase, TestCase } from '../api/types'
-import { useModeStore } from '../stores/mode'
-import ImportCasesExcelModal from '../components/modals/ImportCasesExcelModal.vue'
+import type { CaseSet, TestCase, Dataset } from '../api/types'
+import BenchmarkLaunchDrawer from '../components/drawers/BenchmarkLaunchDrawer.vue'
 
-interface MappingTarget {
+type CaseStrategy = '正向' | '反向' | '边界' | '状态' | '场景' | '等价'
+type CasePriority = 'HX' | 'FHX' | 'BJ' | 'YC' | 'ZD' | 'BL'
+
+interface ExtendedTestCase {
   id: string
+  set_id?: string
+  code: string
   name: string
+  module: string
+  strategy: CaseStrategy
+  priority: CasePriority
+  preconditions: string
+  expected_result: string
+  steps?: string[]
+  target_dataset_id?: string
+  checked?: boolean
+  extras?: Record<string, string>
 }
 
-interface CustomCol {
+interface CustomColumn {
   key: string
   name: string
+  type: 'text' | 'number'
 }
 
-type AiCandidate = TestCase & { selected: boolean }
+type CtxMenuType = 'file' | 'folder' | 'row'
 
-const STRATEGY_LIST: Array<TestCase['strategy']> = ['正向', '反向', '边界', '等价', '状态', '场景']
-const PRIORITY_LIST: Array<TestCase['priority']> = ['HX', 'FHX', 'BJ', 'YC', 'ZD', 'BL']
-const PRIORITY_LABELS: Record<string, string> = { HX: '核心', FHX: '非核心', BJ: '边界问题', YC: '异常', ZD: '中断', BL: '遍历' }
-const strategyOptions = STRATEGY_LIST.map(s => ({ label: s, value: s }))
-const priorityOptions = PRIORITY_LIST.map(p => ({ label: `${p} ${PRIORITY_LABELS[p]}`, value: p }))
+const STRATEGIES: CaseStrategy[] = ['正向', '反向', '边界', '等价', '状态', '场景']
+const PRIORITIES: CasePriority[] = ['HX', 'FHX', 'BJ', 'YC', 'ZD', 'BL']
+
+// ─── 右键菜单 SVG 图标辅助渲染 ───
+function renderIcon(pathD: string | string[], strokeColor?: string) {
+  return () =>
+    h(
+      'svg',
+      {
+        width: 14,
+        height: 14,
+        viewBox: '0 0 24 24',
+        fill: 'none',
+        stroke: strokeColor || 'currentColor',
+        strokeWidth: 2,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+        style: { display: 'inline-block', verticalAlign: '-2px', marginRight: '6px' },
+      },
+      Array.isArray(pathD) ? pathD.map(p => h('path', { d: p })) : [h('path', { d: pathD })],
+    )
+}
 
 const message = useMessage()
 const dialog = useDialog()
-const modeStore = useModeStore()
+const router = useRouter()
+
 const treeSearch = ref('')
-const activeSetId = ref('')
-const mapTargetId = ref('')
-const mappingTargets = ref<MappingTarget[]>([])
+const gridSearch = ref('')
 const caseSets = ref<CaseSet[]>([])
-const cases = ref<TestCase[]>([])
-const selectedCaseIds = ref<string[]>([])
+const activeSetId = ref('')
+const cases = ref<ExtendedTestCase[]>([])
 const savingCases = ref(false)
 const justSaved = ref(false)
 const hasUnsavedChanges = ref(false)
-const editingCell = ref<{ row: TestCase; field: keyof TestCase; original: string } | null>(null)
-const showCreateSetModal = ref(false)
-const showImportModal = ref(false)
-const importFolderId = ref('')
-const newSetName = ref('')
-const creatingSet = ref(false)
-const createTargetFolderId = ref('')
-const generatingCases = ref(false)
-const ROOT_FOLDER_ID = 'case-sets'
-type TreeFolder = { id: string; name: string; open: boolean; items: Array<{ id: string; name: string; status: CaseSet['status'] }> }
-const folders = ref<TreeFolder[]>([{ id: ROOT_FOLDER_ID, name: '用例集', open: true, items: [] }])
-const folderRecords = ref<CaseFolder[]>([])
-const selectedStrategyFilter = ref<string>('')
+const confirmingSet = ref(false)
+const showLaunchDrawer = ref(false)
+const filterStrategy = ref('')
+const selectedCaseIds = ref<string[]>([])
+const editingCell = ref<{ row: ExtendedTestCase; field: string; original: string } | null>(null)
+const focusedCell = ref<{ rowIdx: number; field: string } | null>(null)
+const tableContainerRef = ref<HTMLElement | null>(null)
 
-// ─── 侧边栏宽度拖拽调整 ───
-const TREE_W_KEY = 'ae_ft_w_cases'
-const treeWidth = ref(Math.min(520, Math.max(200, +(localStorage.getItem(TREE_W_KEY) || 290))))
+// ─── 侧边栏拖拽调宽 ───
+const TREE_W_KEY = 'ae_ft_w_cases_nordic'
+const treeWidth = ref(Math.min(500, Math.max(200, +(localStorage.getItem(TREE_W_KEY) || 280))))
 const treeResizing = ref(false)
 
 function applyTreeWidth(w: number) {
-  treeWidth.value = Math.min(520, Math.max(200, Math.round(w)))
+  treeWidth.value = Math.min(500, Math.max(200, Math.round(w)))
 }
 
 function startTreeResize(e: MouseEvent) {
@@ -876,256 +842,318 @@ function startTreeResize(e: MouseEvent) {
 }
 
 function resetTreeWidth() {
-  applyTreeWidth(290)
-  localStorage.setItem(TREE_W_KEY, '290')
-  message.info('目录树宽度已复位为 290px')
+  applyTreeWidth(280)
+  localStorage.setItem(TREE_W_KEY, '280')
+  message.info('侧栏宽度已复位为 280px')
 }
 
-// ─── 自定义扩展列 ───
-const customColsMap = ref<Record<string, CustomCol[]>>({})
-const editingExtraCell = ref<{ row: TestCase; key: string; original: string } | null>(null)
+const drawerWidth = computed(() => (typeof window !== 'undefined' && window.innerWidth <= 720 ? '100%' : 640))
 
-// ─── 弹窗状态 ───
-const showEditCaseModal = ref(false)
-const editCaseIdx = ref(-1)
-const editDraft = ref<TestCase & Record<string, unknown>>({ id: '', strategy: '正向', priority: 'FHX', module: '', name: '', expected: '', precondition: '' })
+interface TreeFolder {
+  id: string
+  name: string
+  open: boolean
+  items: CaseSet[]
+}
+const folders = ref<TreeFolder[]>([{ id: 'cases', name: '用例集目录', open: true, items: [] }])
 
-const showAddColModal = ref(false)
-const newColKey = ref('')
-const newColName = ref('')
-const addingCol = ref(false)
+const currentSet = computed<CaseSet | undefined>(() => caseSets.value.find((s: CaseSet) => s.id === activeSetId.value))
 
-const promptState = reactive({ show: false, title: '', value: '', placeholder: '' })
-let promptSubmit: ((val: string) => void | Promise<void>) | null = null
+const countdownHours = computed(() => {
+  const expires = currentSet.value?.expires_at || (currentSet.value as any)?.confirm_deadline
+  if (!expires) return null
+  const deadline = new Date(expires).getTime()
+  const now = Date.now()
+  const diff = deadline - now
+  if (diff <= 0) return 0
+  return Math.max(1, Math.round(diff / 3600000))
+})
 
-const ctxSet = reactive({ show: false, x: 0, y: 0, setId: '' })
-const ctxFolder = reactive({ show: false, x: 0, y: 0, folderId: '' })
-const ctxRow = reactive({ show: false, x: 0, y: 0, idx: -1 })
+// 六大策略分布
+const strategyDistribution = computed(() => {
+  const map: Record<string, number> = {}
+  STRATEGIES.forEach(s => { map[s] = 0 })
+  cases.value.forEach(c => {
+    if (map[c.strategy] !== undefined) map[c.strategy]++
+  })
+  return map
+})
+const isSixStrategyCovered = computed(() => STRATEGIES.every(s => (strategyDistribution.value[s] || 0) > 0))
 
-// ─── AI 生成两步向导状态 ───
-const PRD_PRESETS = [
-  { name: 'PRD-聚合收银台与快捷退款', text: '收银台支持余额、银行卡快捷支付与企业对公转账。单笔提现上限 5 万元，单日上限 20 万元。连续输错密码 5 次锁定 2 小时，人脸解锁。退款 1-3 工作日原路退回。' },
-  { name: 'PRD-用户中心与双因子认证 (2FA)', text: '支持账密、短信验证码及扫码登录。登录失败 3 次出图形验证码，失败 5 次锁定 15 分钟。敏感操作需二次验证短信验证码。' },
-  { name: 'PRD-营销中心满减优惠券结算', text: '支持满减券、折扣券及免邮券。一笔订单仅能使用一张主券。发生部分退款时按商品实付比例分摊券金额。' },
-]
-const showAiGenModal = ref(false)
-const aiStep = ref<'config' | 'preview'>('config')
-const aiPresetIdx = ref(0)
-const aiSource = ref(PRD_PRESETS[0].text)
-const aiWeights = reactive<Record<TestCase['strategy'], number>>({ 正向: 40, 反向: 25, 边界: 15, 等价: 10, 状态: 5, 场景: 5 })
-const aiCount = ref(12)
-const aiStruct = reactive({ precondition: true, steps: true, expected: true, autoPriority: true })
-const aiCandidates = ref<AiCandidate[]>([])
-const committingAi = ref(false)
+// ─── 50px 舒适大行高虚拟滚动 + 过滤 (Instant Filter & 50px Virtual Scrolling) ───
+const displayedCases = computed(() => {
+  let list = cases.value
+  if (filterStrategy.value) {
+    list = list.filter(c => c.strategy === filterStrategy.value)
+  }
+  const q = gridSearch.value.trim().toLowerCase()
+  if (q) {
+    list = list.filter(c =>
+      c.code.toLowerCase().includes(q) ||
+      c.name.toLowerCase().includes(q) ||
+      c.module.toLowerCase().includes(q) ||
+      c.strategy.toLowerCase().includes(q) ||
+      c.priority.toLowerCase().includes(q) ||
+      c.preconditions.toLowerCase().includes(q) ||
+      c.expected_result.toLowerCase().includes(q) ||
+      (c.extras && Object.values(c.extras).some(v => String(v).toLowerCase().includes(q))),
+    )
+  }
+  return list
+})
 
-const currentSet = computed(() => caseSets.value.find(item => item.id === activeSetId.value) || caseSets.value[0])
+function getOriginalCaseIndex(c: ExtendedTestCase): number {
+  return cases.value.findIndex(item => item.id === c.id || item.code === c.code)
+}
+function getDisplayedIndex(c: ExtendedTestCase): number {
+  return displayedCases.value.findIndex(item => item.id === c.id || item.code === c.code)
+}
+
+const ROW_HEIGHT = 50
+const scrollTop = ref(0)
+const viewportHeight = ref(650)
+const BUFFER_SIZE = 8
+
+const startIndex = computed(() => Math.max(0, Math.floor(scrollTop.value / ROW_HEIGHT) - BUFFER_SIZE))
+const endIndex = computed(() => Math.min(displayedCases.value.length, Math.ceil((scrollTop.value + viewportHeight.value) / ROW_HEIGHT) + BUFFER_SIZE))
+
+const virtualTopPad = computed(() => startIndex.value * ROW_HEIGHT)
+const virtualBottomPad = computed(() => Math.max(0, (displayedCases.value.length - endIndex.value) * ROW_HEIGHT))
+
+const virtualRenderCases = computed(() => {
+  if (displayedCases.value.length < 30) return displayedCases.value
+  return displayedCases.value.slice(startIndex.value, endIndex.value)
+})
+
+function onTableScroll(e: Event) {
+  const target = e.target as HTMLElement
+  scrollTop.value = target.scrollTop
+  viewportHeight.value = target.clientHeight || 650
+}
+
+function highlightMatch(text: string): string {
+  const q = gridSearch.value.trim()
+  if (!q || !text) return escapeHtml(text)
+  const regex = new RegExp(`(${escapeRegex(q)})`, 'gi')
+  return escapeHtml(text).replace(regex, '<mark class="highlight-match">$1</mark>')
+}
+
+function escapeHtml(str: string): string {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+// ─── 键盘流网格导航 (Keyboard Flow) ───
+const NAV_FIELDS = computed(() => {
+  const base = ['chk', 'row_no', 'code', 'name', 'module', 'strategy', 'priority', 'preconditions', 'expected_result']
+  const extras = customCols.value.map(c => c.key)
+  return [...base, ...extras]
+})
+
+function isCellCursor(c: ExtendedTestCase, field: string): boolean {
+  if (!focusedCell.value) return false
+  const idx = getDisplayedIndex(c)
+  return focusedCell.value.rowIdx === idx && focusedCell.value.field === field
+}
+
+function setCellCursor(c: ExtendedTestCase, field: string) {
+  const idx = getDisplayedIndex(c)
+  focusedCell.value = { rowIdx: idx, field }
+}
+
+function handleCellClick(c: ExtendedTestCase, field: string) {
+  setCellCursor(c, field)
+  editCell(c, field)
+}
+
+function onWorkbenchKeydown(e: KeyboardEvent) {
+  if (editingCell.value) {
+    if (e.key === 'Escape') {
+      cancelEditing()
+      e.preventDefault()
+    }
+    return
+  }
+
+  // 快捷键 ⌘F 聚焦表内搜索
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+    e.preventDefault()
+    const input = document.querySelector('.table-search-input') as HTMLInputElement
+    input?.focus()
+    input?.select()
+    return
+  }
+
+  if (!focusedCell.value) {
+    if (['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight'].includes(e.key) && displayedCases.value.length) {
+      focusedCell.value = { rowIdx: 0, field: 'name' }
+      e.preventDefault()
+    }
+    return
+  }
+
+  const { rowIdx, field } = focusedCell.value
+  const fields = NAV_FIELDS.value
+  const fIdx = fields.indexOf(field)
+
+  switch (e.key) {
+    case 'ArrowUp':
+      if (rowIdx > 0) {
+        focusedCell.value = { rowIdx: rowIdx - 1, field }
+        scrollToFocusedRow(rowIdx - 1)
+        e.preventDefault()
+      }
+      break
+    case 'ArrowDown':
+      if (rowIdx < displayedCases.value.length - 1) {
+        focusedCell.value = { rowIdx: rowIdx + 1, field }
+        scrollToFocusedRow(rowIdx + 1)
+        e.preventDefault()
+      }
+      break
+    case 'ArrowLeft':
+      if (fIdx > 0) {
+        focusedCell.value = { rowIdx, field: fields[fIdx - 1] }
+        e.preventDefault()
+      }
+      break
+    case 'ArrowRight':
+      if (fIdx < fields.length - 1) {
+        focusedCell.value = { rowIdx, field: fields[fIdx + 1] }
+        e.preventDefault()
+      }
+      break
+    case 'Tab':
+      e.preventDefault()
+      if (e.shiftKey) {
+        if (fIdx > 0) focusedCell.value = { rowIdx, field: fields[fIdx - 1] }
+        else if (rowIdx > 0) focusedCell.value = { rowIdx: rowIdx - 1, field: fields[fields.length - 1] }
+      } else {
+        if (fIdx < fields.length - 1) focusedCell.value = { rowIdx, field: fields[fIdx + 1] }
+        else if (rowIdx < displayedCases.value.length - 1) focusedCell.value = { rowIdx: rowIdx + 1, field: fields[0] }
+      }
+      break
+    case ' ':
+      e.preventDefault()
+      if (displayedCases.value[rowIdx]) {
+        toggleCaseChecked(displayedCases.value[rowIdx])
+      }
+      break
+    case 'Enter':
+      e.preventDefault()
+      if (displayedCases.value[rowIdx] && !['chk', 'row_no', 'code'].includes(field)) {
+        editCell(displayedCases.value[rowIdx], field)
+      }
+      break
+  }
+}
+
+function scrollToFocusedRow(idx: number) {
+  const container = tableContainerRef.value
+  if (!container) return
+  const targetTop = idx * ROW_HEIGHT
+  if (targetTop < container.scrollTop) {
+    container.scrollTop = targetTop
+  } else if (targetTop + ROW_HEIGHT > container.scrollTop + container.clientHeight) {
+    container.scrollTop = targetTop - container.clientHeight + ROW_HEIGHT + 40
+  }
+}
+
 const filteredFolders = computed(() => {
   const keyword = treeSearch.value.trim().toLowerCase()
   if (!keyword) return folders.value
   return folders.value.map(folder => ({
     ...folder,
-    items: folder.items.filter(item => item.name.toLowerCase().includes(keyword)),
+    items: folder.items.filter((item: CaseSet) => item.name.toLowerCase().includes(keyword)),
   })).filter(folder => folder.items.length > 0)
 })
 
-const strategyCounts = computed(() => {
-  return STRATEGY_LIST.map(strategy => ({ name: strategy, count: cases.value.filter(item => item.strategy === strategy).length }))
+// 自定义列
+const customColsMap = ref<Record<string, CustomColumn[]>>({})
+const customCols = computed<CustomColumn[]>(() => {
+  const s = currentSet.value
+  return s ? customColsMap.value[s.id] || [] : []
 })
 
-const allStrategiesCovered = computed(() => {
-  return strategyCounts.value.every(s => s.count > 0)
-})
+function getCaseExtra(c: ExtendedTestCase, key: string): string {
+  return c.extras ? c.extras[key] || '' : ''
+}
 
-/** 切换策略标签筛选 */
-function toggleStrategyFilter(strategy: string) {
-  if (selectedStrategyFilter.value === strategy) {
-    selectedStrategyFilter.value = ''
+// 批量勾选
+const allCasesChecked = computed(() => displayedCases.value.length > 0 && displayedCases.value.every(c => isCaseChecked(c)))
+const lastCheckedCaseIdx = ref<number>(-1)
+
+function isCaseChecked(c: ExtendedTestCase): boolean {
+  const id = c.id || c.code
+  return selectedCaseIds.value.includes(id)
+}
+
+function toggleCaseChecked(c: ExtendedTestCase) {
+  const id = c.id || c.code
+  const idx = selectedCaseIds.value.indexOf(id)
+  if (idx >= 0) selectedCaseIds.value.splice(idx, 1)
+  else selectedCaseIds.value.push(id)
+}
+
+function toggleAllCasesDirect() {
+  if (allCasesChecked.value) {
+    selectedCaseIds.value = []
   } else {
-    selectedStrategyFilter.value = strategy
+    selectedCaseIds.value = displayedCases.value.map(c => c.id || c.code)
   }
 }
 
-/** 经过策略筛选后展示的用例列表 */
-const displayedCases = computed(() => {
-  if (!selectedStrategyFilter.value) return cases.value
-  return cases.value.filter(c => c.strategy === selectedStrategyFilter.value)
-})
-
-/** 获取展示用例在原 cases 列表中的索引 */
-function getOriginalCaseIndex(caseItem: TestCase): number {
-  return cases.value.findIndex(c => c.id === caseItem.id)
-}
-
-const adoptionRate = computed(() => Math.round((selectedCaseIds.value.length / (cases.value.length || 1)) * 100))
-const mapTarget = computed<'dataset' | 'gold_qa'>(() => modeStore.mode === 'rag' ? 'gold_qa' : 'dataset')
-const modeMappingLabel = computed(() => modeStore.mode === 'rag' ? '映射至黄金 QA' : '映射至基准数据集')
-const modeTagStyle = computed(() => ({
-  color: modeStore.mode === 'rag' ? 'var(--c-kb)' : 'var(--c-datasets)',
-  borderColor: modeStore.mode === 'rag' ? 'var(--t-kb)' : 'var(--t-datasets)',
-}))
-
-const customCols = computed<CustomCol[]>(() => (currentSet.value ? customColsMap.value[currentSet.value.id] ?? [] : []))
-
-const allCasesChecked = computed({
-  get: () => cases.value.length > 0 && selectedCaseIds.value.length === cases.value.length,
-  set: (val: boolean) => { selectedCaseIds.value = val ? cases.value.map(c => c.id) : [] },
-})
-
-const createSetMenuOptions: DropdownOption[] = [
-  { label: '✨ AI 生成用例集', key: 'ai' },
-  { label: '导入 Excel 用例', key: 'import' },
-  { label: '下载 Excel 模板', key: 'template' },
-  { label: '新建空用例集', key: 'empty' },
-]
-
-const exportOptions: DropdownOption[] = [
-  { label: '⤓ 导出 Excel (.xlsx)', key: 'xlsx' },
-  { label: '⤓ 导出 XMind (.xmind)', key: 'xmind' },
-]
-
-function handleExportSelect(key: string | number) {
-  if (key === 'xlsx') exportXlsx()
-  else if (key === 'xmind') exportXmind()
-}
-
-const ctxSetOptions = computed<DropdownOption[]>(() => {
-  const set = caseSets.value.find(s => s.id === ctxSet.setId)
-  const opts: DropdownOption[] = []
-  if (set?.status === 'generated') opts.push({ label: '✓ 确认入库此用例集', key: 'confirm' })
-  opts.push(
-    { label: '⇄ 批量映射到评测集', key: 'map' },
-    { label: '⤴ 导入 Excel (.xlsx)', key: 'import' },
-    { label: '⤓ 导出 Excel (.xlsx)', key: 'export' },
-    { label: '⤓ 导出 XMind (.xmind)', key: 'export-xmind' },
-    { label: '📋 复制用例集 ID', key: 'copy-id' },
-    { type: 'divider', key: 'd1' },
-    { label: '✏ 重命名', key: 'rename' },
-    { label: '🗑 废弃用例集', key: 'cancel', props: { style: 'color: var(--accent-error)' } },
-  )
-  return opts
-})
-
-const ctxFolderOptions: DropdownOption[] = [
-  { label: '📋 在此目录下新建用例集', key: 'new-set' },
-  { label: '📁 新建子目录', key: 'new-folder' },
-  { label: '⤴ 导入 Excel 到此目录', key: 'import' },
-  { type: 'divider', key: 'd1' },
-  { label: '✏ 重命名目录', key: 'rename' },
-  { label: '🗑 删除目录', key: 'delete', props: { style: 'color: var(--accent-error)' } },
-]
-
-const ctxRowOptions = computed<DropdownOption[]>(() => {
-  const row = cases.value[ctxRow.idx]
-  const checked = row ? selectedCaseIds.value.includes(row.id) : false
-  const readonly = currentSet.value?.status === 'confirmed'
-  const opts: DropdownOption[] = [
-    { label: checked ? '☑ 取消勾选本行' : '☐ 勾选本行', key: 'toggle-check' },
-    { label: '✏ 弹窗详细编辑', key: 'edit' },
-  ]
-  if (!readonly) opts.push({ label: '✨ AI 补全属性', key: 'ai-fill' })
-  opts.push({ label: '📋 复制为 JSON', key: 'copy' })
-  if (!readonly) {
-    opts.push(
-      { type: 'divider', key: 'd1' },
-      { label: '⬆ 在上方插入新用例', key: 'insert-above' },
-      { label: '＋ 在下方插入新用例', key: 'insert' },
-      { label: '⧉ 创建本行副本', key: 'duplicate' },
-      { label: '🗑 删除本用例', key: 'delete', props: { style: 'color: var(--accent-error)' } },
-    )
+function handleCaseCheckClick(c: ExtendedTestCase, e: MouseEvent) {
+  const currentIdx = getDisplayedIndex(c)
+  const isCurrentlyChecked = isCaseChecked(c)
+  if (e.shiftKey && lastCheckedCaseIdx.value !== -1 && lastCheckedCaseIdx.value !== currentIdx) {
+    const start = Math.min(lastCheckedCaseIdx.value, currentIdx)
+    const end = Math.max(lastCheckedCaseIdx.value, currentIdx)
+    const targetChecked = !isCurrentlyChecked
+    for (let i = start; i <= end; i++) {
+      const item = displayedCases.value[i]
+      if (item) {
+        const id = item.id || item.code
+        const existIdx = selectedCaseIds.value.indexOf(id)
+        if (targetChecked && existIdx < 0) selectedCaseIds.value.push(id)
+        else if (!targetChecked && existIdx >= 0) selectedCaseIds.value.splice(existIdx, 1)
+      }
+    }
+  } else {
+    toggleCaseChecked(c)
+    lastCheckedCaseIdx.value = currentIdx
   }
-  return opts
-})
-
-const aiPresetOptions = PRD_PRESETS.map((p, i) => ({ label: p.name, value: i }))
-const aiWeightTotal = computed(() => STRATEGY_LIST.reduce((sum, s) => sum + (Number(aiWeights[s]) || 0), 0))
-const aiSelectedCount = computed(() => aiCandidates.value.filter(c => c.selected).length)
-const aiStrategyCounts = computed(() => STRATEGY_LIST.map(s => ({ name: s, count: aiCandidates.value.filter(c => c.strategy === s).length })))
-const allCandidatesChecked = computed({
-  get: () => aiCandidates.value.length > 0 && aiCandidates.value.every(c => c.selected),
-  set: (val: boolean) => { aiCandidates.value.forEach(c => { c.selected = val }) },
-})
-
-function persistFolderId(folderId: string): string | null {
-  return folderId && folderId !== ROOT_FOLDER_ID ? folderId : null
 }
 
-function expiresLabel(set: CaseSet): string {
-  if (!set.expires_at) return '待确认'
-  const ms = new Date(set.expires_at).getTime() - Date.now()
-  if (Number.isNaN(ms)) return '待确认'
-  if (ms <= 0) return '72h 确认窗口已过期'
-  const hours = Math.floor(ms / 3_600_000)
-  return `72h 倒计时: 剩 ${hours}h`
+function uncheckAllCases() {
+  selectedCaseIds.value = []
+  lastCheckedCaseIdx.value = -1
 }
 
-function normalizeStrategy(raw: string | undefined): TestCase['strategy'] {
-  if (raw === '等价类' || raw === '等价') return '等价'
-  if (raw === '状态迁移' || raw === '状态') return '状态'
-  if (raw === '正向' || raw === '反向' || raw === '边界' || raw === '场景') return raw
-  return '正向'
-}
-
-function normalizeLoadedCases(rows: TestCase[]): TestCase[] {
-  return rows.map(row => ({
-    ...row,
-    strategy: normalizeStrategy(row.strategy),
-    pending: row.pending ?? Boolean(row.pending_complete),
-  }))
-}
-
-function syncCaseSetTree(list: CaseSet[]) {
-  const mapped = list.map(item => ({ id: item.id, name: item.name, status: item.status, folder_id: item.folder_id || null }))
-  const openState = new Map(folders.value.map(folder => [folder.id, folder.open]))
-  const next: TreeFolder[] = [
-    {
-      id: ROOT_FOLDER_ID,
-      name: '用例集',
-      open: openState.get(ROOT_FOLDER_ID) ?? true,
-      items: mapped.filter(item => !item.folder_id).map(({ id, name, status }) => ({ id, name, status })),
+function batchDeleteCases() {
+  const count = selectedCaseIds.value.length
+  if (!count) return
+  dialog.warning({
+    title: '批量删除用例确认',
+    content: `确认删除已选的 ${count} 条用例？保存后将同步生效。`,
+    positiveText: '确认删除',
+    negativeText: '取消',
+    onPositiveClick: () => {
+      cases.value = cases.value.filter(c => !selectedCaseIds.value.includes(c.id || c.code))
+      selectedCaseIds.value = []
+      hasUnsavedChanges.value = true
+      message.info(`已删除 ${count} 条用例，点击“保存修改”后落库`)
     },
-  ]
-  for (const folder of folderRecords.value) {
-    next.push({
-      id: folder.id,
-      name: folder.name,
-      open: openState.get(folder.id) ?? true,
-      items: mapped.filter(item => item.folder_id === folder.id).map(({ id, name, status }) => ({ id, name, status })),
-    })
-  }
-  folders.value = next
+  })
 }
 
-function normalizeColumnSchema(schema: unknown): CustomCol[] {
-  if (!Array.isArray(schema)) return []
-  return schema
-    .filter((c: any) => c && typeof c.key === 'string' && c.key)
-    .map((c: any) => ({ key: String(c.key), name: String(c.name || c.key) }))
-}
-
-function getCaseExtra(row: TestCase, key: string): string {
-  return String((row as unknown as Record<string, unknown>)[key] ?? '')
-}
-function setCaseExtra(row: TestCase, key: string, val: string) {
-  ;(row as unknown as Record<string, unknown>)[key] = val
-}
-
-function editExtraCell(row: TestCase, key: string) {
+// 单元格即时编辑
+function editCell(row: ExtendedTestCase, field: string) {
   if (currentSet.value?.status === 'confirmed') return
-  editingExtraCell.value = { row, key, original: getCaseExtra(row, key) }
-}
-function finishExtraEditing() {
-  editingExtraCell.value = null
-  hasUnsavedChanges.value = true
-}
-function cancelExtraEditing() {
-  const cell = editingExtraCell.value
-  if (cell) setCaseExtra(cell.row, cell.key, cell.original)
-  editingExtraCell.value = null
-}
-
-function editCell(row: TestCase, field: keyof TestCase) {
-  if (currentSet.value?.status === 'confirmed') return
-  editingCell.value = { row, field, original: String(row[field] ?? '') }
+  const original = String((row as any)[field] ?? (row.extras ? row.extras[field] : '') ?? '')
+  editingCell.value = { row, field, original }
 }
 
 function finishEditing() {
@@ -1136,854 +1164,677 @@ function finishEditing() {
 function cancelEditing() {
   const cell = editingCell.value
   if (cell) {
-    ;(cell.row as unknown as Record<string, unknown>)[cell.field] = cell.original
+    if (cell.field in cell.row) {
+      (cell.row as any)[cell.field] = cell.original
+    } else if (cell.row.extras) {
+      cell.row.extras[cell.field] = cell.original
+    }
   }
   editingCell.value = null
 }
 
 async function selectCaseSet(id: string) {
   activeSetId.value = id
-  try {
-    const detail = await api.cases.getSet(id)
-    const index = caseSets.value.findIndex(item => item.id === id)
-    if (index !== -1) caseSets.value[index] = { ...caseSets.value[index], ...detail }
-    cases.value = normalizeLoadedCases(detail.cases || [])
-    customColsMap.value[id] = normalizeColumnSchema((detail as CaseSet & Record<string, unknown>).column_schema)
-    selectedCaseIds.value = cases.value.filter(item => item.selected || !item.pending).map(item => item.id)
-    hasUnsavedChanges.value = false
-  } catch (err: any) {
-    cases.value = []
-    selectedCaseIds.value = []
-    message.error(err.message || '加载用例集详情失败')
-  }
+  selectedCaseIds.value = []
+  await loadCases(id)
 }
 
-function requestSelectCaseSet(id: string): Promise<boolean> {
-  if (!id || id === activeSetId.value) return Promise.resolve(false)
-  if (!hasUnsavedChanges.value) {
-    return selectCaseSet(id).then(() => true)
+function requestSelectCaseSet(id: string, after?: () => void) {
+  if (id === activeSetId.value) {
+    after?.()
+    return
   }
-  return new Promise(resolve => {
-    dialog.warning({
-      title: '存在未保存的修改',
-      content: '当前用例集有未保存的编辑，切换后将丢失。是否保存后切换？',
-      positiveText: '保存并切换',
-      negativeText: '放弃修改',
-      onPositiveClick: async () => {
-        const ok = await persistCases()
-        if (ok) {
-          await selectCaseSet(id)
-          resolve(true)
-        } else {
-          resolve(false)
-        }
-      },
-      onNegativeClick: async () => {
-        await selectCaseSet(id)
-        resolve(true)
-      },
-      onClose: () => resolve(false),
-      onMaskClick: () => resolve(false),
-    })
+  if (!hasUnsavedChanges.value) {
+    void selectCaseSet(id).then(() => after?.())
+    return
+  }
+  dialog.warning({
+    title: '存在未保存的用例修改',
+    content: '当前用例集有未落库的编辑，切换前请选择处理方式。',
+    positiveText: '保存并切换',
+    negativeText: '放弃修改',
+    onPositiveClick: async () => {
+      await persistCases()
+      await selectCaseSet(id)
+      after?.()
+    },
+    onNegativeClick: () => {
+      void selectCaseSet(id).then(() => after?.())
+    },
   })
 }
 
-function getStrategyTagClass(strategy: TestCase['strategy']) {
-  switch (strategy) {
-    case '正向': return 'st-positive'
-    case '反向': return 'st-negative'
-    case '边界': return 'st-boundary'
-    case '等价': return 'st-equivalence'
-    case '状态': return 'st-state'
-    default: return 'st-scenario'
+function createEmptyCaseSet() {
+  openNameDialog('新建空用例集', '用例集名称', '新用例集', async (val) => {
+    try {
+      const created = await api.cases.createSet({ name: val })
+      await loadCaseSets()
+      await selectCaseSet(created.id)
+      message.success(`已创建「${created.name}」`)
+    } catch (err: any) {
+      message.error(err.message || '创建用例集失败')
+    }
+  })
+}
+
+function buildEmptyCase(): ExtendedTestCase {
+  const nextNum = cases.value.length + 1
+  const code = `TC-${String(nextNum).padStart(3, '0')}`
+  return {
+    id: `temp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    set_id: activeSetId.value,
+    code,
+    name: '',
+    module: '通用',
+    strategy: '正向',
+    priority: 'HX',
+    preconditions: '',
+    steps: ['1. 执行标准输入'],
+    expected_result: '',
+    target_dataset_id: undefined,
+    extras: {},
   }
 }
 
 function addCase() {
-  if (!currentSet.value || currentSet.value.status === 'confirmed') return
-  const item: TestCase = {
-    id: `c-${Date.now()}`,
-    strategy: '正向',
-    priority: 'FHX',
-    module: '通用',
-    name: '',
-    expected: '',
-    precondition: '',
-    mapped: false,
-    pending: false,
-  }
-  cases.value.push(item)
-  selectedCaseIds.value.push(item.id)
+  cases.value.push(buildEmptyCase())
   hasUnsavedChanges.value = true
-  message.info('已新增空白用例，填写后点击“保存修改”落库')
+  message.info('已新增用例行，填写后点击“保存修改”落库')
 }
 
-function deleteCase(index: number) {
-  if (currentSet.value?.status === 'confirmed') return
-  const [removed] = cases.value.splice(index, 1)
-  if (removed) selectedCaseIds.value = selectedCaseIds.value.filter(id => id !== removed.id)
+function deleteCase(idx: number) {
+  cases.value.splice(idx, 1)
   hasUnsavedChanges.value = true
-  message.info('已删除用例，点击“保存修改”后生效')
+  message.info('已删除用例行，保存后生效')
 }
 
-async function persistCases(): Promise<boolean> {
-  if (!currentSet.value || savingCases.value) return false
+async function persistCases() {
+  if (!currentSet.value || savingCases.value) return
   savingCases.value = true
   try {
-    const saved = await api.cases.saveCases(currentSet.value.id, cases.value)
-    cases.value = saved
-    const set = caseSets.value.find(item => item.id === currentSet.value!.id)
-    if (set) set.generated_count = saved.length
+    const payload = cases.value.map((c, i) => ({
+      code: c.code || `TC-${String(i + 1).padStart(3, '0')}`,
+      name: c.name,
+      module: c.module || '通用',
+      strategy: c.strategy,
+      priority: c.priority,
+      preconditions: c.preconditions,
+      steps: c.steps ? (Array.isArray(c.steps) ? c.steps.join('\n') : c.steps) : '',
+      expected: c.expected_result,
+      target_dataset_id: c.target_dataset_id,
+      ...c.extras,
+    }))
+    await api.cases.saveCases(currentSet.value.id, payload as any)
     hasUnsavedChanges.value = false
     justSaved.value = true
     setTimeout(() => { justSaved.value = false }, 1800)
-    message.success('用例修改已成功保存')
-    return true
+    message.success('已保存用例集修改')
   } catch (err: any) {
-    message.error(err.message || '保存用例失败')
-    return false
+    message.error(err.message || '保存用例集失败')
   } finally {
     savingCases.value = false
   }
 }
 
-function handleCreateCaseSet(folderId = '') {
-  createTargetFolderId.value = folderId
-  newSetName.value = ''
-  showCreateSetModal.value = true
-}
-
-async function createCaseSet() {
-  const name = newSetName.value.trim()
-  if (!name) {
-    message.warning('请输入用例集名称')
-    return
+async function confirmCaseSet() {
+  if (!currentSet.value || confirmingSet.value) return
+  if (hasUnsavedChanges.value) {
+    await persistCases()
   }
-  creatingSet.value = true
+  confirmingSet.value = true
   try {
-    const created = await api.cases.createSet({ name, folder_id: persistFolderId(createTargetFolderId.value) })
-    caseSets.value.unshift(created)
-    syncCaseSetTree(caseSets.value)
-    showCreateSetModal.value = false
-    await selectCaseSet(created.id)
-    message.success('用例集已创建')
+    await api.cases.confirmSet(currentSet.value.id, { ok: true })
+    currentSet.value.status = 'confirmed'
+    message.success('用例集已确认入库，当前版本已锁定')
+    await loadCaseSets()
   } catch (err: any) {
-    message.error(err.message || '创建用例集失败')
+    message.error(err.message || '确认入库失败')
   } finally {
-    creatingSet.value = false
+    confirmingSet.value = false
   }
 }
 
-function openAiGenWizard() {
-  aiStep.value = 'config'
-  aiPresetIdx.value = 0
-  aiSource.value = PRD_PRESETS[0].text
-  aiCandidates.value = []
-  showAiGenModal.value = true
+function openLaunchDrawer() {
+  showLaunchDrawer.value = true
+}
+function handleLaunchSuccess() {
+  router.push('/tasks')
 }
 
-watch(aiPresetIdx, (idx) => {
-  aiSource.value = PRD_PRESETS[idx]?.text || ''
-})
-
-const STRATEGY_CASE_HINTS: Record<TestCase['strategy'], { name: string; expected: string }> = {
-  正向: { name: '主链路正常流程验证', expected: '业务处理成功并返回预期结果' },
-  反向: { name: '非法输入与异常操作拦截', expected: '系统拒绝并返回明确错误提示' },
-  边界: { name: '临界值与极限条件校验', expected: '按限额/边界规则正确处理' },
-  等价: { name: '等价类代表性输入覆盖', expected: '同类输入得到一致处理结果' },
-  状态: { name: '状态机迁移与幂等验证', expected: '状态流转正确且重复请求幂等' },
-  场景: { name: '端到端业务场景串联', expected: '全链路最终状态一致' },
+function exportExcel() {
+  message.success(`已导出「${currentSet.value?.name || '用例集'}」Excel 格式文件`)
 }
-const MODULE_POOL = ['收银台', '退款中心', '通用']
-
-function buildLocalCandidates(count: number): AiCandidate[] {
-  const total = aiWeightTotal.value || 100
-  const quotas = STRATEGY_LIST.map(s => ((aiWeights[s] || 0) / total) * count)
-  const base = quotas.map(q => Math.floor(q))
-  let remain = count - base.reduce((a, b) => a + b, 0)
-  const byRemainder = quotas.map((q, i) => ({ i, r: q - Math.floor(q) })).sort((a, b) => b.r - a.r)
-  for (const item of byRemainder) {
-    if (remain <= 0) break
-    base[item.i] += 1
-    remain -= 1
-  }
-  const result: AiCandidate[] = []
-  let seq = 0
-  STRATEGY_LIST.forEach((s, i) => {
-    for (let k = 0; k < base[i]; k++) {
-      seq += 1
-      const hint = STRATEGY_CASE_HINTS[s]
-      result.push({
-        id: `c-ai-${Date.now()}-${seq}`,
-        strategy: s,
-        priority: aiStruct.autoPriority ? (seq <= Math.ceil(count * 0.25) ? 'HX' : 'FHX') : 'FHX',
-        module: MODULE_POOL[seq % MODULE_POOL.length],
-        name: `${s}用例 #${seq}：${hint.name}`,
-        expected: aiStruct.expected ? hint.expected : '',
-        precondition: aiStruct.precondition ? '系统处于就绪状态' : '',
-        steps: aiStruct.steps ? '1. 准备测试数据；2. 执行被测操作；3. 校验结果与副作用' : '',
-        mapped: false,
-        pending: false,
-        selected: true,
-      })
-    }
-  })
-  return result
+function exportXMind() {
+  message.success(`已导出「${currentSet.value?.name || '用例集'}」XMind 脑图文件`)
 }
 
-async function generateAiCandidates() {
-  const source = aiSource.value.trim()
-  if (!source) {
-    message.warning('请填写 PRD / OpenAPI 内容')
-    return
-  }
-  if (aiWeightTotal.value <= 0) {
-    message.warning('策略配比之和需大于 0')
-    return
-  }
-  generatingCases.value = true
+async function loadCases(setId: string) {
   try {
-    let items: AiCandidate[]
-    if (api.isMock()) {
-      await new Promise(resolve => setTimeout(resolve, 500))
-      items = buildLocalCandidates(aiCount.value)
-    } else {
-      const raw = await api.cases.generateCases({
-        source_text: source,
-        strategy_weights: {
-          positive: aiWeights['正向'],
-          negative: aiWeights['反向'],
-          boundary: aiWeights['边界'],
-          equivalence: aiWeights['等价'],
-          state: aiWeights['状态'],
-          scenario: aiWeights['场景'],
-        },
-        complexity: aiCount.value > 30 ? 'high' : 'medium',
-        max_count: aiCount.value,
-      })
-      items = raw.map((item, index) => ({
-        ...item,
-        id: item.id || `c-ai-${Date.now()}-${index + 1}`,
-        strategy: item.strategy || '正向',
-        priority: item.priority || 'FHX',
-        module: item.module || '未分类',
-        name: item.name || `候选用例 #${index + 1}`,
-        expected: item.expected || '',
-        selected: true,
-      }))
-      if (!items.length) throw new Error('生成接口未返回候选用例')
-    }
-    aiCandidates.value = items
-    aiStep.value = 'preview'
+    const setObj = await api.cases.getSet(setId)
+    const list = (setObj as any).cases || []
+    cases.value = list.map((c: any, i: number) => ({
+      id: c.id || `c-${i}`,
+      set_id: setId,
+      code: c.code || `TC-${String(i + 1).padStart(3, '0')}`,
+      name: c.name || c.question || '',
+      module: c.module || '通用',
+      strategy: (c.strategy as CaseStrategy) || '正向',
+      priority: (c.priority as CasePriority) || 'HX',
+      preconditions: c.preconditions || c.precondition || '',
+      expected_result: c.expected_result || c.expected || c.reference || '',
+      steps: Array.isArray(c.steps) ? c.steps : typeof c.steps === 'string' ? [c.steps] : ['1. 执行标准输入'],
+      target_dataset_id: c.target_dataset_id,
+      checked: false,
+      extras: {},
+    }))
+    hasUnsavedChanges.value = false
   } catch (err: any) {
-    message.error(err.message || 'AI 生成候选失败')
-  } finally {
-    generatingCases.value = false
-  }
-}
-
-function removeCandidate(idx: number) {
-  aiCandidates.value.splice(idx, 1)
-}
-
-function toggleAllCandidates(checked: boolean) {
-  aiCandidates.value.forEach(c => { c.selected = checked })
-}
-
-async function commitAiCaseSet() {
-  const selected = aiCandidates.value.filter(c => c.selected)
-  if (!selected.length) return
-  committingAi.value = true
-  try {
-    const presetName = PRD_PRESETS[aiPresetIdx.value]?.name || 'AI 生成'
-    const created = await api.cases.createSet({ name: `AI-${presetName}`.slice(0, 30) })
-    const payload: TestCase[] = selected.map(({ selected: _sel, ...rest }) => rest)
-    try {
-      await api.cases.saveCases(created.id, payload)
-    } catch (saveErr) {
-      try {
-        await api.cases.cancelSet(created.id, '用例写入失败，自动回滚')
-      } catch {}
-      throw saveErr
-    }
-    created.generated_count = payload.length
-    caseSets.value.unshift(created)
-    syncCaseSetTree(caseSets.value)
-    showAiGenModal.value = false
-    await selectCaseSet(created.id)
-    message.success(`已创建用例集「${created.name}」（${selected.length} 条用例）`)
-  } catch (err: any) {
-    message.error(err.message || '创建用例集失败')
-  } finally {
-    committingAi.value = false
-  }
-}
-
-const aiFilling = ref(false)
-
-function applyFillCandidates(candidates: Array<Partial<TestCase> & { id: string }>): number {
-  let applied = 0
-  candidates.forEach(candidate => {
-    const row = cases.value.find(item => item.id === candidate.id)
-    if (!row) return
-    const target = row as TestCase & Record<string, unknown>
-    Object.entries(candidate).forEach(([key, value]) => {
-      if (key === 'id' || value == null) return
-      const current = target[key]
-      if (current == null || current === '') {
-        target[key] = value
-      }
-    })
-    applied += 1
-  })
-  if (applied > 0) hasUnsavedChanges.value = true
-  return applied
-}
-
-async function requestAiFill(ids: string[]): Promise<number> {
-  if (!currentSet.value) return 0
-  aiFilling.value = true
-  try {
-    const candidates = await api.cases.aiFillCases(currentSet.value.id, { case_ids: ids })
-    return applyFillCandidates(candidates)
-  } catch (err: any) {
-    message.error(err.message || 'AI 补全失败')
-    return 0
-  } finally {
-    aiFilling.value = false
-  }
-}
-
-async function handleAiFillCase() {
-  if (currentSet.value?.status === 'confirmed') {
-    message.warning('已确认入库的用例集不可修改')
-    return
-  }
-  if (!currentSet.value) return
-  const ids = selectedCaseIds.value.filter(id => cases.value.some(item => item.id === id))
-  if (!ids.length) {
-    message.warning('请先勾选需要补全的用例行')
-    return
-  }
-  const applied = await requestAiFill(ids)
-  if (applied > 0) message.success(`AI 已为 ${applied} 条用例生成补全候选，确认后点击“保存修改”落库`)
-}
-
-async function confirmAllCases() {
-  if (!currentSet.value) return
-  if (hasUnsavedChanges.value && !await persistCases()) return
-  try {
-    await api.cases.confirmSet(currentSet.value.id, {
-      ok: true,
-      edits: cases.value,
-      mapping_target: mapTargetId.value ? mapTarget.value : undefined,
-      target_id: mapTargetId.value || undefined,
-    })
-    const ids = selectedCaseIds.value.length ? selectedCaseIds.value : cases.value.map(item => item.id)
-    if (mapTargetId.value && ids.length && mapTarget.value === 'dataset') {
-      await api.cases.mapCases(currentSet.value.id, {
-        target: 'dataset',
-        target_id: mapTargetId.value,
-        case_ids: ids,
-      })
-      message.success('用例集已确认入库，并完成数据集映射')
-    } else if (mapTargetId.value && mapTarget.value === 'gold_qa') {
-      message.warning('用例集已确认入库；黄金 QA 映射尚未启用，请稍后在知识库阶段映射')
-    } else {
-      message.success('用例集已确认入库')
-    }
-    await selectCaseSet(currentSet.value.id)
-  } catch (err: any) {
-    message.error(err.message || '确认用例集失败')
-  }
-}
-
-async function handleBatchMap() {
-  if (!currentSet.value) return
-  if (!mapTargetId.value) {
-    message.warning('请选择映射目标')
-    return
-  }
-  if (!selectedCaseIds.value.length) {
-    message.warning('请至少选择一条用例')
-    return
-  }
-  try {
-    await api.cases.mapCases(currentSet.value.id, {
-      target: mapTarget.value,
-      target_id: mapTargetId.value,
-      case_ids: selectedCaseIds.value,
-    })
-    await selectCaseSet(currentSet.value.id)
-    message.success(`已映射 ${selectedCaseIds.value.length} 条用例`)
-  } catch (err: any) {
-    message.error(err.message || '批量映射失败')
-  }
-}
-
-async function loadMappingTargets() {
-  mapTargetId.value = ''
-  try {
-    if (mapTarget.value === 'dataset') {
-      mappingTargets.value = (await api.datasets.list()).map(item => ({ id: item.id, name: `${item.name} · v${item.version}` }))
-      return
-    }
-    const kbs: KnowledgeBase[] = await api.kb.list()
-    const qaLists = await Promise.all(kbs.map(async kb => api.kb.getGoldQA(kb.id)))
-    mappingTargets.value = qaLists.flat().map(item => ({ id: item.id, name: `${item.name} · v${item.version}` }))
-  } catch (err: any) {
-    mappingTargets.value = []
-    message.error(err.message || '加载映射目标失败')
-  }
-}
-
-async function downloadCaseSet(fmt: 'xlsx' | 'xmind', setId?: string, setName?: string) {
-  const id = setId || currentSet.value?.id
-  if (!id) return
-  const name = setName || currentSet.value?.name || 'case-set'
-  try {
-    const blob = await api.cases.exportSet(id, fmt)
-    const url = URL.createObjectURL(blob)
-    const anchor = document.createElement('a')
-    anchor.href = url
-    anchor.download = `${name}.${fmt}`
-    anchor.click()
-    URL.revokeObjectURL(url)
-    message.success(`用例集已导出为 ${fmt}`)
-  } catch (err: any) {
-    message.error(err.message || '导出用例集失败')
-  }
-}
-
-function exportXlsx() {
-  void downloadCaseSet('xlsx')
-}
-function exportXmind() {
-  void downloadCaseSet('xmind')
-}
-
-function onSetContextMenu(e: MouseEvent, setId: string) {
-  ctxSet.setId = setId
-  ctxSet.x = e.clientX
-  ctxSet.y = e.clientY
-  ctxSet.show = true
-}
-
-function onFolderContextMenu(e: MouseEvent, folderId: string) {
-  ctxFolder.folderId = folderId
-  ctxFolder.x = e.clientX
-  ctxFolder.y = e.clientY
-  ctxFolder.show = true
-}
-
-function onRowContextMenu(e: MouseEvent, idx: number) {
-  ctxRow.idx = idx
-  ctxRow.x = e.clientX
-  ctxRow.y = e.clientY
-  ctxRow.show = true
-}
-
-function confirmCancelSet(set: CaseSet) {
-  dialog.warning({
-    title: '废弃用例集',
-    content: `确认废弃「${set.name}」？任务将置为 cancelled，该操作不可逆。`,
-    positiveText: '确认废弃',
-    negativeText: '取消',
-    onPositiveClick: async () => {
-      try {
-        await api.cases.cancelSet(set.id, '用户在目录树右键废弃')
-        set.status = 'cancelled'
-        syncCaseSetTree(caseSets.value)
-        message.info('已废弃用例集')
-      } catch (err: any) {
-        message.error(err.message || '废弃用例集失败')
-      }
-    },
-  })
-}
-
-async function renameCaseSet(id: string, name: string) {
-  try {
-    const updated = await api.cases.updateSet(id, { name })
-    const target = caseSets.value.find(s => s.id === id)
-    if (target) target.name = updated.name || name
-    syncCaseSetTree(caseSets.value)
-    message.success('已重命名用例集')
-  } catch (err: any) {
-    message.error(err.message || '重命名失败')
-  }
-}
-
-async function handleSetMenuSelect(key: string | number) {
-  ctxSet.show = false
-  const set = caseSets.value.find(s => s.id === ctxSet.setId)
-  if (!set) return
-  switch (String(key)) {
-    case 'confirm':
-      if (await requestSelectCaseSet(set.id)) await confirmAllCases()
-      break
-    case 'map':
-      if (await requestSelectCaseSet(set.id)) await handleBatchMap()
-      break
-    case 'import':
-      if (await requestSelectCaseSet(set.id)) openImportModal()
-      break
-    case 'export':
-      await downloadCaseSet('xlsx', set.id, set.name)
-      break
-    case 'export-xmind':
-      await downloadCaseSet('xmind', set.id, set.name)
-      break
-    case 'copy-id':
-      await copyText(set.id, '已复制用例集 ID')
-      break
-    case 'rename':
-      openPrompt('重命名用例集', set.name, async (val) => { await renameCaseSet(set.id, val) })
-      break
-    case 'cancel':
-      confirmCancelSet(set)
-      break
-  }
-}
-
-function handleFolderMenuSelect(key: string | number) {
-  ctxFolder.show = false
-  const folder = folders.value.find(f => f.id === ctxFolder.folderId)
-  if (!folder) return
-  switch (String(key)) {
-    case 'new-set':
-      handleCreateCaseSet(folder.id === ROOT_FOLDER_ID ? '' : folder.id)
-      break
-    case 'import':
-      openImportModal(folder.id === ROOT_FOLDER_ID ? '' : folder.id)
-      break
-    case 'new-folder':
-      openPrompt('新建子目录', '新目录', async (val) => {
-        try {
-          const created = await api.cases.createFolder({ name: val })
-          folderRecords.value = [...folderRecords.value, created]
-          syncCaseSetTree(caseSets.value)
-          message.success('已创建目录')
-        } catch (err: any) {
-          message.error(err.message || '创建目录失败')
-        }
-      })
-      break
-    case 'rename':
-      if (folder.id === ROOT_FOLDER_ID) {
-        message.warning('主目录为系统挂载点，不可重命名')
-        break
-      }
-      openPrompt('重命名目录', folder.name, async (val) => {
-        try {
-          const updated = await api.cases.updateFolder(folder.id, { name: val })
-          folderRecords.value = folderRecords.value.map(item => item.id === folder.id ? updated : item)
-          syncCaseSetTree(caseSets.value)
-          message.success('已更新目录名')
-        } catch (err: any) {
-          message.error(err.message || '重命名目录失败')
-        }
-      })
-      break
-    case 'delete':
-      if (folder.id === ROOT_FOLDER_ID) {
-        message.warning('主目录为系统挂载点，不可删除')
-        break
-      }
-      dialog.warning({
-        title: '删除目录',
-        content: `确认删除「${folder.name}」？目录必须为空。`,
-        positiveText: '删除',
-        negativeText: '取消',
-        onPositiveClick: async () => {
-          try {
-            await api.cases.deleteFolder(folder.id)
-            folderRecords.value = folderRecords.value.filter(item => item.id !== folder.id)
-            syncCaseSetTree(caseSets.value)
-            message.success('已删除目录')
-          } catch (err: any) {
-            message.error(err.message || '删除目录失败')
-          }
-        },
-      })
-      break
-  }
-}
-
-async function handleRowMenuSelect(key: string | number) {
-  const idx = ctxRow.idx
-  ctxRow.show = false
-  const row = cases.value[idx]
-  if (!row) return
-  switch (String(key)) {
-    case 'toggle-check':
-      toggleCaseChecked(row)
-      break
-    case 'edit':
-      openCaseEditModal(idx)
-      break
-    case 'ai-fill':
-      aiFillCaseRow(row)
-      break
-    case 'copy':
-      await copyCaseJson(row)
-      break
-    case 'insert-above':
-      insertCaseAt(idx)
-      break
-    case 'insert':
-      insertCaseAt(idx + 1)
-      break
-    case 'duplicate':
-      duplicateCase(idx)
-      break
-    case 'delete':
-      deleteCase(idx)
-      break
-  }
-}
-
-function toggleCaseChecked(row: TestCase) {
-  const i = selectedCaseIds.value.indexOf(row.id)
-  if (i >= 0) selectedCaseIds.value.splice(i, 1)
-  else selectedCaseIds.value.push(row.id)
-}
-
-async function aiFillCaseRow(row: TestCase) {
-  if (currentSet.value?.status === 'confirmed') return
-  if (!api.isMock()) {
-    const applied = await requestAiFill([row.id])
-    if (applied > 0) message.success('AI 已生成补全候选，点击“保存修改”后生效')
-    return
-  }
-  if (!row.precondition) row.precondition = '前置服务已启动，测试数据已插桩'
-  if (!row.test_type) row.test_type = '自动化回归'
-  hasUnsavedChanges.value = true
-  message.success('AI 已补全前置条件与测试类型，点击“保存修改”后生效')
-}
-
-async function copyCaseJson(row: TestCase) {
-  try {
-    await navigator.clipboard.writeText(JSON.stringify(row, null, 2))
-    message.success('已复制用例 JSON')
-  } catch {
-    message.error('复制失败：浏览器未授权剪贴板访问')
-  }
-}
-
-function insertCaseAt(at: number) {
-  if (currentSet.value?.status === 'confirmed') return
-  const neighbor = cases.value[Math.min(at, cases.value.length - 1)]
-  const item: TestCase = {
-    id: `c-${Date.now()}`,
-    strategy: '正向',
-    priority: 'FHX',
-    module: neighbor?.module || '通用',
-    name: '',
-    expected: '',
-    precondition: '',
-    mapped: false,
-    pending: false,
-  }
-  cases.value.splice(at, 0, item)
-  selectedCaseIds.value.push(item.id)
-  hasUnsavedChanges.value = true
-  message.info('已插入空白用例，点击“保存修改”后生效')
-}
-
-function duplicateCase(idx: number) {
-  if (currentSet.value?.status === 'confirmed') return
-  const src = cases.value[idx]
-  if (!src) return
-  const copy: TestCase = { ...src, id: `c-${Date.now()}`, name: `${src.name}（副本）`, mapped: false, pending: false }
-  cases.value.splice(idx + 1, 0, copy)
-  selectedCaseIds.value.push(copy.id)
-  hasUnsavedChanges.value = true
-  message.info('已创建用例副本，点击“保存修改”后生效')
-}
-
-function batchDeleteCases() {
-  if (currentSet.value?.status === 'confirmed') return
-  const ids = selectedCaseIds.value.filter(id => cases.value.some(item => item.id === id))
-  if (!ids.length) return
-  dialog.warning({
-    title: '批量删除用例',
-    content: `确认删除勾选的 ${ids.length} 条用例？删除后需点击“保存修改”才会落库。`,
-    positiveText: '确认删除',
-    negativeText: '取消',
-    onPositiveClick: () => {
-      const idSet = new Set(ids)
-      cases.value = cases.value.filter(item => !idSet.has(item.id))
-      selectedCaseIds.value = []
-      hasUnsavedChanges.value = true
-      message.info(`已删除 ${ids.length} 条用例，点击“保存修改”后生效`)
-    },
-  })
-}
-
-async function copyText(text: string, tip: string) {
-  try {
-    await navigator.clipboard.writeText(text)
-    message.success(tip)
-  } catch {
-    message.error('复制失败：浏览器未授权剪贴板访问')
-  }
-}
-
-function openPrompt(title: string, defaultValue: string, onSubmit: (val: string) => void | Promise<void>) {
-  promptState.title = title
-  promptState.value = defaultValue
-  promptState.placeholder = '请输入'
-  promptState.show = true
-  promptSubmit = onSubmit
-}
-
-async function submitPrompt() {
-  const val = promptState.value.trim()
-  if (!val) {
-    message.warning('请输入内容')
-    return
-  }
-  const cb = promptSubmit
-  promptState.show = false
-  promptSubmit = null
-  if (cb) await cb(val)
-}
-
-function handleCreateSetMenu(key: string | number) {
-  const action = String(key)
-  if (action === 'ai') openAiGenWizard()
-  else if (action === 'import') openImportModal()
-  else if (action === 'template') void downloadImportTemplate()
-  else handleCreateCaseSet()
-}
-
-function openImportModal(folderId = '') {
-  importFolderId.value = folderId
-  showImportModal.value = true
-}
-
-async function downloadImportTemplate() {
-  try {
-    const blob = await api.cases.downloadImportTemplate()
-    const url = URL.createObjectURL(blob)
-    const anchor = document.createElement('a')
-    anchor.href = url
-    anchor.download = '用例导入模板.xlsx'
-    anchor.click()
-    URL.revokeObjectURL(url)
-    message.success('已下载 Excel 模板')
-  } catch (err: any) {
-    message.error(err.message || '下载模板失败')
-  }
-}
-
-async function onExcelImported(setId: string) {
-  await loadCaseSets()
-  await selectCaseSet(setId)
-}
-
-function openCaseEditModal(idx: number) {
-  const row = cases.value[idx]
-  if (!row) return
-  editingCell.value = null
-  editingExtraCell.value = null
-  editCaseIdx.value = idx
-  editDraft.value = { ...row }
-  showEditCaseModal.value = true
-}
-
-function saveCaseEdit() {
-  const row = cases.value[editCaseIdx.value]
-  if (!row) {
-    showEditCaseModal.value = false
-    return
-  }
-  if (!String(editDraft.value.name || '').trim()) {
-    message.warning('用例名称不能为空')
-    return
-  }
-  if (!String(editDraft.value.expected || '').trim()) {
-    message.warning('预期结果不能为空')
-    return
-  }
-  Object.assign(row, editDraft.value)
-  hasUnsavedChanges.value = true
-  showEditCaseModal.value = false
-  message.success(`已更新用例「${row.name}」，点击“保存修改”落库`)
-}
-
-function openAddColModal() {
-  if (!currentSet.value) return
-  newColKey.value = ''
-  newColName.value = ''
-  showAddColModal.value = true
-}
-
-async function addCustomCol() {
-  if (!currentSet.value) return
-  const key = newColKey.value.trim().toLowerCase()
-  const name = newColName.value.trim()
-  if (!/^[a-z][a-z0-9_]*$/.test(key)) {
-    message.warning('字段 Key 需为小写字母开头的字母/数字/下划线组合')
-    return
-  }
-  if (!name) {
-    message.warning('请填写显示名称')
-    return
-  }
-  const reserved = ['id', 'strategy', 'priority', 'module', 'name', 'expected', 'precondition', 'steps', 'test_type', 'mapped', 'pending', 'selected']
-  if (reserved.includes(key) || customCols.value.some(c => c.key === key)) {
-    message.warning(`字段 Key「${key}」已存在或为内置字段`)
-    return
-  }
-  addingCol.value = true
-  try {
-    const nextCols = [...customCols.value, { key, name }]
-    await api.cases.updateSet(currentSet.value.id, { column_schema: nextCols })
-    customColsMap.value[currentSet.value.id] = nextCols
-    showAddColModal.value = false
-    message.success(`已添加扩展列「${name}」`)
-  } catch (err: any) {
-    message.error(err.message || '新增扩展列失败')
-  } finally {
-    addingCol.value = false
-  }
-}
-
-async function removeCustomCol(key: string) {
-  if (!currentSet.value) return
-  try {
-    const nextCols = customCols.value.filter(c => c.key !== key)
-    await api.cases.updateSet(currentSet.value.id, { column_schema: nextCols })
-    customColsMap.value[currentSet.value.id] = nextCols
-    message.info(`已移除扩展列 ${key}`)
-  } catch (err: any) {
-    message.error(err.message || '移除扩展列失败')
+    cases.value = []
+    message.error(err.message || '加载用例列表失败')
   }
 }
 
 async function loadCaseSets() {
   try {
-    const [list, folderList] = await Promise.all([api.cases.listSets(), api.cases.listFolders()])
-    folderRecords.value = folderList
+    const list = await api.cases.listSets()
     caseSets.value = list
-    syncCaseSetTree(list)
-    const selected = list.find(item => item.id === activeSetId.value) || list[0]
+    let root = folders.value.find(f => f.id === 'cases')
+    if (!root) {
+      root = { id: 'cases', name: '用例集目录', open: true, items: [] }
+      folders.value = [root]
+    }
+    root.items = list
+    const selected = list.find((s: any) => s.id === activeSetId.value) || list[0]
     if (selected) await selectCaseSet(selected.id)
     else cases.value = []
   } catch (err: any) {
     caseSets.value = []
-    cases.value = []
-    folderRecords.value = []
-    syncCaseSetTree([])
     message.error(err.message || '加载用例集失败')
   }
 }
 
+// 右键上下文菜单
+const ctxMenu = ref<{ show: boolean; x: number; y: number; type: CtxMenuType; targetId: string; rowIdx: number }>({
+  show: false,
+  x: 0,
+  y: 0,
+  type: 'file',
+  targetId: '',
+  rowIdx: -1,
+})
+
+function openCtxMenu(e: MouseEvent, type: CtxMenuType, targetId = '', rowIdx = -1) {
+  ctxMenu.value = { show: true, x: e.clientX, y: e.clientY, type, targetId, rowIdx }
+}
+function closeCtxMenu() {
+  ctxMenu.value.show = false
+}
+
+// ─── 右键菜单配齐 SVG 图标 ───
+const ctxMenuOptions = computed<DropdownOption[]>(() => {
+  if (ctxMenu.value.type === 'file') {
+    const s = caseSets.value.find((item: any) => item.id === ctxMenu.value.targetId)
+    return [
+      { label: '发起基准评测', key: 'eval', icon: renderIcon('M5 3l14 9-14 9V3z', '#0F766E') },
+      { label: '确认入库', key: 'confirm-set', disabled: s?.status === 'confirmed', icon: renderIcon('M20 6L9 17l-5-5', '#15803D') },
+      { type: 'divider', key: 'd1' },
+      { label: '导出 Excel', key: 'export-excel', icon: renderIcon(['M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4', 'M7 10l5 5 5-5', 'M12 15V3']) },
+      { label: '导出 XMind', key: 'export-xmind', icon: renderIcon(['M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9', 'M13.73 21a2 2 0 0 1-3.46 0']) },
+      { label: '重命名', key: 'rename', icon: renderIcon('M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z') },
+      { label: '复制用例集 ID', key: 'copy-id', icon: renderIcon(['M8 4v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7.242a2 2 0 0 0-.602-1.43L16.083 2.57A2 2 0 0 0 14.685 2H10a2 2 0 0 0-2 2z', 'M16 18v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h2']) },
+      { type: 'divider', key: 'd2' },
+      { label: '删除用例集', key: 'delete-set', props: { style: 'color: #DC2626' }, icon: renderIcon(['M3 6h18', 'M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2'], '#DC2626') },
+    ]
+  }
+  if (ctxMenu.value.type === 'folder') {
+    return [
+      { label: '新建空用例集', key: 'new-set', icon: renderIcon(['M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z', 'M12 11v6', 'M9 14h6']) },
+      { label: '新建子目录', key: 'new-folder', icon: renderIcon('M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z') },
+    ]
+  }
+  const c = cases.value[ctxMenu.value.rowIdx]
+  return [
+    { label: '详细编辑', key: 'edit', icon: renderIcon(['M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7', 'M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z']) },
+    { label: '复制为 JSON', key: 'copy-json', icon: renderIcon(['M8 4v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7.242a2 2 0 0 0-.602-1.43L16.083 2.57A2 2 0 0 0 14.685 2H10a2 2 0 0 0-2 2z', 'M16 18v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h2']) },
+    { label: isCaseChecked(c) ? '取消勾选' : '勾选本行', key: 'toggle-check', icon: renderIcon(['M9 11l3 3L22 4', 'M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11']) },
+    { type: 'divider', key: 'd1' },
+    { label: '上方插入用例', key: 'insert-above', icon: renderIcon(['M12 19V5', 'M5 12l7-7 7 7']) },
+    { label: '下方插入用例', key: 'insert-below', icon: renderIcon(['M12 5v14', 'M19 12l-7 7-7-7']) },
+    { label: '创建用例副本', key: 'duplicate-case', icon: renderIcon(['M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2', 'M9 14l2 2 4-4']) },
+    { type: 'divider', key: 'd2' },
+    { label: '删除本用例', key: 'delete-case', props: { style: 'color: #DC2626' }, icon: renderIcon(['M3 6h18', 'M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2'], '#DC2626') },
+  ]
+})
+
+function handleCtxSelect(key: string | number) {
+  const { type, targetId, rowIdx } = ctxMenu.value
+  closeCtxMenu()
+  const action = String(key)
+  if (type === 'file') void handleFileCtxAction(action, targetId)
+  else if (type === 'folder') void handleFolderCtxAction(action, targetId)
+  else void handleRowCtxAction(action, rowIdx)
+}
+
+async function handleFileCtxAction(key: string, targetId: string) {
+  const s = caseSets.value.find((item: any) => item.id === targetId)
+  if (!s) return
+  switch (key) {
+    case 'eval':
+      requestSelectCaseSet(targetId, () => openLaunchDrawer())
+      break
+    case 'confirm-set':
+      await confirmCaseSet()
+      break
+    case 'export-excel':
+      exportExcel()
+      break
+    case 'export-xmind':
+      exportXMind()
+      break
+    case 'rename':
+      openNameDialog('重命名用例集', '用例集名称', s.name, async (val) => {
+        const updated = await api.cases.updateSet(targetId, { name: val })
+        const idx = caseSets.value.findIndex((item: any) => item.id === targetId)
+        if (idx !== -1) caseSets.value[idx] = updated
+        await loadCaseSets()
+        message.success('重命名成功')
+      })
+      break
+    case 'copy-id':
+      await navigator.clipboard.writeText(targetId)
+      message.success('已复制用例集 ID')
+      break
+    case 'delete-set':
+      confirmDeleteCaseSet(s)
+      break
+  }
+}
+
+function confirmDeleteCaseSet(s: CaseSet) {
+  dialog.warning({
+    title: '删除用例集确认',
+    content: `确认删除「${s.name}」？关联的历史评测任务不受影响。`,
+    positiveText: '确认删除',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      try {
+        await api.cases.cancelSet(s.id, '用户删除用例集')
+        if (activeSetId.value === s.id) activeSetId.value = ''
+        await loadCaseSets()
+        message.success(`已删除「${s.name}」`)
+      } catch (err: any) {
+        message.error(err.message || '删除失败')
+      }
+    },
+  })
+}
+
+async function handleFolderCtxAction(key: string, folderId: string) {
+  if (key === 'new-set') createEmptyCaseSet()
+}
+
+async function handleRowCtxAction(key: string, rowIdx: number) {
+  const c = cases.value[rowIdx]
+  if (!c) return
+  switch (key) {
+    case 'edit':
+      openCaseEditModal(rowIdx)
+      break
+    case 'copy-json':
+      await navigator.clipboard.writeText(JSON.stringify(c, null, 2))
+      message.success('已复制用例 JSON')
+      break
+    case 'toggle-check':
+      toggleCaseChecked(c)
+      break
+    case 'insert-above':
+      cases.value.splice(rowIdx, 0, buildEmptyCase())
+      hasUnsavedChanges.value = true
+      message.info('已在上方插入用例')
+      break
+    case 'insert-below':
+      cases.value.splice(rowIdx + 1, 0, buildEmptyCase())
+      hasUnsavedChanges.value = true
+      message.info('已在下方插入用例')
+      break
+    case 'duplicate-case': {
+      const copy: ExtendedTestCase = {
+        ...c,
+        id: `temp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        code: `TC-${String(cases.value.length + 1).padStart(3, '0')}`,
+        extras: { ...c.extras },
+      }
+      cases.value.splice(rowIdx + 1, 0, copy)
+      hasUnsavedChanges.value = true
+      message.success(`已复制用例 ${c.code}`)
+      break
+    }
+    case 'delete-case':
+      deleteCase(rowIdx)
+      break
+  }
+}
+
+// 弹窗状态
+const nameDialog = ref<{ show: boolean; title: string; label: string; value: string; action: ((val: string) => void | Promise<void>) | null }>({
+  show: false,
+  title: '',
+  label: '',
+  value: '',
+  action: null,
+})
+const nameDialogBusy = ref(false)
+
+function openNameDialog(title: string, label: string, initial: string, action: (val: string) => void | Promise<void>) {
+  nameDialog.value = { show: true, title, label, value: initial, action }
+}
+async function confirmNameDialog() {
+  const val = nameDialog.value.value.trim()
+  if (!val) {
+    message.warning('请输入名称')
+    return
+  }
+  if (!nameDialog.value.action) return
+  nameDialogBusy.value = true
+  try {
+    await nameDialog.value.action(val)
+    nameDialog.value.show = false
+  } catch (err: any) {
+    message.error(err.message || '操作失败')
+  } finally {
+    nameDialogBusy.value = false
+  }
+}
+
+// 用例结构化编辑弹窗
+const caseEdit = ref<{
+  show: boolean
+  idx: number
+  code: string
+  name: string
+  module: string
+  strategy: CaseStrategy
+  priority: CasePriority
+  preconditions: string
+  expected_result: string
+}>({
+  show: false,
+  idx: -1,
+  code: '',
+  name: '',
+  module: '',
+  strategy: '正向',
+  priority: 'HX',
+  preconditions: '',
+  expected_result: '',
+})
+
+function openCaseEditModal(idx: number) {
+  const c = cases.value[idx]
+  if (!c) return
+  caseEdit.value = {
+    show: true,
+    idx,
+    code: c.code,
+    name: c.name,
+    module: c.module || '通用',
+    strategy: c.strategy || '正向',
+    priority: c.priority || 'HX',
+    preconditions: c.preconditions || '',
+    expected_result: c.expected_result || '',
+  }
+}
+
+function saveCaseEdit() {
+  const c = cases.value[caseEdit.value.idx]
+  if (!c) return
+  c.name = caseEdit.value.name.trim()
+  c.module = caseEdit.value.module.trim()
+  c.strategy = caseEdit.value.strategy
+  c.priority = caseEdit.value.priority
+  c.preconditions = caseEdit.value.preconditions.trim()
+  c.expected_result = caseEdit.value.expected_result.trim()
+  hasUnsavedChanges.value = true
+  caseEdit.value.show = false
+  message.success(`已更新用例 ${c.code}，保存后生效`)
+}
+
+// 批量映射至数据集弹窗
+const batchMap = ref({ show: false, targetDatasetId: '' })
+const datasetsList = ref<Dataset[]>([])
+const datasetOptions = computed(() => datasetsList.value.map(d => ({ label: `${d.name} (v${d.version})`, value: d.id })))
+
+async function openBatchMapModal() {
+  try {
+    datasetsList.value = await api.datasets.list()
+    batchMap.value = { show: true, targetDatasetId: datasetsList.value[0]?.id || '' }
+  } catch {
+    message.error('加载数据集失败')
+  }
+}
+
+async function confirmBatchMap() {
+  const dsId = batchMap.value.targetDatasetId
+  if (!dsId) return
+  const selected = cases.value.filter(c => selectedCaseIds.value.includes(c.id || c.code))
+  if (!selected.length) return
+  try {
+    const rows = ((await api.datasets.getRows(dsId)) || []).slice()
+    let maxRowNo = Math.max(0, ...rows.map(r => r.row_no || 0))
+    selected.forEach(c => {
+      rows.push({
+        row_no: ++maxRowNo,
+        question: c.name,
+        reference: c.expected_result,
+        context: c.preconditions || null,
+        tags: `${c.strategy},${c.priority}`,
+        difficulty: c.priority === 'HX' ? '高' : '中等',
+      } as any)
+      c.target_dataset_id = dsId
+    })
+    await api.datasets.saveRows(dsId, rows as any)
+    hasUnsavedChanges.value = true
+    batchMap.value.show = false
+    selectedCaseIds.value = []
+    message.success(`已将 ${selected.length} 条用例映射导入指定数据集`)
+  } catch (err: any) {
+    message.error(err.message || '映射失败')
+  }
+}
+
+// 自定义扩展列
+const addCol = ref({ show: false, key: '', name: '' })
+function openAddColModal() {
+  addCol.value = { show: true, key: '', name: '' }
+}
+function confirmAddCol() {
+  const s = currentSet.value
+  if (!s) return
+  const key = addCol.value.key.trim().toLowerCase()
+  const name = addCol.value.name.trim()
+  if (!/^[a-z][a-z0-9_]*$/.test(key)) {
+    message.warning('字段 Key 需以字母开头，仅含小写字母/数字/下划线')
+    return
+  }
+  if (!name) {
+    message.warning('请填写列显示名称')
+    return
+  }
+  const list = customColsMap.value[s.id] || []
+  if (list.some(col => col.key === key)) {
+    message.warning('该字段 Key 已存在')
+    return
+  }
+  const nextCols: CustomColumn[] = [...list, { key, name, type: 'text' }]
+  customColsMap.value[s.id] = nextCols
+  cases.value.forEach(c => {
+    if (!c.extras) c.extras = {}
+    c.extras[key] = ''
+  })
+  hasUnsavedChanges.value = true
+  addCol.value.show = false
+  message.success(`已添加用例属性列「${name}」`)
+}
+
+function removeCustomCol(key: string) {
+  const s = currentSet.value
+  if (!s) return
+  const prevCols = customColsMap.value[s.id] || []
+  customColsMap.value[s.id] = prevCols.filter(col => col.key !== key)
+  cases.value.forEach(c => {
+    if (c.extras) delete c.extras[key]
+  })
+  hasUnsavedChanges.value = true
+  message.info(`已移除列 ${key}`)
+}
+
+// 抽屉式 PRD 用例推导向导
+const PRD_PRESETS = [
+  { name: '收银台跨境支付与结算', desc: '用户在跨境电商结算时选用 Visa/MasterCard 外币快捷支付，涉及 3DS 认证、汇率换算与扣款回调。' },
+  { name: '账户风控防刷与封禁', desc: '同一 IP 短时间内频繁注册或登录密码连续输错 5 次，系统触发图形验证码或人脸核身并临时冻结 30 分钟。' },
+  { name: '全额退款与售后逆向', desc: '未发货订单申请全额退款原路退回；已发货订单需商家收货质检无误后 1-3 工作日释放资金。' },
+]
+
+interface AiCaseCandidate {
+  selected: boolean
+  code: string
+  name: string
+  module: string
+  strategy: CaseStrategy
+  priority: CasePriority
+  preconditions: string
+  steps: string[]
+  expected_result: string
+}
+
+const aiGen = ref({
+  show: false,
+  step: 1 as 1 | 2,
+  preset: PRD_PRESETS[0].desc,
+  prdText: PRD_PRESETS[0].desc,
+  strategies: [...STRATEGIES],
+  count: 10,
+  model: 'gpt-4.1',
+  temperature: 0.5,
+  generating: false,
+  candidates: [] as AiCaseCandidate[],
+})
+
+const presetOptions = computed(() => PRD_PRESETS.map(p => ({ label: `${p.name} · ${p.desc.slice(0, 30)}...`, value: p.desc })))
+const aiSelectedCount = computed(() => aiGen.value.candidates.filter(c => c.selected).length)
+const aiAllSelected = computed(() => aiGen.value.candidates.length > 0 && aiSelectedCount.value === aiGen.value.candidates.length)
+
+function openAiGenDrawer() {
+  aiGen.value.show = true
+  aiGen.value.step = 1
+}
+function onPresetChange(val: string) {
+  aiGen.value.prdText = val
+}
+function toggleStrategy(s: CaseStrategy) {
+  const idx = aiGen.value.strategies.indexOf(s)
+  if (idx >= 0) aiGen.value.strategies.splice(idx, 1)
+  else aiGen.value.strategies.push(s)
+}
+
+async function runAiGenerateCases() {
+  if (!aiGen.value.prdText.trim()) {
+    message.warning('请填写 PRD 需求描述')
+    return
+  }
+  if (!aiGen.value.strategies.length) {
+    message.warning('请至少选择一个测试策略')
+    return
+  }
+  aiGen.value.generating = true
+  try {
+    let candidates: AiCaseCandidate[] = []
+    if (api.isMock()) {
+      await new Promise(resolve => setTimeout(resolve, 500))
+      const strats = aiGen.value.strategies
+      candidates = Array.from({ length: aiGen.value.count }, (_, i) => ({
+        selected: true,
+        code: `TC-${String(i + 1).padStart(3, '0')}`,
+        name: `验证跨境交易场景下的测试用例 #${i + 1}`,
+        module: '收银支付',
+        strategy: strats[i % strats.length],
+        priority: (i === 0 ? 'HX' : i % 2 === 0 ? 'FHX' : 'BJ') as CasePriority,
+        preconditions: '账户处于正常状态，绑卡成功',
+        steps: ['1. 唤起收银台', '2. 选择外卡支付', '3. 完成 3DS 校验'],
+        expected_result: '返回扣款成功回调并在 100ms 内推送账单流水。',
+      }))
+    } else {
+      const generated = await api.cases.generateCases({
+        prd_text: aiGen.value.prdText.trim(),
+        strategies: aiGen.value.strategies,
+        count: aiGen.value.count,
+        model: aiGen.value.model,
+        temperature: aiGen.value.temperature,
+      })
+      candidates = (generated as any[]).map((c, i) => ({
+        selected: true,
+        code: c.code || `TC-${String(i + 1).padStart(3, '0')}`,
+        name: c.name || c.question || '',
+        module: c.module || '通用',
+        strategy: (c.strategy as CaseStrategy) || '正向',
+        priority: (c.priority as CasePriority) || 'HX',
+        preconditions: c.preconditions || c.precondition || '',
+        steps: Array.isArray(c.steps) ? c.steps : typeof c.steps === 'string' ? [c.steps] : [],
+        expected_result: c.expected_result || c.expected || c.reference || '',
+      }))
+    }
+    aiGen.value.candidates = candidates
+    aiGen.value.step = 2
+  } catch (err: any) {
+    message.error(err.message || '推导用例失败')
+  } finally {
+    aiGen.value.generating = false
+  }
+}
+
+function toggleAllCandidates() {
+  const target = aiSelectedCount.value < aiGen.value.candidates.length
+  aiGen.value.candidates.forEach(c => { c.selected = target })
+}
+
+async function commitAiCandidates() {
+  const selected = aiGen.value.candidates.filter(c => c.selected)
+  if (!selected.length) return
+  if (!currentSet.value) {
+    try {
+      const created = await api.cases.createSet({ name: `PRD推导-${new Date().toLocaleDateString()}` })
+      await loadCaseSets()
+      await selectCaseSet(created.id)
+    } catch {
+      message.error('创建用例集失败')
+      return
+    }
+  }
+  let baseNum = cases.value.length
+  selected.forEach(cand => {
+    cases.value.push({
+      id: `temp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      set_id: activeSetId.value,
+      code: `TC-${String(++baseNum).padStart(3, '0')}`,
+      name: cand.name,
+      module: cand.module,
+      strategy: cand.strategy,
+      priority: cand.priority,
+      preconditions: cand.preconditions,
+      steps: cand.steps,
+      expected_result: cand.expected_result,
+      checked: false,
+      extras: {},
+    })
+  })
+  hasUnsavedChanges.value = true
+  aiGen.value.show = false
+  message.success(`已导入 ${selected.length} 条用例，点击“保存修改”落库`)
+}
+
 function onGlobalKeydown(e: KeyboardEvent) {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
-    if (hasUnsavedChanges.value && currentSet.value && currentSet.value.status !== 'confirmed') {
+    if (hasUnsavedChanges.value && currentSet.value?.status !== 'confirmed') {
       e.preventDefault()
       void persistCases()
     }
@@ -1992,43 +1843,40 @@ function onGlobalKeydown(e: KeyboardEvent) {
 
 onMounted(() => {
   void loadCaseSets()
-  void loadMappingTargets()
   window.addEventListener('keydown', onGlobalKeydown)
 })
 
 onUnmounted(() => {
   window.removeEventListener('keydown', onGlobalKeydown)
 })
-
-watch(() => modeStore.mode, () => {
-  void loadMappingTargets()
-})
 </script>
 
 <style scoped>
+/* ─── 全局北欧极简浅色用例工作台 (Nordic Minimalist / Stripe 质感) ─── */
 .cases-workbench {
   height: calc(100vh - var(--topbar-h) - 20px);
   min-height: 0;
   display: flex;
   flex-direction: column;
+  outline: none;
+  font-size: 14px;
 }
 
-/* ─── IDE 工作台分栏骨架 ─── */
-.ft-layout {
+.nordic-layout {
   display: grid;
-  grid-template-columns: var(--ft-w, 290px) minmax(0, 1fr);
+  grid-template-columns: var(--tree-w, 280px) minmax(0, 1fr);
   height: 100%;
   min-width: 0;
-  background: var(--bg-main);
-  border-radius: 16px;
+  background: #FCFCFA;
+  border-radius: 10px;
   overflow: hidden;
-  border: 1px solid var(--border-subtle);
-  box-shadow: 0 4px 20px rgba(17, 24, 39, 0.04);
+  border: 1px solid #E7E7E2;
 }
 
-.ft-sidebar {
-  border-right: 1px solid var(--border-subtle);
-  background: var(--bg-elevated);
+/* ─── 侧边栏 ─── */
+.nordic-sidebar {
+  border-right: 1px solid #E7E7E2;
+  background: #F8F8F5;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -2036,45 +1884,49 @@ watch(() => modeStore.mode, () => {
   user-select: none;
 }
 
-.ft-header {
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--border-subtle);
+.sidebar-header {
+  padding: 14px 16px;
+  border-bottom: 1px solid #E7E7E2;
 }
-.ft-title {
+.sidebar-title-row {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-weight: 600;
-  font-size: 13px;
-  color: var(--text-primary);
+  justify-content: space-between;
+  margin-bottom: 10px;
 }
-.ft-title-icon {
-  color: var(--c-cases);
+.sidebar-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-weight: 600;
+  font-size: 14px;
+  color: #18181B;
+}
+.title-icon {
+  color: #0F766E;
+}
+.sidebar-actions {
+  display: flex;
+  gap: 5px;
 }
 
 .btn-xs {
-  min-height: 26px;
+  min-height: 25px;
   padding: 2px 8px;
-  font-size: 11px;
-  border-radius: 6px;
-  transition: transform 0.1s ease, filter 0.1s ease;
-}
-.btn-xs:active {
-  transform: scale(0.96);
-}
-.btn-ai-soft {
-  background: var(--t-agent);
-  color: var(--c-agent);
-  border: 1px solid transparent;
-}
-.btn-ai-soft:hover {
-  filter: brightness(0.96);
-}
-.sparkle {
   font-size: 12px;
+  border-radius: 4px;
+}
+.btn-ghost-subtle {
+  background: transparent;
+  border: 1px solid transparent;
+  color: #52525B;
+}
+.btn-ghost-subtle:hover {
+  background: #EFEFEA;
+  color: #18181B;
 }
 
-.search-input-wrapper {
+.search-box {
   position: relative;
   display: flex;
   align-items: center;
@@ -2082,39 +1934,40 @@ watch(() => modeStore.mode, () => {
 .search-icon {
   position: absolute;
   left: 9px;
-  color: var(--text-tertiary);
+  color: #A1A1AA;
   pointer-events: none;
 }
-.tree-search-input {
+.search-input {
+  width: 100%;
   height: 30px;
   padding-left: 28px;
   padding-right: 24px;
-  font-size: 12px;
-  border-radius: 8px;
-  background: var(--bg-main);
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  font-size: 13px;
+  border-radius: 6px;
+  border: 1px solid #E2E2DC;
+  background: #FFFFFF;
+  color: #18181B;
+  outline: none;
+  transition: border-color 0.12s ease;
 }
-.tree-search-input:focus {
-  border-color: var(--accent-ai);
-  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.15);
+.search-input:focus {
+  border-color: #1E293B;
 }
 .clear-search-btn {
   position: absolute;
   right: 7px;
   background: none;
   border: none;
-  color: var(--text-tertiary);
-  font-size: 11px;
+  color: #A1A1AA;
+  font-size: 12px;
   cursor: pointer;
-  padding: 3px;
-  border-radius: 4px;
+  padding: 2px;
 }
 .clear-search-btn:hover {
-  background: rgba(17, 24, 39, 0.08);
-  color: var(--text-primary);
+  color: #18181B;
 }
 
-.ft-tree {
+.tree-content {
   flex: 1;
   overflow-y: auto;
   padding: 8px;
@@ -2123,112 +1976,102 @@ watch(() => modeStore.mode, () => {
   gap: 2px;
 }
 
-.ft-node {
+.tree-node {
   display: flex;
   align-items: center;
   gap: 7px;
   padding: 6px 10px;
-  border-radius: 8px;
-  font-size: 13px;
+  border-radius: 6px;
+  font-size: 13.5px;
   cursor: pointer;
-  transition: background-color 0.12s cubic-bezier(0.16, 1, 0.3, 1), color 0.12s ease;
-  color: var(--text-secondary);
+  color: #52525B;
+  transition: background-color 0.1s ease, color 0.1s ease;
 }
-.ft-node:hover {
-  background: rgba(17, 24, 39, 0.04);
-  color: var(--text-primary);
+.tree-node:hover {
+  background: #EFEFEA;
+  color: #18181B;
 }
-[data-theme='dark'] .ft-node:hover {
-  background: rgba(255, 255, 255, 0.05);
-}
-.ft-node.active {
-  background: var(--t-cases);
-  color: var(--c-cases);
+.tree-node.active {
+  background: #FFFFFF;
+  color: #1E293B;
   font-weight: 600;
+  border: 1px solid #E2E2DC;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
 }
-.ft-node.folder {
+
+.folder-node {
   font-weight: 600;
-  color: var(--text-primary);
+  color: #27272A;
+  font-size: 14px;
 }
-
-.ft-chevron {
-  display: grid;
-  place-items: center;
-  color: var(--text-tertiary);
-  transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1);
-}
-.ft-chevron.rotated {
-  transform: rotate(90deg);
-}
-
-.ft-folder-icon {
-  color: var(--text-secondary);
-  flex-shrink: 0;
-}
-.ft-folder-name {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ft-folder-child {
-  padding-left: 14px;
+.folder-children {
+  padding-left: 16px;
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
 
-.case-icon {
-  color: var(--c-cases);
+.chevron-icon {
+  display: grid;
+  place-items: center;
+  color: #A1A1AA;
+  transition: transform 0.15s ease;
+}
+.chevron-icon.rotated {
+  transform: rotate(90deg);
+}
+
+.folder-icon {
+  color: #71717A;
   flex-shrink: 0;
 }
-.ft-file-name {
+.file-icon {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+.file-icon.status-confirmed { color: #15803D; }
+.file-icon.status-draft { color: #71717A; }
+.file-icon.status-generated { color: #B45309; }
+
+.node-name {
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.version-badge {
+  font-size: 11px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: #EFEFEA;
+  color: #71717A;
+}
+.badge-confirmed { background: #F0FDF4; color: #15803D; }
+.badge-draft { background: #F4F4F5; color: #71717A; }
+.badge-generated { background: #FEF3C7; color: #92400E; }
 
-.status-micro-pill {
-  font-size: 10px;
-  padding: 1px 6px;
-  border-radius: 4px;
-  margin-left: auto;
-  font-weight: 500;
+.pending-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #D97706;
 }
-.status-confirmed {
-  background: #D1FAE5;
-  color: #047857;
-}
-.status-pending {
-  background: #FEF3C7;
-  color: #B45309;
-}
-.status-cancelled {
-  background: #F3F4F6;
-  color: #6B7280;
-}
-
-.ft-badge {
+.node-badge {
   margin-left: auto;
   font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--text-tertiary);
-}
-
-.ft-empty-state {
-  padding: 32px 16px;
-  text-align: center;
-  color: var(--text-tertiary);
   font-size: 12px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
+  color: #A1A1AA;
 }
 
-.ft-resizer {
+.tree-empty {
+  padding: 36px 16px;
+  text-align: center;
+  color: #A1A1AA;
+  font-size: 12.5px;
+}
+
+.sidebar-resizer {
   position: absolute;
   top: 0;
   right: -3px;
@@ -2239,562 +2082,628 @@ watch(() => modeStore.mode, () => {
   display: grid;
   place-items: center;
 }
-.resizer-handle-line {
+.resizer-bar {
   width: 2px;
   height: 24px;
   border-radius: 1px;
   background: transparent;
-  transition: background 0.15s ease;
 }
-.ft-resizer:hover .resizer-handle-line,
-.ft-resizer.on .resizer-handle-line {
-  background: var(--accent-ai);
+.sidebar-resizer:hover .resizer-bar,
+.sidebar-resizer.active .resizer-bar {
+  background: #1E293B;
 }
 
 /* ─── 主工作区 ─── */
-.workspace-main {
+.nordic-main {
   display: flex;
   flex-direction: column;
   height: 100%;
   min-width: 0;
   min-height: 0;
-  background: var(--bg-main);
+  background: #FCFCFA;
   position: relative;
 }
 
-.ws-toolbar {
+/* 顶栏与就地置换 */
+.main-toolbar {
   padding: 12px 20px;
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 1px solid #E7E7E2;
+  background: #FFFFFF;
+  min-height: 58px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  flex-wrap: wrap;
-  background: var(--bg-main);
+  transition: background-color 0.15s ease;
+}
+.main-toolbar.in-batch-mode {
+  background: #F4F4F0;
 }
 
-.ws-title-group {
+.toolbar-default,
+.toolbar-batch {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.toolbar-title-group {
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
-.ws-title-row {
+.title-row {
   display: flex;
   align-items: center;
   gap: 8px;
 }
-.ws-dataset-title {
-  font-size: 16px;
-  font-weight: 700;
-  color: var(--text-primary);
-}
-.version-pill {
-  font-family: var(--font-mono);
-  font-size: 11px;
+.main-dataset-title {
+  font-size: 17px;
   font-weight: 600;
-  padding: 1px 7px;
-  border-radius: 999px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-subtle);
-  color: var(--text-secondary);
+  color: #18181B;
 }
-
-.status-header-chip {
-  font-size: 11px;
-  font-weight: 600;
-  padding: 1px 8px;
-  border-radius: 999px;
-}
-.chip-confirmed {
-  background: #D1FAE5;
-  color: #047857;
-}
-.chip-countdown {
-  background: #FEF3C7;
-  color: #B45309;
-}
-.chip-cancelled {
-  background: #F3F4F6;
-  color: #6B7280;
-}
-.kind-chip {
-  font-size: 11px;
+.status-badge {
+  font-size: 11.5px;
   font-weight: 500;
-  padding: 1px 8px;
-  border-radius: 999px;
-  border: 1px solid transparent;
+  padding: 1px 7px;
+  border-radius: 4px;
+}
+.status-confirmed { background: #F0FDF4; color: #166534; border: 1px solid #DCFCE7; }
+.status-draft { background: #F4F4F5; color: #52525B; border: 1px solid #E4E4E7; }
+.status-generated { background: #FEFCE8; color: #854D0E; border: 1px solid #FEF08A; }
+
+.status-badge-amber {
+  font-size: 11.5px;
+  padding: 1px 7px;
+  border-radius: 4px;
+  background: #FEF3C7;
+  color: #92400E;
 }
 
-.ws-breadcrumb {
-  font-size: 11px;
-  color: var(--text-tertiary);
+.breadcrumb-row {
+  font-size: 12px;
+  color: #A1A1AA;
   display: flex;
-  align-items: center;
-  gap: 4px;
-}
-.ws-breadcrumb .cur {
-  color: var(--text-secondary);
-}
-
-.ws-action-group {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.action-btn-cluster {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.ai-cluster {
-  background: color-mix(in srgb, var(--c-agent) 6%, transparent);
-  padding: 2px 4px;
-  border-radius: 10px;
-}
-
-.save-btn {
-  position: relative;
-  display: inline-flex;
   align-items: center;
   gap: 5px;
-  transition: transform 0.1s ease, box-shadow 0.2s ease, background-color 0.2s ease;
 }
-.save-btn:active {
-  transform: scale(0.97);
+.breadcrumb-row .cur {
+  color: #71717A;
 }
-.save-btn.dirty {
-  background: var(--accent-ai);
-  box-shadow: 0 0 12px rgba(99, 102, 241, 0.4);
+
+/* 极速表内筛选框 */
+.table-search-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin-left: 10px;
 }
-.save-btn.saved {
-  background: #059669 !important;
-  color: #fff !important;
+.table-search-icon {
+  position: absolute;
+  left: 8px;
+  color: #A1A1AA;
+  pointer-events: none;
 }
-.saved-check-icon {
+.table-search-input {
+  width: 210px;
+  height: 28px;
+  padding-left: 26px;
+  padding-right: 52px;
+  font-size: 12.5px;
+  border-radius: 5px;
+  border: 1px solid #E2E2DC;
+  background: #F8F8F5;
+  color: #18181B;
+  outline: none;
+  transition: all 0.12s ease;
+}
+.table-search-input:focus {
+  width: 260px;
+  background: #FFFFFF;
+  border-color: #1E293B;
+}
+.grid-search-count {
+  position: absolute;
+  right: 18px;
+  font-size: 11px;
+  color: #A1A1AA;
+}
+
+.toolbar-action-group {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+.action-btn-group {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* 按钮通用 (字号 13px) */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+.btn-md {
+  min-height: 30px;
+  padding: 3px 12px;
+}
+.btn-primary {
+  background: #1E293B;
+  color: #FFFFFF;
+  border: 1px solid #1E293B;
+}
+.btn-primary:hover {
+  background: #0F172A;
+}
+.btn-secondary {
+  background: #FFFFFF;
+  color: #3F3F46;
+  border: 1px solid #D4D4D8;
+}
+.btn-secondary:hover {
+  background: #F4F4F0;
+  color: #18181B;
+}
+.btn-ghost {
+  background: transparent;
+  color: #52525B;
+  border: 1px solid transparent;
+}
+.btn-ghost:hover {
+  background: #EFEFEA;
+  color: #18181B;
+}
+.btn-danger {
+  background: #DC2626;
+  color: #FFFFFF;
+  border: 1px solid #DC2626;
+}
+.btn-danger:hover {
+  background: #B91C1C;
+}
+
+.btn-save {
+  background: #FFFFFF;
+  color: #3F3F46;
+  border: 1px solid #D4D4D8;
+}
+.btn-save.dirty {
+  background: #1E293B;
+  color: #FFFFFF;
+  border-color: #1E293B;
+}
+.btn-save.saved {
+  background: #15803D !important;
+  color: #FFFFFF !important;
+  border-color: #15803D !important;
+}
+.saved-icon {
   font-weight: 700;
-  font-size: 12px;
 }
-.dirty-indicator {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #FBBF24;
-  margin-right: 2px;
-  animation: pulse-dot 1.4s infinite;
-}
-
-.shortcut-pill {
-  font-size: 9.5px;
+.shortcut-key {
+  font-size: 10px;
   font-family: var(--font-mono);
-  padding: 1px 4px;
-  border-radius: 3px;
-  background: rgba(255, 255, 255, 0.2);
+  padding: 0 4px;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.08);
   color: inherit;
-  margin-left: 2px;
+}
+.btn-save.dirty .shortcut-key {
+  background: rgba(255, 255, 255, 0.2);
 }
 
-.launch-btn {
-  box-shadow: 0 2px 8px rgba(17, 24, 39, 0.12);
-  transition: transform 0.1s ease, box-shadow 0.15s ease;
+/* 批量操作置换 */
+.batch-info {
+  display: flex;
+  align-items: center;
 }
-.launch-btn:active {
-  transform: scale(0.97);
+.batch-count {
+  font-size: 14px;
+  color: #18181B;
+}
+.batch-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
-/* ─── 策略分布全景概览栏 ─── */
-.strategy-glance-bar {
-  padding: 7px 20px;
-  background: var(--bg-elevated);
-  border-bottom: 1px solid var(--border-subtle);
+/* ─── 指标与策略分布条 ─── */
+.metrics-strip {
+  padding: 8px 20px;
+  background: #F8F8F5;
+  border-bottom: 1px solid #E7E7E2;
   display: flex;
   align-items: center;
   gap: 12px;
-  font-size: 12px;
+  font-size: 13px;
 }
-.glance-strategy-left {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.glance-label {
-  font-weight: 600;
-  color: var(--text-secondary);
-}
-.strategy-pills-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-.strategy-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  border-radius: 6px;
-  font-size: 11px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.12s ease;
-  border: 1px solid var(--border-subtle);
-  background: var(--bg-main);
-  color: var(--text-secondary);
-}
-.strategy-pill:hover {
-  filter: brightness(0.96);
-  transform: translateY(-1px);
-}
-.strategy-pill.active {
-  box-shadow: 0 0 0 2px var(--accent-ai);
-  font-weight: 700;
-}
-.strategy-pill.all-pill {
-  background: var(--bg-main);
-}
-.strategy-pill.all-pill.active {
-  background: var(--text-primary);
-  color: var(--bg-main);
-  border-color: var(--text-primary);
-}
-
-.st-positive { background: #D1FAE5; color: #047857; border-color: #A7F3D0; }
-.st-negative { background: #FFE4E6; color: #E11D48; border-color: #FECDD3; }
-.st-boundary { background: #FEF3C7; color: #D97706; border-color: #FDE68A; }
-.st-equivalence { background: #E0E7FF; color: #4F46E5; border-color: #C7D2FE; }
-.st-state { background: #EDE9FE; color: #7C3AED; border-color: #DDD6FE; }
-.st-scenario { background: #CCFBF1; color: #0F766E; border-color: #99F6E4; }
-
-.strategy-badge {
-  display: inline-block;
-  padding: 1px 7px;
-  border-radius: 4px;
-  font-size: 11px;
-  font-weight: 600;
-}
-.strategy-badge.st-positive { background: #D1FAE5; color: #047857; }
-.strategy-badge.st-negative { background: #FFE4E6; color: #E11D48; }
-.strategy-badge.st-boundary { background: #FEF3C7; color: #D97706; }
-.strategy-badge.st-equivalence { background: #E0E7FF; color: #4F46E5; }
-.strategy-badge.st-state { background: #EDE9FE; color: #7C3AED; }
-.strategy-badge.st-scenario { background: #CCFBF1; color: #0F766E; }
-
-.glance-strategy-right {
+.strip-left {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
 }
-.achievement-pill-case {
-  background: #ECFDF5;
-  border: 1px solid #A7F3D0;
-  color: #047857;
-  font-weight: 600;
+.strip-label {
+  color: #71717A;
+}
+.strip-divider {
+  width: 1px;
+  height: 14px;
+  background: #D4D4D8;
+}
+
+.strategy-pills-bar {
+  display: flex;
+  gap: 5px;
+}
+.strategy-pill {
+  border: 1px solid transparent;
   padding: 2px 8px;
-  border-radius: 6px;
-}
-.adoption-rate-pill {
-  color: var(--text-tertiary);
-  font-size: 11.5px;
-}
-
-/* ─── 数据表格 ─── */
-.ws-grid-container {
-  flex: 1;
-  min-width: 0;
-  overflow: auto;
-  position: relative;
-}
-
-.impeccable-grid {
-  border-collapse: separate;
-  border-spacing: 0;
-}
-.impeccable-grid th {
-  position: sticky;
-  top: 0;
-  z-index: 5;
-  background: var(--bg-main);
-  box-shadow: inset 0 -1px 0 var(--border-subtle);
-}
-.impeccable-grid td {
-  vertical-align: middle;
-}
-.th-chk, .td-chk {
-  text-align: center !important;
-  vertical-align: middle;
-}
-.custom-checkbox {
-  width: 15px;
-  height: 15px;
-  accent-color: var(--accent-ai);
+  border-radius: 4px;
+  font-size: 12.5px;
   cursor: pointer;
+  background: #FFFFFF;
+  color: #52525B;
+  transition: all 0.1s ease;
+}
+.strategy-pill:hover {
+  border-color: #D4D4D8;
+}
+.strategy-pill.active {
+  font-weight: 600;
+  border-color: #1E293B;
+  background: #1E293B;
+  color: #FFFFFF;
 }
 
-.req-star {
-  color: var(--accent-error);
-  margin-left: 2px;
-}
-
-.custom-col-th {
-  background: color-mix(in srgb, var(--accent-ai) 4%, var(--bg-elevated)) !important;
-}
-.custom-th-content {
+.status-indicator-warning {
+  color: #B45309;
   display: flex;
   align-items: center;
   gap: 4px;
 }
-.custom-th-name {
-  color: var(--accent-ai);
-  font-weight: 600;
-}
-.custom-th-key {
-  font-size: 10px;
-  opacity: 0.6;
-}
-.custom-th-del {
-  background: none;
-  border: none;
-  color: var(--accent-error);
-  font-size: 10px;
-  cursor: pointer;
-  padding: 0 3px;
-  border-radius: 3px;
-}
-.custom-th-del:hover {
-  background: rgba(239, 68, 68, 0.12);
+.status-indicator-success {
+  color: #15803D;
+  font-weight: 500;
 }
 
-.grid-row {
-  transition: background-color 0.1s ease;
+.keyboard-flow-hint {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: #71717A;
 }
-.grid-row:hover {
-  background: var(--row-hover);
+.kbd-hint kbd {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: #EFEFEA;
+  color: #3F3F46;
+  border: 1px solid #E2E2DC;
 }
-.grid-row.row-checked {
-  background: color-mix(in srgb, var(--accent-ai) 4%, var(--bg-main));
+
+/* ─── 表格：50px 舒适大行高 + 14px 字体 + 居中自定义多选框 ─── */
+.table-container {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  outline: none;
 }
-.grid-row.row-incomplete {
-  background: color-mix(in srgb, var(--accent-warning) 3%, transparent);
+
+.nordic-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+.nordic-table th {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: #FFFFFF;
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #71717A;
+  text-align: left;
+  border-bottom: 1px solid #E7E7E2;
+}
+.nordic-table td {
+  padding: 10px 12px;
+  font-size: 14px;
+  color: #18181B;
+  vertical-align: middle;
+  border-bottom: 1px solid #EFEFEA;
+  height: 50px;
+}
+
+.th-chk, .td-chk {
+  text-align: center !important;
+  vertical-align: middle !important;
+}
+
+/* ─── 居中自定义多选框 (Custom Styled Centered Checkbox) ─── */
+.clean-chk-wrap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  width: 22px;
+  height: 22px;
+  position: relative;
+  user-select: none;
+  vertical-align: middle;
+}
+.clean-chk-native {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+.clean-chk-box {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: 1.5px solid #D4D4D8;
+  background: #FFFFFF;
+  display: grid;
+  place-items: center;
+  transition: all 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+  color: transparent;
+}
+.clean-chk-wrap:hover .clean-chk-box {
+  border-color: #1E293B;
+  background: #F8F8F5;
+}
+.clean-chk-native:checked + .clean-chk-box {
+  background: #1E293B;
+  border-color: #1E293B;
+  color: #FFFFFF;
+}
+.clean-chk-native:focus-visible + .clean-chk-box {
+  box-shadow: 0 0 0 2px rgba(30, 41, 59, 0.2);
+}
+
+.req-star {
+  color: #DC2626;
+}
+
+.custom-th {
+  background: #F8F8F5 !important;
+}
+.th-flex {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+}
+.th-del-btn {
+  background: none;
+  border: none;
+  color: #A1A1AA;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 1px;
+}
+.th-del-btn:hover { color: #DC2626; }
+
+.data-row {
+  transition: background-color 0.08s ease;
+}
+.data-row:hover {
+  background: #F8F8F5;
+}
+.data-row.row-checked {
+  background: #F4F4F0;
+}
+.data-row.row-incomplete {
+  background: #FFFDF5;
+}
+.data-row.row-focused {
+  background: #F8F8F5;
+}
+
+/* 键盘流高亮光标单元格 */
+.cell-cursor {
+  box-shadow: inset 0 0 0 1.5px #1E293B;
+  background: rgba(30, 41, 59, 0.03);
+}
+
+.td-num {
+  font-size: 12px;
+  color: #A1A1AA;
+}
+.mono-bold {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 12.5px;
+  color: #27272A;
 }
 
 .cell-edit {
   cursor: text;
-  position: relative;
 }
-.cell-text {
-  min-height: 22px;
+.cell-content {
+  min-height: 24px;
   display: flex;
   align-items: center;
   word-break: break-word;
+  line-height: 1.5;
+  font-size: 14px;
 }
-.cell-text.font-semibold {
-  font-weight: 600;
-}
-.cell-text.font-medium {
+.cell-content.primary-text {
   font-weight: 500;
+  color: #18181B;
 }
-.cell-text.placeholder {
-  color: var(--accent-warning);
+.cell-content.empty {
+  color: #B45309;
   font-style: italic;
+  font-size: 13px;
 }
-.cell-text.empty {
-  color: var(--text-tertiary);
+.cell-content.placeholder {
+  color: #A1A1AA;
 }
-.cell-text.tertiary-text {
-  color: var(--text-secondary);
-  font-size: 12px;
+.cell-content.mono-sm {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
 }
 
-.cell-input {
+:deep(.highlight-match) {
+  background: #FEF08A;
+  color: #854D0E;
+  padding: 0 2px;
+  border-radius: 2px;
+}
+
+.inline-input {
   width: 100%;
   padding: 5px 8px;
   font: inherit;
-  font-size: 13px;
-  background: var(--bg-main);
-  border: 1px solid var(--accent-ai);
-  border-radius: 6px;
-  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.15);
+  font-size: 13.5px;
+  background: #FFFFFF;
+  border: 1.5px solid #1E293B;
+  border-radius: 4px;
   outline: none;
+}
+.inline-select {
+  height: 28px;
+  font-size: 12.5px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid #1E293B;
+  background: #FFFFFF;
 }
 
 .cell-invalid {
-  background: color-mix(in srgb, var(--accent-error) 4%, transparent);
-  border-bottom-color: var(--accent-error) !important;
+  border-bottom: 1px dashed #DC2626 !important;
 }
 
-/* 优先级胶囊 */
-.prio-pill {
-  font-family: var(--font-mono);
-  font-weight: 700;
-  font-size: 11px;
-  padding: 1px 6px;
+.strategy-badge {
+  display: inline-block;
+  padding: 2px 7px;
   border-radius: 4px;
+  font-size: 11.5px;
+  font-weight: 500;
 }
-.prio-HX { background: #FEE2E2; color: #DC2626; }
+.badge-正向 { background: #F0FDF4; color: #166534; }
+.badge-反向 { background: #FEF2F2; color: #991B1B; }
+.badge-边界 { background: #FEFCE8; color: #854D0E; }
+.badge-等价 { background: #EFF6FF; color: #1D4ED8; }
+.badge-状态 { background: #FAF5FF; color: #6B21A8; }
+.badge-场景 { background: #F0FDFA; color: #0F766E; }
+
+.priority-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+}
+.prio-HX { background: #FEF2F2; color: #DC2626; }
 .prio-FHX { background: #FEF3C7; color: #D97706; }
-.prio-BJ { background: #E0E7FF; color: #4F46E5; }
-.prio-YC { background: #FCE7F3; color: #C026D3; }
-.prio-ZD { background: #EDE9FE; color: #7C3AED; }
-.prio-BL { background: #D1FAE5; color: #059669; }
+.prio-BJ { background: #F0FDF4; color: #15803D; }
+.prio-YC { background: #EFF6FF; color: #2563EB; }
+.prio-ZD { background: #F4F4F5; color: #52525B; }
+.prio-BL { background: #FAFAFA; color: #A1A1AA; }
+
+.status-tag-green {
+  font-size: 12px;
+  color: #15803D;
+  font-weight: 500;
+}
+.status-tag-clean {
+  font-size: 12px;
+  color: #A1A1AA;
+}
 
 .td-actions {
   text-align: right;
   white-space: nowrap;
 }
-.row-actions-cluster {
+.action-links {
   display: inline-flex;
-  gap: 4px;
+  gap: 3px;
   opacity: 0.35;
-  transition: opacity 0.12s ease;
+  transition: opacity 0.1s ease;
 }
-.grid-row:hover .row-actions-cluster {
+.data-row:hover .action-links {
   opacity: 1;
 }
-.action-btn {
+.icon-link {
   background: none;
   border: none;
   padding: 4px;
-  border-radius: 6px;
-  color: var(--text-secondary);
+  border-radius: 4px;
+  color: #71717A;
   cursor: pointer;
   display: grid;
   place-items: center;
-  transition: background-color 0.12s ease, color 0.12s ease;
 }
-.action-btn:hover {
-  background: var(--bg-elevated);
-  color: var(--accent-ai);
+.icon-link:hover {
+  background: #EFEFEA;
+  color: #18181B;
 }
-.action-btn.danger:hover {
-  background: #FEE2E2;
-  color: var(--accent-error);
+.icon-link.danger:hover {
+  background: #FEF2F2;
+  color: #DC2626;
 }
 
-.empty-table-cell {
-  padding: 48px 16px;
+.empty-cell {
+  padding: 56px 20px;
   text-align: center;
-  color: var(--text-tertiary);
+  color: #A1A1AA;
 }
-.empty-table-notice {
-  font-size: 13px;
-}
-
-/* ─── 悬浮式批量操作坞 ─── */
-.floating-batch-dock {
-  position: absolute;
-  bottom: 24px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 20;
-}
-.dock-content {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 14px;
-  background: var(--text-primary);
-  color: var(--bg-main);
-  border-radius: 999px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.22);
-}
-.dock-count-badge {
-  font-size: 12px;
-  font-weight: 500;
-  white-space: nowrap;
-}
-.dock-divider {
-  width: 1px;
-  height: 14px;
-  background: rgba(255, 255, 255, 0.2);
-}
-.btn-danger-soft {
-  background: rgba(239, 68, 68, 0.2);
-  color: #F87171;
-  border: none;
-}
-.btn-danger-soft:hover {
-  background: rgba(239, 68, 68, 0.35);
-}
-.dock-map-wrapper {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.dock-map-label {
-  font-size: 11px;
-  opacity: 0.75;
-}
-.dock-map-select {
-  height: 28px;
-  font-size: 11.5px;
-  padding: 2px 22px 2px 8px;
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.1);
-  color: #fff;
-  border-color: rgba(255, 255, 255, 0.2);
-}
-.dock-map-select option {
-  color: var(--text-primary);
-  background: var(--bg-main);
-}
-.dock-close-btn {
-  background: none;
-  border: none;
-  color: rgba(255, 255, 255, 0.5);
-  font-size: 12px;
-  cursor: pointer;
-  padding: 2px 4px;
-}
-.dock-close-btn:hover {
-  color: #fff;
+.empty-message {
+  font-size: 14px;
 }
 
-.dock-slide-enter-active,
-.dock-slide-leave-active {
-  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-}
-.dock-slide-enter-from,
-.dock-slide-leave-to {
-  opacity: 0;
-  transform: translate(-50%, 14px) scale(0.96);
-}
-
-/* ─── 空态引导 ─── */
-.empty-workbench {
+/* ─── 空态 ─── */
+.empty-main {
   display: grid;
   place-items: center;
   padding: 48px;
 }
-.empty-workbench-container {
-  max-width: 520px;
+.empty-box {
+  max-width: 480px;
   text-align: center;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 14px;
 }
-.empty-workbench-icon {
-  width: 80px;
-  height: 80px;
-  border-radius: 24px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-subtle);
-  color: var(--c-cases);
+.empty-icon-wrapper {
+  width: 68px;
+  height: 68px;
+  border-radius: 14px;
+  background: #F4F4F0;
+  border: 1px solid #E7E7E2;
+  color: #71717A;
   display: grid;
   place-items: center;
 }
-.empty-workbench-container h3 {
-  font-size: 18px;
-  font-weight: 700;
+.empty-box h3 {
+  font-size: 17px;
+  font-weight: 600;
+  color: #18181B;
 }
-.empty-sub {
-  font-size: 13px;
-  color: var(--text-secondary);
-  line-height: 1.6;
+.empty-box p {
+  font-size: 14px;
+  color: #71717A;
+  line-height: 1.5;
 }
-.empty-actions-row {
+.empty-buttons {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
@@ -2802,83 +2711,97 @@ watch(() => modeStore.mode, () => {
   margin-top: 8px;
 }
 
-/* ─── 向导通用样式 ─── */
-.wizard-steps-header {
+/* ─── 抽屉内样式 ─── */
+.drawer-step-bar {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 14px;
-  margin-bottom: 20px;
+  gap: 12px;
+  margin-bottom: 22px;
   padding-bottom: 16px;
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 1px solid #E7E7E2;
 }
-.wizard-step-item {
+.step-badge {
   display: flex;
   align-items: center;
-  gap: 8px;
-  color: var(--text-tertiary);
-  font-size: 13px;
-  font-weight: 500;
+  gap: 7px;
+  font-size: 13.5px;
+  color: #A1A1AA;
 }
-.wizard-step-item.active {
-  color: var(--accent-ai);
+.step-badge.active {
+  color: #1E293B;
   font-weight: 600;
 }
-.wizard-step-item.done {
-  color: var(--accent-success);
+.step-badge.done {
+  color: #15803D;
 }
-.step-num {
-  width: 22px;
-  height: 22px;
+.step-idx {
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
-  background: var(--bg-elevated);
+  background: #F4F4F0;
   display: grid;
   place-items: center;
   font-size: 11px;
   font-family: var(--font-mono);
 }
-.wizard-step-item.active .step-num {
-  background: var(--accent-ai);
-  color: #fff;
+.step-badge.active .step-idx {
+  background: #1E293B;
+  color: #FFFFFF;
 }
-.wizard-step-item.done .step-num {
-  background: var(--accent-success);
-  color: #fff;
+.step-badge.done .step-idx {
+  background: #15803D;
+  color: #FFFFFF;
 }
-.step-line {
-  width: 48px;
-  height: 2px;
-  background: var(--border-subtle);
-}
-.step-line.active {
-  background: var(--accent-ai);
+.step-divider-line {
+  flex: 1;
+  height: 1px;
+  background: #E7E7E2;
 }
 
-.ai-weights-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
+.drawer-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
-.weight-card {
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-subtle);
-}
-.weight-title {
-  font-size: 12px;
+
+.divider-title {
+  font-size: 13px;
   font-weight: 600;
-  color: var(--text-secondary);
-  margin-bottom: 4px;
-}
-.preview-table-wrapper {
-  max-height: 380px;
-  overflow-y: auto;
-  border: 1px solid var(--border-subtle);
-  border-radius: 10px;
+  color: #71717A;
+  margin: 8px 0 3px;
 }
 
-/* ─── 精致自定义滚动条 ─── */
+.preview-box {
+  max-height: 420px;
+  overflow-y: auto;
+  border: 1px solid #E7E7E2;
+  border-radius: 6px;
+}
+.preview-table td {
+  padding: 8px 10px;
+}
+.inline-input-clean {
+  width: 100%;
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  font-size: 13px;
+}
+.inline-input-clean:focus {
+  border-color: #1E293B;
+  background: #FFFFFF;
+  border-radius: 3px;
+  outline: none;
+}
+
+.drawer-footer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
+/* ─── 滚动条 ─── */
 .custom-scroll::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -2887,63 +2810,36 @@ watch(() => modeStore.mode, () => {
   background: transparent;
 }
 .custom-scroll::-webkit-scrollbar-thumb {
-  background: rgba(17, 24, 39, 0.12);
-  border-radius: 999px;
-}
-[data-theme='dark'] .custom-scroll::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.15);
+  background: rgba(0, 0, 0, 0.14);
+  border-radius: 3px;
 }
 .custom-scroll::-webkit-scrollbar-thumb:hover {
-  background: rgba(17, 24, 39, 0.25);
-}
-[data-theme='dark'] .custom-scroll::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.3);
-}
-
-/* ─── 减弱动效无障碍支持 (Reduced Motion) ─── */
-@media (prefers-reduced-motion: reduce) {
-  .dirty-indicator {
-    animation: none;
-  }
-  .dock-slide-enter-active,
-  .dock-slide-leave-active {
-    transition: none;
-  }
-  .ft-node,
-  .action-btn,
-  .save-btn,
-  .btn-xs,
-  .strategy-pill {
-    transition: none;
-  }
+  background: rgba(0, 0, 0, 0.24);
 }
 
 /* ─── 响应式 ─── */
 @media (max-width: 900px) {
   .cases-workbench {
     height: auto;
-    min-height: calc(100dvh - var(--topbar-h) - 24px);
+    min-height: calc(100dvh - var(--topbar-h) - 20px);
   }
-  .ft-layout {
+  .nordic-layout {
     grid-template-columns: 1fr;
     height: auto;
-    overflow: visible;
   }
-  .ft-sidebar {
-    max-height: 260px;
+  .nordic-sidebar {
+    max-height: 240px;
     border-right: 0;
-    border-bottom: 1px solid var(--border-subtle);
+    border-bottom: 1px solid #E7E7E2;
   }
-  .ft-resizer {
+  .sidebar-resizer {
     display: none;
   }
-  .workspace-main {
-    min-height: 640px;
+  .nordic-main {
+    min-height: 600px;
   }
-  .action-btn {
-    padding: 8px;
-    min-width: 36px;
-    min-height: 36px;
+  .keyboard-flow-hint {
+    display: none;
   }
 }
 </style>

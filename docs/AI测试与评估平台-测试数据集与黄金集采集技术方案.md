@@ -3,7 +3,7 @@
 > **版本**：V2.2<br>
 > **审查日期**：2026-08-28<br>
 > **状态**：M1 已实现（目录治理 API、独立导入 Worker、租约回收、staging 审核与 DatasetVersion 发布）；黄金集、专用 benchmark 解析器与前端导入抽屉仍待后续里程碑<br>
-> **关联契约**：PRD.md V1.14；API.md V1.55。目录筛选、导入作业、staging 行、发布和任务版本冻结以 PRD/API 为准
+> **关联契约**：PRD.md V1.15；API.md V1.55。目录筛选、导入作业、staging 行、发布和任务版本冻结以 PRD/API 为准
 
 ---
 

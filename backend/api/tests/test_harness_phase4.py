@@ -258,11 +258,15 @@ def test_build_plan_fail_reason_goes_to_notes_not_keywords() -> None:
     assert plan.skill_id == "skill-benchmark"
 
 
-def test_budget_for_plan_uses_plan_budget() -> None:
-    """预算按 plan.budget 派生（count-only）。"""
-    budget = budget_for_plan(_plan())
-    assert budget.model_calls == 2
-    assert budget.tool_turns == 1
+def test_budget_for_plan_scales_by_steps() -> None:
+    """预算按步骤数由平台派生（不信任模型 plan.budget 自报值）。"""
+    plan = _plan(slots={"steps": ["a", "b", "c", "d"]}, budget={"model_calls": 2, "tool_turns": 1})
+    budget = budget_for_plan(plan)
+    expected = min(20, max(6, 4 + 4 * 3))
+    assert budget.model_calls == expected == 16
+    assert budget.tool_turns == expected
+    # 覆盖模型自报的过小值
+    assert budget.model_calls > 2
 
 
 # —— M6 review.py（F-A3） ——
