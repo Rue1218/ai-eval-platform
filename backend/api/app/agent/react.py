@@ -753,6 +753,38 @@ def _turn_stats(
     }
 
 
+def _finalize_task_state(current: TaskSessionState | None) -> dict[str, object] | None:
+    """模型以无工具回答收尾时的状态归一：当前步骤并入已完成并置可交付。
+
+    总结/汇报类步骤没有工具闭环（模型直接作答），若不归一，current_step
+    永远停留该步骤、can_deliver 恒 False，任务看板显示"待执行"。
+    """
+    if current is None:
+        return None
+    completed = list(current.completed_steps)
+    step = current.current_step
+    if step and step not in completed:
+        completed.append(step)
+    return TaskSessionState(
+        protocol="task_state",
+        version="v1",
+        goal=current.goal,
+        phase="completed",
+        completed_steps=tuple(completed),
+        current_step="",
+        next_actions=current.next_actions,
+        failed_steps=current.failed_steps,
+        current_hypothesis=current.current_hypothesis,
+        confirmed_facts=current.confirmed_facts,
+        evidence=current.evidence,
+        rejected_hypotheses=current.rejected_hypotheses,
+        missing_info=current.missing_info,
+        can_deliver=True,
+        blocked_reason=current.blocked_reason,
+        notes=current.notes,
+    ).to_dict()
+
+
 def _assistant_completion(
     text: str,
     *,
@@ -1344,9 +1376,10 @@ def build_react_nodes(
                 )
                 completed["budget"] = budget.to_dict()
                 if current_task_state is not None:
-                    completed["task_state"] = current_task_state.to_dict()
+                    finalized = _finalize_task_state(current_task_state)
+                    completed["task_state"] = finalized
                     completed["pending_events"].append(
-                        make_event("task_state", current_task_state.to_dict())
+                        make_event("task_state", finalized or {})
                     )
                 return completed
 
@@ -1449,9 +1482,10 @@ def build_react_nodes(
                 )
                 finished["budget"] = budget.to_dict()
                 if current_task_state is not None:
-                    finished["task_state"] = current_task_state.to_dict()
+                    finalized = _finalize_task_state(current_task_state)
+                    finished["task_state"] = finalized
                     finished["pending_events"].append(
-                        make_event("task_state", current_task_state.to_dict())
+                        make_event("task_state", finalized or {})
                     )
                 return finished
             # 工具路径：重复调用抑制（OR-4）→ 预算 → 写 pending_tool
