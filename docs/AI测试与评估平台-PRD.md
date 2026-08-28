@@ -2,10 +2,10 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.13 |
-| 文档状态 | 已冻结基线 |
+| 文档版本 | V1.14 |
+| 文档状态 | 已冻结基线（V1.14 增补基准目录与异步导入） |
 | 撰写日期 | 2026-08-17 |
-| 最近修订 | 2026-08-24：补充 Agent 多附件交互：支持图片（PNG/JPG/JPEG/WEBP/GIF）、Markdown/TXT/HTML/JSON/YAML、PDF、Word（DOC/DOCX）、Excel（XLS/XLSX）、CSV/JSONL 与音频；输入区支持文件选择和拖拽上传，图片显示缩略图，PDF/文本支持预览，Office 文件显示类型卡片并可打开/下载。2026-08-23：补齐 Gemini OpenAI 兼容端点的思考摘要请求与增量归一化；增加 Agent 思考摘要开关与思考强度设置；将用户回显固定为 `user_message`，将完成信号固定为 `response.completed`，明确 `thought` 不承载助手正文；协议档增加可选 Embedding / Reranker 独立端点配置，三类 Key 均按 profile 写入受控环境文件 |
+| 最近修订 | 2026-08-28：V1.14 新增基准数据集目录、异步导入、staging 表格和发布门禁；下载/解析仅由 Worker 执行，未审核行不得评测。2026-08-24：补充 Agent 多附件交互：支持图片（PNG/JPG/JPEG/WEBP/GIF）、Markdown/TXT/HTML/JSON/YAML、PDF、Word（DOC/DOCX）、Excel（XLS/XLSX）、CSV/JSONL 与音频；输入区支持文件选择和拖拽上传，图片显示缩略图，PDF/文本支持预览，Office 文件显示类型卡片并可打开/下载。2026-08-23：补齐 Gemini OpenAI 兼容端点的思考摘要请求与增量归一化；增加 Agent 思考摘要开关与思考强度设置；将用户回显固定为 `user_message`，将完成信号固定为 `response.completed`，明确 `thought` 不承载助手正文；协议档增加可选 Embedding / Reranker 独立端点配置，三类 Key 均按 profile 写入受控环境文件 |
 | 适用版本 | 平台 V1.0 |
 | 技术栈 | Vue3 + Naive UI、Python FastAPI、PostgreSQL、WebSocket、Docker Compose、go-stress-testing |
 
@@ -27,6 +27,7 @@
 | V1.10 | 2026-08-23 | 用户回显使用 `user_message`，助手正文使用 `assistant_delta` / `assistant_message`，回合结束使用 `response.completed`，`thought` 严禁承载助手正文 |
 | V1.11 | 2026-08-23 | Agent 后台增加思考摘要开关与 `low/medium/high/xhigh/max` 强度；不改变 WebSocket 公共头与正文事件语义 |
 | V1.12 | 2026-08-23 | Gemini OpenAI 兼容流式请求增加 `include_thoughts` 与强度映射；思考摘要仍通过 `thought` 事件独立展示 |
+| V1.14 | 2026-08-28 | 基准数据集页新增受控目录筛选、异步制品导入、staging 表格预览和审核发布门禁；不做社交媒体抓取 |
 
 ---
 
@@ -287,13 +288,14 @@ queued → running → succeeded
 | --- | --- | --- | --- | --- |
 | F-BM-01 | 协议档 CRUD | P0 | M1 | 见 6.2；主模型及可选 Embedding / Reranker 端点配置，三类 Key 只写不回显，审计变更 |
 | F-BM-02 | 统一调用 | P0 | M1 | 入 `messages`，出 `text,usage,raw,latency_ms` |
-| F-BM-03 | 数据集 | P0 | M2 | JSONL/CSV UTF-8；列 `question,reference,context?`；版本号每次覆盖上传 +1；单集 ≤50MB、≤2 万行 |
+| F-BM-03 | 数据集 | P0 | M2 | JSONL/CSV UTF-8；列 `question,reference,context?`；导入/编辑先写 `draft` 或 staging，审核发布才生成可评测版本；单集 ≤50MB、≤2 万行 |
 | F-BM-04 | 用例入集 | P0 | M2 | 5.4.2；待补全不评分 |
 | F-BM-05 | 规则评分 | P0 | M2 | 每集选一种主指标：exact / contain / regex / rouge_l / bleu；默认 contain |
 | F-BM-06 | 多模型 | P0 | M2 | 1–5 个 profile；报告并排 |
 | F-BM-07 | 基线 | P0 | M2 | 管理员冻结某次 succeeded；同 dataset 版本+主指标才能对比 |
 | F-BM-08 | Judge | P1 | M3 | 裁判协议档 ≠ 被测（警告，不强制）；1–5 分 + 理由 |
 | F-BM-09 | 代码题 | — | 不做 | |
+| F-BM-10 | 基准目录与异步导入 | P1 | M3 | 数据集页按能力、语言、许可、测试标签与评分器筛选官方 release；Worker 下载/校验/解析后自动写入 staging 表格，审核发布前不得评分 |
 
 #### 5.2.2 运行配置 `run`
 
@@ -312,6 +314,14 @@ queued → running → succeeded
 #### 5.2.3 验收（M2）
 
 两个协议档 + 一份 ≥20 条 JSONL，对话确认后出对比报告（contain 分）；断线重连仍看得到进度；缺 question 的映射行在待补全，不进分母。
+
+#### 5.2.4 基准目录、导入与发布（M3）
+
+`/datasets` 提供“导入公开基准”入口，只展示平台已审核的目录条目。用户可按能力场景、任务族、语言、许可状态、测试标签可用性、评分器支持度、污染风险与预计规模筛选，并选择固定 release、允许的 split、subject/子集与目标数据集名称。页面不得提交任意 URL、Cookie、请求头、Token 或解析脚本。
+
+提交后 API 只创建独立 `DatasetImport` 作业并立即返回；Worker 负责下载、哈希/许可证/格式校验、解压、解析、去重和 staging 写入，API 进程不得等待或执行这些耗时步骤。作业状态：`queued → downloading → validating → parsing → review_ready | failed | rejected`。同一目录 release、切分、过滤规则、解析器版本和目标数据集的重复请求必须幂等返回既有作业，禁止重复写行。
+
+当状态为 `review_ready`，目标数据集在左侧树和主表格中可见，主表展示 staging 行、split、来源 release 和解析告警；这些行可审核修订，但不进入确认卡、任务分母或基线。点击“审核并发布”后，服务端原子冻结审核通过行、来源 manifest、内容哈希、解析器/评分器版本为新的可评测版本，状态变为 `active`。`failed`/`rejected` 只保留最小审计与错误摘要。标准集的 `train` split 默认禁止导入；无公开 test 标签的条目只能导入 validation 并显著标记“非官方 test”。
 
 ---
 
@@ -513,7 +523,7 @@ FastAPI（REST + WS）+ worker 进程 + PostgreSQL + Vue3/Naive/Vite + LightRAG 
 
 ### 6.4 表
 
-`users, sessions, messages, ws_events, protocol_profiles, settings, files, datasets, dataset_rows, case_sets, cases, case_maps, kbs, kb_docs, gold_qa, tasks, task_events, eval_items, baselines, reports, share_links, audit_logs, usage_ledger`。
+`users, sessions, messages, ws_events, protocol_profiles, settings, files, dataset_catalog_entries, dataset_catalog_releases, dataset_imports, dataset_import_rows, datasets, dataset_rows, dataset_versions, dataset_version_rows, case_sets, cases, case_maps, kbs, kb_docs, gold_qa, tasks, task_events, eval_items, baselines, reports, share_links, audit_logs, usage_ledger`。
 
 ### 6.5 开源
 
@@ -527,7 +537,7 @@ testcase-tools：只对齐，不进镜像。LightRAG：MIT，锁 tag。go-stress
 | --- | --- | --- |
 | M1 | Compose、账号、协议档、LangGraph 单轮 Agent、WS 基础事件、会话回放、文件 | 登录后完成单轮流式对话；断线按 event_id 续；确认卡、短 MCP、任务下单进入后续 Harness 阶段 |
 | M2 | 真调用、规则分、对比、基线、用例 Skill、表单、预算 | 5.2.3 |
-| M3 | LightRAG、外部 Chat RAG、黄金 QA、Hit Rate | 5.3.2 |
+| M3 | LightRAG、外部 Chat RAG、黄金 QA、Hit Rate、基准目录与异步导入 | 5.3.2 + 5.2.4 |
 | M4 | 先评后压、白名单、Grafana、解读、通知 | 5.6 验收 |
 
 ---
@@ -675,3 +685,11 @@ testcase-tools：只对齐，不进镜像。LightRAG：MIT，锁 tag。go-stress
 | `frontend/src/views/Agent.vue` | 支持多选/拖拽上传、附件暂存、移除、上传状态与消息内展示 |
 | `frontend/src/api/http.ts` | 同步文件上传响应的内容类型字段 |
 | `backend/api/tests/test_files.py` | 增加附件扩展名白名单回归测试 |
+
+### V1.14 修改代码文件与作用清单
+
+| 实际修改文件 | 作用 |
+| :--- | :--- |
+| `docs/AI测试与评估平台-PRD.md` | 将基准数据集目录、异步导入、staging 表格和审核发布纳入 Benchmark 功能范围与 M3 验收 |
+| `docs/AI测试与评估平台-API.md` | 定义目录筛选、导入作业、staging 行与发布接口契约 |
+| `docs/AI测试与评估平台-测试数据集与黄金集采集技术方案.md` | 定义 Worker 制品采集、场景划分、内容筛选和表格保存实现方案 |
