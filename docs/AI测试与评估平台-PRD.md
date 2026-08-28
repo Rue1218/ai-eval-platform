@@ -2,10 +2,10 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.14 |
-| 文档状态 | 已冻结基线（V1.14 增补基准目录与异步导入） |
+| 文档版本 | V1.15 |
+| 文档状态 | 已冻结基线（V1.15 完成基准目录治理、导入队列与发布并发控制闭环） |
 | 撰写日期 | 2026-08-17 |
-| 最近修订 | 2026-08-28：V1.14 新增基准数据集目录、异步导入、staging 表格和发布门禁；下载/解析仅由 Worker 执行，未审核行不得评测。2026-08-24：补充 Agent 多附件交互：支持图片（PNG/JPG/JPEG/WEBP/GIF）、Markdown/TXT/HTML/JSON/YAML、PDF、Word（DOC/DOCX）、Excel（XLS/XLSX）、CSV/JSONL 与音频；输入区支持文件选择和拖拽上传，图片显示缩略图，PDF/文本支持预览，Office 文件显示类型卡片并可打开/下载。2026-08-23：补齐 Gemini OpenAI 兼容端点的思考摘要请求与增量归一化；增加 Agent 思考摘要开关与思考强度设置；将用户回显固定为 `user_message`，将完成信号固定为 `response.completed`，明确 `thought` 不承载助手正文；协议档增加可选 Embedding / Reranker 独立端点配置，三类 Key 均按 profile 写入受控环境文件 |
+| 最近修订 | 2026-08-28：V1.15 统一基准目录治理、独立导入队列、staging 并发发布、成员同权双人复核与 M3 里程碑；冻结任务必须锁定数据集/黄金集版本。2026-08-28：V1.14 新增基准数据集目录、异步导入、staging 表格和发布门禁；下载/解析仅由 Worker 执行，未审核行不得评测。2026-08-24：补充 Agent 多附件交互：支持图片（PNG/JPG/JPEG/WEBP/GIF）、Markdown/TXT/HTML/JSON/YAML、PDF、Word（DOC/DOCX）、Excel（XLS/XLSX）、CSV/JSONL 与音频；输入区支持文件选择和拖拽上传，图片显示缩略图，PDF/文本支持预览，Office 文件显示类型卡片并可打开/下载。2026-08-23：补齐 Gemini OpenAI 兼容端点的思考摘要请求与增量归一化；增加 Agent 思考摘要开关与思考强度设置；将用户回显固定为 `user_message`，将完成信号固定为 `response.completed`，明确 `thought` 不承载助手正文；协议档增加可选 Embedding / Reranker 独立端点配置，三类 Key 均按 profile 写入受控环境文件 |
 | 适用版本 | 平台 V1.0 |
 | 技术栈 | Vue3 + Naive UI、Python FastAPI、PostgreSQL、WebSocket、Docker Compose、go-stress-testing |
 
@@ -28,6 +28,7 @@
 | V1.11 | 2026-08-23 | Agent 后台增加思考摘要开关与 `low/medium/high/xhigh/max` 强度；不改变 WebSocket 公共头与正文事件语义 |
 | V1.12 | 2026-08-23 | Gemini OpenAI 兼容流式请求增加 `include_thoughts` 与强度映射；思考摘要仍通过 `thought` 事件独立展示 |
 | V1.14 | 2026-08-28 | 基准数据集页新增受控目录筛选、异步制品导入、staging 表格预览和审核发布门禁；不做社交媒体抓取 |
+| V1.15 | 2026-08-28 | 补齐目录/release 双人复核、导入队列租约与重试、staging 版本号发布和版本锁定；将该能力与 RAG 黄金集统一收敛至 M3，代码题继续不做 |
 
 ---
 
@@ -138,6 +139,19 @@ WebSocket 短票
 
 首次部署：环境变量创建初始成员账号，登录后强制改密。密码 ≥8 位，含字母和数字。浏览器会话使用 HttpOnly Cookie（12h 可续）。WebSocket 连接使用 5 分钟短票（ticket），见 F-AGT-01。
 
+#### 2.1.1 数据资产治理（不新增 RBAC）
+
+目录、release、导入和发布仍由同一个 `member` 角色执行；“提报人”“审核人”是某一次操作的审计身份，不是永久角色或权限等级。这样既保持全员同权，也避免同一人对自己的来源、许可证和数据行作无复核发布。
+
+| 治理动作 | 执行规则 | 必须记录的审计信息 |
+| --- | --- | --- |
+| 新建目录来源、登记 release、发起允许的导入 | 任一正常成员可执行 | actor、对象 ID、来源/release manifest 哈希、原因、时间 |
+| 审核并批准 release、审核并发布 staging、确认许可证例外 | 审核成员必须与该 release/导入的提报成员不同；同一成员不得审批自己的提交 | 提报人与审核人、前后状态、许可证证据引用、审核意见、冻结版本 ID |
+| 暂停或封禁 release | 任一正常成员可立即暂停新的导入以止损；另一成员必须复核为 `blocked` 或恢复 | 暂停原因、影响版本、复核结果与时间 |
+| 撤销正式版本 | 任一正常成员可提交撤销；另一成员复核后将旧版本置为 `deprecated`，历史报告只读保留 | 版本 ID、内容/manifest 哈希、撤销原因、两名操作者 |
+
+系统初始化账号、运行并发上限和密钥托管是运维配置，不授予数据资产的单人发布豁免。所有上述操作均写入 `audit_logs`；浏览器和模型上下文不得获得下载令牌、授权文件正文或未脱敏上游响应。
+
 ### 2.2 团队协同原则
 
 团队全员同权，通过全局顶栏「大模型 / RAG」双模式与统一任务工作台实现高效无阻碍协同。
@@ -215,7 +229,7 @@ queued → running → succeeded
 
 ### 4.2 外
 
-外部 MCP、改系统提示词、多租户、多模态、内置公开集、TMS 同步、审批流、强制私有化、压平台自己、评测与压测并行、被测走 WS、HumanEval 沙箱、分布式压测、Open API（V1.1）。
+外部 MCP、改系统提示词、多租户、多模态、未经目录审核的预置公开集、TMS 同步、通用审批流（目录/release 双人复核除外）、强制私有化、压平台自己、评测与压测并行、被测走 WS、HumanEval 沙箱、分布式压测、Open API（V1.1）。
 
 ---
 
@@ -292,10 +306,10 @@ queued → running → succeeded
 | F-BM-04 | 用例入集 | P0 | M2 | 5.4.2；待补全不评分 |
 | F-BM-05 | 规则评分 | P0 | M2 | 每集选一种主指标：exact / contain / regex / rouge_l / bleu；默认 contain |
 | F-BM-06 | 多模型 | P0 | M2 | 1–5 个 profile；报告并排 |
-| F-BM-07 | 基线 | P0 | M2 | 管理员冻结某次 succeeded；同 dataset 版本+主指标才能对比 |
+| F-BM-07 | 基线 | P0 | M2 | 成员冻结某次 succeeded；同 dataset 版本+主指标才能对比 |
 | F-BM-08 | Judge | P1 | M3 | 裁判协议档 ≠ 被测（警告，不强制）；1–5 分 + 理由 |
 | F-BM-09 | 代码题 | — | 不做 | |
-| F-BM-10 | 基准目录与异步导入 | P1 | M3 | 数据集页按能力、语言、许可、测试标签与评分器筛选官方 release；Worker 下载/校验/解析后自动写入 staging 表格，审核发布前不得评分 |
+| F-BM-10 | 基准目录与异步导入 | P1 | M3 | 仅展示双人复核的固定 release；独立 Worker 队列下载/校验/解析后写入带版本号的 staging 表格，非提报人审核原子发布前不得评分 |
 
 #### 5.2.2 运行配置 `run`
 
@@ -317,11 +331,15 @@ queued → running → succeeded
 
 #### 5.2.4 基准目录、导入与发布（M3）
 
-`/datasets` 提供“导入公开基准”入口，只展示平台已审核的目录条目。用户可按能力场景、任务族、语言、许可状态、测试标签可用性、评分器支持度、污染风险与预计规模筛选，并选择固定 release、允许的 split、subject/子集与目标数据集名称。页面不得提交任意 URL、Cookie、请求头、Token 或解析脚本。
+`/datasets` 提供“导入公开基准”入口，只展示**来源与固定 release 均已复核批准**的目录条目。成员可按能力场景、任务族、语言、许可状态、测试标签可用性、评分器支持度、污染风险与预计规模筛选，并选择 release 明示的 split、subject/子集与目标数据集。页面不得提交任意 URL、Cookie、请求头、Token 或解析脚本；筛选字段、枚举值、默认值、最大行数和确定性排序均由目录 release 返回的 `filter_schema` 定义。
 
-提交后 API 只创建独立 `DatasetImport` 作业并立即返回；Worker 负责下载、哈希/许可证/格式校验、解压、解析、去重和 staging 写入，API 进程不得等待或执行这些耗时步骤。作业状态：`queued → downloading → validating → parsing → review_ready | failed | rejected`。同一目录 release、切分、过滤规则、解析器版本和目标数据集的重复请求必须幂等返回既有作业，禁止重复写行。
+目录治理分为来源和 release 两层：成员先登记来源和固定 release manifest（官方地址、允许域名、revision、制品清单/哈希、许可证证据、允许 split、解析器与筛选 schema），另一成员审核后才可见、可导入。release 一经批准不可原地编辑；修订、许可证变化或上游制品变化必须新建 release。任一成员可暂停 release 阻止新导入，复核后再恢复或置为 `blocked`；被封禁 release 的正式版本只保留历史报告，不得新建任务。
 
-当状态为 `review_ready`，目标数据集在左侧树和主表格中可见，主表展示 staging 行、split、来源 release 和解析告警；这些行可审核修订，但不进入确认卡、任务分母或基线。点击“审核并发布”后，服务端原子冻结审核通过行、来源 manifest、内容哈希、解析器/评分器版本为新的可评测版本，状态变为 `active`。`failed`/`rejected` 只保留最小审计与错误摘要。标准集的 `train` split 默认禁止导入；无公开 test 标签的条目只能导入 validation 并显著标记“非官方 test”。
+提交后 API 只创建独立 `DatasetImport` 作业并立即返回；Worker 负责下载、哈希/许可证/格式校验、解压、解析、去重和 staging 写入，API 进程不得等待或执行这些耗时步骤。作业状态：`queued → downloading → validating → parsing → review_ready → published`，或转为 `failed | rejected`。作业有不可变导入 manifest、唯一请求指纹、尝试次数和租约；Worker 使用行锁领取，租约过期时回收重排，超过重试上限才置为 `failed`。同一 release manifest、切分、规范化过滤规则、解析器版本和目标数据集的重复请求必须幂等返回既有作业，禁止重复写行或由失效 Worker 覆盖新尝试结果。
+
+当导入状态为 `review_ready`，目标数据集在左侧树和主表格中可见，主表展示该 `import_id` 的 staging 行、稳定行 ID、`staging_revision`、split、来源 release 和解析告警；这些行可审核修订，但不进入确认卡、任务分母或基线。表格编辑必须带回读取时的 `staging_revision`，成功编辑递增该版本号。由**非提报成员**点击“审核并发布”时，服务端锁住 import 与数据集，校验 `import_id + staging_revision + accepted_row_ids[]`，并在一个事务中冻结审核通过行、来源 manifest、制品/行内容哈希、解析器/评分器版本和审核记录为新的 `DatasetVersion`；过期 revision、重复发布或并发编辑返回 `CONCURRENCY`，不得按行号猜测选择。数据集容器可继续保持旧 `active_version_id`，新 staging 不影响正在运行任务；发布成功才原子切换新的 `active_version_id`，作业变为 `published`。`failed`/`rejected` 只保留最小审计与错误摘要。标准集的 `train` split 默认禁止导入；无公开 test 标签的条目只能导入 validation 并显著标记“非官方 test”。
+
+创建 benchmark 任务时，服务端在同一事务读取数据集当前 `active_version_id` 并锁定为 `Task.config.dataset_version_id`；请求方不能指定、替换或在重跑时漂移到最新版本。Worker、报告、基线和重跑只读取该冻结版本。RAG 任务同理锁定 `gold_qa_version_id` 与 KB 文档快照。
 
 ---
 
@@ -523,7 +541,7 @@ FastAPI（REST + WS）+ worker 进程 + PostgreSQL + Vue3/Naive/Vite + LightRAG 
 
 ### 6.4 表
 
-`users, sessions, messages, ws_events, protocol_profiles, settings, files, dataset_catalog_entries, dataset_catalog_releases, dataset_imports, dataset_import_rows, datasets, dataset_rows, dataset_versions, dataset_version_rows, case_sets, cases, case_maps, kbs, kb_docs, gold_qa, tasks, task_events, eval_items, baselines, reports, share_links, audit_logs, usage_ledger`。
+`users, sessions, messages, ws_events, protocol_profiles, settings, files, dataset_catalog_entries, dataset_catalog_releases, dataset_catalog_reviews, dataset_source_artifacts, dataset_imports, dataset_import_attempts, dataset_import_rows, datasets, dataset_rows, dataset_versions, dataset_version_rows, case_sets, cases, case_maps, kbs, kb_docs, gold_qa, tasks, task_events, eval_items, baselines, reports, share_links, audit_logs, usage_ledger`。
 
 ### 6.5 开源
 
@@ -537,7 +555,7 @@ testcase-tools：只对齐，不进镜像。LightRAG：MIT，锁 tag。go-stress
 | --- | --- | --- |
 | M1 | Compose、账号、协议档、LangGraph 单轮 Agent、WS 基础事件、会话回放、文件 | 登录后完成单轮流式对话；断线按 event_id 续；确认卡、短 MCP、任务下单进入后续 Harness 阶段 |
 | M2 | 真调用、规则分、对比、基线、用例 Skill、表单、预算 | 5.2.3 |
-| M3 | LightRAG、外部 Chat RAG、黄金 QA、Hit Rate、基准目录与异步导入 | 5.3.2 + 5.2.4 |
+| M3 | LightRAG、外部 Chat RAG、黄金 QA、Hit Rate、目录/release 双人复核、独立导入队列、staging 原子发布和任务版本锁定 | 5.3.2 + 5.2.4；仅支持当前 PRD 已列任务族，不含代码题 |
 | M4 | 先评后压、白名单、Grafana、解读、通知 | 5.6 验收 |
 
 ---
@@ -686,10 +704,10 @@ testcase-tools：只对齐，不进镜像。LightRAG：MIT，锁 tag。go-stress
 | `frontend/src/api/http.ts` | 同步文件上传响应的内容类型字段 |
 | `backend/api/tests/test_files.py` | 增加附件扩展名白名单回归测试 |
 
-### V1.14 修改代码文件与作用清单
+### V1.15 修改代码文件与作用清单
 
 | 实际修改文件 | 作用 |
 | :--- | :--- |
-| `docs/AI测试与评估平台-PRD.md` | 将基准数据集目录、异步导入、staging 表格和审核发布纳入 Benchmark 功能范围与 M3 验收 |
-| `docs/AI测试与评估平台-API.md` | 定义目录筛选、导入作业、staging 行与发布接口契约 |
-| `docs/AI测试与评估平台-测试数据集与黄金集采集技术方案.md` | 定义 Worker 制品采集、场景划分、内容筛选和表格保存实现方案 |
+| `docs/AI测试与评估平台-PRD.md` | 统一成员同权双人复核、目录/release 生命周期、独立导入队列、staging 并发发布、版本锁定及 M3 边界 |
+| `docs/AI测试与评估平台-API.md` | 定义目录治理、导入租约与重试、稳定 staging 行 ID/revision、原子发布和任务快照接口契约 |
+| `docs/AI测试与评估平台-测试数据集与黄金集采集技术方案.md` | 细化来源 manifest、队列领取/回收、审计、发布事务和与 PRD 一致的分期实施方案 |
