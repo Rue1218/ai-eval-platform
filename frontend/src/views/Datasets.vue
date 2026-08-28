@@ -1,211 +1,419 @@
 <template>
   <div class="datasets-workbench">
+    <!-- RAG 模式提示面板（大模型模式专注基准数据集） -->
     <div v-if="modeStore.mode === 'rag'" class="mode-context-panel panel">
-      <span class="eyebrow">RAG 测试模式</span>
-      <h2>RAG 评测使用知识库与黄金 QA</h2>
-      <p>基准数据集只服务于大模型对比评测。当前模式下，请在知识库工作台管理文档、切块、检索与黄金 QA，再发起 RAG 评测。</p>
-      <router-link to="/kb" class="btn btn-sign btn-sm">进入知识库工作台</router-link>
+      <div class="mode-icon-wrapper">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5Z" />
+          <path d="M6 6h10" />
+          <path d="M6 10h10" />
+        </svg>
+      </div>
+      <h2>RAG 评测请使用知识库与黄金 QA</h2>
+      <p>基准数据集主要服务于大模型评测与对比。当前模式下，请前往知识库工作台管理文档切块、检索与黄金 QA 资产。</p>
+      <router-link to="/kb" class="btn btn-sign btn-sm">进入知识库工作台 →</router-link>
     </div>
 
     <div v-else class="ft-layout" :style="{ '--ft-w': treeWidth + 'px' }">
-      <!-- 左侧：目录树侧边栏 -->
+      <!-- ─── 左侧：资源目录树侧边栏 ─── -->
       <div class="ft-sidebar">
+        <!-- 侧边栏头部 -->
         <div class="ft-header">
           <div class="row-between mb8">
-            <span style="font-weight: 600; font-size: 13px">资源目录树</span>
+            <div class="ft-title">
+              <svg class="ft-title-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
+              </svg>
+              <span>数据集资源</span>
+            </div>
             <div class="row" style="gap: 6px">
-              <!-- 对齐原型：「+ 新建」触发 AI 智能合成；「上传」走真实 JSONL/CSV 上传通道 -->
-              <button class="btn btn-secondary btn-sm" style="font-size: 11px" @click="openAiGenModal">+ 新建</button>
-              <button class="btn btn-ghost btn-sm" style="font-size: 11px" title="上传 JSONL / CSV 数据集" @click="openUploadModal(null)">上传</button>
+              <button class="btn btn-ai-soft btn-xs" title="通过 AI 场景或种子样本合成数据" aria-label="AI 智能合成新数据集" @click="openAiGenModal">
+                <span class="sparkle">✨</span> 新建
+              </button>
+              <button class="btn btn-ghost btn-xs" title="上传 JSONL / CSV 数据集文件" aria-label="上传数据集文件" @click="openUploadModal(null)">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="17 8 12 3 7 8" />
+                  <line x1="12" y1="3" x2="12" y2="15" />
+                </svg>
+                上传
+              </button>
             </div>
           </div>
-          <input v-model="treeSearch" class="input" placeholder="搜索数据集 / 黄金 QA..." style="height: 30px; font-size: 12px" />
+          <!-- 搜索输入框 -->
+          <div class="search-input-wrapper">
+            <svg class="search-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="8" />
+              <line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+            <input v-model="treeSearch" class="input tree-search-input" placeholder="搜索数据集 / 黄金 QA..." aria-label="搜索数据集或黄金QA" />
+            <button v-if="treeSearch" class="clear-search-btn" aria-label="清空搜索内容" @click="treeSearch = ''">✕</button>
+          </div>
         </div>
 
-        <div class="ft-tree">
-          <div v-for="folder in filteredFolders" :key="folder.id" :data-fid="folder.id">
-            <!-- 文件夹节点：右键唤起目录级菜单（新建数据集 / 子文件夹 / 重命名 / 删除） -->
+        <!-- 目录树内容区 -->
+        <div class="ft-tree custom-scroll">
+          <div v-for="folder in filteredFolders" :key="folder.id" class="ft-folder-group" :data-fid="folder.id">
+            <!-- 文件夹节点 -->
             <div
               class="ft-node folder"
+              :class="{ open: folder.open }"
               @click="folder.open = !folder.open"
               @contextmenu.prevent.stop="openCtxMenu($event, 'folder', folder.id)"
             >
-              <span class="ft-icon">{{ folder.open ? '▾' : '▸' }}</span>
-              <span>📁 {{ folder.name }}</span>
+              <span class="ft-chevron" :class="{ rotated: folder.open }">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="9 18 15 12 9 6" />
+                </svg>
+              </span>
+              <svg class="ft-folder-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path v-if="folder.open" d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" />
+                <path v-else d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
+              </svg>
+              <span class="ft-folder-name">{{ folder.name }}</span>
               <span class="ft-badge">{{ folder.items.length }}</span>
             </div>
 
+            <!-- 文件夹内部项目 -->
             <div v-if="folder.open" class="ft-folder-child">
-              <!-- 文件节点：右键唤起文件级菜单（评测 / 覆盖上传 / AI 补全 / 重命名 / 导出 / 删除） -->
               <div
                 v-for="item in folder.items"
                 :key="item.id"
-                class="ft-node"
+                class="ft-node file"
                 :class="{ active: activeDatasetId === item.id }"
                 :title="`${item.name} · v${item.version}`"
                 @click="requestSelectDataset(item.id)"
                 @contextmenu.prevent.stop="openCtxMenu($event, 'file', item.id)"
               >
-                <span class="ft-icon">{{ item.isGoldQa ? '⭐' : '📄' }}</span>
-                <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{ item.name }}</span>
-                <span class="tag-soft" style="font-size: 10px; padding: 1px 5px; margin-left: auto">v{{ item.version }}</span>
+                <!-- 图标区分黄金 QA 与常规数据集 -->
+                <span v-if="item.isGoldQa" class="ft-file-icon gold-qa" title="黄金 QA 资产">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                    <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                  </svg>
+                </span>
+                <span v-else class="ft-file-icon dataset" title="基准数据集">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                    <polyline points="14 2 14 8 20 8" />
+                    <line x1="16" y1="13" x2="8" y2="13" />
+                    <line x1="16" y1="17" x2="8" y2="17" />
+                    <polyline points="10 9 9 9 8 9" />
+                  </svg>
+                </span>
+                <span class="ft-file-name">{{ item.name }}</span>
+                <span class="version-tag">v{{ item.version }}</span>
                 <span v-if="item.pending_complete_count > 0" class="ft-status-dot" :title="`${item.pending_complete_count} 行待补全`"></span>
               </div>
             </div>
           </div>
-          <!-- 目录树空态 / 搜索无结果提示 -->
-          <div v-if="!filteredFolders.length" class="tertiary" style="padding: 14px 12px; font-size: 12px; line-height: 1.7">
-            {{ treeSearch.trim() ? `未找到匹配「${treeSearch.trim()}」的数据集` : '暂无数据集，点击上方「+ 新建」或「上传」开始' }}
+
+          <!-- 目录树空态提示 -->
+          <div v-if="!filteredFolders.length" class="ft-empty-state">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="empty-icon">
+              <circle cx="11" cy="11" r="8" />
+              <line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+            <p>{{ treeSearch.trim() ? `未找到匹配「${treeSearch.trim()}」的数据集` : '暂无数据集，点击上方「+ 新建」或「上传」开始' }}</p>
           </div>
         </div>
-        <!-- 目录树面板拖拽调宽手柄（200–520px，双击复位 290px，localStorage 持久化），对齐原型 ft-resizer -->
+
+        <!-- 目录树调宽手柄 -->
         <div
           class="ft-resizer"
           :class="{ on: treeResizing }"
-          title="拖拽调整目录树宽度 · 双击复位"
+          title="拖拽调整侧边栏宽度 · 双击复位为 290px"
           @mousedown="startTreeResize"
           @dblclick="resetTreeWidth"
-        ></div>
+        >
+          <div class="resizer-handle-line"></div>
+        </div>
       </div>
 
-      <!-- 右侧：数据表格工作台 -->
+      <!-- ─── 右侧：数据表格工作台 ─── -->
       <div v-if="currentItem" class="workspace-main">
         <!-- 1. 顶部工具栏 -->
         <div class="ws-toolbar">
-          <div class="row" style="gap: 8px; align-items: center">
-            <span style="font-weight: 700; font-size: 15px">{{ currentItem.name }}</span>
-            <span class="tag-soft" style="font-size: 11px">v{{ currentItem.version }}</span>
-            <!-- 类型徽章：黄金 QA 用知识库青色，基准数据集用数据集色（对齐原型） -->
-            <span
-              class="tag-soft"
-              :style="isGoldQaActive
-                ? { color: 'var(--c-kb)', borderColor: 'var(--t-kb)' }
-                : { color: 'var(--c-datasets)', borderColor: 'var(--t-datasets)' }"
-            >{{ isGoldQaActive ? '黄金 QA' : '基准数据集' }}</span>
-            <span v-if="!isGoldQaActive && currentDataset && currentDataset.pending_complete_count > 0" class="badge badge-awaiting_case_confirm">
-              {{ currentDataset.pending_complete_count }} 条待补全
-            </span>
+          <div class="ws-title-group">
+            <div class="ws-title-row">
+              <span class="ws-dataset-title">{{ currentItem.name }}</span>
+              <span class="version-pill">v{{ currentItem.version }}</span>
+              <span
+                class="kind-chip"
+                :class="isGoldQaActive ? 'chip-gold-qa' : 'chip-dataset'"
+              >
+                {{ isGoldQaActive ? '黄金 QA' : '基准数据集' }}
+              </span>
+              <span v-if="!isGoldQaActive && currentDataset && currentDataset.pending_complete_count > 0" class="badge badge-awaiting_case_confirm">
+                {{ currentDataset.pending_complete_count }} 行待补全
+              </span>
+            </div>
+            <!-- 面包屑路径提示 -->
+            <div class="ws-breadcrumb">
+              <span>{{ isGoldQaActive ? '知识库资产' : '数据集资源' }}</span>
+              <span class="sep">/</span>
+              <span class="cur">{{ currentItem.name }}</span>
+            </div>
           </div>
 
-          <!-- 黄金 QA 视图：行编辑依赖 M3 行级接口，仅保留评测入口（对齐原型工具栏） -->
-          <div v-if="isGoldQaActive" class="row" style="gap: 8px; align-items: center; margin-left: auto; flex-wrap: wrap; justify-content: flex-end">
-            <button class="btn btn-sign btn-sm" @click="openRagDrawer">发起 RAG 评测</button>
-          </div>
-          <div v-else class="row" style="gap: 8px; align-items: center; margin-left: auto; flex-wrap: wrap; justify-content: flex-end">
-            <button class="btn btn-secondary btn-sm" @click="addRow">+ 新增行</button>
-            <button class="btn btn-secondary btn-sm" @click="openAddColModal">+ 新增列</button>
-            <button class="btn btn-ai btn-sm" @click="openAiGenModal">✨ AI 合成新数据</button>
-            <button class="btn btn-ai btn-sm" @click="openAiFillModal">AI 补全缺失行</button>
-            <button class="btn btn-secondary btn-sm" :disabled="!hasUnsavedChanges || savingRows" title="快捷键 Ctrl/⌘ + S" @click="persistRows">
-              {{ savingRows ? '保存中…' : '保存修改' }}
+          <!-- 右侧操作按钮组 -->
+          <div v-if="isGoldQaActive" class="ws-action-group">
+            <button class="btn btn-sign btn-sm" @click="openRagDrawer">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="5 3 19 12 5 21 5 3" />
+              </svg>
+              发起 RAG 评测
             </button>
-            <button class="btn btn-secondary btn-sm" @click="exportJsonl">导出 JSONL</button>
-            <button class="btn btn-sign btn-sm" @click="openLaunchDrawer">发起基准评测</button>
+          </div>
+
+          <div v-else class="ws-action-group">
+            <!-- 常规表格编辑与扩展 -->
+            <div class="action-btn-cluster">
+              <button class="btn btn-secondary btn-sm" aria-label="新增表格行" @click="addRow">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
+                新增行
+              </button>
+              <button class="btn btn-secondary btn-sm" aria-label="新增自定义扩展列" @click="openAddColModal">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
+                新增列
+              </button>
+            </div>
+
+            <!-- AI 增强功能区 -->
+            <div class="action-btn-cluster ai-cluster">
+              <button class="btn btn-ai btn-sm" aria-label="AI 智能合成数据集向导" @click="openAiGenModal">
+                <span class="sparkle">✨</span> AI 智能合成
+              </button>
+              <button class="btn btn-ai-soft btn-sm" :disabled="pendingCount === 0" title="为缺失问句或答案的行智能推导并补全" aria-label="AI 补全缺失行" @click="openAiFillModal">
+                AI 补全缺失行
+              </button>
+            </div>
+
+            <!-- 导出与保存 -->
+            <div class="action-btn-cluster">
+              <button class="btn btn-secondary btn-sm" title="导出当前表格为 JSONL 格式文件" aria-label="导出 JSONL 文件" @click="exportJsonl">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
+                导出 JSONL
+              </button>
+              <button
+                class="btn btn-primary btn-sm save-btn"
+                :class="{ dirty: hasUnsavedChanges, saved: justSaved }"
+                :disabled="!hasUnsavedChanges || savingRows"
+                title="快捷键 Ctrl/⌘ + S"
+                aria-label="保存当前数据集修改"
+                @click="persistRows"
+              >
+                <span v-if="hasUnsavedChanges" class="dirty-indicator"></span>
+                <span v-if="justSaved" class="saved-check-icon">✓</span>
+                {{ savingRows ? '保存中…' : justSaved ? '已保存' : '保存修改' }}
+                <kbd class="shortcut-pill">⌘S</kbd>
+              </button>
+            </div>
+
+            <!-- 核心主行动：发起评测 -->
+            <button class="btn btn-sign btn-sm launch-btn" aria-label="发起基准评测任务" @click="openLaunchDrawer">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="5 3 19 12 5 21 5 3" />
+              </svg>
+              发起基准评测
+            </button>
           </div>
         </div>
 
-        <!-- 2. 表格数据网格 -->
-        <div class="ws-grid-container">
-          <table class="ds-table">
+        <!-- 2. 数据质量与指标概览栏 (Quality & Metrics Glance Bar) -->
+        <div class="quality-glance-bar">
+          <div class="glance-metrics-left">
+            <span class="glance-label">数据概览:</span>
+            <span class="glance-pill">
+              共 <b class="num mono">{{ isGoldQaActive ? (activeGoldQa?.row_count || 0) : sampleRows.length }}</b> 行
+            </span>
+
+            <template v-if="!isGoldQaActive">
+              <span class="glance-pill success" :class="{ active: filterPendingOnly === false }" @click="filterPendingOnly = false">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12" /></svg>
+                达标 <b class="num mono">{{ sampleRows.length - pendingCount }}</b> 行
+              </span>
+              <span
+                v-if="pendingCount > 0"
+                class="glance-pill warning clickable"
+                :class="{ active: filterPendingOnly === true }"
+                title="点击切换仅看待补全行"
+                @click="filterPendingOnly = !filterPendingOnly"
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
+                待补全 <b class="num mono">{{ pendingCount }}</b> 行
+                <span class="filter-tag">{{ filterPendingOnly ? '✓ 已过滤' : '点击筛选' }}</span>
+              </span>
+              <span v-else class="glance-pill achievement-pill">
+                <span class="sparkle">✨</span> 校验 100% 达标 · 就绪可评测
+              </span>
+
+              <span v-if="customCols.length" class="glance-pill">
+                自定义扩展列: <b class="num mono">{{ customCols.length }}</b>
+              </span>
+            </template>
+          </div>
+
+          <div class="grow"></div>
+
+          <!-- 主评测指标选择器 -->
+          <div v-if="!isGoldQaActive && currentDataset" class="metric-selector-wrapper">
+            <span class="metric-label">主评分指标:</span>
+            <select v-model="currentDataset.metric" class="select metric-select" aria-label="选择主评分指标" @change="saveMetric">
+              <option value="contain">Contain (包含匹配)</option>
+              <option value="exact">Exact (完全一致)</option>
+              <option value="regex">Regex (正则表达式)</option>
+              <option value="rouge_l">ROUGE-L (最长公共子序列)</option>
+              <option value="bleu">BLEU (自然语言平滑)</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- 3. 数据表格网格 (Impeccable Grid Table) -->
+        <div class="ws-grid-container custom-scroll">
+          <table class="ds-table impeccable-grid">
             <thead>
               <tr>
-                <!-- 全选联动：勾选状态仅存于本地编辑态，对齐原型 chk-all 行为 -->
-                <th style="width: 44px"><input type="checkbox" :checked="allRowsChecked" @change="toggleAllRows" /></th>
-                <th style="width: 70px">行号</th>
-                <th style="min-width: 220px">测试问句 (Question) <i class="req" style="color: var(--accent-error)">*</i></th>
-                <th style="min-width: 260px">标准答案 (Reference) <i class="req" style="color: var(--accent-error)">*</i></th>
-                <!-- 黄金 QA 第三列为预期召回文档，基准数据集为上下文（对齐原型表头切换） -->
-                <th style="min-width: 140px">{{ isGoldQaActive ? '预期文档 expected_doc_ids' : '上下文 / 前置 (Context)' }}</th>
+                <th class="th-chk" style="width: 44px">
+                  <input type="checkbox" :checked="allRowsChecked" class="custom-checkbox" aria-label="全选所有行" @change="toggleAllRows" />
+                </th>
+                <th style="width: 68px"># 行号</th>
+                <th style="min-width: 240px">
+                  测试问句 (Question) <span class="req-star">*</span>
+                </th>
+                <th style="min-width: 280px">
+                  标准参考答案 (Reference) <span class="req-star">*</span>
+                </th>
+                <th style="min-width: 160px">
+                  {{ isGoldQaActive ? '预期文档 expected_doc_ids' : '上下文注入 / Prompt Context' }}
+                </th>
                 <template v-if="!isGoldQaActive">
                   <th style="min-width: 110px">标签</th>
                   <th style="min-width: 90px">难度</th>
                 </template>
-                <!-- D3 自定义扩展列表头：薄荷绿底 + ✕ 删列入 -->
-                <th v-for="col in customCols" :key="col.key" class="custom-col-th" style="min-width: 110px">
-                  {{ col.name }}
-                  <button class="link-btn danger" style="font-size: 10px; padding: 0 2px" title="删除该扩展列" @click="removeCustomCol(col.key)">✕</button>
+                <!-- 自定义扩展列表头 -->
+                <th v-for="col in customCols" :key="col.key" class="custom-col-th" style="min-width: 120px">
+                  <div class="custom-th-content">
+                    <span class="custom-th-name">{{ col.name }}</span>
+                    <span class="custom-th-key">({{ col.key }})</span>
+                    <button class="custom-th-del" title="删除该扩展列" :aria-label="`删除扩展列 ${col.name}`" @click.stop="removeCustomCol(col.key)">✕</button>
+                  </div>
                 </th>
-                <th style="width: 90px">校验状态</th>
+                <th style="width: 96px">校验状态</th>
                 <th style="width: 110px; text-align: right">操作</th>
               </tr>
             </thead>
+
             <tbody>
-              <!-- 黄金 QA 行级数据依赖 M3 接口，当前展示空态说明（不用静态数据顶替） -->
+              <!-- 黄金 QA 提示说明 -->
               <tr v-if="isGoldQaActive">
-                <!-- 列数随模式变化：黄金 QA 7+N 列，基准数据集 9+N 列（含标签/难度） -->
-                <td :colspan="(isGoldQaActive ? 7 : 9) + customCols.length" style="text-align: center; padding: 40px 16px; color: var(--text-tertiary)">
-                  黄金 QA「{{ currentItem?.name }}」共 {{ activeGoldQa?.row_count || 0 }} 行，行级查看与编辑将在 M3 知识库里程碑接入。
+                <td :colspan="(isGoldQaActive ? 7 : 9) + customCols.length" class="gold-qa-empty-cell">
+                  <div class="gold-qa-notice">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                    </svg>
+                    <span>黄金 QA「{{ currentItem?.name }}」共 {{ activeGoldQa?.row_count || 0 }} 行，行级查看与深度编辑将在 M3 知识库全面接入。</span>
+                  </div>
                 </td>
               </tr>
-              <!-- 表格行：双击打开弹窗编辑；右键唤起行级菜单（编辑 / 补全 / 复制 / 勾选 / 插入 / 副本 / 删除） -->
+
+              <!-- 数据集行记录 -->
               <tr
-                v-for="(r, idx) in sampleRows"
+                v-for="(r, idx) in displayedRows"
                 v-else
-                :key="idx"
-                @contextmenu.prevent="openCtxMenu($event, 'row', '', idx)"
-                @dblclick="openRowEditModal(idx)"
+                :key="r.row_no"
+                class="grid-row"
+                :class="{ 'row-checked': r.checked, 'row-incomplete': !r.q.trim() || !r.r.trim() }"
+                @contextmenu.prevent="openCtxMenu($event, 'row', '', getOriginalRowIndex(r))"
+                @dblclick="openRowEditModal(getOriginalRowIndex(r))"
               >
-                <td><input v-model="r.checked" type="checkbox" /></td>
-                <td class="mono small">{{ r.row_no }}</td>
-                <!-- cell-bad 作用于单元格本身：红字 + 红色虚线下划线，对齐原型 datasets.html。 -->
-                <td class="cell-edit" :class="{ 'cell-bad': !r.q.trim() }" @click="editCell(r, 'q')">
+                <!-- 勾选列 -->
+                <td class="td-chk">
+                  <input v-model="r.checked" type="checkbox" class="custom-checkbox" :aria-label="`勾选第 ${r.row_no} 行`" />
+                </td>
+
+                <!-- 行号 -->
+                <td class="mono small td-row-no">{{ r.row_no }}</td>
+
+                <!-- 问题单元格 (就地编辑) -->
+                <td class="cell-edit" :class="{ 'cell-invalid': !r.q.trim() }" @click="editCell(r, 'q')">
                   <input
                     v-if="editingCell?.row === r && editingCell?.field === 'q'"
                     v-model="r.q"
-                    class="cell-input"
+                    class="cell-input active"
+                    placeholder="输入测试问题..."
+                    :aria-label="`编辑第 ${r.row_no} 行测试问题`"
                     autofocus
                     @blur="finishEditing"
                     @keyup.enter="finishEditing"
                     @keyup.esc="cancelEditing"
                   />
-                  <span v-else>
-                    {{ r.q || '（空问句 · 待补全）' }}
-                  </span>
+                  <div v-else class="cell-text" :class="{ placeholder: !r.q.trim() }">
+                    {{ r.q || '（空问句 · 点击补全）' }}
+                  </div>
                 </td>
-                <td class="cell-edit" :class="{ 'cell-bad': !r.r.trim() }" @click="editCell(r, 'r')">
+
+                <!-- 参考答案单元格 (就地编辑) -->
+                <td class="cell-edit" :class="{ 'cell-invalid': !r.r.trim() }" @click="editCell(r, 'r')">
                   <input
                     v-if="editingCell?.row === r && editingCell?.field === 'r'"
                     v-model="r.r"
-                    class="cell-input"
+                    class="cell-input active"
+                    placeholder="输入标准答案..."
+                    :aria-label="`编辑第 ${r.row_no} 行标准答案`"
                     autofocus
                     @blur="finishEditing"
                     @keyup.enter="finishEditing"
                     @keyup.esc="cancelEditing"
                   />
-                  <span v-else>
-                    {{ r.r || '（空答案 · 待补全）' }}
-                  </span>
+                  <div v-else class="cell-text" :class="{ placeholder: !r.r.trim() }">
+                    {{ r.r || '（空答案 · 点击补全）' }}
+                  </div>
                 </td>
+
+                <!-- 上下文注入单元格 (就地编辑) -->
                 <td class="cell-edit" @click="editCell(r, 'c')">
                   <input
                     v-if="editingCell?.row === r && editingCell?.field === 'c'"
                     v-model="r.c"
-                    class="cell-input"
+                    class="cell-input active"
+                    placeholder="上下文 Context..."
+                    :aria-label="`编辑第 ${r.row_no} 行上下文`"
                     autofocus
                     @blur="finishEditing"
                     @keyup.enter="finishEditing"
                     @keyup.esc="cancelEditing"
                   />
-                  <span v-else>{{ r.c || '—' }}</span>
+                  <div v-else class="cell-text mono-text" :class="{ empty: !r.c }">
+                    {{ r.c || '—' }}
+                  </div>
                 </td>
+
+                <!-- 标签单元格 (就地编辑) -->
                 <td class="cell-edit" @click="editCell(r, 'tags')">
                   <input
                     v-if="editingCell?.row === r && editingCell?.field === 'tags'"
                     v-model="r.tags"
-                    class="cell-input"
+                    class="cell-input active"
+                    placeholder="标签，逗号分隔..."
+                    :aria-label="`编辑第 ${r.row_no} 行标签`"
                     autofocus
                     @blur="finishEditing"
                     @keyup.enter="finishEditing"
                     @keyup.esc="cancelEditing"
                   />
-                  <span v-else class="tag-soft" style="font-size: 11px">{{ r.tags || '常规' }}</span>
+                  <div v-else class="cell-text">
+                    <span v-if="r.tags" class="tag-chip">{{ r.tags }}</span>
+                    <span v-else class="empty-placeholder">常规</span>
+                  </div>
                 </td>
+
+                <!-- 难度选择器单元格 -->
                 <td class="cell-edit" @click="editCell(r, 'difficulty')">
                   <select
                     v-if="editingCell?.row === r && editingCell?.field === 'difficulty'"
                     v-model="r.difficulty"
-                    class="select"
-                    style="height: 28px; padding: 2px 20px 2px 6px; font-size: 11px"
+                    class="select cell-select"
+                    :aria-label="`选择第 ${r.row_no} 行难度`"
                     autofocus
                     @blur="finishEditing"
                     @change="finishEditing"
@@ -215,125 +423,119 @@
                     <option>中等</option>
                     <option>高</option>
                   </select>
-                  <span v-else class="tag-soft" style="font-size: 11px">{{ r.difficulty || '简单' }}</span>
+                  <div v-else class="cell-text">
+                    <span class="difficulty-chip" :class="`diff-${r.difficulty}`">
+                      {{ r.difficulty || '简单' }}
+                    </span>
+                  </div>
                 </td>
-                <!-- D3 自定义扩展列单元格：与内置列共用就地编辑交互，值存于 row.extras -->
+
+                <!-- 自定义扩展列单元格 (就地编辑) -->
                 <td v-for="col in customCols" :key="col.key" class="cell-edit" @click="editCell(r, col.key)">
                   <input
                     v-if="editingCell?.row === r && editingCell?.field === col.key"
                     v-model="r.extras[col.key]"
-                    class="cell-input"
+                    class="cell-input active"
+                    :placeholder="`输入 ${col.name}...`"
+                    :aria-label="`编辑第 ${r.row_no} 行 ${col.name}`"
                     autofocus
                     @blur="finishEditing"
                     @keyup.enter="finishEditing"
                     @keyup.esc="cancelEditing"
                   />
-                  <span v-else>{{ r.extras[col.key] || '—' }}</span>
+                  <div v-else class="cell-text" :class="{ empty: !r.extras[col.key] }">
+                    {{ r.extras[col.key] || '—' }}
+                  </div>
                 </td>
-                <!-- 行级校验状态：问句或标准答案缺失即为待补全。 -->
-                <td>
-                  <span v-if="!r.q.trim() || !r.r.trim()" class="badge badge-awaiting_case_confirm">⊘ 待补全</span>
-                  <span v-else class="badge badge-succeeded">✓ 达标</span>
-                </td>
-                <td style="text-align: right; white-space: nowrap">
-                  <button class="link-btn" @click="openRowEditModal(idx)">编辑</button>
-                  <button class="link-btn danger" @click="deleteRow(idx)">删除</button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
 
-        <!-- 3. 底部状态栏 -->
-        <div class="ws-status-bar">
-          <template v-if="isGoldQaActive">
-            <span>共 <b class="num mono">{{ activeGoldQa?.row_count || 0 }}</b> 行</span>
-            <span class="tertiary">黄金 QA 资产 · 行级编辑 M3 接入</span>
-          </template>
-          <template v-else>
-            <span>共 <b class="num mono">{{ sampleRows.length }}</b> 行数据</span>
-            <span v-if="pendingCount > 0" class="st-bad">
-              ⚠ {{ pendingCount }} 行缺失测试句或参考答案
-            </span>
-            <span v-else class="st-ok">✓ 数据格式校验通过</span>
-            <!-- D3 扩展列计数，对齐原型状态栏 -->
-            <span>扩展列: <b class="num mono">{{ customCols.length }}</b></span>
-            <!-- 批量操作条：勾选行后出现，支持批量删除与导出选中 -->
-            <template v-if="selectedCount > 0">
-              <span>已选 <b class="num mono">{{ selectedCount }}</b> 行</span>
-              <button class="link-btn" @click="exportSelectedRows">导出选中</button>
-              <button class="link-btn danger" @click="batchDeleteRows">批量删除</button>
-            </template>
-          </template>
-          <span class="grow"></span>
-          <!-- 主评测指标选择仅基准数据集展示（对齐原型：黄金 QA 视图无指标切换） -->
-          <div v-if="!isGoldQaActive && currentDataset" class="row" style="gap: 6px; align-items: center">
-            <span class="tertiary">主指标:</span>
-            <select v-model="currentDataset.metric" class="select" style="height: 28px; padding: 2px 24px 2px 8px; font-size: 12px" @change="saveMetric">
-              <option value="contain">Contain (包含匹配)</option>
-              <option value="exact">Exact (完全一致)</option>
-              <option value="regex">Regex (正则表达式)</option>
-              <option value="rouge_l">ROUGE-L</option>
-              <option value="bleu">BLEU</option>
-            </select>
-          </div>
-        </div>
-      </div>
-      <!-- 空态仍保留完整工作台骨架：工具栏 + 表头 + 状态栏，空表格内嵌引导操作 -->
-      <div v-else class="workspace-main">
-        <div class="ws-toolbar">
-          <div class="row" style="gap: 8px; align-items: center">
-            <span style="font-weight: 700; font-size: 15px">数据集工作台</span>
-            <span class="tag-soft" style="color: var(--c-datasets); border-color: var(--t-datasets)">基准数据集</span>
-          </div>
-          <div class="row" style="gap: 8px; align-items: center; margin-left: auto; flex-wrap: wrap; justify-content: flex-end">
-            <button class="btn btn-secondary btn-sm" @click="openUploadModal(null)">⤴ 上传数据集</button>
-            <button class="btn btn-ai btn-sm" @click="createEmptyDataset(() => openAiGenModal())">✨ AI 合成新数据</button>
-            <button class="btn btn-sign btn-sm" @click="createEmptyDataset()">+ 新建空数据集</button>
-          </div>
-        </div>
-        <div class="ws-grid-container">
-          <table class="ds-table">
-            <thead>
-              <tr>
-                <th style="width: 44px"><input type="checkbox" disabled /></th>
-                <th style="width: 70px">行号</th>
-                <th style="min-width: 220px">测试问句 (Question) <i class="req" style="color: var(--accent-error)">*</i></th>
-                <th style="min-width: 260px">标准答案 (Reference) <i class="req" style="color: var(--accent-error)">*</i></th>
-                <th style="min-width: 140px">上下文 / 前置 (Context)</th>
-                <th style="min-width: 110px">标签</th>
-                <th style="min-width: 90px">难度</th>
-                <th style="width: 90px">校验状态</th>
-                <th style="width: 110px; text-align: right">操作</th>
+                <!-- 校验状态指示 -->
+                <td>
+                  <span v-if="!r.q.trim() || !r.r.trim()" class="badge badge-awaiting_case_confirm" title="缺少测试句或参考答案">
+                    <span class="bdot"></span> 待补全
+                  </span>
+                  <span v-else class="badge badge-succeeded" title="核心字段完整">
+                    <span class="bdot"></span> 达标
+                  </span>
+                </td>
+
+                <!-- 行内快捷操作 -->
+                <td class="td-actions">
+                  <div class="row-actions-cluster">
+                    <button class="action-btn" title="详细弹窗编辑" :aria-label="`详细编辑第 ${r.row_no} 行`" @click.stop="openRowEditModal(getOriginalRowIndex(r))">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
+                    </button>
+                    <button class="action-btn danger" title="删除本行" :aria-label="`删除第 ${r.row_no} 行`" @click.stop="deleteRow(getOriginalRowIndex(r))">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
+                    </button>
+                  </div>
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td colspan="9" style="padding: 56px 16px; border-bottom: none">
-                  <div style="display: flex; flex-direction: column; align-items: center; gap: 10px; color: var(--text-tertiary)">
-                    <span style="font-size: 34px">🗂️</span>
-                    <span style="font-size: 14px; font-weight: 600; color: var(--text-secondary)">暂无可用数据集</span>
-                    <span class="small">上传 JSONL / CSV 文件，或先新建空集再由 AI 从场景描述合成评测数据</span>
-                    <div class="row" style="gap: 8px; margin-top: 6px">
-                      <button class="btn btn-secondary btn-sm" @click="openUploadModal(null)">⤴ 上传数据集</button>
-                      <button class="btn btn-ai btn-sm" @click="createEmptyDataset(() => openAiGenModal())">✨ AI 合成</button>
-                      <button class="btn btn-sign btn-sm" @click="createEmptyDataset()">+ 新建空数据集</button>
-                    </div>
+
+              <!-- 空行/过滤无结果提示 -->
+              <tr v-if="!displayedRows.length">
+                <td :colspan="(isGoldQaActive ? 7 : 9) + customCols.length" class="empty-table-cell">
+                  <div class="empty-table-notice">
+                    <span v-if="filterPendingOnly">当前无待补全行，全部样本格式均已达标。</span>
+                    <span v-else>当前数据集暂无样本行，点击上方「新增行」或「AI 智能合成」开始填充数据。</span>
                   </div>
                 </td>
               </tr>
             </tbody>
           </table>
         </div>
-        <div class="ws-status-bar">
-          <span>共 <b class="num mono">0</b> 行数据</span>
-          <span class="tertiary">尚未创建数据集</span>
-          <span class="grow"></span>
+
+        <!-- 4. 浮动式批量操作坞 (Floating Batch Action Dock) -->
+        <transition name="dock-slide">
+          <div v-if="selectedCount > 0" class="floating-batch-dock">
+            <div class="dock-content">
+              <span class="dock-count-badge">已勾选 <b class="num mono">{{ selectedCount }}</b> 行</span>
+              <div class="dock-divider"></div>
+              <button class="btn btn-ghost btn-sm" aria-label="导出选中行 JSONL" @click="exportSelectedRows">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
+                导出选中 JSONL
+              </button>
+              <button class="btn btn-danger-soft btn-sm" aria-label="批量删除勾选行" @click="batchDeleteRows">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
+                批量删除 ({{ selectedCount }})
+              </button>
+              <div class="dock-divider"></div>
+              <button class="dock-close-btn" title="取消全部勾选" aria-label="取消勾选所有行" @click="uncheckAllRows">✕</button>
+            </div>
+          </div>
+        </transition>
+      </div>
+
+      <!-- ─── 空态页面引导 ─── -->
+      <div v-else class="workspace-main empty-workbench">
+        <div class="empty-workbench-container">
+          <div class="empty-workbench-icon">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <polyline points="14 2 14 8 20 8" />
+              <line x1="16" y1="13" x2="8" y2="13" />
+              <line x1="16" y1="17" x2="8" y2="17" />
+              <polyline points="10 9 9 9 8 9" />
+            </svg>
+          </div>
+          <h3>尚未选择或创建数据集</h3>
+          <p class="empty-sub">你可以通过上传现有的 JSONL / CSV 评测集，或者由 AI 深度推理一键合成评测数据。</p>
+          <div class="empty-actions-row">
+            <button class="btn btn-secondary" @click="openUploadModal(null)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>
+              上传已有数据集
+            </button>
+            <button class="btn btn-ai" @click="createEmptyDataset(() => openAiGenModal())">
+              <span class="sparkle">✨</span> AI 智能合成新数据
+            </button>
+            <button class="btn btn-sign" @click="createEmptyDataset()">
+              + 新建空数据集
+            </button>
+          </div>
         </div>
       </div>
     </div>
 
-    <!-- 弹窗与抽屉 -->
+    <!-- ─── 弹窗与抽屉组件 ─── -->
     <UploadDatasetModal
       v-model:show="showUploadModal"
       :dataset="datasetForUpload"
@@ -346,7 +548,7 @@
       @success="handleLaunchSuccess"
     />
 
-    <!-- D1 右键上下文菜单：NDropdown manual 触发 + 坐标定位，点击外部关闭 -->
+    <!-- 右键上下文菜单 -->
     <n-dropdown
       trigger="manual"
       placement="bottom-start"
@@ -358,8 +560,8 @@
       @clickoutside="closeCtxMenu"
     />
 
-    <!-- D2 行结构化编辑弹窗：问题 / 答案 / 上下文 + 自定义扩展字段 -->
-    <n-modal v-model:show="rowEdit.show" preset="card" :title="`编辑样本行 #${rowEdit.rowNo}`" style="width: 640px; max-width: calc(100vw - 24px)">
+    <!-- 行结构化编辑弹窗 -->
+    <n-modal v-model:show="rowEdit.show" preset="card" :title="`详细编辑样本行 #${rowEdit.rowNo}`" style="width: 660px; max-width: calc(100vw - 24px)">
       <div class="field">
         <label class="field-label">问题 / 提示词 (Question / Prompt) <span class="req">*</span></label>
         <n-input v-model:value="rowEdit.q" type="textarea" :autosize="{ minRows: 3, maxRows: 6 }" placeholder="请输入测试问句" />
@@ -369,16 +571,16 @@
         <n-input v-model:value="rowEdit.r" type="textarea" :autosize="{ minRows: 3, maxRows: 6 }" placeholder="请输入标准答案" />
       </div>
       <div class="field">
-        <label class="field-label">上下文注入 / Prompt Context (支持 Markdown / JSON)</label>
-        <n-input v-model:value="rowEdit.c" class="mono" type="textarea" :autosize="{ minRows: 3, maxRows: 8 }" placeholder="可粘贴 Markdown 或 JSON 结构化上下文" />
+        <label class="field-label">上下文注入 / Prompt Context (支持 Markdown / JSON 结构体)</label>
+        <n-input v-model:value="rowEdit.c" class="mono" type="textarea" :autosize="{ minRows: 3, maxRows: 8 }" placeholder="可粘贴结构化上下文或参考文档段落..." />
       </div>
-      <!-- 自定义扩展字段区：随扩展列动态生成输入框 -->
+      <!-- 自定义扩展字段区 -->
       <template v-if="customCols.length">
-        <div class="rail-label" style="margin-bottom: 10px">自定义扩展字段</div>
+        <div class="rail-label" style="margin: 12px 0 8px">自定义扩展字段</div>
         <div class="form-row">
           <div v-for="col in customCols" :key="col.key" class="field">
             <label class="field-label">{{ col.name }} ({{ col.key }})</label>
-            <n-input v-model:value="rowEdit.extras[col.key]" :placeholder="col.type === 'json' ? '请输入 JSON 结构体文本' : col.type === 'number' ? '请输入数值' : '请输入文本'" />
+            <n-input v-model:value="rowEdit.extras[col.key]" :placeholder="col.type === 'json' ? 'JSON 结构体' : col.type === 'number' ? '数值' : '文本'" />
           </div>
         </div>
       </template>
@@ -390,8 +592,8 @@
       </template>
     </n-modal>
 
-    <!-- D3 新增自定义扩展列弹窗：Key / 名称 / 类型三要素 -->
-    <n-modal v-model:show="addCol.show" preset="card" title="新增自定义数据列 (Custom Column)" style="width: 460px; max-width: calc(100vw - 24px)">
+    <!-- 新增自定义扩展列弹窗 -->
+    <n-modal v-model:show="addCol.show" preset="card" title="新增自定义数据列 (Custom Column)" style="width: 480px; max-width: calc(100vw - 24px)">
       <div class="field">
         <label class="field-label">字段 Key (英文字母 / 下划线) <span class="req">*</span></label>
         <n-input v-model:value="addCol.key" class="mono" placeholder="如 category, meta_tags, prompt_type" />
@@ -419,17 +621,30 @@
       </template>
     </n-modal>
 
-    <!-- D4 AI 合成新数据两步向导：Step1 参数配置 → Step2 候选预览导入 -->
-    <n-modal v-model:show="aiGen.show" preset="card" title="✨ AI 智能生成评测数据集" style="width: 760px; max-width: calc(100vw - 24px)">
+    <!-- AI 智能合成新数据两步向导 -->
+    <n-modal v-model:show="aiGen.show" preset="card" title="✨ AI 智能生成评测数据集" style="width: 780px; max-width: calc(100vw - 24px)" :mask-closable="false">
+      <!-- 步骤指示器 -->
+      <div class="wizard-steps-header">
+        <div class="wizard-step-item" :class="{ active: aiGen.step === 1, done: aiGen.step === 2 }">
+          <span class="step-num">1</span>
+          <span class="step-text">生成模式与参数配置</span>
+        </div>
+        <div class="step-line" :class="{ active: aiGen.step === 2 }"></div>
+        <div class="wizard-step-item" :class="{ active: aiGen.step === 2 }">
+          <span class="step-num">2</span>
+          <span class="step-text">候选样本预览与导入</span>
+        </div>
+      </div>
+
       <!-- Step 1: 合成模式与高级控制参数 -->
-      <div v-show="aiGen.step === 1">
-        <div class="row" style="gap: 8px; margin-bottom: 14px">
+      <div v-show="aiGen.step === 1" class="wizard-step-body">
+        <div class="mode-chips-row">
           <button class="chip" :class="{ on: aiGen.mode === 'scene' }" @click="aiGen.mode = 'scene'">🌟 场景定向合成</button>
           <button class="chip" :class="{ on: aiGen.mode === 'seed' }" @click="aiGen.mode = 'seed'">🌱 种子样本扩写</button>
           <button class="chip" :class="{ on: aiGen.mode === 'doc' }" @click="aiGen.mode = 'doc'">📄 需求文档/OpenAPI 提取</button>
         </div>
 
-        <!-- 场景模式：预设业务模板 + 目标描述 -->
+        <!-- 场景模式 -->
         <div v-show="aiGen.mode === 'scene'">
           <div class="field">
             <label class="field-label">预设业务场景模板</label>
@@ -437,11 +652,11 @@
           </div>
           <div class="field">
             <label class="field-label">场景与评估目标描述 (Prompt Instruction) <span class="req">*</span></label>
-            <n-input v-model:value="aiGen.instruction" type="textarea" :autosize="{ minRows: 3, maxRows: 5 }" />
+            <n-input v-model:value="aiGen.instruction" type="textarea" :autosize="{ minRows: 3, maxRows: 5 }" placeholder="请详述被测场景、边界陷阱或关注的能力维度..." />
           </div>
         </div>
 
-        <!-- 种子模式：种子样本下拉 + 扩写维度复选 -->
+        <!-- 种子模式 -->
         <div v-show="aiGen.mode === 'seed'">
           <div class="field">
             <label class="field-label">选择种子样本（基于此样本扩写同义、长尾或边界题）</label>
@@ -450,7 +665,7 @@
           <div class="field">
             <label class="field-label">扩写维度</label>
             <n-checkbox-group v-model:value="aiGen.dims">
-              <div class="row wrap" style="gap: 12px">
+              <div class="row wrap" style="gap: 14px">
                 <n-checkbox value="synonym">同义口语化改写</n-checkbox>
                 <n-checkbox value="constraint">增加前置约束条件</n-checkbox>
                 <n-checkbox value="boundary">衍生边界异常提问</n-checkbox>
@@ -459,7 +674,7 @@
           </div>
         </div>
 
-        <!-- 文档模式：粘贴 PRD / OpenAPI 文本 -->
+        <!-- 文档提取模式 -->
         <div v-show="aiGen.mode === 'doc'">
           <div class="field">
             <label class="field-label">粘贴 PRD / OpenAPI 接口定义 / Markdown 需求文本</label>
@@ -467,14 +682,14 @@
           </div>
         </div>
 
-        <div class="rail-label" style="margin: 4px 0 10px">高级控制参数</div>
+        <div class="rail-label" style="margin: 8px 0 10px">高级控制参数</div>
         <div class="form-row-3">
           <div class="field">
-            <label class="field-label">生成行数 (<b class="num">{{ aiGen.rowCount }}</b> 行)</label>
+            <label class="field-label">生成规模 (<b class="num mono">{{ aiGen.rowCount }}</b> 行)</label>
             <n-slider v-model:value="aiGen.rowCount" :min="3" :max="25" :step="1" />
           </div>
           <div class="field">
-            <label class="field-label">生成模型</label>
+            <label class="field-label">生成推理模型</label>
             <n-select
               v-model:value="aiGen.model"
               :options="[
@@ -499,7 +714,7 @@
 
         <div class="form-row">
           <div class="field">
-            <label class="field-label">难易度分布配比</label>
+            <label class="field-label">难易度分布预设</label>
             <div class="row" style="gap: 8px; font-size: 12px">
               <span class="tag-soft">简单 40%</span>
               <span class="tag-soft">中等 40%</span>
@@ -507,31 +722,31 @@
             </div>
           </div>
           <div class="field">
-            <label class="field-label">自动生成字段</label>
-            <div class="row wrap" style="gap: 10px; font-size: 12px">
-              <n-checkbox v-model:checked="aiGen.genRef">标准答案</n-checkbox>
-              <n-checkbox v-model:checked="aiGen.genCtx">上下文 Context</n-checkbox>
-              <n-checkbox v-model:checked="aiGen.genTags">标签 Tags</n-checkbox>
+            <label class="field-label">自动生成目标字段</label>
+            <div class="row wrap" style="gap: 12px; font-size: 12px">
+              <n-checkbox v-model:checked="aiGen.genRef">标准答案 Reference</n-checkbox>
+              <n-checkbox v-model:checked="aiGen.genCtx">注入上下文 Context</n-checkbox>
+              <n-checkbox v-model:checked="aiGen.genTags">业务标签 Tags</n-checkbox>
             </div>
           </div>
         </div>
       </div>
 
-      <!-- Step 2: 候选结果表格预览（勾选 / 行内编辑 / 剔除 / 全选） -->
-      <div v-show="aiGen.step === 2">
-        <div class="row-between" style="margin-bottom: 8px">
-          <span style="font-weight: 600; font-size: 13px">AI 生成候选项（已生成 <b class="num">{{ aiGen.candidates.length }}</b> 条，可直接点击单元格微调）</span>
+      <!-- Step 2: 候选结果表格预览 -->
+      <div v-show="aiGen.step === 2" class="wizard-step-body">
+        <div class="row-between mb8">
+          <span style="font-weight: 600; font-size: 13px">AI 生成候选项（已生成 <b class="num mono">{{ aiGen.candidates.length }}</b> 条，可点击单元格直接微调）</span>
           <button class="link-btn" @click="toggleAllCandidates">全选 / 全不选</button>
         </div>
-        <div style="max-height: 360px; overflow-y: auto; border: 1px solid var(--border-subtle); border-radius: 8px">
+        <div class="preview-table-wrapper custom-scroll">
           <table class="ds-table">
             <thead>
               <tr>
                 <th style="width: 36px"><input type="checkbox" :checked="aiAllSelected" @change="toggleAllCandidates" /></th>
-                <th>问题 Question</th>
-                <th>参考答案 Reference</th>
-                <th style="width: 110px">难度 / 标签</th>
-                <th style="width: 70px">操作</th>
+                <th style="min-width: 220px">测试问句 Question</th>
+                <th style="min-width: 240px">参考答案 Reference</th>
+                <th style="width: 100px">难度 / 标签</th>
+                <th style="width: 60px">操作</th>
               </tr>
             </thead>
             <tbody>
@@ -564,10 +779,10 @@
       </template>
     </n-modal>
 
-    <!-- D5 AI 补全确认弹窗：待补全统计 + Prompt 引导 + 补全范围 + Few-Shot 说明 -->
+    <!-- AI 补全确认弹窗 -->
     <n-modal v-model:show="aiFill.show" preset="card" :title="`✨ AI 智能补全缺失字段（共 ${pendingCount} 行待补全）`" style="width: 560px; max-width: calc(100vw - 24px)">
       <p class="small" style="margin: 0 0 12px; color: var(--text-secondary)">
-        系统检测到以下样本行缺少核心字段（问句或标准答案）。AI 将结合已有业务上下文自动推导并补全，补全后将保持高亮以供复核。
+        系统检测到当前表格存在缺少问句或标准答案的样本行。AI 将结合已有业务上下文及同组高质特征自动推导补全。
       </p>
       <div class="field">
         <label class="field-label">业务提示词引导 (Prompt Instruction)</label>
@@ -576,29 +791,31 @@
       <div class="form-row">
         <div class="field">
           <label class="field-label">补全范围</label>
-          <div class="row" style="gap: 12px; font-size: 12px; margin-top: 4px">
-            <n-checkbox v-model:checked="aiFill.scopeQ">自动填补缺失问句</n-checkbox>
-            <n-checkbox v-model:checked="aiFill.scopeR">自动填补缺失参考答案</n-checkbox>
+          <div class="row" style="gap: 14px; font-size: 12px; margin-top: 4px">
+            <n-checkbox v-model:checked="aiFill.scopeQ">填补缺失问句</n-checkbox>
+            <n-checkbox v-model:checked="aiFill.scopeR">填补缺失标准答案</n-checkbox>
           </div>
         </div>
         <div class="field">
-          <label class="field-label">参考上下文</label>
-          <span class="small tertiary">自动关联数据集同组高质样本特征进行少样本学习 (Few-Shot)</span>
+          <label class="field-label">少样本学习 (Few-Shot)</label>
+          <span class="small tertiary">自动关联数据集同组高质样本特征进行少样本学习</span>
         </div>
       </div>
       <template #footer>
         <div style="display: flex; justify-content: flex-end; gap: 8px">
           <n-button @click="aiFill.show = false">取消</n-button>
-          <n-button type="primary" :loading="aiFill.filling" @click="confirmAiFill">开始 AI 补全 ({{ pendingCount }} 行)</n-button>
+          <n-button type="primary" :loading="aiFill.filling" @click="confirmAiFill">
+            开始 AI 补全 ({{ pendingCount }} 行)
+          </n-button>
         </div>
       </template>
     </n-modal>
 
-    <!-- 通用命名弹窗：复用于 重命名数据集 / 新建空数据集 / 新建子文件夹 / 重命名目录 -->
-    <n-modal v-model:show="nameDialog.show" preset="card" :title="nameDialog.title" style="width: 420px; max-width: calc(100vw - 24px)">
+    <!-- 通用命名弹窗 -->
+    <n-modal v-model:show="nameDialog.show" preset="card" :title="nameDialog.title" style="width: 440px; max-width: calc(100vw - 24px)">
       <div class="field">
         <label class="field-label">{{ nameDialog.label }} <span class="req">*</span></label>
-        <n-input v-model:value="nameDialog.value" placeholder="请输入名称" @keyup.enter="confirmNameDialog" />
+        <n-input v-model:value="nameDialog.value" placeholder="请输入名称" autofocus @keyup.enter="confirmNameDialog" />
       </div>
       <template #footer>
         <div style="display: flex; justify-content: flex-end; gap: 8px">
@@ -608,7 +825,7 @@
       </template>
     </n-modal>
 
-    <!-- 黄金 QA「发起 RAG 评测」抽屉：字段对齐原型 openEvalDrawer 的 rag 分支（kb_id / gold_qa_id / rag_mode / 运行参数 / 先评后压） -->
+    <!-- 黄金 QA 发起 RAG 评测抽屉 -->
     <n-drawer v-model:show="ragDrawer.show" :width="ragDrawerWidth">
       <n-drawer-content title="发起 RAG 评测任务" closable>
         <div class="field">
@@ -714,9 +931,7 @@ interface EditableDatasetRow {
   c: string
   tags: string
   difficulty: string
-  /** 行勾选态：仅本地编辑态使用（对齐原型 chk-all 全选联动），不随保存落库。 */
   checked: boolean
-  /** 自定义扩展列的值集合：Key → 文本值，随行保存时一并持久化。 */
   extras: Record<string, string>
 }
 
@@ -752,14 +967,15 @@ const datasets = ref<Dataset[]>([])
 const activeDatasetId = ref('')
 const sampleRows = ref<EditableDatasetRow[]>([])
 const savingRows = ref(false)
+const justSaved = ref(false)
 const hasUnsavedChanges = ref(false)
-// field 为字符串以同时支持内置列（q/r/c/tags/difficulty）与自定义扩展列 Key；original 供 Escape 取消时还原。
 const editingCell = ref<{ row: EditableDatasetRow; field: string; original: string } | null>(null)
 const showUploadModal = ref(false)
 const datasetForUpload = ref<Dataset | null>(null)
 const showLaunchDrawer = ref(false)
+const filterPendingOnly = ref(false)
 
-// ─── 目录树面板自由伸缩（对齐原型 ft-resizer：拖拽 200–520px，双击复位 290px，localStorage 持久化） ───
+// ─── 目录树面板拖拽调宽（200–520px，双击复位 290px，localStorage 持久化） ───
 const TREE_W_KEY = 'ae_ft_w_datasets'
 const treeWidth = ref(Math.min(520, Math.max(200, +(localStorage.getItem(TREE_W_KEY) || 290))))
 const treeResizing = ref(false)
@@ -790,7 +1006,7 @@ function resetTreeWidth() {
   message.info('目录树宽度已复位为 290px')
 }
 
-// ─── 黄金 QA 资产：树内与数据集混排（⭐ 节点），行级数据依赖 M3 接口 ───
+// ─── 黄金 QA 资产：树内混排展示 ───
 const goldQas = ref<GoldQA[]>([])
 const activeGoldQa = computed(() => goldQas.value.find(g => g.id === activeDatasetId.value))
 const isGoldQaActive = computed(() => !!activeGoldQa.value)
@@ -798,10 +1014,8 @@ const isGoldQaActive = computed(() => !!activeGoldQa.value)
 const currentDataset = computed(() =>
   datasets.value.find(dataset => dataset.id === activeDatasetId.value) || (isGoldQaActive.value ? undefined : datasets.value[0]),
 )
-// 当前选中项：数据集或黄金 QA（工具栏标题 / 版本号 / 状态栏共用）
 const currentItem = computed(() => activeGoldQa.value || currentDataset.value)
 
-/** 目录树节点统一结构：数据集与黄金 QA 混排展示。 */
 interface TreeNode {
   id: string
   name: string
@@ -817,12 +1031,26 @@ interface TreeFolder {
 }
 
 const folders = ref<TreeFolder[]>([{ id: 'datasets', name: '数据集', open: true, items: [] }])
-// 黄金 QA 独立成组（对齐原型「客服与知识库 FAQ」目录），有资产时才展示
 const goldQaFolder = ref<TreeFolder>({ id: 'gold-qa', name: '黄金 QA', open: true, items: [] })
 const allFolders = computed<TreeFolder[]>(() =>
   goldQaFolder.value.items.length ? [...folders.value, goldQaFolder.value] : folders.value,
 )
+
 const pendingCount = computed(() => sampleRows.value.filter(row => !row.q.trim() || !row.r.trim()).length)
+
+/** 根据是否勾选「仅看待补全」过滤显示的样本行 */
+const displayedRows = computed(() => {
+  if (filterPendingOnly.value) {
+    return sampleRows.value.filter(row => !row.q.trim() || !row.r.trim())
+  }
+  return sampleRows.value
+})
+
+/** 获取当前过滤行在原始 sampleRows 中的索引 */
+function getOriginalRowIndex(row: EditableDatasetRow): number {
+  return sampleRows.value.findIndex(r => r.row_no === row.row_no)
+}
+
 const filteredFolders = computed(() => {
   const keyword = treeSearch.value.trim().toLowerCase()
   if (!keyword) return allFolders.value
@@ -832,21 +1060,19 @@ const filteredFolders = computed(() => {
   })).filter(folder => folder.items.length > 0)
 })
 
-// ─── D3 自定义扩展列状态：按数据集维度维护（对齐原型 CUSTOM_COLS），契约 column_schema 持久化 ───
+// ─── 自定义扩展列 ───
 const customColsMap = ref<Record<string, CustomColumn[]>>({})
 const customCols = computed<CustomColumn[]>(() => {
   const ds = currentDataset.value
   return ds ? customColsMap.value[ds.id] || [] : []
 })
 
-// 契约 column_schema 与页面 CustomColumn 的互转（type 缺省按 text）
 function fromColumnSchema(schema: Dataset['column_schema']): CustomColumn[] {
   return (schema || [])
     .filter(item => item && item.key)
     .map(item => ({ key: item.key, name: item.name || item.key, type: (item.type as CustomColumn['type']) || 'text' }))
 }
 
-/** 持久化扩展列定义（PUT /api/datasets/{id} 的 column_schema 字段），失败时回滚本地状态。 */
 async function persistCustomCols(datasetId: string, nextCols: CustomColumn[], prevCols: CustomColumn[]) {
   try {
     await api.datasets.update(datasetId, {
@@ -861,10 +1087,8 @@ async function persistCustomCols(datasetId: string, nextCols: CustomColumn[], pr
   }
 }
 
-// 契约内已知行字段，其余动态字段统一归入 extras 扩展列值集。
 const KNOWN_ROW_KEYS = new Set(['row_no', 'question', 'reference', 'context', 'q', 'r', 'c', 'tags', 'difficulty', 'source_case_id', 'is_pending'])
 
-// 将接口行字段和页面可编辑字段归一化，兼容历史 q/r/c 与正式 question/reference/context 响应。
 function toEditableRow(row: DatasetRow): EditableDatasetRow {
   const extendedRow = row as DatasetRow & Record<string, unknown>
   const extras: Record<string, string> = {}
@@ -883,7 +1107,6 @@ function toEditableRow(row: DatasetRow): EditableDatasetRow {
   }
 }
 
-// 将页面编辑结果转换为接口约定的行载荷，并保留扩展字段。
 function toApiRows(): Array<DatasetRow & Record<string, unknown>> {
   return sampleRows.value.map(row => ({
     row_no: row.row_no,
@@ -895,14 +1118,11 @@ function toApiRows(): Array<DatasetRow & Record<string, unknown>> {
     c: row.c,
     tags: row.tags,
     difficulty: row.difficulty,
-    // 扩展列值随行一并持久化。
     ...row.extras,
   }))
 }
 
-// 让目录树始终使用当前接口返回的数据集，而不是原型中固定的示例名称。
 function syncDatasetTree(list: Dataset[]) {
-  // 根目录可能被本地删除，缺失时自动重建，保证数据集始终有挂载点。
   let root = folders.value.find(folder => folder.id === 'datasets')
   if (!root) {
     root = { id: 'datasets', name: '数据集', open: true, items: [] }
@@ -916,7 +1136,6 @@ function syncDatasetTree(list: Dataset[]) {
     pending_complete_count: dataset.pending_complete_count,
   })
   root.items = []
-  // 按 folder_id 把数据集归入对应子目录，未归类的留在根目录。
   folders.value.forEach(folder => {
     if (folder.id !== 'datasets') folder.items = []
   })
@@ -927,7 +1146,6 @@ function syncDatasetTree(list: Dataset[]) {
   })
 }
 
-/** 从后端加载目录树（根目录 + 子目录），目录增删改均持久化到 /api/dataset-folders。 */
 async function loadFolders() {
   try {
     const folderList = await api.datasets.listFolders()
@@ -940,12 +1158,9 @@ async function loadFolders() {
         .map(folder => ({ id: folder.id, name: folder.name, open: true, items: [] })),
     ]
     if (datasets.value.length) syncDatasetTree(datasets.value)
-  } catch {
-    // 目录接口异常时保持本地结构，不影响数据集浏览。
-  }
+  } catch {}
 }
 
-// 黄金 QA 目录树节点由知识库资产接口组装（M3 前行级数据不可得，仅元信息入树）。
 function syncGoldQaTree(list: GoldQA[]) {
   goldQaFolder.value.items = list.map(qa => ({
     id: qa.id,
@@ -956,7 +1171,7 @@ function syncGoldQaTree(list: GoldQA[]) {
   }))
 }
 
-// ─── 行勾选：对齐原型 chk-all 全选 / 全不选联动（仅本地编辑态），并驱动批量操作条 ───
+// ─── 行勾选与批量操作 ───
 const allRowsChecked = computed(() => sampleRows.value.length > 0 && sampleRows.value.every(row => row.checked))
 const selectedCount = computed(() => sampleRows.value.filter(row => row.checked).length)
 
@@ -967,13 +1182,18 @@ function toggleAllRows(e: Event) {
   })
 }
 
-/** 批量删除勾选行：二次确认后从本地编辑态移除，仍由「保存修改」统一落库。 */
+function uncheckAllRows() {
+  sampleRows.value.forEach(row => {
+    row.checked = false
+  })
+}
+
 function batchDeleteRows() {
   const count = selectedCount.value
   if (!count) return
   dialog.warning({
     title: '批量删除',
-    content: `确认删除勾选的 ${count} 行？点击“保存修改”后同步服务端。`,
+    content: `确认删除勾选的 ${count} 行？删除将在点击“保存修改”后同步服务端。`,
     positiveText: '删除',
     negativeText: '取消',
     onPositiveClick: () => {
@@ -984,7 +1204,6 @@ function batchDeleteRows() {
   })
 }
 
-/** 导出勾选行为 JSONL：便于把子集贴到外部工具或另存为新数据集。 */
 function exportSelectedRows() {
   const selected = sampleRows.value.filter(row => row.checked)
   if (!selected.length) return
@@ -1001,25 +1220,21 @@ function exportSelectedRows() {
   message.success(`已导出勾选的 ${selected.length} 行 JSONL`)
 }
 
-// 读取单元格当前值（内置列或扩展列），供编辑取消时还原。
 function cellValue(row: EditableDatasetRow, field: string): string {
   if (field === 'q' || field === 'r' || field === 'c' || field === 'tags' || field === 'difficulty') return row[field]
   return row.extras[field] || ''
 }
 
 function editCell(row: EditableDatasetRow, field: string) {
-  // 记录当前编辑单元格与原始值，失焦提交、Escape 取消（对齐原型单元格编辑交互）。
   editingCell.value = { row, field, original: cellValue(row, field) }
 }
 
 function finishEditing() {
-  // 统一结束单元格编辑并提示用户显式保存。
   editingCell.value = null
   hasUnsavedChanges.value = true
 }
 
 function cancelEditing() {
-  // Escape 放弃本次编辑：还原原始值且不标记待保存。
   const cell = editingCell.value
   if (cell) {
     if (cell.field === 'q' || cell.field === 'r' || cell.field === 'c' || cell.field === 'tags' || cell.field === 'difficulty') {
@@ -1031,7 +1246,6 @@ function cancelEditing() {
   editingCell.value = null
 }
 
-// 切换树节点：数据集读取服务端行数据；黄金 QA 行级数据依赖 M3 接口，仅切换视图。
 async function selectDataset(id: string) {
   activeDatasetId.value = id
   if (goldQas.value.some(g => g.id === id)) {
@@ -1042,10 +1256,6 @@ async function selectDataset(id: string) {
   await loadRows(id)
 }
 
-/**
- * 带未保存守卫的切换入口：存在未落库编辑时先询问「保存并切换 / 放弃修改」，
- * 关闭对话框视为取消切换；after 回调在切换完成后执行（供右键菜单续接动作）。
- */
 function requestSelectDataset(id: string, after?: () => void) {
   if (id === activeDatasetId.value) {
     after?.()
@@ -1072,14 +1282,12 @@ function requestSelectDataset(id: string, after?: () => void) {
 }
 
 function openUploadModal(dataset: Dataset | null) {
-  // 传入空值创建数据集，传入已有数据集则覆盖上传新版本。
   datasetForUpload.value = dataset
   showUploadModal.value = true
 }
 
-/** 新建空数据集：创建后自动选中；after 回调用于空态「AI 合成」创建完毕直接进入向导。 */
 function createEmptyDataset(after?: () => void) {
-  openNameDialog('新建数据集（空集）', '数据集名称', 'new-dataset', async (val) => {
+  openNameDialog('新建数据集（空集）', '数据集名称', '新数据集', async (val) => {
     const created = await api.datasets.create({ name: val })
     await loadDatasets()
     await selectDataset(created.id)
@@ -1089,16 +1297,13 @@ function createEmptyDataset(after?: () => void) {
 }
 
 function openLaunchDrawer() {
-  // 仅打开评测配置抽屉，任务创建仍由抽屉确认动作完成。
   showLaunchDrawer.value = true
 }
 
-/** 评测下单成功后跳转任务中心，与原型交互保持一致。 */
 function handleLaunchSuccess() {
   router.push('/tasks')
 }
 
-/** 构造空白候选行，row_no 取当前最大值 +1。 */
 function buildEmptyRow(): EditableDatasetRow {
   return {
     row_no: Math.max(0, ...sampleRows.value.map(row => row.row_no)) + 1,
@@ -1113,20 +1318,17 @@ function buildEmptyRow(): EditableDatasetRow {
 }
 
 function addRow() {
-  // 新增空白候选行，避免以示例文本伪造已验证数据。
   sampleRows.value.push(buildEmptyRow())
   hasUnsavedChanges.value = true
   message.info('已新增空白行，填写后点击“保存修改”落库')
 }
 
 function deleteRow(index: number) {
-  // 删除先保留在本地编辑态，显式保存后才同步服务端。
   sampleRows.value.splice(index, 1)
   hasUnsavedChanges.value = true
   message.info('已删除该行，点击“保存修改”后生效')
 }
 
-// 保存所有可编辑行，服务端会统一校验并持久化扩展列。
 async function persistRows() {
   if (!currentDataset.value || savingRows.value) return
   savingRows.value = true
@@ -1139,7 +1341,9 @@ async function persistRows() {
     }
     syncDatasetTree(datasets.value)
     hasUnsavedChanges.value = false
-    message.success('数据集行已保存')
+    justSaved.value = true
+    setTimeout(() => { justSaved.value = false }, 1800)
+    message.success('数据集修改已成功保存')
   } catch (err: any) {
     message.error(err.message || '保存数据集行失败')
   } finally {
@@ -1148,8 +1352,7 @@ async function persistRows() {
 }
 
 function exportJsonl() {
-  // 导出当前可见表格，便于在保存前人工复核候选内容。
-  const content = sampleRows.value.map(row => JSON.stringify({ question: row.q, reference: row.r, context: row.c || null })).join('\n')
+  const content = sampleRows.value.map(row => JSON.stringify({ question: row.q, reference: row.r, context: row.c || null, tags: row.tags, difficulty: row.difficulty, ...row.extras })).join('\n')
   const blob = new Blob([content], { type: 'application/jsonl' })
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
@@ -1157,10 +1360,9 @@ function exportJsonl() {
   anchor.download = `${currentDataset.value?.name || 'dataset'}-v${currentDataset.value?.version || 1}.jsonl`
   anchor.click()
   URL.revokeObjectURL(url)
-  message.success('当前表格内容已导出为 JSONL')
+  message.success('当前表格内容已导出为 JSONL 文件')
 }
 
-// 更新主评分指标并用接口响应替换本地数据，避免刷新后回退。
 async function saveMetric() {
   if (!currentDataset.value) return
   try {
@@ -1188,7 +1390,6 @@ async function loadDatasets() {
   try {
     const list = await api.datasets.list()
     datasets.value = list
-    // 扩展列定义由服务端 column_schema 下发，刷新后仍然保留（契约 §3.7）
     list.forEach(ds => {
       customColsMap.value[ds.id] = fromColumnSchema(ds.column_schema)
     })
@@ -1204,7 +1405,6 @@ async function loadDatasets() {
   }
 }
 
-// 加载黄金 QA 资产入树（M3 前 /api/kb 未实现时走前端降级，不阻塞数据集主流程）。
 async function loadGoldQas() {
   try {
     const kbs = await api.kb.list()
@@ -1216,7 +1416,7 @@ async function loadGoldQas() {
   syncGoldQaTree(goldQas.value)
 }
 
-// ─── D1 右键上下文菜单（文件 / 文件夹 / 表格行 三组） ───
+// ─── 右键上下文菜单 ───
 const ctxMenu = ref<{ show: boolean; x: number; y: number; type: CtxMenuType; targetId: string; rowIdx: number }>({
   show: false,
   x: 0,
@@ -1226,7 +1426,6 @@ const ctxMenu = ref<{ show: boolean; x: number; y: number; type: CtxMenuType; ta
   rowIdx: -1,
 })
 
-/** 打开右键菜单：manual 触发模式下由 x/y 坐标定位。 */
 function openCtxMenu(e: MouseEvent, type: CtxMenuType, targetId = '', rowIdx = -1) {
   ctxMenu.value = { show: true, x: e.clientX, y: e.clientY, type, targetId, rowIdx }
 }
@@ -1235,10 +1434,8 @@ function closeCtxMenu() {
   ctxMenu.value.show = false
 }
 
-// 按菜单类型动态生成 NDropdown 选项（对齐原型 datasets.html 三组右键菜单）。
 const ctxMenuOptions = computed<DropdownOption[]>(() => {
   if (ctxMenu.value.type === 'file') {
-    // 黄金 QA 节点：覆盖上传 / AI 补全 / 重命名 / 删除均依赖 M3 接口，开放评测与 ID 复制
     const isGoldQaNode = goldQas.value.some(g => g.id === ctxMenu.value.targetId)
     if (isGoldQaNode) {
       return [
@@ -1250,13 +1447,13 @@ const ctxMenuOptions = computed<DropdownOption[]>(() => {
     return [
       { label: '⚡ 发起评测', key: 'eval' },
       { label: `⤴ 覆盖上传新版本 (v${(ds?.version || 1) + 1})`, key: 'upload' },
-      { label: '✨ AI 补全', key: 'ai-fill' },
+      { label: '✨ AI 补全缺失行', key: 'ai-fill' },
       { type: 'divider', key: 'd1' },
       { label: '✏ 重命名', key: 'rename' },
       { label: '📋 复制数据集 ID', key: 'copy-id' },
       { label: '⤓ 导出 JSONL', key: 'export' },
       { type: 'divider', key: 'd2' },
-      { label: '🗑 删除数据集', key: 'delete' },
+      { label: '🗑 删除数据集', key: 'delete', props: { style: 'color: var(--accent-error)' } },
     ]
   }
   if (ctxMenu.value.type === 'folder') {
@@ -1265,10 +1462,9 @@ const ctxMenuOptions = computed<DropdownOption[]>(() => {
       { label: '📁 新建子文件夹', key: 'new-folder' },
       { type: 'divider', key: 'd1' },
       { label: '✏ 重命名目录', key: 'rename-folder' },
-      { label: '🗑 删除目录', key: 'delete-folder' },
+      { label: '🗑 删除目录', key: 'delete-folder', props: { style: 'color: var(--accent-error)' } },
     ]
   }
-  // 表格行菜单：编辑 / 补全 / 复制 / 勾选 / 插入 / 副本 / 删除
   const row = sampleRows.value[ctxMenu.value.rowIdx]
   return [
     { label: '✏ 详细弹窗编辑', key: 'edit' },
@@ -1280,11 +1476,10 @@ const ctxMenuOptions = computed<DropdownOption[]>(() => {
     { label: '＋ 在下方插入新行', key: 'insert-below' },
     { label: '⧉ 创建本行副本', key: 'duplicate-row' },
     { type: 'divider', key: 'd2' },
-    { label: '🗑 删除本行', key: 'delete-row' },
+    { label: '🗑 删除本行', key: 'delete-row', props: { style: 'color: var(--accent-error)' } },
   ]
 })
 
-/** 菜单点击统一分发：先关菜单再按目标类型执行动作。 */
 function handleCtxSelect(key: string | number) {
   const { type, targetId, rowIdx } = ctxMenu.value
   closeCtxMenu()
@@ -1294,9 +1489,7 @@ function handleCtxSelect(key: string | number) {
   else void handleRowCtxAction(action, rowIdx)
 }
 
-/** 文件节点右键动作：评测 / 覆盖上传 / AI 补全 / 重命名 / 复制 ID / 导出 / 删除。 */
 async function handleFileCtxAction(key: string, targetId: string) {
-  // 黄金 QA 节点优先处理：不查数据集表，避免评测入口被空查找拦截。
   const goldQa = goldQas.value.find(g => g.id === targetId)
   if (goldQa) {
     if (key === 'eval') {
@@ -1312,11 +1505,9 @@ async function handleFileCtxAction(key: string, targetId: string) {
   if (!dataset) return
   switch (key) {
     case 'eval':
-      // 先切到目标数据集再开抽屉，确保 default-dataset-id 指向右键对象；未保存修改先经守卫确认。
       requestSelectDataset(targetId, () => openLaunchDrawer())
       break
     case 'upload':
-      // 传入已有数据集，UploadDatasetModal 自动进入覆盖上传 (isOverride) 分支。
       openUploadModal(dataset)
       break
     case 'ai-fill':
@@ -1328,7 +1519,7 @@ async function handleFileCtxAction(key: string, targetId: string) {
         const index = datasets.value.findIndex(item => item.id === targetId)
         if (index !== -1) datasets.value[index] = updated
         syncDatasetTree(datasets.value)
-        message.success('已重命名')
+        message.success('已重命名数据集')
       })
       break
     case 'copy-id':
@@ -1336,7 +1527,6 @@ async function handleFileCtxAction(key: string, targetId: string) {
       message.success('已复制数据集 ID 到剪贴板')
       break
     case 'export':
-      // 导出以表格数据为准，先切换加载目标数据集的行。
       requestSelectDataset(targetId, () => exportJsonl())
       break
     case 'delete':
@@ -1345,7 +1535,6 @@ async function handleFileCtxAction(key: string, targetId: string) {
   }
 }
 
-/** 删除数据集为不可逆操作，需经确认对话框二次确认。 */
 function confirmDeleteDataset(dataset: Dataset) {
   dialog.warning({
     title: '删除数据集',
@@ -1365,13 +1554,11 @@ function confirmDeleteDataset(dataset: Dataset) {
   })
 }
 
-/** 文件夹右键动作：目录树与后端 /api/dataset-folders 同步，增删改均持久化。 */
 async function handleFolderCtxAction(key: string, folderId: string) {
   const folder = folders.value.find(item => item.id === folderId)
   if (!folder) return
   switch (key) {
     case 'new-dataset':
-      // D16 新建空数据集入口：只创建空集，行数据后续在表格中维护。
       createEmptyDataset()
       break
     case 'new-folder':
@@ -1386,7 +1573,6 @@ async function handleFolderCtxAction(key: string, folderId: string) {
       })
       break
     case 'rename-folder':
-      // 系统目录（数据集根目录 / 黄金 QA 目录）不可重命名，与删除校验保持一致。
       if (folder.id === 'datasets' || folder.id === 'gold-qa') {
         message.warning('系统目录不可重命名')
         return
@@ -1402,7 +1588,6 @@ async function handleFolderCtxAction(key: string, folderId: string) {
       })
       break
     case 'delete-folder':
-      // 对齐原型：系统根目录不可删除；非空目录需先移出或删除其中的数据集。
       if (folder.id === 'datasets' || folder.id === 'gold-qa') {
         message.warning('系统目录不可删除')
         return
@@ -1430,7 +1615,6 @@ async function handleFolderCtxAction(key: string, folderId: string) {
   }
 }
 
-/** 表格行右键动作：弹窗编辑 / 单行 AI 补全 / 复制 JSON / 下方插入 / 删除。 */
 async function handleRowCtxAction(key: string, rowIdx: number) {
   const row = sampleRows.value[rowIdx]
   if (!row) return
@@ -1442,7 +1626,6 @@ async function handleRowCtxAction(key: string, rowIdx: number) {
       await aiFillRow(rowIdx)
       break
     case 'copy-json': {
-      // 复制为契约 JSON 结构（含扩展列值），便于贴到外部工具调试。
       const payload = {
         row_no: row.row_no,
         question: row.q,
@@ -1470,7 +1653,6 @@ async function handleRowCtxAction(key: string, rowIdx: number) {
       message.info('已在下方插入新行，点击“保存修改”后生效')
       break
     case 'duplicate-row': {
-      // 创建副本：内容全量拷贝，row_no 取最大值 +1，保存后落库。
       const copy: EditableDatasetRow = {
         ...buildEmptyRow(),
         q: row.q,
@@ -1491,7 +1673,7 @@ async function handleRowCtxAction(key: string, rowIdx: number) {
   }
 }
 
-// ─── 通用命名弹窗：复用于 重命名数据集 / 新建空数据集 / 新建子文件夹 / 重命名目录 ───
+// ─── 通用单输入弹窗 ───
 const nameDialog = ref<{
   show: boolean
   title: string
@@ -1523,8 +1705,7 @@ async function confirmNameDialog() {
   }
 }
 
-// ─── D2 行结构化编辑弹窗 ───
-// 编辑副本避免直接改表格，确认后才写回行数据。
+// ─── 行结构化编辑弹窗 ───
 const rowEdit = ref<{ show: boolean; idx: number; rowNo: number; q: string; r: string; c: string; extras: Record<string, string> }>({
   show: false,
   idx: -1,
@@ -1538,17 +1719,14 @@ const rowEdit = ref<{ show: boolean; idx: number; rowNo: number; q: string; r: s
 function openRowEditModal(idx: number) {
   const row = sampleRows.value[idx]
   if (!row) return
-  // 双击行可能正处于单元格编辑态，先退出避免弹窗与就地编辑并存。
   editingCell.value = null
   const extras = { ...row.extras }
-  // 补齐扩展列 Key，保证每列都有可编辑输入框。
   customCols.value.forEach(col => {
     if (!(col.key in extras)) extras[col.key] = ''
   })
   rowEdit.value = { show: true, idx, rowNo: row.row_no, q: row.q, r: row.r, c: row.c, extras }
 }
 
-/** 保存弹窗编辑：写回行数据并标记待保存，仍由「保存修改」统一落库。 */
 function saveRowEdit() {
   const row = sampleRows.value[rowEdit.value.idx]
   if (!row) {
@@ -1564,17 +1742,14 @@ function saveRowEdit() {
   message.success(`已更新样本 #${row.row_no}，点击“保存修改”落库`)
 }
 
-// ─── D3 新增自定义扩展列弹窗 ───
+// ─── 新增扩展列弹窗 ───
 const addCol = ref<{ show: boolean; key: string; name: string; type: CustomColumn['type'] }>({ show: false, key: '', name: '', type: 'text' })
-
-// 内置列 Key 禁止占用，避免与契约字段冲突。
 const RESERVED_COL_KEYS = ['row_no', 'question', 'reference', 'context', 'q', 'r', 'c', 'tags', 'difficulty']
 
 function openAddColModal() {
   addCol.value = { show: true, key: '', name: '', type: 'text' }
 }
 
-/** 确认新增扩展列：校验 Key 格式与唯一性、为现有行初始化空值，并持久化列定义。 */
 async function confirmAddCol() {
   const ds = currentDataset.value
   if (!ds) return
@@ -1606,13 +1781,10 @@ async function confirmAddCol() {
   addCol.value.show = false
   try {
     await persistCustomCols(ds.id, nextCols, list)
-    message.success(`已添加自定义列「${name}」并持久化；行内取值点击“保存修改”后落库`)
-  } catch {
-    // 列定义保存失败已回滚并提示，行值保持原样
-  }
+    message.success(`已添加自定义列「${name}」`)
+  } catch {}
 }
 
-/** 表头 ✕ 删除扩展列：同时清理各行中的列值，并持久化列定义。 */
 async function removeCustomCol(key: string) {
   const ds = currentDataset.value
   if (!ds) return
@@ -1625,14 +1797,11 @@ async function removeCustomCol(key: string) {
   hasUnsavedChanges.value = true
   try {
     await persistCustomCols(ds.id, nextCols, prevCols)
-    message.info(`已移除列 ${key} 并持久化；行值清理在“保存修改”后生效`)
-  } catch {
-    // 列定义保存失败已回滚并提示
-  }
+    message.info(`已移除列 ${key}`)
+  } catch {}
 }
 
-// ─── D4 AI 合成新数据两步向导 ───
-// 预设业务场景模板（对齐原型 PRESETS），选中后自动填充场景描述。
+// ─── AI 合成向导 ───
 const AI_PRESETS = [
   { name: '跨境收银与外币结算', desc: '涵盖外卡快捷支付、汇损换算、3DS 安全验证与跨境退款' },
   { name: '风控拦截与账户锁定', desc: '密码连续输错锁定、人脸识别解锁、高危 IP 拦截与大额转账审批' },
@@ -1659,10 +1828,8 @@ const aiGen = ref({
   candidates: [] as AiCandidate[],
 })
 
-/** 预设模板下拉选项：label 展示「名称 · 描述」，value 为描述文本。 */
 const presetOptions = computed(() => AI_PRESETS.map(p => ({ label: `${p.name} · ${p.desc}`, value: p.desc })))
 
-/** 种子样本下拉：取当前表格中问句完整的前 10 行。 */
 const seedOptions = computed(() =>
   sampleRows.value
     .filter(row => row.q.trim())
@@ -1673,13 +1840,9 @@ const seedOptions = computed(() =>
     })),
 )
 
-/** 已勾选候选数：驱动「采纳并导入 (N 条)」按钮文案与禁用态。 */
 const aiSelectedCount = computed(() => aiGen.value.candidates.filter(c => c.selected).length)
-
-/** 候选全选态：有候选且全部勾选时为 true。 */
 const aiAllSelected = computed(() => aiGen.value.candidates.length > 0 && aiSelectedCount.value === aiGen.value.candidates.length)
 
-/** 打开 AI 合成向导：每次回到 Step1，并默认选中首条可用种子样本。黄金 QA 激活时回退到首个数据集；无数据集时先引导创建空集再自动进入向导。 */
 function openAiGenModal() {
   const target = currentDataset.value || datasets.value[0]
   if (!target) {
@@ -1692,12 +1855,10 @@ function openAiGenModal() {
   if (!aiGen.value.seedSample && seedOptions.value.length) aiGen.value.seedSample = seedOptions.value[0].value
 }
 
-/** 预设模板联动：选中后自动填充场景描述，仍可手动修改。 */
 function onPresetChange(val: string) {
   aiGen.value.instruction = val
 }
 
-/** Step1「立即生成候选样本」：按表单参数走现有 ai-generate 通道；Mock 模式下本地造候选。 */
 async function runAiGenerate() {
   if (!currentDataset.value || aiGen.value.generating) return
   const form = aiGen.value
@@ -1717,9 +1878,7 @@ async function runAiGenerate() {
   try {
     let candidates: AiCandidate[] = []
     if (api.isMock()) {
-      // Mock 模式：本地按目标行数生成演示候选，便于走通两步向导交互。
       await new Promise(resolve => setTimeout(resolve, 500))
-      // 「自动生成字段」复选框决定候选行是否带出答案 / 上下文 / 标签。
       candidates = Array.from({ length: form.rowCount }, (_, i) => ({
         selected: true,
         q: `如何处理跨境交易退款中的汇损问题？（场景派生 #${i + 1}）`,
@@ -1754,7 +1913,6 @@ async function runAiGenerate() {
   }
 }
 
-/** 候选预览表「全选 / 全不选」切换。 */
 function toggleAllCandidates() {
   const target = aiSelectedCount.value < aiGen.value.candidates.length
   aiGen.value.candidates.forEach(c => {
@@ -1762,7 +1920,6 @@ function toggleAllCandidates() {
   })
 }
 
-/** Step2「采纳并导入」：仅把勾选的候选追加进表格，仍由「保存修改」统一落库。 */
 function commitAiCandidates() {
   const selected = aiGen.value.candidates.filter(c => c.selected)
   if (!selected.length) return
@@ -1775,17 +1932,15 @@ function commitAiCandidates() {
   message.success(`已采纳 ${selected.length} 条 AI 候选，请审核后点击“保存修改”落库`)
 }
 
-// ─── D5 AI 补全确认弹窗 ───
+// ─── AI 补全 ───
 const aiFill = ref({
   show: false,
-  // 默认引导词对齐原型，帮助 AI 推导含操作路径的完整答案。
   instruction: '基于已有业务上下文与同组高质样本，精准推导出前置问句与包含操作路径的完整标准答案。',
   scopeQ: true,
   scopeR: true,
   filling: false,
 })
 
-/** 打开 AI 补全弹窗：无缺失行时直接提示，不弹窗。 */
 function openAiFillModal() {
   if (!currentDataset.value) return
   if (pendingCount.value === 0) {
@@ -1795,13 +1950,11 @@ function openAiFillModal() {
   aiFill.value.show = true
 }
 
-/** 确认执行 AI 补全：仅提交缺失行，返回候选就地回填并等待用户显式保存。 */
 async function confirmAiFill() {
   if (!currentDataset.value || aiFill.value.filling) return
   aiFill.value.filling = true
   try {
     if (api.isMock()) {
-      // Mock 模式：本地按补全范围填充演示文案，走通确认弹窗交互。
       await new Promise(resolve => setTimeout(resolve, 500))
       sampleRows.value.forEach((row, i) => {
         if (aiFill.value.scopeQ && !row.q.trim()) row.q = `AI 推导问句 #${i + 1}：如何申请退款与发票红冲？`
@@ -1818,7 +1971,6 @@ async function confirmAiFill() {
       candidates.map(toEditableRow).forEach(candidate => {
         const target = sampleRows.value.find(row => row.row_no === candidate.row_no)
         if (!target) return
-        // 只回填补全返回的核心字段；扩展列做键级合并，避免接口未返回的自定义列被清空
         target.q = candidate.q
         target.r = candidate.r
         target.c = candidate.c
@@ -1837,7 +1989,6 @@ async function confirmAiFill() {
   }
 }
 
-/** 右键「AI 补全本行」：只把当前行提交给补全通道并就地回填。 */
 async function aiFillRow(idx: number) {
   const row = sampleRows.value[idx]
   if (!row || !currentDataset.value) return
@@ -1865,7 +2016,7 @@ async function aiFillRow(idx: number) {
   }
 }
 
-// ─── 黄金 QA「发起 RAG 评测」抽屉（对齐原型 openEvalDrawer 的 rag 分支） ───
+// ─── 黄金 QA RAG 抽屉 ───
 const RAG_MODES = ['naive', 'local', 'global', 'hybrid'] as const
 type RagMode = (typeof RAG_MODES)[number]
 
@@ -1886,13 +2037,7 @@ const ragDrawer = ref({
   submitting: false,
 })
 
-/** 黄金 QA 评测抽屉移动端自适应宽度 */
-const ragDrawerWidth = computed(() => {
-  if (typeof window !== 'undefined' && window.innerWidth <= 640) {
-    return '100%'
-  }
-  return 480
-})
+const ragDrawerWidth = computed(() => (typeof window !== 'undefined' && window.innerWidth <= 640 ? '100%' : 480))
 
 function openRagDrawer() {
   const qa = activeGoldQa.value
@@ -1910,7 +2055,6 @@ function toggleRagMode(m: RagMode) {
   else modes.push(m)
 }
 
-/** 提交 RAG 评测任务：契约 TaskSpec 直传 kb_id / gold_qa_id / rag_mode，成功后跳任务中心（对齐原型）。 */
 async function submitRagTask() {
   if (ragDrawer.value.submitting) return
   if (!ragDrawer.value.modes.length) {
@@ -1937,7 +2081,7 @@ async function submitRagTask() {
     }
     await api.tasks.create(spec)
     ragDrawer.value.show = false
-    message.success('任务已创建（queued）')
+    message.success('RAG 评测任务已创建（queued）')
     setTimeout(() => router.push('/tasks'), 650)
   } catch (err: any) {
     message.error(err.message || '创建任务失败')
@@ -1946,7 +2090,6 @@ async function submitRagTask() {
   }
 }
 
-// Ctrl/Cmd + S 快捷保存：仅在存在未落库编辑时接管浏览器默认行为。
 function onGlobalKeydown(e: KeyboardEvent) {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
     if (hasUnsavedChanges.value && !isGoldQaActive.value) {
@@ -1957,7 +2100,6 @@ function onGlobalKeydown(e: KeyboardEvent) {
 }
 
 onMounted(() => {
-  // 基准数据只在大模型模式加载，避免 RAG 模式访问后展示错误资产。
   if (modeStore.mode === 'llm') {
     void loadDatasets()
     void loadFolders()
@@ -1970,7 +2112,6 @@ onUnmounted(() => {
   window.removeEventListener('keydown', onGlobalKeydown)
 })
 
-// 用户在当前页切回大模型模式时，按需读取基准数据资产。
 watch(() => modeStore.mode, (mode) => {
   if (mode === 'llm' && !datasets.value.length) {
     void loadDatasets()
@@ -1983,33 +2124,55 @@ watch(() => modeStore.mode, (mode) => {
 <style scoped>
 .datasets-workbench {
   height: calc(100vh - var(--topbar-h) - 20px);
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
+
 .mode-context-panel {
-  max-width: 680px;
-  margin: 48px auto;
-  padding: 28px;
+  max-width: 640px;
+  margin: 64px auto;
+  padding: 36px 32px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  border-radius: 20px;
+}
+.mode-icon-wrapper {
+  width: 60px;
+  height: 60px;
+  border-radius: 16px;
+  background: var(--t-kb);
+  color: var(--c-kb);
+  display: grid;
+  place-items: center;
 }
 .mode-context-panel h2 {
-  margin: 8px 0 10px;
   font-size: 20px;
+  font-weight: 700;
+  color: var(--text-primary);
 }
 .mode-context-panel p {
-  max-width: 560px;
-  margin: 0 0 20px;
+  font-size: 14px;
   color: var(--text-secondary);
   line-height: 1.7;
 }
+
+/* ─── IDE 工作台分栏骨架 ─── */
 .ft-layout {
   display: grid;
-  /* 目录树宽度由 --ft-w 驱动（拖拽手柄 200–520px，默认 290px，对齐原型） */
   grid-template-columns: var(--ft-w, 290px) minmax(0, 1fr);
   height: 100%;
   min-width: 0;
   background: var(--bg-main);
-  border-radius: 14px;
+  border-radius: 16px;
   overflow: hidden;
   border: 1px solid var(--border-subtle);
+  box-shadow: 0 4px 20px rgba(17, 24, 39, 0.04);
 }
+
 .ft-sidebar {
   border-right: 1px solid var(--border-subtle);
   background: var(--bg-elevated);
@@ -2017,8 +2180,211 @@ watch(() => modeStore.mode, (mode) => {
   flex-direction: column;
   height: 100%;
   position: relative;
+  user-select: none;
 }
-/* 目录树面板拖拽调宽手柄（对齐原型 .ft-resizer） */
+
+.ft-header {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.ft-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+.ft-title-icon {
+  color: var(--c-datasets);
+}
+
+.btn-xs {
+  min-height: 26px;
+  padding: 2px 8px;
+  font-size: 11px;
+  border-radius: 6px;
+  transition: transform 0.1s ease, filter 0.1s ease;
+}
+.btn-xs:active {
+  transform: scale(0.96);
+}
+.btn-ai-soft {
+  background: var(--t-agent);
+  color: var(--c-agent);
+  border: 1px solid transparent;
+}
+.btn-ai-soft:hover {
+  filter: brightness(0.96);
+}
+.sparkle {
+  font-size: 12px;
+}
+
+.search-input-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.search-icon {
+  position: absolute;
+  left: 9px;
+  color: var(--text-tertiary);
+  pointer-events: none;
+}
+.tree-search-input {
+  height: 30px;
+  padding-left: 28px;
+  padding-right: 24px;
+  font-size: 12px;
+  border-radius: 8px;
+  background: var(--bg-main);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.tree-search-input:focus {
+  border-color: var(--accent-ai);
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.15);
+}
+.clear-search-btn {
+  position: absolute;
+  right: 7px;
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 3px;
+  border-radius: 4px;
+}
+.clear-search-btn:hover {
+  background: rgba(17, 24, 39, 0.08);
+  color: var(--text-primary);
+}
+
+.ft-tree {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ft-node {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background-color 0.12s cubic-bezier(0.16, 1, 0.3, 1), color 0.12s ease;
+  color: var(--text-secondary);
+}
+.ft-node:hover {
+  background: rgba(17, 24, 39, 0.04);
+  color: var(--text-primary);
+}
+[data-theme='dark'] .ft-node:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+.ft-node.active {
+  background: var(--t-datasets);
+  color: var(--c-datasets);
+  font-weight: 600;
+}
+.ft-node.folder {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ft-chevron {
+  display: grid;
+  place-items: center;
+  color: var(--text-tertiary);
+  transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.ft-chevron.rotated {
+  transform: rotate(90deg);
+}
+
+.ft-folder-icon {
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+.ft-folder-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ft-folder-child {
+  padding-left: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ft-file-icon {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+.ft-file-icon.gold-qa {
+  color: #D97706;
+}
+.ft-file-icon.dataset {
+  color: var(--c-datasets);
+}
+
+.ft-file-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.version-tag {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(17, 24, 39, 0.05);
+  color: var(--text-tertiary);
+}
+.ft-node.active .version-tag {
+  background: color-mix(in srgb, var(--c-datasets) 15%, transparent);
+  color: var(--c-datasets);
+}
+
+.ft-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-warning);
+  flex-shrink: 0;
+}
+
+.ft-badge {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.ft-empty-state {
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 调宽手柄 */
 .ft-resizer {
   position: absolute;
   top: 0;
@@ -2026,70 +2392,23 @@ watch(() => modeStore.mode, (mode) => {
   width: 6px;
   height: 100%;
   cursor: col-resize;
-  z-index: 5;
+  z-index: 10;
+  display: grid;
+  place-items: center;
 }
-.ft-resizer:hover,
-.ft-resizer.on {
-  background: color-mix(in srgb, var(--accent-ai) 35%, transparent);
+.resizer-handle-line {
+  width: 2px;
+  height: 24px;
+  border-radius: 1px;
+  background: transparent;
+  transition: background 0.15s ease;
 }
-.ft-header {
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--border-subtle);
+.ft-resizer:hover .resizer-handle-line,
+.ft-resizer.on .resizer-handle-line {
+  background: var(--accent-ai);
 }
-.ft-tree {
-  flex: 1;
-  overflow-y: auto;
-  padding: 10px 8px;
-}
-.ft-node {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 10px;
-  border-radius: 8px;
-  font-size: 13px;
-  cursor: pointer;
-  transition: all 0.12s ease;
-}
-.ft-node:hover {
-  background: rgba(17, 24, 39, 0.04);
-}
-.ft-node.active {
-  background: color-mix(in srgb, var(--accent-ai) 12%, var(--bg-main));
-  color: var(--accent-ai);
-  font-weight: 600;
-}
-.ft-node.folder {
-  font-weight: 600;
-  color: var(--text-secondary);
-}
-.ft-folder-child {
-  padding-left: 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.ft-icon {
-  width: 16px;
-  height: 16px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 16px;
-}
-.ft-badge {
-  margin-left: auto;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--text-tertiary);
-}
-.ft-status-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--accent-warning);
-  margin-left: 4px;
-}
+
+/* ─── 主工作区 ─── */
 .workspace-main {
   display: flex;
   flex-direction: column;
@@ -2097,42 +2416,630 @@ watch(() => modeStore.mode, (mode) => {
   min-width: 0;
   min-height: 0;
   background: var(--bg-main);
+  position: relative;
 }
+
 .ws-toolbar {
-  padding: 10px 16px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  background: var(--bg-main);
+}
+
+.ws-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ws-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ws-dataset-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.version-pill {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+}
+.kind-chip {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+.chip-dataset {
+  background: var(--t-datasets);
+  color: var(--c-datasets);
+  border-color: color-mix(in srgb, var(--c-datasets) 25%, transparent);
+}
+.chip-gold-qa {
+  background: var(--t-kb);
+  color: var(--c-kb);
+  border-color: color-mix(in srgb, var(--c-kb) 25%, transparent);
+}
+
+.ws-breadcrumb {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.ws-breadcrumb .cur {
+  color: var(--text-secondary);
+}
+
+.ws-action-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.action-btn-cluster {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ai-cluster {
+  background: color-mix(in srgb, var(--c-agent) 6%, transparent);
+  padding: 2px 4px;
+  border-radius: 10px;
+}
+
+.save-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: transform 0.1s ease, box-shadow 0.2s ease, background-color 0.2s ease;
+}
+.save-btn:active {
+  transform: scale(0.97);
+}
+.save-btn.dirty {
+  background: var(--accent-ai);
+  box-shadow: 0 0 12px rgba(99, 102, 241, 0.4);
+}
+.save-btn.saved {
+  background: #059669 !important;
+  color: #fff !important;
+}
+.saved-check-icon {
+  font-weight: 700;
+  font-size: 12px;
+}
+.dirty-indicator {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #FBBF24;
+  margin-right: 2px;
+  animation: pulse-dot 1.4s infinite;
+}
+@keyframes pulse-dot {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.3); opacity: 0.6; }
+}
+
+.shortcut-pill {
+  font-size: 9.5px;
+  font-family: var(--font-mono);
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.2);
+  color: inherit;
+  margin-left: 2px;
+}
+
+.launch-btn {
+  box-shadow: 0 2px 8px rgba(17, 24, 39, 0.12);
+  transition: transform 0.1s ease, box-shadow 0.15s ease;
+}
+.launch-btn:active {
+  transform: scale(0.97);
+}
+
+/* ─── 概览栏 ─── */
+.quality-glance-bar {
+  padding: 7px 20px;
+  background: var(--bg-elevated);
   border-bottom: 1px solid var(--border-subtle);
   display: flex;
   align-items: center;
   gap: 12px;
+  font-size: 12px;
+}
+.glance-metrics-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   flex-wrap: wrap;
 }
+.glance-label {
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.glance-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--bg-main);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+}
+.glance-pill.success {
+  color: var(--accent-success);
+}
+.glance-pill.warning {
+  color: var(--accent-warning);
+  border-color: color-mix(in srgb, var(--accent-warning) 30%, transparent);
+}
+.glance-pill.clickable {
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+.glance-pill.clickable:hover {
+  background: #FEF3C7;
+}
+.glance-pill.active {
+  background: #FEF3C7;
+  border-color: var(--accent-warning);
+  font-weight: 600;
+}
+.filter-tag {
+  font-size: 10px;
+  opacity: 0.75;
+  margin-left: 2px;
+}
+.achievement-pill {
+  background: #ECFDF5;
+  border-color: #A7F3D0;
+  color: #047857;
+  font-weight: 600;
+}
+
+.metric-selector-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.metric-label {
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+.metric-select {
+  height: 26px;
+  padding: 2px 22px 2px 8px;
+  font-size: 11px;
+  border-radius: 6px;
+}
+
+/* ─── 数据表格 ─── */
 .ws-grid-container {
   flex: 1;
   min-width: 0;
   overflow: auto;
+  position: relative;
 }
-.ws-status-bar {
-  padding: 8px 16px;
-  border-top: 1px solid var(--border-subtle);
+
+.impeccable-grid {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+.impeccable-grid th {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--bg-main);
+  box-shadow: inset 0 -1px 0 var(--border-subtle);
+}
+.impeccable-grid td {
+  vertical-align: middle;
+}
+.th-chk, .td-chk {
+  text-align: center !important;
+  vertical-align: middle;
+}
+.custom-checkbox {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent-ai);
+  cursor: pointer;
+}
+
+.req-star {
+  color: var(--accent-error);
+  margin-left: 2px;
+}
+
+.custom-col-th {
+  background: color-mix(in srgb, var(--accent-ai) 4%, var(--bg-elevated)) !important;
+}
+.custom-th-content {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 4px;
+}
+.custom-th-name {
+  color: var(--accent-ai);
+  font-weight: 600;
+}
+.custom-th-key {
+  font-size: 10px;
+  opacity: 0.6;
+}
+.custom-th-del {
+  background: none;
+  border: none;
+  color: var(--accent-error);
+  font-size: 10px;
+  cursor: pointer;
+  padding: 0 3px;
+  border-radius: 3px;
+}
+.custom-th-del:hover {
+  background: rgba(239, 68, 68, 0.12);
+}
+
+.grid-row {
+  transition: background-color 0.1s ease;
+}
+.grid-row:hover {
+  background: var(--row-hover);
+}
+.grid-row.row-checked {
+  background: color-mix(in srgb, var(--accent-ai) 4%, var(--bg-main));
+}
+.grid-row.row-incomplete {
+  background: color-mix(in srgb, var(--accent-warning) 3%, transparent);
+}
+
+.td-row-no {
+  color: var(--text-tertiary);
+  font-weight: 500;
+}
+
+.cell-edit {
+  cursor: text;
+  position: relative;
+}
+.cell-text {
+  min-height: 22px;
+  display: flex;
+  align-items: center;
+  word-break: break-word;
+}
+.cell-text.placeholder {
+  color: var(--accent-warning);
+  font-style: italic;
+}
+.cell-text.empty {
+  color: var(--text-tertiary);
+}
+.cell-text.mono-text {
   font-family: var(--font-mono);
   font-size: 12px;
+}
+
+.cell-input {
+  width: 100%;
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 13px;
+  background: var(--bg-main);
+  border: 1px solid var(--accent-ai);
+  border-radius: 6px;
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.15);
+  outline: none;
+}
+.cell-select {
+  height: 26px;
+  padding: 2px 20px 2px 6px;
+  font-size: 11px;
+}
+
+.cell-invalid {
+  background: color-mix(in srgb, var(--accent-error) 4%, transparent);
+  border-bottom-color: var(--accent-error) !important;
+}
+
+.tag-chip {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 999px;
   background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  font-size: 11px;
   color: var(--text-secondary);
 }
-.st-ok {
-  color: var(--accent-success);
+.difficulty-chip {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
 }
-.st-bad {
-  color: var(--accent-error);
+.diff-简单 { background: #D1FAE5; color: #047857; }
+.diff-中等 { background: #FEF3C7; color: #B45309; }
+.diff-高 { background: #FEE2E2; color: #B91C1C; }
+
+.empty-placeholder {
+  color: var(--text-tertiary);
+  font-size: 12px;
 }
-/* D3 自定义扩展列表头：薄荷绿底（对齐原型 .custom-col-th），优先级需压过全局 .ds-table th。 */
-.ds-table th.custom-col-th {
-  background: color-mix(in srgb, var(--accent-ai) 6%, var(--bg-elevated));
+
+.td-actions {
+  text-align: right;
+  white-space: nowrap;
+}
+.row-actions-cluster {
+  display: inline-flex;
+  gap: 4px;
+  opacity: 0.35;
+  transition: opacity 0.12s ease;
+}
+.grid-row:hover .row-actions-cluster {
+  opacity: 1;
+}
+.action-btn {
+  background: none;
+  border: none;
+  padding: 4px;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+.action-btn:hover {
+  background: var(--bg-elevated);
   color: var(--accent-ai);
 }
+.action-btn.danger:hover {
+  background: #FEE2E2;
+  color: var(--accent-error);
+}
+
+.gold-qa-empty-cell,
+.empty-table-cell {
+  padding: 48px 16px;
+  text-align: center;
+  color: var(--text-tertiary);
+}
+.gold-qa-notice {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--c-kb);
+  font-size: 13px;
+}
+.empty-table-notice {
+  font-size: 13px;
+}
+
+/* ─── 悬浮式批量操作坞 ─── */
+.floating-batch-dock {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+}
+.dock-content {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
+  background: var(--text-primary);
+  color: var(--bg-main);
+  border-radius: 999px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.22);
+}
+.dock-count-badge {
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.dock-divider {
+  width: 1px;
+  height: 14px;
+  background: rgba(255, 255, 255, 0.2);
+}
+.btn-danger-soft {
+  background: rgba(239, 68, 68, 0.2);
+  color: #F87171;
+  border: none;
+}
+.btn-danger-soft:hover {
+  background: rgba(239, 68, 68, 0.35);
+}
+.dock-close-btn {
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+.dock-close-btn:hover {
+  color: #fff;
+}
+
+.dock-slide-enter-active,
+.dock-slide-leave-active {
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.dock-slide-enter-from,
+.dock-slide-leave-to {
+  opacity: 0;
+  transform: translate(-50%, 14px) scale(0.96);
+}
+
+/* ─── 空态引导 ─── */
+.empty-workbench {
+  display: grid;
+  place-items: center;
+  padding: 48px;
+}
+.empty-workbench-container {
+  max-width: 520px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+.empty-workbench-icon {
+  width: 80px;
+  height: 80px;
+  border-radius: 24px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  color: var(--c-datasets);
+  display: grid;
+  place-items: center;
+}
+.empty-workbench-container h3 {
+  font-size: 18px;
+  font-weight: 700;
+}
+.empty-sub {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+.empty-actions-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: 8px;
+}
+
+/* ─── 向导通用样式 ─── */
+.wizard-steps-header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.wizard-step-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-tertiary);
+  font-size: 13px;
+  font-weight: 500;
+}
+.wizard-step-item.active {
+  color: var(--accent-ai);
+  font-weight: 600;
+}
+.wizard-step-item.done {
+  color: var(--accent-success);
+}
+.step-num {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--bg-elevated);
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+.wizard-step-item.active .step-num {
+  background: var(--accent-ai);
+  color: #fff;
+}
+.wizard-step-item.done .step-num {
+  background: var(--accent-success);
+  color: #fff;
+}
+.step-line {
+  width: 48px;
+  height: 2px;
+  background: var(--border-subtle);
+}
+.step-line.active {
+  background: var(--accent-ai);
+}
+
+.mode-chips-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.preview-table-wrapper {
+  max-height: 380px;
+  overflow-y: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+}
+
+/* ─── 精致自定义滚动条 ─── */
+.custom-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.custom-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scroll::-webkit-scrollbar-thumb {
+  background: rgba(17, 24, 39, 0.12);
+  border-radius: 999px;
+}
+[data-theme='dark'] .custom-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+}
+.custom-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(17, 24, 39, 0.25);
+}
+[data-theme='dark'] .custom-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* ─── 减弱动效无障碍支持 (Reduced Motion) ─── */
+@media (prefers-reduced-motion: reduce) {
+  .dirty-indicator {
+    animation: none;
+  }
+  .dock-slide-enter-active,
+  .dock-slide-leave-active {
+    transition: none;
+  }
+  .ft-node,
+  .action-btn,
+  .save-btn,
+  .btn-xs {
+    transition: none;
+  }
+}
+
+/* ─── 响应式设计 ─── */
 @media (max-width: 900px) {
   .datasets-workbench {
     height: auto;
@@ -2144,7 +3051,7 @@ watch(() => modeStore.mode, (mode) => {
     overflow: visible;
   }
   .ft-sidebar {
-    max-height: 250px;
+    max-height: 260px;
     border-right: 0;
     border-bottom: 1px solid var(--border-subtle);
   }
@@ -2152,34 +3059,12 @@ watch(() => modeStore.mode, (mode) => {
     display: none;
   }
   .workspace-main {
-    min-height: 620px;
+    min-height: 640px;
   }
-  .ws-toolbar .row:last-child {
-    width: 100%;
-    margin-left: 0 !important;
-    justify-content: flex-start !important;
-  }
-  .ws-status-bar {
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-}
-
-@media (max-width: 640px) {
-  .ft-sidebar {
-    max-height: 210px;
-  }
-  .ws-toolbar {
-    padding: 8px 12px;
-    gap: 8px;
-  }
-  .ws-toolbar .btn {
-    font-size: 11px;
-    padding: 4px 8px;
-  }
-  .ws-status-bar {
-    padding: 6px 12px;
-    font-size: 11px;
+  .action-btn {
+    padding: 8px;
+    min-width: 36px;
+    min-height: 36px;
   }
 }
 </style>
