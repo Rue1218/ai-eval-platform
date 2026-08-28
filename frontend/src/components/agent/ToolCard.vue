@@ -73,13 +73,14 @@
       </div>
       <div class="td-block">
         <div class="td-label">ToolCall</div>
-        <dl v-if="inputFields.length" class="td-fields">
+        <StructuredDataView v-if="showStructuredArgs" :value="argsRecord" />
+        <dl v-else-if="inputFields.length" class="td-fields">
           <div v-for="(field, fieldIdx) in inputFields" :key="`${field.label}-${fieldIdx}`" class="td-field">
             <dt>{{ field.label }}</dt>
             <dd :class="{ mono: field.mono, cmd: field.cmd }">{{ field.value }}</dd>
           </div>
         </dl>
-        <div v-if="toolCallLines.length" class="tool-call-code-wrap">
+        <div v-if="!showStructuredArgs && toolCallLines.length" class="tool-call-code-wrap">
           <div v-if="toolCallCodeLabel" class="td-code-caption mono">{{ toolCallCodeLabel }}</div>
           <div class="line-block tool-call-code" role="region" aria-label="ToolCall 参数">
             <div v-for="line in toolCallLines" :key="line.n" class="ln-row">
@@ -129,7 +130,7 @@
           </div>
         </div>
         <template v-else>
-          <p v-if="resultSummary && !previewText && status === 'ok'" class="td-summary">{{ resultSummary }}</p>
+          <p v-if="resultSummary && !previewText && !hasStructuredResult && status === 'ok'" class="td-summary">{{ resultSummary }}</p>
           <div v-if="readMeta" class="td-meta mono">
             第 {{ readMeta.start }}–{{ readMeta.end }} 行 · 本次 {{ readMeta.count }} 行 / 共 {{ readMeta.total }} 行
             <span v-if="readMeta.next != null"> · 下一页 offset={{ readMeta.next }}</span>
@@ -143,6 +144,12 @@
             v-if="showMarkdownOutput"
             :content="previewText"
             custom-class="tool-md"
+          />
+          <StructuredDataView
+            v-else-if="hasStructuredResult"
+            :value="result"
+            label="工具结果"
+            show-toolbar
           />
           <div
             v-else-if="outputLines.length && status === 'ok'"
@@ -173,6 +180,7 @@ import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { formatLatency } from '../../utils/format'
 import { shouldKeepToolCardOpen } from '../../utils/toolCard'
 import MarkdownView from './MarkdownView.vue'
+import StructuredDataView from './StructuredDataView.vue'
 
 const props = withDefaults(
   defineProps<{
@@ -335,6 +343,12 @@ const inputFields = computed(() => {
     }))
 })
 
+/** 预定义文件/网页/命令工具沿用专用字段；其余调用展示完整对象结构。 */
+const showStructuredArgs = computed(() => {
+  if (['read', 'write', 'edit', 'bash', 'web_search', 'web_fetch'].includes(props.tool)) return false
+  return Object.keys(argsRecord.value).length > 0
+})
+
 /** 工具卡代码/文档预览的行号与正文，避免长文本失去定位上下文。 */
 type LineItem = { n: number; text: string }
 
@@ -434,7 +448,10 @@ const outputLines = computed(() => {
 
 const isMarkdownFile = computed(() => {
   const path = stringField(argsRecord.value.path || asRecord(resultRecord.value?.read)?.path)
-  return /\.(md|markdown|mdx)$/i.test(path)
+  if (/\.(md|markdown|mdx)$/i.test(path)) return true
+
+  // web_fetch 默认返回 Markdown，只有请求 text 格式时才按纯文本展示。
+  return props.tool === 'web_fetch' && stringField(argsRecord.value.format).toLowerCase() !== 'text'
 })
 
 /** web_fetch 返回 Markdown 正文时与 .md 文件同样支持「渲染/源码」双视图。 */
@@ -461,6 +478,13 @@ const resultSummary = computed(() => {
   const data = resultRecord.value
   if (typeof data?.summary === 'string') return data.summary
   return ''
+})
+
+/** 有受控文本预览的工具优先展示原文；其余安全对象结果用字段树或表格呈现。 */
+const hasStructuredResult = computed(() => {
+  if (props.status !== 'ok' || isStreamingOutput.value || previewText.value) return false
+  if (isAudioOutput.value || props.tool === 'image.generate') return false
+  return Boolean(props.result && typeof props.result === 'object')
 })
 
 const playUrl = computed(() => {
@@ -544,6 +568,7 @@ function formatJson(val: any): string {
 
 const streamSourceText = computed(() => {
   if (props.status !== 'ok') return ''
+  if (hasStructuredResult.value) return ''
   return previewText.value || resolvedOutputText.value
 })
 

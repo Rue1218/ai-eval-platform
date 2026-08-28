@@ -6,14 +6,21 @@
     :class="[customClass, { 'is-streaming': isStreaming }]"
     @click="handleContainerClick"
   >
-    <div class="markdown-content" v-html="renderedHtml"></div>
+    <StructuredDataView
+      v-if="showStructuredValue"
+      :value="structuredValue"
+      label="结构化输出"
+      show-toolbar
+    />
+    <div v-else class="markdown-content" v-html="renderedHtml"></div>
     <span v-if="isStreaming" class="md-streaming-cursor" aria-hidden="true">▍</span>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, nextTick } from 'vue'
+import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue'
 import mermaid from 'mermaid'
+import StructuredDataView from './StructuredDataView.vue'
 
 const props = withDefaults(
   defineProps<{
@@ -31,6 +38,9 @@ const props = withDefaults(
 const containerRef = ref<HTMLElement | null>(null)
 let renderSvgCounter = 0
 let mermaidInitialized = false
+let markdownRenderFrame: number | undefined
+let mermaidRenderFrame: number | undefined
+const renderedSource = ref('')
 
 /**
  * 初始化 Mermaid 全局深色主题与渲染配置
@@ -262,7 +272,8 @@ function formatLanguageName(rawLang: string): string {
 function renderMarkdown(raw: string): string {
   if (!raw) return ''
 
-  let text = raw.trim()
+  // 保留流式文本末尾的换行与未闭合围栏，避免每个增量帧改变 Markdown 边界。
+  let text = raw
 
   // 0. 清理可能由历史数据或后端预包裹的 <p> / </p> 标签
   text = text
@@ -496,21 +507,64 @@ function renderMarkdown(raw: string): string {
   return text
 }
 
-const renderedHtml = computed(() => renderMarkdown(props.content))
+/** 仅识别完整独立 JSON；未闭合的流式 JSON 仍按普通 Markdown 显示。 */
+function parseStandaloneJson(raw: string): unknown | undefined {
+  const trimmed = raw.trim()
+  const fenced = trimmed.match(/^```json\s*\n([\s\S]*?)\n?```$/i)
+  const candidate = (fenced?.[1] || trimmed).trim()
+  if (!candidate.startsWith('{') && !candidate.startsWith('[')) return undefined
+  try {
+    return JSON.parse(candidate)
+  } catch {
+    return undefined
+  }
+}
+
+const structuredValue = computed(() => parseStandaloneJson(renderedSource.value))
+const showStructuredValue = computed(() => !props.isStreaming && structuredValue.value !== undefined)
+const renderedHtml = computed(() => renderMarkdown(renderedSource.value))
+
+/** 流式正文按动画帧合并，避免每个 token 都全量解析 Markdown 和更新 v-html。 */
+function syncRenderedSource(content: string, streaming: boolean): void {
+  if (markdownRenderFrame !== undefined) {
+    window.cancelAnimationFrame(markdownRenderFrame)
+    markdownRenderFrame = undefined
+  }
+  if (!streaming) {
+    renderedSource.value = content
+    return
+  }
+  markdownRenderFrame = window.requestAnimationFrame(() => {
+    renderedSource.value = content
+    markdownRenderFrame = undefined
+  })
+}
 
 /**
  * 监听内容更新，自动触发 Mermaid 图表渲染
  */
 watch(
-  () => props.content,
-  () => {
-    renderAllMermaidDiagrams()
+  () => [props.content, props.isStreaming] as const,
+  ([content, streaming]) => {
+    syncRenderedSource(content, streaming)
+    if (mermaidRenderFrame !== undefined) {
+      window.cancelAnimationFrame(mermaidRenderFrame)
+      mermaidRenderFrame = undefined
+    }
+    // Mermaid 在流式过程中常为未闭合状态；仅稳定正文触发一次真实 SVG 渲染。
+    if (!streaming) {
+      mermaidRenderFrame = window.requestAnimationFrame(() => {
+        void renderAllMermaidDiagrams()
+        mermaidRenderFrame = undefined
+      })
+    }
   },
   { immediate: true },
 )
 
-onMounted(() => {
-  renderAllMermaidDiagrams()
+onBeforeUnmount(() => {
+  if (markdownRenderFrame !== undefined) window.cancelAnimationFrame(markdownRenderFrame)
+  if (mermaidRenderFrame !== undefined) window.cancelAnimationFrame(mermaidRenderFrame)
 })
 
 /**
