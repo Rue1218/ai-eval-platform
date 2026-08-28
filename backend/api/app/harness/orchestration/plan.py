@@ -113,8 +113,11 @@ def _l0_fallback(raw: str) -> PlanArtifact | None:
         tools_needed=_dedupe(("task",) + short_tools),
         delivery="confirm" if needs_confirm else "chat",
         budget={
-            "model_calls": min(12, max(4, 2 + len(steps))),
-            "tool_turns": min(12, max(4, 2 + len(steps))),
+            # native 模式每个工具步骤需 2 次模型调用（决策 + 回填后继续），
+            # 再加规划/路由/最终总结的固定开销；实测 4 步任务需 ~9 次，
+            # 旧公式 2+steps 必然 BUDGET_EXCEEDED（上限 12 兜底防失控）。
+            "model_calls": min(12, max(4, 3 + len(steps) * 2)),
+            "tool_turns": min(12, max(4, 3 + len(steps) * 2)),
         },
         allows_replan=True,
         notes="L0 规则降级产物，需复核；步骤："
@@ -178,10 +181,17 @@ def task_state_from_plan(plan: PlanArtifact) -> TaskSessionState:
     current_step = steps[0] if steps else ""
     next_actions = tuple(steps[1:]) if len(steps) > 1 else ()
 
-    # 初始关键信息缺口：将分析/诊断类步骤视为待消除信息缺口
+    # 初始关键信息缺口：仅把需要工具闭环的探查类步骤视为缺口；
+    # 纯说明/总结/汇报类步骤由模型直接作答收尾（无工具调用），纳入缺口会
+    # 永远无法消除，导致 can_deliver 恒 False（任务完成仍显示待执行）。
     missing_info = tuple(
-        s for s in steps if "说明" not in s and "列出" not in s and "确认卡" not in s
-    ) or tuple(steps)
+        s
+        for s in steps
+        if not any(
+            word in s
+            for word in ("说明", "列出", "确认卡", "总结", "汇总", "报告", "介绍", "回答")
+        )
+    )
 
     return TaskSessionState(
         protocol="task_state",
