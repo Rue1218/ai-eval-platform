@@ -1,9 +1,9 @@
-# AI 测试与评估平台 — 测试数据集与黄金集采集技术方案 (V2.1)
+# AI 测试与评估平台 — 测试数据集与黄金集采集技术方案 (V2.2)
 
-> **版本**：V2.1<br>
+> **版本**：V2.2<br>
 > **审查日期**：2026-08-28<br>
-> **状态**：方案制定中（V2.1 补充基准数据集页的目录筛选、异步导入和表格 staging；待按 M0→M3 分期实施）<br>
-> **关联契约**：PRD.md V1.14；API.md V1.54。目录筛选、导入作业、staging 行和发布门禁以 PRD/API 为准；新增数据模型、Worker 与前端实现仍须按 M0 生成迁移并补齐测试
+> **状态**：M1 已实现（目录治理 API、独立导入 Worker、租约回收、staging 审核与 DatasetVersion 发布）；黄金集、专用 benchmark 解析器与前端导入抽屉仍待后续里程碑<br>
+> **关联契约**：PRD.md V1.14；API.md V1.55。目录筛选、导入作业、staging 行、发布和任务版本冻结以 PRD/API 为准
 
 ---
 
@@ -429,7 +429,7 @@ KbDocumentSnapshot
 
 ---
 
-## 11. 修改代码文件与作用清单（V2.0 预期实施清单）
+## 11. 修改代码文件与作用清单（V2.0–V2.1 方案清单）
 
 > 本次仅完成文档重构与契约表述对齐，未修改运行时代码、数据库或接口实现。下表是后续按里程碑实施的预期清单。
 
@@ -462,3 +462,61 @@ KbDocumentSnapshot
 | `docs/AI测试与评估平台-测试数据集与黄金集采集技术方案.md` | 补充基准数据集页的目录筛选、场景划分、独立异步导入、staging 表格保存与发布语义；明确首批目录条目与任务族边界 |
 | `docs/AI测试与评估平台-PRD.md` | V1.14 将目录导入、staging 表格和审核发布纳入 Benchmark 功能与 M3 验收范围 |
 | `docs/AI测试与评估平台-API.md` | V1.54 定义目录查询、导入作业、staging 行、重试与发布接口；未修改运行时代码或数据库 |
+
+---
+
+## 14. V2.2 实现记录（目录治理、导入租约与 staging 发布）
+
+### 14.1 已实现闭环
+
+```text
+成员提报目录来源 / 固定 release
+        │  draft → reviewing → approved（不同成员复核）
+        ▼
+POST /api/dataset-imports（只引用已批准 release）
+        │  request_fingerprint 幂等、冻结 manifest/域名/哈希/筛选条件
+        ▼
+DatasetImport 独立队列
+        │  FOR UPDATE SKIP LOCKED + 15 分钟 lease + attempt 记录
+        ▼
+Worker：HTTPS/重定向/私网地址检查 → SHA-256 → 固定 JSONL/CSV parser
+        │
+        ├─ VALIDATION / UPSTREAM / TIMEOUT → failed；仅后两者可 retry
+        └─ review_ready → staging 行（稳定 UUID + staging_revision）
+                                      │
+                      非提报成员按 revision 审核、编辑、选择
+                                      ▼
+            原子发布 DatasetVersion / DatasetVersionRow → Dataset.active_version_id
+                                      │
+                                      ▼
+        新建 benchmark Task 时锁定该 version；Worker 仅读取该版本行
+```
+
+### 14.2 当前安全与可信度边界
+
+- Worker 不接收浏览器传入的 URL、Cookie、Header、Token、路径或解析脚本；作业 manifest 在 API 创建时冻结来源允许域名、release manifest、筛选条件与 parser 版本。
+- 下载只允许无凭据 HTTPS、审核域名及同样受审核的重定向目标；下载前拒绝 loopback、私网、链路本地与保留地址；单制品上限 50MB，制品 SHA-256 不匹配即失败。
+- 当前仅注册 `jsonl-qa-v1` 与 `csv-qa-v1` 两个受控 parser。未注册 parser、代码、多模态、偏好与需专用评分器的任务族均 fail-closed，不会伪造 staging 或成功评测。
+- staging 行用稳定 UUID 而非可变行号选择；保存和发布都要求 `expected_staging_revision`。发布时锁定 dataset/import，提报成员不得自行批准发布。
+- 发布后 `DatasetVersionRow` 是不可变快照；手工上传、正式行编辑和删除不能绕过已有 `active_version_id`。任务创建把 `dataset_version_id/version_no` 写入配置快照，benchmark Worker 仅读取它。
+
+### 14.3 已知后续工作
+
+1. 登记首批经许可证复核的 C-Eval、MMLU、ARC、GSM8K、IFEval 等 release manifest，并为多选、数学、指令遵循提供专用 parser 和评分器；
+2. 实现黄金集的 KB 文档快照、证据锚点、双人审核及 Evidence Judge，不能以公开 benchmark 代替 RAG 忠实度；
+3. 补前端“导入公开基准”抽屉、作业轮询、staging 编辑/发布界面，以及真实数据库集成测试；
+4. 如要支持压缩包、Parquet 或需要登录授权的来源，必须另行评审资源上限、许可和解析器，不得扩展通用下载器能力。
+
+### 14.4 V2.2 实际修改文件与作用
+
+| 实际修改文件 | 作用 |
+| :--- | :--- |
+| `backend/shared/models.py`、`backend/api/migrations/versions/122a3391d44d_新增数据集目录导入治理表.py` | 已在前置提交中定义目录、release、审核、导入租约、staging、制品与不可变版本表，并通过 Alembic 落库 |
+| `backend/api/app/routers/dataset_catalog.py` | 目录/release 提报、双人复核、封禁处理、创建/查询/重试/拒绝导入、原子发布 API |
+| `backend/api/app/routers/datasets.py` | staging 行读取与 revision 保存、正式版本只读以及对已发布数据集的编辑/上传/删除保护 |
+| `backend/worker/app/dataset_import.py` | 独立队列领取、租约回收、受控下载、哈希校验、JSONL/CSV 解析、筛选、staging 写入与安全失败收束 |
+| `backend/worker/app/main.py` | 在既有评测队列外调度独立 DatasetImport 队列，避免跨 Session 传递 ORM 实体 |
+| `backend/api/app/routers/tasks.py`、`backend/worker/app/benchmark.py` | 创建任务时冻结已发布数据集版本，benchmark 执行只读取冻结版本行 |
+| `backend/api/app/schemas.py`、`backend/api/app/main.py` | 新增目录/导入/staging/发布契约模型并注册 API 路由 |
+| `backend/worker/tests/test_dataset_import.py` | 覆盖 JSONL 解析、冻结筛选和私网来源拒绝的离线回归测试 |
+| `docs/AI测试与评估平台-社媒平台内容抓取适配技术方案.md` | 已删除；其功能范围已被本数据集与黄金集方案取代 |

@@ -2,17 +2,19 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.54 |
+| 文档版本 | V1.55 |
 | 对应 PRD | V1.14（功能唯一权威） |
 | 对应设计规范 | V1.10（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.5.17（LangGraph 单轮 Agent 与 WS 桥接；JSON 仍以本文为准） |
 | 对应前端计划 | V1.5 |
 | 对应后端计划 | V1.5 |
 | 撰写日期 | 2026-08-18 |
-| 本轮修订 | 2026-08-28：V1.54 新增基准数据集目录与异步导入契约：数据集页筛选已审核 release，Worker 下载/校验/解析为 staging 行，审核发布前不得进入评测。 |
+| 本轮修订 | 2026-08-28：V1.55 落地目录治理、独立导入租约、staging revision 发布与 benchmark 数据集版本冻结；接口字段按本节实际实现收敛。 |
 | 最近修订 | 2026-08-28：V1.53 `web_fetch` 直抓路径接入 trafilatura 正文提取：可读性算法识别文章主体，保留标题层级/链接/图片/表格，未安装或提取失败降级回内置 `_TextExtractor`；提取真实产出 Markdown 时才声明 `format=markdown`（§4.3.1）。V1.52 优化 `web_fetch` 长文完整性与卡片预览：模型正文预算 8,000→60,000 字符，卡片预览与 `read` 同源对齐 `TOOL_PREVIEW_MAX_CHARS` 并随 `web.preview_limit_chars` 下发，直接抓取字节窗口 256KB→1MB（§4.3.1）。2026-08-27：V1.51 新增持久事件 `session_title`（§4.3）与会话标题 AI 生成契约（§4.3.2）：默认标题会话首条消息后由 Agent 协议档弱结构化生成标题并落库广播，修复标题不持久化问题。V1.50 统一 Agent 文本附件 staging 与 `read` 的 20MB 边界；`read` 模型窗口为 2,000 行 / 600,000 字符。V1.49 协议档新增 `max_output_tokens`（256–131072，默认 8192），创建/更新/列表/详情均支持；Agent 模型调用从协议档读取输出上限，长文档总结/导出类任务可调大避免回答被截断。2026-08-26：V1.48 同轮多调用默认串行，灰度开启后仅 `read`/`web_search`/`web_fetch` 可并行，回填按原始 `call_id`。V1.47 新增 `GET /api/agent/metrics`，不含正文/参数，不新增 WS 事件。V1.46 明确 native 一次 ToolCall 结束当前上游响应，结果回填后再请求，不新增事件名。V1.45 思考链只下发可展示摘要，隐藏 CoT（`Here's a thinking process` / `Analyze User Input`）由服务端替换，不原样推给前端。V1.44 ToolCall 在执行前持久化，新增瞬态 `tool_progress` / `tool_output_delta`，并冻结原生工具的输出 Schema、权限边界和失败恢复字段。V1.43 思考增量允许合并下发；有思考链时 `think_final` 在 `response.completed` 之前。V1.42 Direct `/help`、未知斜杠与图内防御提示在业务事件后必须再发 `response.completed`（成功 `stop`，校验/防御 `error`），结束整轮生成态。V1.41 确认卡预填与 `confirm_ack` 入队前丢掉已删除的协议档/数据集/知识库 ID，避免 Worker 再报「协议档不存在或已删除」。V1.40 `/cancel` 与 `/stress` 按 §4.4 解禁（仍走 `user_message`）：`/cancel` 取消本会话非终态任务，`/stress` 发出质量任务确认卡且 `with_stress=true`，禁止 `kind=stress`。V1.39 原生工具卡片收起态副标题统一为 `ToolCall`，不在卡片摘要区回显文件路径、命令或写入内容；详细参数仍在展开区展示。V1.38 明确原生基础 ToolCall 卡片使用英文工具名，展开区统一显示 `ToolCall` 与 `输出`，文件、命令和代码/文档结果使用行号展示；MCP/平台短工具仍按下方中文名映射。2026-08-24：V1.24 修复 Agent 附件上下文链路：服务端校验文件归属并在模型窗口解析文本、PDF、DOCX、XLSX，图片按三协议图文内容块发送；历史消息附件补齐安全元数据，前端可在刷新后继续预览。同步调整输入框内附件按钮与用户消息附件位序。V1.23 扩展 Agent 附件契约，支持图片、Word 文档与多附件拖拽上传；保留 `POST /api/files` 后再以既有 `file_id` 引用的消息链路，补充图片缩略图、PDF/文本预览与 Office 文件打开/下载说明。V1.22 修复 V1.21 遗留：§4.4 标题「仅此三条」改「仅此四条」、§9 禁止清单「第四种」改「第五种」并补四类上行事件枚举、§4.3 `tool_result.source` 语义对齐 M7 `Observation.source`（溯源标识字符串，非 short\|long 枚举）、§4.3 共享流规则补 clarify/plan/confirm 持久化广播说明、§4.4 clarify 多副本限制注明、§9 Ask/Plan 补注非 Harness plan 事件；V1.20 及更早版本沿用历史修订记录。 |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
+> V1.55（2026-08-28）：§3.7 实现目录来源/release 的双人复核、独立 `DatasetImport` 作业的 lease 领取/回收、稳定 staging 行 ID 与 optimistic revision 发布；新建 benchmark 任务写入已发布 `dataset_version_id/version_no` 快照，Worker 只读该版本。所有成员同权，但 release 批准/封禁解除和 staging 发布均不得由提报成员本人完成；不新增 WS 事件。
+>
 > V1.54（2026-08-28）：§3.7 新增公开基准目录、独立 `DatasetImport` 作业与 staging 行契约。`/datasets` 只能选择受审核的目录 release，下载/解析由 Worker 异步执行；未审核 staging 行不得用于确认卡、评测或基线。本版本不新增 WS 事件。
 >
 > V1.53（2026-08-28）：§4.3.1 `web_fetch` 直抓路径（未配置 Firecrawl）接入 trafilatura（新增依赖，`requirements.txt` 固定 2.2.0）做正文级提取：可读性算法识别文章主体，丢弃导航/页脚/脚本噪声，保留标题层级、链接、图片与表格；未安装或提取失败降级回内置 `_TextExtractor` 全文本展开。提取真实产出 Markdown 时 `format=markdown`，降级路径仍为 `text`。SSRF 校验、受控字节窗口与正文预算不变，不新增 WS 字段。
@@ -732,13 +734,14 @@ V1.0 使用服务端固定系统提示词和固定短工具绑定（见 §4、§
   "id": "uuid",
   "name": "smoke-20",
   "version": 3,
-  "status": "importing | review_ready | active | failed | rejected",
+  "status": "draft | active",
+  "active_version_id": "uuid?",
   "folder_id": "uuid?",
   "row_count": 20,
   "pending_complete_count": 2,
   "metric": "contain",
   "column_schema": [{ "key": "difficulty", "name": "难度", "type": "string", "sort_order": 1 }],
-  "owner_id": "uuid",
+  "created_by": "uuid?",
   "created_at": "..."
 }
 ```
@@ -759,93 +762,60 @@ V1.0 使用服务端固定系统提示词和固定短工具绑定（见 §4、§
 
 #### `DELETE /api/datasets/{id}`
 
-删除数据集（全员同权，进行中的历史任务快照不受影响）。
+删除仅限没有 `active_version_id` 的草稿数据集；已发布数据集返回 `VALIDATION`，以保留版本、导入和历史任务的可追溯关系。
 
 #### `POST /api/datasets/{id}/upload`  multipart `file`
 
-JSONL 或 CSV UTF-8；列 `question,reference,context?`；≤50MB、≤2 万行。覆盖后 `version += 1`。非法行可拒整文件 `VALIDATION`。
+JSONL 或 CSV UTF-8；列 `question,reference,context?`；≤50MB、≤2 万行。覆盖后 `version += 1`。非法行可拒整文件 `VALIDATION`。已有 `active_version_id` 的数据集返回 `VALIDATION`，必须创建新的受控导入版本。
 
-#### 公开基准目录与异步导入（V1.54，M3）
+#### 公开基准目录、独立导入与发布（V1.55）
 
-`GET /api/dataset-catalog` 返回当前用户可见的、已审核的目录条目；这是**平台元数据查询**，不会请求 Hugging Face、GitHub 或第三方站点。可选 query 参数：`scenario`、`task_family`、`language`、`license_status`、`test_availability`、`support_status`、`q`。响应中的每一项至少包含：
+目录治理由全员同权成员维护，但采用**不同成员复核**，没有管理员角色或绕过接口：
 
-```json
-{
-  "id": "uuid",
-  "name": "C-Eval",
-  "scenarios": ["中文", "通用知识", "推理"],
-  "task_family": "multiple_choice",
-  "language": ["zh"],
-  "license_status": "allowed | review_required | blocked",
-  "test_availability": "public_test | validation_only | official_submission | dynamic_release",
-  "support_status": "supported | review_required | planned",
-  "risk_labels": ["historical_contamination"],
-  "releases": [{"id": "uuid", "display_version": "v1", "allowed_splits": ["validation", "test"], "estimated_rows": 13948}]
-}
-```
+- `POST /api/dataset-catalog-entries`、`PUT /api/dataset-catalog-entries/{entry_id}`：登记或修改来源 draft。输入为 `name, upstream_owner, official_project_url, allowed_domains[], purpose?, evidence_refs?`；仅提报成员可改 draft。
+- `POST /api/dataset-catalog-entries/{entry_id}/releases`、`PUT /api/dataset-catalog-releases/{release_id}`：登记固定 release draft。`manifest.artifacts[]` 的每项必须有无凭据 HTTPS `url` 和 SHA-256；`source_revision` 不得是 `main/master/latest`；同时提供 `license.status`、`allowed_splits`、`filter_schema:{version:1,fields:{...}}`、固定 `parser_id/parser_version`、`task_family` 和 `support_status`。
+- `POST /api/dataset-catalog-releases/{id}/submit-review`、`/approve`、`/block`、`/resolve-block`：请求体为 `{note?}`（解除封禁还含 `decision:"approved"|"blocked"`）。批准与解除封禁不能由提报者完成；解除封禁还不能由原封禁者完成。
 
-`POST /api/dataset-imports` 只接收平台目录的 ID，不接受任意 URL、Cookie、请求头、Token、脚本或压缩包路径：
+`GET /api/dataset-catalog` **只**返回 `active` 来源下 `approved` release，绝不在请求时访问 Hugging Face、GitHub 或第三方站点。可选 query 为 `scenario,task_family,language,license_status,test_availability,support_status,q`。release 的 `metadata` 可提供 `scenarios,language,test_availability,estimated_rows`；响应同时返回 `license_status`、风险标签、允许 split、固定 parser 及 manifest 哈希。
+
+`POST /api/dataset-imports` 只接受已批准目录的 ID 与受限筛选，绝不接受任意 URL、Cookie、Header、Token、脚本或路径：
 
 ```json
 {
   "catalog_entry_id": "uuid",
   "release_id": "uuid",
   "splits": ["test"],
-  "filters": {"subjects": ["computer_network"], "max_rows": 1000, "sampling_seed": 20260828},
+  "filter_schema_version": 1,
+  "filters": {"subject": "computer_network"},
   "target_name": "C-Eval-计算机网络-test",
   "folder_id": "uuid?"
 }
 ```
 
-服务端验证 release 的许可状态、任务族支持度、允许切分、过滤字段和配额后创建独立 `DatasetImport` 作业，返回 HTTP `202`：
+也可用 `target_dataset_id` 指向已有容器（若同时传 `target_name` 必须一致）。服务端校验 release/许可证/任务支持状态、split 和 filter schema，冻结 release manifest、来源允许域名、parser 版本与筛选条件，按 `manifest_hash + splits + filters + parser_version + dataset_id` 生成幂等指纹并返回 HTTP 202。目标数据集存在未完成导入时返回 `CONCURRENCY`。
+
+`DatasetImport` 不是评测 `Task`，不写确认卡或报告。状态为 `queued | downloading | validating | parsing | review_ready | failed | rejected | published`；`GET /api/dataset-imports/{id}` 返回 `id,dataset_id,status,stage,attempt,max_attempts,manifest_hash,staging_revision?,summary,error?,creator_id,reviewer_id`。`POST /api/dataset-imports/{id}/retry` 仅允许 `failed` 且错误码为 `UPSTREAM` 或 `TIMEOUT`、且未超过尝试上限的作业；`POST /api/dataset-imports/{id}/reject` 要求非提报成员拒绝 `review_ready` 作业。全程不新增 WS 事件。
+
+Worker 按 `FOR UPDATE SKIP LOCKED` 领取导入，写入独立 15 分钟 lease 与 attempt；过期 lease 在尝试上限内重新排队，超过上限以 `TIMEOUT` 收束。当前只支持受控 `jsonl-qa-v1` 和 `csv-qa-v1` parser；下载必须通过 HTTPS、冻结域名/重定向和私网地址检查，并校验单制品 50MB 上限与 SHA-256。
+
+#### staging 行与不可变发布
+
+`GET /api/datasets/{dataset_id}/rows?view=staging&import_id={import_id}` 在 `review_ready`（及只读的 `published/rejected`）状态返回 staging 行。每行都有稳定 `id`、`row_no`、三元组字段、`warnings`、`provenance` 和解析扩展列，响应包含 `staging_revision`。
+
+`PUT /api/datasets/{dataset_id}/rows?view=staging&import_id={import_id}` 的请求体为 `{expected_staging_revision,rows:[{id,q?,r?,c?,...}]}`。服务端锁定导入批次，校验 revision 与稳定行 ID，保存后重算行内容哈希并递增 revision；不允许按可变 `row_no` 直接发布。
+
+`POST /api/datasets/{dataset_id}/publish-import` 的请求体为：
 
 ```json
 {
-  "id": "uuid",
-  "dataset_id": "uuid",
-  "status": "queued",
-  "stage": "queued",
-  "reused": false,
-  "created_at": "..."
+  "import_id": "uuid",
+  "expected_staging_revision": 3,
+  "accepted_row_ids": ["stable-row-uuid"],
+  "note": "复核通过"
 }
 ```
 
-作业不是 `Task`，不写确认卡，也不产生评测/报告事件。唯一幂等键由 `catalog_entry_id + release_id + splits + canonical_filters + parser_version + target_name` 组成；重复请求必须返回既有进行中或已完成作业，禁止重复写 staging 行。作业状态仅为 `queued | downloading | validating | parsing | review_ready | failed | rejected`；失败响应和 `GET` 查询只返回归一错误码、失败阶段、计数和安全的修复提示，不回显下载凭据或完整上游响应。
-
-`GET /api/dataset-imports/{id}` 返回 `{id,dataset_id,status,stage,progress:{done,total?},summary:{parsed,accepted,rejected,duplicates},error?}`。前端在导入期间轮询该接口；V1.54 不新增 WebSocket 事件。
-
-`POST /api/dataset-imports/{id}/retry` 仅允许 `failed` 且原因可重试的作业，重用相同 manifest；许可证、格式和标签校验失败不可自动重试。管理员可先将错误作业标记 `rejected`，再登记新的 release 后重新导入。
-
-#### staging 行与发布
-
-当导入作业到达 `review_ready`，目标 `Dataset.status=review_ready`，`GET /api/datasets/{id}/rows?view=staging` 返回已规范化行、来源和解析告警：
-
-```json
-{
-  "items": [{
-    "row_no": 1,
-    "question": "...",
-    "reference": "A",
-    "context": null,
-    "row_status": "staging | rejected",
-    "provenance": {
-      "catalog_entry_id": "uuid",
-      "release_id": "uuid",
-      "artifact_sha256": "hex",
-      "source_record_id": "test-1",
-      "split": "test",
-      "parser_id": "ceval_v1",
-      "parser_version": "1.0.0"
-    },
-    "warnings": []
-  }],
-  "total": 1000
-}
-```
-
-缺省 `view=active` 保持既有已发布行语义；`view=staging` 仅对关联的 `review_ready` 数据集可用。`PUT /api/datasets/{id}/rows` 在 `review_ready` 时只修改 staging 行，不能直接令数据集可评测。
-
-`POST /api/datasets/{id}/publish-import` 接收 `{ "accepted_row_nos": [1, 2], "review_note": "..." }`。服务端验证导入作业为 `review_ready`、所有选择行有效且数量非零，在一个事务中冻结来源 manifest、行内容、内容 SHA-256、parser/scorer 版本与审核记录，创建新的数据集版本并使 `Dataset.status=active`。未选择或被拒绝行不进入评测版本；没有 `active` 版本的数据集不能出现在确认卡数据集选择器中。
+发布者必须不同于导入提报者。服务端在一个事务中锁定 dataset/import，校验 revision 和选择行，创建不可变 `DatasetVersion/DatasetVersionRow`，更新 `Dataset.active_version_id`、行数与状态为 `active`，并把 import 标记为 `published`。正式版本只能读取，已有 `active_version_id` 的数据集禁止手工上传、正式行编辑或直接删除；缺省 `GET rows?view=active` 读取 `DatasetVersionRow`。
 
 #### `GET /api/datasets/{id}/rows?pending_complete=true`
 
@@ -1163,6 +1133,7 @@ case item 包含：`id, strategy, priority, module, name, precondition, steps, e
 - 平台 `max_running_tasks` 满 → **仍** `queued`（3.4），可附 `warning: "CONCURRENCY"` 字段（可选）。  
 - `kind=stress` 一般由 worker 在质量 `succeeded` 且 `with_stress=true` 时创建；人手 POST 须带 `parent_task_id`，且父任务必须 succeeded。  
 - 一任务一种 `kind`。V1 禁止 Benchmark+RAG 混单。
+- `kind=benchmark` 且目标数据集存在 `active_version_id` 时，服务端在创建事务中锁定数据集并把 `dataset_version_id`、`dataset_version_no` 写入 `config` 快照；后续发布或 staging 编辑不影响该任务。
 
 #### `GET /api/tasks?status=&kind=&offset=&limit=`
 
@@ -2394,3 +2365,15 @@ Markdown 输出与 Firecrawl 对齐。提取真实产出 Markdown 时才声明 `
 | `docs/AI测试与评估平台-API.md` | §3.7 新增目录查询、异步导入、作业查询/重试、staging 行和审核发布契约 |
 | `docs/AI测试与评估平台-PRD.md` | V1.14 新增 Benchmark 目录导入、staging 表格与 M3 验收要求 |
 | `docs/AI测试与评估平台-测试数据集与黄金集采集技术方案.md` | V2.1 补充页面场景、内容筛选、首批目录、Worker 与表格保存设计 |
+
+**V1.55（2026-08-28）— 目录治理、导入租约与不可变发布实现**
+
+目录与 release 增加提报、不同成员复核、封禁和封禁解除 API；导入作业在独立队列领取，使用 `SKIP LOCKED`、短 lease、attempt 与回收策略。staging 读写使用 `import_id + stable row id + staging_revision`，发布使用同一 revision 和非提报成员门禁，原子创建 `DatasetVersion`。benchmark 创建时冻结版本，Worker 仅读取冻结行；不新增 WS 事件。
+
+| 实际修改文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/routers/dataset_catalog.py` | 目录/release 治理、导入/重试/拒绝、原子发布 API |
+| `backend/api/app/routers/datasets.py` | staging 表格读写和已发布数据集的不变性保护 |
+| `backend/worker/app/dataset_import.py`、`backend/worker/app/main.py` | 独立导入领取、租约回收、受控下载/解析、staging 写入 |
+| `backend/api/app/routers/tasks.py`、`backend/worker/app/benchmark.py` | 任务版本冻结与正式版本读取 |
+| `backend/api/app/schemas.py`、`backend/api/app/main.py` | V1.55 请求模型和路由注册 |

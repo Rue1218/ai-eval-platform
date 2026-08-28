@@ -145,6 +145,7 @@ def _entry_out(entry: DatasetCatalogEntry) -> dict[str, Any]:
 
 def _release_out(release: DatasetCatalogRelease) -> dict[str, Any]:
     """返回 release 元数据；manifest 保持可审计但不含凭据字段。"""
+    metadata = release.manifest.get("metadata", {}) if isinstance(release.manifest, dict) else {}
     return {
         "id": release.id,
         "catalog_entry_id": release.catalog_entry_id,
@@ -152,6 +153,7 @@ def _release_out(release: DatasetCatalogRelease) -> dict[str, Any]:
         "source_revision": release.source_revision,
         "manifest_hash": release.manifest_hash,
         "license": release.license or {},
+        "license_status": (release.license or {}).get("status"),
         "allowed_splits": release.allowed_splits or [],
         "filter_schema": release.filter_schema or {},
         "parser_id": release.parser_id,
@@ -159,6 +161,8 @@ def _release_out(release: DatasetCatalogRelease) -> dict[str, Any]:
         "task_family": release.task_family,
         "support_status": release.support_status,
         "risk_labels": release.risk_labels or [],
+        "test_availability": metadata.get("test_availability"),
+        "estimated_rows": metadata.get("estimated_rows"),
         "status": release.status,
         "submitter_id": release.submitted_by,
         "approved_by": release.approved_by,
@@ -567,6 +571,9 @@ def list_catalog(
     scenario: str | None = Query(default=None),
     task_family: str | None = Query(default=None),
     language: str | None = Query(default=None),
+    license_status: str | None = Query(default=None),
+    test_availability: str | None = Query(default=None),
+    support_status: str | None = Query(default=None),
     q: str | None = Query(default=None),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -580,6 +587,8 @@ def list_catalog(
     )
     if task_family:
         query = query.filter(DatasetCatalogRelease.task_family == task_family)
+    if support_status:
+        query = query.filter(DatasetCatalogRelease.support_status == support_status)
     if q:
         query = query.filter(DatasetCatalogEntry.name.ilike(f"%{q.strip()}%"))
     items: dict[str, dict[str, Any]] = {}
@@ -591,6 +600,10 @@ def list_catalog(
             continue
         if language and language not in metadata.get("language", []):
             continue
+        if license_status and (release.license or {}).get("status") != license_status:
+            continue
+        if test_availability and metadata.get("test_availability") != test_availability:
+            continue
         item = items.setdefault(
             entry.id,
             {
@@ -600,6 +613,8 @@ def list_catalog(
                 "task_family": release.task_family,
                 "language": metadata.get("language", []),
                 "license": release.license,
+                "license_status": (release.license or {}).get("status"),
+                "test_availability": metadata.get("test_availability"),
                 "risk_labels": release.risk_labels or [],
                 "releases": [],
             },
