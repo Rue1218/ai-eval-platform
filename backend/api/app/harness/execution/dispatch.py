@@ -23,6 +23,7 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from html.parser import HTMLParser
+from types import ModuleType
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener, urlopen
@@ -748,6 +749,47 @@ class _TextExtractor(HTMLParser):
         return title, body
 
 
+def _load_trafilatura() -> ModuleType | None:
+    """懒加载 trafilatura 可选依赖；未安装返回 None，由调用方走内置降级提取器。"""
+    try:
+        import trafilatura
+    except ImportError:
+        return None
+    return trafilatura
+
+
+def _extract_article_with_trafilatura(decoded: str, url: str, format: str) -> str | None:
+    """用 trafilatura 做正文级提取（2026-08-28 接入，替代朴素全文本展开）。
+
+    trafilatura 以可读性算法识别文章主体：丢弃导航/页脚/脚本噪声，保留
+    标题层级、链接、图片、列表与表格，Markdown 输出与 Firecrawl 对齐。
+    未安装、提取失败或无正文时返回 None，调用方降级回内置 ``_TextExtractor``。
+    """
+    trafilatura = _load_trafilatura()
+    if trafilatura is None:
+        return None
+    try:
+        extracted = trafilatura.extract(
+            decoded,
+            url=url,
+            # favor_recall：宁可多保留正文也不丢段落（知乎等长文剪枝保护）。
+            favor_recall=True,
+            output_format="markdown" if format == "markdown" else "txt",
+            include_links=True,
+            include_images=True,
+            include_formatting=True,
+            include_tables=True,
+            include_comments=False,
+        )
+    except Exception as exc:
+        # 只记异常类型不记原文（§5.2.1）；失败降级为内置提取器，不中断抓取。
+        logger.info("trafilatura 提取失败 type=%s", type(exc).__name__)
+        return None
+    if not isinstance(extracted, str) or not extracted.strip():
+        return None
+    return extracted
+
+
 def _validate_public_url(url: str) -> str:
     """校验 HTTP(S) URL、拒绝凭据和内网目标，供首次与重定向请求共用。"""
     parsed = urlparse(url.strip())
@@ -883,7 +925,7 @@ def _fetch_via_firecrawl(url: str, format: str, *, timeout_s: float) -> WebFetch
 
 
 def _fetch_direct(url: str, format: str, *, timeout_s: float) -> WebFetchResult:
-    """未配置 Firecrawl 时，以受控 HTTP 文本抓取提供最小可用降级。"""
+    """未配置 Firecrawl 时，以受控 HTTP 抓取 + trafilatura 正文提取提供降级。"""
     opener = build_opener(_SafeRedirectHandler(), ProxyHandler({}))
     request = Request(
         url,
@@ -909,10 +951,21 @@ def _fetch_direct(url: str, format: str, *, timeout_s: float) -> WebFetchResult:
     decoded = raw.decode(charset, errors="replace")
     title = ""
     content = decoded
+    result_format = "text"
     if content_type == "text/html":
+        # 正文提取降级链：trafilatura 正文级提取（保标题层级/链接/图片）→
+        # 内置 _TextExtractor 全文本展开 → 空正文报 UPSTREAM。
+        # _TextExtractor 始终先跑一次以取 <title>；trafilatura 失败时直接复用其正文。
         extractor = _TextExtractor()
         extractor.feed(decoded)
-        title, content = extractor.result()
+        title, fallback_content = extractor.result()
+        article = _extract_article_with_trafilatura(decoded, url, format)
+        if article is not None:
+            content = article
+            # trafilatura 真实产出结构化 Markdown 时才声明对应格式，保持诚实。
+            result_format = format
+        else:
+            content = fallback_content
     if not content.strip():
         raise AppError(ErrorCode.UPSTREAM, "页面未返回可读取正文")
     content = content[:WEB_FETCH_MAX_CHARS]
@@ -920,8 +973,7 @@ def _fetch_direct(url: str, format: str, *, timeout_s: float) -> WebFetchResult:
         url=final_url,
         title=title,
         content=content,
-        # 没有 Firecrawl 时只提取受控文本；不能把文本降级伪称 Markdown。
-        format="text",
+        format=result_format,
         truncated=truncated_by_bytes or len(decoded) > len(content),
     )
 

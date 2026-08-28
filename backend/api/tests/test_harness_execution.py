@@ -1217,6 +1217,137 @@ def test_web_fetch_content_budget_and_card_preview(monkeypatch) -> None:
     assert len(str(web["preview"])) <= 100
 
 
+_ARTICLE_HTML = """<!DOCTYPE html>
+<html><head><title>Agent设计模式详解 - 技术专栏</title></head>
+<body>
+<nav><a href="/home">首页</a><a href="/tags">标签</a></nav>
+<article>
+<h1>Agent设计模式详解</h1>
+<p>Agent设计模式是智能化系统开发的核心要点。本系列文章将详细介绍九种常见的Agent设计模式，
+帮助开发者掌握每种模式的原理和具体应用场景，先从最基础的ReAct模式开始讲起，
+它是所有模式的理论基石，也是工程实践中使用频率最高的一种范式。</p>
+<h2>1、ReAct 模式</h2>
+<p>ReAct 模式的核心思想是<a href="https://example.com/react-paper">推理与行动交错进行</a>，
+模型在思考之后立即执行工具调用，并根据观察结果调整下一步计划。
+这种循环结构既保证了推理的深度，又保证了行动的准确性。</p>
+<img src="https://picx.zhimg.com/v2-853507087d2befc30a742018816a7d5f_1440w.jpg" alt="ReAct架构图"/>
+<h2>2、Plan-and-Solve 模式</h2>
+<p>Plan-and-Solve 模式强调先制定完整计划再逐步执行。规划阶段模型会把目标拆解为有序的子步骤，
+执行阶段按顺序完成每个子步骤并根据反馈动态修正，适合流程固定的批量评测任务。</p>
+</article>
+<footer>版权声明：本文为原创文章，转载请保留出处与作者信息。</footer>
+</body></html>"""
+
+
+def _install_fake_html_fetch(monkeypatch, body: bytes) -> None:
+    """给 web_fetch 直抓路径装上返回固定 HTML 的假 opener（测试辅助）。"""
+    from app.harness.execution import dispatch
+
+    class _FakeHeaders:
+        def get_content_type(self) -> str:
+            return "text/html"
+
+        def get_content_charset(self) -> str:
+            return "utf-8"
+
+    class _FakeResponse:
+        def __enter__(self) -> "_FakeResponse":
+            return self
+
+        def __exit__(self, *_exc: object) -> bool:
+            return False
+
+        def read(self, _n: int = -1) -> bytes:
+            return body
+
+        @property
+        def headers(self) -> _FakeHeaders:
+            return _FakeHeaders()
+
+        def geturl(self) -> str:
+            return "http://93.184.216.34/article"
+
+    class _FakeOpener:
+        def open(self, _request: object, timeout: float) -> _FakeResponse:
+            _ = timeout
+            return _FakeResponse()
+
+    monkeypatch.setattr(dispatch, "build_opener", lambda *_a, **_k: _FakeOpener())
+
+
+def test_web_fetch_trafilatura_markdown_extraction(monkeypatch) -> None:
+    """直抓路径接入 trafilatura（2026-08-28）：正文级 Markdown 提取且格式诚实声明。"""
+    from types import SimpleNamespace
+
+    from app.harness.execution import dispatch
+
+    captured: dict[str, object] = {}
+
+    def _fake_extract(decoded: str, **kwargs: object) -> str:
+        captured["kwargs"] = kwargs
+        assert "<article>" in decoded
+        return "# Agent设计模式详解\n\n正文含 [ReAct 模式](https://example.com/react-paper)。"
+
+    monkeypatch.setattr(
+        dispatch, "_load_trafilatura", lambda: SimpleNamespace(extract=_fake_extract)
+    )
+    _install_fake_html_fetch(monkeypatch, _ARTICLE_HTML.encode("utf-8"))
+    result = dispatch.web_fetch("http://93.184.216.34/article", format="markdown", timeout_s=1.0)
+    assert result.format == "markdown"
+    assert "[ReAct 模式](https://example.com/react-paper)" in result.content
+    # <title> 仍由内置提取器提供
+    assert "Agent设计模式详解" in result.title
+    kwargs = captured["kwargs"]
+    assert kwargs.get("include_links") is True
+    assert kwargs.get("favor_recall") is True
+
+
+def test_web_fetch_falls_back_without_trafilatura(monkeypatch) -> None:
+    """未安装 trafilatura 时降级回 _TextExtractor，格式诚实保持 text。"""
+    from app.harness.execution import dispatch
+
+    monkeypatch.setattr(dispatch, "_load_trafilatura", lambda: None)
+    _install_fake_html_fetch(monkeypatch, _ARTICLE_HTML.encode("utf-8"))
+    result = dispatch.web_fetch("http://93.184.216.34/article", format="markdown", timeout_s=1.0)
+    assert result.format == "text"
+    assert "Agent设计模式" in result.content
+    assert "Agent设计模式详解" in result.title
+
+
+def test_web_fetch_falls_back_when_trafilatura_raises(monkeypatch) -> None:
+    """trafilatura 提取抛异常时不中断抓取，降级为内置提取器。"""
+    from types import SimpleNamespace
+
+    from app.harness.execution import dispatch
+
+    def _boom(*_args: object, **_kwargs: object) -> str:
+        raise RuntimeError("extractor exploded")
+
+    monkeypatch.setattr(
+        dispatch, "_load_trafilatura", lambda: SimpleNamespace(extract=_boom)
+    )
+    _install_fake_html_fetch(monkeypatch, _ARTICLE_HTML.encode("utf-8"))
+    result = dispatch.web_fetch("http://93.184.216.34/article", format="markdown", timeout_s=1.0)
+    assert result.format == "text"
+    assert "Agent设计模式" in result.content
+
+
+def test_web_fetch_real_trafilatura_integration(monkeypatch) -> None:
+    """集成：真实 trafilatura 对文章式 HTML 输出结构化 Markdown。"""
+    pytest.importorskip("trafilatura")
+    from app.harness.execution import dispatch
+
+    _install_fake_html_fetch(monkeypatch, _ARTICLE_HTML.encode("utf-8"))
+    result = dispatch.web_fetch("http://93.184.216.34/article", format="markdown", timeout_s=1.0)
+    assert result.format == "markdown"
+    assert "# Agent设计模式详解" in result.content
+    assert "](https://example.com/react-paper)" in result.content
+    assert "![" in result.content
+    # 导航/页脚噪声被剔除
+    assert "首页" not in result.content
+    assert "版权声明" not in result.content
+
+
 class _RecordingHandler(BaseHTTPRequestHandler):
     """回环集成测试用 HTTP handler：记录请求路径、返回固定内容、不刷日志。"""
 
