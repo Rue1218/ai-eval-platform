@@ -72,3 +72,23 @@ def test_budget_cap_20() -> None:
     assert plan is not None
     assert plan.budget["model_calls"] <= 20
     assert plan.budget["model_calls"] > 12
+
+
+def test_budget_for_plan_ignores_model_given_budget() -> None:
+    """预算由平台按步骤数计算，不信任模型在 plan.budget 中自报的过小值。"""
+    from app.harness.contracts import PlanArtifact
+    from app.harness.orchestration import budget_for_plan
+
+    plan = PlanArtifact(
+        intent="测试",
+        skill_id=None,
+        slots={"steps": ["用 read 读取 a", "用 write 写 b", "用 edit 改 c", "汇总结果"]},
+        tools_needed=["read", "write", "edit"],
+        delivery="chat",
+        budget={"model_calls": 2, "tool_turns": 2},  # 模型自报过小值
+        allows_replan=True,
+    )
+    budget = budget_for_plan(plan)
+    assert budget.model_calls == min(20, max(6, 4 + 4 * 3)) == 16
+    assert budget.tool_turns == 16
+    assert budget.model_calls > 2  # 覆盖模型自报值

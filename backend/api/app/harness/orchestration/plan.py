@@ -11,7 +11,7 @@ from dataclasses import replace
 
 from app.errors import AppError, ErrorCode
 from app.harness.contracts import PlanArtifact, TaskSessionState, validate_plan_artifact
-from app.harness.orchestration.budget import Budget, from_dict
+from app.harness.orchestration.budget import Budget
 from app.harness.orchestration.router import short_tool_names
 from app.harness.prompts import parse_plan_protocol
 from app.harness.skills import DISABLED_SKILLS
@@ -152,13 +152,20 @@ def build_plan(raw: str, fail_reason: str = "") -> PlanArtifact:
 
 
 def budget_for_plan(plan: PlanArtifact, base: Budget | None = None) -> Budget:
-    """按 plan.budget 派生预算（count-only，OR-5）；缺省回退默认预算。"""
-    plan_budget = plan.budget or {}
-    base_budget = base or from_dict({})
-    return Budget(
-        model_calls=int(plan_budget.get("model_calls", base_budget.model_calls)),
-        tool_turns=int(plan_budget.get("tool_turns", base_budget.tool_turns)),
+    """按步骤数统一派生预算（count-only，OR-5）。
+
+    不信任模型在 plan.budget 中给出的数值：LLM 规划路径让模型自报预算，
+    实测模型给 2/2 这类远小于 native 实际消耗的值，导致多步任务中途
+    BUDGET_EXCEEDED。预算统一由平台按 4 + steps*3 计算（上限 20）。
+    """
+    raw_steps = plan.slots.get("steps") if isinstance(plan.slots, dict) else None
+    step_count = (
+        len([s for s in raw_steps if str(s).strip()])
+        if isinstance(raw_steps, list | tuple)
+        else 0
     )
+    calls = min(20, max(6, 4 + step_count * 3))
+    return Budget(model_calls=calls, tool_turns=calls)
 
 
 def task_state_from_plan(plan: PlanArtifact) -> TaskSessionState:
