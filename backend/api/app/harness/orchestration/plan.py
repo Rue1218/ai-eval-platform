@@ -114,10 +114,10 @@ def _l0_fallback(raw: str) -> PlanArtifact | None:
         delivery="confirm" if needs_confirm else "chat",
         budget={
             # native 模式每个工具步骤需 2 次模型调用（决策 + 回填后继续），
-            # 再加规划/路由/最终总结的固定开销；实测 4 步任务需 ~9 次，
-            # 旧公式 2+steps 必然 BUDGET_EXCEEDED（上限 12 兜底防失控）。
-            "model_calls": min(12, max(4, 3 + len(steps) * 2)),
-            "tool_turns": min(12, max(4, 3 + len(steps) * 2)),
+            # 加规划/路由/总结固定开销后，4 步任务实测 ≥12 次；公式按
+            # 4 + steps*3 派生、上限 20（plan 任务本就多轮，防失控由上限保障）。
+            "model_calls": min(20, max(6, 4 + len(steps) * 3)),
+            "tool_turns": min(20, max(6, 4 + len(steps) * 3)),
         },
         allows_replan=True,
         notes="L0 规则降级产物，需复核；步骤："
