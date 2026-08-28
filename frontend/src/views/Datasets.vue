@@ -3,7 +3,7 @@
     <!-- RAG 模式提示面板 -->
     <div v-if="modeStore.mode === 'rag'" class="mode-context-panel">
       <div class="mode-icon-wrapper">
-        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
           <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5Z" />
           <path d="M6 6h10" />
           <path d="M6 10h10" />
@@ -11,7 +11,7 @@
       </div>
       <h2>RAG 评测请使用知识库与黄金 QA</h2>
       <p>基准数据集主要服务于大模型通用能力评测与对比。当前模式下，请前往知识库工作台管理文档分块、检索配置与黄金 QA 资产。</p>
-      <router-link to="/kb" class="btn btn-primary btn-sm">进入知识库工作台 →</router-link>
+      <router-link to="/kb" class="btn btn-primary btn-md">进入知识库工作台 →</router-link>
     </div>
 
     <div v-else class="nordic-layout" :style="{ '--tree-w': treeWidth + 'px' }">
@@ -20,7 +20,7 @@
         <div class="sidebar-header">
           <div class="sidebar-title-row">
             <div class="sidebar-title">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="title-icon">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="title-icon">
                 <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
               </svg>
               <span>数据集资源</span>
@@ -30,7 +30,7 @@
                 + 合成
               </button>
               <button class="btn btn-ghost-subtle btn-xs" title="上传 JSONL / CSV 数据集文件" aria-label="上传数据集文件" @click="openUploadModal(null)">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
                   <polyline points="17 8 12 3 7 8" />
                   <line x1="12" y1="3" x2="12" y2="15" />
@@ -42,7 +42,7 @@
 
           <!-- 搜索输入框 -->
           <div class="search-box">
-            <svg class="search-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <circle cx="11" cy="11" r="8" />
               <line x1="21" y1="21" x2="16.65" y2="16.65" />
             </svg>
@@ -62,11 +62,11 @@
               @contextmenu.prevent.stop="openCtxMenu($event, 'folder', folder.id)"
             >
               <span class="chevron-icon" :class="{ rotated: folder.open }">
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
                   <polyline points="9 18 15 12 9 6" />
                 </svg>
               </span>
-              <svg class="folder-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <svg class="folder-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                 <path v-if="folder.open" d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" />
                 <path v-else d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
               </svg>
@@ -86,12 +86,12 @@
                 @contextmenu.prevent.stop="openCtxMenu($event, 'file', item.id)"
               >
                 <span v-if="item.isGoldQa" class="file-icon gold-qa" title="黄金 QA">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
                     <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
                   </svg>
                 </span>
                 <span v-else class="file-icon dataset" title="基准数据集">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
                     <polyline points="14 2 14 8 20 8" />
                   </svg>
@@ -104,7 +104,7 @@
           </div>
 
           <div v-if="!filteredFolders.length" class="tree-empty">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="empty-icon">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="empty-icon">
               <circle cx="11" cy="11" r="8" />
               <line x1="21" y1="21" x2="16.65" y2="16.65" />
             </svg>
@@ -150,7 +150,7 @@
 
             <!-- 表格内即时搜索过滤框 (Instant Grid Filter) -->
             <div v-if="!isGoldQaActive" class="table-search-box">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="table-search-icon">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="table-search-icon">
                 <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
               </svg>
               <input v-model="gridSearch" class="table-search-input" placeholder="在当前表中极速筛选 (⌘F)..." aria-label="在当前表中极速筛选" />
@@ -162,8 +162,8 @@
 
             <!-- 右侧操作组 -->
             <div v-if="isGoldQaActive" class="toolbar-action-group">
-              <button class="btn btn-primary btn-sm" @click="openRagDrawer">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <button class="btn btn-primary btn-md" @click="openRagDrawer">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <polygon points="5 3 19 12 5 21 5 3" />
                 </svg>
                 发起 RAG 评测
@@ -172,32 +172,32 @@
 
             <div v-else class="toolbar-action-group">
               <div class="action-btn-group">
-                <button class="btn btn-secondary btn-sm" aria-label="新增表格行" @click="addRow">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
+                <button class="btn btn-secondary btn-md" aria-label="新增表格行" @click="addRow">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
                   新增行
                 </button>
-                <button class="btn btn-secondary btn-sm" aria-label="新增自定义扩展列" @click="openAddColModal">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
+                <button class="btn btn-secondary btn-md" aria-label="新增自定义扩展列" @click="openAddColModal">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
                   新增列
                 </button>
               </div>
 
               <div class="action-btn-group">
-                <button class="btn btn-secondary btn-sm" aria-label="打开数据自动合成抽屉" @click="openAiGenDrawer">
+                <button class="btn btn-secondary btn-md" aria-label="打开数据自动合成抽屉" @click="openAiGenDrawer">
                   数据合成向导
                 </button>
-                <button class="btn btn-secondary btn-sm" :disabled="pendingCount === 0" title="为缺失问句或答案的行自动推导补全" aria-label="自动补全缺失行" @click="openAiFillModal">
+                <button class="btn btn-secondary btn-md" :disabled="pendingCount === 0" title="为缺失问句或答案的行自动推导补全" aria-label="自动补全缺失行" @click="openAiFillModal">
                   批量补全缺失行
                 </button>
               </div>
 
               <div class="action-btn-group">
-                <button class="btn btn-secondary btn-sm" title="导出为 JSONL 文件" aria-label="导出 JSONL 文件" @click="exportJsonl">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
+                <button class="btn btn-secondary btn-md" title="导出为 JSONL 文件" aria-label="导出 JSONL 文件" @click="exportJsonl">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
                   导出 JSONL
                 </button>
                 <button
-                  class="btn btn-save btn-sm"
+                  class="btn btn-save btn-md"
                   :class="{ dirty: hasUnsavedChanges, saved: justSaved }"
                   :disabled="!hasUnsavedChanges || savingRows"
                   title="快捷键 Ctrl/⌘ + S"
@@ -210,8 +210,8 @@
                 </button>
               </div>
 
-              <button class="btn btn-primary btn-sm" aria-label="发起基准评测任务" @click="openLaunchDrawer">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <button class="btn btn-primary btn-md" aria-label="发起基准评测任务" @click="openLaunchDrawer">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <polygon points="5 3 19 12 5 21 5 3" />
                 </svg>
                 发起基准评测
@@ -228,14 +228,14 @@
             <div class="grow"></div>
 
             <div class="batch-actions">
-              <button class="btn btn-secondary btn-sm" aria-label="导出选中行 JSONL" @click="exportSelectedRows">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
+              <button class="btn btn-secondary btn-md" aria-label="导出选中行 JSONL" @click="exportSelectedRows">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
                 导出选中 JSONL
               </button>
-              <button class="btn btn-danger btn-sm" aria-label="批量删除勾选行" @click="batchDeleteRows">
+              <button class="btn btn-danger btn-md" aria-label="批量删除勾选行" @click="batchDeleteRows">
                 批量删除 ({{ selectedCount }})
               </button>
-              <button class="btn btn-ghost btn-sm" aria-label="取消选择" @click="uncheckAllRows">
+              <button class="btn btn-ghost btn-md" aria-label="取消选择" @click="uncheckAllRows">
                 取消选择
               </button>
             </div>
@@ -298,7 +298,7 @@
           </div>
         </div>
 
-        <!-- 3. 数据表格：高性能虚拟网格 + 键盘流 (Hyper-Speed Virtual Grid) -->
+        <!-- 3. 数据表格：高性能虚拟网格 + 居中自定义多选框 (Hyper-Speed Virtual Grid) -->
         <div ref="tableContainerRef" class="table-container custom-scroll" tabindex="0" @scroll="onTableScroll">
           <!-- 顶部虚拟占位 -->
           <div v-if="virtualTopPad > 0" :style="{ height: virtualTopPad + 'px' }"></div>
@@ -306,16 +306,20 @@
           <table class="nordic-table">
             <thead>
               <tr>
-                <th class="th-chk" style="width: 40px">
-                  <input type="checkbox" :checked="allRowsChecked" class="clean-checkbox" aria-label="全选所有行" @change="toggleAllRows" />
+                <th class="th-chk" style="width: 48px" title="全选所有行" @click.stop="toggleAllRowsDirect">
+                  <div class="clean-chk-box" :class="{ checked: allRowsChecked }" role="checkbox" :aria-checked="allRowsChecked">
+                    <svg v-if="allRowsChecked" class="chk-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  </div>
                 </th>
-                <th style="width: 60px">#</th>
-                <th style="min-width: 250px">测试问句 (Question) <span class="req-star">*</span></th>
-                <th style="min-width: 280px">标准参考答案 (Reference) <span class="req-star">*</span></th>
-                <th style="min-width: 170px">{{ isGoldQaActive ? '预期文档 IDs' : '上下文 (Context)' }}</th>
+                <th style="width: 64px">#</th>
+                <th style="min-width: 260px">测试问句 (Question) <span class="req-star">*</span></th>
+                <th style="min-width: 290px">标准参考答案 (Reference) <span class="req-star">*</span></th>
+                <th style="min-width: 180px">{{ isGoldQaActive ? '预期文档 IDs' : '上下文 (Context)' }}</th>
                 <template v-if="!isGoldQaActive">
-                  <th style="min-width: 110px">业务标签</th>
-                  <th style="min-width: 85px">难度</th>
+                  <th style="min-width: 120px">业务标签</th>
+                  <th style="min-width: 90px">难度</th>
                 </template>
                 <th v-for="col in customCols" :key="col.key" class="custom-th" style="min-width: 120px">
                   <div class="th-flex">
@@ -323,8 +327,8 @@
                     <button class="th-del-btn" title="删除该列" :aria-label="`删除扩展列 ${col.name}`" @click.stop="removeCustomCol(col.key)">✕</button>
                   </div>
                 </th>
-                <th style="width: 88px">状态</th>
-                <th style="width: 76px; text-align: right">操作</th>
+                <th style="width: 92px">状态</th>
+                <th style="width: 80px; text-align: right">操作</th>
               </tr>
             </thead>
 
@@ -338,7 +342,7 @@
                 </td>
               </tr>
 
-              <!-- 虚拟切片数据行 -->
+              <!-- 虚拟切片数据行 (50px 舒适大行高) -->
               <tr
                 v-for="(r, virtualIdx) in virtualRenderRows"
                 v-else
@@ -352,9 +356,13 @@
                 @contextmenu.prevent="openCtxMenu($event, 'row', '', getOriginalRowIndex(r))"
                 @dblclick="openRowEditModal(getOriginalRowIndex(r))"
               >
-                <!-- 勾选列 -->
-                <td class="td-chk" :class="{ 'cell-cursor': isCellCursor(r, 'chk') }" @click="setCellCursor(r, 'chk')">
-                  <input v-model="r.checked" type="checkbox" class="clean-checkbox" :aria-label="`勾选第 ${r.row_no} 行`" />
+                <!-- 居中自定义多选框列 (支持直接点击与 Shift 连选) -->
+                <td class="td-chk" :class="{ 'cell-cursor': isCellCursor(r, 'chk') }" @click.stop="handleRowCheckClick(r, $event)">
+                  <div class="clean-chk-box" :class="{ checked: r.checked }" :title="`勾选第 ${r.row_no} 行（支持 Shift 连选）`" role="checkbox" :aria-checked="r.checked">
+                    <svg v-if="r.checked" class="chk-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  </div>
                 </td>
 
                 <!-- 行号 -->
@@ -362,7 +370,7 @@
                   {{ r.row_no }}
                 </td>
 
-                <!-- 测试问句 -->
+                <!-- 测试问句 (14px 舒适字阶) -->
                 <td class="cell-edit" :class="{ 'cell-invalid': !r.q.trim(), 'cell-cursor': isCellCursor(r, 'q') }" @click="handleCellClick(r, 'q')">
                   <input
                     v-if="editingCell?.row === r && editingCell?.field === 'q'"
@@ -375,10 +383,10 @@
                     @keyup.enter="finishEditing"
                     @keyup.esc="cancelEditing"
                   />
-                  <div v-else class="cell-content" :class="{ empty: !r.q.trim() }" v-html="highlightMatch(r.q || '（空问句 · 点击录入）')"></div>
+                  <div v-else class="cell-content primary-text" :class="{ empty: !r.q.trim() }" v-html="highlightMatch(r.q || '（空问句 · 点击录入）')"></div>
                 </td>
 
-                <!-- 参考答案 -->
+                <!-- 参考答案 (14px 舒适字阶) -->
                 <td class="cell-edit" :class="{ 'cell-invalid': !r.r.trim(), 'cell-cursor': isCellCursor(r, 'r') }" @click="handleCellClick(r, 'r')">
                   <input
                     v-if="editingCell?.row === r && editingCell?.field === 'r'"
@@ -480,10 +488,10 @@
                 <td class="td-actions">
                   <div class="action-links">
                     <button class="icon-link" title="详细编辑" :aria-label="`详细编辑第 ${r.row_no} 行`" @click.stop="openRowEditModal(getOriginalRowIndex(r))">
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
                     </button>
                     <button class="icon-link danger" title="删除行" :aria-label="`删除第 ${r.row_no} 行`" @click.stop="deleteRow(getOriginalRowIndex(r))">
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
                     </button>
                   </div>
                 </td>
@@ -511,7 +519,7 @@
       <main v-else class="nordic-main empty-main">
         <div class="empty-box">
           <div class="empty-icon-wrapper">
-            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
               <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
               <polyline points="14 2 14 8 20 8" />
             </svg>
@@ -519,13 +527,13 @@
           <h3>尚未选择或创建数据集</h3>
           <p>你可以上传现有的 JSONL / CSV 评测集，或使用数据合成向导进行批量测试样本扩写。</p>
           <div class="empty-buttons">
-            <button class="btn btn-secondary" @click="openUploadModal(null)">
+            <button class="btn btn-secondary btn-md" @click="openUploadModal(null)">
               上传已有文件
             </button>
-            <button class="btn btn-primary" @click="createEmptyDataset(() => openAiGenDrawer())">
+            <button class="btn btn-primary btn-md" @click="createEmptyDataset(() => openAiGenDrawer())">
               数据合成向导
             </button>
-            <button class="btn btn-ghost" @click="createEmptyDataset()">
+            <button class="btn btn-ghost btn-md" @click="createEmptyDataset()">
               + 新建空数据集
             </button>
           </div>
@@ -625,7 +633,7 @@
 
           <div class="field">
             <label class="field-label">生成字段目标</label>
-            <div class="row wrap" style="gap: 16px; font-size: 13px">
+            <div class="row wrap" style="gap: 16px; font-size: 13.5px">
               <n-checkbox v-model:checked="aiGen.genRef">标准答案 Reference</n-checkbox>
               <n-checkbox v-model:checked="aiGen.genCtx">注入上下文 Context</n-checkbox>
               <n-checkbox v-model:checked="aiGen.genTags">业务标签 Tags</n-checkbox>
@@ -635,14 +643,20 @@
 
         <div v-show="aiGen.step === 2" class="drawer-body">
           <div class="row-between mb8">
-            <span class="bold small">候选项列表 (共 {{ aiGen.candidates.length }} 条，可就地微调)</span>
+            <span class="bold" style="font-size: 13.5px">候选项列表 (共 {{ aiGen.candidates.length }} 条，可就地微调)</span>
             <button class="link-btn" @click="toggleAllCandidates">全选 / 全不选</button>
           </div>
           <div class="preview-box custom-scroll">
             <table class="nordic-table preview-table">
               <thead>
                 <tr>
-                  <th style="width: 32px"><input type="checkbox" :checked="aiAllSelected" @change="toggleAllCandidates" /></th>
+                  <th class="th-chk" style="width: 40px" title="全选 / 全不选" @click.stop="toggleAllCandidates">
+                    <div class="clean-chk-box" :class="{ checked: aiAllSelected }">
+                      <svg v-if="aiAllSelected" class="chk-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                    </div>
+                  </th>
                   <th style="min-width: 180px">测试问句</th>
                   <th style="min-width: 200px">标准参考答案</th>
                   <th style="width: 80px">难度</th>
@@ -651,7 +665,13 @@
               </thead>
               <tbody>
                 <tr v-for="(cand, ci) in aiGen.candidates" :key="ci">
-                  <td><input v-model="cand.selected" type="checkbox" /></td>
+                  <td class="td-chk" @click.stop="cand.selected = !cand.selected">
+                    <div class="clean-chk-box" :class="{ checked: cand.selected }">
+                      <svg v-if="cand.selected" class="chk-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                    </div>
+                  </td>
                   <td><input v-model="cand.q" class="inline-input-clean" /></td>
                   <td><input v-model="cand.r" class="inline-input-clean" /></td>
                   <td><span class="diff-badge diff-中等">{{ cand.difficulty }}</span></td>
@@ -680,7 +700,7 @@
       </n-drawer-content>
     </n-drawer>
 
-    <!-- 弹窗与抽屉组件 -->
+    <!-- 弹窗与抽屉组件 (全居中显示) -->
     <UploadDatasetModal
       v-model:show="showUploadModal"
       :dataset="datasetForUpload"
@@ -704,7 +724,7 @@
       @clickoutside="closeCtxMenu"
     />
 
-    <n-modal v-model:show="rowEdit.show" preset="card" :title="`编辑样本 #${rowEdit.rowNo}`" style="width: 620px; max-width: calc(100vw - 24px)">
+    <n-modal v-model:show="rowEdit.show" preset="card" :title="`编辑样本 #${rowEdit.rowNo}`" class="center-dialog-card" style="width: 660px; max-width: calc(100vw - 32px)">
       <div class="field">
         <label class="field-label">测试问句 (Question) <span class="req">*</span></label>
         <n-input v-model:value="rowEdit.q" type="textarea" :autosize="{ minRows: 3, maxRows: 6 }" placeholder="请输入测试问句" />
@@ -734,7 +754,7 @@
       </template>
     </n-modal>
 
-    <n-modal v-model:show="addCol.show" preset="card" title="新增数据扩展列" style="width: 440px; max-width: calc(100vw - 24px)">
+    <n-modal v-model:show="addCol.show" preset="card" title="新增数据扩展列" class="center-dialog-card" style="width: 440px; max-width: calc(100vw - 32px)">
       <div class="field">
         <label class="field-label">字段 Key (英文字母/下划线) <span class="req">*</span></label>
         <n-input v-model:value="addCol.key" class="mono" placeholder="如 category, topic" />
@@ -751,8 +771,8 @@
       </template>
     </n-modal>
 
-    <n-modal v-model:show="aiFill.show" preset="card" :title="`自动补全缺失字段 (${pendingCount} 行)`" style="width: 520px; max-width: calc(100vw - 24px)">
-      <p class="small" style="margin: 0 0 12px; color: var(--text-secondary)">
+    <n-modal v-model:show="aiFill.show" preset="card" :title="`自动补全缺失字段 (${pendingCount} 行)`" class="center-dialog-card" style="width: 540px; max-width: calc(100vw - 32px)">
+      <p class="small" style="margin: 0 0 12px; color: #52525B; font-size: 13px">
         系统将结合已有上下文及同数据集样本规律自动推导补全缺失的问句或标准答案。
       </p>
       <div class="field">
@@ -762,7 +782,7 @@
       <div class="form-row">
         <div class="field">
           <label class="field-label">补全范围</label>
-          <div class="row" style="gap: 14px; font-size: 13px; margin-top: 4px">
+          <div class="row" style="gap: 14px; font-size: 13.5px; margin-top: 4px">
             <n-checkbox v-model:checked="aiFill.scopeQ">填补缺失问句</n-checkbox>
             <n-checkbox v-model:checked="aiFill.scopeR">填补缺失答案</n-checkbox>
           </div>
@@ -778,7 +798,7 @@
       </template>
     </n-modal>
 
-    <n-modal v-model:show="nameDialog.show" preset="card" :title="nameDialog.title" style="width: 420px; max-width: calc(100vw - 24px)">
+    <n-modal v-model:show="nameDialog.show" preset="card" :title="nameDialog.title" class="center-dialog-card" style="width: 440px; max-width: calc(100vw - 32px)">
       <div class="field">
         <label class="field-label">{{ nameDialog.label }} <span class="req">*</span></label>
         <n-input v-model:value="nameDialog.value" placeholder="请输入名称" autofocus @keyup.enter="confirmNameDialog" />
@@ -850,7 +870,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, h } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage, useDialog, type DropdownOption } from 'naive-ui'
 import { api } from '../api/http'
@@ -886,6 +906,26 @@ interface AiCandidate {
   c: string
   tags: string
   difficulty: string
+}
+
+// ─── 右键菜单 SVG 图标辅助渲染 ───
+function renderIcon(pathD: string | string[], strokeColor?: string) {
+  return () =>
+    h(
+      'svg',
+      {
+        width: 14,
+        height: 14,
+        viewBox: '0 0 24 24',
+        fill: 'none',
+        stroke: strokeColor || 'currentColor',
+        strokeWidth: 2,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+        style: { display: 'inline-block', verticalAlign: '-2px', marginRight: '6px' },
+      },
+      Array.isArray(pathD) ? pathD.map(p => h('path', { d: p })) : [h('path', { d: pathD })],
+    )
 }
 
 const message = useMessage()
@@ -939,7 +979,7 @@ function resetTreeWidth() {
   message.info('侧栏宽度已复位为 280px')
 }
 
-const drawerWidth = computed(() => (typeof window !== 'undefined' && window.innerWidth <= 720 ? '100%' : 600))
+const drawerWidth = computed(() => (typeof window !== 'undefined' && window.innerWidth <= 720 ? '100%' : 640))
 
 // ─── 黄金 QA 资产 ───
 const goldQas = ref<GoldQA[]>([])
@@ -973,7 +1013,7 @@ const allFolders = computed<TreeFolder[]>(() =>
 
 const pendingCount = computed(() => sampleRows.value.filter(row => !row.q.trim() || !row.r.trim()).length)
 
-// ─── 即时搜索过滤 + 虚拟滚动 (Instant Filter & Virtual Scrolling) ───
+// ─── 即时搜索过滤 + 50px 虚拟滚动 (Instant Filter & 50px Virtual Scrolling) ───
 const displayedRows = computed(() => {
   let list = sampleRows.value
   if (filterPendingOnly.value) {
@@ -999,10 +1039,10 @@ function getDisplayedIndex(row: EditableDatasetRow): number {
   return displayedRows.value.findIndex(r => r.row_no === row.row_no)
 }
 
-// 虚拟滚动状态
-const ROW_HEIGHT = 41
+// 虚拟滚动状态 (50px 舒适行高)
+const ROW_HEIGHT = 50
 const scrollTop = ref(0)
-const viewportHeight = ref(600)
+const viewportHeight = ref(650)
 const BUFFER_SIZE = 8
 
 const startIndex = computed(() => Math.max(0, Math.floor(scrollTop.value / ROW_HEIGHT) - BUFFER_SIZE))
@@ -1012,14 +1052,14 @@ const virtualTopPad = computed(() => startIndex.value * ROW_HEIGHT)
 const virtualBottomPad = computed(() => Math.max(0, (displayedRows.value.length - endIndex.value) * ROW_HEIGHT))
 
 const virtualRenderRows = computed(() => {
-  if (displayedRows.value.length < 40) return displayedRows.value
+  if (displayedRows.value.length < 30) return displayedRows.value
   return displayedRows.value.slice(startIndex.value, endIndex.value)
 })
 
 function onTableScroll(e: Event) {
   const target = e.target as HTMLElement
   scrollTop.value = target.scrollTop
-  viewportHeight.value = target.clientHeight || 600
+  viewportHeight.value = target.clientHeight || 650
 }
 
 // 关键词高亮
@@ -1277,13 +1317,33 @@ function syncGoldQaTree(list: GoldQA[]) {
 const allRowsChecked = computed(() => sampleRows.value.length > 0 && sampleRows.value.every(row => row.checked))
 const selectedCount = computed(() => sampleRows.value.filter(row => row.checked).length)
 
-function toggleAllRows(e: Event) {
-  const checked = (e.target as HTMLInputElement).checked
-  sampleRows.value.forEach(row => { row.checked = checked })
+const lastCheckedIdx = ref<number>(-1)
+
+function toggleAllRowsDirect() {
+  const nextState = !allRowsChecked.value
+  sampleRows.value.forEach(row => { row.checked = nextState })
+}
+
+function handleRowCheckClick(r: EditableDatasetRow, e: MouseEvent) {
+  const currentIdx = getDisplayedIndex(r)
+  if (e.shiftKey && lastCheckedIdx.value !== -1 && lastCheckedIdx.value !== currentIdx) {
+    const start = Math.min(lastCheckedIdx.value, currentIdx)
+    const end = Math.max(lastCheckedIdx.value, currentIdx)
+    const targetState = !r.checked
+    for (let i = start; i <= end; i++) {
+      if (displayedRows.value[i]) {
+        displayedRows.value[i].checked = targetState
+      }
+    }
+  } else {
+    r.checked = !r.checked
+    lastCheckedIdx.value = currentIdx
+  }
 }
 
 function uncheckAllRows() {
   sampleRows.value.forEach(row => { row.checked = false })
+  lastCheckedIdx.value = -1
 }
 
 function batchDeleteRows() {
@@ -1532,49 +1592,50 @@ function closeCtxMenu() {
   ctxMenu.value.show = false
 }
 
+// ─── 右键菜单配齐 SVG 图标 ───
 const ctxMenuOptions = computed<DropdownOption[]>(() => {
   if (ctxMenu.value.type === 'file') {
     const isGoldQaNode = goldQas.value.some(g => g.id === ctxMenu.value.targetId)
     if (isGoldQaNode) {
       return [
-        { label: '发起 RAG 评测', key: 'eval' },
-        { label: '复制 gold_qa_id', key: 'copy-id' },
+        { label: '发起 RAG 评测', key: 'eval', icon: renderIcon('M5 3l14 9-14 9V3z', '#0F766E') },
+        { label: '复制 gold_qa_id', key: 'copy-id', icon: renderIcon(['M8 4v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7.242a2 2 0 0 0-.602-1.43L16.083 2.57A2 2 0 0 0 14.685 2H10a2 2 0 0 0-2 2z', 'M16 18v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h2']) },
       ]
     }
     const ds = datasets.value.find(item => item.id === ctxMenu.value.targetId)
     return [
-      { label: '发起评测', key: 'eval' },
-      { label: `上传新版本 (v${(ds?.version || 1) + 1})`, key: 'upload' },
-      { label: '补全缺失行', key: 'ai-fill' },
+      { label: '发起评测', key: 'eval', icon: renderIcon('M5 3l14 9-14 9V3z', '#0F766E') },
+      { label: `上传新版本 (v${(ds?.version || 1) + 1})`, key: 'upload', icon: renderIcon(['M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4', 'M17 8l-5-5-5 5', 'M12 3v12']) },
+      { label: '补全缺失行', key: 'ai-fill', icon: renderIcon(['M12 2v4', 'M12 18v4', 'M4.93 4.93l2.83 2.83', 'M16.24 16.24l2.83 2.83', 'M2 12h4', 'M18 12h4']) },
       { type: 'divider', key: 'd1' },
-      { label: '重命名', key: 'rename' },
-      { label: '复制数据集 ID', key: 'copy-id' },
-      { label: '导出 JSONL', key: 'export' },
+      { label: '重命名', key: 'rename', icon: renderIcon('M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z') },
+      { label: '复制数据集 ID', key: 'copy-id', icon: renderIcon(['M8 4v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7.242a2 2 0 0 0-.602-1.43L16.083 2.57A2 2 0 0 0 14.685 2H10a2 2 0 0 0-2 2z', 'M16 18v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h2']) },
+      { label: '导出 JSONL', key: 'export', icon: renderIcon(['M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4', 'M7 10l5 5 5-5', 'M12 15V3']) },
       { type: 'divider', key: 'd2' },
-      { label: '删除数据集', key: 'delete', props: { style: 'color: #DC2626' } },
+      { label: '删除数据集', key: 'delete', props: { style: 'color: #DC2626' }, icon: renderIcon(['M3 6h18', 'M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2'], '#DC2626') },
     ]
   }
   if (ctxMenu.value.type === 'folder') {
     return [
-      { label: '新建空数据集', key: 'new-dataset' },
-      { label: '新建子目录', key: 'new-folder' },
+      { label: '新建空数据集', key: 'new-dataset', icon: renderIcon(['M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z', 'M12 11v6', 'M9 14h6']) },
+      { label: '新建子目录', key: 'new-folder', icon: renderIcon('M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z') },
       { type: 'divider', key: 'd1' },
-      { label: '重命名目录', key: 'rename-folder' },
-      { label: '删除目录', key: 'delete-folder', props: { style: 'color: #DC2626' } },
+      { label: '重命名目录', key: 'rename-folder', icon: renderIcon('M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z') },
+      { label: '删除目录', key: 'delete-folder', props: { style: 'color: #DC2626' }, icon: renderIcon(['M3 6h18', 'M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2'], '#DC2626') },
     ]
   }
   const row = sampleRows.value[ctxMenu.value.rowIdx]
   return [
-    { label: '详细编辑', key: 'edit' },
-    { label: '补全本行', key: 'ai-fill-row' },
-    { label: '复制为 JSON', key: 'copy-json' },
-    { label: row?.checked ? '取消勾选' : '勾选本行', key: 'toggle-check' },
+    { label: '详细编辑', key: 'edit', icon: renderIcon(['M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7', 'M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z']) },
+    { label: '补全本行', key: 'ai-fill-row', icon: renderIcon(['M12 2v4', 'M12 18v4', 'M4.93 4.93l2.83 2.83', 'M16.24 16.24l2.83 2.83']) },
+    { label: '复制为 JSON', key: 'copy-json', icon: renderIcon(['M8 4v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7.242a2 2 0 0 0-.602-1.43L16.083 2.57A2 2 0 0 0 14.685 2H10a2 2 0 0 0-2 2z', 'M16 18v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h2']) },
+    { label: row?.checked ? '取消勾选' : '勾选本行', key: 'toggle-check', icon: renderIcon(['M9 11l3 3L22 4', 'M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11']) },
     { type: 'divider', key: 'd1' },
-    { label: '上方插入行', key: 'insert-above' },
-    { label: '下方插入行', key: 'insert-below' },
-    { label: '创建副本', key: 'duplicate-row' },
+    { label: '上方插入行', key: 'insert-above', icon: renderIcon(['M12 19V5', 'M5 12l7-7 7 7']) },
+    { label: '下方插入行', key: 'insert-below', icon: renderIcon(['M12 5v14', 'M19 12l-7 7-7-7']) },
+    { label: '创建副本', key: 'duplicate-row', icon: renderIcon(['M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2', 'M9 14l2 2 4-4']) },
     { type: 'divider', key: 'd2' },
-    { label: '删除本行', key: 'delete-row', props: { style: 'color: #DC2626' } },
+    { label: '删除本行', key: 'delete-row', props: { style: 'color: #DC2626' }, icon: renderIcon(['M3 6h18', 'M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2'], '#DC2626') },
   ]
 })
 
@@ -2223,37 +2284,38 @@ watch(() => modeStore.mode, (mode) => {
   display: flex;
   flex-direction: column;
   outline: none;
+  font-size: 14px;
 }
 
 .mode-context-panel {
-  max-width: 600px;
+  max-width: 620px;
   margin: 64px auto;
-  padding: 36px 32px;
+  padding: 40px 36px;
   text-align: center;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 14px;
+  gap: 16px;
   background: #FCFCFA;
   border: 1px solid #E7E7E2;
   border-radius: 12px;
 }
 .mode-icon-wrapper {
-  width: 52px;
-  height: 52px;
-  border-radius: 12px;
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
   background: #F4F4F0;
   color: #1E293B;
   display: grid;
   place-items: center;
 }
 .mode-context-panel h2 {
-  font-size: 18px;
+  font-size: 19px;
   font-weight: 600;
   color: #18181B;
 }
 .mode-context-panel p {
-  font-size: 13.5px;
+  font-size: 14px;
   color: #52525B;
   line-height: 1.6;
 }
@@ -2282,21 +2344,21 @@ watch(() => modeStore.mode, (mode) => {
 }
 
 .sidebar-header {
-  padding: 12px 14px;
+  padding: 14px 16px;
   border-bottom: 1px solid #E7E7E2;
 }
 .sidebar-title-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
 }
 .sidebar-title {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   font-weight: 600;
-  font-size: 12.5px;
+  font-size: 14px;
   color: #18181B;
 }
 .title-icon {
@@ -2304,13 +2366,13 @@ watch(() => modeStore.mode, (mode) => {
 }
 .sidebar-actions {
   display: flex;
-  gap: 4px;
+  gap: 5px;
 }
 
 .btn-xs {
-  min-height: 24px;
-  padding: 1px 7px;
-  font-size: 11px;
+  min-height: 25px;
+  padding: 2px 8px;
+  font-size: 12px;
   border-radius: 4px;
 }
 .btn-ghost-subtle {
@@ -2330,16 +2392,16 @@ watch(() => modeStore.mode, (mode) => {
 }
 .search-icon {
   position: absolute;
-  left: 8px;
+  left: 9px;
   color: #A1A1AA;
   pointer-events: none;
 }
 .search-input {
   width: 100%;
-  height: 28px;
-  padding-left: 26px;
-  padding-right: 22px;
-  font-size: 12px;
+  height: 30px;
+  padding-left: 28px;
+  padding-right: 24px;
+  font-size: 13px;
   border-radius: 6px;
   border: 1px solid #E2E2DC;
   background: #FFFFFF;
@@ -2352,11 +2414,11 @@ watch(() => modeStore.mode, (mode) => {
 }
 .clear-search-btn {
   position: absolute;
-  right: 6px;
+  right: 7px;
   background: none;
   border: none;
   color: #A1A1AA;
-  font-size: 11px;
+  font-size: 12px;
   cursor: pointer;
   padding: 2px;
 }
@@ -2367,19 +2429,19 @@ watch(() => modeStore.mode, (mode) => {
 .tree-content {
   flex: 1;
   overflow-y: auto;
-  padding: 6px;
+  padding: 8px;
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 2px;
 }
 
 .tree-node {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 5px 8px;
+  gap: 7px;
+  padding: 6px 10px;
   border-radius: 6px;
-  font-size: 12.5px;
+  font-size: 13.5px;
   cursor: pointer;
   color: #52525B;
   transition: background-color 0.1s ease, color 0.1s ease;
@@ -2399,12 +2461,13 @@ watch(() => modeStore.mode, (mode) => {
 .folder-node {
   font-weight: 600;
   color: #27272A;
+  font-size: 14px;
 }
 .folder-children {
-  padding-left: 14px;
+  padding-left: 16px;
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 2px;
 }
 
 .chevron-icon {
@@ -2437,8 +2500,8 @@ watch(() => modeStore.mode, (mode) => {
 }
 .version-badge {
   font-family: var(--font-mono);
-  font-size: 10px;
-  padding: 0 4px;
+  font-size: 11px;
+  padding: 1px 5px;
   border-radius: 3px;
   background: #EFEFEA;
   color: #71717A;
@@ -2448,23 +2511,23 @@ watch(() => modeStore.mode, (mode) => {
   color: #1E293B;
 }
 .pending-dot {
-  width: 5px;
-  height: 5px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: #D97706;
 }
 .node-badge {
   margin-left: auto;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
   color: #A1A1AA;
 }
 
 .tree-empty {
-  padding: 32px 14px;
+  padding: 36px 16px;
   text-align: center;
   color: #A1A1AA;
-  font-size: 11.5px;
+  font-size: 12.5px;
 }
 
 .sidebar-resizer {
@@ -2480,7 +2543,7 @@ watch(() => modeStore.mode, (mode) => {
 }
 .resizer-bar {
   width: 2px;
-  height: 20px;
+  height: 24px;
   border-radius: 1px;
   background: transparent;
 }
@@ -2502,10 +2565,10 @@ watch(() => modeStore.mode, (mode) => {
 
 /* 顶栏与就地置换 */
 .main-toolbar {
-  padding: 10px 18px;
+  padding: 12px 20px;
   border-bottom: 1px solid #E7E7E2;
   background: #FFFFFF;
-  min-height: 54px;
+  min-height: 58px;
   display: flex;
   align-items: center;
   transition: background-color 0.15s ease;
@@ -2519,58 +2582,58 @@ watch(() => modeStore.mode, (mode) => {
   display: flex;
   align-items: center;
   width: 100%;
-  gap: 12px;
+  gap: 14px;
   flex-wrap: wrap;
 }
 
 .toolbar-title-group {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 2px;
 }
 .title-row {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
 }
 .main-dataset-title {
-  font-size: 15px;
+  font-size: 17px;
   font-weight: 600;
   color: #18181B;
 }
 .version-tag {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 11.5px;
   font-weight: 500;
-  padding: 1px 6px;
+  padding: 1px 7px;
   border-radius: 4px;
   background: #F4F4F0;
   border: 1px solid #E7E7E2;
   color: #52525B;
 }
 .asset-type-badge {
-  font-size: 10.5px;
+  font-size: 11.5px;
   font-weight: 500;
-  padding: 1px 6px;
+  padding: 1px 7px;
   border-radius: 4px;
 }
 .type-dataset { background: #F0FDF4; color: #166534; border: 1px solid #DCFCE7; }
 .type-gold { background: #FEFCE8; color: #854D0E; border: 1px solid #FEF08A; }
 
 .status-badge-amber {
-  font-size: 10.5px;
-  padding: 1px 6px;
+  font-size: 11.5px;
+  padding: 1px 7px;
   border-radius: 4px;
   background: #FEF3C7;
   color: #92400E;
 }
 
 .breadcrumb-row {
-  font-size: 11px;
+  font-size: 12px;
   color: #A1A1AA;
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
 }
 .breadcrumb-row .cur {
   color: #71717A;
@@ -2581,21 +2644,21 @@ watch(() => modeStore.mode, (mode) => {
   position: relative;
   display: flex;
   align-items: center;
-  margin-left: 8px;
+  margin-left: 10px;
 }
 .table-search-icon {
   position: absolute;
-  left: 7px;
+  left: 8px;
   color: #A1A1AA;
   pointer-events: none;
 }
 .table-search-input {
-  width: 190px;
-  height: 26px;
-  padding-left: 24px;
-  padding-right: 48px;
-  font-size: 11.5px;
-  border-radius: 4px;
+  width: 210px;
+  height: 28px;
+  padding-left: 26px;
+  padding-right: 52px;
+  font-size: 12.5px;
+  border-radius: 5px;
   border: 1px solid #E2E2DC;
   background: #F8F8F5;
   color: #18181B;
@@ -2603,43 +2666,43 @@ watch(() => modeStore.mode, (mode) => {
   transition: all 0.12s ease;
 }
 .table-search-input:focus {
-  width: 240px;
+  width: 260px;
   background: #FFFFFF;
   border-color: #1E293B;
 }
 .grid-search-count {
   position: absolute;
   right: 18px;
-  font-size: 10px;
+  font-size: 11px;
   color: #A1A1AA;
 }
 
 .toolbar-action-group {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   flex-wrap: wrap;
 }
 .action-btn-group {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
 }
 
-/* 按钮通用 */
+/* 按钮通用 (字号 13px) */
 .btn {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  font-size: 12px;
+  gap: 6px;
+  font-size: 13px;
   font-weight: 500;
-  border-radius: 5px;
+  border-radius: 6px;
   cursor: pointer;
   transition: all 0.12s ease;
 }
-.btn-sm {
-  min-height: 28px;
-  padding: 2px 10px;
+.btn-md {
+  min-height: 30px;
+  padding: 3px 12px;
 }
 .btn-primary {
   background: #1E293B;
@@ -2695,9 +2758,9 @@ watch(() => modeStore.mode, (mode) => {
   font-weight: 700;
 }
 .shortcut-key {
-  font-size: 9.5px;
+  font-size: 10px;
   font-family: var(--font-mono);
-  padding: 0 3px;
+  padding: 0 4px;
   border-radius: 2px;
   background: rgba(0, 0, 0, 0.08);
   color: inherit;
@@ -2712,7 +2775,7 @@ watch(() => modeStore.mode, (mode) => {
   align-items: center;
 }
 .batch-count {
-  font-size: 13px;
+  font-size: 14px;
   color: #18181B;
 }
 .batch-actions {
@@ -2723,18 +2786,18 @@ watch(() => modeStore.mode, (mode) => {
 
 /* ─── 指标与质检条 ─── */
 .metrics-strip {
-  padding: 6px 18px;
+  padding: 8px 20px;
   background: #F8F8F5;
   border-bottom: 1px solid #E7E7E2;
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-size: 12px;
+  gap: 12px;
+  font-size: 13px;
 }
 .strip-left {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   flex-wrap: wrap;
 }
 .strip-label {
@@ -2746,7 +2809,7 @@ watch(() => modeStore.mode, (mode) => {
 }
 .strip-divider {
   width: 1px;
-  height: 12px;
+  height: 14px;
   background: #D4D4D8;
 }
 
@@ -2765,8 +2828,8 @@ watch(() => modeStore.mode, (mode) => {
   font-weight: 600;
 }
 .filter-mark {
-  font-size: 10.5px;
-  padding: 0 4px;
+  font-size: 11px;
+  padding: 0 5px;
   border-radius: 3px;
   background: #FEF3C7;
 }
@@ -2778,14 +2841,14 @@ watch(() => modeStore.mode, (mode) => {
 .keyboard-flow-hint {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 11px;
+  gap: 10px;
+  font-size: 12px;
   color: #71717A;
 }
 .kbd-hint kbd {
   font-family: var(--font-mono);
-  font-size: 10px;
-  padding: 0 3px;
+  font-size: 11px;
+  padding: 1px 4px;
   border-radius: 3px;
   background: #EFEFEA;
   color: #3F3F46;
@@ -2795,23 +2858,23 @@ watch(() => modeStore.mode, (mode) => {
 .metric-control {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
 }
 .metric-label {
   color: #71717A;
-  font-size: 11.5px;
+  font-size: 12.5px;
 }
 .metric-select {
-  height: 24px;
-  font-size: 11.5px;
-  padding: 1px 6px;
+  height: 26px;
+  font-size: 12.5px;
+  padding: 1px 7px;
   border-radius: 4px;
   border: 1px solid #D4D4D8;
   background: #FFFFFF;
   color: #18181B;
 }
 
-/* ─── 表格：优雅行级横线流 + 键盘光标 ─── */
+/* ─── 表格：50px 舒适大行高 + 14px 字体 + 居中自定义多选框 ─── */
 .table-container {
   flex: 1;
   min-width: 0;
@@ -2829,30 +2892,70 @@ watch(() => modeStore.mode, (mode) => {
   top: 0;
   z-index: 5;
   background: #FFFFFF;
-  padding: 8px 10px;
-  font-size: 11.5px;
+  padding: 10px 12px;
+  font-size: 13px;
   font-weight: 600;
   color: #71717A;
   text-align: left;
   border-bottom: 1px solid #E7E7E2;
 }
 .nordic-table td {
-  padding: 8px 10px;
-  font-size: 12.5px;
+  padding: 10px 12px;
+  font-size: 14px;
   color: #18181B;
   vertical-align: middle;
   border-bottom: 1px solid #EFEFEA;
+  height: 50px;
 }
 
 .th-chk, .td-chk {
   text-align: center !important;
+  vertical-align: middle !important;
 }
-.clean-checkbox {
-  width: 14px;
-  height: 14px;
-  accent-color: #1E293B;
+
+/* ─── 居中自定义多选框 (Custom Styled Centered Checkbox) ─── */
+.clean-chk-wrap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
+  width: 22px;
+  height: 22px;
+  position: relative;
+  user-select: none;
+  vertical-align: middle;
 }
+.clean-chk-native {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+.clean-chk-box {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: 1.5px solid #D4D4D8;
+  background: #FFFFFF;
+  display: grid;
+  place-items: center;
+  transition: all 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+  color: transparent;
+}
+.clean-chk-wrap:hover .clean-chk-box {
+  border-color: #1E293B;
+  background: #F8F8F5;
+}
+.clean-chk-native:checked + .clean-chk-box {
+  background: #1E293B;
+  border-color: #1E293B;
+  color: #FFFFFF;
+}
+.clean-chk-native:focus-visible + .clean-chk-box {
+  box-shadow: 0 0 0 2px rgba(30, 41, 59, 0.2);
+}
+
 .req-star {
   color: #DC2626;
 }
@@ -2870,7 +2973,7 @@ watch(() => modeStore.mode, (mode) => {
   background: none;
   border: none;
   color: #A1A1AA;
-  font-size: 10px;
+  font-size: 11px;
   cursor: pointer;
   padding: 1px;
 }
@@ -2899,7 +3002,7 @@ watch(() => modeStore.mode, (mode) => {
 }
 
 .td-num {
-  font-size: 11px;
+  font-size: 12px;
   color: #A1A1AA;
 }
 
@@ -2907,46 +3010,51 @@ watch(() => modeStore.mode, (mode) => {
   cursor: text;
 }
 .cell-content {
-  min-height: 22px;
+  min-height: 24px;
   display: flex;
   align-items: center;
   word-break: break-word;
-  line-height: 1.45;
+  line-height: 1.5;
+  font-size: 14px;
+}
+.cell-content.primary-text {
+  font-weight: 500;
+  color: #18181B;
 }
 .cell-content.empty {
   color: #B45309;
   font-style: italic;
-  font-size: 12px;
+  font-size: 13px;
 }
 .cell-content.placeholder {
   color: #A1A1AA;
 }
 .cell-content.mono-sm {
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: 12.5px;
 }
 
 :deep(.highlight-match) {
   background: #FEF08A;
   color: #854D0E;
-  padding: 0 1px;
+  padding: 0 2px;
   border-radius: 2px;
 }
 
 .inline-input {
   width: 100%;
-  padding: 4px 6px;
+  padding: 5px 8px;
   font: inherit;
-  font-size: 12.5px;
+  font-size: 13.5px;
   background: #FFFFFF;
-  border: 1px solid #1E293B;
+  border: 1.5px solid #1E293B;
   border-radius: 4px;
   outline: none;
 }
 .inline-select {
-  height: 26px;
-  font-size: 11.5px;
-  padding: 1px 4px;
+  height: 28px;
+  font-size: 12.5px;
+  padding: 1px 6px;
   border-radius: 4px;
   border: 1px solid #1E293B;
   background: #FFFFFF;
@@ -2958,17 +3066,17 @@ watch(() => modeStore.mode, (mode) => {
 
 .tag-pill {
   display: inline-block;
-  padding: 0 6px;
-  border-radius: 3px;
+  padding: 1px 7px;
+  border-radius: 4px;
   background: #F4F4F0;
   color: #52525B;
-  font-size: 11px;
+  font-size: 12px;
 }
 .diff-badge {
   display: inline-block;
-  padding: 0 5px;
-  border-radius: 3px;
-  font-size: 10.5px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11.5px;
   font-weight: 500;
 }
 .diff-简单 { background: #F0FDF4; color: #166534; }
@@ -2976,22 +3084,22 @@ watch(() => modeStore.mode, (mode) => {
 .diff-高 { background: #FEF2F2; color: #991B1B; }
 
 .status-tag-green {
-  font-size: 10.5px;
+  font-size: 12px;
   color: #15803D;
   font-weight: 500;
 }
 .status-tag-amber {
-  font-size: 10.5px;
+  font-size: 12px;
   color: #B45309;
   font-weight: 500;
 }
 .status-tag-clean {
   display: inline-block;
-  padding: 2px 8px;
+  padding: 3px 10px;
   border-radius: 4px;
   background: #F4F4F0;
   color: #18181B;
-  font-size: 11.5px;
+  font-size: 12.5px;
 }
 
 .td-actions {
@@ -3000,8 +3108,8 @@ watch(() => modeStore.mode, (mode) => {
 }
 .action-links {
   display: inline-flex;
-  gap: 2px;
-  opacity: 0.3;
+  gap: 3px;
+  opacity: 0.35;
   transition: opacity 0.1s ease;
 }
 .data-row:hover .action-links {
@@ -3010,8 +3118,8 @@ watch(() => modeStore.mode, (mode) => {
 .icon-link {
   background: none;
   border: none;
-  padding: 3px;
-  border-radius: 3px;
+  padding: 4px;
+  border-radius: 4px;
   color: #71717A;
   cursor: pointer;
   display: grid;
@@ -3027,12 +3135,12 @@ watch(() => modeStore.mode, (mode) => {
 }
 
 .empty-cell {
-  padding: 48px 16px;
+  padding: 56px 20px;
   text-align: center;
   color: #A1A1AA;
 }
 .empty-message {
-  font-size: 13px;
+  font-size: 14px;
 }
 
 /* ─── 空态 ─── */
@@ -3042,17 +3150,17 @@ watch(() => modeStore.mode, (mode) => {
   padding: 48px;
 }
 .empty-box {
-  max-width: 460px;
+  max-width: 480px;
   text-align: center;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
 }
 .empty-icon-wrapper {
-  width: 64px;
-  height: 64px;
-  border-radius: 12px;
+  width: 68px;
+  height: 68px;
+  border-radius: 14px;
   background: #F4F4F0;
   border: 1px solid #E7E7E2;
   color: #71717A;
@@ -3060,37 +3168,37 @@ watch(() => modeStore.mode, (mode) => {
   place-items: center;
 }
 .empty-box h3 {
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 600;
   color: #18181B;
 }
 .empty-box p {
-  font-size: 13px;
+  font-size: 14px;
   color: #71717A;
   line-height: 1.5;
 }
 .empty-buttons {
   display: flex;
-  gap: 8px;
+  gap: 10px;
   flex-wrap: wrap;
   justify-content: center;
-  margin-top: 6px;
+  margin-top: 8px;
 }
 
 /* ─── 抽屉内样式 ─── */
 .drawer-step-bar {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 20px;
-  padding-bottom: 14px;
+  gap: 12px;
+  margin-bottom: 22px;
+  padding-bottom: 16px;
   border-bottom: 1px solid #E7E7E2;
 }
 .step-badge {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12.5px;
+  gap: 7px;
+  font-size: 13.5px;
   color: #A1A1AA;
 }
 .step-badge.active {
@@ -3101,13 +3209,13 @@ watch(() => modeStore.mode, (mode) => {
   color: #15803D;
 }
 .step-idx {
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
   background: #F4F4F0;
   display: grid;
   place-items: center;
-  font-size: 10.5px;
+  font-size: 11px;
   font-family: var(--font-mono);
 }
 .step-badge.active .step-idx {
@@ -3127,20 +3235,20 @@ watch(() => modeStore.mode, (mode) => {
 .drawer-body {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 16px;
 }
 
 .tab-pill-group {
   display: flex;
   gap: 6px;
   background: #F4F4F0;
-  padding: 3px;
+  padding: 4px;
   border-radius: 6px;
 }
 .tab-pill {
   flex: 1;
-  padding: 4px 8px;
-  font-size: 12px;
+  padding: 5px 10px;
+  font-size: 13px;
   border: none;
   background: transparent;
   color: #71717A;
@@ -3156,27 +3264,27 @@ watch(() => modeStore.mode, (mode) => {
 }
 
 .divider-title {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   color: #71717A;
-  margin: 6px 0 2px;
+  margin: 8px 0 3px;
 }
 
 .preview-box {
-  max-height: 400px;
+  max-height: 420px;
   overflow-y: auto;
   border: 1px solid #E7E7E2;
   border-radius: 6px;
 }
 .preview-table td {
-  padding: 6px 8px;
+  padding: 8px 10px;
 }
 .inline-input-clean {
   width: 100%;
-  padding: 2px 4px;
+  padding: 3px 6px;
   border: 1px solid transparent;
   background: transparent;
-  font-size: 12px;
+  font-size: 13px;
 }
 .inline-input-clean:focus {
   border-color: #1E293B;
@@ -3194,18 +3302,18 @@ watch(() => modeStore.mode, (mode) => {
 
 /* ─── 滚动条 ─── */
 .custom-scroll::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
+  width: 6px;
+  height: 6px;
 }
 .custom-scroll::-webkit-scrollbar-track {
   background: transparent;
 }
 .custom-scroll::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.12);
+  background: rgba(0, 0, 0, 0.14);
   border-radius: 3px;
 }
 .custom-scroll::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.22);
+  background: rgba(0, 0, 0, 0.24);
 }
 
 /* ─── 响应式 ─── */
