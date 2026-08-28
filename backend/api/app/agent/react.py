@@ -33,7 +33,7 @@ from app.harness.context.observation import MODEL_TOOL_RESULT_MAX_CHARS, truncat
 from app.harness.contracts import Observation, TaskSessionState, evolve_task_state, make_event
 from app.harness.execution import NativeToolResultStore, runtime_thread_id
 from app.harness.execution.batch import build_tool_batch
-from app.harness.execution.dispatch import READ_MAX_CHARS, resolve_read_offset
+from app.harness.execution.dispatch import READ_MAX_CHARS, WEB_FETCH_MAX_CHARS, resolve_read_offset
 from app.harness.execution.stream_metrics import get_default_stream_metrics
 from app.harness.execution.stream_policy import native_stream_allowed, profile_id_from_configurable
 from app.harness.memory import GraphState, rebuild_model_config
@@ -416,15 +416,29 @@ def _inject_observations(state: GraphState) -> str:
     if not selected:
         return ""
     lines = [
-        # read 的正文可达 READ_MAX_CHARS（1000 行量级一次读完），其余工具
-        # 仍用全局 8000 字符预算，避免 bash/web 输出挤占上下文。
+        # read 的正文可达 READ_MAX_CHARS（1000 行量级一次读完），web_fetch 的
+        # 正文可达 WEB_FETCH_MAX_CHARS（长文抓取一次读全，与抓取侧同源），
+        # 其余工具仍用全局 8000 字符预算，避免 bash/搜索输出挤占上下文。
         to_observation(
             observation,
-            max_chars=READ_MAX_CHARS if observation.tool == "read" else MODEL_TOOL_RESULT_MAX_CHARS,
+            max_chars=_observation_inject_budget(str(observation.tool or "")),
         )
         for observation in selected
     ]
     return "【工具结果】\n" + "\n".join(lines)
+
+
+def _observation_inject_budget(tool: str) -> int:
+    """按工具选择 Observation 注入字符预算。
+
+    read / web_fetch 有专属大预算（长文件、长网页一次读全）；其余工具维持
+    全局 8000 字符，防止上下文被单条工具输出挤占。
+    """
+    if tool == "read":
+        return READ_MAX_CHARS
+    if tool == "web_fetch":
+        return WEB_FETCH_MAX_CHARS
+    return MODEL_TOOL_RESULT_MAX_CHARS
 
 
 def _extract_thought(raw: str) -> str:

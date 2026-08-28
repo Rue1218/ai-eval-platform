@@ -1488,3 +1488,19 @@ def test_inject_observations_read_budget_drops_oldest_pages(monkeypatch) -> None
     text = react_module._inject_observations({"observations": observations})
     assert "PAGE_OLD_" not in text
     assert "PAGE_NEW_" in text
+
+
+def test_inject_observations_web_fetch_full_budget() -> None:
+    """web_fetch 观察按 WEB_FETCH_MAX_CHARS 预算注入（2026-08-28 调整）。
+
+    旧全局 8000 字符预算会把 2 万字符的长文截成带 ``[截断]`` 标记的半篇；
+    放宽后整段正文应原样进入模型上下文。
+    """
+    import app.agent.react as react_module
+
+    long_text = "Z" * 20_000
+    text = react_module._inject_observations(
+        {"observations": [_observation("web_fetch", long_text)]}
+    )
+    assert long_text in text
+    assert "[截断]" not in text
