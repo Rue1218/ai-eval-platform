@@ -9,6 +9,7 @@
 """
 
 import csv
+import hashlib
 import io
 import json
 from typing import Any
@@ -21,7 +22,16 @@ from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
 from ..llm_client import call_agent_model, extract_json_array
-from ..models import AuditLog, Dataset, DatasetFolder, DatasetRow, User
+from ..models import (
+    AuditLog,
+    Dataset,
+    DatasetFolder,
+    DatasetImport,
+    DatasetImportRow,
+    DatasetRow,
+    DatasetVersionRow,
+    User,
+)
 from ..schemas import (
     AiGenerateIn,
     DatasetCreate,
@@ -31,6 +41,7 @@ from ..schemas import (
     FolderIn,
     FolderOut,
     RowsPayload,
+    StagingRowsSave,
 )
 
 router = APIRouter(prefix="/api/datasets", tags=["datasets"])
@@ -90,6 +101,48 @@ def _row_to_item(row: DatasetRow) -> dict[str, Any]:
     }
     item.update(row.extras or {})
     return item
+
+
+def _staging_row_to_item(row: DatasetImportRow) -> dict[str, Any]:
+    """展开 staging 行并保留稳定 ID，供审核端编辑和精确选择发布。"""
+    item: dict[str, Any] = {
+        "id": row.id,
+        "row_no": row.row_no,
+        "question": row.question,
+        "reference": row.reference,
+        "context": row.context,
+        "row_status": row.row_status,
+        "warnings": row.warnings or [],
+        "provenance": row.provenance or {},
+    }
+    item.update(row.extras or {})
+    return item
+
+
+def _version_row_to_item(row: DatasetVersionRow) -> dict[str, Any]:
+    """读取不可变版本行时维持数据集表格字段，避免退回可编辑 DatasetRow。"""
+    item: dict[str, Any] = {
+        "row_no": row.row_no,
+        "question": row.question,
+        "reference": row.reference,
+        "context": row.context,
+        "pending_complete": not row.question.strip() or not row.reference.strip(),
+    }
+    item.update(row.extras or {})
+    return item
+
+
+def _content_sha256(
+    question: str, reference: str, context: str | None, extras: dict[str, Any]
+) -> str:
+    """为 staging 编辑后的规范化内容重算行哈希，供发布版本内容校验。"""
+    payload = json.dumps(
+        {"question": question, "reference": reference, "context": context, "extras": extras},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _refresh_dataset_counters(db: Session, dataset: Dataset) -> None:
@@ -217,6 +270,8 @@ def delete_dataset(
 ):
     """删除数据集并级联清理其数据行；进行中的历史任务快照不受影响。"""
     dataset = _get_dataset_or_404(db, dataset_id)
+    if dataset.active_version_id:
+        raise AppError(ErrorCode.VALIDATION, "含已发布版本的数据集不可直接删除")
     db.query(DatasetRow).filter(DatasetRow.dataset_id == dataset_id).delete(synchronize_session=False)
     db.delete(dataset)
     db.add(
@@ -281,6 +336,8 @@ async def upload_dataset_file(
 ):
     """JSONL/CSV 全量覆盖导入：解析校验 → 替换全部数据行 → version+1 并重算计数。"""
     dataset = _get_dataset_or_404(db, dataset_id)
+    if dataset.active_version_id:
+        raise AppError(ErrorCode.VALIDATION, "已发布数据集只能通过受控导入产生新版本")
     content = await file.read()
     if len(content) > _UPLOAD_MAX_BYTES:
         raise AppError(ErrorCode.VALIDATION, "文件大小超过 50MB 上限")
@@ -325,11 +382,51 @@ async def upload_dataset_file(
 def list_dataset_rows(
     dataset_id: str,
     pending_complete: bool | None = Query(default=None),
+    view: str = Query(default="active"),
+    import_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """读取数据行；pending_complete=true 仅返回待补全行，false/缺省返回全部。"""
+    """读取正式行或指定导入 staging；staging 不会被评测 Worker 直接使用。"""
+    _ = user
     dataset = _get_dataset_or_404(db, dataset_id)
+    if view == "staging":
+        if not import_id:
+            raise AppError(ErrorCode.VALIDATION, "读取 staging 必须提供 import_id")
+        job = (
+            db.query(DatasetImport)
+            .filter(DatasetImport.id == import_id, DatasetImport.dataset_id == dataset.id)
+            .first()
+        )
+        if not job:
+            raise AppError(ErrorCode.NOT_FOUND, "导入作业不存在")
+        if job.status not in {"review_ready", "published", "rejected"}:
+            raise AppError(ErrorCode.VALIDATION, "当前导入作业没有可审核的 staging")
+        rows = (
+            db.query(DatasetImportRow)
+            .filter(DatasetImportRow.import_id == job.id)
+            .order_by(DatasetImportRow.row_no.asc())
+            .all()
+        )
+        return {
+            "items": [_staging_row_to_item(row) for row in rows],
+            "total": len(rows),
+            "import_id": job.id,
+            "staging_revision": job.staging_revision,
+        }
+    if view != "active":
+        raise AppError(ErrorCode.VALIDATION, "view 仅支持 active 或 staging")
+    if dataset.active_version_id:
+        version_rows = (
+            db.query(DatasetVersionRow)
+            .filter(DatasetVersionRow.dataset_version_id == dataset.active_version_id)
+            .order_by(DatasetVersionRow.row_no.asc())
+            .all()
+        )
+        return {
+            "items": [_version_row_to_item(row) for row in version_rows],
+            "total": len(version_rows),
+        }
     query = db.query(DatasetRow).filter(DatasetRow.dataset_id == dataset.id)
     if pending_complete:
         query = query.filter(DatasetRow.pending_complete.is_(True))
@@ -340,12 +437,92 @@ def list_dataset_rows(
 @router.put("/{dataset_id}/rows")
 def save_dataset_rows(
     dataset_id: str,
-    body: RowsPayload,
+    body: StagingRowsSave | RowsPayload,
+    view: str = Query(default="active"),
+    import_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """按 row_no 批量 upsert 数据行与扩展列，保存后重算行数与待补全数。"""
+    """保存手工正式行或审核 staging；两者使用不同的并发与删除语义。"""
+    _ = user
     dataset = _get_dataset_or_404(db, dataset_id)
+    if view == "staging":
+        if not import_id or not isinstance(body, StagingRowsSave):
+            raise AppError(
+                ErrorCode.VALIDATION, "保存 staging 必须提供 import_id、revision 和稳定行 ID"
+            )
+        job = (
+            db.query(DatasetImport)
+            .filter(DatasetImport.id == import_id, DatasetImport.dataset_id == dataset.id)
+            .with_for_update()
+            .first()
+        )
+        if not job:
+            raise AppError(ErrorCode.NOT_FOUND, "导入作业不存在")
+        if job.status != "review_ready" or job.staging_revision != body.expected_staging_revision:
+            raise AppError(ErrorCode.CONCURRENCY, "staging 已变化、未就绪或已发布，请刷新后重试")
+        row_ids = [str(raw.get("id") or "") for raw in body.rows]
+        if not all(row_ids) or len(row_ids) != len(set(row_ids)):
+            raise AppError(ErrorCode.VALIDATION, "每个 staging 行必须提供唯一稳定 id")
+        rows = (
+            db.query(DatasetImportRow)
+            .filter(
+                DatasetImportRow.import_id == job.id,
+                DatasetImportRow.id.in_(row_ids),
+                DatasetImportRow.row_status == "staging",
+            )
+            .all()
+        )
+        if len(rows) != len(row_ids):
+            raise AppError(ErrorCode.VALIDATION, "存在无效、重复或不可编辑的 staging 行")
+        by_id = {row.id: row for row in rows}
+        for raw in body.rows:
+            row = by_id[str(raw["id"])]
+            question = str(raw.get("q", raw.get("question", row.question)) or "")
+            reference = str(raw.get("r", raw.get("reference", row.reference)) or "")
+            context_raw = raw.get("c", raw.get("context", row.context))
+            context = str(context_raw) if context_raw is not None else None
+            extras = {
+                key: value
+                for key, value in raw.items()
+                if key
+                not in {
+                    "id",
+                    "row_no",
+                    "q",
+                    "r",
+                    "c",
+                    "question",
+                    "reference",
+                    "context",
+                    "row_status",
+                    "warnings",
+                    "provenance",
+                }
+            }
+            row.question = question
+            row.reference = reference
+            row.context = context
+            row.extras = extras
+            row.content_sha256 = _content_sha256(question, reference, context, extras)
+        job.staging_revision += 1
+        db.commit()
+        rows = (
+            db.query(DatasetImportRow)
+            .filter(DatasetImportRow.import_id == job.id)
+            .order_by(DatasetImportRow.row_no.asc())
+            .all()
+        )
+        return {
+            "items": [_staging_row_to_item(row) for row in rows],
+            "total": len(rows),
+            "import_id": job.id,
+            "staging_revision": job.staging_revision,
+        }
+    if view != "active" or not isinstance(body, RowsPayload):
+        raise AppError(ErrorCode.VALIDATION, "view 仅支持 active 或 staging")
+    if dataset.active_version_id:
+        raise AppError(ErrorCode.VALIDATION, "已发布数据集只能通过受控导入产生新版本")
     existing = {
         row.row_no: row
         for row in db.query(DatasetRow).filter(DatasetRow.dataset_id == dataset.id).all()

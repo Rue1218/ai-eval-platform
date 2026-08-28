@@ -266,9 +266,87 @@ class DatasetOut(OrmOut):
     row_count: int = 0
     pending_complete_count: int = 0
     metric: str = "contain"
+    # 目录导入发布后的容器状态；手工维护的历史数据集仍保持 draft。
+    status: str = "draft"
+    # 评测创建时必须冻结该不可变版本，而不是直接读取可编辑行。
+    active_version_id: str | None = None
     column_schema: list[dict[str, Any]] = Field(default_factory=list)
     created_by: str | None = None
     created_at: Any
+
+
+class CatalogEntryIn(ApiModel):
+    """目录来源草稿：仅记录经审计的官方身份与允许分发域名。"""
+
+    name: str = Field(min_length=1, max_length=160)
+    upstream_owner: str = Field(min_length=1, max_length=160)
+    official_project_url: str = Field(min_length=8, max_length=2_000)
+    allowed_domains: list[str] = Field(min_length=1, max_length=20)
+    purpose: str = Field(default="internal_evaluation_only", max_length=128)
+    evidence_refs: list[str] = Field(default_factory=list, max_length=20)
+
+
+class CatalogReleaseIn(ApiModel):
+    """固定 release manifest；提交审核后只允许通过新 release 修订。"""
+
+    display_version: str = Field(min_length=1, max_length=128)
+    source_revision: str = Field(min_length=1, max_length=256)
+    manifest: dict[str, Any]
+    license: dict[str, Any]
+    allowed_splits: list[str] = Field(min_length=1, max_length=8)
+    filter_schema: dict[str, Any]
+    parser_id: str = Field(min_length=1, max_length=128)
+    parser_version: str = Field(min_length=1, max_length=64)
+    task_family: Literal["multiple_choice", "generation", "instruction_following"]
+    support_status: Literal["supported", "review_required", "planned"] = "review_required"
+    risk_labels: list[str] = Field(default_factory=list, max_length=20)
+
+
+class ReviewNoteIn(ApiModel):
+    """来源、release 或导入审核操作的最小审计意见。"""
+
+    note: str | None = Field(default=None, max_length=2_000)
+
+
+class ResolveBlockIn(ReviewNoteIn):
+    """封禁复核只能恢复批准状态或确认持续封禁。"""
+
+    decision: Literal["approved", "blocked"]
+
+
+class DatasetImportCreate(ApiModel):
+    """创建独立导入作业；外部地址与解析规则只来自已批准 release。"""
+
+    catalog_entry_id: str = Field(min_length=1, max_length=64)
+    release_id: str = Field(min_length=1, max_length=64)
+    splits: list[str] = Field(min_length=1, max_length=8)
+    filter_schema_version: int = Field(ge=1)
+    filters: dict[str, Any] = Field(default_factory=dict)
+    target_name: str | None = Field(default=None, min_length=1, max_length=160)
+    target_dataset_id: str | None = Field(default=None, min_length=1, max_length=64)
+    folder_id: str | None = Field(default=None, min_length=1, max_length=64)
+
+    @model_validator(mode="after")
+    def validate_target(self) -> "DatasetImportCreate":
+        """目标容器必须是已有数据集或一个待创建名称。"""
+        if not self.target_name and not self.target_dataset_id:
+            raise ValueError("target_name 与 target_dataset_id 至少填写一项")
+        return self
+
+
+class StagingRowsSave(ApiModel):
+    """staging 编辑使用读取时的 revision，避免多人按行号误发布。"""
+
+    expected_staging_revision: int = Field(ge=0)
+    rows: list[dict[str, Any]] = Field(min_length=1, max_length=20_000)
+
+
+class PublishImportIn(ReviewNoteIn):
+    """发布时必须同时锁定导入批次、revision 与稳定 staging 行 ID。"""
+
+    import_id: str = Field(min_length=1, max_length=64)
+    expected_staging_revision: int = Field(ge=0)
+    accepted_row_ids: list[str] = Field(min_length=1, max_length=20_000)
 
 
 class RunConfig(ApiModel):

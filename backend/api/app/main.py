@@ -14,6 +14,7 @@ from .routers import (
     agent_prefs,
     auth,
     cases,
+    dataset_catalog,
     datasets,
     dispatch,
     files,
@@ -114,6 +115,7 @@ app.include_router(tasks.router)
 app.include_router(profiles.router)
 app.include_router(datasets.router)
 app.include_router(datasets.folders_router)
+app.include_router(dataset_catalog.router)
 app.include_router(cases.router)
 app.include_router(cases.folders_router)
 app.include_router(admin.router)
