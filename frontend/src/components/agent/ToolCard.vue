@@ -135,7 +135,7 @@
             <span v-if="readMeta.next != null"> · 下一页 offset={{ readMeta.next }}</span>
             <span v-else> · 已读完</span>
           </div>
-          <div v-if="isMarkdownFile && previewText && status === 'ok'" class="td-tabs">
+          <div v-if="isMarkdownOutput && previewText && status === 'ok'" class="td-tabs">
             <button type="button" class="td-tab" :class="{ active: previewMode === 'render' }" @click="previewMode = 'render'">渲染</button>
             <button type="button" class="td-tab" :class="{ active: previewMode === 'source' }" @click="previewMode = 'source'">源码</button>
           </div>
@@ -397,9 +397,11 @@ const previewText = computed(() => {
 
 const displayedPreviewText = computed(() => (previewText.value ? displayedOutputText.value : ''))
 
-/** 服务端下发的实际预览上限（read.preview_limit_chars），提示文案不硬编码数字。 */
+/** 服务端下发的实际预览上限（read/web 的 preview_limit_chars），提示文案不硬编码数字。 */
 const previewLimitLabel = computed(() => {
-  const limit = asNonNegInt(asRecord(resultRecord.value?.read)?.preview_limit_chars)
+  const limit =
+    asNonNegInt(asRecord(resultRecord.value?.read)?.preview_limit_chars) ||
+    asNonNegInt(asRecord(resultRecord.value?.web)?.preview_limit_chars)
   return limit > 0 ? limit.toLocaleString('en-US') : ''
 })
 
@@ -435,11 +437,22 @@ const isMarkdownFile = computed(() => {
   return /\.(md|markdown|mdx)$/i.test(path)
 })
 
+/** web_fetch 返回 Markdown 正文时与 .md 文件同样支持「渲染/源码」双视图。 */
+const webMeta = computed(() => {
+  if (props.tool !== 'web_fetch') return null
+  const web = asRecord(resultRecord.value?.web)
+  return web ? { format: stringField(web.format) } : null
+})
+
+const isMarkdownOutput = computed(
+  () => isMarkdownFile.value || webMeta.value?.format === 'markdown',
+)
+
 const showMarkdownOutput = computed(
   () =>
     props.status === 'ok' &&
     !!previewText.value &&
-    isMarkdownFile.value &&
+    isMarkdownOutput.value &&
     previewMode.value === 'render' &&
     !isStreamingOutput.value,
 )

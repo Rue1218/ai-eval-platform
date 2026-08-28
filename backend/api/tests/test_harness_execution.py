@@ -1145,6 +1145,78 @@ def test_web_fetch_allows_public_target(monkeypatch) -> None:
         assert error.value.code != ErrorCode.VALIDATION
 
 
+def test_web_fetch_content_budget_and_card_preview(monkeypatch) -> None:
+    """web_fetch 正文预算与卡片预览（2026-08-28 调整）：
+
+    - 旧 8000 字符正文上限把知乎专栏等长文截掉大半，放宽为专属
+      ``WEB_FETCH_MAX_CHARS`` 预算，超限仍带 ``truncated`` 诚实标记；
+    - 卡片预览不再固定 500 字符，与 read 同源对齐 ``preview_char_limit()``，
+      并下发 ``preview_limit_chars`` 供前端提示文案使用。
+    """
+    from app.config import settings
+    from app.harness.execution import dispatch
+
+    class _FakeHeaders:
+        def get_content_type(self) -> str:
+            return "text/plain"
+
+        def get_content_charset(self) -> str:
+            return "utf-8"
+
+    class _FakeResponse:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+
+        def __enter__(self) -> "_FakeResponse":
+            return self
+
+        def __exit__(self, *_exc: object) -> bool:
+            return False
+
+        def read(self, _n: int = -1) -> bytes:
+            return self._body
+
+        @property
+        def headers(self) -> _FakeHeaders:
+            return _FakeHeaders()
+
+        def geturl(self) -> str:
+            return "http://93.184.216.34/long"
+
+    class _FakeOpener:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+
+        def open(self, _request: object, timeout: float) -> _FakeResponse:
+            _ = timeout
+            return _FakeResponse(self._body)
+
+    # 1) 介于旧 8000 与新 60000 预算之间的长文不再被截半
+    monkeypatch.setattr(
+        dispatch, "build_opener", lambda *_a, **_k: _FakeOpener(b"x" * 20_000)
+    )
+    mid = dispatch.web_fetch("http://93.184.216.34/long", format="text", timeout_s=1.0)
+    assert len(mid.content) == 20_000
+    assert mid.truncated is False
+
+    # 2) 超出 60000 预算仍受控截断，并带诚实标记
+    monkeypatch.setattr(
+        dispatch, "build_opener", lambda *_a, **_k: _FakeOpener(b"y" * 61_000)
+    )
+    over = dispatch.web_fetch("http://93.184.216.34/long", format="text", timeout_s=1.0)
+    assert len(over.content) == dispatch.WEB_FETCH_MAX_CHARS
+    assert over.truncated is True
+
+    # 3) 卡片预览与 preview_char_limit() 同源，上限随数据下发
+    monkeypatch.setattr(settings, "tool_preview_max_chars", 100)
+    data = over.to_tool_data()
+    web = data["display"]["web"]
+    assert isinstance(web, dict)
+    assert web["preview_limit_chars"] == 100
+    assert web["preview_truncated"] is True
+    assert len(str(web["preview"])) <= 100
+
+
 class _RecordingHandler(BaseHTTPRequestHandler):
     """回环集成测试用 HTTP handler：记录请求路径、返回固定内容、不刷日志。"""
 

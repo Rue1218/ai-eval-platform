@@ -55,10 +55,16 @@ READ_MAX_BYTES = 20 * 1024 * 1024
 # 剩余正文按块统计行数/字符，避免对未返回内容逐行建 Python 字符串导致超时。
 READ_SCAN_CHUNK = 256 * 1024
 WRITE_MAX_BYTES = 2 * 1024 * 1024
-WEB_MAX_CONTENT_CHARS = MODEL_TOOL_RESULT_MAX_CHARS
-WEB_PREVIEW_CHARS = 500
+# web_fetch 专属正文预算：与全局 MODEL_TOOL_RESULT_MAX_CHARS 解耦（2026-08-28
+# 调整：旧 8000 字符上限把知乎专栏等长文截掉大半，模型只能基于半篇作答）。
+# 网页正文噪声高于本地文件，预算按 READ_MAX_CHARS 的十分之一量级熔断。
+WEB_FETCH_MAX_CHARS = 60_000
+# web_search 拼接摘要仍用全局 8000 字符预算，避免多条搜索结果挤占上下文。
+WEB_MAX_SEARCH_CHARS = MODEL_TOOL_RESULT_MAX_CHARS
 WEB_MAX_SEARCH_RESULTS = 10
-WEB_RESPONSE_MAX_BYTES = 256 * 1024
+# 直接抓取路径的 HTML 字节窗口：知乎等长文单页 HTML 常超 256KB，窗口过小会
+# 让正文提取器只见半页标记；放宽到 1MB 仍保持受控读取。
+WEB_RESPONSE_MAX_BYTES = 1024 * 1024
 
 
 def preview_char_limit() -> int:
@@ -621,7 +627,7 @@ class WebSearchResult:
         lines: list[str] = [f"搜索关键词：{self.query}"]
         for index, result in enumerate(self.results, start=1):
             lines.append(f"[{index}] {result['title']}\nURL: {result['url']}\n{result['description']}")
-        model_text = "\n\n".join(lines)[:WEB_MAX_CONTENT_CHARS]
+        model_text = "\n\n".join(lines)[:WEB_MAX_SEARCH_CHARS]
         summary = f"网络搜索完成，返回 {len(self.results)} 条结果"
         return {
             "summary": summary,
@@ -646,9 +652,16 @@ class WebFetchResult:
     truncated: bool
 
     def to_tool_data(self) -> dict[str, object]:
-        """返回模型正文和受控 ToolCard 投影。"""
+        """返回模型正文和受控 ToolCard 投影。
+
+        卡片预览与 read/write/bash 同源对齐 ``preview_char_limit()``（2026-08-28
+        调整：旧 500 字符预览让网页抓取卡片几乎不可读），保证「卡片所见 ==
+        模型真实读取内容」，并下发实际预览上限供前端提示文案使用。
+        """
         title = self.title or urlparse(self.url).hostname or "网页"
         summary = f"已抓取 {title}"
+        preview_limit = preview_char_limit()
+        preview, preview_truncated = clip_at_line_boundary(self.content, preview_limit)
         return {
             "summary": summary,
             "model_text": self.content,
@@ -660,8 +673,10 @@ class WebFetchResult:
                     "url": self.url,
                     "title": self.title,
                     "format": self.format,
-                    "preview": self.content[:WEB_PREVIEW_CHARS],
-                    "preview_truncated": len(self.content) > WEB_PREVIEW_CHARS,
+                    "preview": preview,
+                    "preview_truncated": preview_truncated,
+                    # 生效的预览上限随数据下发，前端提示文案不硬编码数字。
+                    "preview_limit_chars": preview_limit,
                 },
             },
         }
@@ -857,7 +872,7 @@ def _fetch_via_firecrawl(url: str, format: str, *, timeout_s: float) -> WebFetch
     raw_content = data.get("markdown" if format == "markdown" else "html")
     if not isinstance(raw_content, str) or not raw_content.strip():
         raise AppError(ErrorCode.UPSTREAM, "网页抓取服务未返回正文")
-    content = raw_content[:WEB_MAX_CONTENT_CHARS]
+    content = raw_content[:WEB_FETCH_MAX_CHARS]
     return WebFetchResult(
         url=url,
         title=str(metadata.get("title") or "")[:300],
@@ -900,7 +915,7 @@ def _fetch_direct(url: str, format: str, *, timeout_s: float) -> WebFetchResult:
         title, content = extractor.result()
     if not content.strip():
         raise AppError(ErrorCode.UPSTREAM, "页面未返回可读取正文")
-    content = content[:WEB_MAX_CONTENT_CHARS]
+    content = content[:WEB_FETCH_MAX_CHARS]
     return WebFetchResult(
         url=final_url,
         title=title,
