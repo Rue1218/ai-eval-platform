@@ -108,10 +108,9 @@
 
       <!-- ─── 右侧：主用例工作台 ─── -->
       <main v-if="currentSet" class="nordic-main">
-        <!-- 1. 顶栏：就地批量操作置换 (In-Toolbar Transition) -->
-        <div class="main-toolbar" :class="{ 'in-batch-mode': selectedCaseIds.length > 0 }">
-          <!-- 默认模式顶栏 -->
-          <div v-if="selectedCaseIds.length === 0" class="toolbar-default">
+        <!-- 1. 顶栏：层级分明的操作区与检索 -->
+        <div class="main-toolbar">
+          <div class="toolbar-default">
             <div class="toolbar-title-group">
               <div class="title-row">
                 <span class="main-dataset-title">{{ currentSet.name }}</span>
@@ -141,9 +140,10 @@
 
             <div class="grow"></div>
 
-            <!-- 右侧操作组 -->
+            <!-- 右侧操作组（操作金字塔） -->
             <div class="toolbar-action-group">
               <template v-if="currentSet.status !== 'confirmed'">
+                <!-- 中频操作组 -->
                 <div class="action-btn-group">
                   <button class="btn btn-secondary btn-md" aria-label="新增测试用例" @click="addCase">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
@@ -153,82 +153,92 @@
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
                     新增列
                   </button>
-                </div>
-
-                <div class="action-btn-group">
                   <button class="btn btn-secondary btn-md" aria-label="打开 PRD 用例推导向导" @click="openAiGenDrawer">
                     PRD 推导向导
                   </button>
-                  <button class="btn btn-secondary btn-md" title="导出为 Excel 格式" aria-label="导出 Excel" @click="exportExcel">
-                    导出 Excel
-                  </button>
-                  <button
-                    class="btn btn-save btn-md"
-                    :class="{ dirty: hasUnsavedChanges, saved: justSaved }"
-                    :disabled="!hasUnsavedChanges || savingCases"
-                    title="快捷键 Ctrl/⌘ + S"
-                    aria-label="保存用例修改"
-                    @click="persistCases"
-                  >
-                    <span v-if="justSaved" class="saved-icon">✓</span>
-                    {{ savingCases ? '保存中…' : justSaved ? '已保存' : '保存修改' }}
-                    <kbd class="shortcut-key">⌘S</kbd>
-                  </button>
                 </div>
 
-                <button class="btn btn-primary btn-md" :loading="confirmingSet" aria-label="确认入库用例集" @click="confirmCaseSet">
+                <!-- 保存修改按钮 -->
+                <button
+                  class="btn btn-save btn-md"
+                  :class="{ dirty: hasUnsavedChanges, saved: justSaved }"
+                  :disabled="!hasUnsavedChanges || savingCases"
+                  title="快捷键 Ctrl/⌘ + S"
+                  aria-label="保存用例修改"
+                  @click="persistCases"
+                >
+                  <span v-if="justSaved" class="saved-icon">✓</span>
+                  {{ savingCases ? '保存中…' : justSaved ? '已保存' : '保存修改' }}
+                  <kbd class="shortcut-key">⌘S</kbd>
+                </button>
+
+                <!-- 主操作 CTA：确认入库 -->
+                <button class="btn btn-primary btn-md primary-cta btn-success-solid" :loading="confirmingSet" aria-label="确认入库用例集" @click="confirmCaseSet">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <polyline points="20 6 9 17 4 12" />
                   </svg>
                   确认入库
                 </button>
+
+                <!-- 更多操作下拉 -->
+                <n-dropdown :options="moreMenuOptions" trigger="click" @select="handleMoreMenuSelect">
+                  <button class="btn btn-ghost-subtle btn-md btn-icon-only" title="更多用例操作" aria-label="更多操作">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <circle cx="12" cy="12" r="1"></circle>
+                      <circle cx="19" cy="12" r="1"></circle>
+                      <circle cx="5" cy="12" r="1"></circle>
+                    </svg>
+                  </button>
+                </n-dropdown>
               </template>
 
               <!-- 已确认入库状态下 -->
               <template v-else>
-                <button class="btn btn-secondary btn-md" @click="exportExcel">
-                  导出 Excel
-                </button>
-                <button class="btn btn-secondary btn-md" @click="exportXMind">
-                  导出 XMind
-                </button>
-                <button class="btn btn-primary btn-md" @click="openLaunchDrawer">
+                <div class="action-btn-group">
+                  <button class="btn btn-secondary btn-md" aria-label="新增测试用例" @click="addCase">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
+                    新增用例
+                  </button>
+                  <button class="btn btn-secondary btn-md" @click="exportExcel">
+                    导出 Excel
+                  </button>
+                </div>
+
+                <!-- 主操作 CTA：发起基准评测 -->
+                <button class="btn btn-primary btn-md primary-cta" @click="openLaunchDrawer">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <polygon points="5 3 19 12 5 21 5 3" />
                   </svg>
                   发起基准评测
                 </button>
+
+                <!-- 更多操作下拉 -->
+                <n-dropdown :options="moreMenuOptions" trigger="click" @select="handleMoreMenuSelect">
+                  <button class="btn btn-ghost-subtle btn-md btn-icon-only" title="更多用例操作" aria-label="更多操作">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <circle cx="12" cy="12" r="1"></circle>
+                      <circle cx="19" cy="12" r="1"></circle>
+                      <circle cx="5" cy="12" r="1"></circle>
+                    </svg>
+                  </button>
+                </n-dropdown>
               </template>
-            </div>
-          </div>
-
-          <!-- 批量操作置换模式顶栏 (In-Toolbar Transition) -->
-          <div v-else class="toolbar-batch">
-            <div class="batch-info">
-              <span class="batch-count">已选择 <b>{{ selectedCaseIds.length }}</b> / {{ cases.length }} 条用例</span>
-            </div>
-
-            <div class="grow"></div>
-
-            <div class="batch-actions">
-              <button class="btn btn-secondary btn-md" aria-label="批量映射到基准数据集" @click="openBatchMapModal">
-                批量映射到数据集 ({{ selectedCaseIds.length }})
-              </button>
-              <button class="btn btn-danger btn-md" aria-label="批量删除勾选用例" @click="batchDeleteCases">
-                批量删除 ({{ selectedCaseIds.length }})
-              </button>
-              <button class="btn btn-ghost btn-md" aria-label="取消选择" @click="uncheckAllCases">
-                取消选择
-              </button>
             </div>
           </div>
         </div>
 
-        <!-- 2. 六大策略分布胶囊与状态条 -->
+        <!-- 2. 六大策略分布可交互胶囊筛选条 -->
         <div class="metrics-strip">
           <div class="strip-left">
-            <span class="strip-label">策略分布:</span>
+            <span class="strip-label">策略筛选:</span>
             <div class="strategy-pills-bar">
+              <button
+                class="strategy-pill"
+                :class="{ active: filterStrategy === '' }"
+                @click="filterStrategy = ''"
+              >
+                全部 <b class="pill-num">{{ cases.length }}</b>
+              </button>
               <button
                 v-for="(count, st) in strategyDistribution"
                 :key="st"
@@ -236,7 +246,7 @@
                 :class="[`pill-${st}`, { active: filterStrategy === st }]"
                 @click="filterStrategy = filterStrategy === st ? '' : st"
               >
-                {{ st }}: <b>{{ count }}</b>
+                {{ st }} <b class="pill-num">{{ count }}</b>
               </button>
             </div>
 
@@ -251,10 +261,10 @@
 
           <div class="grow"></div>
 
-          <!-- 键盘流提示 -->
-          <div class="keyboard-flow-hint">
-            <span class="kbd-hint"><kbd>↑↓←→</kbd> 移动光标</span>
-            <span class="kbd-hint"><kbd>Enter</kbd> 就地编辑</span>
+          <!-- 键盘流提示 (可悬停查看) -->
+          <div class="keyboard-flow-hint" title="支持键盘方向键与快捷键无障碍操作">
+            <span class="kbd-hint"><kbd>↑↓←→</kbd> 移动</span>
+            <span class="kbd-hint"><kbd>Enter</kbd> 编辑</span>
             <span class="kbd-hint"><kbd>Space</kbd> 勾选</span>
           </div>
         </div>
@@ -481,24 +491,49 @@
           <!-- 底部虚拟占位 -->
           <div v-if="virtualBottomPad > 0" :style="{ height: virtualBottomPad + 'px' }"></div>
         </div>
+
+        <!-- 4. 底部浮动批量操作栏 (Floating Action Dock) -->
+        <transition name="slide-up">
+          <div v-if="selectedCaseIds.length > 0" class="floating-batch-dock">
+            <div class="batch-dock-info">
+              <span class="batch-dock-badge">{{ selectedCaseIds.length }}</span>
+              <span class="batch-dock-text">已选择测试用例 / 共 {{ cases.length }} 条</span>
+            </div>
+            <div class="batch-dock-actions">
+              <button class="btn btn-secondary btn-sm" @click="openBatchMapModal">
+                批量映射至数据集
+              </button>
+              <button class="btn btn-danger btn-sm" @click="batchDeleteCases">
+                批量删除 ({{ selectedCaseIds.length }})
+              </button>
+              <button class="btn btn-ghost btn-sm" @click="uncheckAllCases">
+                取消选择
+              </button>
+            </div>
+          </div>
+        </transition>
       </main>
 
-      <!-- 空态页面 -->
+      <!-- 空态页面 (精致矢量引导态) -->
       <main v-else class="nordic-main empty-main">
         <div class="empty-box">
           <div class="empty-icon-wrapper">
-            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
               <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
               <polyline points="14 2 14 8 20 8" />
+              <line x1="16" y1="13" x2="8" y2="13" />
+              <line x1="16" y1="17" x2="8" y2="17" />
+              <polyline points="10 9 9 9 8 9" />
             </svg>
           </div>
           <h3>尚未选择或创建用例集</h3>
-          <p>你可以基于 PRD / 接口需求文档一键推导六大策略测试用例，或新建空集手动设计用例。</p>
+          <p class="empty-desc">您可以基于 PRD 或接口需求文档一键自动推导六大策略测试用例，或新建空集手动录入。</p>
           <div class="empty-buttons">
-            <button class="btn btn-primary btn-md" @click="openAiGenDrawer">
+            <button class="btn btn-primary btn-md primary-cta" @click="openAiGenDrawer">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
               PRD 用例推导向导
             </button>
-            <button class="btn btn-ghost btn-md" @click="createEmptyCaseSet">
+            <button class="btn btn-secondary btn-md" @click="createEmptyCaseSet">
               + 新建空用例集
             </button>
           </div>
@@ -691,7 +726,7 @@
     </n-modal>
 
     <n-modal v-model:show="batchMap.show" preset="card" title="批量映射至基准数据集" class="center-dialog-card" style="width: 500px; max-width: calc(100vw - 32px)">
-      <p class="small" style="margin: 0 0 12px; color: #52525B; font-size: 13px">
+      <p class="small" style="margin: 0 0 12px; color: var(--text-secondary); font-size: 13px">
         将选中的 {{ selectedCaseIds.length }} 条用例同步导入至指定的数据集，自动映射问句与标准参考答案。
       </p>
       <div class="field">
@@ -815,6 +850,36 @@ const selectedCaseIds = ref<string[]>([])
 const editingCell = ref<{ row: ExtendedTestCase; field: string; original: string } | null>(null)
 const focusedCell = ref<{ rowIdx: number; field: string } | null>(null)
 const tableContainerRef = ref<HTMLElement | null>(null)
+
+// ─── 更多操作下拉菜单配置 ───
+const moreMenuOptions = computed<DropdownOption[]>(() => [
+  {
+    label: '导出为 Excel (XLSX)',
+    key: 'export-excel',
+    icon: renderIcon(['M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z', 'M14 2v6h6']),
+  },
+  {
+    label: '导出为 XMind 脑图',
+    key: 'export-xmind',
+    icon: renderIcon(['M18 6L6 18', 'M6 6l12 12']),
+  },
+  {
+    type: 'divider',
+    key: 'd1',
+  },
+  {
+    label: '批量映射至基准数据集',
+    key: 'batch-map',
+    disabled: cases.value.length === 0,
+    icon: renderIcon(['M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2', 'M15 2H9a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1z']),
+  },
+])
+
+function handleMoreMenuSelect(key: string) {
+  if (key === 'export-excel') exportExcel()
+  else if (key === 'export-xmind') exportXMind()
+  else if (key === 'batch-map') openBatchMapModal()
+}
 
 // ─── 侧边栏拖拽调宽 ───
 const TREE_W_KEY = 'ae_ft_w_cases_nordic'
@@ -1852,31 +1917,33 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-/* ─── 全局北欧极简浅色用例工作台 (Nordic Minimalist / Stripe 质感) ─── */
+/* ─── 用例集工作台核心布局 ─── */
 .cases-workbench {
   height: calc(100vh - var(--topbar-h) - 20px);
   min-height: 0;
   display: flex;
   flex-direction: column;
   outline: none;
-  font-size: 14px;
+  font-size: 13.5px;
+  color: var(--text-primary);
 }
 
+/* ─── 布局骨架 ─── */
 .nordic-layout {
   display: grid;
   grid-template-columns: var(--tree-w, 280px) minmax(0, 1fr);
   height: 100%;
   min-width: 0;
-  background: #FCFCFA;
-  border-radius: 10px;
+  background: var(--bg-main);
+  border-radius: 12px;
   overflow: hidden;
-  border: 1px solid #E7E7E2;
+  border: 1px solid var(--border-subtle);
 }
 
 /* ─── 侧边栏 ─── */
 .nordic-sidebar {
-  border-right: 1px solid #E7E7E2;
-  background: #F8F8F5;
+  border-right: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -1885,8 +1952,8 @@ onUnmounted(() => {
 }
 
 .sidebar-header {
-  padding: 14px 16px;
-  border-bottom: 1px solid #E7E7E2;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border-subtle);
 }
 .sidebar-title-row {
   display: flex;
@@ -1897,33 +1964,33 @@ onUnmounted(() => {
 .sidebar-title {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
   font-weight: 600;
-  font-size: 14px;
-  color: #18181B;
+  font-size: 13.5px;
+  color: var(--text-primary);
 }
 .title-icon {
-  color: #0F766E;
+  color: var(--c-cases);
 }
 .sidebar-actions {
   display: flex;
-  gap: 5px;
+  gap: 4px;
 }
 
 .btn-xs {
-  min-height: 25px;
-  padding: 2px 8px;
+  min-height: 24px;
+  padding: 2px 7px;
   font-size: 12px;
   border-radius: 4px;
 }
 .btn-ghost-subtle {
   background: transparent;
   border: 1px solid transparent;
-  color: #52525B;
+  color: var(--text-secondary);
 }
 .btn-ghost-subtle:hover {
-  background: #EFEFEA;
-  color: #18181B;
+  background: var(--row-hover);
+  color: var(--text-primary);
 }
 
 .search-box {
@@ -1934,7 +2001,7 @@ onUnmounted(() => {
 .search-icon {
   position: absolute;
   left: 9px;
-  color: #A1A1AA;
+  color: var(--text-tertiary);
   pointer-events: none;
 }
 .search-input {
@@ -1942,29 +2009,30 @@ onUnmounted(() => {
   height: 30px;
   padding-left: 28px;
   padding-right: 24px;
-  font-size: 13px;
+  font-size: 12.5px;
   border-radius: 6px;
-  border: 1px solid #E2E2DC;
-  background: #FFFFFF;
-  color: #18181B;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-main);
+  color: var(--text-primary);
   outline: none;
-  transition: border-color 0.12s ease;
+  transition: border-color 0.15s ease;
 }
 .search-input:focus {
-  border-color: #1E293B;
+  border-color: var(--accent-ai);
+  box-shadow: var(--focus-ring);
 }
 .clear-search-btn {
   position: absolute;
   right: 7px;
   background: none;
   border: none;
-  color: #A1A1AA;
+  color: var(--text-tertiary);
   font-size: 12px;
   cursor: pointer;
   padding: 2px;
 }
 .clear-search-btn:hover {
-  color: #18181B;
+  color: var(--text-primary);
 }
 
 .tree-content {
@@ -1982,27 +2050,26 @@ onUnmounted(() => {
   gap: 7px;
   padding: 6px 10px;
   border-radius: 6px;
-  font-size: 13.5px;
+  font-size: 13px;
   cursor: pointer;
-  color: #52525B;
-  transition: background-color 0.1s ease, color 0.1s ease;
+  color: var(--text-secondary);
+  transition: background-color 0.12s ease, color 0.12s ease;
 }
 .tree-node:hover {
-  background: #EFEFEA;
-  color: #18181B;
+  background: var(--row-hover);
+  color: var(--text-primary);
 }
 .tree-node.active {
-  background: #FFFFFF;
-  color: #1E293B;
+  background: var(--t-cases);
+  color: var(--c-cases);
   font-weight: 600;
-  border: 1px solid #E2E2DC;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+  border: 1px solid transparent;
 }
 
 .folder-node {
   font-weight: 600;
-  color: #27272A;
-  font-size: 14px;
+  color: var(--text-primary);
+  font-size: 13.5px;
 }
 .folder-children {
   padding-left: 16px;
@@ -2014,7 +2081,7 @@ onUnmounted(() => {
 .chevron-icon {
   display: grid;
   place-items: center;
-  color: #A1A1AA;
+  color: var(--text-tertiary);
   transition: transform 0.15s ease;
 }
 .chevron-icon.rotated {
@@ -2022,7 +2089,7 @@ onUnmounted(() => {
 }
 
 .folder-icon {
-  color: #71717A;
+  color: var(--text-tertiary);
   flex-shrink: 0;
 }
 .file-icon {
@@ -2030,9 +2097,7 @@ onUnmounted(() => {
   place-items: center;
   flex-shrink: 0;
 }
-.file-icon.status-confirmed { color: #15803D; }
-.file-icon.status-draft { color: #71717A; }
-.file-icon.status-generated { color: #B45309; }
+.file-icon.case-set { color: var(--c-cases); }
 
 .node-name {
   flex: 1;
@@ -2041,33 +2106,38 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 .version-badge {
+  font-family: var(--font-mono);
   font-size: 11px;
   padding: 1px 5px;
   border-radius: 3px;
-  background: #EFEFEA;
-  color: #71717A;
+  background: var(--bg-elevated);
+  color: var(--text-tertiary);
+  border: 1px solid var(--border-subtle);
 }
-.badge-confirmed { background: #F0FDF4; color: #15803D; }
-.badge-draft { background: #F4F4F5; color: #71717A; }
-.badge-generated { background: #FEF3C7; color: #92400E; }
+.tree-node.active .version-badge {
+  background: rgba(255, 255, 255, 0.6);
+  color: var(--c-cases);
+}
+.badge-confirmed { background: var(--t-cases); color: var(--c-cases); }
+.badge-draft { background: var(--t-profiles); color: var(--c-profiles); }
 
 .pending-dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #D97706;
+  background: var(--accent-warning);
 }
 .node-badge {
   margin-left: auto;
   font-family: var(--font-mono);
-  font-size: 12px;
-  color: #A1A1AA;
+  font-size: 11px;
+  color: var(--text-tertiary);
 }
 
 .tree-empty {
   padding: 36px 16px;
   text-align: center;
-  color: #A1A1AA;
+  color: var(--text-tertiary);
   font-size: 12.5px;
 }
 
@@ -2090,7 +2160,7 @@ onUnmounted(() => {
 }
 .sidebar-resizer:hover .resizer-bar,
 .sidebar-resizer.active .resizer-bar {
-  background: #1E293B;
+  background: var(--accent-ai);
 }
 
 /* ─── 主工作区 ─── */
@@ -2100,31 +2170,25 @@ onUnmounted(() => {
   height: 100%;
   min-width: 0;
   min-height: 0;
-  background: #FCFCFA;
+  background: var(--bg-main);
   position: relative;
 }
 
-/* 顶栏与就地置换 */
+/* 顶栏 */
 .main-toolbar {
-  padding: 12px 20px;
-  border-bottom: 1px solid #E7E7E2;
-  background: #FFFFFF;
-  min-height: 58px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-main);
+  min-height: 56px;
   display: flex;
   align-items: center;
-  transition: background-color 0.15s ease;
-}
-.main-toolbar.in-batch-mode {
-  background: #F4F4F0;
 }
 
-.toolbar-default,
-.toolbar-batch {
+.toolbar-default {
   display: flex;
   align-items: center;
   width: 100%;
-  gap: 14px;
-  flex-wrap: wrap;
+  gap: 12px;
 }
 
 .toolbar-title-group {
@@ -2138,9 +2202,9 @@ onUnmounted(() => {
   gap: 8px;
 }
 .main-dataset-title {
-  font-size: 17px;
+  font-size: 16.5px;
   font-weight: 600;
-  color: #18181B;
+  color: var(--text-primary);
 }
 .status-badge {
   font-size: 11.5px;
@@ -2148,27 +2212,27 @@ onUnmounted(() => {
   padding: 1px 7px;
   border-radius: 4px;
 }
-.status-confirmed { background: #F0FDF4; color: #166534; border: 1px solid #DCFCE7; }
-.status-draft { background: #F4F4F5; color: #52525B; border: 1px solid #E4E4E7; }
-.status-generated { background: #FEFCE8; color: #854D0E; border: 1px solid #FEF08A; }
+.status-confirmed { background: var(--t-cases); color: var(--c-cases); border: 1px solid rgba(5, 150, 105, 0.2); }
+.status-draft { background: var(--t-profiles); color: var(--c-profiles); border: 1px solid rgba(217, 119, 6, 0.2); }
+.status-generated { background: var(--t-profiles); color: var(--c-profiles); border: 1px solid rgba(217, 119, 6, 0.2); }
 
 .status-badge-amber {
   font-size: 11.5px;
   padding: 1px 7px;
   border-radius: 4px;
-  background: #FEF3C7;
-  color: #92400E;
+  background: var(--t-profiles);
+  color: var(--c-profiles);
 }
 
 .breadcrumb-row {
   font-size: 12px;
-  color: #A1A1AA;
+  color: var(--text-tertiary);
   display: flex;
   align-items: center;
   gap: 5px;
 }
 .breadcrumb-row .cur {
-  color: #71717A;
+  color: var(--text-secondary);
 }
 
 /* 极速表内筛选框 */
@@ -2176,44 +2240,44 @@ onUnmounted(() => {
   position: relative;
   display: flex;
   align-items: center;
-  margin-left: 10px;
+  margin-left: 8px;
 }
 .table-search-icon {
   position: absolute;
   left: 8px;
-  color: #A1A1AA;
+  color: var(--text-tertiary);
   pointer-events: none;
 }
 .table-search-input {
-  width: 210px;
+  width: 200px;
   height: 28px;
   padding-left: 26px;
-  padding-right: 52px;
+  padding-right: 50px;
   font-size: 12.5px;
-  border-radius: 5px;
-  border: 1px solid #E2E2DC;
-  background: #F8F8F5;
-  color: #18181B;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
   outline: none;
-  transition: all 0.12s ease;
+  transition: all 0.15s ease;
 }
 .table-search-input:focus {
-  width: 260px;
-  background: #FFFFFF;
-  border-color: #1E293B;
+  width: 250px;
+  background: var(--bg-main);
+  border-color: var(--accent-ai);
+  box-shadow: var(--focus-ring);
 }
 .grid-search-count {
   position: absolute;
   right: 18px;
   font-size: 11px;
-  color: #A1A1AA;
+  color: var(--text-tertiary);
 }
 
 .toolbar-action-group {
   display: flex;
   align-items: center;
-  gap: 7px;
-  flex-wrap: wrap;
+  gap: 8px;
 }
 .action-btn-group {
   display: flex;
@@ -2221,70 +2285,90 @@ onUnmounted(() => {
   gap: 5px;
 }
 
-/* 按钮通用 (字号 13px) */
+/* 按钮通用 */
 .btn {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
   font-size: 13px;
   font-weight: 500;
   border-radius: 6px;
   cursor: pointer;
   transition: all 0.12s ease;
+  white-space: nowrap;
 }
 .btn-md {
   min-height: 30px;
-  padding: 3px 12px;
+  padding: 4px 12px;
+}
+.btn-sm {
+  min-height: 26px;
+  padding: 3px 10px;
+  font-size: 12.5px;
 }
 .btn-primary {
-  background: #1E293B;
+  background: var(--accent-ai);
   color: #FFFFFF;
-  border: 1px solid #1E293B;
+  border: 1px solid var(--accent-ai);
 }
 .btn-primary:hover {
-  background: #0F172A;
+  opacity: 0.92;
+}
+.btn-success-solid {
+  background: var(--accent-success) !important;
+  border-color: var(--accent-success) !important;
 }
 .btn-secondary {
-  background: #FFFFFF;
-  color: #3F3F46;
-  border: 1px solid #D4D4D8;
+  background: var(--bg-main);
+  color: var(--text-primary);
+  border: 1px solid var(--border-subtle);
 }
 .btn-secondary:hover {
-  background: #F4F4F0;
-  color: #18181B;
+  background: var(--row-hover);
+  border-color: var(--border-subtle);
 }
 .btn-ghost {
   background: transparent;
-  color: #52525B;
+  color: var(--text-secondary);
   border: 1px solid transparent;
 }
 .btn-ghost:hover {
-  background: #EFEFEA;
-  color: #18181B;
+  background: var(--row-hover);
+  color: var(--text-primary);
 }
 .btn-danger {
-  background: #DC2626;
+  background: var(--accent-error);
   color: #FFFFFF;
-  border: 1px solid #DC2626;
+  border: 1px solid var(--accent-error);
 }
 .btn-danger:hover {
-  background: #B91C1C;
+  opacity: 0.9;
+}
+.btn-icon-only {
+  padding: 5px;
+  border-radius: 6px;
+  color: var(--text-secondary);
+}
+.btn-icon-only:hover {
+  background: var(--row-hover);
+  color: var(--text-primary);
 }
 
 .btn-save {
-  background: #FFFFFF;
-  color: #3F3F46;
-  border: 1px solid #D4D4D8;
+  background: var(--bg-main);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
 }
 .btn-save.dirty {
-  background: #1E293B;
+  background: var(--accent-warning);
   color: #FFFFFF;
-  border-color: #1E293B;
+  border-color: var(--accent-warning);
 }
 .btn-save.saved {
-  background: #15803D !important;
+  background: var(--accent-success) !important;
   color: #FFFFFF !important;
-  border-color: #15803D !important;
+  border-color: var(--accent-success) !important;
 }
 .saved-icon {
   font-weight: 700;
@@ -2298,33 +2382,18 @@ onUnmounted(() => {
   color: inherit;
 }
 .btn-save.dirty .shortcut-key {
-  background: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.25);
 }
 
-/* 批量操作置换 */
-.batch-info {
-  display: flex;
-  align-items: center;
-}
-.batch-count {
-  font-size: 14px;
-  color: #18181B;
-}
-.batch-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-/* ─── 指标与策略分布条 ─── */
+/* ─── 策略分布胶囊条 ─── */
 .metrics-strip {
-  padding: 8px 20px;
-  background: #F8F8F5;
-  border-bottom: 1px solid #E7E7E2;
+  padding: 8px 18px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border-subtle);
   display: flex;
   align-items: center;
   gap: 12px;
-  font-size: 13px;
+  font-size: 12.5px;
 }
 .strip-left {
   display: flex;
@@ -2333,72 +2402,88 @@ onUnmounted(() => {
   flex-wrap: wrap;
 }
 .strip-label {
-  color: #71717A;
+  color: var(--text-tertiary);
 }
 .strip-divider {
   width: 1px;
   height: 14px;
-  background: #D4D4D8;
+  background: var(--border-subtle);
 }
 
 .strategy-pills-bar {
   display: flex;
-  gap: 5px;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 .strategy-pill {
-  border: 1px solid transparent;
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 12.5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 9px;
+  font-size: 12px;
+  border-radius: 14px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-main);
+  color: var(--text-secondary);
   cursor: pointer;
-  background: #FFFFFF;
-  color: #52525B;
-  transition: all 0.1s ease;
+  transition: all 0.12s ease;
 }
 .strategy-pill:hover {
-  border-color: #D4D4D8;
+  border-color: var(--accent-ai);
+  color: var(--text-primary);
 }
 .strategy-pill.active {
+  background: var(--text-primary);
+  color: var(--bg-main);
+  border-color: var(--text-primary);
   font-weight: 600;
-  border-color: #1E293B;
-  background: #1E293B;
-  color: #FFFFFF;
+}
+.strategy-pill.pill-正向.active { background: var(--accent-success); border-color: var(--accent-success); color: #FFFFFF; }
+.strategy-pill.pill-反向.active { background: var(--accent-error); border-color: var(--accent-error); color: #FFFFFF; }
+.strategy-pill.pill-边界.active { background: var(--accent-warning); border-color: var(--accent-warning); color: #FFFFFF; }
+.strategy-pill.pill-等价.active { background: var(--accent-info); border-color: var(--accent-info); color: #FFFFFF; }
+.strategy-pill.pill-状态.active { background: var(--c-agent); border-color: var(--c-agent); color: #FFFFFF; }
+.strategy-pill.pill-场景.active { background: var(--c-kb); border-color: var(--c-kb); color: #FFFFFF; }
+
+.pill-num {
+  font-family: var(--font-mono);
+  font-size: 11px;
 }
 
 .status-indicator-warning {
-  color: #B45309;
-  display: flex;
-  align-items: center;
-  gap: 4px;
+  color: var(--accent-warning);
+  font-weight: 500;
 }
 .status-indicator-success {
-  color: #15803D;
+  color: var(--accent-success);
   font-weight: 500;
 }
 
 .keyboard-flow-hint {
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-size: 12px;
-  color: #71717A;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--text-tertiary);
 }
 .kbd-hint kbd {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 10.5px;
   padding: 1px 4px;
   border-radius: 3px;
-  background: #EFEFEA;
-  color: #3F3F46;
-  border: 1px solid #E2E2DC;
+  background: var(--bg-main);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
 }
 
-/* ─── 表格：50px 舒适大行高 + 14px 字体 + 居中自定义多选框 ─── */
+/* ─── 表格与固定列 ─── */
 .table-container {
   flex: 1;
   min-width: 0;
   overflow: auto;
   outline: none;
+  position: relative;
 }
 
 .nordic-table {
@@ -2410,21 +2495,23 @@ onUnmounted(() => {
   position: sticky;
   top: 0;
   z-index: 5;
-  background: #FFFFFF;
+  background: var(--bg-elevated);
   padding: 10px 12px;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
-  color: #71717A;
+  color: var(--text-secondary);
   text-align: left;
-  border-bottom: 1px solid #E7E7E2;
+  border-bottom: 1px solid var(--border-subtle);
+  letter-spacing: 0.01em;
 }
 .nordic-table td {
-  padding: 10px 12px;
-  font-size: 14px;
-  color: #18181B;
+  padding: 8px 12px;
+  font-size: 13.5px;
+  color: var(--text-primary);
   vertical-align: middle;
-  border-bottom: 1px solid #EFEFEA;
-  height: 50px;
+  border-bottom: 1px solid var(--border-subtle);
+  height: 48px;
+  background: var(--bg-main);
 }
 
 .th-chk, .td-chk {
@@ -2432,55 +2519,31 @@ onUnmounted(() => {
   vertical-align: middle !important;
 }
 
-/* ─── 居中自定义多选框 (Custom Styled Centered Checkbox) ─── */
-.clean-chk-wrap {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  width: 22px;
-  height: 22px;
-  position: relative;
-  user-select: none;
-  vertical-align: middle;
-}
-.clean-chk-native {
-  position: absolute;
-  opacity: 0;
-  width: 0;
-  height: 0;
-  pointer-events: none;
-}
 .clean-chk-box {
-  width: 18px;
-  height: 18px;
+  width: 17px;
+  height: 17px;
   border-radius: 4px;
-  border: 1.5px solid #D4D4D8;
-  background: #FFFFFF;
+  border: 1.5px solid var(--border-subtle);
+  background: var(--bg-main);
   display: grid;
   place-items: center;
-  transition: all 0.12s cubic-bezier(0.4, 0, 0.2, 1);
-  color: transparent;
+  cursor: pointer;
+  transition: all 0.12s ease;
 }
-.clean-chk-wrap:hover .clean-chk-box {
-  border-color: #1E293B;
-  background: #F8F8F5;
+.clean-chk-box:hover {
+  border-color: var(--accent-ai);
 }
-.clean-chk-native:checked + .clean-chk-box {
-  background: #1E293B;
-  border-color: #1E293B;
-  color: #FFFFFF;
-}
-.clean-chk-native:focus-visible + .clean-chk-box {
-  box-shadow: 0 0 0 2px rgba(30, 41, 59, 0.2);
+.clean-chk-box.checked {
+  background: var(--accent-ai);
+  border-color: var(--accent-ai);
 }
 
 .req-star {
-  color: #DC2626;
+  color: var(--accent-error);
 }
 
 .custom-th {
-  background: #F8F8F5 !important;
+  background: var(--bg-elevated) !important;
 }
 .th-flex {
   display: flex;
@@ -2491,72 +2554,75 @@ onUnmounted(() => {
 .th-del-btn {
   background: none;
   border: none;
-  color: #A1A1AA;
+  color: var(--text-tertiary);
   font-size: 11px;
   cursor: pointer;
   padding: 1px;
 }
-.th-del-btn:hover { color: #DC2626; }
+.th-del-btn:hover { color: var(--accent-error); }
 
 .data-row {
   transition: background-color 0.08s ease;
 }
-.data-row:hover {
-  background: #F8F8F5;
+.data-row:hover td {
+  background: var(--row-hover);
 }
-.data-row.row-checked {
-  background: #F4F4F0;
+.data-row.row-checked td {
+  background: var(--t-cases);
 }
-.data-row.row-incomplete {
-  background: #FFFDF5;
-}
-.data-row.row-focused {
-  background: #F8F8F5;
+.data-row.row-incomplete td {
+  background: rgba(245, 158, 11, 0.04);
 }
 
-/* 键盘流高亮光标单元格 */
 .cell-cursor {
-  box-shadow: inset 0 0 0 1.5px #1E293B;
-  background: rgba(30, 41, 59, 0.03);
+  box-shadow: inset 0 0 0 1.5px var(--accent-ai);
 }
 
 .td-num {
   font-size: 12px;
-  color: #A1A1AA;
+  color: var(--text-tertiary);
 }
 .mono-bold {
   font-family: var(--font-mono);
   font-weight: 600;
   font-size: 12.5px;
-  color: #27272A;
+  color: var(--text-primary);
 }
 
 .cell-edit {
   cursor: text;
+  transition: background-color 0.1s ease;
+  position: relative;
 }
+.cell-edit:hover {
+  outline: 1px dashed var(--accent-ai);
+  outline-offset: -2px;
+  border-radius: 4px;
+}
+
 .cell-content {
   min-height: 24px;
   display: flex;
   align-items: center;
   word-break: break-word;
   line-height: 1.5;
-  font-size: 14px;
+  font-size: 13.5px;
 }
 .cell-content.primary-text {
   font-weight: 500;
-  color: #18181B;
+  color: var(--text-primary);
 }
 .cell-content.empty {
-  color: #B45309;
+  color: var(--accent-warning);
   font-style: italic;
-  font-size: 13px;
+  font-size: 12.5px;
 }
 .cell-content.placeholder {
-  color: #A1A1AA;
+  color: var(--text-tertiary);
 }
 .cell-content.mono-sm {
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: 12px;
 }
 
 :deep(.highlight-match) {
@@ -2568,25 +2634,28 @@ onUnmounted(() => {
 
 .inline-input {
   width: 100%;
-  padding: 5px 8px;
+  padding: 4px 7px;
   font: inherit;
-  font-size: 13.5px;
-  background: #FFFFFF;
-  border: 1.5px solid #1E293B;
+  font-size: 13px;
+  background: var(--bg-main);
+  border: 1.5px solid var(--accent-ai);
   border-radius: 4px;
   outline: none;
+  color: var(--text-primary);
+  box-shadow: var(--focus-ring);
 }
 .inline-select {
   height: 28px;
   font-size: 12.5px;
   padding: 1px 6px;
   border-radius: 4px;
-  border: 1px solid #1E293B;
-  background: #FFFFFF;
+  border: 1px solid var(--accent-ai);
+  background: var(--bg-main);
+  color: var(--text-primary);
 }
 
 .cell-invalid {
-  border-bottom: 1px dashed #DC2626 !important;
+  border-bottom: 1px dashed var(--accent-error) !important;
 }
 
 .strategy-badge {
@@ -2596,12 +2665,12 @@ onUnmounted(() => {
   font-size: 11.5px;
   font-weight: 500;
 }
-.badge-正向 { background: #F0FDF4; color: #166534; }
-.badge-反向 { background: #FEF2F2; color: #991B1B; }
-.badge-边界 { background: #FEFCE8; color: #854D0E; }
-.badge-等价 { background: #EFF6FF; color: #1D4ED8; }
-.badge-状态 { background: #FAF5FF; color: #6B21A8; }
-.badge-场景 { background: #F0FDFA; color: #0F766E; }
+.badge-正向 { background: var(--t-cases); color: var(--c-cases); }
+.badge-反向 { background: var(--t-stress); color: var(--c-stress); }
+.badge-边界 { background: var(--t-profiles); color: var(--c-profiles); }
+.badge-等价 { background: var(--t-datasets); color: var(--c-datasets); }
+.badge-状态 { background: var(--t-agent); color: var(--c-agent); }
+.badge-场景 { background: var(--t-kb); color: var(--c-kb); }
 
 .priority-badge {
   display: inline-block;
@@ -2611,21 +2680,21 @@ onUnmounted(() => {
   font-size: 11px;
   font-weight: 600;
 }
-.prio-HX { background: #FEF2F2; color: #DC2626; }
-.prio-FHX { background: #FEF3C7; color: #D97706; }
-.prio-BJ { background: #F0FDF4; color: #15803D; }
-.prio-YC { background: #EFF6FF; color: #2563EB; }
-.prio-ZD { background: #F4F4F5; color: #52525B; }
-.prio-BL { background: #FAFAFA; color: #A1A1AA; }
+.prio-HX { background: var(--t-stress); color: var(--c-stress); }
+.prio-FHX { background: var(--t-profiles); color: var(--c-profiles); }
+.prio-BJ { background: var(--t-cases); color: var(--c-cases); }
+.prio-YC { background: var(--t-agent); color: var(--c-agent); }
+.prio-ZD { background: var(--bg-elevated); color: var(--text-secondary); border: 1px solid var(--border-subtle); }
+.prio-BL { background: var(--bg-elevated); color: var(--text-tertiary); }
 
 .status-tag-green {
   font-size: 12px;
-  color: #15803D;
+  color: var(--accent-success);
   font-weight: 500;
 }
 .status-tag-clean {
   font-size: 12px;
-  color: #A1A1AA;
+  color: var(--text-tertiary);
 }
 
 .td-actions {
