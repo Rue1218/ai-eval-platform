@@ -248,11 +248,12 @@ const rejectedTooltip = computed(() =>
 
 <style scoped>
 .task-state-drawer {
+  max-width: 780px;
+  margin: 0 auto 8px;
   background: var(--bg-main, #ffffff);
   border: 1px solid var(--border-subtle, rgba(229, 231, 235, 0.8));
   border-radius: 12px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.05);
-  margin-bottom: 8px;
   overflow: hidden;
   transition: all 0.25s cubic-bezier(0.2, 0.9, 0.3, 1);
 }
