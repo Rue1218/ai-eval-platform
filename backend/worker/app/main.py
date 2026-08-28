@@ -16,6 +16,11 @@ from sqlalchemy import not_
 
 from .benchmark import run_benchmark
 from .db import SessionLocal
+from .dataset_import import (
+    claim_next_dataset_import,
+    recover_expired_dataset_import_leases,
+    run_dataset_import,
+)
 from .events import push_ws
 from .models import CaseSet, Setting, Task, TaskEvent
 from .rag import run_rag
@@ -213,16 +218,21 @@ def _expire_stale_case_confirmations(db) -> int:
 
 
 def loop() -> None:
-    """轮询任务队列：受平台并发闸门约束，超限时 queued 任务保持排队。"""
+    """轮询评测与导入两条独立队列，二者各自受并发闸门和租约约束。"""
     last_expire_scan = 0.0
     while True:
         db = SessionLocal()
+        task_id: str | None = None
+        import_claim: tuple[str, str] | None = None
         try:
+            # 导入租约独立于 Task；先回收异常退出的领取，再按设置尝试领取一个作业。
+            recover_expired_dataset_import_leases(db)
+            import_claim = claim_next_dataset_import(db)
             # 平台并发闸门（PRD 3.4）：running 任务达到 max_running_tasks 时
             # 不领取新任务，queued 任务保持排队；会话内串行由 tasks 表的
             # 部分唯一索引 uq_tasks_active_session 在创建侧保证。
             running = db.query(Task).filter(Task.status == "running").count()
-            if running < _max_running_tasks(db):
+            if not import_claim and running < _max_running_tasks(db):
                 task = (
                     db.query(Task)
                     .filter(Task.status == "queued")
@@ -235,12 +245,19 @@ def loop() -> None:
                     task.status = "running"
                     task.started_at = datetime.now(timezone.utc)
                     db.commit()
-                    db.refresh(task)
-                    _run_task(task.id)
+                    task_id = task.id
         except Exception:
             logger.exception("worker loop error")
         finally:
             db.close()
+        # 执行器自建 Session；主循环绝不将 ORM 实体跨 Session 传递。
+        if import_claim:
+            import_id, lease_token = import_claim
+            logger.info("开始执行 dataset import=%s", import_id)
+            print(f"[worker] dataset-import start import={import_id}", flush=True)
+            run_dataset_import(import_id, lease_token)
+        elif task_id:
+            _run_task(task_id)
         # 72h 超时扫描：节流执行，避免每秒全表扫（表量级小，代价可忽略）
         if time.monotonic() - last_expire_scan >= EXPIRE_SCAN_INTERVAL_S:
             last_expire_scan = time.monotonic()

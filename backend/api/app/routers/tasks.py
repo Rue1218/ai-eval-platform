@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
-from ..models import AuditLog, Report, Task, TaskEvent, User
+from ..models import AuditLog, Dataset, DatasetVersion, Report, Task, TaskEvent, User
 from ..models import Session as AgentSession
 from ..schemas import TaskCreate, TaskDetailOut, TaskEventOut, TaskOut
 from ..session_access import require_visible_session
@@ -124,6 +124,29 @@ def create_task(
             raise AppError(ErrorCode.VALIDATION, "仅质量任务可派生压测")
 
     snapshot = body.snapshot()
+    if body.kind == "benchmark" and body.dataset_id:
+        # 与发布流程争用同一数据集行锁，确保任务快照到的是单一、不可变版本。
+        dataset = (
+            db.query(Dataset)
+            .filter(Dataset.id == body.dataset_id)
+            .with_for_update()
+            .first()
+        )
+        if not dataset:
+            raise AppError(ErrorCode.NOT_FOUND, "关联数据集不存在")
+        if dataset.active_version_id:
+            snapshot["dataset_version_id"] = dataset.active_version_id
+            version = (
+                db.query(DatasetVersion)
+                .filter(
+                    DatasetVersion.id == dataset.active_version_id,
+                    DatasetVersion.dataset_id == dataset.id,
+                )
+                .first()
+            )
+            if not version:
+                raise AppError(ErrorCode.INTERNAL, "数据集当前版本异常，无法创建评测任务")
+            snapshot["dataset_version_no"] = version.version_no
     if body.kind == "stress" and body.stress and body.stress.env == "prod":
         snapshot["need_approval"] = True
     task = Task(

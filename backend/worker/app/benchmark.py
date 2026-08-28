@@ -28,6 +28,8 @@ from .judge import build_judge_call_kwargs, judge_single_sample
 from .models import (
     Dataset,
     DatasetRow,
+    DatasetVersion,
+    DatasetVersionRow,
     EvalItem,
     ProtocolProfile,
     Report,
@@ -434,7 +436,7 @@ def _finish(db: Session, task: Task, dataset: Dataset, metric: str, total: int) 
             "metric": metric,
             "dataset_id": dataset.id,
             "dataset_name": dataset.name,
-            "dataset_version": dataset.version,
+            "dataset_version": config.get("dataset_version_no", dataset.version),
             # 分母口径在报告内可见（前端页脚同文案）
             "denominator_note": "待补全行（question/reference 缺失）不进评分分母；失败样本不计入主指标均值；裁判分仅对调用成功且成功打分的样本求均值",
             "scores": scores,
@@ -484,12 +486,41 @@ def run_benchmark(task_id: str) -> None:
         if not dataset:
             _fail(db, task, "VALIDATION", "关联数据集不存在，任务无法执行")
             return
-        rows = (
-            db.query(DatasetRow)
-            .filter(DatasetRow.dataset_id == dataset.id, DatasetRow.pending_complete.is_(False))
-            .order_by(DatasetRow.row_no.asc())
-            .all()
-        )
+        frozen_version_id = config.get("dataset_version_id")
+        if frozen_version_id:
+            frozen_version = (
+                db.query(DatasetVersion)
+                .filter(
+                    DatasetVersion.id == frozen_version_id,
+                    DatasetVersion.dataset_id == dataset.id,
+                )
+                .first()
+            )
+            if not frozen_version:
+                _fail(db, task, "VALIDATION", "任务锁定的数据集版本不存在，无法执行")
+                return
+            # 评测只读创建任务时冻结的正式版本，staging 或后续发布不会污染历史任务。
+            rows = (
+                db.query(DatasetVersionRow)
+                .filter(
+                    DatasetVersionRow.dataset_version_id == frozen_version.id,
+                    DatasetVersionRow.question != "",
+                    DatasetVersionRow.reference != "",
+                )
+                .order_by(DatasetVersionRow.row_no.asc())
+                .all()
+            )
+        else:
+            # 兼容 M3 之前的手工数据集；此分支不触及导入后的不可变版本。
+            rows = (
+                db.query(DatasetRow)
+                .filter(
+                    DatasetRow.dataset_id == dataset.id,
+                    DatasetRow.pending_complete.is_(False),
+                )
+                .order_by(DatasetRow.row_no.asc())
+                .all()
+            )
         sample_size = clamp_sample_size(run.get("sample_size"), len(rows))
         rows = rows[:sample_size]
         if not rows:

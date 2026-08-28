@@ -262,7 +262,7 @@ class StoredFile(Base):
 
 
 class Dataset(Base):
-    """数据集：M2 起挂载目录树、评测口径与自定义扩展列定义。"""
+    """数据集容器：正式评测只读取 active_version_id 指向的不可变版本。"""
 
     __tablename__ = "datasets"
 
@@ -277,8 +277,201 @@ class Dataset(Base):
     folder_id = Column(String, ForeignKey("dataset_folders.id"), nullable=True)
     # 自定义扩展列定义数组：[{key, name, type, required?, sort_order}]
     column_schema = Column(JSONB, nullable=False, default=list)
+    # 容器状态与当前可评测版本分离，新的 staging 导入不影响旧 active 版本。
+    status = Column(String, nullable=False, default="draft", server_default="draft")
+    active_version_id = Column(
+        String,
+        ForeignKey("dataset_versions.id", name="fk_datasets_active_version", use_alter=True),
+        nullable=True,
+        index=True,
+    )
     created_by = Column(String, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class DatasetCatalogEntry(Base):
+    """公开基准的稳定来源身份；可导入制品由其 release 另行冻结。"""
+
+    __tablename__ = "dataset_catalog_entries"
+
+    id = Column(String, primary_key=True, default=uuid_str)
+    name = Column(String, nullable=False)
+    upstream_owner = Column(String, nullable=False)
+    official_project_url = Column(Text, nullable=False)
+    allowed_domains = Column(JSONB, nullable=False, default=list)
+    purpose = Column(String, nullable=False, default="internal_evaluation_only")
+    evidence_refs = Column(JSONB, nullable=False, default=list)
+    status = Column(String, nullable=False, default="draft", index=True)
+    submitted_by = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+
+class DatasetCatalogRelease(Base):
+    """目录来源的一次不可变 release manifest；审核后禁止原地修改。"""
+
+    __tablename__ = "dataset_catalog_releases"
+    __table_args__ = (
+        UniqueConstraint("catalog_entry_id", "manifest_hash", name="uq_catalog_release_manifest"),
+    )
+
+    id = Column(String, primary_key=True, default=uuid_str)
+    catalog_entry_id = Column(String, ForeignKey("dataset_catalog_entries.id"), nullable=False, index=True)
+    display_version = Column(String, nullable=False)
+    source_revision = Column(String, nullable=False)
+    manifest = Column(JSONB, nullable=False, default=dict)
+    manifest_hash = Column(String(64), nullable=False, index=True)
+    license = Column(JSONB, nullable=False, default=dict)
+    allowed_splits = Column(JSONB, nullable=False, default=list)
+    filter_schema = Column(JSONB, nullable=False, default=dict)
+    parser_id = Column(String, nullable=False)
+    parser_version = Column(String, nullable=False)
+    task_family = Column(String, nullable=False)
+    support_status = Column(String, nullable=False, default="review_required")
+    risk_labels = Column(JSONB, nullable=False, default=list)
+    status = Column(String, nullable=False, default="draft", index=True)
+    submitted_by = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    approved_by = Column(String, ForeignKey("users.id"), nullable=True)
+    approved_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+
+class DatasetCatalogReview(Base):
+    """目录/release 的追加式审核记录；双人复核由服务层校验。"""
+
+    __tablename__ = "dataset_catalog_reviews"
+
+    id = Column(String, primary_key=True, default=uuid_str)
+    catalog_entry_id = Column(String, ForeignKey("dataset_catalog_entries.id"), nullable=True, index=True)
+    release_id = Column(String, ForeignKey("dataset_catalog_releases.id"), nullable=True, index=True)
+    actor_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    action = Column(String, nullable=False)
+    previous_status = Column(String, nullable=True)
+    next_status = Column(String, nullable=False)
+    manifest_hash = Column(String(64), nullable=True)
+    note = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class DatasetImport(Base):
+    """独立导入队列主记录；不复用评测 Task，也不产生评测报告。"""
+
+    __tablename__ = "dataset_imports"
+    __table_args__ = (
+        UniqueConstraint("request_fingerprint", name="uq_dataset_import_fingerprint"),
+        Index("ix_dataset_import_queue", "status", "created_at"),
+    )
+
+    id = Column(String, primary_key=True, default=uuid_str)
+    dataset_id = Column(String, ForeignKey("datasets.id"), nullable=False, index=True)
+    catalog_release_id = Column(String, ForeignKey("dataset_catalog_releases.id"), nullable=False, index=True)
+    request_fingerprint = Column(String(64), nullable=False)
+    manifest = Column(JSONB, nullable=False, default=dict)
+    manifest_hash = Column(String(64), nullable=False, index=True)
+    status = Column(String, nullable=False, default="queued", index=True)
+    stage = Column(String, nullable=False, default="queued")
+    attempt = Column(Integer, nullable=False, default=0)
+    max_attempts = Column(Integer, nullable=False, default=3)
+    lease_token = Column(String(64), nullable=True, unique=True)
+    lease_owner = Column(String, nullable=True)
+    lease_expires_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    staging_revision = Column(Integer, nullable=False, default=0)
+    summary = Column(JSONB, nullable=False, default=dict)
+    error = Column(JSONB, nullable=False, default=dict)
+    created_by = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    reviewed_by = Column(String, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+
+class DatasetImportAttempt(Base):
+    """导入作业的单次领取与执行记录，用于租约回收和失败诊断。"""
+
+    __tablename__ = "dataset_import_attempts"
+    __table_args__ = (UniqueConstraint("import_id", "attempt_no", name="uq_dataset_import_attempt"),)
+
+    id = Column(String, primary_key=True, default=uuid_str)
+    import_id = Column(String, ForeignKey("dataset_imports.id"), nullable=False, index=True)
+    attempt_no = Column(Integer, nullable=False)
+    worker_id = Column(String, nullable=True)
+    lease_token = Column(String(64), nullable=False, unique=True)
+    stage = Column(String, nullable=False, default="queued")
+    error_code = Column(String, nullable=True)
+    error_summary = Column(Text, nullable=True)
+    started_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    finished_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class DatasetSourceArtifact(Base):
+    """Worker 实际取得的制品快照；哈希与 release manifest 一起进入正式版本。"""
+
+    __tablename__ = "dataset_source_artifacts"
+
+    id = Column(String, primary_key=True, default=uuid_str)
+    import_id = Column(String, ForeignKey("dataset_imports.id"), nullable=False, index=True)
+    artifact_name = Column(String, nullable=False)
+    sha256 = Column(String(64), nullable=False, index=True)
+    size_bytes = Column(BigInteger, nullable=False)
+    media_type = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class DatasetImportRow(Base):
+    """导入产生的 staging 行；稳定 UUID 取代可变 row_no 作为发布选择键。"""
+
+    __tablename__ = "dataset_import_rows"
+    __table_args__ = (UniqueConstraint("import_id", "row_no", name="uq_dataset_import_row_no"),)
+
+    id = Column(String, primary_key=True, default=uuid_str)
+    import_id = Column(String, ForeignKey("dataset_imports.id"), nullable=False, index=True)
+    row_no = Column(Integer, nullable=False)
+    question = Column(Text, nullable=False, default="")
+    reference = Column(Text, nullable=False, default="")
+    context = Column(Text, nullable=True)
+    extras = Column(JSONB, nullable=False, default=dict)
+    row_status = Column(String, nullable=False, default="staging")
+    provenance = Column(JSONB, nullable=False, default=dict)
+    warnings = Column(JSONB, nullable=False, default=list)
+    content_sha256 = Column(String(64), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+
+class DatasetVersion(Base):
+    """审核发布后的不可变数据集版本；active_version_id 仅指向该表。"""
+
+    __tablename__ = "dataset_versions"
+    __table_args__ = (UniqueConstraint("dataset_id", "version_no", name="uq_dataset_version_no"),)
+
+    id = Column(String, primary_key=True, default=uuid_str)
+    dataset_id = Column(String, ForeignKey("datasets.id"), nullable=False, index=True)
+    import_id = Column(String, ForeignKey("dataset_imports.id"), nullable=True, index=True)
+    version_no = Column(Integer, nullable=False)
+    status = Column(String, nullable=False, default="active")
+    manifest = Column(JSONB, nullable=False, default=dict)
+    content_sha256 = Column(String(64), nullable=False, index=True)
+    scorer_version = Column(String, nullable=False)
+    published_by = Column(String, ForeignKey("users.id"), nullable=False)
+    published_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class DatasetVersionRow(Base):
+    """正式版本行快照；评测 Worker 仅可读取此表而非可编辑 staging。"""
+
+    __tablename__ = "dataset_version_rows"
+    __table_args__ = (UniqueConstraint("dataset_version_id", "row_no", name="uq_dataset_version_row_no"),)
+
+    id = Column(String, primary_key=True, default=uuid_str)
+    dataset_version_id = Column(String, ForeignKey("dataset_versions.id"), nullable=False, index=True)
+    source_import_row_id = Column(String, ForeignKey("dataset_import_rows.id"), nullable=True)
+    row_no = Column(Integer, nullable=False)
+    question = Column(Text, nullable=False)
+    reference = Column(Text, nullable=False)
+    context = Column(Text, nullable=True)
+    extras = Column(JSONB, nullable=False, default=dict)
+    provenance = Column(JSONB, nullable=False, default=dict)
+    content_sha256 = Column(String(64), nullable=False)
 
 
 class Task(Base):
