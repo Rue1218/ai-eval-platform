@@ -177,7 +177,8 @@ const formattedTasks = computed<TaskItemDisplay[]>(() => {
     : []
 
   const completed = new Set(taskState.value?.completed_steps || [])
-  const failedMap = new Map((taskState.value?.failed_steps || []).map((f) => [f.step, f.reason]))
+  const failedSteps = taskState.value?.failed_steps || []
+  const failedMap = new Map(failedSteps.map((f) => [f.step, f.reason]))
   const currentStep = taskState.value?.current_step || ''
 
   // 若无细分 taskState，推导当前执行步骤：首个未完成的为 running

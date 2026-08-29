@@ -118,6 +118,7 @@ class GraphState(TypedDict, total=False):
     clarify_id: str | None  # 阶段 3：澄清唯一标识（匹配前端 clarify_reply.id）
     verdict: ReflectVerdict | None  # 阶段 4：reflect 节点写
     task_state: Mapping[str, object] | None  # 结构化任务状态机（TaskSessionState 投影）
+    task_state_observation_count: int  # 已被状态机消费的 Observation 数，防 append reducer 重放旧观察
     response: Mapping[str, object]  # ModelResponse 投影（text/usage/latency_ms）
 
 

@@ -183,6 +183,8 @@ def build_plan_solve_subgraph(gateway: object | None = None) -> dict:
         return {
             "plan": payload,
             "task_state": task_state.to_dict(),
+            # 重规划时历史 Observation 已参与过上一个计划，不能再次推进新计划。
+            "task_state_observation_count": len(state.get("observations") or ()),
             "budget": budget.to_dict(),
             "force_replan": False,
             "replan_reason": None,

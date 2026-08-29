@@ -66,6 +66,11 @@ class TaskSessionState:
     blocked_reason: str = ""
     notes: str = ""
 
+    def __post_init__(self) -> None:
+        """固化交付不变式，避免绕过 ``from_dict`` 直接伪造完成态。"""
+        if self.missing_info and self.can_deliver:
+            object.__setattr__(self, "can_deliver", False)
+
     def to_dict(self) -> dict[str, object]:
         """转换为 json.dumps 安全的字典结构。"""
         return {
@@ -143,9 +148,6 @@ class TaskSessionState:
 
         missing_info = str_tuple(raw.get("missing_info"))
         can_deliver = bool(raw.get("can_deliver"))
-        # 守卫：如果存在明确的 missing_info，强制不允许判定为可交付
-        if missing_info and can_deliver:
-            can_deliver = False
 
         return cls(
             protocol="task_state",
@@ -171,14 +173,13 @@ def evolve_task_state(
     current: TaskSessionState,
     observations: list[object] | tuple[object, ...],
 ) -> TaskSessionState:
-    """根据最新累积的 Observation 列表驱动结构化任务状态机演进。"""
+    """根据尚未消费的 Observation 列表驱动结构化任务状态机演进。"""
     if not observations:
         return current
 
     confirmed_facts = list(current.confirmed_facts)
     evidence = list(current.evidence)
     failed_steps = list(current.failed_steps)
-    rejected_hypotheses = list(current.rejected_hypotheses)
     completed_steps = list(current.completed_steps)
     missing_info = list(current.missing_info)
     next_actions = list(current.next_actions)
@@ -199,10 +200,16 @@ def evolve_task_state(
             if source and source not in evidence:
                 evidence.append(source)
 
-            if current_step and current_step not in completed_steps:
+            # 仅当计划步骤显式点名当前工具，才能认定该步骤完成。工具成功本身
+            # 只能说明获取到一条事实，不能替代任意计划动作的闭环。
+            if (
+                current_step
+                and current_step not in completed_steps
+                and tool.casefold() in current_step.casefold()
+            ):
                 completed_steps.append(current_step)
                 for item in list(missing_info):
-                    if item == current_step or tool in item:
+                    if item == current_step:
                         missing_info.remove(item)
                 if next_actions:
                     current_step = next_actions.pop(0)
@@ -210,18 +217,16 @@ def evolve_task_state(
                     current_step = ""
         else:
             repair_hint = str(getattr(obs, "repair_hint", "") or "")
-            fail_step = FailedStep(step=tool, reason=text[:160], repair_hint=repair_hint)
+            # 前端按计划步骤渲染失败态；只有匹配中的调用才归属当前步骤，其他
+            # 非计划调用保留工具名，避免错误污染计划看板。
+            failed_step = (
+                current_step
+                if current_step and tool.casefold() in current_step.casefold()
+                else tool
+            )
+            fail_step = FailedStep(step=failed_step, reason=text[:160], repair_hint=repair_hint)
             if fail_step not in failed_steps:
                 failed_steps.append(fail_step)
-
-            if current.current_hypothesis:
-                rej = RejectedHypothesis(
-                    hypothesis=current.current_hypothesis,
-                    reason=f"{tool} 执行未达预期：{text[:120]}",
-                    evidence_ref=source,
-                )
-                if rej not in rejected_hypotheses:
-                    rejected_hypotheses.append(rej)
 
     can_deliver = len(missing_info) == 0 and (len(completed_steps) > 0 or not current.missing_info)
     phase: TaskPhase = (
@@ -242,10 +247,9 @@ def evolve_task_state(
         current_hypothesis=current.current_hypothesis,
         confirmed_facts=tuple(confirmed_facts),
         evidence=tuple(evidence),
-        rejected_hypotheses=tuple(rejected_hypotheses),
+        rejected_hypotheses=current.rejected_hypotheses,
         missing_info=tuple(missing_info),
         can_deliver=can_deliver,
         blocked_reason=current.blocked_reason,
         notes=current.notes,
     )
-

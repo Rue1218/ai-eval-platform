@@ -6,8 +6,8 @@ current_step——预算公式 2+steps 与 native 每工具 2 次模型调用不
 总结类纯文本步骤被误纳入 missing_info 无法闭环。
 """
 
-from app.agent.react import _finalize_task_state
-from app.harness.contracts import Observation
+from app.agent.react import _evolve_unprocessed_task_state, _finalize_task_state
+from app.harness.contracts import Observation, TaskSessionState
 from app.harness.contracts.task_state import evolve_task_state
 from app.harness.orchestration.plan import _l0_fallback, task_state_from_plan
 
@@ -43,25 +43,57 @@ def test_evolve_completes_tool_steps_and_deliverable() -> None:
     """工具步骤完成后 missing_info 清空、can_deliver=True。"""
     plan = _plan_for("用 read 读取 a.txt，write 写入 b.txt，最后总结")
     state = task_state_from_plan(plan)
+    state = evolve_task_state(state, [Observation(tool="task", text="步骤已列出", ok=True)])
     state = evolve_task_state(state, [Observation(tool="read", text="内容X", ok=True)])
     state = evolve_task_state(state, [Observation(tool="write", text="写入成功", ok=True)])
-    assert len(state.completed_steps) == 2
+    assert len(state.completed_steps) == 3
     assert not state.missing_info
     assert state.can_deliver is True
 
 
 def test_finalize_task_state_marks_summary_complete() -> None:
     """模型无工具收尾时，current_step（说明类步骤）并入完成并置可交付。"""
-    plan = _plan_for("用 read 读取 a.txt，用 write 写入 b.txt，用 edit 修改 c.txt")
-    state = task_state_from_plan(plan)
-    state = evolve_task_state(state, [Observation(tool="read", text="内容", ok=True)])
-    assert state.current_step  # 总结步骤仍是 current
+    state = TaskSessionState(
+        completed_steps=("用 read 读取 a.txt",),
+        current_step="向用户说明结论",
+        missing_info=(),
+    )
     finalized = _finalize_task_state(state)
     assert finalized is not None
     assert finalized["can_deliver"] is True
     assert finalized["phase"] == "completed"
     assert state.current_step in finalized["completed_steps"]
     assert finalized["current_step"] == ""
+
+
+def test_finalize_task_state_keeps_missing_info_open() -> None:
+    """关键缺口未消除时，收尾函数不得伪造可交付或完成当前步骤。"""
+    state = TaskSessionState(
+        current_step="用 read 读取生产日志",
+        missing_info=("用 read 读取生产日志",),
+    )
+    finalized = _finalize_task_state(state)
+    assert finalized is not None
+    assert finalized["can_deliver"] is False
+    assert finalized["current_step"] == "用 read 读取生产日志"
+    assert not finalized["completed_steps"]
+
+
+def test_evolve_unprocessed_task_state_ignores_consumed_observations() -> None:
+    """累计 Observation 再入图时，只处理计数器之后的新结果，不得重复推进。"""
+    initial = TaskSessionState(
+        current_step="用 read 读取 A",
+        next_actions=("用 write 写入 B", "用 edit 修改 C"),
+        missing_info=("用 read 读取 A", "用 write 写入 B", "用 edit 修改 C"),
+    )
+    read = Observation(tool="read", text="A", ok=True)
+    write = Observation(tool="write", text="B", ok=True)
+    after_read, count = _evolve_unprocessed_task_state(initial, (read,), 0)
+    after_write, count = _evolve_unprocessed_task_state(after_read, (read, write), count)
+    assert count == 2
+    assert after_write.completed_steps == ("用 read 读取 A", "用 write 写入 B")
+    assert after_write.current_step == "用 edit 修改 C"
+    assert after_write.can_deliver is False
 
 
 def test_budget_cap_20() -> None:

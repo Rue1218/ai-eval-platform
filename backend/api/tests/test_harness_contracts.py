@@ -225,6 +225,10 @@ def test_task_session_state_missing_info_forces_can_deliver_false() -> None:
     restored = TaskSessionState.from_dict(raw)
     assert restored.can_deliver is False
 
+    # 直接构造也必须遵守同一不变式，不能绕过反序列化入口。
+    direct = TaskSessionState(missing_info=("压测 QPS 采样数据",), can_deliver=True)
+    assert direct.can_deliver is False
+
 
 def test_evolve_task_state_advances_steps_and_records_evidence() -> None:
     """状态机演进：工具成功执行驱动步骤推进并记录证据。"""
@@ -232,9 +236,9 @@ def test_evolve_task_state_advances_steps_and_records_evidence() -> None:
         goal="分析仓库代码",
         phase="exploring",
         completed_steps=(),
-        current_step="读取目录结构",
-        next_actions=("定位核心模块",),
-        missing_info=("读取目录结构", "定位核心模块"),
+        current_step="用 read 读取目录结构",
+        next_actions=("用 read 定位核心模块",),
+        missing_info=("用 read 读取目录结构", "用 read 定位核心模块"),
         can_deliver=False,
     )
     obs = Observation(
@@ -244,8 +248,8 @@ def test_evolve_task_state_advances_steps_and_records_evidence() -> None:
         source="repo:root",
     )
     evolved = evolve_task_state(initial, [obs])
-    assert "读取目录结构" in evolved.completed_steps
-    assert evolved.current_step == "定位核心模块"
+    assert "用 read 读取目录结构" in evolved.completed_steps
+    assert evolved.current_step == "用 read 定位核心模块"
     assert "repo:root" in evolved.evidence
     assert any("read" in fact for fact in evolved.confirmed_facts)
     # 仍有定位核心模块未完成
@@ -254,14 +258,14 @@ def test_evolve_task_state_advances_steps_and_records_evidence() -> None:
     # 推进第二步
     obs2 = Observation(tool="read", text="已定位核心模块", ok=True, source="repo:src")
     evolved2 = evolve_task_state(evolved, [obs2])
-    assert "定位核心模块" in evolved2.completed_steps
+    assert "用 read 定位核心模块" in evolved2.completed_steps
     assert evolved2.current_step == ""
     assert evolved2.can_deliver is True
     assert evolved2.phase == "converging"
 
 
-def test_evolve_task_state_records_failures_and_rejects_hypothesis() -> None:
-    """状态机演进：工具失败记录到 failed_steps 并证伪当前假设。"""
+def test_evolve_task_state_records_failure_without_rejecting_hypothesis() -> None:
+    """状态机演进：工具失败只记录执行问题，不能凭此证伪业务假设。"""
     initial = TaskSessionState(
         goal="排查故障",
         current_hypothesis="内存泄漏导致 OOM",
@@ -277,7 +281,18 @@ def test_evolve_task_state_records_failures_and_rejects_hypothesis() -> None:
     evolved = evolve_task_state(initial, [obs])
     assert len(evolved.failed_steps) == 1
     assert evolved.failed_steps[0].step == "bash"
-    assert len(evolved.rejected_hypotheses) == 1
-    assert evolved.rejected_hypotheses[0].hypothesis == "内存泄漏导致 OOM"
+    assert not evolved.rejected_hypotheses
     assert not evolved.can_deliver
 
+
+def test_evolve_task_state_does_not_advance_unmatched_tool() -> None:
+    """非当前计划工具的成功结果只能沉淀事实，不能跳过计划步骤。"""
+    initial = TaskSessionState(
+        current_step="用 read 读取配置",
+        next_actions=("用 write 写入修复",),
+        missing_info=("用 read 读取配置", "用 write 写入修复"),
+    )
+    evolved = evolve_task_state(initial, [Observation(tool="web_search", text="无关网页", ok=True)])
+    assert not evolved.completed_steps
+    assert evolved.current_step == "用 read 读取配置"
+    assert evolved.missing_info == initial.missing_info

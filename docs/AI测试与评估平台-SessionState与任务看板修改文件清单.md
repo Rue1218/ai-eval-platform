@@ -2,8 +2,8 @@
 
 | 项 | 内容 |
 | :--- | :--- |
-| 文档版本 | V1.0 |
-| 审查日期 | 2026-08-26 |
+| 文档版本 | V1.1 |
+| 审查日期 | 2026-08-29 |
 | 对应提交 / PR | PR #137 (Commit `fb4f934`) |
 | 涉及模块 | 后端 Harness 契约层、记忆层、编排层、执行层、反射层；前端类型层、抽屉看板组件、Agent 对话视图 |
 
@@ -129,3 +129,19 @@
 | **前端类型检查** | `npm run typecheck` | **0 错误（`vue-tsc --noEmit` 完全通过）** |
 | **前端生产构建** | `npm run build` | **`vite build` 成功通过（耗时 53.74s）** |
 | **Git 合并与分支**| PR #137 | **已成功通过 PR 合并至主干 `main` (`fb4f934`)，清理临时分支** |
+
+---
+
+## 5. V1.1 运行逻辑修复（2026-08-29）
+
+本次代码审查发现：累计 Observation 会重复推进步骤、直接构造状态可绕过交付不变式、未闭环任务会先发送最终正文、工具失败会错误证伪业务假设。已完成以下局部修复，**未新增 REST/WS 对外字段**：
+
+| 文件 | 修改作用 |
+| :--- | :--- |
+| `backend/api/app/harness/contracts/task_state.py` | 在 `TaskSessionState.__post_init__` 固化 `missing_info` 与 `can_deliver` 不变式；仅工具名与当前步骤明确匹配时推进；工具失败只记录执行失败，不再自动证伪假设。 |
+| `backend/api/app/harness/memory/state.py` | 为 GraphState 增加已消费 Observation 计数，配合 append reducer 防止旧观察重复回放。 |
+| `backend/api/app/agent/plan_solve.py`、`backend/api/app/agent/react.py` | 新建或重规划时初始化消费计数；ReAct 仅消费新增观察；chat 规划的最终正文及其流式正文增量均先暂存，等待 Reflect 放行。 |
+| `backend/api/app/agent/reflect.py` | 缺口未闭环时不发送暂存正文；超过修复次数后以受控错误结束，避免伪交付；通过复核后才发送最终正文。 |
+| `backend/api/tests/test_harness_contracts.py`、`backend/api/tests/test_plan_budget_task_state.py`、`backend/api/tests/test_harness_phase4.py` | 覆盖构造不变式、未匹配工具、累计观察、未闭环正文拦截与放行后发送。 |
+
+本次定向验证：`pytest tests/test_agent_react.py tests/test_harness_contracts.py tests/test_plan_budget_task_state.py tests/test_harness_phase4.py` 为 **105 passed**；`ruff check` 与 `npm run typecheck` 通过。

@@ -6,6 +6,7 @@ import tempfile
 
 import pytest
 
+import app.agent.react as react_module
 from app.agent import LangGraphAgent
 from app.agent.graph import iter_pending_events
 from app.harness.execution import build_default_registry
@@ -95,6 +96,31 @@ class _StreamingAfterToolGateway(_ScriptGateway):
                 ),
             ]
         )
+
+
+def test_stream_final_answer_can_hold_content_until_reflect_passes(monkeypatch) -> None:
+    """chat 规划待 Reflect 审核时，最终正文增量不得提前发送给浏览器。"""
+    emitted: list[dict] = []
+    monkeypatch.setattr(react_module, "get_stream_writer", lambda: emitted.append)
+
+    class _Gateway:
+        """构造最小流式最终回答网关。"""
+
+        def stream(self, request: object, config: dict | None = None):
+            return iter(
+                [
+                    ModelStreamEvent(kind="content", text="暂存正文"),
+                    ModelStreamEvent(
+                        kind="completed",
+                        response=ModelResponse(text="暂存正文", latency_ms=1),
+                    ),
+                ]
+            )
+
+    response = react_module._stream_final_answer(_Gateway(), object(), {}, emit_content=False)
+    assert response is not None
+    assert response.text == "暂存正文"
+    assert not emitted
 
 
 class _NativeToolCallGateway:

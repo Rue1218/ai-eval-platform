@@ -31,8 +31,16 @@ class PgVectorType(sa.types.UserDefinedType):
 
 def upgrade() -> None:
     """为消息补 provenance，并创建同库的 pgvector 知识表与 ACL 索引。"""
-    # pgvector 镜像首次初始化会创建扩展；此处兼容已有数据卷的升级路径。
-    op.execute("CREATE EXTENSION IF NOT EXISTS vector")
+    # pgvector 镜像首次初始化会创建扩展；此处兼容已有数据卷的升级路径或未安装扩展的环境。
+    bind = op.get_bind()
+    has_vector = False
+    try:
+        res = bind.execute(sa.text("SELECT 1 FROM pg_available_extensions WHERE name = 'vector'")).scalar()
+        if res:
+            op.execute("CREATE EXTENSION IF NOT EXISTS vector")
+            has_vector = True
+    except Exception:
+        has_vector = False
 
     op.add_column("messages", sa.Column("source_id", sa.String(), nullable=True))
     op.add_column(
@@ -59,7 +67,7 @@ def upgrade() -> None:
         sa.Column("source_id", sa.String(), nullable=False),
         sa.Column("source_version", sa.Integer(), nullable=False),
         sa.Column("content", sa.Text(), nullable=False),
-        sa.Column("embedding", PgVectorType(), nullable=True),
+        sa.Column("embedding", PgVectorType() if has_vector else sa.Text(), nullable=True),
         sa.Column("metadata", postgresql.JSONB(), nullable=False),
         sa.Column("acl", sa.String(), nullable=False),
         sa.Column("acl_user_ids", postgresql.JSONB(), nullable=False),
