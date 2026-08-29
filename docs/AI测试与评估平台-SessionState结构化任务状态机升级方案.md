@@ -2,9 +2,9 @@
 
 | 项 | 内容 |
 | --- | --- |
-| 文档版本 | V1.1 |
+| 文档版本 | V1.2 |
 | 状态 | 已实施完成并验收通过 |
-| 审查日期 | 2026-08-26 |
+| 审查日期 | 2026-08-29 |
 | 适用范围 | `backend/api/app/harness/`、`app/agent/`、`frontend/src/views/Agent.vue`、`frontend/src/components/agent/TaskStateDrawer.vue` |
 | 上游权威 | `AI测试与评估平台-PRD.md`、`AI测试与评估平台-API.md`、`AGENTS.md`、`AI测试与评估平台-Harness-记忆层.md` |
 
@@ -266,3 +266,26 @@ Milestone 4: 端到端测试与质量验证 (P4)
 | **前端主视图**| `frontend/src/views/Agent.vue` | `[MODIFY]` 挂载 `TaskStateDrawer`，通过 `latestPlan` 响应式计算属性实时向抽屉组件输送最新状态机数据 |
 | **技术规划**| `docs/AI测试与评估平台-Agent内容块交错流式调用规划.md` | `[NEW]` 深度调研与梳理 LLM 流式交错内容块机制及平台平滑演进路径 |
 | **技术设计**| `docs/AI测试与评估平台-SessionState结构化任务状态机升级方案.md` | `[NEW]` SessionState 结构化任务状态机权威技术升级方案与闭环记录 |
+
+---
+
+## 7. V1.2 完整性修复与修改代码文件清单（2026-08-29）
+
+### 7.1 运行时约束
+
+1. `missing_info` 非空时，`TaskSessionState` 无论经由反序列化还是直接构造，`can_deliver` 都必须为 `false`。
+2. `observations` 是 append reducer 的累计历史；Task State 只消费消费计数之后新增的观察。重规划会把计数重置为当前历史长度，避免旧计划结果推进新计划。
+3. 工具成功仅在当前步骤文本明确包含该工具短名时推进步骤；其他成功结果只沉淀为事实与证据。工具执行失败不能自动作为业务假设已证伪的依据。
+4. `delivery=chat` 的最终正文及其 `assistant_delta` 先存入 GraphState `response`，只有 Reflect 判定 `pass` 后才生成 `assistant_message`。缺口未闭环且修复额度耗尽时发送统一 `VALIDATION` 错误并结束，不得降级为最终结论。
+
+### 7.2 修改文件与作用
+
+| 模块 | 文件路径 | 作用 |
+| :--- | :--- | :--- |
+| 契约层 | `backend/api/app/harness/contracts/task_state.py` | 固化交付不变式；按显式工具名推进；分离执行失败与假设证伪。 |
+| 记忆层 | `backend/api/app/harness/memory/state.py` | 增加 `task_state_observation_count` 检查点字段。 |
+| 编排/执行 | `backend/api/app/agent/plan_solve.py`、`backend/api/app/agent/react.py` | 初始化并传递观察消费计数；暂存 chat 最终正文直至反射放行。 |
+| 反射层 | `backend/api/app/agent/reflect.py` | 放行后发送暂存正文；未闭环任务受控拦截和终止。 |
+| 测试 | `backend/api/tests/test_harness_contracts.py`、`backend/api/tests/test_plan_budget_task_state.py`、`backend/api/tests/test_harness_phase4.py` | 新增状态机和最终正文门禁的回归覆盖。 |
+
+验证命令：`pytest tests/test_agent_react.py tests/test_harness_contracts.py tests/test_plan_budget_task_state.py tests/test_harness_phase4.py`（105 passed）、`ruff check . ../shared`、`npm run typecheck`。

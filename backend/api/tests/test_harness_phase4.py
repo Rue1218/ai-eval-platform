@@ -7,7 +7,7 @@ import pytest
 
 from app.agent.reflect import reflect_node, reflect_route
 from app.errors import AppError, ErrorCode
-from app.harness.contracts import Observation, PlanArtifact, SkillHint, to_dict
+from app.harness.contracts import Observation, PlanArtifact, SkillHint, TaskSessionState, to_dict
 from app.harness.feedback import (
     FeedbackBudget,
     consume_failure,
@@ -237,6 +237,38 @@ def test_reflect_chat_delivery_skips_confirm() -> None:
     kinds = [event["kind"] for event in out["pending_events"]]
     assert "confirm" not in kinds
     assert kinds[-1] == "response.completed"
+
+
+def test_reflect_rejects_unclosed_task_state_without_sending_draft() -> None:
+    """任务缺口未闭环时，Reflect 必须拦截暂存正文且不得发 assistant_message。"""
+    plan = _plan(delivery="chat", tools_needed=("read",))
+    out = reflect_node(
+        {
+            "plan": to_dict(plan),
+            "observations": [Observation(tool="read", text="日志不完整", ok=True)],
+            "task_state": TaskSessionState(
+                current_step="用 read 读取生产日志",
+                missing_info=("用 read 读取生产日志",),
+            ).to_dict(),
+            "response": {"text": "这是不应发送的最终结论", "latency_ms": 12},
+        }
+    )
+    kinds = [event["kind"] for event in out["pending_events"]]
+    assert out["verdict"] == "repair"
+    assert "assistant_message" not in kinds
+
+
+def test_reflect_emits_draft_only_after_chat_plan_passes() -> None:
+    """chat 规划通过复核后，才把 ReAct 暂存正文转成对外消息。"""
+    out = reflect_node(
+        {
+            "plan": to_dict(_plan(delivery="chat", tools_needed=("task",))),
+            "response": {"text": "已完成", "latency_ms": 12, "turn_stats": {"tool_calls": 1}},
+        }
+    )
+    message = next(event for event in out["pending_events"] if event["kind"] == "assistant_message")
+    assert message["payload"]["text"] == "已完成"
+    assert message["payload"]["turn_stats"] == {"tool_calls": 1}
 
 
 def test_build_plan_unrecognized_raises() -> None:

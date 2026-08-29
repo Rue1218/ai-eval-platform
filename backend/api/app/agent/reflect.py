@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Literal
 
 from app.harness.contracts import Observation, PlanArtifact, TaskSessionState, from_dict, make_event
@@ -29,6 +30,24 @@ def _completed(finish_reason: str) -> dict:
         "response.completed",
         {"finish_reason": finish_reason, "role": "assistant"},
     )
+
+
+def _draft_assistant_message(state: GraphState) -> dict | None:
+    """读取 ReAct 暂存的最终正文，仅在 Reflect 放行后转为对外事件。"""
+    draft = state.get("response")
+    if not isinstance(draft, Mapping):
+        return None
+    text = str(draft.get("text") or "").strip()
+    if not text:
+        return None
+    payload: dict[str, object] = {
+        "text": text,
+        "role": "assistant",
+        "latency_ms": int(draft.get("latency_ms") or 0),
+    }
+    if isinstance(draft.get("turn_stats"), Mapping):
+        payload["turn_stats"] = dict(draft["turn_stats"])
+    return make_event("assistant_message", payload)
 
 
 def _latest_observation(state: GraphState) -> Observation:
@@ -98,20 +117,14 @@ def reflect_node(state: GraphState) -> dict:
 
     task_state_data = state.get("task_state")
     if verdict == "pass" and isinstance(task_state_data, dict):
-        try:
-            task_state = TaskSessionState.from_dict(task_state_data)
-            has_tool_obs = any(
-                str(getattr(obs, "tool", "") or "") not in ("", "__parse__", "__reflect__", "plan")
-                for obs in (state.get("observations") or [])
-            )
-            if (
-                plan.delivery == "chat"
-                and has_tool_obs
-                and not task_state.can_deliver
-                and task_state.missing_info
-                and fail_count < MAX_REPAIRS
-            ):
-                missing_preview = "、".join(task_state.missing_info[:3])
+        task_state = TaskSessionState.from_dict(task_state_data)
+        has_tool_obs = any(
+            str(getattr(obs, "tool", "") or "") not in ("", "__parse__", "__reflect__", "plan")
+            for obs in (state.get("observations") or [])
+        )
+        if plan.delivery == "chat" and has_tool_obs and not task_state.can_deliver and task_state.missing_info:
+            missing_preview = "、".join(task_state.missing_info[:3])
+            if fail_count < MAX_REPAIRS:
                 repair_text = (
                     f"【任务状态门禁拦截】：任务关键信息尚未闭环（尚缺：{missing_preview}），"
                     "当前禁止提前交付最终结论！请继续调用工具探查以补齐信息缺口。"
@@ -134,8 +147,15 @@ def reflect_node(state: GraphState) -> dict:
                         )
                     ],
                 }
-        except Exception:
-            pass
+            return {
+                "verdict": "reject",
+                "step_fail_count": fail_count,
+                "pending_events": [
+                    make_event("thought", {"stage": "reflect", "text": "任务信息缺口未闭环，终止提前交付"}),
+                    make_event("error", {"code": "VALIDATION", "message": "任务关键信息未闭环，无法交付最终结论"}),
+                    _completed("error"),
+                ],
+            }
     tool_failed = (
         not observation.ok and observation.tool not in {"plan", "__parse__"}
     )
@@ -211,5 +231,9 @@ def reflect_node(state: GraphState) -> dict:
                 "pending_events": events,
             }
         events.append(make_event("confirm", payload))
+    if plan.delivery == "chat":
+        draft_message = _draft_assistant_message(state)
+        if draft_message is not None:
+            events.append(draft_message)
     events.append(_completed("stop"))
     return {"verdict": "pass", "step_fail_count": 0, "pending_events": events}

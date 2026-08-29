@@ -355,6 +355,7 @@ def _forced_repeat_completion(
         model_run_config,
         system=system,
         extra_instruction=FORCED_FINAL_ANSWER_INPUT,
+        emit_content=not _is_chat_plan(state),
     )
     text = (
         final_response.text
@@ -372,6 +373,7 @@ def _forced_repeat_completion(
         latency_ms=round((time.perf_counter() - started) * 1000),
         pending_events=pending_events,
         close_turn=close_turn,
+        defer_delivery=_is_chat_plan(state),
         turn_stats=_turn_stats(state, budget, forced_usage),
     )
     finished["budget"] = budget.to_dict()
@@ -600,6 +602,12 @@ def _has_active_plan(state: GraphState) -> bool:
     return isinstance(state.get("plan"), dict)
 
 
+def _is_chat_plan(state: GraphState) -> bool:
+    """仅 chat 规划延迟广播最终正文，确认卡路径保持既有交互。"""
+    plan = state.get("plan")
+    return isinstance(plan, Mapping) and str(plan.get("delivery") or "") == "chat"
+
+
 # 工具指令守卫：用户消息必须同时命中"动作词 + 工具名"才视为明确要求调用工具，
 # 避免"解释一下什么是 bash"这类提及场景误伤。
 _TOOL_ACTION_WORDS = frozenset(
@@ -814,17 +822,19 @@ def _finalize_task_state(current: TaskSessionState | None) -> dict[str, object] 
     """
     if current is None:
         return None
+    can_deliver = not current.missing_info
     completed = list(current.completed_steps)
     step = current.current_step
-    if step and step not in completed:
+    # 只有工具缺口已经清零时，当前纯说明步骤才可随最终正文一并完成。
+    if can_deliver and step and step not in completed:
         completed.append(step)
     return TaskSessionState(
         protocol="task_state",
         version="v1",
         goal=current.goal,
-        phase="completed",
+        phase="completed" if can_deliver else current.phase,
         completed_steps=tuple(completed),
-        current_step="",
+        current_step="" if can_deliver else step,
         next_actions=current.next_actions,
         failed_steps=current.failed_steps,
         current_hypothesis=current.current_hypothesis,
@@ -832,7 +842,7 @@ def _finalize_task_state(current: TaskSessionState | None) -> dict[str, object] 
         evidence=current.evidence,
         rejected_hypotheses=current.rejected_hypotheses,
         missing_info=current.missing_info,
-        can_deliver=True,
+        can_deliver=can_deliver,
         blocked_reason=current.blocked_reason,
         notes=current.notes,
     ).to_dict()
@@ -845,19 +855,21 @@ def _assistant_completion(
     latency_ms: int,
     pending_events: list[dict] | None = None,
     close_turn: bool = True,
+    defer_delivery: bool = False,
     turn_stats: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    """统一构造自然语言收尾投影，避免原生/兼容路径产生不同事件契约。"""
+    """统一构造自然语言收尾投影；计划任务须经 Reflect 后才广播最终正文。"""
     events = list(pending_events or [])
     message_payload: dict[str, object] = {"text": text, "role": "assistant", "latency_ms": latency_ms}
     if turn_stats is not None:
         message_payload["turn_stats"] = turn_stats
-    events.append(
-        make_event(
-            "assistant_message",
-            message_payload,
+    if not defer_delivery:
+        events.append(
+            make_event(
+                "assistant_message",
+                message_payload,
+            )
         )
-    )
     if close_turn:
         events.append(
             make_event(
@@ -867,7 +879,12 @@ def _assistant_completion(
         )
     return {
         "pending_events": events,
-        "response": {"text": text, "usage": dict(usage or {}), "latency_ms": latency_ms},
+        "response": {
+            "text": text,
+            "usage": dict(usage or {}),
+            "latency_ms": latency_ms,
+            "turn_stats": turn_stats,
+        },
         "pending_tool": None,
         "pending_tools": [],
         "pending_tool_batch": None,
@@ -885,6 +902,17 @@ def _has_tool_observation(state: GraphState) -> bool:
         str(getattr(observation, "tool", "") or "") not in ("", "__parse__", GUARD_TOOL)
         for observation in (state.get("observations") or [])
     )
+
+
+def _evolve_unprocessed_task_state(
+    current: TaskSessionState,
+    observations: list[object] | tuple[object, ...],
+    processed_count: int,
+) -> tuple[TaskSessionState, int]:
+    """只消费 append reducer 新增的观察，防止旧成功结果重复推进步骤。"""
+    all_observations = tuple(observations)
+    start = min(max(processed_count, 0), len(all_observations))
+    return evolve_task_state(current, all_observations[start:]), len(all_observations)
 
 
 def _final_answer_request(
@@ -909,8 +937,10 @@ def _stream_final_answer(
     gateway: object,
     answer_request: ModelRequest,
     run_config: dict,
+    *,
+    emit_content: bool = True,
 ) -> ModelResponse | None:
-    """流式生成工具链收敛后的自然语言回答并投影正文增量。
+    """流式生成工具链收敛后的自然语言回答，并按需投影正文增量。
 
     ReAct 控制调用的输出是协议 JSON，不能直接作为助手正文流出。工具调用完成
     后改用无工具提示再次调用模型，复用 ``ModelGateway.stream`` 的正文/思考增量，
@@ -935,7 +965,8 @@ def _stream_final_answer(
                 writer({"kind": "reasoning", "text": event.text})
             elif event.kind == "content":
                 content.append(event.text)
-                writer({"kind": "content", "text": event.text})
+                if emit_content:
+                    writer({"kind": "content", "text": event.text})
     except StreamAborted:
         raise
     except AppError:
@@ -965,6 +996,8 @@ def _stream_native_tool_round(
     gateway: object,
     request: ModelRequest,
     run_config: dict,
+    *,
+    emit_content: bool = True,
 ) -> tuple[ModelResponse, _NativeRoundTrace] | None:
     """流式执行原生工具回合（含首轮），投影正文增量，响应结束后才交出 ToolCall。
 
@@ -1012,7 +1045,7 @@ def _stream_native_tool_round(
                 if preview.startswith("{") and not collected_calls:
                     hold_possible_json = True
                     continue
-                if not hold_possible_json:
+                if emit_content and not hold_possible_json:
                     writer({"kind": "content", "text": event.text})
     except StreamAborted:
         metrics.record_stream(
@@ -1049,7 +1082,7 @@ def _stream_native_tool_round(
 
     merged_text = "".join(content)
     merged_calls = tuple(collected_calls)
-    if hold_possible_json and merged_text and not _looks_like_legacy_react(merged_text):
+    if emit_content and hold_possible_json and merged_text and not _looks_like_legacy_react(merged_text):
         writer({"kind": "content", "text": merged_text})
     if final_response is None:
         return (
@@ -1084,6 +1117,7 @@ def _generate_final_answer(
     *,
     system: str,
     extra_instruction: str = "",
+    emit_content: bool = True,
 ) -> ModelResponse | None:
     """生成工具链收敛后的最终正文，优先流式，缺失流式能力时仍调用模型。
 
@@ -1097,7 +1131,12 @@ def _generate_final_answer(
     )
     stream = getattr(gateway, "stream", None)
     if callable(stream):
-        return _stream_final_answer(gateway, answer_request, run_config)
+        return _stream_final_answer(
+            gateway,
+            answer_request,
+            run_config,
+            emit_content=emit_content,
+        )
 
     invoke = getattr(gateway, "invoke", None)
     if not callable(invoke):
@@ -1194,9 +1233,12 @@ def build_react_nodes(
             if isinstance(task_state_data, Mapping)
             else None
         )
-        if current_task_state is not None and state.get("observations"):
-            current_task_state = evolve_task_state(
-                current_task_state, tuple(state.get("observations") or ())
+        task_state_observation_count = int(state.get("task_state_observation_count") or 0)
+        if current_task_state is not None:
+            current_task_state, task_state_observation_count = _evolve_unprocessed_task_state(
+                current_task_state,
+                tuple(state.get("observations") or ()),
+                task_state_observation_count,
             )
             state["task_state"] = current_task_state.to_dict()
 
@@ -1250,7 +1292,14 @@ def build_react_nodes(
             response = None
             if use_native_stream:
                 stream_attempted = True
-                streamed = _stream_native_tool_round(gateway, request, model_run_config)
+                streamed = _stream_native_tool_round(
+                    gateway,
+                    request,
+                    model_run_config,
+                    # 已有工具往返后无 ToolCall 的正文是最终交付候选；chat 规划必须
+                    # 等 Reflect 放行，不能先以 assistant_delta 发给浏览器。
+                    emit_content=not (_is_chat_plan(state) and bool(state_native_messages)),
+                )
                 if streamed is not None:
                     response, round_trace = streamed
             if response is None:
@@ -1414,6 +1463,7 @@ def build_react_nodes(
                 }
                 if current_task_state is not None:
                     result_payload["task_state"] = current_task_state.to_dict()
+                    result_payload["task_state_observation_count"] = task_state_observation_count
                     # 演进后的状态黑板随事件下发，前端实时刷新任务看板
                     pending_events.append(
                         make_event("task_state", current_task_state.to_dict())
@@ -1436,12 +1486,14 @@ def build_react_nodes(
                     usage=response.usage,
                     latency_ms=round((time.perf_counter() - started) * 1000),
                     close_turn=close_turn,
+                    defer_delivery=_is_chat_plan(state),
                     turn_stats=_turn_stats(state, budget, response.usage),
                 )
                 completed["budget"] = budget.to_dict()
                 if current_task_state is not None:
                     finalized = _finalize_task_state(current_task_state)
                     completed["task_state"] = finalized
+                    completed["task_state_observation_count"] = task_state_observation_count
                     completed["pending_events"].append(
                         make_event("task_state", finalized or {})
                     )
@@ -1521,6 +1573,7 @@ def build_react_nodes(
                         request,
                         model_run_config,
                         system=system,
+                        emit_content=not _is_chat_plan(state),
                     )
                     latency_ms = round((time.perf_counter() - started) * 1000)
                 # 工具链不再以 ReAct thought 作为最终交付句。最终模型回合为空时仅
@@ -1542,12 +1595,14 @@ def build_react_nodes(
                     usage=final_usage,
                     latency_ms=latency_ms,
                     close_turn=close_turn,
+                    defer_delivery=_is_chat_plan(state),
                     turn_stats=_turn_stats(state, budget, final_usage),
                 )
                 finished["budget"] = budget.to_dict()
                 if current_task_state is not None:
                     finalized = _finalize_task_state(current_task_state)
                     finished["task_state"] = finalized
+                    finished["task_state_observation_count"] = task_state_observation_count
                     finished["pending_events"].append(
                         make_event("task_state", finalized or {})
                     )
@@ -1639,7 +1694,7 @@ def build_react_nodes(
             budget = consume_tool_turn(budget)  # 可能抛 BUDGET_EXCEEDED
             if state.get("repeat_retry"):
                 # 重试回合中模型已换新调用，清除回环标记后正常执行
-                return _json_react_tool_payload(
+                pending = _json_react_tool_payload(
                     native_tool_mode=native_tool_mode,
                     call_id=legacy_call_id,
                     tool=tool,
@@ -1648,6 +1703,10 @@ def build_react_nodes(
                     budget=budget,
                     thought_text=thought,
                 )
+                if current_task_state is not None:
+                    pending["task_state"] = current_task_state.to_dict()
+                    pending["task_state_observation_count"] = task_state_observation_count
+                return pending
         except AppError as exc:
             # 协议解析失败/预算耗尽：转 error 收尾（不裸抛给用户堆栈）
             return _react_error_state(
@@ -1667,6 +1726,7 @@ def build_react_nodes(
         )
         if current_task_state is not None:
             pending["task_state"] = current_task_state.to_dict()
+            pending["task_state_observation_count"] = task_state_observation_count
         return pending
 
     return {"react_agent": react_agent_node}
