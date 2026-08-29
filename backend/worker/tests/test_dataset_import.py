@@ -40,3 +40,11 @@ def test_private_source_address_is_rejected_before_download():
         _assert_safe_download_url("https://127.0.0.1/artifact.jsonl", {"127.0.0.1"})
 
     assert exc_info.value.code == "VALIDATION"
+
+
+def test_row_without_split_is_rejected_before_staging():
+    """导入请求已选择 split 时，来源行不能以缺失 split 绕过冻结筛选。"""
+    with pytest.raises(ImportFailure, match="缺少可验证的 split") as exc_info:
+        _is_selected({"question": "Q", "reference": "A"}, {}, {"splits": ["test"]})
+
+    assert exc_info.value.code == "VALIDATION"
