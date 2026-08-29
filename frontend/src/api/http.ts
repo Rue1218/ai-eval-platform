@@ -1165,8 +1165,15 @@ export const api = {
       return data
     },
     // 管理端 · 工作区（会话 → 沙箱文件夹）
-    async listWorkspaces(): Promise<WorkspaceOverview> {
-      const { data } = await http.get('/api/admin/workspaces')
+    async listWorkspaces(
+      params?: { offset?: number; limit?: number; keyword?: string; folder?: string; deleted?: string },
+    ): Promise<WorkspaceOverview> {
+      const { data } = await http.get('/api/admin/workspaces', { params })
+      return data
+    },
+    // 全部工作区磁盘总字节（遍历代价高，前端列表渲染后异步加载 KPI）
+    async workspaceStats(): Promise<{ total_bytes: number }> {
+      const { data } = await http.get('/api/admin/workspaces/stats')
       return data
     },
     async listWorkspaceFiles(sessionId: string): Promise<WorkspaceFileList> {
