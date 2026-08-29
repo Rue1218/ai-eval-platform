@@ -12,6 +12,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, Query, Request
+from shared.dataset_import import SUPPORTED_DATASET_IMPORT_PARSERS
 from sqlalchemy.orm import Session
 
 from ..db import get_db
@@ -202,7 +203,38 @@ def _validate_release_payload(entry: DatasetCatalogEntry, body: CatalogReleaseIn
         body.filter_schema.get("fields"), dict
     ):
         raise AppError(ErrorCode.VALIDATION, "filter_schema 必须提供 version=1 和 fields")
+    if body.support_status == "supported" and body.parser_id not in SUPPORTED_DATASET_IMPORT_PARSERS:
+        raise AppError(ErrorCode.VALIDATION, "标记为 supported 的 release 必须使用已注册解析器")
     return _canonical_hash(body.manifest)
+
+
+def _validate_publish_rows(rows: list[DatasetImportRow]) -> None:
+    """发布前校验必填字段、冻结 split 与重复样本，防止无效 staging 进入正式版本。"""
+    invalid_rows: list[str] = []
+    seen: dict[str, tuple[int, str]] = {}
+    for row in rows:
+        question = row.question.strip()
+        reference = row.reference.strip()
+        source_split = (row.provenance or {}).get("split")
+        if not question or not reference:
+            invalid_rows.append(f"第 {row.row_no} 行缺少题目或参考答案")
+            continue
+        if not isinstance(source_split, str) or not source_split.strip():
+            invalid_rows.append(f"第 {row.row_no} 行缺少冻结 split")
+            continue
+        content_key = _canonical_hash({"question": question, "reference": reference})
+        previous = seen.get(content_key)
+        if previous is None:
+            seen[content_key] = (row.row_no, source_split)
+        elif previous[1] == source_split:
+            invalid_rows.append(f"第 {row.row_no} 行与第 {previous[0]} 行重复")
+        else:
+            invalid_rows.append(
+                f"第 {row.row_no} 行与第 {previous[0]} 行跨 split 重复"
+            )
+    if invalid_rows:
+        summary = "；".join(invalid_rows[:8])
+        raise AppError(ErrorCode.VALIDATION, f"选择的 staging 行未通过发布校验：{summary}")
 
 
 @router.post("/dataset-catalog-entries", status_code=201)
@@ -861,6 +893,7 @@ def publish_import(
     )
     if len(rows) != len(set(body.accepted_row_ids)):
         raise AppError(ErrorCode.VALIDATION, "存在无效、重复或已拒绝的 staging 行")
+    _validate_publish_rows(rows)
     content_hash = _canonical_hash(
         {"manifest_hash": job.manifest_hash, "rows": [row.content_sha256 for row in rows]}
     )

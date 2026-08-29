@@ -145,6 +145,12 @@ def _content_sha256(
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _require_independent_staging_reviewer(job: DatasetImport, user: User) -> None:
+    """staging 内容只能由非提报成员审核修订，避免提交人自行改变待审样本。"""
+    if job.created_by == user.id:
+        raise AppError(ErrorCode.VALIDATION, "提报成员不能编辑自己的 staging 导入")
+
+
 def _refresh_dataset_counters(db: Session, dataset: Dataset) -> None:
     """按 dataset_rows 实况重算数据集行数与待补全行数。"""
     rows = db.query(DatasetRow).filter(DatasetRow.dataset_id == dataset.id).all()
@@ -438,13 +444,12 @@ def list_dataset_rows(
 def save_dataset_rows(
     dataset_id: str,
     body: StagingRowsSave | RowsPayload,
-    view: str = Query(default="active"),
-    import_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
+    view: str = "active",
+    import_id: str | None = None,
 ):
     """保存手工正式行或审核 staging；两者使用不同的并发与删除语义。"""
-    _ = user
     dataset = _get_dataset_or_404(db, dataset_id)
     if view == "staging":
         if not import_id or not isinstance(body, StagingRowsSave):
@@ -459,6 +464,7 @@ def save_dataset_rows(
         )
         if not job:
             raise AppError(ErrorCode.NOT_FOUND, "导入作业不存在")
+        _require_independent_staging_reviewer(job, user)
         if job.status != "review_ready" or job.staging_revision != body.expected_staging_revision:
             raise AppError(ErrorCode.CONCURRENCY, "staging 已变化、未就绪或已发布，请刷新后重试")
         row_ids = [str(raw.get("id") or "") for raw in body.rows]
@@ -506,6 +512,15 @@ def save_dataset_rows(
             row.extras = extras
             row.content_sha256 = _content_sha256(question, reference, context, extras)
         job.staging_revision += 1
+        db.add(
+            AuditLog(
+                user_id=user.id,
+                action="dataset_import_staging_save",
+                target_type="dataset_import",
+                target_id=job.id,
+                detail={"dataset_id": dataset.id, "staging_revision": job.staging_revision},
+            )
+        )
         db.commit()
         rows = (
             db.query(DatasetImportRow)
@@ -521,6 +536,7 @@ def save_dataset_rows(
         }
     if view != "active" or not isinstance(body, RowsPayload):
         raise AppError(ErrorCode.VALIDATION, "view 仅支持 active 或 staging")
+    _ = user
     if dataset.active_version_id:
         raise AppError(ErrorCode.VALIDATION, "已发布数据集只能通过受控导入产生新版本")
     existing = {

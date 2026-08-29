@@ -1,9 +1,9 @@
-# AI 测试与评估平台 — 测试数据集与黄金集采集技术方案 (V2.2)
+# AI 测试与评估平台 — 测试数据集与黄金集采集技术方案 (V2.3)
 
-> **版本**：V2.2<br>
-> **审查日期**：2026-08-28<br>
-> **状态**：M1 已实现（目录治理 API、独立导入 Worker、租约回收、staging 审核与 DatasetVersion 发布）；黄金集、专用 benchmark 解析器与前端导入抽屉仍待后续里程碑<br>
-> **关联契约**：PRD.md V1.15；API.md V1.55。目录筛选、导入作业、staging 行、发布和任务版本冻结以 PRD/API 为准
+> **版本**：V2.3<br>
+> **审查日期**：2026-08-29<br>
+> **状态**：标准数据集导入后端核心已实现（对应 PRD M3 的目录/导入子范围）：目录治理 API、独立导入 Worker、租约回收、独立 staging 审核与 DatasetVersion 发布。黄金集、专用 benchmark 解析器与前端导入抽屉仍待后续里程碑<br>
+> **关联契约**：PRD.md V1.15；API.md V1.56。目录筛选、导入作业、staging 行、发布和任务版本冻结以 PRD/API 为准
 
 ---
 
@@ -496,8 +496,8 @@ Worker：HTTPS/重定向/私网地址检查 → SHA-256 → 固定 JSONL/CSV par
 
 - Worker 不接收浏览器传入的 URL、Cookie、Header、Token、路径或解析脚本；作业 manifest 在 API 创建时冻结来源允许域名、release manifest、筛选条件与 parser 版本。
 - 下载只允许无凭据 HTTPS、审核域名及同样受审核的重定向目标；下载前拒绝 loopback、私网、链路本地与保留地址；单制品上限 50MB，制品 SHA-256 不匹配即失败。
-- 当前仅注册 `jsonl-qa-v1` 与 `csv-qa-v1` 两个受控 parser。未注册 parser、代码、多模态、偏好与需专用评分器的任务族均 fail-closed，不会伪造 staging 或成功评测。
-- staging 行用稳定 UUID 而非可变行号选择；保存和发布都要求 `expected_staging_revision`。发布时锁定 dataset/import，提报成员不得自行批准发布。
+- 当前仅注册 `jsonl-qa-v1` 与 `csv-qa-v1` 两个受控 parser；API 与 Worker 共用同一注册表，只有已注册 parser 才能标记目录 release 为 `supported`。未注册 parser、代码、多模态、偏好与需专用评分器的任务族均 fail-closed，不会伪造 staging 或成功评测。
+- staging 行用稳定 UUID 而非可变行号选择；保存和发布都要求 `expected_staging_revision`，且编辑与发布必须由非提报成员执行。发布前校验必填题目/答案、冻结 split、同 split 重复和跨 split 泄漏；通过后才锁定 dataset/import 并生成正式版本。
 - 发布后 `DatasetVersionRow` 是不可变快照；手工上传、正式行编辑和删除不能绕过已有 `active_version_id`。任务创建把 `dataset_version_id/version_no` 写入配置快照，benchmark Worker 仅读取它。
 
 ### 14.3 已知后续工作
@@ -520,3 +520,14 @@ Worker：HTTPS/重定向/私网地址检查 → SHA-256 → 固定 JSONL/CSV par
 | `backend/api/app/schemas.py`、`backend/api/app/main.py` | 新增目录/导入/staging/发布契约模型并注册 API 路由 |
 | `backend/worker/tests/test_dataset_import.py` | 覆盖 JSONL 解析、冻结筛选和私网来源拒绝的离线回归测试 |
 | `docs/AI测试与评估平台-社媒平台内容抓取适配技术方案.md` | 已删除；其功能范围已被本数据集与黄金集方案取代 |
+
+### 14.5 V2.3 修复记录（审核与发布质量门禁）
+
+| 实际修改文件 | 作用 |
+| :--- | :--- |
+| `backend/shared/dataset_import.py` | API 与 Worker 共用 `jsonl-qa-v1`、`csv-qa-v1` parser 注册表，防止目录 `supported` 状态与执行能力漂移 |
+| `backend/api/app/routers/dataset_catalog.py` | 发布前拒绝缺失题目/答案、无冻结 split、同 split 重复与跨 split 泄漏的 staging 行 |
+| `backend/api/app/routers/datasets.py` | staging 编辑强制非提报成员，并记录最小审核审计 |
+| `backend/worker/app/dataset_import.py` | 缺 split 的来源行 fail-closed，并把实际 split 固定写入溯源信息 |
+| `backend/api/tests/test_dataset_import_governance.py`、`backend/worker/tests/test_dataset_import.py` | 补审核隔离、发布质量、parser 准入和 split 缺失离线回归 |
+| `docs/AI测试与评估平台-API.md` | V1.56 同步既有 endpoint 的审核与发布门禁契约 |

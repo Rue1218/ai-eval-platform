@@ -21,6 +21,7 @@ from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from sqlalchemy.orm import Session
+from shared.dataset_import import SUPPORTED_DATASET_IMPORT_PARSERS
 
 from .db import SessionLocal
 from .models import (
@@ -37,7 +38,8 @@ DEFAULT_MAX_RUNNING_DATASET_IMPORTS = 1
 IMPORT_LEASE_SECONDS = 15 * 60
 IMPORT_MAX_ARTIFACT_BYTES = 50 * 1024 * 1024
 IMPORT_MAX_ROWS = 20_000
-SUPPORTED_PARSERS = {"jsonl-qa-v1": "jsonl", "csv-qa-v1": "csv"}
+# 兼容已有测试与调用方；注册表唯一事实源在 backend/shared/dataset_import.py。
+SUPPORTED_PARSERS = SUPPORTED_DATASET_IMPORT_PARSERS
 IN_PROGRESS_STATUSES = {"downloading", "validating", "parsing"}
 
 
@@ -260,12 +262,19 @@ def _parse_artifact(content: bytes, parser_kind: str) -> list[dict[str, Any]]:
     return rows
 
 
+def _source_split(raw: dict[str, Any], artifact: dict[str, Any]) -> Any:
+    """优先读取行级 split；缺失时使用制品级固定 split。"""
+    return raw.get("split") if raw.get("split") is not None else artifact.get("split")
+
+
 def _is_selected(
     raw: dict[str, Any], artifact: dict[str, Any], manifest: dict[str, Any]
 ) -> bool:
     """按冻结 split 和精确 filters 筛选行，筛选表达式不支持用户自定义代码。"""
-    split = raw.get("split", artifact.get("split"))
-    if split is not None and split not in set(manifest.get("splits") or []):
+    split = _source_split(raw, artifact)
+    if not isinstance(split, str) or not split.strip():
+        raise ImportFailure("VALIDATION", "来源制品行缺少可验证的 split")
+    if split not in set(manifest.get("splits") or []):
         return False
     for key, expected in (manifest.get("filters") or {}).items():
         actual = raw.get(key)
@@ -435,6 +444,8 @@ def run_dataset_import(import_id: str, lease_token: str) -> None:
                             "artifact_name": artifact_name,
                             "artifact_sha256": actual_sha256,
                             "source_row_no": source_row_no,
+                            # split 随来源快照冻结，staging 编辑不能伪造来源分组。
+                            "split": _source_split(raw, artifact),
                             "release_manifest_hash": manifest.get(
                                 "release_manifest_hash"
                             ),
