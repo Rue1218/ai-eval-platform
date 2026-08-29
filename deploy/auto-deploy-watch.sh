@@ -81,7 +81,7 @@ if [ -f "$ENV_FILE" ]; then
     source "$ENV_FILE"
 fi
 
-MODE=$(tr -d '[:space:]' < "$MODE_FILE" 2>/dev/null || true)
+MODE=$(cat "$MODE_FILE" 2>/dev/null | tr -d '[:space:]' || true)
 MODE=${MODE:-actions}
 case "$MODE" in
     actions|local) ;;
@@ -117,7 +117,7 @@ cd "$APP_DIR"
 # Actions 用量上限不影响 git 拉取，这是本备用链路成立的前提）
 FETCH_OK=0
 for attempt in 1 2 3; do
-    if git fetch origin "$BRANCH"; then
+    if git fetch -q origin "$BRANCH"; then
         FETCH_OK=1
         break
     fi
