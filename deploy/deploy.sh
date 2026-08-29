@@ -190,8 +190,9 @@ else
     for service in "${BUILD_SERVICES[@]}"; do
         if [ "$service" = "web" ]; then
             # 服务器本地构建收紧 Vite 堆，避免与运行中容器争抢内存后持续 swap（CI 构建不受影响）。
-            # 内存充足的机器可通过 NODE_BUILD_MEMORY 环境变量调高（本机 16G 用 2048）。
-            NODE_BUILD_MEMORY="${NODE_BUILD_MEMORY:-768}" BUILDKIT_PROGRESS=plain docker compose build "$service"
+            # 768 已不够：2026-08-29 前端增长后 vite build 在 768MB 堆上限 OOM，
+            # 手动部署需 1536 才能通过（9 分钟）；内存充足的机器可经 NODE_BUILD_MEMORY 调高（本机 16G 用 2048）。
+            NODE_BUILD_MEMORY="${NODE_BUILD_MEMORY:-1536}" BUILDKIT_PROGRESS=plain docker compose build "$service"
         else
             BUILDKIT_PROGRESS=plain docker compose build "$service"
         fi

@@ -4,7 +4,7 @@ WORKDIR /app
 
 # Vite 构建堆大小可用 NODE_BUILD_MEMORY 覆盖：
 # - CI（GitHub runner，7G 内存）不传该参数，使用默认 4096，避免前端体积增大后 OOM；
-# - 服务器本地构建由 deploy.sh 收紧为 768，避免低配机与其他容器争抢内存后持续 swap。
+# - 服务器本地构建由 deploy.sh 收紧为 1536（768 已在 2026-08-29 实测 OOM），避免低配机与其他容器争抢内存后持续 swap。
 ARG NODE_BUILD_MEMORY=4096
 ENV NODE_OPTIONS="--max-old-space-size=${NODE_BUILD_MEMORY}"
 

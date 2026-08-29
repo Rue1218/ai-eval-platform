@@ -9,6 +9,7 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
+.venv-image-mcp/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
