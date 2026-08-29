@@ -2,7 +2,7 @@
 
 > **文档地位**：本文件是平台部署链路的配套技术方案，规定 GitHub Actions CD 因用量上限停摆时，
 > 生产环境 `47.119.132.83` 的备用自动化部署机制。与 [`AI测试与评估平台-API.md`](AI测试与评估平台-API.md) 无契约交集。
-> 版本：V1.1 ｜ 审查日期：2026-08-29
+> 版本：V1.2 ｜ 审查日期：2026-08-29
 
 ---
 
@@ -45,6 +45,7 @@ GitHub main（新提交）
 3. **精确提交部署**：巡检传入 `DEPLOY_COMMIT=<origin/main sha>`，`deploy.sh` 检测目标提交已在本地对象库后跳过重复 fetch（规避 GitHub SSH 偶发的通道拒绝问题），并重载该提交版本的部署脚本。
 4. **观察性**：`mode=actions` 期间若日志连续出现「待部署」而 Actions 无成功记录，即为主链路停摆信号，提示切换 `local`。
 5. **自动降权（V1.1）**：仓库属主与 GitHub 部署密钥的分布存在两种拓扑——`deploy/server-setup.sh` 方案下属主为 `deploy` 用户（密钥在 `/home/deploy/.ssh`）；宝塔托管的服务器实测为 root 属主、无 `deploy` 用户（密钥在 `/root/.ssh`）。脚本两种拓扑均兼容：root 启动时若存在 `deploy` 用户则先修正 `logs/` 属主再 `sudo -u deploy -H` 降权重入（避免 root 的 git 操作把仓库对象写成 root 属主、破坏 `deploy` 身份主链路的后续部署），否则保持 root 原样执行。
+6. **按部署基准自愈（V1.2）**：「是否有待部署提交」以 `.deploy-success-sha`（上次成功部署标记）而非工作区 HEAD 为基准对比 origin/main——HEAD 在 `deploy.sh` 的 `git reset` 阶段就会前进到目标提交，若部署中途被打断（SSH 断开、远程后台任务超时强杀等），按 HEAD 对比会误判「无需部署」而永不自愈；按标记对比则下一轮巡检（≤5 分钟）自动续跑剩余构建与滚动更新，且 `deploy.sh` 的差异构建以标记为基准，续跑只重建未完成部分。
 
 ## 4. 模式开关与切换 SOP
 
@@ -123,6 +124,7 @@ DEPLOY_NOTIFY_WEBHOOK=https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxx
 | `deploy.sh 退出非 0` | 查看 `logs/auto-deploy.log` 尾部构建输出；常见为本地构建内存不足（web 构建默认 `NODE_BUILD_MEMORY=1536`，低内存机器需先停非关键容器） |
 | 健康检查 150 秒未通过 | `docker compose logs -n 100 api` / `web`；确认 `/api/health` 可达；若宝塔 Nginx 占用 80 端口，改 `.auto-deploy.env` 的 `WEB_HEALTH_URL` |
 | 需要回滚上一版本 | `cd /opt/ai-eval-platform && git reset --hard <旧提交> && bash deploy/deploy.sh`（旧提交可用 `git reflog` 或告警消息中的 `PREV_SHA` 定位） |
+| 部署进程被中途打断（SSH 断开 / 远程后台任务超时强杀） | 无需干预：下一轮巡检按 `.deploy-success-sha` 基准自动续跑（V1.2）；构建失败的轮次旧容器持续服务 |
 
 ## 8. 约束与边界
 
@@ -150,3 +152,12 @@ DEPLOY_NOTIFY_WEBHOOK=https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxx
 拓扑，无 `deploy` 用户）时保持 root 原样执行。另打磨：`.deploy-mode` 缺失时不再向
 cron 日志输出重定向报错、`git fetch` 静默化；巡检脚本已在服务器经宝塔 MCP 落地并注册
 root crontab 计划任务（每 5 分钟），试跑巡检通过。
+
+**V1.2（2026-08-29）— 按部署基准自愈中断的部署**
+
+首轮备用部署在服务器本地构建（web 约 30 分钟，2 核 / 1.6GB 内存 swap 争抢）期间被远程
+后台任务的 30 分钟超时强杀，`deploy.sh` 的 `git reset` 已推进工作区 HEAD 但容器未更新，
+原脚本按 HEAD 对比 origin/main 会误判「无需部署」导致永不自愈。修正：待部署判断改为
+`.deploy-success-sha`（上次成功部署标记）对比 origin/main，标记落后即自动续跑；续跑时
+`deploy.sh` 差异构建仍以标记为基准，只重建未完成部分。同步补充排错表「部署被中途打断」
+自愈说明。
