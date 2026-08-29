@@ -966,9 +966,21 @@ export interface WorkspaceSession {
   folder: WorkspaceFolder | null
 }
 
+// 工作区整体聚合统计（不受筛选影响，供 KPI 卡片）
+export interface WorkspaceStats {
+  total_sessions: number
+  with_folder: number
+  orphan_count: number
+}
+
 export interface WorkspaceOverview {
   root: string
   items: WorkspaceSession[]
+  // 服务端分页：items 仅当前页，total 为过滤后的会话总数
+  total: number
+  offset: number
+  limit: number
+  stats: WorkspaceStats
   orphans: WorkspaceFolder[]
 }
 

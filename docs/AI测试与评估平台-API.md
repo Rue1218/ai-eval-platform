@@ -2,17 +2,19 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.56 |
+| 文档版本 | V1.57 |
 | 对应 PRD | V1.15（功能唯一权威） |
 | 对应设计规范 | V1.10（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.5.17（LangGraph 单轮 Agent 与 WS 桥接；JSON 仍以本文为准） |
 | 对应前端计划 | V1.5 |
 | 对应后端计划 | V1.5 |
 | 撰写日期 | 2026-08-18 |
-| 本轮修订 | 2026-08-29：V1.56 收紧受控数据集导入的 staging 审核者隔离、发布质量门禁与 parser 注册校验；不新增接口字段或 WS 事件。 |
+| 本轮修订 | 2026-08-29：V1.57 管理端工作区接口接入 §1.1 分页约定并新增磁盘统计端点（§3.12.2），前端工作区页改为服务端分页筛选。 |
 | 最近修订 | 2026-08-28：V1.53 `web_fetch` 直抓路径接入 trafilatura 正文提取：可读性算法识别文章主体，保留标题层级/链接/图片/表格，未安装或提取失败降级回内置 `_TextExtractor`；提取真实产出 Markdown 时才声明 `format=markdown`（§4.3.1）。V1.52 优化 `web_fetch` 长文完整性与卡片预览：模型正文预算 8,000→60,000 字符，卡片预览与 `read` 同源对齐 `TOOL_PREVIEW_MAX_CHARS` 并随 `web.preview_limit_chars` 下发，直接抓取字节窗口 256KB→1MB（§4.3.1）。2026-08-27：V1.51 新增持久事件 `session_title`（§4.3）与会话标题 AI 生成契约（§4.3.2）：默认标题会话首条消息后由 Agent 协议档弱结构化生成标题并落库广播，修复标题不持久化问题。V1.50 统一 Agent 文本附件 staging 与 `read` 的 20MB 边界；`read` 模型窗口为 2,000 行 / 600,000 字符。V1.49 协议档新增 `max_output_tokens`（256–131072，默认 8192），创建/更新/列表/详情均支持；Agent 模型调用从协议档读取输出上限，长文档总结/导出类任务可调大避免回答被截断。2026-08-26：V1.48 同轮多调用默认串行，灰度开启后仅 `read`/`web_search`/`web_fetch` 可并行，回填按原始 `call_id`。V1.47 新增 `GET /api/agent/metrics`，不含正文/参数，不新增 WS 事件。V1.46 明确 native 一次 ToolCall 结束当前上游响应，结果回填后再请求，不新增事件名。V1.45 思考链只下发可展示摘要，隐藏 CoT（`Here's a thinking process` / `Analyze User Input`）由服务端替换，不原样推给前端。V1.44 ToolCall 在执行前持久化，新增瞬态 `tool_progress` / `tool_output_delta`，并冻结原生工具的输出 Schema、权限边界和失败恢复字段。V1.43 思考增量允许合并下发；有思考链时 `think_final` 在 `response.completed` 之前。V1.42 Direct `/help`、未知斜杠与图内防御提示在业务事件后必须再发 `response.completed`（成功 `stop`，校验/防御 `error`），结束整轮生成态。V1.41 确认卡预填与 `confirm_ack` 入队前丢掉已删除的协议档/数据集/知识库 ID，避免 Worker 再报「协议档不存在或已删除」。V1.40 `/cancel` 与 `/stress` 按 §4.4 解禁（仍走 `user_message`）：`/cancel` 取消本会话非终态任务，`/stress` 发出质量任务确认卡且 `with_stress=true`，禁止 `kind=stress`。V1.39 原生工具卡片收起态副标题统一为 `ToolCall`，不在卡片摘要区回显文件路径、命令或写入内容；详细参数仍在展开区展示。V1.38 明确原生基础 ToolCall 卡片使用英文工具名，展开区统一显示 `ToolCall` 与 `输出`，文件、命令和代码/文档结果使用行号展示；MCP/平台短工具仍按下方中文名映射。2026-08-24：V1.24 修复 Agent 附件上下文链路：服务端校验文件归属并在模型窗口解析文本、PDF、DOCX、XLSX，图片按三协议图文内容块发送；历史消息附件补齐安全元数据，前端可在刷新后继续预览。同步调整输入框内附件按钮与用户消息附件位序。V1.23 扩展 Agent 附件契约，支持图片、Word 文档与多附件拖拽上传；保留 `POST /api/files` 后再以既有 `file_id` 引用的消息链路，补充图片缩略图、PDF/文本预览与 Office 文件打开/下载说明。V1.22 修复 V1.21 遗留：§4.4 标题「仅此三条」改「仅此四条」、§9 禁止清单「第四种」改「第五种」并补四类上行事件枚举、§4.3 `tool_result.source` 语义对齐 M7 `Observation.source`（溯源标识字符串，非 short\|long 枚举）、§4.3 共享流规则补 clarify/plan/confirm 持久化广播说明、§4.4 clarify 多副本限制注明、§9 Ask/Plan 补注非 Harness plan 事件；V1.20 及更早版本沿用历史修订记录。 |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
+> V1.57（2026-08-29）：§3.12.2 补录管理端工作区接口契约。`GET /api/admin/workspaces` 按 §1.1 分页约定（`offset`/`limit`、`{items,total}`）分页返回会话与工作区文件夹摘要，新增 `keyword` / `folder` / `deleted` 过滤参数与整体聚合 `stats`（会话总数 / 有工作区文件数 / 孤立文件夹数），文件夹扫描仅对当前页会话执行；新增 `GET /api/admin/workspaces/stats` 返回全部工作区磁盘总字节（前端后台加载 KPI）。列表响应由全量数组改为分页对象，前端工作区管理页同步改造。
+>
 > V1.56（2026-08-29）：§3.7 规定 staging 编辑与发布均由非提报成员完成；发布前拒绝缺少 `question/reference` 或冻结 split 的行、同 split 重复和跨 split 泄漏。`support_status=supported` 的 release 必须使用 Worker 已注册的 parser；不新增接口字段或 WS 事件。
 >
 > V1.55（2026-08-28）：§3.7 实现目录来源/release 的双人复核、独立 `DatasetImport` 作业的 lease 领取/回收、稳定 staging 行 ID 与 optimistic revision 发布；新建 benchmark 任务写入已发布 `dataset_version_id/version_no` 快照，Worker 只读该版本。所有成员同权，但 release 批准/封禁解除和 staging 发布均不得由提报成员本人完成；不新增 WS 事件。
@@ -1348,6 +1350,74 @@ Prometheus 内置可观测性指标端点（内网 HTTP GET），输出前缀为
 
 ---
 
+### 3.12.2 工作区管理（会话沙箱文件夹，V1.57）
+
+会话与沙箱文件夹一一对应；含软删除会话与孤立目录治理。已登录成员即可访问（与 §1.2 单一角色一致），清理类操作写审计日志。
+
+#### `GET /api/admin/workspaces?offset=&limit=&keyword=&folder=&deleted=`
+
+分页列出会话及其工作区文件夹摘要。遵循 §1.1 分页约定：`offset` 默认 0，`limit` 默认 50、最大 200。
+
+- `keyword`：按会话标题 / 归属用户名 / 会话 ID 不区分大小写模糊匹配，默认空；
+- `folder`：`all`（默认）/ `has`（有工作区文件夹）/ `none`（无）；
+- `deleted`：`all`（默认）/ `active`（正常）/ `deleted`（软删除）；
+- 排序固定按会话 `updated_at` 倒序；**文件夹扫描仅对当前页会话执行**，避免会话与文件过多时全量遍历拖慢首屏。
+
+```json
+{
+  "root": "data/workspaces",
+  "items": [
+    {
+      "session_id": "uuid",
+      "title": "会话标题",
+      "owner": "alice",
+      "visibility": "private",
+      "deleted": false,
+      "created_at": "2026-08-01T00:00:00+00:00",
+      "updated_at": "2026-08-29T00:00:00+00:00",
+      "folder": {
+        "name": "uuid",
+        "path": "data/workspaces/uuid",
+        "exists": true,
+        "file_count": 3,
+        "total_bytes": 10240,
+        "updated_at": "2026-08-29T00:00:00+00:00"
+      }
+    }
+  ],
+  "total": 128,
+  "offset": 0,
+  "limit": 50,
+  "stats": { "total_sessions": 200, "with_folder": 156, "orphan_count": 2 },
+  "orphans": [
+    {
+      "name": "uuid",
+      "path": "data/workspaces/uuid",
+      "exists": true,
+      "file_count": 1,
+      "total_bytes": 512,
+      "updated_at": "2026-08-29T00:00:00+00:00"
+    }
+  ]
+}
+```
+
+`total` 为过滤后的会话总数（分页用）；`stats` 为整体聚合（不受过滤影响）：会话总数 / 有工作区文件的会话数 / 孤立文件夹数；`folder` 为 `null` 表示该会话暂无落盘工作区；`orphans` 为磁盘上存在但无对应会话记录的文件夹清单。
+
+#### `GET /api/admin/workspaces/stats`
+
+返回全部会话工作区的磁盘总字节：`{ "total_bytes": 123456 }`。需遍历所有工作区文件，代价较高；供前端在列表渲染完成后异步加载 KPI，不阻塞表格首屏。
+
+#### `GET /api/admin/workspaces/{session_id}/files?max_entries=`
+
+展开会话工作区文件清单（名称 / 大小 / 修改时间）；`max_entries` 默认 200、最大 500。
+
+#### `DELETE /api/admin/workspaces/{session_id}` 、 `DELETE /api/admin/workspaces/orphans/{folder_name}`
+
+物理删除会话沙箱文件夹 / 孤立文件夹，写审计日志 `workspace_cleanup`。成功返回 `{ "ok": true, "path": "…" }`；目标不存在返回 `{ "ok": false, "reason": "not_found", "path": "…" }`。
+
+---
+
 ### 3.13 调度内核与 Worker 节点管理
 
 #### `GET /api/dispatch/overview`
@@ -2393,3 +2463,20 @@ staging 保存改为仅允许非提报成员执行，并写入最小审核审计
 | `backend/api/app/routers/datasets.py` | staging 独立审核人门禁与审核保存审计 |
 | `backend/worker/app/dataset_import.py` | 缺少来源 split 的行 fail-closed，并冻结 split 溯源 |
 | `backend/api/tests/test_dataset_import_governance.py`、`backend/worker/tests/test_dataset_import.py` | 审核隔离、发布校验、parser 准入与 split 缺失回归 |
+
+**V1.57（2026-08-29）— 管理端工作区分页与磁盘统计**
+
+`GET /api/admin/workspaces` 接入 §1.1 分页约定（`offset`/`limit`、`{items,total}`），新增
+`keyword` / `folder` / `deleted` 服务端过滤与整体聚合 `stats`；文件夹扫描仅对当前页会话执行，
+避免会话与文件过多时全量 `os.walk` 拖慢首屏。新增 `GET /api/admin/workspaces/stats` 返回全部
+工作区磁盘总字节，由前端在列表渲染后异步加载 KPI。列表响应由全量数组改为分页对象，
+前端工作区管理页同步改为服务端分页筛选。
+
+| 实际修改文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/routers/workspaces.py` | 列表分页 / 过滤 / 聚合与 `_match_session`、`_paginate_entries` 纯函数；新增 `/stats` 磁盘总字节端点 |
+| `backend/api/tests/test_admin_workspaces.py` | 过滤与分页切片单测、未登录 401 回归 |
+| `frontend/src/api/types.ts` | `WorkspaceOverview` 增加 `total/offset/limit/stats`，新增 `WorkspaceStats` |
+| `frontend/src/api/http.ts` | `admin.listWorkspaces` 透传分页与过滤参数，新增 `admin.workspaceStats` |
+| `frontend/src/views/AdminWorkspaces.vue` | 服务端分页筛选（n-pagination + 防抖搜索），KPI 改读聚合统计与后台磁盘统计 |
+| `docs/AI测试与评估平台-API.md` | V1.57：§3.12.2 补录工作区接口契约 |

@@ -3,18 +3,18 @@
     <!-- 顶部：说明条 + 4 维 KPI 统计卡 -->
     <div class="row-between">
       <div class="info-strip" style="margin: 0; padding: 6px 14px; border-radius: 8px">
-        工作区 = 每个会话独立对应的沙箱文件夹（<span class="mono">{{ overview.root || 'data/workspaces' }}</span>）。
+        工作区 = 每个会话独立对应的沙箱文件夹（<span class="mono">{{ root || 'data/workspaces' }}</span>）。
         会话内工具调用的落盘文件全部保存在该文件夹，会话间互不可见。
       </div>
     </div>
 
     <div class="kpi-grid" style="--glow-c: var(--c-workspaces)">
       <div class="kpi">
-        <div class="kpi-num num">{{ overview.items.length }}</div>
+        <div class="kpi-num num">{{ stats.total_sessions }}</div>
         <div class="kpi-label">会话总数</div>
       </div>
       <div class="kpi">
-        <div class="kpi-num num">{{ withFolderCount }}</div>
+        <div class="kpi-num num">{{ stats.with_folder }}</div>
         <div class="kpi-label">有工作区文件</div>
       </div>
       <div class="kpi">
@@ -22,17 +22,17 @@
         <div class="kpi-label">工作区总大小</div>
       </div>
       <div class="kpi">
-        <div class="kpi-num num" :style="overview.orphans.length ? 'color: var(--accent-warning)' : ''">{{ overview.orphans.length }}</div>
+        <div class="kpi-num num" :style="stats.orphan_count ? 'color: var(--accent-warning)' : ''">{{ stats.orphan_count }}</div>
         <div class="kpi-label">孤立文件夹</div>
       </div>
     </div>
 
-    <!-- 主面板：会话列表（每个会话对应一个沙箱文件夹） -->
+    <!-- 主面板：会话列表（每个会话对应一个沙箱文件夹，服务端分页） -->
     <div class="panel glow" style="--glow-c: var(--c-workspaces)">
       <div class="panel-title">
         <div class="row">
           <span>会话 · 沙箱文件夹</span>
-          <span class="mono" style="font-size: 12px; color: var(--text-tertiary)">({{ filteredItems.length }} / {{ overview.items.length }} 个会话)</span>
+          <span class="mono" style="font-size: 12px; color: var(--text-tertiary)">({{ total }} / {{ stats.total_sessions }} 个会话)</span>
         </div>
 
         <div class="row">
@@ -52,7 +52,7 @@
             <option value="active">正常</option>
             <option value="deleted">已删除</option>
           </select>
-          <button class="btn btn-secondary btn-sm" :disabled="loading" @click="loadWorkspaces">
+          <button class="btn btn-secondary btn-sm" :disabled="loading" @click="refresh">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="23 4 23 10 17 10"></polyline>
               <polyline points="1 20 1 14 7 14"></polyline>
@@ -76,7 +76,7 @@
           </tr>
         </thead>
         <tbody>
-          <tr v-for="item in filteredItems" :key="item.session_id">
+          <tr v-for="item in items" :key="item.session_id">
             <td>
               <div class="session-cell">
                 <div class="folder-ico">
@@ -115,17 +115,30 @@
               </div>
             </td>
           </tr>
-          <tr v-if="!filteredItems.length">
+          <tr v-if="!items.length">
             <td colspan="7" class="small tertiary" style="text-align: center; padding: 28px 0">
-              暂无会话记录
+              {{ hasActiveFilter ? '未找到匹配的会话' : '暂无会话记录' }}
             </td>
           </tr>
         </tbody>
       </table>
+
+      <!-- 分页：跟随服务端 total，切页 / 调整每页条数均回源查询 -->
+      <div class="pager-row">
+        <n-pagination
+          v-model:page="page"
+          v-model:page-size="pageSize"
+          :item-count="total"
+          :page-sizes="[20, 50, 100, 200]"
+          show-size-picker
+          @update:page="loadWorkspaces"
+          @update:page-size="onPageSizeChange"
+        />
+      </div>
     </div>
 
     <!-- 孤立文件夹（磁盘存在但数据库无对应会话） -->
-    <div v-if="overview.orphans.length" class="panel glow" style="--glow-c: var(--c-workspaces)">
+    <div v-if="orphans.length" class="panel glow" style="--glow-c: var(--c-workspaces)">
       <div class="panel-title">
         <div class="row">
           <span>孤立文件夹</span>
@@ -142,7 +155,7 @@
           </tr>
         </thead>
         <tbody>
-          <tr v-for="folder in overview.orphans" :key="folder.name">
+          <tr v-for="folder in orphans" :key="folder.name">
             <td>
               <div class="session-cell">
                 <div class="folder-ico">
@@ -217,22 +230,43 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useMessage, useDialog } from 'naive-ui'
 import { api } from '../api/http'
-import type { WorkspaceOverview, WorkspaceSession, WorkspaceFolder, WorkspaceFileList } from '../api/types'
+import type { WorkspaceSession, WorkspaceFolder, WorkspaceFileList, WorkspaceStats } from '../api/types'
 
 const message = useMessage()
 const dialog = useDialog()
 
-const overview = ref<WorkspaceOverview>({ root: '', items: [], orphans: [] })
+// 列表与聚合状态：服务端分页，items 仅当前页
+const root = ref('')
+const items = ref<WorkspaceSession[]>([])
+const orphans = ref<WorkspaceFolder[]>([])
+const total = ref(0)
+const stats = ref<WorkspaceStats>({ total_sessions: 0, with_folder: 0, orphan_count: 0 })
 const loading = ref(false)
 const fileLoading = ref(false)
 const cleaning = ref(false)
 
+// 分页与筛选状态：筛选条件变化由服务端处理，并回到第 1 页
+const page = ref(1)
+const pageSize = ref(50)
 const searchKeyword = ref('')
 const folderFilter = ref<'all' | 'has' | 'none'>('all')
 const deletedFilter = ref<'all' | 'active' | 'deleted'>('all')
+
+const hasActiveFilter = computed(
+  () => searchKeyword.value.trim() !== '' || folderFilter.value !== 'all' || deletedFilter.value !== 'all',
+)
+
+// 磁盘总大小 KPI：需遍历全部工作区文件，列表渲染后异步加载，不阻塞表格首屏
+const totalSizeLoading = ref(true)
+const totalBytes = ref<number | null>(null)
+const totalSizeText = computed(() => {
+  if (totalSizeLoading.value) return '…'
+  if (totalBytes.value === null) return '—'
+  return formatBytes(totalBytes.value)
+})
 
 // 文件查看弹窗状态
 const showFiles = ref(false)
@@ -240,25 +274,70 @@ const currentSession = ref<WorkspaceSession | null>(null)
 const fileList = ref<WorkspaceFileList>({ session_id: '', path: '', files: [], total: 0 })
 const currentFolderPath = computed(() => currentSession.value?.folder?.path || fileList.value.path || '')
 
-const filteredItems = computed(() => {
-  const kw = searchKeyword.value.trim().toLowerCase()
-  return overview.value.items.filter(item => {
-    if (kw) {
-      const haystack = `${item.title} ${item.owner || ''} ${item.session_id}`.toLowerCase()
-      if (!haystack.includes(kw)) return false
-    }
-    if (folderFilter.value === 'has' && !item.folder) return false
-    if (folderFilter.value === 'none' && item.folder) return false
-    if (deletedFilter.value === 'active' && item.deleted) return false
-    if (deletedFilter.value === 'deleted' && !item.deleted) return false
-    return true
-  })
+// 请求序号：丢弃过期响应，避免慢请求覆盖新筛选结果
+let requestSeq = 0
+
+async function loadWorkspaces() {
+  const seq = ++requestSeq
+  loading.value = true
+  try {
+    const data = await api.admin.listWorkspaces({
+      offset: (page.value - 1) * pageSize.value,
+      limit: pageSize.value,
+      keyword: searchKeyword.value.trim(),
+      folder: folderFilter.value,
+      deleted: deletedFilter.value,
+    })
+    if (seq !== requestSeq) return
+    root.value = data.root
+    items.value = data.items
+    orphans.value = data.orphans
+    total.value = data.total
+    stats.value = data.stats
+  } catch (err: any) {
+    message.error(err.message || '加载工作区失败')
+  } finally {
+    if (seq === requestSeq) loading.value = false
+  }
+}
+
+async function loadTotalBytes() {
+  totalSizeLoading.value = true
+  try {
+    const data = await api.admin.workspaceStats()
+    totalBytes.value = data.total_bytes
+  } catch {
+    totalBytes.value = null // KPI 后台加载失败静默降级，不干扰列表
+  } finally {
+    totalSizeLoading.value = false
+  }
+}
+
+function onPageSizeChange() {
+  // 每页条数变化后回到第 1 页重新查询
+  page.value = 1
+  void loadWorkspaces()
+}
+
+function refresh() {
+  void loadWorkspaces()
+  void loadTotalBytes()
+}
+
+// 关键词防抖：输入停顿 300ms 后回到第 1 页重新查询
+let searchTimer: number | undefined
+watch(searchKeyword, () => {
+  window.clearTimeout(searchTimer)
+  searchTimer = window.setTimeout(() => {
+    page.value = 1
+    void loadWorkspaces()
+  }, 300)
 })
 
-const withFolderCount = computed(() => overview.value.items.filter(i => i.folder).length)
-const totalSizeText = computed(() => {
-  const bytes = overview.value.items.reduce((sum, i) => sum + (i.folder?.total_bytes || 0), 0)
-  return formatBytes(bytes)
+// 下拉筛选立即生效并回到第 1 页
+watch([folderFilter, deletedFilter], () => {
+  page.value = 1
+  void loadWorkspaces()
 })
 
 function shortId(id: string): string {
@@ -275,17 +354,6 @@ function formatBytes(bytes?: number): string {
 function formatDate(value?: string | null): string {
   if (!value) return '—'
   return new Date(value).toLocaleString('zh-CN', { hour12: false })
-}
-
-async function loadWorkspaces() {
-  loading.value = true
-  try {
-    overview.value = await api.admin.listWorkspaces()
-  } catch (err: any) {
-    message.error(err.message || '加载工作区失败')
-  } finally {
-    loading.value = false
-  }
 }
 
 async function openFiles(session: WorkspaceSession) {
@@ -325,7 +393,7 @@ function doCleanup(sessionId: string, label: string, after: () => void) {
 }
 
 function confirmCleanup(session: WorkspaceSession) {
-  doCleanup(session.session_id, session.title || session.session_id, loadWorkspaces)
+  doCleanup(session.session_id, session.title || session.session_id, refresh)
 }
 
 function confirmOrphanCleanup(folder: WorkspaceFolder) {
@@ -339,7 +407,7 @@ function confirmOrphanCleanup(folder: WorkspaceFolder) {
       try {
         await api.admin.deleteOrphan(folder.name)
         message.success('孤立文件夹已清理')
-        await loadWorkspaces()
+        refresh()
       } catch (err: any) {
         message.error(err.message || '清理失败')
       } finally {
@@ -349,7 +417,7 @@ function confirmOrphanCleanup(folder: WorkspaceFolder) {
   })
 }
 
-onMounted(loadWorkspaces)
+onMounted(refresh)
 </script>
 
 <style scoped>
@@ -397,5 +465,10 @@ onMounted(loadWorkspaces)
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+.pager-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
 }
 </style>

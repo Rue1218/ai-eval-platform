@@ -1,7 +1,9 @@
 """工作区管理接口：会话 → 沙箱文件夹的一一对应视图（管理端）。
 
-- ``GET /api/admin/workspaces``：返回全部会话（含软删除）及其沙箱文件夹摘要
-  （文件数 / 占用字节 / 最近活动），并附带磁盘上无对应会话的孤立文件夹；
+- ``GET /api/admin/workspaces``：分页返回会话（含软删除）及其沙箱文件夹摘要
+  （文件数 / 占用字节 / 最近活动），支持关键词 / 文件夹 / 删除状态过滤；
+  文件夹扫描只对当前页会话执行，并附带整体聚合 ``stats`` 与孤立文件夹清单；
+- ``GET /api/admin/workspaces/stats``：全部工作区磁盘总字节（遍历代价高，供前端后台加载 KPI）；
 - ``GET /api/admin/workspaces/{session_id}/files``：展开会话文件夹内的文件清单；
 - ``DELETE /api/admin/workspaces/{session_id}``：清理该会话的沙箱文件夹（写审计）。
 
@@ -29,6 +31,46 @@ from ..models import Session as AgentSession
 router = APIRouter(prefix="/api/admin/workspaces", tags=["admin-workspaces"])
 
 _MAX_FILES = 500
+
+
+def _match_session(
+    entry: tuple[str | None, str | None, str, bool, bool],
+    keyword: str,
+    folder: str,
+    deleted: str,
+) -> bool:
+    """单条会话的过滤判定（纯函数，便于单测）。
+
+    ``entry`` 为 ``(title, owner, session_id, has_folder, is_deleted)``；
+    ``keyword`` 匹配标题 / 归属 / 会话 ID；``folder`` 取 all/has/none；
+    ``deleted`` 取 all/active/deleted。
+    """
+    title, owner, session_id, has_folder, is_deleted = entry
+    if keyword and keyword not in f"{title or ''} {owner or ''} {session_id}".lower():
+        return False
+    if folder == "has" and not has_folder:
+        return False
+    if folder == "none" and has_folder:
+        return False
+    if deleted == "active" and is_deleted:
+        return False
+    if deleted == "deleted" and not is_deleted:
+        return False
+    return True
+
+
+def _paginate_entries(
+    entries: list,
+    offset: int,
+    limit: int,
+) -> tuple[list, int]:
+    """按会话最近更新时间倒序排序并切片，返回 (当前页, 过滤后总数)。"""
+    ordered = sorted(
+        entries,
+        key=lambda entry: entry[0].updated_at.timestamp() if entry[0].updated_at else 0.0,
+        reverse=True,
+    )
+    return ordered[offset : offset + limit], len(ordered)
 
 
 def _folder_summary(directory: str) -> dict[str, Any] | None:
@@ -65,25 +107,60 @@ def _folder_summary(directory: str) -> dict[str, Any] | None:
 def list_workspaces(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
+    offset: int = Query(default=0, ge=0, description="分页偏移，默认 0"),
+    limit: int = Query(default=50, ge=1, le=200, description="每页条数，默认 50、最大 200"),
+    keyword: str = Query(default="", description="按会话标题 / 归属 / 会话 ID 模糊搜索"),
+    folder: str = Query(
+        default="all", pattern="^(all|has|none)$", description="工作区文件夹过滤：all/has/none"
+    ),
+    deleted: str = Query(
+        default="all", pattern="^(all|active|deleted)$", description="删除状态过滤：all/active/deleted"
+    ),
 ):
-    """列出全部会话及其沙箱文件夹摘要，并识别孤立文件夹（磁盘有目录、数据库无会话）。"""
-    root = get_workspace_root()
-    sessions = db.query(AgentSession).all()
-    session_ids = {row.id for row in sessions}
+    """分页列出会话及其沙箱文件夹摘要，并识别孤立文件夹（磁盘有目录、数据库无会话）。
 
-    owners = {
-        row.id: row.username
-        for row in db.query(User).filter(User.id.in_({s.user_id for s in sessions})).all()
-    } if sessions else {}
+    过滤与分页先在会话行上完成（配合一次 ``isdir`` 判断），仅对当前页会话执行
+    文件夹扫描统计，避免会话过多时全量 ``os.walk`` 拖慢首屏；``stats`` 为整体
+    聚合（不做过滤），供 KPI 卡片使用；磁盘总字节走 ``GET /stats`` 由前端后台加载。
+    """
+    root = get_workspace_root()
+    rows = (
+        db.query(AgentSession, User.username)
+        .outerjoin(User, AgentSession.user_id == User.id)
+        .all()
+    )
+    kw = keyword.strip().lower()
+
+    # 单次遍历构建 (会话, 归属, 是否有工作区) 三元组，并统计整体聚合
+    entries: list[tuple[AgentSession, str | None, bool]] = []
+    with_folder = 0
+    for session, username in rows:
+        has_folder = os.path.isdir(session_workspace_dir(session.id))
+        if has_folder:
+            with_folder += 1
+        entries.append((session, username, has_folder))
+
+    filtered = [
+        (session, username)
+        for session, username, has in entries
+        if _match_session(
+            (session.title, username, session.id, has, session.deleted_at is not None),
+            kw,
+            folder,
+            deleted,
+        )
+    ]
+    page_entries, total = _paginate_entries(filtered, offset, limit)
 
     items = []
-    for session in sessions:
+    for session, username in page_entries:
+        # 仅当前页会话做文件夹扫描，控制单次请求的磁盘遍历规模
         directory = session_workspace_dir(session.id)
         items.append(
             {
                 "session_id": session.id,
                 "title": session.title,
-                "owner": owners.get(session.user_id),
+                "owner": username,
                 "visibility": session.visibility,
                 "deleted": session.deleted_at is not None,
                 "created_at": session.created_at.isoformat() if session.created_at else None,
@@ -94,6 +171,8 @@ def list_workspaces(
 
     orphans = []
     if os.path.isdir(root):
+        # 孤立判定必须基于全部会话（含被过滤掉的），避免误把过滤会话当孤立目录
+        session_ids = {session.id for session, _username, _has in entries}
         for name in sorted(os.listdir(root)):
             if name in session_ids:
                 continue
@@ -104,8 +183,37 @@ def list_workspaces(
             if summary:
                 orphans.append(summary)
 
-    items.sort(key=lambda item: item["updated_at"] or "", reverse=True)
-    return {"root": root, "items": items, "orphans": orphans}
+    return {
+        "root": root,
+        "items": items,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "stats": {
+            "total_sessions": len(entries),
+            "with_folder": with_folder,
+            "orphan_count": len(orphans),
+        },
+        "orphans": orphans,
+    }
+
+
+@router.get("/stats")
+def workspace_stats(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """统计全部会话工作区的磁盘总字节（KPI「工作区总大小」）。
+
+    需要遍历所有会话工作区内的文件，代价较高；由前端在列表渲染完成后
+    异步调用，不阻塞工作区表格的首屏。
+    """
+    total_bytes = 0
+    for (session_id,) in db.query(AgentSession.id).all():
+        summary = _folder_summary(session_workspace_dir(session_id))
+        if summary:
+            total_bytes += summary["total_bytes"]
+    return {"total_bytes": total_bytes}
 
 
 @router.delete("/orphans/{folder_name}")
