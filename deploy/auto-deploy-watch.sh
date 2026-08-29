@@ -137,20 +137,27 @@ if [ -z "$REMOTE_SHA" ]; then
     exit 1
 fi
 
-if [ "$LOCAL_SHA" = "$REMOTE_SHA" ] && [ "$FORCE" != "1" ]; then
-    _log "巡检正常：mode=$MODE 本地已是最新 ${LOCAL_SHA:0:8}"
+# 部署基准用「成功标记」而非工作区 HEAD：HEAD 在 deploy.sh 的 git reset 阶段就会
+# 前进到目标提交，若部署中途被打断（SSH 断开 / 后台任务超时强杀），HEAD 已是最新
+# 而容器仍是旧版本，按 HEAD 对比会误判"无需部署"导致永不自愈；按标记对比可在
+# 下一轮巡检自动续跑剩余构建与滚动更新。
+LAST_DEPLOYED=$(cat "$SUCCESS_MARKER" 2>/dev/null || true)
+COMPARE_BASE=${LAST_DEPLOYED:-$LOCAL_SHA}
+
+if [ "$COMPARE_BASE" = "$REMOTE_SHA" ] && [ "$FORCE" != "1" ]; then
+    _log "巡检正常：mode=$MODE 已部署至最新 ${REMOTE_SHA:0:8}"
     exit 0
 fi
 
 if [ "$MODE" != "local" ] && [ "$FORCE" != "1" ]; then
     # actions 模式只提示待部署，不部署（避免与主链路双写部署基准）。
     # 若该日志连续出现而 Actions 又长期没有成功记录，即主链路已停摆，应切换 local。
-    _log "待部署：发现 origin/$BRANCH 新提交 ${REMOTE_SHA:0:8}（当前 mode=actions，备用链路未启用，等待 GitHub Actions 部署）"
+    _log "待部署：origin/$BRANCH ${REMOTE_SHA:0:8} 未上线（已部署 ${COMPARE_BASE:0:8}，mode=actions，等待 GitHub Actions）"
     exit 0
 fi
 
 PREV_SHA=$(cat "$SUCCESS_MARKER" 2>/dev/null || echo "")
-_log "开始备用部署：mode=local ${PREV_SHA:0:8} -> ${REMOTE_SHA:0:8}${FORCE:+（手动强制）}"
+_log "开始备用部署：mode=local ${PREV_SHA:0:8} -> ${REMOTE_SHA:0:8}${FORCE:+（手动强制）}（工作区 HEAD ${LOCAL_SHA:0:8}）"
 
 # 服务器本地构建部署：不传 IMAGE_* 环境变量即走 deploy.sh 既有本机构建回退路径；
 # DEPLOY_COMMIT 传入精确提交，deploy.sh 检测目标提交已在本地对象库会跳过重复 fetch，
