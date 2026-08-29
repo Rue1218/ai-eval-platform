@@ -43,6 +43,20 @@ for arg in "$@"; do
     esac
 done
 
+# 宝塔计划任务默认以 root 运行；但 /opt/ai-eval-platform 与 .git 属主是 deploy 用户
+# （见 deploy/server-setup.sh），GitHub 部署密钥也在 /home/deploy/.ssh：
+# root 直接执行 git fetch/reset 会把仓库对象写成 root 属主、破坏 deploy 身份的主链路部署。
+# 因此 root 启动时先修正日志目录属主，再以 deploy 身份降权重入本脚本（幂等防循环）。
+WATCH_SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+if [ "$(id -u)" -eq 0 ] && [ "${DEPLOY_WATCH_REEXEC:-0}" != "1" ] && id deploy >/dev/null 2>&1; then
+    mkdir -p "$APP_DIR/logs"
+    chown -R deploy:deploy "$APP_DIR/logs" 2>/dev/null || true
+    exec sudo -u deploy -H env \
+        DEPLOY_WATCH_REEXEC=1 APP_DIR="$APP_DIR" BRANCH="$BRANCH" \
+        API_HEALTH_URL="$API_HEALTH_URL" WEB_HEALTH_URL="$WEB_HEALTH_URL" \
+        bash "$WATCH_SELF" "$@"
+fi
+
 LOG_DIR="$APP_DIR/logs"
 LOG_FILE="$LOG_DIR/auto-deploy.log"
 MODE_FILE="$APP_DIR/.deploy-mode"

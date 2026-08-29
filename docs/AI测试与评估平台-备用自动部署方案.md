@@ -2,7 +2,7 @@
 
 > **文档地位**：本文件是平台部署链路的配套技术方案，规定 GitHub Actions CD 因用量上限停摆时，
 > 生产环境 `47.119.132.83` 的备用自动化部署机制。与 [`AI测试与评估平台-API.md`](AI测试与评估平台-API.md) 无契约交集。
-> 版本：V1.0 ｜ 审查日期：2026-08-29
+> 版本：V1.1 ｜ 审查日期：2026-08-29
 
 ---
 
@@ -44,6 +44,7 @@ GitHub main（新提交）
 2. **模式开关互斥**：`.deploy-mode=actions` 时巡检只记录不部署，避免与主链路双写部署基准；`local` 时才真正接管。
 3. **精确提交部署**：巡检传入 `DEPLOY_COMMIT=<origin/main sha>`，`deploy.sh` 检测目标提交已在本地对象库后跳过重复 fetch（规避 GitHub SSH 偶发的通道拒绝问题），并重载该提交版本的部署脚本。
 4. **观察性**：`mode=actions` 期间若日志连续出现「待部署」而 Actions 无成功记录，即为主链路停摆信号，提示切换 `local`。
+5. **自动降权（V1.1）**：宝塔计划任务默认以 root 运行，而仓库与 `.git` 属主是 `deploy` 用户、GitHub 部署密钥在 `/home/deploy/.ssh`（见 `deploy/server-setup.sh`）；脚本检测到 root 启动时先修正 `logs/` 属主，再 `sudo -u deploy -H` 降权重入，避免 root 的 git 操作把仓库对象写成 root 属主、破坏 `deploy` 身份主链路的后续部署。
 
 ## 4. 模式开关与切换 SOP
 
@@ -111,7 +112,7 @@ DEPLOY_NOTIFY_WEBHOOK=https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxx
 # WEB_HEALTH_URL=http://127.0.0.1:8080/
 ```
 
-部署成功、失败、健康检查不通过、`git fetch` 连续失败四种事件均会推送；Webhook 地址只从该文件读取，不写入日志（遵守 AGENTS.md §5.2.1 凭据不落日志红线）。
+部署成功、失败、健康检查不通过、`git fetch` 连续失败四种事件均会推送；Webhook 地址只从该文件读取，不写入日志（遵守 AGENTS.md §5.2.1 凭据不落日志红线）。注意 `.auto-deploy.env` 与 `.deploy-mode` 若由 root 创建，需保证 `deploy` 用户可读（默认 644 即可；`.auto-deploy.env` 建议同时 `chmod 600` 并 `chown deploy:deploy`）。
 
 ## 7. 失败排查与回滚
 
@@ -137,5 +138,13 @@ DEPLOY_NOTIFY_WEBHOOK=https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxx
 
 | 文件 | 作用 |
 | :--- | :--- |
-| `deploy/auto-deploy-watch.sh` | 备用自动部署巡检脚本：模式开关读取、git fetch 重试、HEAD 与 origin/main 对比、触发 `deploy.sh` 服务器本地构建、健康检查、可选企业微信通知、日志轮转与巡检互斥 |
+| `deploy/auto-deploy-watch.sh` | 备用自动部署巡检脚本：模式开关读取、git fetch 重试、HEAD 与 origin/main 对比、触发 `deploy.sh` 服务器本地构建、健康检查、可选企业微信通知、日志轮转与巡检互斥；root 启动时自动 `sudo -u deploy` 降权重入（V1.1） |
 | `docs/AI测试与评估平台-备用自动部署方案.md` | 本方案：选型、架构、宝塔三种接入方式、切换/回切/回滚 SOP 与边界约束 |
+
+**V1.1（2026-08-29）— 复查修正 root 属主冲突**
+
+宝塔计划任务默认以 root 运行；`deploy/server-setup.sh` 规定 `/opt/ai-eval-platform` 属主为
+`deploy` 用户且 GitHub 部署密钥仅存在于 `/home/deploy/.ssh`。原脚本若以 root 执行，
+`git fetch/reset` 会把 `.git` 对象写成 root 属主且无部署密钥，备用链路自身失败并连累
+`deploy` 身份的主链路部署。修正为：root 启动时先修正 `logs/` 属主，再 `sudo -u deploy -H`
+降权重入本脚本（`DEPLOY_WATCH_REEXEC` 防循环）；计划任务无需指定执行用户。
