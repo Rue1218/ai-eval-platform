@@ -140,8 +140,24 @@
             <button type="button" class="td-tab" :class="{ active: previewMode === 'render' }" @click="previewMode = 'render'">渲染</button>
             <button type="button" class="td-tab" :class="{ active: previewMode === 'source' }" @click="previewMode = 'source'">源码</button>
           </div>
+          <!-- edit 结果结构固定且字段少：用成功摘要卡替代通用 JSON 字段树 -->
+          <div v-if="editMeta" class="edit-result" role="status">
+            <span class="edit-result-icon" aria-hidden="true">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="20 6 9 17 4 12"></polyline>
+              </svg>
+            </span>
+            <span class="edit-result-text">
+              已完成替换
+              <span class="edit-result-path mono" :title="editMeta.path">{{ editMeta.path }}</span>
+            </span>
+            <span class="edit-result-chips">
+              <span class="edit-chip">替换 {{ editMeta.replacements }} 处</span>
+              <span class="edit-chip mono">{{ editMeta.oldLength }} → {{ editMeta.newLength }} 字符</span>
+            </span>
+          </div>
           <MarkdownView
-            v-if="showMarkdownOutput"
+            v-else-if="showMarkdownOutput"
             :content="previewText"
             custom-class="tool-md"
           />
@@ -392,6 +408,19 @@ const readMeta = computed(() => {
   }
 })
 
+/** edit 成功投影（display.edit）字段少且结构固定，摘出后用专用摘要卡展示。 */
+const editMeta = computed(() => {
+  if (props.tool !== 'edit') return null
+  const edit = asRecord(resultRecord.value?.edit)
+  if (!edit) return null
+  return {
+    path: stringField(edit.path),
+    replacements: asNonNegInt(edit.replacements),
+    oldLength: asNonNegInt(edit.old_length),
+    newLength: asNonNegInt(edit.new_length),
+  }
+})
+
 const previewText = computed(() => {
   const data = resultRecord.value
   const read = asRecord(data?.read)
@@ -601,6 +630,7 @@ function revealOutput(text: string): void {
     && !prefersReducedMotion()
     && !isAudioOutput.value
     && props.tool !== 'image.generate'
+    && props.tool !== 'edit'
   if (!shouldAnimate) {
     displayedOutputText.value = text
     isStreamingOutput.value = false
@@ -911,6 +941,59 @@ pre.code {
   color: var(--text-secondary);
   font-size: 12.5px;
   line-height: 1.5;
+}
+/* edit 结果摘要卡：成功图标 + 文件路径 + 替换统计，替代低对比度的通用 JSON 树 */
+.edit-result {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent-success) 24%, var(--border-subtle));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent-success) 6%, var(--bg-main));
+}
+.edit-result-icon {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  border-radius: 999px;
+  color: var(--accent-success);
+  background: color-mix(in srgb, var(--accent-success) 14%, transparent);
+}
+.edit-result-text {
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.edit-result-path {
+  margin-left: 2px;
+  padding: 1px 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  background: var(--bg-main);
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.edit-result-chips {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
+}
+.edit-chip {
+  padding: 2px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--bg-main);
+  color: var(--text-secondary);
+  font-size: 11px;
+  white-space: nowrap;
 }
 .tool-recovery {
   display: grid;
