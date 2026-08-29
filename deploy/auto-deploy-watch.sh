@@ -157,7 +157,12 @@ if [ "$MODE" != "local" ] && [ "$FORCE" != "1" ]; then
 fi
 
 PREV_SHA=$(cat "$SUCCESS_MARKER" 2>/dev/null || echo "")
-_log "开始备用部署：mode=local ${PREV_SHA:0:8} -> ${REMOTE_SHA:0:8}${FORCE:+（手动强制）}（工作区 HEAD ${LOCAL_SHA:0:8}）"
+# ${FORCE:+…} 在 FORCE=0（非空）时也会展开，改用显式判断拼接标记
+FORCE_SUFFIX=""
+if [ "$FORCE" = "1" ]; then
+    FORCE_SUFFIX="（手动强制）"
+fi
+_log "开始备用部署：mode=local ${PREV_SHA:0:8} -> ${REMOTE_SHA:0:8}${FORCE_SUFFIX}（工作区 HEAD ${LOCAL_SHA:0:8}）"
 
 # 服务器本地构建部署：不传 IMAGE_* 环境变量即走 deploy.sh 既有本机构建回退路径；
 # DEPLOY_COMMIT 传入精确提交，deploy.sh 检测目标提交已在本地对象库会跳过重复 fetch，
