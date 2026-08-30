@@ -30,6 +30,45 @@ def test_fetch_remote_models_openai_format():
         assert models[1]["id"] == "mimo-v2.5-pro"
 
 
+def test_fetch_remote_models_preserves_cursorapi_parameters():
+    """CursorAPI 模型目录的参数维度必须原样交给前端构造模型规格。"""
+    mock_data = {
+        "data": [
+            {
+                "id": "grok-4.6",
+                "display_name": "Cursor Grok 4.6",
+                "owned_by": "cursorapi",
+                "parameters": [
+                    {"id": "effort", "values": ["Low", "Medium", "High"]},
+                    {"id": "fast", "values": ["false", "true"]},
+                ],
+            }
+        ]
+    }
+    mock_resp = MagicMock()
+    mock_resp.read.return_value = json.dumps(mock_data).encode("utf-8")
+    mock_resp.__enter__.return_value = mock_resp
+
+    with patch("app.adapters.urlopen", return_value=mock_resp):
+        models = fetch_remote_models(
+            protocol="openai_chat",
+            base_url="https://cursorapi.example.com/v1",
+            api_key="sk-test",
+        )
+
+    assert models == [
+        {
+            "id": "grok-4.6",
+            "name": "Cursor Grok 4.6",
+            "owned_by": "cursorapi",
+            "parameters": [
+                {"id": "effort", "values": ["Low", "Medium", "High"]},
+                {"id": "fast", "values": ["false", "true"]},
+            ],
+        }
+    ]
+
+
 def test_fetch_remote_models_ollama_format():
     """测试解析 Ollama /api/tags 格式。"""
     mock_data = {
@@ -221,4 +260,3 @@ def test_resolve_env_api_key_for_url(tmp_path, monkeypatch):
     # 4. 默认 Base URL
     base = resolve_env_base_url("openai_chat")
     assert base == "https://api.openai.com/v1"
-

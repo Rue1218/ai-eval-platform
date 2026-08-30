@@ -40,12 +40,19 @@
             <div class="model-id-text mono">{{ m.id }}</div>
             <div class="model-sub-text">
               <span v-if="m.owned_by" class="tag-owned">{{ m.owned_by }}</span>
+              <span
+                v-for="parameter in m.parameters || []"
+                :key="parameter.id"
+                class="tag-parameter"
+              >
+                {{ parameter.id }}: {{ parameter.values.join(' / ') }}
+              </span>
             </div>
           </div>
           <div class="model-actions" @click.stop>
             <button
               class="btn btn-secondary btn-xs"
-              @click="handleSinglePick(m.id)"
+              @click="handleSinglePick(m)"
             >
               选用此模型
             </button>
@@ -77,15 +84,16 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import type { RemoteModel } from '../../api/types'
 
 const props = defineProps<{
   show: boolean
-  models: Array<{ id: string; name: string; owned_by?: string }>
+  models: RemoteModel[]
 }>()
 
 const emit = defineEmits<{
   (e: 'update:show', val: boolean): void
-  (e: 'select', modelId: string): void
+  (e: 'select', model: RemoteModel): void
   (e: 'batch-create', modelIds: string[]): void
 }>()
 
@@ -111,8 +119,8 @@ function toggleSelect(id: string) {
   }
 }
 
-function handleSinglePick(modelId: string) {
-  emit('select', modelId)
+function handleSinglePick(model: RemoteModel) {
+  emit('select', model)
   emit('update:show', false)
 }
 
@@ -195,6 +203,9 @@ function handleBatchAdd() {
   color: var(--text-secondary, #475569);
   padding: 1px 6px;
   border-radius: 4px;
+}
+.tag-parameter {
+  color: var(--text-tertiary, #94a3b8);
 }
 .empty-tip {
   padding: 32px;

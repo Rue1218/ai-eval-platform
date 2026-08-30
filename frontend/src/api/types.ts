@@ -134,6 +134,19 @@ export interface ProfileCheckOut {
   error?: string
 }
 
+// 远程 /models 目录可选的模型请求字段；CursorAPI 用于构造 model[param=value]。
+export interface RemoteModelParameter {
+  id: string
+  values: string[]
+}
+
+export interface RemoteModel {
+  id: string
+  name: string
+  owned_by?: string
+  parameters?: RemoteModelParameter[]
+}
+
 // 任务类型与状态
 export type TaskKind = 'benchmark' | 'rag' | 'testcase' | 'stress'
 
