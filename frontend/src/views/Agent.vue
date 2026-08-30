@@ -1402,8 +1402,16 @@ function getCurrentTurnAgent(list: StreamItem[]): StreamItem | undefined {
       break
     }
   }
-  const lastItem = list[list.length - 1]
-  return lastItem && lastItem.type === 'agent' && list.length - 1 > from ? lastItem : undefined
+  // 从尾部回溯寻找本回合容器：error / report 等独立收尾条目会插在容器之后，
+  // 若只认「最后一条必须是 agent」，同回合的后续帧会被误判为新回合，
+  // 思考流被切碎成多张孤儿卡，且永远等不到 think_final 收尾（生产实测必现）。
+  for (let i = list.length - 1; i > from; i--) {
+    const item = list[i]
+    if (item.type === 'user') break
+    if (item.type === 'agent') return item
+    // error / report 等独立条目：不属于任何容器，跳过继续回溯
+  }
+  return undefined
 }
 
 /** 获取或创建一个 ReAct 回合容器；所有思考、工具和助手正文都追加到其 blocks。 */
@@ -2043,6 +2051,19 @@ function finishLiveThought() {
   if (last) finishThought(last)
 }
 
+/** 收尾缓冲区内所有仍未完成的思考卡（think_final / 停止 专用）：
+ *  后端整回合只发一次完整思考快照；若同回合内出现 error / report 独立条目、
+ *  或阶段卡把思考流切成多张卡，只有最后一张能按全文回填，其余卡不在此统一
+ *  收尾就会永久停留在「深度思考中...」。不覆盖各卡已有文本，仅置完成态。 */
+function finishAllBufferThoughts(buf: StreamItem[]) {
+  for (const item of buf) {
+    if (item.type !== 'agent' || !item.blocks) continue
+    for (const block of item.blocks) {
+      if (block.type === 'thought') finishThought(block)
+    }
+  }
+}
+
 /** 协作者缓冲区：立刻收尾未完成思考卡，避免下一轮工具卡叠进同一张。 */
 function finishBufferThought(buf: StreamItem[]) {
   for (let i = buf.length - 1; i >= 0; i--) {
@@ -2279,6 +2300,7 @@ function handleSendClick() {
     flowTimers.forEach(id => clearTracked(id))
     finishLiveThought()
     events.value.forEach(ev => { if (ev.type === 'thought' && !ev.done) finishThought(ev) })
+    finishAllBufferThoughts(events.value)
     if (agentWs?.isConnected) {
       agentWs.sendUserMessage('/stop', [], createClientMessageId())
     } else {
@@ -3668,6 +3690,8 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
             })
           }
         }
+        // 整回合思考快照已到：统一收尾所有仍未完成的思考卡（含孤儿卡）。
+        finishAllBufferThoughts(buf)
         break
       }
       if (p.stream === 'think') {
@@ -4005,6 +4029,9 @@ function handleWsEvent(ev: WsServerEvent) {
             })
           }
         }
+        // 整回合思考快照已到：统一收尾所有仍未完成的思考卡，
+        // 防止中途 error / report 分出的孤儿卡永久停留在「深度思考中...」。
+        finishAllBufferThoughts(events.value)
         scrollToBottom()
         break
       }
