@@ -31,6 +31,7 @@ from ..agent.think_stream import (
     sanitize_reasoning,
 )
 from ..agent.title import generate_title_text
+from ..agent_prompt_settings import get_agent_prompt_overlay
 from ..config import settings
 from ..db import SessionLocal
 from ..errors import AppError, ErrorCode
@@ -725,12 +726,12 @@ async def _run_turn(
         config, profile = _selected_model_config(db)
         turn_user = db.query(User).filter(User.id == user_id).first()
         history = _history_messages(db, session_id)
-        # 系统提示词：agent_system_prompt 设置行优先，回退 Harness 五段策略（#101）
-        system_row = db.query(Setting).filter(Setting.key == "agent_system_prompt").first()
-        system_prompt = (
-            system_row.value
-            if (system_row and isinstance(system_row.value, str) and system_row.value.strip())
-            else build_system_prompt(SystemVars(skill_hints=tuple(skill_hint_lines())))
+        # 核心系统策略始终由 Harness 生成；协议档只能注入受审计的补充提示词。
+        system_prompt = build_system_prompt(
+            SystemVars(
+                skill_hints=tuple(skill_hint_lines()),
+                agent_prompt_overlay=get_agent_prompt_overlay(db, profile.id),
+            )
         )
         session_row = db.query(AgentSession).filter(AgentSession.id == session_id).first()
         compact_summary = (session_row.compact_summary or "") if session_row else ""

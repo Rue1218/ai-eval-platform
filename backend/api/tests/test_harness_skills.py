@@ -9,11 +9,16 @@ from app.harness.context import assemble, skill_hint_lines, skill_hints_for_turn
 from app.harness.skills import (
     DISABLED_SKILLS,
     SKILL_CATALOG,
-    SKILL_WORKFLOWS,
     assert_skill_enabled,
     list_hints,
     load_skill_workflow,
     skill_to_kind,
+)
+from app.harness.skills.storage import (
+    ensure_skill_files,
+    read_skill_document,
+    read_skill_metadata,
+    update_skill_document,
 )
 
 _FRONTEND_LABELS = (
@@ -83,7 +88,60 @@ def test_skill_rag_disabled_raises_validation() -> None:
     with pytest.raises(AppError) as error:
         load_skill_workflow("skill-rag")
     assert error.value.code == ErrorCode.VALIDATION
-    assert "skill-rag" not in SKILL_WORKFLOWS
+    document = read_skill_document("skill-rag")
+    assert document.metadata.enabled is False
+
+
+def test_skill_file_requires_existence_before_loading(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """技能读取先验证 SKILL.md 存在；空运行时目录不得回退硬编码正文。"""
+    monkeypatch.setenv("AGENT_SKILLS_ROOT", str(tmp_path / "skills"))
+    with pytest.raises(AppError) as error:
+        read_skill_metadata("skill-benchmark")
+    assert error.value.code == ErrorCode.NOT_FOUND
+
+
+def test_skill_file_header_and_workflow_are_loaded_in_two_steps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """目录仅使用头部字段，完整工作流只在明确读取单个技能时加载。"""
+    monkeypatch.setenv("AGENT_SKILLS_ROOT", str(tmp_path / "skills"))
+    ensure_skill_files()
+    metadata = read_skill_metadata("skill-benchmark")
+    document = read_skill_document("skill-benchmark")
+    assert metadata.summary == "执行大模型基准评测"
+    assert document.content.startswith("---\nid: skill-benchmark\n")
+    assert "## 工作流" in document.content
+
+
+def test_skill_file_edit_rejects_stale_revision_and_enabling_rag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """编辑必须携带当前修订指纹，且未接入 RAG 不得通过文件绕过启用门禁。"""
+    monkeypatch.setenv("AGENT_SKILLS_ROOT", str(tmp_path / "skills"))
+    ensure_skill_files()
+    benchmark = read_skill_document("skill-benchmark")
+    with pytest.raises(AppError) as stale:
+        update_skill_document("skill-benchmark", benchmark.content, "stale-revision-00")
+    assert stale.value.code == ErrorCode.CONCURRENCY
+
+    rag = read_skill_document("skill-rag")
+    with pytest.raises(AppError) as invalid:
+        update_skill_document(
+            "skill-rag",
+            rag.content.replace("enabled: false", "enabled: true"),
+            rag.revision,
+        )
+    assert invalid.value.code == ErrorCode.VALIDATION
+
+
+def test_skill_file_edit_rejects_suspected_secret(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Skill 正文不得保存疑似凭据，且校验失败不能覆盖现有文件。"""
+    monkeypatch.setenv("AGENT_SKILLS_ROOT", str(tmp_path / "skills"))
+    ensure_skill_files()
+    benchmark = read_skill_document("skill-benchmark")
+    unsafe_content = benchmark.content.replace("## 工作流", "password: should-not-save\n\n## 工作流")
+
+    with pytest.raises(AppError) as error:
+        update_skill_document("skill-benchmark", unsafe_content, benchmark.revision)
+
+    assert error.value.code == ErrorCode.VALIDATION
+    assert read_skill_document("skill-benchmark").content == benchmark.content
 
 
 def test_skill_list_matches_slash_commands() -> None:

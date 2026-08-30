@@ -1215,8 +1215,8 @@ def build_react_nodes(
                 code=exc.code.value,
                 message=exc.message,
             )
-        # ws.py 的 agent_system_prompt 是协议档/平台配置的唯一入口，ReAct 只能在
-        # 其后按 CX-4 装配 Skill Hint / 摘要 / 阶段输入，不能用固定 Persona 覆盖。
+        # ws.py 已注入固定核心策略和协议档补充层；ReAct 只能在其后按 CX-4
+        # 装配 Skill Hint / 摘要 / 阶段输入，不能用另一个 Persona 覆盖。
         configured_system = str(serializable.get("system") or "").strip()
         persona = configured_system or build_system_prompt(
             SystemVars(skill_hints=tuple(hints))

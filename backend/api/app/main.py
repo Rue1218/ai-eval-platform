@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
 from .db import SessionLocal
 from .errors import register_error_handlers
+from .harness.skills.storage import ensure_skill_files
 from .models import User
 from .routers import (
     admin,
@@ -79,6 +80,8 @@ def _bootstrap_preview() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # 表结构由 Alembic 管理（启动前执行 alembic upgrade head），此处只做引导数据
+    # 首次启动只补齐缺失的运行时技能文件，已有管理员修改绝不覆盖。
+    ensure_skill_files()
     _bootstrap_admin()
     _bootstrap_preview()
     from .runtime import checkpoint_ttl_loop

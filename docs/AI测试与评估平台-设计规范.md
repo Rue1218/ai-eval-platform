@@ -2,12 +2,12 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.10 |
-| 对应 PRD | V1.8（唯一产品权威） |
+| 文档版本 | V1.12 |
+| 对应 PRD | V1.16（唯一产品权威） |
 | 对应开发计划 | V1.5 |
 | 撰写日期 | 2026-08-17 |
-| 本轮修订 | 2026-08-26：ToolCard 接收真实 `tool_progress` / `tool_output_delta`，执行期间持续展示带行号的受控输出，终态仍以持久化 ToolResult 收敛；失败卡展示安全恢复建议。 |
-| 最近修订 | 2026-08-26：ToolCard 在 ToolCall 后立即显示执行加载态，ToolResult 的安全投影按帧渐显，并加入卡片弹出与展开动画；动效遵从系统减少动态效果设置。2026-08-26：ToolCard 原生工具收起态统一显示 ToolCall，不回显文件路径、命令和写入内容；展开区继续展示详细参数与行号内容。2026-08-26：ToolCard 原生工具改用英文工具名，展开区统一使用 ToolCall/输出分区，文件、命令和代码/文档结果使用行号展示；2026-08-23：Agent 对话助手消息增加供应商 Logo、模型名、协议档名和时间；2026-08-23：Agent 输入框模型选择器增加供应商 Logo；2026-08-23：协议档供应商卡片改用本地品牌标识并补充 Gemini 归类；2026-08-23：对齐 LangGraph 单轮 Agent、WS 基础事件和 Harness 冻结边界；2026-08-21：协议档增加 Embedding / Reranker 独立 URL、模型 ID、Key 配置，仍按 profile 环境文件隔离持久化 |
+| 本轮修订 | 2026-08-30：Agent 技能页增加真实 SKILL.md 预览/编辑与协议档专属补充提示词入口；核心提示词只读。 |
+| 最近修订 | 2026-08-30：协议档新增 xAI Grok 快捷配置、供应商自动归类与本地内联图标；2026-08-26：ToolCard 在 ToolCall 后立即显示执行加载态，ToolResult 的安全投影按帧渐显，并加入卡片弹出与展开动画；动效遵从系统减少动态效果设置。2026-08-26：ToolCard 原生工具收起态统一显示 ToolCall，不回显文件路径、命令和写入内容；展开区继续展示详细参数与行号内容；2026-08-26：ToolCard 原生工具改用英文工具名，展开区统一使用 ToolCall/输出分区，文件、命令和代码/文档结果使用行号展示；2026-08-23：Agent 对话助手消息增加供应商 Logo、模型名、协议档名和时间；2026-08-23：Agent 输入框模型选择器增加供应商 Logo；2026-08-23：协议档供应商卡片改用本地品牌标识并补充 Gemini 归类；2026-08-23：对齐 LangGraph 单轮 Agent、WS 基础事件和 Harness 冻结边界；2026-08-21：协议档增加 Embedding / Reranker 独立 URL、模型 ID、Key 配置，仍按 profile 环境文件隔离持久化 |
 | 技术栈（PRD） | Vue3 + Naive UI、Python FastAPI、PostgreSQL、WebSocket、Docker Compose、go-stress-testing |
 | 适用范围 | V1.0 前端 `frontend/` |
 
@@ -749,3 +749,25 @@ Agent 页允许的 Dialog **只有**：取消当前长任务、退出登录。�
 | `docs/AI测试与评估平台-API.md` | 冻结瞬态工具流事件、输出范围与恢复字段的接口契约。 |
 
 *V1.10：补充 ToolCall 真实流式输出、加载状态与失败恢复的展示约定。产品以 PRD 为准。*
+
+## 本次修订代码文件与作用清单（2026-08-30 · xAI Grok 供应商）
+
+| 文件 | 作用 |
+| --- | --- |
+| `frontend/src/components/modals/ProfileModal.vue` | 增加 xAI Grok 快捷配置，预填官方 API 地址、`grok-4.6` 与 500k 上下文窗口；管理员可按需切换既有协议类型。 |
+| `frontend/src/utils/providerLogo.ts` | 按 xAI API 地址、Grok 模型 ID 或供应商名称自动识别 Grok。 |
+| `frontend/src/components/ProviderLogo.vue` | 新增不依赖运行时外链的 xAI 单色图形标识，供协议档卡片与 Agent 消息头复用。 |
+| `frontend/src/views/AdminProfiles.vue` | 在供应商卡片分组中将 Grok 显示为 xAI Grok。 |
+
+*V1.11：补充 xAI Grok 协议档快捷配置与供应商标识。产品以 PRD 为准。*
+
+## 本次修订代码文件与作用清单（2026-08-30 · Agent 技能与 Prompt）
+
+| 文件 | 作用 |
+| --- | --- |
+| `frontend/src/components/modals/AgentSkillFileModal.vue` | 预览和编辑真实 `SKILL.md`；明确文件存在校验、统一规格、按需加载与修订冲突提示。 |
+| `frontend/src/components/modals/AgentPromptModal.vue` | 预览只读核心系统提示词，并编辑当前 Agent 协议档的补充提示词。 |
+| `frontend/src/views/AdminProfiles.vue` | 在 Agent 技能页提供文件预览/编辑入口；在每个 Agent 用途协议档和当前 Agent 配置处提供提示词入口。 |
+| `frontend/src/api/http.ts` / `frontend/src/api/types.ts` | 接入 Skill 与协议档 Prompt 的管理端契约类型和读写调用。 |
+
+*V1.12：补充受控 Skill 文件管理与 Agent 专属 Prompt 补充层。产品以 PRD 为准。*

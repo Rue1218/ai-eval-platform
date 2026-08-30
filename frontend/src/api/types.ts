@@ -696,6 +696,31 @@ export interface AdminSettings {
   }
 }
 
+/** Agent 技能文件的轻量目录；不携带工作流正文。 */
+export interface AgentSkillMetadata {
+  id: string
+  name: string
+  kind: 'benchmark' | 'rag' | 'testcase' | 'stress'
+  version: string
+  enabled: boolean
+  summary: string
+}
+
+/** 管理端预览或编辑的单个 SKILL.md 文件。 */
+export interface AgentSkillDocument {
+  id: string
+  content: string
+  revision: string
+  metadata: AgentSkillMetadata
+}
+
+/** Agent 协议档的只读核心提示词与可写补充层。 */
+export interface AgentPromptConfig {
+  profile_id: string
+  base_prompt: string
+  overlay: string
+}
+
 export interface WhitelistItem {
   id: string
   host: string

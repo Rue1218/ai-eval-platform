@@ -9,9 +9,23 @@ from fastapi import APIRouter, Depends, Query, Request
 from pydantic import Field, model_validator
 from sqlalchemy.orm import Session
 
+from ..agent.log import agent_trace
+from ..agent_prompt_settings import (
+    MAX_AGENT_PROMPT_OVERLAY_LENGTH,
+    get_agent_prompt_overlay,
+    update_agent_prompt_overlay,
+)
 from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
+from ..harness.context import skill_hint_lines
+from ..harness.prompts import SystemVars, build_system_prompt
+from ..harness.skills.storage import (
+    list_skill_metadata,
+    read_skill_document,
+    restore_skill_document,
+    update_skill_document,
+)
 from ..models import AuditLog, ProtocolProfile, Setting, User
 from ..profile_env import (
     ProfileEnvSnapshot,
@@ -60,6 +74,19 @@ class RagModelsIn(ApiModel):
                     data[k] = None
         return data
 
+
+class AgentSkillUpdateIn(ApiModel):
+    """管理端更新统一 SKILL.md 文件的请求体。"""
+
+    content: str = Field(min_length=1, max_length=30_000)
+    expected_revision: str = Field(min_length=16, max_length=16)
+
+
+class AgentPromptUpdateIn(ApiModel):
+    """管理端更新单个 Agent 协议档补充提示词的请求体。"""
+
+    overlay: str = Field(default="", max_length=MAX_AGENT_PROMPT_OVERLAY_LENGTH)
+
 DEFAULT_SETTINGS: dict[str, Any] = {
     "agent_profile_id": None,
     # Agent 模型推理控制：只允许展示上游返回的 reasoning summary，不暴露隐藏思维链。
@@ -79,6 +106,16 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "runtime": {"ws_ping_s": 15, "ws_timeout_s": 45, "strict_session_slot": True},
 }
 ALLOWED_KEYS = set(DEFAULT_SETTINGS)
+
+
+def _require_agent_profile(db: Session, profile_id: str) -> ProtocolProfile:
+    """校验 Prompt 管理目标存在且已启用 Agent 用途。"""
+    profile = db.query(ProtocolProfile).filter(ProtocolProfile.id == profile_id).first()
+    if not profile:
+        raise AppError(ErrorCode.NOT_FOUND, "Agent 协议档不存在")
+    if "agent" not in (profile.usages or []):
+        raise AppError(ErrorCode.VALIDATION, "所选协议档未启用 agent 用途")
+    return profile
 
 
 def _load(db: Session) -> dict[str, Any]:
@@ -187,6 +224,147 @@ def put_settings(
             restore_snapshot(env_snapshot)
         raise AppError(ErrorCode.INTERNAL, "运行时配置写入失败") from exc
     return _load(db)
+
+
+@router.get("/skills")
+def list_agent_skills(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """返回技能文件的轻量目录，只读取 SKILL.md 头部。"""
+    return {
+        "items": [
+            {
+                "id": metadata.skill_id,
+                "name": metadata.name,
+                "kind": metadata.kind,
+                "version": metadata.version,
+                "enabled": metadata.enabled,
+                "summary": metadata.summary,
+            }
+            for metadata in list_skill_metadata()
+        ]
+    }
+
+
+@router.get("/skills/{skill_id}")
+def get_agent_skill(
+    skill_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """预览单个技能完整文件；读取前由存储层验证 SKILL.md 存在。"""
+    document = read_skill_document(skill_id)
+    return {
+        "id": document.metadata.skill_id,
+        "content": document.content,
+        "revision": document.revision,
+        "metadata": {
+            "id": document.metadata.skill_id,
+            "name": document.metadata.name,
+            "kind": document.metadata.kind,
+            "version": document.metadata.version,
+            "enabled": document.metadata.enabled,
+            "summary": document.metadata.summary,
+        },
+    }
+
+
+@router.put("/skills/{skill_id}")
+def put_agent_skill(
+    skill_id: str,
+    body: AgentSkillUpdateIn,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """以修订指纹保护技能编辑，并记录不含正文的最小审计。"""
+    previous = read_skill_document(skill_id)
+    document = update_skill_document(skill_id, body.content, body.expected_revision)
+    db.add(
+        AuditLog(
+            user_id=user.id,
+            action="agent_skill_update",
+            target_type="agent_skill",
+            target_id=document.metadata.skill_id,
+            detail={"revision": document.revision, "content_length": len(document.content)},
+            ip=request.client.host if request.client else None,
+        )
+    )
+    try:
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        try:
+            restore_skill_document(skill_id, previous.content, document.revision)
+        except AppError as restore_error:
+            agent_trace(
+                "agent skill audit rollback failed "
+                f"skill_id={skill_id} code={restore_error.code.value}"
+            )
+            raise AppError(ErrorCode.INTERNAL, "技能文件审计写入失败，请联系平台维护者") from restore_error
+        raise AppError(ErrorCode.INTERNAL, "技能文件审计写入失败，已恢复原内容") from exc
+    return {
+        "id": document.metadata.skill_id,
+        "content": document.content,
+        "revision": document.revision,
+        "metadata": {
+            "id": document.metadata.skill_id,
+            "name": document.metadata.name,
+            "kind": document.metadata.kind,
+            "version": document.metadata.version,
+            "enabled": document.metadata.enabled,
+            "summary": document.metadata.summary,
+        },
+    }
+
+
+@router.get("/agent-prompts/{profile_id}")
+def get_agent_prompt(
+    profile_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """返回指定 Agent 协议档的只读核心策略与可编辑补充提示词。"""
+    profile = _require_agent_profile(db, profile_id)
+    return {
+        "profile_id": profile.id,
+        "base_prompt": build_system_prompt(SystemVars(skill_hints=tuple(skill_hint_lines()))),
+        "overlay": get_agent_prompt_overlay(db, profile.id),
+    }
+
+
+@router.put("/agent-prompts/{profile_id}")
+def put_agent_prompt(
+    profile_id: str,
+    body: AgentPromptUpdateIn,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """保存协议档补充提示词；核心系统策略不提供写入通道。"""
+    profile = _require_agent_profile(db, profile_id)
+    overlay = update_agent_prompt_overlay(db, profile.id, body.overlay, updated_by=user.id)
+    db.add(
+        AuditLog(
+            user_id=user.id,
+            action="agent_prompt_update",
+            target_type="agent_prompt",
+            target_id=profile.id,
+            detail={"overlay_length": len(overlay)},
+            ip=request.client.host if request.client else None,
+        )
+    )
+    try:
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise AppError(ErrorCode.INTERNAL, "提示词配置写入失败") from exc
+    return {
+        "profile_id": profile.id,
+        "base_prompt": build_system_prompt(SystemVars(skill_hints=tuple(skill_hint_lines()))),
+        "overlay": overlay,
+    }
 
 
 @router.get("/rag-models")

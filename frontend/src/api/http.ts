@@ -20,6 +20,9 @@ import {
   type TaskSpec,
   type Report,
   type AdminSettings,
+  type AgentPromptConfig,
+  type AgentSkillDocument,
+  type AgentSkillMetadata,
   type CaseSet,
   type CaseFolder,
   type DatasetFolder,
@@ -1117,6 +1120,64 @@ export const api = {
         return mockStore.settings
       }
       const { data } = await http.put('/api/admin/settings', payload)
+      return data
+    },
+    /** 读取技能目录；服务端只读取每个文件的固定头部。 */
+    async listAgentSkills(): Promise<AgentSkillMetadata[]> {
+      if (getDataMode() === 'mock') {
+        return [
+          { id: 'skill-benchmark', name: '基准评测', kind: 'benchmark', version: '1.0', enabled: true, summary: '执行大模型基准评测' },
+          { id: 'skill-testcase', name: '用例生成', kind: 'testcase', version: '1.0', enabled: true, summary: '生成评测测试用例' },
+          { id: 'skill-rag', name: '知识库评测', kind: 'rag', version: '1.0', enabled: false, summary: '执行知识库评测' },
+          { id: 'skill-stress', name: '压测', kind: 'stress', version: '1.0', enabled: true, summary: '执行共享压测' },
+        ]
+      }
+      const { data } = await http.get('/api/admin/skills')
+      return Array.isArray(data) ? data : data.items || []
+    },
+    /** 预览已存在的单个 SKILL.md；由服务端先验证文件存在和规格。 */
+    async getAgentSkill(skillId: string): Promise<AgentSkillDocument> {
+      if (getDataMode() === 'mock') {
+        const metadata = (await this.listAgentSkills()).find((item) => item.id === skillId)
+        if (!metadata) throw new ApiError('技能文件不存在', ErrorCode.NOT_FOUND, 404)
+        return {
+          id: skillId,
+          revision: `mock-${skillId}`.slice(0, 16),
+          metadata,
+          content: `---\nid: ${metadata.id}\nname: ${metadata.name}\nkind: ${metadata.kind}\nversion: ${metadata.version}\nenabled: ${metadata.enabled}\nsummary: ${metadata.summary}\n---\n## 工作流\n1. 此为本地预览模式的技能工作流示例。\n`,
+        }
+      }
+      const { data } = await http.get(`/api/admin/skills/${encodeURIComponent(skillId)}`)
+      return data
+    },
+    /** 保存单个技能文件，必须回传读取时取得的修订指纹。 */
+    async updateAgentSkill(skillId: string, payload: { content: string; expected_revision: string }): Promise<AgentSkillDocument> {
+      if (getDataMode() === 'mock') {
+        const document = await this.getAgentSkill(skillId)
+        return { ...document, content: payload.content, revision: `mock-${Date.now()}`.slice(0, 16) }
+      }
+      const { data } = await http.put(`/api/admin/skills/${encodeURIComponent(skillId)}`, payload)
+      return data
+    },
+    /** 查看某个 Agent 协议档的核心提示词和可编辑补充层。 */
+    async getAgentPrompt(profileId: string): Promise<AgentPromptConfig> {
+      if (getDataMode() === 'mock') {
+        return {
+          profile_id: profileId,
+          base_prompt: '你是 AI 测试与评估平台的评测助手。\n\n【安全边界】\n- 核心规则由平台固定生成。',
+          overlay: '',
+        }
+      }
+      const { data } = await http.get(`/api/admin/agent-prompts/${encodeURIComponent(profileId)}`)
+      return data
+    },
+    /** 保存某个 Agent 协议档的补充提示词，空文本会清除该覆盖层。 */
+    async updateAgentPrompt(profileId: string, payload: { overlay: string }): Promise<AgentPromptConfig> {
+      if (getDataMode() === 'mock') {
+        const config = await this.getAgentPrompt(profileId)
+        return { ...config, overlay: payload.overlay }
+      }
+      const { data } = await http.put(`/api/admin/agent-prompts/${encodeURIComponent(profileId)}`, payload)
       return data
     },
     async getWhitelist(): Promise<WhitelistItem[]> {

@@ -168,6 +168,7 @@
                   <span v-if="p.usages?.includes('agent')" class="kind-tag kind-rag">Agent</span>
                 </div>
                 <div class="row" style="gap: 6px">
+                  <button v-if="p.usages?.includes('agent')" class="link-btn small" @click="handleOpenAgentPrompt(p)">提示词</button>
                   <button class="link-btn small" @click="openModal(p)">编辑</button>
                   <button
                     class="link-btn danger small"
@@ -255,6 +256,7 @@
                 <button class="link-btn" :disabled="checkingId === p.id" @click="handleCheck(p)">
                   {{ checkingId === p.id ? '检查中...' : '连通详情' }}
                 </button>
+                <button v-if="p.usages?.includes('agent')" class="link-btn" @click="handleOpenAgentPrompt(p)">提示词</button>
                 <button class="link-btn" @click="openModal(p)">编辑</button>
                 <button
                   class="link-btn danger"
@@ -868,7 +870,7 @@
       </div>
     </template>
 
-    <!-- Tab 3：Agent 技能编排（V1.0 受控边界：固定系统提示词，不回显、不可自定义） -->
+    <!-- Tab 3：Agent 技能编排（技能文件可受控编辑，核心提示词保持只读） -->
     <template v-else-if="activeTab === 'skills'">
       <div class="skills-center-container">
         <!-- 1. 顶部全景与操作栏 -->
@@ -877,11 +879,11 @@
             <div class="skills-hero-title-area">
               <div class="row" style="gap: 8px; align-items: center">
                 <span class="skills-main-title">🧠 Agent 技能编排 (Skills & Prompts)</span>
-                <span class="tag-soft skills-badge-vault">PRD 5.5.2 受控编排 · 4大内置场景</span>
-                <span class="badge badge-succeeded">Prompt 沙箱托管</span>
+                <span class="tag-soft skills-badge-vault">统一 SKILL.md · 4 大内置场景</span>
+                <span class="badge badge-succeeded">核心提示词受控</span>
               </div>
               <div class="small tertiary mt4" style="line-height: 1.5">
-                智能体在基准对比、RAG 评估、用例生成与压测场景下的 4 大核心内置技能；System Prompt 由服务端安全沙箱托管。
+                技能目录只读取文件头部，完整工作流仅在预览或本轮选中后读取；每个 Agent 协议档均可维护受审计的补充提示词。
               </div>
             </div>
 
@@ -896,9 +898,11 @@
               </button>
               <button
                 class="btn btn-sign btn-sm"
-                @click="handleOpenAddSkillNotice"
+                :disabled="!selectedAgentProfile"
+                :title="selectedAgentProfile ? `查看或编辑 ${selectedAgentProfile.name} 的补充提示词` : '请先在大模型协议档页指定 Agent 协议档'"
+                @click="handleOpenAgentPrompt()"
               >
-                + 创建自定义技能
+                查看 / 编辑当前 Agent 提示词
               </button>
             </div>
           </div>
@@ -919,8 +923,8 @@
                 <span class="skills-kpi-label">提示词托管模式</span>
                 <span class="skills-kpi-icon">🔒</span>
               </div>
-              <div class="skills-kpi-val mono" style="color: var(--accent-ai)">服务端托管</div>
-              <div class="skills-kpi-sub">代码级硬编码 · 沙箱防注入</div>
+              <div class="skills-kpi-val mono" style="color: var(--accent-ai)">核心 + 补充层</div>
+              <div class="skills-kpi-sub">核心只读 · 协议档补充层可审计</div>
             </div>
 
             <div class="skills-kpi-card">
@@ -1080,14 +1084,12 @@
 
               <div class="skill-card-bottom">
                 <div class="row" style="gap: 6px; align-items: center">
-                  <span class="small tertiary">🔒 System Prompt 安全沙箱托管</span>
+                  <span class="small tertiary">📄 统一 SKILL.md · 按需加载</span>
                 </div>
-                <button
-                  class="btn btn-secondary btn-xs"
-                  @click="handleOpenSkillModal(s)"
-                >
-                  编排详情
-                </button>
+                <div class="row" style="gap: 6px">
+                  <button class="btn btn-secondary btn-xs" @click="handleOpenSkillModal(s)">编排详情</button>
+                  <button class="btn btn-sign btn-xs" @click="handleOpenSkillFile(s)">预览 / 编辑</button>
+                </div>
               </div>
             </div>
 
@@ -1143,9 +1145,10 @@
                     <span class="badge badge-succeeded">已启用</span>
                   </td>
                   <td style="text-align: right">
-                    <button class="link-btn" @click="handleOpenSkillModal(s)">
-                      编排详情
-                    </button>
+                    <div class="row" style="justify-content: flex-end; gap: 6px">
+                      <button class="link-btn" @click="handleOpenSkillModal(s)">编排详情</button>
+                      <button class="link-btn" @click="handleOpenSkillFile(s)">预览 / 编辑</button>
+                    </div>
                   </td>
                 </tr>
 
@@ -1168,10 +1171,10 @@
             <div class="guardrail-card">
               <div class="guardrail-head">
                 <span class="g-icon">🔒</span>
-                <span class="g-title">固定提示词安全托管</span>
+                <span class="g-title">核心提示词与补充层分离</span>
               </div>
               <p class="g-text">
-                采用服务端代码级固定系统提示词（System Prompt），<strong>严禁外部明文读取或动态覆盖</strong>，严格防范 Prompt 越权注入与越狱。
+                核心系统提示词由 Harness 固定生成并可预览，<strong>不能被动态覆盖</strong>；协议档只能保存受审计的补充提示词，运行时核心规则始终优先。
               </p>
             </div>
 
@@ -1198,10 +1201,10 @@
             <div class="guardrail-card">
               <div class="guardrail-head">
                 <span class="g-icon">🏛️</span>
-                <span class="g-title">V1.0 架构冻结准则</span>
+                <span class="g-title">技能文件渐进式披露</span>
               </div>
               <p class="g-text">
-                自定义技能创建与 Prompt 编辑在 V1.0 处于受控未开放状态（API §3.6.2），后续版本将另立 API 并补齐安全审计与回滚机制。
+                技能目录仅读取 <code>SKILL.md</code> 固定头部；仅在预览或计划选中后才加载完整工作流。编辑使用修订指纹防覆盖并写入审计记录。
               </p>
             </div>
           </div>
@@ -1452,6 +1455,17 @@
       v-model:show="showSkillModal"
       :skill="selectedSkill"
     />
+
+    <AgentSkillFileModal
+      v-model:show="showSkillFileModal"
+      :skill-id="selectedSkillFileId"
+    />
+
+    <AgentPromptModal
+      v-model:show="showAgentPromptModal"
+      :profile-id="promptProfile?.id || null"
+      :profile-name="promptProfile?.name || ''"
+    />
   </div>
 </template>
 
@@ -1467,6 +1481,8 @@ import ProfileModal from '../components/modals/ProfileModal.vue'
 import CheckResultModal from '../components/modals/CheckResultModal.vue'
 import McpToolModal from '../components/modals/McpToolModal.vue'
 import SkillDetailModal, { type SkillDetail } from '../components/modals/SkillDetailModal.vue'
+import AgentSkillFileModal from '../components/modals/AgentSkillFileModal.vue'
+import AgentPromptModal from '../components/modals/AgentPromptModal.vue'
 
 const message = useMessage()
 const dialog = useDialog()
@@ -1835,6 +1851,8 @@ const skillCategoryFilter = ref<'all' | 'benchmark' | 'rag' | 'testcase' | 'stre
 const skillSearchKeyword = ref('')
 const selectedSkill = ref<SkillDetail | null>(null)
 const showSkillModal = ref(false)
+const selectedSkillFileId = ref<string | null>(null)
+const showSkillFileModal = ref(false)
 
 /** 多维过滤后的技能清单 */
 const filteredSkills = computed(() => {
@@ -1865,6 +1883,13 @@ function handleOpenSkillModal(skill: SkillDetail) {
   showSkillModal.value = true
 }
 
+/** 打开统一 Skill 文件的预览/编辑弹窗；真实文件存在性由服务端先校验。 */
+function handleOpenSkillFile(skill: SkillDetail) {
+  safeBlur()
+  selectedSkillFileId.value = skill.id
+  showSkillFileModal.value = true
+}
+
 /** 导出/复制技能清单配置 JSON */
 function handleExportSkillsJson() {
   safeBlur()
@@ -1875,17 +1900,6 @@ function handleExportSkillsJson() {
   } catch {
     message.info('请在安全上下文中复制配置')
   }
-}
-
-/** 创建自定义技能受控说明 */
-function handleOpenAddSkillNotice() {
-  safeBlur()
-  dialog.info({
-    title: '创建自定义技能 · 架构受控说明',
-    content:
-      '依据系统安全与评测确定性契约（PRD §5.5.2 与 API §3.6.2），V1.0 使用服务端固定的高安全性系统提示词（System Prompt）与短工具绑定，暂不开放自定义技能创建与外部提示词篡改，防范 Prompt 越权注入。如后续版本开放将补齐安全审计与版本回滚机制。',
-    positiveText: '了解规范',
-  })
 }
 
 // 运行时治理表单（settings.runtime）
@@ -1911,6 +1925,23 @@ const loading = ref(false)
 const selectedAgentProfileId = ref<string | null>(null)
 // 最近一次成功保存的 Agent 协议档 ID，用于保存失败时回滚选择器
 const lastSavedAgentProfileId = ref<string | null>(null)
+const showAgentPromptModal = ref(false)
+const promptProfile = ref<Profile | null>(null)
+const selectedAgentProfile = computed(() => (
+  profiles.value.find((profile) => profile.id === selectedAgentProfileId.value) || null
+))
+
+/** 每个 agent 用途协议档均可打开自己的补充提示词管理入口。 */
+function handleOpenAgentPrompt(profile?: Profile) {
+  const target = profile || selectedAgentProfile.value
+  if (!target) {
+    message.warning('请先指定 Agent 协议档')
+    return
+  }
+  safeBlur()
+  promptProfile.value = target
+  showAgentPromptModal.value = true
+}
 
 const showModal = ref(false)
 const selectedProfile = ref<Profile | null>(null)
@@ -1953,6 +1984,7 @@ const VENDOR_NAMES: Record<ProviderLogoKey, string> = {
   volcengine: 'ByteDance Doubao (火山引擎)',
   qianfan: 'Baidu Qianfan (百度千帆)',
   hunyuan: 'Tencent Hunyuan (腾讯混元)',
+  grok: 'xAI Grok',
   groq: 'Groq',
   ollama: 'Ollama (本地私有)',
   zhipu: 'Zhipu GLM (智谱清言)',

@@ -229,6 +229,7 @@ const protocolOptions = [
 
 const vendorOptions = [
   { label: 'Google Gemini (官方端点 / OpenAI 兼容)', value: 'gemini' },
+  { label: 'xAI Grok (官方端点 / OpenAI 兼容)', value: 'grok' },
   { label: 'NVIDIA NIM (英伟达推理云)', value: 'nvidia' },
   { label: 'Xiaomi Mimo (小米 Mimo 端点)', value: 'mimo' },
   { label: 'OpenAI (官方端点)', value: 'openai' },
@@ -251,8 +252,10 @@ const vendorOptions = [
   { label: 'Baichuan (百川智能)', value: 'baichuan' },
 ]
 
-const VENDOR_MAP: Record<string, { name: string; base_url: string; protocol: ProtocolType; model: string }> = {
+const VENDOR_MAP: Record<string, { name: string; base_url: string; protocol: ProtocolType; model: string; context_window?: number }> = {
   gemini: { name: 'Google Gemini', base_url: 'https://generativelanguage.googleapis.com/v1beta/openai/', protocol: 'openai_chat', model: 'gemini-2.5-flash' },
+  // xAI 官方 API 兼容 Chat Completions；模型列表仍可通过 /models 读取实际授权范围。
+  grok: { name: 'xAI Grok', base_url: 'https://api.x.ai/v1', protocol: 'openai_chat', model: 'grok-4.6', context_window: 500000 },
   nvidia: { name: 'NVIDIA NIM', base_url: 'https://integrate.api.nvidia.com/v1', protocol: 'openai_chat', model: 'meta/llama-3.3-70b-instruct' },
   mimo: { name: 'Xiaomi Mimo', base_url: 'https://token-plan-cn.xiaomimimo.com', protocol: 'openai_chat', model: 'mimo-v2.5-pro' },
   openai: { name: 'OpenAI', base_url: 'https://api.openai.com/v1', protocol: 'openai_chat', model: 'gpt-4o' },
@@ -286,6 +289,7 @@ function handleSelectVendor(val: string | null) {
   const item = VENDOR_MAP[val]
   form.value.base_url = item.base_url
   form.value.protocol = item.protocol
+  form.value.context_window = item.context_window || 200000
   if (!form.value.model) form.value.model = item.model
   if (!form.value.name || form.value.name.startsWith('新协议档')) {
     form.value.name = `${item.name} (${item.model})`
