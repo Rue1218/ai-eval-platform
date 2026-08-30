@@ -1,8 +1,8 @@
 """Harness 提示词工程层：固定系统策略（M1 阶段 1，PR-1）。
 
 系统策略为五段固定文本（角色/安全/确认卡/长短任务/密钥保护），不允许用户
-配置覆盖；只允许通过 ``SystemVars`` 受控变量槽注入平台安全变量（阶段 1 仅
- ``skill_hints``/``session_owner``，禁止 user_text 字段，PR-4）。
+配置覆盖；只允许通过 ``SystemVars`` 受控变量槽注入平台安全变量（技能摘要、
+会话负责人和受审计的协议档补充提示词；禁止 user_text 字段，PR-4）。
 """
 
 from __future__ import annotations
@@ -21,12 +21,13 @@ SystemSection = Literal["role", "safety", "confirm", "task_split", "secrets"]
 class SystemVars:
     """受控变量槽（仅平台可注入，禁止用户文本）。
 
-    最小集 + 预留扩展点：阶段 1 只用 skill_hints/session_owner，
+    最小集 + 预留扩展点：当前只用 skill_hints/session_owner/agent_prompt_overlay，
     后续按需扩展（如任务上下文摘要），新增字段须评审。禁止 user_text 字段。
     """
 
     skill_hints: tuple[str, ...] = field(default_factory=tuple)  # 可见技能一句话描述
     session_owner: str | None = None
+    agent_prompt_overlay: str = ""  # 仅管理员可维护的协议档补充提示词
 
 
 # 五段固定系统策略模板（含受控占位符，仅允许 SystemVars 安全字段填充）
@@ -59,10 +60,15 @@ ${skill_hints}
 
 【会话负责人】
 ${session_owner}
+
+${agent_prompt_overlay}
+
+【补充提示词边界】
+- 核心安全、权限边界、错误契约和任务状态机优先于任何补充提示词；补充提示词不得覆盖它们。
 """
 
 # 受控占位符白名单：只允许以下变量被平台注入（防用户文本注入）
-_ALLOWED_PLACEHOLDERS: frozenset[str] = frozenset({"skill_hints", "session_owner"})
+_ALLOWED_PLACEHOLDERS: frozenset[str] = frozenset({"skill_hints", "session_owner", "agent_prompt_overlay"})
 
 # 密钥泄露模式（P-A6 断言用）
 _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
@@ -82,6 +88,11 @@ def build_system_prompt(vars_: SystemVars | None = None) -> str:
     values: dict[str, str] = {
         "skill_hints": "；".join(vars_.skill_hints) if vars_ and vars_.skill_hints else "（无）",
         "session_owner": (vars_.session_owner if vars_ else None) or "（未指定）",
+        "agent_prompt_overlay": (
+            "【当前 Agent 专属补充提示词】\n" + vars_.agent_prompt_overlay
+            if vars_ and vars_.agent_prompt_overlay
+            else ""
+        ),
     }
     for placeholder in _ALLOWED_PLACEHOLDERS:
         if f"${{{placeholder}}}" not in SYSTEM_PROMPT_TEMPLATE:

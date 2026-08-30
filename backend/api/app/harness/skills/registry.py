@@ -12,6 +12,7 @@ from collections.abc import Mapping
 
 from app.errors import AppError, ErrorCode
 from app.harness.contracts import SkillHint
+from app.harness.skills.storage import RUNTIME_DISABLED_SKILLS, list_skill_metadata
 
 # 技能目录（单一事实源；skill_id → (名称, 一句话描述, kind)）
 SKILL_CATALOG: dict[str, tuple[str, str, str]] = {
@@ -22,7 +23,7 @@ SKILL_CATALOG: dict[str, tuple[str, str, str]] = {
 }
 
 # 未接入技能（LightRAG 未接入 → rag 必须失败；禁止 mock succeeded）
-DISABLED_SKILLS: frozenset[str] = frozenset({"skill-rag"})
+DISABLED_SKILLS: frozenset[str] = RUNTIME_DISABLED_SKILLS
 
 
 def skill_to_kind(skill_id: str) -> str:
@@ -52,10 +53,19 @@ def get_hint(skill_id: str) -> SkillHint:
 def list_hints() -> list[SkillHint]:
     """返回全部 SkillHint（M7 晚波契约），供 M4 路由注入与
     前端 ``skillLabels.ts`` 对齐（SK-5）。"""
-    return [
-        SkillHint(skill_id=skill_id, name=entry[0], summary=entry[1])
-        for skill_id, entry in SKILL_CATALOG.items()
-    ]
+    # 仅读取每个 SKILL.md 的固定头部，禁止在技能目录阶段加载工作流正文。
+    metadata_by_id = {metadata.skill_id: metadata for metadata in list_skill_metadata()}
+    hints: list[SkillHint] = []
+    for skill_id, entry in SKILL_CATALOG.items():
+        metadata = metadata_by_id.get(skill_id)
+        hints.append(
+            SkillHint(
+                skill_id=skill_id,
+                name=metadata.name if metadata else entry[0],
+                summary=metadata.summary if metadata else entry[1],
+            )
+        )
+    return hints
 
 
 def plan_skill_id(state: Mapping[str, object] | None) -> str | None:

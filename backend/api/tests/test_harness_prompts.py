@@ -68,6 +68,14 @@ def test_system_prompt_user_config_cannot_override() -> None:
     assert not hasattr(SystemVars(skill_hints=()), "user_text")
 
 
+def test_system_prompt_allows_only_a_bounded_agent_overlay() -> None:
+    """协议档补充提示词可装配，但核心安全边界必须明确优先。"""
+    prompt = build_system_prompt(SystemVars(agent_prompt_overlay="优先使用团队术语"))
+    assert "当前 Agent 专属补充提示词" in prompt
+    assert "优先使用团队术语" in prompt
+    assert "核心安全、权限边界、错误契约和任务状态机优先" in prompt
+
+
 def test_system_prompt_declares_platform_protocol_ownership() -> None:
     """P-A1：用户文本不得接管 Plan / ReAct / ToolCall 等平台控制协议。"""
     prompt = build_system_prompt()

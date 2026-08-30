@@ -111,7 +111,7 @@
       <div class="section-block guardrail-box">
         <div class="guardrail-title">🔒 System Prompt 安全沙箱与边界说明 (PRD 5.5.2 & API §3.6.2)</div>
         <div class="guardrail-desc">
-          本技能使用服务端硬编码的高安全性 System Prompt，由 FastAPI 后端统一注入并在独立上下文沙箱中运行；提示词不回显、不可外部篡改，严格防范 Prompt 越权注入。
+          本技能的完整工作流存放于统一 <code>SKILL.md</code>，仅在预览或 Agent 选中技能后按需读取。核心 System Prompt 由 Harness 固定生成；管理端只能为特定 Agent 协议档维护受审计的补充提示词，不能覆盖安全规则。
         </div>
       </div>
     </div>

@@ -9,12 +9,11 @@ from .registry import (
     plan_skill_id,
     skill_to_kind,
 )
-from .workflows import SKILL_WORKFLOWS, load_skill_workflow
+from .workflows import load_skill_workflow
 
 __all__ = [
     "DISABLED_SKILLS",
     "SKILL_CATALOG",
-    "SKILL_WORKFLOWS",
     "assert_skill_enabled",
     "get_hint",
     "list_hints",

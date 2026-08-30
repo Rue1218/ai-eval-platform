@@ -1,10 +1,10 @@
 # AI 测试与评估平台 Agent 开发文档
 
-> 版本：V1.5.23
+> 版本：V1.5.24
 > 状态：LangGraph Harness 已启用混合范式 P0–P2：Plan-and-Solve → ReAct → reflect；native 首轮流式可按协议档回滚；同轮 ToolBatch 保序回填；JSON ReAct 在 native 下流式不投影协议 JSON，read 结果按 call_id 回填；受控只读并行需总开关+白名单；关联错乱每回合只记一笔终态；P3 集成测试覆盖 bwrap 屏障 / WS 重连 / team 瞬态广播 / ToolCard 乱序；中间叙述；clarify interrupt 与有界重规划；检查点默认 memory；reflect 产出确认卡；ContextMeter 服务端计算；assemble 接线 CX-4/CX-5；read 防重复与行级 ToolCard；read 一次读完引导与分页观察全量注入；ToolCall 进度/安全输出流；Direct `/help` 发 `response.completed`；思考增量合并与隐藏 CoT 摘要；技能工作流 Progressive Disclosure
-> 审查日期：2026-08-29
-> 对应需求：`AI测试与评估平台-PRD.md` V1.12
-> 对应接口：`AI测试与评估平台-API.md` V1.50
+> 审查日期：2026-08-30
+> 对应需求：`AI测试与评估平台-PRD.md` V1.16
+> 对应接口：`AI测试与评估平台-API.md` V1.58
 
 ## 1. 当前唯一运行链路
 
@@ -434,3 +434,12 @@ Agent 思考配置从 `Setting(key="agent_reasoning")` 读取，结构为
 ### V1.5.23（2026-08-29）修改代码文件与作用清单
 
 - `frontend/src/components/agent/ToolCard.vue`：edit 工具成功结果新增专用摘要卡（成功图标 + 文件路径徽章 + 替换处数与字符数变化胶囊），替代通用 JSON 字段树的低对比度展示；edit 结果为静态摘要，跳过 JSON 打字机动画；样式全部使用设计令牌，明暗主题自适应。
+
+### V1.5.24（2026-08-30）修改代码文件与作用清单
+
+- `backend/api/app/harness/skills/files/<skill_id>/SKILL.md`：四个内置技能统一为固定六码头部（`id/name/kind/version/enabled/summary`）与 `## 工作流` 正文；运行时副本位于 `AGENT_SKILLS_ROOT`（容器默认 `/data/skills`）。
+- `backend/api/app/harness/skills/storage.py`：读取前先验证单个 `SKILL.md` 存在；目录只读取 8KB 头部，完整工作流仅在选中 `plan.skill_id` 后读取；编辑校验规格、禁止启用 RAG、以 SHA-256 修订指纹和原子替换避免覆盖。
+- `backend/api/app/harness/skills/registry.py` / `workflows.py` / `context/assembly.py` / `agent/react.py`：Skill Hint 不携带正文，图状态只保存 `skill_id`，按回合最小装配工作流，未启用技能继续返回 `VALIDATION`。
+- `backend/api/app/routers/admin.py` / `agent_prompt_settings.py`：新增 `/api/admin/skills*` 与 `/api/admin/agent-prompts/{profile_id}`；文件与提示词写入均做最小审计，审计明细不保存正文或密钥。
+- `backend/api/app/harness/prompts/system.py` / `routers/ws.py`：核心系统策略始终由 Harness 生成；各 Agent 协议档只能注入受审计的补充提示词，核心安全、权限、错误契约和任务状态机始终优先。
+- `backend/api/tests/test_harness_skills.py` / `test_harness_prompts.py`：覆盖技能文件缺失拒绝、头部/全文两阶段读取、RAG 禁用与补充提示词优先级说明。

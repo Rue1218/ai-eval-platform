@@ -2,10 +2,10 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.15 |
-| 文档状态 | 已冻结基线（V1.15 完成基准目录治理、导入队列与发布并发控制闭环） |
+| 文档版本 | V1.16 |
+| 文档状态 | 已冻结基线（V1.16 增加受控 Agent 技能文件与补充提示词管理） |
 | 撰写日期 | 2026-08-17 |
-| 最近修订 | 2026-08-28：V1.15 统一基准目录治理、独立导入队列、staging 并发发布、成员同权双人复核与 M3 里程碑；冻结任务必须锁定数据集/黄金集版本。2026-08-28：V1.14 新增基准数据集目录、异步导入、staging 表格和发布门禁；下载/解析仅由 Worker 执行，未审核行不得评测。2026-08-24：补充 Agent 多附件交互：支持图片（PNG/JPG/JPEG/WEBP/GIF）、Markdown/TXT/HTML/JSON/YAML、PDF、Word（DOC/DOCX）、Excel（XLS/XLSX）、CSV/JSONL 与音频；输入区支持文件选择和拖拽上传，图片显示缩略图，PDF/文本支持预览，Office 文件显示类型卡片并可打开/下载。2026-08-23：补齐 Gemini OpenAI 兼容端点的思考摘要请求与增量归一化；增加 Agent 思考摘要开关与思考强度设置；将用户回显固定为 `user_message`，将完成信号固定为 `response.completed`，明确 `thought` 不承载助手正文；协议档增加可选 Embedding / Reranker 独立端点配置，三类 Key 均按 profile 写入受控环境文件 |
+| 最近修订 | 2026-08-30：V1.16 增加受控 Agent 技能文件与协议档专属补充提示词管理；技能正文遵循渐进式披露，核心安全提示词不可覆盖。2026-08-28：V1.15 统一基准目录治理、独立导入队列、staging 并发发布、成员同权双人复核与 M3 里程碑；冻结任务必须锁定数据集/黄金集版本。2026-08-28：V1.14 新增基准数据集目录、异步导入、staging 表格和发布门禁；下载/解析仅由 Worker 执行，未审核行不得评测。2026-08-24：补充 Agent 多附件交互：支持图片（PNG/JPG/JPEG/WEBP/GIF）、Markdown/TXT/HTML/JSON/YAML、PDF、Word（DOC/DOCX）、Excel（XLS/XLSX）、CSV/JSONL 与音频；输入区支持文件选择和拖拽上传，图片显示缩略图，PDF/文本支持预览，Office 文件显示类型卡片并可打开/下载。2026-08-23：补齐 Gemini OpenAI 兼容端点的思考摘要请求与增量归一化；增加 Agent 思考摘要开关与思考强度设置；将用户回显固定为 `user_message`，将完成信号固定为 `response.completed`，明确 `thought` 不承载助手正文；协议档增加可选 Embedding / Reranker 独立端点配置，三类 Key 均按 profile 写入受控环境文件 |
 | 适用版本 | 平台 V1.0 |
 | 技术栈 | Vue3 + Naive UI、Python FastAPI、PostgreSQL、WebSocket、Docker Compose、go-stress-testing |
 
@@ -29,6 +29,7 @@
 | V1.12 | 2026-08-23 | Gemini OpenAI 兼容流式请求增加 `include_thoughts` 与强度映射；思考摘要仍通过 `thought` 事件独立展示 |
 | V1.14 | 2026-08-28 | 基准数据集页新增受控目录筛选、异步制品导入、staging 表格预览和审核发布门禁；不做社交媒体抓取 |
 | V1.15 | 2026-08-28 | 补齐目录/release 双人复核、导入队列租约与重试、staging 版本号发布和版本锁定；将该能力与 RAG 黄金集统一收敛至 M3，代码题继续不做 |
+| V1.16 | 2026-08-30 | Agent 技能文件统一规格、渐进式加载、管理端预览/编辑及协议档专属补充提示词；核心安全提示词继续固定 |
 
 ---
 
@@ -245,12 +246,18 @@ queued → running → succeeded
 | F-AGT-02 | 事件流 | P0 | M1 | 见 5.1.3 |
 | F-AGT-03 | MCP Host | P0 | 后续阶段 | 目标是只连内部 Server；短工具同步，长任务只 `task.create`；首期保持能力未启用 |
 | F-AGT-04 | 确认卡 | P0 | 后续阶段 | 见 5.1.2；未确认不入队；首期不生成确认卡 |
-| F-AGT-05 | 人设 | P0 | 后续阶段 | 由 Harness/Agent 范式评审后落地；首期不增加独立 Prompt 或思考强度配置 |
+| F-AGT-05 | 人设与技能治理 | P0 | 后续阶段 | 核心系统提示词由 Harness 固定生成；每个 Agent 协议档预留独立补充提示词入口，内置技能以统一 `SKILL.md` 受控预览/编辑，均需审计 |
 | F-AGT-06 | Agent 后端 | P0 | M1 基础 | 管理员指定一个协议档；LangGraph 单轮调用默认读取最近 20 条用户/助手消息；系统提示词与复杂上下文策略留后续 |
 | F-AGT-07 | 表单双入口 | P0 | M2 | `POST /api/tasks` 与确认卡字段一致 |
 | F-AGT-08 | 解读 | P1 | M4 | 仅对已有 `report_id` 调评测 Skill，不重跑评测 |
 | F-AGT-09 | 取消 / 重跑 | P0 | M1 | 工程师取消自己的非终态任务；管理员可取消任何人的。评测取消=当前样本结束后停；**压测取消=立即停发**。重跑=新任务拷配置 |
 | F-AGT-10 | 团队共享与软删除会话 | P0 | M1 基础 | 默认私有；会话创建者可切为 `team`，在线协作者实时看到用户消息与 AI 正文 chunk；删除为软删除，运行中的 Agent 回合、待确认卡或非终态任务必须先结束 |
+
+#### 5.1.1.1 Agent 技能与 Prompt 管理边界
+
+内置任务技能统一存为 `skills/<skill_id>/SKILL.md`，头部固定 `id`、`name`、`kind`、`version`、`enabled`、`summary`，正文固定以 `## 工作流` 开始。系统提示词常驻的仅是技能目录摘要；仅当本轮计划选中技能后，Harness 才读取该技能全文。读取技能前必须验证目标 `SKILL.md` 存在；缺失或规格不合法时不得降级为硬编码工作流。
+
+管理端可预览和编辑已登记的 Skill 文件，写入必须采用修订指纹并发保护、原子替换和不含正文的审计记录。每个 `agent` 用途的协议档预留独立 Prompt 管理入口：核心角色/安全/任务状态机提示词始终只读且优先，管理员只能维护该协议档的补充提示词。普通会话中的文件工具始终限制在会话工作区，不得读取或写入运行时 Skill/Prompt 配置。
 
 #### 5.1.2 确认卡字段（P0）
 
@@ -661,7 +668,7 @@ testcase-tools：只对齐，不进镜像。LightRAG：MIT，锁 tag。go-stress
 | Key 管理员池 | 1.6 | 是 |
 | LightRAG 进同一 Compose | F-RAG-01 | 是 |
 | 不内置公开集 | 1.3 | 是 |
-| 固定人设，不改系统提示词 | F-AGT-05 | 是 |
+| 核心人设固定；协议档可维护受审计补充提示词 | F-AGT-05 | 是 |
 | 单团队；先文本后多模态 | 1.2、4.2 | 是 |
 | 不涉密、不强制私有化 | 1.6 | 是 |
 | 报告不进审批 | 1.6、4.2 | 是 |
@@ -711,3 +718,13 @@ testcase-tools：只对齐，不进镜像。LightRAG：MIT，锁 tag。go-stress
 | `docs/AI测试与评估平台-PRD.md` | 统一成员同权双人复核、目录/release 生命周期、独立导入队列、staging 并发发布、版本锁定及 M3 边界 |
 | `docs/AI测试与评估平台-API.md` | 定义目录治理、导入租约与重试、稳定 staging 行 ID/revision、原子发布和任务快照接口契约 |
 | `docs/AI测试与评估平台-测试数据集与黄金集采集技术方案.md` | 细化来源 manifest、队列领取/回收、审计、发布事务和与 PRD 一致的分期实施方案 |
+
+### V1.16 修改代码文件与作用清单
+
+| 实际修改文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/harness/skills/files/*/SKILL.md` / `storage.py` | 统一内置技能文件规格、持久化副本、文件存在校验、头部按需读取和全文工作流延迟加载 |
+| `backend/api/app/harness/skills/registry.py` / `workflows.py` | Skill Hint 从文件头部生成，选中技能后才加载正文 |
+| `backend/api/app/routers/admin.py` / `agent_prompt_settings.py` | 受审计的 Skill 预览/编辑和协议档补充提示词管理接口 |
+| `backend/api/app/harness/prompts/system.py` / `routers/ws.py` | 固定核心系统策略与协议档补充提示词装配，禁止设置项替换核心规则 |
+| `frontend/src/views/AdminProfiles.vue` / `frontend/src/components/modals/*` | Agent 技能文件预览/编辑与当前 Agent 提示词管理入口 |

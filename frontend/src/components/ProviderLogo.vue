@@ -98,6 +98,14 @@ const LOGOS: Record<ProviderLogoKey, ProviderLogoDefinition> = {
     label: 'Baidu Qianfan', color: '#2932E1', mark: '千',
   },
   hunyuan: { label: 'Tencent Hunyuan', color: '#00A4EF', mark: '元' },
+  grok: {
+    label: 'xAI Grok', color: '#111827', mark: '𝕏',
+    // 采用 xAI 单色 X 识别符的内联矢量形式，避免依赖运行时外链品牌资源。
+    paths: [
+      { d: 'M4.1 2.5h3.7l12.1 19H16.2z', fill: '#111827' },
+      { d: 'M16.2 2.5h3.7L7.8 21H4.1z', fill: '#111827' },
+    ],
+  },
   groq: {
     label: 'Groq', color: '#F43E01', mark: 'G', viewBox: '0 0 33 33',
     // 来源：https://groq.com/favicon.svg，修复旧路径坐标系与官网闪电图形不一致的问题。
