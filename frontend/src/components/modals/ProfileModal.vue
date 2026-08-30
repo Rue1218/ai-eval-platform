@@ -39,6 +39,7 @@
               v-model:value="form.model"
               class="grow"
               placeholder="例如：mimo-v2.5-pro / gpt-4o"
+              @update:value="handleManualModelChange"
             />
             <n-button
               type="info"
@@ -53,6 +54,28 @@
             </n-button>
           </div>
         </div>
+      </div>
+
+      <div v-if="modelParameterDefinitions.length" class="field">
+        <label class="field-label">模型请求字段（由 /models 目录提供）</label>
+        <div class="model-parameter-grid">
+          <div v-for="parameter in modelParameterDefinitions" :key="parameter.id" class="field">
+            <label class="small tertiary">{{ parameter.id }}</label>
+            <n-select
+              :value="modelParameterValues[parameter.id] || null"
+              :options="modelParameterOptions(parameter)"
+              clearable
+              placeholder="保持端点默认值"
+              @update:value="value => updateModelParameter(parameter.id, value)"
+            />
+          </div>
+        </div>
+        <span class="small tertiary">
+          已保存为 <code>{{ form.model }}</code>，调用时作为模型标识原样传给端点。
+        </span>
+        <span v-if="selectedModelOwner === 'cursorapi'" class="small tertiary">
+          CursorAPI 仅从模型标识读取这些字段；原生 Function Calling 可用，但它不会向 OpenAI 流回传可展示的思考过程。
+        </span>
       </div>
 
       <div class="field">
@@ -169,7 +192,16 @@ import {
   NModal,
 } from 'naive-ui'
 import { api } from '../../api/http'
-import type { Profile, ProfileCreateIn, ProfileUpdateIn, ProtocolType, ProfileUsage, ToolCallMode } from '../../api/types'
+import type {
+  Profile,
+  ProfileCreateIn,
+  ProfileUpdateIn,
+  ProtocolType,
+  ProfileUsage,
+  RemoteModel,
+  RemoteModelParameter,
+  ToolCallMode,
+} from '../../api/types'
 import FetchModelsModal from './FetchModelsModal.vue'
 
 const props = defineProps<{
@@ -192,8 +224,12 @@ const message = useMessage()
 const saving = ref(false)
 const fetchingModels = ref(false)
 const showFetchModal = ref(false)
-const fetchedModelList = ref<Array<{ id: string; name: string; owned_by?: string }>>([])
+const fetchedModelList = ref<RemoteModel[]>([])
 const selectedVendor = ref<string | null>(null)
+const selectedModelId = ref('')
+const selectedModelOwner = ref<string | undefined>()
+const modelParameterDefinitions = ref<RemoteModelParameter[]>([])
+const modelParameterValues = ref<Record<string, string>>({})
 
 const isEdit = computed(() => !!props.profile?.id)
 
@@ -286,6 +322,7 @@ const VENDOR_MAP: Record<string, { name: string; base_url: string; protocol: Pro
 
 function handleSelectVendor(val: string | null) {
   if (!val || !VENDOR_MAP[val]) return
+  clearModelParameters()
   const item = VENDOR_MAP[val]
   form.value.base_url = item.base_url
   form.value.protocol = item.protocol
@@ -325,13 +362,53 @@ async function handleFetchRemoteModels() {
   }
 }
 
-function onModelSelect(modelId: string) {
-  form.value.model = modelId
+function clearModelParameters() {
+  selectedModelId.value = ''
+  selectedModelOwner.value = undefined
+  modelParameterDefinitions.value = []
+  modelParameterValues.value = {}
+}
+
+function configuredModelName() {
+  const parameters = modelParameterDefinitions.value
+    .map((parameter) => {
+      const value = modelParameterValues.value[parameter.id]
+      return value ? `${parameter.id}=${value}` : ''
+    })
+    .filter(Boolean)
+  return parameters.length ? `${selectedModelId.value}[${parameters.join(',')}]` : selectedModelId.value
+}
+
+function modelParameterOptions(parameter: RemoteModelParameter) {
+  return parameter.values.map((value) => ({ label: value, value }))
+}
+
+function updateModelParameter(parameterId: string, value: string | null) {
+  if (value) {
+    modelParameterValues.value[parameterId] = value
+  } else {
+    delete modelParameterValues.value[parameterId]
+  }
+  form.value.model = configuredModelName()
+}
+
+function handleManualModelChange(model: string) {
+  if (selectedModelId.value && model !== configuredModelName()) {
+    clearModelParameters()
+  }
+}
+
+function onModelSelect(model: RemoteModel) {
+  selectedModelId.value = model.id
+  selectedModelOwner.value = model.owned_by?.toLowerCase()
+  modelParameterDefinitions.value = model.parameters || []
+  modelParameterValues.value = {}
+  form.value.model = model.id
   if (!form.value.name || form.value.name.includes('(')) {
     const vendorName = selectedVendor.value ? VENDOR_MAP[selectedVendor.value]?.name : ''
-    form.value.name = vendorName ? `${vendorName} (${modelId})` : modelId
+    form.value.name = vendorName ? `${vendorName} (${model.id})` : model.id
   }
-  message.info(`已选用模型: ${modelId}`)
+  message.info(`已选用模型: ${model.id}`)
 }
 
 async function onBatchCreate(modelIds: string[]) {
@@ -370,6 +447,7 @@ watch(
   ([showVal, profileVal]) => {
     if (showVal) {
       selectedVendor.value = props.initialData?.vendorKey || null
+      clearModelParameters()
       if (profileVal) {
         form.value = {
           name: profileVal.name || '',
@@ -493,6 +571,11 @@ async function handleSave() {
   display: grid;
   grid-template-columns: 1fr 1.3fr;
   gap: 12px;
+}
+.model-parameter-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
 }
 .profile-tabs {
   margin-top: 4px;

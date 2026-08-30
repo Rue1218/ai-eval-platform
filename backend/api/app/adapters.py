@@ -293,6 +293,10 @@ def _is_openai_reasoning_model(model: str) -> bool:
 
 def _openai_reasoning_effort(model: str, enabled: bool, effort: str) -> str | None:
     """返回可发送的 OpenAI effort；普通模型不携带推理专用字段。"""
+    # CursorAPI 将模型可选项编码在 ``model[param=value]`` 中，并不会读取
+    # OpenAI 请求体的 reasoning_effort；检测到该规格时保留模型名原样透传。
+    if "[" in model and model.rstrip().endswith("]"):
+        return None
     if not _is_openai_reasoning_model(model):
         return None
     if enabled and effort in _REASONING_EFFORTS:
@@ -1122,6 +1126,25 @@ def _anthropic_model_list_roots(base_url: str) -> list[str]:
     return roots
 
 
+def _remote_model_parameters(item: Mapping[str, object]) -> list[dict[str, object]]:
+    """保留上游模型目录声明的可选请求字段，供前端构造模型规格。"""
+    raw_parameters = item.get("parameters")
+    if not isinstance(raw_parameters, list):
+        return []
+    parameters: list[dict[str, object]] = []
+    for raw_parameter in raw_parameters:
+        if not isinstance(raw_parameter, Mapping):
+            continue
+        parameter_id = str(raw_parameter.get("id") or "").strip()
+        raw_values = raw_parameter.get("values")
+        if not parameter_id or not isinstance(raw_values, list):
+            continue
+        values = [str(value) for value in raw_values if isinstance(value, str | int | float | bool)]
+        if values:
+            parameters.append({"id": parameter_id, "values": values})
+    return parameters
+
+
 def fetch_remote_models(
     *,
     protocol: str,
@@ -1215,11 +1238,15 @@ def fetch_remote_models(
         for item in data:
             if isinstance(item, dict) and (item.get("id") or item.get("name") or item.get("display_name")):
                 m_id = str(item.get("id") or item.get("name") or item.get("display_name"))
-                models_list.append({
+                model_item: dict[str, object] = {
                     "id": m_id,
                     "name": str(item.get("display_name") or item.get("name") or m_id),
                     "owned_by": str(item.get("owned_by") or item.get("root") or ("anthropic" if protocol == "anthropic_messages" else "remote")),
-                })
+                }
+                parameters = _remote_model_parameters(item)
+                if parameters:
+                    model_item["parameters"] = parameters
+                models_list.append(model_item)
     elif isinstance(data, dict):
         raw_items = data.get("data") or data.get("models") or data.get("items") or []
         if isinstance(raw_items, dict) and isinstance(raw_items.get("models"), list):
@@ -1228,11 +1255,15 @@ def fetch_remote_models(
             for item in raw_items:
                 if isinstance(item, dict) and (item.get("id") or item.get("name") or item.get("display_name")):
                     m_id = str(item.get("id") or item.get("name") or item.get("display_name"))
-                    models_list.append({
+                    model_item = {
                         "id": m_id,
                         "name": str(item.get("display_name") or item.get("name") or m_id),
                         "owned_by": str(item.get("owned_by") or item.get("root") or ("anthropic" if protocol == "anthropic_messages" else ("ollama" if "models" in data else "remote"))),
-                    })
+                    }
+                    parameters = _remote_model_parameters(item)
+                    if parameters:
+                        model_item["parameters"] = parameters
+                    models_list.append(model_item)
 
     if models_list:
         # 去重并排序

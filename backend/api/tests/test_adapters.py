@@ -342,6 +342,22 @@ def test_openai_responses_reasoning_settings(monkeypatch):
     assert seen["body"]["reasoning"] == {"effort": "high", "summary": "auto"}
 
 
+def test_cursorapi_model_spec_keeps_request_fields_in_model_name(monkeypatch):
+    """CursorAPI 参数在模型名中传递，不能再附加 OpenAI reasoning_effort。"""
+    seen = _capture(monkeypatch, OPENAI_CHAT_OK)
+    call_protocol(
+        **(
+            _kwargs("openai_chat")
+            | {"model": "gpt-5.3-codex[reasoning=medium,fast=false]"}
+        ),
+        reasoning_enabled=True,
+        reasoning_effort="high",
+    )
+
+    assert seen["body"]["model"] == "gpt-5.3-codex[reasoning=medium,fast=false]"
+    assert "reasoning_effort" not in seen["body"]
+
+
 def test_anthropic_request_shape(monkeypatch):
     """anthropic_messages：system 独立字段、x-api-key + anthropic-version 鉴权头。"""
     seen = _capture(monkeypatch, ANTHROPIC_OK)

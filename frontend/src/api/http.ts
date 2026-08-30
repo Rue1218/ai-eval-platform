@@ -10,6 +10,7 @@ import {
   type Profile,
   type ProfileCreateIn,
   type ProfileUpdateIn,
+  type RemoteModel,
   type Dataset,
   type DatasetRow,
   type KnowledgeBase,
@@ -321,7 +322,7 @@ export const api = {
       api_key?: string
       profile_id?: string
       anthropic_version?: string
-    }): Promise<{ ok: boolean; models: Array<{ id: string; name: string; owned_by?: string }>; total: number }> {
+    }): Promise<{ ok: boolean; models: RemoteModel[]; total: number }> {
       if (getDataMode() === 'mock') {
         return {
           ok: true,
