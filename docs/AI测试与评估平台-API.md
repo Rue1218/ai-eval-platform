@@ -2,17 +2,19 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.61 |
+| 文档版本 | V1.62 |
 | 对应 PRD | V1.18（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.5.26（LangGraph HITL 与 WS 桥接；JSON 仍以本文为准） |
 | 对应前端计划 | V1.5 |
 | 对应后端计划 | V1.5 |
 | 撰写日期 | 2026-08-18 |
-| 本轮修订 | 2026-08-31：V1.61 收敛 ReAct、Plan-and-Solve 与 reflect 的过程投影：JSON ReAct `thought`、Plan/Reflect 阶段事件、ToolCall 前模型草稿均不得出站；仅保留每回合至多一条固定过程摘要，历史重放忽略 `thought`。`assistant_message` 只承载已验证的最终交付，不再支持 `interim` 阶段叙述（§4.3/§4.4）。 |
+| 本轮修订 | 2026-08-31：V1.62 将危险 bash 确认改为 Composer 上方的临时抽屉，用户确认/取消立即收回（§4.3/§4.4）。 |
 | 最近修订 | 2026-08-28：V1.53 `web_fetch` 直抓路径接入 trafilatura 正文提取：可读性算法识别文章主体，保留标题层级/链接/图片/表格，未安装或提取失败降级回内置 `_TextExtractor`；提取真实产出 Markdown 时才声明 `format=markdown`（§4.3.1）。V1.52 优化 `web_fetch` 长文完整性与卡片预览：模型正文预算 8,000→60,000 字符，卡片预览与 `read` 同源对齐 `TOOL_PREVIEW_MAX_CHARS` 并随 `web.preview_limit_chars` 下发，直接抓取字节窗口 256KB→1MB（§4.3.1）。2026-08-27：V1.51 新增持久事件 `session_title`（§4.3）与会话标题 AI 生成契约（§4.3.2）：默认标题会话首条消息后由 Agent 协议档弱结构化生成标题并落库广播，修复标题不持久化问题。V1.50 统一 Agent 文本附件 staging 与 `read` 的 20MB 边界；`read` 模型窗口为 2,000 行 / 600,000 字符。V1.49 协议档新增 `max_output_tokens`（256–131072，默认 8192），创建/更新/列表/详情均支持；Agent 模型调用从协议档读取输出上限，长文档总结/导出类任务可调大避免回答被截断。2026-08-26：V1.48 同轮多调用默认串行，灰度开启后仅 `read`/`web_search`/`web_fetch` 可并行，回填按原始 `call_id`。V1.47 新增 `GET /api/agent/metrics`，不含正文/参数，不新增 WS 事件。V1.46 明确 native 一次 ToolCall 结束当前上游响应，结果回填后再请求，不新增事件名。V1.45 思考链只下发可展示摘要，隐藏 CoT（`Here's a thinking process` / `Analyze User Input`）由服务端替换，不原样推给前端。V1.44 ToolCall 在执行前持久化，新增瞬态 `tool_progress` / `tool_output_delta`，并冻结原生工具的输出 Schema、权限边界和失败恢复字段。V1.43 思考增量允许合并下发；有思考链时 `think_final` 在 `response.completed` 之前。V1.42 Direct `/help`、未知斜杠与图内防御提示在业务事件后必须再发 `response.completed`（成功 `stop`，校验/防御 `error`），结束整轮生成态。V1.41 确认卡预填与 `confirm_ack` 入队前丢掉已删除的协议档/数据集/知识库 ID，避免 Worker 再报「协议档不存在或已删除」。V1.40 `/cancel` 与 `/stress` 按 §4.4 解禁（仍走 `user_message`）：`/cancel` 取消本会话非终态任务，`/stress` 发出质量任务确认卡且 `with_stress=true`，禁止 `kind=stress`。V1.39 原生工具卡片收起态副标题统一为 `ToolCall`，不在卡片摘要区回显文件路径、命令或写入内容；详细参数仍在展开区展示。V1.38 明确原生基础 ToolCall 卡片使用英文工具名，展开区统一显示 `ToolCall` 与 `输出`，文件、命令和代码/文档结果使用行号展示；MCP/平台短工具仍按下方中文名映射。2026-08-24：V1.24 修复 Agent 附件上下文链路：服务端校验文件归属并在模型窗口解析文本、PDF、DOCX、XLSX，图片按三协议图文内容块发送；历史消息附件补齐安全元数据，前端可在刷新后继续预览。同步调整输入框内附件按钮与用户消息附件位序。V1.23 扩展 Agent 附件契约，支持图片、Word 文档与多附件拖拽上传；保留 `POST /api/files` 后再以既有 `file_id` 引用的消息链路，补充图片缩略图、PDF/文本预览与 Office 文件打开/下载说明。V1.22 修复 V1.21 遗留：§4.4 标题「仅此三条」改「仅此四条」、§9 禁止清单「第四种」改「第五种」并补四类上行事件枚举、§4.3 `tool_result.source` 语义对齐 M7 `Observation.source`（溯源标识字符串，非 short\|long 枚举）、§4.3 共享流规则补 clarify/plan/confirm 持久化广播说明、§4.4 clarify 多副本限制注明、§9 Ask/Plan 补注非 Harness plan 事件；V1.20 及更早版本沿用历史修订记录。 |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
+> V1.62（2026-08-31）：危险 bash 的确认卡以 Composer 上方抽屉呈现，点击确认或取消立即收回；消息流仅显示关联 ToolCard 的等待状态。
+>
 > V1.61（2026-08-31）：界面只呈现可验证的执行过程：Plan 使用 PlanCard，工具使用 ToolCard，危险 bash 使用确认卡；JSON ReAct `thought`、Plan/Reflect 阶段事件与 ToolCall 前模型草稿一律是内部控制信息。服务端每回合至多发一条固定过程摘要，前端不重放历史 `thought`，`assistant_message` 仅保留工具终态之后的最终交付，避免思考卡堆积和“先报成功、后报工具失败”的矛盾。
 >
 > V1.60（2026-08-31）：危险 bash 采用 LangGraph `interrupt()` 人在回路：先持久化 `tool_approval` 卡，再由原发起成员上行 `tool_approval_ack` 的 `approve|reject` 恢复同一 `thread_id`。确认前绝不调用 Runner；`sudo`、网络和远程连接仍是硬黑名单。任意上游 reasoning（包括中文）只投影固定过程摘要，工具调用轮次在确认无 ToolCall 前不投影模型正文，禁止出现先报“已完成”后工具失败的矛盾。
@@ -1589,8 +1591,8 @@ Harness 回合必须丢到后台 Task，**不得**在 `receive` 循环里 `await
 | `tool_progress` | `{ "call_id", "name", "stage":"validating\|approved\|executing\|finalizing", "message" }`；仅在对应 `tool_call` 已落库后下发；不落库、不占 event_id、不补发 | ToolCard 保持 pending，更新加载文案与阶段状态 |
 | `tool_output_delta` | `{ "call_id", "name", "seq", "channel":"document\|stdout\|result", "text", "start_line" }`；仅服务端安全预览块可发送，单 ToolCall 累计最多 `TOOL_PREVIEW_MAX_CHARS` 字符（默认 600,000，见 V1.45）；不落库、不占 event_id、不补发 | ToolCard 按 `call_id`、`seq` 追加带行号输出；最终由 `tool_result` 替换成功态内容 |
 | `tool_result` | `{ "call_id":"toolcall_xxx", "name": "model.list", "ok": true, "data": {} }` 或 `{ "call_id":"toolcall_xxx", "name":"model.list", "ok": false, "error": "...", "status":"rejected"?, "recovery": {"retryable", "suggested_action", "repair_hint", "max_auto_repairs"} }`；`call_id` 必须与对应 `tool_call` 相同。`status="rejected"` 仅表示用户拒绝危险工具，非系统错误。可选 `latency_ms`、`truncated`(bool，结果是否被截断)、`source`(溯源标识字符串，对齐 M7 `Observation.source`，如 `"file:uuid"`，可选)、`redacted`(bool，是否已脱敏)。`name="read"` 成功时 `data` 使用本节下方的受控投影 | ToolCard done；按 `call_id` 原地更新；失败显示脱敏恢复建议；`truncated`/`redacted` 为 true 时展示截断/脱敏徽标 |
-| `tool_approval` | `{ "id":"toolcall_xxx", "call_id":"toolcall_xxx", "name":"bash", "command":"...", "reason":"...", "risk_level":"high", "sandbox_scope":"...", "allowed_decisions":["approve","reject"] }`；危险 bash 在 Runner 前触发；落库、占 event_id、可回放 | ToolApprovalCard；关联 ToolCard 显示“等待确认”，命令尚未执行 |
-| `tool_approval_ack` | `{ "id":"toolcall_xxx", "action":"approve\|reject", "ok":true }`；服务端接受原发起成员决定后落库 | 给对应 ToolApprovalCard 盖章；`approve` 后图恢复执行，`reject` 后返回 `tool_result.status="rejected"` |
+| `tool_approval` | `{ "id":"toolcall_xxx", "call_id":"toolcall_xxx", "name":"bash", "command":"...", "reason":"...", "risk_level":"high", "sandbox_scope":"...", "allowed_decisions":["approve","reject"] }`；危险 bash 在 Runner 前触发；落库、占 event_id、可回放 | Composer 上方 ToolApprovalDrawer；关联 ToolCard 显示“等待确认”，命令尚未执行；用户选择后立即收回抽屉 |
+| `tool_approval_ack` | `{ "id":"toolcall_xxx", "action":"approve\|reject", "ok":true }`；服务端接受原发起成员决定后落库 | 收回 Composer 上方抽屉；`approve` 后图恢复执行，`reject` 后返回 `tool_result.status="rejected"` |
 | `clarify` | `{ "id":"uuid", "question":"...", "options":["..."]?, "context":"..."? }`；落库、占 event_id；澄清卡不建任务、不写 `sessions.pending_confirm`，仅暂停图等待用户回复 | ClarifyCard（独立组件，区别于 ConfirmCard）；用户回复后上行 `clarify_reply` 恢复图 |
 | `plan` | PlanArtifact `{ "intent":"...", "skill_id":"skill-benchmark", "slots":{...}, "tools_needed":["..."], "delivery":"...", "budget":{...}, "allows_replan":bool, "notes":"..."? }`；落库、占 event_id；Plan-Solve 规划产物对用户完全可见 | PlanCard（展示规划意图/技能/工具/预算/交付物）；用户可查看但无需 ack |
 | `task_state` | `TaskSessionState` `{ "goal":"...", "phase":"exploring\|verifying\|converging\|completed\|blocked", "completed_steps":["..."], "current_step":"...", "next_actions":["..."], "failed_steps":[{"step","reason","repair_hint"?}], "current_hypothesis":"...", "confirmed_facts":["..."], "evidence":["..."], "rejected_hypotheses":[{"hypothesis","reason","evidence_ref"?}], "missing_info":["..."], "can_deliver":bool, "blocked_reason":"..."?, "notes":"..."? }`；落库、占 event_id、可回放；由 `plan.slots.task_state` 初始快照演进而来，多轮工具迭代中随状态演进重复下发（原地更新最近 PlanCard，不新建卡） | TaskStateDrawer 实时刷新步骤状态（completed/running/failed/pending）与证据/缺口/排除方向徽章 |
@@ -2603,3 +2605,12 @@ ReAct 的 `thought`、Plan/reflect 阶段事件和含 ToolCall 响应的模型�
 | `frontend/src/views/Agent.vue` | 历史回放跳过 `thought`；实时阶段仅更新生成状态，单回合最多一张过程摘要卡 |
 | `backend/api/tests/test_agent_react.py` / `test_agent_routing.py` / `test_agent_multiturn.py` | 回归验证三种范式不泄漏内部过程、工具前无草稿、工具后再生成最终交付 |
 | `docs/AI测试与评估平台-PRD.md` / `AI测试与评估平台-Agent开发文档.md` | 同步 PRD V1.18、Agent 文档 V1.5.26 与事件边界 |
+
+**V1.62（2026-08-31）— 工具确认抽屉**
+
+危险 bash 的 `tool_approval` 保持持久化与可重放，但浏览器只将最新未确认项渲染为
+Composer 上方抽屉；点击确认或取消即收回，消息流只保留关联 ToolCard 的“等待确认”状态。
+
+| 实际修改文件 | 作用 |
+| :--- | :--- |
+| `frontend/src/views/Agent.vue` | 将危险命令确认移至 Composer 上方抽屉，确认/取消后立即收回，历史重放同步恢复未处理抽屉 |

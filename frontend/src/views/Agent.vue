@@ -284,17 +284,6 @@
               @reply="handleClarifyReply(item, $event)"
             />
 
-            <!-- 危险 bash：LangGraph interrupt() 暂停后，用户确认才恢复同一 ToolNode。 -->
-            <ToolApprovalCard
-              v-else-if="item.type === 'tool_approval'"
-              :command="item.command || ''"
-              :reason="item.reason || '该命令可能修改会话工作区'"
-              :sandbox-scope="item.sandboxScope || ''"
-              :is-acked="item.isAcked"
-              :action="item.approvalAction"
-              @decide="handleToolApproval(item, $event)"
-            />
-
             <!-- 2.5 评测报告卡片 -->
             <div
               v-else-if="item.type === 'report'"
@@ -526,6 +515,24 @@
           :plan="latestPlan"
           :is-generating="isGenerating"
         />
+
+        <!-- 危险命令确认抽屉：只在输入框上方短暂出现，不进入消息时间线。 -->
+        <Transition name="tool-approval-drawer">
+          <section
+            v-if="activeToolApproval"
+            class="tool-approval-drawer"
+            role="alertdialog"
+            aria-live="assertive"
+            aria-label="危险命令确认"
+          >
+            <ToolApprovalCard
+              :command="activeToolApproval.command"
+              :reason="activeToolApproval.reason"
+              :sandbox-scope="activeToolApproval.sandboxScope"
+              @decide="handleToolApproval"
+            />
+          </section>
+        </Transition>
 
         <div
           class="composer-card"
@@ -956,6 +963,9 @@ const currentSessionId = ref<string>('')
 const isCreatingSession = ref(false)
 // 未绑定服务端会话时保持草稿态，不得用列表首项冒充当前会话。
 const currentSession = computed(() => sessions.value.find(s => s.id === currentSessionId.value) || null)
+/** 每个会话至多一张危险命令确认抽屉；持久事件重放后仍可恢复。 */
+const toolApprovalsBySession = ref<Record<string, ToolApprovalDrawer>>({})
+const activeToolApproval = computed(() => toolApprovalsBySession.value[currentSessionId.value] || null)
 const deletableSessionCount = computed(() => filteredSessions.value.filter((session) => session.can_delete).length)
 const allDeletableSessionsSelected = computed(() => {
   const deletableIds = filteredSessions.value.filter((session) => session.can_delete).map((session) => session.id)
@@ -1171,19 +1181,21 @@ type AgentBlock =
   | AgentMediaItem
   | AgentErrorItem
 
+interface ToolApprovalDrawer {
+  id: string
+  command: string
+  reason: string
+  sandboxScope: string
+}
+
 interface StreamItem {
-  type: 'user' | 'agent' | 'thought' | 'tool' | 'media' | 'confirm' | 'clarify' | 'tool_approval' | 'plan' | 'report' | 'error' | 'typing'
+  type: 'user' | 'agent' | 'thought' | 'tool' | 'media' | 'confirm' | 'clarify' | 'plan' | 'report' | 'error' | 'typing'
   text?: string
   done?: boolean
   // 澄清卡（M4 §3.9.6：id 匹配 clarify_reply，仅回复输入）
   id?: string
   question?: string
   options?: string[] | null
-  // 危险工具确认卡：id 与 ToolCall.call_id 一致，服务端按它恢复同一图检查点。
-  command?: string
-  reason?: string
-  sandboxScope?: string
-  approvalAction?: 'approve' | 'reject'
   planIntent?: string
   planSteps?: string[]
   plan?: PlanArtifact
@@ -1247,6 +1259,30 @@ interface StreamItem {
   blocks?: AgentBlock[]
   // F8 确认卡内联校验错误（字段名 → 红字文案）
   fieldErrors?: Record<string, string>
+}
+
+/** 将持久化确认事件投影为 Composer 上方的临时抽屉。 */
+function showToolApproval(sessionId: string, payload: Record<string, unknown>) {
+  const id = String(payload.id || '')
+  if (!sessionId || !id) return
+  toolApprovalsBySession.value = {
+    ...toolApprovalsBySession.value,
+    [sessionId]: {
+      id,
+      command: String(payload.command || ''),
+      reason: String(payload.reason || '该命令可能修改会话工作区'),
+      sandboxScope: String(payload.sandbox_scope || ''),
+    },
+  }
+}
+
+/** 收到确认回执、用户作出决定或重放已结束事件时收回对应抽屉。 */
+function clearToolApproval(sessionId: string, approvalId?: string) {
+  const active = toolApprovalsBySession.value[sessionId]
+  if (!active || (approvalId && active.id !== approvalId)) return
+  const next = { ...toolApprovalsBySession.value }
+  delete next[sessionId]
+  toolApprovalsBySession.value = next
 }
 
 /** 将历史或 WS 的文件 ID 统一成既有附件芯片可读取的对象。 */
@@ -2765,16 +2801,16 @@ function handleClarifyReply(item: StreamItem, answer: string) {
 }
 
 /** 危险工具确认：仅提交明确决定；命令仍由服务端恢复原 LangGraph 检查点后执行。 */
-function handleToolApproval(item: StreamItem, action: 'approve' | 'reject') {
-  if (item.type !== 'tool_approval' || item.isAcked) return
-  if (!agentWs || !agentWs.isConnected || !item.id) {
+function handleToolApproval(action: 'approve' | 'reject') {
+  const approval = activeToolApproval.value
+  if (!agentWs || !agentWs.isConnected || !approval) {
     message.error('Agent 连接未就绪，暂不能确认命令')
     return
   }
-  item.isAcked = true
-  item.approvalAction = action
+  // 选择后立即收回抽屉；服务端仍是唯一执行与拒绝事实源。
+  clearToolApproval(currentSessionId.value, approval.id)
   setCurrentGenerating(true)
-  agentWs.sendToolApprovalAck(item.id, action)
+  agentWs.sendToolApprovalAck(approval.id, action)
   scrollToBottom()
 }
 
@@ -3056,6 +3092,7 @@ async function loadSessionHistory(sid: string): Promise<number> {
   if (deletingSessionIds.has(sid)) return 0
   try {
     const history = await api.sessions.getMessages(sid)
+    clearToolApproval(sid)
     interface TimelineItem {
       time: number
       priority: number
@@ -3169,30 +3206,9 @@ async function loadSessionHistory(sid: string): Promise<number> {
           p.call_id,
         )
         if (pendingTool) pendingTool.status = 'awaiting_approval'
-        rawList.push({
-          time: t,
-          priority: 4,
-          eventId: eid,
-          item: {
-            type: 'tool_approval',
-            id: typeof p.id === 'string' ? p.id : undefined,
-            callId: typeof p.call_id === 'string' ? p.call_id : undefined,
-            tool: String(p.name || 'bash'),
-            command: String(p.command || ''),
-            reason: String(p.reason || '该命令可能修改会话工作区'),
-            sandboxScope: String(p.sandbox_scope || ''),
-            isAcked: false,
-            noAnim: true,
-          },
-        })
+        showToolApproval(sid, p)
       } else if (ev.event === 'tool_approval_ack') {
-        const approval = [...rawList].reverse().find((entry) => (
-          entry.item.type === 'tool_approval' && entry.item.id === p.id
-        ))
-        if (approval) {
-          approval.item.isAcked = true
-          approval.item.approvalAction = p.action === 'reject' ? 'reject' : 'approve'
-        }
+        clearToolApproval(sid, String(p.id || ''))
       } else if (ev.event === 'confirm') {
         rawList.push({
           time: t,
@@ -3865,7 +3881,7 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
       break
     }
     case 'tool_approval': {
-      // LangGraph 已暂停在 ToolNode；这里仅展示风险，不代表命令已经执行。
+      // LangGraph 已暂停在 ToolNode；确认抽屉不进入会话消息时间线。
       const agent = getCurrentTurnAgent(buf)
       const target = agent ? findPendingToolBlock(agent, p.name, p.call_id) : undefined
       if (target) {
@@ -3875,24 +3891,11 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
       finishBufferThought(buf)
       markGenerating(sid, false)
       rt.harnessStage = ''
-      buf.push({
-        type: 'tool_approval',
-        id: String(p.id || ''),
-        callId: typeof p.call_id === 'string' ? p.call_id : undefined,
-        tool: String(p.name || 'bash'),
-        command: String(p.command || ''),
-        reason: String(p.reason || '该命令可能修改会话工作区'),
-        sandboxScope: String(p.sandbox_scope || ''),
-        isAcked: false,
-      })
+      showToolApproval(sid, p)
       break
     }
     case 'tool_approval_ack': {
-      const approval = [...buf].reverse().find((item) => item.type === 'tool_approval' && item.id === p.id)
-      if (approval) {
-        approval.isAcked = true
-        approval.approvalAction = p.action === 'reject' ? 'reject' : 'approve'
-      }
+      clearToolApproval(sid, String(p.id || ''))
       markGenerating(sid, true)
       break
     }
@@ -4283,7 +4286,7 @@ function handleWsEvent(ev: WsServerEvent) {
       break
     }
     case 'tool_approval': {
-      // LangGraph 暂停而非失败：标记原 ToolCard，单独插入可审阅的确认卡。
+      // LangGraph 暂停而非失败：标记原 ToolCard，并在 Composer 上方弹出确认抽屉。
       const agent = getCurrentTurnAgent(events.value)
       const target = agent ? findPendingToolBlock(agent, p.name, p.call_id) : undefined
       if (target) {
@@ -4293,25 +4296,12 @@ function handleWsEvent(ev: WsServerEvent) {
       finishLiveThought()
       setCurrentGenerating(false)
       harnessStage.value = ''
-      events.value.push({
-        type: 'tool_approval',
-        id: String(p.id || ''),
-        callId: typeof p.call_id === 'string' ? p.call_id : undefined,
-        tool: String(p.name || 'bash'),
-        command: String(p.command || ''),
-        reason: String(p.reason || '该命令可能修改会话工作区'),
-        sandboxScope: String(p.sandbox_scope || ''),
-        isAcked: false,
-      })
+      showToolApproval(ev.session_id || currentSessionId.value, p)
       scrollToBottom()
       break
     }
     case 'tool_approval_ack': {
-      const approval = [...events.value].reverse().find((item) => item.type === 'tool_approval' && item.id === p.id)
-      if (approval) {
-        approval.isAcked = true
-        approval.approvalAction = p.action === 'reject' ? 'reject' : 'approve'
-      }
+      clearToolApproval(ev.session_id || currentSessionId.value, String(p.id || ''))
       setCurrentGenerating(true)
       scrollToBottom()
       break
@@ -4743,6 +4733,29 @@ onBeforeUnmount(() => {
   background: var(--bg-main);
 }
 
+/* 危险 bash 的确认卡从 Composer 上方弹出，确认或取消后立即收回。 */
+.tool-approval-drawer {
+  max-width: 780px;
+  margin: 0 auto 10px;
+  transform-origin: bottom center;
+}
+
+.tool-approval-drawer :deep(.tool-approval-card) {
+  max-width: none;
+  border-radius: 16px;
+}
+
+.tool-approval-drawer-enter-active,
+.tool-approval-drawer-leave-active {
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.tool-approval-drawer-enter-from,
+.tool-approval-drawer-leave-to {
+  opacity: 0;
+  transform: translateY(10px);
+}
+
 .quick-chips {
   max-width: 780px;
   margin: 0 auto 8px;
@@ -5104,6 +5117,9 @@ onBeforeUnmount(() => {
   }
   .composer {
     padding: 6px 10px max(12px, env(safe-area-inset-bottom));
+  }
+  .tool-approval-drawer {
+    margin-bottom: 8px;
   }
   .composer-card {
     border-radius: 14px;
