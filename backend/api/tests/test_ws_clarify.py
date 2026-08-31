@@ -236,3 +236,110 @@ async def test_tool_approval_ack_resumes_with_decision(monkeypatch):
     }
     assert emitted == [("tool_approval_ack", {"id": "call-rm", "action": "approve", "ok": True})]
     assert "s-1" not in ws._SESSION_TOOL_APPROVAL
+
+
+class _EventQueryDb:
+    """按事件号倒序返回固定 ws_events 行的桩数据库（恢复链路用）。"""
+
+    def __init__(self, rows: list[tuple[str, dict | None]]) -> None:
+        self._rows = rows
+
+    def query(self, *_args):
+        return self
+
+    def filter(self, *_args):
+        return self
+
+    def order_by(self, *_args):
+        return self
+
+    def limit(self, _n):
+        return self
+
+    def all(self):
+        return self._rows
+
+
+def test_recover_pending_tool_approval_from_events() -> None:
+    """注册表随重启丢失后，从持久化事件重建待确认状态。"""
+    pending = ws._recover_pending_tool_approval(
+        _EventQueryDb([("tool_approval", {"id": "call-1", "thread_id": "s-1:t1", "user_id": "u-1"})]),
+        "s-1",
+    )
+    assert pending == {"id": "call-1", "thread_id": "s-1:t1", "user_id": "u-1"}
+
+    # 已消费（ack 在后）→ 不可恢复
+    assert (
+        ws._recover_pending_tool_approval(
+            _EventQueryDb(
+                [
+                    ("tool_approval_ack", {"id": "call-1", "action": "approve"}),
+                    ("tool_approval", {"id": "call-1", "thread_id": "s-1:t1", "user_id": "u-1"}),
+                ]
+            ),
+            "s-1",
+        )
+        is None
+    )
+    # 旧格式事件缺恢复定位字段 → 不可恢复
+    assert (
+        ws._recover_pending_tool_approval(
+            _EventQueryDb([("tool_approval", {"id": "call-1"})]), "s-1"
+        )
+        is None
+    )
+    # 无卡片事件 → 不可恢复
+    assert ws._recover_pending_tool_approval(_EventQueryDb([]), "s-1") is None
+
+
+@pytest.mark.asyncio
+async def test_tool_approval_ack_recovery_guards_stale_thread(monkeypatch):
+    """恢复路径上图线程已不存在（如 memory 引擎随重启丢失）时 fail-closed。"""
+    monkeypatch.setattr(ws, "_SESSION_TOOL_APPROVAL", {})
+
+    class _Agent:
+        async def ahas_pending_interrupt(self, _thread_id: str) -> bool:
+            return False
+
+    monkeypatch.setattr(ws, "_AGENT", _Agent())
+    user = User(id="u-1", username="u", password_hash="x")
+    db = _EventQueryDb([("tool_approval", {"id": "call-1", "thread_id": "s-1:t1", "user_id": "u-1"})])
+    with pytest.raises(AppError) as error:
+        await ws._handle_tool_approval_ack(
+            db,
+            object(),
+            ws._ConnectionState(),
+            _session(),
+            user,
+            {"id": "call-1", "action": "approve"},
+            None,
+        )
+    assert error.value.code == ErrorCode.VALIDATION
+
+
+@pytest.mark.asyncio
+async def test_stop_invalidates_recovered_tool_approval(monkeypatch):
+    """/stop 使重启后残留的待确认卡失效（持久化 reject ack，不 resume）。"""
+    emitted: list[tuple[str, dict]] = []
+
+    async def fake_emit(_db, _websocket, _state, _session_id, event, payload, **_kw):
+        emitted.append((event, payload))
+        return True
+
+    monkeypatch.setattr(ws, "_emit_persistent", fake_emit)
+    monkeypatch.setattr(ws, "_SESSION_TOOL_APPROVAL", {})
+    monkeypatch.setattr(ws, "_SESSION_CLARIFY", {})
+    monkeypatch.setattr(
+        ws,
+        "_recover_pending_tool_approval",
+        lambda _db, _sid: {"id": "call-1", "thread_id": "s-1:t1", "user_id": "u-1"},
+    )
+
+    await ws._handle_stop(
+        _EventQueryDb([]),
+        object(),
+        ws._ConnectionState(),
+        "s-1",
+        None,
+    )
+    assert ("tool_approval_ack", {"id": "call-1", "action": "reject", "ok": False}) in emitted

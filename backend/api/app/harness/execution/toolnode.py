@@ -479,9 +479,16 @@ def build_tool_node(
         if len(wave) == 1:
             outcomes = [await execute_one(wave[0])]
         else:
-            async with asyncio.TaskGroup() as group:
-                tasks = [group.create_task(execute_one(item)) for item in wave]
-            outcomes = [task.result() for task in tasks]
+            try:
+                async with asyncio.TaskGroup() as group:
+                    tasks = [group.create_task(execute_one(item)) for item in wave]
+                outcomes = [task.result() for task in tasks]
+            except* GraphInterrupt as group_exc:
+                # TaskGroup 会把子任务的 GraphInterrupt 包装进 ExceptionGroup，
+                # 裸 except 与 LangGraph 运行时都无法识别 → 中断语义丢失（节点
+                # 报错而非暂停）。当前并行波次仅只读工具、bash 恒独占波次，不会
+                # 走到这里；此解包是对未来并行面扩大的纵深防御。
+                raise group_exc.exceptions[0] from None
         get_default_stream_metrics().record_batch(
             duration_ms=round((time.perf_counter() - wave_started) * 1000),
             wave_size=len(wave),

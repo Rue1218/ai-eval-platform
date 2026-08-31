@@ -202,6 +202,20 @@ class LangGraphAgent:
         finally:
             self._native_tool_results.clear(thread_id)
 
+    async def ahas_pending_interrupt(self, thread_id: str) -> bool:
+        """判断 thread 是否仍停在待恢复的人工中断处。
+
+        HITL 确认卡在 api 重启后从持久化事件重建注册项，恢复前必须确认
+        检查点里该 thread 确实处于中断暂停（memory 引擎随进程丢失、或已被
+        其他连接消费时会返回 False），避免对已完成图线程误发 resume。
+        """
+        config = {"configurable": {"thread_id": str(thread_id)}}
+        try:
+            snapshot = await self._graph.aget_state(config)
+        except Exception:  # noqa: BLE001 —— 引擎不可用一律视为不可恢复（fail-closed）
+            return False
+        return bool(snapshot is not None and snapshot.next)
+
     @staticmethod
     def _prepare_run_config(config: dict | None) -> tuple[dict, str]:
         """复制运行配置并保证每一轮都有不可冲突的临时存储键。"""

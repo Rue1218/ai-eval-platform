@@ -996,7 +996,20 @@ async def _handle_stop(
         active_turn.cancel()
     # 已暂停的人工交互没有活跃 asyncio Task；/stop 仍需使其恢复令牌失效。
     _SESSION_CLARIFY.pop(session_id, None)
-    _SESSION_TOOL_APPROVAL.pop(session_id, None)
+    stopped_approval = _SESSION_TOOL_APPROVAL.pop(session_id, None)
+    if stopped_approval is None:
+        # api 重启后注册表丢失：从持久化事件找回仍在等待的确认卡一并失效。
+        stopped_approval = _recover_pending_tool_approval(db, session_id)
+    if stopped_approval is not None:
+        # 持久化 reject ack 让前端关卡；图线程保持暂停不 resume，由 TTL 清理回收。
+        await _emit_persistent(
+            db,
+            websocket,
+            state,
+            session_id,
+            "tool_approval_ack",
+            {"id": str(stopped_approval["id"]), "action": "reject", "ok": False},
+        )
     await _emit_persistent(
         db,
         websocket,
@@ -1169,6 +1182,8 @@ async def _handle_tool_approval_interrupt(
 
     命令本体仅随 ``tool_approval`` 事件保存在该会话历史中；进程内注册表只保存
     ``id/thread_id/user_id``，以便前端提交确认后准确恢复同一 LangGraph 检查点。
+    事件 payload 同时携带 ``thread_id``/``user_id`` 恢复定位字段：api 重启后
+    进程内注册表丢失，靠它从持久化事件重建（见 ``_recover_pending_tool_approval``）。
     """
     approval_id = str(payload.get("id") or "")
     call_id = str(payload.get("call_id") or "")
@@ -1194,8 +1209,43 @@ async def _handle_tool_approval_interrupt(
             "risk_level": str(payload.get("risk_level") or "high"),
             "sandbox_scope": str(payload.get("sandbox_scope") or ""),
             "allowed_decisions": ["approve", "reject"],
+            # 恢复定位字段（前端不消费）：api 重启后据此重建待确认状态
+            "thread_id": thread_id,
+            "user_id": str(user_id),
         },
     )
+
+
+def _recover_pending_tool_approval(db: Session, session_id: str) -> dict | None:
+    """从 ws_events 重建会话的待确认危险工具注册项（api 重启后兜底）。
+
+    按事件号倒序扫描：最近的卡片类事件若是 ``tool_approval_ack``（确认/拒绝/
+    stop 失效均会写入）则无待确认项；若是未消费的 ``tool_approval`` 则从其
+    payload 恢复定位字段重建注册项。旧格式事件缺 ``thread_id`` 时不可恢复。
+    """
+    rows = (
+        db.query(WsEvent.event, WsEvent.payload)
+        .filter(WsEvent.session_id == session_id)
+        .order_by(WsEvent.event_id.desc())
+        .limit(200)
+        .all()
+    )
+    for event, payload in rows:
+        if event == "tool_approval_ack":
+            return None
+        if event == "tool_approval":
+            data = payload if isinstance(payload, dict) else {}
+            approval_id = str(data.get("id") or "")
+            thread_id = str(data.get("thread_id") or "")
+            user_id = data.get("user_id")
+            if not approval_id or not thread_id:
+                return None
+            return {
+                "id": approval_id,
+                "thread_id": thread_id,
+                "user_id": user_id,
+            }
+    return None
 
 
 async def _handle_clarify_reply(
@@ -1252,18 +1302,28 @@ async def _handle_tool_approval_ack(
     if not isinstance(payload, dict):
         raise AppError(ErrorCode.VALIDATION, "tool_approval_ack payload 必须是对象")
     pending = _SESSION_TOOL_APPROVAL.get(session.id)
+    recovered = False
+    if pending is None:
+        # api 重启后进程内注册表丢失：从持久化事件重建（内存引擎的检查点已随
+        # 进程消失，下面的图中断护栏会把这种不可恢复的情况拦下）。
+        pending = _recover_pending_tool_approval(db, session.id)
+        recovered = pending is not None
     if pending is None:
         raise AppError(ErrorCode.VALIDATION, "无待确认的危险工具")
     approval_id = str(payload.get("id") or "")
     if approval_id != pending["id"]:
         raise AppError(ErrorCode.VALIDATION, "危险工具确认已失效，请刷新后重试")
-    if user.id != pending["user_id"]:
+    if str(user.id) != str(pending["user_id"]):
         raise AppError(ErrorCode.UNAUTHORIZED, "仅发起该命令的成员可以确认")
     action = payload.get("action")
     if action not in {"approve", "reject"}:
         raise AppError(ErrorCode.VALIDATION, "确认动作仅支持 approve 或 reject")
     if active_turn and not active_turn.done():
         raise AppError(ErrorCode.CONCURRENCY, "上一轮 Agent 仍在生成")
+    if recovered and not await _AGENT.ahas_pending_interrupt(str(pending["thread_id"])):
+        # 恢复路径的图线程可能已随重启丢失（memory 引擎）或被消费：fail-closed，
+        # 不对不存在/已完成的中断误发 resume。
+        raise AppError(ErrorCode.VALIDATION, "确认已失效（会话状态已过期），请重新发起命令")
     _SESSION_TOOL_APPROVAL.pop(session.id, None)
     await _emit_persistent(
         db,

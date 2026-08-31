@@ -149,3 +149,39 @@ def test_rejected_bash_never_executes_and_returns_rejected_result() -> None:
 def test_nested_hard_blacklist_command_cannot_downgrade_to_approval() -> None:
     """嵌套 shell 中的 sudo 仍硬拒绝，不能借确认卡绕过安全边界。"""
     assert bash_block_reason("bash -c 'sudo id'") == "bash 命令命中黑名单：sudo"
+
+
+def test_bash_never_shares_parallel_wave() -> None:
+    """并行不变量：bash 恒独占波次。
+
+    若 bash 与兄弟工具同波并行，TaskGroup 会把 interrupt() 包装进
+    ExceptionGroup（中断语义丢失），且兄弟工具会在恢复后重复执行。
+    该不变量由 PARALLEL_ELIGIBLE_NAMES 白名单 + exclusive 并发类共同保证。
+    """
+    from app.harness.execution.batch import is_parallel_eligible, select_execution_wave
+
+    assert is_parallel_eligible("bash", "exclusive") is False
+
+    class_of = {"bash": "exclusive", "read": "path_scoped"}
+    # bash 打头：波次到 bash 为止，绝不带入后续工具
+    wave = select_execution_wave(
+        [
+            {"name": "bash", "arguments": {"command": "rm x"}},
+            {"name": "read", "arguments": {"path": "a.txt"}},
+        ],
+        class_of=class_of,
+        enabled=True,
+        max_parallel=3,
+    )
+    assert [item["name"] for item in wave] == ["bash"]
+    # bash 在后：前面的可并行工具成波，bash 不加入
+    wave = select_execution_wave(
+        [
+            {"name": "read", "arguments": {"path": "a.txt"}},
+            {"name": "bash", "arguments": {"command": "rm x"}},
+        ],
+        class_of=class_of,
+        enabled=True,
+        max_parallel=3,
+    )
+    assert [item["name"] for item in wave] == ["read"]
