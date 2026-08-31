@@ -5,6 +5,8 @@ services:
     # 使用带 pgvector 扩展的官方镜像（同一 PG 16 大版本，pgdata 卷兼容）；
     # 与 postgres:16.x-alpine 一样锁定具体版本，避免浮动标签在重建时静默漂移。
     image: ${POSTGRES_IMAGE:-pgvector/pgvector:0.8.0-pg16}
+    # 1.6G 内存低配机护栏：防止单容器吃满内存拖垮整机（上限为天花板非预留）。
+    mem_limit: 640m
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-aieval}
@@ -23,6 +25,7 @@ services:
   redis:
     # Harness 记忆层短期回合状态 / 会话索引 / 幂等键；仅容器网络内访问，不暴露公网端口。
     image: ${REDIS_IMAGE:-redis:7.4-alpine}
+    mem_limit: 256m
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
@@ -35,6 +38,7 @@ services:
 
   api:
     image: ${API_IMAGE:-ai-eval-platform-api}
+    mem_limit: 512m
     # 上下文为 backend/，Dockerfile 内 COPY api/ 与 shared/（共享模型包）
     build:
       context: ./backend
@@ -110,6 +114,7 @@ services:
     # 独立沙箱 Runner（P4-2）：bash bwrap 内核执行体，唯一持有
     # privileged + seccomp:unconfined + SYS_ADMIN 的容器（api 已移除）。
     image: ${RUNNER_IMAGE:-ai-eval-platform-runner}
+    mem_limit: 512m
     build:
       context: ./backend
       dockerfile: runner/Dockerfile
@@ -139,6 +144,7 @@ services:
 
   worker:
     image: ${WORKER_IMAGE:-ai-eval-platform-worker}
+    mem_limit: 384m
     # 上下文为 backend/，Dockerfile 内 COPY worker/ 与 shared/（共享模型包）
     build:
       context: ./backend
@@ -172,6 +178,7 @@ services:
 
   web:
     image: ${WEB_IMAGE:-ai-eval-platform-web}
+    mem_limit: 64m
     build:
       context: ./frontend
       args:
@@ -187,6 +194,7 @@ services:
 
   lightrag:
     image: ${LIGHTRAG_IMAGE:-ai-eval-platform-lightrag}
+    mem_limit: 512m
     build: ./backend/lightrag
     restart: unless-stopped
     environment:
@@ -201,6 +209,7 @@ services:
 
   stress:
     image: ${STRESS_IMAGE:-ai-eval-platform-stress}
+    mem_limit: 128m
     build: ./backend/stress
     restart: unless-stopped
     ports:
