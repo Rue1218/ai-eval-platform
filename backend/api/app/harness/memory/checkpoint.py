@@ -276,23 +276,24 @@ class InMemoryCheckpointer(_AsyncBridgeMixin, BaseCheckpointSaver):
 
 _CHECKPOINT_UPSERT = """
 INSERT INTO harness_checkpoints (
-    thread_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata
-) VALUES (:thread_id, :checkpoint_ns, :checkpoint_id, :parent_checkpoint_id, :type, :checkpoint, :metadata)
+    thread_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata_type, metadata
+) VALUES (:thread_id, :checkpoint_ns, :checkpoint_id, :parent_checkpoint_id, :type, :checkpoint, :metadata_type, :metadata)
 ON CONFLICT (thread_id, checkpoint_ns, checkpoint_id) DO UPDATE SET
     parent_checkpoint_id = EXCLUDED.parent_checkpoint_id,
     checkpoint = EXCLUDED.checkpoint,
+    metadata_type = EXCLUDED.metadata_type,
     metadata = EXCLUDED.metadata
 """
 
 _CHECKPOINT_GET = """
-SELECT checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata
+SELECT checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata_type, metadata
 FROM harness_checkpoints
 WHERE thread_id = :thread_id AND checkpoint_ns = :checkpoint_ns
   AND checkpoint_id = :checkpoint_id
 """
 
 _CHECKPOINT_GET_LATEST = """
-SELECT checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata
+SELECT checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata_type, metadata
 FROM harness_checkpoints
 WHERE thread_id = :thread_id AND checkpoint_ns = :checkpoint_ns
 ORDER BY checkpoint_id DESC
@@ -343,6 +344,7 @@ class PgCheckpointer(_AsyncBridgeMixin, BaseCheckpointSaver):
                     "parent_checkpoint_id": parent_id,
                     "type": checkpoint_type,
                     "checkpoint": checkpoint_blob,
+                    "metadata_type": metadata_type,
                     "metadata": metadata_blob,
                 },
             )

@@ -231,3 +231,66 @@ def test_cleanup_session_blank_id_is_noop() -> None:
     assert cleanup_session_checkpoints(checkpointer, "") == 0
     assert cleanup_session_checkpoints(checkpointer, "   ") == 0
     assert checkpointer.get_tuple(config) is not None
+
+
+def test_pg_checkpointer_roundtrip_sqlite() -> None:
+    """PgCheckpointer SQL 全链路读写删（sqlite 内存库，方言无关语义）。
+
+    曾因 SELECT 缺 metadata_type 列导致 get_tuple/list 读已有检查点必炸
+    （a1f3c5e7b9d1 建表漏列；该类此前从未启用，零测试覆盖而漏网）。
+    """
+    import sqlalchemy as sa
+
+    from app.harness.memory.checkpoint import PgCheckpointer
+
+    engine = sa.create_engine("sqlite://")
+    with engine.begin() as conn:
+        conn.execute(sa.text("""
+            CREATE TABLE harness_checkpoints (
+                thread_id TEXT NOT NULL,
+                checkpoint_ns TEXT NOT NULL DEFAULT '',
+                checkpoint_id TEXT NOT NULL,
+                parent_checkpoint_id TEXT,
+                type TEXT,
+                checkpoint BLOB NOT NULL,
+                metadata_type TEXT NOT NULL DEFAULT 'msgpack',
+                metadata BLOB NOT NULL,
+                PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id)
+            )
+        """))
+        conn.execute(sa.text("""
+            CREATE TABLE harness_checkpoint_writes (
+                thread_id TEXT NOT NULL,
+                checkpoint_ns TEXT NOT NULL DEFAULT '',
+                checkpoint_id TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                idx INTEGER NOT NULL,
+                channel TEXT NOT NULL,
+                type TEXT NOT NULL,
+                blob BLOB NOT NULL,
+                PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id, task_id, idx)
+            )
+        """))
+
+    checkpointer = PgCheckpointer(engine)
+    config = {"configurable": {"thread_id": "pg-t1", "checkpoint_ns": ""}}
+    stored = checkpointer.put(config, _checkpoint("cp-1"), _metadata(1), {})
+
+    got = checkpointer.get_tuple(config)
+    assert got is not None, "get_tuple 未读回刚写入的检查点"
+    assert got.checkpoint["id"] == "cp-1"
+    assert got.metadata["step"] == 1
+
+    checkpointer.put_writes(stored, [("messages", "hello")], "task-1")
+    got = checkpointer.get_tuple(config)
+    assert got is not None and got.pending_writes
+    assert got.pending_writes[0][0] == "task-1"
+
+    items = list(checkpointer.list(config))
+    assert len(items) == 1
+    assert items[0].metadata["step"] == 1
+
+    assert checkpointer.iter_thread_ids() == ["pg-t1"]
+    checkpointer.delete_thread("pg-t1")
+    assert checkpointer.get_tuple(config) is None
+    assert list(checkpointer.list(config)) == []
