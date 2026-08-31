@@ -848,6 +848,9 @@ def _write_handler(
     """write 工具 handler：受控目录内写入相对路径（防目录穿越）。"""
     from .dispatch import write_file_safe
 
+    progress = getattr(context, "report_progress", None)
+    if callable(progress):
+        progress("writing", "正在以原子方式写入文件")
     result = write_file_safe(
         str(arguments.get("path", "")),
         str(arguments.get("content", "")),
@@ -883,11 +886,17 @@ def _web_search_handler(
     """web_search 原生 handler：服务端 Firecrawl REST 适配器。"""
     from .dispatch import web_search
 
-    return web_search(
+    progress = getattr(_context, "report_progress", None)
+    if callable(progress):
+        progress("searching", "正在请求受控网络检索服务")
+    result = web_search(
         str(arguments.get("query", "")),
         limit=arguments.get("limit"),
         timeout_s=20.0,
     )
+    if callable(progress):
+        progress("formatting", "正在整理安全检索结果")
+    return result
 
 
 def _web_fetch_handler(
@@ -902,6 +911,8 @@ def _web_fetch_handler(
         str(arguments.get("url", "")),
         format=str(arguments.get("format") or "markdown"),
         timeout_s=20.0,
+        on_output=getattr(_context, "report_output", None),
+        on_progress=getattr(_context, "report_progress", None),
     )
 
 

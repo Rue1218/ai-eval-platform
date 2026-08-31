@@ -1229,6 +1229,66 @@ def test_web_fetch_content_budget_and_card_preview(monkeypatch) -> None:
     assert len(str(web["preview"])) <= 100
 
 
+def test_web_fetch_streams_direct_plain_text_before_completion(monkeypatch) -> None:
+    """直接抓取纯文本时，已接收片段应在 HTTP 响应结束前通过安全回调发出。"""
+    from app.harness.execution import dispatch
+
+    class _FakeHeaders:
+        def get_content_type(self) -> str:
+            return "text/plain"
+
+        def get_content_charset(self) -> str:
+            return "utf-8"
+
+    class _FakeResponse:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+            self._offset = 0
+
+        def __enter__(self) -> "_FakeResponse":
+            return self
+
+        def __exit__(self, *_exc: object) -> bool:
+            return False
+
+        def read(self, size: int = -1) -> bytes:
+            if self._offset >= len(self._body):
+                return b""
+            stop = len(self._body) if size < 0 else min(len(self._body), self._offset + size)
+            chunk = self._body[self._offset:stop]
+            self._offset = stop
+            return chunk
+
+        @property
+        def headers(self) -> _FakeHeaders:
+            return _FakeHeaders()
+
+        def geturl(self) -> str:
+            return "http://93.184.216.34/stream.txt"
+
+    class _FakeOpener:
+        def open(self, _request: object, timeout: float) -> _FakeResponse:
+            assert timeout == 1.0
+            return _FakeResponse(("第一行\\n第二行\\n" * 1_000).encode("utf-8"))
+
+    monkeypatch.setattr(dispatch, "build_opener", lambda *_a, **_k: _FakeOpener())
+    chunks: list[tuple[str, str, int | None]] = []
+    stages: list[tuple[str, str]] = []
+    result = dispatch.web_fetch(
+        "http://93.184.216.34/stream.txt",
+        format="text",
+        timeout_s=1.0,
+        on_output=lambda channel, text, start_line: chunks.append((channel, text, start_line)),
+        on_progress=lambda stage, message: stages.append((stage, message)),
+    )
+
+    assert result.content.startswith("第一行")
+    assert len(chunks) >= 2
+    assert all(channel == "document" and start_line is None for channel, _text, start_line in chunks)
+    assert "".join(text for _channel, text, _start_line in chunks) == result.content
+    assert [stage for stage, _message in stages] == ["downloading", "extracting"]
+
+
 _ARTICLE_HTML = """<!DOCTYPE html>
 <html><head><title>Agent设计模式详解 - 技术专栏</title></head>
 <body>

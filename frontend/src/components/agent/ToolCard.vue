@@ -5,7 +5,7 @@
       open: isOpen,
       'no-anim': noAnim,
       'is-pending': status === 'pending' || status === 'awaiting_approval',
-      'is-streaming': isStreamingOutput || hasLiveOutput,
+      'is-streaming': isStreamingOutput || isReceivingLiveOutput,
     }"
     :data-tool="tool"
   >
@@ -98,13 +98,14 @@
         <div class="td-label-row">
           <div class="td-label">输出</div>
           <div v-if="isStreamingOutput || hasLiveOutput" class="td-stream-state">
-            <span class="td-stream-dot" aria-hidden="true"></span>
-            {{ hasLiveOutput ? '正在接收输出' : '正在流式呈现' }}
+            <span v-if="isStreamingOutput || isReceivingLiveOutput" class="td-stream-dot" aria-hidden="true"></span>
+            {{ isReceivingLiveOutput ? '正在接收安全输出' : isStreamingOutput ? '正在流式呈现' : '已接收安全输出' }}
           </div>
         </div>
         <div
           v-if="hasLiveOutput"
-          class="line-block is-streaming-output"
+          class="line-block"
+          :class="{ 'is-streaming-output': isReceivingLiveOutput }"
           role="region"
           aria-label="工具实时输出"
         >
@@ -112,7 +113,7 @@
             <span class="ln-no mono">{{ line.n }}</span>
             <span class="ln-text">{{ line.text }}</span>
           </div>
-          <div class="stream-tail mono"><span class="stream-cursor">▋</span></div>
+          <div v-if="isReceivingLiveOutput" class="stream-tail mono"><span class="stream-cursor">▋</span></div>
           <div v-if="status === 'fail'" class="tool-recovery" role="alert">
             <div class="tool-recovery-title">{{ resolvedOutputText }}</div>
             <p v-if="recoveryHint" class="tool-recovery-hint">{{ recoveryHint }}</p>
@@ -213,7 +214,7 @@ const props = withDefaults(
     source?: string
     redacted?: boolean
     progress?: { stage: string; message: string }
-    streamOutput?: { text: string; channel: string; startLine: number; seq: number }
+    streamOutput?: { text: string; channel: string; startLine: number; seq: number; completed?: boolean }
     recovery?: { retryable?: boolean; suggested_action?: string; repair_hint?: string; max_auto_repairs?: number }
     defaultOpen?: boolean
     noAnim?: boolean
@@ -315,6 +316,7 @@ const argsRecord = computed(() => asRecord(props.args) || {})
 const resultRecord = computed(() => asRecord(props.result))
 const liveOutputText = computed(() => props.streamOutput?.text || '')
 const hasLiveOutput = computed(() => !!liveOutputText.value)
+const isReceivingLiveOutput = computed(() => hasLiveOutput.value && props.streamOutput?.completed !== true)
 const liveOutputLines = computed(() => toLineItems(liveOutputText.value, props.streamOutput?.startLine || 1))
 const recoveryHint = computed(() => props.recovery?.repair_hint || '')
 const recoveryAction = computed(() => props.recovery?.suggested_action || '')
