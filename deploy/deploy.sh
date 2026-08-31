@@ -145,9 +145,22 @@ else
     # runner 是平台核心服务（P4-3：bash 沙箱执行体），必须始终纳入构建/拉取列表：
     # 否则目标机首次部署或镜像清理后缺 runner 镜像（且 Docker Hub 不可达）时，
     # compose up 会以 "No such image: ai-eval-platform-runner" 失败。
+    # 手动路径例外：runner 代码未变且本地已有容器/镜像时跳过构建——
+    # 层缓存命中虽快但毫无必要，且避免把运行中的 CI ghcr 镜像换成等价的本地镜像重滚容器。
     case " ${BUILD_SERVICES[*]} " in
         *' runner '*) ;;
-        *) BUILD_SERVICES+=(runner) ;;
+        *)
+            if [ -n "$IMAGE_PREFIX" ]; then
+                # CI 拉取路径：增量拉取便宜，始终包含以确保镜像存在。
+                BUILD_SERVICES+=(runner)
+            elif [ -z "$(docker compose ps -aq runner 2>/dev/null || true)" ] \
+                && ! docker image inspect ai-eval-platform-runner >/dev/null 2>&1; then
+                # 手动路径：本地既无 runner 容器也无镜像，必须构建，否则 up 会因缺镜像失败。
+                BUILD_SERVICES+=(runner)
+            else
+                echo "==> runner 代码无变化且本地镜像/容器已存在，跳过 runner 构建与滚动"
+            fi
+            ;;
     esac
 fi
 
@@ -186,6 +199,9 @@ elif [ "${#BUILD_SERVICES[@]}" -eq 0 ]; then
     echo "==> 仅部署脚本/工作流发生变化，无需构建业务镜像"
 else
     echo "==> 本次构建服务：${BUILD_SERVICES[*]}"
+    # 本地构建的 apt 层走 USTC Debian 镜像源（deb.debian.org 实测 17.6kB/s，
+    # runner 冷缓存安装 bubblewrap 耗时 9min+）；CI 在 GitHub runner 构建不受影响。
+    export APT_MIRROR=${APT_MIRROR:-mirrors.ustc.edu.cn}
     # 低配服务器顺序构建，避免并发争抢内存触发 swap；未变化服务直接复用现有镜像。
     for service in "${BUILD_SERVICES[@]}"; do
         if [ "$service" = "web" ]; then

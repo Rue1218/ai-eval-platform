@@ -113,6 +113,10 @@ services:
     build:
       context: ./backend
       dockerfile: runner/Dockerfile
+      # 服务器本地构建由 deploy.sh 注入 APT_MIRROR（USTC 镜像源）；
+      # CI 不传时为空，Dockerfile 内保持 Debian 官方源。
+      args:
+        APT_MIRROR: ${APT_MIRROR:-}
     restart: unless-stopped
     privileged: true
     security_opt:
