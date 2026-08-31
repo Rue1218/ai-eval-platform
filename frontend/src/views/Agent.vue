@@ -1130,8 +1130,8 @@ export interface AgentToolItem {
   redacted?: boolean
   /** 瞬态工具执行阶段；不进入历史回放。 */
   toolProgress?: { stage: string; message: string }
-  /** 已通过服务端受控窗口的实时输出；最终 tool_result 到达后清空。 */
-  streamOutput?: { text: string; channel: string; startLine: number; seq: number }
+  /** 已通过服务端受控窗口的实时输出；终态抵达后标记完成并保留在当前卡片。 */
+  streamOutput?: { text: string; channel: string; startLine: number; seq: number; completed?: boolean }
   /** 失败时的可操作恢复信息，不包含上游异常或堆栈。 */
   recovery?: { retryable?: boolean; suggested_action?: string; repair_hint?: string; max_auto_repairs?: number }
   open?: boolean
@@ -3848,7 +3848,7 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
         target.redacted = p.redacted === true
         target.recovery = p.recovery && typeof p.recovery === 'object' ? p.recovery : undefined
         target.toolProgress = undefined
-        if (p.ok) target.streamOutput = undefined
+        if (p.ok && target.streamOutput) target.streamOutput.completed = true
         if (p.ok && shouldKeepToolCardOpen(String(p.name || ''))) target.open = true
       }
       if (p.ok) {
@@ -4236,7 +4236,7 @@ function handleWsEvent(ev: WsServerEvent) {
         target.redacted = p.redacted === true
         target.recovery = p.recovery && typeof p.recovery === 'object' ? p.recovery : undefined
         target.toolProgress = undefined
-        if (p.ok) target.streamOutput = undefined
+        if (p.ok && target.streamOutput) target.streamOutput.completed = true
         target.open = p.ok && shouldKeepToolCardOpen(String(p.name || ''))
       }
       if (p.ok) {

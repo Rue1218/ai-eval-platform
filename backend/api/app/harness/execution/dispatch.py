@@ -12,6 +12,7 @@ bwrap 沙箱（无网络、工作区唯一可写、资源受限、超时整树�
 
 from __future__ import annotations
 
+import codecs
 import ipaddress
 import json
 import logging
@@ -67,6 +68,9 @@ WEB_MAX_SEARCH_RESULTS = 10
 # 直接抓取路径的 HTML 字节窗口：知乎等长文单页 HTML 常超 256KB，窗口过小会
 # 让正文提取器只见半页标记；放宽到 1MB 仍保持受控读取。
 WEB_RESPONSE_MAX_BYTES = 1024 * 1024
+# 直接抓取纯文本时的网络读取粒度。HTML 必须完成正文提取后才能安全展示，因此
+# 不在这里将原始标签流推给浏览器。
+WEB_RESPONSE_STREAM_CHUNK_BYTES = 8 * 1024
 
 
 def preview_char_limit() -> int:
@@ -80,6 +84,8 @@ def preview_char_limit() -> int:
 
 # handler 可在受控输出生成时调用回调；回调由 ToolNode 注入，未运行在图内时为 None。
 ToolOutputCallback = Callable[[str, str, int | None], None]
+# 网络工具的阶段回调只描述生命周期，不包含 URL、正文或密钥。
+ToolProgressCallback = Callable[[str, str], None]
 
 # bash 命令硬黑名单（纵深防御；bwrap 沙箱之外的第二道防线）。
 #
@@ -889,10 +895,33 @@ class _SafeRedirectHandler(HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-def _read_limited_response(response) -> tuple[bytes, bool]:
-    """读取上游响应的受控字节窗口，并保留是否截断标识。"""
-    body = response.read(WEB_RESPONSE_MAX_BYTES + 1)
-    return body[:WEB_RESPONSE_MAX_BYTES], len(body) > WEB_RESPONSE_MAX_BYTES
+def _read_limited_response(
+    response,
+    *,
+    on_chunk: Callable[[bytes], None] | None = None,
+) -> tuple[bytes, bool]:
+    """读取受控字节窗口，并可将已确认的文本字节分块交给调用方。
+
+    多读一个字节只用于判断截断，绝不通过 ``on_chunk`` 发给浏览器。未传回调时
+    保持一次性读取，避免改变 Firecrawl 等 JSON 响应的既有行为。
+    """
+    if on_chunk is None:
+        body = response.read(WEB_RESPONSE_MAX_BYTES + 1)
+        return body[:WEB_RESPONSE_MAX_BYTES], len(body) > WEB_RESPONSE_MAX_BYTES
+
+    buffered = bytearray()
+    limit_with_probe = WEB_RESPONSE_MAX_BYTES + 1
+    while len(buffered) < limit_with_probe:
+        size = min(WEB_RESPONSE_STREAM_CHUNK_BYTES, limit_with_probe - len(buffered))
+        chunk = response.read(size)
+        if not chunk:
+            break
+        allowed = max(0, WEB_RESPONSE_MAX_BYTES - len(buffered))
+        visible = chunk[:allowed]
+        if visible:
+            on_chunk(visible)
+        buffered.extend(chunk)
+    return bytes(buffered[:WEB_RESPONSE_MAX_BYTES]), len(buffered) > WEB_RESPONSE_MAX_BYTES
 
 
 def _request_firecrawl(path: str, payload: dict[str, object], *, timeout_s: float) -> object:
@@ -945,7 +974,12 @@ def _coerce_limit(value: object | None) -> int:
     return parsed
 
 
-def web_search(query: str, *, limit: object | None = None, timeout_s: float) -> WebSearchResult:
+def web_search(
+    query: str,
+    *,
+    limit: object | None = None,
+    timeout_s: float,
+) -> WebSearchResult:
     """通过服务端 Firecrawl REST 执行真实网络搜索（非 MCP transport）。"""
     normalized_query = query.strip()
     if not normalized_query:
@@ -977,13 +1011,23 @@ def web_search(query: str, *, limit: object | None = None, timeout_s: float) -> 
     return WebSearchResult(query=normalized_query, results=tuple(results))
 
 
-def _fetch_via_firecrawl(url: str, format: str, *, timeout_s: float) -> WebFetchResult:
+def _fetch_via_firecrawl(
+    url: str,
+    format: str,
+    *,
+    timeout_s: float,
+    on_progress: ToolProgressCallback | None = None,
+) -> WebFetchResult:
     """使用已配置的 Firecrawl 提取网页 Markdown，复用真实搜索服务配额。"""
+    if on_progress is not None:
+        on_progress("fetching", "正在请求受控网页抓取服务")
     response = _request_firecrawl(
         "scrape",
         {"url": url, "formats": ["markdown" if format == "markdown" else "html"]},
         timeout_s=timeout_s,
     )
+    if on_progress is not None:
+        on_progress("extracting", "正在整理网页正文")
     data = response.get("data", response) if isinstance(response, dict) else {}
     if not isinstance(data, dict):
         raise AppError(ErrorCode.UPSTREAM, "网页抓取服务返回格式无效")
@@ -1001,7 +1045,14 @@ def _fetch_via_firecrawl(url: str, format: str, *, timeout_s: float) -> WebFetch
     )
 
 
-def _fetch_direct(url: str, format: str, *, timeout_s: float) -> WebFetchResult:
+def _fetch_direct(
+    url: str,
+    format: str,
+    *,
+    timeout_s: float,
+    on_output: ToolOutputCallback | None = None,
+    on_progress: ToolProgressCallback | None = None,
+) -> WebFetchResult:
     """未配置 Firecrawl 时，以受控 HTTP 抓取 + trafilatura 正文提取提供降级。"""
     opener = build_opener(_SafeRedirectHandler(), ProxyHandler({}))
     request = Request(
@@ -1013,9 +1064,44 @@ def _fetch_direct(url: str, format: str, *, timeout_s: float) -> WebFetchResult:
     )
     try:
         with opener.open(request, timeout=timeout_s) as response:  # noqa: S310 - 已在入口/重定向校验
-            raw, truncated_by_bytes = _read_limited_response(response)
             content_type = response.headers.get_content_type()
             charset = response.headers.get_content_charset() or "utf-8"
+            if not (
+                content_type.startswith("text/")
+                or content_type in {"application/json", "application/xml"}
+            ):
+                raise AppError(ErrorCode.VALIDATION, "仅支持抓取文本或 HTML 页面")
+            if on_progress is not None:
+                on_progress("downloading", "正在流式接收网页响应")
+
+            text_decoder = None
+            streamed_chars = 0
+
+            def emit_text_chunk(chunk: bytes) -> None:
+                """仅为非 HTML 文本逐块解码并推送，不泄露未受控的二进制响应。"""
+                nonlocal streamed_chars
+                if text_decoder is None or on_output is None:
+                    return
+                text = text_decoder.decode(chunk)
+                remaining = WEB_FETCH_MAX_CHARS - streamed_chars
+                visible = text[:remaining]
+                if visible:
+                    on_output("document", visible, None)
+                    streamed_chars += len(visible)
+
+            # HTML 的可读正文依赖完整 DOM 与正文提取器，不能把原始标签流伪装成
+            # 正文；纯文本、JSON 和 XML 则可以安全地边下载边展示。
+            if on_output is not None and content_type != "text/html":
+                try:
+                    text_decoder = codecs.getincrementaldecoder(charset)(errors="replace")
+                except LookupError:
+                    text_decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+            raw, truncated_by_bytes = _read_limited_response(
+                response,
+                on_chunk=emit_text_chunk if text_decoder is not None else None,
+            )
+            if text_decoder is not None:
+                emit_text_chunk(b"")
             final_url = _validate_public_url(response.geturl())
     except HTTPError as exc:
         raise AppError(ErrorCode.UPSTREAM, f"抓取失败（HTTP {exc.code}）") from exc
@@ -1023,8 +1109,8 @@ def _fetch_direct(url: str, format: str, *, timeout_s: float) -> WebFetchResult:
         raise AppError(ErrorCode.UPSTREAM, "抓取失败（网络错误）") from exc
     except TimeoutError as exc:
         raise AppError(ErrorCode.TIMEOUT, "抓取超时") from exc
-    if not (content_type.startswith("text/") or content_type in {"application/json", "application/xml"}):
-        raise AppError(ErrorCode.VALIDATION, "仅支持抓取文本或 HTML 页面")
+    if on_progress is not None:
+        on_progress("extracting", "正在提取可读网页正文")
     decoded = raw.decode(charset, errors="replace")
     title = ""
     content = decoded
@@ -1055,14 +1141,32 @@ def _fetch_direct(url: str, format: str, *, timeout_s: float) -> WebFetchResult:
     )
 
 
-def web_fetch(url: str, *, format: str = "markdown", timeout_s: float) -> WebFetchResult:
+def web_fetch(
+    url: str,
+    *,
+    format: str = "markdown",
+    timeout_s: float,
+    on_output: ToolOutputCallback | None = None,
+    on_progress: ToolProgressCallback | None = None,
+) -> WebFetchResult:
     """抓取单页正文：优先 Firecrawl，未配置时走受控直接抓取，不走 MCP。"""
     if format not in {"markdown", "text"}:
         raise AppError(ErrorCode.VALIDATION, "抓取格式仅支持 markdown 或 text")
     normalized_url = _validate_public_url(url)
     if settings.firecrawl_api_key.strip():
-        return _fetch_via_firecrawl(normalized_url, format, timeout_s=timeout_s)
-    return _fetch_direct(normalized_url, format, timeout_s=timeout_s)
+        return _fetch_via_firecrawl(
+            normalized_url,
+            format,
+            timeout_s=timeout_s,
+            on_progress=on_progress,
+        )
+    return _fetch_direct(
+        normalized_url,
+        format,
+        timeout_s=timeout_s,
+        on_output=on_output,
+        on_progress=on_progress,
+    )
 
 
 def build_task_plan(arguments: Mapping[str, object]) -> TaskPlanResult:
