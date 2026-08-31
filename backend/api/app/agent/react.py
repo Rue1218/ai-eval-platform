@@ -123,11 +123,9 @@ FORCED_FINAL_ANSWER_INPUT = """\
 同一只读工具已使用相同参数重复执行，系统不会再执行该调用。请只根据已有工具结果
 完成回答；不得再次请求工具，也不得逐字粘贴工具原文。"""
 
-FINAL_ANSWER_EMPTY_TEXT = "工具已执行，但未生成可展示的最终回答。"
-
-# P1 阶段叙述字数上限（API.md V1.33）；超出截断，禁止写入 Observation 原文。
-NARRATION_MAX_CHARS = 200
-
+# 无论是否走过工具，缺少自然语言交付时都不能猜测执行结果；尤其 confirm 规划
+# 尚未入队时，不能写成“工具已执行”。
+FINAL_ANSWER_EMPTY_TEXT = "未生成可展示的最终回答。"
 
 @dataclass(frozen=True, slots=True)
 class _NativeRoundTrace:
@@ -154,16 +152,6 @@ def _record_native_round(
         upstream=upstream,
         incomplete=incomplete,
     )
-
-
-def _stage_narration(text: str) -> str:
-    """把模型旁白压成阶段叙述，不含工具原文。"""
-    cleaned = " ".join((text or "").split())
-    if not cleaned:
-        return ""
-    if len(cleaned) > NARRATION_MAX_CHARS:
-        return cleaned[:NARRATION_MAX_CHARS] + "…"
-    return cleaned
 
 
 def _tool_call_event(call: Mapping[str, object]) -> dict:
@@ -443,22 +431,6 @@ def _observation_inject_budget(tool: str) -> int:
     return MODEL_TOOL_RESULT_MAX_CHARS
 
 
-def _extract_thought(raw: str) -> str:
-    """从模型输出中提取 thought 回显（PR-3：只回显不触发动作）。
-
-    ``parse_react`` 的 fields 不含 thought（授权字段），done 收尾需要回显
-    给用户；此处容错提取，失败返回空串。
-    """
-    import json
-
-    try:
-        data = json.loads(raw.strip())
-        text = data.get("thought")
-        return str(text) if text else ""
-    except (json.JSONDecodeError, AttributeError):
-        return ""
-
-
 def _looks_like_legacy_react(raw: str) -> bool:
     """仅在模型明显输出旧 ReAct 控制 JSON 时进入兼容解析与纠正流程。"""
     text = raw.lstrip()
@@ -471,9 +443,7 @@ def _json_react_tool_payload(
     call_id: str,
     tool: str,
     arguments: dict,
-    thought_events: list[dict],
     budget: object,
-    thought_text: str = "",
 ) -> dict:
     """把 JSON ReAct 的 tool/arguments 排进 ToolNode。
 
@@ -490,22 +460,28 @@ def _json_react_tool_payload(
     payload: dict = {
         "pending_tool": pending_call,
         "pending_tools": [],
-        "pending_events": [*thought_events, _tool_call_event(pending_call)],
+        # ReAct 的 thought 是内部控制字段，不能变成浏览器过程卡；界面只展示
+        # 已验证的 ToolCard，避免同一回合随着循环不断堆叠“已思考”卡片。
+        "pending_events": [_tool_call_event(pending_call)],
         "repeat_retry": False,
         "budget": budget.to_dict() if hasattr(budget, "to_dict") else budget,
     }
     if native_tool_mode:
         native_call = NativeToolCall(call_id, tool, arguments)
         payload["pending_tool_batch"] = build_tool_batch([pending_call])
-        payload["native_messages"] = [_native_tool_message((native_call,), thought_text)]
+        payload["native_messages"] = [_native_tool_message((native_call,))]
     return payload
 
 
-def _native_tool_message(tool_calls: tuple[NativeToolCall, ...], text: str) -> dict[str, object]:
-    """构造协议无关 assistant ToolCall 消息，下一轮由适配器映射到上游格式。"""
+def _native_tool_message(tool_calls: tuple[NativeToolCall, ...]) -> dict[str, object]:
+    """构造协议无关 assistant ToolCall 消息，控制回合正文一律置空。
+
+    原生函数调用所需的是 ``tool_calls`` 与后续 ``tool_call_id`` 配对；调用前的
+    模型草稿既不是工具结果，也不是用户可见结论，不能带入下一轮模型上下文。
+    """
     return {
         "role": "assistant",
-        "content": text,
+        "content": "",
         "tool_calls": [
             {
                 "call_id": call.call_id,
@@ -999,7 +975,7 @@ def _stream_native_tool_round(
     *,
     emit_content: bool = True,
 ) -> tuple[ModelResponse, _NativeRoundTrace] | None:
-    """流式执行原生工具回合（含首轮），投影正文增量，响应结束后才交出 ToolCall。
+    """流式执行原生工具回合（含首轮），响应结束后才交出 ToolCall。
 
     工具参数碎片不投影到外层；完整 ``tool_call`` 事件只用于拼回收尾响应，
     由调用方在上游响应结束后再写入 ``pending_tool(s)`` 并落卡。
@@ -1016,7 +992,6 @@ def _stream_native_tool_round(
     started = time.perf_counter()
     first_delta_ms: int | None = None
     tool_call_parse_ms: int | None = None
-    hold_possible_json = False
     metrics = get_default_stream_metrics()
     try:
         for event in stream(request, config=run_config):
@@ -1040,13 +1015,10 @@ def _stream_native_tool_round(
                     first_delta_ms = round((time.perf_counter() - started) * 1000)
                 content.append(event.text)
                 preview = "".join(content).lstrip()
-                # ReAct 控制 JSON 不能当助手正文下发；先暂扣以 ``{`` 开头的增量，
-                # 收尾后若确认是 protocol=react 则丢弃投影，改由 thought/ToolCard 承接。
+                # ReAct 控制 JSON 不能当助手正文下发；即使本轮最终没有 ToolCall，
+                # 也会在收尾处由 ``_looks_like_legacy_react`` 决定是否投影。
                 if preview.startswith("{") and not collected_calls:
-                    hold_possible_json = True
                     continue
-                if emit_content and not hold_possible_json:
-                    writer({"kind": "content", "text": event.text})
     except StreamAborted:
         metrics.record_stream(
             first_delta_ms=first_delta_ms,
@@ -1082,32 +1054,37 @@ def _stream_native_tool_round(
 
     merged_text = "".join(content)
     merged_calls = tuple(collected_calls)
-    if emit_content and hold_possible_json and merged_text and not _looks_like_legacy_react(merged_text):
-        writer({"kind": "content", "text": merged_text})
     if final_response is None:
-        return (
-            ModelResponse(
-                text=merged_text,
-                usage={},
-                latency_ms=round((time.perf_counter() - started) * 1000),
-                tool_calls=merged_calls,
-            ),
-            trace,
+        response = ModelResponse(
+            text=merged_text,
+            usage={},
+            latency_ms=round((time.perf_counter() - started) * 1000),
+            tool_calls=merged_calls,
         )
-    text = final_response.text or merged_text
-    tool_calls = final_response.tool_calls or merged_calls
-    if text == final_response.text and tool_calls == final_response.tool_calls:
-        return final_response, trace
-    return (
-        ModelResponse(
-            text=text,
-            usage=final_response.usage,
-            raw=final_response.raw,
-            latency_ms=final_response.latency_ms,
-            tool_calls=tool_calls,
-        ),
-        trace,
-    )
+    else:
+        text = final_response.text or merged_text
+        tool_calls = final_response.tool_calls or merged_calls
+        if text == final_response.text and tool_calls == final_response.tool_calls:
+            response = final_response
+        else:
+            response = ModelResponse(
+                text=text,
+                usage=final_response.usage,
+                raw=final_response.raw,
+                latency_ms=final_response.latency_ms,
+                tool_calls=tool_calls,
+            )
+    # 原生流的首段正文可能是模型在真正调用工具前的草稿。必须等到响应结束确认
+    # 本轮没有 ToolCall 后才下发；否则「已完成/已删除」会先于真实工具结果出现。
+    if emit_content and not response.tool_calls and response.text and not _looks_like_legacy_react(response.text):
+        # 确认无工具后重放原始分块，保留最终回答的流式阅读体验；上游收尾正文
+        # 与已累计分块不一致时以收尾正文为准，避免投影失真的旧分块。
+        if content and merged_text == response.text:
+            for chunk in content:
+                writer({"kind": "content", "text": chunk})
+        else:
+            writer({"kind": "content", "text": response.text})
+    return response, trace
 
 
 def _generate_final_answer(
@@ -1336,22 +1313,6 @@ def build_react_nodes(
                     state, native_calls
                 )
                 if not native_calls and skipped_repeat is not None:
-                    narration = _stage_narration(response.text)
-                    thought_events = (
-                        [
-                            make_event(
-                                "assistant_message",
-                                {
-                                    "text": narration,
-                                    "role": "assistant",
-                                    "interim": True,
-                                    "latency_ms": latency_ms,
-                                },
-                            )
-                        ]
-                        if narration
-                        else []
-                    )
                     if state.get("repeat_retry"):
                         return _forced_repeat_completion(
                             state=state,
@@ -1361,7 +1322,7 @@ def build_react_nodes(
                             system=system,
                             budget=budget,
                             started=started,
-                            pending_events=thought_events,
+                            pending_events=[],
                             close_turn=close_turn,
                             response=response,
                         )
@@ -1384,7 +1345,7 @@ def build_react_nodes(
                             "pending_tool_batch": None,
                             "repeat_retry": True,
                             "native_messages": [
-                                _native_tool_message((skipped_repeat,), response.text),
+                                _native_tool_message((skipped_repeat,)),
                                 {
                                     "role": "tool",
                                     "tool_call_id": skipped_repeat.call_id,
@@ -1392,7 +1353,7 @@ def build_react_nodes(
                                     "content": "",
                                 },
                             ],
-                            "pending_events": thought_events,
+                            "pending_events": [],
                             # 观察只留摘要（完整正文仅进单回合 store，不入检查点）
                             "observations": [
                                 Observation(
@@ -1412,7 +1373,7 @@ def build_react_nodes(
                         "pending_tools": [],
                         "pending_tool_batch": None,
                         "repeat_retry": True,
-                        "pending_events": thought_events,
+                        "pending_events": [],
                         "observations": [
                             _repeat_correction_observation(
                                 skipped_repeat.name,
@@ -1433,30 +1394,14 @@ def build_react_nodes(
                     }
                     for call in native_calls
                 ]
-                narration = _stage_narration(response.text)
-                pending_events = (
-                    [
-                        make_event(
-                            "assistant_message",
-                            {
-                                "text": narration,
-                                "role": "assistant",
-                                "interim": True,
-                                "latency_ms": latency_ms,
-                            },
-                        )
-                    ]
-                    if narration
-                    else []
-                )
                 # ToolCall 必须早于 ToolNode 的瞬态进度/输出帧落库并广播；前端
                 # 因而可以始终按 call_id 原地更新同一张卡，而非等待工具结束才建卡。
-                pending_events.extend(_tool_call_event(call) for call in pending_calls)
+                pending_events = [_tool_call_event(call) for call in pending_calls]
                 result_payload = {
                     "pending_tool": pending_calls[0],
                     "pending_tools": pending_calls[1:],
                     "pending_tool_batch": build_tool_batch(pending_calls),
-                    "native_messages": [_native_tool_message(native_calls, response.text)],
+                    "native_messages": [_native_tool_message(native_calls)],
                     "pending_events": pending_events,
                     "repeat_retry": False,
                     "budget": budget.to_dict(),
@@ -1536,17 +1481,9 @@ def build_react_nodes(
                     "observations": [correction],
                     "budget": budget.to_dict(),
                 }
-            thought = _extract_thought(response.text)
-            thought_events = (
-                [
-                    make_event(
-                        "thought",
-                        {"text": thought, "stream": "think", "stage": "react"},
-                    )
-                ]
-                if thought
-                else []
-            )
+            # 兼容 JSON-ReAct 的 thought 只是模型内部控制字段：既不作为最终回答，
+            # 也不持久化为阶段卡。用户只应看到计划、工具的真实终态和最终回答。
+            thought_events: list[dict] = []
             if fields["done"]:
                 # 工具指令守卫：用户明确要求调用工具但模型未调用任何工具就声称
                 # 完成（反幻觉，生产实测 qwen 把"已成功更新"写进 thought 并
@@ -1562,11 +1499,13 @@ def build_react_nodes(
                         "observations": [guard],
                         "budget": budget.to_dict(),
                     }
-                # 工具已经执行过时，控制模型只负责判定收敛；再走一次无工具
-                # 自然语言流式调用，正文通过 get_stream_writer 投影为 assistant_delta。
-                final_response = None
+                # ReAct 的 done JSON 没有用户可展示的正文；除 confirm 规划外必须
+                # 再走一次无工具自然语言调用，绝不能把协议中的 thought 当作答案。
                 has_tool_observation = _has_tool_observation(state)
-                if has_tool_observation:
+                # confirm 规划只需展示经 Reflect 审核的确认卡，不能为了生成一句
+                # 草稿额外调用模型；普通 ReAct 与 chat 规划仍须生成自然语言最终回答。
+                final_response = None
+                if has_tool_observation or not _has_active_plan(state) or _is_chat_plan(state):
                     budget = consume_model_call(budget)
                     final_response = _generate_final_answer(
                         gateway,
@@ -1576,14 +1515,19 @@ def build_react_nodes(
                         emit_content=not _is_chat_plan(state),
                     )
                     latency_ms = round((time.perf_counter() - started) * 1000)
-                # 工具链不再以 ReAct thought 作为最终交付句。最终模型回合为空时仅
-                # 返回中性提示，避免控制协议或 Observation 原文泄露给用户。
+                # 规划交付为 confirm 且尚无真实工具观察时，Reflect 只需展示确认卡；
+                # 不要把中性占位语句伪装成助手交付，避免确认卡前出现多余气泡。
+                defer_final_delivery = _is_chat_plan(state) or (
+                    _has_active_plan(state) and not has_tool_observation
+                )
+                # 最终模型回合为空或仍返回控制 JSON 时只给中性提示，避免控制协议
+                # 或 Observation 原文泄露给用户，更不能复用 ReAct thought。
                 text = (
                     final_response.text
-                    if final_response is not None and final_response.text.strip()
+                    if final_response is not None
+                    and final_response.text.strip()
+                    and not _looks_like_legacy_react(final_response.text)
                     else FINAL_ANSWER_EMPTY_TEXT
-                    if has_tool_observation
-                    else _extract_thought(response.text) or "任务完成"
                 )
                 final_usage = (
                     dict(final_response.usage)
@@ -1595,7 +1539,7 @@ def build_react_nodes(
                     usage=final_usage,
                     latency_ms=latency_ms,
                     close_turn=close_turn,
-                    defer_delivery=_is_chat_plan(state),
+                    defer_delivery=defer_final_delivery,
                     turn_stats=_turn_stats(state, budget, final_usage),
                 )
                 finished["budget"] = budget.to_dict()
@@ -1699,9 +1643,7 @@ def build_react_nodes(
                     call_id=legacy_call_id,
                     tool=tool,
                     arguments=arguments,
-                    thought_events=list(thought_events),
                     budget=budget,
-                    thought_text=thought,
                 )
                 if current_task_state is not None:
                     pending["task_state"] = current_task_state.to_dict()
@@ -1720,9 +1662,7 @@ def build_react_nodes(
             call_id=legacy_call_id,
             tool=tool,
             arguments=arguments,
-            thought_events=thought_events,
             budget=budget,
-            thought_text=thought,
         )
         if current_task_state is not None:
             pending["task_state"] = current_task_state.to_dict()

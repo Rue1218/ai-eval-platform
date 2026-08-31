@@ -48,16 +48,6 @@ PLAN_STAGE_INPUT = """\
 - 对话路径不得直接发起压测确认卡（先评后压）。"""
 
 
-def _plan_summary(plan: PlanArtifact) -> str:
-    """生成阶段思考摘要（不是 Observation 原文，也不是最终助手正文）。"""
-    steps = plan.slots.get("steps") if isinstance(plan.slots, dict) else None
-    if isinstance(steps, list) and steps:
-        preview = " → ".join(str(item) for item in steps[:3])
-        return f"已规划：{plan.intent}（{len(steps)} 步）。{preview}"
-    tools = "、".join(plan.tools_needed) if plan.tools_needed else "待确认槽位"
-    return f"已规划：{plan.intent}。交付={plan.delivery}，涉及工具：{tools}。"
-
-
 def _failed(code: str, message: str) -> dict:
     """规划失败：清空 plan，带 completed，条件边走向 END。"""
     return {
@@ -188,10 +178,9 @@ def build_plan_solve_subgraph(gateway: object | None = None) -> dict:
             "budget": budget.to_dict(),
             "force_replan": False,
             "replan_reason": None,
-            "pending_events": [
-                make_event("thought", {"stage": "plan", "text": _plan_summary(plan)}),
-                make_event("plan", payload),
-            ],
+            # PlanArtifact 已有专用 Plan 卡；不再额外发 thought，避免与 ReAct /
+            # Reflect 的内部阶段叠加成一串“已思考”过程卡。
+            "pending_events": [make_event("plan", payload)],
         }
 
     return {"plan_solve": plan_solve_node}

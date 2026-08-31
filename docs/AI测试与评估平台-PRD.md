@@ -2,10 +2,11 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.16 |
-| 文档状态 | 已冻结基线（V1.16 增加受控 Agent 技能文件与补充提示词管理） |
+| 文档版本 | V1.18 |
+| 文档状态 | 已冻结基线（V1.18 收敛 Agent 内部过程卡与最终交付边界） |
 | 撰写日期 | 2026-08-17 |
-| 最近修订 | 2026-08-30：V1.16 增加受控 Agent 技能文件与协议档专属补充提示词管理；技能正文遵循渐进式披露，核心安全提示词不可覆盖。2026-08-28：V1.15 统一基准目录治理、独立导入队列、staging 并发发布、成员同权双人复核与 M3 里程碑；冻结任务必须锁定数据集/黄金集版本。2026-08-28：V1.14 新增基准数据集目录、异步导入、staging 表格和发布门禁；下载/解析仅由 Worker 执行，未审核行不得评测。2026-08-24：补充 Agent 多附件交互：支持图片（PNG/JPG/JPEG/WEBP/GIF）、Markdown/TXT/HTML/JSON/YAML、PDF、Word（DOC/DOCX）、Excel（XLS/XLSX）、CSV/JSONL 与音频；输入区支持文件选择和拖拽上传，图片显示缩略图，PDF/文本支持预览，Office 文件显示类型卡片并可打开/下载。2026-08-23：补齐 Gemini OpenAI 兼容端点的思考摘要请求与增量归一化；增加 Agent 思考摘要开关与思考强度设置；将用户回显固定为 `user_message`，将完成信号固定为 `response.completed`，明确 `thought` 不承载助手正文；协议档增加可选 Embedding / Reranker 独立端点配置，三类 Key 均按 profile 写入受控环境文件 |
+| 本轮修订 | 2026-08-31：V1.18 收敛 Agent 对话投影：Plan 只用 PlanCard，工具只用 ToolCard，危险 bash 只用确认卡；ReAct `thought`、Plan/Reflect 阶段、工具调用前草稿均属于内部控制，禁止出现在对话或历史重放。最终回答只能在真实工具终态之后展示。 |
+| 最近修订 | 2026-08-31：V1.17 增加危险 bash 的 LangGraph 人在回路：风险命令必须弹出确认卡，原发起成员确认后才进入 bwrap 沙箱；拒绝不执行。思考卡只呈现过程摘要，禁止显示会与工具真实结果冲突的原始推理。2026-08-30：V1.16 增加受控 Agent 技能文件与协议档专属补充提示词管理；技能正文遵循渐进式披露，核心安全提示词不可覆盖。2026-08-28：V1.15 统一基准目录治理、独立导入队列、staging 并发发布、成员同权双人复核与 M3 里程碑；冻结任务必须锁定数据集/黄金集版本。2026-08-28：V1.14 新增基准数据集目录、异步导入、staging 表格和发布门禁；下载/解析仅由 Worker 执行，未审核行不得评测。2026-08-24：补充 Agent 多附件交互：支持图片（PNG/JPG/JPEG/WEBP/GIF）、Markdown/TXT/HTML/JSON/YAML、PDF、Word（DOC/DOCX）、Excel（XLS/XLSX）、CSV/JSONL 与音频；输入区支持文件选择和拖拽上传，图片显示缩略图，PDF/文本支持预览，Office 文件显示类型卡片并可打开/下载。2026-08-23：补齐 Gemini OpenAI 兼容端点的思考摘要请求与增量归一化；增加 Agent 思考摘要开关与思考强度设置；将用户回显固定为 `user_message`，将完成信号固定为 `response.completed`，明确 `thought` 不承载助手正文；协议档增加可选 Embedding / Reranker 独立端点配置，三类 Key 均按 profile 写入受控环境文件 |
 | 适用版本 | 平台 V1.0 |
 | 技术栈 | Vue3 + Naive UI、Python FastAPI、PostgreSQL、WebSocket、Docker Compose、go-stress-testing |
 
@@ -30,6 +31,8 @@
 | V1.14 | 2026-08-28 | 基准数据集页新增受控目录筛选、异步制品导入、staging 表格预览和审核发布门禁；不做社交媒体抓取 |
 | V1.15 | 2026-08-28 | 补齐目录/release 双人复核、导入队列租约与重试、staging 版本号发布和版本锁定；将该能力与 RAG 黄金集统一收敛至 M3，代码题继续不做 |
 | V1.16 | 2026-08-30 | Agent 技能文件统一规格、渐进式加载、管理端预览/编辑及协议档专属补充提示词；核心安全提示词继续固定 |
+| V1.17 | 2026-08-31 | 危险 bash 先弹人工确认卡再执行；推理仅呈现过程摘要，工具结果是唯一执行事实 |
+| V1.18 | 2026-08-31 | ReAct / Plan-and-Solve / reflect 的内部过程不再生成对话卡；只显示 Plan、工具、确认与真实最终结果 |
 
 ---
 
@@ -275,27 +278,35 @@ queued → running → succeeded
 
 `prod` + 压测：确认卡展示会签人，未完成会签不得把压测设为 running。
 
+#### 5.1.2.1 危险工具确认卡（P0）
+
+`bash` 不是任务确认卡：它只处理会话工作区内的短命令。删除、覆盖、移动、权限变更，或无法静态证明只读的命令，必须在任何副作用前暂停并展示 `ToolApprovalCard`。卡片必须显示待执行命令、风险原因与沙箱边界；仅命令原发起成员可选择“确认执行”或“拒绝”。确认后才允许 Runner 在 bwrap 中执行；拒绝后命令不得执行，并把 ToolCard 标为“已拒绝”。`sudo`、网络和远程连接命令不属于可确认范围，必须保持硬拒绝。
+
+思考卡每回合至多一张，只描述“正在分析/校验”这类固定过程状态，不得展示模型原始推理、未执行动作或任何“已成功”结论。ReAct JSON 的 `thought`、Plan-and-Solve / reflect 阶段状态以及带 ToolCall 响应中的正文草稿均为内部控制信息，禁止生成卡片或回放。工具的 `tool_result.ok=true` 才是可向用户陈述已执行成功的唯一事实来源。
+
 #### 5.1.3 WS 事件
 
 公共头：`event`, `session_id`, `task_id?`, `event_id`（单调）, `ts`。
 
 | event | payload 要点 |
 | --- | --- |
-| `thought` | 短文本，给人看 |
+| `thought` | 当前回合最多一条固定过程摘要；不得含阶段、推理原文或业务结论，历史 UI 不重放 |
 | `user_message` | 已持久化用户消息、作者与浏览器幂等键；协作者即时补气泡 |
 | `tool_call` | `name`, `arguments` |
-| `tool_result` | `name`, `ok`, `data` 或 `error` |
+| `tool_result` | `name`, `ok`, `data` 或 `error`；用户拒绝危险工具时 `status=rejected` |
+| `tool_approval` | 危险 bash 的命令、风险、沙箱边界与可选决定；命令尚未执行 |
+| `tool_approval_ack` | 原发起成员的 `approve` / `reject` 回执；确认才恢复原 ToolNode |
 | `confirm` | 确认卡 JSON，等前端 `confirm_ack` |
 | `progress` | `percent?`, `done`, `total`, `message` |
 | `report` | `report_id` |
 | `error` | `code`, `message`（可给用户看） |
 | `pong` | 心跳 |
 
-前端 → 服务：`user_message` `{text, attachments[]?, client_message_id?}`，`confirm_ack` `{ok, patch?}`，`cancel_task` `{task_id}`。
+前端 → 服务：`user_message` `{text, attachments[]?, client_message_id?}`，`confirm_ack` `{ok, patch?}`，`cancel_task` `{task_id}`，`clarify_reply` `{id, answer}`，`tool_approval_ack` `{id, action:"approve"|"reject"}`。
 
-`assistant_delta` 只在在线时即时广播，断线不回放；`thought.stream=think` 仅发给本轮发起连接，不向团队协作者泄露；本轮成功结束时以 `thought.stream=think_final` 保存完整思考摘要，`assistant_message` 保存完整助手交付句，`response.completed` 标记本轮结束，三者均可供历史回放恢复状态。
+`assistant_delta` 只在在线时即时广播，断线不回放；含 ToolCall 的上游响应不得下发正文草稿。`thought.stream=think` 仅发给本轮发起连接，不向团队协作者泄露；`think_final` 只保留固定摘要且历史 UI 不重放。`assistant_message` 只保存已验证的最终交付句，`response.completed` 标记本轮结束。
 
-首期已实现事件为 `user_message`、`thought`、`assistant_delta`、`assistant_message`、`response.completed`、`error`、`pong`；`tool_call`、`tool_result`、`confirm`、`confirm_ack`、`progress`、`report` 保留为后续 Harness/Worker 阶段事件。首期收到 `confirm_ack` 或 `cancel_task` 时返回 `VALIDATION` 能力未启用错误，不得伪造任务成功。
+当前已实现事件以 API 契约为准：`tool_call`、`tool_result`、`tool_approval`、`tool_approval_ack`、`plan`、`confirm`、`confirm_ack`、`progress` 与 `report` 均按各自状态机处理。任何未启用能力必须返回 `VALIDATION`，不得伪造任务或工具成功。
 
 附件：先 `POST /api/files` 得 `file_id`，再在消息里引用。单文件 ≤20MB；支持图片（PNG/JPG/JPEG/WEBP/GIF）、PRD/OpenAPI/Markdown/TXT/HTML/JSON/YAML、PDF、Word（DOC/DOCX）、Excel（XLS/XLSX）、JSONL/CSV 与 wav/mp3。Agent 输入区支持多选和拖拽上传；本地暂存阶段图片显示缩略图，PDF/文本支持预览，Office 文件显示文件类型卡片并可打开/下载。
 
@@ -466,7 +477,7 @@ V1 压测内核：**go-stress-testing**（Apache-2.0）扩展，独立 `stress` 
 | 路由 | 页 | 功能说明 | 角色 |
 | --- | --- | --- | --- |
 | `/login` | 登录 | 居中登录卡、统一错误提示（不区分用户或密码）、首登强制改密 | 成员（全员） |
-| `/agent` | 智能体 | 会话列表、对话流式交互、思考卡、工具卡、TaskSpec 确认卡、底部吸附进度坞、内嵌迷你调度视图 | 成员 |
+| `/agent` | 智能体 | 会话列表、对话流式交互、过程摘要卡、工具卡、危险 bash 确认卡、TaskSpec 确认卡、底部吸附进度坞、内嵌迷你调度视图 | 成员 |
 | `/dispatch` | 调度中心 | 调度内核雷达、分发策略切换、并发容量滑块、Task 队列 → Worker 节点平滑三次贝塞尔连线拓扑、调度日志流 | 成员 |
 | `/tasks` | 任务中心 | 六态徽章、24h 吞吐面积图与状态分布分段条、多维筛选、AI 智能编排、任务详情抽屉与事件时间线 | 成员 |
 | `/reports` `/reports/:id` | 评测报告中心 | 独立一级导航；支持 Benchmark 多协议横向对比/基线Δ/Judge裁判分、RAG LightRAG 4模式召回对比、压测多轴曲线与 SLA 拐点、先评后压双向穿透横幅 | 成员 |
@@ -728,3 +739,26 @@ testcase-tools：只对齐，不进镜像。LightRAG：MIT，锁 tag。go-stress
 | `backend/api/app/routers/admin.py` / `agent_prompt_settings.py` | 受审计的 Skill 预览/编辑和协议档补充提示词管理接口 |
 | `backend/api/app/harness/prompts/system.py` / `routers/ws.py` | 固定核心系统策略与协议档补充提示词装配，禁止设置项替换核心规则 |
 | `frontend/src/views/AdminProfiles.vue` / `frontend/src/components/modals/*` | Agent 技能文件预览/编辑与当前 Agent 提示词管理入口 |
+
+### V1.17 修改代码文件与作用清单
+
+| 实际修改文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/harness/execution/dispatch.py` / `feedback/rules.py` | 识别危险 bash、保留提权/网络硬拒绝，定义确认后才可执行的工作区修改范围 |
+| `backend/api/app/harness/execution/toolnode.py` / `routers/ws.py` | 在 Runner 前执行 LangGraph 中断、持久化确认卡/回执并恢复同一图线程 |
+| `backend/api/app/agent/react.py` / `agent/think_stream.py` | 收紧原始 reasoning 和工具前草稿正文，防止假性成功与过程卡堆积 |
+| `frontend/src/components/agent/ToolApprovalCard.vue` / `ToolCard.vue` / `views/Agent.vue` | 提供确认/拒绝交互和 ToolCard 等待确认、已拒绝状态 |
+| `frontend/src/api/ws.ts` / `api/types.ts` | 增加危险工具确认的 WS 上行/下行事件类型 |
+| `backend/api/tests/test_bash_hitl.py` / `test_agent_react.py` / `test_stream_p3_integration.py` | 覆盖确认前不执行、拒绝不执行、ToolCall 草稿延迟投影和 bash 串行边界 |
+| `docs/AI测试与评估平台-API.md` / `docs/AI测试与评估平台-Agent开发文档.md` | 固定 HITL 卡片、恢复、事件与过程输出契约 |
+
+### V1.18 修改代码文件与作用清单
+
+| 实际修改文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/agent/react.py` | 将 JSON ReAct `thought` 完全限制为内部控制字段；删除 ToolCall 前正文草稿投影，并在最终回合重新请求自然语言交付，防止把未执行动作说成结果 |
+| `backend/api/app/harness/execution/dispatch.py` | 硬拒绝检测覆盖多段、嵌套 shell 与包装命令，确保 `bash -c "sudo …"` 等不会降级为可确认操作 |
+| `backend/api/app/agent/plan_solve.py` / `reflect.py` | PlanCard 与确认卡保留为唯一可见规划产物；删除 Plan/reflect 的阶段 thought，避免每个图节点增加过程卡 |
+| `frontend/src/views/Agent.vue` | 一个回合最多显示一张固定过程摘要卡；历史事件跳过 `thought`，阶段事件只更新生成状态，不创建对话卡 |
+| `backend/api/tests/test_agent_react.py` / `test_agent_routing.py` / `test_agent_multiturn.py` | 覆盖 JSON ReAct thought 不出站、ToolCall 草稿不出站、Plan/Reflect 无阶段卡与最终回答重新生成 |
+| `docs/AI测试与评估平台-PRD.md` / `AI测试与评估平台-API.md` / `AI测试与评估平台-Agent开发文档.md` | 统一过程卡、最终交付和历史重放边界 |

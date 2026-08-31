@@ -68,6 +68,9 @@ _TICKET_LOCK = threading.Lock()
 _SESSION_ABORTS: dict[str, asyncio.Event] = {}
 # 会话级待回复澄清卡注册表（interrupt() 暂停后保存，clarify_reply 恢复图用）
 _SESSION_CLARIFY: dict[str, dict] = {}
+# 会话级危险工具确认注册表。与澄清卡同样复用 LangGraph 检查点；只保存恢复定位和
+# 发起人，不保存命令正文或密钥，确认卡本体由持久化 WS 事件负责重放。
+_SESSION_TOOL_APPROVAL: dict[str, dict] = {}
 # 标题生成中去重：同一会话一次只跑一个 AI 标题任务，避免并发消息重复调模型
 _TITLE_GENERATING: set[str] = set()
 
@@ -718,8 +721,8 @@ async def _run_turn(
     消费 ``astream`` 输出后统一 emit（§2.5 事件桥接）。``should_abort`` 与
     api_key 经 ``RunnableConfig.configurable`` 注入（O-12 迁移），不入 State。
 
-    ``resume`` 非 None 时为澄清卡恢复模式：以 ``Command(resume=answer)``
-    恢复同一 thread_id 的图（M9 §3.5.1），不再构造新请求。
+    ``resume`` 非 None 时为人工中断恢复模式：以 ``Command(resume=...)`` 恢复
+    同一 thread_id 的图；澄清回复与危险工具确认共用这条无副作用恢复路径。
     """
     db = SessionLocal()
     try:
@@ -739,13 +742,13 @@ async def _run_turn(
             # 恢复模式：复用中断时的 thread_id，不构造新请求
             serializable = None
             thread_id = str(resume["thread_id"])
-            resume_answer = resume.get("answer")
+            resume_value = resume.get("value")
         else:
             serializable = to_serializable_request(
                 ModelRequest.from_messages(config, history, system=system_prompt)
             )
             thread_id = f"{session_id}:{uuid4().hex}"
-            resume_answer = None
+            resume_value = None
         # 会话工作区：每个会话一个独立文件夹（read/write/edit 与 bash 的
         # 沙箱根，经 configurable 注入，toolnode 优先读取此值）
         sandbox_dir = ensure_session_workspace(session_id)
@@ -818,7 +821,7 @@ async def _run_turn(
                 await _emit_think_delta(chunk)
 
         async for mode, chunk in _AGENT.astream(
-            serializable, config=graph_config, resume=resume_answer
+            serializable, config=graph_config, resume=resume_value
         ):
             if mode == "custom":
                 kind = str(chunk.get("kind") or "")
@@ -874,12 +877,22 @@ async def _run_turn(
                             ),
                         )
                 continue
-            # 澄清卡 interrupt() 中断帧：翻译为 clarify 事件并保存待恢复状态
+            # LangGraph interrupt() 中断帧：按类型翻译为持久化交互卡并保存恢复定位。
             if isinstance(chunk, dict) and "__interrupt__" in chunk:
                 payload = chunk["__interrupt__"][0].value
                 if isinstance(payload, dict) and payload.get("type") == "clarify":
                     await _handle_clarify_interrupt(
                         db, websocket, state, session_id, thread_id, payload
+                    )
+                elif isinstance(payload, dict) and payload.get("type") == "tool_approval":
+                    await _handle_tool_approval_interrupt(
+                        db,
+                        websocket,
+                        state,
+                        session_id,
+                        thread_id,
+                        user_id,
+                        payload,
                     )
                 continue
             # updates 模式：按节点边界消费 pending_events，统一 emit
@@ -981,6 +994,9 @@ async def _handle_stop(
         abort.set()
     if active_turn and not active_turn.done():
         active_turn.cancel()
+    # 已暂停的人工交互没有活跃 asyncio Task；/stop 仍需使其恢复令牌失效。
+    _SESSION_CLARIFY.pop(session_id, None)
+    _SESSION_TOOL_APPROVAL.pop(session_id, None)
     await _emit_persistent(
         db,
         websocket,
@@ -1140,6 +1156,48 @@ async def _handle_clarify_interrupt(
     )
 
 
+async def _handle_tool_approval_interrupt(
+    db: Session,
+    websocket: WebSocket,
+    state: _ConnectionState,
+    session_id: str,
+    thread_id: str,
+    user_id: str,
+    payload: dict,
+) -> None:
+    """将危险工具的 LangGraph 中断持久化为确认卡，等待原发起人确认。
+
+    命令本体仅随 ``tool_approval`` 事件保存在该会话历史中；进程内注册表只保存
+    ``id/thread_id/user_id``，以便前端提交确认后准确恢复同一 LangGraph 检查点。
+    """
+    approval_id = str(payload.get("id") or "")
+    call_id = str(payload.get("call_id") or "")
+    if not approval_id or not call_id or approval_id != call_id:
+        raise AppError(ErrorCode.INTERNAL, "危险工具确认信息无效")
+    _SESSION_TOOL_APPROVAL[session_id] = {
+        "id": approval_id,
+        "thread_id": thread_id,
+        "user_id": user_id,
+    }
+    await _emit_persistent(
+        db,
+        websocket,
+        state,
+        session_id,
+        "tool_approval",
+        {
+            "id": approval_id,
+            "call_id": call_id,
+            "name": str(payload.get("name") or "bash"),
+            "command": str(payload.get("command") or ""),
+            "reason": str(payload.get("reason") or "该命令可能修改会话工作区"),
+            "risk_level": str(payload.get("risk_level") or "high"),
+            "sandbox_scope": str(payload.get("sandbox_scope") or ""),
+            "allowed_decisions": ["approve", "reject"],
+        },
+    )
+
+
 async def _handle_clarify_reply(
     db: Session,
     websocket: WebSocket,
@@ -1171,13 +1229,67 @@ async def _handle_clarify_reply(
             state,
             abort,
             user_id=session.user_id,
-            resume={"thread_id": pending["thread_id"], "answer": answer.strip()},
+            resume={"thread_id": pending["thread_id"], "value": answer.strip()},
         ),
         name=f"agent-turn-{session.id}",
     )
     task.add_done_callback(
         lambda _task: _SESSION_ABORTS.pop(session.id, None)
     )
+    return task
+
+
+async def _handle_tool_approval_ack(
+    db: Session,
+    websocket: WebSocket,
+    state: _ConnectionState,
+    session: AgentSession,
+    user: User,
+    payload: Any,
+    active_turn: asyncio.Task[None] | None,
+) -> asyncio.Task[None] | None:
+    """处理危险工具确认：校验发起人后以 approve/reject 恢复同一图线程。"""
+    if not isinstance(payload, dict):
+        raise AppError(ErrorCode.VALIDATION, "tool_approval_ack payload 必须是对象")
+    pending = _SESSION_TOOL_APPROVAL.get(session.id)
+    if pending is None:
+        raise AppError(ErrorCode.VALIDATION, "无待确认的危险工具")
+    approval_id = str(payload.get("id") or "")
+    if approval_id != pending["id"]:
+        raise AppError(ErrorCode.VALIDATION, "危险工具确认已失效，请刷新后重试")
+    if user.id != pending["user_id"]:
+        raise AppError(ErrorCode.UNAUTHORIZED, "仅发起该命令的成员可以确认")
+    action = payload.get("action")
+    if action not in {"approve", "reject"}:
+        raise AppError(ErrorCode.VALIDATION, "确认动作仅支持 approve 或 reject")
+    if active_turn and not active_turn.done():
+        raise AppError(ErrorCode.CONCURRENCY, "上一轮 Agent 仍在生成")
+    _SESSION_TOOL_APPROVAL.pop(session.id, None)
+    await _emit_persistent(
+        db,
+        websocket,
+        state,
+        session.id,
+        "tool_approval_ack",
+        {"id": approval_id, "action": action, "ok": True},
+    )
+    abort = asyncio.Event()
+    _SESSION_ABORTS[session.id] = abort
+    task = asyncio.create_task(
+        _run_turn(
+            session.id,
+            websocket,
+            state,
+            abort,
+            user_id=user.id,
+            resume={
+                "thread_id": pending["thread_id"],
+                "value": {"id": approval_id, "action": action},
+            },
+        ),
+        name=f"agent-turn-{session.id}",
+    )
+    task.add_done_callback(lambda _task: _SESSION_ABORTS.pop(session.id, None))
     return task
 
 
@@ -1304,6 +1416,7 @@ async def _handle_user_message(
     _maybe_schedule_title(session, websocket, state, text)
     # 新用户消息作废未回复的澄清卡（澄清与新一轮输入互斥）
     _SESSION_CLARIFY.pop(session.id, None)
+    _SESSION_TOOL_APPROVAL.pop(session.id, None)
     abort = asyncio.Event()
     _SESSION_ABORTS[session.id] = abort
     task = asyncio.create_task(
@@ -1453,6 +1566,17 @@ async def agent_websocket(websocket: WebSocket) -> None:
                         websocket,
                         state,
                         session,
+                        message.get("payload"),
+                        active_turn,
+                    )
+                elif event == "tool_approval_ack":
+                    # 危险 bash 的确认/拒绝：恢复被 interrupt() 暂停的同一 ToolNode。
+                    active_turn = await _handle_tool_approval_ack(
+                        db,
+                        websocket,
+                        state,
+                        session,
+                        user,
                         message.get("payload"),
                         active_turn,
                     )

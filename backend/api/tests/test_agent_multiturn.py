@@ -146,7 +146,7 @@ def test_identical_repeat_corrected_then_different_command() -> None:
     assert kinds.count("error") == 0
     # 首次相同调用被纠正不执行；换命令后真正执行一次
     assert kinds.count("tool_call") == 2
-    assert kinds.count("thought") >= 2
+    assert kinds.count("thought") == 0
     assert kinds[-2:] == ["assistant_message", "response.completed"]
 
 
@@ -169,13 +169,11 @@ def test_identical_repeat_twice_hard_error() -> None:
     assert kinds.count("tool_call") == 1
 
 
-def test_tool_path_emits_thought_events() -> None:
-    """回归：工具调用每轮 thought 透出，思考过程可见。"""
+def test_tool_path_does_not_emit_internal_thought_events() -> None:
+    """回归：工具循环不再把内部 ReAct thought 投影为浏览器过程卡。"""
     gateway, events = _run([_REACT_LS, _REACT_DONE])
     thoughts = [event for event in events if event["kind"] == "thought"]
-    assert len(thoughts) >= 1
-    # 工具调用轮次的 thought 携带思考文本
-    assert any(event["payload"].get("text") for event in thoughts)
+    assert thoughts == []
 
 
 def test_react_system_prompt_skill_hints_list_tools() -> None:

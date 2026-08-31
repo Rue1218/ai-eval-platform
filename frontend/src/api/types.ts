@@ -899,6 +899,8 @@ export interface WsServerEvent {
     | 'tool_progress'
     | 'tool_output_delta'
     | 'tool_result'
+    | 'tool_approval'
+    | 'tool_approval_ack'
     | 'confirm'
     | 'confirm_ack'
     | 'clarify'

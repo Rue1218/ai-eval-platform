@@ -4,7 +4,7 @@
     :class="{
       open: isOpen,
       'no-anim': noAnim,
-      'is-pending': status === 'pending',
+      'is-pending': status === 'pending' || status === 'awaiting_approval',
       'is-streaming': isStreamingOutput || hasLiveOutput,
     }"
     :data-tool="tool"
@@ -21,6 +21,10 @@
           <line x1="18" y1="12" x2="22" y2="12"></line>
           <line x1="4.93" y1="19.07" x2="7.76" y2="16.24"></line>
           <line x1="16.24" y1="7.76" x2="19.07" y2="4.93"></line>
+        </svg>
+        <!-- 等待人工确认 -->
+        <svg v-else-if="status === 'awaiting_approval'" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3v9l3 2"></path><circle cx="12" cy="12" r="9"></circle>
         </svg>
         <!-- ok 成功 -->
         <svg v-else-if="status === 'ok'" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -120,10 +124,10 @@
           <p v-if="recoveryHint" class="tool-recovery-hint">{{ recoveryHint }}</p>
           <span v-if="recoveryAction" class="tool-recovery-action mono">建议：{{ recoveryAction }}</span>
         </div>
-        <div v-else-if="status === 'pending'" class="tool-output-loading" role="status">
+        <div v-else-if="status === 'pending' || status === 'awaiting_approval'" class="tool-output-loading" role="status">
           <div class="tool-loading-copy">
             <span class="tool-loading-orbit" aria-hidden="true"></span>
-            {{ toolDisplayName }} 正在执行，等待安全输出…
+            {{ status === 'awaiting_approval' ? '危险命令尚未执行，等待用户确认…' : `${toolDisplayName} 正在执行，等待安全输出…` }}
           </div>
           <div class="tool-loading-lines" aria-hidden="true">
             <span></span><span></span><span></span>
@@ -203,7 +207,7 @@ const props = withDefaults(
     tool: string
     args?: any
     result?: any
-    status?: 'pending' | 'ok' | 'fail'
+    status?: 'pending' | 'awaiting_approval' | 'ok' | 'fail' | 'rejected'
     latencyMs?: number
     truncated?: boolean
     source?: string
@@ -226,7 +230,7 @@ const isOpen = ref(!!props.defaultOpen)
 watch(
   () => props.status,
   (status) => {
-    if (status === 'pending') {
+    if (status === 'pending' || status === 'awaiting_approval') {
       isOpen.value = true
       return
     }
@@ -537,7 +541,9 @@ const statusClass = computed(() => props.status)
 
 const stateText = computed(() => {
   if (props.status === 'pending') return props.progress?.message || '执行中'
+  if (props.status === 'awaiting_approval') return '等待确认'
   if (isStreamingOutput.value) return '输出呈现中'
+  if (props.status === 'rejected') return '已拒绝'
   if (props.status === 'fail') return '调用失败'
   return '调用成功'
 })
@@ -718,6 +724,9 @@ onBeforeUnmount(stopOutputStream)
   color: var(--accent-info);
   animation: spin 1.2s linear infinite;
 }
+.tool-status.awaiting_approval {
+  color: var(--accent-warning);
+}
 .tool-pulse {
   width: 7px;
   height: 7px;
@@ -744,6 +753,9 @@ onBeforeUnmount(stopOutputStream)
 }
 .tool-status.fail {
   color: var(--accent-error);
+}
+.tool-status.rejected {
+  color: var(--text-tertiary);
 }
 .tool-title-wrap {
   display: flex;
@@ -795,11 +807,19 @@ onBeforeUnmount(stopOutputStream)
   color: var(--accent-info);
   font-weight: 600;
 }
+.tool-state-text.awaiting_approval {
+  color: var(--accent-warning);
+  font-weight: 600;
+}
 .tool-state-text.ok {
   color: var(--accent-success);
 }
 .tool-state-text.fail {
   color: var(--accent-error);
+  font-weight: 500;
+}
+.tool-state-text.rejected {
+  color: var(--text-tertiary);
   font-weight: 500;
 }
 .tool-head .chev {

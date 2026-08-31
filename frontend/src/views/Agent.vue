@@ -217,7 +217,7 @@
               <span class="tdot"></span><span class="tdot"></span><span class="tdot"></span>
             </div>
 
-            <!-- 2.2 思考卡：深度思考链流式展示，完成后自动折叠，可展开/收起 -->
+            <!-- 2.2 过程摘要：只展示服务端归一的一条状态，不展示模型原始思考链。 -->
             <ThoughtCard
               v-else-if="item.type === 'thought'"
               :text="item.text || ''"
@@ -282,6 +282,17 @@
               :options="item.options || null"
               :is-acked="item.isAcked"
               @reply="handleClarifyReply(item, $event)"
+            />
+
+            <!-- 危险 bash：LangGraph interrupt() 暂停后，用户确认才恢复同一 ToolNode。 -->
+            <ToolApprovalCard
+              v-else-if="item.type === 'tool_approval'"
+              :command="item.command || ''"
+              :reason="item.reason || '该命令可能修改会话工作区'"
+              :sandbox-scope="item.sandboxScope || ''"
+              :is-acked="item.isAcked"
+              :action="item.approvalAction"
+              @decide="handleToolApproval(item, $event)"
             />
 
             <!-- 2.5 评测报告卡片 -->
@@ -355,7 +366,7 @@
                     </div>
                   </div>
 
-                  <!-- ReAct 内容块：thought → tool_call/tool_result → thought → assistant -->
+                  <!-- 回合内容只保留过程摘要、已验证 ToolCard 与最终回答。 -->
                   <template v-for="(block, blockIdx) in item.blocks" :key="blockIdx">
                     <ThoughtCard
                       v-if="block.type === 'thought'"
@@ -736,6 +747,7 @@ import { formatLatency } from '../utils/format'
 import { findPendingToolItem, shouldKeepToolCardOpen } from '../utils/toolCard'
 import ClarifyCard from '../components/agent/ClarifyCard.vue'
 import ConfirmCard from '../components/agent/ConfirmCard.vue'
+import ToolApprovalCard from '../components/agent/ToolApprovalCard.vue'
 import PlanCard from '../components/agent/PlanCard.vue'
 import ThoughtCard from '../components/agent/ThoughtCard.vue'
 import ToolCard from '../components/agent/ToolCard.vue'
@@ -1111,7 +1123,7 @@ export interface AgentToolItem {
   tool: string
   args?: any
   result?: any
-  status?: 'pending' | 'ok' | 'fail'
+  status?: 'pending' | 'awaiting_approval' | 'ok' | 'fail' | 'rejected'
   latency_ms?: number
   truncated?: boolean
   source?: string
@@ -1160,13 +1172,18 @@ type AgentBlock =
   | AgentErrorItem
 
 interface StreamItem {
-  type: 'user' | 'agent' | 'thought' | 'tool' | 'media' | 'confirm' | 'clarify' | 'plan' | 'report' | 'error' | 'typing'
+  type: 'user' | 'agent' | 'thought' | 'tool' | 'media' | 'confirm' | 'clarify' | 'tool_approval' | 'plan' | 'report' | 'error' | 'typing'
   text?: string
   done?: boolean
   // 澄清卡（M4 §3.9.6：id 匹配 clarify_reply，仅回复输入）
   id?: string
   question?: string
   options?: string[] | null
+  // 危险工具确认卡：id 与 ToolCall.call_id 一致，服务端按它恢复同一图检查点。
+  command?: string
+  reason?: string
+  sandboxScope?: string
+  approvalAction?: 'approve' | 'reject'
   planIntent?: string
   planSteps?: string[]
   plan?: PlanArtifact
@@ -1189,7 +1206,7 @@ interface StreamItem {
   tool?: string
   args?: any
   result?: any
-  status?: 'pending' | 'ok' | 'fail'
+  status?: 'pending' | 'awaiting_approval' | 'ok' | 'fail' | 'rejected'
   toolProgress?: AgentToolItem['toolProgress']
   streamOutput?: AgentToolItem['streamOutput']
   recovery?: AgentToolItem['recovery']
@@ -1501,7 +1518,7 @@ function applyTaskState(items: StreamItem[], payload: Record<string, unknown>) {
   }
 }
 
-/** 返回当前回合仍在生成的思考块。 */
+/** 返回当前回合仍在生成的过程摘要块。 */
 function getActiveThoughtBlock(agent: StreamItem): AgentThoughtItem | undefined {
   const blocks = agent.blocks || []
   // 只认最后一个块：工具结果到达后即使旧思考卡仍在收尾动画，也不能把下一轮思考并回旧卡。
@@ -1544,10 +1561,10 @@ function pushTurnBlock(agent: StreamItem, block: AgentBlock) {
   }
 }
 
-/** 追加一个思考块；同一思考流的增量帧复用最近未完成块。 */
+/** 追加过程摘要块；同一回合最多保留一张，防止工具循环拆出多张“已思考”卡。 */
 function appendThoughtBlock(agent: StreamItem, block: AgentThoughtItem): AgentThoughtItem {
-  const active = getActiveThoughtBlock(agent)
-  if (active) return active
+  const existing = findLastThoughtBlock(agent)
+  if (existing) return existing
   const next = reactive({ type: 'thought', ...block }) as AgentBlock
   pushTurnBlock(agent, next)
   return next as AgentThoughtItem
@@ -1576,6 +1593,7 @@ function applyToolProgress(agent: StreamItem | undefined, payload: any): void {
     stage: String(payload?.stage || 'executing'),
     message: String(payload?.message || '工具正在执行'),
   }
+  target.status = 'pending'
   target.open = true
 }
 
@@ -2746,6 +2764,20 @@ function handleClarifyReply(item: StreamItem, answer: string) {
   scrollToBottom()
 }
 
+/** 危险工具确认：仅提交明确决定；命令仍由服务端恢复原 LangGraph 检查点后执行。 */
+function handleToolApproval(item: StreamItem, action: 'approve' | 'reject') {
+  if (item.type !== 'tool_approval' || item.isAcked) return
+  if (!agentWs || !agentWs.isConnected || !item.id) {
+    message.error('Agent 连接未就绪，暂不能确认命令')
+    return
+  }
+  item.isAcked = true
+  item.approvalAction = action
+  setCurrentGenerating(true)
+  agentWs.sendToolApprovalAck(item.id, action)
+  scrollToBottom()
+}
+
 /** 派生压测子任务（mock 演示）：agent 说明 → stress 进度坞实时序列 → prod 会签 → 压测报告卡。 */
 function runStressChild(card: any) {
   const env = card.stress_env || card.stress?.env || 'test'
@@ -3073,47 +3105,15 @@ async function loadSessionHistory(sid: string): Promise<number> {
       }
     }
 
-    // 2. 收集 WS 事件流：ReAct 的 thought → tool_call → tool_result 必须保持顶层顺序
+    // 2. 收集 WS 事件流：历史 thought 可能含旧版原始 CoT，一律不回放；计划、
+    // ToolCard、确认卡和最终回答已经足够表达可验证的执行过程。
     for (const ev of history.events || []) {
       const p = ev.payload || {}
       const t = ev.ts ? new Date(ev.ts).getTime() : 0
       const eid = Number(ev.event_id) || 0
 
-      if (ev.event === 'thought' && p.stream === 'think_final') {
-        // 推理增量不逐 token 落库；服务端在终帧保存快照，作为当前步骤独立思考卡回放
-        if (p.text) {
-          rawList.push({
-            time: t,
-            priority: 2,
-            eventId: eid,
-            item: {
-              type: 'thought',
-              text: p.text || '',
-              fullText: p.text || '',
-              done: true,
-              collapsed: true,
-              streamThink: true,
-              noAnim: true,
-            },
-          })
-        }
-      } else if (ev.event === 'thought' && !p.stream && (p.stage || p.skill_id) && p.text) {
-        // 阶段思考卡也按事件位置回放，不能聚合到助手回复末尾
-        rawList.push({
-          time: t,
-          priority: 2,
-          eventId: eid,
-          item: {
-            type: 'thought',
-            text: p.text || '',
-            done: true,
-            collapsed: true,
-            latency_ms: p.latency_ms,
-            stage: p.stage,
-            skill_id: p.skill_id,
-            noAnim: true,
-          },
-        })
+      if (ev.event === 'thought') {
+        continue
       } else if (ev.event === 'tool_call') {
         rawList.push({
           time: t,
@@ -3138,7 +3138,7 @@ async function loadSessionHistory(sid: string): Promise<number> {
         )
         if (foundTool) {
           foundTool.result = p.ok ? p.data : p.error
-          foundTool.status = p.ok ? 'ok' : 'fail'
+          foundTool.status = p.ok ? 'ok' : p.status === 'rejected' ? 'rejected' : 'fail'
           foundTool.latency_ms = p.latency_ms
           foundTool.truncated = p.truncated === true
           foundTool.source = typeof p.source === 'string' ? p.source : undefined
@@ -3161,6 +3161,37 @@ async function loadSessionHistory(sid: string): Promise<number> {
             confirm.item.ackResult = true
             confirm.item.open = false
           }
+        }
+      } else if (ev.event === 'tool_approval') {
+        const pendingTool = findPendingToolItem(
+          rawList.map((entry) => entry.item),
+          p.name,
+          p.call_id,
+        )
+        if (pendingTool) pendingTool.status = 'awaiting_approval'
+        rawList.push({
+          time: t,
+          priority: 4,
+          eventId: eid,
+          item: {
+            type: 'tool_approval',
+            id: typeof p.id === 'string' ? p.id : undefined,
+            callId: typeof p.call_id === 'string' ? p.call_id : undefined,
+            tool: String(p.name || 'bash'),
+            command: String(p.command || ''),
+            reason: String(p.reason || '该命令可能修改会话工作区'),
+            sandboxScope: String(p.sandbox_scope || ''),
+            isAcked: false,
+            noAnim: true,
+          },
+        })
+      } else if (ev.event === 'tool_approval_ack') {
+        const approval = [...rawList].reverse().find((entry) => (
+          entry.item.type === 'tool_approval' && entry.item.id === p.id
+        ))
+        if (approval) {
+          approval.item.isAcked = true
+          approval.item.approvalAction = p.action === 'reject' ? 'reject' : 'approve'
         }
       } else if (ev.event === 'confirm') {
         rawList.push({
@@ -3716,20 +3747,11 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
         markGenerating(sid, true)
         break
       }
-      const text = String(p.text || '').trim()
       const stage = p.stage as StreamItem['stage'] | undefined
       if (stage) {
-        // 每轮 Harness 阶段单独一张卡（规划 / MCP ReAct / 复核），禁止叠进上一轮。
-        finishBufferThought(buf)
+        // 旧版阶段 thought 可能含内部草稿；专用 Plan/Tool/Error 卡已可表达事实，
+        // 后台会话不再追加可展开过程卡。
         rt.harnessStage = stage
-        appendThoughtBlock(agent, {
-          text,
-          done: false,
-          collapsed: false,
-          latency_ms: p.latency_ms,
-          stage,
-          skill_id: p.skill_id,
-        })
         markGenerating(sid, true)
         break
       }
@@ -3751,6 +3773,12 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
     case 'assistant_message': {
       const text = String(p.text || '')
       const interim = p.interim === true
+      // 兼容历史：ToolCall 前的草稿不是工具事实，不再渲染成助手消息。
+      if (interim) {
+        markGenerating(sid, true)
+        rt.harnessStage = rt.harnessStage || 'react'
+        break
+      }
       finishBufferThought(buf)
       // assistant_message 携带服务端实际使用的协议档快照；以 profile_id 覆盖
       // 回合创建时的全局选择，保证切换模型后每个回合仍显示自己的模型。
@@ -3765,9 +3793,9 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
       } else {
         target.streaming = false
       }
-      targetAgent.streaming = interim
-      markGenerating(sid, interim)
-      rt.harnessStage = interim ? (rt.harnessStage || 'react') : ''
+      targetAgent.streaming = false
+      markGenerating(sid, false)
+      rt.harnessStage = ''
       void refreshContextMeter(sid)
       break
     }
@@ -3813,7 +3841,7 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
       const target = agent ? findPendingToolBlock(agent, p.name, p.call_id) : undefined
       if (target) {
         target.result = p.ok ? p.data : p.error
-        target.status = p.ok ? 'ok' : 'fail'
+        target.status = p.ok ? 'ok' : p.status === 'rejected' ? 'rejected' : 'fail'
         if (p.latency_ms !== undefined) target.latency_ms = p.latency_ms
         target.truncated = p.truncated === true
         target.source = typeof p.source === 'string' ? p.source : undefined
@@ -3834,6 +3862,38 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
           stampConfirmCard(confirm, true)
         }
       }
+      break
+    }
+    case 'tool_approval': {
+      // LangGraph 已暂停在 ToolNode；这里仅展示风险，不代表命令已经执行。
+      const agent = getCurrentTurnAgent(buf)
+      const target = agent ? findPendingToolBlock(agent, p.name, p.call_id) : undefined
+      if (target) {
+        target.status = 'awaiting_approval'
+        target.open = true
+      }
+      finishBufferThought(buf)
+      markGenerating(sid, false)
+      rt.harnessStage = ''
+      buf.push({
+        type: 'tool_approval',
+        id: String(p.id || ''),
+        callId: typeof p.call_id === 'string' ? p.call_id : undefined,
+        tool: String(p.name || 'bash'),
+        command: String(p.command || ''),
+        reason: String(p.reason || '该命令可能修改会话工作区'),
+        sandboxScope: String(p.sandbox_scope || ''),
+        isAcked: false,
+      })
+      break
+    }
+    case 'tool_approval_ack': {
+      const approval = [...buf].reverse().find((item) => item.type === 'tool_approval' && item.id === p.id)
+      if (approval) {
+        approval.isAcked = true
+        approval.approvalAction = p.action === 'reject' ? 'reject' : 'approve'
+      }
+      markGenerating(sid, true)
       break
     }
     case 'confirm':
@@ -4064,23 +4124,13 @@ function handleWsEvent(ev: WsServerEvent) {
         }
         break
       }
-      // 阶段思考卡（规划 / MCP ReAct / 复核）：每轮一张，归属当前助手消息
-      const text = String(p.text || '').trim()
+      // 旧版阶段 thought（规划 / ReAct / 复核）可能携带内部草稿；计划、工具和
+      // 错误均已有专用卡，实时链路同样不再追加过程卡。
       const stage = p.stage as StreamItem['stage'] | undefined
       if (typeof p.latency_ms === 'number') turnLatencyMs.value += p.latency_ms
       if (stage) {
-        finishLiveThought()
         harnessStage.value = stage
         setCurrentGenerating(true)
-        appendThoughtBlock(agent, {
-          text,
-          done: false,
-          collapsed: false,
-          latency_ms: p.latency_ms,
-          stage,
-          skill_id: p.skill_id,
-        })
-        if (text) scrollToBottom()
         break
       }
       // 新协议中 thought 只承载思考摘要；助手正文由 assistant_delta / assistant_message 承载。
@@ -4102,6 +4152,12 @@ function handleWsEvent(ev: WsServerEvent) {
     case 'assistant_message': {
       const text = String(p.text || '')
       const interim = p.interim === true
+      // ToolCall 前草稿不属于最终回答；兼容旧事件时也必须过滤。
+      if (interim) {
+        setCurrentGenerating(true)
+        harnessStage.value = harnessStage.value || 'react'
+        break
+      }
       finishLiveThought()
       // assistant_message 携带服务端实际使用的协议档快照；以 profile_id 覆盖
       // 回合创建时的全局选择，保证切换模型后每个回合仍显示自己的模型。
@@ -4116,9 +4172,9 @@ function handleWsEvent(ev: WsServerEvent) {
       } else {
         target.streaming = false
       }
-      targetAgent.streaming = interim
-      setCurrentGenerating(interim)
-      harnessStage.value = interim ? (harnessStage.value || 'react') : ''
+      targetAgent.streaming = false
+      setCurrentGenerating(false)
+      harnessStage.value = ''
       if (currentSessionId.value) void refreshContextMeter(currentSessionId.value)
       if (text) scrollToBottom()
       break
@@ -4170,7 +4226,7 @@ function handleWsEvent(ev: WsServerEvent) {
       const target = agent ? findPendingToolBlock(agent, p.name, p.call_id) : undefined
       if (target) {
         target.result = p.ok ? p.data : p.error
-        target.status = p.ok ? 'ok' : 'fail'
+        target.status = p.ok ? 'ok' : p.status === 'rejected' ? 'rejected' : 'fail'
         if (p.latency_ms !== undefined) {
           target.latency_ms = p.latency_ms
           turnLatencyMs.value += p.latency_ms
@@ -4223,6 +4279,40 @@ function handleWsEvent(ev: WsServerEvent) {
         summary: '',
         open: true,
       })
+      scrollToBottom()
+      break
+    }
+    case 'tool_approval': {
+      // LangGraph 暂停而非失败：标记原 ToolCard，单独插入可审阅的确认卡。
+      const agent = getCurrentTurnAgent(events.value)
+      const target = agent ? findPendingToolBlock(agent, p.name, p.call_id) : undefined
+      if (target) {
+        target.status = 'awaiting_approval'
+        target.open = true
+      }
+      finishLiveThought()
+      setCurrentGenerating(false)
+      harnessStage.value = ''
+      events.value.push({
+        type: 'tool_approval',
+        id: String(p.id || ''),
+        callId: typeof p.call_id === 'string' ? p.call_id : undefined,
+        tool: String(p.name || 'bash'),
+        command: String(p.command || ''),
+        reason: String(p.reason || '该命令可能修改会话工作区'),
+        sandboxScope: String(p.sandbox_scope || ''),
+        isAcked: false,
+      })
+      scrollToBottom()
+      break
+    }
+    case 'tool_approval_ack': {
+      const approval = [...events.value].reverse().find((item) => item.type === 'tool_approval' && item.id === p.id)
+      if (approval) {
+        approval.isAcked = true
+        approval.approvalAction = p.action === 'reject' ? 'reject' : 'approve'
+      }
+      setCurrentGenerating(true)
       scrollToBottom()
       break
     }

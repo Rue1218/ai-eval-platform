@@ -124,7 +124,9 @@ def test_toolnode_bash_exclusive_wave_when_parallel_enabled(monkeypatch) -> None
     bash_call = {
         "call_id": "call_bash",
         "name": "bash",
-        "arguments": {"command": "hello"},
+        # 本用例仅验证 bash 的独占波次；使用白名单只读命令，避免把未经过
+        # LangGraph HITL 确认的模拟写命令带入这里的直调 ToolNode。
+        "arguments": {"command": "pwd"},
         "native": True,
     }
     read_call = {

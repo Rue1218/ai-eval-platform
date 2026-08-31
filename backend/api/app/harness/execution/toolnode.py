@@ -17,6 +17,8 @@ from dataclasses import replace
 from uuid import uuid4
 
 from langgraph.config import get_config, get_stream_writer
+from langgraph.errors import GraphInterrupt
+from langgraph.types import interrupt
 
 from app.config import settings
 from app.errors import AppError, ErrorCode
@@ -40,6 +42,7 @@ from .batch import (
 )
 from .binding import bind_attachments
 from .context import ToolExecutionContext
+from .dispatch import bash_approval_reason, bash_block_reason
 from .mcp import MCPClientManager
 from .native import NativeToolExecutor
 from .native_results import NativeToolResultStore, runtime_thread_id
@@ -127,6 +130,10 @@ def build_tool_node(
             try:
                 return await execute_one_unguarded(pending_item)
             except asyncio.CancelledError:
+                raise
+            except GraphInterrupt:
+                # ``interrupt()`` 不是工具错误：必须冒泡给 LangGraph 写检查点并暂停。
+                # 吞掉它会导致确认卡已经展示、图却继续或返回失败的严重错位。
                 raise
             except Exception as exc:
                 _trace(f"工具执行隔离异常 type={type(exc).__name__}")
@@ -241,36 +248,47 @@ def build_tool_node(
                         )
                 return "", "result", None
 
-            def failed(code: str, message: str) -> dict[str, object]:
+            def failed(
+                code: str,
+                message: str,
+                *,
+                status: str = "failed",
+                emit_error: bool = True,
+            ) -> dict[str, object]:
                 """拒绝路径：同 call_id 的结果 + error，不推进批次（由外层合并）。"""
                 if is_native and native_tool_results is not None:
                     native_tool_results.put(thread_id, call.call_id, message)
+                result_event = make_event(
+                    "tool_result",
+                    {
+                        "call_id": call.call_id,
+                        "name": call.name,
+                        "ok": False,
+                        "status": status,
+                        "error": message,
+                        "latency_ms": 0,
+                        "truncated": False,
+                        "redacted": True,
+                        "recovery": recovery_policy.to_payload(code, message),
+                    },
+                )
                 return {
                     "call_id": call.call_id,
                     "name": call.name,
                     "native": is_native,
-                    "status": "failed",
+                    "status": status,
                     "events": [
                         *events,
-                        make_event(
-                            "tool_result",
-                            {
-                                "call_id": call.call_id,
-                                "name": call.name,
-                                "ok": False,
-                                "error": message,
-                                "latency_ms": 0,
-                                "truncated": False,
-                                "redacted": True,
-                                "recovery": recovery_policy.to_payload(code, message),
-                            },
+                        result_event,
+                        *(
+                            [make_event("error", {"code": code, "message": message})]
+                            if emit_error
+                            else []
                         ),
-                        make_event("error", {"code": code, "message": message}),
                     ],
                     "observation": None,
                 }
 
-            emit_progress("validating", "正在校验工具参数与权限边界")
             if is_native and (native_tool_results is None or not thread_id):
                 return failed("INTERNAL", "工具临时上下文不可用")
             definition = registry.find(call.name)
@@ -313,6 +331,40 @@ def build_tool_node(
             finally:
                 if db is not None:
                     db.close()
+            # LangGraph HITL：所有无法静态证明只读的 bash 命令必须在副作用前暂停。
+            # call_id 同时是确认卡 ID，图从检查点恢复时会重进本节点并拿到 decision。
+            if call.name == "bash":
+                command = str(safe_args.get("command") or "")
+                if blocked := bash_block_reason(command):
+                    return failed("VALIDATION", blocked)
+                reason = bash_approval_reason(command)
+                if reason:
+                    decision = interrupt(
+                        {
+                            "type": "tool_approval",
+                            "id": call.call_id,
+                            "call_id": call.call_id,
+                            "name": call.name,
+                            "command": command,
+                            "reason": reason,
+                            "risk_level": "high",
+                            "sandbox_scope": "仅当前会话工作区可写；网络关闭、系统目录只读且资源受限。",
+                            "allowed_decisions": ["approve", "reject"],
+                        }
+                    )
+                    action = decision.get("action") if isinstance(decision, Mapping) else None
+                    approval_id = decision.get("id") if isinstance(decision, Mapping) else None
+                    if approval_id != call.call_id or action not in {"approve", "reject"}:
+                        return failed("VALIDATION", "确认结果无效，命令未执行")
+                    if action == "reject":
+                        return failed(
+                            "VALIDATION",
+                            "用户拒绝执行此 bash 命令",
+                            status="rejected",
+                            emit_error=False,
+                        )
+                    emit_progress("approved", "已获用户确认，正在进入受控沙箱执行")
+            emit_progress("validating", "正在校验工具参数与权限边界")
             emit_progress("executing", "工具正在受控执行")
             started = time.perf_counter()
             exec_context = ToolExecutionContext(

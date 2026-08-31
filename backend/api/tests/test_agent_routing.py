@@ -328,8 +328,9 @@ def test_routing_multi_skill_plans_then_react_then_reflect() -> None:
     kinds = [event["kind"] for event in pending]
     assert kinds.count("response.completed") == 1
     assert kinds[-1] == "response.completed"
-    assert kinds.index("plan") < kinds.index("assistant_message")
-    assert kinds.index("assistant_message") < kinds.index("response.completed")
+    # L0 规划的多技能请求尚无真实工具观察时，Reflect 只收敛状态，不发送
+    # 中性占位 assistant_message；用户应通过 Plan/确认卡继续交互。
+    assert "assistant_message" not in kinds
     assert "tool_call" not in kinds
     assert "error" not in kinds
     plan_payload = next(event["payload"] for event in pending if event["kind"] == "plan")
@@ -339,14 +340,9 @@ def test_routing_multi_skill_plans_then_react_then_reflect() -> None:
     steps = plan_payload["slots"]["steps"]
     assert 3 <= len(steps) <= 7
     assert plan_payload["tools_needed"] == ["task"]
-    reflect_thoughts = [
-        event
-        for event in pending
-        if event["kind"] == "thought" and event["payload"].get("stage") == "reflect"
-    ]
-    assert reflect_thoughts
+    # Plan/Reflect 是内部编排；前端只显示专用 Plan 卡、确认卡或最终结果。
+    assert "thought" not in kinds
     assert kinds.index("plan") < kinds.index("response.completed")
-    assert pending.index(reflect_thoughts[0]) < len(pending) - 1
     budget_updates = [
         value.get("budget")
         for mode, chunk in events
@@ -383,10 +379,7 @@ def test_routing_plan_react_error_completes_with_error() -> None:
     assert kinds[-1] == "response.completed"
     completed = next(event for event in pending if event["kind"] == "response.completed")
     assert completed["payload"]["finish_reason"] == "error"
-    assert not any(
-        event["kind"] == "thought" and event["payload"].get("stage") == "reflect"
-        for event in pending
-    )
+    assert "thought" not in kinds
 
 
 def test_invoke_plan_solve_returns_model_response() -> None:
@@ -394,7 +387,7 @@ def test_invoke_plan_solve_returns_model_response() -> None:
     response = LangGraphAgent(_FakeGateway()).invoke(
         _serializable("帮我做基准评测并生成测试用例")
     )
-    assert "确认卡" in response.text
+    assert response.text == "未生成可展示的最终回答。"
 
 
 class _PlanAwareGateway(_FakeGateway):
@@ -444,11 +437,11 @@ def test_plan_solve_uses_llm_planner_artifact() -> None:
     assert react_systems, "选中 skill-benchmark 后 ReAct 须按需注入工作流"
     assert "三协议调用" in react_systems[0]
     assert "六策略 LLM" not in react_systems[0]
-    # 规划短调用 + ReAct 控制调用 + done 后无工具最终回答调用（基线行为，非本次新增）
+    # 规划短调用 + ReAct 控制调用 + done 后的无工具收敛调用。
     assert len(gateway.invoke_calls) == 3
-    final_message = next(event for event in pending if event["kind"] == "assistant_message")
-    # 收尾正文来自无工具最终回答（桩网关回 react JSON 无正文 → 中性兑底），非 Observation 原文
-    assert "一步" not in final_message["payload"]["text"]
+    # 该计划的交付类型是 confirm，且没有真实工具观察；Reflect 应只保留确认/澄清
+    # 交互卡，不得把中性占位语句当作助手最终交付。
+    assert "assistant_message" not in kinds
 
 
 def test_plan_solve_disabled_skill_returns_validation() -> None:

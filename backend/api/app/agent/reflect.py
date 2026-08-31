@@ -140,18 +140,13 @@ def reflect_node(state: GraphState) -> dict:
                             redacted=True,
                         )
                     ],
-                    "pending_events": [
-                        make_event(
-                            "thought",
-                            {"stage": "reflect", "text": "任务信息缺口未闭环，驳回提前收尾"},
-                        )
-                    ],
+                    # 复核仅改变图状态并驱动后续工具/澄清，不向浏览器追加内部过程卡。
+                    "pending_events": [],
                 }
             return {
                 "verdict": "reject",
                 "step_fail_count": fail_count,
                 "pending_events": [
-                    make_event("thought", {"stage": "reflect", "text": "任务信息缺口未闭环，终止提前交付"}),
                     make_event("error", {"code": "VALIDATION", "message": "任务关键信息未闭环，无法交付最终结论"}),
                     _completed("error"),
                 ],
@@ -181,12 +176,7 @@ def reflect_node(state: GraphState) -> dict:
                     repair_hint=hint,
                 )
             ],
-            "pending_events": [
-                make_event(
-                    "thought",
-                    {"stage": "reflect", "text": "复核未通过，注入修复建议后再试一次"},
-                )
-            ],
+            "pending_events": [],
         }
     if tool_failed and plan.allows_replan and replan_count < MAX_REPLANS:
         reason = f"工具 {observation.tool} 执行失败：{observation.text[:200]}"
@@ -198,21 +188,13 @@ def reflect_node(state: GraphState) -> dict:
             "force_replan": True,
             "step_fail_count": 0,
             "replan_reason": reason,
-            "pending_events": [
-                make_event(
-                    "thought",
-                    {
-                        "stage": "reflect",
-                        "text": f"复核未通过，第 {replan_count + 1} 次有界重规划",
-                    },
-                )
-            ],
+            # 重规划后会产生新的 Plan 卡，毋须再渲染一张内部复核卡。
+            "pending_events": [],
         }
     if tool_failed and replan_count >= MAX_REPLANS:
         verdict = "reject"
-    events = [
-        make_event("thought", {"stage": "reflect", "text": f"复核完成：{verdict}"}),
-    ]
+    # 复核是内部门禁；只投影其产生的确认卡、最终回答或错误事实。
+    events: list[dict] = []
     if verdict == "clarify":
         return {"verdict": verdict, "step_fail_count": 0, "pending_events": events}
     if verdict == "reject":

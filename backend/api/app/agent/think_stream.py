@@ -1,13 +1,13 @@
 """思考链瞬态帧合并 + 可展示摘要。
 
-上游按字增量时，WS 不应一帧一字。生产探针还发现部分协议档会把英文隐藏
-CoT（``Here's a thinking process`` / ``Analyze User Input``）整段推给前端，
-违反 API.md「不暴露隐藏思维链、只展示 reasoning summary」。本模块：
+上游按字增量时，WS 不应一帧一字。模型 reasoning（无论中文或英文）都不是
+面向用户的事实输出：它可能包含未执行动作、错误的中间判断或隐藏 CoT。为避免
+把「已删除成功」这类草稿当作结果，本模块只投影固定、可展示的过程摘要：
 
 - ``ThinkStreamCoalescer``：首帧立即，之后按间隔与字数合并；
-- ``sanitize_reasoning`` / ``ReasoningDisplayFilter``：把隐藏 CoT 收成可展示
-  摘要；中文思考原文保留。完整快照由调用方对累计原文再 ``sanitize_reasoning``
-  后发 ``think_final``。
+- ``sanitize_reasoning`` / ``ReasoningDisplayFilter``：把任意 reasoning 收成一条
+  可展示摘要；完整快照由调用方对累计原文再 ``sanitize_reasoning`` 后发
+  ``think_final``。
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from collections.abc import Callable
 from typing import Literal
 
 # 可展示摘要（隐藏 CoT 的替代文案；不暴露逐步分析稿）
-DISPLAY_REASONING_SUMMARY = "正在分析问题并组织回复。"
+DISPLAY_REASONING_SUMMARY = "正在分析请求并校验下一步操作。"
 
 # 隐藏 CoT 包装头（大小写不敏感）
 _WRAPPER_PREFIXES: tuple[str, ...] = (
@@ -101,47 +101,22 @@ def classify_reasoning(text: str) -> ClassifyMode:
 
 
 def sanitize_reasoning(text: str) -> str:
-    """把上游 reasoning 收成可展示摘要（API.md：不暴露隐藏思维链）。
-
-    中文思考保留（可剥包装头）；英文隐藏 CoT 替换为短摘要；空输入返回空串。
-    """
-    stripped = text.strip()
-    if not stripped:
-        return ""
-    if is_hidden_chain_of_thought(stripped):
-        return DISPLAY_REASONING_SUMMARY
-    return strip_reasoning_wrappers(stripped) or DISPLAY_REASONING_SUMMARY
+    """把任意上游 reasoning 收成过程摘要，绝不把推理原文发给浏览器。"""
+    return DISPLAY_REASONING_SUMMARY if text.strip() else ""
 
 
 class ReasoningDisplayFilter:
-    """流式思考分类器：隐藏 CoT 只下发一次摘要，可展示原文按增量放出。
-
-    ``unknown`` 时暂扣增量，避免把 ``Here's a th`` 这类包装头首字立即推给前端。
-    """
+    """流式 reasoning 过滤器：每个回合最多投影一次不含推理内容的过程摘要。"""
 
     def __init__(self) -> None:
-        self._acc: list[str] = []
-        self._mode: ClassifyMode = "unknown"
+        self._emitted = False
 
     def feed(self, chunk: str) -> list[str]:
         """吃进一段上游 reasoning；返回本轮应进入合并器的可见文本。"""
-        if not chunk:
+        if not chunk or self._emitted:
             return []
-        if self._mode == "hidden":
-            return []
-        if self._mode == "visible":
-            return [chunk]
-        self._acc.append(chunk)
-        acc = "".join(self._acc)
-        decision = classify_reasoning(acc)
-        if decision == "unknown":
-            return []
-        if decision == "hidden":
-            self._mode = "hidden"
-            return [DISPLAY_REASONING_SUMMARY]
-        self._mode = "visible"
-        body = strip_reasoning_wrappers(acc)
-        return [body] if body else []
+        self._emitted = True
+        return [DISPLAY_REASONING_SUMMARY]
 
 
 class ThinkStreamCoalescer:

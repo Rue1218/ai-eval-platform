@@ -6,6 +6,7 @@ import pytest
 
 from app.errors import AppError, ErrorCode
 from app.models import Session as AgentSession
+from app.models import User
 from app.routers import ws
 
 
@@ -133,8 +134,8 @@ async def test_clarify_reply_resumes_same_thread(monkeypatch):
         None,
     )
     await task
-    # 恢复模式以 resume 参数传递（thread_id 复用 + answer 透传）
-    assert captured["resume"] == {"thread_id": "s-1:turn-9", "answer": "数据集用 mmlu"}
+    # 恢复模式以 resume 参数传递（thread_id 复用 + value 透传）
+    assert captured["resume"] == {"thread_id": "s-1:turn-9", "value": "数据集用 mmlu"}
     assert "s-1" not in ws._SESSION_CLARIFY
 
 
@@ -160,3 +161,78 @@ async def test_clarify_reply_concurrent_turn_rejected(monkeypatch):
         assert error.value.code == ErrorCode.CONCURRENCY
     finally:
         busy.cancel()
+
+
+@pytest.mark.asyncio
+async def test_tool_approval_interrupt_registers_and_emits(monkeypatch):
+    """危险工具中断持久化为确认卡，只在内存保存恢复定位与发起人。"""
+    emitted: list[tuple[str, dict]] = []
+
+    async def fake_emit(_db, _websocket, _state, _session_id, event, payload):
+        emitted.append((event, payload))
+        return True
+
+    monkeypatch.setattr(ws, "_emit_persistent", fake_emit)
+    monkeypatch.setattr(ws, "_SESSION_TOOL_APPROVAL", {})
+    await ws._handle_tool_approval_interrupt(
+        _MessageDb(),
+        object(),
+        ws._ConnectionState(),
+        "s-1",
+        "s-1:turn-10",
+        "u-1",
+        {
+            "type": "tool_approval",
+            "id": "call-rm",
+            "call_id": "call-rm",
+            "name": "bash",
+            "command": "rm -f draft.md",
+            "reason": "命令会删除文件",
+        },
+    )
+    assert ws._SESSION_TOOL_APPROVAL["s-1"] == {
+        "id": "call-rm",
+        "thread_id": "s-1:turn-10",
+        "user_id": "u-1",
+    }
+    assert emitted[0][0] == "tool_approval"
+    assert emitted[0][1]["command"] == "rm -f draft.md"
+
+
+@pytest.mark.asyncio
+async def test_tool_approval_ack_resumes_with_decision(monkeypatch):
+    """确认动作必须匹配卡片与发起人，并以 decision 对象恢复同一图线程。"""
+    captured: dict = {}
+    emitted: list[tuple[str, dict]] = []
+
+    async def fake_run_turn(*_args, **_kwargs):
+        captured.update(**_kwargs)
+
+    async def fake_emit(_db, _websocket, _state, _session_id, event, payload):
+        emitted.append((event, payload))
+        return True
+
+    monkeypatch.setattr(ws, "_run_turn", fake_run_turn)
+    monkeypatch.setattr(ws, "_emit_persistent", fake_emit)
+    monkeypatch.setattr(
+        ws,
+        "_SESSION_TOOL_APPROVAL",
+        {"s-1": {"id": "call-rm", "thread_id": "s-1:turn-10", "user_id": "u-1"}},
+    )
+    task = await ws._handle_tool_approval_ack(
+        _MessageDb(),
+        object(),
+        ws._ConnectionState(),
+        _session(),
+        User(id="u-1", username="alice", password_hash="hash"),
+        {"id": "call-rm", "action": "approve"},
+        None,
+    )
+    assert task is not None
+    await task
+    assert captured["resume"] == {
+        "thread_id": "s-1:turn-10",
+        "value": {"id": "call-rm", "action": "approve"},
+    }
+    assert emitted == [("tool_approval_ack", {"id": "call-rm", "action": "approve", "ok": True})]
+    assert "s-1" not in ws._SESSION_TOOL_APPROVAL

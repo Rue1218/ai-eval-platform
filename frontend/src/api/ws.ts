@@ -204,6 +204,15 @@ export class AgentWebSocket {
     )
   }
 
+  /** 提交危险工具确认；服务端仅以同一会话的 LangGraph 检查点恢复原 ToolCall。 */
+  public sendToolApprovalAck(id: string, action: 'approve' | 'reject'): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      console.warn('WebSocket not open, cannot send tool_approval_ack')
+      return
+    }
+    this.ws.send(JSON.stringify({ event: 'tool_approval_ack', payload: { id, action } }))
+  }
+
   public sendCancelTask(taskId: string): boolean {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       console.warn('WebSocket not open, cannot send cancel_task')

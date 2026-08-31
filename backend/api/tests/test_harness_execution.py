@@ -710,12 +710,24 @@ def test_all_defs_serializable_without_handler() -> None:
 
 
 def test_bash_blocklist_rejects_dangerous_commands() -> None:
-    """X-A7：bash 黑名单拒绝 rm/sudo/网络命令。"""
-    for command in ("rm -rf /", "sudo whoami", "curl http://x", "wget http://x"):
+    """X-A7：提权/网络命令仍由硬黑名单拒绝，删除改由 HITL 确认。"""
+    for command in ("sudo whoami", "curl http://x", "wget http://x", "echo ok; sudo whoami"):
         with pytest.raises(AppError) as error:
             run_bash(command, sandbox_dir=".", timeout_s=1.0)
         assert error.value.code == ErrorCode.VALIDATION
-    assert "rm" in BASH_BLOCKLIST
+    assert "rm" not in BASH_BLOCKLIST
+
+
+def test_bash_approval_reason_covers_write_and_unknown_commands() -> None:
+    """危险或无法证明只读的 bash 必须进入确认卡，简单只读命令可直接执行。"""
+    from app.harness.execution.dispatch import bash_approval_reason, bash_block_reason
+
+    assert bash_approval_reason("rm -f result.md") == "命令会删除或清空当前会话工作区中的文件"
+    assert bash_approval_reason("echo content > result.md")
+    assert bash_approval_reason("python -c 'print(1)'")
+    assert bash_approval_reason("cat result.md") is None
+    assert bash_approval_reason("git status --short") is None
+    assert bash_block_reason("echo ok; sudo whoami") == "bash 命令命中黑名单：sudo"
 
 
 def test_run_bash_delegates_to_sandbox(monkeypatch) -> None:

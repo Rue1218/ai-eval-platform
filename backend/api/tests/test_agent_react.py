@@ -396,8 +396,9 @@ def test_native_tool_calls_keep_call_id_and_stream_final_answer() -> None:
         for mode, chunk in events
         if mode == "custom" and chunk.get("kind") == "content"
     ]
+    # 首轮包含 ToolCall 的草稿正文不能先于真实工具结果投影；仅保留工具完成后
+    # 第二轮收敛回答的原始流式分块。
     assert [(chunk["kind"], chunk["text"]) for chunk in custom] == [
-        ("content", "先读取两个附件再汇总"),
         ("content", "两个文件的共同结论是："),
         ("content", "都可用于后续评测。"),
     ]
@@ -698,8 +699,8 @@ def test_native_read_repeat_same_offset_is_blocked() -> None:
     assert kinds[-2:] == ["assistant_message", "response.completed"]
 
 
-def test_native_tool_calls_emit_interim_narration() -> None:
-    """P1：native 同轮正文 + ToolCall 先发 interim 阶段叙述，不是 Observation。"""
+def test_native_tool_calls_delay_draft_content_until_tool_result() -> None:
+    """P1：native 同轮 ToolCall 的草稿正文必须等待工具终态，不能抢先展示。"""
     gateway = _NativeToolCallGateway()
     with tempfile.TemporaryDirectory() as tmp:
         with open(f"{tmp}/a.txt", "w", encoding="utf-8") as handle:
@@ -715,10 +716,12 @@ def test_native_tool_calls_emit_interim_narration() -> None:
         for event in _pending_events(events)
         if event["kind"] == "assistant_message"
     ]
-    assert messages[0]["payload"]["interim"] is True
-    assert messages[0]["payload"]["text"] == "先读取两个附件再汇总"
-    assert "A 文件内容" not in messages[0]["payload"]["text"]
-    # 首轮正文增量必须出现在 ToolCard 持久化之前，且只渲染一次。
+    # ToolCall 前的模型草稿不再落 assistant_message；仅工具结束后的最终回答可交付。
+    assert messages
+    assert all(event["payload"].get("interim") is not True for event in messages)
+    assert all(event["payload"].get("text") != "先读取两个附件再汇总" for event in messages)
+    # 首轮草稿不得以正文增量抢在 ToolCard 前显示；浏览器只能在工具终态后收到
+    # 第二轮收敛回答，杜绝「已完成」类叙述先于实际执行结果的矛盾。
     first_content = next(
         index
         for index, (mode, chunk) in enumerate(events)
@@ -730,7 +733,7 @@ def test_native_tool_calls_emit_interim_narration() -> None:
         if mode == "updates"
         and any(event["kind"] == "tool_call" for event in iter_pending_events(chunk))
     )
-    assert first_content < first_tool_call
+    assert first_tool_call < first_content
 
 
 def test_native_read_then_write_refills_in_original_call_order() -> None:
@@ -1017,14 +1020,15 @@ def test_react_done_immediately() -> None:
     events = _collect(LangGraphAgent(gateway, build_default_registry()), _serializable())
     kinds = [event["kind"] for event in _pending_events(events)]
     assert kinds == ["assistant_message", "response.completed"]
-    assert len(gateway.calls) == 1
-    # done 收尾回显 thought（PR-3 回显语义）
+    # done JSON 的 thought 是控制字段；必须另调一轮自然语言回答，不能原样回显。
+    assert len(gateway.calls) == 2
     payloads = [
         event["payload"]
         for event in _pending_events(events)
         if event["kind"] == "assistant_message"
     ]
-    assert "已完成检索并总结" in payloads[0]["text"]
+    assert payloads[0]["text"] == "工具结果已整理。"
+    assert "已完成检索并总结" not in payloads[0]["text"]
 
 
 _REACT_WRITE = (
@@ -1130,8 +1134,8 @@ def test_react_repeat_first_gives_correction_then_done_cleanly() -> None:
     assert kinds.count("error") == 0
     assert kinds.count("tool_call") == 1
     assert kinds[-2:] == ["assistant_message", "response.completed"]
-    # 纠正环节透出 thought（思考过程可见）
-    assert kinds.count("thought") >= 1
+    # 纠正环节只留在内部 Observation，不再生成过程卡。
+    assert kinds.count("thought") == 0
 
 
 def test_react_read_repeat_blocked_after_first_success() -> None:
@@ -1365,8 +1369,8 @@ def test_react_parse_failure_recovers_with_correction() -> None:
     kinds = [event["kind"] for event in _pending_events(events)]
     assert kinds.count("error") == 0
     assert kinds[-2:] == ["assistant_message", "response.completed"]
-    # 模型调用 2 次：首次输出坏 JSON 被纠正，第二次 done 收尾
-    assert len(gateway.calls) == 2
+    # 模型调用 3 次：首次输出坏 JSON 被纠正，第二次 done 后另调自然语言收尾。
+    assert len(gateway.calls) == 3
     # 纠正观察进入第二次调用的系统上下文（模型能看到自己上轮的坏输出）
     assert "不是 JSON" in gateway.calls[1].system
 

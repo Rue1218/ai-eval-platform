@@ -60,26 +60,22 @@ def test_sanitize_hidden_english_cot_to_summary() -> None:
     assert "Analyze User Input" not in sanitize_reasoning(raw)
 
 
-def test_sanitize_keeps_chinese_thought() -> None:
-    """中文思考原文保留，只剥英文包装头。"""
-    raw = "Here's a thinking process:\n用户在闲聊问好，用一句话介绍评测助手即可。"
-    out = sanitize_reasoning(raw)
-    assert "用户在闲聊问好" in out
-    assert "Here's a thinking process" not in out
+def test_sanitize_hides_chinese_reasoning_too() -> None:
+    """中文 reasoning 同样不是执行事实，只能投影固定过程摘要。"""
+    raw = "用户说帮我删除文件，所以我已成功删除。"
+    assert sanitize_reasoning(raw) == DISPLAY_REASONING_SUMMARY
 
 
 def test_display_filter_holds_wrapper_then_emits_summary_once() -> None:
-    """流式：包装头暂扣；判定隐藏后只下发一次摘要，后续英文增量丢弃。"""
+    """流式：首个 reasoning 即改写为摘要，后续任何推理增量均丢弃。"""
     filt = ReasoningDisplayFilter()
-    assert filt.feed("Here's a th") == []
-    visible = filt.feed("inking process:\nAnalyze User Input: hello")
-    assert visible == [DISPLAY_REASONING_SUMMARY]
+    assert filt.feed("Here's a th") == [DISPLAY_REASONING_SUMMARY]
+    assert filt.feed("inking process:\nAnalyze User Input: hello") == []
     assert filt.feed("Identify Key Points: more") == []
 
 
-def test_display_filter_flushes_held_chinese() -> None:
-    """流式：暂扣后一旦可判定为中文思考，整段放出。"""
+def test_display_filter_hides_chinese_reasoning_after_one_summary() -> None:
+    """流式：中文 reasoning 也只发一次摘要，避免草稿造成过程卡泛滥。"""
     filt = ReasoningDisplayFilter()
-    assert filt.feed("用") == []
-    assert filt.feed("户想了解平台能力") == ["用户想了解平台能力"]
-    assert filt.feed("，直接介绍。") == ["，直接介绍。"]
+    assert filt.feed("用户想删除文件") == [DISPLAY_REASONING_SUMMARY]
+    assert filt.feed("，所以我认为已经完成") == []

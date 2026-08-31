@@ -18,17 +18,15 @@ from app.harness.contracts import ToolCall
 # 确认卡 kind 白名单（一单一 kind 门禁）
 CONFIRM_KINDS: frozenset[str] = frozenset({"benchmark", "testcase", "rag", "stress"})
 
-# 任意代码黑名单前缀（bash 门禁；bwrap 沙箱之外的第二道防线，禁止命令开头命中）
+# 任意代码硬黑名单前缀（bash 门禁；bwrap 沙箱之外的第二道防线）。删除、改权限
+# 等工作区内变更由 ToolNode 的人工确认处理；提权、网络和远程连接仍不可执行。
 BASH_BLOCK_PREFIXES: tuple[str, ...] = (
-    "rm ",
     "sudo ",
     "curl ",
     "wget ",
     "nc ",
     "ssh ",
     "scp ",
-    "chmod ",
-    "chown ",
 )
 
 
