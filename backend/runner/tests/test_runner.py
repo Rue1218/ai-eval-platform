@@ -127,7 +127,9 @@ def test_run_empty_command_rejected(server: _Server) -> None:
 
 
 def test_run_blocklisted_command_rejected(server: _Server) -> None:
-    status, body = _post(server.url("/run"), _run_payload(command="rm -rf /tmp/x"))
+    # sudo 属「不可确认后执行」类（提权），runner 必须独立硬拒；
+    # rm/chmod 等改动工作区的命令走 HITL 确认，批准后应放行（不再在此断言）。
+    status, body = _post(server.url("/run"), _run_payload(command="sudo id -u"))
     assert status == 200
     assert body["ok"] is False
     assert body["error"]["code"] == "VALIDATION"

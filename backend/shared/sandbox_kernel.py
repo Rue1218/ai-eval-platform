@@ -31,17 +31,18 @@ _SANDBOX_MOUNT = "/work"
 # 会话标识严格校验：UUID 或安全短标识（防路径穿越，与 workspace.py 同源）
 _SESSION_ID_RE = re.compile(r"^[0-9a-fA-F-]{8,64}$")
 
-# bash 命令黑名单前缀（独立 runner 的第二道防线；api 侧 rules.py 保留同款）
+# bash 命令黑名单前缀（独立 runner 的第二道防线；api 侧 rules.py / dispatch.py 保留同款）。
+# 仅覆盖「不可确认后执行」的命令类（提权/网络/远程连接）；rm/chmod/chown 等改动
+# 会话工作区的命令自 5863846 起走 LangGraph 人工确认（HITL），批准后必须放行进入
+# bwrap——runner 不得再次硬拒，否则出现「用户已确认但命令仍被拒绝」的错位流程。
+# 物理隔离边界仍由 bwrap 承担（无网络、工作区唯一可写、资源受限）。
 BASH_BLOCK_PREFIXES: tuple[str, ...] = (
-    "rm ",
     "sudo ",
     "curl ",
     "wget ",
     "nc ",
     "ssh ",
     "scp ",
-    "chmod ",
-    "chown ",
 )
 
 
