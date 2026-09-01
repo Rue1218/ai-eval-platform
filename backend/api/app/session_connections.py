@@ -1,21 +1,21 @@
 """单 API 副本下的共享会话瞬态流连接 Hub。
 
-Worker 产生的持久化事件仍通过 ``ws_events`` 轮询转发；本模块只负责不落库的
-正文 chunk 广播。产品当前部署为单 API 副本，若扩容为多副本必须替换为 Redis
-Pub/Sub 等进程外总线，不能把本 Hub 当作跨进程一致性机制。
+Worker 产生的持久化事件仍通过 ``ws_events`` 轮询转发；本模块负责在线连接登记、
+回放期间的持久事件排队，以及不落库正文 chunk 广播。产品当前部署为单 API 副本，
+若扩容为多副本必须替换为 Redis Pub/Sub 等进程外总线，不能把本 Hub 当作跨进程一致性机制。
 """
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from fastapi import WebSocket
 
 
-@dataclass(frozen=True)
+@dataclass
 class LiveSessionConnection:
     """已认证的会话连接及其独立发送游标/锁。"""
 
@@ -24,6 +24,9 @@ class LiveSessionConnection:
     user_id: str
     websocket: WebSocket
     state: Any
+    # 新连接回放期间不接收实时持久事件，避免回放和广播交错；事件先暂存到队列。
+    ready: bool = True
+    pending_events: list[dict] = field(default_factory=list)
 
 
 class SessionConnectionHub:
@@ -39,6 +42,8 @@ class SessionConnectionHub:
         user_id: str,
         websocket: WebSocket,
         state: Any,
+        *,
+        ready: bool = True,
     ) -> None:
         """登记已通过会话可见性校验的长连接。"""
         self._connections.setdefault(session_id, {})[connection_id] = LiveSessionConnection(
@@ -47,6 +52,7 @@ class SessionConnectionHub:
             user_id=user_id,
             websocket=websocket,
             state=state,
+            ready=ready,
         )
 
     def unregister(self, session_id: str, connection_id: str) -> None:
@@ -58,6 +64,32 @@ class SessionConnectionHub:
         if not rows:
             self._connections.pop(session_id, None)
 
+    async def activate(self, session_id: str, connection_id: str) -> bool:
+        """完成历史回放后，按事件号顺序发送回放期间暂存的实时事件。"""
+        row = self._connections.get(session_id, {}).get(connection_id)
+        if row is None:
+            return False
+        try:
+            async with row.state.lock:
+                if row.ready:
+                    return True
+                pending = sorted(
+                    row.pending_events,
+                    key=lambda frame: int(frame.get("event_id", 0)),
+                )
+                row.pending_events.clear()
+                for frame in pending:
+                    event_id = int(frame.get("event_id", 0))
+                    if event_id <= int(getattr(row.state, "cursor", 0)):
+                        continue
+                    await asyncio.wait_for(row.websocket.send_json(frame), timeout=1.0)
+                    row.state.cursor = event_id
+                row.ready = True
+            return True
+        except Exception:
+            self.unregister(session_id, connection_id)
+            return False
+
     async def broadcast_chunk(
         self,
         session_id: str,
@@ -66,16 +98,19 @@ class SessionConnectionHub:
         """向会话内在线成员并发发送正文 chunk；慢/失效连接会被清理。
 
         ``build_frame`` 每个接收者单独按其 cursor 构造帧，避免共享发起者的
-        event_id；发送与该连接的 Worker 事件转发共用 state.lock。
+        event_id；发送与该连接的 Worker 事件转发共用 state.lock。回放期间的
+        瞬态帧直接丢弃，因为它们本来就不落库、不补发。
         """
         rows = list(self._connections.get(session_id, {}).values())
         if not rows:
             return
 
         async def _send(row: LiveSessionConnection) -> str | None:
-            frame = build_frame(int(getattr(row.state, "cursor", 0)))
             try:
                 async with row.state.lock:
+                    if not row.ready:
+                        return None
+                    frame = build_frame(int(getattr(row.state, "cursor", 0)))
                     await asyncio.wait_for(row.websocket.send_json(frame), timeout=1.0)
             except Exception:
                 return row.connection_id
@@ -86,19 +121,27 @@ class SessionConnectionHub:
             self.unregister(session_id, connection_id)
 
     async def broadcast_event(self, session_id: str, frame: dict) -> bool:
-        """向会话在线成员广播同一条持久化事件，并同步各连接事件游标。"""
+        """广播持久化事件；新连接回放期间先排队，避免实时帧插入历史序列。"""
         rows = list(self._connections.get(session_id, {}).values())
         if not rows:
             return False
+        event_id = int(frame.get("event_id", 0))
 
         async def _send(row: LiveSessionConnection) -> str | None:
             try:
                 async with row.state.lock:
+                    cursor = int(getattr(row.state, "cursor", 0))
+                    if not row.ready:
+                        if event_id > cursor and not any(
+                            int(item.get("event_id", 0)) == event_id
+                            for item in row.pending_events
+                        ):
+                            row.pending_events.append(dict(frame))
+                        return None
+                    if event_id <= cursor:
+                        return None
                     await asyncio.wait_for(row.websocket.send_json(frame), timeout=1.0)
-                    row.state.cursor = max(
-                        int(getattr(row.state, "cursor", 0)),
-                        int(frame.get("event_id", 0)),
-                    )
+                    row.state.cursor = event_id
             except Exception:
                 return row.connection_id
             return None

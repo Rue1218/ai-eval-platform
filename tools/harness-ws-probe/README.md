@@ -1,6 +1,6 @@
 # Harness WebSocket 协议探针（harness-ws-probe）
 
-> 对 `http://<host>:8000/ws/agent?ticket=...` 做**黑盒抓包 + 契约断言**的工具：不依赖前端、不依赖后端内部实现，只按 API.md V1.22 的 WS 事件契约收发帧，并用 `ExpectMatcher` 对帧做白名单 / 单调性 / 时序 / 字段级断言。
+> 对 `http://<host>:8000/ws/agent?ticket=...` 做**黑盒抓包 + 契约断言**的工具：不依赖前端、不依赖后端内部实现，只按 API.md V1.62 的 WS 事件契约收发帧，并用 `ExpectMatcher` 对帧做白名单 / 单调性 / 时序 / 字段级断言。
 
 | 项 | 内容 |
 | :--- | :--- |
@@ -14,11 +14,11 @@
 ```
 tools/harness-ws-probe/
 ├── harness_ws_probe/
-│   ├── client.py         # WS 客户端：Cookie 登录、短票、四类上行、4401/4404 关闭码
+│   ├── client.py         # WS 客户端：Cookie 登录、短票、五类上行、4401/4404 关闭码
 │   ├── recorder.py       # TraceRecorder：双向帧录制（dir up/down、事件号、时间戳），落盘 jsonl
 │   ├── expect.py         # ExpectMatcher：事件白名单 / event_id 严格递增 / 上行枚举 / 回合契约
 │   ├── redact.py         # 抓包脱敏：ticket、system_prompt 等一律 <redacted>
-│   ├── protocol.py       # 协议常量（禁止的旧事件名、四类上行、瞬态帧定义）
+│   ├── protocol.py       # 协议常量（禁止的旧事件名、五类上行、瞬态帧定义）
 │   ├── scripted.py       # ScriptedProbe：进程内对等端，不连真实服务
 │   ├── scenarios/        # L0 握手/斜杠/幂等/断线重放、L1 确认卡入队、L2 chat 契约
 │   └── __main__.py       # CLI 入口
@@ -91,7 +91,7 @@ pytest live 套件（`backend/api/tests/test_harness_probe_live.py`）把 L0/L1/
 
 覆盖场景（与 CLI live 同一套场景，断言更严）：
 
-- **L0**：非法票 4401 / 不存在会话 4404 关闭码、第五种上行 → `VALIDATION`、空会话 `/cancel`、`/stress` 确认卡取消、`/help` 正文、`client_message_id` 幂等、断线按 `last_event_id` 重连补发（不含瞬态帧）；
+- **L0**：非法票 4401 / 不存在会话 4404 关闭码、非法上行 → `VALIDATION`、空会话 `/cancel`、`/stress` 确认卡取消、`/help` 正文、`client_message_id` 幂等、断线按 `last_event_id` 重连补发（不含瞬态帧）；
 - **L1**：`/stress` → 确认卡 → `confirm_ack(ok=true, sample_size=1)` → 返回 `task_id`；
 - **L2**：真实模型一轮对话，断言 `think_final` 先于 `response.completed`、无一字一帧、无隐藏思维链。
 
@@ -109,7 +109,7 @@ pytest live 套件（`backend/api/tests/test_harness_probe_live.py`）把 L0/L1/
 | `public_headers` | 下行帧必须带 `{event, session_id, task_id, event_id, ts, payload}` 公共头 |
 | `event_whitelist` | 禁止旧事件名（如 `message`），未知下行事件即失败 |
 | `event_ids_monotonic` | 持久帧 `event_id` 严格递增 |
-| `no_forbidden_uplink` | 上行只能是四类：`user_message` / `confirm_ack` / `cancel_task` / `clarify_reply` |
+| `no_forbidden_uplink` | 上行只能是五类：`user_message` / `confirm_ack` / `cancel_task` / `clarify_reply` / `tool_approval_ack` |
 | `error(code, text)` | 错误帧归一为 10 大错误码 + 场景文案 |
 | `chat_turn_contract` | `response.completed` 收尾；有思考链时 `think_final` 必须先于它；禁止一字一帧；禁止隐藏思维链（`Here's a thinking process`） |
 | `replay_no_transient` | 断线重连补发不得包含瞬态帧（`assistant_delta` 等） |

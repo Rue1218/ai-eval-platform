@@ -73,6 +73,15 @@ def test_tool_call_start_is_forbidden() -> None:
         ExpectMatcher(trace).event_whitelist()
 
 
+def test_tool_approval_events_are_whitelisted() -> None:
+    """危险 bash 的确认卡与回执必须纳入服务端下行事件白名单。"""
+    trace = TraceRecorder()
+    base = {"session_id": "s", "task_id": None, "ts": "t", "payload": {}}
+    trace.record_down({**base, "event": "tool_approval", "event_id": 1})
+    trace.record_down({**base, "event": "tool_approval_ack", "event_id": 2})
+    ExpectMatcher(trace).event_whitelist()
+
+
 def test_tool_stream_events_whitelisted_and_skipped_by_event_id() -> None:
     """tool_progress / tool_output_delta 属白名单事件，且不参与 event_id 单调性检查。"""
     trace = TraceRecorder()
@@ -95,12 +104,28 @@ def test_monotonic_event_id() -> None:
         ExpectMatcher(trace).event_ids_monotonic()
 
 
-def test_client_rejects_fifth_uplink() -> None:
+def test_client_rejects_unknown_uplink() -> None:
     async def _run() -> None:
         client = ProbeClient("http://127.0.0.1:9")
         client._ws = object()
-        with pytest.raises(Exception, match="第五种"):
+        with pytest.raises(Exception, match="未登记"):
             await client._send({"event": "slash", "payload": {}})
+
+    asyncio.run(_run())
+
+
+def test_client_accepts_tool_approval_ack_uplink() -> None:
+    """危险工具确认回执是 API.md §4.4 的合法第五类上行。"""
+
+    class _Ws:
+        async def send(self, _raw: str) -> None:
+            return None
+
+    async def _run() -> None:
+        client = ProbeClient("http://127.0.0.1:9")
+        client._ws = _Ws()
+        await client.send_tool_approval_ack("call-1", "reject")
+        assert client.trace.uplink()[-1].event == "tool_approval_ack"
 
     asyncio.run(_run())
 

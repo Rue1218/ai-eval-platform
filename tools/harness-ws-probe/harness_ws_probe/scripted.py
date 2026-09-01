@@ -186,13 +186,32 @@ class ScriptedProbe:
             {"event": "clarify_reply", "payload": {"id": clarify_id, "answer": answer}}
         )
 
+    async def send_tool_approval_ack(self, approval_id: str, action: str) -> None:
+        """记录危险工具确认回执，保持脚本端与真实客户端上行枚举一致。"""
+        self.trace.record_up(
+            {
+                "event": "tool_approval_ack",
+                "payload": {"id": approval_id, "action": action},
+            }
+        )
+        self._emit(
+            "error",
+            {"code": "VALIDATION", "message": "脚本场景未注册待确认危险工具"},
+        )
+
     async def send_cancel_task(self, task_id: str) -> None:
         self.trace.record_up({"event": "cancel_task", "payload": {"task_id": task_id}})
 
     async def send_raw(self, message: dict[str, Any]) -> None:
         self.trace.record_up(message)
         event = message.get("event")
-        if event not in {"user_message", "confirm_ack", "cancel_task", "clarify_reply"}:
+        if event not in {
+            "user_message",
+            "confirm_ack",
+            "cancel_task",
+            "clarify_reply",
+            "tool_approval_ack",
+        }:
             self._emit("error", {"code": "VALIDATION", "message": "不支持的 WebSocket 事件"})
 
     async def recv(self, timeout_s: float = 15.0) -> dict[str, Any]:

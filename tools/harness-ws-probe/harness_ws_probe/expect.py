@@ -62,7 +62,7 @@ class ExpectMatcher:
             last = item.event_id
 
     def no_forbidden_uplink(self, allowed_raw: bool = False) -> None:
-        """默认上行只能是四类；allowed_raw 时允许场景「第五种事件」的探测帧。"""
+        """默认上行只能是五类；allowed_raw 时允许场景探测用的非法事件帧。"""
         from .protocol import UPLINK_EVENTS
 
         for item in self.trace.uplink():
