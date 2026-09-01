@@ -4735,7 +4735,7 @@ onBeforeUnmount(() => {
 
 /* 危险 bash 的确认卡从 Composer 上方弹出，确认或取消后立即收回。 */
 .tool-approval-drawer {
-  max-width: 780px;
+  max-width: 840px;
   margin: 0 auto 10px;
   transform-origin: bottom center;
 }
@@ -4757,7 +4757,7 @@ onBeforeUnmount(() => {
 }
 
 .quick-chips {
-  max-width: 780px;
+  max-width: 840px;
   margin: 0 auto 8px;
 }
 
@@ -4785,7 +4785,7 @@ onBeforeUnmount(() => {
 
 /* 输入卡片：上部多行文本，下部操作底栏（对齐 Gemini / Cursor / Claude 对话框） */
 .composer-card {
-  max-width: 780px;
+  max-width: 840px;
   margin: 0 auto;
   border: 1px solid var(--border-subtle);
   border-radius: 16px;
