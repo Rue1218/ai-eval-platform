@@ -83,6 +83,132 @@ class _ConnectionState:
         self.cursor = 0
 
 
+@dataclass
+class _TurnHandle:
+    """会话级 Agent 回合租约，隔离多连接并发与旧任务清理。"""
+
+    turn_id: str
+    user_id: str
+    abort: asyncio.Event
+    task: asyncio.Task[None] | None = None
+    started: bool = False
+    terminal_emitted: bool = False
+
+
+# 一个共享会话同一时刻只能有一个交互回合；锁只保护本进程内短临界区，不跨越 await。
+_TURN_LOCK = threading.Lock()
+_SESSION_TURNS: dict[str, _TurnHandle] = {}
+
+
+def _turn_busy(session_id: str, local_task: asyncio.Task[None] | None = None) -> bool:
+    """判断会话是否已有尚未完成的回合，覆盖同会话多条 WebSocket 连接。"""
+    if local_task is not None and not local_task.done():
+        return True
+    with _TURN_LOCK:
+        current = _SESSION_TURNS.get(session_id)
+        return current is not None and (current.task is None or not current.task.done())
+
+
+def _reserve_turn(
+    session_id: str,
+    user_id: str,
+    *,
+    local_task: asyncio.Task[None] | None = None,
+) -> _TurnHandle:
+    """原子抢占会话回合；失败时不写入用户消息或恢复令牌。"""
+    if local_task is not None and not local_task.done():
+        raise AppError(ErrorCode.CONCURRENCY, "上一轮 Agent 仍在生成")
+    with _TURN_LOCK:
+        current = _SESSION_TURNS.get(session_id)
+        if current is not None and (current.task is None or not current.task.done()):
+            raise AppError(ErrorCode.CONCURRENCY, "上一轮 Agent 仍在生成")
+        handle = _TurnHandle(
+            turn_id=f"{session_id}:{uuid4().hex}",
+            user_id=str(user_id),
+            abort=asyncio.Event(),
+        )
+        _SESSION_TURNS[session_id] = handle
+        _SESSION_ABORTS[session_id] = handle.abort
+        return handle
+
+
+def _release_turn(handle: _TurnHandle, task: asyncio.Task[None] | None = None) -> None:
+    """只清理仍指向当前租约的映射，防止旧任务回调误删新回合 abort。"""
+    session_id = handle.turn_id.split(":", 1)[0]
+    with _TURN_LOCK:
+        current = _SESSION_TURNS.get(session_id)
+        if current is not handle:
+            return
+        if task is not None and current.task is not task:
+            return
+        _SESSION_TURNS.pop(session_id, None)
+        if _SESSION_ABORTS.get(session_id) is handle.abort:
+            _SESSION_ABORTS.pop(session_id, None)
+
+
+def _attach_turn_task(handle: _TurnHandle, task: asyncio.Task[None]) -> None:
+    """把后台任务绑定到租约，并用身份校验注册完成回调。"""
+    with _TURN_LOCK:
+        current = _SESSION_TURNS.get(handle.turn_id.split(":", 1)[0])
+        if current is not handle:
+            task.cancel()
+            raise AppError(ErrorCode.CONCURRENCY, "Agent 回合已失效，请重试")
+        handle.task = task
+    # stop 可能在 task 首次调度前到达；先让它启动并由 abort 路径发出唯一 completed。
+    if handle.abort.is_set() and handle.started:
+        task.cancel()
+    task.add_done_callback(lambda done: _release_turn(handle, done))
+
+
+def _claim_terminal(session_id: str, turn_id: str | None) -> bool:
+    """为回合抢占唯一完成事件；旧任务或 stop 不得重复发送 completed。"""
+    if not turn_id:
+        return True
+    with _TURN_LOCK:
+        current = _SESSION_TURNS.get(session_id)
+        if current is None or current.turn_id != turn_id or current.terminal_emitted:
+            return False
+        current.terminal_emitted = True
+        return True
+
+
+def _turn_owner(session_id: str) -> str | None:
+    """读取当前回合所有者，仅返回非敏感用户 ID。"""
+    with _TURN_LOCK:
+        current = _SESSION_TURNS.get(session_id)
+        return current.user_id if current else None
+
+
+def _start_turn(
+    session_id: str,
+    websocket: WebSocket,
+    state: _ConnectionState,
+    user_id: str,
+    *,
+    handle: _TurnHandle,
+    resume: dict | None = None,
+) -> asyncio.Task[None]:
+    """创建并登记后台 Harness 回合；收包循环永不等待整轮图执行。"""
+    task = asyncio.create_task(
+        _run_turn(
+            session_id,
+            websocket,
+            state,
+            handle.abort,
+            user_id=user_id,
+            resume=resume,
+            turn_id=handle.turn_id,
+        ),
+        name=f"agent-turn-{session_id}",
+    )
+    try:
+        _attach_turn_task(handle, task)
+    except Exception:
+        task.cancel()
+        raise
+    return task
+
+
 def _iso(value: datetime | None = None) -> str:
     """将数据库时间统一转换为前端可解析的 UTC ISO 字符串。"""
     current = value or datetime.now(UTC)
@@ -111,21 +237,26 @@ def _frame(
     }
 
 
-async def _send(
-    websocket: WebSocket,
-    state: _ConnectionState,
-    frame: dict[str, Any],
-) -> bool:
-    """串行发送一帧；连接已关闭时只返回失败，不把底层异常泄露给前端。"""
+async def _send_unlocked(websocket: WebSocket, frame: dict[str, Any]) -> bool:
+    """在调用方已持有连接锁时发送一帧，统一吞掉底层连接异常。"""
     try:
-        async with state.lock:
-            await websocket.send_json(frame)
+        await websocket.send_json(frame)
         return True
     except (WebSocketDisconnect, RuntimeError):
         return False
     except Exception as exc:
         logger.info("Agent WS 发送失败 type=%s", type(exc).__name__)
         return False
+
+
+async def _send(
+    websocket: WebSocket,
+    state: _ConnectionState,
+    frame: dict[str, Any],
+) -> bool:
+    """串行发送一帧；连接已关闭时只返回失败，不把底层异常泄露给前端。"""
+    async with state.lock:
+        return await _send_unlocked(websocket, frame)
 
 
 def _consume_ws_ticket(db: Session, ticket: str | None) -> User:
@@ -221,11 +352,12 @@ async def _emit_persistent(
         return False
     if row is None:
         return False
-    state.cursor = max(state.cursor, event_id)
     frame = _frame(session_id, event, event_id, payload, task_id=task_id, ts=row.ts)
     # 持久化事件需要让 team 会话的在线协作者即时看到；无登记连接时保底发给当前连接。
+    # 不要提前推进当前连接游标：Hub 需要据此判断回放期间的排队事件是否已补发。
     if await SESSION_CONNECTION_HUB.broadcast_event(session_id, frame):
         return True
+    state.cursor = max(state.cursor, event_id)
     return await _send(websocket, state, frame)
 
 
@@ -397,28 +529,31 @@ async def _replay_events(
     session_id: str,
     last_event_id: int,
 ) -> None:
-    """按 last_event_id 补发持久化事件，不重放瞬态流增量。"""
+    """按 last_event_id 补发持久化事件，并先推进游标避免 Worker 旧事件重发。"""
+    # 即使没有待补发事件，也必须承接客户端游标；否则 forward_loop 会从 0 重扫。
+    state.cursor = max(state.cursor, last_event_id)
     rows = (
         db.query(WsEvent)
         .filter(WsEvent.session_id == session_id, WsEvent.event_id > last_event_id)
         .order_by(WsEvent.event_id)
         .all()
     )
-    for row in rows:
-        state.cursor = max(state.cursor, row.event_id)
-        if not await _send(
-            websocket,
-            state,
-            _frame(
+    # 回放与当前连接的广播共用同一把锁；Hub 会在锁外登记/排队新事件。
+    async with state.lock:
+        for row in rows:
+            if row.event_id <= state.cursor:
+                continue
+            frame = _frame(
                 session_id,
                 row.event,
                 row.event_id,
                 row.payload or {},
                 task_id=row.task_id,
                 ts=row.ts,
-            ),
-        ):
-            return
+            )
+            if not await _send_unlocked(websocket, frame):
+                return
+            state.cursor = row.event_id
 
 
 DEFAULT_AGENT_SYSTEM = (
@@ -624,6 +759,28 @@ def _confirm_author_payload(user: User | None) -> dict[str, str] | None:
     }
 
 
+async def _emit_turn_completed(
+    db: Session,
+    websocket: WebSocket,
+    state: _ConnectionState,
+    session_id: str,
+    *,
+    finish_reason: str,
+    turn_id: str | None,
+) -> None:
+    """以回合租约保证 response.completed 至多落库并发送一次。"""
+    if not _claim_terminal(session_id, turn_id):
+        return
+    await _emit_persistent(
+        db,
+        websocket,
+        state,
+        session_id,
+        "response.completed",
+        {"finish_reason": finish_reason, "role": "assistant"},
+    )
+
+
 async def _translate_event(
     db: Session,
     websocket: WebSocket,
@@ -633,6 +790,7 @@ async def _translate_event(
     event: dict,
     *,
     user: User | None = None,
+    turn_id: str | None = None,
 ) -> None:
     """把图节点产出的 NodeEvent 翻译为 ws event（落库 + 统一 emit）。
 
@@ -643,6 +801,8 @@ async def _translate_event(
     kind = event["kind"]
     payload = event.get("payload") or {}
     task_id = event.get("task_id")
+    if kind == "response.completed" and not _claim_terminal(session_id, turn_id):
+        return
     if kind == "assistant_message":
         assistant = Message(
             session_id=session_id,
@@ -714,6 +874,7 @@ async def _run_turn(
     *,
     user_id: str,
     resume: dict | None = None,
+    turn_id: str | None = None,
 ) -> None:
     """后台执行一轮 LangGraph Agent，并把图输出统一投影为 WS 事件。
 
@@ -724,6 +885,11 @@ async def _run_turn(
     ``resume`` 非 None 时为人工中断恢复模式：以 ``Command(resume=...)`` 恢复
     同一 thread_id 的图；澄清回复与危险工具确认共用这条无副作用恢复路径。
     """
+    if turn_id:
+        with _TURN_LOCK:
+            current = _SESSION_TURNS.get(session_id)
+            if current is not None and current.turn_id == turn_id:
+                current.started = True
     db = SessionLocal()
     try:
         config, profile = _selected_model_config(db)
@@ -747,7 +913,8 @@ async def _run_turn(
             serializable = to_serializable_request(
                 ModelRequest.from_messages(config, history, system=system_prompt)
             )
-            thread_id = f"{session_id}:{uuid4().hex}"
+            # 新回合复用租约 ID 作为检查点线程 ID，便于并发与中断审计关联。
+            thread_id = turn_id or f"{session_id}:{uuid4().hex}"
             resume_value = None
         # 会话工作区：每个会话一个独立文件夹（read/write/edit 与 bash 的
         # 沙箱根，经 configurable 注入，toolnode 优先读取此值）
@@ -882,7 +1049,13 @@ async def _run_turn(
                 payload = chunk["__interrupt__"][0].value
                 if isinstance(payload, dict) and payload.get("type") == "clarify":
                     await _handle_clarify_interrupt(
-                        db, websocket, state, session_id, thread_id, payload
+                        db,
+                        websocket,
+                        state,
+                        session_id,
+                        thread_id,
+                        payload,
+                        user_id=user_id,
                     )
                 elif isinstance(payload, dict) and payload.get("type") == "tool_approval":
                     await _handle_tool_approval_interrupt(
@@ -910,6 +1083,7 @@ async def _run_turn(
                     profile,
                     event,
                     user=turn_user,
+                    turn_id=turn_id,
                 )
 
         await _flush_think()
@@ -932,29 +1106,44 @@ async def _run_turn(
                 profile,
                 event,
                 user=turn_user,
+                turn_id=turn_id,
             )
+    except asyncio.CancelledError:
+        db.rollback()
+        if abort.is_set():
+            logger.info("Agent 回合已中止 session=%s", session_id)
+            await _emit_turn_completed(
+                db,
+                websocket,
+                state,
+                session_id,
+                finish_reason="cancelled",
+                turn_id=turn_id,
+            )
+            return
+        raise
     except StreamAborted:
         db.rollback()
         logger.info("Agent 回合已中止 session=%s", session_id)
-        await _emit_persistent(
+        await _emit_turn_completed(
             db,
             websocket,
             state,
             session_id,
-            "response.completed",
-            {"finish_reason": "cancelled", "role": "assistant"},
+            finish_reason="cancelled",
+            turn_id=turn_id,
         )
     except AppError as exc:
         db.rollback()
         logger.info("Agent 回合失败 session=%s code=%s", session_id, exc.code.value)
         await _emit_error(db, websocket, state, session_id, exc)
-        await _emit_persistent(
+        await _emit_turn_completed(
             db,
             websocket,
             state,
             session_id,
-            "response.completed",
-            {"finish_reason": "error", "role": "assistant"},
+            finish_reason="error",
+            turn_id=turn_id,
         )
     except Exception as exc:
         db.rollback()
@@ -966,13 +1155,13 @@ async def _run_turn(
             session_id,
             AppError(ErrorCode.INTERNAL, "Agent 调用失败"),
         )
-        await _emit_persistent(
+        await _emit_turn_completed(
             db,
             websocket,
             state,
             session_id,
-            "response.completed",
-            {"finish_reason": "error", "role": "assistant"},
+            finish_reason="error",
+            turn_id=turn_id,
         )
     finally:
         db.close()
@@ -984,16 +1173,42 @@ async def _handle_stop(
     state: _ConnectionState,
     session_id: str,
     active_turn: asyncio.Task[None] | None,
+    user_id: str | None = None,
 ) -> None:
-    """/stop 即时中断：置位会话 abort 并取消当前回合（不可恢复，§2.5）。
+    """/stop 中止当前 Harness 回合，并限制为本轮发起成员执行。
 
-    ``interrupt()`` 是可恢复暂停，不替代取消；/stop 不取消已入队的任务。
+    ``interrupt()`` 是可恢复暂停，不替代取消；/stop 不取消已入队的任务。活跃
+    回合由后台任务统一发送唯一 ``response.completed``，避免 stop 与任务竞态重复收尾。
     """
-    abort = _SESSION_ABORTS.get(session_id)
-    if abort:
-        abort.set()
-    if active_turn and not active_turn.done():
+    with _TURN_LOCK:
+        turn = _SESSION_TURNS.get(session_id)
+    pending_clarify = _SESSION_CLARIFY.get(session_id)
+    pending_approval = _SESSION_TOOL_APPROVAL.get(session_id)
+    pending_owner = None
+    if isinstance(pending_approval, dict):
+        pending_owner = pending_approval.get("user_id")
+    elif isinstance(pending_clarify, dict):
+        pending_owner = pending_clarify.get("user_id")
+    owner = turn.user_id if turn else pending_owner
+    if user_id and owner and str(user_id) != str(owner):
+        raise AppError(ErrorCode.UNAUTHORIZED, "仅本轮发起成员可以执行 /stop")
+
+    abort = turn.abort if turn else _SESSION_ABORTS.get(session_id)
+    active = False
+    if turn and (turn.task is None or not turn.task.done()):
+        active = True
+        turn.abort.set()
+        if turn.task is not None and turn.started:
+            turn.task.cancel()
+    elif active_turn and not active_turn.done():
+        active = True
+        if abort:
+            abort.set()
         active_turn.cancel()
+    # 有活跃后台任务时不在收包循环抢发 completed，由 _run_turn 的取消分支收尾。
+    if active:
+        return
+
     # 已暂停的人工交互没有活跃 asyncio Task；/stop 仍需使其恢复令牌失效。
     _SESSION_CLARIFY.pop(session_id, None)
     stopped_approval = _SESSION_TOOL_APPROVAL.pop(session_id, None)
@@ -1010,13 +1225,13 @@ async def _handle_stop(
             "tool_approval_ack",
             {"id": str(stopped_approval["id"]), "action": "reject", "ok": False},
         )
-    await _emit_persistent(
+    await _emit_turn_completed(
         db,
         websocket,
         state,
         session_id,
-        "response.completed",
-        {"finish_reason": "cancelled", "role": "assistant"},
+        finish_reason="cancelled",
+        turn_id=turn.turn_id if turn else None,
     )
 
 
@@ -1033,6 +1248,8 @@ async def _handle_compact(
     M3 ``write_summary`` 写 ``sessions.compact_summary``，窗口游标
     ``compact_keep_from`` 指向保留起点（CX-6/MEM-3 原始优先）。
     """
+    if _turn_busy(session.id):
+        raise AppError(ErrorCode.CONCURRENCY, "上一轮 Agent 仍在生成")
     if session.user_id != user.id:
         raise AppError(ErrorCode.UNAUTHORIZED, "仅会话负责人可执行 /compact")
     rows = (
@@ -1109,6 +1326,8 @@ async def _handle_stress(
     user: User,
 ) -> None:
     """/stress：发出质量任务确认卡且 with_stress=true，禁止 kind=stress。"""
+    if _turn_busy(session.id):
+        raise AppError(ErrorCode.CONCURRENCY, "上一轮 Agent 仍在生成")
     from ..harness.memory import read_prefs
     from ..harness.memory.episodic import get_active_tasks
 
@@ -1143,6 +1362,8 @@ async def _handle_clarify_interrupt(
     session_id: str,
     thread_id: str,
     payload: dict,
+    *,
+    user_id: str | None = None,
 ) -> None:
     """澄清卡中断帧翻译：持久化 clarify 事件并保存待恢复状态。
 
@@ -1151,10 +1372,13 @@ async def _handle_clarify_interrupt(
     恢复同一 thread（M9 §3.5.1）。澄清卡不建任务、不写 pending_confirm。
     """
     clarify_id = str(payload.get("id") or "")
-    _SESSION_CLARIFY[session_id] = {
+    pending = {
         "id": clarify_id,
         "thread_id": thread_id,
     }
+    if user_id:
+        pending["user_id"] = str(user_id)
+    _SESSION_CLARIFY[session_id] = pending
     await _emit_persistent(
         db,
         websocket,
@@ -1255,8 +1479,9 @@ async def _handle_clarify_reply(
     session: AgentSession,
     payload: Any,
     active_turn: asyncio.Task[None] | None,
+    user_id: str | None = None,
 ) -> asyncio.Task[None] | None:
-    """澄清卡回复：校验 id 匹配后以 Command(resume) 恢复图（不唤醒 confirm）。"""
+    """澄清卡回复：校验发起人后以 Command(resume) 恢复同一图线程。"""
     if not isinstance(payload, dict):
         raise AppError(ErrorCode.VALIDATION, "clarify_reply payload 必须是对象")
     pending = _SESSION_CLARIFY.get(session.id)
@@ -1264,29 +1489,28 @@ async def _handle_clarify_reply(
         raise AppError(ErrorCode.VALIDATION, "无待回复的澄清卡")
     if str(payload.get("id") or "") != pending["id"]:
         raise AppError(ErrorCode.VALIDATION, "澄清卡已失效，请刷新后重试")
+    if user_id and pending.get("user_id") and str(user_id) != str(pending["user_id"]):
+        raise AppError(ErrorCode.UNAUTHORIZED, "仅发起该澄清的成员可以回复")
     answer = payload.get("answer")
     if not isinstance(answer, str) or not answer.strip():
         raise AppError(ErrorCode.VALIDATION, "回复内容不能为空")
-    if active_turn and not active_turn.done():
+    if _turn_busy(session.id, active_turn):
         raise AppError(ErrorCode.CONCURRENCY, "上一轮 Agent 仍在生成")
-    _SESSION_CLARIFY.pop(session.id, None)
-    abort = asyncio.Event()
-    _SESSION_ABORTS[session.id] = abort
-    task = asyncio.create_task(
-        _run_turn(
+    handle = _reserve_turn(session.id, user_id or session.user_id, local_task=active_turn)
+    try:
+        _SESSION_CLARIFY.pop(session.id, None)
+        return _start_turn(
             session.id,
             websocket,
             state,
-            abort,
-            user_id=session.user_id,
+            user_id or session.user_id,
+            handle=handle,
             resume={"thread_id": pending["thread_id"], "value": answer.strip()},
-        ),
-        name=f"agent-turn-{session.id}",
-    )
-    task.add_done_callback(
-        lambda _task: _SESSION_ABORTS.pop(session.id, None)
-    )
-    return task
+        )
+    except Exception:
+        _SESSION_CLARIFY[session.id] = pending
+        _release_turn(handle)
+        raise
 
 
 async def _handle_tool_approval_ack(
@@ -1318,39 +1542,39 @@ async def _handle_tool_approval_ack(
     action = payload.get("action")
     if action not in {"approve", "reject"}:
         raise AppError(ErrorCode.VALIDATION, "确认动作仅支持 approve 或 reject")
-    if active_turn and not active_turn.done():
+    if _turn_busy(session.id, active_turn):
         raise AppError(ErrorCode.CONCURRENCY, "上一轮 Agent 仍在生成")
     if recovered and not await _AGENT.ahas_pending_interrupt(str(pending["thread_id"])):
         # 恢复路径的图线程可能已随重启丢失（memory 引擎）或被消费：fail-closed，
         # 不对不存在/已完成的中断误发 resume。
         raise AppError(ErrorCode.VALIDATION, "确认已失效（会话状态已过期），请重新发起命令")
-    _SESSION_TOOL_APPROVAL.pop(session.id, None)
-    await _emit_persistent(
-        db,
-        websocket,
-        state,
-        session.id,
-        "tool_approval_ack",
-        {"id": approval_id, "action": action, "ok": True},
-    )
-    abort = asyncio.Event()
-    _SESSION_ABORTS[session.id] = abort
-    task = asyncio.create_task(
-        _run_turn(
+    handle = _reserve_turn(session.id, str(user.id), local_task=active_turn)
+    try:
+        await _emit_persistent(
+            db,
+            websocket,
+            state,
+            session.id,
+            "tool_approval_ack",
+            {"id": approval_id, "action": action, "ok": True},
+        )
+        removed_pending = _SESSION_TOOL_APPROVAL.pop(session.id, None)
+        return _start_turn(
             session.id,
             websocket,
             state,
-            abort,
-            user_id=user.id,
+            str(user.id),
+            handle=handle,
             resume={
                 "thread_id": pending["thread_id"],
                 "value": {"id": approval_id, "action": action},
             },
-        ),
-        name=f"agent-turn-{session.id}",
-    )
-    task.add_done_callback(lambda _task: _SESSION_ABORTS.pop(session.id, None))
-    return task
+        )
+    except Exception:
+        if removed_pending is not None:
+            _SESSION_TOOL_APPROVAL[session.id] = removed_pending
+        _release_turn(handle)
+        raise
 
 
 def _maybe_schedule_title(
@@ -1415,14 +1639,12 @@ async def _handle_user_message(
     payload: Any,
     active_turn: asyncio.Task[None] | None,
 ) -> asyncio.Task[None] | None:
-    """校验并保存用户消息，然后仅创建后台 Agent 任务。"""
+    """校验并保存用户消息，再原子抢占会话回合并创建后台 Agent 任务。"""
     if not isinstance(payload, dict):
         raise AppError(ErrorCode.VALIDATION, "user_message payload 必须是对象")
     text = payload.get("text")
     if not isinstance(text, str):
         raise AppError(ErrorCode.VALIDATION, "消息内容格式不正确")
-    if active_turn and not active_turn.done():
-        raise AppError(ErrorCode.CONCURRENCY, "上一轮 Agent 仍在生成")
 
     attachments = payload.get("attachments", [])
     if not isinstance(attachments, list) or any(
@@ -1450,43 +1672,60 @@ async def _handle_user_message(
         if duplicate:
             return None
 
-    row = Message(
-        session_id=session.id,
-        role="user",
-        content=text.strip(),
-        attachments=normalized_attachments,
-        author_id=user.id,
-        client_message_id=client_message_id,
-        source_id="pending",
-        source_version=1,
-    )
-    db.add(row)
-    db.flush()
-    row.source_id = f"message:{row.id}"
-    db.commit()
-    await _emit_persistent(
-        db,
-        websocket,
-        state,
-        session.id,
-        "user_message",
-        _message_payload(row, user),
-    )
-    # 首条消息后后台生成 AI 会话标题（默认标题才触发，见 API.md §4.3）
-    _maybe_schedule_title(session, websocket, state, text)
-    # 新用户消息作废未回复的澄清卡（澄清与新一轮输入互斥）
-    _SESSION_CLARIFY.pop(session.id, None)
-    _SESSION_TOOL_APPROVAL.pop(session.id, None)
-    abort = asyncio.Event()
-    _SESSION_ABORTS[session.id] = abort
-    task = asyncio.create_task(
-        _run_turn(session.id, websocket, state, abort, user_id=user.id),
-        name=f"agent-turn-{session.id}",
-    )
-    task.add_done_callback(
-        lambda _task: _SESSION_ABORTS.pop(session.id, None)
-    )
-    return task
+    if _turn_busy(session.id, active_turn):
+        raise AppError(ErrorCode.CONCURRENCY, "上一轮 Agent 仍在生成")
+    pending_approval = _SESSION_TOOL_APPROVAL.get(session.id)
+    if pending_approval is not None:
+        if str(user.id) != str(pending_approval.get("user_id")):
+            raise AppError(ErrorCode.UNAUTHORIZED, "仅发起该命令的成员可以处理危险工具确认")
+        raise AppError(ErrorCode.CONCURRENCY, "会话存在待确认的危险工具，请先确认或取消")
+    pending_clarify = _SESSION_CLARIFY.get(session.id)
+    if (
+        isinstance(pending_clarify, dict)
+        and pending_clarify.get("user_id")
+        and str(user.id) != str(pending_clarify["user_id"])
+    ):
+        raise AppError(ErrorCode.UNAUTHORIZED, "仅发起该澄清的成员可以开始新一轮")
+
+    handle = _reserve_turn(session.id, str(user.id), local_task=active_turn)
+    try:
+        row = Message(
+            session_id=session.id,
+            role="user",
+            content=text.strip(),
+            attachments=normalized_attachments,
+            author_id=user.id,
+            client_message_id=client_message_id,
+            source_id="pending",
+            source_version=1,
+        )
+        db.add(row)
+        db.flush()
+        row.source_id = f"message:{row.id}"
+        db.commit()
+        await _emit_persistent(
+            db,
+            websocket,
+            state,
+            session.id,
+            "user_message",
+            _message_payload(row, user),
+        )
+        # 首条消息后后台生成 AI 会话标题（默认标题才触发，见 API.md §4.3）
+        _maybe_schedule_title(session, websocket, state, text)
+        # 新用户消息作废未回复的澄清卡（澄清与新一轮输入互斥）
+        _SESSION_CLARIFY.pop(session.id, None)
+        return _start_turn(
+            session.id,
+            websocket,
+            state,
+            str(user.id),
+            handle=handle,
+        )
+    except Exception:
+        db.rollback()
+        _release_turn(handle)
+        raise
 
 
 @router.websocket("/ws/agent")
@@ -1534,13 +1773,17 @@ async def agent_websocket(websocket: WebSocket) -> None:
             user.id,
             websocket,
             state,
+            ready=False,
         )
+        state.cursor = last_event_id
         await _send(
             websocket,
             state,
             _frame(session.id, "pong", state.cursor, {}),
         )
         await _replay_events(db, websocket, state, session.id, last_event_id)
+        if not await SESSION_CONNECTION_HUB.activate(session.id, connection_id):
+            return
         heartbeat_task = asyncio.create_task(
             _heartbeat_loop(
                 websocket,
@@ -1596,6 +1839,7 @@ async def agent_websocket(websocket: WebSocket) -> None:
                                     state,
                                     session.id,
                                     active_turn,
+                                    user.id,
                                 )
                                 continue
                             if stripped.startswith("/compact"):
@@ -1628,6 +1872,7 @@ async def agent_websocket(websocket: WebSocket) -> None:
                         session,
                         message.get("payload"),
                         active_turn,
+                        user.id,
                     )
                 elif event == "tool_approval_ack":
                     # 危险 bash 的确认/拒绝：恢复被 interrupt() 暂停的同一 ToolNode。
@@ -1696,10 +1941,11 @@ async def agent_websocket(websocket: WebSocket) -> None:
         logger.info("Agent WS 断开 session=%s", session.id if session else "unknown")
     finally:
         heartbeat_stop.set()
-        if heartbeat_task:
-            heartbeat_task.cancel()
-        if forward_task:
-            forward_task.cancel()
+        cleanup_tasks = [task for task in (heartbeat_task, forward_task) if task is not None]
+        for task in cleanup_tasks:
+            task.cancel()
+        if cleanup_tasks:
+            await asyncio.gather(*cleanup_tasks, return_exceptions=True)
         if session:
             SESSION_CONNECTION_HUB.unregister(session.id, connection_id)
         db.close()

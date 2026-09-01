@@ -1,4 +1,4 @@
-"""最小浏览器等价物：Cookie 登录、短票、四类上行、瞬态不去重。"""
+"""最小浏览器等价物：Cookie 登录、短票、五类上行、瞬态不去重。"""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ def _ws_base(http_base: str) -> str:
 
 
 class ProbeClient:
-    """对齐 frontend/src/api/ws.ts 的建连与四类上行。"""
+    """对齐 frontend/src/api/ws.ts 的建连与五类上行。"""
 
     def __init__(
         self,
@@ -98,6 +98,9 @@ class ProbeClient:
         ticket: str | None = None,
     ) -> None:
         """建连。非法 ticket / 会话由对端关 4401/4404，写入 close_code。"""
+        # live 套件复用同一客户端切换会话，先关闭旧连接，避免遗留 keepalive 任务。
+        if self._ws is not None:
+            await self.disconnect()
         sid = session_id or self.session_id
         if sid:
             self.session_id = sid
@@ -125,9 +128,17 @@ class ProbeClient:
 
     async def disconnect(self) -> None:
         """只关 WS，保留登录 Cookie，便于带 last_event_id 重连领新票。"""
-        if self._ws is not None:
-            await self._ws.close()
-            self._ws = None
+        websocket = self._ws
+        self._ws = None
+        if websocket is not None:
+            try:
+                await websocket.close()
+                wait_closed = getattr(websocket, "wait_closed", None)
+                if callable(wait_closed):
+                    await asyncio.wait_for(wait_closed(), timeout=6)
+            except Exception:
+                # 探针清理必须尽力完成，连接已失效时不覆盖原始断言结果。
+                pass
         self._recv_buffer.clear()
 
     async def close(self) -> None:
@@ -139,7 +150,7 @@ class ProbeClient:
     async def _send(self, message: dict[str, Any], *, raw: bool = False) -> None:
         event = str(message.get("event") or "")
         if not raw and event not in UPLINK_EVENTS:
-            raise ProbeError(f"禁止发送第五种上行事件：{event}")
+            raise ProbeError(f"禁止发送未登记的上行事件：{event}")
         if self._ws is None:
             raise ProbeError("WebSocket 未连接")
         self.trace.record_up(message)
@@ -165,11 +176,20 @@ class ProbeClient:
             {"event": "clarify_reply", "payload": {"id": clarify_id, "answer": answer}}
         )
 
+    async def send_tool_approval_ack(self, approval_id: str, action: str) -> None:
+        """发送危险工具确认回执，覆盖 API.md §4.4 的第五类上行。"""
+        await self._send(
+            {
+                "event": "tool_approval_ack",
+                "payload": {"id": approval_id, "action": action},
+            }
+        )
+
     async def send_cancel_task(self, task_id: str) -> None:
         await self._send({"event": "cancel_task", "payload": {"task_id": task_id}})
 
     async def send_raw(self, message: dict[str, Any]) -> None:
-        """仅用于探测第五种事件，不得作为日常发送入口。"""
+        """仅用于探测非法事件，不得作为日常发送入口。"""
         await self._send(message, raw=True)
 
     def _ingest(self, data: dict[str, Any]) -> TraceFrame:

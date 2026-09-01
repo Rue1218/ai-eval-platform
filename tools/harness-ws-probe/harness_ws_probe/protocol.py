@@ -4,9 +4,15 @@ from __future__ import annotations
 
 from typing import Any
 
-# 前端 → 服务：仅此四条（API.md §4.4）
+# 前端 → 服务：仅此五条（API.md §4.4，含危险工具确认回执）
 UPLINK_EVENTS = frozenset(
-    {"user_message", "confirm_ack", "cancel_task", "clarify_reply"}
+    {
+        "user_message",
+        "confirm_ack",
+        "cancel_task",
+        "clarify_reply",
+        "tool_approval_ack",
+    }
 )
 
 # 服务 → 前端：允许的事件名（§4.3）。禁止旧名 thinking/token/chat:send/tool_call_start/message/done。
@@ -21,6 +27,8 @@ DOWNLINK_EVENTS = frozenset(
         "tool_progress",
         "tool_output_delta",
         "tool_result",
+        "tool_approval",
+        "tool_approval_ack",
         "clarify",
         "plan",
         "task_state",

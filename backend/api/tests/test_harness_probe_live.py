@@ -61,7 +61,13 @@ class _LiveLoop:
         return self._loop.run_until_complete(coro)
 
     def close(self) -> None:
-        self._loop.run_until_complete(asyncio.sleep(0))
+        """取消并回收探针内部任务，再关闭长生命周期事件循环。"""
+        pending = [task for task in asyncio.all_tasks(self._loop) if not task.done()]
+        for task in pending:
+            task.cancel()
+        if pending:
+            self._loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        self._loop.run_until_complete(self._loop.shutdown_asyncgens())
         self._loop.close()
 
 
