@@ -357,59 +357,61 @@
                   </div>
 
                   <!-- 回合内容只保留过程摘要、已验证 ToolCard 与最终回答。 -->
-                  <template v-for="(block, blockIdx) in item.blocks" :key="blockIdx">
-                    <ThoughtCard
-                      v-if="block.type === 'thought'"
-                      :text="block.text || ''"
-                      :done="block.done"
-                      :latency-ms="block.latency_ms"
-                      :skill-id="block.skill_id"
-                      :stage="block.stage"
-                    />
-                    <ToolCard
-                      v-else-if="block.type === 'tool'"
-                      :tool="block.tool || ''"
-                      :args="block.args"
-                      :result="block.result"
-                      :status="block.status || 'pending'"
-                      :latency-ms="block.latency_ms"
-                      :truncated="block.truncated"
-                      :source="block.source"
-                      :redacted="block.redacted"
-                      :progress="block.toolProgress"
-                      :stream-output="block.streamOutput"
-                      :recovery="block.recovery"
-                      :default-open="block.status === 'pending' || block.open"
-                      :no-anim="block.noAnim"
-                    />
-                    <MediaPreview
-                      v-else-if="block.type === 'media' && block.contentUrl"
-                      :src="block.contentUrl"
-                      :filename="block.filename"
-                      :no-anim="block.noAnim"
-                    />
-                    <div v-else-if="block.type === 'assistant'">
-                      <MarkdownView
-                        v-if="block.raw || block.text"
-                        :content="block.raw || block.text || ''"
-                        :is-streaming="block.streaming"
+                  <div v-if="item.blocks?.length" class="assistant-message-blocks">
+                    <template v-for="(block, blockIdx) in item.blocks" :key="blockIdx">
+                      <ThoughtCard
+                        v-if="block.type === 'thought'"
+                        :text="block.text || ''"
+                        :done="block.done"
+                        :latency-ms="block.latency_ms"
+                        :skill-id="block.skill_id"
+                        :stage="block.stage"
                       />
-                      <div v-if="!block.streaming" class="reply-latency mono">
-                        <template v-if="formatLatency(block.latency_ms)">耗时 {{ formatLatency(block.latency_ms) }}</template>
-                        <template v-if="block.turn_stats && formatTurnStats(block.turn_stats)">
-                          <template v-if="formatLatency(block.latency_ms)"> · </template>{{ formatTurnStats(block.turn_stats) }}
-                        </template>
+                      <ToolCard
+                        v-else-if="block.type === 'tool'"
+                        :tool="block.tool || ''"
+                        :args="block.args"
+                        :result="block.result"
+                        :status="block.status || 'pending'"
+                        :latency-ms="block.latency_ms"
+                        :truncated="block.truncated"
+                        :source="block.source"
+                        :redacted="block.redacted"
+                        :progress="block.toolProgress"
+                        :stream-output="block.streamOutput"
+                        :recovery="block.recovery"
+                        :default-open="block.status === 'pending' || block.open"
+                        :no-anim="block.noAnim"
+                      />
+                      <MediaPreview
+                        v-else-if="block.type === 'media' && block.contentUrl"
+                        :src="block.contentUrl"
+                        :filename="block.filename"
+                        :no-anim="block.noAnim"
+                      />
+                      <div v-else-if="block.type === 'assistant'" class="assistant-reply">
+                        <MarkdownView
+                          v-if="block.raw || block.text"
+                          :content="block.raw || block.text || ''"
+                          :is-streaming="block.streaming"
+                        />
+                        <div v-if="!block.streaming" class="reply-latency mono">
+                          <template v-if="formatLatency(block.latency_ms)">耗时 {{ formatLatency(block.latency_ms) }}</template>
+                          <template v-if="block.turn_stats && formatTurnStats(block.turn_stats)">
+                            <template v-if="formatLatency(block.latency_ms)"> · </template>{{ formatTurnStats(block.turn_stats) }}
+                          </template>
+                        </div>
                       </div>
-                    </div>
-                    <div v-else-if="block.type === 'error'" class="error-strip" :class="{ 'no-anim': block.noAnim }">
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-                        <circle cx="12" cy="12" r="9" />
-                        <path d="M12 7.5v5.5" />
-                        <circle cx="12" cy="16.4" r=".4" fill="currentColor" />
-                      </svg>
-                      <div><b>{{ block.code || 'ERROR' }}</b> · {{ block.message }}</div>
-                    </div>
-                  </template>
+                      <div v-else-if="block.type === 'error'" class="error-strip" :class="{ 'no-anim': block.noAnim }">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                          <circle cx="12" cy="12" r="9" />
+                          <path d="M12 7.5v5.5" />
+                          <circle cx="12" cy="16.4" r=".4" fill="currentColor" />
+                        </svg>
+                        <div><b>{{ block.code || 'ERROR' }}</b> · {{ block.message }}</div>
+                      </div>
+                    </template>
+                  </div>
 
                   <!-- 兼容历史旧缓存：没有 blocks 时仍渲染原助手正文。 -->
                   <MarkdownView
@@ -4696,6 +4698,26 @@ onBeforeUnmount(() => {
 .assistant-message-main {
   min-width: 0;
   flex: 1;
+}
+
+.assistant-message-blocks {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.assistant-reply :deep(.md-h1:first-child),
+.assistant-reply :deep(.md-h2:first-child),
+.assistant-reply :deep(.md-h3:first-child),
+.assistant-reply :deep(.md-h4:first-child),
+.assistant-reply :deep(.md-h5:first-child),
+.assistant-reply :deep(.md-h6:first-child),
+.assistant-reply :deep(.md-p:first-child),
+.assistant-reply :deep(.md-ul:first-child),
+.assistant-reply :deep(.md-ol:first-child),
+.assistant-reply :deep(.md-quote:first-child),
+.assistant-reply :deep(.md-code-card:first-child) {
+  margin-top: 0;
 }
 
 .assistant-message-header {
