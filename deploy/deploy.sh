@@ -44,6 +44,17 @@ if [ "${DEPLOY_LOCK_ACQUIRED:-0}" != "1" ]; then
     export DEPLOY_LOCK_ACQUIRED=1
 fi
 
+# 已持有部署互斥锁：此时不应再有其它 git 写操作。被取消的 SSH 会话
+# 可能在 git reset 中途留下 HEAD.lock / index.lock，必须先清掉再同步。
+if [ -d "$APP_DIR/.git" ]; then
+    stale_locks=$(find "$APP_DIR/.git" -name '*.lock' -type f 2>/dev/null || true)
+    if [ -n "$stale_locks" ]; then
+        echo "警告：清理过期 git 锁"
+        echo "$stale_locks"
+        find "$APP_DIR/.git" -name '*.lock' -type f -delete
+    fi
+fi
+
 git_fetch_with_retry() {
     # GitHub SSH 偶发拒绝复用通道（channel 0: administratively prohibited），短间隔连拉会失败。
     local attempt=1

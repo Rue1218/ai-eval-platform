@@ -206,7 +206,13 @@ main（保护，仅 PR 合入）
    sudo -u deploy bash /opt/ai-eval-platform/deploy/deploy.sh
    ```
 4. **容器状态异常 / 端口占用**：在服务器执行 `netstat -tlpn | grep -E '80|8000|5432'` 排查端口占用；执行 `docker compose logs -n 100 api` 查看日志。
-5. **紧急回滚**：本地 `git revert HEAD && git push origin main`，或在服务器执行 `git reset --hard <commit_id> && bash deploy/deploy.sh`。
+5. **git `HEAD.lock` / `update_ref failed`**：被取消的旧 CD 可能留下 `/opt/ai-eval-platform/.git/HEAD.lock`。确认没有正在跑的 `git`/`deploy.sh` 后删除锁文件并重跑 Deploy：
+   ```bash
+   rm -f /opt/ai-eval-platform/.git/HEAD.lock /opt/ai-eval-platform/.git/index.lock
+   sudo -u deploy bash /opt/ai-eval-platform/deploy/deploy.sh
+   ```
+   `deploy.sh` 在拿到部署互斥锁后会自动清理过期 `*.lock`。
+6. **紧急回滚**：本地 `git revert HEAD && git push origin main`，或在服务器执行 `git reset --hard <commit_id> && bash deploy/deploy.sh`。
 
 ---
 

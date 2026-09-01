@@ -208,6 +208,8 @@ jobs:
             # 只 fetch，不在锁外 reset 工作区；从目标提交提取脚本后由脚本持锁完成同步。
             if [ -d "$APP_DIR/.git" ]; then
               cd "$APP_DIR"
+              # 被取消的旧部署可能留下 HEAD.lock；超过 20s 视为过期后再 fetch。
+              find "$APP_DIR/.git" -name '*.lock' -type f ! -newermt "-20 seconds" -delete 2>/dev/null || true
               git fetch origin main
               git cat-file -e "${DEPLOY_COMMIT}^{commit}"
               DEPLOY_ENTRY=$(mktemp)
