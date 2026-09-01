@@ -667,7 +667,7 @@ p { margin: 0; text-wrap: pretty; }
   background: var(--accent-ai); color: #fff;
   border-radius: 20px; border-bottom-right-radius: 6px;
   padding: 11px 16px; font-size: 15px; line-height: 1.65;
-  max-width: 78%;
+  max-width: 86%;
 }
 .attach-chip {
   display: inline-flex; align-items: center; gap: 7px;
@@ -676,7 +676,7 @@ p { margin: 0; text-wrap: pretty; }
 }
 .attach-chip .mono { font-size: 11px; color: var(--text-tertiary); }
 
-.msg-agent { font-size: 16.5px; line-height: 1.85; color: var(--text-primary); max-width: 92%; }
+.msg-agent { font-size: 16.5px; line-height: 1.85; color: var(--text-primary); max-width: 100%; }
 .msg-agent p + p { margin-top: 12px; }
 /* 回复耗时角标：助手气泡下方展示「耗时 x 秒」，生成中不渲染 */
 .reply-latency {
