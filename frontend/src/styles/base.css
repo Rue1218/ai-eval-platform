@@ -621,7 +621,7 @@ p { margin: 0; text-wrap: pretty; }
 }
 
 .chat-scroll { flex: 1; overflow-y: auto; min-height: 0; }
-.chat-col { max-width: 760px; margin: 0 auto; padding: 28px 24px 20px; display: flex; flex-direction: column; gap: 18px; min-height: 100%; }
+.chat-col { max-width: 840px; margin: 0 auto; padding: 28px 24px 20px; display: flex; flex-direction: column; gap: 18px; min-height: 100%; }
 
 @keyframes msg-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 .msg-user, .msg-agent, .thought-card, .tool-card, .error-strip, .welcome { animation: msg-in .26s cubic-bezier(.2, .9, .3, 1); }
@@ -891,7 +891,7 @@ pre.code {
   background: var(--bg-main);
   padding: 10px 24px;
 }
-.progress-dock-inner { max-width: 760px; margin: 0 auto; display: flex; align-items: center; gap: 14px; }
+.progress-dock-inner { max-width: 840px; margin: 0 auto; display: flex; align-items: center; gap: 14px; }
 .progress-bar { flex: 1; height: 5px; border-radius: 999px; background: var(--bg-elevated); overflow: hidden; min-width: 80px; }
 .progress-bar > i { display: block; height: 100%; border-radius: 999px; background: var(--accent-ai); transition: width .4s ease; }
 .progress-msg { font-size: 12px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 300px; }
