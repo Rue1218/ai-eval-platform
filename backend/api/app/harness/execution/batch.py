@@ -169,7 +169,8 @@ def tool_resource_key(
     if concurrency_class == "session_exclusive":
         return "session"
     if concurrency_class == "path_scoped":
-        return normalize_workspace_path((arguments or {}).get("path"), sandbox_dir)
+        args = arguments or {}
+        return normalize_workspace_path(args.get("file_path") or args.get("path"), sandbox_dir)
     return ""
 
 

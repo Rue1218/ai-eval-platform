@@ -97,6 +97,11 @@ def test_default_registry_includes_bash() -> None:
         "web_fetch",
         "bash",
         "task",
+        "TaskCreate",
+        "TaskGet",
+        "TaskUpdate",
+        "TaskList",
+        "ask_user_question",
         "task.create",
         "task.status",
         "task.cancel",
@@ -106,9 +111,9 @@ def test_default_registry_includes_bash() -> None:
 def test_tool_schema_validation_rejects_invalid_and_extra_arguments() -> None:
     """ToolNode 前的 schema 校验拒绝类型错误、缺字段和未声明参数。"""
     read_schema = build_default_registry().get("read").parameters_schema
-    assert validate_tool_arguments(read_schema, {"path": 1}) == "参数 path 类型无效，应为 string"
-    assert validate_tool_arguments(read_schema, {"offset": 0}) == "缺少必填参数：path"
-    assert validate_tool_arguments(read_schema, {"path": "a.txt", "unsafe": True}) == "包含未允许的参数：unsafe"
+    assert validate_tool_arguments(read_schema, {"file_path": 1}) == "参数 file_path 类型无效，应为 string"
+    assert validate_tool_arguments(read_schema, {"offset": 0}) == "缺少必填参数：file_path"
+    assert validate_tool_arguments(read_schema, {"file_path": "a.txt", "unsafe": True}) == "包含未允许的参数：unsafe"
 
 
 def test_registry_rejects_unsupported_tool_schema_keywords() -> None:

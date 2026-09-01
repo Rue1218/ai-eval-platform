@@ -9,26 +9,60 @@
 
     <!-- 卡身：仅回复输入，无确认入队（与 ConfirmCard 互斥，M4 §8.2） -->
     <div class="clarify-body">
-      <div v-if="options && options.length" class="option-group">
-        <button
-          v-for="opt in options"
-          :key="opt"
-          class="chip"
-          :class="{ on: answer === opt }"
-          :disabled="isAcked"
-          @click="answer = opt"
-        >
-          {{ opt }}
-        </button>
+      <div v-if="normalizedQuestions.length" class="question-list">
+        <section v-for="item in normalizedQuestions" :key="item.id" class="question-block">
+          <div class="td-io-key">
+            <span class="td-field-name mono">{{ item.id }}</span>
+            <span v-if="item.required" class="td-field-req">必答</span>
+            <span v-if="item.header" class="td-field-hint">{{ item.header }}</span>
+          </div>
+          <p class="question-text">{{ item.question }}</p>
+          <div v-if="item.options.length" class="option-group">
+            <button
+              v-for="opt in item.options"
+              :key="`${item.id}-${opt}`"
+              class="chip"
+              :class="{ on: isOptionOn(item, opt) }"
+              :disabled="isAcked"
+              @click="toggleOption(item, opt)"
+            >
+              {{ opt }}
+            </button>
+          </div>
+          <n-input
+            v-if="item.type === 'text' || !item.options.length"
+            :value="textValue(item.id)"
+            type="textarea"
+            :rows="2"
+            :disabled="isAcked"
+            placeholder="填写补充信息…"
+            @update:value="setText(item.id, $event)"
+            @keydown.enter.exact.prevent="handleSend"
+          />
+        </section>
       </div>
-      <n-input
-        v-model:value="answer"
-        type="textarea"
-        :rows="2"
-        :disabled="isAcked"
-        placeholder="回复以补充所需信息…"
-        @keydown.enter.exact.prevent="handleSend"
-      />
+      <template v-else>
+        <div v-if="options && options.length" class="option-group">
+          <button
+            v-for="opt in options"
+            :key="opt"
+            class="chip"
+            :class="{ on: answer === opt }"
+            :disabled="isAcked"
+            @click="answer = opt"
+          >
+            {{ opt }}
+          </button>
+        </div>
+        <n-input
+          v-model:value="answer"
+          type="textarea"
+          :rows="2"
+          :disabled="isAcked"
+          placeholder="回复以补充所需信息…"
+          @keydown.enter.exact.prevent="handleSend"
+        />
+      </template>
     </div>
 
     <!-- 卡底操作条 -->
@@ -36,7 +70,7 @@
       <div v-if="isAcked" class="ack-stamp ok">✓ 已回复，继续执行</div>
       <div class="spacer"></div>
       <template v-if="!isAcked">
-        <button class="btn btn-sign btn-sm" :disabled="sending || !answer.trim()" @click="handleSend">
+        <button class="btn btn-sign btn-sm" :disabled="sending || !canSend" @click="handleSend">
           {{ sending ? '发送中…' : '发送回复' }}
         </button>
       </template>
@@ -45,11 +79,18 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, nextTick, reactive, ref } from 'vue'
+import {
+  canSubmitClarify,
+  composeClarifyReply,
+  parseClarifyQuestions,
+  type ClarifyReplyQuestion,
+} from '../../utils/clarifyReply'
 
 const props = defineProps<{
   question: string
   options?: string[] | null
+  questions?: Array<Record<string, unknown> | ClarifyReplyQuestion> | null
   isAcked?: boolean
 }>()
 
@@ -59,12 +100,50 @@ const emit = defineEmits<{
 
 const answer = ref('')
 const sending = ref(false)
+const selected = reactive<Record<string, string | string[]>>({})
+
+const normalizedQuestions = computed(
+  () => parseClarifyQuestions(props.questions) || [],
+)
+
+const canSend = computed(() =>
+  canSubmitClarify(normalizedQuestions.value, selected, answer.value),
+)
+
+function textValue(id: string): string {
+  const value = selected[id]
+  return typeof value === 'string' ? value : ''
+}
+
+function setText(id: string, value: string) {
+  selected[id] = value
+}
+
+function isOptionOn(item: ClarifyReplyQuestion, opt: string): boolean {
+  const value = selected[item.id]
+  return item.multiSelect ? Array.isArray(value) && value.includes(opt) : value === opt
+}
+
+function toggleOption(item: ClarifyReplyQuestion, opt: string) {
+  if (item.multiSelect) {
+    const current = Array.isArray(selected[item.id]) ? [...(selected[item.id] as string[])] : []
+    const index = current.indexOf(opt)
+    if (index >= 0) current.splice(index, 1)
+    else current.push(opt)
+    selected[item.id] = current
+    return
+  }
+  selected[item.id] = opt
+}
 
 function handleSend() {
-  const text = answer.value.trim()
+  const text = composeClarifyReply(normalizedQuestions.value, selected, answer.value)
   if (!text || props.isAcked || sending.value) return
   sending.value = true
   emit('reply', text)
+  void nextTick(() => {
+    if (!props.isAcked) sending.value = false
+  })
 }
 </script>
 
@@ -125,6 +204,12 @@ function handleSend() {
   flex-direction: column;
   gap: 10px;
 }
+.question-list { display: grid; gap: 12px; }
+.question-text { margin: 4px 0 0; color: var(--text-primary); font-size: 13px; line-height: 1.55; }
+.td-io-key { display: flex; align-items: baseline; gap: 6px; }
+.td-field-name { color: var(--accent-info); font-size: 11.5px; }
+.td-field-hint { color: var(--text-tertiary); font-size: 11px; }
+.td-field-req { color: #b45309; font-size: 10.5px; font-weight: 700; }
 .option-group {
   display: flex;
   flex-wrap: wrap;

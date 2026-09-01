@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from uuid import uuid4
 
 from langgraph.config import get_config
 
@@ -19,6 +20,7 @@ from app.agent.log import agent_trace
 from app.agent.routing import user_text_from_state
 from app.errors import AppError
 from app.harness.contracts import PlanArtifact, from_dict, make_event, to_dict
+from app.harness.execution.batch import build_tool_batch
 from app.harness.memory import GraphState, rebuild_model_config
 from app.harness.orchestration import (
     Budget,
@@ -63,8 +65,10 @@ def _failed(code: str, message: str) -> dict:
 
 
 def plan_solve_route(state: GraphState) -> str:
-    """规划成功 → ReAct 执行；失败（无 plan）→ 结束。"""
-    return "react_agent" if isinstance(state.get("plan"), dict) else "end"
+    """规划成功后优先执行计划已确定的首个短工具，再交 ReAct 决策。"""
+    if not isinstance(state.get("plan"), dict):
+        return "end"
+    return "tools" if state.get("pending_tool") else "react_agent"
 
 
 def _plan_gateway_config(run_config: object) -> dict[str, object]:
@@ -129,6 +133,33 @@ def _generate_plan(
         return build_plan(raw, fail_reason=fail_reason), True
 
 
+def _initial_task_call(plan: PlanArtifact) -> dict[str, object] | None:
+    """把 PlanArtifact 转成首个 task 调用，省掉“先想是否建清单”的额外模型回合。
+
+    ``task`` 只维护当前会话的内存清单，不创建评测任务或写数据库。真实工具选择仍由
+    后续 ReAct 根据这次调用的 Observation 与计划状态做出，避免 Plan 越权猜测其他
+    工具的参数。
+    """
+    if "task" not in plan.tools_needed:
+        return None
+    raw_steps = plan.slots.get("steps") if isinstance(plan.slots, Mapping) else None
+    steps = [str(step).strip() for step in raw_steps or () if str(step).strip()]
+    if not plan.intent.strip() or not steps:
+        return None
+    return {
+        "call_id": f"plan_task_{uuid4().hex}",
+        "name": "task",
+        "arguments": {
+            "description": (plan.intent[:24] + ("…" if len(plan.intent) > 24 else "")) or "任务清单",
+            "prompt": plan.intent,
+            "steps": [{"title": step, "status": "pending"} for step in steps],
+        },
+        # 这是 Plan 节点确定的调用，并非上游 native ToolCall；下一轮通过
+        # Observation 注入 ReAct，而非伪造一条 assistant/tool 往返消息。
+        "native": False,
+    }
+
+
 def build_plan_solve_subgraph(gateway: object | None = None) -> dict:
     """构造 Plan-Solve 节点：``{'plan_solve': <node>}``。
 
@@ -170,7 +201,7 @@ def build_plan_solve_subgraph(gateway: object | None = None) -> dict:
         slots_dict = dict(payload.get("slots") or {})
         slots_dict["task_state"] = task_state.to_dict()
         payload["slots"] = slots_dict
-        return {
+        result: dict[str, object] = {
             "plan": payload,
             "task_state": task_state.to_dict(),
             # 重规划时历史 Observation 已参与过上一个计划，不能再次推进新计划。
@@ -182,5 +213,23 @@ def build_plan_solve_subgraph(gateway: object | None = None) -> dict:
             # Reflect 的内部阶段叠加成一串“已思考”过程卡。
             "pending_events": [make_event("plan", payload)],
         }
+        initial_task = _initial_task_call(plan)
+        if initial_task is not None:
+            # PlanCard 与待执行 ToolCard 同一节点依序发出；浏览器无需等待 ReAct
+            # 再做一次“是否调用 task”的模型决策，即可先展示加载态。
+            result["pending_tool"] = initial_task
+            result["pending_tools"] = []
+            result["pending_tool_batch"] = build_tool_batch([initial_task])
+            result["pending_events"].append(
+                make_event(
+                    "tool_call",
+                    {
+                        "call_id": initial_task["call_id"],
+                        "name": initial_task["name"],
+                        "arguments": initial_task["arguments"],
+                    },
+                )
+            )
+        return result
 
     return {"plan_solve": plan_solve_node}

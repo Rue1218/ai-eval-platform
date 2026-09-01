@@ -28,3 +28,5 @@ class ToolExecutionContext:
     call_id: str = ""
     report_progress: ToolProgressReporter | None = None
     report_output: ToolOutputReporter | None = None
+    # 可变列表：同一 ToolNode 波次共享，写回 GraphState.session_tasks。
+    session_tasks: list | None = None

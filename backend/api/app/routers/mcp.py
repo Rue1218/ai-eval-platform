@@ -2,6 +2,7 @@
 
 对应 API.md §3.6.1：
 1. 原生基础工具 (transport=native)：read/write/edit/bash/web_search/web_fetch/task，
+   以及会话看板 TaskCreate/TaskGet/TaskUpdate/TaskList 与 ask_user_question，
    由 NativeToolExecutor 进程内直连执行，bwrap 沙箱隔离，零 MCP 序列化开销。
 2. 内部受控 MCP Server (transport=mcp, server=platform.tasks)：task.create/status/cancel，
    由 MCPClientManager 通过受控 InProcessProvider 桥接 PostgreSQL 任务队列。
@@ -474,6 +475,7 @@ def list_all_tools(user: User = Depends(get_current_user)):
     """返回平台所有已注册工具（含 transport=native 与 transport=mcp）的完备元数据契约。
 
     - ``transport=native`` (原生基础工具)：read/write/edit/bash/web_search/web_fetch/task，
+      以及会话看板 TaskCreate/TaskGet/TaskUpdate/TaskList 与 ask_user_question，
       由 NativeToolExecutor 进程内直连执行，bwrap 沙箱防护。
     - ``transport=mcp`` (内部 MCP 扩展)：platform.tasks.task.create/status/cancel，
       由 MCPClientManager 通过受控 InProcessProvider 桥接 PostgreSQL 任务队列。

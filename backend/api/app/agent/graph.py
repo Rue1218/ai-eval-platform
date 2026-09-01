@@ -2,8 +2,9 @@
 
 图拓扑：``START → routing → (direct | chat_stream | react_agent | plan_solve)``；
 ReAct 循环：``react_agent → (tools | reflect | END)``，
-``tools → (tools | react_agent | END)``（队列未空继续、预算耗尽结束）；
-Plan-Solve：``plan_solve → react_agent``（失败则 END）；有 ``plan`` 的 ReAct
+``tools → (tools | react_agent | reflect | END)``（队列未空继续、确认卡已齐
+直达门禁、预算耗尽结束）；
+Plan-Solve：``plan_solve → tools | react_agent``（失败则 END）；有 ``plan`` 的
 收尾进入 ``reflect``，由 reflect 发出 ``response.completed``；工具失败阶梯：
 ``reflect → react_agent``（repair 首档）/ ``reflect → plan_solve``（retry 重规划）。
 节点只返回纯数据（mode / pending_events / pending_tool / pending_tool_batch / response 投影），
@@ -13,6 +14,7 @@ WebSocket、数据库与平台任务队列由路由层（ws.py）负责，节点
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Iterator
 from uuid import uuid4
 
@@ -121,14 +123,19 @@ class LangGraphAgent:
         graph.add_conditional_edges(
             "tools",
             tools_route,
-            {"tools": "tools", "react_agent": "react_agent", "end": END},
+            {
+                "tools": "tools",
+                "react_agent": "react_agent",
+                "reflect": "reflect",
+                "end": END,
+            },
         )
         graph.add_edge("direct", END)
         graph.add_edge("chat_stream", END)
         graph.add_conditional_edges(
             "plan_solve",
             plan_solve_route,
-            {"react_agent": "react_agent", "end": END},
+            {"tools": "tools", "react_agent": "react_agent", "end": END},
         )
         graph.add_conditional_edges(
             "reflect",
@@ -157,10 +164,12 @@ class LangGraphAgent:
         return node
 
     def invoke(self, request: SerializableRequest, config: dict | None = None) -> ModelResponse:
-        """执行一轮非流式 Agent 调用（Chat/ReAct/Plan-Solve 路径产生模型响应）。"""
+        """执行一轮非流式 Agent 调用（兼容 Plan 直接进入异步 ToolNode）。"""
         run_config, thread_id = self._prepare_run_config(config)
         try:
-            state = self._graph.invoke({"request": request}, config=run_config)
+            # ToolNode 本身是异步节点。Plan 现可直接调 task，非流式入口也必须沿用
+            # 同一张图，避免同步 invoke 在到达 tools 节点时抛出运行时错误。
+            state = asyncio.run(self._graph.ainvoke({"request": request}, config=run_config))
             if state.get("mode") not in ("chat", "react", "plan_solve"):
                 raise AppError(ErrorCode.VALIDATION, "Direct 路径不产生模型响应")
             return self._response_from_state(state)
@@ -192,15 +201,21 @@ class LangGraphAgent:
         else:
             graph_input = {"request": request}
         run_config, thread_id = self._prepare_run_config(config)
+        interrupted = False
         try:
             async for mode, chunk in self._graph.astream(
                 graph_input,
                 config=run_config,
                 stream_mode=["custom", "updates"],
             ):
+                if isinstance(chunk, dict) and "__interrupt__" in chunk:
+                    # HITL 暂停后同一 thread 还会 resume；先清掉会丢掉本轮已成功的
+                    # read/write 原文，恢复后模型只能看到「结果不可用」。
+                    interrupted = True
                 yield mode, chunk
         finally:
-            self._native_tool_results.clear(thread_id)
+            if not interrupted:
+                self._native_tool_results.clear(thread_id)
 
     async def ahas_pending_interrupt(self, thread_id: str) -> bool:
         """判断 thread 是否仍停在待恢复的人工中断处。

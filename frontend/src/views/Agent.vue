@@ -280,6 +280,7 @@
               v-else-if="item.type === 'clarify'"
               :question="item.question || ''"
               :options="item.options || null"
+              :questions="item.questions || null"
               :is-acked="item.isAcked"
               @reply="handleClarifyReply(item, $event)"
             />
@@ -527,6 +528,7 @@
           >
             <ToolApprovalCard
               :command="activeToolApproval.command"
+              :args="activeToolApproval.args"
               :reason="activeToolApproval.reason"
               :sandbox-scope="activeToolApproval.sandboxScope"
               @decide="handleToolApproval"
@@ -753,6 +755,7 @@ import { getProviderLogoKey, type ProviderLogoKey } from '../utils/providerLogo'
 import { formatLatency } from '../utils/format'
 import { findPendingToolItem, shouldKeepToolCardOpen } from '../utils/toolCard'
 import ClarifyCard from '../components/agent/ClarifyCard.vue'
+import { parseClarifyQuestions, type ClarifyReplyQuestion as ClarifyQuestion } from '../utils/clarifyReply'
 import ConfirmCard from '../components/agent/ConfirmCard.vue'
 import ToolApprovalCard from '../components/agent/ToolApprovalCard.vue'
 import PlanCard from '../components/agent/PlanCard.vue'
@@ -1186,6 +1189,8 @@ interface ToolApprovalDrawer {
   command: string
   reason: string
   sandboxScope: string
+  /** 关联 bash ToolCard 的入参，弹层按 command / description / timeout 展示。 */
+  args?: Record<string, unknown>
 }
 
 interface StreamItem {
@@ -1196,6 +1201,7 @@ interface StreamItem {
   id?: string
   question?: string
   options?: string[] | null
+  questions?: ClarifyQuestion[] | null
   planIntent?: string
   planSteps?: string[]
   plan?: PlanArtifact
@@ -1262,16 +1268,24 @@ interface StreamItem {
 }
 
 /** 将持久化确认事件投影为 Composer 上方的临时抽屉。 */
-function showToolApproval(sessionId: string, payload: Record<string, unknown>) {
+function showToolApproval(
+  sessionId: string,
+  payload: Record<string, unknown>,
+  toolArgs?: unknown,
+) {
   const id = String(payload.id || '')
   if (!sessionId || !id) return
+  const args = toolArgs && typeof toolArgs === 'object' && !Array.isArray(toolArgs)
+    ? { ...(toolArgs as Record<string, unknown>) }
+    : {}
   toolApprovalsBySession.value = {
     ...toolApprovalsBySession.value,
     [sessionId]: {
       id,
-      command: String(payload.command || ''),
+      command: String(payload.command || args.command || ''),
       reason: String(payload.reason || '该命令可能修改会话工作区'),
       sandboxScope: String(payload.sandbox_scope || ''),
+      args,
     },
   }
 }
@@ -1620,6 +1634,16 @@ function findPendingToolBlock(agent: StreamItem, name: unknown, callId?: unknown
   return findPendingToolItem(agent.blocks || [], name, callId) as AgentToolItem | undefined
 }
 
+/** 确认回执到达后立刻离开「等待确认」，让后续 progress / tool_result 按同一 call_id 回填。 */
+function stampToolApprovalAck(target: { status?: string; open?: boolean; toolProgress?: { stage: string; message: string } } | undefined, payload: Record<string, unknown>) {
+  if (!target) return
+  target.status = 'pending'
+  target.open = true
+  if (payload.ok !== false && payload.action !== 'reject') {
+    target.toolProgress = { stage: 'approved', message: '已获确认，正在进入受控沙箱执行' }
+  }
+}
+
 /** 用瞬态进度原地更新待执行 ToolCard；历史回放只依赖最终 tool_result。 */
 function applyToolProgress(agent: StreamItem | undefined, payload: any): void {
   if (!agent) return
@@ -1869,6 +1893,7 @@ function getToolDisplayName(name?: string) {
     'task.get': '查询任务',
     'report.get': '读取报告',
     'task.create': '创建任务',
+    'task.status': '查询任务',
     'task.cancel': '取消任务',
     'testcase.confirm': '确认用例入库',
     'audio.speech_recognition': '语音识别转写',
@@ -2807,7 +2832,12 @@ function handleToolApproval(action: 'approve' | 'reject') {
     message.error('Agent 连接未就绪，暂不能确认命令')
     return
   }
-  // 选择后立即收回抽屉；服务端仍是唯一执行与拒绝事实源。
+  // 选择后立即收回抽屉并离开「等待确认」，避免确认后的 tool_result 对不上卡。
+  const agent = getCurrentTurnAgent(events.value)
+  stampToolApprovalAck(
+    agent ? findPendingToolBlock(agent, 'bash', approval.id) : undefined,
+    { id: approval.id, action, ok: action === 'approve' },
+  )
   clearToolApproval(currentSessionId.value, approval.id)
   setCurrentGenerating(true)
   agentWs.sendToolApprovalAck(approval.id, action)
@@ -3206,9 +3236,13 @@ async function loadSessionHistory(sid: string): Promise<number> {
           p.call_id,
         )
         if (pendingTool) pendingTool.status = 'awaiting_approval'
-        showToolApproval(sid, p)
+        showToolApproval(sid, p, pendingTool?.args)
       } else if (ev.event === 'tool_approval_ack') {
         clearToolApproval(sid, String(p.id || ''))
+        stampToolApprovalAck(
+          findPendingToolItem(rawList.map((entry) => entry.item), p.name, p.id || p.call_id),
+          p,
+        )
       } else if (ev.event === 'confirm') {
         rawList.push({
           time: t,
@@ -3256,6 +3290,7 @@ async function loadSessionHistory(sid: string): Promise<number> {
             id: String(p.id || ''),
             question: String(p.question || '需要补充信息'),
             options: Array.isArray(p.options) ? p.options : null,
+            questions: parseClarifyQuestions(p.questions),
             isAcked: false,
             noAnim: true,
           },
@@ -3891,11 +3926,16 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
       finishBufferThought(buf)
       markGenerating(sid, false)
       rt.harnessStage = ''
-      showToolApproval(sid, p)
+      showToolApproval(sid, p, target?.args)
       break
     }
     case 'tool_approval_ack': {
       clearToolApproval(sid, String(p.id || ''))
+      const agent = getCurrentTurnAgent(buf)
+      stampToolApprovalAck(
+        agent ? findPendingToolBlock(agent, p.name, p.id || p.call_id) : undefined,
+        p,
+      )
       markGenerating(sid, true)
       break
     }
@@ -3931,6 +3971,7 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
         id: String(p.id || ''),
         question: String(p.question || '需要补充信息'),
         options: Array.isArray(p.options) ? p.options : null,
+        questions: parseClarifyQuestions(p.questions),
         isAcked: false,
       })
       break
@@ -4296,12 +4337,17 @@ function handleWsEvent(ev: WsServerEvent) {
       finishLiveThought()
       setCurrentGenerating(false)
       harnessStage.value = ''
-      showToolApproval(ev.session_id || currentSessionId.value, p)
+      showToolApproval(ev.session_id || currentSessionId.value, p, target?.args)
       scrollToBottom()
       break
     }
     case 'tool_approval_ack': {
       clearToolApproval(ev.session_id || currentSessionId.value, String(p.id || ''))
+      const agent = getCurrentTurnAgent(events.value)
+      stampToolApprovalAck(
+        agent ? findPendingToolBlock(agent, p.name, p.id || p.call_id) : undefined,
+        p,
+      )
       setCurrentGenerating(true)
       scrollToBottom()
       break
@@ -4316,6 +4362,7 @@ function handleWsEvent(ev: WsServerEvent) {
         id: String(p.id || ''),
         question: String(p.question || '需要补充信息'),
         options: Array.isArray(p.options) ? p.options : null,
+        questions: parseClarifyQuestions(p.questions),
         isAcked: false,
       })
       scrollToBottom()

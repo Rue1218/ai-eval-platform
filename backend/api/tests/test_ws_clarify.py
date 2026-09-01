@@ -238,6 +238,29 @@ async def test_tool_approval_ack_resumes_with_decision(monkeypatch):
     assert "s-1" not in ws._SESSION_TOOL_APPROVAL
 
 
+@pytest.mark.asyncio
+async def test_tool_approval_ack_emit_failure_keeps_pending(monkeypatch):
+    """落库确认回执失败时不得 UnboundLocalError，且须还原待确认注册项。"""
+    pending = {"id": "call-rm", "thread_id": "s-1:turn-10", "user_id": "u-1"}
+    monkeypatch.setattr(ws, "_SESSION_TOOL_APPROVAL", {"s-1": pending})
+
+    async def boom(*_args, **_kwargs):
+        raise RuntimeError("persist failed")
+
+    monkeypatch.setattr(ws, "_emit_persistent", boom)
+    with pytest.raises(RuntimeError, match="persist failed"):
+        await ws._handle_tool_approval_ack(
+            _MessageDb(),
+            object(),
+            ws._ConnectionState(),
+            _session(),
+            User(id="u-1", username="alice", password_hash="hash"),
+            {"id": "call-rm", "action": "approve"},
+            None,
+        )
+    assert ws._SESSION_TOOL_APPROVAL["s-1"] == pending
+
+
 class _EventQueryDb:
     """按事件号倒序返回固定 ws_events 行的桩数据库（恢复链路用）。"""
 

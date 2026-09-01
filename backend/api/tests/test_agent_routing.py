@@ -315,10 +315,10 @@ def test_routing_multi_skill_plans_then_react_then_reflect() -> None:
     gateway = _FakeGateway()
     events = _collect(LangGraphAgent(gateway), _serializable("帮我做基准评测并生成测试用例"))
     assert gateway.stream_calls == []
-    # LLM Planner 已接线：规划一次短调用（产物非法降级 L0）+ ReAct 一次控制调用；
+    # LLM Planner 已接线：规划一次短调用（产物非法降级 L0）；task 观察齐后
+    # confirm 路径直达 reflect，不再为空转 ReAct 多耗一次模型调用。
     # 桩网关返回 react JSON 无法解析为 plan.v1，计划仍由 L0 规则产出。
-    assert len(gateway.invoke_calls) == 2
-    assert "【当前规划】" in str(gateway.invoke_calls[1].system)
+    assert len(gateway.invoke_calls) == 1
     pending = [
         event
         for mode, chunk in events
@@ -331,7 +331,9 @@ def test_routing_multi_skill_plans_then_react_then_reflect() -> None:
     # L0 规划的多技能请求尚无真实工具观察时，Reflect 只收敛状态，不发送
     # 中性占位 assistant_message；用户应通过 Plan/确认卡继续交互。
     assert "assistant_message" not in kinds
-    assert "tool_call" not in kinds
+    # Plan 节点现在直接建立 task 清单：Plan 与 ToolCall 同一节点顺序落卡，随后
+    # 工具结果作为 Observation 交给 ReAct；不再为“是否创建清单”额外等待一轮模型。
+    assert kinds.index("plan") < kinds.index("tool_call") < kinds.index("tool_result")
     assert "error" not in kinds
     plan_payload = next(event["payload"] for event in pending if event["kind"] == "plan")
     assert {"intent", "slots", "budget", "notes", "tools_needed", "delivery"} <= set(
@@ -340,6 +342,11 @@ def test_routing_multi_skill_plans_then_react_then_reflect() -> None:
     steps = plan_payload["slots"]["steps"]
     assert 3 <= len(steps) <= 7
     assert plan_payload["tools_needed"] == ["task"]
+    task_call = next(event["payload"] for event in pending if event["kind"] == "tool_call")
+    assert task_call["name"] == "task"
+    assert task_call["arguments"]["prompt"] == plan_payload["intent"]
+    assert task_call["arguments"]["description"]
+    assert [step["title"] for step in task_call["arguments"]["steps"]] == steps
     # Plan/Reflect 是内部编排；前端只显示专用 Plan 卡、确认卡或最终结果。
     assert "thought" not in kinds
     assert kinds.index("plan") < kinds.index("response.completed")
@@ -365,7 +372,8 @@ def test_routing_plan_react_error_completes_with_error() -> None:
 
     events = _collect(
         LangGraphAgent(_BoomGateway()),
-        _serializable("帮我做基准评测并生成测试用例"),
+        # 多短工具链在 task Observation 后仍有 read/bash 等剩余步骤，必须进 ReAct。
+        _serializable("先 read 日志，再用 bash 统计，最后 write 报告"),
     )
     pending = [
         event
@@ -429,16 +437,13 @@ def test_plan_solve_uses_llm_planner_artifact() -> None:
     plan_payload = next(event["payload"] for event in pending if event["kind"] == "plan")
     assert plan_payload["intent"] == "模型规划意图"
     assert plan_payload["slots"]["steps"] == ["一步", "两步", "三步"]
-    react_systems = [
-        str(call.system or "")
+    # confirm + 仅 task 的计划在 Observation 齐后直达 reflect，不再为注入
+    # 工作流空转一轮 ReAct；技能约束已写在 PlanArtifact.skill_id 上。
+    assert not any(
+        "【当前技能工作流】" in str(call.system or "")
         for call in gateway.invoke_calls
-        if "【当前技能工作流】" in str(call.system or "")
-    ]
-    assert react_systems, "选中 skill-benchmark 后 ReAct 须按需注入工作流"
-    assert "三协议调用" in react_systems[0]
-    assert "六策略 LLM" not in react_systems[0]
-    # 规划短调用 + ReAct 控制调用 + done 后的无工具收敛调用。
-    assert len(gateway.invoke_calls) == 3
+    )
+    assert len(gateway.invoke_calls) == 1
     # 该计划的交付类型是 confirm，且没有真实工具观察；Reflect 应只保留确认/澄清
     # 交互卡，不得把中性占位语句当作助手最终交付。
     assert "assistant_message" not in kinds

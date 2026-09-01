@@ -140,6 +140,16 @@ def test_select_tool_defs_react_native_excludes_mcp() -> None:
     }
     assert "task.create" in named
     assert "read" in named
+    planned = {
+        item["name"]
+        for item in select_tool_defs(
+            build_default_registry(),
+            mode="react",
+            tools_needed=("read",),
+            planned_only=True,
+        )
+    }
+    assert planned == {"read"}
 
 
 def test_skill_hint_lines_are_catalog_directory() -> None:

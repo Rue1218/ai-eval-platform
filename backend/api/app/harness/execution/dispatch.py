@@ -327,6 +327,15 @@ class ReadResult:
             "source": self.source,
             "display": {
                 "summary": summary,
+                "status": "success",
+                "content": preview,
+                "metadata": {
+                    "total_lines": self.total_lines,
+                    "truncated": not self.is_complete or preview_truncated,
+                    "start_line": self.start_line,
+                    "end_line": self.end_line,
+                    "next_offset": self.next_offset,
+                },
                 "read": {
                     "path": self.path,
                     "total_lines": self.total_lines,
@@ -553,6 +562,9 @@ class WriteResult:
             "summary": summary,
             "display": {
                 "summary": summary,
+                "status": "success",
+                "path": f"workspace/{self.path.lstrip('./')}",
+                "content": summary,
                 "write": {
                     "path": self.path,
                     "bytes_written": self.bytes_written,
@@ -571,17 +583,26 @@ class EditResult:
     path: str
     old_length: int
     new_length: int
+    replacements: int = 1
+    modified_lines: int = 1
+    diff: str = ""
 
     def to_tool_data(self) -> dict[str, object]:
         """生成模型摘要与 ToolCard 安全展示投影。"""
-        summary = f"已编辑 {self.path}（替换 {self.old_length}→{self.new_length} 字符）"
+        summary = (
+            f"已编辑 {self.path}（替换 {self.replacements} 处，"
+            f"{self.old_length}→{self.new_length} 字符）"
+        )
         return {
             "summary": summary,
             "display": {
                 "summary": summary,
+                "status": "success",
+                "modified_lines": self.modified_lines,
+                "diff": self.diff,
                 "edit": {
                     "path": self.path,
-                    "replacements": 1,
+                    "replacements": self.replacements,
                     "old_length": self.old_length,
                     "new_length": self.new_length,
                 },
@@ -594,6 +615,8 @@ class BashResult:
     """bash 的结构化安全投影，正文按行号显示且不持久化完整输出。"""
 
     output: str
+    exit_code: int = 0
+    duration_ms: int | None = None
 
     def to_tool_data(self) -> dict[str, object]:
         """把沙箱输出限制为 ToolCard 可见预览，完整片段仅供当前模型回合。"""
@@ -606,8 +629,13 @@ class BashResult:
             "source": "sandbox:bash",
             "display": {
                 "summary": summary,
+                "stdout": preview,
+                "stderr": "",
+                "exit_code": self.exit_code,
+                "duration_ms": self.duration_ms if self.duration_ms is not None else 0,
+                "is_background": False,
                 "bash": {
-                    "exit_code": 0,
+                    "exit_code": self.exit_code,
                     "preview": preview,
                     "preview_truncated": preview_truncated,
                 },
@@ -668,20 +696,69 @@ def _edit_mismatch_hint(content: str, old: str, *, preview_chars: int = 80) -> s
     )
 
 
-def edit_file_safe(path: str, old: str, new: str, sandbox_dir: str) -> EditResult:
-    """受控目录内精确原子替换（防目录穿越；不匹配则拒绝）。"""
+def _count_occurrences(content: str, needle: str) -> int:
+    """统计精确子串出现次数，空串视为 0。"""
+    if not needle:
+        return 0
+    return content.count(needle)
+
+
+def _modified_line_count(content: str, needle: str) -> int:
+    """估算被替换片段覆盖的行数，至少为 1。"""
+    if not needle:
+        return 0
+    lines = 0
+    start = 0
+    while True:
+        index = content.find(needle, start)
+        if index < 0:
+            break
+        lines += needle.count("\n") + 1
+        start = index + max(len(needle), 1)
+    return max(lines, 1) if content.find(needle) >= 0 else 0
+
+
+def _short_edit_diff(old: str, new: str) -> str:
+    """生成限长统一差异摘要，避免把全文写进浏览器事件。"""
+    old_preview = old[:80] + ("…" if len(old) > 80 else "")
+    new_preview = new[:80] + ("…" if len(new) > 80 else "")
+    return f"@@ -{len(old)} +{len(new)} @@\n-{old_preview}\n+{new_preview}"
+
+
+def edit_file_safe(
+    path: str,
+    old: str,
+    new: str,
+    sandbox_dir: str,
+    *,
+    replace_all: bool = False,
+) -> EditResult:
+    """受控目录内精确原子替换（防目录穿越；默认必须唯一匹配）。"""
     target = _resolve_safe_path(path, sandbox_dir)
     if not os.path.isfile(target):
         raise AppError(ErrorCode.NOT_FOUND, "文件不存在")
     with open(target, encoding="utf-8") as handle:
         content = handle.read()
-    if old not in content:
+    matches = _count_occurrences(content, old)
+    if matches == 0:
         raise AppError(
             ErrorCode.VALIDATION,
             "原文不匹配，编辑已拒绝",
-            fields={"repair_hint": _edit_mismatch_hint(content, old)},
+            fields={
+                "error": "StringNotFound",
+                "repair_hint": _edit_mismatch_hint(content, old),
+            },
         )
-    replacement = content.replace(old, new, 1)
+    if matches > 1 and not replace_all:
+        raise AppError(
+            ErrorCode.VALIDATION,
+            "原文出现多处，编辑已拒绝",
+            fields={
+                "error": "MultipleMatches",
+                "repair_hint": f"old_string 匹配 {matches} 处；请先 read 收窄原文，或显式传 replace_all=true。",
+            },
+        )
+    replacement = content.replace(old, new) if replace_all else content.replace(old, new, 1)
     _ensure_write_size(replacement)
     descriptor, temporary_path = tempfile.mkstemp(prefix=".agent-edit-", dir=os.path.dirname(target), text=True)
     try:
@@ -696,7 +773,14 @@ def edit_file_safe(path: str, old: str, new: str, sandbox_dir: str) -> EditResul
         except FileNotFoundError:
             pass
         raise
-    return EditResult(path=path, old_length=len(old), new_length=len(new))
+    return EditResult(
+        path=path,
+        old_length=len(old),
+        new_length=len(new),
+        replacements=matches,
+        modified_lines=_modified_line_count(content, old),
+        diff=_short_edit_diff(old, new),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -720,6 +804,15 @@ class WebSearchResult:
             "source": "web:search",
             "display": {
                 "summary": summary,
+                "results": [
+                    {
+                        "title": item.get("title") or "",
+                        "url": item.get("url") or "",
+                        "content": item.get("description") or "",
+                        "score": item.get("score") or "",
+                    }
+                    for item in self.results
+                ],
                 "search": {"query": self.query, "results": list(self.results)},
             },
         }
@@ -753,6 +846,9 @@ class WebFetchResult:
             "source": f"web:{urlparse(self.url).hostname or 'unknown'}",
             "display": {
                 "summary": summary,
+                "content": preview,
+                "title": self.title,
+                "url": self.url,
                 "web": {
                     "url": self.url,
                     "title": self.title,
@@ -772,6 +868,7 @@ class TaskPlanResult:
 
     goal: str
     steps: tuple[dict[str, str], ...]
+    description: str = ""
 
     def to_tool_data(self) -> dict[str, object]:
         """返回模型可读清单和 ToolCard 摘要。"""
@@ -784,7 +881,17 @@ class TaskPlanResult:
             "summary": summary,
             "model_text": model_text,
             "source": "session:task-plan",
-            "display": {"summary": summary, "task": {"goal": self.goal, "steps": list(self.steps)}},
+            "display": {
+                "summary": summary,
+                "status": "success",
+                "result": summary,
+                "task": {
+                    "goal": self.goal,
+                    "description": self.description,
+                    "prompt": self.goal,
+                    "steps": list(self.steps),
+                },
+            },
         }
 
 
@@ -1141,6 +1248,60 @@ def _fetch_direct(
     )
 
 
+def _normalize_domain_list(value: object) -> list[str]:
+    """把域名白/黑名单规范为小写 host 列表。"""
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise AppError(ErrorCode.VALIDATION, "域名列表必须是字符串数组")
+    domains: list[str] = []
+    for item in value:
+        host = str(item or "").strip().lower().lstrip(".")
+        if host:
+            domains.append(host)
+    return domains
+
+
+def _host_matches(host: str, domains: list[str]) -> bool:
+    """精确或后缀匹配域名（含 www 与子域）。"""
+    return any(host == domain or host.endswith(f".{domain}") for domain in domains)
+
+
+def assert_fetch_domains(url: str, *, allowed: object, blocked: object) -> None:
+    """按最终 URL host 强制白/黑名单；空名单表示不额外限制。"""
+    host = (urlparse(url).hostname or "").lower()
+    if not host:
+        raise AppError(ErrorCode.VALIDATION, "抓取地址缺少有效域名")
+    allowed_domains = _normalize_domain_list(allowed)
+    blocked_domains = _normalize_domain_list(blocked)
+    if allowed_domains and not _host_matches(host, allowed_domains):
+        raise AppError(ErrorCode.VALIDATION, "目标域名不在 allowed_domains 白名单")
+    if blocked_domains and _host_matches(host, blocked_domains):
+        raise AppError(ErrorCode.VALIDATION, "目标域名命中 blocked_domains 黑名单")
+
+
+def apply_fetch_content_budget(result: WebFetchResult, max_tokens: object) -> WebFetchResult:
+    """把 max_content_tokens 映射为字符上限，且不放宽 WEB_FETCH_MAX_CHARS。"""
+    if max_tokens is None or max_tokens == "":
+        return result
+    try:
+        tokens = int(max_tokens)
+    except (TypeError, ValueError) as exc:
+        raise AppError(ErrorCode.VALIDATION, "max_content_tokens 必须是整数") from exc
+    if tokens <= 0:
+        raise AppError(ErrorCode.VALIDATION, "max_content_tokens 必须大于 0")
+    max_chars = min(WEB_FETCH_MAX_CHARS, tokens * 4)
+    if len(result.content) <= max_chars:
+        return result
+    return WebFetchResult(
+        url=result.url,
+        title=result.title,
+        content=result.content[:max_chars],
+        format=result.format,
+        truncated=True,
+    )
+
+
 def web_fetch(
     url: str,
     *,
@@ -1171,12 +1332,15 @@ def web_fetch(
 
 def build_task_plan(arguments: Mapping[str, object]) -> TaskPlanResult:
     """构造会话内任务清单；它不是 ``Task`` ORM 行，也不会触发 Worker。"""
-    goal = str(arguments.get("goal") or "").strip()
+    goal = str(arguments.get("prompt") or arguments.get("goal") or "").strip()
+    description = str(arguments.get("description") or "").strip()
     raw_steps = arguments.get("steps")
     if not goal:
-        raise AppError(ErrorCode.VALIDATION, "任务目标不能为空")
-    if not isinstance(raw_steps, list) or not 1 <= len(raw_steps) <= 12:
-        raise AppError(ErrorCode.VALIDATION, "任务步骤数量必须在 1 到 12 之间")
+        raise AppError(ErrorCode.VALIDATION, "任务指令不能为空")
+    if raw_steps is None:
+        raw_steps = []
+    if not isinstance(raw_steps, list) or len(raw_steps) > 12:
+        raise AppError(ErrorCode.VALIDATION, "任务步骤数量必须在 0 到 12 之间")
     steps: list[dict[str, str]] = []
     for index, raw_step in enumerate(raw_steps, start=1):
         if not isinstance(raw_step, Mapping):
@@ -1188,7 +1352,7 @@ def build_task_plan(arguments: Mapping[str, object]) -> TaskPlanResult:
         if status not in {"pending", "in_progress", "completed"}:
             raise AppError(ErrorCode.VALIDATION, f"第 {index} 个任务步骤状态无效")
         steps.append({"title": title, "status": status})
-    return TaskPlanResult(goal=goal, steps=tuple(steps))
+    return TaskPlanResult(goal=goal, steps=tuple(steps), description=description)
 
 
 def execute_raw(
