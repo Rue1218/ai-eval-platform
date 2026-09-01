@@ -21,6 +21,7 @@ from langgraph.config import get_config, get_stream_writer
 
 from app.adapters import StreamAborted
 from app.agent.log import agent_trace
+from app.agent.loop import PLAN_META_TOOLS, remaining_plan_tools, route_after_tools
 from app.errors import AppError, ErrorCode
 from app.harness.context import (
     assemble,
@@ -170,8 +171,10 @@ logger = logging.getLogger("ai-eval.agent-react")
 
 
 def _normalized_tool_arguments(name: str, arguments: Mapping[str, object] | None) -> dict[str, object]:
-    """归一化工具参数，避免 offset/next_offset 别名导致重复读无法识别。"""
-    raw = dict(arguments or {})
+    """归一化工具参数，避免 offset/next_offset 与 path/file_path 别名导致重复读无法识别。"""
+    from app.harness.execution.aliases import normalize_tool_arguments
+
+    raw = normalize_tool_arguments(name, arguments)
     if name != "read":
         return raw
     offset = resolve_read_offset(raw)
@@ -179,7 +182,10 @@ def _normalized_tool_arguments(name: str, arguments: Mapping[str, object] | None
         normalized_offset = int(offset) if offset is not None else 0
     except (TypeError, ValueError):
         normalized_offset = 0
-    normalized: dict[str, object] = {"path": str(raw.get("path") or ""), "offset": normalized_offset}
+    normalized: dict[str, object] = {
+        "file_path": str(raw.get("file_path") or raw.get("path") or ""),
+        "offset": normalized_offset,
+    }
     if raw.get("limit") is not None:
         try:
             normalized["limit"] = int(raw["limit"])
@@ -629,12 +635,8 @@ def _requested_tool_correction(state: GraphState) -> Observation | None:
 
 
 def _plan_tools_needed(state: GraphState) -> tuple[str, ...]:
-    """从 PlanArtifact 投影取出本轮点名的短工具名（未注册项由 select_tool_defs 丢弃）。"""
-    plan = state.get("plan")
-    if not isinstance(plan, dict):
-        return ()
-    raw = plan.get("tools_needed") or ()
-    return tuple(str(item) for item in raw if str(item).strip())
+    """从 PlanArtifact 投影取出尚待 ReAct 决策的短工具名。"""
+    return remaining_plan_tools(state)
 
 
 def _format_task_state_input(task_state_data: Mapping[str, object]) -> str:
@@ -975,11 +977,11 @@ def _stream_native_tool_round(
     *,
     emit_content: bool = True,
 ) -> tuple[ModelResponse, _NativeRoundTrace] | None:
-    """流式执行原生工具回合（含首轮），响应结束后才交出 ToolCall。
+    """流式执行原生工具回合（含首轮），完整 ToolCall 到齐即预建 ToolCard。
 
-    工具参数碎片不投影到外层；完整 ``tool_call`` 事件只用于拼回收尾响应，
-    由调用方在上游响应结束后再写入 ``pending_tool(s)`` 并落卡。
-    成功路径不记账，由调用方在 call_id 校验后再记终态。
+    参数碎片不投影到外层；网关给出完整 ``name/call_id/arguments`` 后先通过
+    custom 通道交给 WS 持久化卡片，响应收尾后再回写 ``pending_tool(s)`` 执行。
+    成功路径不记账，由调用方在完整批次校验后再记终态。
     """
     stream = getattr(gateway, "stream", None)
     if not callable(stream):
@@ -988,6 +990,7 @@ def _stream_native_tool_round(
     writer = get_stream_writer()
     content: list[str] = []
     collected_calls: list[NativeToolCall] = []
+    announced_call_ids: set[str] = set()
     final_response: ModelResponse | None = None
     started = time.perf_counter()
     first_delta_ms: int | None = None
@@ -999,17 +1002,38 @@ def _stream_native_tool_round(
                 final_response = event.response
                 continue
             if event.kind == "tool_call":
-                # 上游工具参数只在网关确认完整后返回；实际 ToolCard 仍由
-                # 响应结束后的 pending_events 投影，避免半截参数出站。
+                # 仅在网关给出完整 name/call_id/arguments 后才发卡；这通常早于
+                # 上游 completed，浏览器可在工具真正执行前看到加载态。节点收尾
+                # 仍会携带同一持久事件，由 ws 层按 call_id 去重。
                 if event.tool_call is not None:
                     if tool_call_parse_ms is None:
                         tool_call_parse_ms = round((time.perf_counter() - started) * 1000)
                     collected_calls.append(event.tool_call)
+                    try:
+                        ready_call = _validated_native_tool_calls((event.tool_call,))[0]
+                    except AppError:
+                        # 最终统一走完整批次校验并返回标准 UPSTREAM 错误；半截或
+                        # 非法调用绝不能先在浏览器创建一张无法关联的 ToolCard。
+                        pass
+                    else:
+                        if ready_call.call_id not in announced_call_ids:
+                            announced_call_ids.add(ready_call.call_id)
+                            writer(
+                                {
+                                    "kind": "tool_call",
+                                    "call_id": ready_call.call_id,
+                                    "name": ready_call.name,
+                                    "arguments": dict(ready_call.arguments),
+                                }
+                            )
                 continue
             if not event.text:
                 continue
             if event.kind == "reasoning":
-                writer({"kind": "reasoning", "text": event.text})
+                # 原生函数调用轮的 reasoning 是模型内部的选工具草稿。PlanCard、
+                # ToolCard 与 Observation 已完整表达可验证事实，不能拿原始 thought
+                # 当作用户可见的决策过程。
+                writer({"kind": "reasoning", "text": event.text, "visibility": "internal"})
             elif event.kind == "content":
                 if first_delta_ms is None:
                     first_delta_ms = round((time.perf_counter() - started) * 1000)
@@ -1167,6 +1191,8 @@ def build_react_nodes(
                 registry,
                 mode="react",
                 tools_needed=_plan_tools_needed(state),
+                # 有计划时执行器只看见剩余步骤，避免确认卡路径再次铺开全量工具。
+                planned_only=_has_active_plan(state),
             )
         ]
         native_tool_mode = model_config.tool_call_mode == "native"
@@ -1420,6 +1446,36 @@ def build_react_nodes(
 
             if (
                 native_tool_mode
+                and not tool_defs
+                and _has_tool_observation(state)
+                and not _looks_like_legacy_react(response.text)
+            ):
+                # Plan 已直接执行 task 并得到 Observation 时，后续没有可调用短工具。
+                # 这一轮自然语言只负责基于事实收敛，避免再要求模型输出一段无意义
+                # 的 JSON-ReAct done 控制报文。
+                text = response.text.strip() or FINAL_ANSWER_EMPTY_TEXT
+                completed = _assistant_completion(
+                    text,
+                    usage=response.usage,
+                    latency_ms=round((time.perf_counter() - started) * 1000),
+                    close_turn=close_turn,
+                    # 有 Plan 的交付一律先经 Reflect；chat 由 Reflect 转成最终
+                    # 助手消息，confirm 仅转成确认卡，不能提前泄露模型草稿。
+                    defer_delivery=_has_active_plan(state),
+                    turn_stats=_turn_stats(state, budget, response.usage),
+                )
+                completed["budget"] = budget.to_dict()
+                if current_task_state is not None:
+                    finalized = _finalize_task_state(current_task_state)
+                    completed["task_state"] = finalized
+                    completed["task_state_observation_count"] = task_state_observation_count
+                    completed["pending_events"].append(
+                        make_event("task_state", finalized or {})
+                    )
+                return completed
+
+            if (
+                native_tool_mode
                 and state_native_messages
                 and not _looks_like_legacy_react(response.text)
             ):
@@ -1501,11 +1557,26 @@ def build_react_nodes(
                     }
                 # ReAct 的 done JSON 没有用户可展示的正文；除 confirm 规划外必须
                 # 再走一次无工具自然语言调用，绝不能把协议中的 thought 当作答案。
-                has_tool_observation = _has_tool_observation(state)
+                # Plan 直接调用 task / TaskCreate 后得到的是“清单已建立”的
+                # Observation，不代表已完成任何业务步骤。它应供本轮 ReAct 决策
+                # 与 Reflect 生成确认卡，不能触发一次额外的自然语言总结调用。
+                skip_tools = {"", "__parse__", *PLAN_META_TOOLS}
+                has_execution_observation = any(
+                    (
+                        str(item.get("tool") or "") not in skip_tools
+                        and item.get("ok") is True
+                    )
+                    if isinstance(item, Mapping)
+                    else (
+                        str(getattr(item, "tool", "") or "") not in skip_tools
+                        and getattr(item, "ok", False) is True
+                    )
+                    for item in (state.get("observations") or ())
+                )
                 # confirm 规划只需展示经 Reflect 审核的确认卡，不能为了生成一句
                 # 草稿额外调用模型；普通 ReAct 与 chat 规划仍须生成自然语言最终回答。
                 final_response = None
-                if has_tool_observation or not _has_active_plan(state) or _is_chat_plan(state):
+                if has_execution_observation or not _has_active_plan(state) or _is_chat_plan(state):
                     budget = consume_model_call(budget)
                     final_response = _generate_final_answer(
                         gateway,
@@ -1518,7 +1589,7 @@ def build_react_nodes(
                 # 规划交付为 confirm 且尚无真实工具观察时，Reflect 只需展示确认卡；
                 # 不要把中性占位语句伪装成助手交付，避免确认卡前出现多余气泡。
                 defer_final_delivery = _is_chat_plan(state) or (
-                    _has_active_plan(state) and not has_tool_observation
+                    _has_active_plan(state) and not has_execution_observation
                 )
                 # 最终模型回合为空或仍返回控制 JSON 时只给中性提示，避免控制协议
                 # 或 Observation 原文泄露给用户，更不能复用 ReAct thought。
@@ -1688,18 +1759,5 @@ def react_route(state: GraphState) -> str:
 
 
 def tools_route(state: GraphState) -> str:
-    """ToolNode 条件边：队列未空继续 tools；预算耗尽或回合失败则结束。
-
-    默认预算 12/12 时 ``routing + n×(react+tools)`` 约 25 步，恰好顶到
-    LangGraph 默认 ``recursion_limit=25``。若工具后再无条件回 ``react_agent``，
-    第 13 次 ``consume_model_call`` 来不及抛 ``BUDGET_EXCEEDED`` 就会
-    ``GraphRecursionError``。
-    """
-    if state.get("pending_tool"):
-        return "tools"
-    if state.get("turn_failed"):
-        return "end"
-    budget = from_dict(state.get("budget") or {})
-    if is_budget_exhausted(budget):
-        return "end"
-    return "react_agent"
+    """ToolNode 条件边：见 ``loop.route_after_tools``。"""
+    return route_after_tools(state)

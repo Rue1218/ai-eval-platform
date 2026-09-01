@@ -733,6 +733,14 @@ def test_native_tool_calls_delay_draft_content_until_tool_result() -> None:
         if mode == "updates"
         and any(event["kind"] == "tool_call" for event in iter_pending_events(chunk))
     )
+    first_preview_call = next(
+        index
+        for index, (mode, chunk) in enumerate(events)
+        if mode == "custom" and chunk.get("kind") == "tool_call"
+    )
+    # 网关拿到完整 call_id/name/arguments 时即可先建加载态卡片；节点收尾的
+    # pending ToolCall 仍用于状态提交，但不得成为浏览器第一次看到卡片的时机。
+    assert first_preview_call < first_tool_call
     assert first_tool_call < first_content
 
 
@@ -1074,6 +1082,28 @@ def test_tools_route_ends_when_budget_exhausted() -> None:
         tools_route({"pending_tool": None, "budget": {"model_calls": 3, "tool_turns": 3}})
         == "react_agent"
     )
+    assert (
+        tools_route(
+            {
+                "pending_tool": None,
+                "budget": {"model_calls": 3, "tool_turns": 3},
+                "plan": {"delivery": "confirm", "tools_needed": ["task"]},
+                "observations": [{"tool": "task", "ok": True, "text": "清单已建立"}],
+            }
+        )
+        == "reflect"
+    )
+    assert (
+        tools_route(
+            {
+                "pending_tool": None,
+                "budget": {"model_calls": 3, "tool_turns": 3},
+                "plan": {"delivery": "confirm", "tools_needed": ["task", "read"]},
+                "observations": [{"tool": "task", "ok": True, "text": "清单已建立"}],
+            }
+        )
+        == "react_agent"
+    )
 
 
 def test_react_budget_exhausted_emits_error() -> None:
@@ -1253,7 +1283,7 @@ def test_read_offset_aliases_normalize_to_same_call() -> None:
     missing = _normalized_tool_arguments("read", {"path": "a.txt"})
     explicit = _normalized_tool_arguments("read", {"path": "a.txt", "offset": 0})
     alias = _normalized_tool_arguments("read", {"path": "a.txt", "next_offset": 0})
-    assert missing == explicit == alias == {"path": "a.txt", "offset": 0}
+    assert missing == explicit == alias == {"file_path": "a.txt", "offset": 0}
 
 
 def test_split_native_readonly_repeats_dedups_same_batch() -> None:

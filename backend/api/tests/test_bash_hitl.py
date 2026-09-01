@@ -92,6 +92,38 @@ def test_dangerous_bash_interrupts_before_handler_execution() -> None:
     assert executed == []
 
 
+def test_approved_bash_resumes_with_custom_and_updates_stream() -> None:
+    """生产 _run_turn 使用 stream_mode=["custom", "updates"]，确认后仍须执行并回传结果。"""
+    executed: list[str] = []
+    graph = _build_graph(executed)
+    config = {"configurable": {"thread_id": "bash-hitl-stream", "session": {"id": "s-1"}}}
+
+    async def collect(graph_input: object) -> list[tuple[str, dict]]:
+        frames: list[tuple[str, dict]] = []
+        async for mode, frame in graph.astream(
+            graph_input, config=config, stream_mode=["custom", "updates"]
+        ):
+            frames.append((mode, frame))
+        return frames
+
+    asyncio.run(collect(_initial_state()))
+    frames = asyncio.run(
+        collect(Command(resume={"id": "call-delete", "action": "approve"}))
+    )
+
+    assert executed == ["rm -f result.md"]
+    payloads = [
+        event["payload"]
+        for mode, frame in frames
+        if mode == "updates"
+        for update in frame.values()
+        if isinstance(update, dict)
+        for event in update.get("pending_events", [])
+        if event["kind"] == "tool_result"
+    ]
+    assert payloads and payloads[0]["ok"] is True
+
+
 def test_approved_bash_resumes_same_toolnode_and_executes() -> None:
     """确认后 Command(resume) 回到同一 ToolNode，才允许测试 handler 执行。"""
     executed: list[str] = []

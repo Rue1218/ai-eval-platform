@@ -17,6 +17,7 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from langgraph.errors import GraphInterrupt
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -968,6 +969,9 @@ async def _run_turn(
         coalescer = ThinkStreamCoalescer()
         display = ReasoningDisplayFilter()
         deferred_completed: list[dict] = []
+        # 原生流会在完整 ToolCall 到齐时先走 custom 通道，节点收尾的同一
+        # pending_events 只用于状态提交，不能再次落库/广播同一张 ToolCard。
+        published_tool_call_ids: set[str] = set()
 
         async def _emit_think_delta(text: str) -> None:
             """下发合并后的 thought.stream=think 瞬态帧。"""
@@ -993,7 +997,31 @@ async def _run_turn(
             if mode == "custom":
                 kind = str(chunk.get("kind") or "")
                 text = str(chunk.get("text") or "")
-                if kind == "content" and text:
+                if kind == "tool_call":
+                    call_id = str(chunk.get("call_id") or "").strip()
+                    name = str(chunk.get("name") or "").strip()
+                    arguments = chunk.get("arguments")
+                    if call_id and name and isinstance(arguments, dict):
+                        await _flush_think()
+                        await _translate_event(
+                            db,
+                            websocket,
+                            state,
+                            session_id,
+                            profile,
+                            {
+                                "kind": "tool_call",
+                                "payload": {
+                                    "call_id": call_id,
+                                    "name": name,
+                                    "arguments": dict(arguments),
+                                },
+                            },
+                            user=turn_user,
+                            turn_id=turn_id,
+                        )
+                        published_tool_call_ids.add(call_id)
+                elif kind == "content" and text:
                     await _flush_think()
                     await SESSION_CONNECTION_HUB.broadcast_chunk(
                         session_id,
@@ -1004,7 +1032,7 @@ async def _run_turn(
                             {"role": "assistant", "text": text},
                         ),
                     )
-                elif kind == "reasoning" and text:
+                elif kind == "reasoning" and text and chunk.get("visibility") != "internal":
                     thinking.append(text)
                     for visible in display.feed(text):
                         merged = coalescer.push(visible)
@@ -1074,6 +1102,11 @@ async def _run_turn(
                     # completed 必须是本轮最后一条持久事件；think_final 要插在它前面。
                     deferred_completed.append(event)
                     continue
+                if event.get("kind") == "tool_call":
+                    payload = event.get("payload") or {}
+                    call_id = str(payload.get("call_id") or "").strip()
+                    if call_id and call_id in published_tool_call_ids:
+                        continue
                 await _flush_think()
                 await _translate_event(
                     db,
@@ -1133,6 +1166,11 @@ async def _run_turn(
             finish_reason="cancelled",
             turn_id=turn_id,
         )
+    except GraphInterrupt:
+        # interrupt() 已在循环内投影为确认卡/澄清卡；图处于可恢复暂停，不是失败。
+        db.rollback()
+        logger.info("Agent 回合已暂停等待确认 session=%s", session_id)
+        return
     except AppError as exc:
         db.rollback()
         logger.info("Agent 回合失败 session=%s code=%s", session_id, exc.code.value)
@@ -1389,6 +1427,7 @@ async def _handle_clarify_interrupt(
             "id": clarify_id,
             "question": str(payload.get("question") or ""),
             "options": payload.get("options"),
+            "questions": payload.get("questions") if isinstance(payload.get("questions"), list) else None,
         },
     )
 
@@ -1505,7 +1544,10 @@ async def _handle_clarify_reply(
             state,
             user_id or session.user_id,
             handle=handle,
-            resume={"thread_id": pending["thread_id"], "value": answer.strip()},
+            resume={
+                "thread_id": pending["thread_id"],
+                "value": answer.replace("\r\n", "\n").rstrip("\n"),
+            },
         )
     except Exception:
         _SESSION_CLARIFY[session.id] = pending
@@ -1549,6 +1591,7 @@ async def _handle_tool_approval_ack(
         # 不对不存在/已完成的中断误发 resume。
         raise AppError(ErrorCode.VALIDATION, "确认已失效（会话状态已过期），请重新发起命令")
     handle = _reserve_turn(session.id, str(user.id), local_task=active_turn)
+    removed_pending = None
     try:
         await _emit_persistent(
             db,

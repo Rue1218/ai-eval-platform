@@ -22,7 +22,7 @@ from langgraph.types import interrupt
 
 from app.config import settings
 from app.errors import AppError, ErrorCode
-from app.harness.contracts import ToolCall, make_event
+from app.harness.contracts import ToolCall, ToolResult, make_event
 from app.harness.feedback.observation import normalize, normalize_exception
 from app.harness.feedback.rules import GateContext, check_gates
 from app.harness.memory import GraphState
@@ -31,6 +31,8 @@ from app.harness.orchestration.budget import from_dict, is_budget_exhausted
 # 会话级占槽门禁（OR-7）：task.create/task.cancel 前查询会话活动任务
 from app.harness.orchestration.gates import check_session_active_task
 
+from .aliases import enforce_tool_argument_policy, normalize_tool_arguments
+from .ask_user import answers_from_reply, first_option_labels, validate_questions
 from .batch import (
     BatchItemStatus,
     batch_is_complete,
@@ -119,6 +121,11 @@ def build_tool_node(
         owned_file_ids = frozenset(configurable.get("assets", {}).get("file_ids") or ())
         sandbox_box = configurable.get("sandbox") or {}
         sandbox = str(sandbox_box.get("dir") or sandbox_dir or "")
+        session_board = [
+            dict(item)
+            for item in (state.get("session_tasks") or [])
+            if isinstance(item, Mapping)
+        ]
         try:
             writer = get_stream_writer()
         except Exception:  # noqa: BLE001 —— 图外单测/同步调用没有 LangGraph writer
@@ -295,6 +302,16 @@ def build_tool_node(
             if definition is None:
                 return failed("VALIDATION", f"工具未注册：{call.name}")
             recovery_policy = definition.recovery_policy
+            try:
+                call = replace(
+                    call,
+                    arguments=normalize_tool_arguments(
+                        call.name, call.arguments, definition.parameters_schema
+                    ),
+                )
+                enforce_tool_argument_policy(call.name, call.arguments)
+            except AppError as exc:
+                return failed(exc.code.value, exc.message)
             schema_error = validate_tool_arguments(definition.parameters_schema, call.arguments)
             if schema_error:
                 return failed("VALIDATION", schema_error)
@@ -364,6 +381,33 @@ def build_tool_node(
                             emit_error=False,
                         )
                     emit_progress("approved", "已获用户确认，正在进入受控沙箱执行")
+            ask_user_raw = None
+            if call.name == "ask_user_question":
+                try:
+                    questions = validate_questions(safe_args)
+                except AppError as exc:
+                    return failed(exc.code.value, exc.message)
+                first = questions[0]
+                reply = interrupt(
+                    {
+                        "type": "clarify",
+                        "id": call.call_id,
+                        "question": str(first.get("question") or ""),
+                        "options": first_option_labels(first),
+                        "questions": questions,
+                    }
+                )
+                answers = answers_from_reply(questions, reply)
+                ask_user_raw = ToolResult(
+                    name=call.name,
+                    ok=True,
+                    data={
+                        "summary": "用户已回复提问",
+                        "model_text": "用户已回复提问",
+                        "display": {"status": "success", "answers": answers},
+                    },
+                    call_id=call.call_id,
+                )
             emit_progress("validating", "正在校验工具参数与权限边界")
             emit_progress("executing", "工具正在受控执行")
             started = time.perf_counter()
@@ -376,9 +420,12 @@ def build_tool_node(
                 call_id=call.call_id,
                 report_progress=emit_progress,
                 report_output=emit_output,
+                session_tasks=session_board,
             )
             try:
-                if definition.transport == "native":
+                if ask_user_raw is not None:
+                    raw = ask_user_raw
+                elif definition.transport == "native":
                     raw = await executor.call(definition, safe_args, exec_context)
                 elif manager is None:
                     raise AppError(ErrorCode.INTERNAL, "MCP 工具执行器不可用")
@@ -526,6 +573,7 @@ def build_tool_node(
             "pending_tool": next_pending,
             "pending_tools": remaining,
             "pending_events": events,
+            "session_tasks": session_board,
         }
         if observations:
             result["observations"] = observations

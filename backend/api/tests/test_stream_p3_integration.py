@@ -390,6 +390,7 @@ async def test_team_transient_broadcast_stays_in_session() -> None:
 
 def _find_pending_tool(blocks: list[dict], name: object, call_id: object) -> dict | None:
     """与 frontend/src/utils/toolCard.ts findPendingToolItem 同一套关联规则。"""
+    open_statuses = {"pending", "awaiting_approval"}
     reversed_blocks = list(reversed(blocks))
     if isinstance(call_id, str) and call_id:
         return next(
@@ -398,7 +399,7 @@ def _find_pending_tool(blocks: list[dict], name: object, call_id: object) -> dic
                 for block in reversed_blocks
                 if block.get("type") == "tool"
                 and block.get("callId") == call_id
-                and block.get("status") == "pending"
+                and block.get("status") in open_statuses
             ),
             None,
         )
@@ -408,7 +409,7 @@ def _find_pending_tool(blocks: list[dict], name: object, call_id: object) -> dic
             for block in reversed_blocks
             if block.get("type") == "tool"
             and block.get("tool") == name
-            and block.get("status") == "pending"
+            and block.get("status") in open_statuses
         ),
         None,
     )
@@ -440,3 +441,16 @@ def test_toolcard_out_of_order_results_keep_call_id() -> None:
     legacy = _find_pending_tool(blocks, "read", "")
     assert legacy is blocks[2]
     assert _find_pending_tool(blocks, "read", "call_b") is None
+
+
+def test_toolcard_awaiting_approval_still_receives_result() -> None:
+    """危险 bash 确认后卡片仍是 awaiting_approval 时，tool_result 必须按 call_id 回填。"""
+    blocks = [
+        {"type": "tool", "callId": "call-rm", "tool": "bash", "status": "awaiting_approval", "result": None},
+    ]
+    found = _find_pending_tool(blocks, "bash", "call-rm")
+    assert found is blocks[0]
+    found["status"] = "ok"
+    found["result"] = {"bash": {"preview": "ok"}}
+    assert blocks[0]["result"]["bash"]["preview"] == "ok"
+    assert _find_pending_tool(blocks, "bash", "call-rm") is None

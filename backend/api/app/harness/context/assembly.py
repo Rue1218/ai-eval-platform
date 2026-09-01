@@ -78,11 +78,14 @@ def select_tool_defs(
     *,
     mode: str,
     tools_needed: tuple[str, ...] = (),
+    planned_only: bool = False,
 ) -> list[Mapping[str, object]]:
     """按本轮 mode 与 tools_needed 从注册表取工具定义（CX-5）。
 
-    Chat/Direct 返回空。ReAct 默认注入 ``transport=native`` 短工具（本轮执行
-    能力），并并入 ``tools_needed`` 中已注册项；未注册不返回；MCP 长工具
+    Chat/Direct 返回空。无计划的 ReAct 默认注入 ``transport=native`` 短工具
+    （本轮执行能力），并并入 ``tools_needed`` 中已注册项。有 ``PlanArtifact``
+    时 ``planned_only=True``：执行器只看见计划剩余工具，避免确认卡路径把
+    全量原生工具重新铺开造成空转循环。未注册不返回；MCP 长工具
     （如 ``task.create``）不默认注入。无 ``iter_defs`` 的测试桩仅消费
     ``tools_needed``。
     """
@@ -93,7 +96,7 @@ def select_tool_defs(
         return []
     names: list[str] = []
     iter_defs = getattr(registry, "iter_defs", None)
-    if callable(iter_defs):
+    if callable(iter_defs) and not planned_only:
         names.extend(definition.name for definition in iter_defs(transport="native"))
     for name in tools_needed:
         if name and name not in names:

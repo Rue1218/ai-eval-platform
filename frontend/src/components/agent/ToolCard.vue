@@ -77,30 +77,88 @@
       </div>
       <div class="td-block">
         <div class="td-label">ToolCall</div>
-        <StructuredDataView v-if="showStructuredArgs" :value="argsRecord" />
+        <div v-if="taskPlanInput" class="task-plan" data-od-id="task-plan-input">
+          <div class="td-io-key">
+            <span class="td-field-name mono">description</span>
+            <span class="td-field-req">必填</span>
+            <span class="td-field-hint">任务简短概括</span>
+          </div>
+          <div class="task-plan-goal">{{ taskPlanInput.description || '未命名任务' }}</div>
+          <div v-if="taskPlanInput.prompt" class="td-io-block">
+            <div class="td-io-key">
+              <span class="td-field-name mono">prompt</span>
+              <span class="td-field-req">必填</span>
+              <span class="td-field-hint">完整指令</span>
+            </div>
+            <p class="task-plan-summary">{{ taskPlanInput.prompt }}</p>
+          </div>
+          <div
+            v-for="(field, fieldIdx) in taskPlanInput.extraFields"
+            :key="`task-extra-${field.name}-${fieldIdx}`"
+            class="td-io-block"
+          >
+            <div class="td-io-key">
+              <span class="td-field-name mono">{{ field.name }}</span>
+              <span class="td-field-hint">{{ field.hint }}</span>
+            </div>
+            <p class="task-plan-summary mono">{{ field.value }}</p>
+          </div>
+          <div v-if="taskPlanInput.metadata" class="td-io-block">
+            <div class="td-io-key">
+              <span class="td-field-name mono">metadata</span>
+              <span class="td-field-hint">附加的元数据</span>
+            </div>
+            <pre class="task-meta mono">{{ taskPlanInput.metadata }}</pre>
+          </div>
+          <ol v-if="taskPlanInput.steps.length" class="task-steps">
+            <li
+              v-for="(step, stepIdx) in taskPlanInput.steps"
+              :key="`${step.title}-${stepIdx}`"
+              class="task-step"
+              :class="step.status"
+            >
+              <span class="task-step-index mono">{{ stepIdx + 1 }}</span>
+              <span class="task-step-title">{{ step.title }}</span>
+              <span class="task-step-badge">{{ step.label }}</span>
+            </li>
+          </ol>
+        </div>
+        <StructuredDataView v-else-if="showStructuredArgs" :value="argsRecord" />
         <dl v-else-if="inputFields.length" class="td-fields">
-          <div v-for="(field, fieldIdx) in inputFields" :key="`${field.label}-${fieldIdx}`" class="td-field">
-            <dt>{{ field.label }}</dt>
-            <dd :class="{ mono: field.mono, cmd: field.cmd }">{{ field.value }}</dd>
+          <div
+            v-for="(field, fieldIdx) in inputFields"
+            :key="`${field.name}-${fieldIdx}`"
+            class="td-field"
+            :class="{ 'is-stack': field.kind === 'code' }"
+          >
+            <dt class="td-io-key">
+              <span class="td-field-name mono">{{ field.name }}</span>
+              <span v-if="field.required" class="td-field-req">必填</span>
+              <span v-if="field.hint" class="td-field-hint">{{ field.hint }}</span>
+            </dt>
+            <dd v-if="field.kind === 'code'" class="td-field-block">
+              <div class="line-block tool-call-code" role="region" :aria-label="field.name">
+                <div v-for="line in toLineItems(field.value)" :key="`${field.name}-${line.n}`" class="ln-row">
+                  <span class="ln-no mono">{{ line.n }}</span>
+                  <span class="ln-text">{{ line.text }}</span>
+                </div>
+              </div>
+            </dd>
+            <dd v-else :class="{ mono: field.kind === 'mono' }">{{ field.value }}</dd>
           </div>
         </dl>
-        <div v-if="!showStructuredArgs && toolCallLines.length" class="tool-call-code-wrap">
-          <div v-if="toolCallCodeLabel" class="td-code-caption mono">{{ toolCallCodeLabel }}</div>
-          <div class="line-block tool-call-code" role="region" aria-label="ToolCall 参数">
-            <div v-for="line in toolCallLines" :key="line.n" class="ln-row">
-              <span class="ln-no mono">{{ line.n }}</span>
-              <span class="ln-text">{{ line.text }}</span>
-            </div>
-          </div>
-        </div>
       </div>
       <div class="td-block">
         <div class="td-label-row">
-          <div class="td-label">输出</div>
+          <div class="td-label">{{ taskPlanResult ? 'Observation' : '输出' }}</div>
           <div v-if="isStreamingOutput || hasLiveOutput" class="td-stream-state">
             <span v-if="isStreamingOutput || isReceivingLiveOutput" class="td-stream-dot" aria-hidden="true"></span>
             {{ isReceivingLiveOutput ? '正在接收安全输出' : isStreamingOutput ? '正在流式呈现' : '已接收安全输出' }}
           </div>
+        </div>
+        <div v-if="hasLiveOutput && outputCaption" class="td-io-caption">
+          <span class="td-field-name mono">{{ outputCaption.name }}</span>
+          <span class="td-field-hint">{{ outputCaption.hint }}</span>
         </div>
         <div
           v-if="hasLiveOutput"
@@ -121,11 +179,19 @@
           </div>
         </div>
         <div v-else-if="status === 'fail'" class="tool-recovery" role="alert">
+          <div class="td-io-key">
+            <span class="td-field-name mono">error</span>
+            <span class="td-field-hint">{{ tool === 'edit' ? '查找失败原因' : '执行失败信息' }}</span>
+          </div>
           <div class="tool-recovery-title">{{ resolvedOutputText }}</div>
           <p v-if="recoveryHint" class="tool-recovery-hint">{{ recoveryHint }}</p>
           <span v-if="recoveryAction" class="tool-recovery-action mono">建议：{{ recoveryAction }}</span>
         </div>
         <div v-else-if="status === 'pending' || status === 'awaiting_approval'" class="tool-output-loading" role="status">
+          <div v-if="outputCaption" class="td-io-caption">
+            <span class="td-field-name mono">{{ outputCaption.name }}</span>
+            <span class="td-field-hint">{{ outputCaption.hint }}</span>
+          </div>
           <div class="tool-loading-copy">
             <span class="tool-loading-orbit" aria-hidden="true"></span>
             {{ status === 'awaiting_approval' ? '危险命令尚未执行，等待用户确认…' : `${toolDisplayName} 正在执行，等待安全输出…` }}
@@ -135,18 +201,121 @@
           </div>
         </div>
         <template v-else>
-          <p v-if="resultSummary && !previewText && !hasStructuredResult && status === 'ok'" class="td-summary">{{ resultSummary }}</p>
+          <dl v-if="outputMetaFields.length && !queueTaskResult && !sessionBoardResult" class="td-fields td-output-fields">
+            <div
+              v-for="(field, fieldIdx) in outputMetaFields"
+              :key="`out-${field.name}-${fieldIdx}`"
+              class="td-field"
+            >
+              <dt class="td-io-key">
+                <span class="td-field-name mono">{{ field.name }}</span>
+                <span v-if="field.hint" class="td-field-hint">{{ field.hint }}</span>
+              </dt>
+              <dd :class="{ mono: field.kind === 'mono' }">{{ field.value }}</dd>
+            </div>
+          </dl>
+          <p v-if="resultSummary && !previewText && !hasStructuredResult && !taskPlanResult && !queueTaskResult && !sessionBoardResult && status === 'ok'" class="td-summary">{{ resultSummary }}</p>
           <div v-if="readMeta" class="td-meta mono">
             第 {{ readMeta.start }}–{{ readMeta.end }} 行 · 本次 {{ readMeta.count }} 行 / 共 {{ readMeta.total }} 行
             <span v-if="readMeta.next != null"> · 下一页 offset={{ readMeta.next }}</span>
             <span v-else> · 已读完</span>
           </div>
+          <div v-if="outputCaption && (previewText || outputLines.length || showMarkdownOutput || taskPlanResult || editMeta)" class="td-io-caption">
+            <span class="td-field-name mono">{{ outputCaption.name }}</span>
+            <span class="td-field-hint">{{ outputCaption.hint }}</span>
+          </div>
           <div v-if="isMarkdownOutput && previewText && status === 'ok'" class="td-tabs">
             <button type="button" class="td-tab" :class="{ active: previewMode === 'render' }" @click="previewMode = 'render'">渲染</button>
             <button type="button" class="td-tab" :class="{ active: previewMode === 'source' }" @click="previewMode = 'source'">源码</button>
           </div>
+          <!-- 会话内拆解清单：目标 + 步骤状态，替代通用 JSON 树 -->
+          <div v-if="taskPlanResult" class="task-plan is-result" data-od-id="task-plan-result" role="status">
+            <div class="task-plan-head">
+              <p class="task-plan-summary">{{ taskPlanResult.summary }}</p>
+              <span class="task-plan-count mono">{{ taskPlanResult.completed }}/{{ taskPlanResult.count }} 步</span>
+            </div>
+            <div v-if="taskPlanResult.subject" class="task-plan-goal">{{ taskPlanResult.subject }}</div>
+            <ol v-if="taskPlanResult.steps.length" class="task-steps">
+              <li
+                v-for="(step, stepIdx) in taskPlanResult.steps"
+                :key="`out-${step.title}-${stepIdx}`"
+                class="task-step"
+                :class="step.status"
+              >
+                <span class="task-step-index mono">{{ stepIdx + 1 }}</span>
+                <span class="task-step-title">{{ step.title }}</span>
+                <span class="task-step-badge">{{ step.label }}</span>
+              </li>
+            </ol>
+          </div>
+          <!-- 评测队列工具：状态徽章 + 关键字段，避免整段 JSON -->
+          <div v-else-if="sessionBoardResult" class="task-queue" :class="sessionBoardResult.tone" role="status">
+            <div class="task-queue-head">
+              <span class="task-queue-badge">{{ sessionBoardResult.statusLabel }}</span>
+              <span class="task-queue-kind">{{ sessionBoardResult.title }}</span>
+            </div>
+            <p v-if="sessionBoardResult.summary" class="task-queue-summary">{{ sessionBoardResult.summary }}</p>
+            <dl v-if="sessionBoardResult.taskId || sessionBoardResult.subject" class="task-queue-fields">
+              <div v-if="sessionBoardResult.taskId" class="task-queue-field">
+                <dt class="td-io-key"><span class="td-field-name mono">task.id</span></dt>
+                <dd class="mono" :title="sessionBoardResult.taskId">{{ sessionBoardResult.taskId }}</dd>
+              </div>
+              <div v-if="sessionBoardResult.subject" class="task-queue-field">
+                <dt class="td-io-key"><span class="td-field-name mono">subject</span></dt>
+                <dd>{{ sessionBoardResult.subject }}</dd>
+              </div>
+              <div v-if="sessionBoardResult.owner" class="task-queue-field">
+                <dt class="td-io-key"><span class="td-field-name mono">owner</span></dt>
+                <dd class="mono">{{ sessionBoardResult.owner }}</dd>
+              </div>
+            </dl>
+            <ol v-if="sessionBoardResult.items.length" class="task-steps">
+              <li
+                v-for="item in sessionBoardResult.items"
+                :key="item.id"
+                class="task-step"
+                :class="item.status"
+              >
+                <span class="task-step-title">{{ item.subject }}</span>
+                <span class="task-step-badge">{{ item.label }}</span>
+              </li>
+            </ol>
+            <dl v-if="sessionBoardResult.answers.length" class="task-queue-fields">
+              <div v-for="item in sessionBoardResult.answers" :key="item.id" class="task-queue-field">
+                <dt class="td-io-key"><span class="td-field-name mono">{{ item.id }}</span></dt>
+                <dd>{{ item.value }}</dd>
+              </div>
+            </dl>
+          </div>
+          <div v-else-if="queueTaskResult" class="task-queue" :class="queueTaskResult.status" role="status">
+            <div class="task-queue-head">
+              <span class="task-queue-badge">{{ queueTaskResult.statusLabel }}</span>
+              <span class="task-queue-kind">{{ queueTaskResult.kindLabel || '评测任务' }}</span>
+            </div>
+            <p v-if="queueTaskResult.summary || queueTaskResult.progressText" class="task-queue-summary">
+              {{ queueTaskResult.summary || queueTaskResult.progressText }}
+            </p>
+            <dl class="task-queue-fields">
+              <div class="task-queue-field">
+                <dt class="td-io-key"><span class="td-field-name mono">success</span></dt>
+                <dd class="mono">{{ queueTaskResult.success }}</dd>
+              </div>
+              <div v-if="queueTaskResult.taskId" class="task-queue-field">
+                <dt class="td-io-key"><span class="td-field-name mono">taskId</span></dt>
+                <dd class="mono" :title="queueTaskResult.taskId">{{ queueTaskResult.taskId }}</dd>
+              </div>
+              <div v-if="queueTaskResult.percent > 0" class="task-queue-field">
+                <dt class="td-io-key"><span class="td-field-name mono">progress</span></dt>
+                <dd>{{ queueTaskResult.percent }}%</dd>
+              </div>
+              <div v-if="queueTaskResult.reportId" class="task-queue-field">
+                <dt class="td-io-key"><span class="td-field-name mono">reportId</span></dt>
+                <dd class="mono">{{ queueTaskResult.reportId }}</dd>
+              </div>
+            </dl>
+          </div>
           <!-- edit 结果结构固定且字段少：用成功摘要卡替代通用 JSON 字段树 -->
-          <div v-if="editMeta" class="edit-result" role="status">
+          <div v-else-if="editMeta" class="edit-result" role="status">
             <span class="edit-result-icon" aria-hidden="true">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="20 6 9 17 4 12"></polyline>
@@ -154,7 +323,7 @@
             </span>
             <span class="edit-result-text">
               已完成替换
-              <span class="edit-result-path mono" :title="editMeta.path">{{ editMeta.path }}</span>
+              <span class="edit-result-path mono" :title="editMeta.displayPath">{{ editMeta.displayPath }}</span>
             </span>
             <span class="edit-result-chips">
               <span class="edit-chip">替换 {{ editMeta.replacements }} 处</span>
@@ -200,6 +369,14 @@
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { formatLatency } from '../../utils/format'
 import { shouldKeepToolCardOpen } from '../../utils/toolCard'
+import {
+  buildToolInputFields,
+  buildToolOutputFields,
+  formatWorkspacePath,
+  outputBodyCaption,
+  pickArg,
+  resolveTaskDescription,
+} from '../../utils/toolIo'
 import MarkdownView from './MarkdownView.vue'
 import StructuredDataView from './StructuredDataView.vue'
 
@@ -251,6 +428,7 @@ const toolNameMap: Record<string, string> = {
   'kb.list': '列出知识库',
   'task.get': '查询任务详情',
   'task.create': '创建评测任务',
+  'task.status': '查询任务状态',
   'task.cancel': '取消任务',
   'report.get': '读取评测报告',
   'dispatch.overview': '调度概览',
@@ -281,7 +459,20 @@ const toolNameMap: Record<string, string> = {
   get_report: '读取评测报告',
 }
 
-const nativeToolNames = new Set(['read', 'write', 'edit', 'bash', 'web_search', 'web_fetch', 'task'])
+const nativeToolNames = new Set([
+  'read',
+  'write',
+  'edit',
+  'bash',
+  'web_search',
+  'web_fetch',
+  'task',
+  'TaskCreate',
+  'TaskGet',
+  'TaskUpdate',
+  'TaskList',
+  'ask_user_question',
+])
 
 const toolDisplayName = computed(() => {
   if (nativeToolNames.has(props.tool)) return props.tool
@@ -314,6 +505,206 @@ function asNonNegInt(value: unknown, fallback = 0): number {
 
 const argsRecord = computed(() => asRecord(props.args) || {})
 const resultRecord = computed(() => asRecord(props.result))
+
+const TASK_KIND_LABEL: Record<string, string> = {
+  benchmark: '基准评测',
+  testcase: '用例生成',
+  rag: 'RAG 评测',
+  stress: '压测',
+}
+const TASK_STEP_LABEL: Record<string, string> = {
+  pending: '待执行',
+  in_progress: '进行中',
+  completed: '已完成',
+  deleted: '已删除',
+}
+const QUEUE_STATUS_LABEL: Record<string, string> = {
+  queued: '已入队',
+  running: '执行中',
+  succeeded: '已成功',
+  failed: '已失败',
+  cancelled: '已取消',
+  awaiting_case_confirm: '待确认入库',
+}
+
+type TaskStepView = { title: string; status: string; label: string }
+
+/** 判断是否为评测队列短工具（入队 / 查询 / 取消）。 */
+function isQueueTaskTool(name: string): boolean {
+  return name === 'task.create' || name === 'task.status' || name === 'task.cancel' || name === 'task.get'
+}
+
+function queueKindLabel(value: unknown): string {
+  const kind = stringField(value)
+  return TASK_KIND_LABEL[kind] || kind
+}
+
+/** 把模型提交的 steps 投影为卡片可用的标题与中文状态。 */
+function parseTaskSteps(raw: unknown): TaskStepView[] {
+  if (!Array.isArray(raw)) return []
+  return raw.map((item) => {
+    const rec = asRecord(item) || {}
+    const status = stringField(rec.status) || 'pending'
+    return {
+      title: stringField(rec.title) || '未命名步骤',
+      status: TASK_STEP_LABEL[status] ? status : 'pending',
+      label: TASK_STEP_LABEL[status] || '待执行',
+    }
+  })
+}
+
+function formatTaskMetadata(value: unknown): string {
+  if (value == null || value === '') return ''
+  if (typeof value === 'string') return value
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
+}
+
+const taskPlanInput = computed(() => {
+  if (props.tool !== 'task') return null
+  const prompt = stringField(pickArg(argsRecord.value, 'prompt', 'goal'))
+  const description = resolveTaskDescription(argsRecord.value)
+  const metadata = formatTaskMetadata(argsRecord.value.metadata)
+  const steps = parseTaskSteps(argsRecord.value.steps)
+  const extraFields = buildToolInputFields('task', argsRecord.value).filter(
+    (field) => field.name !== 'description' && field.name !== 'prompt',
+  )
+  if (!description && !prompt && !metadata && !steps.length && !extraFields.length) return null
+  return {
+    description,
+    prompt,
+    subject: description || prompt,
+    metadata,
+    extraFields,
+    steps,
+    count: steps.length,
+  }
+})
+
+const taskPlanResult = computed(() => {
+  if (props.tool !== 'task' || props.status !== 'ok') return null
+  const data = resultRecord.value
+  const task = asRecord(data?.task)
+  const subject =
+    stringField(task?.description) ||
+    stringField(task?.subject) ||
+    stringField(task?.goal) ||
+    resolveTaskDescription(argsRecord.value) ||
+    stringField(pickArg(argsRecord.value, 'prompt', 'goal'))
+  const steps = parseTaskSteps(task?.steps ?? argsRecord.value.steps)
+  if (!subject && !steps.length) return null
+  const completed = steps.filter((step) => step.status === 'completed').length
+  return {
+    summary: stringField(data?.result) || stringField(data?.summary) || `已拆解为 ${steps.length} 个步骤`,
+    subject,
+    steps,
+    count: steps.length,
+    completed,
+  }
+})
+
+const BOARD_TONE: Record<string, string> = {
+  pending: '',
+  in_progress: '',
+  completed: 'succeeded',
+  deleted: 'cancelled',
+}
+
+const sessionBoardResult = computed(() => {
+  if (props.status !== 'ok') return null
+  const data = resultRecord.value
+  if (!data) return null
+  if (props.tool === 'ask_user_question') {
+    const answers = (Array.isArray(data.answers) ? data.answers : [])
+      .map((item) => {
+        const rec = asRecord(item)
+        if (!rec) return null
+        const selected = Array.isArray(rec.selected) ? rec.selected.filter(Boolean).join(', ') : ''
+        const value = selected || stringField(rec.custom)
+        return value ? { id: stringField(rec.id) || 'answer', value } : null
+      })
+      .filter((item): item is { id: string; value: string } => item !== null)
+    return {
+      tone: 'succeeded',
+      title: '用户已回复',
+      statusLabel: '已回复',
+      summary: stringField(data.summary) || '用户已回复提问',
+      taskId: '',
+      subject: '',
+      owner: '',
+      items: [] as Array<{ id: string; subject: string; status: string; label: string }>,
+      answers,
+    }
+  }
+  if (!['TaskCreate', 'TaskGet', 'TaskUpdate', 'TaskList'].includes(props.tool)) return null
+  const task = asRecord(data.task)
+  if (props.tool === 'TaskGet' && !task) {
+    return {
+      tone: 'cancelled',
+      title: '会话任务',
+      statusLabel: '未找到',
+      summary: stringField(data.summary) || '任务不存在',
+      taskId: '',
+      subject: '',
+      owner: '',
+      items: [] as Array<{ id: string; subject: string; status: string; label: string }>,
+      answers: [] as Array<{ id: string; value: string }>,
+    }
+  }
+  const status = stringField(task?.status)
+  const list = (Array.isArray(data.tasks) ? data.tasks : [])
+    .map((item) => {
+      const rec = asRecord(item)
+      const nested = asRecord(rec?.task) || rec
+      if (!nested) return null
+      const itemStatus = stringField(nested.status || rec?.status) || 'pending'
+      return {
+        id: stringField(nested.id || rec?.id),
+        subject: stringField(nested.subject) || '未命名任务',
+        status: TASK_STEP_LABEL[itemStatus] ? itemStatus : 'pending',
+        label: TASK_STEP_LABEL[itemStatus] || '待执行',
+      }
+    })
+    .filter((item): item is { id: string; subject: string; status: string; label: string } => Boolean(item?.id))
+  return {
+    tone: Object.prototype.hasOwnProperty.call(BOARD_TONE, status)
+      ? BOARD_TONE[status]
+      : 'succeeded',
+    title: props.tool === 'TaskList' ? '会话看板' : stringField(task?.subject) || '会话任务',
+    statusLabel: props.tool === 'TaskList' ? `${list.length} 项` : TASK_STEP_LABEL[status] || '已完成',
+    summary: stringField(data.summary),
+    taskId: stringField(task?.id || data.id),
+    subject: stringField(task?.subject),
+    owner: stringField(task?.owner),
+    items: list,
+    answers: [] as Array<{ id: string; value: string }>,
+  }
+})
+
+const queueTaskResult = computed(() => {
+  if (!isQueueTaskTool(props.tool) || props.status !== 'ok') return null
+  const data = resultRecord.value
+  if (!data) return null
+  const status = stringField(data.status)
+  const kind = stringField(data.kind)
+  const progress = asRecord(data.progress)
+  return {
+    taskId: stringField(data.task_id),
+    kind,
+    kindLabel: queueKindLabel(kind || argsRecord.value.kind),
+    status,
+    statusLabel: QUEUE_STATUS_LABEL[status] || status || '已完成',
+    success: 'true',
+    reportId: stringField(data.report_id),
+    progressText: stringField(progress?.message),
+    percent: asNonNegInt(progress?.percent ?? progress?.done),
+    summary: stringField(data.summary),
+  }
+})
+
 const liveOutputText = computed(() => props.streamOutput?.text || '')
 const hasLiveOutput = computed(() => !!liveOutputText.value)
 const isReceivingLiveOutput = computed(() => hasLiveOutput.value && props.streamOutput?.completed !== true)
@@ -322,52 +713,65 @@ const recoveryHint = computed(() => props.recovery?.repair_hint || '')
 const recoveryAction = computed(() => props.recovery?.suggested_action || '')
 
 const headerHint = computed(() => {
+  if (props.tool === 'task') {
+    const count = taskPlanInput.value?.count || taskPlanResult.value?.count
+    return count ? `拆解 · ${count} 步` : '拆解清单'
+  }
+  if (props.tool === 'task.create') {
+    const kind = queueTaskResult.value?.kindLabel || queueKindLabel(argsRecord.value.kind)
+    return kind ? `入队 · ${kind}` : '入队'
+  }
+  if (props.tool === 'task.status') {
+    return queueTaskResult.value?.statusLabel ? `查询 · ${queueTaskResult.value.statusLabel}` : '查询状态'
+  }
+  if (props.tool === 'task.cancel') {
+    return queueTaskResult.value?.statusLabel ? `取消 · ${queueTaskResult.value.statusLabel}` : '取消任务'
+  }
+  if (props.tool === 'TaskCreate') return sessionBoardResult.value?.subject ? `看板 · ${sessionBoardResult.value.subject}` : '看板 · 新建'
+  if (props.tool === 'TaskGet') return '看板 · 详情'
+  if (props.tool === 'TaskUpdate') return sessionBoardResult.value?.statusLabel ? `看板 · ${sessionBoardResult.value.statusLabel}` : '看板 · 更新'
+  if (props.tool === 'TaskList') {
+    const count = sessionBoardResult.value?.items.length
+    return count != null ? `看板 · ${count} 项` : '看板 · 清单'
+  }
+  if (props.tool === 'ask_user_question') return '向用户提问'
   // 收起态只标识这是一次 ToolCall，具体路径、命令和内容统一放到展开区。
   if (nativeToolNames.has(props.tool)) return 'ToolCall'
   return `ToolCall · ${props.tool}`
 })
 
-type InputField = { label: string; value: string; mono?: boolean; cmd?: boolean }
-
 const inputFields = computed(() => {
-  const args = argsRecord.value
-  const fields: InputField[] = []
-  if (props.tool === 'read') {
-    if (args.path) fields.push({ label: '文件', value: stringField(args.path), mono: true })
-    const offset = args.offset ?? args.next_offset ?? 0
-    fields.push({ label: '起始行', value: String(asNonNegInt(offset) + 1) })
-    if (args.limit != null) fields.push({ label: '行数', value: String(args.limit) })
-    return fields
-  }
-  if (props.tool === 'bash') return fields
-  if ((props.tool === 'write' || props.tool === 'edit') && args.path) {
-    fields.push({ label: '文件', value: stringField(args.path), mono: true })
-    if (props.tool === 'edit' && args.old) {
-      fields.push({ label: '查找', value: stringField(args.old) })
-    }
-    return fields
-  }
-  if (props.tool === 'web_search' && args.query) {
-    fields.push({ label: '关键词', value: stringField(args.query) })
-    return fields
-  }
-  if (props.tool === 'web_fetch' && args.url) {
-    fields.push({ label: '网址', value: stringField(args.url), mono: true })
-    return fields
-  }
-  return Object.entries(args)
-    .filter(([, value]) => value !== undefined)
-    .slice(0, 8)
-    .map(([key, value]): InputField => ({
-      label: key,
-      value: typeof value === 'string' ? value : formatJson(value),
-      mono: true,
-    }))
+  const fields = buildToolInputFields(props.tool, argsRecord.value)
+  return fields.map((field) =>
+    field.name === 'kind' ? { ...field, value: queueKindLabel(field.value) || field.value } : field,
+  )
 })
+const outputCaption = computed(() => outputBodyCaption(props.tool))
+const outputMetaFields = computed(() =>
+  buildToolOutputFields(props.tool, resultRecord.value, argsRecord.value, props.status || ''),
+)
 
-/** 预定义文件/网页/命令工具沿用专用字段；其余调用展示完整对象结构。 */
+/** 预定义文件/网页/命令/任务工具沿用专用字段；其余调用展示完整对象结构。 */
 const showStructuredArgs = computed(() => {
-  if (['read', 'write', 'edit', 'bash', 'web_search', 'web_fetch'].includes(props.tool)) return false
+  if (
+    [
+      'read',
+      'write',
+      'edit',
+      'bash',
+      'web_search',
+      'web_fetch',
+      'task',
+      'TaskCreate',
+      'TaskGet',
+      'TaskUpdate',
+      'TaskList',
+      'ask_user_question',
+    ].includes(props.tool)
+  ) {
+    return false
+  }
+  if (isQueueTaskTool(props.tool)) return false
   return Object.keys(argsRecord.value).length > 0
 })
 
@@ -382,24 +786,6 @@ function toLineItems(text: string, start = 1): LineItem[] {
     text: line,
   }))
 }
-
-const toolCallText = computed(() => {
-  const args = argsRecord.value
-  if (props.tool === 'bash') return stringField(args.command)
-  if (props.tool === 'write') return stringField(args.content)
-  if (props.tool === 'edit') return stringField(args.new)
-  if (inputFields.value.length) return ''
-  return formatJson(props.args ?? {})
-})
-
-const toolCallLines = computed(() => toLineItems(toolCallText.value))
-
-const toolCallCodeLabel = computed(() => {
-  if (props.tool === 'bash') return 'command'
-  if (props.tool === 'write') return 'content'
-  if (props.tool === 'edit') return 'new'
-  return ''
-})
 
 const readMeta = computed(() => {
   const data = resultRecord.value
@@ -421,6 +807,7 @@ const editMeta = computed(() => {
   if (!edit) return null
   return {
     path: stringField(edit.path),
+    displayPath: formatWorkspacePath(edit.path),
     replacements: asNonNegInt(edit.replacements),
     oldLength: asNonNegInt(edit.old_length),
     newLength: asNonNegInt(edit.new_length),
@@ -433,6 +820,7 @@ const previewText = computed(() => {
   if (read && typeof read.preview === 'string') return read.preview
   const write = asRecord(data?.write)
   if (write && typeof write.preview === 'string') return write.preview
+  if (props.tool === 'write' && typeof argsRecord.value.content === 'string') return argsRecord.value.content
   if (props.tool === 'bash') {
     if (typeof props.result === 'string') return props.result
     const bash = asRecord(data?.bash)
@@ -482,7 +870,11 @@ const outputLines = computed(() => {
 })
 
 const isMarkdownFile = computed(() => {
-  const path = stringField(argsRecord.value.path || asRecord(resultRecord.value?.read)?.path)
+  const path = stringField(
+    argsRecord.value.file_path ||
+      argsRecord.value.path ||
+      asRecord(resultRecord.value?.read)?.path,
+  )
   if (/\.(md|markdown|mdx)$/i.test(path)) return true
 
   // web_fetch 默认返回 Markdown，只有请求 text 格式时才按纯文本展示。
@@ -519,6 +911,7 @@ const resultSummary = computed(() => {
 const hasStructuredResult = computed(() => {
   if (props.status !== 'ok' || isStreamingOutput.value || previewText.value) return false
   if (isAudioOutput.value || props.tool === 'image.generate') return false
+  if (taskPlanResult.value || queueTaskResult.value || sessionBoardResult.value) return false
   return Boolean(props.result && typeof props.result === 'object')
 })
 
@@ -639,6 +1032,8 @@ function revealOutput(text: string): void {
     && !isAudioOutput.value
     && props.tool !== 'image.generate'
     && props.tool !== 'edit'
+    && props.tool !== 'task'
+    && !isQueueTaskTool(props.tool)
   if (!shouldAnimate) {
     displayedOutputText.value = text
     isStreamingOutput.value = false
@@ -917,10 +1312,54 @@ pre.code {
 .td-fields {
   margin: 0;
   display: grid;
+  gap: 10px;
+}
+.td-output-fields {
+  margin-bottom: 10px;
+}
+.td-io-key {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
   gap: 6px;
 }
-.tool-call-code-wrap {
-  margin-top: 8px;
+.td-field-name {
+  color: var(--accent-info);
+  font-size: 11.5px;
+  letter-spacing: 0.01em;
+}
+.td-field-req {
+  padding: 0 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent-error) 12%, transparent);
+  color: var(--accent-error);
+  font-size: 10px;
+  line-height: 1.5;
+}
+.td-field-hint {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+.td-io-caption {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 2px 0 6px;
+}
+.td-io-block {
+  display: grid;
+  gap: 4px;
+}
+.task-meta {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  overflow: auto;
+  max-height: 160px;
 }
 .td-code-caption {
   margin: 0 0 4px 2px;
@@ -930,14 +1369,12 @@ pre.code {
 }
 .td-field {
   display: grid;
-  grid-template-columns: 56px 1fr;
-  gap: 8px;
+  gap: 4px;
   align-items: start;
 }
 .td-field dt {
   color: var(--text-tertiary);
   font-size: 11px;
-  padding-top: 1px;
 }
 .td-field dd {
   margin: 0;
@@ -952,11 +1389,12 @@ pre.code {
   font-family: var(--font-mono);
   font-size: 12px;
 }
-.td-field dd.cmd {
-  background: #0f172a;
-  color: #e2e8f0;
-  border-radius: 6px;
-  padding: 6px 8px;
+.td-field dd.cmd,
+.td-field-block {
+  width: 100%;
+}
+.td-field.is-stack .td-field-block {
+  min-width: 0;
 }
 .td-summary {
   margin: 0 0 6px;
@@ -965,6 +1403,194 @@ pre.code {
   line-height: 1.5;
 }
 /* edit 结果摘要卡：成功图标 + 文件路径 + 替换统计，替代低对比度的通用 JSON 树 */
+/* 会话内 task 拆解：目标 + 步骤清单，对齐薄荷绿状态色 */
+.task-plan {
+  display: grid;
+  gap: 10px;
+  padding: 11px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent-info) 22%, var(--border-subtle));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent-info) 5%, var(--bg-main));
+}
+.task-plan.is-result {
+  border-color: color-mix(in srgb, var(--accent-success) 22%, var(--border-subtle));
+  background: color-mix(in srgb, var(--accent-success) 5%, var(--bg-main));
+}
+.task-plan-kicker,
+.task-plan-summary {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.task-plan-kicker {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+.task-plan-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.task-plan-head .task-plan-summary {
+  flex: 1;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.task-plan-count {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--bg-main);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.task-plan-goal {
+  color: var(--text-primary);
+  font-size: 13.5px;
+  font-weight: 650;
+  line-height: 1.45;
+}
+.task-steps {
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+  list-style: none;
+}
+.task-step {
+  display: grid;
+  grid-template-columns: 22px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  background: var(--bg-main);
+}
+.task-step-index {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+.task-step-title {
+  color: var(--text-primary);
+  font-size: 12.5px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.task-step-badge {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+.task-step.in_progress {
+  border-color: color-mix(in srgb, var(--accent-info) 28%, var(--border-subtle));
+}
+.task-step.in_progress .task-step-index,
+.task-step.in_progress .task-step-badge {
+  color: var(--accent-info);
+  background: color-mix(in srgb, var(--accent-info) 12%, transparent);
+}
+.task-step.completed {
+  border-color: color-mix(in srgb, var(--accent-success) 26%, var(--border-subtle));
+}
+.task-step.completed .task-step-index,
+.task-step.completed .task-step-badge {
+  color: var(--accent-success);
+  background: color-mix(in srgb, var(--accent-success) 12%, transparent);
+}
+.task-step.completed .task-step-title {
+  color: var(--text-secondary);
+}
+.task-queue {
+  display: grid;
+  gap: 8px;
+  padding: 11px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent-info) 22%, var(--border-subtle));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent-info) 5%, var(--bg-main));
+}
+.task-queue.succeeded {
+  border-color: color-mix(in srgb, var(--accent-success) 24%, var(--border-subtle));
+  background: color-mix(in srgb, var(--accent-success) 5%, var(--bg-main));
+}
+.task-queue.failed {
+  border-color: color-mix(in srgb, var(--accent-error) 24%, var(--border-subtle));
+  background: color-mix(in srgb, var(--accent-error) 5%, var(--bg-main));
+}
+.task-queue.cancelled {
+  border-color: var(--border-subtle);
+  background: var(--bg-main);
+}
+.task-queue-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.task-queue-badge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent-info) 14%, transparent);
+  color: var(--accent-info);
+  font-size: 11px;
+  font-weight: 650;
+}
+.task-queue.succeeded .task-queue-badge {
+  background: color-mix(in srgb, var(--accent-success) 14%, transparent);
+  color: var(--accent-success);
+}
+.task-queue.failed .task-queue-badge {
+  background: color-mix(in srgb, var(--accent-error) 14%, transparent);
+  color: var(--accent-error);
+}
+.task-queue.cancelled .task-queue-badge {
+  background: var(--bg-elevated);
+  color: var(--text-tertiary);
+}
+.task-queue-kind {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 650;
+}
+.task-queue-summary {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.task-queue-fields {
+  margin: 0;
+  display: grid;
+  gap: 6px;
+}
+.task-queue-field {
+  display: grid;
+  gap: 3px;
+  align-items: start;
+}
+.task-queue-field dt {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  padding-top: 1px;
+}
+.task-queue-field dd {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
 .edit-result {
   display: flex;
   align-items: center;

@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import re
+import time
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Literal
@@ -425,13 +426,8 @@ def build_default_registry() -> ToolRegistry:
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "path": {"type": "string", "description": "相对路径"},
+                    "file_path": {"type": "string", "description": "会话工作区相对路径"},
                     "offset": {"type": "integer", "description": "起始行号，0-based，默认 0", "minimum": 0},
-                    "next_offset": {
-                        "type": "integer",
-                        "description": "与 offset 同义；可把上次返回的 next_offset 填到这里",
-                        "minimum": 0,
-                    },
                     "limit": {
                         "type": "integer",
                         "description": "最多读取行数；建议省略以一次读完，默认/上限 2000",
@@ -439,7 +435,7 @@ def build_default_registry() -> ToolRegistry:
                         "maximum": 2000,
                     },
                 },
-                "required": ["path"],
+                "required": ["file_path"],
             },
             permission="sandbox.read",
             timeout_s=20.0,
@@ -448,6 +444,9 @@ def build_default_registry() -> ToolRegistry:
                 "type": "object",
                 "properties": {
                     "summary": {"type": "string"},
+                    "status": {"type": "string"},
+                    "content": {"type": "string"},
+                    "metadata": {"type": "object"},
                     "read": {
                         "type": "object",
                         "properties": {
@@ -483,10 +482,12 @@ def build_default_registry() -> ToolRegistry:
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "path": {"type": "string"},
-                    "content": {"type": "string"},
+                    "file_path": {"type": "string", "description": "目标文件相对路径，不存在则新建"},
+                    "content": {"type": "string", "description": "完整文本内容"},
+                    "description": {"type": "string", "description": "简短操作描述"},
+                    "reviewComment": {"type": "string", "description": "写操作动机，仅供审查展示"},
                 },
-                "required": ["path", "content"],
+                "required": ["file_path", "content"],
             },
             permission="sandbox.write",
             timeout_s=10.0,
@@ -495,6 +496,9 @@ def build_default_registry() -> ToolRegistry:
                 "type": "object",
                 "properties": {
                     "summary": {"type": "string"},
+                    "status": {"type": "string"},
+                    "path": {"type": "string"},
+                    "content": {"type": "string"},
                     "write": {
                         "type": "object",
                         "properties": {
@@ -534,11 +538,15 @@ def build_default_registry() -> ToolRegistry:
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "path": {"type": "string"},
-                    "old": {"type": "string"},
-                    "new": {"type": "string"},
+                    "file_path": {"type": "string", "description": "目标文件相对路径"},
+                    "old_string": {"type": "string", "description": "需唯一精确匹配的原文"},
+                    "new_string": {"type": "string", "description": "替换后的新文本，空串表示删除"},
+                    "replace_all": {
+                        "type": "boolean",
+                        "description": "为 true 时替换全部匹配，否则多处匹配会失败",
+                    },
                 },
-                "required": ["path", "old", "new"],
+                "required": ["file_path", "old_string", "new_string"],
             },
             permission="sandbox.write",
             timeout_s=10.0,
@@ -547,6 +555,9 @@ def build_default_registry() -> ToolRegistry:
                 "type": "object",
                 "properties": {
                     "summary": {"type": "string"},
+                    "status": {"type": "string"},
+                    "modified_lines": {"type": "integer"},
+                    "diff": {"type": "string"},
                     "edit": {
                         "type": "object",
                         "properties": {
@@ -580,7 +591,26 @@ def build_default_registry() -> ToolRegistry:
                 "additionalProperties": False,
                 "properties": {
                     "query": {"type": "string", "minLength": 1, "maxLength": 500},
-                    "limit": {"type": "integer", "description": "返回结果数，默认 5，最大 10", "minimum": 1, "maximum": 10},
+                    "max_results": {
+                        "type": "integer",
+                        "description": "返回结果数，默认 5，平台上限 10",
+                        "minimum": 1,
+                        "maximum": 10,
+                    },
+                    "topic": {"type": "string", "description": "主题，仅展示"},
+                    "time_range": {"type": "string", "description": "时间筛选，仅展示"},
+                    "include_domains": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "限定来源域名，本轮不改变检索实现",
+                    },
+                    "exclude_domains": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "排除域名，本轮不改变检索实现",
+                    },
+                    "engine": {"type": "string", "description": "仅 auto/native"},
+                    "search_context_size": {"type": "string", "description": "上下文长度提示，仅展示"},
                 },
                 "required": ["query"],
             },
@@ -589,7 +619,11 @@ def build_default_registry() -> ToolRegistry:
             handler=_web_search_handler,
             output_schema={
                 "type": "object",
-                "properties": {"summary": {"type": "string"}, "search": {"type": "object"}},
+                "properties": {
+                    "summary": {"type": "string"},
+                    "results": {"type": "array"},
+                    "search": {"type": "object"},
+                },
             },
             permission_policy=ToolPermissionPolicy(network="public_only"),
             recovery_policy=ToolRecoveryPolicy(
@@ -613,6 +647,22 @@ def build_default_registry() -> ToolRegistry:
                 "properties": {
                     "url": {"type": "string", "minLength": 8, "maxLength": 2048},
                     "format": {"type": "string", "enum": ["markdown", "text"], "description": "优先返回 Markdown，默认 markdown"},
+                    "allowed_domains": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "允许访问的域名白名单",
+                    },
+                    "blocked_domains": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "禁止访问的域名黑名单",
+                    },
+                    "max_content_tokens": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "映射到现有字符预算，不放宽 60000",
+                    },
+                    "engine": {"type": "string", "description": "仅 auto/native"},
                 },
                 "required": ["url"],
             },
@@ -621,7 +671,13 @@ def build_default_registry() -> ToolRegistry:
             handler=_web_fetch_handler,
             output_schema={
                 "type": "object",
-                "properties": {"summary": {"type": "string"}, "web": {"type": "object"}},
+                "properties": {
+                    "summary": {"type": "string"},
+                    "content": {"type": "string"},
+                    "title": {"type": "string"},
+                    "url": {"type": "string"},
+                    "web": {"type": "object"},
+                },
             },
             permission_policy=ToolPermissionPolicy(network="public_only"),
             recovery_policy=ToolRecoveryPolicy(
@@ -645,7 +701,18 @@ def build_default_registry() -> ToolRegistry:
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "command": {"type": "string"},
+                    "command": {"type": "string", "description": "完整 shell 命令，仅在 bwrap 沙箱运行"},
+                    "description": {"type": "string", "description": "命令简短描述"},
+                    "timeout": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "超时毫秒，封顶现有沙箱墙钟 15000",
+                    },
+                    "run_in_background": {"type": "boolean", "description": "必须为 false；true 会被拒绝"},
+                    "dangerouslyDisableSandbox": {
+                        "type": "boolean",
+                        "description": "必须为 false；true 会被拒绝",
+                    },
                 },
                 "required": ["command"],
             },
@@ -656,6 +723,11 @@ def build_default_registry() -> ToolRegistry:
                 "type": "object",
                 "properties": {
                     "summary": {"type": "string"},
+                    "stdout": {"type": "string"},
+                    "stderr": {"type": "string"},
+                    "exit_code": {"type": "integer"},
+                    "duration_ms": {"type": "integer"},
+                    "is_background": {"type": "boolean"},
                     "bash": {
                         "type": "object",
                         "properties": {
@@ -688,14 +760,25 @@ def build_default_registry() -> ToolRegistry:
                 "维护本回合的执行清单：把复杂需求拆成有限步骤并标注状态。"
                 "适用：多步评测/用例/压测前先列出 3–7 步计划。"
                 "不适用：真正创建评测任务（用确认卡或 platform.tasks.task.create）、"
-                "查询/取消已入队任务（用 task.status / task.cancel）。"
-                "前置：goal 与 steps 必填；不写数据库、不绕过确认卡或 Worker。"
+                "查询/取消已入队任务（用 task.status / task.cancel）、启动子代理。"
+                "前置：description 与 prompt 必填；steps 可选；不写数据库、不绕过确认卡或 Worker。"
             ),
             parameters_schema={
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "goal": {"type": "string", "minLength": 1, "maxLength": 500, "description": "本轮目标"},
+                    "description": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 80,
+                        "description": "任务简短概括",
+                    },
+                    "prompt": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 2000,
+                        "description": "完整指令，映射为本回合清单目标",
+                    },
                     "steps": {
                         "type": "array",
                         "items": {
@@ -708,15 +791,26 @@ def build_default_registry() -> ToolRegistry:
                             "required": ["title"],
                         },
                     },
+                    "subagent_type": {"type": "string", "description": "仅展示，不启子代理"},
+                    "model": {"type": "string", "description": "仅展示，不切换模型"},
+                    "resume": {"type": "string", "description": "仅展示，不恢复子会话"},
+                    "run_in_background": {"type": "boolean", "description": "必须为 false"},
+                    "tools": {"type": "array", "items": {"type": "string"}, "description": "仅展示"},
+                    "max_turns": {"type": "integer", "minimum": 1, "description": "仅展示"},
                 },
-                "required": ["goal", "steps"],
+                "required": ["description", "prompt"],
             },
             permission="task.plan",
             timeout_s=2.0,
             handler=_task_handler,
             output_schema={
                 "type": "object",
-                "properties": {"summary": {"type": "string"}, "task": {"type": "object"}},
+                "properties": {
+                    "summary": {"type": "string"},
+                    "status": {"type": "string"},
+                    "result": {"type": "string"},
+                    "task": {"type": "object"},
+                },
             },
             permission_policy=ToolPermissionPolicy(),
             recovery_policy=ToolRecoveryPolicy(
@@ -726,7 +820,166 @@ def build_default_registry() -> ToolRegistry:
             transport="native",
             display_name="拆解任务",
             risk_level="read",
+            contextual=True,
             concurrency_class="read_only",
+        )
+    )
+    registry.register(
+        ToolDef(
+            name="TaskCreate",
+            description=(
+                "在当前会话看板创建一项拆解任务，返回 task.id。"
+                "不创建评测入队任务（那是 task.create），不启子代理。"
+            ),
+            parameters_schema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "subject": {"type": "string", "minLength": 1, "maxLength": 120},
+                    "description": {"type": "string", "maxLength": 2000},
+                    "activeForm": {"type": "string", "maxLength": 80},
+                    "metadata": {"type": "object"},
+                },
+                "required": ["subject"],
+            },
+            permission="task.plan",
+            timeout_s=2.0,
+            handler=_session_task_create_handler,
+            output_schema={"type": "object", "properties": {"task": {"type": "object"}, "status": {"type": "string"}}},
+            permission_policy=ToolPermissionPolicy(),
+            transport="native",
+            display_name="TaskCreate",
+            risk_level="read",
+            contextual=True,
+            concurrency_class="exclusive",
+        )
+    )
+    registry.register(
+        ToolDef(
+            name="TaskGet",
+            description="按 taskId 读取会话看板中的一项；找不到返回 null。不是评测任务详情。",
+            parameters_schema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {"taskId": {"type": "string", "minLength": 1}},
+                "required": ["taskId"],
+            },
+            permission="task.plan",
+            timeout_s=2.0,
+            handler=_session_task_get_handler,
+            output_schema={"type": "object"},
+            permission_policy=ToolPermissionPolicy(),
+            transport="native",
+            display_name="TaskGet",
+            risk_level="read",
+            contextual=True,
+            concurrency_class="read_only",
+        )
+    )
+    registry.register(
+        ToolDef(
+            name="TaskUpdate",
+            description=(
+                "更新会话看板任务的状态或字段。status=deleted 表示删除。"
+                "in_progress 且未指定 owner 时写入当前用户，避免重复认领。"
+            ),
+            parameters_schema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "taskId": {"type": "string", "minLength": 1},
+                    "status": {"type": "string", "enum": ["pending", "in_progress", "completed", "deleted"]},
+                    "subject": {"type": "string", "maxLength": 120},
+                    "description": {"type": "string", "maxLength": 2000},
+                    "activeForm": {"type": "string", "maxLength": 80},
+                    "owner": {"type": "string", "maxLength": 64},
+                    "addBlocks": {"type": "array", "items": {"type": "string"}},
+                    "addBlockedBy": {"type": "array", "items": {"type": "string"}},
+                    "metadata": {"type": "object"},
+                },
+                "required": ["taskId", "status"],
+            },
+            permission="task.plan",
+            timeout_s=2.0,
+            handler=_session_task_update_handler,
+            output_schema={"type": "object"},
+            permission_policy=ToolPermissionPolicy(),
+            transport="native",
+            display_name="TaskUpdate",
+            risk_level="read",
+            contextual=True,
+            concurrency_class="exclusive",
+        )
+    )
+    registry.register(
+        ToolDef(
+            name="TaskList",
+            description="返回当前会话看板快照，用于读取整体拆解进度。无入参。",
+            parameters_schema={"type": "object", "additionalProperties": False, "properties": {}},
+            permission="task.plan",
+            timeout_s=2.0,
+            handler=_session_task_list_handler,
+            output_schema={"type": "object"},
+            permission_policy=ToolPermissionPolicy(),
+            transport="native",
+            display_name="TaskList",
+            risk_level="read",
+            contextual=True,
+            concurrency_class="read_only",
+        )
+    )
+    registry.register(
+        ToolDef(
+            name="ask_user_question",
+            description=(
+                "向用户提出一个或多个澄清问题，暂停图直到用户回复。"
+                "复用 clarify / clarify_reply，不入队评测任务。"
+            ),
+            parameters_schema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "questions": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "id": {"type": "string", "minLength": 1},
+                                "question": {"type": "string", "minLength": 1},
+                                "header": {"type": "string"},
+                                "options": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "additionalProperties": False,
+                                        "properties": {
+                                            "label": {"type": "string"},
+                                            "description": {"type": "string"},
+                                        },
+                                        "required": ["label"],
+                                    },
+                                },
+                                "multi_select": {"type": "boolean"},
+                                "required": {"type": "boolean"},
+                                "type": {"type": "string", "enum": ["radio", "checkbox", "text"]},
+                            },
+                            "required": ["id", "question"],
+                        },
+                    }
+                },
+                "required": ["questions"],
+            },
+            permission="task.plan",
+            timeout_s=2.0,
+            handler=_ask_user_question_handler,
+            output_schema={"type": "object", "properties": {"answers": {"type": "array"}}},
+            permission_policy=ToolPermissionPolicy(),
+            transport="native",
+            display_name="ask_user_question",
+            risk_level="read",
+            contextual=True,
+            concurrency_class="exclusive",
         )
     )
     # ── platform.tasks 长任务 MCP：只入队/查询/取消，不等待终态 ──
@@ -832,7 +1085,7 @@ def _read_handler(
     from .dispatch import read_file_safe, resolve_read_offset
 
     return read_file_safe(
-        str(arguments.get("path", "")),
+        str(arguments.get("file_path") or arguments.get("path") or ""),
         sandbox_dir or "",
         offset=resolve_read_offset(arguments),
         limit=arguments.get("limit"),
@@ -852,7 +1105,7 @@ def _write_handler(
     if callable(progress):
         progress("writing", "正在以原子方式写入文件")
     result = write_file_safe(
-        str(arguments.get("path", "")),
+        str(arguments.get("file_path") or arguments.get("path") or ""),
         str(arguments.get("content", "")),
         sandbox_dir or "",
     )
@@ -871,10 +1124,11 @@ def _edit_handler(
     from .dispatch import edit_file_safe
 
     return edit_file_safe(
-        str(arguments.get("path", "")),
-        str(arguments.get("old", "")),
-        str(arguments.get("new", "")),
+        str(arguments.get("file_path") or arguments.get("path") or ""),
+        str(arguments.get("old_string") or arguments.get("old") or ""),
+        str(arguments.get("new_string") if arguments.get("new_string") is not None else arguments.get("new") or ""),
         sandbox_dir or "",
+        replace_all=arguments.get("replace_all") is True,
     )
 
 
@@ -891,7 +1145,7 @@ def _web_search_handler(
         progress("searching", "正在请求受控网络检索服务")
     result = web_search(
         str(arguments.get("query", "")),
-        limit=arguments.get("limit"),
+        limit=arguments.get("max_results", arguments.get("limit")),
         timeout_s=20.0,
     )
     if callable(progress):
@@ -905,26 +1159,116 @@ def _web_fetch_handler(
     _context: object | None = None,
 ) -> object:
     """web_fetch 原生 handler：带 SSRF 防护的服务端抓取器。"""
-    from .dispatch import web_fetch
+    from .dispatch import apply_fetch_content_budget, assert_fetch_domains, web_fetch
 
-    return web_fetch(
-        str(arguments.get("url", "")),
+    url = str(arguments.get("url", ""))
+    assert_fetch_domains(
+        url,
+        allowed=arguments.get("allowed_domains"),
+        blocked=arguments.get("blocked_domains"),
+    )
+    result = web_fetch(
+        url,
         format=str(arguments.get("format") or "markdown"),
         timeout_s=20.0,
         on_output=getattr(_context, "report_output", None),
         on_progress=getattr(_context, "report_progress", None),
     )
+    return apply_fetch_content_budget(result, arguments.get("max_content_tokens"))
 
 
 def _task_handler(
     arguments: Mapping[str, object],
     _sandbox_dir: str | None = None,
+    context: object | None = None,
+) -> object:
+    """task 原生 handler：生成本回合清单，并同步写入会话看板。"""
+    from .dispatch import build_task_plan
+    from .session_board import import_plan_steps
+
+    plan = build_task_plan(arguments)
+    board = getattr(context, "session_tasks", None)
+    if isinstance(board, list):
+        import_plan_steps(
+            board,
+            subject=plan.description or plan.goal[:24],
+            description=plan.goal,
+            steps=list(plan.steps),
+        )
+    return plan
+
+
+def _board_from_context(context: object | None) -> list:
+    """取出当前波次共享的会话看板；缺失时用空列表（不写回图状态）。"""
+    board = getattr(context, "session_tasks", None)
+    return board if isinstance(board, list) else []
+
+
+def _session_task_create_handler(
+    arguments: Mapping[str, object],
+    _sandbox_dir: str | None = None,
+    context: object | None = None,
+) -> object:
+    """会话看板创建一项，返回 task.id。"""
+    from .session_board import BoardToolResult, create_task
+
+    item = create_task(_board_from_context(context), arguments)
+    return BoardToolResult("已创建会话任务", item)
+
+
+def _session_task_get_handler(
+    arguments: Mapping[str, object],
+    _sandbox_dir: str | None = None,
+    context: object | None = None,
+) -> object:
+    """按 taskId 读取看板项。"""
+    from .session_board import BoardToolResult, get_task
+
+    item = get_task(_board_from_context(context), str(arguments.get("taskId") or ""))
+    if item is None:
+        return BoardToolResult("任务不存在", {"task": None})
+    return BoardToolResult("已读取会话任务", item)
+
+
+def _session_task_update_handler(
+    arguments: Mapping[str, object],
+    _sandbox_dir: str | None = None,
+    context: object | None = None,
+) -> object:
+    """更新看板项状态或字段。"""
+    from .session_board import BoardToolResult, update_task
+
+    item = update_task(
+        _board_from_context(context),
+        arguments,
+        owner=str(getattr(context, "user_id", "") or ""),
+    )
+    return BoardToolResult("已更新会话任务", item)
+
+
+def _session_task_list_handler(
+    arguments: Mapping[str, object],
+    _sandbox_dir: str | None = None,
+    context: object | None = None,
+) -> object:
+    """列出未删除的会话任务。"""
+    from .session_board import BoardToolResult, list_tasks
+
+    items = list_tasks(_board_from_context(context))
+    return BoardToolResult(
+        f"当前清单 {len(items)} 项",
+        {"tasks": items},
+        model_text=f"会话任务 {len(items)} 项",
+    )
+
+
+def _ask_user_question_handler(
+    arguments: Mapping[str, object],
+    _sandbox_dir: str | None = None,
     _context: object | None = None,
 ) -> object:
-    """task 原生 handler：仅生成本回合任务清单，不触发平台长任务副作用。"""
-    from .dispatch import build_task_plan
-
-    return build_task_plan(arguments)
+    """提问在 ToolNode 内 interrupt；handler 不应被走到。"""
+    raise AppError(ErrorCode.INTERNAL, "ask_user_question 必须由 ToolNode 挂起")
 
 
 def _bash_handler(
@@ -953,14 +1297,18 @@ def _bash_handler(
         nproc=settings.sandbox_nproc,
         cpu_s=settings.sandbox_cpu_s,
     )
+    from .aliases import bash_timeout_seconds
+
+    started = time.perf_counter()
     output = run_bash(
         str(arguments.get("command", "")),
         sandbox_dir=sandbox_dir or "",
-        timeout_s=15.0,
+        timeout_s=bash_timeout_seconds(arguments),
         limits=limits,
         on_output=getattr(context, "report_output", None),
     )
-    return BashResult(output)
+    duration_ms = int((time.perf_counter() - started) * 1000)
+    return BashResult(output, duration_ms=duration_ms)
 
 
 def _task_create_handler(

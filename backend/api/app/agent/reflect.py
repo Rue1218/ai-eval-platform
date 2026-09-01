@@ -218,4 +218,12 @@ def reflect_node(state: GraphState) -> dict:
         if draft_message is not None:
             events.append(draft_message)
     events.append(_completed("stop"))
-    return {"verdict": "pass", "step_fail_count": 0, "pending_events": events}
+    result: dict = {"verdict": "pass", "step_fail_count": 0, "pending_events": events}
+    # confirm 快路径可能跳过 ReAct，非流式 invoke 仍要从 state.response 取正文。
+    if plan.delivery == "confirm" and not isinstance(state.get("response"), Mapping):
+        result["response"] = {
+            "text": "未生成可展示的最终回答。",
+            "usage": {},
+            "latency_ms": 0,
+        }
+    return result
