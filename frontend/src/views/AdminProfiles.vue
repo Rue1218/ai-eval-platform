@@ -416,15 +416,15 @@
                   <div>
                     <div class="row" style="gap: 6px; align-items: center">
                       <span class="server-name">platform.native · 原生基础工具</span>
-                      <span class="tag-soft" style="color: var(--accent-success)">NativeToolExecutor · 进程内直连</span>
+                      <span class="tag-soft" style="color: var(--accent-success)">已注册 · 当前纯对话 Agent 未接线</span>
                     </div>
-                    <div class="mono small tertiary">transport=native · 零 MCP 序列化开销 · 直连 Handler</div>
+                    <div class="mono small tertiary">transport=native · 供未来 ToolNode 启用 · 当前不注入模型</div>
                   </div>
                 </div>
 
                 <div class="row" style="gap: 8px; align-items: center">
                   <span class="ping-badge" :class="mcpRequestState === 'success' ? 'ok' : 'err'">
-                    {{ mcpRequestState === 'success' ? `● 就绪 · ${nativeTools.length} 个工具` : '— 未加载' }}
+                    {{ mcpRequestState === 'success' ? `● 已注册 · ${nativeTools.length} 个工具` : '— 未加载' }}
                   </span>
                 </div>
               </div>
@@ -464,14 +464,14 @@
                   <div>
                     <div class="row" style="gap: 6px; align-items: center">
                       <span class="server-name">platform.tasks · 内部 MCP Server</span>
-                      <span class="tag-soft" style="color: var(--accent-ai)">MCPClientManager · 受控 MCP 扩展</span>
+                      <span class="tag-soft" style="color: var(--accent-ai)">已注册 · 当前纯对话 Agent 未接线</span>
                     </div>
-                    <div class="mono small tertiary">transport=mcp · 评测任务队列桥 · task.create/status/cancel</div>
+                    <div class="mono small tertiary">transport=mcp · 评测任务队列桥 · 供未来 ToolNode 启用</div>
                   </div>
                 </div>
 
                 <span class="ping-badge" :class="mcpExtTools.length > 0 ? 'ok' : 'err'">
-                  {{ mcpExtTools.length > 0 ? `● 就绪 · ${mcpExtTools.length} 个工具` : '— 未加载' }}
+                  {{ mcpExtTools.length > 0 ? `● 已注册 · ${mcpExtTools.length} 个工具` : '— 未加载' }}
                 </span>
               </div>
 

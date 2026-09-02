@@ -18,10 +18,11 @@ from app.harness.execution import (
     ToolRegistry,
     build_default_registry,
     build_tool_node,
+    validate_tool_arguments,
 )
 from app.harness.execution.mcp import ToolExecutionContext
 from app.harness.execution.task_tools import cancel_task_safe, create_task_safe, status_task_safe
-from app.models import AuditLog, Task, TaskEvent
+from app.models import AuditLog, Dataset, Task, TaskEvent
 from app.models import Session as AgentSession
 
 
@@ -71,10 +72,15 @@ class _Query:
 class _FakeDb:
     """覆盖 task_tools 所需 query/get/add/flush/commit/rollback/close 的最小会话桩。"""
 
-    def __init__(self, *, session_row=None, tasks=None, task_query=None, fail_integrity=False):
+    def __init__(self, *, session_row=None, tasks=None, task_query=None, datasets=None, fail_integrity=False):
         self._session_row = session_row
         self._tasks = dict(tasks or {})
         self._task_query = task_query
+        self._datasets = dict(
+            {"d1": Dataset(id="d1", name="测试数据集")}
+            if datasets is None
+            else datasets
+        )
         self.fail_integrity = fail_integrity
         self.added: list = []
         self.commit_calls = 0
@@ -84,6 +90,8 @@ class _FakeDb:
     def query(self, model):
         if model is AgentSession:
             return _Query(self._session_row)
+        if model is Dataset:
+            return _Query(next(iter(self._datasets.values()), None))
         return _Query(self._task_query)
 
     def get(self, model, pk):
@@ -130,6 +138,41 @@ def _tool_result(out: dict) -> dict:
     return next(event for event in out["pending_events"] if event["kind"] == "tool_result")
 
 
+def _benchmark_args(**overrides: object) -> dict[str, object]:
+    """构造满足统一 TaskCreate 契约的 benchmark MCP 入队参数。"""
+    payload: dict[str, object] = {
+        "kind": "benchmark",
+        "dataset_id": "d1",
+        "profile_ids": ["p1"],
+        "run": {"sample_size": 1},
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _rag_args(**overrides: object) -> dict[str, object]:
+    """构造满足统一 TaskCreate 契约的 RAG MCP 入队参数。"""
+    payload: dict[str, object] = {
+        "kind": "rag",
+        "kb_id": "kb1",
+        "gold_qa_id": "g1",
+        "run": {"sample_size": 1},
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_task_create_schema_accepts_complete_rest_task_spec() -> None:
+    """MCP 目录必须允许 REST TaskSpec 的 run/stress/case_source 字段通过前置校验。"""
+    schema = build_default_registry().get("task.create").parameters_schema
+    arguments = _benchmark_args(
+        with_stress=True,
+        stress={"env": "test", "qps": 10, "duration_s": 120},
+    )
+
+    assert validate_tool_arguments(schema, arguments) is None
+
+
 # —— task.create 门禁 ——
 
 
@@ -149,23 +192,52 @@ def test_create_rejects_unknown_kind() -> None:
 def test_create_missing_dataset(monkeypatch) -> None:
     monkeypatch.setattr("app.db.SessionLocal", lambda: _FakeDb(session_row=_SessionRow(), task_query=[]))
     with pytest.raises(AppError) as error:
-        create_task_safe({"kind": "benchmark"}, _ctx())
+        create_task_safe(_benchmark_args(dataset_id=None), _ctx())
     assert error.value.code == ErrorCode.VALIDATION
-    assert "数据集" in error.value.message
+    assert "dataset_id" in error.value.message
+
+
+def test_create_rejects_incomplete_benchmark_spec() -> None:
+    """MCP 任务桥不得绕过 REST 对协议档和运行配置的 TaskSpec 校验。"""
+    with pytest.raises(AppError) as error:
+        create_task_safe({"kind": "benchmark", "dataset_id": "d1"}, _ctx())
+
+    assert error.value.code == ErrorCode.VALIDATION
+    assert "profile_ids" in error.value.message
+
+
+def test_create_rejects_missing_dataset_row(monkeypatch) -> None:
+    """MCP 任务桥与 REST 一样拒绝已删除或不存在的数据集。"""
+    db = _FakeDb(session_row=_SessionRow(), task_query=[], datasets={})
+    monkeypatch.setattr("app.db.SessionLocal", lambda: db)
+
+    with pytest.raises(AppError) as error:
+        create_task_safe(_benchmark_args(), _ctx())
+
+    assert error.value.code == ErrorCode.NOT_FOUND
+
+
+def test_create_rejects_stress_flag_without_config() -> None:
+    """with_stress=true 必须携带完整压测配置，避免 Worker 静默跳过派生。"""
+    with pytest.raises(AppError) as error:
+        create_task_safe(_benchmark_args(with_stress=True), _ctx())
+
+    assert error.value.code == ErrorCode.VALIDATION
+    assert "stress" in error.value.message
 
 
 def test_create_rag_requires_kb_and_gold(monkeypatch) -> None:
     monkeypatch.setattr("app.db.SessionLocal", lambda: _FakeDb(session_row=_SessionRow(), task_query=[]))
     with pytest.raises(AppError) as error:
-        create_task_safe({"kind": "rag"}, _ctx())
+        create_task_safe(_rag_args(kb_id=None, gold_qa_id=None), _ctx())
     assert error.value.code == ErrorCode.VALIDATION
-    assert "知识库" in error.value.message
+    assert "kb_id" in error.value.message
 
 
 def test_create_rag_ok_without_dataset(monkeypatch) -> None:
     db = _FakeDb(session_row=_SessionRow(), task_query=[])
     monkeypatch.setattr("app.db.SessionLocal", lambda: db)
-    result = create_task_safe({"kind": "rag", "kb_id": "kb1", "gold_qa_id": "g1"}, _ctx())
+    result = create_task_safe(_rag_args(), _ctx())
     assert result["status"] == "queued"
     assert result["kind"] == "rag"
 
@@ -174,7 +246,7 @@ def test_create_pending_confirm_rejected(monkeypatch) -> None:
     db = _FakeDb(session_row=_SessionRow(pending_confirm={"kind": "benchmark"}), task_query=[])
     monkeypatch.setattr("app.db.SessionLocal", lambda: db)
     with pytest.raises(AppError) as error:
-        create_task_safe({"kind": "benchmark", "dataset_id": "d1"}, _ctx())
+        create_task_safe(_benchmark_args(), _ctx())
     assert error.value.code == ErrorCode.CONCURRENCY
 
 
@@ -183,7 +255,7 @@ def test_create_active_task_rejected(monkeypatch) -> None:
     db = _FakeDb(session_row=_SessionRow(), task_query=[active])
     monkeypatch.setattr("app.db.SessionLocal", lambda: db)
     with pytest.raises(AppError) as error:
-        create_task_safe({"kind": "benchmark", "dataset_id": "d1"}, _ctx())
+        create_task_safe(_benchmark_args(), _ctx())
     assert error.value.code == ErrorCode.CONCURRENCY
 
 
@@ -210,14 +282,21 @@ def test_create_ok_enqueues_with_spec_and_owner(monkeypatch) -> None:
     db = _FakeDb(session_row=_SessionRow(), task_query=[])
     monkeypatch.setattr("app.db.SessionLocal", lambda: db)
     result = create_task_safe(
-        {"kind": "benchmark", "dataset_id": "d1", "profile_ids": ["p1"]},
+        _benchmark_args(),
         _ctx(),
     )
     assert result["status"] == "queued"
     assert result["kind"] == "benchmark"
     assert db.commit_calls >= 1
     task = db._tasks[result["task_id"]]
-    assert task.config == {"dataset_id": "d1", "profile_ids": ["p1"]}
+    assert task.config == {
+        "kind": "benchmark",
+        "dataset_id": "d1",
+        "profile_ids": ["p1"],
+        "run": {"sample_size": 1, "use_judge": False},
+        "rag_mode": [],
+        "with_stress": False,
+    }
     assert task.created_by == "u1"
     assert task.session_id == "s1"
     assert task.status == "queued"
@@ -227,7 +306,7 @@ def test_create_integrity_conflict_returns_concurrency(monkeypatch) -> None:
     db = _FakeDb(session_row=_SessionRow(), task_query=[], fail_integrity=True)
     monkeypatch.setattr("app.db.SessionLocal", lambda: db)
     with pytest.raises(AppError) as error:
-        create_task_safe({"kind": "benchmark", "dataset_id": "d1"}, _ctx())
+        create_task_safe(_benchmark_args(), _ctx())
     assert error.value.code == ErrorCode.CONCURRENCY
     assert db.rollback_calls >= 1
 

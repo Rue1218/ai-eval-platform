@@ -2,18 +2,20 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.63 |
+| 文档版本 | V1.64 |
 | 对应 PRD | V1.18（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.6.0（骨架化纯对话；JSON 仍以本文为准） |
 | 对应前端计划 | V1.5 |
 | 对应后端计划 | V1.5 |
 | 撰写日期 | 2026-08-18 |
-| 本轮修订 | 2026-09-02：V1.63 Agent 骨架化：多范式路由 / ReAct 思考链 / reflect / 思考流 / 澄清卡 / 确认卡 / 短工具调用 / 斜杠命令整体移除，WS 下行事件收敛为纯对话 + 平台任务流（§4.3），上行仅 `user_message` / `cancel_task`。 |
+| 本轮修订 | 2026-09-02：V1.64 修复任务工具契约漂移：MCP `task.create` 与 REST 共用 TaskSpec 校验；`cancel_task` 成功改发 `task_cancelled` 平台任务事件，前端完成进度坞收尾；REST 与 MCP 的终态取消均为幂等。 |
 | 最近修订 | 2026-08-28：V1.53 `web_fetch` 直抓路径接入 trafilatura 正文提取：可读性算法识别文章主体，保留标题层级/链接/图片/表格，未安装或提取失败降级回内置 `_TextExtractor`；提取真实产出 Markdown 时才声明 `format=markdown`（§4.3.1）。V1.52 优化 `web_fetch` 长文完整性与卡片预览：模型正文预算 8,000→60,000 字符，卡片预览与 `read` 同源对齐 `TOOL_PREVIEW_MAX_CHARS` 并随 `web.preview_limit_chars` 下发，直接抓取字节窗口 256KB→1MB（§4.3.1）。2026-08-27：V1.51 新增持久事件 `session_title`（§4.3）与会话标题 AI 生成契约（§4.3.2）：默认标题会话首条消息后由 Agent 协议档弱结构化生成标题并落库广播，修复标题不持久化问题。V1.50 统一 Agent 文本附件 staging 与 `read` 的 20MB 边界；`read` 模型窗口为 2,000 行 / 600,000 字符。V1.49 协议档新增 `max_output_tokens`（256–131072，默认 8192），创建/更新/列表/详情均支持；Agent 模型调用从协议档读取输出上限，长文档总结/导出类任务可调大避免回答被截断。2026-08-26：V1.48 同轮多调用默认串行，灰度开启后仅 `read`/`web_search`/`web_fetch` 可并行，回填按原始 `call_id`。V1.47 新增 `GET /api/agent/metrics`，不含正文/参数，不新增 WS 事件。V1.46 明确 native 一次 ToolCall 结束当前上游响应，结果回填后再请求，不新增事件名。V1.45 思考链只下发可展示摘要，隐藏 CoT（`Here's a thinking process` / `Analyze User Input`）由服务端替换，不原样推给前端。V1.44 ToolCall 在执行前持久化，新增瞬态 `tool_progress` / `tool_output_delta`，并冻结原生工具的输出 Schema、权限边界和失败恢复字段。V1.43 思考增量允许合并下发；有思考链时 `think_final` 在 `response.completed` 之前。V1.42 Direct `/help`、未知斜杠与图内防御提示在业务事件后必须再发 `response.completed`（成功 `stop`，校验/防御 `error`），结束整轮生成态。V1.41 确认卡预填与 `confirm_ack` 入队前丢掉已删除的协议档/数据集/知识库 ID，避免 Worker 再报「协议档不存在或已删除」。V1.40 `/cancel` 与 `/stress` 按 §4.4 解禁（仍走 `user_message`）：`/cancel` 取消本会话非终态任务，`/stress` 发出质量任务确认卡且 `with_stress=true`，禁止 `kind=stress`。V1.39 原生工具卡片收起态副标题统一为 `ToolCall`，不在卡片摘要区回显文件路径、命令或写入内容；详细参数仍在展开区展示。V1.38 明确原生基础 ToolCall 卡片使用英文工具名，展开区统一显示 `ToolCall` 与 `输出`，文件、命令和代码/文档结果使用行号展示；MCP/平台短工具仍按下方中文名映射。2026-08-24：V1.24 修复 Agent 附件上下文链路：服务端校验文件归属并在模型窗口解析文本、PDF、DOCX、XLSX，图片按三协议图文内容块发送；历史消息附件补齐安全元数据，前端可在刷新后继续预览。同步调整输入框内附件按钮与用户消息附件位序。V1.23 扩展 Agent 附件契约，支持图片、Word 文档与多附件拖拽上传；保留 `POST /api/files` 后再以既有 `file_id` 引用的消息链路，补充图片缩略图、PDF/文本预览与 Office 文件打开/下载说明。V1.22 修复 V1.21 遗留：§4.4 标题「仅此三条」改「仅此四条」、§9 禁止清单「第四种」改「第五种」并补四类上行事件枚举、§4.3 `tool_result.source` 语义对齐 M7 `Observation.source`（溯源标识字符串，非 short\|long 枚举）、§4.3 共享流规则补 clarify/plan/confirm 持久化广播说明、§4.4 clarify 多副本限制注明、§9 Ask/Plan 补注非 Harness plan 事件；V1.20 及更早版本沿用历史修订记录。 |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
-> V1.63（2026-09-02）：**Agent 骨架化（breaking）**。Agent 图收敛为单节点纯对话（`START → chat_stream → END`），以下内容整体移除：`thought` / `tool_call` / `tool_progress` / `tool_output_delta` / `tool_result` / `tool_approval` / `tool_approval_ack` / `clarify` / `plan` / `task_state` / `confirm` / `confirm_ack` 事件，`/help` `/compact` `/cancel` `/stress` 斜杠，`/api/slash-commands` 接口，自定义斜杠。下行事件仅保留 `user_message` / `assistant_delta` / `assistant_message` / `response.completed` / `progress` / `report` / `session_title` / `error` / `pong`；上行仅 `user_message` / `cancel_task`（`/stop` 以 `user_message` 文本上行）。历史 `ws_events` 中的旧事件不再渲染（§4.3 事件表标注保留历史兼容，但 Agent 图不再产生）。
+> V1.64（2026-09-02）：`cancel_task` 的成功回执为持久化 `task_cancelled`，不再复用已移除的 `tool_result`；payload 为 `{status:"cancelled",kind}`，公共头携带 `task_id`。`task.create` 即使由内部 MCP 触发，也必须通过与 REST 相同的 TaskSpec 校验。
+>
+> V1.63（2026-09-02）：**Agent 骨架化（breaking）**。Agent 图收敛为单节点纯对话（`START → chat_stream → END`），以下内容整体移除：`thought` / `tool_call` / `tool_progress` / `tool_output_delta` / `tool_result` / `tool_approval` / `tool_approval_ack` / `clarify` / `plan` / `task_state` / `confirm` / `confirm_ack` 事件，`/help` `/compact` `/cancel` `/stress` 斜杠，`/api/slash-commands` 接口，自定义斜杠。下行事件仅保留 `user_message` / `assistant_delta` / `assistant_message` / `response.completed` / `progress` / `report` / `task_cancelled` / `session_title` / `error` / `pong`；上行仅 `user_message` / `cancel_task`（`/stop` 以 `user_message` 文本上行）。历史 `ws_events` 中的旧事件不再渲染（§4.3 事件表标注保留历史兼容，但 Agent 图不再产生）。
 >
 > V1.62（2026-08-31）：危险 bash 的确认卡以 Composer 上方抽屉呈现，点击确认或取消立即收回；消息流仅显示关联 ToolCard 的等待状态。
 >
@@ -1580,74 +1582,26 @@ Harness 回合必须丢到后台 Task，**不得**在 `receive` 循环里 `await
 
 `event_id` 在会话内单调递增。`task_id` 在入队后才有。
 
-### 4.3 服务 → 前端（事件名冻结，V1.18 对齐 response 生命周期）
+### 4.3 服务 → 前端（V1.64 当前事件）
 
 | event | payload | 前端渲染 |
 | --- | --- | --- |
-| `thought` | 仅允许固定、无业务结论的过程摘要 `{ "text":"正在分析请求并校验下一步操作。", "stream":"think\|think_final" }`；每回合最多一条摘要。禁止 `stage`、`skill_id`、原始 reasoning、ReAct `thought` 与 Plan/Reflect 状态。`think` 是仅发起连接可见的瞬态帧，`think_final` 可持久化但历史 UI 必须忽略 | 当前回合最多一张 ThoughtCard；历史重放不渲染 |
-| `user_message` | `{ "id", "role":"user", "content", "attachments", "author_id", "author":{id,username,display_name?}, "client_message_id?", "created_at" }`；落库、占 event_id，用于协作者实时补用户气泡；不使用 `message` 避免与助手正文歧义 | UserBubble |
-| `assistant_delta` | `{ "role":"assistant", "text":"增量" }`；助手正文瞬态增量，不落库、不占事件号，仅用于在线连接的流式气泡 | AssistantBubble |
-| `assistant_message` | `{ "id", "role":"assistant", "text":"最终回答", "reply_latency_ms?", "created_at" }`；落库、占 event_id、可历史回放。只能在工具终态、确认卡或 PlanCard 已表达过程后发送最终交付；禁止 ToolCall 前草稿、`interim` 阶段叙述、ReAct JSON、Observation / `read` 全文。`response.completed` 仍是整轮结束 | AssistantBubble |
-| `response.completed` | `{ "finish_reason":"stop\|cancelled\|error", "role":"assistant" }`；本轮生成结束，落库、占 event_id | 结束流式状态 |
-| `tool_call` | `{ "call_id":"toolcall_xxx", "name": "model.list", "arguments": {} }`；`call_id` 为本轮模型生成或平台补齐的稳定非空字符串 | ToolCard pending；原生基础工具标题直接使用英文 `name`；MCP/平台短工具按下方中文名映射；展开区显示 `ToolCall` |
-| `tool_progress` | `{ "call_id", "name", "stage":"validating\|approved\|executing\|finalizing", "message" }`；仅在对应 `tool_call` 已落库后下发；不落库、不占 event_id、不补发 | ToolCard 保持 pending，更新加载文案与阶段状态 |
-| `tool_output_delta` | `{ "call_id", "name", "seq", "channel":"document\|stdout\|result", "text", "start_line" }`；仅服务端安全预览块可发送，单 ToolCall 累计最多 `TOOL_PREVIEW_MAX_CHARS` 字符（默认 600,000，见 V1.45）；不落库、不占 event_id、不补发 | ToolCard 按 `call_id`、`seq` 追加带行号输出；最终由 `tool_result` 替换成功态内容 |
-| `tool_result` | `{ "call_id":"toolcall_xxx", "name": "model.list", "ok": true, "data": {} }` 或 `{ "call_id":"toolcall_xxx", "name":"model.list", "ok": false, "error": "...", "status":"rejected"?, "recovery": {"retryable", "suggested_action", "repair_hint", "max_auto_repairs"} }`；`call_id` 必须与对应 `tool_call` 相同。`status="rejected"` 仅表示用户拒绝危险工具，非系统错误。可选 `latency_ms`、`truncated`(bool，结果是否被截断)、`source`(溯源标识字符串，对齐 M7 `Observation.source`，如 `"file:uuid"`，可选)、`redacted`(bool，是否已脱敏)。`name="read"` 成功时 `data` 使用本节下方的受控投影 | ToolCard done；按 `call_id` 原地更新；失败显示脱敏恢复建议；`truncated`/`redacted` 为 true 时展示截断/脱敏徽标 |
-| `tool_approval` | `{ "id":"toolcall_xxx", "call_id":"toolcall_xxx", "name":"bash", "command":"...", "reason":"...", "risk_level":"high", "sandbox_scope":"...", "allowed_decisions":["approve","reject"] }`；危险 bash 在 Runner 前触发；落库、占 event_id、可回放 | Composer 上方 ToolApprovalDrawer；关联 ToolCard 显示“等待确认”，命令尚未执行；用户选择后立即收回抽屉 |
-| `tool_approval_ack` | `{ "id":"toolcall_xxx", "action":"approve\|reject", "ok":true }`；服务端接受原发起成员决定后落库 | 收回 Composer 上方抽屉；`approve` 后图恢复执行，`reject` 后返回 `tool_result.status="rejected"` |
-| `clarify` | `{ "id":"uuid", "question":"...", "options":["..."]?, "context":"..."? }`；落库、占 event_id；澄清卡不建任务、不写 `sessions.pending_confirm`，仅暂停图等待用户回复 | ClarifyCard（独立组件，区别于 ConfirmCard）；用户回复后上行 `clarify_reply` 恢复图 |
-| `plan` | PlanArtifact `{ "intent":"...", "skill_id":"skill-benchmark", "slots":{...}, "tools_needed":["..."], "delivery":"...", "budget":{...}, "allows_replan":bool, "notes":"..."? }`；落库、占 event_id；Plan-Solve 规划产物对用户完全可见 | PlanCard（展示规划意图/技能/工具/预算/交付物）；用户可查看但无需 ack |
-| `task_state` | `TaskSessionState` `{ "goal":"...", "phase":"exploring\|verifying\|converging\|completed\|blocked", "completed_steps":["..."], "current_step":"...", "next_actions":["..."], "failed_steps":[{"step","reason","repair_hint"?}], "current_hypothesis":"...", "confirmed_facts":["..."], "evidence":["..."], "rejected_hypotheses":[{"hypothesis","reason","evidence_ref"?}], "missing_info":["..."], "can_deliver":bool, "blocked_reason":"..."?, "notes":"..."? }`；落库、占 event_id、可回放；由 `plan.slots.task_state` 初始快照演进而来，多轮工具迭代中随状态演进重复下发（原地更新最近 PlanCard，不新建卡） | TaskStateDrawer 实时刷新步骤状态（completed/running/failed/pending）与证据/缺口/排除方向徽章 |
-| `confirm` | TaskSpec（§5 / §6）+ 非 TaskSpec 元数据 `confirm_author:{id,username,display_name?}` | ConfirmCard，等 `confirm_ack`；仅 `confirm_author.id` 可操作 |
-| `confirm_ack` | `{ "ok": true, "task_id": "uuid" }` 或 `{ "ok": false }` | 更新最近一张 ConfirmCard 的确认/取消状态；落库、可回放 |
-| `progress` | `{ "percent": 40, "done": 40, "total": 100, "message": "..." }` | ProgressDock。**仅这四字段**（percent 可选），不写入 `messages` |
-| `report` | `{ "report_id": "uuid" }` | ReportCard |
-| `session_title` | `{ "title": "会话标题", "source": "ai" }`；会话仍为默认标题「新会话」时，首条用户消息落库后由 Agent 协议档后台生成（结构化输出契约见 §4.3.2），先落库 `sessions.title` 再广播；落库、占 event_id、可回放，重连回放幂等。生成失败降级为消息截断且不发出本事件，禁止阻塞对话回合 | 侧边栏会话列表与头部标题同步更新 |
-| `error` | `{ "code": "UPSTREAM", "message": "..." }` | ErrorStrip + Toast |
-| `pong` | `{}` | 不渲染 |
+| `user_message` | `{id,role:"user",content,attachments,author,client_message_id?,created_at}`；持久化并可回放 | UserBubble |
+| `assistant_delta` | `{role:"assistant",text}`；瞬态、不占 event_id | AssistantBubble 流式增量 |
+| `assistant_message` | `{id,role:"assistant",text,reply_latency_ms?,created_at}`；持久化并可回放 | AssistantBubble |
+| `response.completed` | `{finish_reason:"stop",role:"assistant"}`；持久化并可回放 | 结束流式状态 |
+| `progress` | `{percent,done,total,message}`；Worker 任务进度 | ProgressDock |
+| `report` | `{report_id}`；Worker 报告就绪 | ReportCard |
+| `task_cancelled` | `{status:"cancelled",kind}`；公共头必须带 `task_id`，持久化并可回放 | 关闭对应 ProgressDock，并结束取消中状态 |
+| `session_title` | `{title,source:"ai"}`；持久化并可回放 | 同步会话标题 |
+| `error` | `{code,message}`；异常消息必须脱敏 | ErrorStrip + Toast |
+| `pong` | `{}`；瞬态 | 不渲染 |
 
-禁止：`thinking` `token` `chat:send` `tool_call_start` 及任何参考文档旧名。
+Agent 图不产生 `thought`、`tool_*`、`plan`、`confirm`、`clarify` 或其确认/回复事件；历史中出现的旧事件不再由前端渲染。`task_cancelled` 是收包循环的任务控制事件，不属于 Agent ToolCall。
 
-`call_id` 规则：
+#### 4.3.1 历史原生工具契约（V1.62 及以前，当前未接线）
 
-- 仅在模型 ToolCall 参数完整、通过平台解析后发出 `tool_call`；参数增量不向浏览器新增事件；
-- `native` 下一次上游模型响应可交错输出正文块与多个完整 ToolCall，但该响应对运行时而言在 ToolCall 处结束；回填全部 `tool_result` 后才发起下一次请求。`legacy` 不得把半截 JSON 当作正文或参数执行；
-- 同一回合可有多个不同 `call_id`，禁止按工具名匹配，否则并行或连续同名调用会串卡；浏览器按 `call_id` 各更新一张卡；
-- 同轮多个调用**默认串行**。仅当 `AGENT_PARALLEL_TOOL_BATCH_ENABLED=true`、当前协议档命中 `AGENT_PARALLEL_TOOL_BATCH_PROFILE_IDS`（空名单不开，`*` 表示全部）且进程内脚踢线未触发时，白名单只读工具 `read` / `web_search` / `web_fetch` 可同波并行；`write` / `edit` / `bash` / `task.create` / `task.cancel` 始终串行。模型回填仍按原始 `call_id` 顺序，与完成顺序无关；
-- 上游未提供 ID 时由 API 进程生成 `toolcall_<uuid>`；该 ID 只在当前回合内稳定，不等同于 MCP Server、任务或数据库资源 ID；
-- 上游返回空、空白或同一模型响应内重复的 `call_id` 时，API 以 `UPSTREAM` 结束该轮，禁止发送任何 `tool_call` 或进入 ToolNode；
-- 策略拒绝、工具超时和执行失败也必须发出带原 `call_id` 的 `tool_result`，不得把异常转换为无关联的助手正文。
-
-`read` 的成功 `tool_result.data` 契约：
-
-```json
-{
-  "summary": "已读取 attachments/requirements.md 第 1–2000 行（共 3560 行，未读完）",
-  "read": {
-    "path": "attachments/requirements.md",
-    "total_lines": 3560,
-    "total_chars": 180423,
-    "start_line": 0,
-    "end_line": 2000,
-    "lines_read": 2000,
-    "is_complete": false,
-    "next_offset": 2000,
-    "content_truncated": false,
-    "preview": "按完整行截取的受控预览",
-    "preview_truncated": true,
-    "preview_limit_chars": 600000
-  }
-}
-```
-
-- `offset` / `limit` 的单位为行，均为 0-based；`end_line` 为排他上界，故示例表示第 1–2000 行；
-- `preview` 停在完整行，仅用于 ToolCard 与 WS 投影；长度受服务端 `TOOL_PREVIEW_MAX_CHARS`（V1.45 起默认 600,000，与 `read` 模型窗口同源对齐——**卡片所见即模型真实读取内容**），该值经 `preview_limit_chars` 随数据下发。设为更小值（如 4,000）可恢复「完整正文仅留在服务端 Observation、不出站到浏览器」的旧行为；
-- `truncated=true` 表示本次未读完整文件或受服务端内容预算限制；`content_truncated=true` 仅表示完整内容被截断，首期按整行裁剪，禁止截断半行；
-- `source` 使用不暴露宿主绝对路径的 `workspace:<相对路径>` 标识。
-
-#### 4.3.1 原生工具规格、权限与恢复（V1.44）
-
-工具注册表是 `description`、输入 Schema、浏览器安全输出 Schema、权限与恢复策略的唯一来源。模型只接收描述和输入 Schema；`output_schema` 不包含完整 Observation。所有对象参数默认 `additionalProperties=false`，未知字段在执行器前以 `VALIDATION` 拒绝。
+以下内容保留为恢复 ToolNode 时的历史设计资料；V1.64 的纯对话 Agent 不注入任何工具定义，也不产生对应 ToolCard 或 `tool_*` 事件。当前注册表/内部 MCP 仅表示受控执行基础设施，不能被前端标为 Agent 可调用能力。
 
 | 工具 | 输入 Schema（必填；可选） | 成功 `tool_result.data` 安全投影 | 执行权限边界 | 失败恢复 |
 | --- | --- | --- | --- | --- |
@@ -1713,11 +1667,19 @@ MCP/平台短工具中文名（ToolCard 标题；原生基础工具 `read` / `wr
 成功路径：先落库 `sessions.title`（行锁复查仍为「新会话」，不覆盖用户已改标题），再广播持久事件
 `session_title`（§4.3）。前端在事件到达前可继续展示本地乐观截断标题，刷新后以服务端为准。
 
-### 4.4 前端 → 服务（仅此五条 JSON）
+### 4.4 前端 → 服务（V1.64 当前）
 
 ```json
 { "event": "user_message", "payload": { "text": "帮我下一单 Benchmark", "attachments": [ { "file_id": "uuid" } ], "client_message_id": "browser-uuid" } }
 ```
+
+```json
+{ "event": "cancel_task", "payload": { "task_id": "uuid" } }
+```
+
+当前上行只有 `user_message` 与 `cancel_task`；`/stop` 作为 `user_message.payload.text` 以 `/stop` 开头时由收包循环即时处理。`cancel_task` 成功后服务端发送 `task_cancelled`，前端只能在该持久化回执到达后结束取消中状态。
+
+> 下方 `confirm_ack`、`clarify_reply`、`tool_approval_ack`、斜杠与确认卡规则为 V1.62 及以前的历史资料；V1.64 服务端不再接受这些事件。
 
 ```json
 { "event": "confirm_ack", "payload": { "ok": true, "patch": { "with_stress": false } } }
@@ -1754,7 +1716,7 @@ MCP/平台短工具中文名（ToolCard 标题；原生基础工具 `read` / `wr
 
 ---
 
-## 5. 任务规格 TaskSpec（确认卡 = `POST /api/tasks`）
+## 5. 任务规格 TaskSpec（`POST /api/tasks` 与内部 `task.create` 共用）
 
 字段名不得改。必填语义随 `kind` 变化（PRD 5.1.2）。
 
@@ -1807,15 +1769,17 @@ MCP/平台短工具中文名（ToolCard 标题；原生基础工具 `read` / `wr
 
 `stress.qps` ≤ settings.max_qps（默认 500），`duration_s` ≤ max_duration_s（默认 1800）。未填 `sla_p99_ms` 时报告不出「是否达标」。
 
-对话 Agent **不得**把 `kind` 设为 `stress` 发给确认卡；压测由质量任务 `succeeded` 且 `with_stress=true` 时 Worker 派生。人手 `POST /api/tasks` `kind=stress` 仍须 `parent_task_id`。
+纯对话 Agent 当前不创建任务。人手 `POST /api/tasks` 或未来恢复 ToolNode 后的内部 `task.create` 都必须按本节校验；压测由质量任务 `succeeded` 且 `with_stress=true` 时 Worker 派生，手动创建 `kind=stress` 仍须 `parent_task_id`。
 
-`frontend/src/schemas/confirmCard.ts` 与 `ws.py` 预填必须与上表默认值一致（`sample_size=1000`、`temperature=0`、`max_tokens=1024`、`qps=10`、`duration_s=120`、`sla_p99_ms=null`）。Worker 夹紧：`sample_size = min(请求值, 1000, 行数)`。
+REST 前端预填与后端 TaskSpec 默认值必须保持一致（`sample_size=1000`、`temperature=0`、`max_tokens=1024`、`qps=10`、`duration_s=120`、`sla_p99_ms=null`）。Worker 夹紧：`sample_size = min(请求值, 1000, 行数)`。
 
 ---
 
-## 6. 内部 MCP 扩展（浏览器不调用）
+## 6. 内部 MCP 执行基础设施（浏览器只读）
 
-MCP 预留给评测、RAG 和 Worker 协作扩展；基础工具清单与直连边界以 §3.6.1 为准。入参/出参与 PRD 5.5 一致，错误码同 §1.3；当前只挂载 `platform.tasks`，其余条目均为未来能力，不得伪装为可调用。
+`platform.tasks` 当前注册 `task.create` / `task.status` / `task.cancel`，用于未来恢复 ToolNode 时的受控任务队列桥。V1.64 Agent 不调用 MCP 或原生工具；`GET /api/mcp/*` 只展示已注册基础设施和健康状态，不能表示浏览器或当前 Agent 可执行。`task.create` 与本节 TaskSpec 共用 Pydantic 校验，`task.cancel` 对终态幂等返回现状。
+
+> 下表其余工具为历史扩展规划，当前未挂载，不能伪装为可调用。
 
 | 工具 | 类型 | 入参 | 出参 | 阶段 |
 | --- | --- | --- | --- | --- |
@@ -1837,7 +1801,7 @@ MCP 预留给评测、RAG 和 Worker 协作扩展；基础工具清单与直连�
 | `rag.evaluate` | 长 | TaskSpec RAG 段 | `report_id` | M3 |
 | `stress.run` | 长 | `parent_task_id` + `stress` | `report_id` | M4 |
 
-Agent **只**调短工具：原生 `task` 仅用于对话内拆解；MCP `task.create` 经 kind、数据集、占槽和先评后压门禁后直接入队返回 `queued`，确认卡路径仍由 `confirm_ack` 驱动，二者复用 `enqueue_long_task`。长工具（`benchmark.run`、`rag.evaluate`、`testcase.generate`、`stress.run`）由 Worker 执行，Agent 进程同步调用必须 `VALIDATION`。`stress.run` 只下发 stress 容器。LightRAG 未接入时 `kind=rag` **不得** mock succeeded。
+V1.64 Agent 不调短工具：原生 `task` 与 MCP `task.create/status/cancel` 均为已注册但未接线的执行基础设施。恢复 ToolNode 前，任务只能通过 REST 控制面或 WS `cancel_task` 管理；长工作仍仅由 Worker 执行，API 进程不得同步运行 benchmark、RAG、testcase 或 stress。
 
 JSON Schema 冻结点：短工具 M1 W4；音频工具输入以本节为准，结果只回安全文本/文件元数据；评测长工具 M2 W6；RAG M3 W10；stress M4 W13。禁止新增 REST 代理或浏览器直连上游音频服务。
 
@@ -2616,3 +2580,15 @@ Composer 上方抽屉；点击确认或取消即收回，消息流只保留关�
 | 实际修改文件 | 作用 |
 | :--- | :--- |
 | `frontend/src/views/Agent.vue` | 将危险命令确认移至 Composer 上方抽屉，确认/取消后立即收回，历史重放同步恢复未处理抽屉 |
+
+**V1.64（2026-09-02）— 任务工具契约收敛与取消回执**
+
+`platform.tasks.task.create` 先使用 REST 同源的 `TaskCreate` 校验 TaskSpec，再执行会话占槽、配额与父任务状态门禁；避免缺少 `run`、协议档或 `stress` 段的任务进入 Worker。WS `cancel_task` 成功后持久化 `task_cancelled`，前端据此结束取消中状态；REST 与 MCP 的终态取消均幂等返回当前任务。纯对话 Agent 仍不注入工具定义，工具中心只表示已注册的执行基础设施。
+
+| 实际修改文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/harness/execution/task_tools.py` / `registry.py` | MCP TaskSpec 同源校验，并补齐 run/stress/case_source Schema。 |
+| `backend/api/app/routers/tasks.py` / `routers/ws.py` | 统一终态取消幂等语义，WS 改发 `task_cancelled`。 |
+| `frontend/src/api/types.ts` / `views/Agent.vue` | 接收 `task_cancelled` 并可靠收尾任务进度坞。 |
+| `backend/api/app/routers/mcp.py` / `frontend/src/views/AdminProfiles.vue` | 明示工具已注册但当前纯对话 Agent 未接线。 |
+| `backend/api/tests/test_task_tools.py` / `test_task_permissions.py` | 覆盖 MCP 完整 TaskSpec 门禁与终态取消幂等。 |

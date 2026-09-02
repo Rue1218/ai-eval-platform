@@ -241,7 +241,9 @@ def cancel_task(
     """取消非终态任务；M1 mock Worker 会在下一检查点停止。"""
     task = _owned_task(db, task_id, user.id)
     if task.status in TERMINAL_STATUSES:
-        raise AppError(ErrorCode.VALIDATION, "任务已结束")
+        # REST 与 platform.tasks.task.cancel 保持幂等：重试取消不会把已完成、
+        # 已失败或已取消的任务误报为业务错误。
+        return _task_out(task)
     task.cancel_requested_at = datetime.now(UTC)
     task.status = "cancelled"
     task.finished_at = task.cancel_requested_at

@@ -20,7 +20,7 @@ from app.harness.execution import (
 from app.harness.execution.mcp import ToolExecutionContext, ToolMetrics
 from app.harness.execution.task_tools import create_task_safe
 from app.harness.execution.worker_bridge import count_active_tasks
-from app.models import AuditLog, Task
+from app.models import AuditLog, Dataset, Task
 from app.models import Session as AgentSession
 
 # —— 工具桩与假时钟 ——
@@ -124,18 +124,30 @@ class _SessionRow:
 class _FakeDb:
     """覆盖 task_tools / count_active_tasks / is_cancelled 所需 query/get 的最小桩。"""
 
-    def __init__(self, *, session_row=None, tasks=None, task_query=None, task_count=0, task_first=None):
+    def __init__(
+        self,
+        *,
+        session_row=None,
+        tasks=None,
+        task_query=None,
+        task_count=0,
+        task_first=None,
+        dataset=None,
+    ):
         self._session_row = session_row
         self._tasks = dict(tasks or {})
         self._task_query = task_query
         self._task_count = task_count
         self._task_first = task_first
+        self._dataset = dataset if dataset is not None else Dataset(id="d1", name="测试数据集")
         self.added: list = []
         self.commit_calls = 0
 
     def query(self, model):
         if model is AgentSession:
             return _Query(self._session_row)
+        if model is Dataset:
+            return _Query(self._dataset)
         return _Query(self._task_query, self._task_count, first_result=self._task_first)
 
     def get(self, model, pk):
@@ -283,7 +295,10 @@ def test_create_task_quota_rejected_with_audit(monkeypatch) -> None:
     db = _FakeDb(session_row=_SessionRow(), task_query=[], task_count=5)
     monkeypatch.setattr("app.db.SessionLocal", lambda: db)
     with pytest.raises(AppError) as error:
-        create_task_safe({"kind": "benchmark", "dataset_id": "d1"}, _ctx())
+        create_task_safe(
+            {"kind": "benchmark", "dataset_id": "d1", "profile_ids": ["p1"], "run": {}},
+            _ctx(),
+        )
     assert error.value.code == ErrorCode.CONCURRENCY
     assert "配额" in error.value.message
     assert any(
@@ -295,7 +310,10 @@ def test_create_task_quota_rejected_with_audit(monkeypatch) -> None:
 def test_create_task_passes_quota_below_limit(monkeypatch) -> None:
     db = _FakeDb(session_row=_SessionRow(), task_query=[], task_count=2)
     monkeypatch.setattr("app.db.SessionLocal", lambda: db)
-    result = create_task_safe({"kind": "benchmark", "dataset_id": "d1"}, _ctx())
+    result = create_task_safe(
+        {"kind": "benchmark", "dataset_id": "d1", "profile_ids": ["p1"], "run": {}},
+        _ctx(),
+    )
     assert result["status"] == "queued"
 
 

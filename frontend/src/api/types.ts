@@ -887,6 +887,7 @@ export interface WsServerEvent {
     | 'done'
     | 'progress'
     | 'report'
+    | 'task_cancelled'
     | 'error'
     | 'session_title'
     | 'pong'

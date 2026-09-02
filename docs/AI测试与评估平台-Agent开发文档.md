@@ -4,7 +4,7 @@
 > 状态：**骨架化改造**：Agent 图已收敛为单节点纯对话（`START → chat_stream → END`）。多范式路由（direct/chat/react/plan_solve）、ReAct 思考链、reflect 反思门禁、think_stream 思考流、澄清卡、确认卡、短工具调用与斜杠命令全部移除；保留模型直答、流式投影、会话记忆（assemble / compact 摘要）、WS 事件桥接与平台任务进度/报告事件。检查点默认 memory；ContextMeter 服务端计算；assemble 接线 CX-4/CX-5。
 > 审查日期：2026-09-02
 > 对应需求：`AI测试与评估平台-PRD.md` V1.18
-> 对应接口：`AI测试与评估平台-API.md` V1.61
+> 对应接口：`AI测试与评估平台-API.md` V1.64
 
 ## 1. 当前唯一运行链路
 
@@ -31,7 +31,7 @@
 - 校验会话可见性，支持首次连接创建私有会话；
 - 保存 `messages` 与 `ws_events`，按 `last_event_id` 补发历史事件；
 - 在后台 Task 中启动单轮 Agent，不阻塞 WebSocket `receive` 循环；
-- 将 LangGraph 流事件投影为 `user_message`、`assistant_delta`、`assistant_message`、`response.completed`、`error`、`pong`（骨架化后不再产生 `thought` / `tool_*` / `confirm` / `clarify` 等事件）；
+- 将 LangGraph 流事件投影为 `user_message`、`assistant_delta`、`assistant_message`、`response.completed`、`error`、`pong`；平台取消成功由收包循环另发 `task_cancelled`（骨架化后不再产生 `thought` / `tool_*` / `confirm` / `clarify` 等事件）；
 - `cancel_task` 由收包循环直连，不在 api 进程执行评测或压测。
 
 路由不得直接调用 `app.adapters`，不得执行 Benchmark、RAG、用例生成或压测。
@@ -90,6 +90,7 @@ reasoning 事件，并对已知支持显式关闭的端点发送关闭参数。G
 | `assistant_delta` | 助手正文瞬态增量，仅向在线会话成员广播，不占事件号 |
 | `assistant_message` | 助手完整交付句，落库并占用会话事件号 |
 | `response.completed` | 本轮生成结束，携带 `finish_reason` 和 `role=assistant` 并可回放 |
+| `task_cancelled` | 任务取消已持久化；公共头携带 `task_id`，payload 含 `status` 与 `kind` |
 | `error` | 脱敏后的 `ErrorCode` 与用户可见消息 |
 | `pong` | 应用层心跳，不占用持久化事件号，可与业务事件交错到达 |
 
@@ -487,3 +488,10 @@ reasoning 事件，并对已知支持显式关闭的端点发送关闭参数。G
 - `frontend/src/views/Agent.vue`：单回合最多显示一张固定过程摘要；历史 `thought` 不回放，Plan/Reflect 阶段仅驱动生成状态而不创建聊天卡。
 - `backend/api/tests/test_agent_react.py` / `test_agent_routing.py` / `test_agent_multiturn.py`：覆盖 ReAct 内部 thought、ToolCall 草稿和 Plan/Reflect 阶段均不出站，且工具后必须重新生成最终交付。
 - `docs/AI测试与评估平台-PRD.md` / `AI测试与评估平台-API.md`：升级至 PRD V1.18 / API V1.61，冻结可见过程卡与历史重放边界。
+
+### V1.64（2026-09-02）任务取消回执与工具状态同步
+
+- `backend/api/app/routers/ws.py`：`cancel_task` 成功后发送持久化 `task_cancelled`，不再发送已从骨架化事件集移除的 `tool_result`。
+- `frontend/src/api/types.ts` / `frontend/src/views/Agent.vue`：新增 `task_cancelled` 类型与实时/后台会话收尾逻辑，只有收到回执才结束取消中状态。
+- `backend/api/app/harness/execution/task_tools.py` / `registry.py`：为未来恢复 ToolNode 保留的 `task.create` 与 REST 复用 TaskSpec 校验；当前 Agent 图仍不注入它。
+- `backend/api/app/routers/mcp.py` / `frontend/src/views/AdminProfiles.vue`：工具目录标明“已注册、当前纯对话 Agent 未接线”。

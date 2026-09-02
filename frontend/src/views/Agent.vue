@@ -1794,6 +1794,10 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
       rt.activeTask = null
       if (p.report_id) buf.push({ type: 'report', reportId: p.report_id })
       break
+    case 'task_cancelled':
+      // 取消结果是平台任务流，不再伪装为已移除的 tool_result。
+      if (ev.task_id && rt.activeTask?.id === ev.task_id) rt.activeTask = null
+      break
     case 'progress': {
       if (ev.task_id) {
         const progress = { percent: p.percent, done: p.done, total: p.total, message: p.message }
@@ -1954,6 +1958,14 @@ function handleWsEvent(ev: WsServerEvent) {
         })
       }
       scrollToBottom()
+      break
+    }
+    case 'task_cancelled': {
+      // 仅收到服务端持久化确认后才收起取消态，避免网络失败时出现假成功。
+      if (ev.task_id) {
+        finishCancelledTask(ev.task_id)
+        message.success('评测任务已取消（cancelled）')
+      }
       break
     }
     case 'error': {
