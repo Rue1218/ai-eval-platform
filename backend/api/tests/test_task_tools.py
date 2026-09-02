@@ -400,6 +400,7 @@ def test_contextual_handler_receives_execution_context() -> None:
             handler=handler,
             server_id="platform.custom",
             contextual=True,
+            output_schema={},
         )
     )
     manager = MCPClientManager.build_from_registry(registry)
@@ -427,6 +428,7 @@ def test_non_contextual_handler_two_args_via_manager() -> None:
             timeout_s=5.0,
             handler=handler,
             server_id="platform.custom",
+            output_schema={},
         )
     )
     manager = MCPClientManager.build_from_registry(registry)

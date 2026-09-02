@@ -30,6 +30,7 @@ from .registry import (
     build_default_registry,
     required_parameter_names,
     validate_tool_arguments,
+    validate_tool_output,
     validate_tool_schema,
 )
 from .session_guard import assert_no_orm_leak, with_managed_session
@@ -78,6 +79,7 @@ __all__ = [
     "web_fetch",
     "web_search",
     "validate_tool_arguments",
+    "validate_tool_output",
     "validate_tool_schema",
     "write_file_safe",
 ]

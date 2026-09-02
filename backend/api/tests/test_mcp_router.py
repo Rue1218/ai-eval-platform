@@ -1,5 +1,5 @@
 ﻿from app.models import User
-from app.routers.mcp import get_tool_code, health_check, list_all_tools
+from app.routers.mcp import health_check, list_all_tools
 
 
 def test_list_all_tools_returns_native_and_mcp():
@@ -12,6 +12,9 @@ def test_list_all_tools_returns_native_and_mcp():
     assert "output_schema" in read_tool
     assert "code_details" in read_tool
     assert read_tool["code_details"]["source_file"]
+    # code_snippet 已移除：原为手写示意代码且与真实 handler 不符（伪造展示）
+    assert "code_snippet" not in read_tool["code_details"]
+
 
 def test_health_check_returns_channel_statuses():
     user = User(id="u-admin", username="admin", role="admin")
@@ -20,10 +23,4 @@ def test_health_check_returns_channel_statuses():
     assert "native" in res["channels"]
     assert "internal_mcp" in res["channels"]
     assert "external_gateway" in res["channels"]
-
-def test_get_tool_code_returns_source_and_snippet():
-    user = User(id="u-admin", username="admin", role="admin")
-    code_res = get_tool_code(tool_name="read", user=user)
-    assert code_res["name"] == "read"
-    assert "def _read_handler" in code_res["code_snippet"]
 

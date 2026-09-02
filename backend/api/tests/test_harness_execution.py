@@ -54,6 +54,7 @@ def test_registry_rejects_duplicate_register() -> None:
             permission="p",
             timeout_s=1.0,
             handler=_handler_factory("dup"),
+            output_schema={},
         )
     )
     with pytest.raises(AppError) as error:
@@ -65,6 +66,7 @@ def test_registry_rejects_duplicate_register() -> None:
                 permission="p",
                 timeout_s=1.0,
                 handler=_handler_factory("dup2"),
+                output_schema={},
             )
         )
     assert error.value.code == ErrorCode.VALIDATION
@@ -129,6 +131,7 @@ def test_registry_rejects_unsupported_tool_schema_keywords() -> None:
                 permission="test.read",
                 timeout_s=1.0,
                 handler=_handler_factory("invalid-schema"),
+                output_schema={},
             )
         )
     assert error.value.code == ErrorCode.VALIDATION
@@ -492,6 +495,7 @@ def test_toolnode_parallel_reads_one_visit(monkeypatch) -> None:
             transport="native",
             contextual=True,
             concurrency_class="path_scoped",
+            output_schema={},
         )
     )
     result_store = NativeToolResultStore()
@@ -579,6 +583,7 @@ def test_toolnode_parallel_failure_does_not_cancel_sibling(monkeypatch) -> None:
             transport="native",
             contextual=True,
             concurrency_class="path_scoped",
+            output_schema={},
         )
     )
     registry.register(
@@ -596,6 +601,7 @@ def test_toolnode_parallel_failure_does_not_cancel_sibling(monkeypatch) -> None:
             handler=ok,
             transport="native",
             concurrency_class="read_only",
+            output_schema={},
         )
     )
     result_store = NativeToolResultStore()
@@ -676,6 +682,7 @@ def test_toolnode_streams_scoped_progress_and_output(monkeypatch) -> None:
             transport="native",
             supports_streaming=True,
             contextual=True,
+            output_schema={},
         )
     )
     frames: list[dict] = []
@@ -1574,6 +1581,7 @@ def test_toolnode_timeout_and_frontend_event_payload() -> None:
             timeout_s=0.01,
             handler=slow_handler,
             transport="native",
+            output_schema={},
         )
     )
     node = build_tool_node(registry)

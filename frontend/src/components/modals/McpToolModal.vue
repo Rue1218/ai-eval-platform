@@ -281,11 +281,6 @@
             <div class="section-title">
               <span>💻 Python Handler 实现源码片段 (Source Code)</span>
             </div>
-            <div class="row" style="gap: 8px">
-              <button class="link-btn small" @click="handleCopyCode">
-                📋 复制代码
-              </button>
-            </div>
           </div>
 
           <div class="code-meta-bar">
@@ -299,8 +294,14 @@
             </div>
           </div>
 
-          <!-- 代码高亮预览框 -->
-          <pre class="json-code code-full-block"><code>{{ codeSnippetText }}</code></pre>
+          <!-- 代码片段已移除：原 code_snippet 为手写示意代码且与真实 handler 不符（伪造展示）。
+               真实源码请直接查看上方文件路径对应的仓库文件。 -->
+          <div class="guardrail-box">
+            <div class="guardrail-desc">
+              源码片段展示已下线。请按上方「文件路径」与「入口函数」在代码仓库中查看真实实现，
+              以确保所见即真实执行逻辑。
+            </div>
+          </div>
         </div>
 
         <div class="section-block mt12">
@@ -525,14 +526,6 @@ const pipelineStages = computed(() => {
   ]
 })
 
-/** 源码片段展示 */
-const codeSnippetText = computed(() => {
-  if (props.tool?.code_details?.code_snippet) {
-    return props.tool.code_details.code_snippet
-  }
-  return `# ${props.tool?.name || 'tool'} 底层实现函数\ndef _${props.tool?.name || 'handler'}(arguments, sandbox_dir, context):\n    # 1. 路径校验与参数安全检查\n    # 2. 核心业务处理\n    return {"summary": "执行完成"}`
-})
-
 /** 示例请求 JSON */
 const exampleRequestJson = computed(() => {
   if (!props.tool) return '{}'
@@ -574,33 +567,36 @@ const testResultJson = computed(() => {
   return JSON.stringify(testResult.value.data, null, 2)
 })
 
-function handleCopyCode() {
-  navigator.clipboard.writeText(codeSnippetText.value)
-  message.success('已复制 Python Handler 源码片段')
-}
-
 function handleCopyTestResult() {
   if (!testResult.value) return
   navigator.clipboard.writeText(testResultJson.value)
   message.success('已复制返回载荷 JSON')
 }
 
-/** 在线真实自检 */
+/** 在线真实自检：改查 /api/mcp/all-tools 中该工具的契约投影（原 /tools/{name}/code 端点已移除） */
 async function handleRunLiveToolCall() {
   if (!props.tool) return
   testing.value = true
   const start = performance.now()
   try {
-    const res = await api.mcp.code(props.tool.name)
+    const res = await api.mcp.tools()
     const latency = Math.round(performance.now() - start)
-    const payloadStr = JSON.stringify(res)
+    const items = res?.items || []
+    const found = items.find(
+      (t: any) => t.name === props.tool!.name || t.tool_id === props.tool!.tool_id || t.short_name === props.tool!.short_name,
+    )
+    const payloadStr = JSON.stringify(found ?? { error: '工具未在清单中', name: props.tool.name })
     testResult.value = {
-      ok: true,
+      ok: Boolean(found),
       latencyMs: Math.max(1, latency),
       payloadSize: payloadStr.length,
-      data: res,
+      data: found ?? { error: '工具未在清单中', name: props.tool.name },
     }
-    message.success(`自检 [${props.tool.display_name || props.tool.name}] 成功 (${testResult.value.latencyMs}ms)`)
+    if (found) {
+      message.success(`自检 [${props.tool.display_name || props.tool.name}] 成功 (${testResult.value.latencyMs}ms)`)
+    } else {
+      message.warning(`自检未在清单中找到 [${props.tool.name}]`)
+    }
   } catch (err: any) {
     const latency = Math.round(performance.now() - start)
     testResult.value = {

@@ -2,17 +2,19 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.64 |
+| 文档版本 | V1.65 |
 | 对应 PRD | V1.18（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.6.0（骨架化纯对话；JSON 仍以本文为准） |
 | 对应前端计划 | V1.5 |
 | 对应后端计划 | V1.5 |
 | 撰写日期 | 2026-08-18 |
-| 本轮修订 | 2026-09-02：V1.64 修复任务工具契约漂移：MCP `task.create` 与 REST 共用 TaskSpec 校验；`cancel_task` 成功改发 `task_cancelled` 平台任务事件，前端完成进度坞收尾；REST 与 MCP 的终态取消均为幂等。 |
+| 本轮修订 | 2026-09-02：V1.65 工具契约加固（T1–T3）：JSON Schema 子集新增 `minItems`/`maxItems` 并为 8 处数组参数补上限；`output_schema` 从装饰字段升级为强制契约——注册期拒绝未声明（`None`），运行期 `execute_raw` 按声明比对 handler 展示投影，失败归一 `INTERNAL` 不外泄原始返回；`platform.tasks` 三工具补全 `output_schema`；移除 `/api/mcp/tools/{name}/code` 端点与 `code_snippet` 字段（原为手写示意代码且与真实 handler 不符，违反「禁止伪造」红线）。 |
 | 最近修订 | 2026-08-28：V1.53 `web_fetch` 直抓路径接入 trafilatura 正文提取：可读性算法识别文章主体，保留标题层级/链接/图片/表格，未安装或提取失败降级回内置 `_TextExtractor`；提取真实产出 Markdown 时才声明 `format=markdown`（§4.3.1）。V1.52 优化 `web_fetch` 长文完整性与卡片预览：模型正文预算 8,000→60,000 字符，卡片预览与 `read` 同源对齐 `TOOL_PREVIEW_MAX_CHARS` 并随 `web.preview_limit_chars` 下发，直接抓取字节窗口 256KB→1MB（§4.3.1）。2026-08-27：V1.51 新增持久事件 `session_title`（§4.3）与会话标题 AI 生成契约（§4.3.2）：默认标题会话首条消息后由 Agent 协议档弱结构化生成标题并落库广播，修复标题不持久化问题。V1.50 统一 Agent 文本附件 staging 与 `read` 的 20MB 边界；`read` 模型窗口为 2,000 行 / 600,000 字符。V1.49 协议档新增 `max_output_tokens`（256–131072，默认 8192），创建/更新/列表/详情均支持；Agent 模型调用从协议档读取输出上限，长文档总结/导出类任务可调大避免回答被截断。2026-08-26：V1.48 同轮多调用默认串行，灰度开启后仅 `read`/`web_search`/`web_fetch` 可并行，回填按原始 `call_id`。V1.47 新增 `GET /api/agent/metrics`，不含正文/参数，不新增 WS 事件。V1.46 明确 native 一次 ToolCall 结束当前上游响应，结果回填后再请求，不新增事件名。V1.45 思考链只下发可展示摘要，隐藏 CoT（`Here's a thinking process` / `Analyze User Input`）由服务端替换，不原样推给前端。V1.44 ToolCall 在执行前持久化，新增瞬态 `tool_progress` / `tool_output_delta`，并冻结原生工具的输出 Schema、权限边界和失败恢复字段。V1.43 思考增量允许合并下发；有思考链时 `think_final` 在 `response.completed` 之前。V1.42 Direct `/help`、未知斜杠与图内防御提示在业务事件后必须再发 `response.completed`（成功 `stop`，校验/防御 `error`），结束整轮生成态。V1.41 确认卡预填与 `confirm_ack` 入队前丢掉已删除的协议档/数据集/知识库 ID，避免 Worker 再报「协议档不存在或已删除」。V1.40 `/cancel` 与 `/stress` 按 §4.4 解禁（仍走 `user_message`）：`/cancel` 取消本会话非终态任务，`/stress` 发出质量任务确认卡且 `with_stress=true`，禁止 `kind=stress`。V1.39 原生工具卡片收起态副标题统一为 `ToolCall`，不在卡片摘要区回显文件路径、命令或写入内容；详细参数仍在展开区展示。V1.38 明确原生基础 ToolCall 卡片使用英文工具名，展开区统一显示 `ToolCall` 与 `输出`，文件、命令和代码/文档结果使用行号展示；MCP/平台短工具仍按下方中文名映射。2026-08-24：V1.24 修复 Agent 附件上下文链路：服务端校验文件归属并在模型窗口解析文本、PDF、DOCX、XLSX，图片按三协议图文内容块发送；历史消息附件补齐安全元数据，前端可在刷新后继续预览。同步调整输入框内附件按钮与用户消息附件位序。V1.23 扩展 Agent 附件契约，支持图片、Word 文档与多附件拖拽上传；保留 `POST /api/files` 后再以既有 `file_id` 引用的消息链路，补充图片缩略图、PDF/文本预览与 Office 文件打开/下载说明。V1.22 修复 V1.21 遗留：§4.4 标题「仅此三条」改「仅此四条」、§9 禁止清单「第四种」改「第五种」并补四类上行事件枚举、§4.3 `tool_result.source` 语义对齐 M7 `Observation.source`（溯源标识字符串，非 short\|long 枚举）、§4.3 共享流规则补 clarify/plan/confirm 持久化广播说明、§4.4 clarify 多副本限制注明、§9 Ask/Plan 补注非 Harness plan 事件；V1.20 及更早版本沿用历史修订记录。 |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
+> V1.65（2026-09-02）：工具契约加固（T1–T3）。T1：JSON Schema 受限子集新增 `minItems`/`maxItems`（注册期与运行期均校验），并为 `web_search.include_domains/exclude_domains`、`web_fetch.allowed_domains/blocked_domains`、`task.steps/tools`、`ask_user_question.questions/options`、`task.create.profile_ids/rag_mode` 等 8 处数组参数补上限。T2：`output_schema` 从装饰字段升级为强制契约——`ToolDef.output_schema` 默认 `None`（未声明）注册期拒绝，显式 `{}` 表示无结构化投影（合法，运行期跳过比对）；`execute_raw` 运行期按声明比对 handler 原始返回的展示投影，失败归一 `INTERNAL` 且不外泄原始返回；`platform.tasks.task.create/status/cancel` 补全 `output_schema`。T3：移除 `GET /api/mcp/tools/{name}/code` 端点与所有 `code_snippet` 字段（后端 `TOOL_METADATA_EXT`、前端 `ToolCodeDetails`/mock/Modal）——原实现为手写示意代码且与真实 handler 不符，违反「禁止伪造」红线；前端「源码实现」Tab 改为引导查看仓库真实文件。
+>
 > V1.64（2026-09-02）：`cancel_task` 的成功回执为持久化 `task_cancelled`，不再复用已移除的 `tool_result`；payload 为 `{status:"cancelled",kind}`，公共头携带 `task_id`。`task.create` 即使由内部 MCP 触发，也必须通过与 REST 相同的 TaskSpec 校验。
 >
 > V1.63（2026-09-02）：**Agent 骨架化（breaking）**。Agent 图收敛为单节点纯对话（`START → chat_stream → END`），以下内容整体移除：`thought` / `tool_call` / `tool_progress` / `tool_output_delta` / `tool_result` / `tool_approval` / `tool_approval_ack` / `clarify` / `plan` / `task_state` / `confirm` / `confirm_ack` 事件，`/help` `/compact` `/cancel` `/stress` 斜杠，`/api/slash-commands` 接口，自定义斜杠。下行事件仅保留 `user_message` / `assistant_delta` / `assistant_message` / `response.completed` / `progress` / `report` / `task_cancelled` / `session_title` / `error` / `pong`；上行仅 `user_message` / `cancel_task`（`/stop` 以 `user_message` 文本上行）。历史 `ws_events` 中的旧事件不再渲染（§4.3 事件表标注保留历史兼容，但 Agent 图不再产生）。
@@ -707,7 +709,7 @@ Embedding 与 Reranker 的 URL、模型和 Key 与主模型使用相同的“按
 
 获取当前智能体环境中平台 allowlist 的**MCP 扩展目录**（只读）。`read`、`write`、`edit`、`bash`、`web_search`、`web_fetch` 与对话拆解 `task` 不属于目录：模型以原生 Function Calling 生成 ToolCall，ToolNode 完成 Schema、权限、附件门禁后，直接交 `NativeToolExecutor` 在线程池执行，不产生 MCP catalog/provider 路由开销。
 
-当前已挂载的 MCP 扩展仅为评测任务桥 `platform.tasks`；RAG、报告等其它扩展仍须按 allowlist 和契约另行登记。目录只展示元数据，**不展示任何 MCP Server 连接命令、环境变量、工作目录或凭据**，也不展示内部 handler 细节。
+当前已挂载的 MCP 扩展仅为评测任务桥 `platform.tasks`；RAG、报告等其它扩展仍须按 allowlist 和契约另行登记。目录只展示元数据，**不展示任何 MCP Server 连接命令、环境变量、工作目录或凭据**，也不展示内部 handler 细节。`code_snippet` 字段与 `GET /api/mcp/tools/{name}/code` 端点已于 V1.65 移除（原为手写示意代码且与真实 handler 不符）；前端「源码实现」视图改为引导按 `source_file`/`handler_function` 在代码仓库中查看真实实现。
 
 `platform.tasks` 三工具只入 PG 队列或查询，**不等待 Worker 终态**：`task.create` 校验通过后直接入队返回 `queued` + `task_id`；`task.status` 只读当前状态不轮询；`task.cancel` 行锁取消非终态任务。真实进度/报告/错误由 Worker 写入 `task_events`/`ws_events` 转发。
 
