@@ -3,7 +3,7 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | 混合驱动引擎（Hybrid Agent Engine）架构需求 |
-| 版本 | V1.1 |
+| 版本 | V1.2 |
 | 审查日期 | 2026-09-02 |
 | 文档性质 | 架构需求 + ADR + 分阶段落地契约（**本版不改对外契约，契约变更逐阶段先改 API.md**） |
 | 适用范围 | `/agent` 对话智能体全链路：LangGraph 双引擎图、Harness 九层、WebSocket 事件桥、短工具与长任务分离 |
@@ -405,6 +405,78 @@ sequenceDiagram
 | **观察** | `GraphState.observations` / `native_messages`；`model_text` 仅内存 | 下一圈模型 | 写入 `ws_events` / `messages` / 日志原文 / 检查点全文 |
 | **展示** | `tool_call` / `tool_result` → ToolCard | 用户 | `read` 全文、密钥、上游协议字段 |
 | **叙述** | `assistant_delta` / `assistant_message` | 用户 | 粘贴 Observation 原文、复读工具卡 |
+
+### 3.4 端到端流程速览（实施对照用）
+
+§3.1 的 Mermaid 表达完整拓扑，本节给出**线性可读**的同一条流程，供实施时逐节点对照。括号内为该节点是否调模型。
+
+```text
+用户输入
+  ↓
+router（L0 确定性，零模型调用；仅 router_confidence < 0.7 才 L1 一次短 CoT，失败必降级 L0）
+  │
+  ├─ direct   → 斜杠命令，零模型调用 ─────────────────────────────────────────► END
+  │
+  ├─ chat     → 单轮流式生成（一次模型调用，tools=空）───────────────────────► END
+  │
+  ├─ workflow → select_skill（不调模型：router.skill_id 优先 → 确定性打分；零命中/并列即 clarify）
+  │               ↓
+  │             prepare_slots（调模型：单圈局部 ReAct，只读工具视野，不可改变下一跳）
+  │               ↓
+  │             load_skill（不调模型：load_skill_workflow 注入 SKILL.md 正文，正文不入 State）
+  │               ↓
+  │             validate_gates（不调模型：check_gates 八类门禁；不通过就地收尾，不重试）
+  │               ↓
+  │             build_task_spec（不调模型：defaults.py 唯一默认值来源）
+  │               ↓
+  │             await_confirm（人工：interrupt 确认卡）
+  │               ↓
+  │             enqueue（不调模型：入 PG 队列，长任务交给 Worker 容器执行）
+  │               ↓
+  │             summarize（调模型：阶段叙述收尾）──────────────────────────────► END
+  │
+  └─ agent    → plan（调模型：一次短调用出 plan.v1，3–7 步；失败降级 build_plan L0 关键词）
+                  ↓
+                discover（不调模型：AgentRegistry.discover 选 Worker，收窄 allowed_tools）
+                  ↓
+                ┌─► orchestrator【哑】（调模型：Observe 注入观察 → Think → 取 Act）
+                │       │
+                │       ├─ 有 tool_call ─► tools【哑】（不调模型：Schema → 门禁 → 权限
+                │       │                    → 波次调度 → bwrap；工具串行过门禁）
+                │       │                      │
+                │       │                      ├─ 非只读 bash / ask_user ─► interrupt 人工审批
+                │       │                      │                              ├─ 批准 → 继续执行
+                │       │                      │                              └─ 拒绝 → reflect
+                │       └──────────────────────┘ 回灌 Observation（含 repair_hint）
+                │               ↑
+                │      正常推进只递增 plan_step_index，不重规划
+                │
+                └─ 无 tool_call（模型自主停止）或预算/重复守卫截断
+                        ↓
+                     reflect（L1 规则 → L2 计算 → L3 推理按需；每次只出一个 verdict，不自我重入）
+                        ├─ pass    ─────────────────────────────────────────► END
+                        ├─ repair  ─► 回 orchestrator（首次失败注入修复观察，MAX_REPAIRS=1）
+                        ├─ retry   ─► 回 plan（replan_count < MAX_REPLANS=2）
+                        ├─ clarify ─► interrupt 澄清卡 ─► 补槽后回 plan
+                        └─ reject  ─► END（向用户说明卡在哪一步）
+```
+
+**设计取向一句话**：能不调模型的地方一律不调（Router 的 L0、Workflow 的门禁与 DAG 流转、`discover`、`tools`），必须调模型的地方把决策权完整交给模型（Orchestrator 是哑的，不改写模型意图）。中间那层「代码半推测半执行」是震荡高发地带，由 ADR-2 明确禁止。
+
+### 3.5 常见误读对照（实施前必读）
+
+以下是评审中反复出现的理解偏差，逐条给出本文的实际设计与理由。**实施者若发现代码与右列不符，以右列为准并回头对齐本文**。
+
+| # | 常见误读 | 本文实际设计 | 理由 |
+| :--- | :--- | :--- | :--- |
+| M1 | Router 每轮先输出思考链，再据此识别意图 | **绝大多数请求 Router 零模型调用**。L0 确定性特征先判，仅 `router_confidence < 0.7` 才 L1 一次短 CoT，且失败必降级 | §6.2 要求「Router L0 可复现性 **100%**」。模型每轮自由分流会让同一句话两次走不同引擎，而 Workflow 分支尽头是**有副作用的**评测入队，必须可审计（ADR-1） |
+| M2 | Router 一次同时判「引擎 + 是否 plan + 拆几步」 | **三段分离**：`router` 定 `engine` → `select_skill` 定 `skill_id`（Workflow）/ `plan` 定 `PlanArtifact`（Agent） | 一次调用背三个决策，判错时无法定位层级；分离后每段有独立降级路径（L0 / 确定性打分 / `build_plan` L0） |
+| M3 | plan 输出后**并行**调用工具 | **三层全串行**：同轮 ToolCall 串行过门禁（既有冻结）；只读批次并行代码已有但 `agent_parallel_tool_batch_enabled=False`，H6 才灰度且仅 `read`/`web_search`/`web_fetch`；多 Worker Fan-out **明确不做** | 事件公共头无 worker/branch 维度，并发 emit 会让 ToolCard 归属错乱、断线补发无法还原分支（ADR-10）。写/edit/bash **永远串行**且非只读 bash 需 HITL |
+| M4 | `PlanArtifact` 直接作为助手正文发给用户 | **两个通道**：`PlanArtifact` 是结构化产物（进模型与检查点）；用户看到的是**阶段叙述** `assistant_message` | §3.3 三通道铁律：观察 / 展示 / 叙述互不替代。「我会按当前代码与接口契约核对：1… 2… 3…」是阶段叙述的正确形态，不是 plan 的 JSON 原文 |
+| M5 | Workflow 模式也以 ReAct / Plan / Reflection 为基础架构 | Workflow **无 Plan**（步骤硬编码）、**无 Reflection 回环**（节点失败就地收尾，不重试）。全程仅 `W1 prepare_slots` 一处**单圈**局部 ReAct，只读视野且不可改变下一跳 | 这是两模式的**本质区别**而非程度差异。Workflow 一旦获得 Plan 与 Reflection 回环即退化为第二条 Agent 循环，确定性与可验证性同时失去（ADR-4） |
+| M6 | 每个 task 完成后都重新规划（task1 完 → 规划 task2） | **正常推进不重规划**，只递增 `plan_step_index`。仅 `verdict=retry` 才回 `plan`，且 `replan_count` 硬上限 2 | 每步后重规划会让规划调用次数等于步数（成本与抖动均不可接受），且每次重规划都可能改写后续步骤，前端清单卡反复跳变 |
+| M7 | `reflect` 是一个循环 | `reflect` 是**判决**：每次进入只输出一个 verdict，**不自我重入** | 自我重入的反思器没有终止保证；有界性由外层 `MAX_REPAIRS` / `MAX_REPLANS` 提供（ADR-2 停止条件） |
+| M8 | 思考链（`thought`）现在就能用 | 骨架化已移除思考流（`stream=think`），前端 WS 事件类型中**无** `thought`。恢复属 H3，且**必须先改 API.md** | 红线第 1 条：新 WS 字段必须先回写 API.md（审计矛盾 C-6） |
 
 ---
 
@@ -972,6 +1044,8 @@ except Exception as exc:
 
 - `docs/AI测试与评估平台-混合驱动引擎架构.md`（新增）：V1.0 定义混合驱动引擎架构——顶层 Router 双引擎分流、Agent 子图 Orchestrator-Worker TAOR 循环、Workflow 子图硬编码 DAG、上下文缓存边界、Agent Registry、工具十层网关、HITL 与事件溯源；含 9 条 ADR、双层状态机 Mermaid 图、RootState/AgentState/WorkflowState 设计、H0–H6 七阶段落地计划、四类场景与五维评分测试策略、35 项「已满足 / 需重构 / 新建」总表。
 - `docs/AI测试与评估平台-混合驱动引擎环境审计.md`（前置输入）：V1.0 只读审计，提供本文全部现状判定依据与 9 项阻塞矛盾点（C-1…C-9）。
+
+**V1.2 变更（评审理解对齐，纯文档）**：新增 §3.4「端到端流程速览」——把 §3.1 的 Mermaid 拓扑展开为线性可读流程，逐节点标注**是否调模型**，并给出设计取向「能不调模型的地方一律不调，必须调模型的地方把决策权完整交给模型」；新增 §3.5「常见误读对照」M1–M8，逐条记录评审中反复出现的理解偏差与本文实际设计及理由（Router 零模型调用与 100% 可复现要求、三段分离而非一次判三项、三层全串行而非并行、`PlanArtifact` 与阶段叙述分属两通道、Workflow 无 Plan 无 Reflection 回环是本质区别、正常推进不重规划、`reflect` 是判决不是循环、`thought` 恢复须先改 API.md）。
 
 **V1.1 变更（对齐需求草案 §3–§7 复核，纯文档）**：新增 ADR-10（多 Worker 并行 Fan-out/Fan-in 明确不做并列出三重阻塞）；ADR-1 补分流基数四路与协议格式 JSON 两项裁决（否决二值分流与 `<Intent>`/`<Reasoning>` XML 标签）；ADR-3 补 `AgentDef.model_profile_id`（只持档 ID、不持 LLM 实例、档不可用 fail-closed）；ADR-4 补 `select_skill` 二段路由节点，Workflow DAG 由 7 节点扩为 8 节点并同步 Mermaid 与范式标注表；§4.1 补 `mode` 字段撞车裁决（新增 `engine`、不采纳草案 `mode`/`user_input`）；§4.2 新增 `plan_step_index` 并给出草案字段映射表（`reflection_feedback` 拆为 `repair_hint` + `replan_reason` 双通道、`worker_results` 不引入）与重试预算分档口径；§4.3 补 `skill_candidates`；新增 §5.5「指令分层与运行时注入」（`project_instructions` 受控槽 + L1/L2/L3 优先级 + 接管性措辞校验，替代无法落地的「加载 CLAUDE.md」），原 §5.5 顺延为 §5.6；§6.1 S1 场景明确「不得为简单问答伪造 Skill」；§6.2 增「3 次内修复成功率」指标；§7.4 错误映射补二段路由与协议档不可用；§7.5 增第 11–13 条禁令；§8 总表扩至 39 项（新建 9 / 明确不做 4）；§9 新增 Q8–Q10 并列出 V1.1 已关闭的 5 项草案分歧。
 
