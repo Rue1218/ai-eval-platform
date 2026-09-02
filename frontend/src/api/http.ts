@@ -40,7 +40,6 @@ import {
   type SessionHistory,
   type SessionVisibility,
   type AgentPrefs,
-  type SlashCommandItem,
   type StressSeriesResponse,
   type WorkspaceOverview,
   type WorkspaceFileList,
@@ -1302,20 +1301,6 @@ export const api = {
       if (getDataMode() === 'mock') return { messages: [], events: [] }
       const { data } = await http.get(`/api/sessions/${id}/messages`)
       return data
-    },
-  },
-  slashCommands: {
-    async list(): Promise<{ items: SlashCommandItem[]; total: number }> {
-      if (getDataMode() === 'mock') return { items: [], total: 0 }
-      const { data } = await http.get('/api/slash-commands')
-      return data
-    },
-    async create(body: { name: string; hint: string; template: string }): Promise<SlashCommandItem> {
-      const { data } = await http.post('/api/slash-commands', body)
-      return data
-    },
-    async remove(id: string): Promise<void> {
-      await http.delete(`/api/slash-commands/${id}`)
     },
   },
   agent: {

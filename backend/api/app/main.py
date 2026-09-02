@@ -24,7 +24,6 @@ from .routers import (
     profiles,
     reports,
     sessions,
-    slash_commands,
     tasks,
     users,
     workspaces,
@@ -113,7 +112,6 @@ app.include_router(users.router)
 app.include_router(files.router)
 app.include_router(sessions.router)
 app.include_router(agent_prefs.router)
-app.include_router(slash_commands.router)
 app.include_router(tasks.router)
 app.include_router(profiles.router)
 app.include_router(datasets.router)

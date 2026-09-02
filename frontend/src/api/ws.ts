@@ -128,14 +128,12 @@ export class AgentWebSocket {
         this.lastReceiveAt = Date.now()
         try {
           const data: WsServerEvent = JSON.parse(ev.data)
-          // 瞬态帧（pong、assistant_delta、stream:think、工具进度/安全输出）不占用
-          // 单调事件号，其 event_id 仅复用连接游标满足公共头结构，
-          // 必须跳过去重，否则流式增量会因 event_id <= lastEventId 被整帧丢弃
+          // 瞬态帧（pong、assistant_delta）不占用单调事件号，其 event_id 仅复用
+          // 连接游标满足公共头结构，必须跳过去重，否则流式增量会因
+          // event_id <= lastEventId 被整帧丢弃
           const transient =
             data.event === 'pong'
             || data.event === 'assistant_delta'
-            || data.event === 'tool_progress'
-            || data.event === 'tool_output_delta'
             || (data.payload && typeof data.payload.stream === 'string')
           if (!transient && 'event_id' in data && typeof data.event_id === 'number') {
             // 事件号单调递增：重放补发与服务端转发竞争可能产生重复事件，按 event_id 去重
@@ -176,41 +174,6 @@ export class AgentWebSocket {
       },
     }
     this.ws.send(JSON.stringify(payload))
-  }
-
-  public sendConfirmAck(ok: boolean, patch?: any): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      console.warn('WebSocket not open, cannot send confirm_ack')
-      return
-    }
-    const payload = {
-      event: 'confirm_ack',
-      payload: { ok, patch },
-    }
-    this.ws.send(JSON.stringify(payload))
-  }
-
-  /** 发送澄清卡回复（clarify_reply.id 必须匹配最近待回复澄清卡，M4 §3.9.6）。 */
-  public sendClarifyReply(id: string, answer: string): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      console.warn('WebSocket not open, cannot send clarify_reply')
-      return
-    }
-    this.ws.send(
-      JSON.stringify({
-        event: 'clarify_reply',
-        payload: { id, answer },
-      }),
-    )
-  }
-
-  /** 提交危险工具确认；服务端仅以同一会话的 LangGraph 检查点恢复原 ToolCall。 */
-  public sendToolApprovalAck(id: string, action: 'approve' | 'reject'): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      console.warn('WebSocket not open, cannot send tool_approval_ack')
-      return
-    }
-    this.ws.send(JSON.stringify({ event: 'tool_approval_ack', payload: { id, action } }))
   }
 
   public sendCancelTask(taskId: string): boolean {

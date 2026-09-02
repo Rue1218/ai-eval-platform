@@ -922,14 +922,6 @@ class KbQueryOut(ApiModel):
     metrics: dict = Field(default_factory=lambda: {"hit_rate": 0.0, "mrr": 0.0, "recall": 0.0, "contain": 0.0})
 
 
-class SlashCommandCreate(ApiModel):
-    """自定义斜杠创建体（API.md §3.4）；模板只预填输入框。"""
-
-    name: str = Field(min_length=1, max_length=32)
-    hint: str = Field(default="", max_length=128)
-    template: str = Field(min_length=1, max_length=2000)
-
-
 class GoldQaOut(ApiModel):
     """黄金 QA 集响应。"""
 
