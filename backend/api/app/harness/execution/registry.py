@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 import time
 from collections.abc import Callable, Iterator, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Literal
 
 from app.errors import AppError, ErrorCode
@@ -31,6 +31,8 @@ _SUPPORTED_SCHEMA_KEYWORDS = frozenset(
         "additionalProperties",
         "enum",
         "items",
+        "minItems",
+        "maxItems",
         "minLength",
         "maxLength",
         "pattern",
@@ -59,8 +61,9 @@ class ToolDef:
     timeout_s: float  # 执行超时
     handler: Callable[..., object]  # 执行函数（不入 GraphState，仅运行时）
     # 输出、权限与恢复策略与输入 Schema 同属工具契约，禁止在前端或 handler
-    # 分别维护第二份规则。默认值仅兼容历史测试/内部扩展，新工具必须显式声明。
-    output_schema: Mapping[str, object] = field(default_factory=dict)  # 浏览器安全投影 Schema
+    # 分别维护第二份规则。``output_schema`` 为 ``None`` 表示未声明（注册期拒绝）；
+    # 显式传 ``{}`` 表示「无结构化展示投影」（合法，运行期跳过比对）。
+    output_schema: Mapping[str, object] | None = None  # 浏览器安全投影 Schema
     permission_policy: ToolPermissionPolicy = ToolPermissionPolicy()
     recovery_policy: ToolRecoveryPolicy = DEFAULT_RECOVERY_POLICY
     # 为既有内部扩展保持 MCP 默认值；基础工具在 build_default_registry 中显式
@@ -93,7 +96,7 @@ class ToolDef:
             display_name=self.display_name or self.name,
             description=self.description,
             input_schema=dict(self.parameters_schema),
-            output_schema=dict(self.output_schema or {}),
+            output_schema=dict(self.output_schema or {}),  # None 与 {} 均投影为 {}
             permission=self.permission,
             permission_policy=self.permission_policy.to_payload(),
             recovery_policy={
@@ -123,6 +126,10 @@ class ToolRegistry:
         schema_error = validate_tool_schema(def_.parameters_schema)
         if schema_error:
             raise AppError(ErrorCode.VALIDATION, f"工具参数 Schema 无效：{schema_error}")
+        # output_schema 是浏览器展示投影的契约，必须显式声明且自身合法。
+        # None（未声明）拒绝；显式 {} 表示无结构化投影，合法但运行期不做比对。
+        if def_.output_schema is None:
+            raise AppError(ErrorCode.VALIDATION, f"工具必须声明 output_schema：{def_.name}")
         output_schema_error = validate_tool_schema(def_.output_schema)
         if output_schema_error:
             raise AppError(ErrorCode.VALIDATION, f"工具输出 Schema 无效：{output_schema_error}")
@@ -279,6 +286,15 @@ def _validate_schema_definition(schema: Mapping[str, object], path: str) -> str 
         if error:
             return error
 
+    for key in ("minItems", "maxItems"):
+        value = schema.get(key)
+        if value is not None and (not isinstance(value, int) or isinstance(value, bool) or value < 0):
+            return f"{path}.{key} 必须是非负整数"
+    min_items = schema.get("minItems")
+    max_items = schema.get("maxItems")
+    if isinstance(min_items, int) and isinstance(max_items, int) and min_items > max_items:
+        return f"{path}.minItems 不能大于 maxItems"
+
     for key in ("minLength", "maxLength"):
         value = schema.get(key)
         if value is not None and (not isinstance(value, int) or isinstance(value, bool) or value < 0):
@@ -326,6 +342,18 @@ def validate_tool_arguments(schema: Mapping[str, object], arguments: Mapping[str
     return _validate_schema_value(arguments, schema, "arguments")
 
 
+def validate_tool_output(schema: Mapping[str, object], data: Mapping[str, object]) -> str | None:
+    """按 ``output_schema`` 校验 handler 返回的展示投影，失败返回脱敏中文原因。
+
+    与 ``validate_tool_arguments`` 共用同一受限子集校验器；不校验 ``latency_ms``
+    等运行期注入字段，只比对 handler 声明的展示投影键。返回 ``None`` 表示通过。
+    空 Schema（显式 ``{}``）视为「无结构化投影」，跳过比对。
+    """
+    if not schema:
+        return None
+    return _validate_schema_value(data, schema, "output")
+
+
 def _validate_schema_value(value: object, schema: Mapping[str, object], path: str) -> str | None:
     """递归校验一个 JSON 值，覆盖内部短工具声明的安全子集。"""
     expected = schema.get("type")
@@ -359,6 +387,12 @@ def _validate_schema_value(value: object, schema: Mapping[str, object], path: st
                 return error
 
     if isinstance(value, list):
+        min_items = schema.get("minItems")
+        max_items = schema.get("maxItems")
+        if isinstance(min_items, int) and len(value) < min_items:
+            return f"参数 {path} 元素数不能少于 {min_items}"
+        if isinstance(max_items, int) and len(value) > max_items:
+            return f"参数 {path} 元素数不能多于 {max_items}"
         item_schema = schema.get("items")
         if isinstance(item_schema, Mapping):
             for index, child in enumerate(value):
@@ -602,11 +636,13 @@ def build_default_registry() -> ToolRegistry:
                     "include_domains": {
                         "type": "array",
                         "items": {"type": "string"},
+                        "maxItems": 20,
                         "description": "限定来源域名，本轮不改变检索实现",
                     },
                     "exclude_domains": {
                         "type": "array",
                         "items": {"type": "string"},
+                        "maxItems": 20,
                         "description": "排除域名，本轮不改变检索实现",
                     },
                     "engine": {"type": "string", "description": "仅 auto/native"},
@@ -650,11 +686,13 @@ def build_default_registry() -> ToolRegistry:
                     "allowed_domains": {
                         "type": "array",
                         "items": {"type": "string"},
+                        "maxItems": 20,
                         "description": "允许访问的域名白名单",
                     },
                     "blocked_domains": {
                         "type": "array",
                         "items": {"type": "string"},
+                        "maxItems": 20,
                         "description": "禁止访问的域名黑名单",
                     },
                     "max_content_tokens": {
@@ -781,6 +819,7 @@ def build_default_registry() -> ToolRegistry:
                     },
                     "steps": {
                         "type": "array",
+                        "maxItems": 20,
                         "items": {
                             "type": "object",
                             "additionalProperties": False,
@@ -795,7 +834,7 @@ def build_default_registry() -> ToolRegistry:
                     "model": {"type": "string", "description": "仅展示，不切换模型"},
                     "resume": {"type": "string", "description": "仅展示，不恢复子会话"},
                     "run_in_background": {"type": "boolean", "description": "必须为 false"},
-                    "tools": {"type": "array", "items": {"type": "string"}, "description": "仅展示"},
+                    "tools": {"type": "array", "items": {"type": "string"}, "maxItems": 20, "description": "仅展示"},
                     "max_turns": {"type": "integer", "minimum": 1, "description": "仅展示"},
                 },
                 "required": ["description", "prompt"],
@@ -941,6 +980,8 @@ def build_default_registry() -> ToolRegistry:
                 "properties": {
                     "questions": {
                         "type": "array",
+                        "minItems": 1,
+                        "maxItems": 5,
                         "items": {
                             "type": "object",
                             "additionalProperties": False,
@@ -950,6 +991,7 @@ def build_default_registry() -> ToolRegistry:
                                 "header": {"type": "string"},
                                 "options": {
                                     "type": "array",
+                                    "maxItems": 10,
                                     "items": {
                                         "type": "object",
                                         "additionalProperties": False,
@@ -1000,12 +1042,14 @@ def build_default_registry() -> ToolRegistry:
                     "profile_ids": {
                         "type": "array",
                         "items": {"type": "string"},
+                        "maxItems": 10,
                         "description": "模型协议档 ID 列表",
                     },
                     "kb_id": {"type": "string", "description": "知识库 ID（rag）"},
                     "gold_qa_id": {"type": "string", "description": "黄金 QA ID（rag）"},
                     "rag_mode": {
                         "type": "array",
+                        "maxItems": 4,
                         "items": {
                             "type": "string",
                             "enum": ["naive", "local", "global", "hybrid"],
@@ -1057,6 +1101,15 @@ def build_default_registry() -> ToolRegistry:
             permission="task.create",
             timeout_s=10.0,
             handler=_task_create_handler,
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "status": {"type": "string", "enum": ["queued"]},
+                    "task_id": {"type": "string"},
+                    "kind": {"type": "string"},
+                },
+                "required": ["status", "task_id", "kind"],
+            },
             transport="mcp",
             server_id="platform.tasks",
             display_name="创建评测任务",
@@ -1078,6 +1131,17 @@ def build_default_registry() -> ToolRegistry:
             permission="task.status",
             timeout_s=10.0,
             handler=_task_status_handler,
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string"},
+                    "kind": {"type": "string"},
+                    "status": {"type": "string"},
+                    "progress": {"type": "object"},
+                    "report_id": {"type": ["string", "null"]},
+                },
+                "required": ["task_id", "kind", "status"],
+            },
             transport="mcp",
             server_id="platform.tasks",
             display_name="查询任务状态",
@@ -1099,6 +1163,15 @@ def build_default_registry() -> ToolRegistry:
             permission="task.cancel",
             timeout_s=10.0,
             handler=_task_cancel_handler,
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string"},
+                    "status": {"type": "string"},
+                    "kind": {"type": "string"},
+                },
+                "required": ["task_id", "status", "kind"],
+            },
             transport="mcp",
             server_id="platform.tasks",
             display_name="取消评测任务",

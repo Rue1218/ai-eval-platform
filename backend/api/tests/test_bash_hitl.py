@@ -46,6 +46,7 @@ def _build_graph(executed: list[str]):
             handler=handler,
             transport="native",
             risk_level="code",
+            output_schema={},
         )
     )
     graph = StateGraph(GraphState)

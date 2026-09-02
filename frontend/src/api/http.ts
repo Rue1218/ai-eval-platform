@@ -556,23 +556,6 @@ export const api = {
       return data
     },
 
-    /** 查看单个工具底层实现代码与链路 */
-    async code(toolName: string): Promise<any> {
-      if (getDataMode() === 'mock') {
-        const tool = MOCK_MCP_TOOLS.find((t) => t.name === toolName || t.tool_id === toolName)
-        return {
-          name: tool?.name || toolName,
-          display_name: tool?.display_name || toolName,
-          source_file: tool?.code_details?.source_file || 'backend/api/app/harness/execution/registry.py',
-          handler_function: tool?.code_details?.handler_function || `_${toolName}_handler()`,
-          code_summary: tool?.code_details?.code_summary || '受控短工具执行逻辑',
-          code_snippet: tool?.code_details?.code_snippet || `# ${toolName} 执行逻辑`,
-          pipeline_stages: tool?.pipeline?.stages || [],
-        }
-      }
-      const { data } = await http.get(`/api/mcp/tools/${encodeURIComponent(toolName)}/code`)
-      return data
-    },
   },
 
   // 6. 数据集管理

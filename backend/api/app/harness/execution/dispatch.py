@@ -1364,6 +1364,7 @@ def execute_raw(
     handler: object | None = None,
     context: object | None = None,
     recovery_policy: ToolRecoveryPolicy = DEFAULT_RECOVERY_POLICY,
+    output_schema: Mapping[str, object] | None = None,
 ) -> ToolResult:
     """按 call.name 分派到 handler，返回 ``ToolResult``（不抛，错误归一）。
 
@@ -1399,6 +1400,40 @@ def execute_raw(
                 "display": {"summary": str(result)},
             }
         data["latency_ms"] = latency_ms
+        # output_schema 是 handler 展示投影的契约（非装饰字段）：运行期按声明比对，
+        # 失败不外泄原始返回，归一为 INTERNAL 并只记录工具名与失败字段名。
+        # 比对对象是 handler 原始返回（result），不是归一后的 data——data 已被
+        # execute_raw 包成 {"summary","display"}，与 handler 声明的 output_schema 不同层。
+        if output_schema:
+            from .registry import validate_tool_output
+
+            raw_projection: Mapping[str, object] | None = None
+            if isinstance(result, Mapping):
+                raw_projection = result
+            else:
+                to_tool_data = getattr(result, "to_tool_data", None)
+                if callable(to_tool_data):
+                    candidate = to_tool_data()
+                    if isinstance(candidate, Mapping):
+                        raw_projection = candidate
+            if raw_projection is not None:
+                output_error = validate_tool_output(output_schema, raw_projection)
+                if output_error:
+                    logger.warning(
+                        "工具展示投影与 output_schema 不符 name=%s reason=%s",
+                        call.name,
+                        output_error,
+                    )
+                    return ToolResult(
+                        name=call.name,
+                        ok=False,
+                        error={
+                            "code": "INTERNAL",
+                            "message": "操作失败（INTERNAL）",
+                            "recovery": recovery_policy.to_payload("INTERNAL"),
+                        },
+                        call_id=call.call_id,
+                    )
         return ToolResult(name=call.name, ok=True, data=data, call_id=call.call_id)
     except AppError as exc:
         logger.info(
@@ -1453,6 +1488,7 @@ def execute(
     handler: object | None = None,
     context: object | None = None,
     recovery_policy: ToolRecoveryPolicy = DEFAULT_RECOVERY_POLICY,
+    output_schema: Mapping[str, object] | None = None,
 ) -> Observation:
     """按 call.name 分派到 handler，带超时；归一为 observation（FB-1）。
 
@@ -1468,6 +1504,7 @@ def execute(
             handler=handler,
             context=context,
             recovery_policy=recovery_policy,
+            output_schema=output_schema,
         ),
         None,
         tool=call.name,

@@ -255,12 +255,11 @@ export interface RagModelsConfig {
   has_reranker_api_key?: boolean
 }
 
-// 工具代码实现详情接口（API §3.6.1）
+// 工具实现位置与摘要接口（API §3.6.1；code_snippet 已移除——原为手写示意代码且与真实 handler 不符）
 export interface ToolCodeDetails {
   source_file: string
   handler_function: string
   code_summary: string
-  code_snippet: string
 }
 
 // 工具执行阶段流接口

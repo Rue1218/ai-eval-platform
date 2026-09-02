@@ -70,6 +70,7 @@ def _registry_with(server_id: str = "platform.custom") -> ToolRegistry:
             timeout_s=5.0,
             handler=_boom_handler(),
             server_id=server_id,
+            output_schema={},
         )
     )
     registry.register(
@@ -81,6 +82,7 @@ def _registry_with(server_id: str = "platform.custom") -> ToolRegistry:
             timeout_s=5.0,
             handler=_ok_handler(),
             server_id=server_id,
+            output_schema={},
         )
     )
     return registry

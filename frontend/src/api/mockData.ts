@@ -243,18 +243,6 @@ export const MOCK_MCP_TOOLS: McpTool[] = [
       source_file: 'backend/api/app/harness/execution/registry.py',
       handler_function: '_read_handler(arguments, sandbox_dir, context)',
       code_summary: '相对路径安全校验 -> 读取指定文件 -> 0-based offset/limit 分页解码 -> 字符截断与上下文防爆仓保护 -> 输出 preview 摘要',
-      code_snippet: `def _read_handler(arguments: Mapping[str, object], sandbox_dir: Path | None, context: ToolExecutionContext | None) -> dict[str, object]:
-    path = _resolve_relative_path(str(arguments["path"]), sandbox_dir)
-    if not path.is_file():
-        raise AppError(ErrorCode.NOT_FOUND, f"文件不存在：{arguments['path']}")
-    offset = int(arguments.get("offset", 0))
-    limit = int(arguments.get("limit", 2000))
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
-        lines = f.readlines()
-    selected = lines[offset:offset + limit]
-    preview = "".join(selected)[:600000]
-    next_offset = (offset + len(selected)) if (offset + len(selected) < len(lines)) else None
-    return {"summary": f"已读取 {len(selected)} 行", "read": {"path": str(arguments["path"]), "total_lines": len(lines), "preview": preview, "next_offset": next_offset}}`,
     },
     pipeline: {
       stages: [
@@ -298,13 +286,6 @@ export const MOCK_MCP_TOOLS: McpTool[] = [
       source_file: 'backend/api/app/harness/execution/registry.py',
       handler_function: '_write_handler(arguments, sandbox_dir, context)',
       code_summary: '路径沙箱检验 -> 校验非覆盖策略 -> 自动创建父目录 -> 原子写入 content 文本 -> 统计 bytes/lines',
-      code_snippet: `def _write_handler(arguments: Mapping[str, object], sandbox_dir: Path | None, context: ToolExecutionContext | None) -> dict[str, object]:
-    path = _resolve_relative_path(str(arguments["path"]), sandbox_dir)
-    if path.exists():
-        raise AppError(ErrorCode.VALIDATION, f"文件已存在，write 禁止覆盖：{arguments['path']}")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(str(arguments["content"]), encoding="utf-8")
-    return {"summary": f"成功写入文件 {arguments['path']}", "write": {"path": str(arguments["path"]), "bytes_written": len(str(arguments["content"]))}}`,
     },
     pipeline: {
       stages: [
@@ -349,14 +330,6 @@ export const MOCK_MCP_TOOLS: McpTool[] = [
       source_file: 'backend/api/app/harness/execution/registry.py',
       handler_function: '_edit_handler(arguments, sandbox_dir, context)',
       code_summary: '读取全文 -> 验证 old 字符串在文件中唯一匹配 -> 字符串精确替换为 new -> 原子写回',
-      code_snippet: `def _edit_handler(arguments: Mapping[str, object], sandbox_dir: Path | None, context: ToolExecutionContext | None) -> dict[str, object]:
-    path = _resolve_relative_path(str(arguments["path"]), sandbox_dir)
-    content = path.read_text(encoding="utf-8")
-    if content.count(str(arguments["old"])) != 1:
-        raise AppError(ErrorCode.VALIDATION, "目标文本匹配不唯一或不存在")
-    new_content = content.replace(str(arguments["old"]), str(arguments["new"]), 1)
-    path.write_text(new_content, encoding="utf-8")
-    return {"summary": "替换成功", "edit": {"path": str(arguments["path"]), "replacements": 1}}`,
     },
     pipeline: {
       stages: [
@@ -399,12 +372,6 @@ export const MOCK_MCP_TOOLS: McpTool[] = [
       source_file: 'backend/api/app/harness/execution/sandbox.py',
       handler_function: '_bash_handler(arguments, sandbox_dir, context)',
       code_summary: '静态高危黑名单拦截 -> 一次性 bwrap 沙箱创建 -> 根系统只读绑定 + 会话工作区唯一可写 -> 无网络隔离 -> ulimit 限制 + 15s 超时整树清理 -> stdout/stderr 脱敏截断',
-      code_snippet: `def _bash_handler(arguments: Mapping[str, object], sandbox_dir: Path | None, context: ToolExecutionContext | None) -> dict[str, object]:
-    command = str(arguments["command"]).strip()
-    _check_command_blacklist(command)
-    bwrap_cmd = ["bwrap", "--ro-bind", "/usr", "/usr", "--bind", str(sandbox_dir), "/workspace", "--unshare-net", "--chdir", "/workspace", "--", "bash", "-c", command]
-    proc = subprocess.run(bwrap_cmd, capture_output=True, text=True, timeout=15.0)
-    return {"summary": f"执行完成 (退出码: {proc.returncode})", "bash": {"command": command, "exit_code": proc.returncode, "stdout": redact_secrets(proc.stdout[:8000])}}`,
     },
     pipeline: {
       stages: [
@@ -446,10 +413,6 @@ export const MOCK_MCP_TOOLS: McpTool[] = [
       source_file: 'backend/api/app/harness/execution/registry.py',
       handler_function: '_web_search_handler(arguments, sandbox_dir, context)',
       code_summary: '清洗搜索关键词 -> 内部搜索引擎客户端发起请求 -> 提取标题/摘要/URL -> 结构化 JSON 投影',
-      code_snippet: `async def _web_search_handler(arguments: Mapping[str, object], sandbox_dir: Path | None, context: ToolExecutionContext | None) -> dict[str, object]:
-    query = str(arguments["query"]).strip()
-    results = await search_engine_client.query(query=query, limit=min(int(arguments.get("limit", 5)), 10))
-    return {"summary": f"检索到 {len(results)} 条相关结果", "search": {"query": query, "items": results}}`,
     },
     pipeline: {
       stages: [
@@ -492,12 +455,6 @@ export const MOCK_MCP_TOOLS: McpTool[] = [
       source_file: 'backend/api/app/harness/execution/registry.py',
       handler_function: '_web_fetch_handler(arguments, sandbox_dir, context)',
       code_summary: 'URL 防 SSRF 检查 -> HTTP GET 请求 -> 网页 HTML 转 Markdown -> 敏感数据脱敏 -> 截断输出',
-      code_snippet: `async def _web_fetch_handler(arguments: Mapping[str, object], sandbox_dir: Path | None, context: ToolExecutionContext | None) -> dict[str, object]:
-    url = str(arguments["url"]).strip()
-    _validate_public_url(url)
-    html = await http_client.get(url, timeout=20.0)
-    markdown = html_to_markdown(html)
-    return {"summary": f"已成功抓取网页 {url}", "web": {"url": url, "content": redact_secrets(markdown[:12000])}}`,
     },
     pipeline: {
       stages: [
@@ -549,10 +506,6 @@ export const MOCK_MCP_TOOLS: McpTool[] = [
       source_file: 'backend/api/app/harness/execution/registry.py',
       handler_function: '_task_planner_handler(arguments, sandbox_dir, context)',
       code_summary: '解析 tasks 执行步骤 -> 校验步骤状态机 (pending/in_progress/completed) -> 更新回合 GraphState',
-      code_snippet: `def _task_planner_handler(arguments: Mapping[str, object], sandbox_dir: Path | None, context: ToolExecutionContext | None) -> dict[str, object]:
-    tasks_list = list(arguments.get("tasks", []))
-    validated = [_validate_task_item(t) for t in tasks_list]
-    return {"summary": f"已更新任务清单：共 {len(validated)} 个步骤", "task": {"tasks": validated}}`,
     },
     pipeline: {
       stages: [
@@ -597,12 +550,6 @@ export const MOCK_MCP_TOOLS: McpTool[] = [
       source_file: 'backend/api/app/harness/execution/registry.py & routers/tasks.py',
       handler_function: '_task_create_handler(arguments, context)',
       code_summary: 'TaskSpec 校验 -> 确认卡鉴权核准 -> 写入 PG 任务表 (status=queued) -> 唤醒 Worker 异步消费',
-      code_snippet: `def _task_create_handler(arguments: Mapping[str, object], sandbox_dir: Path | None, context: ToolExecutionContext | None) -> dict[str, object]:
-    spec = TaskCreateIn(**arguments)
-    task = Task(kind=spec.kind, config=spec.config.dict(), status="queued", with_stress=spec.with_stress, session_id=context.session_id)
-    db.add(task)
-    db.commit()
-    return {"summary": f"评测任务 {task.id} 创建成功并已入队排队", "task": {"task_id": task.id, "status": "queued"}}`,
     },
     pipeline: {
       stages: [
@@ -646,9 +593,6 @@ export const MOCK_MCP_TOOLS: McpTool[] = [
       source_file: 'backend/api/app/harness/execution/registry.py',
       handler_function: '_task_status_handler(arguments, context)',
       code_summary: '查询 PG 数据库任务记录 -> 提取当前状态机、执行进度、样本数与报告关联 ID -> 立即返回',
-      code_snippet: `def _task_status_handler(arguments: Mapping[str, object], sandbox_dir: Path | None, context: ToolExecutionContext | None) -> dict[str, object]:
-    task = db.query(Task).filter(Task.id == str(arguments["task_id"])).first()
-    return {"summary": f"任务当前状态: {task.status}", "task": {"task_id": task.id, "status": task.status, "progress": task.progress, "report_id": task.report_id}}`,
     },
     pipeline: {
       stages: [
@@ -690,12 +634,6 @@ export const MOCK_MCP_TOOLS: McpTool[] = [
       source_file: 'backend/api/app/harness/execution/registry.py',
       handler_function: '_task_cancel_handler(arguments, context)',
       code_summary: '校验任务有效性 -> 将非终态任务标记为 cancelled -> 触发 Worker 中断信号 -> 幂等安全返回',
-      code_snippet: `def _task_cancel_handler(arguments: Mapping[str, object], sandbox_dir: Path | None, context: ToolExecutionContext | None) -> dict[str, object]:
-    task = db.query(Task).filter(Task.id == str(arguments["task_id"])).first()
-    if task.status not in ("succeeded", "failed", "cancelled"):
-        task.status = "cancelled"
-        db.commit()
-    return {"summary": f"已取消任务 {task.id}", "task": {"task_id": task.id, "status": task.status}}`,
     },
     pipeline: {
       stages: [

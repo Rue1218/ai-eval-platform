@@ -101,6 +101,7 @@ def test_toolnode_bash_exclusive_wave_when_parallel_enabled(monkeypatch) -> None
             transport="native",
             contextual=True,
             concurrency_class="exclusive",
+            output_schema={},
         )
     )
     registry.register(
@@ -119,6 +120,7 @@ def test_toolnode_bash_exclusive_wave_when_parallel_enabled(monkeypatch) -> None
             transport="native",
             contextual=True,
             concurrency_class="path_scoped",
+            output_schema={},
         )
     )
     bash_call = {

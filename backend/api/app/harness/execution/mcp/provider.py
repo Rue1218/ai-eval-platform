@@ -50,6 +50,7 @@ class InProcessProvider:
             "permission": definition.permission,
             "sandbox_dir": sandbox_dir,
             "handler": definition.handler,
+            "output_schema": dict(definition.output_schema) if definition.output_schema else None,
         }
         if definition.contextual:
             kwargs["context"] = context

@@ -74,6 +74,7 @@ def test_sandbox_injected_via_configurable(tmp_root) -> None:
             timeout_s=10.0,
             handler=_read_handler,
             transport="native",
+            output_schema={},
         )
     )
     registry.register(
@@ -93,6 +94,7 @@ def test_sandbox_injected_via_configurable(tmp_root) -> None:
             timeout_s=10.0,
             handler=_write_handler,
             transport="native",
+            output_schema={},
         )
     )
     node = build_tool_node(registry)

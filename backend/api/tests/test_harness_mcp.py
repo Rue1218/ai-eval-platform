@@ -48,6 +48,7 @@ def _def(
         permission="test.read",
         timeout_s=timeout_s,
         handler=handler or (lambda args, sandbox_dir=None: f"ok:{name}"),
+        output_schema={},  # 显式空：无结构化展示投影
         transport=transport,  # type: ignore[arg-type]
         server_id=server_id,
         display_name=name,

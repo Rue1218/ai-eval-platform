@@ -20,10 +20,8 @@ import time
 from typing import Any
 
 from fastapi import APIRouter, Depends
-from fastapi import Path as FastApiPath
 
 from ..deps import get_current_user
-from ..errors import AppError, ErrorCode
 from ..harness.execution import ToolCatalog, build_default_registry
 from ..harness.execution.mcp import get_default_metrics
 from ..models import User
@@ -41,35 +39,13 @@ def _get_default_catalog() -> ToolCatalog:
     return _catalog
 
 
-# 工具底层代码实现与执行链路详细字典 (只读元数据与安全脱敏展示)
+# 工具实现位置与执行链路元数据（只读、脱敏；不含代码片段——code_snippet 已移除，
+# 原实现为手写示意代码且与真实 handler 不符，违反「禁止伪造」红线）。
 TOOL_METADATA_EXT: dict[str, dict[str, Any]] = {
     "read": {
         "source_file": "backend/api/app/harness/execution/registry.py",
         "handler_function": "_read_handler(arguments, sandbox_dir, context)",
         "code_summary": "相对路径安全校验 -> 读取指定文件 -> 0-based offset/limit 分页解码 -> 字符截断与上下文防爆仓保护 -> 输出 preview 摘要",
-        "code_snippet": '''def _read_handler(arguments: Mapping[str, object], sandbox_dir: Path | None, context: ToolExecutionContext | None) -> dict[str, object]:
-    path = _resolve_relative_path(str(arguments["path"]), sandbox_dir)
-    if not path.is_file():
-        raise AppError(ErrorCode.NOT_FOUND, f"文件不存在：{arguments['path']}")
-    offset = int(arguments.get("offset", 0))
-    limit = int(arguments.get("limit", 2000))
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
-        lines = f.readlines()
-    total_lines = len(lines)
-    selected = lines[offset:offset + limit]
-    preview = "".join(selected)[:600000]
-    next_offset = (offset + len(selected)) if (offset + len(selected) < total_lines) else None
-    return {
-        "summary": f"已读取 {len(selected)} 行 (共 {total_lines} 行)",
-        "read": {
-            "path": str(arguments["path"]),
-            "total_lines": total_lines,
-            "start_line": offset,
-            "end_line": offset + len(selected),
-            "next_offset": next_offset,
-            "preview": preview,
-        },
-    }''',
         "pipeline_stages": [
             {"step": 1, "name": "参数解析与范围校验", "desc": "解析 path、offset (默认 0)、limit (默认 2000，单次上限 2000 行)"},
             {"step": 2, "name": "工作区防越界检查", "desc": "路径归一化，严格限制在当前会话沙箱目录内，拦截 ../ 越界访问"},
@@ -82,24 +58,6 @@ TOOL_METADATA_EXT: dict[str, dict[str, Any]] = {
         "source_file": "backend/api/app/harness/execution/registry.py",
         "handler_function": "_write_handler(arguments, sandbox_dir, context)",
         "code_summary": "路径沙箱检验 -> 校验非覆盖策略 -> 自动创建父目录 -> 原子写入 content 文本 -> 统计 bytes/lines",
-        "code_snippet": '''def _write_handler(arguments: Mapping[str, object], sandbox_dir: Path | None, context: ToolExecutionContext | None) -> dict[str, object]:
-    path = _resolve_relative_path(str(arguments["path"]), sandbox_dir)
-    if path.exists():
-        raise AppError(ErrorCode.VALIDATION, f"文件已存在，write 工具禁止覆盖已有文件：{arguments['path']}")
-    content = str(arguments["content"])
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(content)
-    lines_count = len(content.splitlines())
-    return {
-        "summary": f"成功写入文件 {arguments['path']} ({len(content)} 字节, {lines_count} 行)",
-        "write": {
-            "path": str(arguments["path"]),
-            "bytes_written": len(content),
-            "lines_written": lines_count,
-            "preview": content[:1000],
-        },
-    }''',
         "pipeline_stages": [
             {"step": 1, "name": "参数必填校验", "desc": "严格检查 path 相对路径与 content 文本内容"},
             {"step": 2, "name": "非覆盖安全策略", "desc": "若文件已存在则主动拦截抛错，引导模型改用 edit 或新文件名"},
@@ -112,29 +70,6 @@ TOOL_METADATA_EXT: dict[str, dict[str, Any]] = {
         "source_file": "backend/api/app/harness/execution/registry.py",
         "handler_function": "_edit_handler(arguments, sandbox_dir, context)",
         "code_summary": "读取全文 -> 验证 old 字符串在文件中唯一匹配 -> 字符串精确替换为 new -> 原子写回 -> 未匹配时输出修复建议",
-        "code_snippet": '''def _edit_handler(arguments: Mapping[str, object], sandbox_dir: Path | None, context: ToolExecutionContext | None) -> dict[str, object]:
-    path = _resolve_relative_path(str(arguments["path"]), sandbox_dir)
-    if not path.is_file():
-        raise AppError(ErrorCode.NOT_FOUND, f"待编辑文件不存在：{arguments['path']}")
-    old_str = str(arguments["old"])
-    new_str = str(arguments["new"])
-    content = path.read_text(encoding="utf-8", errors="replace")
-    occurrences = content.count(old_str)
-    if occurrences == 0:
-        raise AppError(ErrorCode.VALIDATION, f"未在 {arguments['path']} 中找到目标替换文本 old，请先 read 确认准确内容")
-    if occurrences > 1:
-        raise AppError(ErrorCode.VALIDATION, f"目标替换文本 old 在文件中出现 {occurrences} 次，匹配不唯一，请包含更多上下文行")
-    new_content = content.replace(old_str, new_str, 1)
-    path.write_text(new_content, encoding="utf-8")
-    return {
-        "summary": f"已成功替换 {arguments['path']} 中的 1 处文本",
-        "edit": {
-            "path": str(arguments["path"]),
-            "replacements": 1,
-            "old_length": len(old_str),
-            "new_length": len(new_str),
-        },
-    }''',
         "pipeline_stages": [
             {"step": 1, "name": "目标文件存在性检查", "desc": "验证 path 文件是否存在于会话沙箱中"},
             {"step": 2, "name": "全文精确查找", "desc": "对文件文本进行全量匹配，计算 old 出现次数"},
@@ -147,34 +82,6 @@ TOOL_METADATA_EXT: dict[str, dict[str, Any]] = {
         "source_file": "backend/api/app/harness/execution/sandbox.py",
         "handler_function": "_bash_handler(arguments, sandbox_dir, context)",
         "code_summary": "静态高危黑名单拦截 -> 一次性 bwrap 沙箱创建 -> 根系统只读绑定 + 会话工作区唯一可写 -> 无网络隔离 -> ulimit 限制 + 15s 超时整树清理 -> stdout/stderr 脱敏截断",
-        "code_snippet": '''def _bash_handler(arguments: Mapping[str, object], sandbox_dir: Path | None, context: ToolExecutionContext | None) -> dict[str, object]:
-    command = str(arguments["command"]).strip()
-    _check_command_blacklist(command)
-    bwrap_cmd = [
-        "bwrap",
-        "--ro-bind", "/usr", "/usr",
-        "--ro-bind", "/lib", "/lib",
-        "--ro-bind", "/lib64", "/lib64",
-        "--ro-bind", "/bin", "/bin",
-        "--bind", str(sandbox_dir), "/workspace",
-        "--unshare-net",
-        "--unshare-pid",
-        "--unshare-ipc",
-        "--chdir", "/workspace",
-        "--", "bash", "-c", command,
-    ]
-    proc = subprocess.run(bwrap_cmd, capture_output=True, text=True, timeout=15.0)
-    stdout = redact_secrets(proc.stdout[:8000])
-    stderr = redact_secrets(proc.stderr[:4000])
-    return {
-        "summary": f"命令执行完成 (退出码: {proc.returncode})",
-        "bash": {
-            "command": command,
-            "exit_code": proc.returncode,
-            "stdout": stdout,
-            "stderr": stderr,
-        },
-    }''',
         "pipeline_stages": [
             {"step": 1, "name": "静态安全黑名单过滤", "desc": "拦截 rm -rf /、提权、篡改系统配置等高危命令"},
             {"step": 2, "name": "bwrap 隔离沙箱构建", "desc": "--unshare-net 禁用外网通信，--unshare-pid 隔离宿主进程"},
@@ -187,17 +94,6 @@ TOOL_METADATA_EXT: dict[str, dict[str, Any]] = {
         "source_file": "backend/api/app/harness/execution/registry.py",
         "handler_function": "_web_search_handler(arguments, sandbox_dir, context)",
         "code_summary": "清洗搜索关键词 -> 内部搜索引擎客户端发起请求 -> 提取标题/摘要/URL -> 结构化 JSON 投影",
-        "code_snippet": '''async def _web_search_handler(arguments: Mapping[str, object], sandbox_dir: Path | None, context: ToolExecutionContext | None) -> dict[str, object]:
-    query = str(arguments["query"]).strip()
-    limit = int(arguments.get("limit", 5))
-    results = await search_engine_client.query(query=query, limit=min(limit, 10))
-    return {
-        "summary": f"检索到 {len(results)} 条相关结果",
-        "search": {
-            "query": query,
-            "items": [{"title": r.title, "snippet": r.snippet, "url": r.url} for r in results],
-        },
-    }''',
         "pipeline_stages": [
             {"step": 1, "name": "搜索关键词预处理", "desc": "清洗 query 字符串 (1-500 字符)，限制 limit (1-10 篇)"},
             {"step": 2, "name": "合规与敏感词过滤", "desc": "校验检索词安全性与防注入拦截"},
@@ -210,20 +106,6 @@ TOOL_METADATA_EXT: dict[str, dict[str, Any]] = {
         "source_file": "backend/api/app/harness/execution/registry.py",
         "handler_function": "_web_fetch_handler(arguments, sandbox_dir, context)",
         "code_summary": "URL 防 SSRF 检查 -> HTTP GET 请求 -> 网页 HTML 转 Markdown -> 敏感数据脱敏 -> 截断输出",
-        "code_snippet": '''async def _web_fetch_handler(arguments: Mapping[str, object], sandbox_dir: Path | None, context: ToolExecutionContext | None) -> dict[str, object]:
-    url = str(arguments["url"]).strip()
-    _validate_public_url(url)
-    html_content = await http_client.get(url, timeout=20.0)
-    markdown_text = html_to_markdown(html_content)
-    redacted = redact_secrets(markdown_text[:12000])
-    return {
-        "summary": f"已成功抓取网页 {url} ({len(redacted)} 字符)",
-        "web": {
-            "url": url,
-            "format": arguments.get("format", "markdown"),
-            "content": redacted,
-        },
-    }''',
         "pipeline_stages": [
             {"step": 1, "name": "SSRF 安全防御拦截", "desc": "严禁抓取 127.0.0.1、内网网段 (10.x, 192.168.x) 及元数据端点"},
             {"step": 2, "name": "异步 HTTP 网页请求", "desc": "设置 20s 超时、User-Agent 标识并追踪公开重定向"},
@@ -236,16 +118,6 @@ TOOL_METADATA_EXT: dict[str, dict[str, Any]] = {
         "source_file": "backend/api/app/harness/execution/registry.py",
         "handler_function": "_task_planner_handler(arguments, sandbox_dir, context)",
         "code_summary": "解析 tasks 执行步骤 -> 校验步骤状态机 (pending/in_progress/completed) -> 更新回合 GraphState",
-        "code_snippet": '''def _task_planner_handler(arguments: Mapping[str, object], sandbox_dir: Path | None, context: ToolExecutionContext | None) -> dict[str, object]:
-    tasks_list = list(arguments.get("tasks", []))
-    validated = [_validate_task_item(t) for t in tasks_list]
-    return {
-        "summary": f"已更新任务清单：共 {len(validated)} 个步骤",
-        "task": {
-            "tasks": validated,
-            "updated_at": datetime.utcnow().isoformat(),
-        },
-    }''',
         "pipeline_stages": [
             {"step": 1, "name": "执行清单步骤解析", "desc": "读取 tasks 步骤数组，校验每项的 id、title 与 status"},
             {"step": 2, "name": "状态机跃迁合规", "desc": "校验步骤状态：pending (待执行) -> in_progress (执行中) -> completed (已完成)"},
@@ -257,26 +129,6 @@ TOOL_METADATA_EXT: dict[str, dict[str, Any]] = {
         "source_file": "backend/api/app/harness/execution/registry.py & routers/tasks.py",
         "handler_function": "_task_create_handler(arguments, context)",
         "code_summary": "TaskSpec 校验 -> 确认卡鉴权核准 -> 写入 PG 任务表 (status=queued) -> 唤醒 Worker 异步消费 -> (可选) 派生压测任务",
-        "code_snippet": '''def _task_create_handler(arguments: Mapping[str, object], sandbox_dir: Path | None, context: ToolExecutionContext | None) -> dict[str, object]:
-    spec = TaskCreateIn(**arguments)
-    task = Task(
-        kind=spec.kind,
-        config=spec.config.dict(),
-        status="queued",
-        with_stress=spec.with_stress,
-        session_id=context.session_id,
-    )
-    db.add(task)
-    db.commit()
-    return {
-        "summary": f"评测任务 {task.id} 创建成功并已入队排队",
-        "task": {
-            "task_id": task.id,
-            "kind": task.kind,
-            "status": "queued",
-            "created_at": task.created_at.isoformat(),
-        },
-    }''',
         "pipeline_stages": [
             {"step": 1, "name": "意图拆解与参数解析", "desc": "解析评测类型（benchmark/rag/testcase）与被测模型矩阵"},
             {"step": 2, "name": "G3 反射与用户确认卡", "desc": "严格阻止直接执行，必须由用户在前端确认卡点击同意"},
@@ -289,21 +141,6 @@ TOOL_METADATA_EXT: dict[str, dict[str, Any]] = {
         "source_file": "backend/api/app/harness/execution/registry.py",
         "handler_function": "_task_status_handler(arguments, context)",
         "code_summary": "查询 PG 数据库任务记录 -> 提取当前状态机、执行进度、样本数与报告关联 ID -> 立即返回",
-        "code_snippet": '''def _task_status_handler(arguments: Mapping[str, object], sandbox_dir: Path | None, context: ToolExecutionContext | None) -> dict[str, object]:
-    task_id = str(arguments["task_id"])
-    task = db.query(Task).filter(Task.id == task_id).first()
-    if not task:
-        raise AppError(ErrorCode.NOT_FOUND, f"任务不存在：{task_id}")
-    return {
-        "summary": f"任务 {task_id} 当前状态: {task.status}",
-        "task": {
-            "task_id": task.id,
-            "kind": task.kind,
-            "status": task.status,
-            "progress": task.progress,
-            "report_id": task.report_id,
-        },
-    }''',
         "pipeline_stages": [
             {"step": 1, "name": "任务 ID 格式校验", "desc": "校验 task_id 格式合规性"},
             {"step": 2, "name": "只读数据库检索", "desc": "查询 PostgreSQL tasks 表最新记录"},
@@ -316,21 +153,6 @@ TOOL_METADATA_EXT: dict[str, dict[str, Any]] = {
         "source_file": "backend/api/app/harness/execution/registry.py",
         "handler_function": "_task_cancel_handler(arguments, context)",
         "code_summary": "校验任务有效性 -> 将非终态任务标记为 cancelled -> 触发 Worker 中断信号 -> 幂等安全返回",
-        "code_snippet": '''def _task_cancel_handler(arguments: Mapping[str, object], sandbox_dir: Path | None, context: ToolExecutionContext | None) -> dict[str, object]:
-    task_id = str(arguments["task_id"])
-    task = db.query(Task).filter(Task.id == task_id).first()
-    if not task:
-        raise AppError(ErrorCode.NOT_FOUND, f"任务不存在：{task_id}")
-    if task.status not in ("succeeded", "failed", "cancelled"):
-        task.status = "cancelled"
-        db.commit()
-    return {
-        "summary": f"已取消任务 {task_id}",
-        "task": {
-            "task_id": task.id,
-            "status": task.status,
-        },
-    }''',
         "pipeline_stages": [
             {"step": 1, "name": "任务鉴权与存在性确认", "desc": "校验当前用户对目标任务的操作权限"},
             {"step": 2, "name": "终态幂等检查", "desc": "若已处于 succeeded/failed/cancelled 则直接幂等返回现状"},
@@ -353,7 +175,6 @@ def _get_tool_ext_metadata(tool_key: str) -> dict[str, Any]:
         "source_file": "backend/api/app/harness/execution/registry.py",
         "handler_function": f"_{short_name}_handler()",
         "code_summary": "受控短工具：参数校验 -> 权限检查 -> 执行 Handler -> 结果脱敏",
-        "code_snippet": f"# {tool_key} 执行函数\\ndef _{short_name}_handler(arguments, sandbox_dir, context):\\n    return {{'summary': '执行成功'}}",
         "pipeline_stages": [
             {"step": 1, "name": "参数解析与校验", "desc": "解析输入参数 JSON Schema"},
             {"step": 2, "name": "权限与沙箱检查", "desc": "检查工作区与网络权限策略"},
@@ -415,7 +236,6 @@ def _project_descriptor(item: object, def_: object | None = None) -> dict[str, o
             "source_file": ext["source_file"],
             "handler_function": ext["handler_function"],
             "code_summary": ext["code_summary"],
-            "code_snippet": ext["code_snippet"],
         },
         "pipeline": {
             "stages": ext["pipeline_stages"],
@@ -457,7 +277,6 @@ def _project_native_def(def_: object) -> dict[str, object]:
             "source_file": ext["source_file"],
             "handler_function": ext["handler_function"],
             "code_summary": ext["code_summary"],
-            "code_snippet": ext["code_snippet"],
         },
         "pipeline": {
             "stages": ext["pipeline_stages"],
@@ -574,36 +393,6 @@ def health_check(user: User = Depends(get_current_user)):
             "internal_mcp": mcp_status,
             "external_gateway": ext_status,
         },
-    }
-
-
-@router.get("/tools/{tool_name}/code", summary="查看单个工具底层实现代码与链路")
-def get_tool_code(
-    tool_name: str = FastApiPath(..., description="工具名称或 tool_id"),
-    user: User = Depends(get_current_user),
-):
-    """返回指定工具的 Python Handler 实现代码片段、源码文件路径与执行流程。"""
-    _ = user
-    registry = build_default_registry()
-    short_name = tool_name.split(".")[-1]
-    definition = registry.find(short_name) or registry.find(tool_name)
-    if not definition:
-        raise AppError(ErrorCode.NOT_FOUND, f"工具未注册：{tool_name}")
-
-    ext = _get_tool_ext_metadata(definition.tool_id or definition.name)
-    return {
-        "name": definition.name,
-        "tool_id": definition.tool_id,
-        "display_name": definition.display_name or definition.name,
-        "transport": definition.transport,
-        "source_file": ext["source_file"],
-        "handler_function": ext["handler_function"],
-        "code_summary": ext["code_summary"],
-        "code_snippet": ext["code_snippet"],
-        "pipeline_stages": ext["pipeline_stages"],
-        "parameters_schema": dict(definition.parameters_schema or {}),
-        "output_schema": dict(definition.output_schema or {}),
-        "timeout_s": definition.timeout_s,
     }
 
 

@@ -50,6 +50,7 @@ class NativeToolExecutor:
                 handler=definition.handler,
                 context=context if definition.contextual else None,
                 recovery_policy=definition.recovery_policy,
+                output_schema=dict(definition.output_schema) if definition.output_schema else None,
             )
         )
         key = context.call_id or definition.name
