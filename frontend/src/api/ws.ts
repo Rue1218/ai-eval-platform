@@ -25,6 +25,13 @@ export class AgentWebSocket {
   public sessionId: string | null = null
   public lastEventId = 0
   public isConnected = false
+  // 乱序重排缓冲：图内事件（Hub 即时广播）与 Worker 事件（0.4s 轮询转发）是
+  // 两条通道，小号 Worker 事件可能晚于大号图内事件到达。event_id 按会话单调
+  // 连续编号，故暂存「未来帧」等待缺失的小号帧；超过重排窗口（大于服务端
+  // 转发轮询周期）说明小号帧永远不会来（编号空洞），按号序冲刷放行。
+  private pendingEvents = new Map<number, WsServerEvent>()
+  private flushTimer: number | null = null
+  private readonly reorderWindowMs = 600
 
   constructor(sessionId?: string) {
     if (sessionId) this.sessionId = sessionId
@@ -129,21 +136,23 @@ export class AgentWebSocket {
         try {
           const data: WsServerEvent = JSON.parse(ev.data)
           // 瞬态帧（pong、assistant_delta）不占用单调事件号，其 event_id 仅复用
-          // 连接游标满足公共头结构，必须跳过去重，否则流式增量会因
+          // 连接游标满足公共头结构，必须跳过去重与重排，否则流式增量会因
           // event_id <= lastEventId 被整帧丢弃
           const transient =
             data.event === 'pong'
             || data.event === 'assistant_delta'
             || (data.payload && typeof data.payload.stream === 'string')
+          let orderedPersistent = false
           if (!transient && 'event_id' in data && typeof data.event_id === 'number') {
-            // 事件号单调递增：重放补发与服务端转发竞争可能产生重复事件，按 event_id 去重
-            if (data.event_id <= this.lastEventId) return
-            this.lastEventId = data.event_id
+            if (!this.acceptOrdered(data)) return
+            orderedPersistent = true
           }
           if ('session_id' in data && data.session_id) {
             this.sessionId = data.session_id
           }
           this.notifyEvent(data)
+          // 本帧派发后，缓冲中可能已有连续衔接的下一号帧，按序连带派发
+          if (orderedPersistent) this.drainContiguous()
         } catch (e) {
           console.error('Failed to parse WS message:', ev.data, e)
         }
@@ -197,6 +206,67 @@ export class AgentWebSocket {
     }, 3000)
   }
 
+  /**
+   * 持久化事件的保序入口：重复帧丢弃；下一号帧立即派发并连带冲刷缓冲；
+   * 未来帧暂存并启动重排窗口。返回 true 表示本帧可立即派发。
+   */
+  private acceptOrdered(data: WsServerEvent): boolean {
+    const id = data.event_id as number
+    // 重复帧（重放补发与转发竞争）或已被更大号覆盖的迟到帧：丢弃
+    if (id <= this.lastEventId || this.pendingEvents.has(id)) return false
+    // lastEventId === 0 表示全新连接（未带 last_event_id 重放），服务端游标
+    // 从当前最大号起步，首帧即基线，直接放行，避免首帧被误当未来帧缓冲
+    if (this.lastEventId === 0 || id === this.lastEventId + 1) {
+      this.lastEventId = id
+      return true
+    }
+    // 未来帧：小号帧可能仍在服务端转发队列里，暂存等待；窗口到期按号序冲刷
+    this.pendingEvents.set(id, data)
+    this.startFlushTimer()
+    return false
+  }
+
+  private startFlushTimer(): void {
+    if (this.flushTimer !== null) return
+    this.flushTimer = window.setTimeout(() => {
+      this.flushTimer = null
+      this.flushPending()
+    }, this.reorderWindowMs)
+  }
+
+  /** 按 event_id 升序冲刷缓冲帧；编号空洞（服务端永不补发）由本函数兜底放行。 */
+  private flushPending(): void {
+    if (!this.pendingEvents.size) return
+    const ordered = [...this.pendingEvents.entries()].sort((a, b) => a[0] - b[0])
+    this.pendingEvents.clear()
+    for (const [id, frame] of ordered) {
+      if (id <= this.lastEventId) continue
+      this.lastEventId = id
+      if ('session_id' in frame && frame.session_id) {
+        this.sessionId = frame.session_id
+      }
+      this.notifyEvent(frame)
+    }
+  }
+
+  /** 在 lastEventId 推进后，把缓冲中已连续衔接的帧按序派发。 */
+  private drainContiguous(): void {
+    while (this.pendingEvents.has(this.lastEventId + 1)) {
+      const nextId = this.lastEventId + 1
+      const frame = this.pendingEvents.get(nextId)!
+      this.pendingEvents.delete(nextId)
+      this.lastEventId = nextId
+      if ('session_id' in frame && frame.session_id) {
+        this.sessionId = frame.session_id
+      }
+      this.notifyEvent(frame)
+    }
+    if (!this.pendingEvents.size && this.flushTimer !== null) {
+      window.clearTimeout(this.flushTimer)
+      this.flushTimer = null
+    }
+  }
+
   /** 启动静默判活：周期检查最近消息时间，超时未收到 pong 即断开重连 */
   private startSilenceWatch(): void {
     this.stopSilenceWatch()
@@ -224,6 +294,13 @@ export class AgentWebSocket {
 
   private cleanup(): void {
     this.stopSilenceWatch()
+    // 重连后服务端会按 last_event_id 重放，缓冲中的旧帧一律作废（重放帧
+    // 会经 acceptOrdered 的重复检测丢弃，不会造成二次渲染）
+    this.pendingEvents.clear()
+    if (this.flushTimer !== null) {
+      window.clearTimeout(this.flushTimer)
+      this.flushTimer = null
+    }
     if (this.reconnectTimer !== null) {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
