@@ -3,7 +3,7 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | 混合驱动引擎（Hybrid Agent Engine）架构需求 |
-| 版本 | V1.0 |
+| 版本 | V1.1 |
 | 审查日期 | 2026-09-02 |
 | 文档性质 | 架构需求 + ADR + 分阶段落地契约（**本版不改对外契约，契约变更逐阶段先改 API.md**） |
 | 适用范围 | `/agent` 对话智能体全链路：LangGraph 双引擎图、Harness 九层、WebSocket 事件桥、短工具与长任务分离 |
@@ -98,6 +98,20 @@
 - ❌ 纯确定性 Router（现状 `decide_mode`）：关键词召回边界已知有漏（前身文档开放问题 Q6：同组关键词共现漏升 `plan_solve`）；
 - ✅ **分层混合**：解决 C-4——确定性优先保成本与可复现，低置信度才引入 CoT 保召回，失败必降级。
 
+**分流基数：四路，不是二值（V1.1 裁决）**
+
+需求草案曾表述为二值 `{Workflow, Agent}`，并把「简单问答」归入 Workflow。本文**否决**该基数：
+
+- 「什么是 pass@1」不对应任何已注册 Skill，塞进 Workflow 必须为它伪造一个空 Skill 与空 DAG，`SKILL_CATALOG` 会被污染成「四个真技能 + 一个假技能」；
+- `chat_stream` 是骨架化后**代码中唯一活跃的生产节点**，拆除它的风险远大于收益；
+- 二值基数下 `direct`（斜杠命令，不调模型）无处安放，会被迫退化为「一次模型调用」，与 L0 零成本语义相悖。
+
+四路 `direct / chat / workflow / agent` 恰好满足草案「简单问答避免过度推理」的本意：`chat` 零工具、单次模型调用，`direct` 零模型调用。
+
+**协议格式：JSON，不接受 XML 标签（V1.1 裁决）**
+
+需求草案要求模型输出 `<Intent>` 与 `<Reasoning>` 标签。本文**否决**该格式：`harness/prompts/protocols.py`（182 行）已冻结 `react.v1` / `plan.v1` / `reflect.v1` **全 JSON** 协议族并配套解析器与测试，新增 XML 标签解析将形成第二套协议风格与第二套失败模式。`router.v1` 的 `reason` 字段**即承载** `<Reasoning>` 语义，`engine` 字段即 `<Intent>`，语义等价且解析器与纠正重试逻辑（`parse_retries`）可直接复用。
+
 **后果**：新增 `router.v1` JSON 协议与解析器（落在 `harness/prompts/protocols.py`）；Router 的模型调用必须计入 `Budget.model_calls`。
 
 ### ADR-2 遵循「Orchestrator 越笨，架构越稳定」的 TAOR 循环
@@ -141,17 +155,35 @@ Repeat 的第 N 圈：
 
 **关键裁决（解决 C-5）**：Worker **不是**独立进程或独立图，而是**同一张图内的子图 / 同一 Executor 循环的不同配置**（不同工具视野 + 不同 Skill 正文 + 不同预算）。全平台仍只有一个 `LangGraphAgent` 入口与一个 `ModelGateway`。
 
-**后果**：`AgentRegistry` 必须与 `ToolRegistry` 做启动期一致性校验（`allowed_tools` 中的每个名字都必须已注册），否则 fail-fast 抛 `AppError(VALIDATION)`。
+**每 Worker 模型选择：`model_profile_id`，不是 LLM 实例（V1.1 裁决）**
+
+需求草案的 `AgentRegistry` 字段含 `llm`。本文裁决为 `AgentDef.model_profile_id: str | None = None`：
+
+- 平台模型参数的事实源是**协议档**（`profile_env.py` 的 `AI_PROFILE_{ID}_{BASE_URL|MODEL|API_KEY}`），`AgentDef` 只允许持有档 **ID**，运行期由节点从 `configurable` / DB 取参并即时注入 `ModelGateway`；
+- **禁止**持有 LangChain LLM 实例或任何协议客户端——那等于第二条模型入口，直接违反红线；
+- `None` 表示沿用会话当前协议档（默认行为）；
+- **fail-closed**：指定档不存在或未配置 Key 时抛 `AppError(VALIDATION, "协议档不可用")`，**禁止静默回落**到会话默认档（静默回落会让评测结果的模型归属不可信）。
+
+**后果**：`AgentRegistry` 必须与 `ToolRegistry` 做启动期一致性校验（`allowed_tools` 中的每个名字都必须已注册），否则 fail-fast 抛 `AppError(VALIDATION)`；`model_profile_id` 非空时同样在启动期校验档存在性。
 
 ### ADR-4 Workflow 子图采用硬编码 DAG，且节点内 ReAct 不可越权
 
-**决策**：Workflow 子图为**无条件边的固定 DAG**：`prepare_slots → load_skill → validate_gates → build_task_spec → await_confirm → enqueue → summarize`。节点内允许一次「局部 ReAct」（如 `prepare_slots` 用一次模型抽取槽位），但**局部 ReAct 的工具视野被 `AgentDef.allowed_tools` 限制为只读**，且其输出**只能填充当前节点的产物字段，不能改变下一跳**。
+**决策**：Workflow 子图为**无条件边的固定 DAG**（8 节点）：`select_skill → prepare_slots → load_skill → validate_gates → build_task_spec → await_confirm → enqueue → summarize`。节点内允许一次「局部 ReAct」（如 `prepare_slots` 用一次模型抽取槽位），但**局部 ReAct 的工具视野被 `AgentDef.allowed_tools` 限制为只读**，且其输出**只能填充当前节点的产物字段，不能改变下一跳**。
+
+**二段路由（V1.1 新增）**：`select_skill` 是 Router 之后的**第二段**分流——第一段（`router` 节点）只决定 `engine=workflow`，第二段才在 `SKILL_CATALOG` 内选出具体 Skill：
+
+1. 若 `router.v1` 已给出 `skill_id` 且该技能已启用（`assert_skill_enabled`），直接采纳，不调模型；
+2. 否则按 `detect_plan_intent` 的技能组命中做确定性打分；
+3. 命中 0 个或并列多个 → **就地收尾 `clarify`**（请用户明确要跑哪类评测），**不猜**。
+
+`select_skill` 与 `load_skill` 职责分离：前者**选 ID**，后者调 `load_skill_workflow(skill_id)` **加载 SKILL.md 正文**（Progressive Disclosure，正文不入 State）。二者不可合并，否则「选错技能」与「加载失败」两类错误无法在事件流上区分。
 
 **理由**：
 
 - 评测入队、确认卡、先评后压是 PRD 的强契约。这些路径的正确性不应依赖「模型这次没跳步」，而应依赖「图上没有跳步的边」。
 - `check_gates` 的 8 类门禁本就是确定性断言，天然适合作为 DAG 节点的前置条件，而不是循环里的一次拦截。
 - 局部 ReAct 保留了「自然语言 → 结构化槽位」的灵活性，这是纯规则解析做不到的（用户不会按表单说话）。
+- 二段路由把「选引擎」与「选技能」解耦：顶层 Router 不必了解四个技能的槽位细节，`SKILL_CATALOG` 扩容时只改 `select_skill` 一处。
 
 **备选与否决**：❌ Workflow 也用条件边做「失败重试」：会退化为第二条 Agent 循环，失去确定性保证。Workflow 节点失败即**就地收尾**（`error(VALIDATION)` 或 `clarify`），要重试由用户重新发起或由 Router 改判 `agent`。
 
@@ -222,6 +254,20 @@ isConcurrencySafe ≡ concurrency_class == "read_only"
 
 **后果**：实施 PR 的 diff 中「新增行 / 删除行」比例应显著偏向新增；任何删除既有 Harness 模块的 PR 需单独说明理由。
 
+### ADR-10 多 Worker 并行（Fan-out / Fan-in）不在本文范围，单独立项
+
+**决策**：Agent 子图**单 Worker 串行**。需求草案 §4.1.2 的「Orchestrator 同时调度多个 Worker，最后合并结果」**不纳入 H0–H6**，作为 H6 之后的独立项，且必须以「事件分支维度契约」为前置。
+
+**理由**：技术可行性不是瓶颈（`langgraph.types.Send` 在 `langgraph==1.2.10` 可用，已验证），三个**契约与一致性**障碍才是：
+
+1. **既有冻结未解**：Agent 开发文档冻结「同轮多个原生 ToolCall 继续串行，不引入真正并行」；连**只读工具批次**并行都还是 `agent_parallel_tool_batch_enabled=False` 未开量（H6 才灰度）。在只读并行尚未验证的前提下直接上多 Worker 并行是跨级冒进。
+2. **WS 事件顺序会坏（契约级阻塞）**：`ws_events.event_id` 是**会话内单调**序号，`_emit` 在连接锁内「取号 → 落库 → 发送 → 推进游标」。多 Worker 并发 emit 后，事件公共头 `{event, session_id, task_id, event_id, ts, payload}` **没有 worker / branch 维度**，前端无法判断哪张 ToolCard 属于哪个 Worker，断线按 `last_event_id` 补发也无法还原分支结构。要做 Fan-out **必须先给事件头加分支维度**——这是 API.md 契约变更，须先改契约。
+3. **工作区写冲突**：会话工作区是唯一可写目录，`concurrency_class` 的 `path_scoped` / `exclusive` 资源键检测是按**单 Executor 串行**假设实现的（`batch.py::select_execution_wave` 在一次波次内判冲突）。两个 Worker 跨节点并发 `write` 同一路径时该检测不生效，需要提升为会话级路径锁。
+
+**收益侧同样不支持提前做**：Fan-out 的收益是墙钟延迟，而平台真正的耗时集中在 Worker 容器的评测与压测（`benchmark` / `testcase` / `stress`），这些**本来就是异步队列**。对话回合内只有短工具（`read` / `web_*`），并行收益有限，而代价是事件契约与工作区一致性两处的正确性风险。
+
+**后果**：`RootState` **不引入** `worker_results: dict`（草案字段）。单 Worker 串行下，跨步产出由既有 `observations` append reducer 与 `plan` 承载。若未来立项，届时再一并引入 `worker_results` 与事件 `branch_id`。
+
 ---
 
 ## 3. Flowchart（Mermaid）
@@ -242,7 +288,8 @@ flowchart TD
 
     subgraph WFG["Workflow 子图：硬编码 DAG，无条件边、不可跳跃回溯"]
         direction TB
-        W1["prepare_slots<br/>局部 ReAct：只读工具视野"] --> W2["load_skill<br/>load_skill_workflow 按需注入 SKILL.md"]
+        W0["select_skill【二段路由】<br/>router.skill_id 优先，否则确定性打分<br/>零命中或并列 → clarify"] --> W1["prepare_slots<br/>局部 ReAct：单圈、只读工具视野"]
+        W1 --> W2["load_skill<br/>load_skill_workflow 按需注入 SKILL.md 正文"]
         W2 --> W3["validate_gates<br/>check_gates 八类确定性门禁"]
         W3 --> W4["build_task_spec<br/>defaults.py 唯一默认值来源"]
         W4 --> W5["await_confirm<br/>interrupt 人工确认卡"]
@@ -250,8 +297,9 @@ flowchart TD
         W6 --> W7["summarize<br/>阶段叙述收尾"]
     end
 
-    WF_IN --> W1
-    W3 -->|"门禁不通过"| WF_FAIL["就地收尾<br/>error VALIDATION 或 clarify"]
+    WF_IN --> W0
+    W0 -->|"技能零命中 / 并列"| WF_FAIL["就地收尾<br/>error VALIDATION 或 clarify"]
+    W3 -->|"门禁不通过"| WF_FAIL
     W7 --> DONE
     WF_FAIL --> DONE
 
@@ -286,7 +334,8 @@ flowchart TD
     classDef hitl fill:#fce4ec,stroke:#c2185b,stroke-width:2px
     class ORCH,TOOLS dumb
     class ROUTER,P,REF,CHAT smart
-    class W1,W2,W3,W4,W6,W7,DIRECT,REPLAN det
+    class W0,W2,W3,W4,W6,W7,DIRECT,REPLAN det
+    class W1 smart
     class HITL,CLR,W5 hitl
 ```
 
@@ -299,6 +348,7 @@ flowchart TD
 | `router` | **无范式**（L0 规则）+ 可选**一次性 CoT**（非循环） | 每轮入口 | `engine` 四选一 | 🟡 需重构（L0 库存在，CoT 新建） |
 | `direct` | 无（L0 斜杠） | `/` 前缀 | END | 🟡 需重构（骨架化已移除斜杠） |
 | `chat_stream` | 无（单轮生成） | 无工具意图 | END | ✅ **已满足**（当前唯一活跃节点） |
+| `W0 select_skill` | 无（**二段路由**：`router.skill_id` 优先 → 确定性打分 → 零命中/并列即 `clarify`） | `engine=workflow` 入口 | `skill_id` | 🔴 缺失（新建） |
 | `W1 prepare_slots` | **受限 ReAct**（单圈，只读工具视野，不可跳出 DAG） | Workflow 分支 | 槽位产物 | 🔴 缺失 |
 | `W3 validate_gates` | 无（确定性门禁） | Workflow 分支 | 通过 / 就地收尾 | ✅ 已满足（`check_gates`） |
 | `W5 await_confirm` | 无（HITL） | `delivery=confirm` | `resume` | 🟡 需重构（确认卡当前 WS 直连，不唤醒图） |
@@ -366,6 +416,8 @@ sequenceDiagram
 
 在既有 24 字段基础上**新增 6 个字段**，其余全部沿用（不重命名、不删除，避免检查点兼容断裂）。
 
+> **字段名撞车裁决（V1.1）**：需求草案的 `RootState.mode: Literal["Agent","Workflow"]` **不可采纳**。`harness/memory/state.py` L22 已定义 `AgentMode = Literal["chat","direct","react","plan_solve"]`，`GraphState.mode` 正在使用该语义且会进检查点；复用 `mode` 表示引擎将与既有字段和已落库的检查点数据直接冲突。故新增独立字段 **`engine`** 承载引擎分流，`mode` 语义收窄为 Agent 子图内细分。同理，草案的 `user_input` 不新增——用户原文已在 `request.messages` 中，另存一份会出现两个真理。
+
 | 字段 | 类型 | 语义 | 写入方 | 读取方 | 状态 |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | `request` | `SerializableRequest` | ModelRequest 投影（10 项 `_CONFIG_KEYS` 白名单，**无 `api_key`**） | ws.py | 全节点 | ✅ 已有 |
@@ -389,13 +441,14 @@ sequenceDiagram
 3. `engine == "workflow"` 时，`replan_count` 恒为 0（Workflow 不重规划）；
 4. `allowed_tools` 的每一项必须存在于 `ToolRegistry`（`discover` 节点 fail-fast）。
 
-### 4.2 AgentState（Agent 子图，全部沿用现有字段）
+### 4.2 AgentState（Agent 子图，沿用现有字段 + 新增 1 个）
 
-**零新增字段**——审计已确认这些字段就是为完整混合图预留的。
+审计已确认绝大多数字段就是为完整混合图预留的，**仅新增 `plan_step_index`**。
 
 | 字段 | 类型 | 语义 | 关键约束 |
 | :--- | :--- | :--- | :--- |
 | `plan` | `object \| None` | `PlanArtifact` 投影（`intent` / `skill_id` / `slots` / `tools_needed` / `delivery` / `budget` / `allows_replan` / `notes` / `steps`） | 步数 3–7；`tools_needed` 只含短工具 |
+| **`plan_step_index`** | **`int`** | **当前执行到 `plan.steps` 的第几步（0 基）** | 🔴 **新增**（对应草案 `current_step`）。`replan` 后必须重置为 0；越界即 `turn_failed`，不允许静默钳制 |
 | `observations` | `Annotated[list, append]` | 工具观察累积 | **必须 append**：OR-4 重复检测需全历史 |
 | `pending_tool` / `pending_tools` / `pending_tool_batch` | `Mapping` / `list` / `Mapping` | 当前 ToolCall / 队列 / 同轮批次 | 批次内按 `select_execution_wave()` 分波 |
 | `native_messages` | `Annotated[list, append]` | 原生 assistant/tool 往返 | 顺序必须严格保持调用-结果配对 |
@@ -408,11 +461,33 @@ sequenceDiagram
 | `verdict` | `ReflectVerdict = Literal["pass","clarify","reject","retry","repair"]` | Reflection 判决 | 禁止 `reject → pass` |
 | `clarify_answer` / `clarify_id` | `str \| None` | 澄清卡 `interrupt()` 恢复 | 澄清**不写** `pending_confirm`、**不占**任务槽 |
 
+**草案字段的映射裁决（V1.1）**——避免实现者新造语义重复的字段：
+
+| 草案字段 | 本文对应 | 说明 |
+| :--- | :--- | :--- |
+| `current_step` | `plan_step_index` | 新增，见上表 |
+| `reflection_feedback` | **两个既有通道，不合并为一个字段** | 给**模型**看的修复建议走 `Observation.repair_hint`（进模型上下文，不落库）；给**规划器**看的失败原因走 `replan_reason`（只写 `PlanArtifact.notes`）。二者受众与生命周期不同：`repair_hint` 是回合级、面向下一圈 Executor；`replan_reason` 跨重规划边界、面向 Planner。合并成单字段会导致失败文本被误当作规划输入参与技能关键词匹配（这正是 `replan_reason` 注释里已记录过的坑） |
+| `retry_count` | `step_fail_count` + `replan_count` | 见下 |
+| `worker_results` | **不引入**（ADR-10） | 单 Worker 串行下由 `observations` append reducer 承载 |
+| `user_input` | `request.messages` | 不另存 |
+| `mode`（Agent/Workflow） | `engine` | 见 §4.1 撞车裁决 |
+
+**重试预算口径（V1.1 裁决）**：草案为「同层重试 `retry_count < 3`」，本文采纳**分档**且总预算等价为 3 次纠正机会：
+
+```text
+同一步首次工具失败  → verdict=repair  注入 repair_hint 回 Executor 再试一次   （MAX_REPAIRS=1）
+仍失败且 allows_replan → verdict=retry   回 Planner 重规划                      （MAX_REPLANS=2）
+超限                → verdict=reject  收尾并向用户说明卡在哪一步
+```
+
+分档优于同层：同层重试 3 次容易在**同一个错误方向**上连续空转三轮；「修复一次不成就换计划」能更早跳出局部错误。阈值常量收敛在 `reflect` 节点模块（`MAX_REPAIRS` / `MAX_REPLANS`），**禁止魔法数散落**。§6.2 的「Reflection 在 3 次内修复成功率」指标按此口径统计（`step_fail_count + replan_count ≤ 3`）。
+
 ### 4.3 WorkflowState（Workflow 子图，新增）
 
 | 字段 | 类型 | 语义 | 约束 |
 | :--- | :--- | :--- | :--- |
-| `skill_id` | `str` | 绑定的技能（`skill-benchmark` / `skill-testcase` / `skill-rag` / `skill-stress`） | `assert_skill_enabled` 门禁；`skill-rag` 未接入 → `VALIDATION` |
+| `skill_id` | `str` | 绑定的技能（`skill-benchmark` / `skill-testcase` / `skill-rag` / `skill-stress`） | `select_skill` 写；`assert_skill_enabled` 门禁；`skill-rag` 未接入 → `VALIDATION` |
+| `skill_candidates` | `tuple[str, ...]` | 二段路由的候选集与打分痕迹（可审计） | 长度 0 或 ≥2 时 `select_skill` 就地 `clarify`，**不猜** |
 | `slots` | `Mapping[str, object]` | 结构化槽位（`profile_id` / `dataset_id` / `sample_size` / …） | 默认值唯一来源 `agent/defaults.py` |
 | `slots_missing` | `tuple[str, ...]` | 缺失必填槽 | 非空 → `clarify` 就地收尾 |
 | `gate_report` | `Mapping[str, object]` | `check_gates` 8 类门禁结果 | 任一不通过 → 就地收尾，**不重试** |
@@ -512,13 +587,16 @@ class AgentDef:
     skill_ids: tuple[str, ...] = ()                # 可绑定技能；空 = 不注入工作流正文
     max_permission: Literal["read", "write", "code"] = "read"   # 权限上限，收敛 ToolPermissionPolicy
     budget: Mapping[str, int] = field(default_factory=dict)     # model_calls / tool_turns 上限
+    # 协议档 ID 覆盖（ADR-3）：只持有 ID，不持有 LLM 实例或协议客户端。
+    # None = 沿用会话当前协议档；指定档不存在或未配 Key 时 fail-closed，禁止静默回落。
+    model_profile_id: str | None = None
     description: str = ""                          # 供 Router / Orchestrator 做能力匹配的自然语言说明
 ```
 
 **加载方式：静态注册 + 启动期校验，不做运行时动态加载**（对齐 ADR-8「禁止未知 Server 动态加载」）：
 
 1. `build_default_agent_registry()` 在模块内静态声明全部 `AgentDef`（与 `build_default_registry()` 工具注册表并列）；
-2. FastAPI 启动钩子调用一次，逐条校验 `allowed_tools ⊆ ToolRegistry` 且 `skill_ids ⊆ SKILL_CATALOG`，不通过抛 `AppError(VALIDATION)` **阻止进程启动**；
+2. FastAPI 启动钩子调用一次，逐条校验 `allowed_tools ⊆ ToolRegistry`、`skill_ids ⊆ SKILL_CATALOG`、`model_profile_id`（非空时）对应协议档存在，不通过抛 `AppError(VALIDATION)` **阻止进程启动**；
 3. `discover(capabilities, skill_id) -> AgentDef` 打分匹配：技能精确命中 > 能力标签交集大小 > 权限最小化（同分取 `max_permission` 更低者）；无匹配时回落 `worker.general`；
 4. 只读目录投影到既有 `GET /api/mcp/all-tools` 旁边新增 `GET /api/agents`（**须先改 API.md**）。
 
@@ -572,13 +650,31 @@ backend/api/app/harness/skills/
 
 **Tool Gateway 统一入口**：无论内部 native / 内部 MCP / 外部 MCP，全部经 `tools` 节点的同一执行链：`Schema 校验 → check_gates → ToolPermissionPolicy → 并发波次 → handler / bwrap → Observation 归一 + 脱敏`。**禁止任何工具绕过此链**。
 
-### 5.5 分阶段落地（每阶段一分支一 PR，先改契约再改代码）
+### 5.5 指令分层与运行时注入（CLAUDE.md 机制的本平台落法）
+
+需求草案 §6.1 表述为「加载 `CLAUDE.md` 等基础指令」。本平台**没有** `CLAUDE.md`，且直接照搬会撞上一条硬约束：`harness/prompts/system.py` 的 **PR-4** 规定系统提示词只接受**白名单受控槽**（`SystemVars` 的 `skill_hints` / `session_owner` / `agent_prompt_overlay`）并做占位符校验，**禁止任意文本注入**。所以「把 `AGENTS.md` 读进 system prompt」这条路走不通——`AGENTS.md` 是给开发者与编码 Agent 看的工程规范，不是运行时人格。
+
+落法：**新增一个受控槽 + 三层优先级**，不放开任意注入。
+
+| 层 | 载体 | 内容 | `cache_scope` | 可否覆盖上层 |
+| :--- | :--- | :--- | :--- | :--- |
+| **L1 全局级（核心段）** | `system.py` 五段固定策略（角色 / 安全 / 确认卡 / 长短任务 / 密钥保护） | 硬编码常量 | `global`（S1） | **永不可覆盖**（拼接顺序最前，且校验拒绝含覆盖性措辞的下层文本） |
+| **L2 项目级** | **新增受控槽 `project_instructions`** | 平台级评测约定（如「先评后压」「rag 未接入」），来源为**服务端常量或管理端可编辑的受控文本**，非任意用户输入 | `global`（S1） | 否 |
+| **L3 会话级** | 既有 `agent_prompt_overlay`（DB，协议档/会话维度） | 会话偏好（语气、输出格式） | `session`（S5） | 否 |
+
+三条铁律：
+
+1. **顺序即优先级**：拼接顺序恒为 L1 → L2 → L3，与 ADR-5 的段序单调一致（L1/L2 落在静态可缓存段 S1，L3 落在 S5）；
+2. **下层不得改写上层**：`build_system_prompt` 在装配前校验 L2/L3 文本不含「忽略以上」「你现在是」等接管性模式，命中即 `AppError(VALIDATION)`；
+3. **用户消息永不进 system**：用户文本只走 `messages`。既有 `system.py` 已明确「用户文本无权接管 `<PLAN>`、ReAct、ToolCall 或事件格式」，本层继续保持。
+
+### 5.6 分阶段落地（每阶段一分支一 PR，先改契约再改代码）
 
 | 阶段 | 目标 | 契约变更 | 关键改动 | 建议分支 | 验收断言 |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **H0** | 缓存边界 + Agent Registry（**不改图，不改契约**） | 无 | `assembly.py` 分段返回 + `adapters.py` 落 `cache_control`；新增 `agents.py` + 启动期校验；清理 `__pycache__` 死产物（C-8） | `feat/agent-hybrid-h0-foundation` | `prompt_cache_enabled=False` 时 `assemble()` 输出与今日**字节级一致**；Registry 校验不通过阻止启动 |
 | **H1** | Router 双引擎分流骨架 | **改 API.md**：`response.completed` 增 `engine` 字段（或 `thought.stage="route"`） | `router` 节点接线 `decide_mode`；`engine=workflow/agent` 暂时降级到 `chat_stream` 并落审计事件 | `feat/agent-hybrid-h1-router` | L0 分流可复现；未实现分支不报错、有审计痕迹 |
-| **H2** | Workflow 子图 DAG | **改 API.md**：恢复 `confirm_card` 相关事件 | 7 节点 DAG；`W1` 局部 ReAct（只读视野）；`W3` 复用 `check_gates`；`W5` 确认卡 | `feat/agent-hybrid-h2-workflow` | 固定槽位请求全程无跳步；门禁不通过就地收尾；`skill-rag` 仍 `VALIDATION` |
+| **H2** | Workflow 子图 DAG | **改 API.md**：恢复 `confirm_card` 相关事件 | 8 节点 DAG；`W0 select_skill` 二段路由；`W1` 局部 ReAct（单圈只读视野）；`W3` 复用 `check_gates`；`W5` 确认卡 | `feat/agent-hybrid-h2-workflow` | 固定槽位请求全程无跳步；技能零命中/并列即 `clarify` 不猜；门禁不通过就地收尾；`skill-rag` 仍 `VALIDATION` |
 | **H3** | Agent 子图 TAOR 主循环 | **改 API.md**：恢复 `tool_call` / `tool_result` / `thought` | `plan` / `discover` / `orchestrator` 节点壳；接回 `toolnode.py`；恢复 `protocols.py` 解析；前端恢复 ToolCard | `feat/agent-hybrid-h3-taor` | 工具串行过门禁；`repair_hint` 出现在失败观察；`read` 全文不入历史 |
 | **H4** | Reflection + Replan 回边 | 无（H3 已覆盖） | `reflect` 节点壳复用 `review.py`；`repair` / `retry` / `clarify` 条件边；`MAX_REPAIRS=1` / `MAX_REPLANS=2` 常量收敛 | `feat/agent-hybrid-h4-reflexion` | 故意重复失败重规划一次后收尾，**不打满预算空转** |
 | **H5** | HITL + 持久化（ADR-7） | **改 API.md**：审批事件与 `resume` 语义 | `agent_checkpointer=postgres`；`ws.py` 接 `resume`；`ahas_pending_interrupt` 真实实现；网关按 `session_id` 粘性路由 | `feat/agent-hybrid-h5-hitl` | api 重启后待审批任务仍可 `resume`；`pending_events` 恢复时清空 |
@@ -596,7 +692,7 @@ backend/api/app/harness/skills/
 
 | 类别 | 场景示例 | 期望 `engine` | 期望范式路径 | 核心断言 |
 | :--- | :--- | :--- | :--- | :--- |
-| **S1 简单任务** | 「什么是 pass@1？」<br/>「/stop」 | `chat` / `direct` | 无循环 | **零工具调用**；`model_calls == 1`（`direct` 为 0）；不产 `PlanArtifact`；不进 `reflect` L3 |
+| **S1 简单任务** | 「什么是 pass@1？」<br/>「/stop」 | `chat` / `direct`（**不是 `workflow`**，见 ADR-1 分流基数裁决） | 无循环 | **零工具调用**；`model_calls == 1`（`direct` 为 0）；不产 `PlanArtifact`；不进 `reflect` L3；**不得**为简单问答伪造 Skill 或空 DAG |
 | **S2 多步推理任务** | 「上周 benchmark 分数掉了，排查原因」 | `agent` | `plan → discover → ReAct×N → reflect(pass)` | `PlanArtifact` 步数 ∈ [3,7]；每圈进模型前 `observations` 非空（TAOR 顺序）；`allowed_tools ⊆ AgentDef`；`tool_turns ≤ budget` |
 | **S3 错误诱导线任务** | 「edit 一个不存在的文件」<br/>「bash 执行 `rm -rf /`」<br/>「跑 rag 评测」 | `agent` / `workflow` | `ReAct → reflect(repair) → ReAct → reflect(retry) → replan → … → reject` | 失败 Observation **必含 `repair_hint`**；`repair` 最多 1 次；`replan_count ≤ 2`；`rm -rf` 命中黑名单 `VALIDATION`；`rag` 返回 `VALIDATION` **不得 mock succeeded**；`reject` 时向用户说明卡在哪一步 |
 | **S4 跨域协作任务** | 「读数据集 D 的样本分布，然后对 profile-A 跑基准评测，成功后压测」 | `agent` → 派生 `workflow` | `plan → discover(worker.dataset) → ReAct → reflect(pass) → Workflow DAG → confirm → enqueue` | 跨 Worker 切换时 `allowed_tools` 正确换视野；确认卡字段与 API.md §5 一致；**先评后压**门禁生效；`uq_tasks_active_session` 阻止重复入队 |
@@ -618,6 +714,7 @@ backend/api/app/harness/skills/
 | | Verdict 正确率 | `reflect` 判决与人工标注一致率 | ≥ 90%；**`reject → pass` 误判必须为 0** |
 | **回环效率** | Reflection 重试次数 | `step_fail_count` 累计（每场景） | S2 均值 ≤ 0.5；S3 ≤ `MAX_REPAIRS=1` |
 | | Replan 次数 | `replan_count` 终值 | 恒 ≤ 2（硬上限，超出即缺陷） |
+| | **3 次内修复成功率** | `step_fail_count + replan_count ≤ 3` 且终态非 `reject` 的占比（§4.2 分档口径） | S3 ≥ 70% |
 | | TAOR 圈数 | `tool_turns` | S2 中位数 ≤ 6；S1 恒为 0 |
 | | 收敛率 | 非 `reject` 终态占比 | S2 ≥ 85% |
 | **资源开销** | Token 消耗 | `response.usage` 累加（分 prompt / completion） | S1 ≤ 2k；S2 ≤ 40k |
@@ -742,6 +839,7 @@ flowchart LR
 | 场景 | ErrorCode | HTTP / WS |
 | :--- | :--- | :--- |
 | Router 无法分流、Schema 非法、技能未启用、外部 MCP 未启用、工具未注册 | `VALIDATION` | 400 |
+| 二段路由技能零命中/并列、`AgentDef.model_profile_id` 指向的档不可用 | `VALIDATION` | 400 |
 | 预算耗尽、`MAX_REPLANS` 超限 | `VALIDATION` | 400 |
 | 活动任务占槽、配额熔断 | `CONCURRENCY` | 409 |
 | bash 黑名单命中、附件不属本人 | `WHITELIST` / `UNAUTHORIZED` | 403 |
@@ -764,7 +862,7 @@ except Exception as exc:
 
 ### 7.5 明确不做什么（继承并扩展既有红线）
 
-1. 不新增第二条 Agent 循环、第二个 `ModelGateway`、第二套模型客户端；Worker 是**同图子图**，不是独立进程（ADR-3 / C-5）。
+1. 不新增第二条 Agent 循环、第二个 `ModelGateway`、第二套模型客户端；Worker 是**同图子图**，不是独立进程（ADR-3 / C-5）。`AgentDef` 只持有 `model_profile_id`，不持有 LLM 实例。
 2. 不把 Observation / `model_text` 写入 `assistant_message`、`ws_events` 或检查点。
 3. 不把 RAG / LightRAG mock 为 `succeeded`；语义记忆 `retrieve` 未接入前保持 `VALIDATION`。
 4. 不在 api 进程同步执行评测、用例生成、知识库评测、压测；不在 WS 收包循环 `await` 整轮 Harness。
@@ -774,6 +872,9 @@ except Exception as exc:
 8. 不在 `main` 上开发；每阶段一分支一 PR，契约变更先改 API.md（C-6）。
 9. 不重写 Harness 既有六层；新增代码只允许出现在 ADR-9 列举的位置。
 10. 不在 `agent_checkpointer=memory` 下发布 HITL 审批（ADR-7 / C-7）。
+11. **不做多 Worker 并行 Fan-out / Fan-in**（ADR-10）：H0–H6 内 Agent 子图恒为单 Worker 串行；不引入 `worker_results`；恢复该能力须先在 API.md 给 WS 事件头加分支维度，并把工作区资源键锁提升到会话级。
+12. 不用 XML 标签（`<Intent>` / `<Reasoning>`）作为模型协议格式；协议族统一 `*.v1` JSON（ADR-1）。
+13. 不把 `AGENTS.md` 或任意文本注入系统提示词；指令分层只经白名单受控槽（§5.5，PR-4）。
 
 ---
 
@@ -805,19 +906,23 @@ except Exception as exc:
 | 22 | **断点续跑（`PgCheckpointer`）** | 🟡 需重构 | 488 行就绪，默认 `memory`；须先解决粘性路由 | H5 |
 | 23 | **只读工具并行** | 🟡 需重构 | `batch.py` 完整，`agent_parallel_tool_batch_enabled=False` | H6 |
 | 24 | **Compact LLM 压缩** | 🟡 需重构 | `compact.summarize()` 当前为确定性截断 | H6 |
-| 25 | **CLAUDE.md 式指令三层优先级** | 🟡 需重构 | 有 `AGENTS.md`（不进运行时）+ `agent_prompt_overlay`，缺优先级与不可覆盖声明 | H0 |
+| 25 | **CLAUDE.md 式指令三层优先级** | 🟡 需重构 | 有 `AGENTS.md`（不进运行时）+ `agent_prompt_overlay`；需新增 `project_instructions` 受控槽 + L1/L2/L3 优先级 + 接管性措辞校验（§5.5，受 PR-4 约束不可任意注入） | H0 |
 | 26 | **斜杠命令（`direct`）** | 🟡 需重构 | 骨架化已整体移除，前端不再请求 `/api/slash-commands` | H1 |
 | 27 | **上下文缓存边界** | 🔴 **缺失（新建）** | `assemble()` 分段 + `adapters.py` `cache_control` | H0 |
 | 28 | **Agent Registry** | 🔴 **缺失（新建）** | 新增 `orchestration/agents.py` | H0 |
-| 29 | **Workflow 硬编码 DAG 子图** | 🔴 **缺失（新建）** | 新增 7 节点 DAG | H2 |
-| 30 | **Worker 发现（`discover` 节点）** | 🔴 **缺失（新建）** | 依赖 #28 | H3 |
-| 31 | **工具视野校验层** | 🔴 **缺失（新建）** | Tool Gateway 第 3 层 | H3 |
-| 32 | **外部 MCP 网关（预留 fail-closed）** | 🔴 缺失（**不实现**） | ADR-8，接口预留 + 开关默认关 | 待产品拍板 |
-| 33 | **语义记忆 / LightRAG** | 🔴 缺失（**保持 fail-closed**） | `memory/semantic.py` 抛 `VALIDATION`，红线禁止 mock | 不在本文范围 |
-| 34 | **Redis 短期记忆层** | 🔴 缺失 | 无源文件，`harness_memory_short_term_enabled=False` | 不在本文范围 |
-| 35 | **混合引擎测试套件** | 🔴 缺失（新建） | `tests/hybrid/` 四类场景 + 五维评分 | 随各阶段 |
+| 29 | **Workflow 硬编码 DAG 子图** | 🔴 **缺失（新建）** | 新增 8 节点 DAG | H2 |
+| 30 | **二段路由（`select_skill` 节点）** | 🔴 **缺失（新建）** | Workflow 内选具体 Skill；零命中/并列即 `clarify` | H2 |
+| 31 | **Worker 发现（`discover` 节点）** | 🔴 **缺失（新建）** | 依赖 #28 | H3 |
+| 32 | **工具视野校验层** | 🔴 **缺失（新建）** | Tool Gateway 第 3 层 | H3 |
+| 33 | **计划步进索引（`plan_step_index`）** | 🔴 **缺失（新建）** | 既有 `GraphState` 亦无；`replan` 后须重置为 0 | H3 |
+| 34 | **每 Worker 协议档覆盖（`model_profile_id`）** | 🔴 **缺失（新建）** | 只持 ID 不持 LLM 实例；档不可用 fail-closed | H0（字段）/ H3（生效） |
+| 35 | **外部 MCP 网关（预留 fail-closed）** | 🔴 缺失（**不实现**） | ADR-8，接口预留 + 开关默认关 | 待产品拍板 |
+| 36 | **多 Worker 并行 Fan-out / Fan-in** | 🔴 缺失（**本文明确不做**） | ADR-10：三重阻塞（既有串行冻结 / WS 事件缺分支维度 / 工作区跨 Worker 写冲突）；`Send` 技术可用但收益侧不支持提前做 | H6 之后单独立项 |
+| 37 | **语义记忆 / LightRAG** | 🔴 缺失（**保持 fail-closed**） | `memory/semantic.py` 抛 `VALIDATION`，红线禁止 mock | 不在本文范围 |
+| 38 | **Redis 短期记忆层** | 🔴 缺失 | 无源文件，`harness_memory_short_term_enabled=False` | 不在本文范围 |
+| 39 | **混合引擎测试套件** | 🔴 缺失（新建） | `tests/hybrid/` 四类场景 + 五维评分 | 随各阶段 |
 
-**统计**：已满足 14 项、需重构 12 项、新建 6 项、明确不做 3 项。
+**统计**：已满足 14 项、需重构 12 项、新建 9 项、明确不做 4 项。
 
 ---
 
@@ -832,6 +937,11 @@ except Exception as exc:
 | Q5 | 缓存边界的 S3 工具定义段是否按 `agent_id` 分桶（vs 全局） | 按 `agent_id` 分桶；Worker 数量少，桶数可控 | 架构 |
 | Q6 | Workflow DAG 节点内的局部 ReAct 是否允许多圈 | 单圈（ADR-4）；确实需要多圈的场景应由 Router 改判 `agent` | 架构 |
 | Q7 | 是否需要 `worker.sandbox`（`bash` 权限）在首批上线 | 否；H3 先上只读 Worker，`code` 权限 Worker 待 H5 HITL 就绪 | 架构 + 安全 |
+| Q8 | Fan-out 立项时 WS 事件分支维度怎么设计 | 事件公共头加 `branch_id`（Worker 分支标识）+ `parent_event_id`（合并点回指），`event_id` 仍全局单调；须先改 API.md | 契约负责人 + 架构 |
+| Q9 | `select_skill` 并列命中时是 `clarify` 还是取分数最高者 | `clarify`（ADR-4：宁可问一句，不猜错技能——评测入队是有副作用的） | 产品 |
+| Q10 | `project_instructions`（L2）是硬编码常量还是管理端可编辑 | 先硬编码常量随代码走；可编辑需要新 REST 端点与审计，价值待验证 | 产品 + 架构 |
+
+**已在 V1.1 关闭的问题**（原属草案分歧，已由 ADR 裁决）：分流基数四路（ADR-1）、协议格式 JSON（ADR-1）、每 Worker 模型用 `model_profile_id`（ADR-3）、重试预算分档（§4.2）、Fan-out 单独立项（ADR-10）。
 
 ---
 
@@ -846,6 +956,8 @@ except Exception as exc:
 | **哑 Orchestrator** | 只驱动循环、校验、执行、回灌，不做任何推理的编排组件（ADR-2） |
 | **Cache Boundary** | 提示词中静态段与动态段的分界，用于 Prompt Cache（ADR-5） |
 | **PlanArtifact** | 可序列化规划产物，字段以 `harness/contracts/artifacts.py` 为准 |
+| **二段路由** | 第一段 `router` 决定 `engine`，第二段 `select_skill` 在 Workflow 内决定 `skill_id`；两段职责不合并 |
+| **Fan-out / Fan-in** | 多 Worker 并行与结果合并。本文**明确不做**（ADR-10），H6 之后单独立项 |
 | **有界重规划** | Reflection 打回 Plan，`replan_count` 硬上限 2 |
 | **失败阶梯** | 首次失败 `repair`（注入 `repair_hint` 回 Executor，`MAX_REPAIRS=1`）→ 再失败 `retry`（重规划）→ 超限 `reject` |
 | **三通道** | 观察（进模型）/ 展示（ToolCard）/ 叙述（用户可读），互不替代 |
@@ -860,6 +972,8 @@ except Exception as exc:
 
 - `docs/AI测试与评估平台-混合驱动引擎架构.md`（新增）：V1.0 定义混合驱动引擎架构——顶层 Router 双引擎分流、Agent 子图 Orchestrator-Worker TAOR 循环、Workflow 子图硬编码 DAG、上下文缓存边界、Agent Registry、工具十层网关、HITL 与事件溯源；含 9 条 ADR、双层状态机 Mermaid 图、RootState/AgentState/WorkflowState 设计、H0–H6 七阶段落地计划、四类场景与五维评分测试策略、35 项「已满足 / 需重构 / 新建」总表。
 - `docs/AI测试与评估平台-混合驱动引擎环境审计.md`（前置输入）：V1.0 只读审计，提供本文全部现状判定依据与 9 项阻塞矛盾点（C-1…C-9）。
+
+**V1.1 变更（对齐需求草案 §3–§7 复核，纯文档）**：新增 ADR-10（多 Worker 并行 Fan-out/Fan-in 明确不做并列出三重阻塞）；ADR-1 补分流基数四路与协议格式 JSON 两项裁决（否决二值分流与 `<Intent>`/`<Reasoning>` XML 标签）；ADR-3 补 `AgentDef.model_profile_id`（只持档 ID、不持 LLM 实例、档不可用 fail-closed）；ADR-4 补 `select_skill` 二段路由节点，Workflow DAG 由 7 节点扩为 8 节点并同步 Mermaid 与范式标注表；§4.1 补 `mode` 字段撞车裁决（新增 `engine`、不采纳草案 `mode`/`user_input`）；§4.2 新增 `plan_step_index` 并给出草案字段映射表（`reflection_feedback` 拆为 `repair_hint` + `replan_reason` 双通道、`worker_results` 不引入）与重试预算分档口径；§4.3 补 `skill_candidates`；新增 §5.5「指令分层与运行时注入」（`project_instructions` 受控槽 + L1/L2/L3 优先级 + 接管性措辞校验，替代无法落地的「加载 CLAUDE.md」），原 §5.5 顺延为 §5.6；§6.1 S1 场景明确「不得为简单问答伪造 Skill」；§6.2 增「3 次内修复成功率」指标；§7.4 错误映射补二段路由与协议档不可用；§7.5 增第 11–13 条禁令；§8 总表扩至 39 项（新建 9 / 明确不做 4）；§9 新增 Q8–Q10 并列出 V1.1 已关闭的 5 项草案分歧。
 
 **待回写的既有文档**（实施各阶段时同步，`AGENTS.md` §1.4 文档闭环要求）：
 
