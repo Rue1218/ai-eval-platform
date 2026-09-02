@@ -1,10 +1,10 @@
 # AI 测试与评估平台 Agent 开发文档
 
-> 版本：V1.5.32
-> 状态：LangGraph Harness 已启用混合范式 P0–P2：Plan-and-Solve → ReAct → reflect；Plan 可直接建立 task 清单并把安全 Observation 交给 ReAct；confirm 规划在计划内短工具观察齐后可跳过空转 ReAct 直达 reflect；执行器有计划时只注入剩余工具；完整原生 ToolCall 在上游收尾前先持久化加载态；native 首轮流式可按协议档回滚；同轮 ToolBatch 保序回填；JSON ReAct 和原生选工具 reasoning 不投影；clarify 与危险 bash approval 均采用 LangGraph interrupt；检查点默认 memory；reflect 产出确认卡；ContextMeter 服务端计算；技能工作流 Progressive Disclosure
-> 审查日期：2026-09-01（V1.5.32）
+> 版本：V1.6.0
+> 状态：**骨架化改造**：Agent 图已收敛为单节点纯对话（`START → chat_stream → END`）。多范式路由（direct/chat/react/plan_solve）、ReAct 思考链、reflect 反思门禁、think_stream 思考流、澄清卡、确认卡、短工具调用与斜杠命令全部移除；保留模型直答、流式投影、会话记忆（assemble / compact 摘要）、WS 事件桥接与平台任务进度/报告事件。检查点默认 memory；ContextMeter 服务端计算；assemble 接线 CX-4/CX-5。
+> 审查日期：2026-09-02
 > 对应需求：`AI测试与评估平台-PRD.md` V1.18
-> 对应接口：`AI测试与评估平台-API.md` V1.66
+> 对应接口：`AI测试与评估平台-API.md` V1.61
 
 ## 1. 当前唯一运行链路
 
@@ -12,14 +12,14 @@
 浏览器
   -> WebSocket /ws/agent（五分钟单次短票）
   -> app/routers/ws.py
-  -> app/agent/graph.py（LangGraph 路由 + ReAct 图）
-  -> react.py（原生 ToolCall，严格 JSON 兼容回退）→ toolnode.py（原生基础工具 / MCP 扩展）→ react.py（模型收敛）
+  -> app/agent/graph.py（LangGraph 纯对话图）
+  -> routing.py（chat_stream_node：assemble 装配上下文 → ModelGateway 流式生成）
   -> app/llm/gateway.py（LangGraph 模型调用图）
   -> app/adapters.py（三协议 HTTP 适配）
   -> 上游模型
 ```
 
-本链路只有一个 Agent 入口和一个模型调用入口。ReAct 只能作为该 LangGraph 图的子图，禁止复制第二套 Harness 循环或模型客户端。
+本链路只有一个 Agent 入口和一个模型调用入口，全链路不注入任何工具定义，不产生思考链/确认卡/澄清卡事件。
 
 ## 2. 分层边界
 
@@ -31,8 +31,8 @@
 - 校验会话可见性，支持首次连接创建私有会话；
 - 保存 `messages` 与 `ws_events`，按 `last_event_id` 补发历史事件；
 - 在后台 Task 中启动单轮 Agent，不阻塞 WebSocket `receive` 循环；
-- 将 LangGraph 流事件投影为 `user_message`、`thought`、`assistant_delta`、`tool_progress`、`tool_output_delta`、`assistant_message`、`tool_approval`、`confirm`、`response.completed`、`error`、`pong`。`thought` 每回合至多是一条固定过程摘要；JSON ReAct `thought`、Plan/reflect 阶段事件和 ToolCall 前正文草稿一律不投影；工具流只允许受控输出窗口。
-- `confirm_ack` / `cancel_task` / `clarify_reply` / `tool_approval_ack` 由收包循环直连；后两者仅以 `Command(resume=...)` 恢复同一检查点，不在 api 进程执行评测或压测。
+- 将 LangGraph 流事件投影为 `user_message`、`assistant_delta`、`assistant_message`、`response.completed`、`error`、`pong`（骨架化后不再产生 `thought` / `tool_*` / `confirm` / `clarify` 等事件）；
+- `cancel_task` 由收包循环直连，不在 api 进程执行评测或压测。
 
 路由不得直接调用 `app.adapters`，不得执行 Benchmark、RAG、用例生成或压测。
 
@@ -41,17 +41,18 @@
 `app/agent/graph.py` 保持一个 LangGraph 图，模型调用只依赖 `app.llm` 的公开契约：
 
 ```text
-START -> routing -> (direct | chat_stream | react_agent | plan_solve)
-react_agent -> (tools | reflect | END)
-tools -> (tools | react_agent | reflect | END)
-plan_solve -> (tools | react_agent | END)   # 有首个 task 先执行，失败则 END
-reflect -> (react_agent | clarify | plan_solve | END)
-clarify -> plan_solve
+START -> chat_stream -> END
 ```
 
-`decide_mode` 为代码主导：斜杠 → Direct；附件 → ReAct；多技能、两个及以上不同短工具、确认卡或显式清单 → Plan-and-Solve（`build_plan`，失败 L0 降级并合并全部命中能力，步骤 3–7）；单工具关键词 → ReAct；否则 Chat。`plan_solve` 下发完整 `PlanArtifact`（`plan` 事件含 `slots`/`budget`/`notes`）；需要清单时同一节点发出 `task` 的 `tool_call`，规划节点不发 `response.completed`。`delivery=confirm` 且计划内短工具已观察完毕时，`tools` 可跳过空转 ReAct 直达 `reflect`；计划仍有未执行短工具时必须回 ReAct 决策。有 `plan` 的回合由 `reflect` 发出本轮唯一 `response.completed`。Direct 不经 reflect，由 `direct_node` 在业务事件后发出本轮唯一 `response.completed`（`/help` 为 `stop`，校验/防御为 `error`）。用户消息不得接管 `<PLAN>`、ReAct 或 ToolCall 控制格式；这些协议仅由平台内部图生成。PlanCard、ToolCard、确认卡和最终回答是唯一业务可见输出；内部图不投影思考链。不引入 LangChain `create_react_agent` 或第二张图。
+骨架图只有一个 `chat_stream_node`（`app/agent/routing.py`）：`assemble` 装配
+Persona / Skill Hint / 会话摘要 / 历史消息后，直接调用 `ModelGateway.stream()`
+流式生成，正文增量经 `assistant_delta` 投影，收尾产出
+`assistant_message` + `response.completed`。不再有 `decide_mode` 范式路由、
+ReAct 循环、Plan/reflect 节点、工具节点、澄清卡与确认卡。
 
-图节点不持有数据库 Session、WebSocket 或任务队列。ToolNode 只消费可序列化 `pending_tool` / `pending_tools` / `pending_tool_batch`、执行既有门禁与沙箱工具，并返回 Observation；同一模型响应的多个 ToolCall 以 ToolBatch 保序。危险 bash 在全部 Schema/Gate/附件校验通过后、调用 Runner 前以 `interrupt()` 暂停：payload 使用稳定 `call_id`，只允许原发起成员 `approve|reject` 恢复；拒绝生成 `tool_result.status=rejected` 而不发系统错误。默认一次访问只执行一项。只读并行须同时满足：`AGENT_PARALLEL_TOOL_BATCH_ENABLED=true`、`AGENT_PARALLEL_TOOL_BATCH_PROFILE_IDS` 命中当前协议档（空名单不开，`*` 表示全部）、进程内脚踢线未触发。可并行工具仍仅 `read` / `web_search` / `web_fetch`。`write` / `edit` / `bash` / `task.create` / `task.cancel` 始终串行屏障；`task` / `task.status` 仍串行。灰度与度量见 `GET /api/agent/metrics`。并发类不投影给模型或浏览器。并行不得绕过 Schema、Gate、附件绑定、权限或 bwrap；每项自建/关闭 DB Session。一批全部终态后才按原始 `call_id` 顺序组装 `role=tool` 回填消息。`transport=native` 的 read/write/edit/bash/web_search/web_fetch/task 经 NativeToolExecutor 直连受控 handler；`transport=mcp` 的 `platform.tasks.task.create/status/cancel` 和后续评测/RAG 扩展经 MCPClientManager。路由层仍负责事件持久化与投影。
+图节点不持有数据库 Session、WebSocket 或任务队列；节点只返回纯数据
+（`pending_events` / `response` 投影），事件持久化与广播由 ws.py 负责。
+`/stop` 即时中断保留在收包循环（不进入图），其余斜杠命令已移除。
 
 ### 2.3 ModelGateway
 
@@ -66,45 +67,43 @@ clarify -> plan_solve
 
 三协议 HTTP 细节只允许存在于 `app/adapters.py`。API Key 不得出现在日志、事件、异常消息或模型层对象的默认 repr 中。
 
-流式工具参数只能在 `app/adapters.py` 的单次调用内累计：OpenAI Chat 按调用索引、OpenAI Responses 按输出项、Anthropic 按内容块累计，只有 JSON 对象完整后才产生 `ModelStreamEvent(kind="tool_call")`。该内部事件用于 Agent 控制流和最终 `ModelResponse.tool_calls`，浏览器不得接收或透传参数片段；工具执行期间仅允许 ToolNode 发出已脱敏、受限额的 `tool_progress`/`tool_output_delta`，最终状态仍以完整 `tool_result` 为准。
-
-`tool_call_mode=native` 时，首轮与工具结果回填后的模型回合默认走 `ModelGateway.stream()`：没有 ToolCall 的自然语言响应才可投影 `text` 块为 `assistant_delta`；一旦该上游响应含 ToolCall，所有正文草稿均丢弃，完整 ToolCall 只在该次上游响应结束后写入 `pending_tool_batch` 并落卡。可用 `AGENT_NATIVE_STREAM_ENABLED=false` 或协议档白名单立即回退 `invoke`，不改历史事件。一次上游响应在发出 ToolCall 后即结束；执行工具并回填 `tool_result` 后才会发起下一次模型请求。同轮多个调用由 ToolBatch 保序；并行另需总开关 + 协议档白名单。`legacy` 继续走严格 `react.v1` JSON-ReAct。
+骨架化后 Agent 不再注入工具定义、不消费 `ModelStreamEvent(kind="tool_call")`；
+模型层仍保留原生 ToolCall 契约（供 Worker/未来扩展复用），但浏览器与 Agent 图
+均不接收工具事件。正文流式投影：`ModelStreamEvent(kind="content")` 以
+`assistant_delta` 瞬时广播，`completed` 收尾产出 `assistant_message`。
 
 Agent 思考配置从 `Setting(key="agent_reasoning")` 读取，结构为
 `{"enabled": true, "effort": "medium"}`。开启时，OpenAI Responses 使用
 `reasoning.effort` 与 `reasoning.summary="auto"`，Gemini OpenAI 兼容端点使用
 `extra_body.google.thinking_config`，OpenAI Chat / Mimo 与 Anthropic 使用各自的思考字段；
-前端不渲染上游提供的摘要/增量原文；服务端只会用固定过程摘要替代一次，且不把助手正文写入 `thought`。关闭时网关过滤 reasoning
-事件，并对已知支持显式关闭的端点发送关闭参数。Gemini 的 `xhigh/max` 映射为 `high`。
+骨架化后不再投影 `thought` 事件，前端不渲染任何思考摘要。关闭时网关过滤
+reasoning 事件，并对已知支持显式关闭的端点发送关闭参数。Gemini 的
+`xhigh/max` 映射为 `high`。
 
 ## 3. 首期 WebSocket 事件
 
-已实现服务端事件：
+已实现服务端事件（骨架化后收敛为纯对话 + 平台任务流）：
 
 | 事件 | 作用 |
 | --- | --- |
 | `user_message` | `role=user` 的用户消息落库并向会话在线成员广播；服务端不再使用含义不明确的 `message` |
-| `thought` | 每回合至多一条固定过程摘要；`stream=think` 为当前连接瞬态提示，`think_final` 不在历史 UI 重放；不承载阶段状态、助手正文或模型 reasoning |
 | `assistant_delta` | 助手正文瞬态增量，仅向在线会话成员广播，不占事件号 |
 | `assistant_message` | 助手完整交付句，落库并占用会话事件号 |
 | `response.completed` | 本轮生成结束，携带 `finish_reason` 和 `role=assistant` 并可回放 |
-| `tool_call` | 已解析的短工具 `call_id`、名称与参数；创建 ToolCard，不直接执行业务长任务 |
-| `tool_approval` | 危险 bash 的人工确认卡；持久化命令、风险原因与沙箱边界，图在此暂停，命令尚未执行 |
-| `tool_progress` | ToolNode 校验/执行/收尾的瞬态阶段；按 `call_id` 原地更新卡片，不落库、不补发 |
-| `tool_output_delta` | 服务端受控输出块；`bash` 逐完整行、`read` 按完整行块、`write` 仅在原子写成功后下发预览；单次调用累计≤`TOOL_PREVIEW_MAX_CHARS`（默认与 read 窗口对齐），不落库、不补发 |
-| `tool_result` | 与 `tool_call.call_id` 相同的短工具受控结果；`read` 包含行范围、文件统计与完整行预览（上限随部署配置，经 `preview_limit_chars` 下发）；用户拒绝时 `status=rejected`，无系统错误 |
-| `tool_approval_ack` | 仅原发起成员可上行的确认回执；服务端校验 `id` 和 `action=approve|reject` 后以 `Command(resume=...)` 恢复原检查点 |
-| `confirm` | 质量任务确认卡（TaskSpec）；`kind` 不得为 `stress`；落 `sessions.pending_confirm` |
 | `error` | 脱敏后的 `ErrorCode` 与用户可见消息 |
 | `pong` | 应用层心跳，不占用持久化事件号，可与业务事件交错到达 |
 
-上行已启用：`user_message`、`confirm_ack`（直连入队/取消卡）、`cancel_task`、`clarify_reply`、`tool_approval_ack`。
+平台任务流（Worker 直产，`_forward_loop` 推送，与骨架 Agent 无关）：
+`progress`（任务进度）、`report`（评测报告）、带 `task_id` 的 `error`（任务失败）。
+
+上行已启用：`user_message`、`cancel_task`（直连取消任务）。`/stop` 以
+`user_message` 文本上行，由收包循环即时中断。
 
 ## 4. 当前冻结范围
 
 以下内容仍不属于当前已实施范围，不得绕过契约提前加入：
 
-- 外部 MCP、浏览器直连 MCP、动态加载未知 MCP Server；未命中白名单或未开 flag 时的工具并行；写/bash/任务类工具并行；
+- 多范式路由、ReAct 思考链、reflect 反思、think_stream 展示、澄清卡、确认卡、短工具调用与斜杠命令（骨架化后已整体移除，恢复需先回写 PRD/API 再实现）；
 - 外部通知渠道（企微/邮件/Webhook）与 Grafana 抓取编排；
 - PostgreSQL Checkpointer 多副本粘性路由（默认仍为 memory）；
 - 未经模型变更、Alembic 自动生成与审阅的新迁移。
@@ -112,22 +111,47 @@ Agent 思考配置从 `Setting(key="agent_reasoning")` 读取，结构为
 ## 5. 后续扩展门禁
 
 1. 新增 Harness 前先定义独立的输入、输出、事件、取消和错误契约；
-2. 新增 MCP 或确认卡前先同步 PRD 与 API，再实现 API 层门禁；
+2. 新增 MCP、确认卡或范式路由前先同步 PRD 与 API，再实现 API 层门禁；
 3. 长任务只能入 PostgreSQL 队列，由 Worker 执行，API 进程不等待终态；
 4. 所有异常统一为十类 `ErrorCode`，不得把 traceback、SQL 或上游原文发送给浏览器；
 5. 扩展 Agent 只能在 LangGraph 图中增加节点/边，禁止保留旧路径或复制协议适配。
 
 ## 修改代码文件与作用清单
 
-- `backend/api/app/agent/graph.py`：LangGraph 单轮 Agent 图；
-- `backend/api/app/llm/contracts.py`：模型调用输入输出契约；
-- `backend/api/app/llm/gateway.py`：LangGraph 模型调用与流式投影；
-- `backend/api/app/routers/ws.py`：WebSocket 鉴权、会话事件与后台 Agent 回合；
+- `backend/api/app/agent/graph.py`：LangGraph 单轮 Agent 图（骨架化：`START → chat_stream → END`）；
+- `backend/api/app/agent/routing.py`：纯对话流式节点 `chat_stream_node`（骨架化后唯一节点）；
+- `backend/api/app/routers/ws.py`：WebSocket 鉴权、会话事件与后台 Agent 回合（骨架化：移除 thought/clarify/tool_approval/confirm/斜杠逻辑）；
 - `backend/api/app/session_connections.py`：会话内事件和流增量广播；
 - `backend/api/tests/test_agent_graph.py`：Agent 图回归测试；
 - `frontend/src/api/ws.ts`：识别 `assistant_delta` 瞬态帧并跳过事件号去重；
 - `frontend/src/api/types.ts`：补充 `user_message`、`assistant_delta`、`assistant_message`、`response.completed` 事件类型；
-- `frontend/src/views/Agent.vue`：分离思考卡、助手正文增量、最终助手消息和结束状态。
+- `frontend/src/views/Agent.vue`：纯对话消息流（移除思考卡/工具卡/确认卡/澄清卡/斜杠面板）。
+
+### V1.6.0（2026-09-02）骨架化改造修改代码文件与作用清单
+
+**后端（Agent 骨架化）**：
+
+- `backend/api/app/agent/graph.py`：重写为纯对话图 `START → chat_stream → END`；删除 routing/react/plan_solve/reflect/clarify/tools 节点；
+- `backend/api/app/agent/routing.py`：只保留 `chat_stream_node`（assemble → ModelGateway 流式生成 → `assistant_message` + `response.completed`）；删除 `routing_node`/`route`/`direct_node`；
+- 删除 `backend/api/app/agent/react.py`、`plan_solve.py`、`reflect.py`、`think_stream.py`、`clarify.py`；
+- `backend/api/app/routers/ws.py`：删除 think 流、`__interrupt__` 翻译（clarify/tool_approval）、confirm 事件与 `confirm_ack`、斜杠命令（/help /compact /cancel /stress）、`_handle_clarify_*`/`_handle_tool_approval_*`/`_persist_pending_confirm`/`_confirm_author_payload`；保留 `/stop` 即时中断与 `cancel_task`；
+- 删除 `backend/api/app/routers/slash_commands.py`、`backend/api/app/harness/memory/slash_store.py`；`main.py` 移除斜杠路由注册；`schemas.py` 删除 `SlashCommandCreate`。
+
+**测试**：
+
+- 删除 `test_agent_react.py`、`test_agent_routing.py`、`test_agent_clarify.py`、`test_think_stream.py`、`test_ws_clarify.py`、`test_plan_budget_task_state.py`、`test_harness_phase4.py`、`test_confirm_ack.py`、`test_slash_commands.py`；
+- 改写 `test_agent_multiturn.py`（纯对话多轮）、`test_ws_protocol.py`（移除确认卡/斜杠用例）、`test_harness_prompts.py`（移除 ReAct stage input 用例）。
+
+**前端（同步拆除）**：
+
+- 删除组件 `ThoughtCard.vue`、`ToolCard.vue`、`PlanCard.vue`、`ClarifyCard.vue`、`ConfirmCard.vue`、`ToolApprovalCard.vue`、`SlashPalette.vue`、`TaskStateDrawer.vue`、`Composer.vue`；
+- 删除 `agent/slashRegistry.ts`、`utils/toolCard.ts`；
+- `Agent.vue` 重写为纯对话消息流（保留会话管理、附件、模型切换、ContextMeter、进度坞、报告卡）；
+- `ws.ts` 删除 `sendConfirmAck`/`sendClarifyReply`/`sendToolApprovalAck`；`types.ts` 收窄 `WsServerEvent`；`http.ts` 移除 `/api/slash-commands`。
+
+**文档**：
+
+- `docs/AI测试与评估平台-Agent开发文档.md`：同步骨架化链路、事件表与冻结范围（本文档 V1.6.0）；AGENTS.md 状态地图同步。
 
 ### V0.3（2026-08-23）修改代码文件与作用清单
 
@@ -463,49 +487,3 @@ Agent 思考配置从 `Setting(key="agent_reasoning")` 读取，结构为
 - `frontend/src/views/Agent.vue`：单回合最多显示一张固定过程摘要；历史 `thought` 不回放，Plan/Reflect 阶段仅驱动生成状态而不创建聊天卡。
 - `backend/api/tests/test_agent_react.py` / `test_agent_routing.py` / `test_agent_multiturn.py`：覆盖 ReAct 内部 thought、ToolCall 草稿和 Plan/Reflect 阶段均不出站，且工具后必须重新生成最终交付。
 - `docs/AI测试与评估平台-PRD.md` / `AI测试与评估平台-API.md`：升级至 PRD V1.18 / API V1.61，冻结可见过程卡与历史重放边界。
-
-### V1.5.28（2026-09-01）修改代码文件与作用清单
-
-- `backend/api/app/agent/plan_solve.py` / `graph.py`：PlanArtifact 需要清单时直接建立 `task` ToolCall；Plan 后先执行 ToolNode，再将安全 Observation 交给 ReAct；非流式入口改走异步图以兼容该 ToolNode。
-- `backend/api/app/agent/react.py` / `routers/ws.py`：原生 ToolCall 在完整 `call_id`、工具名和参数到齐时预建持久化加载卡；节点收尾按 `call_id` 去重；原生选工具 reasoning 与 JSON ReAct `thought` 均不出站。
-- `frontend/src/components/agent/ToolCard.vue` / `frontend/src/utils/toolIo.ts`：task 输入与结果固定展示目标、步骤和状态，结果标签为 Observation，避免通用 JSON 回退；其余工具复用同一字段展示模型。
-- `backend/api/tests/test_agent_routing.py` / `test_agent_react.py`：覆盖 Plan→task→Observation→ReAct 事件顺序及提前 ToolCall。
-- `docs/AI测试与评估平台-API.md`：升级 V1.64。
-
-### V1.5.29（2026-09-01）修改代码文件与作用清单
-
-- `backend/api/app/harness/execution/aliases.py` / `toolnode.py`：Schema 校验前把 `path`/`old`/`new`/`limit`/`goal` 等旧名归一为 canonical 字段并删除旧键。
-- `backend/api/app/harness/execution/registry.py`：7 个原生工具输入/输出 Schema 改为 `file_path`、`old_string`/`new_string`、`max_results`、`description`+`prompt` 等。
-- `backend/api/app/harness/execution/dispatch.py`：`edit.replace_all`、bash `timeout` 封顶、域名白/黑名单；`display` 增补扁平字段；`dangerouslyDisableSandbox`/`run_in_background` 拒绝。
-- `backend/api/app/agent/react.py` / `plan_solve.py` / `harness/execution/batch.py`：去重指纹与 Plan 直调 task、并发键改读 `file_path`。
-- `frontend/src/utils/toolIo.ts` / `components/agent/ToolCard.vue`：卡片优先展示新字段。
-- `docs/AI测试与评估平台-API.md`：升级 V1.65。
-
-### V1.5.27（2026-09-01）修改代码文件与作用清单
-
-- `frontend/src/utils/toolCard.ts` / `views/Agent.vue`：`findPendingToolItem` 同时匹配 `pending` 与 `awaiting_approval`；用户确认或收到 `tool_approval_ack` 后立刻离开“等待确认”，保证后续 `tool_progress` / `tool_result` 按同一 `call_id` 回填。
-- `backend/api/app/agent/graph.py`：HITL `interrupt()` 暂停时不清空本轮 `NativeToolResultStore`，避免确认恢复后先前 read 原文丢失。
-- `backend/api/app/routers/ws.py`：`GraphInterrupt` 视为可恢复暂停，不再兜底成 INTERNAL「Agent 调用失败」；确认回执落库失败时还原待确认注册项。
-- `backend/api/tests/test_bash_hitl.py` / `test_stream_p3_integration.py` / `test_ws_clarify.py`：覆盖 `["custom","updates"]` 恢复、awaiting_approval 回填与回执失败还原。
-- `docs/AI测试与评估平台-API.md`：升级 V1.63。
-
-### V1.5.30（2026-09-01）修改代码文件与作用清单
-
-- `backend/api/app/agent/loop.py`：抽出 Observe → Think → Act → Gate 循环边；`delivery=confirm` 且计划内短工具已观察完毕时，`tools` 直达 `reflect`，不再空转一轮 ReAct。
-- `backend/api/app/agent/react.py` / `graph.py` / `reflect.py`：有计划时执行器只注入剩余 `tools_needed`；`tools` 条件边增加 `reflect`；confirm 快路径补齐非流式 `response` 占位。
-- `backend/api/app/harness/context/assembly.py`：`select_tool_defs(planned_only=True)` 不再铺开全量原生工具。
-- `backend/api/tests/test_agent_react.py` / `test_agent_routing.py` / `test_harness_context.py`：覆盖确认卡快路径、剩余工具仍回 ReAct、以及 planned_only 注入。
-
-### V1.5.31（2026-09-01）修改代码文件与作用清单
-
-- `backend/api/app/harness/execution/session_board.py` / `ask_user.py` / `registry.py`：会话看板 `TaskCreate`/`TaskGet`/`TaskUpdate`/`TaskList`；`ask_user_question` 复用 clarify。
-- `backend/api/app/harness/execution/toolnode.py` / `aliases.py` / `memory/state.py`：看板写回 GraphState；`id`/`task_id`→`taskId`；提问在 ToolNode `interrupt`。
-- `frontend/src/utils/toolIo.ts` / `ClarifyCard.vue` / `views/Agent.vue`：新工具字段与多问题澄清卡。
-- `docs/AI测试与评估平台-API.md`：升级 V1.66。
-
-### V1.5.32（2026-09-01）修改代码文件与作用清单
-
-- `backend/api/app/agent/loop.py` / `react.py`：计划内 `Task*` / `ask_user_question` 与 `task` 同等视为元工具，成功后从剩余步骤移除，不触发额外总结调用。
-- `backend/api/app/harness/execution/ask_user.py` / `routers/ws.py` / `frontend/src/utils/clarifyReply.ts`：澄清回复按行对齐，保留空行；多选拆 `selected`。
-- `backend/api/app/harness/execution/session_board.py` / `registry.py`：不再用 `status=success` 覆盖看板状态；已删除项不可更新；超容量整批拒绝；前置依赖生效。
-- `frontend/src/components/agent/ToolCard.vue`：`pending` 不再被当成成功色。

@@ -93,15 +93,6 @@ def test_system_prompt_anti_hallucination_clauses() -> None:
     assert "必须完成全部步骤后才可报告完成" in prompt
 
 
-def test_react_stage_inputs_anti_hallucination() -> None:
-    """ReAct/native 阶段输入必须含反幻觉约束（收到 tool_result 才可声称成功）。"""
-    from app.agent.react import NATIVE_TOOL_STAGE_INPUT, REACT_STAGE_INPUT
-
-    for stage in (REACT_STAGE_INPUT, NATIVE_TOOL_STAGE_INPUT):
-        assert "收到平台返回的工具结果后才能声称该操作已成功" in stage
-        assert "禁止口头编造执行结果或文件内容" in stage
-
-
 def test_plan_schema_rejects_missing_extra_fields() -> None:
     """P-A2：规划协议拒绝缺字段/多字段。"""
     with pytest.raises(AppError) as missing:

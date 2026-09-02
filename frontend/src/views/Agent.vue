@@ -120,11 +120,8 @@
         <span v-if="currentSession?.visibility === 'team'" class="chat-team-badge">团队共享</span>
         <span v-if="isGenerating" class="gen-pill">
           <i class="bdot"></i>
-          <span>{{ harnessStageLabel }}</span>
+          <span>生成中</span>
           <span v-if="turnLatencyLabel" class="mono" style="opacity:.8">{{ turnLatencyLabel }}</span>
-        </span>
-        <span v-else-if="awaitingConfirm" class="gen-pill">
-          <span>等待确认</span>
         </span>
 
         <span class="grow"></span>
@@ -136,16 +133,6 @@
           @click="toggleSessionSharing"
         >
           {{ currentSession.visibility === 'team' ? '仅自己' : '共享团队' }}
-        </button>
-
-        <!-- 调度视图切换按钮 -->
-        <button
-          class="btn btn-sm"
-          :class="isRailOpen ? 'btn-secondary' : 'btn-ghost'"
-          title="展开/折叠任务调度分配侧轨"
-          @click="toggleDispatchRail"
-        >
-          调度视图
         </button>
       </div>
 
@@ -164,11 +151,11 @@
         <div class="chat-col">
           <!-- 1. 空会话内联欢迎态 -->
           <div v-if="events.length === 0" class="welcome" data-od-id="welcome">
-            <div class="welcome-eyebrow">{{ isRagMode ? 'AI Eval · RAG 评估智能体' : 'AI Eval · 大模型测试智能体' }}</div>
+            <div class="welcome-eyebrow">AI Eval · 智能体</div>
             <!-- 固定文案两行排版（对齐原型 <br> 换行），非用户输入，无注入风险 -->
             <h2 class="welcome-title" v-html="isRagMode ? '知识库检索质量评估，<br>全链路调优与召回分析。' : '说一句目标，<br>拿回一份评测报告。'"></h2>
             <p class="welcome-sub">
-              {{ isRagMode ? '说明要评测的知识库或外部 RAG 接口，我会澄清后给您确认卡。支持 LightRAG 4 模式对比与召回命中归因。' : '说明要评测的模型或 PRD 生成需求，我会澄清后给您确认卡。未确认不入队，确认前字段都能修改。' }}
+              {{ isRagMode ? '说明要评测的知识库或外部 RAG 接口。' : '说明要评测的模型或 PRD 生成需求。' }}
             </p>
 
             <div class="welcome-caps">
@@ -212,78 +199,10 @@
               </div>
             </div>
 
-            <!-- 2.1.1 打字占位气泡：LLM 意图识别期间的即时反馈（收到事件后由 dismissTyping 移除） -->
+            <!-- 2.1.1 打字占位气泡：服务端流式开始前的即时反馈（收到事件后由 dismissTyping 移除） -->
             <div v-else-if="item.type === 'typing'" class="msg-agent typing-bubble">
               <span class="tdot"></span><span class="tdot"></span><span class="tdot"></span>
             </div>
-
-            <!-- 2.2 过程摘要：只展示服务端归一的一条状态，不展示模型原始思考链。 -->
-            <ThoughtCard
-              v-else-if="item.type === 'thought'"
-              :text="item.text || ''"
-              :done="item.done"
-              :latency-ms="item.latency_ms"
-              :skill-id="item.skill_id"
-              :stage="item.stage"
-            />
-
-            <!-- 2.3 ToolCall 卡片：WS 事件 tool_call/tool_result，执行走内部短工具 -->
-            <ToolCard
-              v-else-if="item.type === 'tool'"
-              :tool="item.tool || ''"
-              :args="item.args"
-              :result="item.result"
-              :status="item.status || 'pending'"
-              :latency-ms="item.latency_ms"
-              :truncated="item.truncated"
-              :source="item.source"
-              :redacted="item.redacted"
-              :progress="item.toolProgress"
-              :stream-output="item.streamOutput"
-              :recovery="item.recovery"
-              :default-open="item.status === 'pending' || item.open"
-              :no-anim="item.noAnim"
-            />
-
-            <MediaPreview
-              v-else-if="item.type === 'media' && item.contentUrl"
-              :src="item.contentUrl"
-              :filename="item.filename"
-              :no-anim="item.noAnim"
-            />
-
-            <!-- 2.4 任务确认卡：事实源在 ConfirmCard.vue（与 Agent 内联卡行为一致） -->
-            <ConfirmCard
-              v-else-if="item.type === 'confirm' && item.card"
-              :item="item"
-              :available-profiles="availableProfiles"
-              :available-datasets="availableDatasets"
-              :available-kbs="availableKbs"
-              :available-gold-qas="availableGoldQas"
-              :active-task="activeTask"
-              :prod-approvers-text="prodApproversText"
-              :can-confirm="canConfirmItem(item)"
-              :confirm-author-label="confirmAuthorLabel(item)"
-              @confirm="handleConfirmAck(item, true)"
-              @cancel="handleConfirmAck(item, false)"
-            />
-
-            <!-- 2.4.0 PlanArtifact：完整可见，用户无需 ack（API.md §4.3 plan） -->
-            <PlanCard
-              v-else-if="item.type === 'plan' && item.plan"
-              :plan="item.plan"
-              :no-anim="item.noAnim"
-            />
-
-            <!-- 2.4.1 澄清卡：interrupt() 暂停图后等待用户补充信息（仅回复，不建任务） -->
-            <ClarifyCard
-              v-else-if="item.type === 'clarify'"
-              :question="item.question || ''"
-              :options="item.options || null"
-              :questions="item.questions || null"
-              :is-acked="item.isAcked"
-              @reply="handleClarifyReply(item, $event)"
-            />
 
             <!-- 2.5 评测报告卡片 -->
             <div
@@ -334,7 +253,7 @@
               </div>
             </div>
 
-            <!-- 2.7 Agent 回合：模型头部固定在最前，后续块严格按 ReAct 顺序排列 -->
+            <!-- 2.7 Agent 回合：模型头部固定在最前，助手正文按流式增量顺序排列 -->
             <div
               v-else-if="item.type === 'agent'"
               class="msg-agent"
@@ -356,62 +275,27 @@
                     </div>
                   </div>
 
-                  <!-- 回合内容只保留过程摘要、已验证 ToolCard 与最终回答。 -->
-                  <div v-if="item.blocks?.length" class="assistant-message-blocks">
-                    <template v-for="(block, blockIdx) in item.blocks" :key="blockIdx">
-                      <ThoughtCard
-                        v-if="block.type === 'thought'"
-                        :text="block.text || ''"
-                        :done="block.done"
-                        :latency-ms="block.latency_ms"
-                        :skill-id="block.skill_id"
-                        :stage="block.stage"
+                  <!-- 回合内容：纯助手正文（骨架版无思考卡 / 工具卡 / 确认卡）。 -->
+                  <template v-for="(block, blockIdx) in item.blocks" :key="blockIdx">
+                    <div v-if="block.type === 'assistant'">
+                      <MarkdownView
+                        v-if="block.raw || block.text"
+                        :content="block.raw || block.text || ''"
+                        :is-streaming="block.streaming"
                       />
-                      <ToolCard
-                        v-else-if="block.type === 'tool'"
-                        :tool="block.tool || ''"
-                        :args="block.args"
-                        :result="block.result"
-                        :status="block.status || 'pending'"
-                        :latency-ms="block.latency_ms"
-                        :truncated="block.truncated"
-                        :source="block.source"
-                        :redacted="block.redacted"
-                        :progress="block.toolProgress"
-                        :stream-output="block.streamOutput"
-                        :recovery="block.recovery"
-                        :default-open="block.status === 'pending' || block.open"
-                        :no-anim="block.noAnim"
-                      />
-                      <MediaPreview
-                        v-else-if="block.type === 'media' && block.contentUrl"
-                        :src="block.contentUrl"
-                        :filename="block.filename"
-                        :no-anim="block.noAnim"
-                      />
-                      <div v-else-if="block.type === 'assistant'" class="assistant-reply">
-                        <MarkdownView
-                          v-if="block.raw || block.text"
-                          :content="block.raw || block.text || ''"
-                          :is-streaming="block.streaming"
-                        />
-                        <div v-if="!block.streaming" class="reply-latency mono">
-                          <template v-if="formatLatency(block.latency_ms)">耗时 {{ formatLatency(block.latency_ms) }}</template>
-                          <template v-if="block.turn_stats && formatTurnStats(block.turn_stats)">
-                            <template v-if="formatLatency(block.latency_ms)"> · </template>{{ formatTurnStats(block.turn_stats) }}
-                          </template>
-                        </div>
+                      <div v-if="!block.streaming" class="reply-latency mono">
+                        <template v-if="formatLatency(block.latency_ms)">耗时 {{ formatLatency(block.latency_ms) }}</template>
                       </div>
-                      <div v-else-if="block.type === 'error'" class="error-strip" :class="{ 'no-anim': block.noAnim }">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-                          <circle cx="12" cy="12" r="9" />
-                          <path d="M12 7.5v5.5" />
-                          <circle cx="12" cy="16.4" r=".4" fill="currentColor" />
-                        </svg>
-                        <div><b>{{ block.code || 'ERROR' }}</b> · {{ block.message }}</div>
-                      </div>
-                    </template>
-                  </div>
+                    </div>
+                    <div v-else-if="block.type === 'error'" class="error-strip" :class="{ 'no-anim': block.noAnim }">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                        <circle cx="12" cy="12" r="9" />
+                        <path d="M12 7.5v5.5" />
+                        <circle cx="12" cy="16.4" r=".4" fill="currentColor" />
+                      </svg>
+                      <div><b>{{ block.code || 'ERROR' }}</b> · {{ block.message }}</div>
+                    </div>
+                  </template>
 
                   <!-- 兼容历史旧缓存：没有 blocks 时仍渲染原助手正文。 -->
                   <MarkdownView
@@ -420,12 +304,9 @@
                     :is-streaming="item.streaming"
                   />
 
-                  <!-- 兼容历史旧缓存的回复耗时与 turn 级指标。 -->
+                  <!-- 兼容历史旧缓存的回复耗时。 -->
                   <div v-if="!item.blocks?.length && !item.streaming" class="reply-latency mono">
                     <template v-if="formatLatency(item.latency_ms)">耗时 {{ formatLatency(item.latency_ms) }}</template>
-                    <template v-if="item.turn_stats && formatTurnStats(item.turn_stats)">
-                      <template v-if="formatLatency(item.latency_ms)"> · </template>{{ formatTurnStats(item.turn_stats) }}
-                    </template>
                   </div>
                 </div>
               </div>
@@ -449,53 +330,21 @@
         <div v-if="!activeTask" class="progress-dock-inner">
           <span class="small tertiary">{{ dockClosingNote }}</span>
         </div>
-        <div v-else class="progress-dock-inner" :class="{ stress: activeTask.kind === 'stress' }">
-          <template v-if="activeTask.kind === 'stress'">
-            <div class="dock-row">
-              <KindTag kind="stress" />
-              <svg class="spark" viewBox="0 0 180 36" preserveAspectRatio="none">
-                <polygon class="a-qps" :points="sparkPolygonPoints" />
-                <polyline class="l-qps" :points="sparkLinePoints" />
-                <polyline class="l-rt" :points="sparkRtPoints" />
-                <polyline class="l-err" :points="sparkErrPoints" />
-                <circle class="dot-end" :cx="sparkLastPoint.x" :cy="sparkLastPoint.y" r="2.4" />
-              </svg>
-              <span class="mini-series">
-                <span class="ms ms-qps">QPS <b>{{ currentStressMetrics.qps }}</b></span>
-                <span class="ms ms-rt">RT <b>{{ currentStressMetrics.rt }}ms</b></span>
-                <span class="ms ms-err">错误率 <b>{{ currentStressMetrics.err }}%</b></span>
-              </span>
-              <span class="progress-msg">{{ activeTask.progress?.message || '压测执行中' }}</span>
-              <button
-                v-if="canCancelActiveTask"
-                class="btn btn-ghost btn-sm"
-                :disabled="cancellingTaskId === activeTask.id"
-                @click="handleCancelActiveTask(activeTask.id)"
-              >
-                {{ cancellingTaskId === activeTask.id ? '停止中…' : '立即停止' }}
-              </button>
-            </div>
-            <div class="progress-bar">
-              <i :style="{ width: `${activeTask.progress?.percent || 50}%` }"></i>
-            </div>
-          </template>
-
-          <template v-else>
-            <KindTag :kind="activeTask.kind" />
-            <div class="progress-bar">
-              <i :style="{ width: `${activeTask.progress?.percent || 0}%` }"></i>
-            </div>
-            <span class="progress-nums mono">{{ activeTask.progress?.done || 0 }}/{{ activeTask.progress?.total || 100 }}</span>
-            <span class="progress-msg">{{ activeTask.progress?.message || '任务进行中...' }}</span>
-            <button
-              v-if="canCancelActiveTask"
-              class="btn btn-ghost btn-sm"
-              :disabled="cancellingTaskId === activeTask.id"
-              @click="handleCancelActiveTask(activeTask.id)"
-            >
-              {{ cancellingTaskId === activeTask.id ? '取消中…' : '取消' }}
-            </button>
-          </template>
+        <div v-else class="progress-dock-inner">
+          <KindTag :kind="activeTask.kind" />
+          <div class="progress-bar">
+            <i :style="{ width: `${activeTask.progress?.percent || 0}%` }"></i>
+          </div>
+          <span class="progress-nums mono">{{ activeTask.progress?.done || 0 }}/{{ activeTask.progress?.total || 100 }}</span>
+          <span class="progress-msg">{{ activeTask.progress?.message || '任务进行中...' }}</span>
+          <button
+            v-if="canCancelActiveTask"
+            class="btn btn-ghost btn-sm"
+            :disabled="cancellingTaskId === activeTask.id"
+            @click="handleCancelActiveTask(activeTask.id)"
+          >
+            {{ cancellingTaskId === activeTask.id ? '取消中…' : '取消' }}
+          </button>
         </div>
       </div>
 
@@ -512,31 +361,6 @@
             {{ chip.label }}
           </button>
         </div>
-
-        <!-- 任务状态机抽屉卡片（在输入框上方浮动展示任务流与动态状态，格式为 task 1 ：XXXXX） -->
-        <TaskStateDrawer
-          :plan="latestPlan"
-          :is-generating="isGenerating"
-        />
-
-        <!-- 危险命令确认抽屉：只在输入框上方短暂出现，不进入消息时间线。 -->
-        <Transition name="tool-approval-drawer">
-          <section
-            v-if="activeToolApproval"
-            class="tool-approval-drawer"
-            role="alertdialog"
-            aria-live="assertive"
-            aria-label="危险命令确认"
-          >
-            <ToolApprovalCard
-              :command="activeToolApproval.command"
-              :args="activeToolApproval.args"
-              :reason="activeToolApproval.reason"
-              :sandbox-scope="activeToolApproval.sandboxScope"
-              @decide="handleToolApproval"
-            />
-          </section>
-        </Transition>
 
         <div
           class="composer-card"
@@ -563,16 +387,8 @@
             <strong>松开以上传附件</strong>
             <span>支持图片、Markdown、PDF、Word、Excel 等格式</span>
           </div>
-          <!-- 斜杠命令悬浮面板 (宽 380px，键入 / 触发) -->
-          <SlashPalette
-            ref="slashPaletteRef"
-            :show="showSlashPalette"
-            :filter-query="inputText"
-            @select="handleSlashSelect"
-            @close="handleSlashClose"
-          />
 
-          <!-- 上半区：行内命令纯文本强调色前缀 + 正常黑色多行文本域 -->
+          <!-- 上半区：正常黑色多行文本域 -->
           <div class="composer-input-row">
             <!-- 添加附件按钮紧贴输入内容左侧，保持在输入框边界内。 -->
             <button class="composer-action-btn composer-attach-btn" type="button" title="添加附件（≤20MB，支持图片、Markdown、PDF、Word、Excel 等）" @click="triggerFileInput">
@@ -581,13 +397,12 @@
                 <line x1="5" y1="12" x2="19" y2="12"></line>
               </svg>
             </button>
-            <span v-if="selectedSlashCmd" class="composer-cmd-prefix mono">/{{ selectedSlashCmd }}&nbsp;</span>
             <textarea
               ref="textareaRef"
               v-model="inputText"
               class="composer-textarea"
               rows="1"
-              :placeholder="selectedSlashCmd ? '输入命令参数（可选），Enter 发送' : '输入任何评测问题或需求，或键入 / 选择命令，Shift + Enter 换行，Enter 发送'"
+              :placeholder="'输入任何评测问题或需求，Shift + Enter 换行，Enter 发送'"
               @keydown="handleKeydown"
               @input="adjustTextareaHeight"
               @paste="() => nextTick(adjustTextareaHeight)"
@@ -654,71 +469,6 @@
       </div>
     </section>
 
-    <!-- 右侧迷你调度视图侧轨 (308px) -->
-    <aside class="dispatch-rail" data-od-id="dispatch-rail">
-      <div class="rail-head">
-        <div class="rail-head-top-row">
-          <span style="font-size: 13px; font-weight: 600">调度视图</span>
-          <div class="row" style="gap: 8px; align-items: center">
-            <router-link to="/tasks" class="link-btn" data-od-id="rail-open-dispatch">打开任务中心 →</router-link>
-            <button
-              class="rail-drawer-close-btn mobile-only"
-              title="关闭调度视图"
-              @click="isRailOpen = false"
-            >
-              ✕
-            </button>
-          </div>
-        </div>
-        <div class="small tertiary" style="margin-top: 4px">当前会话任务的实时分配</div>
-      </div>
-      <div class="rail-body">
-        <div>
-          <div class="rail-label">运行中任务</div>
-          <div v-if="activeTask" class="queue-item assigning">
-            <KindTag :kind="activeTask.kind" />
-            <div class="small mono" style="margin-top: 4px">
-              {{ activeTask.id.substring(0, 8) }} · {{ activeTask.kind === 'stress' ? 'go-stress-testing' : '评测执行中' }}
-            </div>
-          </div>
-          <p v-else class="small tertiary" style="margin: 0">当前会话没有运行中的任务</p>
-        </div>
-
-        <div>
-          <div class="rail-label">分配节点</div>
-          <div style="display: flex; flex-direction: column; gap: 8px">
-            <div
-              v-for="w in railWorkers"
-              :key="w.id"
-              class="agent-node"
-              :class="{ busy: w.load > 30 }"
-            >
-              <div class="an-head">
-                <span class="an-name mono">{{ w.id }}</span>
-                <span class="an-state" :class="w.load > 30 ? 'busy' : 'idle'">
-                  {{ w.load > 30 ? 'BUSY' : 'IDLE' }}
-                </span>
-              </div>
-              <div class="load-track" :class="{ hot: w.load >= 80 }" style="margin-top: 6px">
-                <i :style="{ width: `${w.load}%` }"></i>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div>
-          <div class="rail-label">调度日志</div>
-          <div class="log-stream">
-            <div v-for="(l, idx) in dispatchLogs" :key="idx" class="log-line">
-              <span class="lt">{{ l.time }}</span>
-              <span class="lk">{{ l.kind }}</span>
-              <span class="lr">{{ l.msg }}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    </aside>
-
     <!-- 移动端侧边栏抽屉遮罩层 (点击遮罩收起所有侧边栏) -->
     <div
       v-if="isMobileDrawerActive"
@@ -736,39 +486,19 @@ import { api } from '../api/http'
 import { AgentWebSocket } from '../api/ws'
 import type {
   AgentSession,
-  GoldQA,
-  KnowledgeBase,
   Profile,
-  Dataset,
   SessionAuthor,
   Task,
-  TaskSpec,
-  PlanArtifact,
-  AgentPrefs,
-  TurnStats,
   WsServerEvent,
 } from '../api/types'
-import { getDefaultRunConfig, getDefaultStressConfig } from '../schemas/confirmCard'
 import { useModeStore } from '../stores/mode'
 import { useAuthStore } from '../stores/auth'
 import KindTag from '../components/common/KindTag.vue'
 import ProviderLogo from '../components/ProviderLogo.vue'
 import { getProviderLogoKey, type ProviderLogoKey } from '../utils/providerLogo'
 import { formatLatency } from '../utils/format'
-import { findPendingToolItem, shouldKeepToolCardOpen } from '../utils/toolCard'
-import ClarifyCard from '../components/agent/ClarifyCard.vue'
-import { parseClarifyQuestions, type ClarifyReplyQuestion as ClarifyQuestion } from '../utils/clarifyReply'
-import ConfirmCard from '../components/agent/ConfirmCard.vue'
-import ToolApprovalCard from '../components/agent/ToolApprovalCard.vue'
-import PlanCard from '../components/agent/PlanCard.vue'
-import ThoughtCard from '../components/agent/ThoughtCard.vue'
-import ToolCard from '../components/agent/ToolCard.vue'
-import MediaPreview from '../components/agent/MediaPreview.vue'
 import AttachmentPreview from '../components/agent/AttachmentPreview.vue'
-import TaskStateDrawer from '../components/agent/TaskStateDrawer.vue'
 import MarkdownView from '../components/agent/MarkdownView.vue'
-import SlashPalette from '../components/agent/SlashPalette.vue'
-import { SYSTEM_SLASH_COMMANDS } from '../agent/slashRegistry'
 import ContextMeter, { type ContextMeterData } from '../components/agent/ContextMeter.vue'
 
 const message = useMessage()
@@ -812,29 +542,7 @@ function toggleDispatchRail() {
 
 const isWsOnline = ref(true)
 const isGenerating = ref(false)
-const harnessStage = ref<'plan' | 'react' | 'reflect' | 'plan_solve' | ''>('')
-const lastToolTitle = ref('')
 const turnLatencyMs = ref(0)
-const awaitingConfirm = computed(() =>
-  events.value.some((item) => item.type === 'confirm' && !item.isAcked) && !isGenerating.value
-)
-const latestPlan = computed<PlanArtifact | null>(() => {
-  for (let i = events.value.length - 1; i >= 0; i--) {
-    const it = events.value[i]
-    if (it.type === 'plan' && it.plan) {
-      return it.plan
-    }
-  }
-  return null
-})
-const harnessStageLabel = computed(() => {
-  if (harnessStage.value === 'plan') return '规划中'
-  if (harnessStage.value === 'plan_solve') return 'Plan-Solve 执行中'
-  if (harnessStage.value === 'reflect') return '复核中'
-  if (harnessStage.value === 'react' && lastToolTitle.value) return `ToolCall「${lastToolTitle.value}」`
-  if (harnessStage.value === 'react') return 'ToolCall 中'
-  return '生成中'
-})
 const turnLatencyLabel = computed(() => formatLatency(turnLatencyMs.value) || '')
 const showJumpBottom = ref(false)
 const currentAgentProfileId = ref<string>('')
@@ -849,41 +557,9 @@ const agentProfileLogoKey = computed<ProviderLogoKey>(() => {
 const agentDisplayModelName = computed(() => activeAgentProfile.value?.model || 'Agent')
 const agentProfileDisplayName = computed(() => activeAgentProfile.value?.name || '')
 
-// 上下文度量与斜杠命令面板状态
+// 上下文度量状态
 const currentContextMeter = ref<ContextMeterData | null>(null)
 const currentCompactSummary = ref<string | null>(null)
-const agentPrefs = ref<AgentPrefs | null>(null)
-const slashPaletteRef = ref<InstanceType<typeof SlashPalette> | null>(null)
-const paletteClosedManually = ref(false)
-const selectedSlashCmd = ref<string>('')
-
-const showSlashPalette = computed(() => {
-  const text = inputText.value
-  return !selectedSlashCmd.value && text.startsWith('/') && !text.includes(' ') && !paletteClosedManually.value
-})
-
-function handleSlashSelect(cmdText: string) {
-  const cleanName = cmdText.trim().replace(/^\//, '')
-  selectedSlashCmd.value = cleanName
-  inputText.value = ''
-  paletteClosedManually.value = true
-  nextTick(() => {
-    textareaRef.value?.focus()
-    adjustTextareaHeight()
-  })
-}
-
-function removeSelectedSlashCmd() {
-  selectedSlashCmd.value = ''
-  nextTick(() => {
-    textareaRef.value?.focus()
-    adjustTextareaHeight()
-  })
-}
-
-function handleSlashClose() {
-  paletteClosedManually.value = true
-}
 
 /** 模型选择下拉菜单项（对齐 /admin/profiles 接入池） */
 const agentProfileDropdownOptions = computed<DropdownOption[]>(() => {
@@ -968,9 +644,6 @@ const currentSessionId = ref<string>('')
 const isCreatingSession = ref(false)
 // 未绑定服务端会话时保持草稿态，不得用列表首项冒充当前会话。
 const currentSession = computed(() => sessions.value.find(s => s.id === currentSessionId.value) || null)
-/** 每个会话至多一张危险命令确认抽屉；持久事件重放后仍可恢复。 */
-const toolApprovalsBySession = ref<Record<string, ToolApprovalDrawer>>({})
-const activeToolApproval = computed(() => toolApprovalsBySession.value[currentSessionId.value] || null)
 const deletableSessionCount = computed(() => filteredSessions.value.filter((session) => session.can_delete).length)
 const allDeletableSessionsSelected = computed(() => {
   const deletableIds = filteredSessions.value.filter((session) => session.can_delete).map((session) => session.id)
@@ -1011,28 +684,6 @@ const canCancelActiveTask = computed(() => {
   return !!creatorId && creatorId === user.id
 })
 
-const isSlashCommandMode = computed(() => {
-  return (inputText.value || '').trimStart().startsWith('/')
-})
-
-// 模拟资产只允许在显式 mock 模式中存在；实时模式必须等待服务端短工具回填。
-const availableProfiles = ref<Profile[]>(api.isMock() ? [
-  { id: 'p-gpt', name: 'gpt-test', model: 'gpt-4o', protocol: 'openai_chat', base_url: 'https://api.openai.com/v1', usages: ['target'], created_at: new Date().toISOString() },
-  { id: 'p-claude', name: 'claude-x', model: 'claude-3-5-sonnet-20241022', protocol: 'anthropic_messages', base_url: 'https://api.anthropic.com', usages: ['target'], created_at: new Date().toISOString() },
-  // F10 外部 RAG 服务档（external_chat 库确认卡单选选项）
-  { id: 'p-ragsvc', name: 'rag-客服外挂', model: 'rag-chat-v2', protocol: 'openai_chat', base_url: 'https://rag.internal.example.com/v1', usages: ['target'], created_at: new Date().toISOString() },
- ] : [])
-const availableDatasets = ref<Dataset[]>(api.isMock() ? [
-  { id: 'ds-smoke', name: 'smoke-20', version: 3, row_count: 20, pending_complete_count: 0, metric: 'contain', owner: 'admin', created_at: new Date().toISOString() },
- ] : [])
-const availableKbs = ref<KnowledgeBase[]>(api.isMock() ? [
-  { id: 'kb-default', name: 'default', kind: 'lightrag', doc_count: 12, is_core: true, owner: 'admin' },
-  { id: 'kb-cs', name: '外挂客服', kind: 'external_chat', doc_count: null, is_core: false, owner: 'alice' },
- ] : [])
-const availableGoldQas = ref<GoldQA[]>(api.isMock() ? [
-  { id: 'gq-1', kb_id: 'kb-default', name: 'qa-v1', version: 2, row_count: 20, owner: 'admin', created_at: new Date().toISOString() },
- ] : [])
-
 // 智能体能力卡与顶栏共用同一模式状态，避免出现页面内外不一致的评测上下文。
 const isRagMode = computed(() => modeStore.mode === 'rag')
 
@@ -1040,14 +691,12 @@ const LLM_CAPS = [
   { id: 'cap-benchmark', name: '多模型基准对比', desc: '1–5 个协议档并排测试，输出 contain / exact / Judge 打分', say: '帮我对两个已配置模型进行基准评测', icoSvg: '<path d="M4 20V10M10 20V4M16 20v-8M3 20h18"/>' },
   { id: 'cap-prompt', name: 'Prompt 效果评测', desc: '评测不同系统提示词与上下文在同一数据集上的得分差异', say: '评测系统 Prompt 在支付链路问答上的准确率', icoSvg: '<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 9h8M8 13h5"/>' },
   { id: 'cap-testcase', name: 'PRD 生成用例', desc: '附 PRD / OpenAPI，按 6 种策略生成，72h 内确认入库', say: '帮我把这份支付 PRD 生成测试用例', icoSvg: '<path d="M9 11.5 11 14l4.5-5"/><rect x="4" y="4" width="16" height="16" rx="3"/>' },
-  { id: 'cap-stress', name: '先评后压', desc: '质量达标后自动压测同一 endpoint，实时监控 QPS / RT', say: '帮我评测已配置模型，并在成功后自动执行压测', icoSvg: '<path d="M3 17l5-6 4 3 6-8"/><path d="M18 6h3v3"/>' }
 ]
 
 const RAG_CAPS = [
   { id: 'cap-rag', name: 'RAG 检索评测', desc: '知识库 + 黄金 QA，输出 Hit Rate@5 / MRR / Recall', say: '帮我评估已配置知识库的检索质量', icoSvg: '<path d="M5 5.5A2.5 2.5 0 0 1 7.5 3H19v15H7.5A2.5 2.5 0 0 0 5 20.5Z"/><path d="M5 18.5V5.5"/><path d="M9 7.5h6"/>' },
   { id: 'cap-modes', name: '4 模式横向对比', desc: '对比 LightRAG naive / local / global / hybrid 检索表现', say: '横向对比已配置知识库的四种检索模式', icoSvg: '<circle cx="12" cy="12" r="3"/><path d="M3 12h3M18 12h3M12 3v3M12 18v3"/>' },
   { id: 'cap-qa', name: '黄金 QA 检验', desc: '校验 expected_doc_ids 召回命中与相似度分布', say: '检验已配置知识库的黄金 QA 覆盖度', icoSvg: '<path d="M9 11.5 11 14l4.5-5"/><circle cx="12" cy="12" r="9"/>' },
-  { id: 'cap-rag-stress', name: 'RAG 接口加压', desc: '对 LightRAG query 或外部 RAG HTTP 服务发起高并发压测', say: '对已配置知识库的查询接口执行压测', icoSvg: '<path d="M3 17l5-6 4 3 6-8"/><path d="M18 6h3v3"/>' }
 ]
 
 const currentCaps = computed(() => isRagMode.value ? RAG_CAPS : LLM_CAPS)
@@ -1057,12 +706,11 @@ const QUICK_CHIPS = [
   { label: '生成用例', say: '帮我把这份 PRD 生成测试用例' },
   { label: '基准评测', say: '对比一下 gpt-test 和 claude-x 在 smoke-20 上的表现' },
   { label: 'RAG 评测', say: '评估 default 知识库的检索质量' },
-  { label: '先评后压', say: '跑完基准评测后自动加压测' },
 ]
 
 const currentQuickChips = computed(() => {
   // RAG 模式 RAG 优先（对齐原型 orderChipsByMode）
-  if (isRagMode.value) return [QUICK_CHIPS[2], QUICK_CHIPS[0], QUICK_CHIPS[1], QUICK_CHIPS[3]]
+  if (isRagMode.value) return [QUICK_CHIPS[2], QUICK_CHIPS[0], QUICK_CHIPS[1]]
   return QUICK_CHIPS
 })
 
@@ -1071,936 +719,6 @@ const defaultKpis = [
   { value: '820ms', label: '平均延迟' },
   { value: '0.86', label: '主指标 contain' },
 ]
-
-const railWorkers = ref([
-  { id: 'agent-01', load: 62 },
-  { id: 'agent-06', load: 18 },
-  { id: 'agent-10', load: 9 },
-])
-
-const dispatchLogs = ref([
-  { time: '12:01:02', kind: 'ENQUEUE', msg: 'a1f3c2 smoke-20 v3 · 5 shards' },
-  { time: '12:01:08', kind: 'ASSIGN', msg: 'shard 2/5 → agent-01 · 84ms' },
-])
-
-const currentStressMetrics = ref({ qps: 118, rt: 890, err: 0.4 })
-// 压测迷你曲线数据：[QPS, RT, 错误率] 三元组（对齐原型 STRESS_SERIES）
-const sparkPointsData = [[12, 210, 0.0], [38, 260, 0.0], [64, 340, 0.1], [92, 520, 0.2], [118, 890, 0.4], [118, 1200, 0.4]]
-
-/** 按列独立归一化生成折线点串（原型 drawSpark：QPS 面积+线 / RT / 错误率三线） */
-function sparkLineFor(colIdx: number): string {
-  const W = 180, H = 36, P = 3
-  const maxV = Math.max(...sparkPointsData.map(p => p[colIdx])) || 1
-  return sparkPointsData.map((p, i) => {
-    const x = P + i * (W - 2 * P) / (sparkPointsData.length - 1)
-    const y = H - P - (p[colIdx] / maxV) * (H - 2 * P)
-    return `${x.toFixed(1)},${y.toFixed(1)}`
-  }).join(' ')
-}
-
-const sparkLinePoints = computed(() => sparkLineFor(0))
-const sparkRtPoints = computed(() => sparkLineFor(1))
-const sparkErrPoints = computed(() => sparkLineFor(2))
-
-const sparkPolygonPoints = computed(() => {
-  const W = 180, H = 36, P = 3
-  const firstX = P, lastX = W - P
-  return `${firstX},${H - P} ${sparkLinePoints.value} ${lastX},${H - P}`
-})
-
-const sparkLastPoint = computed(() => {
-  const W = 180, H = 36, P = 3
-  const maxQ = Math.max(...sparkPointsData.map(p => p[0])) || 1
-  const last = sparkPointsData[sparkPointsData.length - 1]
-  return {
-    x: W - P,
-    y: H - P - (last[0] / maxQ) * (H - 2 * P),
-  }
-})
-
-export interface AgentThoughtItem {
-  text?: string
-  fullText?: string
-  done?: boolean
-  collapsed?: boolean
-  latency_ms?: number
-  stage?: 'plan' | 'react' | 'reflect'
-  skill_id?: string
-  streamThink?: boolean
-  streaming?: boolean
-}
-
-type ThoughtLike = AgentThoughtItem & { streaming?: boolean }
-
-export interface AgentToolItem {
-  /** 后端工具调用唯一标识；tool_result 必须按此字段回填。 */
-  callId?: string
-  tool: string
-  args?: any
-  result?: any
-  status?: 'pending' | 'awaiting_approval' | 'ok' | 'fail' | 'rejected'
-  latency_ms?: number
-  truncated?: boolean
-  source?: string
-  redacted?: boolean
-  /** 瞬态工具执行阶段；不进入历史回放。 */
-  toolProgress?: { stage: string; message: string }
-  /** 已通过服务端受控窗口的实时输出；终态抵达后标记完成并保留在当前卡片。 */
-  streamOutput?: { text: string; channel: string; startLine: number; seq: number; completed?: boolean }
-  /** 失败时的可操作恢复信息，不包含上游异常或堆栈。 */
-  recovery?: { retryable?: boolean; suggested_action?: string; repair_hint?: string; max_auto_repairs?: number }
-  open?: boolean
-  noAnim?: boolean
-}
-
-interface AgentAssistantItem {
-  type: 'assistant'
-  raw?: string
-  text?: string
-  streaming?: boolean
-  latency_ms?: number
-  /** turn 级观测指标：模型轮数/token/工具成败（assistant_message 事件与历史回放）。 */
-  turn_stats?: TurnStats | null
-}
-
-interface AgentMediaItem {
-  type: 'media'
-  mediaKind?: 'image'
-  contentUrl?: string
-  filename?: string
-  fileId?: string
-  noAnim?: boolean
-}
-
-interface AgentErrorItem {
-  type: 'error'
-  code?: string
-  message?: string
-  noAnim?: boolean
-}
-
-type AgentBlock =
-  | (AgentThoughtItem & { type: 'thought' })
-  | (AgentToolItem & { type: 'tool' })
-  | AgentAssistantItem
-  | AgentMediaItem
-  | AgentErrorItem
-
-interface ToolApprovalDrawer {
-  id: string
-  command: string
-  reason: string
-  sandboxScope: string
-  /** 关联 bash ToolCard 的入参，弹层按 command / description / timeout 展示。 */
-  args?: Record<string, unknown>
-}
-
-interface StreamItem {
-  type: 'user' | 'agent' | 'thought' | 'tool' | 'media' | 'confirm' | 'clarify' | 'plan' | 'report' | 'error' | 'typing'
-  text?: string
-  done?: boolean
-  // 澄清卡（M4 §3.9.6：id 匹配 clarify_reply，仅回复输入）
-  id?: string
-  question?: string
-  options?: string[] | null
-  questions?: ClarifyQuestion[] | null
-  planIntent?: string
-  planSteps?: string[]
-  plan?: PlanArtifact
-  collapsed?: boolean
-  latency_ms?: number
-  /** turn 级观测指标（仅 agent 气泡）：模型轮数/token/工具成败。 */
-  turn_stats?: TurnStats | null
-  truncated?: boolean
-  source?: string
-  redacted?: boolean
-  stage?: 'plan' | 'react' | 'reflect'
-  skill_id?: string
-  // 推理思考链标记：由 stream=think 瞬态增量帧创建，终帧只结束折叠、不得覆盖其内容
-  streamThink?: boolean
-  // 流式标记：true 表示该 agent 气泡正在接收 LLM 增量帧，终帧到达后置 false
-  streaming?: boolean
-  // 已显示的纯文本进度（流式增量与打字机共用，text 为其渲染后的 HTML）
-  raw?: string
-  callId?: string
-  tool?: string
-  args?: any
-  result?: any
-  status?: 'pending' | 'awaiting_approval' | 'ok' | 'fail' | 'rejected'
-  toolProgress?: AgentToolItem['toolProgress']
-  streamOutput?: AgentToolItem['streamOutput']
-  recovery?: AgentToolItem['recovery']
-  open?: boolean
-  mediaKind?: 'image'
-  contentUrl?: string
-  filename?: string
-  fileId?: string
-  card?: any
-  isAcked?: boolean
-  ackResult?: boolean
-  summary?: string
-  showRunConfig?: boolean
-  reportId?: string
-  kpis?: any[]
-  bars?: any[]
-  code?: string
-  message?: string
-  files?: any[]
-  // 用户消息的服务端 ID / 浏览器幂等键与作者，用于团队协作实时回显去重。
-  messageId?: string
-  clientMessageId?: string
-  author?: SessionAuthor | null
-  // 确认卡作者不属于 TaskSpec；只能用于前端权限展示，提交 patch 前必须剥离。
-  confirmAuthor?: SessionAuthor | null
-  // F4 历史回放标记：跳过入场动画（对齐原型 no-anim）
-  noAnim?: boolean
-  // S3 思考卡流式打字：fullText 为应显示全文，复用上方 streaming 标记表示打字机进行中
-  fullText?: string
-  // 助手消息头元数据：用于展示本轮使用的供应商 Logo、模型和协议档名称。
-  providerLogoKey?: ProviderLogoKey
-  // 助手回合实际使用的协议档 ID；不能用当前全局选择覆盖历史回合。
-  profileId?: string
-  modelName?: string
-  profileName?: string
-  createdAt?: string
-  // 一个助手回合的有序内容块；模型头部只在回合容器顶部展示一次
-  blocks?: AgentBlock[]
-  // F8 确认卡内联校验错误（字段名 → 红字文案）
-  fieldErrors?: Record<string, string>
-}
-
-/** 将持久化确认事件投影为 Composer 上方的临时抽屉。 */
-function showToolApproval(
-  sessionId: string,
-  payload: Record<string, unknown>,
-  toolArgs?: unknown,
-) {
-  const id = String(payload.id || '')
-  if (!sessionId || !id) return
-  const args = toolArgs && typeof toolArgs === 'object' && !Array.isArray(toolArgs)
-    ? { ...(toolArgs as Record<string, unknown>) }
-    : {}
-  toolApprovalsBySession.value = {
-    ...toolApprovalsBySession.value,
-    [sessionId]: {
-      id,
-      command: String(payload.command || args.command || ''),
-      reason: String(payload.reason || '该命令可能修改会话工作区'),
-      sandboxScope: String(payload.sandbox_scope || ''),
-      args,
-    },
-  }
-}
-
-/** 收到确认回执、用户作出决定或重放已结束事件时收回对应抽屉。 */
-function clearToolApproval(sessionId: string, approvalId?: string) {
-  const active = toolApprovalsBySession.value[sessionId]
-  if (!active || (approvalId && active.id !== approvalId)) return
-  const next = { ...toolApprovalsBySession.value }
-  delete next[sessionId]
-  toolApprovalsBySession.value = next
-}
-
-/** 将历史或 WS 的文件 ID 统一成既有附件芯片可读取的对象。 */
-function normalizeMessageFiles(attachments: unknown): any[] {
-  if (!Array.isArray(attachments)) return []
-  return attachments.map((item) => (
-    typeof item === 'string' ? { id: item, name: item, size: '' } : item
-  ))
-}
-
-function mediaItemFromToolResult(name: string, data: unknown, extra: Partial<StreamItem> = {}): StreamItem | null {
-  if (name !== 'image.generate' || !data || typeof data !== 'object') return null
-  const rec = data as Record<string, unknown>
-  const fileId = typeof rec.file_id === 'string' ? rec.file_id : ''
-  const contentUrl = typeof rec.content_url === 'string' && rec.content_url.startsWith('/api/files/')
-    ? rec.content_url
-    : (fileId ? `/api/files/${fileId}/content` : '')
-  if (!contentUrl) return null
-  return {
-    type: 'media',
-    mediaKind: 'image',
-    fileId,
-    contentUrl,
-    filename: typeof rec.filename === 'string' ? rec.filename : 'imagegen.png',
-    ...extra,
-  }
-}
-
-/** 返回用户气泡展示名：自己的消息显示“我”，协作者优先显示昵称。 */
-function userMessageAuthorLabel(item: StreamItem): string {
-  if (!item.author) return ''
-  if (item.author.id === authStore.user?.id) return '我'
-  return item.author.display_name || item.author.username
-}
-
-/** 判断用户气泡是否来自当前成员以外的团队协作者。 */
-function isRemoteUserMessage(item: StreamItem): boolean {
-  return Boolean(item.author?.id && authStore.user?.id && item.author.id !== authStore.user.id)
-}
-
-/** 将助手消息时间格式化为原型中的 MM/DD HH:mm。 */
-function formatAgentMessageTime(dateStr?: string): string {
-  if (!dateStr) return ''
-  const date = new Date(dateStr)
-  if (Number.isNaN(date.getTime())) return ''
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  const hours = String(date.getHours()).padStart(2, '0')
-  const minutes = String(date.getMinutes()).padStart(2, '0')
-  return `${month}/${day} ${hours}:${minutes}`
-}
-
-/** 记录本轮助手消息头所需的供应商、模型和协议档信息。 */
-function currentAgentMessageMeta(): Pick<StreamItem, 'providerLogoKey' | 'profileId' | 'modelName' | 'profileName' | 'createdAt'> {
-  return {
-    providerLogoKey: agentProfileLogoKey.value,
-    profileId: currentAgentProfileId.value || activeAgentProfile.value?.id || undefined,
-    modelName: agentDisplayModelName.value,
-    profileName: agentProfileDisplayName.value,
-    createdAt: new Date().toISOString(),
-  }
-}
-
-/** 追加本地演示助手消息，并同步当前 Agent 的供应商 Logo 与模型元数据。 */
-function pushAgentMessage(text: string) {
-  const agent = getOrCreateTurnAgent(events.value)
-  const block = getOrCreateAssistantBlock(agent)
-  block.raw = text
-  block.text = text
-  block.streaming = false
-  agent.streaming = false
-}
-
-/** 格式化 turn 级观测摘要：模型轮数 · 工具成功/失败 · token 用量（无数据显示空串）。 */
-function formatTurnStats(stats?: TurnStats | null): string {
-  if (!stats || typeof stats !== 'object') return ''
-  const parts: string[] = []
-  if (typeof stats.model_calls === 'number') parts.push(`模型 ${stats.model_calls} 轮`)
-  if (typeof stats.tool_calls === 'number') {
-    const fails = typeof stats.tool_failures === 'number' ? stats.tool_failures : 0
-    parts.push(`工具 ${stats.tool_calls} 次${fails > 0 ? `（失败 ${fails}）` : ''}`)
-  }
-  if (typeof stats.total_tokens === 'number') {
-    const tokens = stats.total_tokens >= 1000 ? `${(stats.total_tokens / 1000).toFixed(1)}k` : `${stats.total_tokens}`
-    parts.push(`${tokens} tokens`)
-  }
-  return parts.join(' · ')
-}
-
-/** 解析历史消息中的供应商 Logo 标识，优先使用快照字段。 */
-function resolveMessageLogoKey(m: { provider?: string | null; profile_id?: string | null; model_name?: string | null }): ProviderLogoKey {
-  // 同一模型可能托管在不同供应商，必须优先按消息快照的 profile_id 取图标。
-  if (m.profile_id) {
-    const prof = allProfiles.value.find((p) => p.id === m.profile_id)
-    if (prof) return getProviderLogoKey(prof)
-  }
-  if (m.model_name) {
-    const key = getProviderLogoKey({ model: m.model_name })
-    if (key !== 'custom') return key
-  }
-  if (m.provider) {
-    return getProviderLogoKey({ name: m.provider, model: m.model_name || '' })
-  }
-  return agentProfileLogoKey.value || 'custom'
-}
-
-/** 解析历史消息中的模型显示名称，优先使用快照字段。 */
-function resolveMessageModelName(m: { model_name?: string | null; profile_id?: string | null }): string {
-  if (m.model_name) return m.model_name
-  if (m.profile_id) {
-    const prof = allProfiles.value.find((p) => p.id === m.profile_id)
-    if (prof) return prof.model || prof.name
-  }
-  return agentDisplayModelName.value || 'Agent'
-}
-
-/** 解析历史消息中的协议档显示名称，优先使用快照字段。 */
-function resolveMessageProfileName(m: { profile_name?: string | null; profile_id?: string | null }): string {
-  if (m.profile_name) return m.profile_name
-  if (m.profile_id) {
-    const prof = allProfiles.value.find((p) => p.id === m.profile_id)
-    if (prof) return prof.name
-  }
-  return ''
-}
-
-/** 将 assistant_message 的服务端模型快照转换为前端回合元数据。 */
-function messageMetaFromPayload(payload: Record<string, any>): Partial<StreamItem> {
-  const profileId = typeof payload.profile_id === 'string' && payload.profile_id
-    ? payload.profile_id
-    : undefined
-  const profile = profileId ? allProfiles.value.find((item) => item.id === profileId) : undefined
-  const modelName = typeof payload.model_name === 'string' && payload.model_name
-    ? payload.model_name
-    : profile?.model || profile?.name || undefined
-  const profileName = typeof payload.profile_name === 'string' && payload.profile_name
-    ? payload.profile_name
-    : profile?.name || undefined
-  const meta: Partial<StreamItem> = {
-    profileId,
-    modelName,
-    profileName,
-    createdAt: typeof payload.created_at === 'string' ? payload.created_at : undefined,
-  }
-  // 旧事件可能没有模型快照，不能用默认 custom 覆盖回合初始展示信息。
-  if (profile || modelName || typeof payload.provider === 'string') {
-    meta.providerLogoKey = profile
-      ? getProviderLogoKey(profile)
-      : getProviderLogoKey({ name: payload.provider, model: modelName })
-  }
-  return meta
-}
-
-/** 把服务端确认的模型快照应用到助手回合，避免继续使用全局当前模型。 */
-function applyAgentMessageMeta(agent: StreamItem, meta?: Partial<StreamItem>) {
-  if (!meta) return
-  if (meta.profileId) agent.profileId = meta.profileId
-  if (meta.modelName) agent.modelName = meta.modelName
-  if (meta.profileName) agent.profileName = meta.profileName
-  if (meta.providerLogoKey) agent.providerLogoKey = meta.providerLogoKey
-  if (meta.createdAt) agent.createdAt = meta.createdAt
-}
-
-/** 返回当前用户回合的助手容器；确认卡、错误等顶层事件会结束当前容器。 */
-function getCurrentTurnAgent(list: StreamItem[]): StreamItem | undefined {
-  let from = -1
-  for (let i = list.length - 1; i >= 0; i--) {
-    if (list[i].type === 'user') {
-      from = i
-      break
-    }
-  }
-  // 从尾部回溯寻找本回合容器：error / report 等独立收尾条目会插在容器之后，
-  // 若只认「最后一条必须是 agent」，同回合的后续帧会被误判为新回合，
-  // 思考流被切碎成多张孤儿卡，且永远等不到 think_final 收尾（生产实测必现）。
-  for (let i = list.length - 1; i > from; i--) {
-    const item = list[i]
-    if (item.type === 'user') break
-    if (item.type === 'agent') return item
-    // error / report 等独立条目：不属于任何容器，跳过继续回溯
-  }
-  return undefined
-}
-
-/** 获取或创建一个 ReAct 回合容器；所有思考、工具和助手正文都追加到其 blocks。 */
-function getOrCreateTurnAgent(list: StreamItem[], meta?: Partial<StreamItem>): StreamItem {
-  const current = getCurrentTurnAgent(list)
-  if (current) {
-    applyAgentMessageMeta(current, meta)
-    return current
-  }
-  const defaultMeta = currentAgentMessageMeta()
-  const newAgent = reactive({
-    type: 'agent',
-    blocks: [] as AgentBlock[],
-    streaming: true,
-    noAnim: meta?.noAnim,
-    profileId: meta?.profileId || defaultMeta.profileId,
-    providerLogoKey: meta?.providerLogoKey || defaultMeta.providerLogoKey,
-    modelName: meta?.modelName || defaultMeta.modelName,
-    profileName: meta?.profileName || defaultMeta.profileName,
-    createdAt: meta?.createdAt || defaultMeta.createdAt,
-  }) as StreamItem
-  list.push(newAgent)
-  return newAgent
-}
-
-/** 返回或创建当前回合的助手正文块。已落库的段落不再覆盖，保证中间叙述另起一段。 */
-function getOrCreateAssistantBlock(agent: StreamItem): AgentAssistantItem {
-  const blocks = agent.blocks || (agent.blocks = [])
-  const last = blocks[blocks.length - 1]
-  if (last?.type === 'assistant' && (last.streaming || !last.raw)) return last
-  const block = reactive({ type: 'assistant', raw: '', text: '', streaming: true }) as AgentAssistantItem
-  blocks.push(block)
-  agent.streaming = true
-  return block
-}
-
-function parsePlanArtifact(payload: Record<string, unknown>): PlanArtifact {
-  const slots = payload.slots && typeof payload.slots === 'object'
-    ? payload.slots as Record<string, unknown>
-    : {}
-  const tools = Array.isArray(payload.tools_needed)
-    ? payload.tools_needed.map((item) => String(item))
-    : []
-  const budget = payload.budget && typeof payload.budget === 'object'
-    ? payload.budget as Record<string, number>
-    : {}
-  return {
-    intent: String(payload.intent || ''),
-    skill_id: payload.skill_id ? String(payload.skill_id) : null,
-    slots,
-    tools_needed: tools,
-    delivery: String(payload.delivery || 'chat'),
-    budget,
-    allows_replan: payload.allows_replan === true,
-    notes: payload.notes ? String(payload.notes) : '',
-  }
-}
-
-function planItemFromPayload(payload: Record<string, unknown>, noAnim = false): StreamItem {
-  const plan = parsePlanArtifact(payload)
-  const rawSteps = plan.slots.steps
-  const planSteps = Array.isArray(rawSteps) ? rawSteps.map((step) => String(step)) : []
-  return {
-    type: 'plan',
-    plan,
-    planIntent: plan.intent,
-    planSteps,
-    noAnim,
-  }
-}
-
-/**
- * task_state 事件：原地更新最近一个 plan 的 slots.task_state（不新增卡片），
- * 驱动 TaskStateDrawer 随步骤演进实时刷新（completed_steps/current_step 等）。
- */
-function applyTaskState(items: StreamItem[], payload: Record<string, unknown>) {
-  if (!payload || typeof payload !== 'object') return
-  for (let i = items.length - 1; i >= 0; i--) {
-    const it = items[i]
-    if (it.type === 'plan' && it.plan) {
-      it.plan = {
-        ...it.plan,
-        slots: { ...(it.plan.slots || {}), task_state: payload },
-      }
-      return
-    }
-  }
-}
-
-/** 返回当前回合仍在生成的过程摘要块。 */
-function getActiveThoughtBlock(agent: StreamItem): AgentThoughtItem | undefined {
-  const blocks = agent.blocks || []
-  // 只认最后一个块：工具结果到达后即使旧思考卡仍在收尾动画，也不能把下一轮思考并回旧卡。
-  const last = blocks[blocks.length - 1]
-  return last?.type === 'thought' && !last.done ? last as AgentThoughtItem : undefined
-}
-
-/** 倒序查找最后一个未完成的思考块（收尾专用）：
- *  正文块（assistant_delta）会追加在思考卡之后，若只认最后一个块，
- *  活跃思考卡会被"顶掉"，导致永远收不了尾、并出现重复的 think_final 卡。
- *  注意：此函数仅供"收尾/回填"使用，增量拼接仍走 getActiveThoughtBlock（防并回旧卡）。 */
-function findLastActiveThoughtBlock(agent: StreamItem): AgentThoughtItem | undefined {
-  const blocks = agent.blocks || []
-  for (let i = blocks.length - 1; i >= 0; i--) {
-    const block = blocks[i]
-    if (block.type === 'thought' && !block.done) return block as AgentThoughtItem
-  }
-  return undefined
-}
-
-/** 倒序查找最后一个思考块（含已收尾的），用于 think_final 快照回填已有卡，避免重复建卡。 */
-function findLastThoughtBlock(agent: StreamItem): AgentThoughtItem | undefined {
-  const blocks = agent.blocks || []
-  for (let i = blocks.length - 1; i >= 0; i--) {
-    const block = blocks[i]
-    if (block.type === 'thought') return block as AgentThoughtItem
-  }
-  return undefined
-}
-
-/** 将块追加进回合 blocks：思考卡必须位于助手正文之上（回复后不允许出现思考卡）。 */
-function pushTurnBlock(agent: StreamItem, block: AgentBlock) {
-  const blocks = agent.blocks || (agent.blocks = [])
-  if (block.type === 'thought') {
-    const assistantIdx = blocks.findIndex((b) => b.type === 'assistant')
-    if (assistantIdx === -1) blocks.push(block)
-    else blocks.splice(assistantIdx, 0, block)
-  } else {
-    blocks.push(block)
-  }
-}
-
-/** 追加过程摘要块；同一回合最多保留一张，防止工具循环拆出多张“已思考”卡。 */
-function appendThoughtBlock(agent: StreamItem, block: AgentThoughtItem): AgentThoughtItem {
-  const existing = findLastThoughtBlock(agent)
-  if (existing) return existing
-  const next = reactive({ type: 'thought', ...block }) as AgentBlock
-  pushTurnBlock(agent, next)
-  return next as AgentThoughtItem
-}
-
-/** 追加一个待执行工具块，工具结果只更新该块，不改变其在回合中的位置。 */
-function appendToolBlock(agent: StreamItem, tool: AgentToolItem): AgentToolItem {
-  const next = reactive({ type: 'tool', ...tool }) as AgentBlock
-  const blocks = agent.blocks || (agent.blocks = [])
-  blocks.push(next)
-  agent.streaming = true
-  return next as AgentToolItem
-}
-
-/** 按 call_id 查找待完成工具；历史事件缺失时才兼容旧的同名回退。 */
-function findPendingToolBlock(agent: StreamItem, name: unknown, callId?: unknown): AgentToolItem | undefined {
-  return findPendingToolItem(agent.blocks || [], name, callId) as AgentToolItem | undefined
-}
-
-/** 确认回执到达后立刻离开「等待确认」，让后续 progress / tool_result 按同一 call_id 回填。 */
-function stampToolApprovalAck(target: { status?: string; open?: boolean; toolProgress?: { stage: string; message: string } } | undefined, payload: Record<string, unknown>) {
-  if (!target) return
-  target.status = 'pending'
-  target.open = true
-  if (payload.ok !== false && payload.action !== 'reject') {
-    target.toolProgress = { stage: 'approved', message: '已获确认，正在进入受控沙箱执行' }
-  }
-}
-
-/** 用瞬态进度原地更新待执行 ToolCard；历史回放只依赖最终 tool_result。 */
-function applyToolProgress(agent: StreamItem | undefined, payload: any): void {
-  if (!agent) return
-  const target = findPendingToolBlock(agent, payload?.name, payload?.call_id)
-  if (!target) return
-  target.toolProgress = {
-    stage: String(payload?.stage || 'executing'),
-    message: String(payload?.message || '工具正在执行'),
-  }
-  target.status = 'pending'
-  target.open = true
-}
-
-/** 追加服务端受控输出块；按 seq 去重，避免网络重连边缘场景造成重复行。 */
-function appendToolOutput(agent: StreamItem | undefined, payload: any): void {
-  if (!agent) return
-  const target = findPendingToolBlock(agent, payload?.name, payload?.call_id)
-  const text = typeof payload?.text === 'string' ? payload.text : ''
-  if (!target || !text) return
-  const seq = Number(payload?.seq) || 0
-  if (target.streamOutput && seq > 0 && seq <= target.streamOutput.seq) return
-  const startLine = Math.max(1, Number(payload?.start_line) || target.streamOutput?.startLine || 1)
-  target.streamOutput = {
-    text: `${target.streamOutput?.text || ''}${text}`,
-    channel: String(payload?.channel || target.streamOutput?.channel || 'result'),
-    startLine: target.streamOutput?.startLine || startLine,
-    seq,
-  }
-  target.toolProgress = { stage: 'streaming', message: '正在接收安全输出' }
-  target.open = true
-}
-
-/** 把工具生成的媒体结果插入当前 ReAct 回合，保持其位于工具结果之后。 */
-function appendMediaBlock(agent: StreamItem, media: StreamItem) {
-  const blocks = agent.blocks || (agent.blocks = [])
-  blocks.push(reactive({
-    type: 'media',
-    mediaKind: media.mediaKind,
-    contentUrl: media.contentUrl,
-    filename: media.filename,
-    fileId: media.fileId,
-    noAnim: media.noAnim,
-  }) as AgentBlock)
-}
-
-/** 判断当前成员是否是待确认卡的唯一作者；兼容迁移前无作者字段的历史卡。 */
-function canConfirmItem(item: StreamItem): boolean {
-  return !item.confirmAuthor?.id || item.confirmAuthor.id === authStore.user?.id
-}
-
-/** 返回待确认卡作者的展示名称，供协作者只读提示使用。 */
-function confirmAuthorLabel(item: StreamItem): string {
-  return item.confirmAuthor?.display_name || item.confirmAuthor?.username || '发起人'
-}
-
-/** 为每次用户发送生成浏览器侧幂等键，断线重发时避免重复触发 Harness。 */
-function createClientMessageId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID()
-  }
-  return `browser-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
-}
-
-const events = ref<StreamItem[]>([])
-let agentWs: AgentWebSocket | null = null
-let lastConfirmKind = 'benchmark'
-
-/** 按会话缓存对话流与生成态：切换会话不丢历史，生成中的 WS 不拆。 */
-interface SessionRuntime {
-  events: StreamItem[]
-  isGenerating: boolean
-  harnessStage: 'plan' | 'react' | 'reflect' | 'plan_solve' | ''
-  lastToolTitle: string
-  turnLatencyMs: number
-  activeTask: any
-  contextMeter: ContextMeterData | null
-  compactSummary: string | null
-}
-
-const sessionRuntimes = new Map<string, SessionRuntime>()
-const sockets = new Map<string, AgentWebSocket>()
-const generatingBySession = ref<Record<string, boolean>>({})
-let selectEpoch = 0
-
-function emptyRuntime(): SessionRuntime {
-  return {
-    events: [],
-    isGenerating: false,
-    harnessStage: '',
-    lastToolTitle: '',
-    turnLatencyMs: 0,
-    activeTask: null,
-    contextMeter: null,
-    compactSummary: null,
-  }
-}
-
-function ensureRuntime(sid: string): SessionRuntime {
-  let rt = sessionRuntimes.get(sid)
-  if (!rt) {
-    rt = emptyRuntime()
-    sessionRuntimes.set(sid, rt)
-  }
-  return rt
-}
-
-function markGenerating(sid: string, value: boolean) {
-  if (!sid) return
-  const rt = ensureRuntime(sid)
-  rt.isGenerating = value
-  if (generatingBySession.value[sid] === value) return
-  generatingBySession.value = { ...generatingBySession.value, [sid]: value }
-}
-
-/** 当前会话生成态：同步列表小点与缓存，切走后后台仍显示「正在生成」。 */
-function setCurrentGenerating(value: boolean) {
-  isGenerating.value = value
-  const sid = currentSessionId.value
-  if (!sid) return
-  const rt = ensureRuntime(sid)
-  rt.events = events.value
-  rt.isGenerating = value
-  rt.harnessStage = harnessStage.value
-  markGenerating(sid, value)
-}
-
-/** 把当前 UI 状态写回该会话缓存（切走前调用）。 */
-function persistCurrentRuntime() {
-  const sid = currentSessionId.value
-  if (!sid) return
-  const rt = ensureRuntime(sid)
-  rt.events = events.value
-  rt.isGenerating = isGenerating.value
-  rt.harnessStage = harnessStage.value
-  rt.lastToolTitle = lastToolTitle.value
-  rt.turnLatencyMs = turnLatencyMs.value
-  rt.activeTask = activeTask.value
-  rt.contextMeter = currentContextMeter.value
-  rt.compactSummary = currentCompactSummary.value
-  markGenerating(sid, isGenerating.value)
-}
-
-/** 关闭已结束生成且非当前会话的连接，生成中的会话保持 WS 以便后台继续收事件。 */
-function gcIdleSockets(keepId: string) {
-  for (const [id, ws] of sockets) {
-    if (id === keepId) continue
-    if (sessionRuntimes.get(id)?.isGenerating) continue
-    ws.close()
-    sockets.delete(id)
-  }
-}
-
-/** 服务端以 4404 收回会话后同步移除本地缓存，避免列表留下无法重连的幽灵项。 */
-function removeInaccessibleSession(sid: string, navigate = true) {
-  const index = sessions.value.findIndex((session) => session.id === sid)
-  const wasCurrent = currentSessionId.value === sid
-  const socket = sockets.get(sid)
-  if (socket) socket.close()
-  sockets.delete(sid)
-  sessionRuntimes.delete(sid)
-  selectedSessionIds.value = selectedSessionIds.value.filter((id) => id !== sid)
-  const nextGenerating = { ...generatingBySession.value }
-  delete nextGenerating[sid]
-  generatingBySession.value = nextGenerating
-  if (index < 0) return
-
-  sessions.value.splice(index, 1)
-  if (wasCurrent && agentWs === socket) agentWs = null
-  if (!wasCurrent || !navigate) return
-  const next = sessions.value[index] || sessions.value[index - 1]
-  if (next) {
-    void selectSession(next.id)
-  } else {
-    void handleCreateSession()
-  }
-}
-
-/** 批量清理已删除会话后只导航一次，避免依次跳转到同批次的已删除会话。 */
-function removeInaccessibleSessions(sids: string[]) {
-  const wasCurrent = sids.includes(currentSessionId.value)
-  if (wasCurrent) selectEpoch += 1
-  sids.forEach((sid) => removeInaccessibleSession(sid, false))
-  if (!wasCurrent) return
-  const next = sessions.value[0]
-  if (next) {
-    void selectSession(next.id)
-  } else {
-    void handleCreateSession()
-  }
-}
-
-/** 切换单个 owner 会话的批量选择状态。 */
-function toggleSessionSelected(sid: string) {
-  if (selectedSessionIds.value.includes(sid)) {
-    selectedSessionIds.value = selectedSessionIds.value.filter((id) => id !== sid)
-  } else {
-    selectedSessionIds.value = [...selectedSessionIds.value, sid]
-  }
-}
-
-/** 全选或清空当前列表中可由本人删除的会话。 */
-function handleSelectAllChange(event: Event) {
-  const checked = (event.target as HTMLInputElement).checked
-  selectedSessionIds.value = checked
-    ? filteredSessions.value.filter((session) => session.can_delete).map((session) => session.id)
-    : []
-}
-
-/* ─── 页面级定时器登记：所有演示/兜底定时器统一登记，组件卸载时集中清理，避免回调写入已销毁状态 ─── */
-const pendingTimers = new Set<number>()
-/* F19 生成流定时器子集：mock 场景步骤 / 思考打字机 / mock 进度推进专用，
-   「暂停生成」只清理该子集（保留 WS 连接与 F15 侧轨心跳等页面级定时器）。 */
-const flowTimers = new Set<number>()
-let interpretStopWatch: (() => void) | null = null
-
-function trackTimeout(fn: () => void, ms: number, flow = false): number {
-  const id = window.setTimeout(() => {
-    pendingTimers.delete(id)
-    flowTimers.delete(id)
-    fn()
-  }, ms)
-  pendingTimers.add(id)
-  if (flow) flowTimers.add(id)
-  return id
-}
-
-function trackInterval(fn: () => void, ms: number, flow = false): number {
-  const id = window.setInterval(fn, ms)
-  pendingTimers.add(id)
-  if (flow) flowTimers.add(id)
-  return id
-}
-
-/** 主动清除已登记定时器（任务提前完成时使用）。 */
-function clearTracked(id: number) {
-  window.clearTimeout(id)
-  window.clearInterval(id)
-  pendingTimers.delete(id)
-  flowTimers.delete(id)
-}
-
-function getToolDisplayName(name?: string) {
-  const names: Record<string, string> = {
-    'model.list': '列出协议档',
-    'dataset.list': '列出数据集',
-    'kb.list': '列出知识库',
-    'task.get': '查询任务',
-    'report.get': '读取报告',
-    'task.create': '创建任务',
-    'task.status': '查询任务',
-    'task.cancel': '取消任务',
-    'testcase.confirm': '确认用例入库',
-    'audio.speech_recognition': '语音识别转写',
-    'audio.speech_synthesis': '语音合成',
-    'audio.voiceclone': '音色克隆配音',
-    'image.generate': 'Qwen Image 生图',
-    'dispatch.overview': '调度概览',
-  }
-  return (name && names[name]) || name || 'MCP 短工具'
-}
-
-/** F10 判断确认卡当前选中知识库是否为外部 Chat 库（外部库无 rag_mode，改选恰好 1 个外部 RAG 服务档）。 */
-function isExternalKb(card: any): boolean {
-  return availableKbs.value.find(k => k.id === card?.kb_id)?.kind === 'external_chat'
-}
-
-/** F8 确认卡内联校验：错误留在卡内 .field-error 红字，不 Toast（对齐原型 556-564）。 */
-function validateConfirmCard(item: StreamItem): boolean {
-  const errors: Record<string, string> = {}
-  const card = item.card
-  if (card?.kind === 'benchmark') {
-    if (!card.profile_ids || card.profile_ids.length < 1) errors.profile_ids = '至少选择 1 个被测协议档'
-    else if (card.profile_ids.length > 5) errors.profile_ids = '被测协议档不能超过 5 个'
-  }
-  if (card?.kind === 'rag') {
-    if (isExternalKb(card)) {
-      if (!card.profile_ids || card.profile_ids.length !== 1) errors.profile_ids = '外部 RAG 服务档需恰好选择 1 个'
-    } else if (!card.rag_mode || card.rag_mode.length < 1) {
-      errors.rag_mode = '请至少选择 1 种检索模式'
-    }
-  }
-  if (card?.kind === 'testcase') {
-    // 契约字段为 case_source.text（后端确认卡结构），历史 mock 曾用 case_source_text，两者兼容
-    const sourceText = String(card.case_source?.text ?? card.case_source_text ?? '')
-    if (!sourceText.trim()) errors.case_source = '请提供 file_id 或粘贴文本'
-  }
-  item.fieldErrors = errors
-  return Object.keys(errors).length === 0
-}
-
-/** 现网列表加载后，丢掉确认卡上已删除、chip 点不掉的资产 ID。 */
-function sanitizeConfirmAssets(card: any) {
-  if (!card || typeof card !== 'object') return card
-  const liveProfiles = new Set(availableProfiles.value.map((p) => p.id))
-  if (liveProfiles.size && Array.isArray(card.profile_ids)) {
-    card.profile_ids = card.profile_ids.filter((id: string) => liveProfiles.has(String(id)))
-  }
-  const liveDatasets = new Set(availableDatasets.value.map((d) => d.id))
-  if (liveDatasets.size && card.dataset_id && !liveDatasets.has(card.dataset_id)) {
-    card.dataset_id = null
-  }
-  const liveKbs = new Set(availableKbs.value.map((k) => k.id))
-  if (liveKbs.size && card.kb_id && !liveKbs.has(card.kb_id)) {
-    card.kb_id = null
-    card.gold_qa_id = null
-  }
-  return card
-}
-
-/** 选项列表到达后，再滤一遍未 ack 确认卡上的失效 ID。 */
-function sanitizeOpenConfirmCards() {
-  for (const item of events.value) {
-    if (item?.type === 'confirm' && item.card && !item.isAcked) {
-      sanitizeConfirmAssets(item.card)
-    }
-  }
-}
-
-/** 确认卡规范化：补齐 run / stress / case_source 默认值，保证折叠区 v-model 绑定路径始终存在（对齐 TaskSpec 契约）。 */
-function normalizeConfirmCard(card: any) {
-  if (!card) return card
-  const prefs = agentPrefs.value
-  // 首单空槽用 /api/agent/prefs 预填；后端已给的值不得覆盖
-  if (prefs) {
-    if (!card.kind && prefs.last_kind) card.kind = prefs.last_kind
-    if ((!card.profile_ids || card.profile_ids.length === 0) && prefs.last_profile_ids?.length) {
-      card.profile_ids = [...prefs.last_profile_ids]
-    }
-    if (!card.dataset_id && prefs.last_dataset_id) card.dataset_id = prefs.last_dataset_id
-    if (!card.kb_id && prefs.last_kb_id) card.kb_id = prefs.last_kb_id
-    if (!card.gold_qa_id && prefs.last_gold_qa_id) card.gold_qa_id = prefs.last_gold_qa_id
-    if (card.with_stress == null && prefs.last_with_stress != null) {
-      card.with_stress = prefs.last_with_stress
-    }
-  }
-  card.run = { ...getDefaultRunConfig(), ...(card.run || {}) }
-  card.stress = { ...getDefaultStressConfig(), ...(card.stress || {}) }
-  // testcase 确认卡的 case_source 可能由后端缺省下发，此处兜底初始化避免模板 v-model 崩溃
-  if (card.kind === 'testcase') {
-    card.case_source = { text: '', ...(card.case_source || {}) }
-  }
-  return sanitizeConfirmAssets(card)
-}
-
-/** 将历史短工具结果恢复到当前会话的确认卡选项，保证刷新前后 MCP 上下文一致。 */
-function hydrateToolResult(name: unknown, data: any) {
-  if (!data || typeof data !== 'object') return
-  const items = Array.isArray(data.items) ? data.items : []
-  if (name === 'model.list') availableProfiles.value = items
-  if (name === 'dataset.list') availableDatasets.value = items
-  if (name === 'kb.list') availableKbs.value = items
-  if (name === 'model.list' || name === 'dataset.list' || name === 'kb.list') {
-    sanitizeOpenConfirmCards()
-  }
-}
 
 /** D5 会话列表状态点多态：按 status / active_task / 本轮生成中 / 断线重连 映射 nav-dot 样式，常驻显示就绪状态。 */
 function sessionDotClass(s: any): string {
@@ -2042,15 +760,6 @@ function sessionDotTooltip(s: any): string {
   return '智能体就绪 (在线)'
 }
 
-/** HTML 转义：历史 assistant 消息纯文本安全注入气泡（对齐原型 AE.esc）。 */
-function escapeHtml(s: string) {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-}
-
-/* F12 prod 会签人名单：取自 api.admin.getSettings().prod_approvers，失败回退静态文案 */
-const prodApprovers = ref<string[]>([])
-const prodApproversText = computed(() => (prodApprovers.value.length ? prodApprovers.value.join('、') : 'admin、bob'))
-
 /* S10 进度坞收尾提示：非空时坞保持可见，2.6s 后隐藏 */
 const dockClosingNote = ref('')
 
@@ -2081,87 +790,29 @@ function finishCancelledTask(taskId: string) {
   if (cancellingTaskId.value === taskId) cancellingTaskId.value = null
 }
 
-/* ─── S3 思考卡流式打字（原型 300-328） ─── */
-/** 是否偏好减弱动效：是则思考卡整段直出，不做流式打字。 */
-const REDUCED_MOTION = typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+/* ─── 页面级定时器登记：所有演示/兜底定时器统一登记，组件卸载时集中清理，避免回调写入已销毁状态 ─── */
+const pendingTimers = new Set<number>()
 
-/** S3 打字机推进：26ms 追加 2 字直至逼近 fullText；计时器登记为 flow，暂停/切会话即中断。 */
-function pumpThought(item: ThoughtLike) {
-  const full = item.fullText ?? item.text ?? ''
-  if (REDUCED_MOTION) { item.text = full; return }
-  if (item.done || item.streaming) return
-  item.streaming = true
-  const step = () => {
-    if (item.done) { item.streaming = false; return }
-    const target = item.fullText ?? ''
-    const cur = item.text ?? ''
-    if (cur.length >= target.length) { item.streaming = false; return }
-    item.text = target.slice(0, cur.length + 2)
-    scrollToBottom()
-    trackTimeout(step, 26, true)
-  }
-  step()
+function trackTimeout(fn: () => void, ms: number): number {
+  const id = window.setTimeout(() => {
+    pendingTimers.delete(id)
+    fn()
+  }, ms)
+  pendingTimers.add(id)
+  return id
 }
 
-/** S3 思考卡收尾：补齐全文 → 200ms 置 done → 再 800ms 自动折叠（对齐原型 finishThought 两段延迟）。 */
-function finishThought(item: ThoughtLike) {
-  if (item.done) return
-  item.text = item.fullText ?? item.text ?? ''
-  if ('streaming' in item) item.streaming = false
-  // react 阶段的工具调用思考保持展开，让用户看到思考过程；其余深度思考自动折叠。
-  const keepOpen = item.stage === 'react'
-  trackTimeout(() => {
-    item.done = true
-    if (!keepOpen) trackTimeout(() => { item.collapsed = true }, 800)
-  }, 200)
+function trackInterval(fn: () => void, ms: number): number {
+  const id = window.setInterval(fn, ms)
+  pendingTimers.add(id)
+  return id
 }
 
-/** 实时模式：下一个非 thought 事件到达时收尾当前思考卡（对齐原型 finishLiveThought）。 */
-function finishLiveThought() {
-  for (let i = events.value.length - 1; i >= 0; i--) {
-    const item = events.value[i]
-    if (item.type === 'agent') {
-      const activeTh = findLastActiveThoughtBlock(item)
-      if (activeTh) {
-        finishThought(activeTh)
-        return
-      }
-    }
-  }
-  const last = [...events.value].reverse().find((e) => e.type === 'thought' && !e.done)
-  if (last) finishThought(last)
-}
-
-/** 收尾缓冲区内所有仍未完成的思考卡（think_final / 停止 专用）：
- *  后端整回合只发一次完整思考快照；若同回合内出现 error / report 独立条目、
- *  或阶段卡把思考流切成多张卡，只有最后一张能按全文回填，其余卡不在此统一
- *  收尾就会永久停留在「深度思考中...」。不覆盖各卡已有文本，仅置完成态。 */
-function finishAllBufferThoughts(buf: StreamItem[]) {
-  for (const item of buf) {
-    if (item.type !== 'agent' || !item.blocks) continue
-    for (const block of item.blocks) {
-      if (block.type === 'thought') finishThought(block)
-    }
-  }
-}
-
-/** 协作者缓冲区：立刻收尾未完成思考卡，避免下一轮工具卡叠进同一张。 */
-function finishBufferThought(buf: StreamItem[]) {
-  for (let i = buf.length - 1; i >= 0; i--) {
-    const item = buf[i]
-    if (item.type === 'agent') {
-      const activeTh = findLastActiveThoughtBlock(item)
-      if (activeTh) {
-        activeTh.done = true
-        activeTh.collapsed = true
-      }
-    }
-  }
-  const last = [...buf].reverse().find((e) => e.type === 'thought' && !e.done)
-  if (last) {
-    last.done = true
-    last.collapsed = true
-  }
+/** 主动清除已登记定时器（任务提前完成时使用）。 */
+function clearTracked(id: number) {
+  window.clearTimeout(id)
+  window.clearInterval(id)
+  pendingTimers.delete(id)
 }
 
 /** 滚动锚定：仅当视口贴底（距底 <72px）时才跟随新消息，上翻阅读不被打断（对齐原型行为）。 */
@@ -2198,21 +849,7 @@ function adjustTextareaHeight() {
 }
 
 // 深度监听输入文本变化，无论是快捷 Prompt 填入还是换行均即时同步高度
-watch(inputText, (newVal) => {
-  // 当用户在输入框键入 "/stress xxx" 时自动转为行内命令标签
-  if (!selectedSlashCmd.value && newVal.startsWith('/') && newVal.includes(' ')) {
-    const match = newVal.match(/^(\/[a-zA-Z0-9_-]+)\s([\s\S]*)$/)
-    if (match) {
-      selectedSlashCmd.value = match[1].slice(1)
-      inputText.value = match[2]
-      paletteClosedManually.value = true
-      nextTick(adjustTextareaHeight)
-      return
-    }
-  }
-  if (newVal === '/' || (newVal.startsWith('/') && !newVal.includes(' '))) {
-    paletteClosedManually.value = false
-  }
+watch(inputText, () => {
   nextTick(adjustTextareaHeight)
 })
 
@@ -2333,30 +970,8 @@ function removeStagedFile(localId: string) {
   if (removed) releaseAttachmentPreviewUrl(removed)
 }
 
-/** 键盘事件监听：SlashPalette 导航、Enter 发送，Shift + Enter 换行，Backspace 删除命令 Tag */
+/** 键盘事件监听：Enter 发送，Shift + Enter 换行。 */
 function handleKeydown(e: KeyboardEvent) {
-  if (paletteClosedManually.value && e.key !== 'Escape') {
-    paletteClosedManually.value = false
-  }
-
-  // 1. 若斜杠面板可见且非中文输入法合成期，委托斜杠面板处理按键 (↑ / ↓ / Enter / Esc)
-  if (showSlashPalette.value && !e.isComposing && slashPaletteRef.value) {
-    const handled = slashPaletteRef.value.handleKeyDown(e)
-    if (handled) return
-  }
-
-  // 2. 参数为空时，按 Backspace 回退命令标签为输入框文字
-  if (e.key === 'Backspace' && selectedSlashCmd.value && !inputText.value) {
-    e.preventDefault()
-    const prev = selectedSlashCmd.value
-    selectedSlashCmd.value = ''
-    inputText.value = `/${prev}`
-    paletteClosedManually.value = false
-    nextTick(adjustTextareaHeight)
-    return
-  }
-
-  // 3. 正常输入换行 / 发送
   if (e.key === 'Enter') {
     if (e.shiftKey) {
       // Shift + Enter: 允许原生换行，并在 DOM 渲染后重新计算自适应高度
@@ -2371,17 +986,9 @@ function handleKeydown(e: KeyboardEvent) {
   }
 }
 
-function handleEnterPress() {
-  handleSendClick()
-}
-
 function handleSendClick() {
   if (isGenerating.value) {
     // /stop：只停本轮生成，走 user_message，不清 queued 任务
-    flowTimers.forEach(id => clearTracked(id))
-    finishLiveThought()
-    events.value.forEach(ev => { if (ev.type === 'thought' && !ev.done) finishThought(ev) })
-    finishAllBufferThoughts(events.value)
     if (agentWs?.isConnected) {
       agentWs.sendUserMessage('/stop', [], createClientMessageId())
     } else {
@@ -2391,19 +998,12 @@ function handleSendClick() {
     scrollToBottom()
     return
   }
-  const rawInput = inputText.value.trim()
-  const text = selectedSlashCmd.value ? `/${selectedSlashCmd.value}${rawInput ? ' ' + rawInput : ''}` : rawInput
+  const text = inputText.value.trim()
   if (isUploadingAttachments.value) return
   if (!text && !hasUploadedAttachments.value) return
-  // /compact 仅会话 owner 可执行；服务端仍会再校验，此处提前 Toast 避免空跑
-  if (/^\/compact(?:\s|$)/i.test(text) && currentSession.value && !currentSession.value.can_manage) {
-    message.warning('仅会话 owner 可压缩')
-    return
-  }
 
   const files = [...stagedFiles.value]
   stagedFiles.value = []
-  selectedSlashCmd.value = ''
   inputText.value = ''
   adjustTextareaHeight()
 
@@ -2412,20 +1012,6 @@ function handleSendClick() {
 
 /** 快捷芯片/能力卡点击仅填入输入框并聚焦，由用户确认后再发送（对齐原型行为）。 */
 function sendPredefined(prompt: string) {
-  if (prompt.startsWith('/')) {
-    const match = prompt.match(/^(\/[a-zA-Z0-9_-]+)\s*([\s\S]*)$/)
-    if (match) {
-      selectedSlashCmd.value = match[1].slice(1)
-      inputText.value = match[2]
-      paletteClosedManually.value = true
-      nextTick(() => {
-        adjustTextareaHeight()
-        textareaRef.value?.focus()
-      })
-      return
-    }
-  }
-  selectedSlashCmd.value = ''
   inputText.value = prompt
   nextTick(() => {
     adjustTextareaHeight()
@@ -2444,14 +1030,11 @@ function resetToDraftSession() {
   agentWs = null
   events.value = []
   isGenerating.value = false
-  harnessStage.value = ''
-  lastToolTitle.value = ''
   turnLatencyMs.value = 0
   activeTask.value = null
   currentContextMeter.value = null
   currentCompactSummary.value = null
   dockClosingNote.value = ''
-  pendingAckItem.value = null
   isRailOpen.value = false
   // 草稿尚未绑定 WS，页面不应因为没有会话而显示离线错误。
   isWsOnline.value = true
@@ -2463,8 +1046,6 @@ function activateCreatedSession(session: AgentSession) {
   const runtime = ensureRuntime(session.id)
   events.value = runtime.events
   isGenerating.value = runtime.isGenerating
-  harnessStage.value = runtime.harnessStage
-  lastToolTitle.value = runtime.lastToolTitle
   turnLatencyMs.value = runtime.turnLatencyMs
   activeTask.value = runtime.activeTask
   currentContextMeter.value = runtime.contextMeter
@@ -2529,7 +1110,6 @@ async function handleUserSend(text: string, files: any[] = []) {
       : null,
   })
   setCurrentGenerating(true)
-  harnessStage.value = 'plan'
   turnLatencyMs.value = 0
   scrollToBottom(true)
 
@@ -2542,7 +1122,6 @@ async function handleUserSend(text: string, files: any[] = []) {
 
   if (!api.isMock() && !(await ensureLiveAgentSocket())) {
     setCurrentGenerating(false)
-    harnessStage.value = ''
     events.value.push({ type: 'error', code: 'UPSTREAM', message: 'Agent 连接未就绪，请等待重连后重试。' })
     message.error('Agent 连接未就绪，请等待重连后重试')
     scrollToBottom()
@@ -2552,7 +1131,7 @@ async function handleUserSend(text: string, files: any[] = []) {
   // 会话匹配守卫：等待连接期间若用户切换了会话，不能把消息发送到新页面的错误连接。
   if (currentSessionId.value !== targetSessionId) return
   if (agentWs?.isConnected && (!agentWs.sessionId || agentWs.sessionId === targetSessionId)) {
-    // 打字占位气泡：服务端 LLM 意图识别期间给用户即时反馈，收到任意事件后移除
+    // 打字占位气泡：服务端流式开始前给用户即时反馈，收到任意事件后移除
     events.value.push({ type: 'typing' })
     scrollToBottom()
     // 契约：attachments = [{ file_id }]，仅回传上传成功的附件，失败附件按提示忽略
@@ -2566,353 +1145,20 @@ async function handleUserSend(text: string, files: any[] = []) {
     simulateAgentFlow(text, files)
   } else {
     setCurrentGenerating(false)
-    harnessStage.value = ''
     events.value.push({ type: 'error', code: 'UPSTREAM', message: 'Agent 连接未就绪，请等待重连后重试。' })
     message.error('Agent 连接未就绪，请等待重连后重试')
     scrollToBottom()
   }
 }
 
-function simulateAgentFlow(text: string, files: any[]) {
-  if (/PRD|用例|测试用例/i.test(text)) {
-    runTestCaseFlow(files[0])
-  } else if (/RAG|知识库|检索/i.test(text)) {
-    runRagFlow()
-  } else {
-    runBenchmarkFlow(/压测|加压|先评后压/.test(text))
-  }
-}
-
-function runBenchmarkFlow(withStress = false) {
+/** Mock 模式：本地模拟一次纯文本回复（不再伪造思考卡/工具/确认卡）。 */
+function simulateAgentFlow(text: string, _files: any[]) {
   const turn = getOrCreateTurnAgent(events.value)
-  const th = appendThoughtBlock(turn, {
-    text: '',
-    fullText: '正在梳理评测目标：对比被测协议档在同一数据集上的规则分。先列出可用协议档与数据集…',
-    done: false,
-    collapsed: false,
-  })
-  pumpThought(th)
-  scrollToBottom()
-
   trackTimeout(() => {
-    finishThought(th)
-    appendToolBlock(turn, {
-      tool: 'model.list',
-      args: {},
-      result: { items: availableProfiles.value },
-      status: 'ok',
-      open: false,
-    })
-    appendToolBlock(turn, {
-      tool: 'dataset.list',
-      args: {},
-      result: { items: availableDatasets.value },
-      status: 'ok',
-      open: false,
-    })
-    pushAgentMessage(`<p>找到 <b>${availableProfiles.value.length}</b> 个被测协议档与 <b>${availableDatasets.value.length}</b> 个数据集。建议用 <b>smoke-20 v3</b>（20 行，主指标 contain）做对比。请确认评测单${withStress ? '；已按「先评后压」预开压测开关' : ''}：</p>`)
-    events.value.push({
-      type: 'confirm',
-      card: normalizeConfirmCard({
-        kind: 'benchmark',
-        profile_ids: ['p-gpt', 'p-claude'],
-        dataset_id: 'ds-smoke',
-        run: { concurrency: 5, timeout_s: 60 },
-        with_stress: withStress,
-        stress: { env: 'test', qps: 20 },
-      }),
-      isAcked: false,
-      summary: '',
-      open: true,
-    })
+    pushAgentMessage(`<p>已收到你的消息：<b>${escapeHtml(text.slice(0, 120))}</b>。</p><p>（当前为显式 mock 模式：仅演示纯对话回复，实时评测任务请连接真实服务端。）</p>`)
     setCurrentGenerating(false)
     scrollToBottom()
-  }, 900, true)
-}
-
-function runRagFlow() {
-  const turn = getOrCreateTurnAgent(events.value)
-  const th = appendThoughtBlock(turn, {
-    text: '',
-    fullText: '目标是评估知识库检索质量。需要知识库与黄金 QA，先列出现有库…',
-    done: false,
-    collapsed: false,
-  })
-  pumpThought(th)
-  scrollToBottom()
-
-  trackTimeout(() => {
-    finishThought(th)
-    appendToolBlock(turn, {
-      tool: 'kb.list',
-      args: {},
-      result: { items: availableKbs.value },
-      status: 'ok',
-      open: false,
-    })
-    pushAgentMessage('<p>内置库 <b>default</b>（LightRAG，12 篇文档）配有黄金 QA <b>qa-v1 v2</b>（20 条）。默认用 hybrid 模式、K=5。请确认：</p>')
-    events.value.push({
-      type: 'confirm',
-      card: normalizeConfirmCard({
-        kind: 'rag',
-        kb_id: 'kb-default',
-        gold_qa_id: 'gq-1',
-        rag_mode: ['hybrid'],
-        run: { k: 5, concurrency: 5, timeout_s: 60 },
-        with_stress: false,
-        stress: { env: 'test', qps: 20 },
-      }),
-      isAcked: false,
-      summary: '',
-      open: true,
-    })
-    setCurrentGenerating(false)
-    scrollToBottom()
-  }, 900, true)
-}
-
-function runTestCaseFlow(file?: any) {
-  const turn = getOrCreateTurnAgent(events.value)
-  const th = appendThoughtBlock(turn, {
-    text: '',
-    fullText: '解析输入材料，按正向 / 反向 / 边界 / 等价 / 状态 / 场景策略生成用例，规模按 PRD 复杂度上限控制…',
-    done: false,
-    collapsed: false,
-  })
-  pumpThought(th)
-  scrollToBottom()
-
-  trackTimeout(() => {
-    finishThought(th)
-    pushAgentMessage('<p>将基于「支付」模块 PRD 生成用例，预计 40 条（中等复杂度上限 45）。生成后进入 <b>awaiting_case_confirm</b>，需你在 72h 内确认入库。请确认：</p>')
-    events.value.push({
-      type: 'confirm',
-      card: normalizeConfirmCard({
-        kind: 'testcase',
-        case_source: { text: file ? `附件：${file.name}` : '' },
-      }),
-      isAcked: false,
-      summary: file ? file.name : '粘贴文本输入',
-      open: true,
-    })
-    setCurrentGenerating(false)
-    scrollToBottom()
-  }, 1000, true)
-}
-
-/** A1：ack 校验失败时卡保持可编辑，待 task.create 成功后再盖章。 */
-const pendingAckItem = ref<StreamItem | null>(null)
-
-function stampConfirmCard(item: StreamItem, confirmed: boolean) {
-  item.isAcked = true
-  item.ackResult = confirmed
-  item.open = false
-  if (item.card?.kind === 'benchmark') {
-    item.summary = `${item.card.profile_ids?.length || 0} 个协议档 · 待入队`
-  } else if (item.card?.kind === 'rag') {
-    item.summary = 'RAG 评测 · 待入队'
-  } else if (item.card?.kind === 'testcase') {
-    item.summary = '用例生成 · 待入队'
-  }
-}
-
-function handleConfirmAck(item: StreamItem, confirmed: boolean) {
-  if (!canConfirmItem(item)) {
-    message.error(`仅 ${confirmAuthorLabel(item)} 可以确认或取消该任务`)
-    return
-  }
-  // F8 确认前卡内校验：不通过则留卡内显示红字，不盖章、不 Toast
-  if (confirmed && !validateConfirmCard(item)) return
-
-  const useLive = !!(agentWs && agentWs.isConnected)
-
-  // 实时模式断线时不可将确认卡伪造成任务成功；保留卡片供重连后再次确认。
-  if (!useLive && !api.isMock()) {
-    message.error('Agent 连接未就绪，暂不能确认入队')
-    return
-  }
-  if (useLive && agentWs!.sessionId && agentWs!.sessionId !== currentSessionId.value) {
-    message.error('会话切换中，请稍后再确认')
-    return
-  }
-
-  // 真实链路：确认成功前不盖章（A1）；取消可以立即折叠
-  if (useLive) {
-    if (confirmed) {
-      pendingAckItem.value = item
-      // confirm_author 是服务端事件元数据，TaskSpec 输入模型严格拒绝，提交前必须移除。
-      const { confirm_author: _confirmAuthor, ...patch } = item.card || {}
-      agentWs!.sendConfirmAck(true, patch)
-      return
-    }
-    stampConfirmCard(item, false)
-    agentWs!.sendConfirmAck(false, item.card)
-    // 取消结果与交付句由服务端 confirm_ack + thought 事件回放，
-    // 不在这里再插入一条乐观助手气泡，避免实时链路出现重复文本。
-    scrollToBottom()
-    return
-  }
-
-  stampConfirmCard(item, confirmed)
-
-  // 显式 mock 模式：本地演示入队与进度。
-  if (!confirmed) {
-    pushAgentMessage('<p>已取消，未创建任务。需要调整目标可以继续说。</p>')
-    scrollToBottom()
-    return
-  }
-
-
-  // Mock 模式：本地模拟入队与进度，便于无后端环境演示。
-  const turn = getOrCreateTurnAgent(events.value)
-  appendToolBlock(turn, {
-    tool: 'task.create',
-    args: item.card,
-    result: { task_id: 't-' + Date.now().toString(16).slice(4), status: 'queued' },
-    status: 'ok',
-    open: false,
-  })
-
-  activeTask.value = {
-    id: 't-' + Math.random().toString(16).slice(2, 8),
-    kind: item.card.kind,
-    status: 'running',
-    config: item.card,
-    progress: { done: 20, total: 100, percent: 20, message: '正在执行多模型对比推理与规则打分' },
-    created_at: new Date().toISOString(),
-  }
-
-  let prog = 20
-  const timer = trackInterval(() => {
-    prog += 25
-    if (activeTask.value) {
-      activeTask.value.progress = {
-        done: Math.min(100, prog),
-        total: 100,
-        percent: Math.min(100, prog),
-        message: '正在计算规则评分与大模型裁判一致性',
-      }
-    }
-    if (prog >= 100) {
-      clearTracked(timer)
-      trackTimeout(() => {
-        // S10 坞先显示「任务 succeeded」note，2.6s 后再隐藏
-        finishDock('任务 succeeded')
-        events.value.push({
-          type: 'report',
-          reportId: 'r-bm-1',
-          kpis: defaultKpis,
-          bars: [
-            { label: 'gpt-test · contain', value: 0.86, max: 1 },
-            { label: 'claude-x · contain', value: 0.79, max: 1 },
-          ],
-        })
-        scrollToBottom()
-        // 先评后压：质量评测 succeeded 且勾选压测后自动派生共享压测子任务
-        if (item.card?.with_stress) runStressChild(item.card)
-      }, 600, true)
-    }
-  }, 1000, true)
-}
-
-/** 澄清卡回复：发送 clarify_reply（id 匹配服务端最近待回复澄清卡）并盖章。 */
-function handleClarifyReply(item: StreamItem, answer: string) {
-  if (item.type !== 'clarify' || item.isAcked) return
-  if (!agentWs || !agentWs.isConnected || !item.id) {
-    message.error('Agent 连接未就绪，暂不能发送回复')
-    return
-  }
-  item.isAcked = true
-  agentWs.sendClarifyReply(item.id, answer)
-  scrollToBottom()
-}
-
-/** 危险工具确认：仅提交明确决定；命令仍由服务端恢复原 LangGraph 检查点后执行。 */
-function handleToolApproval(action: 'approve' | 'reject') {
-  const approval = activeToolApproval.value
-  if (!agentWs || !agentWs.isConnected || !approval) {
-    message.error('Agent 连接未就绪，暂不能确认命令')
-    return
-  }
-  // 选择后立即收回抽屉并离开「等待确认」，避免确认后的 tool_result 对不上卡。
-  const agent = getCurrentTurnAgent(events.value)
-  stampToolApprovalAck(
-    agent ? findPendingToolBlock(agent, 'bash', approval.id) : undefined,
-    { id: approval.id, action, ok: action === 'approve' },
-  )
-  clearToolApproval(currentSessionId.value, approval.id)
-  setCurrentGenerating(true)
-  agentWs.sendToolApprovalAck(approval.id, action)
-  scrollToBottom()
-}
-
-/** 派生压测子任务（mock 演示）：agent 说明 → stress 进度坞实时序列 → prod 会签 → 压测报告卡。 */
-function runStressChild(card: any) {
-  const env = card.stress_env || card.stress?.env || 'test'
-  const qps = card.stress_qps || card.stress?.qps || 20
-  pushAgentMessage(`<p>质量评测 <b>succeeded</b>，已按「先评后压」自动派生共享压测子任务（env=${env} · ${qps} QPS）。</p>`)
-  activeTask.value = {
-    id: 't-stress-' + Math.random().toString(16).slice(2, 6),
-    kind: 'stress',
-    status: env === 'prod' ? 'queued' : 'running',
-    need_approval: env === 'prod',
-    config: { kind: 'stress', stress: { env, qps, duration_s: card.stress?.duration_s || 120 } },
-    progress: { done: 0, total: 100, percent: 0, message: env === 'prod' ? '等待双人会签审批…' : '正在发压…' },
-    created_at: new Date().toISOString(),
-  }
-  scrollToBottom()
-
-  const startStress = () => {
-    if (!activeTask.value) return
-    activeTask.value.status = 'running'
-    activeTask.value.need_approval = false
-    let p = 0
-    const stressTimer = trackInterval(() => {
-      p += 20
-      // 压测实时指标驱动坞内 sparkline 与 KPI
-      currentStressMetrics.value = {
-        qps: Math.round(qps * (0.85 + Math.random() * 0.3)),
-        rt: 600 + Math.round(Math.random() * 600),
-        err: +(Math.random() * 0.8).toFixed(1),
-      }
-      if (activeTask.value) {
-        activeTask.value.progress = {
-          done: Math.min(100, p),
-          total: 100,
-          percent: Math.min(100, p),
-          message: '正在发压并采集 QPS / RT / 错误率',
-        }
-      }
-      if (p >= 100) {
-        clearTracked(stressTimer)
-        trackTimeout(() => {
-          // S10 坞先显示「压测完成」note，2.6s 后再隐藏
-          finishDock('压测完成')
-          events.value.push({
-            type: 'report',
-            reportId: 'r-st-1',
-            kpis: [
-              { value: String(Math.round(qps * 1.1)), label: '峰值 QPS' },
-              { value: '1.2s', label: 'P99 延迟' },
-              { value: '0.4%', label: '错误率' },
-            ],
-          })
-          scrollToBottom()
-        }, 600, true)
-      }
-    }, 900, true)
-  }
-
-  if (env === 'prod') {
-    // prod 生产压测需双人会签：模拟会签通过后开始发压
-    pushAgentMessage('<p>⚠ <b>NEED_APPROVAL</b>：prod 环境压测需双人会签，子任务已挂起等待审批。</p>')
-    trackTimeout(() => {
-      pushAgentMessage('<p>prod 会签已通过（双人确认），压测子任务开始发压。</p>')
-      startStress()
-    }, 2600, true)
-  } else {
-    startStress()
-  }
+  }, 600)
 }
 
 async function handleInterpretReport(reportId: string) {
@@ -2948,78 +1194,8 @@ async function handleInterpretReport(reportId: string) {
     agentWs.sendUserMessage(`解读报告 #${reportId}`, [], clientMessageId)
     return
   }
-
-  const turn = getOrCreateTurnAgent(events.value)
-  const th = appendThoughtBlock(turn, {
-    text: '',
-    fullText: `读取报告 ${reportId} 的指标摘要与失败样本，进行关键退化原因归因…`,
-    done: false,
-    collapsed: false,
-  })
-  pumpThought(th)
-
-  trackTimeout(() => {
-    finishThought(th)
-    appendToolBlock(turn, {
-      tool: 'report.get',
-      args: { report_id: reportId },
-      result: { scores: [{ profile: 'gpt-test', score: 0.86 }, { profile: 'claude-x', score: 0.79 }] },
-      status: 'ok',
-      open: false,
-    })
-    pushAgentMessage('<p><b>解读（基于已有报告，不重跑）：</b>gpt-test 以 contain 0.86 领先 claude-x 0.79，失败率 2% 对 5%。两条失败样本分别为 UPSTREAM 502 与超时，与模型能力无关，建议复跑失败行后再冻结基线。</p>')
-    setCurrentGenerating(false)
-    scrollToBottom()
-  }, 1000, true)
-}
-
-function handleFailDemo() {
-  // 生成中禁止重复触发演示，避免事件流交叉
-  if (isGenerating.value) return
-  events.value.push({
-    type: 'user',
-    text: '对比一下 gpt-test 和 claude-x 在 smoke-20 上的表现',
-  })
-  setCurrentGenerating(true)
-  const turn = getOrCreateTurnAgent(events.value)
-  const th = appendThoughtBlock(turn, {
-    text: '',
-    fullText: '目标明确：Benchmark 对比。准备创建任务并检查协议档连通性…',
-    done: false,
-  })
-  pumpThought(th)
-  scrollToBottom(true)
-
-  trackTimeout(() => {
-    finishThought(th)
-    const toolItem = appendToolBlock(turn, {
-      tool: 'task.create',
-      args: { kind: 'benchmark', profile_ids: ['p-gpt', 'p-claude'], dataset_id: 'ds-smoke' },
-      status: 'pending',
-    })
-
-    trackTimeout(() => {
-      toolItem.status = 'fail'
-      toolItem.result = 'UPSTREAM 502: bad gateway（gpt-test 网关超时）'
-      turn.blocks!.push(reactive({
-        type: 'error',
-        code: 'UPSTREAM',
-        message: '被测协议档 gpt-test 返回 502，任务未入队',
-      }) as AgentBlock)
-      pushAgentMessage('<p>创建失败：<b>UPSTREAM 502</b>（gpt-test 网关错误），与模型能力无关。建议先到「协议档」页对 gpt-test 做连通性检查，恢复后重新发送目标即可。</p>')
-      setCurrentGenerating(false)
-      scrollToBottom()
-    }, 800, true)
-  }, 800, true)
-}
-
-function handleWsToggle() {
-  if (isWsOnline.value) {
-    message.info('正在断开连接…')
-    agentWs?.close()
-  } else {
-    message.info('正在重新连接（按 last_event_id 补发）…')
-    agentWs?.connect()
+  if (api.isMock()) {
+    simulateAgentFlow(`解读报告 #${reportId}`, [])
   }
 }
 
@@ -3029,16 +1205,11 @@ function handleCancelActiveTask(taskId: string) {
     return
   }
   if (cancellingTaskId.value === taskId) return
-  // S9 取消弹窗区分压测/评测：压测立即停发（危险语义按钮），评测当前样本结束后停止
-  const isStress = activeTask.value?.kind === 'stress'
   dialog.warning({
-    title: isStress ? '立即停止发压？' : '取消任务？',
-    content: isStress
-      ? '与评测不同，确认后立刻停发。'
-      : '将在当前样本推理完成后停止，已完成的评测得分与报文将完整保留。',
-    positiveText: isStress ? '立刻停发' : '确认取消',
+    title: '取消任务？',
+    content: '将在当前样本推理完成后停止，已完成的评测得分与报文将完整保留。',
+    positiveText: '确认取消',
     negativeText: '放弃',
-    positiveButtonProps: isStress ? { type: 'error' } : undefined,
     onPositiveClick: async () => {
       if (cancellingTaskId.value === taskId) return
       cancellingTaskId.value = taskId
@@ -3046,12 +1217,12 @@ function handleCancelActiveTask(taskId: string) {
         // 契约：优先使用 WS 上行 cancel_task；发送失败才回退 REST，避免链路半开时静默丢请求。
         const sentByWs = agentWs?.sendCancelTask(taskId) ?? false
         if (sentByWs) {
-          message.info(isStress ? '停止发压请求已提交，等待服务端确认' : '取消请求已提交，等待服务端确认')
+          message.info('取消请求已提交，等待服务端确认')
           return
         }
         const cancelled = await api.tasks.cancel(taskId)
         finishCancelledTask(cancelled.id)
-        message.success(isStress ? '压测任务已停止' : '评测任务已取消（cancelled）')
+        message.success('评测任务已取消（cancelled）')
       } catch (err: any) {
         if (cancellingTaskId.value === taskId) cancellingTaskId.value = null
         message.error(err?.message || '取消请求失败，请稍后重试')
@@ -3066,24 +1237,6 @@ async function loadSessions() {
     sessions.value = list || []
   } catch {
     sessions.value = []
-  }
-}
-
-/** 实时模式预装确认卡选项；/stress 不经短工具，否则 chip/下拉为空无法确认。 */
-async function loadConfirmOptions() {
-  if (api.isMock()) return
-  try {
-    const [profiles, datasets, kbs] = await Promise.all([
-      api.profiles.list().catch(() => []),
-      api.datasets.list().catch(() => []),
-      api.kb.list().catch(() => []),
-    ])
-    if (profiles?.length) availableProfiles.value = profiles
-    if (datasets?.length) availableDatasets.value = datasets
-    if (kbs?.length) availableKbs.value = kbs
-    sanitizeOpenConfirmCards()
-  } catch {
-    // 选项留空，确认时仍走卡内校验，不阻断会话
   }
 }
 
@@ -3119,12 +1272,11 @@ async function handleSelectAgentModel(key: string) {
   }
 }
 
-/** F4 会话历史回放：按回合容器恢复模型头部与 ReAct 内容块的顺序。 */
+/** F4 会话历史回放：按回合容器恢复模型头部与助手正文的顺序。 */
 async function loadSessionHistory(sid: string): Promise<number> {
   if (deletingSessionIds.has(sid)) return 0
   try {
     const history = await api.sessions.getMessages(sid)
-    clearToolApproval(sid)
     interface TimelineItem {
       time: number
       priority: number
@@ -3162,7 +1314,6 @@ async function loadSessionHistory(sid: string): Promise<number> {
             text: m.content || '',
             raw: m.content || '',
             latency_ms: m.latency_ms ?? undefined,
-            turn_stats: m.turn_stats ?? undefined,
             providerLogoKey: logoKey,
             profileId: m.profile_id || undefined,
             modelName: modelName,
@@ -3174,130 +1325,14 @@ async function loadSessionHistory(sid: string): Promise<number> {
       }
     }
 
-    // 2. 收集 WS 事件流：历史 thought 可能含旧版原始 CoT，一律不回放；计划、
-    // ToolCard、确认卡和最终回答已经足够表达可验证的执行过程。
+    // 2. 收集 WS 事件流：骨架版只回放错误与报告；历史 thought/tool/plan/confirm
+    //    /clarify 等旧范式事件一律不再渲染。
     for (const ev of history.events || []) {
       const p = ev.payload || {}
       const t = ev.ts ? new Date(ev.ts).getTime() : 0
       const eid = Number(ev.event_id) || 0
 
-      if (ev.event === 'thought') {
-        continue
-      } else if (ev.event === 'tool_call') {
-        rawList.push({
-          time: t,
-          priority: 3,
-          eventId: eid,
-          item: {
-            type: 'tool',
-            callId: typeof p.call_id === 'string' ? p.call_id : undefined,
-            tool: p.name,
-            args: p.arguments,
-            status: 'pending',
-            open: true,
-            noAnim: true,
-          },
-        })
-      } else if (ev.event === 'tool_result') {
-        // 新事件按 call_id 精确回填；缺失该字段的历史数据才退回同名最近项。
-        const foundTool = findPendingToolItem(
-          rawList.map((entry) => entry.item),
-          p.name,
-          p.call_id,
-        )
-        if (foundTool) {
-          foundTool.result = p.ok ? p.data : p.error
-          foundTool.status = p.ok ? 'ok' : p.status === 'rejected' ? 'rejected' : 'fail'
-          foundTool.latency_ms = p.latency_ms
-          foundTool.truncated = p.truncated === true
-          foundTool.source = typeof p.source === 'string' ? p.source : undefined
-          foundTool.redacted = p.redacted === true
-          if (p.ok && shouldKeepToolCardOpen(String(p.name || ''))) foundTool.open = true
-        }
-        if (p.ok) {
-          const media = mediaItemFromToolResult(p.name, p.data, { noAnim: true })
-          if (media) {
-            rawList.push({ time: t, priority: 3, eventId: eid, item: media })
-          }
-        }
-        // 历史回放也要恢复确认卡的 MCP 选项，否则刷新后下拉框会变空。
-        if (p.ok) hydrateToolResult(p.name, p.data)
-        // 旧版本没有 confirm_ack；task.create 成功可作为兼容性的确认结果。
-        if (p.ok && p.name === 'task.create') {
-          const confirm = [...rawList].reverse().find((x) => x.item.type === 'confirm')
-          if (confirm) {
-            confirm.item.isAcked = true
-            confirm.item.ackResult = true
-            confirm.item.open = false
-          }
-        }
-      } else if (ev.event === 'tool_approval') {
-        const pendingTool = findPendingToolItem(
-          rawList.map((entry) => entry.item),
-          p.name,
-          p.call_id,
-        )
-        if (pendingTool) pendingTool.status = 'awaiting_approval'
-        showToolApproval(sid, p, pendingTool?.args)
-      } else if (ev.event === 'tool_approval_ack') {
-        clearToolApproval(sid, String(p.id || ''))
-        stampToolApprovalAck(
-          findPendingToolItem(rawList.map((entry) => entry.item), p.name, p.id || p.call_id),
-          p,
-        )
-      } else if (ev.event === 'confirm') {
-        rawList.push({
-          time: t,
-          priority: 4,
-          eventId: eid,
-          item: {
-            type: 'confirm',
-            card: normalizeConfirmCard(p),
-            confirmAuthor: p.confirm_author || null,
-            // 兼容没有 confirm_ack 的旧事件：没有 pending_confirm 时按历史已处理卡展示；
-            // 当前仍待确认的卡会在下方由 pending_confirm 覆盖为未 ack。
-            isAcked: true,
-            summary: '',
-            open: false,
-            noAnim: true,
-          },
-        })
-      } else if (ev.event === 'confirm_ack') {
-        const confirm = [...rawList].reverse().find((x) => x.item.type === 'confirm')
-        if (confirm) {
-          confirm.item.isAcked = true
-          confirm.item.ackResult = Boolean(p.ok)
-          confirm.item.open = false
-        }
-      } else if (ev.event === 'plan') {
-        rawList.push({
-          time: t,
-          priority: 3,
-          eventId: eid,
-          item: planItemFromPayload(p, true),
-        })
-      } else if (ev.event === 'task_state') {
-        // 历史回放：按事件顺序应用演进后的状态黑板到最近一个 plan 卡
-        const plan = [...rawList].reverse().find((x) => x.item.type === 'plan' && x.item.plan)
-        if (plan) {
-          applyTaskState([plan.item], p)
-        }
-      } else if (ev.event === 'clarify') {
-        rawList.push({
-          time: t,
-          priority: 4,
-          eventId: eid,
-          item: {
-            type: 'clarify',
-            id: String(p.id || ''),
-            question: String(p.question || '需要补充信息'),
-            options: Array.isArray(p.options) ? p.options : null,
-            questions: parseClarifyQuestions(p.questions),
-            isAcked: false,
-            noAnim: true,
-          },
-        })
-      } else if (ev.event === 'error') {
+      if (ev.event === 'error') {
         rawList.push({
           time: t,
           priority: 7,
@@ -3347,11 +1382,6 @@ async function loadSessionHistory(sid: string): Promise<number> {
         activeTurn = null
         continue
       }
-      if (item.type === 'thought' || item.type === 'tool' || item.type === 'media') {
-        const turn = ensureReplayTurn(item, timeline.time)
-        pushTurnBlock(turn, item as unknown as AgentBlock)
-        continue
-      }
       if (item.type === 'agent') {
         const turn = ensureReplayTurn(item, timeline.time)
         turn.profileId = item.profileId || turn.profileId
@@ -3370,34 +1400,11 @@ async function loadSessionHistory(sid: string): Promise<number> {
         continue
       }
       replay.push(item)
-      if (item.type === 'confirm' || item.type === 'clarify' || item.type === 'plan' || item.type === 'error' || item.type === 'report') {
+      if (item.type === 'error' || item.type === 'report') {
         activeTurn = null
       }
     }
 
-    if (history.pending_confirm) {
-      const card = normalizeConfirmCard({
-        ...history.pending_confirm,
-        confirm_author: history.pending_confirm_author || undefined,
-      })
-      const existing = [...replay].reverse().find((x) => x.type === 'confirm')
-      if (existing) {
-        existing.card = card
-        existing.confirmAuthor = history.pending_confirm_author || null
-        existing.isAcked = false
-        existing.open = true
-      } else {
-        replay.push({
-          type: 'confirm',
-          card,
-          confirmAuthor: history.pending_confirm_author || null,
-          isAcked: false,
-          summary: '',
-          open: true,
-          noAnim: true,
-        })
-      }
-    }
     currentContextMeter.value = history.context_meter || null
     currentCompactSummary.value = history.compact_summary || null
 
@@ -3446,8 +1453,6 @@ async function selectSession(sid: string) {
   const rt = ensureRuntime(sid)
   events.value = rt.events
   isGenerating.value = rt.isGenerating
-  harnessStage.value = rt.harnessStage
-  lastToolTitle.value = rt.lastToolTitle
   turnLatencyMs.value = rt.turnLatencyMs
   activeTask.value = rt.activeTask
   currentContextMeter.value = rt.contextMeter
@@ -3531,7 +1536,7 @@ function handleDeleteSession(sid: string) {
   }
   dialog.warning({
     title: '删除会话？',
-    content: '对话将在列表中隐藏，但消息、任务和报告会保留用于审计回溯。正在生成、待确认或执行中的任务需先处理。',
+    content: '对话将在列表中隐藏，但消息、任务和报告会保留用于审计回溯。正在生成或执行中的任务需先处理。',
     positiveText: '删除会话',
     negativeText: '保留',
     positiveButtonProps: { type: 'error' },
@@ -3556,7 +1561,7 @@ function handleBatchDeleteSessions() {
   }
   dialog.warning({
     title: '批量删除会话？',
-    content: `将删除选中的 ${ids.length} 个会话。消息、任务和报告仍会保留用于审计回溯；包含生成中、待确认或执行中任务的会话会单独失败。`,
+    content: `将删除选中的 ${ids.length} 个会话。消息、任务和报告仍会保留用于审计回溯；包含生成中或执行中任务的会话会单独失败。`,
     positiveText: '删除选中',
     negativeText: '保留',
     positiveButtonProps: { type: 'error' },
@@ -3638,7 +1643,7 @@ function waitForWebSocketConnection(ws: AgentWebSocket, timeoutMs = 10000): Prom
   })
 }
 
-/** 移除打字占位气泡：服务端首个事件到达即表明意图识别已出结果。 */
+/** 移除打字占位气泡：服务端首个事件到达即表明流式已开始。 */
 function dismissTyping() {
   const idx = events.value.findIndex((e) => e.type === 'typing')
   if (idx >= 0) events.value.splice(idx, 1)
@@ -3667,16 +1672,13 @@ function turnStreamingAgent(list: StreamItem[]): StreamItem | undefined {
 
 /** 停掉当前页打字机，避免切会话后定时器改旧缓存并滚动新会话。 */
 function stopFlowAnimations() {
-  flowTimers.forEach((id) => clearTracked(id))
   events.value.forEach((item) => {
     if (item.type === 'agent') {
       if (item.streaming) item.streaming = false
       for (const block of item.blocks || []) {
-        if (block.type === 'thought' && !block.done) block.streaming = false
         if (block.type === 'assistant' && block.streaming) block.streaming = false
       }
     }
-    if (item.type === 'thought' && item.streaming) item.streaming = false
   })
 }
 
@@ -3739,76 +1741,7 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
       }
       if (author?.id && author.id !== authStore.user?.id) {
         markGenerating(sid, true)
-        rt.harnessStage = 'plan'
       }
-      break
-    }
-    case 'thought': {
-      const agent = getOrCreateTurnAgent(buf)
-      if (p.stream === 'think_final') {
-        const fullText = String(p.text || '')
-        if (!fullText) break
-        const target = findLastActiveThoughtBlock(agent)
-        if (target) {
-          target.text = fullText
-          target.fullText = fullText
-          target.done = true
-          target.collapsed = true
-          target.streamThink = true
-        } else {
-          // 实时流中 think_final 之前必有 think 增量建卡；找不到未完成思考块，
-          // 说明该卡已被收尾（assistant_message/tool_call 触发），只回填完整文本，
-          // 不要新建重复卡（否则同一段思考会被渲染成两张卡）。
-          const last = findLastThoughtBlock(agent)
-          if (last) {
-            last.text = fullText
-            last.fullText = fullText
-            last.streamThink = true
-          } else {
-            appendThoughtBlock(agent, {
-              text: fullText,
-              fullText,
-              done: true,
-              collapsed: true,
-              streamThink: true,
-            })
-          }
-        }
-        // 整回合思考快照已到：统一收尾所有仍未完成的思考卡（含孤儿卡）。
-        finishAllBufferThoughts(buf)
-        break
-      }
-      if (p.stream === 'think') {
-        const delta = String(p.text || '')
-        if (!delta) break
-        const target = getActiveThoughtBlock(agent)
-        if (target) target.text = (target.text || '') + delta
-        else appendThoughtBlock(agent, { text: delta, done: false, collapsed: false, streamThink: true, stage: p.stage })
-        markGenerating(sid, true)
-        rt.harnessStage = rt.harnessStage || 'plan'
-        break
-      }
-      if (p.stream === 'chunk') {
-        // 兼容旧服务端事件：新协议使用 assistant_delta，历史回放期间仍可收到旧 chunk。
-        const delta = String(p.text || '')
-        if (!delta) break
-        const target = getOrCreateAssistantBlock(agent)
-        target.raw = (target.raw || '') + delta
-        target.text = renderBubbleHtml(target.raw)
-        target.streaming = true
-        agent.streaming = true
-        markGenerating(sid, true)
-        break
-      }
-      const stage = p.stage as StreamItem['stage'] | undefined
-      if (stage) {
-        // 旧版阶段 thought 可能含内部草稿；专用 Plan/Tool/Error 卡已可表达事实，
-        // 后台会话不再追加可展开过程卡。
-        rt.harnessStage = stage
-        markGenerating(sid, true)
-        break
-      }
-      // 新协议中 thought 只承载思考摘要；助手正文由 assistant_delta / assistant_message 承载。
       break
     }
     case 'assistant_delta': {
@@ -3825,16 +1758,6 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
     }
     case 'assistant_message': {
       const text = String(p.text || '')
-      const interim = p.interim === true
-      // 兼容历史：ToolCall 前的草稿不是工具事实，不再渲染成助手消息。
-      if (interim) {
-        markGenerating(sid, true)
-        rt.harnessStage = rt.harnessStage || 'react'
-        break
-      }
-      finishBufferThought(buf)
-      // assistant_message 携带服务端实际使用的协议档快照；以 profile_id 覆盖
-      // 回合创建时的全局选择，保证切换模型后每个回合仍显示自己的模型。
       const targetAgent = getOrCreateTurnAgent(buf, messageMetaFromPayload(p))
       const target = getOrCreateAssistantBlock(targetAgent)
       if (text) {
@@ -3842,7 +1765,6 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
         target.text = renderBubbleHtml(text)
         target.streaming = false
         if (typeof p.reply_latency_ms === 'number') target.latency_ms = p.reply_latency_ms
-        if (p.turn_stats && typeof p.turn_stats === 'object') target.turn_stats = p.turn_stats
       } else {
         target.streaming = false
       }
@@ -3852,130 +1774,14 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
       void refreshContextMeter(sid)
       break
     }
-    case 'plan':
-      markGenerating(sid, true)
-      rt.harnessStage = 'plan_solve'
-      buf.push(planItemFromPayload(p))
-      break
-    case 'task_state':
-      applyTaskState(buf, p)
-      break
     case 'response.completed':
     case 'done': {
-      finishBufferThought(buf)
       const agent = getCurrentTurnAgent(buf)
       if (agent) agent.streaming = false
       const orphan = turnStreamingAgent(buf)
       if (orphan) orphan.streaming = false
       markGenerating(sid, false)
       rt.harnessStage = ''
-      break
-    }
-    case 'tool_call':
-      markGenerating(sid, true)
-      rt.harnessStage = 'react'
-      finishBufferThought(buf)
-      appendToolBlock(getOrCreateTurnAgent(buf), {
-        callId: typeof p.call_id === 'string' ? p.call_id : undefined,
-        tool: p.name,
-        args: p.arguments,
-        status: 'pending',
-        open: true,
-      })
-      break
-    case 'tool_progress':
-      applyToolProgress(getCurrentTurnAgent(buf), p)
-      break
-    case 'tool_output_delta':
-      appendToolOutput(getCurrentTurnAgent(buf), p)
-      break
-    case 'tool_result': {
-      const agent = getCurrentTurnAgent(buf)
-      const target = agent ? findPendingToolBlock(agent, p.name, p.call_id) : undefined
-      if (target) {
-        target.result = p.ok ? p.data : p.error
-        target.status = p.ok ? 'ok' : p.status === 'rejected' ? 'rejected' : 'fail'
-        if (p.latency_ms !== undefined) target.latency_ms = p.latency_ms
-        target.truncated = p.truncated === true
-        target.source = typeof p.source === 'string' ? p.source : undefined
-        target.redacted = p.redacted === true
-        target.recovery = p.recovery && typeof p.recovery === 'object' ? p.recovery : undefined
-        target.toolProgress = undefined
-        if (p.ok && target.streamOutput) target.streamOutput.completed = true
-        if (p.ok && shouldKeepToolCardOpen(String(p.name || ''))) target.open = true
-      }
-      if (p.ok) {
-        const media = mediaItemFromToolResult(p.name, p.data)
-        if (media && agent) appendMediaBlock(agent, media)
-        hydrateToolResult(p.name, p.data)
-      }
-      if (p.ok && p.name === 'task.create') {
-        const confirm = [...buf].reverse().find((x) => x.type === 'confirm')
-        if (confirm) {
-          stampConfirmCard(confirm, true)
-        }
-      }
-      break
-    }
-    case 'tool_approval': {
-      // LangGraph 已暂停在 ToolNode；确认抽屉不进入会话消息时间线。
-      const agent = getCurrentTurnAgent(buf)
-      const target = agent ? findPendingToolBlock(agent, p.name, p.call_id) : undefined
-      if (target) {
-        target.status = 'awaiting_approval'
-        target.open = true
-      }
-      finishBufferThought(buf)
-      markGenerating(sid, false)
-      rt.harnessStage = ''
-      showToolApproval(sid, p, target?.args)
-      break
-    }
-    case 'tool_approval_ack': {
-      clearToolApproval(sid, String(p.id || ''))
-      const agent = getCurrentTurnAgent(buf)
-      stampToolApprovalAck(
-        agent ? findPendingToolBlock(agent, p.name, p.id || p.call_id) : undefined,
-        p,
-      )
-      markGenerating(sid, true)
-      break
-    }
-    case 'confirm':
-      markGenerating(sid, false)
-      rt.harnessStage = ''
-      finishBufferThought(buf)
-      buf.push({
-        type: 'confirm',
-        card: normalizeConfirmCard(p),
-        confirmAuthor: p.confirm_author || null,
-        isAcked: false,
-        summary: '',
-        open: true,
-      })
-      break
-    case 'confirm_ack': {
-      const confirm = [...buf].reverse().find((x) => x.type === 'confirm')
-      if (confirm) {
-        stampConfirmCard(confirm, Boolean(p.ok))
-        if (!p.ok) confirm.summary = ''
-      }
-      void refreshContextMeter(sid)
-      break
-    }
-    case 'clarify': {
-      // 澄清卡：interrupt() 暂停图，等待用户补充信息（M4 §3.9.6）
-      markGenerating(sid, false)
-      rt.harnessStage = ''
-      finishBufferThought(buf)
-      buf.push({
-        type: 'clarify',
-        id: String(p.id || ''),
-        question: String(p.question || '需要补充信息'),
-        options: Array.isArray(p.options) ? p.options : null,
-        questions: parseClarifyQuestions(p.questions),
-        isAcked: false,
-      })
       break
     }
     case 'error':
@@ -4017,48 +1823,10 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
   }
 }
 
-/* ─── 打字机渲染：终帧权威全文逐字补齐 ───
-   无论是真流式增量、网关不支持 SSE 的单块兜底、还是降级规则版的整段回复，
-   终帧到达后都从已显示长度逐字推进到全文，保证任何链路下用户都看到
-   「一个字一个字弹出」的效果。定时器登记进 flowTimers，「暂停生成」可中断。 */
-const typewriteTimerByItem = new WeakMap<object, number>()
-
-function typewriteTo(rawItem: StreamItem, fullText: string) {
-  // 响应式关键修复：调用方可能传入 push 进响应式数组前的原始对象引用，
-  // 直接修改原始对象不会触发 Vue 重渲染（气泡停留在空文本 + 光标卡死）。
-  // reactive() 对同一目标有缓存，与 v-for 渲染取到的是同一个代理，修改即触发更新。
-  const item = reactive(rawItem) as StreamItem
-  const prev = typewriteTimerByItem.get(item)
-  if (prev) clearTracked(prev)
-  // 已显示前缀可续播时从其长度继续，否则（前缀不匹配）从头渲染
-  const start = item.raw && fullText.startsWith(item.raw) ? item.raw.length : 0
-  let pos = start
-  const total = fullText.length
-  if (total === 0) {
-    item.streaming = false
-    return
-  }
-  item.streaming = true
-  // 长文本提速：避免长回复打字机拖沓（80 字内 24ms/字，超长 10ms/字，每 tick 推进 2 字）
-  const stepMs = total > 120 ? 10 : total > 60 ? 16 : 24
-  const id = trackInterval(() => {
-    pos = Math.min(total, pos + 2)
-    item.raw = fullText.slice(0, pos)
-    item.text = renderBubbleHtml(item.raw)
-    scrollToBottom()
-    if (pos >= total) {
-      clearTracked(id)
-      typewriteTimerByItem.delete(item)
-      item.streaming = false
-    }
-  }, stepMs, true)
-  typewriteTimerByItem.set(item, id)
-}
-
 function handleWsEvent(ev: WsServerEvent) {
   // 用户自己的 user_message 回显不是「本轮已出结果」。过早移除打字占位时，
-  // 规划/流式开始前对话区只剩用户气泡，看起来像模型没有回复。
-  // session_title 在首轮规划期间到达，同样不属于回合产出，不收占位气泡。
+  // 流式开始前对话区只剩用户气泡，看起来像模型没有回复。
+  // session_title 在首轮期间到达，同样不属于回合产出，不收占位气泡。
   if (
     ev.event !== 'pong' &&
     ev.event !== 'message' &&
@@ -4098,88 +1866,9 @@ function handleWsEvent(ev: WsServerEvent) {
       // 协作者发言意味着本会话即将生成一轮回复，复用现有阶段提示与流式气泡。
       if (author?.id && author.id !== authStore.user?.id) {
         isGenerating.value = true
-        harnessStage.value = 'plan'
         turnLatencyMs.value = 0
       }
       scrollToBottom()
-      break
-    }
-    case 'thought': {
-      const agent = getOrCreateTurnAgent(events.value)
-      if (p.stream === 'think_final') {
-        const fullText = String(p.text || '')
-        if (!fullText) break
-        const target = findLastActiveThoughtBlock(agent)
-        if (target) {
-          target.text = fullText
-          target.fullText = fullText
-          target.done = true
-          target.collapsed = true
-          target.streamThink = true
-        } else {
-          // 实时流中 think_final 之前必有 think 增量建卡；找不到未完成思考块，
-          // 说明该卡已被收尾（assistant_message/tool_call 触发），只回填完整文本，
-          // 不要新建重复卡（否则同一段思考会被渲染成两张卡）。
-          const last = findLastThoughtBlock(agent)
-          if (last) {
-            last.text = fullText
-            last.fullText = fullText
-            last.streamThink = true
-          } else {
-            appendThoughtBlock(agent, {
-              text: fullText,
-              fullText,
-              done: true,
-              collapsed: true,
-              streamThink: true,
-            })
-          }
-        }
-        // 整回合思考快照已到：统一收尾所有仍未完成的思考卡，
-        // 防止中途 error / report 分出的孤儿卡永久停留在「深度思考中...」。
-        finishAllBufferThoughts(events.value)
-        scrollToBottom()
-        break
-      }
-      // 思考链增量帧（瞬态）：追加到当前助手消息内部的思考卡
-      if (p.stream === 'think') {
-        const delta = String(p.text || '')
-        if (delta) {
-          const target = getActiveThoughtBlock(agent)
-          if (target) {
-            target.text = (target.text || '') + delta
-          } else {
-            appendThoughtBlock(agent, { text: delta, done: false, collapsed: false, streamThink: true, stage: p.stage })
-          }
-          scrollToBottom()
-          setCurrentGenerating(true)
-        }
-        break
-      }
-      // 兼容旧服务端事件：新协议使用 assistant_delta。
-      if (p.stream === 'chunk') {
-        const delta = String(p.text || '')
-        if (delta) {
-          const target = getOrCreateAssistantBlock(agent)
-          target.raw = (target.raw || '') + delta
-          target.text = renderBubbleHtml(target.raw)
-          target.streaming = true
-          agent.streaming = true
-          scrollToBottom()
-          setCurrentGenerating(true)
-        }
-        break
-      }
-      // 旧版阶段 thought（规划 / ReAct / 复核）可能携带内部草稿；计划、工具和
-      // 错误均已有专用卡，实时链路同样不再追加过程卡。
-      const stage = p.stage as StreamItem['stage'] | undefined
-      if (typeof p.latency_ms === 'number') turnLatencyMs.value += p.latency_ms
-      if (stage) {
-        harnessStage.value = stage
-        setCurrentGenerating(true)
-        break
-      }
-      // 新协议中 thought 只承载思考摘要；助手正文由 assistant_delta / assistant_message 承载。
       break
     }
     case 'assistant_delta': {
@@ -4197,14 +1886,6 @@ function handleWsEvent(ev: WsServerEvent) {
     }
     case 'assistant_message': {
       const text = String(p.text || '')
-      const interim = p.interim === true
-      // ToolCall 前草稿不属于最终回答；兼容旧事件时也必须过滤。
-      if (interim) {
-        setCurrentGenerating(true)
-        harnessStage.value = harnessStage.value || 'react'
-        break
-      }
-      finishLiveThought()
       // assistant_message 携带服务端实际使用的协议档快照；以 profile_id 覆盖
       // 回合创建时的全局选择，保证切换模型后每个回合仍显示自己的模型。
       const targetAgent = getOrCreateTurnAgent(events.value, messageMetaFromPayload(p))
@@ -4214,160 +1895,21 @@ function handleWsEvent(ev: WsServerEvent) {
         target.text = renderBubbleHtml(text)
         target.streaming = false
         if (typeof p.reply_latency_ms === 'number') target.latency_ms = p.reply_latency_ms
-        if (p.turn_stats && typeof p.turn_stats === 'object') target.turn_stats = p.turn_stats
       } else {
         target.streaming = false
       }
       targetAgent.streaming = false
       setCurrentGenerating(false)
-      harnessStage.value = ''
+      if (typeof p.reply_latency_ms === 'number') turnLatencyMs.value = p.reply_latency_ms
       if (currentSessionId.value) void refreshContextMeter(currentSessionId.value)
       if (text) scrollToBottom()
       break
     }
-    case 'plan':
-      harnessStage.value = 'plan_solve'
-      setCurrentGenerating(true)
-      events.value.push(planItemFromPayload(p))
-      scrollToBottom()
-      break
-    case 'task_state':
-      applyTaskState(events.value, p)
-      break
     case 'response.completed':
     case 'done': {
-      finishLiveThought()
       const orphan = turnStreamingAgent(events.value)
       if (orphan) orphan.streaming = false
       setCurrentGenerating(false)
-      harnessStage.value = ''
-      break
-    }
-    case 'tool_call': {
-      finishLiveThought()
-      harnessStage.value = 'react'
-      lastToolTitle.value = getToolDisplayName(p.name)
-      setCurrentGenerating(true)
-      appendToolBlock(getOrCreateTurnAgent(events.value), {
-        callId: typeof p.call_id === 'string' ? p.call_id : undefined,
-        tool: p.name,
-        args: p.arguments,
-        status: 'pending',
-        open: true,
-      })
-      scrollToBottom()
-      break
-    }
-    case 'tool_progress': {
-      applyToolProgress(getCurrentTurnAgent(events.value), p)
-      break
-    }
-    case 'tool_output_delta': {
-      appendToolOutput(getCurrentTurnAgent(events.value), p)
-      scrollToBottom()
-      break
-    }
-    case 'tool_result': {
-      const agent = getCurrentTurnAgent(events.value)
-      const target = agent ? findPendingToolBlock(agent, p.name, p.call_id) : undefined
-      if (target) {
-        target.result = p.ok ? p.data : p.error
-        target.status = p.ok ? 'ok' : p.status === 'rejected' ? 'rejected' : 'fail'
-        if (p.latency_ms !== undefined) {
-          target.latency_ms = p.latency_ms
-          turnLatencyMs.value += p.latency_ms
-        }
-        target.truncated = p.truncated === true
-        target.source = typeof p.source === 'string' ? p.source : undefined
-        target.redacted = p.redacted === true
-        target.recovery = p.recovery && typeof p.recovery === 'object' ? p.recovery : undefined
-        target.toolProgress = undefined
-        if (p.ok && target.streamOutput) target.streamOutput.completed = true
-        target.open = p.ok && shouldKeepToolCardOpen(String(p.name || ''))
-      }
-      if (p.ok) {
-        const media = mediaItemFromToolResult(p.name, p.data)
-        if (media && agent) appendMediaBlock(agent, media)
-        hydrateToolResult(p.name, p.data)
-        if (p.name === 'task.cancel' && p.data?.task_id) {
-          finishCancelledTask(p.data.task_id)
-          message.success('任务已取消（cancelled）')
-        }
-        if (p.name === 'task.create' && pendingAckItem.value) {
-          stampConfirmCard(pendingAckItem.value, true)
-          pendingAckItem.value = null
-        }
-      }
-      scrollToBottom()
-      break
-    }
-    case 'confirm_ack': {
-      const target = [...events.value].reverse().find(e => e.type === 'confirm')
-      if (target) {
-        stampConfirmCard(target, Boolean(p.ok))
-        if (!p.ok) target.summary = ''
-      }
-      pendingAckItem.value = null
-      if (currentSessionId.value) void refreshContextMeter(currentSessionId.value)
-      break
-    }
-    case 'confirm': {
-      lastConfirmKind = p.kind || 'benchmark'
-      finishLiveThought()
-      setCurrentGenerating(false)
-      harnessStage.value = ''
-      events.value.push({
-        type: 'confirm',
-        // 契约：确认卡 TaskSpec 在 payload；规范化补齐 run / stress 默认值，折叠区绑定路径始终有效
-        card: normalizeConfirmCard(p),
-        confirmAuthor: p.confirm_author || null,
-        isAcked: false,
-        summary: '',
-        open: true,
-      })
-      scrollToBottom()
-      break
-    }
-    case 'tool_approval': {
-      // LangGraph 暂停而非失败：标记原 ToolCard，并在 Composer 上方弹出确认抽屉。
-      const agent = getCurrentTurnAgent(events.value)
-      const target = agent ? findPendingToolBlock(agent, p.name, p.call_id) : undefined
-      if (target) {
-        target.status = 'awaiting_approval'
-        target.open = true
-      }
-      finishLiveThought()
-      setCurrentGenerating(false)
-      harnessStage.value = ''
-      showToolApproval(ev.session_id || currentSessionId.value, p, target?.args)
-      scrollToBottom()
-      break
-    }
-    case 'tool_approval_ack': {
-      clearToolApproval(ev.session_id || currentSessionId.value, String(p.id || ''))
-      const agent = getCurrentTurnAgent(events.value)
-      stampToolApprovalAck(
-        agent ? findPendingToolBlock(agent, p.name, p.id || p.call_id) : undefined,
-        p,
-      )
-      setCurrentGenerating(true)
-      scrollToBottom()
-      break
-    }
-    case 'clarify': {
-      // 澄清卡：interrupt() 暂停图，等待用户补充信息（仅回复，不建任务）
-      finishLiveThought()
-      setCurrentGenerating(false)
-      harnessStage.value = ''
-      events.value.push({
-        type: 'clarify',
-        id: String(p.id || ''),
-        question: String(p.question || '需要补充信息'),
-        options: Array.isArray(p.options) ? p.options : null,
-        questions: parseClarifyQuestions(p.questions),
-        isAcked: false,
-      })
-      scrollToBottom()
       break
     }
     case 'progress': {
@@ -4375,12 +1917,11 @@ function handleWsEvent(ev: WsServerEvent) {
         // 契约：进度字段在 payload（percent/done/total/message）；首个进度事件到达时自动起坞
         const progress = { percent: p.percent, done: p.done, total: p.total, message: p.message }
         if (!activeTask.value || activeTask.value.id !== ev.task_id) {
-          const lastCard = [...events.value].reverse().find(x => x.type === 'confirm')?.card
           activeTask.value = {
             id: ev.task_id,
-            kind: lastCard?.kind || lastConfirmKind,
+            kind: 'benchmark',
             status: 'running',
-            config: lastCard || { kind: lastConfirmKind },
+            config: {},
             progress,
             created_at: new Date().toISOString(),
           } as any
@@ -4395,14 +1936,11 @@ function handleWsEvent(ev: WsServerEvent) {
         } else {
           activeTask.value.progress = progress
         }
-        // 用例生成进入 awaiting_case_confirm 时 Worker 也会推 percent=100，坞需保持以便取消
-        const awaitingCase = String(progress.message || '').includes('等待确认入库')
-        if ((progress.percent ?? 0) >= 100 && !awaitingCase) finishDock('任务已完成')
+        if ((progress.percent ?? 0) >= 100) finishDock('任务已完成')
       }
       break
     }
     case 'report': {
-      finishLiveThought()
       // S10 坞先显示「任务 succeeded」note，2.6s 后再隐藏
       finishDock('任务 succeeded')
       setCurrentGenerating(false)
@@ -4419,16 +1957,9 @@ function handleWsEvent(ev: WsServerEvent) {
       break
     }
     case 'error': {
-      finishLiveThought()
       // 取消失败时恢复按钮；不能保留“取消中”假象阻断用户重试。
       if (cancellingTaskId.value && (!ev.task_id || ev.task_id === cancellingTaskId.value)) {
         cancellingTaskId.value = null
-      }
-      // A1：校验失败保留确认卡可编辑，不盖章
-      if (pendingAckItem.value) {
-        pendingAckItem.value.isAcked = false
-        pendingAckItem.value.open = true
-        pendingAckItem.value = null
       }
       events.value.push({
         type: 'error',
@@ -4446,6 +1977,8 @@ function handleWsEvent(ev: WsServerEvent) {
       applySessionTitle(ev.session_id, String(p.title || ''))
       break
     }
+    default:
+      break
   }
 }
 
@@ -4458,38 +1991,391 @@ function formatRelativeTime(dateStr?: string) {
   return `${Math.floor(mins / 60)} 小时前`
 }
 
-onMounted(async () => {
-  try {
-    agentPrefs.value = await api.agent.getPrefs()
-  } catch {
-    agentPrefs.value = null
+/** HTML 转义：历史 assistant 消息纯文本安全注入气泡（对齐原型 AE.esc）。 */
+function escapeHtml(s: string) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+
+/** 将历史或 WS 的文件 ID 统一成既有附件芯片可读取的对象。 */
+function normalizeMessageFiles(attachments: unknown): any[] {
+  if (!Array.isArray(attachments)) return []
+  return attachments.map((item) => (
+    typeof item === 'string' ? { id: item, name: item, size: '' } : item
+  ))
+}
+
+/** 返回用户气泡展示名：自己的消息显示“我”，协作者优先显示昵称。 */
+function userMessageAuthorLabel(item: StreamItem): string {
+  if (!item.author) return ''
+  if (item.author.id === authStore.user?.id) return '我'
+  return item.author.display_name || item.author.username
+}
+
+/** 判断用户气泡是否来自当前成员以外的团队协作者。 */
+function isRemoteUserMessage(item: StreamItem): boolean {
+  return Boolean(item.author?.id && authStore.user?.id && item.author.id !== authStore.user.id)
+}
+
+/** 将助手消息时间格式化为原型中的 MM/DD HH:mm。 */
+function formatAgentMessageTime(dateStr?: string): string {
+  if (!dateStr) return ''
+  const date = new Date(dateStr)
+  if (Number.isNaN(date.getTime())) return ''
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  const hours = String(date.getHours()).padStart(2, '0')
+  const minutes = String(date.getMinutes()).padStart(2, '0')
+  return `${month}/${day} ${hours}:${minutes}`
+}
+
+/** 记录本轮助手消息头所需的供应商、模型和协议档信息。 */
+function currentAgentMessageMeta(): Pick<StreamItem, 'providerLogoKey' | 'profileId' | 'modelName' | 'profileName' | 'createdAt'> {
+  return {
+    providerLogoKey: agentProfileLogoKey.value,
+    profileId: currentAgentProfileId.value || activeAgentProfile.value?.id || undefined,
+    modelName: agentDisplayModelName.value,
+    profileName: agentProfileDisplayName.value,
+    createdAt: new Date().toISOString(),
   }
+}
+
+/** 追加本地演示助手消息，并同步当前 Agent 的供应商 Logo 与模型元数据。 */
+function pushAgentMessage(text: string) {
+  const agent = getOrCreateTurnAgent(events.value)
+  const block = getOrCreateAssistantBlock(agent)
+  block.raw = text
+  block.text = text
+  block.streaming = false
+  agent.streaming = false
+}
+
+/** 解析历史消息中的供应商 Logo 标识，优先使用快照字段。 */
+function resolveMessageLogoKey(m: { provider?: string | null; profile_id?: string | null; model_name?: string | null }): ProviderLogoKey {
+  // 同一模型可能托管在不同供应商，必须优先按消息快照的 profile_id 取图标。
+  if (m.profile_id) {
+    const prof = allProfiles.value.find((p) => p.id === m.profile_id)
+    if (prof) return getProviderLogoKey(prof)
+  }
+  if (m.model_name) {
+    const key = getProviderLogoKey({ model: m.model_name })
+    if (key !== 'custom') return key
+  }
+  if (m.provider) {
+    return getProviderLogoKey({ name: m.provider, model: m.model_name || '' })
+  }
+  return agentProfileLogoKey.value || 'custom'
+}
+
+/** 解析历史消息中的模型显示名称，优先使用快照字段。 */
+function resolveMessageModelName(m: { model_name?: string | null; profile_id?: string | null }): string {
+  if (m.model_name) return m.model_name
+  if (m.profile_id) {
+    const prof = allProfiles.value.find((p) => p.id === m.profile_id)
+    if (prof) return prof.model || prof.name
+  }
+  return agentDisplayModelName.value || 'Agent'
+}
+
+/** 解析历史消息中的协议档显示名称，优先使用快照字段。 */
+function resolveMessageProfileName(m: { profile_name?: string | null; profile_id?: string | null }): string {
+  if (m.profile_name) return m.profile_name
+  if (m.profile_id) {
+    const prof = allProfiles.value.find((p) => p.id === m.profile_id)
+    if (prof) return prof.name
+  }
+  return ''
+}
+
+/** 将 assistant_message 的服务端模型快照转换为前端回合元数据。 */
+function messageMetaFromPayload(payload: Record<string, any>): Partial<StreamItem> {
+  const profileId = typeof payload.profile_id === 'string' && payload.profile_id
+    ? payload.profile_id
+    : undefined
+  const profile = profileId ? allProfiles.value.find((item) => item.id === profileId) : undefined
+  const modelName = typeof payload.model_name === 'string' && payload.model_name
+    ? payload.model_name
+    : profile?.model || profile?.name || undefined
+  const profileName = typeof payload.profile_name === 'string' && payload.profile_name
+    ? payload.profile_name
+    : profile?.name || undefined
+  const meta: Partial<StreamItem> = {
+    profileId,
+    modelName,
+    profileName,
+    createdAt: typeof payload.created_at === 'string' ? payload.created_at : undefined,
+  }
+  // 旧事件可能没有模型快照，不能用默认 custom 覆盖回合初始展示信息。
+  if (profile || modelName || typeof payload.provider === 'string') {
+    meta.providerLogoKey = profile
+      ? getProviderLogoKey(profile)
+      : getProviderLogoKey({ name: payload.provider, model: modelName })
+  }
+  return meta
+}
+
+/** 把服务端确认的模型快照应用到助手回合，避免继续使用全局当前模型。 */
+function applyAgentMessageMeta(agent: StreamItem, meta?: Partial<StreamItem>) {
+  if (!meta) return
+  if (meta.profileId) agent.profileId = meta.profileId
+  if (meta.modelName) agent.modelName = meta.modelName
+  if (meta.profileName) agent.profileName = meta.profileName
+  if (meta.providerLogoKey) agent.providerLogoKey = meta.providerLogoKey
+  if (meta.createdAt) agent.createdAt = meta.createdAt
+}
+
+/** 返回当前用户回合的助手容器；错误、报告等顶层事件会结束当前容器。 */
+function getCurrentTurnAgent(list: StreamItem[]): StreamItem | undefined {
+  let from = -1
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (list[i].type === 'user') {
+      from = i
+      break
+    }
+  }
+  // 从尾部回溯寻找本回合容器：error / report 等独立收尾条目会插在容器之后，
+  // 若只认「最后一条必须是 agent」，同回合的后续帧会被误判为新回合。
+  for (let i = list.length - 1; i > from; i--) {
+    const item = list[i]
+    if (item.type === 'user') break
+    if (item.type === 'agent') return item
+    // error / report 等独立条目：不属于任何容器，跳过继续回溯
+  }
+  return undefined
+}
+
+/** 获取或创建一个 Agent 回合容器；助手正文追加到其 blocks。 */
+function getOrCreateTurnAgent(list: StreamItem[], meta?: Partial<StreamItem>): StreamItem {
+  const current = getCurrentTurnAgent(list)
+  if (current) {
+    applyAgentMessageMeta(current, meta)
+    return current
+  }
+  const defaultMeta = currentAgentMessageMeta()
+  const newAgent = reactive({
+    type: 'agent',
+    blocks: [] as AgentBlock[],
+    streaming: true,
+    noAnim: meta?.noAnim,
+    profileId: meta?.profileId || defaultMeta.profileId,
+    providerLogoKey: meta?.providerLogoKey || defaultMeta.providerLogoKey,
+    modelName: meta?.modelName || defaultMeta.modelName,
+    profileName: meta?.profileName || defaultMeta.profileName,
+    createdAt: meta?.createdAt || defaultMeta.createdAt,
+  }) as StreamItem
+  list.push(newAgent)
+  return newAgent
+}
+
+/** 返回或创建当前回合的助手正文块。已落库的段落不再覆盖，保证中间叙述另起一段。 */
+function getOrCreateAssistantBlock(agent: StreamItem): AgentAssistantItem {
+  const blocks = agent.blocks || (agent.blocks = [])
+  const last = blocks[blocks.length - 1]
+  if (last?.type === 'assistant' && (last.streaming || !last.raw)) return last
+  const block = reactive({ type: 'assistant', raw: '', text: '', streaming: true }) as AgentAssistantItem
+  blocks.push(block)
+  agent.streaming = true
+  return block
+}
+
+/** 为每次用户发送生成浏览器侧幂等键，断线重发时避免重复触发 Harness。 */
+function createClientMessageId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return `browser-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
+
+const events = ref<StreamItem[]>([])
+let agentWs: AgentWebSocket | null = null
+
+/** 按会话缓存对话流与生成态：切换会话不丢历史，生成中的 WS 不拆。 */
+interface SessionRuntime {
+  events: StreamItem[]
+  isGenerating: boolean
+  harnessStage: string
+  turnLatencyMs: number
+  activeTask: any
+  contextMeter: ContextMeterData | null
+  compactSummary: string | null
+}
+
+const sessionRuntimes = new Map<string, SessionRuntime>()
+const sockets = new Map<string, AgentWebSocket>()
+const generatingBySession = ref<Record<string, boolean>>({})
+let selectEpoch = 0
+
+function emptyRuntime(): SessionRuntime {
+  return {
+    events: [],
+    isGenerating: false,
+    harnessStage: '',
+    turnLatencyMs: 0,
+    activeTask: null,
+    contextMeter: null,
+    compactSummary: null,
+  }
+}
+
+function ensureRuntime(sid: string): SessionRuntime {
+  let rt = sessionRuntimes.get(sid)
+  if (!rt) {
+    rt = emptyRuntime()
+    sessionRuntimes.set(sid, rt)
+  }
+  return rt
+}
+
+function markGenerating(sid: string, value: boolean) {
+  if (!sid) return
+  const rt = ensureRuntime(sid)
+  rt.isGenerating = value
+  if (generatingBySession.value[sid] === value) return
+  generatingBySession.value = { ...generatingBySession.value, [sid]: value }
+}
+
+/** 当前会话生成态：同步列表小点与缓存，切走后后台仍显示「正在生成」。 */
+function setCurrentGenerating(value: boolean) {
+  isGenerating.value = value
+  const sid = currentSessionId.value
+  if (!sid) return
+  const rt = ensureRuntime(sid)
+  rt.events = events.value
+  rt.isGenerating = value
+  rt.harnessStage = harnessStage.value
+  markGenerating(sid, value)
+}
+
+/** 把当前 UI 状态写回该会话缓存（切走前调用）。 */
+function persistCurrentRuntime() {
+  const sid = currentSessionId.value
+  if (!sid) return
+  const rt = ensureRuntime(sid)
+  rt.events = events.value
+  rt.isGenerating = isGenerating.value
+  rt.harnessStage = harnessStage.value
+  rt.turnLatencyMs = turnLatencyMs.value
+  rt.activeTask = activeTask.value
+  rt.contextMeter = currentContextMeter.value
+  rt.compactSummary = currentCompactSummary.value
+  markGenerating(sid, isGenerating.value)
+}
+
+/** 关闭已结束生成且非当前会话的连接，生成中的会话保持 WS 以便后台继续收事件。 */
+function gcIdleSockets(keepId: string) {
+  for (const [id, ws] of sockets) {
+    if (id === keepId) continue
+    if (sessionRuntimes.get(id)?.isGenerating) continue
+    ws.close()
+    sockets.delete(id)
+  }
+}
+
+/** 服务端以 4404 收回会话后同步移除本地缓存，避免列表留下无法重连的幽灵项。 */
+function removeInaccessibleSession(sid: string, navigate = true) {
+  const index = sessions.value.findIndex((session) => session.id === sid)
+  const wasCurrent = currentSessionId.value === sid
+  const socket = sockets.get(sid)
+  if (socket) socket.close()
+  sockets.delete(sid)
+  sessionRuntimes.delete(sid)
+  selectedSessionIds.value = selectedSessionIds.value.filter((id) => id !== sid)
+  const nextGenerating = { ...generatingBySession.value }
+  delete nextGenerating[sid]
+  generatingBySession.value = nextGenerating
+  if (index < 0) return
+
+  sessions.value.splice(index, 1)
+  if (wasCurrent && agentWs === socket) agentWs = null
+  if (!wasCurrent || !navigate) return
+  const next = sessions.value[index] || sessions.value[index - 1]
+  if (next) {
+    void selectSession(next.id)
+  } else {
+    void handleCreateSession()
+  }
+}
+
+/** 批量清理已删除会话后只导航一次，避免依次跳转到同批次的已删除会话。 */
+function removeInaccessibleSessions(sids: string[]) {
+  const wasCurrent = sids.includes(currentSessionId.value)
+  if (wasCurrent) selectEpoch += 1
+  sids.forEach((sid) => removeInaccessibleSession(sid, false))
+  if (!wasCurrent) return
+  const next = sessions.value[0]
+  if (next) {
+    void selectSession(next.id)
+  } else {
+    void handleCreateSession()
+  }
+}
+
+/** 切换单个 owner 会话的批量选择状态。 */
+function toggleSessionSelected(sid: string) {
+  if (selectedSessionIds.value.includes(sid)) {
+    selectedSessionIds.value = selectedSessionIds.value.filter((id) => id !== sid)
+  } else {
+    selectedSessionIds.value = [...selectedSessionIds.value, sid]
+  }
+}
+
+/** 全选或清空当前列表中可由本人删除的会话。 */
+function handleSelectAllChange(event: Event) {
+  const checked = (event.target as HTMLInputElement).checked
+  selectedSessionIds.value = checked
+    ? filteredSessions.value.filter((session) => session.can_delete).map((session) => session.id)
+    : []
+}
+
+interface AgentAssistantItem {
+  type: 'assistant'
+  raw?: string
+  text?: string
+  streaming?: boolean
+  latency_ms?: number
+}
+
+interface AgentErrorItem {
+  type: 'error'
+  code?: string
+  message?: string
+  noAnim?: boolean
+}
+
+type AgentBlock = AgentAssistantItem | AgentErrorItem
+
+interface StreamItem {
+  type: 'user' | 'agent' | 'report' | 'error' | 'typing'
+  text?: string
+  latency_ms?: number
+  streaming?: boolean
+  raw?: string
+  noAnim?: boolean
+  messageId?: string
+  clientMessageId?: string
+  author?: SessionAuthor | null
+  files?: any[]
+  blocks?: AgentBlock[]
+  providerLogoKey?: ProviderLogoKey
+  profileId?: string
+  modelName?: string
+  profileName?: string
+  createdAt?: string
+  reportId?: string
+  kpis?: any[]
+  bars?: any[]
+  code?: string
+  message?: string
+}
+
+const harnessStage = ref<string>('')
+
+onMounted(async () => {
   await loadSessions()
   // 顶栏/输入框的 Agent 模型名改为按后端协议档动态解析，不再硬编码
   // 先解析协议档，再回放历史消息，保证助手消息头能显示正确供应商 Logo 与模型名称。
   await resolveAgentModelName()
-  await loadConfirmOptions()
   // 默认停留在未持久化草稿，只有首次发送消息时才创建服务端会话。
   resetToDraftSession()
-  // F12 拉取 prod 会签人名单用于确认卡动态提示；失败静默回退静态文案
-  try {
-    const settings = await api.admin.getSettings()
-    if (settings?.prod_approvers?.length) prodApprovers.value = settings.prod_approvers
-  } catch {}
-  // F15 调度侧轨心跳：2.8s 随机推进节点负载；有运行中任务时 40% 概率 prepend TICK 日志（上限 12 条截断）
-  trackInterval(() => {
-    if (!api.isMock() || !isRailOpen.value) return
-    const w = railWorkers.value[Math.floor(Math.random() * railWorkers.value.length)]
-    w.load = Math.max(6, Math.min(94, w.load + (Math.random() < 0.5 ? -1 : 1) * (4 + Math.round(Math.random() * 10))))
-    if (activeTask.value && Math.random() < 0.4) {
-      dispatchLogs.value.unshift({
-        time: new Date().toTimeString().slice(0, 8),
-        kind: 'TICK',
-        msg: `${w.id} 负载 ${w.load}% · 心跳正常`,
-      })
-      if (dispatchLogs.value.length > 12) dispatchLogs.value.length = 12
-    }
-  }, 2800)
   // 消费报告页「在对话中解读」直达参数（兼容 ?interpret= 与 ?report_id=）。
   const interpretId = (route.query.interpret || route.query.report_id) as string | undefined
   if (interpretId) {
@@ -4497,7 +2383,6 @@ onMounted(async () => {
       void handleInterpretReport(interpretId)
     } else {
       // 实时模式需等待 WS 建立连接后再发送解读请求；超时只提示连接异常，禁止伪造解读。
-      // 兜底定时器与 watch 均登记在册，组件卸载时统一清理。
       if (isWsOnline.value) {
         void handleInterpretReport(interpretId)
         return
@@ -4518,6 +2403,8 @@ onMounted(async () => {
     }
   }
 })
+
+let interpretStopWatch: (() => void) | null = null
 
 onBeforeUnmount(() => {
   // 统一清理登记的全部定时器与解读监听，防止卸载后回调触发
@@ -4700,26 +2587,6 @@ onBeforeUnmount(() => {
   flex: 1;
 }
 
-.assistant-message-blocks {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.assistant-reply :deep(.md-h1:first-child),
-.assistant-reply :deep(.md-h2:first-child),
-.assistant-reply :deep(.md-h3:first-child),
-.assistant-reply :deep(.md-h4:first-child),
-.assistant-reply :deep(.md-h5:first-child),
-.assistant-reply :deep(.md-h6:first-child),
-.assistant-reply :deep(.md-p:first-child),
-.assistant-reply :deep(.md-ul:first-child),
-.assistant-reply :deep(.md-ol:first-child),
-.assistant-reply :deep(.md-quote:first-child),
-.assistant-reply :deep(.md-code-card:first-child) {
-  margin-top: 0;
-}
-
 .assistant-message-header {
   margin-bottom: 7px;
   line-height: 1.25;
@@ -4786,43 +2653,12 @@ onBeforeUnmount(() => {
   border-color: var(--border-color, #d1d5db);
   color: var(--text-primary, #111827);
 }
-.think-latency {
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--text-tertiary);
-  background: var(--bg-main);
-  padding: 1px 6px;
-  border-radius: 4px;
-  margin-left: 2px;
-}
+
 /* 底部输入框整体容器（固定吸附于对话流底部，不随会话滚动消失） */
 .composer {
   padding: 6px 20px 14px;
   flex-shrink: 0;
   background: var(--bg-main);
-}
-
-/* 危险 bash 的确认卡从 Composer 上方弹出，确认或取消后立即收回。 */
-.tool-approval-drawer {
-  max-width: 840px;
-  margin: 0 auto 10px;
-  transform-origin: bottom center;
-}
-
-.tool-approval-drawer :deep(.tool-approval-card) {
-  max-width: none;
-  border-radius: 16px;
-}
-
-.tool-approval-drawer-enter-active,
-.tool-approval-drawer-leave-active {
-  transition: opacity 160ms ease, transform 160ms ease;
-}
-
-.tool-approval-drawer-enter-from,
-.tool-approval-drawer-leave-to {
-  opacity: 0;
-  transform: translateY(10px);
 }
 
 .quick-chips {
@@ -4956,21 +2792,6 @@ onBeforeUnmount(() => {
   }
 }
 
-/* 顶部激活的斜杠命令状态识别芯片 */
-.composer-command-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 8px;
-  margin-bottom: 4px;
-  background: var(--t-tasks, #e0e7ff);
-  border: 1px solid color-mix(in srgb, var(--accent-ai, #6366f1) 25%, transparent);
-  border-radius: 6px;
-  width: fit-content;
-  animation: pill-pop 0.15s ease-out;
-  user-select: none;
-}
-
 /* 输入框上半区行容器 */
 .composer-input-row {
   display: flex;
@@ -4978,24 +2799,6 @@ onBeforeUnmount(() => {
   gap: 2px;
   width: 100%;
   min-height: 38px;
-}
-
-/* 行内命令前缀：纯文本高亮，无卡片框/无背景/无边框 */
-.composer-cmd-prefix {
-  display: inline-block;
-  padding: 4px 0 4px 6px;
-  background: transparent;
-  color: var(--accent-ai, #6366f1);
-  font-family: var(--font-mono, monospace);
-  font-size: 14.5px;
-  line-height: 1.55;
-  font-weight: 700;
-  flex-shrink: 0;
-  user-select: none;
-}
-
-[data-theme='dark'] .composer-cmd-prefix {
-  color: #818cf8;
 }
 
 /* 多行文本域自适应高度（最小 38px，最大 200px 限制） */
@@ -5138,11 +2941,6 @@ onBeforeUnmount(() => {
   transform: scale(1.05);
 }
 
-/* F9 会话占槽时确认卡 note 转 warning 色 */
-.confirm-note.warn {
-  color: var(--accent-warning);
-}
-
 .session-meta-right .nav-dot {
   position: static;
   margin: 0;
@@ -5170,25 +2968,8 @@ onBeforeUnmount(() => {
   .session-title {
     font-size: 13.5px;
   }
-  .dispatch-rail .rail-head {
-    padding: 12px 14px 10px;
-  }
-  .dispatch-rail .rail-body {
-    padding: 10px 12px 14px;
-    gap: 10px;
-  }
-  .agent-node {
-    padding: 9px 11px;
-  }
-  .log-stream {
-    max-height: 200px;
-    -webkit-overflow-scrolling: touch;
-  }
   .composer {
     padding: 6px 10px max(12px, env(safe-area-inset-bottom));
-  }
-  .tool-approval-drawer {
-    margin-bottom: 8px;
   }
   .composer-card {
     border-radius: 14px;
@@ -5200,10 +2981,6 @@ onBeforeUnmount(() => {
   }
   .composer-model-dropdown-btn .model-name {
     max-width: 100px;
-  }
-  .composer-toolbar {
-    flex-wrap: wrap;
-    gap: 6px;
   }
   .quick-chips {
     overflow-x: auto;

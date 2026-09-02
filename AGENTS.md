@@ -1,7 +1,7 @@
 # AI 测试与评估平台 — AI Agent 行为规范与工程指南 (AGENTS.md)
 
 > **最高指示**：本文件是面向所有参与本项目的 **AI Agent 与开发者** 的最高行动指南。在编写或修改代码前，**必须严格遵守本文档所规定的架构边界、开发契约与行为红线**。
-> 版本：V1.2 ｜ 审查日期：2026-08-24
+> 版本：V1.2 ｜ 审查日期：2026-09-02（V1.6.0 Agent 骨架化：纯对话图，范式/思考链/确认卡/澄清卡/斜杠已移除）
 
 ---
 
@@ -26,7 +26,7 @@
 ### 1.2 核心架构流
 ```text
 浏览器 Vue 3 (Naive UI)
-  │── WS: /ws/agent?ticket= ──► FastAPI Agent Host (短 MCP + 意图拆解 + 任务入队)
+  │── WS: /ws/agent?ticket= ──► FastAPI Agent Host (纯对话流式生成 + 任务事件桥接)
   │── REST: /api/* ───────────► FastAPI REST API (认证 / 协议档 / 数据集 / 报告)
                                         │
                                         ▼
@@ -36,10 +36,16 @@
                                   Python Worker (异步执行：三协议评测 / LightRAG / 派生压测)
 ```
 
+> 骨架化说明（V1.6.0）：Agent 图已收敛为单节点纯对话
+> `START → chat_stream → END`；多范式路由（direct/chat/react/plan_solve）、
+> ReAct 思考链、reflect 反思、思考流、澄清卡、确认卡、短工具调用与斜杠命令
+> 已全部移除，仅保留消息 → LLM 直接生成回复 → `assistant_message` +
+> `response.completed` 的最小链路。
+
 ### 1.3 权威文档与冲突裁决
 1. **L0 产品权威**：[`docs/AI测试与评估平台-PRD.md`](docs/AI测试与评估平台-PRD.md)（功能范围、状态机、确认卡字段唯一真理）；
 2. **L1 接口契约**：[`docs/AI测试与评估平台-API.md`](docs/AI测试与评估平台-API.md) **V1.4+**（REST/WS 路径、JSON 契约唯一真理）；
-3. **Agent 子系统**：[`docs/AI测试与评估平台-Agent开发文档.md`](docs/AI测试与评估平台-Agent开发文档.md)（Harness、斜杠、上下文算法、长任务门禁）；**JSON 字段名与路径仍以 API.md 为准**；
+3. **Agent 子系统**：[`docs/AI测试与评估平台-Agent开发文档.md`](docs/AI测试与评估平台-Agent开发文档.md)（骨架化纯对话、上下文算法、长任务门禁）；**JSON 字段名与路径仍以 API.md 为准**；
 4. **裁决铁律**：代码/计划与 PRD 冲突以 PRD 为准；接口与 API.md 冲突以 API.md 为准。禁止私自扩充产品范围（Agent 说明书新增路径必须先回写 API.md）。
 
 ### 1.4 文档命名与更新规范 (Documentation Conventions)
@@ -57,13 +63,14 @@
 **WS 事件机制**（`backend/api/app/routers/ws.py` + `session_connections.py`）：
 - 持久事件统一写入 `ws_events` 表并带公共头 `{event, session_id, task_id, event_id, ts, payload}`；
 - `_emit` 在连接锁内完成「取号 → 落库 → 发送 → 推进游标」；`_forward_loop` 后台循环按游标增量把 **Worker 进程外**写入的事件推送到当前连接；
-- 断线重连按 `last_event_id` 补发；流式帧（`stream=chunk/think`）与心跳 `pong` 为瞬态帧，**不落库、不占事件号**；
+- 断线重连按 `last_event_id` 补发；流式帧（`assistant_delta`）与心跳 `pong` 为瞬态帧，**不落库、不占事件号**（骨架化后无 `stream=think`）；
 - 关闭码 `4401`=重新领票，`4404`=会话不存在/共享被收回。
 
-**Agent Harness 并发模型**（`routers/ws.py` + `agent/harness.py`）：
-- 收包循环**不得 await 整轮 Harness**，`dispatch_user_message` 必须丢 `asyncio.Task` 执行；
+**Agent Harness 并发模型**（`routers/ws.py` + `agent/graph.py`）：
+- 收包循环**不得 await 整轮 Harness**，`_handle_user_message` 必须丢 `asyncio.Task` 执行；
 - 会话级 abort 是进程内 dict（单副本或网关按 `session_id` 粘性路由的前提）；
-- L0 规则意图 → LLM 规划 → DIRECT/CHAT/ReAct/Plan-and-Solve 调度 → 反射门禁，全部收敛在 `backend/api/app/agent/` 包内。
+- 骨架化后 Agent 为单节点纯对话图（`graph.py` + `routing.py` 的 `chat_stream_node`），
+  不再有多范式调度与思考链；`/stop` 即时中断与 `cancel_task` 保留在收包循环。
 
 **模型单一事实源**：`backend/shared/models.py` 由 api 与 worker 共用（`api/app/models.py` 仅为 re-export）；改表必须 `alembic revision --autogenerate`，禁止双副本漂移。
 
@@ -75,8 +82,8 @@
 | testcase 用例生成 | 真实执行器（六策略 LLM 生成、72h 确认超时扫描） | `backend/worker/app/testcase.py` |
 | rag 知识库评测 | **必须失败**：LightRAG 未接入，禁止 mock `succeeded` | `backend/worker/app/main.py` |
 | stress 压测 | 骨架 mock（M4 替换） | `backend/worker/app/main.py` |
-| Agent 短工具 | 已接 image.generate、MIMO TTS 音色克隆/音频、LightRAG stub | `backend/api/app/agent/imagegen.py` 等 |
-| bash 工具 | **真实 bwrap 沙箱**（阶段 3）：一次性进程级沙箱（无网络、会话工作区唯一可写、ulimit 资源限制、超时整树清理）+ 黑名单纵深防御；bwrap 不可用/引擎 `off` 时 fail-closed | `backend/api/app/harness/execution/sandbox.py`、`dispatch.py`、`registry.py` |
+| Agent 图 | **骨架化**：单节点纯对话（`START → chat_stream → END`），无工具/确认卡/澄清卡/斜杠 | `backend/api/app/agent/graph.py`、`routing.py` |
+| bash 工具 | **真实 bwrap 沙箱**（阶段 3）：一次性进程级沙箱（无网络、会话工作区唯一可写、ulimit 资源限制、超时整树清理）+ 黑名单纵深防御；bwrap 不可用/引擎 `off` 时 fail-closed（骨架化后 Agent 不再调用，保留供未来扩展） | `backend/api/app/harness/execution/sandbox.py`、`dispatch.py`、`registry.py` |
 
 ---
 
@@ -276,8 +283,8 @@ except AppError as exc:
 ### 5.3 前端规范 (Vue 3 / TypeScript / Naive UI)
 1. **统一架构**：采用 `<script setup lang="ts">` + `naive-ui`，严格遵循薄荷绿/深空蓝设计令牌 (`naive-theme.ts`)。
 2. **通信与重连**：API 使用相对路径 `/api/*`；WS 使用相对路径 `/ws/agent?ticket=${ticket}`，支持断线按 `last_event_id` 自动补发事件流。关闭码 `4401` 重新领票，`4404` 视为会话不存在。
-3. **确认卡默认值** 与 API.md §5 / PRD 5.2.2 同一份，禁止前端另备 sample_size=20 等第二套默认；后端侧默认值唯一来源在 `backend/api/app/agent/defaults.py`，前后端各存一份，改默认值必须双端同步。
-4. ContextMeter 只读 `GET /api/sessions/{id}/messages` 的 `context_meter`；自定义斜杠只请求 `/api/slash-commands`。
+3. **确认卡默认值** 与 API.md §5 / PRD 5.2.2 同一份，禁止前端另备 sample_size=20 等第二套默认；后端侧默认值唯一来源在 `backend/api/app/agent/defaults.py`，前后端各存一份，改默认值必须双端同步（骨架化后 Agent 不再产出确认卡，该约定仅适用于未来恢复或 REST 直连场景）。
+4. ContextMeter 只读 `GET /api/sessions/{id}/messages` 的 `context_meter`；骨架化后斜杠命令已整体移除，前端不再请求 `/api/slash-commands`。
 
 ---
 

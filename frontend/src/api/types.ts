@@ -875,37 +875,16 @@ export interface AgentPrefs {
   updated_at?: string | null
 }
 
-/** 自定义斜杠（API.md §3.4 GET /api/slash-commands） */
-export interface SlashCommandItem {
-  id: string
-  name: string
-  hint: string
-  template: string
-  created_by?: string
-  created_at?: string
-}
-
 // WS 事件公共头（API.md §4.2）：payload 嵌套，task_id 入队后才有
+// 骨架化后事件收敛为纯对话 + 平台任务流（无 thought / tool / confirm / clarify / plan）。
 export interface WsServerEvent {
   event:
-    | 'thought'
     | 'user_message'
     | 'message'
     | 'assistant_delta'
     | 'assistant_message'
     | 'response.completed'
     | 'done'
-    | 'tool_call'
-    | 'tool_progress'
-    | 'tool_output_delta'
-    | 'tool_result'
-    | 'tool_approval'
-    | 'tool_approval_ack'
-    | 'confirm'
-    | 'confirm_ack'
-    | 'clarify'
-    | 'plan'
-    | 'task_state'
     | 'progress'
     | 'report'
     | 'error'

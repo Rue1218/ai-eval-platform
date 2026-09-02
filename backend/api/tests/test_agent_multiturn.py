@@ -1,46 +1,24 @@
-"""多轮对话回归测试（工具调用链路的跨回合行为）。
+"""多轮对话回归测试（纯对话骨架版）。
 
-覆盖此前修复的回归点：
-- OR-4 守卫：不同命令的连续工具调用不被误杀（原只比较工具名）
-- OR-4 纠正机制：首次相同调用给纠正机会，done 收尾不再回环触发错误
+覆盖此前修复的回归点（骨架化后保留与纯对话相关的部分）：
 - gateway.invoke/ainvoke 接受 config 参数（原 react 路径 TypeError）
 - assemble 常驻 Skill Hint（系统提示词不再显示"可见技能：（无）"）
-- 每轮 ReAct thought 透出为 thought 事件
+- 连续多轮纯对话各自产生完整的 assistant_message + response.completed
 
-不触碰 WS/DB/真实模型；用脚本化网关桩驱动完整多轮图。
+不触碰 WS/DB/真实模型；用脚本化网关桩驱动完整图。
 """
 
 import asyncio
-import tempfile
 
 from app.adapters import AdapterResult
 from app.agent import LangGraphAgent
 from app.agent.graph import iter_pending_events
-from app.harness.execution import build_default_registry
 from app.harness.memory import SerializableRequest
 from app.llm import ModelGateway, ModelRequest
 
-_REACT_DONE = (
-    '{"protocol": "react", "version": "react.v1", "thought": "任务已完成并总结", '
-    '"tool": null, "arguments": {}, "done": true}'
-)
-_REACT_LS = (
-    '{"protocol": "react", "version": "react.v1", "thought": "先列出工作区文件", '
-    '"tool": "bash", "arguments": {"command": "ls -la"}, "done": false}'
-)
-_REACT_CAT = (
-    '{"protocol": "react", "version": "react.v1", "thought": "再读取文件内容", '
-    '"tool": "bash", "arguments": {"command": "cat probe.txt"}, "done": false}'
-)
-# 有副作用工具（write）用于验证 OR-4 重复守卫：无需 bwrap，测试环境确定性成功。
-_REACT_WRITE = (
-    '{"protocol": "react", "version": "react.v1", "thought": "需要写入文件", '
-    '"tool": "write", "arguments": {"path": "b.txt", "content": "x"}, "done": false}'
-)
 
-
-def _serializable(text: str = "请读取工作区文件列表") -> SerializableRequest:
-    """构造可序列化请求投影（含工具意图关键词，触发 react 路由）。"""
+def _serializable(text: str = "你好") -> SerializableRequest:
+    """构造可序列化请求投影（纯对话入口）。"""
     return SerializableRequest(
         config={
             "protocol": "openai_chat",
@@ -52,7 +30,7 @@ def _serializable(text: str = "请读取工作区文件列表") -> SerializableR
 
 
 class _ScriptGateway:
-    """按脚本依次返回响应的网关桩（invoke 路径）。"""
+    """按脚本依次返回响应的网关桩（纯对话 stream 路径）。"""
 
     def __init__(self, script: list[str]) -> None:
         self.script = list(script)
@@ -60,14 +38,17 @@ class _ScriptGateway:
 
     def invoke(self, request: object, config: dict | None = None):
         self.calls.append(request)
-        if self.script:
-            text = self.script.pop(0)
-        elif getattr(request, "tools", ()) == ():
-            # 工具链收敛后的无工具请求应返回自然语言，而非复用 ReAct 控制 JSON。
-            text = "工具结果已整理。"
-        else:
-            text = _REACT_DONE
+        text = self.script.pop(0) if self.script else "好的。"
         return _model_response(text)
+
+    def stream(self, request: object, config: dict | None = None):
+        """模拟纯对话流式输出：正文增量 + completed 收尾。"""
+        from app.llm import ModelStreamEvent
+
+        self.calls.append(request)
+        text = self.script.pop(0) if self.script else "好的。"
+        yield ModelStreamEvent(kind="content", text=text)
+        yield ModelStreamEvent(kind="completed", response=_model_response(text))
 
 
 def _model_response(text: str):
@@ -98,93 +79,49 @@ def _pending_events(events: list[tuple[str, dict]]) -> list[dict]:
     ]
 
 
-def _run(script: list[str], text: str = "请读取工作区文件列表") -> list[dict]:
-    """驱动一次完整多轮图执行，返回全部事件。
-
-    注入临时沙箱目录：write 等受控目录工具确定性成功（不依赖 bwrap）。
-    """
+def _run(script: list[str], text: str = "你好") -> list[dict]:
+    """驱动一次完整图执行，返回全部事件。"""
     gateway = _ScriptGateway(script)
-    with tempfile.TemporaryDirectory() as tmp:
-        events = _collect(
-            LangGraphAgent(gateway, build_default_registry(), sandbox_dir=tmp),
-            _serializable(text),
-        )
+    events = _collect(LangGraphAgent(gateway), _serializable(text))
     return gateway, _pending_events(events)
 
 
-# —— 多轮工具调用回归 ——
+# —— 纯对话多轮回归 ——
 
 
-def test_single_tool_then_clean_done_no_stale_loop() -> None:
-    """回归：一次工具调用后 done 干净收尾，不得有多余回环或错误。"""
-    gateway, events = _run([_REACT_LS, _REACT_DONE])
+def test_single_turn_clean_completion() -> None:
+    """回归：单轮对话干净收尾，事件序列恒为 assistant_message + response.completed。"""
+    gateway, events = _run(["你好！"])
     kinds = [event["kind"] for event in events]
     assert kinds.count("error") == 0
-    assert kinds.count("tool_call") == 1
-    assert kinds[-2:] == ["assistant_message", "response.completed"]
-    assert len(gateway.calls) == 3
-    assert gateway.calls[-1].tools == ()
+    assert kinds == ["assistant_message", "response.completed"]
+    assert len(gateway.calls) == 1
+    # 纯对话不注入工具定义
+    assert getattr(gateway.calls[0], "tools", ()) == ()
 
 
-def test_consecutive_different_bash_calls_allowed() -> None:
-    """回归：连续两个不同命令的 bash 调用不被 OR-4 误杀。"""
-    gateway, events = _run([_REACT_LS, _REACT_CAT, _REACT_DONE])
-    kinds = [event["kind"] for event in events]
-    assert kinds.count("error") == 0
-    assert kinds.count("tool_call") == 2
-    tool_args = [
-        event["payload"]["arguments"] for event in events if event["kind"] == "tool_call"
-    ]
-    assert tool_args == [{"command": "ls -la"}, {"command": "cat probe.txt"}]
-    assert kinds[-2:] == ["assistant_message", "response.completed"]
+def test_consecutive_turns_each_complete() -> None:
+    """回归：连续多轮对话各自产生完整的回复与收尾，不串回合。"""
+    for text in ("第一轮问题", "第二轮问题", "第三轮问题"):
+        gateway, events = _run([f"回答：{text}"], text)
+        kinds = [event["kind"] for event in events]
+        assert kinds.count("error") == 0
+        assert kinds == ["assistant_message", "response.completed"]
 
 
-def test_identical_repeat_corrected_then_different_command() -> None:
-    """回归：相同调用触发纠正（不执行）→ 模型换新命令执行 → 干净收尾。"""
-    gateway, events = _run([_REACT_WRITE, _REACT_WRITE, _REACT_CAT, _REACT_DONE])
-    kinds = [event["kind"] for event in events]
-    assert kinds.count("error") == 0
-    # 首次相同调用被纠正不执行；换命令后真正执行一次
-    assert kinds.count("tool_call") == 2
-    assert kinds.count("thought") == 0
-    assert kinds[-2:] == ["assistant_message", "response.completed"]
+def test_no_internal_thought_events() -> None:
+    """骨架化：纯对话不再产出 thought / tool_call 等过程事件。"""
+    gateway, events = _run(["回答"])
+    assert not any(event["kind"] in ("thought", "tool_call", "plan") for event in events)
 
 
-def test_identical_repeat_corrected_then_done_clean_end() -> None:
-    """回归（用户场景）：相同调用纠正后模型直接 done 收尾，不得再回环报错。"""
-    gateway, events = _run([_REACT_WRITE, _REACT_WRITE, _REACT_DONE])
-    kinds = [event["kind"] for event in events]
-    assert kinds.count("error") == 0
-    assert kinds.count("tool_call") == 1
-    assert kinds[-2:] == ["assistant_message", "response.completed"]
-
-
-def test_identical_repeat_twice_hard_error() -> None:
-    """兜底：纠正后仍重复相同调用才硬错误终止。"""
-    gateway, events = _run([_REACT_WRITE, _REACT_WRITE, _REACT_WRITE])
-    kinds = [event["kind"] for event in events]
-    assert kinds.count("error") == 1
-    messages = [event["payload"].get("message", "") for event in events]
-    assert any("连续调用" in message for message in messages)
-    assert kinds.count("tool_call") == 1
-
-
-def test_tool_path_does_not_emit_internal_thought_events() -> None:
-    """回归：工具循环不再把内部 ReAct thought 投影为浏览器过程卡。"""
-    gateway, events = _run([_REACT_LS, _REACT_DONE])
-    thoughts = [event for event in events if event["kind"] == "thought"]
-    assert thoughts == []
-
-
-def test_react_system_prompt_skill_hints_list_tools() -> None:
-    """回归：assemble 注入常驻 Skill Hint 与本轮短工具，不再显示"（无）"。"""
-    gateway = _ScriptGateway([_REACT_DONE])
-    agent = LangGraphAgent(gateway, build_default_registry())
+def test_system_prompt_skill_hints_present() -> None:
+    """回归：assemble 注入常驻 Skill Hint，不再显示"（无）"。"""
+    gateway = _ScriptGateway(["好的。"])
+    agent = LangGraphAgent(gateway)
     _collect(agent, _serializable())
     system = gateway.calls[0].system
     assert "（无）" not in system
-    assert "bash" in system
-    assert "read" in system
     assert "基准评测" in system
 
 
