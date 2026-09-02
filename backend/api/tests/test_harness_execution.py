@@ -118,6 +118,22 @@ def test_tool_schema_validation_rejects_invalid_and_extra_arguments() -> None:
     assert validate_tool_arguments(read_schema, {"file_path": "a.txt", "unsafe": True}) == "包含未允许的参数：unsafe"
 
 
+def test_array_max_items_enforced_at_runtime() -> None:
+    """minItems/maxItems 运行期校验：超长/欠长数组被 VALIDATION 拒绝。"""
+    registry = build_default_registry()
+    # TaskUpdate.addBlocks/addBlockedBy 上限 20
+    update_schema = registry.get("TaskUpdate").parameters_schema
+    over = {"taskId": "t1", "status": "pending", "addBlocks": [f"x{i}" for i in range(21)]}
+    assert "不能多于 20" in (validate_tool_arguments(update_schema, over) or "")
+    ok = {"taskId": "t1", "status": "pending", "addBlocks": ["a", "b"]}
+    assert validate_tool_arguments(update_schema, ok) is None
+    # ask_user_question.questions 下限 1 / 上限 5
+    ask_schema = registry.get("ask_user_question").parameters_schema
+    assert "不能少于 1" in (validate_tool_arguments(ask_schema, {"questions": []}) or "")
+    too_many = {"questions": [{"id": f"q{i}", "question": "x", "options": []} for i in range(6)]}
+    assert "不能多于 5" in (validate_tool_arguments(ask_schema, too_many) or "")
+
+
 def test_registry_rejects_unsupported_tool_schema_keywords() -> None:
     """未知 JSON Schema 关键字必须在注册期失败，不能运行时静默放行。"""
     assert validate_tool_schema({"type": "object", "$ref": "#/defs/input"})
