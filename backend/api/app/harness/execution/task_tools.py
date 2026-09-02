@@ -19,6 +19,31 @@ from .worker_bridge import TASK_KINDS, enqueue_long_task
 _TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
 
 
+def _task_spec(arguments: Mapping[str, object], session_id: str):
+    """按 REST 同一 TaskCreate 契约校验 MCP 入队参数。
+
+    ``session_id`` 只能由平台上下文注入，禁止让模型覆盖；这样 MCP 桥与
+    ``POST /api/tasks`` 对 benchmark、RAG、压测和用例生成使用同一份必填规则。
+    """
+    from pydantic import ValidationError
+
+    from app.schemas import TaskCreate
+
+    payload = dict(arguments)
+    payload["session_id"] = session_id
+    try:
+        return TaskCreate.model_validate(payload)
+    except ValidationError as exc:
+        first_error = exc.errors()[0] if exc.errors() else {}
+        if first_error.get("type") == "literal_error":
+            message = f"未知任务类型：{payload.get('kind') or ''}"
+        else:
+            message = str(first_error.get("msg") or "任务规格无效")
+            # Pydantic 为模型级中文校验加上的英文前缀不应透传给浏览器。
+            message = message.removeprefix("Value error, ")
+        raise AppError(ErrorCode.VALIDATION, message) from None
+
+
 def _context_ids(context: object) -> tuple[str, str]:
     """提取平台注入的 session_id/user_id；缺失即拒绝（模型不可伪造）。"""
     session_id = str(getattr(context, "session_id", "") or "")
@@ -38,7 +63,8 @@ def create_task_safe(arguments: Mapping[str, object], context: object) -> dict:
     testcase 须 ``case_source``；唯一索引冲突 → CONCURRENCY。
     """
     session_id, user_id = _context_ids(context)
-    kind = str(arguments.get("kind") or "")
+    task_spec = _task_spec(arguments, session_id)
+    kind = task_spec.kind
     if kind not in TASK_KINDS:
         raise AppError(ErrorCode.VALIDATION, f"未知任务类型：{kind}")
     from sqlalchemy.exc import IntegrityError
@@ -46,7 +72,7 @@ def create_task_safe(arguments: Mapping[str, object], context: object) -> dict:
     from app.config import settings
     from app.db import SessionLocal
     from app.harness.memory.episodic import get_active_tasks
-    from app.models import AuditLog, Task
+    from app.models import AuditLog, Dataset, DatasetVersion, Task
     from app.session_access import require_visible_session
 
     from .worker_bridge import count_active_tasks
@@ -80,15 +106,33 @@ def create_task_safe(arguments: Mapping[str, object], context: object) -> dict:
                 or parent.kind not in {"benchmark", "rag"}
             ):
                 raise AppError(ErrorCode.VALIDATION, "压测任务须由已成功的质量任务派生")
-        elif kind == "benchmark" and not arguments.get("dataset_id"):
-            raise AppError(ErrorCode.VALIDATION, "缺少数据集")
-        elif kind == "rag" and (
-            not arguments.get("kb_id") or not arguments.get("gold_qa_id")
-        ):
-            raise AppError(ErrorCode.VALIDATION, "缺少知识库或黄金 QA")
-        elif kind == "testcase" and not arguments.get("case_source"):
-            raise AppError(ErrorCode.VALIDATION, "缺少用例来源")
-        spec = {key: value for key, value in arguments.items() if key != "kind"}
+        # TaskCreate 已统一校验 benchmark/RAG/testcase/with_stress 的必填段；
+        # 本处只保留依赖数据库状态的父任务校验。
+        spec = task_spec.snapshot()
+        if kind == "benchmark":
+            # 与 REST 创建路径一样锁住数据集，并冻结已发布版本，禁止 MCP 用
+            # 已删除数据集或可变 staging 行创建无法复现的评测任务。
+            dataset = (
+                db.query(Dataset)
+                .filter(Dataset.id == task_spec.dataset_id)
+                .with_for_update()
+                .first()
+            )
+            if not dataset:
+                raise AppError(ErrorCode.NOT_FOUND, "关联数据集不存在")
+            if dataset.active_version_id:
+                version = (
+                    db.query(DatasetVersion)
+                    .filter(
+                        DatasetVersion.id == dataset.active_version_id,
+                        DatasetVersion.dataset_id == dataset.id,
+                    )
+                    .first()
+                )
+                if not version:
+                    raise AppError(ErrorCode.INTERNAL, "数据集当前版本异常，无法创建评测任务")
+                spec["dataset_version_id"] = dataset.active_version_id
+                spec["dataset_version_no"] = version.version_no
         parent_task_id = spec.pop("parent_task_id", None)
         try:
             task_id = enqueue_long_task(

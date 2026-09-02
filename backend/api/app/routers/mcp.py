@@ -7,6 +7,9 @@
 2. 内部受控 MCP Server (transport=mcp, server=platform.tasks)：task.create/status/cancel，
    由 MCPClientManager 通过受控 InProcessProvider 桥接 PostgreSQL 任务队列。
 3. 外部 MCP Gateway (受控边界)：受控边界保护，预留扩展插槽与安全隔离。
+
+当前 Agent 为纯对话骨架，以上目录仅表示已注册的执行基础设施，不能表示
+模型正在调用；恢复 ToolNode 前，浏览器不可把它们显示为当前 Agent 可用能力。
 """
 
 from __future__ import annotations
@@ -522,7 +525,7 @@ def health_check(user: User = Depends(get_current_user)):
         "sandbox_mode": "bwrap 进程级隔离 (无网络/只读根系统)" if bwrap_available else "受控临时工作区",
         "bwrap_ready": bwrap_available,
         "workspace_access": "读写正常",
-        "message": f"原生通道就绪 · 已装载 {len(native_tools)} 个基础工具 (进程内直连执行)",
+        "message": f"原生通道已注册 · {len(native_tools)} 个基础工具等待 ToolNode 启用",
     }
 
     # 2. 检测内部 MCP Server (platform.tasks Host)
@@ -539,7 +542,7 @@ def health_check(user: User = Depends(get_current_user)):
         "latency_ms": mcp_latency_ms,
         "provider": "InProcessProvider (受控 Host)",
         "task_queue_bridge": "PostgreSQL tasks 状态机连通正常",
-        "message": f"内部 MCP Server 正常 · 已注册 {len(mcp_tools)} 个任务队列受控扩展",
+        "message": f"内部 MCP 已注册 · {len(mcp_tools)} 个任务队列扩展等待 ToolNode 启用",
     }
 
     # 3. 检测外部 MCP Gateway (受控边界)

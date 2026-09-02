@@ -99,14 +99,13 @@ def test_owned_task_creator_allowed():
     assert _owned_task(_FakeDb(result=task), "t-1", "user-1") is task
 
 
-def test_cancel_terminal_task_rejected():
-    # 终态任务不可取消：VALIDATION 拒绝且不产生任何写操作
+def test_cancel_terminal_task_is_idempotent():
+    # 终态任务重试取消直接返回现状，与 platform.tasks.task.cancel 语义一致。
     user = User(id="user-owner", username="owner")
     db = _FakeDb(result=_task("succeeded", creator="user-owner"))
-    with pytest.raises(AppError) as exc:
-        cancel_task(task_id="t-1", request=_FakeRequest(), db=db, user=user)
+    out = cancel_task(task_id="t-1", request=_FakeRequest(), db=db, user=user)
 
-    assert exc.value.code == ErrorCode.VALIDATION
+    assert out["status"] == "succeeded"
     assert db.added == []
 
 

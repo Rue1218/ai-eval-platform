@@ -1291,15 +1291,10 @@ async def agent_websocket(websocket: WebSocket) -> None:
                         websocket,
                         state,
                         session.id,
-                        "tool_result",
+                        "task_cancelled",
                         {
-                            "name": "task.cancel",
-                            "ok": True,
-                            "data": {
-                                "task_id": result.get("task_id"),
-                                "status": result.get("status"),
-                                "kind": result.get("kind"),
-                            },
+                            "status": result.get("status"),
+                            "kind": result.get("kind"),
                         },
                         task_id=str(result.get("task_id") or "") or None,
                     )
