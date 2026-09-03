@@ -82,7 +82,7 @@
 | testcase 用例生成 | 真实执行器（六策略 LLM 生成、72h 确认超时扫描） | `backend/worker/app/testcase.py` |
 | rag 知识库评测 | 真实执行器（LightRAG 优先；未配置/不可达/空返回回退本地关键词检索，报告 `degraded`/`engine_counts` 诚实标注引擎来源，禁止无标注出报告） | `backend/worker/app/rag.py`、`backend/shared/kb.py` |
 | stress 压测 | 真实执行器（对接 `stress:19090` 引擎：Host 白名单、SLA 判定、取消停发、报告 upsert） | `backend/worker/app/stress.py` |
-| Agent 图 | **骨架化**：单节点纯对话（`START → chat_stream → END`），无工具/确认卡/澄清卡/斜杠 | `backend/api/app/agent/graph.py`、`routing.py` |
+| Agent 图 | **骨架化**：单节点纯对话（`START → chat_stream → END`），无工具/确认卡/澄清卡/斜杠；H0 基础设施已就绪（2026-09-03：缓存分段装配 `assemble_segments` + `AgentRegistry` 启动期校验 + L2 `project_instructions` 受控槽），主开关 `hybrid_engine_enabled=False` 默认关闭 | `backend/api/app/agent/graph.py`、`routing.py` |
 | bash 工具 | **真实 bwrap 沙箱**（阶段 3）：一次性进程级沙箱（无网络、会话工作区唯一可写、ulimit 资源限制、超时整树清理）+ 黑名单纵深防御；bwrap 不可用/引擎 `off` 时 fail-closed（骨架化后 Agent 不再调用，保留供未来扩展） | `backend/api/app/harness/execution/sandbox.py`、`dispatch.py`、`registry.py` |
 
 ---
