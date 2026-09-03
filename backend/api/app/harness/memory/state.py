@@ -21,6 +21,9 @@ from app.harness.contracts import NodeEvent
 # 路由模式（等价 M4 AgentMode；条件边消费）
 AgentMode = Literal["chat", "direct", "react", "plan_solve"]
 
+# 引擎分流（H1 Router 顶层结果；条件边读——direct/chat/workflow/agent 四路）
+EngineKind = Literal["direct", "chat", "workflow", "agent"]
+
 # 复核结论（等价 M4 ReflectVerdict；阶段 4 reflect 节点写；
 # repair 为失败阶梯首档：注入修复观察后回 Executor 再试一次）
 ReflectVerdict = Literal["pass", "clarify", "reject", "retry", "repair"]
@@ -97,7 +100,13 @@ class GraphState(TypedDict, total=False):
     """
 
     request: SerializableRequest  # 路由节点读文本，chat 节点重建 ModelRequest
-    mode: AgentMode  # 路由节点写，条件边读
+    mode: AgentMode  # Agent 子图内细分；H0–H6 不驱动任何条件边（检查点兼容保留）
+    engine: EngineKind | None  # H1 Router：顶层分流结果，条件边读；本轮写入后不可改写
+    router_confidence: float | None  # H1 Router：L0 置信度；低于配置阈值才触发 L1 CoT
+    router_reason: str | None  # H1 Router：分流理由（平台生成、脱敏；随 response.completed 审计）
+    agent_id: str | None  # H3 AgentRegistry.discover 选中 Worker；H1 恒 None
+    allowed_tools: tuple[str, ...]  # H3 工具视野（收窄后）；H1 恒空
+    workflow_step: str | None  # H2 Workflow DAG 当前节点名（可观测 + 恢复定位）
     pending_events: Annotated[list[NodeEvent], _append_events]  # 节点 append，ws.py 图外消费清空
     plan: object | None  # 阶段 4：PlanArtifact（M7 晚波）投影
     observations: Annotated[list[object], _append_observations]  # 阶段 2：Observation（M7 早波），append 累积

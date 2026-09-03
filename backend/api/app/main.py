@@ -19,6 +19,7 @@ from .models import ProtocolProfile, User
 from .routers import (
     admin,
     agent_prefs,
+    agents,
     auth,
     cases,
     dataset_catalog,
@@ -157,6 +158,7 @@ app.include_router(dataset_catalog.router)
 app.include_router(cases.router)
 app.include_router(cases.folders_router)
 app.include_router(admin.router)
+app.include_router(agents.router)
 app.include_router(workspaces.router)
 app.include_router(dispatch.router)
 app.include_router(kb.router)

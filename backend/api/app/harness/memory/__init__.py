@@ -16,6 +16,7 @@ from .preference import prefs_from_task_spec, public_prefs, read_prefs, write_pr
 from .semantic import retrieve
 from .state import (
     AgentMode,
+    EngineKind,
     GraphState,
     ReflectVerdict,
     SerializableRequest,
@@ -27,6 +28,7 @@ from .working import new_working, reset_working
 
 __all__ = [
     "AgentMode",
+    "EngineKind",
     "GraphState",
     "InMemoryCheckpointer",
     "PgCheckpointer",

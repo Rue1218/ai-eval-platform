@@ -14,16 +14,22 @@ from typing import Literal, TypedDict
 
 from app.errors import AppError, ErrorCode
 
-ProtocolName = Literal["plan", "react", "reflect"]  # compact 归 M2，不在本层
+ProtocolName = Literal["plan", "react", "reflect", "router"]  # compact 归 M2，不在本层
 ProtocolVersion = str  # 如 "plan.v1"、"react.v1"
 
 # 各协议当前版本（严格不兼容：旧版直接拒绝）
 PLAN_VERSION: ProtocolVersion = "plan.v1"
 REACT_VERSION: ProtocolVersion = "react.v1"
 REFLECT_VERSION: ProtocolVersion = "reflect.v1"
+ROUTER_VERSION: ProtocolVersion = "router.v1"
 
 # 期望协议名（模型输出须声明，防止跨协议误用）
-_EXPECTED_PROTOCOL = {"plan": "plan", "react": "react", "reflect": "reflect"}
+_EXPECTED_PROTOCOL = {
+    "plan": "plan",
+    "react": "react",
+    "reflect": "reflect",
+    "router": "router",
+}
 
 
 class ProtocolResult(TypedDict, total=False):
@@ -83,6 +89,19 @@ REFLECT_SCHEMA: dict = {
         "version": {"type": "string"},
     },
     "required": ["verdict", "reason", "protocol", "version"],
+}
+
+ROUTER_SCHEMA: dict = {
+    "properties": {
+        "engine": {"enum": ["direct", "chat", "workflow", "agent"]},
+        "skill_id": {"type": ["string", "null"]},
+        "confidence": {"type": "number"},
+        "reason": {"type": "string"},
+        "slots": {"type": "object"},
+        "protocol": {"type": "string"},
+        "version": {"type": "string"},
+    },
+    "required": ["engine", "confidence", "reason", "protocol", "version"],
 }
 
 # 代码块包裹提取（模型可能以 ```json 包裹输出）
@@ -228,3 +247,17 @@ def parse_react(raw: str) -> ProtocolResult:
 def parse_reflect(raw: str) -> ProtocolResult:
     """复核协议解析；verdict ∈ {pass, clarify, reject}。"""
     return _parse(raw, "reflect", REFLECT_SCHEMA, REFLECT_VERSION)
+
+
+def parse_router_v1(raw: str) -> ProtocolResult:
+    """Router L1 CoT 协议解析（ADR-1，H1）。
+
+    fields 含 engine/confidence/reason 与可选 skill_id/slots——reason 即
+    ``<Reasoning>`` 语义，engine 即 ``<Intent>``，全 JSON 无 XML 标签。
+    置信度越界（<0 或 >1）在本层即拒绝，防止异常值污染审计。
+    """
+    result = _parse(raw, "router", ROUTER_SCHEMA, ROUTER_VERSION)
+    confidence = float(result["fields"].get("confidence") or 0.0)
+    if not 0.0 <= confidence <= 1.0:
+        raise AppError(ErrorCode.VALIDATION, "router.v1 置信度越界")
+    return result

@@ -20,7 +20,7 @@ from ..errors import AppError, ErrorCode
 from ..harness.execution import runtime_thread_id
 from ..harness.memory import GraphState, SerializableRequest
 from ..llm import ModelGateway, ModelResponse
-from .routing import chat_stream_node
+from .routing import chat_stream_node, router_node
 
 
 class LangGraphAgent:
@@ -46,10 +46,29 @@ class LangGraphAgent:
         self._graph = self._build_graph()
 
     def _build_graph(self):
-        """构建骨架图：路由 → 纯对话流式节点 → 结束。"""
+        """构建生产图。
+
+        H1（混合驱动引擎）：``hybrid_engine_enabled=True`` 时在 START 之后接入
+        顶层 ``router`` 节点（L0/L1 分流写 ``engine`` 审计），条件边当前把四路
+        引擎统一降级到 ``chat_stream`` 执行（H2/H3 逐阶段替换为 Workflow DAG
+        与 Agent TAOR）；开关关闭时保持骨架化纯对话拓扑（START → chat_stream →
+        END），作为灰度回滚出口。
+        """
+        from app.config import settings
+
         graph = StateGraph(GraphState)
         graph.add_node("chat_stream", self._make_chat_node())
-        graph.add_edge(START, "chat_stream")
+        if settings.hybrid_engine_enabled:
+            graph.add_node("router", self._make_router_node())
+            graph.add_edge(START, "router")
+            # 四路引擎当前统一降级 chat_stream；条件边保留为未来分流的挂载点
+            graph.add_conditional_edges(
+                "router",
+                _route_after_router,
+                {"chat_stream": "chat_stream", "direct": "chat_stream"},
+            )
+        else:
+            graph.add_edge(START, "chat_stream")
         graph.add_edge("chat_stream", END)
         # 阶段 3：Checkpointer 按 thread_id 隔离回合（M3-D4 恢复语义）
         if self._checkpointer is not None:
@@ -62,6 +81,15 @@ class LangGraphAgent:
 
         def node(state: GraphState) -> dict:
             return chat_stream_node(state, gateway)
+
+        return node
+
+    def _make_router_node(self):
+        """闭包绑定网关的 Router 节点（H1，仅引擎开关开启时加入图）。"""
+        gateway = self._gateway
+
+        def node(state: GraphState) -> dict:
+            return router_node(state, gateway)
 
         return node
 
@@ -137,6 +165,15 @@ class LangGraphAgent:
             usage=response.get("usage") or {},
             latency_ms=int(response.get("latency_ms", 0)),
         )
+
+
+def _route_after_router(state: GraphState) -> str:
+    """Router 条件边（H1）：四路引擎当前统一执行 chat_stream。
+
+    H2 起按 ``engine`` 分流：workflow → Workflow 子图、agent → Agent 子图；
+    direct/chat 维持 chat_stream。engine 缺失（异常兜底）按 chat 处理。
+    """
+    return "chat_stream"
 
 
 def iter_pending_events(update: dict) -> Iterator[dict]:
