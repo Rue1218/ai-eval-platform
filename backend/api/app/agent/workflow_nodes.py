@@ -25,7 +25,7 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
-from langgraph.config import get_config
+from langgraph.config import RunnableConfig, get_config
 
 from app.errors import AppError
 from app.harness.contracts import make_event
@@ -196,7 +196,7 @@ def load_skill_node(state: GraphState) -> dict:
 # ── W3 validate_gates：确定性门禁（kind / 先评后压 / 会话占槽）──
 
 
-def validate_gates_node(state: GraphState, *, config: Mapping[str, object] | None = None) -> dict:
+def validate_gates_node(state: GraphState, *, config: RunnableConfig | None = None) -> dict:
     """W3：门禁先行（规则与 feedback.rules 同源语义）。
 
     - kind 白名单：非四类评测 kind 拒绝（防御）；
@@ -259,7 +259,7 @@ def build_task_spec_node(state: GraphState) -> dict:
 # ── W5 await_confirm：必填资产确认（图内不 interrupt，直连由 ws 层承担）──
 
 
-def await_confirm_node(state: GraphState, *, config: Mapping[str, object] | None = None) -> dict:
+def await_confirm_node(state: GraphState, *, config: RunnableConfig | None = None) -> dict:
     """W5：确认门槛。
 
     ``configurable["workflow_confirm"]``（ws 直连层确认后注入的载荷，批次 2）
@@ -300,7 +300,7 @@ def await_confirm_node(state: GraphState, *, config: Mapping[str, object] | None
 # ── W6 enqueue：唯一入队出口（内部 MCP 长任务桥）──
 
 
-def enqueue_node(state: GraphState, *, config: Mapping[str, object] | None = None) -> dict:
+def enqueue_node(state: GraphState, *, config: RunnableConfig | None = None) -> dict:
     """W6：经 ``enqueue_long_task`` 原子入队（唯一 W6 出口）。
 
     ``configurable`` 注入 ``db_factory`` / ``session_id`` / ``user_id``；

@@ -297,6 +297,45 @@
                     </div>
                   </template>
 
+                  <!-- H3 工具卡：Agent TAOR 的 Act 与结果（ToolCard 只展示脱敏摘要）。 -->
+                  <div v-if="item.toolItems?.length" class="tool-stack">
+                    <div
+                      v-for="tool in item.toolItems"
+                      :key="tool.call_id"
+                      class="tool-card"
+                      :class="{ open: item.openToolId === tool.call_id }"
+                    >
+                      <div class="tool-head" @click="toggleToolCard(item, tool.call_id)">
+                        <span class="tool-status" :class="tool.status === 'running' ? 'pending' : tool.ok ? 'ok' : 'fail'">
+                          <svg v-if="tool.status === 'running'" width="14" height="14" viewBox="0 0 24 24" fill="none">
+                            <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3" stroke-dasharray="18 40" />
+                          </svg>
+                          <svg v-else-if="tool.ok" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M4 12.5l5.5 5.5L20 6.5" />
+                          </svg>
+                          <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round">
+                            <path d="M6 6l12 12M18 6L6 18" />
+                          </svg>
+                        </span>
+                        <span class="tool-name">{{ tool.name }}</span>
+                        <span class="tool-state-text" :class="{ fail: tool.status === 'error' }">
+                          {{ toolStateText(tool) }}
+                        </span>
+                        <span class="chev">▾</span>
+                      </div>
+                      <div class="tool-detail">
+                        <template v-if="hasToolArguments(tool)">
+                          <div class="td-label">参数摘要</div>
+                          <pre class="mono tool-args">{{ formatToolArguments(tool.arguments) }}</pre>
+                        </template>
+                        <template v-if="tool.status === 'error'">
+                          <div class="td-label">结果</div>
+                          <div class="tool-state-text fail">{{ tool.error }}</div>
+                        </template>
+                      </div>
+                    </div>
+                  </div>
+
                   <!-- 兼容历史旧缓存：没有 blocks 时仍渲染原助手正文。 -->
                   <MarkdownView
                     v-if="!item.blocks?.length && (item.raw || item.text)"
@@ -1909,6 +1948,36 @@ function handleWsEvent(ev: WsServerEvent) {
       if (text) scrollToBottom()
       break
     }
+    case 'tool_call': {
+      // H3 Agent TAOR：Act 发起即入列（幂等：同 call_id 不重复追加）。
+      const agent = getOrCreateTurnAgent(events.value)
+      const toolItems = agent.toolItems || (agent.toolItems = [])
+      const callId = String(p.call_id || '')
+      if (callId && !toolItems.some((t) => t.call_id === callId)) {
+        toolItems.push(
+          reactive({
+            call_id: callId,
+            name: String(p.name || 'unknown'),
+            arguments: p.arguments,
+            status: 'running',
+          }) as ToolRunItem,
+        )
+      }
+      agent.streaming = true
+      scrollToBottom()
+      break
+    }
+    case 'tool_result': {
+      // H3：工具终态回填对应卡片（error 展示脱敏原因，不含观察全文）。
+      const agent = getCurrentTurnAgent(events.value)
+      const tool = agent?.toolItems?.find((t) => t.call_id === String(p.call_id || ''))
+      if (!tool) break
+      tool.ok = p.ok !== false
+      tool.status = p.ok === false ? 'error' : 'done'
+      if (p.ok === false) tool.error = String(p.error || '工具执行失败')
+      scrollToBottom()
+      break
+    }
     case 'response.completed':
     case 'done': {
       const orphan = turnStreamingAgent(events.value)
@@ -2338,6 +2407,30 @@ function handleSelectAllChange(event: Event) {
     : []
 }
 
+/** ToolCard：点击折叠/展开详情。 */
+function toggleToolCard(item: StreamItem, callId: string) {
+  item.openToolId = item.openToolId === callId ? undefined : callId
+}
+
+function toolStateText(tool: ToolRunItem): string {
+  if (tool.status === 'running') return '执行中…'
+  if (tool.status === 'error') return '执行失败'
+  return '已完成'
+}
+
+function hasToolArguments(tool: ToolRunItem): boolean {
+  return !!(tool.arguments && Object.keys(tool.arguments as object).length)
+}
+
+function formatToolArguments(args: unknown): string {
+  try {
+    const text = JSON.stringify(args, null, 1)
+    return text.length > 600 ? `${text.slice(0, 600)}…` : text
+  } catch {
+    return String(args)
+  }
+}
+
 interface AgentAssistantItem {
   type: 'assistant'
   raw?: string
@@ -2351,6 +2444,16 @@ interface AgentErrorItem {
   code?: string
   message?: string
   noAnim?: boolean
+}
+
+/** H3 ToolCard 运行时状态（tool_call → tool_result 生命周期）。 */
+interface ToolRunItem {
+  call_id: string
+  name: string
+  arguments?: unknown
+  status: 'running' | 'done' | 'error'
+  ok?: boolean
+  error?: string
 }
 
 type AgentBlock = AgentAssistantItem | AgentErrorItem
@@ -2367,6 +2470,8 @@ interface StreamItem {
   author?: SessionAuthor | null
   files?: any[]
   blocks?: AgentBlock[]
+  toolItems?: ToolRunItem[]
+  openToolId?: string
   providerLogoKey?: ProviderLogoKey
   profileId?: string
   modelName?: string
