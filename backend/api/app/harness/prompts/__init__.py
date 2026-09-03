@@ -7,12 +7,15 @@ from .protocols import (
     REACT_VERSION,
     REFLECT_SCHEMA,
     REFLECT_VERSION,
+    ROUTER_SCHEMA,
+    ROUTER_VERSION,
     ProtocolName,
     ProtocolResult,
     check_version,
     parse_plan_protocol,
     parse_react,
     parse_reflect,
+    parse_router,
 )
 from .safety import (
     INJECTION_PATTERNS,
@@ -34,6 +37,7 @@ PROTOCOL: dict[str, str] = {
     "plan": PLAN_VERSION,
     "react": REACT_VERSION,
     "reflect": REFLECT_VERSION,
+    "router": ROUTER_VERSION,
 }
 
 __all__ = [
@@ -46,6 +50,8 @@ __all__ = [
     "REACT_VERSION",
     "REFLECT_SCHEMA",
     "REFLECT_VERSION",
+    "ROUTER_SCHEMA",
+    "ROUTER_VERSION",
     "SYSTEM_PROMPT_TEMPLATE",
     "ProtocolName",
     "ProtocolResult",
@@ -59,5 +65,6 @@ __all__ = [
     "parse_plan_protocol",
     "parse_react",
     "parse_reflect",
+    "parse_router",
     "run_injection_tests",
 ]

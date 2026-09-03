@@ -82,16 +82,22 @@ def chat_stream_node(state: GraphState, gateway: object) -> dict:
     if final_response is None:
         raise AppError(ErrorCode.INTERNAL, "模型层未产生完整响应")
     latency_ms = round((time.perf_counter() - started) * 1000)
+    # Router 审计字段（H1）：仅当 Router 已写入 engine 时附带（主开关关闭时
+    # payload 与骨架化快照完全一致）；本节点只读不写，engine 本轮不可变。
+    completed: dict[str, object] = {"finish_reason": "stop", "role": "assistant"}
+    if state.get("engine"):
+        completed.update(
+            engine=state.get("engine"),
+            router_confidence=float(state.get("router_confidence") or 0.0),
+            router_reason=str(state.get("router_reason") or ""),
+        )
     return {
         "pending_events": [
             make_event(
                 "assistant_message",
                 {"text": final_response.text, "role": "assistant", "latency_ms": latency_ms},
             ),
-            make_event(
-                "response.completed",
-                {"finish_reason": "stop", "role": "assistant"},
-            ),
+            make_event("response.completed", completed),
         ],
         "response": {
             "text": final_response.text,

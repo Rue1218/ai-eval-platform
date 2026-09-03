@@ -19,6 +19,7 @@ from .models import ProtocolProfile, User
 from .routers import (
     admin,
     agent_prefs,
+    agents,
     auth,
     cases,
     dataset_catalog,
@@ -161,6 +162,8 @@ app.include_router(workspaces.router)
 app.include_router(dispatch.router)
 app.include_router(kb.router)
 app.include_router(mcp.router)
+# H1：Agent Worker 只读目录（API.md §3.6.3，登录可见的脱敏投影）
+app.include_router(agents.router)
 app.include_router(reports.router)
 app.include_router(ws.router)
 

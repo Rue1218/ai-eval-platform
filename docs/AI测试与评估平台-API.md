@@ -2,17 +2,19 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.65 |
+| 文档版本 | V1.66 |
 | 对应 PRD | V1.18（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.6.0（骨架化纯对话；JSON 仍以本文为准） |
 | 对应前端计划 | V1.5 |
 | 对应后端计划 | V1.5 |
 | 撰写日期 | 2026-08-18 |
-| 本轮修订 | 2026-09-02：V1.65 工具契约加固（T1–T3）：JSON Schema 子集新增 `minItems`/`maxItems` 并为 8 处数组参数补上限；`output_schema` 从装饰字段升级为强制契约——注册期拒绝未声明（`None`），运行期 `execute_raw` 按声明比对 handler 展示投影，失败归一 `INTERNAL` 不外泄原始返回；`platform.tasks` 三工具补全 `output_schema`；移除 `/api/mcp/tools/{name}/code` 端点与 `code_snippet` 字段（原为手写示意代码且与真实 handler 不符，违反「禁止伪造」红线）。 |
-| 最近修订 | 2026-08-28：V1.53 `web_fetch` 直抓路径接入 trafilatura 正文提取：可读性算法识别文章主体，保留标题层级/链接/图片/表格，未安装或提取失败降级回内置 `_TextExtractor`；提取真实产出 Markdown 时才声明 `format=markdown`（§4.3.1）。V1.52 优化 `web_fetch` 长文完整性与卡片预览：模型正文预算 8,000→60,000 字符，卡片预览与 `read` 同源对齐 `TOOL_PREVIEW_MAX_CHARS` 并随 `web.preview_limit_chars` 下发，直接抓取字节窗口 256KB→1MB（§4.3.1）。2026-08-27：V1.51 新增持久事件 `session_title`（§4.3）与会话标题 AI 生成契约（§4.3.2）：默认标题会话首条消息后由 Agent 协议档弱结构化生成标题并落库广播，修复标题不持久化问题。V1.50 统一 Agent 文本附件 staging 与 `read` 的 20MB 边界；`read` 模型窗口为 2,000 行 / 600,000 字符。V1.49 协议档新增 `max_output_tokens`（256–131072，默认 8192），创建/更新/列表/详情均支持；Agent 模型调用从协议档读取输出上限，长文档总结/导出类任务可调大避免回答被截断。2026-08-26：V1.48 同轮多调用默认串行，灰度开启后仅 `read`/`web_search`/`web_fetch` 可并行，回填按原始 `call_id`。V1.47 新增 `GET /api/agent/metrics`，不含正文/参数，不新增 WS 事件。V1.46 明确 native 一次 ToolCall 结束当前上游响应，结果回填后再请求，不新增事件名。V1.45 思考链只下发可展示摘要，隐藏 CoT（`Here's a thinking process` / `Analyze User Input`）由服务端替换，不原样推给前端。V1.44 ToolCall 在执行前持久化，新增瞬态 `tool_progress` / `tool_output_delta`，并冻结原生工具的输出 Schema、权限边界和失败恢复字段。V1.43 思考增量允许合并下发；有思考链时 `think_final` 在 `response.completed` 之前。V1.42 Direct `/help`、未知斜杠与图内防御提示在业务事件后必须再发 `response.completed`（成功 `stop`，校验/防御 `error`），结束整轮生成态。V1.41 确认卡预填与 `confirm_ack` 入队前丢掉已删除的协议档/数据集/知识库 ID，避免 Worker 再报「协议档不存在或已删除」。V1.40 `/cancel` 与 `/stress` 按 §4.4 解禁（仍走 `user_message`）：`/cancel` 取消本会话非终态任务，`/stress` 发出质量任务确认卡且 `with_stress=true`，禁止 `kind=stress`。V1.39 原生工具卡片收起态副标题统一为 `ToolCall`，不在卡片摘要区回显文件路径、命令或写入内容；详细参数仍在展开区展示。V1.38 明确原生基础 ToolCall 卡片使用英文工具名，展开区统一显示 `ToolCall` 与 `输出`，文件、命令和代码/文档结果使用行号展示；MCP/平台短工具仍按下方中文名映射。2026-08-24：V1.24 修复 Agent 附件上下文链路：服务端校验文件归属并在模型窗口解析文本、PDF、DOCX、XLSX，图片按三协议图文内容块发送；历史消息附件补齐安全元数据，前端可在刷新后继续预览。同步调整输入框内附件按钮与用户消息附件位序。V1.23 扩展 Agent 附件契约，支持图片、Word 文档与多附件拖拽上传；保留 `POST /api/files` 后再以既有 `file_id` 引用的消息链路，补充图片缩略图、PDF/文本预览与 Office 文件打开/下载说明。V1.22 修复 V1.21 遗留：§4.4 标题「仅此三条」改「仅此四条」、§9 禁止清单「第四种」改「第五种」并补四类上行事件枚举、§4.3 `tool_result.source` 语义对齐 M7 `Observation.source`（溯源标识字符串，非 short\|long 枚举）、§4.3 共享流规则补 clarify/plan/confirm 持久化广播说明、§4.4 clarify 多副本限制注明、§9 Ask/Plan 补注非 Harness plan 事件；V1.20 及更早版本沿用历史修订记录。 |
+| 本轮修订 | 2026-09-03：V1.66 混合引擎 H1 Router 审计契约：`response.completed` payload 新增可选 `engine` / `router_confidence` / `router_reason`（仅 `hybrid_engine_enabled=true` 时出现，旧客户端忽略未知字段即可）；新增 `GET /api/agents` Worker 只读目录（§3.6.3）。本版不新增 WS 事件名、不恢复 `thought` / `tool_*`；`workflow` / `agent` 引擎在 H1 阶段降级按 `chat` 执行，`engine` 如实记录分流结论并经 `router_reason` 标注降级。 |
+| 最近修订 | 2026-09-02：V1.65 工具契约加固（T1–T3）：JSON Schema 子集新增 `minItems`/`maxItems` 并为 8 处数组参数补上限；`output_schema` 从装饰字段升级为强制契约（注册期拒绝未声明，运行期按声明比对展示投影）；`platform.tasks` 三工具补全 `output_schema`；移除 `/api/mcp/tools/{name}/code` 端点与 `code_snippet` 字段。2026-08-28：V1.53 `web_fetch` 直抓路径接入 trafilatura 正文提取：可读性算法识别文章主体，保留标题层级/链接/图片/表格，未安装或提取失败降级回内置 `_TextExtractor`；提取真实产出 Markdown 时才声明 `format=markdown`（§4.3.1）。V1.52 优化 `web_fetch` 长文完整性与卡片预览：模型正文预算 8,000→60,000 字符，卡片预览与 `read` 同源对齐 `TOOL_PREVIEW_MAX_CHARS` 并随 `web.preview_limit_chars` 下发，直接抓取字节窗口 256KB→1MB（§4.3.1）。2026-08-27：V1.51 新增持久事件 `session_title`（§4.3）与会话标题 AI 生成契约（§4.3.2）：默认标题会话首条消息后由 Agent 协议档弱结构化生成标题并落库广播，修复标题不持久化问题。V1.50 统一 Agent 文本附件 staging 与 `read` 的 20MB 边界；`read` 模型窗口为 2,000 行 / 600,000 字符。V1.49 协议档新增 `max_output_tokens`（256–131072，默认 8192），创建/更新/列表/详情均支持；Agent 模型调用从协议档读取输出上限，长文档总结/导出类任务可调大避免回答被截断。2026-08-26：V1.48 同轮多调用默认串行，灰度开启后仅 `read`/`web_search`/`web_fetch` 可并行，回填按原始 `call_id`。V1.47 新增 `GET /api/agent/metrics`，不含正文/参数，不新增 WS 事件。V1.46 明确 native 一次 ToolCall 结束当前上游响应，结果回填后再请求，不新增事件名。V1.45 思考链只下发可展示摘要，隐藏 CoT（`Here's a thinking process` / `Analyze User Input`）由服务端替换，不原样推给前端。V1.44 ToolCall 在执行前持久化，新增瞬态 `tool_progress` / `tool_output_delta`，并冻结原生工具的输出 Schema、权限边界和失败恢复字段。V1.43 思考增量允许合并下发；有思考链时 `think_final` 在 `response.completed` 之前。V1.42 Direct `/help`、未知斜杠与图内防御提示在业务事件后必须再发 `response.completed`（成功 `stop`，校验/防御 `error`），结束整轮生成态。V1.41 确认卡预填与 `confirm_ack` 入队前丢掉已删除的协议档/数据集/知识库 ID，避免 Worker 再报「协议档不存在或已删除」。V1.40 `/cancel` 与 `/stress` 按 §4.4 解禁（仍走 `user_message`）：`/cancel` 取消本会话非终态任务，`/stress` 发出质量任务确认卡且 `with_stress=true`，禁止 `kind=stress`。V1.39 原生工具卡片收起态副标题统一为 `ToolCall`，不在卡片摘要区回显文件路径、命令或写入内容；详细参数仍在展开区展示。V1.38 明确原生基础 ToolCall 卡片使用英文工具名，展开区统一显示 `ToolCall` 与 `输出`，文件、命令和代码/文档结果使用行号展示；MCP/平台短工具仍按下方中文名映射。2026-08-24：V1.24 修复 Agent 附件上下文链路：服务端校验文件归属并在模型窗口解析文本、PDF、DOCX、XLSX，图片按三协议图文内容块发送；历史消息附件补齐安全元数据，前端可在刷新后继续预览。同步调整输入框内附件按钮与用户消息附件位序。V1.23 扩展 Agent 附件契约，支持图片、Word 文档与多附件拖拽上传；保留 `POST /api/files` 后再以既有 `file_id` 引用的消息链路，补充图片缩略图、PDF/文本预览与 Office 文件打开/下载说明。V1.22 修复 V1.21 遗留：§4.4 标题「仅此三条」改「仅此四条」、§9 禁止清单「第四种」改「第五种」并补四类上行事件枚举、§4.3 `tool_result.source` 语义对齐 M7 `Observation.source`（溯源标识字符串，非 short\|long 枚举）、§4.3 共享流规则补 clarify/plan/confirm 持久化广播说明、§4.4 clarify 多副本限制注明、§9 Ask/Plan 补注非 Harness plan 事件；V1.20 及更早版本沿用历史修订记录。 |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
+> V1.66（2026-09-03）：混合引擎 H1（Router 四路分流骨架）审计契约。`response.completed` payload 在混合引擎开启时新增三个可选字段：`engine`（`"direct"|"chat"|"workflow"|"agent"`，Router 分流结论，写入后本轮不可变）、`router_confidence`（0–1 浮点，L0 确定性置信度）、`router_reason`（脱敏分流理由，含降级标注）。`hybrid_engine_enabled=false`（默认）时 payload 与 V1.65 完全一致。L0 为纯函数零模型调用（可复现性 100%）；仅当置信度低于 `hybrid_router_confidence_threshold`（默认 0.7）且 `hybrid_router_cot_enabled=true` 时触发一次 L1 短调用（`router.v1` JSON，计入回合预算），任何失败均回落 L0、L0 无结论回落 `chat`。H1 阶段 `workflow` / `agent` 尚未实现，降级按 `chat` 执行并在 `router_reason` 标注；`direct` 仅承认收包循环既有 `/stop`（图内其余斜杠为防御性拒绝，`finish_reason="error"`，零模型调用）。新增 `GET /api/agents` Worker 只读目录（§3.6.3，登录可见，不含密钥与模型实例）。`engine` 审计为 O2 分流判错信号（立即 `/stop`、`clarify`、门禁失败、重规划计数）的唯一采集载体，信号仅用于样本筛选，不得直接充当阈值优化目标。
+>
 > V1.65（2026-09-02）：工具契约加固（T1–T3）。T1：JSON Schema 受限子集新增 `minItems`/`maxItems`（注册期与运行期均校验），并为 `web_search.include_domains/exclude_domains`、`web_fetch.allowed_domains/blocked_domains`、`task.steps/tools`、`ask_user_question.questions/options`、`task.create.profile_ids/rag_mode` 等 8 处数组参数补上限。T2：`output_schema` 从装饰字段升级为强制契约——`ToolDef.output_schema` 默认 `None`（未声明）注册期拒绝，显式 `{}` 表示无结构化投影（合法，运行期跳过比对）；`execute_raw` 运行期按声明比对 handler 原始返回的展示投影，失败归一 `INTERNAL` 且不外泄原始返回；`platform.tasks.task.create/status/cancel` 补全 `output_schema`。T3：移除 `GET /api/mcp/tools/{name}/code` 端点与所有 `code_snippet` 字段（后端 `TOOL_METADATA_EXT`、前端 `ToolCodeDetails`/mock/Modal）——原实现为手写示意代码且与真实 handler 不符，违反「禁止伪造」红线；前端「源码实现」Tab 改为引导查看仓库真实文件。
 >
 > V1.64（2026-09-02）：`cancel_task` 的成功回执为持久化 `task_cancelled`，不再复用已移除的 `tool_result`；payload 为 `{status:"cancelled",kind}`，公共头携带 `task_id`。`task.create` 即使由内部 MCP 触发，也必须通过与 REST 相同的 TaskSpec 校验。
@@ -788,6 +790,32 @@ body：`{ "content":"...", "expected_revision":"16位修订指纹" }`。服务�
 #### `GET /api/admin/agent-prompts/{profile_id}` / `PUT /api/admin/agent-prompts/{profile_id}`
 
 每个 `usages` 包含 `agent` 的协议档均预留独立的 Prompt 管理入口。GET 返回只读 `base_prompt`（核心角色、安全、确认卡、长短任务和密钥保护）以及该协议档当前 `overlay`。PUT body 为 `{ "overlay":"..." }`，只可保存 12,000 字符以内、无疑似密钥字段的补充提示词；空字符串清除该协议档补充提示词。核心 `base_prompt` 不可写，运行时始终由 Harness 生成，且它优先于任何 `overlay`。不存在的协议档返回 `NOT_FOUND`，非 Agent 用途协议档返回 `VALIDATION`。
+
+---
+
+### 3.6.3 Agent Worker 目录（只读，V1.66）
+
+`GET /api/agents`：返回混合引擎静态 Worker 目录（H0 `AgentRegistry` 投影）。所有已登录成员可读；目录仅描述同一 LangGraph 图内的工具视野与能力边界，**不代表模型正在调用**，不含 API Key、协议客户端或 LLM 实例；`model_profile_id` 只持有协议档 ID（`null` 表示沿用会话当前协议档）。注册表在启动期完成 `allowed_tools ⊆ ToolRegistry`、`skill_ids ⊆ SKILL_CATALOG` 校验，strict 模式下不通过则进程拒绝启动。
+
+```json
+{
+  "agents": [
+    {
+      "agent_id": "worker.general",
+      "display_name": "通用助手",
+      "capabilities": ["general"],
+      "allowed_tools": ["read", "web_search", "web_fetch", "task"],
+      "skill_ids": [],
+      "max_permission": "read",
+      "budget": {},
+      "model_profile_id": null,
+      "description": "通用对话与只读探索：读文件、联网检索、会话任务看板"
+    }
+  ]
+}
+```
+
+H1 阶段该目录仅用于诊断与联调观测；`discover` 收窄工具视野自 H3 起生效，`worker.sandbox`（`code` 权限）在 HITL 就绪前不得被生产路径选中。
 
 ---
 
@@ -1591,7 +1619,7 @@ Harness 回合必须丢到后台 Task，**不得**在 `receive` 循环里 `await
 | `user_message` | `{id,role:"user",content,attachments,author,client_message_id?,created_at}`；持久化并可回放 | UserBubble |
 | `assistant_delta` | `{role:"assistant",text}`；瞬态、不占 event_id | AssistantBubble 流式增量 |
 | `assistant_message` | `{id,role:"assistant",text,reply_latency_ms?,created_at}`；持久化并可回放 | AssistantBubble |
-| `response.completed` | `{finish_reason:"stop",role:"assistant"}`；持久化并可回放 | 结束流式状态 |
+| `response.completed` | `{finish_reason:"stop"\|"cancelled"\|"error",role:"assistant"}`；混合引擎开启时额外携带 `engine`（`"direct"\|"chat"\|"workflow"\|"agent"`）、`router_confidence`（0–1）、`router_reason`（脱敏理由，含 H1 降级标注）三个可选审计字段；持久化并可回放 | 结束流式状态；`engine` 为 Router 分流结论（本轮唯一写入点），不代表实际执行引擎 |
 | `progress` | `{percent,done,total,message}`；Worker 任务进度 | ProgressDock |
 | `report` | `{report_id}`；Worker 报告就绪 | ReportCard |
 | `task_cancelled` | `{status:"cancelled",kind}`；公共头必须带 `task_id`，持久化并可回放 | 关闭对应 ProgressDock，并结束取消中状态 |
@@ -1600,6 +1628,8 @@ Harness 回合必须丢到后台 Task，**不得**在 `receive` 循环里 `await
 | `pong` | `{}`；瞬态 | 不渲染 |
 
 Agent 图不产生 `thought`、`tool_*`、`plan`、`confirm`、`clarify` 或其确认/回复事件；历史中出现的旧事件不再由前端渲染。`task_cancelled` 是收包循环的任务控制事件，不属于 Agent ToolCall。
+
+Router 审计字段（V1.66，H1）：`response.completed` 的 `engine` / `router_confidence` / `router_reason` 仅在 `hybrid_engine_enabled=true` 时出现，旧客户端忽略未知字段即可，断线补发按 `last_event_id` 原样回放。`engine` 由图内 Router 节点一次性写入、本轮不可变，记录的是**分流结论**——H1 阶段 `workflow` / `agent` 尚未实现，实际降级按 `chat` 执行，降级事实经 `router_reason` 标注（如「H1 未实现该引擎，降级 chat 执行」），前端不得据 `engine` 推断已发生的工具执行。取消 / 异常收尾路径（`finish_reason="cancelled"|"error"`）若 Router 已执行，同样携带三个审计字段。`router_reason` 为脱敏短文本（≤120 字符），禁止包含 Observation、密钥、完整提示词或上游原文。
 
 #### 4.3.1 历史原生工具契约（V1.62 及以前，当前未接线）
 
@@ -2594,3 +2624,21 @@ Composer 上方抽屉；点击确认或取消即收回，消息流只保留关�
 | `frontend/src/api/types.ts` / `views/Agent.vue` | 接收 `task_cancelled` 并可靠收尾任务进度坞。 |
 | `backend/api/app/routers/mcp.py` / `frontend/src/views/AdminProfiles.vue` | 明示工具已注册但当前纯对话 Agent 未接线。 |
 | `backend/api/tests/test_task_tools.py` / `test_task_permissions.py` | 覆盖 MCP 完整 TaskSpec 门禁与终态取消幂等。 |
+
+**V1.66（2026-09-03）— 混合引擎 H1 Router 审计契约**
+
+`response.completed` payload 在 `hybrid_engine_enabled=true` 时新增可选 `engine` / `router_confidence` / `router_reason` 审计字段：`engine` 为 Router 分流结论（本轮唯一写入点、不可变），H1 阶段 `workflow` / `agent` 降级按 `chat` 执行并经 `router_reason` 标注；取消 / 异常收尾路径在 Router 已执行时同样携带。L0 纯函数零模型调用、可复现性 100%；L1 CoT 仅在置信度低于阈值（默认 0.7）且开关开启时触发一次 `router.v1` JSON 短调用（计入回合预算），任何失败回落 L0、L0 无结论回落 `chat`。`direct` 仅承认收包循环既有 `/stop`，图内其余斜杠为防御性拒绝（`finish_reason="error"`、零模型调用）。新增 `GET /api/agents` Worker 只读目录（§3.6.3）。不新增 WS 事件名，不恢复 `thought` / `tool_*`；主开关关闭时 payload 与 V1.65 完全一致。
+
+| 实际修改文件 | 作用 |
+| :--- | :--- |
+| `docs/AI测试与评估平台-API.md` | 本版契约：§4.3 事件表与 Router 审计字段说明、§3.6.3 Worker 目录、头部版本与变更记录 |
+| `backend/api/app/agent/router_node.py` | 新增 Router 节点壳：L0 确定性打分纯函数、L1 `router.v1` 短调用与全量回落链、direct 防御节点 |
+| `backend/api/app/agent/graph.py` | `hybrid_engine_enabled` 双拓扑：关闭保持 `START → chat_stream → END`；开启接入 `router` 条件边四路分流（H1 降级）；新增 `router_audit_from_update` |
+| `backend/api/app/agent/routing.py` | `chat_stream` 收尾 `response.completed` 在 `engine` 存在时附带三个审计字段 |
+| `backend/api/app/harness/memory/state.py` | `GraphState` 新增 `engine` / `router_confidence` / `router_reason` / `agent_id` / `allowed_tools` / `workflow_step`（既有 `mode` 不重命名不驱动） |
+| `backend/api/app/harness/prompts/protocols.py` / `prompts/__init__.py` | 新增 `router.v1` 协议 Schema 与 `parse_router` 严格解析并导出 |
+| `backend/api/app/routers/ws.py` | 取消 / 异常收尾路径携带 Router 审计三元组（O2 信号采集载体） |
+| `backend/api/app/routers/agents.py` | 新增 `GET /api/agents` 只读目录（静态注册表脱敏投影） |
+| `backend/api/app/main.py` | 注册 `/api/agents` 路由 |
+| `frontend/src/api/types.ts` | `ResponseCompletedPayload` 类型同步（可选审计字段） |
+| `backend/api/tests/test_hybrid_h1_router.py` | L0 五次一致性、阈值两侧、L1 回落矩阵、S1 零工具、开关关闭快照回归、direct 零模型调用、目录端点投影 |

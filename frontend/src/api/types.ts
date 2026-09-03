@@ -897,6 +897,17 @@ export interface WsServerEvent {
   payload: any
 }
 
+// response.completed payload（API.md §4.3 V1.66）：混合引擎开启时的 Router 审计。
+// engine 是分流结论（不代表实际执行引擎——H1 阶段 workflow/agent 降级按 chat 执行，
+// router_reason 会标注降级）；主开关关闭时三个可选字段不出现，旧客户端忽略即可。
+export interface ResponseCompletedPayload {
+  finish_reason: 'stop' | 'cancelled' | 'error'
+  role: string
+  engine?: 'direct' | 'chat' | 'workflow' | 'agent'
+  router_confidence?: number
+  router_reason?: string
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // Dify 风格可视化工作流编排相关数据结构 (Workflow Studio & DAG)
 // ══════════════════════════════════════════════════════════════════════════════

@@ -21,6 +21,10 @@ from app.harness.contracts import NodeEvent
 # 路由模式（等价 M4 AgentMode；条件边消费）
 AgentMode = Literal["chat", "direct", "react", "plan_solve"]
 
+# 混合引擎顶层分流结果（H1 RootState；与 AgentMode 正交——mode 为 Agent 子图内
+# 细分且 H0–H6 不驱动任何条件边，engine 由 router 节点一次性写入、本轮不可变）
+EngineKind = Literal["direct", "chat", "workflow", "agent"]
+
 # 复核结论（等价 M4 ReflectVerdict；阶段 4 reflect 节点写；
 # repair 为失败阶梯首档：注入修复观察后回 Executor 再试一次）
 ReflectVerdict = Literal["pass", "clarify", "reject", "retry", "repair"]
@@ -121,6 +125,13 @@ class GraphState(TypedDict, total=False):
     task_state_observation_count: int  # 已被状态机消费的 Observation 数，防 append reducer 重放旧观察
     session_tasks: list  # 会话内 TaskCreate 看板，不写 PG tasks 表
     response: Mapping[str, object]  # ModelResponse 投影（text/usage/latency_ms）
+    # ── 混合引擎 RootState 扩展（H1）：engine 由 router 节点唯一写入，本轮不可变 ──
+    engine: EngineKind  # 顶层分流结论（direct/chat/workflow/agent），顶层条件边读
+    router_confidence: float  # L0 置信度（0–1）；低于阈值且开关开启才触发 L1 CoT
+    router_reason: str  # 脱敏分流理由（含 H1 降级标注），随 response.completed 审计落库
+    agent_id: str | None  # AgentRegistry.discover 选中的 Worker（H3 discover 节点写；H1 恒空）
+    allowed_tools: tuple[str, ...]  # 收窄后的工具视野（H3 写；H1 恒空，且必须 ⊆ ToolRegistry）
+    workflow_step: str | None  # Workflow DAG 当前节点名（H2 写；H1 恒空，仅供观测与恢复定位）
 
 
 def assert_serializable(state: GraphState) -> None:
