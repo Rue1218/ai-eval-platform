@@ -3,7 +3,7 @@
 覆盖：L0 纯函数五次一致性与场景标注对齐、置信度阈值两侧、L1 `router.v1`
 成功采信与预算记账、L1 非法 JSON / 上游 5xx / 超时 / 预算耗尽全量回落、
 L1 关闭零调用、主开关关闭的纯对话快照回归、开启后的 chat 审计字段与
-workflow/agent 降级标注、direct 零模型防御收尾、engine 本轮不可变
+四路真实分流、direct 零模型防御收尾、engine 本轮不可变
 （结构断言：仅 router 节点写 engine）、`GET /api/agents` 目录投影。
 全部不依赖 DB/WS/真实模型。
 """
@@ -136,6 +136,24 @@ def test_l0_empty_and_slash_are_deterministic() -> None:
     assert route_l0("/anything").engine == "direct"
 
 
+@pytest.mark.parametrize(
+    "text",
+    ["什么是用例生成？", "如何生成测试用例？", "讲讲如何创建基准评测任务"],
+)
+def test_l0_concept_questions_never_enter_workflow(text: str) -> None:
+    """概念问答含动作词时仍走 chat，不得生成确认卡。"""
+    assert route_l0(text).engine == "chat"
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["对 profile-A 跑基准评测，成功后压测", "跑一次基准评测，先评后压"],
+)
+def test_l0_quality_then_stress_enters_workflow(text: str) -> None:
+    """先评后压归一为质量任务 Workflow，禁止绕到无长任务桥的 Agent。"""
+    assert route_l0(text).engine == "workflow"
+
+
 def test_l0_router_node_workflow_no_model_no_downgrade_stamp() -> None:
     """router 节点 L0 路径零模型调用；workflow（H2 已实现）不再标注降级。"""
     gateway = _StubGateway()
@@ -145,25 +163,37 @@ def test_l0_router_node_workflow_no_model_no_downgrade_stamp() -> None:
     assert gateway.invoke_calls == []  # L0 零模型调用
 
 
+def test_l0_router_node_agent_keeps_real_engine_audit() -> None:
+    """H3 已接通 Agent TAOR，Router 审计不得再谎称降级为 chat。"""
+    gateway = _StubGateway()
+    update = router_node({"request": _request("请排查基准评测失败原因")}, gateway)
+    assert update["engine"] == "agent"
+    assert "降级" not in update["router_reason"]
+    assert gateway.invoke_calls == []
+
+
 # ─── 2. L1 CoT：成功采信与全量回落 ───
 
 
 def test_l1_success_adopts_result_and_consumes_budget(
     monkeypatch: pytest.MonkeyPatch, hybrid_on: None
 ) -> None:
-    """低置信触发 L1：合法 router.v1 采信，model_calls 12→11。"""
+    """低置信触发 L1：合法且有执行动作的 router.v1 采信，model_calls 12→11。"""
     monkeypatch.setattr(settings, "hybrid_router_cot_enabled", True)
+    # 让该有效 Workflow 请求走 L1，以覆盖 L1 成功采信而非 L0 直判路径。
+    monkeypatch.setattr(settings, "hybrid_router_confidence_threshold", 0.99)
     gateway = _StubGateway(invoke_text=_L1_OK_JSON)
-    events = _run(LangGraphAgent(gateway), _request("什么是基准评测"))
+    events = _run(LangGraphAgent(gateway), _request("对 profile-A 跑基准评测"))
     router_out = _node_output(events, "router")
     assert router_out is not None
     assert router_out["engine"] == "workflow"
+    assert router_out["skill_id"] == "skill-benchmark"  # L1 已启用技能须传给 W0
     assert router_out["budget"] == {"model_calls": 11, "tool_turns": 12}
     assert len(gateway.invoke_calls) == 1
     l1_request = gateway.invoke_calls[0]
     assert l1_request.config.max_tokens == 256  # L1 限流输出
-    # H2：engine=workflow 进入 W0–W7 DAG；无确认上下文时在 W5 安全结束回合
-    # （不产 completed——确认卡直连桥接在 H2 批次 2 落地，届时恢复该断言）
+    # H2：engine=workflow 进入 W0–W7 DAG；无确认上下文时在 W5 发确认卡并
+    # 以 completed(stop) 收尾本轮，等待确认回执重放。
     pending = [
         event
         for mode, chunk in events
@@ -173,6 +203,28 @@ def test_l1_success_adopts_result_and_consumes_budget(
         for event in value.get("pending_events", [])
     ]
     assert not [e for e in pending if e["kind"] == "error"]
+    assert _completed_payload(events)["finish_reason"] == "stop"
+
+
+def test_l1_workflow_without_execution_intent_falls_back_to_l0_chat(
+    monkeypatch: pytest.MonkeyPatch, hybrid_on: None
+) -> None:
+    """L1 不得仅凭技能名词把概念问答提升为会产生确认卡的 Workflow。"""
+    monkeypatch.setattr(settings, "hybrid_router_cot_enabled", True)
+    gateway = _StubGateway(invoke_text=_L1_OK_JSON)
+    events = _run(LangGraphAgent(gateway), _request("什么是基准评测"))
+    router_out = _node_output(events, "router")
+    assert router_out is not None
+    assert router_out["engine"] == "chat"
+    assert "缺少执行动作回落 L0" in router_out["router_reason"]
+    assert not [
+        event
+        for mode, chunk in events
+        if mode == "updates"
+        for event in iter_pending_events(chunk)
+        if event["kind"] == "confirm"
+    ]
+    assert _completed_payload(events)["engine"] == "chat"
 
 
 @pytest.mark.parametrize(

@@ -2,17 +2,19 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.68 |
+| 文档版本 | V1.69 |
 | 对应 PRD | V1.18（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.6.0（骨架化纯对话；JSON 仍以本文为准） |
 | 对应前端计划 | V1.5 |
 | 对应后端计划 | V1.5 |
 | 撰写日期 | 2026-08-18 |
-| 本轮修订 | 2026-09-03：V1.68 混合引擎 Workflow 确认卡恢复（H2 批次 2）：`confirm` / `confirm_ack` 事件自 V1.63 骨架化移除后恢复（语义与 V1.62 一致，产出来源为 Workflow 子图 W5 `await_confirm`）；`confirm_ack` 上行恢复接受。确认动作在 `sessions.pending_confirm` 行锁事务内完成（owner / 并发 / patch 深合并 / TaskSpec 同源校验 / 清卡），批准后再以 `workflow_confirm` 注入重放回合，**入队仍唯一经 W6**（不绕过 DAG）。仅 `hybrid_engine_enabled=true` 且 `engine=workflow` 时可达；关闭时事件与 V1.66 完全一致。 |
+| 本轮修订 | 2026-09-03：V1.69 混合引擎 H1/H2 审查修复：Router 将概念问答排除在 Workflow 副作用门禁外，并把明确的「先评后压」归一为 benchmark/rag 质量任务的 `with_stress=true`；L1 已验证且启用的 `skill_id` 传递给 W0 直接采用。确认回放在清卡前先抢占会话回合租约；只有 W6 写入真实 `task_id` 才发送 `confirm_ack.ok=true`，失败恢复 `pending_confirm` 并发送既有 `error`，不伪造成功或取消回执。W1 仅预填明确平台短 ID，W4 合并受控槽位。 |
 | 最近修订 | 2026-09-03：V1.67 混合引擎执行落地（H2 Workflow DAG / H3 Agent TAOR）：恢复持久事件 `tool_call` / `tool_result`（payload 见 §4.3，ToolCard 只渲染脱敏摘要，观察全文不进任何事件）；`response.completed` 的 `engine` 从「分流结论」升级为「真实执行引擎」——`workflow`（H2，W0–W7 硬编码 DAG）与 `agent`（H3，plan→discover→orchestrator⇄tools 单图内 TAOR）均已真实执行，`agent_id` 审计随 Worker 目录（§3.6.3）供归属核验；`thought` / `tool_progress` / `tool_output_delta` / `confirm` / `clarify` 仍不产生。历史 `ws_events` 中的旧工具事件仍不重放。 |2026-09-03：V1.66 混合引擎 H1 Router 审计契约：`response.completed` payload 新增可选 `engine` / `router_confidence` / `router_reason`（仅 `hybrid_engine_enabled=true` 时出现，旧客户端忽略未知字段即可）；新增 `GET /api/agents` Worker 只读目录（§3.6.3）。本版不新增 WS 事件名、不恢复 `thought` / `tool_*`；`workflow` / `agent` 引擎在 H1 阶段降级按 `chat` 执行，`engine` 如实记录分流结论并经 `router_reason` 标注降级。2026-09-02：V1.65 工具契约加固（T1–T3）：JSON Schema 子集新增 `minItems`/`maxItems` 并为 8 处数组参数补上限；`output_schema` 从装饰字段升级为强制契约（注册期拒绝未声明，运行期按声明比对展示投影）；`platform.tasks` 三工具补全 `output_schema`；移除 `/api/mcp/tools/{name}/code` 端点与 `code_snippet` 字段。2026-08-28：V1.53 `web_fetch` 直抓路径接入 trafilatura 正文提取：可读性算法识别文章主体，保留标题层级/链接/图片/表格，未安装或提取失败降级回内置 `_TextExtractor`；提取真实产出 Markdown 时才声明 `format=markdown`（§4.3.1）。V1.52 优化 `web_fetch` 长文完整性与卡片预览：模型正文预算 8,000→60,000 字符，卡片预览与 `read` 同源对齐 `TOOL_PREVIEW_MAX_CHARS` 并随 `web.preview_limit_chars` 下发，直接抓取字节窗口 256KB→1MB（§4.3.1）。2026-08-27：V1.51 新增持久事件 `session_title`（§4.3）与会话标题 AI 生成契约（§4.3.2）：默认标题会话首条消息后由 Agent 协议档弱结构化生成标题并落库广播，修复标题不持久化问题。V1.50 统一 Agent 文本附件 staging 与 `read` 的 20MB 边界；`read` 模型窗口为 2,000 行 / 600,000 字符。V1.49 协议档新增 `max_output_tokens`（256–131072，默认 8192），创建/更新/列表/详情均支持；Agent 模型调用从协议档读取输出上限，长文档总结/导出类任务可调大避免回答被截断。2026-08-26：V1.48 同轮多调用默认串行，灰度开启后仅 `read`/`web_search`/`web_fetch` 可并行，回填按原始 `call_id`。V1.47 新增 `GET /api/agent/metrics`，不含正文/参数，不新增 WS 事件。V1.46 明确 native 一次 ToolCall 结束当前上游响应，结果回填后再请求，不新增事件名。V1.45 思考链只下发可展示摘要，隐藏 CoT（`Here's a thinking process` / `Analyze User Input`）由服务端替换，不原样推给前端。V1.44 ToolCall 在执行前持久化，新增瞬态 `tool_progress` / `tool_output_delta`，并冻结原生工具的输出 Schema、权限边界和失败恢复字段。V1.43 思考增量允许合并下发；有思考链时 `think_final` 在 `response.completed` 之前。V1.42 Direct `/help`、未知斜杠与图内防御提示在业务事件后必须再发 `response.completed`（成功 `stop`，校验/防御 `error`），结束整轮生成态。V1.41 确认卡预填与 `confirm_ack` 入队前丢掉已删除的协议档/数据集/知识库 ID，避免 Worker 再报「协议档不存在或已删除」。V1.40 `/cancel` 与 `/stress` 按 §4.4 解禁（仍走 `user_message`）：`/cancel` 取消本会话非终态任务，`/stress` 发出质量任务确认卡且 `with_stress=true`，禁止 `kind=stress`。V1.39 原生工具卡片收起态副标题统一为 `ToolCall`，不在卡片摘要区回显文件路径、命令或写入内容；详细参数仍在展开区展示。V1.38 明确原生基础 ToolCall 卡片使用英文工具名，展开区统一显示 `ToolCall` 与 `输出`，文件、命令和代码/文档结果使用行号展示；MCP/平台短工具仍按下方中文名映射。2026-08-24：V1.24 修复 Agent 附件上下文链路：服务端校验文件归属并在模型窗口解析文本、PDF、DOCX、XLSX，图片按三协议图文内容块发送；历史消息附件补齐安全元数据，前端可在刷新后继续预览。同步调整输入框内附件按钮与用户消息附件位序。V1.23 扩展 Agent 附件契约，支持图片、Word 文档与多附件拖拽上传；保留 `POST /api/files` 后再以既有 `file_id` 引用的消息链路，补充图片缩略图、PDF/文本预览与 Office 文件打开/下载说明。V1.22 修复 V1.21 遗留：§4.4 标题「仅此三条」改「仅此四条」、§9 禁止清单「第四种」改「第五种」并补四类上行事件枚举、§4.3 `tool_result.source` 语义对齐 M7 `Observation.source`（溯源标识字符串，非 short\|long 枚举）、§4.3 共享流规则补 clarify/plan/confirm 持久化广播说明、§4.4 clarify 多副本限制注明、§9 Ask/Plan 补注非 Harness plan 事件；V1.20 及更早版本沿用历史修订记录。 |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
+> V1.69（2026-09-03）：混合引擎 H1/H2 审查修复。Workflow 执行动作门禁先排除「什么是 / 如何 / 讲讲」等概念问答，避免动词误发确认卡；只读准备动作仍走 Agent。明确「先评后压 / 成功后压测」时，Router 直接进入 Workflow，W0 归一为 benchmark/rag 质量技能，W4 写 `with_stress=true`，压测仍由 Worker 在成功后派生。`router.v1` 的已启用 `skill_id` 写入 State 并由 W0 直接采用；W1 只提取明确平台短 ID，W4 仅合并白名单槽位。确认 `ok=true` 先抢占会话回合租约，再校验和清卡；**仅** W6 产出真实任务 ID 时发送 `{ok:true,task_id:"uuid",message}`。未入队时恢复同一张 `pending_confirm` 并发既有 `error`，不发送伪成功或 `ok=false` 取消回执；未新增 WS 事件或字段。
+>
 > V1.68（2026-09-03）：混合引擎 Workflow 确认卡恢复（H2 批次 2）。`confirm`（TaskSpec §5 + 非 TaskSpec 元数据 `confirm_author:{id,username,display_name?}`）与 `confirm_ack`（`{ok,task_id?,message}`）两事件自 V1.63 移除后恢复，语义与 V1.62 一致；产出来源改为 Workflow 子图 W5 `await_confirm`（仅 `hybrid_engine_enabled=true` 且 Router 判定 `engine=workflow` 时可达）。八节点硬编码顺序：`select_skill → prepare_slots → load_skill → validate_gates → build_task_spec → await_confirm → enqueue → summarize`，节点失败就地收尾、不回环。W5 首次到达时**发卡并收尾本轮**（`confirm` + 阶段叙述 + `response.completed(stop)`）；用户确认后服务端在同一 `pending_confirm` 行锁事务内完成 owner 校验、并发检测、patch 深合并、TaskSpec 同源校验与清卡，再以 `workflow_confirm` 注入重放回合，由 **W6 唯一入队**、W7 收尾，`confirm_ack` 携带 W6 写入的真实 `task_id`。未批准/取消只清卡不入队；重复确认或无待确认卡返回 `VALIDATION`（「无待确认卡」），并发已处理为 `CONCURRENCY`，绝不重复入队。`skill-rag` 未接入仍 `VALIDATION` fail-closed，绝不 mock `succeeded`。主开关关闭时全部行为与 V1.66 一致。
 >
 > V1.66（2026-09-03）：混合引擎 H1（Router 四路分流骨架）审计契约。`response.completed` payload 在混合引擎开启时新增三个可选字段：`engine`（`"direct"|"chat"|"workflow"|"agent"`，Router 分流结论，写入后本轮不可变）、`router_confidence`（0–1 浮点，L0 确定性置信度）、`router_reason`（脱敏分流理由，含降级标注）。`hybrid_engine_enabled=false`（默认）时 payload 与 V1.65 完全一致。L0 为纯函数零模型调用（可复现性 100%）；仅当置信度低于 `hybrid_router_confidence_threshold`（默认 0.7）且 `hybrid_router_cot_enabled=true` 时触发一次 L1 短调用（`router.v1` JSON，计入回合预算），任何失败均回落 L0、L0 无结论回落 `chat`。H1 阶段 `workflow` / `agent` 尚未实现，降级按 `chat` 执行并在 `router_reason` 标注；`direct` 仅承认收包循环既有 `/stop`（图内其余斜杠为防御性拒绝，`finish_reason="error"`，零模型调用）。新增 `GET /api/agents` Worker 只读目录（§3.6.3，登录可见，不含密钥与模型实例）。`engine` 审计为 O2 分流判错信号（立即 `/stop`、`clarify`、门禁失败、重规划计数）的唯一采集载体，信号仅用于样本筛选，不得直接充当阈值优化目标。
@@ -1722,7 +1724,7 @@ MCP/平台短工具中文名（ToolCard 标题；原生基础工具 `read` / `wr
 `confirm_ack`（V1.67 恢复，仅在 `sessions.pending_confirm` 存在时有意义）：
 
 - `ok=false`：不入队，仅清卡并回 `{ok:false,message:"已取消确认"}`。
-- `ok=true`：`patch` 与 `pending_confirm` 深合并后按 §5 二次校验；通过后清卡并提交，再以 `workflow_confirm` 注入重放回合，**入队唯一经 W6**（`enqueue_long_task`），W7 收尾；`confirm_ack` 事件携带 W6 写入的真实 `task_id`。
+- `ok=true`：先抢占会话回合租约，`patch` 与 `pending_confirm` 深合并后按 §5 二次校验；通过后清卡并提交，再以 `workflow_confirm` 注入重放回合，**入队唯一经 W6**（`enqueue_long_task`），W7 收尾。仅 W6 写入真实 `task_id` 才发送 `confirm_ack.ok=true`；回放未入队则恢复 `pending_confirm` 并发送 `error`，卡保持可再次确认。
 - 权限与重复：仅 `pending_confirm_author_id` 对应成员可提交（他人 `UNAUTHORIZED`）；重复确认或已无待确认卡返回 `VALIDATION`（「无待确认卡」），并发已处理为 `CONCURRENCY`，均不重复入队。
 - 前端提交 patch 前必须剥离 `confirm_author` 元数据。
 
@@ -2655,6 +2657,16 @@ Composer 上方抽屉；点击确认或取消即收回，消息流只保留关�
 | `backend/api/app/main.py` | 注册 `/api/agents` 路由 |
 | `frontend/src/api/types.ts` | `ResponseCompletedPayload` 类型同步（可选审计字段） |
 | `backend/api/tests/test_hybrid_h1_router.py` | L0 五次一致性、阈值两侧、L1 回落矩阵、S1 零工具、开关关闭快照回归、direct 零模型调用、目录端点投影 |
+
+**V1.69（2026-09-03）修复代码文件与作用清单：**
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/harness/orchestration/router.py` | 收窄工作流意图识别，避免概念问答误入队；识别“先评后压”复合意图。 |
+| `backend/api/app/agent/router_node.py` | 保留带本地读取前置步骤的 Agent 路径；将已启用的 L1 `skill_id` 传入 Workflow。 |
+| `backend/api/app/agent/workflow_nodes.py` | 优先采纳 L1 技能、只提取显式资源标识，并生成 `with_stress=true` 的质量评测任务规格。 |
+| `backend/api/app/routers/ws.py` | 确认重放在清卡前预占回合；仅 W6 真实入队后发送成功回执，失败时恢复确认卡。 |
+| `backend/api/tests/test_hybrid_h1_router.py`、`test_hybrid_h2_workflow.py`、`test_hybrid_h2_confirm_card.py`、`test_hybrid_e2e_h0_h3.py` | 覆盖误路由、L1 技能传递、显式槽位、先评后压与确认卡恢复的回归场景。 |
 
 **V1.68（2026-09-03）— 混合引擎 Workflow 确认卡恢复（H2 批次 2）**
 

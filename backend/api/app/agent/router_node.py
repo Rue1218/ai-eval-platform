@@ -8,9 +8,8 @@
   （默认 0.7）且 ``hybrid_router_cot_enabled`` 开启时执行一次 ``router.v1``
   JSON 短调用（复用会话协议档、限制 max_tokens、计入 ``budget.model_calls``）；
   格式错误、上游异常、超时或预算耗尽**一律回落 L0**，L0 无结论回落 ``chat``；
-- **H1 降级**：``workflow`` / ``agent`` 引擎本阶段未实现，图上降级按
-  ``chat_stream`` 执行，降级事实经 ``router_reason`` 标注（审计可回答
-  「为什么走了这条路」）；
+- **执行边界**：``workflow`` 与 ``agent`` 均由图中对应子图执行；L1 不能
+  越过固定流程的执行动作门禁，避免概念问答误发确认卡；
 - **direct 语义**：H1 仅承认收包循环既有 ``/stop``（ws.py 拦截，不进图）；
   图内其余斜杠为防御性拒绝（零模型调用，``finish_reason="error"``）。
 
@@ -41,10 +40,12 @@ from app.harness.orchestration.router import (
     _SKILL_GROUPS,
     TOOL_INTENT_KEYWORDS,
     detect_plan_intent,
+    has_quality_then_stress_intent,
+    has_workflow_execution_intent,
     short_tool_names,
 )
 from app.harness.prompts.protocols import parse_router
-from app.harness.skills import SKILL_CATALOG
+from app.harness.skills import assert_skill_enabled
 from app.llm import ModelRequest
 
 # L0 置信度常量（离散特征 → 浮点；低于阈值的两个档位是 L1 的触发场景）
@@ -65,18 +66,18 @@ _STRONG_INTENT_KEYWORDS: tuple[str, ...] = tuple(
 # 探索排查意图（S2 典型：目标导向、步数未知，需读文件/查报告交叉验证）
 _DIAGNOSE_PATTERN = re.compile(r"排查|诊断|定位|分析一下|查一下原因|为什么|原因|掉了|失败|异常")
 
-# 技能执行动作：动词，或「评测一下 / 压测任务」这类技能词直接成句的形态。
-# 仅命中技能词而无动作（如「什么是基准评测」）不判 workflow，交由 L1 兜底。
-_WORKFLOW_ACTION_PATTERN = re.compile(
-    r"(?:跑|运行|执行|发起|创建|新建|开始|提交|生成|做)(?:一[个次]|一下)?"
-    r"|(?:评测|压测|用例|知识库)(?:一下|来一次|任务)"
-)
-
 # 「rag/知识库评测」复合词折叠：通用「评测」是名词中心语，不构成第二个技能组
 # （否则「跑 rag 评测」被误判为多技能 → agent，而期望是 workflow → skill-rag
 # fail-closed）。仅当无其他技能组共现时折叠为单一「知识库评测」意图。
 _RAG_EVAL_COMPOUND = re.compile(
     r"(?:rag|知识库)\s*(?:质量)?\s*评测|评测\s*(?:质量)?\s*(?:rag|知识库)"
+)
+
+# 用户先要求读取/分析资产再下单时，必须交由 Agent TAOR 完成只读准备；不能因
+# 末尾带「先评后压」而跳过前置观察直接生成确认卡。
+_WORKFLOW_PREPARATION_PATTERN = re.compile(
+    r"(?:读取|读(?:取)?(?:数据集|文件)|查询|搜索|查看|分析).{0,32}(?:然后|再)",
+    re.IGNORECASE,
 )
 
 # router_reason 落 ws_events，超长截断并清理控制字符（脱敏短文本）
@@ -158,15 +159,18 @@ def route_l0(text: str) -> RouteDecision:
         return RouteDecision("direct", _CONF_DIRECT, "斜杠命令（L0）")
     if _rag_eval_single_intent(stripped):
         # 复合词折叠：知识库评测是单一技能意图，先于多技能判定
-        if _WORKFLOW_ACTION_PATTERN.search(stripped):
+        if has_workflow_execution_intent(stripped):
             return RouteDecision("workflow", _CONF_WORKFLOW, "命中技能组「知识库评测」且含执行动作（L0）")
         return RouteDecision("chat", _CONF_SKILL_AMBIGUOUS, "命中技能词「知识库评测」但无执行动作，疑似概念问答（L0）")
+    if has_quality_then_stress_intent(stripped) and not _WORKFLOW_PREPARATION_PATTERN.search(stripped):
+        # PRD：先评后压是质量任务成功后的 Worker 派生链，而不是 Agent 的多工具计划。
+        return RouteDecision("workflow", _CONF_WORKFLOW, "命中质量评测后派生压测意图（L0）")
     if detect_plan_intent(stripped):
         return RouteDecision("agent", _CONF_PLAN_INTENT, "多槽/多技能/多短工具/确认卡意图（L0）")
     if _DIAGNOSE_PATTERN.search(stripped):
         return RouteDecision("agent", _CONF_TOOL_INTENT, "探索排查意图（L0）")
     groups = _skill_group_hits(stripped)
-    if len(groups) == 1 and _WORKFLOW_ACTION_PATTERN.search(stripped):
+    if len(groups) == 1 and has_workflow_execution_intent(stripped):
         return RouteDecision("workflow", _CONF_WORKFLOW, f"命中技能组「{groups[0]}」且含执行动作（L0）")
     tools = short_tool_names(stripped)
     if tools:
@@ -265,21 +269,50 @@ def _route_l1(
         engine = fields["engine"]
         confidence = _clamp_confidence(fields.get("confidence"))
         reason = _sanitize_reason(fields.get("reason"))
+        # L1 只在低置信度时辅助判断，不能越过确定性的副作用门禁：普通
+        # 概念问答即便模型误报 workflow，也必须保留 L0 的 chat/agent 结论。
+        if engine == "workflow" and not has_workflow_execution_intent(text):
+            return {
+                "engine": l0.engine,
+                "router_confidence": l0.confidence,
+                "router_reason": f"{l0.reason}；L1 workflow 因缺少执行动作回落 L0",
+                "budget": budget_data,
+            }
+        # direct 只承认 WS 收包循环的 /stop；L1 绝不能把普通文本升级为命令。
+        if engine == "direct" and not text.strip().startswith("/"):
+            return {
+                "engine": l0.engine,
+                "router_confidence": l0.confidence,
+                "router_reason": f"{l0.reason}；L1 direct 因非斜杠输入回落 L0",
+                "budget": budget_data,
+            }
         skill_id = fields.get("skill_id")
+        selected_skill_id: str | None = None
         if skill_id:
-            if str(skill_id) not in SKILL_CATALOG:
-                reason = f"{reason}（skill_id={skill_id} 未知已忽略）"
+            skill_text = str(skill_id)
+            if engine != "workflow":
+                reason = f"{reason}（skill_id={skill_text} 非 Workflow 已忽略）"
             else:
-                reason = f"{reason}（skill={skill_id}）"
+                try:
+                    # 仅把已注册且启用的 L1 建议写入 State；W0 将优先采用它，
+                    # 避免第二段路由重新以关键词覆盖 Router 的明确选择。
+                    assert_skill_enabled(skill_text)
+                    selected_skill_id = skill_text
+                    reason = f"{reason}（skill={skill_text}）"
+                except AppError:
+                    reason = f"{reason}（skill_id={skill_text} 不可用已忽略）"
         agent_trace(
             f"router l1 engine={engine} confidence={confidence:.2f} skill={skill_id or '-'}"
         )
-        return {
+        result = {
             "engine": engine,
             "router_confidence": confidence,
             "router_reason": f"L1 CoT：{reason}",
             "budget": budget_data,
         }
+        if selected_skill_id is not None:
+            result["skill_id"] = selected_skill_id
+        return result
     except AppError as exc:
         # 格式错误 / 上游 5xx / 超时 / 预算耗尽：回落 L0；已消费的预算如实记账。
         agent_trace(f"router l1 fallback code={exc.code.value}")
@@ -290,15 +323,11 @@ def _route_l1(
 
 
 def _finalize(update: dict) -> dict:
-    """引擎执行态标注：未实现引擎降级 chat 执行，事实进 router_reason（可审计）。
+    """收敛 Router 输出，保留真实引擎结论供图条件边和审计共同消费。
 
-    H2：``workflow`` 已由 W0–W7 DAG 执行，不再降级；仅 ``agent`` 引擎
-    未实现（H3 落地前）降级 ``chat_stream`` 并如实标注。
+    H2/H3 已分别接通 Workflow DAG 与 Agent TAOR；不得再把 ``agent`` 篡改为
+    “降级 chat”的审计文案，否则事件事实会与实际图路径不一致。
     """
-    if update.get("engine") == "agent":
-        update["router_reason"] = (
-            f"{update.get('router_reason', '')}；agent 引擎未实现（H2），降级 chat 执行"
-        )
     return update
 
 

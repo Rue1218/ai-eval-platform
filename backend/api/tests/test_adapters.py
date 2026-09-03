@@ -453,6 +453,32 @@ def test_openai_responses_usage_accepts_official_field_names(monkeypatch):
     assert result.usage == {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18}
 
 
+def test_usage_preserves_upstream_prompt_cache_counters(monkeypatch):
+    """H0 缓存观测：仅透传上游已声明的读/创建 token，不凭空推断命中。"""
+    _capture(
+        monkeypatch,
+        {
+            "content": [{"type": "text", "text": "ok"}],
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 5,
+                "cache_read_input_tokens": 80,
+                "cache_creation_input_tokens": 12,
+            },
+        },
+    )
+
+    result = call_protocol(**_kwargs("anthropic_messages"))
+
+    assert result.usage == {
+        "prompt_tokens": 100,
+        "completion_tokens": 5,
+        "total_tokens": 105,
+        "cache_read_input_tokens": 80,
+        "cache_creation_input_tokens": 12,
+    }
+
+
 @pytest.mark.parametrize(
     "protocol,payload,expected_tool",
     [

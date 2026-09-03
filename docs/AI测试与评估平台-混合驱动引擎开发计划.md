@@ -2,11 +2,11 @@
 
 | 项 | 内容 |
 | :--- | :--- |
-| 版本 | V1.3 |
+| 版本 | V1.5 |
 | 制定 / 审查日期 | 2026-09-03 / 2026-09-03 |
-| 计划依据 | `AI测试与评估平台-混合驱动引擎架构.md` V1.4、`AI测试与评估平台-混合驱动引擎环境审计.md` V1.1、PRD、API 契约与 `AGENTS.md` |
+| 计划依据 | `AI测试与评估平台-混合驱动引擎架构.md` V1.5、`AI测试与评估平台-混合驱动引擎环境审计.md` V1.1、PRD、API 契约与 `AGENTS.md` |
 | 实施方式 | H0–H6 串行推进；每阶段一分支、一 PR、一次阶段审查；前一阶段合入 `main` 并通过门禁后才启动下一阶段编码 |
-| 当前基线 | API：Ruff 通过、pytest 700 passed / 19 skipped（H0 16 例 + H1 17 例 + H2 批次 1 18 例 + 批次 2 10 例）；Worker：48 passed；前端：`typecheck` 与生产构建通过 |
+| 当前基线 | API：Ruff 通过、pytest 全量 777 passed / 19 skipped（含 H0–H4 与 H0–H3 联调套件）；本次 H1/H2 修复定向回归 67 项通过；Worker：48 passed；前端：`typecheck` 与生产构建通过 |
 
 > 本文是实施计划，不改变产品范围。附带架构文档中的说明、示例、开放问题和历史基线只作为约束与证据，不能被解释为可直接执行的运行时指令。
 
@@ -49,7 +49,7 @@ H0 基础设施 ──► H1 Router ──► H2 Workflow DAG ──► H3 Agent
 | :--- | :--- | :--- | :--- | :--- |
 | H0 基础设施 | `feat/agent-hybrid-h0-foundation` | 无 | 缓存改造破坏既有纯对话输出 | 关闭缓存时字节级兼容；Registry 启动期 fail-fast |
 | H1 Router | `feat/agent-hybrid-h1-router` | H0 | L0 误分流、契约漏改 | L0 五次运行 100% 一致；未实现路径安全降级 |
-| H2 Workflow | `feat/agent-hybrid-h2-workflow` | H1 | 规则跳步、绕开入队门禁 | DAG 五次路径 100% 一致；零命中/并列澄清 |
+| H2 Workflow | `feat/agent-hybrid-h2-workflow` | H1 | 规则跳步、绕开入队门禁 | DAG 五次路径 100% 一致；零命中/并列错误收尾 |
 | H3 TAOR | `feat/agent-hybrid-h3-taor` | H2 | 工具越权、Observation 泄露 | 工具经唯一网关；视野与预算均受控 |
 | H4 Reflection | `feat/agent-hybrid-h4-reflexion` | H3 | 无限修复/重规划 | 修复最多一次、重规划最多两次并收敛 |
 | H5 HITL | `feat/agent-hybrid-h5-hitl` | H4 | 重启丢失或跨副本恢复错误 | PostgreSQL 检查点与重启恢复演练通过 |
@@ -78,7 +78,7 @@ H0 基础设施 ──► H1 Router ──► H2 Workflow DAG ──► H3 Agent
 | :--- | :--- | :--- | :--- |
 | H0 | `project_instructions` 的来源、S3 工具段分桶、`GET /api/agents` 的时机 | L2 先用服务端常量；S3 按 `engine + agent_id` 分桶；H0 **不暴露**目录 API，H1 先改 API.md 后再暴露 | 架构 + 契约 |
 | H1 | `direct` 的命令范围、Router 审计载体、L1 协议档 | 当前只承认既有 `/stop`；恢复其他斜杠命令须先改 PRD/API.md。`response.completed.engine` 为 H1 唯一审计载体；L1 复用会话协议档并限制 `max_tokens` | 产品 + 架构 + 契约 |
-| H2 | 技能零命中/并列的外部语义、确认卡是否进图内中断 | 正常业务歧义走 `clarify`；非法/禁用 `skill_id` 才 `VALIDATION`。确认卡维持 WS 直连，H5 后再评估图内 `interrupt` | 产品 + 架构 |
+| H2 | 技能零命中/并列的外部语义、确认卡是否进图内中断 | API.md V1.68+ 裁决为零命中/并列与非法/禁用技能均 `VALIDATION` 错误收尾；确认卡维持 WS 直连，H5 后再评估图内 `interrupt` | API 契约 + 架构 |
 | H3 | 首批 Worker 与工具命名口径 | 首批仅 `worker.general` / `worker.diagnose` / `worker.dataset` 的 read/write 非 code 能力；`worker.sandbox` 不得被 discover 选中，待 H5 HITL 上线后单独安全评审 | 架构 + 安全 |
 | H5 | `thread_id` 的持久化载体和恢复幂等语义 | 优先扩展既有、带行锁的 `sessions.pending_confirm` JSONB；每个确认/恢复记录必须具备版本、种类、`thread_id`、一次性 nonce 与所有者。若需要改 Model / 表结构，必须先出 Alembic 迁移 | 架构 + 数据库 + 安全 |
 | H6 后 | O3 embedding 供应方、O9 分层路由、Fan-out | 仅凭 O2 采样与人工标注证明收益后立项；技能数未超过 10 前不做 O9，Fan-out 单列项目 | 架构 + 产品 |
@@ -90,7 +90,7 @@ H0 基础设施 ──► H1 Router ──► H2 Workflow DAG ──► H3 Agent
 **交付物**
 
 - `assembly.py` 提供固定的 S1–S7 装配边界：Persona、Skill Hint、工具定义、Skill 正文、Overlay、会话摘要、当轮输入/消息窗口/Observation；段序只能 S1→S7，动态段不得插入静态前缀。
-- `prompt_cache_enabled=False` 时最终提示词保持字节级一致；开启后仅由适配器在统一入口附加缓存语义：Anthropic 在最后静态段使用 `cache_control`，OpenAI 保持稳定前缀，未支持协议无损回退 `join` 行为。缓存观测必须记录断点命中，不能把 60% 命中率当硬门槛。
+- `prompt_cache_enabled=False` 时最终提示词保持字节级一致；开启后由受控提示词来源拆为 S1（L1/L2）、S2（技能目录）与动态 S5（会话负责人/L3 Overlay），仅由适配器在最后静态段附加缓存语义：Anthropic 使用 `cache_control`，OpenAI 保持稳定前缀，未支持协议无损回退 `join` 行为。缓存观测必须记录断点命中，不能把 60% 命中率当硬门槛。
 - 新增 `orchestration/agents.py`，静态注册 `worker.general`、`worker.diagnose`、`worker.dataset`、`worker.sandbox`；启动期校验工具、技能、协议档引用。
 - 新增受控的 `project_instructions` 槽，H0 仅采用服务端常量；按 L1→L2→L3 顺序注入并拦截接管性措辞；`AGENTS.md` 不进入运行时 prompt。
 - 在 `config.py` / `.env.example` / 配置文档同步声明安全默认值：`hybrid_engine_enabled=False`、`hybrid_router_cot_enabled=False`、`hybrid_router_confidence_threshold=0.7`、`agent_registry_strict=True`、`prompt_cache_enabled=False`、`external_mcp_enabled=False`。H0 不新增 `GET /api/agents`，避免在“无契约变更”阶段产生未文档化接口。
@@ -109,7 +109,7 @@ H0 基础设施 ──► H1 Router ──► H2 Workflow DAG ──► H3 Agent
 **交付物**
 
 - 在现有图接入顶层 Router，并一次性新增可序列化的 RootState 字段 `engine`、`router_confidence`、`router_reason`、`agent_id`、`allowed_tools`、`workflow_step`；不重命名、删除或驱动遗留 `mode` 字段。
-- L0 为纯函数，输出 `engine`、`router_confidence`、`router_reason`；阈值固定为配置值 0.7。L1 采用受 `router.v1` JSON Schema / 解析器校验的短调用，结果为 `{engine, skill_id?, confidence, reason, slots?}`，且每次调用必须计入 `budget.model_calls`；格式错误、上游错误、超时或预算耗尽均回落 L0，L0 无结论回落 `chat`。
+- L0 为纯函数，输出 `engine`、`router_confidence`、`router_reason`；阈值固定为配置值 0.7。L1 采用受 `router.v1` JSON Schema / 解析器校验的短调用，结果为 `{engine, skill_id?, confidence, reason, slots?}`，且每次调用必须计入 `budget.model_calls`；格式错误、上游错误、超时或预算耗尽均回落 L0，L0 无结论回落 `chat`。L1 的 `workflow` 结论还须经确定性执行意图门禁，概念问答不得误入确认卡流程。
 - H1 的 `direct` 只承认当前收包循环已有的 `/stop` 零模型动作；任何新增或恢复的斜杠命令必须先完成 PRD、API.md、前端交互和安全审查，不能借 Router 重建绕过骨架化范围。
 - 主开关关闭时完全保留 chat-only 路径；`workflow`、`agent` 在本阶段先安全降级到 `chat_stream`，并产生审计痕迹。
 - 先更新 API.md，在既有 `response.completed` 固定增加 `engine`、`router_confidence` 与脱敏的 `router_reason`，不在 H1 复用尚未恢复的 `thought` 事件；同步前端类型、旧客户端兼容策略和 `GET /api/agents` 的只读目录契约。
@@ -129,7 +129,7 @@ H0 基础设施 ──► H1 Router ──► H2 Workflow DAG ──► H3 Agent
 
 - 按唯一顺序实现 8 节点硬编码 DAG：W0 `select_skill` → W1 `prepare_slots`（节点内最多一次、只读视野的局部 ReAct）→ W2 `load_skill` → W3 `validate_gates` → W4 `build_task_spec` → W5 `await_confirm` → W6 `enqueue` → W7 `summarize`。节点失败只能就地收尾，不能改写下一跳或形成重试回环。
 - 同步新增 WorkflowState 的 `skill_id`、`skill_candidates`、`slots`、`slots_missing`、`gate_report`、`task_spec`、`confirm_id`、`enqueued_task_id`；字段全部 JSON 可序列化。`confirm_id` 与 `clarify_id` 必须互斥，`engine=workflow` 时 `replan_count` 恒为 0。
-- W0 根据候选做确定性二段路由：用户请求存在业务歧义（零命中或并列）时就地 `clarify`，非法或已禁用的明确 `skill_id` 才返回 `VALIDATION`；不得猜测技能。
+- W0 根据候选做确定性二段路由：已启用的 L1 `skill_id` 直接采用；其余零命中、并列、非法或已禁用技能均以 `VALIDATION` 错误收尾；不得猜测技能。明确「先评后压」归一为 benchmark/rag 质量任务的 `with_stress=true`，直接 `stress` 仍由 W3 拒绝。
 - 只允许 W6 通过内部 MCP 长任务桥入队；保持「先评后压」、会话串行和 `skill-rag` fail-closed。
 - API.md 先恢复确认卡事件、字段及前端确认卡类型；H2 维持既有 WS 直连确认卡，不提前接入图内 HITL。确认动作必须在既有 `pending_confirm` 行锁事务内完成，且未批准、拒绝、重复确认都不会绕过 W6 入队门禁。
 
@@ -137,7 +137,7 @@ H0 基础设施 ──► H1 Router ──► H2 Workflow DAG ──► H3 Agent
 
 - 固定槽位请求五次运行的节点路径一致率为 100%，精确覆盖 8 个节点的顺序，无跳步、回溯或合并 `select_skill/load_skill`。
 - `benchmark`、`testcase`、`stress` 的正确技能选择；`rag` 返回 `VALIDATION`，绝不写 succeeded。
-- 并列/零命中产生澄清；门禁失败在当前节点收尾；重复提交命中 `uq_tasks_active_session`。
+- 并列/零命中产生 `VALIDATION` 错误；门禁失败在当前节点收尾；重复提交命中 `uq_tasks_active_session`。
 - 确认卡字段和 API.md §5 默认值精确一致；评测成功前不派生压测；`assert_serializable()` 覆盖 WorkflowState 和所有新增 RootState 字段。
 
 **审查出口**：Workflow 不形成多圈 Agent；W1 只读工具视野不越权，任何入队均可追溯至 W6。
@@ -292,11 +292,11 @@ npm run build
 
 | 任务 | 状态规则 | 交接产物 |
 | :--- | :--- | :--- |
-| H0 | 可立即开始 | 缓存/Registry/指令分层 PR、测试输出、基线记录 |
-| H1 | 等 H0 合入 | Router 契约、确定性测试和 O2 口径 |
-| H2 | ✅ 批次 1 已合入（PR #202，8db5f7a；CD ✓）；批次 2（确认卡链路）已完成于 `feat/agent-hybrid-h2-confirm-card`，待 PR | Workflow DAG 与确认卡契约、入队门禁测试 |
-| H3 | 等 H2 批次 2 合入 | TAOR、ToolCard 契约、工具视野与泄露测试 |
-| H4 | 等 H3 合入 | 五档 Reflection、上限与失败阶梯测试 |
+| H0 | ✅ 已交付（PR #198）；审查修复（PR #209）已使 L2 受控常量进入 WS 运行时，并将 L3 Overlay 移出缓存静态段 | 缓存/Registry/指令分层 PR、测试输出、基线记录 |
+| H1 | ✅ 已交付（PR #200）；审查修复（PR #209）及本次修复已排除概念问答、归一先评后压，并把已启用 L1 `skill_id` 交给 W0 | Router 契约、确定性测试和 O2 口径 |
+| H2 | ✅ 批次 1（PR #202）与批次 2 确认卡链路（PR #204）均已合入、CD ✓；本次修复已恢复失败确认卡、合并受控槽位，并让 W0/W2/W3/W6 错误统一写入 `response.completed(error)` | Workflow DAG 与确认卡契约、入队门禁测试 |
+| H3 | ✅ 已合入（PR #203，CD ✓）；H0–H3 联调套件已合入（PR #206） | TAOR、ToolCard 契约、工具视野与泄露测试 |
+| H4 | ✅ 已合入（PR #210，CD ✓） | 五档 Reflection、上限与失败阶梯测试 |
 | H5 | 等 H4 合入 | 持久化/HITL、重启恢复演练证据 |
 | H6 | 等 H5 合入 | 灰度报告、并行/Compact 观测和回滚演练 |
 
@@ -325,3 +325,116 @@ npm run build
 5. **配置与清理**：`config.py`/`.env.example` 新增 6 项安全默认配置（全部默认关闭）；死 `__pycache__` 产物核查不存在（C-8 关闭）；
 6. **测试资产**：新增 `tests/test_hybrid_h0_foundation.py`（16 例）与 `tests/hybrid/fixtures/scenarios.py`（S1–S4 语料，H1 起复用）；
 7. **验收结果**：API Ruff 通过、pytest **654 passed / 20 skipped**（含 16 例新测试，零回归）；Worker 48 passed；审查出口确认：无新增第三方依赖、无外部 MCP、无第二模型入口、`hybrid_engine_enabled=False` 时纯对话行为不变。
+
+**V1.3 实施记录（H2 批次 2 确认卡链路，PR #204，974ee17，2026-09-03）**：W5 发卡
++ `confirm_ack` 行锁事务 + `workflow_confirm` 重放，入队唯一经 W6；API.md 升至
+V1.68（与 H3 的 V1.67 顺序修正）。
+
+**V1.4 H0/H1 审查修复（`fix/agent-h0-h1-review`，2026-09-03）**：
+
+1. **L2 与缓存边界接线**：新增受控 `DEFAULT_PROJECT_INSTRUCTIONS` 并由 WS 在每轮构造 `SystemVars`；缓存开启时使用 `SystemPromptParts` 将 L1/L2 放入静态 S1、技能目录放入 S2、会话负责人与协议档 Overlay 放入动态 S5，杜绝 L3 Overlay 被错误缓存或技能目录重复注入。缓存关闭仍经旧单字符串渲染路径，保留回滚兼容；上游返回的缓存读/创建 token 将归一并随既有 `turn_stats` 持久化。
+2. **Registry 单一实例**：启动校验、Agent TAOR 子图和 `GET /api/agents` 改为查询同一个进程级静态 `AgentRegistry`，避免多处独立构造导致运行时与校验对象漂移。
+3. **Router 副作用门禁**：L1 的 `workflow` 与 `direct` 结论分别受“明确执行动作”和“斜杠输入”约束；概念问答回落 L0，不产生确认卡。同步清除已接通 TAOR 后仍称“agent 降级 chat”的错误审计文案。
+4. **Workflow 失败终态**：W0/W2/W3/W6 的 `error` 统一经 `workflow_failure` 写入一次 `response.completed(error)`；W5 已自行收尾的确认卡/缺槽路径直接结束，保证每轮恰有一个 completed 事件。
+5. **验收结果**：`ruff check . ../shared` 通过；API 全量 `pytest` **729 passed / 19 skipped**；H0/H1/H2 定向回归 56 项通过。无数据库模型、迁移、REST/WS 字段或默认开关变更。
+
+## 修改代码文件与作用清单
+
+- `backend/api/app/adapters.py`、`agent/routing.py`：归一并持久化上游缓存读/创建 token，供既有 `turn_stats` 观测。
+- `backend/api/app/harness/prompts/system.py`、`__init__.py`：定义 L2 服务端常量和 S1/S2/S5 受控提示词分段源。
+- `backend/api/app/harness/context/assembly.py`、`memory/state.py`：支持动态 S5 Overlay 与无密钥分段来源的可序列化传递。
+- `backend/api/app/routers/ws.py`、`routers/admin.py`、`agent/routing.py`：在真实 WS 回合接入 L2/L3，按缓存开关重建正确分段。
+- `backend/api/app/harness/orchestration/agents.py`、`main.py`、`routers/agents.py`、`agent/graph.py`：统一使用进程级 Agent Registry。
+- `backend/api/app/harness/orchestration/router.py`、`agent/router_node.py`：复用确定性执行意图门禁，并修正 Agent 实际执行审计。
+- `backend/api/app/agent/workflow_nodes.py`、`agent/graph.py`：为 Workflow 错误路径补齐唯一 `response.completed(error)` 收尾。
+- `backend/api/tests/test_adapters.py`、`test_hybrid_h0_foundation.py`、`test_hybrid_h1_router.py`、`test_hybrid_h2_workflow.py`：覆盖缓存计数、缓存段位、Registry 共享、L1 回落、四路审计和失败终态回归。
+- `AGENTS.md`、`docs/AI测试与评估平台-混合驱动引擎开发计划.md`：同步 H0–H3 真实实施状态与本次修复证据。
+
+**V1.5 实施记录（H4 Reflection 五档判决，`feat/agent-hybrid-h4-reflexion`，PR #210，2026-09-03）**：
+按 H4 阶段目标恢复五档判决与失败阶梯，**未新增 WS 事件名、未改 API 契约、未改前端**——
+
+1. **五档判决库**：`harness/feedback/review.py` 的 `ReflectVerdict` 由三档扩为
+   `pass/clarify/reject/repair/retry`，新增回合级常量 `MAX_REPAIRS=1` /
+   `MAX_REPLANS=2`（唯一来源），判决分三级：L1 计划硬矛盾 → L2 失败阶梯 →
+   L3 受控短核对（**只降级不放行**，保留 FB-3 硬约束）；
+2. **协议同步**：`prompts/protocols.py` 的 `REFLECT_SCHEMA.verdict` 枚举同步为五档
+   并补可选 `repair_hint`，`parse_reflect` 文档与过滤口径对齐；
+3. **reflect 节点**：`agent/taor_nodes.py` 新增 `make_reflect_node`——L1 `turn_failed`
+   一律 `reject`（不调模型、只补收尾帧），L2 阶梯按**回合级** `repair_count` /
+   `replan_count` 配额判定，L3 仅在无失败时调用（计入预算，耗尽即跳过）；
+   `repair` 把修复建议包成 Observation 回灌下一轮 Executor，`retry` 置
+   `force_replan` + `replan_reason` 回 `plan`；
+4. **收尾权移交**：`orchestrator` 的 done 路径不再自行发 `response.completed`，
+   只写 `final_text` 交 `reflect` 判决后统一收尾（否则 `reject` 会被先发出的
+   `stop` 覆盖，判决形同虚设）；`graph.py` 新增 `orchestrator → reflect` 与
+   `reflect → END/orchestrator/plan` 两条条件边；
+5. **plan 节点消费重规划**：`replan_reason` 只进系统指令与新 Plan 的 `notes`，
+   **绝不并入** `build_plan` 文本入参（防失败文本参与 L0 技能关键词匹配）；
+   游标与连续失败计数归零，**预算沿用剩余值**（换计划不放大回合预算）；
+6. **状态层**：`memory/state.py` 新增 `final_text` 与 `repair_count`，
+   `ReflectVerdict` 五档注释与实现三方（state / review / REFLECT_SCHEMA）对齐；
+7. **递归上限**：混合引擎开启时 `recursion_limit` 由 32 提到 64（推导：
+   2（plan+discover）+ 2×`MAX_REPLANS` + 2×`tool_turns` 上限 ≈ 46，留余量）；
+   真正的硬上限仍是回合预算与两档配额；
+8. **测试资产**：新增 `tests/test_hybrid_h4_reflection.py`（29 例），覆盖五档协议
+   枚举、L1/L2/L3 判决、每个硬上限、`repair → retry → reject/pass` 图级全阶梯、
+   `replan_reason` 不参与关键词匹配、无限修复反例；同步修正
+   `tests/test_hybrid_h3_taor.py` 中因收尾权移交而变化的 6 处断言；
+9. **验收结果**：API Ruff 通过、pytest **767 passed / 19 skipped**（+29 新例，零回归；
+   H0–H3 联调套件 2 项按 H4 收尾权移交与失败阶梯同步更新）；
+   Worker 48 passed；前端 `typecheck` 与生产构建通过。
+
+### H4 与架构/计划的偏差（需评审确认）
+
+1. **replan 折叠进 plan 节点**：架构 mermaid 画了独立 `replan` 节点，实现改为
+   `reflect` 置 `force_replan` / `replan_reason` 后由 `plan` 节点消费（`state.py`
+   的 `force_replan` 字段注释即为此语义），少一次无行为的跳转；
+2. **clarify 判为收尾叙述而非事件**：`verdict=clarify` 只发 `assistant_message` +
+   `response.completed(stop)`，**不恢复** `clarify` 持久事件与 `clarify_reply`
+   上行——真正的 `interrupt + resume` 归 H5（与 H2「确认卡先 WS 直连、H5 再评估
+   图内 interrupt」同节奏）。API.md V1.67 中「澄清卡待 H4 评审后恢复」据此调整为 H5；
+3. **重规划沿用剩余预算**：架构未规定重规划是否重置预算，实现选择**不重置**
+   （换计划不放大回合预算，服务「不允许空转至预算耗尽」）；
+4. **配额为回合级而非每步级**：`MAX_REPAIRS=1` 实现为本回合最多修复一次
+   （与计划表「修复最多一次、重规划最多两次并**收敛**」一致），`step_fail_count`
+   仅作「当前是否存在未解决失败」的判据。
+
+### H4 联调实测发现并修复的 H3 遗留缺陷（P1）
+
+1. **`pending_tool.native` 恒为 True**：`graph.py` 建工具节点时未传
+   `native_tool_results`，而 `NativeToolResultStore.get()` 在骨架化后**零消费方**
+   ⇒ 每条工具调用都撞 fail-closed 的「工具临时上下文不可用」，`observation=None`，
+   模型永远看不到文件内容。TAOR 分支是靠 `_observation_lines` 把观察注入用户
+   消息的**提示词驱动**循环，已改为 `native: False`；
+2. **观察以 frozen dataclass 进 State**：下游 `_observation_lines` /
+   `_repeat_count` 全部用 `isinstance(x, Mapping)` 判定，dataclass 会被静默跳过
+   ⇒ 模型同样看不到工具结果，且不可 `json.dumps`（H5 接 PgCheckpointer 必然失败）。
+   已在 `make_tools_node` 包装层归一为纯 dict。
+
+**H4 改动文件清单**：
+
+- `backend/api/app/harness/feedback/review.py`：五档判决与回合级常量（唯一来源）。
+- `backend/api/app/harness/prompts/protocols.py`：`REFLECT_SCHEMA` 五档枚举 + `repair_hint`。
+- `backend/api/app/agent/taor_nodes.py`：新增 `make_reflect_node`；`orchestrator` 收尾权移交；
+  `tools` 维护 `step_fail_count` 并归一观察为纯 dict；`plan` 消费 `force_replan`。
+- `backend/api/app/agent/graph.py`：`orchestrator → reflect`、`reflect → END/orchestrator/plan`
+  条件边；混合引擎开启时 `recursion_limit` 32 → 64。
+- `backend/api/app/harness/memory/state.py`：新增 `final_text` / `repair_count`，五档注释对齐。
+- `backend/api/tests/test_hybrid_h4_reflection.py`（新增 29 例）、`tests/test_hybrid_h3_taor.py`
+  （同步收尾权移交后的 6 处断言）。
+- `AGENTS.md`、`docs/AI测试与评估平台-混合驱动引擎开发计划.md`：同步 H4 实施状态与偏差。
+**V1.5 H1/H2 审查修复（`fix/agent-h1-h2-routing`，2026-09-03）**：
+
+1. **确认回放可恢复**：确认前先占用会话回合租约，避免普通回合竞争后清卡；仅 W6 返回真实 `task_id` 才发送 `confirm_ack.ok=true`。图内门禁、W6 或调度失败时恢复原 `pending_confirm` 并发送既有 `error`，不伪造成功或取消回执。
+2. **产品路径归一**：将「先评后压 / 成功后压测」从 Agent 多技能计划改为 benchmark/rag Workflow 的 `with_stress=true`；Worker 仍在质量任务成功后派生压测，直接 `kind=stress` 继续 fail-closed。
+3. **H1→H2 可追溯交接**：L1 `router.v1` 的已启用 `skill_id` 写入 GraphState，W0 优先采用；概念问答即使含“生成/创建”等词也不会进入确认卡路径。
+4. **受控槽位装配**：W1 仅提取 `profile-*`、`ds-*` 等明确平台短 ID，W4 合并白名单槽位，避免名称猜测和未知字段注入。
+5. **验收结果**：`ruff check` 通过；H1/H2 定向 `pytest` **67 passed**。无数据库模型、迁移、REST/WS 字段或默认开关变更。
+
+| 实际修改文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/harness/orchestration/router.py` / `agent/router_node.py` | 收紧问答与执行判定，归一先评后压，传递已启用的 L1 技能。 |
+| `backend/api/app/agent/workflow_nodes.py` | W0 直采 L1 技能，W1 安全提取明确 ID，W4 合并槽位并写入 `with_stress`。 |
+| `backend/api/app/routers/ws.py` | 回放租约、真实任务 ID 成功回执和失败保卡恢复。 |
+| `backend/api/tests/test_hybrid_h1_router.py` / `test_hybrid_h2_workflow.py` / `test_hybrid_h2_confirm_card.py` / `test_hybrid_e2e_h0_h3.py` | 新增与更新 H1/H2 审查问题的回归覆盖。 |
+| `docs/AI测试与评估平台-API.md` / `docs/AI测试与评估平台-混合驱动引擎架构.md` / 本文档 | 同步 V1.69 API 契约、ADR-4 与阶段状态。 |

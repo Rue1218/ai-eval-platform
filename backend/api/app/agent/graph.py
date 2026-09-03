@@ -4,9 +4,12 @@
 
 - **关闭（默认）**：``START → chat_stream → END``，与骨架化纯对话完全一致
   （回归保证：事件序列与 payload 不因本文件引入而漂移）；
-- **开启（H1）**：``START → router →（条件边）→ direct | chat_stream → END``。
-  ``workflow`` / ``agent`` 引擎本阶段未实现，条件边统一降级到 ``chat_stream``
-  执行，降级事实经 ``router_reason`` 标注（见 router_node.py）。
+- **开启（H1–H4）**：``START → router → direct | chat_stream | workflow | agent``；
+  workflow 进入 W0–W7 确定性链，agent 进入 TAOR 子图，并在 H4 接入 ``reflect``
+  五档判决回边：``plan → discover → orchestrator ⇄ tools``，``orchestrator``
+  停止或守卫截断后一律进 ``reflect``，由它裁决 ``pass`` / ``clarify`` / ``reject``
+  收尾，或 ``repair`` 回 ``orchestrator``、``retry`` 回 ``plan``（两档均为回合级
+  硬上限）。
 
 节点只返回纯数据（pending_events / response 投影），WebSocket、数据库与
 平台任务队列由路由层（ws.py）负责，节点内不持有外部资源（§2.5 事件桥接契约）。
@@ -30,6 +33,7 @@ from .taor_nodes import (
     make_discover_node,
     make_orchestrator_node,
     make_plan_node,
+    make_reflect_node,
     make_tools_node,
 )
 from .workflow_nodes import (
@@ -41,7 +45,11 @@ from .workflow_nodes import (
     select_skill_node,
     summarize_node,
     validate_gates_node,
+    workflow_failure_node,
 )
+
+# 混合引擎开启时的递归上限（推导见 _prepare_run_config；关闭时沿用骨架版 32）
+_HYBRID_RECURSION_LIMIT = 64
 
 
 def _route_by_engine(state: GraphState) -> str:
@@ -61,11 +69,31 @@ def _route_by_engine(state: GraphState) -> str:
 
 
 def _after_orchestrator(state: GraphState) -> str:
-    """TAOR：Act 未决（有 pending_tool）→ tools；turn_failed / 收尾 → END。"""
-    if state.get("turn_failed") or state.get("workflow_failed"):
+    """TAOR：Act 未决（有 pending_tool）→ tools；停止或守卫截断 → reflect 判决。
+
+    H4：模型自主停止与守卫截断都不再直接 END——一律先进 reflect，由它决定
+    放行（pass）/ 提问（clarify）/ 收尾（reject）/ 修复（repair）/ 重规划（retry）。
+    「模型觉得差不多了」不是停止条件（ADR-2）。
+    """
+    if state.get("workflow_failed"):
         return "END"
     if state.get("pending_tool"):
         return "tools"
+    return "reflect"
+
+
+def _after_reflect(state: GraphState) -> str:
+    """H4：reflect 五档判决的回边与收尾。
+
+    ``repair`` 回 orchestrator（失败阶梯首档，最多 MAX_REPAIRS 次）；
+    ``retry`` 回 plan（有界重规划，最多 MAX_REPLANS 次）；
+    ``pass`` / ``clarify`` / ``reject`` 一律 END（三档都是终态，不再回圈）。
+    """
+    verdict = state.get("verdict")
+    if verdict == "repair":
+        return "orchestrator"
+    if verdict == "retry":
+        return "plan"
     return "END"
 
 
@@ -76,14 +104,24 @@ def _after_tools(state: GraphState) -> str:
     return "orchestrator"
 
 
-def _after_validate_gates(state: GraphState) -> str:
-    """W3 失败（门禁不通过）就地收尾；通过推进 W4。"""
-    return "END" if state.get("workflow_failed") else "w4_build_task_spec"
+def _has_completed_event(state: GraphState) -> bool:
+    """判断节点是否已经自行写入回合结束事件。"""
+    return any(
+        isinstance(event, dict) and event.get("kind") == "response.completed"
+        for event in state.get("pending_events") or ()
+    )
 
 
-def _after_await_confirm(state: GraphState) -> str:
-    """W5 未确认/必填缺失就地收尾；确认通过推进 W6。"""
-    return "END" if state.get("workflow_failed") else "w6_enqueue"
+def _after_workflow_step(state: GraphState, success_node: str) -> str:
+    """失败链路统一补 completed；已自行收尾的 W5 直接结束。
+
+    ``workflow_failed`` 是所有 Workflow 节点的共同失败标记。只有 W5 的
+    确认卡/补槽分支会自行发送 ``response.completed``；其余失败经
+    ``workflow_failure`` 统一收尾，避免 WS 前端一直等待本轮结束。
+    """
+    if not state.get("workflow_failed"):
+        return success_node
+    return "END" if _has_completed_event(state) else "workflow_failure"
 
 
 class LangGraphAgent:
@@ -156,13 +194,17 @@ class LangGraphAgent:
         return graph.compile()
 
     def _add_agent_subgraph(self, graph: StateGraph) -> None:
-        """H3 TAOR 子图：plan → discover → orchestrator ⇄ tools（单图内循环）。"""
+        """H3 TAOR 子图 + H4 reflect 判决回边（单图内循环，全部硬上限有界）。
+
+        拓扑：``plan → discover → orchestrator ⇄ tools``；``orchestrator`` 停止后
+        进 ``reflect``，后者可回 ``orchestrator``（repair）或 ``plan``（retry）。
+        """
         from app.harness.execution.registry import build_default_registry
         from app.harness.execution.toolnode import build_tool_node
-        from app.harness.orchestration.agents import build_default_agent_registry
+        from app.harness.orchestration.agents import get_default_agent_registry
 
         tool_registry = self._registry or build_default_registry()
-        agent_registry = self._agent_registry or build_default_agent_registry()
+        agent_registry = self._agent_registry or get_default_agent_registry()
         tools_node = build_tool_node(
             tool_registry,  # type: ignore[arg-type]
             db_factory=self._db_factory,  # type: ignore[arg-type]
@@ -177,12 +219,18 @@ class LangGraphAgent:
             make_orchestrator_node(self._gateway, agent_registry, tool_registry),
         )
         graph.add_node("tools", make_tools_node(tools_node))
+        graph.add_node("reflect", make_reflect_node(self._gateway))
         graph.add_edge("plan", "discover")
         graph.add_edge("discover", "orchestrator")
         graph.add_conditional_edges(
             "orchestrator",
             _after_orchestrator,
-            {"tools": "tools", "END": END},
+            {"tools": "tools", "reflect": "reflect"},
+        )
+        graph.add_conditional_edges(
+            "reflect",
+            _after_reflect,
+            {"orchestrator": "orchestrator", "plan": "plan", "END": END},
         )
         graph.add_conditional_edges(
             "tools",
@@ -203,25 +251,47 @@ class LangGraphAgent:
             "w7_summarize": summarize_node,
         }
         graph.add_node("workflow", self._make_workflow_entry())
+        graph.add_node("workflow_failure", workflow_failure_node)
         for node_name, node_fn in workflow_nodes.items():
             graph.add_node(node_name, node_fn)
         graph.add_edge("workflow", "w0_select_skill")
-        graph.add_edge("w0_select_skill", "w1_prepare_slots")
-        graph.add_edge("w1_prepare_slots", "w2_load_skill")
-        graph.add_edge("w2_load_skill", "w3_validate_gates")
+        graph.add_conditional_edges(
+            "w0_select_skill",
+            lambda state: _after_workflow_step(state, "w1_prepare_slots"),
+            {"w1_prepare_slots": "w1_prepare_slots", "workflow_failure": "workflow_failure", "END": END},
+        )
+        graph.add_conditional_edges(
+            "w1_prepare_slots",
+            lambda state: _after_workflow_step(state, "w2_load_skill"),
+            {"w2_load_skill": "w2_load_skill", "workflow_failure": "workflow_failure", "END": END},
+        )
+        graph.add_conditional_edges(
+            "w2_load_skill",
+            lambda state: _after_workflow_step(state, "w3_validate_gates"),
+            {"w3_validate_gates": "w3_validate_gates", "workflow_failure": "workflow_failure", "END": END},
+        )
         graph.add_conditional_edges(
             "w3_validate_gates",
-            _after_validate_gates,
-            {"w4_build_task_spec": "w4_build_task_spec", "END": END},
+            lambda state: _after_workflow_step(state, "w4_build_task_spec"),
+            {"w4_build_task_spec": "w4_build_task_spec", "workflow_failure": "workflow_failure", "END": END},
         )
-        graph.add_edge("w4_build_task_spec", "w5_await_confirm")
+        graph.add_conditional_edges(
+            "w4_build_task_spec",
+            lambda state: _after_workflow_step(state, "w5_await_confirm"),
+            {"w5_await_confirm": "w5_await_confirm", "workflow_failure": "workflow_failure", "END": END},
+        )
         graph.add_conditional_edges(
             "w5_await_confirm",
-            _after_await_confirm,
-            {"w6_enqueue": "w6_enqueue", "END": END},
+            lambda state: _after_workflow_step(state, "w6_enqueue"),
+            {"w6_enqueue": "w6_enqueue", "workflow_failure": "workflow_failure", "END": END},
         )
-        graph.add_edge("w6_enqueue", "w7_summarize")
+        graph.add_conditional_edges(
+            "w6_enqueue",
+            lambda state: _after_workflow_step(state, "w7_summarize"),
+            {"w7_summarize": "w7_summarize", "workflow_failure": "workflow_failure", "END": END},
+        )
         graph.add_edge("w7_summarize", END)
+        graph.add_edge("workflow_failure", END)
 
     def _make_workflow_entry(self):
         """Workflow 入口占位节点：透传 Router 分流结论（engine 本轮不可变）。"""
@@ -327,7 +397,13 @@ class LangGraphAgent:
             thread_id = f"agent:{uuid4().hex}"
             configurable["thread_id"] = thread_id
         run_config["configurable"] = configurable
-        run_config.setdefault("recursion_limit", 32)
+        # H4：agent 分支新增 repair / retry 两条回边，超级步上界由「2（plan+discover）
+        # + 2×MAX_REPLANS（重规划回边）+ 2×tool_turns 上限（20）」推导 ≈ 46，
+        # 取 64 预留余量；真正的硬上限仍是回合预算与 MAX_REPAIRS / MAX_REPLANS。
+        run_config.setdefault(
+            "recursion_limit",
+            _HYBRID_RECURSION_LIMIT if settings.hybrid_engine_enabled else 32,
+        )
         return run_config, thread_id
 
     def _discard_thread(self, thread_id: str) -> None:

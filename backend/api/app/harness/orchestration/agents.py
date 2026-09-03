@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Literal
 
 from app.errors import AppError, ErrorCode
@@ -174,6 +175,17 @@ def build_default_agent_registry() -> AgentRegistry:
         )
     )
     return registry
+
+
+@lru_cache(maxsize=1)
+def get_default_agent_registry() -> AgentRegistry:
+    """返回进程级静态 Worker 注册表唯一实例。
+
+    H0 要求启动期校验、Agent 子图与只读目录共享同一份静态声明。注册表本身
+    只在初始化时写入，后续仅查询，缓存该实例既避免三处重复构造，也让启动期
+    校验的对象就是运行时实际使用的对象。
+    """
+    return build_default_agent_registry()
 
 
 def validate_agent_registry_integrity(

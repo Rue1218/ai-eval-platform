@@ -24,12 +24,14 @@ from .safety import (
     run_injection_tests,
 )
 from .system import (
+    DEFAULT_PROJECT_INSTRUCTIONS,
     SYSTEM_PROMPT_TEMPLATE,
     SystemSection,
     SystemVars,
     assert_no_secret_leak,
     assert_no_takeover,
     build_system_prompt,
+    build_system_prompt_parts,
 )
 
 # 兼容导出：协议名 → 版本映射（供 M4 引用）
@@ -43,6 +45,7 @@ PROTOCOL: dict[str, str] = {
 __all__ = [
     "INJECTION_PATTERNS",
     "INJECTION_TEST_CASES",
+    "DEFAULT_PROJECT_INSTRUCTIONS",
     "PLAN_SCHEMA",
     "PLAN_VERSION",
     "PROTOCOL",
@@ -60,6 +63,7 @@ __all__ = [
     "assert_no_secret_leak",
     "assert_no_takeover",
     "assert_user_text_safe",
+    "build_system_prompt_parts",
     "build_system_prompt",
     "check_version",
     "parse_plan_protocol",

@@ -32,7 +32,16 @@ from app.errors import AppError
 from app.harness.contracts import make_event
 from app.harness.feedback.rules import CONFIRM_KINDS
 from app.harness.memory import GraphState, SerializableRequest
-from app.harness.skills import SKILL_CATALOG, load_skill_workflow, skill_to_kind
+from app.harness.orchestration.router import (
+    has_quality_then_stress_intent,
+    has_workflow_execution_intent,
+)
+from app.harness.skills import (
+    SKILL_CATALOG,
+    assert_skill_enabled,
+    load_skill_workflow,
+    skill_to_kind,
+)
 
 # ── 技能候选关键词（目录单一事实源 + 别名；命中即技能意图候选）──
 _SKILL_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -47,6 +56,14 @@ _SKILL_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
 _RAG_EVAL_COMPOUND = re.compile(
     r"(?:rag|知识库)\s*(?:质量)?\s*评测|评测\s*(?:质量)?\s*(?:rag|知识库)"
 )
+
+# H2 只安全预填用户已明确给出的平台引用，不猜测中文名称，也不访问数据库做
+# 模糊匹配；名称解析与只读工具协作属于后续 H3 能力。正则保留完整短 ID，供
+# ConfirmCard 最终二次校验，避免把任意自然语言写成资产 ID。
+_PROFILE_REF_PATTERN = re.compile(r"\bprofile[-_][A-Za-z0-9][A-Za-z0-9_-]*\b", re.IGNORECASE)
+_DATASET_REF_PATTERN = re.compile(r"\b(?:dataset|ds)[-_][A-Za-z0-9][A-Za-z0-9_-]*\b", re.IGNORECASE)
+_KB_REF_PATTERN = re.compile(r"\bkb[-_][A-Za-z0-9][A-Za-z0-9_-]*\b", re.IGNORECASE)
+_GOLD_QA_REF_PATTERN = re.compile(r"\bgold(?:[-_]qa)?[-_][A-Za-z0-9][A-Za-z0-9_-]*\b", re.IGNORECASE)
 
 # 技能 → 必填资产槽（确认卡兜底；profile 三技能都要）
 _REQUIRED_ASSETS: dict[str, tuple[str, ...]] = {
@@ -90,6 +107,9 @@ def _skill_candidates(text: str) -> tuple[str, ...]:
     """文本中的技能候选（目录序去重）；rag 复合词先折叠。"""
     if _RAG_EVAL_COMPOUND.search(text):
         return ("skill-rag",)
+    if has_quality_then_stress_intent(text):
+        # 先评后压归一为质量任务，禁止与 skill-stress 并列后误判业务歧义。
+        return ("skill-benchmark",)
     hits: list[str] = []
     for skill_id, keywords in _SKILL_KEYWORDS:
         if skill_id == "skill-rag":
@@ -97,6 +117,87 @@ def _skill_candidates(text: str) -> tuple[str, ...]:
         if any(keyword in text for keyword in keywords) and skill_id not in hits:
             hits.append(skill_id)
     return tuple(hits)
+
+
+def _unique_references(pattern: re.Pattern[str], text: str) -> list[str]:
+    """按文本顺序去重提取显式平台短 ID，最多保留确认卡允许的五个协议档。"""
+    refs: list[str] = []
+    for match in pattern.finditer(text):
+        reference = match.group(0)
+        if reference not in refs:
+            refs.append(reference)
+    return refs
+
+
+def _extract_explicit_slots(text: str, kind: str) -> dict[str, object]:
+    """从用户文本安全抽取 H2 可确认的显式资产引用。
+
+    只处理稳定的英文 ID 形式，不把「数据集 D」「默认协议档」等自然语言名称
+    伪装为 ID；确认卡仍是缺槽与同源校验的最后边界。
+    """
+    slots: dict[str, object] = {}
+    profile_ids = _unique_references(_PROFILE_REF_PATTERN, text)[:5]
+    if profile_ids:
+        slots["profile_ids"] = profile_ids
+    if kind == "benchmark":
+        dataset_ids = _unique_references(_DATASET_REF_PATTERN, text)
+        if dataset_ids:
+            slots["dataset_id"] = dataset_ids[0]
+    elif kind == "rag":
+        kb_ids = _unique_references(_KB_REF_PATTERN, text)
+        gold_qa_ids = _unique_references(_GOLD_QA_REF_PATTERN, text)
+        if kb_ids:
+            slots["kb_id"] = kb_ids[0]
+        if gold_qa_ids:
+            slots["gold_qa_id"] = gold_qa_ids[0]
+    return slots
+
+
+_TASK_SPEC_SLOT_KEYS = frozenset(
+    {
+        "profile_ids",
+        "dataset_id",
+        "kb_id",
+        "gold_qa_id",
+        "rag_mode",
+        "run",
+        "with_stress",
+        "stress",
+        "case_source",
+    }
+)
+
+
+def _merge_slots_into_task_spec(
+    defaults: dict[str, Any], slots: Mapping[str, object] | None
+) -> dict[str, Any]:
+    """把 W1 受控槽位合并到默认 TaskSpec，拒绝覆盖 kind 或注入未知字段。"""
+    spec = dict(defaults)
+    if not isinstance(slots, Mapping):
+        return spec
+    for key, value in slots.items():
+        if key not in _TASK_SPEC_SLOT_KEYS or value is None:
+            continue
+        if key in {"run", "stress", "case_source"}:
+            if not isinstance(value, Mapping):
+                continue
+            base = dict(spec.get(key) or {})
+            for nested_key, nested_value in value.items():
+                if nested_value is not None:
+                    base[str(nested_key)] = nested_value
+            spec[key] = base
+        elif key == "profile_ids":
+            if isinstance(value, list) and all(isinstance(item, str) and item for item in value):
+                spec[key] = list(dict.fromkeys(value))[:5]
+        elif key == "rag_mode":
+            if isinstance(value, list) and all(isinstance(item, str) and item for item in value):
+                spec[key] = list(dict.fromkeys(value))[:4]
+        elif key == "with_stress":
+            if isinstance(value, bool):
+                spec[key] = value
+        elif isinstance(value, str) and value:
+            spec[key] = value
+    return spec
 
 
 def _error_events(code: str, message: str) -> list[dict]:
@@ -137,6 +238,32 @@ def select_skill_node(state: GraphState) -> dict:
     就地收尾（歧义提示，不猜测技能、不产生任务）。
     """
     text = _latest_user_text(state["request"])
+    # H1 的 L1 仅是建议性分类；即使上游误把概念问答投到 workflow，
+    # W0 也必须再次确认用户确有执行意图，避免错误地发出确认卡。
+    if not has_workflow_execution_intent(text):
+        return {
+            **_step("W0_select_skill"),
+            "workflow_failed": True,
+            "pending_events": _error_events(
+                "VALIDATION", "请明确说明要执行的评测任务；概念问答可直接提问"
+            ),
+        }
+    suggested_skill_id = state.get("skill_id")
+    if suggested_skill_id:
+        try:
+            # ADR-4：L1 已给出且仍启用的技能时，W0 直接采用，不重新按关键字猜测。
+            assert_skill_enabled(str(suggested_skill_id))
+        except AppError as exc:
+            return {
+                **_step("W0_select_skill"),
+                "workflow_failed": True,
+                "pending_events": _error_events(exc.code.value, str(exc)),
+            }
+        return {
+            **_step("W0_select_skill"),
+            "skill_id": str(suggested_skill_id),
+            "skill_candidates": (str(suggested_skill_id),),
+        }
     candidates = _skill_candidates(text)
     if len(candidates) == 1:
         skill_id = candidates[0]
@@ -175,20 +302,21 @@ def select_skill_node(state: GraphState) -> dict:
 
 
 def prepare_slots_node(state: GraphState) -> dict:
-    """W1：初始化槽位并按技能列出缺失必填资产。
+    """W1：提取明确资产引用，并按技能列出仍缺失的必填资产。
 
-    H2 版本为确定性映射（无 LLM）：默认值已在 W4 经 ``default_task_spec``
-    预填，本节点只登记缺失的资产槽供确认卡展示；槽位抽取的 LLM 增强
-    与只读工具视野随 H3 一并落地。
+    H2 版本不调用模型：只接受 ``profile-*``、``ds-*`` 等显式平台引用，
+    其余名称留给确认卡选择，避免模糊命中错误资产。槽位抽取的 LLM 增强与
+    只读工具视野随 H3 一并落地。
     """
     skill_id = state.get("skill_id")
     if not skill_id or state.get("workflow_failed"):
         return _step("W1_prepare_slots")
     kind = skill_to_kind(skill_id)
-    missing = list(_REQUIRED_ASSETS.get(kind, ()))
+    slots = _extract_explicit_slots(_latest_user_text(state["request"]), kind)
+    missing = [slot for slot in _REQUIRED_ASSETS.get(kind, ()) if not slots.get(slot)]
     return {
         **_step("W1_prepare_slots"),
-        "slots": {},
+        "slots": slots,
         "slots_missing": tuple(missing),
     }
 
@@ -265,14 +393,20 @@ def validate_gates_node(state: GraphState, *, config: RunnableConfig | None = No
 
 
 def build_task_spec_node(state: GraphState) -> dict:
-    """W4：按 kind 产出确认卡 TaskSpec 预填骨架（``default_task_spec``）。"""
+    """W4：按 kind 合并默认值与 W1 槽位，产出确认卡 TaskSpec。"""
     skill_id = state.get("skill_id")
     if not skill_id or state.get("workflow_failed"):
         return _step("W4_build_task_spec")
     from app.agent.defaults import default_task_spec
 
     kind = skill_to_kind(skill_id)
-    return {**_step("W4_build_task_spec"), "task_spec": default_task_spec(kind)}
+    spec = _merge_slots_into_task_spec(default_task_spec(kind), state.get("slots"))
+    if kind in {"benchmark", "rag"} and has_quality_then_stress_intent(
+        _latest_user_text(state["request"])
+    ):
+        # 质量任务成功后由 Worker 派生压测，Workflow 本身绝不创建 kind=stress。
+        spec["with_stress"] = True
+    return {**_step("W4_build_task_spec"), "task_spec": spec}
 
 
 # ── W5 await_confirm：必填资产确认（图内不 interrupt，直连由 ws 层承担）──
@@ -401,4 +535,20 @@ def summarize_node(state: GraphState) -> dict:
         ],
         "response": {"text": text, "usage": {}, "latency_ms": 0},
         "confirm_id": None,  # 引擎 workflow 完成时确认卡已消费（与 clarify 互斥）
+    }
+
+
+def workflow_failure_node(state: GraphState) -> dict:
+    """统一收尾未自行结束的 Workflow 失败路径。
+
+    W0、W2、W3、W6 会先产出 ``error`` 供前端展示，却不能各自遗漏
+    ``response.completed``。W5 的确认卡/缺槽路径已自行收尾，图条件边会避开
+    本节点，从而保证一个回合恰好一个 completed 事件。
+    """
+    return {
+        **_step("workflow_failure"),
+        "pending_events": [
+            make_event("response.completed", _completed_payload(state, "error"))
+        ],
+        "response": {"text": "", "usage": {}, "latency_ms": 0},
     }
