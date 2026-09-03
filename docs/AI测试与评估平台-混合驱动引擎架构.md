@@ -3,17 +3,19 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | 混合驱动引擎（Hybrid Agent Engine）架构需求 |
-| 版本 | V1.5 |
+| 版本 | V1.6 |
 | 审查日期 | 2026-09-03 |
 | 文档性质 | 架构需求 + ADR + 分阶段落地契约（**本版不改对外契约，契约变更逐阶段先改 API.md**） |
 | 适用范围 | `/agent` 对话智能体全链路：LangGraph 双引擎图、Harness 分层基础设施、WebSocket 事件桥、短工具与长任务分离 |
-| 前置输入 | [`docs/AI测试与评估平台-混合驱动引擎环境审计.md`](./AI测试与评估平台-混合驱动引擎环境审计.md) V1.1（只读审计，10 项阻塞矛盾 C-1…C-10——C-10 反馈层收窄发现为 V1.1 新增） |
+| 前置输入 | [`docs/AI测试与评估平台-混合驱动引擎环境审计.md`](./AI测试与评估平台-混合驱动引擎环境审计.md) V1.3（历史只读审计基线 + H4/H5 状态校正，11 项阻塞矛盾 C-1…C-11） |
 | 上游权威 | `docs/AI测试与评估平台-PRD.md`（产品范围）＞ `docs/AI测试与评估平台-API.md`（REST/WS 字段唯一真理）＞ `docs/AI测试与评估平台-Agent开发文档.md`（当前链路）＞ 本文 |
 | 事实来源 | `backend/api/app/{agent,harness,llm}/`、`app/routers/{ws,tasks,mcp}.py`、`backend/worker/app/`、`frontend/src/{views/Agent.vue,api/types.ts}` |
 | 参考实现 | Claude Code Harness（TAOR 循环、两层状态、原子工具、Skills 渐进披露、Prompt Cache 边界）；LangGraph Plan-and-Execute / Reflexion；Anthropic Orchestrator-Worker |
 | 前身文档 | `docs/AI测试与评估平台-Agent混合范式与架构完善.md` V0.3.3（本文是其**继任者**，在骨架化后重建并升级为双引擎） |
 
 > **裁决铁律**：本文与 PRD 冲突以 PRD 为准；与 API.md 冲突以 API.md 为准。本文**不新增** REST/WS 字段；任何新事件必须先回写 API.md 再改代码（`AGENTS.md` 红线第 1 条）。
+
+> **V1.6 当前状态校正（2026-09-03）**：H4 已由 PR #210 合入，H5 批次 1/2 已由 PR #211/#213 合入 `main`（当前合并提交 `11f5753`）。H5 的实现与联调资产已具备，但 `AGENT_CHECKPOINTER=postgres` 生产切换、Linux/Docker 重启恢复实证及 `worker.sandbox` 安全评审仍是正式发布门槛；本文后部 V1.1 需求矩阵保留为历史规划基线，不替代当前阶段状态。
 >
 > **一句话目标**：把已被骨架化的编排层，重建为「**顶层 Router 双引擎分流 + Agent 子图 TAOR 自主循环 + Workflow 子图确定性 DAG**」的单张 LangGraph 图，并补齐 Agent Registry、上下文缓存边界、HITL 审批三处真实空白。
 

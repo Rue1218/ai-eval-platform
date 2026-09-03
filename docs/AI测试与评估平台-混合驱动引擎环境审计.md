@@ -3,9 +3,9 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | 混合驱动引擎（Hybrid Agent Engine）前置环境与现状审计 |
-| 版本 | V1.2 |
+| 版本 | V1.3 |
 | 审查日期 | 2026-09-03 |
-| 文档性质 | **只读审计**（未修改任何源码、配置、迁移与依赖） |
+| 文档性质 | **只读审计基线 + 后续状态校正**（不修改源码、配置、迁移与依赖） |
 | 审计对象 | `backend/api/app/agent/`、`backend/api/app/harness/`、`backend/api/app/llm/`、`backend/api/app/routers/{ws,tasks,mcp}.py`、`backend/worker/app/`、`frontend/src/` |
 | 审计基线 | 分支 `codex/fix/task-tool-contracts`，HEAD `95a8608 fix(task): 收敛任务工具契约与取消回执`。**本文全部行号为该基线快照值**（合入 main 后个别引用已漂移 ±数十行，如 `subagent_type` L794→L833），实施/评审时一律以**符号名为准**，行号仅供快速定位 |
 | 下游文档 | [`docs/AI测试与评估平台-混合驱动引擎架构.md`](./AI测试与评估平台-混合驱动引擎架构.md)（混合驱动引擎架构需求） |
@@ -479,3 +479,15 @@ Redis 当前唯一用途：`routers/ws_tickets.py` 的 WS 短票 `SET NX`（5 �
 4. **C-9 关闭**：两文档已直接归档 `docs/` 且命名合规（`AI测试与评估平台-` 前缀），`specs/` 不存在，删除「保留 specs/ 作为交付」的过时建议；
 5. **C-1 引用修正**：`AGENTS.md` 无 §5.2.3 小节，改为 §5.2 第 3 条；
 6. **分层口径统一**：§5 结论不再以「六层（列 9 子包）」混称，统一为「分层基础设施（九子包 + `llm` 占位）」。
+
+**V1.3 状态校正（2026-09-03）**：本文前述差距矩阵与结论仍严格对应审计基线 `95a8608`，不回写为当前实现，避免把历史证据伪装成现状。基于当前 `main=11f5753` 的 H4/H5 检查，补充以下实施状态：
+
+1. H4 Reflection 五档判决、失败阶梯与回合级上限已由 PR #210 合入；H4 与 H5 的图级联调测试已具备。
+2. H5 批次 1 已由 PR #211 合入，H5 批次 2 已由 PR #213 合入：API.md V1.70、图内 `interrupt()`/`Command(resume=...)`、审批卡 `meta`、严格 PG 启动门禁与 `/api/health` 实例标识均已落地。
+3. 本轮收尾修复补齐审批卡真实 `owner_id`、缺失 `resume_nonce` 的 fail-closed 校验，以及多 API 副本 Compose 的 `ports: !reset []` 覆盖契约。
+4. H5 仍未达到正式发布条件：生产 `AGENT_CHECKPOINTER=postgres` 切换、Linux/Docker 重启恢复演练和 `worker.sandbox` 安全评审尚未形成可验收证据；网关粘性路由已补配置，但仍需 Linux/Docker 多副本实证。
+
+| 当前证据 | 位置 |
+| :--- | :--- |
+| H4/H5 定向联调与部署契约测试 | `backend/api/tests/test_hybrid_h4_reflection.py`、`test_hybrid_h5_hitl.py`、`test_hybrid_h5_batch2.py`、`test_h5_deployment_contract.py` |
+| H5 Linux/Docker 收尾演练方案 | `docs/AI测试与评估平台-H5持久化HITL收尾演练.md` |

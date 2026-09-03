@@ -380,6 +380,8 @@ async def _handle_approval_ack(
     thread_id = str(meta.get("thread_id") or "")
     if not thread_id:
         raise AppError(ErrorCode.VALIDATION, "审批卡缺少恢复线程标识")
+    if not str(meta.get("resume_nonce") or ""):
+        raise AppError(ErrorCode.VALIDATION, "审批卡缺少一次性恢复令牌")
     _clear_pending_confirm(db, session_id)
     db.commit()
     await _emit_persistent(
@@ -1081,7 +1083,7 @@ _CONFIRM_SCHEMA_VERSION = 1
 
 
 def _card_meta(
-    session_id: str,
+    owner_id: str,
     thread_id: str | None,
     confirm_type: str,
     *,
@@ -1099,7 +1101,7 @@ def _card_meta(
         "schema_version": _CONFIRM_SCHEMA_VERSION,
         "confirm_type": confirm_type,
         "thread_id": thread_id or "",
-        "owner_id": session_id,  # 占位；真实 owner 写列 pending_confirm_author_id
+        "owner_id": owner_id,
         "created_at": datetime.now(UTC).isoformat(),
     }
     if resume_nonce:
@@ -1135,11 +1137,12 @@ def _persist_pending_confirm(
         raise AppError(ErrorCode.NOT_FOUND, "会话不存在")
     if session.pending_confirm is not None:
         raise AppError(ErrorCode.CONCURRENCY, "会话存在待处理任务卡，请先确认或取消")
+    owner_id = str(author_id or user_id or session.user_id or "")
     spec["meta"] = _card_meta(
-        session_id, thread_id, "task_confirm", resume_nonce=None
+        owner_id, thread_id, "task_confirm", resume_nonce=None
     )
     session.pending_confirm = spec
-    session.pending_confirm_author_id = str(author_id) if author_id else (user_id or session.user_id)
+    session.pending_confirm_author_id = owner_id
     db.commit()
 
 
@@ -1174,7 +1177,7 @@ def _persist_pending_approval(
         key: value for key, value in approval.items() if key in allowed
     }
     card["meta"] = _card_meta(
-        session_id,
+        user_id,
         thread_id,
         "tool_approval",
         resume_nonce=uuid4().hex,

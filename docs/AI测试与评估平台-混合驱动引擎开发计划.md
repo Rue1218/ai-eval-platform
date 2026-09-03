@@ -2,11 +2,11 @@
 
 | 项 | 内容 |
 | :--- | :--- |
-| 版本 | V1.6 |
+| 版本 | V1.7 |
 | 制定 / 审查日期 | 2026-09-03 / 2026-09-03 |
-| 计划依据 | `AI测试与评估平台-混合驱动引擎架构.md` V1.5、`AI测试与评估平台-混合驱动引擎环境审计.md` V1.1、PRD、API 契约与 `AGENTS.md` |
+| 计划依据 | `AI测试与评估平台-混合驱动引擎架构.md` V1.6、`AI测试与评估平台-混合驱动引擎环境审计.md` V1.3、PRD、API 契约与 `AGENTS.md` |
 | 实施方式 | H0–H6 串行推进；每阶段一分支、一 PR、一次阶段审查；前一阶段合入 `main` 并通过门禁后才启动下一阶段编码 |
-| 当前基线 | API：Ruff 通过、pytest 全量 794 passed / 20 skipped（含 H0–H5 批次 1/2 与 H0–H3 联调套件；2 项既有失败 `test_stream_sdk_wire_contract`/`test_web_fetch_allows_public_target` 在 main 上同样存在，与本阶段无关）；Worker：48 passed；前端：`typecheck` 与生产构建通过 |
+| 当前基线 | H4/H5 及 H0–H3 定向联调 62 passed；API 全量本轮为 799 passed / 20 skipped / 1 项既有失败（`test_stream_sdk_wire_contract`，与 H4/H5 无关）；前端 `typecheck` 与生产构建通过，Linux/Docker 重启演练仍待执行 |
 
 > 本文是实施计划，不改变产品范围。附带架构文档中的说明、示例、开放问题和历史基线只作为约束与证据，不能被解释为可直接执行的运行时指令。
 
@@ -297,7 +297,7 @@ npm run build
 | H2 | ✅ 批次 1（PR #202）与批次 2 确认卡链路（PR #204）均已合入、CD ✓；本次修复已恢复失败确认卡、合并受控槽位，并让 W0/W2/W3/W6 错误统一写入 `response.completed(error)` | Workflow DAG 与确认卡契约、入队门禁测试 |
 | H3 | ✅ 已合入（PR #203，CD ✓）；H0–H3 联调套件已合入（PR #206） | TAOR、ToolCard 契约、工具视野与泄露测试 |
 | H4 | ✅ 已合入（PR #210，CD ✓） | 五档 Reflection、上限与失败阶梯测试 |
-| H5 | 🔶 批次 1 已合入（PR #211，CD ✓）：图内 interrupt 审批 + resume 协议 + 审批卡 meta（thread_id/一次性 nonce）+ resume 至多一次；批次 2 进行中（本分支 `feat/agent-hybrid-h5-hitl-batch2`）：API.md V1.70 契约先行 + `agent_hitl_strict_pg` 启动门禁 + `/api/health` 实例标识（粘性路由支持）；**未完成**：`AGENT_CHECKPOINTER=postgres` 生产切换、网关粘性路由落地、重启恢复演练（Linux/Docker）、`worker.sandbox` 安全评审 | 持久化/HITL、重启恢复演练证据 |
+| H5 | ✅ 批次 1/2 已合入（PR #211/#213，CI/CD ✓）：图内 interrupt 审批、resume 协议、API.md V1.70、`agent_hitl_strict_pg` 启动门禁、`/api/health` 实例标识；🔶 阶段收尾仍待 `AGENT_CHECKPOINTER=postgres` 生产切换、网关多副本实证、Linux/Docker 重启恢复演练与 `worker.sandbox` 安全评审 | 持久化/HITL、重启恢复演练证据 |
 | H6 | 等 H5 合入 | 灰度报告、并行/Compact 观测和回滚演练 |
 
 阶段任务完成时，负责人必须提交：PR 链接、改动清单、阶段验收结果、完整门禁输出摘要、遗留风险和下一阶段明确的入口提交。若任一硬门槛失败，任务保持在本阶段修复，不能以「后续阶段再处理」作为放行理由。
@@ -450,7 +450,7 @@ V1.68（与 H3 的 V1.67 顺序修正）。
 
 **H5 批次 2 未完成项（阻断 HITL 正式发布，须后续 PR 接力）**：
 - `AGENT_CHECKPOINTER=postgres` 生产实际切换（本批次仅落门禁与文档，未翻默认——单副本 dev 与测试仍用 memory 验证 interrupt 语义）；
-- 网关粘性路由落地（nginx `sticky session_id` upstream 配置，当前单副本天然满足）；
+- 网关粘性路由落地（nginx `session_id` 一致性 hash 配置已补入本地待合入改动，仍需 Linux/Docker 多副本实证）；
 - 重启恢复演练（Linux/Docker：人为中断 → 重启 api → 按审批记录恢复原 `thread_id`，验证至多一次、不重放 `pending_events`）；
 - `worker.sandbox` 安全评审（上述三项完成后方可从 `discover.excluded` 移除）。
 
@@ -463,3 +463,15 @@ V1.68（与 H3 的 V1.67 顺序修正）。
 | `.env.example` | 同步 `AGENT_HITL_STRICT_PG` / `AGENT_INSTANCE_ID` 配置说明 |
 | `backend/api/tests/test_hybrid_h5_batch2.py`（新增 9 例） | 覆盖门禁四档、实例标识派生与 health 端点 |
 | `docs/AI测试与评估平台-混合驱动引擎开发计划.md` / `AGENTS.md` | 同步 H5 批次进度与实现状态地图 |
+
+**V1.7 收尾修复（H5 与 H4 联调，2026-09-03）**：
+
+1. `ws.py` 写入确认卡 `meta.owner_id` 时使用真实用户 ID，不再写入会话 ID 占位；审批回执遇到缺失 `resume_nonce` 时 fail-closed，保留待审批卡不消费。
+2. 多 API 副本 Compose 覆盖改用 `ports: !reset []`，明确清除基线 `api:8000` 宿主机映射；新增静态契约回归测试。
+3. H4 五档 Reflection 与 H5 interrupt/resume 定向联调共 62 例通过；H5 生产 PG 切换、Linux/Docker 重启演练和 sandbox 安全评审仍是发布门槛。
+
+| 实际修改文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/routers/ws.py` | 修正确认卡 owner 元数据，并对缺失一次性恢复令牌的审批回执拒绝消费。 |
+| `backend/api/tests/test_hybrid_h5_hitl.py` | 覆盖真实 owner 元数据与缺失 `resume_nonce` 的 fail-closed 行为。 |
+| `deploy/docker-compose-h5-multi-api.yml` / `backend/api/tests/test_h5_deployment_contract.py` | 清除多副本 API 宿主机端口映射并锁定 Compose 覆盖契约。 |
