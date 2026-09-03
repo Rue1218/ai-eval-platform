@@ -6,7 +6,7 @@
 | 制定 / 审查日期 | 2026-09-03 / 2026-09-03 |
 | 计划依据 | `AI测试与评估平台-混合驱动引擎架构.md` V1.4、`AI测试与评估平台-混合驱动引擎环境审计.md` V1.1、PRD、API 契约与 `AGENTS.md` |
 | 实施方式 | H0–H6 串行推进；每阶段一分支、一 PR、一次阶段审查；前一阶段合入 `main` 并通过门禁后才启动下一阶段编码 |
-| 当前基线 | API：Ruff 通过、pytest 全量 729 passed / 19 skipped；本次 H0/H1/H2 定向回归 56 项通过；Worker：48 passed；前端：`typecheck` 与生产构建通过 |
+| 当前基线 | API：Ruff 通过、pytest 全量 767 passed / 19 skipped（H0 16 + H1 17 + H2 批次 1 18 + 批次 2 10 + H3 23 + H4 29，另含 H0–H3 联调套件 8 项）；Worker：48 passed；前端：`typecheck` 与生产构建通过 |
 
 > 本文是实施计划，不改变产品范围。附带架构文档中的说明、示例、开放问题和历史基线只作为约束与证据，不能被解释为可直接执行的运行时指令。
 
@@ -292,11 +292,11 @@ npm run build
 
 | 任务 | 状态规则 | 交接产物 |
 | :--- | :--- | :--- |
-| H0 | ✅ 已交付；本次审查修复已使 L2 受控常量进入 WS 运行时，并将 L3 Overlay 移出缓存静态段 | 缓存/Registry/指令分层 PR、测试输出、基线记录 |
-| H1 | ✅ 已交付；本次审查修复已为 L1 Workflow 增加执行意图回落，审计与实际四路图一致 | Router 契约、确定性测试和 O2 口径 |
-| H2 | ✅ 已交付；本次审查修复已让 W0/W2/W3/W6 错误统一写入 `response.completed(error)` | Workflow DAG 与确认卡契约、入队门禁测试 |
-| H3 | ✅ 已交付；TAOR、ToolCard 契约、工具视野与泄露测试已落地 | TAOR、ToolCard 契约、工具视野与泄露测试 |
-| H4 | 等 H3 合入 | 五档 Reflection、上限与失败阶梯测试 |
+| H0 | ✅ 已交付（PR #198）；审查修复（PR #209）已使 L2 受控常量进入 WS 运行时，并将 L3 Overlay 移出缓存静态段 | 缓存/Registry/指令分层 PR、测试输出、基线记录 |
+| H1 | ✅ 已交付（PR #200）；审查修复（PR #209）已为 L1 Workflow 增加执行意图回落，审计与实际四路图一致 | Router 契约、确定性测试和 O2 口径 |
+| H2 | ✅ 批次 1（PR #202）与批次 2 确认卡链路（PR #204）均已合入、CD ✓；审查修复（PR #209）已让 W0/W2/W3/W6 错误统一写入 `response.completed(error)` | Workflow DAG 与确认卡契约、入队门禁测试 |
+| H3 | ✅ 已合入（PR #203，CD ✓）；H0–H3 联调套件已合入（PR #206） | TAOR、ToolCard 契约、工具视野与泄露测试 |
+| H4 | ✅ 已完成于 `feat/agent-hybrid-h4-reflexion`（PR #210），待合入 | 五档 Reflection、上限与失败阶梯测试 |
 | H5 | 等 H4 合入 | 持久化/HITL、重启恢复演练证据 |
 | H6 | 等 H5 合入 | 灰度报告、并行/Compact 观测和回滚演练 |
 
@@ -326,6 +326,10 @@ npm run build
 6. **测试资产**：新增 `tests/test_hybrid_h0_foundation.py`（16 例）与 `tests/hybrid/fixtures/scenarios.py`（S1–S4 语料，H1 起复用）；
 7. **验收结果**：API Ruff 通过、pytest **654 passed / 20 skipped**（含 16 例新测试，零回归）；Worker 48 passed；审查出口确认：无新增第三方依赖、无外部 MCP、无第二模型入口、`hybrid_engine_enabled=False` 时纯对话行为不变。
 
+**V1.3 实施记录（H2 批次 2 确认卡链路，PR #204，974ee17，2026-09-03）**：W5 发卡
++ `confirm_ack` 行锁事务 + `workflow_confirm` 重放，入队唯一经 W6；API.md 升至
+V1.68（与 H3 的 V1.67 顺序修正）。
+
 **V1.4 H0/H1 审查修复（`fix/agent-h0-h1-review`，2026-09-03）**：
 
 1. **L2 与缓存边界接线**：新增受控 `DEFAULT_PROJECT_INSTRUCTIONS` 并由 WS 在每轮构造 `SystemVars`；缓存开启时使用 `SystemPromptParts` 将 L1/L2 放入静态 S1、技能目录放入 S2、会话负责人与协议档 Overlay 放入动态 S5，杜绝 L3 Overlay 被错误缓存或技能目录重复注入。缓存关闭仍经旧单字符串渲染路径，保留回滚兼容；上游返回的缓存读/创建 token 将归一并随既有 `turn_stats` 持久化。
@@ -345,3 +349,78 @@ npm run build
 - `backend/api/app/agent/workflow_nodes.py`、`agent/graph.py`：为 Workflow 错误路径补齐唯一 `response.completed(error)` 收尾。
 - `backend/api/tests/test_adapters.py`、`test_hybrid_h0_foundation.py`、`test_hybrid_h1_router.py`、`test_hybrid_h2_workflow.py`：覆盖缓存计数、缓存段位、Registry 共享、L1 回落、四路审计和失败终态回归。
 - `AGENTS.md`、`docs/AI测试与评估平台-混合驱动引擎开发计划.md`：同步 H0–H3 真实实施状态与本次修复证据。
+
+
+**V1.5 实施记录（H4 Reflection 五档判决，`feat/agent-hybrid-h4-reflexion`，PR #210，2026-09-03）**：
+按 H4 阶段目标恢复五档判决与失败阶梯，**未新增 WS 事件名、未改 API 契约、未改前端**——
+
+1. **五档判决库**：`harness/feedback/review.py` 的 `ReflectVerdict` 由三档扩为
+   `pass/clarify/reject/repair/retry`，新增回合级常量 `MAX_REPAIRS=1` /
+   `MAX_REPLANS=2`（唯一来源），判决分三级：L1 计划硬矛盾 → L2 失败阶梯 →
+   L3 受控短核对（**只降级不放行**，保留 FB-3 硬约束）；
+2. **协议同步**：`prompts/protocols.py` 的 `REFLECT_SCHEMA.verdict` 枚举同步为五档
+   并补可选 `repair_hint`，`parse_reflect` 文档与过滤口径对齐；
+3. **reflect 节点**：`agent/taor_nodes.py` 新增 `make_reflect_node`——L1 `turn_failed`
+   一律 `reject`（不调模型、只补收尾帧），L2 阶梯按**回合级** `repair_count` /
+   `replan_count` 配额判定，L3 仅在无失败时调用（计入预算，耗尽即跳过）；
+   `repair` 把修复建议包成 Observation 回灌下一轮 Executor，`retry` 置
+   `force_replan` + `replan_reason` 回 `plan`；
+4. **收尾权移交**：`orchestrator` 的 done 路径不再自行发 `response.completed`，
+   只写 `final_text` 交 `reflect` 判决后统一收尾（否则 `reject` 会被先发出的
+   `stop` 覆盖，判决形同虚设）；`graph.py` 新增 `orchestrator → reflect` 与
+   `reflect → END/orchestrator/plan` 两条条件边；
+5. **plan 节点消费重规划**：`replan_reason` 只进系统指令与新 Plan 的 `notes`，
+   **绝不并入** `build_plan` 文本入参（防失败文本参与 L0 技能关键词匹配）；
+   游标与连续失败计数归零，**预算沿用剩余值**（换计划不放大回合预算）；
+6. **状态层**：`memory/state.py` 新增 `final_text` 与 `repair_count`，
+   `ReflectVerdict` 五档注释与实现三方（state / review / REFLECT_SCHEMA）对齐；
+7. **递归上限**：混合引擎开启时 `recursion_limit` 由 32 提到 64（推导：
+   2（plan+discover）+ 2×`MAX_REPLANS` + 2×`tool_turns` 上限 ≈ 46，留余量）；
+   真正的硬上限仍是回合预算与两档配额；
+8. **测试资产**：新增 `tests/test_hybrid_h4_reflection.py`（29 例），覆盖五档协议
+   枚举、L1/L2/L3 判决、每个硬上限、`repair → retry → reject/pass` 图级全阶梯、
+   `replan_reason` 不参与关键词匹配、无限修复反例；同步修正
+   `tests/test_hybrid_h3_taor.py` 中因收尾权移交而变化的 6 处断言；
+9. **验收结果**：API Ruff 通过、pytest **767 passed / 19 skipped**（+29 新例，零回归；
+   H0–H3 联调套件 2 项按 H4 收尾权移交与失败阶梯同步更新）；
+   Worker 48 passed；前端 `typecheck` 与生产构建通过。
+
+### H4 与架构/计划的偏差（需评审确认）
+
+1. **replan 折叠进 plan 节点**：架构 mermaid 画了独立 `replan` 节点，实现改为
+   `reflect` 置 `force_replan` / `replan_reason` 后由 `plan` 节点消费（`state.py`
+   的 `force_replan` 字段注释即为此语义），少一次无行为的跳转；
+2. **clarify 判为收尾叙述而非事件**：`verdict=clarify` 只发 `assistant_message` +
+   `response.completed(stop)`，**不恢复** `clarify` 持久事件与 `clarify_reply`
+   上行——真正的 `interrupt + resume` 归 H5（与 H2「确认卡先 WS 直连、H5 再评估
+   图内 interrupt」同节奏）。API.md V1.67 中「澄清卡待 H4 评审后恢复」据此调整为 H5；
+3. **重规划沿用剩余预算**：架构未规定重规划是否重置预算，实现选择**不重置**
+   （换计划不放大回合预算，服务「不允许空转至预算耗尽」）；
+4. **配额为回合级而非每步级**：`MAX_REPAIRS=1` 实现为本回合最多修复一次
+   （与计划表「修复最多一次、重规划最多两次并**收敛**」一致），`step_fail_count`
+   仅作「当前是否存在未解决失败」的判据。
+
+### H4 联调实测发现并修复的 H3 遗留缺陷（P1）
+
+1. **`pending_tool.native` 恒为 True**：`graph.py` 建工具节点时未传
+   `native_tool_results`，而 `NativeToolResultStore.get()` 在骨架化后**零消费方**
+   ⇒ 每条工具调用都撞 fail-closed 的「工具临时上下文不可用」，`observation=None`，
+   模型永远看不到文件内容。TAOR 分支是靠 `_observation_lines` 把观察注入用户
+   消息的**提示词驱动**循环，已改为 `native: False`；
+2. **观察以 frozen dataclass 进 State**：下游 `_observation_lines` /
+   `_repeat_count` 全部用 `isinstance(x, Mapping)` 判定，dataclass 会被静默跳过
+   ⇒ 模型同样看不到工具结果，且不可 `json.dumps`（H5 接 PgCheckpointer 必然失败）。
+   已在 `make_tools_node` 包装层归一为纯 dict。
+
+**H4 改动文件清单**：
+
+- `backend/api/app/harness/feedback/review.py`：五档判决与回合级常量（唯一来源）。
+- `backend/api/app/harness/prompts/protocols.py`：`REFLECT_SCHEMA` 五档枚举 + `repair_hint`。
+- `backend/api/app/agent/taor_nodes.py`：新增 `make_reflect_node`；`orchestrator` 收尾权移交；
+  `tools` 维护 `step_fail_count` 并归一观察为纯 dict；`plan` 消费 `force_replan`。
+- `backend/api/app/agent/graph.py`：`orchestrator → reflect`、`reflect → END/orchestrator/plan`
+  条件边；混合引擎开启时 `recursion_limit` 32 → 64。
+- `backend/api/app/harness/memory/state.py`：新增 `final_text` / `repair_count`，五档注释对齐。
+- `backend/api/tests/test_hybrid_h4_reflection.py`（新增 29 例）、`tests/test_hybrid_h3_taor.py`
+  （同步收尾权移交后的 6 处断言）。
+- `AGENTS.md`、`docs/AI测试与评估平台-混合驱动引擎开发计划.md`：同步 H4 实施状态与偏差。

@@ -233,6 +233,12 @@ _REACT_READ = (
     '{"thought":"读取报告","tool":"read","arguments":{"path":"result.md"},'
     '"done":false,"protocol":"react","version":"react.v1"}'
 )
+# H4：orchestrator 收尾后由 reflect 判决，无失败路径需多一次受控复核短调用
+_REFLECT_PASS = (
+    '{"verdict":"pass","reason":"候选答复可直接给出",'
+    '"clarify_question":null,"repair_hint":null,'
+    '"protocol":"reflect","version":"reflect.v1"}'
+)
 
 
 def _orchestrator_state(**extra) -> GraphState:
@@ -262,18 +268,15 @@ def _make_orch(gateway: _ScriptedGateway, tool_names: tuple[str, ...] = ("read",
     return make_orchestrator_node(gateway, agents, _tool_registry_stub(tool_names))
 
 
-def test_orchestrator_done_emits_reply_and_completed() -> None:
+def test_orchestrator_done_hands_off_to_reflect() -> None:
+    """H4：模型 done 后不再自行收尾——只落 final_text 交 reflect 判决（防 reject 被 stop 覆盖）。"""
     gateway = _ScriptedGateway(_REACT_DONE)
     update = _make_orch(gateway)(_orchestrator_state())
-    kinds = [event["kind"] for event in update["pending_events"]]
-    assert kinds == ["assistant_message", "response.completed"]
-    completed = update["pending_events"][1]["payload"]
-    assert completed["engine"] == "agent"
-    assert completed["agent_id"] == "worker.diagnose"
-    assert "样本量不足" in update["pending_events"][0]["payload"]["text"]
+    assert "样本量不足" in update["final_text"]
+    assert not update.get("pending_events")  # 收尾事件由 reflect 统一产出
     assert gateway.calls == 1
     assert update["budget"]["model_calls"] == DEFAULT_BUDGET["model_calls"] - 1
-    assert update["response"]["text"]  # 终态响应投影
+    assert update["response"]["text"]  # 终态响应投影（未判决前的候选答复）
 
 
 def test_orchestrator_act_emits_redacted_tool_call() -> None:
@@ -412,7 +415,7 @@ def _node_trace(events: list[tuple[str, dict]]) -> list[str]:
         for mode, chunk in events
         if mode == "updates"
         for node in chunk
-        if node in {"plan", "discover", "orchestrator", "tools"}
+        if node in {"plan", "discover", "orchestrator", "tools", "reflect"}
     ]
 
 
@@ -437,7 +440,7 @@ def test_taor_full_cycle_with_real_read(monkeypatch, tmp_path) -> None:
         '{"thought":"已确认原因","tool":null,"arguments":{},"done":true,'
         '"protocol":"react","version":"react.v1"}\n\n结论：样本量不足。'
     )
-    gateway = _fake_graph_gateway([_PLAN_OK, _REACT_READ, react_done])
+    gateway = _fake_graph_gateway([_PLAN_OK, _REACT_READ, react_done, _REFLECT_PASS])
     agent = LangGraphAgent(gateway)
     config = {
         "configurable": {
@@ -447,7 +450,7 @@ def test_taor_full_cycle_with_real_read(monkeypatch, tmp_path) -> None:
     }
     events = _collect(agent, _request("排查一下测试报告失败原因"), config)
     trace = _node_trace(events)
-    assert trace == ["plan", "discover", "orchestrator", "tools", "orchestrator"]
+    assert trace == ["plan", "discover", "orchestrator", "tools", "orchestrator", "reflect"]
     pending = _all_pending(events)
     kinds = [event["kind"] for event in pending]
     assert "tool_call" in kinds and "tool_result" in kinds
@@ -466,7 +469,12 @@ def test_taor_full_cycle_with_real_read(monkeypatch, tmp_path) -> None:
 
 
 def test_taor_graph_blocks_out_of_view_bash(monkeypatch) -> None:
-    """越权 bash（discover 永不选 sandbox）→ VALIDATION 就地收尾，无工具事件。"""
+    """越权 bash（discover 永不选 sandbox）→ VALIDATION 就地收尾，无工具事件。
+
+    H4：硬错误（turn_failed）仍进 reflect，但 L1 直接判 reject 且不调模型，
+    只补一条 ``response.completed``（finish_reason=error）收尾，不再重复叙述
+    （原因已由 orchestrator 的 error 事件下发）。
+    """
     _engine_on(monkeypatch)
     react_bash = _REACT_READ.replace("read", "bash").replace("result.md", "rm -rf /")
     gateway = _fake_graph_gateway([_PLAN_OK, react_bash])
@@ -476,19 +484,22 @@ def test_taor_graph_blocks_out_of_view_bash(monkeypatch) -> None:
     assert not any(event["kind"] == "tool_result" for event in pending)
     error = next(e for e in pending if e["kind"] == "error")
     assert "非法工具" in error["payload"]["message"]
-    assert not any(event["kind"] == "response.completed" for event in pending)
+    completed = next(e for e in pending if e["kind"] == "response.completed")
+    assert completed["payload"]["finish_reason"] == "error"
+    assert gateway.calls == 2  # plan + orchestrator；reflect 硬错误不调模型
 
 
 def test_taor_done_without_tools(monkeypatch) -> None:
-    """模型直接 done（无需工具）→ plan/discover/orchestrator 收尾，不进 tools。"""
+    """模型直接 done（无需工具）→ plan/discover/orchestrator → reflect 收尾，不进 tools。"""
     _engine_on(monkeypatch)
-    gateway = _fake_graph_gateway([_PLAN_OK, _REACT_DONE])
+    gateway = _fake_graph_gateway([_PLAN_OK, _REACT_DONE, _REFLECT_PASS])
     agent = LangGraphAgent(gateway)
     events = _collect(agent, _request("排查一下测试报告失败原因"), {})
     trace = _node_trace(events)
-    assert trace == ["plan", "discover", "orchestrator"]
+    assert trace == ["plan", "discover", "orchestrator", "reflect"]
     pending = _all_pending(events)
-    assert any(event["kind"] == "response.completed" for event in pending)
+    completed = next(e for e in pending if e["kind"] == "response.completed")
+    assert completed["payload"]["finish_reason"] == "stop"
 
 
 def test_taor_dataset_worker_selected_and_tools_switched(monkeypatch) -> None:
@@ -500,7 +511,7 @@ def test_taor_dataset_worker_selected_and_tools_switched(monkeypatch) -> None:
         '"tools_needed":["read","write"],"delivery":"chat",'
         '"budget":{},"allows_replan":false,"notes":"","protocol":"plan","version":"plan.v1"}'
     )
-    gateway = _fake_graph_gateway([plan_dataset, _REACT_DONE])
+    gateway = _fake_graph_gateway([plan_dataset, _REACT_DONE, _REFLECT_PASS])
     agent = LangGraphAgent(gateway)
     events = _collect(agent, _request("排查一下数据集清单"), {})
     # 从 updates 提取 discover 节点输出（端到端视野切换）
@@ -521,7 +532,7 @@ def test_taor_tool_result_payload_is_controlled(monkeypatch, tmp_path) -> None:
     _engine_on(monkeypatch)
     report = tmp_path / "result.md"
     report.write_text("失败原因：样本量不足 500 条" * 100, encoding="utf-8")  # 超长正文
-    gateway = _fake_graph_gateway([_PLAN_OK, _REACT_READ, _REACT_DONE])
+    gateway = _fake_graph_gateway([_PLAN_OK, _REACT_READ, _REACT_DONE, _REFLECT_PASS])
     agent = LangGraphAgent(gateway)
     config = {
         "configurable": {

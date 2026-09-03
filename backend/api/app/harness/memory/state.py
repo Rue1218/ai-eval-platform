@@ -25,8 +25,13 @@ AgentMode = Literal["chat", "direct", "react", "plan_solve"]
 # 细分且 H0–H6 不驱动任何条件边，engine 由 router 节点一次性写入、本轮不可变）
 EngineKind = Literal["direct", "chat", "workflow", "agent"]
 
-# 复核结论（等价 M4 ReflectVerdict；阶段 4 reflect 节点写；
-# repair 为失败阶梯首档：注入修复观察后回 Executor 再试一次）
+# 复核结论（等价 M4 ReflectVerdict；阶段 4 reflect 节点写；H4 五档已与
+# feedback.review.Review 判决、REFLECT_SCHEMA.verdict 枚举三者对齐）
+# - pass：候选答复可直接给出；
+# - clarify：信息不足，收尾提问（不调用工具）；
+# - reject：不可用且无法自动修复，可读原因收尾（reject 不得被判为 pass）；
+# - repair：失败阶梯首档，注入 repair_hint 观察后回 Executor 再试一次；
+# - retry：失败阶梯次档，回 Planner 有界重规划（replan_count 硬上限 2）。
 ReflectVerdict = Literal["pass", "clarify", "reject", "retry", "repair"]
 
 # ModelConfig 投影允许保留的键（api_key 密钥保护，不入 State）
@@ -128,13 +133,16 @@ class GraphState(TypedDict, total=False):
     turn_failed: bool  # 有 plan 时 ReAct 硬错误：禁止再进 reflect，避免 completed(stop)
     replan_count: int  # P2：有界重规划已用次数，上限 2
     force_replan: bool  # P2：reflect 打回规划时强制重建 PlanArtifact
-    step_fail_count: int  # 失败阶梯：同一步连续工具失败次数（首档注入修复观察，再失败才重规划）
+    step_fail_count: int  # 失败阶梯：同一步连续工具失败次数（成功即归零；用于判定「当前存在未解决失败」）
+    repair_count: int  # 失败阶梯：本回合已用修复次数（**回合级**硬上限 MAX_REPAIRS=1，成功不重置）
+
     replan_reason: str | None  # 失败阶梯：最近一次失败原因，重规划时注入规划输入
     parse_retries: int  # 阶段 2：ReAct 协议解析失败纠正重试计数（有界，防死循环）
     budget: Mapping[str, int]  # 阶段 2：Budget count-only 投影
     clarify_answer: str | None  # 阶段 3：澄清卡 interrupt() 恢复后写（M4 clarify.py）
     clarify_id: str | None  # 阶段 3：澄清唯一标识（匹配前端 clarify_reply.id）
-    verdict: ReflectVerdict | None  # 阶段 4：reflect 节点写
+    verdict: ReflectVerdict | None  # 阶段 4：reflect 节点写（H4 五档判决，每次进入只出一个）
+    final_text: str | None  # H4：orchestrator 收尾候选答复；由 reflect 判决后统一收尾发出
     task_state: Mapping[str, object] | None  # 结构化任务状态机（TaskSessionState 投影）
     task_state_observation_count: int  # 已被状态机消费的 Observation 数，防 append reducer 重放旧观察
     session_tasks: list  # 会话内 TaskCreate 看板，不写 PG tasks 表

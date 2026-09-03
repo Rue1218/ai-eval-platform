@@ -1,7 +1,7 @@
 # AI 测试与评估平台 — AI Agent 行为规范与工程指南 (AGENTS.md)
 
 > **最高指示**：本文件是面向所有参与本项目的 **AI Agent 与开发者** 的最高行动指南。在编写或修改代码前，**必须严格遵守本文档所规定的架构边界、开发契约与行为红线**。
-> 版本：V1.5 ｜ 审查日期：2026-09-03（混合引擎 H0–H3 已交付并完成 H0/H1 审查修复：L2 项目指令已接入运行时、提示词缓存按 S1/S2/S5 真实分段、L1 Workflow 须通过执行意图门禁、Workflow 失败回合必发终态；**仅 `hybrid_engine_enabled=true` 时可达，默认关闭保持骨架化纯对话**；V1.6.0 骨架化与 V1.3 rag/stress 状态修正为历史基线）
+> 版本：V1.6 ｜ 审查日期：2026-09-03（V1.6 混合引擎：H0 基础设施、H1 Router 四路分流、H2 Workflow 八节点 DAG（含确认卡恢复）、H3 TAOR、H4 Reflection 五档判决（含失败阶梯 repair/retry 回合级硬上限）已交付，并完成 H0/H1 审查修复（L2 项目指令接入运行时、提示词缓存按 S1/S2/S5 真实分段、L1 Workflow 须通过执行意图门禁、Workflow 失败回合必发终态）；确认卡经 API.md V1.68 恢复——**仅 `hybrid_engine_enabled=true` 时可达，默认关闭保持骨架化纯对话**；V1.6.0 骨架化与 V1.3 rag/stress 状态修正为历史基线）
 
 ---
 
@@ -43,12 +43,17 @@
 > `response.completed` 的最小链路。
 >
 > 混合引擎增量（V1.5 实施状态地图）：`hybrid_engine_enabled=true` 时图为
-> `START → router → direct | chat | workflow(八节点 DAG) | agent(TAOR)`；
+> `START → router → direct | chat | workflow(八节点 DAG) | agent(TAOR 子图)`；
 > Workflow 链为 W0 select_skill → W1 prepare_slots → W2 load_skill → W3 validate_gates
 > → W4 build_task_spec → W5 await_confirm → W6 enqueue → W7 summarize。W5 首次到达
 > 时发确认卡并收尾本轮，用户确认后经 `pending_confirm` 行锁事务清卡，再以
 > `workflow_confirm` 注入重放回合——**入队唯一经 W6**；W0/W2/W3/W6 失败统一补
-> `response.completed(error)`，确保每轮恰有一个终态事件。默认关闭时行为不变。
+> `response.completed(error)`，确保每轮恰有一个终态事件。
+> Agent 链为 plan → discover → orchestrator ⇄ tools，orchestrator 停止或守卫截断后
+> **一律进 reflect 判决**：pass/clarify/reject 收尾（reject 的
+> `finish_reason="error"`），repair 回 orchestrator、retry 回 plan——两档均为**回合级**
+> 硬上限（`MAX_REPAIRS=1` / `MAX_REPLANS=2`，常量唯一来源 `feedback/review.py`）。
+> 默认关闭时行为不变。
 
 ### 1.3 权威文档与冲突裁决
 1. **L0 产品权威**：[`docs/AI测试与评估平台-PRD.md`](docs/AI测试与评估平台-PRD.md)（功能范围、状态机、确认卡字段唯一真理）；
@@ -91,8 +96,7 @@
 | testcase 用例生成 | 真实执行器（六策略 LLM 生成、72h 确认超时扫描） | `backend/worker/app/testcase.py` |
 | rag 知识库评测 | 真实执行器（LightRAG 优先；未配置/不可达/空返回回退本地关键词检索，报告 `degraded`/`engine_counts` 诚实标注引擎来源，禁止无标注出报告） | `backend/worker/app/rag.py`、`backend/shared/kb.py` |
 | stress 压测 | 真实执行器（对接 `stress:19090` 引擎：Host 白名单、SLA 判定、取消停发、报告 upsert） | `backend/worker/app/stress.py` |
-| Agent 图 | **混合引擎灰度中**：默认关闭时为骨架化纯对话（`START → chat_stream → END`）；开启后 `START → router → direct/chat/workflow/agent`。H0（缓存分段、进程级 `AgentRegistry`、受控 L2 `project_instructions`）、H1（Router 四路分流、`engine` 审计、L1 Workflow 执行动作门禁）、H2（W0–W7、确认卡/行锁回执、失败统一终态，入队唯一经 W6）、H3（TAOR 与 `tool_call`/`tool_result`）均已交付；`thought`/`clarify` 未恢复，主开关默认关闭 | `backend/api/app/agent/{graph,routing,router_node,workflow_nodes,taor_nodes}.py`、`routers/ws.py` |
-| bash 工具 | **真实 bwrap 沙箱**（阶段 3）：一次性进程级沙箱（无网络、会话工作区唯一可写、ulimit 资源限制、超时整树清理）+ 黑名单纵深防御；bwrap 不可用/引擎 `off` 时 fail-closed（骨架化后 Agent 不再调用，保留供未来扩展） | `backend/api/app/harness/execution/sandbox.py`、`dispatch.py`、`registry.py` |
+| Agent 图 | **混合引擎灰度中**：默认关闭时为骨架化纯对话（`START → chat_stream → END`）；开启后 `START → router → direct/chat/workflow/agent`。H0（缓存分段、进程级 `AgentRegistry`、受控 L2 `project_instructions`）、H1（Router 四路分流、`engine` 审计、L1 Workflow 执行动作门禁）、H2（W0–W7、确认卡/行锁回执、失败统一终态，入队唯一经 W6）、H3（TAOR 与 `tool_call`/`tool_result`）、H4（reflect 五档判决 + 失败阶梯，回合级 `repair_count`/`replan_count` 硬上限 `MAX_REPAIRS=1`/`MAX_REPLANS=2`；orchestrator 收尾权已移交 reflect）均已交付；`thought`/`tool_progress`/`tool_output_delta`/`clarify` 未恢复（`clarify` 判为收尾叙述而非事件，事件与 `interrupt` 归 H5），主开关默认关闭 | `backend/api/app/agent/{graph,routing,router_node,workflow_nodes,taor_nodes}.py`、`routers/ws.py` |
 
 ---
 
