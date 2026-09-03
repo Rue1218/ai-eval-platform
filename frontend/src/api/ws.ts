@@ -202,6 +202,20 @@ export class AgentWebSocket {
     return true
   }
 
+  /** H2 确认卡回执（WS 直连）：ok=true 携带 patch 深合并后入队；false 仅取消。 */
+  public sendConfirmAck(ok: boolean, patch?: Record<string, unknown>): boolean {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      console.warn('WebSocket not open, cannot send confirm_ack')
+      return false
+    }
+    const payload = {
+      event: 'confirm_ack',
+      payload: { ok, ...(ok && patch ? { patch } : {}) },
+    }
+    this.ws.send(JSON.stringify(payload))
+    return true
+  }
+
   private scheduleReconnect(): void {
     if (this.reconnectTimer !== null) return
     this.reconnectTimer = window.setTimeout(() => {

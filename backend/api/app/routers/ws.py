@@ -750,12 +750,15 @@ async def _translate_event(
     event: dict,
     *,
     turn_id: str | None = None,
+    user_id: str = "",
 ) -> None:
     """把图节点产出的 NodeEvent 翻译为 ws event（落库 + 统一 emit）。
 
     事件桥接契约（§2.5）：节点只返回纯数据，持久化事件全部经本函数落
     ``ws_events`` 并广播；``assistant_message`` 需先落库 Message 再构造对外
-    payload（对齐 REST 历史回放格式）。
+    payload（对齐 REST 历史回放格式）。``confirm`` 为 H2 直连确认卡意图：
+    行锁事务内写入 ``sessions.pending_confirm``（open_pending_confirm）后
+    才广播，失败（会话已有卡/非法 kind）改发 error。
     """
     kind = event["kind"]
     payload = event.get("payload") or {}
@@ -793,6 +796,33 @@ async def _translate_event(
             task_id=task_id,
         )
         return
+    if kind == "confirm":
+        # H2 WS 直连确认卡：行锁落卡（pending_confirm）后广播带 confirm_id 的卡；
+        # 发卡失败（会话已有卡 / 非法 kind / 会话不存在）→ error，不落 confirm。
+        try:
+            from ..harness.orchestration.confirm import open_pending_confirm
+
+            card = open_pending_confirm(
+                db, session_id, user_id, dict(payload.get("spec") or {})
+            )
+        except AppError as exc:
+            await _emit_persistent(
+                db,
+                websocket,
+                state,
+                session_id,
+                "error",
+                {"code": exc.code.value, "message": exc.message},
+                task_id=task_id,
+            )
+            return
+        card_spec = {key: value for key, value in card.items() if key != "confirm_id"}
+        payload = {
+            "confirm_id": card.get("confirm_id"),
+            "kind": card.get("kind"),
+            "spec": card_spec,
+            "missing": payload.get("missing") or [],
+        }
     if kind == "error":
         await _emit_persistent(
             db,
@@ -910,6 +940,7 @@ async def _run_turn(
                     profile,
                     event,
                     turn_id=turn_id,
+                    user_id=user_id,
                 )
         for event in deferred_completed:
             await _translate_event(
@@ -920,6 +951,19 @@ async def _run_turn(
                 profile,
                 event,
                 turn_id=turn_id,
+                user_id=user_id,
+            )
+        if not deferred_completed:
+            # 图正常结束但未产 completed（W0 澄清 / W5 确认卡收尾等直连收尾）：
+            # 兜底补发唯一 response.completed，保证前端流式状态正确闭合。
+            await _emit_turn_completed(
+                db,
+                websocket,
+                state,
+                session_id,
+                finish_reason="stop",
+                turn_id=turn_id,
+                router_audit=router_audit,
             )
     except asyncio.CancelledError:
         db.rollback()
@@ -1314,6 +1358,31 @@ async def agent_websocket(websocket: WebSocket) -> None:
                             "kind": result.get("kind"),
                         },
                         task_id=str(result.get("task_id") or "") or None,
+                    )
+                elif event == "confirm_ack":
+                    # H2 确认卡回执：行锁事务内校验/入队/清卡（handle_confirm_ack）；
+                    # 校验或并发失败抛 AppError，由外层统一 emit error（不绕过入队门禁）。
+                    payload = (
+                        message.get("payload")
+                        if isinstance(message.get("payload"), dict)
+                        else {}
+                    )
+                    from ..harness.orchestration.confirm import handle_confirm_ack
+
+                    result = handle_confirm_ack(db, session.id, user.id, payload)
+                    await _emit_persistent(
+                        db,
+                        websocket,
+                        state,
+                        session.id,
+                        "confirm_ack",
+                        {
+                            "ok": result.ok,
+                            "kind": result.kind,
+                            "message": result.message,
+                            "task_id": result.task_id,
+                        },
+                        task_id=result.task_id,
                     )
                 else:
                     raise AppError(ErrorCode.VALIDATION, "不支持的 WebSocket 事件")

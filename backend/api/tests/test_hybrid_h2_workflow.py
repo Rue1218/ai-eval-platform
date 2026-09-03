@@ -71,15 +71,17 @@ def test_w0_rag_fail_closed() -> None:
     assert error["payload"]["code"] == "VALIDATION"
 
 
-def test_w0_ambiguous_and_empty_reject_without_guessing() -> None:
-    """并列与零命中均就地收尾（不猜测技能）。"""
+def test_w0_ambiguous_and_empty_clarify_without_guessing() -> None:
+    """并列与零命中均产 clarify 澄清（不猜测技能、不产生任务）。"""
     both = select_skill_node(_state("先跑基准评测再发起压测"))
     assert both["workflow_failed"] is True
-    assert "多个评测意图" in next(
-        e for e in both["pending_events"] if e["kind"] == "error"
-    )["payload"]["message"]
+    clarify = next(e for e in both["pending_events"] if e["kind"] == "clarify")
+    assert "多个评测意图" in clarify["payload"]["question"]
+    assert clarify["payload"]["options"] == ["基准评测", "压测"]
     none = select_skill_node(_state("帮我看看这个"))
     assert none["workflow_failed"] is True
+    none_clarify = next(e for e in none["pending_events"] if e["kind"] == "clarify")
+    assert none_clarify["payload"]["options"] == ["基准评测", "用例生成", "压测"]
 
 
 # ─── 2. W1–W4：槽位 / 加载 / 门禁 / TaskSpec ───
@@ -128,10 +130,20 @@ def test_w4_builds_task_spec_from_defaults() -> None:
 # ─── 3. W5–W7：确认 / 入队 / 收尾 ───
 
 
-def test_w5_requires_confirm_context() -> None:
-    """无确认上下文：就地收尾（批次 2 直连确认卡前不产事件）。"""
-    update = await_confirm_node(_state("评测", skill_id="skill-benchmark"))
-    assert update["workflow_failed"] is True
+def test_w5_requires_confirm_context_emits_confirm_card() -> None:
+    """无确认上下文：产 confirm 事件（kind/spec/missing），回合收尾等用户确认。"""
+    state = _state(
+        "评测",
+        skill_id="skill-benchmark",
+        task_spec={"kind": "benchmark", "profile_ids": [], "with_stress": False},
+        slots_missing=("profile_ids",),
+    )
+    update = await_confirm_node(state)
+    assert update["workflow_failed"] is True  # 短路后续节点，不静默
+    confirm = next(e for e in update["pending_events"] if e["kind"] == "confirm")
+    assert confirm["payload"]["kind"] == "benchmark"
+    assert confirm["payload"]["spec"]["kind"] == "benchmark"
+    assert "profile_ids" in confirm["payload"]["missing"]
 
 
 def test_w5_confirm_missing_profile_rejected() -> None:

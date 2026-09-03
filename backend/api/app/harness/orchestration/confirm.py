@@ -194,6 +194,68 @@ def _validate_confirmed(task_spec: dict) -> str:
     return str(kind)
 
 
+def _check_card_kind(task_spec: dict) -> str:
+    """发卡时的 kind 白名单校验（必填资产留待用户补齐，不在发卡期拦截）。"""
+    kind = task_spec.get("kind")
+    if kind == "stress":
+        raise AppError(
+            ErrorCode.VALIDATION,
+            "压测由质量任务勾选「先评后压」派生，不能单独下单",
+        )
+    if kind not in TASK_KINDS:
+        raise AppError(ErrorCode.VALIDATION, f"未知任务类型：{kind}")
+    return str(kind)
+
+
+def open_pending_confirm(
+    db,
+    session_id: str,
+    user_id: str,
+    task_spec: dict,
+) -> dict:
+    """发起确认卡（H2 Workflow W5 → ws 直连层调用；行锁事务内落卡）。
+
+    - 行锁读卡：已有未确认卡 → CONCURRENCY（防覆盖/防抢占，团队协作语义
+      与 REST create_task 一致）；
+    - 只做 kind 白名单 + 先评后压拦截（必填资产由用户在卡上补齐，确认时
+      经 ``handle_confirm_ack`` 二次校验）；
+    - 同一事务内写 ``sessions.pending_confirm``（JSONB：confirm_id / kind /
+      spec）与 ``pending_confirm_author_id`` 后 commit。
+    返回卡片字典（含 confirm_id）。
+    """
+    pending = lock_pending_confirm(db, session_id)  # SELECT ... FOR UPDATE
+    if pending.pending is not None:
+        raise AppError(
+            ErrorCode.CONCURRENCY, "会话存在待确认任务，请先确认或取消"
+        )
+    from uuid import uuid4
+
+    from sqlalchemy import text
+
+    _check_card_kind(dict(task_spec))  # 发卡期只做 kind 白名单/先评后压校验
+    spec = drop_stale_asset_ids(db, dict(task_spec))
+    # 卡 JSONB 为「TaskSpec 平铺 + confirm_id」（与 handle_confirm_ack 的
+    # deep_merge 基座一致；kind 即 spec.kind）。_TASK_SPEC_KEYS 白名单过滤，
+    # 不留图内临时字段。
+    card = {
+        key: value for key, value in spec.items() if key in _TASK_SPEC_KEYS
+    }
+    card["confirm_id"] = uuid4().hex
+    db.execute(
+        text(
+            "UPDATE sessions SET pending_confirm = :card, "
+            "pending_confirm_author_id = :user_id WHERE id = :session_id"
+        ),
+        {
+            "card": __import__("json").dumps(card),
+            "user_id": user_id,
+            "session_id": session_id,
+        },
+    )
+    db.commit()
+    return card
+
+
 def handle_confirm_ack(
     db,
     session_id: str,

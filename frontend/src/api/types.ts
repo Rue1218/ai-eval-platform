@@ -875,8 +875,9 @@ export interface AgentPrefs {
 }
 
 // WS 事件公共头（API.md §4.2）：payload 嵌套，task_id 入队后才有
-// H1 骨架化收敛为纯对话 + 平台任务流；H3 起 Agent 引擎恢复 thought /
-// tool_call / tool_result（ToolCard 只渲染脱敏摘要，历史旧事件不重放）。
+// H1 骨架化收敛为纯对话 + 平台任务流；H2 起恢复 confirm / confirm_ack /
+// clarify（WS 直连确认卡）；H3 起 Agent 引擎恢复 thought / tool_call /
+// tool_result（ToolCard 只渲染脱敏摘要，历史旧事件不重放）。
 export interface WsServerEvent {
   event:
     | 'user_message'
@@ -888,6 +889,9 @@ export interface WsServerEvent {
     | 'thought'
     | 'tool_call'
     | 'tool_result'
+    | 'confirm'
+    | 'confirm_ack'
+    | 'clarify'
     | 'progress'
     | 'report'
     | 'task_cancelled'
@@ -932,6 +936,21 @@ export interface ToolResultPayload {
   data?: Record<string, unknown>
   error?: string
   source?: string
+}
+
+// confirm payload（H2 WS 直连确认卡）：spec 为 TaskSpec 平铺默认值，
+// missing 为必填资产清单（确认前需补齐，服务端二次校验）。
+export interface ConfirmCardPayload {
+  confirm_id: string
+  kind: TaskKind
+  spec: Record<string, unknown>
+  missing?: string[]
+}
+
+// clarify payload（H2 业务歧义澄清）：以提问文本呈现，用户自然回复即可。
+export interface ClarifyPayload {
+  question: string
+  options?: string[]
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

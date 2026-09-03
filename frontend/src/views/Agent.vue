@@ -336,6 +336,21 @@
                     </div>
                   </div>
 
+                  <!-- H2 确认卡：Workflow W5 直连（行锁已落卡；确认/取消走 confirm_ack）。 -->
+                  <div v-if="item.confirmCard" class="confirm-card-h2">
+                    <div class="confirm-head-h2">
+                      <span class="confirm-title-h2">{{ confirmKindLabel(item.confirmCard.kind) }}</span>
+                      <span class="confirm-sub-h2">{{ confirmSpecSummary(item.confirmCard.spec) }}</span>
+                    </div>
+                    <div v-if="item.confirmCard.missing.length" class="confirm-missing-h2">
+                      确认前需补齐：{{ confirmMissingText(item.confirmCard.missing) }}
+                    </div>
+                    <div class="confirm-actions-h2">
+                      <button class="btn-primary-h2" @click="onConfirmCardAck(item, true)">确认并运行</button>
+                      <button class="btn-plain-h2" @click="onConfirmCardAck(item, false)">取消</button>
+                    </div>
+                  </div>
+
                   <!-- 兼容历史旧缓存：没有 blocks 时仍渲染原助手正文。 -->
                   <MarkdownView
                     v-if="!item.blocks?.length && (item.raw || item.text)"
@@ -528,6 +543,7 @@ import type {
   Profile,
   SessionAuthor,
   Task,
+  TaskKind,
   WsServerEvent,
 } from '../api/types'
 import { useModeStore } from '../stores/mode'
@@ -1978,6 +1994,51 @@ function handleWsEvent(ev: WsServerEvent) {
       scrollToBottom()
       break
     }
+    case 'confirm': {
+      // H2：Workflow W5 直连确认卡（行锁已落库，服务端广播带 confirm_id 的卡）。
+      const agent = getOrCreateTurnAgent(events.value)
+      const card = {
+        confirm_id: String(p.confirm_id || ''),
+        kind: String(p.kind || 'benchmark') as TaskKind,
+        spec: (p.spec && typeof p.spec === 'object' ? p.spec : {}) as Record<string, unknown>,
+        missing: Array.isArray(p.missing) ? p.missing.map(String) : [],
+      }
+      agent.confirmCard = reactive(card)
+      agent.streaming = false
+      scrollToBottom()
+      break
+    }
+    case 'confirm_ack': {
+      // H2：回执结果。ok=true 入队成功（服务端 task_id 公共头/ payload）；
+      // ok=false 取消确认。移除当前卡。
+      const agent = getCurrentTurnAgent(events.value)
+      if (agent) agent.confirmCard = undefined
+      if (p.ok === true && ev.task_id) {
+        const kind = String(p.kind || 'benchmark') as TaskKind
+        activeTask.value = {
+          id: ev.task_id,
+          kind,
+          status: 'queued',
+          config: { kind },
+          created_at: new Date().toISOString(),
+        }
+      }
+      scrollToBottom()
+      break
+    }
+    case 'clarify': {
+      // H2：业务歧义澄清（W0 并列/零命中）——以纯文本气泡呈现，用户自然回复。
+      const question = String(p.question || '')
+      if (!question) break
+      const agent = getOrCreateTurnAgent(events.value)
+      const target = getOrCreateAssistantBlock(agent)
+      target.raw = question
+      target.text = renderBubbleHtml(question)
+      target.streaming = false
+      agent.streaming = false
+      scrollToBottom()
+      break
+    }
     case 'response.completed':
     case 'done': {
       const orphan = turnStreamingAgent(events.value)
@@ -2456,6 +2517,52 @@ interface ToolRunItem {
   error?: string
 }
 
+/** H2 确认卡运行时状态（服务端已行锁落卡；spec 为 TaskSpec 平铺默认值）。 */
+interface ConfirmCardItem {
+  confirm_id: string
+  kind: TaskKind
+  spec: Record<string, unknown>
+  missing: string[]
+}
+
+/** H2：确认卡按钮回执（乐观清卡；服务端行锁事务内校验入队）。 */
+function onConfirmCardAck(agent: StreamItem, ok: boolean) {
+  if (!agent.confirmCard) return
+  agent.confirmCard = undefined
+  agentWs?.sendConfirmAck(ok)
+}
+
+function confirmKindLabel(kind: TaskKind): string {
+  const labels: Record<string, string> = {
+    benchmark: '基准评测',
+    testcase: '用例生成',
+    rag: '知识库评测',
+    stress: '压测',
+  }
+  return labels[kind] || kind
+}
+
+function confirmMissingText(missing: string[]): string {
+  const labels: Record<string, string> = {
+    profile_ids: '被测协议档',
+    dataset_id: '数据集',
+    kb_id: '知识库',
+    gold_qa_id: '黄金 QA',
+    case_source: '用例来源',
+  }
+  return missing.map((key) => labels[key] || key).join('、')
+}
+
+function confirmSpecSummary(spec: Record<string, unknown>): string {
+  const profileIds = Array.isArray(spec.profile_ids) ? spec.profile_ids : []
+  const datasetId = spec.dataset_id ? String(spec.dataset_id).slice(0, 8) : ''
+  const parts: string[] = []
+  if (profileIds.length) parts.push(`协议档 ×${profileIds.length}`)
+  if (datasetId) parts.push(`数据集 ${datasetId}…`)
+  if (typeof spec.sample_size === 'number') parts.push(`样本 ${spec.sample_size}`)
+  return parts.join(' · ') || '按默认参数执行'
+}
+
 type AgentBlock = AgentAssistantItem | AgentErrorItem
 
 interface StreamItem {
@@ -2472,6 +2579,7 @@ interface StreamItem {
   blocks?: AgentBlock[]
   toolItems?: ToolRunItem[]
   openToolId?: string
+  confirmCard?: ConfirmCardItem
   providerLogoKey?: ProviderLogoKey
   profileId?: string
   modelName?: string
@@ -2543,6 +2651,54 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+/* H2 确认卡（WS 直连；样式与既有 tool-card 视觉同族） */
+.confirm-card-h2 {
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  background: var(--bg-main);
+  overflow: hidden;
+  max-width: 92%;
+  margin: 8px 0;
+  box-shadow: 0 1px 2px rgba(17, 24, 39, .04);
+}
+.confirm-head-h2 {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 11px 14px 4px;
+}
+.confirm-title-h2 { font-size: 13px; font-weight: 600; }
+.confirm-sub-h2 { font-size: 12px; color: var(--text-tertiary); }
+.confirm-missing-h2 {
+  margin: 4px 14px 8px;
+  font-size: 12px;
+  color: var(--accent-error);
+  font-weight: 500;
+}
+.confirm-actions-h2 {
+  display: flex;
+  gap: 8px;
+  padding: 6px 14px 12px;
+}
+.btn-primary-h2 {
+  border: none;
+  border-radius: 8px;
+  background: var(--accent-primary, #2f6fed);
+  color: #fff;
+  font-size: 13px;
+  padding: 6px 16px;
+  cursor: pointer;
+}
+.btn-primary-h2:hover { opacity: .9; }
+.btn-plain-h2 {
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  padding: 6px 16px;
+  cursor: pointer;
+}
 .agent-layout {
   height: calc(100vh - var(--topbar-h) - 20px);
 }

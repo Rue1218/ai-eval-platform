@@ -138,17 +138,29 @@ def select_skill_node(state: GraphState) -> dict:
         names = "、".join(SKILL_CATALOG[skill_id][0] for skill_id in candidates)
         return {
             **_step("W0_select_skill"),
-            "workflow_failed": True,
-            "pending_events": _error_events(
-                "VALIDATION", f"检测到多个评测意图（{names}），请明确要执行哪一项"
-            ),
+            "workflow_failed": True,  # 短路后续节点，回合就此收尾等用户澄清
+            "pending_events": [
+                make_event(
+                    "clarify",
+                    {
+                        "question": f"检测到多个评测意图（{names}），请明确要执行哪一项",
+                        "options": [SKILL_CATALOG[skill_id][0] for skill_id in candidates],
+                    },
+                )
+            ],
         }
     return {
         **_step("W0_select_skill"),
         "workflow_failed": True,
-        "pending_events": _error_events(
-            "VALIDATION", "无法识别评测类型（当前支持：基准评测 / 用例生成 / 压测）"
-        ),
+        "pending_events": [
+            make_event(
+                "clarify",
+                {
+                    "question": "无法识别评测类型，请问要执行哪一项？",
+                    "options": ["基准评测", "用例生成", "压测"],
+                },
+            )
+        ],
     }
 
 
@@ -272,7 +284,23 @@ def await_confirm_node(state: GraphState, *, config: RunnableConfig | None = Non
         return _step("W5_await_confirm")
     confirm = (config if config is not None else _configurable()).get("workflow_confirm")
     if not isinstance(confirm, Mapping) or not confirm:
-        return {**_step("W5_await_confirm"), "workflow_failed": True}
+        # 无确认上下文：产确认卡事件并收尾回合（ws 直连层落 pending_confirm 行锁，
+        # 确认/取消走 confirm_ack；H5 前图内不 interrupt）。
+        kind = skill_to_kind(skill_id)
+        return {
+            **_step("W5_await_confirm"),
+            "workflow_failed": True,
+            "pending_events": [
+                make_event(
+                    "confirm",
+                    {
+                        "kind": kind,
+                        "spec": dict(state.get("task_spec") or {}),
+                        "missing": list(state.get("slots_missing") or ()),
+                    },
+                )
+            ],
+        }
     kind = skill_to_kind(skill_id)
     spec = dict(state.get("task_spec") or {})
     patch = dict(confirm.get("task_spec") or {}) if isinstance(confirm, Mapping) else {}

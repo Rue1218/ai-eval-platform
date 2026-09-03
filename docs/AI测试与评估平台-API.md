@@ -9,10 +9,12 @@
 | 对应前端计划 | V1.5 |
 | 对应后端计划 | V1.5 |
 | 撰写日期 | 2026-08-18 |
-| 本轮修订 | 2026-09-03：V1.67 混合引擎执行落地（H2 Workflow DAG / H3 Agent TAOR）：恢复持久事件 `tool_call` / `tool_result`（payload 见 §4.3，ToolCard 只渲染脱敏摘要，观察全文不进任何事件）；`response.completed` 的 `engine` 从「分流结论」升级为「真实执行引擎」——`workflow`（H2，W0–W7 硬编码 DAG）与 `agent`（H3，plan→discover→orchestrator⇄tools 单图内 TAOR）均已真实执行，`agent_id` 审计随 Worker 目录（§3.6.3）供归属核验；`thought` / `tool_progress` / `tool_output_delta` / `confirm` / `clarify` 仍不产生。历史 `ws_events` 中的旧工具事件仍不重放。 |
+| 本轮修订 | 2026-09-03：V1.68 混合引擎 H2 批次 2——WS 直连确认卡恢复：持久事件 `confirm`（Workflow W5 未确认时产出，ws 层行锁写入 `sessions.pending_confirm` 后广播，payload 含 `confirm_id` / `kind` / `spec`（TaskSpec 平铺）/ `missing`）与 `clarify`（W0 并列/零命中业务歧义，以提问文本呈现）；上行新增 `confirm_ack`（`{ok, patch?}`，行锁事务内二次校验 → `enqueue_long_task` 入队 → 清卡，拒绝/重复/非 owner 均不绕过入队门禁）；`response.completed` 在直连收尾回合（W0 澄清 / W5 发卡）由服务端兜底补发 `finish_reason="stop"` 并携带引擎审计。前端恢复 ConfirmCard（确认/取消回执）与 clarify 气泡。 |
 | 最近修订 | 2026-09-02：V1.65 工具契约加固（T1–T3）：JSON Schema 子集新增 `minItems`/`maxItems` 并为 8 处数组参数补上限；`output_schema` 从装饰字段升级为强制契约（注册期拒绝未声明，运行期按声明比对展示投影）；`platform.tasks` 三工具补全 `output_schema`；移除 `/api/mcp/tools/{name}/code` 端点与 `code_snippet` 字段。2026-08-28：V1.53 `web_fetch` 直抓路径接入 trafilatura 正文提取：可读性算法识别文章主体，保留标题层级/链接/图片/表格，未安装或提取失败降级回内置 `_TextExtractor`；提取真实产出 Markdown 时才声明 `format=markdown`（§4.3.1）。V1.52 优化 `web_fetch` 长文完整性与卡片预览：模型正文预算 8,000→60,000 字符，卡片预览与 `read` 同源对齐 `TOOL_PREVIEW_MAX_CHARS` 并随 `web.preview_limit_chars` 下发，直接抓取字节窗口 256KB→1MB（§4.3.1）。2026-08-27：V1.51 新增持久事件 `session_title`（§4.3）与会话标题 AI 生成契约（§4.3.2）：默认标题会话首条消息后由 Agent 协议档弱结构化生成标题并落库广播，修复标题不持久化问题。V1.50 统一 Agent 文本附件 staging 与 `read` 的 20MB 边界；`read` 模型窗口为 2,000 行 / 600,000 字符。V1.49 协议档新增 `max_output_tokens`（256–131072，默认 8192），创建/更新/列表/详情均支持；Agent 模型调用从协议档读取输出上限，长文档总结/导出类任务可调大避免回答被截断。2026-08-26：V1.48 同轮多调用默认串行，灰度开启后仅 `read`/`web_search`/`web_fetch` 可并行，回填按原始 `call_id`。V1.47 新增 `GET /api/agent/metrics`，不含正文/参数，不新增 WS 事件。V1.46 明确 native 一次 ToolCall 结束当前上游响应，结果回填后再请求，不新增事件名。V1.45 思考链只下发可展示摘要，隐藏 CoT（`Here's a thinking process` / `Analyze User Input`）由服务端替换，不原样推给前端。V1.44 ToolCall 在执行前持久化，新增瞬态 `tool_progress` / `tool_output_delta`，并冻结原生工具的输出 Schema、权限边界和失败恢复字段。V1.43 思考增量允许合并下发；有思考链时 `think_final` 在 `response.completed` 之前。V1.42 Direct `/help`、未知斜杠与图内防御提示在业务事件后必须再发 `response.completed`（成功 `stop`，校验/防御 `error`），结束整轮生成态。V1.41 确认卡预填与 `confirm_ack` 入队前丢掉已删除的协议档/数据集/知识库 ID，避免 Worker 再报「协议档不存在或已删除」。V1.40 `/cancel` 与 `/stress` 按 §4.4 解禁（仍走 `user_message`）：`/cancel` 取消本会话非终态任务，`/stress` 发出质量任务确认卡且 `with_stress=true`，禁止 `kind=stress`。V1.39 原生工具卡片收起态副标题统一为 `ToolCall`，不在卡片摘要区回显文件路径、命令或写入内容；详细参数仍在展开区展示。V1.38 明确原生基础 ToolCall 卡片使用英文工具名，展开区统一显示 `ToolCall` 与 `输出`，文件、命令和代码/文档结果使用行号展示；MCP/平台短工具仍按下方中文名映射。2026-08-24：V1.24 修复 Agent 附件上下文链路：服务端校验文件归属并在模型窗口解析文本、PDF、DOCX、XLSX，图片按三协议图文内容块发送；历史消息附件补齐安全元数据，前端可在刷新后继续预览。同步调整输入框内附件按钮与用户消息附件位序。V1.23 扩展 Agent 附件契约，支持图片、Word 文档与多附件拖拽上传；保留 `POST /api/files` 后再以既有 `file_id` 引用的消息链路，补充图片缩略图、PDF/文本预览与 Office 文件打开/下载说明。V1.22 修复 V1.21 遗留：§4.4 标题「仅此三条」改「仅此四条」、§9 禁止清单「第四种」改「第五种」并补四类上行事件枚举、§4.3 `tool_result.source` 语义对齐 M7 `Observation.source`（溯源标识字符串，非 short\|long 枚举）、§4.3 共享流规则补 clarify/plan/confirm 持久化广播说明、§4.4 clarify 多副本限制注明、§9 Ask/Plan 补注非 Harness plan 事件；V1.20 及更早版本沿用历史修订记录。 |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
+> V1.68（2026-09-03）：**WS 直连确认卡恢复（H2 批次 2）**。`engine="workflow"` 回合执行到 W5（await_confirm）且无确认上下文时，图产出持久事件 `confirm`（payload：`kind` / `spec`（TaskSpec 平铺默认值，经 `default_task_spec`）/ `missing`（必填资产清单）），图回合就此结束；ws 直连层收到 `confirm` 意图后**先写卡后广播**：`open_pending_confirm` 行锁（SELECT ... FOR UPDATE）校验会话无待确认卡 → `sessions.pending_confirm` 写入「TaskSpec 平铺 + `confirm_id`」与 `pending_confirm_author_id` → 同一事务 commit → 广播带 `confirm_id` 的卡。会话已有待确认卡（重复意图/协作者抢占）→ 发卡失败，改发 `error`（CONCURRENCY）。W0（select_skill）并列/零命中业务歧义产出 `clarify`（`question` / `options`），图回合结束（不猜测技能、不产生任务）。直连收尾回合无 `response.completed` 时由 ws 层兜底补发（`finish_reason="stop"` + Router 审计字段）。上行新增 `confirm_ack`（§4.4：`{ok, patch?}`，`patch` 深合并到卡 spec）：经 `handle_confirm_ack` 全程同一事务单次行锁——owner 校验 → 并发检测 → `ok=true` 时 stale 资产过滤 + TaskSpec 二次校验（缺必填 → `VALIDATION`，绝不入队）→ `enqueue_long_task`（`commit=False`）→ 清卡同 commit；`ok=false` 仅清卡不入队；重复确认（卡已消费）→ 拒绝。入队仍只经长任务桥（`uq_tasks_active_session` 命中由捕获层转 CONCURRENCY）。前端恢复 ConfirmCard（确认/取消回执按钮与缺失提示）与 clarify 气泡；历史 `ws_events` 中 V1.63 前旧卡事件仍不重放。
+>
 > V1.67（2026-09-03）：混合引擎执行落地（H2 + H3）。`engine="workflow"` 由 W0–W7 八节点硬编码 DAG 执行（select_skill → prepare_slots → load_skill → validate_gates → build_task_spec → await_confirm → enqueue → summarize），入队只经 W6 长任务桥；`engine="agent"` 由单图内 TAOR 循环执行（plan 一次出 plan.v1 → discover 按 AgentRegistry 确定性选 Worker 并收窄工具视野 → orchestrator⇄tools，工具经 Schema/门禁/权限/并发/脱敏十层链）。恢复持久事件 `tool_call`（发起 Act，arguments 为脱敏摘要）与 `tool_result`（终态受控投影：`data` 仅含 `display_data` 摘要、失败 `error` 为脱敏原因，**不含 Observation 全文**；Observation 只作模型输入，不进入任何 WS 持久事件/消息历史/检查点正文）。`worker.sandbox` 不可被 discover 选中（H5 前 code 能力 fail-closed）。Agent 分支守卫：非法/越权工具 `VALIDATION`、预算耗尽 `BUDGET_EXCEEDED`、协议解析重试 ≤2、同参只读工具重复 3 次守卫、`plan_step_index` 越界 `turn_failed`，全部就地收尾。`thought` / `tool_progress` / `tool_output_delta` / `confirm` / `clarify` 仍不产生（H3 无生产者）。ToolCard 只展示脱敏摘要；历史 `ws_events` 旧工具事件仍不重放。
 >
 > V1.66（2026-09-03）：混合引擎 H1（Router 四路分流骨架）审计契约。`response.completed` payload 在混合引擎开启时新增三个可选字段：`engine`（`"direct"|"chat"|"workflow"|"agent"`，Router 分流结论，写入后本轮不可变）、`router_confidence`（0–1 浮点，L0 确定性置信度）、`router_reason`（脱敏分流理由，含降级标注）。`hybrid_engine_enabled=false`（默认）时 payload 与 V1.65 完全一致。L0 为纯函数零模型调用（可复现性 100%）；仅当置信度低于 `hybrid_router_confidence_threshold`（默认 0.7）且 `hybrid_router_cot_enabled=true` 时触发一次 L1 短调用（`router.v1` JSON，计入回合预算），任何失败均回落 L0、L0 无结论回落 `chat`。H1 阶段 `workflow` / `agent` 尚未实现，降级按 `chat` 执行并在 `router_reason` 标注（该降级标注自 V1.67 起仅 `agent` 保留、`workflow` 移除）；`direct` 仅承认收包循环既有 `/stop`（图内其余斜杠为防御性拒绝，`finish_reason="error"`，零模型调用）。新增 `GET /api/agents` Worker 只读目录（§3.6.3，登录可见，不含密钥与模型实例）。`engine` 审计为 O2 分流判错信号（立即 `/stop`、`clarify`、门禁失败、重规划计数）的唯一采集载体，信号仅用于样本筛选，不得直接充当阈值优化目标。
@@ -1627,6 +1629,9 @@ Harness 回合必须丢到后台 Task，**不得**在 `receive` 循环里 `await
 | `progress` | `{percent,done,total,message}`；Worker 任务进度 | ProgressDock |
 | `report` | `{report_id}`；Worker 报告就绪 | ReportCard |
 | `task_cancelled` | `{status:"cancelled",kind}`；公共头必须带 `task_id`，持久化并可回放 | 关闭对应 ProgressDock，并结束取消中状态 |
+| `confirm` | `{confirm_id,kind,spec,missing}`（V1.68）：Workflow W5 产确认意图，ws 层行锁写入 `sessions.pending_confirm` 后广播；`spec` 为 TaskSpec 平铺默认值、`missing` 为必填资产清单；持久化并可回放 | ConfirmCard（摘要 + 确认/取消回执） |
+| `confirm_ack` | `{ok,kind?,message,task_id?}`；公共头带 `task_id`（入队后）；回执结果（行锁事务内完成校验/入队/清卡）；持久化并可回放 | 关闭 ConfirmCard；`ok=true` 展示任务进度坞 |
+| `clarify` | `{question,options?}`（V1.68）：W0 并列/零命中业务歧义，以提问文本呈现，用户自然回复即可；持久化并可回放 | 助手气泡（提问文本） |
 | `session_title` | `{title,source:"ai"}`；持久化并可回放 | 同步会话标题 |
 | `error` | `{code,message}`；异常消息必须脱敏 | ErrorStrip + Toast |
 | `pong` | `{}`；瞬态 | 不渲染 |
@@ -1703,7 +1708,7 @@ MCP/平台短工具中文名（ToolCard 标题；原生基础工具 `read` / `wr
 成功路径：先落库 `sessions.title`（行锁复查仍为「新会话」，不覆盖用户已改标题），再广播持久事件
 `session_title`（§4.3）。前端在事件到达前可继续展示本地乐观截断标题，刷新后以服务端为准。
 
-### 4.4 前端 → 服务（V1.64 当前）
+### 4.4 前端 → 服务（V1.68 当前）
 
 ```json
 { "event": "user_message", "payload": { "text": "帮我下一单 Benchmark", "attachments": [ { "file_id": "uuid" } ], "client_message_id": "browser-uuid" } }
@@ -1713,9 +1718,13 @@ MCP/平台短工具中文名（ToolCard 标题；原生基础工具 `read` / `wr
 { "event": "cancel_task", "payload": { "task_id": "uuid" } }
 ```
 
-当前上行只有 `user_message` 与 `cancel_task`；`/stop` 作为 `user_message.payload.text` 以 `/stop` 开头时由收包循环即时处理。`cancel_task` 成功后服务端发送 `task_cancelled`，前端只能在该持久化回执到达后结束取消中状态。
+```json
+{ "event": "confirm_ack", "payload": { "ok": true, "patch": { "with_stress": false } } }
+```
 
-> 下方 `confirm_ack`、`clarify_reply`、`tool_approval_ack`、斜杠与确认卡规则为 V1.62 及以前的历史资料；V1.64 服务端不再接受这些事件。
+当前上行有 `user_message` / `cancel_task` / `confirm_ack`（V1.68 恢复）；`/stop` 作为 `user_message.payload.text` 以 `/stop` 开头时由收包循环即时处理。`cancel_task` 成功后服务端发送 `task_cancelled`，前端只能在该持久化回执到达后结束取消中状态。`confirm_ack` 只接受 `ok` 布尔与可选 `patch`（深合并到待确认 TaskSpec）；回执经 `handle_confirm_ack` 全程同一事务单次行锁（owner 校验 → 二次校验 → 入队 → 清卡），`ok=false` 仅取消清卡；重复确认/非 owner/校验失败 → `error`，绝不绕过入队门禁。`clarify` 不需要专门上行：用户直接以普通 `user_message` 回复即可。
+
+> 下方 `clarify_reply`、`tool_approval_ack`、斜杠与危险工具确认卡规则为 V1.62 及以前的历史资料；V1.68 服务端不接收 `clarify_reply` / `tool_approval_ack`（H5 HITL 前无图内 interrupt）。
 
 ```json
 { "event": "confirm_ack", "payload": { "ok": true, "patch": { "with_stress": false } } }
