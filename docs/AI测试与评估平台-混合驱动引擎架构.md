@@ -3,11 +3,11 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | 混合驱动引擎（Hybrid Agent Engine）架构需求 |
-| 版本 | V1.3 |
-| 审查日期 | 2026-09-02 |
+| 版本 | V1.4 |
+| 审查日期 | 2026-09-03 |
 | 文档性质 | 架构需求 + ADR + 分阶段落地契约（**本版不改对外契约，契约变更逐阶段先改 API.md**） |
-| 适用范围 | `/agent` 对话智能体全链路：LangGraph 双引擎图、Harness 九层、WebSocket 事件桥、短工具与长任务分离 |
-| 前置输入 | [`docs/AI测试与评估平台-混合驱动引擎环境审计.md`](./AI测试与评估平台-混合驱动引擎环境审计.md) V1.0（只读审计与 9 项阻塞矛盾） |
+| 适用范围 | `/agent` 对话智能体全链路：LangGraph 双引擎图、Harness 分层基础设施、WebSocket 事件桥、短工具与长任务分离 |
+| 前置输入 | [`docs/AI测试与评估平台-混合驱动引擎环境审计.md`](./AI测试与评估平台-混合驱动引擎环境审计.md) V1.1（只读审计，10 项阻塞矛盾 C-1…C-10——C-10 反馈层收窄发现为 V1.1 新增） |
 | 上游权威 | `docs/AI测试与评估平台-PRD.md`（产品范围）＞ `docs/AI测试与评估平台-API.md`（REST/WS 字段唯一真理）＞ `docs/AI测试与评估平台-Agent开发文档.md`（当前链路）＞ 本文 |
 | 事实来源 | `backend/api/app/{agent,harness,llm}/`、`app/routers/{ws,tasks,mcp}.py`、`backend/worker/app/`、`frontend/src/{views/Agent.vue,api/types.ts}` |
 | 参考实现 | Claude Code Harness（TAOR 循环、两层状态、原子工具、Skills 渐进披露、Prompt Cache 边界）；LangGraph Plan-and-Execute / Reflexion；Anthropic Orchestrator-Worker |
@@ -30,7 +30,7 @@
 | 审计发现 | 数据 | 对架构的约束 |
 | :--- | :--- | :--- |
 | 生产 Agent 图已被骨架化 | **1 节点 / 2 无条件边 / 0 条件边 / 0 工具 / 0 interrupt** | 编排层是唯一断点，必须重建 |
-| `GraphState` 为完整混合图设计 | **24 字段，骨架图仅用 3 个**；含 `replan_count` / `force_replan` / `verdict="repair"` / `step_fail_count` | Plan/Reflect/Replan 曾运行过，State 无需重设计，只需扩展 |
+| `GraphState` 为完整混合图设计 | **25 字段，骨架图仅用 3 个**；含 `replan_count` / `force_replan` / `verdict="repair"` / `step_fail_count` | Plan/Reflect/Replan 曾运行过，State 无需重设计，只需扩展（审计 V1.1 修正：原「24 字段」为 25） |
 | Harness 基础设施完整但「死连」 | `registry.py` 1256 行、`dispatch.py` 1264 行、`toolnode.py` 544 行、`checkpoint.py` 488 行，均**零生产调用** | 路线必须是「恢复接线 + 增量升级」，禁止重写（红线第 5 条） |
 | 工具元数据粒度超出需求预期 | `ToolDef` 19 字段，含 `risk_level` / `execution_mode` / `concurrency_class`（四档）/ `permission_policy` / `recovery_policy` | Claude Code 的 `isReadOnly/isDestructive/isConcurrencySafe` **已满足**，无需新建 |
 | 上下文缓存边界完全缺失 | 全 `backend/api` 无 `cache_control`；`assemble()` 把静态段与动态段 `"\n\n".join` 成单块 | 真实新建项之一 |
@@ -39,6 +39,7 @@
 | LangGraph 已固定安装 | `langgraph==1.2.10`（api + worker），8 处真实 import；**无 langchain 主包 / 无 langsmith / 无官方 mcp 包 / 无 langgraph.json** | 依赖新增须保守（Python 3.14 wheel 风险） |
 | 断点续跑与 HITL 事实不可用 | `agent_checkpointer=memory`；`ahas_pending_interrupt` 恒 `False`；`ws.py` 无 `resume` 调用 | HITL 阶段必须同步切 `PgCheckpointer`（矛盾 C-7） |
 | 并行工具已实现但灰度关闭 | `agent_parallel_tool_batch_enabled=False`，`batch.py::select_execution_wave` 齐备 | 属「开开关」不属开发 |
+| 反馈层 reflect 库已收窄而非完整（审计 V1.1 / C-10） | `review.py` 仅 39 行、`ReflectVerdict` 三档（pass/clarify/reject）、**零调用含测试**；`REFLECT_SCHEMA` / `parse_reflect` enum 同三档，五档 verdict 仅残留 `state.py` 类型注释 | H4 需**恢复性扩展**五档判决 + 协议 schema/parser，而非仅重建节点壳（ADR-9 / §8-18 同步修正） |
 
 ### 1.2 为什么采用「Workflow + Agent 混合架构」
 
@@ -214,6 +215,8 @@ Repeat 的第 N 圈：
 
 **后果**：`assemble()` 的返回类型变更会影响所有调用方（当前仅 `routing.py` 一处，改造成本低——这是**趁骨架化窗口期改造的最佳时机**）。需新增测试断言「段序单调」与「静态段字节级稳定」。
 
+**现实约束（V1.4 补充）**：Anthropic prompt cache 为断点级缓存、TTL 约 5 分钟且低于 1024 token 无收益；同会话内 `engine` 交替（workflow ↔ chat ↔ agent）会使 S3/S4 分桶切换，前缀命中率天然低于单一引擎会话。因此 §6.2 的「缓存命中率 ≥ 60%」定位为**校准值而非硬门槛**，验收以「静态段字节级稳定」与「分段断点命中可观测」为主，命中率仅作 H6 灰度期间的调优参考。
+
 ### ADR-6 复用既有工具元数据，不引入 Claude Code 的布尔标志命名
 
 **决策**：**不新增** `isReadOnly` / `isDestructive` / `isConcurrencySafe` 字段，改为在文档与 `ToolDescriptor` 投影中声明既有字段的等价映射：
@@ -248,9 +251,9 @@ isConcurrencySafe ≡ concurrency_class == "read_only"
 
 ### ADR-9 采用「恢复接线 + 增量升级」路线，禁止重写 Harness
 
-**决策**：全部实施必须**复用**既有库代码：`orchestration/router.py`（Router L0）、`orchestration/plan.py`（Plan L0 降级）、`prompts/protocols.py`（协议解析）、`execution/toolnode.py`（哑执行器）、`feedback/review.py`（三级验证）、`feedback/rules.py`（8 类门禁）、`memory/checkpoint.py`（检查点）。新增代码只允许出现在：`router` 节点壳、`orchestrator` 节点壳、`reflect` 节点壳、Workflow DAG 节点、`AgentRegistry`、缓存边界改造。
+**决策**：全部实施必须**复用**既有库代码：`orchestration/router.py`（Router L0）、`orchestration/plan.py`（Plan L0 降级）、`prompts/protocols.py`（协议解析基础）、`execution/toolnode.py`（哑执行器）、`feedback/review.py`（**现为 39 行三档简版**，H4 需扩展而非整体重写，见审计 C-10）、`feedback/rules.py`（8 类门禁）、`memory/checkpoint.py`（检查点）。新增代码只允许出现在：`router` 节点壳、`orchestrator` 节点壳、`reflect` 节点壳、Workflow DAG 节点、`AgentRegistry`、缓存边界改造。**对既有库文件的修改仅限两处增量**（非重写）：`feedback/review.py` 判决逻辑扩展至五档（`repair`/`retry`）与 `prompts/protocols.py` 的 `REFLECT_SCHEMA`/`parse_reflect` enum 扩展——二者是恢复五档判决的必要条件，删除或整体替换上述文件仍属红线第 5 条禁止范围。
 
-**理由**：解决审计矛盾 **C-3**。审计确认这些模块是「库完整、生产零调用」而非「实现有缺陷」——`toolnode.py` 有 6 个 HITL 测试用例、`test_harness_execution.py` 有 57 例覆盖。重写将丢弃 658 例测试积累的正确性，并直接触碰红线第 5 条。
+**理由**：解决审计矛盾 **C-3**。审计确认这些模块是「库完整、生产零调用」而非「实现有缺陷」——`toolnode.py` 有 6 个 HITL 测试用例、`test_harness_execution.py` 有 57 例覆盖（**例外：`review.py` 已随骨架化收窄为 39 行三档简版，属 C-10 恢复性扩展范围**）。重写将丢弃 658 例测试积累的正确性，并直接触碰红线第 5 条。
 
 **后果**：实施 PR 的 diff 中「新增行 / 删除行」比例应显著偏向新增；任何删除既有 Harness 模块的 PR 需单独说明理由。
 
@@ -356,7 +359,7 @@ flowchart TD
 | `discover` | 无（注册表查询） | 每次 plan 之后 | `agent_id` + `allowed_tools` | 🔴 **缺失（新建）** |
 | `orchestrator` ⇄ `tools` | **ReAct / TAOR 主循环** | Agent 分支主体 | `tool_call` 或最终正文 | 🟡 需重构（`toolnode.py` 库完整） |
 | `HITL` | 无（`interrupt`） | 非只读 bash、`ask_user_question`、`requires_confirmation` | 批准 → `tools`；拒绝 → `reflect` | 🟡 需重构（库有，生产未接） |
-| `reflect` | **Reflection / Reflexion 三级**（L1 规则 / L2 计算 / L3 推理） | Executor 退出循环时 | `pass` / `repair` / `retry` / `clarify` / `reject` | 🟡 需重构（`review.py` 库存在） |
+| `reflect` | **Reflection / Reflexion 判决**（L1 规则 / L2 计算 / L3 推理为设计分级） | Executor 退出循环时 | `pass` / `repair` / `retry` / `clarify` / `reject` | 🟡 需重构（审计 V1.1 修正：`review.py` 现仅 39 行三档简版、零调用，无分级实现；H4 需扩展判决至五档 + `REFLECT_SCHEMA`/`parse_reflect` 补 enum，再重建节点壳） |
 | `reflect → orchestrator` | **Reflection 首档修复**（`verdict=repair`） | 同一步**首次**工具失败，`step_fail_count == 1`，`MAX_REPAIRS=1` | 注入含 `repair_hint` 的观察，回 Executor 再试一次 | 🟡 需重构 |
 | `replan` | **Replan（有界重规划）** | 同一步**再次**失败 ∧ `plan.allows_replan` ∧ `replan_count < MAX_REPLANS=2` | `force_replan=True` + `replan_reason` → 回 `plan` | 🟡 需重构 |
 | `clarify` | 无（HITL 澄清卡） | `verdict=clarify`（缺必填槽） | `resume` 补槽 → 回 `plan` | 🟡 需重构 |
@@ -486,7 +489,7 @@ router（L0 确定性，零模型调用；仅 router_confidence < 0.7 才 L1 一
 
 ### 4.1 RootState（顶层，扩展现有 `GraphState`）
 
-在既有 24 字段基础上**新增 6 个字段**，其余全部沿用（不重命名、不删除，避免检查点兼容断裂）。
+在既有 25 字段基础上**新增 6 个字段**，其余全部沿用（不重命名、不删除，避免检查点兼容断裂）。
 
 > **字段名撞车裁决（V1.1）**：需求草案的 `RootState.mode: Literal["Agent","Workflow"]` **不可采纳**。`harness/memory/state.py` L22 已定义 `AgentMode = Literal["chat","direct","react","plan_solve"]`，`GraphState.mode` 正在使用该语义且会进检查点；复用 `mode` 表示引擎将与既有字段和已落库的检查点数据直接冲突。故新增独立字段 **`engine`** 承载引擎分流，`mode` 语义收窄为 Agent 子图内细分。同理，草案的 `user_input` 不新增——用户原文已在 `request.messages` 中，另存一份会出现两个真理。
 
@@ -501,7 +504,7 @@ router（L0 确定性，零模型调用；仅 router_confidence < 0.7 才 L1 一
 | **`agent_id`** | **`str \| None`** | **`AgentRegistry.discover` 选中的 Worker** | **`discover`** | **`orchestrator`** | 🔴 **新增** |
 | **`allowed_tools`** | **`tuple[str, ...]`** | **本轮工具视野（收窄后）** | **`discover`** | **`orchestrator` / `tools`** | 🔴 **新增** |
 | **`workflow_step`** | **`str \| None`** | **Workflow DAG 当前节点名（可观测 + 恢复定位）** | **DAG 各节点** | **ws.py / 检查点** | 🔴 **新增** |
-| `mode` | `AgentMode` | 保留：Agent 子图内的 `react` / `plan_solve` 细分 | `plan` | Agent 条件边 | 🟡 语义收窄 |
+| `mode` | `AgentMode` | 语义收窄为 Agent 子图内细分，**但 H0–H6 不驱动任何条件边**：`plan` 产出 `PlanArtifact` 后直接走 `orchestrator`，图上无 `react`↔`plan_solve` 分流边 | **预留（H0–H6 不写）** | **预留（无读取方）** | 🟡 语义收窄（字段保留仅为检查点兼容与未来扩展，避免实现者造死逻辑） |
 | `budget` | `Mapping[str,int]` | count-only 预算（`model_calls` / `tool_turns`） | `router` / `plan` / `orchestrator` | 守卫 | ✅ 已有 |
 | `task_state` / `task_state_observation_count` | `Mapping` / `int` | 结构化任务状态机投影与消费游标 | `tools` | `reflect` | ✅ 已有 |
 | `session_tasks` | `list` | 会话内任务看板（不写 PG `tasks`） | `tools` | ws.py | ✅ 已有 |
@@ -530,7 +533,7 @@ router（L0 确定性，零模型调用；仅 router_confidence < 0.7 才 L1 一
 | `step_fail_count` | `int` | 同一步连续工具失败数 | 驱动 `MAX_REPAIRS=1` 首档 |
 | `replan_count` | `int` | 已用重规划次数 | 硬上限 `MAX_REPLANS=2` |
 | `force_replan` / `replan_reason` | `bool` / `str \| None` | 强制重建计划 / 失败原因注入 | `replan_reason` 只写 `notes`，**不参与关键词匹配**（防失败文本误命中技能） |
-| `verdict` | `ReflectVerdict = Literal["pass","clarify","reject","retry","repair"]` | Reflection 判决 | 禁止 `reject → pass` |
+| `verdict` | `ReflectVerdict = Literal["pass","clarify","reject","retry","repair"]` | Reflection 判决 | 禁止 `reject → pass`。注：`state.py` 类型为五档，但实现层 `review.py` / `REFLECT_SCHEMA` 现为三档（审计 C-10），H4 统一扩展 |
 | `clarify_answer` / `clarify_id` | `str \| None` | 澄清卡 `interrupt()` 恢复 | 澄清**不写** `pending_confirm`、**不占**任务槽 |
 
 **草案字段的映射裁决（V1.1）**——避免实现者新造语义重复的字段：
@@ -672,6 +675,8 @@ class AgentDef:
 3. `discover(capabilities, skill_id) -> AgentDef` 打分匹配：技能精确命中 > 能力标签交集大小 > 权限最小化（同分取 `max_permission` 更低者）；无匹配时回落 `worker.general`；
 4. 只读目录投影到既有 `GET /api/mcp/all-tools` 旁边新增 `GET /api/agents`（**须先改 API.md**）。
 
+**`discover` 入参推导（V1.4 补充，闭环实现空白）**：`capabilities` 与 `skill_id` 均由 `plan.v1` 确定性映射产出，**不新增模型调用**：`plan.v1.intent` →（`SKILL_CATALOG` / `ToolRegistry` 关键词命中）→ `capabilities` 集合与可选 `skill_id`。推导规则：技能精确命中 → 该技能绑定的 `capabilities`；否则按 intent 关键词与 `AgentDef.description` 的交集打分；推导失败或空集 → 空 `capabilities`，`discover` 回落 `worker.general`（默认只读视野）。该映射在 `discover` 节点内实现为纯函数，纳入 H3 单元测试断言「同输入必同 `agent_id`」。
+
 **首批 Worker（建议）**：
 
 | `agent_id` | `capabilities` | `allowed_tools` | `max_permission` |
@@ -680,6 +685,8 @@ class AgentDef:
 | `worker.diagnose` | `{read_workspace, analyze_report, trace_task}` | `read` / `TaskGet` / `TaskList` / `web_search` | `read` |
 | `worker.dataset` | `{inspect_dataset, prepare_slots}` | `read` / `write` / `edit` / `task` | `write` |
 | `worker.sandbox` | `{run_script, verify_output}` | `read` / `bash` | `code` |
+
+**命名口径（V1.4 补充）**：`allowed_tools` 一律使用 `ToolRegistry` 注册名且三类互不替代——`task`（原生聚合入口）、`TaskCreate|TaskGet|TaskUpdate|TaskList`（会话看板四件套，写 `session_tasks` 不写 PG `tasks` 表）、`platform.tasks.task.{create,status,cancel}`（MCP 长任务桥，`transport="mcp"`）。上表 `general` / `dataset` 中的 `task` 均为**会话看板入口**；MCP 入队桥 `platform.tasks.task.create` **不进入任何 Worker 的 `allowed_tools`**——Workflow `enqueue` 节点（W6）才经工具十层链调用它，避免探索路径绕过门禁直接入队。H3 视野校验（`allowed_tools ⊆ ToolRegistry` fail-fast）按此口径比对全名。
 
 ### 5.3 Skill 文件目录规范
 
@@ -746,11 +753,11 @@ backend/api/app/harness/skills/
 | 阶段 | 目标 | 契约变更 | 关键改动 | 建议分支 | 验收断言 |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **H0** | 缓存边界 + Agent Registry（**不改图，不改契约**） | 无 | `assembly.py` 分段返回 + `adapters.py` 落 `cache_control`；新增 `agents.py` + 启动期校验；清理 `__pycache__` 死产物（C-8） | `feat/agent-hybrid-h0-foundation` | `prompt_cache_enabled=False` 时 `assemble()` 输出与今日**字节级一致**；Registry 校验不通过阻止启动 |
-| **H1** | Router 双引擎分流骨架 | **改 API.md**：`response.completed` 增 `engine` 字段（或 `thought.stage="route"`） | `router` 节点接线 `decide_mode`；`engine=workflow/agent` 暂时降级到 `chat_stream` 并落审计事件 | `feat/agent-hybrid-h1-router` | L0 分流可复现；未实现分支不报错、有审计痕迹 |
+| **H1** | Router 双引擎分流骨架 | **改 API.md**：`response.completed` 增 `engine` 字段（或 `thought.stage="route"`） | `router` 节点接线 `decide_mode`；**定义 L0 置信度打分规则**（离散特征 → 浮点 `router_confidence`，低于 §5.1 阈值 0.7 才触发 L1，打分规则为纯函数并随本阶段交付）；`engine=workflow/agent` 暂时降级到 `chat_stream` 并落审计事件 | `feat/agent-hybrid-h1-router` | L0 分流可复现；**同输入 `router_confidence` 恒等（L1 关闭时）**；未实现分支不报错、有审计痕迹 |
 | **H2** | Workflow 子图 DAG | **改 API.md**：恢复 `confirm_card` 相关事件 | 8 节点 DAG；`W0 select_skill` 二段路由；`W1` 局部 ReAct（单圈只读视野）；`W3` 复用 `check_gates`；`W5` 确认卡 | `feat/agent-hybrid-h2-workflow` | 固定槽位请求全程无跳步；技能零命中/并列即 `clarify` 不猜；门禁不通过就地收尾；`skill-rag` 仍 `VALIDATION` |
 | **H3** | Agent 子图 TAOR 主循环 | **改 API.md**：恢复 `tool_call` / `tool_result` / `thought` | `plan` / `discover` / `orchestrator` 节点壳；接回 `toolnode.py`；恢复 `protocols.py` 解析；前端恢复 ToolCard | `feat/agent-hybrid-h3-taor` | 工具串行过门禁；`repair_hint` 出现在失败观察；`read` 全文不入历史 |
 | **H4** | Reflection + Replan 回边 | 无（H3 已覆盖） | `reflect` 节点壳复用 `review.py`；`repair` / `retry` / `clarify` 条件边；`MAX_REPAIRS=1` / `MAX_REPLANS=2` 常量收敛 | `feat/agent-hybrid-h4-reflexion` | 故意重复失败重规划一次后收尾，**不打满预算空转** |
-| **H5** | HITL + 持久化（ADR-7） | **改 API.md**：审批事件与 `resume` 语义 | `agent_checkpointer=postgres`；`ws.py` 接 `resume`；`ahas_pending_interrupt` 真实实现；网关按 `session_id` 粘性路由 | `feat/agent-hybrid-h5-hitl` | api 重启后待审批任务仍可 `resume`；`pending_events` 恢复时清空 |
+| **H5** | HITL + 持久化（ADR-7） | **改 API.md**：审批事件与 `resume` 语义 | `agent_checkpointer=postgres`；`ws.py` 接 `resume`；`ahas_pending_interrupt` 真实实现；网关按 `session_id` 粘性路由；**定义 `thread_id` 持久化与 resume 定位协议**（审批/确认记录携带 thread_id，resume 按记录取回唤醒图——见 §7.3） | `feat/agent-hybrid-h5-hitl` | api 重启后待审批任务仍可 `resume`；`pending_events` 恢复时清空；**重启后按审批记录可定位并恢复同 `thread_id`** |
 | **H6** | 并行灰度 + Compact 升级 | 无 | `agent_parallel_tool_batch_enabled` 按协议档灰度；`compact.summarize()` 接 LLM 压缩 | `feat/agent-hybrid-h6-rollout` | 只读工具并行无资源键冲突；compact 后语义不丢关键槽位 |
 
 **H0 优先的理由**：缓存边界改造需修改 `assemble()` 返回类型，当前调用方**只有 `routing.py` 一处**（骨架化的副产品）。H3 之后调用方将变为 4–5 处，改造成本翻倍。这是趁窗口期动手的最佳时机。
@@ -868,7 +875,7 @@ O1 与 O2 的共同特征是**成本低且不可逆价值高**：O1 定下的 ex
 | | TAOR 圈数 | `tool_turns` | S2 中位数 ≤ 6；S1 恒为 0 |
 | | 收敛率 | 非 `reject` 终态占比 | S2 ≥ 85% |
 | **资源开销** | Token 消耗 | `response.usage` 累加（分 prompt / completion） | S1 ≤ 2k；S2 ≤ 40k |
-| | **缓存命中率** | `usage.cache_read_input_tokens / usage.input_tokens` | 开启 `prompt_cache_enabled` 后 ≥ 60% |
+| | **缓存命中率** | `usage.cache_read_input_tokens / usage.input_tokens` | 开启 `prompt_cache_enabled` 后 ≥ 60%（**校准值，非硬门槛**，见 ADR-5 现实约束；混合 engine 会话允许低于该值，辅以「静态段字节级稳定 + 分段断点命中」观测） |
 | | 端到端延迟 | 首 `assistant_delta` 时延 / 整轮时延 | 首字 ≤ 2s；S1 整轮 ≤ 5s |
 | | 模型调用次数 | `budget.model_calls` | S1 ≤ 1；S2 ≤ 12 |
 | **工具调用冗余度** | 重复调用率 | 同名同参调用数 / 总调用数 | ≤ 10%（`repeat_retry` 应捕获超限） |
@@ -940,6 +947,8 @@ cd frontend && npm run typecheck && npm run build
 **互斥铁律**：澄清卡与确认卡**互斥**——澄清**不写** `pending_confirm`、**不占**任务槽（`clarify_id` 与 `confirm_id` 不可同时非空）。
 
 **H5 前置条件（ADR-7）**：`agent_checkpointer=postgres` + 网关粘性路由 + `ahas_pending_interrupt` 真实实现。**在 `memory` 检查点下发布审批功能属于已知缺陷，不得上线。**
+
+**`resume` 定位协议（V1.4 补充）**：现状每回合独立 `thread_id`（§7.1），`interrupt()` 恢复要求**同 `thread_id`** 唤醒图，故 thread_id 必须跨请求可寻址：待恢复线程的 `thread_id` 随审批/确认记录持久化（确认卡/澄清卡/审批事件载体：PG `pending_confirm` 或检查点元数据，落地形态在 H5 阶段定并先改 API.md），`resume` 请求按记录取回 thread_id 后以 `Command(resume=...)` 唤醒；`thread_id` 本身可暴露给前端（非敏感），但**禁止**将 `pending_events` / Observation 全文写入该记录。
 
 ### 7.4 工具调用隔离（Tool Gateway + Permission Check）
 
@@ -1049,7 +1058,7 @@ except Exception as exc:
 | 15 | **Router 顶层分流** | 🟡 需重构 | `orchestration/router.py` 库完整**零调用**，需接线并升级为双引擎 + L1 CoT | H1 |
 | 16 | **Plan 节点** | 🟡 需重构 | `orchestration/plan.py` 完整，节点壳已删，需重写（~150 行） | H3 |
 | 17 | **TAOR / ReAct 主循环** | 🟡 需重构 | `execution/toolnode.py` 544 行完整，需接回图 | H3 |
-| 18 | **Reflection 三级判决** | 🟡 需重构 | `feedback/review.py` 库完整，节点壳已删 | H4 |
+| 18 | **Reflection 五档判决** | 🟡 需重构 | 审计 V1.1（C-10）：`review.py` 现为 39 行三档简版（pass/clarify/reject）、零调用；`REFLECT_SCHEMA` / `parse_reflect` enum 同三档。H4 = 扩展判决至五档（repair/retry）+ 协议 schema/parser 补 enum + 重建节点壳 | H4 |
 | 19 | **Replan 有界重规划** | 🟡 需重构 | State 字段 + 阈值语义齐备，需重建条件边 | H4 |
 | 20 | **协议解析（`react.v1` / `plan.v1` / `reflect.v1`）** | 🟡 需重构 | `prompts/protocols.py` 182 行完整，零生产调用 | H3 |
 | 21 | **HITL 审批（`interrupt` / `resume`）** | 🟡 需重构 | 库有 + 6 测试；`ws.py` 无 `resume`，`ahas_pending_interrupt` 恒 `False` | H5 |
@@ -1122,8 +1131,17 @@ except Exception as exc:
 
 本文档为**架构需求设计**，未修改任何源码、配置、依赖或数据库迁移。
 
-- `docs/AI测试与评估平台-混合驱动引擎架构.md`（新增）：V1.0 定义混合驱动引擎架构——顶层 Router 双引擎分流、Agent 子图 Orchestrator-Worker TAOR 循环、Workflow 子图硬编码 DAG、上下文缓存边界、Agent Registry、工具十层网关、HITL 与事件溯源；含 9 条 ADR、双层状态机 Mermaid 图、RootState/AgentState/WorkflowState 设计、H0–H6 七阶段落地计划、四类场景与五维评分测试策略、35 项「已满足 / 需重构 / 新建」总表。
-- `docs/AI测试与评估平台-混合驱动引擎环境审计.md`（前置输入）：V1.0 只读审计，提供本文全部现状判定依据与 9 项阻塞矛盾点（C-1…C-9）。
+- `docs/AI测试与评估平台-混合驱动引擎架构.md`（新增）：V1.0 定义混合驱动引擎架构——顶层 Router 双引擎分流、Agent 子图 Orchestrator-Worker TAOR 循环、Workflow 子图硬编码 DAG、上下文缓存边界、Agent Registry、工具十层网关、HITL 与事件溯源；含 10 条 ADR（V1.1 增 ADR-10）、双层状态机 Mermaid 图、RootState/AgentState/WorkflowState 设计、H0–H6 七阶段落地计划、四类场景与五维评分测试策略、39 项「已满足 / 需重构 / 新建」总表。
+- `docs/AI测试与评估平台-混合驱动引擎环境审计.md`（前置输入）：V1.0 只读审计，提供本文全部现状判定依据与 9 项阻塞矛盾点（C-1…C-9）；V1.1 起并入 C-10 反馈层收窄发现。
+
+**V1.4 变更（评审修订对齐，纯文档）**：按架构评审意见对齐审计 V1.1（C-10）——
+1. **Reflection 判定全面修正**：§1.1 增「反馈层 reflect 库已收窄」行；§3.2 范式标注表 `reflect` 行、§8 第 18 项、ADR-9 复用清单统一改为「`review.py` 现为 39 行三档简版（pass/clarify/reject）、零调用含测试，`REFLECT_SCHEMA`/`parse_reflect` enum 同三档，五档 verdict 仅残留 `state.py` 类型注释；H4 = 判决扩展至五档 + 协议补 enum + 重建节点壳」；ADR-9 明确允许的增量修改仅限 review.py 判决逻辑与 protocols.py 协议族两处；
+2. **字段计数修正**：§1.1 / §4.1 的「24 字段」改为 25（与审计 V1.1 同步）；
+3. **§4.1 `mode` 读写闭环**：明示 H0–H6 不驱动任何条件边、不写不读（仅检查点兼容保留），防实现者造死逻辑；§4.2 `verdict` 行标注「类型五档 vs 实现三档」差距；
+4. **§5.2 补两处实现空白**：`discover` 入参推导链（plan.v1.intent → 确定性映射 → capabilities/skill_id，不新增模型调用、失败回落 worker.general）；Worker `allowed_tools` 命名口径（`task` / `TaskCreate|TaskGet|TaskUpdate|TaskList` / `platform.tasks.task.*` 三类互不替代，MCP 入队桥不进入任何 Worker 视野）；
+5. **§5.6 H1/H5 补交付物与验收**：H1 交付 L0 置信度打分规则（离散特征 → 浮点 `router_confidence`，验收同输入恒等）；H5 交付 `thread_id` 持久化与 resume 定位协议（§7.3 增专段，重启后按审批记录恢复同 thread_id）；
+6. **缓存约束**：ADR-5 补现实约束（Anthropic 5 分钟 TTL / 1024 token 下限、engine 交替分桶碎片化），§6.2 缓存命中率 ≥ 60% 定位为**校准值非硬门槛**；
+7. **版本漂移修正**：尾部清单「35 项」→「39 项」；分层口径不再称「Harness 九层」。
 
 **V1.3 变更（Router + Skill 模式优化路线，纯文档）**：新增 §5.7「Router + Skill 模式优化路线」——列出 O1–O9 九项模式级优化及其**阶段依赖、成本与契约影响**，明确它们依附 H 阶段而非独立立项、不计入 §8 总表；§5.7.2 给出 **O1 落法裁决**：经审计 `harness/skills/storage.py` 发现头部方案被三条代码约束否决（`_REQUIRED_HEADER_KEYS` 六键全等比较、`HEADER_READ_LIMIT=8192` 挤占常驻 Hint 预算、`SkillMetadata` 加字段将迫使 `routers/admin.py` 显式序列化改 API.md），故裁决 examples 落**正文 `## 示例请求` 段**，实现契约零变更且与工作流同修订指纹（消除 Router 关键词表与 Skill 描述的知识漂移）；§5.7.3 定义四类判错信号的**零新埋点**推导来源，并立「弱监督标签不得直接充当阈值优化目标函数」口径铁律（否则阈值会被推向全判 `chat`）；§5.7.4 给出 O3 语义路由与「L0 可复现性 100%」的三条兼容约束（语料随 `revision`、embedding 版本视为契约级变更、失败必降级 L1）并确认 pgvector 已具备无需新依赖；§5.7.5 记录「技能数越多路由越准」为反直觉误判，将 O9 分层路由的触发条件定为**技能数 > 10** 而非阶段；§5.7.6 定优先级 O1 → O2 → O3 并说明 O1/O2 的不可逆价值。同步：§5.3 技能目录规范新增第 5 条铁律（示例段单一来源、不得放头部）；§9 新增 Q11（示例段是否表单化编辑）与 Q12（O3 embedding 提供方）。
 
@@ -1134,7 +1152,7 @@ except Exception as exc:
 **待回写的既有文档**（实施各阶段时同步，`AGENTS.md` §1.4 文档闭环要求）：
 
 - `docs/AI测试与评估平台-API.md`：H1 `engine` 审计痕迹、H2 确认卡事件、H3 `tool_call`/`tool_result`/`thought`、H5 审批与 `resume` 语义；
-- `AGENTS.md`：§5.2.3 API Key 存储事实源修正为 `profile_env.py`（矛盾 C-1）；§1.5 实现状态地图随各阶段更新；
+- `AGENTS.md`：§5.2 第 3 条 API Key 存储事实源修正为 `profile_env.py`（矛盾 C-1）；§1.5 实现状态地图随各阶段更新；
 - `docs/AI测试与评估平台-Harness-执行层.md`：ADR-6 工具标志等价映射表；
 - `docs/AI测试与评估平台-Harness-编排层.md`：Router 双引擎分流与 `AgentRegistry` 挂载点；
 - `docs/AI测试与评估平台-Harness-上下文工程层.md`：ADR-5 缓存边界七段与段序单调约束；

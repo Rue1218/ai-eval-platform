@@ -3,11 +3,11 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | 混合驱动引擎（Hybrid Agent Engine）前置环境与现状审计 |
-| 版本 | V1.0 |
-| 审查日期 | 2026-09-02 |
+| 版本 | V1.1 |
+| 审查日期 | 2026-09-03 |
 | 文档性质 | **只读审计**（未修改任何源码、配置、迁移与依赖） |
 | 审计对象 | `backend/api/app/agent/`、`backend/api/app/harness/`、`backend/api/app/llm/`、`backend/api/app/routers/{ws,tasks,mcp}.py`、`backend/worker/app/`、`frontend/src/` |
-| 审计基线 | 分支 `codex/fix/task-tool-contracts`，HEAD `95a8608 fix(task): 收敛任务工具契约与取消回执` |
+| 审计基线 | 分支 `codex/fix/task-tool-contracts`，HEAD `95a8608 fix(task): 收敛任务工具契约与取消回执`。**本文全部行号为该基线快照值**（合入 main 后个别引用已漂移 ±数十行，如 `subagent_type` L794→L833），实施/评审时一律以**符号名为准**，行号仅供快速定位 |
 | 下游文档 | [`docs/AI测试与评估平台-混合驱动引擎架构.md`](./AI测试与评估平台-混合驱动引擎架构.md)（混合驱动引擎架构需求） |
 | 上游权威 | `docs/AI测试与评估平台-PRD.md`（产品范围）、`docs/AI测试与评估平台-API.md`（REST/WS 契约）、`docs/AI测试与评估平台-Agent开发文档.md`（当前链路）、`AGENTS.md`（工程红线） |
 
@@ -49,7 +49,7 @@
 1. **主路径（现行）** — 协议档受控环境文件：`app/profile_env.py` 以协议档 ID 生成稳定变量名 `AI_PROFILE_{NORMALIZED_ID}_{BASE_URL|MODEL|API_KEY}`（L65–78），在 bind mount 的 `.env` 上**加锁刷新**；`docker-compose.yml` L105–106 将 `./.env` 挂载到 api 容器 `/run/config/.env`（可写），L177 对 worker 只读挂载。
 2. **遗留路径（兼容）** — DB Fernet 加密列：`backend/shared/models.py` L216–234 `ProtocolProfile.encrypted_key`；加解密在 `app/security.py` L56–73（`KEY_ENCRYPTION_KEY` 为空时从 `SECRET_KEY` 派生 Fernet）。`routers/profiles.py` L100–102 / L320–322 新建与更新时**优先写 env 文件并清空 `encrypted_key`**。
 
-> **矛盾点 C-1（文档漂移）**：`AGENTS.md` §5.2.3 仍表述「API Key 必须用 Fernet 加密存储」，而代码主写入路径已迁移到挂载 `.env` 的 `AI_PROFILE_*`。混合引擎设计时**必须以 `profile_env.py` 为事实源**，否则新增 Worker Agent 取密钥会走到已废弃的 DB 列。
+> **矛盾点 C-1（文档漂移）**：`AGENTS.md` §5.2 第 3 条仍表述「API Key 必须用 Fernet 加密存储」，而代码主写入路径已迁移到挂载 `.env` 的 `AI_PROFILE_*`。混合引擎设计时**必须以 `profile_env.py` 为事实源**，否则新增 Worker Agent 取密钥会走到已废弃的 DB 列。
 
 **其余关键配置项状态**（默认值 → 本机 `.env`）：
 
@@ -114,7 +114,7 @@ AI / Agent 相关依赖实测：
 | 期望路径 | 存在性 | 实际情况 |
 | :--- | :--- | :--- |
 | `langgraph.json` | **不存在** | 未使用 LangGraph CLI / Platform 部署形态；图在 FastAPI 进程内手工编译 |
-| `specs/` | **本审计前不存在** | 本文档为该目录首个文件 |
+| `specs/` | **不存在** | V1.1 起本文档直接归档 `docs/`（`AI测试与评估平台-` 前缀命名合规，C-9 已关闭，无需迁移） |
 | 根 `src/` | **不存在** | 仅 `frontend/src/`（71 文件） |
 | 根 `config/` | **不存在** | 配置收敛在 `backend/api/app/config.py` |
 | `.claude/` | **存在** | 仅 `.claude/settings.local.json`（IDE 本地设置，非 Agent 指令） |
@@ -122,7 +122,7 @@ AI / Agent 相关依赖实测：
 | `AGENTS.md` | **存在** | 工程规范与六大红线 |
 | Skill `.md` 文件 | **存在，4 个** | `backend/api/app/harness/skills/files/skill-{benchmark,testcase,rag,stress}/SKILL.md` |
 
-`backend/api/app/harness/` 六层结构（源码，排除 `__pycache__`）：
+`backend/api/app/harness/` 目录结构（源码，排除 `__pycache__`）：
 
 ```text
 harness/
@@ -176,7 +176,7 @@ harness/
 
 **位置**：`backend/api/app/harness/memory/state.py`（153 行）。**类型**：`TypedDict, total=False`（非 dataclass / Pydantic），配 `assert_serializable()` 反射断言全字段 `json.dumps` 安全。
 
-`GraphState` 共 **24 个字段**，其中 3 个带 append reducer（`_append_events` / `_append_observations` / `_append_native_messages`）。骨架图实际只写 3 个字段：
+`GraphState` 共 **25 个字段**，其中 3 个带 append reducer（`_append_events` / `_append_observations` / `_append_native_messages`）。骨架图实际只写 3 个字段：
 
 | 字段 | 类型 | 语义 | 骨架图使用 |
 | :--- | :--- | :--- | :--- |
@@ -238,7 +238,7 @@ START → routing
 | `harness/prompts/protocols.py`（182 行，`parse_react` / `parse_plan` / `parse_reflect`） | 保留 | **库完整，死连** | 仅测试 |
 | `harness/execution/toolnode.py`（544 行，含 `interrupt()` 与并行波次） | 保留 | **库完整，死连** | 仅测试构造图 |
 | `harness/execution/registry.py`（1256 行） / `dispatch.py`（1264 行） / `sandbox.py` | 保留 | **完整可用** | `/api/mcp/*` 目录 + 测试 |
-| `harness/feedback/review.py` | 保留（注释明确「不定义 reflect_node」） | **库函数** | 仅测试 |
+| `harness/feedback/review.py` | **保留但已收窄**（39 行三档简版：`ReflectVerdict = pass/clarify/reject`，注释明确「不定义 reflect_node」；`REFLECT_SCHEMA` enum 同为三档，五档 `verdict` 仅残留于 `state.py` 类型注释） | **库函数（简版）** | **零调用（含测试）**，仅 `feedback/__init__.py` re-export |
 
 > **矛盾点 C-3（真实冲突，非功能重叠）**：这不是「两套并存的循环」冲突（`AGENTS.md` 禁止第二条 Harness 循环，现网确实只有一条），而是**「基础设施与编排层的接线断裂」**。混合引擎的正确姿势是**恢复接线并升级**，而非新写一套。若忽视此点重新实现，将直接触碰红线第 5 条「禁止全量无意义重写」。
 
@@ -396,7 +396,7 @@ Redis 当前唯一用途：`routers/ws_tickets.py` 的 WS 短票 `SET NX`（5 �
 | Orchestrator 极简（代码只驱动循环） | ✅ 已满足（理念） | 既有文档 §2.1 已冻结「LLM 当受控微服务，外层循环由代码控制」；`toolnode.py` 即哑执行器 |
 | TAOR（Think→Act→Observe→Repeat） | 🟡 需重构 | 平台已冻结为 **OTA（Observe→Think→Act）**，语义等价、顺序表述不同；`observations` append reducer 与 `native_messages` 回灌机制在库中完整 |
 | Plan 节点 | 🟡 需重构 | `orchestration/plan.py::build_plan`（L0 关键词降级）完整；LLM 规划节点 `plan_solve.py` **已删除**，需重写节点壳（约 150 行） |
-| Reflection 节点 | 🟡 需重构 | `feedback/review.py` 三级验证库函数保留；`reflect.py` 节点已删除；`ReflectVerdict` 五档（含 `repair`）在 State 中保留 |
+| Reflection 节点 | 🟡 需重构 | `feedback/review.py` 仅 39 行三档简版（`pass/clarify/reject`、零调用），**无 L1/L2/L3 分级实现**；`reflect.py` 节点已删除；五档 `ReflectVerdict`（含 `repair`）仅残留 `state.py` 类型注释——需**恢复性扩展**判决逻辑与 `REFLECT_SCHEMA` / `parse_reflect`（C-10） |
 | Replan（有界重规划） | 🟡 需重构 | `replan_count` / `force_replan` / `replan_reason` / `step_fail_count` 字段与 `MAX_REPAIRS=1` / `MAX_REPLANS=2` 阈值语义均有记载，需重建条件边 |
 | **Agent Registry（能力标签 + 工具集）** | 🔴 **完全缺失** | 无 `AgentRegistry` 类；`task` 工具 schema 中 `subagent_type` 明确标注「仅展示，不启子代理」（`registry.py` L794 附近）。`ToolRegistry` 可作实现范本 |
 | Worker 内嵌 ReAct | 🟡 需重构 | ReAct 双协议（`legacy` 严格 JSON / `native` Function Calling）在 `protocols.py` + `stream_policy.py` 中完整 |
@@ -432,7 +432,7 @@ Redis 当前唯一用途：`routers/ws_tickets.py` 的 WS 短票 `SET NX`（5 �
 
 | 编号 | 矛盾 | 影响 | 建议裁决 | 拍板方 |
 | :--- | :--- | :--- | :--- | :--- |
-| **C-1** | `AGENTS.md` 称 API Key 走 DB Fernet，代码主路径已迁移到挂载 `.env` 的 `AI_PROFILE_*` | 新 Agent/Worker 取密钥可能走废弃列 | 以 `profile_env.py` 为事实源；回写 `AGENTS.md` §5.2.3 | 架构 |
+| **C-1** | `AGENTS.md` 称 API Key 走 DB Fernet（§5.2 第 3 条），代码主路径已迁移到挂载 `.env` 的 `AI_PROFILE_*` | 新 Agent/Worker 取密钥可能走废弃列 | 以 `profile_env.py` 为事实源；回写 `AGENTS.md` §5.2 第 3 条 | 架构 |
 | **C-2** | 需求的「外部 MCP（Github / SQLite）」与平台内部 MCP 同名异物，且红线禁止外部 MCP | 直接触碰六大红线第 1 条 | 混合引擎**默认不接外部 MCP**；预留 `ExternalMCPGateway` 接口但 fail-closed，启用须先改 PRD + API.md | 产品 + 架构 |
 | **C-3** | 编排层被骨架化拆除，但基础设施完整；库代码「死连」 | 若重新实现将触碰红线第 5 条「禁止全量无意义重写」 | 采取「**恢复接线 + 增量升级**」路线，禁止另起 Harness | 架构 |
 | **C-4** | 需求要求 Router 用 LLM 长思维链；既有文档明令「不用 LLM 替代 `decide_mode`」 | 设计意图直接冲突 | 混合 Router：确定性特征优先，低置信度才调一次短模型，失败降级 L0 | 架构 |
@@ -440,17 +440,19 @@ Redis 当前唯一用途：`routers/ws_tickets.py` 的 WS 短票 `SET NX`（5 �
 | **C-6** | 恢复工具链路需要 `tool_call` / `tool_result` / `thought` / `plan` 等 WS 事件，但骨架化已从 API.md 与前端类型中移除 | 红线第 1 条「新字段必须先改 API.md」 | 每阶段**先改 API.md、再改代码、再改前端** | 契约负责人 |
 | **C-7** | `agent_checkpointer=memory` 时 HITL 审批与断点续跑事实上不可用 | 需求 §2.4 无法验收 | 引入 HITL 的阶段必须同步切 `PgCheckpointer` 并解决多副本粘性路由 | 运维 + 架构 |
 | **C-8** | 死产物 `orchestration/__pycache__/react_loop.cpython-314.pyc`（源文件已删） | 误导审计与潜在导入歧义 | 清理 `__pycache__` 并确认 `.gitignore` 覆盖 | 任一实施 PR 顺带 |
-| **C-9** | 文档路径规范：`AGENTS.md` §1.4 要求设计文档归档于 `docs/AI测试与评估平台-<主题>.md` | 本次产出位于 `specs/` | 保留 `specs/` 作为本次交付；合并前在 `docs/` 建同名索引或迁移 | 文档负责人 |
+| **C-9** | 文档路径规范：`AGENTS.md` §1.4 要求设计文档归档于 `docs/AI测试与评估平台-<主题>.md` | 原产出于 `specs/`，与规范冲突 | **✅ 已关闭（V1.1）**：本文与架构文档均已直接归档 `docs/` 且命名合规，`specs/` 不存在，无需迁移 | 文档负责人 |
+| **C-10** | 反馈层 reflect 库随骨架化**收窄而非仅拆除**：`review.py` 仅 39 行三档简版（`pass/clarify/reject`、零调用含测试），`REFLECT_SCHEMA` / `parse_reflect` enum 同为三档，五档 `verdict`（含 `repair`/`retry`）仅残留于 `state.py` 类型注释 | 架构文档原把 H4 判为「库完整、只需重建节点壳」，实际需**恢复性扩展**判决逻辑与协议 schema/parser，H4 工作量被低估 | 审计基线修订后，H4 范围改为「扩展 `review()` 至五档 + `REFLECT_SCHEMA`/`parse_reflect` 补 enum + 重建 `reflect` 节点壳」，并同步更新架构文档 ADR-9 复用清单 | 架构 |
 
 ---
 
 ## 5. 审计结论
 
-1. **基础设施成熟度高**：Harness 六层（上下文 / 契约 / 执行 / 反馈 / 记忆 / 编排 / 提示词 / 安全 / 技能）源码合计数千行，658 例测试，工具元数据与权限纵深**超过** Claude Code 公开设计的粒度。
-2. **唯一真实断点在编排层**：生产图为 1 节点 / 0 条件边 / 0 工具 / 0 interrupt，而 `GraphState` 24 字段中 21 个是为完整混合图预留的。
+1. **基础设施成熟度高**：Harness 分层基础设施（`context` / `contracts` / `execution` / `feedback` / `memory` / `orchestration` / `prompts` / `security` / `skills` 九子包 + `llm` 占位）源码合计数千行，658 例测试，工具元数据与权限纵深**超过** Claude Code 公开设计的粒度。
+2. **唯一真实断点在编排层**：生产图为 1 节点 / 0 条件边 / 0 工具 / 0 interrupt，而 `GraphState` 25 字段中 22 个是为完整混合图预留的。
 3. **三处真正的新建工作**：**Agent Registry**（能力标签与发现）、**上下文缓存边界**（`cache_control` 分段）、**Workflow 硬编码 DAG 子图**。
 4. **两处「开开关」即得的能力**：只读工具并行（`agent_parallel_tool_batch_enabled`）、断点续跑（`agent_checkpointer=postgres`）。
 5. **合法性前置**：C-2 / C-5 / C-6 三项涉及产品红线与对外契约，必须先裁决与回写文档，再落代码。
+6. **反馈层 reflect 库已收窄而非完整保留（V1.1 修正，C-10）**：`review.py` 39 行三档简版、零调用（含测试），`REFLECT_SCHEMA` enum 三档，五档 verdict 仅残留于 `state.py` 类型注释——「恢复接线」清单须把反馈层列为**恢复性扩展**（判决逻辑 + 协议 schema/parser + 节点壳），H4 工作量相应上调。
 
 详细架构设计、ADR、State 设计、Mermaid 流转图与测试策略见 [`docs/AI测试与评估平台-混合驱动引擎架构.md`](./AI测试与评估平台-混合驱动引擎架构.md)。
 
@@ -461,3 +463,11 @@ Redis 当前唯一用途：`routers/ws_tickets.py` 的 WS 短票 `SET NX`（5 �
 本文档为**只读审计**，未修改任何源码、配置、依赖或数据库迁移。
 
 - `docs/AI测试与评估平台-混合驱动引擎环境审计.md`（新增）：V1.0 记录环境探测（运行时 / 密钥 / 依赖 / 结构）与现状审计（状态机 / State / 工具调度 / 上下文 / 记忆 / 测试），输出差距矩阵与 9 项阻塞矛盾点。
+
+**V1.1 变更（评审修订，纯文档）**：按架构评审意见修订以下六项——
+1. **反馈层判定修正（新增 C-10）**：实测 `harness/feedback/review.py` 仅 39 行、`ReflectVerdict` 三档（`pass/clarify/reject`）、**零调用（含测试）**，且 `prompts/protocols.py` `REFLECT_SCHEMA`/`parse_reflect` enum 同为三档——五档 `verdict`（含 `repair`/`retry`）仅残留于 `state.py` 类型注释。原「三级验证库函数保留（仅测试）」表述不成立，反馈层是**随骨架化收窄**而非「库完整死连」，需恢复性扩展；
+2. **字段计数修正**：`GraphState` 实为 **25 个字段**（原写 24），相应「骨架图仅用 3 个 / 预留 22 个」；
+3. **行号快照说明**：表头标注全部行号为基线 `95a8608` 快照值（合入 main 后已漂移，如 `subagent_type` L794→L833、`build_default_registry` L403→L437），实施以符号名为准；
+4. **C-9 关闭**：两文档已直接归档 `docs/` 且命名合规（`AI测试与评估平台-` 前缀），`specs/` 不存在，删除「保留 specs/ 作为交付」的过时建议；
+5. **C-1 引用修正**：`AGENTS.md` 无 §5.2.3 小节，改为 §5.2 第 3 条；
+6. **分层口径统一**：§5 结论不再以「六层（列 9 子包）」混称，统一为「分层基础设施（九子包 + `llm` 占位）」。
