@@ -133,6 +133,13 @@ def _engine_on(monkeypatch):
     yield
 
 
+def _saver():
+    """进程内检查点（BaseCheckpointSaver 契约，CI 严格类型校验兼容）。"""
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    return InMemorySaver()
+
+
 def test_graph_interrupt_then_approve_resume(_engine_on, monkeypatch) -> None:
     """bash 危险命令 interrupt → 检查点暂停 → approve resume → 图继续收尾。"""
     monkeypatch.setattr(
@@ -141,7 +148,7 @@ def test_graph_interrupt_then_approve_resume(_engine_on, monkeypatch) -> None:
     )
     thread_id = "h5-thread-1"
     gateway = _ScriptedGateway([_PLAN_OK, _REACT_BASH, _REACT_DONE])
-    agent = LangGraphAgent(gateway, checkpointer=_InMemory())
+    agent = LangGraphAgent(gateway, checkpointer=_saver())
     config = _engine_config(thread_id)
     interrupt_value, events = _collect_until_interrupt(agent, "排查一下测试环境异常", config)
     assert interrupt_value is not None
@@ -171,7 +178,7 @@ def test_graph_interrupt_then_reject_stops_command(_engine_on, monkeypatch) -> N
     )
     thread_id = "h5-thread-2"
     gateway = _ScriptedGateway([_PLAN_OK, _REACT_BASH, _REACT_DONE])
-    agent = LangGraphAgent(gateway, checkpointer=_InMemory())
+    agent = LangGraphAgent(gateway, checkpointer=_saver())
     config = _engine_config(thread_id)
     interrupt_value, _events = _collect_until_interrupt(agent, "排查一下测试环境异常", config)
     assert interrupt_value is not None
@@ -181,18 +188,6 @@ def test_graph_interrupt_then_reject_stops_command(_engine_on, monkeypatch) -> N
     assert tool_results and tool_results[0]["payload"]["ok"] is False  # 拒绝不执行
     completed = [e for e in resumed_pending if e["kind"] == "response.completed"]
     assert completed
-
-
-class _InMemory:
-    """进程内检查点（图级测试用；与 PgCheckpointer 同 BaseCheckpointSaver 契约）。"""
-
-    def __init__(self) -> None:
-        from langgraph.checkpoint.memory import InMemorySaver
-
-        self._inner = InMemorySaver()
-
-    def __getattr__(self, name):
-        return getattr(self._inner, name)
 
 
 # ─── 2. 审批卡协议：落卡行锁 / meta / 一次性 nonce ───
