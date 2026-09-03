@@ -26,17 +26,39 @@ from ..harness.memory import GraphState, SerializableRequest
 from ..llm import ModelGateway, ModelResponse
 from .router_node import direct_node, router_node
 from .routing import chat_stream_node
+from .workflow_nodes import (
+    await_confirm_node,
+    build_task_spec_node,
+    enqueue_node,
+    load_skill_node,
+    prepare_slots_node,
+    select_skill_node,
+    summarize_node,
+    validate_gates_node,
+)
 
 
 def _route_by_engine(state: GraphState) -> str:
-    """Router 之后的顶层条件边：direct 零模型收尾，其余引擎 H1 统一降级 chat。
+    """Router 之后的顶层条件边：direct 零模型收尾，workflow 进 DAG，其余降级 chat。
 
     防御语义：Router 未产出 ``engine``（异常路径）时回落 chat，不猜测。
     """
     engine = state.get("engine")
     if engine == "direct":
         return "direct"
+    if engine == "workflow":
+        return "workflow"
     return "chat_stream"
+
+
+def _after_validate_gates(state: GraphState) -> str:
+    """W3 失败（门禁不通过）就地收尾；通过推进 W4。"""
+    return "END" if state.get("workflow_failed") else "w4_build_task_spec"
+
+
+def _after_await_confirm(state: GraphState) -> str:
+    """W5 未确认/必填缺失就地收尾；确认通过推进 W6。"""
+    return "END" if state.get("workflow_failed") else "w6_enqueue"
 
 
 class LangGraphAgent:
@@ -62,7 +84,11 @@ class LangGraphAgent:
         self._graph = self._build_graph()
 
     def _build_graph(self):
-        """构建图：主开关关闭保持纯对话；开启接入 Router 四路分流（H1 降级）。"""
+        """构建图：主开关关闭保持纯对话；开启接入 Router 四路分流。
+
+        H2：``engine=workflow`` 走 W0–W7 Workflow DAG（确定性链）；``agent``
+        未实现仍降级 ``chat_stream``；W3/W5 失败经条件边就地收尾。
+        """
         graph = StateGraph(GraphState)
         graph.add_node("chat_stream", self._make_chat_node())
         if not settings.hybrid_engine_enabled:
@@ -72,18 +98,60 @@ class LangGraphAgent:
             graph.add_node("router", self._make_router_node())
             graph.add_node("direct", self._make_direct_node())
             graph.add_edge(START, "router")
-            # H1：workflow / agent 未实现，与 chat 一同降级到 chat_stream 执行
+            # H2：workflow 引擎接入 Workflow DAG；agent 仍降级 chat_stream
             graph.add_conditional_edges(
                 "router",
                 _route_by_engine,
-                {"direct": "direct", "chat_stream": "chat_stream"},
+                {"direct": "direct", "chat_stream": "chat_stream", "workflow": "workflow"},
             )
             graph.add_edge("direct", END)
             graph.add_edge("chat_stream", END)
+            self._add_workflow_dag(graph)
         # 阶段 3：Checkpointer 按 thread_id 隔离回合（M3-D4 恢复语义）
         if self._checkpointer is not None:
             return graph.compile(checkpointer=self._checkpointer)
         return graph.compile()
+
+    def _add_workflow_dag(self, graph: StateGraph) -> None:
+        """W0–W7 八节点确定性链（H2；失败条件边就地收尾，无重试回环）。"""
+        workflow_nodes = {
+            "w0_select_skill": select_skill_node,
+            "w1_prepare_slots": prepare_slots_node,
+            "w2_load_skill": load_skill_node,
+            "w3_validate_gates": validate_gates_node,
+            "w4_build_task_spec": build_task_spec_node,
+            "w5_await_confirm": await_confirm_node,
+            "w6_enqueue": enqueue_node,
+            "w7_summarize": summarize_node,
+        }
+        graph.add_node("workflow", self._make_workflow_entry())
+        for node_name, node_fn in workflow_nodes.items():
+            graph.add_node(node_name, node_fn)
+        graph.add_edge("workflow", "w0_select_skill")
+        graph.add_edge("w0_select_skill", "w1_prepare_slots")
+        graph.add_edge("w1_prepare_slots", "w2_load_skill")
+        graph.add_edge("w2_load_skill", "w3_validate_gates")
+        graph.add_conditional_edges(
+            "w3_validate_gates",
+            _after_validate_gates,
+            {"w4_build_task_spec": "w4_build_task_spec", "END": END},
+        )
+        graph.add_edge("w4_build_task_spec", "w5_await_confirm")
+        graph.add_conditional_edges(
+            "w5_await_confirm",
+            _after_await_confirm,
+            {"w6_enqueue": "w6_enqueue", "END": END},
+        )
+        graph.add_edge("w6_enqueue", "w7_summarize")
+        graph.add_edge("w7_summarize", END)
+
+    def _make_workflow_entry(self):
+        """Workflow 入口占位节点：透传 Router 分流结论（engine 本轮不可变）。"""
+
+        def node(state: GraphState) -> dict:
+            return {"workflow_step": "w0_select_skill"}
+
+        return node
 
     def _make_chat_node(self):
         """闭包绑定网关的 Chat 流式节点（节点签名只接收 state）。"""

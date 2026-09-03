@@ -290,9 +290,15 @@ def _route_l1(
 
 
 def _finalize(update: dict) -> dict:
-    """H1 降级标注：未实现引擎降级 chat 执行，理由进 router_reason（可审计）。"""
-    if update.get("engine") in ("workflow", "agent"):
-        update["router_reason"] = f"{update.get('router_reason', '')}；H1 未实现该引擎，降级 chat 执行"
+    """引擎执行态标注：未实现引擎降级 chat 执行，事实进 router_reason（可审计）。
+
+    H2：``workflow`` 已由 W0–W7 DAG 执行，不再降级；仅 ``agent`` 引擎
+    未实现（H3 落地前）降级 ``chat_stream`` 并如实标注。
+    """
+    if update.get("engine") == "agent":
+        update["router_reason"] = (
+            f"{update.get('router_reason', '')}；agent 引擎未实现（H2），降级 chat 执行"
+        )
     return update
 
 

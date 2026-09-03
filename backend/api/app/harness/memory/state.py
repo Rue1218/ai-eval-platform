@@ -132,6 +132,16 @@ class GraphState(TypedDict, total=False):
     agent_id: str | None  # AgentRegistry.discover 选中的 Worker（H3 discover 节点写；H1 恒空）
     allowed_tools: tuple[str, ...]  # 收窄后的工具视野（H3 写；H1 恒空，且必须 ⊆ ToolRegistry）
     workflow_step: str | None  # Workflow DAG 当前节点名（H2 写；H1 恒空，仅供观测与恢复定位）
+    # ── Workflow DAG（H2）：engine=workflow 时由 W0–W7 节点链写入，全部 JSON 可序列化 ──
+    skill_id: str | None  # W0 select_skill：二段路由选定的技能（skill-<id>）
+    skill_candidates: tuple[str, ...]  # W0：并列候选；命中多个时业务歧义 → clarify 就地收尾，禁止猜测
+    slots: Mapping[str, object]  # W1 prepare_slots：抽取槽位（H2 确定性映射；LLM 抽取随 H3 工具批）
+    slots_missing: tuple[str, ...]  # W1：缺失必填槽清单（确认卡兜底展示，由用户补齐）
+    gate_report: Mapping[str, object]  # W3 validate_gates：门禁结果投影（passed/failed_code/message）
+    task_spec: Mapping[str, object]  # W4 build_task_spec：TaskSpec（defaults.py 预填 + slots 覆盖）
+    confirm_id: str | None  # W5 await_confirm：确认卡唯一标识（H2 WS 直连，图内不 interrupt）
+    enqueued_task_id: str | None  # W6 enqueue：内部 MCP 长任务桥入队结果（task_id）
+    workflow_failed: bool  # 失败就地收尾标记：W0/W3/W5 失败后短路后续节点并结束回合
 
 
 def assert_serializable(state: GraphState) -> None:
