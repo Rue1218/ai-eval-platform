@@ -10,7 +10,7 @@ from .db import SessionLocal
 from .errors import register_error_handlers
 from .harness.execution.registry import build_default_registry
 from .harness.orchestration.agents import (
-    build_default_agent_registry,
+    get_default_agent_registry,
     validate_agent_registry_integrity,
 )
 from .harness.skills.registry import SKILL_CATALOG
@@ -103,7 +103,7 @@ def _validate_agent_registry() -> None:
         db_profile_ids = None
         logger.warning("Agent Registry 协议档校验跳过：数据库暂不可用")
     validate_agent_registry_integrity(
-        build_default_agent_registry(),
+        get_default_agent_registry(),
         tool_names=frozenset(build_default_registry().names()),
         skill_ids=frozenset(SKILL_CATALOG),
         db_profile_ids=db_profile_ids,

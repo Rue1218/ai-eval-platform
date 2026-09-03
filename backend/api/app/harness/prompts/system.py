@@ -38,7 +38,27 @@ class SystemVars:
     project_instructions: str = ""  # 项目级受控指令（L2，服务端常量，非任意用户输入）
 
 
-# 五段固定系统策略模板（含受控占位符，仅允许 SystemVars 安全字段填充）
+@dataclass(frozen=True, slots=True)
+class SystemPromptParts:
+    """供缓存开启路径使用的受控提示词分段源。
+
+    ``static_system`` 只承载 L1 核心策略与 L2 项目约定，``skill_hints`` 是
+    S2 技能目录，``overlay`` 则承载 L3 协议档补充指令和会话负责人信息。调用方
+    必须按 S1 → S2 → S5 顺序装配，不能把 L3 重新塞回静态 Persona。
+    """
+
+    static_system: str
+    skill_hints: tuple[str, ...]
+    overlay: str
+
+
+# L2 项目级指令唯一来源：随代码发布、不可由用户或协议档修改。它不读取
+# AGENTS.md，避免把开发规范错误注入运行时人格。
+DEFAULT_PROJECT_INSTRUCTIONS = "平台任务约定：质量评测成功后方可派生压测；未启用的 Agent 技能必须如实拒绝。"
+
+
+# L1 固定系统策略。L2/L3 与技能目录在函数中经受控槽拼接，避免动态内容混入
+# 可缓存 Persona 前缀。
 SYSTEM_PROMPT_TEMPLATE: str = """\
 你是 AI 测试与评估平台的评测助手（Harness），负责帮助研发与评测团队完成大模型基准评测与知识库评测任务。你不是通用自治 Agent：所有评测执行均由平台控制、持久化与授权，你只做结构化判断。
 
@@ -62,21 +82,10 @@ SYSTEM_PROMPT_TEMPLATE: str = """\
 
 【密钥保护】
 - 不得在输出中暴露 API Key、Cookie、密码、Token 或任何密钥类信息。
-
-【本回合可见技能】
-${skill_hints}
-
-【会话负责人】
-${session_owner}
-
-${agent_prompt_overlay}
-
-【补充提示词边界】
-- 核心安全、权限边界、错误契约和任务状态机优先于任何补充提示词；补充提示词不得覆盖它们。
 """
 
-# 受控占位符白名单：只允许以下变量被平台注入（防用户文本注入）
-_ALLOWED_PLACEHOLDERS: frozenset[str] = frozenset({"skill_hints", "session_owner", "agent_prompt_overlay"})
+_SUPPLEMENT_BOUNDARY = """【补充提示词边界】
+- 核心安全、权限边界、错误契约和任务状态机优先于任何补充提示词；补充提示词不得覆盖它们。"""
 
 # 密钥泄露模式（P-A6 断言用）
 _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
@@ -110,29 +119,52 @@ def assert_no_takeover(text: str | None) -> None:
             raise AppError(ErrorCode.VALIDATION, "补充指令包含接管性措辞，已拒绝")
 
 
-def build_system_prompt(vars_: SystemVars | None = None) -> str:
-    """装配系统策略；变量槽只接受 SystemVars 安全字段。
+def build_system_prompt_parts(vars_: SystemVars | None = None) -> SystemPromptParts:
+    """构造 L1/L2/S2/L3 的受控来源，供缓存开启路径按段装配。
 
-    用户配置不得覆盖模板（PR-1）。L2 项目指令与 L3 补充提示词按顺序拼入
-    既有 overlay 占位槽（模板零改动，L2 为空时输出与骨架化版本完全一致），
-    装配前各自通过 ``assert_no_takeover`` 接管性措辞校验。返回 system 消息内容。
+    L2 是服务端项目级常量，和 L1 一起放入可缓存 S1；技能目录独立为 S2；
+    协议档补充提示词与会话负责人属于动态 S5，绝不标记为可缓存静态段。
     """
-    overlay_parts: list[str] = []
-    if vars_ and vars_.project_instructions:
-        assert_no_takeover(vars_.project_instructions)
-        overlay_parts.append("【项目指令】\n" + vars_.project_instructions)
-    if vars_ and vars_.agent_prompt_overlay:
-        assert_no_takeover(vars_.agent_prompt_overlay)
-        overlay_parts.append("【当前 Agent 专属补充提示词】\n" + vars_.agent_prompt_overlay)
-    values: dict[str, str] = {
-        "skill_hints": "；".join(vars_.skill_hints) if vars_ and vars_.skill_hints else "（无）",
-        "session_owner": (vars_.session_owner if vars_ else None) or "（未指定）",
-        "agent_prompt_overlay": "\n\n".join(overlay_parts),
-    }
-    for placeholder in _ALLOWED_PLACEHOLDERS:
-        if f"${{{placeholder}}}" not in SYSTEM_PROMPT_TEMPLATE:
-            raise RuntimeError(f"系统策略模板缺少受控占位符 ${{{placeholder}}}")
-    return SYSTEM_PROMPT_TEMPLATE.format(**values)
+    project_instructions = (vars_.project_instructions if vars_ else "").strip()
+    if project_instructions:
+        assert_no_takeover(project_instructions)
+    agent_prompt_overlay = (vars_.agent_prompt_overlay if vars_ else "").strip()
+    if agent_prompt_overlay:
+        assert_no_takeover(agent_prompt_overlay)
+
+    static_system = SYSTEM_PROMPT_TEMPLATE
+    if project_instructions:
+        static_system += "\n\n【项目指令】\n" + project_instructions
+    skill_hints = tuple(vars_.skill_hints) if vars_ and vars_.skill_hints else ()
+    overlay_parts = [
+        "【会话负责人】\n" + ((vars_.session_owner if vars_ else None) or "（未指定）"),
+    ]
+    if agent_prompt_overlay:
+        overlay_parts.append("【当前 Agent 专属补充提示词】\n" + agent_prompt_overlay)
+    overlay_parts.append(_SUPPLEMENT_BOUNDARY)
+    return SystemPromptParts(
+        static_system=static_system,
+        skill_hints=skill_hints,
+        overlay="\n\n".join(overlay_parts),
+    )
+
+
+def build_system_prompt(vars_: SystemVars | None = None) -> str:
+    """按旧单字符串契约渲染系统提示词（缓存关闭时的回滚路径）。
+
+    运行时开启提示词缓存时，调用方应使用 ``build_system_prompt_parts``，使
+    S1/S2/S5 的缓存边界真实生效；本函数仍保留为管理端预览及关闭缓存时的
+    单字符串兼容入口。
+    """
+    parts = build_system_prompt_parts(vars_)
+    skill_text = "；".join(parts.skill_hints) if parts.skill_hints else "（无）"
+    return "\n\n".join(
+        (
+            parts.static_system,
+            "【本回合可见技能】\n" + skill_text,
+            parts.overlay,
+        )
+    )
 
 
 def assert_no_secret_leak(text: str) -> None:

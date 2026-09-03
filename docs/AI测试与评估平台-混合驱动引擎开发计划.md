@@ -2,11 +2,11 @@
 
 | 项 | 内容 |
 | :--- | :--- |
-| 版本 | V1.3 |
+| 版本 | V1.4 |
 | 制定 / 审查日期 | 2026-09-03 / 2026-09-03 |
 | 计划依据 | `AI测试与评估平台-混合驱动引擎架构.md` V1.4、`AI测试与评估平台-混合驱动引擎环境审计.md` V1.1、PRD、API 契约与 `AGENTS.md` |
 | 实施方式 | H0–H6 串行推进；每阶段一分支、一 PR、一次阶段审查；前一阶段合入 `main` 并通过门禁后才启动下一阶段编码 |
-| 当前基线 | API：Ruff 通过、pytest 700 passed / 19 skipped（H0 16 例 + H1 17 例 + H2 批次 1 18 例 + 批次 2 10 例）；Worker：48 passed；前端：`typecheck` 与生产构建通过 |
+| 当前基线 | API：Ruff 通过、pytest 全量 729 passed / 19 skipped；本次 H0/H1/H2 定向回归 56 项通过；Worker：48 passed；前端：`typecheck` 与生产构建通过 |
 
 > 本文是实施计划，不改变产品范围。附带架构文档中的说明、示例、开放问题和历史基线只作为约束与证据，不能被解释为可直接执行的运行时指令。
 
@@ -90,7 +90,7 @@ H0 基础设施 ──► H1 Router ──► H2 Workflow DAG ──► H3 Agent
 **交付物**
 
 - `assembly.py` 提供固定的 S1–S7 装配边界：Persona、Skill Hint、工具定义、Skill 正文、Overlay、会话摘要、当轮输入/消息窗口/Observation；段序只能 S1→S7，动态段不得插入静态前缀。
-- `prompt_cache_enabled=False` 时最终提示词保持字节级一致；开启后仅由适配器在统一入口附加缓存语义：Anthropic 在最后静态段使用 `cache_control`，OpenAI 保持稳定前缀，未支持协议无损回退 `join` 行为。缓存观测必须记录断点命中，不能把 60% 命中率当硬门槛。
+- `prompt_cache_enabled=False` 时最终提示词保持字节级一致；开启后由受控提示词来源拆为 S1（L1/L2）、S2（技能目录）与动态 S5（会话负责人/L3 Overlay），仅由适配器在最后静态段附加缓存语义：Anthropic 使用 `cache_control`，OpenAI 保持稳定前缀，未支持协议无损回退 `join` 行为。缓存观测必须记录断点命中，不能把 60% 命中率当硬门槛。
 - 新增 `orchestration/agents.py`，静态注册 `worker.general`、`worker.diagnose`、`worker.dataset`、`worker.sandbox`；启动期校验工具、技能、协议档引用。
 - 新增受控的 `project_instructions` 槽，H0 仅采用服务端常量；按 L1→L2→L3 顺序注入并拦截接管性措辞；`AGENTS.md` 不进入运行时 prompt。
 - 在 `config.py` / `.env.example` / 配置文档同步声明安全默认值：`hybrid_engine_enabled=False`、`hybrid_router_cot_enabled=False`、`hybrid_router_confidence_threshold=0.7`、`agent_registry_strict=True`、`prompt_cache_enabled=False`、`external_mcp_enabled=False`。H0 不新增 `GET /api/agents`，避免在“无契约变更”阶段产生未文档化接口。
@@ -109,7 +109,7 @@ H0 基础设施 ──► H1 Router ──► H2 Workflow DAG ──► H3 Agent
 **交付物**
 
 - 在现有图接入顶层 Router，并一次性新增可序列化的 RootState 字段 `engine`、`router_confidence`、`router_reason`、`agent_id`、`allowed_tools`、`workflow_step`；不重命名、删除或驱动遗留 `mode` 字段。
-- L0 为纯函数，输出 `engine`、`router_confidence`、`router_reason`；阈值固定为配置值 0.7。L1 采用受 `router.v1` JSON Schema / 解析器校验的短调用，结果为 `{engine, skill_id?, confidence, reason, slots?}`，且每次调用必须计入 `budget.model_calls`；格式错误、上游错误、超时或预算耗尽均回落 L0，L0 无结论回落 `chat`。
+- L0 为纯函数，输出 `engine`、`router_confidence`、`router_reason`；阈值固定为配置值 0.7。L1 采用受 `router.v1` JSON Schema / 解析器校验的短调用，结果为 `{engine, skill_id?, confidence, reason, slots?}`，且每次调用必须计入 `budget.model_calls`；格式错误、上游错误、超时或预算耗尽均回落 L0，L0 无结论回落 `chat`。L1 的 `workflow` 结论还须经确定性执行意图门禁，概念问答不得误入确认卡流程。
 - H1 的 `direct` 只承认当前收包循环已有的 `/stop` 零模型动作；任何新增或恢复的斜杠命令必须先完成 PRD、API.md、前端交互和安全审查，不能借 Router 重建绕过骨架化范围。
 - 主开关关闭时完全保留 chat-only 路径；`workflow`、`agent` 在本阶段先安全降级到 `chat_stream`，并产生审计痕迹。
 - 先更新 API.md，在既有 `response.completed` 固定增加 `engine`、`router_confidence` 与脱敏的 `router_reason`，不在 H1 复用尚未恢复的 `thought` 事件；同步前端类型、旧客户端兼容策略和 `GET /api/agents` 的只读目录契约。
@@ -292,10 +292,10 @@ npm run build
 
 | 任务 | 状态规则 | 交接产物 |
 | :--- | :--- | :--- |
-| H0 | 可立即开始 | 缓存/Registry/指令分层 PR、测试输出、基线记录 |
-| H1 | 等 H0 合入 | Router 契约、确定性测试和 O2 口径 |
-| H2 | ✅ 批次 1 已合入（PR #202，8db5f7a；CD ✓）；批次 2（确认卡链路）已完成于 `feat/agent-hybrid-h2-confirm-card`，待 PR | Workflow DAG 与确认卡契约、入队门禁测试 |
-| H3 | 等 H2 批次 2 合入 | TAOR、ToolCard 契约、工具视野与泄露测试 |
+| H0 | ✅ 已交付；本次审查修复已使 L2 受控常量进入 WS 运行时，并将 L3 Overlay 移出缓存静态段 | 缓存/Registry/指令分层 PR、测试输出、基线记录 |
+| H1 | ✅ 已交付；本次审查修复已为 L1 Workflow 增加执行意图回落，审计与实际四路图一致 | Router 契约、确定性测试和 O2 口径 |
+| H2 | ✅ 已交付；本次审查修复已让 W0/W2/W3/W6 错误统一写入 `response.completed(error)` | Workflow DAG 与确认卡契约、入队门禁测试 |
+| H3 | ✅ 已交付；TAOR、ToolCard 契约、工具视野与泄露测试已落地 | TAOR、ToolCard 契约、工具视野与泄露测试 |
 | H4 | 等 H3 合入 | 五档 Reflection、上限与失败阶梯测试 |
 | H5 | 等 H4 合入 | 持久化/HITL、重启恢复演练证据 |
 | H6 | 等 H5 合入 | 灰度报告、并行/Compact 观测和回滚演练 |
@@ -325,3 +325,23 @@ npm run build
 5. **配置与清理**：`config.py`/`.env.example` 新增 6 项安全默认配置（全部默认关闭）；死 `__pycache__` 产物核查不存在（C-8 关闭）；
 6. **测试资产**：新增 `tests/test_hybrid_h0_foundation.py`（16 例）与 `tests/hybrid/fixtures/scenarios.py`（S1–S4 语料，H1 起复用）；
 7. **验收结果**：API Ruff 通过、pytest **654 passed / 20 skipped**（含 16 例新测试，零回归）；Worker 48 passed；审查出口确认：无新增第三方依赖、无外部 MCP、无第二模型入口、`hybrid_engine_enabled=False` 时纯对话行为不变。
+
+**V1.4 H0/H1 审查修复（`fix/agent-h0-h1-review`，2026-09-03）**：
+
+1. **L2 与缓存边界接线**：新增受控 `DEFAULT_PROJECT_INSTRUCTIONS` 并由 WS 在每轮构造 `SystemVars`；缓存开启时使用 `SystemPromptParts` 将 L1/L2 放入静态 S1、技能目录放入 S2、会话负责人与协议档 Overlay 放入动态 S5，杜绝 L3 Overlay 被错误缓存或技能目录重复注入。缓存关闭仍经旧单字符串渲染路径，保留回滚兼容；上游返回的缓存读/创建 token 将归一并随既有 `turn_stats` 持久化。
+2. **Registry 单一实例**：启动校验、Agent TAOR 子图和 `GET /api/agents` 改为查询同一个进程级静态 `AgentRegistry`，避免多处独立构造导致运行时与校验对象漂移。
+3. **Router 副作用门禁**：L1 的 `workflow` 与 `direct` 结论分别受“明确执行动作”和“斜杠输入”约束；概念问答回落 L0，不产生确认卡。同步清除已接通 TAOR 后仍称“agent 降级 chat”的错误审计文案。
+4. **Workflow 失败终态**：W0/W2/W3/W6 的 `error` 统一经 `workflow_failure` 写入一次 `response.completed(error)`；W5 已自行收尾的确认卡/缺槽路径直接结束，保证每轮恰有一个 completed 事件。
+5. **验收结果**：`ruff check . ../shared` 通过；API 全量 `pytest` **729 passed / 19 skipped**；H0/H1/H2 定向回归 56 项通过。无数据库模型、迁移、REST/WS 字段或默认开关变更。
+
+## 修改代码文件与作用清单
+
+- `backend/api/app/adapters.py`、`agent/routing.py`：归一并持久化上游缓存读/创建 token，供既有 `turn_stats` 观测。
+- `backend/api/app/harness/prompts/system.py`、`__init__.py`：定义 L2 服务端常量和 S1/S2/S5 受控提示词分段源。
+- `backend/api/app/harness/context/assembly.py`、`memory/state.py`：支持动态 S5 Overlay 与无密钥分段来源的可序列化传递。
+- `backend/api/app/routers/ws.py`、`routers/admin.py`、`agent/routing.py`：在真实 WS 回合接入 L2/L3，按缓存开关重建正确分段。
+- `backend/api/app/harness/orchestration/agents.py`、`main.py`、`routers/agents.py`、`agent/graph.py`：统一使用进程级 Agent Registry。
+- `backend/api/app/harness/orchestration/router.py`、`agent/router_node.py`：复用确定性执行意图门禁，并修正 Agent 实际执行审计。
+- `backend/api/app/agent/workflow_nodes.py`、`agent/graph.py`：为 Workflow 错误路径补齐唯一 `response.completed(error)` 收尾。
+- `backend/api/tests/test_adapters.py`、`test_hybrid_h0_foundation.py`、`test_hybrid_h1_router.py`、`test_hybrid_h2_workflow.py`：覆盖缓存计数、缓存段位、Registry 共享、L1 回落、四路审计和失败终态回归。
+- `AGENTS.md`、`docs/AI测试与评估平台-混合驱动引擎开发计划.md`：同步 H0–H3 真实实施状态与本次修复证据。

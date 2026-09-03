@@ -522,7 +522,12 @@ def _anthropic_messages_create(
 
 
 def _norm_usage(data: dict, *, anthropic: bool) -> dict:
-    """把三协议各自的 usage 字段归一为统一 token 计数结构。"""
+    """把三协议各自的 usage 字段归一为统一 token 与缓存计数结构。
+
+    缓存字段仅在上游明确返回时透传：Anthropic 使用 input token 的读/创建
+    计数，OpenAI 使用 ``prompt_tokens_details.cached_tokens``。缺失表示上游
+    未提供该观测，不能伪造为命中或零命中。
+    """
     usage = data.get("usage") or {}
     if not isinstance(usage, Mapping):
         usage = {}
@@ -530,17 +535,35 @@ def _norm_usage(data: dict, *, anthropic: bool) -> dict:
         # Anthropic 使用 input_tokens / output_tokens 命名，total 需自行求和
         prompt = int(usage.get("input_tokens") or 0)
         completion = int(usage.get("output_tokens") or 0)
-        return {
+        normalized = {
             "prompt_tokens": prompt,
             "completion_tokens": completion,
             "total_tokens": prompt + completion,
         }
+        cache_read = int(usage.get("cache_read_input_tokens") or 0)
+        cache_creation = int(usage.get("cache_creation_input_tokens") or 0)
+        if cache_read or cache_creation:
+            normalized.update(
+                cache_read_input_tokens=cache_read,
+                cache_creation_input_tokens=cache_creation,
+            )
+        return normalized
     # OpenAI Chat 与部分兼容网关使用 prompt/completion_tokens；官方
     # Responses 对象使用 input/output_tokens。两种响应均需维持平台统一口径。
     prompt = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
     completion = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
     total = int(usage.get("total_tokens") or (prompt + completion))
-    return {"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": total}
+    normalized = {
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "total_tokens": total,
+    }
+    details = usage.get("prompt_tokens_details")
+    if isinstance(details, Mapping):
+        cache_read = int(details.get("cached_tokens") or 0)
+        if cache_read:
+            normalized["cache_read_input_tokens"] = cache_read
+    return normalized
 
 
 def _full_text(protocol: str, data: dict) -> str:

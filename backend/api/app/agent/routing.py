@@ -10,6 +10,7 @@ GraphState。骨架版不再做范式路由（direct/chat/react/plan_solve），
 from __future__ import annotations
 
 import time
+from collections.abc import Mapping
 
 from langgraph.config import get_config, get_stream_writer
 
@@ -21,8 +22,14 @@ from app.harness.context import (
 )
 from app.harness.contracts import make_event
 from app.harness.memory import GraphState, SerializableRequest, rebuild_model_config
-from app.harness.prompts import SystemVars, build_system_prompt
+from app.harness.prompts import (
+    DEFAULT_PROJECT_INSTRUCTIONS,
+    SystemVars,
+    build_system_prompt,
+    build_system_prompt_parts,
+)
 from app.llm import ModelRequest
+from app.llm.contracts import SystemSegment
 
 
 def chat_stream_node(state: GraphState, gateway: object) -> dict:
@@ -40,7 +47,10 @@ def chat_stream_node(state: GraphState, gateway: object) -> dict:
     api_key = str(configurable.get("credentials", {}).get("api_key") or "")
     model_config = rebuild_model_config(serializable, api_key=api_key)
     persona = str(serializable.get("system") or "").strip() or build_system_prompt(
-        SystemVars(skill_hints=tuple(skill_hints_for_turn()))
+        SystemVars(
+            skill_hints=tuple(skill_hints_for_turn()),
+            project_instructions=DEFAULT_PROJECT_INSTRUCTIONS,
+        )
     )
     skill_hints = skill_hints_for_turn()
     summary = compact_summary_from_configurable(configurable)
@@ -55,20 +65,47 @@ def chat_stream_node(state: GraphState, gateway: object) -> dict:
     from app.config import settings
     from app.harness.context import assemble_segments
 
-    segments = ()
+    system_segments: tuple[SystemSegment, ...] = ()
     system_text = assembled["system"]
     if settings.prompt_cache_enabled:
+        # 缓存开启时不再从已拼接的 persona 猜测边界：WS 受控层传入的
+        # system_context 使 L1/L2、S2 和动态 L3 能被明确拆开。旧检查点或
+        # 单测缺该上下文时使用安全默认值，仍不把 Overlay 误标为静态。
+        context = serializable.get("system_context")
+        if isinstance(context, Mapping):
+            static_system = str(context.get("static_system") or "").strip()
+            raw_hints = context.get("skill_hints")
+            context_hints = (
+                tuple(str(item) for item in raw_hints)
+                if isinstance(raw_hints, list | tuple)
+                else ()
+            )
+            overlay = str(context.get("overlay") or "").strip()
+        else:
+            parts = build_system_prompt_parts(
+                SystemVars(
+                    skill_hints=tuple(skill_hints),
+                    project_instructions=DEFAULT_PROJECT_INSTRUCTIONS,
+                )
+            )
+            static_system = parts.static_system
+            context_hints = parts.skill_hints
+            overlay = parts.overlay
         segments = assemble_segments(
-            system=persona,
-            skill_hints=skill_hints,
+            system=static_system,
+            skill_hints=context_hints,
+            overlay=overlay,
             summary=summary,
         )
         system_text = "\n\n".join(segment.text for segment in segments)
+        system_segments = tuple(
+            SystemSegment(text=segment.text, cacheable=segment.cacheable) for segment in segments
+        )
     request = ModelRequest(
         config=model_config,  # type: ignore[arg-type]
         messages=tuple(assembled["messages"]),
         system=system_text,
-        system_segments=segments,
+        system_segments=system_segments,
         tools=(),  # 骨架版不注入工具定义
     )
     writer = get_stream_writer()
@@ -95,7 +132,14 @@ def chat_stream_node(state: GraphState, gateway: object) -> dict:
         "pending_events": [
             make_event(
                 "assistant_message",
-                {"text": final_response.text, "role": "assistant", "latency_ms": latency_ms},
+                {
+                    "text": final_response.text,
+                    "role": "assistant",
+                    "latency_ms": latency_ms,
+                    # usage（含上游可用时的缓存读/创建 token）随既有 turn_stats
+                    # 落库，供 O2/H6 在不新增 WS 事件的前提下观测缓存效果。
+                    "turn_stats": {"usage": dict(final_response.usage)},
+                },
             ),
             make_event("response.completed", completed),
         ],

@@ -82,6 +82,15 @@ def test_w0_ambiguous_and_empty_reject_without_guessing() -> None:
     assert none["workflow_failed"] is True
 
 
+def test_w0_rejects_concept_question_before_skill_selection() -> None:
+    """即使上游误进 Workflow，概念问答也不能生成确认卡或任务。"""
+    update = select_skill_node(_state("什么是基准评测"))
+    assert update["workflow_failed"] is True
+    assert "概念问答" in next(
+        event for event in update["pending_events"] if event["kind"] == "error"
+    )["payload"]["message"]
+
+
 # ─── 2. W1–W4：槽位 / 加载 / 门禁 / TaskSpec ───
 
 
@@ -302,8 +311,14 @@ def test_dag_rag_and_direct_stress_fail_closed(_engine_on) -> None:
         for e in rag_events
     )
     assert not any(e["kind"] == "assistant_message" for e in rag_events)
+    rag_completed = [e for e in rag_events if e["kind"] == "response.completed"]
+    assert len(rag_completed) == 1
+    assert rag_completed[0]["payload"]["finish_reason"] == "error"
     stress_events = _pending(_run_workflow("发起一次压测"))
     assert any("先评后压" in e["payload"]["message"] for e in stress_events if e["kind"] == "error")
+    stress_completed = [e for e in stress_events if e["kind"] == "response.completed"]
+    assert len(stress_completed) == 1
+    assert stress_completed[0]["payload"]["finish_reason"] == "error"
 
 
 def test_workflow_state_serializable(_engine_on, monkeypatch) -> None:

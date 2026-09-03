@@ -4,9 +4,8 @@
 
 - **关闭（默认）**：``START → chat_stream → END``，与骨架化纯对话完全一致
   （回归保证：事件序列与 payload 不因本文件引入而漂移）；
-- **开启（H1）**：``START → router →（条件边）→ direct | chat_stream → END``。
-  ``workflow`` / ``agent`` 引擎本阶段未实现，条件边统一降级到 ``chat_stream``
-  执行，降级事实经 ``router_reason`` 标注（见 router_node.py）。
+- **开启（H1-H3）**：``START → router → direct | chat_stream | workflow | agent``；
+  workflow 进入 W0–W7 确定性链，agent 进入 TAOR 子图。
 
 节点只返回纯数据（pending_events / response 投影），WebSocket、数据库与
 平台任务队列由路由层（ws.py）负责，节点内不持有外部资源（§2.5 事件桥接契约）。
@@ -41,6 +40,7 @@ from .workflow_nodes import (
     select_skill_node,
     summarize_node,
     validate_gates_node,
+    workflow_failure_node,
 )
 
 
@@ -76,14 +76,24 @@ def _after_tools(state: GraphState) -> str:
     return "orchestrator"
 
 
-def _after_validate_gates(state: GraphState) -> str:
-    """W3 失败（门禁不通过）就地收尾；通过推进 W4。"""
-    return "END" if state.get("workflow_failed") else "w4_build_task_spec"
+def _has_completed_event(state: GraphState) -> bool:
+    """判断节点是否已经自行写入回合结束事件。"""
+    return any(
+        isinstance(event, dict) and event.get("kind") == "response.completed"
+        for event in state.get("pending_events") or ()
+    )
 
 
-def _after_await_confirm(state: GraphState) -> str:
-    """W5 未确认/必填缺失就地收尾；确认通过推进 W6。"""
-    return "END" if state.get("workflow_failed") else "w6_enqueue"
+def _after_workflow_step(state: GraphState, success_node: str) -> str:
+    """失败链路统一补 completed；已自行收尾的 W5 直接结束。
+
+    ``workflow_failed`` 是所有 Workflow 节点的共同失败标记。只有 W5 的
+    确认卡/补槽分支会自行发送 ``response.completed``；其余失败经
+    ``workflow_failure`` 统一收尾，避免 WS 前端一直等待本轮结束。
+    """
+    if not state.get("workflow_failed"):
+        return success_node
+    return "END" if _has_completed_event(state) else "workflow_failure"
 
 
 class LangGraphAgent:
@@ -154,10 +164,10 @@ class LangGraphAgent:
         """H3 TAOR 子图：plan → discover → orchestrator ⇄ tools（单图内循环）。"""
         from app.harness.execution.registry import build_default_registry
         from app.harness.execution.toolnode import build_tool_node
-        from app.harness.orchestration.agents import build_default_agent_registry
+        from app.harness.orchestration.agents import get_default_agent_registry
 
         tool_registry = self._registry or build_default_registry()
-        agent_registry = self._agent_registry or build_default_agent_registry()
+        agent_registry = self._agent_registry or get_default_agent_registry()
         tools_node = build_tool_node(
             tool_registry,  # type: ignore[arg-type]
             db_factory=self._db_factory,  # type: ignore[arg-type]
@@ -197,25 +207,47 @@ class LangGraphAgent:
             "w7_summarize": summarize_node,
         }
         graph.add_node("workflow", self._make_workflow_entry())
+        graph.add_node("workflow_failure", workflow_failure_node)
         for node_name, node_fn in workflow_nodes.items():
             graph.add_node(node_name, node_fn)
         graph.add_edge("workflow", "w0_select_skill")
-        graph.add_edge("w0_select_skill", "w1_prepare_slots")
-        graph.add_edge("w1_prepare_slots", "w2_load_skill")
-        graph.add_edge("w2_load_skill", "w3_validate_gates")
+        graph.add_conditional_edges(
+            "w0_select_skill",
+            lambda state: _after_workflow_step(state, "w1_prepare_slots"),
+            {"w1_prepare_slots": "w1_prepare_slots", "workflow_failure": "workflow_failure", "END": END},
+        )
+        graph.add_conditional_edges(
+            "w1_prepare_slots",
+            lambda state: _after_workflow_step(state, "w2_load_skill"),
+            {"w2_load_skill": "w2_load_skill", "workflow_failure": "workflow_failure", "END": END},
+        )
+        graph.add_conditional_edges(
+            "w2_load_skill",
+            lambda state: _after_workflow_step(state, "w3_validate_gates"),
+            {"w3_validate_gates": "w3_validate_gates", "workflow_failure": "workflow_failure", "END": END},
+        )
         graph.add_conditional_edges(
             "w3_validate_gates",
-            _after_validate_gates,
-            {"w4_build_task_spec": "w4_build_task_spec", "END": END},
+            lambda state: _after_workflow_step(state, "w4_build_task_spec"),
+            {"w4_build_task_spec": "w4_build_task_spec", "workflow_failure": "workflow_failure", "END": END},
         )
-        graph.add_edge("w4_build_task_spec", "w5_await_confirm")
+        graph.add_conditional_edges(
+            "w4_build_task_spec",
+            lambda state: _after_workflow_step(state, "w5_await_confirm"),
+            {"w5_await_confirm": "w5_await_confirm", "workflow_failure": "workflow_failure", "END": END},
+        )
         graph.add_conditional_edges(
             "w5_await_confirm",
-            _after_await_confirm,
-            {"w6_enqueue": "w6_enqueue", "END": END},
+            lambda state: _after_workflow_step(state, "w6_enqueue"),
+            {"w6_enqueue": "w6_enqueue", "workflow_failure": "workflow_failure", "END": END},
         )
-        graph.add_edge("w6_enqueue", "w7_summarize")
+        graph.add_conditional_edges(
+            "w6_enqueue",
+            lambda state: _after_workflow_step(state, "w7_summarize"),
+            {"w7_summarize": "w7_summarize", "workflow_failure": "workflow_failure", "END": END},
+        )
         graph.add_edge("w7_summarize", END)
+        graph.add_edge("workflow_failure", END)
 
     def _make_workflow_entry(self):
         """Workflow 入口占位节点：透传 Router 分流结论（engine 本轮不可变）。"""
