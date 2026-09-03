@@ -11,6 +11,7 @@ import json
 import logging
 import threading
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -294,6 +295,139 @@ def _start_confirm_replay(
     except Exception:
         task.cancel()
         _release_turn(replay_handle)
+        raise
+    return task
+
+
+async def _handle_graph_interrupt(
+    db: Session,
+    websocket: WebSocket,
+    state: _ConnectionState,
+    session_id: str,
+    interrupts: tuple,
+    *,
+    thread_id: str,
+    user_id: str | None,
+) -> bool:
+    """H5：处理图 interrupt 帧（危险 bash / ask_user_question）。
+
+    仅 ``type=tool_approval`` 落审批卡（行锁；已有任何待处理卡 → CONCURRENCY
+    经 error 反馈，不覆盖）并广播 ``tool_approval`` 事件，返回 True 暂停回合；
+    其余类型（clarify 提问等）暂不落卡（无生产者接线），返回 False。
+    """
+    if not interrupts:
+        return False
+    first = interrupts[0]
+    value = getattr(first, "value", first)
+    if not isinstance(value, Mapping):
+        return False
+    if value.get("type") != "tool_approval":
+        return False
+    try:
+        card = _persist_pending_approval(
+            db,
+            session_id,
+            dict(value),
+            thread_id=thread_id,
+            user_id=str(user_id or ""),
+        )
+    except AppError as exc:
+        await _emit_error(db, websocket, state, session_id, exc)
+        return False
+    payload = {key: value for key, value in card.items() if key != "meta"}
+    await _emit_persistent(
+        db,
+        websocket,
+        state,
+        session_id,
+        "tool_approval",
+        payload,
+        task_id=None,
+    )
+    return True
+
+
+async def _handle_approval_ack(
+    db: Session,
+    websocket: WebSocket,
+    state: _ConnectionState,
+    session_id: str,
+    user_id: str,
+    payload: dict,
+) -> None:
+    """工具审批回执（H5）：行锁校验 → 清卡提交 → 后台 resume 原回合。
+
+    - 卡必须存在且 ``meta.confirm_type=tool_approval``、owner 匹配、``id`` 与
+      审批卡一致，action ∈ {approve, reject}；任一失败 → AppError（外层统一
+      error 事件），卡保留；
+    - 清卡与提交先行（一次性 nonce 语义：消费即失效），再以原中断回合的
+      thread_id 恢复检查点（resume 值 = {action, id}，toolnode 据此继续或拒绝）；
+    - 重复 ack / 并发 ack：清卡后行锁读空 → 拒绝（resume 至多一次）。
+    """
+    action = payload.get("action")
+    approval_id = str(payload.get("id") or "")
+    if not isinstance(action, str) or action not in {"approve", "reject"}:
+        raise AppError(ErrorCode.VALIDATION, "审批动作必须是 approve 或 reject")
+    pending = lock_pending_confirm(db, session_id)  # SELECT ... FOR UPDATE
+    assert_confirm_owner(pending, user_id)
+    assert_no_concurrent_confirm(pending)
+    card = dict(pending.pending or {})
+    meta = card.get("meta") if isinstance(card.get("meta"), dict) else {}
+    if meta.get("confirm_type") != "tool_approval":
+        raise AppError(ErrorCode.VALIDATION, "会话不存在待审批的工具卡")
+    if str(card.get("id") or "") != approval_id:
+        raise AppError(ErrorCode.VALIDATION, "审批卡标识不匹配")
+    thread_id = str(meta.get("thread_id") or "")
+    if not thread_id:
+        raise AppError(ErrorCode.VALIDATION, "审批卡缺少恢复线程标识")
+    _clear_pending_confirm(db, session_id)
+    db.commit()
+    await _emit_persistent(
+        db,
+        websocket,
+        state,
+        session_id,
+        "tool_approval_ack",
+        {"action": action, "approval_id": approval_id},
+        task_id=None,
+    )
+    _start_approval_resume(
+        session_id, websocket, state, user_id, thread_id, action, approval_id
+    )
+
+
+def _start_approval_resume(
+    session_id: str,
+    websocket: WebSocket,
+    state: _ConnectionState,
+    user_id: str,
+    thread_id: str,
+    action: str,
+    approval_id: str,
+) -> asyncio.Task[None]:
+    """审批通过后以原 thread_id 恢复检查点回合（H5 HITL resume）。"""
+    handle = _reserve_turn(session_id, user_id)
+
+    async def runner() -> None:
+        try:
+            await _run_turn(
+                session_id,
+                websocket,
+                state,
+                handle.abort,
+                user_id=user_id,
+                turn_id=handle.turn_id,
+                resume={"action": action, "id": approval_id},
+                resume_thread_id=thread_id,
+            )
+        except Exception:  # 恢复失败不撤销已清卡：审批记录留 ws_events 可审计
+            logger.exception("审批恢复回合失败 session=%s", session_id)
+
+    task = asyncio.create_task(runner(), name=f"approval-resume-{session_id}")
+    try:
+        _attach_turn_task(handle, task)
+    except Exception:
+        task.cancel()
         raise
     return task
 
@@ -943,10 +1077,50 @@ def _confirm_author_payload(db: Session, user_id: str | None) -> dict[str, str] 
     }
 
 
-def _persist_pending_confirm(db: Session, session_id: str, payload: dict[str, Any]) -> None:
+_CONFIRM_SCHEMA_VERSION = 1
+
+
+def _card_meta(
+    session_id: str,
+    thread_id: str | None,
+    confirm_type: str,
+    *,
+    resume_nonce: str | None = None,
+) -> dict[str, Any]:
+    """H5 恢复协议元数据（写入卡 JSONB ``meta`` 键；task 确认/工具审批共用）。
+
+    字段：schema_version / confirm_type / thread_id / owner_id /
+    created_at；工具审批卡另带一次性 resume_nonce（恢复图检查点用，
+    消费即失效——并发/重复恢复由行锁 + 清卡保证至多一次）。
+    """
+    from datetime import datetime
+
+    meta: dict[str, Any] = {
+        "schema_version": _CONFIRM_SCHEMA_VERSION,
+        "confirm_type": confirm_type,
+        "thread_id": thread_id or "",
+        "owner_id": session_id,  # 占位；真实 owner 写列 pending_confirm_author_id
+        "created_at": datetime.now(UTC).isoformat(),
+    }
+    if resume_nonce:
+        meta["resume_nonce"] = resume_nonce
+    return meta
+
+
+def _persist_pending_confirm(
+    db: Session,
+    session_id: str,
+    payload: dict[str, Any],
+    *,
+    thread_id: str | None = None,
+    user_id: str | None = None,
+) -> None:
     """把确认卡 TaskSpec 写入 sessions.pending_confirm（行锁），供 confirm_ack 二次校验。
 
     ``confirm_author`` 只作归属元数据，不进入卡标 JSON（前端提交 patch 须剥离）。
+    H5：卡 JSONB 附 ``meta`` 恢复协议元数据（schema_version/confirm_type/
+    thread_id/created_at）；会话已有待处理卡（确认/审批任意种类）→
+    CONCURRENCY，绝不覆盖（团队协作不得抢占）。
     """
     spec = dict(payload)
     author = spec.pop("confirm_author", None)
@@ -958,10 +1132,57 @@ def _persist_pending_confirm(db: Session, session_id: str, payload: dict[str, An
         .first()
     )
     if not session:
-        return
+        raise AppError(ErrorCode.NOT_FOUND, "会话不存在")
+    if session.pending_confirm is not None:
+        raise AppError(ErrorCode.CONCURRENCY, "会话存在待处理任务卡，请先确认或取消")
+    spec["meta"] = _card_meta(
+        session_id, thread_id, "task_confirm", resume_nonce=None
+    )
     session.pending_confirm = spec
-    session.pending_confirm_author_id = str(author_id) if author_id else session.user_id
+    session.pending_confirm_author_id = str(author_id) if author_id else (user_id or session.user_id)
     db.commit()
+
+
+def _persist_pending_approval(
+    db: Session,
+    session_id: str,
+    approval: dict[str, Any],
+    *,
+    thread_id: str,
+    user_id: str,
+) -> dict[str, Any]:
+    """工具审批卡落库（H5 HITL：图 interrupt 后由 ws 层落卡，等待 resume）。
+
+    卡 JSONB：``meta``（confirm_type=tool_approval + 一次性 resume_nonce）+
+    ``approval`` 字段白名单（id/call_id/name/command/reason/risk_level）。
+    行锁：已有任何待处理卡 → CONCURRENCY。返回卡 dict（含 meta）。
+    """
+    from uuid import uuid4
+
+    session = (
+        db.query(AgentSession)
+        .filter(AgentSession.id == session_id)
+        .with_for_update()
+        .first()
+    )
+    if not session:
+        raise AppError(ErrorCode.NOT_FOUND, "会话不存在")
+    if session.pending_confirm is not None:
+        raise AppError(ErrorCode.CONCURRENCY, "会话存在待处理任务卡，请先确认或取消")
+    allowed = {"id", "call_id", "name", "command", "reason", "risk_level", "sandbox_scope"}
+    card = {
+        key: value for key, value in approval.items() if key in allowed
+    }
+    card["meta"] = _card_meta(
+        session_id,
+        thread_id,
+        "tool_approval",
+        resume_nonce=uuid4().hex,
+    )
+    session.pending_confirm = card
+    session.pending_confirm_author_id = user_id
+    db.commit()
+    return card
 
 
 def _clear_pending_confirm(db: Session, session_id: str) -> None:
@@ -1023,6 +1244,7 @@ async def _translate_event(
     event: dict,
     *,
     turn_id: str | None = None,
+    thread_id: str | None = None,
     user_id: str | None = None,
 ) -> None:
     """把图节点产出的 NodeEvent 翻译为 ws event（落库 + 统一 emit）。
@@ -1085,11 +1307,18 @@ async def _translate_event(
     if kind == "confirm":
         # V1.67 恢复：确认卡落 pending_confirm（行锁）+ 作者元数据；同一会话
         # 同一时刻至多一张卡，回执由收包循环 confirm_ack 处理（重放经 W6 入队）。
+        # H5：卡 JSONB 附 meta 恢复协议（schema_version/thread_id/created_at）。
         outgoing = dict(payload)
         author = _confirm_author_payload(db, user_id)
         if author and "confirm_author" not in outgoing:
             outgoing["confirm_author"] = author
-        _persist_pending_confirm(db, session_id, outgoing)
+        _persist_pending_confirm(
+            db,
+            session_id,
+            outgoing,
+            thread_id=thread_id,
+            user_id=user_id,
+        )
         payload = outgoing
     await _emit_persistent(
         db,
@@ -1112,6 +1341,8 @@ async def _run_turn(
     turn_id: str | None = None,
     workflow_confirm: dict | None = None,
     turn_sink: dict | None = None,
+    resume: object | None = None,
+    resume_thread_id: str | None = None,
 ) -> None:
     """后台执行一轮 LangGraph Agent，并把图输出统一投影为 WS 事件。
 
@@ -1122,6 +1353,10 @@ async def _run_turn(
     ``workflow_confirm`` 为确认卡回执重放（H2 批次 2）：非空时注入
     ``configurable``，Workflow W5 合并槽位后放行 W6 入队、W7 收尾——入队仍
     唯一经 W6（不在此处直接入队）。
+
+    ``resume`` / ``resume_thread_id`` 为 H5 HITL 审批恢复：以原中断回合的
+    thread_id 从检查点 ``Command(resume=...)`` 恢复执行（恢复前清空图内
+    pending_events，避免事件重放；resume 至多一次由审批卡行锁清卡保证）。
     """
     if turn_id:
         with _TURN_LOCK:
@@ -1155,8 +1390,9 @@ async def _run_turn(
                 "overlay": system_parts.overlay,
             },
         )
-        # 新回合复用租约 ID 作为检查点线程 ID，便于并发与中断审计关联。
-        thread_id = turn_id or f"{session_id}:{uuid4().hex}"
+        # 新回合复用租约 ID 作为检查点线程 ID，便于并发与中断审计关联；
+        # H5 审批恢复沿用原中断回合的 thread_id（卡 meta 记录）。
+        thread_id = resume_thread_id or turn_id or f"{session_id}:{uuid4().hex}"
         graph_config = {
             "configurable": {
                 # 每回合独立 thread_id：检查点按回合隔离（M3 阶段 3）
@@ -1185,7 +1421,9 @@ async def _run_turn(
         }
         deferred_completed: list[dict] = []
 
-        async for mode, chunk in _AGENT.astream(serializable, config=graph_config):
+        async for mode, chunk in _AGENT.astream(
+            serializable, config=graph_config, resume=resume
+        ):
             if mode == "custom":
                 kind = str(chunk.get("kind") or "")
                 text = str(chunk.get("text") or "")
@@ -1200,6 +1438,21 @@ async def _run_turn(
                         ),
                     )
                 continue
+            # H5 HITL：图 interrupt（危险 bash / 提问）——先于事件翻译处理，
+            # 落审批卡并广播 tool_approval 事件后暂停回合（不产 completed）。
+            interrupts = chunk.get("__interrupt__")
+            if interrupts:
+                paused = await _handle_graph_interrupt(
+                    db,
+                    websocket,
+                    state,
+                    session_id,
+                    interrupts,
+                    thread_id=thread_id,
+                    user_id=user_id,
+                )
+                if paused:
+                    break
             # updates 模式：按节点边界消费 pending_events，统一 emit；
             # Router 节点一旦执行即捕获审计三元组，供取消/异常收尾携带（O2）
             router_audit = router_audit_from_update(chunk) or router_audit
@@ -1225,6 +1478,7 @@ async def _run_turn(
                     profile,
                     event,
                     turn_id=turn_id,
+                    thread_id=thread_id,
                     user_id=user_id,
                 )
         for event in deferred_completed:
@@ -1236,6 +1490,7 @@ async def _run_turn(
                 profile,
                 event,
                 turn_id=turn_id,
+                thread_id=thread_id,
                 user_id=user_id,
             )
     except asyncio.CancelledError:
@@ -1642,6 +1897,19 @@ async def agent_websocket(websocket: WebSocket) -> None:
                     # V1.67 恢复：确认卡回执——行锁事务校验 + 后台重放回合
                     # （入队唯一经 W6），收包循环只派生任务，不 await 整轮图。
                     await _handle_confirm_ack(
+                        db,
+                        websocket,
+                        state,
+                        session.id,
+                        str(user.id),
+                        message.get("payload")
+                        if isinstance(message.get("payload"), dict)
+                        else {},
+                    )
+                elif event == "tool_approval_ack":
+                    # H5 HITL 审批回执：行锁校验（卡存在/种类/owner/id/action）
+                    # → 清卡提交 → 以原 thread_id 恢复检查点回合（resume 至多一次）。
+                    await _handle_approval_ack(
                         db,
                         websocket,
                         state,
