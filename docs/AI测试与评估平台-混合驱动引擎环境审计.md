@@ -3,7 +3,7 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | 混合驱动引擎（Hybrid Agent Engine）前置环境与现状审计 |
-| 版本 | V1.1 |
+| 版本 | V1.2 |
 | 审查日期 | 2026-09-03 |
 | 文档性质 | **只读审计**（未修改任何源码、配置、迁移与依赖） |
 | 审计对象 | `backend/api/app/agent/`、`backend/api/app/harness/`、`backend/api/app/llm/`、`backend/api/app/routers/{ws,tasks,mcp}.py`、`backend/worker/app/`、`frontend/src/` |
@@ -313,7 +313,7 @@ class ToolDef:
 
 > **注**：`tool_call` / `tool_result` / `thought` / `confirm_card` / `clarify_card` / `plan` 等事件已随骨架化从前端类型中移除。混合引擎恢复工具链路时，**必须先改 `docs/AI测试与评估平台-API.md` 再改代码**（红线第 1 条）。
 
-**长短任务分离（已满足）**：`tasks` 表状态机 `queued → running → succeeded|failed|cancelled`（testcase 另有 `awaiting_case_confirm`）；`backend/worker/app/main.py` L220–272 主循环以 `SELECT ... FOR UPDATE SKIP LOCKED` 领取，受 `settings.max_running_tasks`（默认 3）闸门；`uq_tasks_active_session` 部分唯一索引保证同会话任务串行。执行器入口：`run_benchmark(task_id)`（benchmark.py L472）、`run_testcase(task_id)`（testcase.py L136）；`rag` **必须失败**（LightRAG 未接入，禁止 mock），`stress` 为骨架 mock。
+**长短任务分离（已满足）**：`tasks` 表状态机 `queued → running → succeeded|failed|cancelled`（testcase 另有 `awaiting_case_confirm`）；`backend/worker/app/main.py` L220–272 主循环以 `SELECT ... FOR UPDATE SKIP LOCKED` 领取，受 `settings.max_running_tasks`（默认 3）闸门；`uq_tasks_active_session` 部分唯一索引保证同会话任务串行。执行器入口：`run_benchmark(task_id)`（benchmark.py L472）、`run_testcase(task_id)`（testcase.py L136）、`run_rag(task_id)`（rag.py，V1.2 修正：**真实执行**，LightRAG 优先 + 本地关键词兜底，报告须 `degraded`/`engine_counts` 标注）、`run_stress(task_id)`（stress.py，V1.2 修正：**已对接真实压测引擎**，见 C-11）。
 
 ### 2.5 上下文管理审计
 
@@ -442,6 +442,7 @@ Redis 当前唯一用途：`routers/ws_tickets.py` 的 WS 短票 `SET NX`（5 �
 | **C-8** | 死产物 `orchestration/__pycache__/react_loop.cpython-314.pyc`（源文件已删） | 误导审计与潜在导入歧义 | 清理 `__pycache__` 并确认 `.gitignore` 覆盖 | 任一实施 PR 顺带 |
 | **C-9** | 文档路径规范：`AGENTS.md` §1.4 要求设计文档归档于 `docs/AI测试与评估平台-<主题>.md` | 原产出于 `specs/`，与规范冲突 | **✅ 已关闭（V1.1）**：本文与架构文档均已直接归档 `docs/` 且命名合规，`specs/` 不存在，无需迁移 | 文档负责人 |
 | **C-10** | 反馈层 reflect 库随骨架化**收窄而非仅拆除**：`review.py` 仅 39 行三档简版（`pass/clarify/reject`、零调用含测试），`REFLECT_SCHEMA` / `parse_reflect` enum 同为三档，五档 `verdict`（含 `repair`/`retry`）仅残留于 `state.py` 类型注释 | 架构文档原把 H4 判为「库完整、只需重建节点壳」，实际需**恢复性扩展**判决逻辑与协议 schema/parser，H4 工作量被低估 | 审计基线修订后，H4 范围改为「扩展 `review()` 至五档 + `REFLECT_SCHEMA`/`parse_reflect` 补 enum + 重建 `reflect` 节点壳」，并同步更新架构文档 ADR-9 复用清单 | 架构 |
+| **C-11** | 状态地图漂移：`AGENTS.md` §1.5（V1.2）与本文 V1.1 均称 rag「**必须失败**（LightRAG 未接入，禁止 mock）」、stress「骨架 mock」，而两执行器已于 2026-08-25（`ada0bb4` / `ee8adc1`）**真实落地**：`rag.py`（LightRAG 优先 + 本地关键词兜底，可 succeeded）与 `stress.py`（对接 `stress:19090` 引擎） | 基于过时前提的差距矩阵与 H 阶段判断失真（如「rag 任务必须失败」实为可成功）；rag 兜底报告此前 `degraded` 恒 `None`，引擎来源不可区分 | 以代码为事实源回写 `AGENTS.md` §1.5/§5.2/§6（升 V1.3）与本文；代码侧 rag 报告补 `degraded`/`engine_counts` 诚实标注（已随本 V1.2 对应修复落地） | 文档负责人 + 架构 |
 
 ---
 
@@ -463,6 +464,13 @@ Redis 当前唯一用途：`routers/ws_tickets.py` 的 WS 短票 `SET NX`（5 �
 本文档为**只读审计**，未修改任何源码、配置、依赖或数据库迁移。
 
 - `docs/AI测试与评估平台-混合驱动引擎环境审计.md`（新增）：V1.0 记录环境探测（运行时 / 密钥 / 依赖 / 结构）与现状审计（状态机 / State / 工具调度 / 上下文 / 记忆 / 测试），输出差距矩阵与 9 项阻塞矛盾点。
+
+**V1.2 变更（状态地图纠偏，配合代码修复）**：按代码评审发现修正两处过时断言并新增矛盾 C-11——
+1. **rag 状态修正**：原「rag 必须失败（LightRAG 未接入，禁止 mock）」不成立——`run_rag` 真实执行器（`rag.py`，2026-08-25 `ada0bb4` 落地），LightRAG 未配置/不可达/空返回时回退本地关键词检索并真实计算指标写报告置 `succeeded`；
+2. **stress 状态修正**：原「骨架 mock（M4 替换）」不成立——`stress.py`（`ee8adc1`）已对接 `stress:19090` 真实引擎（Host 白名单、SLA 判定、取消停发、报告 upsert）；
+3. **报告诚实性补强**：rag 报告原 `degraded` 恒 `None`，本地兜底结果与 LightRAG 结果不可区分——随代码修复（`shared/kb.py` 新增 `retrieve_with_source`，`rag.py` 报告写入 `degraded`/`degraded_note`/`engine_counts`）后如实标注；
+4. **C-11 入表**：矛盾点清单扩至 11 项（C-1…C-11），裁决「以代码为事实源回写 AGENTS.md §1.5/§5.2/§6（V1.3）与本文」；
+5. 头部「阻塞矛盾 9 项」语境同步更新（C-10/C-11 为 V1.1/V1.2 新增）。
 
 **V1.1 变更（评审修订，纯文档）**：按架构评审意见修订以下六项——
 1. **反馈层判定修正（新增 C-10）**：实测 `harness/feedback/review.py` 仅 39 行、`ReflectVerdict` 三档（`pass/clarify/reject`）、**零调用（含测试）**，且 `prompts/protocols.py` `REFLECT_SCHEMA`/`parse_reflect` enum 同为三档——五档 `verdict`（含 `repair`/`retry`）仅残留于 `state.py` 类型注释。原「三级验证库函数保留（仅测试）」表述不成立，反馈层是**随骨架化收窄**而非「库完整死连」，需恢复性扩展；

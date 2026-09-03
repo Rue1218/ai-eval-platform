@@ -1,7 +1,7 @@
 # AI 测试与评估平台 — AI Agent 行为规范与工程指南 (AGENTS.md)
 
 > **最高指示**：本文件是面向所有参与本项目的 **AI Agent 与开发者** 的最高行动指南。在编写或修改代码前，**必须严格遵守本文档所规定的架构边界、开发契约与行为红线**。
-> 版本：V1.2 ｜ 审查日期：2026-09-02（V1.6.0 Agent 骨架化：纯对话图，范式/思考链/确认卡/澄清卡/斜杠已移除）
+> 版本：V1.3 ｜ 审查日期：2026-09-03（V1.6.0 Agent 骨架化：纯对话图，范式/思考链/确认卡/澄清卡/斜杠已移除；V1.3 修正 rag/stress 实现状态地图与降级诚实标注红线）
 
 ---
 
@@ -80,8 +80,8 @@
 | :--- | :--- | :--- |
 | benchmark 基准评测 | 真实执行器（三协议调用、规则评分、预算熔断、断点续跑） | `backend/worker/app/benchmark.py` |
 | testcase 用例生成 | 真实执行器（六策略 LLM 生成、72h 确认超时扫描） | `backend/worker/app/testcase.py` |
-| rag 知识库评测 | **必须失败**：LightRAG 未接入，禁止 mock `succeeded` | `backend/worker/app/main.py` |
-| stress 压测 | 骨架 mock（M4 替换） | `backend/worker/app/main.py` |
+| rag 知识库评测 | 真实执行器（LightRAG 优先；未配置/不可达/空返回回退本地关键词检索，报告 `degraded`/`engine_counts` 诚实标注引擎来源，禁止无标注出报告） | `backend/worker/app/rag.py`、`backend/shared/kb.py` |
+| stress 压测 | 真实执行器（对接 `stress:19090` 引擎：Host 白名单、SLA 判定、取消停发、报告 upsert） | `backend/worker/app/stress.py` |
 | Agent 图 | **骨架化**：单节点纯对话（`START → chat_stream → END`），无工具/确认卡/澄清卡/斜杠 | `backend/api/app/agent/graph.py`、`routing.py` |
 | bash 工具 | **真实 bwrap 沙箱**（阶段 3）：一次性进程级沙箱（无网络、会话工作区唯一可写、ulimit 资源限制、超时整树清理）+ 黑名单纵深防御；bwrap 不可用/引擎 `off` 时 fail-closed（骨架化后 Agent 不再调用，保留供未来扩展） | `backend/api/app/harness/execution/sandbox.py`、`dispatch.py`、`registry.py` |
 
@@ -241,7 +241,7 @@ async def create_task(payload: TaskCreateIn, db: Session = Depends(get_db)) -> T
 2. **数据库与迁移**：修改 `models.py` 后必须通过 Alembic 生成迁移脚本：`alembic revision --autogenerate -m "..."`，禁止私自手动改库。
 3. **安全与鉴权**：API Key 必须用 Fernet 加密存储且只写不回显；用户鉴权用 `HttpOnly` Cookie；WebSocket 使用 5 分钟有效期的单次短票 `ws-ticket`。
 4. **长短任务分离**：`api` 容器仅负责快速交互与任务入队，耗时评测与压测全部由 `worker` 异步消费并下发给 `stress` 容器执行。**禁止**在 `routers/ws.py` / `harness.py` 里 `time.sleep` 评测、同步调用 `benchmark.run` / `rag.evaluate` / `testcase.generate` / `stress.run`、或轮询等到任务终态。
-5. **能力未启用**：抛 `AppError(ErrorCode.VALIDATION, ...)`，HTTP **400**。禁止用 409 表示「功能没做」。LightRAG 未接入时 `kind=rag` **不得** mock `succeeded`。
+5. **能力未启用**：抛 `AppError(ErrorCode.VALIDATION, ...)`，HTTP **400**。禁止用 409 表示「功能没做」。LightRAG 未接入时 `kind=rag` **不得** mock `succeeded`；真实本地关键词兜底执行允许，但报告**必须**以 `degraded`/`engine_counts` 标注引擎来源（V1.3），禁止无标注把兜底成绩当作 LightRAG 引擎结果。
 
 ### 5.2.1 异常处理与控制台追踪（冻结）
 
@@ -300,7 +300,7 @@ except AppError as exc:
 
 额外（Agent / Worker）：
 - 禁止在 WS 收包循环里 `await` 整轮 Harness；禁止在 api 进程跑完长 MCP；
-- 禁止 LightRAG 未接入时把 RAG 任务 mock 成成功；
+- 禁止 LightRAG 未接入时把 RAG 任务 mock 成成功；真实本地关键词兜底必须经报告 `degraded`/`engine_counts` 标注后方可出报告；
 - 禁止 `except Exception` 后把异常原文或堆栈发给浏览器。
 - **bash 必须走 bwrap 沙箱**（`sandbox.py`），禁止降级为裸 subprocess 或绕过沙箱执行命令（V1.2 红线）。
 
