@@ -532,6 +532,11 @@ def get_default_checkpointer() -> BaseCheckpointSaver:
 
     单例保证 WS 图、会话软删除与 TTL 后台任务操作同一份检查点；
     禁止默认改为 postgres（多副本粘性需单独评审）。
+
+    H5 批次 2 生产门禁：混合引擎开启时，HITL 审批 resume 需跨进程恢复，
+    ``main.py::_validate_hitl_checkpointer`` 在启动期校验——``agent_hitl_strict_pg``
+    为 true 时 ``memory`` 检查点 fail-fast 阻止启动；为 false（默认）仅告警。
+    正式发布 HITL 前必须切 ``postgres`` 并完成重启恢复演练（开发计划 §3 H5）。
     """
     global _default_checkpointer
     with _default_checkpointer_lock:

@@ -111,6 +111,53 @@ def _validate_agent_registry() -> None:
     )
 
 
+def _validate_hitl_checkpointer() -> None:
+    """H5 批次 2：HITL 持久化启动门禁。
+
+    混合引擎开启（``hybrid_engine_enabled=true``）时，Agent 分支的危险 bash 会
+    触发图内 ``interrupt()`` 审批；审批回执需以原 ``thread_id`` 经
+    ``Command(resume=...)`` 恢复检查点。``memory`` 检查点为进程内单例，api 重启
+    或多副本轮询即丢失待恢复线程，用户点「批准」时找不到中断点（审计矛盾
+    C-7 / ADR-7）。
+
+    - ``agent_hitl_strict_pg=true``（生产部署）：混合引擎 + memory 检查点 →
+      抛 ``AppError(VALIDATION)`` 阻止启动（fail-fast）；
+    - ``agent_hitl_strict_pg=false``（默认，单副本/测试）：仅 ``logger.warning``
+      告警，便于用 ``memory`` 验证 interrupt 语义；正式发布 HITL 前必须切
+      ``AGENT_CHECKPOINTER=postgres`` 并完成重启恢复演练（开发计划 §3 H5）。
+    """
+    if not settings.hybrid_engine_enabled:
+        return
+    mode = str(settings.agent_checkpointer or "memory").strip().lower()
+    if mode == "postgres":
+        return
+    msg = (
+        "混合引擎已开启但检查点为 memory：HITL 审批 resume 无法跨进程重启恢复，"
+        "正式发布前必须设 AGENT_CHECKPOINTER=postgres 并完成重启恢复演练"
+    )
+    if settings.agent_hitl_strict_pg:
+        from .errors import AppError, ErrorCode
+
+        raise AppError(ErrorCode.VALIDATION, msg)
+    logger.warning(msg)
+
+
+def _resolve_instance_id() -> str:
+    """H5 批次 2：派生 API 实例标识（粘性路由用，暴露于 /api/health）。
+
+    优先使用 ``AGENT_INSTANCE_ID`` 显式配置；为空时以 ``hostname:pid`` 派生，
+    同一进程内稳定、跨重启变化——多副本部署时网关按 ``session_id`` 粘性路由
+    到同一实例，保证会话级 abort dict 与 interrupt ``thread_id`` 可寻址。
+    """
+    explicit = (settings.agent_instance_id or "").strip()
+    if explicit:
+        return explicit
+    import os
+    import socket
+
+    return f"{socket.gethostname()}:{os.getpid()}"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # 表结构由 Alembic 管理（启动前执行 alembic upgrade head），此处只做引导数据
@@ -121,6 +168,8 @@ async def lifespan(app: FastAPI):
     # H0：Agent Registry 静态引用校验在引导数据之后执行；strict 模式抛
     # AppError(VALIDATION) 阻止进程启动（fail-fast），见 AGENTS.md H0 硬门槛。
     _validate_agent_registry()
+    # H5 批次 2：HITL 持久化门禁——混合引擎开启时检查点必须可跨进程恢复。
+    _validate_hitl_checkpointer()
     from .runtime import checkpoint_ttl_loop
 
     cleanup_task = asyncio.create_task(checkpoint_ttl_loop())
@@ -170,4 +219,5 @@ app.include_router(ws.router)
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "version": app.version}
+    # H5 批次 2：暴露实例标识，供网关按 session_id 粘性路由健康检查识别副本。
+    return {"status": "ok", "version": app.version, "instance_id": _resolve_instance_id()}
