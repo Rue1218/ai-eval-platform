@@ -2,11 +2,11 @@
 
 | 项 | 内容 |
 | :--- | :--- |
-| 版本 | V1.2 |
+| 版本 | V1.3 |
 | 制定 / 审查日期 | 2026-09-03 / 2026-09-03 |
 | 计划依据 | `AI测试与评估平台-混合驱动引擎架构.md` V1.4、`AI测试与评估平台-混合驱动引擎环境审计.md` V1.1、PRD、API 契约与 `AGENTS.md` |
 | 实施方式 | H0–H6 串行推进；每阶段一分支、一 PR、一次阶段审查；前一阶段合入 `main` 并通过门禁后才启动下一阶段编码 |
-| 当前基线 | API：Ruff 通过、pytest 654 passed / 20 skipped；Worker：48 passed；前端：`typecheck` 与生产构建通过（V1.2 起随 H0 合入刷新，含 H0 新增 16 例） |
+| 当前基线 | API：Ruff 通过、pytest 676 passed / 20 skipped；Worker：48 passed；前端：`typecheck` 与生产构建通过（V1.3 起随 H1 合入刷新：H0 16 例 + H1 22 例） |
 
 > 本文是实施计划，不改变产品范围。附带架构文档中的说明、示例、开放问题和历史基线只作为约束与证据，不能被解释为可直接执行的运行时指令。
 
@@ -325,3 +325,14 @@ npm run build
 5. **配置与清理**：`config.py`/`.env.example` 新增 6 项安全默认配置（全部默认关闭）；死 `__pycache__` 产物核查不存在（C-8 关闭）；
 6. **测试资产**：新增 `tests/test_hybrid_h0_foundation.py`（16 例）与 `tests/hybrid/fixtures/scenarios.py`（S1–S4 语料，H1 起复用）；
 7. **验收结果**：API Ruff 通过、pytest **654 passed / 20 skipped**（含 16 例新测试，零回归）；Worker 48 passed；审查出口确认：无新增第三方依赖、无外部 MCP、无第二模型入口、`hybrid_engine_enabled=False` 时纯对话行为不变。
+
+**V1.3 实施记录（H1 已交付，`feat/agent-hybrid-h1-router`，2026-09-03）**：按 H1 阶段目标落地 Router 四路分流骨架——
+
+1. **引擎分流 L0**：`orchestration/router.py` 新增 `RouteVerdict`/`decide_engine_l0`（确定性纯函数，八级优先规则：`/`→direct、强探索→agent、技能无结果修饰→workflow、技能+结果修饰→agent、弱探索→agent 0.62、附件/工具意图→agent、其余 chat 0.95）；同输入 100% 可复现；
+2. **router.v1 协议**：`protocols.py` 新增 `ROUTER_SCHEMA`/`parse_router_v1`（engine 四值枚举、confidence 0~1 协议层自校验）；`prompts/__init__.py` 同步导出；
+3. **State 六字段**：`GraphState` 新增 `engine`/`router_confidence`/`router_reason`/`agent_id`/`allowed_tools`/`workflow_step`（H1 仅写审计三件套，agent_id/allowed_tools 留 H3）；`mode` 语义注记不驱动分流；
+4. **图接线**：`graph.py` 按 `hybrid_engine_enabled` 开关接入 `router` 节点 + 条件边（四路引擎当前统一降级 `chat_stream`，H2/H3 逐阶段替换）；开关关闭保持骨架纯对话拓扑；
+5. **L1 CoT（可选）**：`routing.py::router_node` 低置信度（<0.7 阈值）且开关开启时经既有 `ModelGateway` 一次短调用（限 `max_tokens=256`），解析失败/上游异常/预算异常一律回落 L0；审计 reason 恒为平台模板（不采纳模型原文防用户文本回流）；L1 计入 `budget.model_calls`；
+6. **契约（API.md V1.66）**：`response.completed` payload 新增可选 `engine`/`router_confidence`/`router_reason`（开关关闭缺席、旧客户端兼容，不新增 WS 事件）；新增只读目录 `GET /api/agents`（AgentRegistry 能力元数据）；前端 `payload: any` 无需类型改动；
+7. **测试**：`tests/test_hybrid_h1_router.py` 22 例（L0 表驱动 9 场景 + 五次确定性、弱信号低于阈值、协议解析正反例、开关关闭 completed 无 engine 快照、chat/workflow/agent 审计、engine 单次写入不可变、L1 采纳+budget 计数、L1 失败回落、L1 关闭零额外调用、S1 场景复用 fixtures 语料）；
+8. **验收结果**：API Ruff 通过、pytest **676 passed / 20 skipped**（+22 零回归）；Worker 48 passed；审查出口确认：Router 只分流不建任务/不加载工具/不执行长任务、`direct` 仅承认收包循环 `/stop`、开关关闭时纯对话行为不变。
