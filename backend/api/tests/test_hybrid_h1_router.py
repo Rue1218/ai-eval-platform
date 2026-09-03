@@ -136,12 +136,12 @@ def test_l0_empty_and_slash_are_deterministic() -> None:
     assert route_l0("/anything").engine == "direct"
 
 
-def test_l0_router_node_marks_downgrade_reason_without_model() -> None:
-    """router 节点 L0 路径零模型调用；未实现引擎的降级事实进 router_reason。"""
+def test_l0_router_node_workflow_no_model_no_downgrade_stamp() -> None:
+    """router 节点 L0 路径零模型调用；workflow（H2 已实现）不再标注降级。"""
     gateway = _StubGateway()
     update = router_node({"request": _request("对 profile-A 跑基准评测")}, gateway)
     assert update["engine"] == "workflow"
-    assert "降级 chat 执行" in update["router_reason"]
+    assert "降级" not in update["router_reason"]  # H2：workflow 由 W0–W7 DAG 执行
     assert gateway.invoke_calls == []  # L0 零模型调用
 
 
@@ -162,9 +162,17 @@ def test_l1_success_adopts_result_and_consumes_budget(
     assert len(gateway.invoke_calls) == 1
     l1_request = gateway.invoke_calls[0]
     assert l1_request.config.max_tokens == 256  # L1 限流输出
-    completed = _completed_payload(events)
-    assert completed["engine"] == "workflow"
-    assert "降级 chat 执行" in completed["router_reason"]
+    # H2：engine=workflow 进入 W0–W7 DAG；无确认上下文时在 W5 安全结束回合
+    # （不产 completed——确认卡直连桥接在 H2 批次 2 落地，届时恢复该断言）
+    pending = [
+        event
+        for mode, chunk in events
+        if mode == "updates"
+        for value in chunk.values()
+        if isinstance(value, dict)
+        for event in value.get("pending_events", [])
+    ]
+    assert not [e for e in pending if e["kind"] == "error"]
 
 
 @pytest.mark.parametrize(
