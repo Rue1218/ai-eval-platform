@@ -27,11 +27,15 @@ export class AgentWebSocket {
   public isConnected = false
   // 乱序重排缓冲：图内事件（Hub 即时广播）与 Worker 事件（0.4s 轮询转发）是
   // 两条通道，小号 Worker 事件可能晚于大号图内事件到达。event_id 按会话单调
-  // 连续编号，故暂存「未来帧」等待缺失的小号帧；超过重排窗口（大于服务端
-  // 转发轮询周期）说明小号帧永远不会来（编号空洞），按号序冲刷放行。
+  // 连续编号，故暂存「未来帧」等待缺失的小号帧；超过重排窗口说明小号帧
+  // 永远不会来（编号空洞），按号序冲刷放行。
+  // 窗口取值依据：服务端 Worker 转发轮询 0.4s，真实链路延迟 = 轮询间隔 + DB
+  // 查询 + 事件桥 emit + 网络，负载下可超 1s；600ms 裕量不足会导致小号帧在
+  // 窗口外到达时被重复检测永久丢弃（progress/report 静默丢失），故取 2s
+  // （约 5 个轮询周期）作为最坏情况窗口；正常连续帧不启动计时器，不受窗口影响。
   private pendingEvents = new Map<number, WsServerEvent>()
   private flushTimer: number | null = null
-  private readonly reorderWindowMs = 600
+  private readonly reorderWindowMs = 2_000
 
   constructor(sessionId?: string) {
     if (sessionId) this.sessionId = sessionId
@@ -237,6 +241,12 @@ export class AgentWebSocket {
   /** 按 event_id 升序冲刷缓冲帧；编号空洞（服务端永不补发）由本函数兜底放行。 */
   private flushPending(): void {
     if (!this.pendingEvents.size) return
+    // 窗口到期按序冲刷：若缓冲帧与 lastEventId 之间存在编号空洞，说明小号帧
+    // 迟到超过窗口（服务端转发延迟异常或已永久缺失）。记可观测告警，供评估
+    // 窗口取值是否仍不足；正常无乱序（不启动计时器）时不触发。
+    console.warn(
+      `WS reorder window expired: flushing ${this.pendingEvents.size} frame(s) with gap after event_id=${this.lastEventId}`,
+    )
     const ordered = [...this.pendingEvents.entries()].sort((a, b) => a[0] - b[0])
     this.pendingEvents.clear()
     for (const [id, frame] of ordered) {
