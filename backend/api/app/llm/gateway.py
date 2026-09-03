@@ -66,6 +66,7 @@ def _default_invoke_transport(request: ModelRequest) -> AdapterResult:
         reasoning_enabled=config.reasoning_enabled,
         reasoning_effort=config.reasoning_effort,
         tools=[dict(tool) for tool in request.tools],
+        system_segments=request.system_segments,
     )
 
 
@@ -89,6 +90,7 @@ def _default_stream_transport(
         reasoning_enabled=config.reasoning_enabled,
         reasoning_effort=config.reasoning_effort,
         tools=[dict(tool) for tool in request.tools],
+        system_segments=request.system_segments,
     )
 
 

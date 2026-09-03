@@ -42,16 +42,33 @@ def chat_stream_node(state: GraphState, gateway: object) -> dict:
     persona = str(serializable.get("system") or "").strip() or build_system_prompt(
         SystemVars(skill_hints=tuple(skill_hints_for_turn()))
     )
+    skill_hints = skill_hints_for_turn()
+    summary = compact_summary_from_configurable(configurable)
     assembled = assemble(
         system=persona,
-        skill_hints=skill_hints_for_turn(),
-        summary=compact_summary_from_configurable(configurable),
+        skill_hints=skill_hints,
+        summary=summary,
         messages=list(serializable.get("messages") or ()),
     )
+    # H0 缓存边界：开关开启时挂分段（适配器据此打缓存断点），关闭时行为与
+    # 骨架化版本一致（assembled["system"] 单字符串，字节级兼容）。
+    from app.config import settings
+    from app.harness.context import assemble_segments
+
+    segments = ()
+    system_text = assembled["system"]
+    if settings.prompt_cache_enabled:
+        segments = assemble_segments(
+            system=persona,
+            skill_hints=skill_hints,
+            summary=summary,
+        )
+        system_text = "\n\n".join(segment.text for segment in segments)
     request = ModelRequest(
         config=model_config,  # type: ignore[arg-type]
         messages=tuple(assembled["messages"]),
-        system=assembled["system"],
+        system=system_text,
+        system_segments=segments,
         tools=(),  # 骨架版不注入工具定义
     )
     writer = get_stream_writer()

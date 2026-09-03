@@ -44,6 +44,18 @@ Message = Mapping[str, object]
 
 
 @dataclass(frozen=True, slots=True)
+class SystemSegment:
+    """系统提示词分段（缓存边界，ADR-5）。
+
+    ``text`` 为段正文；``cacheable`` 标记该段是否为可缓存静态段（静态在前的
+    单调段序由 ``assembly.assemble_segments`` 强制，适配器据此决定断点落点）。
+    """
+
+    text: str
+    cacheable: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class NativeToolCall:
     """模型协议原生函数调用的统一投影。
 
@@ -68,6 +80,9 @@ class ModelRequest:
     config: ModelConfig
     messages: tuple[Message, ...] = field(default_factory=tuple, repr=False)
     system: str | None = field(default=None, repr=False)
+    # 缓存边界分段（ADR-5，H0）：非空且开关开启时适配器按分段落 cache_control；
+    # 为空或开关关闭时退化为 system 单字符串，行为与骨架化版本一致。
+    system_segments: tuple[SystemSegment, ...] = field(default_factory=tuple, repr=False)
     tools: tuple[Mapping[str, object], ...] = field(
         default_factory=tuple, repr=False
     )  # M2 assemble 产出的工具定义（CX-5）

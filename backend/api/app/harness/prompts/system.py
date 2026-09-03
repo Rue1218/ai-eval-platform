@@ -21,13 +21,21 @@ SystemSection = Literal["role", "safety", "confirm", "task_split", "secrets"]
 class SystemVars:
     """受控变量槽（仅平台可注入，禁止用户文本）。
 
-    最小集 + 预留扩展点：当前只用 skill_hints/session_owner/agent_prompt_overlay，
-    后续按需扩展（如任务上下文摘要），新增字段须评审。禁止 user_text 字段。
+    最小集 + 预留扩展点：当前只用 skill_hints/session_owner/agent_prompt_overlay/
+    project_instructions，后续按需扩展（如任务上下文摘要），新增字段须评审。
+    禁止 user_text 字段。
+
+    指令三层优先级（H0 混合驱动引擎基础设施）：
+    L1 核心段 = 模板五段固定策略（硬编码，永不可覆盖）；
+    L2 项目级 = ``project_instructions``（服务端常量或管理端受控文本）；
+    L3 会话级 = ``agent_prompt_overlay``（DB，协议档/会话维度）。
+    拼接顺序恒 L1 → L2 → L3；L2/L3 装配前必须通过接管性措辞校验。
     """
 
     skill_hints: tuple[str, ...] = field(default_factory=tuple)  # 可见技能一句话描述
     session_owner: str | None = None
-    agent_prompt_overlay: str = ""  # 仅管理员可维护的协议档补充提示词
+    agent_prompt_overlay: str = ""  # 仅管理员可维护的协议档补充提示词（L3）
+    project_instructions: str = ""  # 项目级受控指令（L2，服务端常量，非任意用户输入）
 
 
 # 五段固定系统策略模板（含受控占位符，仅允许 SystemVars 安全字段填充）
@@ -79,20 +87,47 @@ _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bcookie\b", re.IGNORECASE),
 )
 
+# 接管性措辞模式（H0 指令分层：L2/L3 不得改写 L1 核心段）
+_TAKEOVER_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"忽略(以上|此前|之前|前面)|无视(以上|此前|之前|前面)", re.IGNORECASE),
+    re.compile(r"忘记(之前|以上|前面).*(指令|规则|提示)", re.IGNORECASE),
+    re.compile(r"你现在是|你(将)?扮演|从(现在|此刻)起", re.IGNORECASE),
+    re.compile(r"override|ignore (above|previous|all)", re.IGNORECASE),
+    re.compile(r"只(听|遵循|服从)我的指令", re.IGNORECASE),
+)
+
+
+def assert_no_takeover(text: str | None) -> None:
+    """校验下层指令不含接管性措辞（L2/L3 不得改写 L1，H0 指令分层铁律）。
+
+    命中「忽略以上 / 你现在是 / 扮演」等接管模式即抛 ``AppError(VALIDATION)``，
+    防止协议档补充提示词或项目指令覆盖核心安全策略。
+    """
+    if not text:
+        return
+    for pattern in _TAKEOVER_PATTERNS:
+        if pattern.search(text):
+            raise AppError(ErrorCode.VALIDATION, "补充指令包含接管性措辞，已拒绝")
+
 
 def build_system_prompt(vars_: SystemVars | None = None) -> str:
     """装配系统策略；变量槽只接受 SystemVars 安全字段。
 
-    用户配置不得覆盖模板（PR-1）。返回 system 消息内容。
+    用户配置不得覆盖模板（PR-1）。L2 项目指令与 L3 补充提示词按顺序拼入
+    既有 overlay 占位槽（模板零改动，L2 为空时输出与骨架化版本完全一致），
+    装配前各自通过 ``assert_no_takeover`` 接管性措辞校验。返回 system 消息内容。
     """
+    overlay_parts: list[str] = []
+    if vars_ and vars_.project_instructions:
+        assert_no_takeover(vars_.project_instructions)
+        overlay_parts.append("【项目指令】\n" + vars_.project_instructions)
+    if vars_ and vars_.agent_prompt_overlay:
+        assert_no_takeover(vars_.agent_prompt_overlay)
+        overlay_parts.append("【当前 Agent 专属补充提示词】\n" + vars_.agent_prompt_overlay)
     values: dict[str, str] = {
         "skill_hints": "；".join(vars_.skill_hints) if vars_ and vars_.skill_hints else "（无）",
         "session_owner": (vars_.session_owner if vars_ else None) or "（未指定）",
-        "agent_prompt_overlay": (
-            "【当前 Agent 专属补充提示词】\n" + vars_.agent_prompt_overlay
-            if vars_ and vars_.agent_prompt_overlay
-            else ""
-        ),
+        "agent_prompt_overlay": "\n\n".join(overlay_parts),
     }
     for placeholder in _ALLOWED_PLACEHOLDERS:
         if f"${{{placeholder}}}" not in SYSTEM_PROMPT_TEMPLATE:

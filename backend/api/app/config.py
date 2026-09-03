@@ -75,6 +75,13 @@ class Settings(BaseSettings):
     # 预算（READ_MAX_CHARS=600_000）对齐，使 ToolCard 所见 == 模型真实读取
     # 内容；需要收紧回旧版安全窗时设 TOOL_PREVIEW_MAX_CHARS=4000。
     tool_preview_max_chars: int = 600_000
+    # ===== 混合驱动引擎（H0 基础设施灰度开关；全部默认安全关闭）=====
+    hybrid_engine_enabled: bool = False  # 主开关；关闭时保持骨架化纯对话（灰度回滚出口）
+    hybrid_router_cot_enabled: bool = False  # Router L1 CoT 开关；关闭时纯 L0
+    hybrid_router_confidence_threshold: float = 0.7  # L0 置信度低于此值才触发 L1 CoT
+    agent_registry_strict: bool = True  # AgentDef.allowed_tools 未注册时启动 fail-fast
+    prompt_cache_enabled: bool = False  # 提示词缓存边界开关；关闭时装配行为与今日字节级一致
+    external_mcp_enabled: bool = False  # 外部 MCP fail-closed（ADR-8）
 
     @property
     def cors_origin_list(self) -> list[str]:
