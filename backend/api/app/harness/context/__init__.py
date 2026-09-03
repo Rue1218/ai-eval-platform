@@ -1,7 +1,9 @@
 """Harness 上下文工程层（M2）：窗口/装配/observation 摘要/compact 摘要/meter。"""
 
 from .assembly import (
+    PromptSegment,
     assemble,
+    assemble_segments,
     compact_summary_from_configurable,
     select_tool_defs,
     skill_hint_lines,
@@ -30,8 +32,10 @@ __all__ = [
     "ContextMeter",
     "DEFAULT_MAX_CHARS",
     "MODEL_TOOL_RESULT_MAX_CHARS",
+    "PromptSegment",
     "WindowMessage",
     "assemble",
+    "assemble_segments",
     "compact_summary_from_configurable",
     "compute_meter",
     "estimate_tokens",

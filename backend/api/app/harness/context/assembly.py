@@ -4,11 +4,17 @@
 → 用户消息（CX-4 / SK-1）。工具定义按本轮能力最小注入（CX-5）：Chat/Direct
 不注入；ReAct 注入已注册的短原生工具，并并入 ``tools_needed`` 中已注册项；
 未注册与未点名的 MCP 长工具不默认注入。
+
+H0（混合驱动引擎基础设施）：新增 ``assemble_segments`` 提供 ADR-5 缓存边界的
+分段装配（静态段在前、动态段在后，段序单调）。``assemble`` 保持原签名与
+返回结构不变，内部委托分段渲染，保证 ``prompt_cache_enabled=False`` 时输出
+与骨架化版本**字节级一致**。
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 
 
 def skill_hints_for_turn(skill_id: str | None = None) -> list[str]:
@@ -41,6 +47,89 @@ def compact_summary_from_configurable(
     return summary or None
 
 
+# ─── 缓存边界分段（ADR-5 / H0）───
+
+# 段序标识：静态在前（global/skill），动态在后（session/none），严格单调。
+# 与 ADR-5 的 S1–S7 对应：S1 Persona、S2 Skill Hint、S3 工具定义（tools
+# payload 承载，不入 system 文本）、S4 Skill 工作流正文、S5 Overlay（当前仍
+# 内嵌于 build_system_prompt 产物，S1 文本内，未来按需拆出独立段）、S6 会话
+# 摘要、S7 阶段输入/当轮动态（不缓存）。
+SEGMENT_S1_PERSONA = 1
+SEGMENT_S2_SKILL_HINTS = 2
+SEGMENT_S4_SKILL_WORKFLOW = 4
+SEGMENT_S6_SUMMARY = 6
+SEGMENT_S7_STAGE = 7
+
+
+@dataclass(frozen=True, slots=True)
+class PromptSegment:
+    """装配产出的提示词分段（缓存边界最小单元）。
+
+    ``order`` 为段序（单调递增，装配层强制）；``cacheable`` 标记静态可缓存
+    段（global/skill 级），适配器仅在最后一个可缓存段后打缓存断点。
+    """
+
+    text: str
+    order: int
+    cacheable: bool = False
+
+
+def _segment(text: str, order: int, *, cacheable: bool) -> PromptSegment:
+    """构造非空分段；空文本直接剔除（与 ``assemble`` 的空段省略语义一致）。"""
+    return PromptSegment(text=text, order=order, cacheable=cacheable)
+
+
+def assemble_segments(
+    *,
+    system: str,  # Persona（M1 build_system_prompt 产出；含五段策略与受控槽）
+    skill_hints: Sequence[str] | None = None,
+    skill_workflow: str | None = None,  # 本轮按需工作流（SK-1，可选）
+    summary: str | None = None,  # compact 摘要（compact.py 产出，可选）
+    stage_input: str | None = None,  # 当前阶段协议说明（M4 节点提供，可选）
+) -> tuple[PromptSegment, ...]:
+    """按 ADR-5 段序产出带缓存边界的分段（静态在前、动态在后）。
+
+    - S1 Persona 与 S2 Skill Hint：部署级静态，``cacheable=True``；
+    - S4 Skill 工作流正文：技能级静态（按 skill_id 分桶），``cacheable=True``；
+    - S6 会话摘要与 S7 阶段输入：会话/当轮动态，``cacheable=False``（断点之后）；
+    - 空的可选段不产出（与 ``assemble`` 空段省略语义一致）。
+
+    渲染顺序由 ``assemble`` 强制为分段序，禁止调用方调整——缓存断点落在
+    最后一个可缓存段之后，一旦动态段插入静态前缀，整个前缀缓存即失效。
+    """
+    segments: list[PromptSegment] = [_segment(system, SEGMENT_S1_PERSONA, cacheable=True)]
+    if skill_hints:
+        segments.append(
+            _segment(
+                "【可见技能】\n" + "\n".join(f"- {hint}" for hint in skill_hints),
+                SEGMENT_S2_SKILL_HINTS,
+                cacheable=True,
+            )
+        )
+    if skill_workflow:
+        segments.append(
+            _segment(
+                "【当前技能工作流】\n" + skill_workflow,
+                SEGMENT_S4_SKILL_WORKFLOW,
+                cacheable=True,
+            )
+        )
+    if summary:
+        segments.append(
+            _segment("【会话摘要】\n" + summary, SEGMENT_S6_SUMMARY, cacheable=False)
+        )
+    if stage_input:
+        segments.append(
+            _segment("【当前阶段】\n" + stage_input, SEGMENT_S7_STAGE, cacheable=False)
+        )
+    return tuple(segments)
+
+
+def _render_system(segments: Sequence[PromptSegment]) -> str:
+    """按段序渲染为单块 system 字符串（与骨架化 ``assemble`` 的 join 字节级一致）。"""
+    return "\n\n".join(segment.text for segment in segments)
+
+
 def assemble(
     *,
     system: str,  # Persona（M1 build_system_prompt 产出）
@@ -56,18 +145,20 @@ def assemble(
 
     ``skill_workflow`` 仅本轮选中技能时注入，不写入 GraphState（SK-1/SK-2）。
     返回 {'system': str, 'messages': list, 'tools': list} 供 ModelRequest 构造。
+
+    H0 起内部委托 ``assemble_segments`` 渲染 system：段序单调由装配层强制，
+    但本函数仍返回单块字符串（``prompt_cache_enabled=False`` 时字节级兼容）；
+    启用缓存的路径请直接使用 ``assemble_segments`` 并把分段挂到 ModelRequest。
     """
-    sections: list[str] = [system]
-    if skill_hints:
-        sections.append("【可见技能】\n" + "\n".join(f"- {hint}" for hint in skill_hints))
-    if skill_workflow:
-        sections.append("【当前技能工作流】\n" + skill_workflow)
-    if summary:
-        sections.append("【会话摘要】\n" + summary)
-    if stage_input:
-        sections.append("【当前阶段】\n" + stage_input)
+    segments = assemble_segments(
+        system=system,
+        skill_hints=skill_hints,
+        skill_workflow=skill_workflow,
+        summary=summary,
+        stage_input=stage_input,
+    )
     return {
-        "system": "\n\n".join(sections),
+        "system": _render_system(segments),
         "messages": [dict(message) for message in messages],
         "tools": [dict(tool) for tool in (tool_defs or [])],
     }

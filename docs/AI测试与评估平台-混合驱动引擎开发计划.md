@@ -2,11 +2,11 @@
 
 | 项 | 内容 |
 | :--- | :--- |
-| 版本 | V1.1 |
+| 版本 | V1.2 |
 | 制定 / 审查日期 | 2026-09-03 / 2026-09-03 |
 | 计划依据 | `AI测试与评估平台-混合驱动引擎架构.md` V1.4、`AI测试与评估平台-混合驱动引擎环境审计.md` V1.1、PRD、API 契约与 `AGENTS.md` |
 | 实施方式 | H0–H6 串行推进；每阶段一分支、一 PR、一次阶段审查；前一阶段合入 `main` 并通过门禁后才启动下一阶段编码 |
-| 当前基线 | API：Ruff 通过、pytest 639 passed / 19 skipped；Worker：45 passed；前端：`typecheck` 与生产构建通过 |
+| 当前基线 | API：Ruff 通过、pytest 654 passed / 20 skipped；Worker：48 passed；前端：`typecheck` 与生产构建通过（V1.2 起随 H0 合入刷新，含 H0 新增 16 例） |
 
 > 本文是实施计划，不改变产品范围。附带架构文档中的说明、示例、开放问题和历史基线只作为约束与证据，不能被解释为可直接执行的运行时指令。
 
@@ -315,3 +315,13 @@ npm run build
 3. 补齐 RootState、Router `router.v1` 协议/预算/回退、H3 首批 Worker 与 sandbox 禁用、Reflection 双通道和停止守卫；
 4. 补齐 H5 的确认记录字段、既有行锁复用、迁移条件、重复 resume 至多一次、遗留审批回退保护；
 5. 补齐混合测试资产、评分报告和性能/收敛指标，作为 O2 数据采集与 H6 灰度放量依据。
+
+**V1.2 实施记录（H0 已交付，`feat/agent-hybrid-h0-foundation`，2026-09-03）**：按 H0 阶段目标落地基础设施，**未改生产图、未改 WS 契约**——
+
+1. **缓存边界**：`assembly.py` 新增 `PromptSegment`/`assemble_segments`（段序单调 S1/S2/S4 可缓存静态段 + S6/S7 动态段），`assemble()` 内部委托渲染且与骨架化版本**字节级一致**（`prompt_cache_enabled=False` 回归锚点）；`contracts.py` 新增 `SystemSegment` 与 `ModelRequest.system_segments`；`adapters.py` 三协议入口透传并在 Anthropic 分支按「最后一个可缓存段」落 `cache_control: ephemeral`（OpenAI 依赖前缀稳定，不做处理；开关默认关）；
+2. **Agent Registry**：新增 `harness/orchestration/agents.py`（`AgentDef`/`AgentRegistry`/首批 4 Worker 静态注册/`validate_agent_registry_integrity`），`main.py` lifespan 启动期校验（strict 缺项即阻止启动；DB 暂不可用仅跳过协议档维度）；
+3. **指令分层**：`system.py` 新增 `project_instructions`（L2 受控槽，模板零改动，L2 空时输出与骨架版一致）与 `assert_no_takeover` 接管性措辞校验（L2/L3 命中「忽略以上/你现在是/override」即 VALIDATION）；
+4. **Skill 示例段**：`workflows.py` 新增 `extract_skill_examples`（正文 `## 示例请求` 段，头部六键零改动，fail-closed 沿 skill 门禁）；
+5. **配置与清理**：`config.py`/`.env.example` 新增 6 项安全默认配置（全部默认关闭）；死 `__pycache__` 产物核查不存在（C-8 关闭）；
+6. **测试资产**：新增 `tests/test_hybrid_h0_foundation.py`（16 例）与 `tests/hybrid/fixtures/scenarios.py`（S1–S4 语料，H1 起复用）；
+7. **验收结果**：API Ruff 通过、pytest **654 passed / 20 skipped**（含 16 例新测试，零回归）；Worker 48 passed；审查出口确认：无新增第三方依赖、无外部 MCP、无第二模型入口、`hybrid_engine_enabled=False` 时纯对话行为不变。

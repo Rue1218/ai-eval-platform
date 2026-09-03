@@ -8,8 +8,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
 from .db import SessionLocal
 from .errors import register_error_handlers
+from .harness.execution.registry import build_default_registry
+from .harness.orchestration.agents import (
+    build_default_agent_registry,
+    validate_agent_registry_integrity,
+)
+from .harness.skills.registry import SKILL_CATALOG
 from .harness.skills.storage import ensure_skill_files
-from .models import User
+from .models import ProtocolProfile, User
 from .routers import (
     admin,
     agent_prefs,
@@ -76,6 +82,34 @@ def _bootstrap_preview() -> None:
         db.close()
 
 
+def _validate_agent_registry() -> None:
+    """H0：Agent Registry 启动期一致性校验（strict 下缺项即阻止启动）。
+
+    校验 ``allowed_tools ⊆ ToolRegistry``、``skill_ids ⊆ SKILL_CATALOG`` 与
+    ``model_profile_id``（非空时）的协议档存在性。数据库暂不可用（首启迁移
+    前）时仅跳过协议档维度，静态引用校验始终执行。
+    """
+    db_profile_ids: frozenset[str] | None = frozenset()
+    try:
+        db = SessionLocal()
+        try:
+            db_profile_ids = frozenset(
+                str(row[0]) for row in db.query(ProtocolProfile.id).all()
+            )
+        finally:
+            db.close()
+    except Exception:
+        db_profile_ids = None
+        logger.warning("Agent Registry 协议档校验跳过：数据库暂不可用")
+    validate_agent_registry_integrity(
+        build_default_agent_registry(),
+        tool_names=frozenset(build_default_registry().names()),
+        skill_ids=frozenset(SKILL_CATALOG),
+        db_profile_ids=db_profile_ids,
+        strict=settings.agent_registry_strict,
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # 表结构由 Alembic 管理（启动前执行 alembic upgrade head），此处只做引导数据
@@ -83,6 +117,9 @@ async def lifespan(app: FastAPI):
     ensure_skill_files()
     _bootstrap_admin()
     _bootstrap_preview()
+    # H0：Agent Registry 静态引用校验在引导数据之后执行；strict 模式抛
+    # AppError(VALIDATION) 阻止进程启动（fail-fast），见 AGENTS.md H0 硬门槛。
+    _validate_agent_registry()
     from .runtime import checkpoint_ttl_loop
 
     cleanup_task = asyncio.create_task(checkpoint_ttl_loop())

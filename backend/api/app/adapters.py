@@ -18,6 +18,7 @@ import json
 import time
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
@@ -28,7 +29,13 @@ import openai
 from anthropic import Anthropic
 from openai import OpenAI
 
+from .config import settings
 from .errors import AppError, ErrorCode
+
+if TYPE_CHECKING:
+    # 仅类型检查可见：运行时导入会经 app.llm.__init__ → gateway → adapters
+    # 形成循环，注解在 future annotations 下字符串化，无需运行时类型。
+    from .llm.contracts import SystemSegment
 
 # 契约支持的三种协议（与 protocol_profiles 的 CHECK 约束一致）
 SUPPORTED_PROTOCOLS = ("openai_chat", "openai_responses", "anthropic_messages")
@@ -649,6 +656,43 @@ def _service_base_url(base_url: str) -> str:
     return base
 
 
+def _anthropic_system_param(
+    system: str | None,
+    segments: tuple[SystemSegment, ...] | None = None,
+    *,
+    cache_enabled: bool = False,
+) -> str | list[dict[str, object]]:
+    """Anthropic Messages 的 system 参数：缓存边界开启时返回带断点的内容块数组。
+
+    ADR-5：断点只落在**最后一个可缓存静态段**（S1 Persona / S2 Skill Hint /
+    S4 Skill 工作流），动态段（S6 会话摘要、S7 当轮输入）位于断点之后随请求
+    发送但不计入缓存前缀。不满足条件（开关关 / 无分段）时返回原字符串，
+    行为与骨架化版本一致。``cache_control`` 由协议档 anthropic-version
+    （2023-06-01 起支持）承载；上游不支持时错误归一兜底，调用方可关闭开关。
+    OpenAI 系协议依赖自动前缀缓存，仅需保证前缀字节级稳定，不做本处理。
+    """
+    if not cache_enabled or not segments:
+        return system or ""
+    blocks: list[dict[str, object]] = []
+    last_cacheable: int | None = None
+    for index, segment in enumerate(segments):
+        if segment.cacheable and segment.text:
+            last_cacheable = index
+    for index, segment in enumerate(segments):
+        if not segment.text:
+            continue
+        block: dict[str, object] = {"type": "text", "text": segment.text}
+        if index == last_cacheable:
+            block["cache_control"] = {"type": "ephemeral"}
+        blocks.append(block)
+    return blocks
+
+
+def _prompt_cache_flag(prompt_cache: bool | None) -> bool:
+    """缓存开关判定：显式传入优先，否则读运行配置（默认关闭）。"""
+    return settings.prompt_cache_enabled if prompt_cache is None else prompt_cache
+
+
 def call_protocol(
     *,
     protocol: str,
@@ -664,6 +708,8 @@ def call_protocol(
     reasoning_enabled: bool = False,
     reasoning_effort: str = "medium",
     tools: list[dict] | None = None,
+    system_segments: tuple[SystemSegment, ...] | None = None,
+    prompt_cache: bool | None = None,
 ) -> AdapterResult:
     """按协议适配调用上游模型并返回统一结构的结果对象。
 
@@ -723,7 +769,11 @@ def call_protocol(
         if native_tools:
             body["tools"] = native_tools
         if system:
-            body["system"] = system
+            body["system"] = _anthropic_system_param(
+                system,
+                system_segments,
+                cache_enabled=_prompt_cache_flag(prompt_cache),
+            )
         if reasoning_enabled and _supports_anthropic_thinking(model):
             body["thinking"] = {
                 "type": "enabled",
@@ -788,6 +838,8 @@ def stream_protocol(
     reasoning_enabled: bool = True,
     reasoning_effort: str = "medium",
     tools: list[dict] | None = None,
+    system_segments: tuple[SystemSegment, ...] | None = None,
+    prompt_cache: bool | None = None,
 ) -> Iterator[tuple[str, str] | AdapterStreamEvent]:
     """按协议流式调用上游模型，逐块 yield ``(kind, text)`` 增量。
 
@@ -986,7 +1038,11 @@ def stream_protocol(
         if native_tools:
             body["tools"] = native_tools
         if system:
-            body["system"] = system
+            body["system"] = _anthropic_system_param(
+                system,
+                system_segments,
+                cache_enabled=_prompt_cache_flag(prompt_cache),
+            )
         if reasoning_enabled and _supports_anthropic_thinking(model):
             body["thinking"] = {
                 "type": "enabled",

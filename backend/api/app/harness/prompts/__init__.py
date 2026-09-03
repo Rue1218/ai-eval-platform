@@ -25,6 +25,7 @@ from .system import (
     SystemSection,
     SystemVars,
     assert_no_secret_leak,
+    assert_no_takeover,
     build_system_prompt,
 )
 
@@ -51,6 +52,7 @@ __all__ = [
     "SystemSection",
     "SystemVars",
     "assert_no_secret_leak",
+    "assert_no_takeover",
     "assert_user_text_safe",
     "build_system_prompt",
     "check_version",
