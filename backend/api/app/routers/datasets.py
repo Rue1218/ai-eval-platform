@@ -190,10 +190,24 @@ def _upsert_row(db: Session, dataset: Dataset, row_in: DatasetRowIn, row: Datase
 
 
 @router.get("")
-def list_datasets(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    """列出全部数据集，按契约返回 {items, total} 包装。"""
-    rows = db.query(Dataset).order_by(Dataset.created_at.desc()).all()
-    return {"items": [DatasetOut.model_validate(row) for row in rows], "total": len(rows)}
+def list_datasets(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    page: int | None = Query(default=None, ge=1, description="当前页码（从1开始）"),
+    page_size: int | None = Query(default=None, ge=1, le=500, description="每页条数"),
+    q: str | None = Query(default=None, description="数据集名称检索关键字"),
+):
+    """列出全部数据集，按契约返回 {items, total} 包装，支持分页与关键词检索。"""
+    query = db.query(Dataset)
+    if q and q.strip():
+        query = query.filter(Dataset.name.ilike(f"%{q.strip()}%"))
+    total = query.count()
+    query = query.order_by(Dataset.created_at.desc())
+    if page is not None and page_size is not None:
+        rows = query.offset((page - 1) * page_size).limit(page_size).all()
+    else:
+        rows = query.all()
+    return {"items": [DatasetOut.model_validate(row) for row in rows], "total": total}
 
 
 @router.post("", response_model=DatasetOut, status_code=201)
@@ -390,10 +404,13 @@ def list_dataset_rows(
     pending_complete: bool | None = Query(default=None),
     view: str = Query(default="active"),
     import_id: str | None = Query(default=None),
+    page: int | None = Query(default=None, ge=1, description="当前页码（从1开始）"),
+    page_size: int | None = Query(default=None, ge=1, le=500, description="每页条数"),
+    q: str | None = Query(default=None, description="问句/答案/上下文检索关键字"),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """读取正式行或指定导入 staging；staging 不会被评测 Worker 直接使用。"""
+    """读取正式行或指定导入 staging；staging 不会被评测 Worker 直接使用。支持可选分页查询。"""
     _ = user
     dataset = _get_dataset_or_404(db, dataset_id)
     if view == "staging":
@@ -408,36 +425,66 @@ def list_dataset_rows(
             raise AppError(ErrorCode.NOT_FOUND, "导入作业不存在")
         if job.status not in {"review_ready", "published", "rejected"}:
             raise AppError(ErrorCode.VALIDATION, "当前导入作业没有可审核的 staging")
-        rows = (
+        staging_query = (
             db.query(DatasetImportRow)
             .filter(DatasetImportRow.import_id == job.id)
             .order_by(DatasetImportRow.row_no.asc())
-            .all()
         )
+        if q and q.strip():
+            kw = f"%{q.strip()}%"
+            staging_query = staging_query.filter(
+                (DatasetImportRow.question.ilike(kw)) | (DatasetImportRow.reference.ilike(kw))
+            )
+        total_staging = staging_query.count()
+        if page is not None and page_size is not None:
+            staging_rows = staging_query.offset((page - 1) * page_size).limit(page_size).all()
+        else:
+            staging_rows = staging_query.all()
         return {
-            "items": [_staging_row_to_item(row) for row in rows],
-            "total": len(rows),
+            "items": [_staging_row_to_item(row) for row in staging_rows],
+            "total": total_staging,
             "import_id": job.id,
             "staging_revision": job.staging_revision,
         }
     if view != "active":
         raise AppError(ErrorCode.VALIDATION, "view 仅支持 active 或 staging")
     if dataset.active_version_id:
-        version_rows = (
+        v_query = (
             db.query(DatasetVersionRow)
             .filter(DatasetVersionRow.dataset_version_id == dataset.active_version_id)
             .order_by(DatasetVersionRow.row_no.asc())
-            .all()
         )
+        if q and q.strip():
+            kw = f"%{q.strip()}%"
+            v_query = v_query.filter(
+                (DatasetVersionRow.question.ilike(kw)) | (DatasetVersionRow.reference.ilike(kw))
+            )
+        total_v = v_query.count()
+        if page is not None and page_size is not None:
+            v_rows = v_query.offset((page - 1) * page_size).limit(page_size).all()
+        else:
+            v_rows = v_query.all()
         return {
-            "items": [_version_row_to_item(row) for row in version_rows],
-            "total": len(version_rows),
+            "items": [_version_row_to_item(row) for row in v_rows],
+            "total": total_v,
         }
     query = db.query(DatasetRow).filter(DatasetRow.dataset_id == dataset.id)
     if pending_complete:
         query = query.filter(DatasetRow.pending_complete.is_(True))
-    rows = query.order_by(DatasetRow.row_no.asc()).all()
-    return {"items": [_row_to_item(row) for row in rows], "total": len(rows)}
+    if q and q.strip():
+        kw = f"%{q.strip()}%"
+        query = query.filter(
+            (DatasetRow.question.ilike(kw))
+            | (DatasetRow.reference.ilike(kw))
+            | (DatasetRow.context.ilike(kw))
+        )
+    total_rows = query.count()
+    query = query.order_by(DatasetRow.row_no.asc())
+    if page is not None and page_size is not None:
+        rows = query.offset((page - 1) * page_size).limit(page_size).all()
+    else:
+        rows = query.all()
+    return {"items": [_row_to_item(row) for row in rows], "total": total_rows}
 
 
 @router.put("/{dataset_id}/rows")

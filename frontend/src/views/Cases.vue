@@ -269,17 +269,14 @@
           </div>
         </div>
 
-        <!-- 3. 用例表格：高性能虚拟网格 + 居中自定义多选框 (Hyper-Speed Virtual Grid) -->
-        <div ref="tableContainerRef" class="table-container custom-scroll" tabindex="0" @scroll="onTableScroll">
-          <!-- 顶部虚拟占位 -->
-          <div v-if="virtualTopPad > 0" :style="{ height: virtualTopPad + 'px' }"></div>
-
+        <!-- 3. 用例表格：分页网格 + 居中自定义多选框 -->
+        <div ref="tableContainerRef" class="table-container custom-scroll" tabindex="0">
           <table class="nordic-table">
             <thead>
               <tr>
-                <th class="th-chk" style="width: 48px" title="全选用例" @click.stop="toggleAllCasesDirect">
-                  <div class="clean-chk-box" :class="{ checked: allCasesChecked }" role="checkbox" :aria-checked="allCasesChecked">
-                    <svg v-if="allCasesChecked" class="chk-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">
+                <th class="th-chk" style="width: 48px" title="全选当前页用例" @click.stop="toggleCurrentPageCasesDirect">
+                  <div class="clean-chk-box" :class="{ checked: isCurrentPageAllChecked }" role="checkbox" :aria-checked="isCurrentPageAllChecked">
+                    <svg v-if="isCurrentPageAllChecked" class="chk-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">
                       <polyline points="20 6 9 17 4 12" />
                     </svg>
                   </div>
@@ -304,9 +301,9 @@
             </thead>
 
             <tbody>
-              <!-- 虚拟切片用例行 (50px 舒适大行高) -->
+              <!-- 当前页切片用例行 -->
               <tr
-                v-for="(c, virtualIdx) in virtualRenderCases"
+                v-for="(c, pageIdx) in pagedCases"
                 :key="c.id || c.code"
                 class="data-row"
                 :class="{
@@ -328,7 +325,7 @@
 
                 <!-- 行号 -->
                 <td class="mono td-num" :class="{ 'cell-cursor': isCellCursor(c, 'row_no') }" @click="setCellCursor(c, 'row_no')">
-                  {{ getDisplayedIndex(c) + 1 }}
+                  {{ (page - 1) * pageSize + pageIdx + 1 }}
                 </td>
 
                 <!-- 用例编码 (Mono) -->
@@ -479,27 +476,61 @@
               <tr v-if="!displayedCases.length">
                 <td :colspan="11 + customCols.length" class="empty-cell">
                   <div class="empty-message">
-                    <span v-if="gridSearch.trim()">未找到匹配「{{ gridSearch.trim() }}」的测试用例。</span>
-                    <span v-else-if="filterStrategy">当前策略「{{ filterStrategy }}」下暂无用例。</span>
+                    <template v-if="gridSearch.trim() || filterStrategy">
+                      <p style="margin-bottom: 8px;">未找到符合条件的测试用例（当前检索：{{ gridSearch.trim() ? `「${gridSearch.trim()}」` : '' }}{{ filterStrategy ? ` [${filterStrategy}策略]` : '' }}）。</p>
+                      <button class="btn btn-secondary btn-sm" @click="clearAllFilters">
+                        清空搜索与筛选条件
+                      </button>
+                    </template>
                     <span v-else>当前用例集暂无用例，点击上方「新增用例」或「PRD 推导向导」开始录入。</span>
                   </div>
                 </td>
               </tr>
             </tbody>
           </table>
-
-          <!-- 底部虚拟占位 -->
-          <div v-if="virtualBottomPad > 0" :style="{ height: virtualBottomPad + 'px' }"></div>
         </div>
 
-        <!-- 4. 底部浮动批量操作栏 (Floating Action Dock) -->
+        <!-- 4. 底部固定分页工具栏 (Table Pagination Bar) -->
+        <div v-if="cases.length > 0" class="table-pagination-bar">
+          <div class="pagination-info">
+            <span class="pagination-total">
+              共 <strong class="mono">{{ displayedCases.length }}</strong> 条用例
+              <span class="pagination-pages mono">（第 {{ page }} / {{ totalPages }} 页）</span>
+            </span>
+            <span v-if="gridSearch.trim() || filterStrategy !== ''" class="pagination-filter-tag">
+              已从全部 {{ cases.length }} 条中过滤
+            </span>
+            <span v-if="selectedCaseIds.length > 0" class="pagination-selection-tag">
+              已勾选 {{ selectedCaseIds.length }} 条
+            </span>
+          </div>
+          <div class="pagination-controls">
+            <n-pagination
+              v-model:page="page"
+              v-model:page-size="pageSize"
+              :item-count="displayedCases.length"
+              :page-sizes="[10, 20, 50, 100]"
+              show-size-picker
+              show-quick-jumper
+            />
+          </div>
+        </div>
+
+        <!-- 5. 底部浮动批量操作栏 (Floating Action Dock) -->
         <transition name="slide-up">
           <div v-if="selectedCaseIds.length > 0" class="floating-batch-dock">
             <div class="batch-dock-info">
               <span class="batch-dock-badge">{{ selectedCaseIds.length }}</span>
-              <span class="batch-dock-text">已选择测试用例 / 共 {{ cases.length }} 条</span>
+              <span class="batch-dock-text">已选择 / 筛选共 {{ displayedCases.length }} 条</span>
             </div>
             <div class="batch-dock-actions">
+              <button
+                v-if="selectedCaseIds.length < displayedCases.length"
+                class="btn btn-ghost btn-sm"
+                @click="checkAllDisplayedCases"
+              >
+                全选所有筛选用例 ({{ displayedCases.length }})
+              </button>
               <button class="btn btn-secondary btn-sm" @click="openBatchMapModal">
                 批量映射至数据集
               </button>
@@ -774,7 +805,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, h } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick, h } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage, useDialog, type DropdownOption } from 'naive-ui'
 import { api } from '../api/http'
@@ -945,7 +976,10 @@ const strategyDistribution = computed(() => {
 })
 const isSixStrategyCovered = computed(() => STRATEGIES.every(s => (strategyDistribution.value[s] || 0) > 0))
 
-// ─── 50px 舒适大行高虚拟滚动 + 过滤 (Instant Filter & 50px Virtual Scrolling) ───
+// ─── 分页与即时搜索过滤 (Pagination & Instant Filter) ───
+const page = ref(1)
+const pageSize = ref(20)
+
 const displayedCases = computed(() => {
   let list = cases.value
   if (filterStrategy.value) {
@@ -967,6 +1001,19 @@ const displayedCases = computed(() => {
   return list
 })
 
+// 监听搜索或策略筛选变化，自动重置页码为 1
+watch([gridSearch, filterStrategy], () => {
+  page.value = 1
+})
+
+const totalPages = computed(() => Math.max(1, Math.ceil(displayedCases.value.length / pageSize.value)))
+
+// 当前页切片
+const pagedCases = computed(() => {
+  const start = (page.value - 1) * pageSize.value
+  return displayedCases.value.slice(start, start + pageSize.value)
+})
+
 function getOriginalCaseIndex(c: ExtendedTestCase): number {
   return cases.value.findIndex(item => item.id === c.id || item.code === c.code)
 }
@@ -974,26 +1021,14 @@ function getDisplayedIndex(c: ExtendedTestCase): number {
   return displayedCases.value.findIndex(item => item.id === c.id || item.code === c.code)
 }
 
-const ROW_HEIGHT = 50
-const scrollTop = ref(0)
-const viewportHeight = ref(650)
-const BUFFER_SIZE = 8
+function clearAllFilters() {
+  gridSearch.value = ''
+  filterStrategy.value = ''
+  page.value = 1
+}
 
-const startIndex = computed(() => Math.max(0, Math.floor(scrollTop.value / ROW_HEIGHT) - BUFFER_SIZE))
-const endIndex = computed(() => Math.min(displayedCases.value.length, Math.ceil((scrollTop.value + viewportHeight.value) / ROW_HEIGHT) + BUFFER_SIZE))
-
-const virtualTopPad = computed(() => startIndex.value * ROW_HEIGHT)
-const virtualBottomPad = computed(() => Math.max(0, (displayedCases.value.length - endIndex.value) * ROW_HEIGHT))
-
-const virtualRenderCases = computed(() => {
-  if (displayedCases.value.length < 30) return displayedCases.value
-  return displayedCases.value.slice(startIndex.value, endIndex.value)
-})
-
-function onTableScroll(e: Event) {
-  const target = e.target as HTMLElement
-  scrollTop.value = target.scrollTop
-  viewportHeight.value = target.clientHeight || 650
+function checkAllDisplayedCases() {
+  selectedCaseIds.value = displayedCases.value.map(c => c.id || c.code)
 }
 
 function highlightMatch(text: string): string {
@@ -1066,15 +1101,21 @@ function onWorkbenchKeydown(e: KeyboardEvent) {
   switch (e.key) {
     case 'ArrowUp':
       if (rowIdx > 0) {
-        focusedCell.value = { rowIdx: rowIdx - 1, field }
-        scrollToFocusedRow(rowIdx - 1)
+        const nextIdx = rowIdx - 1
+        focusedCell.value = { rowIdx: nextIdx, field }
+        const targetPage = Math.floor(nextIdx / pageSize.value) + 1
+        if (targetPage !== page.value) page.value = targetPage
+        scrollToFocusedRow(nextIdx)
         e.preventDefault()
       }
       break
     case 'ArrowDown':
       if (rowIdx < displayedCases.value.length - 1) {
-        focusedCell.value = { rowIdx: rowIdx + 1, field }
-        scrollToFocusedRow(rowIdx + 1)
+        const nextIdx = rowIdx + 1
+        focusedCell.value = { rowIdx: nextIdx, field }
+        const targetPage = Math.floor(nextIdx / pageSize.value) + 1
+        if (targetPage !== page.value) page.value = targetPage
+        scrollToFocusedRow(nextIdx)
         e.preventDefault()
       }
       break
@@ -1094,10 +1135,20 @@ function onWorkbenchKeydown(e: KeyboardEvent) {
       e.preventDefault()
       if (e.shiftKey) {
         if (fIdx > 0) focusedCell.value = { rowIdx, field: fields[fIdx - 1] }
-        else if (rowIdx > 0) focusedCell.value = { rowIdx: rowIdx - 1, field: fields[fields.length - 1] }
+        else if (rowIdx > 0) {
+          const nextIdx = rowIdx - 1
+          focusedCell.value = { rowIdx: nextIdx, field: fields[fields.length - 1] }
+          const targetPage = Math.floor(nextIdx / pageSize.value) + 1
+          if (targetPage !== page.value) page.value = targetPage
+        }
       } else {
         if (fIdx < fields.length - 1) focusedCell.value = { rowIdx, field: fields[fIdx + 1] }
-        else if (rowIdx < displayedCases.value.length - 1) focusedCell.value = { rowIdx: rowIdx + 1, field: fields[0] }
+        else if (rowIdx < displayedCases.value.length - 1) {
+          const nextIdx = rowIdx + 1
+          focusedCell.value = { rowIdx: nextIdx, field: fields[0] }
+          const targetPage = Math.floor(nextIdx / pageSize.value) + 1
+          if (targetPage !== page.value) page.value = targetPage
+        }
       }
       break
     case ' ':
@@ -1118,11 +1169,12 @@ function onWorkbenchKeydown(e: KeyboardEvent) {
 function scrollToFocusedRow(idx: number) {
   const container = tableContainerRef.value
   if (!container) return
-  const targetTop = idx * ROW_HEIGHT
+  const rowInPage = idx % pageSize.value
+  const targetTop = rowInPage * 48
   if (targetTop < container.scrollTop) {
     container.scrollTop = targetTop
-  } else if (targetTop + ROW_HEIGHT > container.scrollTop + container.clientHeight) {
-    container.scrollTop = targetTop - container.clientHeight + ROW_HEIGHT + 40
+  } else if (targetTop + 48 > container.scrollTop + container.clientHeight) {
+    container.scrollTop = targetTop - container.clientHeight + 48 + 20
   }
 }
 
@@ -1147,6 +1199,7 @@ function getCaseExtra(c: ExtendedTestCase, key: string): string {
 }
 
 // 批量勾选
+const isCurrentPageAllChecked = computed(() => pagedCases.value.length > 0 && pagedCases.value.every(c => isCaseChecked(c)))
 const allCasesChecked = computed(() => displayedCases.value.length > 0 && displayedCases.value.every(c => isCaseChecked(c)))
 const lastCheckedCaseIdx = ref<number>(-1)
 
@@ -1160,6 +1213,16 @@ function toggleCaseChecked(c: ExtendedTestCase) {
   const idx = selectedCaseIds.value.indexOf(id)
   if (idx >= 0) selectedCaseIds.value.splice(idx, 1)
   else selectedCaseIds.value.push(id)
+}
+
+function toggleCurrentPageCasesDirect() {
+  const target = !isCurrentPageAllChecked.value
+  pagedCases.value.forEach(c => {
+    const id = c.id || c.code
+    const idx = selectedCaseIds.value.indexOf(id)
+    if (target && idx < 0) selectedCaseIds.value.push(id)
+    else if (!target && idx >= 0) selectedCaseIds.value.splice(idx, 1)
+  })
 }
 
 function toggleAllCasesDirect() {
@@ -1209,6 +1272,10 @@ function batchDeleteCases() {
       cases.value = cases.value.filter(c => !selectedCaseIds.value.includes(c.id || c.code))
       selectedCaseIds.value = []
       hasUnsavedChanges.value = true
+      const maxPage = Math.max(1, Math.ceil(displayedCases.value.length / pageSize.value))
+      if (page.value > maxPage) {
+        page.value = maxPage
+      }
       message.info(`已删除 ${count} 条用例，点击“保存修改”后落库`)
     },
   })
@@ -1241,6 +1308,10 @@ function cancelEditing() {
 async function selectCaseSet(id: string) {
   activeSetId.value = id
   selectedCaseIds.value = []
+  page.value = 1
+  gridSearch.value = ''
+  filterStrategy.value = ''
+  focusedCell.value = null
   await loadCases(id)
 }
 
@@ -1302,14 +1373,24 @@ function buildEmptyCase(): ExtendedTestCase {
 }
 
 function addCase() {
-  cases.value.push(buildEmptyCase())
+  const newCase = buildEmptyCase()
+  cases.value.push(newCase)
   hasUnsavedChanges.value = true
+  const newPage = Math.ceil(displayedCases.value.length / pageSize.value)
+  page.value = Math.max(1, newPage)
+  nextTick(() => {
+    editCell(newCase, 'name')
+  })
   message.info('已新增用例行，填写后点击“保存修改”落库')
 }
 
 function deleteCase(idx: number) {
   cases.value.splice(idx, 1)
   hasUnsavedChanges.value = true
+  const maxPage = Math.max(1, Math.ceil(displayedCases.value.length / pageSize.value))
+  if (page.value > maxPage) {
+    page.value = maxPage
+  }
   message.info('已删除用例行，保存后生效')
 }
 
@@ -2868,6 +2949,113 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   width: 100%;
+}
+
+/* ─── 底部固定分页工具栏 (Table Pagination Bar) ─── */
+.table-pagination-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 18px;
+  background: var(--bg-elevated);
+  border-top: 1px solid var(--border-subtle);
+  min-height: 46px;
+  flex-shrink: 0;
+  gap: 16px;
+  z-index: 10;
+}
+.pagination-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  flex-wrap: wrap;
+}
+.pagination-total strong {
+  color: var(--text-primary);
+}
+.pagination-pages {
+  color: var(--text-tertiary);
+  font-size: 11.5px;
+  margin-left: 4px;
+}
+.pagination-filter-tag {
+  font-size: 11.5px;
+  color: var(--accent-ai);
+  background: color-mix(in srgb, var(--accent-ai) 10%, transparent);
+  padding: 1px 7px;
+  border-radius: 4px;
+  border: 1px solid color-mix(in srgb, var(--accent-ai) 22%, transparent);
+}
+.pagination-selection-tag {
+  font-size: 11.5px;
+  color: var(--c-cases);
+  background: var(--t-cases);
+  padding: 1px 7px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+.pagination-controls {
+  display: flex;
+  align-items: center;
+}
+
+/* ─── 底部浮动批量操作栏 (Floating Action Dock) ─── */
+.floating-batch-dock {
+  position: absolute;
+  bottom: 60px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 18px;
+  border-radius: 24px;
+  background: rgba(17, 24, 39, 0.92);
+  color: #FFFFFF;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3), 0 8px 10px -6px rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
+.batch-dock-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.batch-dock-badge {
+  background: var(--accent-ai);
+  color: #FFFFFF;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  padding: 1px 8px;
+  border-radius: 12px;
+}
+.batch-dock-text {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.85);
+}
+.batch-dock-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.floating-batch-dock .btn-secondary {
+  background: rgba(255, 255, 255, 0.12);
+  color: #FFFFFF;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+.floating-batch-dock .btn-secondary:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+.floating-batch-dock .btn-ghost {
+  color: rgba(255, 255, 255, 0.7);
+}
+.floating-batch-dock .btn-ghost:hover {
+  color: #FFFFFF;
+  background: rgba(255, 255, 255, 0.1);
 }
 
 /* ─── 滚动条 ─── */

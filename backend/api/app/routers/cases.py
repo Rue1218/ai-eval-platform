@@ -376,10 +376,24 @@ def _build_xmind(case_set: CaseSet, cases: list[CaseItem]) -> bytes:
 
 
 @router.get("")
-def list_case_sets(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    """列出全部用例集，按契约返回 {items, total} 包装。"""
-    rows = db.query(CaseSet).order_by(CaseSet.created_at.desc()).all()
-    return {"items": [CaseSetOut.model_validate(row) for row in rows], "total": len(rows)}
+def list_case_sets(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    page: int | None = Query(default=None, ge=1, description="当前页码（从1开始）"),
+    page_size: int | None = Query(default=None, ge=1, le=500, description="每页条数"),
+    q: str | None = Query(default=None, description="用例集名称检索关键字"),
+):
+    """列出全部用例集，按契约返回 {items, total} 包装，支持分页与关键词过滤。"""
+    query = db.query(CaseSet)
+    if q and q.strip():
+        query = query.filter(CaseSet.name.ilike(f"%{q.strip()}%"))
+    total = query.count()
+    query = query.order_by(CaseSet.created_at.desc())
+    if page is not None and page_size is not None:
+        rows = query.offset((page - 1) * page_size).limit(page_size).all()
+    else:
+        rows = query.all()
+    return {"items": [CaseSetOut.model_validate(row) for row in rows], "total": total}
 
 
 @router.post("", response_model=CaseSetOut, status_code=201)
