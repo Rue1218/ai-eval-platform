@@ -58,6 +58,13 @@ _SKILL_GROUPS: tuple[tuple[str, ...], ...] = (
 _CONFIRM_PHRASES: tuple[str, ...] = ("确认卡", "先评后压", "先评再压", "评完再压")
 _LIST_PHRASES: tuple[str, ...] = ("任务清单", "分步", "拆成步骤", "分几步")
 
+# 工作流具有确认卡与后续入队副作用，因此不能只凭技能名词触发。该正则由 H1
+# Router 与 H2 W0 共用，确保 L1 模型误判不会把概念问答推进到确认流程。
+_WORKFLOW_EXECUTION_PATTERN = re.compile(
+    r"(?:跑|运行|执行|发起|创建|新建|开始|提交|生成|做)(?:一[个次]|一下)?"
+    r"|(?:评测|压测|用例|知识库)(?:一下|来一次|任务)"
+)
+
 # 网页抓取动作的窄匹配：仅在用户明确要求访问/提取链接内容时进入 ReAct，
 # 避免普通聊天中仅提到一个 URL 就意外触发网络工具。
 _WEB_FETCH_INTENT_PATTERN = re.compile(
@@ -86,6 +93,11 @@ _SHORT_TOOL_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 def short_tool_names(text: str) -> tuple[str, ...]:
     """提取用户任务中点名的不同短工具，供路由与 L0 规划使用。"""
     return tuple(name for name, pattern in _SHORT_TOOL_PATTERNS if pattern.search(text))
+
+
+def has_workflow_execution_intent(text: str) -> bool:
+    """判断文本是否明确要求执行固定评测工作流（H1/H2 副作用门禁）。"""
+    return bool(_WORKFLOW_EXECUTION_PATTERN.search(text.strip()))
 
 
 def detect_plan_intent(text: str) -> bool:

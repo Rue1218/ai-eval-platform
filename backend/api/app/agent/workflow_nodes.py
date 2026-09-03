@@ -32,6 +32,7 @@ from app.errors import AppError
 from app.harness.contracts import make_event
 from app.harness.feedback.rules import CONFIRM_KINDS
 from app.harness.memory import GraphState, SerializableRequest
+from app.harness.orchestration.router import has_workflow_execution_intent
 from app.harness.skills import SKILL_CATALOG, load_skill_workflow, skill_to_kind
 
 # ── 技能候选关键词（目录单一事实源 + 别名；命中即技能意图候选）──
@@ -137,6 +138,16 @@ def select_skill_node(state: GraphState) -> dict:
     就地收尾（歧义提示，不猜测技能、不产生任务）。
     """
     text = _latest_user_text(state["request"])
+    # H1 的 L1 仅是建议性分类；即使上游误把概念问答投到 workflow，
+    # W0 也必须再次确认用户确有执行意图，避免错误地发出确认卡。
+    if not has_workflow_execution_intent(text):
+        return {
+            **_step("W0_select_skill"),
+            "workflow_failed": True,
+            "pending_events": _error_events(
+                "VALIDATION", "请明确说明要执行的评测任务；概念问答可直接提问"
+            ),
+        }
     candidates = _skill_candidates(text)
     if len(candidates) == 1:
         skill_id = candidates[0]
@@ -401,4 +412,20 @@ def summarize_node(state: GraphState) -> dict:
         ],
         "response": {"text": text, "usage": {}, "latency_ms": 0},
         "confirm_id": None,  # 引擎 workflow 完成时确认卡已消费（与 clarify 互斥）
+    }
+
+
+def workflow_failure_node(state: GraphState) -> dict:
+    """统一收尾未自行结束的 Workflow 失败路径。
+
+    W0、W2、W3、W6 会先产出 ``error`` 供前端展示，却不能各自遗漏
+    ``response.completed``。W5 的确认卡/缺槽路径已自行收尾，图条件边会避开
+    本节点，从而保证一个回合恰好一个 completed 事件。
+    """
+    return {
+        **_step("workflow_failure"),
+        "pending_events": [
+            make_event("response.completed", _completed_payload(state, "error"))
+        ],
+        "response": {"text": "", "usage": {}, "latency_ms": 0},
     }

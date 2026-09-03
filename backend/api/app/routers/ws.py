@@ -44,7 +44,12 @@ from ..harness.orchestration.confirm import (
     _validate_confirmed,
     drop_stale_asset_ids,
 )
-from ..harness.prompts import SystemVars, build_system_prompt
+from ..harness.prompts import (
+    DEFAULT_PROJECT_INSTRUCTIONS,
+    SystemVars,
+    build_system_prompt,
+    build_system_prompt_parts,
+)
 from ..harness.security.auth import (
     assert_confirm_owner,
     assert_no_concurrent_confirm,
@@ -1035,17 +1040,26 @@ async def _run_turn(
     try:
         config, profile = _selected_model_config(db)
         history = _history_messages(db, session_id)
-        # 核心系统策略始终由 Harness 生成；协议档只能注入受审计的补充提示词。
-        system_prompt = build_system_prompt(
-            SystemVars(
-                skill_hints=tuple(skill_hint_lines()),
-                agent_prompt_overlay=get_agent_prompt_overlay(db, profile.id),
-            )
-        )
         session_row = db.query(AgentSession).filter(AgentSession.id == session_id).first()
         compact_summary = (session_row.compact_summary or "") if session_row else ""
+        # 核心策略、L2 项目常量和 L3 协议档补充提示词均由受控层组装。除关闭
+        # 缓存时的兼容单字符串外，同时保存无密钥的分段来源，供图节点恢复真实
+        # S1 → S2 → S5 → S6 缓存边界。
+        system_vars = SystemVars(
+            skill_hints=tuple(skill_hint_lines()),
+            session_owner=str(session_row.user_id) if session_row else None,
+            project_instructions=DEFAULT_PROJECT_INSTRUCTIONS,
+            agent_prompt_overlay=get_agent_prompt_overlay(db, profile.id),
+        )
+        system_parts = build_system_prompt_parts(system_vars)
+        system_prompt = build_system_prompt(system_vars)
         serializable = to_serializable_request(
-            ModelRequest.from_messages(config, history, system=system_prompt)
+            ModelRequest.from_messages(config, history, system=system_prompt),
+            system_context={
+                "static_system": system_parts.static_system,
+                "skill_hints": system_parts.skill_hints,
+                "overlay": system_parts.overlay,
+            },
         )
         # 新回合复用租约 ID 作为检查点线程 ID，便于并发与中断审计关联。
         thread_id = turn_id or f"{session_id}:{uuid4().hex}"

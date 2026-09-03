@@ -54,11 +54,22 @@ class SerializableRequest(TypedDict, total=False):
     config: Mapping[str, object]
     messages: tuple[Mapping[str, object], ...]
     system: str | None
+    # 缓存开启时的受控提示词来源投影（L1/L2/S2/L3 均为无密钥文本），供
+    # chat 节点重建真实 S1→S7 分段；关闭缓存仍使用 system 单字符串兼容路径。
+    system_context: Mapping[str, object]
     tools: tuple[Mapping[str, object], ...]
 
 
-def to_serializable_request(req: object) -> SerializableRequest:
-    """把含回调的请求转为可序列化投影（剔除 should_abort 与 api_key）。"""
+def to_serializable_request(
+    req: object,
+    *,
+    system_context: Mapping[str, object] | None = None,
+) -> SerializableRequest:
+    """把含回调的请求转为可序列化投影（剔除 should_abort 与 api_key）。
+
+    ``system_context`` 仅可由 WS 受控层传入，保存缓存开启时所需的静态/动态
+    提示词来源；禁止在其中放入用户输入、模型凭据或任意数据库对象。
+    """
     config = getattr(req, "config")
     projected_config = {key: getattr(config, key) for key in _CONFIG_KEYS if hasattr(config, key)}
     request: SerializableRequest = {
@@ -68,6 +79,8 @@ def to_serializable_request(req: object) -> SerializableRequest:
     system = getattr(req, "system", None)
     if system:
         request["system"] = system
+    if system_context:
+        request["system_context"] = dict(system_context)
     tools = getattr(req, "tools", None)
     if tools:
         request["tools"] = tuple(dict(tool) for tool in tools)

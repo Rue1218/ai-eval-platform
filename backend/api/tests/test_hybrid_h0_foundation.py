@@ -18,9 +18,15 @@ from app.harness.orchestration.agents import (
     AgentDef,
     AgentRegistry,
     build_default_agent_registry,
+    get_default_agent_registry,
     validate_agent_registry_integrity,
 )
-from app.harness.prompts import SystemVars, assert_no_takeover, build_system_prompt
+from app.harness.prompts import (
+    SystemVars,
+    assert_no_takeover,
+    build_system_prompt,
+    build_system_prompt_parts,
+)
 from app.harness.skills import SKILL_CATALOG
 from app.harness.skills.workflows import extract_skill_examples
 from app.llm.contracts import SystemSegment
@@ -70,6 +76,29 @@ def test_assemble_segments_omits_empty_sections() -> None:
     assert segments[0].cacheable is True
 
 
+def test_cache_prompt_parts_keep_l3_overlay_outside_static_segments() -> None:
+    """缓存路径：L1/L2 在 S1、技能在 S2，L3 仅能落入动态 S5。"""
+    parts = build_system_prompt_parts(
+        SystemVars(
+            skill_hints=("技能A：基准评测",),
+            session_owner="alice",
+            project_instructions="平台约定：先评后压",
+            agent_prompt_overlay="回复保持简洁",
+        )
+    )
+    segments = assemble_segments(
+        system=parts.static_system,
+        skill_hints=parts.skill_hints,
+        overlay=parts.overlay,
+    )
+    assert [segment.order for segment in segments] == [1, 2, 5]
+    assert [segment.cacheable for segment in segments] == [True, True, False]
+    assert "【项目指令】" in segments[0].text
+    assert "【可见技能】" not in segments[0].text
+    assert "【会话负责人】" not in segments[0].text
+    assert "【当前 Agent 专属补充提示词】" in segments[-1].text
+
+
 def test_anthropic_system_param_breakpoint_on_last_cacheable() -> None:
     """断点只落在最后一个可缓存段；动态段不打断点。"""
     segments = (
@@ -109,6 +138,11 @@ def test_default_registry_passes_integrity_against_tool_and_skill_catalogs() -> 
     assert problems == []
     # 模型协议档维度：首批 Worker 均不覆盖档（None 沿用会话档）
     assert all(def_.model_profile_id is None for def_ in registry.iter_defs())
+
+
+def test_default_registry_is_shared_runtime_instance() -> None:
+    """启动校验、Agent 图和只读目录应查询同一静态注册表实例。"""
+    assert get_default_agent_registry() is get_default_agent_registry()
 
 
 def test_registry_integrity_rejects_unknown_tool_fail_fast() -> None:

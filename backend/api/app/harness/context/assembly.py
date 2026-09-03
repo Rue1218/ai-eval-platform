@@ -50,13 +50,13 @@ def compact_summary_from_configurable(
 # ─── 缓存边界分段（ADR-5 / H0）───
 
 # 段序标识：静态在前（global/skill），动态在后（session/none），严格单调。
-# 与 ADR-5 的 S1–S7 对应：S1 Persona、S2 Skill Hint、S3 工具定义（tools
-# payload 承载，不入 system 文本）、S4 Skill 工作流正文、S5 Overlay（当前仍
-# 内嵌于 build_system_prompt 产物，S1 文本内，未来按需拆出独立段）、S6 会话
-# 摘要、S7 阶段输入/当轮动态（不缓存）。
+# 与 ADR-5 的 S1–S7 对应：S1 Persona/L2 项目指令、S2 Skill Hint、S3 工具
+# 定义（tools payload 承载，不入 system 文本）、S4 Skill 工作流正文、S5
+# 会话负责人/协议档 Overlay、S6 会话摘要、S7 阶段输入/当轮动态（不缓存）。
 SEGMENT_S1_PERSONA = 1
 SEGMENT_S2_SKILL_HINTS = 2
 SEGMENT_S4_SKILL_WORKFLOW = 4
+SEGMENT_S5_OVERLAY = 5
 SEGMENT_S6_SUMMARY = 6
 SEGMENT_S7_STAGE = 7
 
@@ -84,6 +84,7 @@ def assemble_segments(
     system: str,  # Persona（M1 build_system_prompt 产出；含五段策略与受控槽）
     skill_hints: Sequence[str] | None = None,
     skill_workflow: str | None = None,  # 本轮按需工作流（SK-1，可选）
+    overlay: str | None = None,  # 会话负责人 + 协议档补充提示词（动态 S5）
     summary: str | None = None,  # compact 摘要（compact.py 产出，可选）
     stage_input: str | None = None,  # 当前阶段协议说明（M4 节点提供，可选）
 ) -> tuple[PromptSegment, ...]:
@@ -91,7 +92,7 @@ def assemble_segments(
 
     - S1 Persona 与 S2 Skill Hint：部署级静态，``cacheable=True``；
     - S4 Skill 工作流正文：技能级静态（按 skill_id 分桶），``cacheable=True``；
-    - S6 会话摘要与 S7 阶段输入：会话/当轮动态，``cacheable=False``（断点之后）；
+    - S5 Overlay、S6 会话摘要与 S7 阶段输入：会话/当轮动态，``cacheable=False``；
     - 空的可选段不产出（与 ``assemble`` 空段省略语义一致）。
 
     渲染顺序由 ``assemble`` 强制为分段序，禁止调用方调整——缓存断点落在
@@ -114,6 +115,8 @@ def assemble_segments(
                 cacheable=True,
             )
         )
+    if overlay:
+        segments.append(_segment(overlay, SEGMENT_S5_OVERLAY, cacheable=False))
     if summary:
         segments.append(
             _segment("【会话摘要】\n" + summary, SEGMENT_S6_SUMMARY, cacheable=False)
@@ -135,13 +138,14 @@ def assemble(
     system: str,  # Persona（M1 build_system_prompt 产出）
     skill_hints: Sequence[str] | None = None,
     skill_workflow: str | None = None,  # 本轮按需工作流（SK-1，可选）
+    overlay: str | None = None,  # 会话负责人 + 协议档补充提示词（动态 S5）
     summary: str | None = None,  # compact 摘要（compact.py 产出，可选）
     stage_input: str | None = None,  # 当前阶段协议说明（M4 节点提供）
     messages: list[Mapping[str, object]],  # window.py 产出
     tool_defs: Sequence[Mapping[str, object]] | None = None,  # 按本轮最小注入
 ) -> dict:
     """按固定顺序装配模型本轮输入（CX-4）：
-    Persona → Skill Hint → 技能工作流 → 摘要 → 阶段输入 → 用户消息。
+    Persona → Skill Hint → 技能工作流 → Overlay → 摘要 → 阶段输入 → 用户消息。
 
     ``skill_workflow`` 仅本轮选中技能时注入，不写入 GraphState（SK-1/SK-2）。
     返回 {'system': str, 'messages': list, 'tools': list} 供 ModelRequest 构造。
@@ -154,6 +158,7 @@ def assemble(
         system=system,
         skill_hints=skill_hints,
         skill_workflow=skill_workflow,
+        overlay=overlay,
         summary=summary,
         stage_input=stage_input,
     )

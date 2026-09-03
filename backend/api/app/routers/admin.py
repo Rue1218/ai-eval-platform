@@ -19,7 +19,7 @@ from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
 from ..harness.context import skill_hint_lines
-from ..harness.prompts import SystemVars, build_system_prompt
+from ..harness.prompts import DEFAULT_PROJECT_INSTRUCTIONS, SystemVars, build_system_prompt
 from ..harness.skills.storage import (
     list_skill_metadata,
     read_skill_document,
@@ -329,7 +329,12 @@ def get_agent_prompt(
     profile = _require_agent_profile(db, profile_id)
     return {
         "profile_id": profile.id,
-        "base_prompt": build_system_prompt(SystemVars(skill_hints=tuple(skill_hint_lines()))),
+        "base_prompt": build_system_prompt(
+            SystemVars(
+                skill_hints=tuple(skill_hint_lines()),
+                project_instructions=DEFAULT_PROJECT_INSTRUCTIONS,
+            )
+        ),
         "overlay": get_agent_prompt_overlay(db, profile.id),
     }
 
@@ -362,7 +367,12 @@ def put_agent_prompt(
         raise AppError(ErrorCode.INTERNAL, "提示词配置写入失败") from exc
     return {
         "profile_id": profile.id,
-        "base_prompt": build_system_prompt(SystemVars(skill_hints=tuple(skill_hint_lines()))),
+        "base_prompt": build_system_prompt(
+            SystemVars(
+                skill_hints=tuple(skill_hint_lines()),
+                project_instructions=DEFAULT_PROJECT_INSTRUCTIONS,
+            )
+        ),
         "overlay": overlay,
     }
 

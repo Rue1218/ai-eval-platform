@@ -11,7 +11,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from ..deps import get_current_user
-from ..harness.orchestration.agents import build_default_agent_registry
+from ..harness.orchestration.agents import get_default_agent_registry
 from ..models import User
 
 router = APIRouter(prefix="/api/agents", tags=["agents"])
@@ -32,6 +32,6 @@ def list_agents(user: User = Depends(get_current_user)) -> dict:
             "model_profile_id": definition.model_profile_id,
             "description": definition.description,
         }
-        for definition in build_default_agent_registry().iter_defs()
+        for definition in get_default_agent_registry().iter_defs()
     ]
     return {"agents": agents}
