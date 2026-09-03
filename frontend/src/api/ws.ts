@@ -202,6 +202,20 @@ export class AgentWebSocket {
     return true
   }
 
+  /** 确认卡回执（API.md §4.4 V1.67）：patch 与 pending_confirm 深合并，须剥离 confirm_author。 */
+  public sendConfirmAck(ok: boolean, patch: Record<string, unknown> = {}): boolean {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      console.warn('WebSocket not open, cannot send confirm_ack')
+      return false
+    }
+    const payload = {
+      event: 'confirm_ack',
+      payload: { ok, patch },
+    }
+    this.ws.send(JSON.stringify(payload))
+    return true
+  }
+
   private scheduleReconnect(): void {
     if (this.reconnectTimer !== null) return
     this.reconnectTimer = window.setTimeout(() => {

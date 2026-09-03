@@ -1,7 +1,7 @@
 # AI 测试与评估平台 — AI Agent 行为规范与工程指南 (AGENTS.md)
 
 > **最高指示**：本文件是面向所有参与本项目的 **AI Agent 与开发者** 的最高行动指南。在编写或修改代码前，**必须严格遵守本文档所规定的架构边界、开发契约与行为红线**。
-> 版本：V1.3 ｜ 审查日期：2026-09-03（V1.6.0 Agent 骨架化：纯对话图，范式/思考链/确认卡/澄清卡/斜杠已移除；V1.3 修正 rag/stress 实现状态地图与降级诚实标注红线）
+> 版本：V1.4 ｜ 审查日期：2026-09-03（V1.4 混合引擎：H0 基础设施、H1 Router 四路分流、H2 Workflow 八节点 DAG（含确认卡恢复）已交付，确认卡经 API.md V1.67 恢复——**仅 `hybrid_engine_enabled=true` 时可达，默认关闭保持骨架化纯对话**；V1.6.0 骨架化与 V1.3 rag/stress 状态修正为历史基线）
 
 ---
 
@@ -41,6 +41,13 @@
 > ReAct 思考链、reflect 反思、思考流、澄清卡、确认卡、短工具调用与斜杠命令
 > 已全部移除，仅保留消息 → LLM 直接生成回复 → `assistant_message` +
 > `response.completed` 的最小链路。
+>
+> 混合引擎增量（V1.4 实施状态地图）：`hybrid_engine_enabled=true` 时图为
+> `START → router → direct | chat | workflow(八节点 DAG) | chat(agent 降级，待 H3)`；
+> Workflow 链为 W0 select_skill → W1 prepare_slots → W2 load_skill → W3 validate_gates
+> → W4 build_task_spec → W5 await_confirm → W6 enqueue → W7 summarize。W5 首次到达
+> 时发确认卡并收尾本轮，用户确认后经 `pending_confirm` 行锁事务清卡，再以
+> `workflow_confirm` 注入重放回合——**入队唯一经 W6**。默认关闭时行为不变。
 
 ### 1.3 权威文档与冲突裁决
 1. **L0 产品权威**：[`docs/AI测试与评估平台-PRD.md`](docs/AI测试与评估平台-PRD.md)（功能范围、状态机、确认卡字段唯一真理）；
@@ -82,7 +89,7 @@
 | testcase 用例生成 | 真实执行器（六策略 LLM 生成、72h 确认超时扫描） | `backend/worker/app/testcase.py` |
 | rag 知识库评测 | 真实执行器（LightRAG 优先；未配置/不可达/空返回回退本地关键词检索，报告 `degraded`/`engine_counts` 诚实标注引擎来源，禁止无标注出报告） | `backend/worker/app/rag.py`、`backend/shared/kb.py` |
 | stress 压测 | 真实执行器（对接 `stress:19090` 引擎：Host 白名单、SLA 判定、取消停发、报告 upsert） | `backend/worker/app/stress.py` |
-| Agent 图 | **骨架化**：单节点纯对话（`START → chat_stream → END`），无工具/确认卡/澄清卡/斜杠；H0 基础设施已就绪（2026-09-03：缓存分段装配 `assemble_segments` + `AgentRegistry` 启动期校验 + L2 `project_instructions` 受控槽），主开关 `hybrid_engine_enabled=False` 默认关闭 | `backend/api/app/agent/graph.py`、`routing.py` |
+| Agent 图 | **混合引擎灰度中**：默认关闭时为骨架化纯对话（`START → chat_stream → END`）；开启后 `START → router → direct/chat/workflow/chat(agent 降级)`。H0（缓存分段 + `AgentRegistry` + L2 `project_instructions`）、H1（Router 四路分流 + `engine` 审计）、H2 批次 1（`workflow_nodes.py` 八节点确定性链）、批次 2（W5 发卡 + `confirm_ack` 行锁事务 + `workflow_confirm` 重放，入队唯一经 W6）均已交付；`thought`/`tool_*`/`clarify` 未恢复，主开关默认关闭 | `backend/api/app/agent/{graph,routing,router_node,workflow_nodes}.py`、`routers/ws.py` |
 | bash 工具 | **真实 bwrap 沙箱**（阶段 3）：一次性进程级沙箱（无网络、会话工作区唯一可写、ulimit 资源限制、超时整树清理）+ 黑名单纵深防御；bwrap 不可用/引擎 `off` 时 fail-closed（骨架化后 Agent 不再调用，保留供未来扩展） | `backend/api/app/harness/execution/sandbox.py`、`dispatch.py`、`registry.py` |
 
 ---
@@ -283,7 +290,7 @@ except AppError as exc:
 ### 5.3 前端规范 (Vue 3 / TypeScript / Naive UI)
 1. **统一架构**：采用 `<script setup lang="ts">` + `naive-ui`，严格遵循薄荷绿/深空蓝设计令牌 (`naive-theme.ts`)。
 2. **通信与重连**：API 使用相对路径 `/api/*`；WS 使用相对路径 `/ws/agent?ticket=${ticket}`，支持断线按 `last_event_id` 自动补发事件流。关闭码 `4401` 重新领票，`4404` 视为会话不存在。
-3. **确认卡默认值** 与 API.md §5 / PRD 5.2.2 同一份，禁止前端另备 sample_size=20 等第二套默认；后端侧默认值唯一来源在 `backend/api/app/agent/defaults.py`，前后端各存一份，改默认值必须双端同步（骨架化后 Agent 不再产出确认卡，该约定仅适用于未来恢复或 REST 直连场景）。
+3. **确认卡默认值** 与 API.md §5 / PRD 5.2.2 同一份，禁止前端另备 sample_size=20 等第二套默认；后端侧默认值唯一来源在 `backend/api/app/agent/defaults.py`，前后端各存一份，改默认值必须双端同步（H2 批次 2 起混合引擎开启时 Workflow W5 恢复确认卡产出，默认关闭时不产出；双端同步约定持续有效）。
 4. ContextMeter 只读 `GET /api/sessions/{id}/messages` 的 `context_meter`；骨架化后斜杠命令已整体移除，前端不再请求 `/api/slash-commands`。
 
 ---

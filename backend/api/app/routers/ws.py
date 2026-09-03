@@ -17,13 +17,18 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..adapters import StreamAborted
 from ..agent import LangGraphAgent
 from ..agent.attachments import model_content_for_message, normalize_attachment_refs
-from ..agent.graph import iter_pending_events, router_audit_from_update
+from ..agent.graph import (
+    enqueued_task_id_from_update,
+    iter_pending_events,
+    router_audit_from_update,
+)
 from ..agent.log import agent_trace
 from ..agent.title import generate_title_text
 from ..agent_prompt_settings import get_agent_prompt_overlay
@@ -33,7 +38,18 @@ from ..harness.context import recent_window, skill_hint_lines
 from ..harness.execution.context import ToolExecutionContext
 from ..harness.execution.task_tools import cancel_task_safe
 from ..harness.memory import get_default_checkpointer, to_serializable_request
+from ..harness.orchestration import check_session_active_task
+from ..harness.orchestration.confirm import (
+    _deep_merge,
+    _validate_confirmed,
+    drop_stale_asset_ids,
+)
 from ..harness.prompts import SystemVars, build_system_prompt
+from ..harness.security.auth import (
+    assert_confirm_owner,
+    assert_no_concurrent_confirm,
+    lock_pending_confirm,
+)
 from ..llm import ModelConfig, ModelRequest
 from ..models import Message, ProtocolProfile, Setting, User, WsEvent
 from ..models import Session as AgentSession
@@ -190,6 +206,106 @@ def _start_turn(
         task.cancel()
         raise
     return task
+
+
+def _start_confirm_replay(
+    session_id: str,
+    websocket: WebSocket,
+    state: _ConnectionState,
+    user_id: str,
+    task_spec: dict[str, Any],
+) -> asyncio.Task[None]:
+    """确认卡回执重放回合：以 ``workflow_confirm`` 注入重跑 DAG。
+
+    重放链路为 W0→W4（确定性重算，无叙述事件）→ W5 合并放行 → **W6 唯一入队**
+    → W7 收尾；``confirm_ack`` 事件在回合结束后发出，携带 W6 写入的真实
+    ``task_id``。入队绝不在此处直接发生（ADR-4「任何入队均可追溯至 W6」）。
+    """
+    handle = _reserve_turn(session_id, user_id)
+    sink: dict[str, Any] = {}
+
+    async def runner() -> None:
+        try:
+            await _run_turn(
+                session_id,
+                websocket,
+                state,
+                handle.abort,
+                user_id=user_id,
+                turn_id=handle.turn_id,
+                workflow_confirm={"task_spec": dict(task_spec)},
+                turn_sink=sink,
+            )
+        except Exception:  # 重放失败不撤销已清卡：由 confirm_ack 如实回报
+            logger.exception("确认卡回执重放失败 session=%s", session_id)
+        task_id = sink.get("enqueued_task_id")
+        db = SessionLocal()
+        try:
+            await _emit_persistent(
+                db,
+                websocket,
+                state,
+                session_id,
+                "confirm_ack",
+                {
+                    "ok": True,
+                    "task_id": task_id,
+                    "message": "已确认并入队" if task_id else "已确认，但任务未入队（请检查必填项后重试）",
+                },
+            )
+        finally:
+            db.close()
+
+    task = asyncio.create_task(runner(), name=f"confirm-replay-{session_id}")
+    try:
+        _attach_turn_task(handle, task)
+    except Exception:
+        task.cancel()
+        raise
+    return task
+
+
+async def _handle_confirm_ack(
+    db: Session,
+    websocket: WebSocket,
+    state: _ConnectionState,
+    session_id: str,
+    user_id: str,
+    payload: dict,
+) -> None:
+    """确认卡回执（V1.67）：``pending_confirm`` 行锁事务 + 后台重放。
+
+    - owner 非发起人 → ``UNAUTHORIZED``；卡已被消费 → ``CONCURRENCY``；
+    - ``ok=true``：patch 深合并 → 丢掉已删除资产 → 按 ``TaskCreate`` 同源二次
+      校验（**失败则卡保留**，供用户补齐后重试）→ 清卡并提交 → 派生重放回合；
+    - ``ok=false``：不入队，仅清卡并回 ``confirm_ack(ok=false)``。
+    """
+    confirmed = bool(payload.get("ok"))
+    patch = payload.get("patch") if isinstance(payload.get("patch"), dict) else {}
+    try:
+        pending = lock_pending_confirm(db, session_id)  # SELECT ... FOR UPDATE
+        assert_confirm_owner(pending, user_id)
+        assert_no_concurrent_confirm(pending)
+        merged = _deep_merge(dict(pending.pending or {}), patch)
+        if confirmed:
+            drop_stale_asset_ids(db, merged)
+            _validate_confirmed(merged)  # 校验失败：抛错前不提交，卡标保留
+        _clear_pending_confirm(db, session_id)
+        db.commit()
+    except AppError:
+        db.rollback()
+        raise
+    if not confirmed:
+        await _emit_persistent(
+            db,
+            websocket,
+            state,
+            session_id,
+            "confirm_ack",
+            {"ok": False, "task_id": None, "message": "已取消确认"},
+        )
+        return
+    _start_confirm_replay(session_id, websocket, state, user_id, merged)
 
 
 def _iso(value: datetime | None = None) -> str:
@@ -741,6 +857,64 @@ async def _emit_turn_completed(
     )
 
 
+def _make_session_probe(session_id: str):
+    """W3 会话占槽探针（惰性可调用：仅 workflow 回合真正调用时才查库）。"""
+    def probe() -> bool:
+        db = SessionLocal()
+        try:
+            return check_session_active_task(db, session_id)
+        finally:
+            db.close()
+
+    return probe
+
+
+def _confirm_author_payload(db: Session, user_id: str | None) -> dict[str, str] | None:
+    """确认卡作者元数据；不进卡标 JSON，仅供前端展示与 pending_confirm_author_id。"""
+    if not user_id:
+        return None
+    user = db.query(User).filter(User.id == user_id).first()
+    if user is None or not user.id:
+        return None
+    return {
+        "id": str(user.id),
+        "username": str(user.username or ""),
+        "display_name": str(user.display_name or user.username or ""),
+    }
+
+
+def _persist_pending_confirm(db: Session, session_id: str, payload: dict[str, Any]) -> None:
+    """把确认卡 TaskSpec 写入 sessions.pending_confirm（行锁），供 confirm_ack 二次校验。
+
+    ``confirm_author`` 只作归属元数据，不进入卡标 JSON（前端提交 patch 须剥离）。
+    """
+    spec = dict(payload)
+    author = spec.pop("confirm_author", None)
+    author_id = author.get("id") if isinstance(author, dict) else None
+    session = (
+        db.query(AgentSession)
+        .filter(AgentSession.id == session_id)
+        .with_for_update()
+        .first()
+    )
+    if not session:
+        return
+    session.pending_confirm = spec
+    session.pending_confirm_author_id = str(author_id) if author_id else session.user_id
+    db.commit()
+
+
+def _clear_pending_confirm(db: Session, session_id: str) -> None:
+    """清空待确认卡（与回执同事务提交，避免入队成功而卡标残留）。"""
+    db.execute(
+        text(
+            "UPDATE sessions SET pending_confirm = NULL, pending_confirm_author_id = NULL "
+            "WHERE id = :session_id"
+        ),
+        {"session_id": session_id},
+    )
+
+
 async def _translate_event(
     db: Session,
     websocket: WebSocket,
@@ -750,12 +924,14 @@ async def _translate_event(
     event: dict,
     *,
     turn_id: str | None = None,
+    user_id: str | None = None,
 ) -> None:
     """把图节点产出的 NodeEvent 翻译为 ws event（落库 + 统一 emit）。
 
     事件桥接契约（§2.5）：节点只返回纯数据，持久化事件全部经本函数落
     ``ws_events`` 并广播；``assistant_message`` 需先落库 Message 再构造对外
-    payload（对齐 REST 历史回放格式）。
+    payload（对齐 REST 历史回放格式）；``confirm``（V1.67 恢复）落
+    ``sessions.pending_confirm`` 行锁并补 ``confirm_author`` 元数据。
     """
     kind = event["kind"]
     payload = event.get("payload") or {}
@@ -807,6 +983,15 @@ async def _translate_event(
             task_id=task_id,
         )
         return
+    if kind == "confirm":
+        # V1.67 恢复：确认卡落 pending_confirm（行锁）+ 作者元数据；同一会话
+        # 同一时刻至多一张卡，回执由收包循环 confirm_ack 处理（重放经 W6 入队）。
+        outgoing = dict(payload)
+        author = _confirm_author_payload(db, user_id)
+        if author and "confirm_author" not in outgoing:
+            outgoing["confirm_author"] = author
+        _persist_pending_confirm(db, session_id, outgoing)
+        payload = outgoing
     await _emit_persistent(
         db,
         websocket,
@@ -826,13 +1011,18 @@ async def _run_turn(
     *,
     user_id: str,
     turn_id: str | None = None,
+    workflow_confirm: dict | None = None,
+    turn_sink: dict | None = None,
 ) -> None:
     """后台执行一轮 LangGraph Agent，并把图输出统一投影为 WS 事件。
 
     图节点只返回纯数据（custom 瞬态帧 + pending_events 事件意图）；本函数
     消费 ``astream`` 输出后统一 emit（§2.5 事件桥接）。``should_abort`` 与
     api_key 经 ``RunnableConfig.configurable`` 注入（O-12 迁移），不入 State。
-    骨架版仅纯对话流式生成，不处理 interrupt / 思考链 / 工具帧。
+
+    ``workflow_confirm`` 为确认卡回执重放（H2 批次 2）：非空时注入
+    ``configurable``，Workflow W5 合并槽位后放行 W6 入队、W7 收尾——入队仍
+    唯一经 W6（不在此处直接入队）。
     """
     if turn_id:
         with _TURN_LOCK:
@@ -875,6 +1065,14 @@ async def _run_turn(
                 },
                 # 协议档 ID 用于助手消息头快照，不含密钥。
                 "profile": {"id": profile.id},
+                # ── Workflow DAG 上下文（H2：节点不触碰 DB，全部由本层注入）──
+                "db_factory": SessionLocal,  # W6 入队唯一经 worker_bridge
+                "session_id": session_id,
+                "user_id": user_id,
+                # W3 会话占槽门禁探针（惰性调用，避免非 workflow 回合查库）
+                "session_probe": _make_session_probe(session_id),
+                # 确认卡回执重放载荷（非空时 W5 合并放行 W6）
+                "workflow_confirm": workflow_confirm or {},
             }
         }
         deferred_completed: list[dict] = []
@@ -897,6 +1095,10 @@ async def _run_turn(
             # updates 模式：按节点边界消费 pending_events，统一 emit；
             # Router 节点一旦执行即捕获审计三元组，供取消/异常收尾携带（O2）
             router_audit = router_audit_from_update(chunk) or router_audit
+            if turn_sink is not None:
+                task_id_hit = enqueued_task_id_from_update(chunk)
+                if task_id_hit:
+                    turn_sink["enqueued_task_id"] = task_id_hit
             for event in iter_pending_events(chunk):
                 if event.get("kind") == "response.completed":
                     # completed 必须是本轮最后一条持久事件。
@@ -910,6 +1112,7 @@ async def _run_turn(
                     profile,
                     event,
                     turn_id=turn_id,
+                    user_id=user_id,
                 )
         for event in deferred_completed:
             await _translate_event(
@@ -920,6 +1123,7 @@ async def _run_turn(
                 profile,
                 event,
                 turn_id=turn_id,
+                user_id=user_id,
             )
     except asyncio.CancelledError:
         db.rollback()
@@ -1314,6 +1518,19 @@ async def agent_websocket(websocket: WebSocket) -> None:
                             "kind": result.get("kind"),
                         },
                         task_id=str(result.get("task_id") or "") or None,
+                    )
+                elif event == "confirm_ack":
+                    # V1.67 恢复：确认卡回执——行锁事务校验 + 后台重放回合
+                    # （入队唯一经 W6），收包循环只派生任务，不 await 整轮图。
+                    await _handle_confirm_ack(
+                        db,
+                        websocket,
+                        state,
+                        session.id,
+                        str(user.id),
+                        message.get("payload")
+                        if isinstance(message.get("payload"), dict)
+                        else {},
                     )
                 else:
                     raise AppError(ErrorCode.VALIDATION, "不支持的 WebSocket 事件")
