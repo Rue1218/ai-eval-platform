@@ -489,3 +489,53 @@ def test_taor_done_without_tools(monkeypatch) -> None:
     assert trace == ["plan", "discover", "orchestrator"]
     pending = _all_pending(events)
     assert any(event["kind"] == "response.completed" for event in pending)
+
+
+def test_taor_dataset_worker_selected_and_tools_switched(monkeypatch) -> None:
+    """数据集意图 → worker.dataset（跨 Worker 视野切换端到端：allowed 含 write/edit）。"""
+    _engine_on(monkeypatch)
+    plan_dataset = (
+        '{"intent":"整理数据集槽位清单","skill_id":null,'
+        '"slots":{"steps":["检视数据集","整理槽位","输出清单"]},'
+        '"tools_needed":["read","write"],"delivery":"chat",'
+        '"budget":{},"allows_replan":false,"notes":"","protocol":"plan","version":"plan.v1"}'
+    )
+    gateway = _fake_graph_gateway([plan_dataset, _REACT_DONE])
+    agent = LangGraphAgent(gateway)
+    events = _collect(agent, _request("排查一下数据集清单"), {})
+    # 从 updates 提取 discover 节点输出（端到端视野切换）
+    discover_out = None
+    for mode, chunk in events:
+        if mode == "updates" and "discover" in chunk:
+            discover_out = chunk["discover"]
+    assert discover_out is not None
+    assert discover_out["agent_id"] == "worker.dataset"
+    assert {"write", "edit"} <= set(discover_out["allowed_tools"])
+    pending = _all_pending(events)
+    completed = next(e for e in pending if e["kind"] == "response.completed")
+    assert completed["payload"]["agent_id"] == "worker.dataset"
+
+
+def test_taor_tool_result_payload_is_controlled(monkeypatch, tmp_path) -> None:
+    """tool_result 持久事件只含受控投影：无 arguments 回显、带脱敏/截断标记。"""
+    _engine_on(monkeypatch)
+    report = tmp_path / "result.md"
+    report.write_text("失败原因：样本量不足 500 条" * 100, encoding="utf-8")  # 超长正文
+    gateway = _fake_graph_gateway([_PLAN_OK, _REACT_READ, _REACT_DONE])
+    agent = LangGraphAgent(gateway)
+    config = {
+        "configurable": {
+            "credentials": {"api_key": ""},
+            "sandbox": {"dir": str(tmp_path)},
+        }
+    }
+    events = _collect(agent, _request("排查一下测试报告失败原因"), config)
+    pending = _all_pending(events)
+    result = next(e for e in pending if e["kind"] == "tool_result")
+    payload = result["payload"]
+    assert "arguments" not in payload  # 不回显调用参数
+    assert payload["name"] == "read"
+    assert isinstance(payload.get("truncated"), bool)
+    assert isinstance(payload.get("redacted"), bool)
+    serialized = json.dumps(payload, ensure_ascii=False)
+    assert len(serialized) < 5000  # 持久事件体积受控（观察全文只在单回合模型输入）

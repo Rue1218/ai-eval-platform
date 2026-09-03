@@ -875,7 +875,8 @@ export interface AgentPrefs {
 }
 
 // WS 事件公共头（API.md §4.2）：payload 嵌套，task_id 入队后才有
-// 骨架化后事件收敛为纯对话 + 平台任务流（无 thought / tool / confirm / clarify / plan）。
+// H1 骨架化收敛为纯对话 + 平台任务流；H3 起 Agent 引擎恢复 thought /
+// tool_call / tool_result（ToolCard 只渲染脱敏摘要，历史旧事件不重放）。
 export interface WsServerEvent {
   event:
     | 'user_message'
@@ -884,6 +885,9 @@ export interface WsServerEvent {
     | 'assistant_message'
     | 'response.completed'
     | 'done'
+    | 'thought'
+    | 'tool_call'
+    | 'tool_result'
     | 'progress'
     | 'report'
     | 'task_cancelled'
@@ -897,15 +901,37 @@ export interface WsServerEvent {
   payload: any
 }
 
-// response.completed payload（API.md §4.3 V1.66）：混合引擎开启时的 Router 审计。
-// engine 是分流结论（不代表实际执行引擎——H1 阶段 workflow/agent 降级按 chat 执行，
-// router_reason 会标注降级）；主开关关闭时三个可选字段不出现，旧客户端忽略即可。
+// response.completed payload（API.md §4.3 V1.67）：混合引擎开启时的引擎审计。
+// engine 即分流结论；H2/H3 起 workflow（W0–W7 DAG）/ agent（TAOR）均已真实执行，
+// 主开关关闭时三个可选字段不出现，旧客户端忽略即可。
 export interface ResponseCompletedPayload {
   finish_reason: 'stop' | 'cancelled' | 'error'
   role: string
   engine?: 'direct' | 'chat' | 'workflow' | 'agent'
   router_confidence?: number
   router_reason?: string
+}
+
+// tool_call payload（H3 Agent TAOR）：orchestrator 发起 Act 时产出；
+// arguments 已脱敏（值截断/路径取末段/对象折叠），ToolCard 只展示摘要。
+export interface ToolCallPayload {
+  call_id: string
+  name: string
+  arguments?: Record<string, unknown>
+}
+
+// tool_result payload（toolnode 十层链产出）：仅受控投影
+// （data 为 display_data 摘要；失败时 error 为脱敏原因），不含观察全文。
+export interface ToolResultPayload {
+  call_id: string
+  name: string
+  ok: boolean
+  latency_ms?: number
+  truncated?: boolean
+  redacted?: boolean
+  data?: Record<string, unknown>
+  error?: string
+  source?: string
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
