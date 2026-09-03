@@ -190,7 +190,7 @@ def test_w5_emits_confirm_card_and_completes_turn(hybrid_on: None) -> None:
     factory = _FakeDbFactory()
     events = _run(
         LangGraphAgent(_StubGateway()),
-        _request("对 profile-A 跑基准评测"),
+        _request("跑一次基准评测"),
         {
             "configurable": {
                 "thread_id": "t1",
@@ -219,7 +219,7 @@ def test_confirm_card_defaults_match_backend_source(hybrid_on: None) -> None:
 
     events = _run(
         LangGraphAgent(_StubGateway()),
-        _request("对 profile-A 跑基准评测"),
+        _request("跑一次基准评测"),
         {
             "configurable": {
                 "thread_id": "t1",
@@ -300,7 +300,7 @@ def test_replay_missing_required_assets_stops_in_place(hybrid_on: None) -> None:
     factory = _FakeDbFactory()
     events = _run(
         LangGraphAgent(_StubGateway()),
-        _request("对 profile-A 跑基准评测"),
+        _request("跑一次基准评测"),
         {
             "configurable": {
                 "thread_id": "t3",
@@ -333,8 +333,18 @@ def _ack_env(monkeypatch: pytest.MonkeyPatch, *, spec: dict, author_id: str):
     async def fake_emit(db: Any, websocket: Any, state: Any, session_id: str, event: str, payload: dict, **kwargs: Any) -> None:
         emitted.append((event, payload))
 
-    def fake_replay(session_id: str, websocket: Any, state: Any, user_id: str, merged_spec: dict) -> None:
+    def fake_replay(
+        session_id: str,
+        websocket: Any,
+        state: Any,
+        user_id: str,
+        merged_spec: dict,
+        *,
+        handle: Any = None,
+    ) -> None:
         replayed.append(merged_spec)
+        if handle is not None:
+            ws._release_turn(handle)
         return None  # type: ignore[return-value]
 
     monkeypatch.setattr(ws, "_emit_persistent", fake_emit)
@@ -403,6 +413,82 @@ def test_ack_ok_merges_patch_clears_card_and_replays(monkeypatch: pytest.MonkeyP
     assert merged["run"] == {"sample_size": 1000, "concurrency": 8}  # 深合并
     assert db.committed == 1
     assert any("UPDATE sessions SET pending_confirm = NULL" in sql for sql in db.executed)
+
+
+def test_ack_active_turn_keeps_pending_card(monkeypatch: pytest.MonkeyPatch) -> None:
+    """确认前已有交互回合时先报 CONCURRENCY，绝不清卡或启动重放。"""
+    ws, db, emitted, replayed = _ack_env(
+        monkeypatch,
+        spec={"kind": "benchmark", "profile_ids": ["p1"], "dataset_id": "d1"},
+        author_id="u-1",
+    )
+    active = ws._reserve_turn("s-1", "u-1")
+    try:
+        with pytest.raises(AppError) as exc:
+            asyncio.run(
+                ws._handle_confirm_ack(db, None, None, "s-1", "u-1", {"ok": True})
+            )
+        assert exc.value.code == ErrorCode.CONCURRENCY
+        assert replayed == [] and emitted == []
+        assert not any("UPDATE sessions SET pending_confirm = NULL" in sql for sql in db.executed)
+    finally:
+        ws._release_turn(active)
+
+
+def test_confirm_replay_without_task_restores_card_without_success_ack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """W6 未写任务 ID 时恢复卡并报错，禁止发 ok=true 与空 task_id。"""
+    import app.routers.ws as ws
+
+    emitted: list[tuple[str, dict]] = []
+    restored: list[dict] = []
+
+    async def fake_run_turn(*args: Any, **kwargs: Any) -> None:
+        return None  # 模拟开关切换到 chat 等未产出 W6 task_id 的路径
+
+    async def fake_emit_persistent(
+        db: Any,
+        websocket: Any,
+        state: Any,
+        session_id: str,
+        event: str,
+        payload: dict,
+        **kwargs: Any,
+    ) -> None:
+        emitted.append((event, payload))
+
+    async def fake_emit_error(
+        db: Any, websocket: Any, state: Any, session_id: str, error: AppError
+    ) -> None:
+        emitted.append(("error", {"code": error.code.value, "message": error.message}))
+
+    def fake_restore(db: Any, session_id: str, task_spec: dict, user_id: str) -> None:
+        restored.append(dict(task_spec))
+
+    monkeypatch.setattr(ws, "_run_turn", fake_run_turn)
+    monkeypatch.setattr(ws, "_emit_persistent", fake_emit_persistent)
+    monkeypatch.setattr(ws, "_emit_error", fake_emit_error)
+    monkeypatch.setattr(ws, "_restore_pending_confirm", fake_restore)
+    monkeypatch.setattr(
+        ws,
+        "SessionLocal",
+        lambda: _FakeDb(row=_FakeRow(pending_confirm=None, pending_confirm_author_id=None)),
+    )
+
+    async def drive() -> None:
+        task = ws._start_confirm_replay(
+            "s-replay-failure",
+            None,
+            ws._ConnectionState(),
+            "u-1",
+            {"kind": "benchmark", "profile_ids": ["p1"], "dataset_id": "d1"},
+        )
+        await task
+
+    asyncio.run(drive())
+    assert restored == [{"kind": "benchmark", "profile_ids": ["p1"], "dataset_id": "d1"}]
+    assert emitted == [("error", {"code": "INTERNAL", "message": "确认任务未入队，请稍后重试"})]
 
 
 def test_ack_cancel_only_clears_card(monkeypatch: pytest.MonkeyPatch) -> None:

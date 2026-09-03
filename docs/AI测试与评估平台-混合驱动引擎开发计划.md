@@ -2,11 +2,11 @@
 
 | 项 | 内容 |
 | :--- | :--- |
-| 版本 | V1.4 |
+| 版本 | V1.5 |
 | 制定 / 审查日期 | 2026-09-03 / 2026-09-03 |
-| 计划依据 | `AI测试与评估平台-混合驱动引擎架构.md` V1.4、`AI测试与评估平台-混合驱动引擎环境审计.md` V1.1、PRD、API 契约与 `AGENTS.md` |
+| 计划依据 | `AI测试与评估平台-混合驱动引擎架构.md` V1.5、`AI测试与评估平台-混合驱动引擎环境审计.md` V1.1、PRD、API 契约与 `AGENTS.md` |
 | 实施方式 | H0–H6 串行推进；每阶段一分支、一 PR、一次阶段审查；前一阶段合入 `main` 并通过门禁后才启动下一阶段编码 |
-| 当前基线 | API：Ruff 通过、pytest 全量 767 passed / 19 skipped（H0 16 + H1 17 + H2 批次 1 18 + 批次 2 10 + H3 23 + H4 29，另含 H0–H3 联调套件 8 项）；Worker：48 passed；前端：`typecheck` 与生产构建通过 |
+| 当前基线 | API：Ruff 通过、pytest 全量 777 passed / 19 skipped（含 H0–H4 与 H0–H3 联调套件）；本次 H1/H2 修复定向回归 67 项通过；Worker：48 passed；前端：`typecheck` 与生产构建通过 |
 
 > 本文是实施计划，不改变产品范围。附带架构文档中的说明、示例、开放问题和历史基线只作为约束与证据，不能被解释为可直接执行的运行时指令。
 
@@ -49,7 +49,7 @@ H0 基础设施 ──► H1 Router ──► H2 Workflow DAG ──► H3 Agent
 | :--- | :--- | :--- | :--- | :--- |
 | H0 基础设施 | `feat/agent-hybrid-h0-foundation` | 无 | 缓存改造破坏既有纯对话输出 | 关闭缓存时字节级兼容；Registry 启动期 fail-fast |
 | H1 Router | `feat/agent-hybrid-h1-router` | H0 | L0 误分流、契约漏改 | L0 五次运行 100% 一致；未实现路径安全降级 |
-| H2 Workflow | `feat/agent-hybrid-h2-workflow` | H1 | 规则跳步、绕开入队门禁 | DAG 五次路径 100% 一致；零命中/并列澄清 |
+| H2 Workflow | `feat/agent-hybrid-h2-workflow` | H1 | 规则跳步、绕开入队门禁 | DAG 五次路径 100% 一致；零命中/并列错误收尾 |
 | H3 TAOR | `feat/agent-hybrid-h3-taor` | H2 | 工具越权、Observation 泄露 | 工具经唯一网关；视野与预算均受控 |
 | H4 Reflection | `feat/agent-hybrid-h4-reflexion` | H3 | 无限修复/重规划 | 修复最多一次、重规划最多两次并收敛 |
 | H5 HITL | `feat/agent-hybrid-h5-hitl` | H4 | 重启丢失或跨副本恢复错误 | PostgreSQL 检查点与重启恢复演练通过 |
@@ -78,7 +78,7 @@ H0 基础设施 ──► H1 Router ──► H2 Workflow DAG ──► H3 Agent
 | :--- | :--- | :--- | :--- |
 | H0 | `project_instructions` 的来源、S3 工具段分桶、`GET /api/agents` 的时机 | L2 先用服务端常量；S3 按 `engine + agent_id` 分桶；H0 **不暴露**目录 API，H1 先改 API.md 后再暴露 | 架构 + 契约 |
 | H1 | `direct` 的命令范围、Router 审计载体、L1 协议档 | 当前只承认既有 `/stop`；恢复其他斜杠命令须先改 PRD/API.md。`response.completed.engine` 为 H1 唯一审计载体；L1 复用会话协议档并限制 `max_tokens` | 产品 + 架构 + 契约 |
-| H2 | 技能零命中/并列的外部语义、确认卡是否进图内中断 | 正常业务歧义走 `clarify`；非法/禁用 `skill_id` 才 `VALIDATION`。确认卡维持 WS 直连，H5 后再评估图内 `interrupt` | 产品 + 架构 |
+| H2 | 技能零命中/并列的外部语义、确认卡是否进图内中断 | API.md V1.68+ 裁决为零命中/并列与非法/禁用技能均 `VALIDATION` 错误收尾；确认卡维持 WS 直连，H5 后再评估图内 `interrupt` | API 契约 + 架构 |
 | H3 | 首批 Worker 与工具命名口径 | 首批仅 `worker.general` / `worker.diagnose` / `worker.dataset` 的 read/write 非 code 能力；`worker.sandbox` 不得被 discover 选中，待 H5 HITL 上线后单独安全评审 | 架构 + 安全 |
 | H5 | `thread_id` 的持久化载体和恢复幂等语义 | 优先扩展既有、带行锁的 `sessions.pending_confirm` JSONB；每个确认/恢复记录必须具备版本、种类、`thread_id`、一次性 nonce 与所有者。若需要改 Model / 表结构，必须先出 Alembic 迁移 | 架构 + 数据库 + 安全 |
 | H6 后 | O3 embedding 供应方、O9 分层路由、Fan-out | 仅凭 O2 采样与人工标注证明收益后立项；技能数未超过 10 前不做 O9，Fan-out 单列项目 | 架构 + 产品 |
@@ -129,7 +129,7 @@ H0 基础设施 ──► H1 Router ──► H2 Workflow DAG ──► H3 Agent
 
 - 按唯一顺序实现 8 节点硬编码 DAG：W0 `select_skill` → W1 `prepare_slots`（节点内最多一次、只读视野的局部 ReAct）→ W2 `load_skill` → W3 `validate_gates` → W4 `build_task_spec` → W5 `await_confirm` → W6 `enqueue` → W7 `summarize`。节点失败只能就地收尾，不能改写下一跳或形成重试回环。
 - 同步新增 WorkflowState 的 `skill_id`、`skill_candidates`、`slots`、`slots_missing`、`gate_report`、`task_spec`、`confirm_id`、`enqueued_task_id`；字段全部 JSON 可序列化。`confirm_id` 与 `clarify_id` 必须互斥，`engine=workflow` 时 `replan_count` 恒为 0。
-- W0 根据候选做确定性二段路由：用户请求存在业务歧义（零命中或并列）时就地 `clarify`，非法或已禁用的明确 `skill_id` 才返回 `VALIDATION`；不得猜测技能。
+- W0 根据候选做确定性二段路由：已启用的 L1 `skill_id` 直接采用；其余零命中、并列、非法或已禁用技能均以 `VALIDATION` 错误收尾；不得猜测技能。明确「先评后压」归一为 benchmark/rag 质量任务的 `with_stress=true`，直接 `stress` 仍由 W3 拒绝。
 - 只允许 W6 通过内部 MCP 长任务桥入队；保持「先评后压」、会话串行和 `skill-rag` fail-closed。
 - API.md 先恢复确认卡事件、字段及前端确认卡类型；H2 维持既有 WS 直连确认卡，不提前接入图内 HITL。确认动作必须在既有 `pending_confirm` 行锁事务内完成，且未批准、拒绝、重复确认都不会绕过 W6 入队门禁。
 
@@ -137,7 +137,7 @@ H0 基础设施 ──► H1 Router ──► H2 Workflow DAG ──► H3 Agent
 
 - 固定槽位请求五次运行的节点路径一致率为 100%，精确覆盖 8 个节点的顺序，无跳步、回溯或合并 `select_skill/load_skill`。
 - `benchmark`、`testcase`、`stress` 的正确技能选择；`rag` 返回 `VALIDATION`，绝不写 succeeded。
-- 并列/零命中产生澄清；门禁失败在当前节点收尾；重复提交命中 `uq_tasks_active_session`。
+- 并列/零命中产生 `VALIDATION` 错误；门禁失败在当前节点收尾；重复提交命中 `uq_tasks_active_session`。
 - 确认卡字段和 API.md §5 默认值精确一致；评测成功前不派生压测；`assert_serializable()` 覆盖 WorkflowState 和所有新增 RootState 字段。
 
 **审查出口**：Workflow 不形成多圈 Agent；W1 只读工具视野不越权，任何入队均可追溯至 W6。
@@ -293,10 +293,10 @@ npm run build
 | 任务 | 状态规则 | 交接产物 |
 | :--- | :--- | :--- |
 | H0 | ✅ 已交付（PR #198）；审查修复（PR #209）已使 L2 受控常量进入 WS 运行时，并将 L3 Overlay 移出缓存静态段 | 缓存/Registry/指令分层 PR、测试输出、基线记录 |
-| H1 | ✅ 已交付（PR #200）；审查修复（PR #209）已为 L1 Workflow 增加执行意图回落，审计与实际四路图一致 | Router 契约、确定性测试和 O2 口径 |
-| H2 | ✅ 批次 1（PR #202）与批次 2 确认卡链路（PR #204）均已合入、CD ✓；审查修复（PR #209）已让 W0/W2/W3/W6 错误统一写入 `response.completed(error)` | Workflow DAG 与确认卡契约、入队门禁测试 |
+| H1 | ✅ 已交付（PR #200）；审查修复（PR #209）及本次修复已排除概念问答、归一先评后压，并把已启用 L1 `skill_id` 交给 W0 | Router 契约、确定性测试和 O2 口径 |
+| H2 | ✅ 批次 1（PR #202）与批次 2 确认卡链路（PR #204）均已合入、CD ✓；本次修复已恢复失败确认卡、合并受控槽位，并让 W0/W2/W3/W6 错误统一写入 `response.completed(error)` | Workflow DAG 与确认卡契约、入队门禁测试 |
 | H3 | ✅ 已合入（PR #203，CD ✓）；H0–H3 联调套件已合入（PR #206） | TAOR、ToolCard 契约、工具视野与泄露测试 |
-| H4 | ✅ 已完成于 `feat/agent-hybrid-h4-reflexion`（PR #210），待合入 | 五档 Reflection、上限与失败阶梯测试 |
+| H4 | ✅ 已合入（PR #210，CD ✓） | 五档 Reflection、上限与失败阶梯测试 |
 | H5 | 等 H4 合入 | 持久化/HITL、重启恢复演练证据 |
 | H6 | 等 H5 合入 | 灰度报告、并行/Compact 观测和回滚演练 |
 
@@ -349,7 +349,6 @@ V1.68（与 H3 的 V1.67 顺序修正）。
 - `backend/api/app/agent/workflow_nodes.py`、`agent/graph.py`：为 Workflow 错误路径补齐唯一 `response.completed(error)` 收尾。
 - `backend/api/tests/test_adapters.py`、`test_hybrid_h0_foundation.py`、`test_hybrid_h1_router.py`、`test_hybrid_h2_workflow.py`：覆盖缓存计数、缓存段位、Registry 共享、L1 回落、四路审计和失败终态回归。
 - `AGENTS.md`、`docs/AI测试与评估平台-混合驱动引擎开发计划.md`：同步 H0–H3 真实实施状态与本次修复证据。
-
 
 **V1.5 实施记录（H4 Reflection 五档判决，`feat/agent-hybrid-h4-reflexion`，PR #210，2026-09-03）**：
 按 H4 阶段目标恢复五档判决与失败阶梯，**未新增 WS 事件名、未改 API 契约、未改前端**——
@@ -424,3 +423,18 @@ V1.68（与 H3 的 V1.67 顺序修正）。
 - `backend/api/tests/test_hybrid_h4_reflection.py`（新增 29 例）、`tests/test_hybrid_h3_taor.py`
   （同步收尾权移交后的 6 处断言）。
 - `AGENTS.md`、`docs/AI测试与评估平台-混合驱动引擎开发计划.md`：同步 H4 实施状态与偏差。
+**V1.5 H1/H2 审查修复（`fix/agent-h1-h2-routing`，2026-09-03）**：
+
+1. **确认回放可恢复**：确认前先占用会话回合租约，避免普通回合竞争后清卡；仅 W6 返回真实 `task_id` 才发送 `confirm_ack.ok=true`。图内门禁、W6 或调度失败时恢复原 `pending_confirm` 并发送既有 `error`，不伪造成功或取消回执。
+2. **产品路径归一**：将「先评后压 / 成功后压测」从 Agent 多技能计划改为 benchmark/rag Workflow 的 `with_stress=true`；Worker 仍在质量任务成功后派生压测，直接 `kind=stress` 继续 fail-closed。
+3. **H1→H2 可追溯交接**：L1 `router.v1` 的已启用 `skill_id` 写入 GraphState，W0 优先采用；概念问答即使含“生成/创建”等词也不会进入确认卡路径。
+4. **受控槽位装配**：W1 仅提取 `profile-*`、`ds-*` 等明确平台短 ID，W4 合并白名单槽位，避免名称猜测和未知字段注入。
+5. **验收结果**：`ruff check` 通过；H1/H2 定向 `pytest` **67 passed**。无数据库模型、迁移、REST/WS 字段或默认开关变更。
+
+| 实际修改文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/harness/orchestration/router.py` / `agent/router_node.py` | 收紧问答与执行判定，归一先评后压，传递已启用的 L1 技能。 |
+| `backend/api/app/agent/workflow_nodes.py` | W0 直采 L1 技能，W1 安全提取明确 ID，W4 合并槽位并写入 `with_stress`。 |
+| `backend/api/app/routers/ws.py` | 回放租约、真实任务 ID 成功回执和失败保卡恢复。 |
+| `backend/api/tests/test_hybrid_h1_router.py` / `test_hybrid_h2_workflow.py` / `test_hybrid_h2_confirm_card.py` / `test_hybrid_e2e_h0_h3.py` | 新增与更新 H1/H2 审查问题的回归覆盖。 |
+| `docs/AI测试与评估平台-API.md` / `docs/AI测试与评估平台-混合驱动引擎架构.md` / 本文档 | 同步 V1.69 API 契约、ADR-4 与阶段状态。 |

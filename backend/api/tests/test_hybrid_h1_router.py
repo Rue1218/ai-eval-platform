@@ -136,6 +136,24 @@ def test_l0_empty_and_slash_are_deterministic() -> None:
     assert route_l0("/anything").engine == "direct"
 
 
+@pytest.mark.parametrize(
+    "text",
+    ["什么是用例生成？", "如何生成测试用例？", "讲讲如何创建基准评测任务"],
+)
+def test_l0_concept_questions_never_enter_workflow(text: str) -> None:
+    """概念问答含动作词时仍走 chat，不得生成确认卡。"""
+    assert route_l0(text).engine == "chat"
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["对 profile-A 跑基准评测，成功后压测", "跑一次基准评测，先评后压"],
+)
+def test_l0_quality_then_stress_enters_workflow(text: str) -> None:
+    """先评后压归一为质量任务 Workflow，禁止绕到无长任务桥的 Agent。"""
+    assert route_l0(text).engine == "workflow"
+
+
 def test_l0_router_node_workflow_no_model_no_downgrade_stamp() -> None:
     """router 节点 L0 路径零模型调用；workflow（H2 已实现）不再标注降级。"""
     gateway = _StubGateway()
@@ -169,6 +187,7 @@ def test_l1_success_adopts_result_and_consumes_budget(
     router_out = _node_output(events, "router")
     assert router_out is not None
     assert router_out["engine"] == "workflow"
+    assert router_out["skill_id"] == "skill-benchmark"  # L1 已启用技能须传给 W0
     assert router_out["budget"] == {"model_calls": 11, "tool_turns": 12}
     assert len(gateway.invoke_calls) == 1
     l1_request = gateway.invoke_calls[0]

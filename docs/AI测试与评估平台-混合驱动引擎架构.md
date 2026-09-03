@@ -3,7 +3,7 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | 混合驱动引擎（Hybrid Agent Engine）架构需求 |
-| 版本 | V1.4 |
+| 版本 | V1.5 |
 | 审查日期 | 2026-09-03 |
 | 文档性质 | 架构需求 + ADR + 分阶段落地契约（**本版不改对外契约，契约变更逐阶段先改 API.md**） |
 | 适用范围 | `/agent` 对话智能体全链路：LangGraph 双引擎图、Harness 分层基础设施、WebSocket 事件桥、短工具与长任务分离 |
@@ -173,11 +173,11 @@ Repeat 的第 N 圈：
 
 **二段路由（V1.1 新增）**：`select_skill` 是 Router 之后的**第二段**分流——第一段（`router` 节点）只决定 `engine=workflow`，第二段才在 `SKILL_CATALOG` 内选出具体 Skill：
 
-1. 若 `router.v1` 已给出 `skill_id` 且该技能已启用（`assert_skill_enabled`），直接采纳，不调模型；
-2. 否则按 `detect_plan_intent` 的技能组命中做确定性打分；
-3. 命中 0 个或并列多个 → **就地收尾 `clarify`**（请用户明确要跑哪类评测），**不猜**。
+1. 若 `router.v1` 已给出 `skill_id` 且该技能已启用（`assert_skill_enabled`），Router 将其写入 State，W0 **直接采纳**，不调模型；
+2. 否则按技能组命中做确定性打分；明确「先评后压」时归一为 benchmark/rag 质量任务并在 W4 写 `with_stress=true`，压测仍仅由 Worker 成功后派生；
+3. 命中 0 个或并列多个 → 按 API.md V1.68+ **就地 `error(VALIDATION)` 收尾**，不恢复 `clarify` 事件，**不猜**。
 
-`select_skill` 与 `load_skill` 职责分离：前者**选 ID**，后者调 `load_skill_workflow(skill_id)` **加载 SKILL.md 正文**（Progressive Disclosure，正文不入 State）。二者不可合并，否则「选错技能」与「加载失败」两类错误无法在事件流上区分。
+`select_skill` 与 `load_skill` 职责分离：前者**选 ID**，后者调 `load_skill_workflow(skill_id)` **加载 SKILL.md 正文**（Progressive Disclosure，正文不入 State）。H2 只用该加载完成启用门禁与确定性槽位装配；需要将正文注入局部只读 ReAct 的名称解析在 H3 再接入。二者不可合并，否则「选错技能」与「加载失败」两类错误无法在事件流上区分。
 
 **理由**：
 
@@ -1133,6 +1133,15 @@ except Exception as exc:
 
 - `docs/AI测试与评估平台-混合驱动引擎架构.md`（新增）：V1.0 定义混合驱动引擎架构——顶层 Router 双引擎分流、Agent 子图 Orchestrator-Worker TAOR 循环、Workflow 子图硬编码 DAG、上下文缓存边界、Agent Registry、工具十层网关、HITL 与事件溯源；含 10 条 ADR（V1.1 增 ADR-10）、双层状态机 Mermaid 图、RootState/AgentState/WorkflowState 设计、H0–H6 七阶段落地计划、四类场景与五维评分测试策略、39 项「已满足 / 需重构 / 新建」总表。
 - `docs/AI测试与评估平台-混合驱动引擎环境审计.md`（前置输入）：V1.0 只读审计，提供本文全部现状判定依据与 9 项阻塞矛盾点（C-1…C-9）；V1.1 起并入 C-10 反馈层收窄发现。
+
+**V1.5 实施修订（2026-09-03）**：根据 H1/H2 代码审查更新 ADR-4：概念问答不得穿透 Workflow 副作用门禁；「先评后压」归一为质量任务的 `with_stress=true`；L1 的已启用 `skill_id` 必须传递并由 W0 直接采用；零/并列候选以 API.md V1.68+ 的 `VALIDATION` 错误收尾。H2 仅安全预填明确平台短 ID，并在 W4 合并白名单槽位；名称解析保留给 H3 只读工具路径。
+
+| 实际修改文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/harness/orchestration/router.py` / `agent/router_node.py` | 收紧命令式执行判定、保留只读准备任务到 Agent，并归一先评后压与 L1 技能交接。 |
+| `backend/api/app/agent/workflow_nodes.py` | W0 优先采用已启用 L1 技能，W1 提取明确资产 ID，W4 合并槽位并设置 `with_stress`。 |
+| `backend/api/app/routers/ws.py` | 确认回放先取得回合租约；无 W6 任务 ID 时恢复待确认卡并只发送错误。 |
+| `backend/api/tests/test_hybrid_h1_router.py` / `test_hybrid_h2_workflow.py` / `test_hybrid_h2_confirm_card.py` / `test_hybrid_e2e_h0_h3.py` | 覆盖问答门禁、先评后压、L1→W0、槽位合并与回放失败恢复。 |
 
 **V1.4 变更（评审修订对齐，纯文档）**：按架构评审意见对齐审计 V1.1（C-10）——
 1. **Reflection 判定全面修正**：§1.1 增「反馈层 reflect 库已收窄」行；§3.2 范式标注表 `reflect` 行、§8 第 18 项、ADR-9 复用清单统一改为「`review.py` 现为 39 行三档简版（pass/clarify/reject）、零调用含测试，`REFLECT_SCHEMA`/`parse_reflect` enum 同三档，五档 verdict 仅残留 `state.py` 类型注释；H4 = 判决扩展至五档 + 协议补 enum + 重建节点壳」；ADR-9 明确允许的增量修改仅限 review.py 判决逻辑与 protocols.py 协议族两处；

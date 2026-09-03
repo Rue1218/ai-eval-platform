@@ -60,9 +60,28 @@ _LIST_PHRASES: tuple[str, ...] = ("任务清单", "分步", "拆成步骤", "分
 
 # 工作流具有确认卡与后续入队副作用，因此不能只凭技能名词触发。该正则由 H1
 # Router 与 H2 W0 共用，确保 L1 模型误判不会把概念问答推进到确认流程。
+# 概念问答的问法会包含「生成」「创建」等动词。先识别其语义，再匹配命令式
+# 动作，避免「什么是用例生成」「如何创建任务」误发确认卡。
+_CONCEPTUAL_QUESTION_PATTERN = re.compile(
+    r"^(?:请问[，,]?|想了解(?:一下)?[，,]?|能否介绍(?:一下)?[，,]?)?"
+    r"(?:什么是|如何|怎样|怎么|为什么|为何|是否|能否|介绍|讲讲|解释|说明)"
+)
+
+# 执行动作要求位于句首、礼貌请求后或独立分隔符后；不能仅凭技能名词末尾的
+# 「生成」判断。第二分支保留「评测任务」等平台既有简短下单表达。
 _WORKFLOW_EXECUTION_PATTERN = re.compile(
+    r"(?:^|[\s，,；;：:])"
+    r"(?:(?:请|麻烦)(?:帮我)?|帮我|给我|我想(?:要)?|我需要|想要|需要|希望)?\s*"
     r"(?:跑|运行|执行|发起|创建|新建|开始|提交|生成|做)(?:一[个次]|一下)?"
     r"|(?:评测|压测|用例|知识库)(?:一下|来一次|任务)"
+)
+
+# 「先评后压」不是两个彼此独立的任务：PRD 规定它必须归一为 benchmark/rag
+# 质量任务的 ``with_stress=true``，由 Worker 在成功后派生压测子任务。
+_QUALITY_THEN_STRESS_PATTERN = re.compile(
+    r"先评(?:后|再)压|评完再压|(?:成功|完成|结束)后(?:再|进行)?(?:压测|stress)"
+    r"|(?:评测|benchmark|rag).{0,16}(?:后|再|然后).{0,8}(?:压测|stress)",
+    re.IGNORECASE,
 )
 
 # 网页抓取动作的窄匹配：仅在用户明确要求访问/提取链接内容时进入 ReAct，
@@ -97,7 +116,35 @@ def short_tool_names(text: str) -> tuple[str, ...]:
 
 def has_workflow_execution_intent(text: str) -> bool:
     """判断文本是否明确要求执行固定评测工作流（H1/H2 副作用门禁）。"""
-    return bool(_WORKFLOW_EXECUTION_PATTERN.search(text.strip()))
+    stripped = text.strip()
+    if not stripped or _CONCEPTUAL_QUESTION_PATTERN.search(stripped):
+        return False
+    return bool(_WORKFLOW_EXECUTION_PATTERN.search(stripped))
+
+
+def has_quality_then_stress_intent(text: str) -> bool:
+    """判断「质量评测成功后压测」复合意图，归一为单个质量任务工作流。
+
+    仅接受明确执行动作、质量评测语义与顺序词三者同时存在的请求；单独压测
+    仍由 W3 按「先评后压」门禁拒绝，避免把任意提及压测的问答误判为下单。
+    """
+    stripped = text.strip()
+    lowered = stripped.lower()
+    if not has_workflow_execution_intent(stripped):
+        return False
+    has_quality = (
+        "基准评测" in stripped
+        or "知识库评测" in stripped
+        or "benchmark" in lowered
+        or "rag" in lowered
+        or ("评测" in stripped and "用例" not in stripped)
+    )
+    has_stress = (
+        "压测" in stripped
+        or "stress" in lowered
+        or any(token in stripped for token in ("先评后压", "先评再压", "评完再压"))
+    )
+    return has_quality and has_stress and bool(_QUALITY_THEN_STRESS_PATTERN.search(stripped))
 
 
 def detect_plan_intent(text: str) -> bool:

@@ -40,11 +40,12 @@ from app.harness.orchestration.router import (
     _SKILL_GROUPS,
     TOOL_INTENT_KEYWORDS,
     detect_plan_intent,
+    has_quality_then_stress_intent,
     has_workflow_execution_intent,
     short_tool_names,
 )
 from app.harness.prompts.protocols import parse_router
-from app.harness.skills import SKILL_CATALOG
+from app.harness.skills import assert_skill_enabled
 from app.llm import ModelRequest
 
 # L0 置信度常量（离散特征 → 浮点；低于阈值的两个档位是 L1 的触发场景）
@@ -70,6 +71,13 @@ _DIAGNOSE_PATTERN = re.compile(r"排查|诊断|定位|分析一下|查一下原�
 # fail-closed）。仅当无其他技能组共现时折叠为单一「知识库评测」意图。
 _RAG_EVAL_COMPOUND = re.compile(
     r"(?:rag|知识库)\s*(?:质量)?\s*评测|评测\s*(?:质量)?\s*(?:rag|知识库)"
+)
+
+# 用户先要求读取/分析资产再下单时，必须交由 Agent TAOR 完成只读准备；不能因
+# 末尾带「先评后压」而跳过前置观察直接生成确认卡。
+_WORKFLOW_PREPARATION_PATTERN = re.compile(
+    r"(?:读取|读(?:取)?(?:数据集|文件)|查询|搜索|查看|分析).{0,32}(?:然后|再)",
+    re.IGNORECASE,
 )
 
 # router_reason 落 ws_events，超长截断并清理控制字符（脱敏短文本）
@@ -154,6 +162,9 @@ def route_l0(text: str) -> RouteDecision:
         if has_workflow_execution_intent(stripped):
             return RouteDecision("workflow", _CONF_WORKFLOW, "命中技能组「知识库评测」且含执行动作（L0）")
         return RouteDecision("chat", _CONF_SKILL_AMBIGUOUS, "命中技能词「知识库评测」但无执行动作，疑似概念问答（L0）")
+    if has_quality_then_stress_intent(stripped) and not _WORKFLOW_PREPARATION_PATTERN.search(stripped):
+        # PRD：先评后压是质量任务成功后的 Worker 派生链，而不是 Agent 的多工具计划。
+        return RouteDecision("workflow", _CONF_WORKFLOW, "命中质量评测后派生压测意图（L0）")
     if detect_plan_intent(stripped):
         return RouteDecision("agent", _CONF_PLAN_INTENT, "多槽/多技能/多短工具/确认卡意图（L0）")
     if _DIAGNOSE_PATTERN.search(stripped):
@@ -276,20 +287,32 @@ def _route_l1(
                 "budget": budget_data,
             }
         skill_id = fields.get("skill_id")
+        selected_skill_id: str | None = None
         if skill_id:
-            if str(skill_id) not in SKILL_CATALOG:
-                reason = f"{reason}（skill_id={skill_id} 未知已忽略）"
+            skill_text = str(skill_id)
+            if engine != "workflow":
+                reason = f"{reason}（skill_id={skill_text} 非 Workflow 已忽略）"
             else:
-                reason = f"{reason}（skill={skill_id}）"
+                try:
+                    # 仅把已注册且启用的 L1 建议写入 State；W0 将优先采用它，
+                    # 避免第二段路由重新以关键词覆盖 Router 的明确选择。
+                    assert_skill_enabled(skill_text)
+                    selected_skill_id = skill_text
+                    reason = f"{reason}（skill={skill_text}）"
+                except AppError:
+                    reason = f"{reason}（skill_id={skill_text} 不可用已忽略）"
         agent_trace(
             f"router l1 engine={engine} confidence={confidence:.2f} skill={skill_id or '-'}"
         )
-        return {
+        result = {
             "engine": engine,
             "router_confidence": confidence,
             "router_reason": f"L1 CoT：{reason}",
             "budget": budget_data,
         }
+        if selected_skill_id is not None:
+            result["skill_id"] = selected_skill_id
+        return result
     except AppError as exc:
         # 格式错误 / 上游 5xx / 超时 / 预算耗尽：回落 L0；已消费的预算如实记账。
         agent_trace(f"router l1 fallback code={exc.code.value}")

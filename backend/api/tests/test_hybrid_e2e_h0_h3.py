@@ -266,7 +266,7 @@ async def test_h2_workflow_issues_confirm_card(monkeypatch) -> None:
     # V1.68：confirm 事件 payload 即 TaskSpec 平铺（defaults.py 单一事实源）
     spec = confirm_payload
     assert spec["kind"] == "benchmark"
-    assert spec["profile_ids"] == []  # 平台默认值（defaults.py 同源）
+    assert spec["profile_ids"] == ["profile-A"]  # W1 安全预填明确的协议档短 ID
     assert spec["with_stress"] is False
     assert spec["dataset_id"] is None
     assert spec["run"]["sample_size"] == 1000

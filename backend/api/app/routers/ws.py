@@ -219,6 +219,8 @@ def _start_confirm_replay(
     state: _ConnectionState,
     user_id: str,
     task_spec: dict[str, Any],
+    *,
+    handle: _TurnHandle | None = None,
 ) -> asyncio.Task[None]:
     """确认卡回执重放回合：以 ``workflow_confirm`` 注入重跑 DAG。
 
@@ -226,7 +228,9 @@ def _start_confirm_replay(
     → W7 收尾；``confirm_ack`` 事件在回合结束后发出，携带 W6 写入的真实
     ``task_id``。入队绝不在此处直接发生（ADR-4「任何入队均可追溯至 W6」）。
     """
-    handle = _reserve_turn(session_id, user_id)
+    # 回执处理先抢占租约，再清卡；此处复用该租约，避免确认提交后才发现有
+    # 普通回合在运行而丢失 pending_confirm。独立调用仍保持原有的自建租约行为。
+    replay_handle = handle or _reserve_turn(session_id, user_id)
     sink: dict[str, Any] = {}
 
     async def runner() -> None:
@@ -235,37 +239,61 @@ def _start_confirm_replay(
                 session_id,
                 websocket,
                 state,
-                handle.abort,
+                replay_handle.abort,
                 user_id=user_id,
-                turn_id=handle.turn_id,
+                turn_id=replay_handle.turn_id,
                 workflow_confirm={"task_spec": dict(task_spec)},
                 turn_sink=sink,
             )
-        except Exception:  # 重放失败不撤销已清卡：由 confirm_ack 如实回报
+        except Exception:
             logger.exception("确认卡回执重放失败 session=%s", session_id)
+            sink.setdefault(
+                "error",
+                {"code": ErrorCode.INTERNAL.value, "message": "确认任务重放失败，请稍后重试"},
+            )
         task_id = sink.get("enqueued_task_id")
         db = SessionLocal()
         try:
-            await _emit_persistent(
-                db,
-                websocket,
-                state,
-                session_id,
-                "confirm_ack",
-                {
-                    "ok": True,
-                    "task_id": task_id,
-                    "message": "已确认并入队" if task_id else "已确认，但任务未入队（请检查必填项后重试）",
-                },
-            )
+            if task_id:
+                # API.md：成功回执必须带 W6 写入的真实 task_id，前端才能接管进度。
+                await _emit_persistent(
+                    db,
+                    websocket,
+                    state,
+                    session_id,
+                    "confirm_ack",
+                    {"ok": True, "task_id": task_id, "message": "已确认并入队"},
+                )
+            else:
+                # 图内门禁、开关切换或 W6 失败时恢复同一张卡。不能伪造
+                # ok=true，也不能发送 ok=false（前端将其视为用户主动取消）。
+                _restore_pending_confirm(db, session_id, task_spec, user_id)
+                error = sink.get("error")
+                if not isinstance(error, dict):
+                    error = {
+                        "code": ErrorCode.INTERNAL.value,
+                        "message": "确认任务未入队，请稍后重试",
+                    }
+                if not sink.get("error_emitted"):
+                    await _emit_error(
+                        db,
+                        websocket,
+                        state,
+                        session_id,
+                        AppError(
+                            _error_code_from_payload(error.get("code")),
+                            str(error.get("message") or "确认任务未入队，请稍后重试"),
+                        ),
+                    )
         finally:
             db.close()
 
     task = asyncio.create_task(runner(), name=f"confirm-replay-{session_id}")
     try:
-        _attach_turn_task(handle, task)
+        _attach_turn_task(replay_handle, task)
     except Exception:
         task.cancel()
+        _release_turn(replay_handle)
         raise
     return task
 
@@ -281,12 +309,14 @@ async def _handle_confirm_ack(
     """确认卡回执（V1.67）：``pending_confirm`` 行锁事务 + 后台重放。
 
     - owner 非发起人 → ``UNAUTHORIZED``；卡已被消费 → ``CONCURRENCY``；
-    - ``ok=true``：patch 深合并 → 丢掉已删除资产 → 按 ``TaskCreate`` 同源二次
-      校验（**失败则卡保留**，供用户补齐后重试）→ 清卡并提交 → 派生重放回合；
+    - ``ok=true``：先抢占回放租约，再 patch 深合并 / 二次校验 / 清卡提交并派生
+      重放；若重放未得到 W6 的真实 task_id，后台恢复卡而不伪造成功回执；
     - ``ok=false``：不入队，仅清卡并回 ``confirm_ack(ok=false)``。
     """
     confirmed = bool(payload.get("ok"))
     patch = payload.get("patch") if isinstance(payload.get("patch"), dict) else {}
+    # 必须在清卡前获得会话租约。失败时不触碰 pending_confirm，让前端保留原卡。
+    replay_handle = _reserve_turn(session_id, user_id) if confirmed else None
     try:
         pending = lock_pending_confirm(db, session_id)  # SELECT ... FOR UPDATE
         assert_confirm_owner(pending, user_id)
@@ -299,7 +329,15 @@ async def _handle_confirm_ack(
         db.commit()
     except AppError:
         db.rollback()
+        if replay_handle is not None:
+            _release_turn(replay_handle)
         raise
+    except Exception as exc:
+        db.rollback()
+        if replay_handle is not None:
+            _release_turn(replay_handle)
+        agent_trace(f"confirm_ack 内部异常 type={type(exc).__name__}")
+        raise AppError(ErrorCode.INTERNAL, "确认任务处理失败") from exc
     if not confirmed:
         await _emit_persistent(
             db,
@@ -310,7 +348,24 @@ async def _handle_confirm_ack(
             {"ok": False, "task_id": None, "message": "已取消确认"},
         )
         return
-    _start_confirm_replay(session_id, websocket, state, user_id, merged)
+    assert replay_handle is not None
+    try:
+        _start_confirm_replay(
+            session_id,
+            websocket,
+            state,
+            user_id,
+            merged,
+            handle=replay_handle,
+        )
+    except AppError:
+        # 极端调度失败同样不得吞掉已确认卡；恢复后由既有 error 事件提示重试。
+        _restore_pending_confirm(db, session_id, merged, user_id)
+        raise
+    except Exception as exc:
+        _restore_pending_confirm(db, session_id, merged, user_id)
+        agent_trace(f"confirm_ack 启动重放失败 type={type(exc).__name__}")
+        raise AppError(ErrorCode.INTERNAL, "确认任务重放失败，请稍后重试") from exc
 
 
 def _iso(value: datetime | None = None) -> str:
@@ -920,6 +975,45 @@ def _clear_pending_confirm(db: Session, session_id: str) -> None:
     )
 
 
+def _restore_pending_confirm(
+    db: Session,
+    session_id: str,
+    task_spec: dict[str, Any],
+    user_id: str,
+) -> None:
+    """在确认重放未入队时恢复待确认卡，且不覆盖可能已生成的新卡。
+
+    回放租约已阻止本进程普通回合并发；额外的 ``IS NULL`` 条件仍为断线恢复或
+    多连接边界提供纵深保护。TaskSpec 经同源校验后才会到达此处，序列化为 JSONB
+    与 ``pending_confirm`` 的持久化格式保持一致。
+    """
+    try:
+        db.execute(
+            text(
+                "UPDATE sessions SET pending_confirm = CAST(:pending_confirm AS jsonb), "
+                "pending_confirm_author_id = :author_id "
+                "WHERE id = :session_id AND pending_confirm IS NULL"
+            ),
+            {
+                "pending_confirm": json.dumps(task_spec, ensure_ascii=False),
+                "author_id": user_id,
+                "session_id": session_id,
+            },
+        )
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        agent_trace(f"confirm_ack 恢复待确认卡失败 type={type(exc).__name__}")
+
+
+def _error_code_from_payload(value: object) -> ErrorCode:
+    """把图内错误码安全归一为公开 ErrorCode，未知值不透出实现细节。"""
+    try:
+        return ErrorCode(str(value))
+    except ValueError:
+        return ErrorCode.INTERNAL
+
+
 async def _translate_event(
     db: Session,
     websocket: WebSocket,
@@ -1114,6 +1208,11 @@ async def _run_turn(
                 if task_id_hit:
                     turn_sink["enqueued_task_id"] = task_id_hit
             for event in iter_pending_events(chunk):
+                if turn_sink is not None and event.get("kind") == "error":
+                    # 确认重放的 runner 依此判断图内已发送业务错误，避免恢复卡后
+                    # 再重复推送同一条错误。
+                    turn_sink["error"] = dict(event.get("payload") or {})
+                    turn_sink["error_emitted"] = True
                 if event.get("kind") == "response.completed":
                     # completed 必须是本轮最后一条持久事件。
                     deferred_completed.append(event)
@@ -1169,6 +1268,9 @@ async def _run_turn(
     except AppError as exc:
         db.rollback()
         logger.info("Agent 回合失败 session=%s code=%s", session_id, exc.code.value)
+        if turn_sink is not None:
+            turn_sink["error"] = {"code": exc.code.value, "message": exc.message}
+            turn_sink["error_emitted"] = True
         await _emit_error(db, websocket, state, session_id, exc)
         await _emit_turn_completed(
             db,
@@ -1182,6 +1284,9 @@ async def _run_turn(
     except Exception as exc:
         db.rollback()
         logger.exception("Agent 回合内部异常 session=%s type=%s", session_id, type(exc).__name__)
+        if turn_sink is not None:
+            turn_sink["error"] = {"code": ErrorCode.INTERNAL.value, "message": "Agent 调用失败"}
+            turn_sink["error_emitted"] = True
         await _emit_error(
             db,
             websocket,

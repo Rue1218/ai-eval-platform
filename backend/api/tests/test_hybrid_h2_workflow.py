@@ -73,7 +73,7 @@ def test_w0_rag_fail_closed() -> None:
 
 def test_w0_ambiguous_and_empty_reject_without_guessing() -> None:
     """并列与零命中均就地收尾（不猜测技能）。"""
-    both = select_skill_node(_state("先跑基准评测再发起压测"))
+    both = select_skill_node(_state("帮我跑一次基准评测和压测任务"))
     assert both["workflow_failed"] is True
     assert "多个评测意图" in next(
         e for e in both["pending_events"] if e["kind"] == "error"
@@ -89,6 +89,21 @@ def test_w0_rejects_concept_question_before_skill_selection() -> None:
     assert "概念问答" in next(
         event for event in update["pending_events"] if event["kind"] == "error"
     )["payload"]["message"]
+
+
+def test_w0_adopts_enabled_l1_skill_before_keyword_matching() -> None:
+    """L1 已验证的 skill_id 必须优先于 W0 关键词候选，避免二段路由漂移。"""
+    update = select_skill_node(
+        _state("跑一次未知评估任务", skill_id="skill-testcase")
+    )
+    assert update["skill_id"] == "skill-testcase"
+    assert update["skill_candidates"] == ("skill-testcase",)
+
+
+def test_w0_normalizes_quality_then_stress_to_benchmark() -> None:
+    """先评后压只选质量评测技能，不能与直接压测形成并列歧义。"""
+    update = select_skill_node(_state("跑一次基准评测，成功后压测"))
+    assert update["skill_id"] == "skill-benchmark"
 
 
 # ─── 2. W1–W4：槽位 / 加载 / 门禁 / TaskSpec ───
@@ -132,6 +147,23 @@ def test_w4_builds_task_spec_from_defaults() -> None:
     assert spec["kind"] == "benchmark"
     assert spec["profile_ids"] == []
     assert spec["with_stress"] is False
+
+
+def test_w1_explicit_slots_are_merged_into_task_spec() -> None:
+    """W1 仅预填明确短 ID，W4 合并槽位且把先评后压写为 with_stress。"""
+    state = _state(
+        "对 ds-math-qa 用 profile-A 跑一次基准评测，成功后压测",
+        skill_id="skill-benchmark",
+    )
+    prepared = prepare_slots_node(state)
+    assert prepared["slots"] == {
+        "profile_ids": ["profile-A"],
+        "dataset_id": "ds-math-qa",
+    }
+    spec = build_task_spec_node({**state, **prepared})["task_spec"]
+    assert spec["profile_ids"] == ["profile-A"]
+    assert spec["dataset_id"] == "ds-math-qa"
+    assert spec["with_stress"] is True
 
 
 # ─── 3. W5–W7：确认 / 入队 / 收尾 ───
