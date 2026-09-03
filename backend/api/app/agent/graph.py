@@ -113,6 +113,11 @@ class LangGraphAgent:
         self._sandbox_dir = sandbox_dir
         self._user_id = user_id
         self._checkpointer = checkpointer
+        # 原生工具单回合原文存储（不参与序列化；H5 修复：工具十层链的
+        # native 结果回灌依赖本 store，缺失时全部 native 工具被拒）
+        from app.harness.execution.native_results import NativeToolResultStore
+
+        self._native_tool_results = NativeToolResultStore()
         self._graph = self._build_graph()
 
     def _build_graph(self):
@@ -163,6 +168,7 @@ class LangGraphAgent:
             db_factory=self._db_factory,  # type: ignore[arg-type]
             sandbox_dir=self._sandbox_dir,
             user_id=self._user_id,
+            native_tool_results=self._native_tool_results,
         )
         graph.add_node("plan", make_plan_node(self._gateway))
         graph.add_node("discover", make_discover_node(agent_registry, tool_registry))
@@ -290,11 +296,26 @@ class LangGraphAgent:
             ):
                 yield mode, chunk
         finally:
-            self._discard_thread(thread_id)
+            await self._discard_thread_guarded(thread_id)
 
     async def ahas_pending_interrupt(self, thread_id: str) -> bool:
-        """判断 thread 是否仍停在待恢复的人工中断处（骨架版恒为 False）。"""
-        return False
+        """判断 thread 是否仍停在待恢复的人工中断处（H5）。
+
+        判定依据为编译图 ``aget_state(config).next``：interrupt 暂停的线程
+        保留待恢复节点（next 非空），正常完成的回合 next 为空；本仓库所用
+        LangGraph 版本不把 pending_interrupts 写入检查点元数据，故不用
+        metadata 判定。无检查点或读取失败一律返回 False（安全默认：不因
+        检查点异常阻塞主流程）。
+        """
+        checkpointer = getattr(self._graph, "checkpointer", None)
+        if checkpointer is None:
+            return False
+        config = {"configurable": {"thread_id": thread_id}}
+        try:
+            snapshot = await self._graph.aget_state(config)
+        except Exception:  # noqa: BLE001 —— 检查点异常不阻塞恢复判定主流程
+            return False
+        return bool(getattr(snapshot, "next", ()))
 
     @staticmethod
     def _prepare_run_config(config: dict | None) -> tuple[dict, str]:
@@ -309,9 +330,20 @@ class LangGraphAgent:
         run_config.setdefault("recursion_limit", 32)
         return run_config, thread_id
 
-    @staticmethod
-    def _discard_thread(thread_id: str) -> None:
-        """骨架版无原生工具结果存储，保留占位以对齐既有 finally 语义。"""
+    def _discard_thread(self, thread_id: str) -> None:
+        """回合结束清理单回合原生工具原文（进程内 store，不序列化）。"""
+
+    async def _discard_thread_guarded(self, thread_id: str) -> None:
+        """H5：中断暂停的回合保留单回合原文（resume 继续执行需要）；仅
+        无待恢复中断（回合正常结束/异常）时清理，避免 resume 后模型
+        上下文丢失原生工具原文。"""
+        if self._checkpointer is not None:
+            try:
+                if await self.ahas_pending_interrupt(thread_id):
+                    return
+            except Exception:  # noqa: BLE001 —— 判定失败按可清理处理
+                pass
+        self._native_tool_results.clear(thread_id)
 
     @staticmethod
     def _response_from_state(state: dict) -> ModelResponse:
