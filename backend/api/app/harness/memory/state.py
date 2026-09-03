@@ -103,8 +103,9 @@ class GraphState(TypedDict, total=False):
     request: SerializableRequest  # 路由节点读文本，chat 节点重建 ModelRequest
     mode: AgentMode  # 路由节点写，条件边读
     pending_events: Annotated[list[NodeEvent], _append_events]  # 节点 append，ws.py 图外消费清空
-    plan: object | None  # 阶段 4：PlanArtifact（M7 晚波）投影
-    observations: Annotated[list[object], _append_observations]  # 阶段 2：Observation（M7 早波），append 累积
+    plan: object | None  # PlanArtifact 投影（H3 plan 节点写：intent/skill_id/slots/tools_needed/delivery/budget/allows_replan/notes）
+    plan_step_index: int  # H3：计划步执行游标（0 基）；plan 置 0，Replan（H4）后重置，越界即 turn_failed
+    observations: Annotated[list[object], _append_observations]  # 工具观察（Observation 投影）；只作模型输入
     pending_tool: Mapping[str, object] | None  # 阶段 2：当前 ToolCall 投影（react 条件边分流）
     pending_tools: list[Mapping[str, object]]  # 兼容队列：批次内尚未执行的后续项
     pending_tool_batch: Mapping[str, object] | None  # P2：同轮 ToolBatch（batch_id/items/block_index/status）

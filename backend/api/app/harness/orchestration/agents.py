@@ -85,6 +85,42 @@ class AgentRegistry:
         """判断 Worker 是否已注册（discover 兜底与启动校验用）。"""
         return agent_id in self._defs
 
+    def discover(
+        self,
+        *,
+        capabilities: frozenset[str] = frozenset(),
+        skill_id: str | None = None,
+    ) -> AgentDef:
+        """确定性选择 Worker（H3 discover 节点消费；不调模型，同输入稳定同输出）。
+
+        匹配规则（注册序稳定，无随机）：
+        1. ``worker.sandbox`` 静态排除——code 能力须等 H5 持久化 HITL 与安全
+           评审后放开，任何 discover 结果都不得包含它（fail-closed）；
+        2. 候选 = 能力全含（请求 capabilities ⊆ 声明的 capabilities）的 Worker；
+        3. 得分 = 命中能力数 + 绑定该 ``skill_id`` 的加成；得分最高者胜出，
+           并列取注册序在先；零命中回落 ``worker.general``（验收：同一输入
+           稳定选择同一 Agent）。
+        """
+        excluded = {"worker.sandbox"}  # H5 前任何 discover 不得选中
+        best: AgentDef | None = None
+        best_score = -1
+        for def_ in self.iter_defs():
+            if def_.agent_id in excluded:
+                continue
+            if not capabilities.issubset(def_.capabilities):
+                continue
+            score = len(capabilities & def_.capabilities)
+            if skill_id is not None and skill_id in def_.skill_ids:
+                score += 1
+            if score > best_score:
+                best, best_score = def_, score
+        if best is not None:
+            return best
+        fallback = self._defs.get("worker.general")
+        if fallback is None:
+            raise AppError(ErrorCode.VALIDATION, "缺少通用 Worker（worker.general 未注册）")
+        return fallback
+
 
 def build_default_agent_registry() -> AgentRegistry:
     """静态声明首批 Worker（与 ``build_default_registry`` 工具注册表并列）。

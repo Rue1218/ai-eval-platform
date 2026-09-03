@@ -26,6 +26,12 @@ from ..harness.memory import GraphState, SerializableRequest
 from ..llm import ModelGateway, ModelResponse
 from .router_node import direct_node, router_node
 from .routing import chat_stream_node
+from .taor_nodes import (
+    make_discover_node,
+    make_orchestrator_node,
+    make_plan_node,
+    make_tools_node,
+)
 from .workflow_nodes import (
     await_confirm_node,
     build_task_spec_node,
@@ -39,7 +45,8 @@ from .workflow_nodes import (
 
 
 def _route_by_engine(state: GraphState) -> str:
-    """Router 之后的顶层条件边：direct 零模型收尾，workflow 进 DAG，其余降级 chat。
+    """Router 之后的顶层条件边：direct 零模型收尾，workflow 进 DAG，
+    agent 进 TAOR 子图，其余降级 chat。
 
     防御语义：Router 未产出 ``engine``（异常路径）时回落 chat，不猜测。
     """
@@ -48,7 +55,25 @@ def _route_by_engine(state: GraphState) -> str:
         return "direct"
     if engine == "workflow":
         return "workflow"
+    if engine == "agent":
+        return "plan"
     return "chat_stream"
+
+
+def _after_orchestrator(state: GraphState) -> str:
+    """TAOR：Act 未决（有 pending_tool）→ tools；turn_failed / 收尾 → END。"""
+    if state.get("turn_failed") or state.get("workflow_failed"):
+        return "END"
+    if state.get("pending_tool"):
+        return "tools"
+    return "END"
+
+
+def _after_tools(state: GraphState) -> str:
+    """TAOR：工具执行后必须回 orchestrator 看 Observation（done 由模型裁决）。"""
+    if state.get("turn_failed") or state.get("workflow_failed"):
+        return "END"
+    return "orchestrator"
 
 
 def _after_validate_gates(state: GraphState) -> str:
@@ -69,25 +94,33 @@ class LangGraphAgent:
         gateway: ModelGateway | None = None,
         registry: object | None = None,
         *,
+        agent_registry: object | None = None,
         db_factory: object | None = None,
         sandbox_dir: str | None = None,
         user_id: str = "",
         checkpointer: object | None = None,
     ) -> None:
-        """创建 Agent 图；网关/检查点可注入测试夹具或不同模型路由。
+        """创建 Agent 图；网关/注册表/检查点可注入测试夹具。
 
-        骨架版不构建工具节点，``registry`` / ``db_factory`` / ``sandbox_dir``
-        参数仅为兼容既有调用方保留，实际不参与图构建。
+        H3：``registry``（ToolRegistry）/ ``agent_registry``（AgentRegistry）
+        参与 ``engine=agent`` 分支构建——缺省时按默认注册表构建；纯对话
+        开关关闭时不构建工具节点，两个注册表参数不参与图。
         """
         self._gateway = gateway or ModelGateway()
+        self._registry = registry
+        self._agent_registry = agent_registry
+        self._db_factory = db_factory
+        self._sandbox_dir = sandbox_dir
+        self._user_id = user_id
         self._checkpointer = checkpointer
         self._graph = self._build_graph()
 
     def _build_graph(self):
         """构建图：主开关关闭保持纯对话；开启接入 Router 四路分流。
 
-        H2：``engine=workflow`` 走 W0–W7 Workflow DAG（确定性链）；``agent``
-        未实现仍降级 ``chat_stream``；W3/W5 失败经条件边就地收尾。
+        H2：``engine=workflow`` 走 W0–W7 Workflow DAG；
+        H3：``engine=agent`` 走 TAOR 子图（plan → discover → orchestrator ⇄ tools）；
+        W3/W5 失败与 TAOR 守卫经条件边就地收尾。
         """
         graph = StateGraph(GraphState)
         graph.add_node("chat_stream", self._make_chat_node())
@@ -98,19 +131,58 @@ class LangGraphAgent:
             graph.add_node("router", self._make_router_node())
             graph.add_node("direct", self._make_direct_node())
             graph.add_edge(START, "router")
-            # H2：workflow 引擎接入 Workflow DAG；agent 仍降级 chat_stream
             graph.add_conditional_edges(
                 "router",
                 _route_by_engine,
-                {"direct": "direct", "chat_stream": "chat_stream", "workflow": "workflow"},
+                {
+                    "direct": "direct",
+                    "chat_stream": "chat_stream",
+                    "workflow": "workflow",
+                    "plan": "plan",
+                },
             )
             graph.add_edge("direct", END)
             graph.add_edge("chat_stream", END)
             self._add_workflow_dag(graph)
+            self._add_agent_subgraph(graph)
         # 阶段 3：Checkpointer 按 thread_id 隔离回合（M3-D4 恢复语义）
         if self._checkpointer is not None:
             return graph.compile(checkpointer=self._checkpointer)
         return graph.compile()
+
+    def _add_agent_subgraph(self, graph: StateGraph) -> None:
+        """H3 TAOR 子图：plan → discover → orchestrator ⇄ tools（单图内循环）。"""
+        from app.harness.execution.registry import build_default_registry
+        from app.harness.execution.toolnode import build_tool_node
+        from app.harness.orchestration.agents import build_default_agent_registry
+
+        tool_registry = self._registry or build_default_registry()
+        agent_registry = self._agent_registry or build_default_agent_registry()
+        tools_node = build_tool_node(
+            tool_registry,  # type: ignore[arg-type]
+            db_factory=self._db_factory,  # type: ignore[arg-type]
+            sandbox_dir=self._sandbox_dir,
+            user_id=self._user_id,
+        )
+        graph.add_node("plan", make_plan_node(self._gateway))
+        graph.add_node("discover", make_discover_node(agent_registry, tool_registry))
+        graph.add_node(
+            "orchestrator",
+            make_orchestrator_node(self._gateway, agent_registry, tool_registry),
+        )
+        graph.add_node("tools", make_tools_node(tools_node))
+        graph.add_edge("plan", "discover")
+        graph.add_edge("discover", "orchestrator")
+        graph.add_conditional_edges(
+            "orchestrator",
+            _after_orchestrator,
+            {"tools": "tools", "END": END},
+        )
+        graph.add_conditional_edges(
+            "tools",
+            _after_tools,
+            {"orchestrator": "orchestrator", "END": END},
+        )
 
     def _add_workflow_dag(self, graph: StateGraph) -> None:
         """W0–W7 八节点确定性链（H2；失败条件边就地收尾，无重试回环）。"""
