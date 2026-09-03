@@ -151,7 +151,14 @@ def test_graph_interrupt_then_approve_resume(_engine_on, monkeypatch) -> None:
     agent = LangGraphAgent(gateway, checkpointer=_saver())
     config = _engine_config(thread_id)
     interrupt_value, events = _collect_until_interrupt(agent, "排查一下测试环境异常", config)
-    assert interrupt_value is not None
+    if interrupt_value is None:
+        trace = [
+            (node, [e["kind"] for e in update.get("pending_events", [])] if isinstance(update, dict) else type(update).__name__)
+            for _mode, chunk in events
+            if isinstance(chunk, dict)
+            for node, update in chunk.items()
+        ]
+        raise AssertionError(f"未捕获 interrupt；图轨迹={trace}；调用={gateway.calls}")
     assert interrupt_value.get("type") == "tool_approval"
     assert interrupt_value.get("name") == "bash"
     assert "touch" in interrupt_value.get("command", "")
@@ -180,8 +187,15 @@ def test_graph_interrupt_then_reject_stops_command(_engine_on, monkeypatch) -> N
     gateway = _ScriptedGateway([_PLAN_OK, _REACT_BASH, _REACT_DONE])
     agent = LangGraphAgent(gateway, checkpointer=_saver())
     config = _engine_config(thread_id)
-    interrupt_value, _events = _collect_until_interrupt(agent, "排查一下测试环境异常", config)
-    assert interrupt_value is not None
+    interrupt_value, events = _collect_until_interrupt(agent, "排查一下测试环境异常", config)
+    if interrupt_value is None:
+        trace = [
+            (node, [e["kind"] for e in update.get("pending_events", [])] if isinstance(update, dict) else type(update).__name__)
+            for _mode, chunk in events
+            if isinstance(chunk, dict)
+            for node, update in chunk.items()
+        ]
+        raise AssertionError(f"未捕获 interrupt；图轨迹={trace}；调用={gateway.calls}")
     resumed = _resume(agent, config, {"action": "reject", "id": interrupt_value["id"]})
     resumed_pending = _all_pending(resumed)
     tool_results = [e for e in resumed_pending if e["kind"] == "tool_result"]
