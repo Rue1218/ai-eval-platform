@@ -83,15 +83,34 @@ def _items():
 
 
 def _retrieve_mock(db, kb_id, query, mode="hybrid", k=5):
-    """固定检索结果：第 1 行命中期望文档，第 2 行未命中。"""
+    """固定检索结果：第 1 行命中期望文档，第 2 行未命中；引擎来源恒为 lightrag。"""
     if "退款" in query:
-        return [
-            {"chunk_id": "doc-a#c01", "doc_id": "doc-a", "doc_name": "a.txt", "text": "退款 1-3 个工作日到账", "similarity": 0.9}
-        ]
-    return [{"chunk_id": "doc-x#c01", "doc_id": "doc-x", "doc_name": "x.txt", "text": "无关内容", "similarity": 0.5}]
+        return (
+            [
+                {"chunk_id": "doc-a#c01", "doc_id": "doc-a", "doc_name": "a.txt", "text": "退款 1-3 个工作日到账", "similarity": 0.9}
+            ],
+            "lightrag",
+        )
+    return (
+        [{"chunk_id": "doc-x#c01", "doc_id": "doc-x", "doc_name": "x.txt", "text": "无关内容", "similarity": 0.5}],
+        "lightrag",
+    )
 
 
-def _setup(monkeypatch, config: dict | None = None):
+def _retrieve_local_mock(db, kb_id, query, mode="hybrid", k=5):
+    """引擎来源恒为本地关键词检索（LightRAG 不可用降级场景）。"""
+    items, _ = _retrieve_mock(db, kb_id, query, mode=mode, k=k)
+    return items, "local"
+
+
+def _retrieve_mixed_mock(db, kb_id, query, mode="hybrid", k=5):
+    """第 1 行走 LightRAG，第 2 行回退本地（部分降级场景）。"""
+    if "退款" in query:
+        return _retrieve_mock(db, kb_id, query, mode=mode, k=k)
+    return _retrieve_local_mock(db, kb_id, query, mode=mode, k=k)
+
+
+def _setup(monkeypatch, config: dict | None = None, retrieve_mock=_retrieve_mock):
     config = config or {
         "kb_id": "kb-1",
         "gold_qa_id": "qa-1",
@@ -101,7 +120,7 @@ def _setup(monkeypatch, config: dict | None = None):
     task = _task(config)
     db = _FakeDb({Task: [task], KnowledgeBase: [_kb()], GoldQa: [_qa()], GoldQaItem: _items()})
     monkeypatch.setattr(rag_module, "SessionLocal", lambda: db)
-    monkeypatch.setattr(rag_module, "retrieve", _retrieve_mock)
+    monkeypatch.setattr(rag_module, "retrieve_with_source", retrieve_mock)
     monkeypatch.setattr(rag_module, "push_ws", lambda *a, **k: None)
     monkeypatch.setattr(
         rag_module, "claim_running_task_for_terminal_write", lambda _db, _tid: task
@@ -172,3 +191,42 @@ def test_run_rag_fails_when_qa_empty(monkeypatch):
 
     assert task.status == "failed"
     assert task.result.get("error_code") == "VALIDATION"
+
+
+def test_run_rag_reports_lightrag_engine_no_degraded(monkeypatch):
+    """全部查询走 LightRAG：degraded 为 None，engine_counts 如实记录。"""
+    task, db = _setup(monkeypatch, retrieve_mock=_retrieve_mock)
+    rag_module.run_rag(task.id)
+
+    report = next(o for o in db.added if isinstance(o, Report))
+    metrics = report.metrics
+    assert metrics["degraded"] is None
+    assert metrics["degraded_note"] is None
+    assert metrics["engine_counts"] == {"lightrag": 2, "local": 0}
+    assert task.status == "succeeded"
+
+
+def test_run_rag_reports_local_keyword_degraded(monkeypatch):
+    """LightRAG 不可用全部回退本地：degraded=local_keyword 且说明文字非空。"""
+    task, db = _setup(monkeypatch, retrieve_mock=_retrieve_local_mock)
+    rag_module.run_rag(task.id)
+
+    report = next(o for o in db.added if isinstance(o, Report))
+    metrics = report.metrics
+    assert metrics["degraded"] == "local_keyword"
+    assert metrics["degraded_note"]
+    assert "LightRAG" in metrics["degraded_note"]
+    assert metrics["engine_counts"] == {"lightrag": 0, "local": 2}
+    assert task.status == "succeeded"
+
+
+def test_run_rag_reports_partial_degraded(monkeypatch):
+    """部分查询回退：degraded=partial，可据 engine_counts 区分引擎来源。"""
+    task, db = _setup(monkeypatch, retrieve_mock=_retrieve_mixed_mock)
+    rag_module.run_rag(task.id)
+
+    report = next(o for o in db.added if isinstance(o, Report))
+    metrics = report.metrics
+    assert metrics["degraded"] == "partial"
+    assert metrics["engine_counts"] == {"lightrag": 1, "local": 1}
+    assert task.status == "succeeded"

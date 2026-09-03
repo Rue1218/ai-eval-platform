@@ -159,12 +159,31 @@ def _local_retrieve(db, kb_id: str, query: str, k: int) -> list[dict]:
     return scored[: min(k, MAX_K)]
 
 
-def retrieve(db, kb_id: str, query: str, mode: str = "hybrid", k: int = 5) -> list[dict]:
-    """执行一次 Top-K 检索；LightRAG 可用时优先，否则本地关键词兜底。"""
+# 检索引擎来源标识（报告诚实标注降级用）
+RETRIEVE_SOURCE_LIGHTRAG = "lightrag"
+RETRIEVE_SOURCE_LOCAL = "local"
+
+
+def retrieve_with_source(
+    db, kb_id: str, query: str, mode: str = "hybrid", k: int = 5
+) -> tuple[list[dict], str]:
+    """执行一次 Top-K 检索并返回引擎来源，供评测报告诚实标注降级。
+
+    返回 ``(items, source)``：``source`` ∈ {lightrag, local}——LightRAG
+    可用（返回非空）时为 ``lightrag``；未配置 / 不可达 / 空结果回退本地
+    关键词检索时为 ``local``。评测报告必须据此区分引擎来源，禁止把
+    本地兜底结果无标注地当作 LightRAG 引擎成绩对外呈现。
+    """
     k = max(1, min(int(k or DEFAULT_K), MAX_K))
     items = _try_lightrag(query, mode, k)
-    if items is None:
-        items = _local_retrieve(db, kb_id, query, k)
+    if items is not None:
+        return items, RETRIEVE_SOURCE_LIGHTRAG
+    return _local_retrieve(db, kb_id, query, k), RETRIEVE_SOURCE_LOCAL
+
+
+def retrieve(db, kb_id: str, query: str, mode: str = "hybrid", k: int = 5) -> list[dict]:
+    """向后兼容封装：只返回 Top-K 检索结果，不暴露引擎来源（REST 目录等场景）。"""
+    items, _ = retrieve_with_source(db, kb_id, query, mode=mode, k=k)
     return items
 
 
