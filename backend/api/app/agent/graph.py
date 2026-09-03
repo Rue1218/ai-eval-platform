@@ -4,8 +4,12 @@
 
 - **关闭（默认）**：``START → chat_stream → END``，与骨架化纯对话完全一致
   （回归保证：事件序列与 payload 不因本文件引入而漂移）；
-- **开启（H1-H3）**：``START → router → direct | chat_stream | workflow | agent``；
-  workflow 进入 W0–W7 确定性链，agent 进入 TAOR 子图。
+- **开启（H1–H4）**：``START → router → direct | chat_stream | workflow | agent``；
+  workflow 进入 W0–W7 确定性链，agent 进入 TAOR 子图，并在 H4 接入 ``reflect``
+  五档判决回边：``plan → discover → orchestrator ⇄ tools``，``orchestrator``
+  停止或守卫截断后一律进 ``reflect``，由它裁决 ``pass`` / ``clarify`` / ``reject``
+  收尾，或 ``repair`` 回 ``orchestrator``、``retry`` 回 ``plan``（两档均为回合级
+  硬上限）。
 
 节点只返回纯数据（pending_events / response 投影），WebSocket、数据库与
 平台任务队列由路由层（ws.py）负责，节点内不持有外部资源（§2.5 事件桥接契约）。
@@ -29,6 +33,7 @@ from .taor_nodes import (
     make_discover_node,
     make_orchestrator_node,
     make_plan_node,
+    make_reflect_node,
     make_tools_node,
 )
 from .workflow_nodes import (
@@ -42,6 +47,9 @@ from .workflow_nodes import (
     validate_gates_node,
     workflow_failure_node,
 )
+
+# 混合引擎开启时的递归上限（推导见 _prepare_run_config；关闭时沿用骨架版 32）
+_HYBRID_RECURSION_LIMIT = 64
 
 
 def _route_by_engine(state: GraphState) -> str:
@@ -61,11 +69,31 @@ def _route_by_engine(state: GraphState) -> str:
 
 
 def _after_orchestrator(state: GraphState) -> str:
-    """TAOR：Act 未决（有 pending_tool）→ tools；turn_failed / 收尾 → END。"""
-    if state.get("turn_failed") or state.get("workflow_failed"):
+    """TAOR：Act 未决（有 pending_tool）→ tools；停止或守卫截断 → reflect 判决。
+
+    H4：模型自主停止与守卫截断都不再直接 END——一律先进 reflect，由它决定
+    放行（pass）/ 提问（clarify）/ 收尾（reject）/ 修复（repair）/ 重规划（retry）。
+    「模型觉得差不多了」不是停止条件（ADR-2）。
+    """
+    if state.get("workflow_failed"):
         return "END"
     if state.get("pending_tool"):
         return "tools"
+    return "reflect"
+
+
+def _after_reflect(state: GraphState) -> str:
+    """H4：reflect 五档判决的回边与收尾。
+
+    ``repair`` 回 orchestrator（失败阶梯首档，最多 MAX_REPAIRS 次）；
+    ``retry`` 回 plan（有界重规划，最多 MAX_REPLANS 次）；
+    ``pass`` / ``clarify`` / ``reject`` 一律 END（三档都是终态，不再回圈）。
+    """
+    verdict = state.get("verdict")
+    if verdict == "repair":
+        return "orchestrator"
+    if verdict == "retry":
+        return "plan"
     return "END"
 
 
@@ -161,7 +189,11 @@ class LangGraphAgent:
         return graph.compile()
 
     def _add_agent_subgraph(self, graph: StateGraph) -> None:
-        """H3 TAOR 子图：plan → discover → orchestrator ⇄ tools（单图内循环）。"""
+        """H3 TAOR 子图 + H4 reflect 判决回边（单图内循环，全部硬上限有界）。
+
+        拓扑：``plan → discover → orchestrator ⇄ tools``；``orchestrator`` 停止后
+        进 ``reflect``，后者可回 ``orchestrator``（repair）或 ``plan``（retry）。
+        """
         from app.harness.execution.registry import build_default_registry
         from app.harness.execution.toolnode import build_tool_node
         from app.harness.orchestration.agents import get_default_agent_registry
@@ -181,12 +213,18 @@ class LangGraphAgent:
             make_orchestrator_node(self._gateway, agent_registry, tool_registry),
         )
         graph.add_node("tools", make_tools_node(tools_node))
+        graph.add_node("reflect", make_reflect_node(self._gateway))
         graph.add_edge("plan", "discover")
         graph.add_edge("discover", "orchestrator")
         graph.add_conditional_edges(
             "orchestrator",
             _after_orchestrator,
-            {"tools": "tools", "END": END},
+            {"tools": "tools", "reflect": "reflect"},
+        )
+        graph.add_conditional_edges(
+            "reflect",
+            _after_reflect,
+            {"orchestrator": "orchestrator", "plan": "plan", "END": END},
         )
         graph.add_conditional_edges(
             "tools",
@@ -338,7 +376,13 @@ class LangGraphAgent:
             thread_id = f"agent:{uuid4().hex}"
             configurable["thread_id"] = thread_id
         run_config["configurable"] = configurable
-        run_config.setdefault("recursion_limit", 32)
+        # H4：agent 分支新增 repair / retry 两条回边，超级步上界由「2（plan+discover）
+        # + 2×MAX_REPLANS（重规划回边）+ 2×tool_turns 上限（20）」推导 ≈ 46，
+        # 取 64 预留余量；真正的硬上限仍是回合预算与 MAX_REPAIRS / MAX_REPLANS。
+        run_config.setdefault(
+            "recursion_limit",
+            _HYBRID_RECURSION_LIMIT if settings.hybrid_engine_enabled else 32,
+        )
         return run_config, thread_id
 
     @staticmethod

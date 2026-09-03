@@ -75,11 +75,15 @@ REACT_SCHEMA: dict = {
     "required": ["thought", "tool", "arguments", "done", "protocol", "version"],
 }
 
+# 复核协议（H4 恢复性扩展）：verdict 从三档扩为五档，与 state.ReflectVerdict
+# 及 feedback.review.Review 判决口径一致；repair_hint 为可选（仅 verdict=repair
+# 时由模型给出可执行修复建议，经 Observation 进入下一轮 Executor，不落库）。
 REFLECT_SCHEMA: dict = {
     "properties": {
-        "verdict": {"enum": ["pass", "clarify", "reject"]},
+        "verdict": {"enum": ["pass", "clarify", "reject", "retry", "repair"]},
         "reason": {"type": "string"},
         "clarify_question": {"type": ["string", "null"]},
+        "repair_hint": {"type": ["string", "null"]},
         "protocol": {"type": "string"},
         "version": {"type": "string"},
     },
@@ -243,7 +247,11 @@ def parse_react(raw: str) -> ProtocolResult:
 
 
 def parse_reflect(raw: str) -> ProtocolResult:
-    """复核协议解析；verdict ∈ {pass, clarify, reject}。"""
+    """复核协议解析（H4 五档）；verdict ∈ {pass, clarify, reject, retry, repair}。
+
+    仅消费授权字段（verdict / reason / clarify_question / repair_hint）；
+    解析失败抛 AppError(VALIDATION)，由 reflect 节点回落确定性判决（不重试）。
+    """
     return _parse(raw, "reflect", REFLECT_SCHEMA, REFLECT_VERSION)
 
 

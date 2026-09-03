@@ -213,6 +213,10 @@ _REACT_DONE = (
     '{"thought":"已定位原因","tool":null,"arguments":{},"done":true,'
     '"protocol":"react","version":"react.v1"}\n\n结论：样本量不足，建议补数。'
 )
+# H4：orchestrator 收尾后由 reflect 判决，无失败路径需多一次受控复核短调用
+_REFLECT_PASS = (
+    '{"verdict":"pass","reason":"可直接给出","protocol":"reflect","version":"reflect.v1"}'
+)
 
 
 # ─── H0：开关关闭纯对话全链路 ───
@@ -331,25 +335,35 @@ async def test_h2_confirm_replay_missing_assets_not_enqueued(monkeypatch) -> Non
 
 @pytest.mark.asyncio
 async def test_h3_agent_taor_plan_discover_done(monkeypatch) -> None:
-    """探索请求 → plan(脚本) → discover(worker.diagnose) → orchestrator done 收尾。"""
-    gateway = _E2eGateway(invoke_texts=[_PLAN_OK, _REACT_DONE])
+    """探索请求 → plan(脚本) → discover(worker.diagnose) → orchestrator done → reflect 放行。
+
+    H4：orchestrator 不再自行收尾，候选答复交 reflect 判决后发出（多一次复核短调用）。
+    """
+    gateway = _E2eGateway(invoke_texts=[_PLAN_OK, _REACT_DONE, _REFLECT_PASS])
     emitted, _db, _sink = await _drive(monkeypatch, gateway, "排查一下测试报告失败原因", hybrid=True)
     completed = _completed(emitted)
     assert completed["engine"] == "agent"
     assert completed["agent_id"] == "worker.diagnose"
+    assert completed["finish_reason"] == "stop"
     texts = _assistant_texts(emitted)
     assert any("样本量不足" in text for text in texts)
-    assert gateway.invoke_calls == 2  # plan 1 次 + orchestrator done 1 次
+    assert gateway.invoke_calls == 3  # plan 1 次 + orchestrator done 1 次 + reflect 1 次
 
 
 @pytest.mark.asyncio
 async def test_h3_agent_read_observation_failure_then_done(monkeypatch) -> None:
-    """真实工具执行链：read（无沙箱上下文）→ 失败观察回灌 → 模型收尾不崩溃。"""
+    """真实工具执行链：read（无沙箱上下文）失败 → H4 失败阶梯 repair → 收敛收尾。
+
+    工具级失败经十层链异常隔离为 INTERNAL error 事件，但回合不崩溃（隔离语义：
+    错误不打断图流）。H4 后失败不再直接放行：先 ``repair`` 注入修复观察回
+    Executor 再试一次；本计划 ``allows_replan=false``，修复配额用尽即 ``reject``
+    收尾——**不得**以 ``pass`` 静默放行失败。
+    """
     react_read = (
         '{"thought":"读取报告","tool":"read","arguments":{"path":"result.md"},'
         '"done":false,"protocol":"react","version":"react.v1"}'
     )
-    gateway = _E2eGateway(invoke_texts=[_PLAN_OK, react_read, _REACT_DONE])
+    gateway = _E2eGateway(invoke_texts=[_PLAN_OK, react_read, _REACT_DONE, _REACT_DONE])
     emitted, _db, _sink = await _drive(monkeypatch, gateway, "排查一下测试报告失败原因", hybrid=True)
     events = [event for event, _payload, _ in emitted]
     assert "tool_call" in events and "tool_result" in events
@@ -359,9 +373,10 @@ async def test_h3_agent_read_observation_failure_then_done(monkeypatch) -> None:
     assert "redacted" in tool_result and "error" in tool_result
     completed = _completed(emitted)
     assert completed["engine"] == "agent"
-    assert gateway.invoke_calls == 3  # plan + read Act + done
-    # 工具级失败经十层链异常隔离为 INTERNAL error 事件，但回合不崩溃、
-    # 模型据失败观察正常收尾（隔离语义：错误不打断图流）
+    # 失败阶梯：plan + read Act + done + repair 后 done，共 4 次调用后收敛
+    assert gateway.invoke_calls == 4
+    # 修复一次仍失败且计划不允许重规划 → 以可读原因 reject 收尾，不误判为 pass
+    assert completed["finish_reason"] == "error"
 
 
 @pytest.mark.asyncio
