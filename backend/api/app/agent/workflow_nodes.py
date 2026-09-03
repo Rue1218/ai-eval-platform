@@ -24,6 +24,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from typing import Any
+from uuid import uuid4
 
 from langgraph.config import RunnableConfig, get_config
 
@@ -106,6 +107,24 @@ def _error_events(code: str, message: str) -> list[dict]:
 def _step(name: str) -> dict:
     """节点推进标记（可观测：workflow_step 记录当前节点）。"""
     return {"workflow_step": name}
+
+
+def _completed_payload(state: GraphState, finish_reason: str) -> dict[str, object]:
+    """回合收尾 completed payload；engine 已写入时携带 Router 审计三元组。"""
+    payload: dict[str, object] = {"finish_reason": finish_reason, "role": "assistant"}
+    engine = state.get("engine")
+    if engine is not None:
+        payload.update(
+            engine=engine,
+            router_confidence=state.get("router_confidence"),
+            router_reason=state.get("router_reason"),
+        )
+    return payload
+
+
+def _narrate(text: str) -> dict:
+    """阶段叙述事件意图（assistant_message；单回合多条，API.md V1.67）。"""
+    return make_event("assistant_message", {"text": text, "role": "assistant", "latency_ms": 0})
 
 
 # ── W0 select_skill：二段路由（确定性；业务歧义就地收尾，禁止猜测）──
@@ -260,19 +279,34 @@ def build_task_spec_node(state: GraphState) -> dict:
 
 
 def await_confirm_node(state: GraphState, *, config: RunnableConfig | None = None) -> dict:
-    """W5：确认门槛。
+    """W5：确认门槛（H2 批次 2：无确认上下文时发卡收尾，有则合并放行 W6）。 (feat(agent): H2 批次 2 确认卡链路——W5 发卡与 ack 重放经 W6 唯一入队)
 
-    ``configurable["workflow_confirm"]``（ws 直连层确认后注入的载荷，批次 2）
-    存在时：合并槽位并校验必填资产 → 通过放行 W6，缺失就地收尾；
-    不存在时：本轮无确认上下文 → 置 ``workflow_failed`` 结束回合
-    （不产事件——确认卡契约随批次 2 恢复；H5 前图内不做 interrupt）。
+    - ``configurable["workflow_confirm"]``（ws 直连层确认回执注入的载荷）存在时：
+      合并槽位并校验必填资产 → 通过放行 W6，缺失就地收尾（error + 收尾 completed）；
+    - 不存在时：**发出确认卡**（``confirm`` 事件携带 W4 的 TaskSpec）并收尾本轮
+      （``workflow_failed`` 表示本轮链未走完，等待回执重放；H5 前图内不 interrupt）。
     """
     skill_id = state.get("skill_id")
     if not skill_id or state.get("workflow_failed"):
         return _step("W5_await_confirm")
     confirm = (config if config is not None else _configurable()).get("workflow_confirm")
     if not isinstance(confirm, Mapping) or not confirm:
-        return {**_step("W5_await_confirm"), "workflow_failed": True}
+        # 首次到达 W5：发卡收尾（卡即补槽 UI），不推进 W6
+        spec = dict(state.get("task_spec") or {})
+        missing = state.get("slots_missing") or ()
+        hint = "（卡上已按平台默认值预填，请补齐必填项后确认）" if missing else "（请核对后确认）"
+        message = f"任务单已生成{hint}。"
+        return {
+            **_step("W5_await_confirm"),
+            "workflow_failed": True,  # 本轮链到此收尾，等 ws 层回执重放
+            "confirm_id": uuid4().hex,
+            "pending_events": [
+                _narrate(message),
+                make_event("confirm", spec),
+                make_event("response.completed", _completed_payload(state, "stop")),
+            ],
+            "response": {"text": message, "usage": {}, "latency_ms": 0},
+        }
     kind = skill_to_kind(skill_id)
     spec = dict(state.get("task_spec") or {})
     patch = dict(confirm.get("task_spec") or {}) if isinstance(confirm, Mapping) else {}
@@ -289,10 +323,13 @@ def await_confirm_node(state: GraphState, *, config: RunnableConfig | None = Non
             **_step("W5_await_confirm"),
             "workflow_failed": True,
             "slots_missing": tuple(missing),
-            "pending_events": _error_events(
-                "VALIDATION",
-                f"确认卡缺少必填项：{', '.join(missing)}（请补齐后重试）",
-            ),
+            "pending_events": [
+                *_error_events(
+                    "VALIDATION",
+                    f"确认卡缺少必填项：{', '.join(missing)}（请补齐后重试）",
+                ),
+                make_event("response.completed", _completed_payload(state, "error")),
+            ],
         }
     return {**_step("W5_await_confirm"), "task_spec": spec}
 
@@ -351,12 +388,8 @@ def summarize_node(state: GraphState) -> dict:
     text = _ENQUEUE_SUMMARY.get(kind, "任务已入队，进度与报告将在对话中实时更新。")
     if task_id:
         text = f"{text}（任务 ID：{task_id}）"
-    completed_payload: dict[str, object] = {"finish_reason": "stop", "role": "assistant"}
-    engine = state.get("engine")
-    if engine is not None:
-        completed_payload["engine"] = engine
-        completed_payload["router_confidence"] = state.get("router_confidence")
-        completed_payload["router_reason"] = state.get("router_reason")
+    # 收尾 completed 与 W5 发卡收尾共用同一构造（engine 审计三元组）
+    completed_payload = _completed_payload(state, "stop")
     return {
         **_step("W7_summarize"),
         "pending_events": [

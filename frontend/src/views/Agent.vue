@@ -241,6 +241,22 @@
               </div>
             </div>
 
+            <!-- 2.5.1 任务确认卡（V1.67 恢复）：事实源在 ConfirmCard.vue，仅发起成员可操作 -->
+            <ConfirmCard
+              v-else-if="item.type === 'confirm' && item.card"
+              :item="item"
+              :available-profiles="availableProfiles"
+              :available-datasets="availableDatasets"
+              :available-kbs="availableKbs"
+              :available-gold-qas="availableGoldQas"
+              :active-task="activeTask"
+              :prod-approvers-text="prodApproversText"
+              :can-confirm="canConfirmItem(item)"
+              :confirm-author-label="confirmAuthorLabel(item)"
+              @confirm="handleConfirmAck(item, true)"
+              @cancel="handleConfirmAck(item, false)"
+            />
+
             <!-- 2.6 错误条 -->
             <div v-else-if="item.type === 'error'" class="error-strip" :class="{ 'no-anim': item.noAnim }">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="flex: 0 0 16px; margin-top: 1px">
@@ -524,7 +540,11 @@ import { useMessage, useDialog, NDropdown, type DropdownOption } from 'naive-ui'
 import { api } from '../api/http'
 import { AgentWebSocket } from '../api/ws'
 import type {
+  AgentPrefs,
   AgentSession,
+  Dataset,
+  GoldQA,
+  KnowledgeBase,
   Profile,
   SessionAuthor,
   Task,
@@ -539,6 +559,8 @@ import { formatLatency } from '../utils/format'
 import AttachmentPreview from '../components/agent/AttachmentPreview.vue'
 import MarkdownView from '../components/agent/MarkdownView.vue'
 import ContextMeter, { type ContextMeterData } from '../components/agent/ContextMeter.vue'
+import ConfirmCard from '../components/agent/ConfirmCard.vue'
+import { getDefaultRunConfig, getDefaultStressConfig } from '../schemas/confirmCard'
 
 const message = useMessage()
 const dialog = useDialog()
@@ -1385,6 +1407,30 @@ async function loadSessionHistory(sid: string): Promise<number> {
           eventId: eid,
           item: { type: 'report', reportId: p.report_id, noAnim: true },
         })
+      } else if (ev.event === 'confirm') {
+        // V1.67：历史卡默认按已处理只读回放；当前仍待确认的卡由
+        // sessions.pending_confirm 在回放末尾覆盖为可编辑卡。
+        rawList.push({
+          time: t,
+          priority: 4,
+          eventId: eid,
+          item: {
+            type: 'confirm',
+            card: normalizeConfirmCard(p),
+            confirmAuthor: p.confirm_author || null,
+            isAcked: true,
+            summary: '',
+            open: false,
+            noAnim: true,
+          },
+        })
+      } else if (ev.event === 'confirm_ack') {
+        const confirm = [...rawList].reverse().find(x => x.item.type === 'confirm')
+        if (confirm) {
+          confirm.item.isAcked = true
+          confirm.item.ackResult = Boolean(p.ok)
+          confirm.item.open = false
+        }
       }
     }
 
@@ -1439,8 +1485,34 @@ async function loadSessionHistory(sid: string): Promise<number> {
         continue
       }
       replay.push(item)
-      if (item.type === 'error' || item.type === 'report') {
+      if (item.type === 'error' || item.type === 'report' || item.type === 'confirm') {
         activeTurn = null
+      }
+    }
+
+    // V1.67：仍待确认的卡以 sessions.pending_confirm 为准覆盖为可编辑卡
+    // （API.md §3.4：前端优先该字段做成可编辑卡，events 里的 confirm 只作只读回放）。
+    if (history.pending_confirm) {
+      const card = normalizeConfirmCard({
+        ...history.pending_confirm,
+        confirm_author: history.pending_confirm_author || undefined,
+      })
+      const existing = [...replay].reverse().find(x => x.type === 'confirm')
+      if (existing) {
+        existing.card = card
+        existing.confirmAuthor = history.pending_confirm_author || null
+        existing.isAcked = false
+        existing.open = true
+      } else {
+        replay.push({
+          type: 'confirm',
+          card,
+          confirmAuthor: history.pending_confirm_author || null,
+          isAcked: false,
+          summary: '',
+          open: true,
+          noAnim: true,
+        })
       }
     }
 
@@ -1823,6 +1895,27 @@ function ingestBackground(sid: string, ev: WsServerEvent) {
       rt.harnessStage = ''
       break
     }
+    case 'confirm':
+      markGenerating(sid, false)
+      rt.harnessStage = ''
+      buf.push({
+        type: 'confirm',
+        card: normalizeConfirmCard(p),
+        confirmAuthor: p.confirm_author || null,
+        isAcked: false,
+        summary: '',
+        open: true,
+      })
+      break
+    case 'confirm_ack': {
+      const confirm = [...buf].reverse().find(x => x.type === 'confirm')
+      if (confirm) {
+        stampConfirmCard(confirm, Boolean(p.ok))
+        if (!p.ok) confirm.summary = ''
+      }
+      void refreshContextMeter(sid)
+      break
+    }
     case 'error':
       markGenerating(sid, false)
       rt.activeTask = null
@@ -1983,6 +2076,33 @@ function handleWsEvent(ev: WsServerEvent) {
       const orphan = turnStreamingAgent(events.value)
       if (orphan) orphan.streaming = false
       setCurrentGenerating(false)
+      break
+    }
+    case 'confirm': {
+      // V1.67 恢复：确认卡 TaskSpec 在 payload；规范化补齐 run / stress 默认值
+      setCurrentGenerating(false)
+      harnessStage.value = ''
+      events.value.push({
+        type: 'confirm',
+        card: normalizeConfirmCard(p),
+        confirmAuthor: p.confirm_author || null,
+        isAcked: false,
+        summary: '',
+        open: true,
+      })
+      scrollToBottom()
+      break
+    }
+    case 'confirm_ack': {
+      const target = [...events.value].reverse().find(e => e.type === 'confirm')
+      if (target) {
+        stampConfirmCard(target, Boolean(p.ok))
+        if (!p.ok) target.summary = ''
+      }
+      // 服务端回执（含真实 task_id）才是权威结果
+      if (pendingAckItem.value && p.ok) pendingAckItem.value = null
+      if (typeof p.message === 'string' && p.message) message.info(p.message)
+      if (currentSessionId.value) void refreshContextMeter(currentSessionId.value)
       break
     }
     case 'progress': {
@@ -2459,7 +2579,7 @@ interface ToolRunItem {
 type AgentBlock = AgentAssistantItem | AgentErrorItem
 
 interface StreamItem {
-  type: 'user' | 'agent' | 'report' | 'error' | 'typing'
+  type: 'user' | 'agent' | 'report' | 'confirm' | 'error' | 'typing'
   text?: string
   latency_ms?: number
   streaming?: boolean
@@ -2482,15 +2602,205 @@ interface StreamItem {
   bars?: any[]
   code?: string
   message?: string
+  // 确认卡（V1.67 恢复）：card 为 TaskSpec；confirmAuthor 为服务端元数据（提交前剥离）
+  card?: any
+  confirmAuthor?: SessionAuthor | null
+  isAcked?: boolean
+  ackResult?: boolean
+  summary?: string
+  open?: boolean
+  fieldErrors?: Record<string, string>
 }
 
 const harnessStage = ref<string>('')
+// ════════ 确认卡（V1.67 / H2 批次 2 恢复）：选项加载、规范化、校验与 ack ════════
+
+const availableProfiles = ref<Profile[]>([])
+const availableDatasets = ref<Dataset[]>([])
+const availableKbs = ref<KnowledgeBase[]>([])
+const availableGoldQas = ref<GoldQA[]>([])
+/** 跨会话下单偏好（/api/agent/prefs）：首单空槽预填，后端已给的值不覆盖。 */
+const agentPrefs = ref<AgentPrefs | null>(null)
+/** F12 prod 会签人名单：取自 api.admin.getSettings().prod_approvers，失败回退静态文案。 */
+const prodApprovers = ref<string[]>([])
+const prodApproversText = computed(() => (prodApprovers.value.length ? prodApprovers.value.join('、') : 'admin、bob'))
+/** A1：确认成功前不盖章，等服务端 confirm_ack 到达后再清除乐观态。 */
+const pendingAckItem = ref<StreamItem | null>(null)
+
+function canConfirmItem(item: StreamItem): boolean {
+  return !item.confirmAuthor?.id || item.confirmAuthor.id === authStore.user?.id
+}
+
+function confirmAuthorLabel(item: StreamItem): string {
+  return item.confirmAuthor?.display_name || item.confirmAuthor?.username || '发起人'
+}
+
+/** F10：当前选中知识库是否为外部 Chat 库（无 rag_mode，改选恰好 1 个外部 RAG 服务档）。 */
+function isExternalKb(card: any): boolean {
+  return availableKbs.value.find(k => k.id === card?.kb_id)?.kind === 'external_chat'
+}
+
+/** F8 确认卡内联校验：错误留在卡内 .field-error 红字，不 Toast。 */
+function validateConfirmCard(item: StreamItem): boolean {
+  const errors: Record<string, string> = {}
+  const card = item.card
+  if (card?.kind === 'benchmark') {
+    if (!card.profile_ids || card.profile_ids.length < 1) errors.profile_ids = '至少选择 1 个被测协议档'
+    else if (card.profile_ids.length > 5) errors.profile_ids = '被测协议档不能超过 5 个'
+  }
+  if (card?.kind === 'rag') {
+    if (isExternalKb(card)) {
+      if (!card.profile_ids || card.profile_ids.length !== 1) errors.profile_ids = '外部 RAG 服务档需恰好选择 1 个'
+    } else if (!card.rag_mode || card.rag_mode.length < 1) {
+      errors.rag_mode = '请至少选择 1 种检索模式'
+    }
+  }
+  if (card?.kind === 'testcase') {
+    const sourceText = String(card.case_source?.text ?? '')
+    if (!sourceText.trim()) errors.case_source = '请提供 file_id 或粘贴文本'
+  }
+  item.fieldErrors = errors
+  return Object.keys(errors).length === 0
+}
+
+/** 现网列表加载后，丢掉确认卡上已删除、chip 点不掉的资产 ID。 */
+function sanitizeConfirmAssets(card: any) {
+  if (!card || typeof card !== 'object') return card
+  const liveProfiles = new Set(availableProfiles.value.map(p => p.id))
+  if (liveProfiles.size && Array.isArray(card.profile_ids)) {
+    card.profile_ids = card.profile_ids.filter((id: string) => liveProfiles.has(String(id)))
+  }
+  const liveDatasets = new Set(availableDatasets.value.map(d => d.id))
+  if (liveDatasets.size && card.dataset_id && !liveDatasets.has(card.dataset_id)) {
+    card.dataset_id = null
+  }
+  const liveKbs = new Set(availableKbs.value.map(k => k.id))
+  if (liveKbs.size && card.kb_id && !liveKbs.has(card.kb_id)) {
+    card.kb_id = null
+    card.gold_qa_id = null
+  }
+  return card
+}
+
+/** 选项列表到达后，再滤一遍未 ack 确认卡上的失效 ID。 */
+function sanitizeOpenConfirmCards() {
+  for (const item of events.value) {
+    if (item?.type === 'confirm' && item.card && !item.isAcked) {
+      sanitizeConfirmAssets(item.card)
+    }
+  }
+}
+
+/** 确认卡规范化：补齐 run / stress / case_source 默认值，保证折叠区 v-model 绑定路径始终存在。 */
+function normalizeConfirmCard(card: any) {
+  if (!card) return card
+  const prefs = agentPrefs.value
+  if (prefs) {
+    if (!card.kind && prefs.last_kind) card.kind = prefs.last_kind
+    if ((!card.profile_ids || card.profile_ids.length === 0) && prefs.last_profile_ids?.length) {
+      card.profile_ids = [...prefs.last_profile_ids]
+    }
+    if (!card.dataset_id && prefs.last_dataset_id) card.dataset_id = prefs.last_dataset_id
+    if (!card.kb_id && prefs.last_kb_id) card.kb_id = prefs.last_kb_id
+    if (!card.gold_qa_id && prefs.last_gold_qa_id) card.gold_qa_id = prefs.last_gold_qa_id
+    if (card.with_stress == null && prefs.last_with_stress != null) {
+      card.with_stress = prefs.last_with_stress
+    }
+  }
+  card.run = { ...getDefaultRunConfig(), ...(card.run || {}) }
+  card.stress = { ...getDefaultStressConfig(), ...(card.stress || {}) }
+  if (card.kind === 'testcase') {
+    card.case_source = { text: '', ...(card.case_source || {}) }
+  }
+  return sanitizeConfirmAssets(card)
+}
+
+/** 实时模式预装确认卡选项（API.md §4.3 confirm：卡即补槽 UI）。 */
+async function loadConfirmOptions() {
+  if (api.isMock()) return
+  try {
+    const [profiles, datasets, kbs] = await Promise.all([
+      api.profiles.list().catch(() => []),
+      api.datasets.list().catch(() => []),
+      api.kb.list().catch(() => []),
+    ])
+    if (profiles?.length) availableProfiles.value = profiles
+    if (datasets?.length) availableDatasets.value = datasets
+    if (kbs?.length) availableKbs.value = kbs
+    // 黄金 QA 选项仅在 rag 卡可用（skill-rag 现行 fail-closed，暂无实时来源）
+    sanitizeOpenConfirmCards()
+  } catch {
+    // 选项留空，确认时仍走卡内校验，不阻断会话
+  }
+}
+
+function stampConfirmCard(item: StreamItem, confirmed: boolean) {
+  item.isAcked = true
+  item.ackResult = confirmed
+  item.open = false
+  if (item.card?.kind === 'benchmark') {
+    item.summary = `${item.card.profile_ids?.length || 0} 个协议档 · 待入队`
+  } else if (item.card?.kind === 'rag') {
+    item.summary = 'RAG 评测 · 待入队'
+  } else if (item.card?.kind === 'testcase') {
+    item.summary = '用例生成 · 待入队'
+  }
+}
+
+function handleConfirmAck(item: StreamItem, confirmed: boolean) {
+  if (!canConfirmItem(item)) {
+    message.error(`仅 ${confirmAuthorLabel(item)} 可以确认或取消该任务`)
+    return
+  }
+  // F8 确认前卡内校验：不通过则留卡内显示红字，不盖章、不 Toast
+  if (confirmed && !validateConfirmCard(item)) return
+  const useLive = !!(agentWs && agentWs.isConnected)
+  // 实时模式断线时不可将确认卡伪造成任务成功；保留卡片供重连后再次确认。
+  if (!useLive && !api.isMock()) {
+    message.error('Agent 连接未就绪，暂不能确认入队')
+    return
+  }
+  if (useLive && agentWs!.sessionId && agentWs!.sessionId !== currentSessionId.value) {
+    message.error('会话切换中，请稍后再确认')
+    return
+  }
+  if (useLive) {
+    if (confirmed) {
+      // 确认成功前不盖章（A1）；confirm_author 是服务端事件元数据，提交前必须剥离。
+      pendingAckItem.value = item
+      const { confirm_author: _confirmAuthor, ...patch } = item.card || {}
+      agentWs!.sendConfirmAck(true, patch)
+      return
+    }
+    stampConfirmCard(item, false)
+    agentWs!.sendConfirmAck(false, item.card)
+    scrollToBottom()
+    return
+  }
+  // 显式 mock 模式：仅本地盖章演示，不伪造任务进度。
+  stampConfirmCard(item, confirmed)
+  message.info(confirmed ? '演示模式：已确认（未真实入队）' : '已取消，未创建任务')
+  scrollToBottom()
+}
 
 onMounted(async () => {
+  // 跨会话下单偏好先行加载：历史回放中的确认卡规范化要用它预填空槽
+  try {
+    agentPrefs.value = await api.agent.getPrefs()
+  } catch {
+    agentPrefs.value = null
+  }
   await loadSessions()
   // 顶栏/输入框的 Agent 模型名改为按后端协议档动态解析，不再硬编码
   // 先解析协议档，再回放历史消息，保证助手消息头能显示正确供应商 Logo 与模型名称。
   await resolveAgentModelName()
+  // V1.67：预装确认卡选项（协议档/数据集/知识库），刷新后的待确认卡才能补槽
+  await loadConfirmOptions()
+  // F12 拉取 prod 会签人名单用于确认卡动态提示；失败静默回退静态文案
+  try {
+    const settings = await api.admin.getSettings()
+    if (settings?.prod_approvers?.length) prodApprovers.value = settings.prod_approvers
+  } catch {}
   // 默认停留在未持久化草稿，只有首次发送消息时才创建服务端会话。
   resetToDraftSession()
   // 消费报告页「在对话中解读」直达参数（兼容 ?interpret= 与 ?report_id=）。

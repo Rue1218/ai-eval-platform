@@ -349,3 +349,11 @@ def router_audit_from_update(update: dict) -> dict | None:
                 "router_reason": str(value.get("router_reason") or ""),
             }
     return None
+
+
+def enqueued_task_id_from_update(update: dict) -> str | None:
+    """从 updates 增量中提取 W6 入队结果（确认卡回执回显 task_id 用）。"""
+    for value in update.values():
+        if isinstance(value, dict) and value.get("enqueued_task_id"):
+            return str(value["enqueued_task_id"])
+    return None

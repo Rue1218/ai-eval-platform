@@ -875,8 +875,8 @@ export interface AgentPrefs {
 }
 
 // WS 事件公共头（API.md §4.2）：payload 嵌套，task_id 入队后才有
-// H1 骨架化收敛为纯对话 + 平台任务流；H3 起 Agent 引擎恢复 thought /
-// tool_call / tool_result（ToolCard 只渲染脱敏摘要，历史旧事件不重放）。
+// H3 起 Agent 引擎恢复 tool_call / tool_result（ToolCard 只渲染脱敏摘要）；
+// V1.68（H2 批次 2）恢复确认卡 confirm / confirm_ack；历史旧事件一律不重放。 (feat(agent): H2 批次 2 确认卡链路——W5 发卡与 ack 重放经 W6 唯一入队)
 export interface WsServerEvent {
   event:
     | 'user_message'
@@ -891,6 +891,8 @@ export interface WsServerEvent {
     | 'progress'
     | 'report'
     | 'task_cancelled'
+    | 'confirm'
+    | 'confirm_ack'
     | 'error'
     | 'session_title'
     | 'pong'
