@@ -1,7 +1,7 @@
 # AI 测试与评估平台 — AI Agent 行为规范与工程指南 (AGENTS.md)
 
 > **最高指示**：本文件是面向所有参与本项目的 **AI Agent 与开发者** 的最高行动指南。在编写或修改代码前，**必须严格遵守本文档所规定的架构边界、开发契约与行为红线**。
-> 版本：V1.6 ｜ 审查日期：2026-09-03（V1.6 混合引擎：H0 基础设施、H1 Router 四路分流、H2 Workflow 八节点 DAG（含确认卡恢复）、H3 TAOR、H4 Reflection 五档判决（含失败阶梯 repair/retry 回合级硬上限）已交付，并完成 H0/H1 审查修复（L2 项目指令接入运行时、提示词缓存按 S1/S2/S5 真实分段、L1 Workflow 须通过执行意图门禁、Workflow 失败回合必发终态）；确认卡经 API.md V1.68 恢复——**仅 `hybrid_engine_enabled=true` 时可达，默认关闭保持骨架化纯对话**；V1.6.0 骨架化与 V1.3 rag/stress 状态修正为历史基线）
+> 版本：V1.7 ｜ 审查日期：2026-09-03（V1.6 混合引擎：H0 基础设施、H1 Router 四路分流、H2 Workflow 八节点 DAG（含确认卡恢复）、H3 TAOR、H4 Reflection 五档判决（含失败阶梯 repair/retry 回合级硬上限）已交付；V1.7 H5 持久化 HITL 批次 1（图内 interrupt 审批 + resume 协议 + 审批卡 meta + resume 至多一次，PR #211）与批次 2（API.md V1.70 契约先行 + `agent_hitl_strict_pg` 启动门禁 + `/api/health` 实例标识粘性路由支持）已交付；H5 批次 2 未完成项：`AGENT_CHECKPOINTER=postgres` 生产切换、网关粘性路由落地、重启恢复演练、`worker.sandbox` 安全评审）；并完成 H0/H1 审查修复（L2 项目指令接入运行时、提示词缓存按 S1/S2/S5 真实分段、L1 Workflow 须通过执行意图门禁、Workflow 失败回合必发终态）；确认卡经 API.md V1.68 恢复、危险 bash 审批经 V1.70 恢复——**仅 `hybrid_engine_enabled=true` 时可达，默认关闭保持骨架化纯对话**；V1.6.0 骨架化与 V1.3 rag/stress 状态修正为历史基线）
 
 ---
 
@@ -96,7 +96,7 @@
 | testcase 用例生成 | 真实执行器（六策略 LLM 生成、72h 确认超时扫描） | `backend/worker/app/testcase.py` |
 | rag 知识库评测 | 真实执行器（LightRAG 优先；未配置/不可达/空返回回退本地关键词检索，报告 `degraded`/`engine_counts` 诚实标注引擎来源，禁止无标注出报告） | `backend/worker/app/rag.py`、`backend/shared/kb.py` |
 | stress 压测 | 真实执行器（对接 `stress:19090` 引擎：Host 白名单、SLA 判定、取消停发、报告 upsert） | `backend/worker/app/stress.py` |
-| Agent 图 | **混合引擎灰度中**：默认关闭时为骨架化纯对话（`START → chat_stream → END`）；开启后 `START → router → direct/chat/workflow/agent`。H0（缓存分段、进程级 `AgentRegistry`、受控 L2 `project_instructions`）、H1（Router 四路分流、`engine` 审计、L1 Workflow 执行动作门禁）、H2（W0–W7、确认卡/行锁回执、失败统一终态，入队唯一经 W6）、H3（TAOR 与 `tool_call`/`tool_result`）、H4（reflect 五档判决 + 失败阶梯，回合级 `repair_count`/`replan_count` 硬上限 `MAX_REPAIRS=1`/`MAX_REPLANS=2`；orchestrator 收尾权已移交 reflect）均已交付；`thought`/`tool_progress`/`tool_output_delta`/`clarify` 未恢复（`clarify` 判为收尾叙述而非事件，事件与 `interrupt` 归 H5），主开关默认关闭 | `backend/api/app/agent/{graph,routing,router_node,workflow_nodes,taor_nodes}.py`、`routers/ws.py` |
+| Agent 图 | **混合引擎灰度中**：默认关闭时为骨架化纯对话（`START → chat_stream → END`）；开启后 `START → router → direct/chat/workflow/agent`。H0（缓存分段、进程级 `AgentRegistry`、受控 L2 `project_instructions`）、H1（Router 四路分流、`engine` 审计、L1 Workflow 执行动作门禁）、H2（W0–W7、确认卡/行锁回执、失败统一终态，入队唯一经 W6）、H3（TAOR 与 `tool_call`/`tool_result`）、H4（reflect 五档判决 + 失败阶梯，回合级 `repair_count`/`replan_count` 硬上限 `MAX_REPAIRS=1`/`MAX_REPLANS=2`；orchestrator 收尾权已移交 reflect）、H5 批次 1（图内 `interrupt()` 审批 + `Command(resume=...)` 恢复 + 审批卡 `meta`/一次性 `resume_nonce` + resume 至多一次）均已交付；H5 批次 2（API.md V1.70 契约先行 + `agent_hitl_strict_pg` 启动门禁 + `/api/health` 实例标识）已交付，**未完成**：`AGENT_CHECKPOINTER=postgres` 生产切换、网关粘性路由落地、重启恢复演练、`worker.sandbox` 安全评审；`thought`/`tool_progress`/`tool_output_delta`/`clarify` 未恢复（`clarify` 判为收尾叙述而非事件，事件与 `interrupt` 归 H5 批次 2 后续），主开关默认关闭 | `backend/api/app/agent/{graph,routing,router_node,workflow_nodes,taor_nodes}.py`、`routers/ws.py`、`harness/memory/checkpoint.py` |
 
 ---
 

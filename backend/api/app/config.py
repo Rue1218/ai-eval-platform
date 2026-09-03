@@ -62,6 +62,14 @@ class Settings(BaseSettings):
     # P3：检查点引擎。默认 memory（每回合独立 thread_id）；postgres 需单独评审
     # 多副本粘性路由后再开，禁止把 Observation 全文写入检查点。
     agent_checkpointer: str = "memory"
+    # H5 批次 2：HITL 生产门禁。true 时（生产部署）若混合引擎开启且检查点为
+    # memory，启动期 fail-fast（HITL resume 无法跨进程重启恢复）；false（默认）
+    # 仅在 agent_trace 输出告警，便于单副本/测试环境用 memory 验证 interrupt 语义。
+    agent_hitl_strict_pg: bool = False
+    # H5 批次 2：API 实例标识（粘性路由用）。空 = 启动期自动派生（hostname+pid）；
+    # 多副本部署时网关按 session_id 粘性路由，同一会话固定落点以保证会话级
+    # abort dict 与 interrupt resume 的 thread_id 可寻址。暴露于 /api/health。
+    agent_instance_id: str = ""
     # P1/P4：native 首轮流式。默认开启（已落地）；false 回退 invoke，不改历史事件。
     agent_native_stream_enabled: bool = True
     # 逗号分隔协议档 ID；空 = 全部 native。``*`` 同样表示全部。
