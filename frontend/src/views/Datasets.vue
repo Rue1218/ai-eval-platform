@@ -291,17 +291,14 @@
           </div>
         </div>
 
-        <!-- 3. 数据表格：高性能虚拟网格 + 居中自定义多选框 (Hyper-Speed Virtual Grid) -->
-        <div ref="tableContainerRef" class="table-container custom-scroll" tabindex="0" @scroll="onTableScroll">
-          <!-- 顶部虚拟占位 -->
-          <div v-if="virtualTopPad > 0" :style="{ height: virtualTopPad + 'px' }"></div>
-
+        <!-- 3. 数据表格：分页网格 + 居中自定义多选框 -->
+        <div ref="tableContainerRef" class="table-container custom-scroll" tabindex="0">
           <table class="nordic-table">
             <thead>
               <tr>
-                <th class="th-chk" style="width: 48px" title="全选所有行" @click.stop="toggleAllRowsDirect">
-                  <div class="clean-chk-box" :class="{ checked: allRowsChecked }" role="checkbox" :aria-checked="allRowsChecked">
-                    <svg v-if="allRowsChecked" class="chk-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">
+                <th class="th-chk" style="width: 48px" title="全选当前页所有行" @click.stop="toggleCurrentPageRowsDirect">
+                  <div class="clean-chk-box" :class="{ checked: isCurrentPageAllChecked }" role="checkbox" :aria-checked="isCurrentPageAllChecked">
+                    <svg v-if="isCurrentPageAllChecked" class="chk-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">
                       <polyline points="20 6 9 17 4 12" />
                     </svg>
                   </div>
@@ -335,9 +332,9 @@
                 </td>
               </tr>
 
-              <!-- 虚拟切片数据行 (50px 舒适大行高) -->
+              <!-- 当前页切片数据行 -->
               <tr
-                v-for="(r, virtualIdx) in virtualRenderRows"
+                v-for="(r, pageIdx) in pagedRows"
                 v-else
                 :key="r.row_no"
                 class="data-row"
@@ -494,27 +491,61 @@
               <tr v-if="!displayedRows.length">
                 <td :colspan="(isGoldQaActive ? 7 : 9) + customCols.length" class="empty-cell">
                   <div class="empty-message">
-                    <span v-if="gridSearch.trim()">未找到匹配「{{ gridSearch.trim() }}」的样本行。</span>
-                    <span v-else-if="filterPendingOnly">当前无待补全行，全部样本格式均已达标。</span>
+                    <template v-if="gridSearch.trim() || filterPendingMode !== 'all'">
+                      <p style="margin-bottom: 8px;">未找到符合条件的样本行（当前检索：{{ gridSearch.trim() ? `「${gridSearch.trim()}」` : '' }}{{ filterPendingMode !== 'all' ? ` [${filterPendingMode === 'pending' ? '仅看待补全' : '仅看达标'}]` : '' }}）。</p>
+                      <button class="btn btn-secondary btn-sm" @click="clearAllFilters">
+                        清空搜索与筛选条件
+                      </button>
+                    </template>
                     <span v-else>当前数据集暂无样本行，点击上方「新增行」或「数据合成向导」开始录入。</span>
                   </div>
                 </td>
               </tr>
             </tbody>
           </table>
-
-          <!-- 底部虚拟占位 -->
-          <div v-if="virtualBottomPad > 0" :style="{ height: virtualBottomPad + 'px' }"></div>
         </div>
 
-        <!-- 4. 底部浮动批量操作栏 (Floating Action Dock) -->
+        <!-- 4. 底部固定分页工具栏 (Table Pagination Bar) -->
+        <div v-if="!isGoldQaActive && sampleRows.length > 0" class="table-pagination-bar">
+          <div class="pagination-info">
+            <span class="pagination-total">
+              共 <strong class="mono">{{ displayedRows.length }}</strong> 条样本
+              <span class="pagination-pages mono">（第 {{ page }} / {{ totalPages }} 页）</span>
+            </span>
+            <span v-if="gridSearch.trim() || filterPendingMode !== 'all'" class="pagination-filter-tag">
+              已从全部 {{ sampleRows.length }} 条中过滤
+            </span>
+            <span v-if="selectedCount > 0" class="pagination-selection-tag">
+              已勾选 {{ selectedCount }} 条
+            </span>
+          </div>
+          <div class="pagination-controls">
+            <n-pagination
+              v-model:page="page"
+              v-model:page-size="pageSize"
+              :item-count="displayedRows.length"
+              :page-sizes="[10, 20, 50, 100]"
+              show-size-picker
+              show-quick-jumper
+            />
+          </div>
+        </div>
+
+        <!-- 5. 底部浮动批量操作栏 (Floating Action Dock) -->
         <transition name="slide-up">
           <div v-if="selectedCount > 0" class="floating-batch-dock">
             <div class="batch-dock-info">
               <span class="batch-dock-badge">{{ selectedCount }}</span>
-              <span class="batch-dock-text">已选择样本 / 共 {{ sampleRows.length }} 行</span>
+              <span class="batch-dock-text">已选择 / 筛选共 {{ displayedRows.length }} 行</span>
             </div>
             <div class="batch-dock-actions">
+              <button
+                v-if="selectedCount < displayedRows.length"
+                class="btn btn-ghost btn-sm"
+                @click="checkAllDisplayedRows"
+              >
+                全选所有筛选行 ({{ displayedRows.length }})
+              </button>
               <button class="btn btn-secondary btn-sm" @click="exportSelectedRows">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
                 导出选中 JSONL
@@ -889,7 +920,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, h } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, h, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage, useDialog, type DropdownOption } from 'naive-ui'
 import { api } from '../api/http'
@@ -1086,7 +1117,10 @@ const allFolders = computed<TreeFolder[]>(() =>
 
 const pendingCount = computed(() => sampleRows.value.filter(row => !row.q.trim() || !row.r.trim()).length)
 
-// ─── 即时搜索过滤 + 50px 虚拟滚动 (Instant Filter & 50px Virtual Scrolling) ───
+// ─── 分页与即时搜索过滤 (Pagination & Instant Filter) ───
+const page = ref(1)
+const pageSize = ref(20)
+
 const displayedRows = computed(() => {
   let list = sampleRows.value
   if (filterPendingMode.value === 'pending') {
@@ -1107,6 +1141,19 @@ const displayedRows = computed(() => {
   return list
 })
 
+// 监听搜索或筛选条件变化，自动重置页码为 1
+watch([gridSearch, filterPendingMode], () => {
+  page.value = 1
+})
+
+const totalPages = computed(() => Math.max(1, Math.ceil(displayedRows.value.length / pageSize.value)))
+
+// 当前页数据切片
+const pagedRows = computed(() => {
+  const start = (page.value - 1) * pageSize.value
+  return displayedRows.value.slice(start, start + pageSize.value)
+})
+
 function getOriginalRowIndex(row: EditableDatasetRow): number {
   return sampleRows.value.findIndex(r => r.row_no === row.row_no)
 }
@@ -1114,27 +1161,14 @@ function getDisplayedIndex(row: EditableDatasetRow): number {
   return displayedRows.value.findIndex(r => r.row_no === row.row_no)
 }
 
-// 虚拟滚动状态 (50px 舒适行高)
-const ROW_HEIGHT = 50
-const scrollTop = ref(0)
-const viewportHeight = ref(650)
-const BUFFER_SIZE = 8
+function clearAllFilters() {
+  gridSearch.value = ''
+  filterPendingMode.value = 'all'
+  page.value = 1
+}
 
-const startIndex = computed(() => Math.max(0, Math.floor(scrollTop.value / ROW_HEIGHT) - BUFFER_SIZE))
-const endIndex = computed(() => Math.min(displayedRows.value.length, Math.ceil((scrollTop.value + viewportHeight.value) / ROW_HEIGHT) + BUFFER_SIZE))
-
-const virtualTopPad = computed(() => startIndex.value * ROW_HEIGHT)
-const virtualBottomPad = computed(() => Math.max(0, (displayedRows.value.length - endIndex.value) * ROW_HEIGHT))
-
-const virtualRenderRows = computed(() => {
-  if (displayedRows.value.length < 30) return displayedRows.value
-  return displayedRows.value.slice(startIndex.value, endIndex.value)
-})
-
-function onTableScroll(e: Event) {
-  const target = e.target as HTMLElement
-  scrollTop.value = target.scrollTop
-  viewportHeight.value = target.clientHeight || 650
+function checkAllDisplayedRows() {
+  displayedRows.value.forEach(r => { r.checked = true })
 }
 
 // 关键词高亮
@@ -1208,15 +1242,21 @@ function onWorkbenchKeydown(e: KeyboardEvent) {
   switch (e.key) {
     case 'ArrowUp':
       if (rowIdx > 0) {
-        focusedCell.value = { rowIdx: rowIdx - 1, field }
-        scrollToFocusedRow(rowIdx - 1)
+        const nextIdx = rowIdx - 1
+        focusedCell.value = { rowIdx: nextIdx, field }
+        const targetPage = Math.floor(nextIdx / pageSize.value) + 1
+        if (targetPage !== page.value) page.value = targetPage
+        scrollToFocusedRow(nextIdx)
         e.preventDefault()
       }
       break
     case 'ArrowDown':
       if (rowIdx < displayedRows.value.length - 1) {
-        focusedCell.value = { rowIdx: rowIdx + 1, field }
-        scrollToFocusedRow(rowIdx + 1)
+        const nextIdx = rowIdx + 1
+        focusedCell.value = { rowIdx: nextIdx, field }
+        const targetPage = Math.floor(nextIdx / pageSize.value) + 1
+        if (targetPage !== page.value) page.value = targetPage
+        scrollToFocusedRow(nextIdx)
         e.preventDefault()
       }
       break
@@ -1236,10 +1276,20 @@ function onWorkbenchKeydown(e: KeyboardEvent) {
       e.preventDefault()
       if (e.shiftKey) {
         if (fIdx > 0) focusedCell.value = { rowIdx, field: fields[fIdx - 1] }
-        else if (rowIdx > 0) focusedCell.value = { rowIdx: rowIdx - 1, field: fields[fields.length - 1] }
+        else if (rowIdx > 0) {
+          const nextIdx = rowIdx - 1
+          focusedCell.value = { rowIdx: nextIdx, field: fields[fields.length - 1] }
+          const targetPage = Math.floor(nextIdx / pageSize.value) + 1
+          if (targetPage !== page.value) page.value = targetPage
+        }
       } else {
         if (fIdx < fields.length - 1) focusedCell.value = { rowIdx, field: fields[fIdx + 1] }
-        else if (rowIdx < displayedRows.value.length - 1) focusedCell.value = { rowIdx: rowIdx + 1, field: fields[0] }
+        else if (rowIdx < displayedRows.value.length - 1) {
+          const nextIdx = rowIdx + 1
+          focusedCell.value = { rowIdx: nextIdx, field: fields[0] }
+          const targetPage = Math.floor(nextIdx / pageSize.value) + 1
+          if (targetPage !== page.value) page.value = targetPage
+        }
       }
       break
     case ' ':
@@ -1260,11 +1310,12 @@ function onWorkbenchKeydown(e: KeyboardEvent) {
 function scrollToFocusedRow(idx: number) {
   const container = tableContainerRef.value
   if (!container) return
-  const targetTop = idx * ROW_HEIGHT
+  const rowInPage = idx % pageSize.value
+  const targetTop = rowInPage * 48
   if (targetTop < container.scrollTop) {
     container.scrollTop = targetTop
-  } else if (targetTop + ROW_HEIGHT > container.scrollTop + container.clientHeight) {
-    container.scrollTop = targetTop - container.clientHeight + ROW_HEIGHT + 40
+  } else if (targetTop + 48 > container.scrollTop + container.clientHeight) {
+    container.scrollTop = targetTop - container.clientHeight + 48 + 20
   }
 }
 
@@ -1389,10 +1440,16 @@ function syncGoldQaTree(list: GoldQA[]) {
 }
 
 // 批量选择
+const isCurrentPageAllChecked = computed(() => pagedRows.value.length > 0 && pagedRows.value.every(row => row.checked))
 const allRowsChecked = computed(() => sampleRows.value.length > 0 && sampleRows.value.every(row => row.checked))
 const selectedCount = computed(() => sampleRows.value.filter(row => row.checked).length)
 
 const lastCheckedIdx = ref<number>(-1)
+
+function toggleCurrentPageRowsDirect() {
+  const nextState = !isCurrentPageAllChecked.value
+  pagedRows.value.forEach(row => { row.checked = nextState })
+}
 
 function toggleAllRowsDirect() {
   const nextState = !allRowsChecked.value
@@ -1431,7 +1488,12 @@ function batchDeleteRows() {
     negativeText: '取消',
     onPositiveClick: () => {
       sampleRows.value = sampleRows.value.filter(row => !row.checked)
+      sampleRows.value.forEach((r, i) => { r.row_no = i + 1 })
       hasUnsavedChanges.value = true
+      const maxPage = Math.max(1, Math.ceil(displayedRows.value.length / pageSize.value))
+      if (page.value > maxPage) {
+        page.value = maxPage
+      }
       message.info(`已删除 ${count} 行，点击“保存修改”后落库`)
     },
   })
@@ -1481,6 +1543,10 @@ function cancelEditing() {
 
 async function selectDataset(id: string) {
   activeDatasetId.value = id
+  page.value = 1
+  gridSearch.value = ''
+  filterPendingMode.value = 'all'
+  focusedCell.value = null
   if (goldQas.value.some(g => g.id === id)) {
     sampleRows.value = []
     hasUnsavedChanges.value = false
@@ -1551,14 +1617,25 @@ function buildEmptyRow(): EditableDatasetRow {
 }
 
 function addRow() {
-  sampleRows.value.push(buildEmptyRow())
+  const newRow = buildEmptyRow()
+  sampleRows.value.push(newRow)
   hasUnsavedChanges.value = true
+  const newPage = Math.ceil(displayedRows.value.length / pageSize.value)
+  page.value = Math.max(1, newPage)
+  nextTick(() => {
+    editCell(newRow, 'q')
+  })
   message.info('已新增行，填写后点击“保存修改”落库')
 }
 
 function deleteRow(index: number) {
   sampleRows.value.splice(index, 1)
+  sampleRows.value.forEach((r, i) => { r.row_no = i + 1 })
   hasUnsavedChanges.value = true
+  const maxPage = Math.max(1, Math.ceil(displayedRows.value.length / pageSize.value))
+  if (page.value > maxPage) {
+    page.value = maxPage
+  }
   message.info('已删除行，保存后生效')
 }
 
@@ -3234,10 +3311,60 @@ watch(() => modeStore.mode, (mode) => {
   font-size: 13.5px;
 }
 
+/* ─── 底部固定分页工具栏 (Table Pagination Bar) ─── */
+.table-pagination-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 18px;
+  background: var(--bg-elevated);
+  border-top: 1px solid var(--border-subtle);
+  min-height: 46px;
+  flex-shrink: 0;
+  gap: 16px;
+  z-index: 10;
+}
+.pagination-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  flex-wrap: wrap;
+}
+.pagination-total strong {
+  color: var(--text-primary);
+}
+.pagination-pages {
+  color: var(--text-tertiary);
+  font-size: 11.5px;
+  margin-left: 4px;
+}
+.pagination-filter-tag {
+  font-size: 11.5px;
+  color: var(--accent-ai);
+  background: color-mix(in srgb, var(--accent-ai) 10%, transparent);
+  padding: 1px 7px;
+  border-radius: 4px;
+  border: 1px solid color-mix(in srgb, var(--accent-ai) 22%, transparent);
+}
+.pagination-selection-tag {
+  font-size: 11.5px;
+  color: var(--c-datasets);
+  background: var(--t-datasets);
+  padding: 1px 7px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+.pagination-controls {
+  display: flex;
+  align-items: center;
+}
+
 /* ─── 底部浮动批量操作栏 (Floating Action Dock) ─── */
 .floating-batch-dock {
   position: absolute;
-  bottom: 20px;
+  bottom: 60px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 100;
