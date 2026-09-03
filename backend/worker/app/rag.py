@@ -21,7 +21,12 @@ from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
-from shared.kb import compute_metrics, retrieve
+from shared.kb import (
+    RETRIEVE_SOURCE_LIGHTRAG,
+    RETRIEVE_SOURCE_LOCAL,
+    compute_metrics,
+    retrieve_with_source,
+)
 
 from .db import SessionLocal
 from .events import push_ws
@@ -141,6 +146,14 @@ def run_rag(task_id: str) -> None:
             for mode in modes
         }
         primary_mode = modes[0]
+        # 引擎来源统计（报告诚实标注降级）：逐查询记录 LightRAG / 本地关键词
+        # 检索次数，报告据此标注 degraded——禁止把本地兜底成绩无标注当作
+        # LightRAG 引擎成绩（AGENTS.md 红线：能力降级必须诚实声明）。
+        # 双键恒定初始化，保证报告 engine_counts 结构稳定（零次方也显式出现）。
+        source_stats: dict[str, int] = {
+            RETRIEVE_SOURCE_LIGHTRAG: 0,
+            RETRIEVE_SOURCE_LOCAL: 0,
+        }
 
         for item in items:
             # P4-2 取消传播：逐条检查任务是否取消，提前停止不烧 token；
@@ -154,7 +167,8 @@ def run_rag(task_id: str) -> None:
             row_contexts: list[str] = []
             start = time.perf_counter()
             for mode in modes:
-                retrieved = retrieve(db, kb_id, item.question, mode=mode, k=k)
+                retrieved, source = retrieve_with_source(db, kb_id, item.question, mode=mode, k=k)
+                source_stats[source] = source_stats.get(source, 0) + 1
                 metrics = compute_metrics(retrieved, expected, reference)
                 row_metrics[mode] = metrics
                 agg[mode]["hit"] += metrics["hit_rate"]
@@ -205,6 +219,26 @@ def run_rag(task_id: str) -> None:
             }
         overall = per_mode[primary_mode]
 
+        # degraded 裁决：全 LightRAG → None（未降级）；全本地关键词 → local_keyword；
+        # 部分回退 → partial。engine_counts 保留逐查询来源明细供审计比对。
+        queries = sum(source_stats.values())
+        lightrag_n = source_stats.get(RETRIEVE_SOURCE_LIGHTRAG, 0)
+        if queries and lightrag_n == queries:
+            degraded: str | None = None
+        elif lightrag_n == 0:
+            degraded = "local_keyword"
+        else:
+            degraded = "partial"
+        if degraded is None:
+            degraded_note: str | None = None
+        elif degraded == "local_keyword":
+            degraded_note = (
+                "LightRAG 未返回结果，本次评测经本地关键词检索兜底完成，"
+                "指标仅作基线参考，不可与 LightRAG 引擎结果直接比较"
+            )
+        else:
+            degraded_note = "本次评测部分查询回退本地关键词检索，引擎来源明细见 engine_counts"
+
         report = Report(
             task_id=task.id,
             kind="rag",
@@ -223,7 +257,9 @@ def run_rag(task_id: str) -> None:
                 "hit_denominator_note": "无 expected_doc_ids 的样本不进 Hit Rate 分母",
                 "per_mode": per_mode,
                 "sample_total": len(items),
-                "degraded": None,
+                "degraded": degraded,
+                "degraded_note": degraded_note,
+                "engine_counts": dict(source_stats),
             },
         )
         db.add(report)
