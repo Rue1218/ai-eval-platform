@@ -1,9 +1,12 @@
-"""基于 LangGraph 的 Harness Agent 图（骨架版：纯对话）。
+"""基于 LangGraph 的 Harness Agent 图（H1：可选 Router 四路分流骨架）。
 
-图拓扑：``START → chat_stream → END``。用户消息经上下文装配（assemble）后
-直接调用 ModelGateway 流式生成回复，产出 ``assistant_message`` 与
-``response.completed`` 事件；不包含多范式路由（direct/chat/react/plan_solve）、
-ReAct 思考链、规划与反思门禁、工具调用、确认卡与澄清卡（骨架化改造）。
+图拓扑由 ``hybrid_engine_enabled`` 在进程启动时决定：
+
+- **关闭（默认）**：``START → chat_stream → END``，与骨架化纯对话完全一致
+  （回归保证：事件序列与 payload 不因本文件引入而漂移）；
+- **开启（H1）**：``START → router →（条件边）→ direct | chat_stream → END``。
+  ``workflow`` / ``agent`` 引擎本阶段未实现，条件边统一降级到 ``chat_stream``
+  执行，降级事实经 ``router_reason`` 标注（见 router_node.py）。
 
 节点只返回纯数据（pending_events / response 投影），WebSocket、数据库与
 平台任务队列由路由层（ws.py）负责，节点内不持有外部资源（§2.5 事件桥接契约）。
@@ -16,15 +19,28 @@ from uuid import uuid4
 
 from langgraph.graph import END, START, StateGraph
 
+from ..config import settings
 from ..errors import AppError, ErrorCode
 from ..harness.execution import runtime_thread_id
 from ..harness.memory import GraphState, SerializableRequest
 from ..llm import ModelGateway, ModelResponse
+from .router_node import direct_node, router_node
 from .routing import chat_stream_node
 
 
+def _route_by_engine(state: GraphState) -> str:
+    """Router 之后的顶层条件边：direct 零模型收尾，其余引擎 H1 统一降级 chat。
+
+    防御语义：Router 未产出 ``engine``（异常路径）时回落 chat，不猜测。
+    """
+    engine = state.get("engine")
+    if engine == "direct":
+        return "direct"
+    return "chat_stream"
+
+
 class LangGraphAgent:
-    """Harness Agent 图（骨架版）；对外入口与既有 ws.py 调用契约保持一致。"""
+    """Harness Agent 图；对外入口与既有 ws.py 调用契约保持一致。"""
 
     def __init__(
         self,
@@ -46,11 +62,24 @@ class LangGraphAgent:
         self._graph = self._build_graph()
 
     def _build_graph(self):
-        """构建骨架图：路由 → 纯对话流式节点 → 结束。"""
+        """构建图：主开关关闭保持纯对话；开启接入 Router 四路分流（H1 降级）。"""
         graph = StateGraph(GraphState)
         graph.add_node("chat_stream", self._make_chat_node())
-        graph.add_edge(START, "chat_stream")
-        graph.add_edge("chat_stream", END)
+        if not settings.hybrid_engine_enabled:
+            graph.add_edge(START, "chat_stream")
+            graph.add_edge("chat_stream", END)
+        else:
+            graph.add_node("router", self._make_router_node())
+            graph.add_node("direct", self._make_direct_node())
+            graph.add_edge(START, "router")
+            # H1：workflow / agent 未实现，与 chat 一同降级到 chat_stream 执行
+            graph.add_conditional_edges(
+                "router",
+                _route_by_engine,
+                {"direct": "direct", "chat_stream": "chat_stream"},
+            )
+            graph.add_edge("direct", END)
+            graph.add_edge("chat_stream", END)
         # 阶段 3：Checkpointer 按 thread_id 隔离回合（M3-D4 恢复语义）
         if self._checkpointer is not None:
             return graph.compile(checkpointer=self._checkpointer)
@@ -62,6 +91,24 @@ class LangGraphAgent:
 
         def node(state: GraphState) -> dict:
             return chat_stream_node(state, gateway)
+
+        return node
+
+    def _make_router_node(self):
+        """闭包绑定网关的 Router 分流节点（L0 零调用；L1 仅低置信时短调用）。"""
+        gateway = self._gateway
+
+        def node(state: GraphState) -> dict:
+            return router_node(state, gateway)
+
+        return node
+
+    @staticmethod
+    def _make_direct_node():
+        """direct 防御节点（纯函数，不绑定网关：零模型调用）。"""
+
+        def node(state: GraphState) -> dict:
+            return direct_node(state)
 
         return node
 
@@ -146,3 +193,19 @@ def iter_pending_events(update: dict) -> Iterator[dict]:
             events = value.get("pending_events")
             if isinstance(events, list):
                 yield from events
+
+
+def router_audit_from_update(update: dict) -> dict | None:
+    """从 updates 增量中提取 Router 审计三元组（engine 已写入时）。
+
+    供 ws.py 在取消 / 异常收尾路径携带审计（O2 信号：如 agent 分支立即
+    /stop）；正常路径的审计已由收尾节点写入 completed payload，无需重复。
+    """
+    for value in update.values():
+        if isinstance(value, dict) and value.get("engine"):
+            return {
+                "engine": value.get("engine"),
+                "router_confidence": float(value.get("router_confidence") or 0.0),
+                "router_reason": str(value.get("router_reason") or ""),
+            }
+    return None

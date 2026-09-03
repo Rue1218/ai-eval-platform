@@ -14,16 +14,17 @@ from typing import Literal, TypedDict
 
 from app.errors import AppError, ErrorCode
 
-ProtocolName = Literal["plan", "react", "reflect"]  # compact 归 M2，不在本层
+ProtocolName = Literal["plan", "react", "reflect", "router"]  # compact 归 M2，不在本层
 ProtocolVersion = str  # 如 "plan.v1"、"react.v1"
 
 # 各协议当前版本（严格不兼容：旧版直接拒绝）
 PLAN_VERSION: ProtocolVersion = "plan.v1"
 REACT_VERSION: ProtocolVersion = "react.v1"
 REFLECT_VERSION: ProtocolVersion = "reflect.v1"
+ROUTER_VERSION: ProtocolVersion = "router.v1"
 
 # 期望协议名（模型输出须声明，防止跨协议误用）
-_EXPECTED_PROTOCOL = {"plan": "plan", "react": "react", "reflect": "reflect"}
+_EXPECTED_PROTOCOL = {"plan": "plan", "react": "react", "reflect": "reflect", "router": "router"}
 
 
 class ProtocolResult(TypedDict, total=False):
@@ -83,6 +84,22 @@ REFLECT_SCHEMA: dict = {
         "version": {"type": "string"},
     },
     "required": ["verdict", "reason", "protocol", "version"],
+}
+
+# Router 分流协议（H1，ADR-1 裁决：JSON，不接受 <Intent>/<Reasoning> XML 标签）。
+# skill_id / slots 为可选：仅 engine=workflow 且 L1 能识别具体技能时携带，
+# H1 阶段只作审计痕迹（并入 router_reason），H2 select_skill 节点才消费。
+ROUTER_SCHEMA: dict = {
+    "properties": {
+        "engine": {"enum": ["direct", "chat", "workflow", "agent"]},
+        "skill_id": {"type": ["string", "null"]},
+        "confidence": {"type": "number"},
+        "reason": {"type": "string"},
+        "slots": {"type": "object"},
+        "protocol": {"type": "string"},
+        "version": {"type": "string"},
+    },
+    "required": ["engine", "confidence", "reason", "protocol", "version"],
 }
 
 # 代码块包裹提取（模型可能以 ```json 包裹输出）
@@ -228,3 +245,12 @@ def parse_react(raw: str) -> ProtocolResult:
 def parse_reflect(raw: str) -> ProtocolResult:
     """复核协议解析；verdict ∈ {pass, clarify, reject}。"""
     return _parse(raw, "reflect", REFLECT_SCHEMA, REFLECT_VERSION)
+
+
+def parse_router(raw: str) -> ProtocolResult:
+    """Router 分流协议解析；engine ∈ {direct, chat, workflow, agent}。
+
+    仅消费授权字段（engine / skill_id / confidence / reason / slots）；
+    解析失败抛 AppError(VALIDATION)，由 router 节点回落 L0，不重试。
+    """
+    return _parse(raw, "router", ROUTER_SCHEMA, ROUTER_VERSION)

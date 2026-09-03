@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 from ..adapters import StreamAborted
 from ..agent import LangGraphAgent
 from ..agent.attachments import model_content_for_message, normalize_attachment_refs
-from ..agent.graph import iter_pending_events
+from ..agent.graph import iter_pending_events, router_audit_from_update
 from ..agent.log import agent_trace
 from ..agent.title import generate_title_text
 from ..agent_prompt_settings import get_agent_prompt_overlay
@@ -718,17 +718,26 @@ async def _emit_turn_completed(
     *,
     finish_reason: str,
     turn_id: str | None,
+    router_audit: dict | None = None,
 ) -> None:
-    """以回合租约保证 response.completed 至多落库并发送一次。"""
+    """以回合租约保证 response.completed 至多落库并发送一次。
+
+    ``router_audit`` 为 Router 审计三元组（H1）：取消 / 异常收尾时若 Router
+    已执行则随 completed 落库，保证 O2 判错信号（如 agent 分支立即 /stop）
+    可从 ws_events 推导；主开关关闭时恒为 None，payload 与历史完全一致。
+    """
     if not _claim_terminal(session_id, turn_id):
         return
+    payload: dict[str, object] = {"finish_reason": finish_reason, "role": "assistant"}
+    if router_audit:
+        payload.update(router_audit)
     await _emit_persistent(
         db,
         websocket,
         state,
         session_id,
         "response.completed",
-        {"finish_reason": finish_reason, "role": "assistant"},
+        payload,
     )
 
 
@@ -831,6 +840,8 @@ async def _run_turn(
             if current is not None and current.turn_id == turn_id:
                 current.started = True
     db = SessionLocal()
+    # Router 审计三元组（H1）：先置空再进 try，任何阶段异常收尾均可安全携带
+    router_audit: dict | None = None
     try:
         config, profile = _selected_model_config(db)
         history = _history_messages(db, session_id)
@@ -883,7 +894,9 @@ async def _run_turn(
                         ),
                     )
                 continue
-            # updates 模式：按节点边界消费 pending_events，统一 emit
+            # updates 模式：按节点边界消费 pending_events，统一 emit；
+            # Router 节点一旦执行即捕获审计三元组，供取消/异常收尾携带（O2）
+            router_audit = router_audit_from_update(chunk) or router_audit
             for event in iter_pending_events(chunk):
                 if event.get("kind") == "response.completed":
                     # completed 必须是本轮最后一条持久事件。
@@ -919,6 +932,7 @@ async def _run_turn(
                 session_id,
                 finish_reason="cancelled",
                 turn_id=turn_id,
+                router_audit=router_audit,
             )
             return
         raise
@@ -932,6 +946,7 @@ async def _run_turn(
             session_id,
             finish_reason="cancelled",
             turn_id=turn_id,
+            router_audit=router_audit,
         )
     except AppError as exc:
         db.rollback()
@@ -944,6 +959,7 @@ async def _run_turn(
             session_id,
             finish_reason="error",
             turn_id=turn_id,
+            router_audit=router_audit,
         )
     except Exception as exc:
         db.rollback()
@@ -962,6 +978,7 @@ async def _run_turn(
             session_id,
             finish_reason="error",
             turn_id=turn_id,
+            router_audit=router_audit,
         )
     finally:
         db.close()
