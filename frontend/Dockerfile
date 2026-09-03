@@ -23,7 +23,8 @@ COPY . .
 RUN npm run build
 
 # 运行阶段
-FROM nginx:1.27-alpine
+# resolve + zone 的动态 upstream 需要 Nginx OSS 1.27.3 或更新版本。
+FROM nginx:1.27.3-alpine
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
 EXPOSE 80

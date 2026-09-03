@@ -274,6 +274,7 @@ def test_persist_approval_writes_card_with_meta() -> None:
     assert meta["schema_version"] == 1
     assert meta["confirm_type"] == "tool_approval"
     assert meta["thread_id"] == "t-1"
+    assert meta["owner_id"] == "u-1"
     assert meta["resume_nonce"]
     assert db.row.pending_confirm_author_id == "u-1"
     assert card["id"] == "call-1"
@@ -306,6 +307,7 @@ def test_confirm_card_now_carries_h5_meta() -> None:
     meta = card["meta"]
     assert meta["confirm_type"] == "task_confirm"
     assert meta["thread_id"] == "t-1"
+    assert meta["owner_id"] == "u-1"
     assert db.row.pending_confirm_author_id == "u-1"
 
 
@@ -334,6 +336,7 @@ def _approval_card(thread_id: str = "t-1") -> dict:
             "schema_version": 1,
             "confirm_type": "tool_approval",
             "thread_id": thread_id,
+            "owner_id": "u-1",
             "resume_nonce": "nonce-1",
         },
     }
@@ -397,6 +400,28 @@ def test_approval_ack_repeated_after_clear_rejected(monkeypatch) -> None:
             ws._handle_approval_ack(db, object(), ws._ConnectionState(), "s-1", "u-1", {"action": "approve", "id": "call-1"})
         )
     assert exc.value.code == ErrorCode.VALIDATION
+
+
+def test_approval_ack_missing_resume_nonce_rejected() -> None:
+    """审批卡缺少一次性恢复令牌时拒绝消费，避免恢复协议降级。"""
+    db = _FakeDb(_Row())
+    card = _approval_card()
+    del card["meta"]["resume_nonce"]
+    db.row.pending_confirm = card
+    db.row.pending_confirm_author_id = "u-1"
+    with pytest.raises(AppError) as exc:
+        asyncio.run(
+            ws._handle_approval_ack(
+                db,
+                object(),
+                ws._ConnectionState(),
+                "s-1",
+                "u-1",
+                {"action": "approve", "id": "call-1"},
+            )
+        )
+    assert exc.value.code == ErrorCode.VALIDATION
+    assert db.row.pending_confirm is card
 
 
 def test_approval_ack_wrong_owner_or_kind_rejected() -> None:

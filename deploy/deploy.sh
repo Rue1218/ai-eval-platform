@@ -120,6 +120,29 @@ export BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 export DOCKER_BUILDKIT=1
 export COMPOSE_DOCKER_CLI_BUILD=1
 
+# H5 混合引擎生产前置检查：开启混合引擎时禁止以 memory 检查点部署，
+# 否则 API 虽能启动，HITL 中断状态却无法跨进程重启恢复。
+echo "==> 校验 H5 生产检查点与沙箱网络配置"
+docker compose config --format json | python3 -c '
+import json
+import sys
+
+config = json.load(sys.stdin)
+services = config.get("services", {})
+api_env = services.get("api", {}).get("environment", {})
+hybrid_enabled = str(api_env.get("HYBRID_ENGINE_ENABLED", "false")).lower() == "true"
+checkpointer = str(api_env.get("AGENT_CHECKPOINTER", "memory")).lower()
+strict_pg = str(api_env.get("AGENT_HITL_STRICT_PG", "false")).lower() == "true"
+if hybrid_enabled and (checkpointer != "postgres" or not strict_pg):
+    print("错误：HYBRID_ENGINE_ENABLED=true 时必须同时设置 AGENT_CHECKPOINTER=postgres 与 AGENT_HITL_STRICT_PG=true", file=sys.stderr)
+    sys.exit(1)
+runner_networks = set(services.get("runner", {}).get("networks", {}))
+if runner_networks != {"sandbox_net"}:
+    print("错误：runner 必须仅加入 sandbox_net", file=sys.stderr)
+    sys.exit(1)
+print(f"H5 配置通过：hybrid={hybrid_enabled} checkpointer={checkpointer} strict_pg={strict_pg}")
+'
+
 echo "==> [2/4] 按代码差异构建容器镜像（BUILD_VERSION=$BUILD_VERSION，旧容器持续服务中）"
 BUILD_SERVICES=()
 

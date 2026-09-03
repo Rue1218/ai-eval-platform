@@ -1,0 +1,5 @@
+# H5 多 API 副本覆盖：仅通过 web 暴露入口，避免多个 api 副本争抢宿主机 8000 端口。
+# 使用：docker compose -f docker-compose.yml -f deploy/docker-compose-h5-multi-api.yml up -d --build --scale api=2
+services:
+  api:
+    ports: !reset []
