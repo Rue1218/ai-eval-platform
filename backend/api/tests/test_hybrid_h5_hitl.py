@@ -140,15 +140,14 @@ def _saver():
     return InMemorySaver()
 
 
-def test_graph_interrupt_then_approve_resume(_engine_on, monkeypatch) -> None:
+def test_graph_interrupt_then_approve_resume(_engine_on) -> None:
     """bash 危险命令 interrupt → 检查点暂停 → approve resume → 图继续收尾。"""
-    monkeypatch.setattr(
-        "app.harness.orchestration.agents.build_default_agent_registry",
-        lambda: _BASH_REGISTRY,
-    )
     thread_id = "h5-thread-1"
-    gateway = _ScriptedGateway([_PLAN_OK, _REACT_BASH, _REACT_DONE])
-    agent = LangGraphAgent(gateway, checkpointer=_saver())
+    # H4 失败阶梯会在工具失败后允许一次 repair，因此恢复回合需要两次收尾响应。
+    gateway = _ScriptedGateway([_PLAN_OK, _REACT_BASH, _REACT_DONE, _REACT_DONE])
+    agent = LangGraphAgent(
+        gateway, agent_registry=_BASH_REGISTRY, checkpointer=_saver()
+    )
     config = _engine_config(thread_id)
     interrupt_value, events = _collect_until_interrupt(agent, "排查一下测试环境异常", config)
     if interrupt_value is None:
@@ -166,7 +165,7 @@ def test_graph_interrupt_then_approve_resume(_engine_on, monkeypatch) -> None:
     assert asyncio.run(agent.ahas_pending_interrupt(thread_id)) is True
     # 中断前已广播一次 tool_call（Act 阶段）；resume 回合不得重放
     assert len([e for e in _all_pending(events) if e["kind"] == "tool_call"]) == 1
-    # resume approve：toolnode 放行执行（本机无 bwrap → 工具失败观察），模型收尾
+    # resume approve：toolnode 放行执行（本机无 bwrap → 工具失败观察），H4 repair 后收尾
     resumed = _resume(agent, config, {"action": "approve", "id": interrupt_value["id"]})
     resumed_pending = _all_pending(resumed)
     tool_calls_after = [e for e in resumed_pending if e["kind"] == "tool_call"]
@@ -174,18 +173,17 @@ def test_graph_interrupt_then_approve_resume(_engine_on, monkeypatch) -> None:
     completed = [e for e in resumed_pending if e["kind"] == "response.completed"]
     assert completed, "resume 后回合应正常收尾"
     assert asyncio.run(agent.ahas_pending_interrupt(thread_id)) is False
-    assert gateway.calls == 3  # plan + bash Act + done（resume 不额外调模型）
+    assert gateway.calls == 4  # plan + bash Act + repair 后两次收尾响应
 
 
-def test_graph_interrupt_then_reject_stops_command(_engine_on, monkeypatch) -> None:
+def test_graph_interrupt_then_reject_stops_command(_engine_on) -> None:
     """reject resume：bash 不执行（rejected 观察），回合正常收尾。"""
-    monkeypatch.setattr(
-        "app.harness.orchestration.agents.build_default_agent_registry",
-        lambda: _BASH_REGISTRY,
-    )
     thread_id = "h5-thread-2"
-    gateway = _ScriptedGateway([_PLAN_OK, _REACT_BASH, _REACT_DONE])
-    agent = LangGraphAgent(gateway, checkpointer=_saver())
+    # reject 也会形成一次失败观察，H4 repair 阶梯需要第二次收尾响应。
+    gateway = _ScriptedGateway([_PLAN_OK, _REACT_BASH, _REACT_DONE, _REACT_DONE])
+    agent = LangGraphAgent(
+        gateway, agent_registry=_BASH_REGISTRY, checkpointer=_saver()
+    )
     config = _engine_config(thread_id)
     interrupt_value, events = _collect_until_interrupt(agent, "排查一下测试环境异常", config)
     if interrupt_value is None:
