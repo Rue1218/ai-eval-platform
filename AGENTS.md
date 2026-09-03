@@ -183,6 +183,11 @@ main（保护，仅 PR 合入）
 - **常见 Type**：`feat`（新功能）、`fix`（修缺陷）、`docs`（文档）、`style`（格式）、`refactor`（重构）、`test`（测试）、`ci`（CI/CD）、`chore`（杂项）。
 - **常用 Scope**：`api`、`worker`、`web`、`mcp`、`rag`、`stress`、`auth`、`dataset`、`profile`、`task`、`report`、`agent`、`deploy`。
 - **提交前强制门禁**：提交代码前**必须在本地先完成构建与自检**，确保 0 错误后方可执行 `git commit`：后端 `cd backend/api && ruff check . ../shared && pytest`、`cd backend/worker && PYTHONPATH=.:.. pytest`；前端 `cd frontend && npm run typecheck && npm run build`。
+- **提交标题编码检查（强制，防乱码）**：提交消息含中文时，**禁止在非 UTF-8 终端（如 Windows PowerShell）直接内联中文参数**执行 `git commit -m "中文标题"` / `gh pr create --title "中文"`——终端编码会把中文标题写成乱码并永久进入历史（曾发生：`docs: 娣峰悎寮曟搸…`）。正确做法与提交前检查：
+  1. 中文提交消息一律写入临时文件后 `git commit -F <msg_file>`（`gh pr create` 同理用 `--body-file`，标题用 ASCII 或经文件传递）；
+  2. 提交后立即检查标题可读：`git log -1 --format=%s` 与 `git show -s --format=%B HEAD` 输出必须为正常中文；
+  3. 乱码特征速查：出现 `�`（替换符）、`娣峰悎` 类错位汉字段、`?` 替代中文、或英文与乱码混排即视为失败；
+  4. 发现乱码：**未推送** → `git commit --amend` 用文件方式重写；**已推送未合入** → 分支内 amend 后 `push --force-with-lease`；**已合入 main** → 改写历史影响 CD 与协作者，须先评估（除非用户明确授权，禁止 force push main），并优先以修正提交记录说明。
 - **中文示例**：
   - `feat(api): 新增 WebSocket 短票鉴权接口`
   - `fix(worker): 修复大模型裁判调用超时重试逻辑`
