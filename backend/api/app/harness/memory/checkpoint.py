@@ -311,6 +311,10 @@ _WRITES_INSERT = """
 INSERT INTO harness_checkpoint_writes (
     thread_id, checkpoint_ns, checkpoint_id, task_id, idx, channel, type, blob
 ) VALUES (:thread_id, :checkpoint_ns, :checkpoint_id, :task_id, :idx, :channel, :type, :blob)
+ON CONFLICT (thread_id, checkpoint_ns, checkpoint_id, task_id, idx) DO UPDATE SET
+    channel = EXCLUDED.channel,
+    type = EXCLUDED.type,
+    blob = EXCLUDED.blob
 """
 
 

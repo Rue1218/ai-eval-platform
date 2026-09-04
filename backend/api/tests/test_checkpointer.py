@@ -160,6 +160,16 @@ def test_default_checkpointer_is_process_singleton() -> None:
     assert get_default_checkpointer() is get_default_checkpointer()
 
 
+def test_pg_writes_upsert_is_idempotent() -> None:
+    """PG put_writes 必须幂等（H5 真实演练发现）：恢复回合重复写入同一
+    (thread, checkpoint, task, idx) 时不得 UniqueViolation——断线重试/重复
+    resume 都要能安全重放，靠 ON CONFLICT DO UPDATE 覆盖。"""
+    from app.harness.memory.checkpoint import _WRITES_INSERT
+
+    assert "ON CONFLICT (thread_id, checkpoint_ns, checkpoint_id, task_id, idx)" in _WRITES_INSERT
+    assert "DO UPDATE SET" in _WRITES_INSERT
+
+
 def test_inmemory_visible_across_threads() -> None:
     """进程内共享存储：后台线程写入后，调用方可读（非 threading.local）。"""
     import threading
