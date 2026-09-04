@@ -81,6 +81,8 @@ services:
       AGENT_HITL_STRICT_PG: ${AGENT_HITL_STRICT_PG:-false}
       AGENT_INSTANCE_ID: ${AGENT_INSTANCE_ID:-}
       HYBRID_ENGINE_ENABLED: ${HYBRID_ENGINE_ENABLED:-false}
+      # H5 收尾演练开关（默认 false fail-closed；仅演练环境临时置 true，结束置回）。
+      AGENT_DRILL_SANDBOX_ENABLED: ${AGENT_DRILL_SANDBOX_ENABLED:-false}
       # native 首轮流式；默认开启。并行默认关，且必须填写协议档白名单或 *。
       AGENT_NATIVE_STREAM_ENABLED: ${AGENT_NATIVE_STREAM_ENABLED:-true}
       AGENT_NATIVE_STREAM_PROFILE_IDS: ${AGENT_NATIVE_STREAM_PROFILE_IDS:-}

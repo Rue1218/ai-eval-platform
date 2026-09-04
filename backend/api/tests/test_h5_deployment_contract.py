@@ -13,6 +13,7 @@ def test_compose_injects_h5_settings_and_isolates_runner_network() -> None:
     assert "AGENT_HITL_STRICT_PG: ${AGENT_HITL_STRICT_PG:-false}" in api_block
     assert "AGENT_INSTANCE_ID: ${AGENT_INSTANCE_ID:-}" in api_block
     assert "HYBRID_ENGINE_ENABLED: ${HYBRID_ENGINE_ENABLED:-false}" in api_block
+    assert "AGENT_DRILL_SANDBOX_ENABLED: ${AGENT_DRILL_SANDBOX_ENABLED:-false}" in api_block
     assert "- default\n      - sandbox_net" in api_block
     assert "networks:\n      - sandbox_net" in runner_block
     assert "networks:\n      - default" not in runner_block
