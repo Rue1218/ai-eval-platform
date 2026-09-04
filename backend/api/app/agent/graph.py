@@ -74,9 +74,11 @@ def _after_orchestrator(state: GraphState) -> str:
     H4：模型自主停止与守卫截断都不再直接 END——一律先进 reflect，由它决定
     放行（pass）/ 提问（clarify）/ 收尾（reject）/ 修复（repair）/ 重规划（retry）。
     「模型觉得差不多了」不是停止条件（ADR-2）。
+
+    注意：本分支**不读** ``workflow_failed``（那是 Workflow DAG（W0–W7）专用
+    语义字段，TAOR 子图内 orchestrator/tools 都不会置位；条件边映射也没有
+    END 键——若误置会触发 LangGraph Invalid path 而非收尾，属假守卫）。
     """
-    if state.get("workflow_failed"):
-        return "END"
     if state.get("pending_tool"):
         return "tools"
     return "reflect"
