@@ -161,8 +161,19 @@ API 恢复后，用原会话和原审批卡提交一次 `tool_approval_ack`：
 | # | 发现 | 处置 |
 | :-- | :--- | :--- |
 | 1 | `PgCheckpointer.put_writes` 无 upsert：跨进程恢复回合重复写入唯一键冲突 `UniqueViolation`（断线重试/重复 resume 不可安全重放；InMemory 路径不暴露） | 已修复：`ON CONFLICT (thread_id, checkpoint_ns, checkpoint_id, task_id, idx) DO UPDATE` 幂等覆盖（PR #217，合入 `fbe3e1d`） |
-| 2 | 审批放行后 bash 在 runner 层仍被 fail-closed 拒绝：`sandbox_dir` 非合法会话工作区（图级/ws 回合均未注入会话工作区） | 非缺陷，属既有沙箱边界（与 Smoke 遗留 L1 同源：ws 回合未注入文件沙箱工作区）。**sandbox 命令真实执行路径待会话工作区接线后二次演练**，接线完成前不得把 bash 加入生产能力白名单 |
+| 2 | 审批放行后 bash 在 runner 层仍被 fail-closed 拒绝：`sandbox_dir` 非合法会话工作区（图级/ws 回合均未注入会话工作区） | 会话工作区接线已完成（PR #219：ws 回合注入 `configurable["sandbox"]["dir"]` 与 `assets.file_ids`）并经 **二次演练闭环通过（2026-09-04）**：注入会话工作区后 bash 审批 → resume approve → runner bwrap 真实执行成功（`tool_result ok:true`、文件落盘工作区）。演练后 `AGENT_DRILL_SANDBOX_ENABLED` 已置回 `false` |
 
-**收尾确认**：`AGENT_DRILL_SANDBOX_ENABLED` 已置回 `false` 并重启验证（容器内 `false`）；演练会话与检查点数据已从数据库清理。
+**收尾确认**：`AGENT_DRILL_SANDBOX_ENABLED` 已置回 `false` 并重启验证（容器内 `false`）；演练会话、检查点与工作区数据已清理。
 
-**未完成（阻断发布项保留）**：多副本粘性路由演练（§2，`scale api=2`）、runner bwrap 权限边界复核（§4 高风险项）。
+### 2026-09-04（补）· P0 二次演练（sandbox 真实执行闭环，main `6e90e38`）
+
+| # | 步骤 | 结果 |
+| :-- | :--- | :--- |
+| 1 | 会话工作区注入（PR #219 后） | 图级回合 `configurable["sandbox"]["dir"]` = 会话工作区（runner 同卷可访问） |
+| 2 | 制造审批卡 | discover 选中 `worker.sandbox`；`bash "touch p0-flag.txt && echo P0-OK"` → `tool_approval` interrupt（sandbox_scope 随卡） |
+| 3 | resume approve（裸 dict，与 ws.py 同构） | 校验通过 → **runner bwrap 沙箱真实执行**：`tool_result {ok:true, stdout:"P0-OK", exit_code:0, source:"sandbox:bash"}`，`p0-flag.txt` 落盘工作区 |
+| 4 | 收尾 | drill 开关置回 `false`；演练检查点/工作区已清理 |
+
+> 注：演练过程同时确认 LangGraph resume 传参契约——恢复值须以 `resume=<裸 dict>`（或经 ws.py 现有封装）传入，包装成 `Command` 对象直接传入会因节点输入类型不符而失败；H5 恢复协议以 ws.py 实现为唯一事实源。
+
+**未完成（阻断发布项保留）**：多副本粘性路由演练（§2，`scale api=2`）、runner bwrap 权限边界复核（§4 高风险项）；bash 真实执行已闭环，但**生产放行 worker.sandbox 仍需完成上述两项后的正式权限边界评审**。
