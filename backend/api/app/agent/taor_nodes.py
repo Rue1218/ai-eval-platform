@@ -89,7 +89,11 @@ _PLAN_SYSTEM = (
     '"delivery":"chat","budget":{"model_calls":12,"tool_turns":8},'
     '"allows_replan":false,"notes":"不超过40字说明",'
     '"protocol":"plan","version":"plan.v1"}\n'
-    "要求：步骤必须 3–7 步；tools_needed 只列短工具；探索任务 delivery=chat。"
+    "要求：步骤必须 3–7 步；tools_needed 只列短工具；探索任务 delivery=chat。\n"
+    "intent 是执行环境的路由依据，必须从以下语义词中明确表述（不要用抽象概括，"
+    "不要自造新词）：排查/诊断/定位/分析（排查类）；数据集/整理/清单（数据类）；"
+    "运行脚本/执行命令/跑脚本/运行代码（脚本执行类）。涉及脚本执行时 intent 必须"
+    "显式包含上述执行类语义词，否则执行器无法获得对应能力。"
 )
 
 # react.v1 输出说明：done 时在 JSON 之后附最终答复正文（JSON 前后文字被容忍）。
@@ -558,7 +562,10 @@ def make_orchestrator_node(gateway: object, agent_registry: object, tool_registr
                 "turn_failed": True,
                 "budget": budget.to_dict(),
                 "pending_events": _error_payload(
-                    "VALIDATION", f"非法工具调用：{name}（不在本轮视野内）"
+                    "VALIDATION",
+                    f"非法工具调用：{name}（不在本轮视野内）。"
+                    "如需读取/整理文件或运行脚本等执行类能力，请在请求中明确说明用途"
+                    "（如『运行脚本…』），Agent 将按声明能力重新路由；不要尝试越权调用。",
                 ),
             }
         arguments = dict(fields.get("arguments") or {})
