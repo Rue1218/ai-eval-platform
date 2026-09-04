@@ -70,6 +70,11 @@ class Settings(BaseSettings):
     # 多副本部署时网关按 session_id 粘性路由，同一会话固定落点以保证会话级
     # abort dict 与 interrupt resume 的 thread_id 可寻址。暴露于 /api/health。
     agent_instance_id: str = ""
+    # H5 收尾演练开关：true 时 discover 允许选中 worker.sandbox（仅演练专用，
+    # 配合《H5 持久化 HITL 收尾演练》§3 制造危险 bash 审批卡验证重启恢复）。
+    # 默认 false 保持静态排除 fail-closed；演练结束必须置回 false——放行属
+    # 生产红线，须先完成 Linux/Docker 恢复演练与 bwrap 权限边界评审。
+    agent_drill_sandbox_enabled: bool = False
     # P1/P4：native 首轮流式。默认开启（已落地）；false 回退 invoke，不改历史事件。
     agent_native_stream_enabled: bool = True
     # 逗号分隔协议档 ID；空 = 全部 native。``*`` 同样表示全部。
