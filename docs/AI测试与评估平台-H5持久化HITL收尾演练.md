@@ -2,10 +2,10 @@
 
 | 项 | 内容 |
 | :--- | :--- |
-| 版本 | V1.0 |
-| 审查日期 | 2026-09-03 |
+| 版本 | V1.1 |
+| 审查日期 | 2026-09-04 |
 | 适用环境 | Linux + Docker Compose |
-| 前置提交 | H5 批次 2 `11f5753` 及本收尾分支变更 |
+| 前置提交 | H5 批次 2 `11f5753` + 演练开关（`agent_drill_sandbox_enabled`）合入 |
 | 结论 | 配置与路由已具备；真实生产切换、重启恢复和 sandbox 放行仍须 Linux/Docker 证据 |
 
 本文只记录 H5 收尾的可重复操作与验收证据，不把 Windows 本机测试结果当作 Linux/Docker 运行证据。
@@ -19,6 +19,8 @@ AGENT_CHECKPOINTER=postgres
 AGENT_HITL_STRICT_PG=true
 HYBRID_ENGINE_ENABLED=true
 AGENT_INSTANCE_ID=
+# 仅本演练环境（制造审批卡）置 true；演练结束置回 false 并重启
+AGENT_DRILL_SANDBOX_ENABLED=true
 ```
 
 Compose 会把这些值显式注入 API。`deploy/deploy.sh` 在构建前检查：混合引擎开启时必须同时满足 PostgreSQL 检查点和严格启动门禁；否则部署立即失败。API 启动时仍会再次执行同一门禁。
@@ -52,10 +54,23 @@ docker compose -f docker-compose.yml -f deploy/docker-compose-h5-multi-api.yml \
 
 ## 3. Linux/Docker 重启恢复演练
 
+> **演练开关（必须先合入并理解）**：生产注册表把 `worker.sandbox` 从 discover
+> 静态排除（`backend/api/app/harness/orchestration/agents.py`，fail-closed），
+> 因此正常生产下模型**永远无法**触发危险 bash 审批。为制造待审批状态，本演练
+> 需在演练环境把 `AGENT_DRILL_SANDBOX_ENABLED=true` 写入 `.env` 并重启 api——
+> 该开关默认 `false`（config.py / .env.example），只放行 discover 选中
+> `worker.sandbox`，**不等于** sandbox 放行评审结论；演练结束必须置回
+> `false` 并重启。双闸结构：即使开关打开，intent 词表（
+> `taor_nodes._capabilities_from_intent` 的「运行脚本 / 执行命令 / 跑脚本 /
+> 运行代码 / 执行 bash」触发词）命中的 `run_script` 能力请求才会选中
+> sandbox；混合能力请求仍保守回落 `worker.general`。
+
 ### 3.1 制造待审批状态
 
 1. 使用两个同一会话成员建立 Agent WS；
-2. 在混合引擎 `agent` 路径提交一个会触发危险 bash 审批的请求；
+2. 在混合引擎 `agent` 路径提交一个**含 code 触发词**的请求（如「排查一下
+   测试环境异常，然后运行脚本定位问题」——含「运行脚本」触发 `run_script`
+   能力，演练开关打开后 discover 选中 `worker.sandbox`）；
 3. 确认已收到持久化 `tool_approval`，记录 `session_id`、审批卡 `id` 和当前 `last_event_id`；
 4. 在 API 重启前确认 runner 没有执行该命令：
 
@@ -102,6 +117,9 @@ API 恢复后，用原会话和原审批卡提交一次 `tool_approval_ack`：
 ## 4. `worker.sandbox` 安全评审
 
 当前结论为“受控基础设施已加固，尚未批准从 `discover.excluded` 放行”：
+`AGENT_DRILL_SANDBOX_ENABLED`（默认 `false`）只允许演练环境临时选中
+`worker.sandbox` 制造审批卡，**演练结束必须置回 `false`**——置回前不得把
+本演练证据当作生产放行结论：
 
 - `worker.sandbox` 继续静态排除，Agent 不可发现选择；
 - runner 无宿主机端口，只加入 Compose 的 `internal: true` `sandbox_net`，API 是唯一业务侧调用方；

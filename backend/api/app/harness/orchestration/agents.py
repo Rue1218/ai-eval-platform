@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Literal
 
+from app.config import settings
 from app.errors import AppError, ErrorCode
 
 logger = logging.getLogger("harness.agents")
@@ -54,8 +55,12 @@ class AgentDef:
 class AgentRegistry:
     """Worker 注册表；静态注册 + 查询，模式对齐 ``ToolRegistry``。"""
 
-    def __init__(self) -> None:
+    def __init__(self, drill_sandbox_enabled: bool = False) -> None:
         self._defs: dict[str, AgentDef] = {}
+        # H5 收尾演练开关（config.agent_drill_sandbox_enabled）：默认 False 保持
+        # worker.sandbox 静态排除 fail-closed；仅演练环境临时置 True 以便制造
+        # 危险 bash 审批卡（见《H5 持久化 HITL 收尾演练》§3）。
+        self._drill_sandbox_enabled = drill_sandbox_enabled
 
     def register(self, def_: AgentDef) -> None:
         """登记 Worker；重名登记抛 VALIDATION（防止覆盖导致分派漂移）。"""
@@ -95,14 +100,16 @@ class AgentRegistry:
         """确定性选择 Worker（H3 discover 节点消费；不调模型，同输入稳定同输出）。
 
         匹配规则（注册序稳定，无随机）：
-        1. ``worker.sandbox`` 静态排除——code 能力须等 H5 持久化 HITL 与安全
-           评审后放开，任何 discover 结果都不得包含它（fail-closed）；
+        1. ``worker.sandbox`` 默认静态排除——code 能力放行属生产红线，须先
+           完成 Linux/Docker 恢复演练与 bwrap 权限边界评审；仅 H5 收尾演练
+           开关（``agent_drill_sandbox_enabled``，默认 False）置 True 时放行
+           用于制造危险 bash 审批卡，演练结束必须置回；
         2. 候选 = 能力全含（请求 capabilities ⊆ 声明的 capabilities）的 Worker；
         3. 得分 = 命中能力数 + 绑定该 ``skill_id`` 的加成；得分最高者胜出，
            并列取注册序在先；零命中回落 ``worker.general``（验收：同一输入
            稳定选择同一 Agent）。
         """
-        excluded = {"worker.sandbox"}  # H5 前任何 discover 不得选中
+        excluded = set() if self._drill_sandbox_enabled else {"worker.sandbox"}
         best: AgentDef | None = None
         best_score = -1
         for def_ in self.iter_defs():
@@ -133,7 +140,7 @@ def build_default_agent_registry() -> AgentRegistry:
     MCP 长任务桥且**不进入任何 Worker 视野**（仅 Workflow ``enqueue`` 节点
     经工具十层链调用，避免探索路径绕过门禁直接入队）。
     """
-    registry = AgentRegistry()
+    registry = AgentRegistry(drill_sandbox_enabled=settings.agent_drill_sandbox_enabled)
     registry.register(
         AgentDef(
             agent_id="worker.general",

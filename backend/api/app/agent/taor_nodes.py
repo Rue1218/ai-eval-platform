@@ -126,6 +126,12 @@ _DIAGNOSE_CAPABILITIES = frozenset({"read_workspace", "analyze_report", "trace_t
 _DATASET_CAPABILITIES = frozenset({"inspect_dataset", "prepare_slots"})
 _DIAGNOSE_KEYWORDS = ("排查", "诊断", "定位", "分析", "查", "原因", "为什么", "报告", "失败", "异常")
 _DATASET_KEYWORDS = ("数据集", "数据", "槽位", "检视", "整理", "清单")
+# code 能力触发词（H5 收尾演练/未来放行通道）。注意双闸：即便意图命中这里，
+# discover 的 worker.sandbox 静态排除仍常闭（agent_drill_sandbox_enabled 默认
+# False）——带 run_script 的请求在生产零命中回落 worker.general，行为与词表
+# 引入前等价（fail-closed），不会因此获得 bash。
+_SANDBOX_CAPABILITIES = frozenset({"run_script", "verify_output"})
+_SANDBOX_KEYWORDS = ("运行脚本", "执行命令", "跑脚本", "运行代码", "执行 bash", "跑一下代码")
 
 # 只读工具（OR-4 重复守卫对象；与 ToolRegistry risk_level="read" 一致的保守子集）
 _READ_TOOLS: frozenset[str] = frozenset({"read", "web_search", "web_fetch", "TaskGet", "TaskList"})
@@ -153,6 +159,8 @@ def _capabilities_from_intent(intent: str) -> frozenset[str]:
         caps.update(_DIAGNOSE_CAPABILITIES)
     if any(keyword in intent for keyword in _DATASET_KEYWORDS):
         caps.update(_DATASET_CAPABILITIES)
+    if any(keyword in intent for keyword in _SANDBOX_KEYWORDS):
+        caps.update(_SANDBOX_CAPABILITIES)
     return frozenset(caps)
 
 
