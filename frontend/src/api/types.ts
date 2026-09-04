@@ -893,6 +893,8 @@ export interface WsServerEvent {
     | 'task_cancelled'
     | 'confirm'
     | 'confirm_ack'
+    | 'tool_approval'
+    | 'tool_approval_ack'
     | 'error'
     | 'session_title'
     | 'pong'
@@ -910,6 +912,7 @@ export interface ResponseCompletedPayload {
   finish_reason: 'stop' | 'cancelled' | 'error'
   role: string
   engine?: 'direct' | 'chat' | 'workflow' | 'agent'
+  agent_id?: string
   router_confidence?: number
   router_reason?: string
 }
@@ -934,6 +937,20 @@ export interface ToolResultPayload {
   data?: Record<string, unknown>
   error?: string
   source?: string
+}
+
+// tool_approval payload（API.md §4.3 V1.70 / H5 HITL）：危险 bash 等命令在
+// 执行前中断，事件载荷即审批卡；approved/rejected 由上行 tool_approval_ack 回执。
+export interface ToolApprovalPayload {
+  type: 'tool_approval'
+  id: string
+  call_id: string
+  name: string
+  command: string
+  reason?: string
+  risk_level?: 'high' | 'medium' | 'low'
+  sandbox_scope?: string
+  allowed_decisions?: Array<'approve' | 'reject'>
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

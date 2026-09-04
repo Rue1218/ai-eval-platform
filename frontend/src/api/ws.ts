@@ -216,6 +216,16 @@ export class AgentWebSocket {
     return true
   }
 
+  /** 工具审批回执（API.md §4.4 V1.70）：{action: 'approve'|'reject', id} 恢复原图回合。 */
+  public sendApprovalAck(action: 'approve' | 'reject', id: string): boolean {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      console.warn('WebSocket not open, cannot send tool_approval_ack')
+      return false
+    }
+    this.ws.send(JSON.stringify({ event: 'tool_approval_ack', payload: { action, id } }))
+    return true
+  }
+
   private scheduleReconnect(): void {
     if (this.reconnectTimer !== null) return
     this.reconnectTimer = window.setTimeout(() => {
