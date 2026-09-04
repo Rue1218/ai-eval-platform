@@ -257,6 +257,16 @@
               @cancel="handleConfirmAck(item, false)"
             />
 
+            <!-- 2.5.2 工具审批卡（H5 HITL，API.md V1.70）：危险 bash 命令执行前暂停，
+                 批准/拒绝经 tool_approval_ack 回执恢复原图回合（resume 至多一次） -->
+            <ApprovalCard
+              v-else-if="item.type === 'toolApproval' && item.approval"
+              :item="item"
+              :can-act="canActApproval(item)"
+              @approve="handleApprovalAck"
+              @reject="handleApprovalReject"
+            />
+
             <!-- 2.6 错误条 -->
             <div v-else-if="item.type === 'error'" class="error-strip" :class="{ 'no-anim': item.noAnim }">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="flex: 0 0 16px; margin-top: 1px">
@@ -548,6 +558,7 @@ import type {
   Profile,
   SessionAuthor,
   Task,
+  ToolApprovalPayload,
   WsServerEvent,
 } from '../api/types'
 import { useModeStore } from '../stores/mode'
@@ -559,6 +570,7 @@ import { formatLatency } from '../utils/format'
 import AttachmentPreview from '../components/agent/AttachmentPreview.vue'
 import MarkdownView from '../components/agent/MarkdownView.vue'
 import ContextMeter, { type ContextMeterData } from '../components/agent/ContextMeter.vue'
+import ApprovalCard from '../components/agent/ApprovalCard.vue'
 import ConfirmCard from '../components/agent/ConfirmCard.vue'
 import { getDefaultRunConfig, getDefaultStressConfig } from '../schemas/confirmCard'
 
@@ -1431,6 +1443,24 @@ async function loadSessionHistory(sid: string): Promise<number> {
           confirm.item.ackResult = Boolean(p.ok)
           confirm.item.open = false
         }
+      } else if (ev.event === 'tool_approval') {
+        // V1.70：历史审批卡只读回放；其后紧跟的 tool_approval_ack 会盖章终态。
+        rawList.push({
+          time: t,
+          priority: 4,
+          eventId: eid,
+          item: {
+            type: 'toolApproval',
+            approval: p,
+            approvalDone: null,
+            noAnim: true,
+          },
+        })
+      } else if (ev.event === 'tool_approval_ack') {
+        const target = [...rawList].reverse().find(
+          x => x.item.type === 'toolApproval' && x.item.approval?.id === p.approval_id,
+        )
+        if (target) target.item.approvalDone = p.action === 'approve' ? 'approved' : 'rejected'
       }
     }
 
@@ -2078,6 +2108,33 @@ function handleWsEvent(ev: WsServerEvent) {
       setCurrentGenerating(false)
       break
     }
+    case 'tool_approval': {
+      // H5 HITL：危险命令执行前中断，落审批卡（可折叠只读展开命令全文）。
+      setCurrentGenerating(false)
+      harnessStage.value = ''
+      const id = String(p.id || '')
+      if (id && !events.value.some(e => e.type === 'toolApproval' && e.approval?.id === id)) {
+        events.value.push(
+          reactive({
+            type: 'toolApproval',
+            approval: p,
+            approvalDone: null,
+          }) as StreamItem,
+        )
+      }
+      scrollToBottom()
+      break
+    }
+    case 'tool_approval_ack': {
+      const target = [...events.value].reverse().find(
+        e => e.type === 'toolApproval' && e.approval?.id === p.approval_id,
+      )
+      if (target) {
+        target.approvalDone = p.action === 'approve' ? 'approved' : 'rejected'
+        target.streaming = false
+      }
+      break
+    }
     case 'confirm': {
       // V1.67 恢复：确认卡 TaskSpec 在 payload；规范化补齐 run / stress 默认值
       setCurrentGenerating(false)
@@ -2579,7 +2636,7 @@ interface ToolRunItem {
 type AgentBlock = AgentAssistantItem | AgentErrorItem
 
 interface StreamItem {
-  type: 'user' | 'agent' | 'report' | 'confirm' | 'error' | 'typing'
+  type: 'user' | 'agent' | 'report' | 'confirm' | 'toolApproval' | 'error' | 'typing'
   text?: string
   latency_ms?: number
   streaming?: boolean
@@ -2610,6 +2667,10 @@ interface StreamItem {
   summary?: string
   open?: boolean
   fieldErrors?: Record<string, string>
+  // 工具审批卡（H5 HITL，API.md V1.70）：approval 为中断载荷快照；
+  // approvalDone 由 tool_approval_ack 回执盖章（approved/rejected）。
+  approval?: ToolApprovalPayload | null
+  approvalDone?: 'approved' | 'rejected' | null
 }
 
 const harnessStage = ref<string>('')
@@ -2629,6 +2690,38 @@ const pendingAckItem = ref<StreamItem | null>(null)
 
 function canConfirmItem(item: StreamItem): boolean {
   return !item.confirmAuthor?.id || item.confirmAuthor.id === authStore.user?.id
+}
+
+/** 工具审批卡可操作：实时连接且该卡尚未回执（owner 校验由服务端行锁把关）。 */
+function canActApproval(item: StreamItem): boolean {
+  return !item.approvalDone && !!(agentWs && agentWs.isConnected)
+}
+
+/** H5 HITL 审批回执：乐观盖章（服务端行锁兜底重复 ack；tool_approval_ack
+ * 广播回执到达后终态一致）。审批放行以原 thread_id 恢复检查点回合。 */
+function handleApprovalAck(item: StreamItem) {
+  const approval = item.approval
+  if (!approval || item.approvalDone) return
+  const useLive = !!(agentWs && agentWs.isConnected)
+  if (!useLive) {
+    message.warning('连接已断开，审批卡将保留；重连后仍可审批')
+    return
+  }
+  item.approvalDone = 'approved'
+  agentWs!.sendApprovalAck('approve', approval.id)
+  scrollToBottom()
+}
+
+function handleApprovalReject(item: StreamItem) {
+  const approval = item.approval
+  if (!approval || item.approvalDone) return
+  if (!agentWs || !agentWs.isConnected) {
+    message.warning('连接已断开，审批卡将保留；重连后仍可审批')
+    return
+  }
+  item.approvalDone = 'rejected'
+  agentWs.sendApprovalAck('reject', approval.id)
+  scrollToBottom()
 }
 
 function confirmAuthorLabel(item: StreamItem): string {

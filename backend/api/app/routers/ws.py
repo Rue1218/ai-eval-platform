@@ -38,6 +38,7 @@ from ..errors import AppError, ErrorCode
 from ..harness.context import recent_window, skill_hint_lines
 from ..harness.execution.context import ToolExecutionContext
 from ..harness.execution.task_tools import cancel_task_safe
+from ..harness.execution.workspace import ensure_session_workspace
 from ..harness.memory import get_default_checkpointer, to_serializable_request
 from ..harness.orchestration import check_session_active_task
 from ..harness.orchestration.confirm import (
@@ -1334,6 +1335,32 @@ async def _translate_event(
     )
 
 
+def _session_owned_file_ids(db: Session, session_id: str) -> frozenset[str]:
+    """本会话用户消息引用过的附件 ``file_id`` 集合。
+
+    供资产溯源门禁（``feedback/rules.py``）使用：只对真正引用过的附件做归属
+    校验，空集时门禁保持短路（既有语义）。注入 ``configurable["assets"]``。
+    """
+
+    try:
+        rows = (
+            db.query(Message.attachments)
+            .filter(Message.session_id == session_id, Message.role == "user")
+            .all()
+        )
+    except Exception:  # noqa: BLE001 —— 桩 DB/查询失败降级为空集（门禁短路=未注入语义）
+        return frozenset()
+    ids: set[str] = set()
+    for (attachments,) in rows:
+        for item in attachments or []:
+            if not isinstance(item, Mapping):
+                continue
+            file_id = item.get("file_id")
+            if isinstance(file_id, str) and file_id:
+                ids.add(file_id)
+    return frozenset(ids)
+
+
 async def _run_turn(
     session_id: str,
     websocket: WebSocket,
@@ -1396,6 +1423,14 @@ async def _run_turn(
         # 新回合复用租约 ID 作为检查点线程 ID，便于并发与中断审计关联；
         # H5 审批恢复沿用原中断回合的 thread_id（卡 meta 记录）。
         thread_id = resume_thread_id or turn_id or f"{session_id}:{uuid4().hex}"
+        # 会话文件沙箱（H5 完善，P0）：read/write/edit/bash 以会话工作区为执行
+        # 根（stage 的附件即落在 {root}/{session_id}/attachments/），普通回合与
+        # 审批 resume 回合共用本注入点。目录不可得（如桩会话标识）时为空——
+        # 工具保持 fail-closed（旧语义），绝不让注入失败阻断回合。
+        try:
+            sandbox_dir = ensure_session_workspace(session_id)
+        except Exception:  # noqa: BLE001 —— 工作区不可得降级为空（工具 fail-closed）
+            sandbox_dir = ""
         graph_config = {
             "configurable": {
                 # 每回合独立 thread_id：检查点按回合隔离（M3 阶段 3）
@@ -1405,6 +1440,9 @@ async def _run_turn(
                     "api_key": config.api_key or "",
                     "user_id": user_id,
                 },
+                "sandbox": {"dir": sandbox_dir},
+                # 资产溯源门禁输入：本会话用户消息引用过的附件集合（空集短路）。
+                "assets": {"file_ids": _session_owned_file_ids(db, session_id)},
                 "session": {
                     "id": session_id,
                     # compact 摘要供 M2 assemble 注入【会话摘要】，不入 GraphState
