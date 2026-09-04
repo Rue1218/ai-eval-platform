@@ -6,7 +6,7 @@
 | 审查日期 | 2026-09-04 |
 | 适用环境 | Linux + Docker Compose |
 | 前置提交 | H5 批次 2 `11f5753` + 演练开关（`agent_drill_sandbox_enabled`）合入 |
-| 结论 | 配置与路由已具备；真实生产切换、重启恢复和 sandbox 放行仍须 Linux/Docker 证据 |
+| 结论 | 重启恢复演练已执行（2026-09-04，见 §6）；多副本粘性演练与 sandbox 命令执行链接线（会话工作区注入）仍待完成后才能评审放行 |
 
 本文只记录 H5 收尾的可重复操作与验收证据，不把 Windows 本机测试结果当作 Linux/Docker 运行证据。
 
@@ -140,3 +140,29 @@ API 恢复后，用原会话和原审批卡提交一次 `tool_approval_ack`：
 | `docs/AI测试与评估平台-混合驱动引擎开发计划.md` | 更新 H5 收尾状态与实现记录 |
 | `docs/AI测试与评估平台-Agent开发文档.md` | 更新检查点、网关与 sandbox 状态 |
 | `docs/AI测试与评估平台-API.md` | 同步 H5 V1.70 的生产前提与当前实现状态 |
+| `backend/api/app/harness/memory/checkpoint.py` | PgCheckpointer.put_writes 幂等 upsert（演练发现修复，#217） |
+
+## 6. 演练执行记录（V1.1）
+
+### 2026-09-04 · Linux/Docker 重启恢复演练（47.119.132.83，main `fbe3e1d`）
+
+**通过项**
+
+| # | 步骤 | 结果 |
+| :-- | :--- | :--- |
+| 1 | H5 生产配置全开（postgres + strict + hybrid + drill）启动 | 启动门禁通过，无 fail-fast；`/api/health` 返回非空 `instance_id` |
+| 2 | 制造待审批状态（§3.1） | `AGENT_DRILL_SANDBOX_ENABLED=true` 时 discover 选中 `worker.sandbox`；真实图（PG 检查点）中 orchestrator Act `bash touch /tmp/...` → `tool_approval` interrupt（id/call_id/command 完整）落检查点 |
+| 3 | API 重启（容器重启，跨进程） | runner 日志确认命令未执行；重启后健康 |
+| 4 | 恢复执行（§3.2） | 新进程按原 `thread_id` 从 PG 检查点 `Command(resume={action:approve})` → `tool_result` 仅 1 次（不重放中断前事件）→ `response.completed` 收尾 |
+| 5 | 重复 resume 幂等 | 同一 thread 再次 resume → 零事件零执行（resume 至多一次） |
+
+**发现与修复**
+
+| # | 发现 | 处置 |
+| :-- | :--- | :--- |
+| 1 | `PgCheckpointer.put_writes` 无 upsert：跨进程恢复回合重复写入唯一键冲突 `UniqueViolation`（断线重试/重复 resume 不可安全重放；InMemory 路径不暴露） | 已修复：`ON CONFLICT (thread_id, checkpoint_ns, checkpoint_id, task_id, idx) DO UPDATE` 幂等覆盖（PR #217，合入 `fbe3e1d`） |
+| 2 | 审批放行后 bash 在 runner 层仍被 fail-closed 拒绝：`sandbox_dir` 非合法会话工作区（图级/ws 回合均未注入会话工作区） | 非缺陷，属既有沙箱边界（与 Smoke 遗留 L1 同源：ws 回合未注入文件沙箱工作区）。**sandbox 命令真实执行路径待会话工作区接线后二次演练**，接线完成前不得把 bash 加入生产能力白名单 |
+
+**收尾确认**：`AGENT_DRILL_SANDBOX_ENABLED` 已置回 `false` 并重启验证（容器内 `false`）；演练会话与检查点数据已从数据库清理。
+
+**未完成（阻断发布项保留）**：多副本粘性路由演练（§2，`scale api=2`）、runner bwrap 权限边界复核（§4 高风险项）。
