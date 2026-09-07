@@ -199,6 +199,30 @@ async def test_stop_keeps_others_or_non_approval_cards(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_stop_terminal_emit_failure_still_completes(monkeypatch) -> None:
+    """/stop 的终态广播失败（DB/网络瞬时故障）时 completed 仍必发（每轮恰一终态铁律）。"""
+    completed: list[str] = []
+
+    async def fake_completed(_db, _ws, _st, _sid, **kw):
+        completed.append(kw.get("finish_reason") or "")
+        return None
+
+    async def fake_emit_boom(*_a, **_k):
+        raise RuntimeError("db write failed")
+
+    monkeypatch.setattr(ws, "_emit_persistent", fake_emit_boom)
+    monkeypatch.setattr(ws, "_emit_turn_completed", fake_completed)
+    monkeypatch.setattr(ws, "_SESSION_TURNS", {})
+    db = _FakeDb()
+    db.rows[0].pending_confirm = _card(created_at=_now())
+    db.rows[0].pending_confirm_author_id = "u-1"
+    # 不应抛出：终态广播失败被吞掉，/stop 正常收尾
+    await ws._handle_stop(db, object(), ws._ConnectionState(), "s-1", None, user_id="u-1")
+    assert db.rows[0].pending_confirm is None  # 卡已清（清卡先行）
+    assert completed == ["cancelled"]
+
+
+@pytest.mark.asyncio
 async def test_expiry_scan_clears_only_overdue_and_is_idempotent(monkeypatch) -> None:
     """后台扫描：只清过期审批卡并广播 expired；新鲜/非审批卡不动；重复扫描幂等。"""
     expired_row = _Row("s-overdue")
