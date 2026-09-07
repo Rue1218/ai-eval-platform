@@ -178,3 +178,55 @@ def test_execute_raw_internal_keeps_generic_message() -> None:
     error = result.error  # type: ignore[attr-defined]
     assert error["code"] == "INTERNAL"
     assert "secret" not in str(error["message"])
+
+
+# ─── MAJ-2：admin 会话数据目录定位（绑定 → 工作区 scope）───
+
+
+def _admin_session(*, bound: bool = True, deleted_ws: bool = False) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=_SID,
+        workspace_id=_WS_ID if bound else None,
+        scope_path=None,
+        user_id="u-1",
+        deleted_at=None,
+        title="t",
+        visibility="private",
+        created_at=None,
+        updated_at=None,
+    )
+
+
+def test_admin_session_data_dir_bound_points_to_scope(tmp_root) -> None:
+    """绑定会话 → admin 数据目录 = 工作区根（非 legacy）。"""
+    from app.routers.workspaces import _session_data_dir
+
+    (tmp_root / _WS_ID).mkdir()
+    fake = _FakeDb(_workspace_row(deleted=False))
+    session = _admin_session()
+    result = _session_data_dir(fake, session)
+    assert result == os.path.abspath(str(tmp_root / _WS_ID))
+    assert not result.endswith(_SID)
+
+
+def test_admin_session_data_dir_bound_inactive_returns_none(tmp_root) -> None:
+    """绑定工作区已注销 → admin 视图无文件夹（不回落 legacy 空壳）。"""
+    from app.routers.workspaces import _session_data_dir
+
+    (tmp_root / _WS_ID).mkdir()
+    session = _admin_session(deleted_ws=True)
+    result = _session_data_dir(_FakeDb(_workspace_row(deleted=True)), session)
+    assert result is None
+
+
+def test_admin_session_data_dir_unbound_uses_legacy(tmp_root) -> None:
+    """未绑定会话 → legacy 目录（存在才返回，不主动创建）。"""
+    from app.routers.workspaces import _session_data_dir
+
+    # 目录不存在 → None（统计/浏览不虚报、不主动 mkdir）
+    assert _session_data_dir(_FakeDb(None), _admin_session(bound=False)) is None
+    assert not os.path.exists(str(tmp_root / _SID))
+    # 目录存在 → legacy 路径
+    legacy = tmp_root / _SID
+    legacy.mkdir()
+    assert _session_data_dir(_FakeDb(None), _admin_session(bound=False)) == str(legacy)

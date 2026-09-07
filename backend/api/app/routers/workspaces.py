@@ -30,10 +30,30 @@ from ..workspace_service import (
     _MAX_FILES,
     folder_summary,
     orphan_direct_children,
+    resolve_session_sandbox_db,
     validate_segment,
 )
 
 router = APIRouter(prefix="/api/admin/workspaces", tags=["admin-workspaces"])
+
+
+def _session_data_dir(db: Session, session: AgentSession) -> str | None:
+    """会话沙箱数据目录（MAJ-2）：绑定 → 工作区 scope；未绑定 → legacy。
+
+    绑定会话（F3/G5）的真实数据在工作区 scope——admin 视图/统计/浏览必须
+    指向该目录（经带行态校验的 resolve_session_sandbox_db，行态失效/目录
+    不可得返回 None = 无文件夹，绝不回落 legacy 空壳）；未绑定保持原
+    ``isdir(session_workspace_dir)`` 语义（不主动 mkdir）。
+    """
+    if session.workspace_id:
+        try:
+            return resolve_session_sandbox_db(
+                db, session.id, session.workspace_id, session.scope_path
+            )
+        except AppError:
+            return None
+    directory = session_workspace_dir(session.id)
+    return directory if os.path.isdir(directory) else None
 
 
 def _match_session(
@@ -104,13 +124,24 @@ def list_workspaces(
     )
     kw = keyword.strip().lower()
 
-    # 单次遍历构建 (会话, 归属, 是否有工作区) 三元组，并统计整体聚合
+    # 单次遍历构建 (会话, 归属, 是否有数据目录) 三元组，并统计整体聚合。
+    # 绑定会话的数据目录 = 工作区 scope（MAJ-2：_session_data_dir 行态解析）。
+    bound_ids = {session.workspace_id for session, _u in rows if session.workspace_id}
+    ws_names: dict[str, str] = {}
+    if bound_ids:
+        ws_names = {
+            row.id: row.name
+            for row in db.query(Workspace).filter(Workspace.id.in_(bound_ids)).all()
+        }
     entries: list[tuple[AgentSession, str | None, bool]] = []
+    data_dirs: dict[str, str] = {}
     with_folder = 0
     for session, username in rows:
-        has_folder = os.path.isdir(session_workspace_dir(session.id))
+        directory = _session_data_dir(db, session)
+        has_folder = directory is not None
         if has_folder:
             with_folder += 1
+            data_dirs[session.id] = directory
         entries.append((session, username, has_folder))
 
     filtered = [
@@ -128,7 +159,7 @@ def list_workspaces(
     items = []
     for session, username in page_entries:
         # 仅当前页会话做文件夹扫描，控制单次请求的磁盘遍历规模
-        directory = session_workspace_dir(session.id)
+        directory = data_dirs.get(session.id)
         items.append(
             {
                 "session_id": session.id,
@@ -136,9 +167,15 @@ def list_workspaces(
                 "owner": username,
                 "visibility": session.visibility,
                 "deleted": session.deleted_at is not None,
+                # MAJ-2：绑定会话附工作区信息（数据在 scope，folder 指向 scope）
+                "workspace_id": session.workspace_id,
+                "workspace_name": (
+                    ws_names.get(session.workspace_id) if session.workspace_id else None
+                ),
+                "scope_path": session.scope_path,
                 "created_at": session.created_at.isoformat() if session.created_at else None,
                 "updated_at": session.updated_at.isoformat() if session.updated_at else None,
-                "folder": folder_summary(directory),
+                "folder": folder_summary(directory) if directory else None,
             }
         )
 
@@ -183,8 +220,11 @@ def workspace_stats(
     异步调用，不阻塞工作区表格的首屏。
     """
     total_bytes = 0
-    for (session_id,) in db.query(AgentSession.id).all():
-        summary = folder_summary(session_workspace_dir(session_id))
+    for session in db.query(AgentSession).all():
+        directory = _session_data_dir(db, session)
+        if directory is None:
+            continue
+        summary = folder_summary(directory)
         if summary:
             total_bytes += summary["total_bytes"]
     return {"total_bytes": total_bytes}
@@ -257,10 +297,13 @@ def list_workspace_files(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """列出会话工作区内的文件（名称 / 大小 / 修改时间），仅限当前会话目录内。"""
-    directory = session_workspace_dir(session_id)  # 严格校验，防路径穿越
+    """列出会话沙箱数据目录内的文件（绑定会话 = 工作区 scope，MAJ-2）。"""
+    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+    if session is None:
+        raise AppError(ErrorCode.NOT_FOUND, "会话不存在")
+    directory = _session_data_dir(db, session)
     files = []
-    if os.path.isdir(directory):
+    if directory is not None and os.path.isdir(directory):
         for root, _dirs, names in os.walk(directory):
             rel_root = os.path.relpath(root, directory)
             for name in sorted(names):
@@ -281,7 +324,13 @@ def list_workspace_files(
                     break
             if len(files) >= max_entries:
                 break
-    return {"session_id": session_id, "path": directory, "files": files, "total": len(files)}
+    return {
+        "session_id": session_id,
+        "workspace_id": session.workspace_id,
+        "path": directory,
+        "files": files,
+        "total": len(files),
+    }
 
 
 @router.delete("/{session_id}")
@@ -291,7 +340,17 @@ def delete_workspace(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """清理会话沙箱文件夹（物理删除，软删除的会话工作区同样可清理）。"""
+    """清理会话沙箱数据目录（物理删除，软删会话 legacy 目录同样可清理）。
+
+    MAJ-2：绑定会话的数据归工作区生命周期——admin 拒绝在此删除（引导走
+    工作区管理/owner purge，避免绕过行态/孤儿守卫直接动工作区树）。
+    """
+    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+    if session is not None and session.workspace_id:
+        raise AppError(
+            ErrorCode.VALIDATION,
+            "绑定会话的数据由工作区管理，请通过「我的工作区」删除/清空工作区处理",
+        )
     directory = session_workspace_dir(session_id)  # 严格校验，防路径穿越
     if not os.path.isdir(directory):
         return {"ok": False, "reason": "not_found", "path": directory}
