@@ -140,7 +140,31 @@ runner_networks = set(services.get("runner", {}).get("networks", {}))
 if runner_networks != {"sandbox_net"}:
     print("错误：runner 必须仅加入 sandbox_net", file=sys.stderr)
     sys.exit(1)
-print(f"H5 配置通过：hybrid={hybrid_enabled} checkpointer={checkpointer} strict_pg={strict_pg}")
+# G2 降权断言（PoC 定稿形态，见 docs/…-G2G3实施评估与PoC结论.md）：无 privileged、
+# read_only rootfs + tmpfs、no-new-privileges、显式 seccomp:unconfined、SYS_ADMIN。
+runner_cfg = services.get("runner", {})
+runner_caps = set(runner_cfg.get("cap_add", []) or [])
+runner_secopts = set(runner_cfg.get("security_opt", []) or [])
+runner_tmpfs = set(runner_cfg.get("tmpfs", []) or [])
+if runner_cfg.get("privileged"):
+    print("错误：runner 不得 privileged（G2 降权），请改 compose 后重试", file=sys.stderr)
+    sys.exit(1)
+if not runner_cfg.get("read_only"):
+    print("错误：runner 必须 read_only: true（G2 降权 rootfs 只读）", file=sys.stderr)
+    sys.exit(1)
+if "SYS_ADMIN" not in runner_caps:
+    print("错误：runner 必须 cap_add SYS_ADMIN（bwrap userns/mount 所需）", file=sys.stderr)
+    sys.exit(1)
+if "seccomp:unconfined" not in runner_secopts:
+    print("错误：runner 必须显式 seccomp:unconfined（默认 profile 拦 bwrap，PoC 结论）", file=sys.stderr)
+    sys.exit(1)
+if not any(opt.startswith("no-new-privileges") for opt in runner_secopts):
+    print("错误：runner 必须设 no-new-privileges（G2 降权）", file=sys.stderr)
+    sys.exit(1)
+if not any(p.startswith("/tmp") for p in runner_tmpfs) or not any(p.startswith("/run") for p in runner_tmpfs):
+    print("错误：runner 必须挂 /tmp 与 /run tmpfs（read_only 运行面）", file=sys.stderr)
+    sys.exit(1)
+print(f"H5 配置通过：hybrid={hybrid_enabled} checkpointer={checkpointer} strict_pg={strict_pg}；runner 降权断言通过")
 '
 
 echo "==> [2/4] 按代码差异构建容器镜像（BUILD_VERSION=$BUILD_VERSION，旧容器持续服务中）"

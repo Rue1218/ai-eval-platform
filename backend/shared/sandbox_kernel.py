@@ -105,7 +105,11 @@ def _build_bwrap_argv(
     argv = [
         bwrap_bin,
         "--unshare-user",
-        "--unshare-pid",
+        # PoC 勘误（G2，2026-09-07，见《…G2G3实施评估与PoC结论.md》）：非特权
+        # 容器下 `--unshare-pid` + `--proc` 组合 mount proc EPERM（bwrap 0.12/
+        # Docker 26 实测），故移除私有 PID ns——`/proc` 呈容器 pid ns 级视图
+        # （仅 runner 容器自身进程，无宿主/跨容器进程；沙箱 userns root 对
+        # 容器内他进程无 ptrace 权限，防护语义保持）。bwrap ≥1.0.4 可复测。
         "--unshare-net",
         "--unshare-ipc",
         "--unshare-uts",

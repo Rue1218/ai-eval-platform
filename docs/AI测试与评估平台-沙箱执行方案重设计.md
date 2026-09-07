@@ -1,8 +1,9 @@
 # AI 测试与评估平台 — 沙箱执行方案重设计（评审稿）
 
-> 版本:V0.6（定稿候选） | 状态:P5 复审通过（有条件），收尾完成待归档 | 日期:2026-09-07
-> 范围：仅设计文档，不含代码改动。评审通过后按 §12 组合路线图立项实施。
-> V0.6（2026-09-07）：P5 复审收尾对齐彼稿 V0.4——D7 内废止编号引用修正（S6 → G1/G5）；worker 回归基线口径（50 passed）；附录 B-6 承接彼稿 §12-7；彼稿契约组扩展（V0.4 §8.2：outcome 扩展/词汇表注册修复/tool_result 结构化字段）为执行面所属，本稿 §7/§8 引用不变。
+> 版本:V0.6.1（定稿候选） | 状态:G2 落地登记（D1 PoC 勘误并入）；待 CI 构建部署与空转观察 | 日期:2026-09-07
+> 范围：本稿正文为设计文档；D1 落地代码（kernel argv 等 shared/runner 面）随 G2 commit 同批合入。
+> V0.6.1（2026-09-07）：G2 落地 PoC 勘误并入 D1（见 D1 勘误块与《…-G2G3实施评估与PoC结论.md》）：非 root USER/cap_drop ALL/seccomp 自定义 profile 三项否决、`--unshare-pid` 移除（sandbox_kernel argv 同批）；compose runner 段与 deploy.sh 降权断言同 commit；§11 演练 4/6 口径同步。
+> V0.6（2026-09-07，历史）：P5 复审收尾对齐彼稿 V0.4——D7 内废止编号引用修正（S6 → G1/G5）；worker 回归基线口径（50 passed）；附录 B-6 承接彼稿 §12-7；彼稿契约组扩展（V0.4 §8.2：outcome 扩展/词汇表注册修复/tool_result 结构化字段）为执行面所属，本稿 §7/§8 引用不变。
 > V0.5（2026-09-07，历史）：按《团队评审记录》P3 与彼稿 V0.3 对齐——D2/D3/D5/D7 标注「已被取代」；D6 扩 7 项；基线 api 854；排期对齐 G1–G6。
 > 依据：`docker-compose.yml` runner 服务、`backend/shared/sandbox_kernel.py`、`backend/runner/main.py`、`backend/runner/Dockerfile`、`backend/api/app/harness/execution/{dispatch,sandbox}.py`、`harness/feedback/rules.py`、`harness/security/exec_policy.py`、`harness/orchestration/agents.py`、`deploy/deploy.sh`、AGENTS.md V1.8（H5 批次 2 未完成项、api 854 基线）。
 
@@ -52,7 +53,8 @@ data/workspaces/<session_id>/   ← 会话唯一文件夹（UUID/安全短标识
 ```
 模型 bash "…" → api sandbox client(HTTP) → runner(ThreadingHTTPServer)
   → bwrap --bind data/workspaces/<session_id> → /work（唯一可写）
-       + ro-bind 系统目录 + --tmpfs /tmp,/run + --unshare-user/pid/net
+       + ro-bind 系统目录 + --tmpfs /tmp,/run + --unshare-user/net
+         （私有 PID ns 已移除——G2 PoC 勘误④，/proc 为容器 pid ns 级视图）
        + ulimit(内存/进程/CPU) + 墙钟超时 killpg
   → 命令结束 → 沙箱进程销毁（--die-with-parent，整树回收）
 ```
@@ -67,8 +69,9 @@ data/workspaces/<session_id>/   ← 会话唯一文件夹（UUID/安全短标识
 ```
 模型(agent) → toolnode(bash) → 逐调用 policy 解析(档位/升档, 彼稿 §6.2/§6.4)
     → api HTTP(/run,/run/stream, policy{mode,workspace_root}) → runner(降权容器, 固定并发)
-    → shared.sandbox_kernel.run_sandboxed(bwrap 一次性沙箱: unshare-user/pid/net
-      + 最小ro-bind + 按 mode bind scope(只读或可写) + ulimit + 墙钟超时 killpg)
+    → shared.sandbox_kernel.run_sandboxed(bwrap 一次性沙箱: unshare-user/net
+      （PID 私有化 PoC 移除，见 D1 勘误④）+ 最小ro-bind
+      + 按 mode bind scope(只读或可写) + ulimit + 墙钟超时 killpg)
 ```
 
 **重设计演进**：上述「会话自动文件夹」拓扑在 §5 D7 用户工作区模型下演进为
@@ -116,6 +119,13 @@ L4 内核      shared.sandbox_kernel（bwrap 一次性沙箱，最小 bind 清�
 | no-new-privileges | 未设 | 设 | 防 setuid 提权 |
 
 **验收**（DoD 项）：降权后 `probe_sandbox` 通过；全部 `backend/shared/sandbox_kernel` 单测与 runner 集成用例通过；§11 演练清单通过。
+
+> **D1 形态勘误（PoC 已做，2026-09-07；详见《AI测试与评估平台-沙箱方案-G2G3实施评估与PoC结论.md》V0.1）**——上表目标列按 PoC 实测修订，落地形态 = compose/deploy 断言（同 commit）：
+> ① **非 root（USER runner）否决**：Docker `--user` 下 `--cap-add` 不生效（CapEff=0 实测），bwrap 全 unshare 不可用 → 保留容器 root；「沙箱内 `--uid/--gid` 固定非 0」相应不再依赖 USER runner（沙箱内 userns root 的宿主视角 = 容器 root，隔离收益由 bwrap userns + 容器 cap 最小化承担，评审记录 P4-1 登记）；
+> ② **cap_drop ALL 否决**：全 drop 破坏 userns uid_map（实测 EPERM，与 seccomp/AA 无关）→ 保留 Docker 默认 caps + `SYS_ADMIN`；
+> ③ **seccomp 自定义 profile 暂缓**：默认 builtin profile 实测拦 userns/pivot_root 链（`pivot_root: EPERM`）→ 维持显式 `seccomp:unconfined` 并登记「自定义最小 profile」为后续强化项（B 附录 B-1 关闭为 PoC 结论）；
+> ④ **`--unshare-pid` 移除**（sandbox_kernel argv，同批落地）：非特权下 `--unshare-pid`+`--proc` mount proc EPERM → `/proc` 呈容器 pid ns 级视图（§11 演练 4/6 口径同步）；bwrap ≥1.0.4 升级后可复测恢复私有 PID。
+> 落地形态其余项不变：去 privileged、read_only rootfs + `/tmp`/`/run` tmpfs、no-new-privileges。
 
 ### D2：能力分档与放行阶梯（P2）——【已被《工作区与沙箱设计方案》V0.3 §6.1 取代，本节仅存历史】
 
@@ -260,10 +270,10 @@ data/workspaces/
 3. 沙箱内读写**其他工作区 / 未绑定会话文件夹 / 根目录** → 拒绝（绑定 scope 前缀强校验 + 唯一可写）；
 3.1. 沙箱内符号链接逃逸（链接目标指向工作区外或其他工作区）→ 拒绝（realpath 后前缀重验）；
 3.2. **resolve→bind 窗口换链**（并发会话在 api 校验后、runner bind 前替换 scope 内符号链接指向卷外）→ 拒绝（bind realpath 后最终路径，彼稿 §6.2/MAJ-9③）；
-4. 沙箱内提权尝试（sudo/setuid/chroot 逃逸尝试）→ 阻断/无特权放大（S3 降权后验证非 root 语义）；
+4. 沙箱内提权尝试（sudo/setuid/chroot 逃逸尝试）→ 阻断/无特权放大（G2 降权后验证：沙箱内 userns root 的宿主视角为容器 root——无逃逸即无初始 userns 外提权面；S3 观察期含此验证）；
 5. 沙箱内 DoS（fork 炸弹/内存占满/死循环）→ ulimit + 墙钟超时 killpg 回收，宿主无影响；
 5.1. **沙箱内写满数据卷**（workspace-write 反复写/单命令洪水写共享 data 卷）→ 每工作区配额拒写 + **卷级水位熔断兜底**（写前检查拦不住单命令洪水；剩余空间低于水位阈值 → workspace-write 整体拒写，fail-closed），同机服务不拖垮（彼稿 §6.6 M-R3-4，D6-7；V0.6 判据随彼稿 V0.4.1 同步）；
-6. runner 容器逃逸演练（假设 bwrap 被突破）：rootfs 只读、非 root、seccomp 下横向移动受限（internal 网络无出网）；记录可复现步骤与结论。
+6. runner 容器逃逸演练（假设 bwrap 被突破）：降权容器（无 privileged、默认 caps+SYS_ADMIN 窄集、rootfs 只读、no-new-privileges、显式 seccomp:unconfined 登记）横向移动受限（internal 网络无出网）；记录可复现步骤与结论。**另：/proc 为容器 pid ns 级视图（G2 PoC 勘误④）——沙箱内 `ps` 可见 runner 容器自身进程树（无宿主/跨容器），演练结论按此口径记录。**
 
 ## 12. 实施排期建议（评审通过后另行立项）
 
@@ -290,7 +300,7 @@ data/workspaces/
 
 ## 附录 B：评审待决点（V0.5 状态更新）
 
-1. D1 非 root + 自定义 seccomp profile 的实现风险是否可接受（bwrap 在非特权+no-new-privileges 下的可用性需 S3 先做 PoC）——**开放，S3 前置 PoC**；
+1. ~~D1 非 root + 自定义 seccomp profile 的实现风险~~ **已关闭（PoC，2026-09-07）**：非特权可用性实测——非 root USER 否决（`--user` 下 cap 不生效）、默认 seccomp 拦 bwrap、自定义 profile 暂缓（维持显式 unconfined 登记）、去 privileged 形态可行（详见 D1 勘误块与 G2G3 文档）；
 2. ~~`workfile` 白名单集是否足够支撑真实评测场景~~ **已关闭**：词表/白名单设计废弃（彼稿 §6.3），需求样本改用于 read-only 档灰度观察（彼稿 §9.1）；
 3. 并发默认值（4 workers / 每会话 1 在途）是否与现有负载假设匹配——**开放，S2 压测定标**；
 4. ~~`mutating` 档放行护栏~~ **已演进**：workspace-write 放行 = 授予 + 拒写升档两层（彼稿 §6.4）+ D6-7（配额）与 H5 批次 2 硬前置；

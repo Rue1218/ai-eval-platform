@@ -1,6 +1,7 @@
 # AI 测试与评估平台 — G2/G3 实施评估与 PoC 结论
 
-> 版本:V0.1 | 日期:2026-09-07 | 状态:评估结论（G2 形态修订待落地；G3 可并行实施）
+> 版本:V0.2 | 日期:2026-09-07 | 状态:**G2 落地代码已合入**（compose runner 降权形态 + deploy.sh 断言 + sandbox_kernel argv 去 `--unshare-pid`，与 B 稿 V0.6.1 同批）；G3 已实施（commit 8061b6a）；**待 CI 构建新 runner 镜像 → 服务器部署 → 空转观察 ≥7 天（D6-1）**
+> V0.2（2026-09-07）：登记 G2 落地 commit 与 B 稿 V0.6.1 勘误引用（§2 结论 1/3/5 已落地：compose/deploy/kernel 同批）。
 > 关联：B《沙箱执行方案重设计》V0.6（D1=S3、D4=S2）；A《工作区与沙箱设计方案》V0.4.1（组合路线图 G2/G3 → G4）
 > PoC 环境：生产服务器 `47.119.132.83`（Docker 26.1.3，项目 `/opt/ai-eval-platform`，runner 镜像 `ghcr.io/rue1218/ai-eval-platform-runner:e5087e3`）——仅以一次性 `docker run` 实验容器验证，**未触碰生产容器**。
 

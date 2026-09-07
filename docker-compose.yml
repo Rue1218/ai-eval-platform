@@ -122,7 +122,16 @@ services:
 
   runner:
     # 独立沙箱 Runner（P4-2）：bash bwrap 内核执行体，唯一持有
-    # privileged + seccomp:unconfined + SYS_ADMIN 的容器（api 已移除）。
+    # seccomp:unconfined + SYS_ADMIN 的容器（api 已移除；G2 降权后无 privileged）。
+    # 降权形态（G2-PoC，2026-09-07 实测定稿，见 docs/…-G2G3实施评估与PoC结论.md）：
+    #   - 去 privileged（消除设备全访问与 SYS_MODULE/RAWIO/PTRACE 等超集）；
+    #   - 保留 Docker 默认 caps + SYS_ADMIN——cap_drop ALL 会破坏 bwrap userns
+    #     uid_map（容器 root 需 SETUID 系默认 cap）；
+    #   - seccomp 维持 unconfined：默认 builtin profile 拦截 userns/pivot_root 链
+    #     （实测 pivot_root EPERM）；自定义最小 profile 列为后续强化；
+    #   - read_only rootfs + /tmp /run tmpfs + no-new-privileges（逃逸落盘受限）；
+    #   - 容器 root 运行：Docker --user 下 cap-add 不生效（CapEff=0）→ 非 root
+    #     USER 否决（bwrap 全 unshare 不可用）。
     image: ${RUNNER_IMAGE:-ai-eval-platform-runner}
     mem_limit: 512m
     build:
@@ -133,11 +142,15 @@ services:
       args:
         APT_MIRROR: ${APT_MIRROR:-}
     restart: unless-stopped
-    privileged: true
     security_opt:
       - seccomp:unconfined
+      - no-new-privileges:true
     cap_add:
       - SYS_ADMIN
+    read_only: true
+    tmpfs:
+      - /tmp:rw,size=64m
+      - /run:rw,size=8m
     environment:
       # 工作区根（与 api 同挂 ./data:/data，路径两侧一致）
       SANDBOX_WORKSPACE_ROOT: /data/workspaces
