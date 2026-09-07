@@ -1396,13 +1396,13 @@ def _bash_handler(
     from app.config import settings
     from app.harness.execution.dispatch import BashResult, run_bash
     from app.harness.execution.sandbox import SandboxLimits
+    from app.harness.security.exec_policy import resolve_bash_engine
 
-    if settings.sandbox_engine != "bwrap":
-        raise AppError(
-            ErrorCode.VALIDATION,
-            "bash 工具不可用：沙箱引擎未启用（环境缺 bwrap 时 fail-closed，"
-            "请改用 read/write/edit 工具完成文件操作，不要重试 bash）",
-        )
+    # #5：沙箱引擎决策收敛于 exec_policy.resolve_bash_engine（显式 Spec 决策，
+    # 默认行为不变：非 bwrap 一律 fail-closed，禁止降级裸 subprocess）
+    verdict = resolve_bash_engine(settings.sandbox_engine)
+    if not verdict.allow:
+        raise AppError(ErrorCode.VALIDATION, verdict.reason)
     limits = SandboxLimits(
         memory_kb=settings.sandbox_memory_mb * 1024,
         nproc=settings.sandbox_nproc,

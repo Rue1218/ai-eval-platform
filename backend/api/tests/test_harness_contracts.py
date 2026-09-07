@@ -63,11 +63,18 @@ def test_is_persistent_all_kinds() -> None:
 
 
 def test_node_event_json_serializable() -> None:
-    """C-A3：NodeEvent 可 json.dumps。"""
+    """C-A3：NodeEvent 可 json.dumps。
+
+    #4（dsh 改进）：事件版本断言引用 EVENT_VERSION 常量而非字面版本串，
+    版本演进（增删 kind 递增）时本测试自动跟随，不产生陈旧断言。
+    """
+    from app.harness.contracts import EVENT_VERSION
+
+    assert EVENT_VERSION  # 演进纪律：版本常量必须非空
     event = make_event("thought", {"text": "先判断", "stage": "plan"})
     dumped = json.dumps(event, ensure_ascii=False)
     assert "先判断" in dumped
-    assert "event.v1" in dumped
+    assert EVENT_VERSION in dumped
 
 
 def test_node_event_has_no_callable_or_websocket_fields() -> None:

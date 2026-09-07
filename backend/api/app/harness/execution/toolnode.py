@@ -32,7 +32,11 @@ from app.harness.orchestration.budget import from_dict, is_budget_exhausted
 from app.harness.orchestration.gates import check_session_active_task
 
 from .aliases import enforce_tool_argument_policy, normalize_tool_arguments
-from .ask_user import answers_from_reply, first_option_labels, validate_questions
+from .ask_user import (
+    first_option_labels,
+    resolve_clarify_answers,
+    validate_questions,
+)
 from .batch import (
     BatchItemStatus,
     batch_is_complete,
@@ -397,7 +401,13 @@ def build_tool_node(
                         "questions": questions,
                     }
                 )
-                answers = answers_from_reply(questions, reply)
+                # #1（V1.72 B 路线）：resume 载荷为 {id, answers[]}（ClarifyCard
+                # 多题结构，服务端 clarify_reply 已强校验；此处纵深防御再校验）；
+                # 答复无效 → 回合内失败观察（不抛出、不崩溃），模型可见原因。
+                try:
+                    answers = resolve_clarify_answers(questions, reply)
+                except AppError as exc:
+                    return failed(exc.code.value, f"澄清答复无效：{exc.message}")
                 ask_user_raw = ToolResult(
                     name=call.name,
                     ok=True,

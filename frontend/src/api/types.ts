@@ -895,6 +895,9 @@ export interface WsServerEvent {
     | 'confirm_ack'
     | 'tool_approval'
     | 'tool_approval_ack'
+    | 'approval_terminal'
+    | 'clarify'
+    | 'clarify_ack'
     | 'error'
     | 'session_title'
     | 'pong'
@@ -951,6 +954,33 @@ export interface ToolApprovalPayload {
   risk_level?: 'high' | 'medium' | 'low'
   sandbox_scope?: string
   allowed_decisions?: Array<'approve' | 'reject'>
+}
+
+// clarify payload（API.md §4.3 V1.72 / dsh #1）：ask_user_question 的图内
+// interrupt 载荷即澄清卡（≤8 题三题型一次作答）；submitted 由上行 clarify_reply
+// 乐观盖章并经 clarify_ack 广播回执确认（与 tool_approval_ack 同构）。
+export interface ClarifyQuestion {
+  id: string
+  question: string
+  header?: string
+  options?: Array<{ label: string; description?: string }>
+  multi_select?: boolean
+  required?: boolean
+  type: 'radio' | 'checkbox' | 'text'
+}
+
+export interface ClarifyPayload {
+  type: 'clarify'
+  id: string
+  questions: ClarifyQuestion[]
+}
+
+/** 澄清答案（API.md §4.4 V1.72 clarify_reply.answers[]）：radio/checkbox 用
+ * selected（label 列表），text 用 custom。 */
+export interface ClarifyAnswer {
+  id: string
+  selected: string[]
+  custom?: string
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

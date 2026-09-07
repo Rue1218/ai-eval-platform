@@ -23,7 +23,7 @@ from .observation import (
     to_observation,
     truncate_with_marker,
 )
-from .window import WindowMessage, is_window_eligible, recent_window
+from .window import WindowMessage, is_window_eligible, recent_window, window_trim_stats
 
 __all__ = [
     "COMPACT_SCHEMA",
@@ -44,6 +44,7 @@ __all__ = [
     "project_meter",
     "recent_window",
     "select_tool_defs",
+    "window_trim_stats",
     "skill_hint_lines",
     "skill_hints_for_turn",
     "summarize",

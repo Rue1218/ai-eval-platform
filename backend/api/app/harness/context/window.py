@@ -35,16 +35,47 @@ def recent_window(
     之前的消息；起点本身不在列表中时忽略该参数（原始记录保留在 DB，不删除）。
     本函数再按 ``is_window_eligible`` 过滤一遍（CX-2 纵深防御）。
     """
+    windowed, _meta = window_trim_stats(messages, limit=limit, keep_from=keep_from)
+    return windowed
+
+
+def window_trim_stats(
+    messages: list[WindowMessage],
+    *,
+    limit: int = 20,
+    keep_from: str | None = None,
+) -> tuple[list[WindowMessage], dict[str, object]]:
+    """唯一窗口算法同源实现 + 裁剪元信息（#2 上下文压缩事件化留痕用）。
+
+    返回 ``(窗口消息, meta)``；``meta`` 字段：``reason``（compact = keep_from
+    截断命中；tail_window = 末 N 条尾窗截断）、``dropped``（本次裁剪条数）、
+    ``kept``、``in_scope_total``（可入窗消息总数）、``keep_from_id``、``limit``。
+    未发生裁剪时 ``dropped=0``（调用方据此决定是否留痕，避免无裁剪也发事件）。
+    仅记录元信息——不携带被裁消息原文（观察纪律：正文不进事件/检查点）。
+    """
     eligible = [
         message
         for message in messages
         if is_window_eligible(str(message.get("role") or ""))
     ]
+    in_scope_total = len(eligible)
+    kept_from_id: str | None = None
     # 先按 keep_from 截断更早消息（若命中）
     if keep_from:
         for index, message in enumerate(eligible):
             if message.get("source_id") == keep_from:
+                kept_from_id = keep_from
                 eligible = eligible[index:]
                 break
     # 再取末尾 limit 条（保持原始时间顺序）
-    return eligible[-limit:] if limit > 0 else []
+    windowed = eligible[-limit:] if limit > 0 else []
+    kept = len(windowed)
+    reason = "compact" if kept_from_id else "tail_window"
+    return windowed, {
+        "reason": reason,
+        "dropped": max(0, in_scope_total - kept),
+        "kept": kept,
+        "in_scope_total": in_scope_total,
+        "keep_from_id": kept_from_id,
+        "limit": limit,
+    }
