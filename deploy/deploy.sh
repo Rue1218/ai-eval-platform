@@ -380,11 +380,21 @@ done
 
 if [ "${#DEPLOY_SERVICES[@]}" -eq 0 ]; then
     echo "==> [3/4] 无需滚动更新业务服务"
-elif ! docker compose up -d --no-build --remove-orphans "${DEPLOY_SERVICES[@]}"; then
-    echo "警告：业务服务平滑更新异常，尝试安全按序自愈拉起：${DEPLOY_SERVICES[*]}"
-    # PostgreSQL 已独立验证健康，自愈阶段只处理本次计划更新的业务应用。
-    docker compose stop "${DEPLOY_SERVICES[@]}" 2>/dev/null || true
-    docker compose up -d --no-build "${DEPLOY_SERVICES[@]}"
+else
+    UP_ARGS=(--no-build --remove-orphans)
+    if [ -z "$IMAGE_PREFIX" ]; then
+        # 本地构建路径（手动部署回退）：镜像名固定不变（ai-eval-platform-api 等），
+        # compose 判定容器 config 未变时不 recreate，新代码将不生效（历史事故：
+        # api 容器长期跑 2 天前旧镜像）。强制重建以加载本次构建产物。
+        UP_ARGS+=(--force-recreate)
+        echo "==> 本地构建路径：强制重建 ${DEPLOY_SERVICES[*]} 以加载新镜像"
+    fi
+    if ! docker compose up -d "${UP_ARGS[@]}" "${DEPLOY_SERVICES[@]}"; then
+        echo "警告：业务服务平滑更新异常，尝试安全按序自愈拉起：${DEPLOY_SERVICES[*]}"
+        # PostgreSQL 已独立验证健康，自愈阶段只处理本次计划更新的业务应用。
+        docker compose stop "${DEPLOY_SERVICES[@]}" 2>/dev/null || true
+        docker compose up -d --no-build "${DEPLOY_SERVICES[@]}"
+    fi
 fi
 
 # Web 镜像的入口 HTML 与其首屏静态资源必须成对存在，否则 Nginx 会把缺失分包回退成 HTML。
