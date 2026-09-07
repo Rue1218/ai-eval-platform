@@ -68,7 +68,58 @@ def _run_payload(**overrides: object) -> dict:
 def test_health(server: _Server) -> None:
     with urlopen(server.url("/health"), timeout=5) as resp:
         assert resp.status == 200
-        assert json.loads(resp.read().decode("utf-8")) == {"status": "ok"}
+        body = json.loads(resp.read().decode("utf-8"))
+    # D4/G3：health 暴露执行槽位负载（max_workers/running/queued）
+    assert body["status"] == "ok"
+    assert isinstance(body.get("max_workers"), int)
+    assert "running" in body and "queued" in body
+
+
+def test_concurrent_runs_never_exceed_max_workers(server: _Server, monkeypatch) -> None:
+    """并发上限（D4/G3）：8 并发慢命令在 4 槽位下排队执行，实测并发 ≤4 且全部成功。"""
+    import threading
+    import time
+
+    lock = threading.Lock()
+    state = {"active": 0, "peak": 0}
+
+    def slow_run(_cmd: str, **kwargs: object) -> str:
+        with lock:
+            state["active"] += 1
+            state["peak"] = max(state["peak"], state["active"])
+        time.sleep(0.25)
+        with lock:
+            state["active"] -= 1
+        return "ok"
+
+    monkeypatch.setattr(main, "run_sandboxed", slow_run)
+    results: list[tuple[int, dict]] = [None] * 8  # type: ignore[list-item]
+
+    def worker(index: int) -> None:
+        results[index] = _post(server.url("/run"), _run_payload())
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+    assert state["peak"] <= main.MAX_WORKERS
+    assert all(status == 200 and body.get("ok") is True for status, body in results)
+
+
+def test_busy_when_slots_exhausted(server: _Server, monkeypatch) -> None:
+    """等待超时仍无槽位 → 200 + BUSY 错误码（api 映射 CONCURRENCY，D4/G3）。"""
+    gate = main._SlotGate(1)
+    monkeypatch.setattr(main, "SLOT_GATE", gate)
+    monkeypatch.setattr(main, "SLOT_WAIT_S", 0.05)
+    assert gate.acquire(timeout_s=0) is True
+    try:
+        status, body = _post(server.url("/run"), _run_payload())
+        assert status == 200
+        assert body["ok"] is False
+        assert body["error"]["code"] == "BUSY"
+    finally:
+        gate.release()
 
 
 def test_run_ok_passes_kernel_and_returns_output(server: _Server, monkeypatch) -> None:

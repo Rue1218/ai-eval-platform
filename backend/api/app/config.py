@@ -92,6 +92,9 @@ class Settings(BaseSettings):
     hybrid_engine_enabled: bool = False  # 主开关；关闭时保持骨架化纯对话（灰度回滚出口）
     hybrid_router_cot_enabled: bool = False  # Router L1 CoT 开关；关闭时纯 L0
     hybrid_router_confidence_threshold: float = 0.7  # L0 置信度低于此值才触发 L1 CoT
+    # dsh 改进 D4/G3 并发配额：每 scope bash 闸门限时等待（秒）；runner 侧全局
+    # 槽位由 RUNNER_MAX_WORKERS（默认 4）/ RUNNER_SLOT_WAIT_S（5s）env 控制
+    sandbox_bash_gate_timeout_s: float = 30.0
     agent_registry_strict: bool = True  # AgentDef.allowed_tools 未注册时启动 fail-fast
     prompt_cache_enabled: bool = False  # 提示词缓存边界开关；关闭时装配行为与今日字节级一致
     external_mcp_enabled: bool = False  # 外部 MCP fail-closed（ADR-8）

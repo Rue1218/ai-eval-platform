@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -42,6 +43,53 @@ BWRAP_BIN = os.environ.get("SANDBOX_BWRAP_BIN", "/usr/bin/bwrap")
 # 墙钟超时上限（防御畸形请求拖住 worker 线程）
 MAX_TIMEOUT_S = 60.0
 MAX_OUTPUT_CHARS = 20000
+# 并发配额（D4/G3）：固定 worker 槽位 + 限时等待队列；超时返回 429 BUSY
+MAX_WORKERS = int(os.environ.get("RUNNER_MAX_WORKERS", "4"))
+SLOT_WAIT_S = float(os.environ.get("RUNNER_SLOT_WAIT_S", "5.0"))
+
+
+class _SlotGate:
+    """全局执行槽位（bounded semaphore）+ 可观测计数（running/queued）。
+
+    ``health`` 暴露负载；请求超时等待后仍无槽位 → 429 + 错误码 BUSY
+    （api 映射 CONCURRENCY 文案），不无限排队（D4）。
+    """
+
+    def __init__(self, max_workers: int) -> None:
+        self._max = max_workers
+        self._sem = threading.BoundedSemaphore(max_workers)
+        self._lock = threading.Lock()
+        self._running = 0
+        self._queued = 0
+
+    def acquire(self, timeout_s: float) -> bool:
+        with self._lock:
+            self._queued += 1
+        try:
+            ok = self._sem.acquire(timeout=timeout_s)
+        finally:
+            with self._lock:
+                self._queued -= 1
+        if ok:
+            with self._lock:
+                self._running += 1
+        return ok
+
+    def release(self) -> None:
+        with self._lock:
+            self._running -= 1
+        self._sem.release()
+
+    def snapshot(self) -> dict[str, int]:
+        with self._lock:
+            return {
+                "max_workers": self._max,
+                "running": self._running,
+                "queued": self._queued,
+            }
+
+
+SLOT_GATE = _SlotGate(MAX_WORKERS)
 
 
 class _SandboxHandler(BaseHTTPRequestHandler):
@@ -74,19 +122,32 @@ class _SandboxHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: object) -> None:  # noqa: A002, ANN001
         """静默访问日志：不记录命令与参数。"""
 
+    def _acquire_slot(self) -> bool:
+        """占执行槽位（限时等待）；失败时请求方须回 429 BUSY。"""
+        return SLOT_GATE.acquire(timeout_s=SLOT_WAIT_S)
+
     def do_GET(self) -> None:  # noqa: N802
         if self.path == "/health":
-            self._send(200, {"status": "ok"})
+            payload = {"status": "ok"}
+            payload.update(SLOT_GATE.snapshot())
+            self._send(200, payload)
         else:
             self._send(404, {"ok": False, "error": {"code": "VALIDATION", "message": "未知端点"}})
 
     def do_POST(self) -> None:  # noqa: N802
-        if self.path == "/run":
-            self._handle_run()
-        elif self.path == "/run/stream":
-            self._handle_run_stream()
-        elif self.path == "/probe":
-            self._send(200, {"ok": probe_sandbox(bwrap_bin=BWRAP_BIN)})
+        if self.path in {"/run", "/run/stream", "/probe"}:
+            if not self._acquire_slot():
+                self._send(200, {"ok": False, "error": {"code": "BUSY", "message": "沙箱执行槽位繁忙，请稍后重试"}})
+                return
+            try:
+                if self.path == "/run":
+                    self._handle_run()
+                elif self.path == "/run/stream":
+                    self._handle_run_stream()
+                else:
+                    self._send(200, {"ok": probe_sandbox(bwrap_bin=BWRAP_BIN)})
+            finally:
+                SLOT_GATE.release()
         else:
             self._send(404, {"ok": False, "error": {"code": "VALIDATION", "message": "未知端点"}})
 
