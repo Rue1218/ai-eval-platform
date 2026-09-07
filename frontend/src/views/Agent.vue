@@ -77,6 +77,12 @@
             />
             <span class="session-title-text">{{ s.title || '新会话' }}</span>
             <span v-if="s.visibility === 'team'" class="session-team-badge">团队</span>
+            <span
+              v-if="s.workspace_id"
+              class="session-ws-badge"
+              :title="s.workspace_name ? '绑定工作区：' + s.workspace_name : '绑定工作区'"
+              >{{ s.workspace_name || '工作区' }}</span
+            >
             <div class="session-meta-right">
               <!-- D5 会话状态点多态：常驻显示 ready(就绪) / running(进行中) / succeeded(成功) / failed(失败) / offline(断线) -->
               <i class="nav-dot" :class="sessionDotClass(s)" :title="sessionDotTooltip(s)"></i>
@@ -118,6 +124,12 @@
         </button>
         <span class="chat-head-title">{{ currentSession?.title || '新会话' }}</span>
         <span v-if="currentSession?.visibility === 'team'" class="chat-team-badge">团队共享</span>
+        <span
+          v-if="currentSession?.workspace_id && currentSession?.workspace_name"
+          class="chat-ws-chip"
+          :title="'会话绑定工作区：' + currentSession.workspace_name + '（模型的文件读写与 bash 均在此进行，创建后不可更改）'"
+          >工作区 · {{ currentSession.workspace_name }}</span
+        >
         <span v-if="isGenerating" class="gen-pill">
           <i class="bdot"></i>
           <span>生成中</span>
@@ -126,6 +138,15 @@
 
         <span class="grow"></span>
 
+        <!-- F3/G5：草稿会话可预选绑定工作区；发送首条消息时随创建固化 -->
+        <template v-if="!currentSessionId && !isGenerating">
+          <span v-if="draftWorkspaceId" class="chat-ws-chip draft">
+            <span>工作区 · {{ draftWorkspaceName }}</span>
+            <span class="ws-chip-x" title="取消绑定" @click="clearDraftWorkspace">×</span>
+          </span>
+          <button v-else class="btn btn-sm btn-ghost" @click="openBindingPanel">绑定工作区</button>
+        </template>
+
         <button
           v-if="currentSession?.can_manage"
           class="btn btn-sm btn-ghost"
@@ -133,6 +154,27 @@
           @click="toggleSessionSharing"
         >
           {{ currentSession.visibility === 'team' ? '仅自己' : '共享团队' }}
+        </button>
+      </div>
+
+      <!-- F3/G5：草稿会话工作区选择面板（初版仅根 scope；固化后不可更改） -->
+      <div v-if="bindingPanelOpen" class="ws-binding-panel" data-od-id="ws-binding-panel">
+        <div class="ws-binding-panel-title">
+          选择要绑定的工作区
+          <span class="muted">（绑定后会话内模型的文件读写与 bash 均在该工作区进行，发送首条消息后固化）</span>
+        </div>
+        <div v-if="bindingLoading" class="muted" style="padding: 8px 0">加载中…</div>
+        <div v-else-if="bindableWorkspaces.length === 0" class="muted" style="padding: 8px 0">
+          暂无工作区——请先到「我的工作区」创建
+        </div>
+        <button
+          v-for="wsItem in bindableWorkspaces"
+          :key="wsItem.id"
+          class="ws-binding-item"
+          @click="pickDraftWorkspace(wsItem.id, wsItem.name)"
+        >
+          <span>{{ wsItem.name }}</span>
+          <span class="muted">根目录</span>
         </button>
       </div>
 
@@ -727,6 +769,13 @@ const selectedSessionIds = ref<string[]>([])
 const deletingSessionIds = new Set<string>()
 const currentSessionId = ref<string>('')
 const isCreatingSession = ref(false)
+// F3/G5：草稿会话可预选绑定工作区（首条消息发送时随 create 固化；已建会话
+// 绑定关系只读展示 workspace_name，运行期不可变更——换绑 = 新建会话）。
+const draftWorkspaceId = ref<string | null>(null)
+const draftWorkspaceName = ref<string>('')
+const bindingPanelOpen = ref(false)
+const bindableWorkspaces = ref<Array<{ id: string; name: string }>>([])
+const bindingLoading = ref(false)
 // 未绑定服务端会话时保持草稿态，不得用列表首项冒充当前会话。
 const currentSession = computed(() => sessions.value.find(s => s.id === currentSessionId.value) || null)
 const deletableSessionCount = computed(() => filteredSessions.value.filter((session) => session.can_delete).length)
@@ -1141,13 +1190,49 @@ function activateCreatedSession(session: AgentSession) {
   markGenerating(session.id, runtime.isGenerating)
 }
 
+/** F3/G5：打开草稿绑定面板并加载可选工作区（仅属主自己的，无 share）。 */
+async function openBindingPanel() {
+  if (currentSessionId.value) return
+  bindingPanelOpen.value = !bindingPanelOpen.value
+  if (!bindingPanelOpen.value || bindableWorkspaces.value.length) return
+  bindingLoading.value = true
+  try {
+    const payload = await api.workspaces.list()
+    const items = Array.isArray(payload) ? payload : payload.items || []
+    bindableWorkspaces.value = items.map((item) => ({
+      id: String(item.id),
+      name: String(item.name),
+    }))
+  } catch {
+    message.error('加载工作区失败')
+  } finally {
+    bindingLoading.value = false
+  }
+}
+
+function pickDraftWorkspace(id: string, name: string) {
+  draftWorkspaceId.value = id
+  draftWorkspaceName.value = name
+  bindingPanelOpen.value = false
+}
+
+function clearDraftWorkspace() {
+  draftWorkspaceId.value = null
+  draftWorkspaceName.value = ''
+  bindingPanelOpen.value = false
+}
+
 /** 首次发送消息时才向服务端创建会话；mock 列表已由 API 层写入时避免重复插入。 */
 async function ensureActiveSession(): Promise<boolean> {
   if (currentSessionId.value) return true
   if (isCreatingSession.value) return false
   isCreatingSession.value = true
   try {
-    const newSession = await api.sessions.create('新会话')
+    const newSession = await api.sessions.create('新会话', {
+      workspaceId: draftWorkspaceId.value || undefined,
+    })
+    // 绑定已随会话固化（会话卡片展示 workspace_name）；草稿预选清空防误带。
+    clearDraftWorkspace()
     if (!sessions.value.some((session) => session.id === newSession.id)) {
       sessions.value.unshift(newSession)
     }
@@ -1688,6 +1773,8 @@ function handleCreateSession() {
   if (isCreatingSession.value) return
   sessionStatusFilter.value = 'all'
   resetToDraftSession()
+  // 新会话不带上次草稿的工作区预选
+  clearDraftWorkspace()
 }
 
 /** 仅 owner 可切换会话私有/团队共享范围，服务端为最终权限裁决。 */
@@ -3069,6 +3156,97 @@ onBeforeUnmount(() => {
 
 .chat-team-badge {
   font-size: 11px;
+}
+
+/* F3/G5：会话绑定工作区标识（列表 badge / 顶栏 chip / 草稿选择面板）。 */
+.session-ws-badge {
+  display: inline-flex;
+  align-items: center;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: 999px;
+  color: var(--c-success, #188038);
+  background: var(--t-success, rgba(24, 128, 56, 0.12));
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 3px 6px;
+}
+
+.chat-ws-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  padding: 4px 8px;
+  white-space: nowrap;
+}
+
+.chat-ws-chip.draft {
+  color: var(--c-success, #188038);
+  border-color: var(--t-success, rgba(24, 128, 56, 0.3));
+}
+
+.ws-chip-x {
+  cursor: pointer;
+  font-weight: 700;
+  padding: 0 2px;
+  color: var(--text-tertiary);
+}
+
+.ws-chip-x:hover {
+  color: var(--text-primary);
+}
+
+.ws-binding-panel {
+  position: absolute;
+  top: 52px;
+  right: 16px;
+  z-index: 40;
+  width: min(360px, calc(100vw - 32px));
+  max-height: 300px;
+  overflow: auto;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+.ws-binding-panel-title {
+  font-size: 12px;
+  font-weight: 600;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: 4px;
+}
+
+.ws-binding-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  text-align: left;
+  gap: 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  padding: 8px 4px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.ws-binding-item:hover {
+  background: var(--bg-hover, rgba(128, 128, 128, 0.08));
 }
 
 /* 协作者消息左对齐并弱化背景色，作者行让多人记录可以追溯。 */

@@ -1,8 +1,9 @@
 # AI 测试与评估平台 — 工作区与沙箱设计方案
 
-> 版本:V0.5（定稿候选） | 状态:G4（F2）落地登记；待 S3 空转观察期满 | 日期:2026-09-07
+> 版本:V0.6（定稿候选） | 状态:G5（F3）落地登记；F4 灰度待 S3 观察与部署决策 | 日期:2026-09-07
 > 范围：仅设计文档，不改代码。评审通过后按 §10 分期实施。
 > 与《沙箱执行方案重设计》V0.6.1 的关系：本稿正式化其 D7 并修订 D2/D3（词表全删 → 文件效果档位 + 拒写升档）；D1 降权（V0.6.1 PoC 勘误形态）、D4 并发、D6 放行 DoD（扩 7 项）继续有效；组合路线图见 §10 G1–G6。
+> V0.6（2026-09-07）：**G5 = F3 会话绑定接线落地登记**——`POST /api/sessions` 增量 `workspace_id/scope_path`（创建固化、仅 private、属主校验 + `ensure_workspace_scope` 目录就绪、AuditLog `session_workspace_bind`）；新增 `resolve_session_sandbox` 唯一沙箱解析入口（§5 校验链落地：绑定失效 fail-closed 不回落 legacy），替换 ws.py 注入点；已绑定转 team 拒绝（BLK-4）；`SessionOut` 绑定字段 + `workspace_name`；前端草稿「绑定工作区」预选 + 列表/顶栏绑定展示（初版仅根 scope）；API.md V1.76 / AGENTS V2.0 契约留档。附件 staging 仍落 legacy（绑定会话附件归属随绑定迁移留评审，见 §12 待决点 8）。F4 read-only 档灰度（§9.1 判据 + 部署翻转 `sandbox_bash_default_mode`）与 G6/F5 未交付。
 > V0.5（2026-09-07）：**G4 = F2 落地登记**——§6.2 policy 契约与 runner 前缀校验（`resolve_workspace_path`）、bind mode 化（read-only/workspace-write）、§6.3 四处词表与静态裁决全删（含 sudo 残余项，依据按 G2 定稿形态改述，见 §6.3② 标注）、toolnode 直通（升档卡 F5 接入）、runner 双端 fail-closed 测试（policy 缺失/mode 非法 VALIDATION）；图级 tool_approval interrupt 端到端用例转 F5 升档卡接入恢复（test_bash_hitl/test_hybrid_h5_hitl 改写为直通回归，卡协议 ws 层用例保留）；门禁 api 881/runner 17/worker 50。
 > V0.4.1（2026-09-07，历史）：第三轮终审补丁——**M-R3-6** 软删组合闭合：孤儿判定与守卫②按行态区分（仅活跃行受保护）、purge 事务内显式解绑、§7.2 导入 = 复活路径（旧会话自动恢复续用，MAJ-1 真闭环）、§9 口径对齐；**M-R3-7** 作废终态改「行锁内清卡 + `voided` 终态 + error + AuditLog」（对齐 expired 先例，消除卡残留与双终态）；契约组补 V1.75 范围清单/纪律句/卡归类统一/回归锁断言/`allowed_decisions` 漂移校正；§6.6 熔断规格句；陈旧 approve 用例与重新发起引导；勘误（彼稿版本引用 V0.6、§6.6 元注释、§10 F5 彼稿限定）。
 > V0.4（2026-09-07，历史）：P5 复审收尾 + 裁决点落地（软删/同根/DELETE；见评审记录 §8）。
@@ -275,3 +276,4 @@
 5. 运行中「换绑」会话是否需要（初版 = 新建会话；后续单独排期）。
 6. ~~工作区目录布局~~ **已裁决（V0.4）：采纳同根共存 + 孤儿守卫**（§7.3 守卫与 §9 用例即为定稿依据）；若未来改独立子树分流，需新评审并出返工清单（§4.1/§7.3/§9/F1/admin 视图连带）。
 7. **文件夹层级/命名规则（承接彼稿附录 B-6，R1-3）**：`scope_path` 允许深度/字符集/层级上限？是否开放文件夹改名/移动（初版建议：仅创建 + 删除 + 改名，移动留后续）？——F3 实现前须定，正文无需返工。
+8. **附件 staging 归属（G5/F3 落地登记，开放）**：绑定会话的附件仍落 legacy `{root}/{session_id}/attachments/`（与工作区 scope 分离，模型 read 工具不可见）；是否迁移附件落点（工作区树内 `attachments/` 或 scope 内）+ 存量附件迁移策略——随 F4 评审或独立小项排期，正文引用与 API.md V1.76 已标注。

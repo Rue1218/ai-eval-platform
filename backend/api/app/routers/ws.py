@@ -41,7 +41,6 @@ from ..harness.context import skill_hint_lines, window_trim_stats
 from ..harness.execution.ask_user import validate_answers
 from ..harness.execution.context import ToolExecutionContext
 from ..harness.execution.task_tools import cancel_task_safe
-from ..harness.execution.workspace import ensure_session_workspace
 from ..harness.memory import get_default_checkpointer, to_serializable_request
 from ..harness.orchestration import check_session_active_task
 from ..harness.orchestration.confirm import (
@@ -66,6 +65,7 @@ from ..models import Session as AgentSession
 from ..security import TOKEN_TYPE_WS, decode_token
 from ..session_access import require_visible_session
 from ..session_connections import SESSION_CONNECTION_HUB
+from ..workspace_service import resolve_session_sandbox
 from ..ws_tickets import consume_ws_jti, ttl_from_jwt_payload
 from .profiles import _profile_connection
 
@@ -1791,12 +1791,18 @@ async def _run_turn(
         # 新回合复用租约 ID 作为检查点线程 ID，便于并发与中断审计关联；
         # H5 审批恢复沿用原中断回合的 thread_id（卡 meta 记录）。
         thread_id = resume_thread_id or turn_id or f"{session_id}:{uuid4().hex}"
-        # 会话文件沙箱（H5 完善，P0）：read/write/edit/bash 以会话工作区为执行
-        # 根（stage 的附件即落在 {root}/{session_id}/attachments/），普通回合与
-        # 审批 resume 回合共用本注入点。目录不可得（如桩会话标识）时为空——
-        # 工具保持 fail-closed（旧语义），绝不让注入失败阻断回合。
+        # 会话文件沙箱（H5 完善，P0；F3/G5）：read/write/edit/bash 以会话工作区
+        # 为执行根（stage 的附件仍落 legacy {root}/{session_id}/attachments/——
+        # 附件目录归属随绑定会话的迁移留 F3 后续评审）。F3 起经唯一入口
+        # resolve_session_sandbox：绑定会话 → 工作区 scope 目录；未绑定 → legacy
+        # 自动目录（与 F3 前一致）。绑定失效（行外目录缺失等不一致窗口）时为空
+        # ——工具保持 fail-closed（旧语义），绝不回落 legacy 裸目录。
         try:
-            sandbox_dir = ensure_session_workspace(session_id)
+            sandbox_dir = resolve_session_sandbox(
+                session_id=session_id,
+                workspace_id=session_row.workspace_id if session_row else None,
+                scope_path=session_row.scope_path if session_row else None,
+            )
         except Exception:  # noqa: BLE001 —— 工作区不可得降级为空（工具 fail-closed）
             sandbox_dir = ""
         graph_config = {

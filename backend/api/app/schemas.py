@@ -195,10 +195,17 @@ class FetchModelsIn(ApiModel):
 
 
 class SessionCreate(ApiModel):
-    """创建空 Agent 会话的输入。"""
+    """创建空 Agent 会话的输入。
+
+    F3/G5：``workspace_id``/``scope_path`` 可选——绑定用户工作区（创建时
+    固化、运行期不可变，设计《工作区与沙箱设计方案》§5）；绑定仅限 private
+    会话（BLK-4）。缺省 = legacy 临时工作区（行为与 F3 前一致）。
+    """
 
     title: str = Field(default="新会话", min_length=1, max_length=200)
     visibility: Literal["private", "team"] = "private"
+    workspace_id: str | None = Field(default=None, max_length=64)
+    scope_path: str | None = Field(default=None, max_length=1024)
 
 
 class SessionSharingUpdate(ApiModel):
@@ -208,12 +215,19 @@ class SessionSharingUpdate(ApiModel):
 
 
 class SessionOut(OrmOut):
-    """会话列表项及当前成员的共享管理权限。"""
+    """会话列表项及当前成员的共享管理权限。
+
+    F3/G5：``workspace_id``/``scope_path``/``workspace_name`` 为绑定工作区
+    信息（未绑定为 None）；``workspace_name`` 由路由侧补充（行内无此列）。
+    """
 
     id: str
     title: str
     owner_id: str = Field(validation_alias=AliasChoices("user_id", "owner_id"))
     visibility: Literal["private", "team"] = "private"
+    workspace_id: str | None = None
+    scope_path: str | None = None
+    workspace_name: str | None = None
     created_at: Any
     updated_at: Any
     can_manage: bool = False
