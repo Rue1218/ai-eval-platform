@@ -43,6 +43,7 @@ from shared.models import (  # noqa: F401
     TaskEvent,
     UsageLedger,
     User,
+    Workspace,
     WsEvent,
     utcnow,
     uuid_str,

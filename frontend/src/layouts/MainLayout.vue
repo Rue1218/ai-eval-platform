@@ -312,6 +312,8 @@ const evalRoutes = computed(() => {
     { path: '/reports', label: '评测报告', icon: IconReports, t: 'var(--t-reports)', c: 'var(--c-reports)' },
     modeAsset,
     { path: '/cases', label: '用例', icon: IconCases, t: 'var(--t-cases)', c: 'var(--c-cases)' },
+    // F1（G1）：我的工作区（用户自管数据域）；管理端清理视图保留于 /admin/workspaces
+    { path: '/workspaces', label: '我的工作区', icon: IconWorkspaces, t: 'var(--t-workspaces)', c: 'var(--c-workspaces)' },
   ]
 })
 

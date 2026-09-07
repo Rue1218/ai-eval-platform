@@ -93,6 +93,39 @@ class User(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
 
 
+class Workspace(Base):
+    """用户工作区（用户自管数据域，会话绑定的沙箱隔离单元；设计文档 F1/G1）。
+
+    - ``id`` = uuid 稳定引用，同时是数据卷目录名（``data/workspaces/<id>``）；
+    - 注销 = **软删**（``deleted_at`` 标记，行保留供审计与复活——legacy 导入即
+      清标记；绑定会话 resolve 因行态校验 fail-closed）；
+    - ``purge`` 才真删行 + 目录：事务内先显式解绑全部 ``sessions.workspace_id``
+      引用（FK ``ON DELETE RESTRICT`` 兜底，**禁用 SET NULL**——静默回落违背
+      fail-closed 承诺）；
+    - ``name`` 每属主**活跃行**唯一（部分唯一索引；软删行占名不阻止复活与重建）。
+    """
+
+    __tablename__ = "workspaces"
+    __table_args__ = (
+        Index(
+            "uq_workspaces_owner_name_active",
+            "owner_id",
+            "name",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+    )
+
+    id = Column(String, primary_key=True, default=uuid_str)
+    # 创建者（owner）始终不变；跨用户共享写不在初版范围。
+    owner_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    name = Column(String, nullable=False)
+    # 注销标记（软删）；行态区分活跃/已注销是孤儿守卫与复活路径的前提。
+    deleted_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+
 class Session(Base):
     """Agent 对话会话，不承载浏览器登录 Cookie。"""
 
@@ -121,6 +154,13 @@ class Session(Base):
     pending_confirm = Column(JSONB, nullable=True)
     # 确认卡属于提出该卡的成员，团队协作者不能替其确认、拒绝或覆盖。
     pending_confirm_author_id = Column(String, ForeignKey("users.id"), nullable=True)
+    # dsh 借鉴 D7/F1：工作区绑定（数据域归属）。首条消息发送落库时固化、运行期
+    # 不可变（换绑 = 新建会话）；null/null = legacy 临时工作区（现状兜底）。
+    # FK ON DELETE RESTRICT——purge 需先显式解绑，绝不用 SET NULL（静默回落 legacy）。
+    workspace_id = Column(
+        String, ForeignKey("workspaces.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    scope_path = Column(String, nullable=True)
     # /compact 摘要与窗口游标（messages.id）；从未压缩时皆为空
     compact_summary = Column(Text, nullable=True)
     compact_keep_from = Column(String, nullable=True)

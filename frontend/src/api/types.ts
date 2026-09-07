@@ -1101,3 +1101,33 @@ export interface WorkspaceFileList {
   files: WorkspaceFile[]
   total: number
 }
+
+// —— 用户域工作区（F1/G1）——
+export interface UserWorkspace {
+  id: string
+  name: string
+  owner_id: string
+  created_at?: string | null
+  updated_at?: string | null
+  deleted: boolean
+  folder: WorkspaceFolder | null
+}
+
+export interface UserWorkspaceList {
+  items: UserWorkspace[]
+  total: number
+}
+
+export interface UserWorkspaceFileEntry {
+  name: string
+  kind: 'dir' | 'file' | 'link'
+  size: number
+  updated_at?: string | null
+}
+
+export interface UserWorkspaceFileList {
+  workspace_id: string
+  path: string
+  entries: UserWorkspaceFileEntry[]
+  total: number
+}

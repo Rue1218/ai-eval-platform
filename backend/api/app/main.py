@@ -32,6 +32,7 @@ from .routers import (
     reports,
     sessions,
     tasks,
+    user_workspaces,
     users,
     workspaces,
     ws,
@@ -213,6 +214,7 @@ app.include_router(cases.router)
 app.include_router(cases.folders_router)
 app.include_router(admin.router)
 app.include_router(workspaces.router)
+app.include_router(user_workspaces.router)
 app.include_router(dispatch.router)
 app.include_router(kb.router)
 app.include_router(mcp.router)

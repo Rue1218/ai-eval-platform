@@ -1,0 +1,205 @@
+"""工作区目录服务（admin 与用户域共用，单一事实源——设计文档 A V0.4.1）。
+
+从 ``routers/workspaces.py``（admin）抽取的目录扫描/统计与路径安全逻辑
+收敛于此，避免用户域路由复制出第二份 ``os.walk`` 语义：
+
+- ``folder_summary``：目录摘要（文件数/总字节/最近活动），admin 与用户域共用；
+- 路径安全（防穿越/符号链接逃逸，api 双侧校验纪律）：
+  - ``validate_segment``：单段目录名校验（拒 ``.``/``..``/分隔符）；
+  - ``resolve_scope_dir``：在工作区根内解析相对 scope 的绝对目录
+    （逐段 realpath 前缀重验，允许尚不存在的新建段）；
+- ``list_dir_level``：一层目录列表（目录/文件混合，不递归、不跟随链接）；
+- ``create_child_dir``：在已校验父目录下创建单段子目录（父须存在）；
+- ``orphan_direct_children``：孤儿目录判定输入（目录名 ∉ 受保护集合）。
+
+目录拓扑（与 legacy 会话目录**同根共存**）：``data/workspaces/<uuid>`` 为
+工作区目录（id 即目录名），``data/workspaces/<session_id>`` 为未绑定会话的
+legacy 临时工作区；孤儿守卫按行态区分（仅活跃 ``workspaces.id`` 受保护）。
+"""
+
+from __future__ import annotations
+
+import os
+import re
+from datetime import UTC, datetime
+from typing import Any
+
+from app.errors import AppError, ErrorCode
+
+# 目录名形态校验：uuid（工作区/会话）或任意安全目录段（用户新建文件夹名）
+_ID_RE = re.compile(r"^[0-9a-fA-F-]{8,64}$")
+
+_MAX_FILES = 500
+
+
+def workspace_dir_for(workspace_id: str) -> str:
+    """校验工作区 id 并返回其数据目录（纯路径计算，不创建）。
+
+    与 ``harness.execution.workspace.session_workspace_dir`` 同根：目录名 =
+    行 id（uuid 形态）；防路径穿越由形态校验保证。
+    """
+    from app.harness.execution.workspace import get_workspace_root
+
+    if not _ID_RE.fullmatch(workspace_id or ""):
+        raise AppError(ErrorCode.VALIDATION, "非法工作区标识")
+    return os.path.join(get_workspace_root(), workspace_id)
+
+
+def validate_segment(name: str) -> str:
+    """单段目录名校验（新建文件夹/孤儿清理共用）：非空、非 ``.``/``..``、无分隔符。
+
+    段级限制 255 字符（POSIX NAME_MAX）；返回原值。
+    """
+    if (
+        not isinstance(name, str)
+        or not name
+        or name in {".", ".."}
+        or len(name) > 255
+        or "/" in name
+        or "\\" in name
+    ):
+        raise AppError(ErrorCode.VALIDATION, "非法目录名：需为单段非空名称")
+    return name
+
+
+def resolve_scope_dir(base: str, rel_scope: str) -> str:
+    """在工作区目录 ``base`` 内解析相对 scope，返回绝对目录（防穿越+符号链接）。
+
+    - ``rel_scope`` 为空或 ``"/"`` → ``base``；
+    - 每段须过 ``validate_segment``（拒 ``..`` 与分隔符）；
+    - 已存在路径段逐段 ``realpath`` 前缀重验（符号链接逃逸拒绝）；
+    - 尚不存在的段（将由其后的 mkdir 创建）仅做名字校验——父链已校验，
+      不存在即不可能被符号链接指走。
+    """
+    base_abs = os.path.abspath(base)
+    base_real = os.path.realpath(base_abs)
+    if not os.path.isdir(base_real):
+        raise AppError(ErrorCode.NOT_FOUND, "工作区目录不存在")
+    rel = (rel_scope or "").strip("/")
+    current = base_abs
+    if not rel:
+        return current
+    for part in rel.split("/"):
+        validate_segment(part)
+        current = os.path.join(current, part)
+        if os.path.islink(current):
+            raise AppError(ErrorCode.VALIDATION, "路径含符号链接，拒绝访问")
+        if os.path.exists(current):
+            real = os.path.realpath(current)
+            if real != base_real and not real.startswith(base_real + os.sep):
+                raise AppError(ErrorCode.VALIDATION, "路径越出工作区，拒绝访问")
+    return os.path.abspath(current)
+
+
+def folder_summary(directory: str) -> dict[str, Any] | None:
+    """统计目录：文件数 / 总字节 / 最近修改时间；目录不存在返回 None。"""
+    if not os.path.isdir(directory):
+        return None
+    file_count = 0
+    total_bytes = 0
+    last_mtime = 0.0
+    for root, _dirs, files in os.walk(directory):
+        for name in files:
+            path = os.path.join(root, name)
+            try:
+                st = os.stat(path)
+            except OSError:
+                continue
+            file_count += 1
+            total_bytes += st.st_size
+            if st.st_mtime > last_mtime:
+                last_mtime = st.st_mtime
+    return {
+        "name": os.path.basename(directory),
+        "path": directory,
+        "exists": True,
+        "file_count": file_count,
+        "total_bytes": total_bytes,
+        "updated_at": (
+            datetime.fromtimestamp(last_mtime, UTC).isoformat() if last_mtime else None
+        ),
+    }
+
+
+def list_dir_level(directory: str, rel_scope: str = "") -> list[dict[str, Any]]:
+    """一层目录列表（目录/文件混合，≤``_MAX_FILES``），不递归、不跟随链接。
+
+    相对 scope 的解析与防穿越见 ``resolve_scope_dir``。条目含
+    ``name/kind(dir|file|link)/size/updated_at``；链接以 ``kind=link`` 暴露
+    但不跟随（浏览仅为元数据展示，杜绝符号链接内容泄露面）。
+    """
+    target = resolve_scope_dir(directory, rel_scope)
+    entries: list[dict[str, Any]] = []
+    try:
+        with os.scandir(target) as iterator:
+            for entry in iterator:
+                kind: str
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        kind = "dir"
+                    elif entry.is_file(follow_symlinks=False):
+                        kind = "file"
+                    else:
+                        kind = "link"
+                    st = entry.stat(follow_symlinks=False)
+                    size = st.st_size if kind == "file" else 0
+                    mtime = st.st_mtime if kind in {"file", "dir"} else 0
+                except OSError:
+                    continue
+                entries.append(
+                    {
+                        "name": entry.name,
+                        "kind": kind,
+                        "size": size,
+                        "updated_at": (
+                            datetime.fromtimestamp(mtime, UTC).isoformat() if mtime else None
+                        ),
+                    }
+                )
+                if len(entries) >= _MAX_FILES:
+                    break
+    except FileNotFoundError:
+        raise AppError(ErrorCode.NOT_FOUND, "目录不存在") from None
+    except OSError as exc:
+        raise AppError(ErrorCode.VALIDATION, "目录读取失败") from exc
+    entries.sort(key=lambda item: (item["kind"] != "dir", item["name"].lower()))
+    return entries
+
+
+def create_child_dir(parent: str, name: str) -> str:
+    """在已存在父目录下创建单段子目录（幂等：已存在同名目录直接返回）。
+
+    ``name`` 经 ``validate_segment``；父目录须已存在（平台创建的工作区树内）。
+    """
+    validate_segment(name)
+    target = os.path.join(parent, name)
+    if os.path.islink(target):
+        raise AppError(ErrorCode.VALIDATION, "同名路径为符号链接，拒绝创建")
+    try:
+        os.makedirs(target, exist_ok=True)
+    except OSError as exc:
+        raise AppError(ErrorCode.INTERNAL, "目录创建失败") from exc
+    if not os.path.isdir(target) or os.path.islink(target):
+        raise AppError(ErrorCode.INTERNAL, "目录创建失败")
+    return target
+
+
+def orphan_direct_children(root: str, protected_ids: set[str]) -> list[str]:
+    """孤儿目录候选（根下直接子目录名 ∉ 受保护 id 集合）。
+
+    ``protected_ids`` 由路由侧组装：全会话 id ∪ **活跃** ``workspaces.id``
+    （行态区分——软删工作区目录入清理面，见设计稿 §7.3 V0.4.1）。
+    """
+    if not os.path.isdir(root):
+        return []
+    orphans: list[str] = []
+    try:
+        for name in sorted(os.listdir(root)):
+            if name in protected_ids:
+                continue
+            directory = os.path.join(root, name)
+            if os.path.isdir(directory) and not os.path.islink(directory):
+                orphans.append(name)
+    except OSError:
+        return []
+    return orphans
