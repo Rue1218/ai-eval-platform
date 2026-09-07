@@ -184,6 +184,56 @@ def create_child_dir(parent: str, name: str) -> str:
     return target
 
 
+def ensure_workspace_scope(workspace_id: str, scope_path: str | None) -> str:
+    """绑定目录准备（创建会话时调用，F3/G5）：校验 id/scope 并确保目标目录存在。
+
+    工作区目录须已存在（平台创建）；scope 段可尚不存在（按需 mkdir，仅工作区
+    树内）。返回绝对目录供 bind 与 runner ``policy.workspace_root``。
+    """
+    base = workspace_dir_for(workspace_id)
+    target = resolve_scope_dir(base, scope_path or "")
+    if os.path.islink(target):
+        raise AppError(ErrorCode.VALIDATION, "绑定路径为符号链接")
+    try:
+        os.makedirs(target, exist_ok=True)
+    except OSError as exc:
+        raise AppError(ErrorCode.INTERNAL, "目录创建失败") from exc
+    if not os.path.isdir(target) or os.path.islink(target):
+        raise AppError(ErrorCode.INTERNAL, "目录创建失败")
+    return target
+
+
+def resolve_session_sandbox(
+    session_id: str,
+    workspace_id: str | None,
+    scope_path: str | None,
+) -> str:
+    """会话沙箱唯一解析入口（F3/G5，设计 §5）：绑定 → 工作区 scope；未绑定 → legacy。
+
+    - 未绑定（``workspace_id`` 空）→ ``ensure_session_workspace(session_id)``
+      （legacy 自动目录，与 F3 前逐字节一致）；
+    - 绑定 → 工作区目录存在 + scope 前缀防穿越解析（``resolve_scope_dir``），
+      返回绝对目录；目录不可得（行存在但目录被删等不一致窗口）→
+      ``AppError(VALIDATION)`` **fail-closed**——调用方降级空串（工具
+      VALIDATION「未配置沙箱目录」），绝不回落 legacy 裸目录。
+    """
+    if not workspace_id:
+        from app.harness.execution.workspace import ensure_session_workspace
+
+        return ensure_session_workspace(session_id)
+    base = workspace_dir_for(workspace_id)
+    try:
+        target = resolve_scope_dir(base, scope_path or "")
+    except AppError as exc:
+        # 工作区目录缺失 / scope 越界：绑定失效统一 VALIDATION（fail-closed）
+        if exc.code == ErrorCode.NOT_FOUND:
+            raise AppError(ErrorCode.VALIDATION, "绑定工作区目录不可用") from None
+        raise
+    if not os.path.isdir(target) or os.path.islink(target):
+        raise AppError(ErrorCode.VALIDATION, "绑定工作区目录不可用")
+    return target
+
+
 def orphan_direct_children(root: str, protected_ids: set[str]) -> list[str]:
     """孤儿目录候选（根下直接子目录名 ∉ 受保护 id 集合）。
 

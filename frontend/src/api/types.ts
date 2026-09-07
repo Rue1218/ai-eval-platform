@@ -769,6 +769,10 @@ export interface AgentSession {
   status?: TaskStatus
   can_manage: boolean
   can_delete: boolean
+  /** F3/G5：绑定工作区（创建时固化；未绑定为 null） */
+  workspace_id?: string | null
+  workspace_name?: string | null
+  scope_path?: string | null
   active_task?: { id: string; kind: TaskKind; status: TaskStatus } | null
 }
 

@@ -14,11 +14,12 @@ from ..errors import AppError, ErrorCode
 from ..harness.context import compute_meter, is_window_eligible, recent_window
 from ..harness.context.meter import DEFAULT_MAX_TOKENS, DEFAULT_MCP_TOOLS_MAX
 from ..harness.memory import purge_session_checkpoints
-from ..models import AuditLog, Message, ProtocolProfile, Setting, Task, User, WsEvent
+from ..models import AuditLog, Message, ProtocolProfile, Setting, Task, User, Workspace, WsEvent
 from ..models import Session as AgentSession
 from ..schemas import SessionCreate, SessionOut, SessionSharingUpdate
 from ..session_access import require_session_owner, require_visible_session
 from ..session_connections import SESSION_CONNECTION_HUB
+from ..workspace_service import ensure_workspace_scope
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 ACTIVE_STATUSES = {"queued", "running", "awaiting_case_confirm"}
@@ -85,14 +86,19 @@ def build_session_context_meter(
 
 
 def _session_out(db: Session, row: AgentSession, user: User) -> dict:
-    """补齐会话 owner、当前成员管理权和活动任务摘要。"""
+    """补齐会话 owner、绑定工作区名、当前成员管理权和活动任务摘要。"""
     task = (
         db.query(Task)
         .filter(Task.session_id == row.id, Task.status.in_(ACTIVE_STATUSES))
         .order_by(Task.created_at.desc())
         .first()
     )
+    workspace_name = None
+    if row.workspace_id:
+        ws_row = db.query(Workspace).filter(Workspace.id == row.workspace_id).first()
+        workspace_name = ws_row.name if ws_row else None
     value = SessionOut.model_validate(row).model_dump(mode="json")
+    value["workspace_name"] = workspace_name
     value["can_manage"] = row.user_id == user.id
     value["can_delete"] = row.user_id == user.id
     value["active_task"] = (
@@ -126,13 +132,46 @@ def create_session(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """创建尚未关联长任务的空 Agent 会话，默认仅创建者可见。"""
+    """创建尚未关联长任务的空 Agent 会话，默认仅创建者可见。
+
+    F3/G5：可选携带 ``workspace_id``/``scope_path`` 绑定用户工作区——创建时
+    固化、运行期不可变（设计 §5，无换绑端点，需换绑 = 删除重建）；绑定仅限
+    private 会话（BLK-4：防 team 成员借绑定会话横向获得工作区写授权）；属主
+    校验 fail-closed。未绑定 = legacy 临时工作区（与 F3 前行为一致）。
+    """
+    workspace_id = (body.workspace_id or "").strip() or None
+    scope_path = (body.scope_path or "").strip("/") or None
+    if workspace_id:
+        if body.visibility != "private":
+            raise AppError(ErrorCode.VALIDATION, "绑定工作区的会话必须为私有可见性")
+        workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
+        if (
+            workspace is None
+            or workspace.owner_id != user.id
+            or workspace.deleted_at is not None
+        ):
+            raise AppError(ErrorCode.VALIDATION, "工作区不存在或无权绑定")
+        # 目录就绪：scope 防穿越校验（异常即失败）+ 目标目录按需创建
+        ensure_workspace_scope(workspace.id, scope_path)
     session = AgentSession(
         user_id=user.id,
         title=body.title.strip(),
         visibility=body.visibility,
+        workspace_id=workspace_id,
+        scope_path=scope_path,
     )
     db.add(session)
+    db.flush()  # 取 session.id 供审计
+    if workspace_id:
+        db.add(
+            AuditLog(
+                user_id=user.id,
+                action="session_workspace_bind",
+                target_type="session",
+                target_id=session.id,
+                detail={"workspace_id": workspace_id, "scope_path": scope_path},
+            )
+        )
     db.commit()
     db.refresh(session)
     return _session_out(db, session, user)
@@ -147,6 +186,11 @@ async def update_session_sharing(
 ):
     """由会话创建者在私有和全团队共享之间切换可见范围。"""
     session = require_session_owner(db, session_id, user.id, lock=True)
+    # F3/G5（BLK-4）：绑定工作区的会话不可转团队共享（写授权不随 team 开放）
+    if body.visibility == "team" and session.workspace_id:
+        raise AppError(
+            ErrorCode.VALIDATION, "绑定工作区的会话不可转为团队共享"
+        )
     session.visibility = body.visibility
     db.add(
         AuditLog(

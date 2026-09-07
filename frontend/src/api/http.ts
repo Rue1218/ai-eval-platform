@@ -1277,13 +1277,20 @@ export const api = {
         throw e
       }
     },
-    async create(title?: string, visibility: SessionVisibility = 'private'): Promise<AgentSession> {
+    async create(
+      title?: string,
+      options: { visibility?: SessionVisibility; workspaceId?: string; scopePath?: string } = {},
+    ): Promise<AgentSession> {
+      const visibility = options.visibility ?? 'private'
       if (getDataMode() === 'mock') {
         const s: AgentSession = {
           id: 's-' + Date.now(),
           title: title || '新会话',
           owner_id: 'u-admin',
           visibility,
+          workspace_id: options.workspaceId || null,
+          workspace_name: null,
+          scope_path: options.scopePath || null,
           can_manage: true,
           can_delete: true,
           created_at: new Date().toISOString(),
@@ -1291,7 +1298,12 @@ export const api = {
         mockStore.sessions.unshift(s)
         return s
       }
-      const { data } = await http.post('/api/sessions', { title: title || '新会话', visibility })
+      const { data } = await http.post('/api/sessions', {
+        title: title || '新会话',
+        visibility,
+        workspace_id: options.workspaceId || undefined,
+        scope_path: options.scopePath || undefined,
+      })
       return data
     },
     async updateSharing(id: string, visibility: SessionVisibility): Promise<AgentSession> {

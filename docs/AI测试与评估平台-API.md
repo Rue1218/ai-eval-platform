@@ -2,17 +2,19 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.75 |
+| 文档版本 | V1.76 |
 | 对应 PRD | V1.18（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.6.0（骨架化纯对话；JSON 仍以本文为准） |
 | 对应前端计划 | V1.5 |
 | 对应后端计划 | V1.5 |
 | 撰写日期 | 2026-08-18 |
-| 本轮修订 | 2026-09-07：V1.75 用户工作区（《工作区与沙箱设计方案》V0.4.1 F1/G1）：新增用户域 `GET/POST /api/workspaces`、`PUT/DELETE /api/workspaces/{id}`（注销=软删置 `deleted_at`；`purge=true` 行锁内显式解绑会话引用后真删行+目录，FK `ON DELETE RESTRICT` 兜底、禁用 SET NULL）与 `GET/POST /api/workspaces/{id}/files`（一层目录浏览/建文件夹，段级校验+逐段 realpath 前缀重验+符号链接拒绝）；`workspaces` 表 + `sessions.workspace_id/scope_path` 新列（迁移 e8f1a2b3c4d5；会话绑定接线随 F3，本期会话不产生绑定）；孤儿判定与 `delete_orphan` 排除**活跃** `workspaces.id`（行态区分，软删目录入清理面）。REST 增量按版本纪律留档（§3.12.3）；无 WS 事件/上行变化。2026-09-07：V1.74 上下文压缩事件化（dsh 借鉴 #2 首期落地物）：超大工具结果先裁剪再进窗（`NativeToolResultStore` 长度上限与截断标注，模型只见带标注的截断结果）；发生窗口裁剪时落一条持久留痕事件 `context_trim`（§4.3，payload 仅元信息：`reason`（compact/tail_window）/`dropped`/`kept`/`in_scope_total`/`keep_from_id`/`limit`，**不含被裁原文**——观察纪律）；`recent_window` + `compact_keep_from` 算法行为不变；新增 kind 按词汇表纪律版本递增至 `event.v4`（§4.3）。2026-09-07：V1.73 审批终态（dsh 借鉴 #3）：审批卡引入 TTL/终态语义——TTL 常量 `agent_approval_ttl_seconds`（默认 3600，config）；api 侧周期扫描对过期 `tool_approval` 卡行锁清卡并广播持久终态事件 `approval_terminal`（`{approval_id, outcome:"expired"}`）；`/stop` 放弃悬挂审批卡时广播 `outcome:"cancelled"`；**失效判定以卡 `meta.created_at` + 当前时间幂等兜底，不依赖扫描进程存活性**——过期后 ack 一律拒绝且不触发 resume（沿用一次性纪律），`rejected` 语义仍由 `tool_approval_ack(action=reject)` 承载。新增 kind 按词汇表纪律版本递增至 `event.v3`（§4.3）；前端 ApprovalCard 增 disabled/终态展示。2026-09-07：V1.72 clarify 问答恢复（dsh 借鉴 #1，契约转正）：`clarify` 自「无生产者」转正为现行持久事件（§4.3，payload 定稿多题 `questions[]`），`clarify_reply` 自历史资料转正为第 5 类现行上行（§4.4，payload 定稿 `{id, answers[]}` 多题结构，替代 V1.62 单文本）；§9 红线措辞改为「上行/事件 kind 以 §4.4/§4.3 现行清单为准 + 契约评审」。卡存储走 B 路线（§3.1.2 裁决）：三类卡（`task_confirm`/`tool_approval`/`clarify`）共用 `pending_confirm` 单行互斥，`meta` 扩 `confirm_type="clarify"`；新增持久回执事件 `clarify_ack`（`{ok:true,id}`）——按 #4 词汇表纪律，**新增 kind 版本递增为 `event.v2`**（§4.3 词汇表版本段落，`backend/shared/event_vocab.py` 同步升版）。2026-09-07：V1.71 事件词汇表版本化（dsh 借鉴 #4，D0 契约先行）：§4.2 公共头增补可选 `vocab_version` 字段（服务端恒发，旧客户端忽略未知字段即可，无前端改动）；§4.3 新增词汇表版本语义与演进纪律（增删事件必须递增版本，演进理由随修订记录留档）。服务端实现：api 与 worker 共用 `backend/shared/event_vocab.py` 单一事实源（api `_emit_persistent` 与 Worker `push_ws` 落库 payload 均内嵌 `event_version` 保留字段，转发/回放剥离）；api `_forward_loop` 对未知 kind / 版本不符事件按 `event_vocab_strict`（默认 false）告警跳过或 fail-closed 拒收并落 `error`；历史 `ws_events` 无版本行按当前版本解释（只读兼容）。 |
+| 本轮修订 | 2026-09-07：V1.76 会话-工作区绑定（《工作区与沙箱设计方案》V0.5 F3/G5）：`POST /api/sessions` 请求体增量可选 `workspace_id`/`scope_path`（创建时固化、运行期不可变、无换绑端点；绑定仅限 `visibility="private"`——BLK-4，team 会话绑定拒绝；属主校验 + scope 防穿越 + 目录就绪，未绑定行为与 V1.75 完全一致）；会话列表项/响应增量 `workspace_id`/`scope_path`/`workspace_name`（名称由服务端按行补充）；`PUT /api/sessions/{id}/sharing` 对已绑定会话转 `team` 返回 `VALIDATION`（写授权不随团队可见性开放）；绑定成功写 AuditLog `session_workspace_bind`（§3.12.3 词表）；会话工具（read/write/edit/bash）沙箱根 = 绑定工作区 scope（legacy 会话仍为 `data/workspaces/<session_id>`，附件 staging 仍落 legacy 目录——附件归属随绑定会话迁移留后续评审）；无 WS 事件/上行变化。2026-09-07：V1.75 用户工作区（《工作区与沙箱设计方案》V0.4.1 F1/G1）：新增用户域 `GET/POST /api/workspaces`、`PUT/DELETE /api/workspaces/{id}`（注销=软删置 `deleted_at`；`purge=true` 行锁内显式解绑会话引用后真删行+目录，FK `ON DELETE RESTRICT` 兜底、禁用 SET NULL）与 `GET/POST /api/workspaces/{id}/files`（一层目录浏览/建文件夹，段级校验+逐段 realpath 前缀重验+符号链接拒绝）；`workspaces` 表 + `sessions.workspace_id/scope_path` 新列（迁移 e8f1a2b3c4d5；会话绑定接线随 F3，本期会话不产生绑定）；孤儿判定与 `delete_orphan` 排除**活跃** `workspaces.id`（行态区分，软删目录入清理面）。REST 增量按版本纪律留档（§3.12.3）；无 WS 事件/上行变化。2026-09-07：V1.74 上下文压缩事件化（dsh 借鉴 #2 首期落地物）：超大工具结果先裁剪再进窗（`NativeToolResultStore` 长度上限与截断标注，模型只见带标注的截断结果）；发生窗口裁剪时落一条持久留痕事件 `context_trim`（§4.3，payload 仅元信息：`reason`（compact/tail_window）/`dropped`/`kept`/`in_scope_total`/`keep_from_id`/`limit`，**不含被裁原文**——观察纪律）；`recent_window` + `compact_keep_from` 算法行为不变；新增 kind 按词汇表纪律版本递增至 `event.v4`（§4.3）。2026-09-07：V1.73 审批终态（dsh 借鉴 #3）：审批卡引入 TTL/终态语义——TTL 常量 `agent_approval_ttl_seconds`（默认 3600，config）；api 侧周期扫描对过期 `tool_approval` 卡行锁清卡并广播持久终态事件 `approval_terminal`（`{approval_id, outcome:"expired"}`）；`/stop` 放弃悬挂审批卡时广播 `outcome:"cancelled"`；**失效判定以卡 `meta.created_at` + 当前时间幂等兜底，不依赖扫描进程存活性**——过期后 ack 一律拒绝且不触发 resume（沿用一次性纪律），`rejected` 语义仍由 `tool_approval_ack(action=reject)` 承载。新增 kind 按词汇表纪律版本递增至 `event.v3`（§4.3）；前端 ApprovalCard 增 disabled/终态展示。2026-09-07：V1.72 clarify 问答恢复（dsh 借鉴 #1，契约转正）：`clarify` 自「无生产者」转正为现行持久事件（§4.3，payload 定稿多题 `questions[]`），`clarify_reply` 自历史资料转正为第 5 类现行上行（§4.4，payload 定稿 `{id, answers[]}` 多题结构，替代 V1.62 单文本）；§9 红线措辞改为「上行/事件 kind 以 §4.4/§4.3 现行清单为准 + 契约评审」。卡存储走 B 路线（§3.1.2 裁决）：三类卡（`task_confirm`/`tool_approval`/`clarify`）共用 `pending_confirm` 单行互斥，`meta` 扩 `confirm_type="clarify"`；新增持久回执事件 `clarify_ack`（`{ok:true,id}`）——按 #4 词汇表纪律，**新增 kind 版本递增为 `event.v2`**（§4.3 词汇表版本段落，`backend/shared/event_vocab.py` 同步升版）。2026-09-07：V1.71 事件词汇表版本化（dsh 借鉴 #4，D0 契约先行）：§4.2 公共头增补可选 `vocab_version` 字段（服务端恒发，旧客户端忽略未知字段即可，无前端改动）；§4.3 新增词汇表版本语义与演进纪律（增删事件必须递增版本，演进理由随修订记录留档）。服务端实现：api 与 worker 共用 `backend/shared/event_vocab.py` 单一事实源（api `_emit_persistent` 与 Worker `push_ws` 落库 payload 均内嵌 `event_version` 保留字段，转发/回放剥离）；api `_forward_loop` 对未知 kind / 版本不符事件按 `event_vocab_strict`（默认 false）告警跳过或 fail-closed 拒收并落 `error`；历史 `ws_events` 无版本行按当前版本解释（只读兼容）。 |
 | 最近修订 | 2026-09-03：V1.67 混合引擎执行落地（H2 Workflow DAG / H3 Agent TAOR）：恢复持久事件 `tool_call` / `tool_result`（payload 见 §4.3，ToolCard 只渲染脱敏摘要，观察全文不进任何事件）；`response.completed` 的 `engine` 从「分流结论」升级为「真实执行引擎」——`workflow`（H2，W0–W7 硬编码 DAG）与 `agent`（H3，plan→discover→orchestrator⇄tools 单图内 TAOR）均已真实执行，`agent_id` 审计随 Worker 目录（§3.6.3）供归属核验；`thought` / `tool_progress` / `tool_output_delta` / `confirm` / `clarify` 仍不产生。历史 `ws_events` 中的旧工具事件仍不重放。 |2026-09-03：V1.66 混合引擎 H1 Router 审计契约：`response.completed` payload 新增可选 `engine` / `router_confidence` / `router_reason`（仅 `hybrid_engine_enabled=true` 时出现，旧客户端忽略未知字段即可）；新增 `GET /api/agents` Worker 只读目录（§3.6.3）。本版不新增 WS 事件名、不恢复 `thought` / `tool_*`；`workflow` / `agent` 引擎在 H1 阶段降级按 `chat` 执行，`engine` 如实记录分流结论并经 `router_reason` 标注降级。2026-09-02：V1.65 工具契约加固（T1–T3）：JSON Schema 子集新增 `minItems`/`maxItems` 并为 8 处数组参数补上限；`output_schema` 从装饰字段升级为强制契约（注册期拒绝未声明，运行期按声明比对展示投影）；`platform.tasks` 三工具补全 `output_schema`；移除 `/api/mcp/tools/{name}/code` 端点与 `code_snippet` 字段。2026-08-28：V1.53 `web_fetch` 直抓路径接入 trafilatura 正文提取：可读性算法识别文章主体，保留标题层级/链接/图片/表格，未安装或提取失败降级回内置 `_TextExtractor`；提取真实产出 Markdown 时才声明 `format=markdown`（§4.3.1）。V1.52 优化 `web_fetch` 长文完整性与卡片预览：模型正文预算 8,000→60,000 字符，卡片预览与 `read` 同源对齐 `TOOL_PREVIEW_MAX_CHARS` 并随 `web.preview_limit_chars` 下发，直接抓取字节窗口 256KB→1MB（§4.3.1）。2026-08-27：V1.51 新增持久事件 `session_title`（§4.3）与会话标题 AI 生成契约（§4.3.2）：默认标题会话首条消息后由 Agent 协议档弱结构化生成标题并落库广播，修复标题不持久化问题。V1.50 统一 Agent 文本附件 staging 与 `read` 的 20MB 边界；`read` 模型窗口为 2,000 行 / 600,000 字符。V1.49 协议档新增 `max_output_tokens`（256–131072，默认 8192），创建/更新/列表/详情均支持；Agent 模型调用从协议档读取输出上限，长文档总结/导出类任务可调大避免回答被截断。2026-08-26：V1.48 同轮多调用默认串行，灰度开启后仅 `read`/`web_search`/`web_fetch` 可并行，回填按原始 `call_id`。V1.47 新增 `GET /api/agent/metrics`，不含正文/参数，不新增 WS 事件。V1.46 明确 native 一次 ToolCall 结束当前上游响应，结果回填后再请求，不新增事件名。V1.45 思考链只下发可展示摘要，隐藏 CoT（`Here's a thinking process` / `Analyze User Input`）由服务端替换，不原样推给前端。V1.44 ToolCall 在执行前持久化，新增瞬态 `tool_progress` / `tool_output_delta`，并冻结原生工具的输出 Schema、权限边界和失败恢复字段。V1.43 思考增量允许合并下发；有思考链时 `think_final` 在 `response.completed` 之前。V1.42 Direct `/help`、未知斜杠与图内防御提示在业务事件后必须再发 `response.completed`（成功 `stop`，校验/防御 `error`），结束整轮生成态。V1.41 确认卡预填与 `confirm_ack` 入队前丢掉已删除的协议档/数据集/知识库 ID，避免 Worker 再报「协议档不存在或已删除」。V1.40 `/cancel` 与 `/stress` 按 §4.4 解禁（仍走 `user_message`）：`/cancel` 取消本会话非终态任务，`/stress` 发出质量任务确认卡且 `with_stress=true`，禁止 `kind=stress`。V1.39 原生工具卡片收起态副标题统一为 `ToolCall`，不在卡片摘要区回显文件路径、命令或写入内容；详细参数仍在展开区展示。V1.38 明确原生基础 ToolCall 卡片使用英文工具名，展开区统一显示 `ToolCall` 与 `输出`，文件、命令和代码/文档结果使用行号展示；MCP/平台短工具仍按下方中文名映射。2026-08-24：V1.24 修复 Agent 附件上下文链路：服务端校验文件归属并在模型窗口解析文本、PDF、DOCX、XLSX，图片按三协议图文内容块发送；历史消息附件补齐安全元数据，前端可在刷新后继续预览。同步调整输入框内附件按钮与用户消息附件位序。V1.23 扩展 Agent 附件契约，支持图片、Word 文档与多附件拖拽上传；保留 `POST /api/files` 后再以既有 `file_id` 引用的消息链路，补充图片缩略图、PDF/文本预览与 Office 文件打开/下载说明。V1.22 修复 V1.21 遗留：§4.4 标题「仅此三条」改「仅此四条」、§9 禁止清单「第四种」改「第五种」并补四类上行事件枚举、§4.3 `tool_result.source` 语义对齐 M7 `Observation.source`（溯源标识字符串，非 short\|long 枚举）、§4.3 共享流规则补 clarify/plan/confirm 持久化广播说明、§4.4 clarify 多副本限制注明、§9 Ask/Plan 补注非 Harness plan 事件；V1.20 及更早版本沿用历史修订记录。 |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
+> V1.76（2026-09-07）：会话-工作区绑定（《工作区与沙箱设计方案》V0.5 F3/G5）。`POST /api/sessions` 增量可选 `workspace_id`（工作区 uuid）/`scope_path`（工作区内相对子目录，默认根）——绑定在**创建时固化**（运行期不可变、无换绑端点，需换绑 = 删除重建；前端草稿模式在首条消息随 create 携带）；绑定仅限 `visibility="private"`（BLK-4：写授权不随团队可见性开放），工作区须存在、未软删、属主匹配，scope 逐段 realpath 防穿越 + 目标目录自动就绪；失败一律 `VALIDATION` fail-closed。列表项/响应增量 `workspace_id`/`scope_path`/`workspace_name`（`workspace_name` 服务端按行补查，前端仅展示）；`PUT /api/sessions/{id}/sharing` 对 `workspace_id` 非空会话转 `team` → `VALIDATION`。绑定会话的沙箱根（read/write/edit/bash 数据域）由 `resolve_session_sandbox` 唯一解析为工作区 scope（runner 前缀校验面随 G4 已就绪）；未绑定会话行为与 V1.75 逐字节一致（legacy 自动目录）。附件 staging（`attachments/`）仍落 legacy `{root}/{session_id}/attachments/`——绑定会话附件归属迁移留后续评审。审计新增 `session_workspace_bind`（§3.12.3）。无 WS 事件/上行变化。
+>
 > V1.74（2026-09-07）：上下文压缩事件化（dsh 借鉴与 Agent Harness 改进 #2 首期落地物）。治理「超长上下文精度衰减」遗留项的可观测性：① 超大 `tool_result` 先裁剪——单回合原生工具结果临时存储（`NativeToolResultStore`）写入前按长度上限（与 read 模型窗口同源 600,000 字符）裁剪并追加截断标注，模型只见带标注的截断结果（禁止假装全文在手），未超限行为逐字节不变；② 窗口裁剪事件化留痕——回合装配模型上下文时若发生窗口裁剪（compact `keep_from` 截断或末 20 条尾窗截断），广播持久留痕事件 `context_trim`（payload 仅元信息 reason/dropped/kept/in_scope_total/keep_from_id/limit，不携带被裁消息原文，观察纪律不变；首期不做 LLM 摘要）。`recent_window` / `compact_keep_from` 窗口算法本身与行为默认不变；新增 kind 按 #4 词汇表纪律版本递增至 `event.v4`（§4.3，`backend/shared/event_vocab.py` 同步）。
 >
 > V1.73（2026-09-07）：审批终态（dsh 借鉴与 Agent Harness 改进 #3）。审批卡不再无限期悬挂：TTL 常量 `agent_approval_ttl_seconds`（config，默认 3600 秒，禁硬编码）——api 侧后台周期扫描对超龄 `tool_approval` 卡在行锁内二次判定后清卡，广播持久终态事件 `approval_terminal`（payload `{approval_id, outcome:"expired"}`）；`/stop` 放弃悬挂审批卡时广播 `outcome:"cancelled"`（与用户 `reject` 语义区分：`rejected` 仍由 `tool_approval_ack(action="reject")` 回执承载，不回执场景的放弃属 cancelled）。失效判定以卡 `meta.created_at`（UTC ISO）+ 当前时间**幂等兜底，不依赖扫描进程存活性**：过期后任意 ack 先判龄拒绝（清卡 + `expired` 终态 + `error`），绝不触发 resume；卡清后重复 ack 走既有「无待审批卡」拒绝。前端 ApprovalCard 对 expired/cancelled 展示失效态、按钮禁操作（回放只读）。新增 kind 按 #4 词汇表纪律版本递增至 `event.v3`（§4.3 词汇表版本段落、`backend/shared/event_vocab.py` 同步）。
@@ -360,6 +362,11 @@ WS `error` 事件 payload 与上表同一套 `code` + `message`（可带 `fields
 `owner_id` 不因协作者发言而改变。会话删除是**软删除**：会话列表、历史和
 WS 不再可访问，但 `messages`、`ws_events`、tasks、reports 均保留审计记录。
 
+V1.76（F3/G5）会话可绑定用户工作区（`workspace_id`/`scope_path`）：绑定 =
+创建时固化（运行期不可变），仅属主可绑、**绑定会话强制 `private`**（写授权
+不随 `team` 可见性开放）；已绑定会话不可转 `team`。绑定后 read/write/edit/
+bash 的沙箱根 = 工作区 scope（模型数据域即工作区）。
+
 - `private`：只有 owner 可读写；
 - `team`：所有正常成员可浏览、发送消息和连接同一会话；
 - 分享设置、取消分享和软删除：只有 owner；
@@ -379,7 +386,10 @@ WS 不再可访问，但 `messages`、`ws_events`、tasks、reports 均保留审
       "id": "uuid",
       "title": "帮我下一单 Benchmark",
       "owner_id": "uuid",
-      "visibility": "team",
+      "visibility": "private",
+      "workspace_id": "uuid" | null,
+      "workspace_name": "评测素材" | null,
+      "scope_path": null | "cases/round1",
       "can_manage": false,
       "can_delete": false,
       "updated_at": "2026-09-21T12:00:00Z",
@@ -398,6 +408,13 @@ WS 不再可访问，但 `messages`、`ws_events`、tasks、reports 均保留审
 请求：`{ "title": "新会话", "visibility": "private" }`；`visibility` 省略时为
 `private`。响应包含 GET 列表项的 `owner_id`、`visibility`、权限字段和时间。
 
+V1.76（F3/G5）可选绑定工作区：`{ "title": "…", "visibility": "private",
+"workspace_id": "uuid", "scope_path": "cases/round1" }`——`workspace_id`
+省略 = 未绑定（legacy 临时工作区，行为与 V1.75 一致）；`scope_path` 省略/
+空 = 工作区根。绑定约束：`visibility` 必须 `private`；工作区须存在、未注销且
+为当前用户属主；scope 段防穿越校验；任一不满足返回 `VALIDATION`
+（fail-closed，不回落 legacy）。绑定创建时固化、运行期不可变，无换绑端点。
+
 空会话，不创建 task。
 
 #### `PUT /api/sessions/{id}/sharing`
@@ -409,7 +426,8 @@ WS 不再可访问，但 `messages`、`ws_events`、tasks、reports 均保留审
 ```
 
 将 `team` 改回 `private` 后，服务端立即以关闭码 `4404` 关闭协作者 WS，避免继续接收
-瞬态正文流。正在执行的任务不因分享设置变化而取消。
+瞬态正文流。正在执行的任务不因分享设置变化而取消。V1.76：已绑定工作区的会话
+（`workspace_id` 非空）转 `team` → `VALIDATION`（写授权不随团队可见性开放）。
 
 #### `DELETE /api/sessions/{id}`
 
@@ -1522,7 +1540,7 @@ Prometheus 内置可观测性指标端点（内网 HTTP GET），输出前缀为
 
 ### 3.12.3 用户域工作区（V1.75，F1/G1）
 
-用户工作区 = 用户自管数据域（目录 `data/workspaces/<id>`，与 legacy 会话目录同根共存）；会话绑定接线随 F3（本期会话不产生绑定）。鉴权：仅属主；写入均写 AuditLog（`workspace_create/rename/delete/purge/folder_create`、解绑 `workspace_unbind` 随 purge）。
+用户工作区 = 用户自管数据域（目录 `data/workspaces/<id>`，与 legacy 会话目录同根共存）。V1.76（F3/G5）会话绑定已接线：`POST /api/sessions` 携带 `workspace_id/scope_path` 创建绑定会话（仅 private、创建时固化、无换绑端点；见 §3.4），运行期沙箱根由 `resolve_session_sandbox` 解析为工作区 scope。鉴权：仅属主；写入均写 AuditLog（`workspace_create/rename/delete/purge/folder_create`、解绑 `workspace_unbind` 随 purge、绑定 `session_workspace_bind`）。
 
 #### `GET /api/workspaces?include_deleted=&offset=&limit=`
 
