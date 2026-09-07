@@ -2060,6 +2060,25 @@ async def _handle_stop(
     )
 
 
+def stop_session_turns(session_id: str) -> None:
+    """中止会话在途回合（abort + cancel），供会话删除等管理动作联动（MAJ-4）。
+
+    与 /stop 同路径语义：abort 置位 + 后台任务 cancel（未调度任务由
+    ``_attach_turn_task`` 的 abort 检查兜底取消）；取消分支负责唯一
+    ``response.completed`` 收尾。调用方（如 REST delete_session 已在 owner
+    校验后）无需传 user_id——删除/管理意图本身即授权。
+    """
+    with _TURN_LOCK:
+        turn = _SESSION_TURNS.get(session_id)
+    abort = turn.abort if turn else _SESSION_ABORTS.get(session_id)
+    if turn is not None and (turn.task is None or not turn.task.done()):
+        turn.abort.set()
+        if turn.task is not None and turn.started:
+            turn.task.cancel()
+    elif abort is not None:
+        abort.set()
+
+
 def _maybe_schedule_title(
     session: AgentSession,
     websocket: WebSocket,

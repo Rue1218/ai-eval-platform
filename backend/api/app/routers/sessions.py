@@ -346,6 +346,13 @@ async def delete_session(
     if active_task:
         raise AppError(ErrorCode.VALIDATION, "存在执行中的任务，请先取消或等待任务结束")
 
+    # MAJ-4：软删前中止该会话在途 Agent 回合（尽力而为——取消分支负责唯一
+    # completed 收尾；软删后断连 close_all 在 commit 后执行）。局部 import
+    # 防 routers/ws → sessions 循环依赖。
+    from . import ws as _ws_module
+
+    _ws_module.stop_session_turns(session.id)
+
     session.deleted_at = datetime.now(UTC)
     db.add(
         AuditLog(
