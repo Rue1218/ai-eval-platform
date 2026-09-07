@@ -234,28 +234,49 @@ def delete_workspace(
         raise AppError(
             ErrorCode.CONCURRENCY, "存在活跃绑定会话，禁止 purge（请先结束相关会话）"
         )
-    # 显式解绑全部引用（含软删会话行；FK RESTRICT 兜底，绝不用 SET NULL）
-    unbound = (
+    # 显式解绑全部引用（含软删会话行；FK RESTRICT 兜底，绝不用 SET NULL）。
+    # 先取解绑会话 id 清单供审计追溯（P2：补 workspace_unbind 语义到 detail）。
+    bound_rows = (
+        db.query(AgentSession.id)
+        .filter(AgentSession.workspace_id == workspace_id)
+        .all()
+    )
+    unbound_ids = [str(row[0]) for row in bound_rows]
+    if unbound_ids:
         db.execute(
             update(AgentSession)
             .where(AgentSession.workspace_id == workspace_id)
             .values(workspace_id=None, scope_path=None)
         )
-        .rowcount
-    )
     directory = workspace_dir_for(workspace_id)
-    shutil.rmtree(directory, ignore_errors=True)
     _audit(
         db,
         request,
         user,
         action="workspace_purge",
         target_id=workspace_id,
-        detail={"unbound_sessions": int(unbound or 0), "path": directory},
+        detail={
+            "unbound_sessions": len(unbound_ids),
+            "session_ids": unbound_ids,
+            "path": directory,
+        },
     )
     db.delete(row)
     db.commit()
-    return {"ok": True, "id": workspace_id, "purged": True, "unbound_sessions": int(unbound or 0)}
+    # 事务提交后再清理目录（P5 修复）：行删除是唯一事务事实；目录删除失败
+    # 不伪装成功——残留目录进入孤儿清理面兜底，响应明示 residual_dir。
+    residual_dir = False
+    try:
+        shutil.rmtree(directory)
+    except OSError:
+        residual_dir = True
+    return {
+        "ok": True,
+        "id": workspace_id,
+        "purged": True,
+        "unbound_sessions": len(unbound_ids),
+        "residual_dir": residual_dir,
+    }
 
 
 @router.get("/{workspace_id}/files")

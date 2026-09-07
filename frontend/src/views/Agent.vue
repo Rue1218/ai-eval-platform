@@ -1176,6 +1176,7 @@ function resetToDraftSession() {
 
 /** 将服务端新建的会话绑定到当前页面，并初始化空的运行时缓存。 */
 function activateCreatedSession(session: AgentSession) {
+  bindingPanelOpen.value = false
   currentSessionId.value = session.id
   const runtime = ensureRuntime(session.id)
   events.value = runtime.events
@@ -1211,6 +1212,11 @@ async function openBindingPanel() {
 }
 
 function pickDraftWorkspace(id: string, name: string) {
+  // S2 修复：绑定仅草稿态可操作（已激活会话绑定随创建固化，不可事后设置）
+  if (currentSessionId.value) {
+    bindingPanelOpen.value = false
+    return
+  }
   draftWorkspaceId.value = id
   draftWorkspaceName.value = name
   bindingPanelOpen.value = false
@@ -1700,6 +1706,8 @@ async function loadSessionHistory(sid: string): Promise<number> {
 
 async function selectSession(sid: string) {
   if (deletingSessionIds.has(sid)) return
+  // S2 修复：切换会话即关闭草稿绑定面板（绑定仅草稿态可用，避免误操作残留）
+  bindingPanelOpen.value = false
   // 移动端会话列表是覆盖式抽屉，选中会话后自动收起让出对话区。
   if (typeof window !== 'undefined' && window.innerWidth <= 768) isListCollapsed.value = true
   if (sid === currentSessionId.value && sockets.has(sid)) {

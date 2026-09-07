@@ -85,8 +85,17 @@ def build_session_context_meter(
     )
 
 
-def _session_out(db: Session, row: AgentSession, user: User) -> dict:
-    """补齐会话 owner、绑定工作区名、当前成员管理权和活动任务摘要。"""
+def _session_out(
+    db: Session,
+    row: AgentSession,
+    user: User,
+    workspace_names: dict[str, str] | None = None,
+) -> dict:
+    """补齐会话 owner、绑定工作区名、当前成员管理权和活动任务摘要。
+
+    ``workspace_names`` 为列表预取结果（避免 N+1）；None 时按行单查（单对象
+    场景如 create/sharing）。
+    """
     task = (
         db.query(Task)
         .filter(Task.session_id == row.id, Task.status.in_(ACTIVE_STATUSES))
@@ -95,8 +104,13 @@ def _session_out(db: Session, row: AgentSession, user: User) -> dict:
     )
     workspace_name = None
     if row.workspace_id:
-        ws_row = db.query(Workspace).filter(Workspace.id == row.workspace_id).first()
-        workspace_name = ws_row.name if ws_row else None
+        if workspace_names is not None:
+            workspace_name = workspace_names.get(row.workspace_id)
+        else:
+            ws_row = (
+                db.query(Workspace).filter(Workspace.id == row.workspace_id).first()
+            )
+            workspace_name = ws_row.name if ws_row else None
     value = SessionOut.model_validate(row).model_dump(mode="json")
     value["workspace_name"] = workspace_name
     value["can_manage"] = row.user_id == user.id
@@ -122,7 +136,15 @@ def list_sessions(
         .order_by(AgentSession.updated_at.desc())
         .all()
     )
-    items = [_session_out(db, row, user) for row in rows]
+    # N+1 收窄（P3 轻修）：绑定工作区名称一次预取（活跃任务查询仍按行进行）
+    bound_ids = {row.workspace_id for row in rows if row.workspace_id}
+    ws_names: dict[str, str] = {}
+    if bound_ids:
+        ws_names = {
+            ws.id: ws.name
+            for ws in db.query(Workspace).filter(Workspace.id.in_(bound_ids)).all()
+        }
+    items = [_session_out(db, row, user, workspace_names=ws_names) for row in rows]
     return {"items": items, "total": len(items)}
 
 
@@ -140,19 +162,25 @@ def create_session(
     校验 fail-closed。未绑定 = legacy 临时工作区（与 F3 前行为一致）。
     """
     workspace_id = (body.workspace_id or "").strip() or None
-    scope_path = (body.scope_path or "").strip("/") or None
+    scope_path: str | None = None
     if workspace_id:
         if body.visibility != "private":
             raise AppError(ErrorCode.VALIDATION, "绑定工作区的会话必须为私有可见性")
-        workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
+        # 行锁与 purge 同锁序（workspace → sessions），防 purge×create 竞态
+        # 触发 FK RESTRICT IntegrityError → 500（BLK-4/P1 修复）。
+        workspace = (
+            db.query(Workspace)
+            .filter(Workspace.id == workspace_id)
+            .with_for_update()
+            .first()
+        )
         if (
             workspace is None
             or workspace.owner_id != user.id
             or workspace.deleted_at is not None
         ):
             raise AppError(ErrorCode.VALIDATION, "工作区不存在或无权绑定")
-        # 目录就绪：scope 防穿越校验（异常即失败）+ 目标目录按需创建
-        ensure_workspace_scope(workspace.id, scope_path)
+        scope_path = (body.scope_path or "").strip("/") or None
     session = AgentSession(
         user_id=user.id,
         title=body.title.strip(),
@@ -161,8 +189,16 @@ def create_session(
         scope_path=scope_path,
     )
     db.add(session)
-    db.flush()  # 取 session.id 供审计
+    db.flush()  # 行先落库（取 id 供审计；目录就绪在行后，失败回滚不产生孤儿行）
     if workspace_id:
+        # 目录就绪：scope 防穿越校验 + 目标按需 mkdir；失败回滚行并清理目录
+        # 残留（best-effort；scope 子目录 mkdir 失败残留为空目录链，小概率
+        # 可被 owner 在「我的工作区」清理，不产生不可见孤儿——BLK-4）。
+        try:
+            ensure_workspace_scope(workspace.id, scope_path)
+        except AppError:
+            db.rollback()
+            raise
         db.add(
             AuditLog(
                 user_id=user.id,
@@ -190,6 +226,17 @@ async def update_session_sharing(
     if body.visibility == "team" and session.workspace_id:
         raise AppError(
             ErrorCode.VALIDATION, "绑定工作区的会话不可转为团队共享"
+        )
+    # 收回共享前：pending_confirm 作者是协作者时拒绝收回——避免协作者卡成孤儿
+    # （会话被卡阻塞无法删除/续用，且协作者已不可确认——P4 修复）。
+    if (
+        body.visibility == "private"
+        and session.visibility == "team"
+        and session.pending_confirm_author_id is not None
+        and str(session.pending_confirm_author_id) != str(user.id)
+    ):
+        raise AppError(
+            ErrorCode.VALIDATION, "存在协作者待处理的确认卡，请先确认或取消后再收回共享"
         )
     session.visibility = body.visibility
     db.add(

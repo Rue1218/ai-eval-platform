@@ -65,7 +65,10 @@ class TestResolveScopeDir:
         outside = tmp_path / "outside"
         outside.mkdir()
         link = tmp_path / "link"
-        link.symlink_to(outside, target_is_directory=True)
+        try:
+            link.symlink_to(outside, target_is_directory=True)
+        except OSError:
+            pytest.skip("当前环境无符号链接权限")
         with pytest.raises(Exception):
             workspace_service.resolve_scope_dir(str(tmp_path), "link")
         with pytest.raises(Exception):
@@ -94,7 +97,10 @@ class TestDirLevel:
         base = str(tmp_path)
         outside = tmp_path / "outside"
         outside.mkdir()
-        (tmp_path / "lnk").symlink_to(outside, target_is_directory=True)
+        try:
+            (tmp_path / "lnk").symlink_to(outside, target_is_directory=True)
+        except OSError:
+            pytest.skip("当前环境无符号链接权限")
         entries = workspace_service.list_dir_level(base)
         link = next(entry for entry in entries if entry["name"] == "lnk")
         assert link["kind"] == "link"
@@ -119,7 +125,10 @@ class TestCreateChildDir:
         base = str(tmp_path)
         outside = tmp_path / "outside"
         outside.mkdir()
-        (tmp_path / "lnk").symlink_to(outside, target_is_directory=True)
+        try:
+            (tmp_path / "lnk").symlink_to(outside, target_is_directory=True)
+        except OSError:
+            pytest.skip("当前环境无符号链接权限")
         with pytest.raises(Exception):
             workspace_service.create_child_dir(base, "lnk")
 

@@ -1362,14 +1362,26 @@ def execute_raw(
             redact_for_log(dict(call.arguments or {})),
         )
         code = exc.code.value
-        error: dict[str, object] = {"code": code, "message": f"操作失败（{code}）"}
+        # MAJ-1 修复：仅 bash 的 VALIDATION（退出码/stderr 摘要）把可读原因直接
+        # 放 message——原生回填中模型可见具体失败原因，避免只见「操作失败
+        # （VALIDATION）」对同命令盲重试直至撞墙钟。其余工具维持通用文案契约
+        # （具体原因经 repair_hint，ToolCard/observation.text 既有断言不变）。
+        detail = str(getattr(exc, "message", "") or "")
+        message = f"操作失败（{code}）"
+        if (
+            code == "VALIDATION"
+            and getattr(call, "name", "") == "bash"
+            and detail
+            and "操作失败" not in detail
+        ):
+            message = detail[:300]
+        error: dict[str, object] = {"code": code, "message": message}
         # 修复建议优先取 fields.repair_hint；无则回退 exc.message（如 write 覆盖
         # 拒绝的"文件已存在，请使用 edit"），避免模型只看到模糊错误盲目重试。
         hint = (exc.fields or {}).get("repair_hint") if exc.fields else None
         if not hint:
-            message = str(getattr(exc, "message", "") or "")
-            if message and message not in {"操作失败", "操作失败（INTERNAL）"}:
-                hint = message
+            if detail and detail not in {"操作失败", "操作失败（INTERNAL）", "操作失败（VALIDATION）"}:
+                hint = detail
         if hint:
             error["repair_hint"] = str(hint)[:500]
         error["recovery"] = recovery_policy.to_payload(code, str(hint or ""))
