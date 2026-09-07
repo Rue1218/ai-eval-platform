@@ -3,7 +3,7 @@
  * 依据：docs/AI测试与评估平台-PRD.md (5.1.3) 与 API.md (V1.5)
  */
 import { api } from './http'
-import type { WsServerEvent } from './types'
+import type { ClarifyAnswer, WsServerEvent } from './types'
 
 export type WsEventHandler = (event: WsServerEvent) => void
 export type WsStatusHandler = (connected: boolean) => void
@@ -223,6 +223,17 @@ export class AgentWebSocket {
       return false
     }
     this.ws.send(JSON.stringify({ event: 'tool_approval_ack', payload: { action, id } }))
+    return true
+  }
+
+  /** 澄清卡作答（API.md §4.4 V1.72 clarify_reply）：多题 answers[] 一次答完，
+   * 服务端行锁清卡后按原 thread_id 恢复回合（resume 至多一次）。 */
+  public sendClarifyReply(id: string, answers: ClarifyAnswer[]): boolean {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      console.warn('WebSocket not open, cannot send clarify_reply')
+      return false
+    }
+    this.ws.send(JSON.stringify({ event: 'clarify_reply', payload: { id, answers } }))
     return true
   }
 

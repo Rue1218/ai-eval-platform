@@ -271,7 +271,8 @@ def test_persist_approval_writes_card_with_meta() -> None:
     )
     assert db.row.pending_confirm is not None
     meta = db.row.pending_confirm["meta"]
-    assert meta["schema_version"] == 1
+    # #1（V1.72）：三类卡共用 meta，schema_version 升版为 2（消费端不读数字分支）
+    assert meta["schema_version"] == 2
     assert meta["confirm_type"] == "tool_approval"
     assert meta["thread_id"] == "t-1"
     assert meta["owner_id"] == "u-1"
@@ -333,6 +334,8 @@ def _approval_card(thread_id: str = "t-1") -> dict:
         "name": "bash",
         "command": "rm -rf /tmp/x",
         "meta": {
+            # 刻意保留 V1.70 旧版 schema_version=1：验证升版后旧卡仍可被
+            # ack 消费（零影响回归：消费端不读 schema 数字分支）
             "schema_version": 1,
             "confirm_type": "tool_approval",
             "thread_id": thread_id,

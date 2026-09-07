@@ -20,6 +20,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Literal, TypedDict
 
+# 词汇表单一事实源（dsh 改进 #4）：本模块不再自持集合，全部从 shared 引用，
+# 消灭 _PERSISTENT_KINDS 与 ws.py/worker 直产字符串的碎片化漂移。
+from shared.event_vocab import EVENT_VERSION, NODE_EVENT_KINDS, PERSISTENT_KINDS
+
 # 图节点产出的持久化事件意图（对齐 API.md §4.3；生产者归属矩阵见模块文档 §3.6.1）
 NodeEventKind = Literal[
     "user_message",
@@ -37,31 +41,15 @@ NodeEventKind = Literal[
     "response.completed",
 ]
 
-# 全部持久化事件集合（含直产方），供翻译层校验使用
-_PERSISTENT_KINDS: frozenset[str] = frozenset(
-    {
-        "user_message",
-        "thought",
-        "tool_call",
-        "tool_result",
-        "confirm",
-        "confirm_ack",
-        "clarify",
-        "plan",
-        "task_state",
-        "progress",
-        "report",
-        "error",
-        "assistant_message",
-        "response.completed",
-    }
-)
-
 # NodeEventKind 字面量值集合（make_event 白名单；confirm_ack 等直产事件不可由节点产出）
-_NODE_EVENT_KIND_VALUES: frozenset[str] = frozenset(NodeEventKind.__args__)
+_NODE_EVENT_KIND_VALUES: frozenset[str] = NODE_EVENT_KINDS
 
-# 事件契约演进版本（M7-Q4 裁决）
-EVENT_VERSION = "event.v1"
+# 模块加载期一致性护栏（#4 D5 注册表完整性断言的一部分）：字面量集合与
+# shared 注册表必须完全一致，防止两处再次漂移（漂移即启动失败）。
+assert _NODE_EVENT_KIND_VALUES == frozenset(NodeEventKind.__args__), (
+    "shared.event_vocab.NODE_EVENT_KINDS 与 NodeEventKind 字面量不一致，"
+    "请同步扩展词汇表单一事实源（backend/shared/event_vocab.py）"
+)
 
 
 class NodeEvent(TypedDict, total=False):
@@ -99,5 +87,5 @@ def make_event(
 
 
 def is_persistent(kind: NodeEventKind) -> bool:
-    """全部 NodeEventKind 均为持久化事件（瞬态帧不进本枚举）。"""
-    return kind in _PERSISTENT_KINDS
+    """NodeEventKind 全部为持久化事件（瞬态帧不进本枚举）；委托 shared 注册表。"""
+    return kind in PERSISTENT_KINDS

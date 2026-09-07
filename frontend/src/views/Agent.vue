@@ -267,6 +267,15 @@
               @reject="handleApprovalReject"
             />
 
+            <!-- 2.5.3 澄清卡（V1.72 / dsh #1，API.md §4.3）：ask_user_question 的
+                 图内中断载荷即澄清问卷；提交经 clarify_reply 恢复原回合（至多一次） -->
+            <ClarifyCard
+              v-else-if="item.type === 'clarify' && item.clarify"
+              :item="item"
+              :can-act="canActClarify(item)"
+              @submit="handleClarifySubmit(item, $event)"
+            />
+
             <!-- 2.6 错误条 -->
             <div v-else-if="item.type === 'error'" class="error-strip" :class="{ 'no-anim': item.noAnim }">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="flex: 0 0 16px; margin-top: 1px">
@@ -552,6 +561,8 @@ import { AgentWebSocket } from '../api/ws'
 import type {
   AgentPrefs,
   AgentSession,
+  ClarifyAnswer,
+  ClarifyPayload,
   Dataset,
   GoldQA,
   KnowledgeBase,
@@ -571,6 +582,7 @@ import AttachmentPreview from '../components/agent/AttachmentPreview.vue'
 import MarkdownView from '../components/agent/MarkdownView.vue'
 import ContextMeter, { type ContextMeterData } from '../components/agent/ContextMeter.vue'
 import ApprovalCard from '../components/agent/ApprovalCard.vue'
+import ClarifyCard from '../components/agent/ClarifyCard.vue'
 import ConfirmCard from '../components/agent/ConfirmCard.vue'
 import { getDefaultRunConfig, getDefaultStressConfig } from '../schemas/confirmCard'
 
@@ -1461,6 +1473,31 @@ async function loadSessionHistory(sid: string): Promise<number> {
           x => x.item.type === 'toolApproval' && x.item.approval?.id === p.approval_id,
         )
         if (target) target.item.approvalDone = p.action === 'approve' ? 'approved' : 'rejected'
+      } else if (ev.event === 'approval_terminal') {
+        // V1.73：历史审批卡终态（expired 超时 / cancelled 放弃）只读回放
+        const target = [...rawList].reverse().find(
+          x => x.item.type === 'toolApproval' && x.item.approval?.id === p.approval_id,
+        )
+        if (target && p.outcome === 'expired') target.item.approvalDone = 'expired'
+        else if (target && p.outcome === 'cancelled') target.item.approvalDone = 'cancelled'
+      } else if (ev.event === 'clarify') {
+        // V1.72（dsh #1）：历史澄清卡只读回放；其后紧跟的 clarify_ack 会盖章终态。
+        rawList.push({
+          time: t,
+          priority: 4,
+          eventId: eid,
+          item: {
+            type: 'clarify',
+            clarify: p,
+            clarifyDone: null,
+            noAnim: true,
+          },
+        })
+      } else if (ev.event === 'clarify_ack') {
+        const target = [...rawList].reverse().find(
+          x => x.item.type === 'clarify' && x.item.clarify?.id === p.id,
+        )
+        if (target) target.item.clarifyDone = 'submitted'
       }
     }
 
@@ -2135,6 +2172,47 @@ function handleWsEvent(ev: WsServerEvent) {
       }
       break
     }
+    case 'approval_terminal': {
+      // V1.73（#3）：审批卡终态——expired（TTL 超时）→ 卡失效禁操作；
+      // cancelled（/stop 放弃）→ 与用户 reject 区分的另一终态。
+      const target = [...events.value].reverse().find(
+        e => e.type === 'toolApproval' && e.approval?.id === p.approval_id,
+      )
+      if (target && (p.outcome === 'expired' || p.outcome === 'cancelled')) {
+        target.approvalDone = p.outcome
+        target.streaming = false
+        setCurrentGenerating(false)
+      }
+      break
+    }
+    case 'clarify': {
+      // V1.72（dsh #1）：ask_user_question 图内中断落澄清卡（问卷一次作答）
+      setCurrentGenerating(false)
+      harnessStage.value = ''
+      const id = String(p.id || '')
+      if (id && !events.value.some(e => e.type === 'clarify' && e.clarify?.id === id)) {
+        events.value.push(
+          reactive({
+            type: 'clarify',
+            clarify: p,
+            clarifyDone: null,
+          }) as StreamItem,
+        )
+      }
+      scrollToBottom()
+      break
+    }
+    case 'clarify_ack': {
+      // 服务端回执：澄清卡提交成功（resume 已派发；重复 reply 由服务端行锁拒绝）
+      const target = [...events.value].reverse().find(
+        e => e.type === 'clarify' && e.clarify?.id === p.id,
+      )
+      if (target) {
+        target.clarifyDone = 'submitted'
+        target.streaming = false
+      }
+      break
+    }
     case 'confirm': {
       // V1.67 恢复：确认卡 TaskSpec 在 payload；规范化补齐 run / stress 默认值
       setCurrentGenerating(false)
@@ -2636,7 +2714,7 @@ interface ToolRunItem {
 type AgentBlock = AgentAssistantItem | AgentErrorItem
 
 interface StreamItem {
-  type: 'user' | 'agent' | 'report' | 'confirm' | 'toolApproval' | 'error' | 'typing'
+  type: 'user' | 'agent' | 'report' | 'confirm' | 'toolApproval' | 'clarify' | 'error' | 'typing'
   text?: string
   latency_ms?: number
   streaming?: boolean
@@ -2667,10 +2745,15 @@ interface StreamItem {
   summary?: string
   open?: boolean
   fieldErrors?: Record<string, string>
-  // 工具审批卡（H5 HITL，API.md V1.70）：approval 为中断载荷快照；
-  // approvalDone 由 tool_approval_ack 回执盖章（approved/rejected）。
+  // 工具审批卡（H5 HITL，API.md V1.70 / V1.73）：approval 为中断载荷快照；
+  // approvalDone 由 tool_approval_ack 回执盖章（approved/rejected）或
+  // approval_terminal 终态事件（expired 超时 / cancelled 放弃）驱动。
   approval?: ToolApprovalPayload | null
-  approvalDone?: 'approved' | 'rejected' | null
+  approvalDone?: 'approved' | 'rejected' | 'expired' | 'cancelled' | null
+  // 澄清卡（V1.72 / dsh #1，API.md §4.3）：clarify 为中断问卷快照；
+  // clarifyDone 由 clarify_reply 乐观盖章 + clarify_ack 广播回执确认。
+  clarify?: ClarifyPayload | null
+  clarifyDone?: 'submitted' | null
 }
 
 const harnessStage = ref<string>('')
@@ -2721,6 +2804,25 @@ function handleApprovalReject(item: StreamItem) {
   }
   item.approvalDone = 'rejected'
   agentWs.sendApprovalAck('reject', approval.id)
+  scrollToBottom()
+}
+
+/** 澄清卡可作答：实时连接且尚未提交（owner 校验由服务端行锁把关）。 */
+function canActClarify(item: StreamItem): boolean {
+  return item.clarifyDone !== 'submitted' && !!(agentWs && agentWs.isConnected)
+}
+
+/** V1.72（dsh #1）澄清作答：乐观盖章（服务端行锁兜底重复 reply；clarify_ack
+ * 广播回执到达后终态一致）。作答后回合按 answers[] 以原 thread_id 续跑。 */
+function handleClarifySubmit(item: StreamItem, answers: ClarifyAnswer[]) {
+  const clarify = item.clarify
+  if (!clarify?.id || item.clarifyDone) return
+  if (!agentWs || !agentWs.isConnected) {
+    message.warning('连接已断开，澄清卡将保留；重连后仍可作答')
+    return
+  }
+  item.clarifyDone = 'submitted'
+  agentWs.sendClarifyReply(clarify.id, answers)
   scrollToBottom()
 }
 

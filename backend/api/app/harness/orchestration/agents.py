@@ -22,6 +22,7 @@ from typing import Literal
 
 from app.config import settings
 from app.errors import AppError, ErrorCode
+from app.harness.security.exec_policy import resolve_worker_visible
 
 logger = logging.getLogger("harness.agents")
 
@@ -103,17 +104,21 @@ class AgentRegistry:
         1. ``worker.sandbox`` 默认静态排除——code 能力放行属生产红线，须先
            完成 Linux/Docker 恢复演练与 bwrap 权限边界评审；仅 H5 收尾演练
            开关（``agent_drill_sandbox_enabled``，默认 False）置 True 时放行
-           用于制造危险 bash 审批卡，演练结束必须置回；
+           用于制造危险 bash 审批卡，演练结束必须置回（#5：该排除决策收敛于
+           ``harness.security.exec_policy.resolve_worker_visible``，默认行为
+           不变，禁止在本层再现内联布尔分支）；
         2. 候选 = 能力全含（请求 capabilities ⊆ 声明的 capabilities）的 Worker；
         3. 得分 = 命中能力数 + 绑定该 ``skill_id`` 的加成；得分最高者胜出，
            并列取注册序在先；零命中回落 ``worker.general``（验收：同一输入
            稳定选择同一 Agent）。
         """
-        excluded = set() if self._drill_sandbox_enabled else {"worker.sandbox"}
         best: AgentDef | None = None
         best_score = -1
         for def_ in self.iter_defs():
-            if def_.agent_id in excluded:
+            verdict = resolve_worker_visible(
+                def_.agent_id, drill_enabled=self._drill_sandbox_enabled
+            )
+            if not verdict.allow:
                 continue
             if not capabilities.issubset(def_.capabilities):
                 continue
@@ -146,9 +151,11 @@ def build_default_agent_registry() -> AgentRegistry:
             agent_id="worker.general",
             display_name="通用助手",
             capabilities=frozenset({"general"}),
-            allowed_tools=("read", "web_search", "web_fetch", "task"),
+            # #1（clarify 恢复）：ask_user_question 加入通用 Worker 视野——
+            # 模型澄清提问的卡链路（interrupt → 澄清卡 → resume）可达的前提
+            allowed_tools=("read", "web_search", "web_fetch", "task", "ask_user_question"),
             max_permission="read",
-            description="通用对话与只读探索：读文件、联网检索、会话任务看板",
+            description="通用对话与只读探索：读文件、联网检索、会话任务看板与澄清提问",
         )
     )
     registry.register(

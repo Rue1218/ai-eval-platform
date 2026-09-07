@@ -25,6 +25,8 @@
 
       <div v-if="item.approvalDone === 'approved'" class="approval-verdict ok">已批准 —— 命令已放行执行</div>
       <div v-else-if="item.approvalDone === 'rejected'" class="approval-verdict no">已拒绝 —— 命令未执行</div>
+      <div v-else-if="item.approvalDone === 'expired'" class="approval-verdict expired">已过期 —— 审批超时失效，如需执行请重新发起</div>
+      <div v-else-if="item.approvalDone === 'cancelled'" class="approval-verdict no">已取消 —— /stop 已放弃本轮审批</div>
       <div v-else-if="canAct" class="approval-actions">
         <button class="btn btn-sign btn-sm" @click="$emit('approve', item)">批准并执行</button>
         <button class="btn btn-secondary btn-sm" @click="$emit('reject', item)">拒绝</button>
@@ -40,7 +42,8 @@ import { computed } from 'vue'
 const props = defineProps<{
   item: {
     approval?: { name?: string; command?: string; reason?: string; risk_level?: string; sandbox_scope?: string; call_id?: string } | null
-    approvalDone?: 'approved' | 'rejected' | null
+    // V1.73：终态增加 expired（TTL 超时）/ cancelled（/stop 放弃）
+    approvalDone?: 'approved' | 'rejected' | 'expired' | 'cancelled' | null
     noAnim?: boolean
   }
   canAct?: boolean
@@ -149,6 +152,9 @@ const riskLabel = computed(() => {
 }
 .approval-verdict.pending {
   color: #b8860b;
+}
+.approval-verdict.expired {
+  color: #9aa0ab;
 }
 .approval-card.done {
   opacity: 0.82;

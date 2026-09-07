@@ -168,8 +168,11 @@ async def _drive(
     )
     monkeypatch.setattr(
         ws,
-        "_history_messages",
-        lambda _db, _session_id: [{"role": "user", "content": text}],
+        "_history_with_trim",
+        lambda _db, _session_id: (
+            [{"role": "user", "content": text}],
+            {"reason": "tail_window", "dropped": 0},
+        ),
     )
     monkeypatch.setattr(ws, "_emit_persistent", _collect_emit)
     monkeypatch.setattr(ws, "_claim_terminal", lambda _sid, _turn_id: True)

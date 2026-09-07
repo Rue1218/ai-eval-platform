@@ -95,6 +95,16 @@ class Settings(BaseSettings):
     agent_registry_strict: bool = True  # AgentDef.allowed_tools 未注册时启动 fail-fast
     prompt_cache_enabled: bool = False  # 提示词缓存边界开关；关闭时装配行为与今日字节级一致
     external_mcp_enabled: bool = False  # 外部 MCP fail-closed（ADR-8）
+    # dsh 改进 #4 事件词汇表版本化（登记《dsh 借鉴与 AgentHarness 改进方案》§6.3）：
+    # false（默认）灰度——转发循环对未知 kind/版本不符事件告警并跳过；
+    # true——fail-closed 拒收并落 error。灰度观察期（生产无未知事件告警）后置
+    # true；若 fail-closed 长期必要，评估固化为常驻校验而非开关（复盘后删除）。
+    event_vocab_strict: bool = False
+    # dsh 改进 #3 审批终态（API.md §4.3 V1.73）：审批卡 TTL（秒，默认 1 小时）。
+    # 超龄卡由 api 后台扫描行锁清卡并广播 approval_terminal(expired)；失效判定
+    # 以卡 meta.created_at + 当前时间幂等兜底，不依赖扫描进程存活性。常量入
+    # config，禁止硬编码（方案 §3.3.5 边界）。
+    agent_approval_ttl_seconds: int = 3600
 
     @property
     def cors_origin_list(self) -> list[str]:

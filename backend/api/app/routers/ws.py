@@ -18,6 +18,7 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from shared.event_vocab import EVENT_VERSION, PERSISTENT_KINDS
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -33,9 +34,11 @@ from ..agent.graph import (
 from ..agent.log import agent_trace
 from ..agent.title import generate_title_text
 from ..agent_prompt_settings import get_agent_prompt_overlay
+from ..config import settings
 from ..db import SessionLocal
 from ..errors import AppError, ErrorCode
-from ..harness.context import recent_window, skill_hint_lines
+from ..harness.context import skill_hint_lines, window_trim_stats
+from ..harness.execution.ask_user import validate_answers
 from ..harness.execution.context import ToolExecutionContext
 from ..harness.execution.task_tools import cancel_task_safe
 from ..harness.execution.workspace import ensure_session_workspace
@@ -310,11 +313,12 @@ async def _handle_graph_interrupt(
     thread_id: str,
     user_id: str | None,
 ) -> bool:
-    """H5：处理图 interrupt 帧（危险 bash / ask_user_question）。
+    """处理图 interrupt 帧（危险 bash 审批 / ask_user_question 澄清）。
 
-    仅 ``type=tool_approval`` 落审批卡（行锁；已有任何待处理卡 → CONCURRENCY
-    经 error 反馈，不覆盖）并广播 ``tool_approval`` 事件，返回 True 暂停回合；
-    其余类型（clarify 提问等）暂不落卡（无生产者接线），返回 False。
+    H5 + #1（B 路线）：``type=tool_approval`` 落审批卡、``type=clarify`` 落
+    澄清卡——两类卡共用 ``pending_confirm`` 行锁单行互斥（已有任何待处理卡
+    → CONCURRENCY 经 error 反馈，不覆盖），广播对应持久事件（剥离 meta），
+    返回 True 暂停回合；其余类型不落卡，返回 False。
     """
     if not interrupts:
         return False
@@ -322,16 +326,28 @@ async def _handle_graph_interrupt(
     value = getattr(first, "value", first)
     if not isinstance(value, Mapping):
         return False
-    if value.get("type") != "tool_approval":
-        return False
+    interrupt_type = value.get("type")
     try:
-        card = _persist_pending_approval(
-            db,
-            session_id,
-            dict(value),
-            thread_id=thread_id,
-            user_id=str(user_id or ""),
-        )
+        if interrupt_type == "tool_approval":
+            card = _persist_pending_approval(
+                db,
+                session_id,
+                dict(value),
+                thread_id=thread_id,
+                user_id=str(user_id or ""),
+            )
+        elif interrupt_type == "clarify":
+            # #1：ask_user_question 提问落澄清卡（meta.confirm_type=clarify +
+            # 一次性 resume_nonce），与审批卡同一套行锁/清卡/resume 纪律
+            card = _persist_pending_clarify(
+                db,
+                session_id,
+                dict(value),
+                thread_id=thread_id,
+                user_id=str(user_id or ""),
+            )
+        else:
+            return False
     except AppError as exc:
         await _emit_error(db, websocket, state, session_id, exc)
         return False
@@ -341,7 +357,7 @@ async def _handle_graph_interrupt(
         websocket,
         state,
         session_id,
-        "tool_approval",
+        "tool_approval" if interrupt_type == "tool_approval" else "clarify",
         payload,
         task_id=None,
     )
@@ -378,6 +394,21 @@ async def _handle_approval_ack(
         raise AppError(ErrorCode.VALIDATION, "会话不存在待审批的工具卡")
     if str(card.get("id") or "") != approval_id:
         raise AppError(ErrorCode.VALIDATION, "审批卡标识不匹配")
+    if _approval_overdue(card):
+        # #3（V1.73）：过期审批拒绝消费——清卡 + expired 终态事件 + error，
+        # 绝不触发 resume（幂等判龄：扫描缺席时本路径同样生效）
+        _clear_pending_confirm(db, session_id)
+        db.commit()
+        await _emit_persistent(
+            db,
+            websocket,
+            state,
+            session_id,
+            "approval_terminal",
+            {"approval_id": approval_id, "outcome": "expired", "reason": "审批超时已失效"},
+            task_id=None,
+        )
+        raise AppError(ErrorCode.VALIDATION, "审批已超时失效，请重新发起该操作")
     thread_id = str(meta.get("thread_id") or "")
     if not thread_id:
         raise AppError(ErrorCode.VALIDATION, "审批卡缺少恢复线程标识")
@@ -399,16 +430,101 @@ async def _handle_approval_ack(
     )
 
 
-def _start_approval_resume(
+async def _handle_clarify_reply(
+    db: Session,
+    websocket: WebSocket,
+    state: _ConnectionState,
+    session_id: str,
+    user_id: str,
+    payload: dict,
+) -> None:
+    """澄清卡回执（#1 B 路线）：answers 校验 → 行锁清卡 → 回执 → 恢复回合。
+
+    - 卡必须存在且 ``meta.confirm_type=clarify``、owner 匹配、``id`` 与澄清卡
+      一致，answers 逐题强校验（id ∈ questions、radio/checkbox 取值 ∈ options
+      label、required 必答）——任一失败 → AppError（外层统一 error 事件），
+      卡保留可重答；
+    - 清卡与提交先行（一次性 nonce 语义：消费即失效），再以原中断回合的
+      thread_id 恢复检查点（resume 值 = {id, answers}，toolnode 据此放行）；
+    - 重复/并发 clarify_reply：清卡后行锁读空 → 拒绝（resume 至多一次）。
+    """
+    card_id = str(payload.get("id") or "")
+    answers_raw = payload.get("answers")
+    if not isinstance(answers_raw, list) or not answers_raw:
+        raise AppError(ErrorCode.VALIDATION, "clarify_reply answers 必须是数组")
+    pending = lock_pending_confirm(db, session_id)  # SELECT ... FOR UPDATE
+    assert_confirm_owner(pending, user_id)
+    assert_no_concurrent_confirm(pending)
+    card = dict(pending.pending or {})
+    meta = card.get("meta") if isinstance(card.get("meta"), dict) else {}
+    if meta.get("confirm_type") != "clarify":
+        raise AppError(ErrorCode.VALIDATION, "会话不存在待澄清的卡")
+    if str(card.get("id") or "") != card_id:
+        raise AppError(ErrorCode.VALIDATION, "澄清卡标识不匹配")
+    thread_id = str(meta.get("thread_id") or "")
+    if not thread_id:
+        raise AppError(ErrorCode.VALIDATION, "澄清卡缺少恢复线程标识")
+    if not str(meta.get("resume_nonce") or ""):
+        raise AppError(ErrorCode.VALIDATION, "澄清卡缺少一次性恢复令牌")
+    questions = card.get("questions")
+    if not isinstance(questions, list) or not questions:
+        raise AppError(ErrorCode.VALIDATION, "澄清卡缺少问题清单")
+    # 逐题强校验（与 toolnode resume 侧同一实现，双保险）
+    try:
+        validate_answers([dict(q) for q in questions if isinstance(q, Mapping)], answers_raw)
+    except AppError as exc:
+        raise AppError(ErrorCode.VALIDATION, f"澄清答复无效：{exc.message}") from exc
+    _clear_pending_confirm(db, session_id)
+    db.commit()
+    await _emit_persistent(
+        db,
+        websocket,
+        state,
+        session_id,
+        "clarify_ack",
+        {"ok": True, "id": card_id},
+        task_id=None,
+    )
+    _start_clarify_resume(session_id, websocket, state, user_id, thread_id, card_id, answers_raw)
+
+
+def _start_clarify_resume(
     session_id: str,
     websocket: WebSocket,
     state: _ConnectionState,
     user_id: str,
     thread_id: str,
-    action: str,
-    approval_id: str,
+    card_id: str,
+    answers: list[dict],
 ) -> asyncio.Task[None]:
-    """审批通过后以原 thread_id 恢复检查点回合（H5 HITL resume）。"""
+    """澄清作答后以原 thread_id 恢复检查点回合（#1 B 路线 resume）。"""
+    return _start_card_resume(
+        session_id,
+        websocket,
+        state,
+        user_id,
+        thread_id,
+        {"id": card_id, "answers": answers},
+        log_label="澄清",
+    )
+
+
+def _start_card_resume(
+    session_id: str,
+    websocket: WebSocket,
+    state: _ConnectionState,
+    user_id: str,
+    thread_id: str,
+    resume_value: dict[str, Any],
+    *,
+    log_label: str,
+) -> asyncio.Task[None]:
+    """以原 thread_id 从检查点恢复中断回合（H5 HITL / #1 clarify resume）。
+
+    审批卡 resume 值为 ``{action, id}``；澄清卡 resume 值为 ``{id, answers}``。
+    清卡与提交已在 ack 处理中先行（一次性 resume_nonce 消费即失效，resume
+    至多一次由行锁读空兜底）。
+    """
     handle = _reserve_turn(session_id, user_id)
 
     async def runner() -> None:
@@ -420,19 +536,40 @@ def _start_approval_resume(
                 handle.abort,
                 user_id=user_id,
                 turn_id=handle.turn_id,
-                resume={"action": action, "id": approval_id},
+                resume=resume_value,
                 resume_thread_id=thread_id,
             )
-        except Exception:  # 恢复失败不撤销已清卡：审批记录留 ws_events 可审计
-            logger.exception("审批恢复回合失败 session=%s", session_id)
+        except Exception:  # 恢复失败不撤销已清卡：回执记录留 ws_events 可审计
+            logger.exception("%s恢复回合失败 session=%s", log_label, session_id)
 
-    task = asyncio.create_task(runner(), name=f"approval-resume-{session_id}")
+    task = asyncio.create_task(runner(), name=f"{log_label}-resume-{session_id}")
     try:
         _attach_turn_task(handle, task)
     except Exception:
         task.cancel()
         raise
     return task
+
+
+def _start_approval_resume(
+    session_id: str,
+    websocket: WebSocket,
+    state: _ConnectionState,
+    user_id: str,
+    thread_id: str,
+    action: str,
+    approval_id: str,
+) -> asyncio.Task[None]:
+    """审批通过后以原 thread_id 恢复检查点回合（H5 HITL resume）。"""
+    return _start_card_resume(
+        session_id,
+        websocket,
+        state,
+        user_id,
+        thread_id,
+        {"action": action, "id": approval_id},
+        log_label="审批",
+    )
 
 
 async def _handle_confirm_ack(
@@ -522,15 +659,49 @@ def _frame(
     task_id: str | None = None,
     ts: datetime | None = None,
 ) -> dict[str, Any]:
-    """构造 API.md §4.2 规定的 WebSocket 公共事件头。"""
+    """构造 API.md §4.2 规定的 WebSocket 公共事件头。
+
+    ``vocab_version``（#4 D2）：词汇表版本（shared.event_vocab.EVENT_VERSION），
+    服务端恒发；属可选字段，旧客户端按「忽略未知字段」原则安全跳过。
+    """
     return {
         "event": event,
         "session_id": session_id,
         "task_id": task_id,
         "event_id": event_id,
         "ts": _iso(ts),
+        "vocab_version": EVENT_VERSION,
         "payload": payload,
     }
+
+
+# #4 D3：落库 payload 内嵌的词汇版本保留字段（转发/回放时剥离，不回显前端）
+_EVENT_VERSION_KEY = "event_version"
+
+
+def _split_event_version(payload: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
+    """取出并剥离落库 payload 的事件词汇版本保留字段（#4 D3）。
+
+    写库侧统一注入 ``event_version``（免 WsEvent 加列/Alembic，向后兼容）；
+    读侧（转发/回放）剥离后再广播，前端只见 §4.2 公共头与业务字段。
+    历史无版本行返回 ``(原样, None)``——按当前词汇表版本解释（D4 只读兼容）。
+    """
+    stored = dict(payload or {})
+    version = stored.pop(_EVENT_VERSION_KEY, None)
+    return stored, str(version) if isinstance(version, str) else None
+
+
+def _event_vocab_mismatch(event: str, version: str | None) -> str | None:
+    """事件词汇表校验（#4 D5 转发护栏）。
+
+    返回 None 放行；否则返回原因（``unknown`` / ``version``）。未知 kind 或
+    版本不符均不允许实时转发；历史无版本行（None）按当前版本解释放行。
+    """
+    if event not in PERSISTENT_KINDS:
+        return "unknown"
+    if version is not None and version != EVENT_VERSION:
+        return "version"
+    return None
 
 
 async def _send_unlocked(websocket: WebSocket, frame: dict[str, Any]) -> bool:
@@ -608,7 +779,13 @@ async def _emit_persistent(
     *,
     task_id: str | None = None,
 ) -> bool:
-    """写入 ws_events 并发送持久化事件；事件号由数据库历史决定。"""
+    """写入 ws_events 并发送持久化事件；事件号由数据库历史决定。
+
+    #4 D3：落库 payload 注入 ``event_version`` 词汇版本保留字段（转发/回放侧
+    剥离），使 Worker 直写与 api 直写具备同一版本声明面，免 WsEvent 加列。
+    """
+    stored_payload = dict(payload)
+    stored_payload[_EVENT_VERSION_KEY] = EVENT_VERSION
     row: WsEvent | None = None
     event_id = 0
     for attempt in range(2):
@@ -618,7 +795,7 @@ async def _emit_persistent(
             task_id=task_id,
             event_id=event_id,
             event=event,
-            payload=payload,
+            payload=stored_payload,
             ts=datetime.now(UTC),
         )
         try:
@@ -652,6 +829,10 @@ async def _emit_persistent(
     # 持久化事件需要让 team 会话的在线协作者即时看到；无登记连接时保底发给当前连接。
     # 不要提前推进当前连接游标：Hub 需要据此判断回放期间的排队事件是否已补发。
     if await SESSION_CONNECTION_HUB.broadcast_event(session_id, frame):
+        return True
+    if websocket is None:
+        # #3 后台 TTL 扫描等无连接场景：只落库不发送，在线者经 Hub 收到、
+        # 离线者断线重连按 last_event_id 回放补齐（事件已持久化即完成职责）。
         return True
     state.cursor = max(state.cursor, event_id)
     return await _send(websocket, state, frame)
@@ -768,6 +949,11 @@ async def _forward_loop(
 
     查询 / 发送 / 游标推进在同一把连接锁内，避免与 ``_emit_persistent``
     并发重复推送。使用独立 Session，不占用收包循环的 ``db``。
+
+    #4 D3/D4 转发护栏：候选行先剥离词汇版本保留字段并做词汇表校验——
+    ``event_vocab_strict=false``（默认）未知 kind/版本不符 → 告警并跳过转发；
+    ``true`` → fail-closed 拒收并落 ``error`` 事件（锁外 emit，避免锁重入）。
+    历史无版本行（旧 Worker / V1.71 前数据）按当前版本解释，宽容放行。
     """
     while not stop.is_set():
         try:
@@ -776,6 +962,7 @@ async def _forward_loop(
         except TimeoutError:
             pass
         db = SessionLocal()
+        rejected: dict[str, str | None] = {}
         try:
             async with state.lock:
                 rows = (
@@ -793,11 +980,27 @@ async def _forward_loop(
                         # 已由本连接 _emit 发出的对话错误：只推进游标，避免每轮重扫。
                         state.cursor = max(state.cursor, row.event_id)
                         continue
+                    payload, row_version = _split_event_version(row.payload or {})
+                    reason = _event_vocab_mismatch(row.event, row_version)
+                    if reason is not None:
+                        # 无论开关如何都先推进游标，避免同一事件每轮重复告警；
+                        # strict=false 只跳过，strict=true 由锁外统一落 error。
+                        state.cursor = max(state.cursor, row.event_id)
+                        if settings.event_vocab_strict:
+                            rejected.setdefault(row.event, row_version)
+                        else:
+                            logger.warning(
+                                "Agent WS 转发跳过未契约事件 event=%s version=%s reason=%s",
+                                row.event,
+                                row_version,
+                                reason,
+                            )
+                        continue
                     frame = _frame(
                         session_id,
                         row.event,
                         row.event_id,
-                        row.payload or {},
+                        payload,
                         task_id=row.task_id,
                         ts=row.ts,
                     )
@@ -814,6 +1017,29 @@ async def _forward_loop(
                         return
         except Exception as exc:
             logger.info("Agent WS 转发查询失败 type=%s", type(exc).__name__)
+        finally:
+            db.close()
+        # strict=true：fail-closed 拒收并落 error。必须在连接锁外 emit（_send
+        # 会再取 state.lock，锁内调用将死锁）；按 kind 去重避免同轮刷屏。
+        if not rejected:
+            continue
+        db = SessionLocal()
+        try:
+            for event, version in rejected.items():
+                logger.error(
+                    "Agent WS fail-closed 拒绝未契约事件 event=%s version=%s",
+                    event,
+                    version,
+                )
+                await _emit_error(
+                    db,
+                    websocket,
+                    state,
+                    session_id,
+                    AppError(ErrorCode.INTERNAL, "收到未契约的 Worker 事件，已拒绝转发"),
+                )
+        except Exception as exc:
+            logger.info("Agent WS fail-closed 落 error 失败 type=%s", type(exc).__name__)
         finally:
             db.close()
 
@@ -839,11 +1065,13 @@ async def _replay_events(
         for row in rows:
             if row.event_id <= state.cursor:
                 continue
+            # #4：剥离词汇版本保留字段再回放；历史无版本行（V1.71 前）宽容兼容
+            payload, _row_version = _split_event_version(row.payload or {})
             frame = _frame(
                 session_id,
                 row.event,
                 row.event_id,
-                row.payload or {},
+                payload,
                 task_id=row.task_id,
                 ts=row.ts,
             )
@@ -938,15 +1166,18 @@ def _selected_model_config(db: Session) -> tuple[ModelConfig, _ProfileSnapshot]:
     return config, snapshot
 
 
-def _window_messages(db: Session, session_id: str) -> list[dict]:
+def _window_messages(db: Session, session_id: str) -> tuple[list[dict], dict[str, object]]:
     """读取会话消息，经 Harness 窗口算法（CX-1）投影（含 source_id）。
 
     ``compact_keep_from`` 指定保留起点时截断更早消息；思考/工具/确认/进度
     事件不进窗口（CX-2）。窗口算法唯一来源为
-    ``app.harness.context.window.recent_window``。
+    ``app.harness.context.window.recent_window``（#2 起经 window_trim_stats
+    同源实现返回裁剪元信息，供 context_trim 留痕事件使用）。
+    返回 ``(窗口消息, trim_meta)``；trim_meta.dropped>0 即本回合发生了窗口裁剪。
     """
     session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
-    keep_from = session.compact_keep_from if session else None
+    # getattr 容错：会话行缺少该列（测试桩/旧快照）时按未压缩处理
+    keep_from = getattr(session, "compact_keep_from", None) if session else None
     rows = (
         db.query(Message)
         .filter(Message.session_id == session_id, Message.role.in_(("user", "assistant")))
@@ -962,15 +1193,24 @@ def _window_messages(db: Session, session_id: str) -> list[dict]:
         }
         for row in reversed(rows)
     ]
-    return recent_window(ordered, limit=20, keep_from=keep_from)
+    return window_trim_stats(ordered, limit=20, keep_from=keep_from)
 
 
 def _history_messages(db: Session, session_id: str) -> list[dict[str, str]]:
     """模型层稳定消息格式（窗口投影，去掉 source_id）。"""
+    history, _meta = _history_with_trim(db, session_id)
+    return history
+
+
+def _history_with_trim(
+    db: Session, session_id: str
+) -> tuple[list[dict[str, str]], dict[str, object]]:
+    """窗口投影消息 + 裁剪元信息（#2 留痕用，与 _window_messages 同一次查询）。"""
+    windowed, meta = _window_messages(db, session_id)
     return [
         {"role": item["role"], "content": item["content"]}
-        for item in _window_messages(db, session_id)
-    ]
+        for item in windowed
+    ], meta
 
 
 def _infer_provider(profile: _ProfileSnapshot | None) -> str | None:
@@ -1080,7 +1320,46 @@ def _confirm_author_payload(db: Session, user_id: str | None) -> dict[str, str] 
     }
 
 
-_CONFIRM_SCHEMA_VERSION = 1
+# #1（V1.72）：三类卡共用 pending_confirm 单行，meta 卡种枚举扩展 clarify——
+# schema_version 1 → 2 标识卡元数据结构升版；消费端（W5 confirm_ack /
+# H5 tool_approval_ack）均不读 schema 数字分支，升版对既有路径零影响。
+_CONFIRM_SCHEMA_VERSION = 2
+
+# #3 审批终态：TTL 失效判定辅助（幂等，不依赖扫描进程存活性，API.md §4.3 V1.73）
+
+
+def _card_age_seconds(card: Mapping[str, Any] | None) -> float | None:
+    """解析卡 meta.created_at（UTC ISO）相对当前时间的年龄秒数。
+
+    卡无 meta / created_at 缺失或不可解析时返回 None（调用方按不判龄处理——
+    旧版无时间戳卡保持原语义，由扫描或重启后自然消费/清理）。
+    """
+    if not isinstance(card, Mapping):
+        return None
+    meta = card.get("meta")
+    if not isinstance(meta, Mapping):
+        return None
+    raw = meta.get("created_at")
+    try:
+        parsed = datetime.fromisoformat(str(raw or "").replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return (datetime.now(UTC) - parsed).total_seconds()
+
+
+def _approval_overdue(card: Mapping[str, Any] | None) -> bool:
+    """审批卡是否已超 TTL 失效（TTL ≤ 0 表示不启用过期，config 可关）。
+
+    判龄以卡创建时间为锚，任何进程（扫描或 ack 路径）都可独立得出同一结论，
+    天然幂等；扫描缺席时 ack 路径仍拒绝过期卡，不会绕过失效语义恢复回合。
+    """
+    ttl = settings.agent_approval_ttl_seconds
+    if ttl <= 0:
+        return False
+    age = _card_age_seconds(card)
+    return age is not None and age > ttl
 
 
 def _card_meta(
@@ -1189,6 +1468,55 @@ def _persist_pending_approval(
     return card
 
 
+def _persist_pending_clarify(
+    db: Session,
+    session_id: str,
+    clarify: dict[str, Any],
+    *,
+    thread_id: str,
+    user_id: str,
+) -> dict[str, Any]:
+    """澄清卡落库（#1 B 路线：与审批卡共用 ``pending_confirm`` 单行互斥）。
+
+    卡 JSONB：``meta``（confirm_type=clarify + 一次性 resume_nonce）+ 白名单
+    字段 ``id`` / ``questions``（questions 为 toolnode 侧 validate_questions
+    归一后的 ≤8 题三题型结构，ws 层做轻量 sanity 校验）。行锁：已有任何
+    待处理卡 → CONCURRENCY。返回卡 dict（含 meta）。
+    """
+    session = (
+        db.query(AgentSession)
+        .filter(AgentSession.id == session_id)
+        .with_for_update()
+        .first()
+    )
+    if not session:
+        raise AppError(ErrorCode.NOT_FOUND, "会话不存在")
+    if session.pending_confirm is not None:
+        raise AppError(ErrorCode.CONCURRENCY, "会话存在待处理任务卡，请先确认或取消")
+    allowed = {"id", "questions"}
+    card = {key: value for key, value in clarify.items() if key in allowed}
+    questions = card.get("questions")
+    if not isinstance(card.get("id"), str) or not card["id"]:
+        raise AppError(ErrorCode.VALIDATION, "澄清问题缺少卡标识")
+    if not isinstance(questions, list) or not questions or len(questions) > 8:
+        raise AppError(ErrorCode.VALIDATION, "澄清问题数量必须为 1–8 个")
+    for index, item in enumerate(questions, start=1):
+        if not isinstance(item, Mapping):
+            raise AppError(ErrorCode.VALIDATION, f"第 {index} 个澄清问题格式无效")
+        if not isinstance(item.get("id"), str) or not str(item.get("question") or "").strip():
+            raise AppError(ErrorCode.VALIDATION, f"第 {index} 个澄清问题缺少 id 或 question")
+    card["meta"] = _card_meta(
+        user_id,
+        thread_id,
+        "clarify",
+        resume_nonce=uuid4().hex,
+    )
+    session.pending_confirm = card
+    session.pending_confirm_author_id = user_id
+    db.commit()
+    return card
+
+
 def _clear_pending_confirm(db: Session, session_id: str) -> None:
     """清空待确认卡（与回执同事务提交，避免入队成功而卡标残留）。"""
     db.execute(
@@ -1257,8 +1585,27 @@ async def _translate_event(
     ``ws_events`` 并广播；``assistant_message`` 需先落库 Message 再构造对外
     payload（对齐 REST 历史回放格式）；``confirm``（V1.67 恢复）落
     ``sessions.pending_confirm`` 行锁并补 ``confirm_author`` 元数据。
+
+    #4 D3 词汇表护栏：事件 ``event_version`` 与当前版本不符 → 按当前词汇表
+    翻译 + 日志告警（图内事件与 ws.py 同版本部署，仅作漂移哨兵）；kind 不在
+    注册表（PERSISTENT_KINDS）→ fail-closed：告警并跳过，绝不静默落库广播。
     """
     kind = event["kind"]
+    node_version = event.get("event_version")
+    if not isinstance(kind, str) or kind not in PERSISTENT_KINDS:
+        logger.error(
+            "Agent 图产出未契约事件 kind=%s version=%s，已拒绝翻译落库",
+            kind,
+            node_version,
+        )
+        return
+    if node_version is not None and node_version != EVENT_VERSION:
+        logger.warning(
+            "Agent 事件版本漂移 kind=%s version=%s current=%s，按当前词汇表翻译",
+            kind,
+            node_version,
+            EVENT_VERSION,
+        )
     payload = event.get("payload") or {}
     task_id = event.get("task_id")
     if kind == "response.completed" and not _claim_terminal(session_id, turn_id):
@@ -1398,8 +1745,29 @@ async def _run_turn(
     router_audit: dict | None = None
     try:
         config, profile = _selected_model_config(db)
-        history = _history_messages(db, session_id)
+        history, trim_meta = _history_with_trim(db, session_id)
         session_row = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+        # #2（V1.74）：窗口裁剪事件化留痕——本回合装配模型上下文时若发生了
+        # 窗口裁剪（compact 截断或尾窗截断），落一条 context_trim 持久事件
+        # （仅元信息：触发原因/保留策略/被裁范围，不携带被裁原文——观察纪律）。
+        # 留痕在回合业务事件之前发出，response.completed 仍为本轮最后一条持久事件。
+        if int(trim_meta.get("dropped") or 0) > 0:
+            await _emit_persistent(
+                db,
+                websocket,
+                state,
+                session_id,
+                "context_trim",
+                {
+                    "reason": str(trim_meta.get("reason") or "tail_window"),
+                    "dropped": int(trim_meta.get("dropped") or 0),
+                    "kept": int(trim_meta.get("kept") or 0),
+                    "in_scope_total": int(trim_meta.get("in_scope_total") or 0),
+                    "keep_from_id": trim_meta.get("keep_from_id"),
+                    "limit": int(trim_meta.get("limit") or 0),
+                },
+                task_id=None,
+            )
         compact_summary = (session_row.compact_summary or "") if session_row else ""
         # 核心策略、L2 项目常量和 L3 协议档补充提示词均由受控层组装。除关闭
         # 缓存时的兼容单字符串外，同时保存无密钥的分段来源，供图节点恢复真实
@@ -1637,6 +2005,34 @@ async def _handle_stop(
     # 有活跃后台任务时不在收包循环抢发 completed，由 _run_turn 的取消分支收尾。
     if active:
         return
+    # #3（V1.73）：无活跃回合时若存在本成员悬挂的审批卡，/stop 视为放弃本轮
+    # 交互——清卡并广播 cancelled 终态（与用户 reject 语义区分），避免卡无限
+    # 期悬挂阻塞后续回合；非本成员卡不动（团队协作不越权）。
+    try:
+        pending = lock_pending_confirm(db, session_id)
+    except AppError:
+        pending = None
+    if pending is not None and pending.pending is not None:
+        card = dict(pending.pending)
+        meta = card.get("meta") if isinstance(card.get("meta"), dict) else {}
+        approval_id = str(card.get("id") or "")
+        if (
+            meta.get("confirm_type") == "tool_approval"
+            and approval_id
+            and pending.author_id
+            and (user_id is None or str(pending.author_id) == str(user_id))
+        ):
+            _clear_pending_confirm(db, session_id)
+            db.commit()
+            await _emit_persistent(
+                db,
+                websocket,
+                state,
+                session_id,
+                "approval_terminal",
+                {"approval_id": approval_id, "outcome": "cancelled", "reason": "/stop 已放弃本轮审批"},
+                task_id=None,
+            )
     await _emit_turn_completed(
         db,
         websocket,
@@ -1960,6 +2356,19 @@ async def agent_websocket(websocket: WebSocket) -> None:
                         if isinstance(message.get("payload"), dict)
                         else {},
                     )
+                elif event == "clarify_reply":
+                    # #1 澄清卡回执（V1.72 转正）：answers 校验 → 行锁清卡 →
+                    # clarify_ack 回执 → 以原 thread_id 恢复回合（resume 至多一次）。
+                    await _handle_clarify_reply(
+                        db,
+                        websocket,
+                        state,
+                        session.id,
+                        str(user.id),
+                        message.get("payload")
+                        if isinstance(message.get("payload"), dict)
+                        else {},
+                    )
                 else:
                     raise AppError(ErrorCode.VALIDATION, "不支持的 WebSocket 事件")
             except AppError as exc:
@@ -1976,3 +2385,80 @@ async def agent_websocket(websocket: WebSocket) -> None:
         if session:
             SESSION_CONNECTION_HUB.unregister(session.id, connection_id)
         db.close()
+
+
+# #3（V1.73）：审批卡 TTL 扫描轮询间隔（秒）。失效判定以卡 meta.created_at
+# 幂等兜底（_approval_overdue），扫描进程缺席时 ack 路径同样拒绝过期卡——
+# 本循环只负责「主动收尸 + 广播 expired 终态」，不承担失效语义本身。
+_APPROVAL_EXPIRY_POLL_S = 30.0
+
+
+async def _expire_overdue_approvals_once() -> int:
+    """单轮 TTL 扫描：行锁清过期 tool_approval 卡并广播 expired 终态。
+
+    只处理 ``meta.confirm_type=tool_approval`` 的卡（task_confirm / clarify
+    不受审批 TTL 约束，保持各自生命周期）；锁内二次判龄与清卡同事务，
+    与 ack/stop 并发竞争时后到者行锁读空自然跳过，幂等不重复广播。
+    返回本轮过期清卡数。
+    """
+    expired: list[tuple[str, str]] = []
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(AgentSession)
+            .filter(AgentSession.pending_confirm.isnot(None))
+            .all()
+        )
+        for session in rows:
+            card = session.pending_confirm or {}
+            meta = card.get("meta") if isinstance(card.get("meta"), dict) else {}
+            approval_id = str(card.get("id") or "")
+            if meta.get("confirm_type") != "tool_approval" or not approval_id:
+                continue
+            if not _approval_overdue(card):
+                continue
+            # 锁内二次判定：与 ack 清卡并发时，卡已消费/被刷新则跳过
+            locked = (
+                db.query(AgentSession)
+                .filter(AgentSession.id == session.id)
+                .with_for_update()
+                .first()
+            )
+            if locked is None or locked.pending_confirm is None:
+                continue
+            locked_card = dict(locked.pending_confirm)
+            if (
+                not _approval_overdue(locked_card)
+                or str(locked_card.get("id") or "") != approval_id
+            ):
+                continue
+            _clear_pending_confirm(db, session.id)
+            db.commit()
+            expired.append((session.id, approval_id))
+        state = _ConnectionState()
+        for session_id, approval_id in expired:
+            # 无在线连接时仅落库（websocket=None）；在线者经 Hub 广播收到，
+            # 离线者断线重连按 last_event_id 回放补齐终态。
+            await _emit_persistent(
+                db,
+                None,
+                state,
+                session_id,
+                "approval_terminal",
+                {"approval_id": approval_id, "outcome": "expired", "reason": "审批超时已失效"},
+                task_id=None,
+            )
+        return len(expired)
+    except Exception as exc:
+        db.rollback()
+        logger.info("Agent 审批 TTL 扫描失败 type=%s", type(exc).__name__)
+        return 0
+    finally:
+        db.close()
+
+
+async def approval_expiry_loop() -> None:
+    """后台审批卡 TTL 扫描循环（api lifespan 注册，参照 checkpoint_ttl_loop）。"""
+    while True:
+        await asyncio.sleep(_APPROVAL_EXPIRY_POLL_S)
+        await _expire_overdue_approvals_once()
