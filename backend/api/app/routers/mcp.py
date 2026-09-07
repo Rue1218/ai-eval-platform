@@ -81,12 +81,12 @@ TOOL_METADATA_EXT: dict[str, dict[str, Any]] = {
     "bash": {
         "source_file": "backend/api/app/harness/execution/sandbox.py",
         "handler_function": "_bash_handler(arguments, sandbox_dir, context)",
-        "code_summary": "静态高危黑名单拦截 -> 一次性 bwrap 沙箱创建 -> 根系统只读绑定 + 会话工作区唯一可写 -> 无网络隔离 -> ulimit 限制 + 15s 超时整树清理 -> stdout/stderr 脱敏截断",
+        "code_summary": "一次性 bwrap 沙箱按档位执行（F2/G4：无命令词表/静态裁决）-> 系统目录只读绑定 + 工作区按档位绑定（workspace-write 可写 / read-only 只读）-> 无网络隔离 -> ulimit + 墙钟超时整树清理 -> stdout/stderr 脱敏截断",
         "pipeline_stages": [
-            {"step": 1, "name": "静态安全黑名单过滤", "desc": "拦截 rm -rf /、提权、篡改系统配置等高危命令"},
-            {"step": 2, "name": "bwrap 隔离沙箱构建", "desc": "--unshare-net 禁用外网通信，--unshare-pid 隔离宿主进程"},
-            {"step": 3, "name": "只读环境与唯一可写挂载", "desc": "系统根与依赖只读绑定，唯一可读写目录为会话沙箱 /workspace"},
-            {"step": 4, "name": "执行监控与资源约束", "desc": "ulimit 限制内存/文件，15s 超时强制整进程树 SIGKILL 清理"},
+            {"step": 1, "name": "档位与工作区绑定", "desc": "scope 按 mode 组装 bind（workspace-write/read-only）；工作区前缀 + realpath 逐段强校验"},
+            {"step": 2, "name": "bwrap 隔离沙箱构建", "desc": "--unshare-net 禁用外网通信；私有 PID ns 因非特权容器 PoC 移除（/proc 呈容器级视图）"},
+            {"step": 3, "name": "只读环境与工作区挂载", "desc": "系统目录只读绑定，/tmp /run tmpfs，唯一工作区挂载点 /work 按档位读写"},
+            {"step": 4, "name": "执行监控与资源约束", "desc": "ulimit 限制内存/进程/CPU，墙钟超时强制整进程树 SIGKILL 清理"},
             {"step": 5, "name": "凭据脱敏与输出安全投影", "desc": "redact_secrets 自动过滤密钥与 Token，截断至安全上限回传"},
         ],
     },

@@ -5,7 +5,6 @@ from .isolation import WORKER_EVENTS, assert_not_in_messages, isolate_worker_eve
 from .observation import normalize, normalize_exception
 from .review import ReflectVerdict, review
 from .rules import (
-    BASH_BLOCK_PREFIXES,
     CONFIRM_KINDS,
     GateContext,
     GateResult,
@@ -14,7 +13,6 @@ from .rules import (
 )
 
 __all__ = [
-    "BASH_BLOCK_PREFIXES",
     "CONFIRM_KINDS",
     "FeedbackBudget",
     "GateContext",

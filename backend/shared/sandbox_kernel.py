@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import signal
 import subprocess
 import threading
@@ -28,22 +27,10 @@ logger = logging.getLogger("ai-eval.sandbox_kernel")
 # 沙箱内工作区挂载点（固定路径，避免被 --tmpfs /tmp 遮蔽；模型相对路径落在此处）
 _SANDBOX_MOUNT = "/work"
 
-# 会话标识严格校验：UUID 或安全短标识（防路径穿越，与 workspace.py 同源）
-_SESSION_ID_RE = re.compile(r"^[0-9a-fA-F-]{8,64}$")
-
-# bash 命令黑名单前缀（独立 runner 的第二道防线；api 侧 rules.py / dispatch.py 保留同款）。
-# 仅覆盖「不可确认后执行」的命令类（提权/网络/远程连接）；rm/chmod/chown 等改动
-# 会话工作区的命令自 5863846 起走 LangGraph 人工确认（HITL），批准后必须放行进入
-# bwrap——runner 不得再次硬拒，否则出现「用户已确认但命令仍被拒绝」的错位流程。
-# 物理隔离边界仍由 bwrap 承担（无网络、工作区唯一可写、资源受限）。
-BASH_BLOCK_PREFIXES: tuple[str, ...] = (
-    "sudo ",
-    "curl ",
-    "wget ",
-    "nc ",
-    "ssh ",
-    "scp ",
-)
+# 沙箱档位（F2/G4，《工作区与沙箱设计方案》§6）：只声明文件效果——
+# "read-only"（scope 只读 bind）与 "workspace-write"（scope 可写 bind）。
+# "none"（bash 不可达）由 api 侧 sandbox_engine=off fail-closed 承担，不进 runner。
+SANDBOX_MODES: frozenset[str] = frozenset({"read-only", "workspace-write"})
 
 
 class SandboxError(Exception):
@@ -64,29 +51,31 @@ class SandboxLimits:
     cpu_s: int = 10  # CPU 时间上限（秒）
 
 
-def check_bash_blocklist(cmd: str) -> str | None:
-    """bash 黑名单检查：命中返回匹配前缀，未命中返回 None。"""
-    stripped = (cmd or "").lstrip()
-    for prefix in BASH_BLOCK_PREFIXES:
-        if stripped.startswith(prefix):
-            return prefix
-    return None
+def resolve_workspace_path(path: str, root: str) -> str:
+    """校验工作区路径位于 ``root`` 前缀内，返回 canonical 绝对路径供 bind。
 
-
-def is_valid_session_workspace(path: str, root: str) -> bool:
-    """校验沙箱工作区路径：必须是 ``root`` 的直接安全标识子目录且非符号链接。
-
-    防止 runner 被传入任意路径（如 /etc、其他会话目录）bind 进沙箱。
+    F2/G4（MAJ-5）：替代旧「root 直接子目录 + 会话标识」校验（runner 侧不再
+    依赖会话形态）——接受嵌套 scope（``{root}/<ws>/<folder>/…``），逐段
+    realpath 后重验前缀（符号链接逃逸拒绝），仍拒相对路径与 ``..`` 段；
+    bind 使用返回值（realpath 最终路径），消除 resolve→bind 换链窗口。
+    越界/非法一律抛 ``SandboxError(VALIDATION)``（fail-closed）。
     """
     if not path or not root:
-        return False
-    parent = os.path.dirname(path)
-    name = os.path.basename(path)
-    return (
-        os.path.abspath(parent) == os.path.abspath(root)
-        and bool(_SESSION_ID_RE.fullmatch(name))
-        and not os.path.islink(path)
-    )
+        raise SandboxError("VALIDATION", "非法工作区路径")
+    root_real = os.path.realpath(root)
+    abs_path = os.path.abspath(path)
+    if abs_path == root_real or not abs_path.startswith(root_real + os.sep):
+        raise SandboxError("VALIDATION", "工作区路径越出根目录")
+    rel = os.path.relpath(abs_path, root_real)
+    if rel == "." or rel == ".." or rel.startswith(".." + os.sep) or os.path.isabs(rel):
+        raise SandboxError("VALIDATION", "工作区路径非法")
+    # 逐段 realpath 重验：任一中间段为指向前缀外的符号链接即拒绝
+    current = root_real
+    for segment in rel.split(os.sep):
+        current = os.path.realpath(os.path.join(current, segment))
+        if current != root_real and not current.startswith(root_real + os.sep):
+            raise SandboxError("VALIDATION", "工作区路径含越界符号链接")
+    return current
 
 
 def _build_bwrap_argv(
@@ -95,9 +84,12 @@ def _build_bwrap_argv(
     sandbox_dir: str,
     cmd: str,
     limits: SandboxLimits,
+    mode: str = "workspace-write",
 ) -> list[str]:
-    """构造 bwrap 命令行（工作区唯一可写 + 无网络 + ulimit 限制）。
+    """构造 bwrap 命令行（按档位绑定 scope + 无网络 + ulimit 限制）。
 
+    F2/G4：scope 按 ``mode`` 组装 bind——"workspace-write" 可写（--bind）、
+    "read-only" 只读（--ro-bind）；调用方须先行校验 mode ∈ SANDBOX_MODES。
     最小 bind 而非 ``--ro-bind / /``：不暴露源码、``/run/config/.env``
     （供应商 Key，已被 ``--tmpfs /run`` 遮蔽）、其他会话工作区与备份文件；
     ulimit 由 bash 设置后 ``exec`` 继承（RLIMIT 在 exec 后保留）。
@@ -126,7 +118,8 @@ def _build_bwrap_argv(
         "--dev", "/dev",
         "--tmpfs", "/tmp",
         "--tmpfs", "/run",
-        "--bind", sandbox_dir, _SANDBOX_MOUNT,
+        ("--bind" if mode == "workspace-write" else "--ro-bind"),
+        sandbox_dir, _SANDBOX_MOUNT,
         "--clearenv",
         "--setenv", "PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         "--setenv", "HOME", "/tmp",
@@ -143,14 +136,17 @@ def run_sandboxed(
     cmd: str,
     *,
     sandbox_dir: str,
+    mode: str = "workspace-write",
     timeout_s: float,
     limits: SandboxLimits | None = None,
     bwrap_bin: str = "/usr/bin/bwrap",
     max_output_chars: int = 20000,
     on_output: Callable[[str], None] | None = None,
 ) -> str:
-    """在一次性 bwrap 沙箱内执行命令，返回 stdout；失败抛 SandboxError。
+    """在一次性 bwrap 沙箱内按档位执行命令，返回 stdout；失败抛 SandboxError。
 
+    - ``mode`` ∈ SANDBOX_MODES（文件效果档位，F2/G4）：workspace-write →
+      scope 可写 bind；read-only → scope 只读 bind；未知档位 fail-closed；
     - 超时：wall-clock 超时后 ``killpg(SIGKILL)`` 整树清理（配合
       ``--die-with-parent`` 回收沙箱内全部进程），抛 ``SandboxError(TIMEOUT)``；
     - 非零退出码：抛 ``SandboxError(INTERNAL)``，附截断的 stderr 摘要；
@@ -159,14 +155,16 @@ def run_sandboxed(
     """
     if not cmd.strip():
         raise SandboxError("VALIDATION", "bash 命令为空")
+    if mode not in SANDBOX_MODES:
+        raise SandboxError("VALIDATION", f"未知沙箱档位：{mode}")
     limits = limits or SandboxLimits()
     argv = _build_bwrap_argv(
-        bwrap_bin=bwrap_bin, sandbox_dir=sandbox_dir, cmd=cmd, limits=limits
+        bwrap_bin=bwrap_bin, sandbox_dir=sandbox_dir, cmd=cmd, limits=limits, mode=mode
     )
     # 记录脱敏摘要（命令长度与摘要，不打印命令原文/密钥）
     logger.info(
-        "bash 沙箱执行 len=%d dir=%s timeout=%s",
-        len(cmd), sandbox_dir, timeout_s,
+        "bash 沙箱执行 mode=%s len=%d dir=%s timeout=%s",
+        mode, len(cmd), sandbox_dir, timeout_s,
     )
     try:
         started = subprocess.Popen(

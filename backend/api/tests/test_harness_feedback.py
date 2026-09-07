@@ -8,7 +8,6 @@ from app.harness.feedback import (
     normalize,
     normalize_exception,
 )
-from app.harness.feedback.rules import BASH_BLOCK_PREFIXES
 
 
 def _call(name: str, **arguments: object) -> ToolCall:
@@ -85,15 +84,6 @@ def test_gate_unregistered_rejected() -> None:
     result = check_gates(_call("evil_tool"), _ctx())
     assert result.passed is False
     assert result.failed_code == "VALIDATION"
-
-
-def test_gate_bash_blocklist_rejected() -> None:
-    """F-A2：bash 黑名单命令拒绝。"""
-    for prefix in BASH_BLOCK_PREFIXES:
-        result = check_gates(
-            _call("bash", command=f"{prefix}target"), _ctx(registered_names=frozenset({"bash"}))
-        )
-        assert result.passed is False
 
 
 def test_gate_unknown_kind_rejected() -> None:

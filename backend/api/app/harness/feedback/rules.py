@@ -1,6 +1,6 @@
 """Harness 反馈层：规则门禁先行（M6 阶段 2，FB-2）。
 
-按八类门禁顺序做确定性检查（不调模型）：长工具/白名单/任意代码/一单一
+按七类门禁顺序做确定性检查（不调模型）：长工具/白名单/一单一
 kind/必填槽位/资产溯源/占槽/先评后压。门禁失败返回 ``GateResult``；
 ``assert_gates`` 抛 ``AppError``（VALIDATION/CONCURRENCY），由 M4 节点捕获
 转 ``NodeEvent(error)``。会话级门禁（OR-6/7）由 M4 ``gates.py`` 承担，
@@ -17,17 +17,6 @@ from app.harness.contracts import ToolCall
 
 # 确认卡 kind 白名单（一单一 kind 门禁）
 CONFIRM_KINDS: frozenset[str] = frozenset({"benchmark", "testcase", "rag", "stress"})
-
-# 任意代码硬黑名单前缀（bash 门禁；bwrap 沙箱之外的第二道防线）。删除、改权限
-# 等工作区内变更由 ToolNode 的人工确认处理；提权、网络和远程连接仍不可执行。
-BASH_BLOCK_PREFIXES: tuple[str, ...] = (
-    "sudo ",
-    "curl ",
-    "wget ",
-    "nc ",
-    "ssh ",
-    "scp ",
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,32 +63,26 @@ def check_gates(call: ToolCall, ctx: GateContext) -> GateResult:
     # 2. 白名单：未注册即拒绝（EX-5）
     if ctx.registered_names and name not in ctx.registered_names:
         return GateResult(False, "VALIDATION", f"工具未注册：{name}")
-    # 3. 任意代码：bash 黑名单纵深防御（bwrap 沙箱之外的第二道防线）
-    command = arguments.get("command")
-    if name == "bash" and isinstance(command, str):
-        stripped = command.lstrip()
-        if any(stripped.startswith(prefix) for prefix in BASH_BLOCK_PREFIXES):
-            return GateResult(False, "VALIDATION", "bash 命令命中黑名单")
-    # 4. 一单一 kind：确认卡 kind 四选一，不混跑
+    # 3. 一单一 kind：确认卡 kind 四选一，不混跑
     kind = arguments.get("kind")
     if kind is not None and kind not in CONFIRM_KINDS:
         return GateResult(False, "VALIDATION", f"未知任务类型：{kind}")
-    # 5. 必填槽位：工具参数 schema required 缺失
+    # 4. 必填槽位：工具参数 schema required 缺失
     required = ctx.required_slots.get(name)
     if required:
         missing = [slot for slot in required if not arguments.get(slot)]
         if missing:
             return GateResult(False, "VALIDATION", f"缺少必填参数：{', '.join(missing)}")
-    # 6. 资产溯源：file_id 非归属用户拒绝（EX-2）
+    # 5. 资产溯源：file_id 非归属用户拒绝（EX-2）
     file_id = arguments.get("file_id")
     if file_id is not None and ctx.owned_file_ids and file_id not in ctx.owned_file_ids:
         return GateResult(False, "VALIDATION", "附件不属于当前用户")
-    # 7. 占槽：会话存在活动任务时禁止再入队新任务（OR-7）。
+    # 6. 占槽：会话存在活动任务时禁止再入队新任务（OR-7）。
     # task.cancel 不在此列：取消非终态任务正是其用途（API.md §3.6.1），
     # 须放行以释放占槽；task.status 只读同样不受限。
     if ctx.has_active_task and name == "task.create":
         return GateResult(False, "CONCURRENCY", "会话存在活动任务")
-    # 8. 先评后压：stress 须由质量任务 succeeded 派生
+    # 7. 先评后压：stress 须由质量任务 succeeded 派生
     if name == "task.create" and kind == "stress":
         return GateResult(False, "VALIDATION", "压测任务须由质量评测成功派生")
     return GateResult(True)

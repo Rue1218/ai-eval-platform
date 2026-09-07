@@ -6,10 +6,12 @@ api 经 HTTP JSON 调用，不再持有 ``privileged``/``seccomp:unconfined``/
 
 端点（仅 compose 内网可达，不发布主机端口）：
 
-- ``POST /run``：body ``{command, sandbox_dir, timeout_s, limits,
-  max_output_chars}`` → ``{ok:true, output}`` 或 ``{ok:false,
-  error:{code,message}}``。命令黑名单 + 工作区路径强校验（纵深防御，api
-  侧有同等校验）；fail-closed：bwrap 缺失/启动失败一律返回 VALIDATION。
+- ``POST /run``：body ``{command, policy{mode, workspace_root}, timeout_s,
+  limits, max_output_chars}`` → ``{ok:true, output}`` 或 ``{ok:false,
+  error:{code,message}}``。F2/G4：无字符串词表（§6.3）——仅工作区前缀 +
+  realpath 逐段校验（接受嵌套 scope、拒符号链接逃逸）与档位校验；
+  fail-closed：``policy`` 缺失/``mode`` 非法一律返回 VALIDATION（不按任何
+  档位猜测），bwrap 缺失/启动失败一律返回 VALIDATION。
 - ``POST /run/stream``：NDJSON 输出块 + 最终结果，仅供 API 内网转发 ToolCard。
 - ``POST /probe``：bwrap 冒烟探测 → ``{ok:bool}``。
 - ``GET /health``：``{"status":"ok"}``。
@@ -27,11 +29,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 from shared.sandbox_kernel import (
+    SANDBOX_MODES,
     SandboxError,
     SandboxLimits,
-    check_bash_blocklist,
-    is_valid_session_workspace,
     probe_sandbox,
+    resolve_workspace_path,
     run_sandboxed,
 )
 
@@ -51,8 +53,9 @@ SLOT_WAIT_S = float(os.environ.get("RUNNER_SLOT_WAIT_S", "5.0"))
 class _SlotGate:
     """全局执行槽位（bounded semaphore）+ 可观测计数（running/queued）。
 
-    ``health`` 暴露负载；请求超时等待后仍无槽位 → 429 + 错误码 BUSY
-    （api 映射 CONCURRENCY 文案），不无限排队（D4）。
+    ``health`` 暴露负载；请求超时等待后仍无槽位 → HTTP 200 + ``{ok:false,
+    error:{code:"BUSY"}}``（G2G3 文档"429"口径以实现为准，api 映射
+    CONCURRENCY 文案），不无限排队（D4）。
     """
 
     def __init__(self, max_workers: int) -> None:
@@ -152,18 +155,24 @@ class _SandboxHandler(BaseHTTPRequestHandler):
             self._send(404, {"ok": False, "error": {"code": "VALIDATION", "message": "未知端点"}})
 
     def _run_from_payload(self, *, on_output: Callable[[str], None] | None = None) -> str:
-        """校验请求后执行 bwrap；流式和非流式端点共用同一安全边界。"""
+        """校验请求后按档位执行 bwrap；流式和非流式端点共用同一安全边界。
+
+        F2/G4 契约（§6.2）：只收 ``policy{mode, workspace_root}``——不再接收
+        任何词表/黑白名单字段；policy 缺失或 mode 非法 → VALIDATION
+        fail-closed（旧 api 混布时默认拒绝，不按任何档位猜测）。
+        """
         payload = self._read_body()
         command = str(payload.get("command") or "")
-        sandbox_dir = str(payload.get("sandbox_dir") or "")
-        # 命令与路径校验（纵深防御，独立于 api 侧）
+        policy = payload.get("policy") if isinstance(payload.get("policy"), dict) else {}
+        mode = str(policy.get("mode") or "")
+        workspace_root = str(policy.get("workspace_root") or "")
         if not command.strip():
             raise SandboxError("VALIDATION", "bash 命令为空")
-        blocked = check_bash_blocklist(command)
-        if blocked is not None:
-            raise SandboxError("VALIDATION", "bash 命令命中黑名单")
-        if not is_valid_session_workspace(sandbox_dir, WORKSPACE_ROOT):
-            raise SandboxError("VALIDATION", "非法工作区路径")
+        if mode not in SANDBOX_MODES:
+            raise SandboxError("VALIDATION", "policy.mode 非法或缺失")
+        # 工作区前缀 + realpath 逐段校验（MAJ-5）；返回值 = canonical 路径供
+        # bind（bind realpath 最终路径，消除 resolve→bind 换链窗口）
+        sandbox_dir = resolve_workspace_path(workspace_root, WORKSPACE_ROOT)
         try:
             timeout_s = float(payload.get("timeout_s", 15.0))
         except (TypeError, ValueError):
@@ -181,6 +190,7 @@ class _SandboxHandler(BaseHTTPRequestHandler):
         return run_sandboxed(
             command,
             sandbox_dir=sandbox_dir,
+            mode=mode,
             timeout_s=timeout_s,
             limits=limits,
             bwrap_bin=BWRAP_BIN,
