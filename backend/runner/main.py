@@ -140,7 +140,7 @@ class _SandboxHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         if self.path in {"/run", "/run/stream", "/probe"}:
             if not self._acquire_slot():
-                self._send(200, {"ok": False, "error": {"code": "BUSY", "message": "沙箱执行槽位繁忙，请稍后重试"}})
+                self._send_busy()
                 return
             try:
                 if self.path == "/run":
@@ -198,6 +198,30 @@ class _SandboxHandler(BaseHTTPRequestHandler):
             on_output=on_output,
         )
 
+    def _begin_stream(self) -> None:
+        """发送 NDJSON 流式响应头（普通流与 BUSY 帧共用同一协议面）。"""
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "close")
+        self.end_headers()
+
+    def _send_busy(self) -> None:
+        """槽位耗尽响应：/run/stream 必须按 NDJSON 协议回结果帧（BLK-3 修复，
+        否则 api 流式解析把 BUSY 误判为「沙箱引擎不可用」）；其余端点普通 JSON。
+        """
+        if self.path == "/run/stream":
+            self._begin_stream()
+            self._send_stream(
+                {
+                    "type": "result",
+                    "ok": False,
+                    "error": {"code": "BUSY", "message": "沙箱执行槽位繁忙，请稍后重试"},
+                }
+            )
+            return
+        self._send(200, {"ok": False, "error": {"code": "BUSY", "message": "沙箱执行槽位繁忙，请稍后重试"}})
+
     def _send_stream(self, body: dict[str, Any]) -> None:
         """发送一条 NDJSON 瞬态帧；该端点仅暴露在 Compose 内网。"""
         payload = json.dumps(body, ensure_ascii=False).encode("utf-8") + b"\n"
@@ -217,11 +241,7 @@ class _SandboxHandler(BaseHTTPRequestHandler):
 
     def _handle_run_stream(self) -> None:
         """执行 bash 并逐行输出 NDJSON；最终帧不重复回传完整正文。"""
-        self.send_response(200)
-        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Connection", "close")
-        self.end_headers()
+        self._begin_stream()
         try:
             self._run_from_payload(
                 on_output=lambda chunk: self._send_stream({"type": "output", "chunk": chunk})

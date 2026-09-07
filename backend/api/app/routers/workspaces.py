@@ -219,6 +219,22 @@ def delete_orphan(
     }
     if folder_name in session_ids or folder_name in active_ws_ids:
         raise AppError(ErrorCode.VALIDATION, "该目录属于活跃会话/工作区，禁止作孤儿清理")
+    # BLK-2 守卫：软删工作区目录若仍被「未删除」绑定会话引用，禁止孤儿清理
+    # （防注销后窗口内活跃绑定会话数据被静默 rmtree；会话删除/结束后目录
+    # 自动重回清理面）。
+    bound_ws_ids = {
+        row[0]
+        for row in db.query(AgentSession.workspace_id)
+        .filter(
+            AgentSession.workspace_id.isnot(None),
+            AgentSession.deleted_at.is_(None),
+        )
+        .all()
+    }
+    if folder_name in bound_ws_ids:
+        raise AppError(
+            ErrorCode.VALIDATION, "该目录仍被活跃绑定会话引用，请先删除相关会话后再清理"
+        )
     shutil.rmtree(directory)
     db.add(
         AuditLog(

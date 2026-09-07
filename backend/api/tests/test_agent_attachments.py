@@ -66,14 +66,17 @@ def test_stage_attachments_path_matches_manifest(tmp_path: Path, monkeypatch) ->
     session_id = "b68eddc9-2b37-4883-b90c-3756035fbc5e"
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
     stored = _stored(tmp_path, "brief.md", "正文内容".encode(), "text/markdown", file_id="file-abc")
+    workspace_dir = tmp_path / "ws" / session_id
+    workspace_dir.mkdir(parents=True)
 
-    stage_attachments(session_id, [stored])
+    # F3/BLK-1 修复：签名改为显式沙箱根（与 read 工具注入根同源）
+    stage_attachments(str(workspace_dir), [stored])
 
-    staged = tmp_path / "ws" / session_id / "attachments" / "file-abc-brief.md"
+    staged = workspace_dir / "attachments" / "file-abc-brief.md"
     assert staged.is_file()
     assert staged.read_text(encoding="utf-8") == "正文内容"
     # 清单相对路径必须与 staging 目标一致（read 工具按沙箱根解析）
-    result = build_model_content("分析", [stored], workspace_dir=str(tmp_path / "ws" / session_id))
+    result = build_model_content("分析", [stored], workspace_dir=str(workspace_dir))
     assert "attachments/file-abc-brief.md" in result
 
 
@@ -82,10 +85,12 @@ def test_stage_attachments_isolates_uploaded_source_from_workspace_writes(tmp_pa
     session_id = "b68eddc9-2b37-4883-b90c-3756035fbc5e"
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path / "ws"))
     stored = _stored(tmp_path, "cases.json", b'{"name":"origin"}', "application/json", file_id="file-json")
+    workspace_dir = tmp_path / "ws" / session_id
+    workspace_dir.mkdir(parents=True)
 
-    stage_attachments(session_id, [stored])
+    stage_attachments(str(workspace_dir), [stored])
 
-    staged = tmp_path / "ws" / session_id / "attachments" / "file-json-cases.json"
+    staged = workspace_dir / "attachments" / "file-json-cases.json"
     staged.write_text('{"name":"workspace"}', encoding="utf-8")
     assert Path(stored.storage_path).read_text(encoding="utf-8") == '{"name":"origin"}'
 

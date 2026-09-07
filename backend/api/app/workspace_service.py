@@ -203,6 +203,32 @@ def ensure_workspace_scope(workspace_id: str, scope_path: str | None) -> str:
     return target
 
 
+def resolve_session_sandbox_db(
+    db_session,
+    session_id: str,
+    workspace_id: str | None,
+    scope_path: str | None,
+) -> str:
+    """带行态校验的会话沙箱唯一解析（ws/附件装配共用，BLK-2 修复）。
+
+    ``resolve_session_sandbox`` 的 DB 版：绑定工作区行必须存在且**未注销**
+    （``deleted_at IS NULL``，落实 models.py 注释承诺）——行缺失/已注销 →
+    ``AppError(VALIDATION)`` fail-closed（调用方降级空串，绝不回落 legacy）。
+    """
+    if not workspace_id:
+        from app.harness.execution.workspace import ensure_session_workspace
+
+        return ensure_session_workspace(session_id)
+    from app.models import Workspace
+
+    ws_row = (
+        db_session.query(Workspace).filter(Workspace.id == workspace_id).first()
+    )
+    if ws_row is None or ws_row.deleted_at is not None:
+        raise AppError(ErrorCode.VALIDATION, "绑定工作区已注销或不存在")
+    return resolve_session_sandbox(session_id, workspace_id, scope_path)
+
+
 def resolve_session_sandbox(
     session_id: str,
     workspace_id: str | None,

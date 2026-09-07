@@ -65,7 +65,7 @@ from ..models import Session as AgentSession
 from ..security import TOKEN_TYPE_WS, decode_token
 from ..session_access import require_visible_session
 from ..session_connections import SESSION_CONNECTION_HUB
-from ..workspace_service import resolve_session_sandbox
+from ..workspace_service import resolve_session_sandbox_db
 from ..ws_tickets import consume_ws_jti, ttl_from_jwt_payload
 from .profiles import _profile_connection
 
@@ -1188,6 +1188,8 @@ def _window_messages(db: Session, session_id: str) -> tuple[list[dict], dict[str
     ordered = [
         {
             "role": row.role,
+            # 附件装配（staging）在 model_content_for_message 内按会话绑定自行
+            # 解析（resolve_session_sandbox_db，与 _run_turn 注入同源同态——BLK-1）
             "content": model_content_for_message(db, row) if row.role == "user" else row.content,
             "source_id": row.source_id,
         }
@@ -1745,8 +1747,23 @@ async def _run_turn(
     router_audit: dict | None = None
     try:
         config, profile = _selected_model_config(db)
-        history, trim_meta = _history_with_trim(db, session_id)
+        # 沙箱根先行解析（F3/G5 + BLK-1/BLK-2 修复）：session_row 提前查询，
+        # 绑定会话经带行态校验的 resolve_session_sandbox_db 统一解析——附件
+        # staging（_window_messages）与工具注入共用同一根；解析失败/绑定失效
+        # → 空串（工具 fail-closed，附件回退内联注入），不阻断回合。
         session_row = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+        sandbox_dir = ""
+        try:
+            if session_row is not None:
+                sandbox_dir = resolve_session_sandbox_db(
+                    db,
+                    session_id,
+                    session_row.workspace_id,
+                    session_row.scope_path,
+                )
+        except Exception as exc:  # noqa: BLE001 —— 沙箱不可得不阻断回合（旧语义）
+            agent_trace(f"sandbox resolve failed type={type(exc).__name__}")
+        history, trim_meta = _history_with_trim(db, session_id)
         # #2（V1.74）：窗口裁剪事件化留痕——本回合装配模型上下文时若发生了
         # 窗口裁剪（compact 截断或尾窗截断），落一条 context_trim 持久事件
         # （仅元信息：触发原因/保留策略/被裁范围，不携带被裁原文——观察纪律）。
@@ -1791,20 +1808,9 @@ async def _run_turn(
         # 新回合复用租约 ID 作为检查点线程 ID，便于并发与中断审计关联；
         # H5 审批恢复沿用原中断回合的 thread_id（卡 meta 记录）。
         thread_id = resume_thread_id or turn_id or f"{session_id}:{uuid4().hex}"
-        # 会话文件沙箱（H5 完善，P0；F3/G5）：read/write/edit/bash 以会话工作区
-        # 为执行根（stage 的附件仍落 legacy {root}/{session_id}/attachments/——
-        # 附件目录归属随绑定会话的迁移留 F3 后续评审）。F3 起经唯一入口
-        # resolve_session_sandbox：绑定会话 → 工作区 scope 目录；未绑定 → legacy
-        # 自动目录（与 F3 前一致）。绑定失效（行外目录缺失等不一致窗口）时为空
-        # ——工具保持 fail-closed（旧语义），绝不回落 legacy 裸目录。
-        try:
-            sandbox_dir = resolve_session_sandbox(
-                session_id=session_id,
-                workspace_id=session_row.workspace_id if session_row else None,
-                scope_path=session_row.scope_path if session_row else None,
-            )
-        except Exception:  # noqa: BLE001 —— 工作区不可得降级为空（工具 fail-closed）
-            sandbox_dir = ""
+        # 会话文件沙箱注入（H5 P0；F3/G5）：read/write/edit/bash 以上方统一解析
+        # 的沙箱根为执行域（绑定 = 工作区 scope / 未绑定 = legacy）；解析失败时
+        # sandbox_dir="" —— 工具保持 fail-closed（旧语义），绝不回落 legacy。
         graph_config = {
             "configurable": {
                 # 每回合独立 thread_id：检查点按回合隔离（M3 阶段 3）

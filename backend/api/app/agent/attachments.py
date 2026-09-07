@@ -127,20 +127,19 @@ def _workspace_attachment_path(file_id: str, filename: str) -> str:
     return f"{file_id}-{Path(filename).name}"
 
 
-def stage_attachments(session_id: str, files: list[StoredFile]) -> None:
-    """把文本附件复制到会话工作区，供 read 工具读取（幂等）。
+def stage_attachments(workspace_dir: str, files: list[StoredFile]) -> None:
+    """把文本附件复制到会话工作区（沙箱执行根同源，BLK-1 修复），供 read 读取。
 
-    - 目标相对路径 ``attachments/{file_id}-{name}``（沙箱内，防目录穿越边界不变）；
+    - ``workspace_dir`` = 会话实际沙箱根（未绑定 = legacy 自动目录；绑定 =
+      工作区 scope——由调用方/``model_content_for_message`` 解析，保证附件
+      相对路径 ``attachments/{file_id}-{name}`` 位于 read/bash 同一根下）；
     - 复制到工作区的新 inode，避免 bash 原地写入时篡改 ``/data/files`` 原文件；
     - 临时文件经同目录原子发布，避免并发 staging 覆盖已有的工作区文件；
     - 目标已存在时跳过（幂等），不覆盖模型可能已改写的文件。
     """
-    from ..harness.execution.workspace import ensure_session_workspace
-
     if not files:
         return
-    workspace = ensure_session_workspace(session_id)
-    attach_dir = os.path.join(workspace, "attachments")
+    attach_dir = os.path.join(workspace_dir, "attachments")
     os.makedirs(attach_dir, exist_ok=True)
     for stored in files:
         if Path(stored.filename).suffix.lower() not in TEXT_LAZY_SUFFIXES:
@@ -336,16 +335,51 @@ def build_model_content(
     return [{"type": "text", "text": combined}, *image_parts]
 
 
-def model_content_for_message(db: Session, row: Message) -> str | list[dict[str, Any]]:
+def _resolve_content_workspace(db: Session, session_id: str) -> str | None:
+    """附件装配用沙箱根（与 _run_turn 注入同源解析；失败返回 None → 内联注入）。
+
+    - 未绑定 → legacy 自动目录（原行为）；
+    - 绑定 → 经带行态校验的 ``resolve_session_sandbox_db`` 解析到工作区 scope；
+    - 行态失效/目录不可得 → None（build_model_content 回退内联正文，不 staging
+      到与 read 根错位的 legacy 目录——BLK-1/BLK-2 修复）。
+    """
+    from ..models import Session as AgentSession
+    from ..workspace_service import resolve_session_sandbox_db
+
+    session_row = (
+        db.query(AgentSession)
+        .filter(AgentSession.id == session_id)
+        .first()
+    )
+    if session_row is None:
+        return None
+    try:
+        return resolve_session_sandbox_db(
+            db,
+            session_row.id,
+            session_row.workspace_id,
+            session_row.scope_path,
+        )
+    except AppError:
+        return None
+
+
+def model_content_for_message(
+    db: Session,
+    row: Message,
+    *,
+    sandbox_dir: str | None = None,
+) -> str | list[dict[str, Any]]:
     """读取一条 user 消息的附件，并生成只供模型使用的上下文内容。
 
-    同时把 txt/md 附件 staging 进会话工作区（幂等），使 read 工具可读。
+    同时把 txt/md 附件 staging 进会话沙箱根（幂等），使 read 工具可读。
+    ``sandbox_dir`` 由回合装配方传入（与工具注入根同源）；为 None 时（历史/
+    离线装配）自行按会话绑定解析，解析失败回退内联注入。
     """
     files = load_message_files(db, row.attachments or [], owner_id=row.author_id)
     workspace_dir: str | None = None
     if files:
-        from ..harness.execution.workspace import ensure_session_workspace
-
-        workspace_dir = ensure_session_workspace(row.session_id)
-        stage_attachments(row.session_id, files)
+        workspace_dir = sandbox_dir or _resolve_content_workspace(db, row.session_id)
+        if workspace_dir:
+            stage_attachments(workspace_dir, files)
     return build_model_content(row.content, files, workspace_dir=workspace_dir)

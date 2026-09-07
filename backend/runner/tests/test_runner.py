@@ -244,6 +244,36 @@ def test_run_blocklist_removed_sudo_executes(server: _Server, ws, monkeypatch) -
     assert captured["cmd"] == "sudo id -u"
 
 
+def test_run_stream_busy_returns_ndjson_result_frame(server: _Server, ws, monkeypatch) -> None:
+    """BLK-3：槽位耗尽时 /run/stream 必须按 NDJSON 协议回结果帧（非普通 JSON）。"""
+    gate = main._SlotGate(1)
+    monkeypatch.setattr(main, "SLOT_GATE", gate)
+    monkeypatch.setattr(main, "SLOT_WAIT_S", 0.05)
+    assert gate.acquire(timeout_s=0) is True
+    try:
+        req = Request(
+            server.url("/run/stream"),
+            data=json.dumps(_run_payload(ws)).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(req, timeout=5) as response:
+            assert response.headers.get_content_type() == "application/x-ndjson"
+            frames = [
+                json.loads(line)
+                for line in response.read().decode("utf-8").splitlines()
+            ]
+        assert frames == [
+            {
+                "type": "result",
+                "ok": False,
+                "error": {"code": "BUSY", "message": "沙箱执行槽位繁忙，请稍后重试"},
+            }
+        ]
+    finally:
+        gate.release()
+
+
 def test_run_policy_missing_rejected(server: _Server, ws) -> None:
     """双向兼容 fail-closed：policy 缺失（旧 api 载荷）→ VALIDATION，不猜测档位。"""
     payload = _run_payload(ws)
