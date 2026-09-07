@@ -2024,15 +2024,20 @@ async def _handle_stop(
         ):
             _clear_pending_confirm(db, session_id)
             db.commit()
-            await _emit_persistent(
-                db,
-                websocket,
-                state,
-                session_id,
-                "approval_terminal",
-                {"approval_id": approval_id, "outcome": "cancelled", "reason": "/stop 已放弃本轮审批"},
-                task_id=None,
-            )
+            try:
+                await _emit_persistent(
+                    db,
+                    websocket,
+                    state,
+                    session_id,
+                    "approval_terminal",
+                    {"approval_id": approval_id, "outcome": "cancelled", "reason": "/stop 已放弃本轮审批"},
+                    task_id=None,
+                )
+            except Exception as exc:  # noqa: BLE001 —— 终态广播尽力而为（已清卡，
+                # 记录失败即可）；completed 收尾绝不能被吞（每轮恰一终态铁律）
+                db.rollback()
+                agent_trace(f"/stop 终态广播失败 type={type(exc).__name__}")
     await _emit_turn_completed(
         db,
         websocket,
