@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from collections.abc import Callable, Mapping
 from urllib.error import URLError
 from urllib.request import Request, urlopen
@@ -27,15 +28,31 @@ from app.harness.context.observation import MODEL_TOOL_RESULT_MAX_CHARS
 
 logger = logging.getLogger("ai-eval.harness.sandbox")
 
-# runner 错误码 → api ErrorCode
+# runner 错误码 → api ErrorCode（BUSY 归属并发冲突）
 _ERROR_MAP: Mapping[str, ErrorCode] = {
     "TIMEOUT": ErrorCode.TIMEOUT,
     "VALIDATION": ErrorCode.VALIDATION,
     "INTERNAL": ErrorCode.INTERNAL,
+    "BUSY": ErrorCode.CONCURRENCY,
 }
 
 # 冒烟探测结果缓存（None=未探测；True/False=已探测）
 _PROBE_RESULT: bool | None = None
+
+# 每 scope 并发闸门（D4/G3）：同一工作区目录同时至多 1 个 bash 在途，
+# 防并行写互相踩踏；与 runner 全局槽位构成双层。线程锁注册表（目录数
+# 受工作区/会话数量约束，不做引用计数回收）。
+_SCOPE_GATES: dict[str, threading.Lock] = {}
+_SCOPE_GATES_GUARD = threading.Lock()
+
+
+def _scope_gate(sandbox_dir: str) -> threading.Lock:
+    with _SCOPE_GATES_GUARD:
+        gate = _SCOPE_GATES.get(sandbox_dir)
+        if gate is None:
+            gate = threading.Lock()
+            _SCOPE_GATES[sandbox_dir] = gate
+        return gate
 
 
 def _runner_url(path: str) -> str:
@@ -62,40 +79,47 @@ def run_sandboxed(
     if not cmd.strip():
         raise AppError(ErrorCode.VALIDATION, "bash 命令为空")
     limits = limits or SandboxLimits()
-    payload = {
-        "command": cmd,
-        "sandbox_dir": sandbox_dir,
-        "timeout_s": timeout_s,
-        "limits": {
-            "memory_kb": limits.memory_kb,
-            "nproc": limits.nproc,
-            "cpu_s": limits.cpu_s,
-        },
-        "max_output_chars": max_output_chars,
-    }
-    # 记录脱敏摘要（命令长度与目录，不打印命令原文/密钥）
-    logger.info("bash 沙箱执行 len=%d dir=%s timeout=%s", len(cmd), sandbox_dir, timeout_s)
-    request = Request(
-        _runner_url("/run/stream" if on_output is not None else "/run"),
-        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
+    # 每 scope 闸门（D4/G3）：同目录 bash 排他，限时等待（config 可调）
+    gate = _scope_gate(sandbox_dir)
+    if not gate.acquire(timeout=settings.sandbox_bash_gate_timeout_s):
+        raise AppError(ErrorCode.CONCURRENCY, "该工作区已有 bash 命令执行中，请稍后重试")
     try:
-        with urlopen(request, timeout=timeout_s + 5) as resp:
-            if on_output is None:
-                body = json.loads(resp.read().decode("utf-8"))
-            else:
-                return _read_stream_response(resp, on_output)
-    except (URLError, OSError, ValueError):
-        # runner 不可达/超时/响应损坏：fail-closed，禁止降级为裸 subprocess
-        raise AppError(ErrorCode.VALIDATION, "沙箱引擎不可用") from None
-    if not isinstance(body, Mapping) or not body.get("ok"):
-        error = body.get("error") if isinstance(body, Mapping) else None
-        code = str((error or {}).get("code") or "INTERNAL")
-        message = str((error or {}).get("message") or "沙箱执行失败")
-        raise AppError(_ERROR_MAP.get(code, ErrorCode.INTERNAL), message)
-    return str(body.get("output") or "（无输出）")
+        payload = {
+            "command": cmd,
+            "sandbox_dir": sandbox_dir,
+            "timeout_s": timeout_s,
+            "limits": {
+                "memory_kb": limits.memory_kb,
+                "nproc": limits.nproc,
+                "cpu_s": limits.cpu_s,
+            },
+            "max_output_chars": max_output_chars,
+        }
+        # 记录脱敏摘要（命令长度与目录，不打印命令原文/密钥）
+        logger.info("bash 沙箱执行 len=%d dir=%s timeout=%s", len(cmd), sandbox_dir, timeout_s)
+        request = Request(
+            _runner_url("/run/stream" if on_output is not None else "/run"),
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=timeout_s + 5) as resp:
+                if on_output is None:
+                    body = json.loads(resp.read().decode("utf-8"))
+                else:
+                    return _read_stream_response(resp, on_output)
+        except (URLError, OSError, ValueError):
+            # runner 不可达/超时/响应损坏：fail-closed，禁止降级为裸 subprocess
+            raise AppError(ErrorCode.VALIDATION, "沙箱引擎不可用") from None
+        if not isinstance(body, Mapping) or not body.get("ok"):
+            error = body.get("error") if isinstance(body, Mapping) else None
+            code = str((error or {}).get("code") or "INTERNAL")
+            message = str((error or {}).get("message") or "沙箱执行失败")
+            raise AppError(_ERROR_MAP.get(code, ErrorCode.INTERNAL), message)
+        return str(body.get("output") or "（无输出）")
+    finally:
+        gate.release()
 
 
 def _read_stream_response(response: object, on_output: Callable[[str], None]) -> str:

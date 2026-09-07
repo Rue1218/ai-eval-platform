@@ -16,7 +16,6 @@ from __future__ import annotations
 import os
 import shutil
 from datetime import UTC, datetime
-from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
@@ -25,12 +24,16 @@ from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
 from ..harness.execution.workspace import get_workspace_root, session_workspace_dir
-from ..models import AuditLog, User
+from ..models import AuditLog, User, Workspace
 from ..models import Session as AgentSession
+from ..workspace_service import (
+    _MAX_FILES,
+    folder_summary,
+    orphan_direct_children,
+    validate_segment,
+)
 
 router = APIRouter(prefix="/api/admin/workspaces", tags=["admin-workspaces"])
-
-_MAX_FILES = 500
 
 
 def _match_session(
@@ -71,36 +74,6 @@ def _paginate_entries(
         reverse=True,
     )
     return ordered[offset : offset + limit], len(ordered)
-
-
-def _folder_summary(directory: str) -> dict[str, Any] | None:
-    """统计工作区文件夹：文件数 / 总字节 / 最近修改时间；目录不存在返回 None。"""
-    if not os.path.isdir(directory):
-        return None
-    file_count = 0
-    total_bytes = 0
-    last_mtime = 0.0
-    for root, _dirs, files in os.walk(directory):
-        for name in files:
-            path = os.path.join(root, name)
-            try:
-                st = os.stat(path)
-            except OSError:
-                continue
-            file_count += 1
-            total_bytes += st.st_size
-            if st.st_mtime > last_mtime:
-                last_mtime = st.st_mtime
-    return {
-        "name": os.path.basename(directory),
-        "path": directory,
-        "exists": True,
-        "file_count": file_count,
-        "total_bytes": total_bytes,
-        "updated_at": (
-            datetime.fromtimestamp(last_mtime, UTC).isoformat() if last_mtime else None
-        ),
-    }
 
 
 @router.get("")
@@ -165,21 +138,22 @@ def list_workspaces(
                 "deleted": session.deleted_at is not None,
                 "created_at": session.created_at.isoformat() if session.created_at else None,
                 "updated_at": session.updated_at.isoformat() if session.updated_at else None,
-                "folder": _folder_summary(directory),
+                "folder": folder_summary(directory),
             }
         )
 
     orphans = []
     if os.path.isdir(root):
-        # 孤立判定必须基于全部会话（含被过滤掉的），避免误把过滤会话当孤立目录
+        # 孤立判定基于全部会话（含被过滤掉的）+ **活跃**工作区行（行态区分，
+        # 软删工作区目录入清理面——设计稿 §7.3 V0.4.1）；工作区 uuid 目录若不在
+        # 保护集合将被 delete_orphan 误删（高危 B2），故必须排除。
         session_ids = {session.id for session, _username, _has in entries}
-        for name in sorted(os.listdir(root)):
-            if name in session_ids:
-                continue
-            directory = os.path.join(root, name)
-            if not os.path.isdir(directory):
-                continue
-            summary = _folder_summary(directory)
+        active_ws_ids = {
+            row.id
+            for row in db.query(Workspace.id).filter(Workspace.deleted_at.is_(None)).all()
+        }
+        for name in orphan_direct_children(root, session_ids | active_ws_ids):
+            summary = folder_summary(os.path.join(root, name))
             if summary:
                 orphans.append(summary)
 
@@ -210,7 +184,7 @@ def workspace_stats(
     """
     total_bytes = 0
     for (session_id,) in db.query(AgentSession.id).all():
-        summary = _folder_summary(session_workspace_dir(session_id))
+        summary = folder_summary(session_workspace_dir(session_id))
         if summary:
             total_bytes += summary["total_bytes"]
     return {"total_bytes": total_bytes}
@@ -229,22 +203,22 @@ def delete_orphan(
     ``.`` / ``..`` 与符号链接逃逸，避免误删工作区根以外的内容。
     """
     root = get_workspace_root()
-    if (
-        not folder_name
-        or folder_name in {".", ".."}
-        or "/" in folder_name
-        or "\\" in folder_name
-    ):
-        raise AppError(ErrorCode.VALIDATION, "非法文件夹名")
+    validate_segment(folder_name)
     directory = os.path.join(root, folder_name)
-    if os.path.dirname(directory) != root:
-        raise AppError(ErrorCode.VALIDATION, "非法文件夹名")
     if os.path.islink(directory) or not os.path.realpath(directory).startswith(
         os.path.realpath(root) + os.sep
     ):
         raise AppError(ErrorCode.VALIDATION, "非法文件夹名")
     if not os.path.isdir(directory):
         return {"ok": False, "reason": "not_found", "path": directory}
+    # 删除前集合复检（B2/删除竞态守卫）：活跃工作区/任何会话目录绝不可作孤儿清理
+    session_ids = {row[0] for row in db.query(AgentSession.id).all()}
+    active_ws_ids = {
+        row.id
+        for row in db.query(Workspace.id).filter(Workspace.deleted_at.is_(None)).all()
+    }
+    if folder_name in session_ids or folder_name in active_ws_ids:
+        raise AppError(ErrorCode.VALIDATION, "该目录属于活跃会话/工作区，禁止作孤儿清理")
     shutil.rmtree(directory)
     db.add(
         AuditLog(

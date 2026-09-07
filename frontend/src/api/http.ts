@@ -43,6 +43,9 @@ import {
   type StressSeriesResponse,
   type WorkspaceOverview,
   type WorkspaceFileList,
+  type UserWorkspace,
+  type UserWorkspaceList,
+  type UserWorkspaceFileList,
   type CompareSampleRow,
   type McpHealthCheckResponse,
 } from './types'
@@ -1230,6 +1233,34 @@ export const api = {
     },
     async deleteOrphan(folderName: string): Promise<{ ok: boolean; path: string }> {
       const { data } = await http.delete(`/api/admin/workspaces/orphans/${folderName}`)
+      return data
+    },
+  },
+
+  // 用户域 · 工作区（F1/G1：用户自管数据域；管理端清理见 api.admin.*）
+  workspaces: {
+    async list(params?: { include_deleted?: boolean }): Promise<UserWorkspaceList> {
+      const { data } = await http.get('/api/workspaces', { params })
+      return data
+    },
+    async create(name: string): Promise<UserWorkspace> {
+      const { data } = await http.post('/api/workspaces', { name })
+      return data
+    },
+    async rename(id: string, name: string): Promise<UserWorkspace> {
+      const { data } = await http.put(`/api/workspaces/${id}`, { name })
+      return data
+    },
+    async remove(id: string, purge = false): Promise<{ ok: boolean; deleted?: boolean; purged?: boolean }> {
+      const { data } = await http.delete(`/api/workspaces/${id}`, { params: { purge } })
+      return data
+    },
+    async listFiles(id: string, path = ''): Promise<UserWorkspaceFileList> {
+      const { data } = await http.get(`/api/workspaces/${id}/files`, { params: { path } })
+      return data
+    },
+    async createFolder(id: string, path: string, name: string): Promise<{ ok: boolean; path: string }> {
+      const { data } = await http.post(`/api/workspaces/${id}/files`, { path, name })
       return data
     },
   },
