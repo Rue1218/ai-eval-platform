@@ -50,6 +50,11 @@ class Settings(BaseSettings):
     # api 不再持有 privileged/bubblewrap。engine 为 "bwrap" 时开放通用 bash；
     # engine 为 "off" 时 bash 工具 fail-closed。
     sandbox_engine: str = "bwrap"
+    # F2/G4：bash 默认档位（《工作区与沙箱设计方案》§6，只声明文件效果）。
+    # "workspace-write" = 现状可写语义（F4 read-only 灰度前保持无行为变化）；
+    # F4 灰度时翻转 "read-only"（拒写 → 升档审批）。"none"（bash 不可达）由
+    # sandbox_engine=off fail-closed 承担，本字段不接受 none。
+    sandbox_bash_default_mode: str = "workspace-write"
     sandbox_memory_mb: int = 256  # 沙箱虚拟内存上限（MB）
     sandbox_nproc: int = 32  # 沙箱最大进程数（防 fork 炸弹）
     sandbox_cpu_s: int = 10  # 沙箱 CPU 时间上限（秒）

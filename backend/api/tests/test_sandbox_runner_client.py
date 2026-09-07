@@ -61,13 +61,40 @@ def test_run_ok_sends_payload_and_returns_output(monkeypatch) -> None:
     assert result == "hello"
     payload = json.loads(capture["request"].data.decode("utf-8"))
     assert payload["command"] == "echo hello"
-    assert payload["sandbox_dir"] == f"/data/workspaces/{_UUID}"
+    # F2/G4：sandbox_dir 键并入 policy{ mode, workspace_root }，不再单独发送
+    assert payload["policy"] == {
+        "mode": "workspace-write",
+        "workspace_root": f"/data/workspaces/{_UUID}",
+    }
+    assert "sandbox_dir" not in payload
     assert payload["timeout_s"] == 5.0
     assert payload["limits"] == {"memory_kb": 262144, "nproc": 32, "cpu_s": 10}
     assert payload["max_output_chars"] == 8000
     assert capture["request"].get_method() == "POST"
     assert "/run" in capture["request"].full_url
     assert capture["timeout"] >= 5.0
+
+
+def test_run_read_only_mode_carried_in_policy(monkeypatch) -> None:
+    """read-only 档位随 policy.mode 传递（F2/G4 bind mode 化）。"""
+    capture: dict = {}
+    _patch_urlopen(
+        monkeypatch,
+        {"ok": True, "output": "readonly"},
+        capture=capture,
+    )
+    result = sandbox_mod.run_sandboxed(
+        "cat a.txt",
+        sandbox_dir=f"/data/workspaces/{_UUID}",
+        mode="read-only",
+        timeout_s=5.0,
+    )
+    assert result == "readonly"
+    payload = json.loads(capture["request"].data.decode("utf-8"))
+    assert payload["policy"] == {
+        "mode": "read-only",
+        "workspace_root": f"/data/workspaces/{_UUID}",
+    }
 
 
 def test_run_stream_forwards_ndjson_output(monkeypatch) -> None:

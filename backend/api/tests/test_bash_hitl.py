@@ -1,4 +1,12 @@
-"""危险 bash 的 LangGraph 人工确认中断测试。"""
+"""bash 工具直通执行回归（F2/G4：静态裁决与词表删除后）。
+
+原 HITL 语义（危险/变更命令由 ``bash_approval_reason`` 静态判定触发
+``tool_approval`` 卡）自 F2/G4 起不存在——命令文本不再产生任何审批卡，
+一律进入受控沙箱按档位执行（档位准入 + 拒写升档卡语义随 F5/read-only 档
+接入，见《工作区与沙箱设计方案》§6.3/§6.4）。本文件回归锁定：
+bash 调用（含原「危险」命令）直通执行一次、无中断、tool_result 可见；
+bash 独占波次不变量保持。
+"""
 
 from __future__ import annotations
 
@@ -13,7 +21,6 @@ from app.harness.execution import (
     ToolRegistry,
     build_tool_node,
 )
-from app.harness.execution.dispatch import bash_block_reason
 from app.harness.memory import GraphState, InMemoryCheckpointer, SerializableRequest
 
 
@@ -23,11 +30,11 @@ def _request() -> SerializableRequest:
 
 
 def _build_graph(executed: list[str]):
-    """构造仅含 bash ToolNode 的检查点图，验证 interrupt/resume 的真实语义。"""
+    """构造仅含 bash ToolNode 的检查点图：首次执行即直通（无 interrupt）。"""
     registry = ToolRegistry()
 
     def handler(arguments: dict, _sandbox_dir: str | None = None) -> dict[str, str]:
-        """测试 handler：仅在确认恢复后记录命令，不触碰真实沙箱。"""
+        """测试 handler：记录命令，不触碰真实沙箱。"""
         executed.append(str(arguments["command"]))
         return {"summary": "命令已在测试执行器中运行"}
 
@@ -65,7 +72,7 @@ async def _collect(compiled, graph_input: object, config: dict) -> list[dict]:
 
 
 def _initial_state() -> GraphState:
-    """准备一条会删除工作区文件的原生 ToolCall。"""
+    """准备一条原「危险/变更」类命令的原生 ToolCall（词表删除前的卡触发样本）。"""
     return {
         "request": _request(),
         "pending_tool": {
@@ -77,27 +84,38 @@ def _initial_state() -> GraphState:
     }
 
 
-def test_dangerous_bash_interrupts_before_handler_execution() -> None:
-    """删除命令先产生确认载荷；handler 在用户确认前绝不能执行。"""
+def _tool_result_payloads(frames: list[dict]) -> list[dict]:
+    """从更新帧提取持久 tool_result 载荷。"""
+    payloads: list[dict] = []
+    for frame in frames:
+        for update in frame.values():
+            if isinstance(update, dict):
+                for event in update.get("pending_events", []):
+                    if event["kind"] == "tool_result":
+                        payloads.append(event["payload"])
+    return payloads
+
+
+def test_bash_dangerous_command_executes_directly_without_interrupt() -> None:
+    """F2/G4：删除类命令首轮即执行，不再产生任何 tool_approval 中断。"""
     executed: list[str] = []
     graph = _build_graph(executed)
-    config = {"configurable": {"thread_id": "bash-hitl-1", "session": {"id": "s-1"}}}
+    config = {"configurable": {"thread_id": "bash-passthrough-1", "session": {"id": "s-1"}}}
 
     frames = asyncio.run(_collect(graph, _initial_state(), config))
 
     interrupts = [frame["__interrupt__"][0].value for frame in frames if "__interrupt__" in frame]
-    assert len(interrupts) == 1
-    assert interrupts[0]["type"] == "tool_approval"
-    assert interrupts[0]["id"] == "call-delete"
-    assert interrupts[0]["allowed_decisions"] == ["approve", "reject"]
-    assert executed == []
+    assert interrupts == []
+    assert executed == ["rm -f result.md"]
+    payloads = _tool_result_payloads(frames)
+    assert payloads and payloads[0]["ok"] is True
 
 
-def test_approved_bash_resumes_with_custom_and_updates_stream() -> None:
-    """生产 _run_turn 使用 stream_mode=["custom", "updates"]，确认后仍须执行并回传结果。"""
+def test_bash_passthrough_reports_tool_result_via_updates() -> None:
+    """直通执行的 bash 向模型/ToolCard 回传成功 tool_result（custom+updates 流）。"""
     executed: list[str] = []
     graph = _build_graph(executed)
-    config = {"configurable": {"thread_id": "bash-hitl-stream", "session": {"id": "s-1"}}}
+    config = {"configurable": {"thread_id": "bash-passthrough-stream", "session": {"id": "s-1"}}}
 
     async def collect(graph_input: object) -> list[tuple[str, dict]]:
         frames: list[tuple[str, dict]] = []
@@ -107,11 +125,7 @@ def test_approved_bash_resumes_with_custom_and_updates_stream() -> None:
             frames.append((mode, frame))
         return frames
 
-    asyncio.run(collect(_initial_state()))
-    frames = asyncio.run(
-        collect(Command(resume={"id": "call-delete", "action": "approve"}))
-    )
-
+    frames = asyncio.run(collect(_initial_state()))
     assert executed == ["rm -f result.md"]
     payloads = [
         event["payload"]
@@ -123,15 +137,19 @@ def test_approved_bash_resumes_with_custom_and_updates_stream() -> None:
         if event["kind"] == "tool_result"
     ]
     assert payloads and payloads[0]["ok"] is True
+    # 首轮即完成：不存在等待审批的 paused 中断路径
+    assert all("__interrupt__" not in frame for _, frame in frames if isinstance(frame, dict))
 
 
-def test_approved_bash_resumes_same_toolnode_and_executes() -> None:
-    """确认后 Command(resume) 回到同一 ToolNode，才允许测试 handler 执行。"""
+def test_resume_after_passthrough_is_noop_observation() -> None:
+    """直通后携带原 call_id 的 resume 属陈旧决策——无卡可批、命令不重放。"""
     executed: list[str] = []
     graph = _build_graph(executed)
-    config = {"configurable": {"thread_id": "bash-hitl-2", "session": {"id": "s-1"}}}
+    config = {"configurable": {"thread_id": "bash-passthrough-2", "session": {"id": "s-1"}}}
     asyncio.run(_collect(graph, _initial_state(), config))
+    assert executed == ["rm -f result.md"]
 
+    # 图已走完（无挂起 interrupt）→ 陈旧 resume 不重放、无新执行副作用
     frames = asyncio.run(
         _collect(
             graph,
@@ -139,49 +157,14 @@ def test_approved_bash_resumes_same_toolnode_and_executes() -> None:
             config,
         )
     )
-
     assert executed == ["rm -f result.md"]
-    payloads = [
-        event["payload"]
+    assert not any(
+        event["kind"] == "tool_result"
         for frame in frames
         for update in frame.values()
         if isinstance(update, dict)
         for event in update.get("pending_events", [])
-        if event["kind"] == "tool_result"
-    ]
-    assert payloads and payloads[0]["ok"] is True
-
-
-def test_rejected_bash_never_executes_and_returns_rejected_result() -> None:
-    """拒绝不会执行 handler，并向模型和 ToolCard 返回可识别的 rejected 终态。"""
-    executed: list[str] = []
-    graph = _build_graph(executed)
-    config = {"configurable": {"thread_id": "bash-hitl-3", "session": {"id": "s-1"}}}
-    asyncio.run(_collect(graph, _initial_state(), config))
-
-    frames = asyncio.run(
-        _collect(
-            graph,
-            Command(resume={"id": "call-delete", "action": "reject"}),
-            config,
-        )
     )
-
-    assert executed == []
-    payloads = [
-        event["payload"]
-        for frame in frames
-        for update in frame.values()
-        if isinstance(update, dict)
-        for event in update.get("pending_events", [])
-        if event["kind"] == "tool_result"
-    ]
-    assert payloads and payloads[0]["status"] == "rejected"
-
-
-def test_nested_hard_blacklist_command_cannot_downgrade_to_approval() -> None:
-    """嵌套 shell 中的 sudo 仍硬拒绝，不能借确认卡绕过安全边界。"""
-    assert bash_block_reason("bash -c 'sudo id'") == "bash 命令命中黑名单：sudo"
 
 
 def test_bash_never_shares_parallel_wave() -> None:

@@ -15,7 +15,6 @@ import app.harness.execution.toolnode as toolnode_mod
 from app.errors import AppError, ErrorCode
 from app.harness.contracts import ToolCall
 from app.harness.execution import (
-    BASH_BLOCKLIST,
     NativeToolResultStore,
     ToolDef,
     ToolRegistry,
@@ -737,25 +736,23 @@ def test_all_defs_serializable_without_handler() -> None:
     json.dumps(definitions)
 
 
-def test_bash_blocklist_rejects_dangerous_commands() -> None:
-    """X-A7：提权/网络命令仍由硬黑名单拒绝，删除改由 HITL 确认。"""
-    for command in ("sudo whoami", "curl http://x", "wget http://x", "echo ok; sudo whoami"):
-        with pytest.raises(AppError) as error:
-            run_bash(command, sandbox_dir=".", timeout_s=1.0)
-        assert error.value.code == ErrorCode.VALIDATION
-    assert "rm" not in BASH_BLOCKLIST
+def test_bash_no_blocklist_static_adjudication(monkeypatch) -> None:
+    """F2/G4：词表与静态裁决删除（§6.3）——提权/网络/破坏命令不再字符串拦截。"""
+    import app.harness.execution.dispatch as dispatch
 
+    captured: dict[str, object] = {}
 
-def test_bash_approval_reason_covers_write_and_unknown_commands() -> None:
-    """危险或无法证明只读的 bash 必须进入确认卡，简单只读命令可直接执行。"""
-    from app.harness.execution.dispatch import bash_approval_reason, bash_block_reason
+    def fake_run_sandboxed(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["mode"] = kwargs["mode"]
+        return "沙箱输出"
 
-    assert bash_approval_reason("rm -f result.md") == "命令会删除或清空当前会话工作区中的文件"
-    assert bash_approval_reason("echo content > result.md")
-    assert bash_approval_reason("python -c 'print(1)'")
-    assert bash_approval_reason("cat result.md") is None
-    assert bash_approval_reason("git status --short") is None
-    assert bash_block_reason("echo ok; sudo whoami") == "bash 命令命中黑名单：sudo"
+    monkeypatch.setattr(dispatch, "run_sandboxed", fake_run_sandboxed)
+    for command in ("sudo whoami", "curl http://x", "wget http://x", "rm -f result.md"):
+        run_bash(command, sandbox_dir="/tmp/ws", mode="workspace-write", timeout_s=15.0)
+    # 全部命令直通沙箱（未拦截），档位原样透传
+    assert captured["cmd"] == "rm -f result.md"
+    assert captured["mode"] == "workspace-write"
 
 
 def test_run_bash_delegates_to_sandbox(monkeypatch) -> None:
@@ -767,6 +764,7 @@ def test_run_bash_delegates_to_sandbox(monkeypatch) -> None:
     def fake_run_sandboxed(cmd, **kwargs):
         captured["cmd"] = cmd
         captured["sandbox_dir"] = kwargs["sandbox_dir"]
+        captured["mode"] = kwargs["mode"]
         captured["timeout_s"] = kwargs["timeout_s"]
         return "沙箱输出"
 
@@ -775,6 +773,7 @@ def test_run_bash_delegates_to_sandbox(monkeypatch) -> None:
     assert result == "沙箱输出"
     assert captured["cmd"] == "echo hi"
     assert captured["sandbox_dir"] == "/tmp/ws"
+    assert captured["mode"] == "workspace-write"
     assert captured["timeout_s"] == 15.0
 
 

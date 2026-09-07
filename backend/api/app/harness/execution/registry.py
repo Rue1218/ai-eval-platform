@@ -1387,11 +1387,13 @@ def _bash_handler(
     sandbox_dir: str | None = None,
     context: object | None = None,
 ) -> object:
-    """bash 工具 handler：bwrap 沙箱内执行（阶段 3 开放通用 bash）。
+    """bash 工具 handler：bwrap 沙箱内按档位执行（阶段 3 开放通用 bash）。
 
     资源限制读 Settings（内存/进程数/CPU），``sandbox_dir`` 由平台注入，
-    禁止模型传参（M5-D7 红线）；引擎为 "off" 或 bwrap 不可用时 fail-closed
-    （VALIDATION），禁止降级为裸 subprocess。
+    禁止模型传参（M5-D7 红线）；F2/G4 后无字符串词表/静态裁决——档位
+    （settings.sandbox_bash_default_mode）只声明文件效果，物理边界由
+    降权容器 + bwrap（无网络、scope bind、资源受限）承担；引擎为 "off"
+    或 bwrap 不可用时 fail-closed（VALIDATION），禁止降级为裸 subprocess。
     """
     from app.config import settings
     from app.harness.execution.dispatch import BashResult, run_bash
@@ -1414,6 +1416,7 @@ def _bash_handler(
     output = run_bash(
         str(arguments.get("command", "")),
         sandbox_dir=sandbox_dir or "",
+        mode=settings.sandbox_bash_default_mode,
         timeout_s=bash_timeout_seconds(arguments),
         limits=limits,
         on_output=getattr(context, "report_output", None),

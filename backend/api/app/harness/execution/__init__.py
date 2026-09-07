@@ -3,7 +3,6 @@
 from .binding import bind_attachments
 from .context import ToolExecutionContext
 from .dispatch import (
-    BASH_BLOCKLIST,
     EditResult,
     ReadResult,
     TaskPlanResult,
@@ -43,7 +42,6 @@ from .workspace import (
 )
 
 __all__ = [
-    "BASH_BLOCKLIST",
     "EditResult",
     "InProcessProvider",
     "LONG_TOOLS",

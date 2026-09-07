@@ -64,6 +64,7 @@ def run_sandboxed(
     cmd: str,
     *,
     sandbox_dir: str,
+    mode: str = "workspace-write",
     timeout_s: float,
     limits: SandboxLimits | None = None,
     bwrap_bin: str = "/usr/bin/bwrap",
@@ -72,9 +73,13 @@ def run_sandboxed(
 ) -> str:
     """经 runner 在一次性 bwrap 沙箱内执行命令，返回 stdout；失败归一为 AppError。
 
-    ``bwrap_bin`` 仅为签名兼容保留（bwrap 路径由 runner 侧 env 决定，api 不
-    可指定——安全边界）。失败抛 AppError（TIMEOUT/VALIDATION/INTERNAL），
-    runner 不可达时 fail-closed（VALIDATION「沙箱引擎不可用」）。
+    F2/G4：``mode`` ∈ {"workspace-write", "read-only"}（文件效果档位，见
+    shared.sandbox_kernel.SANDBOX_MODES），经 ``policy{mode, workspace_root}``
+    传给 runner 按档位组装 bind（read-only → scope 只读）；``sandbox_dir``
+    参数名保留为兼容别名，语义 = policy.workspace_root。``bwrap_bin`` 仅为
+    签名兼容保留（bwrap 路径由 runner 侧 env 决定，api 不可指定——安全边界）。
+    失败抛 AppError（TIMEOUT/VALIDATION/INTERNAL），runner 不可达时
+    fail-closed（VALIDATION「沙箱引擎不可用」）。
     """
     if not cmd.strip():
         raise AppError(ErrorCode.VALIDATION, "bash 命令为空")
@@ -86,7 +91,7 @@ def run_sandboxed(
     try:
         payload = {
             "command": cmd,
-            "sandbox_dir": sandbox_dir,
+            "policy": {"mode": mode, "workspace_root": sandbox_dir},
             "timeout_s": timeout_s,
             "limits": {
                 "memory_kb": limits.memory_kb,

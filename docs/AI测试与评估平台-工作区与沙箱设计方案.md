@@ -1,9 +1,10 @@
 # AI 测试与评估平台 — 工作区与沙箱设计方案
 
-> 版本:V0.4.1（定稿候选） | 状态:终审通过（有条件），补丁完成待归档 | 日期:2026-09-07
+> 版本:V0.5（定稿候选） | 状态:G4（F2）落地登记；待 S3 空转观察期满 | 日期:2026-09-07
 > 范围：仅设计文档，不改代码。评审通过后按 §10 分期实施。
-> 与《沙箱执行方案重设计》V0.6 的关系：本稿正式化其 D7 并修订 D2/D3（词表全删 → 文件效果档位 + 拒写升档）；D1 降权、D4 并发、D6 放行 DoD（V0.6 扩 7 项）继续有效；组合路线图见 §10 G1–G6。
-> V0.4.1（2026-09-07）：第三轮终审补丁——**M-R3-6** 软删组合闭合：孤儿判定与守卫②按行态区分（仅活跃行受保护）、purge 事务内显式解绑、§7.2 导入 = 复活路径（旧会话自动恢复续用，MAJ-1 真闭环）、§9 口径对齐；**M-R3-7** 作废终态改「行锁内清卡 + `voided` 终态 + error + AuditLog」（对齐 expired 先例，消除卡残留与双终态）；契约组补 V1.75 范围清单/纪律句/卡归类统一/回归锁断言/`allowed_decisions` 漂移校正；§6.6 熔断规格句；陈旧 approve 用例与重新发起引导；勘误（彼稿版本引用 V0.6、§6.6 元注释、§10 F5 彼稿限定）。
+> 与《沙箱执行方案重设计》V0.6.1 的关系：本稿正式化其 D7 并修订 D2/D3（词表全删 → 文件效果档位 + 拒写升档）；D1 降权（V0.6.1 PoC 勘误形态）、D4 并发、D6 放行 DoD（扩 7 项）继续有效；组合路线图见 §10 G1–G6。
+> V0.5（2026-09-07）：**G4 = F2 落地登记**——§6.2 policy 契约与 runner 前缀校验（`resolve_workspace_path`）、bind mode 化（read-only/workspace-write）、§6.3 四处词表与静态裁决全删（含 sudo 残余项，依据按 G2 定稿形态改述，见 §6.3② 标注）、toolnode 直通（升档卡 F5 接入）、runner 双端 fail-closed 测试（policy 缺失/mode 非法 VALIDATION）；图级 tool_approval interrupt 端到端用例转 F5 升档卡接入恢复（test_bash_hitl/test_hybrid_h5_hitl 改写为直通回归，卡协议 ws 层用例保留）；门禁 api 881/runner 17/worker 50。
+> V0.4.1（2026-09-07，历史）：第三轮终审补丁——**M-R3-6** 软删组合闭合：孤儿判定与守卫②按行态区分（仅活跃行受保护）、purge 事务内显式解绑、§7.2 导入 = 复活路径（旧会话自动恢复续用，MAJ-1 真闭环）、§9 口径对齐；**M-R3-7** 作废终态改「行锁内清卡 + `voided` 终态 + error + AuditLog」（对齐 expired 先例，消除卡残留与双终态）；契约组补 V1.75 范围清单/纪律句/卡归类统一/回归锁断言/`allowed_decisions` 漂移校正；§6.6 熔断规格句；陈旧 approve 用例与重新发起引导；勘误（彼稿版本引用 V0.6、§6.6 元注释、§10 F5 彼稿限定）。
 > V0.4（2026-09-07，历史）：P5 复审收尾 + 裁决点落地（软删/同根/DELETE；见评审记录 §8）。
 
 ---
@@ -144,6 +145,7 @@
 
 1. **删除对象清单**：① `feedback/rules.py` 的 `BASH_BLOCK_PREFIXES` + `check_gates` 内联 bash 门禁分支（**toolnode 每次 bash 调用先过 gate**，早于 block/approval 判定）及其单测（`test_harness_feedback.py` 门禁用例）；② `sandbox_kernel.BASH_BLOCK_PREFIXES`（连同其误导性注释「批准后必须放行、runner 不得硬拒」——与 runner 现状无条件硬拒矛盾，一并修正）；③ `dispatch.py` 词表/正则（`bash_block_reason`/`bash_approval_reason` 静态词表路径）；④ runner `check_bash_blocklist` 调用。四处实现语义不等价（前缀 startswith vs 段切分正则；runner 拒集 ⊂ dispatch 拒集）——单一化等价性矩阵需补「前缀 vs 段切分」差异样例（如 `bash -c 'curl …'`），避免行为回退。
 2. **物理边界已覆盖其目标（B1：前置为 D1/S3 降权后的目标形态）**：`curl/wget/ssh/nc/scp`（`--unshare-net` 无网络，与降权无关、即时成立）、`rm/chmod/chown`（宿主目录只读 bind，破坏只限于沙箱视图且 `--tmpfs` 遮蔽敏感路径）、`sudo`（沙箱内非 root 无特权放大——**现状沙箱内为 userns root（`_build_bwrap_argv` 未设 `--uid/--gid`），该项仅在 S3 落地后成立**）。**过渡期（S3 前）**：`sudo` 前缀拦截保留为唯一残余词表项，**落点 = api 裁决层 `bash_block_reason` 仅保留 sudo 前缀一条**（其余词表与 gate 分支全删）；S3 合入后连同残余项一并删除（联动 §10 F2 依赖）。
+   > **G4（F2）落地改述（V0.5，2026-09-07）**：S3（G2）已合入部署，四处词表（含 sudo 残余项）按 §6.3 全删。依据按 G2 PoC 定稿形态改述（见 B 稿 D1 勘误块）：沙箱内 userns root 的宿主视角 = 容器 root，容器 cap 窄化（默认 caps + SYS_ADMIN）与 no-new-privileges 下 `sudo`/setuid 均无容器/宿主级特权放大——原「沙箱内非 root」目标形态已被 PoC 否决（非 root USER 下 `--cap-add` 不生效），删除判定改为按上述定稿形态成立，残余风险表与 §11 演练 4 口径同步（B 稿 V0.6.1）。
 3. **词表层不可靠且是漂移源（P6）**：字符串匹配既不完整（同义变体/拼接绕过/`bash -c` 嵌套）又难以维护（四处语义互有出入）。
 4. **破坏性操作准入改述（BLK-5）**：准入 = **档位授予（首条前一次性决策）+ 拒写升档审批（按次人工）** 两层——不再声称「档内破坏命令由审批把关」：`workspace-write` 会话内针对 scope 的破坏命令直接执行，风险由「授予决策 + 绑定会话 private + 属主自担 + 审计」承担（§11）；`read-only` 下内核拒写 + 升档卡为唯一写入口。UX 兜底（无网络工具白等超时）由工具 schema 说明与结果文案提示承担。
 

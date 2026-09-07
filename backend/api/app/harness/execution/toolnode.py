@@ -48,7 +48,6 @@ from .batch import (
 )
 from .binding import bind_attachments
 from .context import ToolExecutionContext
-from .dispatch import bash_approval_reason, bash_block_reason
 from .mcp import MCPClientManager
 from .native import NativeToolExecutor
 from .native_results import NativeToolResultStore, runtime_thread_id
@@ -352,39 +351,9 @@ def build_tool_node(
             finally:
                 if db is not None:
                     db.close()
-            # LangGraph HITL：所有无法静态证明只读的 bash 命令必须在副作用前暂停。
-            # call_id 同时是确认卡 ID，图从检查点恢复时会重进本节点并拿到 decision。
-            if call.name == "bash":
-                command = str(safe_args.get("command") or "")
-                if blocked := bash_block_reason(command):
-                    return failed("VALIDATION", blocked)
-                reason = bash_approval_reason(command)
-                if reason:
-                    decision = interrupt(
-                        {
-                            "type": "tool_approval",
-                            "id": call.call_id,
-                            "call_id": call.call_id,
-                            "name": call.name,
-                            "command": command,
-                            "reason": reason,
-                            "risk_level": "high",
-                            "sandbox_scope": "仅当前会话工作区可写；网络关闭、系统目录只读且资源受限。",
-                            "allowed_decisions": ["approve", "reject"],
-                        }
-                    )
-                    action = decision.get("action") if isinstance(decision, Mapping) else None
-                    approval_id = decision.get("id") if isinstance(decision, Mapping) else None
-                    if approval_id != call.call_id or action not in {"approve", "reject"}:
-                        return failed("VALIDATION", "确认结果无效，命令未执行")
-                    if action == "reject":
-                        return failed(
-                            "VALIDATION",
-                            "用户拒绝执行此 bash 命令",
-                            status="rejected",
-                            emit_error=False,
-                        )
-                    emit_progress("approved", "已获用户确认，正在进入受控沙箱执行")
+            # F2/G4：bash 字符串词表与静态裁决已删除（§6.3）——命令不再按文本
+            # 暂停/审批，直接进入受控沙箱执行（档位只声明文件效果）；拒写升档
+            # 审批卡（tool_approval 语义修订，§6.4）随 F5/read-only 档接入。
             ask_user_raw = None
             if call.name == "ask_user_question":
                 try:

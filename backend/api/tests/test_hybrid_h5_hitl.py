@@ -30,7 +30,7 @@ _BASH_REGISTRY.register(
         agent_id="worker.general",
         display_name="通用助手（测试含 bash）",
         capabilities=frozenset({"general"}),
-        allowed_tools=("read", "bash", "web_search"),
+        allowed_tools=("read", "bash", "web_search", "ask_user_question"),
         max_permission="code",
         description="测试用",
     )
@@ -124,7 +124,13 @@ def _engine_config(thread_id: str) -> dict:
     return {"configurable": {"thread_id": thread_id, "credentials": {"api_key": ""}}}
 
 
-# ─── 1. 图级：危险 bash interrupt → resume（approve/reject）───
+# ─── 1. 图级：bash 直通（F2/G4 静态裁决删除）───
+#
+# F2/G4 起 bash 不再因命令文本产生 tool_approval 卡（词表与静态裁决删除，
+# 《工作区与沙箱设计方案》§6.3）；图级 tool_approval interrupt/resume 的
+# 端到端语义改由 F5「拒写升档卡」接入时恢复覆盖（彼稿 §6.4、测试矩阵 F5
+# 集成列）。本组锁定直通回归：bash 进入执行、无中断、回合正常收尾、事件
+# 不重放；卡协议/落卡/ack 链路由本文件第 2–4 节继续保护。
 
 
 @pytest.fixture()
@@ -140,66 +146,32 @@ def _saver():
     return InMemorySaver()
 
 
-def test_graph_interrupt_then_approve_resume(_engine_on) -> None:
-    """bash 危险命令 interrupt → 检查点暂停 → approve resume → 图继续收尾。"""
+def test_graph_bash_passthrough_no_interrupt(_engine_on) -> None:
+    """F2/G4：bash（原危险/变更命令）直通执行——无任何 tool_approval 中断。"""
     thread_id = "h5-thread-1"
-    # H4 失败阶梯会在工具失败后允许一次 repair，因此恢复回合需要两次收尾响应。
+    # H4 失败阶梯：bash 工具失败（本机无沙箱）→ 允许一次 repair → 两次收尾响应
     gateway = _ScriptedGateway([_PLAN_OK, _REACT_BASH, _REACT_DONE, _REACT_DONE])
     agent = LangGraphAgent(
         gateway, agent_registry=_BASH_REGISTRY, checkpointer=_saver()
     )
     config = _engine_config(thread_id)
     interrupt_value, events = _collect_until_interrupt(agent, "排查一下测试环境异常", config)
-    if interrupt_value is None:
-        trace = [
-            (node, [e["kind"] for e in update.get("pending_events", [])] if isinstance(update, dict) else type(update).__name__)
-            for _mode, chunk in events
-            if isinstance(chunk, dict)
-            for node, update in chunk.items()
-        ]
-        raise AssertionError(f"未捕获 interrupt；图轨迹={trace}；调用={gateway.calls}")
-    assert interrupt_value.get("type") == "tool_approval"
-    assert interrupt_value.get("name") == "bash"
-    assert "touch" in interrupt_value.get("command", "")
-    assert "允许" not in interrupt_value.get("allowed_decisions", [])  # 只 approve/reject
-    assert asyncio.run(agent.ahas_pending_interrupt(thread_id)) is True
-    # 中断前已广播一次 tool_call（Act 阶段）；resume 回合不得重放
-    assert len([e for e in _all_pending(events) if e["kind"] == "tool_call"]) == 1
-    # resume approve：toolnode 放行执行（本机无 bwrap → 工具失败观察），H4 repair 后收尾
-    resumed = _resume(agent, config, {"action": "approve", "id": interrupt_value["id"]})
-    resumed_pending = _all_pending(resumed)
-    tool_calls_after = [e for e in resumed_pending if e["kind"] == "tool_call"]
-    assert not tool_calls_after  # 恢复回合不重放中断前的 tool_call（无重复事件）
-    completed = [e for e in resumed_pending if e["kind"] == "response.completed"]
-    assert completed, "resume 后回合应正常收尾"
-    assert asyncio.run(agent.ahas_pending_interrupt(thread_id)) is False
-    assert gateway.calls == 4  # plan + bash Act + repair 后两次收尾响应
 
-
-def test_graph_interrupt_then_reject_stops_command(_engine_on) -> None:
-    """reject resume：bash 不执行（rejected 观察），回合正常收尾。"""
-    thread_id = "h5-thread-2"
-    # reject 也会形成一次失败观察，H4 repair 阶梯需要第二次收尾响应。
-    gateway = _ScriptedGateway([_PLAN_OK, _REACT_BASH, _REACT_DONE, _REACT_DONE])
-    agent = LangGraphAgent(
-        gateway, agent_registry=_BASH_REGISTRY, checkpointer=_saver()
-    )
-    config = _engine_config(thread_id)
-    interrupt_value, events = _collect_until_interrupt(agent, "排查一下测试环境异常", config)
-    if interrupt_value is None:
-        trace = [
-            (node, [e["kind"] for e in update.get("pending_events", [])] if isinstance(update, dict) else type(update).__name__)
-            for _mode, chunk in events
-            if isinstance(chunk, dict)
-            for node, update in chunk.items()
-        ]
-        raise AssertionError(f"未捕获 interrupt；图轨迹={trace}；调用={gateway.calls}")
-    resumed = _resume(agent, config, {"action": "reject", "id": interrupt_value["id"]})
-    resumed_pending = _all_pending(resumed)
-    tool_results = [e for e in resumed_pending if e["kind"] == "tool_result"]
-    assert tool_results and tool_results[0]["payload"]["ok"] is False  # 拒绝不执行
-    completed = [e for e in resumed_pending if e["kind"] == "response.completed"]
+    assert interrupt_value is None, f"bash 直通后不应产生中断：{interrupt_value}"
+    # 事件不重放：bash 工具调用恰好一条（无中断、无 resume 路径）
+    all_events = _all_pending(events)
+    assert len([e for e in all_events if e["kind"] == "tool_call"]) == 1
+    tool_results = [e for e in all_events if e["kind"] == "tool_result"]
+    # 本机测试环境无沙箱 runner → 工具失败观察（fail-closed），回合仍正常收尾
+    assert tool_results and tool_results[0]["payload"]["ok"] is False
+    completed = [e for e in all_events if e["kind"] == "response.completed"]
     assert completed
+    assert asyncio.run(agent.ahas_pending_interrupt(thread_id)) is False
+
+
+# 注：图级 tool_approval/升档卡 interrupt→resume 端到端用例在 F5 接入升档
+# 审批时恢复（彼稿 §6.4 升档触发 = ToolNode 内 interrupt 路径，测试矩阵 F5
+# 集成列）；本文件第 2–4 节继续保护卡落库/ack/一次性 resume 协议。
 
 
 # ─── 2. 审批卡协议：落卡行锁 / meta / 一次性 nonce ───

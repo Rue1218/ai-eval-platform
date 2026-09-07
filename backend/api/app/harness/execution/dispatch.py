@@ -5,9 +5,11 @@ observation；日志脱敏（调 M8）。含受控目录文件工具（read/writ
 原生网络适配器（web_search/web_fetch）与 **bwrap 沙箱 bash**
 （阶段 3 开放通用 bash，安全边界见 ``sandbox.py``）。
 
-**bash 安全边界（阶段 3 bwrap 闭环）**：命令黑名单（纵深防御）+ 一次性
-bwrap 沙箱（无网络、工作区唯一可写、资源受限、超时整树清理）；黑名单与
-沙箱均失败即拒绝，**禁止降级为裸 subprocess**。
+**bash 安全边界（F2/G4 修订）**：无字符串词表/静态裁决（§6.3，物理边界
+覆盖：无网络、scope 按档位 bind、系统目录只读、资源受限、超时整树清理）；
+按档位（``mode`` ∈ workspace-write/read-only）执行——准入由「会话档位 +
+升档审批」承担（§6.1.1/§6.4），沙箱不可用时 fail-closed，**禁止降级为裸
+subprocess**。
 """
 
 from __future__ import annotations
@@ -17,8 +19,6 @@ import ipaddress
 import json
 import logging
 import os
-import re
-import shlex
 import socket
 import tempfile
 import time
@@ -87,89 +87,9 @@ ToolOutputCallback = Callable[[str, str, int | None], None]
 # 网络工具的阶段回调只描述生命周期，不包含 URL、正文或密钥。
 ToolProgressCallback = Callable[[str, str], None]
 
-# bash 命令硬黑名单（纵深防御；bwrap 沙箱之外的第二道防线）。
-#
-# ``rm`` / ``chmod`` / ``chown`` 等会改动会话工作区的命令不再在这里一律拒绝：
-# 它们会先走 LangGraph 的人工确认中断，得到用户明确确认后才能进入 bwrap。网络、
-# 提权和远程连接命令则不属于「可确认后执行」的范围，仍必须直接拒绝。
-BASH_BLOCKLIST: frozenset[str] = frozenset(
-    {"sudo", "curl", "wget", "nc", "ssh", "scp"}
-)
-_BASH_COMMAND_SEPARATOR = re.compile(r"(?:&&|\|\||[;|&\n])")
-# 嵌套 shell（如 ``bash -c 'sudo id'``）不会让 sudo 出现在命令段首词；仍必须
-# 识别其独立命令词，不能让人工确认卡意外放宽提权/网络/远程连接硬拒绝。
-_BASH_BLOCK_TOKEN = re.compile(
-    r"(?<![A-Za-z0-9_.-])(?:sudo|curl|wget|nc|ssh|scp)(?![A-Za-z0-9_.-])"
-)
-
-# 只读白名单足够小才能作为「无需确认」的可靠例外。未识别的命令、shell 展开和
-# 组合语法全部要求确认，宁可多问一次，也不能漏过会改动工作区的写操作。
-_BASH_READONLY_COMMANDS: frozenset[str] = frozenset(
-    {"cat", "diff", "du", "file", "head", "ls", "pwd", "stat", "tail", "wc", "grep"}
-)
-_BASH_SHELL_SYNTAX = re.compile(r"(?:[;&|<>`]|\$\(|\$\{|\n)")
-_BASH_DESTRUCTIVE_COMMANDS: frozenset[str] = frozenset(
-    {"rm", "rmdir", "unlink", "shred", "truncate"}
-)
-_BASH_MUTATING_COMMANDS: frozenset[str] = frozenset(
-    {"chmod", "chown", "cp", "dd", "install", "ln", "mkdir", "mv", "sed", "tee", "touch"}
-)
-
-
-def bash_block_reason(cmd: str) -> str | None:
-    """检查 bash 硬黑名单，返回命中原因；命中时不得进入人工确认卡。
-
-    这里与 ``run_bash`` 共用同一段切分逻辑，保证多段命令既不能绕过 Runner
-    的纵深防御，也不会出现「用户已确认但命令仍被硬拒绝」的误导性流程。
-    """
-    for segment in _BASH_COMMAND_SEPARATOR.split(cmd.strip()):
-        first = segment.strip().split(maxsplit=1)[0] if segment.strip() else ""
-        if first in BASH_BLOCKLIST:
-            return f"bash 命令命中黑名单：{first}"
-    # ``bash -c 'sudo id'``、``env ssh host`` 等嵌套/包装写法也不能降级为
-    # “等待确认”：命中任一硬黑名单命令词就应直接结束，不调用 Runner。
-    if matched := _BASH_BLOCK_TOKEN.search(cmd):
-        return f"bash 命令命中黑名单：{matched.group(0)}"
-    return None
-
-
-def bash_approval_reason(cmd: str) -> str | None:
-    """识别 bash 是否必须人工确认，返回供确认卡展示的脱敏风险原因。
-
-    工具调用始终运行在无网络、仅会话工作区可写的 bwrap 沙箱中；本函数只决定
-    是否暂停等待人工审核，不放宽沙箱或硬黑名单。``None`` 仅表示确定的简单
-    只读命令，可直接执行。
-    """
-    command = cmd.strip()
-    if not command:
-        return "命令为空或无法判断其影响范围"
-    if bash_block_reason(command):
-        # 调用方会优先将其归一为 VALIDATION；本分支只是防止后续逻辑误判。
-        return None
-    if _BASH_SHELL_SYNTAX.search(command):
-        return "命令包含重定向、管道、变量展开或多段 shell 语法，无法证明只读"
-    try:
-        parts = shlex.split(command)
-    except ValueError:
-        return "命令引号或转义格式异常，无法安全分析"
-    if not parts:
-        return "命令为空或无法判断其影响范围"
-    program = parts[0].rsplit("/", maxsplit=1)[-1]
-    if program in _BASH_DESTRUCTIVE_COMMANDS:
-        return "命令会删除或清空当前会话工作区中的文件"
-    if program in _BASH_MUTATING_COMMANDS:
-        return "命令可能创建、覆盖、移动文件或修改文件权限"
-    if program == "git":
-        if len(parts) > 1 and parts[1] in {"diff", "log", "show", "status"}:
-            return None
-        return "Git 子命令可能修改当前会话工作区"
-    if program == "find":
-        if any(part in {"-delete", "-exec", "-execdir", "-ok", "-okdir"} for part in parts[1:]):
-            return "find 命令包含会执行或删除文件的动作"
-        return None
-    if program in _BASH_READONLY_COMMANDS:
-        return None
-    return "命令不在受控只读白名单中，无法证明不会修改会话工作区"
+# F2/G4：bash 字符串词表与静态裁决已全部删除（《工作区与沙箱设计方案》§6.3）
+# ——准入不再对命令文本做静态分析：网络命令由 bwrap --unshare-net 覆盖、提权
+# 与破坏命令由「降权容器 + scope bind + 会话档位/升档审批」承担（§6.1.1/§6.4）。
 
 # SSRF 防护：web_fetch 抓取目标命中以下内网/回环/链路本地/保留地址段即拒绝。
 # 含 IPv4 保留段、IPv6 回环/ULA/链路本地/多播与文档地址（RFC 1918/6890/3849 等）。
@@ -239,26 +159,25 @@ def run_bash(
     cmd: str,
     *,
     sandbox_dir: str,
+    mode: str = "workspace-write",
     timeout_s: float,
     limits: SandboxLimits | None = None,
     on_output: ToolOutputCallback | None = None,
 ) -> str:
-    """bwrap 沙箱 + 黑名单双防护执行 shell 命令（阶段 3 开放通用 bash）。
+    """按档位经 bwrap 沙箱执行 shell 命令（阶段 3 开放通用 bash，F2/G4）。
 
-    黑名单命中抛 AppError(VALIDATION)；其余经 ``run_sandboxed`` 在一次性
-    bwrap 沙箱内执行（无网络、会话工作区唯一可写、资源受限、超时整树清理）；
-    bwrap 不可用时 fail-closed，禁止降级为裸 subprocess。
+    无字符串词表/静态裁决（§6.3）——准入由档位（文件效果）+ 物理边界承担：
+    经 ``run_sandboxed`` 在一次性 bwrap 沙箱内执行（按 mode 组装 scope bind、
+    无网络、资源受限、超时整树清理）；bwrap 不可用时 fail-closed，禁止
+    降级为裸 subprocess。
     """
     command = cmd.strip()
     if not command:
         raise AppError(ErrorCode.VALIDATION, "bash 命令为空")
-    # 不只检查整条命令首词，避免 ``echo ok; sudo ...`` 绕过纵深防御；bwrap
-    # 仍是最终隔离边界，黑名单不能替代沙箱。
-    if blocked := bash_block_reason(command):
-        raise AppError(ErrorCode.VALIDATION, blocked)
     return run_sandboxed(
         command,
         sandbox_dir=sandbox_dir,
+        mode=mode,
         timeout_s=timeout_s,
         limits=limits,
         on_output=(
