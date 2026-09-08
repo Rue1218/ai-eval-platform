@@ -414,6 +414,30 @@ async def _handle_approval_ack(
         raise AppError(ErrorCode.VALIDATION, "审批卡缺少恢复线程标识")
     if not str(meta.get("resume_nonce") or ""):
         raise AppError(ErrorCode.VALIDATION, "审批卡缺少一次性恢复令牌")
+    # F5/G6（M-R3-7）：清卡提交前预检检查点存在性——线程必须仍停在待恢复的
+    # 中断处（检查点缺失/回合已完成/容量淘汰）→ 行锁内清卡 + voided 终态 +
+    # error，绝不静默放行也不留卡残留（终态事件与清卡对齐 expired 先例）。
+    # 预检经模块级函数（测试可注入替身）；approve/reject 均须可恢复才消费卡。
+    if not await _approval_resume_probe(thread_id):
+        _clear_pending_confirm(db, session_id)
+        db.commit()
+        await _emit_persistent(
+            db,
+            websocket,
+            state,
+            session_id,
+            "approval_terminal",
+            {
+                "approval_id": approval_id,
+                "outcome": "voided",
+                "reason": "审批卡对应回合已不可恢复（检查点缺失），操作作废，请重新发起该操作",
+            },
+            task_id=None,
+        )
+        raise AppError(
+            ErrorCode.VALIDATION,
+            "审批卡对应执行回合已不可恢复（检查点缺失），操作已作废，请重新发起该操作",
+        )
     _clear_pending_confirm(db, session_id)
     db.commit()
     await _emit_persistent(
@@ -539,8 +563,33 @@ def _start_card_resume(
                 resume=resume_value,
                 resume_thread_id=thread_id,
             )
-        except Exception:  # 恢复失败不撤销已清卡：回执记录留 ws_events 可审计
+        except Exception:  # F5/G6（M-R3-7）：恢复失败不再只记日志——广播终态
+            # 事件（recovery_failed，卡已先行清空，与 expired/voided 同族终态，
+            # 供前端/审计确认无悬挂续跑）；广播失败不影响主日志留痕。
             logger.exception("%s恢复回合失败 session=%s", log_label, session_id)
+            try:
+                approval_id = str(resume_value.get("id") or "")
+                db_session = SessionLocal()
+                if db_session is None:
+                    return
+                try:
+                    await _emit_persistent(
+                        db_session,
+                        websocket,
+                        state,
+                        session_id,
+                        "approval_terminal",
+                        {
+                            "approval_id": approval_id,
+                            "outcome": "recovery_failed",
+                            "reason": f"{log_label}回合恢复失败（检查点不可用），请重新发起该操作",
+                        },
+                        task_id=None,
+                    )
+                finally:
+                    db_session.close()
+            except Exception:  # noqa: BLE001 —— 终态广播失败不回卷主日志
+                logger.debug("审批恢复失败终态广播异常 session=%s", session_id)
 
     task = asyncio.create_task(runner(), name=f"{log_label}-resume-{session_id}")
     try:
@@ -570,6 +619,19 @@ def _start_approval_resume(
         {"action": action, "id": approval_id},
         log_label="审批",
     )
+
+
+async def _approval_resume_probe(thread_id: str) -> bool:
+    """审批卡恢复可行性预检（F5/G6 M-R3-7）。
+
+    判定 = 线程仍停在待恢复的人工中断处（checkpoint 存在且 next 非空）；
+    检查点缺失/回合已完成 → False（走 voided 终态，不消费卡）。
+    """
+    try:
+        return await _AGENT.ahas_pending_interrupt(thread_id)
+    except Exception:  # noqa: BLE001 —— 预检失败按不可恢复处理（fail-closed）
+        logger.exception("审批卡恢复预检异常 thread=%s", thread_id)
+        return False
 
 
 async def _handle_confirm_ack(

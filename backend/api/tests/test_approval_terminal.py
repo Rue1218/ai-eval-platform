@@ -261,3 +261,65 @@ async def test_expiry_scan_clears_only_overdue_and_is_idempotent(monkeypatch) ->
     again = await ws._expire_overdue_approvals_once()
     assert again == 0
     assert [e for e in emitted if e[0] == "approval_terminal"] == terminal
+
+
+@pytest.mark.asyncio
+async def test_approval_ack_voided_when_checkpoint_missing(monkeypatch) -> None:
+    """F5/G6（M-R3-7）：恢复预检失败（检查点缺失）→ 行锁内清卡 + voided 终态 +
+    error；绝不 resume（防静默丢卡/悬挂续跑）。"""
+    started: list = []
+    monkeypatch.setattr(ws, "_start_approval_resume", lambda *_a, **_k: started.append(1) or object())
+    emitted: list[tuple[str, dict]] = []
+
+    async def fake_emit(_db, _ws, _st, _sid, event, payload, **kw):
+        emitted.append((event, payload))
+        return True
+
+    async def probe_false(_thread_id: str) -> bool:
+        return False
+
+    monkeypatch.setattr(ws, _EMIT, fake_emit)
+    monkeypatch.setattr(ws, "_approval_resume_probe", probe_false)
+    db = _FakeDb()
+    db.rows[0].pending_confirm = _card(created_at=_now())
+    db.rows[0].pending_confirm_author_id = "u-1"
+    with pytest.raises(AppError) as exc:
+        await ws._handle_approval_ack(
+            db, object(), ws._ConnectionState(), "s-1", "u-1",
+            {"action": "approve", "id": "call-1"},
+        )
+    assert exc.value.code == ErrorCode.VALIDATION
+    assert db.rows[0].pending_confirm is None  # 卡已清（作废不留残留）
+    assert started == []  # 不 resume
+    terminal = [e for e in emitted if e[0] == "approval_terminal"]
+    assert terminal and terminal[-1][1]["outcome"] == "voided"
+    assert terminal[-1][1]["approval_id"] == "call-1"
+    assert "检查点" in terminal[-1][1]["reason"]
+
+
+@pytest.mark.asyncio
+async def test_approval_ack_resumable_probe_passes(monkeypatch) -> None:
+    """F5/G6：预检通过（检查点存在）→ 正常清卡 + resume（既有语义不回归）。"""
+    started: list = []
+    monkeypatch.setattr(ws, "_start_approval_resume", lambda *_a, **_k: started.append(1) or object())
+    emitted: list[tuple[str, dict]] = []
+
+    async def fake_emit(_db, _ws, _st, _sid, event, payload, **kw):
+        emitted.append((event, payload))
+        return True
+
+    async def probe_true(_thread_id: str) -> bool:
+        return True
+
+    monkeypatch.setattr(ws, _EMIT, fake_emit)
+    monkeypatch.setattr(ws, "_approval_resume_probe", probe_true)
+    db = _FakeDb()
+    db.rows[0].pending_confirm = _card(created_at=_now())
+    db.rows[0].pending_confirm_author_id = "u-1"
+    await ws._handle_approval_ack(
+        db, object(), ws._ConnectionState(), "s-1", "u-1",
+        {"action": "approve", "id": "call-1"},
+    )
+    assert db.rows[0].pending_confirm is None
+    assert started == [1]  # 预检通过 → resume 照常
+    assert not [e for e in emitted if e[0] == "approval_terminal"]

@@ -1,7 +1,21 @@
 # AI 测试与评估平台 — 工作区与沙箱设计方案
 
-> 版本:V0.6（定稿候选） | 状态:G5（F3）落地登记；F4 灰度待 S3 观察与部署决策 | 日期:2026-09-07
+> 版本:V0.6.1（定稿候选） | 状态:G5（F3）落地登记；**F5 核心代码开发完成（升档审批 G6a + 配额/终态 G6b，feat/sandbox-g6-quota 链）**，放行仍待 F4 灰度（S3 观察期满后部署决策） | 日期:2026-09-08
 > 范围：仅设计文档，不改代码。评审通过后按 §10 分期实施。
+> V0.6.1（2026-09-08）：G6/F5 代码落地登记（两个链式 PR，全部开关后/默认关，
+> 生产零行为变化）——**G6a（feat/sandbox-g6-escalation）**：DENIED 错误码全链
+> （HTTP 403 + kernel EROFS 证据识别 → api 归一）；toolnode 自动升档卡
+> （`agent_escalation_approval_enabled` 默认关；denied 帧 + interrupt
+> reason=escalation → approve 以 workspace-write 重放恰好一次，reject 走失败
+> 阶梯，防环）；AppError 保码修复；`ToolExecutionContext.sandbox_mode` 档位
+> 接缝；失败阶梯排除 escalation 中间帧（MAJ-9②）。**G6b（本稿）**：磁盘配额
+> §6.6 代码（`workspace_quota_bytes` 默认 1GiB + `sandbox_volume_watermark_bytes`
+> 默认 512MiB；写前检查 TTL 缓存 du + 卷水位熔断优先；挂点 = dispatch 直写
+> write/edit 净增 + workspace-write bash 写前；VALIDATION 码不触发升档链）与
+> M-R3-7 终态落地（ack 行锁内检查点预检 `_approval_resume_probe` → 缺失清卡
+> + `voided` 终态 + error；resume 恢复失败 → `recovery_failed` 终态广播；前端
+> ApprovalCard/Agent.vue 四终态成组扩展；API.md approval_terminal outcome 修订）。
+> 门禁 api 949/runner 18/worker 50。
 > 与《沙箱执行方案重设计》V0.6.1 的关系：本稿正式化其 D7 并修订 D2/D3（词表全删 → 文件效果档位 + 拒写升档）；D1 降权（V0.6.1 PoC 勘误形态）、D4 并发、D6 放行 DoD（扩 7 项）继续有效；组合路线图见 §10 G1–G6。
 > V0.6（2026-09-07）：**G5 = F3 会话绑定接线落地登记**——`POST /api/sessions` 增量 `workspace_id/scope_path`（创建固化、仅 private、属主校验 + `ensure_workspace_scope` 目录就绪、AuditLog `session_workspace_bind`）；新增 `resolve_session_sandbox` 唯一沙箱解析入口（§5 校验链落地：绑定失效 fail-closed 不回落 legacy），替换 ws.py 注入点；已绑定转 team 拒绝（BLK-4）；`SessionOut` 绑定字段 + `workspace_name`；前端草稿「绑定工作区」预选 + 列表/顶栏绑定展示（初版仅根 scope）；API.md V1.76 / AGENTS V2.0 契约留档。附件 staging 仍落 legacy（绑定会话附件归属随绑定迁移留评审，见 §12 待决点 8）。F4 read-only 档灰度（§9.1 判据 + 部署翻转 `sandbox_bash_default_mode`）与 G6/F5 未交付。
 > V0.5（2026-09-07）：**G4 = F2 落地登记**——§6.2 policy 契约与 runner 前缀校验（`resolve_workspace_path`）、bind mode 化（read-only/workspace-write）、§6.3 四处词表与静态裁决全删（含 sudo 残余项，依据按 G2 定稿形态改述，见 §6.3② 标注）、toolnode 直通（升档卡 F5 接入）、runner 双端 fail-closed 测试（policy 缺失/mode 非法 VALIDATION）；图级 tool_approval interrupt 端到端用例转 F5 升档卡接入恢复（test_bash_hitl/test_hybrid_h5_hitl 改写为直通回归，卡协议 ws 层用例保留）；门禁 api 881/runner 17/worker 50。

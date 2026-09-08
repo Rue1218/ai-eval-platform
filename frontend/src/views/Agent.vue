@@ -1565,12 +1565,12 @@ async function loadSessionHistory(sid: string): Promise<number> {
         )
         if (target) target.item.approvalDone = p.action === 'approve' ? 'approved' : 'rejected'
       } else if (ev.event === 'approval_terminal') {
-        // V1.73：历史审批卡终态（expired 超时 / cancelled 放弃）只读回放
+        // V1.73/F5-G6：历史审批卡终态只读回放（expired/cancelled/voided/recovery_failed）
         const target = [...rawList].reverse().find(
           x => x.item.type === 'toolApproval' && x.item.approval?.id === p.approval_id,
         )
-        if (target && p.outcome === 'expired') target.item.approvalDone = 'expired'
-        else if (target && p.outcome === 'cancelled') target.item.approvalDone = 'cancelled'
+        const terminal = ['expired', 'cancelled', 'voided', 'recovery_failed'].includes(p.outcome)
+        if (target && terminal) target.item.approvalDone = p.outcome
       } else if (ev.event === 'clarify') {
         // V1.72（dsh #1）：历史澄清卡只读回放；其后紧跟的 clarify_ack 会盖章终态。
         rawList.push({
@@ -2268,12 +2268,14 @@ function handleWsEvent(ev: WsServerEvent) {
       break
     }
     case 'approval_terminal': {
-      // V1.73（#3）：审批卡终态——expired（TTL 超时）→ 卡失效禁操作；
-      // cancelled（/stop 放弃）→ 与用户 reject 区分的另一终态。
+      // V1.73（#3）：审批卡终态——expired（TTL 超时）/cancelled（/stop 放弃）
+      // 与用户 reject 区分；F5/G6（M-R3-7）成组扩展：voided（检查点缺失卡
+      // 作废）/recovery_failed（resume 恢复失败）→ 同为终态禁操作。
       const target = [...events.value].reverse().find(
         e => e.type === 'toolApproval' && e.approval?.id === p.approval_id,
       )
-      if (target && (p.outcome === 'expired' || p.outcome === 'cancelled')) {
+      const terminal = ['expired', 'cancelled', 'voided', 'recovery_failed'].includes(p.outcome)
+      if (target && terminal) {
         target.approvalDone = p.outcome
         target.streaming = false
         setCurrentGenerating(false)
@@ -2840,11 +2842,12 @@ interface StreamItem {
   summary?: string
   open?: boolean
   fieldErrors?: Record<string, string>
-  // 工具审批卡（H5 HITL，API.md V1.70 / V1.73）：approval 为中断载荷快照；
-  // approvalDone 由 tool_approval_ack 回执盖章（approved/rejected）或
-  // approval_terminal 终态事件（expired 超时 / cancelled 放弃）驱动。
+  // 工具审批卡（H5 HITL，API.md V1.70 / V1.73 / F5-G6）：approval 为中断载荷
+  // 快照；approvalDone 由 tool_approval_ack 回执盖章（approved/rejected）或
+  // approval_terminal 终态事件驱动（expired 超时 / cancelled 放弃 /
+  // voided 检查点缺失作废 / recovery_failed 恢复失败——M-R3-7 成组扩展）。
   approval?: ToolApprovalPayload | null
-  approvalDone?: 'approved' | 'rejected' | 'expired' | 'cancelled' | null
+  approvalDone?: 'approved' | 'rejected' | 'expired' | 'cancelled' | 'voided' | 'recovery_failed' | null
   // 澄清卡（V1.72 / dsh #1，API.md §4.3）：clarify 为中断问卷快照；
   // clarifyDone 由 clarify_reply 乐观盖章 + clarify_ack 广播回执确认。
   clarify?: ClarifyPayload | null
