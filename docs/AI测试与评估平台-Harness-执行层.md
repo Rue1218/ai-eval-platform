@@ -3,8 +3,8 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 执行层模块设计 |
-| 版本 | V0.5.1 |
-| 审查日期 | 2026-08-24 |
+| 版本 | V0.5.2 |
+| 审查日期 | 2026-09-09 |
 | 文档性质 | 模块设计说明书（需求发散 + 架构设计 + 接口签名） |
 | 适用模块 | M5 执行层（`app/harness/execution/` + `app/agent/react.py`） |
 | 上游权威 | Harness 需求文档 V1.5.0 §4.5、§2.4、§7、§9；API.md V1.22 §4.3；PRD §5.1.3 |
@@ -404,6 +404,18 @@ def assert_no_orm_leak(obj: object) -> None:
 
 本文档仅设计执行层，不改变任何 API、数据库、前端或 Agent 运行代码。
 
+## AgentLoop v2 执行增量（V0.5.2，2026-09-09）
 
+继续以现有 ToolRegistry 为工具定义唯一来源。新桥当前选择 read、write、edit、web_search、web_fetch、bash、ask_user_question、task.create/status/cancel；不复制源项目全部工具。模型参数经显式字段转换和真实 schema 校验，再进行权限、工作区和审批检查。
 
+调度采用滚动并行只读工具、独占副作用屏障与模型调用顺序提交结果。普通 failed/denied 不使兄弟调用失败；取消等待本地线程/MCP 真实结束。MCP 新路径显式使用 join_on_cancel，旧调用保持原默认值。业务任务 prepare 与 enqueue 分离，确认时重新校验冻结 spec 和权限，在同一事务写入任务、审计与 Agent 回执。
 
+bash 只经 Runner/bwrap；新执行需要内部认证、实例代次、幂等执行 ID 和受限 cgroup v2。只有 not_started/cgroup_empty 等可信证据可证明安全终止。HTTP 超时不是取消完成。旧 Native 入口也检查持久工作区 guard，防止切回旧会话后绕过未知执行隔离。
+
+### 本次修改代码文件与作用清单
+
+- `backend/api/app/harness/execution/loop_bridge.py`、`loop_tools.py`、`scheduler.py`、`approval.py`：工具映射、六类结果、并行屏障与审批。
+- `backend/api/app/harness/execution/task_tools.py`、`mcp/manager.py`：复用业务准备校验与可取消 MCP 生命周期。
+- `backend/api/app/harness/execution/loop_runner.py`：带请求指纹与 Runner 代次的执行/查询/取消客户端。
+- `backend/api/app/harness/execution/workspace_guard.py`、`native.py`：跨旧、新执行路径隔离。
+- `backend/runner/main.py`、`backend/shared/sandbox_kernel.py`：受控执行协议、停止证据与 cgroup 收敛。

@@ -22,7 +22,7 @@ from app.harness.execution import (
 )
 from app.harness.execution.mcp import ToolExecutionContext
 from app.harness.execution.task_tools import cancel_task_safe, create_task_safe, status_task_safe
-from app.models import AuditLog, Dataset, Task, TaskEvent
+from app.models import AuditLog, Dataset, ProtocolProfile, Task, TaskEvent
 from app.models import Session as AgentSession
 
 
@@ -72,9 +72,10 @@ class _Query:
 class _FakeDb:
     """覆盖 task_tools 所需 query/get/add/flush/commit/rollback/close 的最小会话桩。"""
 
-    def __init__(self, *, session_row=None, tasks=None, task_query=None, datasets=None, fail_integrity=False):
+    def __init__(self, *, session_row=None, tasks=None, task_query=None, datasets=None, profiles=None, fail_integrity=False):
         self._session_row = session_row
         self._tasks = dict(tasks or {})
+        self._profiles = {"p1": ProtocolProfile(id="p1", created_by="u1")} if profiles is None else dict(profiles)
         self._task_query = task_query
         self._datasets = dict(
             {"d1": Dataset(id="d1", name="测试数据集")}
@@ -97,6 +98,8 @@ class _FakeDb:
     def get(self, model, pk):
         if model is Task:
             return self._tasks.get(pk)
+        if model is ProtocolProfile:
+            return self._profiles.get(pk)
         return None
 
     def add(self, obj):

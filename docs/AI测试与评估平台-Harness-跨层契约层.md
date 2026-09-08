@@ -3,8 +3,8 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 跨层契约层模块设计 |
-| 版本 | V0.4.2 |
-| 审查日期 | 2026-08-24 |
+| 版本 | V0.4.3 |
+| 审查日期 | 2026-09-09 |
 | 文档性质 | 模块设计说明书（需求发散 + 架构设计） |
 | 适用模块 | M7 跨层契约层（`app/harness/contracts/`） |
 | 上游权威 | Harness 需求文档 V1.4.4 §2.5、§4 各层、§7、§9；API.md V1.22 §4.3/§4.4/§5；PRD §5.1.3 |
@@ -339,3 +339,17 @@ def validate_plan_artifact(data: dict) -> PlanArtifact:
 
 本文档仅设计契约层，不改变任何 API、数据库、前端或 Agent 运行代码。
 
+## AgentLoop v2 契约增量（V0.4.3，2026-09-09）
+
+本节记录本次实际后端增量；上文历史设计声明不涵盖本节。API.md V1.77 为公开字段权威。
+
+源工具调用保留 `id/name/args/arguments_raw/parse_error`；工具声明使用 `ToolSpec.parameters`，通过显式 codec 转入平台工具。结果状态为 succeeded、failed、denied、cancelled、not_started、outcome_unknown。模型流统一文本、reasoning、原生工具增量、Done、ProviderItem 与 ProtocolState；EOF 不自动等价于正常 finish。
+
+原始事实的 seq、WS v2 的 cursor 和旧 ws_events.event_id 分工独立。持久投影有 cursor，命令回执、临时正文和 reasoning chunk 无 cursor。`turn.end` 是回合终态；`assistant.end` 仅关闭一次模型输出。所有卡片回执校验身份、turn/attempt/call、nonce 与 TTL。
+
+### 本次修改代码文件与作用清单
+
+- `backend/api/app/llm/loop_contracts.py`：规范请求、消息、chunk、工具与供应商状态。
+- `backend/api/app/harness/contracts/loop_events.py`：源事件 schema catalog、生产者与关联字段。
+- `backend/api/app/agent/events.py`：事实到公开帧/诊断轨迹投影。
+- `backend/api/app/routers/ws_v2.py`：严格命令解析、快照、补发、背压与 ACL。

@@ -2,7 +2,8 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.76 |
+| 文档版本 | V1.77 |
+| WS v2 修订日期 | 2026-09-09（§4A，新引擎契约登记） |
 | 对应 PRD | V1.18（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.6.0（骨架化纯对话；JSON 仍以本文为准） |
@@ -1862,6 +1863,144 @@ MCP/平台短工具中文名（ToolCard 标题；原生基础工具 `read` / `wr
 - Agent 进程禁止同步执行 `benchmark.run` / `rag.evaluate` / `testcase.generate` / `stress.run`。
 
 ---
+
+
+## 4A. Agent Loop WebSocket v2（V1.77，2026-09-09）
+
+本节按《AgentLoop后端架构设计》V0.3 §11 登记，独立于 §4 legacy 协议。
+新增会话字段 `engine_version: "legacy" | "agent_loop_v2"`，创建请求可选且默认
+`legacy`，响应返回固定引擎版本；禁止通过 WS 或更新接口切换历史会话引擎。
+`/ws/agent/v2?ticket=...` 仅服务 agent_loop_v2，旧 `/ws/agent` 仅服务 legacy。
+沿用登录 Cookie 换取的单次短票，校验类型、jti、有效期、用户禁用状态与 auth_version；
+失败关闭 4401。会话不可见/删除关闭 4404。不接受客户端 actor、凭据、沙箱路径。
+
+### 4A.1 上行与协商
+
+连接返回 `hello`、`capabilities`；客户端首个会话操作为 `subscribe`，以
+`protocol_version=2` 明确协商。每连接至多订阅一个会话，换会话须先退订。
+公共头严格为 `{protocol_version:2,type,request_id,session_id,data}`；
+未知字段、旧 last_event_id、非整数游标、版本不匹配均拒绝，不回落旧协议。
+request_id/session_id/交互标识为非空字符串，长度不超过 128；nonce 不超过 512。
+单帧 UTF-8 上限 64 KiB；JSON 重复键、NaN/Infinity、隐式类型转换均拒绝。
+客户端时钟不参与鉴权、TTL 或事件排序。
+
+| type | data（未注明可选即必填） |
+| :--- | :--- |
+| subscribe | `after_cursor:int>=0=0, view:"semantic"="semantic"` |
+| unsubscribe | 空对象 |
+| turn.submit | `client_message_id, content`；可选 `attachment_refs:string[]=[], reasoning_effort:off/low/medium/high/xhigh/max`；附件只接受平台引用，不接受路径或任意模型参数 |
+| turn.cancel | `turn_id` |
+| approval.respond | `interaction_id, turn_id, turn:int>=1, attempt_id, call_id, nonce, decision:allow/deny/always` |
+| question.respond | 同上交互身份，改为 `answers:[{question_id,answer}]`（非空、问题 ID 不重复） |
+| task_confirmation.respond | 同上交互身份，另 `spec_hash, decision:confirm/reject` |
+| trace.subscribe | `after_seq:int>=-1=-1, catalog_etag?:string`；事实 seq 从 0 起，与 cursor 不同 |
+| trace.unsubscribe | 空对象 |
+| ping | `client_time?:string` |
+
+`command.accepted/rejected` 使用 request_id 关联，data 包含接受结果或安全
+`code/message`；accepted 不代表模型、工具完成。状态变更回执必须在事实/卡决定提交后发出。
+幂等键为服务端 actor_user_id + session_id + request_id，摘要为规范 type/session_id/data
+的排序 JSON SHA256（UTF-8，紧凑分隔，无 NaN，算法版本 1）。
+同键同摘要返回既有回执，同键不同摘要拒绝；turn.submit 另以 client_message_id 去重。
+幂等和接受事实处于同一 PG 事务；WS 不用内存缓存替代数据库唯一约束。
+审批/回答/确认必须在事务内验证 owner、当前 turn/attempt/call、nonce、TTL、
+spec_hash（任务确认）；重连和回放均不得重做工具或入队。
+turn.cancel 只请求指定 Agent 回合停止，最终以 turn.end 确认为准，不能取消 Worker 任务。
+
+### 4A.2 下行与字段隔离
+
+2026-09-09 事实目录补充（catalog_version=3）：登记 Store 实际写入的
+`runtime/command`，data 为 `{fingerprint,data,correlation}`；这是持久命令回执，
+不是原始命令请求，不产生额外语义 cursor 或回放触发的 command.accepted。
+`assistant/attempt_start` 增补可选 `history_selection`（algorithm、indices、
+message_count、input_fingerprint）及 `fingerprint_algorithm="dsh-json-v1"`。
+indices 为对 `history_upto_seq` 所界定的派生消息列表的零基有序选择，不是事实 seq。
+旧事实可省略新增字段；传输版本仍为 2，stream 目录保持 v2.1。
+上述追踪字段仅供已授权 trace；普通 assistant.start 继续只公开 header/history 引用。
+runtime/command 的 trace 仅投影 fingerprint、接受结果身份和关联字段；原始 request、
+请求凭据、header、opaque 状态与未登记扩展不得透传。事实目录 schema 本身不含凭据。
+
+统一信封为 `{protocol_version:2,type,durability,session_id?,ts,correlation,data}`。
+persistent 必须有 session_id 与正整数 cursor；transient/control 禁止 cursor。
+request_id 仅 command.accepted/rejected 携带。
+correlation 只接受 turn_id/turn/step/attempt_id/call_id/call_seq/task_id/source_seq；
+source_seq 仅引用 Agent 事实，不替代 session_stream cursor。
+
+| durability | type |
+| :--- | :--- |
+| persistent | user.message、turn.start/end、step.start/end、assistant.start/message/end/retry、tool.call/dispatch/result、approval.requested/resolved、question.requested/resolved、task_confirmation.requested/resolved、execution.quarantined/reconciled、task.queued/progress/report/end、session.updated、context.trimmed、runtime.error |
+| transient | assistant.text.delta、assistant.reasoning.delta、trace.chunk |
+| control | hello、capabilities、schema.catalog、command.accepted/rejected、subscribed、replay.completed、resync.required、pong、trace.event |
+
+语义字段采用白名单投影；工具内容与原始参数保留在事实存储，tool.result 仅发送
+name/status/synthetic/display/error_code/exit_code 等展示字段，六态为
+succeeded/failed/denied/cancelled/not_started/outcome_unknown。
+assistant/message 事实稳定产生 assistant.message 和 assistant.end 两个 projection_kind；
+失败/放弃 assistant/attempt 产生 assistant.end，不能依赖瞬态 end。
+assistant.message 的工具列表只投影调用身份和名称，不携带 args/arguments_raw。
+错误只发送平台标准错误码与固定安全摘要；未知异常不得外发原文、SQL 或 traceback。
+system、protocol_state、provider_options、密钥、请求头和原始上下文不进入普通语义或 trace 帧。
+
+每连接发送前重查 ACL；无权看交互的 persistent 帧以相同 cursor 的
+`data:{restricted:true}` 占位；reasoning 字段/增量需独立授权。
+trace 需显式订阅和 trace ACL，即使控制者也不自动拥有；发送事实的独立诊断副本，
+保留脱敏后的参数形状与 schema/producer/correlation，通用递归凭据脱敏叠加事件敏感路径，
+继续剔除 system/protocol_state/raw/header/原始历史/异常原文/nonce；不等于开放内部请求正文。
+trace.event 的 `data:{source:"history"|"runtime",event:{seq,type,ts,data}}` 使用 after_seq，
+不更新 semantic cursor；撤权立即停止 trace，撤销会话可见性关闭连接。
+
+### 4A.3 快照、背压与运行时边界
+
+先 attach 注册瞬态接收，再在一致性快照读高水位 H 和最早保留 cursor。
+subscribed 返回 `{cursor:H}`；合法游标只回放 (after_cursor,H]，然后
+replay.completed `{cursor:H}`，再发送连续的 >H 已提交前缀。
+持久读取按 cursor 排序并校验连续性，重复行去重；不能依通知先后推进 cursor。
+不存在、超水位、早于保留窗口的游标返回 resync.required：
+`{cursor:H,snapshot:<H对应的授权状态>}`，本次停止回放与写命令；
+客户端替换快照后重新 subscribe(after_cursor=H)，不得再追加 <=H 历史。
+重放不调用 execute_command；增量丢失由最终 assistant.message 校正。
+
+每连接有界发送队列和分页读取；优先丢瞬态，持久/控制帧仍超限时关闭 4408，
+send 超时同样关闭 4408。Runtime 的事实提交不等待网络。
+断连/退订调用 detach；仅释放并取消该连接实际控制的活动回合，观察者不取消，
+重连/重复命令不自动抢占旧控制权。接收循环只等短事务接受结果，不 await 整轮图。
+
+### 4A.4 主服务注入契约
+
+路由从 `app.state.loop_service` 获取 `app.agent.loop_service.LoopService`。
+本批不修改 main.py。缺服务关闭 1013，不启用内存回退实现。
+WS 类型定义在 `routers/ws_v2.py`：`WsAccess(write,trace,reasoning,interactions)`、
+`StreamSnapshot(cursor,earliest_cursor=1,state={})`、`Command`、
+`CommandReceipt(data,correlation={})`。下列方法均 async：
+
+| 方法 | 返回/责任 |
+| :--- | :--- |
+| authenticate(ticket:str) | str，复用旧短票消费及用户校验，返回服务端 actor ID |
+| authorize(actor_id,session_id) | WsAccess；复用 session ACL，验证引擎版本；权限变化实时读取 |
+| attach(actor_id,session_id,connection_id,on_transient) | 注册 Callable[[dict],None]，仅传完整 transient 信封；不转移控制权 |
+| snapshot(actor_id,session_id) | StreamSnapshot；state 经授权，与 cursor 同一数据库快照 |
+| read_stream(session_id,after_cursor,limit) | list[dict]，完整 persistent 信封、按已提交 cursor 升序 |
+| read_trace(session_id,after_seq,limit) | list[dict]，规范事实、按 seq 升序 |
+| execute_command(actor_id,connection_id,command) | CommandReceipt；行锁事务幂等接受、校验控制权/交互、调用 Runtime 快速 start_turn/cancel；不 wait 整轮 |
+| detach(actor_id,session_id,connection_id) | 幂等注销瞬态订阅；仅 owner connection 请求 Runtime.cancel |
+
+`app.agent.events.project_fact(fact)` 返回除 cursor 外完整 persistent 信封列表（含稳定 projection_kind）；稳定 projection_kind 与源事实 ID 联合去重。
+主服务在事实同事务分配 cursor，用
+`persistent_frame(session_id,cursor,projection,ts=...)` 形成 session_stream 信封。
+非展示事实不投影，trace 另从事实分页读取。状态、消息投影、seq/cursor 由 PG
+会话行锁事务统一提交；不新增第二套数据库访问层。
+
+### V1.77 修改代码文件与作用清单
+
+| 文件 | 作用 |
+| :--- | :--- |
+| backend/api/app/routers/ws_v2.py | 新 v2 严格命令解析、可注入服务、回放、背压、逐连接 ACL |
+| backend/api/app/agent/events.py | v2 事实投影、信封、诊断脱敏纯函数 |
+| backend/api/tests/test_loop_ws*.py | v2 契约、回放、幂等服务边界、权限与断连回归 |
+| backend/api/app/harness/contracts/loop_events.py | 源完整事实目录、schema descriptor、producer、correlation 与缓存 ETag；平台新增事实登记 |
+| backend/api/app/harness/security/loop_redaction.py | 源通用递归敏感字段、凭据值和 JSON Pointer 路径脱敏；ordinary 与 trace 分开 |
+| docs/AI测试与评估平台-API.md | V1.77 契约先行；engine_version 的模型/REST 实现由主 agent 接线 |
+
 
 ## 5. 任务规格 TaskSpec（`POST /api/tasks` 与内部 `task.create` 共用）
 
