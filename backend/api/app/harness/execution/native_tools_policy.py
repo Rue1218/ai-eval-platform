@@ -18,11 +18,14 @@ a9c41b7e2d10），若以其为许可则主闸门一开即全协议档全量下�
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from collections.abc import Mapping
 
 from .stream_policy import PROFILE_ID_WILDCARD, parse_profile_ids
+
+logger = logging.getLogger("ai-eval.agent")
 
 _BREAKER_LOCK = threading.Lock()
 # profile_id -> {"fails": int, "open_until": float}
@@ -47,6 +50,7 @@ def _breaker_open(profile_id: str) -> bool:
             return True
         if until and now >= until:  # 冷却到期：半开探测（fail 计数已清零）
             state["open_until"] = 0
+            logger.info("native_tools_breaker_halfopen profile=%s", profile_id)
         return False
 
 
@@ -66,7 +70,11 @@ def native_tools_allowed(profile_id: str | None) -> bool:
 
 
 def native_tools_report_failure(profile_id: str | None) -> None:
-    """带 tools 请求失败上报：连续达阈值即熔断 open（摘除该档装配）。"""
+    """带 tools 请求失败上报：连续达阈值即熔断 open（摘除该档装配）。
+
+    熔断为运维可观测事件：open/半开分别记 warning/info 日志（冒烟清单据此
+    验证档级摘除与自动恢复）。
+    """
     from app.config import settings
 
     pid = str(profile_id or "").strip()
@@ -78,6 +86,12 @@ def native_tools_report_failure(profile_id: str | None) -> None:
         if fails >= threshold:
             state["fails"] = 0
             state["open_until"] = time.monotonic() + cooldown_s
+            logger.warning(
+                "native_tools_breaker_open profile=%s after %d failures（该档 tools 装配已摘除，cooldown=%ss）",
+                pid,
+                threshold,
+                cooldown_s,
+            )
         else:
             state["fails"] = fails
 
