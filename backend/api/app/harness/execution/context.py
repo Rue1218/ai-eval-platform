@@ -24,6 +24,9 @@ class ToolExecutionContext:
     user_id: str = ""
     thread_id: str = ""
     sandbox_dir: str | None = None
+    # F5/G6：bash 档位（只声明文件效果）。空 = 回落 settings.sandbox_bash_default_mode
+    # （现状逐字节一致）；升档审批重放时由 ToolNode 改写为 "workspace-write"。
+    sandbox_mode: str = ""
     owned_file_ids: frozenset[str] = frozenset()
     call_id: str = ""
     report_progress: ToolProgressReporter | None = None

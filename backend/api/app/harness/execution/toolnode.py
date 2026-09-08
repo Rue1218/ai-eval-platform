@@ -353,8 +353,11 @@ def build_tool_node(
                 if db is not None:
                     db.close()
             # F2/G4：bash 字符串词表与静态裁决已删除（§6.3）——命令不再按文本
-            # 暂停/审批，直接进入受控沙箱执行（档位只声明文件效果）；拒写升档
-            # 审批卡（tool_approval 语义修订，§6.4）随 F5/read-only 档接入。
+            # 暂停/审批，直接进入受控沙箱执行（档位只声明文件效果）。
+            # F5/G6（§6.4）：read-only 档下内核拒写（DENIED）→ ToolNode 自动
+            # interrupt 升档卡（tool_approval reason=escalation）；approve →
+            # 同一命令以 workspace-write 重放恰好一次（resume 一次性语义由 ws
+            # 行锁/卡清保障）；开关 agent_escalation_approval_enabled 默认关。
             ask_user_raw = None
             if call.name == "ask_user_question":
                 try:
@@ -395,43 +398,128 @@ def build_tool_node(
                     call_id=call.call_id,
                 )
             emit_progress("validating", "正在校验工具参数与权限边界")
-            emit_progress("executing", "工具正在受控执行")
             started = time.perf_counter()
+            base_mode = str(sandbox_box.get("mode") or "")
             exec_context = ToolExecutionContext(
                 session_id=session_id,
                 user_id=current_user,
                 thread_id=thread_id,
                 sandbox_dir=sandbox,
+                sandbox_mode=base_mode,
                 owned_file_ids=owned_file_ids,
                 call_id=call.call_id,
                 report_progress=emit_progress,
                 report_output=emit_output,
                 session_tasks=session_board,
             )
-            try:
-                if ask_user_raw is not None:
-                    raw = ask_user_raw
-                elif definition.transport == "native":
-                    raw = await executor.call(definition, safe_args, exec_context)
-                elif manager is None:
-                    raise AppError(ErrorCode.INTERNAL, "MCP 工具执行器不可用")
-                else:
-                    raw = await manager.call_tool(definition.tool_id, safe_args, exec_context)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                observation = normalize_exception(
-                    AppError(ErrorCode.INTERNAL, "工具执行失败"),
-                    tool=call.name,
-                    arguments=dict(call.arguments or {}),
+            # F5/G6 升档循环：read-only 拒写（DENIED）→ denied 帧 + 升档卡 →
+            # approve 同命令以 workspace-write 重放恰好一次；其余错误保码归因
+            #（BLK 保真）；重放后再拒写不再出卡（防环，失败观察收尾）。
+            observation: object = None
+            escalated_once = False
+            run_mode = base_mode
+            while True:
+                exec_ctx_eff = (
+                    replace(exec_context, sandbox_mode=run_mode)
+                    if run_mode != base_mode
+                    else exec_context
                 )
-            else:
+                emit_progress("executing", "工具正在受控执行")
+                try:
+                    if ask_user_raw is not None:
+                        raw_out: object = ask_user_raw
+                    elif definition.transport == "native":
+                        raw_out = await executor.call(definition, safe_args, exec_ctx_eff)
+                    elif manager is None:
+                        raise AppError(ErrorCode.INTERNAL, "MCP 工具执行器不可用")
+                    else:
+                        raw_out = await manager.call_tool(
+                            definition.tool_id, safe_args, exec_ctx_eff
+                        )
+                except asyncio.CancelledError:
+                    raise
+                except AppError as exc:
+                    if (
+                        call.name == "bash"
+                        and not escalated_once
+                        and exc.code == ErrorCode.DENIED
+                        and settings.agent_escalation_approval_enabled
+                    ):
+                        escalated_once = True
+                        # 拒写事实帧（MAJ-9②：同一 call_id 按事件序收敛最后一条）
+                        events.append(
+                            make_event(
+                                "tool_result",
+                                {
+                                    "call_id": call.call_id,
+                                    "name": call.name,
+                                    "ok": False,
+                                    "truncated": False,
+                                    "redacted": False,
+                                    "error": "沙箱卷只读拒绝写入（read-only 档位）",
+                                    "error_code": "DENIED",
+                                    "escalation": True,
+                                },
+                            )
+                        )
+                        reply = interrupt(
+                            {
+                                "type": "tool_approval",
+                                "id": call.call_id,
+                                "call_id": call.call_id,
+                                "name": call.name,
+                                "command": str(safe_args.get("command") or ""),
+                                "reason": "escalation",
+                                "risk_level": "high",
+                                "sandbox_scope": "read-only 档拒写；批准后以 "
+                                "workspace-write 重放该命令一次（仅当前会话工作区可写，"
+                                "网络关闭、系统目录只读且资源受限）。",
+                                "allowed_decisions": ["approve", "reject"],
+                            }
+                        )
+                        # resume 值经 langgraph Command(resume=…) 包装返回
+                        #（ws 恢复链路与图外测试同构）；解包后与卡 id 强校验
+                        reply_value = getattr(reply, "resume", reply)
+                        action = (
+                            reply_value.get("action") if isinstance(reply_value, Mapping) else None
+                        )
+                        approval_id = (
+                            reply_value.get("id") if isinstance(reply_value, Mapping) else None
+                        )
+                        if approval_id == call.call_id and action == "approve":
+                            run_mode = "workspace-write"
+                            continue  # 升档重放一次（escalated_once 防二次出卡）
+                        message = (
+                            "用户拒绝升档执行此 bash 命令"
+                            if action == "reject"
+                            else "升档确认结果无效，命令未执行"
+                        )
+                        observation = normalize_exception(
+                            AppError(ErrorCode.VALIDATION, message),
+                            tool=call.name,
+                            arguments=dict(call.arguments or {}),
+                        )
+                        break
+                    observation = normalize_exception(
+                        exc,
+                        tool=call.name,
+                        arguments=dict(call.arguments or {}),
+                    )
+                    break
+                except Exception:
+                    observation = normalize_exception(
+                        AppError(ErrorCode.INTERNAL, "工具执行失败"),
+                        tool=call.name,
+                        arguments=dict(call.arguments or {}),
+                    )
+                    break
                 observation = normalize(
-                    raw,
+                    raw_out,
                     None,
                     tool=call.name,
                     arguments=dict(call.arguments or {}),
                 )
+                break
             latency_ms = round((time.perf_counter() - started) * 1000)
             emit_progress("finalizing", "正在整理安全输出")
             _trace(

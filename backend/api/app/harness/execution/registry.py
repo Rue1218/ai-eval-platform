@@ -1413,10 +1413,13 @@ def _bash_handler(
     from .aliases import bash_timeout_seconds
 
     started = time.perf_counter()
+    # F5/G6：档位来源接缝——上下文（会话注入/升档重放）优先，缺省回落全局
+    # settings.sandbox_bash_default_mode（现状逐字节一致）。
+    mode = str(getattr(context, "sandbox_mode", "") or "") or settings.sandbox_bash_default_mode
     output = run_bash(
         str(arguments.get("command", "")),
         sandbox_dir=sandbox_dir or "",
-        mode=settings.sandbox_bash_default_mode,
+        mode=mode,
         timeout_s=bash_timeout_seconds(arguments),
         limits=limits,
         on_output=getattr(context, "report_output", None),

@@ -228,8 +228,28 @@ def run_sandboxed(
         # 成"操作失败"，模型无法得知具体原因而盲目重试）。
         detail = stdout.strip().splitlines()
         snippet = detail[-1][:500] if detail else ""
+        # F5/G6（§6.4）：read-only 档对 /work 写入被内核拒（EROFS）→ 归
+        # DENIED（升档审批触发源）。bwrap 无结构化错误通道，只能以只读 bind
+        # 下 EROFS 内核证据归因——这是被动错误归因而非命令词表扫描（与 §6.3
+        # 删词表层立场一致）；仅 read-only 档检测（workspace-write 可写 bind
+        # 下不可能出现 scope EROFS）。
+        if mode == "read-only" and _looks_readonly_denied(snippet):
+            raise SandboxError(
+                "DENIED",
+                "沙箱卷只读拒绝写入（当前档位 read-only；如需写入请经升档审批后重试）",
+            )
         raise SandboxError("VALIDATION", f"命令执行失败（退出码 {started.returncode}）：{snippet}")
     return stdout.strip() or "（无输出）"
+
+
+def _looks_readonly_denied(snippet: str) -> bool:
+    """read-only bind 写被拒的内核证据识别（EROFS/只读文件系统特征）。
+
+    检测只发生在被动错误归因点（见 run_sandboxed 注释），命中即视为
+    拒写事实；空白/未知输出不命中（fail-closed 维持 VALIDATION 归因）。
+    """
+    lowered = (snippet or "").lower()
+    return "read-only file system" in lowered or "erofs" in lowered
 
 
 def probe_sandbox(bwrap_bin: str = "/usr/bin/bwrap", timeout_s: float = 5.0) -> bool:

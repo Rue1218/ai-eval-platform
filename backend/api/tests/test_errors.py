@@ -4,7 +4,7 @@ from app.errors import _CODE_STATUS, ErrorCode
 
 
 def test_error_code_enum_has_ten_codes():
-    # PRD 5.5 / API V1.0 §1.3 定义的十个错误码
+    # PRD 5.5 / API V1.0 §1.3 定义的十个错误码 + F5/G6 新增 DENIED（拒写升档源）
     expected = {
         "UNAUTHORIZED",
         "VALIDATION",
@@ -16,6 +16,7 @@ def test_error_code_enum_has_ten_codes():
         "UPSTREAM",
         "TIMEOUT",
         "INTERNAL",
+        "DENIED",
     }
     assert {c.value for c in ErrorCode} == expected
 
@@ -31,3 +32,4 @@ def test_error_code_default_status_mapping():
     assert _CODE_STATUS[ErrorCode.UPSTREAM] == 502
     assert _CODE_STATUS[ErrorCode.TIMEOUT] == 504
     assert _CODE_STATUS[ErrorCode.INTERNAL] == 500
+    assert _CODE_STATUS[ErrorCode.DENIED] == 403  # F5/G6：只读拒写（授权语义）

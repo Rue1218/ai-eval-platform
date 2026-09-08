@@ -28,12 +28,14 @@ from app.harness.context.observation import MODEL_TOOL_RESULT_MAX_CHARS
 
 logger = logging.getLogger("ai-eval.harness.sandbox")
 
-# runner 错误码 → api ErrorCode（BUSY 归属并发冲突）
+# runner 错误码 → api ErrorCode（BUSY 归属并发冲突；DENIED = read-only 拒写，
+# F5/G6 升档审批触发源）
 _ERROR_MAP: Mapping[str, ErrorCode] = {
     "TIMEOUT": ErrorCode.TIMEOUT,
     "VALIDATION": ErrorCode.VALIDATION,
     "INTERNAL": ErrorCode.INTERNAL,
     "BUSY": ErrorCode.CONCURRENCY,
+    "DENIED": ErrorCode.DENIED,
 }
 
 # 冒烟探测结果缓存（None=未探测；True/False=已探测）

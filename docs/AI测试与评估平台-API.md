@@ -175,6 +175,7 @@
 | 502 | `UPSTREAM` | 被测接口失败，详见样本错误 |
 | 504 | `TIMEOUT` | 超时 |
 | 500 | `INTERNAL` | 内部错误，请重试或联系平台维护者 |
+| 403 | `DENIED` | 沙箱只读档拒写（V1.77/F5；升档审批触发源，一般不直达 REST） |
 
 确认卡 / 表单校验失败：`VALIDATION`，`fields` 给前端卡内红字，**不要**只靠 Toast。  
 错误 body **不得** 含 Key、Cookie、stack。  
@@ -1704,7 +1705,7 @@ api/worker 直产事件（`confirm_ack` / `tool_approval_ack` / `task_cancelled`
 | `confirm_ack` | `{ok:true,task_id:"uuid",message}` 或 `{ok:false,message}`；持久化并可回放（V1.67 恢复） | 更新最近一张 ConfirmCard 的确认/取消状态；`ok=true` 后由 ProgressDock 承接任务进度 |
 | `clarify` | `{id,questions:[{id,question,header?,options:[{label,description?}],multi_select,required,type:"radio"\|"checkbox"\|"text"}]}`；持久化并可回放。**V1.72 转正（PRD 既有范围）**：仅混合引擎开启且 `engine=agent` 时由 `ask_user_question` 图内 `interrupt()` 产出（≤8 题三题型，用户一次作答）；`meta`（`schema_version`/`confirm_type="clarify"`/`thread_id`/一次性 `resume_nonce`/`owner_id`/`created_at`）只落库 `sessions.pending_confirm`，**不广播**给前端；与 `confirm` / `tool_approval` 三类卡共用单行互斥（同一时刻至多一张） | ClarifyCard：仅命令原发起成员作答并提交；作答后回合按 `answers[]` 续跑 |
 | `clarify_ack` | `{ok:true,id}`；持久化并可回放。**V1.72 新增**：服务端在 `clarify_reply` 清卡提交后的回执（resume 至多一次语义与 `tool_approval_ack` 同构） | ClarifyCard 盖章已提交（乐观态确认），回合随后续事件续跑 |
-| `tool_approval` | `{id,call_id,name,command,reason,risk_level,sandbox_scope,allowed_decisions}`；持久化并可回放。**V1.70 恢复**：仅混合引擎开启且 `engine=agent` 时由图内 `interrupt()` 产出（危险 bash / 无法证明只读的命令）；`meta`（`schema_version`/`confirm_type`/`thread_id`/`resume_nonce`/`owner_id`/`created_at`）只落库 `sessions.pending_confirm`，**不广播**给前端；同一会话同一时刻至多一张待审批卡（与 `confirm` / `clarify` 互斥，落同一 `pending_confirm` 行锁）。V1.73：卡 TTL `agent_approval_ttl_seconds`（config，默认 3600）过期后失效，失效判定以 `meta.created_at` 幂等兜底（不依赖扫描进程存活性） | ApprovalCard：仅命令原发起成员可 `approve|reject`，确认前不调用 Runner；expired/cancelled 失效态禁操作 |
+| `tool_approval` | `{id,call_id,name,command,reason,risk_level,sandbox_scope,allowed_decisions}`；持久化并可回放。**V1.70 恢复 / V1.77（F5）语义收敛**：仅混合引擎开启且 `engine=agent` 时由图内 `interrupt()` 产出——词表与静态裁决删除后（V1.75/G4）无文本型生产者；V1.77 起为 **read-only 档拒写升档卡**（`reason="escalation"`，`tool_result` 先落 `error_code=DENIED` 帧，approve 后同命令以 workspace-write 重放恰好一次；受 `agent_escalation_approval_enabled` 门控，默认关）；`meta`（`schema_version`/`confirm_type`/`thread_id`/`resume_nonce`/`owner_id`/`created_at`）只落库 `sessions.pending_confirm`，**不广播**给前端；同一会话同一时刻至多一张待审批卡（与 `confirm` / `clarify` 互斥，落同一 `pending_confirm` 行锁）。V1.73：卡 TTL `agent_approval_ttl_seconds`（config，默认 3600）过期后失效，失效判定以 `meta.created_at` 幂等兜底（不依赖扫描进程存活性） | ApprovalCard：仅命令原发起成员可 `approve|reject`，确认前不调用 Runner；expired/cancelled 失效态禁操作 |
 | `approval_terminal` | `{approval_id,outcome:"expired"\|"cancelled",reason?}`；持久化并可回放。**V1.73 新增**：审批卡终态——api 后台 TTL 扫描对过期卡清卡并广播 `expired`；`/stop` 放弃悬挂审批卡时广播 `cancelled`（`rejected` 仍由 `tool_approval_ack(action="reject")` 承载，不新增重复 kind）；卡清后 ack 一律拒绝且不 resume | ApprovalCard 失效态：expired/cancelled 按钮禁操作，终态只读展示 |
 | `context_trim` | `{reason:"compact"\|"tail_window",dropped,kept,in_scope_total,keep_from_id?,limit}`；持久化并可回放。**V1.74 新增（服务端留痕为主，前端不渲染）**：回合装配模型上下文时发生窗口裁剪（compact `keep_from` 截断 / 末 20 条尾窗截断）即落一条；payload 仅元信息，**不含被裁消息原文**（观察纪律） | 不渲染（审计/回放一致性用） |
 | `session_title` | `{title,source:"ai"}`；持久化并可回放 | 同步会话标题 |
@@ -1727,7 +1728,7 @@ V1.67（H3）起，`engine="agent"` 分支经 `discover` 按 Worker 白名单（
 | `read` | `path`；`offset?`/`next_offset?`、`limit?≤2000` | `read.path/total_lines/start_line/end_line/next_offset/preview` | 仅会话工作区相对路径；≤20MB；模型正文≤600,000 字符；浏览器预览≤`TOOL_PREVIEW_MAX_CHARS`（默认与窗口对齐） | 仅 `TIMEOUT` 可修复重试；路径/分页错误提示相对路径或 `next_offset` |
 | `write` | `path`、`content` | `write.path/bytes_written/lines_written/preview` | 仅会话工作区；≤2MB；排他新建 + fsync，绝不覆盖已有文件 | 不自动重试；文件存在时改用新路径或先 `read` 后 `edit` |
 | `edit` | `path`、`old`、`new` | `edit.path/replacements=1/old_length/new_length` | 仅会话工作区；原子替换；`old` 必须匹配 | 不自动重跑；不匹配时返回邻近行脱敏建议，先 `read` 再调整 |
-| `bash` | `command` | `bash.exit_code/preview/preview_truncated` | 独立 Runner 的一次性 bwrap：无网络、唯一可写工作区、CPU/内存/进程/墙钟限制；提权/网络/远程连接命令硬拒绝。删除、覆盖、权限变更及无法证明只读的命令必须先触发 `tool_approval`，确认前不调用 Runner | 仅 `TIMEOUT` 表示可缩小范围后再试；用户拒绝返回 `status="rejected"`；硬黑名单、沙箱不可用与策略拒绝绝不降级或自动重跑 |
+| `bash` | `command` | `bash.exit_code/preview/preview_truncated` | 独立 Runner 的一次性 bwrap（档位只声明文件效果）：read-only 档 scope 只读 bind，写入被内核拒（EROFS）→ `tool_result` 错误码 `DENIED` 且自动产生 `reason="escalation"` 升档卡（V1.77/F5，approve 后同一命令以 workspace-write 重放恰好一次；`agent_escalation_approval_enabled` 默认关）；workspace-write 档 scope 可写。无网络、唯一可写工作区、CPU/内存/进程/墙钟限制恒开启 | 仅 `TIMEOUT` 表示可缩小范围后再试；`DENIED` 且升档被拒 → 失败观察；沙箱不可用与档位拒绝绝不降级或自动重跑 |
 | `web_search` | `query`；`limit?≤10` | `search.query/results` | 仅服务端配置搜索服务；Key 不入事件/日志 | `TIMEOUT`/`UPSTREAM` 可调整关键词后重试一次 |
 | `web_fetch` | `url`；`format?=markdown\|text` | `web.url/title/format/preview/preview_truncated/preview_limit_chars` | 仅公开 HTTP(S)；每次 DNS 与重定向都做 SSRF 校验；禁止凭据、内网、回环和保留地址；模型正文≤60,000 字符；浏览器预览≤`TOOL_PREVIEW_MAX_CHARS`（默认 600,000，与 `read` 对齐——卡片所见即模型真实读取内容）；正文提取：Firecrawl（已配置时）→ trafilatura → 内置 `_TextExtractor` 降级链 | 仅 `TIMEOUT`/`UPSTREAM` 可重试；SSRF/非法 URL 不重试 |
 | `task` | `goal`、`steps[]` | `task.goal/steps[]` | 仅内存清单，不写库、不入队、不绕过确认卡 | 补齐目标/有限步骤后重试 |

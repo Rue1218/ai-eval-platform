@@ -64,6 +64,9 @@ class Settings(BaseSettings):
     max_active_tasks_per_user: int = 5  # 每用户活动任务（queued/running/awaiting_case_confirm）上限
     circuit_failure_threshold: int = 5  # 服务器连续基础设施失败阈值，达到即熔断 open
     circuit_cooldown_s: float = 30.0  # 熔断冷却时长（秒），到期自动恢复 closed
+    # F5/G6：拒写升档审批（§6.4）。默认关 = DENIED 仅作失败观察（零行为变化）；
+    # F4 read-only 档部署时与档位翻转同批置 true（read-only 下拒写 → 自动升档卡）。
+    agent_escalation_approval_enabled: bool = False
     # P3：检查点引擎。默认 memory（每回合独立 thread_id）；postgres 需单独评审
     # 多副本粘性路由后再开，禁止把 Observation 全文写入检查点。
     agent_checkpointer: str = "memory"
