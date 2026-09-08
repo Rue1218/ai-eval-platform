@@ -56,9 +56,11 @@ from app.errors import AppError
 from app.harness.context.assembly import select_tool_defs
 from app.harness.contracts import Observation, PlanArtifact, make_event, to_dict
 from app.harness.contracts.artifacts import validate_plan_artifact
+from app.harness.execution.native_results import runtime_thread_id
 from app.harness.execution.native_tools_policy import (
     native_tools_allowed,
     native_tools_report_failure,
+    native_tools_report_success,
 )
 from app.harness.execution.stream_policy import profile_id_from_configurable
 from app.harness.execution.toolnode import seal_budget_if_exhausted
@@ -90,6 +92,23 @@ _DEFAULT_MAX_STEPS = 7
 _MAX_REPLAN_REASON_CHARS = 200
 # 澄清问句缺省文案（模型未给 clarify_question 时的可读兜底，不编造事实）
 _DEFAULT_CLARIFY_QUESTION = "需要你补充一点信息才能继续，请说明具体目标或范围。"
+
+# F0/P2：原生循环回填预算（方案 V0.2 R1-M4）——tool 正文经 store 合成注入时
+# 单条二次裁剪上限（字符）并带截断标注（store 已按 600K 裁剪，此处防多轮
+# 回填叠加撑爆 context 窗口；与流式/窗口预算同源精神，量级对齐 read 常用量）。
+_MAX_BACKFILL_CHARS = 60_000
+_BACKFILL_TRUNCATE_NOTICE = (
+    "\n\n[注意：工具结果回填已截断，仅保留前 {limit} 字符——如需更多内容请用工具的分页/范围参数分次读取]"
+)
+# store 正文缺失降级文案（跨进程 resume / store 写入失败等；显式声明不可用，
+# 禁止伪造正文——与平台禁编造纪律一致，R1-M5 降级决策）。
+_NATIVE_BACKFILL_MISSING_TEXT = (
+    "该工具已执行，但结果正文当前不可用（跨进程恢复或临时存储缺失）。"
+    "如需内容请重新调用该工具，或按上一步观察继续。"
+)
+# toolnode 在 native 执行时写入观察的占位前缀（正文只进 store）——观察注入
+# 模型输入时跳过该轮占位（正文已随 role=tool 回填，避免占位噪音双写）。
+_NATIVE_OBSERVATION_PLACEHOLDER = "完整结果仅在当前回合供模型使用"
 
 _PLAN_SYSTEM = (
     "你是评测平台对话引擎的规划器。只输出一个 JSON 对象，不要输出任何其他文字。\n"
@@ -263,19 +282,78 @@ def _merge_usage(
 
 
 def _observation_lines(state: GraphState) -> list[str]:
-    """取最近若干条 Observation 文本（注入模型输入；Observation 只作模型输入）。"""
+    """取最近若干条 Observation 文本（注入模型输入；Observation 只作模型输入）。
+
+    F0/P2：原生轮的占位观察（toolnode 以占位文本落 observations，正文只进
+    NativeToolResultStore）**跳过文本注入**——该轮正文已随 role=tool 回填，
+    占位重复注入只会制造噪音；占位观察仍留 state 供 H4 失败阶梯与 OR-4 守卫。
+    """
     observations = list(state.get("observations") or [])
     lines: list[str] = []
     for observation in observations[-_MAX_INJECTED_OBSERVATIONS:]:
         if not isinstance(observation, Mapping):
             continue
-        tool = str(observation.get("tool") or "")
         text = str(observation.get("text") or "")
+        if _NATIVE_OBSERVATION_PLACEHOLDER in text:
+            continue
+        tool = str(observation.get("tool") or "")
         if len(text) > _MAX_OBSERVATION_CHARS:
             text = text[:_MAX_OBSERVATION_CHARS] + "…"
         ok = "成功" if observation.get("ok") else "失败"
         lines.append(f"[工具 {tool} 执行{ok}]\n{text}")
     return lines
+
+
+def _clip_backfill_text(content: str) -> str:
+    """回填正文二次裁剪（store 600K → 模型输入上限，带截断标注）。"""
+    if len(content) <= _MAX_BACKFILL_CHARS:
+        return content
+    return content[:_MAX_BACKFILL_CHARS] + _BACKFILL_TRUNCATE_NOTICE.format(
+        limit=_MAX_BACKFILL_CHARS
+    )
+
+
+def _build_native_backfill(
+    native_round: Mapping[str, object],
+    native_tool_results: object | None,
+    thread_id: str,
+) -> list[Mapping[str, object]]:
+    """合成上一原生轮的回填消息对（内部规范，适配层转换协议形态）。
+
+    形态 = ``assistant(tool_calls…)`` 紧跟 ``role=tool`` 正文对（anthropic 的
+    tool_result 须紧邻对应 tool_use；本函数保证次序与完整性）。正文从
+    NativeToolResultStore 取（含失败/拒绝路径的正文与 repair 提示——R3-M5），
+    缺失时以显式降级文案替代（不伪造正文，R1-M5）。单条二次裁剪防上下文
+    溢出（R1-M4）。
+    """
+    assistant = native_round.get("assistant")
+    if not isinstance(assistant, Mapping):
+        return []
+    calls = assistant.get("tool_calls")
+    if not isinstance(calls, list | tuple) or not calls:
+        return []
+    backfill: list[Mapping[str, object]] = [dict(assistant)]
+    get = getattr(native_tool_results, "get", None)
+    for call in calls:
+        if not isinstance(call, Mapping):
+            continue
+        call_id = str(call.get("call_id") or "").strip()
+        name = str(call.get("name") or "")
+        content: str = ""
+        if get is not None and call_id:
+            stored = get(thread_id, call_id) if thread_id else None
+            content = str(stored or "") if isinstance(stored, str) else ""
+        if not content.strip():
+            content = _NATIVE_BACKFILL_MISSING_TEXT
+        backfill.append(
+            {
+                "role": "tool",
+                "tool_call_id": call_id,
+                "name": name,
+                "content": _clip_backfill_text(content),
+            }
+        )
+    return backfill
 
 
 def _repeat_count(state: GraphState, name: str, arguments: Mapping[str, object]) -> int:
@@ -507,8 +585,18 @@ def make_discover_node(agent_registry: object, tool_registry: object):
 # ── orchestrator 节点【哑】：Observe → Think → Act ──
 
 
-def make_orchestrator_node(gateway: object, agent_registry: object, tool_registry: object):
-    """构造 TAOR 循环节点（读观察 → 调模型 → 产 Act 或收尾；不 rewrite 意图）。"""
+def make_orchestrator_node(
+    gateway: object,
+    agent_registry: object,
+    tool_registry: object,
+    native_tool_results: object | None = None,
+):
+    """构造 TAOR 循环节点（读观察 → 调模型 → 产 Act 或收尾；不 rewrite 意图）。
+
+    F0/P2：``native_tool_results``（NativeToolResultStore 实例）由图接线注入
+    （与 build_tool_node 同源）；缺失时原生循环不可用，tool_use 响应回退文本
+    协议（fail-safe，P1 语义保留）。
+    """
 
     def _max_steps(state: GraphState) -> int:
         slots = (state.get("plan") or {}).get("slots") if isinstance(state.get("plan"), Mapping) else None
@@ -545,17 +633,21 @@ def make_orchestrator_node(gateway: object, agent_registry: object, tool_registr
                 "pending_events": _error_payload("INTERNAL", "计划步数越界，结束本轮"),
             }
         observation_lines = _observation_lines(state)
-        # F0/P1：原生工具装配（方案 V0.2 D1/D5，仅 orchestrator 执行轮；plan/
-        # reflect 不装配）。双通道裁剪：native 轮 system 移除 _tool_schemas_text
-        # 正文（工具定义经协议 tools 下发）；tool_use 出现 → 本回合回退文本协议
-        # （无 tools 重发一次 + 审计日志，V0.2 §5 P1③，不落入 3 次纠正噪音）。
-        # 档级熔断由 native_tools_policy 承担（带 tools 请求连续失败 → 摘除）。
+        # F0/P2：原生循环（方案 V0.2 D1/D3，仅 orchestrator 执行轮；plan/reflect
+        # 不装配）。Observe：上一原生轮 tools 执行完毕（pending_tool 清空）后，
+        # 从 native_tool_round + NativeToolResultStore 合成 assistant+tool 回填对
+        # 注入下一轮请求（正文缺失时显式降级文案）。Act：tool_use → 名守卫 →
+        # 全量入队（native=True，tools 节点自环 drain）→ 新 round 缓冲。
+        # 关闸/未接线（store 缺失）时保持文本路径（P1 语义，fail-safe）。
         try:
             run_config = get_config()
         except RuntimeError:  # 图外直接调用（单测）无 run 上下文
             run_config = None
-        profile_id = profile_id_from_configurable((run_config or {}).get("configurable"))
+        configurable = (run_config or {}).get("configurable") or {}
+        profile_id = profile_id_from_configurable(configurable)
         native_mode = native_tools_allowed(profile_id)
+        thread_id = runtime_thread_id(configurable)
+        native_cycle = bool(native_mode and native_tool_results is not None and thread_id)
         native_defs: tuple[Mapping[str, object], ...] = (
             tuple(select_tool_defs(tool_registry, mode="react", only=allowed_tools))  # type: ignore[arg-type]
             if native_mode
@@ -572,6 +664,18 @@ def make_orchestrator_node(gateway: object, agent_registry: object, tool_registr
                     "content": "上一步工具观察：\n" + "\n".join(observation_lines),
                 }
             )
+        # 消费上一原生轮（tools 已执行完毕回到本节点时）→ 回填对追加在消息
+        # 最末（role=tool 段尾随 assistant 段，满足 anthropic 紧邻约束）
+        native_round = state.get("native_tool_round")
+        round_out: Mapping[str, object] | None = None
+        if (
+            native_cycle
+            and isinstance(native_round, Mapping)
+            and not state.get("pending_tool")
+        ):
+            backfill = _build_native_backfill(native_round, native_tool_results, thread_id)
+            if backfill:
+                extra.extend(backfill)
         raw: str = ""
         attempts = 0
         max_attempts = 2  # parse_retries ≤ 2（含首次共 3 次尝试的上限语义：首次 + 2 重试）
@@ -597,6 +701,7 @@ def make_orchestrator_node(gateway: object, agent_registry: object, tool_registr
                         "turn_failed": True,
                         "budget": budget.to_dict(),
                         "turn_usage": usage_acc,
+                        "native_tool_round": round_out,
                         "pending_events": _error_payload(
                             exc.code.value, "执行模型连续失败，结束本轮"
                         ),
@@ -604,14 +709,15 @@ def make_orchestrator_node(gateway: object, agent_registry: object, tool_registr
                 continue
             budget = consume_model_call(budget)
             usage_acc = _merge_usage(usage_acc, response.usage)
-            if native_mode and response.tool_calls:
-                # P1 精确回退（V0.2 §5 P1③）：P1 仅下发不循环——tool_use 出现即
-                # 以无 tools 请求重发一次并记审计（不落入 3 次纠正噪音）；本回合
-                # 后续轮次全部转文本协议（防原生/文本摇摆造成同一工具双执行）。
-                # P2 起本分支改接原生执行 + tool 消息回填（D3）。
-                names = ",".join(tool.name for tool in response.tool_calls)
+            if native_mode:
+                native_tools_report_success(profile_id)
+            if native_mode and not native_cycle and response.tool_calls:
+                # fail-safe（P1 语义保留）：装配开启但原生循环未接线（store 缺失
+                # /图外直测）→ tool_use 以无 tools 请求重发一次并记审计；本回合
+                # 后续转文本协议（防摇摆双执行）。P2 正式图均接 store，不走此支。
+                names = ",".join(str(tool.name) for tool in response.tool_calls)
                 logger.info(
-                    "native_tools_defer profile=%s tools=%s（P1 回退文本协议）",
+                    "native_tools_defer profile=%s tools=%s（原生循环未接线，回退文本协议）",
                     profile_id,
                     names,
                 )
@@ -624,6 +730,88 @@ def make_orchestrator_node(gateway: object, agent_registry: object, tool_registr
                     }
                 ]
                 continue  # tool_use 非解析失败，不递增 attempts（模型调用预算已扣）
+            if native_cycle and response.tool_calls:
+                # P2 原生 Act（D3）：逐 tool_use 名守卫（∉ allowed/未注册 →
+                # VALIDATION 就地收尾，语义与文本 L559 一致）；同参重复守卫沿用
+                # OR-4；通过后全量入队 pending_tool/pending_tools（native=True，
+                # tools 节点自环逐个执行），assistant 段 + 调用清单写 round 缓冲。
+                pending_items: list[Mapping[str, object]] = []
+                round_calls: list[Mapping[str, object]] = []
+                call_events: list[dict] = []
+                for tool_call in response.tool_calls:
+                    call_name = str(getattr(tool_call, "name", "") or "")
+                    call_args = dict(getattr(tool_call, "arguments", None) or {})
+                    if (
+                        not call_name
+                        or call_name not in allowed_tools
+                        or not tool_registry.is_registered(call_name)  # type: ignore[attr-defined]
+                    ):
+                        return {
+                            **_step("orchestrator"),
+                            "turn_failed": True,
+                            "budget": budget.to_dict(),
+                            "turn_usage": usage_acc,
+                            "native_tool_round": round_out,
+                            "pending_events": _error_payload(
+                                "VALIDATION",
+                                f"非法工具调用：{call_name}（不在本轮视野内）。"
+                                "如需读取/整理文件或运行脚本等执行类能力，请在请求中明确说明用途"
+                                "（如『运行脚本…』），Agent 将按声明能力重新路由；不要尝试越权调用。",
+                            ),
+                        }
+                    if call_name in _READ_TOOLS and _repeat_count(state, call_name, call_args) >= 3:
+                        return {
+                            **_step("orchestrator"),
+                            "turn_failed": True,
+                            "budget": budget.to_dict(),
+                            "turn_usage": usage_acc,
+                            "native_tool_round": round_out,
+                            "pending_events": _error_payload(
+                                "VALIDATION", f"重复读取已守卫：{call_name} 同一参数已执行 3 次"
+                            ),
+                        }
+                    call_id = str(getattr(tool_call, "call_id", "") or "") or f"toolcall_{uuid.uuid4().hex}"
+                    pending_items.append(
+                        {
+                            "call_id": call_id,
+                            "name": call_name,
+                            "arguments": call_args,
+                            "native": True,
+                        }
+                    )
+                    round_calls.append(
+                        {"call_id": call_id, "name": call_name, "arguments": call_args}
+                    )
+                    call_events.append(
+                        make_event(
+                            "tool_call",
+                            {
+                                "call_id": call_id,
+                                "name": call_name,
+                                "arguments": _redact_arguments(call_args),
+                            },
+                        )
+                    )
+                stray_text = str(response.text or "").strip()
+                if len(stray_text) > _MAX_OBSERVATION_CHARS:
+                    stray_text = stray_text[:_MAX_OBSERVATION_CHARS] + "…"
+                round_out = {
+                    "assistant": {
+                        "role": "assistant",
+                        "content": stray_text,
+                        "tool_calls": list(round_calls),
+                    }
+                }
+                return {
+                    **_step("orchestrator"),
+                    "plan_step_index": index + 1,
+                    "budget": budget.to_dict(),
+                    "turn_usage": usage_acc,
+                    "native_tool_round": round_out,
+                    "pending_tool": pending_items[0],
+                    "pending_tools": pending_items[1:],
+                    "pending_events": call_events,
+                }
             raw = response.text
             try:
                 fields = parse_react(raw)["fields"]
@@ -642,6 +830,7 @@ def make_orchestrator_node(gateway: object, agent_registry: object, tool_registr
                         "turn_failed": True,
                         "budget": budget.to_dict(),
                         "turn_usage": usage_acc,
+                        "native_tool_round": round_out,
                         "pending_events": _error_payload(
                             "VALIDATION", "执行协议解析连续失败，结束本轮"
                         ),
@@ -652,6 +841,7 @@ def make_orchestrator_node(gateway: object, agent_registry: object, tool_registr
                 "turn_failed": True,
                 "budget": budget.to_dict(),
                 "turn_usage": usage_acc,
+                "native_tool_round": round_out,
                 "pending_events": _error_payload("VALIDATION", "执行协议解析失败，结束本轮"),
             }
 
@@ -665,6 +855,7 @@ def make_orchestrator_node(gateway: object, agent_registry: object, tool_registr
                 **_step("orchestrator"),
                 "budget": budget.to_dict(),
                 "turn_usage": usage_acc,
+                "native_tool_round": round_out,
                 "final_text": text,
                 "response": {"text": text, "usage": usage_acc, "latency_ms": 0},
             }
@@ -676,6 +867,7 @@ def make_orchestrator_node(gateway: object, agent_registry: object, tool_registr
                 "turn_failed": True,
                 "budget": budget.to_dict(),
                 "turn_usage": usage_acc,
+                "native_tool_round": round_out,
                 "pending_events": _error_payload(
                     "VALIDATION",
                     f"非法工具调用：{name}（不在本轮视野内）。"
@@ -690,6 +882,7 @@ def make_orchestrator_node(gateway: object, agent_registry: object, tool_registr
                 "turn_failed": True,
                 "budget": budget.to_dict(),
                 "turn_usage": usage_acc,
+                "native_tool_round": round_out,
                 "pending_events": _error_payload(
                     "VALIDATION", f"重复读取已守卫：{name} 同一参数已执行 3 次"
                 ),
@@ -700,16 +893,13 @@ def make_orchestrator_node(gateway: object, agent_registry: object, tool_registr
             "plan_step_index": index + 1,
             "budget": budget.to_dict(),
             "turn_usage": usage_acc,
+            "native_tool_round": round_out,
             "pending_tool": {
                 "call_id": call_id,
                 "name": name,
                 "arguments": arguments,
-                # H4 修正（H3 遗留缺陷）：本分支是**提示词驱动**的 ReAct 循环
-                # ——观察经 _observation_lines 以用户消息注入下一轮模型输入，
-                # 而非原生 tool 消息回填。置 native=True 会让 toolnode 把
-                # observation 正文换成「已执行」占位并写入无人消费的
-                # NativeToolResultStore（骨架化后 get() 零调用方），模型将永远
-                # 看不到文件内容，失败阶梯也因 observations 缺失而失效。
+                # 文本路径（F0/P2 前 legacy 语义）：观察经 _observation_lines 注入；
+                # native=False → toolnode 不写 store、产正常 Observation 回灌。
                 "native": False,
             },
             "pending_events": [

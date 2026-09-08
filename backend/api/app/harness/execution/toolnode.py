@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import replace
@@ -377,12 +378,18 @@ def build_tool_node(
                     answers = resolve_clarify_answers(questions, reply)
                 except AppError as exc:
                     return failed(exc.code.value, f"澄清答复无效：{exc.message}")
+                # P2：答复明细并入 model_text——澄清答复正文须对模型可见（原生
+                # 回填经 store/role=tool 通道、文本路径经观察注入均消费本字段；
+                # 修复原生循环下答复丢失，R2 高 4）。display 保持结构不变。
+                answers_text = json.dumps(answers, ensure_ascii=False)
+                if len(answers_text) > 1000:
+                    answers_text = answers_text[:1000] + "…"
                 ask_user_raw = ToolResult(
                     name=call.name,
                     ok=True,
                     data={
                         "summary": "用户已回复提问",
-                        "model_text": "用户已回复提问",
+                        "model_text": f"用户已回复提问：{answers_text}",
                         "display": {"status": "success", "answers": answers},
                     },
                     call_id=call.call_id,

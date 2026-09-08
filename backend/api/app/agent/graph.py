@@ -100,9 +100,13 @@ def _after_reflect(state: GraphState) -> str:
 
 
 def _after_tools(state: GraphState) -> str:
-    """TAOR：工具执行后必须回 orchestrator 看 Observation（done 由模型裁决）。"""
+    """TAOR：工具执行后回 orchestrator 看 Observation；队列仍有待执行项时自环
+    tools（F0/P2 原生 Act 可一次产多个 tool_use，pending_tool/pending_tools
+    drain 由 tools 节点自环完成，全部终态才回 orchestrator 消费回填轮）。"""
     if state.get("turn_failed") or state.get("workflow_failed"):
         return "END"
+    if state.get("pending_tool"):
+        return "tools"
     return "orchestrator"
 
 
@@ -218,7 +222,12 @@ class LangGraphAgent:
         graph.add_node("discover", make_discover_node(agent_registry, tool_registry))
         graph.add_node(
             "orchestrator",
-            make_orchestrator_node(self._gateway, agent_registry, tool_registry),
+            make_orchestrator_node(
+                self._gateway,
+                agent_registry,
+                tool_registry,
+                native_tool_results=self._native_tool_results,
+            ),
         )
         graph.add_node("tools", make_tools_node(tools_node))
         graph.add_node("reflect", make_reflect_node(self._gateway))
@@ -237,7 +246,7 @@ class LangGraphAgent:
         graph.add_conditional_edges(
             "tools",
             _after_tools,
-            {"orchestrator": "orchestrator", "END": END},
+            {"tools": "tools", "orchestrator": "orchestrator", "END": END},
         )
 
     def _add_workflow_dag(self, graph: StateGraph) -> None:
