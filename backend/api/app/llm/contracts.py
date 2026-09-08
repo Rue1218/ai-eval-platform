@@ -36,7 +36,12 @@ class ModelConfig:
     # 是否请求并向上层投影模型返回的思考摘要；不等同于暴露隐藏思维链。
     reasoning_enabled: bool = True
     reasoning_effort: ReasoningEffort = "medium"
-    # 兼容优先：只有经人工验证的协议档才发送上游 tools；其余走 react.v1 JSON。
+    # F0/P3（方案 V0.4 裁决）：上游 tools 装配与档级放行由三态许可承担
+    # （settings.agent_native_tools_enabled × agent_native_tools_profile_ids，
+    # 见 harness/execution/native_tools_policy.py——装配唯一消费点），本字段不再
+    # 承担 tools 发送语义（历史注释"人工验证才发 tools"已废止）。现仅作协议档
+    # 能力标记：legacy = 无原生首轮流式（stream_policy.native_stream_allowed
+    # 要求 native），native = 默认（可流式/可装配，视装配闸门）。
     tool_call_mode: ToolCallMode = "native"
 
 

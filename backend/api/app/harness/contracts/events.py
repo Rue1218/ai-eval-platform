@@ -39,6 +39,7 @@ NodeEventKind = Literal[
     "error",
     "assistant_message",
     "response.completed",
+    "fabrication",
 ]
 
 # NodeEventKind 字面量值集合（make_event 白名单；confirm_ack 等直产事件不可由节点产出）

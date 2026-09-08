@@ -27,8 +27,9 @@ from __future__ import annotations
 # 事件契约演进版本（M7-Q4 裁决；#4 起语义化：增删 kind 必须递增）。
 # V1.72（#1 clarify 恢复）：新增回执事件 clarify_ack → event.v2；
 # V1.73（#3 审批终态）：新增终态事件 approval_terminal → event.v3；
-# V1.74（#2 压缩事件化）：新增留痕事件 context_trim → event.v4。
-EVENT_VERSION = "event.v4"
+# V1.74（#2 压缩事件化）：新增留痕事件 context_trim → event.v4；
+# V1.75（原生工具 P3）：新增编造对账事件 fabrication → event.v5。
+EVENT_VERSION = "event.v5"
 
 # 图节点可产出的持久化事件意图子集（对齐 NodeEventKind 字面量；make_event 白名单）
 NODE_EVENT_KINDS: frozenset[str] = frozenset(
@@ -46,6 +47,7 @@ NODE_EVENT_KINDS: frozenset[str] = frozenset(
         "error",
         "assistant_message",
         "response.completed",
+        "fabrication",  # V1.75（P3）：收尾声明无工具证据的编造对账留痕（仅审计，不入正文事件）
     }
 )
 
