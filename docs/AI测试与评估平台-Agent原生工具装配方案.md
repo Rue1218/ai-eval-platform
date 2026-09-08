@@ -1,7 +1,16 @@
 # AI 测试与评估平台 — Agent 原生工具装配方案
 
-> 版本:V0.2（定稿候选） | 状态:三路团队评审通过（R1 自洽/R2 代码事实/R3 安全契约，2026-09-08） | 日期:2026-09-08
+> 版本:V0.2.1（定稿候选） | 状态:三路团队评审通过；**P1 已开发完成（feat/agent-native-tools 分支）**，待 PR 评审 → 合入部署 → 端点专项冒烟（P1 DoD②） | 日期:2026-09-08
 > 范围：仅设计文档，不改代码。评审通过后按 §5 分期实施。
+> V0.2.1（2026-09-08）：P1 落地登记（§5 P1 全部验收项）——config 新增
+> `agent_native_tools_enabled`（默认 false）/`agent_native_tools_profile_ids`
+> （另立字段，待决点 5 收口）；新增 `harness/execution/native_tools_policy.py`
+> （三态许可 + 档级熔断，装配唯一消费点）；`select_tool_defs` 新增 `only`
+> 交集收窄（含空元组语义）；taor orchestrator 装配/双通道裁剪/tool_use 无
+> tools 重发回退（`native_tools_defer` 审计日志）/breaker 上报；`turn_usage`
+> 回合 usage 累计（plan/orchestrator/reflect L3 全接入 → assistant_message
+> turn_stats，R3-M1）；`tests/test_native_tools_p1.py` 13 用例覆盖验收①–⑥；
+> 门禁 api 918 passed / ruff 全绿。部署后冒烟清单见 PR 描述。
 > V0.2（2026-09-08）：按团队评审修订——①**D1/D4 装配白名单交集失实修正**（select_tool_defs
 > 现语义 = 全量 native ∪ tools_needed∩registered，无 allowed 交集——交集收窄为本方案新增
 > 行为，D1 收敛为 orchestrator 执行轮装配 + 装配层前置断言）；②**D5 灰度三态许可**

@@ -143,6 +143,9 @@ class GraphState(TypedDict, total=False):
     clarify_id: str | None  # 阶段 3：澄清唯一标识（匹配前端 clarify_reply.id）
     verdict: ReflectVerdict | None  # 阶段 4：reflect 节点写（H4 五档判决，每次进入只出一个）
     final_text: str | None  # H4：orchestrator 收尾候选答复；由 reflect 判决后统一收尾发出
+    turn_usage: dict  # F0/P1：回合累计模型 token usage（plan/orchestrator/reflect L3
+    # 各次 invoke 合并，节点链式覆盖）；随 assistant_message.turn_stats 审计落库
+    # （对齐 chat 路径 routing.py 的 usage 口径）。仅含计数，无正文，可入检查点。
     task_state: Mapping[str, object] | None  # 结构化任务状态机（TaskSessionState 投影）
     task_state_observation_count: int  # 已被状态机消费的 Observation 数，防 append reducer 重放旧观察
     session_tasks: list  # 会话内 TaskCreate 看板，不写 PG tasks 表
