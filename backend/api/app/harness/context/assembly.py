@@ -175,6 +175,7 @@ def select_tool_defs(
     mode: str,
     tools_needed: tuple[str, ...] = (),
     planned_only: bool = False,
+    only: tuple[str, ...] | None = None,
 ) -> list[Mapping[str, object]]:
     """按本轮 mode 与 tools_needed 从注册表取工具定义（CX-5）。
 
@@ -184,12 +185,19 @@ def select_tool_defs(
     全量原生工具重新铺开造成空转循环。未注册不返回；MCP 长工具
     （如 ``task.create``）不默认注入。无 ``iter_defs`` 的测试桩仅消费
     ``tools_needed``。
+
+    F0/P1 修订（V0.2 D1/D4）：新增 ``only`` 交集收窄——非空时返回集合
+    ``⊆ only``（native 全量铺开与 tools_needed 并入均受其约束）。注意：这是
+    **本方案新增行为**，既有语义（全量 native ∪ tools_needed∩registered）
+    不是白名单交集——调用方必须显式传 ``only=allowed_tools`` 才能把
+    worker 视野外的工具定义（bash/write/edit 等）挡在模型下发面之外。
     """
     if mode != "react":
         return []
     get_def = getattr(registry, "get_def", None)
     if get_def is None:
         return []
+    only_set = frozenset(only) if only is not None else None
     names: list[str] = []
     iter_defs = getattr(registry, "iter_defs", None)
     if callable(iter_defs) and not planned_only:
@@ -197,6 +205,8 @@ def select_tool_defs(
     for name in tools_needed:
         if name and name not in names:
             names.append(name)
+    if only_set is not None:
+        names = [name for name in names if name in only_set]
     definitions: list[Mapping[str, object]] = []
     for name in names:
         definition = get_def(name)

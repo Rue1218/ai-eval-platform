@@ -43,6 +43,7 @@ H4：**orchestrator 收尾移交 ``reflect``**——模型自主停止或守卫�
 from __future__ import annotations
 
 import json
+import logging
 import re
 import uuid
 from collections.abc import Mapping
@@ -52,8 +53,14 @@ from typing import Any
 from langgraph.config import get_config
 
 from app.errors import AppError
+from app.harness.context.assembly import select_tool_defs
 from app.harness.contracts import Observation, PlanArtifact, make_event, to_dict
 from app.harness.contracts.artifacts import validate_plan_artifact
+from app.harness.execution.native_tools_policy import (
+    native_tools_allowed,
+    native_tools_report_failure,
+)
+from app.harness.execution.stream_policy import profile_id_from_configurable
 from app.harness.execution.toolnode import seal_budget_if_exhausted
 from app.harness.feedback.review import MAX_REPAIRS, MAX_REPLANS, review
 from app.harness.memory import GraphState, SerializableRequest, rebuild_model_config
@@ -66,6 +73,8 @@ from app.harness.orchestration.budget import (
 )
 from app.harness.prompts.protocols import parse_plan_protocol, parse_react, parse_reflect
 from app.llm import ModelRequest
+
+logger = logging.getLogger("ai-eval.agent")
 
 # ── 常量 ──
 
@@ -109,6 +118,23 @@ _REACT_SYSTEM_TEMPLATE = (
     "- 只能用下列工具（JSON Schema 见上），不能编造工具名；\n"
     "- 已经重复读取过同一文件/检索过同一内容时，直接结束，不要重复调用。\n"
     "可用工具：\n{tool_schemas}"
+)
+
+# F0/P1：原生工具装配轮的执行指令（V0.2 D1 双通道裁剪）——工具 schema 正文
+# 不再注入 system（定义经协议 tools 下发），保留 react.v1 格式说明作为回退
+# 提示，并附 L1 纪律精简段（禁编造/密钥保护，语义同源 system.py L1，长度
+# 受控为执行轮精简版）。回退到文本协议时恢复 _REACT_SYSTEM_TEMPLATE 全量。
+_REACT_NATIVE_SYSTEM = (
+    "你是评测平台对话引擎的执行器。本轮携带平台原生工具定义（tools 参数），"
+    "优先使用原生工具调用完成目标动作：\n"
+    "- 需要工具时发起原生工具调用；只能用下发的工具，不得编造工具名或伪造参数；\n"
+    "- 工具结果会以工具消息回填；未收到工具结果前不得声称操作已成功；\n"
+    "- 不得在输出中暴露 API Key、Cookie、密码、Token 或任何密钥类信息。\n"
+    "若本轮没有收到工具定义或原生工具不可用，则按文本协议输出一个 JSON 对象"
+    "（字段：thought 为不超过 30 字的摘要；tool 为工具名或 null；arguments 为"
+    "对象；done 为布尔；protocol 恒为 react；version 恒为 react.v1；"
+    "done=true 时在 JSON 之后另起一行输出给用户的最终答复正文）。\n"
+    "规则：已经重复读取过同一文件/检索过同一内容时，直接结束，不要重复调用。\n"
 )
 
 # reflect.v1 输出说明（H4）：只在无工具失败时做一次受控核对，判决只能降级。
@@ -190,8 +216,14 @@ def _model_input(
     *,
     system: str,
     extra_messages: list[Mapping[str, object]] | None = None,
+    tools: tuple[Mapping[str, object], ...] = (),
 ) -> tuple[ModelRequest, dict]:
-    """按会话协议档组装 ModelRequest（api_key 即时注入，不入 State）。"""
+    """按会话协议档组装 ModelRequest（api_key 即时注入，不入 State）。
+
+    F0/P1：``tools`` 由调用节点按装配许可传入（仅 orchestrator 执行轮装配，
+    见 _REACT_NATIVE_SYSTEM；plan/reflect 不装配）。默认空元组 = 与现状一致，
+    适配器不写请求体 ``"tools"`` 键。
+    """
     serializable: SerializableRequest = state["request"]
     try:
         run_config = get_config()
@@ -205,8 +237,29 @@ def _model_input(
     ]
     if extra_messages:
         messages.extend(extra_messages)
-    request = ModelRequest(config=model_config, messages=tuple(messages), system=system)  # type: ignore[arg-type]
+    request = ModelRequest(  # type: ignore[arg-type]
+        config=model_config, messages=tuple(messages), system=system, tools=tools
+    )
     return request, configurable
+
+
+def _merge_usage(
+    base: Mapping[str, object] | None, usage: Mapping[str, object] | None
+) -> dict[str, int]:
+    """回合累计模型 token usage（F0/P1 审计；计数键相加，非计数键忽略）。
+
+    agent 图内每次模型调用（plan/orchestrator/reflect L3）都把响应 usage 并入，
+    最终随收尾 assistant_message 的 turn_stats 落库（对齐 chat 路径 routing.py
+    的 usage 口径，R3-M1 计量修复）。仅含计数，无正文，可安全入检查点。
+    """
+    merged: dict[str, int] = {}
+    for source in (base, usage):
+        if not isinstance(source, Mapping):
+            continue
+        for key, value in source.items():
+            if isinstance(value, int | float) and not isinstance(value, bool):
+                merged[key] = int(merged.get(key, 0)) + int(value)
+    return merged
 
 
 def _observation_lines(state: GraphState) -> list[str]:
@@ -297,9 +350,17 @@ def _completed_payload(state: GraphState, finish_reason: str) -> dict[str, objec
 
 
 def _terminal_events(state: GraphState, text: str, finish_reason: str) -> list[dict]:
-    """收尾事件对：``assistant_message`` + ``response.completed``（后者必须最后一条）。"""
+    """收尾事件对：``assistant_message`` + ``response.completed``（后者必须最后一条）。
+
+    F0/P1：assistant_message 携带 turn_stats.usage（回合累计模型 token 用量，
+    与 chat 路径 routing.py 同构，R3-M1 成本审计）；用量为空时省略该键。
+    """
+    payload: dict[str, object] = {"text": text, "role": "assistant", "latency_ms": 0}
+    usage = _merge_usage(state.get("turn_usage"), None)
+    if usage:
+        payload["turn_stats"] = {"usage": usage}
     return [
-        make_event("assistant_message", {"text": text, "role": "assistant", "latency_ms": 0}),
+        make_event("assistant_message", payload),
         make_event("response.completed", _completed_payload(state, finish_reason)),
     ]
 
@@ -361,11 +422,13 @@ def make_plan_node(gateway: object):
             system += "\n\n上次执行失败原因（仅供你调整步骤，不作为识别技能的依据）：" + replan_reason
         request, _configurable = _model_input(state, system=system)
         plan: PlanArtifact
+        usage_acc = _merge_usage(state.get("turn_usage"), None)
         try:
             response = gateway.invoke(request)  # type: ignore[attr-defined]
         except AppError as exc:
             plan = plan_lib.build_plan(text, fail_reason=str(exc))  # L0 降级
         else:
+            usage_acc = _merge_usage(usage_acc, response.usage)
             try:
                 fields = parse_plan_protocol(response.text)["fields"]
                 payload = {key: value for key, value in fields.items() if key not in ("protocol", "version")}
@@ -396,6 +459,7 @@ def make_plan_node(gateway: object):
             "verdict": None,
             "force_replan": False,
             "budget": budget,
+            "turn_usage": usage_acc,
         }
 
     return node
@@ -481,7 +545,23 @@ def make_orchestrator_node(gateway: object, agent_registry: object, tool_registr
                 "pending_events": _error_payload("INTERNAL", "计划步数越界，结束本轮"),
             }
         observation_lines = _observation_lines(state)
-        system = _REACT_SYSTEM_TEMPLATE.format(
+        # F0/P1：原生工具装配（方案 V0.2 D1/D5，仅 orchestrator 执行轮；plan/
+        # reflect 不装配）。双通道裁剪：native 轮 system 移除 _tool_schemas_text
+        # 正文（工具定义经协议 tools 下发）；tool_use 出现 → 本回合回退文本协议
+        # （无 tools 重发一次 + 审计日志，V0.2 §5 P1③，不落入 3 次纠正噪音）。
+        # 档级熔断由 native_tools_policy 承担（带 tools 请求连续失败 → 摘除）。
+        try:
+            run_config = get_config()
+        except RuntimeError:  # 图外直接调用（单测）无 run 上下文
+            run_config = None
+        profile_id = profile_id_from_configurable((run_config or {}).get("configurable"))
+        native_mode = native_tools_allowed(profile_id)
+        native_defs: tuple[Mapping[str, object], ...] = (
+            tuple(select_tool_defs(tool_registry, mode="react", only=allowed_tools))  # type: ignore[arg-type]
+            if native_mode
+            else ()
+        )
+        legacy_system = _REACT_SYSTEM_TEMPLATE.format(
             tool_schemas=_tool_schemas_text(tool_registry, allowed_tools)
         )
         extra: list[Mapping[str, object]] = []
@@ -495,11 +575,20 @@ def make_orchestrator_node(gateway: object, agent_registry: object, tool_registr
         raw: str = ""
         attempts = 0
         max_attempts = 2  # parse_retries ≤ 2（含首次共 3 次尝试的上限语义：首次 + 2 重试）
+        usage_acc = _merge_usage(state.get("turn_usage"), None)
         while attempts <= max_attempts:
-            request, _configurable = _model_input(state, system=system, extra_messages=extra)
+            request, _configurable = _model_input(
+                state,
+                system=_REACT_NATIVE_SYSTEM if native_mode else legacy_system,
+                extra_messages=extra,
+                tools=native_defs if native_mode else (),
+            )
             try:
                 response = gateway.invoke(request)  # type: ignore[attr-defined]
             except AppError as exc:
+                if native_mode:
+                    # 档级熔断：带 tools 请求失败（含端点 400/超时等）→ 计数，达阈值摘除
+                    native_tools_report_failure(profile_id)
                 budget = consume_model_call(budget)
                 attempts += 1
                 if attempts > max_attempts:
@@ -507,12 +596,34 @@ def make_orchestrator_node(gateway: object, agent_registry: object, tool_registr
                         **_step("orchestrator"),
                         "turn_failed": True,
                         "budget": budget.to_dict(),
+                        "turn_usage": usage_acc,
                         "pending_events": _error_payload(
                             exc.code.value, "执行模型连续失败，结束本轮"
                         ),
                     }
                 continue
             budget = consume_model_call(budget)
+            usage_acc = _merge_usage(usage_acc, response.usage)
+            if native_mode and response.tool_calls:
+                # P1 精确回退（V0.2 §5 P1③）：P1 仅下发不循环——tool_use 出现即
+                # 以无 tools 请求重发一次并记审计（不落入 3 次纠正噪音）；本回合
+                # 后续轮次全部转文本协议（防原生/文本摇摆造成同一工具双执行）。
+                # P2 起本分支改接原生执行 + tool 消息回填（D3）。
+                names = ",".join(tool.name for tool in response.tool_calls)
+                logger.info(
+                    "native_tools_defer profile=%s tools=%s（P1 回退文本协议）",
+                    profile_id,
+                    names,
+                )
+                native_mode = False
+                extra = [
+                    {
+                        "role": "user",
+                        "content": "本轮工具定义已移除，请按文本协议输出 react.v1 JSON"
+                        "（tool/arguments/done），不要输出任何其他文字。",
+                    }
+                ]
+                continue  # tool_use 非解析失败，不递增 attempts（模型调用预算已扣）
             raw = response.text
             try:
                 fields = parse_react(raw)["fields"]
@@ -530,6 +641,7 @@ def make_orchestrator_node(gateway: object, agent_registry: object, tool_registr
                         **_step("orchestrator"),
                         "turn_failed": True,
                         "budget": budget.to_dict(),
+                        "turn_usage": usage_acc,
                         "pending_events": _error_payload(
                             "VALIDATION", "执行协议解析连续失败，结束本轮"
                         ),
@@ -539,6 +651,7 @@ def make_orchestrator_node(gateway: object, agent_registry: object, tool_registr
                 **_step("orchestrator"),
                 "turn_failed": True,
                 "budget": budget.to_dict(),
+                "turn_usage": usage_acc,
                 "pending_events": _error_payload("VALIDATION", "执行协议解析失败，结束本轮"),
             }
 
@@ -551,8 +664,9 @@ def make_orchestrator_node(gateway: object, agent_registry: object, tool_registr
             return {
                 **_step("orchestrator"),
                 "budget": budget.to_dict(),
+                "turn_usage": usage_acc,
                 "final_text": text,
-                "response": {"text": text, "usage": {}, "latency_ms": 0},
+                "response": {"text": text, "usage": usage_acc, "latency_ms": 0},
             }
 
         name = str(tool_name)
@@ -561,6 +675,7 @@ def make_orchestrator_node(gateway: object, agent_registry: object, tool_registr
                 **_step("orchestrator"),
                 "turn_failed": True,
                 "budget": budget.to_dict(),
+                "turn_usage": usage_acc,
                 "pending_events": _error_payload(
                     "VALIDATION",
                     f"非法工具调用：{name}（不在本轮视野内）。"
@@ -574,6 +689,7 @@ def make_orchestrator_node(gateway: object, agent_registry: object, tool_registr
                 **_step("orchestrator"),
                 "turn_failed": True,
                 "budget": budget.to_dict(),
+                "turn_usage": usage_acc,
                 "pending_events": _error_payload(
                     "VALIDATION", f"重复读取已守卫：{name} 同一参数已执行 3 次"
                 ),
@@ -583,6 +699,7 @@ def make_orchestrator_node(gateway: object, agent_registry: object, tool_registr
             **_step("orchestrator"),
             "plan_step_index": index + 1,
             "budget": budget.to_dict(),
+            "turn_usage": usage_acc,
             "pending_tool": {
                 "call_id": call_id,
                 "name": name,
@@ -715,8 +832,14 @@ def make_reflect_node(gateway: object):
     做一次受控短调用并计入预算；预算耗尽或上游失败即跳过 L3（不卡住用户）。
     """
 
-    def _l3_fields(state: GraphState) -> dict[str, object] | None:
-        """一次受控复核短调用；失败/非法返回 None（调用方按「无结论」处理）。"""
+    def _l3_fields(
+        state: GraphState,
+    ) -> tuple[dict[str, object] | None, Mapping[str, object]]:
+        """一次受控复核短调用；失败/非法 fields 返回 None（调用方按「无结论」处理）。
+
+        F0/P1：同时返回该次调用的 usage（回合累计审计来源）；异常/非法路径为空。
+        """
+        usage: Mapping[str, object] = {}
         text = str(state.get("final_text") or "")
         extra: list[Mapping[str, object]] = []
         if text:
@@ -727,15 +850,17 @@ def make_reflect_node(gateway: object):
         try:
             response = gateway.invoke(request)  # type: ignore[attr-defined]
         except AppError:
-            return None
+            return None, usage
+        usage = response.usage
         try:
-            return dict(parse_reflect(response.text)["fields"])
+            return dict(parse_reflect(response.text)["fields"]), usage
         except AppError:
-            return None
+            return None, usage
 
     def node(state: GraphState) -> dict:
         base = _step("reflect")
         budget = from_dict(state.get("budget") or {})
+        usage_acc = _merge_usage(state.get("turn_usage"), None)
         step_fail_count = int(state.get("step_fail_count") or 0)
         repair_count = int(state.get("repair_count") or 0)
         replan_count = int(state.get("replan_count") or 0)
@@ -747,10 +872,11 @@ def make_reflect_node(gateway: object):
                 **base,
                 "verdict": "reject",
                 "budget": budget.to_dict(),
+                "turn_usage": usage_acc,
                 "pending_events": [
                     make_event("response.completed", _completed_payload(state, "error"))
                 ],
-                "response": {"text": "", "usage": {}, "latency_ms": 0},
+                "response": {"text": "", "usage": usage_acc, "latency_ms": 0},
             }
         plan = _plan_artifact(state)
         if plan is None:
@@ -759,10 +885,11 @@ def make_reflect_node(gateway: object):
                 **base,
                 "verdict": "reject",
                 "budget": budget.to_dict(),
+                "turn_usage": usage_acc,
                 "pending_events": _terminal_events(
                     state, "本轮计划缺失，已停止执行。", "error"
                 ),
-                "response": {"text": "", "usage": {}, "latency_ms": 0},
+                "response": {"text": "", "usage": usage_acc, "latency_ms": 0},
             }
 
         # ── L2：确定性失败阶梯（review 库函数，零模型）──
@@ -779,7 +906,8 @@ def make_reflect_node(gateway: object):
         # ── L3：仅在无失败（判决为 pass）时核对一次，且只可降级不放行 ──
         if verdict == "pass" and not is_budget_exhausted(budget):
             budget = consume_model_call(budget)
-            l3 = _l3_fields(state)
+            l3, l3_usage = _l3_fields(state)
+            usage_acc = _merge_usage(usage_acc, l3_usage)
             if l3 is not None:
                 fields = l3
                 reason = str(l3.get("reason") or "")
@@ -797,6 +925,7 @@ def make_reflect_node(gateway: object):
                 **base,
                 "verdict": "repair",
                 "budget": budget.to_dict(),
+                "turn_usage": usage_acc,
                 # 修复配额为回合级：消费后不再归还，成功也不重置（防无限修复）
                 "repair_count": repair_count + 1,
                 "observations": [_repair_observation(state, fields)],
@@ -806,6 +935,7 @@ def make_reflect_node(gateway: object):
                 **base,
                 "verdict": "retry",
                 "budget": budget.to_dict(),
+                "turn_usage": usage_acc,
                 "replan_count": replan_count + 1,
                 "force_replan": True,
                 "replan_reason": reason or _failure_reason(state),
@@ -819,8 +949,9 @@ def make_reflect_node(gateway: object):
                 **base,
                 "verdict": "clarify",
                 "budget": budget.to_dict(),
+                "turn_usage": usage_acc,
                 "pending_events": _terminal_events(state, text, "stop"),
-                "response": {"text": text, "usage": {}, "latency_ms": 0},
+                "response": {"text": text, "usage": usage_acc, "latency_ms": 0},
             }
         if verdict == "reject":
             text = _reject_message(state, reason)
@@ -828,8 +959,9 @@ def make_reflect_node(gateway: object):
                 **base,
                 "verdict": "reject",
                 "budget": budget.to_dict(),
+                "turn_usage": usage_acc,
                 "pending_events": _terminal_events(state, text, "error"),
-                "response": {"text": text, "usage": {}, "latency_ms": 0},
+                "response": {"text": text, "usage": usage_acc, "latency_ms": 0},
             }
         # pass：回显 orchestrator 的候选答复并正常收尾
         text = str(state.get("final_text") or "").strip() or f"已完成：{_intent_text(state)}"
@@ -837,8 +969,9 @@ def make_reflect_node(gateway: object):
             **base,
             "verdict": "pass",
             "budget": budget.to_dict(),
+            "turn_usage": usage_acc,
             "pending_events": _terminal_events(state, text, "stop"),
-            "response": {"text": text, "usage": {}, "latency_ms": 0},
+            "response": {"text": text, "usage": usage_acc, "latency_ms": 0},
         }
 
     return node

@@ -84,6 +84,13 @@ class Settings(BaseSettings):
     agent_native_stream_enabled: bool = True
     # 逗号分隔协议档 ID；空 = 全部 native。``*`` 同样表示全部。
     agent_native_stream_profile_ids: str = ""
+    # F0/P1：Agent 原生工具装配（《Agent 原生工具装配方案》V0.2 D1/D5）。主闸门
+    # 默认关 = tools 不注入（请求逐字节保持现状）；开启后按
+    # agent_native_tools_profile_ids 白名单逐协议档放行（空 = 不开任何档，
+    # ``*`` = 全部——与 stream 白名单语义一致）。tool_call_mode 不担任装配
+    # 许可（生产默认已 native，防主闸门一开即全量下发）；装配层是唯一消费点。
+    agent_native_tools_enabled: bool = False
+    agent_native_tools_profile_ids: str = ""
     # P3/P4：同轮只读 ToolBatch 并行。默认关闭。
     agent_parallel_tool_batch_enabled: bool = False
     max_parallel_tool_calls: int = 3
