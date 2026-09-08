@@ -126,6 +126,10 @@ class GraphState(TypedDict, total=False):
     observations: Annotated[list[object], _append_observations]  # 工具观察（Observation 投影）；只作模型输入
     pending_tool: Mapping[str, object] | None  # 阶段 2：当前 ToolCall 投影（react 条件边分流）
     pending_tools: list[Mapping[str, object]]  # 兼容队列：批次内尚未执行的后续项
+    native_tool_round: Mapping[str, object] | None  # P2：原生 tool_use 轮缓冲
+    # （assistant 段 + 该轮 tool_calls；orchestrator Act 写，tools 执行完回 orchestrator
+    #  消费合成回填后置 None；仅含调用元数据与文本段，无工具正文——正文只经
+    #  NativeToolResultStore，持久化契约见方案 V0.2 D3）
     pending_tool_batch: Mapping[str, object] | None  # P2：同轮 ToolBatch（batch_id/items/block_index/status）
     native_messages: Annotated[list[Mapping[str, object]], _append_native_messages]  # 原生 assistant/tool 往返消息
     stop_flag: bool  # 节点写，条件边读（阶段 2）
