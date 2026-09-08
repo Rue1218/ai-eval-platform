@@ -26,6 +26,7 @@ class ErrorCode(StrEnum):
     UPSTREAM = "UPSTREAM"
     TIMEOUT = "TIMEOUT"
     INTERNAL = "INTERNAL"
+    DENIED = "DENIED"  # F5/G6：沙箱只读档拒写（升档审批触发源，§6.4）
 
 
 # code -> 默认 HTTP 状态码（API V1.0 §1.3）
@@ -40,6 +41,7 @@ _CODE_STATUS: dict[ErrorCode, int] = {
     ErrorCode.UPSTREAM: 502,
     ErrorCode.TIMEOUT: 504,
     ErrorCode.INTERNAL: 500,
+    ErrorCode.DENIED: 403,  # F5/G6：只读拒写（HTTP 403 授权语义）
 }
 
 

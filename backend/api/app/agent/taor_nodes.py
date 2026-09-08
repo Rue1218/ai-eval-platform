@@ -996,12 +996,16 @@ def make_tools_node(tool_node: object):
         else:
             # 拒绝路径（门禁/权限/沙箱/未注册）不产 Observation，只发
             # tool_result(ok=false)；同样计入连续失败，否则失败阶梯看不见这类失败。
-            rejected = any(
-                isinstance(event, Mapping)
-                and event.get("kind") == "tool_result"
-                and (event.get("payload") or {}).get("ok") is False
+            # F5/G6（MAJ-9②）：升档中间帧（拒写 denied，escalation=True）是过程
+            # 事实而非终态失败——批准重放后末帧可能成功，按事件序收敛判定，
+            # 该帧不计入连续失败（否则成功升档回合被误判进 repair 阶梯）。
+            final_frames = [
+                (event.get("payload") or {})
                 for event in result.get("pending_events") or []
-            )
+                if isinstance(event, Mapping) and event.get("kind") == "tool_result"
+                and not (event.get("payload") or {}).get("escalation")
+            ]
+            rejected = any(frame.get("ok") is False for frame in final_frames)
             if rejected:
                 result["step_fail_count"] = int(state.get("step_fail_count") or 0) + 1
         return result
