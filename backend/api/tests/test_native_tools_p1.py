@@ -155,11 +155,15 @@ def test_policy_allowlist_semantics(monkeypatch) -> None:
 # ─── 2. 档级熔断（P1 DoD②：连续失败摘除装配，冷却后恢复探测）───
 
 
-def test_breaker_opens_after_threshold_and_recovers(monkeypatch) -> None:
+def test_breaker_opens_after_threshold_and_recovers(monkeypatch, caplog) -> None:
+    import logging
+
     monkeypatch.setattr(settings, "agent_native_tools_enabled", True)
     monkeypatch.setattr(settings, "agent_native_tools_profile_ids", "*")
     monkeypatch.setattr(settings, "circuit_failure_threshold", 2)
     monkeypatch.setattr(settings, "circuit_cooldown_s", 0.05)
+    # halfopen 为 INFO 级，须提升捕获级别才能断言（生产由日志配置决定输出）
+    caplog.set_level(logging.INFO, logger="ai-eval.agent")
 
     assert native_tools_allowed("p-1") is True
     native_tools_report_failure("p-1")
@@ -167,9 +171,18 @@ def test_breaker_opens_after_threshold_and_recovers(monkeypatch) -> None:
     native_tools_report_failure("p-1")
     assert native_tools_allowed("p-1") is False  # open：摘除
     assert native_tools_breaker_snapshot().get("p-1", {}).get("open_until", 0) > 0
+    # 熔断为可观测事件（冒烟据此验证档级摘除）
+    assert any(
+        record.getMessage().startswith("native_tools_breaker_open profile=p-1")
+        for record in caplog.records
+    )
 
     time.sleep(0.06)
     assert native_tools_allowed("p-1") is True  # 冷却到期：半开放行探测
+    assert any(
+        record.getMessage().startswith("native_tools_breaker_halfopen profile=p-1")
+        for record in caplog.records
+    )
 
 
 def test_breaker_success_resets_failures(monkeypatch) -> None:
