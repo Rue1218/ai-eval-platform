@@ -38,6 +38,7 @@ NODE_EVENT_KINDS = frozenset(
         "error",
         "assistant_message",
         "response.completed",
+        "fabrication",
     }
 )
 # 收包循环/Worker 直产且**不入枚举**（confirm_ack 回执由收包循环直产）

@@ -1675,15 +1675,16 @@ Harness 回合必须丢到后台 Task，**不得**在 `receive` 循环里 `await
 
 ### 4.3 服务 → 前端（V1.64 当前事件）
 
-**词汇表版本语义与演进纪律（V1.71 起，V1.74 现值 `event.v4`）**：本节事件表 +
+**词汇表版本语义与演进纪律（V1.71 起，V1.75 现值 `event.v5`）**：本节事件表 +
 api/worker 直产事件（`confirm_ack` / `tool_approval_ack` / `task_cancelled` /
 `session_title` / `clarify_ack` / `approval_terminal` / `context_trim`）的
 词汇表唯一事实源为 `backend/shared/event_vocab.py`（api/worker 共用）。当前
-版本 `vocab_version = "event.v4"`（公共头 §4.2 恒发）。**增删持久事件 kind
-必须递增版本**（`event.v1` → … → `event.v4`），演进理由随本文件修订记录
+版本 `vocab_version = "event.v5"`（公共头 §4.2 恒发）。**增删持久事件 kind
+必须递增版本**（`event.v1` → … → `event.v5`），演进理由随本文件修订记录
 留档——V1.72 新增 `clarify_ack`（#1 回执）升 `event.v2`；V1.73 新增
 `approval_terminal`（#3 审批终态）升 `event.v3`；V1.74 新增 `context_trim`
-（#2 窗口裁剪留痕）升 `event.v4`；未经契约评审不得新增/恢复事件 kind。历史
+（#2 窗口裁剪留痕）升 `event.v4`；V1.75 新增 `fabrication`（原生工具 P3
+编造对账审计）升 `event.v5`；未经契约评审不得新增/恢复事件 kind。历史
 `ws_events` 无版本行按当前版本解释（只读兼容）；服务端转发护栏：未知 kind /
 版本不符默认告警并跳过，`event_vocab_strict=true` 时 fail-closed 拒收并落
 `error`。
@@ -1708,6 +1709,7 @@ api/worker 直产事件（`confirm_ack` / `tool_approval_ack` / `task_cancelled`
 | `context_trim` | `{reason:"compact"\|"tail_window",dropped,kept,in_scope_total,keep_from_id?,limit}`；持久化并可回放。**V1.74 新增（服务端留痕为主，前端不渲染）**：回合装配模型上下文时发生窗口裁剪（compact `keep_from` 截断 / 末 20 条尾窗截断）即落一条；payload 仅元信息，**不含被裁消息原文**（观察纪律） | 不渲染（审计/回放一致性用） |
 | `session_title` | `{title,source:"ai"}`；持久化并可回放 | 同步会话标题 |
 | `error` | `{code,message}`；异常消息必须脱敏 | ErrorStrip + Toast |
+| `fabrication` | `{claim,repairs}`；持久化并可回放。**V1.75 新增（原生工具 P3，服务端审计为主，前端不渲染）**：reflect 编造对账检测——收尾答复声明「发送确认卡/创建入队任务」但本回合无对应工具成功执行记录，提示修正一次后仍复现 → 判 reject 时落一条审计留痕；payload 仅声明类别与已用修复次数，不含答复正文 | 不渲染（审计/对账用） |
 | `pong` | `{}`；瞬态 | 不渲染 |
 
 Agent 图（V1.67，H3）产生 `tool_call` / `tool_result`（ToolCard 摘要）；V1.70（H5）起 `engine="agent"` 危险 bash 另产生 `tool_approval`（审批卡）；V1.72 起 `ask_user_question` 另产生 `clarify`（澄清卡，B 路线与审批卡同构）。不产生 `thought`、`tool_progress`、`tool_output_delta`、`plan` 或其确认/回复事件（无生产者）。历史 `ws_events` 中 V1.63 之前的旧事件（含旧 ToolCard 形态与 V1.62 旧澄清卡）仍不由前端渲染，本版起新会话内产生的新 `tool_call` / `tool_result` / `clarify` 正常渲染并随历史回放。`task_cancelled` 是收包循环的任务控制事件，不属于 Agent ToolCall。

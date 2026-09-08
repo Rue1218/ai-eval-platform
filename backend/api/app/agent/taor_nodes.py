@@ -110,6 +110,30 @@ _NATIVE_BACKFILL_MISSING_TEXT = (
 # 模型输入时跳过该轮占位（正文已随 role=tool 回填，避免占位噪音双写）。
 _NATIVE_OBSERVATION_PLACEHOLDER = "完整结果仅在当前回合供模型使用"
 
+# F0/P3：编造对账（R3-M6 窄版，零模型）——收尾文本的声明-证据规则。窄集防
+# 误报：仅覆盖「本回合即时动作」类声明（确认卡/任务创建入队），其证据必须为
+# 本回合对应工具的成功执行（observations ok=True 且 tool ∈ 证据集）。文件/
+# 搜索类声明不加规则（上下文含历史陈述，转述误报风险高，留观测日志）。
+# 每条 = (类别文案, 声明正则, 证据工具集)。
+_FABRICATION_CLAIM_PATTERNS: tuple[tuple[str, re.Pattern[str], frozenset[str]], ...] = (
+    (
+        "向用户发送确认卡",
+        re.compile(r"(?:已(?:向|经)?(?:发送|发出|发起)|发送了).{0,8}(?:确认卡|审批卡)|确认卡已(?:发送|发出)"),
+        frozenset({"ask_user_question", "task", "TaskCreate"}),
+    ),
+    (
+        "创建或入队评测任务",
+        re.compile(r"已(?:创建|提交|入队)(?:评测)?任务|任务已(?:创建|提交|入队)"),
+        frozenset({"task", "TaskCreate"}),
+    ),
+)
+# 编造对账修复提示模板（注入观察回灌 Executor；与 L2 repair 共用修复配额）
+_FABRICATION_REPAIR_HINT = (
+    "上一轮收尾声称已「{claim}」，但本回合没有对应工具的成功执行记录。"
+    "请只陈述工具结果已证实的内容：如需发起确认卡或创建任务，先调用相应工具，"
+    "不要声称未实际执行的平台操作。"
+)
+
 _PLAN_SYSTEM = (
     "你是评测平台对话引擎的规划器。只输出一个 JSON 对象，不要输出任何其他文字。\n"
     '格式：{"intent":"一句话意图","skill_id":null或技能ID,"slots":{"steps":'
@@ -1004,6 +1028,26 @@ def _repair_observation(state: GraphState, fields: Mapping[str, object]) -> dict
     return to_dict(Observation(tool="reflect", text=hint, ok=False, source="reflect"))
 
 
+def _fabrication_claim(state: GraphState) -> str | None:
+    """收尾答复文本中的无证据声明检测（P3/R3-M6 窄版，零模型）。
+
+    命中 = 声明了「本回合即时动作」类平台操作（发送确认卡/创建入队任务），
+    但本回合无对应工具的成功执行记录（observations ok=True 且 tool ∈ 证据集）。
+    返回命中类别文案；未命中返回 None。
+    """
+    text = str(state.get("final_text") or "").strip()
+    if not text:
+        return None
+    evidence: set[str] = set()
+    for observation in state.get("observations") or []:
+        if isinstance(observation, Mapping) and observation.get("ok"):
+            evidence.add(str(observation.get("tool") or ""))
+    for label, pattern, tools in _FABRICATION_CLAIM_PATTERNS:
+        if pattern.search(text) and not (evidence & tools):
+            return label
+    return None
+
+
 def _reject_message(state: GraphState, reason: str) -> str:
     """``reject`` 收尾文案：说明停在第几步与失败原因（可读，不泄漏堆栈）。"""
     index = int(state.get("plan_step_index") or 0)
@@ -1079,6 +1123,48 @@ def make_reflect_node(gateway: object):
                 "pending_events": _terminal_events(
                     state, "本轮计划缺失，已停止执行。", "error"
                 ),
+                "response": {"text": "", "usage": usage_acc, "latency_ms": 0},
+            }
+
+        # ── L1.5（P3，R3-M6）：编造对账——收尾声明无本回合工具证据 → 修复/
+        # 拒绝（零模型硬护栏）。修复配额与 L2 共用（防无限循环）；纠正观察以
+        # ok=False 回灌（review 以 step_fail_count 判定失败，本观察不误触阶梯）。
+        fabrication = _fabrication_claim(state)
+        if fabrication:
+            if repair_count < MAX_REPAIRS:
+                return {
+                    **base,
+                    "verdict": "repair",
+                    "budget": budget.to_dict(),
+                    "turn_usage": usage_acc,
+                    "repair_count": repair_count + 1,
+                    "observations": [
+                        to_dict(
+                            Observation(
+                                tool="reflect",
+                                text=_FABRICATION_REPAIR_HINT.format(claim=fabrication),
+                                ok=False,
+                                source="reflect",
+                            )
+                        )
+                    ],
+                }
+            text = (
+                f"本轮未能完成：检测到未证实声明「{fabrication}」，提示修正后仍复现"
+                "（平台禁止声称未实际执行的确认卡/任务操作）。"
+            )
+            return {
+                **base,
+                "verdict": "reject",
+                "budget": budget.to_dict(),
+                "turn_usage": usage_acc,
+                "pending_events": [
+                    make_event(
+                        "fabrication",
+                        {"claim": fabrication, "repairs": int(repair_count)},
+                    ),
+                    *_terminal_events(state, text, "error"),
+                ],
                 "response": {"text": "", "usage": usage_acc, "latency_ms": 0},
             }
 

@@ -1,27 +1,32 @@
 # AI 测试与评估平台 — Agent 原生工具装配方案
 
-> 版本:V0.3（定稿候选） | 状态:**P1 已部署（main 51fa3c3）**；**P2 原生循环已开发完成（feat/agent-native-tools-p2 分支）**，待 PR 评审合入；端点冒烟结论待回传（L1-A/C pass 即 P2 外部前提成立） | 日期:2026-09-08
+> 版本:V0.4（定稿候选） | 状态:**P1/P2 已部署（main aec6621）**；**P3 开发完成（feat/agent-native-tools-p3 分支）**，待 PR 评审合入；端点冒烟与开闸观察待执行 | 日期:2026-09-08
 > 范围：仅设计文档，不改代码。评审通过后按 §5 分期实施。
-> V0.3（2026-09-08）：P2 落地登记（§5 P2 全部决策）——orchestrator 原生 Act
-> （tool_use 名守卫/OR-4 重复守卫/round 缓冲 assistant 段/多 tool_use 全量入队
-> native=True）；Observe 回填组装 `_build_native_backfill`（store 正文合成 +
-> 缺失显式降级文案 + 单条 60K 二次裁剪带标注 + 占位观察跳过注入）；graph tools
-> 自环 drain + orchestrator 注入 store（与 build_tool_node 同源实例）；ask_user
-> 答复明细并入 model_text（修复原生答复丢失，R2 高 4）；GraphState 新增
-> `native_tool_round`（覆盖式缓冲，无正文入持久层——契约保持）；P1 fail-safe
-> 回退保留（装配开但 store 未接线时 defer）；tests/test_native_tools_p2.py 8
-> 用例（纯函数组装 + 图级原生全链真实 read/多工具自环/越权 fail-closed/失败
-> 正文回填）；门禁 api 926 passed / ruff 全绿。
+> V0.4（2026-09-08）：P3 落地登记——**编造对账护栏（R3-M6）**：reflect 新增
+> L1.5 声明-证据规则（`_fabrication_claim`，窄词表仅覆盖确认卡/任务创建入队类
+> 本回合即时声明；证据 = 本回合对应工具 ok 观察）——命中先 repair（共用修复
+> 配额，纠正观察回灌）一次，复现即 reject + **fabrication 审计事件**
+> （event.v5；词汇表 v5 登记：shared/event_vocab + events.py + API.md §4.3，
+> 测试矩阵断言同步）；**待决点 1 收口（tool_call_mode 裁决）**：不翻转默认值
+> ——上游 tools 装配与档级放行由三态许可独立承担（native_tools_policy 为唯一
+> 消费点），`tool_call_mode` 语义收敛为协议档能力标记（native=可流式/可装配，
+> legacy=无原生首轮流式），contracts.py 过时注释已修正；**待决点 3 收口
+> （react 淘汰里程碑评审）**：react.v1 保留为兼容回退（P1 defer/fail-safe 依赖），
+> 淘汰条件 = 目标档 tool_use 率 ≥80% 且 defer/回退率 <5% 观察 ≥7 天（判据随
+> P3 灰度数据复核后另立迁移评审）；tests/test_native_tools_p3.py 7 用例（声明
+> 检测纯函数 5 + 图级 repair→reject→审计/修正→pass 2）；门禁 api 933 passed /
+> ruff 全绿。
+> V0.3（2026-09-08，历史）：P2 落地登记（§5 P2 全部决策）——orchestrator 原生
+> Act（tool_use 名守卫/OR-4 重复守卫/round 缓冲 assistant 段/多 tool_use 全量
+> 入队 native=True）；Observe 回填组装 `_build_native_backfill`（store 正文
+> 合成 + 缺失显式降级文案 + 单条 60K 二次裁剪带标注 + 占位观察跳过注入）；
+> graph tools 自环 drain + orchestrator 注入 store（与 build_tool_node 同源
+> 实例）；ask_user 答复明细并入 model_text（修复原生答复丢失，R2 高 4）；
+> GraphState 新增 `native_tool_round`（覆盖式缓冲，无正文入持久层——契约保持）；
+> P1 fail-safe 回退保留（装配开但 store 未接线时 defer）；tests/
+> test_native_tools_p2.py 8 用例（纯函数组装 + 图级原生全链真实 read/多工具
+> 自环/越权 fail-closed/失败正文回填）；门禁 api 926 passed / ruff 全绿。
 > V0.2.1（2026-09-08，历史）：P1 落地登记（§5 P1 全部验收项）——config 新增
-> `agent_native_tools_enabled`（默认 false）/`agent_native_tools_profile_ids`
-> （另立字段，待决点 5 收口）；新增 `harness/execution/native_tools_policy.py`
-> （三态许可 + 档级熔断，装配唯一消费点）；`select_tool_defs` 新增 `only`
-> 交集收窄（含空元组语义）；taor orchestrator 装配/双通道裁剪/tool_use 无
-> tools 重发回退（`native_tools_defer` 审计日志）/breaker 上报；`turn_usage`
-> 回合 usage 累计（plan/orchestrator/reflect L3 全接入 → assistant_message
-> turn_stats，R3-M1）；`tests/test_native_tools_p1.py` 13 用例覆盖验收①–⑥；
-> 门禁 api 918 passed / ruff 全绿。部署后冒烟清单见 PR 描述。
-> V0.2.1（2026-09-08）：P1 落地登记（§5 P1 全部验收项）——config 新增
 > `agent_native_tools_enabled`（默认 false）/`agent_native_tools_profile_ids`
 > （另立字段，待决点 5 收口）；新增 `harness/execution/native_tools_policy.py`
 > （三态许可 + 档级熔断，装配唯一消费点）；`select_tool_defs` 新增 `only`
