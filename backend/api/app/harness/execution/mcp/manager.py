@@ -27,11 +27,14 @@ from .provider import InProcessProvider
 class MCPClientManager:
     """内部 MCP 扩展 Host：目录发现、调用、取消、熔断与度量。"""
 
-    def __init__(self, metrics: ToolMetrics | None = None) -> None:
+    def __init__(self, metrics: ToolMetrics | None = None, *, join_on_cancel: bool = False) -> None:
         self._catalog = ToolCatalog()
         self._providers: dict[str, InProcessProvider] = {}
         self._registry: ToolRegistry | None = None
         self._inflight: dict[str, asyncio.Future] = {}
+        # 新循环显式选择等待线程真实结束；旧调用方保持原超时/取消行为。
+        self._join_on_cancel = join_on_cancel
+        self._call_tasks: dict[str, asyncio.Task] = {}
         self._closed = False
         # 熔断与工具度量（P4-2）：缺省用进程级收集器，测试可注入独立实例。
         self._metrics = metrics if metrics is not None else get_default_metrics()
@@ -42,9 +45,10 @@ class MCPClientManager:
         registry: ToolRegistry,
         *,
         metrics: ToolMetrics | None = None,
+        join_on_cancel: bool = False,
     ) -> MCPClientManager:
         """按 server 分组构建 in-process provider，并建立目录索引。"""
-        manager = cls(metrics=metrics)
+        manager = cls(metrics=metrics, join_on_cancel=join_on_cancel)
         manager._registry = registry
         manager._rebuild(registry)
         return manager
@@ -126,44 +130,48 @@ class MCPClientManager:
         )
         key = context.call_id or tool_id
         self._inflight[key] = future
+        timed_out = False
+        if self._join_on_cancel:
+            self._call_tasks[key] = asyncio.current_task()
         try:
             result = await asyncio.wait_for(
-                future,
+                asyncio.shield(future) if self._join_on_cancel else future,
                 timeout=max(0.001, float(descriptor.timeout_s)),
             )
         except TimeoutError:
-            future.cancel()
-            self._metrics.record_call(
-                tool_id,
-                descriptor.server_id,
-                ok=False,
-                timeout=True,
-                error_code="TIMEOUT",
-                latency_ms=round((time.perf_counter() - started) * 1000),
-            )
-            return ToolResult(
-                name=descriptor.name,
-                ok=False,
-                error={"code": "TIMEOUT", "message": "操作失败（TIMEOUT）"},
-                call_id=context.call_id,
-            )
+            if self._join_on_cancel:
+                timed_out = True
+                result = await self._wait_joined(future)
+            else:
+                future.cancel()
+                self._metrics.record_call(
+                    tool_id, descriptor.server_id, ok=False, timeout=True, error_code="TIMEOUT",
+                    latency_ms=round((time.perf_counter() - started) * 1000),
+                )
+                return ToolResult(name=descriptor.name, ok=False,
+                                  error={"code": "TIMEOUT", "message": "操作失败（TIMEOUT）"},
+                                  call_id=context.call_id)
         except asyncio.CancelledError:
-            future.cancel()
-            raise
+            if self._join_on_cancel:
+                result = await self._wait_joined(future)
+            else:
+                future.cancel()
+                raise
         finally:
             self._inflight.pop(key, None)
+            self._call_tasks.pop(key, None)
         if not result.call_id:
             result = replace(result, call_id=context.call_id)
         latency_ms = round((time.perf_counter() - started) * 1000)
         if result.ok:
-            self._metrics.record_call(tool_id, descriptor.server_id, ok=True, latency_ms=latency_ms)
+            self._metrics.record_call(tool_id, descriptor.server_id, ok=True, timeout=timed_out, latency_ms=latency_ms)
         else:
             code = str((result.error or {}).get("code") or "INTERNAL")
             self._metrics.record_call(
                 tool_id,
                 descriptor.server_id,
                 ok=False,
-                timeout=(code == "TIMEOUT"),
+                timeout=timed_out or code == "TIMEOUT",
                 error_code=code,
                 latency_ms=latency_ms,
             )
@@ -171,6 +179,12 @@ class MCPClientManager:
 
     def cancel_call(self, call_id: str) -> bool:
         """取消指定在飞调用；找到并取消返回 True。"""
+        if self._join_on_cancel:
+            task = self._call_tasks.get(call_id)
+            if task is None or task.done():
+                return False
+            task.cancel()
+            return True
         future = self._inflight.pop(call_id, None)
         if future is None or future.done():
             return False
@@ -180,6 +194,25 @@ class MCPClientManager:
     async def close(self) -> None:
         """取消全部在飞调用并关闭目录（幂等）。"""
         self._closed = True
+        if self._join_on_cancel:
+            tasks = list(self._call_tasks.values())
+            for task in tasks:
+                task.cancel()
+            await self._wait_joined(asyncio.gather(*tasks, return_exceptions=True))
+            return
         for future in list(self._inflight.values()):
             future.cancel()
         self._inflight.clear()
+
+    @staticmethod
+    async def _wait_joined(future: asyncio.Future):
+        """线程不能被 Task.cancel 杀死；重复取消时也必须等到真实结果。"""
+        while True:
+            try:
+                return await asyncio.shield(future)
+            except asyncio.CancelledError:
+                if future.done():
+                    return future.result()
+                current = asyncio.current_task()
+                if current is not None:
+                    current.uncancel()

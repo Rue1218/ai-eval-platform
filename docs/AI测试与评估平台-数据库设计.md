@@ -2,10 +2,10 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.1-Draft |
+| 文档版本 | V1.2 |
 | 状态 | 目标数据模型，待按里程碑以 Alembic 落地 |
 | 数据库 | PostgreSQL 16 |
-| 最近修订 | 2026-08-21：协议档主模型、Embedding、Reranker 的 URL、模型 ID、API Key 均由环境文件按 profile 隔离保存 |
+| 最近修订 | 2026-09-09：追加 AgentLoop v2 持久事实、会话事件流、写者状态及工作区执行隔离；已有设计阶段不据此改为已验收 |
 | 适用范围 | 平台 V1.0 |
 
 ## 1. 文档定位与裁决
@@ -234,3 +234,24 @@ Worker 将质量任务从 `running` 置为 `succeeded` 且需要压测时，必�
 | `backend/api/app/schemas.py` / `frontend/src/api/types.ts` | 增加 Embedding / Reranker 配置字段与脱敏状态字段 |
 | `frontend/src/components/modals/ProfileModal.vue` / `frontend/src/views/AdminProfiles.vue` | 协议档附加模型配置表单与列表标识 |
 | `docker-compose.yml` | `.env` 以 API 可写、Worker 只读方式挂载 |
+
+## AgentLoop v2 增量（V1.2，2026-09-09）
+
+迁移 `77586e897dae` 从 `e8f1a2b3c4d5` 自动生成，并在隔离 PostgreSQL 执行。原业务表与 Worker 任务状态机继续复用。
+
+| 表/字段 | 事实与约束 |
+| :--- | :--- |
+| `sessions.engine_version` | 非空，默认 `legacy`；新会话显式选择 `agent_loop_v2`，不将已有会话中途换引擎 |
+| `agent_runtime_state` | 每会话一行；写者标识、活动回合、下一 seq、最后 cursor、Worker 桥水位；会话行锁串行事务 |
+| `agent_events` | 完整模型历史与恢复事实；`(session_id, seq)` 唯一、seq 从 0 开始；逻辑键防止重复结果和终态 |
+| `session_stream` | WS v2 的已提交投影；cursor 从 1 开始；来源 ID 与 projection_kind 去重，允许一事实产生多帧 |
+| `workspace_execution_guards` | 执行 ID 主键；工作区范围、读写类型、属主及证据；状态限 active/quarantined/released，跨回合与重启保留 |
+
+写者通过专用数据库连接持有会话 advisory lock；同一连接执行写事务，连接失效后不能继续写。事实、消息、卡片、执行隔离、投影与提交回执必须原子提交。快照与高水位在同一事务读取；原始事实不直接返回浏览器。切勿用 UI 消息摘要代替模型正文或供应商必要状态。停止新循环放行不删除事实或隔离记录；已有 v2 数据的生产环境不能通过降级迁移丢弃上述表。
+
+### 本次修改代码文件与作用清单
+
+- `backend/shared/models.py`：共享 ORM 的四张新表和会话引擎字段；API 通过 `app/models.py` 重导出。
+- `backend/api/migrations/versions/77586e897dae_agentloop持久事实与会话流及执行隔离.py`：Alembic 增量。
+- `backend/api/app/harness/memory/agent_events.py`：PG 写者、事务、投影、回执、Worker 桥与执行证据对账。
+- `backend/api/tests/test_loop_store_pg.py`、`test_loop_store_recovery.py`：真实 PG 的回滚、互斥、恢复和快照验证。

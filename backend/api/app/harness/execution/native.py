@@ -16,6 +16,7 @@ from app.harness.contracts import ToolCall, ToolResult
 from .context import ToolExecutionContext
 from .dispatch import execute_raw
 from .registry import ToolDef
+from .workspace_guard import guarded_call
 
 
 class NativeToolExecutor:
@@ -40,17 +41,26 @@ class NativeToolExecutor:
             arguments=dict(arguments),
             call_id=context.call_id,
         )
+        def execute_guarded() -> ToolResult:
+            """真实工作线程持有隔离记录，主协程取消不会清除远端未知执行。"""
+            try:
+                return guarded_call(definition, context, lambda: execute_raw(
+                    call, timeout_s=definition.timeout_s, permission=definition.permission,
+                    sandbox_dir=context.sandbox_dir, handler=definition.handler,
+                    context=context if definition.contextual else None,
+                    recovery_policy=definition.recovery_policy,
+                    output_schema=dict(definition.output_schema) if definition.output_schema else None,
+                ))
+            except Exception as exc:
+                from app.errors import AppError
+
+                code = exc.code.value if isinstance(exc, AppError) else "INTERNAL"
+                return ToolResult(name=definition.name, ok=False, call_id=context.call_id,
+                                  error={"code": code, "message": "工作区执行未获完成确认"})
+
         future = asyncio.ensure_future(
             asyncio.to_thread(
-                execute_raw,
-                call,
-                timeout_s=definition.timeout_s,
-                permission=definition.permission,
-                sandbox_dir=context.sandbox_dir,
-                handler=definition.handler,
-                context=context if definition.contextual else None,
-                recovery_policy=definition.recovery_policy,
-                output_schema=dict(definition.output_schema) if definition.output_schema else None,
+                execute_guarded,
             )
         )
         key = context.call_id or definition.name

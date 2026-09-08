@@ -161,6 +161,10 @@ def create_session(
     private 会话（BLK-4：防 team 成员借绑定会话横向获得工作区写授权）；属主
     校验 fail-closed。未绑定 = legacy 临时工作区（与 F3 前行为一致）。
     """
+    from ..config import settings
+
+    if body.engine_version == "agent_loop_v2" and not settings.agent_loop_enabled:
+        raise AppError(ErrorCode.VALIDATION, "Agent Loop v2 尚未开启")
     workspace_id = (body.workspace_id or "").strip() or None
     scope_path: str | None = None
     if workspace_id:
@@ -184,6 +188,7 @@ def create_session(
     session = AgentSession(
         user_id=user.id,
         title=body.title.strip(),
+        engine_version=body.engine_version,
         visibility=body.visibility,
         workspace_id=workspace_id,
         scope_path=scope_path,

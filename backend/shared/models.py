@@ -141,6 +141,8 @@ class Session(Base):
     # 创建者（owner）始终不变；团队共享不改变资产归属。
     user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
     title = Column(String, nullable=False, default="新会话")
+    # 创建时固定执行协议，旧会话默认 legacy；运行中禁止切换引擎。
+    engine_version = Column(String, nullable=False, default="legacy", server_default="legacy")
     # private 仅 owner 可访问；team 对当前内部团队的正常成员开放协作。
     visibility = Column(
         String,
@@ -251,6 +253,77 @@ class WsEvent(Base):
     event = Column(String, nullable=False)
     payload = Column(JSONB, nullable=False, default=dict)
     ts = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class AgentRuntimeState(Base):
+    """新循环的会话写者、回合占用和两个独立递增序号。"""
+
+    __tablename__ = "agent_runtime_state"
+    session_id = Column(String, ForeignKey("sessions.id"), primary_key=True)
+    writer_id = Column(String, nullable=True)
+    active_turn = Column(Integer, nullable=True)
+    last_turn = Column(Integer, nullable=False, default=0)
+    next_seq = Column(BigInteger, nullable=False, default=0)
+    last_cursor = Column(BigInteger, nullable=False, default=0)
+    worker_event_id = Column(BigInteger, nullable=False, default=0)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+
+class AgentEvent(Base):
+    """可重建模型历史的不可变事实；logical_key 防止重复结果与重复命令。"""
+
+    __tablename__ = "agent_events"
+    __table_args__ = (
+        UniqueConstraint("session_id", "seq", name="uq_agent_events_session_seq"),
+        UniqueConstraint("session_id", "logical_key", name="uq_agent_events_logical_key"),
+    )
+    id = Column(String, primary_key=True, default=uuid_str)
+    session_id = Column(String, ForeignKey("sessions.id"), nullable=False, index=True)
+    seq = Column(BigInteger, nullable=False)
+    type = Column(String, nullable=False)
+    logical_key = Column(String, nullable=True)
+    envelope = Column(JSONB, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class SessionStream(Base):
+    """WS v2 提交顺序流；cursor 不复用源事实 seq 或 legacy event_id。"""
+
+    __tablename__ = "session_stream"
+    __table_args__ = (
+        UniqueConstraint("session_id", "cursor", name="uq_session_stream_cursor"),
+        UniqueConstraint("session_id", "source_kind", "source_id", "projection_kind",
+                         name="uq_session_stream_source"),
+    )
+    id = Column(String, primary_key=True, default=uuid_str)
+    session_id = Column(String, ForeignKey("sessions.id"), nullable=False, index=True)
+    cursor = Column(BigInteger, nullable=False)
+    source_kind = Column(String, nullable=False)
+    source_id = Column(String, nullable=False)
+    projection_kind = Column(String, nullable=False)
+    envelope = Column(JSONB, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class WorkspaceExecutionGuard(Base):
+    """跨会话持久执行隔离；未知远端副作用必须可信对账后才能解除。"""
+
+    __tablename__ = "workspace_execution_guards"
+    __table_args__ = (
+        CheckConstraint("status IN ('active', 'quarantined', 'released')", name="ck_workspace_guard_status"),
+        Index("ix_workspace_guard_scope_status", "scope_path", "status"),
+    )
+    execution_id = Column(String, primary_key=True)
+    session_id = Column(String, ForeignKey("sessions.id"), nullable=False, index=True)
+    scope_path = Column(String, nullable=False)
+    access = Column(String, nullable=False)
+    status = Column(String, nullable=False, default="active")
+    attempt_id = Column(String, nullable=False)
+    call_id = Column(String, nullable=False)
+    owner_id = Column(String, ForeignKey("users.id"), nullable=False)
+    evidence = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
 
 
 class ProtocolProfile(Base):

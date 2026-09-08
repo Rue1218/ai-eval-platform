@@ -3,8 +3,8 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 记忆层模块设计 |
-| 版本 | V0.4.2 |
-| 审查日期 | 2026-08-26 |
+| 版本 | V0.4.3 |
+| 审查日期 | 2026-09-09 |
 | 文档性质 | 模块设计说明书（需求发散 + 架构设计 + 接口签名） |
 | 适用模块 | M3 记忆层（`app/harness/memory/`，含 GraphState 主体 `state.py`） |
 | 上游权威 | Harness 需求文档 V1.4.4 §4.3、§2.4、§2.5、§7、§9；API.md V1.22 §3.4；PRD §5.1.3 |
@@ -373,6 +373,15 @@ def annotate_source(record: dict) -> dict:
 
 本文档仅设计记忆层，不改变任何 API、数据库、前端或 Agent 运行代码。
 
+## AgentLoop v2 记忆增量（V0.4.3，2026-09-09）
 
+新路径使用 PostgreSQL 事实作为恢复与模型消息的唯一权威；旧 GraphState/checkpointer 继续服务旧引擎。user、assistant、工具原始结果及必要供应商状态按事实重建。UI 的 messages、工具卡和统一事件流是事务投影，脱敏摘要不能反向充当下一轮模型输入。
 
+请求追踪保存历史高水位、确定性的消息选择索引与输入指纹，使裁剪后的实际请求可重建。恢复补齐尚未结算的调用：未派发记 not_started，已派发而无可信结果记 outcome_unknown；不重新执行有副作用的工具。已提交的 task/queued 用真实任务回执补齐结果，避免恢复重复入队。未知工作区执行保留持久隔离；回合结束不代表解除隔离。
 
+### 本次修改代码文件与作用清单
+
+- `backend/api/app/harness/memory/agent_events.py`：PG 事实、原子投影、幂等回执、读模型与 Writer fence。
+- `backend/api/app/harness/memory/agent_messages.py`：规范模型消息与完整工具往返重建。
+- `backend/api/app/harness/memory/agent_recovery.py`：补偿事实、三类卡片恢复及未知执行结算。
+- `backend/api/app/agent/loop.py`：每次实际请求的历史选择与指纹记录。
