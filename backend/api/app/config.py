@@ -13,6 +13,13 @@ class Settings(BaseSettings):
     key_encryption_key: str = ""
     access_token_expire_minutes: int = 720
     ws_ticket_expire_minutes: int = 5
+    # 新协议按创建时的 engine_version 隔离；灰度关闭不影响 legacy 会话。
+    agent_loop_enabled: bool = False
+    agent_loop_max_steps: int = 16
+    agent_loop_model_max_retries: int = 2
+    agent_loop_model_retry_delay_seconds: float = 0.25
+    agent_loop_max_parallel_tool_calls: int = 4
+    agent_loop_approval_timeout_seconds: float = 300.0
     data_dir: str = "/data"
     # Harness 记忆层：Redis 仅存可过期短期状态，长期审计仍使用 PostgreSQL。
     # 短期 Port 默认关闭；Redis 容器经 feat/deploy-* 落地后再由环境变量开启。
@@ -60,6 +67,8 @@ class Settings(BaseSettings):
     sandbox_cpu_s: int = 10  # 沙箱 CPU 时间上限（秒）
     # 独立沙箱 runner 服务（compose 内网，默认 runner:8001，不发布主机端口）
     sandbox_runner_url: str = "http://runner:8001"
+    # 新执行协议的内部令牌只用于 API→Runner，不进入模型和日志。
+    runner_internal_token: str = ""
     # P4-2：资源配额与熔断
     max_active_tasks_per_user: int = 5  # 每用户活动任务（queued/running/awaiting_case_confirm）上限
     circuit_failure_threshold: int = 5  # 服务器连续基础设施失败阈值，达到即熔断 open

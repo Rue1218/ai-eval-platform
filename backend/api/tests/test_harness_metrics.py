@@ -20,7 +20,7 @@ from app.harness.execution import (
 from app.harness.execution.mcp import ToolExecutionContext, ToolMetrics
 from app.harness.execution.task_tools import create_task_safe
 from app.harness.execution.worker_bridge import count_active_tasks
-from app.models import AuditLog, Dataset, Task
+from app.models import AuditLog, Dataset, ProtocolProfile, Task
 from app.models import Session as AgentSession
 
 # —— 工具桩与假时钟 ——
@@ -135,9 +135,11 @@ class _FakeDb:
         task_count=0,
         task_first=None,
         dataset=None,
+        profiles=None,
     ):
         self._session_row = session_row
         self._tasks = dict(tasks or {})
+        self._profiles = dict(profiles or {})
         self._task_query = task_query
         self._task_count = task_count
         self._task_first = task_first
@@ -155,6 +157,8 @@ class _FakeDb:
     def get(self, model, pk):
         if model is Task:
             return self._tasks.get(pk)
+        if model is ProtocolProfile:
+            return self._profiles.get(pk)
         return None
 
     def add(self, obj):
@@ -310,7 +314,12 @@ def test_create_task_quota_rejected_with_audit(monkeypatch) -> None:
 
 
 def test_create_task_passes_quota_below_limit(monkeypatch) -> None:
-    db = _FakeDb(session_row=_SessionRow(), task_query=[], task_count=2)
+    """资源合法且归属当前成员时，低于配额的任务可以入队。"""
+    profile = ProtocolProfile(
+        id="p1", name="测试评测档", protocol="openai_chat",
+        base_url="https://model.example.test/v1", model="test-model", created_by="u1",
+    )
+    db = _FakeDb(session_row=_SessionRow(), task_query=[], task_count=2, profiles={"p1": profile})
     monkeypatch.setattr("app.db.SessionLocal", lambda: db)
     result = create_task_safe(
         {"kind": "benchmark", "dataset_id": "d1", "profile_ids": ["p1"], "run": {}},

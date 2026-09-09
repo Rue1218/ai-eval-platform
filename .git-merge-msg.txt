@@ -1,0 +1,8 @@
+merge: 并入 main（#237 loop v2 / G6a #235 后）——解决 G6b 与评审修复的合入冲突
+
+- config.py 补回 main #237 新增字段（agent_loop_* 六项、runner_internal_token）
+- sandbox_kernel.py 按 main _sandbox_output(returncode) 新结构融合 DENIED 判定
+- API.md 版本统一 V1.78（main 的 V1.77 已由 §4A WS v2 占用）；G6b 与 M1–M3
+  合并登记，G6a 主体随 #235 已在 main
+- 门禁：api 1240 passed/69 skipped、runner 48 passed/1 skipped、
+  前端 typecheck/build 通过、ruff 通过

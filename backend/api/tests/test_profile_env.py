@@ -12,6 +12,18 @@ from app.profile_env import (
 )
 
 
+def test_profile_env_write_without_fchmod(tmp_path: Path, monkeypatch):
+    """Windows 3.12 缺少 fd chmod 时仍能保存并读取真实协议档配置。"""
+    from app import profile_env
+
+    monkeypatch.delattr(profile_env.os, "fchmod", raising=False)
+    monkeypatch.setattr(settings, "profile_env_file", str(tmp_path / ".env"))
+    write_profile_env("windows-test", base_url="https://example.com/v1",
+                      model="test-model", api_key="test-only-key")
+    actual = read_profile_env("windows-test")
+    assert actual.model == "test-model" and actual.api_key == "test-only-key"
+
+
 def test_profile_env_supports_multiple_profiles_without_key_collision(tmp_path: Path, monkeypatch):
     """不同供应商协议档写入独立变量，Key 中的特殊字符不破坏 dotenv。"""
     env_file = tmp_path / ".env"

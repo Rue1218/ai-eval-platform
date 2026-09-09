@@ -15,6 +15,12 @@ api 经 HTTP JSON 调用，不再持有 ``privileged``/``seccomp:unconfined``/
 - ``POST /run/stream``：NDJSON 输出块 + 最终结果，仅供 API 内网转发 ToolCard。
 - ``POST /probe``：bwrap 冒烟探测 → ``{ok:bool}``。
 - ``GET /health``：``{"status":"ok"}``。
+- ``GET /executions``：发现本次启动的实例代次。
+- ``POST /executions``：按 execution_id 幂等派发，body 增加 session_id/turn_id/call_id。
+- ``GET /executions/{id}``、``POST /executions/{id}/cancel``：查询与幂等取消。
+  新接口均需 Bearer RUNNER_INTERNAL_TOKEN；除代次发现外还需
+  X-Runner-Instance-ID。RUNNER_CGROUP_ROOT 须指向可写 cgroup v2 委派；
+  无委派在启动前拒绝，缺少整树停止证据则返回 outcome_unknown。
 
 日志脱敏：不打印命令原文/参数（红色红线 X-A4）。
 """
@@ -23,14 +29,20 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import threading
 from collections.abc import Callable
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from hashlib import sha256
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
+from uuid import UUID, uuid4
 
 from shared.sandbox_kernel import (
     SANDBOX_MODES,
     SandboxError,
+    SandboxExecutionControl,
     SandboxLimits,
     probe_sandbox,
     resolve_workspace_path,
@@ -48,6 +60,10 @@ MAX_OUTPUT_CHARS = 20000
 # 并发配额（D4/G3）：固定 worker 槽位 + 限时等待队列；超时返回 429 BUSY
 MAX_WORKERS = int(os.environ.get("RUNNER_MAX_WORKERS", "4"))
 SLOT_WAIT_S = float(os.environ.get("RUNNER_SLOT_WAIT_S", "5.0"))
+# 新接口缺省关闭，令牌与 cgroup 根只由部署注入，不接受模型指定。
+INTERNAL_TOKEN = os.environ.get("RUNNER_INTERNAL_TOKEN", "")
+CGROUP_ROOT = os.environ.get("RUNNER_CGROUP_ROOT")
+MAX_EXECUTION_RECORDS = 4096
 
 
 class _SlotGate:
@@ -95,6 +111,94 @@ class _SlotGate:
 SLOT_GATE = _SlotGate(MAX_WORKERS)
 
 
+def _now() -> str:
+    """内部回执使用 UTC 时间，便于持久 guard 对账。"""
+    return datetime.now(UTC).isoformat()
+
+
+@dataclass
+class _Execution:
+    """单实例执行收据；不淘汰 ID，防止重发导致副作用重复。"""
+
+    execution_id: str
+    request_fingerprint: str | None
+    correlation: dict[str, str]
+    canonical_scope: str | None = None
+    status: str = "running"
+    output: str = ""
+    error: dict[str, str] | None = None
+    created_at: str = field(default_factory=_now)
+    finished_at: str | None = None
+    cancel_requested_at: str | None = None
+    control: SandboxExecutionControl = field(default_factory=SandboxExecutionControl)
+
+
+class _ExecutionRegistry:
+    """启动代次围栏：重启后的旧实例请求只能得到 unknown，不能重新执行。"""
+
+    def __init__(self) -> None:
+        """每次进程启动生成新代次，旧请求不能跨代次重放执行。"""
+        self.instance_id = str(uuid4())
+        self.lock = threading.Lock()
+        self.records: dict[str, _Execution] = {}
+
+    def snapshot(self, record: _Execution) -> dict[str, Any]:
+        """调用者持锁读取状态；未收到可信证据时，guard 必须维持隔离。"""
+        return {
+            "execution_id": record.execution_id,
+            "runner_instance_id": self.instance_id,
+            "request_fingerprint": record.request_fingerprint,
+            "correlation": record.correlation,
+            "canonical_scope": record.canonical_scope,
+            "status": record.status,
+            "output": record.output,
+            "error": record.error,
+            "created_at": record.created_at,
+            "finished_at": record.finished_at,
+            "cancel_requested_at": record.cancel_requested_at,
+            "execution_started": record.control.started,
+            "process_tree_terminated": record.control.process_tree_terminated,
+            "termination_evidence": record.control.termination_evidence,
+            "exit_code": record.control.exit_code,
+            "cgroup_path": record.control.cgroup_path,
+        }
+
+    def unknown(self, execution_id: str) -> dict[str, Any]:
+        """查无记录不是未启动证明；必须由 API 保留原执行域的 guard。"""
+        return {
+            "execution_id": execution_id, "runner_instance_id": self.instance_id,
+            "status": "outcome_unknown", "process_tree_terminated": False,
+            "termination_evidence": None,
+            "error": {"code": "OUTCOME_UNKNOWN", "message": "执行记录或 Runner 实例不可证实"},
+        }
+
+    def execute(self, record: _Execution, arguments: dict[str, Any], gate: _SlotGate) -> None:
+        """单独线程驱动内核，查询与取消不占执行槽；所有结果都检验终止证据。"""
+        status, output, error = "succeeded", "", None
+        try:
+            command = arguments.pop("cmd")
+            output = run_sandboxed(command, **arguments, control=record.control, cgroup_root=CGROUP_ROOT)
+        except SandboxError as exc:
+            status = "cancelled" if exc.code == "CANCELLED" else "denied" if exc.code == "DENIED" else "failed"
+            error = {"code": exc.code, "message": exc.message}
+        except Exception:  # noqa: BLE001 —— 不把内部异常原文发送给调用者
+            status = "failed"
+            error = {"code": "INTERNAL", "message": "沙箱执行失败"}
+        finally:
+            with self.lock:
+                if not record.control.process_tree_terminated:
+                    status = "outcome_unknown"
+                    error = {"code": "OUTCOME_UNKNOWN", "message": "无法证实进程树终止，请保持工作区隔离"}
+                elif not record.control.started:
+                    status = "not_started"
+                record.status, record.output, record.error = status, output, error
+                record.finished_at = _now()
+            gate.release()
+
+
+EXECUTIONS = _ExecutionRegistry()
+
+
 class _SandboxHandler(BaseHTTPRequestHandler):
     """JSON 端点；日志静默（命令/参数不入日志）。"""
 
@@ -130,7 +234,9 @@ class _SandboxHandler(BaseHTTPRequestHandler):
         return SLOT_GATE.acquire(timeout_s=SLOT_WAIT_S)
 
     def do_GET(self) -> None:  # noqa: N802
-        if self.path == "/health":
+        if self.path == "/executions" or self.path.startswith("/executions/"):
+            self._handle_execution()
+        elif self.path == "/health":
             payload = {"status": "ok"}
             payload.update(SLOT_GATE.snapshot())
             self._send(200, payload)
@@ -138,7 +244,9 @@ class _SandboxHandler(BaseHTTPRequestHandler):
             self._send(404, {"ok": False, "error": {"code": "VALIDATION", "message": "未知端点"}})
 
     def do_POST(self) -> None:  # noqa: N802
-        if self.path in {"/run", "/run/stream", "/probe"}:
+        if self.path == "/executions" or self.path.startswith("/executions/"):
+            self._handle_execution()
+        elif self.path in {"/run", "/run/stream", "/probe"}:
             if not self._acquire_slot():
                 self._send_busy()
                 return
@@ -161,7 +269,12 @@ class _SandboxHandler(BaseHTTPRequestHandler):
         任何词表/黑白名单字段；policy 缺失或 mode 非法 → VALIDATION
         fail-closed（旧 api 混布时默认拒绝，不按任何档位猜测）。
         """
-        payload = self._read_body()
+        arguments = self._run_arguments(self._read_body())
+        return run_sandboxed(arguments.pop("cmd"), **arguments, on_output=on_output)
+
+    @staticmethod
+    def _run_arguments(payload: dict[str, Any]) -> dict[str, Any]:
+        """新旧接口共用档位、scope 和资源验证，禁止新接口绕过 bwrap 边界。"""
         command = str(payload.get("command") or "")
         policy = payload.get("policy") if isinstance(payload.get("policy"), dict) else {}
         mode = str(policy.get("mode") or "")
@@ -187,16 +300,112 @@ class _SandboxHandler(BaseHTTPRequestHandler):
         max_output = int(payload.get("max_output_chars", MAX_OUTPUT_CHARS))
         if max_output <= 0 or max_output > 1_000_000:
             max_output = MAX_OUTPUT_CHARS
-        return run_sandboxed(
-            command,
-            sandbox_dir=sandbox_dir,
-            mode=mode,
-            timeout_s=timeout_s,
-            limits=limits,
-            bwrap_bin=BWRAP_BIN,
-            max_output_chars=max_output,
-            on_output=on_output,
-        )
+        return dict(cmd=command, sandbox_dir=sandbox_dir, mode=mode, timeout_s=timeout_s,
+                    limits=limits, bwrap_bin=BWRAP_BIN, max_output_chars=max_output)
+
+    def _handle_execution(self) -> None:
+        """仅令牌认证的内网客户端可操作新接口；认证和实例围栏先于执行。"""
+        if not INTERNAL_TOKEN:
+            self._send(503, {"error": {"code": "VALIDATION", "message": "Runner 内部认证未配置"}})
+            return
+        supplied = self.headers.get("Authorization", "")
+        if not secrets.compare_digest(supplied, f"Bearer {INTERNAL_TOKEN}"):
+            self._send(401, {"error": {"code": "UNAUTHORIZED", "message": "Runner 内部认证失败"}})
+            return
+        registry = EXECUTIONS
+        if self.path == "/executions" and self.command == "GET":
+            self._send(200, {"runner_instance_id": registry.instance_id, "protocol_version": 1})
+            return
+        try:
+            if self.path == "/executions" and self.command == "POST":
+                payload = self._read_body()
+                execution_id = str(UUID(str(payload.get("execution_id", ""))))
+            else:
+                parts = self.path.split("/")
+                valid_get = self.command == "GET" and len(parts) == 3
+                valid_cancel = self.command == "POST" and len(parts) == 4 and parts[3] == "cancel"
+                if not (valid_get or valid_cancel):
+                    raise SandboxError("VALIDATION", "未知执行端点")
+                execution_id = str(UUID(parts[2]))
+                payload = None
+            if self.headers.get("X-Runner-Instance-ID") != registry.instance_id:
+                self._send(409, registry.unknown(execution_id))
+                return
+            if payload is not None:
+                status, body = self._submit_execution(registry, execution_id, payload)
+            else:
+                with registry.lock:
+                    record = registry.records.get(execution_id)
+                    if self.command == "POST":
+                        if record is None and len(registry.records) < MAX_EXECUTION_RECORDS:
+                            # 取消先到时落墓碑，阻止在途 POST 后到又启动命令。
+                            record = _Execution(execution_id, None, {}, status="not_started", finished_at=_now())
+                            record.control.process_tree_terminated = True
+                            record.control.termination_evidence = "not_started"
+                            registry.records[execution_id] = record
+                        if record is not None and record.status in {"running", "not_started"}:
+                            record.control.cancel_event.set()
+                            record.cancel_requested_at = record.cancel_requested_at or _now()
+                    status, body = 200, registry.snapshot(record) if record else registry.unknown(execution_id)
+            self._send(status, body)
+        except (SandboxError, ValueError, TypeError) as exc:
+            message = exc.message if isinstance(exc, SandboxError) else "执行请求字段非法"
+            self._send(400, {"error": {"code": "VALIDATION", "message": message}})
+
+    def _submit_execution(self, registry: _ExecutionRegistry, execution_id: str, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        """原子登记、幂等对比再派发；容量耗尽时不驱逐旧 ID。"""
+        allowed = {"execution_id", "session_id", "turn_id", "call_id", "command", "policy", "timeout_s", "limits", "max_output_chars"}
+        if payload.keys() - allowed:
+            raise SandboxError("VALIDATION", "执行请求含未知字段")
+        if not isinstance(payload.get("command"), str):
+            raise SandboxError("VALIDATION", "command 必须是字符串")
+        policy = payload.get("policy")
+        if not isinstance(policy, dict) or policy.keys() != {"mode", "workspace_root"}:
+            raise SandboxError("VALIDATION", "policy 字段非法")
+        if not all(isinstance(value, str) for value in policy.values()):
+            raise SandboxError("VALIDATION", "policy 字段类型非法")
+        limits = payload.get("limits", {})
+        ceilings = {"memory_kb": 262144, "nproc": 32, "cpu_s": 10}
+        if not isinstance(limits, dict) or limits.keys() - ceilings.keys():
+            raise SandboxError("VALIDATION", "limits 字段非法")
+        for name, value in limits.items():
+            if type(value) is not int or not 0 < value <= ceilings[name]:
+                raise SandboxError("VALIDATION", "limits 必须为受限正整数")
+        correlation = {}
+        for key in ("session_id", "turn_id", "call_id"):
+            value = payload.get(key)
+            if not isinstance(value, str) or not value or len(value) > 200:
+                raise SandboxError("VALIDATION", f"{key} 非法或缺失")
+            correlation[key] = value
+        arguments = self._run_arguments(payload)
+        # 原始请求冻结指纹；包括身份、策略、限额，禁止同 ID 换内容。
+        fingerprint = sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False, allow_nan=False).encode()).hexdigest()
+        with registry.lock:
+            record = registry.records.get(execution_id)
+            if record is not None:
+                if record.request_fingerprint not in (None, fingerprint):
+                    return 409, {"error": {"code": "CONFLICT", "message": "execution_id 已绑定其他请求"}}
+                return 200, registry.snapshot(record)
+            if len(registry.records) >= MAX_EXECUTION_RECORDS:
+                return 503, {"error": {"code": "BUSY", "message": "执行收据容量已满"}}
+            record = _Execution(execution_id, fingerprint, correlation, canonical_scope=arguments["sandbox_dir"])
+            registry.records[execution_id] = record
+            gate = SLOT_GATE
+            if not gate.acquire(timeout_s=0):
+                record.status, record.finished_at = "not_started", _now()
+                record.control.process_tree_terminated = True
+                record.control.termination_evidence = "not_started"
+                record.error = {"code": "BUSY", "message": "沙箱执行槽位繁忙"}
+            else:
+                try:
+                    threading.Thread(target=registry.execute, args=(record, arguments, gate), daemon=True).start()
+                except RuntimeError:
+                    gate.release()
+                    record.status, record.finished_at = "not_started", _now()
+                    record.control.process_tree_terminated = True
+                    record.control.termination_evidence = "not_started"
+                    record.error = {"code": "INTERNAL", "message": "执行线程启动失败"}
+            return 202, registry.snapshot(record)
 
     def _begin_stream(self) -> None:
         """发送 NDJSON 流式响应头（普通流与 BUSY 帧共用同一协议面）。"""

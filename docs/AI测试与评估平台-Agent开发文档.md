@@ -1,12 +1,12 @@
 # AI 测试与评估平台 Agent 开发文档
 
-> 版本：V1.6.0
-> 状态：**骨架化改造**：Agent 图已收敛为单节点纯对话（`START → chat_stream → END`）。多范式路由（direct/chat/react/plan_solve）、ReAct 思考链、reflect 反思门禁、think_stream 思考流、澄清卡、确认卡、短工具调用与斜杠命令全部移除；保留模型直答、流式投影、会话记忆（assemble / compact 摘要）、WS 事件桥接与平台任务进度/报告事件。检查点默认 memory；ContextMeter 服务端计算；assemble 接线 CX-4/CX-5。
-> 审查日期：2026-09-02
+> 版本：V1.7.0
+> 状态：新增独立 AgentLoop v2 后端路径，默认关闭；详见文末本次增量与《AgentLoop后端架构设计》。此前骨架化与混合引擎说明属于 legacy 路径及其历史阶段，不能据此认定新路径仍为纯对话。前端尚未接入 v2。
+> 审查日期：2026-09-09
 > 对应需求：`AI测试与评估平台-PRD.md` V1.18
-> 对应接口：`AI测试与评估平台-API.md` V1.64
+> 对应接口：`AI测试与评估平台-API.md` V1.77
 
-## 1. 当前唯一运行链路
+## 1. legacy 骨架化运行链路（历史基线）
 
 ```text
 浏览器
@@ -495,3 +495,20 @@ reasoning 事件，并对已知支持显式关闭的端点发送关闭参数。G
 - `frontend/src/api/types.ts` / `frontend/src/views/Agent.vue`：新增 `task_cancelled` 类型与实时/后台会话收尾逻辑，只有收到回执才结束取消中状态。
 - `backend/api/app/harness/execution/task_tools.py` / `registry.py`：为未来恢复 ToolNode 保留的 `task.create` 与 REST 复用 TaskSpec 校验；当前 Agent 图仍不注入它。
 - `backend/api/app/routers/mcp.py` / `frontend/src/views/AdminProfiles.vue`：工具目录标明“已注册、当前纯对话 Agent 未接线”。
+
+## AgentLoop v2 后端增量（V1.7.0，2026-09-09）
+
+新建会话传 `engine_version=agent_loop_v2`，须开启 `AGENT_LOOP_ENABLED`；入口 `/ws/agent/v2?ticket=...`，独立 WS v2 命令与 cursor。旧会话仍使用原路径。前端尚未迁移，不因后端接线即视为可在现有页面完整操作。
+
+运行链：`LoopService → AgentRuntime → pre_step → model → tools/retry_wait → close_step → decide_next → finalize_turn`。协议档解析产生每回合依赖，原生工具结果进入规范模型历史，再次调用模型直到正常终态、取消、错误或步数上限。业务任务确认后只入队，执行仍归 Worker。常规工具失败回填结果后继续；取消和未知远端结果独立结算。
+
+旧 `llm/gateway.py`、`adapters.py`、`llm_client.py`、Worker 评测和既有业务工具保留。新路径不嵌套旧 TAOR、文本 react.v1 或第二套工具注册表；源项目尚未实现的 steer、反思和自动续写不凭设计稿补造。
+
+### 本次修改代码文件与作用清单
+
+- `backend/api/app/agent/loop.py`、`runtime.py`、`stream.py`、`loop_settings.py`：七节点、流式 attempt、回合管理与恢复。
+- `backend/api/app/agent/loop_service.py`、`loop_wiring.py`：身份、幂等命令、依赖接线、审批及资源生命周期。
+- `backend/api/app/llm/loop_contracts.py`、`resolver.py`、`providers/`：异步三协议与供应商状态往返。
+- `backend/api/app/main.py`、`config.py`、`schemas.py`、`routers/sessions.py`、`routers/ws.py`、`routers/ws_v2.py`：新路径装配与引擎隔离。
+
+细节和当前验证边界见 [后端架构设计](AI测试与评估平台-AgentLoop后端架构设计.md) 与 [实施记录](AI测试与评估平台-AgentLoop后端实施记录.md)。

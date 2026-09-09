@@ -1176,12 +1176,12 @@ def test_web_fetch_allows_public_target(monkeypatch) -> None:
     monkeypatch.setattr(dispatch, "build_opener", lambda *_a, **_k: _FakeOpener())
     # 公网 IP 字面量：无需 DNS，直接放行
     assert "public" in dispatch.web_fetch("http://93.184.216.34/", timeout_s=1.0).content
-    # 公网域名：SSRF 校验不应以 VALIDATION 拦截（无 DNS 环境的解析失败不算拦截）
-    try:
-        result = dispatch.web_fetch("http://example.com/", timeout_s=1.0)
-        assert "public" in result.content
-    except AppError as error:
-        assert error.value.code != ErrorCode.VALIDATION
+    # 与 HTTP 一样固定 DNS 响应，避免本机代理/离线解析改变本例的公网前提。
+    monkeypatch.setattr(dispatch.socket, "getaddrinfo", lambda *_a, **_k: [
+        (dispatch.socket.AF_INET, dispatch.socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0)),
+    ])
+    result = dispatch.web_fetch("http://example.com/", timeout_s=1.0)
+    assert "public" in result.content
 
 
 def test_web_fetch_content_budget_and_card_preview(monkeypatch) -> None:

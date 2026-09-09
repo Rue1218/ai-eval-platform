@@ -18,9 +18,13 @@ import logging
 import os
 import signal
 import subprocess
+import sys
 import threading
+import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
+from uuid import uuid4
 
 logger = logging.getLogger("ai-eval.sandbox_kernel")
 
@@ -49,6 +53,76 @@ class SandboxLimits:
     memory_kb: int = 262144  # 虚拟内存上限（KB），默认 256MB
     nproc: int = 32  # 最大进程数（防 fork 炸弹）
     cpu_s: int = 10  # CPU 时间上限（秒）
+
+
+@dataclass
+class SandboxExecutionControl:
+    """新执行接口的取消信号和终止证据；旧调用不传入，保持原返回接口。"""
+
+    cancel_event: threading.Event = field(default_factory=threading.Event)
+    started: bool = False
+    process_tree_terminated: bool = False
+    termination_evidence: str | None = None
+    exit_code: int | None = None
+    cgroup_path: str | None = None
+
+
+class _ExecutionCgroup:
+    """每次执行使用独立 cgroup v2，覆盖 setsid 后代，禁止退回仅 killpg 的证明。"""
+
+    def __init__(self, root: str | None) -> None:
+        """只在服务端配置的 cgroup v2 委派下创建独立执行域。"""
+        if sys.platform != "linux" or not root:
+            raise SandboxError("VALIDATION", "可取消执行需要 Linux cgroup v2 委派")
+        parent = Path(root).resolve()
+        if not parent.is_relative_to(Path("/sys/fs/cgroup")) or not (parent / "cgroup.controllers").is_file():
+            raise SandboxError("VALIDATION", "可取消执行的 cgroup 根目录非法")
+        self.path = parent / f"agent-{uuid4().hex}"
+        try:
+            self.path.mkdir()
+            if not (self.path / "cgroup.kill").is_file():
+                raise OSError("cgroup.kill 不可用")
+        except OSError:
+            self.close()
+            raise SandboxError("VALIDATION", "可取消执行的 cgroup 委派不可用") from None
+
+    def wrap(self, argv: list[str]) -> list[str]:
+        """可信启动器先加入执行域再 exec bwrap；模型命令始终只由 bwrap 执行。"""
+        return [
+            "/bin/sh", "-c",
+            'printf "%s\\n" "$$" > "$1/cgroup.procs" || exit 125; shift; exec "$@"',
+            "runner-cgroup", str(self.path), *argv,
+        ]
+
+    def terminate(self, process: subprocess.Popen[str]) -> bool:
+        """先停启动器，再杀执行域；必须同时取得父进程回收和空执行域证据。"""
+        try:
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except OSError:
+            # 进程组信号失败仍须尝试 cgroup.kill；最终以回收和空域证据裁决。
+            pass
+        try:
+            (self.path / "cgroup.kill").write_text("1", encoding="ascii")
+            process.wait(timeout=2.0)
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                events = dict(line.split() for line in (self.path / "cgroup.events").read_text().splitlines())
+                if events.get("populated") == "0":
+                    return True
+                time.sleep(0.02)
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            return False
+        return False
+
+    def close(self) -> None:
+        """只删除已空的执行域；未知状态保留目录供运维对账。"""
+        try:
+            self.path.rmdir()
+        except OSError:
+            pass
 
 
 def resolve_workspace_path(path: str, root: str) -> str:
@@ -142,6 +216,8 @@ def run_sandboxed(
     bwrap_bin: str = "/usr/bin/bwrap",
     max_output_chars: int = 20000,
     on_output: Callable[[str], None] | None = None,
+    control: SandboxExecutionControl | None = None,
+    cgroup_root: str | None = None,
 ) -> str:
     """在一次性 bwrap 沙箱内按档位执行命令，返回 stdout；失败抛 SandboxError。
 
@@ -153,6 +229,11 @@ def run_sandboxed(
     - fail-closed：bwrap 缺失/被 seccomp 拦截导致启动失败即抛
       ``SandboxError(VALIDATION, "沙箱引擎不可用")``，禁止降级为裸 subprocess。
     """
+    if control is not None:
+        control.process_tree_terminated = True
+        control.termination_evidence = "not_started"
+        if control.cancel_event.is_set():
+            raise SandboxError("CANCELLED", "命令在启动前取消")
     if not cmd.strip():
         raise SandboxError("VALIDATION", "bash 命令为空")
     if mode not in SANDBOX_MODES:
@@ -166,7 +247,15 @@ def run_sandboxed(
         "bash 沙箱执行 mode=%s len=%d dir=%s timeout=%s",
         mode, len(cmd), sandbox_dir, timeout_s,
     )
+    execution_group = _ExecutionCgroup(cgroup_root) if control is not None else None
+    if execution_group is not None:
+        control.cgroup_path = str(execution_group.path)
+        argv = execution_group.wrap(argv)
     try:
+        if control is not None:
+            control.started = True
+            control.process_tree_terminated = False
+            control.termination_evidence = None
         started = subprocess.Popen(
             argv,
             start_new_session=True,
@@ -175,9 +264,21 @@ def run_sandboxed(
             text=True,
         )
     except FileNotFoundError as exc:
+        if control is not None:
+            control.started = False
+            control.process_tree_terminated = True
+            control.termination_evidence = "not_started"
+        if execution_group is not None:
+            execution_group.close()
         # bwrap 二进制缺失：fail-closed，禁止降级为裸 subprocess
         raise SandboxError("VALIDATION", "沙箱引擎不可用") from exc
     except OSError as exc:
+        if control is not None:
+            control.started = False
+            control.process_tree_terminated = True
+            control.termination_evidence = "not_started"
+        if execution_group is not None:
+            execution_group.close()
         # userns/seccomp 拒绝等启动失败：fail-closed
         raise SandboxError("VALIDATION", "沙箱引擎不可用") from exc
     output_parts: list[str] = []
@@ -208,7 +309,46 @@ def run_sandboxed(
             stdout.close()
 
     reader = threading.Thread(target=drain_stdout, name="sandbox-stdout", daemon=True)
-    reader.start()
+    if control is not None and execution_group is not None:
+        # 清理覆盖读线程启动、wait 异常、超时和主动取消；取消请求本身不是终止证据。
+        reason = None
+        try:
+            reader.start()
+            deadline = time.monotonic() + timeout_s
+            while started.poll() is None:
+                if control.cancel_event.is_set():
+                    reason = "CANCELLED"
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    reason = "TIMEOUT"
+                    break
+                try:
+                    started.wait(timeout=min(0.1, remaining))
+                except subprocess.TimeoutExpired:
+                    continue
+        finally:
+            control.process_tree_terminated = execution_group.terminate(started)
+            control.exit_code = started.returncode
+            if control.process_tree_terminated:
+                control.termination_evidence = "cgroup_empty"
+                execution_group.close()
+            if reader.ident is not None:
+                reader.join(timeout=1.0)
+            elif started.stdout is not None:
+                started.stdout.close()
+        if not control.process_tree_terminated:
+            raise SandboxError("OUTCOME_UNKNOWN", "无法证实沙箱进程树已终止")
+        if reason is not None:
+            raise SandboxError(reason, "命令已取消" if reason == "CANCELLED" else "命令执行超时")
+    else:
+        reader.start()
+        _wait_legacy(started, reader, timeout_s)
+    return _sandbox_output(started.returncode, "".join(output_parts), mode)
+
+
+def _wait_legacy(started: subprocess.Popen[str], reader: threading.Thread, timeout_s: float) -> None:
+    """保留旧接口的等待和超时语义，不把旧 killpg 结果当作新接口的整树证据。"""
     try:
         started.wait(timeout=timeout_s)
     except subprocess.TimeoutExpired:
@@ -221,8 +361,11 @@ def run_sandboxed(
         reader.join(timeout=1.0)
         raise SandboxError("TIMEOUT", "命令执行超时") from None
     reader.join(timeout=1.0)
-    stdout = "".join(output_parts)
-    if started.returncode != 0:
+
+
+def _sandbox_output(returncode: int | None, stdout: str, mode: str) -> str:
+    """统一新旧接口的输出、只读拒绝和非零退出码兼容规则。"""
+    if returncode != 0:
         # 命令已在沙箱内成功启动，非零退出码属业务失败（如写只读目录被拒），
         # 归 VALIDATION 并把截断摘要送达模型（INTERNAL 会被 api 侧 hint 过滤
         # 成"操作失败"，模型无法得知具体原因而盲目重试）。
@@ -241,7 +384,7 @@ def run_sandboxed(
                 # agent_escalation_approval_enabled 门控，开关关时指引即误导。
                 "沙箱卷只读拒绝写入（当前 bash read-only 档位）",
             )
-        raise SandboxError("VALIDATION", f"命令执行失败（退出码 {started.returncode}）：{snippet}")
+        raise SandboxError("VALIDATION", f"命令执行失败（退出码 {returncode}）：{snippet}")
     return stdout.strip() or "（无输出）"
 
 

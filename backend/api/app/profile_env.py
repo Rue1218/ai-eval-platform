@@ -120,7 +120,9 @@ def _write_content(path: Path, content: str, mode: int = 0o600) -> None:
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
     fd = os.open(path, flags, mode)
     try:
-        os.fchmod(fd, mode)
+        # Windows Python 3.12 无 fchmod；创建模式和下方路径 chmod 仍生效。
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, mode)
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as env_file:
             env_file.write(content)
             env_file.flush()
@@ -488,4 +490,3 @@ def resolve_env_base_url(protocol: str | None = None) -> str | None:
     if protocol == "anthropic_messages":
         return _get("ANTHROPIC_BASE_URL") or _get("LLM_BASE_URL")
     return _get("OPENAI_BASE_URL") or _get("LLM_BASE_URL")
-

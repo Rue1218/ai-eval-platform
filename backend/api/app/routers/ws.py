@@ -2313,6 +2313,9 @@ async def agent_websocket(websocket: WebSocket) -> None:
             session_id = websocket.query_params.get("session_id")
             if session_id:
                 session = require_visible_session(db, session_id, user.id)
+                if getattr(session, "engine_version", "legacy") == "agent_loop_v2":
+                    await websocket.close(code=4400, reason="该会话请使用 WS v2 协议")
+                    return
             else:
                 session = AgentSession(user_id=user.id, title="新会话", visibility="private")
                 db.add(session)

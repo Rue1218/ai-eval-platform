@@ -3,19 +3,18 @@
 | 项目 | 内容 |
 | --- | --- |
 | 文档版本 | V1.78 |
+| WS v2 修订日期 | 2026-09-09（§4A，新引擎契约登记） |
 | 对应 PRD | V1.18（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.6.0（骨架化纯对话；JSON 仍以本文为准） |
 | 对应前端计划 | V1.5 |
 | 对应后端计划 | V1.5 |
 | 撰写日期 | 2026-08-18 |
-| 本轮修订 | 2026-09-09：V1.78 审批卡终态按卡型归类（`approval_terminal` payload 增 `card_type`，澄清卡 recovery_failed 路由至 ClarifyCard failed 终态）+ 错误码 `DENIED` 口径收敛为 bash 只读档拒写 + 配额卷水位核算失败 fail-closed（详见下 V1.78 块）；2026-09-08：V1.77 追溯登记 G6a/G6b 升档审批与磁盘配额契约（详见下 V1.77 块）。2026-09-07：V1.76 会话-工作区绑定（《工作区与沙箱设计方案》V0.5 F3/G5）：`POST /api/sessions` 请求体增量可选 `workspace_id`/`scope_path`（创建时固化、运行期不可变、无换绑端点；绑定仅限 `visibility="private"`——BLK-4，team 会话绑定拒绝；属主校验 + scope 防穿越 + 目录就绪，未绑定行为与 V1.75 完全一致）；会话列表项/响应增量 `workspace_id`/`scope_path`/`workspace_name`（名称由服务端按行补充）；`PUT /api/sessions/{id}/sharing` 对已绑定会话转 `team` 返回 `VALIDATION`（写授权不随团队可见性开放）；绑定成功写 AuditLog `session_workspace_bind`（§3.12.3 词表）；会话工具（read/write/edit/bash）沙箱根 = 绑定工作区 scope（legacy 会话仍为 `data/workspaces/<session_id>`，附件 staging 仍落 legacy 目录——附件归属随绑定会话迁移留后续评审）；无 WS 事件/上行变化。2026-09-07：V1.75 用户工作区（《工作区与沙箱设计方案》V0.4.1 F1/G1）：新增用户域 `GET/POST /api/workspaces`、`PUT/DELETE /api/workspaces/{id}`（注销=软删置 `deleted_at`；`purge=true` 行锁内显式解绑会话引用后真删行+目录，FK `ON DELETE RESTRICT` 兜底、禁用 SET NULL）与 `GET/POST /api/workspaces/{id}/files`（一层目录浏览/建文件夹，段级校验+逐段 realpath 前缀重验+符号链接拒绝）；`workspaces` 表 + `sessions.workspace_id/scope_path` 新列（迁移 e8f1a2b3c4d5；会话绑定接线随 F3，本期会话不产生绑定）；孤儿判定与 `delete_orphan` 排除**活跃** `workspaces.id`（行态区分，软删目录入清理面）。REST 增量按版本纪律留档（§3.12.3）；无 WS 事件/上行变化。2026-09-07：V1.74 上下文压缩事件化（dsh 借鉴 #2 首期落地物）：超大工具结果先裁剪再进窗（`NativeToolResultStore` 长度上限与截断标注，模型只见带标注的截断结果）；发生窗口裁剪时落一条持久留痕事件 `context_trim`（§4.3，payload 仅元信息：`reason`（compact/tail_window）/`dropped`/`kept`/`in_scope_total`/`keep_from_id`/`limit`，**不含被裁原文**——观察纪律）；`recent_window` + `compact_keep_from` 算法行为不变；新增 kind 按词汇表纪律版本递增至 `event.v4`（§4.3）。2026-09-07：V1.73 审批终态（dsh 借鉴 #3）：审批卡引入 TTL/终态语义——TTL 常量 `agent_approval_ttl_seconds`（默认 3600，config）；api 侧周期扫描对过期 `tool_approval` 卡行锁清卡并广播持久终态事件 `approval_terminal`（`{approval_id, outcome:"expired"}`）；`/stop` 放弃悬挂审批卡时广播 `outcome:"cancelled"`；**失效判定以卡 `meta.created_at` + 当前时间幂等兜底，不依赖扫描进程存活性**——过期后 ack 一律拒绝且不触发 resume（沿用一次性纪律），`rejected` 语义仍由 `tool_approval_ack(action=reject)` 承载。新增 kind 按词汇表纪律版本递增至 `event.v3`（§4.3）；前端 ApprovalCard 增 disabled/终态展示。2026-09-07：V1.72 clarify 问答恢复（dsh 借鉴 #1，契约转正）：`clarify` 自「无生产者」转正为现行持久事件（§4.3，payload 定稿多题 `questions[]`），`clarify_reply` 自历史资料转正为第 5 类现行上行（§4.4，payload 定稿 `{id, answers[]}` 多题结构，替代 V1.62 单文本）；§9 红线措辞改为「上行/事件 kind 以 §4.4/§4.3 现行清单为准 + 契约评审」。卡存储走 B 路线（§3.1.2 裁决）：三类卡（`task_confirm`/`tool_approval`/`clarify`）共用 `pending_confirm` 单行互斥，`meta` 扩 `confirm_type="clarify"`；新增持久回执事件 `clarify_ack`（`{ok:true,id}`）——按 #4 词汇表纪律，**新增 kind 版本递增为 `event.v2`**（§4.3 词汇表版本段落，`backend/shared/event_vocab.py` 同步升版）。2026-09-07：V1.71 事件词汇表版本化（dsh 借鉴 #4，D0 契约先行）：§4.2 公共头增补可选 `vocab_version` 字段（服务端恒发，旧客户端忽略未知字段即可，无前端改动）；§4.3 新增词汇表版本语义与演进纪律（增删事件必须递增版本，演进理由随修订记录留档）。服务端实现：api 与 worker 共用 `backend/shared/event_vocab.py` 单一事实源（api `_emit_persistent` 与 Worker `push_ws` 落库 payload 均内嵌 `event_version` 保留字段，转发/回放剥离）；api `_forward_loop` 对未知 kind / 版本不符事件按 `event_vocab_strict`（默认 false）告警跳过或 fail-closed 拒收并落 `error`；历史 `ws_events` 无版本行按当前版本解释（只读兼容）。 |
+| 本轮修订 | 2026-09-09：V1.78 G6b 磁盘配额与终态契约组 + G6 评审 M1–M3 合并登记（G6a 升档审批主体已随 #235 于 2026-09-08 合入 main，见错误码表与 `tool_approval`/`approval_terminal` 事件行）：`approval_terminal` payload 增 `card_type`（澄清卡 recovery_failed 路由至 ClarifyCard failed 终态）+ 错误码 `DENIED` 口径收敛为 bash 只读档拒写 + 配额卷水位核算失败 fail-closed + workspace-write 写前容量检查（详见下 V1.78 块）。2026-09-07：V1.76 会话-工作区绑定（《工作区与沙箱设计方案》V0.5 F3/G5）：`POST /api/sessions` 请求体增量可选 `workspace_id`/`scope_path`（创建时固化、运行期不可变、无换绑端点；绑定仅限 `visibility="private"`——BLK-4，team 会话绑定拒绝；属主校验 + scope 防穿越 + 目录就绪，未绑定行为与 V1.75 完全一致）；会话列表项/响应增量 `workspace_id`/`scope_path`/`workspace_name`（名称由服务端按行补充）；`PUT /api/sessions/{id}/sharing` 对已绑定会话转 `team` 返回 `VALIDATION`（写授权不随团队可见性开放）；绑定成功写 AuditLog `session_workspace_bind`（§3.12.3 词表）；会话工具（read/write/edit/bash）沙箱根 = 绑定工作区 scope（legacy 会话仍为 `data/workspaces/<session_id>`，附件 staging 仍落 legacy 目录——附件归属随绑定会话迁移留后续评审）；无 WS 事件/上行变化。2026-09-07：V1.75 用户工作区（《工作区与沙箱设计方案》V0.4.1 F1/G1）：新增用户域 `GET/POST /api/workspaces`、`PUT/DELETE /api/workspaces/{id}`（注销=软删置 `deleted_at`；`purge=true` 行锁内显式解绑会话引用后真删行+目录，FK `ON DELETE RESTRICT` 兜底、禁用 SET NULL）与 `GET/POST /api/workspaces/{id}/files`（一层目录浏览/建文件夹，段级校验+逐段 realpath 前缀重验+符号链接拒绝）；`workspaces` 表 + `sessions.workspace_id/scope_path` 新列（迁移 e8f1a2b3c4d5；会话绑定接线随 F3，本期会话不产生绑定）；孤儿判定与 `delete_orphan` 排除**活跃** `workspaces.id`（行态区分，软删目录入清理面）。REST 增量按版本纪律留档（§3.12.3）；无 WS 事件/上行变化。2026-09-07：V1.74 上下文压缩事件化（dsh 借鉴 #2 首期落地物）：超大工具结果先裁剪再进窗（`NativeToolResultStore` 长度上限与截断标注，模型只见带标注的截断结果）；发生窗口裁剪时落一条持久留痕事件 `context_trim`（§4.3，payload 仅元信息：`reason`（compact/tail_window）/`dropped`/`kept`/`in_scope_total`/`keep_from_id`/`limit`，**不含被裁原文**——观察纪律）；`recent_window` + `compact_keep_from` 算法行为不变；新增 kind 按词汇表纪律版本递增至 `event.v4`（§4.3）。2026-09-07：V1.73 审批终态（dsh 借鉴 #3）：审批卡引入 TTL/终态语义——TTL 常量 `agent_approval_ttl_seconds`（默认 3600，config）；api 侧周期扫描对过期 `tool_approval` 卡行锁清卡并广播持久终态事件 `approval_terminal`（`{approval_id, outcome:"expired"}`）；`/stop` 放弃悬挂审批卡时广播 `outcome:"cancelled"`；**失效判定以卡 `meta.created_at` + 当前时间幂等兜底，不依赖扫描进程存活性**——过期后 ack 一律拒绝且不触发 resume（沿用一次性纪律），`rejected` 语义仍由 `tool_approval_ack(action=reject)` 承载。新增 kind 按词汇表纪律版本递增至 `event.v3`（§4.3）；前端 ApprovalCard 增 disabled/终态展示。2026-09-07：V1.72 clarify 问答恢复（dsh 借鉴 #1，契约转正）：`clarify` 自「无生产者」转正为现行持久事件（§4.3，payload 定稿多题 `questions[]`），`clarify_reply` 自历史资料转正为第 5 类现行上行（§4.4，payload 定稿 `{id, answers[]}` 多题结构，替代 V1.62 单文本）；§9 红线措辞改为「上行/事件 kind 以 §4.4/§4.3 现行清单为准 + 契约评审」。卡存储走 B 路线（§3.1.2 裁决）：三类卡（`task_confirm`/`tool_approval`/`clarify`）共用 `pending_confirm` 单行互斥，`meta` 扩 `confirm_type="clarify"`；新增持久回执事件 `clarify_ack`（`{ok:true,id}`）——按 #4 词汇表纪律，**新增 kind 版本递增为 `event.v2`**（§4.3 词汇表版本段落，`backend/shared/event_vocab.py` 同步升版）。2026-09-07：V1.71 事件词汇表版本化（dsh 借鉴 #4，D0 契约先行）：§4.2 公共头增补可选 `vocab_version` 字段（服务端恒发，旧客户端忽略未知字段即可，无前端改动）；§4.3 新增词汇表版本语义与演进纪律（增删事件必须递增版本，演进理由随修订记录留档）。服务端实现：api 与 worker 共用 `backend/shared/event_vocab.py` 单一事实源（api `_emit_persistent` 与 Worker `push_ws` 落库 payload 均内嵌 `event_version` 保留字段，转发/回放剥离）；api `_forward_loop` 对未知 kind / 版本不符事件按 `event_vocab_strict`（默认 false）告警跳过或 fail-closed 拒收并落 `error`；历史 `ws_events` 无版本行按当前版本解释（只读兼容）。 |
 | 最近修订 | 2026-09-03：V1.67 混合引擎执行落地（H2 Workflow DAG / H3 Agent TAOR）：恢复持久事件 `tool_call` / `tool_result`（payload 见 §4.3，ToolCard 只渲染脱敏摘要，观察全文不进任何事件）；`response.completed` 的 `engine` 从「分流结论」升级为「真实执行引擎」——`workflow`（H2，W0–W7 硬编码 DAG）与 `agent`（H3，plan→discover→orchestrator⇄tools 单图内 TAOR）均已真实执行，`agent_id` 审计随 Worker 目录（§3.6.3）供归属核验；`thought` / `tool_progress` / `tool_output_delta` / `confirm` / `clarify` 仍不产生。历史 `ws_events` 中的旧工具事件仍不重放。 |2026-09-03：V1.66 混合引擎 H1 Router 审计契约：`response.completed` payload 新增可选 `engine` / `router_confidence` / `router_reason`（仅 `hybrid_engine_enabled=true` 时出现，旧客户端忽略未知字段即可）；新增 `GET /api/agents` Worker 只读目录（§3.6.3）。本版不新增 WS 事件名、不恢复 `thought` / `tool_*`；`workflow` / `agent` 引擎在 H1 阶段降级按 `chat` 执行，`engine` 如实记录分流结论并经 `router_reason` 标注降级。2026-09-02：V1.65 工具契约加固（T1–T3）：JSON Schema 子集新增 `minItems`/`maxItems` 并为 8 处数组参数补上限；`output_schema` 从装饰字段升级为强制契约（注册期拒绝未声明，运行期按声明比对展示投影）；`platform.tasks` 三工具补全 `output_schema`；移除 `/api/mcp/tools/{name}/code` 端点与 `code_snippet` 字段。2026-08-28：V1.53 `web_fetch` 直抓路径接入 trafilatura 正文提取：可读性算法识别文章主体，保留标题层级/链接/图片/表格，未安装或提取失败降级回内置 `_TextExtractor`；提取真实产出 Markdown 时才声明 `format=markdown`（§4.3.1）。V1.52 优化 `web_fetch` 长文完整性与卡片预览：模型正文预算 8,000→60,000 字符，卡片预览与 `read` 同源对齐 `TOOL_PREVIEW_MAX_CHARS` 并随 `web.preview_limit_chars` 下发，直接抓取字节窗口 256KB→1MB（§4.3.1）。2026-08-27：V1.51 新增持久事件 `session_title`（§4.3）与会话标题 AI 生成契约（§4.3.2）：默认标题会话首条消息后由 Agent 协议档弱结构化生成标题并落库广播，修复标题不持久化问题。V1.50 统一 Agent 文本附件 staging 与 `read` 的 20MB 边界；`read` 模型窗口为 2,000 行 / 600,000 字符。V1.49 协议档新增 `max_output_tokens`（256–131072，默认 8192），创建/更新/列表/详情均支持；Agent 模型调用从协议档读取输出上限，长文档总结/导出类任务可调大避免回答被截断。2026-08-26：V1.48 同轮多调用默认串行，灰度开启后仅 `read`/`web_search`/`web_fetch` 可并行，回填按原始 `call_id`。V1.47 新增 `GET /api/agent/metrics`，不含正文/参数，不新增 WS 事件。V1.46 明确 native 一次 ToolCall 结束当前上游响应，结果回填后再请求，不新增事件名。V1.45 思考链只下发可展示摘要，隐藏 CoT（`Here's a thinking process` / `Analyze User Input`）由服务端替换，不原样推给前端。V1.44 ToolCall 在执行前持久化，新增瞬态 `tool_progress` / `tool_output_delta`，并冻结原生工具的输出 Schema、权限边界和失败恢复字段。V1.43 思考增量允许合并下发；有思考链时 `think_final` 在 `response.completed` 之前。V1.42 Direct `/help`、未知斜杠与图内防御提示在业务事件后必须再发 `response.completed`（成功 `stop`，校验/防御 `error`），结束整轮生成态。V1.41 确认卡预填与 `confirm_ack` 入队前丢掉已删除的协议档/数据集/知识库 ID，避免 Worker 再报「协议档不存在或已删除」。V1.40 `/cancel` 与 `/stress` 按 §4.4 解禁（仍走 `user_message`）：`/cancel` 取消本会话非终态任务，`/stress` 发出质量任务确认卡且 `with_stress=true`，禁止 `kind=stress`。V1.39 原生工具卡片收起态副标题统一为 `ToolCall`，不在卡片摘要区回显文件路径、命令或写入内容；详细参数仍在展开区展示。V1.38 明确原生基础 ToolCall 卡片使用英文工具名，展开区统一显示 `ToolCall` 与 `输出`，文件、命令和代码/文档结果使用行号展示；MCP/平台短工具仍按下方中文名映射。2026-08-24：V1.24 修复 Agent 附件上下文链路：服务端校验文件归属并在模型窗口解析文本、PDF、DOCX、XLSX，图片按三协议图文内容块发送；历史消息附件补齐安全元数据，前端可在刷新后继续预览。同步调整输入框内附件按钮与用户消息附件位序。V1.23 扩展 Agent 附件契约，支持图片、Word 文档与多附件拖拽上传；保留 `POST /api/files` 后再以既有 `file_id` 引用的消息链路，补充图片缩略图、PDF/文本预览与 Office 文件打开/下载说明。V1.22 修复 V1.21 遗留：§4.4 标题「仅此三条」改「仅此四条」、§9 禁止清单「第四种」改「第五种」并补四类上行事件枚举、§4.3 `tool_result.source` 语义对齐 M7 `Observation.source`（溯源标识字符串，非 short\|long 枚举）、§4.3 共享流规则补 clarify/plan/confirm 持久化广播说明、§4.4 clarify 多副本限制注明、§9 Ask/Plan 补注非 Harness plan 事件；V1.20 及更早版本沿用历史修订记录。 |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
-> V1.78（2026-09-09）：审批卡终态按卡型归类（G6 评审 M3）+ 配额与文案修订（M1/M2）。`approval_terminal` payload 新增可选 `card_type`（`"approval"`|`"clarify"`，缺省 `"approval"`——旧事件与旧客户端按缺省解释，无破坏）：`recovery_failed` 对澄清卡恢复失败同样广播并携带 `card_type="clarify"`（`_start_card_resume` 按发起卡型携带，前端按卡型路由 → ClarifyCard 增 `failed` 终态展示）；`expired`/`voided`/`cancelled` 恒为审批卡（payload 均带 `card_type="approval"`）。错误码 `DENIED`（403）口径收敛为 **bash 只读档拒写**——read-only 只约束 bash 持久写（绑定会话内文件工具仍可写，口径见《工作区与沙箱设计方案》§6.1.1），DENIED 文案不指引升档通道（该通道受 `agent_escalation_approval_enabled` 门控）；磁盘配额卷水位核算失败（disk_usage OSError）改为 fail-closed 拒写（§6.6，不静默放行，核算恢复自动放行）。
->
-> V1.77（2026-09-08，追溯登记）：G6a/G6b 沙箱配额与升档审批（《工作区与沙箱设计方案》V0.6 F5/G6；正文事件表与错误码表已含修订，此处补头部登记）。403 `DENIED`（沙箱只读档拒写，升档审批触发源）；`tool_approval` 语义收敛为 read-only 档拒写升档卡（V1.77 起 `reason="escalation"`，`tool_result` 先落 `error_code=DENIED` 帧，approve 后同命令以 workspace-write 重放恰好一次，reject 走失败阶梯；受 `agent_escalation_approval_enabled` 门控，默认关）；`approval_terminal` outcome 成组扩展 `voided`（ack 行锁内检查点预检缺失作废）/`recovery_failed`（resume 恢复失败）；新增配置 `workspace_quota_bytes`（默认 1GiB）与 `sandbox_volume_watermark_bytes`（默认 512MiB）——workspace-write 档写前容量检查（卷水位熔断优先于每目录配额，TTL 缓存 du，VALIDATION 码不触发升档链）。
+> V1.78（2026-09-09）：G6b 磁盘配额与终态契约组（F5 §6.6/M-R3-7）+ G6 评审 M1–M3 合并登记（G6a 升档审批主体已随 #235 于 2026-09-08 合入 main，其 `DENIED` 错误码与 `tool_approval` 升档卡语义见本版事件表与错误码表）。**G6b**：新增配置 `workspace_quota_bytes`（默认 1GiB）与 `sandbox_volume_watermark_bytes`（默认 512MiB）——workspace-write 档写前容量检查（卷水位熔断优先于每目录配额，TTL 缓存 du，VALIDATION 码不触发升档链）；`approval_terminal` outcome 成组扩展 `voided`（ack 行锁内检查点预检缺失作废）/`recovery_failed`（resume 恢复失败）。**评审修订**：审批卡终态按卡型归类（M3）——`approval_terminal` payload 新增可选 `card_type`（`"approval"`|`"clarify"`，缺省 `"approval"`——旧事件与旧客户端按缺省解释，无破坏）：`recovery_failed` 对澄清卡恢复失败同样广播并携带 `card_type="clarify"`（`_start_card_resume` 按发起卡型携带，前端按卡型路由 → ClarifyCard 增 `failed` 终态展示）；`expired`/`voided`/`cancelled` 恒为审批卡（payload 均带 `card_type="approval"`）。错误码 `DENIED`（403）口径收敛为 **bash 只读档拒写**——read-only 只约束 bash 持久写（绑定会话内文件工具仍可写，口径见《工作区与沙箱设计方案》§6.1.1），DENIED 文案不指引升档通道（该通道受 `agent_escalation_approval_enabled` 门控）；磁盘配额卷水位核算失败（disk_usage OSError）改为 fail-closed 拒写（§6.6，不静默放行，核算恢复自动放行）。
 >
 > V1.76（2026-09-07）：会话-工作区绑定（《工作区与沙箱设计方案》V0.5 F3/G5）。`POST /api/sessions` 增量可选 `workspace_id`（工作区 uuid）/`scope_path`（工作区内相对子目录，默认根）——绑定在**创建时固化**（运行期不可变、无换绑端点，需换绑 = 删除重建；前端草稿模式在首条消息随 create 携带）；绑定仅限 `visibility="private"`（BLK-4：写授权不随团队可见性开放），工作区须存在、未软删、属主匹配，scope 逐段 realpath 防穿越 + 目标目录自动就绪；失败一律 `VALIDATION` fail-closed。列表项/响应增量 `workspace_id`/`scope_path`/`workspace_name`（`workspace_name` 服务端按行补查，前端仅展示）；`PUT /api/sessions/{id}/sharing` 对 `workspace_id` 非空会话转 `team` → `VALIDATION`。绑定会话的沙箱根（read/write/edit/bash 数据域）由 `resolve_session_sandbox` 唯一解析为工作区 scope（runner 前缀校验面随 G4 已就绪）；未绑定会话行为与 V1.75 逐字节一致（legacy 自动目录）。附件 staging（`attachments/`）仍落 legacy `{root}/{session_id}/attachments/`——绑定会话附件归属迁移留后续评审。审计新增 `session_workspace_bind`（§3.12.3）。无 WS 事件/上行变化。
 >
@@ -1867,6 +1866,144 @@ MCP/平台短工具中文名（ToolCard 标题；原生基础工具 `read` / `wr
 
 ---
 
+
+## 4A. Agent Loop WebSocket v2（V1.77，2026-09-09）
+
+本节按《AgentLoop后端架构设计》V0.3 §11 登记，独立于 §4 legacy 协议。
+新增会话字段 `engine_version: "legacy" | "agent_loop_v2"`，创建请求可选且默认
+`legacy`，响应返回固定引擎版本；禁止通过 WS 或更新接口切换历史会话引擎。
+`/ws/agent/v2?ticket=...` 仅服务 agent_loop_v2，旧 `/ws/agent` 仅服务 legacy。
+沿用登录 Cookie 换取的单次短票，校验类型、jti、有效期、用户禁用状态与 auth_version；
+失败关闭 4401。会话不可见/删除关闭 4404。不接受客户端 actor、凭据、沙箱路径。
+
+### 4A.1 上行与协商
+
+连接返回 `hello`、`capabilities`；客户端首个会话操作为 `subscribe`，以
+`protocol_version=2` 明确协商。每连接至多订阅一个会话，换会话须先退订。
+公共头严格为 `{protocol_version:2,type,request_id,session_id,data}`；
+未知字段、旧 last_event_id、非整数游标、版本不匹配均拒绝，不回落旧协议。
+request_id/session_id/交互标识为非空字符串，长度不超过 128；nonce 不超过 512。
+单帧 UTF-8 上限 64 KiB；JSON 重复键、NaN/Infinity、隐式类型转换均拒绝。
+客户端时钟不参与鉴权、TTL 或事件排序。
+
+| type | data（未注明可选即必填） |
+| :--- | :--- |
+| subscribe | `after_cursor:int>=0=0, view:"semantic"="semantic"` |
+| unsubscribe | 空对象 |
+| turn.submit | `client_message_id, content`；可选 `attachment_refs:string[]=[], reasoning_effort:off/low/medium/high/xhigh/max`；附件只接受平台引用，不接受路径或任意模型参数 |
+| turn.cancel | `turn_id` |
+| approval.respond | `interaction_id, turn_id, turn:int>=1, attempt_id, call_id, nonce, decision:allow/deny/always` |
+| question.respond | 同上交互身份，改为 `answers:[{question_id,answer}]`（非空、问题 ID 不重复） |
+| task_confirmation.respond | 同上交互身份，另 `spec_hash, decision:confirm/reject` |
+| trace.subscribe | `after_seq:int>=-1=-1, catalog_etag?:string`；事实 seq 从 0 起，与 cursor 不同 |
+| trace.unsubscribe | 空对象 |
+| ping | `client_time?:string` |
+
+`command.accepted/rejected` 使用 request_id 关联，data 包含接受结果或安全
+`code/message`；accepted 不代表模型、工具完成。状态变更回执必须在事实/卡决定提交后发出。
+幂等键为服务端 actor_user_id + session_id + request_id，摘要为规范 type/session_id/data
+的排序 JSON SHA256（UTF-8，紧凑分隔，无 NaN，算法版本 1）。
+同键同摘要返回既有回执，同键不同摘要拒绝；turn.submit 另以 client_message_id 去重。
+幂等和接受事实处于同一 PG 事务；WS 不用内存缓存替代数据库唯一约束。
+审批/回答/确认必须在事务内验证 owner、当前 turn/attempt/call、nonce、TTL、
+spec_hash（任务确认）；重连和回放均不得重做工具或入队。
+turn.cancel 只请求指定 Agent 回合停止，最终以 turn.end 确认为准，不能取消 Worker 任务。
+
+### 4A.2 下行与字段隔离
+
+2026-09-09 事实目录补充（catalog_version=3）：登记 Store 实际写入的
+`runtime/command`，data 为 `{fingerprint,data,correlation}`；这是持久命令回执，
+不是原始命令请求，不产生额外语义 cursor 或回放触发的 command.accepted。
+`assistant/attempt_start` 增补可选 `history_selection`（algorithm、indices、
+message_count、input_fingerprint）及 `fingerprint_algorithm="dsh-json-v1"`。
+indices 为对 `history_upto_seq` 所界定的派生消息列表的零基有序选择，不是事实 seq。
+旧事实可省略新增字段；传输版本仍为 2，stream 目录保持 v2.1。
+上述追踪字段仅供已授权 trace；普通 assistant.start 继续只公开 header/history 引用。
+runtime/command 的 trace 仅投影 fingerprint、接受结果身份和关联字段；原始 request、
+请求凭据、header、opaque 状态与未登记扩展不得透传。事实目录 schema 本身不含凭据。
+
+统一信封为 `{protocol_version:2,type,durability,session_id?,ts,correlation,data}`。
+persistent 必须有 session_id 与正整数 cursor；transient/control 禁止 cursor。
+request_id 仅 command.accepted/rejected 携带。
+correlation 只接受 turn_id/turn/step/attempt_id/call_id/call_seq/task_id/source_seq；
+source_seq 仅引用 Agent 事实，不替代 session_stream cursor。
+
+| durability | type |
+| :--- | :--- |
+| persistent | user.message、turn.start/end、step.start/end、assistant.start/message/end/retry、tool.call/dispatch/result、approval.requested/resolved、question.requested/resolved、task_confirmation.requested/resolved、execution.quarantined/reconciled、task.queued/progress/report/end、session.updated、context.trimmed、runtime.error |
+| transient | assistant.text.delta、assistant.reasoning.delta、trace.chunk |
+| control | hello、capabilities、schema.catalog、command.accepted/rejected、subscribed、replay.completed、resync.required、pong、trace.event |
+
+语义字段采用白名单投影；工具内容与原始参数保留在事实存储，tool.result 仅发送
+name/status/synthetic/display/error_code/exit_code 等展示字段，六态为
+succeeded/failed/denied/cancelled/not_started/outcome_unknown。
+assistant/message 事实稳定产生 assistant.message 和 assistant.end 两个 projection_kind；
+失败/放弃 assistant/attempt 产生 assistant.end，不能依赖瞬态 end。
+assistant.message 的工具列表只投影调用身份和名称，不携带 args/arguments_raw。
+错误只发送平台标准错误码与固定安全摘要；未知异常不得外发原文、SQL 或 traceback。
+system、protocol_state、provider_options、密钥、请求头和原始上下文不进入普通语义或 trace 帧。
+
+每连接发送前重查 ACL；无权看交互的 persistent 帧以相同 cursor 的
+`data:{restricted:true}` 占位；reasoning 字段/增量需独立授权。
+trace 需显式订阅和 trace ACL，即使控制者也不自动拥有；发送事实的独立诊断副本，
+保留脱敏后的参数形状与 schema/producer/correlation，通用递归凭据脱敏叠加事件敏感路径，
+继续剔除 system/protocol_state/raw/header/原始历史/异常原文/nonce；不等于开放内部请求正文。
+trace.event 的 `data:{source:"history"|"runtime",event:{seq,type,ts,data}}` 使用 after_seq，
+不更新 semantic cursor；撤权立即停止 trace，撤销会话可见性关闭连接。
+
+### 4A.3 快照、背压与运行时边界
+
+先 attach 注册瞬态接收，再在一致性快照读高水位 H 和最早保留 cursor。
+subscribed 返回 `{cursor:H}`；合法游标只回放 (after_cursor,H]，然后
+replay.completed `{cursor:H}`，再发送连续的 >H 已提交前缀。
+持久读取按 cursor 排序并校验连续性，重复行去重；不能依通知先后推进 cursor。
+不存在、超水位、早于保留窗口的游标返回 resync.required：
+`{cursor:H,snapshot:<H对应的授权状态>}`，本次停止回放与写命令；
+客户端替换快照后重新 subscribe(after_cursor=H)，不得再追加 <=H 历史。
+重放不调用 execute_command；增量丢失由最终 assistant.message 校正。
+
+每连接有界发送队列和分页读取；优先丢瞬态，持久/控制帧仍超限时关闭 4408，
+send 超时同样关闭 4408。Runtime 的事实提交不等待网络。
+断连/退订调用 detach；仅释放并取消该连接实际控制的活动回合，观察者不取消，
+重连/重复命令不自动抢占旧控制权。接收循环只等短事务接受结果，不 await 整轮图。
+
+### 4A.4 主服务注入契约
+
+路由从 `app.state.loop_service` 获取 `app.agent.loop_service.LoopService`。
+本批不修改 main.py。缺服务关闭 1013，不启用内存回退实现。
+WS 类型定义在 `routers/ws_v2.py`：`WsAccess(write,trace,reasoning,interactions)`、
+`StreamSnapshot(cursor,earliest_cursor=1,state={})`、`Command`、
+`CommandReceipt(data,correlation={})`。下列方法均 async：
+
+| 方法 | 返回/责任 |
+| :--- | :--- |
+| authenticate(ticket:str) | str，复用旧短票消费及用户校验，返回服务端 actor ID |
+| authorize(actor_id,session_id) | WsAccess；复用 session ACL，验证引擎版本；权限变化实时读取 |
+| attach(actor_id,session_id,connection_id,on_transient) | 注册 Callable[[dict],None]，仅传完整 transient 信封；不转移控制权 |
+| snapshot(actor_id,session_id) | StreamSnapshot；state 经授权，与 cursor 同一数据库快照 |
+| read_stream(session_id,after_cursor,limit) | list[dict]，完整 persistent 信封、按已提交 cursor 升序 |
+| read_trace(session_id,after_seq,limit) | list[dict]，规范事实、按 seq 升序 |
+| execute_command(actor_id,connection_id,command) | CommandReceipt；行锁事务幂等接受、校验控制权/交互、调用 Runtime 快速 start_turn/cancel；不 wait 整轮 |
+| detach(actor_id,session_id,connection_id) | 幂等注销瞬态订阅；仅 owner connection 请求 Runtime.cancel |
+
+`app.agent.events.project_fact(fact)` 返回除 cursor 外完整 persistent 信封列表（含稳定 projection_kind）；稳定 projection_kind 与源事实 ID 联合去重。
+主服务在事实同事务分配 cursor，用
+`persistent_frame(session_id,cursor,projection,ts=...)` 形成 session_stream 信封。
+非展示事实不投影，trace 另从事实分页读取。状态、消息投影、seq/cursor 由 PG
+会话行锁事务统一提交；不新增第二套数据库访问层。
+
+### V1.77 修改代码文件与作用清单
+
+| 文件 | 作用 |
+| :--- | :--- |
+| backend/api/app/routers/ws_v2.py | 新 v2 严格命令解析、可注入服务、回放、背压、逐连接 ACL |
+| backend/api/app/agent/events.py | v2 事实投影、信封、诊断脱敏纯函数 |
+| backend/api/tests/test_loop_ws*.py | v2 契约、回放、幂等服务边界、权限与断连回归 |
+| backend/api/app/harness/contracts/loop_events.py | 源完整事实目录、schema descriptor、producer、correlation 与缓存 ETag；平台新增事实登记 |
+| backend/api/app/harness/security/loop_redaction.py | 源通用递归敏感字段、凭据值和 JSON Pointer 路径脱敏；ordinary 与 trace 分开 |
+| docs/AI测试与评估平台-API.md | V1.77 契约先行；engine_version 的模型/REST 实现由主 agent 接线 |
+
+
 ## 5. 任务规格 TaskSpec（`POST /api/tasks` 与内部 `task.create` 共用）
 
 字段名不得改。必填语义随 `kind` 变化（PRD 5.1.2）。
@@ -2797,7 +2934,7 @@ Composer 上方抽屉；点击确认或取消即收回，消息流只保留关�
 
 **V1.78（2026-09-09）— 审批卡终态按卡型归类 + 配额/文案评审修订（G6 评审 M1–M3）**
 
-`approval_terminal` payload 增可选 `card_type`（缺省 approval 兼容旧事件）：`recovery_failed` 对澄清卡恢复失败同样广播并携带 `card_type="clarify"`；`expired`/`voided`/`cancelled` 恒为审批卡（payload 统一带 `card_type="approval"`）。错误码 `DENIED`（403）口径收敛为 bash 只读档拒写（read-only 只约束 bash，§6.1.1 口径）；配额卷水位核算失败 fail-closed 拒写。V1.77 修订（G6a/G6b，2026-09-08）追溯登记见头部引用块。
+`approval_terminal` payload 增可选 `card_type`（缺省 approval 兼容旧事件）：`recovery_failed` 对澄清卡恢复失败同样广播并携带 `card_type="clarify"`；`expired`/`voided`/`cancelled` 恒为审批卡（payload 统一带 `card_type="approval"`）。错误码 `DENIED`（403）口径收敛为 bash 只读档拒写（read-only 只约束 bash，§6.1.1 口径）；配额卷水位核算失败 fail-closed 拒写。G6b（配额/终态）与 M1–M3 合并登记于本版（V1.78）；G6a 升档审批主体此前随 #235 合入 main（其契约见错误码表与事件表，此处不重复登记）。
 
 | 实际修改文件 | 作用 |
 | :--- | :--- |

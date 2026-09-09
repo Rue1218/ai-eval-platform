@@ -3,8 +3,8 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 跨层安全模块设计 |
-| 版本 | V0.5.0 |
-| 审查日期 | 2026-08-24 |
+| 版本 | V0.5.1 |
+| 审查日期 | 2026-09-09 |
 | 文档性质 | 模块设计说明书（需求发散 + 架构设计 + 接口签名） |
 | 适用模块 | M8 跨层安全（`app/harness/security/`） |
 | 上游权威 | Harness 需求文档 V1.5.0 §4.2/§4.4/§4.5/§5.2.1/§7；API.md V1.22 §4.1/§4.4/§5；PRD §5.1.2 |
@@ -246,3 +246,19 @@ def assert_no_concurrent_confirm(pending: PendingConfirm) -> None:
 
 本文档仅设计跨层安全，不改变任何 API、数据库、前端或 Agent 运行代码。
 
+## AgentLoop v2 安全增量（V0.5.1，2026-09-09）
+
+本节记录本次实际后端增量；上文“仅设计”描述属于此前版本。
+
+新 WS 复用短票认证和会话 ACL；提交、控制、reasoning、轨迹和交互权限独立检查。卡片绑定身份、回合和一次性 nonce，回执与消费在事务中提交。持续允许仅在同一控制身份的当前运行时有效，断连或恢复不能继承旧授权。
+
+完整模型事实与公开投影分开：API Key 不进入请求头轨迹，供应商不透明状态仅用于后端协议续接，跨不兼容模型/协议时拒绝继续发送。诊断与浏览器响应走白名单/脱敏投影，不能直接序列化 SDK 异常。
+
+工作区 guard 在数据库持久化，检查范围包含重叠目录及旧执行入口；API 重启不会解除未知执行隔离。Runner 内部 token 与实例代次校验、执行指纹绑定、防重复执行和 cgroup 终止证据共同防止把网络断连误认为停止。未配置受限 cgroup 的环境拒绝新 bash。Windows 单测不能替代 Linux 的沙箱逃逸与进程树终止验收。
+
+### 本次修改代码文件与作用清单
+
+- `backend/api/app/harness/security/loop_redaction.py`、`agent/events.py`、`routers/ws_v2.py`：公开投影、诊断和权限控制。
+- `backend/api/app/agent/loop_service.py`：卡片 nonce、事务回执、控制身份和资源清理。
+- `backend/api/app/harness/execution/workspace_guard.py`、`loop_runner.py`：持久隔离与可信执行对账。
+- `backend/runner/main.py`、`backend/shared/sandbox_kernel.py`：内部认证、代次围栏及受限 cgroup 执行。

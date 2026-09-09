@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1060" height="750" viewBox="0 0 1060 750" role="img" aria-labelledby="sheet-title sheet-desc">
+  <title id="sheet-title">AgentLoop 工具线性图标方案</title>
+  <desc id="sheet-desc">16 个本地 SVG symbol；前十个对应当前工具选择，其余为源历史、MCP 与未知工具展示。图标不代表工具已注册。</desc>
+  <defs>
+    <symbol id="file-read" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8zM14 3v5h5M9 12h6M9 16h6"/>
+    </symbol>
+    <symbol id="file-write" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8zM14 3v5h5M9 14h6M12 11v6"/>
+    </symbol>
+    <symbol id="file-edit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M13 3H5v18h9M13 3v5h5V8l-5-5M11 19l1-4 7-7 3 3-7 7zM17 10l3 3"/>
+    </symbol>
+    <symbol id="terminal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M13 15h4"/>
+    </symbol>
+    <symbol id="search-web" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="10" cy="10" r="7"/><path d="M3 10h14M10 3c-4 4-4 10 0 14M10 3c4 4 4 10 0 14m5-2 6 6"/>
+    </symbol>
+    <symbol id="globe" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c-5 5-5 13 0 18M12 3c5 5 5 13 0 18"/>
+    </symbol>
+    <symbol id="message-question" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M5 4h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H8l-5 3V6a2 2 0 0 1 2-2M10 9a2 2 0 1 1 3 1.7c-1 .6-1 1-1 1.3M12 15h.01"/>
+    </symbol>
+    <symbol id="task-add" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M8 5H5v16h10M16 5h3v6M9 10h4M9 14h2M18 14v7M14.5 17.5h7"/><rect x="8" y="3" width="8" height="4" rx="1"/>
+    </symbol>
+    <symbol id="list-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+      <path d="m3 6 2 2 3-4M11 6h10m-18 7 2 2 3-4M11 13h10M4 20h3M11 20h10"/>
+    </symbol>
+    <symbol id="circle-stop" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="9"/><rect x="8.5" y="8.5" width="7" height="7" rx="1"/>
+    </symbol>
+    <symbol id="folder-tree" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 4h6l2 3h10v7H3zM6 14v6h5M6 17h5M15 18h6v4h-6z"/>
+    </symbol>
+    <symbol id="files-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M8 3h10v6M5 6H3v15h10M6 6h9v4"/><circle cx="15" cy="15" r="4"/><path d="m18 18 3 3"/>
+    </symbol>
+    <symbol id="text-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 5h18M3 10h7M3 15h4M3 20h5"/><circle cx="15" cy="15" r="4"/><path d="m18 18 3 3"/>
+    </symbol>
+    <symbol id="code-edit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+      <path d="m8 4-5 5 5 5m8-10 5 5-3 3M12 3l-2 12m2 6 1-4 6-6 3 3-6 6zM17 13l3 3"/>
+    </symbol>
+    <symbol id="plug" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M8 3v5M16 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4"/>
+    </symbol>
+    <symbol id="wrench" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21 7a6 6 0 0 1-8 7L6 21a2 2 0 0 1-3-3l7-7a6 6 0 0 1 7-8l-4 4 4 4z"/>
+    </symbol>
+  </defs>
+  <rect width="1060" height="750" rx="20" fill="#f4f7fb"/>
+  <g font-family="Segoe UI, Microsoft YaHei, sans-serif">
+    <text x="28" y="40" font-size="22" font-weight="600" fill="#17253a">AgentLoop · 工具线性图标</text>
+    <text x="28" y="68" font-size="13" fill="#526378">24 × 24 / 1.75px / currentColor / 本地 symbol · 工具类型与执行状态分开表达</text>
+    <g transform="translate(28 94)"><rect width="238" height="124" rx="12" fill="white"/><use href="#file-read" x="18" y="18" width="28" height="28" color="#2878bc"/><text x="60" y="38" font-size="16" fill="#17253a">读取文件</text><text x="18" y="75" font-size="13" fill="#526378">read · file-read</text><text x="18" y="102" font-size="12" fill="#6c7b8c">路径 / 行范围 / 内容</text></g>
+    <g transform="translate(282 94)"><rect width="238" height="124" rx="12" fill="white"/><use href="#file-write" x="18" y="18" width="28" height="28" color="#2878bc"/><text x="60" y="38" font-size="16" fill="#17253a">写入文件</text><text x="18" y="75" font-size="13" fill="#526378">write · file-write</text><text x="18" y="102" font-size="12" fill="#6c7b8c">目标 / 创建或覆盖 / 写入摘要</text></g>
+    <g transform="translate(536 94)"><rect width="238" height="124" rx="12" fill="white"/><use href="#file-edit" x="18" y="18" width="28" height="28" color="#2878bc"/><text x="60" y="38" font-size="16" fill="#17253a">修改文件</text><text x="18" y="75" font-size="13" fill="#526378">edit · file-edit</text><text x="18" y="102" font-size="12" fill="#6c7b8c">目标 / 替换 / 真实差异</text></g>
+    <g transform="translate(790 94)"><rect width="238" height="124" rx="12" fill="white"/><use href="#terminal" x="18" y="18" width="28" height="28" color="#2878bc"/><text x="60" y="38" font-size="16" fill="#17253a">受控命令</text><text x="18" y="75" font-size="13" fill="#526378">bash / pwsh · terminal</text><text x="18" y="102" font-size="12" fill="#6c7b8c">pwsh 仅源历史展示，不隐式转译</text></g>
+    <g transform="translate(28 234)"><rect width="238" height="124" rx="12" fill="white"/><use href="#search-web" x="18" y="18" width="28" height="28" color="#2878bc"/><text x="60" y="38" font-size="16" fill="#17253a">网页搜索</text><text x="18" y="75" font-size="13" fill="#526378">web_search · search-web</text><text x="18" y="102" font-size="12" fill="#6c7b8c">查询 / 来源 / 链接摘要</text></g>
+    <g transform="translate(282 234)"><rect width="238" height="124" rx="12" fill="white"/><use href="#globe" x="18" y="18" width="28" height="28" color="#2878bc"/><text x="60" y="38" font-size="16" fill="#17253a">读取网页</text><text x="18" y="75" font-size="13" fill="#526378">web_fetch · globe</text><text x="18" y="102" font-size="12" fill="#6c7b8c">URL / 正文预览 / 截断标记</text></g>
+    <g transform="translate(536 234)"><rect width="238" height="124" rx="12" fill="white"/><use href="#message-question" x="18" y="18" width="28" height="28" color="#2878bc"/><text x="60" y="38" font-size="16" fill="#17253a">向用户提问</text><text x="18" y="75" font-size="13" fill="#526378">ask_user_question</text><text x="18" y="102" font-size="12" fill="#6c7b8c">message-question · 工具内回答</text></g>
+    <g transform="translate(790 234)"><rect width="238" height="124" rx="12" fill="white"/><use href="#task-add" x="18" y="18" width="28" height="28" color="#2878bc"/><text x="60" y="38" font-size="16" fill="#17253a">创建任务</text><text x="18" y="75" font-size="13" fill="#526378">task.create · task-add</text><text x="18" y="102" font-size="12" fill="#6c7b8c">冻结规格 / 工具内确认 / 入队</text></g>
+    <g transform="translate(28 374)"><rect width="238" height="124" rx="12" fill="white"/><use href="#list-check" x="18" y="18" width="28" height="28" color="#2878bc"/><text x="60" y="38" font-size="16" fill="#17253a">查询任务</text><text x="18" y="75" font-size="13" fill="#526378">task.status · list-check</text><text x="18" y="102" font-size="12" fill="#6c7b8c">状态 / 阶段 / 报告入口</text></g>
+    <g transform="translate(282 374)"><rect width="238" height="124" rx="12" fill="white"/><use href="#circle-stop" x="18" y="18" width="28" height="28" color="#2878bc"/><text x="60" y="38" font-size="16" fill="#17253a">取消任务</text><text x="18" y="75" font-size="13" fill="#526378">task.cancel · circle-stop</text><text x="18" y="102" font-size="12" fill="#6c7b8c">请求取消与终态分开</text></g>
+    <g transform="translate(536 374)"><rect width="238" height="124" rx="12" fill="#eaf0f6"/><use href="#folder-tree" x="18" y="18" width="28" height="28" color="#53677e"/><text x="60" y="38" font-size="16" fill="#17253a">目录列表</text><text x="18" y="75" font-size="13" fill="#526378">list_dir · folder-tree</text><text x="18" y="102" font-size="12" fill="#6c7b8c">源历史兼容 · 非当前可调用工具</text></g>
+    <g transform="translate(790 374)"><rect width="238" height="124" rx="12" fill="#eaf0f6"/><use href="#files-search" x="18" y="18" width="28" height="28" color="#53677e"/><text x="60" y="38" font-size="16" fill="#17253a">匹配文件</text><text x="18" y="75" font-size="13" fill="#526378">glob · files-search</text><text x="18" y="102" font-size="12" fill="#6c7b8c">源历史兼容 · 不映射网页搜索</text></g>
+    <g transform="translate(28 514)"><rect width="238" height="124" rx="12" fill="#eaf0f6"/><use href="#text-search" x="18" y="18" width="28" height="28" color="#53677e"/><text x="60" y="38" font-size="16" fill="#17253a">文本检索</text><text x="18" y="75" font-size="13" fill="#526378">grep · text-search</text><text x="18" y="102" font-size="12" fill="#6c7b8c">源历史兼容 · 路径与匹配行</text></g>
+    <g transform="translate(282 514)"><rect width="238" height="124" rx="12" fill="#eaf0f6"/><use href="#code-edit" x="18" y="18" width="28" height="28" color="#53677e"/><text x="60" y="38" font-size="16" fill="#17253a">复合编辑器</text><text x="18" y="75" font-size="13" fill="#526378">str_replace_editor</text><text x="18" y="102" font-size="12" fill="#6c7b8c">code-edit · 按 command 展示</text></g>
+    <g transform="translate(536 514)"><rect width="238" height="124" rx="12" fill="#eaf0f6"/><use href="#plug" x="18" y="18" width="28" height="28" color="#53677e"/><text x="60" y="38" font-size="16" fill="#17253a">MCP 工具</text><text x="18" y="75" font-size="13" fill="#526378">MCP · plug</text><text x="18" y="102" font-size="12" fill="#6c7b8c">仅按后端实际授权清单展示</text></g>
+    <g transform="translate(790 514)"><rect width="238" height="124" rx="12" fill="#eaf0f6"/><use href="#wrench" x="18" y="18" width="28" height="28" color="#53677e"/><text x="60" y="38" font-size="16" fill="#17253a">未知工具</text><text x="18" y="75" font-size="13" fill="#526378">fallback · wrench</text><text x="18" y="102" font-size="12" fill="#6c7b8c">保留原名、实际结果与六态</text></g>
+    <text x="28" y="681" font-size="13" fill="#526378">类型图标固定；pending / running / 六种终态用独立状态标记与文字，不靠颜色判定。</text>
+    <text x="28" y="709" font-size="12" fill="#6c7b8c">设计资产 V0.1 · 2026-09-09 · 图标及历史兼容能力不意味着工具已启用或获准执行。</text>
+  </g>
+</svg>

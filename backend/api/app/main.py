@@ -36,6 +36,7 @@ from .routers import (
     users,
     workspaces,
     ws,
+    ws_v2,
 )
 from .security import hash_password
 from .seed import bootstrap_preview_data
@@ -177,14 +178,24 @@ async def lifespan(app: FastAPI):
     cleanup_task = asyncio.create_task(checkpoint_ttl_loop())
     # #3（V1.73）：审批卡 TTL 扫描（过期 tool_approval 卡清卡 + expired 终态）
     approval_expiry = asyncio.create_task(approval_expiry_loop())
+    from .agent.loop_service import LoopService
+
+    app.state.loop_service = LoopService()
+    from .harness.execution.workspace_guard import configure as configure_workspace_guard
+
+    configure_workspace_guard(SessionLocal)
     try:
         yield
     finally:
-        for task in (cleanup_task, approval_expiry):
-            task.cancel()
-        with suppress(asyncio.CancelledError):
+        try:
+            await app.state.loop_service.close()
+        finally:
+            configure_workspace_guard(None)
             for task in (cleanup_task, approval_expiry):
-                await task
+                task.cancel()
+            for task in (cleanup_task, approval_expiry):
+                with suppress(asyncio.CancelledError):
+                    await task
 
 
 app = FastAPI(title="AI 测试与评估平台", version=APP_VERSION, lifespan=lifespan)
@@ -222,6 +233,8 @@ app.include_router(mcp.router)
 app.include_router(agents.router)
 app.include_router(reports.router)
 app.include_router(ws.router)
+
+app.include_router(ws_v2.router)
 
 
 @app.get("/api/health")

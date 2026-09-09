@@ -203,6 +203,7 @@ class SessionCreate(ApiModel):
     """
 
     title: str = Field(default="新会话", min_length=1, max_length=200)
+    engine_version: Literal["legacy", "agent_loop_v2"] = "legacy"
     visibility: Literal["private", "team"] = "private"
     workspace_id: str | None = Field(default=None, max_length=64)
     scope_path: str | None = Field(default=None, max_length=1024)
@@ -222,6 +223,7 @@ class SessionOut(OrmOut):
     """
 
     id: str
+    engine_version: Literal["legacy", "agent_loop_v2"] = "legacy"
     title: str
     owner_id: str = Field(validation_alias=AliasChoices("user_id", "owner_id"))
     visibility: Literal["private", "team"] = "private"
