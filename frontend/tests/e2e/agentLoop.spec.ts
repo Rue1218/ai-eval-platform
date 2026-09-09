@@ -74,7 +74,8 @@ async function setup(page: Page, holdNewReplay = false) {
   await expect(page.getByText('历史旧会话',{exact:true})).toHaveCount(0)
   await page.locator('.session-title-text').filter({hasText:'联调会话'}).click()
   await expect(page.getByRole('textbox',{name:'消息'})).toBeVisible()
-  await expect(page.locator('.loop-status')).toContainText('就绪')
+  // 空会话按当前产品约定隐藏“就绪”状态，运行信息入口仍应可见。
+  await expect(page.locator('.loop-runtime-btn')).toBeVisible()
   return {commands,sessionCreates,get submits(){return submit},get uploading(){return !!releaseUpload},release:()=>releaseUpload?.(),replay:()=>releaseReplay?.(),sockets}
 }
 
@@ -194,9 +195,9 @@ test('消息操作和真实模型指标遵循持久事件字段', async ({page})
   await expect(page.getByLabel('引用为参考记忆')).toBeVisible()
   await expect(page.locator('.assistant-metrics')).toContainText('1.8K token')
   await expect(page.locator('.assistant-metrics')).toContainText('800 ms')
-  await expect(page.locator('.conversation-metrics')).toContainText('生成速度 400/s')
-  await expect(page.locator('.conversation-metrics')).toContainText('缓存命中 40%')
-  await expect(page.locator('.conversation-metrics')).toContainText('输入 1.5K · 输出 320')
+  await expect(page.locator('.loop-bottom-metrics')).toContainText('生成速度 400/s')
+  await expect(page.locator('.loop-bottom-metrics')).toContainText('缓存命中 40%')
+  await expect(page.locator('.loop-bottom-metrics')).toContainText('输入 1.5K · 输出 320')
   await page.getByLabel('引用为参考记忆').click()
   await expect(page.getByRole('textbox', {name:'消息'})).toHaveValue('[引用对话记忆]\n准备读取文件\n[/引用对话记忆]')
   await page.getByRole('button', {name:'允许一次', exact:true}).click()
@@ -226,9 +227,18 @@ test('多步工具内审批、attempt 结束不解锁发送、切会话不取消
   await page.locator('.trace-row').first().click()
   await expect(page.locator('.trace-inspector')).toBeVisible()
   await expect(page.locator('.trace-lanes')).toContainText('模型')
+  await expect(page.locator('.trace-detail-tabs')).toContainText('参数')
+  await expect(page.locator('.trace-detail-tabs')).toContainText('结果')
+  await expect(page.locator('.trace-detail-tabs')).toContainText('Schema')
   await page.getByRole('textbox',{name:'搜索轨迹'}).fill('')
   await page.locator('.trace-filters').getByRole('button',{name:'模型',exact:true}).click()
-  await expect(page.locator('.trace-row')).toHaveCount(1)
+  await expect(page.locator('.trace-row')).toHaveCount(2)
+  await expect(page.locator('.trace-filters').getByRole('button',{name:'授权',exact:true})).toBeVisible()
+  await expect(page.locator('.trace-filters').getByRole('button',{name:'问答',exact:true})).toHaveCount(0)
+  await page.locator('.trace-row').first().click()
+  await expect(page.locator('.trace-detail-title')).toHaveText('模型请求快照')
+  await expect(page.locator('.trace-detail-tabs')).toContainText('原始内容')
+  await expect(page.locator('.trace-detail-tabs')).toContainText('数据包')
   await page.locator('.trace-filters').getByRole('button',{name:'全部',exact:true}).click()
   // 拖选允许经过泳道空白，详情定位到松手的事件且不丢失选区。
   const axis = page.locator('.trace-axis'), box = (await axis.boundingBox())!

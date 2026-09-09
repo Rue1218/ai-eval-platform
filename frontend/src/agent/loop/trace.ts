@@ -26,27 +26,38 @@ export function schemaRef(root: Data, ref: string): any {
   return ref.slice(2).split('/').reduce((value: any, part) => value?.[part.replace(/~1/g, '/').replace(/~0/g, '~')], root) ?? null
 }
 export function category(type: string): string {
-  // 按事件命名空间分类，approval.requested 的后缀不能误命中模型 request。
+  // 参考页只有四类业务筛选；问答/规格确认属于授权，任务/执行属于工具工作。
   const namespace = type.split(/[./]/)[0]
-  if (['assistant', 'request', 'step'].includes(namespace)) return 'model'
-  if (['tool', 'execution'].includes(namespace)) return 'tool'
-  if (namespace === 'question') return 'question'
-  if (['approval', 'task_confirmation'].includes(namespace)) return 'approval'
-  if (namespace === 'task') return 'task'
+  if (['assistant', 'request'].includes(namespace)) return 'model'
+  if (['tool', 'execution', 'task'].includes(namespace)) return 'tool'
+  if (['approval', 'question', 'task_confirmation'].includes(namespace)) return 'approval'
   return 'lifecycle'
 }
 
-/** 每次模型请求和工具调用各占一个语义行，保留全部传输层供检查器关联。 */
-export function semanticTraceRows(facts: LoopFrame[]): Array<LoopFrame & { layers: LoopFrame[] }> {
-  const groups = new Map<string, LoopFrame & { layers: LoopFrame[] }>()
+export type SemanticTraceRow = LoopFrame & { layers: LoopFrame[] }
+
+/** 请求快照与助手提交分别成行；同一工具或授权生命周期仍聚合为一条业务记录。 */
+export function semanticTraceRows(facts: LoopFrame[]): SemanticTraceRow[] {
+  const groups = new Map<string, LoopFrame[]>()
   for (const frame of facts) {
+    const interactionId = typeof frame.data.interaction_id === 'string' ? frame.data.interaction_id : ''
     const key = frame.type.startsWith('tool.') && frame.correlation.call_id ? `tool:${identity(frame, true)}`
-      : frame.type.startsWith('assistant.') && frame.correlation.attempt_id ? `model:${identity(frame)}` : `cursor:${frame.cursor}`
-    const old = groups.get(key)
-    if (old) {
-      old.layers.push(frame)
-      old.data = { ...old.data, ...frame.data, display: { ...old.data.display, ...frame.data.display } }
-    } else groups.set(key, { ...frame, data: { ...frame.data }, layers: [frame] })
+      : /^(approval|question|task_confirmation)\./.test(frame.type) && (interactionId || frame.correlation.call_id)
+        ? `approval:${frame.type.split('.')[0]}:${interactionId || identity(frame, true)}`
+        : frame.type === 'assistant.start' && frame.correlation.attempt_id ? `request:${identity(frame)}`
+          : /^assistant\.(message|end)$/.test(frame.type) && frame.correlation.attempt_id ? `assistant:${identity(frame)}`
+            : `cursor:${frame.cursor}`
+    const layers = groups.get(key) ?? []
+    layers.push(frame)
+    groups.set(key, layers)
   }
-  return [...groups.values()]
+  const preferred = ['assistant.message', 'tool.call', 'approval.requested', 'question.requested',
+    'task_confirmation.requested', 'turn.end', 'step.end']
+  return [...groups.values()].map(layers => {
+    const primary = preferred.map(type => layers.find(layer => layer.type === type)).find(Boolean) ?? layers[0]
+    const data = layers.reduce<Data>((value, layer) => ({
+      ...value, ...layer.data, display: { ...value.display, ...layer.data.display },
+    }), {})
+    return { ...primary, data, layers }
+  }).sort((left, right) => (left.layers[0].cursor ?? 0) - (right.layers[0].cursor ?? 0))
 }
