@@ -700,12 +700,30 @@ def test_protocol_state_compatibility_key_is_stable():
         {"api_key": "secret"},
         {"extra_headers": {"authorization": "secret"}},
         {"thinking": {"type": "enabled", "api_key": "secret"}},
+        {"output_config": {"effort": "high", "api_key": "secret"}},
+        {"output_config": {"effort": {"api_key": "secret"}}},
     ],
 )
 def test_request_rejects_credentials_before_header(options):
     """不能先把凭据写入 header 再等 SDK 请求时校验。"""
     with pytest.raises(LlmRequestError):
         request(provider_options=options)
+
+
+@pytest.mark.parametrize("model,effort,max_tokens", [
+    ("deepseek-v4-flash-0731", "medium", 4096),
+    ("deepseek-v4-flash-0731", "xhigh", 4096),
+    ("qwen3-coder-plus", "high", 4096),
+    ("qwen3.6-flash-unknown", "high", 4096),
+    ("qwen3.6-flash", "high", 1024),
+])
+def test_compatible_reasoning_does_not_invent_model_or_budget_capabilities(model, effort, max_tokens):
+    """近似型号、供应商别名档位和不足的预算不得被 UI 当成可用能力。"""
+    with pytest.raises(UnsupportedReasoningEffortError):
+        resolve_request(ModelConfig(
+            "anthropic_messages", "https://unit.invalid", model, api_key="test-only",
+            max_tokens=max_tokens, reasoning_effort=effort,
+        ), messages=[])
 
 
 @pytest.mark.parametrize(

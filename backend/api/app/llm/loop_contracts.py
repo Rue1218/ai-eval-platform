@@ -117,6 +117,7 @@ class LlmRequest:
             "prompt_cache",
             "anthropic_version",
             "thinking",
+            "output_config",
             "reasoning_effort",
             "reasoning",
             "omit_temperature",
@@ -127,6 +128,7 @@ class LlmRequest:
             raise LlmRequestError("供应商选项含未登记字段", code="model_config")
         shapes = {
             "thinking": {"type", "budget_tokens"},
+            "output_config": {"effort"},
             "reasoning": {"effort", "summary"},
             "google_thinking": {"thinking_level", "include_thoughts"},
         }

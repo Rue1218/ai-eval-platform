@@ -1,7 +1,14 @@
 """供应商采样选项只在此解析，结果进入请求头且不接受任意透传。"""
 
+import re
+
 from ..loop_contracts import LlmRequest, UnsupportedReasoningEffortError
 from .common import invalid, validate_request
+
+
+def _qwen_budget_model(model: str) -> bool:
+    """只开放已核对百炼预算契约的 Flash 型号，不推断全部 Qwen 能力。"""
+    return re.fullmatch(r"qwen3\.6-flash(?:-\d{4}-\d{2}-\d{2})?", model) is not None
 
 
 def resolve_options(request: LlmRequest, provider: str, protocol: str) -> dict:
@@ -27,15 +34,23 @@ def resolve_options(request: LlmRequest, provider: str, protocol: str) -> dict:
             for part in ("claude-3-7", "claude-sonnet-4", "claude-opus-4", "claude-haiku-4")
         )
         if enabled:
-            if not supported or request.max_tokens <= 1024:
+            # V4 的 effort 与 Claude 的 token 预算不是同一参数；只公开共同有效档位。
+            deepseek_v4 = re.fullmatch(r"deepseek-v4-(?:flash|pro)(?:-\d{4})?", model)
+            if deepseek_v4:
+                if effort not in {"high", "max"}:
+                    raise UnsupportedReasoningEffortError(provider, effort)
+                options["thinking"] = {"type": "enabled"}
+                options["output_config"] = {"effort": effort}
+            elif not (supported or _qwen_budget_model(model)) or request.max_tokens <= 1024:
                 raise UnsupportedReasoningEffortError(provider, effort)
-            ratio = {"low": 0.2, "medium": 0.4, "high": 0.6, "xhigh": 0.75, "max": 0.8}[effort]
-            options["thinking"] = {
-                "type": "enabled",
-                "budget_tokens": max(
-                    1024, min(request.max_tokens - 1, round(request.max_tokens * ratio))
-                ),
-            }
+            else:
+                ratio = {"low": 0.2, "medium": 0.4, "high": 0.6, "xhigh": 0.75, "max": 0.8}[effort]
+                options["thinking"] = {
+                    "type": "enabled",
+                    "budget_tokens": max(
+                        1024, min(request.max_tokens - 1, round(request.max_tokens * ratio))
+                    ),
+                }
             options["omit_temperature"] = True
     elif provider == "deepseek" and protocol == "openai_chat":
         if effort == "xhigh":
@@ -93,6 +108,11 @@ def request_options(request: LlmRequest, provider: str, protocol: str) -> dict:
     if protocol == "anthropic_messages":
         if "thinking" in resolved:
             result["thinking"] = resolved["thinking"]
+            if _qwen_budget_model(request.model.lower()) and "budget_tokens" in resolved["thinking"]:
+                # 此型号的 max_tokens 仅约束正文；保持平台总输出预留不被思考额外突破。
+                result["max_tokens"] -= resolved["thinking"]["budget_tokens"]
+        if "output_config" in resolved:
+            result["extra_body"] = {"output_config": resolved["output_config"]}
         version = request.provider_options.get("anthropic_version")
         if version:
             result["extra_headers"] = {"anthropic-version": version}
