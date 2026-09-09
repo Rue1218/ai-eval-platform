@@ -171,9 +171,10 @@ class ProbeClient:
     async def send_confirm_ack(self, ok: bool, patch: dict[str, Any] | None = None) -> None:
         await self._send({"event": "confirm_ack", "payload": {"ok": ok, "patch": patch or {}}})
 
-    async def send_clarify_reply(self, clarify_id: str, answer: str) -> None:
+    async def send_clarify_reply(self, clarify_id: str, answers: list[dict]) -> None:
+        """发送澄清卡回执（V1.72 多题结构 answers[]，替代旧单文本）。"""
         await self._send(
-            {"event": "clarify_reply", "payload": {"id": clarify_id, "answer": answer}}
+            {"event": "clarify_reply", "payload": {"id": clarify_id, "answers": answers}}
         )
 
     async def send_tool_approval_ack(self, approval_id: str, action: str) -> None:

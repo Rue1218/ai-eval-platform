@@ -156,25 +156,45 @@
         </button>
       </div>
 
-      <!-- F3/G5：草稿会话工作区选择面板（初版仅根 scope；固化后不可更改） -->
+      <!-- F3/G5：草稿会话工作区选择面板（初版仅根 scope；固化后不可更改）。
+           支持面板内直接新建工作区并自动选中（即建即绑，无需跳「我的工作区」） -->
       <div v-if="bindingPanelOpen" class="ws-binding-panel" data-od-id="ws-binding-panel">
         <div class="ws-binding-panel-title">
           选择要绑定的工作区
           <span class="muted">（绑定后会话内模型的文件读写与 bash 均在该工作区进行，发送首条消息后固化）</span>
         </div>
         <div v-if="bindingLoading" class="muted" style="padding: 8px 0">加载中…</div>
-        <div v-else-if="bindableWorkspaces.length === 0" class="muted" style="padding: 8px 0">
-          暂无工作区——请先到「我的工作区」创建
+        <template v-else>
+          <div v-if="bindableWorkspaces.length === 0" class="muted" style="padding: 8px 0">
+            暂无工作区——在下方直接新建即可
+          </div>
+          <button
+            v-for="wsItem in bindableWorkspaces"
+            :key="wsItem.id"
+            class="ws-binding-item"
+            @click="pickDraftWorkspace(wsItem.id, wsItem.name)"
+          >
+            <span>{{ wsItem.name }}</span>
+            <span class="muted">根目录</span>
+          </button>
+        </template>
+        <div class="ws-binding-create">
+          <input
+            v-model="newWorkspaceName"
+            class="input ws-binding-create-input"
+            placeholder="新建工作区名称"
+            :disabled="newWorkspaceBusy"
+            maxlength="100"
+            @keyup.enter="createDraftWorkspace"
+          />
+          <button
+            class="btn btn-sm btn-primary"
+            :disabled="newWorkspaceBusy || !newWorkspaceName.trim()"
+            @click="createDraftWorkspace"
+          >
+            新建
+          </button>
         </div>
-        <button
-          v-for="wsItem in bindableWorkspaces"
-          :key="wsItem.id"
-          class="ws-binding-item"
-          @click="pickDraftWorkspace(wsItem.id, wsItem.name)"
-        >
-          <span>{{ wsItem.name }}</span>
-          <span class="muted">根目录</span>
-        </button>
       </div>
 
       <AgentWorkspace v-if="isLoopView" :session-id="currentSessionId" :store="loopStore" :create-session="createLoopSession" />
@@ -781,6 +801,9 @@ const draftWorkspaceName = ref<string>('')
 const bindingPanelOpen = ref(false)
 const bindableWorkspaces = ref<Array<{ id: string; name: string }>>([])
 const bindingLoading = ref(false)
+// 面板内新建工作区（即建即绑，无需跳「我的工作区」）
+const newWorkspaceName = ref('')
+const newWorkspaceBusy = ref(false)
 // 未绑定服务端会话时保持草稿态，不得用列表首项冒充当前会话。
 const currentSession = computed(() => sessions.value.find(s => s.id === currentSessionId.value) || null)
 // 产品入口已收敛为 AgentLoop；保留 v-else 源码仅用于历史审计与后续删除。
@@ -1250,6 +1273,27 @@ function pickDraftWorkspace(id: string, name: string) {
   draftWorkspaceId.value = id
   draftWorkspaceName.value = name
   bindingPanelOpen.value = false
+}
+
+/** 面板内新建工作区并自动选中（即建即绑；失败保留面板与输入，便于重试）。 */
+async function createDraftWorkspace() {
+  const name = newWorkspaceName.value.trim()
+  if (!name || newWorkspaceBusy.value || currentSessionId.value) return
+  newWorkspaceBusy.value = true
+  try {
+    const created = await api.workspaces.create(name)
+    bindableWorkspaces.value.unshift({
+      id: String(created.id),
+      name: String(created.name),
+    })
+    newWorkspaceName.value = ''
+    pickDraftWorkspace(String(created.id), String(created.name))
+    message.success('工作区已创建并绑定该会话')
+  } catch (err: any) {
+    message.error(err?.message || '创建工作区失败')
+  } finally {
+    newWorkspaceBusy.value = false
+  }
 }
 
 function clearDraftWorkspace() {
@@ -3218,6 +3262,22 @@ onBeforeUnmount(() => {
 
 .ws-binding-item:hover {
   background: var(--bg-hover, rgba(128, 128, 128, 0.08));
+}
+
+/* 面板内新建工作区（即建即绑） */
+.ws-binding-create {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.ws-binding-create-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  padding: 6px 10px;
 }
 
 /* 协作者消息左对齐并弱化背景色，作者行让多人记录可以追溯。 */

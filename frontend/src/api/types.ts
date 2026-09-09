@@ -1056,7 +1056,8 @@ export interface WorkflowTemplate {
 }
 
 
-// ─── 管理端 · 工作区（会话 → 沙箱文件夹） ───
+// —— 用户域工作区（F1/G1）——
+// 管理端工作区视图已下线（V1.80）；WorkspaceFolder 目录摘要仍被用户域复用。
 export interface WorkspaceFolder {
   name: string
   path: string
@@ -1065,50 +1066,6 @@ export interface WorkspaceFolder {
   total_bytes: number
   updated_at?: string | null
 }
-
-export interface WorkspaceSession {
-  session_id: string
-  title: string
-  owner?: string | null
-  visibility: SessionVisibility
-  deleted: boolean
-  created_at?: string | null
-  updated_at?: string | null
-  folder: WorkspaceFolder | null
-}
-
-// 工作区整体聚合统计（不受筛选影响，供 KPI 卡片）
-export interface WorkspaceStats {
-  total_sessions: number
-  with_folder: number
-  orphan_count: number
-}
-
-export interface WorkspaceOverview {
-  root: string
-  items: WorkspaceSession[]
-  // 服务端分页：items 仅当前页，total 为过滤后的会话总数
-  total: number
-  offset: number
-  limit: number
-  stats: WorkspaceStats
-  orphans: WorkspaceFolder[]
-}
-
-export interface WorkspaceFile {
-  name: string
-  size: number
-  updated_at: string
-}
-
-export interface WorkspaceFileList {
-  session_id: string
-  path: string
-  files: WorkspaceFile[]
-  total: number
-}
-
-// —— 用户域工作区（F1/G1）——
 export interface UserWorkspace {
   id: string
   name: string

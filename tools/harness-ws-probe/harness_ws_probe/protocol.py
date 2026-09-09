@@ -15,31 +15,47 @@ UPLINK_EVENTS = frozenset(
     }
 )
 
-# 服务 → 前端：允许的事件名（§4.3）。禁止旧名 thinking/token/chat:send/tool_call_start/message/done。
+# 服务 → 前端：允许的事件名（§4.3，V1.78 现行词汇表 event.v5）。
+# 对齐 backend/shared/event_vocab.py：PERSISTENT_KINDS = NODE_EVENT_KINDS |
+# _EMITTER_ONLY_KINDS；另加瞬态帧 assistant_delta/tool_progress/
+# tool_output_delta/pong。禁止旧名 thinking/token/chat:send/
+# tool_call_start/message/done。
 DOWNLINK_EVENTS = frozenset(
     {
-        "thought",
+        # 图节点可产出（NODE_EVENT_KINDS）
         "user_message",
-        "assistant_delta",
-        "assistant_message",
-        "response.completed",
+        "thought",
         "tool_call",
-        "tool_progress",
-        "tool_output_delta",
         "tool_result",
-        "tool_approval",
-        "tool_approval_ack",
+        "confirm",
         "clarify",
         "plan",
         "task_state",
-        "confirm",
-        "confirm_ack",
         "progress",
         "report",
         "error",
+        "assistant_message",
+        "response.completed",
+        "fabrication",  # V1.75（P3）编造对账审计留痕（仅审计，不入正文事件）
+        # 收包循环 / 标题后台 / Worker 直产（_EMITTER_ONLY_KINDS）
+        "confirm_ack",
+        "task_cancelled",
+        "tool_approval_ack",
+        "clarify_ack",  # V1.72（#1）
+        "approval_terminal",  # V1.73（#3）
+        "context_trim",  # V1.74（#2）
+        "session_title",
+        # 历史保留（无生产者或骨架化遗留，白名单兼容回放）
+        "tool_approval",
+        "assistant_delta",
+        "tool_progress",
+        "tool_output_delta",
         "pong",
     }
 )
+
+# 当前词汇表版本（API.md §4.3 V1.75 现值；增删 kind 必须递增）
+EXPECTED_VOCAB_VERSION = "event.v5"
 
 FORBIDDEN_DOWNLINK = frozenset(
     {"thinking", "token", "chat:send", "tool_call_start", "message", "done"}

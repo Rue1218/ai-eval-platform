@@ -38,7 +38,6 @@ const routes: RouteRecordRaw[] = [
       { path: 'admin/profiles', component: () => import('../views/AdminProfiles.vue'), meta: { title: '协议档' } },
       { path: 'admin/stress', component: () => import('../views/AdminStress.vue'), meta: { title: '压测治理' } },
       { path: 'admin/users', component: () => import('../views/AdminUsers.vue'), meta: { title: '账号' } },
-      { path: 'admin/workspaces', component: () => import('../views/AdminWorkspaces.vue'), meta: { title: '工作区' } },
     ],
   },
 ]
