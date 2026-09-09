@@ -597,9 +597,9 @@
               <svg v-if="isGenerating" width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
                 <rect x="6" y="6" width="12" height="12" rx="2" />
               </svg>
-              <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
-                <line x1="5" y1="12" x2="19" y2="12"></line>
-                <polyline points="12 5 19 12 12 19"></polyline>
+              <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="12" y1="19" x2="12" y2="5"></line>
+                <polyline points="5 12 12 5 19 12"></polyline>
               </svg>
             </button>
           </div>
@@ -3747,8 +3747,8 @@ onBeforeUnmount(() => {
 
 /* 右侧圆形发送/暂停按钮 */
 .composer-send-btn {
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
   border: none;
   display: flex;
@@ -3757,19 +3757,36 @@ onBeforeUnmount(() => {
   background: var(--bg-elevated);
   color: var(--text-tertiary);
   cursor: not-allowed;
-  transition: all 0.15s ease;
+  transition: all 0.18s ease;
   flex-shrink: 0;
 }
 
 .composer-send-btn.active {
-  background: var(--text-primary);
-  color: #fff;
+  background: #1f5947;
+  color: #ffffff;
   cursor: pointer;
+  box-shadow: 0 1px 3px rgba(23, 74, 58, 0.25);
 }
 
 .composer-send-btn.active:hover {
-  opacity: 0.88;
+  background: #184738;
+  color: #ffffff;
   transform: scale(1.05);
+  box-shadow: 0 2px 6px rgba(23, 74, 58, 0.35);
+}
+
+.composer-send-btn.active:active {
+  background: #143d30;
+  transform: scale(0.96);
+}
+
+[data-theme='dark'] .composer-send-btn.active {
+  background: #16977a;
+  color: #ffffff;
+}
+
+[data-theme='dark'] .composer-send-btn.active:hover {
+  background: #148369;
 }
 
 .session-meta-right .nav-dot {
