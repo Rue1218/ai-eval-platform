@@ -23,6 +23,18 @@ export interface LoopMeter {
   }
 }
 
+/** 上游已归一化的真实 token 用量；缺失字段表示该协议未返回，而不是零。 */
+export interface LoopUsage {
+  prompt_tokens?: number; completion_tokens?: number; total_tokens?: number
+  cache_read_input_tokens?: number; cache_creation_input_tokens?: number; cached_tokens?: number
+}
+
+/** 当前会话聚合后的模型消耗指标，只由已持久化的助手消息计算。 */
+export interface ConversationMetrics {
+  inputTokens: number; outputTokens: number
+  outputTokensPerSecond: number | null; cacheHitRate: number | null
+}
+
 /** 已授权的 Agent 协议档；只包含选择模型所需的公开元数据。 */
 export interface LoopProfile {
   id: string; name: string; version: string; model: string; protocol: string
@@ -45,8 +57,8 @@ export interface ToolDisplay {
   arguments_preview?: string; result_preview?: string; format?: string; truncated?: boolean; unavailable_reason?: string
 }
 /** 业务记录保持稳定引用，页面展开状态由组件管理。 */
-export interface LoopRecord extends Data { key: string; first_cursor: number; correlation: Correlation; event: string }
-export interface Attempt extends LoopRecord { text: string; reasoning: string; ended: boolean; chunks: Record<string, number>; request_summary?: Data }
+export interface LoopRecord extends Data { key: string; first_cursor: number; correlation: Correlation; event: string; timestamp?: string }
+export interface Attempt extends LoopRecord { text: string; reasoning: string; ended: boolean; chunks: Record<string, number>; request_summary?: Data; usage?: LoopUsage; latency_ms?: number }
 export interface ToolRun extends LoopRecord { name: string; status: ToolStatus; display: ToolDisplay; synthetic?: boolean }
 export interface InteractionRecord extends LoopRecord { interaction_id: string; kind: string; resolved: boolean; submitting?: boolean; restricted?: boolean }
 export type Connection = 'connecting' | 'online' | 'reconnecting' | 'offline' | 'revoked'

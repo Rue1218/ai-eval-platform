@@ -225,6 +225,8 @@ async def test_seven_nodes_tool_loop_second_turn_and_committed_publication():
     assert len(scheduler.invocations) == 1
     assert [e["reason"] for e in observed if e["kind"] == "turn_end"] == ["completed"] * 2
     assert adapter.requests[0].profile_version == 7
+    messages = [event["data"] for event in runtime.log.read() if event["type"] == "assistant/message"]
+    assert all(isinstance(message["latency_ms"], int) and message["latency_ms"] >= 0 for message in messages)
     await runtime.close()
 
 

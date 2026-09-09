@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import time
 import uuid
 from collections.abc import Callable
 from copy import deepcopy
@@ -350,6 +351,8 @@ async def build_agent(
         # 先缓存流片段，只有收到 Done 并通过校验后才形成正式 assistant/message。
         # 因此尚未完成的工具参数不会被提前执行。
         attempt = AssistantAttempt()
+        # 仅统计本次模型流从建连到完成的耗时，不混入工具执行或整个回合等待时间。
+        model_started_at = time.perf_counter()
         try:
             model_stream = current.adapter.stream(request)
             try:
@@ -577,8 +580,10 @@ async def build_agent(
 
         # 完整 assistant 消息先提交，再同时作为图状态中的下一轮历史。
         assistant = attempt.message()
+        latency_ms = round((time.perf_counter() - model_started_at) * 1000)
         if attempt.done.usage:
             assistant["usage"] = attempt.done.usage
+        assistant["latency_ms"] = latency_ms
         assistant["source"] = {"provider": request.provider, "model": request.model}
         committed = context.log.append(
             "assistant/message",
@@ -591,6 +596,7 @@ async def build_agent(
                 "tool_calls": calls,
                 "reasoning_content": assistant.get("reasoning_content"),
                 "usage": attempt.done.usage,
+                "latency_ms": latency_ms,
                 "finish_reason": attempt.done.finish_reason,
             },
         )
@@ -604,6 +610,7 @@ async def build_agent(
             reasoning_content=assistant.get("reasoning_content", ""),
             tool_calls=calls,
             usage=attempt.done.usage,
+            latency_ms=latency_ms,
             finish_reason=attempt.done.finish_reason,
             source=assistant.get("source"),
             interrupted=False,

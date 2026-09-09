@@ -36,7 +36,7 @@ test('首次协商、缺口原连接恢复，快照在 H 后继续',async()=>{
   let state=createLoopState('s');const socket=new Socket()
   const client=new AgentLoopWebSocket('s',{ticket:async()=>'ticket',state:()=>state,replace:value=>state=value,socket:()=>socket})
   try {
-    await client.connect();socket.frame('hello');socket.frame('capabilities',{stream_schema_version:'agent-loop-stream.v2.1'})
+    await client.connect();socket.frame('hello');socket.frame('capabilities',{stream_schema_version:'agent-loop-stream.v2.2'})
     assert.equal(socket.sent[0].data.after_cursor,0)
     socket.frame('replay.completed',{cursor:0},{session_id:'s'});assert.equal(state.ready,true)
     socket.frame('user.message',{content:'missed first'},{session_id:'s',durability:'persistent',cursor:2})

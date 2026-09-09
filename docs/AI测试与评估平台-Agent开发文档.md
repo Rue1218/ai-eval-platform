@@ -1,10 +1,10 @@
 # AI 测试与评估平台 Agent 开发文档
 
-> 版本：V1.7.4
+> 版本：V1.7.5
 > 状态：新建会话统一使用 AgentLoop v2；历史 legacy 行仅保留审计与显式回放路径。此前骨架化与混合引擎说明属于 legacy 路径及其历史阶段，不能据此认定新路径仍为纯对话。前端输入栏按每回合协议档选择模型和思考强度，完整真实供应商/Linux Runner 联调验收仍未结束。
 > 审查日期：2026-09-09
 > 对应需求：`AI测试与评估平台-PRD.md` V1.19
-> 对应接口：`AI测试与评估平台-API.md` V1.87
+> 对应接口：`AI测试与评估平台-API.md` V1.88
 
 ## 1. legacy 骨架化运行链路（历史基线）
 
@@ -525,6 +525,14 @@ reasoning 事件，并对已知支持显式关闭的端点发送关闭参数。G
 POST /api/sessions 只创建 AgentLoop 会话，数据库默认值迁至 agent_loop_v2，历史 legacy 行不改写。GET /api/sessions/agent-ui 与会话同名接口返回脱敏 profiles 数组，每项仅有 id、name、version、model、protocol、allowed_efforts 与 default_effort。输入栏提交 turn.submit.profile_id 与 reasoning_effort 后，loop_wiring 每回合重新检查 Agent 用途、有效凭据、模型配置和档位兼容性；浏览器不能提交端点、密钥或供应商参数。AGENT_LOOP_ENABLED 已从配置和部署变量移除。
 
 修改代码文件与作用清单：backend/shared/models.py 与 migrations/versions/8f9a2c4d6e01_新会话默认使用agentloop.py 固化新会话默认引擎；schemas.py、routers/sessions.py、routers/ws.py、routers/ws_v2.py 与 agent/loop_service.py、agent/loop_wiring.py 落实单入口和逐回合校验；frontend/src/components/agent/loop/AgentComposer.vue、AgentWorkspace.vue、ThinkingControl.vue 与 views/Agent.vue 实现模型选择和 DeepSeek Harness 风格的思考控制；docs/AI测试与评估平台-API.md 升级至 V1.80。
+
+### V1.7.5 消息操作与真实用量（2026-09-09）
+
+AgentLoop 消息卡在实际模型名后展示该持久事件的发送日期时间；回答提供复制、重新生成和「引用为参考记忆」三个线性图标操作。重新生成重新提交同一回合的原用户内容与附件引用，引用操作仅将回答写入下一轮草稿的明确引用块，不创建或伪造服务端持久记忆。
+
+每个完成的助手消息展示上游返回的 token 总量与单次模型生成耗时。输入框下方聚合已持久化 `assistant.message.usage` 与 `latency_ms`：显示输入/输出 token、生成速度和缓存命中率。上游未返回的 token 或缓存字段一律显示未知，绝不按文本反推；生成速度只在输出 token 与模型耗时都存在时计算。浏览器 v2 流 schema 更新为 `agent-loop-stream.v2.2`，源事实目录版本为 `5`。
+
+修改代码文件与作用清单：`backend/api/app/agent/loop.py` 在成功 attempt 上记录模型流耗时；`agent/events.py`、`harness/contracts/loop_events.py`、`routers/ws_v2.py` 公开 `latency_ms` 并升级目录；`frontend/src/api/agentLoopTypes.ts`、`agent/loop/reducer.ts` 保留消息时间、用量与耗时；`components/agent/loop/AgentWorkspace.vue` 与 `AgentComposer.vue` 呈现消息操作和会话统计；对应后端与前端 AgentLoop 测试覆盖事件投影和前端状态。
 
 ### V1.7.4 上下文来源分布（2026-09-09）
 

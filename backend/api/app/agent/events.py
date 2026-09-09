@@ -28,7 +28,7 @@ _FIELDS = {
     "step.start": "",
     "step.end": "reason usage",
     "assistant.start": "header_seq history_upto_seq request_summary",
-    "assistant.message": "content tool_calls usage finish_reason interrupted reasoning_preview",
+    "assistant.message": "content tool_calls usage latency_ms finish_reason interrupted reasoning_preview",
     "assistant.end": "outcome committed_seq interrupted error_code",
     "assistant.retry": "retry_index previous_attempt_id error_code delay_s",
     "tool.call": "name display",
@@ -346,7 +346,7 @@ def trace_frame(event: dict, session_id: str, *, source: str) -> dict:
 def schema_catalog() -> dict:
     """传输目录独立版本化，不假装它是原始事实 schema 的完整描述。"""
     return {
-        "version": "agent-loop-stream.v2.1",
+        "version": "agent-loop-stream.v2.2",
         "types": {
             **{name: {"durability": "persistent", "fields": fields.split()}
                for name, fields in _FIELDS.items()},

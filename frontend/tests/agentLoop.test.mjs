@@ -102,9 +102,9 @@ test('1000 chunks、450 条历史、最终校正和迟到片段不回写终态',
   applyFrame(s, f('assistant.start', {}, { attempt_id:'a' }))
   for(let i=0;i<1000;i++){const chunk=f('assistant.text.delta',{text:'x',chunk_index:i},{attempt_id:'a'},'transient');applyFrame(s,chunk);applyFrame(s,chunk)}
   const a=Object.values(s.attempts)[0]; assert.equal(a.text.length,1000)
-  applyFrame(s,f('assistant.message',{content:'最终正文',reasoning_preview:'授权思考'},{attempt_id:'a'}))
+  applyFrame(s,f('assistant.message',{content:'最终正文',reasoning_preview:'授权思考',usage:{prompt_tokens:12,completion_tokens:3},latency_ms:240},{attempt_id:'a'}))
   applyFrame(s,f('assistant.text.delta',{text:'迟到',chunk_index:1001},{attempt_id:'a'},'transient'))
-  assert.equal(a.text,'最终正文');assert.equal(Object.keys(s.messages).length,450)
+  assert.equal(a.text,'最终正文');assert.deepEqual(a.usage,{prompt_tokens:12,completion_tokens:3});assert.equal(a.latency_ms,240);assert.ok(a.timestamp);assert.equal(Object.keys(s.messages).length,450)
   const restored=restoreSnapshot('s',s.cursor,{timeline:s.facts})
   assert.equal(conversationRows(restored).length,451)
   assert.equal(Object.values(restored.attempts)[0].reasoning,'授权思考')

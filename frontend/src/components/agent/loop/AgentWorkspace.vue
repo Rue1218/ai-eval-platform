@@ -12,11 +12,33 @@
           <template v-for="row in visibleRows" :key="row.key">
             <article v-if="row.role==='user'" class="loop-message user"><header>你</header><div class="history-files"><AttachmentPreview v-for="file in attachments[row.key] || []" :key="file.file_id" :attachment="file"/></div><p>{{ row.content }}</p></article>
             <ToolRunCard v-else-if="'status' in row && 'name' in row" :tool="row as ToolRun" :interactions="interactions(row)" :can-control="canControl" :online="!!state?.ready" @respond="respond"/>
-            <article v-else class="loop-message assistant"><header><ProviderLogo v-if="row.request_summary?.model" :provider="getProviderLogoKey({model:row.request_summary.model})" :size="18"/>{{ row.request_summary?.model || '助手' }}<small v-if="row.request_summary">{{ row.request_summary.reasoning_effort }} · step {{ row.correlation.step }}</small><button v-if="row.text" @click="copy(row.text)">复制</button></header><ReasoningBlock v-if="row.reasoning && ui?.permissions.reasoning" :content="row.reasoning" :ended="row.ended" :interrupted="row.interrupted"/><MarkdownView v-if="row.text" :content="row.text"/><p v-else-if="!row.ended" class="muted">正在响应…</p><small v-if="row.interrupted || row.error_code">{{ row.interrupted ? '本次输出已中断' : row.error_code }}</small></article>
+            <article v-else class="loop-message assistant">
+              <header class="assistant-header">
+                <div class="assistant-identity">
+                  <ProviderLogo v-if="row.request_summary?.model" :provider="getProviderLogoKey({model:row.request_summary.model})" :size="18"/>
+                  <strong>{{ row.request_summary?.model || '助手' }}</strong>
+                  <time v-if="formatTimestamp(row.timestamp)" :datetime="row.timestamp">{{ formatTimestamp(row.timestamp) }}</time>
+                  <small v-if="row.request_summary">{{ row.request_summary.reasoning_effort }} · step {{ row.correlation.step }}</small>
+                </div>
+                <div v-if="row.text" class="assistant-actions" aria-label="回答操作">
+                  <button class="assistant-action" type="button" title="复制回答" aria-label="复制回答" @click="copy(row.text)"><n-icon :component="FileIcon" :size="15"/></button>
+                  <button class="assistant-action" type="button" title="重新生成" aria-label="重新生成" :disabled="busy || draft.submitting || !!draft.pending" @click="regenerate(row)"><n-icon :component="RetryIcon" :size="15"/></button>
+                  <button class="assistant-action" type="button" title="引用为参考记忆" aria-label="引用为参考记忆" @click="quoteMemory(row.text)"><n-icon :component="BackwardIcon" :size="15"/></button>
+                </div>
+              </header>
+              <ReasoningBlock v-if="row.reasoning && ui?.permissions.reasoning" :content="row.reasoning" :ended="row.ended" :interrupted="row.interrupted"/>
+              <MarkdownView v-if="row.text" :content="row.text"/>
+              <p v-else-if="!row.ended" class="muted">正在响应…</p>
+              <footer v-if="row.ended" class="assistant-metrics" aria-label="本次模型生成指标">
+                <span><n-icon :component="FileIcon" :size="14"/>{{ formatTokens(answerTokens(row)) }} token</span>
+                <span><n-icon :component="TimeIcon" :size="14"/>{{ formatDuration(row.latency_ms) }}</span>
+              </footer>
+              <small v-if="row.interrupted || row.error_code">{{ row.interrupted ? '本次输出已中断' : row.error_code }}</small>
+            </article>
           </template>
           <p v-if="!busy && state?.phase && ['max_tokens','max_steps','cancelled','interrupted','error'].includes(state.phase)" class="loop-notice">{{ finishLabels[state.phase] }}</p>
           </div>
-          <div class="loop-composer-wrap"><AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile"/></div>
+          <div class="loop-composer-wrap"><AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :metrics="conversationMetrics" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile"/></div>
           <div class="loop-width-edge loop-width-edge-left" @pointerenter="previewContentResize('left', $event)" @pointermove="moveContentResizePreview('left', $event)" @pointerleave="hideContentResizePreview('left')">
             <button class="loop-width-handle" :class="{ 'is-visible': hoverResizeEdge === 'left', 'is-active': isResizing && resizeEdge === 'left' }" :style="resizeHandleStyle('left')" type="button" aria-label="向左拖拽调整对话内容宽度" aria-orientation="vertical" role="separator" :aria-valuemin="minimumChatWidth" :aria-valuemax="maximumChatWidth" :aria-valuenow="Math.round(renderedChatWidth)" @pointerdown="beginContentResize($event, 'left')" @keydown="adjustContentWidthByKey($event, 'left')">
               <span aria-hidden="true"></span>
@@ -33,15 +55,20 @@
       </div>
       <aside v-if="runtimeOpen" class="loop-runtime"><button class="runtime-close" @click="runtimeOpen=false">关闭</button><h3>当前运行</h3><p>{{ status }}</p><dl><dt>会话</dt><dd>{{ sessionId || '未发送的草稿' }}</dd><dt>实际模型</dt><dd>{{ summary?.model || '尚无实际请求' }}</dd><dt>思考档位</dt><dd>{{ summary?.reasoning_effort || '未知' }}</dd><dt>协议档版本</dt><dd>{{ summary?.profile_version || '未知' }}</dd><dt>最近活动</dt><dd v-for="event in state?.facts.slice(-5) || []" :key="event.cursor">{{ event.type }}</dd></dl><h4 v-if="tasks.length">Worker 任务</h4><div v-for="task in tasks" :key="task.key"><router-link :to="'/tasks'">{{ task.key }}</router-link><p>{{ task.status || '等待状态' }}</p><p v-if="task.progress">{{ JSON.stringify(task.progress) }}</p><router-link v-if="task.report_id" :to="`/reports/${task.report_id}`">查看报告</router-link></div><p v-for="execution in quarantined" :key="execution.key" class="loop-notice">执行范围受限 · {{ execution.reason || '等待对账' }}</p></aside>
     </div>
-    <div v-if="tab==='trace'" class="loop-composer-wrap loop-trace-composer"><AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile"/></div>
+    <div v-if="tab==='trace'" class="loop-composer-wrap loop-trace-composer"><AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :metrics="conversationMetrics" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile"/></div>
   </div>
 </template>
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { NIcon } from 'naive-ui'
+import BackwardIcon from 'naive-ui/es/_internal/icons/Backward'
+import FileIcon from 'naive-ui/es/_internal/icons/File'
+import RetryIcon from 'naive-ui/es/_internal/icons/Retry'
+import TimeIcon from 'naive-ui/es/_internal/icons/Time'
 import http, { ApiError } from '../../../api/http'
 import { createRequestId } from '../../../utils/requestId'
 import type { AttachmentReference } from '../../../api/types'
-import type { Data, Effort, InteractionRecord, LoopProfile, LoopRecord, LoopUi, ToolRun } from '../../../api/agentLoopTypes'
+import type { ConversationMetrics, Data, Effort, InteractionRecord, LoopProfile, LoopRecord, LoopUi, LoopUsage, ToolRun } from '../../../api/agentLoopTypes'
 import { conversationRows, identity } from '../../../agent/loop/reducer'
 import type { LoopStore } from '../../../agent/loop/store'
 import { useAuthStore } from '../../../stores/auth'
@@ -72,6 +99,27 @@ const selectedProfile = computed<LoopProfile | null>(() => ui.value?.profiles.fi
 const ready = computed(() => !!selectedProfile.value && !!effort.value && (props.sessionId ? !!state.value?.ready : !!ui.value?.enabled))
 const canControl = computed(() => !!state.value?.controlled && !!ui.value?.permissions.interactions)
 const summary = computed(() => Object.values(state.value?.attempts || {}).sort((a,b)=>b.first_cursor-a.first_cursor)[0]?.request_summary)
+/** 仅聚合已提交的上游 usage；缺字段代表上游未返回，不能当作零或自行估算。 */
+const conversationMetrics = computed<ConversationMetrics>(() => {
+  let inputTokens = 0, outputTokens = 0, modelLatencyMs = 0, cacheReadTokens = 0, hasCacheUsage = false
+  for (const attempt of Object.values(state.value?.attempts || {})) {
+    const usage = attempt.usage
+    if (!usage) continue
+    const input = tokenValue(usage.prompt_tokens), output = tokenValue(usage.completion_tokens)
+    inputTokens += input; outputTokens += output
+    if (input > 0 && output > 0 && tokenValue(attempt.latency_ms) > 0) modelLatencyMs += tokenValue(attempt.latency_ms)
+    const cached = tokenValue(usage.cache_read_input_tokens) || tokenValue(usage.cached_tokens)
+    if (cached > 0 || typeof usage.cache_read_input_tokens === 'number' || typeof usage.cached_tokens === 'number') {
+      hasCacheUsage = true; cacheReadTokens += cached
+    }
+  }
+  return {
+    inputTokens,
+    outputTokens,
+    outputTokensPerSecond: outputTokens > 0 && modelLatencyMs > 0 ? outputTokens / (modelLatencyMs / 1000) : null,
+    cacheHitRate: hasCacheUsage && inputTokens > 0 ? cacheReadTokens / inputTokens * 100 : null,
+  }
+})
 const tasks = computed(() => Object.values(state.value?.tasks || {}))
 const quarantined = computed(() => Object.values(state.value?.executions || {}).filter(e => e.event === 'execution.quarantined'))
 const finishLabels: Record<string,string> = { max_tokens:'达到输出上限，本轮已结束', max_steps:'达到步骤上限，本轮已结束', cancelled:'本轮已取消', interrupted:'本轮已中断', error:'本轮失败，请查看错误信息' }
@@ -207,14 +255,61 @@ function adjustContentWidthByKey(event: KeyboardEvent, edge: ResizeEdge) {
   try { localStorage.setItem(chatWidthStorageKey, String(Math.round(chatWidth.value))) } catch { /* 本地存储失败不影响本次调整。 */ }
 }
 async function copy(text: string) { try { await navigator.clipboard.writeText(text) } catch { error.value='复制失败' } }
+function tokenValue(value: unknown): number { return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0 }
+function answerTokens(row: LoopRecord): number | null {
+  const usage = row.usage as LoopUsage | undefined
+  if (!usage) return null
+  const total = tokenValue(usage.total_tokens)
+  return total > 0 ? total : tokenValue(usage.prompt_tokens) + tokenValue(usage.completion_tokens)
+}
+function formatTokens(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—'
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}M`
+  if (value >= 1_000) return `${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)}K`
+  return String(Math.round(value))
+}
+function formatDuration(value: unknown): string {
+  const milliseconds = tokenValue(value)
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '—'
+  return milliseconds < 1000 ? `${milliseconds} ms` : `${(milliseconds / 1000).toFixed(milliseconds >= 10_000 ? 0 : 1)} s`
+}
+function formatTimestamp(value?: string): string {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(date)
+}
+/** 引用只写入下一轮草稿，供模型参考；不会伪造为服务端持久记忆。 */
+function quoteMemory(text: string) {
+  const quote = `[引用对话记忆]
+${text}
+[/引用对话记忆]`
+  draft.value.content = draft.value.content.trim() ? `${draft.value.content}
+
+${quote}` : quote
+  composer.value?.focus()
+}
+function originalUserMessage(row: LoopRecord): LoopRecord | undefined {
+  return rows.value.filter(item => item.role === 'user').reverse().find(item =>
+    (row.correlation.turn_id && item.correlation.turn_id === row.correlation.turn_id)
+    || (row.correlation.turn !== undefined && item.correlation.turn === row.correlation.turn),
+  )
+}
+/** 重新生成复用该回答所属的原用户内容与附件引用，仍走新的幂等提交命令。 */
+function regenerate(row: LoopRecord) {
+  const source = originalUserMessage(row)
+  if (!source?.content) { error.value = '未找到可重新生成的原始对话'; return }
+  const refs = Array.isArray(source.attachment_refs) ? source.attachment_refs.map(item => typeof item === 'string' ? item : item?.file_id).filter((item): item is string => typeof item === 'string') : []
+  void submit({ content: String(source.content), attachmentRefs: refs })
+}
 /** 冻结输入/附件/effort 与幂等 ID；未受理时保留可恢复草稿。 */
-async function submit() {
+async function submit(override?: { content: string; attachmentRefs: string[] }) {
   if (!ready.value || busy.value || draft.value.submitting) return
   const source = draft.value, selectedEffort=effort.value, profile=selectedProfile.value
   if (!selectedEffort || !profile) return
   source.submitting = true; error.value = ''
   if (state.value) state.value.error = ''
-  const content=source.content, refs=source.files.filter(f=>!f.removed && f.id).map(f=>f.id!)
+  const content=override?.content ?? source.content, refs=override?.attachmentRefs ?? source.files.filter(f=>!f.removed && f.id).map(f=>f.id!)
   try {
     let sid=props.sessionId
     if(!sid) { sid=await props.createSession(); if(!sid) throw new Error(); props.store.drafts[sid]=source; delete props.store.drafts.draft }
@@ -265,7 +360,7 @@ async function hydrateAttachments() {
 .loop-control{background:transparent;color:inherit;border:1px solid transparent;border-radius:7px;padding:7px 9px;font-size:12px;cursor:pointer}.loop-control:hover{background:#eaf3ee}.loop-primary{background:#174a3a!important;color:#fff!important}.loop-workspace button:focus-visible,.loop-workspace input:focus-visible,.loop-workspace summary:focus-visible{outline:2px solid #16977a;outline-offset:2px}
 </style>
 <style scoped>
-.loop-workspace{display:flex;flex:1;flex-direction:column;min-height:0;min-width:0;background:var(--bg-main,#f8faf8)}.loop-tabs{display:flex;align-items:center;gap:8px;padding:8px 20px;border-bottom:1px solid #e0e8e2}.loop-tabs button{padding:7px 12px;border:0;border-radius:7px;background:transparent;color:#61776a;cursor:pointer}.loop-tabs .active{background:#e2eee6;color:#154834}.loop-status{margin-left:auto;font-size:12px;display:flex;align-items:center;gap:6px}.loop-status i{width:7px;height:7px;border-radius:50%;background:#93a99c}.loop-status .running{background:#21a37e;animation:pulse 1.5s ease-in-out infinite}.loop-content{display:flex;flex:1;min-height:0;position:relative}.loop-center{display:flex;flex-direction:column;flex:1;min-width:0;position:relative;min-height:0}.loop-conversation{overflow:auto;flex:1;padding:24px max(20px,calc((100% - 800px)/2));scrollbar-gutter:stable}.loop-message{margin:0 0 22px;min-width:0;overflow-wrap:anywhere}.loop-message header{display:flex;gap:8px;align-items:center;font-size:13px;font-weight:600;margin-bottom:8px}.loop-message header small{font-weight:400;color:#7b8e82}.loop-message header button{margin-left:auto;border:0;background:transparent;color:#728777;cursor:pointer}.loop-message.user{background:#eaf3ed;padding:16px 20px;border-radius:12px}.loop-message.user p{white-space:pre-wrap;margin:0;line-height:1.7}.history-files{display:flex;gap:8px;flex-wrap:wrap}.loop-welcome{max-width:750px;margin:6vh auto 24px}.loop-welcome>span{letter-spacing:.16em;color:#5c8c75;font-size:11px}.loop-welcome h2{font-size:32px;line-height:1.4;font-weight:600;color:#173f30;margin:16px 0}.loop-welcome p{color:#7d8b82}.loop-welcome>div{display:flex;gap:10px;margin-top:25px}.loop-welcome button{flex:1;text-align:left;border:1px solid #d8e4dc;border-radius:10px;padding:18px;background:#fff;color:#4d6858;line-height:1.7;cursor:pointer}.loop-composer-wrap{padding:12px 24px 18px;max-width:950px;width:100%;box-sizing:border-box;margin:0 auto}.loop-runtime{width:240px;overflow:auto;padding:18px;border-left:1px solid #e0e8e2;font-size:12px;background:#f5f8f5}.loop-runtime dd{margin:5px 0 14px;overflow-wrap:anywhere}.loop-runtime dt{color:#7d9081}.runtime-close{float:right;border:0;background:transparent;cursor:pointer}.loop-notice{padding:8px 16px;margin:4px 10px;background:#f6f0e2;color:#866934;font-size:12px}.loop-notice.error{color:#a24d43}.loop-notice button,.history-more{border:0;background:transparent;text-decoration:underline;cursor:pointer}.jump-bottom{position:absolute;bottom:10px;right:20px;border:1px solid #caddcf;background:#fff;border-radius:20px;padding:8px 15px;cursor:pointer}.muted{color:#86968b}@keyframes pulse{50%{opacity:.35}}@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}@media(max-width:768px){.loop-runtime{position:absolute;inset:0 0 0 auto;max-width:calc(100% - 35px);z-index:30;box-shadow:-20px 0 50px #173e2520}.loop-composer-wrap{padding:8px}.loop-conversation{padding:16px 12px}.loop-welcome h2{font-size:25px}.loop-welcome>div{flex-direction:column}.loop-welcome button{padding:12px}.loop-tabs{padding:6px;gap:0}.loop-tabs button{padding:7px}.loop-status{font-size:11px}.loop-message header{flex-wrap:wrap}}
+.loop-workspace{display:flex;flex:1;flex-direction:column;min-height:0;min-width:0;background:var(--bg-main,#f8faf8)}.loop-tabs{display:flex;align-items:center;gap:8px;padding:8px 20px;border-bottom:1px solid #e0e8e2}.loop-tabs button{padding:7px 12px;border:0;border-radius:7px;background:transparent;color:#61776a;cursor:pointer}.loop-tabs .active{background:#e2eee6;color:#154834}.loop-status{margin-left:auto;font-size:12px;display:flex;align-items:center;gap:6px}.loop-status i{width:7px;height:7px;border-radius:50%;background:#93a99c}.loop-status .running{background:#21a37e;animation:pulse 1.5s ease-in-out infinite}.loop-content{display:flex;flex:1;min-height:0;position:relative}.loop-center{display:flex;flex-direction:column;flex:1;min-width:0;position:relative;min-height:0}.loop-conversation{overflow:auto;flex:1;padding:24px max(20px,calc((100% - 800px)/2));scrollbar-gutter:stable}.loop-message{margin:0 0 22px;min-width:0;overflow-wrap:anywhere}.loop-message header{display:flex;gap:8px;align-items:center;font-size:13px;font-weight:600;margin-bottom:8px}.loop-message header small{font-weight:400;color:#7b8e82}.assistant-header{justify-content:space-between}.assistant-identity,.assistant-actions,.assistant-metrics{display:flex;min-width:0;align-items:center;gap:8px}.assistant-identity{flex-wrap:wrap}.assistant-identity strong{font-weight:650}.assistant-identity time{color:#8390a0;font-size:11px;font-weight:400;font-variant-numeric:tabular-nums}.assistant-actions{margin-left:auto;gap:2px}.assistant-action{display:inline-grid;width:28px;height:28px;place-items:center;border:0;border-radius:7px;background:transparent;color:#758497;padding:0;cursor:pointer}.assistant-action:hover:not(:disabled){background:#eff5f1;color:#2d6851}.assistant-action:disabled{cursor:default;opacity:.45}.assistant-metrics{margin-top:10px;color:#7a8797;font-size:11px;font-variant-numeric:tabular-nums}.assistant-metrics span{display:inline-flex;align-items:center;gap:4px}.loop-message.user{background:#eaf3ed;padding:16px 20px;border-radius:12px}.loop-message.user p{white-space:pre-wrap;margin:0;line-height:1.7}.history-files{display:flex;gap:8px;flex-wrap:wrap}.loop-welcome{max-width:750px;margin:6vh auto 24px}.loop-welcome>span{letter-spacing:.16em;color:#5c8c75;font-size:11px}.loop-welcome h2{font-size:32px;line-height:1.4;font-weight:600;color:#173f30;margin:16px 0}.loop-welcome p{color:#7d8b82}.loop-welcome>div{display:flex;gap:10px;margin-top:25px}.loop-welcome button{flex:1;text-align:left;border:1px solid #d8e4dc;border-radius:10px;padding:18px;background:#fff;color:#4d6858;line-height:1.7;cursor:pointer}.loop-composer-wrap{padding:12px 24px 18px;max-width:950px;width:100%;box-sizing:border-box;margin:0 auto}.loop-runtime{width:240px;overflow:auto;padding:18px;border-left:1px solid #e0e8e2;font-size:12px;background:#f5f8f5}.loop-runtime dd{margin:5px 0 14px;overflow-wrap:anywhere}.loop-runtime dt{color:#7d9081}.runtime-close{float:right;border:0;background:transparent;cursor:pointer}.loop-notice{padding:8px 16px;margin:4px 10px;background:#f6f0e2;color:#866934;font-size:12px}.loop-notice.error{color:#a24d43}.loop-notice button,.history-more{border:0;background:transparent;text-decoration:underline;cursor:pointer}.jump-bottom{position:absolute;bottom:10px;right:20px;border:1px solid #caddcf;background:#fff;border-radius:20px;padding:8px 15px;cursor:pointer}.muted{color:#86968b}@keyframes pulse{50%{opacity:.35}}@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}@media(max-width:768px){.loop-runtime{position:absolute;inset:0 0 0 auto;max-width:calc(100% - 35px);z-index:30;box-shadow:-20px 0 50px #173e2520}.loop-composer-wrap{padding:8px}.loop-conversation{padding:16px 12px}.loop-welcome h2{font-size:25px}.loop-welcome>div{flex-direction:column}.loop-welcome button{padding:12px}.loop-tabs{padding:6px;gap:0}.loop-tabs button{padding:7px}.loop-status{font-size:11px}.loop-message header{flex-wrap:wrap}}
 
 /* 对话/轨迹导航采用参考页的下划线选中态。 */
 .loop-tabs{--line:#e3e8f0;--text:#172033;--subtle:#748197;--accent:#5b5bd6}

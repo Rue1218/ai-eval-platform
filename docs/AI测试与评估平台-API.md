@@ -2,11 +2,11 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.87 |
-| WS v2 修订日期 | 2026-09-09（§4A，上下文来源分布展示） |
+| 文档版本 | V1.88 |
+| WS v2 修订日期 | 2026-09-09（§4A，消息操作与实际用量展示） |
 | 对应 PRD | V1.18（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
-| 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.7.4（AgentLoop 单入口；JSON 仍以本文为准） |
+| 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.7.5（AgentLoop 单入口；JSON 仍以本文为准） |
 | 对应前端计划 | AgentLoop 前端计划 V0.5 |
 | 对应后端计划 | V1.5 |
 | 撰写日期 | 2026-08-18 |
@@ -15,6 +15,8 @@
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
 > V1.86（2026-09-09）：协议档页面 `POST /api/profiles/{id}/check` 的真实 ping 探活上限与通用协议调用统一为 30 秒，避免上游模型冷启动被误判为不可用；响应字段与错误码不变。
+
+> V1.88（2026-09-09）：浏览器 AgentLoop v2 流 schema 升至 `agent-loop-stream.v2.2`，完整事实目录升至 `catalog_version=5`。`assistant.message.data` 新增可选 `latency_ms`，为单次模型流从建立到完成的真实毫秒耗时，不含工具执行；已有 `usage` 继续仅透传上游返回的 `prompt_tokens`、`completion_tokens`、`total_tokens` 与可选缓存 token。前端聚合统计只能使用已持久化的这些字段：上游没有返回缓存 token 时缓存命中率显示未知，不能补零或估算。
 
 > V1.87（2026-09-09）：`assistant.start.data.request_summary.context_meter` 增量 `breakdown`，键为 `system_prompt`、`conversation_messages`、`tools`、`mcp`、`skill`、`memory_files`，均为非负整数估算 token。服务端按本次实际序列化请求拆分，六项和严格等于 `input_tokens`；工具按本轮注册表快照区分原生工具与 MCP。当前请求未注入 Skill 或记忆文件时对应项为 `0`。`reserved_output_tokens` 不在 breakdown 内，前端可作为中性色与输入分项一起计算预计总占用。旧事实没有该字段，前端须保留合并展示并标注其限制。
 
@@ -1930,7 +1932,7 @@ send 超时同样关闭 4408。Runtime 的事实提交不等待网络。
 - `attachments{upload_suffixes,inline_suffixes,image_suffixes,max_bytes,max_image_bytes,content_required}`：上传、模型内联和图片能力分开；模型实际是否支持视觉仍以供应商为准。附件正文不能为空；音频和旧 Office 仅元信息。历史附件按 `file_id` 使用已有 `/api/files/{id}` 和 `/content` 授权接口，不公开磁盘路径。
 - `tool.call/result.data.display` 为 ToolDisplay v1：`version,title,registry_name,wire_name,arguments_preview,result_preview,target,format,truncated,unavailable_reason`，预览最多 12000 字符。参数按工具字段白名单生成，失败仅公开错误码；未知工具有明确缺失说明，不开放任意内部结果。
 - `assistant.start.data.request_summary` 提供实际 `model,provider,protocol,profile_id,profile_version,reasoning_effort,max_tokens,input_fingerprint,tools[{name,parameters_schema}],context_meter`。context_meter 为实际请求的同源序列化估算，字段 `basis,estimated,profile_version,input_fingerprint,history_upto_seq,capacity,input_tokens,reserved_output_tokens,breakdown`；`basis="serialized_request.v2"` 时 `breakdown` 为 `system_prompt,conversation_messages,tools,mcp,skill,memory_files` 的非负整数映射，六项严格合计 `input_tokens`。Skill/记忆文件未实际注入时必须为 `0`；旧事实缺统计时为 null，不显示为 0。
-- `assistant.message.data.reasoning_preview` 为持久思考正文，仅 reasoning ACL 允许时发送。禁止出现在普通 trace 或撤权后的快照里。`question.resolved` 增 `outcome,answers`（仍受 interactions ACL）。
+- `assistant.message.data.reasoning_preview` 为持久思考正文，仅 reasoning ACL 允许时发送。禁止出现在普通 trace 或撤权后的快照里。可选 `usage` 仅保留上游归一化 token 字段；可选 `latency_ms` 是该模型流的真实毫秒耗时，不含工具执行。缺字段表示上游未返回，前端不得补造。`question.resolved` 增 `outcome,answers`（仍受 interactions ACL）。
 - 恢复快照增加有序 `timeline`（完整语义信封，受逐帧 ACL）；与 H 和当前用户权限在同一行锁事务读取。旧分组投影保留，记录增 `first_cursor`，新 reader 以 timeline 为权威，禁止重复追加 messages。
 - `question.respond.answers[].answer` 接受字符串或字符串数组；多选使用标签数组，包含逗号的标签不切分。旧字符串多选仍兼容逗号编码。数组只允许用于 checkbox，多选规范化后复用 validate_answers。
 - 同一连接对相同 session 再次 subscribe 仅重启读取流，保留控制权；跨会话须退订。附件元数据与内容接口复验上传者或可见会话引用权限，未知/无权限统一 NOT_FOUND。
