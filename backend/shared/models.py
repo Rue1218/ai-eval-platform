@@ -84,7 +84,8 @@ class User(Base):
     email = Column(String, unique=True, nullable=True, index=True)
     password_hash = Column(String, nullable=False)
     role = Column(String, nullable=False, default="member")
-    must_change_password = Column(Boolean, nullable=False, default=True)
+    # V1.83 起「首次登录强制改密」机制废除：列保留（兼容历史行与响应），默认不再置 True。
+    must_change_password = Column(Boolean, nullable=False, default=False)
     disabled = Column(Boolean, nullable=False, default=False)
     auth_version = Column(Integer, nullable=False, default=1)
     last_login_at = Column(DateTime(timezone=True), nullable=True)

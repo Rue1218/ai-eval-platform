@@ -119,7 +119,6 @@ def change_password(
     if not body.old_password or not verify_password(body.old_password, user.password_hash):
         raise AppError(ErrorCode.VALIDATION, "旧密码不正确", fields={"old_password": "旧密码不正确"})
     user.password_hash = hash_password(body.new_password)
-    user.must_change_password = False
     user.auth_version += 1
     db.add(
         AuditLog(

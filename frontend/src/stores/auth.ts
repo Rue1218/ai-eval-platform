@@ -11,7 +11,6 @@ export const useAuthStore = defineStore('auth', {
   }),
   getters: {
     isLoggedIn: (state) => !!state.user,
-    mustChangePassword: (state) => !!state.user?.must_change_password,
   },
   actions: {
     async fetchMe() {
@@ -38,9 +37,6 @@ export const useAuthStore = defineStore('auth', {
     },
     async changePassword(newPassword: string, oldPassword?: string) {
       await api.auth.changePassword({ old_password: oldPassword, new_password: newPassword })
-      if (this.user) {
-        this.user.must_change_password = false
-      }
     },
   },
 })

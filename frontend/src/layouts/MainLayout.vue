@@ -163,17 +163,10 @@
       </section>
     </main>
 
-    <!-- 首次改密 / 修改密码弹窗 -->
-    <n-modal
-      v-model:show="showChangePwd"
-      preset="card"
-      title="修改登录密码"
-      style="width: 440px"
-      :closable="!auth.mustChangePassword"
-      :mask-closable="!auth.mustChangePassword"
-    >
+    <!-- 修改密码弹窗（V1.83 起仅普通自助改密，不再有首次强制改密形态） -->
+    <n-modal v-model:show="showChangePwd" preset="card" title="修改登录密码" style="width: 440px">
       <n-form ref="pwdFormRef" :model="pwdForm" label-placement="left" label-width="80">
-        <n-form-item label="原密码" v-if="!auth.mustChangePassword">
+        <n-form-item label="原密码">
           <n-input v-model:value="pwdForm.oldPassword" type="password" show-password-on="click" placeholder="输入当前密码" />
         </n-form-item>
         <n-form-item label="新密码">
@@ -185,7 +178,7 @@
       </n-form>
       <template #footer>
         <div style="display: flex; justify-content: flex-end; gap: 8px">
-          <n-button v-if="!auth.mustChangePassword" @click="showChangePwd = false">取消</n-button>
+          <n-button @click="showChangePwd = false">取消</n-button>
           <n-button type="primary" :loading="pwdLoading" @click="submitChangePassword">确认修改</n-button>
         </div>
       </template>
@@ -210,7 +203,7 @@ const auth = useAuthStore()
 const theme = useThemeStore()
 const modeStore = useModeStore()
 
-const showChangePwd = ref(auth.mustChangePassword)
+const showChangePwd = ref(false)
 const pwdLoading = ref(false)
 const mobileNavOpen = ref(false)
 const pwdForm = ref({

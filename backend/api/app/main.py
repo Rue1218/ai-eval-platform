@@ -58,11 +58,12 @@ def _bootstrap_admin() -> None:
                     password_hash=hash_password(settings.bootstrap_admin_password),
                     display_name=settings.bootstrap_admin_username,
                     role="member",
-                    must_change_password=True,
+                    # V1.83 起机制废除：引导成员同样不再强制首次改密。
+                    must_change_password=False,
                 )
             )
             db.commit()
-            logger.info("已创建引导成员 %s（请登录后立即改密）", settings.bootstrap_admin_username)
+            logger.info("已创建引导成员 %s", settings.bootstrap_admin_username)
         elif existing.role != "member":
             existing.role = "member"
             db.commit()

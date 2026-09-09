@@ -58,7 +58,8 @@ def create_user(
         email=body.email.strip().lower() if body.email else None,
         password_hash=hash_password(body.password),
         role="member",
-        must_change_password=body.must_change_password,
+        # V1.83 起机制废除：忽略请求字段，开户一律不强制首次改密。
+        must_change_password=False,
     )
     db.add(member)
     db.add(
@@ -280,7 +281,6 @@ def reset_password(
     if not member:
         raise AppError(ErrorCode.NOT_FOUND, "成员不存在")
     member.password_hash = hash_password(body.password)
-    member.must_change_password = True
     member.auth_version += 1
     db.add(
         AuditLog(
