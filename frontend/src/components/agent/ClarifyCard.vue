@@ -61,6 +61,9 @@
       <div v-if="item.clarifyDone === 'submitted'" class="clarify-verdict ok">
         已提交 —— 正在按你的答复继续执行
       </div>
+      <div v-else-if="item.clarifyDone === 'failed'" class="clarify-verdict expired">
+        已失效 —— 回合恢复失败（检查点不可用），请重新发起该操作
+      </div>
       <div v-else-if="canAct" class="clarify-actions">
         <button class="btn btn-sign btn-sm" @click="submit">提交回答</button>
         <span v-if="errorMsg" class="clarify-error">{{ errorMsg }}</span>
@@ -78,7 +81,7 @@ import type { ClarifyAnswer, ClarifyQuestion } from '../../api/types'
 const props = defineProps<{
   item: {
     clarify?: { id?: string; questions?: ClarifyQuestion[] } | null
-    clarifyDone?: 'submitted' | null
+    clarifyDone?: 'submitted' | 'failed' | null
     noAnim?: boolean
   }
   canAct?: boolean
@@ -273,6 +276,9 @@ function submit() {
 }
 .clarify-verdict.pending {
   color: #b8860b;
+}
+.clarify-verdict.expired {
+  color: #9aa0ab;
 }
 .clarify-card.done {
   opacity: 0.82;

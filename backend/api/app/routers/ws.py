@@ -405,7 +405,12 @@ async def _handle_approval_ack(
             state,
             session_id,
             "approval_terminal",
-            {"approval_id": approval_id, "outcome": "expired", "reason": "审批超时已失效"},
+            {
+                "approval_id": approval_id,
+                "outcome": "expired",
+                "card_type": "approval",
+                "reason": "审批超时已失效",
+            },
             task_id=None,
         )
         raise AppError(ErrorCode.VALIDATION, "审批已超时失效，请重新发起该操作")
@@ -430,6 +435,7 @@ async def _handle_approval_ack(
             {
                 "approval_id": approval_id,
                 "outcome": "voided",
+                "card_type": "approval",
                 "reason": "审批卡对应回合已不可恢复（检查点缺失），操作作废，请重新发起该操作",
             },
             task_id=None,
@@ -530,6 +536,7 @@ def _start_clarify_resume(
         thread_id,
         {"id": card_id, "answers": answers},
         log_label="澄清",
+        card_type="clarify",
     )
 
 
@@ -542,12 +549,15 @@ def _start_card_resume(
     resume_value: dict[str, Any],
     *,
     log_label: str,
+    card_type: str = "approval",
 ) -> asyncio.Task[None]:
     """以原 thread_id 从检查点恢复中断回合（H5 HITL / #1 clarify resume）。
 
     审批卡 resume 值为 ``{action, id}``；澄清卡 resume 值为 ``{id, answers}``。
     清卡与提交已在 ack 处理中先行（一次性 resume_nonce 消费即失效，resume
     至多一次由行锁读空兜底）。
+    ``card_type`` ∈ approval|clarify：恢复失败广播 ``approval_terminal``
+    recovery_failed 时携带，供前端/回放按卡型路由（缺省 approval 兼容旧事件）。
     """
     handle = _reserve_turn(session_id, user_id)
 
@@ -582,6 +592,7 @@ def _start_card_resume(
                         {
                             "approval_id": approval_id,
                             "outcome": "recovery_failed",
+                            "card_type": card_type,
                             "reason": f"{log_label}回合恢复失败（检查点不可用），请重新发起该操作",
                         },
                         task_id=None,
@@ -618,6 +629,7 @@ def _start_approval_resume(
         thread_id,
         {"action": action, "id": approval_id},
         log_label="审批",
+        card_type="approval",
     )
 
 
@@ -2105,7 +2117,12 @@ async def _handle_stop(
                     state,
                     session_id,
                     "approval_terminal",
-                    {"approval_id": approval_id, "outcome": "cancelled", "reason": "/stop 已放弃本轮审批"},
+                    {
+                        "approval_id": approval_id,
+                        "outcome": "cancelled",
+                        "card_type": "approval",
+                        "reason": "/stop 已放弃本轮审批",
+                    },
                     task_id=None,
                 )
             except Exception as exc:  # noqa: BLE001 —— 终态广播尽力而为（已清卡，
@@ -2543,7 +2560,12 @@ async def _expire_overdue_approvals_once() -> int:
                 state,
                 session_id,
                 "approval_terminal",
-                {"approval_id": approval_id, "outcome": "expired", "reason": "审批超时已失效"},
+                {
+                    "approval_id": approval_id,
+                    "outcome": "expired",
+                    "card_type": "approval",
+                    "reason": "审批超时已失效",
+                },
                 task_id=None,
             )
         return len(expired)
