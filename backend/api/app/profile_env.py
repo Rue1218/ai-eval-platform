@@ -39,6 +39,7 @@ class ProfileEnvValues:
     base_url: str | None
     model: str | None
     api_key: str | None
+    full_url: bool = False  # 完整端点不追加协议后缀。
     embedding_base_url: str | None = None
     embedding_model: str | None = None
     embedding_api_key: str | None = None
@@ -68,6 +69,7 @@ def profile_env_keys(profile_id: str) -> dict[str, str]:
     return {
         "base_url": f"AI_PROFILE_{token}_BASE_URL",
         "model": f"AI_PROFILE_{token}_MODEL",
+        "full_url": f"AI_PROFILE_{token}_FULL_URL",
         "api_key": f"AI_PROFILE_{token}_API_KEY",
         "embedding_base_url": f"AI_PROFILE_{token}_EMBEDDING_BASE_URL",
         "embedding_model": f"AI_PROFILE_{token}_EMBEDDING_MODEL",
@@ -143,6 +145,7 @@ def read_profile_env(profile_id: str) -> ProfileEnvValues:
     values = _parse_lines(snapshot.content.splitlines())
     keys = profile_env_keys(profile_id)
     return ProfileEnvValues(
+        full_url=values.get(keys["full_url"], "false").lower() == "true",
         base_url=values.get(keys["base_url"]) or None,
         model=values.get(keys["model"]) or None,
         api_key=values.get(keys["api_key"]) or None,
@@ -247,6 +250,7 @@ def write_profile_env(
     *,
     base_url: str | None = None,
     model: str | None = None,
+    full_url: bool | None = None,
     api_key: str | None = None,
     embedding_base_url: str | None = None,
     embedding_model: str | None = None,
@@ -276,6 +280,7 @@ def write_profile_env(
         endpoint_values = {
             "base_url": base_url,
             "model": model,
+            "full_url": str(full_url).lower() if full_url is not None else None,
             "api_key": api_key,
             "embedding_base_url": embedding_base_url,
             "embedding_model": embedding_model,

@@ -11,18 +11,17 @@
     <div class="profile-form">
       <div class="field">
         <label class="field-label">协议档名称 <span class="req">*</span></label>
-        <n-input v-model:value="form.name" placeholder="例如：Xiaomi Mimo v2.5 或 OpenAI GPT-4o" />
+        <n-input v-model:value="form.name" placeholder="例如：DeepSeek 日常助手" />
       </div>
 
       <!-- 供应商快捷分类预设选择 -->
       <div class="field">
-        <label class="field-label">主流供应商快速填充</label>
-        <n-select
-          v-model:value="selectedVendor"
-          :options="vendorOptions"
-          placeholder="选择供应商可一键填入典型 Base URL 与协议"
-          @update:value="handleSelectVendor"
-        />
+        <label class="field-label">供应商快速填充</label>
+        <div class="vendor-picker">
+          <button v-for="vendor in PROFILE_VENDORS" :key="vendor.key" type="button" :class="{selected:selectedVendor === vendor.key}" :aria-pressed="selectedVendor === vendor.key" @click="selectedVendor = vendor.key; handleSelectVendor(vendor.key)">
+            <ProviderLogo :provider="vendor.key"/><span>{{ vendor.name }}</span>
+          </button>
+        </div>
       </div>
 
       <div class="form-row">
@@ -38,7 +37,7 @@
             <n-input
               v-model:value="form.model"
               class="grow"
-              placeholder="例如：mimo-v2.5-pro / gpt-4o"
+              placeholder="选择或输入供应商的模型 ID"
               @update:value="handleManualModelChange"
             />
             <n-button
@@ -46,11 +45,12 @@
               secondary
               size="small"
               :loading="fetchingModels"
+              :disabled="form.full_url"
               style="flex: 0 0 auto"
               title="根据当前 Base URL 和 API Key 从服务端点拉取所有可用模型 ID"
               @click="handleFetchRemoteModels"
             >
-              🔍 获取模型 (/models)
+              获取模型 (/models)
             </n-button>
           </div>
         </div>
@@ -79,12 +79,17 @@
       </div>
 
       <div class="field">
-        <label class="field-label">Base URL <span class="req">*</span></label>
+        <div class="row-between">
+          <label class="field-label">{{ form.full_url ? '完整请求 URL' : 'Base URL' }} <span class="req">*</span></label>
+          <label class="url-mode"><span>完整 URL</span><n-switch v-model:value="form.full_url" size="small" aria-label="完整 URL" /></label>
+        </div>
         <n-input
           v-model:value="form.base_url"
-          placeholder="https://api.openai.com/v1 或 http://localhost:11434/v1"
+          :placeholder="form.full_url ? 'https://api.example.com/v1/chat/completions' : 'https://api.openai.com/v1'"
         />
       </div>
+
+      <p class="field-hint">{{ form.full_url ? '原样使用此地址，不追加任何协议后缀。请手动填写模型标识。' : '自动补齐协议请求路径；已有的供应商版本路径会保留。' }}</p>
 
       <div class="field">
         <div class="row-between">
@@ -112,8 +117,11 @@
         <n-input v-model:value="form.anthropic_version" placeholder="2023-06-01 (默认)" />
       </div>
 
+
+
       <div class="field">
         <label class="field-label">上下文窗口大小 (Context Window)</label>
+        <n-input-number v-model:value="form.context_window" :min="1000" :max="10000000" :precision="0" :show-button="false" aria-label="上下文窗口大小" />
         <n-radio-group v-model:value="form.context_window" name="context_window_group" size="small">
           <n-space :size="8">
             <n-radio-button :value="200000">200k (默认)</n-radio-button>
@@ -131,6 +139,8 @@
           :min="256"
           :max="131072"
           :step="1024"
+          :precision="0"
+          aria-label="输出上限"
           style="width: 220px"
         />
         <span class="small tertiary">模型单回合回答的最大输出 token 数（默认 8192）；长文档总结/导出类任务可调大，避免回答被截断。</span>
@@ -178,6 +188,9 @@
 </template>
 
 <script setup lang="ts">
+import { PROFILE_VENDORS } from '../../utils/profileVendors'
+import ProviderLogo from '../ProviderLogo.vue'
+
 import { ref, computed, watch } from 'vue'
 import {
   useMessage,
@@ -188,8 +201,10 @@ import {
   NCheckbox,
   NSelect,
   NInput,
+  NInputNumber,
   NButton,
   NModal,
+  NSwitch,
 } from 'naive-ui'
 import { api } from '../../api/http'
 import type {
@@ -210,6 +225,7 @@ const props = defineProps<{
   initialData?: {
     vendorKey?: string
     base_url?: string
+    full_url?: boolean
     protocol?: ProtocolType
     name?: string
   } | null
@@ -237,6 +253,7 @@ const form = ref<{
   name: string
   protocol: ProtocolType
   base_url: string
+  full_url: boolean
   model: string
   api_key: string
   anthropic_version?: string
@@ -255,6 +272,7 @@ const form = ref<{
   context_window: 200000,
   max_output_tokens: 8192,
   tool_call_mode: 'native',
+  full_url: false,
 })
 
 const protocolOptions = [
@@ -262,74 +280,20 @@ const protocolOptions = [
   { label: 'Anthropic Messages (/messages)', value: 'anthropic_messages' },
 ]
 
-const vendorOptions = [
-  { label: 'Google Gemini (官方端点 / OpenAI 兼容)', value: 'gemini' },
-  { label: 'xAI Grok (官方端点 / OpenAI 兼容)', value: 'grok' },
-  { label: 'NVIDIA NIM (英伟达推理云)', value: 'nvidia' },
-  { label: 'Xiaomi Mimo (小米 Mimo 端点)', value: 'mimo' },
-  { label: 'OpenAI (官方端点)', value: 'openai' },
-  { label: 'Anthropic Claude (官方端点)', value: 'anthropic' },
-  { label: 'DeepSeek (深度求索)', value: 'deepseek' },
-  { label: 'DeepSeek Anthropic 兼容 (官方 /anthropic 端点)', value: 'deepseek_anthropic' },
-  { label: 'StepFun (阶跃星辰)', value: 'stepfun' },
-  { label: 'SiliconFlow (硅基流动)', value: 'siliconflow' },
-  { label: 'Alibaba Qwen (通义千问 / 阿里云百炼)', value: 'qwen' },
-  { label: 'ByteDance Doubao (火山引擎豆包)', value: 'volcengine' },
-  { label: 'Baidu Qianfan (百度文心千帆)', value: 'qianfan' },
-  { label: 'Tencent Hunyuan (腾讯混元)', value: 'hunyuan' },
-  { label: 'Groq (LPU 极速推理)', value: 'groq' },
-  { label: 'Ollama (本地私有端点)', value: 'ollama' },
-  { label: 'Zhipu GLM (智谱清言)', value: 'zhipu' },
-  { label: 'Moonshot AI (月之暗面 Kimi)', value: 'moonshot' },
-  { label: 'Mistral AI (Mistral AI)', value: 'mistral' },
-  { label: 'Together AI', value: 'together' },
-  { label: '01.AI (零一万物)', value: 'lingyi' },
-  { label: 'Baichuan (百川智能)', value: 'baichuan' },
-]
-
-const VENDOR_MAP: Record<string, { name: string; base_url: string; protocol: ProtocolType; model: string; context_window?: number }> = {
-  gemini: { name: 'Google Gemini', base_url: 'https://generativelanguage.googleapis.com/v1beta/openai/', protocol: 'openai_chat', model: 'gemini-2.5-flash' },
-  // xAI 官方 API 兼容 Chat Completions；模型列表仍可通过 /models 读取实际授权范围。
-  grok: { name: 'xAI Grok', base_url: 'https://api.x.ai/v1', protocol: 'openai_chat', model: 'grok-4.6', context_window: 500000 },
-  nvidia: { name: 'NVIDIA NIM', base_url: 'https://integrate.api.nvidia.com/v1', protocol: 'openai_chat', model: 'meta/llama-3.3-70b-instruct' },
-  mimo: { name: 'Xiaomi Mimo', base_url: 'https://token-plan-cn.xiaomimimo.com', protocol: 'openai_chat', model: 'mimo-v2.5-pro' },
-  openai: { name: 'OpenAI', base_url: 'https://api.openai.com/v1', protocol: 'openai_chat', model: 'gpt-4o' },
-  anthropic: { name: 'Anthropic Claude', base_url: 'https://api.anthropic.com', protocol: 'anthropic_messages', model: 'claude-3-7-sonnet-20250219' },
-  deepseek: { name: 'DeepSeek', base_url: 'https://api.deepseek.com/v1', protocol: 'openai_chat', model: 'deepseek-chat' },
-  // DeepSeek 官方 Anthropic 兼容端点：SDK 自动追加 /v1/messages，x-api-key 完全支持
-  deepseek_anthropic: {
-    name: 'DeepSeek (Anthropic 兼容)',
-    base_url: 'https://api.deepseek.com/anthropic',
-    protocol: 'anthropic_messages',
-    model: 'deepseek-chat',
-  },
-  stepfun: { name: 'StepFun 阶跃星辰', base_url: 'https://api.stepfun.com/v1', protocol: 'openai_chat', model: 'step-2-16k' },
-  siliconflow: { name: 'SiliconFlow', base_url: 'https://api.siliconflow.cn/v1', protocol: 'openai_chat', model: 'deepseek-ai/DeepSeek-V3' },
-  qwen: { name: 'Alibaba Qwen', base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', protocol: 'openai_chat', model: 'qwen-plus' },
-  volcengine: { name: 'ByteDance Doubao', base_url: 'https://ark.cn-beijing.volces.com/api/v3', protocol: 'openai_chat', model: 'doubao-pro-32k' },
-  qianfan: { name: 'Baidu Qianfan', base_url: 'https://qianfan.baidubce.com/v2', protocol: 'openai_chat', model: 'ernie-4.0-8k-latest' },
-  hunyuan: { name: 'Tencent Hunyuan', base_url: 'https://api.hunyuan.cloud.tencent.com/v1', protocol: 'openai_chat', model: 'hunyuan-standard' },
-  groq: { name: 'Groq', base_url: 'https://api.groq.com/openai/v1', protocol: 'openai_chat', model: 'llama-3.3-70b-versatile' },
-  ollama: { name: 'Ollama Local', base_url: 'http://localhost:11434/v1', protocol: 'openai_chat', model: 'llama3:latest' },
-  zhipu: { name: 'Zhipu GLM', base_url: 'https://open.bigmodel.cn/api/paas/v4', protocol: 'openai_chat', model: 'glm-4-plus' },
-  moonshot: { name: 'Moonshot AI', base_url: 'https://api.moonshot.cn/v1', protocol: 'openai_chat', model: 'moonshot-v1-8k' },
-  mistral: { name: 'Mistral AI', base_url: 'https://api.mistral.ai/v1', protocol: 'openai_chat', model: 'mistral-large-latest' },
-  together: { name: 'Together AI', base_url: 'https://api.together.xyz/v1', protocol: 'openai_chat', model: 'meta-llama/Llama-3.3-70B-Instruct-Turbo' },
-  lingyi: { name: '01.AI', base_url: 'https://api.lingyiwanwu.com/v1', protocol: 'openai_chat', model: 'yi-large' },
-  baichuan: { name: 'Baichuan AI', base_url: 'https://api.baichuan-ai.com/v1', protocol: 'openai_chat', model: 'Baichuan4' },
-}
+const VENDOR_MAP = Object.fromEntries(PROFILE_VENDORS.map(v => [v.key, v]))
 
 function handleSelectVendor(val: string | null) {
   if (!val || !VENDOR_MAP[val]) return
   clearModelParameters()
   const item = VENDOR_MAP[val]
+  form.value.api_key = ''
+  fetchedModelList.value = []
+  form.value.full_url = false
   form.value.base_url = item.base_url
   form.value.protocol = item.protocol
   form.value.context_window = item.context_window || 200000
-  if (!form.value.model) form.value.model = item.model
-  if (!form.value.name || form.value.name.startsWith('新协议档')) {
-    form.value.name = `${item.name} (${item.model})`
-  }
+  form.value.model = item.model
+  form.value.name = `${item.name} (${item.model})`
   message.info(`已快速填充 ${item.name} 厂商端点与协议配置`)
 }
 
@@ -342,6 +306,7 @@ async function handleFetchRemoteModels() {
   try {
     const res = await api.profiles.fetchModels({
       base_url: form.value.base_url.trim(),
+      full_url: form.value.full_url,
       protocol: form.value.protocol,
       api_key: form.value.api_key.trim() || undefined,
       profile_id: props.profile?.id,
@@ -421,6 +386,7 @@ async function onBatchCreate(modelIds: string[]) {
         name: `${vendorName} ${mId}`,
         protocol: form.value.protocol,
         base_url: form.value.base_url.trim(),
+        full_url: form.value.full_url,
         model: mId,
         api_key: form.value.api_key.trim(),
         anthropic_version: form.value.anthropic_version?.trim() || undefined,
@@ -459,6 +425,7 @@ watch(
           context_window: profileVal.context_window || 200000,
           max_output_tokens: profileVal.max_output_tokens || 8192,
           tool_call_mode: profileVal.tool_call_mode || 'native',
+          full_url: profileVal.full_url ?? false,
         }
       } else if (props.initialData) {
         form.value = {
@@ -472,6 +439,7 @@ watch(
           context_window: 200000,
           max_output_tokens: 8192,
           tool_call_mode: 'native',
+          full_url: props.initialData.full_url ?? false,
         }
       } else {
         form.value = {
@@ -485,6 +453,7 @@ watch(
           context_window: 200000,
           max_output_tokens: 8192,
           tool_call_mode: 'native',
+          full_url: false,
         }
       }
     }
@@ -509,6 +478,7 @@ async function handleSave() {
         name,
         protocol: form.value.protocol,
         base_url: baseUrl,
+        full_url: form.value.full_url,
         model,
         anthropic_version: form.value.anthropic_version?.trim() || undefined,
         usages: form.value.usages,
@@ -526,6 +496,7 @@ async function handleSave() {
         name,
         protocol: form.value.protocol,
         base_url: baseUrl,
+        full_url: form.value.full_url,
         model,
         api_key: form.value.api_key.trim(),
         anthropic_version: form.value.anthropic_version?.trim() || undefined,
@@ -548,7 +519,13 @@ async function handleSave() {
 </script>
 
 <style scoped>
+.url-mode{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-secondary)}
+.vendor-picker{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px}.vendor-picker button{display:flex;min-width:0;flex-direction:column;align-items:center;gap:7px;border:1px solid var(--border-color,#e2e8f0);border-radius:12px;background:var(--bg-card,#fff);color:var(--text-secondary);padding:12px 3px;font:inherit;font-size:11px;cursor:pointer}.vendor-picker button:hover,.vendor-picker button.selected{border-color:#43876e;background:#edf7f1;color:#245f47}
+
 .profile-form {
+  max-height: calc(100dvh - 200px);
+  overflow-y: auto;
+  padding-right: 8px;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -623,4 +600,5 @@ async function handleSave() {
   color: var(--text-tertiary);
   background: rgba(255, 255, 255, 0.04);
 }
+@media(max-width:560px){.form-row{grid-template-columns:1fr}.vendor-picker{grid-template-columns:repeat(3,minmax(0,1fr))}}
 </style>

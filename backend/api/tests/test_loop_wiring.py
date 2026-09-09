@@ -324,7 +324,9 @@ def test_window_keeps_tool_group_and_applies_effort(wired):
     before = deepcopy(messages)
     request, window = loop_wiring._window_request(wired.profile, (SystemSegment("system"),), [], messages, "high", 1000)
     assert request.messages == messages[2:] and messages == before
-    assert request.reasoning_effort == "high" and request.provider_options["reasoning_effort"] == "high"
+    assert request.reasoning_effort == "high"
+    assert request.provider_options["thinking"] == {"type": "enabled"}
+    assert "reasoning_effort" not in request.provider_options
     assert window["window_start"] == 2 and window["window_end"] == 5
     assert window["reserved_output_tokens"] == 128
     with pytest.raises(loop_service.AppError):

@@ -1214,8 +1214,10 @@ def _selected_model_config(db: Session) -> tuple[ModelConfig, _ProfileSnapshot]:
         reasoning_enabled = True
     if reasoning_effort not in {"low", "medium", "high", "xhigh", "max"}:
         reasoning_effort = "medium"
+    from ..profile_env import read_profile_env
+
     config = ModelConfig(
-        protocol=profile.protocol,
+        full_url=read_profile_env(profile.id).full_url,        protocol=profile.protocol,
         base_url=base_url,
         model=model,
         api_key=api_key or "",
