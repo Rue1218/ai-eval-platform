@@ -19,7 +19,11 @@ from app.harness.execution.registry import build_default_registry
 from app.harness.execution.scheduler import ToolScheduler
 from app.harness.prompts.system import assert_no_secret_leak, assert_no_takeover
 from app.llm.contracts import ModelConfig, SystemSegment
-from app.llm.loop_contracts import LlmRequestError, MissingApiKeyError
+from app.llm.loop_contracts import (
+    LlmRequestError,
+    MissingApiKeyError,
+    UnsupportedReasoningEffortError,
+)
 from app.llm.resolver import AuthorizedProfileSnapshot, build_adapter, resolve_request
 from app.models import ProtocolProfile, Setting, User, Workspace
 from app.session_access import require_visible_session
@@ -113,8 +117,16 @@ def authorized_profile(db, data: dict) -> tuple[AuthorizedProfileSnapshot, int]:
     try:
         # 提交前按当前模型和协议解析一次，拒绝不支持的思考强度而不分配 SDK。
         resolve_request(snapshot, messages=[])
-    except LlmRequestError as exc:
+    except UnsupportedReasoningEffortError as exc:
+        # 平台默认思考偏好不能让兼容模型整个消失；未显式选择档位时按关闭思考解析。
+        # 显式请求仍严格拒绝，避免实际参数与输入栏展示不一致。
+        if data.get("reasoning_effort") is None:
+            snapshot = replace(snapshot, config=replace(config, reasoning_enabled=False))
+            resolve_request(snapshot, messages=[])
+            return snapshot, context_window
         raise AppError(ErrorCode.VALIDATION, "所选 Agent 协议档不支持该思考强度") from exc
+    except LlmRequestError as exc:
+        raise AppError(ErrorCode.VALIDATION, "所选 Agent 协议档的模型或连接配置无效") from exc
     return snapshot, context_window
 
 

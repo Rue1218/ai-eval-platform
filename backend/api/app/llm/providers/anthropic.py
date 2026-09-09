@@ -38,11 +38,20 @@ from .common import (
 from .options import request_options
 
 
-def _validate_block(block: dict) -> None:
+def _allows_unsigned_thinking(request: LlmRequest | None) -> bool:
+    """DeepSeek/Qwen 的 Messages 兼容流允许空签名，不能套用 Claude 签名规则。"""
+    return request is not None and request.model.lower().startswith(("deepseek-", "qwen"))
+
+
+def _validate_block(block: dict, *, allow_unsigned_thinking: bool = False) -> None:
     """只允许已实现且可完整回传的内容类型，不把隐藏块降成普通文本。"""
     kind = block.get("type")
     if kind == "thinking":
-        if not isinstance(block.get("thinking"), str) or not block.get("signature"):
+        if (
+            not isinstance(block.get("thinking"), str)
+            or not isinstance(block.get("signature", ""), str)
+            or (not allow_unsigned_thinking and not block.get("signature"))
+        ):
             raise invalid("thinking 块缺少必要签名")
     elif kind == "redacted_thinking":
         if not block.get("data"):
@@ -91,7 +100,7 @@ def to_anthropic_messages(
             )
             if blocks is not None:
                 for block in blocks:
-                    _validate_block(block)
+                    _validate_block(block, allow_unsigned_thinking=_allows_unsigned_thinking(request))
                 raw_calls = [
                     (block["id"], block["name"]) for block in blocks if block["type"] == "tool_use"
                 ]
@@ -287,7 +296,7 @@ class AnthropicAdapter:
                             yield ToolCallDelta(
                                 index, json.dumps(block.get("input", {}), ensure_ascii=False)
                             )
-                    _validate_block(block)
+                    _validate_block(block, allow_unsigned_thinking=_allows_unsigned_thinking(request))
                     completed[index] = block
                     yield ProviderItemEnd(f"{message_id}:{index}", deepcopy(block))
                 elif kind == "message_delta":

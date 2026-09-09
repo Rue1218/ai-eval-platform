@@ -11,6 +11,20 @@ class Socket {
   close(){this.readyState=3}
   frame(type,data={},extra={}) { this.onmessage({data:JSON.stringify({protocol_version:2,type,data,durability:'control',correlation:{},ts:'2026-09-09T00:00:00Z',...extra})}) }
 }
+
+test('socket 写入时断线保留冻结请求，不伪造发送成功', async () => {
+  const state = createLoopState('s'), socket = new Socket()
+  const client = new AgentLoopWebSocket('s', {ticket:async()=>'ticket',state:()=>state,replace:()=>{},socket:()=>socket})
+  try {
+    await client.connect(); state.ready = true
+    socket.send = () => { throw new Error('连接关闭') }
+    const command = client.command('turn.submit', {content:'保留此消息'})
+    assert.equal(client.send(command), false)
+    assert.equal(state.ready, false)
+    assert.equal(state.connection, 'reconnecting')
+    assert.equal(command.data.content, '保留此消息')
+  } finally { client.close() }
+})
 test('首次协商、缺口原连接恢复，快照在 H 后继续',async()=>{
   let state=createLoopState('s');const socket=new Socket()
   const client=new AgentLoopWebSocket('s',{ticket:async()=>'ticket',state:()=>state,replace:value=>state=value,socket:()=>socket})

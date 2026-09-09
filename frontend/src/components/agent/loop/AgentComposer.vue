@@ -4,7 +4,7 @@
     <textarea ref="input" v-model="draft.content" aria-label="消息" placeholder="输入任何评测问题或需求，Shift + Enter 换行，Enter 发送" rows="1" @input="resize" @keydown="keydown" />
     <div class="composer-bottom">
       <input ref="picker" type="file" multiple hidden :accept="ui?.attachments.upload_suffixes.join(',')" @change="pick"/>
-      <button class="loop-control attach-trigger" aria-label="添加附件" type="button" @click="picker?.click()"><n-icon :component="AddIcon" :size="15"/></button>
+      <button class="loop-control attach-trigger" aria-label="添加附件" type="button" :disabled="!ui" @click="picker?.click()"><n-icon :component="AddIcon" :size="15"/></button>
       <n-popover v-model:show="modelOpen" trigger="click" placement="top-start" :show-arrow="false">
         <template #trigger>
           <button class="loop-control model-trigger" type="button" aria-haspopup="dialog" :aria-expanded="modelOpen" :disabled="!profiles.length">
@@ -37,6 +37,7 @@ import CheckmarkIcon from 'naive-ui/es/_internal/icons/Checkmark'
 import ChevronDownIcon from 'naive-ui/es/_internal/icons/ChevronDown'
 import ForwardIcon from 'naive-ui/es/_internal/icons/Forward'
 import { api } from '../../../api/http'
+import { createRequestId } from '../../../utils/requestId'
 import type { Effort, LoopMeter, LoopProfile, LoopUi } from '../../../api/agentLoopTypes'
 import type { DraftFile, LoopDraft } from '../../../agent/loop/store'
 import AttachmentPreview from '../AttachmentPreview.vue'
@@ -60,11 +61,13 @@ defineExpose({ focus })
 /** Tombstone 先标记再移除；迟到上传只结束请求，不能复活草稿引用。 */
 function remove(file: DraftFile) { file.removed = true; URL.revokeObjectURL(file.source); props.draft.files = props.draft.files.filter(f => f.key !== file.key) }
 async function upload(files: File[]) {
+  // 新建/切换会话时能力尚在读取，不能把此时拖入的文件误报为不支持的类型。
+  if (!props.ui) { notice.value = '正在读取附件能力，请稍后重试'; return }
   const draft = props.draft
   for (const file of files) {
     const caps = props.ui?.attachments, suffix = '.' + file.name.split('.').pop()?.toLowerCase()
     if (!caps || !caps.upload_suffixes.includes(suffix) || file.size > caps.max_bytes || (caps.image_suffixes.includes(suffix) && file.size > caps.max_image_bytes)) { notice.value = `附件 ${file.name} 不符合服务端类型或大小限制`; continue }
-    const value: DraftFile = { key: crypto.randomUUID(), filename: file.name, size: file.size, content_type: file.type, source: URL.createObjectURL(file), uploading: true, progress: 0, removed: false }
+    const value: DraftFile = { key: createRequestId(), filename: file.name, size: file.size, content_type: file.type, source: URL.createObjectURL(file), uploading: true, progress: 0, removed: false }
     draft.files.push(value)
     // 操作响应式代理，上传回调仍然绑定原会话草稿。
     const staged = draft.files[draft.files.length - 1]

@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { execSync } from 'node:child_process'
 
@@ -21,7 +21,10 @@ function getGitCommit() {
 const buildTime = process.env.BUILD_TIME || new Date().toISOString()
 const gitCommit = getGitCommit()
 
-export default defineConfig({
+// 本地联调可指向已有 API；REST 与 WS 必须使用同一后端，避免静态预览服务误接消息。
+export default defineConfig(({ mode }) => {
+  const apiTarget = loadEnv(mode, process.cwd(), '').API_PROXY_TARGET || 'http://localhost:8000'
+  return {
   plugins: [vue()],
   resolve: {
     alias: {
@@ -60,13 +63,15 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        target: apiTarget,
         changeOrigin: true,
       },
       '/ws': {
-        target: 'ws://localhost:8000',
+        target: apiTarget.replace(/^http/, 'ws'),
+        changeOrigin: true,
         ws: true,
       },
     },
   },
+  }
 })

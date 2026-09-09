@@ -130,3 +130,26 @@ def test_agent_ui_lists_only_safe_selectable_profile_metadata(profile_db):
     assert "test-only-key" not in rendered
     assert "https://default.invalid" not in rendered
     assert "https://alternate.invalid" not in rendered
+
+
+@pytest.mark.parametrize("protocol,model", [
+    ("anthropic_messages", "deepseek-v4-flash-0731"),
+    ("anthropic_messages", "qwen3.6-flash"),
+    ("openai_chat", "stepfun-ai/step-3.7-flash"),
+])
+def test_compatible_default_profile_survives_global_reasoning_preference(profile_db, protocol, model):
+    """兼容协议档不因全局思考偏好消失；能力与实际请求使用相同回退结果。"""
+    row = profile_db.db.by_id["default"]
+    row.protocol, row.model = protocol, model
+    snapshot, _ = loop_wiring.authorized_profile(profile_db.db, {})
+    assert snapshot.config.reasoning_enabled is False
+    payload = sessions._loop_ui(
+        profile_db.db, SimpleNamespace(id="member", role="member"),
+        SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())),
+    )
+    assert payload["profile"]["id"] == "default"
+    assert payload["default_effort"] == "off"
+    assert payload["unavailable_reason"] is None
+    with pytest.raises(AppError) as caught:
+        loop_wiring.authorized_profile(profile_db.db, {"reasoning_effort": "high"})
+    assert caught.value.code == ErrorCode.VALIDATION

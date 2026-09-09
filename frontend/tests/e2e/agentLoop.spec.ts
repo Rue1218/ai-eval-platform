@@ -5,7 +5,7 @@ const compatibleProfile = { id:'p2',name:'兼容协议档',version:'v2',model:'q
 const ui = { version:1,enabled:true,profile:deepseekProfile,profiles:[deepseekProfile,compatibleProfile],allowed_efforts:deepseekProfile.allowed_efforts,default_effort:deepseekProfile.default_effort,permissions:{write:true,trace:true,reasoning:true,interactions:true,settings:true},controller:{active:false,owned_by_actor:false},attachments:{upload_suffixes:['.txt'],inline_suffixes:['.txt'],image_suffixes:[],max_bytes:20971520,max_image_bytes:4194304,content_required:true} }
 
 /** 真实页面与 WebSocket transport 使用协议夹具；不把夹具当供应商/沙箱闭环。 */
-async function setup(page: Page) {
+async function setup(page: Page, holdNewReplay = false) {
   // 契约回归使用系统字体，避免第三方字体 CDN 可达性影响页面就绪判定。
   await page.route('https://fonts.googleapis.com/**', route => route.fulfill({contentType:'text/css',body:''}))
   page.on('pageerror', error => console.log('页面异常：', error.message))
@@ -13,6 +13,7 @@ async function setup(page: Page) {
   const commands: any[] = [], sessionCreates: Record<string, unknown>[] = [], sockets = new Map<string, any>()
   let cursor=0, submit=0
   let releaseUpload: (()=>void) | undefined
+  let releaseReplay: (()=>void) | undefined
   await page.route('**/api/**', async route => {
     const path=new URL(route.request().url()).pathname
     if (!path.startsWith('/api/')) { await route.continue(); return }
@@ -35,7 +36,12 @@ async function setup(page: Page) {
     socket.onMessage(raw=>{
       const cmd=JSON.parse(String(raw));commands.push(cmd);sockets.set(cmd.session_id,socket)
       const sid=cmd.session_id, c={turn:1,turn_id:`${sid}:1`,step:1,attempt_id:'a',call_id:'c'}
-      if(cmd.type==='subscribe') { send('subscribed',{cursor:cmd.session_id==='s'?cursor:0},{},false,cmd.session_id);send('replay.completed',{cursor:cmd.session_id==='s'?cursor:0},{},false,cmd.session_id) }
+      if(cmd.type==='subscribe') {
+        send('subscribed',{cursor:cmd.session_id==='s'?cursor:0},{},false,cmd.session_id)
+        const replay=()=>send('replay.completed',{cursor:cmd.session_id==='s'?cursor:0},{},false,cmd.session_id)
+        if(holdNewReplay && cmd.session_id==='s3') releaseReplay=replay
+        else replay()
+      }
       if(cmd.type==='turn.submit') {
         submit++
         send('user.message',{content:cmd.data.content,client_message_id:cmd.data.client_message_id},{turn:1,turn_id:`${sid}:1`},true,sid)
@@ -62,7 +68,7 @@ async function setup(page: Page) {
   await page.locator('.session-title-text').filter({hasText:'联调会话'}).click()
   await expect(page.getByRole('textbox',{name:'消息'})).toBeVisible()
   await expect(page.locator('.loop-status')).toContainText('就绪')
-  return {commands,sessionCreates,get submits(){return submit},release:()=>releaseUpload?.(),sockets}
+  return {commands,sessionCreates,get submits(){return submit},get uploading(){return !!releaseUpload},release:()=>releaseUpload?.(),replay:()=>releaseReplay?.(),sockets}
 }
 
 test('新建会话固定采用 AgentLoop transport',async({page})=>{
@@ -73,6 +79,30 @@ test('新建会话固定采用 AgentLoop transport',async({page})=>{
   await expect.poll(()=>ctx.sessionCreates.length).toBe(1)
   expect(ctx.sessionCreates[0].engine_version).toBe('agent_loop_v2')
   await expect.poll(()=>ctx.commands.some(command=>command.type==='subscribe' && command.session_id==='s3')).toBe(true)
+  await expect.poll(()=>ctx.commands.some(command=>command.type==='turn.submit' && command.session_id==='s3')).toBe(true)
+})
+
+test('HTTP 缺少 randomUUID 时新建会话、附件、发送和工具结果回流完整可用', async ({page}) => {
+  await page.addInitScript(() => Object.defineProperty(Crypto.prototype, 'randomUUID', {value:undefined, configurable:true}))
+  const ctx = await setup(page)
+  await page.getByRole('button', {name:/新建会话/}).click()
+  await expect(page.getByRole('button', {name:'添加附件'})).toBeEnabled()
+  await page.locator('.loop-composer input[type=file]').setInputFiles({name:'draft.txt', mimeType:'text/plain', buffer:Buffer.from('hello')})
+  await expect(page.locator('.draft-files')).toContainText('draft.txt')
+  await expect.poll(() => ctx.uploading).toBe(true)
+  ctx.release()
+  await page.getByRole('textbox', {name:'消息'}).fill('验证 HTTP 全链路')
+  await page.getByRole('button', {name:'发送', exact:true}).click()
+  await expect.poll(() => ctx.submits).toBe(1)
+  const submit = ctx.commands.find(command => command.type === 'turn.submit')
+  expect(submit.session_id).toBe('s3')
+  expect(submit.data.attachment_refs).toEqual(['f'])
+  expect(submit.request_id).toMatch(/^[0-9a-f-]{36}$/)
+  expect(submit.data.client_message_id).not.toBe(submit.request_id)
+  await page.getByRole('button', {name:'允许一次', exact:true}).click()
+  await expect(page.locator('.tool-state').first()).toHaveText('已完成')
+  await expect(page.getByRole('textbox', {name:'消息'})).toHaveValue('')
+  await expect(page.getByText('草稿已保留', {exact:false})).toHaveCount(0)
 })
 
 test('协议档选择会同步收窄思考强度并冻结到本轮请求',async({page})=>{
@@ -84,6 +114,25 @@ test('协议档选择会同步收窄思考强度并冻结到本轮请求',async(
   await page.getByRole('button',{name:'发送'}).click()
   await expect.poll(()=>ctx.commands.find(command=>command.type==='turn.submit')?.data.profile_id).toBe('p2')
   expect(ctx.commands.find(command=>command.type==='turn.submit')?.data.reasoning_effort).toBe('high')
+})
+
+test('首次订阅超时保留草稿，迟到回放不自动发送，原请求可手动重试', async ({page}) => {
+  const ctx = await setup(page, true)
+  await page.clock.install()
+  await page.getByRole('button', {name:/新建会话/}).click()
+  await page.getByRole('textbox', {name:'消息'}).fill('超时后保留的消息')
+  await page.getByRole('button', {name:'发送', exact:true}).click()
+  await expect.poll(() => ctx.commands.some(command => command.type === 'subscribe' && command.session_id === 's3')).toBe(true)
+  await page.clock.fastForward(16000)
+  await expect(page.getByRole('alert')).toContainText('消息尚未确认发送')
+  await expect(page.getByRole('textbox', {name:'消息'})).toHaveValue('超时后保留的消息')
+  expect(ctx.submits).toBe(0)
+  ctx.replay()
+  await expect(page.getByRole('button', {name:'使用原请求 ID 重发'})).toBeEnabled()
+  expect(ctx.submits).toBe(0)
+  await page.getByRole('button', {name:'使用原请求 ID 重发'}).click()
+  await expect.poll(() => ctx.submits).toBe(1)
+  await expect(page.getByRole('alert')).toHaveCount(0)
 })
 
 test('多步工具内审批、attempt 结束不解锁发送、切会话不取消、轨迹可用',async({page})=>{
