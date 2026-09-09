@@ -3,7 +3,7 @@
     <template #trigger>
       <button class="loop-control meter" :aria-label="label" :title="label" type="button">
         <svg viewBox="0 0 36 36" aria-hidden="true">
-          <circle class="meter-base" cx="18" cy="18" r="12" fill="none" stroke-width="3" />
+          <circle class="meter-base" cx="18" cy="18" r="12" fill="none" stroke-width="4" />
           <circle
             v-for="segment in ringSegments"
             :key="segment.key"
@@ -11,14 +11,13 @@
             cy="18"
             r="12"
             fill="none"
-            stroke-width="3"
+            stroke-width="4"
             :stroke="segment.color"
             :stroke-dasharray="`${segment.length} ${ringLength - segment.length}`"
             :stroke-dashoffset="-segment.offset"
             transform="rotate(-90 18 18)"
           />
         </svg>
-        <span v-if="!meter">?</span>
       </button>
     </template>
 
@@ -135,5 +134,5 @@ function formatTokens(value: number): string {
 </script>
 
 <style scoped>
-.meter{position:relative;width:28px;height:30px;justify-content:center;padding:0!important}.meter svg{width:21px;height:21px;overflow:visible}.meter-base{stroke:#e4e9e8}.meter>span{position:absolute;inset:6px;font-size:11px;line-height:18px}.meter-detail{width:min(280px,calc(100vw - 32px));padding:2px 1px}.meter-header{display:flex;align-items:baseline;justify-content:space-between;gap:12px;color:#303a48;font-size:12px;line-height:20px}.meter-header strong:last-child{font-variant-numeric:tabular-nums}.meter-progress{display:flex;overflow:hidden;height:4px;margin:8px 0 10px;border-radius:99px;background:#edf0f1}.meter-progress span{display:block;min-width:0;height:100%}.meter-breakdown{display:grid;gap:6px;margin:0;padding:0;list-style:none}.meter-breakdown li,.meter-reserved{display:grid;grid-template-columns:7px minmax(0,1fr) auto;align-items:center;column-gap:6px;color:#667385;font-size:12px;line-height:16px}.meter-dot,.meter-reserved>span{display:block;width:7px;height:7px;border-radius:2px}.meter-breakdown strong,.meter-reserved strong{color:#435064;font-variant-numeric:tabular-nums;font-weight:500}.meter-reserved{margin:8px 0 0;padding-top:7px;border-top:1px solid #edf0f1}.meter-reserved>span{background:#d5dbe2}.meter-detail small{display:block;margin-top:9px;color:#8994a1;font-size:10px;line-height:1.5}.meter-detail>p{margin:0;color:#6f7b89;font-size:12px}@media(max-width:560px){.meter-detail{width:min(260px,calc(100vw - 24px))}}
+.meter{position:relative;width:32px;height:32px;justify-content:center;padding:0!important}.meter svg{width:24px;height:24px;overflow:visible}.meter-base{stroke:#e4e9e8}.meter-detail{width:min(280px,calc(100vw - 32px));padding:2px 1px}.meter-header{display:flex;align-items:baseline;justify-content:space-between;gap:12px;color:#303a48;font-size:12px;line-height:20px}.meter-header strong:last-child{font-variant-numeric:tabular-nums}.meter-progress{display:flex;overflow:hidden;height:4px;margin:8px 0 10px;border-radius:99px;background:#edf0f1}.meter-progress span{display:block;min-width:0;height:100%}.meter-breakdown{display:grid;gap:6px;margin:0;padding:0;list-style:none}.meter-breakdown li,.meter-reserved{display:grid;grid-template-columns:7px minmax(0,1fr) auto;align-items:center;column-gap:6px;color:#667385;font-size:12px;line-height:16px}.meter-dot,.meter-reserved>span{display:block;width:7px;height:7px;border-radius:2px}.meter-breakdown strong,.meter-reserved strong{color:#435064;font-variant-numeric:tabular-nums;font-weight:500}.meter-reserved{margin:8px 0 0;padding-top:7px;border-top:1px solid #edf0f1}.meter-reserved>span{background:#d5dbe2}.meter-detail small{display:block;margin-top:9px;color:#8994a1;font-size:10px;line-height:1.5}.meter-detail>p{margin:0;color:#6f7b89;font-size:12px}@media(max-width:560px){.meter-detail{width:min(260px,calc(100vw - 24px))}}
 </style>
