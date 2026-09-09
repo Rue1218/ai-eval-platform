@@ -53,7 +53,7 @@ async function setup(page: Page, holdNewReplay = false) {
         send('user.message',{content:cmd.data.content,client_message_id:cmd.data.client_message_id},{turn:1,turn_id:`${sid}:1`},true,sid)
         send('turn.start',{},c,true,sid)
         socket.send(JSON.stringify({protocol_version:2,type:'command.accepted',durability:'control',session_id:sid,request_id:cmd.request_id,data:{accepted:true},correlation:c}))
-        send('assistant.start',{request_summary:{model:'deepseek-chat',reasoning_effort:cmd.data.reasoning_effort,profile_version:'v1'}},c,true,sid)
+        send('assistant.start',{request_summary:{model:'deepseek-chat',reasoning_effort:cmd.data.reasoning_effort,profile_version:'v1',context_meter:{basis:'serialized_request.v2',estimated:true,profile_version:'v1',input_fingerprint:'fixture',history_upto_seq:3,capacity:1000000,input_tokens:23300,reserved_output_tokens:25600,system_tokens:1800,skills_tokens:6900,mcp_tokens:1300,tools_tokens:1400,conversation_tokens:11900}}},c,true,sid)
         send('assistant.message',{content:'准备读取文件',reasoning_preview:'检查工作区'},c,true,sid)
         send('assistant.end',{outcome:'committed'},c,true,sid)
         send('tool.call',{name:'read',display:{version:1,target:'test.txt',arguments_preview:'{"path":"test.txt"}'}},c,true,sid)
@@ -120,6 +120,22 @@ test('协议档选择会同步收窄思考强度并冻结到本轮请求',async(
   await page.getByRole('button',{name:'发送'}).click()
   await expect.poll(()=>ctx.commands.find(command=>command.type==='turn.submit')?.data.profile_id).toBe('p2')
   expect(ctx.commands.find(command=>command.type==='turn.submit')?.data.reasoning_effort).toBe('high')
+})
+
+test('上下文仪表按实际来源显示分段进度和详细消息', async ({page}) => {
+  const ctx = await setup(page)
+  await page.getByRole('textbox', {name:'消息'}).fill('验证上下文来源')
+  await page.getByRole('button', {name:'发送'}).click()
+  await expect.poll(() => ctx.submits).toBe(1)
+  await page.getByRole('button', {name:'上下文已用 2%'}).click()
+  await expect(page.getByText('~23.3K / 1M')).toBeVisible()
+  for (const name of ['系统提示词', 'Skill', 'MCP', '工具', '对话消息']) {
+    await expect(page.getByText(name, {exact:true})).toBeVisible()
+  }
+  await expect(page.locator('.meter-segment')).toHaveCount(5)
+  await expect(page.locator('.meter-segment[data-source="system"]')).toHaveCSS('background-color', 'rgb(152, 162, 179)')
+  await expect(page.locator('.meter-segment[data-source="skill"]')).toHaveCSS('background-color', 'rgb(155, 138, 251)')
+  await expect(page.getByText('输出预留 ~25.6K · 最近一次实际请求')).toBeVisible()
 })
 
 for (const profile of serverProfiles.slice(0, 2)) {

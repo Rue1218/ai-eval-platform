@@ -3,8 +3,8 @@
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 上下文工程层模块设计 |
-| 版本 | V0.4.4 |
-| 审查日期 | 2026-08-26 |
+| 版本 | V0.4.5 |
+| 审查日期 | 2026-09-09 |
 | 文档性质 | 模块设计说明书（需求发散 + 架构设计 + 接口签名） |
 | 适用模块 | M2 上下文工程层（`app/harness/context/`） |
 | 上游权威 | Harness 需求文档 V1.4.4 §4.2、§2.4、§7、§9；API.md V1.22 §3.4（context_meter）；PRD §5.1.3 |
@@ -354,6 +354,16 @@ def project_meter(context_meter: Mapping[str, object]) -> ContextMeter:
 | `backend/api/app/harness/context/assembly.py` | 修改 | `skill_hints_for_turn`；`assemble(skill_workflow=)` 插入 Hint 之后 |
 | `backend/api/app/agent/react.py` / `routing.py` | 修改 | Chat 常驻 Hint；ReAct 按 `plan.skill_id` 注入工作流 |
 | `backend/api/tests/test_harness_context.py` / `test_harness_skills.py` | 修改 / 新增 | 装配顺序与相邻回合不污染 |
+
+### V0.4.5（2026-09-09）— AgentLoop 实际请求来源计量
+
+AgentLoop 的请求仪表不复用历史会话的宽泛预估，而是以本轮 `LoopRequest` 的协议序列化作为唯一计量来源。计量分为系统提示词、Skill、MCP、原生工具和对话消息：MCP/原生工具根据注册表的 `transport` 归类，Skill 仅在其正文确实进入本轮请求时计入；当前 Loop 没有注入 Skill 正文，故为 0。前端按五类来源以不同颜色显示分段进度条，保留为 0 的明细行，输出预留不参与已用比例。
+
+| 文件 | 操作 | 作用 |
+| :--- | :--- | :--- |
+| `backend/api/app/agent/loop_wiring.py` | 修改 | `LoopRequest` 同源序列化 token 拆分与 MCP 注册表归类。 |
+| `backend/api/app/agent/loop_presentation.py` | 修改 | 将五类输入 token 写入 `request_summary.context_meter`。 |
+| `frontend/src/components/agent/loop/LoopContextMeter.vue` | 修改 | 紧凑仪表、彩色分段进度条和五类详细明细。 |
 
 
 
