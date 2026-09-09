@@ -38,14 +38,15 @@
           <template v-for="row in visibleRows" :key="row.key">
             <article v-if="row.role==='user'" class="loop-message user"><header>你</header><div class="history-files"><AttachmentPreview v-for="file in attachments[row.key] || []" :key="file.file_id" :attachment="file"/></div><p>{{ row.content }}</p></article>
             <ToolRunCard v-else-if="'status' in row && 'name' in row" :tool="row as ToolRun" :interactions="interactions(row)" :can-control="canControl" :online="!!state?.ready" @respond="respond"/>
-            <article v-else class="loop-message assistant">
-              <header class="assistant-header">
-                <div class="assistant-identity">
+            <article v-else class="loop-message assistant" :class="{ 'is-continuation': !isFirstAssistantInTurn(row) }">
+              <header v-if="isFirstAssistantInTurn(row) || row.text" class="assistant-header">
+                <div v-if="isFirstAssistantInTurn(row)" class="assistant-identity">
                   <ProviderLogo v-if="row.request_summary?.model" :provider="getProviderLogoKey({model:row.request_summary.model,provider:row.request_summary.provider})" :size="18"/>
                   <strong>{{ row.request_summary?.model || '助手' }}</strong>
                   <time v-if="formatTimestamp(row.timestamp)" :datetime="row.timestamp">{{ formatTimestamp(row.timestamp) }}</time>
                   <small v-if="row.request_summary">{{ row.request_summary.reasoning_effort }} · step {{ row.correlation.step }}</small>
                 </div>
+                <div v-else class="assistant-identity continuation-spacer" />
                 <div v-if="row.text" class="assistant-actions" aria-label="回答操作">
                   <button class="assistant-action" type="button" title="复制回答" aria-label="复制回答" @click="copy(row.text)"><n-icon :component="FileIcon" :size="15"/></button>
                   <button class="assistant-action" type="button" title="重新生成" aria-label="重新生成" :disabled="busy || draft.submitting || !!draft.pending" @click="regenerate(row)"><n-icon :component="RetryIcon" :size="15"/></button>
@@ -377,6 +378,32 @@ const state = computed(() => props.store.sessions[props.sessionId]), trace = com
 const draft = computed(() => props.store.draft(props.sessionId || 'draft'))
 const rows = computed(() => state.value ? conversationRows(state.value) : [])
 const visibleRows = computed(() => rows.value.slice(-shown.value))
+
+function getTurnIdentifier(row: LoopRecord): string {
+  if (row.correlation?.turn_id) return `turn_id:${row.correlation.turn_id}`
+  if (row.correlation?.turn !== undefined) return `turn:${row.correlation.turn}`
+  return `key:${row.key}`
+}
+
+const firstAssistantKeyByTurn = computed<Map<string, string>>(() => {
+  const map = new Map<string, string>()
+  for (const r of rows.value) {
+    const isAssistant = r.role !== 'user' && !('status' in r && 'name' in r)
+    if (!isAssistant) continue
+    const turnKey = getTurnIdentifier(r)
+    if (!map.has(turnKey)) {
+      map.set(turnKey, r.key)
+    }
+  }
+  return map
+})
+
+function isFirstAssistantInTurn(row: LoopRecord): boolean {
+  const turnKey = getTurnIdentifier(row)
+  const firstKey = firstAssistantKeyByTurn.value.get(turnKey)
+  return !firstKey || firstKey === row.key
+}
+
 const busy = computed(() => !!state.value?.activeTurn)
 /** 草稿协议档可独立于平台默认项选择；后端在提交时再次校验。 */
 const selectedProfile = computed<LoopProfile | null>(() => ui.value?.profiles.find(item => item.id === selectedProfileId.value) || ui.value?.profile || null)
@@ -656,7 +683,7 @@ async function hydrateAttachments() {
 .loop-control{background:transparent;color:inherit;border:1px solid transparent;border-radius:7px;padding:7px 9px;font-size:12px;cursor:pointer}.loop-control:hover{background:#eaf3ee}.loop-primary{background:#174a3a!important;color:#fff!important}.loop-workspace button:focus-visible,.loop-workspace input:focus-visible,.loop-workspace summary:focus-visible{outline:2px solid #16977a;outline-offset:2px}
 </style>
 <style scoped>
-.loop-workspace{display:flex;flex:1;flex-direction:column;min-height:0;min-width:0;background:var(--bg-main,#f8faf8)}.loop-tabs{display:flex;align-items:center;gap:8px;padding:8px 20px;border-bottom:1px solid #e0e8e2}.loop-tabs button{padding:7px 12px;border:0;border-radius:7px;background:transparent;color:#61776a;cursor:pointer}.loop-tabs .active{background:#e2eee6;color:#154834}.loop-status{margin-left:auto;font-size:12px;display:flex;align-items:center;gap:6px}.loop-status i{width:7px;height:7px;border-radius:50%;background:#93a99c}.loop-status .running{background:#21a37e;animation:pulse 1.5s ease-in-out infinite}.loop-content{display:flex;flex:1;min-height:0;position:relative}.loop-center{display:flex;flex-direction:column;flex:1;min-width:0;position:relative;min-height:0}.loop-conversation{overflow:auto;flex:1;padding:24px max(20px,calc((100% - 800px)/2));scrollbar-gutter:stable}.loop-message{margin:0 0 22px;min-width:0;overflow-wrap:anywhere}.loop-message header{display:flex;gap:8px;align-items:center;font-size:13px;font-weight:600;margin-bottom:8px}.loop-message header small{font-weight:400;color:#7b8e82}.assistant-header{justify-content:space-between}.assistant-identity,.assistant-actions,.assistant-metrics{display:flex;min-width:0;align-items:center;gap:8px}.assistant-identity{flex-wrap:wrap}.assistant-identity strong{font-weight:650}.assistant-identity time{color:#8390a0;font-size:11px;font-weight:400;font-variant-numeric:tabular-nums}.assistant-actions{margin-left:auto;gap:2px}.assistant-action{display:inline-grid;width:28px;height:28px;place-items:center;border:0;border-radius:7px;background:transparent;color:#758497;padding:0;cursor:pointer}.assistant-action:hover:not(:disabled){background:#eff5f1;color:#2d6851}.assistant-action:disabled{cursor:default;opacity:.45}.assistant-metrics{margin-top:10px;color:#7a8797;font-size:11px;font-variant-numeric:tabular-nums}.assistant-metrics span{display:inline-flex;align-items:center;gap:4px}.loop-message.user{background:#eaf3ed;padding:16px 20px;border-radius:12px}.loop-message.user p{white-space:pre-wrap;margin:0;line-height:1.7}.history-files{display:flex;gap:8px;flex-wrap:wrap}.loop-composer-wrap{padding:12px 24px 18px;max-width:950px;width:100%;box-sizing:border-box;margin:0 auto}.loop-runtime{width:240px;overflow:auto;padding:18px;border-left:1px solid #e0e8e2;font-size:12px;background:#f5f8f5}.loop-runtime dd{margin:5px 0 14px;overflow-wrap:anywhere}.loop-runtime dt{color:#7d9081}.runtime-close{float:right;border:0;background:transparent;cursor:pointer}.loop-notice{padding:8px 16px;margin:4px 10px;background:#f6f0e2;color:#866934;font-size:12px}.loop-notice.error{color:#a24d43}.loop-notice button,.history-more{border:0;background:transparent;text-decoration:underline;cursor:pointer}.jump-bottom{position:absolute;bottom:10px;right:20px;border:1px solid #caddcf;background:#fff;border-radius:20px;padding:8px 15px;cursor:pointer}.muted{color:#86968b}@keyframes pulse{50%{opacity:.35}}@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}@media(max-width:768px){.loop-runtime{position:absolute;inset:0 0 0 auto;max-width:calc(100% - 35px);z-index:30;box-shadow:-20px 0 50px #173e2520}.loop-composer-wrap{padding:8px}.loop-conversation{padding:16px 12px}.loop-tabs{padding:6px;gap:0}.loop-tabs button{padding:7px}.loop-status{font-size:11px}.loop-message header{flex-wrap:wrap}}
+.loop-workspace{display:flex;flex:1;flex-direction:column;min-height:0;min-width:0;background:var(--bg-main,#f8faf8)}.loop-tabs{display:flex;align-items:center;gap:8px;padding:8px 20px;border-bottom:1px solid #e0e8e2}.loop-tabs button{padding:7px 12px;border:0;border-radius:7px;background:transparent;color:#61776a;cursor:pointer}.loop-tabs .active{background:#e2eee6;color:#154834}.loop-status{margin-left:auto;font-size:12px;display:flex;align-items:center;gap:6px}.loop-status i{width:7px;height:7px;border-radius:50%;background:#93a99c}.loop-status .running{background:#21a37e;animation:pulse 1.5s ease-in-out infinite}.loop-content{display:flex;flex:1;min-height:0;position:relative}.loop-center{display:flex;flex-direction:column;flex:1;min-width:0;position:relative;min-height:0}.loop-conversation{overflow:auto;flex:1;padding:24px max(20px,calc((100% - 800px)/2));scrollbar-gutter:stable}.loop-message{margin:0 0 22px;min-width:0;overflow-wrap:anywhere}.loop-message header{display:flex;gap:8px;align-items:center;font-size:13px;font-weight:600;margin-bottom:8px}.loop-message header small{font-weight:400;color:#7b8e82}.assistant-header{justify-content:space-between}.assistant-identity,.assistant-actions,.assistant-metrics{display:flex;min-width:0;align-items:center;gap:8px}.assistant-identity{flex-wrap:wrap}.assistant-identity strong{font-weight:650}.assistant-identity time{color:#8390a0;font-size:11px;font-weight:400;font-variant-numeric:tabular-nums}.assistant-actions{margin-left:auto;gap:2px}.assistant-action{display:inline-grid;width:28px;height:28px;place-items:center;border:0;border-radius:7px;background:transparent;color:#758497;padding:0;cursor:pointer}.assistant-action:hover:not(:disabled){background:#eff5f1;color:#2d6851}.assistant-action:disabled{cursor:default;opacity:.45}.assistant-metrics{margin-top:10px;color:#7a8797;font-size:11px;font-variant-numeric:tabular-nums}.assistant-metrics span{display:inline-flex;align-items:center;gap:4px}.loop-message.assistant.is-continuation{margin-top:12px}.continuation-spacer{visibility:hidden}.loop-message.user{background:#eaf3ed;padding:16px 20px;border-radius:12px}.loop-message.user p{white-space:pre-wrap;margin:0;line-height:1.7}.history-files{display:flex;gap:8px;flex-wrap:wrap}.loop-composer-wrap{padding:12px 24px 18px;max-width:950px;width:100%;box-sizing:border-box;margin:0 auto}.loop-runtime{width:240px;overflow:auto;padding:18px;border-left:1px solid #e0e8e2;font-size:12px;background:#f5f8f5}.loop-runtime dd{margin:5px 0 14px;overflow-wrap:anywhere}.loop-runtime dt{color:#7d9081}.runtime-close{float:right;border:0;background:transparent;cursor:pointer}.loop-notice{padding:8px 16px;margin:4px 10px;background:#f6f0e2;color:#866934;font-size:12px}.loop-notice.error{color:#a24d43}.loop-notice button,.history-more{border:0;background:transparent;text-decoration:underline;cursor:pointer}.jump-bottom{position:absolute;bottom:10px;right:20px;border:1px solid #caddcf;background:#fff;border-radius:20px;padding:8px 15px;cursor:pointer}.muted{color:#86968b}@keyframes pulse{50%{opacity:.35}}@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}@media(max-width:768px){.loop-runtime{position:absolute;inset:0 0 0 auto;max-width:calc(100% - 35px);z-index:30;box-shadow:-20px 0 50px #173e2520}.loop-composer-wrap{padding:8px}.loop-conversation{padding:16px 12px}.loop-tabs{padding:6px;gap:0}.loop-tabs button{padding:7px}.loop-status{font-size:11px}.loop-message header{flex-wrap:wrap}}
 
 /* 对话/轨迹导航采用参考页的下划线选中态。 */
 .loop-tabs{--line:#e3e8f0;--text:#172033;--subtle:#748197;--accent:#5b5bd6}

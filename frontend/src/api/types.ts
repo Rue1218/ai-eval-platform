@@ -1103,3 +1103,29 @@ export interface UserWorkspaceFileList {
   entries: UserWorkspaceFileEntry[]
   total: number
 }
+
+export interface UserWorkspaceTreeNode {
+  name: string
+  path: string
+  kind: 'dir' | 'file' | 'link'
+  size: number
+  updated_at?: string | null
+  children?: UserWorkspaceTreeNode[]
+}
+
+export interface UserWorkspaceTree {
+  workspace_id: string
+  tree: UserWorkspaceTreeNode[]
+}
+
+export interface UserWorkspaceFileContent {
+  workspace_id: string
+  path: string
+  name: string
+  size: number
+  updated_at?: string | null
+  is_binary: boolean
+  is_large: boolean
+  content: string
+}
+
