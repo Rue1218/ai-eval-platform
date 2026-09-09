@@ -133,8 +133,7 @@ def test_agent_ui_lists_only_safe_selectable_profile_metadata(profile_db):
 
 
 @pytest.mark.parametrize("protocol,model", [
-    ("anthropic_messages", "deepseek-v4-flash-0731"),
-    ("anthropic_messages", "qwen3.6-flash"),
+    ("anthropic_messages", "unknown-compatible-model"),
     ("openai_chat", "stepfun-ai/step-3.7-flash"),
 ])
 def test_compatible_default_profile_survives_global_reasoning_preference(profile_db, protocol, model):
@@ -153,3 +152,30 @@ def test_compatible_default_profile_survives_global_reasoning_preference(profile
     with pytest.raises(AppError) as caught:
         loop_wiring.authorized_profile(profile_db.db, {"reasoning_effort": "high"})
     assert caught.value.code == ErrorCode.VALIDATION
+
+
+@pytest.mark.parametrize("model,allowed", [
+    ("deepseek-v4-flash-0731", ["off", "high", "max"]),
+    ("deepseek-v4-pro-0813", ["off", "high", "max"]),
+    ("qwen3.6-flash", ["off", "low", "medium", "high", "xhigh", "max"]),
+    ("qwen3.6-flash-2026-04-16", ["off", "low", "medium", "high", "xhigh", "max"]),
+])
+def test_server_model_capabilities_match_each_authorized_request(profile_db, model, allowed):
+    """服务器型号可展示的每个档位，都必须能通过回合授权和模型参数解析。"""
+    from app.llm.resolver import resolve_request
+
+    row = profile_db.db.by_id["default"]
+    row.protocol, row.model = "anthropic_messages", model
+    payload = sessions._loop_ui(
+        profile_db.db, SimpleNamespace(id="member", role="member"),
+        SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())),
+    )
+    assert payload["profile"]["allowed_efforts"] == allowed
+    assert payload["default_effort"] == "high"
+    for effort in allowed:
+        snapshot, _ = loop_wiring.authorized_profile(profile_db.db, {"reasoning_effort": effort})
+        request = resolve_request(snapshot, messages=[])
+        assert request.reasoning_effort == effort
+        assert request.provider_options["thinking"]["type"] == (
+            "disabled" if effort == "off" else "enabled"
+        )

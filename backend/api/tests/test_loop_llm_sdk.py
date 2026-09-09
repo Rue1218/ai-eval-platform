@@ -3,6 +3,7 @@
 import asyncio
 import json
 from copy import deepcopy
+from dataclasses import replace
 
 import anthropic
 import httpx
@@ -23,7 +24,8 @@ PROTOCOLS = [
 
 
 @pytest.mark.parametrize("model", ["deepseek-v4-flash-0731", "qwen3.6-flash"])
-def test_compatible_messages_sdk_loop_and_next_turn(monkeypatch, model):
+@pytest.mark.parametrize("effort", ["off", "high", "max"])
+def test_compatible_messages_sdk_loop_and_next_turn(monkeypatch, model, effort):
     """真实 SDK 和七节点图验证空签名、工具回填、最终回复及下一轮历史。"""
     from app.agent.loop import build_agent
     from app.agent.loop_settings import LoopSettings
@@ -45,7 +47,23 @@ def test_compatible_messages_sdk_loop_and_next_turn(monkeypatch, model):
         requests.append(payload)
         assert http_request.url.path == "/apps/anthropic/v1/messages"
         assert payload["model"] == model
-        assert payload["thinking"] == {"type":"disabled"}
+        expected_effort = effort if len(requests) < 3 else "off"
+        assert http_request.method == "POST"
+        assert payload["stream"] is True
+        if expected_effort == "off":
+            assert payload["thinking"] == {"type":"disabled"}
+            assert "output_config" not in payload
+        else:
+            assert payload["thinking"]["type"] == "enabled"
+            assert "temperature" not in payload
+            if model.startswith("deepseek"):
+                assert payload["output_config"] == {"effort": expected_effort}
+                assert "budget_tokens" not in payload["thinking"]
+            else:
+                ratio = 0.6 if expected_effort == "high" else 0.8
+                budget = round(config.max_tokens * ratio)
+                assert payload["thinking"]["budget_tokens"] == budget
+                assert payload["max_tokens"] + budget == config.max_tokens
         if len(requests) == 1:
             wire = b"".join(sse(event, named=True) for event in anthropic_events(signature=False))
         else:
@@ -60,11 +78,14 @@ def test_compatible_messages_sdk_loop_and_next_turn(monkeypatch, model):
         scheduler = RecordingScheduler()
         graph = await build_agent(
             LoopSettings(), adapter=adapter, scheduler=scheduler,
-            request_factory=lambda messages, effort: resolve_request(config, messages=messages, tools=specs),
+            request_factory=lambda messages, selected: resolve_request(
+                replace(config, reasoning_enabled=selected != "off", reasoning_effort=selected),
+                messages=messages, tools=specs,
+            ),
         )
         runtime = AgentRuntime(MemoryLog(), graph)
         try:
-            await runtime.submit("读取文件", reasoning_effort="off")
+            await runtime.submit("读取文件", reasoning_effort=effort)
             await runtime.wait()
             assert runtime.log.read()[-1]["data"]["reason"] == "completed"
             assert len(requests) == 2

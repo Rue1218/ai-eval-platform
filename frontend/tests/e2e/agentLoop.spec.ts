@@ -2,7 +2,13 @@ import { test, expect, type Page } from '@playwright/test'
 
 const deepseekProfile = { id:'p',name:'DeepSeek 协议档',version:'v1',model:'deepseek-chat',protocol:'openai_chat',allowed_efforts:['off','low','medium','high','max'],default_effort:'medium' }
 const compatibleProfile = { id:'p2',name:'兼容协议档',version:'v2',model:'qwen-plus',protocol:'openai_chat',allowed_efforts:['off','low','high'],default_effort:'high' }
-const ui = { version:1,enabled:true,profile:deepseekProfile,profiles:[deepseekProfile,compatibleProfile],allowed_efforts:deepseekProfile.allowed_efforts,default_effort:deepseekProfile.default_effort,permissions:{write:true,trace:true,reasoning:true,interactions:true,settings:true},controller:{active:false,owned_by_actor:false},attachments:{upload_suffixes:['.txt'],inline_suffixes:['.txt'],image_suffixes:[],max_bytes:20971520,max_image_bytes:4194304,content_required:true} }
+// 与服务器实际型号/协议相同的能力夹具，验证滑动值进入 WS；真实供应商另行验收。
+const serverProfiles = [
+  { id:'p3',name:'MaaS DeepSeek',version:'v3',model:'deepseek-v4-flash-0731',protocol:'anthropic_messages',allowed_efforts:['off','high','max'],default_effort:'off' },
+  { id:'p4',name:'MaaS Qwen',version:'v3',model:'qwen3.6-flash',protocol:'anthropic_messages',allowed_efforts:['off','low','medium','high','xhigh','max'],default_effort:'off' },
+  { id:'p5',name:'NIM StepFun',version:'v3',model:'stepfun-ai/step-3.7-flash',protocol:'openai_chat',allowed_efforts:['off'],default_effort:'off' },
+]
+const ui = { version:1,enabled:true,profile:deepseekProfile,profiles:[deepseekProfile,compatibleProfile,...serverProfiles],allowed_efforts:deepseekProfile.allowed_efforts,default_effort:deepseekProfile.default_effort,permissions:{write:true,trace:true,reasoning:true,interactions:true,settings:true},controller:{active:false,owned_by_actor:false},attachments:{upload_suffixes:['.txt'],inline_suffixes:['.txt'],image_suffixes:[],max_bytes:20971520,max_image_bytes:4194304,content_required:true} }
 
 /** 真实页面与 WebSocket transport 使用协议夹具；不把夹具当供应商/沙箱闭环。 */
 async function setup(page: Page, holdNewReplay = false) {
@@ -114,6 +120,48 @@ test('协议档选择会同步收窄思考强度并冻结到本轮请求',async(
   await page.getByRole('button',{name:'发送'}).click()
   await expect.poll(()=>ctx.commands.find(command=>command.type==='turn.submit')?.data.profile_id).toBe('p2')
   expect(ctx.commands.find(command=>command.type==='turn.submit')?.data.reasoning_effort).toBe('high')
+})
+
+for (const profile of serverProfiles.slice(0, 2)) {
+  test(`${profile.model} 思考滑块拖动、方向键与 WS 请求一致`, async ({page}) => {
+    const ctx = await setup(page)
+    await page.getByRole('button', {name:/deepseek-chat/}).click()
+    await page.locator('.model-option').filter({hasText:profile.name}).click()
+    await page.getByRole('button', {name:/^思考强度：/}).click()
+    const slider = page.getByRole('slider', {name:'思考强度', exact:true})
+    await expect(slider).toBeEnabled()
+    await expect(slider).toHaveAttribute('max', String(profile.allowed_efforts.length - 1))
+    // 切换模型会保留仍受支持的偏好；先归零，再验证真实指针拖动。
+    await slider.press('Home')
+    await expect(slider).toHaveValue('0')
+    // 等待弹层缩放结束再取坐标；拖到轨道边缘，避免跨浏览器的滑块中心偏差。
+    await slider.click({trial:true})
+    const box = (await slider.boundingBox())!
+    await page.mouse.move(box.x + 15, box.y + box.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(box.x + box.width - 1, box.y + box.height / 2, {steps:8})
+    await page.mouse.up()
+    await expect(slider).toHaveAttribute('aria-valuetext', '最高强度')
+    await slider.press('Home')
+    await expect(slider).toHaveAttribute('aria-valuetext', '关闭')
+    await slider.press('End')
+    await slider.press('Escape')
+    await page.getByRole('textbox', {name:'消息'}).fill('验证滑动档位')
+    await page.getByRole('button', {name:'发送', exact:true}).click()
+    await expect.poll(() => ctx.submits).toBe(1)
+    const command = ctx.commands.find(item => item.type === 'turn.submit')
+    expect(command.data.profile_id).toBe(profile.id)
+    expect(command.data.reasoning_effort).toBe('max')
+  })
+}
+
+test('仅支持关闭的模型明确说明不可调节', async ({page}) => {
+  await setup(page)
+  await page.getByRole('button', {name:/deepseek-chat/}).click()
+  await page.locator('.model-option').filter({hasText:'NIM StepFun'}).click()
+  await page.getByRole('button', {name:'思考强度：关闭', exact:true}).click()
+  await expect(page.getByRole('slider', {name:'思考强度', exact:true})).toBeDisabled()
+  await expect(page.getByText('当前模型配置仅支持“关闭”，无法调节思考强度。')).toBeVisible()
 })
 
 test('首次订阅超时保留草稿，迟到回放不自动发送，原请求可手动重试', async ({page}) => {

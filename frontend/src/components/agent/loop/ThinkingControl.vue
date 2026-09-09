@@ -12,8 +12,9 @@
         <div class="effort-slider-wrap" :class="{ 'is-max': current === 'max' }">
           <span class="effort-particles" aria-hidden="true"><span v-for="offset in ['-100%', '0%']" :key="offset" class="effort-liquid" :style="{ '--liquid-start': offset }"><span v-for="(particle, particleIndex) in particles" :key="particleIndex" class="effort-particle" :style="{ '--x': `${particle[0]}%`, '--y': `${particle[1]}%`, '--size': `${particle[2]}px` }"/></span></span>
           <span class="effort-slider-marks" :style="{ gridTemplateColumns: `repeat(${allowed.length}, 1fr)` }" aria-hidden="true"><span v-for="(item, position) in allowed" :key="item" class="effort-slider-mark" :class="{ 'is-active': position <= index }"></span></span>
-          <input id="agent-loop-effort-slider" ref="slider" class="effort-slider" type="range" min="0" :max="Math.max(0, allowed.length - 1)" step="1" :value="index" :style="sliderStyle" aria-label="思考强度" :aria-valuetext="label" @input="change(Number(($event.target as HTMLInputElement).value))" />
+          <input id="agent-loop-effort-slider" ref="slider" class="effort-slider" type="range" min="0" :max="Math.max(0, allowed.length - 1)" step="1" :disabled="allowed.length < 2" :value="index" :style="sliderStyle" aria-label="思考强度" :aria-valuetext="label" @input="change(Number(($event.target as HTMLInputElement).value))" />
         </div>
+        <p v-if="allowed.length === 1" class="effort-unavailable" role="status">当前模型配置仅支持“{{ label }}”，无法调节思考强度。</p>
       </div>
     </section>
   </n-popover>
@@ -40,11 +41,12 @@ watch(open, value => { if (value) void nextTick(() => slider.value?.focus()) })
 // 能力刷新为空时关闭弹层，不保留可操作的过期档位。
 watch(() => props.allowed.length, length => { if (!length) close() })
 /** 原生 range 提供方向键/Home/End；滚轮仅在弹层内依档位顺序调节。 */
-function change(value: number) { const effort = props.allowed[Math.max(0, Math.min(props.allowed.length - 1, value))]; if (effort) emit('update:modelValue', effort) }
+function change(value: number) { if (props.allowed.length < 2) return; const effort = props.allowed[Math.max(0, Math.min(props.allowed.length - 1, value))]; if (effort) emit('update:modelValue', effort) }
 function wheel(event: WheelEvent) { if (event.deltaY) change(index.value + (event.deltaY > 0 ? 1 : -1)) }
 function close() { open.value = false; trigger.value?.focus() }
 </script>
 <style scoped>
+.effort-unavailable{margin:6px 2px 0;color:#778397;font-size:12px}.effort-slider:disabled{cursor:default;opacity:.55}
 .thinking-trigger{display:inline-flex;min-width:0;height:30px;align-items:center;gap:6px;border:1px solid transparent;border-radius:999px;background:transparent;color:#46546a;padding:0 6px 0 3px;cursor:pointer;transition:.15s ease}.thinking-trigger:hover:not(:disabled),.thinking-trigger[aria-expanded="true"]{border-color:#dce4e6;background:#f3f7f5}.thinking-trigger:disabled{cursor:default;opacity:.55}.thinking-dial{position:relative;display:grid;width:20px;height:20px;flex:0 0 auto;place-items:center;border:1px solid #a9acec;border-radius:50%;background:conic-gradient(from 32deg,#5b5bd6 0 18%,rgba(147,140,255,.18) 18% 33%,#47a783 33% 46%,rgba(87,216,193,.16) 46% 100%)}.thinking-dial::before{width:12px;height:12px;content:"";border-radius:50%;background:#fff}.thinking-dial::after{position:absolute;top:3px;width:2px;height:5px;content:"";border-radius:4px;background:#42439f;transform-origin:50% 8px;transition:transform .2s ease}.thinking-trigger[data-effort="off"] .thinking-dial::after{transform:rotate(-100deg)}.thinking-trigger[data-effort="low"] .thinking-dial::after{transform:rotate(-52deg)}.thinking-trigger[data-effort="medium"] .thinking-dial::after{transform:rotate(0deg)}.thinking-trigger[data-effort="high"] .thinking-dial::after{transform:rotate(52deg)}.thinking-trigger[data-effort="xhigh"] .thinking-dial::after{transform:rotate(76deg)}.thinking-trigger[data-effort="max"] .thinking-dial::after{transform:rotate(102deg)}.thinking-copy{display:grid;line-height:1.08;text-align:left}.thinking-copy small{color:#8e9aac;font-size:9px;letter-spacing:.04em}.thinking-copy span{font-size:11px;font-weight:620}.thinking-chevron{flex:0 0 auto;color:#8e9aac;transition:transform .16s ease}.thinking-trigger[aria-expanded="true"] .thinking-chevron{transform:rotate(180deg)}.thinking-menu{width:min(272px,calc(100vw - 24px));padding:0}    .effort-slider-card { border: 1px solid #e1e5ec; border-radius: 16px; background: rgba(255,255,255,.98); padding: 14px 14px 13px; box-shadow: 0 12px 28px rgba(32,48,76,.14), 0 1px 2px rgba(32,48,76,.04); }
     .effort-slider-header { display: flex; min-width: 0; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 0 2px; }
     .effort-slider-header > div { display: grid; min-width: 0; gap: 1px; }
