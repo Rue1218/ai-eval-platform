@@ -1,4 +1,41 @@
-# AgentLoop 原始样式核对（2026-09-09，V0.6）
+# AgentLoop 原始样式核对（2026-09-09，V0.7）
+
+## V0.7 共享对话壳层调宽核对
+
+**Findings**
+
+- 已修复 [P1]：上一版把可调宽区域仅包住消息列表，输入框位于壳层外，且显示右缘大面积玻璃卡片。现在 `AgentWorkspace.vue` 将输入框移入消息区所属的 `loop-chat-shell`，两者由同一 `width` 控制；把手位于左缘，拖动与方向键的宽度方向均已对应左侧边界。
+
+**Source visual truth**
+
+- `C:/Users/Administrator/AppData/Local/Temp/codex-clipboard-7f1ee97a-0688-4173-8e50-8baad01a8704.png`，1172×885 px：细竖向拖拽线在内容列左缘，消息区与输入框共享左右边界。
+
+**Implementation evidence**
+
+- In-app Browser：`http://localhost:5174/agent?data=mock`，1280×720 CSS px，device scale factor 1，新建 Mock 会话、浅色欢迎态、桌面宽度。
+- 无障碍树中“对话内容区域”同时包含欢迎态消息、消息输入框和“拖拽调整对话内容宽度”分隔线，证明三者同属共享壳层。
+- 聚焦后截图显示固定高度的左缘细线；没有整块对话卡片边界。对话列外框与输入框外框左边均为 563px，输入文字相对壳层内缩 16px。
+- `npm run typecheck` 通过。浏览器页未报告应用控制台错误。
+
+**Fidelity surfaces**
+
+- Fonts and typography：本次未改变文字字体、字号、字重或副本；与参考图的中文字体和文案不是同一页面状态，未作等价判断。
+- Spacing and layout rhythm：消息区和输入框改为共同宽度与共同右缘；左缘只保留 104px 高拖拽线，命中区不形成可见胶囊。
+- Colors and visual tokens：默认透明，聚焦/悬停时使用低不透明度白色与灰绿色细线；未为壳层添加卡片背景。
+- Image quality and asset fidelity：本次没有图片、图标或素材变动。
+- Copy and content：本次没有文案变动。
+
+**Open Questions**
+
+- 用户截图为 1172×885 px 的另一页面状态，当前实现截图为带平台导航的 1280×720 px 欢迎态；浏览器策略阻止将两张图片置于同一比较输入，无法完成要求的逐像素并列判断。
+
+**Implementation Checklist**
+
+1. 已将消息区和输入框置入同一个 `loop-chat-shell`。
+2. 已将桌面拖拽点改为壳层左缘的固定高度细玻璃线。
+3. 已验证可访问分隔线及 TypeScript 类型检查。
+
+final result: blocked
 
 ## V0.6 输入焦点与内容宽度核对
 
