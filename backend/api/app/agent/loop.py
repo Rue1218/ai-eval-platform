@@ -96,6 +96,8 @@ class TurnDependencies:
     scheduler: ToolScheduler | None = None
     request: LlmRequest | None = None
     request_factory: RequestFactory | None = None
+    # 平台配置的容量只用于真实请求展示，不改变核心循环窗口策略。
+    context_window: int | None = None
 
 
 FinishReason = Literal["completed", "error", "max_tokens", "max_steps"]
@@ -313,6 +315,8 @@ async def build_agent(
         # Attempt 是“同一 Step 的一次具体模型请求”。网络重试会创建新的 Attempt，
         # 但不会重新创建 Step。
         attempt_id = f"a-{uuid.uuid4().hex[:12]}"
+        from .loop_presentation import request_summary
+
         start = context.log.append(
             "assistant/attempt_start",
             {
@@ -322,6 +326,11 @@ async def build_agent(
                 "header_seq": header_seq,
                 "history_upto_seq": context.log.read()[-1]["seq"],
                 "history_selection": selection,
+                "request_summary": request_summary(
+                    request, context_window=current.context_window,
+                    history_upto_seq=context.log.read()[-1]["seq"],
+                    input_fingerprint=selection["input_fingerprint"],
+                ),
                 "fingerprint_algorithm": "dsh-json-v1",
             },
         )

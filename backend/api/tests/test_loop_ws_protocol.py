@@ -122,13 +122,17 @@ def test_assistant_fact_has_two_stable_projections_and_no_raw():
     "succeeded", "failed", "denied", "cancelled", "not_started", "outcome_unknown",
 ])
 def test_tool_six_states_keep_identity_not_model_body(status):
-    """六态不折叠，模型原始工具结果不得泄露为展示数据。"""
+    """六态不折叠；V1.78 登记工具的成功内容只经限长脱敏预览公开。"""
     event = fact("tool/result", call_id="c", call_seq=2, name="read", status=status,
                  content="PRIVATE BODY", output="PRIVATE BODY", synthetic=True)
     projected = project_fact(event)[0]
     assert projected["data"]["status"] == status
     assert projected["correlation"]["call_id"] == "c"
-    assert "PRIVATE BODY" not in json.dumps(projected)
+    assert "content" not in projected["data"] and "output" not in projected["data"]
+    if status == "succeeded":
+        assert projected["data"]["display"]["result_preview"] == "PRIVATE BODY"
+    else:
+        assert "PRIVATE BODY" not in json.dumps(projected)
 
 
 def test_acl_placeholder_and_reasoning_filter():
@@ -169,7 +173,7 @@ def test_catalog_matches_runtime_history_selection_and_legacy_attempts():
                {"role": "user", "content": "latest"}]
     selection = _history_selection(history, history[2:])
     catalog = event_schema_catalog()
-    assert catalog["catalog_version"] == 3
+    assert catalog["catalog_version"] == 4
     validator = Draft202012Validator(catalog["events"]["assistant/attempt_start"]["schema"])
     legacy = {"turn": 1, "step": 1, "attempt_id": "a", "header_seq": 0,
               "history_upto_seq": 5}

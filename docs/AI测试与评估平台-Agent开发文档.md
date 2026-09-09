@@ -1,10 +1,10 @@
 # AI 测试与评估平台 Agent 开发文档
 
-> 版本：V1.7.0
-> 状态：新增独立 AgentLoop v2 后端路径，默认关闭；详见文末本次增量与《AgentLoop后端架构设计》。此前骨架化与混合引擎说明属于 legacy 路径及其历史阶段，不能据此认定新路径仍为纯对话。前端尚未接入 v2。
+> 版本：V1.7.1
+> 状态：新增独立 AgentLoop v2 后端路径，默认关闭；详见文末本次增量与《AgentLoop后端架构设计》。此前骨架化与混合引擎说明属于 legacy 路径及其历史阶段，不能据此认定新路径仍为纯对话。前端已加入显式 v2 试验入口，默认仍为 legacy，完整迁移验收未结束。
 > 审查日期：2026-09-09
 > 对应需求：`AI测试与评估平台-PRD.md` V1.18
-> 对应接口：`AI测试与评估平台-API.md` V1.77
+> 对应接口：`AI测试与评估平台-API.md` V1.79
 
 ## 1. legacy 骨架化运行链路（历史基线）
 
@@ -512,3 +512,10 @@ reasoning 事件，并对已知支持显式关闭的端点发送关闭参数。G
 - `backend/api/app/main.py`、`config.py`、`schemas.py`、`routers/sessions.py`、`routers/ws.py`、`routers/ws_v2.py`：新路径装配与引擎隔离。
 
 细节和当前验证边界见 [后端架构设计](AI测试与评估平台-AgentLoop后端架构设计.md) 与 [实施记录](AI测试与评估平台-AgentLoop后端实施记录.md)。
+
+
+### V1.7.1 前端试验接线（2026-09-09）
+
+前端按 Session.engine_version 选择独立 transport。相同 v2 连接 resubscribe 只重启读流，避免 detach 误取消；工具内交互继续携带 nonce 与执行身份。公开展示与请求统计按 API V1.79，实施状态和代码清单详见《AgentLoop前端重写与联调计划》§11。默认新会话与服务器开关不扩大；legacy 清理、真实供应商/Linux 验收未完成。
+
+修改代码文件与作用清单：`agent/loop_presentation.py` 提供安全投影，`agent/events.py` 提供持久思考 ACL，`agent/loop.py`/`loop_wiring.py` 提供实际请求统计，`routers/sessions.py` 提供 UI 能力，`routers/ws_v2.py` 保留重同步控制权；前端新增 `agent/loop`、`components/agent/loop` 和 `api/agentLoop*`，由 `views/Agent.vue` 分流。

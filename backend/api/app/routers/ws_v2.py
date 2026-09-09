@@ -81,7 +81,9 @@ class Answer(StrictData):
     """单题回答不允许任意对象注入。"""
 
     question_id: Id
-    answer: Annotated[str, StringConstraints(max_length=16000)]
+    answer: Annotated[str, StringConstraints(max_length=16000)] | Annotated[
+        list[Annotated[str, StringConstraints(max_length=16000)]], Field(max_length=32)
+    ]
 
 
 class Question(Interaction):
@@ -345,6 +347,16 @@ class WsV2Connection:
 
     async def subscribe(self, command: Command) -> None:
         """注册后取快照；回放独立任务让收包循环继续处理取消/判活。"""
+        if self.session_id == command.session_id:
+            # 同连接修复 cursor 缺口时保留 Runtime 控制权，不能 detach 误取消回合。
+            self.ready = False
+            if self.pump:
+                self.pump.cancel()
+                with suppress(asyncio.CancelledError):
+                    await self.pump
+            await self.service.authorize(self.actor_id, command.session_id)
+            self.pump = asyncio.create_task(self.stream(command.data["after_cursor"]))
+            return
         if self.session_id and self.ready:
             raise AppError(ErrorCode.CONCURRENCY, "请先退订当前会话")
         if self.session_id:

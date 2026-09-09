@@ -27,17 +27,17 @@ _FIELDS = {
     "turn.end": "reason",
     "step.start": "",
     "step.end": "reason usage",
-    "assistant.start": "header_seq history_upto_seq",
-    "assistant.message": "content tool_calls usage finish_reason interrupted",
+    "assistant.start": "header_seq history_upto_seq request_summary",
+    "assistant.message": "content tool_calls usage finish_reason interrupted reasoning_preview",
     "assistant.end": "outcome committed_seq interrupted error_code",
     "assistant.retry": "retry_index previous_attempt_id error_code delay_s",
-    "tool.call": "name",
+    "tool.call": "name display",
     "tool.dispatch": "name execution_id",
     "tool.result": "name status synthetic display error_code exit_code",
     "approval.requested": "interaction_id nonce name expires_at display",
     "approval.resolved": "interaction_id decision source_outcome",
     "question.requested": "interaction_id nonce questions expires_at",
-    "question.resolved": "interaction_id",
+    "question.resolved": "interaction_id outcome answers",
     "task_confirmation.requested": "interaction_id nonce spec_hash display expires_at",
     "task_confirmation.resolved": "interaction_id spec_hash decision",
     "execution.quarantined": "execution_id reason display",
@@ -205,6 +205,12 @@ def project_fact(event: dict) -> list[dict]:
     if event_type == "tool.call":
         correlation["call_seq"] = seq
     data = _pick(source, _FIELDS[event_type])
+    if event_type in {"tool.call", "tool.result"}:
+        from .loop_presentation import tool_display
+
+        data["display"] = tool_display(source, result=event_type == "tool.result")
+    if event_type == "assistant.message" and isinstance(source.get("reasoning_content"), str):
+        data["reasoning_preview"] = source["reasoning_content"]
     if event_type == "user.message":
         # 图文内容属于模型正文；语义流只展示文本与平台附件引用，禁止内联图像。
         content = source.get("display_content", source.get("content", ""))
@@ -287,6 +293,17 @@ def visible_frame(envelope: dict, *, interactions: bool = False, reasoning: bool
             state["pending_confirm"] = {"restricted": True}
     if event_type == "assistant.reasoning.delta" and not reasoning:
         return None
+    if not reasoning:
+        result["data"].pop("reasoning_preview", None)
+    if event_type == "resync.required":
+        state = result["data"].get("snapshot", {})
+        # 快照也逐条应用最新授权，禁止持久思考或历史交互绕过发送时复验。
+        if "timeline" in state:
+            state["timeline"] = [visible_frame(item, interactions=interactions, reasoning=reasoning)
+                                 for item in envelope["data"].get("snapshot", {}).get("timeline", [])]
+        for item in state.get("assistants", []):
+            if not reasoning:
+                item.pop("reasoning_preview", None)
     if event_type in PERSISTENT_TYPES and result["data"] != {"restricted": True}:
         result["data"] = _pick(result["data"], _FIELDS[event_type])
     return result

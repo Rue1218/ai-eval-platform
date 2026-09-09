@@ -8,6 +8,18 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    # 隔离临时 PG 运行真实事实/WS/文件闭环测试，绝不借用生产库。
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: agentloop_ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d agentloop_ci"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     defaults:
       run:
         working-directory: backend/api
@@ -34,7 +46,16 @@ jobs:
       - name: Lint (ruff)
         run: ruff check . ../shared
 
+      - name: Migrate isolated AgentLoop test database
+        env:
+          DATABASE_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/agentloop_ci
+          # Alembic 不经过 pytest conftest，显式加入 backend 以导入共享模型。
+          PYTHONPATH: .:..
+        run: alembic upgrade head
+
       - name: Test (pytest)
+        env:
+          LOOP_TEST_DATABASE_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/agentloop_ci
         run: pytest
 
   worker:
@@ -81,6 +102,15 @@ jobs:
       - name: Typecheck (vue-tsc)
         # npm run build 不含类型检查，必须独立跑 typecheck 门禁
         run: npm run typecheck
+
+      - name: AgentLoop reducer and transport tests
+        run: npm test
+
+      - name: Install browser for AgentLoop tests
+        run: npx playwright install --with-deps chromium
+
+      - name: AgentLoop browser contract tests
+        run: npm run test:e2e
 
       - name: Build (vite)
         run: npm run build

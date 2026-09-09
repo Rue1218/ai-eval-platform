@@ -251,7 +251,7 @@ async def _build_dependencies(service, entry, actor_id: str, data: dict, resourc
     effort = profile.config.reasoning_effort if profile.config.reasoning_enabled else "off"
     initial, _ = _window_request(profile, segments, specs, messages, effort, context_window)
     return TurnDependencies(adapter=adapter, scheduler=scheduler, request=initial,
-                            request_factory=request_factory), resources
+                            request_factory=request_factory, context_window=context_window), resources
 
 
 def _prompt_tokens(request) -> int:

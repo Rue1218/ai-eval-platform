@@ -19,6 +19,13 @@ node_modules/
 dist/
 .vite/
 npm-debug.log*
+.npm-cache/
+frontend/test-results/
+frontend/playwright-report/
+# 本地联调隔离依赖与测试临时目录，不进入交付源码。
+backend/test-deps-agentloop/
+backend/test-tmp-agentloop-*/
+test-tmp-agentloop-*/
 
 # Go
 backend/stress/bin/

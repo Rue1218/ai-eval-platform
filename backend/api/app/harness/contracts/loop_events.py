@@ -8,7 +8,7 @@ from typing import Any
 
 EVENT_ENVELOPE_VERSION = 2
 EVENT_SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema"
-SCHEMA_CATALOG_VERSION = 3
+SCHEMA_CATALOG_VERSION = 4
 SCHEMA_REF_PREFIX = "dsh://events/"
 
 
@@ -125,6 +125,7 @@ EVENT_SCHEMAS: dict[str, dict[str, Any]] = {
             "attempt_id": _field(_STRING, "Stable identifier for this provider attempt."),
             "header_seq": _field(_INTEGER, "Sequence of the request/header used by this attempt."),
             "history_upto_seq": _field(_INTEGER, "Latest durable history record sent to the model."),
+            "request_summary": _field(_OBJECT, "已授权实际请求配置、工具 Schema 与同源上下文估算；不含系统正文或凭据。"),
             "history_selection": _field(_object_schema({
                 "algorithm": {"type": "string", "const": "message_indices.v1"},
                 "indices": {"type": "array", "items": {"type": "integer", "minimum": 0},

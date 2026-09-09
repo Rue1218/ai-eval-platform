@@ -760,6 +760,8 @@ export interface AttachmentReference {
 }
 
 export interface AgentSession {
+  /** 创建时固化，打开历史时必须据此选择 transport。 */
+  engine_version?: 'legacy' | 'agent_loop_v2'
   id: string
   title: string
   owner_id: string

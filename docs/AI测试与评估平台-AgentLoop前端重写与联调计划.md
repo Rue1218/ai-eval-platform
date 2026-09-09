@@ -1,10 +1,10 @@
 # AI 测试与评估平台 — AgentLoop 前端重写与联调计划
 
-> 版本：V0.1 ｜ 审查日期：2026-09-09 ｜ 状态：待实施计划，尚未重写前端或新增公开接口。
+> 版本：V0.2 ｜ 审查日期：2026-09-09 ｜ 状态：首批试验实现与本地验证完成，服务器联调及完整切换验收进行中。
 >
 > 基线：`deepseek-harness-py/static/index.html` 当前页面 + `ai-eval-platform/frontend/src/views/Agent.vue` 当前实现 + 已落地后端 WS v2。后端设计见 [架构设计](AI测试与评估平台-AgentLoop后端架构设计.md)，已验证范围见 [实施记录](AI测试与评估平台-AgentLoop后端实施记录.md)。
 >
-> 本次交付为本文与 [工具线性图标稿](assets/AI测试与评估平台-AgentLoop工具线性图标.svg)。下文“新增、删除、改造”均为后续任务；已存在的后端改动不计为本次前端交付。
+> V0.1 为计划基线；V0.2 的实际交付、证据和未完成项见 §11。下文原阶段退出条件继续有效，不能把首批实现认定为 F0–F7 全部完成。
 
 ## 1. 用户要求与实施口径
 
@@ -373,7 +373,7 @@ frontend/src/
 
 ### 本次修改代码文件与作用清单
 
-本次未修改前后端代码、公开 API、依赖或部署配置，仅新增：
+V0.1 计划稿未修改代码；当时仅新增以下文档与资产，V0.2 实现清单见 §11：
 
 | 文件 | 作用 |
 | :--- | :--- |
@@ -387,3 +387,74 @@ frontend/src/
 - [平台 Agent 页面](../frontend/src/views/Agent.vue)、[ContextMeter](../frontend/src/components/agent/ContextMeter.vue)、[附件预览](../frontend/src/components/agent/AttachmentPreview.vue)、[旧 WS](../frontend/src/api/ws.ts)。
 - [v2 WS](../backend/api/app/routers/ws_v2.py)、[事件投影](../backend/api/app/agent/events.py)、[会话接线](../backend/api/app/agent/loop_service.py)、[事实快照](../backend/api/app/harness/memory/agent_events.py)。
 - [工具桥](../backend/api/app/harness/execution/loop_bridge.py)、[模型选项](../backend/api/app/llm/providers/options.py)、[API 契约 §4A](AI测试与评估平台-API.md#4a-agent-loop-websocket-v2v1772026-09-09)。
+
+
+## 11. V0.2 首批实现与联调记录（2026-09-09）
+
+已新增独立 v2 transport/store/页面并接入平台会话列表。默认新会话仍为 legacy，草稿顶部显式选择「AgentLoop · 试验」；服务器 `AGENT_LOOP_ENABLED=false` 时不允许创建新 v2，既有 v2 reader 保留。遵照本次用户指示，完成本地门禁后通过功能分支、PR 和 main CD 推送服务器测试，不直接把功能分支部署到生产。
+
+### 11.1 数据来源及完成边界
+
+| 前置 | 本批实现 | 尚需补齐 |
+| :--- | :--- | :--- |
+| B-FE01 | 草稿/会话 agent-ui；resolver 逐档验证、profile/version、权限、控制者成员摘要 | 草稿工具 manifest 与实际 Runner 可用性联动；模型视觉能力的精细约束 |
+| B-FE02 | 每个实际 attempt 的 request_summary.context_meter，调用同一个 _prompt_tokens 估算；圆环明确最近实际请求、不含草稿 | 细分系统/工具/图片 token 统计，供应商实际 tokenizer 校准 |
+| B-FE03 | ToolDisplay v1；登记工具参数白名单、成功结果预览、JSON 脱敏、12000 字符截断、六态 | 专门的表格/diff/链接 renderer，历史旧事实展示回填 |
+| B-FE04 | assistant.message 持久 reasoning_preview、replay/snapshot/发送前 ACL 裁剪 | 只有思考前缀而无正式消息的失败/取消历史仍需持久终态投影 |
+| B-FE05 | 实际模型/协议/版本/effort/max_tokens/工具 schema/输入摘要 | 服务端 TTFT 与完整 timing；当前无证据项明确显示未知 |
+| B-FE06 | 同一事务 H + timeline；首出现 cursor，完整语义回放，不重复叠加 REST messages | 超大快照的服务端分页/保留窗口压力验收 |
+| B-FE07 | 复用元数据/内容接口；上传者或可见会话引用授权；附件草稿 tombstone、迟到不复活 | 全供应商图文与各种文档真实联调 |
+
+### 11.2 S01–S22 证据登记
+
+| 编号 | 当前证据 / 状态 |
+| :--- | :--- |
+| S01 | 会话列表、共享/工作区保留；按 engine_version 分流；新会话灰度服务端控制，服务器创建待验收 |
+| S02 | 三个快捷提示填入聚焦，浏览器截图验证 |
+| S03 | v2 短票、退避重连、连续 cursor 与快照；transport 单测通过 |
+| S04 | 自动高度、发送/停止、IME；375/768/1440px 浏览器用例通过 |
+| S05 | 后端档位驱动 range，键盘/滚轮/Escape；浏览器键盘用例通过；源装饰性粒子未迁入 |
+| S06 | 成员+profile/version 本地 effort 偏好；失效回退提示，跨用户清缓存 |
+| S07 | 统一时间线、Markdown、最终正文校正、复制与附件；450 历史单测通过 |
+| S08 | attempt 隔离思考块、正式消息刷新可恢复；仅思考失败前缀待补 |
+| S09 | retry_wait 不结束回合，错误使用服务端安全摘要；故障真实模型待验收 |
+| S10 | details 工具卡、参数/结果、长输出与六态；同名三工具及六态单测通过 |
+| S11 | 工具内 allow/deny/always/TTL/nonce，浏览器 allow 通过；全部断线/超时真实组合待验收 |
+| S12 | 工作状态、实际请求配置、最近活动、独立 Worker 状态；不使用固定能量百分比 |
+| S13 | 轨迹分类和搜索，浏览器入口验证 |
+| S14 | 工具 call/dispatch/result 聚合语义行，保留 layers/source seq 与完整身份 |
+| S15 | 12 项检查器入口、缺失原因和授权内容；真实供应商数据待验收 |
+| S16 | 独立 schema.catalog、版本目录、JSON 树及本地 JSON Pointer helper；完整跨引用展示仍待完善 |
+| S17 | 递归 JSON 树、复制二次脱敏；敏感字段/危险 URL 单测通过 |
+| S18 | cursor 排序轴、拖选、清选和方向键/Home/End/Shift；真实耗时瀑布未实现 |
+| S19 | 无服务端计时明确提示未知，不以接收时间捏造 TTFT；timing 增量待补 |
+| S20 | 450 历史、1000 chunk、4 attempt 与3同名调用单测；对话增量分页、轨迹80行分页；瞬态渲染节流待完善 |
+| S21 | 375/768/1440px 通过，无横向溢出；200%缩放/软键盘/触屏详情需补验收 |
+| S22 | turn.end 决定终态；区分 max_tokens/max_steps/取消/失败；attempt.end 不解锁发送，浏览器验证 |
+
+### 11.3 测试结果及发布限制
+
+- Windows 本地 API 全量：同步主干后 1248 passed / 68 skipped；Worker：50 passed。
+- 前端 Node reducer/transport：10 passed；vue-tsc 与 Vite 生产构建通过；构建仍有既有大型 vendor chunk 提示。
+- Chrome 浏览器契约用例：工具交互/跨会话连接 1 项 + 375/768/1440px 各 1 项通过；是协议夹具测试，不代表真实供应商或 Linux Runner 验收。
+- CI 增加独立 pgvector/PG16 数据库、Alembic 迁移、真实 PG 集成测试、Node 单测和 Chromium 浏览器回归。首轮发现 Alembic 缺少共享模型搜索路径，已显式补齐 PYTHONPATH。
+- F4 的 legacy 三类历史/未完成卡仍使用独立 legacy 页面和命令；旧卡未删除，避免破坏未完成交互。F7 清理和默认 v2 切换尚未进行。
+- F6/V01–V24 **未全部验收**。真实供应商、Linux Runner、权限撤回、取消/隔离、报告与任务确认仍需服务器证据。当前仅允许试验部署，不宣布源前端全部迁移完成。
+
+### 11.4 本次修改代码文件与作用清单
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/agent/loop_presentation.py` | 真实模型能力、安全展示、请求摘要、问答 codec |
+| `backend/api/app/agent/{events,loop,loop_service,loop_wiring}.py` | 持久思考、请求估算、授权快照接线、数组问答 |
+| `backend/api/app/harness/{contracts/loop_events,memory/agent_events}.py` | 目录 v4、同事务 H/timeline 与首出现顺序 |
+| `backend/api/app/routers/{sessions,files,ws_v2}.py` | UI 能力、附件可见性、同连接 resubscribe 保留控制权 |
+| `frontend/src/api/{agentLoopTypes,agentLoopWs,types,http}.ts` | v2 DTO/transport、会话创建引擎分流 |
+| `frontend/src/agent/loop/{reducer,store,trace,toolPresentation}.ts` | 归一状态、会话连接池、草稿、轨迹、安全链接 |
+| `frontend/src/components/agent/loop/*.vue` | v2 工作台、输入、工具内三类交互、思考、圆环、JSON/轨迹与本地图标 |
+| `frontend/src/views/Agent.vue` | 保留平台会话/工作区壳，按引擎接入新视图，防止异步初始化覆盖选择 |
+| `frontend/tests/`, `frontend/playwright.config.ts`, `frontend/package*.json`, `frontend/tsconfig.json` | 单测/浏览器夹具与固定 Playwright 1.58.2 |
+| `backend/api/tests/test_loop_{presentation,frontend_resync,ws_protocol}.py` | 新展示/问答/ACL/重同步与目录兼容回归 |
+| `.github/workflows/ci.yml` | 加入隔离 PG、前端单测和浏览器门禁 |
+| `.gitignore` | 排除本地依赖、临时测试目录与浏览器产物 |
+| `docs/AI测试与评估平台-API.md` | V1.79 冻结公开增量，修正主服务接线状态 |
