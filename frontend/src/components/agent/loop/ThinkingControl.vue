@@ -1,7 +1,7 @@
 <template>
   <n-popover v-model:show="open" trigger="click" placement="top-start" :show-arrow="false">
     <template #trigger>
-      <button ref="trigger" class="thinking-trigger" type="button" aria-haspopup="dialog" :aria-expanded="open" :data-effort="current || 'off'" :disabled="!allowed.length" @keydown.esc="close">
+      <button ref="trigger" class="thinking-trigger" type="button" :aria-label="`思考强度：${label}`" aria-haspopup="dialog" :aria-expanded="open" :data-effort="current || 'off'" :disabled="!allowed.length" @keydown.esc="close">
         <span class="thinking-dial" aria-hidden="true"></span><span class="thinking-copy"><small>思考</small><span>{{ label }}</span></span><n-icon :component="ChevronDownIcon" :size="13" class="thinking-chevron"/>
       </button>
     </template>
