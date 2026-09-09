@@ -10,6 +10,7 @@ from app.agent.loop_presentation import (
     tool_display,
 )
 from app.llm.contracts import ModelConfig
+from app.llm.loop_contracts import ToolSpec
 from app.llm.resolver import AuthorizedProfileSnapshot, resolve_request
 
 
@@ -40,7 +41,34 @@ def test_request_meter_matches_actual_wire_estimator():
     summary = request_summary(request, context_window=64000, input_fingerprint="fingerprint", history_upto_seq=7)
     assert summary["context_meter"]["input_tokens"] == _prompt_tokens(request)
     assert summary["context_meter"]["reserved_output_tokens"] == request.max_tokens
+    assert sum(summary["context_meter"]["breakdown"].values()) == _prompt_tokens(request)
+    assert summary["context_meter"]["breakdown"]["system_prompt"] > 0
+    assert summary["context_meter"]["breakdown"]["conversation_messages"] > 0
     assert "api_key" not in str(summary)
+
+
+def test_request_meter_splits_native_and_mcp_tool_schemas():
+    """工具来源按本轮注册表快照区分，不能把 MCP schema 混入原生工具。"""
+    config = ModelConfig(protocol="openai_chat", base_url="https://api.deepseek.com", model="deepseek-chat", api_key="test")
+    request = resolve_request(
+        config,
+        messages=[{"role": "user", "content": "请执行"}],
+        tools=[
+            ToolSpec("read", "读取文件", {"type": "object", "properties": {}}),
+            ToolSpec("platform_task_create", "创建任务", {"type": "object", "properties": {}}),
+        ],
+    )
+    meter = request_summary(
+        request,
+        context_window=64000,
+        input_fingerprint="fingerprint",
+        history_upto_seq=7,
+        tool_transports={"read": "native", "platform_task_create": "mcp"},
+    )["context_meter"]
+    assert meter["breakdown"]["tools"] > 0
+    assert meter["breakdown"]["mcp"] > 0
+    assert meter["breakdown"]["skill"] == 0
+    assert meter["breakdown"]["memory_files"] == 0
 
 
 def test_reasoning_is_persistent_but_acl_trimmed_on_replay_and_snapshot():

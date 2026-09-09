@@ -300,6 +300,11 @@ async def _build_dependencies(service, entry, actor_id: str, data: dict, resourc
                                 runner=runner_callback, runner_instance_id=instance_id,
                                 interaction=question, business=business, mcp=mcp)
     specs = bridge.specs()
+    # 工具 schema 已转换为 wire 名；同一快照供上下文仪表区分原生工具与 MCP 扩展。
+    tool_transports = {
+        tool.name: tool.definition.transport
+        for tool in bridge.available_tools()
+    }
     scheduler = ToolScheduler(service._settings(), bridge.available_tools(), approval_broker=service._broker)
     segments = _loop_system_segments(overlay)
 
@@ -321,17 +326,12 @@ async def _build_dependencies(service, entry, actor_id: str, data: dict, resourc
     effort = profile.config.reasoning_effort if profile.config.reasoning_enabled else "off"
     initial, _ = _window_request(profile, segments, specs, messages, effort, context_window)
     return TurnDependencies(adapter=adapter, scheduler=scheduler, request=initial,
-                            request_factory=request_factory, context_window=context_window), resources
+                            request_factory=request_factory, context_window=context_window,
+                            tool_transports=tool_transports), resources
 
 
-def _prompt_tokens(request) -> int:
-    """用 SDK 同源消息转换估算输入成本，包含工具、图文与 opaque 回传块。
-
-    这是序列化成本估算，不声称等于供应商 tokenizer；图片编码也保守计入。
-    不能用 UI 消息数或省略 protocol_state 的正文长度代替实际请求窗口。
-    """
-    from app.harness.context.meter import estimate_tokens
-
+def _wire_payload(request) -> dict:
+    """构造与既有输入估算完全同源的无凭据请求投影。"""
     if request.protocol == "openai_chat":
         from app.llm.providers.common import replay_items
         from app.llm.providers.openai import to_openai_messages, to_openai_tools
@@ -339,20 +339,107 @@ def _prompt_tokens(request) -> int:
         for message in request.messages:
             if replay_items(message, request, request.provider, request.protocol):
                 raise LlmRequestError("Chat 历史不能回传 opaque item", code="protocol_state_incompatible")
-        payload = {
-            "messages": to_openai_messages(request.messages, request.system,
-                                          include_reasoning_content=request.provider == "deepseek"),
+        return {
+            "messages": to_openai_messages(
+                request.messages,
+                request.system,
+                include_reasoning_content=request.provider == "deepseek",
+            ),
             "tools": to_openai_tools(request.tools),
         }
-    elif request.protocol == "anthropic_messages":
+    if request.protocol == "anthropic_messages":
         from app.llm.providers.anthropic import to_anthropic_messages, to_anthropic_tools
 
-        payload = {"system": request.system, "messages": to_anthropic_messages(
-            request.messages, request=request, provider=request.provider),
-            "tools": to_anthropic_tools(request.tools)}
+        return {
+            "system": request.system,
+            "messages": to_anthropic_messages(
+                request.messages,
+                request=request,
+                provider=request.provider,
+            ),
+            "tools": to_anthropic_tools(request.tools),
+        }
+    raise AppError(ErrorCode.VALIDATION, "未支持的模型请求协议")
+
+
+def _prompt_tokens(request) -> int:
+    """用 SDK 同源消息转换估算输入成本，包含工具、图文与 opaque 回传块。"""
+    from app.harness.context.meter import estimate_tokens
+
+    return estimate_tokens(json.dumps(_wire_payload(request), ensure_ascii=False, allow_nan=False))
+
+
+def _prompt_breakdown(
+    request,
+    tool_transports: dict[str, str] | None = None,
+    input_tokens: int | None = None,
+) -> dict[str, int]:
+    """按实际序列化请求拆分输入来源；没有注入的 Skill/记忆文件必须保持为零。"""
+    from app.harness.context.meter import estimate_tokens
+
+    payload = _wire_payload(request)
+    categories = {
+        "system_prompt": 0,
+        "conversation_messages": 0,
+        "tools": 0,
+        "mcp": 0,
+        "skill": 0,
+        "memory_files": 0,
+    }
+
+    def tokens(value) -> int:
+        return estimate_tokens(json.dumps(value, ensure_ascii=False, allow_nan=False))
+
+    transports = tool_transports or {}
+    for spec, wire in zip(request.tools, payload.get("tools", []), strict=True):
+        category = "mcp" if transports.get(spec.name) == "mcp" else "tools"
+        categories[category] += tokens(wire)
+
+    if request.protocol == "openai_chat":
+        wire_messages = payload["messages"]
+        start = 1 if wire_messages and wire_messages[0].get("role") == "system" else 0
+        if start:
+            categories["system_prompt"] += tokens(wire_messages[0])
+        call_transports: dict[str, str] = {}
+        for message in request.messages:
+            if message.get("role") == "assistant":
+                for call in message.get("tool_calls") or []:
+                    if isinstance(call, dict):
+                        call_transports[str(call.get("id", ""))] = transports.get(
+                            str(call.get("name", "")), "native"
+                        )
+        projected = wire_messages[start:]
+        if len(projected) == len(request.messages):
+            for source, wire in zip(request.messages, projected, strict=True):
+                if source.get("role") == "tool":
+                    category = "mcp" if call_transports.get(
+                        str(source.get("tool_call_id", ""))
+                    ) == "mcp" else "tools"
+                    categories[category] += tokens(wire)
+                else:
+                    categories["conversation_messages"] += tokens(wire)
+        else:
+            categories["conversation_messages"] += tokens(projected)
     else:
-        raise AppError(ErrorCode.VALIDATION, "未支持的模型请求协议")
-    return estimate_tokens(json.dumps(payload, ensure_ascii=False, allow_nan=False))
+        # Anthropic 会把连续 ToolResult 合并进 user 块，不能从 wire 可靠拆回单项。
+        categories["system_prompt"] += tokens(payload.get("system", ""))
+        categories["conversation_messages"] += tokens(payload.get("messages", []))
+
+    total = _prompt_tokens(request) if input_tokens is None else input_tokens
+    delta = total - sum(categories.values())
+    if delta >= 0:
+        # JSON 外层字段、分隔符等无法归属具体业务来源，统一计入系统请求开销。
+        categories["system_prompt"] += delta
+    else:
+        # 独立估算的四舍五入可能略大于整体估算，逆序回收确保分项之和严格对齐。
+        remaining = -delta
+        for name in ("conversation_messages", "tools", "mcp", "system_prompt"):
+            deducted = min(categories[name], remaining)
+            categories[name] -= deducted
+            remaining -= deducted
+            if not remaining:
+                break
+    return categories
 
 
 def _window_request(profile, segments, specs, messages, effort, context_window):

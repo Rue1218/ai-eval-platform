@@ -98,6 +98,8 @@ class TurnDependencies:
     request_factory: RequestFactory | None = None
     # 平台配置的容量只用于真实请求展示，不改变核心循环窗口策略。
     context_window: int | None = None
+    # 工具 wire 名到执行通道的本轮快照，仅用于上下文用量展示，不参与模型路由。
+    tool_transports: dict[str, str] | None = None
 
 
 FinishReason = Literal["completed", "error", "max_tokens", "max_steps"]
@@ -330,6 +332,7 @@ async def build_agent(
                     request, context_window=current.context_window,
                     history_upto_seq=context.log.read()[-1]["seq"],
                     input_fingerprint=selection["input_fingerprint"],
+                    tool_transports=current.tool_transports,
                 ),
                 "fingerprint_algorithm": "dsh-json-v1",
             },
