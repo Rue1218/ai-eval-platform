@@ -764,11 +764,16 @@ watch(() => Object.values(loopStore.sessions).map(s => [s.sessionId, s.title]), 
   for (const value of Object.values(loopStore.sessions)) { const session = sessions.value.find(s => s.id === value.sessionId); if (session && value.title) session.title = value.title }
 })
 /** 创建时固化 v2 和工作区，后续只使用独立 transport。 */
-async function createLoopSession(workspaceId?: string): Promise<string> {
+async function createLoopSession(
+  workspaceId?: string, preparedTicket?: Promise<string>
+): Promise<string> {
   if (currentSessionId.value) return currentSessionId.value
   const targetWsId = workspaceId || draftWorkspaceId.value || undefined
   const session = await api.sessions.create('新会话', { workspaceId: targetWsId })
-  sessions.value.unshift(session); currentSessionId.value = session.id; clearDraftWorkspace()
+  sessions.value.unshift(session)
+  // 在切换 prop 触发子组件 watch 前先建立连接，确保首次连接实际复用并行领取的短票。
+  loopStore.open(session.id, preparedTicket)
+  currentSessionId.value = session.id; clearDraftWorkspace()
   return session.id
 }
 const deletableSessionCount = computed(() => filteredSessions.value.filter((session) => session.can_delete).length)
