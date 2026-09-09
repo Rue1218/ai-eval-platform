@@ -1,3 +1,49 @@
+# AgentLoop 轨迹业务记录检查器核对（2026-09-09，V0.11）
+
+## V0.11 轨迹字段与交互核对
+
+**Findings**
+
+- 浏览器功能核对未发现 P0/P1/P2 问题。筛选、三泳道、业务记录行、右侧标题、状态、动态页签、概览字段和关联链均已按参考实现的语义结构恢复。
+- 参考图显示等待中的 `shell` 授权；实现截图使用隔离夹具中的已允许 `read` 授权，因此状态和工具名属于测试数据差异。
+- 平台继续只展示 WS v2 已授权字段。系统提示词、请求头与协议内部状态不会为了视觉一致性被补到浏览器端。
+
+**Source visual truth**
+
+- `C:/Users/Toneya/AppData/Local/Temp/codex-clipboard-994b79e6-e289-4799-b236-9d3dbd0b1215.png`：整体布局、四类筛选、输入/模型/工具三泳道与生命周期详情。
+- `C:/Users/Toneya/AppData/Local/Temp/codex-clipboard-7440a20f-3ddc-4c2d-8db6-e8639c603474.png`：模型请求快照字段与动态页签。
+- `C:/Users/Toneya/AppData/Local/Temp/codex-clipboard-d7017140-d561-4591-a2f6-cdac3bebc16e.png`：助手消息用量、耗时和关联链。
+- `C:/Users/Toneya/AppData/Local/Temp/codex-clipboard-a57866e0-1702-4128-9d35-7012a0411c08.png`：授权记录的参数、结果、来源、计时与数据包页签。
+
+**Implementation evidence**
+
+- `artifacts/trace-inspector-after.png`：生产 `TraceWorkspace.vue` 在 1280×720 下挂载隔离内存事件的最终截图。
+- In-app Browser 无障碍树确认筛选只有“全部、生命周期、模型、工具、授权”；已允许授权的动态页签为“概览、参数、结果、来源、计时、数据包”。
+- 关联链只显示同一模型请求快照、同一工具调用和当前授权记录。
+
+**Open Questions**
+
+- 参考截图为 988×626 的源应用授权等待态，实现截图为 1280×720 的隔离组件授权完成态。两者已在同一次图像检查中比较结构和字段，但缺少同视口、同数据状态的源应用运行截图，因此不能把本轮标记为逐像素视觉验收通过。
+
+**Fidelity surfaces**
+
+- Fonts and typography：保留平台字体，复用参考页 11px 紧凑工具栏、行与详情字号层级。
+- Spacing and layout rhythm：44px 工具栏、50px 三泳道、30px 记录行、430px 桌面详情栏与参考 CSS 一致。
+- Colors and visual tokens：紫色选中态、蓝/绿/紫/橙轨迹颜色及浅紫详情提示与参考实现一致。
+- Image quality and asset fidelity：本页面没有位图素材；线段、徽标与状态均由 CSS 渲染。
+- Copy and content：事件枚举已转换为中文业务标题；动态页签和业务概览字段按记录类型变化。
+
+**Implementation Checklist**
+
+1. 已恢复参考页四类筛选与三泳道。
+2. 已拆分模型请求快照和助手消息提交。
+3. 已补齐工具、授权、模型请求和助手消息的动态详情字段。
+4. 已保留脱敏复制与授权数据边界。
+
+final result: blocked
+
+---
+
 # AgentLoop 原始样式核对（2026-09-09，V0.8）
 
 ## V0.8 居中双边悬停拖拽核对

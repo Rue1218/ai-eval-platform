@@ -70,19 +70,29 @@ test('模型开始帧迟于文本或思考增量到达时，不倒退显示状�
   }
 })
 
-test('轨迹每次模型请求合为一行，重试独立并保留最终正文和来源', () => {
+test('轨迹请求快照与助手提交分别成行，平台扩展归入参考页四类筛选', () => {
   assert.equal(category('approval.requested'), 'approval')
-  assert.equal(category('question.requested'), 'question')
+  assert.equal(category('question.requested'), 'approval')
   assert.equal(category('task_confirmation.requested'), 'approval')
+  assert.equal(category('task.progress'), 'tool')
   const f = fixture(), c = { attempt_id: 'a' }
   const facts = [f('assistant.start', {request_summary: {model: 'test'}}, c),
     f('assistant.message', {content: '完整回答'}, {...c, source_seq: 3}),
     f('assistant.end', {outcome: 'committed'}, c), f('assistant.start', {}, {attempt_id: 'b'})]
   const rows = semanticTraceRows(facts)
-  assert.equal(rows.length, 2)
-  assert.equal(rows[0].layers.length, 3)
-  assert.equal(rows[0].data.content, '完整回答')
+  assert.equal(rows.length, 3)
+  assert.equal(rows[0].layers.length, 1)
   assert.equal(rows[0].data.request_summary.model, 'test')
+  assert.equal(rows[1].layers.length, 2)
+  assert.equal(rows[1].data.content, '完整回答')
+  assert.equal(rows[1].correlation.source_seq, 3)
+  const approvalRows = semanticTraceRows([
+    f('approval.requested', {interaction_id: 'approval-1', name: 'shell'}, c),
+    f('approval.resolved', {interaction_id: 'approval-1', decision: 'allow'}, c),
+  ])
+  assert.equal(approvalRows.length, 1)
+  assert.equal(approvalRows[0].type, 'approval.requested')
+  assert.equal(approvalRows[0].data.decision, 'allow')
   const trace = createTrace(); trace.denied = true
   applyTrace(trace, f('trace.event', {event: {seq: 0}}, {}, 'control'))
   applyTrace(trace, f('schema.catalog', {secret: 'old'}, {}, 'control'))

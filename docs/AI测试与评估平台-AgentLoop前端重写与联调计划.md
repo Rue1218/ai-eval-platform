@@ -1,6 +1,6 @@
 # AI 测试与评估平台 — AgentLoop 前端重写与联调计划
 
-> 版本：V0.10 ｜ 审查日期：2026-09-09 ｜ 状态：按参考页原始 CSS 修正思考卡片与轨迹样式；补齐输入焦点去框、居中双边共享壳层调宽、HTTP WebSocket 请求标识兼容，并将协议档收敛为两类协议；服务器联调及完整切换验收进行中。
+> 版本：V0.11 ｜ 审查日期：2026-09-09 ｜ 状态：轨迹页已补齐参考实现的四类筛选、请求/回复语义拆分与按记录类型变化的详情字段；HTTP WebSocket 请求标识兼容及两类协议收敛保持不变；服务器联调及完整切换验收进行中。
 >
 > 基线：`deepseek-harness-py/static/index.html` 当前页面 + `ai-eval-platform/frontend/src/views/Agent.vue` 当前实现 + 已落地后端 WS v2。后端设计见 [架构设计](AI测试与评估平台-AgentLoop后端架构设计.md)，已验证范围见 [实施记录](AI测试与评估平台-AgentLoop后端实施记录.md)。
 >
@@ -613,3 +613,24 @@ AgentLoop 与协议档管理只保留 `openai_chat` 和 `anthropic_messages`。�
 | `backend/api/app/{adapters,schemas,seed}.py`、`llm/` | 删除 Responses HTTP/SDK 适配与协议校验分支。 |
 | `backend/worker/app/{protocol,stress}.py` | 删除评测与压测的 Responses 请求形状。 |
 | `backend/api/migrations/versions/01b89a06eb4b_删除_responses_协议.py` | 清除协议档、环境凭据、默认引用并收紧数据库约束。 |
+
+## 20. V0.11 轨迹业务记录检查器修复（2026-09-09）
+
+对照 `deepseek-harness-py/static/index.html` 与实际 WS v2 事件后确认，原轨迹页只复用了参考页的布局和颜色，业务语义仍是平台简化版本：筛选栏多出“问答/任务”，`assistant.start/message/end` 被合并为同一行，详情页签固定展示，记录标题、状态、关联链和概览字段也没有按事件类型变化。后端已有请求安全摘要、工具 Schema、模型用量、耗时及授权结果，本轮不新增接口，也不把未公开的系统提示词、请求头或协议内部状态送入浏览器。
+
+- 筛选项统一为“全部、生命周期、模型、工具、授权”；问答与任务确认归入授权，任务与执行事件归入工具。
+- `assistant.start` 独立投影为“模型请求快照”，`assistant.message/end` 聚合为“助手消息已提交”，避免请求配置与模型输出互相覆盖。
+- 详情检查器按生命周期、用户消息、模型请求、助手消息、工具和授权记录动态提供概览、预览、原始内容、参数、结果、Schema、来源、计时和数据包页签。
+- Token、耗时、工具参数与来源只展示事件实际提供的授权字段；缺失时给出原因，不估算或伪造数据。
+- 关联链只保留同一次模型请求及同一工具调用的直接业务关系，减少同轮无关事件干扰。
+
+### 20.1 本次修改代码文件与作用清单
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `frontend/src/agent/loop/trace.ts` | 将事件投影为参考页四类筛选，并拆分模型请求快照与助手提交记录。 |
+| `frontend/src/components/agent/loop/TraceWorkspace.vue` | 补齐三泳道、业务标题、动态详情页签、状态、字段、来源与关联链。 |
+| `frontend/tests/agentLoop.test.mjs` | 覆盖四类映射、模型请求/回复拆分及来源保留。 |
+| `frontend/tests/e2e/agentLoop.spec.ts` | 更新轨迹筛选、记录数量和动态详情字段的浏览器断言。 |
+| `frontend/tests/agent-loop-style-preview.html` | 增加请求摘要、用量、耗时、工具 Schema 和授权状态的隔离预览数据。 |
+| 本文件、`design-qa.md` | 登记问题定位、修复范围与浏览器视觉复核证据。 |

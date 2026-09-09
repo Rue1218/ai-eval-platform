@@ -22,12 +22,14 @@
   const state=createLoopState('style-preview'), trace=createTrace()
   const identity={turn:1,turn_id:'style-preview:1',step:1,attempt_id:'attempt-1'}
   const facts=[['user.message',{content:'读取 README.md 并总结项目结构'}],['turn.start',{}],
-    ['assistant.start',{request_summary:{model:'deepseek-chat',reasoning_effort:'high'}}],
-    ['assistant.message',{content:'我会先查看项目说明文件。'}],['assistant.end',{outcome:'committed'}],
+    ['assistant.start',{request_summary:{provider:'deepseek',model:'deepseek-chat',reasoning_effort:'high',max_tokens:8192,tools:[{name:'read',parameters_schema:{type:'object',properties:{path:{type:'string'}}}}]}}],
+    ['assistant.message',{content:'我会先查看项目说明文件。',usage:{prompt_tokens:1500,completion_tokens:120,total_tokens:1620},latency_ms:840}],['assistant.end',{outcome:'committed'}],
     ['tool.call',{name:'read',display:{target:'README.md',arguments_preview:'{"path":"README.md"}'}}],
+    ['approval.requested',{name:'read',interaction_id:'approval-1'}],
+    ['approval.resolved',{decision:'allow',interaction_id:'approval-1'}],
     ['tool.result',{name:'read',status:'succeeded',display:{result_preview:'项目包含 API、Worker 与 Vue 前端。'}}],
     ['turn.end',{reason:'completed'}]]
-  facts.forEach(([type,data],index)=>applyFrame(state,{protocol_version:2,type,durability:'persistent',session_id:state.sessionId,cursor:index+1,ts:'2026-09-09T08:00:00Z',correlation:{...identity,...(type.startsWith('tool.')?{call_id:'read-1'}:{})},data}))
+  facts.forEach(([type,data],index)=>applyFrame(state,{protocol_version:2,type,durability:'persistent',session_id:state.sessionId,cursor:index+1,ts:'2026-09-09T08:00:00Z',correlation:{...identity,...(/^(tool|approval)\./.test(type)?{call_id:'read-1'}:{})},data}))
   createApp({setup(){const effort=ref('max');return()=>h('main',{id:'preview'},[
     h('header',{class:'preview-bar'},[h('div',[h('strong','AgentLoop 组件样式核对'),h('br'),h('small','隔离演示数据 · 无模型调用')]),h(ThinkingControl,{modelValue:effort.value,allowed:['off','low','medium','high','max'],model:'DeepSeek','onUpdate:modelValue':value=>effort.value=value})]),
     h('section',{class:'preview-trace'},[h(TraceWorkspace,{state,trace})])])}}).mount('#app')
