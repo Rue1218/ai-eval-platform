@@ -1,20 +1,18 @@
-"""工作区目录服务（admin 与用户域共用，单一事实源——设计文档 A V0.4.1）。
+"""工作区目录服务（用户域单一事实源——设计文档 A V0.4.1）。
 
-从 ``routers/workspaces.py``（admin）抽取的目录扫描/统计与路径安全逻辑
-收敛于此，避免用户域路由复制出第二份 ``os.walk`` 语义：
+目录扫描/统计与路径安全逻辑收敛于此，避免路由复制第二份 ``os.walk`` 语义：
 
-- ``folder_summary``：目录摘要（文件数/总字节/最近活动），admin 与用户域共用；
-- 路径安全（防穿越/符号链接逃逸，api 双侧校验纪律）：
+- ``folder_summary``：目录摘要（文件数/总字节/最近活动），用户域使用；
+- 路径安全（防穿越/符号链接逃逸，api 侧校验纪律）：
   - ``validate_segment``：单段目录名校验（拒 ``.``/``..``/分隔符）；
   - ``resolve_scope_dir``：在工作区根内解析相对 scope 的绝对目录
     （逐段 realpath 前缀重验，允许尚不存在的新建段）；
 - ``list_dir_level``：一层目录列表（目录/文件混合，不递归、不跟随链接）；
-- ``create_child_dir``：在已校验父目录下创建单段子目录（父须存在）；
-- ``orphan_direct_children``：孤儿目录判定输入（目录名 ∉ 受保护集合）。
+- ``create_child_dir``：在已校验父目录下创建单段子目录（父须存在）。
 
 目录拓扑（与 legacy 会话目录**同根共存**）：``data/workspaces/<uuid>`` 为
 工作区目录（id 即目录名），``data/workspaces/<session_id>`` 为未绑定会话的
-legacy 临时工作区；孤儿守卫按行态区分（仅活跃 ``workspaces.id`` 受保护）。
+legacy 临时工作区。
 """
 
 from __future__ import annotations
@@ -259,23 +257,3 @@ def resolve_session_sandbox(
         raise AppError(ErrorCode.VALIDATION, "绑定工作区目录不可用")
     return target
 
-
-def orphan_direct_children(root: str, protected_ids: set[str]) -> list[str]:
-    """孤儿目录候选（根下直接子目录名 ∉ 受保护 id 集合）。
-
-    ``protected_ids`` 由路由侧组装：全会话 id ∪ **活跃** ``workspaces.id``
-    （行态区分——软删工作区目录入清理面，见设计稿 §7.3 V0.4.1）。
-    """
-    if not os.path.isdir(root):
-        return []
-    orphans: list[str] = []
-    try:
-        for name in sorted(os.listdir(root)):
-            if name in protected_ids:
-                continue
-            directory = os.path.join(root, name)
-            if os.path.isdir(directory) and not os.path.islink(directory):
-                orphans.append(name)
-    except OSError:
-        return []
-    return orphans

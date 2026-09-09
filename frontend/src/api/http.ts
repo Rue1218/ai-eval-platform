@@ -41,8 +41,6 @@ import {
   type SessionVisibility,
   type AgentPrefs,
   type StressSeriesResponse,
-  type WorkspaceOverview,
-  type WorkspaceFileList,
   type UserWorkspace,
   type UserWorkspaceList,
   type UserWorkspaceFileList,
@@ -1211,33 +1209,9 @@ export const api = {
       const { data } = await http.post('/api/admin/rag-models/check', payload)
       return data
     },
-    // 管理端 · 工作区（会话 → 沙箱文件夹）
-    async listWorkspaces(
-      params?: { offset?: number; limit?: number; keyword?: string; folder?: string; deleted?: string },
-    ): Promise<WorkspaceOverview> {
-      const { data } = await http.get('/api/admin/workspaces', { params })
-      return data
-    },
-    // 全部工作区磁盘总字节（遍历代价高，前端列表渲染后异步加载 KPI）
-    async workspaceStats(): Promise<{ total_bytes: number }> {
-      const { data } = await http.get('/api/admin/workspaces/stats')
-      return data
-    },
-    async listWorkspaceFiles(sessionId: string): Promise<WorkspaceFileList> {
-      const { data } = await http.get(`/api/admin/workspaces/${sessionId}/files`)
-      return data
-    },
-    async deleteWorkspace(sessionId: string): Promise<{ ok: boolean; path: string }> {
-      const { data } = await http.delete(`/api/admin/workspaces/${sessionId}`)
-      return data
-    },
-    async deleteOrphan(folderName: string): Promise<{ ok: boolean; path: string }> {
-      const { data } = await http.delete(`/api/admin/workspaces/orphans/${folderName}`)
-      return data
-    },
   },
 
-  // 用户域 · 工作区（F1/G1：用户自管数据域；管理端清理见 api.admin.*）
+  // 用户域 · 工作区（F1/G1：用户自管数据域）
   workspaces: {
     async list(params?: { include_deleted?: boolean }): Promise<UserWorkspaceList> {
       const { data } = await http.get('/api/workspaces', { params })

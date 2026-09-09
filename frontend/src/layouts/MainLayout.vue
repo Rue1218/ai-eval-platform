@@ -312,7 +312,7 @@ const evalRoutes = computed(() => {
     { path: '/reports', label: '评测报告', icon: IconReports, t: 'var(--t-reports)', c: 'var(--c-reports)' },
     modeAsset,
     { path: '/cases', label: '用例', icon: IconCases, t: 'var(--t-cases)', c: 'var(--c-cases)' },
-    // F1（G1）：我的工作区（用户自管数据域）；管理端清理视图保留于 /admin/workspaces
+    // F1（G1）：我的工作区（用户自管数据域；管理端清理视图已于 V1.79 下线）
     { path: '/workspaces', label: '我的工作区', icon: IconWorkspaces, t: 'var(--t-workspaces)', c: 'var(--c-workspaces)' },
   ]
 })
@@ -321,7 +321,6 @@ const adminRoutes = [
   { path: '/admin/profiles', label: '协议档', icon: IconProfiles, t: 'var(--t-profiles)', c: 'var(--c-profiles)' },
   { path: '/admin/stress', label: '压测治理', icon: IconStress, t: 'var(--t-stress)', c: 'var(--c-stress)' },
   { path: '/admin/users', label: '账号', icon: IconUsers, t: 'var(--t-users)', c: 'var(--c-users)' },
-  { path: '/admin/workspaces', label: '工作区', icon: IconWorkspaces, t: 'var(--t-workspaces)', c: 'var(--c-workspaces)' },
 ]
 
 /** 当前路由激活状态匹配判定 */

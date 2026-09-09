@@ -3,8 +3,7 @@
 覆盖设计稿 A V0.4.1 §4 的守卫面：
 - 目录名/相对路径段级校验（``.``/``..``/分隔符/超长）；
 - 逐段 realpath 前缀重验与符号链接逃逸拒绝（resolve→browse 窗口静态面）；
-- 孤儿候选按受保护集合过滤（行态区分由路由侧组装，service 侧纯输入）；
-- 路由层未登录 401（与 admin 工作区测试同构）。
+- 路由层未登录 401（管理端工作区已下线，仅保留用户域同构用例）。
 """
 
 import os
@@ -15,7 +14,6 @@ from fastapi.testclient import TestClient
 from app import workspace_service
 from app.main import app
 from app.routers import user_workspaces
-from app.routers.workspaces import _match_session  # noqa: F401  确保 admin 模块导入链
 
 
 class TestValidateSegment:
@@ -135,21 +133,6 @@ class TestCreateChildDir:
     def test_rejects_bad_name(self, tmp_path) -> None:
         with pytest.raises(Exception):
             workspace_service.create_child_dir(str(tmp_path), "../x")
-
-
-class TestOrphanChildren:
-    """孤儿候选过滤：受保护 id（会话 ∪ 活跃工作区）不进候选。"""
-
-    def test_filters_protected_and_non_dirs(self, tmp_path) -> None:
-        root = str(tmp_path)
-        protected = {"834a68f1-a4fd-4261-8677-6f51830c895d"}
-        os.makedirs(os.path.join(root, "834a68f1-a4fd-4261-8677-6f51830c895d"))
-        os.makedirs(os.path.join(root, "leftover"))
-        (tmp_path / "note.txt").write_text("x", encoding="utf-8")
-        assert workspace_service.orphan_direct_children(root, protected) == ["leftover"]
-
-    def test_empty_root(self, tmp_path) -> None:
-        assert workspace_service.orphan_direct_children(str(tmp_path), set()) == []
 
 
 class TestUserRouterAuth:
