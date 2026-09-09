@@ -48,14 +48,14 @@ jobs:
 
       - name: Migrate isolated AgentLoop test database
         env:
-          DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/agentloop_ci
+          DATABASE_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/agentloop_ci
           # Alembic 不经过 pytest conftest，显式加入 backend 以导入共享模型。
           PYTHONPATH: .:..
         run: alembic upgrade head
 
       - name: Test (pytest)
         env:
-          LOOP_TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/agentloop_ci
+          LOOP_TEST_DATABASE_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/agentloop_ci
         run: pytest
 
   worker:
