@@ -1,6 +1,6 @@
 # AI 测试与评估平台 — AgentLoop 前端重写与联调计划
 
-> 版本：V0.3 ｜ 审查日期：2026-09-09 ｜ 状态：AgentLoop 单入口、逐回合协议档选择与输入栏重写完成；服务器联调及完整切换验收进行中。
+> 版本：V0.5 ｜ 审查日期：2026-09-09 ｜ 状态：按参考页原始 CSS 修正思考卡片与轨迹样式；服务器联调及完整切换验收进行中。
 >
 > 基线：`deepseek-harness-py/static/index.html` 当前页面 + `ai-eval-platform/frontend/src/views/Agent.vue` 当前实现 + 已落地后端 WS v2。后端设计见 [架构设计](AI测试与评估平台-AgentLoop后端架构设计.md)，已验证范围见 [实施记录](AI测试与评估平台-AgentLoop后端实施记录.md)。
 >
@@ -490,3 +490,66 @@ V0.1 计划稿未修改代码；当时仅新增以下文档与资产，V0.2 实�
 - 后端：ruff check . ../shared 通过；API pytest 使用工作区 basetemp 为 1247 passed / 72 skipped；Worker 为 50 passed。
 - 迁移：alembic heads 指向 8f9a2c4d6e01；离线 SQL 校验只生成 sessions.engine_version 的默认值调整，不改写历史 legacy 行。
 - 视觉：参考图一和 DeepSeek Harness 的浅色思考控制已在 876 × 720 CSS px 的 In-app Browser 中核对；详细结果见根目录 design-qa.md。
+
+## 13. V0.4 LLM/WS 排查与参考页补齐（2026-09-09）
+
+对照用户提供的 `deepseek-harness-py/static/index.html`，保留平台薄荷绿令牌和权限契约，补齐分类按钮、会话/模型/工具三条泳道、紧凑语义行、右侧详情及移动端覆盖详情。模型每个 attempt 合并为一行，工具仍按完整身份合并；所有传输层和源 seq 保留可查。横轴明确表示事件顺序，未伪造 TTFT 或真实耗时。拖选支持空白区域、指针捕获、键盘扩选与 Escape 清除。
+
+思考控制本来已接入 `turn.submit.reasoning_effort`，本次修正 Naive UI 外层弹层与源卡片叠加、滑块刻度间距和覆盖层次；保留动态可用档位、滚轮/键盘操作、渐变和最高档动效。能力失效时关闭弹层。档位只作用于下一轮，实际请求继续以持久 request_summary 为准。
+
+### 13.1 已修复的问题
+
+- `approval.requested`、`question.requested` 与 `task_confirmation.requested` 被宽泛的 `request` 正则错误分类为模型事件，改为按事件命名空间判断。
+- 模型文本/思考增量先于持久 assistant.start 到达时，前端状态会倒退到“模型处理中”；现在保留已观测的回答/思考状态。
+- 切换会话、关闭轨迹或卸载视图未可靠停止原诊断订阅；现在按视图生命周期清理，保持活动控制连接。退订后丢弃在途轨迹和目录帧；清理权限时同时重置源 seq，后续授权恢复可完整重放。
+- 轨迹订阅被拒绝后，在语义流同步完成时会自动再次订阅；现在停止该订阅意图。
+- 审批/问答/任务确认的持久终态已到达，但命令回执迟到或丢失时，草稿仍显示“提交结果待同步”；现在按 interaction_id 和完整执行身份确认结算。
+
+### 13.2 验证范围与限制
+
+- LLM 适配器、真实 SDK 配合本地 HTTP 替身、WS v2 协议/处理与 Loop 服务装配：172 passed。使用当前本机 Python 3.14 和项目内 pytest basetemp；未据此替代项目 Python 3.12 的完整 CI。
+- 前端 reducer/transport：14 passed；浏览器协议夹具：6 passed，覆盖建会话、模型切换、工具审批、轨迹分类/拖选/详情/退订及 375/768/1440 三种宽度的滑块点击、滚轮、键盘和提交档位。最终类型检查和生产构建均通过，构建仅有既有 vendor chunk 体积提示。
+- 本轮未连接真实供应商或运行实际 PostgreSQL/Runner 服务，未部署生产；上述浏览器结果属于协议夹具联调，不代表生产模型调用与数据库端到端验收。
+- 截图保存在 `frontend/test-results/agentloop-trace.png` 和 `agentloop-slider-{375,768,1440}.png`，均使用协议夹具，不包含真实会话内容。
+- 稳定复核副本：`artifacts/agentloop-trace-review.png`、`artifacts/agentloop-slider-review.png`。
+
+### 13.3 本次修改代码文件与作用清单
+
+| 文件 | 作用 |
+| :--- | :--- |
+| frontend/src/components/agent/loop/TraceWorkspace.vue | 分类栏、三泳道、紧凑行、详情、选区与响应式布局 |
+| frontend/src/components/agent/loop/ThinkingControl.vue | 原始弹层、刻度位置与层次、能力失效处理 |
+| frontend/src/components/agent/loop/AgentWorkspace.vue | 诊断订阅生命周期与授权清理 |
+| frontend/src/agent/loop/trace.ts | 精确分类、模型请求合并、拒绝迟到授权数据 |
+| frontend/src/agent/loop/reducer.ts | 开始事件迟到时保留已观测流式状态 |
+| frontend/src/agent/loop/store.ts | 持久交互终态确认冻结请求已处理 |
+| frontend/src/api/agentLoopWs.ts | 退订后过滤在途帧、订阅被拒后停止自动恢复 |
+| frontend/tests/agentLoop.test.mjs、agentLoopWs.test.mjs、e2e/agentLoop.spec.ts | 事件乱序、分类、合并、退订、交互终态和滑块回归 |
+
+## 14. V0.5 原始样式复刻纠正（2026-09-09）
+
+用户复核指出 V0.4 的卡片与轨迹仍未复刻到位。本轮直接采用参考 HTML 中对应 CSS，替换自行重画的绿色状态、额外说明行和不同尺寸；保留会话权限、数据来源和动态档位契约。
+
+- 思考卡片：272px 宽，16px 圆角，14/14/13px 内边距，216px 轨道；恢复两组共 22 个流动粒子及原始刻度层次。Naive UI raw 弹层仍带默认方形阴影，显式清除该阴影；range 不再继承平台全局焦点方框。移除参考页不存在的底部说明行。
+- 轨迹：原页紫色选中态、44px 工具栏、50px 三泳道、30px 记录行、56px 序号列、360–430px 桌面详情栏；采用原始键值表、预览卡片、关联标签与 JSON 容器样式。对话/轨迹 Tab 改为原页下划线。窄屏详情放在列表下方，沿用源响应式结构。
+- 仅保留必要平台差异：输入栏已有独立布局，不重复添加原页 102px 悬浮输入栏占位；平台额外事件分类、授权提示、分页和关闭详情继续保留。
+
+### 14.1 核对证据
+
+In-app Browser 在 1440×900 下读取计算样式：卡片 272×121.5px、外层 shadow=none、粒子数 22；轨迹详情 430px、记录行 30px、首列 56px、工具栏 44px；选中分类色 `rgb(69,70,170)`、背景 `rgb(240,241,255)` 与源 CSS 相同。375×812 下 document scrollWidth=375，详情和滑块交互可操作。
+
+本轮前端单元回归 14 passed，最终 typecheck 和 build 通过；构建仅保留既有 vendor chunk 体积提示。核对页浏览器控制台未记录 error。
+
+独立样式核对页为 `/tests/agent-loop-style-preview.html`，挂载真实生产组件与静态内存事实，不连接模型、数据库或 WebSocket，不加入产品路由和生产构建入口。截图保存在 `artifacts/agentloop-{trace,effort}-reference-styles.png`、`artifacts/agentloop-reference-styles-mobile.png`。
+
+浏览器策略禁止打开参考 HTML 的 `file://` URL，本轮未绕过限制。原始 CSS 可通过文件工具读取，但没有原页面截图，故只报告计算样式及实现交互核对，不将其等同于源截图逐像素比对通过。相关范围和限制登记在根目录 design-qa.md。
+
+### 14.2 本次修改代码文件与作用清单
+
+| 文件 | 作用 |
+| :--- | :--- |
+| frontend/src/components/agent/loop/ThinkingControl.vue | 原始卡片/滑块 CSS、粒子、移除外层阴影与额外说明 |
+| frontend/src/components/agent/loop/TraceWorkspace.vue | 原始轨迹 CSS、详情结构、窄屏布局与安全 JSON 外观 |
+| frontend/src/components/agent/loop/AgentWorkspace.vue | 源对话/轨迹下划线 Tab 与计数徽标 |
+| frontend/tests/agent-loop-style-preview.html | 无外部副作用的真实组件核对入口 |
+| design-qa.md、本文件 | 本轮视觉核对证据与边界 |

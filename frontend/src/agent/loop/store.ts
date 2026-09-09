@@ -33,9 +33,14 @@ export function createLoopStore(onRevoke: (id: string) => void) {
           delete drafts[id].cancelRequestId
         }
         const pending = drafts[id]?.pending
-        if (pending && (frame.request_id === pending.request_id || frame.type === 'user.message' && frame.data.client_message_id === pending.data.client_message_id)) {
+        // 持久交互终态同样证明请求已处理；回执迟到/丢失时不继续显示“结果待同步”。
+        const settledInteraction = pending?.type.endsWith('.respond')
+          && frame.type === pending.type.replace('.respond', '.resolved')
+          && frame.data.interaction_id === pending.data.interaction_id
+          && (['turn_id', 'attempt_id', 'call_id'] as const).every(key => frame.correlation[key] === pending.data[key])
+        if (pending && (settledInteraction || frame.request_id === pending.request_id || frame.type === 'user.message' && frame.data.client_message_id === pending.data.client_message_id)) {
           const d = drafts[id]
-          if (frame.type === 'command.accepted' || frame.type === 'user.message') {
+          if (settledInteraction || frame.type === 'command.accepted' || frame.type === 'user.message') {
             // 受理后仅清除原冻结内容，用户在运行中编辑的下一轮草稿保留。
             if (pending.type === 'turn.submit') {
               if (d.content === pending.data.content) d.content = ''
@@ -43,7 +48,7 @@ export function createLoopStore(onRevoke: (id: string) => void) {
               d.files = d.files.filter(file => !file.removed)
               if (frame.type === 'command.accepted' && sessions[id].activeTurn !== null) sessions[id].controlled = true
             }
-            delete d.pending; d.submitting = false
+            delete d.pending; delete d.pendingInteraction; d.submitting = false
           } else if (frame.type === 'command.rejected') {
             sessions[id].error = frame.data.message || '命令未接受'
             if (d.pendingInteraction) { const interaction = sessions[id].interactions[d.pendingInteraction]; if (interaction) interaction.submitting = false }

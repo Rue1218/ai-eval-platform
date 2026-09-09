@@ -17,6 +17,7 @@ export class AgentLoopWebSocket {
   private seenAt = 0
   private traceEnabled = false
   private traceSeq = -1
+  private traceRequestId: string | null = null
   constructor(private sessionId: string, private options: LoopTransportOptions) {}
   /** 幂等请求由调用者保存；重连不会自动换 ID 或提交草稿。 */
   send(command: LoopCommand): boolean {
@@ -35,7 +36,9 @@ export class AgentLoopWebSocket {
   }
   trace(enabled: boolean, afterSeq = -1): void {
     this.traceEnabled = enabled; this.traceSeq = afterSeq
-    this.send(this.command(enabled ? 'trace.subscribe' : 'trace.unsubscribe', enabled ? { after_seq: afterSeq } : {}))
+    const command = this.command(enabled ? 'trace.subscribe' : 'trace.unsubscribe', enabled ? { after_seq: afterSeq } : {})
+    this.traceRequestId = enabled ? command.request_id : null
+    this.send(command)
   }
   async connect(): Promise<void> {
     const epoch = ++this.epoch
@@ -56,6 +59,12 @@ export class AgentLoopWebSocket {
           const frame = JSON.parse(event.data) as LoopFrame
           if (frame.protocol_version !== 2) throw new Error('不支持的 Agent 协议版本')
           if (frame.type === 'hello') return
+          // 退订后丢弃在途诊断帧，不能重新填入已清理的授权记录。
+          if (['trace.event', 'schema.catalog'].includes(frame.type) && !this.traceEnabled) return
+          if (frame.type === 'command.rejected' && frame.request_id === this.traceRequestId) {
+            this.traceEnabled = false
+            this.traceRequestId = null
+          }
           if (frame.type === 'capabilities') {
             if (frame.data.stream_schema_version !== 'agent-loop-stream.v2.1') throw new Error('不支持的事件 Schema 版本')
             this.resync(); return
