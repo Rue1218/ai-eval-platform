@@ -434,10 +434,10 @@ V0.1 计划稿未修改代码；当时仅新增以下文档与资产，V0.2 实�
 
 ### 11.3 测试结果及发布限制
 
-- Windows 本地 API 全量：1235 passed / 68 skipped；Worker：50 passed。
+- Windows 本地 API 全量：同步主干后 1248 passed / 68 skipped；Worker：50 passed。
 - 前端 Node reducer/transport：10 passed；vue-tsc 与 Vite 生产构建通过；构建仍有既有大型 vendor chunk 提示。
 - Chrome 浏览器契约用例：工具交互/跨会话连接 1 项 + 375/768/1440px 各 1 项通过；是协议夹具测试，不代表真实供应商或 Linux Runner 验收。
-- CI 增加独立 pgvector/PG16 数据库、Alembic 迁移、真实 PG 集成测试、Node 单测和 Chromium 浏览器回归。
+- CI 增加独立 pgvector/PG16 数据库、Alembic 迁移、真实 PG 集成测试、Node 单测和 Chromium 浏览器回归。首轮发现 Alembic 缺少共享模型搜索路径，已显式补齐 PYTHONPATH。
 - F4 的 legacy 三类历史/未完成卡仍使用独立 legacy 页面和命令；旧卡未删除，避免破坏未完成交互。F7 清理和默认 v2 切换尚未进行。
 - F6/V01–V24 **未全部验收**。真实供应商、Linux Runner、权限撤回、取消/隔离、报告与任务确认仍需服务器证据。当前仅允许试验部署，不宣布源前端全部迁移完成。
 
