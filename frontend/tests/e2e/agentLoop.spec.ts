@@ -68,7 +68,7 @@ async function setup(page: Page, holdNewReplay = false) {
   await page.locator('.session-title-text').filter({hasText:'联调会话'}).click()
   await expect(page.getByRole('textbox',{name:'消息'})).toBeVisible()
   await expect(page.locator('.loop-status')).toContainText('就绪')
-  return {commands,sessionCreates,get submits(){return submit},release:()=>releaseUpload?.(),replay:()=>releaseReplay?.(),sockets}
+  return {commands,sessionCreates,get submits(){return submit},get uploading(){return !!releaseUpload},release:()=>releaseUpload?.(),replay:()=>releaseReplay?.(),sockets}
 }
 
 test('新建会话固定采用 AgentLoop transport',async({page})=>{
@@ -86,9 +86,11 @@ test('HTTP 缺少 randomUUID 时新建会话、附件、发送和工具结果回
   await page.addInitScript(() => Object.defineProperty(Crypto.prototype, 'randomUUID', {value:undefined, configurable:true}))
   const ctx = await setup(page)
   await page.getByRole('button', {name:/新建会话/}).click()
+  await expect(page.getByRole('button', {name:'添加附件'})).toBeEnabled()
   await page.locator('.loop-composer input[type=file]').setInputFiles({name:'draft.txt', mimeType:'text/plain', buffer:Buffer.from('hello')})
   await expect(page.locator('.draft-files')).toContainText('draft.txt')
-  await expect.poll(() => { ctx.release(); return page.getByText('上传中', {exact:false}).count() }).toBe(0)
+  await expect.poll(() => ctx.uploading).toBe(true)
+  ctx.release()
   await page.getByRole('textbox', {name:'消息'}).fill('验证 HTTP 全链路')
   await page.getByRole('button', {name:'发送', exact:true}).click()
   await expect.poll(() => ctx.submits).toBe(1)

@@ -68,6 +68,7 @@ export default defineConfig(({ mode }) => {
       },
       '/ws': {
         target: apiTarget.replace(/^http/, 'ws'),
+        changeOrigin: true,
         ws: true,
       },
     },

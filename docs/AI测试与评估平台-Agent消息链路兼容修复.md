@@ -11,7 +11,7 @@
 | 默认模型 | 线上 `agent-ui.profile=null`，但 `profiles` 中 DeepSeek、Qwen、StepFun 均可在 off 模式使用。全局思考偏好令默认档解析失败。 | 仅省略档位时回退到受支持的 off；显式不支持档位仍拒绝。 |
 | Anthropic 兼容流 | 独立 WS 会话收到 15 个 reasoning delta 后，以 `provider_protocol` 结束，未收到正文。适配器把兼容流空签名判为非法；阿里云官方规范明确允许空签名。 | DeepSeek/Qwen 按已授权模型允许空签名，原样持久化并回填；Claude 与跨模型检查保留。 |
 | 思考关闭 | 兼容协议的 off 原先不发送 thinking 参数，供应商仍可能按默认设置返回思考。 | 对 DeepSeek/Qwen 实际发送 `thinking: {type: disabled}`。 |
-| 本地代理 | `localhost:8000` 是 Python `BaseHTTP/0.6` 静态服务器，登录 501、health 404；Vite 原来把 API/WS 都代理到它。 | `API_PROXY_TARGET` 统一配置 REST/WS；本工作区 `.env.local` 接入用户指定服务器，health 已返回 200。此文件不提交。 |
+| 本地代理 | `localhost:8000` 是 Python `BaseHTTP/0.6` 静态服务器，登录 501、health 404；Vite 原来把 API/WS 都代理到它。仅改目标但不改 WS Host 时远端仍返回 404。 | `API_PROXY_TARGET` 统一配置 REST/WS，两者均转换 Host；本工作区 `.env.local` 接入用户指定服务器，health 返回 200，WS 收到 hello v2。此文件不提交。 |
 
 线上失败记录位于独立测试会话 `400479be-25c4-4bcb-a068-5ba49fe6eadf`。只发送测试文本，未执行工作区修改或评测入队。现有线上代码仍可复现失败，不能把本地夹具通过当作线上已修复。
 
@@ -45,7 +45,10 @@
 - 浏览器 8 项通过，包含无 randomUUID 的创建/附件/消息/工具回执、首次订阅超时、原 ID 重试、移动端与 IME。
 - 真实 Anthropic SDK、本地 HTTP 替身、真实七节点 Runtime：DeepSeek/Qwen 两组均完成工具回填、最终回复和第二轮历史回放。工具调度结果为受控夹具，不代表真实供应商或 Linux Runner 验收。
 - API 全量：1249 passed、69 skipped；跳过项包含未配置隔离 PostgreSQL 的条件集成测试，不计作通过。
+- CI 后端（隔离 PostgreSQL、Python 3.12）：1299 passed、19 skipped，包含本地跳过的数据库集成场景。
 - Worker 全量：50 passed；Ruff、前端 typecheck/build 通过。构建只有既有大 chunk 提示。
+- 首次 CI 的 HTTP 附件用例发现新建会话能力加载竞态；附件入口现等待能力就绪，拖入时尚未就绪会明确提示重试，测试也等待真实配置完成再上传。
+- 本地真实浏览器通过开发代理登录服务器（200），收到 hello/capabilities/subscribed 与完整持久回放及 replay.completed，页面异常数为 0。该检查只回放前述测试会话，没有重新调用模型。
 
 ## 5. 修改代码文件与作用清单
 
