@@ -1,6 +1,6 @@
 # AI 测试与评估平台 — AgentLoop 前端重写与联调计划
 
-> 版本：V0.5 ｜ 审查日期：2026-09-09 ｜ 状态：按参考页原始 CSS 修正思考卡片与轨迹样式；服务器联调及完整切换验收进行中。
+> 版本：V0.6 ｜ 审查日期：2026-09-09 ｜ 状态：按参考页原始 CSS 修正思考卡片与轨迹样式；补齐输入焦点去框与可调整会话内容宽度；服务器联调及完整切换验收进行中。
 >
 > 基线：`deepseek-harness-py/static/index.html` 当前页面 + `ai-eval-platform/frontend/src/views/Agent.vue` 当前实现 + 已落地后端 WS v2。后端设计见 [架构设计](AI测试与评估平台-AgentLoop后端架构设计.md)，已验证范围见 [实施记录](AI测试与评估平台-AgentLoop后端实施记录.md)。
 >
@@ -553,3 +553,17 @@ In-app Browser 在 1440×900 下读取计算样式：卡片 272×121.5px、外�
 | frontend/src/components/agent/loop/AgentWorkspace.vue | 源对话/轨迹下划线 Tab 与计数徽标 |
 | frontend/tests/agent-loop-style-preview.html | 无外部副作用的真实组件核对入口 |
 | design-qa.md、本文件 | 本轮视觉核对证据与边界 |
+
+## 15. V0.6 输入焦点与会话内容宽度（2026-09-09）
+
+根据输入栏与欢迎态截图，移除文本域自身获得焦点时的蓝色边框、outline 与 box-shadow；外层输入卡片仍保留轻量焦点反馈，避免键盘焦点丢失。AgentLoop 的会话内容列新增桌面端横向调整：默认宽度为 860px，并随可用空间收缩；最小宽度 460px，右缘拖拽把手支持鼠标拖动及左右方向键，每次键盘调整 24px。用户设置保存在浏览器本地存储。
+
+会话内容列默认完全透明，无卡片边界；鼠标进入、键盘聚焦或正在拖拽时才展示全列固定高度的半透明玻璃边界及右侧拖拽把手。窄屏（≤768px）固定全宽并隐藏把手，避免占用触控内容区。
+
+### 15.1 本次修改代码文件与作用清单
+
+| 文件 | 作用 |
+| :--- | :--- |
+| frontend/src/components/agent/loop/AgentComposer.vue | 隐藏输入文本域的蓝色焦点轮廓与阴影 |
+| frontend/src/components/agent/loop/AgentWorkspace.vue | 会话内容列玻璃悬停态、固定高度边界、桌面拖拽/键盘调宽与本地偏好 |
+| 本文件、design-qa.md | 更新本轮截图核对、交互验证及已知边界 |
