@@ -165,8 +165,6 @@ class LoopService:
             old = readonly.command_receipt(actor_id, command.request_id)
             if old:
                 return self._receipt(old, command.fingerprint)
-            if command.type == "turn.submit" and not settings.agent_loop_enabled:
-                raise AppError(ErrorCode.VALIDATION, "Agent Loop 新回合放行已关闭")
             entry = await self._entry(command.session_id, actor_id)
             if command.type == "turn.submit":
                 return await self._submit(entry, actor_id, connection_id, command)

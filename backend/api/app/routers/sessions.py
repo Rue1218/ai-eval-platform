@@ -30,23 +30,57 @@ def _loop_ui(db: Session, user: User, request: Request, session=None) -> dict:
     from ..agent.attachments import MAX_IMAGE_BYTES, TEXT_SUFFIXES
     from ..agent.loop_presentation import profile_capabilities
     from ..agent.loop_wiring import authorized_profile
-    from ..config import settings
     from .files import ALLOWED_SUFFIXES, MAX_FILE_BYTES
 
     if session is not None and session.engine_version != "agent_loop_v2":
         raise AppError(ErrorCode.VALIDATION, "该会话使用 legacy 协议")
-    profile_data, allowed, default, error = None, [], None, None
+
+    def profile_item(row: ProtocolProfile, snapshot, allowed: list[str], default: str | None) -> dict:
+        """投影可提交的协议档，绝不把连接地址或凭据带到浏览器。"""
+        return {
+            "id": snapshot.profile_id,
+            "name": row.name,
+            "version": snapshot.profile_version,
+            "model": snapshot.config.model,
+            "protocol": snapshot.config.protocol,
+            "allowed_efforts": allowed,
+            "default_effort": default,
+        }
+
+    rows = db.query(ProtocolProfile).order_by(ProtocolProfile.created_at.desc()).all()
+    row_by_id = {row.id: row for row in rows}
+    profiles: list[dict] = []
+    for row in rows:
+        if "agent" not in (row.usages or []):
+            continue
+        try:
+            # 优先发布设置页的默认档位；不兼容时仍以关闭思考档探测可选择性。
+            snapshot, _ = authorized_profile(db, {"profile_id": row.id})
+        except AppError:
+            try:
+                snapshot, _ = authorized_profile(
+                    db, {"profile_id": row.id, "reasoning_effort": "off"}
+                )
+            except AppError:
+                continue
+        allowed, default = profile_capabilities(snapshot)
+        if allowed:
+            profiles.append(profile_item(row, snapshot, allowed, default))
+
+    profile_data, allowed, default = None, [], None
     try:
         profile, _ = authorized_profile(db, {})
         allowed, default = profile_capabilities(profile)
-        profile_data = {"id": profile.profile_id, "version": profile.profile_version,
-                        "model": profile.config.model, "protocol": profile.config.protocol}
+        row = row_by_id.get(profile.profile_id)
+        if row is not None and allowed:
+            profile_data = profile_item(row, profile, allowed, default)
     except AppError:
-        error = "请配置可用的 Agent 协议档"
+        pass
+    error = None if profile_data else "请选择可用的 Agent 协议档"
     service = getattr(request.app.state, "loop_service", None)
     entry = service.entries.get(session.id) if service and session else None
     controller = entry.controller if entry and entry.runtime.running else None
-    return {"version": 1, "enabled": settings.agent_loop_enabled, "profile": profile_data,
+    return {"version": 1, "enabled": True, "profile": profile_data, "profiles": profiles,
             "allowed_efforts": allowed, "default_effort": default, "unavailable_reason": error,
             "permissions": {"write": True, "trace": session is None or session.user_id == user.id or user.role == "admin",
                             "reasoning": session is None or session.user_id == user.id,
@@ -62,7 +96,7 @@ def _loop_ui(db: Session, user: User, request: Request, session=None) -> dict:
 
 @router.get("/agent-ui")
 def draft_agent_ui(request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    """返回登录成员的新会话 UI 能力，默认灰度开关仍由部署控制。"""
+    """返回登录成员的新会话 UI 能力及可选择的 Agent 协议档。"""
     return _loop_ui(db, user, request)
 
 
@@ -207,12 +241,8 @@ def create_session(
     F3/G5：可选携带 ``workspace_id``/``scope_path`` 绑定用户工作区——创建时
     固化、运行期不可变（设计 §5，无换绑端点，需换绑 = 删除重建）；绑定仅限
     private 会话（BLK-4：防 team 成员借绑定会话横向获得工作区写授权）；属主
-    校验 fail-closed。未绑定 = legacy 临时工作区（与 F3 前行为一致）。
+    校验 fail-closed。未绑定时使用平台临时工作区。
     """
-    from ..config import settings
-
-    if body.engine_version == "agent_loop_v2" and not settings.agent_loop_enabled:
-        raise AppError(ErrorCode.VALIDATION, "Agent Loop v2 尚未开启")
     workspace_id = (body.workspace_id or "").strip() or None
     scope_path: str | None = None
     if workspace_id:
@@ -236,7 +266,8 @@ def create_session(
     session = AgentSession(
         user_id=user.id,
         title=body.title.strip(),
-        engine_version=body.engine_version,
+        # 新会话固定由 AgentLoop 承载，不接受客户端回退到 legacy。
+        engine_version="agent_loop_v2",
         visibility=body.visibility,
         workspace_id=workspace_id,
         scope_path=scope_path,

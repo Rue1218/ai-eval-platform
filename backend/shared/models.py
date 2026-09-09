@@ -141,8 +141,8 @@ class Session(Base):
     # 创建者（owner）始终不变；团队共享不改变资产归属。
     user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
     title = Column(String, nullable=False, default="新会话")
-    # 创建时固定执行协议，旧会话默认 legacy；运行中禁止切换引擎。
-    engine_version = Column(String, nullable=False, default="legacy", server_default="legacy")
+    # 创建时固定执行协议；历史 legacy 会话保留原值，运行中禁止切换引擎。
+    engine_version = Column(String, nullable=False, default="agent_loop_v2", server_default="agent_loop_v2")
     # private 仅 owner 可访问；team 对当前内部团队的正常成员开放协作。
     visibility = Column(
         String,

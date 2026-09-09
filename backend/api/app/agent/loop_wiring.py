@@ -37,28 +37,61 @@ LOOP_SYSTEM = """你是 AI 测试与评估平台助手，通过已提供的原�
 """
 ALLOWED_TOOLS = ("read", "write", "edit", "web_search", "web_fetch", "bash",
                  "ask_user_question", "task.create", "task.status", "task.cancel")
+_REASONING_EFFORTS = frozenset({"off", "low", "medium", "high", "xhigh", "max"})
 
 
 def authorized_profile(db, data: dict) -> tuple[AuthorizedProfileSnapshot, int]:
-    """每回合新取授权协议档及凭据快照，不复用旧网关的可漂移缓存。"""
+    """每回合解析受控协议档、凭据与思考档位，不复用可漂移的旧网关缓存。"""
     from app.routers.profiles import _profile_connection
 
-    row = db.get(Setting, "agent_profile_id")
-    profile = db.get(ProtocolProfile, row.value) if row and isinstance(row.value, str) else None
+    default_row = db.get(Setting, "agent_profile_id")
+    default_profile_id = (
+        default_row.value.strip()
+        if default_row and isinstance(default_row.value, str) and default_row.value.strip()
+        else None
+    )
+    requested_profile_id = data.get("profile_id")
+    if requested_profile_id is not None and (
+        not isinstance(requested_profile_id, str) or not requested_profile_id.strip()
+    ):
+        raise AppError(ErrorCode.VALIDATION, "所选 Agent 协议档不可用")
+    profile_id = requested_profile_id.strip() if isinstance(requested_profile_id, str) else default_profile_id
+    profile = db.get(ProtocolProfile, profile_id) if profile_id else None
     if profile is None or "agent" not in (profile.usages or []):
-        raise AppError(ErrorCode.VALIDATION, "未配置可用 Agent 协议档")
-    base_url, model, key = _profile_connection(profile, allow_global_alias=True)
+        message = "所选 Agent 协议档不可用" if requested_profile_id is not None else "未配置可用 Agent 协议档"
+        raise AppError(ErrorCode.VALIDATION, message)
+    # 只有默认协议档可继承历史全局别名，显式选择不能意外借用其他档的连接参数。
+    base_url, model, key = _profile_connection(profile, allow_global_alias=profile.id == default_profile_id)
+    if not isinstance(key, str) or not key.strip():
+        raise AppError(ErrorCode.VALIDATION, "所选 Agent 协议档未配置模型凭据")
     reasoning_row = db.get(Setting, "agent_reasoning")
     reasoning = reasoning_row.value if reasoning_row and isinstance(reasoning_row.value, dict) else {}
-    effort = data.get("reasoning_effort") or (reasoning.get("effort", "medium") if reasoning.get("enabled", True) else "off")
+    effort = data.get("reasoning_effort")
+    if effort is None:
+        effort = reasoning.get("effort", "medium") if reasoning.get("enabled", True) else "off"
+    if effort not in _REASONING_EFFORTS:
+        raise AppError(ErrorCode.VALIDATION, "思考强度配置非法")
+    try:
+        context_window = int(getattr(profile, "context_window", 0) or 0)
+        max_tokens = int(getattr(profile, "max_output_tokens", 0) or 0)
+    except (TypeError, ValueError) as exc:
+        raise AppError(ErrorCode.VALIDATION, "所选 Agent 协议档配置非法") from exc
+    if context_window <= 0 or max_tokens <= 0:
+        raise AppError(ErrorCode.VALIDATION, "所选 Agent 协议档配置非法")
     config = ModelConfig(protocol=profile.protocol, base_url=base_url, model=model, api_key=key or "",
-                         max_tokens=profile.max_output_tokens, timeout_s=60,
+                         max_tokens=max_tokens, timeout_s=60,
                          anthropic_version=profile.anthropic_version,
                          reasoning_enabled=effort != "off", reasoning_effort=effort if effort != "off" else "medium")
-    snapshot = AuthorizedProfileSnapshot(config, profile_id=profile.id,
-                                         profile_version=profile.updated_at.isoformat(),
+    updated_at = getattr(profile, "updated_at", None)
+    version = updated_at.isoformat() if hasattr(updated_at, "isoformat") else ""
+    snapshot = AuthorizedProfileSnapshot(config, profile_id=profile.id, profile_version=version,
                                          prompt_cache=settings.prompt_cache_enabled)
-    return snapshot, profile.context_window
+    try:
+        # 提交前按当前模型和协议解析一次，拒绝不支持的思考强度而不分配 SDK。
+        resolve_request(snapshot, messages=[])
+    except LlmRequestError as exc:
+        raise AppError(ErrorCode.VALIDATION, "所选 Agent 协议档不支持该思考强度") from exc
+    return snapshot, context_window
 
 
 def _identity(identity: dict) -> dict:

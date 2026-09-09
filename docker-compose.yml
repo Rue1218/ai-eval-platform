@@ -100,7 +100,6 @@ services:
       # 沙箱 runner（compose 内网，不发布主机端口；P4-3 起 bash 由 runner 执行）
       SANDBOX_RUNNER_URL: ${SANDBOX_RUNNER_URL:-http://runner:8001}
       RUNNER_INTERNAL_TOKEN: ${RUNNER_INTERNAL_TOKEN:-}
-      AGENT_LOOP_ENABLED: ${AGENT_LOOP_ENABLED:-false}
       AGENT_LOOP_MAX_STEPS: ${AGENT_LOOP_MAX_STEPS:-16}
       AGENT_LOOP_MAX_PARALLEL_TOOL_CALLS: ${AGENT_LOOP_MAX_PARALLEL_TOOL_CALLS:-4}
     # Harness 沙箱（bash 工具）：bwrap 已迁至独立 runner 容器（P4-2），

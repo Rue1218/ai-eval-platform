@@ -16,7 +16,6 @@ from app.agent.loop import TurnDependencies, build_agent
 from app.agent.loop_service import LoopService
 from app.agent.loop_settings import LoopSettings
 from app.agent.runtime import AgentRuntime
-from app.config import settings
 from app.errors import AppError, ErrorCode
 from app.harness.execution.context import ToolExecutionContext
 from app.harness.execution.loop_bridge import PlatformToolBridge
@@ -174,7 +173,6 @@ def approval_command(sid, card, *, decision="allow", nonce=None, request_id=None
 
 def test_pg_ws_read_edit_read_full_loop_card_acl_nonce_and_replay(pg_case, tmp_path, monkeypatch):
     """真实三工具循环、卡 ACL、错 nonce 拒绝、正确确认、模型正文回填与 WS 回放。"""
-    monkeypatch.setattr(settings, "agent_loop_enabled", True)
     file = tmp_path / "note.txt"
     file.write_text("old-title\nuntouched-sentinel\n", encoding="utf-8")
     sid = pg_case.session(team=True)
@@ -279,7 +277,6 @@ def test_pg_ws_read_edit_read_full_loop_card_acl_nonce_and_replay(pg_case, tmp_p
 
 def test_pg_command_idempotence_survives_new_service_and_changed_input_rejected(pg_case, tmp_path, monkeypatch):
     """命令/消息 ID 在新服务实例中仍幂等，未配置模型也可取回既有接受结果。"""
-    monkeypatch.setattr(settings, "agent_loop_enabled", True)
     sid = pg_case.session()
     adapter = ScriptedAdapter([TextDelta("done"), Done("stop")])
     original = make_command(sid, data={"client_message_id": str(uuid4()), "content": "hello"})
@@ -313,7 +310,6 @@ def test_pg_command_idempotence_survives_new_service_and_changed_input_rejected(
 
 def test_pg_observer_disconnect_does_not_cancel_but_owner_cancel_settles(pg_case, tmp_path, monkeypatch):
     """取消经过持久取消事实与真实 Runtime drain；旁观断连不得影响模型流。"""
-    monkeypatch.setattr(settings, "agent_loop_enabled", True)
     sid = pg_case.session(team=True)
     adapter = BlockingAdapter()
 
@@ -353,7 +349,6 @@ def test_pg_observer_disconnect_does_not_cancel_but_owner_cancel_settles(pg_case
 
 def test_pg_cancel_during_real_native_read_waits_for_guard_settlement(pg_case, tmp_path, monkeypatch):
     """线程中真实读取完成前不可释放 guard；取消后不再请求第二轮模型。"""
-    monkeypatch.setattr(settings, "agent_loop_enabled", True)
     sid = pg_case.session()
     (tmp_path / "read.txt").write_text("actual-file-body", encoding="utf-8")
     entered, release = threading.Event(), threading.Event()
@@ -414,7 +409,6 @@ def test_pg_cancel_during_real_native_read_waits_for_guard_settlement(pg_case, t
 @pytest.mark.parametrize("decision", ["deny", "cancel"])
 def test_pg_denied_or_cancelled_approval_never_edits(pg_case, tmp_path, monkeypatch, decision):
     """拒绝和等待中取消都不跨文件副作用边界，卡终态必须与工具结果落库。"""
-    monkeypatch.setattr(settings, "agent_loop_enabled", True)
     sid = pg_case.session()
     target = tmp_path / "denied.txt"
     target.write_text("old", encoding="utf-8")
@@ -460,7 +454,6 @@ def test_pg_denied_or_cancelled_approval_never_edits(pg_case, tmp_path, monkeypa
 
 def test_pg_expired_nonce_cannot_authorize_edit(pg_case, tmp_path, monkeypatch):
     """即使持久卡仍存在、nonce 正确，过期回执也不能执行工具或消费合法决定。"""
-    monkeypatch.setattr(settings, "agent_loop_enabled", True)
     sid = pg_case.session()
     target = tmp_path / "expired.txt"
     target.write_text("old", encoding="utf-8")

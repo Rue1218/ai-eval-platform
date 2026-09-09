@@ -137,10 +137,6 @@
         </span>
 
         <span class="grow"></span>
-        <select v-if="!currentSessionId && !api.isMock()" v-model="draftEngine" aria-label="会话引擎" class="btn btn-sm btn-ghost">
-          <option value="legacy">现有引擎</option><option value="agent_loop_v2">AgentLoop · 试验</option>
-        </select>
-
         <!-- F3/G5：草稿会话可预选绑定工作区；发送首条消息时随创建固化 -->
         <template v-if="!currentSessionId && !isGenerating">
           <span v-if="draftWorkspaceId" class="chat-ws-chip draft">
@@ -182,6 +178,7 @@
       </div>
 
       <AgentWorkspace v-if="isLoopView" :session-id="currentSessionId" :store="loopStore" :create-session="createLoopSession" />
+      <!-- 历史 v1 界面仅保留源码供审计；isLoopView 恒为真，不能再到达此分支。 -->
       <template v-else>
       <!-- 断线重连横幅提示（真实 WS 状态） -->
       <div v-if="!isWsOnline" class="info-strip">
@@ -786,9 +783,8 @@ const bindableWorkspaces = ref<Array<{ id: string; name: string }>>([])
 const bindingLoading = ref(false)
 // 未绑定服务端会话时保持草稿态，不得用列表首项冒充当前会话。
 const currentSession = computed(() => sessions.value.find(s => s.id === currentSessionId.value) || null)
-// 新会话保留显式试验入口；既有 v2 reader 不受默认开关回滚影响。
-const draftEngine = ref<'legacy' | 'agent_loop_v2'>('legacy')
-const isLoopView = computed(() => currentSessionId.value ? currentSession.value?.engine_version === 'agent_loop_v2' : draftEngine.value === 'agent_loop_v2')
+// 产品入口已收敛为 AgentLoop；保留 v-else 源码仅用于历史审计与后续删除。
+const isLoopView = computed(() => true)
 const loopStore = createLoopStore(id => removeInaccessibleSession(id))
 watch(() => authStore.user?.id, (id, previous) => { if (previous && id !== previous) loopStore.close() })
 watch(() => Object.values(loopStore.sessions).map(s => [s.sessionId, s.title]), () => {
@@ -797,7 +793,7 @@ watch(() => Object.values(loopStore.sessions).map(s => [s.sessionId, s.title]), 
 /** 创建时固化 v2 和工作区，后续只使用独立 transport。 */
 async function createLoopSession(): Promise<string> {
   if (currentSessionId.value) return currentSessionId.value
-  const session = await api.sessions.create('新会话', { workspaceId: draftWorkspaceId.value || undefined, engineVersion: 'agent_loop_v2' })
+  const session = await api.sessions.create('新会话', { workspaceId: draftWorkspaceId.value || undefined })
   sessions.value.unshift(session); currentSessionId.value = session.id; clearDraftWorkspace()
   return session.id
 }
@@ -1371,42 +1367,14 @@ function simulateAgentFlow(text: string, _files: any[]) {
   }, 600)
 }
 
-async function handleInterpretReport(reportId: string) {
-  if (isCreatingSession.value) return
-  if (!currentSessionId.value && !(await ensureActiveSession())) return
-  const targetSessionId = currentSessionId.value
-  const clientMessageId = createClientMessageId()
-  events.value.push({
-    type: 'user',
-    text: `解读报告 #${reportId}`,
-    clientMessageId,
-    author: authStore.user
-      ? {
-          id: authStore.user.id,
-          username: authStore.user.username,
-          display_name: authStore.user.display_name,
-        }
-      : null,
-  })
-  setCurrentGenerating(true)
-  scrollToBottom(true)
-
-  // 实时模式交由服务端智能体解读，结果经 WS 事件回流。
-  if (!api.isMock() && !(await ensureLiveAgentSocket())) {
-    setCurrentGenerating(false)
-    events.value.push({ type: 'error', code: 'UPSTREAM', message: 'Agent 连接未就绪，暂不能解读报告。' })
-    message.error('Agent 连接未就绪，暂不能解读报告')
-    scrollToBottom()
-    return
-  }
-  if (currentSessionId.value !== targetSessionId) return
-  if (agentWs?.isConnected && (!agentWs.sessionId || agentWs.sessionId === targetSessionId)) {
-    agentWs.sendUserMessage(`解读报告 #${reportId}`, [], clientMessageId)
-    return
-  }
-  if (api.isMock()) {
-    simulateAgentFlow(`解读报告 #${reportId}`, [])
-  }
+function handleInterpretReport(reportId: string) {
+  /**
+   * AgentLoop 的提交由工作台冻结 request_id、思考档位与附件后统一发送。
+   * 此处只写入草稿，避免 v2 会话被旧 WebSocket 入口误发。
+   */
+  const draft = loopStore.draft(currentSessionId.value || 'draft')
+  draft.content = `请解读报告 #${reportId}`
+  message.info('已将报告解读请求填入 AgentLoop 输入框')
 }
 
 function handleCancelActiveTask(taskId: string) {
@@ -1444,7 +1412,8 @@ function handleCancelActiveTask(taskId: string) {
 async function loadSessions() {
   try {
     const list = await api.sessions.list()
-    sessions.value = list || []
+    // 历史 legacy 会话保留在服务端审计数据中，但不再进入唯一的 AgentLoop 工作台。
+    sessions.value = (list || []).filter((session) => session.engine_version === 'agent_loop_v2')
   } catch {
     sessions.value = []
   }
@@ -1749,6 +1718,9 @@ async function loadSessionHistory(sid: string): Promise<number> {
 
 async function selectSession(sid: string) {
   if (deletingSessionIds.has(sid)) return
+  const selected = sessions.value.find((session) => session.id === sid)
+  // 列表已过滤历史会话；双重守卫确保任何残留点击也不会落到旧 WS transport。
+  if (!selected || selected.engine_version !== 'agent_loop_v2') return
   // S2 修复：切换会话即关闭草稿绑定面板（绑定仅草稿态可用，避免误操作残留）
   bindingPanelOpen.value = false
   // 移动端会话列表是覆盖式抽屉，选中会话后自动收起让出对话区。
@@ -1759,69 +1731,13 @@ async function selectSession(sid: string) {
     existing?.close()
     sockets.delete(sid)
   }
-  const epoch = ++selectEpoch
+  selectEpoch += 1
   persistCurrentRuntime()
   stopFlowAnimations()
   currentSessionId.value = sid
-  if (sessions.value.find(s => s.id === sid)?.engine_version === 'agent_loop_v2') {
-    isGenerating.value = false; isWsOnline.value = true; isRailOpen.value = false; agentWs = null
-    loopStore.open(sid)
-    return
-  }
-
-  const rt = ensureRuntime(sid)
-  events.value = rt.events
-  isGenerating.value = rt.isGenerating
-  turnLatencyMs.value = rt.turnLatencyMs
-  activeTask.value = rt.activeTask
-  currentContextMeter.value = rt.contextMeter
-  currentCompactSummary.value = rt.compactSummary
-  dockClosingNote.value = ''
-  markGenerating(sid, rt.isGenerating)
-
-  const sess = sessions.value.find(s => s.id === sid)
-  // 仅在桌面端自动展开调度侧轨，避免移动端遮挡聊天界面
-  if (typeof window !== 'undefined' && window.innerWidth > 768) {
-    isRailOpen.value = !!sess?.active_task || rt.isGenerating
-  }
-
-  const activeTaskId = sess?.active_task?.id || rt.activeTask?.id
-  if (activeTaskId) {
-    try {
-      const t = await api.tasks.get(activeTaskId)
-      if (epoch !== selectEpoch || currentSessionId.value !== sid) return
-      if (t && ['queued', 'running', 'awaiting_case_confirm'].includes(t.status)) {
-        activeTask.value = {
-          id: t.id,
-          kind: t.kind,
-          status: t.status,
-          config: t.config,
-          progress: t.progress || { percent: 0, done: 0, total: 100, message: '任务进行中...' },
-          creator_id: t.creator_id,
-          created_by: t.created_by,
-          creator: t.creator,
-          created_at: t.created_at,
-        }
-        rt.activeTask = activeTask.value
-      } else if (t) {
-        activeTask.value = null
-        rt.activeTask = null
-      }
-    } catch { /* 进度坞失败不阻断切会话 */ }
-  }
-
-  const existingWs = sockets.get(sid)
-  if (existingWs) {
-    agentWs = existingWs
-    isWsOnline.value = existingWs.isConnected
-    gcIdleSockets(sid)
-    scrollToBottom(true)
-    return
-  }
-
-  const lastEventId = await loadSessionHistory(sid)
-  if (epoch !== selectEpoch || currentSessionId.value !== sid) return
-  initWebSocket(sid, lastEventId)
+  // 统一由 AgentLoop store 持有 v2 连接；不再为会话建立旧 AgentWebSocket。
+  isGenerating.value = false; isWsOnline.value = true; isRailOpen.value = false; agentWs = null
+  loopStore.open(sid)
 }
 
 /** 打开一个新的本地草稿；服务端会话在用户真正发送消息时才创建。 */
@@ -1829,6 +1745,8 @@ function handleCreateSession() {
   if (isCreatingSession.value) return
   sessionStatusFilter.value = 'all'
   resetToDraftSession()
+  // 清除未持久化 AgentLoop 草稿及其对象 URL；已建会话的连接和草稿保持不动。
+  loopStore.remove('draft')
   // 新会话不带上次草稿的工作区预选
   clearDraftWorkspace()
 }
@@ -3158,48 +3076,23 @@ onMounted(async () => {
     const settings = await api.admin.getSettings()
     if (settings?.prod_approvers?.length) prodApprovers.value = settings.prod_approvers
   } catch {}
-  // 异步初始化不能覆盖用户已经选中的会话或 v2 草稿。
-  if (!currentSessionId.value && draftEngine.value === 'legacy') resetToDraftSession()
-  // 消费报告页「在对话中解读」直达参数（兼容 ?interpret= 与 ?report_id=）。
+  // 异步初始化不能覆盖用户已经选中的 AgentLoop 会话。
+  if (!currentSessionId.value) resetToDraftSession()
+  // 报告直达仅预填 AgentLoop 草稿，实际发送统一经过 v2 composer。
   const interpretId = (route.query.interpret || route.query.report_id) as string | undefined
   if (interpretId) {
-    if (api.isMock()) {
-      void handleInterpretReport(interpretId)
-    } else {
-      // 实时模式需等待 WS 建立连接后再发送解读请求；超时只提示连接异常，禁止伪造解读。
-      if (isWsOnline.value) {
-        void handleInterpretReport(interpretId)
-        return
-      }
-      const fallbackTimer = trackTimeout(() => {
-        events.value.push({ type: 'error', code: 'UPSTREAM', message: 'Agent 连接未就绪，报告解读将在重连后继续。' })
-        message.warning('Agent 连接未就绪，正在等待重连')
-        scrollToBottom()
-      }, 5000)
-      interpretStopWatch = watch(isWsOnline, (online) => {
-        if (online) {
-          clearTracked(fallbackTimer)
-          interpretStopWatch?.()
-          interpretStopWatch = null
-          void handleInterpretReport(interpretId)
-        }
-      })
-    }
+    handleInterpretReport(interpretId)
   }
 })
 
-let interpretStopWatch: (() => void) | null = null
-
 onBeforeUnmount(() => {
   loopStore.close()
-  // 统一清理登记的全部定时器与解读监听，防止卸载后回调触发
+  // 统一清理登记的全部定时器，防止卸载后回调触发
   pendingTimers.forEach(id => {
     window.clearTimeout(id)
     window.clearInterval(id)
   })
   pendingTimers.clear()
-  interpretStopWatch?.()
-  interpretStopWatch = null
   for (const ws of sockets.values()) {
     ws.close()
   }
@@ -3212,7 +3105,9 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .agent-layout {
-  height: calc(100vh - var(--topbar-h) - 20px);
+  /* 由 flush 内容区提供可用高度，避免紧凑输入栏落到视口外。 */
+  height: 100%;
+  min-height: 0;
 }
 
 /* 团队共享会话的轻量状态标识，避免把私有/共享混在同一种列表视觉中。 */

@@ -1,16 +1,18 @@
 # AI 测试与评估平台 — Agent Loop 后端架构设计
 
-> 版本：V0.4 ｜ 日期：2026-09-09 ｜ 状态：后端实现及本地回归完成；生产灰度、真实供应商与 Linux 执行尚待验收。
+> 版本：V0.5 ｜ 日期：2026-09-09 ｜ 状态：AgentLoop 单入口、协议档选择和前端输入栏已完成本地验证；真实供应商与 Linux 执行尚待验收。
 >
 > 用户目标：完整采用 `deepseek-harness-py` 当前已实现的 Agent Loop 及其运行时、模型适配、消息、事件、审批、取消和恢复能力；工具复用平台现有实现，重写字段与接缝并完成兼容联调。核心验收是模型—工具—结果回填—再次模型调用的完整循环。
 >
-> V0.1–V0.3 为架构审查阶段。V0.4 已按用户授权实现后端代码、API v2 契约和 Alembic 迁移；前端改造留待后续要求。下文保留完整目标与验收标准，实际文件、启用步骤和验证边界见文末及《AgentLoop后端实施记录》，不能将验收矩阵视为全部验收通过。
+> V0.1–V0.3 为架构审查阶段。V0.4 已按用户授权实现后端代码、API v2 契约和 Alembic 迁移；V0.5 收敛新会话入口、协议档选择和前端输入栏。下文保留完整目标与验收标准，实际文件、启用步骤和验证边界见文末及《AgentLoop后端实施记录》，不能将验收矩阵视为全部验收通过。
 >
 > V0.2 修订：按审查修复四项问题——WS 改为独立 v2 协议与会话事件流；补齐供应商内容块/协议状态的采集、持久化和回传；分离回合结算与工作区执行隔离；区分普通工具失败、取消、禁止派发和调度基础设施异常。同步架构图、存储、阶段与验收矩阵。
 >
 > V0.3 修订：补充 LLM 调用层重写依据、源/平台字段映射、模型—工具—WS 全链路职责、中间层保留/替换/不迁入建议和删除前提；修正当前源工作区 DeepSeek medium 的透传行为，增加 A23–A26 兼容验收。仅进行了源码审查、隔离字段转换探针和文档校验，未调用真实模型。
 >
-> V0.4 修订：新 Agent 路径接入七节点循环、三协议异步适配、平台工具桥、PG 事实与会话投影、WS v2 和带终止证据的 Runner 客户端；旧网关和业务 Worker 保留。新增 `engine_version` 隔离路径与默认关闭的 `AGENT_LOOP_ENABLED`。补齐按实际裁剪消息索引重建请求、跨引擎工作区隔离、事务内回执和恢复语义。
+> V0.4 修订：新 Agent 路径接入七节点循环、三协议异步适配、平台工具桥、PG 事实与会话投影、WS v2 和带终止证据的 Runner 客户端；旧网关和业务 Worker 保留。新增 engine_version 隔离路径。补齐按实际裁剪消息索引重建请求、跨引擎工作区隔离、事务内回执和恢复语义。
+>
+> V0.5 修订：新建会话固定 AgentLoop，删除 AGENT_LOOP_ENABLED；历史 legacy 行只读保留。agent-ui 发布脱敏 profiles，客户端每回合提交 profile_id 与 reasoning_effort，服务端重新校验协议档、凭据、模型和档位兼容性。输入栏采用参考图的紧凑结构和 DeepSeek Harness 风格思考控制。
 
 ## 1. 范围与设计基线
 
@@ -1067,10 +1069,10 @@ V0.1–V0.3 只修订设计。V0.4 的实际代码清单如下；§13 保留目�
 | `backend/api/app/harness/execution/{task_tools,native,workspace_guard}.py`、`mcp/manager.py` | 业务准备/入队复用、跨旧新路径执行隔离、MCP 取消后 drain |
 | `backend/api/app/harness/memory/{agent_events,agent_messages,agent_recovery}.py` | PG 原始事实、投影、写者占用、Worker 桥、恢复及消息重建 |
 | `backend/api/app/agent/events.py`、`harness/contracts/loop_events.py`、`harness/security/loop_redaction.py`、`routers/ws_v2.py` | schema、公开事件/trace、脱敏与独立 WS v2 |
-| `backend/shared/models.py`、`backend/api/app/models.py`、迁移 `77586e897dae` | 四张新表及 `sessions.engine_version` |
-| `backend/api/app/{config,main,schemas}.py`、`routers/{sessions,ws}.py` | 默认关闭的开关、新会话选择、启动清理及旧入口隔离 |
+| `backend/shared/models.py`、`backend/api/app/models.py`、迁移 `77586e897dae` / `8f9a2c4d6e01` | 四张新表及 sessions.engine_version；新会话默认 AgentLoop，历史 legacy 行不改写 |
+| `backend/api/app/{config,main,schemas}.py`、`routers/{sessions,ws}.py` | 单入口新会话、启动清理及旧入口隔离；不再保留启用开关 |
 | `backend/runner/main.py`、`backend/shared/sandbox_kernel.py` | 执行 ID、实例代次、内部认证、查询/取消及 cgroup 停止证据 |
-| `.env.example`、`docker-compose.yml` | API/Runner 开关与内部凭据、委派根配置项 |
+| `.env.example`、`docker-compose.yml` | 移除 AgentLoop 启用开关，保留 API/Runner 内部凭据、委派根配置项 |
 | `backend/api/tests/test_loop_*.py`、`backend/runner/tests/test_{executions,kernel_cancellation}.py` | 源语义、适配器、真实 PG、临时文件、WS、取消与恢复回归 |
 
-实际验证结果、启用顺序、剩余平台验收见 [后端实施记录](AI测试与评估平台-AgentLoop后端实施记录.md)。新路径默认关闭，未改前端、未提交或部署；源码测试不能替代 A14 的真实协议档与 A20 的 Linux 执行故障演练。
+实际验证结果、启用顺序、剩余平台验收见 [后端实施记录](AI测试与评估平台-AgentLoop后端实施记录.md)。新会话固定 AgentLoop，前端已接入协议档选择和思考控制；源码测试不能替代 A14 的真实协议档与 A20 的 Linux 执行故障演练。

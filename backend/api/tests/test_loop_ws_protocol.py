@@ -44,7 +44,6 @@ def fact(kind="assistant/message", seq=0, **data):
     command(data={"after_cursor": -1}), command(data={"last_event_id": 0}),
     command(data={"after_cursor": "0"}), command("unknown"),
     command("turn.submit", {"client_message_id": "m", "content": "x", "cwd": "/root"}),
-    command("turn.submit", {"client_message_id": "m", "content": "x", "profile_id": "p"}),
     command("turn.cancel", {"turn_id": "t", "actor_id": "victim"}),
     command("trace.subscribe", {"after_seq": -2}),
 ])
@@ -52,6 +51,14 @@ def test_invalid_commands_fail_closed(value):
     """未知字段、类型转换、旧协议与客户端身份不允许透传。"""
     with pytest.raises(AppError):
         parse_command(json.dumps(value))
+
+
+def test_submit_accepts_optional_controlled_profile_id():
+    """协议档 ID 属于受控选择字段，规范帧保留给服务端重新授权解析。"""
+    parsed = parse_command(json.dumps(command("turn.submit", {
+        "client_message_id": "m", "content": "x", "profile_id": "profile-a",
+    })))
+    assert parsed.data["profile_id"] == "profile-a"
 
 
 @pytest.mark.parametrize("raw", [

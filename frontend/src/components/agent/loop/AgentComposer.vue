@@ -1,39 +1,61 @@
 <template>
   <div class="loop-composer" @dragover.prevent @drop.prevent="drop">
     <div class="draft-files"><AttachmentPreview v-for="file in draft.files" :key="file.key" :attachment="{file_id:file.id,filename:file.filename,size:file.size,content_type:file.content_type,preview_url:file.source,uploading:file.uploading,uploadProgress:file.progress,error:!!file.error}" removable @remove="remove(file)"/></div>
-    <textarea ref="input" v-model="draft.content" aria-label="消息" placeholder="描述目标，或把文件拖到这里…" rows="2" @input="resize" @keydown="keydown" />
+    <textarea ref="input" v-model="draft.content" aria-label="消息" placeholder="输入任何评测问题或需求，Shift + Enter 换行，Enter 发送" rows="1" @input="resize" @keydown="keydown" />
     <div class="composer-bottom">
       <input ref="picker" type="file" multiple hidden :accept="ui?.attachments.upload_suffixes.join(',')" @change="pick"/>
-      <button class="loop-control" aria-label="添加附件" @click="picker?.click()">＋ 附件</button>
-      <n-popover trigger="click" placement="top"><template #trigger><button class="loop-control model-trigger"><ProviderLogo v-if="ui?.profile" :provider="getProviderLogoKey({model:ui.profile.model})" :size="16"/>{{ ui?.profile?.model || '未配置模型' }} ▾</button></template><div class="model-popover"><strong>平台默认模型</strong><p>全局设置，切换后下一轮生效。</p><select v-if="ui?.permissions.settings" :value="ui.profile?.id" aria-label="平台默认模型" @change="emit('model', ($event.target as HTMLSelectElement).value)"><option v-for="p in profiles" :key="p.id" :value="p.id">{{ p.name }}</option></select><p v-else>当前账号不能修改全局模型。</p><router-link to="/admin/profiles">管理协议档</router-link></div></n-popover>
-      <ThinkingControl :model-value="effort" :allowed="ui?.allowed_efforts || []" :model="ui?.profile?.model" @update:model-value="value => emit('effort', value)"/>
+      <button class="loop-control attach-trigger" aria-label="添加附件" type="button" @click="picker?.click()"><n-icon :component="AddIcon" :size="15"/></button>
+      <n-popover v-model:show="modelOpen" trigger="click" placement="top-start" :show-arrow="false">
+        <template #trigger>
+          <button class="loop-control model-trigger" type="button" aria-haspopup="dialog" :aria-expanded="modelOpen" :disabled="!profiles.length">
+            <ProviderLogo v-if="profile" :provider="getProviderLogoKey({model:profile.model,name:profile.name})" compact/>
+            <span class="model-name">{{ profile?.model || '未配置模型' }}</span><n-icon :component="ChevronDownIcon" :size="13" class="model-chevron"/>
+          </button>
+        </template>
+        <section class="model-popover" aria-label="选择 AgentLoop 协议档">
+          <header><strong>本轮模型</strong><p>仅列出可用于 AgentLoop 的协议档，切换后下一轮生效。</p></header>
+          <button v-for="item in profiles" :key="item.id" class="model-option" :class="{selected:item.id===profile?.id}" type="button" @click="chooseModel(item.id)">
+            <ProviderLogo :provider="getProviderLogoKey({model:item.model,name:item.name})" compact/><span><strong>{{ item.name }}</strong><small>{{ item.model }} · {{ protocolLabel(item.protocol) }}</small></span><n-icon v-if="item.id===profile?.id" :component="CheckmarkIcon" :size="16"/>
+          </button>
+        </section>
+      </n-popover>
+      <ThinkingControl :model-value="effort" :allowed="profile?.allowed_efforts || []" :model="profile?.model" @update:model-value="value => emit('effort', value)"/>
       <LoopContextMeter :meter="meter"/>
-      <button class="loop-send" :disabled="busy ? !canStop : !ready || !draft.content.trim() || draft.files.some(f => f.uploading || f.error) || draft.submitting" @click="busy ? emit('stop') : emit('submit')">{{ busy ? cancelling ? '取消中…' : '停止' : draft.submitting ? '提交中…' : '发送 ↑' }}</button>
+      <button class="loop-send" :aria-label="sendLabel" :disabled="busy ? !canStop : !ready || !draft.content.trim() || draft.files.some(f => f.uploading || f.error) || draft.submitting" type="button" @click="busy ? emit('stop') : emit('submit')">
+        <span v-if="busy" class="send-status">{{ cancelling ? '取消中…' : '停止' }}</span><n-icon v-else :component="ForwardIcon" :size="18"/><span class="sr-only">{{ sendLabel }}</span>
+      </button>
     </div>
     <p v-if="draft.pending" class="draft-note">提交结果待同步。<button :disabled="!ready" @click="emit('retry')">使用原请求 ID 重发</button></p>
     <p v-if="notice" class="draft-note" role="status">{{ notice }}</p>
-    <p class="draft-note">Enter 发送 · Shift+Enter 换行 · 附件需附正文；PDF/文档内联提取，音频和旧 Office 仅提供元信息。</p>
   </div>
 </template>
 <script setup lang="ts">
-import { ref, nextTick } from 'vue'
-import { NPopover } from 'naive-ui'
+import { computed, nextTick, ref } from 'vue'
+import { NIcon, NPopover } from 'naive-ui'
+import AddIcon from 'naive-ui/es/_internal/icons/Add'
+import CheckmarkIcon from 'naive-ui/es/_internal/icons/Checkmark'
+import ChevronDownIcon from 'naive-ui/es/_internal/icons/ChevronDown'
+import ForwardIcon from 'naive-ui/es/_internal/icons/Forward'
 import { api } from '../../../api/http'
-import type { Profile } from '../../../api/types'
-import type { Effort, LoopMeter, LoopUi } from '../../../api/agentLoopTypes'
+import type { Effort, LoopMeter, LoopProfile, LoopUi } from '../../../api/agentLoopTypes'
 import type { DraftFile, LoopDraft } from '../../../agent/loop/store'
 import AttachmentPreview from '../AttachmentPreview.vue'
 import ProviderLogo from '../../ProviderLogo.vue'
 import { getProviderLogoKey } from '../../../utils/providerLogo'
 import ThinkingControl from './ThinkingControl.vue'
 import LoopContextMeter from './LoopContextMeter.vue'
-const props = defineProps<{ draft: LoopDraft; ui: LoopUi | null; effort: Effort | null; profiles: Profile[]; meter?: LoopMeter | null; busy: boolean; cancelling: boolean; canStop: boolean; ready: boolean }>()
+
+const props = defineProps<{ draft: LoopDraft; ui: LoopUi | null; profile: LoopProfile | null; profiles: LoopProfile[]; effort: Effort | null; meter?: LoopMeter | null; busy: boolean; cancelling: boolean; canStop: boolean; ready: boolean }>()
 const emit = defineEmits<{ submit: []; stop: []; retry: []; effort: [Effort]; model: [string] }>()
-const picker = ref<HTMLInputElement>(), input = ref<HTMLTextAreaElement>(), notice = ref('')
+const picker = ref<HTMLInputElement>(), input = ref<HTMLTextAreaElement>(), notice = ref(''), modelOpen = ref(false)
+const sendLabel = computed(() => props.busy ? (props.cancelling ? '正在取消' : '停止执行') : props.draft.submitting ? '正在提交' : '发送')
+const protocolLabels: Record<string, string> = { openai_chat: 'OpenAI 兼容', anthropic_messages: 'Anthropic', gemini_generate: 'Gemini' }
 /** IME 选词不提交；运行中的 Enter 保留下一轮草稿。 */
 function keydown(event: KeyboardEvent) { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229) { event.preventDefault(); if (!props.busy && props.ready && props.draft.content.trim() && !props.draft.submitting && !props.draft.files.some(f => f.uploading || f.error)) emit('submit') } }
-function resize() { const el = input.value; if (el) { el.style.height = 'auto'; el.style.height = Math.min(190, el.scrollHeight) + 'px' } }
+function resize() { const el = input.value; if (el) { el.style.height = 'auto'; el.style.height = Math.min(190, Math.max(42, el.scrollHeight)) + 'px' } }
 function focus() { nextTick(() => { input.value?.focus(); resize() }) }
+function chooseModel(id: string) { modelOpen.value = false; emit('model', id) }
+function protocolLabel(protocol: string) { return protocolLabels[protocol] || protocol }
 defineExpose({ focus })
 /** Tombstone 先标记再移除；迟到上传只结束请求，不能复活草稿引用。 */
 function remove(file: DraftFile) { file.removed = true; URL.revokeObjectURL(file.source); props.draft.files = props.draft.files.filter(f => f.key !== file.key) }
@@ -53,4 +75,6 @@ async function upload(files: File[]) {
 function pick(event: Event) { const el = event.target as HTMLInputElement; void upload(Array.from(el.files || [])); el.value = '' }
 function drop(event: DragEvent) { void upload(Array.from(event.dataTransfer?.files || [])) }
 </script>
-<style scoped>.loop-composer{border:1px solid #cadfd3;border-radius:16px;background:var(--bg-card,#fff);box-shadow:0 3px 18px #193b2510;padding:12px}.loop-composer textarea{display:block;box-sizing:border-box;resize:none;width:100%;border:0;outline:none;background:transparent;color:inherit;font:inherit;min-height:58px;max-height:190px;line-height:1.7}.composer-bottom{display:flex;flex-wrap:wrap;gap:6px;align-items:center}.loop-send{margin-left:auto;background:#153d33;color:#fff;border:0;border-radius:9px;padding:10px 16px;font-weight:600;cursor:pointer}.loop-send:disabled{opacity:.45;cursor:default}.draft-files{display:flex;flex-wrap:wrap;gap:8px}.draft-note{font-size:11px;color:#718277;margin:7px 0 0}.model-trigger{display:flex;align-items:center;gap:5px;max-width:220px;overflow:hidden;text-overflow:ellipsis}.model-popover{max-width:280px}.model-popover select{max-width:100%}@media(max-width:480px){.model-trigger{max-width:150px}.loop-composer{padding:9px}.draft-note{font-size:10px}}</style>
+<style scoped>
+.loop-composer{border:1px solid #dce4e6;border-radius:18px;background:#fff;box-shadow:0 1px 2px rgba(33,47,66,.03);padding:8px 10px;transition:border-color .15s ease,box-shadow .15s ease}.loop-composer:focus-within{border-color:#bbd6c8;box-shadow:0 0 0 3px rgba(44,131,88,.07)}.loop-composer textarea{display:block;box-sizing:border-box;resize:none;width:100%;border:0;outline:none;background:transparent;color:#263548;font:inherit;font-size:14px;min-height:42px;max-height:190px;padding:7px 9px 4px;line-height:1.55}.loop-composer textarea::placeholder{color:#99a6b6}.composer-bottom{display:flex;min-width:0;min-height:34px;align-items:center;gap:3px}.loop-control{display:inline-flex;min-width:0;align-items:center;border:1px solid transparent;border-radius:8px;background:transparent;color:#667487;padding:6px 7px;font-size:12px;line-height:18px;cursor:pointer}.loop-control:hover:not(:disabled){background:#f3f7f5;color:#304a3e}.loop-control:disabled{cursor:default;opacity:.55}.attach-trigger{width:28px;height:30px;justify-content:center;padding:0}.model-trigger{max-width:min(250px,42vw);gap:5px}.model-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.model-chevron{flex:0 0 auto;color:#8895a4}.model-popover{width:min(330px,calc(100vw - 30px));padding:5px}.model-popover header{padding:7px 8px 9px}.model-popover header strong{font-size:13px;color:#2e3b4c}.model-popover header p{margin:3px 0 0;color:#7a8798;font-size:11px;line-height:1.45}.model-option{display:flex;width:100%;align-items:center;gap:7px;border:1px solid transparent;border-radius:9px;background:transparent;color:#3d4b5c;padding:8px;text-align:left;cursor:pointer}.model-option:hover,.model-option.selected{background:#f2f7f4;border-color:#dae9e0}.model-option>span{display:grid;min-width:0;gap:1px}.model-option strong,.model-option small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.model-option strong{font-size:12px}.model-option small{color:#7c8998;font-size:11px}.model-option>.n-icon{margin-left:auto;color:#287551}.loop-send{display:inline-grid;flex:0 0 auto;width:32px;height:32px;margin-left:auto;place-items:center;border:0;border-radius:50%;background:#edf1f2;color:#84919d;padding:0;cursor:pointer;transition:background .15s ease,color .15s ease,transform .15s ease}.loop-send:not(:disabled){background:#1f5947;color:#fff}.loop-send:not(:disabled):hover{background:#184738;transform:translateY(-1px)}.loop-send:disabled{cursor:default}.send-status{font-size:10px;font-weight:600}.draft-files{display:flex;flex-wrap:wrap;gap:8px;padding:2px 2px 5px}.draft-note{margin:6px 5px 1px;color:#718277;font-size:11px}.draft-note button{border:0;background:transparent;color:#356f59;padding:0;text-decoration:underline;cursor:pointer}.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);clip-path:inset(50%);white-space:nowrap}@media(max-width:560px){.loop-composer{border-radius:14px;padding:7px}.loop-composer textarea{font-size:13px}.model-trigger{max-width:44vw}.model-popover{width:min(310px,calc(100vw - 22px))}}@media(prefers-reduced-motion:reduce){.loop-composer,.loop-send{transition:none}}
+</style>

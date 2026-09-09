@@ -13,8 +13,6 @@ class Settings(BaseSettings):
     key_encryption_key: str = ""
     access_token_expire_minutes: int = 720
     ws_ticket_expire_minutes: int = 5
-    # 新协议按创建时的 engine_version 隔离；灰度关闭不影响 legacy 会话。
-    agent_loop_enabled: bool = False
     agent_loop_max_steps: int = 16
     agent_loop_model_max_retries: int = 2
     agent_loop_model_retry_delay_seconds: float = 0.25

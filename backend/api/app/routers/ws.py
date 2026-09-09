@@ -2317,10 +2317,9 @@ async def agent_websocket(websocket: WebSocket) -> None:
                     await websocket.close(code=4400, reason="该会话请使用 WS v2 协议")
                     return
             else:
-                session = AgentSession(user_id=user.id, title="新会话", visibility="private")
-                db.add(session)
-                db.commit()
-                db.refresh(session)
+                # 禁止旧入口隐式创建 legacy 会话，避免绕过 AgentLoop 的会话绑定。
+                await websocket.close(code=4400, reason="新会话请使用 AgentLoop WS v2 协议")
+                return
             raw_last_event_id = websocket.query_params.get("last_event_id", "0")
             last_event_id = max(0, int(raw_last_event_id))
         except AppError as exc:

@@ -46,11 +46,12 @@ class Subscribe(StrictData):
 
 
 class Submit(StrictData):
-    """附件只接受平台对象 ID；服务解析权限与模型配置。"""
+    """附件与协议档只接受平台对象 ID；服务端重新解析权限与模型配置。"""
 
     client_message_id: Id
     content: Annotated[str, StringConstraints(min_length=1, max_length=60000)]
     attachment_refs: list[Id] = Field(default_factory=list, max_length=32)
+    profile_id: Id | None = None
     reasoning_effort: Literal["off", "low", "medium", "high", "xhigh", "max"] | None = None
 
 
