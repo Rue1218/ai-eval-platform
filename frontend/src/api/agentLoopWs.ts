@@ -2,26 +2,13 @@ import type { LoopCommand, LoopFrame } from './agentLoopTypes.ts'
 import { applyFrame, restoreSnapshot, type LoopState } from '../agent/loop/reducer.ts'
 import { createRequestId } from '../utils/requestId.ts'
 
+// 保持既有传输层测试和调用方的导出路径，同时复用全局唯一的 HTTP UUID 实现。
+export { createRequestId } from '../utils/requestId.ts'
+
 /** 可注入短票与 socket 的独立 transport，测试不依赖浏览器或 legacy HTTP mock。 */
 export interface LoopTransportOptions {
   ticket: () => Promise<string>; state: () => LoopState; replace: (state: LoopState) => void
   socket?: (url: string) => WebSocket; onFrame?: (frame: LoopFrame) => void; onRevoke?: () => void
-}
-
-/** 请求标识只要求全局唯一，不作为凭据；HTTP 页面也必须生成符合服务端 UUID 契约的值。 */
-type RequestIdRandom = { randomUUID?: () => string; getRandomValues?: (values: Uint8Array) => Uint8Array }
-
-/** HTTPS 优先采用原生 UUID；非安全上下文回退到仍可用的 getRandomValues。 */
-export function createRequestId(random: RequestIdRandom | undefined = globalThis.crypto): string {
-  if (typeof random?.randomUUID === 'function') {
-    try { return random.randomUUID() } catch { /* 非安全上下文可能暴露方法却拒绝调用，继续使用安全随机字节。 */ }
-  }
-  if (typeof random?.getRandomValues !== 'function') throw new Error('浏览器不支持安全随机请求标识')
-  const bytes = random.getRandomValues(new Uint8Array(16))
-  bytes[6] = (bytes[6] & 0x0f) | 0x40
-  bytes[8] = (bytes[8] & 0x3f) | 0x80
-  const hex = Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('')
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
 }
 
 export class AgentLoopWebSocket {
