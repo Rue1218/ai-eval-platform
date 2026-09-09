@@ -70,6 +70,31 @@ def test_volume_watermark_takes_precedence(monkeypatch, tmp_path) -> None:
     check_workspace_write_capacity(str(tmp_path), extra_bytes=0)  # 放行
 
 
+def test_volume_probe_failure_fails_closed(monkeypatch, tmp_path) -> None:
+    """水位核算失败（disk_usage OSError）→ fail-closed 拒写（末防线不静默失效，
+    不谎报卷满、无状态自愈）。"""
+    monkeypatch.setattr(settings, "workspace_quota_bytes", 0)
+    monkeypatch.setattr(settings, "sandbox_volume_watermark_bytes", 10)
+
+    def boom(_path):
+        raise OSError("卷不可用")
+
+    monkeypatch.setattr("app.harness.execution.quota.shutil.disk_usage", boom)
+    with pytest.raises(AppError) as exc:
+        check_workspace_write_capacity(str(tmp_path), extra_bytes=0)
+    assert exc.value.code == ErrorCode.VALIDATION
+    assert "不可用" in exc.value.message
+    # 核算恢复（无异常）→ 自动放行
+
+    class _Room:
+        free = 999
+
+    monkeypatch.setattr(
+        "app.harness.execution.quota.shutil.disk_usage", lambda _path: _Room()
+    )
+    check_workspace_write_capacity(str(tmp_path), extra_bytes=0)
+
+
 def test_invalidate_recomputes_usage(_quota_small) -> None:
     """标脏后缓存重算（新写入被后续检查可见）。"""
     usage_dir = _quota_small

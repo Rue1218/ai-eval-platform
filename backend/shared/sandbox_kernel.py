@@ -236,7 +236,10 @@ def run_sandboxed(
         if mode == "read-only" and _looks_readonly_denied(snippet):
             raise SandboxError(
                 "DENIED",
-                "沙箱卷只读拒绝写入（当前档位 read-only；如需写入请经升档审批后重试）",
+                # 口径按设计 §6.1.1：read-only 只约束 bash 持久写（绑定会话内
+                # 文件工具仍可写）；文案不指引升档通道——该通道受 api 开关
+                # agent_escalation_approval_enabled 门控，开关关时指引即误导。
+                "沙箱卷只读拒绝写入（当前 bash read-only 档位）",
             )
         raise SandboxError("VALIDATION", f"命令执行失败（退出码 {started.returncode}）：{snippet}")
     return stdout.strip() or "（无输出）"

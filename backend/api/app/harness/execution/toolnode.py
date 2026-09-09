@@ -456,7 +456,7 @@ def build_tool_node(
                                     "ok": False,
                                     "truncated": False,
                                     "redacted": False,
-                                    "error": "沙箱卷只读拒绝写入（read-only 档位）",
+                                    "error": "沙箱卷只读拒绝写入（bash read-only 档位）",
                                     "error_code": "DENIED",
                                     "escalation": True,
                                 },
@@ -471,9 +471,9 @@ def build_tool_node(
                                 "command": str(safe_args.get("command") or ""),
                                 "reason": "escalation",
                                 "risk_level": "high",
-                                "sandbox_scope": "read-only 档拒写；批准后以 "
-                                "workspace-write 重放该命令一次（仅当前会话工作区可写，"
-                                "网络关闭、系统目录只读且资源受限）。",
+                                "sandbox_scope": "bash read-only 档拒写；批准后该命令以 "
+                                "workspace-write 重放一次（仅当前会话绑定工作区可写；"
+                                "网络关闭、系统目录只读、资源受限）。",
                                 "allowed_decisions": ["approve", "reject"],
                             }
                         )

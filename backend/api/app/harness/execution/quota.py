@@ -68,12 +68,15 @@ def directory_usage_cached(root: str) -> int:
 
 
 def _volume_free_bytes(path: str) -> int:
-    """path 所在文件系统剩余空间（磁盘配额语义按卷而非目录）。"""
+    """path 所在文件系统剩余空间（磁盘配额语义按卷而非目录）。
+
+    核算失败返回 -1 哨兵（fail-closed：末防线失效即拒写，见调用方）。
+    """
     try:
         usage = shutil.disk_usage(os.path.dirname(os.path.abspath(path)) or path)
     except OSError as exc:
-        logger.warning("卷水位核算失败 path=%s err=%s（按放行处理，配额仍生效）", path, exc)
-        return int(settings.sandbox_volume_watermark_bytes)
+        logger.error("卷水位核算失败 path=%s err=%s（fail-closed 拒写）", path, exc)
+        return -1
     return usage.free
 
 
@@ -88,10 +91,17 @@ def check_workspace_write_capacity(
     ``extra_bytes`` = 本次预计新增字节（直写工具传新文件大小或 edit 净增；
     bash 写不可预估传 0——只按现有用量判定）。超限抛 VALIDATION（不触发
     升档链）。``invalidate_after`` = 调用方写成功后标脏用量缓存。
+    水位核算失败（哨兵 -1）= 卷状态不可用：fail-closed 拒写（不谎报卷满；
+    无状态自愈——核算恢复后自动放行），避免全局末防线静默失效。
     """
     watermark = int(settings.sandbox_volume_watermark_bytes)
     if watermark > 0:
         free = _volume_free_bytes(sandbox_dir)
+        if free < 0:
+            raise AppError(
+                ErrorCode.VALIDATION,
+                "沙箱卷状态不可用（容量核算失败）：写入已被拒绝，请稍后重试或联系管理员",
+            )
         if free < watermark:
             raise AppError(
                 ErrorCode.VALIDATION,
