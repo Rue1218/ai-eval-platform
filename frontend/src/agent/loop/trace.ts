@@ -4,6 +4,7 @@ import { identity } from './reducer.ts'
 export interface TraceState { events: Data[]; seen: Set<number>; seq: number; catalog: Data | null; denied: boolean }
 export function createTrace(): TraceState { return { events: [], seen: new Set(), seq: -1, catalog: null, denied: false } }
 export function applyTrace(state: TraceState, frame: LoopFrame): void {
+  if (state.denied) return
   if (frame.type === 'schema.catalog') state.catalog = frame.data
   if (frame.type !== 'trace.event') return
   const event = frame.data.event
@@ -25,18 +26,22 @@ export function schemaRef(root: Data, ref: string): any {
   return ref.slice(2).split('/').reduce((value: any, part) => value?.[part.replace(/~1/g, '/').replace(/~0/g, '~')], root) ?? null
 }
 export function category(type: string): string {
-  if (/assistant|request|step/.test(type)) return 'model'
-  if (/tool|execution/.test(type)) return 'tool'
-  if (/approval|question|task_confirmation/.test(type)) return type.split(/[./]/)[0] === 'question' ? 'question' : 'approval'
-  if (type.startsWith('task')) return 'task'
+  // 按事件命名空间分类，approval.requested 的后缀不能误命中模型 request。
+  const namespace = type.split(/[./]/)[0]
+  if (['assistant', 'request', 'step'].includes(namespace)) return 'model'
+  if (['tool', 'execution'].includes(namespace)) return 'tool'
+  if (namespace === 'question') return 'question'
+  if (['approval', 'task_confirmation'].includes(namespace)) return 'approval'
+  if (namespace === 'task') return 'task'
   return 'lifecycle'
 }
 
-/** 一个工具调用只占一个语义行，保留所有 transport 层和 source seq 供检查器关联。 */
+/** 每次模型请求和工具调用各占一个语义行，保留全部传输层供检查器关联。 */
 export function semanticTraceRows(facts: LoopFrame[]): Array<LoopFrame & { layers: LoopFrame[] }> {
   const groups = new Map<string, LoopFrame & { layers: LoopFrame[] }>()
   for (const frame of facts) {
-    const key = frame.type.startsWith('tool.') && frame.correlation.call_id ? identity(frame, true) : `cursor:${frame.cursor}`
+    const key = frame.type.startsWith('tool.') && frame.correlation.call_id ? `tool:${identity(frame, true)}`
+      : frame.type.startsWith('assistant.') && frame.correlation.attempt_id ? `model:${identity(frame)}` : `cursor:${frame.cursor}`
     const old = groups.get(key)
     if (old) {
       old.layers.push(frame)

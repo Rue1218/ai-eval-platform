@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AgentLoop 组件样式核对</title>
+<style>
+  body{margin:0;background:#f7f8fc;color:#172033;font:14px/1.5 Inter,"Segoe UI Variable Text","Microsoft YaHei UI",sans-serif}
+  #preview{position:relative;z-index:1;display:flex;height:100dvh;flex-direction:column;min-width:0}
+  .preview-bar{display:flex;align-items:center;justify-content:space-between;padding:12px 20px;border-bottom:1px solid #e3e8f0;background:white}
+  .preview-bar small{color:#748197;font-size:11px}.preview-trace{display:flex;flex:1;min-height:0}
+</style>
+<div id="app"></div>
+<script type="module">
+  import {createApp, h, ref} from 'vue'
+  import '../src/styles/base.css'
+  import ThinkingControl from '../src/components/agent/loop/ThinkingControl.vue'
+  import TraceWorkspace from '../src/components/agent/loop/TraceWorkspace.vue'
+  import {createLoopState, applyFrame} from '../src/agent/loop/reducer.ts'
+  import {createTrace} from '../src/agent/loop/trace.ts'
+
+  // 只挂载生产组件与内存演示事实，不连接模型、数据库或 WebSocket。
+  const state=createLoopState('style-preview'), trace=createTrace()
+  const identity={turn:1,turn_id:'style-preview:1',step:1,attempt_id:'attempt-1'}
+  const facts=[['user.message',{content:'读取 README.md 并总结项目结构'}],['turn.start',{}],
+    ['assistant.start',{request_summary:{model:'deepseek-chat',reasoning_effort:'high'}}],
+    ['assistant.message',{content:'我会先查看项目说明文件。'}],['assistant.end',{outcome:'committed'}],
+    ['tool.call',{name:'read',display:{target:'README.md',arguments_preview:'{"path":"README.md"}'}}],
+    ['tool.result',{name:'read',status:'succeeded',display:{result_preview:'项目包含 API、Worker 与 Vue 前端。'}}],
+    ['turn.end',{reason:'completed'}]]
+  facts.forEach(([type,data],index)=>applyFrame(state,{protocol_version:2,type,durability:'persistent',session_id:state.sessionId,cursor:index+1,ts:'2026-09-09T08:00:00Z',correlation:{...identity,...(type.startsWith('tool.')?{call_id:'read-1'}:{})},data}))
+  createApp({setup(){const effort=ref('max');return()=>h('main',{id:'preview'},[
+    h('header',{class:'preview-bar'},[h('div',[h('strong','AgentLoop 组件样式核对'),h('br'),h('small','隔离演示数据 · 无模型调用')]),h(ThinkingControl,{modelValue:effort.value,allowed:['off','low','medium','high','max'],model:'DeepSeek','onUpdate:modelValue':value=>effort.value=value})]),
+    h('section',{class:'preview-trace'},[h(TraceWorkspace,{state,trace})])])}}).mount('#app')
+</script>
+</html>

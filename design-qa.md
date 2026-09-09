@@ -1,4 +1,31 @@
-# AgentLoop 输入栏与思考强度设计 QA
+# AgentLoop 原始样式核对（2026-09-09，V0.5）
+
+## 当前结果与范围
+
+final result: blocked — 仅源截图逐像素比对受阻。浏览器拒绝打开参考文件的 file:// URL；未改用其他浏览器或转发原页面来绕过该限制。源 HTML 的 CSS 已通过文件读取核对，生产组件的计算样式与交互已在 In-app Browser 验证。不能将以下实测记录称为两张截图的视觉一致性验收。
+
+依据 product-design/design-qa/SKILL.md：“If either artifact cannot be opened, captured, or compared, write `design-qa.md` with `final result: blocked`”。此限制不代表已经完成的代码修改和本地交互检查失败。
+
+## 已修正的差异
+
+- [P1] 轨迹沿用了绿色状态、自定义尺寸和卡片式详情。本轮采用原页紫色状态、44px 工具栏、30px 行、56px 序号、430px 桌面详情栏及键值/预览/关联区域。
+- [P1] 思考卡片缺少粒子层，额外说明行改变卡片高度；恢复源结构与两层 22 粒子。
+- [P2] Naive UI raw 弹层仍有方形 shadow；计算样式确认问题后显式去除，复测为 none。
+- [P2] 平台全局焦点规则给 range 增加方框；保留源拇指焦点样式，清除 range 自身 box-shadow。
+
+## 实现证据
+
+- 独立入口：http://localhost:5173/tests/agent-loop-style-preview.html；生产 Vue 组件，内存演示数据，无外部调用。
+- 桌面 1440×900：`artifacts/agentloop-trace-reference-styles.png`、`artifacts/agentloop-effort-reference-styles.png`。
+- 手机 375×812：`artifacts/agentloop-reference-styles-mobile.png`；document scrollWidth 与 viewport 均为 375。
+- 卡片测量：272×121.5px，radius=16px，padding=14px 14px 13px，粒子数=22，外层阴影=none。
+- 轨迹测量：行=30px、首列=56px、工具栏=44px、详情=430px；分类前景 rgb(69,70,170)、背景 rgb(240,241,255)。
+- 字体：两个组件隔离为源 Inter/Segoe UI Variable Text/Microsoft YaHei UI 字体栈；标题、正文、等宽序号分别保留源字号与字重。
+- 布局：移除源未有的说明行和轨迹统计工具条；窄屏详情接在列表下。平台输入栏独立占位，不复制源重复的 102px 预留。
+- 颜色与素材：使用源 CSS 色值、渐变及原有代码粒子，无新增位图和占位素材；内容仍为平台授权数据。
+- 交互：已用浏览器检查选中记录、预览 Tab、滑块 Home/End 从关闭到最高档；详情和滑块均无横向页面溢出。
+
+## 历史记录（V0.3，不作为本轮完整验收结论）
 
 ## Source visual truth
 

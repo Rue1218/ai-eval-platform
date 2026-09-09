@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createLoopState, applyFrame, conversationRows, restoreSnapshot } from '../src/agent/loop/reducer.ts'
-import { createTrace, applyTrace, safePacket, schemaRef, semanticTraceRows } from '../src/agent/loop/trace.ts'
+import { createTrace, applyTrace, safePacket, schemaRef, semanticTraceRows, category } from '../src/agent/loop/trace.ts'
 import { safeLink } from '../src/agent/loop/toolPresentation.ts'
 
 /** 夹具遵循生产信封，持久 cursor 与 source seq 从各自起点计数。 */
@@ -57,6 +57,44 @@ test('四步模型、三个同名工具与下一回合：顺序和调用身份�
   applyFrame(s, f('turn.start', {}, { turn: 2, turn_id: 's:2' }))
   applyFrame(s, f('tool.result', { name:'read', status:'outcome_unknown' }, { turn:2,turn_id:'s:2',attempt_id:'a1',call_id:'same' }))
   assert.equal(Object.keys(s.tools).length, 4)
+})
+
+test('模型开始帧迟于文本或思考增量到达时，不倒退显示状态', () => {
+  for (const [kind, phase] of [['assistant.text.delta', 'answering'], ['assistant.reasoning.delta', 'thinking']]) {
+    const state = createLoopState('s'), f = fixture(), c = { attempt_id: 'a' }
+    applyFrame(state, f('turn.start'))
+    applyFrame(state, f(kind, { text: '已收到的片段', chunk_index: 0 }, c, 'transient'))
+    applyFrame(state, f('assistant.start', { request_summary: { model: 'test' } }, c))
+    assert.equal(state.phase, phase)
+    assert.equal(Object.values(state.attempts).length, 1)
+  }
+})
+
+test('轨迹每次模型请求合为一行，重试独立并保留最终正文和来源', () => {
+  assert.equal(category('approval.requested'), 'approval')
+  assert.equal(category('question.requested'), 'question')
+  assert.equal(category('task_confirmation.requested'), 'approval')
+  const f = fixture(), c = { attempt_id: 'a' }
+  const facts = [f('assistant.start', {request_summary: {model: 'test'}}, c),
+    f('assistant.message', {content: '完整回答'}, {...c, source_seq: 3}),
+    f('assistant.end', {outcome: 'committed'}, c), f('assistant.start', {}, {attempt_id: 'b'})]
+  const rows = semanticTraceRows(facts)
+  assert.equal(rows.length, 2)
+  assert.equal(rows[0].layers.length, 3)
+  assert.equal(rows[0].data.content, '完整回答')
+  assert.equal(rows[0].data.request_summary.model, 'test')
+  const trace = createTrace(); trace.denied = true
+  applyTrace(trace, f('trace.event', {event: {seq: 0}}, {}, 'control'))
+  applyTrace(trace, f('schema.catalog', {secret: 'old'}, {}, 'control'))
+  assert.equal(trace.events.length, 0); assert.equal(trace.catalog, null)
+})
+test('重连回放 interrupted 收尾后，旧 active turn 不再阻塞下一条输入', () => {
+  const s = createLoopState('s'), f = fixture()
+  applyFrame(s, f('turn.start'))
+  assert.equal(s.activeTurn, 's:1')
+  applyFrame(s, f('turn.end', { reason: 'interrupted' }))
+  assert.equal(s.activeTurn, null)
+  assert.equal(s.phase, 'interrupted')
 })
 test('1000 chunks、450 条历史、最终校正和迟到片段不回写终态', () => {
   const s = createLoopState('s'), f = fixture()

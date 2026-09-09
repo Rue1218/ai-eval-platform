@@ -35,3 +35,26 @@ test('同一冻结命令重复发送保持 ID 和负载，错误版本关闭',as
     socket.frame('capabilities',{stream_schema_version:'unknown'});assert.equal(socket.readyState,3);assert.match(state.error,/协议/)
   } finally { client.close() }
 })
+
+test('轨迹退订丢弃在途帧，重连按轨迹序号恢复且不自动重试拒绝的订阅', async () => {
+  const state = createLoopState('s'), socket = new Socket(), frames = []
+  const client = new AgentLoopWebSocket('s', {ticket:async()=>'ticket',state:()=>state,replace:()=>{},socket:()=>socket,onFrame:frame=>frames.push(frame)})
+  try {
+    await client.connect(); state.ready = true
+    client.trace(true, -1)
+    socket.frame('trace.event', {event:{seq:0}})
+    client.trace(false)
+    socket.frame('trace.event', {event:{seq:1}})
+    socket.frame('schema.catalog', {etag:'late'})
+    assert.equal(frames.length, 1)
+    client.trace(true, 0)
+    socket.frame('trace.event', {event:{seq:1}})
+    socket.frame('replay.completed', {cursor:0})
+    assert.equal(socket.sent.at(-1).data.after_seq, 1)
+    const request = socket.sent.at(-1)
+    socket.frame('command.rejected', {code:'UNAUTHORIZED'}, {request_id:request.request_id})
+    const count = socket.sent.length
+    socket.frame('replay.completed', {cursor:0})
+    assert.equal(socket.sent.length, count)
+  } finally { client.close() }
+})

@@ -76,7 +76,8 @@ export function applyFrame(state: LoopState, frame: LoopFrame): 'applied' | 'dup
   if (kind.startsWith('assistant.') && c.attempt_id) {
     const a = attemptFor(state, frame)
     Object.assign(a, d, { event: kind, correlation: { ...a.correlation, ...c } })
-    if (kind === 'assistant.start') state.phase = 'model'
+    // 增量可先于持久 start 到达，迟到的开始事件不能覆盖已经观测的输出状态。
+    if (kind === 'assistant.start' && !a.ended) state.phase = a.text ? 'answering' : a.reasoning ? 'thinking' : 'model'
     if (kind === 'assistant.message') { a.text = d.content ?? ''; a.reasoning = d.reasoning_preview ?? ''; a.ended = true }
     if (kind === 'assistant.end') a.ended = true
     if (kind === 'assistant.retry') state.phase = 'retry_wait'
