@@ -209,8 +209,9 @@ class LoopServiceProtocol(Protocol):
 
     execute_command 在会话行锁事务中校验幂等键/输入摘要/client_message_id，
     当前执行身份、nonce、TTL 与控制连接；提交后调用 Runtime 的快速启动/
-    取消入口并返回既有或新回执。attach 不抢占控制权，detach 仅取消实际
-    属于该 connection_id 的回合。失败抛 AppError，不返回异常原文。
+    取消入口并返回既有或新回执。attach 可在已取得释放写锁时结算硬重启
+    遗留回合，但不抢占存活控制权；detach 仅取消实际属于该 connection_id
+    的回合。失败抛 AppError，不返回异常原文。
     """
 
     async def authenticate(self, ticket: str) -> str:

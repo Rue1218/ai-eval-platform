@@ -1,10 +1,10 @@
 # AI 测试与评估平台 — Agent Loop 后端架构设计
 
-> 版本：V0.5 ｜ 日期：2026-09-09 ｜ 状态：AgentLoop 单入口、协议档选择和前端输入栏已完成本地验证；真实供应商与 Linux 执行尚待验收。
+> 版本：V0.6 ｜ 日期：2026-09-09 ｜ 状态：AgentLoop 单入口、协议档选择、重启恢复和共享评测档已完成本地回归；真实供应商与 Linux 执行尚待验收。
 >
 > 用户目标：完整采用 `deepseek-harness-py` 当前已实现的 Agent Loop 及其运行时、模型适配、消息、事件、审批、取消和恢复能力；工具复用平台现有实现，重写字段与接缝并完成兼容联调。核心验收是模型—工具—结果回填—再次模型调用的完整循环。
 >
-> V0.1–V0.3 为架构审查阶段。V0.4 已按用户授权实现后端代码、API v2 契约和 Alembic 迁移；V0.5 收敛新会话入口、协议档选择和前端输入栏。下文保留完整目标与验收标准，实际文件、启用步骤和验证边界见文末及《AgentLoop后端实施记录》，不能将验收矩阵视为全部验收通过。
+> V0.1–V0.3 为架构审查阶段。V0.4 已按用户授权实现后端代码、API v2 契约和 Alembic 迁移；V0.5 收敛新会话入口、协议档选择和前端输入栏；V0.6 修复审查发现的恢复、提示词、评测档权限与 CI 覆盖缺口。下文保留完整目标与验收标准，实际文件、启用步骤和验证边界见文末及《AgentLoop后端实施记录》，不能将验收矩阵视为全部验收通过。
 >
 > V0.2 修订：按审查修复四项问题——WS 改为独立 v2 协议与会话事件流；补齐供应商内容块/协议状态的采集、持久化和回传；分离回合结算与工作区执行隔离；区分普通工具失败、取消、禁止派发和调度基础设施异常。同步架构图、存储、阶段与验收矩阵。
 >
@@ -13,6 +13,8 @@
 > V0.4 修订：新 Agent 路径接入七节点循环、三协议异步适配、平台工具桥、PG 事实与会话投影、WS v2 和带终止证据的 Runner 客户端；旧网关和业务 Worker 保留。新增 engine_version 隔离路径。补齐按实际裁剪消息索引重建请求、跨引擎工作区隔离、事务内回执和恢复语义。
 >
 > V0.5 修订：新建会话固定 AgentLoop，删除 AGENT_LOOP_ENABLED；历史 legacy 行只读保留。agent-ui 发布脱敏 profiles，客户端每回合提交 profile_id 与 reasoning_effort，服务端重新校验协议档、凭据、模型和档位兼容性。输入栏采用参考图的紧凑结构和 DeepSeek Harness 风格思考控制。
+>
+> V0.6 修订：订阅建立阶段先读取持久事实；只有成功取得已释放的 PostgreSQL advisory writer lock，才补齐硬重启遗留回合的 `interrupted` 终态，存活实例持锁时只订阅而不接管。每回合按所选协议档读取补充提示词，核心系统提示词保持首段和可缓存边界，补充段动态、不可缓存且读取时再次拒绝密钥或接管性文本。`task.create` 的共享协议档遵循全员同权，`created_by` 只作审计不作使用 ACL。CI 同时配置三组 Loop PostgreSQL URL 并新增 Runner Ubuntu 回归任务；真实供应商与可写 cgroup v2 委派仍待服务器验收。
 
 ## 1. 范围与设计基线
 
@@ -1076,3 +1078,13 @@ V0.1–V0.3 只修订设计。V0.4 的实际代码清单如下；§13 保留目�
 | `backend/api/tests/test_loop_*.py`、`backend/runner/tests/test_{executions,kernel_cancellation}.py` | 源语义、适配器、真实 PG、临时文件、WS、取消与恢复回归 |
 
 实际验证结果、启用顺序、剩余平台验收见 [后端实施记录](AI测试与评估平台-AgentLoop后端实施记录.md)。新会话固定 AgentLoop，前端已接入协议档选择和思考控制；源码测试不能替代 A14 的真实协议档与 A20 的 Linux 执行故障演练。
+
+V0.6 的审查修复文件如下：
+
+| 实际文件（相对项目根） | 作用 |
+| :--- | :--- |
+| `backend/api/app/agent/loop_service.py`、`routers/ws_v2.py` | attach 在已释放 writer lock 上结算硬重启遗留回合，存活实例仍只读订阅 |
+| `backend/api/app/agent/loop_wiring.py` | 按本回合协议档装配受校验的动态 overlay，保持核心提示词优先和缓存边界 |
+| `backend/api/app/harness/execution/task_tools.py` | 统一 Agent `task.create` 与 REST 的共享协议档使用口径 |
+| `backend/api/tests/test_loop_{wiring,integration_pg,tools_task_prepare}.py`、`frontend/tests/agentLoop.test.mjs` | 覆盖恢复锁竞争、恢复后续聊、overlay、共享评测档和前端 busy 清理 |
+| `.github/workflows/ci.yml` | 配置三组 PostgreSQL Loop 测试变量，并执行独立 Runner 回归 |

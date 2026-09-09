@@ -2,8 +2,8 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.80 |
-| WS v2 修订日期 | 2026-09-09（§4A，AgentLoop 单入口与逐回合协议档选择） |
+| 文档版本 | V1.81 |
+| WS v2 修订日期 | 2026-09-09（§4A，AgentLoop 安全重连恢复与协议档补充提示词） |
 | 对应 PRD | V1.18（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.7.2（AgentLoop 单入口；JSON 仍以本文为准） |
@@ -15,6 +15,8 @@
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
 > V1.78（2026-09-09）：G6b 磁盘配额与终态契约组（F5 §6.6/M-R3-7）+ G6 评审 M1–M3 合并登记（G6a 升档审批主体已随 #235 于 2026-09-08 合入 main，其 `DENIED` 错误码与 `tool_approval` 升档卡语义见本版事件表与错误码表）。**G6b**：新增配置 `workspace_quota_bytes`（默认 1GiB）与 `sandbox_volume_watermark_bytes`（默认 512MiB）——workspace-write 档写前容量检查（卷水位熔断优先于每目录配额，TTL 缓存 du，VALIDATION 码不触发升档链）；`approval_terminal` outcome 成组扩展 `voided`（ack 行锁内检查点预检缺失作废）/`recovery_failed`（resume 恢复失败）。**评审修订**：审批卡终态按卡型归类（M3）——`approval_terminal` payload 新增可选 `card_type`（`"approval"`|`"clarify"`，缺省 `"approval"`——旧事件与旧客户端按缺省解释，无破坏）：`recovery_failed` 对澄清卡恢复失败同样广播并携带 `card_type="clarify"`（`_start_card_resume` 按发起卡型携带，前端按卡型路由 → ClarifyCard 增 `failed` 终态展示）；`expired`/`voided`/`cancelled` 恒为审批卡（payload 均带 `card_type="approval"`）。错误码 `DENIED`（403）口径收敛为 **bash 只读档拒写**——read-only 只约束 bash 持久写（绑定会话内文件工具仍可写，口径见《工作区与沙箱设计方案》§6.1.1），DENIED 文案不指引升档通道（该通道受 `agent_escalation_approval_enabled` 门控）；磁盘配额卷水位核算失败（disk_usage OSError）改为 fail-closed 拒写（§6.6，不静默放行，核算恢复自动放行）。
+>
+> V1.81（2026-09-09）：不新增 REST 或 WS 字段。`subscribe` 的 attach 阶段在回放前检查持久开放回合：只有成功取得已释放的 PostgreSQL advisory writer lock，才结算硬重启遗留的 `turn.end(reason="interrupted")`；锁仍被存活实例持有时只订阅，不转移控制权或关闭其回合。每回合按所选 Agent 协议档读取已保存的补充提示词，核心提示词优先、补充段不可缓存，并在读取时再次拒绝疑似密钥或接管性内容。`task.create` 的评测档和裁判档使用全员同权协议档目录，`created_by` 仅为审计字段。CI 同时运行三组 Loop PostgreSQL 夹具和 Runner 回归；真实 cgroup v2 进程树取消仍需部署环境验收。
 >
 > V1.80（2026-09-09）：AgentLoop 成为**唯一新会话引擎**。`POST /api/sessions` 的 `engine_version` 仅接受且默认 `agent_loop_v2`；历史 `legacy` 行仍可读取，但不能借创建或 WS 入口回退。删除 `AGENT_LOOP_ENABLED` 开关，旧 `/ws/agent` 必须显式携带历史会话 ID，否则关闭 4400；新会话只使用 `/ws/agent/v2`。`turn.submit.data` 新增可选 `profile_id`，只能是平台协议档 ID：服务端每回合重新校验 Agent 用途、连接凭据、模型与 `reasoning_effort`，浏览器不能传模型地址、密钥或供应商参数。`agent-ui` 增量 `profiles[]`，并将 `profile` 扩为同形脱敏投影，供输入栏逐回合选择模型和思考强度。
 >
@@ -1869,9 +1871,9 @@ MCP/平台短工具中文名（ToolCard 标题；原生基础工具 `read` / `wr
 ---
 
 
-## 4A. Agent Loop WebSocket v2（V1.80，2026-09-09）
+## 4A. Agent Loop WebSocket v2（V1.81，2026-09-09）
 
-本节按《AgentLoop后端架构设计》V0.3 §11 登记，独立于 §4 legacy 协议。
+本节按《AgentLoop后端架构设计》V0.6 §11 登记，独立于 §4 legacy 协议。
 `SessionOut.engine_version` 仍可返回 `"legacy" | "agent_loop_v2"`，用于历史记录审计；
 `POST /api/sessions` 仅接受且默认 `agent_loop_v2`，服务端固定写入该值。禁止通过
 WS 或更新接口切换历史会话引擎，也不能创建新的 legacy 会话。
@@ -1957,7 +1959,9 @@ trace.event 的 `data:{source:"history"|"runtime",event:{seq,type,ts,data}}` 使
 
 ### 4A.3 快照、背压与运行时边界
 
-先 attach 注册瞬态接收，再在一致性快照读高水位 H 和最早保留 cursor。
+attach 在建立回放前检查持久开放回合；只在已成功取得释放的 PostgreSQL writer lock
+后补齐 `turn.end(reason="interrupted")`，锁仍被存活实例持有时只回放而不接管。随后注册
+瞬态接收，再在一致性快照读高水位 H 和最早保留 cursor。
 subscribed 返回 `{cursor:H}`；合法游标只回放 (after_cursor,H]，然后
 replay.completed `{cursor:H}`，再发送连续的 >H 已提交前缀。
 持久读取按 cursor 排序并校验连续性，重复行去重；不能依通知先后推进 cursor。
@@ -1971,7 +1975,7 @@ send 超时同样关闭 4408。Runtime 的事实提交不等待网络。
 断连/退订调用 detach；仅释放并取消该连接实际控制的活动回合，观察者不取消，
 重连/重复命令不自动抢占旧控制权。接收循环只等短事务接受结果，不 await 整轮图。
 
-### 4A.5 前端展示增量（V1.80，2026-09-09）
+### 4A.5 前端展示增量（V1.81，2026-09-09）
 
 - `GET /api/sessions/agent-ui` 返回草稿能力；`GET /api/sessions/{id}/agent-ui` 复验会话可见性与 v2 引擎。响应 `version=1, enabled, profile, profiles, allowed_efforts, default_effort, permissions{write,trace,reasoning,interactions,settings}, controller{active,owned_by_actor}, attachments`。`profile` 与 `profiles[]` 同形，均只包含 `id,name,version,model,protocol,allowed_efforts,default_effort`；服务端逐档通过同一 resolver 校验，绝不返回 base_url、API Key 或供应商参数。顶层 `allowed_efforts/default_effort` 保留为默认协议档兼容字段。controller 不授予当前连接控制权。
 - 每次 `turn.submit` 都以提交的 `profile_id` 与 `reasoning_effort` 重新解析协议档；协议档不存在、未声明 Agent 用途、无有效凭据或思考档位不支持时返回 `VALIDATION`。前端本地偏好只能辅助预选，不能替代服务端解析。
@@ -1995,7 +1999,7 @@ WS 类型定义在 `routers/ws_v2.py`：`WsAccess(write,trace,reasoning,interact
 | :--- | :--- |
 | authenticate(ticket:str) | str，复用旧短票消费及用户校验，返回服务端 actor ID |
 | authorize(actor_id,session_id) | WsAccess；复用 session ACL，验证引擎版本；权限变化实时读取 |
-| attach(actor_id,session_id,connection_id,on_transient) | 注册 Callable[[dict],None]，仅传完整 transient 信封；不转移控制权 |
+| attach(actor_id,session_id,connection_id,on_transient) | 注册 Callable[[dict],None]；仅在取得已释放 writer lock 时结算硬重启遗留回合，绝不转移存活控制权 |
 | snapshot(actor_id,session_id) | StreamSnapshot；state 经授权，与 cursor 同一数据库快照 |
 | read_stream(session_id,after_cursor,limit) | list[dict]，完整 persistent 信封、按已提交 cursor 升序 |
 | read_trace(session_id,after_seq,limit) | list[dict]，规范事实、按 seq 升序 |
@@ -2021,6 +2025,16 @@ WS 类型定义在 `routers/ws_v2.py`：`WsAccess(write,trace,reasoning,interact
 | backend/api/app/harness/contracts/loop_events.py | 源完整事实目录、schema descriptor、producer、correlation 与缓存 ETag；平台新增事实登记 |
 | backend/api/app/harness/security/loop_redaction.py | 源通用递归敏感字段、凭据值和 JSON Pointer 路径脱敏；ordinary 与 trace 分开 |
 | docs/AI测试与评估平台-API.md | V1.80 固化 AgentLoop 单入口、协议档安全投影与逐回合模型选择契约 |
+
+### V1.81 修改代码文件与作用清单
+
+| 文件 | 作用 |
+| :--- | :--- |
+| backend/api/app/agent/loop_service.py / routers/ws_v2.py | 安全重连恢复：释放 writer lock 后结算 interrupted，存活实例不被接管 |
+| backend/api/app/agent/loop_wiring.py | 所选协议档 overlay 的核心优先、动态缓存边界和读取期安全校验 |
+| backend/api/app/harness/execution/task_tools.py | Agent task.create 与 REST 的共享协议档使用口径一致 |
+| backend/api/tests/test_loop_wiring.py / test_loop_integration_pg.py / test_loop_tools_task_prepare.py | 恢复锁竞争、后续回合、overlay 与共享协议档回归 |
+| .github/workflows/ci.yml | 三组 Loop PostgreSQL 夹具与 Runner Ubuntu 回归 |
 
 
 ## 5. 任务规格 TaskSpec（`POST /api/tasks` 与内部 `task.create` 共用）
