@@ -238,3 +238,71 @@ class ExpectMatcher:
         missing = calls - results
         if missing:
             raise ProbeAssertion(f"tool_result 缺少 call_id：{missing}")
+
+    def vocab_version_consistent(self, expected: str | None = None) -> None:
+        """V1.71 词汇表版本化：公共头 vocab_version 存在且恒等于当前版本。
+
+        对齐 API.md §4.2（服务端恒发可选字段）与 shared/event_vocab.py 演进纪律。
+        服务端对每帧（含 pong 瞬态帧）统一注入，故对全部下行帧校验；
+        空会话仅有 pong 时同样可校验。
+        """
+        from .protocol import EXPECTED_VOCAB_VERSION
+
+        expected = expected or EXPECTED_VOCAB_VERSION
+        seen = 0
+        for item in self.trace.downlink():
+            seen += 1
+            version = item.raw.get("vocab_version")
+            if version != expected:
+                raise ProbeAssertion(
+                    f"下行帧 vocab_version 期望 {expected}，实际 {version!r} event={item.event}"
+                )
+        if seen == 0:
+            raise ProbeAssertion("没有下行帧可校验 vocab_version")
+
+    def no_pending_confirm(self, event: str, code: str = "VALIDATION") -> None:
+        """卡片回执在无卡时的 fail-closed：error(VALIDATION)，绝不 resume。
+
+        V1.72/1.73：clarify_reply / tool_approval_ack / confirm_ack 在
+        pending_confirm 为空时一律拒绝（清卡后重复 ack 走同一路径）。
+        """
+        codes = {
+            "clarify_reply": ("无待澄清卡", "无待处理的澄清卡", "无待确认"),
+            "tool_approval_ack": ("无待审批卡", "无待确认"),
+            "confirm_ack": ("无待确认卡", "无待确认"),
+        }
+        needles = codes.get(event, ("无待",))
+        for item in _down_named(self.trace, "error"):
+            payload = _payload(item)
+            if payload.get("code") != code:
+                continue
+            message = str(payload.get("message") or "")
+            if any(needle in message for needle in needles):
+                return item
+        raise ProbeAssertion(f"{event} 无卡时应 error({code} 无待确认卡)")
+
+    def card_payload_clean(self, event: str) -> TraceFrame:
+        """卡事件 payload 不得携带 meta/thread_id/resume_nonce/nonce（B 路线剥离）。"""
+        card = _down_named(self.trace, event)[-1]
+        payload = _payload(card)
+        for needle in ("meta", "thread_id", "resume_nonce", "nonce", "created_at"):
+            if needle in payload:
+                raise ProbeAssertion(
+                    f"{event} payload 泄漏内部字段 {needle}（B 路线只投影白名单）"
+                )
+        return card
+
+    def completed_with(self, *, finish_reason: str, engine: str | None = None) -> TraceFrame:
+        """断言最近的 response.completed 收尾语义（含可选 engine 审计字段）。"""
+        done = _down_named(self.trace, "response.completed")
+        if not done:
+            raise ProbeAssertion("缺少 response.completed")
+        frame = done[-1]
+        payload = _payload(frame)
+        if payload.get("finish_reason") != finish_reason:
+            raise ProbeAssertion(
+                f"finish_reason 期望 {finish_reason}，实际 {payload.get('finish_reason')}"
+            )
+        if engine is not None and payload.get("engine") != engine:
+            raise ProbeAssertion(f"engine 期望 {engine}，实际 {payload.get('engine')}")
+        return frame

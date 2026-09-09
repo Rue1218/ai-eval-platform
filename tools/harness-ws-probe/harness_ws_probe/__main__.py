@@ -44,6 +44,54 @@ async def _run_l0_scripted() -> None:
     await l0.run_reconnect_replay(peer3)
 
 
+async def _run_acceptance(client: ProbeClient, allow_enqueue: bool) -> int:
+    """现行契约全量验收（V1.78 legacy /ws/agent）：每个验收点独立新会话。"""
+    from .scenarios.acceptance import AcceptanceReport, new_session
+    from .scenarios import acceptance_engine as ae
+    from .scenarios import acceptance_l0 as a0
+    from .scenarios import acceptance_ws as aw
+
+    report = AcceptanceReport()
+    try:
+        for fn in (
+            a0.run_slash_matrix,
+            a0.run_stop_idle,
+            a0.run_unknown_uplink,
+            a0.run_idempotent,
+        ):
+            await new_session(client, f"acc-{fn.__name__}")
+            await fn(client, report)
+            await client.disconnect()
+        await new_session(client, "acc-reconnect")
+        await a0.run_reconnect_replay(client, report)
+        await client.disconnect()
+        for fn in (a0.run_vocab_headers, a0.run_cards_reject_no_card):
+            await new_session(client, f"acc-{fn.__name__}")
+            await fn(client, report)
+            await client.disconnect()
+        await new_session(client, "acc-engine")
+        await ae.run_chat_engine(client, report)
+        await ae.run_agent_read(client, report)
+        await ae.run_clarify_try(client, report)
+        await client.disconnect()
+        await new_session(client, "acc-workflow")
+        await aw.run_workflow_confirm(client, report, allow_enqueue=allow_enqueue)
+        await client.disconnect()
+        await aw.run_workspace_bind(client, report)
+        await new_session(client, "acc-trim")
+        await ae.run_context_trim(client, report)
+        await ae.run_fabrication(client, report)
+        await client.disconnect()
+    except Exception as exc:  # noqa: BLE001
+        report.record("验收编排", "FAIL", f"{type(exc).__name__}: {exc}")
+    report.summary()
+    failed = [i for i in report.items if i["status"] == "FAIL"]
+    if failed:
+        print(f"acceptance 失败 {len(failed)} 项，退出码 1")
+        return 1
+    return 0
+
+
 async def _async_main(args: argparse.Namespace) -> int:
     if args.scripted:
         await _run_l0_scripted()
@@ -111,6 +159,14 @@ async def _async_main(args: argparse.Namespace) -> int:
             if failed:
                 print(f"{args.suite} 与契约不符")
                 return 1
+        if args.suite == "acceptance":
+            code = await _run_acceptance(client, allow_enqueue=args.allow_enqueue)
+            if args.trace_dir:
+                stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+                path = Path(args.trace_dir) / f"acceptance-{stamp}.jsonl"
+                client.trace.write_jsonl(path)
+                print(f"trace {path}")
+            return code
         if args.dump:
             print(client.trace.dump_text())
         if args.trace_dir:
@@ -130,7 +186,7 @@ def main() -> None:
     parser.add_argument("--user", default="admin")
     parser.add_argument("--password", default="admin123")
     parser.add_argument("--insecure", action="store_true")
-    parser.add_argument("--suite", choices=("l0", "l1", "l2", "all", "chat"), default="l0")
+    parser.add_argument("--suite", choices=("l0", "l1", "l2", "all", "chat", "acceptance"), default="l0")
     parser.add_argument(
         "--prompt",
         action="append",
