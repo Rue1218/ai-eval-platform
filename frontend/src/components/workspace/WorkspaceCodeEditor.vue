@@ -129,10 +129,10 @@ watch(
   flex-direction: column;
   height: 100%;
   width: 100%;
-  background: var(--bg-card, #0f172a);
+  background: var(--bg-main, #ffffff);
   border-radius: 8px;
   overflow: hidden;
-  border: 1px solid var(--border-color, rgba(148, 163, 184, 0.15));
+  border: 1px solid var(--border-subtle, #e5e7eb);
 }
 
 .editor-main {
@@ -140,6 +140,7 @@ watch(
   display: flex;
   position: relative;
   overflow: hidden;
+  background: var(--bg-main, #ffffff);
 }
 
 .line-numbers {
@@ -149,9 +150,9 @@ watch(
   font-family: var(--font-mono, 'Fira Code', Consolas, Monaco, monospace);
   font-size: 13px;
   line-height: 1.6;
-  color: var(--text-tertiary, #64748b);
-  background: rgba(15, 23, 42, 0.7);
-  border-right: 1px solid var(--border-color, rgba(148, 163, 184, 0.12));
+  color: var(--text-tertiary, #9ca3af);
+  background: var(--bg-elevated, #f4f8f8);
+  border-right: 1px solid var(--border-subtle, #e5e7eb);
   user-select: none;
   overflow-y: hidden;
   box-sizing: border-box;
@@ -169,8 +170,8 @@ watch(
   border: none;
   outline: none;
   resize: none;
-  background: transparent;
-  color: var(--text-primary, #f1f5f9);
+  background: var(--bg-main, #ffffff);
+  color: var(--text-primary, #111827);
   font-family: var(--font-mono, 'Fira Code', Consolas, Monaco, monospace);
   font-size: 13px;
   line-height: 1.6;
@@ -182,7 +183,7 @@ watch(
 }
 
 .editor-textarea::placeholder {
-  color: var(--text-tertiary, #64748b);
+  color: var(--text-tertiary, #9ca3af);
 }
 
 .editor-statusbar {
@@ -190,10 +191,10 @@ watch(
   align-items: center;
   justify-content: space-between;
   padding: 4px 14px;
-  background: rgba(15, 23, 42, 0.85);
-  border-top: 1px solid var(--border-color, rgba(148, 163, 184, 0.12));
+  background: var(--bg-elevated, #f4f8f8);
+  border-top: 1px solid var(--border-subtle, #e5e7eb);
   font-size: 12px;
-  color: var(--text-tertiary, #94a3b8);
+  color: var(--text-secondary, #4b5563);
   font-family: var(--font-mono, monospace);
   user-select: none;
 }
@@ -206,21 +207,23 @@ watch(
 }
 
 .status-sep {
-  opacity: 0.4;
+  opacity: 0.35;
 }
 
 .status-tag {
   padding: 1px 6px;
-  background: rgba(51, 65, 85, 0.4);
+  background: var(--bg-main, #ffffff);
+  border: 1px solid var(--border-subtle, #e5e7eb);
   border-radius: 4px;
   font-size: 11px;
+  color: var(--text-secondary, #4b5563);
 }
 
 .status-lang {
   padding: 1px 8px;
   border-radius: 4px;
-  background: color-mix(in srgb, var(--c-workspaces, #10b981) 15%, transparent);
-  color: var(--c-workspaces, #10b981);
+  background: rgba(99, 102, 241, 0.1);
+  color: var(--accent-ai, #6366f1);
   font-weight: 500;
   font-size: 11px;
 }
