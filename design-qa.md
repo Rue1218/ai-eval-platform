@@ -164,3 +164,25 @@ final result: blocked — 仅源截图逐像素比对受阻。浏览器拒绝打
 - 876 × 720 视口下输入栏保持可见。
 
 final result: passed
+
+## V0.9 上下文来源分布核对
+
+- Source visual truth: `C:/Users/Toneya/AppData/Local/Temp/codex-clipboard-4e1774ce-3d7d-4a70-beea-2c160809ed01.png`, `C:/Users/Toneya/AppData/Local/Temp/codex-clipboard-12d7dca7-b370-46ae-809c-5ed97fc5126a.png`, `C:/Users/Toneya/AppData/Local/Temp/codex-clipboard-a7be2f2d-7c39-4b13-b254-16c7051b1c02.png`
+- Implementation target: `frontend/src/components/agent/loop/LoopContextMeter.vue`
+- Intended state: authenticated AgentLoop session with a completed model attempt and `context_meter.breakdown`.
+- Rendered evidence: local Vite application reached `/login`; the Agent workspace is unavailable without an authenticated session.
+- Viewport and density: not comparable because the target control is not present on the unauthenticated page.
+
+### Findings
+
+- [P1] The authenticated AgentLoop context meter could not be captured.
+  Evidence: the local application rendered its login route, while the target control only appears after an AgentLoop attempt has written `request_summary.context_meter`.
+  Impact: visual fidelity against the supplied reference cannot be confirmed from browser evidence.
+  Fix: open an authenticated Agent session after deployment, send one message, then compare the compact ring and opened meter popover with the supplied references.
+
+### Implementation Checklist
+
+- Verify the six colored source rows and the gray output-reserve segment with a real AgentLoop request.
+- Verify the compact ring and opened popover at desktop and narrow viewport widths.
+
+final result: blocked

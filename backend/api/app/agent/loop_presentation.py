@@ -93,16 +93,25 @@ def profile_capabilities(profile) -> tuple[list[str], str | None]:
     return allowed, selected if selected in allowed else next(iter(allowed), None)
 
 
-def request_summary(request, *, context_window=None, history_upto_seq=None, input_fingerprint=None) -> dict:
+def request_summary(
+    request,
+    *,
+    context_window=None,
+    history_upto_seq=None,
+    input_fingerprint=None,
+    tool_transports: dict[str, str] | None = None,
+) -> dict:
     """记录实际 attempt 的配置和同源输入估算；测试/旧事实缺协议时保留未知。"""
     meter = None
     if request.protocol and context_window:
-        from .loop_wiring import _prompt_tokens
+        from .loop_wiring import _prompt_breakdown, _prompt_tokens
 
-        meter = {"basis": "serialized_request.v1", "estimated": True,
+        input_tokens = _prompt_tokens(request)
+        meter = {"basis": "serialized_request.v2", "estimated": True,
                  "profile_version": request.profile_version, "input_fingerprint": input_fingerprint,
                  "history_upto_seq": history_upto_seq, "capacity": context_window,
-                 "input_tokens": _prompt_tokens(request), "reserved_output_tokens": request.max_tokens}
+                 "input_tokens": input_tokens, "reserved_output_tokens": request.max_tokens,
+                 "breakdown": _prompt_breakdown(request, tool_transports, input_tokens)}
     return {"model": request.model, "provider": request.provider, "protocol": request.protocol,
             "profile_id": request.profile_id, "profile_version": request.profile_version,
             "reasoning_effort": request.reasoning_effort, "max_tokens": request.max_tokens,

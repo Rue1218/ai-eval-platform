@@ -16,6 +16,11 @@ export interface LoopCommand {
 export interface LoopMeter {
   basis: string; estimated: boolean; profile_version: string; input_fingerprint: string
   history_upto_seq: number; capacity: number; input_tokens: number; reserved_output_tokens: number
+  /** 本次真实请求的输入估算明细；旧历史缺失时由前端按总输入兼容展示。 */
+  breakdown?: {
+    system_prompt: number; conversation_messages: number; tools: number
+    mcp: number; skill: number; memory_files: number
+  }
 }
 
 /** 已授权的 Agent 协议档；只包含选择模型所需的公开元数据。 */
