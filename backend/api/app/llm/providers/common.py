@@ -5,7 +5,9 @@ import json
 from copy import deepcopy
 from dataclasses import asdict
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
+
+import httpx
+from shared.model_urls import model_request_url
 
 from ..loop_contracts import LlmRequest, LlmRequestError, ProtocolState, header_fingerprint
 
@@ -31,29 +33,34 @@ def plain(value: Any) -> Any:
     return deepcopy(value)
 
 
-def normalize_base_url(base_url: str, protocol: str) -> str:
-    """剥离资源后缀后只补一次版本段；带凭据的地址拒绝进入配置。"""
-    parts = urlsplit(base_url.strip())
-    if (
-        parts.scheme not in {"http", "https"}
-        or not parts.hostname
-        or parts.username
-        or parts.password
-        or parts.query
-        or parts.fragment
-    ):
-        raise LlmRequestError("模型服务地址不合法", code="model_config")
-    path = parts.path.rstrip("/")
-    for suffix in ("/chat/completions", "/messages", "/models"):
-        if path.endswith(suffix):
-            path = path[: -len(suffix)]
-            break
-    if protocol == "anthropic_messages":
-        if path.endswith("/v1"):
-            path = path[:-3]
-    elif not path.endswith("/v1"):
-        path += "/v1"
-    return urlunsplit((parts.scheme, parts.netloc, path, "", ""))
+def normalize_base_url(base_url: str, protocol: str, *, full_url: bool = False) -> str:
+    """把共享资源端点转换为 SDK 根地址；完整模式不改写输入。"""
+    try:
+        url = model_request_url(base_url, protocol, full_url=full_url)
+    except ValueError as exc:
+        raise LlmRequestError("模型服务地址不合法", code="model_config") from exc
+    if full_url:
+        return url
+    suffix = "/v1/messages" if protocol == "anthropic_messages" else "/chat/completions"
+    return url[:-len(suffix)] if url.endswith(suffix) else url.rsplit("/messages", 1)[0]
+
+
+def full_url_client_options(url: str, *, asynchronous: bool = False) -> dict:
+    """在 HTTP 发送前固定目标，避免 SDK 追加路径；客户端随 SDK 一同关闭。"""
+    target = httpx.URL(normalize_base_url(url, "openai_chat", full_url=True))
+
+    def exact_endpoint(request: httpx.Request) -> None:
+        """保留 SDK 的认证头和正文，仅还原用户指定的完整请求地址。"""
+        request.url = target
+
+    async def exact_endpoint_async(request: httpx.Request) -> None:
+        """异步 SDK 使用同一端点规则。"""
+        exact_endpoint(request)
+
+    if asynchronous:
+        return {"http_client": httpx.AsyncClient(event_hooks={"request": [exact_endpoint_async]})}
+    return {"http_client": httpx.Client(event_hooks={"request": [exact_endpoint]})}
+
 
 
 def compatibility_key(provider: str, protocol: str, model: str) -> str:

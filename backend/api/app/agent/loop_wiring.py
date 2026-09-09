@@ -92,11 +92,13 @@ def authorized_profile(db, data: dict) -> tuple[AuthorizedProfileSnapshot, int]:
     base_url, model, key = _profile_connection(profile, allow_global_alias=profile.id == default_profile_id)
     if not isinstance(key, str) or not key.strip():
         raise AppError(ErrorCode.VALIDATION, "所选 Agent 协议档未配置模型凭据")
-    reasoning_row = db.get(Setting, "agent_reasoning")
-    reasoning = reasoning_row.value if reasoning_row and isinstance(reasoning_row.value, dict) else {}
+    from app.profile_env import read_profile_env
+    from app.profile_reasoning import profile_reasoning
+
     effort = data.get("reasoning_effort")
     if effort is None:
-        effort = reasoning.get("effort", "medium") if reasoning.get("enabled", True) else "off"
+        effort = profile_reasoning(profile.protocol, base_url, model,
+                                   profile.max_output_tokens, full_url=read_profile_env(profile.id).full_url)["reasoning_effort"]
     if effort not in _REASONING_EFFORTS:
         raise AppError(ErrorCode.VALIDATION, "思考强度配置非法")
     try:
@@ -106,7 +108,7 @@ def authorized_profile(db, data: dict) -> tuple[AuthorizedProfileSnapshot, int]:
         raise AppError(ErrorCode.VALIDATION, "所选 Agent 协议档配置非法") from exc
     if context_window <= 0 or max_tokens <= 0:
         raise AppError(ErrorCode.VALIDATION, "所选 Agent 协议档配置非法")
-    config = ModelConfig(protocol=profile.protocol, base_url=base_url, model=model, api_key=key or "",
+    config = ModelConfig(full_url=read_profile_env(profile.id).full_url, protocol=profile.protocol, base_url=base_url, model=model, api_key=key or "",
                          max_tokens=max_tokens, timeout_s=60,
                          anthropic_version=profile.anthropic_version,
                          reasoning_enabled=effort != "off", reasoning_effort=effort if effort != "off" else "medium")
@@ -333,17 +335,14 @@ async def _build_dependencies(service, entry, actor_id: str, data: dict, resourc
 def _wire_payload(request) -> dict:
     """构造与既有输入估算完全同源的无凭据请求投影。"""
     if request.protocol == "openai_chat":
-        from app.llm.providers.common import replay_items
         from app.llm.providers.openai import to_openai_messages, to_openai_tools
 
-        for message in request.messages:
-            if replay_items(message, request, request.provider, request.protocol):
-                raise LlmRequestError("Chat 历史不能回传 opaque item", code="protocol_state_incompatible")
         return {
             "messages": to_openai_messages(
                 request.messages,
                 request.system,
-                include_reasoning_content=request.provider == "deepseek",
+                include_reasoning_content=request.provider in {"deepseek", "moonshot", "zhipu", "minimax"},
+                request=request,
             ),
             "tools": to_openai_tools(request.tools),
         }

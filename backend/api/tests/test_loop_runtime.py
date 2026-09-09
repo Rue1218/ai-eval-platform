@@ -183,7 +183,7 @@ async def test_runtime_template_reasoning_override_rebuilds_wire_options(monkeyp
             enabled = expected != "off"
             wire = client.requests[-1]
             assert wire["extra_body"]["thinking"] == {"type": "enabled" if enabled else "disabled"}
-            assert wire.get("reasoning_effort") == (expected if enabled else None)
+            assert "reasoning_effort" not in wire  # 旧 DeepSeek 只支持思考开关。
             header = [e["data"]["header"] for e in events if e["type"] == "request/header"][-1]
             assert header["reasoning_effort"] == expected
             assert header["thinking"] is enabled

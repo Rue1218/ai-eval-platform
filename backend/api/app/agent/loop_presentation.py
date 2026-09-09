@@ -81,7 +81,7 @@ def question_answers(questions: list[dict], answers: list[dict]) -> dict:
 def profile_capabilities(profile) -> tuple[list[str], str | None]:
     """调用同一个 resolver 验证每个候选档位，禁止维护第二份模型能力名单。"""
     allowed = []
-    for effort in ("off", "low", "medium", "high", "xhigh", "max"):
+    for effort in ("off", "low", "medium", "high", "max"):
         config = replace(profile.config, reasoning_enabled=effort != "off",
                          reasoning_effort=effort if effort != "off" else "medium")
         try:

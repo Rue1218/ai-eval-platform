@@ -37,6 +37,7 @@ export interface ConversationMetrics {
 
 /** 已授权的 Agent 协议档；只包含选择模型所需的公开元数据。 */
 export interface LoopProfile {
+  provider?: string; reasoning_note?: string
   id: string; name: string; version: string; model: string; protocol: string
   allowed_efforts: Effort[]; default_effort: Effort | null
 }

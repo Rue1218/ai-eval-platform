@@ -37,7 +37,7 @@ from .db import SessionLocal
 from .events import push_ws
 from .models import CaseItem, CaseSet, ProtocolProfile, Setting, StoredFile, Task, TaskEvent
 from .protocol import ProtocolCallError, call_protocol
-from .profile_env import profile_connection
+from .profile_env import profile_connection, read_profile_env
 from .task_state import claim_running_task_for_terminal_write, is_cancelled
 
 logger = logging.getLogger("worker.testcase")
@@ -195,6 +195,7 @@ def run_testcase(task_id: str) -> None:
             result = call_protocol(
                 protocol=profile.protocol,
                 base_url=base_url,
+                full_url=read_profile_env(profile.id).full_url,
                 model=model,
                 api_key=api_key,
                 messages=[{"role": "user", "content": user}],

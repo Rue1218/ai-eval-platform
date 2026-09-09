@@ -43,6 +43,7 @@ class ModelConfig:
     # 能力标记：legacy = 无原生首轮流式（stream_policy.native_stream_allowed
     # 要求 native），native = 默认（可流式/可装配，视装配闸门）。
     tool_call_mode: ToolCallMode = "native"
+    full_url: bool = False  # 禁用 SDK 的版本及资源路径补全。
 
 
 Message = Mapping[str, object]

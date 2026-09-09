@@ -116,7 +116,7 @@ def test_agent_ui_lists_only_safe_selectable_profile_metadata(profile_db):
     payload = sessions._loop_ui(profile_db.db, user, request)
 
     fields = {
-        "id", "name", "version", "model", "protocol", "allowed_efforts", "default_effort",
+        "id", "name", "version", "model", "protocol", "provider", "reasoning_note", "allowed_efforts", "default_effort",
     }
     assert [item["id"] for item in payload["profiles"]] == ["default", "alternate"]
     assert all(set(item) == fields for item in payload["profiles"])
@@ -124,7 +124,7 @@ def test_agent_ui_lists_only_safe_selectable_profile_metadata(profile_db):
     assert set(payload["profile"]) == fields
     assert payload["profile"]["id"] == "default"
     assert payload["profile"]["allowed_efforts"] == ["off", "low", "medium", "high", "max"]
-    assert payload["profile"]["default_effort"] == "high"
+    assert payload["profile"]["default_effort"] == "off"
     assert payload["enabled"] is True
     rendered = str(payload)
     assert "test-only-key" not in rendered
@@ -155,10 +155,10 @@ def test_compatible_default_profile_survives_global_reasoning_preference(profile
 
 
 @pytest.mark.parametrize("model,allowed", [
-    ("deepseek-v4-flash-0731", ["off", "high", "max"]),
-    ("deepseek-v4-pro-0813", ["off", "high", "max"]),
-    ("qwen3.6-flash", ["off", "low", "medium", "high", "xhigh", "max"]),
-    ("qwen3.6-flash-2026-04-16", ["off", "low", "medium", "high", "xhigh", "max"]),
+    ("deepseek-v4-flash-0731", ["off", "low", "medium", "high", "max"]),
+    ("deepseek-v4-pro-0813", ["off", "low", "medium", "high", "max"]),
+    ("qwen3.6-flash", ["off", "low", "medium", "high", "max"]),
+    ("qwen3.6-flash-2026-04-16", ["off", "low", "medium", "high", "max"]),
 ])
 def test_server_model_capabilities_match_each_authorized_request(profile_db, model, allowed):
     """服务器型号可展示的每个档位，都必须能通过回合授权和模型参数解析。"""
@@ -171,7 +171,7 @@ def test_server_model_capabilities_match_each_authorized_request(profile_db, mod
         SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())),
     )
     assert payload["profile"]["allowed_efforts"] == allowed
-    assert payload["default_effort"] == "high"
+    assert payload["default_effort"] == "off"
     for effort in allowed:
         snapshot, _ = loop_wiring.authorized_profile(profile_db.db, {"reasoning_effort": effort})
         request = resolve_request(snapshot, messages=[])

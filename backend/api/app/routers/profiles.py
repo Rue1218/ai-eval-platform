@@ -10,6 +10,8 @@ from ..adapters import DEFAULT_TIMEOUT_S, call_protocol, fetch_remote_models
 from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
+from ..llm.loop_contracts import LlmRequestError
+from ..llm.providers.common import normalize_base_url
 from ..models import AuditLog, ProtocolProfile, Setting, User
 from ..profile_env import (
     ProfileEnvSnapshot,
@@ -21,6 +23,7 @@ from ..profile_env import (
     restore_snapshot,
     write_profile_env,
 )
+from ..profile_reasoning import profile_reasoning
 from ..schemas import FetchModelsIn, ProfileCreate, ProfileOut, ProfileUpdate
 from ..security import decrypt_secret
 
@@ -29,6 +32,14 @@ logger = logging.getLogger("ai-eval.profiles")
 
 # 页面探活会触发一次真实模型推理，必须与协议调用共用 30 秒上限，避免冷启动被误判为不可用。
 PROFILE_CHECK_TIMEOUT_S = DEFAULT_TIMEOUT_S
+
+
+def _validate_profile_url(url: str, protocol: str, full_url: bool) -> None:
+    """保存前验证 URL，不向上游发送请求或要求模型支持思考。"""
+    try:
+        normalize_base_url(url, protocol, full_url=full_url)
+    except LlmRequestError as exc:
+        raise AppError(ErrorCode.VALIDATION, "请填写合法的模型服务地址") from exc
 
 
 def _legacy_api_key(profile: ProtocolProfile) -> str | None:
@@ -117,6 +128,10 @@ def _profile_out(profile: ProtocolProfile, connection: tuple[str, str, str | Non
         logger.warning("协议档响应环境读取失败 type=%s", type(exc).__name__)
         raise AppError(ErrorCode.INTERNAL, "协议档环境配置读取失败") from exc
     return ProfileOut(
+        **profile_reasoning(profile.protocol, base_url, model,
+                            getattr(profile, "max_output_tokens", 8192) or 8192,
+                            full_url=env_values.full_url),
+        full_url=env_values.full_url,
         id=profile.id,
         name=profile.name,
         protocol=profile.protocol,
@@ -205,10 +220,11 @@ def create_profile(
     user: User = Depends(get_current_user),
 ):
     """创建协议档并把 URL、模型 ID、API Key 写入受控环境文件。"""
+    _validate_profile_url(body.base_url, body.protocol, body.full_url)
     profile = ProtocolProfile(
         name=body.name,
         protocol=body.protocol,
-        base_url=str(body.base_url).rstrip("/"),
+        base_url=str(body.base_url).strip(),
         model=body.model,
         usages=body.usages,
         anthropic_version=body.anthropic_version,
@@ -225,8 +241,9 @@ def create_profile(
         db.flush()
         snapshot = write_profile_env(
             profile.id,
-            base_url=str(body.base_url).rstrip("/"),
+            base_url=str(body.base_url).strip(),
             model=body.model,
+            full_url=body.full_url,
             api_key=body.api_key or None,
             embedding_base_url=(
                 str(body.embedding_base_url).rstrip("/") if body.embedding_base_url else None
@@ -287,14 +304,17 @@ def update_profile(
     embedding_api_key = values.pop("embedding_api_key", None)
     reranker_api_key = values.pop("reranker_api_key", None)
     current_env = read_profile_env(profile.id)
+    full_url = values.pop("full_url", None)
+    full_url = current_env.full_url if full_url is None else full_url
     # 编辑旧单模型环境配置时允许从全局别名读取一次，随后固化为本 profile 变量。
     current_base_url, current_model, current_api_key = _profile_connection(profile, allow_global_alias=True)
     next_base_url = current_base_url
     next_model = current_model
     if values.get("base_url") is not None:
-        next_base_url = str(values["base_url"]).rstrip("/")
+        next_base_url = str(values["base_url"]).strip()
     if values.get("model") is not None:
         next_model = values["model"]
+    _validate_profile_url(next_base_url, values.get("protocol") or profile.protocol, full_url)
     next_api_key = api_key or current_api_key
     next_embedding_base_url = current_env.embedding_base_url
     next_embedding_model = current_env.embedding_model
@@ -318,13 +338,14 @@ def update_profile(
     snapshot: ProfileEnvSnapshot | None = None
     for field, value in values.items():
         if field == "base_url" and value is not None:
-            value = str(value).rstrip("/")
+            value = str(value).strip()
         setattr(profile, field, value)
     profile.encrypted_key = None
     try:
         snapshot = write_profile_env(
             profile.id,
             base_url=next_base_url,
+            full_url=full_url,
             model=next_model,
             # 编辑其它字段时保留现有 Key，并把旧全局/历史密文 Key 固化到本 profile 变量。
             api_key=next_api_key,
@@ -410,6 +431,8 @@ def get_profile_models(
     profile = db.query(ProtocolProfile).filter(ProtocolProfile.id == profile_id).first()
     if not profile:
         raise AppError(ErrorCode.NOT_FOUND, "协议档不存在")
+    if read_profile_env(profile.id).full_url:
+        raise AppError(ErrorCode.VALIDATION, "完整 URL 模式请手动填写模型标识")
     env_base_url, _model, env_api_key = _profile_connection(profile, allow_global_alias=True)
     base_url = env_base_url or resolve_env_base_url(profile.protocol)
     if not base_url:
@@ -432,6 +455,8 @@ def fetch_models(
     user: User = Depends(get_current_user),
 ):
     """从目标服务 Base URL 获取可用的模型标识列表 (/models)，支持从 .env 自动匹配凭据。"""
+    if body.full_url:
+        raise AppError(ErrorCode.VALIDATION, "完整 URL 模式请手动填写模型标识")
     api_key = body.api_key
     protocol = body.protocol
     base_url = body.base_url
@@ -441,6 +466,8 @@ def fetch_models(
         profile = db.query(ProtocolProfile).filter(ProtocolProfile.id == body.profile_id).first()
         if not profile:
             raise AppError(ErrorCode.NOT_FOUND, "协议档不存在")
+        if body.full_url is None and read_profile_env(profile.id).full_url:
+            raise AppError(ErrorCode.VALIDATION, "完整 URL 模式请手动填写模型标识")
         protocol = profile.protocol
         # 兼容旧单模型环境；若该 profile 已有任一独立变量，则不会串用全局 Key。
         env_base_url, _model, env_api_key = _profile_connection(profile, allow_global_alias=True)
@@ -495,6 +522,7 @@ def check_profile(
             model=model,
             api_key=api_key,
             messages=[{"role": "user", "content": "ping"}],
+            full_url=read_profile_env(profile.id).full_url,
             max_tokens=1,
             anthropic_version=profile.anthropic_version,
             timeout_s=PROFILE_CHECK_TIMEOUT_S,

@@ -385,23 +385,29 @@ def _close_quietly(response: object) -> None:
             return
 
 
-def _openai_client(*, base_url: str, api_key: str, timeout_s: float) -> OpenAI:
+def _openai_client(*, base_url: str, api_key: str, timeout_s: float, full_url: bool = False) -> OpenAI:
     """创建单次 OpenAI SDK 客户端，显式关闭 SDK 默认重试以保持调用语义。"""
+    from .llm.providers.common import full_url_client_options, normalize_base_url
+
     return OpenAI(
+        **(full_url_client_options(base_url) if full_url else {}),
         api_key=api_key,
         # SDK 的资源路径本身不含版本段，因此在已规范化的服务根地址后补 /v1。
-        base_url=f"{base_url.rstrip('/')}/v1",
+        base_url=normalize_base_url(base_url, "openai_chat", full_url=full_url),
         timeout=timeout_s,
         max_retries=0,
     )
 
 
-def _anthropic_client(*, base_url: str, api_key: str, timeout_s: float) -> Anthropic:
+def _anthropic_client(*, base_url: str, api_key: str, timeout_s: float, full_url: bool = False) -> Anthropic:
     """创建单次 Anthropic SDK 客户端，避免连接或限流时改变既有重试次数。"""
+    from .llm.providers.common import full_url_client_options, normalize_base_url
+
     return Anthropic(
+        **(full_url_client_options(base_url) if full_url else {}),
         api_key=api_key,
         # Anthropic SDK 自身会追加 /v1/messages，故这里只传服务根地址。
-        base_url=base_url,
+        base_url=normalize_base_url(base_url, "anthropic_messages", full_url=full_url),
         timeout=timeout_s,
         max_retries=0,
     )
@@ -646,6 +652,7 @@ def call_protocol(
     *,
     protocol: str,
     base_url: str,
+    full_url: bool = False,
     model: str,
     api_key: str,
     messages: list[dict],
@@ -669,7 +676,7 @@ def call_protocol(
     if protocol not in SUPPORTED_PROTOCOLS:
         raise AppError(ErrorCode.VALIDATION, f"协议不受支持：{protocol}")
 
-    base = _service_base_url(base_url)
+    base = base_url.strip() if full_url else _service_base_url(base_url)
     client: object | None = None
 
     if protocol == "openai_chat":
@@ -718,10 +725,10 @@ def call_protocol(
     started = time.perf_counter()
     try:
         if protocol == "openai_chat":
-            client = _openai_client(base_url=base, api_key=api_key, timeout_s=timeout_s)
+            client = _openai_client(base_url=base, api_key=api_key, timeout_s=timeout_s, **({"full_url": True} if full_url else {}))
             response = _openai_chat_create(client, body)
         else:
-            client = _anthropic_client(base_url=base, api_key=api_key, timeout_s=timeout_s)
+            client = _anthropic_client(base_url=base, api_key=api_key, timeout_s=timeout_s, **({"full_url": True} if full_url else {}))
             response = _anthropic_messages_create(client, body, anthropic_version)
         data = _sdk_response_dict(response)
     except (openai.APITimeoutError, anthropic.APITimeoutError) as exc:
@@ -757,6 +764,7 @@ def stream_protocol(
     *,
     protocol: str,
     base_url: str,
+    full_url: bool = False,
     model: str,
     api_key: str,
     messages: list[dict],
@@ -788,7 +796,7 @@ def stream_protocol(
     if protocol not in SUPPORTED_PROTOCOLS:
         raise AppError(ErrorCode.VALIDATION, f"协议不受支持：{protocol}")
 
-    base = _service_base_url(base_url)
+    base = base_url.strip() if full_url else _service_base_url(base_url)
     def complete_stream_call(
         raw_id: object, raw_name: object, raw_arguments: object
     ) -> list[AdapterToolCall]:
@@ -957,10 +965,10 @@ def stream_protocol(
     stream: object | None = None
     try:
         if protocol == "openai_chat":
-            client = _openai_client(base_url=base, api_key=api_key, timeout_s=timeout_s)
+            client = _openai_client(base_url=base, api_key=api_key, timeout_s=timeout_s, **({"full_url": True} if full_url else {}))
             stream = _openai_chat_create(client, body, stream=True)
         else:
-            client = _anthropic_client(base_url=base, api_key=api_key, timeout_s=timeout_s)
+            client = _anthropic_client(base_url=base, api_key=api_key, timeout_s=timeout_s, **({"full_url": True} if full_url else {}))
             stream = _anthropic_messages_create(
                 client,
                 body,

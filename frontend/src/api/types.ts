@@ -61,16 +61,22 @@ export interface AgentReasoningSettings {
   effort: ReasoningEffort
 }
 
+/** 对话输入框的五个思考候选，能力由后端 resolver 验证。 */
+export type ProfileEffort = 'off' | 'low' | 'medium' | 'high' | 'max'
 // 协议档用途
 // benchmark 为 legacy usage 值（种子协议档使用），后端仍接受
 export type ProfileUsage = 'target' | 'agent' | 'judge' | 'benchmark'
 export type ToolCallMode = 'native' | 'legacy'
 
 export interface Profile {
+  provider?: string
+  allowed_efforts?: ProfileEffort[]
+  reasoning_note?: string
   id: string
   name: string
   protocol: ProtocolType
   base_url: string
+  full_url?: boolean // 完整请求地址，不追加协议后缀。
   model: string
   api_key?: string // 永不回显，仅在提交时可选填写
   embedding_base_url?: string | null
@@ -84,6 +90,7 @@ export interface Profile {
   usages?: ProfileUsage[]
   context_window?: number // 上下文窗口容量 (Tokens)
   max_output_tokens?: number // Agent 单回合模型输出上限 (max_tokens)
+  reasoning_effort?: ProfileEffort
   tool_call_mode?: ToolCallMode
   created_at: string
   updated_at?: string
@@ -93,6 +100,7 @@ export interface ProfileCreateIn {
   name: string
   protocol: ProtocolType
   base_url: string
+  full_url?: boolean // 完整请求地址，不追加协议后缀。
   model: string
   api_key: string
   embedding_base_url?: string
@@ -112,6 +120,7 @@ export interface ProfileUpdateIn {
   name?: string
   protocol?: ProtocolType
   base_url?: string
+  full_url?: boolean // 完整请求地址，不追加协议后缀。
   model?: string
   api_key?: string
   embedding_base_url?: string
