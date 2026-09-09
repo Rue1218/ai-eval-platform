@@ -74,7 +74,8 @@ async function setup(page: Page, holdNewReplay = false) {
   await expect(page.getByText('历史旧会话',{exact:true})).toHaveCount(0)
   await page.locator('.session-title-text').filter({hasText:'联调会话'}).click()
   await expect(page.getByRole('textbox',{name:'消息'})).toBeVisible()
-  await expect(page.locator('.loop-status')).toContainText('就绪')
+  // 空会话按当前产品约定隐藏“就绪”状态，运行信息入口仍应可见。
+  await expect(page.locator('.loop-runtime-btn')).toBeVisible()
   return {commands,sessionCreates,get submits(){return submit},get uploading(){return !!releaseUpload},release:()=>releaseUpload?.(),replay:()=>releaseReplay?.(),sockets}
 }
 
