@@ -1,6 +1,14 @@
 # AI 测试与评估平台 — AgentLoop 后端实施记录
 
-> 版本：V0.2 ｜ 审查日期：2026-09-09 ｜ 状态：AgentLoop 单入口、协议档选择和前端输入栏已完成本地验证；服务器端真实供应商/Linux Runner 联调待验收。
+> 版本：V0.3 ｜ 审查日期：2026-09-09 ｜ 状态：AgentLoop 单入口、协议档选择、重启恢复和共享评测档已完成本地回归；服务器端真实供应商/Linux Runner 联调待验收。
+
+## 0.3 审查修复记录
+
+本版落实审查发现的四项缺口。v2 `attach` 在回放前读取持久开放回合，只有取得已经释放的 PostgreSQL advisory writer lock 后才补写 `turn.end(reason="interrupted")`；锁仍被存活 API 实例持有时只订阅，不转移控制权。恢复完成立即释放临时 writer，下一次 `turn.submit` 仍经正常租约获取路径执行。
+
+每回合请求装配会读取所选 Agent 协议档的补充提示词。核心系统提示词保持首段并可缓存，补充提示词使用动态不可缓存段；读取时再次校验密钥和接管性文本，防止历史脏配置进入模型请求或缓存。`task.create` 对评测档、裁判档沿用平台全员同权目录，`created_by` 仅记录审计来源，不再误作使用权限。
+
+CI 同时向 API 测试传入 `LOOP_TEST_DATABASE_URL`、`LOOP_STORE_TEST_DATABASE_URL`、`LOOP_TOOLS_TEST_DATABASE_URL`，并增加 Ubuntu Runner job。GitHub Hosted Runner 未提供可写 cgroup v2 委派根，因此真实进程树终止用例仍按条件跳过；这不替代服务器 Linux Runner 演练。
 
 ## 1. 实施结果与边界
 
@@ -19,7 +27,7 @@ WS 为独立 `/ws/agent/v2`，支持严格命令、订阅快照、PG 游标补�
 1. 使用项目 Python 3.12 与 `backend/api/requirements.txt`、`requirements-dev.txt` 锁定依赖。全局旧版 SDK 不能代替项目环境。
 2. 在目标部署执行正常 Alembic 流程：从 `backend/api` 运行 `python -m alembic upgrade head`。本次新增迁移为 `8f9a2c4d6e01`，上游 `77586e897dae`；不要手工创建生产表。
 3. 为平台设置有效 Agent 协议档，保留现有环境文件凭据加载规则。新建会话自动使用 AgentLoop；输入栏只从 agent-ui 返回的脱敏 profiles 中选择模型和思考档位。
-4. v2 客户端复用 REST 短票认证，按 API.md V1.80 连接、订阅和发送 `turn.submit`。每次提交可带 `profile_id` 与 `reasoning_effort`，服务端重新校验；`request_id` 标识命令，`client_message_id` 标识用户输入；同一幂等 ID 不得改正文。
+4. v2 客户端复用 REST 短票认证，按 API.md V1.81 连接、订阅和发送 `turn.submit`。每次提交可带 `profile_id` 与 `reasoning_effort`，服务端重新校验；`request_id` 标识命令，`client_message_id` 标识用户输入；同一幂等 ID 不得改正文。
 5. 如果使用 bash，API 和 Runner 配置相同的非空 `RUNNER_INTERNAL_TOKEN`，保持内部网络隔离；Runner 还需 Linux cgroup v2 的专用可写委派根 `RUNNER_CGROUP_ROOT`。目录在容器内必须位于 `/sys/fs/cgroup` 下，并有可创建子组和读取/写入必要控制文件的权限。
 
 当前 compose 只接入变量，没有自动替宿主机建立 cgroup 委派。推荐为 Runner 分配专用 systemd 委派子树，仅将该子树挂入容器，并在实际 Docker/cgroup namespace 配置下验证创建子组、进程迁入、`cgroup.kill` 与 `cgroup.events populated=0`。不要将整个宿主 cgroup 树可写暴露给 Runner 或沙箱。缺少可信委派时新 bash 返回失败，不降级到裸 subprocess。
@@ -75,6 +83,8 @@ python -m ruff check . ../shared
 ## 5. 修改代码文件与作用清单
 
 详见 [架构设计 §16.3](AI测试与评估平台-AgentLoop后端架构设计.md#163-修改代码文件与作用清单)。本次同步 API、数据库、Agent 开发、Harness 契约/记忆/执行/安全文档，并改造前端输入栏、模型菜单和思考控制。
+
+V0.3 新增：`backend/api/app/agent/loop_service.py` 与 `routers/ws_v2.py` 固化安全重连恢复语义；`loop_wiring.py` 接入协议档专属 overlay；`task_tools.py` 对齐共享协议档权限；`test_loop_wiring.py`、`test_loop_integration_pg.py`、`test_loop_tools_task_prepare.py` 与 `frontend/tests/agentLoop.test.mjs` 添加回归；`.github/workflows/ci.yml` 覆盖三组 PostgreSQL Loop 测试和 Runner job。无数据库迁移、REST 字段或 WS 命令字段变化。
 
 回归中额外修复 `backend/api/app/profile_env.py` 在 Windows Python 3.12 缺少 `os.fchmod` 时无法保存模型协议档的问题：仅在该能力存在时使用，保留文件创建权限及路径 chmod。`test_profile_env.py` 增加缺少该 API 的回归。`test_harness_execution.py` 的既有公网工具测试固定 DNS 桩，与已固定的 HTTP 响应配套；未改生产 SSRF 校验。`test_loop_rollout.py` 验证新会话固定 AgentLoop、创建/列表引擎字段和旧 WS 不会隐式创建会话。
 

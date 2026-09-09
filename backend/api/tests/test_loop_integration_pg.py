@@ -539,3 +539,43 @@ def test_pg_restart_recovers_unknown_tool_once_without_reexecuting(pg_case, tmp_
             await runtime.close()
             reopened.close()
     asyncio.run(scenario())
+
+
+def test_pg_attach_waits_for_live_writer_then_recovers_and_accepts_next_turn(pg_case, tmp_path):
+    """重连只在旧 writer 释放后恢复，避免关闭另一 API 实例的活动回合。"""
+    sid = pg_case.session()
+    live = SessionLog(sid, pg_case.factory, actor_id=pg_case.user_id)
+    live.claim()
+    live.append("turn/start", {"turn": 1})
+    live.append("user/message", {"turn": 1, "content": "强杀前的输入"})
+    adapter = ScriptedAdapter([TextDelta("恢复后可以继续"), Done("stop")])
+
+    async def scenario():
+        """先模拟另一实例持锁，再模拟它被强杀释放 PostgreSQL 连接。"""
+        service = LoopService(pg_case.factory, dependency_builder=builder_for(pg_case, tmp_path, adapter))
+        try:
+            await service.attach(pg_case.user_id, sid, "while-live", lambda _frame: None)
+            assert not [event for event in SessionLog(sid, pg_case.factory).read()
+                        if event["type"] == "turn/end"]
+            assert (await service.snapshot(pg_case.user_id, sid)).state["active_turn"] == 1
+
+            # 真实连接关闭后 advisory lock 自动释放，下一次订阅才拥有恢复资格。
+            live.close()
+            await service.attach(pg_case.user_id, sid, "after-crash", lambda _frame: None)
+            interrupted = [event for event in SessionLog(sid, pg_case.factory).read()
+                           if event["type"] == "turn/end"]
+            assert [event["data"]["reason"] for event in interrupted] == ["interrupted"]
+            assert (await service.snapshot(pg_case.user_id, sid)).state["active_turn"] is None
+
+            receipt = await service.execute_command(pg_case.user_id, "after-crash", make_command(
+                sid, data={"client_message_id": str(uuid4()), "content": "继续处理"},
+            ))
+            await service.entries[sid].runtime.wait()
+            assert receipt.data["turn_id"] == f"{sid}:2"
+            assert [event["data"]["reason"] for event in SessionLog(sid, pg_case.factory).read()
+                    if event["type"] == "turn/end"] == ["interrupted", "completed"]
+        finally:
+            live.close()
+            await service.close()
+
+    asyncio.run(scenario())

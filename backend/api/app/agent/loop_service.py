@@ -13,6 +13,7 @@ from app.config import settings
 from app.errors import AppError, ErrorCode
 from app.harness.execution.approval import ApprovalBroker
 from app.harness.memory.agent_events import SessionLog
+from app.harness.memory.agent_recovery import recovery_events
 from app.models import Session, User
 from app.routers.ws_v2 import CommandReceipt, StreamSnapshot, WsAccess
 from app.session_access import require_visible_session
@@ -77,9 +78,40 @@ class LoopService:
                             interactions=interactive)
 
     async def attach(self, actor_id: str, session_id: str, connection_id: str, on_transient: Callable) -> None:
-        """先登记瞬态订阅，不创建模型客户端、不抢占会话写者。"""
+        """登记订阅前结算无主中断回合，绝不接管存活写者。"""
         await self.authorize(actor_id, session_id)
-        self._observers.setdefault(session_id, {})[connection_id] = (actor_id, on_transient)
+        async with self._locks.setdefault(session_id, asyncio.Lock()):
+            if self._closed:
+                raise AppError(ErrorCode.VALIDATION, "服务正在关闭")
+            # 强杀后进程内 Runtime 已不存在；在回放前补齐终态，前端才不会把旧
+            # turn.start 一直视为运行中。活动实例仍持有 advisory lock，不能被接管。
+            await self._recover_abandoned_turn(actor_id, session_id)
+            self._observers.setdefault(session_id, {})[connection_id] = (actor_id, on_transient)
+
+    async def _recover_abandoned_turn(self, actor_id: str, session_id: str) -> bool:
+        """仅在成功取得已释放的 PG 写锁后，结算硬重启遗留的事实。"""
+        log = SessionLog(session_id, self.session_factory, actor_id=actor_id)
+        try:
+            # 大多数订阅没有开放回合，不为只读会话占用专用 PG 连接。
+            if not recovery_events(log.read()):
+                return False
+            try:
+                log.claim()
+            except AppError as exc:
+                # advisory lock 仍在，说明另一存活实例拥有运行时；本连接只能回放。
+                if exc.code == ErrorCode.CONCURRENCY:
+                    return False
+                raise
+            # 取得锁后重新读取，避免把已由持锁实例结算的回合重复收尾。
+            if not recovery_events(log.read()):
+                return False
+            runtime = AgentRuntime(log, graph=None, approval_broker=self._broker,
+                                   writer_id=log.writer_id, actor_id=actor_id)
+            await runtime.recover()
+            return True
+        finally:
+            # 恢复只写补偿事实，不保留空闲 writer；下一条输入仍经 _submit 获取租约。
+            log.close()
 
     async def snapshot(self, actor_id: str, session_id: str) -> StreamSnapshot:
         """快照与 H 取自同一事务，交互卡按实际回执成员裁剪。"""

@@ -55,7 +55,41 @@ jobs:
 
       - name: Test (pytest)
         env:
+          # 三套 Loop PostgreSQL 夹具共用 CI 隔离库；各自仅创建随机 schema 或 UUID 数据，
+          # 不会操作 public 或业务库。三个变量必须同时配置，避免恢复/工具测试被静默跳过。
           LOOP_TEST_DATABASE_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/agentloop_ci
+          LOOP_STORE_TEST_DATABASE_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/agentloop_ci
+          LOOP_TOOLS_TEST_DATABASE_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/agentloop_ci
+        run: pytest
+
+  runner:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        # runner 的 pyproject 将 . 与 .. 加入 pythonpath，以导入 backend/shared。
+        working-directory: backend/runner
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies
+        # Runner 与共享沙箱内核仅依赖标准库；pytest 用于 HTTP 契约和清理语义测试。
+        run: pip install pytest
+
+      - name: Install Linux sandbox runtime (bubblewrap)
+        # 验证 Linux 运行环境具备 bwrap。真实可写 cgroup 委派需部署环境提供，
+        # 对应测试会在未设置 RUNNER_TEST_CGROUP_ROOT 时按标记跳过。
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bubblewrap
+
+      - name: Test Runner (pytest)
+        # 覆盖 Runner HTTP 契约、执行幂等、取消与共享内核的确定性清理路径。
         run: pytest
 
   worker:

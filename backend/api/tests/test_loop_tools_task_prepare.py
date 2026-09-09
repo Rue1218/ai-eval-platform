@@ -29,27 +29,50 @@ def test_prepare_rejects_foreign_parent(owner):
     assert db.commit_calls == 0 and not db.closed
 
 
-@pytest.mark.parametrize("profiles,expected", [
-    ({}, ErrorCode.NOT_FOUND),
-    ({"p1": ProtocolProfile(id="p1", created_by="other")}, ErrorCode.UNAUTHORIZED),
-])
-def test_prepare_rejects_missing_or_foreign_profile(profiles, expected):
-    """评测档必须存在且属于当前成员。"""
-    db = _FakeDb(session_row=_SessionRow(), task_query=[], profiles=profiles)
+def test_prepare_rejects_missing_profile():
+    """共享协议档目录中不存在的评测档仍必须被拒绝。"""
+    db = _FakeDb(session_row=_SessionRow(), task_query=[], profiles={})
     with pytest.raises(AppError) as error:
         prepare_task_request(db, _benchmark_args(), _ctx())
-    assert error.value.code == expected and db.commit_calls == 0
+    assert error.value.code == ErrorCode.NOT_FOUND and db.commit_calls == 0
 
 
-def test_prepare_checks_judge_profile():
-    """裁判档不能漏掉资源归属检查。"""
+def test_prepare_accepts_shared_profile_created_by_another_member():
+    """全员同权时，创建者只保留审计用途，不限制共享协议档参与评测。"""
+    db = _FakeDb(session_row=_SessionRow(), task_query=[], profiles={
+        "p1": ProtocolProfile(id="p1", created_by="other"),
+    })
+    kind, spec, parent = prepare_task_request(db, _benchmark_args(), _ctx())
+    assert kind == "benchmark" and spec["profile_ids"] == ["p1"] and parent is None
+    assert db.commit_calls == 0
+
+
+def test_prepare_accepts_shared_judge_profile():
+    """裁判档与评测档遵循同一共享目录权限口径。"""
     db = _FakeDb(session_row=_SessionRow(), task_query=[], profiles={
         "p1": ProtocolProfile(id="p1", created_by="u1"),
         "judge": ProtocolProfile(id="judge", created_by="other"),
     })
+    kind, spec, _ = prepare_task_request(
+        db,
+        _benchmark_args(run={"sample_size": 1, "use_judge": True, "judge_profile_id": "judge"}),
+        _ctx(),
+    )
+    assert kind == "benchmark" and spec["run"]["judge_profile_id"] == "judge"
+
+
+def test_prepare_checks_missing_profile():
+    """已删除的裁判档必须按不存在处理。"""
+    db = _FakeDb(session_row=_SessionRow(), task_query=[], profiles={
+        "p1": ProtocolProfile(id="p1", created_by="u1"),
+    })
     with pytest.raises(AppError) as error:
-        prepare_task_request(db, _benchmark_args(run={"sample_size": 1, "use_judge": True, "judge_profile_id": "judge"}), _ctx())
-    assert error.value.code == ErrorCode.UNAUTHORIZED
+        prepare_task_request(
+            db,
+            _benchmark_args(run={"sample_size": 1, "use_judge": True, "judge_profile_id": "judge"}),
+            _ctx(),
+        )
+    assert error.value.code == ErrorCode.NOT_FOUND
 
 
 def test_prepare_freezes_version():

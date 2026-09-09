@@ -93,7 +93,9 @@ def prepare_task_request(db, arguments: Mapping[str, object], context: object) -
         if kind == "stress" and (parent.status != "succeeded" or parent.kind not in {"benchmark", "rag"}):
             raise AppError(ErrorCode.VALIDATION, "压测任务须由已成功的质量任务派生")
 
-    # 协议档含可计费凭据，显式检查评测档和裁判档的实际归属，不能只接受任意 ID。
+    # 协议档目录按平台“全员同权”口径共享；created_by 仅用于审计，不能把
+    # 创建者字段误当作使用 ACL，否则 Agent 工具会与 REST 创建任务的行为分叉。
+    # 凭据本身仍只由服务端的协议档受控环境变量读取，不回传给调用者。
     profile_ids = set(task_spec.profile_ids)
     if task_spec.run and task_spec.run.judge_profile_id:
         profile_ids.add(task_spec.run.judge_profile_id)
@@ -101,8 +103,6 @@ def prepare_task_request(db, arguments: Mapping[str, object], context: object) -
         profile = db.get(ProtocolProfile, profile_id)
         if not profile:
             raise AppError(ErrorCode.NOT_FOUND, "关联模型协议档不存在")
-        if profile.created_by != user_id:
-            raise AppError(ErrorCode.UNAUTHORIZED, "没有权限使用该模型协议档")
     if task_spec.case_source and task_spec.case_source.file_id:
         file = db.get(StoredFile, task_spec.case_source.file_id)
         if not file or file.uploaded_by != user_id:
