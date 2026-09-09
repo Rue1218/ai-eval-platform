@@ -26,7 +26,7 @@ class ErrorCode(StrEnum):
     UPSTREAM = "UPSTREAM"
     TIMEOUT = "TIMEOUT"
     INTERNAL = "INTERNAL"
-    DENIED = "DENIED"  # F5/G6：沙箱只读档拒写（升档审批触发源，§6.4）
+    DENIED = "DENIED"  # F5/G6：bash 只读档拒写（升档审批触发源，§6.4）
 
 
 # code -> 默认 HTTP 状态码（API V1.0 §1.3）

@@ -1565,12 +1565,21 @@ async function loadSessionHistory(sid: string): Promise<number> {
         )
         if (target) target.item.approvalDone = p.action === 'approve' ? 'approved' : 'rejected'
       } else if (ev.event === 'approval_terminal') {
-        // V1.73：历史审批卡终态（expired 超时 / cancelled 放弃）只读回放
-        const target = [...rawList].reverse().find(
-          x => x.item.type === 'toolApproval' && x.item.approval?.id === p.approval_id,
-        )
-        if (target && p.outcome === 'expired') target.item.approvalDone = 'expired'
-        else if (target && p.outcome === 'cancelled') target.item.approvalDone = 'cancelled'
+        // V1.73/F5-G6：历史卡终态只读回放（expired/cancelled/voided/recovery_failed）
+        // M3：payload.card_type=clarify → 澄清卡 recovery_failed（标 failed）；
+        // 其余/缺省（旧事件）→ 审批卡终态。
+        const terminal = ['expired', 'cancelled', 'voided', 'recovery_failed'].includes(p.outcome)
+        if (terminal && p.card_type === 'clarify') {
+          const target = [...rawList].reverse().find(
+            x => x.item.type === 'clarify' && x.item.clarify?.id === p.approval_id,
+          )
+          if (target) target.item.clarifyDone = 'failed'
+        } else if (terminal) {
+          const target = [...rawList].reverse().find(
+            x => x.item.type === 'toolApproval' && x.item.approval?.id === p.approval_id,
+          )
+          if (target) target.item.approvalDone = p.outcome
+        }
       } else if (ev.event === 'clarify') {
         // V1.72（dsh #1）：历史澄清卡只读回放；其后紧跟的 clarify_ack 会盖章终态。
         rawList.push({
@@ -2268,15 +2277,31 @@ function handleWsEvent(ev: WsServerEvent) {
       break
     }
     case 'approval_terminal': {
-      // V1.73（#3）：审批卡终态——expired（TTL 超时）→ 卡失效禁操作；
-      // cancelled（/stop 放弃）→ 与用户 reject 区分的另一终态。
-      const target = [...events.value].reverse().find(
-        e => e.type === 'toolApproval' && e.approval?.id === p.approval_id,
-      )
-      if (target && (p.outcome === 'expired' || p.outcome === 'cancelled')) {
-        target.approvalDone = p.outcome
-        target.streaming = false
-        setCurrentGenerating(false)
+      // V1.73（#3）：审批卡终态——expired（TTL 超时）/cancelled（/stop 放弃）
+      // 与用户 reject 区分；F5/G6（M-R3-7）成组扩展：voided（检查点缺失卡
+      // 作废）/recovery_failed（resume 恢复失败）→ 同为终态禁操作。
+      // M3：payload.card_type 按卡型路由——clarify → 澄清卡 recovery_failed
+      // 终态；其余/缺省（旧事件）→ 审批卡（行为不回归）。
+      const terminal = ['expired', 'cancelled', 'voided', 'recovery_failed'].includes(p.outcome)
+      if (!terminal) break
+      if (p.card_type === 'clarify') {
+        const clarify = [...events.value].reverse().find(
+          e => e.type === 'clarify' && e.clarify?.id === p.approval_id,
+        )
+        if (clarify) {
+          clarify.clarifyDone = 'failed'
+          clarify.streaming = false
+          setCurrentGenerating(false)
+        }
+      } else {
+        const target = [...events.value].reverse().find(
+          e => e.type === 'toolApproval' && e.approval?.id === p.approval_id,
+        )
+        if (target) {
+          target.approvalDone = p.outcome
+          target.streaming = false
+          setCurrentGenerating(false)
+        }
       }
       break
     }
@@ -2840,15 +2865,17 @@ interface StreamItem {
   summary?: string
   open?: boolean
   fieldErrors?: Record<string, string>
-  // 工具审批卡（H5 HITL，API.md V1.70 / V1.73）：approval 为中断载荷快照；
-  // approvalDone 由 tool_approval_ack 回执盖章（approved/rejected）或
-  // approval_terminal 终态事件（expired 超时 / cancelled 放弃）驱动。
+  // 工具审批卡（H5 HITL，API.md V1.70 / V1.73 / F5-G6）：approval 为中断载荷
+  // 快照；approvalDone 由 tool_approval_ack 回执盖章（approved/rejected）或
+  // approval_terminal 终态事件驱动（expired 超时 / cancelled 放弃 /
+  // voided 检查点缺失作废 / recovery_failed 恢复失败——M-R3-7 成组扩展）。
   approval?: ToolApprovalPayload | null
-  approvalDone?: 'approved' | 'rejected' | 'expired' | 'cancelled' | null
+  approvalDone?: 'approved' | 'rejected' | 'expired' | 'cancelled' | 'voided' | 'recovery_failed' | null
   // 澄清卡（V1.72 / dsh #1，API.md §4.3）：clarify 为中断问卷快照；
-  // clarifyDone 由 clarify_reply 乐观盖章 + clarify_ack 广播回执确认。
+  // clarifyDone 由 clarify_reply 乐观盖章 + clarify_ack 广播回执确认；
+  // M3：failed = approval_terminal(recovery_failed, card_type=clarify) 终态。
   clarify?: ClarifyPayload | null
-  clarifyDone?: 'submitted' | null
+  clarifyDone?: 'submitted' | 'failed' | null
 }
 
 const harnessStage = ref<string>('')
@@ -2902,9 +2929,9 @@ function handleApprovalReject(item: StreamItem) {
   scrollToBottom()
 }
 
-/** 澄清卡可作答：实时连接且尚未提交（owner 校验由服务端行锁把关）。 */
+/** 澄清卡可作答：实时连接且尚未终态（submitted/failed 均禁操作；owner 校验由服务端行锁把关）。 */
 function canActClarify(item: StreamItem): boolean {
-  return item.clarifyDone !== 'submitted' && !!(agentWs && agentWs.isConnected)
+  return !item.clarifyDone && !!(agentWs && agentWs.isConnected)
 }
 
 /** V1.72（dsh #1）澄清作答：乐观盖章（服务端行锁兜底重复 reply；clarify_ack

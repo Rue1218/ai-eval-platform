@@ -39,6 +39,7 @@ from app.harness.feedback.observation import normalize
 from app.harness.security.secrets import redact_for_log
 
 from .policy import DEFAULT_RECOVERY_POLICY, ToolRecoveryPolicy
+from .quota import check_workspace_write_capacity, invalidate_usage_cache
 
 logger = logging.getLogger("ai-eval.harness.dispatch")
 
@@ -571,18 +572,31 @@ def _ensure_write_size(content: str) -> int:
 
 
 def write_file_safe(path: str, content: str, sandbox_dir: str) -> WriteResult:
-    """受控目录内原子新建文本文件（防目录穿越与覆盖竞争）。"""
+    """受控目录内原子新建文本文件（防目录穿越与覆盖竞争）。
+
+    F5/G6：写前做工作区容量检查（§6.6——单次 2MB 上限之外的工作区总配额与
+    卷水位；超限 VALIDATION 明确文案）；成功后标脏用量缓存（下一查重算）。
+    """
     target = _resolve_safe_path(path, sandbox_dir)
     bytes_written = _ensure_write_size(content)
+    check_workspace_write_capacity(sandbox_dir, extra_bytes=bytes_written)
     os.makedirs(os.path.dirname(target), exist_ok=True)
     try:
         descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except FileExistsError as exc:
         raise AppError(ErrorCode.VALIDATION, "文件已存在，请使用 edit") from exc
-    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-        handle.write(content)
-        handle.flush()
-        os.fsync(handle.fileno())
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except Exception:
+        try:
+            os.unlink(target)
+        except OSError:
+            pass
+        raise
+    invalidate_usage_cache(sandbox_dir)
     preview, preview_truncated = clip_at_line_boundary(content, preview_char_limit())
     lines_written = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
     return WriteResult(
@@ -679,6 +693,13 @@ def edit_file_safe(
         )
     replacement = content.replace(old, new) if replace_all else content.replace(old, new, 1)
     _ensure_write_size(replacement)
+    # F5/G6：edit 净增容量检查（新文件字节 - 旧文件字节，负净增不额外占额）
+    try:
+        old_size = os.path.getsize(target)
+    except OSError:
+        old_size = 0
+    extra = max(0, len(replacement.encode("utf-8")) - old_size)
+    check_workspace_write_capacity(sandbox_dir, extra_bytes=extra)
     descriptor, temporary_path = tempfile.mkstemp(prefix=".agent-edit-", dir=os.path.dirname(target), text=True)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
@@ -692,6 +713,7 @@ def edit_file_safe(
         except FileNotFoundError:
             pass
         raise
+    invalidate_usage_cache(sandbox_dir)
     return EditResult(
         path=path,
         old_length=len(old),

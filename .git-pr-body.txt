@@ -1,0 +1,30 @@
+## 概述
+
+G6（沙箱磁盘配额与拒写升档审批）完整交付 + 代码评审修复批次（M1–M3）。
+
+### G6a — 拒写升档审批（c270a22）
+- `DENIED` 错误码全链：HTTP 403 + kernel EROFS 证据归因（`_looks_readonly_denied`，仅 read-only 档、被动归因非词表扫描）→ runner 透传 → api `_ERROR_MAP` 归一
+- toolnode 升档循环：read-only 拒写 → denied 事实帧（escalation）→ `tool_approval` 升档卡（reason=escalation）→ approve 以 workspace-write 重放恰好一次（`escalated_once` 防环 + resume id 强校验）；reject 走失败阶梯
+- `agent_escalation_approval_enabled` 默认关（零行为变化）；`ToolExecutionContext.sandbox_mode` 档位接缝
+- taor 失败阶梯排除 escalation 中间帧（MAJ-9② 按事件序收敛）
+
+### G6b — 磁盘配额与终态契约组（8bca6c4）
+- `quota.py`：写前容量检查（卷水位熔断优先于每目录配额、TTL 缓存 du、edit 按净增核算、写失败清理半成品）；挂点 = dispatch 直写 + workspace-write bash；VALIDATION 码不触发升档链
+- `workspace_quota_bytes`（1GiB）/`sandbox_volume_watermark_bytes`（512MiB）配置化
+- M-R3-7 终态：ack 行锁内检查点预检 → `voided` 作废终态；resume 失败 → `recovery_failed` 终态广播；前端 ApprovalCard 四终态成组
+
+### 评审修复批次（本轮 4818cda/d3da541）
+- M1：read-only 口径按设计 §6.1.1 收敛（只约束 bash）；DENIED 文案去开关依赖的升档指引、补 bash 限定
+- M2：卷水位核算失败由 fail-open 改 **fail-closed 拒写**（末防线不静默失效，无状态自愈）
+- M3：`approval_terminal` payload 增 `card_type`（approval/clarify）——澄清卡恢复失败不再借壳审批卡终态，前端 ClarifyCard 增 failed 终态；API.md V1.78 + V1.77 追溯登记
+
+## 门禁
+
+- api：952 passed / 20 skipped
+- runner：18 passed
+- 前端：typecheck / build 通过
+- ruff（api + shared）通过
+
+## 兼容性
+
+- G6a 开关默认关、G6b 配额默认 1GiB/512MiB（生产卷远高于水位）——对现有会话行为影响面小；`card_type` 缺省按 approval 解释，旧事件零破坏

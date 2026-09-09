@@ -333,6 +333,10 @@ def test_approval_ack_clears_card_and_resumes_once(monkeypatch) -> None:
         emitted.append((event, payload))
         return True
 
+    async def probe_ok(_thread_id: str) -> bool:
+        return True  # F5/G6：恢复预检通过（直调层无真实检查点）
+
+    monkeypatch.setattr(ws, "_approval_resume_probe", probe_ok)
     monkeypatch.setattr(ws, "_emit_persistent", fake_emit)
     db = _FakeDb(_Row())
     db.row.pending_confirm = _approval_card()
@@ -355,6 +359,10 @@ def test_approval_ack_reject_no_resume(monkeypatch) -> None:
     async def fake_emit(_db, _ws, _st, _sid, event, payload, **kw):
         return True
 
+    async def probe_ok(_thread_id: str) -> bool:
+        return True  # F5/G6：恢复预检通过（reject 路径同受预检约束）
+
+    monkeypatch.setattr(ws, "_approval_resume_probe", probe_ok)
     monkeypatch.setattr(ws, "_emit_persistent", fake_emit)
     db = _FakeDb(_Row())
     db.row.pending_confirm = _approval_card()

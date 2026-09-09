@@ -1416,6 +1416,12 @@ def _bash_handler(
     # F5/G6：档位来源接缝——上下文（会话注入/升档重放）优先，缺省回落全局
     # settings.sandbox_bash_default_mode（现状逐字节一致）。
     mode = str(getattr(context, "sandbox_mode", "") or "") or settings.sandbox_bash_default_mode
+    if mode == "workspace-write" and sandbox_dir:
+        # F5/G6（§6.6）：workspace-write 档写前容量检查（卷水位熔断优先；
+        # read-only/none 档不查——无持久写入）。VALIDATION 码不触发升档链。
+        from .quota import check_workspace_write_capacity
+
+        check_workspace_write_capacity(sandbox_dir, extra_bytes=0)
     output = run_bash(
         str(arguments.get("command", "")),
         sandbox_dir=sandbox_dir or "",

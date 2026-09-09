@@ -76,6 +76,13 @@ class Settings(BaseSettings):
     # F5/G6：拒写升档审批（§6.4）。默认关 = DENIED 仅作失败观察（零行为变化）；
     # F4 read-only 档部署时与档位翻转同批置 true（read-only 下拒写 → 自动升档卡）。
     agent_escalation_approval_enabled: bool = False
+    # F5/G6：磁盘配额（§6.6）。workspace_quota_bytes = 每工作区（会话/绑定 scope）
+    # 写入总量软上限（默认 1GiB，写前 du 检查 + TTL 缓存；非 xfs prjquota 部署时
+    # 为软上限语义）；sandbox_volume_watermark_bytes = 共享数据卷剩余空间水位
+    # 熔断（默认 512MiB，剩余低于阈值 → workspace-write 整体拒写 fail-closed）。
+    # 两者 ≤0 表示关闭。熔断判定优先于每目录配额（全局末防线，M-R3-4）。
+    workspace_quota_bytes: int = 1024 * 1024 * 1024
+    sandbox_volume_watermark_bytes: int = 512 * 1024 * 1024
     # P3：检查点引擎。默认 memory（每回合独立 thread_id）；postgres 需单独评审
     # 多副本粘性路由后再开，禁止把 Observation 全文写入检查点。
     agent_checkpointer: str = "memory"

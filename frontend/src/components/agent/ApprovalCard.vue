@@ -27,6 +27,8 @@
       <div v-else-if="item.approvalDone === 'rejected'" class="approval-verdict no">已拒绝 —— 命令未执行</div>
       <div v-else-if="item.approvalDone === 'expired'" class="approval-verdict expired">已过期 —— 审批超时失效，如需执行请重新发起</div>
       <div v-else-if="item.approvalDone === 'cancelled'" class="approval-verdict no">已取消 —— /stop 已放弃本轮审批</div>
+      <div v-else-if="item.approvalDone === 'voided'" class="approval-verdict expired">已作废 —— 执行回合不可恢复（检查点缺失），请重新发起</div>
+      <div v-else-if="item.approvalDone === 'recovery_failed'" class="approval-verdict expired">恢复失败 —— 回合恢复异常，请重新发起该操作</div>
       <div v-else-if="canAct" class="approval-actions">
         <button class="btn btn-sign btn-sm" @click="$emit('approve', item)">批准并执行</button>
         <button class="btn btn-secondary btn-sm" @click="$emit('reject', item)">拒绝</button>
@@ -42,8 +44,9 @@ import { computed } from 'vue'
 const props = defineProps<{
   item: {
     approval?: { name?: string; command?: string; reason?: string; risk_level?: string; sandbox_scope?: string; call_id?: string } | null
-    // V1.73：终态增加 expired（TTL 超时）/ cancelled（/stop 放弃）
-    approvalDone?: 'approved' | 'rejected' | 'expired' | 'cancelled' | null
+    // V1.73：expired（TTL 超时）/ cancelled（/stop 放弃）；
+    // F5-G6（M-R3-7）：voided（检查点缺失作废）/ recovery_failed（恢复失败）
+    approvalDone?: 'approved' | 'rejected' | 'expired' | 'cancelled' | 'voided' | 'recovery_failed' | null
     noAnim?: boolean
   }
   canAct?: boolean
