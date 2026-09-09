@@ -486,8 +486,8 @@ async def test_business_confirmation_revalidates_and_enqueues_in_transaction(wir
 
 
 @pytest.mark.asyncio
-async def test_model_switch_rejected_before_user_acceptance(wired):
-    """历史带旧模型签名时预检必须拒绝，不能先 accepted 再在适配器失败。"""
+async def test_model_switch_migrates_text_history_before_user_acceptance(wired):
+    """无工具历史切换模型时只剔除旧签名，正文仍在首次请求前保留。"""
     wired.entry.log.append("user/message", {"turn": 1, "content": "old input"})
     wired.entry.log.append("assistant/message", {"turn": 1, "message": {
         "role": "assistant", "content": "old answer", "protocol_state": {
@@ -495,15 +495,41 @@ async def test_model_switch_rejected_before_user_acceptance(wired):
             "model": "claude-sonnet-4", "compatibility_key": "old-key", "replay_policy": "items_v1", "items": [],
         }}})
     before = wired.entry.log.read()
-    command = SimpleNamespace(data={"content": "new input", "client_message_id": "new"},
-                              request_id="req", session_id="session", fingerprint="fp")
-    with pytest.raises(loop_service.AppError) as error:
-        await wired.service._submit(wired.entry, "actor", "connection", command)
-    assert error.value.code == loop_service.ErrorCode.VALIDATION
+    dependencies, resources = await loop_wiring.build_dependencies(
+        wired.service, wired.entry, "actor", {"content": "new input"}
+    )
     assert wired.entry.log.read() == before
-    wired.entry.runtime.submit.assert_not_awaited()
+    assert dependencies.history_transition_reason == "model_switch_text_only"
+    assert dependencies.protocol_state_compatibility is not None
+    assert [message["content"] for message in dependencies.request.messages] == [
+        "old input", "old answer", "new input",
+    ]
+    assert "protocol_state" not in dependencies.request.messages[1]
+    assert "reasoning_content" not in dependencies.request.messages[1]
+    await wired.service._close_resources(resources)
     assert wired.closed == ["mcp", "sdk"]
-    assert wired.pool["active"] == 0 and wired.entry.writer_released
+
+
+@pytest.mark.asyncio
+async def test_model_switch_with_tool_history_requires_new_session(wired):
+    """工具 wire 记录不可跨模型伪造，带工具历史仍需显式新建会话。"""
+    wired.entry.log.append("user/message", {"turn": 1, "content": "old input"})
+    wired.entry.log.append("assistant/message", {"turn": 1, "message": {
+        "role": "assistant", "content": "", "tool_calls": [
+            {"id": "call-1", "name": "read", "args": {"file_path": "a.txt"}},
+        ], "protocol_state": {
+            "version": 1, "provider": "anthropic", "protocol": "anthropic_messages",
+            "model": "claude-sonnet-4", "compatibility_key": "old-key", "replay_policy": "items_v1", "items": [],
+        }}})
+    wired.entry.log.append("tool/result", {"call_id": "call-1", "name": "read", "content": "done"})
+
+    with pytest.raises(loop_service.AppError) as error:
+        await loop_wiring.build_dependencies(
+            wired.service, wired.entry, "actor", {"content": "new input"}
+        )
+    assert error.value.code == loop_service.ErrorCode.VALIDATION
+    assert error.value.message == "当前会话包含工具调用，切换模型请新建会话"
+    assert wired.closed == ["mcp", "sdk"]
 
 
 @pytest.mark.asyncio

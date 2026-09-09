@@ -87,6 +87,29 @@ def test_user_multimodal_content_is_preserved_without_mutating_facts():
     assert content[0]["text"] == "识图"
 
 
+def test_incompatible_protocol_state_migrates_only_visible_text_history():
+    """切换模型时删除旧签名和思考通道，但不能改写已提交事实或正文。"""
+    state = {
+        "version": 1, "replay_policy": "items_v1", "provider": "old",
+        "protocol": "anthropic_messages", "model": "old-model", "compatibility_key": "old-key",
+        "items": [{"signature": "opaque"}],
+    }
+    events = [
+        event(1, "user/message", {"content": "旧问题"}),
+        event(2, "assistant/message", {"message": {
+            "role": "assistant", "content": "旧回答", "reasoning_content": "旧思考", "protocol_state": state,
+        }}),
+    ]
+    target = {
+        "version": 1, "replay_policy": "items_v1", "provider": "new",
+        "protocol": "openai_chat", "model": "new-model", "compatibility_key": "new-key",
+    }
+    messages = derive_messages(events, protocol_state_compatibility=target)
+    assert [message["content"] for message in messages] == ["旧问题", "旧回答"]
+    assert "protocol_state" not in messages[1] and "reasoning_content" not in messages[1]
+    assert events[1]["data"]["message"]["protocol_state"] == state
+
+
 @pytest.mark.parametrize("asked,ended", [
     ("approval/asked", "approval/decided"),
     ("question/asked", "question/answered"),

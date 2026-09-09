@@ -7,6 +7,7 @@ import hashlib
 import json
 import time
 from dataclasses import replace
+from typing import Any
 from uuid import uuid4
 
 from app.agent_prompt_settings import get_agent_prompt_overlay
@@ -130,6 +131,36 @@ def authorized_profile(db, data: dict) -> tuple[AuthorizedProfileSnapshot, int]:
     except LlmRequestError as exc:
         raise AppError(ErrorCode.VALIDATION, "所选 Agent 协议档的模型或连接配置无效") from exc
     return snapshot, context_window
+
+
+def _protocol_state_compatibility(profile: AuthorizedProfileSnapshot) -> dict[str, Any]:
+    """提取目标模型可回放 opaque 状态的最小身份，不含连接地址或凭据。"""
+    request = resolve_request(profile, messages=[])
+    return {
+        "version": 1,
+        "replay_policy": "items_v1",
+        "provider": request.provider or "",
+        "protocol": request.protocol or "",
+        "model": request.model,
+        "compatibility_key": request.compatibility_key or "",
+    }
+
+
+def _history_requires_text_migration(messages: list[dict], compatibility: dict[str, Any]) -> bool:
+    """仅在历史确有其他模型的 opaque 状态时启动文本迁移。"""
+    from app.harness.memory.agent_messages import protocol_state_compatible
+
+    return any(
+        message.get("role") == "assistant"
+        and message.get("protocol_state") is not None
+        and not protocol_state_compatible(message["protocol_state"], compatibility)
+        for message in messages
+    )
+
+
+def _history_has_tools(messages: list[dict]) -> bool:
+    """工具调用的 wire 名和参数可能随模型变化，不能降级成跨模型文本历史。"""
+    return any(message.get("role") == "tool" or bool(message.get("tool_calls")) for message in messages)
 
 
 def _identity(identity: dict) -> dict:
@@ -323,13 +354,29 @@ async def _build_dependencies(service, entry, actor_id: str, data: dict, resourc
     # 首个请求在 user/message 提交前完整预检；附件展开后的正文也必须计入预算。
     from app.harness.memory.agent_messages import derive_messages
 
-    messages = derive_messages(entry.log.read())
+    history = derive_messages(entry.log.read())
+    compatibility = _protocol_state_compatibility(profile)
+    migrated_history = _history_requires_text_migration(history, compatibility)
+    if migrated_history:
+        if _history_has_tools(history):
+            raise AppError(
+                ErrorCode.VALIDATION,
+                "当前会话包含工具调用，切换模型请新建会话",
+            )
+        # 仅清理与目标模型不兼容的原始签名；普通正文继续作为下一轮上下文。
+        messages = derive_messages(
+            entry.log.read(), protocol_state_compatibility=compatibility
+        )
+    else:
+        messages = history
     messages.append({"role": "user", "content": data.get("_model_content", data["content"])})
     effort = profile.config.reasoning_effort if profile.config.reasoning_enabled else "off"
     initial, _ = _window_request(profile, segments, specs, messages, effort, context_window)
     return TurnDependencies(adapter=adapter, scheduler=scheduler, request=initial,
                             request_factory=request_factory, context_window=context_window,
-                            tool_transports=tool_transports), resources
+                            tool_transports=tool_transports,
+                            protocol_state_compatibility=compatibility if migrated_history else None,
+                            history_transition_reason="model_switch_text_only" if migrated_history else None), resources
 
 
 def _wire_payload(request) -> dict:

@@ -101,6 +101,10 @@ class TurnDependencies:
     context_window: int | None = None
     # 工具 wire 名到执行通道的本轮快照，仅用于上下文用量展示，不参与模型路由。
     tool_transports: dict[str, str] | None = None
+    # 目标模型的 opaque 状态兼容边界；跨模型文本迁移时仅剔除不兼容的历史状态。
+    protocol_state_compatibility: dict[str, Any] | None = None
+    # 请求头记录本轮是否发生了受控的历史降级，供轨迹和排障核对。
+    history_transition_reason: str | None = None
 
 
 FinishReason = Literal["completed", "error", "max_tokens", "max_steps"]

@@ -264,7 +264,7 @@ const props = withDefaults(
     sessionId: string
     session?: AgentSession | null
     store: LoopStore
-    createSession: (workspaceId?: string) => Promise<string>
+    createSession: (workspaceId?: string, preparedTicket?: Promise<string>) => Promise<string>
   }>(),
   {
     session: null
@@ -635,8 +635,18 @@ async function submit(override?: { content: string; attachmentRefs: string[] }) 
   const content=override?.content ?? source.content, refs=override?.attachmentRefs ?? source.files.filter(f=>!f.removed && f.id).map(f=>f.id!)
   try {
     let sid=props.sessionId
-    if(!sid) { sid=await props.createSession(activeWorkspaceId.value || undefined); if(!sid) throw new Error(); props.store.drafts[sid]=source; delete props.store.drafts.draft }
-    const client=props.store.open(sid)
+    // 短票与 REST 建会没有依赖关系，先并行领取可缩短新会话的首次发送等待。
+    let preparedTicket: Promise<string> | undefined
+    if(!sid) {
+      preparedTicket=api.auth.getWsTicket().then(({ticket})=>ticket)
+      // 建会失败时仍消费此 Promise 的拒绝，避免后台短票请求产生未处理异常。
+      void preparedTicket.catch(()=>undefined)
+      sid=await props.createSession(activeWorkspaceId.value || undefined, preparedTicket)
+      if(!sid) throw new Error()
+      props.store.drafts[sid]=source
+      delete props.store.drafts.draft
+    }
+    const client=props.store.open(sid, preparedTicket)
     source.pending ??= client.command('turn.submit',{client_message_id:createRequestId(),content,attachment_refs:refs,profile_id:profile.id,reasoning_effort:selectedEffort})
     // 只有首次订阅完成后才发送；超时取消等待，不能在以后重连时偷偷补发。
     if (!props.store.sessions[sid].ready) await new Promise<void>((resolve, reject) => {
