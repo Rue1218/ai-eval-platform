@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends
 from fastapi import Request as FastApiRequest
 from sqlalchemy.orm import Session
 
-from ..adapters import call_protocol, fetch_remote_models
+from ..adapters import DEFAULT_TIMEOUT_S, call_protocol, fetch_remote_models
 from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
@@ -26,6 +26,9 @@ from ..security import decrypt_secret
 
 router = APIRouter(prefix="/api/profiles", tags=["profiles"])
 logger = logging.getLogger("ai-eval.profiles")
+
+# 页面探活会触发一次真实模型推理，必须与协议调用共用 30 秒上限，避免冷启动被误判为不可用。
+PROFILE_CHECK_TIMEOUT_S = DEFAULT_TIMEOUT_S
 
 
 def _legacy_api_key(profile: ProtocolProfile) -> str | None:
@@ -494,7 +497,7 @@ def check_profile(
             messages=[{"role": "user", "content": "ping"}],
             max_tokens=1,
             anthropic_version=profile.anthropic_version,
-            timeout_s=10,
+            timeout_s=PROFILE_CHECK_TIMEOUT_S,
         )
     except AppError as exc:
         return {"ok": False, "code": exc.code.value, "message": exc.message}
