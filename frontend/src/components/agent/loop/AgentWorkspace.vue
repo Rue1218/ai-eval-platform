@@ -17,9 +17,16 @@
           <p v-if="!busy && state?.phase && ['max_tokens','max_steps','cancelled','interrupted','error'].includes(state.phase)" class="loop-notice">{{ finishLabels[state.phase] }}</p>
           </div>
           <div class="loop-composer-wrap"><AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile"/></div>
-          <button class="loop-width-handle" type="button" aria-label="拖拽调整对话内容宽度" aria-orientation="vertical" role="separator" :aria-valuemin="minimumChatWidth" :aria-valuemax="maximumChatWidth" :aria-valuenow="Math.round(renderedChatWidth)" @pointerdown="beginContentResize" @keydown="adjustContentWidthByKey">
-            <span aria-hidden="true"></span>
-          </button>
+          <div class="loop-width-edge loop-width-edge-left" @pointerenter="previewContentResize('left', $event)" @pointermove="moveContentResizePreview('left', $event)" @pointerleave="hideContentResizePreview('left')">
+            <button class="loop-width-handle" :class="{ 'is-visible': hoverResizeEdge === 'left', 'is-active': isResizing && resizeEdge === 'left' }" :style="resizeHandleStyle('left')" type="button" aria-label="向左拖拽调整对话内容宽度" aria-orientation="vertical" role="separator" :aria-valuemin="minimumChatWidth" :aria-valuemax="maximumChatWidth" :aria-valuenow="Math.round(renderedChatWidth)" @pointerdown="beginContentResize($event, 'left')" @keydown="adjustContentWidthByKey($event, 'left')">
+              <span aria-hidden="true"></span>
+            </button>
+          </div>
+          <div class="loop-width-edge loop-width-edge-right" @pointerenter="previewContentResize('right', $event)" @pointermove="moveContentResizePreview('right', $event)" @pointerleave="hideContentResizePreview('right')">
+            <button class="loop-width-handle" :class="{ 'is-visible': hoverResizeEdge === 'right', 'is-active': isResizing && resizeEdge === 'right' }" :style="resizeHandleStyle('right')" type="button" aria-label="向右拖拽调整对话内容宽度" aria-orientation="vertical" role="separator" :aria-valuemin="minimumChatWidth" :aria-valuemax="maximumChatWidth" :aria-valuenow="Math.round(renderedChatWidth)" @pointerdown="beginContentResize($event, 'right')" @keydown="adjustContentWidthByKey($event, 'right')">
+              <span aria-hidden="true"></span>
+            </button>
+          </div>
         </section>
         <TraceWorkspace v-else-if="state && trace" :state="state" :trace="trace"/>
         <button v-if="!atBottom && tab==='chat'" class="jump-bottom" @click="scrollBottom">↓ 回到最新</button>
@@ -49,9 +56,11 @@ const props = defineProps<{ sessionId: string; store: LoopStore; createSession: 
 const auth = useAuthStore(), tab = ref('chat'), runtimeOpen = ref(false), error = ref(''), effort = ref<Effort | null>(null)
 const ui = ref<LoopUi | null>(null), selectedProfileId = ref(''), shown = ref(80), attachments = ref<Record<string, AttachmentReference[]>>({})
 const composer = ref<InstanceType<typeof AgentComposer>>(), scroller = ref<HTMLElement>(), chatShell = ref<HTMLElement>(), atBottom = ref(true)
-const chatWidth = ref<number | null>(null), isResizing = ref(false)
+type ResizeEdge = 'left' | 'right'
+const chatWidth = ref<number | null>(null), isResizing = ref(false), resizeEdge = ref<ResizeEdge | null>(null), hoverResizeEdge = ref<ResizeEdge | null>(null)
+const resizeHandleOffsets = ref<Record<ResizeEdge, number>>({ left: 110, right: 110 })
 const minimumChatWidth = 520
-const chatWidthStorageKey = 'agent-loop:chat-shell-width:v2'
+const chatWidthStorageKey = 'agent-loop:chat-shell-width:v3'
 const state = computed(() => props.store.sessions[props.sessionId]), trace = computed(() => props.store.traces[props.sessionId])
 const draft = computed(() => props.store.draft(props.sessionId || 'draft'))
 const rows = computed(() => state.value ? conversationRows(state.value) : [])
@@ -73,6 +82,7 @@ const maximumChatWidth = computed(() => Math.max(minimumChatWidth, (chatShell.va
 const renderedChatWidth = computed(() => chatWidth.value || chatShell.value?.getBoundingClientRect().width || minimumChatWidth)
 let epoch = 0
 let resizeStartX = 0, resizeStartWidth = 0
+const resizeHandleHeight = 96
 /** 能力随会话/窗口聚焦刷新；活动请求显示自己的持久配置版本。 */
 async function refreshUi() {
   const current = ++epoch, sid = props.sessionId
@@ -139,10 +149,33 @@ function interactions(row: LoopRecord) { return Object.values(state.value?.inter
 function fill(text: string) { draft.value.content = text; composer.value?.focus() }
 function trackScroll() { const el=scroller.value; if(el) atBottom.value=el.scrollHeight-el.scrollTop-el.clientHeight<100 }
 function scrollBottom() { const el=scroller.value; if(el) el.scrollTop=el.scrollHeight; atBottom.value=true }
-/** 左侧玻璃把手只在桌面端调整共享对话壳层，输入框与消息区同步变宽。 */
-function beginContentResize(event: PointerEvent) {
+/** 将固定高度的边缘阴影线定位到鼠标所在的纵向位置。 */
+function updateResizeHandleOffset(edge: ResizeEdge, event: PointerEvent) {
+  const rect = chatShell.value?.getBoundingClientRect()
+  if (!rect) return
+  resizeHandleOffsets.value[edge] = Math.min(Math.max(0, event.clientY - rect.top - resizeHandleHeight / 2), Math.max(0, rect.height - resizeHandleHeight))
+}
+/** 仅当鼠标进入左右边缘命中区时，显示随鼠标纵向移动的细玻璃阴影线。 */
+function previewContentResize(edge: ResizeEdge, event: PointerEvent) {
+  if (event.pointerType === 'touch' || isResizing.value) return
+  hoverResizeEdge.value = edge
+  updateResizeHandleOffset(edge, event)
+}
+function moveContentResizePreview(edge: ResizeEdge, event: PointerEvent) {
+  if (event.pointerType === 'touch' || isResizing.value || hoverResizeEdge.value !== edge) return
+  updateResizeHandleOffset(edge, event)
+}
+function hideContentResizePreview(edge: ResizeEdge) {
+  if (!isResizing.value && hoverResizeEdge.value === edge) hoverResizeEdge.value = null
+}
+function resizeHandleStyle(edge: ResizeEdge) { return { top: `${resizeHandleOffsets.value[edge]}px` } }
+/** 两侧边缘都可拖拽；外扩和内收只改变宽度，壳层始终保持页面居中。 */
+function beginContentResize(event: PointerEvent, edge: ResizeEdge) {
   if (event.pointerType === 'touch' || !chatShell.value) return
   event.preventDefault()
+  resizeEdge.value = edge
+  hoverResizeEdge.value = edge
+  updateResizeHandleOffset(edge, event)
   resizeStartX = event.clientX
   resizeStartWidth = chatShell.value.getBoundingClientRect().width
   chatWidth.value = resizeStartWidth
@@ -152,19 +185,24 @@ function beginContentResize(event: PointerEvent) {
 }
 function resizeContent(event: PointerEvent) {
   const upper = maximumChatWidth.value
-  chatWidth.value = Math.min(upper, Math.max(minimumChatWidth, resizeStartWidth - (event.clientX - resizeStartX)))
+  const direction = resizeEdge.value === 'right' ? 1 : -1
+  chatWidth.value = Math.min(upper, Math.max(minimumChatWidth, resizeStartWidth + direction * (event.clientX - resizeStartX)))
+  if (resizeEdge.value) updateResizeHandleOffset(resizeEdge.value, event)
 }
 function finishContentResize() {
   if (!isResizing.value) return
   isResizing.value = false
+  resizeEdge.value = null
+  hoverResizeEdge.value = null
   window.removeEventListener('pointermove', resizeContent)
   try { if (chatWidth.value) localStorage.setItem(chatWidthStorageKey, String(Math.round(chatWidth.value))) } catch { /* 本地存储失败不影响本次调整。 */ }
 }
-/** 键盘用户可用方向键移动左侧把手，以固定步长改变共享宽度。 */
-function adjustContentWidthByKey(event: KeyboardEvent) {
+/** 键盘用户可用方向键从当前侧边缘放大或缩小居中的共享壳层。 */
+function adjustContentWidthByKey(event: KeyboardEvent, edge: ResizeEdge) {
   if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
   event.preventDefault()
-  chatWidth.value = Math.min(maximumChatWidth.value, Math.max(minimumChatWidth, renderedChatWidth.value + (event.key === 'ArrowLeft' ? 24 : -24)))
+  const outward = (edge === 'left' && event.key === 'ArrowLeft') || (edge === 'right' && event.key === 'ArrowRight')
+  chatWidth.value = Math.min(maximumChatWidth.value, Math.max(minimumChatWidth, renderedChatWidth.value + (outward ? 24 : -24)))
   try { localStorage.setItem(chatWidthStorageKey, String(Math.round(chatWidth.value))) } catch { /* 本地存储失败不影响本次调整。 */ }
 }
 async function copy(text: string) { try { await navigator.clipboard.writeText(text) } catch { error.value='复制失败' } }
@@ -225,15 +263,15 @@ async function hydrateAttachments() {
 
 .loop-tabs .workspace-tab{background:transparent}.loop-tabs .workspace-tab:disabled{opacity:.45;cursor:default}
 
-/* 消息区与输入框共用同一宽度壳层；默认不绘制整块边界。 */
-.loop-chat-shell{position:relative;display:flex;flex:1;flex-direction:column;min-height:0;width:min(900px,calc(100% - 48px));max-width:calc(100% - 48px);min-width:520px;margin:0 24px 0 auto}
+/* 消息区与输入框共用同一宽度壳层，并始终在页面内容区居中。 */
+.loop-chat-shell{position:relative;display:flex;flex:1;flex-direction:column;min-height:0;width:min(900px,calc(100% - 48px));max-width:calc(100% - 48px);min-width:520px;margin:0 auto}
 .loop-chat-shell .loop-conversation{padding:24px 16px}
 .loop-chat-shell .loop-composer-wrap{flex:0 0 auto;width:100%;max-width:none;margin:0;padding:12px 0 18px;box-sizing:border-box}
 
-/* 把手固定在共享内容列左缘，仅在靠近该区域或键盘聚焦时呈现玻璃质感。 */
-.loop-width-handle{position:absolute;z-index:3;top:110px;left:-36px;width:28px;height:104px;border:0;border-radius:14px;background:transparent;cursor:ew-resize;opacity:0;touch-action:none;transition:opacity .18s ease,background-color .18s ease}
-.loop-width-handle span{display:block;width:2px;height:72px;margin:auto;border-radius:2px;background:rgba(105,128,122,.28);box-shadow:0 0 10px rgba(119,147,138,.2)}
-.loop-chat-shell:hover .loop-width-handle,.loop-chat-shell:focus-within .loop-width-handle,.loop-chat-shell.is-resizing .loop-width-handle{opacity:1;background:rgba(255,255,255,.08);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
-.loop-width-handle:hover,.loop-width-handle:focus-visible{background:rgba(255,255,255,.28);outline:0}.loop-width-handle:hover span,.loop-width-handle:focus-visible span{background:rgba(91,129,117,.52)}
-@media(max-width:768px){.loop-chat-shell{width:100%!important;max-width:none;min-width:0;margin:0}.loop-chat-shell .loop-composer-wrap{padding:8px}.loop-width-handle{display:none}.loop-chat-shell .loop-conversation{padding:16px 12px}}
+/* 两侧保留窄命中区；只有进入边缘时才显示跟随鼠标移动的细玻璃阴影线。 */
+.loop-width-edge{position:absolute;z-index:3;top:0;bottom:0;width:28px;cursor:ew-resize}.loop-width-edge-left{left:-14px}.loop-width-edge-right{right:-14px}
+.loop-width-handle{position:absolute;left:0;width:28px;height:96px;border:0;border-radius:14px;background:transparent;cursor:ew-resize;opacity:0;touch-action:none;transition:opacity .14s ease,background-color .14s ease}
+.loop-width-handle span{display:block;width:2px;height:76px;margin:auto;border-radius:2px;background:rgba(105,128,122,.3);box-shadow:0 0 10px rgba(119,147,138,.24)}
+.loop-width-handle.is-visible,.loop-width-handle.is-active,.loop-width-handle:focus-visible{opacity:1;background:rgba(255,255,255,.08);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);outline:0}.loop-width-handle:hover{background:rgba(255,255,255,.2)}.loop-width-handle:hover span,.loop-width-handle:focus-visible span{background:rgba(91,129,117,.54)}
+@media(max-width:768px){.loop-chat-shell{width:100%!important;max-width:none;min-width:0;margin:0}.loop-chat-shell .loop-composer-wrap{padding:8px}.loop-width-edge{display:none}.loop-chat-shell .loop-conversation{padding:16px 12px}}
 </style>
