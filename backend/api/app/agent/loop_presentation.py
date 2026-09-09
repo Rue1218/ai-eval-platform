@@ -97,12 +97,13 @@ def request_summary(request, *, context_window=None, history_upto_seq=None, inpu
     """记录实际 attempt 的配置和同源输入估算；测试/旧事实缺协议时保留未知。"""
     meter = None
     if request.protocol and context_window:
-        from .loop_wiring import _prompt_tokens
+        from .loop_wiring import _prompt_token_breakdown
 
+        breakdown = _prompt_token_breakdown(request)
         meter = {"basis": "serialized_request.v1", "estimated": True,
                  "profile_version": request.profile_version, "input_fingerprint": input_fingerprint,
                  "history_upto_seq": history_upto_seq, "capacity": context_window,
-                 "input_tokens": _prompt_tokens(request), "reserved_output_tokens": request.max_tokens}
+                 **breakdown, "reserved_output_tokens": request.max_tokens}
     return {"model": request.model, "provider": request.provider, "protocol": request.protocol,
             "profile_id": request.profile_id, "profile_version": request.profile_version,
             "reasoning_effort": request.reasoning_effort, "max_tokens": request.max_tokens,

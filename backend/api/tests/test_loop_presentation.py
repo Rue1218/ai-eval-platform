@@ -9,7 +9,8 @@ from app.agent.loop_presentation import (
     request_summary,
     tool_display,
 )
-from app.llm.contracts import ModelConfig
+from app.llm.contracts import ModelConfig, SystemSegment
+from app.llm.loop_contracts import ToolSpec
 from app.llm.resolver import AuthorizedProfileSnapshot, resolve_request
 
 
@@ -32,14 +33,30 @@ def test_preview_allowlist_empty_edit_and_truncation():
 
 
 def test_request_meter_matches_actual_wire_estimator():
-    """统计读取同一个请求对象，明确估算及输出预留。"""
+    """统计读取同一个请求对象，来源归因不会丢失或重复输入 token。"""
     from app.agent.loop_wiring import _prompt_tokens
 
     config = ModelConfig(protocol="openai_chat", base_url="https://api.deepseek.com", model="deepseek-chat", api_key="test")
-    request = resolve_request(config, messages=[{"role": "user", "content": "你好"}])
+    request = resolve_request(
+        config,
+        messages=[{"role": "user", "content": "你好"}],
+        system_segments=(SystemSegment("系统提示词"),),
+        tools=(
+            ToolSpec("read", "读取", {"type": "object", "properties": {}}),
+            ToolSpec("task.create", "创建评测", {"type": "object", "properties": {}}),
+        ),
+    )
     summary = request_summary(request, context_window=64000, input_fingerprint="fingerprint", history_upto_seq=7)
-    assert summary["context_meter"]["input_tokens"] == _prompt_tokens(request)
-    assert summary["context_meter"]["reserved_output_tokens"] == request.max_tokens
+    meter = summary["context_meter"]
+    assert meter["input_tokens"] == _prompt_tokens(request)
+    assert meter["reserved_output_tokens"] == request.max_tokens
+    assert meter["system_tokens"] > 0
+    assert meter["mcp_tokens"] > 0
+    assert meter["tools_tokens"] > 0
+    assert meter["skills_tokens"] == 0
+    assert sum(meter[name] for name in (
+        "system_tokens", "skills_tokens", "mcp_tokens", "tools_tokens", "conversation_tokens",
+    )) == meter["input_tokens"]
     assert "api_key" not in str(summary)
 
 

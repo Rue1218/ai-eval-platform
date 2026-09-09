@@ -2,7 +2,8 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.86 |
+| 文档版本 | V1.87 |
+| 当前增量 | V1.87：AgentLoop `request_summary.context_meter` 新增系统提示词、Skill、MCP、原生工具、对话消息五类实际输入 token 明细。 |
 | WS v2 修订日期 | 2026-09-09（§4A，HTTP 消息标识、默认档位与 Anthropic 兼容流修复） |
 | 对应 PRD | V1.18（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
@@ -18,6 +19,8 @@
 
 > V1.78（2026-09-09）：G6b 磁盘配额与终态契约组（F5 §6.6/M-R3-7）+ G6 评审 M1–M3 合并登记（G6a 升档审批主体已随 #235 于 2026-09-08 合入 main，其 `DENIED` 错误码与 `tool_approval` 升档卡语义见本版事件表与错误码表）。**G6b**：新增配置 `workspace_quota_bytes`（默认 1GiB）与 `sandbox_volume_watermark_bytes`（默认 512MiB）——workspace-write 档写前容量检查（卷水位熔断优先于每目录配额，TTL 缓存 du，VALIDATION 码不触发升档链）；`approval_terminal` outcome 成组扩展 `voided`（ack 行锁内检查点预检缺失作废）/`recovery_failed`（resume 恢复失败）。**评审修订**：审批卡终态按卡型归类（M3）——`approval_terminal` payload 新增可选 `card_type`（`"approval"`|`"clarify"`，缺省 `"approval"`——旧事件与旧客户端按缺省解释，无破坏）：`recovery_failed` 对澄清卡恢复失败同样广播并携带 `card_type="clarify"`（`_start_card_resume` 按发起卡型携带，前端按卡型路由 → ClarifyCard 增 `failed` 终态展示）；`expired`/`voided`/`cancelled` 恒为审批卡（payload 均带 `card_type="approval"`）。错误码 `DENIED`（403）口径收敛为 **bash 只读档拒写**——read-only 只约束 bash 持久写（绑定会话内文件工具仍可写，口径见《工作区与沙箱设计方案》§6.1.1），DENIED 文案不指引升档通道（该通道受 `agent_escalation_approval_enabled` 门控）；磁盘配额卷水位核算失败（disk_usage OSError）改为 fail-closed 拒写（§6.6，不静默放行，核算恢复自动放行）。
 >
+> V1.87（2026-09-09）：`assistant.start.data.request_summary.context_meter` 增量提供系统提示词、Skill、MCP、原生工具和对话消息的实际输入 token。它们都由本轮协议序列化请求计量，五项合计等于 `input_tokens`；未注入的来源如实为 0，输出预留不参与前端「已用」比例。
+
 > V1.81（2026-09-09）：不新增 REST 或 WS 字段。`subscribe` 的 attach 阶段在回放前检查持久开放回合：只有成功取得已释放的 PostgreSQL advisory writer lock，才结算硬重启遗留的 `turn.end(reason="interrupted")`；锁仍被存活实例持有时只订阅，不转移控制权或关闭其回合。每回合按所选 Agent 协议档读取已保存的补充提示词，核心提示词优先、补充段不可缓存，并在读取时再次拒绝疑似密钥或接管性内容。`task.create` 的评测档和裁判档使用全员同权协议档目录，`created_by` 仅为审计字段。CI 同时运行三组 Loop PostgreSQL 夹具和 Runner 回归；真实 cgroup v2 进程树取消仍需部署环境验收。
 >
 > V1.82（2026-09-09）：协议档只接受 `openai_chat` 与 `anthropic_messages`。删除 OpenAI Responses 的请求适配、模型列表分支和前端选项；迁移执行时删除全部 `openai_responses` 档、其受控环境文件变量及历史数据库密文，并清理指向被删除档位的 `settings.agent_profile_id`，避免 Agent 留下失效默认配置。历史任务与报告的快照不改写；新请求携带已删除协议一律返回 `VALIDATION`。
@@ -1927,7 +1930,7 @@ send 超时同样关闭 4408。Runtime 的事实提交不等待网络。
   - 传输边界：模型配置管理走 REST，浏览器回合走 `/ws/agent/v2`；平台到模型根据协议档使用 HTTP(S) POST + SSE（Anthropic `/v1/messages`、OpenAI Chat `/chat/completions` 等），不将浏览器 WS 地址作为模型接口。思考强度随 `turn.submit` 冻结，经同一 resolver 转成 SDK 请求体。
 - `attachments{upload_suffixes,inline_suffixes,image_suffixes,max_bytes,max_image_bytes,content_required}`：上传、模型内联和图片能力分开；模型实际是否支持视觉仍以供应商为准。附件正文不能为空；音频和旧 Office 仅元信息。历史附件按 `file_id` 使用已有 `/api/files/{id}` 和 `/content` 授权接口，不公开磁盘路径。
 - `tool.call/result.data.display` 为 ToolDisplay v1：`version,title,registry_name,wire_name,arguments_preview,result_preview,target,format,truncated,unavailable_reason`，预览最多 12000 字符。参数按工具字段白名单生成，失败仅公开错误码；未知工具有明确缺失说明，不开放任意内部结果。
-- `assistant.start.data.request_summary` 提供实际 `model,provider,protocol,profile_id,profile_version,reasoning_effort,max_tokens,input_fingerprint,tools[{name,parameters_schema}],context_meter`。context_meter 为实际请求的同源序列化估算，字段 `basis,estimated,profile_version,input_fingerprint,history_upto_seq,capacity,input_tokens,reserved_output_tokens`；旧事实缺统计时为 null，不显示为 0。
+- `assistant.start.data.request_summary` 提供实际 `model,provider,protocol,profile_id,profile_version,reasoning_effort,max_tokens,input_fingerprint,tools[{name,parameters_schema}],context_meter`。context_meter 为实际请求的同源序列化估算，字段 `basis,estimated,profile_version,input_fingerprint,history_upto_seq,capacity,input_tokens,reserved_output_tokens,system_tokens,skills_tokens,mcp_tokens,tools_tokens,conversation_tokens`；五类输入明细之和等于 `input_tokens`，仅计已注入本轮模型请求的内容，当前未注入 Skill/MCP 时如实为 0；旧事实缺统计时为 null，不显示为 0。
 - `assistant.message.data.reasoning_preview` 为持久思考正文，仅 reasoning ACL 允许时发送。禁止出现在普通 trace 或撤权后的快照里。`question.resolved` 增 `outcome,answers`（仍受 interactions ACL）。
 - 恢复快照增加有序 `timeline`（完整语义信封，受逐帧 ACL）；与 H 和当前用户权限在同一行锁事务读取。旧分组投影保留，记录增 `first_cursor`，新 reader 以 timeline 为权威，禁止重复追加 messages。
 - `question.respond.answers[].answer` 接受字符串或字符串数组；多选使用标签数组，包含逗号的标签不切分。旧字符串多选仍兼容逗号编码。数组只允许用于 checkbox，多选规范化后复用 validate_answers。

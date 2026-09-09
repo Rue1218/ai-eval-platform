@@ -355,6 +355,48 @@ def _prompt_tokens(request) -> int:
     return estimate_tokens(json.dumps(payload, ensure_ascii=False, allow_nan=False))
 
 
+def _prompt_token_breakdown(request) -> dict[str, int]:
+    """按实际序列化请求归因输入 token，五类明细之和始终等于输入总量。
+
+    Skill 只有在其正文实际注入当前请求时才计入；AgentLoop 当前未注入时保留 0，
+    不能把目录 Hint 或其他会话的估算伪装成本轮模型上下文。
+    """
+    # 保留协议 codec 的系统包装成本，其余三类以同一请求减去基线得到。
+    baseline = replace(request, messages=[], tools=[])
+    system_tokens = _prompt_tokens(baseline)
+    from app.harness.execution.registry import build_default_registry
+
+    mcp_names = {
+        definition.name
+        for definition in build_default_registry().iter_defs(transport="mcp")
+    }
+    mcp_tools = [tool for tool in request.tools if tool.name in mcp_names]
+    all_tools_tokens = max(
+        0,
+        _prompt_tokens(replace(baseline, tools=request.tools)) - system_tokens,
+    )
+    # JSON 数组和协议包装只归属一次，避免 MCP/原生工具独立试算时重复计算外层 token。
+    mcp_tokens = min(
+        all_tools_tokens,
+        max(0, _prompt_tokens(replace(baseline, tools=mcp_tools)) - system_tokens),
+    )
+    tools_tokens = all_tools_tokens - mcp_tokens
+    skills_tokens = 0
+    input_tokens = _prompt_tokens(request)
+    conversation_tokens = max(
+        0,
+        input_tokens - system_tokens - skills_tokens - mcp_tokens - tools_tokens,
+    )
+    return {
+        "input_tokens": input_tokens,
+        "system_tokens": system_tokens,
+        "skills_tokens": skills_tokens,
+        "mcp_tokens": mcp_tokens,
+        "tools_tokens": tools_tokens,
+        "conversation_tokens": conversation_tokens,
+    }
+
+
 def _window_request(profile, segments, specs, messages, effort, context_window):
     """纯函数预检和裁剪完整 user 回合；不改事实、不丢单个工具结果或签名块。"""
     if type(context_window) is not int or context_window <= 0:
