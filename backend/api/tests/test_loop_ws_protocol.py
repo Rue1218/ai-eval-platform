@@ -106,6 +106,7 @@ def test_assistant_fact_has_two_stable_projections_and_no_raw():
     original = fact(
         content="answer", raw={"key": "hidden"}, protocol_state={"items": ["opaque"]},
         header={"system": "hidden"}, reasoning_content="private",
+        usage={"prompt_tokens": 8, "completion_tokens": 3}, latency_ms=123,
         tool_calls=[{"id": "c", "name": "read", "args": {"secret": "hidden"}}],
     )
     before = deepcopy(original)
@@ -118,6 +119,8 @@ def test_assistant_fact_has_two_stable_projections_and_no_raw():
         assert "cursor" not in item
     payload = projections[0]["data"]
     assert payload["tool_calls"] == [{"id": "c", "name": "read"}]
+    assert payload["usage"] == {"prompt_tokens": 8, "completion_tokens": 3}
+    assert payload["latency_ms"] == 123
     assert "hidden" not in json.dumps(projections)
     assert original == before
     wire = persistent_frame("s", 8, projections[0])
@@ -180,7 +183,7 @@ def test_catalog_matches_runtime_history_selection_and_legacy_attempts():
                {"role": "user", "content": "latest"}]
     selection = _history_selection(history, history[2:])
     catalog = event_schema_catalog()
-    assert catalog["catalog_version"] == 4
+    assert catalog["catalog_version"] == 5
     validator = Draft202012Validator(catalog["events"]["assistant/attempt_start"]["schema"])
     legacy = {"turn": 1, "step": 1, "attempt_id": "a", "header_seq": 0,
               "history_upto_seq": 5}

@@ -77,7 +77,7 @@ export class AgentLoopWebSocket {
             this.traceRequestId = null
           }
           if (frame.type === 'capabilities') {
-            if (frame.data.stream_schema_version !== 'agent-loop-stream.v2.1') throw new Error('不支持的事件 Schema 版本')
+            if (frame.data.stream_schema_version !== 'agent-loop-stream.v2.2') throw new Error('不支持的事件 Schema 版本')
             this.resync(); return
           }
           if (frame.type === 'resync.required') {

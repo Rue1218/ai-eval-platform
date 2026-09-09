@@ -494,7 +494,7 @@ class WsV2Connection:
         """管理连接任务并在所有退出路径释放控制权，不 await 整轮结算。"""
         self.control("hello", {"protocol_version": 2})
         self.control("capabilities", {
-            "commands": sorted(_DATA_TYPES), "stream_schema_version": "agent-loop-stream.v2.1",
+            "commands": sorted(_DATA_TYPES), "stream_schema_version": "agent-loop-stream.v2.2",
         })
         tasks = [
             asyncio.create_task(self.sender()), asyncio.create_task(self.receive()),

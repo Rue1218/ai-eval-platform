@@ -20,7 +20,7 @@ export function identity(frame: Pick<LoopFrame, 'session_id' | 'correlation'>, t
   return JSON.stringify([frame.session_id, c.turn_id ?? c.turn, c.attempt_id, ...(tool ? [c.call_id] : [])])
 }
 function record(frame: LoopFrame, key: string): LoopRecord {
-  return { key, first_cursor: frame.cursor ?? Number.MAX_SAFE_INTEGER, correlation: { ...frame.correlation }, event: frame.type }
+  return { key, first_cursor: frame.cursor ?? Number.MAX_SAFE_INTEGER, correlation: { ...frame.correlation }, event: frame.type, timestamp: frame.ts }
 }
 /** 流片段可能先于持久 start 到达，之后只校正首次顺序，不替换稳定对象。 */
 function attemptFor(state: LoopState, frame: LoopFrame): Attempt {

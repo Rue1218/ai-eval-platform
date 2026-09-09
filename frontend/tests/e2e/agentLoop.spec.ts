@@ -38,7 +38,7 @@ async function setup(page: Page, holdNewReplay = false) {
   await page.routeWebSocket('**/ws/agent/v2?*', socket => {
     const send=(type:string,data:any={},correlation:any={},persistent=false,sid='s')=>socket.send(JSON.stringify({protocol_version:2,type,durability:persistent?'persistent':'control',...(persistent?{cursor:++cursor}:{}),session_id:sid,ts:'2026-09-09T00:00:00Z',correlation,data}))
     socket.send(JSON.stringify({protocol_version:2,type:'hello',durability:'control',data:{protocol_version:2},correlation:{}}))
-    socket.send(JSON.stringify({protocol_version:2,type:'capabilities',durability:'control',data:{stream_schema_version:'agent-loop-stream.v2.1'},correlation:{}}))
+    socket.send(JSON.stringify({protocol_version:2,type:'capabilities',durability:'control',data:{stream_schema_version:'agent-loop-stream.v2.2'},correlation:{}}))
     socket.onMessage(raw=>{
       const cmd=JSON.parse(String(raw));commands.push(cmd);sockets.set(cmd.session_id,socket)
       const sid=cmd.session_id, c={turn:1,turn_id:`${sid}:1`,step:1,attempt_id:'a',call_id:'c'}
@@ -54,7 +54,7 @@ async function setup(page: Page, holdNewReplay = false) {
         send('turn.start',{},c,true,sid)
         socket.send(JSON.stringify({protocol_version:2,type:'command.accepted',durability:'control',session_id:sid,request_id:cmd.request_id,data:{accepted:true},correlation:c}))
         send('assistant.start',{request_summary:{model:'deepseek-chat',reasoning_effort:cmd.data.reasoning_effort,profile_version:'v1'}},c,true,sid)
-        send('assistant.message',{content:'准备读取文件',reasoning_preview:'检查工作区'},c,true,sid)
+        send('assistant.message',{content:'准备读取文件',reasoning_preview:'检查工作区',usage:{prompt_tokens:1500,completion_tokens:320,total_tokens:1820,cache_read_input_tokens:600},latency_ms:800},c,true,sid)
         send('assistant.end',{outcome:'committed'},c,true,sid)
         send('tool.call',{name:'read',display:{version:1,target:'test.txt',arguments_preview:'{"path":"test.txt"}'}},c,true,sid)
         send('approval.requested',{interaction_id:'i',nonce:'nonce-memory-only',expires_at:Date.now()/1000+300,name:'read'},c,true,sid)
@@ -181,6 +181,28 @@ test('首次订阅超时保留草稿，迟到回放不自动发送，原请求�
   await page.getByRole('button', {name:'使用原请求 ID 重发'}).click()
   await expect.poll(() => ctx.submits).toBe(1)
   await expect(page.getByRole('alert')).toHaveCount(0)
+})
+
+test('消息操作和真实模型指标遵循持久事件字段', async ({page}) => {
+  const ctx = await setup(page)
+  await page.getByRole('textbox', {name:'消息'}).fill('读取测试文件')
+  await page.getByRole('button', {name:'发送'}).click()
+  await expect(page.locator('.assistant-identity time')).toContainText('2026')
+  await expect(page.getByLabel('复制回答')).toBeVisible()
+  await expect(page.getByLabel('重新生成')).toBeDisabled()
+  await expect(page.getByLabel('引用为参考记忆')).toBeVisible()
+  await expect(page.locator('.assistant-metrics')).toContainText('1.8K token')
+  await expect(page.locator('.assistant-metrics')).toContainText('800 ms')
+  await expect(page.locator('.conversation-metrics')).toContainText('生成速度 400/s')
+  await expect(page.locator('.conversation-metrics')).toContainText('缓存命中 40%')
+  await expect(page.locator('.conversation-metrics')).toContainText('输入 1.5K · 输出 320')
+  await page.getByLabel('引用为参考记忆').click()
+  await expect(page.getByRole('textbox', {name:'消息'})).toHaveValue('[引用对话记忆]\n准备读取文件\n[/引用对话记忆]')
+  await page.getByRole('button', {name:'允许一次', exact:true}).click()
+  await expect(page.getByRole('button', {name:'重新生成'})).toBeEnabled()
+  await page.getByRole('button', {name:'重新生成'}).click()
+  await expect.poll(() => ctx.submits).toBe(2)
+  expect(ctx.commands.filter(command => command.type === 'turn.submit')[1].data.content).toBe('读取测试文件')
 })
 
 test('多步工具内审批、attempt 结束不解锁发送、切会话不取消、轨迹可用',async({page})=>{

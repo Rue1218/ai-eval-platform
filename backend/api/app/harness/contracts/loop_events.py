@@ -8,7 +8,7 @@ from typing import Any
 
 EVENT_ENVELOPE_VERSION = 2
 EVENT_SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema"
-SCHEMA_CATALOG_VERSION = 4
+SCHEMA_CATALOG_VERSION = 5
 SCHEMA_REF_PREFIX = "dsh://events/"
 
 
@@ -165,6 +165,7 @@ EVENT_SCHEMAS: dict[str, dict[str, Any]] = {
             "reasoning_content": _field(_STRING, "Provider-visible reasoning channel when available."),
             "tool_calls": _field(_ARRAY, "Normalized tool calls requested by the assistant."),
             "usage": _field(_OBJECT, "Provider usage metadata when available."),
+            "latency_ms": _field(_INTEGER, "模型流从建连到完成的耗时（毫秒），不含工具执行。"),
             "finish_reason": _field(_STRING, "Provider completion reason."),
             "interrupted": _field({"type": "boolean"}, "Whether cancellation interrupted output."),
         },
