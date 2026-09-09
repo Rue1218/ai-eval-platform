@@ -1,6 +1,6 @@
 # AI 测试与评估平台 — AgentLoop 后端实施记录
 
-> 版本：V0.1 ｜ 审查日期：2026-09-09 ｜ 状态：本地后端实现与回归完成；未提交、未部署，前端 v2 待后续改造。
+> 版本：V0.2 ｜ 审查日期：2026-09-09 ｜ 状态：AgentLoop 单入口、协议档选择和前端输入栏已完成本地验证；服务器端真实供应商/Linux Runner 联调待验收。
 
 ## 1. 实施结果与边界
 
@@ -12,19 +12,19 @@ WS 为独立 `/ws/agent/v2`，支持严格命令、订阅快照、PG 游标补�
 
 回合完整 drain 后释放专用 PG 写者连接，下一轮重新 claim 并读取持久事实，避免闲置会话耗尽连接池。同一控制连接的运行时可以保留会话内持续授权；断连或身份变化清除授权。请求模板切换思考强度同步更新开关和供应商派生字段；真实请求头、消息选择索引与输入指纹一同记录。
 
-已有前端页面尚未使用 v2。默认 `AGENT_LOOP_ENABLED=false`；保留已生成的 v2 会话数据和工作区 guard，不通过开关或回合终态释放结果未知的执行。
+前端工作台已统一使用 v2；新会话固定为 agent_loop_v2，历史 legacy 行仍保留审计与显式回放。AGENT_LOOP_ENABLED 已删除；结果未知的执行仍不得因前端状态或回合终态而释放工作区 guard。
 
 ## 2. 配置与启用顺序
 
 1. 使用项目 Python 3.12 与 `backend/api/requirements.txt`、`requirements-dev.txt` 锁定依赖。全局旧版 SDK 不能代替项目环境。
-2. 在目标部署执行正常 Alembic 流程：从 `backend/api` 运行 `python -m alembic upgrade head`。本次新增迁移为 `77586e897dae`，上游 `e8f1a2b3c4d5`；不要手工创建生产表。
-3. 为平台设置有效 Agent 协议档，保留现有环境文件凭据加载规则。打开 `AGENT_LOOP_ENABLED=true`，新建会话时传 `engine_version=agent_loop_v2`。现有 legacy 会话继续原路径。
-4. v2 客户端复用 REST 短票认证，按 API.md V1.77 连接、订阅和发送 `turn.submit`。`request_id` 标识命令，`client_message_id` 标识用户输入；同一幂等 ID 不得改正文。
+2. 在目标部署执行正常 Alembic 流程：从 `backend/api` 运行 `python -m alembic upgrade head`。本次新增迁移为 `8f9a2c4d6e01`，上游 `77586e897dae`；不要手工创建生产表。
+3. 为平台设置有效 Agent 协议档，保留现有环境文件凭据加载规则。新建会话自动使用 AgentLoop；输入栏只从 agent-ui 返回的脱敏 profiles 中选择模型和思考档位。
+4. v2 客户端复用 REST 短票认证，按 API.md V1.80 连接、订阅和发送 `turn.submit`。每次提交可带 `profile_id` 与 `reasoning_effort`，服务端重新校验；`request_id` 标识命令，`client_message_id` 标识用户输入；同一幂等 ID 不得改正文。
 5. 如果使用 bash，API 和 Runner 配置相同的非空 `RUNNER_INTERNAL_TOKEN`，保持内部网络隔离；Runner 还需 Linux cgroup v2 的专用可写委派根 `RUNNER_CGROUP_ROOT`。目录在容器内必须位于 `/sys/fs/cgroup` 下，并有可创建子组和读取/写入必要控制文件的权限。
 
 当前 compose 只接入变量，没有自动替宿主机建立 cgroup 委派。推荐为 Runner 分配专用 systemd 委派子树，仅将该子树挂入容器，并在实际 Docker/cgroup namespace 配置下验证创建子组、进程迁入、`cgroup.kill` 与 `cgroup.events populated=0`。不要将整个宿主 cgroup 树可写暴露给 Runner 或沙箱。缺少可信委派时新 bash 返回失败，不降级到裸 subprocess。
 
-主要参数：`AGENT_LOOP_MAX_STEPS=16`、`AGENT_LOOP_MODEL_MAX_RETRIES=2`、`AGENT_LOOP_MODEL_RETRY_DELAY_SECONDS=0.25`、`AGENT_LOOP_MAX_PARALLEL_TOOL_CALLS=4`、`AGENT_LOOP_APPROVAL_TIMEOUT_SECONDS=300`。直接进程可经环境变量配置；compose 当前显式映射开关、步数和并行数，其他使用默认值。
+主要参数：`AGENT_LOOP_MAX_STEPS=16`、`AGENT_LOOP_MODEL_MAX_RETRIES=2`、`AGENT_LOOP_MODEL_RETRY_DELAY_SECONDS=0.25`、`AGENT_LOOP_MAX_PARALLEL_TOOL_CALLS=4`、`AGENT_LOOP_APPROVAL_TIMEOUT_SECONDS=300`。直接进程可经环境变量配置；Compose 不再映射 AgentLoop 启用开关。
 
 ## 3. 本地验证记录
 
@@ -67,16 +67,16 @@ python -m ruff check . ../shared
 | 源尚未实现的 steer/反思/自动续写 | 不新增，不作为迁移遗漏 |
 | 真实模型与评测 | 仍需三协议实际凭据驱动工具闭环、图文/签名/cache，以及真实 Worker 评测报告验收 |
 | Linux Runner | 仍需容器/bwrap/cgroup 的进程树取消、失联后持续写入、跨重启隔离和可信对账演练 |
-| 前端 v2 | 后续单独改造 reducer、工具卡、reasoning、三类交互、重连快照；现有前端构建通过不代表已接入 |
+| 前端 v2 | 已接入单入口会话、协议档菜单、思考控制和重连快照；真实供应商、Linux Runner、权限撤回和隔离故障仍待服务器证据 |
 | 多 API 副本 | PG 写者排他不等于运行中任务自动接力；上线仍需验证会话路由、实例故障与恢复策略 |
 
 未知执行的 guard 必须保留，只有绑定原实例代次和请求指纹的可信终止证据才可对账释放；API 进程异常留下的本地/旧执行 guard 暂无面向用户的手动解锁 API，运维需先证明实际进程已停止，不能直接清表放行。
 
 ## 5. 修改代码文件与作用清单
 
-详见 [架构设计 §16.3](AI测试与评估平台-AgentLoop后端架构设计.md#163-修改代码文件与作用清单)。本次同步 API、数据库、Agent 开发、Harness 契约/记忆/执行/安全文档；未改前端代码与源项目工作区。
+详见 [架构设计 §16.3](AI测试与评估平台-AgentLoop后端架构设计.md#163-修改代码文件与作用清单)。本次同步 API、数据库、Agent 开发、Harness 契约/记忆/执行/安全文档，并改造前端输入栏、模型菜单和思考控制。
 
-回归中额外修复 `backend/api/app/profile_env.py` 在 Windows Python 3.12 缺少 `os.fchmod` 时无法保存模型协议档的问题：仅在该能力存在时使用，保留文件创建权限及路径 chmod。`test_profile_env.py` 增加缺少该 API 的回归。`test_harness_execution.py` 的既有公网工具测试固定 DNS 桩，与已固定的 HTTP 响应配套；未改生产 SSRF 校验。`test_loop_rollout.py` 验证真实创建开关、创建/列表引擎字段和旧 WS 拒绝新会话。
+回归中额外修复 `backend/api/app/profile_env.py` 在 Windows Python 3.12 缺少 `os.fchmod` 时无法保存模型协议档的问题：仅在该能力存在时使用，保留文件创建权限及路径 chmod。`test_profile_env.py` 增加缺少该 API 的回归。`test_harness_execution.py` 的既有公网工具测试固定 DNS 桩，与已固定的 HTTP 响应配套；未改生产 SSRF 校验。`test_loop_rollout.py` 验证新会话固定 AgentLoop、创建/列表引擎字段和旧 WS 不会隐式创建会话。
 
 `backend/api/requirements-dev.txt` 新增 schema 校验测试依赖。临时 PG 仅用于本轮验证，结束后停止；复验前需另行准备隔离测试库，不能把业务库填入测试变量。
 

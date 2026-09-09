@@ -1,10 +1,10 @@
 # AI 测试与评估平台 Agent 开发文档
 
-> 版本：V1.7.1
-> 状态：新增独立 AgentLoop v2 后端路径，默认关闭；详见文末本次增量与《AgentLoop后端架构设计》。此前骨架化与混合引擎说明属于 legacy 路径及其历史阶段，不能据此认定新路径仍为纯对话。前端已加入显式 v2 试验入口，默认仍为 legacy，完整迁移验收未结束。
+> 版本：V1.7.2
+> 状态：新建会话统一使用 AgentLoop v2；历史 legacy 行仅保留审计与显式回放路径。此前骨架化与混合引擎说明属于 legacy 路径及其历史阶段，不能据此认定新路径仍为纯对话。前端输入栏按每回合协议档选择模型和思考强度，完整真实供应商/Linux Runner 联调验收仍未结束。
 > 审查日期：2026-09-09
 > 对应需求：`AI测试与评估平台-PRD.md` V1.18
-> 对应接口：`AI测试与评估平台-API.md` V1.79
+> 对应接口：`AI测试与评估平台-API.md` V1.80
 
 ## 1. legacy 骨架化运行链路（历史基线）
 
@@ -498,7 +498,7 @@ reasoning 事件，并对已知支持显式关闭的端点发送关闭参数。G
 
 ## AgentLoop v2 后端增量（V1.7.0，2026-09-09）
 
-新建会话传 `engine_version=agent_loop_v2`，须开启 `AGENT_LOOP_ENABLED`；入口 `/ws/agent/v2?ticket=...`，独立 WS v2 命令与 cursor。旧会话仍使用原路径。前端尚未迁移，不因后端接线即视为可在现有页面完整操作。
+新建会话固定为 `engine_version=agent_loop_v2`，不再使用 `AGENT_LOOP_ENABLED` 灰度开关；入口 `/ws/agent/v2?ticket=...`，独立 WS v2 命令与 cursor。旧会话仅能通过携带既有 session_id 的原路径显式回放，缺失 session_id 不创建会话。前端以 AgentLoop 作为唯一工作台，不把历史 legacy 会话迁写为新事实。
 
 运行链：`LoopService → AgentRuntime → pre_step → model → tools/retry_wait → close_step → decide_next → finalize_turn`。协议档解析产生每回合依赖，原生工具结果进入规范模型历史，再次调用模型直到正常终态、取消、错误或步数上限。业务任务确认后只入队，执行仍归 Worker。常规工具失败回填结果后继续；取消和未知远端结果独立结算。
 
@@ -514,8 +514,14 @@ reasoning 事件，并对已知支持显式关闭的端点发送关闭参数。G
 细节和当前验证边界见 [后端架构设计](AI测试与评估平台-AgentLoop后端架构设计.md) 与 [实施记录](AI测试与评估平台-AgentLoop后端实施记录.md)。
 
 
-### V1.7.1 前端试验接线（2026-09-09）
+### V1.7.1 前端试验接线（历史快照，2026-09-09）
 
-前端按 Session.engine_version 选择独立 transport。相同 v2 连接 resubscribe 只重启读流，避免 detach 误取消；工具内交互继续携带 nonce 与执行身份。公开展示与请求统计按 API V1.79，实施状态和代码清单详见《AgentLoop前端重写与联调计划》§11。默认新会话与服务器开关不扩大；legacy 清理、真实供应商/Linux 验收未完成。
+本节记录试验接线时的状态：前端按 Session.engine_version 选择独立 transport。相同 v2 连接 resubscribe 只重启读流，避免 detach 误取消；工具内交互继续携带 nonce 与执行身份。V1.7.2 已固定新会话为 AgentLoop，并移除服务器开关；当前契约见 API V1.80。legacy 清理、真实供应商/Linux 验收仍未完成。
 
 修改代码文件与作用清单：`agent/loop_presentation.py` 提供安全投影，`agent/events.py` 提供持久思考 ACL，`agent/loop.py`/`loop_wiring.py` 提供实际请求统计，`routers/sessions.py` 提供 UI 能力，`routers/ws_v2.py` 保留重同步控制权；前端新增 `agent/loop`、`components/agent/loop` 和 `api/agentLoop*`，由 `views/Agent.vue` 分流。
+
+### V1.7.2 单入口与协议档选择（2026-09-09）
+
+POST /api/sessions 只创建 AgentLoop 会话，数据库默认值迁至 agent_loop_v2，历史 legacy 行不改写。GET /api/sessions/agent-ui 与会话同名接口返回脱敏 profiles 数组，每项仅有 id、name、version、model、protocol、allowed_efforts 与 default_effort。输入栏提交 turn.submit.profile_id 与 reasoning_effort 后，loop_wiring 每回合重新检查 Agent 用途、有效凭据、模型配置和档位兼容性；浏览器不能提交端点、密钥或供应商参数。AGENT_LOOP_ENABLED 已从配置和部署变量移除。
+
+修改代码文件与作用清单：backend/shared/models.py 与 migrations/versions/8f9a2c4d6e01_新会话默认使用agentloop.py 固化新会话默认引擎；schemas.py、routers/sessions.py、routers/ws.py、routers/ws_v2.py 与 agent/loop_service.py、agent/loop_wiring.py 落实单入口和逐回合校验；frontend/src/components/agent/loop/AgentComposer.vue、AgentWorkspace.vue、ThinkingControl.vue 与 views/Agent.vue 实现模型选择和 DeepSeek Harness 风格的思考控制；docs/AI测试与评估平台-API.md 升级至 V1.80。

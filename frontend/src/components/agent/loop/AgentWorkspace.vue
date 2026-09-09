@@ -3,7 +3,6 @@
     <div class="loop-tabs"><button :class="{active:tab==='chat'}" @click="tab='chat'">对话</button><button :class="{active:tab==='trace'}" :disabled="!state" @click="tab='trace'">轨迹 <small>{{ state?.cursor || '' }}</small></button><span class="loop-status"><i :class="{running:busy}"/>{{ status }}</span><button @click="runtimeOpen=!runtimeOpen">运行信息</button></div>
     <p v-if="state && state.connection !== 'online'" class="loop-notice" role="status">{{ state.connection === 'connecting' ? '正在同步会话…' : '连接中断，状态待同步。' }}<button @click="store.clients.get(sessionId)?.connect()">重新连接</button></p>
     <p v-if="state?.error || error" class="loop-notice error" role="alert">{{ state?.error || error }}</p>
-    <p v-if="!sessionId && ui && !ui.enabled" class="loop-notice">服务器尚未开启 AgentLoop 新会话灰度，已有 v2 会话仍可阅读。</p>
     <div class="loop-content">
       <div class="loop-center">
         <div v-if="tab==='chat'" ref="scroller" class="loop-conversation" @scroll="trackScroll">
@@ -21,14 +20,14 @@
       </div>
       <aside v-if="runtimeOpen" class="loop-runtime"><button class="runtime-close" @click="runtimeOpen=false">关闭</button><h3>当前运行</h3><p>{{ status }}</p><dl><dt>会话</dt><dd>{{ sessionId || '未发送的草稿' }}</dd><dt>实际模型</dt><dd>{{ summary?.model || '尚无实际请求' }}</dd><dt>思考档位</dt><dd>{{ summary?.reasoning_effort || '未知' }}</dd><dt>协议档版本</dt><dd>{{ summary?.profile_version || '未知' }}</dd><dt>最近活动</dt><dd v-for="event in state?.facts.slice(-5) || []" :key="event.cursor">{{ event.type }}</dd></dl><h4 v-if="tasks.length">Worker 任务</h4><div v-for="task in tasks" :key="task.key"><router-link :to="'/tasks'">{{ task.key }}</router-link><p>{{ task.status || '等待状态' }}</p><p v-if="task.progress">{{ JSON.stringify(task.progress) }}</p><router-link v-if="task.report_id" :to="`/reports/${task.report_id}`">查看报告</router-link></div><p v-for="execution in quarantined" :key="execution.key" class="loop-notice">执行范围受限 · {{ execution.reason || '等待对账' }}</p></aside>
     </div>
-    <div class="loop-composer-wrap"><AgentComposer ref="composer" :draft="draft" :ui="ui" :effort="effort" :profiles="profiles" :meter="summary?.context_meter" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="changeModel"/></div>
+    <div class="loop-composer-wrap"><AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile"/></div>
   </div>
 </template>
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import http, { api } from '../../../api/http'
-import type { AttachmentReference, Profile } from '../../../api/types'
-import type { Data, Effort, InteractionRecord, LoopRecord, LoopUi, ToolRun } from '../../../api/agentLoopTypes'
+import http from '../../../api/http'
+import type { AttachmentReference } from '../../../api/types'
+import type { Data, Effort, InteractionRecord, LoopProfile, LoopRecord, LoopUi, ToolRun } from '../../../api/agentLoopTypes'
 import { conversationRows, identity } from '../../../agent/loop/reducer'
 import type { LoopStore } from '../../../agent/loop/store'
 import { useAuthStore } from '../../../stores/auth'
@@ -42,14 +41,16 @@ import ReasoningBlock from './ReasoningBlock.vue'
 import TraceWorkspace from './TraceWorkspace.vue'
 const props = defineProps<{ sessionId: string; store: LoopStore; createSession: () => Promise<string> }>()
 const auth = useAuthStore(), tab = ref('chat'), runtimeOpen = ref(false), error = ref(''), effort = ref<Effort | null>(null)
-const ui = ref<LoopUi | null>(null), profiles = ref<Profile[]>([]), shown = ref(80), attachments = ref<Record<string, AttachmentReference[]>>({})
+const ui = ref<LoopUi | null>(null), selectedProfileId = ref(''), shown = ref(80), attachments = ref<Record<string, AttachmentReference[]>>({})
 const composer = ref<InstanceType<typeof AgentComposer>>(), scroller = ref<HTMLElement>(), atBottom = ref(true)
 const state = computed(() => props.store.sessions[props.sessionId]), trace = computed(() => props.store.traces[props.sessionId])
 const draft = computed(() => props.store.draft(props.sessionId || 'draft'))
 const rows = computed(() => state.value ? conversationRows(state.value) : [])
 const visibleRows = computed(() => rows.value.slice(-shown.value))
 const busy = computed(() => !!state.value?.activeTurn)
-const ready = computed(() => !!ui.value?.profile && !!effort.value && (props.sessionId ? !!state.value?.ready : !!ui.value?.enabled))
+/** 草稿协议档可独立于平台默认项选择；后端在提交时再次校验。 */
+const selectedProfile = computed<LoopProfile | null>(() => ui.value?.profiles.find(item => item.id === selectedProfileId.value) || ui.value?.profile || null)
+const ready = computed(() => !!selectedProfile.value && !!effort.value && (props.sessionId ? !!state.value?.ready : !!ui.value?.enabled))
 const canControl = computed(() => !!state.value?.controlled && !!ui.value?.permissions.interactions)
 const summary = computed(() => Object.values(state.value?.attempts || {}).sort((a,b)=>b.first_cursor-a.first_cursor)[0]?.request_summary)
 const tasks = computed(() => Object.values(state.value?.tasks || {}))
@@ -66,20 +67,42 @@ async function refreshUi() {
     const { data } = await http.get<LoopUi>(sid ? `/api/sessions/${sid}/agent-ui` : '/api/sessions/agent-ui')
     if (current !== epoch) return
     ui.value = data
-    const key = preferenceKey(data)
-    let saved: string | null = null
-    try { saved = localStorage.getItem(key) } catch { /* 隐私模式下保留内存偏好。 */ }
-    const previous = saved || effort.value
-    effort.value = previous && data.allowed_efforts.includes(previous as Effort) ? previous as Effort : data.default_effort
-    if (previous && previous !== effort.value) error.value = '当前模型不支持原思考档位，已恢复服务端默认值'
+    const savedProfileId = localPreference('agent-profile')
+    const profile = data.profiles.find(item => item.id === selectedProfileId.value)
+      || data.profiles.find(item => item.id === savedProfileId)
+      || data.profile
+      || null
+    selectedProfileId.value = profile?.id || ''
+    restoreEffort(profile)
     if (!data.permissions.reasoning && state.value) { for (const a of Object.values(state.value.attempts)) { a.reasoning = ''; delete a.reasoning_preview }; for (const event of state.value.facts) delete event.data.reasoning_preview }
     if (!data.permissions.trace && trace.value) { trace.value.events = []; trace.value.seen.clear(); trace.value.catalog = null; trace.value.denied = true }
     if (!data.permissions.interactions && state.value) for (const i of Object.values(state.value.interactions)) { delete i.nonce; delete i.spec_hash; i.restricted = true }
-    if (data.permissions.settings) profiles.value = (await api.profiles.list()).filter(p => p.usages?.includes('agent'))
   } catch { if (current === epoch) { ui.value = null; error.value = '读取会话能力失败，请确认权限和服务状态' } }
 }
-function preferenceKey(value: LoopUi) { return `agent-effort:${auth.user?.id}:${value.profile?.id}:${value.profile?.version}` }
-function setEffort(value: Effort) { effort.value = value; if (ui.value) try { localStorage.setItem(preferenceKey(ui.value), value) } catch { /* 本地存储不可用不影响发送。 */ } }
+/** 本地偏好只保存协议档 ID 和思考档位，不保存 API 端点、凭据或服务端配置。 */
+function localPreference(key: string) { try { return localStorage.getItem(`${key}:${auth.user?.id}`) } catch { return null } }
+function effortPreferenceKey(profile: LoopProfile) { return `agent-effort:${auth.user?.id}:${profile.id}:${profile.version}` }
+function restoreEffort(profile: LoopProfile | null) {
+  if (!profile) { effort.value = null; return }
+  let saved: string | null = null
+  try { saved = localStorage.getItem(effortPreferenceKey(profile)) } catch { /* 隐私模式下保留内存偏好。 */ }
+  const previous = saved || effort.value
+  effort.value = previous && profile.allowed_efforts.includes(previous as Effort) ? previous as Effort : profile.default_effort
+  if (previous && previous !== effort.value) error.value = '当前协议档不支持原思考档位，已恢复默认值'
+}
+function setEffort(value: Effort) {
+  effort.value = value
+  const profile = selectedProfile.value
+  if (profile) try { localStorage.setItem(effortPreferenceKey(profile), value) } catch { /* 本地存储不可用不影响发送。 */ }
+}
+/** 切换只影响下一轮；已经发出的 attempt 永远读取其持久 request_summary。 */
+function selectProfile(id: string) {
+  const profile = ui.value?.profiles.find(item => item.id === id)
+  if (!profile) return
+  selectedProfileId.value = profile.id
+  try { localStorage.setItem(`agent-profile:${auth.user?.id}`, profile.id) } catch { /* 本地存储不可用不影响发送。 */ }
+  restoreEffort(profile)
+}
 watch(() => props.sessionId, () => { ui.value = null; attachments.value = {}; shown.value = 80; tab.value='chat'; if (props.sessionId) props.store.open(props.sessionId); void refreshUi() }, { immediate: true })
 watch(tab, value => { if (props.sessionId) { props.store.clients.get(props.sessionId)?.trace(value === 'trace', trace.value?.seq ?? -1); if (trace.value) trace.value.denied = !ui.value?.permissions.trace } })
 watch(() => state.value?.cursor, () => { if (atBottom.value) void nextTick(scrollBottom); void hydrateAttachments() })
@@ -94,14 +117,15 @@ async function copy(text: string) { try { await navigator.clipboard.writeText(te
 /** 冻结输入/附件/effort 与幂等 ID；未受理时保留可恢复草稿。 */
 async function submit() {
   if (!ready.value || busy.value || draft.value.submitting) return
-  const source = draft.value, selectedEffort=effort.value
+  const source = draft.value, selectedEffort=effort.value, profile=selectedProfile.value
+  if (!selectedEffort || !profile) return
   source.submitting = true
   const content=source.content, refs=source.files.filter(f=>!f.removed && f.id).map(f=>f.id!)
   try {
     let sid=props.sessionId
     if(!sid) { sid=await props.createSession(); if(!sid) throw new Error(); props.store.drafts[sid]=source; delete props.store.drafts.draft }
     const client=props.store.open(sid)
-    source.pending=client.command('turn.submit',{client_message_id:crypto.randomUUID(),content,attachment_refs:refs,reasoning_effort:selectedEffort})
+    source.pending=client.command('turn.submit',{client_message_id:crypto.randomUUID(),content,attachment_refs:refs,profile_id:profile.id,reasoning_effort:selectedEffort})
     // 新建会话首次订阅完成后才发；原请求不自动跨断线重试。
     if(props.store.sessions[sid].ready) { client.send(source.pending); props.store.sessions[sid].controlled=true }
     else { const unwatch=watch(()=>props.store.sessions[sid]?.ready, ok=>{ if(ok){unwatch();if(source.pending){client.send(source.pending);props.store.sessions[sid].controlled=true}} }); setTimeout(unwatch,15000) }
@@ -116,7 +140,6 @@ function respond(interaction: InteractionRecord, values: Data) {
   const client=props.store.clients.get(props.sessionId)!, command=client.command(`${interaction.kind}.respond`,data)
   if(client.send(command)){interaction.submitting=true;draft.value.pending=command;draft.value.pendingInteraction=interaction.key}
 }
-async function changeModel(id:string) { try{await api.admin.updateSettings({agent_profile_id:id});await refreshUi()}catch{error.value='切换模型失败，仍使用服务端当前配置'} }
 /** 文件元数据只取授权接口，不信任历史里的任意 URL。 */
 async function hydrateAttachments() {
   const sid=props.sessionId

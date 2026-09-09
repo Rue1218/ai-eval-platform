@@ -1,10 +1,10 @@
 # AI 测试与评估平台 — AgentLoop 前端重写与联调计划
 
-> 版本：V0.2 ｜ 审查日期：2026-09-09 ｜ 状态：首批试验实现与本地验证完成，服务器联调及完整切换验收进行中。
+> 版本：V0.3 ｜ 审查日期：2026-09-09 ｜ 状态：AgentLoop 单入口、逐回合协议档选择与输入栏重写完成；服务器联调及完整切换验收进行中。
 >
 > 基线：`deepseek-harness-py/static/index.html` 当前页面 + `ai-eval-platform/frontend/src/views/Agent.vue` 当前实现 + 已落地后端 WS v2。后端设计见 [架构设计](AI测试与评估平台-AgentLoop后端架构设计.md)，已验证范围见 [实施记录](AI测试与评估平台-AgentLoop后端实施记录.md)。
 >
-> V0.1 为计划基线；V0.2 的实际交付、证据和未完成项见 §11。下文原阶段退出条件继续有效，不能把首批实现认定为 F0–F7 全部完成。
+> V0.1 为计划基线；V0.2 的首次实现记录见 §11，V0.3 的单入口与输入栏增量见 §12。下文原阶段退出条件继续有效，不能把本次实现认定为 F0–F7 全部完成。
 
 ## 1. 用户要求与实施口径
 
@@ -32,11 +32,11 @@
 | 源 `static/index.html` | 1967 行，HTML/CSS/原生 JS；会话栏、对话/轨迹 Tab、输入栏、运行侧栏 | 提取行为与视觉规则，重写为 Vue 组件；不嵌 iframe 或直接复制脚本 |
 | 源 `addToolCard/finishToolCard` | 参数/结果折叠；用 is_error 归成完成/失败，长成功输出可收起 | 必须扩为平台六态，不能延续二态归并 |
 | 源 `reasoningFor/settleReasoning` | 思考增量展开，结束自动折叠，失败/中断不同标签 | 按 attempt 管理；保留用户手动展开选择 |
-| 源 `loadUiConfig/renderEffortSlider` | 从 `/api/ui-config` 读取档位，支持滑动、滚轮、键盘和本地偏好 | 平台暂无同等模型能力响应；列为前置后端任务 |
+| 源 `loadUiConfig/renderEffortSlider` | 从 `/api/ui-config` 读取档位，支持滑动、滚轮、键盘和本地偏好 | 已由脱敏的 agent-ui profiles 逐档返回能力；前端按所选协议档收敛可用档位 |
 | 源 `phaseMeta` | 68%、48%、92% 等执行能量为固定展示值 | 保留状态表达，移除假进度数值；Worker 的真实百分比继续显示 |
 | 平台 `Agent.vue` | 已有状态点/筛选、模型下拉、附件、圆环、内联旧工具栈、三类旧卡 | 按职责拆出 v2 页面，旧 reducer 不扩成两套协议混杂的分支 |
 | 平台 `api/ws.ts` | legacy event_id、2 秒重排窗口和旧命令 | v2 新客户端使用严格 cursor；不能继承旧超时跳号策略 |
-| 平台模型选择 | `handleSelectAgentModel` 写全局 `agent_profile_id` | 当前不是会话独立模型；保留时须明确作用域，不伪装成只影响当前会话 |
+| 平台模型选择 | 输入栏选择 agent-ui 返回的协议档 | 每次提交显式携带 profile_id，服务端重新校验用途、凭据、模型和思考档位；不写全局 agent_profile_id |
 | 平台圆环 | REST 历史的旧 `context_meter`，基于旧窗口/摘要/skills 口径 | 保留组件形态，不直接把旧统计当作新循环实际上下文 |
 | 平台附件移除 | 移除草稿引用并释放 object URL | 这不等于物理删除上传文件，也不删除已经提交的历史附件 |
 
@@ -121,9 +121,9 @@ S01–S22 全部为本次前端目标。权限导致的内容不可见属于有�
 | 源独立运行“能量百分比” | 不复制假百分比；可保留装饰性呼吸光，但需 `aria-hidden` |
 | 源 HTML 脚本与匿名 WS 客户端 | 不迁入生产目录；行为拆分为 Vue + TypeScript + v2 客户端 |
 
-模型选择先保留当前全局设置机制：仅有设置权限者可修改，活动回合配置冻结，切换显示“下一轮生效”；其他成员/页面造成的全局修改必须重新读取实际配置。前端单独禁用按钮不能消除多用户竞争，B-FE01/B-FE05 需返回有效配置版本。若以后要改为会话独立选模，应另行增加服务端选择/授权契约，本计划不偷偷往 turn.submit 塞未经登记的 profile_id。
+模型选择改为每次 AgentLoop turn.submit 的受控 profile_id：agent-ui 只下发可供 Agent 使用的协议档安全投影，前端仅把选项保存为当前用户的本地预选。服务端在每轮调用前重新解析 profile_id，并校验用途、连接凭据、模型和 reasoning_effort；前端不得写全局 agent_profile_id，也不得发送端点、密钥或供应商参数。活动回合使用持久 request_summary，切换只影响下一轮。
 
-legacy 会话仍使用独立 legacy transport。新视图不再呈现旧 ConfirmCard；旧历史确认转换为只读工具/交互摘要，未完成旧交互仍通过对应旧命令适配，不能发 v2 nonce 命令。旧卡文件仅在全部引用替换、历史和待处理交互回归通过后删除；不删除仍被其他业务页使用的共享组件。
+历史 legacy 会话仍保留在服务端，供审计与显式旧路径回放；唯一 AgentLoop 工作台不再列出或创建 legacy 会话。旧 WS 缺失 session_id 时关闭 4400，不会暗中生成 legacy 数据。旧卡文件及既有业务页暂不删除，真实历史和待处理交互的兼容验收完成后再清理。
 
 ## 5. 状态、输入框与思考滑块
 
@@ -328,7 +328,7 @@ frontend/src/
 | F4 平台业务兼容 | task.create/status/cancel、web 工具、报告/进度、legacy 展示转换 | 任务只入队一次，报告与取消如实；旧独立确认卡不再出现 |
 | F5 完整轨迹工作台 | 所有筛选/检查器/Schema/JSON 树/复制/拖选/timing/关联 | 源四组回归迁移并通过，长流不丢业务行，未授权字段不泄漏 |
 | F6 联合验收 | 真实 SDK/PG/WS 浏览器联调、真实供应商、Linux Runner、权限/故障 | §9 矩阵全项有证据；条件未满足的不得记通过 |
-| F7 切换与清理 | 新会话灰度、旧会话可读/可结算、旧引用与文件清理 | 无旧卡引用与死代码、回滚保留 v2 reader 和 guard；再开启默认 v2 |
+| F7 切换与清理 | 新会话固定 AgentLoop、旧会话可读/可结算、旧引用与文件清理 | 无旧卡引用与死代码、回滚保留历史 reader；禁止恢复隐式创建 legacy 会话 |
 
 关键路径：F0→F1→F2/F3→F4/F5→F6→F7。组件原型可与契约讨论并行，但数据层和后端展示缺口未闭环前不能提前扩大灰度。
 
@@ -336,7 +336,7 @@ frontend/src/
 
 | 编号 | 用例 | 必须观察到的结果 |
 | :--- | :--- | :--- |
-| V01 | v2 创建、打开 legacy、flag 关闭、错误 endpoint | 引擎固定、正确 transport；不自动把旧会话迁成新历史 |
+| V01 | v2 创建、打开历史 legacy、旧 endpoint 缺 session_id、错误 endpoint | 引擎固定、正确 transport；不自动创建或迁写 legacy 历史 |
 | V02 | 同一 submit 重发、掉线未收到 accepted、负载改变复用 ID | 一条用户事实/一轮执行；不同摘要拒绝，草稿可恢复 |
 | V03 | 四步模型、三个同名工具、第二轮历史 | 顺序正确且各调用独立；工具结果真实回填再调用模型 |
 | V04 | read/edit/read + 参数别名、行范围、空替换 | 文件实际变化与卡片一致，不做错误的行号/命令转换 |
@@ -359,7 +359,7 @@ frontend/src/
 | V21 | 375/768/1440px、200% 缩放、中文输入法、减少动效 | 没有横向页面溢出；滑块/附件/发送可操作、焦点可返回 |
 | V22 | DeepSeek/OpenAI Chat/Responses/Anthropic 实际协议档 | 真实多步工具闭环；图文、思考、usage 和必要协议续接无退化 |
 | V23 | Linux Runner 失联后仍在运行、重启、另一会话同 scope | unknown 与隔离持续显示；无误放行；可信对账后才解除提示 |
-| V24 | legacy 历史和待处理三类交互、切换灰度/回滚 | 旧卡 UI 消失但历史/必要操作仍可用；新会话事实与 reader 不丢 |
+| V24 | legacy 历史和待处理三类交互、单入口回滚 | 旧卡 UI 消失但历史/必要操作仍可用；新会话事实与 reader 不丢 |
 
 测试分层：纯 reducer/展示 codec 单测→真实 SDK 响应夹具→真实 PG+WS+临时文件→浏览器 E2E→真实供应商/Linux 验收。mock 工具返回、静态截图、typecheck 或构建成功均不能独立证明整轮闭环。
 
@@ -367,7 +367,7 @@ frontend/src/
 
 ## 10. 发布条件与本次文件清单
 
-- 上线前同时满足：B-FE01–07 完成，S01–S22/V01–V24 有证据，关键浏览器 E2E 通过，后端真实服务验收完成。未满足时保持试验入口和默认关闭状态。
+- 上线前同时满足：B-FE01–07 完成，S01–S22/V01–V24 有证据，关键浏览器 E2E 通过，后端真实服务验收完成。未满足时不合入 main 或触发生产 CD；不能以已完成本地视觉/契约验证替代服务器验收。
 - 回滚先停止新 v2 会话放行；现有 v2 仍保留阅读、取消/结算和必要交互入口。不能回退到不识别 engine_version、绕过 guard 的旧组合。
 - 前端仅持有展示与临时草稿；不在 localStorage 保存原始 trace/nonce/请求头/模型历史；退出登录清理该用户的敏感缓存与连接。
 
@@ -389,9 +389,9 @@ V0.1 计划稿未修改代码；当时仅新增以下文档与资产，V0.2 实�
 - [工具桥](../backend/api/app/harness/execution/loop_bridge.py)、[模型选项](../backend/api/app/llm/providers/options.py)、[API 契约 §4A](AI测试与评估平台-API.md#4a-agent-loop-websocket-v2v1772026-09-09)。
 
 
-## 11. V0.2 首批实现与联调记录（2026-09-09）
+## 11. V0.2 首批实现与联调记录（历史快照，2026-09-09）
 
-已新增独立 v2 transport/store/页面并接入平台会话列表。默认新会话仍为 legacy，草稿顶部显式选择「AgentLoop · 试验」；服务器 `AGENT_LOOP_ENABLED=false` 时不允许创建新 v2，既有 v2 reader 保留。遵照本次用户指示，完成本地门禁后通过功能分支、PR 和 main CD 推送服务器测试，不直接把功能分支部署到生产。
+本节记录 V0.2 当时的试验状态：已新增独立 v2 transport/store/页面并接入平台会话列表，当时默认新会话仍为 legacy，草稿顶部显式选择「AgentLoop · 试验」，并使用 AGENT_LOOP_ENABLED 灰度。该开关、双引擎新建入口和页面选择器已由 V0.3 移除；当前状态以 §12 与 API V1.80 为准。
 
 ### 11.1 数据来源及完成边界
 
@@ -457,4 +457,36 @@ V0.1 计划稿未修改代码；当时仅新增以下文档与资产，V0.2 实�
 | `backend/api/tests/test_loop_{presentation,frontend_resync,ws_protocol}.py` | 新展示/问答/ACL/重同步与目录兼容回归 |
 | `.github/workflows/ci.yml` | 加入隔离 PG、前端单测和浏览器门禁 |
 | `.gitignore` | 排除本地依赖、临时测试目录与浏览器产物 |
-| `docs/AI测试与评估平台-API.md` | V1.79 冻结公开增量，修正主服务接线状态 |
+| `docs/AI测试与评估平台-API.md` | V1.79 首批公开增量；当前 V1.80 单入口契约见 §12 |
+
+## 12. V0.3 单入口、协议档与输入栏增量（2026-09-09）
+
+本批按用户要求收敛为唯一 AgentLoop 工作台。新会话固定创建为 agent_loop_v2，前端不再提供引擎选择，也不向旧 WebSocket 隐式创建会话；历史 legacy 数据不删除，但不出现在日常会话列表中。数据库迁移 8f9a2c4d6e01 只调整 sessions.engine_version 的服务端默认值，不回填或改写历史行。
+
+输入栏按参考图一重构为紧凑的两行结构：首行是单行提示输入，底栏包含添加附件、模型选择、DeepSeek Harness 风格的思考控制、上下文圆环和圆形发送按钮。模型菜单只列出 agent-ui 返回的可用协议档；切换协议档后，思考档位按该档允许的集合动态收敛。滑块支持点击、键盘 Home/End、滚轮和 Escape 返回触发器，选择随下一次提交一起发送。
+
+### 12.1 安全与状态边界
+
+- agent-ui 的 profile 与 profiles 只返回 id、name、version、model、protocol、allowed_efforts 和 default_effort，不返回模型地址、API Key 或供应商参数。
+- 每个 turn.submit 同时带 profile_id 与 reasoning_effort；服务端在真实请求前重查 Agent 用途、连接凭据、模型配置和档位兼容性。前端的本地偏好只用于预选，不构成授权或配置事实。
+- AGENT_LOOP_ENABLED 已从 Settings、环境示例和 Compose 注入移除。旧 /ws/agent 必须有既有 session_id，缺失时关闭 4400。
+- 真实供应商、Linux Runner、隔离 PostgreSQL 与服务器端到端验证仍属于 F6 未完成项；本地浏览器 Mock 仅用于输入栏、模型菜单和思考控制交互验证。
+
+### 12.2 本次修改代码文件与作用清单
+
+| 文件 | 作用 |
+| :--- | :--- |
+| backend/shared/models.py、backend/api/migrations/versions/8f9a2c4d6e01_新会话默认使用agentloop.py | 新会话默认 AgentLoop，历史 legacy 行保持不变 |
+| backend/api/app/schemas.py、routers/sessions.py、routers/ws.py、routers/ws_v2.py | 固定新会话引擎、收紧旧 WS、发布脱敏 profiles 与接受 profile_id |
+| backend/api/app/agent/loop_service.py、loop_wiring.py | 删除开关守卫，并逐回合解析/校验协议档和思考档位 |
+| frontend/src/views/Agent.vue、api/http.ts、api/agentLoopTypes.ts | 去除引擎选择和 legacy 列表入口，固定创建 AgentLoop 会话 |
+| frontend/src/components/agent/loop/AgentComposer.vue、AgentWorkspace.vue、ThinkingControl.vue | 实现参考图输入栏、协议档菜单和 DeepSeek Harness 风格的思考强度控制 |
+| frontend/tests/e2e/agentLoop.spec.ts、backend/api/tests/test_loop_profile_selection.py | 覆盖单入口创建、模型选择和不兼容思考档位 |
+| docs/AI测试与评估平台-API.md、AI测试与评估平台-Agent开发文档.md、本文件 | 升级至 API V1.80 / Agent 文档 V1.7.2 / 本计划 V0.3 |
+
+### 12.3 本轮验证登记
+
+- 前端：npm run typecheck 与 npm run build 通过；Vite 仅报告既有 vendor chunk 体积提示。
+- 后端：ruff check . ../shared 通过；API pytest 使用工作区 basetemp 为 1247 passed / 72 skipped；Worker 为 50 passed。
+- 迁移：alembic heads 指向 8f9a2c4d6e01；离线 SQL 校验只生成 sessions.engine_version 的默认值调整，不改写历史 legacy 行。
+- 视觉：参考图一和 DeepSeek Harness 的浅色思考控制已在 876 × 720 CSS px 的 In-app Browser 中核对；详细结果见根目录 design-qa.md。

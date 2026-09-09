@@ -199,11 +199,12 @@ class SessionCreate(ApiModel):
 
     F3/G5：``workspace_id``/``scope_path`` 可选——绑定用户工作区（创建时
     固化、运行期不可变，设计《工作区与沙箱设计方案》§5）；绑定仅限 private
-    会话（BLK-4）。缺省 = legacy 临时工作区（行为与 F3 前一致）。
+    会话（BLK-4）。未绑定时使用平台临时工作区。
     """
 
     title: str = Field(default="新会话", min_length=1, max_length=200)
-    engine_version: Literal["legacy", "agent_loop_v2"] = "legacy"
+    # 新建会话统一走 AgentLoop；历史 legacy 行只通过 SessionOut 保持可回放。
+    engine_version: Literal["agent_loop_v2"] = "agent_loop_v2"
     visibility: Literal["private", "team"] = "private"
     workspace_id: str | None = Field(default=None, max_length=64)
     scope_path: str | None = Field(default=None, max_length=1024)

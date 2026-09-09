@@ -17,9 +17,18 @@ export interface LoopMeter {
   basis: string; estimated: boolean; profile_version: string; input_fingerprint: string
   history_upto_seq: number; capacity: number; input_tokens: number; reserved_output_tokens: number
 }
+
+/** 已授权的 Agent 协议档；只包含选择模型所需的公开元数据。 */
+export interface LoopProfile {
+  id: string; name: string; version: string; model: string; protocol: string
+  allowed_efforts: Effort[]; default_effort: Effort | null
+}
 export interface LoopUi {
   version: 1; enabled: boolean; unavailable_reason?: string
-  profile: { id: string; version: string; model: string; protocol: string } | null
+  /** 当前草稿选中的协议档；实际回合继续以 request_summary 为准。 */
+  profile: LoopProfile | null
+  /** 当前账号可以用于 AgentLoop 的协议档，不返回端点或凭据。 */
+  profiles: LoopProfile[]
   allowed_efforts: Effort[]; default_effort: Effort | null
   permissions: { write: boolean; trace: boolean; reasoning: boolean; interactions: boolean; settings: boolean }
   controller: { active: boolean; owned_by_actor: boolean }

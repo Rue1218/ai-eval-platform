@@ -1279,12 +1279,13 @@ export const api = {
     },
     async create(
       title?: string,
-      options: { visibility?: SessionVisibility; workspaceId?: string; scopePath?: string; engineVersion?: 'legacy' | 'agent_loop_v2' } = {},
+      options: { visibility?: SessionVisibility; workspaceId?: string; scopePath?: string } = {},
     ): Promise<AgentSession> {
       const visibility = options.visibility ?? 'private'
       if (getDataMode() === 'mock') {
         const s: AgentSession = {
           id: 's-' + Date.now(),
+          engine_version: 'agent_loop_v2',
           title: title || '新会话',
           owner_id: 'u-admin',
           visibility,
@@ -1303,7 +1304,8 @@ export const api = {
         visibility,
         workspace_id: options.workspaceId || undefined,
         scope_path: options.scopePath || undefined,
-        engine_version: options.engineVersion || 'legacy',
+        // 会话 transport 已收敛为 AgentLoop；不允许调用方回退 legacy。
+        engine_version: 'agent_loop_v2',
       })
       return data
     },
