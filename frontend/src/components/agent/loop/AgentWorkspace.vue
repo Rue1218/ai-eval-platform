@@ -1,6 +1,15 @@
 <template>
   <div class="loop-workspace">
-    <div class="loop-tabs"><button class="workspace-tab" :class="{active:tab==='chat'}" @click="tab='chat'">对话</button><button class="workspace-tab" :class="{active:tab==='trace'}" :disabled="!state" @click="tab='trace'">轨迹 <small v-if="state?.cursor" class="trace-tab-count">{{ state.cursor }}</small></button><span class="loop-status"><i :class="{running:busy}"/>{{ status }}</span><button @click="runtimeOpen=!runtimeOpen">运行信息</button></div>
+    <div class="loop-tabs">
+      <button class="workspace-tab" :class="{active:tab==='chat'}" @click="tab='chat'">对话</button>
+      <button class="workspace-tab" :class="{active:tab==='trace'}" :disabled="!state" @click="tab='trace'">轨迹 <small v-if="state?.cursor" class="trace-tab-count">{{ state.cursor }}</small></button>
+      <div class="loop-tabs-actions">
+        <span v-if="rows.length" class="loop-status">
+          <i :class="{running:busy}"/>{{ status }}
+        </span>
+        <button class="loop-runtime-btn" type="button" @click="runtimeOpen=!runtimeOpen">运行信息</button>
+      </div>
+    </div>
     <p v-if="state && state.connection !== 'online'" class="loop-notice" role="status">{{ state.connection === 'connecting' ? '正在同步会话…' : '连接中断，状态待同步。' }}<button @click="store.clients.get(sessionId)?.connect()">重新连接</button></p>
     <p v-if="state?.error || error" class="loop-notice error" role="alert">{{ state?.error || error }}</p>
     <div class="loop-content">
@@ -55,7 +64,97 @@
           </template>
           <p v-if="!busy && state?.phase && ['max_tokens','max_steps','cancelled','interrupted','error'].includes(state.phase)" class="loop-notice">{{ finishLabels[state.phase] }}</p>
           </div>
-          <div class="loop-composer-wrap"><AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :metrics="conversationMetrics" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile"/></div>
+          <div class="loop-composer-wrap">
+            <div class="composer-top-bar">
+              <n-popover
+                v-model:show="workspacePopoverOpen"
+                trigger="click"
+                placement="top-start"
+                :show-arrow="false"
+              >
+                <template #trigger>
+                  <button
+                    type="button"
+                    class="composer-ws-btn"
+                    :class="{ 'has-ws': !!activeWorkspaceId, 'is-draft': !sessionId }"
+                    :title="activeWorkspaceId ? `当前工作区：${activeWorkspaceName}` : '点击选择或新建工作区'"
+                    @click="handleOpenWorkspacePopover"
+                  >
+                    <span class="ws-btn-folder-icon" aria-hidden="true">
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                      </svg>
+                    </span>
+                    <span class="ws-btn-name">{{ activeWorkspaceName || '选择工作区' }}</span>
+                    <span class="ws-btn-arrow" aria-hidden="true">
+                      <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M3 4.5l3 3 3-3" />
+                      </svg>
+                    </span>
+                  </button>
+                </template>
+
+                <div class="ws-popover-card">
+                  <header class="ws-popover-header">
+                    <div class="ws-popover-title">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                      </svg>
+                      <span>工作区</span>
+                    </div>
+                    <span v-if="sessionId" class="ws-popover-badge">已绑定会话</span>
+                  </header>
+
+                  <p v-if="sessionId" class="ws-popover-tip">
+                    当前会话已绑定工作区，创建后不可更改。如需切换工作区，请新建会话。
+                  </p>
+                  <p v-else class="ws-popover-tip">
+                    选择绑定的沙箱工作区，必须选中工作区才能开始对话。
+                  </p>
+
+                  <div v-if="loadingWorkspaces" class="ws-popover-loading">加载工作区中…</div>
+                  <div v-else class="ws-popover-list">
+                    <div v-if="workspaces.length === 0" class="ws-popover-empty">
+                      暂无工作区，请在下方直接新建
+                    </div>
+                    <button
+                      v-for="ws in workspaces"
+                      :key="ws.id"
+                      type="button"
+                      class="ws-popover-item"
+                      :class="{ 'is-selected': ws.id === activeWorkspaceId }"
+                      :disabled="!!sessionId"
+                      @click="handleSelectWorkspace(ws)"
+                    >
+                      <span class="ws-item-folder">📁</span>
+                      <span class="ws-item-name" :title="ws.name">{{ ws.name }}</span>
+                      <span v-if="ws.id === activeWorkspaceId" class="ws-item-check">✓</span>
+                    </button>
+                  </div>
+
+                  <footer v-if="!sessionId" class="ws-popover-footer">
+                    <input
+                      v-model="newWorkspaceName"
+                      class="ws-popover-input"
+                      placeholder="新建工作区名称"
+                      :disabled="creatingWorkspace"
+                      maxlength="80"
+                      @keydown.enter.prevent="handleCreateWorkspace"
+                    />
+                    <button
+                      type="button"
+                      class="ws-popover-create-btn"
+                      :disabled="creatingWorkspace || !newWorkspaceName.trim()"
+                      @click="handleCreateWorkspace"
+                    >
+                      {{ creatingWorkspace ? '创建中' : '新建' }}
+                    </button>
+                  </footer>
+                </div>
+              </n-popover>
+            </div>
+            <AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :metrics="conversationMetrics" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" :has-workspace="!!activeWorkspaceId" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile" @request-workspace="handleRequestWorkspace"/>
+          </div>
           <!-- 空状态时的提示词卡片（位于输入框下方，点击填充草稿） -->
           <div v-if="!rows.length" class="loop-empty-prompts">
             <button
@@ -85,19 +184,67 @@
       </div>
       <aside v-if="runtimeOpen" class="loop-runtime"><button class="runtime-close" @click="runtimeOpen=false">关闭</button><h3>当前运行</h3><p>{{ status }}</p><dl><dt>会话</dt><dd>{{ sessionId || '未发送的草稿' }}</dd><dt>实际模型</dt><dd>{{ summary?.model || '尚无实际请求' }}</dd><dt>思考档位</dt><dd>{{ summary?.reasoning_effort || '未知' }}</dd><dt>协议档版本</dt><dd>{{ summary?.profile_version || '未知' }}</dd><dt>最近活动</dt><dd v-for="event in state?.facts.slice(-5) || []" :key="event.cursor">{{ event.type }}</dd></dl><h4 v-if="tasks.length">Worker 任务</h4><div v-for="task in tasks" :key="task.key"><router-link :to="'/tasks'">{{ task.key }}</router-link><p>{{ task.status || '等待状态' }}</p><p v-if="task.progress">{{ JSON.stringify(task.progress) }}</p><router-link v-if="task.report_id" :to="`/reports/${task.report_id}`">查看报告</router-link></div><p v-for="execution in quarantined" :key="execution.key" class="loop-notice">执行范围受限 · {{ execution.reason || '等待对账' }}</p></aside>
     </div>
-    <div v-if="tab==='trace'" class="loop-composer-wrap loop-trace-composer"><AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :metrics="conversationMetrics" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile"/></div>
+    <div v-if="tab==='trace'" class="loop-composer-wrap loop-trace-composer">
+      <div class="composer-top-bar">
+        <button
+          type="button"
+          class="composer-ws-btn"
+          :class="{ 'has-ws': !!activeWorkspaceId, 'is-draft': !sessionId }"
+          :title="activeWorkspaceId ? `当前工作区：${activeWorkspaceName}` : '工作区'"
+          @click="handleOpenWorkspacePopover"
+        >
+          <span class="ws-btn-folder-icon" aria-hidden="true">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+            </svg>
+          </span>
+          <span class="ws-btn-name">{{ activeWorkspaceName || '选择工作区' }}</span>
+          <span class="ws-btn-arrow" aria-hidden="true">
+            <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 4.5l3 3 3-3" />
+            </svg>
+          </span>
+        </button>
+      </div>
+      <AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :metrics="conversationMetrics" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" :has-workspace="!!activeWorkspaceId" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile" @request-workspace="handleRequestWorkspace"/>
+    </div>
+    <!-- 页面最底部指标栏：只有开始对话后（rows.length > 0）且有 conversationMetrics 时显示 -->
+    <footer v-if="rows.length && conversationMetrics" class="loop-bottom-metrics" aria-label="会话模型总用量指标">
+      <span>
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="5" y1="12" x2="19" y2="12"></line>
+          <polyline points="12 5 19 12 12 19"></polyline>
+        </svg>
+        生成速度 {{ formatSpeed(conversationMetrics.outputTokensPerSecond) }}
+      </span>
+      <span>
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
+          <polygon points="5 3 19 12 5 21 5 3"></polygon>
+        </svg>
+        缓存命中 {{ formatRate(conversationMetrics.cacheHitRate) }}
+      </span>
+      <span>
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+          <polyline points="14 2 14 8 20 8"></polyline>
+          <line x1="16" y1="13" x2="8" y2="13"></line>
+          <line x1="16" y1="17" x2="8" y2="17"></line>
+        </svg>
+        输入 {{ formatTokens(conversationMetrics.inputTokens) }} · 输出 {{ formatTokens(conversationMetrics.outputTokens) }}
+      </span>
+    </footer>
   </div>
 </template>
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { NIcon } from 'naive-ui'
+import { NIcon, NPopover, useMessage } from 'naive-ui'
 import BackwardIcon from 'naive-ui/es/_internal/icons/Backward'
 import FileIcon from 'naive-ui/es/_internal/icons/File'
 import RetryIcon from 'naive-ui/es/_internal/icons/Retry'
 import TimeIcon from 'naive-ui/es/_internal/icons/Time'
-import http, { ApiError } from '../../../api/http'
+import http, { ApiError, api } from '../../../api/http'
 import { createRequestId } from '../../../utils/requestId'
-import type { AttachmentReference } from '../../../api/types'
+import type { AttachmentReference, AgentSession } from '../../../api/types'
 import type { ConversationMetrics, Data, Effort, InteractionRecord, LoopProfile, LoopRecord, LoopUi, LoopUsage, ToolRun } from '../../../api/agentLoopTypes'
 import { conversationRows, identity } from '../../../agent/loop/reducer'
 import type { LoopStore } from '../../../agent/loop/store'
@@ -110,8 +257,110 @@ import AgentComposer from './AgentComposer.vue'
 import ToolRunCard from './ToolRunCard.vue'
 import ReasoningBlock from './ReasoningBlock.vue'
 import TraceWorkspace from './TraceWorkspace.vue'
-const props = defineProps<{ sessionId: string; store: LoopStore; createSession: () => Promise<string> }>()
-const auth = useAuthStore(), tab = ref('chat'), runtimeOpen = ref(false), error = ref(''), effort = ref<Effort | null>(null)
+
+const props = withDefaults(
+  defineProps<{
+    sessionId: string
+    session?: AgentSession | null
+    store: LoopStore
+    createSession: (workspaceId?: string) => Promise<string>
+  }>(),
+  {
+    session: null
+  }
+)
+const auth = useAuthStore(), tab = ref('chat')
+const message = useMessage()
+const workspaces = ref<Array<{ id: string; name: string }>>([])
+const loadingWorkspaces = ref(false)
+const workspacePopoverOpen = ref(false)
+const draftWorkspaceId = ref<string | null>(null)
+const draftWorkspaceName = ref<string>('')
+const newWorkspaceName = ref('')
+const creatingWorkspace = ref(false)
+
+const activeWorkspaceId = computed<string | null>(() => {
+  if (props.sessionId) {
+    return props.session?.workspace_id || null
+  }
+  return draftWorkspaceId.value
+})
+
+const activeWorkspaceName = computed<string>(() => {
+  if (props.sessionId) {
+    return props.session?.workspace_name || (props.session?.workspace_id ? '工作区' : '')
+  }
+  return draftWorkspaceName.value || (draftWorkspaceId.value ? '工作区' : '')
+})
+
+async function loadWorkspaces(autoSelect = true) {
+  if (loadingWorkspaces.value) return
+  loadingWorkspaces.value = true
+  try {
+    const payload = await api.workspaces.list()
+    const items = Array.isArray(payload) ? payload : (payload as any)?.items || []
+    workspaces.value = items.map((item: any) => ({
+      id: String(item.id),
+      name: String(item.name)
+    }))
+    if (!props.sessionId && !draftWorkspaceId.value && workspaces.value.length > 0 && autoSelect) {
+      const savedWsId = localPreference('last-workspace')
+      const matched = workspaces.value.find(ws => ws.id === savedWsId) || workspaces.value[0]
+      draftWorkspaceId.value = matched.id
+      draftWorkspaceName.value = matched.name
+    }
+  } catch {
+    // 忽略加载异常
+  } finally {
+    loadingWorkspaces.value = false
+  }
+}
+
+function handleOpenWorkspacePopover() {
+  workspacePopoverOpen.value = !workspacePopoverOpen.value
+  if (workspacePopoverOpen.value && !workspaces.value.length) {
+    void loadWorkspaces(false)
+  }
+}
+
+function handleSelectWorkspace(ws: { id: string; name: string }) {
+  if (props.sessionId) {
+    workspacePopoverOpen.value = false
+    return
+  }
+  draftWorkspaceId.value = ws.id
+  draftWorkspaceName.value = ws.name
+  try { localStorage.setItem(`last-workspace:${auth.user?.id}`, ws.id) } catch { /* 忽略 */ }
+  workspacePopoverOpen.value = false
+}
+
+async function handleCreateWorkspace() {
+  const name = newWorkspaceName.value.trim()
+  if (!name || creatingWorkspace.value || props.sessionId) return
+  creatingWorkspace.value = true
+  try {
+    const created = await api.workspaces.create(name)
+    const newWs = { id: String(created.id), name: String(created.name) }
+    workspaces.value.unshift(newWs)
+    draftWorkspaceId.value = newWs.id
+    draftWorkspaceName.value = newWs.name
+    try { localStorage.setItem(`last-workspace:${auth.user?.id}`, newWs.id) } catch { /* 忽略 */ }
+    newWorkspaceName.value = ''
+    workspacePopoverOpen.value = false
+    message.success('工作区已创建并选中')
+  } catch (err: any) {
+    message.error(err?.message || '创建工作区失败')
+  } finally {
+    creatingWorkspace.value = false
+  }
+}
+
+function handleRequestWorkspace() {
+  message.warning('请先选择或新建工作区才能开始对话')
+  workspacePopoverOpen.value = true
+  if (!workspaces.value.length) void loadWorkspaces(false)
+}
+const runtimeOpen = ref(false), error = ref(''), effort = ref<Effort | null>(null)
 const ui = ref<LoopUi | null>(null), selectedProfileId = ref(''), shown = ref(80), attachments = ref<Record<string, AttachmentReference[]>>({})
 const composer = ref<InstanceType<typeof AgentComposer>>(), scroller = ref<HTMLElement>(), chatShell = ref<HTMLElement>(), atBottom = ref(true)
 type ResizeEdge = 'left' | 'right'
@@ -208,7 +457,7 @@ function selectProfile(id: string) {
   try { localStorage.setItem(`agent-profile:${auth.user?.id}`, profile.id) } catch { /* 本地存储不可用不影响发送。 */ }
   restoreEffort(profile)
 }
-watch(() => props.sessionId, () => { ui.value = null; attachments.value = {}; shown.value = 80; tab.value='chat'; if (props.sessionId) props.store.open(props.sessionId); void refreshUi() }, { immediate: true })
+watch(() => props.sessionId, (newSid) => { ui.value = null; attachments.value = {}; shown.value = 80; tab.value='chat'; if (props.sessionId) props.store.open(props.sessionId); void refreshUi(); if (!newSid) void loadWorkspaces(true) }, { immediate: true })
 // 轨迹订阅属于当前可见面板；切会话/卸载仅退订诊断，不关闭执行中的控制连接。
 watch([tab, () => props.sessionId, () => ui.value?.permissions.trace], ([view, sid, permitted], _, cleanup) => {
   if (!sid || view !== 'trace' || !permitted) return
@@ -285,6 +534,12 @@ function adjustContentWidthByKey(event: KeyboardEvent, edge: ResizeEdge) {
   try { localStorage.setItem(chatWidthStorageKey, String(Math.round(chatWidth.value))) } catch { /* 本地存储失败不影响本次调整。 */ }
 }
 async function copy(text: string) { try { await navigator.clipboard.writeText(text) } catch { error.value='复制失败' } }
+function formatSpeed(value: number | null): string {
+  return value === null ? '—' : `${formatTokens(value)}/s`
+}
+function formatRate(value: number | null): string {
+  return value === null ? '—' : `${value.toFixed(value >= 10 ? 0 : 1)}%`
+}
 function tokenValue(value: unknown): number { return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0 }
 function answerTokens(row: LoopRecord): number | null {
   const usage = row.usage as LoopUsage | undefined
@@ -330,6 +585,12 @@ function regenerate(row: LoopRecord) {
 }
 /** 冻结输入/附件/effort 与幂等 ID；未受理时保留可恢复草稿。 */
 async function submit(override?: { content: string; attachmentRefs: string[] }) {
+  if (!activeWorkspaceId.value) {
+    message.warning('请先选择或新建工作区才能开始对话')
+    workspacePopoverOpen.value = true
+    if (!workspaces.value.length) void loadWorkspaces(false)
+    return
+  }
   if (!ready.value || busy.value || draft.value.submitting) return
   const source = draft.value, selectedEffort=effort.value, profile=selectedProfile.value
   if (!selectedEffort || !profile) return
@@ -338,7 +599,7 @@ async function submit(override?: { content: string; attachmentRefs: string[] }) 
   const content=override?.content ?? source.content, refs=override?.attachmentRefs ?? source.files.filter(f=>!f.removed && f.id).map(f=>f.id!)
   try {
     let sid=props.sessionId
-    if(!sid) { sid=await props.createSession(); if(!sid) throw new Error(); props.store.drafts[sid]=source; delete props.store.drafts.draft }
+    if(!sid) { sid=await props.createSession(activeWorkspaceId.value); if(!sid) throw new Error(); props.store.drafts[sid]=source; delete props.store.drafts.draft }
     const client=props.store.open(sid)
     source.pending ??= client.command('turn.submit',{client_message_id:createRequestId(),content,attachment_refs:refs,profile_id:profile.id,reasoning_effort:selectedEffort})
     // 只有首次订阅完成后才发送；超时取消等待，不能在以后重连时偷偷补发。
@@ -671,4 +932,322 @@ async function hydrateAttachments() {
   pointer-events: none;
 }
 @media(max-width:768px){.loop-chat-shell{width:100%!important;max-width:none;min-width:0;margin:0}.loop-chat-shell .loop-composer-wrap{padding:8px}.loop-width-edge{display:none}.loop-chat-shell .loop-conversation{padding:16px 12px}}
+
+/* 顶栏操作区：对齐与垂直居中 */
+.loop-tabs-actions {
+  margin-left: auto;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+.loop-tabs-actions .loop-status {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #55685e;
+}
+.loop-runtime-btn {
+  padding: 4px 10px;
+  border: 1px solid #d3dee2;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #485c52;
+  font-size: 12px;
+  cursor: pointer;
+  line-height: 1.4;
+  transition: all 0.15s ease;
+}
+.loop-runtime-btn:hover {
+  background: #f2f7f4;
+  border-color: #b0c9bd;
+  color: #1a4233;
+}
+[data-theme='dark'] .loop-runtime-btn {
+  background: #1e293b;
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #cbd5e1;
+}
+[data-theme='dark'] .loop-runtime-btn:hover {
+  background: #334155;
+  color: #f1f5f9;
+}
+
+/* 输入框上方工作区选择器（图2样式） */
+.composer-top-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 0 4px;
+}
+.composer-ws-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  padding: 4px 8px;
+  color: #263548;
+  font-size: 13px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: all 0.16s ease;
+  user-select: none;
+}
+.composer-ws-btn:hover {
+  background: #edf3f0;
+  color: #174a3a;
+}
+.composer-ws-btn.is-draft:hover {
+  border-color: #d1ded7;
+}
+.ws-btn-folder-icon {
+  display: inline-flex;
+  align-items: center;
+  color: #4a5c53;
+}
+.composer-ws-btn:hover .ws-btn-folder-icon {
+  color: #174a3a;
+}
+.ws-btn-name {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ws-btn-arrow {
+  display: inline-flex;
+  align-items: center;
+  color: #7b8e84;
+  margin-left: -1px;
+}
+[data-theme='dark'] .composer-ws-btn {
+  color: #e2e8f0;
+}
+[data-theme='dark'] .composer-ws-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+}
+[data-theme='dark'] .ws-btn-folder-icon {
+  color: #94a3b8;
+}
+
+/* 工作区弹窗面板 */
+.ws-popover-card {
+  width: 290px;
+  background: #ffffff;
+  border-radius: 12px;
+  padding: 12px;
+  box-shadow: 0 10px 30px -4px rgba(23, 74, 58, 0.15), 0 4px 12px -2px rgba(15, 23, 42, 0.08);
+  border: 1px solid #d8e4dc;
+  font-size: 13px;
+}
+.ws-popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.ws-popover-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 650;
+  color: #1e332a;
+}
+.ws-popover-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #eef2f5;
+  color: #64748b;
+}
+.ws-popover-tip {
+  margin: 0 0 10px;
+  font-size: 11.5px;
+  color: #74877c;
+  line-height: 1.45;
+}
+.ws-popover-loading,
+.ws-popover-empty {
+  padding: 14px 0;
+  text-align: center;
+  color: #8c9e94;
+  font-size: 12px;
+}
+.ws-popover-list {
+  max-height: 190px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 10px;
+  padding-right: 2px;
+}
+.ws-popover-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: #33443c;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.14s ease;
+  font-size: 12.5px;
+}
+.ws-popover-item:hover:not(:disabled) {
+  background: #f0f6f3;
+  color: #174a3a;
+}
+.ws-popover-item.is-selected {
+  background: #e6f1ec;
+  border-color: #cde0d6;
+  color: #174a3a;
+  font-weight: 600;
+}
+.ws-popover-item:disabled {
+  cursor: default;
+}
+.ws-item-folder {
+  font-size: 14px;
+}
+.ws-item-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ws-item-check {
+  color: #1f5947;
+  font-weight: 700;
+  font-size: 13px;
+}
+.ws-popover-footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid #e7eee9;
+}
+.ws-popover-input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid #d2ded7;
+  border-radius: 6px;
+  background: #f9fbf9;
+  font-size: 12px;
+  color: #1e332a;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+.ws-popover-input:focus {
+  border-color: #1f5947;
+  background: #ffffff;
+}
+.ws-popover-create-btn {
+  padding: 5px 11px;
+  border: 0;
+  border-radius: 6px;
+  background: #1f5947;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  white-space: nowrap;
+}
+.ws-popover-create-btn:hover:not(:disabled) {
+  background: #174a3a;
+}
+.ws-popover-create-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+[data-theme='dark'] .ws-popover-card {
+  background: #1e293b;
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 10px 30px -4px rgba(0, 0, 0, 0.5);
+}
+[data-theme='dark'] .ws-popover-title {
+  color: #f1f5f9;
+}
+[data-theme='dark'] .ws-popover-tip {
+  color: #94a3b8;
+}
+[data-theme='dark'] .ws-popover-item {
+  color: #cbd5e1;
+}
+[data-theme='dark'] .ws-popover-item:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+}
+[data-theme='dark'] .ws-popover-item.is-selected {
+  background: rgba(22, 151, 122, 0.2);
+  border-color: rgba(22, 151, 122, 0.4);
+  color: #34d399;
+}
+[data-theme='dark'] .ws-item-check {
+  color: #34d399;
+}
+[data-theme='dark'] .ws-popover-footer {
+  border-top-color: rgba(255, 255, 255, 0.1);
+}
+[data-theme='dark'] .ws-popover-input {
+  background: #0f172a;
+  border-color: rgba(255, 255, 255, 0.15);
+  color: #f8fafc;
+}
+[data-theme='dark'] .ws-popover-create-btn {
+  background: #16977a;
+}
+[data-theme='dark'] .ws-popover-create-btn:hover:not(:disabled) {
+  background: #148369;
+}
+
+/* 页面底部指标条 */
+.loop-bottom-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px 24px;
+  padding: 8px 20px 10px;
+  color: #7b8b9d;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  border-top: 1px solid #eef2f1;
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  flex-shrink: 0;
+}
+.loop-bottom-metrics span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.loop-bottom-metrics svg {
+  color: #8da0b3;
+  flex-shrink: 0;
+}
+[data-theme='dark'] .loop-bottom-metrics {
+  border-top-color: rgba(255, 255, 255, 0.08);
+  background: rgba(17, 24, 39, 0.8);
+  color: #94a3b8;
+}
+[data-theme='dark'] .loop-bottom-metrics svg {
+  color: #64748b;
+}
 </style>

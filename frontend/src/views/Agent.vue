@@ -137,15 +137,6 @@
         </span>
 
         <span class="grow"></span>
-        <!-- F3/G5：草稿会话可预选绑定工作区；发送首条消息时随创建固化 -->
-        <template v-if="!currentSessionId && !isGenerating">
-          <span v-if="draftWorkspaceId" class="chat-ws-chip draft">
-            <span>工作区 · {{ draftWorkspaceName }}</span>
-            <span class="ws-chip-x" title="取消绑定" @click="clearDraftWorkspace">×</span>
-          </span>
-          <button v-else class="btn btn-sm btn-ghost" @click="openBindingPanel">绑定工作区</button>
-        </template>
-
         <button
           v-if="currentSession?.can_manage"
           class="btn btn-sm btn-ghost"
@@ -156,48 +147,7 @@
         </button>
       </div>
 
-      <!-- F3/G5：草稿会话工作区选择面板（初版仅根 scope；固化后不可更改）。
-           支持面板内直接新建工作区并自动选中（即建即绑，无需跳「我的工作区」） -->
-      <div v-if="bindingPanelOpen" class="ws-binding-panel" data-od-id="ws-binding-panel">
-        <div class="ws-binding-panel-title">
-          选择要绑定的工作区
-          <span class="muted">（绑定后会话内模型的文件读写与 bash 均在该工作区进行，发送首条消息后固化）</span>
-        </div>
-        <div v-if="bindingLoading" class="muted" style="padding: 8px 0">加载中…</div>
-        <template v-else>
-          <div v-if="bindableWorkspaces.length === 0" class="muted" style="padding: 8px 0">
-            暂无工作区——在下方直接新建即可
-          </div>
-          <button
-            v-for="wsItem in bindableWorkspaces"
-            :key="wsItem.id"
-            class="ws-binding-item"
-            @click="pickDraftWorkspace(wsItem.id, wsItem.name)"
-          >
-            <span>{{ wsItem.name }}</span>
-            <span class="muted">根目录</span>
-          </button>
-        </template>
-        <div class="ws-binding-create">
-          <input
-            v-model="newWorkspaceName"
-            class="input ws-binding-create-input"
-            placeholder="新建工作区名称"
-            :disabled="newWorkspaceBusy"
-            maxlength="100"
-            @keyup.enter="createDraftWorkspace"
-          />
-          <button
-            class="btn btn-sm btn-primary"
-            :disabled="newWorkspaceBusy || !newWorkspaceName.trim()"
-            @click="createDraftWorkspace"
-          >
-            新建
-          </button>
-        </div>
-      </div>
-
-      <AgentWorkspace v-if="isLoopView" :session-id="currentSessionId" :store="loopStore" :create-session="createLoopSession" />
+      <AgentWorkspace v-if="isLoopView" :session-id="currentSessionId" :session="currentSession" :store="loopStore" :create-session="createLoopSession" />
       <!-- 历史 v1 界面仅保留源码供审计；isLoopView 恒为真，不能再到达此分支。 -->
       <template v-else>
       <!-- 断线重连横幅提示（真实 WS 状态） -->
@@ -814,9 +764,10 @@ watch(() => Object.values(loopStore.sessions).map(s => [s.sessionId, s.title]), 
   for (const value of Object.values(loopStore.sessions)) { const session = sessions.value.find(s => s.id === value.sessionId); if (session && value.title) session.title = value.title }
 })
 /** 创建时固化 v2 和工作区，后续只使用独立 transport。 */
-async function createLoopSession(): Promise<string> {
+async function createLoopSession(workspaceId?: string): Promise<string> {
   if (currentSessionId.value) return currentSessionId.value
-  const session = await api.sessions.create('新会话', { workspaceId: draftWorkspaceId.value || undefined })
+  const targetWsId = workspaceId || draftWorkspaceId.value || undefined
+  const session = await api.sessions.create('新会话', { workspaceId: targetWsId })
   sessions.value.unshift(session); currentSessionId.value = session.id; clearDraftWorkspace()
   return session.id
 }
