@@ -550,6 +550,36 @@ def test_anthropic_rejects_missing_signature(clients):
     assert clients[-1].stream.closed
 
 
+@pytest.mark.parametrize("model", ["deepseek-v4-flash-0731", "qwen3.6-flash"])
+def test_compatible_anthropic_unsigned_thinking_tool_roundtrip(clients, model):
+    """兼容流空签名原样保存，工具结果回填后继续循环，关闭思考参数真实下发。"""
+    profile = AuthorizedProfileSnapshot(ModelConfig(
+        "anthropic_messages", "https://unit.invalid/apps/anthropic", model,
+        api_key="unit", reasoning_enabled=False,
+    ))
+    req = resolve_request(profile, messages=[])
+    adapter, _ = build_adapter(profile)
+    client = clients[-1]
+    client.stream = FakeStream(anthropic_events(signature=False))
+    chunks = asyncio.run(collect(adapter, req))
+    done = chunks[-1]
+    assert done.finish_reason == "tool_calls"
+    assert done.protocol_state.items[0] == {"type":"thinking", "thinking":"分析", "signature":""}
+    assert client.requests[0]["thinking"] == {"type":"disabled"}
+    messages = [
+        {"role":"assistant", "content":"", "protocol_state":asdict(done.protocol_state),
+         "tool_calls":[{"id":"call_1", "name":"read", "args":{"path":"a"}}]},
+        {"role":"tool", "tool_call_id":"call_1", "content":"文件内容"},
+    ]
+    client.stream = FakeStream()
+    asyncio.run(collect(adapter, replace(req, messages=messages)))
+    assert client.requests[-1]["messages"][0]["content"] == done.protocol_state.items
+    assert client.requests[-1]["messages"][1]["content"][0]["tool_use_id"] == "call_1"
+    # 兼容模型的空签名不得用于绕过 Claude 的跨模型回放边界。
+    with pytest.raises(LlmRequestError, match="不兼容"):
+        to_anthropic_messages(messages, request=replace(req, model="claude-sonnet-4"))
+
+
 def test_responses_roundtrip_opaque_items_and_usage(clients):
     """原始 reasoning 与函数 item 回传一次，call_id 与 item_id 不混用。"""
     adapter = ResponsesAdapter(api_key="unit")

@@ -22,6 +22,69 @@ PROTOCOLS = [
 ]
 
 
+@pytest.mark.parametrize("model", ["deepseek-v4-flash-0731", "qwen3.6-flash"])
+def test_compatible_messages_sdk_loop_and_next_turn(monkeypatch, model):
+    """真实 SDK 和七节点图验证空签名、工具回填、最终回复及下一轮历史。"""
+    from app.agent.loop import build_agent
+    from app.agent.loop_settings import LoopSettings
+    from app.agent.runtime import AgentRuntime
+    from app.llm.contracts import ModelConfig
+    from app.llm.loop_contracts import ToolSpec
+    from app.llm.resolver import build_adapter, resolve_request
+    from tests.test_loop_llm import anthropic_events
+    from tests.test_loop_runtime import MemoryLog, RecordingScheduler
+
+    requests = []
+    config = ModelConfig("anthropic_messages", "https://unit.invalid/apps/anthropic", model,
+                         api_key="unit", reasoning_enabled=False)
+    specs = [ToolSpec("read", "读取", {"type":"object", "properties":{"path":{"type":"string"}}})]
+
+    def handler(http_request):
+        """只替换供应商 HTTP 响应；SDK、codec、Runtime 和图均保持真实实现。"""
+        payload = json.loads(http_request.content)
+        requests.append(payload)
+        assert http_request.url.path == "/apps/anthropic/v1/messages"
+        assert payload["model"] == model
+        assert payload["thinking"] == {"type":"disabled"}
+        if len(requests) == 1:
+            wire = b"".join(sse(event, named=True) for event in anthropic_events(signature=False))
+        else:
+            wire = successful_wire(AnthropicAdapter)
+        return httpx.Response(200, content=wire, headers={"content-type":"text/event-stream"})
+
+    install_transport(monkeypatch, "anthropic", handler)
+
+    async def scenario():
+        """工具节点完成后再次请求模型，下一轮继续携带原始工具和思考块。"""
+        adapter, _ = build_adapter(config)
+        scheduler = RecordingScheduler()
+        graph = await build_agent(
+            LoopSettings(), adapter=adapter, scheduler=scheduler,
+            request_factory=lambda messages, effort: resolve_request(config, messages=messages, tools=specs),
+        )
+        runtime = AgentRuntime(MemoryLog(), graph)
+        try:
+            await runtime.submit("读取文件", reasoning_effort="off")
+            await runtime.wait()
+            assert runtime.log.read()[-1]["data"]["reason"] == "completed"
+            assert len(requests) == 2
+            assert len(scheduler.invocations) == 1
+            blocks = requests[1]["messages"][1]["content"]
+            assert blocks[0] == {"type":"thinking", "thinking":"分析", "signature":""}
+            assert blocks[1]["type"] == "tool_use"
+            assert requests[1]["messages"][2]["content"][0]["tool_use_id"] == "call_1"
+            await runtime.submit("继续上一轮", reasoning_effort="off")
+            await runtime.wait()
+            assert runtime.log.read()[-1]["data"]["reason"] == "completed"
+            assert len(requests) == 3
+            assert requests[2]["messages"][1]["content"] == blocks
+        finally:
+            await runtime.close()
+            await adapter.close()
+
+    asyncio.run(scenario())
+
+
 def install_transport(monkeypatch, sdk, handler):
     """仅替换 HTTP transport，保留 SDK 的真实 create、SSE 解码与关闭代码。"""
     module = openai if sdk == "openai" else anthropic

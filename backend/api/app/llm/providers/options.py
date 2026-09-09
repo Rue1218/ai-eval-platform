@@ -19,6 +19,9 @@ def resolve_options(request: LlmRequest, provider: str, protocol: str) -> dict:
     model = request.model.lower()
     options: dict = {}
     if protocol == "anthropic_messages":
+        # 兼容服务可能默认开启思考；off 必须显式发送，不能仅在本地关闭展示。
+        if not enabled and model.startswith(("deepseek-", "qwen")):
+            options["thinking"] = {"type": "disabled"}
         supported = any(
             part in model
             for part in ("claude-3-7", "claude-sonnet-4", "claude-opus-4", "claude-haiku-4")

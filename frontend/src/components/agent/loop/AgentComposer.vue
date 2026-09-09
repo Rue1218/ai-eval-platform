@@ -37,6 +37,7 @@ import CheckmarkIcon from 'naive-ui/es/_internal/icons/Checkmark'
 import ChevronDownIcon from 'naive-ui/es/_internal/icons/ChevronDown'
 import ForwardIcon from 'naive-ui/es/_internal/icons/Forward'
 import { api } from '../../../api/http'
+import { createRequestId } from '../../../utils/requestId'
 import type { Effort, LoopMeter, LoopProfile, LoopUi } from '../../../api/agentLoopTypes'
 import type { DraftFile, LoopDraft } from '../../../agent/loop/store'
 import AttachmentPreview from '../AttachmentPreview.vue'
@@ -64,7 +65,7 @@ async function upload(files: File[]) {
   for (const file of files) {
     const caps = props.ui?.attachments, suffix = '.' + file.name.split('.').pop()?.toLowerCase()
     if (!caps || !caps.upload_suffixes.includes(suffix) || file.size > caps.max_bytes || (caps.image_suffixes.includes(suffix) && file.size > caps.max_image_bytes)) { notice.value = `附件 ${file.name} 不符合服务端类型或大小限制`; continue }
-    const value: DraftFile = { key: crypto.randomUUID(), filename: file.name, size: file.size, content_type: file.type, source: URL.createObjectURL(file), uploading: true, progress: 0, removed: false }
+    const value: DraftFile = { key: createRequestId(), filename: file.name, size: file.size, content_type: file.type, source: URL.createObjectURL(file), uploading: true, progress: 0, removed: false }
     draft.files.push(value)
     // 操作响应式代理，上传回调仍然绑定原会话草稿。
     const staged = draft.files[draft.files.length - 1]

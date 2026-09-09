@@ -30,7 +30,8 @@
 </template>
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import http from '../../../api/http'
+import http, { ApiError } from '../../../api/http'
+import { createRequestId } from '../../../utils/requestId'
 import type { AttachmentReference } from '../../../api/types'
 import type { Data, Effort, InteractionRecord, LoopProfile, LoopRecord, LoopUi, ToolRun } from '../../../api/agentLoopTypes'
 import { conversationRows, identity } from '../../../agent/loop/reducer'
@@ -172,19 +173,36 @@ async function submit() {
   if (!ready.value || busy.value || draft.value.submitting) return
   const source = draft.value, selectedEffort=effort.value, profile=selectedProfile.value
   if (!selectedEffort || !profile) return
-  source.submitting = true
+  source.submitting = true; error.value = ''
+  if (state.value) state.value.error = ''
   const content=source.content, refs=source.files.filter(f=>!f.removed && f.id).map(f=>f.id!)
   try {
     let sid=props.sessionId
     if(!sid) { sid=await props.createSession(); if(!sid) throw new Error(); props.store.drafts[sid]=source; delete props.store.drafts.draft }
     const client=props.store.open(sid)
-    source.pending=client.command('turn.submit',{client_message_id:crypto.randomUUID(),content,attachment_refs:refs,profile_id:profile.id,reasoning_effort:selectedEffort})
-    // 新建会话首次订阅完成后才发；原请求不自动跨断线重试。
-    if(props.store.sessions[sid].ready) { client.send(source.pending); props.store.sessions[sid].controlled=true }
-    else { const unwatch=watch(()=>props.store.sessions[sid]?.ready, ok=>{ if(ok){unwatch();if(source.pending){client.send(source.pending);props.store.sessions[sid].controlled=true}} }); setTimeout(unwatch,15000) }
-  } catch { source.submitting=false; error.value='无法创建或发送会话，草稿已保留' }
+    source.pending ??= client.command('turn.submit',{client_message_id:createRequestId(),content,attachment_refs:refs,profile_id:profile.id,reasoning_effort:selectedEffort})
+    // 只有首次订阅完成后才发送；超时取消等待，不能在以后重连时偷偷补发。
+    if (!props.store.sessions[sid].ready) await new Promise<void>((resolve, reject) => {
+      const unwatch = watch(() => props.store.sessions[sid]?.ready, ok => {
+        if (ok) { clearTimeout(timer); unwatch(); resolve() }
+      })
+      const timer = setTimeout(() => { unwatch(); reject(new Error('连接超时')) }, 15000)
+    })
+    if (!client.send(source.pending)) throw new Error('连接中断')
+    props.store.sessions[sid].controlled = true
+  } catch (exc) {
+    source.submitting = false
+    error.value = exc instanceof ApiError ? `${exc.message}，草稿已保留`
+      : source.pending ? '消息尚未确认发送，请连接恢复后使用原请求 ID 重发，草稿已保留'
+      : '无法创建或发送会话，草稿已保留'
+  }
 }
-function retry() { if(draft.value.pending && state.value?.ready) props.store.send(props.sessionId,draft.value.pending) }
+/** 重试保留原请求及正文，只有实际写入 socket 才显示发送中。 */
+function retry() {
+  if (draft.value.pending && state.value?.ready && props.store.send(props.sessionId, draft.value.pending)) {
+    draft.value.submitting = true; error.value = ''; state.value.error = ''
+  }
+}
 function stop() { if(!canControl.value || !state.value?.activeTurn) return; const client=props.store.clients.get(props.sessionId)!; const command=client.command('turn.cancel',{turn_id:state.value.activeTurn}); if(client.send(command)) { state.value.cancelling=true; draft.value.cancelRequestId=command.request_id } }
 function respond(interaction: InteractionRecord, values: Data) {
   if(!canControl.value || !state.value?.ready || interaction.submitting) return

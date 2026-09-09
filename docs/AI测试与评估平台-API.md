@@ -2,8 +2,8 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.82 |
-| WS v2 修订日期 | 2026-09-09（§4A，AgentLoop 安全重连恢复与协议档补充提示词） |
+| 文档版本 | V1.83 |
+| WS v2 修订日期 | 2026-09-09（§4A，HTTP 消息标识、默认档位与 Anthropic 兼容流修复） |
 | 对应 PRD | V1.18（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.7.2（AgentLoop 单入口；JSON 仍以本文为准） |
@@ -1918,6 +1918,7 @@ send 超时同样关闭 4408。Runtime 的事实提交不等待网络。
 
 - `GET /api/sessions/agent-ui` 返回草稿能力；`GET /api/sessions/{id}/agent-ui` 复验会话可见性与 v2 引擎。响应 `version=1, enabled, profile, profiles, allowed_efforts, default_effort, permissions{write,trace,reasoning,interactions,settings}, controller{active,owned_by_actor}, attachments`。`profile` 与 `profiles[]` 同形，均只包含 `id,name,version,model,protocol,allowed_efforts,default_effort`；服务端逐档通过同一 resolver 校验，绝不返回 base_url、API Key 或供应商参数。顶层 `allowed_efforts/default_effort` 保留为默认协议档兼容字段。controller 不授予当前连接控制权。
 - 每次 `turn.submit` 都以提交的 `profile_id` 与 `reasoning_effort` 重新解析协议档；协议档不存在、未声明 Agent 用途、无有效凭据或思考档位不支持时返回 `VALIDATION`。前端本地偏好只能辅助预选，不能替代服务端解析。
+  - V1.83：省略 `reasoning_effort` 时，若全局思考偏好不被该模型支持，使用经 resolver 验证的 `off`，`agent-ui.default_effort` 和实际请求保持一致。显式提交不支持的档位仍返回 `VALIDATION`。DeepSeek/Qwen 的 Anthropic 兼容请求在 `off` 时实际发送 `thinking.type=disabled`；收到的空签名思考块按兼容模型无损保留，不强套 Claude 非空签名规则，跨模型回放校验仍有效。
 - `attachments{upload_suffixes,inline_suffixes,image_suffixes,max_bytes,max_image_bytes,content_required}`：上传、模型内联和图片能力分开；模型实际是否支持视觉仍以供应商为准。附件正文不能为空；音频和旧 Office 仅元信息。历史附件按 `file_id` 使用已有 `/api/files/{id}` 和 `/content` 授权接口，不公开磁盘路径。
 - `tool.call/result.data.display` 为 ToolDisplay v1：`version,title,registry_name,wire_name,arguments_preview,result_preview,target,format,truncated,unavailable_reason`，预览最多 12000 字符。参数按工具字段白名单生成，失败仅公开错误码；未知工具有明确缺失说明，不开放任意内部结果。
 - `assistant.start.data.request_summary` 提供实际 `model,provider,protocol,profile_id,profile_version,reasoning_effort,max_tokens,input_fingerprint,tools[{name,parameters_schema}],context_meter`。context_meter 为实际请求的同源序列化估算，字段 `basis,estimated,profile_version,input_fingerprint,history_upto_seq,capacity,input_tokens,reserved_output_tokens`；旧事实缺统计时为 null，不显示为 0。
@@ -2939,3 +2940,15 @@ Composer 上方抽屉；点击确认或取消即收回，消息流只保留关�
 | `frontend/src/api/http.ts`/`frontend/src/api/types.ts` | 移除 `api.admin.*` 工作区接口与专属类型（保留 `WorkspaceFolder`） |
 | `frontend/src/views/Agent.vue` | 草稿绑定面板新增「新建工作区」（`createDraftWorkspace` 即建即绑） |
 | `docs/AI测试与评估平台-API.md` | V1.82：§3.12.2 下线登记、原 §3.12.3 重编号、版本与清单更新 |
+
+**V1.83（2026-09-09）— Agent 消息链路兼容修复**
+
+无新增 REST/WS 字段与数据库迁移。默认思考偏好不支持时解析到 off；显式选择仍严格校验。DeepSeek/Qwen Anthropic 流按兼容模型接收空签名，off 显式下发。具体证据与验证边界见 [消息链路兼容修复](AI测试与评估平台-Agent消息链路兼容修复.md)。
+
+| 修改代码文件 | 作用 |
+| --- | --- |
+| `backend/api/app/agent/loop_wiring.py` | 默认偏好与显式档位分开校验 |
+| `backend/api/app/llm/providers/anthropic.py`、`options.py` | 兼容空签名的收流/回填与真实 off 参数 |
+| `frontend/src/utils/requestId.ts`、`api/agentLoopWs.ts`、`components/agent/loop/AgentWorkspace.vue`、`AgentComposer.vue` | HTTP 消息/附件/命令标识，超时与原请求重试 |
+| `frontend/vite.config.js`、`frontend/.env.example` | REST/WS 同源开发代理配置 |
+| `backend/api/tests/test_loop_profile_selection.py`、`test_loop_llm.py`、`test_loop_llm_sdk.py`；`frontend/tests/requestId.test.mjs`、`agentLoopWs.test.mjs`、`e2e/agentLoop.spec.ts` | 回归配置、真实 SDK/Runtime、HTTP 浏览器与超时场景 |

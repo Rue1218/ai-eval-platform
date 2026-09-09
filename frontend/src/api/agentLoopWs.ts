@@ -1,5 +1,6 @@
 import type { LoopCommand, LoopFrame } from './agentLoopTypes.ts'
 import { applyFrame, restoreSnapshot, type LoopState } from '../agent/loop/reducer.ts'
+import { createRequestId } from '../utils/requestId.ts'
 
 /** 可注入短票与 socket 的独立 transport，测试不依赖浏览器或 legacy HTTP mock。 */
 export interface LoopTransportOptions {
@@ -23,10 +24,16 @@ export class AgentLoopWebSocket {
   send(command: LoopCommand): boolean {
     if (!this.ws || this.ws.readyState !== 1) return false
     if (!this.options.state().ready && !['subscribe', 'ping'].includes(command.type)) return false
-    this.ws.send(JSON.stringify(command)); return true
+    try { this.ws.send(JSON.stringify(command)); return true }
+    catch {
+      // OPEN 检查与写入间也可能断线；交给连接恢复并保留调用方的冻结请求。
+      this.options.state().ready = false
+      this.options.state().connection = 'reconnecting'
+      this.ws.close(); this.schedule(); return false
+    }
   }
   command(type: string, data: Record<string, unknown> = {}): LoopCommand {
-    return { protocol_version: 2, type, session_id: this.sessionId, request_id: crypto.randomUUID(), data }
+    return { protocol_version: 2, type, session_id: this.sessionId, request_id: createRequestId(), data }
   }
   /** 同连接重新订阅保留控制权，不发送会触发 detach 的 unsubscribe。 */
   resync(): void {
