@@ -5,7 +5,8 @@
     <p v-if="state?.error || error" class="loop-notice error" role="alert">{{ state?.error || error }}</p>
     <div class="loop-content">
       <div class="loop-center">
-        <div v-if="tab==='chat'" ref="scroller" class="loop-conversation" @scroll="trackScroll">
+        <section v-if="tab==='chat'" ref="chatPanel" class="loop-chat-panel" :class="{ 'is-resizing': isResizing }" :style="chatPanelStyle" aria-label="对话内容区域">
+          <div ref="scroller" class="loop-conversation" @scroll="trackScroll">
           <div v-if="!rows.length" class="loop-welcome"><span>AI EVAL · AGENT LOOP</span><h2>从一个目标开始，<br>让每一步都有依据。</h2><p>在工作区处理文件、查找资料，或创建评测任务。</p><div><button v-for="prompt in prompts" :key="prompt" @click="fill(prompt)">{{ prompt }} ↗</button></div></div>
           <button v-if="shown < rows.length" class="history-more" @click="shown+=80">显示更早的 {{ Math.min(80, rows.length-shown) }} 条记录</button>
           <template v-for="row in visibleRows" :key="row.key">
@@ -14,7 +15,11 @@
             <article v-else class="loop-message assistant"><header><ProviderLogo v-if="row.request_summary?.model" :provider="getProviderLogoKey({model:row.request_summary.model})" :size="18"/>{{ row.request_summary?.model || '助手' }}<small v-if="row.request_summary">{{ row.request_summary.reasoning_effort }} · step {{ row.correlation.step }}</small><button v-if="row.text" @click="copy(row.text)">复制</button></header><ReasoningBlock v-if="row.reasoning && ui?.permissions.reasoning" :content="row.reasoning" :ended="row.ended" :interrupted="row.interrupted"/><MarkdownView v-if="row.text" :content="row.text"/><p v-else-if="!row.ended" class="muted">正在响应…</p><small v-if="row.interrupted || row.error_code">{{ row.interrupted ? '本次输出已中断' : row.error_code }}</small></article>
           </template>
           <p v-if="!busy && state?.phase && ['max_tokens','max_steps','cancelled','interrupted','error'].includes(state.phase)" class="loop-notice">{{ finishLabels[state.phase] }}</p>
-        </div>
+          </div>
+          <button class="loop-width-handle" type="button" aria-label="拖拽调整对话内容宽度" aria-orientation="vertical" role="separator" :aria-valuemin="minimumChatWidth" :aria-valuemax="maximumChatWidth" :aria-valuenow="Math.round(renderedChatWidth)" @pointerdown="beginContentResize" @keydown="adjustContentWidthByKey">
+            <span aria-hidden="true"></span>
+          </button>
+        </section>
         <TraceWorkspace v-else-if="state && trace" :state="state" :trace="trace"/>
         <button v-if="!atBottom && tab==='chat'" class="jump-bottom" @click="scrollBottom">↓ 回到最新</button>
       </div>
@@ -42,7 +47,10 @@ import TraceWorkspace from './TraceWorkspace.vue'
 const props = defineProps<{ sessionId: string; store: LoopStore; createSession: () => Promise<string> }>()
 const auth = useAuthStore(), tab = ref('chat'), runtimeOpen = ref(false), error = ref(''), effort = ref<Effort | null>(null)
 const ui = ref<LoopUi | null>(null), selectedProfileId = ref(''), shown = ref(80), attachments = ref<Record<string, AttachmentReference[]>>({})
-const composer = ref<InstanceType<typeof AgentComposer>>(), scroller = ref<HTMLElement>(), atBottom = ref(true)
+const composer = ref<InstanceType<typeof AgentComposer>>(), scroller = ref<HTMLElement>(), chatPanel = ref<HTMLElement>(), atBottom = ref(true)
+const chatWidth = ref<number | null>(null), isResizing = ref(false)
+const minimumChatWidth = 460
+const chatWidthStorageKey = 'agent-loop:conversation-width'
 const state = computed(() => props.store.sessions[props.sessionId]), trace = computed(() => props.store.traces[props.sessionId])
 const draft = computed(() => props.store.draft(props.sessionId || 'draft'))
 const rows = computed(() => state.value ? conversationRows(state.value) : [])
@@ -59,7 +67,11 @@ const finishLabels: Record<string,string> = { max_tokens:'达到输出上限，�
 const phaseLabels: Record<string,string> = { idle:'就绪',model:'模型处理中',thinking:'正在思考',answering:'正在回答',tools:'工具执行中',waiting_interaction:'等待交互',retry_wait:'等待重试',completed:'已完成',...finishLabels }
 const status = computed(() => state.value?.cancelling ? '取消中' : state.value && state.value.connection !== 'online' ? '连接待同步' : phaseLabels[state.value?.phase || 'idle'] || state.value?.phase || '就绪')
 const prompts = ['查看工作区文件，说明可以如何处理', '帮我准备一次模型基准评测', '查询资料并给出可核对的来源']
+const chatPanelStyle = computed(() => chatWidth.value ? { width: `${chatWidth.value}px` } : undefined)
+const maximumChatWidth = computed(() => Math.max(minimumChatWidth, (chatPanel.value?.parentElement?.clientWidth || minimumChatWidth + 32) - 32))
+const renderedChatWidth = computed(() => chatWidth.value || chatPanel.value?.getBoundingClientRect().width || minimumChatWidth)
 let epoch = 0
+let resizeStartX = 0, resizeStartWidth = 0
 /** 能力随会话/窗口聚焦刷新；活动请求显示自己的持久配置版本。 */
 async function refreshUi() {
   const current = ++epoch, sid = props.sessionId
@@ -117,11 +129,43 @@ watch([tab, () => props.sessionId, () => ui.value?.permissions.trace], ([view, s
 watch(() => state.value?.cursor, () => { if (atBottom.value) void nextTick(scrollBottom); void hydrateAttachments() })
 const refreshTimer = setInterval(() => { if (document.visibilityState === 'visible') void refreshUi() }, 30000)
 window.addEventListener('focus', refreshUi)
-onBeforeUnmount(() => { epoch++; clearInterval(refreshTimer); window.removeEventListener('focus', refreshUi) })
+try {
+  const savedWidth = Number(localStorage.getItem(chatWidthStorageKey))
+  if (Number.isFinite(savedWidth) && savedWidth >= minimumChatWidth) chatWidth.value = savedWidth
+} catch { /* 本地存储不可用时使用默认宽度。 */ }
+onBeforeUnmount(() => { epoch++; clearInterval(refreshTimer); window.removeEventListener('focus', refreshUi); finishContentResize() })
 function interactions(row: LoopRecord) { return Object.values(state.value?.interactions || {}).filter(i => identity({session_id:props.sessionId,correlation:i.correlation},true) === row.key) }
 function fill(text: string) { draft.value.content = text; composer.value?.focus() }
 function trackScroll() { const el=scroller.value; if(el) atBottom.value=el.scrollHeight-el.scrollTop-el.clientHeight<100 }
 function scrollBottom() { const el=scroller.value; if(el) el.scrollTop=el.scrollHeight; atBottom.value=true }
+/** 对话列只在桌面端支持横向拖拽，宽度始终被限定在当前可用内容区内。 */
+function beginContentResize(event: PointerEvent) {
+  if (event.pointerType === 'touch' || !chatPanel.value) return
+  event.preventDefault()
+  resizeStartX = event.clientX
+  resizeStartWidth = chatPanel.value.getBoundingClientRect().width
+  chatWidth.value = resizeStartWidth
+  isResizing.value = true
+  window.addEventListener('pointermove', resizeContent)
+  window.addEventListener('pointerup', finishContentResize, { once: true })
+}
+function resizeContent(event: PointerEvent) {
+  const upper = maximumChatWidth.value
+  chatWidth.value = Math.min(upper, Math.max(minimumChatWidth, resizeStartWidth + event.clientX - resizeStartX))
+}
+function finishContentResize() {
+  if (!isResizing.value) return
+  isResizing.value = false
+  window.removeEventListener('pointermove', resizeContent)
+  try { if (chatWidth.value) localStorage.setItem(chatWidthStorageKey, String(Math.round(chatWidth.value))) } catch { /* 本地存储失败不影响本次调整。 */ }
+}
+/** 键盘用户可用方向键以固定步长调整同一条分隔线。 */
+function adjustContentWidthByKey(event: KeyboardEvent) {
+  if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+  event.preventDefault()
+  chatWidth.value = Math.min(maximumChatWidth.value, Math.max(minimumChatWidth, renderedChatWidth.value + (event.key === 'ArrowRight' ? 24 : -24)))
+  try { localStorage.setItem(chatWidthStorageKey, String(Math.round(chatWidth.value))) } catch { /* 本地存储失败不影响本次调整。 */ }
+}
 async function copy(text: string) { try { await navigator.clipboard.writeText(text) } catch { error.value='复制失败' } }
 /** 冻结输入/附件/effort 与幂等 ID；未受理时保留可恢复草稿。 */
 async function submit() {
@@ -179,4 +223,14 @@ async function hydrateAttachments() {
 
 
 .loop-tabs .workspace-tab{background:transparent}.loop-tabs .workspace-tab:disabled{opacity:.45;cursor:default}
+
+/* 对话内容列默认无边界；悬停或拖拽时显示固定高度的玻璃边界。 */
+.loop-chat-panel{position:relative;display:flex;flex:1;min-height:0;width:min(860px,calc(100% - 32px));max-width:calc(100% - 32px);min-width:460px;margin:0 auto;border:1px solid transparent;border-radius:18px;background:transparent;transition:border-color .18s ease,background-color .18s ease,box-shadow .18s ease}
+.loop-chat-panel:hover,.loop-chat-panel:focus-within,.loop-chat-panel.is-resizing{border-color:rgba(190,218,210,.78);background:rgba(255,255,255,.38);box-shadow:0 12px 32px rgba(34,78,63,.06),inset 0 1px rgba(255,255,255,.76);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+.loop-chat-panel .loop-conversation{padding:24px max(20px,calc((100% - 800px)/2))}
+.loop-width-handle{position:absolute;z-index:3;top:50%;right:-13px;width:26px;height:96px;transform:translateY(-50%);border:1px solid transparent;border-radius:999px;background:transparent;cursor:ew-resize;opacity:0;touch-action:none;transition:opacity .18s ease,background-color .18s ease,border-color .18s ease,box-shadow .18s ease}
+.loop-width-handle span{display:block;width:2px;height:34px;margin:auto;border-radius:2px;background:rgba(66,118,102,.42)}
+.loop-chat-panel:hover .loop-width-handle,.loop-chat-panel:focus-within .loop-width-handle,.loop-chat-panel.is-resizing .loop-width-handle{opacity:1;border-color:rgba(207,228,221,.8);background:rgba(255,255,255,.62);box-shadow:0 4px 14px rgba(35,73,61,.12),inset 0 1px rgba(255,255,255,.88)}
+.loop-width-handle:hover,.loop-width-handle:focus-visible{border-color:#83ad9e;background:rgba(255,255,255,.88);outline:0}
+@media(max-width:768px){.loop-chat-panel{width:100%!important;max-width:none;min-width:0;border-color:transparent!important;background:transparent!important;box-shadow:none!important;backdrop-filter:none}.loop-width-handle{display:none}.loop-chat-panel .loop-conversation{padding:16px 12px}}
 </style>

@@ -1,4 +1,35 @@
-# AgentLoop 原始样式核对（2026-09-09，V0.5）
+# AgentLoop 原始样式核对（2026-09-09，V0.6）
+
+## V0.6 输入焦点与内容宽度核对
+
+final result: blocked — 已能打开用户提供的两张截图和本地实现截图，但浏览器策略拒绝打开用于并列比较的 `data:` 页面。依据 `product-design/design-qa/SKILL.md`，两张图必须放在同一比较输入中；未绕过该策略，因此不能把本轮截图核对标为通过。
+
+### Source visual truth
+
+- `C:/Users/Administrator/AppData/Local/Temp/codex-clipboard-d962b9ea-47bd-4db1-82d6-faef06e9ef37.png`：输入文本域出现的蓝色内框，用户要求隐藏。
+- `C:/Users/Administrator/AppData/Local/Temp/codex-clipboard-741cde78-b3e8-421f-8ba5-5d42601a59ab.png`：欢迎态对话内容区域的默认无框状态。
+
+### Implementation evidence
+
+- `artifacts/agentloop-conversation-default-1046x647.png`：In-app Browser 在 1046×647 CSS px、device scale factor 1 的 AgentLoop 欢迎态截图；内容列默认透明，输入栏没有蓝色内框。
+- `artifacts/agentloop-conversation-resize.png`：1440×900 CSS px 的桌面悬停/分隔线状态截图；右缘玻璃把手及固定高度边界可见。
+- 浏览器无障碍树确认分隔线名称为“拖拽调整对话内容宽度”；键盘 ArrowLeft 已将宽度从 860px 调整至 836px。文本域的计算样式为 `border: 0`、`outline: none`、`box-shadow: none`。
+
+### Findings
+
+- 无 P0/P1/P2 实现问题。图 1 的蓝色内框被主动移除，属于用户明确要求的有意差异。
+- [P3] 参考图没有提供悬停玻璃态，玻璃透明度与把手高度按用户文字要求实现，后续可根据新的悬停参考图继续微调。
+
+### Comparison history
+
+- V0.6：参考图与 1046×647 实现截图均已在 In-app Browser 打开；尝试创建仅包含两张已授权截图的并列核对页被浏览器 URL 策略拒绝，未采用其他路径规避限制。
+
+### Implementation checklist
+
+- [x] 隐藏文本域蓝色 outline、border 和 shadow。
+- [x] 默认隐藏对话内容列边界，悬停/聚焦/拖拽时显示玻璃边界。
+- [x] 桌面端提供右缘鼠标拖拽、键盘左右键和本地宽度偏好。
+- [x] 窄屏固定全宽并隐藏拖拽把手。
 
 ## 当前结果与范围
 
