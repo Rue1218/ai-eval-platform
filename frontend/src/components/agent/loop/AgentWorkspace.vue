@@ -5,7 +5,7 @@
     <p v-if="state?.error || error" class="loop-notice error" role="alert">{{ state?.error || error }}</p>
     <div class="loop-content">
       <div class="loop-center">
-        <section v-if="tab==='chat'" ref="chatPanel" class="loop-chat-panel" :class="{ 'is-resizing': isResizing }" :style="chatPanelStyle" aria-label="对话内容区域">
+        <section v-if="tab==='chat'" ref="chatShell" class="loop-chat-shell" :class="{ 'is-resizing': isResizing }" :style="chatShellStyle" aria-label="对话内容区域">
           <div ref="scroller" class="loop-conversation" @scroll="trackScroll">
           <div v-if="!rows.length" class="loop-welcome"><span>AI EVAL · AGENT LOOP</span><h2>从一个目标开始，<br>让每一步都有依据。</h2><p>在工作区处理文件、查找资料，或创建评测任务。</p><div><button v-for="prompt in prompts" :key="prompt" @click="fill(prompt)">{{ prompt }} ↗</button></div></div>
           <button v-if="shown < rows.length" class="history-more" @click="shown+=80">显示更早的 {{ Math.min(80, rows.length-shown) }} 条记录</button>
@@ -16,6 +16,7 @@
           </template>
           <p v-if="!busy && state?.phase && ['max_tokens','max_steps','cancelled','interrupted','error'].includes(state.phase)" class="loop-notice">{{ finishLabels[state.phase] }}</p>
           </div>
+          <div class="loop-composer-wrap"><AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile"/></div>
           <button class="loop-width-handle" type="button" aria-label="拖拽调整对话内容宽度" aria-orientation="vertical" role="separator" :aria-valuemin="minimumChatWidth" :aria-valuemax="maximumChatWidth" :aria-valuenow="Math.round(renderedChatWidth)" @pointerdown="beginContentResize" @keydown="adjustContentWidthByKey">
             <span aria-hidden="true"></span>
           </button>
@@ -25,7 +26,7 @@
       </div>
       <aside v-if="runtimeOpen" class="loop-runtime"><button class="runtime-close" @click="runtimeOpen=false">关闭</button><h3>当前运行</h3><p>{{ status }}</p><dl><dt>会话</dt><dd>{{ sessionId || '未发送的草稿' }}</dd><dt>实际模型</dt><dd>{{ summary?.model || '尚无实际请求' }}</dd><dt>思考档位</dt><dd>{{ summary?.reasoning_effort || '未知' }}</dd><dt>协议档版本</dt><dd>{{ summary?.profile_version || '未知' }}</dd><dt>最近活动</dt><dd v-for="event in state?.facts.slice(-5) || []" :key="event.cursor">{{ event.type }}</dd></dl><h4 v-if="tasks.length">Worker 任务</h4><div v-for="task in tasks" :key="task.key"><router-link :to="'/tasks'">{{ task.key }}</router-link><p>{{ task.status || '等待状态' }}</p><p v-if="task.progress">{{ JSON.stringify(task.progress) }}</p><router-link v-if="task.report_id" :to="`/reports/${task.report_id}`">查看报告</router-link></div><p v-for="execution in quarantined" :key="execution.key" class="loop-notice">执行范围受限 · {{ execution.reason || '等待对账' }}</p></aside>
     </div>
-    <div class="loop-composer-wrap"><AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile"/></div>
+    <div v-if="tab==='trace'" class="loop-composer-wrap loop-trace-composer"><AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile"/></div>
   </div>
 </template>
 <script setup lang="ts">
@@ -47,10 +48,10 @@ import TraceWorkspace from './TraceWorkspace.vue'
 const props = defineProps<{ sessionId: string; store: LoopStore; createSession: () => Promise<string> }>()
 const auth = useAuthStore(), tab = ref('chat'), runtimeOpen = ref(false), error = ref(''), effort = ref<Effort | null>(null)
 const ui = ref<LoopUi | null>(null), selectedProfileId = ref(''), shown = ref(80), attachments = ref<Record<string, AttachmentReference[]>>({})
-const composer = ref<InstanceType<typeof AgentComposer>>(), scroller = ref<HTMLElement>(), chatPanel = ref<HTMLElement>(), atBottom = ref(true)
+const composer = ref<InstanceType<typeof AgentComposer>>(), scroller = ref<HTMLElement>(), chatShell = ref<HTMLElement>(), atBottom = ref(true)
 const chatWidth = ref<number | null>(null), isResizing = ref(false)
-const minimumChatWidth = 460
-const chatWidthStorageKey = 'agent-loop:conversation-width'
+const minimumChatWidth = 520
+const chatWidthStorageKey = 'agent-loop:chat-shell-width:v2'
 const state = computed(() => props.store.sessions[props.sessionId]), trace = computed(() => props.store.traces[props.sessionId])
 const draft = computed(() => props.store.draft(props.sessionId || 'draft'))
 const rows = computed(() => state.value ? conversationRows(state.value) : [])
@@ -67,9 +68,9 @@ const finishLabels: Record<string,string> = { max_tokens:'达到输出上限，�
 const phaseLabels: Record<string,string> = { idle:'就绪',model:'模型处理中',thinking:'正在思考',answering:'正在回答',tools:'工具执行中',waiting_interaction:'等待交互',retry_wait:'等待重试',completed:'已完成',...finishLabels }
 const status = computed(() => state.value?.cancelling ? '取消中' : state.value && state.value.connection !== 'online' ? '连接待同步' : phaseLabels[state.value?.phase || 'idle'] || state.value?.phase || '就绪')
 const prompts = ['查看工作区文件，说明可以如何处理', '帮我准备一次模型基准评测', '查询资料并给出可核对的来源']
-const chatPanelStyle = computed(() => chatWidth.value ? { width: `${chatWidth.value}px` } : undefined)
-const maximumChatWidth = computed(() => Math.max(minimumChatWidth, (chatPanel.value?.parentElement?.clientWidth || minimumChatWidth + 32) - 32))
-const renderedChatWidth = computed(() => chatWidth.value || chatPanel.value?.getBoundingClientRect().width || minimumChatWidth)
+const chatShellStyle = computed(() => chatWidth.value ? { width: `${chatWidth.value}px` } : undefined)
+const maximumChatWidth = computed(() => Math.max(minimumChatWidth, (chatShell.value?.parentElement?.clientWidth || minimumChatWidth + 48) - 48))
+const renderedChatWidth = computed(() => chatWidth.value || chatShell.value?.getBoundingClientRect().width || minimumChatWidth)
 let epoch = 0
 let resizeStartX = 0, resizeStartWidth = 0
 /** 能力随会话/窗口聚焦刷新；活动请求显示自己的持久配置版本。 */
@@ -138,12 +139,12 @@ function interactions(row: LoopRecord) { return Object.values(state.value?.inter
 function fill(text: string) { draft.value.content = text; composer.value?.focus() }
 function trackScroll() { const el=scroller.value; if(el) atBottom.value=el.scrollHeight-el.scrollTop-el.clientHeight<100 }
 function scrollBottom() { const el=scroller.value; if(el) el.scrollTop=el.scrollHeight; atBottom.value=true }
-/** 对话列只在桌面端支持横向拖拽，宽度始终被限定在当前可用内容区内。 */
+/** 左侧玻璃把手只在桌面端调整共享对话壳层，输入框与消息区同步变宽。 */
 function beginContentResize(event: PointerEvent) {
-  if (event.pointerType === 'touch' || !chatPanel.value) return
+  if (event.pointerType === 'touch' || !chatShell.value) return
   event.preventDefault()
   resizeStartX = event.clientX
-  resizeStartWidth = chatPanel.value.getBoundingClientRect().width
+  resizeStartWidth = chatShell.value.getBoundingClientRect().width
   chatWidth.value = resizeStartWidth
   isResizing.value = true
   window.addEventListener('pointermove', resizeContent)
@@ -151,7 +152,7 @@ function beginContentResize(event: PointerEvent) {
 }
 function resizeContent(event: PointerEvent) {
   const upper = maximumChatWidth.value
-  chatWidth.value = Math.min(upper, Math.max(minimumChatWidth, resizeStartWidth + event.clientX - resizeStartX))
+  chatWidth.value = Math.min(upper, Math.max(minimumChatWidth, resizeStartWidth - (event.clientX - resizeStartX)))
 }
 function finishContentResize() {
   if (!isResizing.value) return
@@ -159,11 +160,11 @@ function finishContentResize() {
   window.removeEventListener('pointermove', resizeContent)
   try { if (chatWidth.value) localStorage.setItem(chatWidthStorageKey, String(Math.round(chatWidth.value))) } catch { /* 本地存储失败不影响本次调整。 */ }
 }
-/** 键盘用户可用方向键以固定步长调整同一条分隔线。 */
+/** 键盘用户可用方向键移动左侧把手，以固定步长改变共享宽度。 */
 function adjustContentWidthByKey(event: KeyboardEvent) {
   if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
   event.preventDefault()
-  chatWidth.value = Math.min(maximumChatWidth.value, Math.max(minimumChatWidth, renderedChatWidth.value + (event.key === 'ArrowRight' ? 24 : -24)))
+  chatWidth.value = Math.min(maximumChatWidth.value, Math.max(minimumChatWidth, renderedChatWidth.value + (event.key === 'ArrowLeft' ? 24 : -24)))
   try { localStorage.setItem(chatWidthStorageKey, String(Math.round(chatWidth.value))) } catch { /* 本地存储失败不影响本次调整。 */ }
 }
 async function copy(text: string) { try { await navigator.clipboard.writeText(text) } catch { error.value='复制失败' } }
@@ -224,13 +225,15 @@ async function hydrateAttachments() {
 
 .loop-tabs .workspace-tab{background:transparent}.loop-tabs .workspace-tab:disabled{opacity:.45;cursor:default}
 
-/* 对话内容列默认无边界；悬停或拖拽时显示固定高度的玻璃边界。 */
-.loop-chat-panel{position:relative;display:flex;flex:1;min-height:0;width:min(860px,calc(100% - 32px));max-width:calc(100% - 32px);min-width:460px;margin:0 auto;border:1px solid transparent;border-radius:18px;background:transparent;transition:border-color .18s ease,background-color .18s ease,box-shadow .18s ease}
-.loop-chat-panel:hover,.loop-chat-panel:focus-within,.loop-chat-panel.is-resizing{border-color:rgba(190,218,210,.78);background:rgba(255,255,255,.38);box-shadow:0 12px 32px rgba(34,78,63,.06),inset 0 1px rgba(255,255,255,.76);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
-.loop-chat-panel .loop-conversation{padding:24px max(20px,calc((100% - 800px)/2))}
-.loop-width-handle{position:absolute;z-index:3;top:50%;right:-13px;width:26px;height:96px;transform:translateY(-50%);border:1px solid transparent;border-radius:999px;background:transparent;cursor:ew-resize;opacity:0;touch-action:none;transition:opacity .18s ease,background-color .18s ease,border-color .18s ease,box-shadow .18s ease}
-.loop-width-handle span{display:block;width:2px;height:34px;margin:auto;border-radius:2px;background:rgba(66,118,102,.42)}
-.loop-chat-panel:hover .loop-width-handle,.loop-chat-panel:focus-within .loop-width-handle,.loop-chat-panel.is-resizing .loop-width-handle{opacity:1;border-color:rgba(207,228,221,.8);background:rgba(255,255,255,.62);box-shadow:0 4px 14px rgba(35,73,61,.12),inset 0 1px rgba(255,255,255,.88)}
-.loop-width-handle:hover,.loop-width-handle:focus-visible{border-color:#83ad9e;background:rgba(255,255,255,.88);outline:0}
-@media(max-width:768px){.loop-chat-panel{width:100%!important;max-width:none;min-width:0;border-color:transparent!important;background:transparent!important;box-shadow:none!important;backdrop-filter:none}.loop-width-handle{display:none}.loop-chat-panel .loop-conversation{padding:16px 12px}}
+/* 消息区与输入框共用同一宽度壳层；默认不绘制整块边界。 */
+.loop-chat-shell{position:relative;display:flex;flex:1;flex-direction:column;min-height:0;width:min(900px,calc(100% - 48px));max-width:calc(100% - 48px);min-width:520px;margin:0 24px 0 auto}
+.loop-chat-shell .loop-conversation{padding:24px 16px}
+.loop-chat-shell .loop-composer-wrap{flex:0 0 auto;width:100%;max-width:none;margin:0;padding:12px 0 18px;box-sizing:border-box}
+
+/* 把手固定在共享内容列左缘，仅在靠近该区域或键盘聚焦时呈现玻璃质感。 */
+.loop-width-handle{position:absolute;z-index:3;top:110px;left:-36px;width:28px;height:104px;border:0;border-radius:14px;background:transparent;cursor:ew-resize;opacity:0;touch-action:none;transition:opacity .18s ease,background-color .18s ease}
+.loop-width-handle span{display:block;width:2px;height:72px;margin:auto;border-radius:2px;background:rgba(105,128,122,.28);box-shadow:0 0 10px rgba(119,147,138,.2)}
+.loop-chat-shell:hover .loop-width-handle,.loop-chat-shell:focus-within .loop-width-handle,.loop-chat-shell.is-resizing .loop-width-handle{opacity:1;background:rgba(255,255,255,.08);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+.loop-width-handle:hover,.loop-width-handle:focus-visible{background:rgba(255,255,255,.28);outline:0}.loop-width-handle:hover span,.loop-width-handle:focus-visible span{background:rgba(91,129,117,.52)}
+@media(max-width:768px){.loop-chat-shell{width:100%!important;max-width:none;min-width:0;margin:0}.loop-chat-shell .loop-composer-wrap{padding:8px}.loop-width-handle{display:none}.loop-chat-shell .loop-conversation{padding:16px 12px}}
 </style>
