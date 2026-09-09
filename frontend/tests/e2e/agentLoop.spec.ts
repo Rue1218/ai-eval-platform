@@ -133,10 +133,13 @@ for (const profile of serverProfiles.slice(0, 2)) {
     await expect(slider).toHaveAttribute('max', String(profile.allowed_efforts.length - 1))
     // 切换模型会保留仍受支持的偏好；先归零，再验证真实指针拖动。
     await slider.press('Home')
+    await expect(slider).toHaveValue('0')
+    // 等待弹层缩放结束再取坐标；拖到轨道边缘，避免跨浏览器的滑块中心偏差。
+    await slider.click({trial:true})
     const box = (await slider.boundingBox())!
     await page.mouse.move(box.x + 15, box.y + box.height / 2)
     await page.mouse.down()
-    await page.mouse.move(box.x + box.width - 15, box.y + box.height / 2, {steps:8})
+    await page.mouse.move(box.x + box.width - 1, box.y + box.height / 2, {steps:8})
     await page.mouse.up()
     await expect(slider).toHaveAttribute('aria-valuetext', '最高强度')
     await slider.press('Home')
