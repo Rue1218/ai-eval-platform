@@ -26,12 +26,13 @@ async function setup(page: Page, holdNewReplay = false) {
     let body: any={}
     if(path==='/api/auth/me') body={id:'u',username:'tester',role:'admin',must_change_password:false}
     else if(path==='/api/auth/ws-ticket') body={ticket:'ticket',expires_in:300}
-    else if(path==='/api/sessions' && route.request().method()==='GET') body=[{id:'s',title:'联调会话',owner_id:'u',visibility:'private',can_manage:true,can_delete:true,engine_version:'agent_loop_v2',created_at:'2026-09-09T00:00:00Z'},{id:'s2',title:'另一个会话',owner_id:'u',visibility:'private',can_manage:true,can_delete:true,engine_version:'agent_loop_v2',created_at:'2026-09-09T00:00:00Z'},{id:'legacy',title:'历史旧会话',owner_id:'u',visibility:'private',can_manage:true,can_delete:true,engine_version:'legacy',created_at:'2026-09-09T00:00:00Z'}]
-    else if(path==='/api/sessions' && route.request().method()==='POST') { const payload=route.request().postDataJSON() as Record<string, unknown>;sessionCreates.push(payload);body={id:'s3',title:payload.title || '新会话',owner_id:'u',visibility:'private',can_manage:true,can_delete:true,engine_version:'agent_loop_v2',created_at:'2026-09-09T00:00:00Z'} }
+    else if(path==='/api/sessions' && route.request().method()==='GET') body=[{id:'s',title:'联调会话',owner_id:'u',visibility:'private',can_manage:true,can_delete:true,engine_version:'agent_loop_v2',workspace_id:'ws-default',workspace_name:'默认工作区',created_at:'2026-09-09T00:00:00Z'},{id:'s2',title:'另一个会话',owner_id:'u',visibility:'private',can_manage:true,can_delete:true,engine_version:'agent_loop_v2',workspace_id:'ws-default',workspace_name:'默认工作区',created_at:'2026-09-09T00:00:00Z'},{id:'legacy',title:'历史旧会话',owner_id:'u',visibility:'private',can_manage:true,can_delete:true,engine_version:'legacy',created_at:'2026-09-09T00:00:00Z'}]
+    else if(path==='/api/sessions' && route.request().method()==='POST') { const payload=route.request().postDataJSON() as Record<string, unknown>;sessionCreates.push(payload);body={id:'s3',title:payload.title || '新会话',owner_id:'u',visibility:'private',can_manage:true,can_delete:true,engine_version:'agent_loop_v2',workspace_id:payload.workspace_id,created_at:'2026-09-09T00:00:00Z'} }
     else if(path.endsWith('/agent-ui')) body=ui
     else if(path==='/api/profiles') body=[{id:'p',name:'测试模型',model:'deepseek-chat',usages:['agent'],protocol:'openai_chat'}]
     else if(path==='/api/admin/settings') body={agent_profile_id:'p'}
     else if(['/api/datasets','/api/kb','/api/tasks'].includes(path)) body=[]
+    else if(path==='/api/workspaces') body=[{id:'ws-default',name:'默认工作区'}]
     else if(path==='/api/files' && route.request().method()==='POST') { await new Promise<void>(resolve=>{releaseUpload=resolve});body={id:'f',filename:'draft.txt',size:5,content_type:'text/plain'} }
     await route.fulfill({json:body})
   })

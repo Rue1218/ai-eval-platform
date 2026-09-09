@@ -4,7 +4,7 @@
       <button class="workspace-tab" :class="{active:tab==='chat'}" @click="tab='chat'">对话</button>
       <button class="workspace-tab" :class="{active:tab==='trace'}" :disabled="!state" @click="tab='trace'">轨迹 <small v-if="state?.cursor" class="trace-tab-count">{{ state.cursor }}</small></button>
       <div class="loop-tabs-actions">
-        <span v-if="rows.length" class="loop-status">
+        <span v-if="sessionId" class="loop-status">
           <i :class="{running:busy}"/>{{ status }}
         </span>
         <button class="loop-runtime-btn" type="button" @click="runtimeOpen=!runtimeOpen">运行信息</button>
@@ -206,10 +206,10 @@
           </span>
         </button>
       </div>
-      <AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :metrics="conversationMetrics" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" :has-workspace="!!activeWorkspaceId" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile" @request-workspace="handleRequestWorkspace"/>
+      <AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :metrics="conversationMetrics" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" :has-workspace="hasWorkspace" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile" @request-workspace="handleRequestWorkspace"/>
     </div>
     <!-- 页面最底部指标栏：只有开始对话后（rows.length > 0）且有 conversationMetrics 时显示 -->
-    <footer v-if="rows.length && conversationMetrics" class="loop-bottom-metrics" aria-label="会话模型总用量指标">
+    <footer v-if="rows.length && conversationMetrics" class="conversation-metrics loop-bottom-metrics" aria-label="会话模型总用量指标">
       <span>
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <line x1="5" y1="12" x2="19" y2="12"></line>
@@ -291,6 +291,11 @@ const activeWorkspaceName = computed<string>(() => {
     return props.session?.workspace_name || (props.session?.workspace_id ? '工作区' : '')
   }
   return draftWorkspaceName.value || (draftWorkspaceId.value ? '工作区' : '')
+})
+
+const hasWorkspace = computed<boolean>(() => {
+  if (props.sessionId) return true
+  return !!activeWorkspaceId.value
 })
 
 async function loadWorkspaces(autoSelect = true) {
@@ -585,7 +590,7 @@ function regenerate(row: LoopRecord) {
 }
 /** 冻结输入/附件/effort 与幂等 ID；未受理时保留可恢复草稿。 */
 async function submit(override?: { content: string; attachmentRefs: string[] }) {
-  if (!activeWorkspaceId.value) {
+  if (!props.sessionId && !activeWorkspaceId.value) {
     message.warning('请先选择或新建工作区才能开始对话')
     workspacePopoverOpen.value = true
     if (!workspaces.value.length) void loadWorkspaces(false)
@@ -599,7 +604,7 @@ async function submit(override?: { content: string; attachmentRefs: string[] }) 
   const content=override?.content ?? source.content, refs=override?.attachmentRefs ?? source.files.filter(f=>!f.removed && f.id).map(f=>f.id!)
   try {
     let sid=props.sessionId
-    if(!sid) { sid=await props.createSession(activeWorkspaceId.value); if(!sid) throw new Error(); props.store.drafts[sid]=source; delete props.store.drafts.draft }
+    if(!sid) { sid=await props.createSession(activeWorkspaceId.value || undefined); if(!sid) throw new Error(); props.store.drafts[sid]=source; delete props.store.drafts.draft }
     const client=props.store.open(sid)
     source.pending ??= client.command('turn.submit',{client_message_id:createRequestId(),content,attachment_refs:refs,profile_id:profile.id,reasoning_effort:selectedEffort})
     // 只有首次订阅完成后才发送；超时取消等待，不能在以后重连时偷偷补发。
