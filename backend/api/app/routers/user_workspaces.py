@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
@@ -29,10 +30,17 @@ from ..models import AuditLog, User, Workspace
 from ..models import Session as AgentSession
 from ..workspace_service import (
     create_child_dir,
+    create_workspace_file,
+    delete_workspace_path,
     folder_summary,
+    get_file_tree,
     list_dir_level,
+    read_workspace_file,
+    rename_workspace_path,
     resolve_scope_dir,
+    resolve_scope_file,
     workspace_dir_for,
+    write_workspace_file,
 )
 
 router = APIRouter(prefix="/api/workspaces", tags=["user-workspaces"])
@@ -49,6 +57,29 @@ class _FileBody(BaseModel):
 
     path: str = Field(default="", max_length=1024)
     name: str = Field(min_length=1, max_length=255)
+
+
+class _FileContentBody(BaseModel):
+    """写回/更新文件内容请求。"""
+
+    path: str = Field(min_length=1, max_length=1024)
+    content: str = Field(default="")
+
+
+class _CreateFileBody(BaseModel):
+    """新建单文件请求。"""
+
+    path: str = Field(default="", max_length=1024)
+    name: str = Field(min_length=1, max_length=255)
+    content: str = Field(default="")
+
+
+class _RenamePathBody(BaseModel):
+    """重命名文件或目录请求。"""
+
+    path: str = Field(min_length=1, max_length=1024)
+    new_name: str = Field(min_length=1, max_length=255)
+
 
 
 def _owned_workspace(
@@ -322,3 +353,142 @@ def create_folder(
     db.commit()
     rel = os.path.join(body.path, os.path.basename(target)).replace("\\", "/")
     return {"ok": True, "path": rel.lstrip("./")}
+
+
+@router.get("/{workspace_id}/files/tree")
+def get_tree(
+    workspace_id: str,
+    max_depth: int = Query(default=4, ge=1, le=8),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """获取工作区目录树结构。"""
+    row = _owned_workspace(db, user, workspace_id)
+    directory = workspace_dir_for(row.id)
+    tree = get_file_tree(directory, max_depth=max_depth)
+    return {"workspace_id": workspace_id, "tree": tree}
+
+
+@router.get("/{workspace_id}/files/content")
+def get_file_content(
+    workspace_id: str,
+    path: str = Query(..., min_length=1, description="文件相对路径"),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """获取单文件文本内容与元信息。超大或二进制文件安全标记。"""
+    row = _owned_workspace(db, user, workspace_id)
+    directory = workspace_dir_for(row.id)
+    result = read_workspace_file(directory, path)
+    return {"workspace_id": workspace_id, **result}
+
+
+@router.put("/{workspace_id}/files/content")
+def update_file_content(
+    workspace_id: str,
+    body: _FileContentBody,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """写回/保存文件内容。"""
+    row = _owned_workspace(db, user, workspace_id)
+    directory = workspace_dir_for(row.id)
+    res = write_workspace_file(directory, body.path, body.content)
+    _audit(
+        db,
+        request,
+        user,
+        action="workspace_file_update",
+        target_id=workspace_id,
+        detail={"path": res["path"], "size": res["size"]},
+    )
+    db.commit()
+    return {"ok": True, "workspace_id": workspace_id, **res}
+
+
+@router.post("/{workspace_id}/files/file", status_code=201)
+def create_file(
+    workspace_id: str,
+    body: _CreateFileBody,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """在指定相对路径下新建单文件。"""
+    row = _owned_workspace(db, user, workspace_id)
+    directory = workspace_dir_for(row.id)
+    res = create_workspace_file(directory, body.path, body.name.strip(), body.content)
+    _audit(
+        db,
+        request,
+        user,
+        action="workspace_file_create",
+        target_id=workspace_id,
+        detail={"path": res["path"], "name": res["name"]},
+    )
+    db.commit()
+    return {"ok": True, "workspace_id": workspace_id, **res}
+
+
+@router.patch("/{workspace_id}/files/rename")
+def rename_item(
+    workspace_id: str,
+    body: _RenamePathBody,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """重命名工作区内的文件或目录。"""
+    row = _owned_workspace(db, user, workspace_id)
+    directory = workspace_dir_for(row.id)
+    res = rename_workspace_path(directory, body.path, body.new_name.strip())
+    _audit(
+        db,
+        request,
+        user,
+        action="workspace_file_rename",
+        target_id=workspace_id,
+        detail={"old_path": res["old_path"], "new_path": res["new_path"]},
+    )
+    db.commit()
+    return {"ok": True, "workspace_id": workspace_id, **res}
+
+
+@router.delete("/{workspace_id}/files")
+def delete_item(
+    workspace_id: str,
+    path: str = Query(..., min_length=1, description="相对路径"),
+    request: Request = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """删除工作区内的文件或目录（拒绝删除工作区根）。"""
+    row = _owned_workspace(db, user, workspace_id)
+    directory = workspace_dir_for(row.id)
+    res = delete_workspace_path(directory, path)
+    _audit(
+        db,
+        request,
+        user,
+        action="workspace_file_delete",
+        target_id=workspace_id,
+        detail={"path": res["path"]},
+    )
+    db.commit()
+    return {"ok": True, "workspace_id": workspace_id, **res}
+
+
+@router.get("/{workspace_id}/files/raw")
+def get_raw_file(
+    workspace_id: str,
+    path: str = Query(..., min_length=1, description="相对路径"),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """以原始二进制/文件流方式返回文件（供图片预览或文件下载）。"""
+    row = _owned_workspace(db, user, workspace_id)
+    directory = workspace_dir_for(row.id)
+    abs_path = resolve_scope_file(directory, path, must_exist=True)
+    return FileResponse(abs_path, filename=os.path.basename(abs_path))
+
