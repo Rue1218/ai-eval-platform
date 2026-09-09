@@ -511,48 +511,6 @@
       </template>
     </n-modal>
 
-    <!-- 弹窗 3：首次登录强制改密（规范 §14.4） -->
-    <n-modal
-      v-model:show="showForceChangeModal"
-      preset="card"
-      title="首次登录请修改密码"
-      :mask-closable="false"
-      :closable="false"
-      class="custom-dialog-modal"
-      style="width: 440px; max-width: calc(100vw - 32px);"
-    >
-      <div class="force-change-form">
-        <p class="dialog-p">首次登录系统必须修改初始密码。新密码长度不少于 8 位，须包含字母和数字。</p>
-        <div class="form-field">
-          <label class="field-label">新密码 <span class="req-star">*</span></label>
-          <n-input
-            v-model:value="forceNewPassword"
-            type="password"
-            show-password-on="click"
-            placeholder="不少于 8 位，含字母和数字"
-          />
-        </div>
-        <div class="form-field" style="margin-top: 12px">
-          <label class="field-label">确认新密码 <span class="req-star">*</span></label>
-          <n-input
-            v-model:value="forceConfirmPassword"
-            type="password"
-            show-password-on="click"
-            placeholder="再次输入新密码"
-          />
-        </div>
-        <div v-if="forceChangeError" class="field-error-text" style="margin-top: 8px">
-          {{ forceChangeError }}
-        </div>
-      </div>
-      <template #footer>
-        <div style="display: flex; justify-content: flex-end">
-          <n-button type="primary" :loading="forceSubmitting" @click="handleForceChangePassword">
-            确认修改并进入系统
-          </n-button>
-        </div>
-      </template>
-    </n-modal>
   </div>
 </template>
 
@@ -600,11 +558,6 @@ const passwordInputRef = ref<HTMLInputElement | null>(null)
 /** 弹窗控制 */
 const showForgotModal = ref(false)
 const showRegisterModal = ref(false)
-const showForceChangeModal = ref(false)
-const forceNewPassword = ref('')
-const forceConfirmPassword = ref('')
-const forceChangeError = ref('')
-const forceSubmitting = ref(false)
 
 /** 状态行：免密健康探测状态 */
 const agentStatusText = ref('连接正常 · 调度器运行中')
@@ -738,12 +691,7 @@ async function submitLogin() {
     isLoginSuccess.value = true
     message.success(`欢迎回来，${user.username}`)
 
-    if (user.must_change_password) {
-      showForceChangeModal.value = true
-      isLoginSuccess.value = false
-      return
-    }
-
+    // V1.83 起机制废除：登录后直接进入系统，不再拦截强制改密。
     await wait(320)
     isSuccessExit.value = true
     await wait(300)
@@ -762,35 +710,6 @@ async function handleSsoLogin(provider: string) {
   await wait(600)
   ssoLoading.value = false
   message.info(`已接收 ${provider} SSO 接入请求，请使用演示账号或联系管理员分配`)
-}
-
-/** 首次登录强制改密提交 */
-async function handleForceChangePassword() {
-  if (forceNewPassword.value.length < 8) {
-    forceChangeError.value = '新密码长度不能少于 8 位'
-    return
-  }
-  if (!/[a-zA-Z]/.test(forceNewPassword.value) || !/d/.test(forceNewPassword.value)) {
-    forceChangeError.value = '新密码必须同时包含字母和数字'
-    return
-  }
-  if (forceNewPassword.value !== forceConfirmPassword.value) {
-    forceChangeError.value = '两次输入的密码不一致'
-    return
-  }
-
-  forceChangeError.value = ''
-  forceSubmitting.value = true
-  try {
-    await auth.changePassword(forceNewPassword.value, password.value)
-    message.success('密码修改成功，正在进入系统')
-    showForceChangeModal.value = false
-    router.push('/agent')
-  } catch (err: any) {
-    forceChangeError.value = err.message || '修改密码失败，请重试'
-  } finally {
-    forceSubmitting.value = false
-  }
 }
 
 onMounted(() => {

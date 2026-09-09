@@ -38,7 +38,8 @@ class UserCreate(ApiModel):
     display_name: str | None = Field(default=None, max_length=128)
     email: str | None = Field(default=None, max_length=320)
     password: str = Field(min_length=8, max_length=512)
-    must_change_password: bool = True
+    # V1.83 起机制废除：字段仅保留请求兼容，服务端恒写 False（不再强制首次改密）。
+    must_change_password: bool = False
 
 
 class UserUpdate(ApiModel):
