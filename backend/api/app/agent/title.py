@@ -1,8 +1,8 @@
 """会话标题 AI 生成（结构化输出）。
 
 首条用户消息落库后，用 Agent 协议档把对话开头压缩成简短标题。输出契约
-要求单一 JSON 对象 ``{"title": "..."}``：平台三协议（openai_chat /
-openai_responses / anthropic_messages）的原生 ``response_format`` 能力
+要求单一 JSON 对象 ``{"title": "..."}``：平台两类协议（openai_chat /
+anthropic_messages）的原生 ``response_format`` 能力
 不一致，这里采用「提示词约定 JSON + 代码侧强校验」的弱结构化方案，
 任何协议档都能稳定工作，契约细节见 API.md §4.3 ``session_title``。
 

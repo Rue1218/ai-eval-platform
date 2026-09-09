@@ -1,11 +1,10 @@
-"""三协议统一适配器（PRD 6.2 / 后端开发计划 M1 W3）。
+"""两类协议统一适配器（PRD 6.2 / 后端开发计划 M1 W3）。
 
 统一入口 ``call_protocol``：入参为 ``messages`` 对话列表与采样参数，
-出参统一为 ``AdapterResult(text, usage, raw, latency_ms)``。三种协议的
+出参统一为 ``AdapterResult(text, usage, raw, latency_ms)``。两类协议的
 端点、鉴权头与响应结构差异全部在模块内消化：
 
 - ``openai_chat``        POST ``{base}/v1/chat/completions``   ``Authorization: Bearer``
-- ``openai_responses``   POST ``{base}/v1/responses``          ``Authorization: Bearer``
 - ``anthropic_messages`` POST ``{base}/v1/messages``           ``x-api-key`` + ``anthropic-version``
 
 失败语义统一归一为 ``AppError``：上游 4xx/5xx 与连接错误 → ``UPSTREAM``，
@@ -37,8 +36,8 @@ if TYPE_CHECKING:
     # 形成循环，注解在 future annotations 下字符串化，无需运行时类型。
     from .llm.contracts import SystemSegment
 
-# 契约支持的三种协议（与 protocol_profiles 的 CHECK 约束一致）
-SUPPORTED_PROTOCOLS = ("openai_chat", "openai_responses", "anthropic_messages")
+# 契约支持的两类协议（与 protocol_profiles 的 CHECK 约束一致）
+SUPPORTED_PROTOCOLS = ("openai_chat", "anthropic_messages")
 
 # 非流式调用被测 / Agent 模型的默认超时秒数
 DEFAULT_TIMEOUT_S = 30.0
@@ -57,11 +56,7 @@ def _adapt_message_content(content: object, protocol: str) -> object:
             continue
         kind = part.get("type")
         if kind == "text":
-            text = str(part.get("text") or "")
-            if protocol == "openai_responses":
-                result.append({"type": "input_text", "text": text})
-            else:
-                result.append({"type": "text", "text": text})
+            result.append({"type": "text", "text": str(part.get("text") or "")})
             continue
         if kind != "image_url" or not isinstance(part.get("image_url"), Mapping):
             continue
@@ -81,8 +76,6 @@ def _adapt_message_content(content: object, protocol: str) -> object:
                     },
                 }
             )
-        elif protocol == "openai_responses":
-            result.append({"type": "input_image", "image_url": url})
         else:
             result.append({"type": "image_url", "image_url": {"url": url}})
     return result
@@ -130,7 +123,7 @@ def _internal_tool_calls(message: Mapping[str, object]) -> list[dict[str, object
 
 
 def _adapt_messages(messages: list[dict], protocol: str) -> list[dict]:
-    """把 Harness 消息映射为三协议的图文与 ToolCall/ToolResult 结构。
+    """把 Harness 消息映射为两类协议的图文与 ToolCall/ToolResult 结构。
 
     内部规范只使用 ``assistant.tool_calls`` 与 ``role=tool`` 两种表示；
     本函数在边界转换为各供应商的不同字段，调用方无需感知协议差异。
@@ -153,15 +146,7 @@ def _adapt_messages(messages: list[dict], protocol: str) -> list[dict]:
             call_id = str(message.get("tool_call_id") or "").strip()
             if not call_id:
                 continue
-            if protocol == "openai_responses":
-                adapted.append(
-                    {
-                        "type": "function_call_output",
-                        "call_id": call_id,
-                        "output": str(content or ""),
-                    }
-                )
-            elif protocol == "anthropic_messages":
+            if protocol == "anthropic_messages":
                 anthropic_tool_results.append(
                     {
                         "type": "tool_result",
@@ -183,24 +168,6 @@ def _adapt_messages(messages: list[dict], protocol: str) -> list[dict]:
             flush_anthropic_tool_results()
 
         if calls and role == "assistant":
-            if protocol == "openai_responses":
-                if content:
-                    adapted.append(
-                        {
-                            "role": "assistant",
-                            "content": _adapt_message_content(content, protocol),
-                        }
-                    )
-                adapted.extend(
-                    {
-                        "type": "function_call",
-                        "call_id": call["call_id"],
-                        "name": call["name"],
-                        "arguments": json.dumps(call["arguments"], ensure_ascii=False),
-                    }
-                    for call in calls
-                )
-                continue
             if protocol == "anthropic_messages":
                 blocks: list[object] = []
                 if content:
@@ -245,7 +212,7 @@ def _adapt_messages(messages: list[dict], protocol: str) -> list[dict]:
 
 
 def _adapt_tools(tools: list[dict] | None, protocol: str) -> list[dict]:
-    """把内部 JSON Schema 工具定义映射为三种原生 ToolCall 描述。"""
+    """把内部 JSON Schema 工具定义映射为两类原生 ToolCall 描述。"""
     adapted: list[dict] = []
     for definition in tools or []:
         name = str(definition.get("name") or "").strip()
@@ -268,15 +235,6 @@ def _adapt_tools(tools: list[dict] | None, protocol: str) -> list[dict]:
                         "description": description,
                         "parameters": parameters,
                     },
-                }
-            )
-        elif protocol == "openai_responses":
-            adapted.append(
-                {
-                    "type": "function",
-                    "name": name,
-                    "description": description,
-                    "parameters": parameters,
                 }
             )
         else:
@@ -321,19 +279,12 @@ def _apply_openai_reasoning(
     model: str,
     enabled: bool,
     effort: str,
-    responses: bool,
 ) -> None:
-    """按 Chat Completions / Responses 的字段差异写入推理控制参数。"""
+    """按 Chat Completions 的字段写入推理控制参数。"""
     selected = _openai_reasoning_effort(model, enabled, effort)
     if selected is None:
         return
-    if responses:
-        body["reasoning"] = {"effort": selected}
-        if enabled:
-            # Responses API 返回的是可展示的 reasoning summary，而非隐藏思维链。
-            body["reasoning"]["summary"] = "auto"
-    else:
-        body["reasoning_effort"] = selected
+    body["reasoning_effort"] = selected
 
 
 def _apply_compatible_thinking(
@@ -410,7 +361,7 @@ class AdapterStreamEvent:
 
 @dataclass(frozen=True)
 class AdapterResult:
-    """三协议统一调用结果。
+    """两类协议统一调用结果。
 
     ``usage`` 已归一为 ``prompt_tokens / completion_tokens / total_tokens``
     （上游缺失时按 0 计）；``raw`` 保留上游原始 JSON 对象，供报告与调试
@@ -496,14 +447,6 @@ def _openai_chat_create(client: object, body: dict, *, stream: bool = False) -> 
     return create(**request)
 
 
-def _openai_responses_create(client: object, body: dict, *, stream: bool = False) -> object:
-    """调用 Responses API；流式标志通过 SDK 正式参数传入。"""
-    request = dict(body)
-    if stream:
-        request["stream"] = True
-    return client.responses.create(**request)  # type: ignore[attr-defined]
-
-
 def _anthropic_messages_create(
     client: object,
     body: dict,
@@ -522,7 +465,7 @@ def _anthropic_messages_create(
 
 
 def _norm_usage(data: dict, *, anthropic: bool) -> dict:
-    """把三协议各自的 usage 字段归一为统一 token 与缓存计数结构。
+    """把两类协议各自的 usage 字段归一为统一 token 与缓存计数结构。
 
     缓存字段仅在上游明确返回时透传：Anthropic 使用 input token 的读/创建
     计数，OpenAI 使用 ``prompt_tokens_details.cached_tokens``。缺失表示上游
@@ -548,10 +491,9 @@ def _norm_usage(data: dict, *, anthropic: bool) -> dict:
                 cache_creation_input_tokens=cache_creation,
             )
         return normalized
-    # OpenAI Chat 与部分兼容网关使用 prompt/completion_tokens；官方
-    # Responses 对象使用 input/output_tokens。两种响应均需维持平台统一口径。
-    prompt = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
-    completion = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
+    # OpenAI Chat 与兼容网关使用 prompt/completion_tokens。
+    prompt = int(usage.get("prompt_tokens") or 0)
+    completion = int(usage.get("completion_tokens") or 0)
     total = int(usage.get("total_tokens") or (prompt + completion))
     normalized = {
         "prompt_tokens": prompt,
@@ -572,14 +514,6 @@ def _full_text(protocol: str, data: dict) -> str:
         # 兼容网关在 max_tokens=1 时可能返回 content=None
         choices = data["choices"]
         return str(choices[0]["message"].get("content") or "")
-    if protocol == "openai_responses":
-        # output 数组内仅拼接 output_text 内容块
-        return "".join(
-            str(part.get("text") or "")
-            for item in data["output"]
-            for part in (item.get("content") or [])
-            if part.get("type") == "output_text"
-        )
     # anthropic_messages：content 数组内仅拼接 text 内容块
     return "".join(str(block.get("text") or "") for block in data["content"] if block.get("type") == "text")
 
@@ -590,7 +524,7 @@ def _new_call_id() -> str:
 
 
 def _full_tool_calls(protocol: str, data: dict) -> tuple[AdapterToolCall, ...]:
-    """从三协议完整响应提取函数调用并统一参数与调用 ID。"""
+    """从两类协议完整响应提取函数调用并统一参数与调用 ID。"""
     raw_calls: list[tuple[object, object, object]] = []
     if protocol == "openai_chat":
         message = (data.get("choices") or [{}])[0].get("message") or {}
@@ -603,12 +537,6 @@ def _full_tool_calls(protocol: str, data: dict) -> tuple[AdapterToolCall, ...]:
             function = call.get("function") or {}
             if isinstance(function, Mapping):
                 raw_calls.append((call.get("id"), function.get("name"), function.get("arguments")))
-    elif protocol == "openai_responses":
-        for item in data.get("output") or []:
-            if isinstance(item, Mapping) and item.get("type") == "function_call":
-                raw_calls.append(
-                    (item.get("call_id") or item.get("id"), item.get("name"), item.get("arguments"))
-                )
     else:
         for block in data.get("content") or []:
             if isinstance(block, Mapping) and block.get("type") == "tool_use":
@@ -662,12 +590,10 @@ def _service_base_url(base_url: str) -> str:
     for suffix in (
         "/chat/completions",
         "/messages",
-        "/responses",
         "/models",
         "/v1/models",
         "/v1/chat/completions",
         "/v1/messages",
-        "/v1/responses",
         "/api/tags",
         "/api/v1/models",
     ):
@@ -738,7 +664,7 @@ def call_protocol(
 
     ``messages`` 为 ``[{"role": "user" | "assistant", "content": "..."}]``；
     系统提示词经 ``system`` 独立传入，由各协议以自身字段承载
-    （chat 的 system 消息 / responses 的 instructions / anthropic 的 system）。
+    （chat 的 system 消息 / anthropic 的 system）。
     """
     if protocol not in SUPPORTED_PROTOCOLS:
         raise AppError(ErrorCode.VALIDATION, f"协议不受支持：{protocol}")
@@ -765,21 +691,6 @@ def call_protocol(
             model=model,
             enabled=reasoning_enabled,
             effort=reasoning_effort,
-            responses=False,
-        )
-    elif protocol == "openai_responses":
-        body = {"model": model, "input": _adapt_messages(messages, protocol), "max_output_tokens": max_tokens}
-        native_tools = _adapt_tools(tools, protocol)
-        if native_tools:
-            body["tools"] = native_tools
-        if system:
-            body["instructions"] = system
-        _apply_openai_reasoning(
-            body,
-            model=model,
-            enabled=reasoning_enabled,
-            effort=reasoning_effort,
-            responses=True,
         )
     else:  # anthropic_messages
         body = {
@@ -809,9 +720,6 @@ def call_protocol(
         if protocol == "openai_chat":
             client = _openai_client(base_url=base, api_key=api_key, timeout_s=timeout_s)
             response = _openai_chat_create(client, body)
-        elif protocol == "openai_responses":
-            client = _openai_client(base_url=base, api_key=api_key, timeout_s=timeout_s)
-            response = _openai_responses_create(client, body)
         else:
             client = _anthropic_client(base_url=base, api_key=api_key, timeout_s=timeout_s)
             response = _anthropic_messages_create(client, body, anthropic_version)
@@ -868,7 +776,7 @@ def stream_protocol(
 
     ``kind`` 为增量类别：``"content"`` 是正式回复正文，``"reasoning"``
     是推理模型的前置思考链（deepseek 风格 ``reasoning_content`` /
-    anthropic ``thinking_delta`` / responses ``reasoning_summary``），
+    anthropic ``thinking_delta``），
     供前端思考卡展示；上游未产生思考链时全程只 yield content。
 
     SDK 负责 SSE 建连、解帧与事件反序列化；适配器只消费 SDK 的事件对象，
@@ -928,7 +836,6 @@ def stream_protocol(
             model=model,
             enabled=reasoning_enabled,
             effort=reasoning_effort,
-            responses=False,
         )
 
         def delta_of(data: dict) -> tuple[str, str]:
@@ -974,81 +881,6 @@ def stream_protocol(
 
         def flush_tool_events() -> list[AdapterToolCall]:
             return drain_tool_calls(chat_calls)
-
-    elif protocol == "openai_responses":
-        body = {
-            "model": model,
-            "input": _adapt_messages(messages, protocol),
-            "max_output_tokens": max_tokens,
-        }
-        native_tools = _adapt_tools(tools, protocol)
-        if native_tools:
-            body["tools"] = native_tools
-        if system:
-            body["instructions"] = system
-        _apply_openai_reasoning(
-            body,
-            model=model,
-            enabled=reasoning_enabled,
-            effort=reasoning_effort,
-            responses=True,
-        )
-
-        def delta_of(data: dict) -> tuple[str, str]:  # noqa: F811  （各分支同名提取器，互斥定义）
-            kind = data.get("type")
-            if kind == "response.reasoning_summary_text.delta":
-                return ("reasoning", str(data.get("delta") or ""))
-            if kind == "response.output_text.delta":
-                return ("content", str(data.get("delta") or ""))
-            return ("content", "")
-
-        response_calls: dict[str, dict[str, object]] = {}
-
-        def tool_events_of(data: dict) -> list[AdapterToolCall]:
-            """累计 Responses 函数参数 delta，并优先使用官方 done 事件完成调用。"""
-            event_type = str(data.get("type") or "")
-            raw_key = data.get("item_id")
-            if raw_key is None:
-                raw_key = data.get("output_index")
-            key = str(raw_key) if raw_key is not None else ""
-            if event_type == "response.function_call_arguments.delta" and key:
-                state = response_calls.setdefault(key, {"arguments": []})
-                if data.get("delta"):
-                    state["arguments"].append(str(data["delta"]))
-                return []
-            if event_type == "response.function_call_arguments.done":
-                state = response_calls.pop(key, {})
-                return complete_stream_call(
-                    data.get("call_id") or state.get("call_id") or key,
-                    data.get("name") or state.get("name"),
-                    data.get("arguments")
-                    if data.get("arguments") is not None
-                    else "".join(state.get("arguments", [])),
-                )
-            if event_type in {"response.output_item.added", "response.output_item.done"}:
-                item = data.get("item") or {}
-                if isinstance(item, Mapping) and item.get("type") == "function_call":
-                    item_key = str(item.get("id") or item.get("call_id") or key)
-                    if event_type.endswith("added"):
-                        response_calls.setdefault(
-                            item_key,
-                            {
-                                "call_id": item.get("call_id") or item.get("id"),
-                                "name": item.get("name"),
-                                "arguments": [],
-                            },
-                        )
-                        return []
-                    response_calls.pop(item_key, None)
-                    return complete_stream_call(
-                        item.get("call_id") or item.get("id"),
-                        item.get("name"),
-                        item.get("arguments"),
-                    )
-            return []
-
-        def flush_tool_events() -> list[AdapterToolCall]:
-            return drain_tool_calls(response_calls)
 
     else:  # anthropic_messages
         body = {
@@ -1127,9 +959,6 @@ def stream_protocol(
         if protocol == "openai_chat":
             client = _openai_client(base_url=base, api_key=api_key, timeout_s=timeout_s)
             stream = _openai_chat_create(client, body, stream=True)
-        elif protocol == "openai_responses":
-            client = _openai_client(base_url=base, api_key=api_key, timeout_s=timeout_s)
-            stream = _openai_responses_create(client, body, stream=True)
         else:
             client = _anthropic_client(base_url=base, api_key=api_key, timeout_s=timeout_s)
             stream = _anthropic_messages_create(

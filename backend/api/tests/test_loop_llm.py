@@ -26,7 +26,6 @@ from app.llm.loop_contracts import (
 from app.llm.providers.anthropic import AnthropicAdapter, to_anthropic_messages
 from app.llm.providers.common import compatibility_key, normalize_base_url
 from app.llm.providers.openai import OpenAiAdapter, to_openai_messages
-from app.llm.providers.responses import ResponsesAdapter
 from app.llm.resolver import (
     AuthorizedProfileSnapshot,
     build_adapter,
@@ -71,7 +70,6 @@ class FakeClient:
         self.closed = False
         self.chat = SimpleNamespace(completions=self)
         self.messages = self
-        self.responses = self
 
     async def create(self, **kwargs):
         """每次调用记录一次，不提供隐式重试。"""
@@ -193,82 +191,6 @@ def anthropic_events(*, signature=True, broken_args=False):
     return events
 
 
-def response_items():
-    """可无状态回传的 reasoning/function_call，保留各自不同的 ID。"""
-    return [
-        {
-            "id": "rs_1",
-            "type": "reasoning",
-            "summary": [{"type": "summary_text", "text": "分析"}],
-            "encrypted_content": "opaque-encrypted",
-        },
-        {
-            "id": "fc_1",
-            "type": "function_call",
-            "call_id": "call_1",
-            "name": "read",
-            "arguments": '{"path":"a"}',
-            "status": "completed",
-        },
-    ]
-
-
-def responses_events(items=None):
-    """Responses 的 started/delta/item done/response completed 顺序。"""
-    items = items or response_items()
-    return [
-        {
-            "type": "response.output_item.added",
-            "output_index": 0,
-            "item": {"id": "rs_1", "type": "reasoning", "summary": []},
-        },
-        {
-            "type": "response.reasoning_summary_text.delta",
-            "output_index": 0,
-            "item_id": "rs_1",
-            "summary_index": 0,
-            "delta": "分析",
-        },
-        {"type": "response.output_item.done", "output_index": 0, "item": items[0]},
-        {
-            "type": "response.output_item.added",
-            "output_index": 1,
-            "item": {**items[1], "arguments": "", "status": "in_progress"},
-        },
-        {
-            "type": "response.function_call_arguments.delta",
-            "output_index": 1,
-            "item_id": "fc_1",
-            "delta": '{"path":',
-        },
-        {
-            "type": "response.function_call_arguments.delta",
-            "output_index": 1,
-            "item_id": "fc_1",
-            "delta": '"a"}',
-        },
-        {
-            "type": "response.function_call_arguments.done",
-            "output_index": 1,
-            "item_id": "fc_1",
-            "arguments": items[1]["arguments"],
-        },
-        {"type": "response.output_item.done", "output_index": 1, "item": items[1]},
-        {
-            "type": "response.completed",
-            "response": {
-                "output": items,
-                "usage": {
-                    "input_tokens": 8,
-                    "output_tokens": 4,
-                    "input_tokens_details": {"cached_tokens": 3},
-                    "output_tokens_details": {"reasoning_tokens": 2},
-                },
-            },
-        },
-    ]
-
-
 def test_source_header_and_constructor_compatibility():
     """没有平台扩展时源 header 和指纹完全不变。"""
     tool = ToolSpec("read", "读文件", {"type": "object"})
@@ -323,7 +245,6 @@ def test_resolver_freezes_and_excludes_credentials(clients):
     "protocol,adapter_type",
     [
         ("openai_chat", OpenAiAdapter),
-        ("openai_responses", ResponsesAdapter),
         ("anthropic_messages", AnthropicAdapter),
     ],
 )
@@ -339,7 +260,7 @@ def test_build_each_protocol(clients, protocol, adapter_type):
 
 
 @pytest.mark.parametrize(
-    "suffix", ["", "/v1", "/v1/chat/completions", "/v1/messages", "/v1/responses"]
+    "suffix", ["", "/v1", "/v1/chat/completions", "/v1/messages"]
 )
 def test_url_single_version(suffix):
     """平台根地址和源版本地址都只附加一个 v1。"""
@@ -437,7 +358,7 @@ def test_chat_source_messages_preserve_raw_and_error_results():
     assert wire[1] == {"role": "tool", "tool_call_id": "c", "content": "不存在"}
 
 
-@pytest.mark.parametrize("adapter_type", [OpenAiAdapter, AnthropicAdapter, ResponsesAdapter])
+@pytest.mark.parametrize("adapter_type", [OpenAiAdapter, AnthropicAdapter])
 def test_eof_does_not_fabricate_done(clients, adapter_type):
     """自然 EOF 不等同于模型完成。"""
     adapter = adapter_type(api_key="unit")
@@ -445,7 +366,7 @@ def test_eof_does_not_fabricate_done(clients, adapter_type):
     assert clients[-1].stream.closed
 
 
-@pytest.mark.parametrize("adapter_type", [OpenAiAdapter, AnthropicAdapter, ResponsesAdapter])
+@pytest.mark.parametrize("adapter_type", [OpenAiAdapter, AnthropicAdapter])
 def test_cancel_before_first_token_closes_stream(clients, adapter_type):
     """等待首 token 时取消必须直接打断并关闭响应，不产生 Done。"""
 
@@ -552,11 +473,16 @@ def test_anthropic_rejects_missing_signature(clients):
 
 @pytest.mark.parametrize("model", ["deepseek-v4-flash-0731", "qwen3.6-flash"])
 def test_compatible_anthropic_unsigned_thinking_tool_roundtrip(clients, model):
-    """兼容流空签名原样保存，工具结果回填后继续循环，关闭思考参数真实下发。"""
-    profile = AuthorizedProfileSnapshot(ModelConfig(
-        "anthropic_messages", "https://unit.invalid/apps/anthropic", model,
-        api_key="unit", reasoning_enabled=False,
-    ))
+    """兼容流空签名可回填工具结果，且不会越过 Claude 的跨模型边界。"""
+    profile = AuthorizedProfileSnapshot(
+        ModelConfig(
+            "anthropic_messages",
+            "https://unit.invalid/apps/anthropic",
+            model,
+            api_key="unit",
+            reasoning_enabled=False,
+        )
+    )
     req = resolve_request(profile, messages=[])
     adapter, _ = build_adapter(profile)
     client = clients[-1]
@@ -564,104 +490,32 @@ def test_compatible_anthropic_unsigned_thinking_tool_roundtrip(clients, model):
     chunks = asyncio.run(collect(adapter, req))
     done = chunks[-1]
     assert done.finish_reason == "tool_calls"
-    assert done.protocol_state.items[0] == {"type":"thinking", "thinking":"分析", "signature":""}
-    assert client.requests[0]["thinking"] == {"type":"disabled"}
+    assert done.protocol_state.items[0] == {
+        "type": "thinking",
+        "thinking": "分析",
+        "signature": "",
+    }
+    assert client.requests[0]["thinking"] == {"type": "disabled"}
     messages = [
-        {"role":"assistant", "content":"", "protocol_state":asdict(done.protocol_state),
-         "tool_calls":[{"id":"call_1", "name":"read", "args":{"path":"a"}}]},
-        {"role":"tool", "tool_call_id":"call_1", "content":"文件内容"},
+        {
+            "role": "assistant",
+            "content": "",
+            "protocol_state": asdict(done.protocol_state),
+            "tool_calls": [{"id": "call_1", "name": "read", "args": {"path": "a"}}],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "文件内容"},
     ]
     client.stream = FakeStream()
     asyncio.run(collect(adapter, replace(req, messages=messages)))
     assert client.requests[-1]["messages"][0]["content"] == done.protocol_state.items
     assert client.requests[-1]["messages"][1]["content"][0]["tool_use_id"] == "call_1"
-    # 兼容模型的空签名不得用于绕过 Claude 的跨模型回放边界。
     with pytest.raises(LlmRequestError, match="不兼容"):
         to_anthropic_messages(messages, request=replace(req, model="claude-sonnet-4"))
 
 
-def test_responses_roundtrip_opaque_items_and_usage(clients):
-    """原始 reasoning 与函数 item 回传一次，call_id 与 item_id 不混用。"""
-    adapter = ResponsesAdapter(api_key="unit")
-    client = clients[-1]
-    client.stream = FakeStream(responses_events())
-    req = request()
-    chunks = asyncio.run(collect(adapter, req))
-    done = chunks[-1]
-    assert done.finish_reason == "tool_calls"
-    assert done.usage["prompt_tokens"] == 8
-    assert done.usage["reasoning_tokens"] == 2
-    assert ToolCallStart(1, "call_1", "read") in chunks
-    assert done.protocol_state.items == response_items()
-    assert client.requests[0]["store"] is False
-    assert client.requests[0]["include"] == ["reasoning.encrypted_content"]
-    history = [
-        {
-            "role": "assistant",
-            "content": "",
-            "protocol_state": asdict(done.protocol_state),
-            "tool_calls": [
-                {
-                    "id": "call_1",
-                    "name": "read",
-                    "arguments_raw": '{"path":"a"}',
-                    "args": {"path": "a"},
-                }
-            ],
-        },
-        {"role": "tool", "tool_call_id": "call_1", "content": "文件内容"},
-    ]
-    client.stream = FakeStream()
-    asyncio.run(collect(adapter, replace(req, messages=history)))
-    wire = client.requests[-1]["input"]
-    assert wire[:2] == response_items()
-    assert wire[2] == {"type": "function_call_output", "call_id": "call_1", "output": "文件内容"}
-    with pytest.raises(LlmRequestError, match="不兼容"):
-        asyncio.run(collect(adapter, replace(req, messages=history, model="different")))
-
-
-@pytest.mark.parametrize("failure", ["arguments", "terminal", "encrypted", "reference", "summary"])
-def test_responses_rejects_inconsistent_snapshots(clients, failure):
-    """闭合快照必须与增量及终态严格一致，不能任选一份。"""
-    adapter = ResponsesAdapter(api_key="unit")
-    events = responses_events()
-    if failure == "arguments":
-        events[5]["delta"] = '"different"}'
-    elif failure == "terminal":
-        events[-1]["response"]["output"] = []
-    elif failure == "encrypted":
-        del events[2]["item"]["encrypted_content"]
-    elif failure == "summary":
-        events[1]["delta"] = "不同内容"
-    else:
-        events[4]["item_id"] = "unknown"
-    clients[-1].stream = FakeStream(events)
-    with pytest.raises(LlmRequestError):
-        asyncio.run(collect(adapter, request()))
-    assert clients[-1].stream.closed
-
-
-@pytest.mark.parametrize(
-    "kind,details,reason",
-    [
-        (
-            "response.incomplete",
-            {"incomplete_details": {"reason": "max_output_tokens"}},
-            "max_tokens",
-        ),
-        ("response.failed", {}, "error:failed"),
-    ],
-)
-def test_responses_unsuccessful_terminals_have_no_state(clients, kind, details, reason):
-    """截断或失败保留真实终态，但不输出可回传成功状态。"""
-    adapter = ResponsesAdapter(api_key="unit")
-    clients[-1].stream = FakeStream([{"type": kind, "response": details}])
-    assert asyncio.run(collect(adapter, request())) == [Done(reason)]
-
-
 @pytest.mark.parametrize(
     "adapter_type,wire_key",
-    [(OpenAiAdapter, "messages"), (AnthropicAdapter, "messages"), (ResponsesAdapter, "input")],
+    [(OpenAiAdapter, "messages"), (AnthropicAdapter, "messages")],
 )
 def test_platform_multimodal_content(clients, adapter_type, wire_key):
     """平台图文块正确转换，图片与文字均不可丢失。"""
@@ -712,7 +566,6 @@ def test_request_rejects_credentials_before_header(options):
     "adapter_type,events",
     [
         (AnthropicAdapter, anthropic_events),
-        (ResponsesAdapter, responses_events),
     ],
 )
 def test_provider_chunks_feed_real_attempt_and_next_request(clients, adapter_type, events):
@@ -747,7 +600,7 @@ def test_provider_chunks_feed_real_attempt_and_next_request(clients, adapter_typ
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("adapter_type", [OpenAiAdapter, AnthropicAdapter, ResponsesAdapter])
+@pytest.mark.parametrize("adapter_type", [OpenAiAdapter, AnthropicAdapter])
 @pytest.mark.parametrize("malformed", [False, True])
 def test_attempt_fact_projection_preserves_source_arguments(clients, adapter_type, malformed):
     """真实 Attempt 与事实投影联调，验证正常/坏 JSON 的 args/raw 及状态往返。"""
@@ -768,13 +621,6 @@ def test_attempt_fact_projection_preserves_source_arguments(clients, adapter_typ
         ]
     elif adapter_type is AnthropicAdapter:
         events = anthropic_events(broken_args=malformed)
-    else:
-        items = response_items()
-        items[1]["arguments"] = raw
-        events = responses_events(items)
-        if malformed:
-            events[5]["delta"] = ""
-
     async def scenario():
         adapter = adapter_type(api_key="unit")
         client = clients[-1]
@@ -829,17 +675,12 @@ def test_attempt_fact_projection_preserves_source_arguments(clients, adapter_typ
             assert tool[0]["input"] == ({} if malformed else {"path": "a"})
             if malformed:
                 assert wire["messages"][2]["content"][0]["is_error"]
-        else:
-            tools = [item for item in wire["input"] if item.get("type") == "function_call"]
-            assert len(tools) == 1
-            assert tools[0]["arguments"] == raw
-
     asyncio.run(scenario())
 
 
 @pytest.mark.parametrize(
     "adapter_type,events",
-    [(AnthropicAdapter, anthropic_events), (ResponsesAdapter, responses_events)],
+    [(AnthropicAdapter, anthropic_events)],
 )
 def test_attempt_rejects_done_state_different_from_item_end(clients, adapter_type, events):
     """Done 和 ItemEnd 是同一完成事实，二者被篡改成不同快照时必须拒绝。"""
@@ -856,7 +697,7 @@ def test_attempt_rejects_done_state_different_from_item_end(clients, adapter_typ
     assert attempt.protocol_errors()
 
 
-@pytest.mark.parametrize("adapter_type", [OpenAiAdapter, AnthropicAdapter, ResponsesAdapter])
+@pytest.mark.parametrize("adapter_type", [OpenAiAdapter, AnthropicAdapter])
 @pytest.mark.parametrize(
     "messages",
     [

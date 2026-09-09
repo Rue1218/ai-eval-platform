@@ -2,10 +2,10 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.2 |
+| 文档版本 | V1.3 |
 | 状态 | 目标数据模型，待按里程碑以 Alembic 落地 |
 | 数据库 | PostgreSQL 16 |
-| 最近修订 | 2026-09-09：追加 AgentLoop v2 持久事实、会话事件流、写者状态及工作区执行隔离；已有设计阶段不据此改为已验收 |
+| 最近修订 | 2026-09-09：追加 AgentLoop v2 持久事实、会话事件流、写者状态及工作区执行隔离；协议档收敛为 OpenAI Chat 与 Anthropic Messages。已有设计阶段不据此改为已验收 |
 | 适用范围 | 平台 V1.0 |
 
 ## 1. 文档定位与裁决
@@ -69,7 +69,7 @@ erDiagram
 | 表 | 主要字段 | 约束与说明 | 最早批次 |
 | --- | --- | --- | --- |
 | `users` | `id`、`username`、`display_name`、`email`、`password_hash`、`role`、`must_change_password`、`disabled`、`last_login_at`、`last_login_ip`、`auth_version`、`created_at`、`updated_at` | `username` 唯一；`email` 非空时唯一；`role` 固定为 `member`，不再使用旧多角色含义；停用最后一个正常账号须由服务层在事务内拒绝。`auth_version` 用于改密或停用后统一失效旧登录态。 | B1 |
-| `protocol_profiles` | `id`、`name`、`protocol`、`base_url`、`model`、`usages`、`anthropic_version`、`encrypted_key`、`created_by`、`created_at`、`updated_at` | `protocol` 限定 `openai_chat`、`openai_responses`、`anthropic_messages`；`usages` 为 `jsonb` 数组，如 `target`、`judge`、`agent`。主模型字段是兼容快照，Embedding / Reranker 连接参数不新增数据库列，三者运行时均以按 profile 隔离的环境文件为准；`encrypted_key` 仅用于旧数据迁移，新 CRUD 永远为空。 | B1 |
+| `protocol_profiles` | `id`、`name`、`protocol`、`base_url`、`model`、`usages`、`anthropic_version`、`encrypted_key`、`created_by`、`created_at`、`updated_at` | `protocol` 限定 `openai_chat`、`anthropic_messages`；`usages` 为 `jsonb` 数组，如 `target`、`judge`、`agent`。主模型字段是兼容快照，Embedding / Reranker 连接参数不新增数据库列，三者运行时均以按 profile 隔离的环境文件为准；`encrypted_key` 仅用于旧数据迁移，新 CRUD 永远为空。 | B1 |
 | `settings` | `key`、`value`、`encrypted_value`、`updated_by`、`updated_at` | `key` 主键；`value` 存非敏感配置，如并发、预算、Agent profile、通知开关和阈值；`encrypted_value` 仅存 Webhook token 等写入型敏感项。白名单使用独立表，不塞入本表。 | B1/B5 |
 | `files` | `id`、`filename`、`content_type`、`size_bytes`、`sha256`、`storage_path`、`kind`、`uploaded_by`、`created_at` | 文件二进制位于 `./data/files/{id}`，数据库只存元数据和路径；`sha256` 建普通索引用于去重核验，不以文件名判断同一内容。 | B1 |
 | `audit_logs` | `id`、`actor_id`、`action`、`target_type`、`target_id`、`detail`、`ip`、`ts` | 追加写入，不更新、不删除；`detail` 必须经脱敏。至少覆盖登录失败、Key 变更、基线冻结/解冻、白名单变更、`prod` 会签/发压、账号状态变更。 | B1 |

@@ -1,4 +1,4 @@
-"""三协议共享的纯转换与资源关闭，不引入图、数据库或应用配置。"""
+"""两类协议共享的纯转换与资源关闭，不引入图、数据库或应用配置。"""
 
 import inspect
 import json
@@ -44,7 +44,7 @@ def normalize_base_url(base_url: str, protocol: str) -> str:
     ):
         raise LlmRequestError("模型服务地址不合法", code="model_config")
     path = parts.path.rstrip("/")
-    for suffix in ("/chat/completions", "/responses", "/messages", "/models"):
+    for suffix in ("/chat/completions", "/messages", "/models"):
         if path.endswith(suffix):
             path = path[: -len(suffix)]
             break
@@ -111,10 +111,7 @@ def content_parts(content: Any, protocol: str, *, role: str = "user") -> Any:
         if not isinstance(part, dict):
             raise invalid("图文块结构不合法")
         if part.get("type") == "text" and isinstance(part.get("text"), str):
-            kind = "text"
-            if protocol == "openai_responses":
-                kind = "output_text" if role == "assistant" else "input_text"
-            result.append({"type": kind, "text": part["text"]})
+            result.append({"type": "text", "text": part["text"]})
         elif part.get("type") == "image_url":
             image = part.get("image_url", {})
             url = image.get("url") if isinstance(image, dict) else None
@@ -133,14 +130,6 @@ def content_parts(content: Any, protocol: str, *, role: str = "user") -> Any:
                 else:
                     source = {"type": "url", "url": url}
                 result.append({"type": "image", "source": source})
-            elif protocol == "openai_responses":
-                result.append(
-                    {
-                        "type": "input_image",
-                        "image_url": url,
-                        **({"detail": image["detail"]} if "detail" in image else {}),
-                    }
-                )
             else:
                 result.append({"type": "image_url", "image_url": deepcopy(image)})
         else:

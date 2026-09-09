@@ -10,7 +10,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Literal
 
-ProtocolName = Literal["openai_chat", "openai_responses", "anthropic_messages"]
+ProtocolName = Literal["openai_chat", "anthropic_messages"]
 ReasoningEffort = Literal["low", "medium", "high", "xhigh", "max"]
 ToolCallMode = Literal["native", "legacy"]
 # 流式取消回调；仅经 RunnableConfig.configurable 注入（O-12 迁移），不入任何 State

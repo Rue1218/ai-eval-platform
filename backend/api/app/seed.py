@@ -38,7 +38,7 @@ def _hours_ago(h: float) -> datetime:
 
 
 def _seed_profiles(db: Session, admin: User) -> list[ProtocolProfile]:
-    """三协议档各一：覆盖 benchmark / agent / judge 用途，凭据留空待页面配置。"""
+    """两类协议档各一：覆盖 benchmark / agent / judge 用途，凭据留空待页面配置。"""
     if db.query(ProtocolProfile).count():
         return []
     profiles = [
@@ -48,14 +48,6 @@ def _seed_profiles(db: Session, admin: User) -> list[ProtocolProfile]:
             base_url="https://api.openai.com/v1",
             model="gpt-4o",
             usages=["benchmark", "agent"],
-            created_by=admin.id,
-        ),
-        ProtocolProfile(
-            name="GPT-4.1（OpenAI Responses）",
-            protocol="openai_responses",
-            base_url="https://api.openai.com/v1",
-            model="gpt-4.1",
-            usages=["benchmark"],
             created_by=admin.id,
         ),
         ProtocolProfile(
@@ -100,7 +92,7 @@ def _seed_datasets(db: Session, admin: User) -> Dataset | None:
     db.flush()
     rows = [
         ("如何修改登录密码？", "在右上角点击个人头像，选择「修改密码」，按提示完成短信验证后设置新密码。", "账户安全", "账户,密码", "简单"),
-        ("平台支持哪些模型协议？", "支持 OpenAI Chat、OpenAI Responses 与 Anthropic Messages 三种协议档。", "协议配置", "协议", "简单"),
+        ("平台支持哪些模型协议？", "支持 OpenAI Chat 与 Anthropic Messages 两种协议档。", "协议配置", "协议", "简单"),
         ("评测任务如何取消？", "在任务中心选择进行中的任务，点击「取消」；评测类任务在当前样本结束后停止，压测任务立即停发。", "任务管理", "任务,取消", "中等"),
         ("什么是先评后压？", "质量评测成功且勾选压测后，系统自动派生共享压测子任务，用于定位 SLA 拐点。", "压测", "压测,流程", "中等"),
         ("数据集支持什么格式上传？", "支持 UTF-8 编码的 JSONL 或 CSV 文件，列需包含 question、reference，context 可选；单文件不超过 50MB、2 万行。", "数据集", "数据集,上传", "简单"),

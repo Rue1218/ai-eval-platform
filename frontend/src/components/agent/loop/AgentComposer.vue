@@ -50,7 +50,7 @@ const props = defineProps<{ draft: LoopDraft; ui: LoopUi | null; profile: LoopPr
 const emit = defineEmits<{ submit: []; stop: []; retry: []; effort: [Effort]; model: [string] }>()
 const picker = ref<HTMLInputElement>(), input = ref<HTMLTextAreaElement>(), notice = ref(''), modelOpen = ref(false)
 const sendLabel = computed(() => props.busy ? (props.cancelling ? '正在取消' : '停止执行') : props.draft.submitting ? '正在提交' : '发送')
-const protocolLabels: Record<string, string> = { openai_chat: 'OpenAI 兼容', anthropic_messages: 'Anthropic', gemini_generate: 'Gemini' }
+const protocolLabels: Record<string, string> = { openai_chat: 'OpenAI 兼容', anthropic_messages: 'Anthropic' }
 /** IME 选词不提交；运行中的 Enter 保留下一轮草稿。 */
 function keydown(event: KeyboardEvent) { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229) { event.preventDefault(); if (!props.busy && props.ready && props.draft.content.trim() && !props.draft.submitting && !props.draft.files.some(f => f.uploading || f.error)) emit('submit') } }
 function resize() { const el = input.value; if (el) { el.style.height = 'auto'; el.style.height = Math.min(190, Math.max(42, el.scrollHeight)) + 'px' } }

@@ -48,15 +48,6 @@ export const MOCK_PROFILES: Profile[] = [
     created_at: '2026-08-01T08:00:00Z',
   },
   {
-    id: 'p-judge',
-    name: 'judge-1',
-    protocol: 'openai_responses',
-    base_url: 'https://api.openai.com/v1',
-    model: 'o4',
-    usages: ['judge'],
-    created_at: '2026-08-03T10:00:00Z',
-  },
-  {
     id: 'p-ragsvc',
     name: 'rag-客服外挂',
     protocol: 'openai_chat',

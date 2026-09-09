@@ -1,4 +1,4 @@
-"""三协议档的安全 CRUD 和真实连通性检查接口。"""
+"""两类协议档的安全 CRUD 和真实连通性检查接口。"""
 
 import logging
 
@@ -475,7 +475,7 @@ def check_profile(
 ):
     """向目标协议端点发送最小真实探活请求并返回脱敏结果。
 
-    复用三协议统一适配器：上游 4xx/5xx → ``UPSTREAM``、超时 → ``TIMEOUT``、
+    复用两类协议统一适配器：上游 4xx/5xx → ``UPSTREAM``、超时 → ``TIMEOUT``、
     结构异常 → ``UPSTREAM``；探活仅验证连通与鉴权，不因空文本判定失败。
     """
     profile = db.query(ProtocolProfile).filter(ProtocolProfile.id == profile_id).first()

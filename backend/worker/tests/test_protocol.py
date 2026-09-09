@@ -1,4 +1,4 @@
-"""Worker 三协议调用器的协议地址规范化回归测试。"""
+"""Worker 两类协议调用器的协议地址规范化回归测试。"""
 
 import pytest
 
@@ -9,11 +9,6 @@ from app import protocol
     "protocol_name,payload,endpoint",
     [
         ("openai_chat", {"choices": [{"message": {"content": "ok"}}]}, "/v1/chat/completions"),
-        (
-            "openai_responses",
-            {"output": [{"content": [{"type": "output_text", "text": "ok"}]}]},
-            "/v1/responses",
-        ),
         (
             "anthropic_messages",
             {"content": [{"type": "text", "text": "ok"}]},

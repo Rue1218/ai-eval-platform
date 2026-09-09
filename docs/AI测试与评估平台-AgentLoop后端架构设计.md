@@ -4,7 +4,7 @@
 >
 > 用户目标：完整采用 `deepseek-harness-py` 当前已实现的 Agent Loop 及其运行时、模型适配、消息、事件、审批、取消和恢复能力；工具复用平台现有实现，重写字段与接缝并完成兼容联调。核心验收是模型—工具—结果回填—再次模型调用的完整循环。
 >
-> V0.1–V0.3 为架构审查阶段。V0.4 已按用户授权实现后端代码、API v2 契约和 Alembic 迁移；V0.5 收敛新会话入口、协议档选择和前端输入栏；V0.6 修复审查发现的恢复、提示词、评测档权限与 CI 覆盖缺口。下文保留完整目标与验收标准，实际文件、启用步骤和验证边界见文末及《AgentLoop后端实施记录》，不能将验收矩阵视为全部验收通过。
+> V0.1–V0.3 为架构审查阶段。V0.4 已按用户授权实现后端代码、API v2 契约和 Alembic 迁移；V0.5 收敛新会话入口、协议档选择和前端输入栏；V0.6 修复审查发现的恢复、提示词、评测档权限与 CI 覆盖缺口；V0.7 删除 OpenAI Responses 兼容面，仅保留两类协议。下文保留完整目标与验收标准，实际文件、启用步骤和验证边界见文末及《AgentLoop后端实施记录》，不能将验收矩阵视为全部验收通过。
 >
 > V0.2 修订：按审查修复四项问题——WS 改为独立 v2 协议与会话事件流；补齐供应商内容块/协议状态的采集、持久化和回传；分离回合结算与工作区执行隔离；区分普通工具失败、取消、禁止派发和调度基础设施异常。同步架构图、存储、阶段与验收矩阵。
 >
@@ -67,7 +67,7 @@
 | D4 | 模型可见正文与浏览器安全投影分开保存、授权和读取 | 下一轮请求能准确重建；不能用 ToolCard 摘要替代真实工具结果 |
 | D5 | 迁入源调度语义，执行仍走平台工具与沙箱 | 不把源项目裸 shell 引入 API 容器 |
 | D6 | 新 loop 使用原生 tool calls，不解析 react.v1 文本执行工具 | 避免重复执行、模型普通 JSON 被误当成工具调用 |
-| D7 | 模型协议保留平台三协议面，增加统一异步 chunk 契约 | 源项目的两类 SDK 适配器不覆盖平台已有 Responses 和图文能力 |
+| D7 | 模型协议保留 OpenAI Chat 与 Anthropic Messages 两类协议面，增加统一异步 chunk 契约 | 源项目的两类 SDK 适配器可直接覆盖保留协议与图文能力 |
 | D8 | 新 loop 审批由 Runtime 等待与结算；旧 H5 图恢复只服务旧引擎 | 不让 Future 等待和 LangGraph interrupt 同时拥有同一个审批 |
 | D9 | 引擎绑定到会话；切换只发生在空闲边界 | 旧会话、活动审批、旧 checkpoint 不直接注入新 AgentState |
 | D10 | 全部迁入能力必须验收；阶段划分只表示实施顺序 | 单次 tool_call 成功、能输出回答或 fake 测试通过，均不足以宣称完整迁入 |
@@ -247,16 +247,14 @@ API Key 在 resolver 的运行时凭据对象中，不能进入可持久化 LlmR
 
 ProviderItemEnd 只接受结构合法、大小受限的完整项；item 未闭合、必要签名缺失或引用不一致时不得提交为可回传成功状态。reasoning 文本只用于语义展示，不能代替供应商原始块。取消或失败时，未完成的 protocol_state 不能进入下一轮；安全正文前缀可按 §5.4 保存，其未完成工具与状态一并剔除，诊断残片仅留受限 attempt 记录。
 
-### 6.2 三协议分工
+### 6.2 两类协议分工
 
 | 协议 | 迁入方式 | 必须保留/补齐 |
 | :--- | :--- | :--- |
 | openai_chat + DeepSeek | 以源 AsyncOpenAI 适配器为基础 | reasoning_content 回传、usage-only 尾块、索引工具增量、错误分类 |
 | openai_chat + OpenAI/兼容端点 | 源异步流 + 平台协议档解析 | 超时、实际参数差异、图文、模型能力、base_url 规范化 |
 | anthropic_messages | 以源 AsyncAnthropic 适配器为基础 | tool_use/tool_result 连续回填、错误结果；平台已有 thinking/cache/system 分段能力 |
-| openai_responses | 将平台现有实现迁到相同异步 chunk 接口 | function_call/output、输出 item 顺序、reasoning summary、终止原因、usage 和图文 |
-
-Responses 的必要非文本 item、Anthropic 等协议的 thinking/signature 及其他必要回传数据，均通过 §6.1 的 ProtocolState 保存。每个适配器按其实际协议需要登记必需字段；不是给所有模型统一添加 signature。不得将不透明块塞入用户正文或跨协议直接复用。
+Anthropic 等协议的 thinking/signature 及其他必要回传数据，均通过 §6.1 的 ProtocolState 保存。每个适配器按其实际协议需要登记必需字段；不是给所有模型统一添加 signature。不得将不透明块塞入用户正文或跨协议直接复用。
 
 回传时，适配器按保存的 item 顺序组装原始块与规范工具结果，同一 tool call 只能出现一次。compatibility_key 包含协议、供应商及模型兼容边界；切换到不兼容协议/模型时，先在空闲边界拒绝原样携带并给出明确说明，显式建立不含不透明块的有效迁移上下文后才开始新 turn。不能静默删状态后声称原请求可精确重建，也不能将其他供应商签名透传。A19 使用带必要状态的 fake 协议严格验证，A15 再做真实档回归。
 
@@ -381,7 +379,7 @@ Responses 的必要非文本 item、Anthropic 等协议的 thinking/signature �
 
 ### 6.9 最小实施切面与删除前提
 
-LLM 部分的首个可交付切面为：新增规范请求/chunk/异常类型 → resolver → 三协议异步 adapter → 真实 AssistantAttempt → 一个真实平台工具 → 第二次模型请求。与 B1 的事实存储共同验证，不能仅以 adapter 单元测试通过宣布循环迁入。新类型可暂与 legacy 类型共存在 contracts.py；不强迫所有业务生成接口同批换签名。
+LLM 部分的首个可交付切面为：新增规范请求/chunk/异常类型 → resolver → 两类协议异步 adapter → 真实 AssistantAttempt → 一个真实平台工具 → 第二次模型请求。与 B1 的事实存储共同验证，不能仅以 adapter 单元测试通过宣布循环迁入。新类型可暂与 legacy 类型共存在 contracts.py；不强迫所有业务生成接口同批换签名。
 
 删除旧实现前须逐个满足：
 
@@ -951,7 +949,7 @@ trace 采用独立授权和 after_seq：由 agent_events 生成脱敏深拷贝�
 | B3 工具闭环 | 平台工具 bridge、字段校验、并行、完整结果回填 | A06/A09/A21，真实临时工作区 read/edit/read 与四类失败分支 |
 | B4 人机交互与取消 | 审批/澄清/always、runner 取消、guard 与统一结算 | A10/A11/A12/A20，Linux runner、跨会话隔离与重启演练 |
 | B5 平台业务联调 | task.create 确认入队、Worker 桥、WS v2/trace/回放 | A13/A16/A17/A22，新协议完整平台链路 |
-| B6 灰度与交付 | v2 前端、真实三协议闭环、旧会话和回滚 | A14–A26，所有阻断项清零 |
+| B6 灰度与交付 | v2 前端、真实两类协议闭环、旧会话和回滚 | A14–A26，所有阻断项清零 |
 
 B2 或 B3 只能称中间阶段；B4 的取消/恢复、B5 的业务与事件联调不能以“后续优化”排除后宣布全部功能迁入。
 
@@ -984,7 +982,7 @@ B2 或 B3 只能称中间阶段；B4 的取消/恢复、B5 的业务与事件联
 | A23 | 源 args/arguments_raw、旧 arguments、parse_error、工具 schema 和六类结果往返 | 新 codec 不丢参数/调用；坏 JSON 不执行且留下结果；工具 ID/正文经 Projector 和各协议回填一致，不默认成空对象 |
 | A24 | SDK 建连/首 token 等待/两 chunk 间取消，401/429/EOF/usage 尾块 | 原生异步流可中断关闭；本地取消不重试；无 finish 不成功；图能结构化区分可重试性；用量按 attempt 保留并去重 |
 | A25 | 旧生成端点、模型发现、Workflow/Worker 与新引擎共存，灰度/熔断触发 | 标题/数据集/用例和评测职责保留；新回合明确放行/拒绝；进行中不静默换协议/摘 tools/降级旧图；旧 metrics 读取仍兼容 |
-| A26 | 三协议 fake 完整链：v2 submit → 模型碎片 → 真实工具 → 第二次请求 → 终态/重连 | 不 mock 掉 Runtime/Attempt/Projector/ToolBridge；断言下一请求 wire 的参数、调用 ID、结果和 opaque state，并与持久事实/WS 投影关联一致；真实档另通过 A14/A15 |
+| A26 | 两类协议 fake 完整链：v2 submit → 模型碎片 → 真实工具 → 第二次请求 → 终态/重连 | 不 mock 掉 Runtime/Attempt/Projector/ToolBridge；断言下一请求 wire 的参数、调用 ID、结果和 opaque state，并与持久事实/WS 投影关联一致；真实档另通过 A14/A15 |
 
 ### 14.3 证据与门禁
 
@@ -997,7 +995,7 @@ B2 或 B3 只能称中间阶段；B4 的取消/恢复、B5 的业务与事件联
 - 真实凭据、runner 或数据库不可用时记录“未验证/环境阻断”，不能以 fake 通过代替。
 - 最终提交前按 AGENTS.md 跑对应门禁；合并、部署、生产验收分别报告，不能互相替代。
 
-**完成定义**：源项目所有已实现能力都有平台对应实现与通过证据；选定工具的模型字段、执行入参、结果正文、事件和下一次模型请求一致；取消/拒绝/重启仍保持合法历史；三协议和业务任务链路联调通过；没有双循环、双调度或第二模型历史来源。
+**完成定义**：源项目所有已实现能力都有平台对应实现与通过证据；选定工具的模型字段、执行入参、结果正文、事件和下一次模型请求一致；取消/拒绝/重启仍保持合法历史；两类协议和业务任务链路联调通过；没有双循环、双调度或第二模型历史来源。
 
 V0.2 额外阻断条件：WS v2 必须完成命令/事件/回放重构；protocol_state 必须可持久化并回传；outcome_unknown 不得释放冲突 scope；普通单项失败必须保持源调度行为。A19–A22 未通过不得标记上述修复已实施。
 
@@ -1012,7 +1010,7 @@ V0.3 额外阻断条件：A23/A24 必须证明新 LLM 路径没有字段丢失�
 | tool_result 主要 ok/摘要 | 增加六态和模型/展示双投影 | API、ToolDef/bridge、前端计划 |
 | 审批用图 interrupt/resume | 新引擎 Runtime 等待；重启结算旧 turn | API、pending_confirm、H5 兼容说明 |
 | Workflow W6 唯一创建任务 | 新 loop 通过同一业务服务受确认创建 | Workflow/worker_bridge/工具白名单 |
-| 同步适配器聚合流 | 异步 chunk + attempt；保留三协议 | llm contracts、协议档、适配器测试 |
+| 同步适配器聚合流 | 异步 chunk + attempt；保留两类协议 | llm contracts、协议档、适配器测试 |
 | WS 路由负责事实落库 | Runtime/Store 与 session_stream 同事务提交，WS 订阅 | ws_v2、Hub、shared event vocab |
 | 旧公共头与事件名 | 独立 v2 命令/信封/生命周期/cursor，legacy 隔离 | API、网关、前端改造计划 |
 | UI assistant_message 可视为结束 | v2 仅 turn.end 结束 turn | API 与前端改造计划 |
@@ -1066,7 +1064,7 @@ V0.1–V0.3 只修订设计。V0.4 的实际代码清单如下；§13 保留目�
 | :--- | :--- |
 | `backend/api/app/agent/{loop,runtime,stream,loop_settings}.py` | 源七节点循环、attempt、单会话回合与恢复 |
 | `backend/api/app/agent/{loop_service,loop_wiring}.py` | 平台授权、协议档、幂等命令、审批/澄清/业务确认与资源生命周期 |
-| `backend/api/app/llm/loop_contracts.py`、`resolver.py`、`providers/` | 源字段契约、配置解析、异步 OpenAI Chat/Responses 与 Anthropic 适配 |
+| `backend/api/app/llm/loop_contracts.py`、`resolver.py`、`providers/` | 源字段契约、配置解析、异步 OpenAI Chat 与 Anthropic 适配 |
 | `backend/api/app/harness/execution/{loop_bridge,loop_tools,scheduler,approval,loop_runner}.py` | 平台工具选择与映射、并行屏障、审批和可信 Runner 客户端 |
 | `backend/api/app/harness/execution/{task_tools,native,workspace_guard}.py`、`mcp/manager.py` | 业务准备/入队复用、跨旧新路径执行隔离、MCP 取消后 drain |
 | `backend/api/app/harness/memory/{agent_events,agent_messages,agent_recovery}.py` | PG 原始事实、投影、写者占用、Worker 桥、恢复及消息重建 |
@@ -1088,3 +1086,14 @@ V0.6 的审查修复文件如下：
 | `backend/api/app/harness/execution/task_tools.py` | 统一 Agent `task.create` 与 REST 的共享协议档使用口径 |
 | `backend/api/tests/test_loop_{wiring,integration_pg,tools_task_prepare}.py`、`frontend/tests/agentLoop.test.mjs` | 覆盖恢复锁竞争、恢复后续聊、overlay、共享评测档和前端 busy 清理 |
 | `.github/workflows/ci.yml` | 配置三组 PostgreSQL Loop 测试变量，并执行独立 Runner 回归 |
+
+V0.7 删除 OpenAI Responses 协议及其适配器；`protocol_profiles` 中的该类档位、
+对应受控环境凭据和指向它的默认 Agent 设置在迁移时一并清理。历史任务和报告的
+JSON 快照不改写，已删除协议的后续调用统一返回 `VALIDATION`。
+
+| 实际文件（相对项目根） | 作用 |
+| :--- | :--- |
+| `backend/api/app/{adapters,schemas,seed}.py`、`app/llm/{contracts,resolver,providers/}` | 只接受并装配 OpenAI Chat、Anthropic Messages；删除 Responses adapter |
+| `backend/api/app/agent/{loop_wiring,title}.py`、`backend/worker/app/{protocol,stress}.py` | 删除 AgentLoop、评测和压测的 Responses 分支 |
+| `backend/shared/models.py`、迁移 `01b89a06eb4b` | 收紧数据库协议约束，在线迁移同步删除档位与受控环境凭据 |
+| `frontend/src/{api,components/modals}` | 协议档类型、模拟档和选择菜单仅展示两类协议 |

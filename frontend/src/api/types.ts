@@ -51,7 +51,7 @@ export interface WsTicketOut {
 }
 
 // 协议类型
-export type ProtocolType = 'openai_chat' | 'openai_responses' | 'anthropic_messages'
+export type ProtocolType = 'openai_chat' | 'anthropic_messages'
 
 // Agent 思考强度；具体模型不支持某档位时由上游返回统一 UPSTREAM 错误。
 export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'

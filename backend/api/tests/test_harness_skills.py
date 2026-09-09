@@ -37,7 +37,7 @@ def test_skill_hints_only_name_and_summary_no_full_doc() -> None:
     """K-A1：常驻 Hint 只有名称 + 一句话，不含完整工作流正文。"""
     joined = "\n".join(skill_hint_lines())
     assert "基准评测" in joined
-    assert "三协议调用" not in joined
+    assert "两类协议调用" not in joined
     assert "六策略 LLM" not in joined
     assert "kind=stress" not in joined
     assert "【当前技能工作流】" not in joined
@@ -57,11 +57,11 @@ def test_adjacent_turns_skill_injection_no_pollution() -> None:
         skill_workflow=load_skill_workflow("skill-testcase"),
         messages=[{"role": "user", "content": "用例"}],
     )
-    assert "三协议调用" in turn_a["system"]
+    assert "两类协议调用" in turn_a["system"]
     assert "六策略 LLM" not in turn_a["system"]
     assert "用例生成" not in turn_a["system"]
     assert "六策略 LLM" in turn_b["system"]
-    assert "三协议调用" not in turn_b["system"]
+    assert "两类协议调用" not in turn_b["system"]
     assert "基准评测" not in turn_b["system"]
     catalog = assemble(
         system="Persona",
@@ -69,7 +69,7 @@ def test_adjacent_turns_skill_injection_no_pollution() -> None:
         messages=[{"role": "user", "content": "你好"}],
     )
     assert "【当前技能工作流】" not in catalog["system"]
-    assert "三协议调用" not in catalog["system"]
+    assert "两类协议调用" not in catalog["system"]
 
 
 def test_skill_kind_map_one_to_one() -> None:

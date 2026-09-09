@@ -52,11 +52,8 @@ def resolve_options(request: LlmRequest, provider: str, protocol: str) -> dict:
         if not enabled and model.startswith(("o1", "o3")):
             raise UnsupportedReasoningEffortError(provider, effort)
         options["omit_temperature"] = True
-        if protocol == "openai_responses":
-            options["reasoning"] = {"effort": selected, **({"summary": "auto"} if enabled else {})}
-        else:
-            options["reasoning_effort"] = selected
-            options["max_tokens_parameter"] = "max_completion_tokens"
+        options["reasoning_effort"] = selected
+        options["max_tokens_parameter"] = "max_completion_tokens"
     elif provider in {"mimo", "xiaomimimo"} and protocol == "openai_chat":
         options["thinking"] = {"type": "enabled" if enabled else "disabled"}
     elif provider == "google" and model.startswith("gemini") and protocol == "openai_chat":
@@ -84,11 +81,7 @@ def request_options(request: LlmRequest, provider: str, protocol: str) -> dict:
         result["timeout"] = request.timeout_s
     if request.temperature is not None and not resolved.get("omit_temperature"):
         result["temperature"] = request.temperature
-    token_key = (
-        "max_output_tokens"
-        if protocol == "openai_responses"
-        else resolved.get("max_tokens_parameter", "max_tokens")
-    )
+    token_key = resolved.get("max_tokens_parameter", "max_tokens")
     result[token_key] = request.max_tokens
     if protocol == "anthropic_messages":
         if "thinking" in resolved:
@@ -97,9 +90,8 @@ def request_options(request: LlmRequest, provider: str, protocol: str) -> dict:
         if version:
             result["extra_headers"] = {"anthropic-version": version}
     else:
-        for key in ("reasoning", "reasoning_effort"):
-            if key in resolved:
-                result[key] = resolved[key]
+        if "reasoning_effort" in resolved:
+            result["reasoning_effort"] = resolved["reasoning_effort"]
         extra = {}
         if "thinking" in resolved:
             extra["thinking"] = resolved["thinking"]

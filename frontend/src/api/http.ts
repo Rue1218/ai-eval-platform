@@ -635,7 +635,7 @@ export const api = {
         if (params.pending_complete) return mockStore.pendingRows
         return [
           { row_no: 1, question: '如何修改密码？', reference: '在右上角点击个人头像并选择修改密码', context: null },
-          { row_no: 2, question: '平台支持哪些协议？', reference: '支持 OpenAI Chat、OpenAI Responses 和 Anthropic Messages', context: null },
+          { row_no: 2, question: '平台支持哪些协议？', reference: '支持 OpenAI Chat 和 Anthropic Messages', context: null },
           ...mockStore.pendingRows,
         ]
       }
@@ -996,7 +996,7 @@ export const api = {
           query: queryPayload.query,
           mode: queryPayload.mode || 'hybrid',
           items: [
-            { chunk_id: 'd-01#c03', doc_name: 'product-manual.pdf', text: 'AI 测试与评估平台产品手册第一章：评测引擎与三协议调度规范...', similarity: 0.89, hit: true },
+            { chunk_id: 'd-01#c03', doc_name: 'product-manual.pdf', text: 'AI 测试与评估平台产品手册第一章：评测引擎与两类协议调度规范...', similarity: 0.89, hit: true },
             { chunk_id: 'd-02#c11', doc_name: 'faq-2026.md', text: 'FAQ 常见问题第 12 条：关于黄金 QA 集制作及 Hit Rate 指标定义...', similarity: 0.82, hit: false },
           ],
           // 重排后最终序，供「重排对比」右列渲染排名位移。
@@ -1013,7 +1013,7 @@ export const api = {
             query: queryPayload.query,
             mode: queryPayload.mode || 'hybrid',
             items: [
-              { chunk_id: 'd-01#c03', doc_name: 'product-manual.pdf', text: 'AI 测试与评估平台产品手册第一章：评测引擎与三协议调度规范...', similarity: 0.89, hit: true },
+              { chunk_id: 'd-01#c03', doc_name: 'product-manual.pdf', text: 'AI 测试与评估平台产品手册第一章：评测引擎与两类协议调度规范...', similarity: 0.89, hit: true },
               { chunk_id: 'd-02#c11', doc_name: 'faq-2026.md', text: 'FAQ 常见问题第 12 条：关于黄金 QA 集制作及 Hit Rate 指标定义...', similarity: 0.82, hit: false },
             ],
             // 重排后最终序，供「重排对比」右列渲染排名位移。

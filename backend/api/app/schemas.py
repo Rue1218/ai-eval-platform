@@ -77,10 +77,10 @@ class UserOut(OrmOut):
 
 
 class ProfileCreate(ApiModel):
-    """创建协议档时的可写字段；三类模型的 API Key 仅在本模型出现。"""
+    """创建协议档时的可写字段；两类模型的 API Key 仅在本模型出现。"""
 
     name: str = Field(min_length=1, max_length=128)
-    protocol: Literal["openai_chat", "openai_responses", "anthropic_messages"]
+    protocol: Literal["openai_chat", "anthropic_messages"]
     base_url: str = Field(min_length=1, max_length=1024)
     model: str = Field(min_length=1, max_length=256)
     api_key: str | None = Field(default=None, max_length=4096)
@@ -120,10 +120,10 @@ class ProfileCreate(ApiModel):
 
 
 class ProfileUpdate(ApiModel):
-    """更新协议档；空的三类 API Key 均表示不修改既有密文。"""
+    """更新协议档；空的两类 API Key 均表示不修改既有密文。"""
 
     name: str | None = Field(default=None, min_length=1, max_length=128)
-    protocol: Literal["openai_chat", "openai_responses", "anthropic_messages"] | None = None
+    protocol: Literal["openai_chat", "anthropic_messages"] | None = None
     base_url: str | None = Field(default=None, min_length=1, max_length=1024)
     model: str | None = Field(default=None, min_length=1, max_length=256)
     api_key: str | None = Field(default=None, max_length=4096)
@@ -187,7 +187,7 @@ class ProfileOut(OrmOut):
 class FetchModelsIn(ApiModel):
     """远程获取模型列表请求入参。"""
 
-    protocol: Literal["openai_chat", "openai_responses", "anthropic_messages"] = "openai_chat"
+    protocol: Literal["openai_chat", "anthropic_messages"] = "openai_chat"
     base_url: str | None = Field(default=None, max_length=1024)
     api_key: str | None = Field(default=None, max_length=4096)
     profile_id: str | None = None

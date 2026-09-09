@@ -268,7 +268,7 @@ def _content_type(stored: StoredFile) -> str:
 
 
 def _image_part(stored: StoredFile) -> dict[str, Any] | None:
-    """将小型图片转换成内部图片内容块，交由适配器转换为三协议格式。"""
+    """将小型图片转换成内部图片内容块，交由适配器转换为两类协议格式。"""
     path = Path(stored.storage_path)
     if not path.is_file() or int(stored.size_bytes) > MAX_IMAGE_BYTES:
         return None

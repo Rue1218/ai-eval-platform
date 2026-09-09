@@ -83,7 +83,7 @@ def _run_task(task_id: str) -> None:
             return
 
         if task.kind == "benchmark":
-            # M2 真实执行：三协议调用 + 规则评分 + 预算熔断 + 断点续跑；
+            # M2 真实执行：两类协议调用 + 规则评分 + 预算熔断 + 断点续跑；
             # 执行器自管数据库会话与任务终态，这里提前释放本层会话
             db.close()
             logger.info("task %s (benchmark) dispatch to real executor", task_id)

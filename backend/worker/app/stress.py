@@ -137,12 +137,7 @@ def _build_probe(profile: ProtocolProfile) -> tuple[str, str, dict[str, str], di
     base = _service_base_url(base_url)
     headers = {"Content-Type": "application/json"}
     ping = [{"role": "user", "content": "ping"}]
-    if profile.protocol == "openai_responses":
-        url = f"{base}/v1/responses"
-        body: dict[str, Any] = {"model": model, "input": ping, "max_output_tokens": 8}
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
-    elif profile.protocol == "anthropic_messages":
+    if profile.protocol == "anthropic_messages":
         url = f"{base}/v1/messages"
         body = {"model": model, "messages": ping, "max_tokens": 8}
         if api_key:

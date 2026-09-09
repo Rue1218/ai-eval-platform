@@ -60,7 +60,7 @@ def test_assemble_segments_with_workflow_keeps_order_and_cacheable() -> None:
     segments = assemble_segments(
         system="P",
         skill_hints=("技能A",),
-        skill_workflow="## 工作流\n三协议调用",
+        skill_workflow="## 工作流\n两类协议调用",
     )
     orders = [segment.order for segment in segments]
     assert orders == [1, 2, 4]

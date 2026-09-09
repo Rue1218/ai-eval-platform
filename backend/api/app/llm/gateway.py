@@ -50,7 +50,7 @@ class _ModelCallState(TypedDict, total=False):
 
 
 def _default_invoke_transport(request: ModelRequest) -> AdapterResult:
-    """把模型层契约映射到现有三协议 HTTP 适配器。"""
+    """把模型层契约映射到现有两类协议 HTTP 适配器。"""
     config = request.config
     return call_protocol(
         protocol=config.protocol,
@@ -73,7 +73,7 @@ def _default_invoke_transport(request: ModelRequest) -> AdapterResult:
 def _default_stream_transport(
     request: ModelRequest, should_abort: StreamAbort | None = None
 ) -> Iterator[tuple[str, str] | AdapterStreamEvent]:
-    """把模型层契约映射到现有三协议 SSE 适配器。"""
+    """把模型层契约映射到现有两类协议 SSE 适配器。"""
     config = request.config
     yield from stream_protocol(
         protocol=config.protocol,
@@ -103,7 +103,7 @@ class ModelGateway:
         invoke_transport: InvokeTransport | None = None,
         stream_transport: StreamTransport | None = None,
     ) -> None:
-        """创建网关；transport 可注入夹具，生产环境默认使用三协议适配器。"""
+        """创建网关；transport 可注入夹具，生产环境默认使用两类协议适配器。"""
         self._invoke_transport = invoke_transport or _default_invoke_transport
         self._stream_transport = stream_transport or _default_stream_transport
         self._invoke_graph = self._build_invoke_graph()
