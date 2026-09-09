@@ -1,4 +1,42 @@
-# AgentLoop 原始样式核对（2026-09-09，V0.7）
+# AgentLoop 原始样式核对（2026-09-09，V0.8）
+
+## V0.8 居中双边悬停拖拽核对
+
+**Findings**
+
+- 已修复 [P1]：上一版壳层右侧停靠，只提供左侧拖拽线，且进入中央内容区也会显示。现在壳层以 `margin: 0 auto` 居中，左右各有独立透明边缘命中区；中间内容区不触发可见线。
+- 未发现新的 P0/P1/P2 布局问题。鼠标实时悬停的浏览器自动化坐标能力不可用，已通过事件实现和桌面布局测量核对位置与边界；仍需由用户在实际鼠标下复核阴影观感。
+
+**Source visual truth**
+
+- `C:/Users/Administrator/AppData/Local/Temp/codex-clipboard-44bef841-14f6-4fb6-bf39-a0e2ac920836.png`，80×117 px：细灰绿色竖线带柔和玻璃阴影，约 80–100px 高。
+
+**Implementation evidence**
+
+- In-app Browser：`http://localhost:5174/agent?data=mock`，1440×900 CSS px，device scale factor 1，新建 Mock 欢迎态、桌面宽度。
+- 运行时测量：共享壳层左/右为 402px / 1302px，宽度 900px；其中输入框左/右也为 402px / 1302px。左右命中区分别为 388–416px 与 1288–1316px，覆盖壳层边缘。
+- 无障碍树暴露两个独立分隔线：“向左拖拽调整对话内容宽度”与“向右拖拽调整对话内容宽度”。
+- `npm run typecheck` 通过；本地页控制台错误为空。
+
+**Fidelity surfaces**
+
+- Fonts and typography：本次未改变字体、字号、字重、行高或文案。
+- Spacing and layout rhythm：消息区和输入框同宽并居中，左右边缘命中区均为 28px，可见线为固定 96px 高。
+- Colors and visual tokens：默认透明；可见线使用低不透明度白色玻璃底、灰绿色 2px 细线和柔和阴影。
+- Image quality and asset fidelity：本次没有图片、图标或素材变动。
+- Copy and content：本次没有文案变动。
+
+**Open Questions**
+
+- 源图只提供局部边缘线，未提供页面整体状态；浏览器策略也不能把局部源图与实现截图放在同一比较输入。因此无法完成逐像素视觉比较。
+
+**Implementation Checklist**
+
+1. 已实现居中共享壳层和左右双边拖拽。
+2. 已将可见阴影线限制为边缘命中区，并使其随鼠标纵向位置移动。
+3. 已完成 TypeScript 和浏览器布局验证。
+
+final result: blocked
 
 ## V0.7 共享对话壳层调宽核对
 
