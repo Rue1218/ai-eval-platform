@@ -8,18 +8,18 @@
       <n-popover v-model:show="modelOpen" trigger="click" placement="top-start" :show-arrow="false">
         <template #trigger>
           <button class="loop-control model-trigger" type="button" aria-haspopup="dialog" :aria-expanded="modelOpen" :disabled="!profiles.length">
-            <ProviderLogo v-if="profile" :provider="getProviderLogoKey({model:profile.model,name:profile.name})" compact/>
+            <ProviderLogo v-if="profile" :provider="getProviderLogoKey(profile)" compact/>
             <span class="model-name">{{ profile?.model || '未配置模型' }}</span><n-icon :component="ChevronDownIcon" :size="13" class="model-chevron"/>
           </button>
         </template>
         <section class="model-popover" aria-label="选择 AgentLoop 协议档">
           <header><strong>本轮模型</strong><p>仅列出可用于 AgentLoop 的协议档，切换后下一轮生效。</p></header>
           <button v-for="item in profiles" :key="item.id" class="model-option" :class="{selected:item.id===profile?.id}" type="button" @click="chooseModel(item.id)">
-            <ProviderLogo :provider="getProviderLogoKey({model:item.model,name:item.name})" compact/><span><strong>{{ item.name }}</strong><small>{{ item.model }} · {{ protocolLabel(item.protocol) }}</small></span><n-icon v-if="item.id===profile?.id" :component="CheckmarkIcon" :size="16"/>
+            <ProviderLogo :provider="getProviderLogoKey(item)" compact/><span><strong>{{ item.name }}</strong><small>{{ item.model }} · {{ protocolLabel(item.protocol) }}</small></span><n-icon v-if="item.id===profile?.id" :component="CheckmarkIcon" :size="16"/>
           </button>
         </section>
       </n-popover>
-      <ThinkingControl :model-value="effort" :allowed="profile?.allowed_efforts || []" :model="profile?.model" @update:model-value="value => emit('effort', value)"/>
+      <ThinkingControl :model-value="effort" :allowed="profile?.allowed_efforts || []" :model="profile?.model" :note="profile?.reasoning_note" @update:model-value="value => emit('effort', value)"/>
       <LoopContextMeter :meter="meter"/>
       <button
         class="loop-send"

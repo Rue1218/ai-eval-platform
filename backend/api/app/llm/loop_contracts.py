@@ -123,6 +123,7 @@ class LlmRequest:
             "omit_temperature",
             "max_tokens_parameter",
             "google_thinking",
+            "enable_thinking", "thinking_budget", "chat_template_kwargs", "reasoning_split",
         }
         if not isinstance(self.provider_options, dict) or set(self.provider_options) - allowed:
             raise LlmRequestError("供应商选项含未登记字段", code="model_config")
@@ -130,7 +131,8 @@ class LlmRequest:
             "thinking": {"type", "budget_tokens"},
             "output_config": {"effort"},
             "reasoning": {"effort", "summary"},
-            "google_thinking": {"thinking_level", "include_thoughts"},
+            "google_thinking": {"thinking_level", "thinking_budget", "include_thoughts"},
+            "chat_template_kwargs": {"enable_thinking"},
         }
         for name, keys in shapes.items():
             value = self.provider_options.get(name)
@@ -140,9 +142,14 @@ class LlmRequest:
                 or any(isinstance(part, dict | list) for part in value.values())
             ):
                 raise LlmRequestError("供应商选项结构不合法", code="model_config")
-        for name in ("prompt_cache", "omit_temperature"):
+        for name in ("prompt_cache", "omit_temperature", "enable_thinking", "reasoning_split"):
             if name in self.provider_options and not isinstance(self.provider_options[name], bool):
                 raise LlmRequestError("供应商开关必须为布尔值", code="model_config")
+        if "thinking_budget" in self.provider_options and (
+            type(self.provider_options["thinking_budget"]) is not int
+            or self.provider_options["thinking_budget"] < 0
+        ):
+            raise LlmRequestError("思考预算必须为非负整数", code="model_config")
         for name in ("anthropic_version", "reasoning_effort", "max_tokens_parameter"):
             if name in self.provider_options and not isinstance(self.provider_options[name], str):
                 raise LlmRequestError("供应商标识必须为字符串", code="model_config")

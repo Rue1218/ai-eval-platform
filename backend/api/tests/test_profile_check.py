@@ -34,7 +34,7 @@ class _ProfileDb:
 
 def test_profile_check_uses_shared_protocol_timeout(monkeypatch):
     """冷启动模型的页面探活必须沿用协议调用的 30 秒默认超时。"""
-    profile = SimpleNamespace(protocol="openai_chat", anthropic_version=None)
+    profile = SimpleNamespace(id="profile-id", protocol="openai_chat", anthropic_version=None)
     captured: dict[str, object] = {}
 
     def fake_connection(*_args: object, **_kwargs: object) -> tuple[str, str, str]:

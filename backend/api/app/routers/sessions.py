@@ -30,6 +30,7 @@ def _loop_ui(db: Session, user: User, request: Request, session=None) -> dict:
     from ..agent.attachments import MAX_IMAGE_BYTES, TEXT_SUFFIXES
     from ..agent.loop_presentation import profile_capabilities
     from ..agent.loop_wiring import authorized_profile
+    from ..llm.providers.catalog import detect_provider, reasoning_note
     from .files import ALLOWED_SUFFIXES, MAX_FILE_BYTES
 
     if session is not None and session.engine_version != "agent_loop_v2":
@@ -43,6 +44,9 @@ def _loop_ui(db: Session, user: User, request: Request, session=None) -> dict:
             "version": snapshot.profile_version,
             "model": snapshot.config.model,
             "protocol": snapshot.config.protocol,
+            "provider": detect_provider(snapshot.config.base_url, snapshot.config.model, snapshot.config.protocol),
+            "reasoning_note": reasoning_note(detect_provider(snapshot.config.base_url, snapshot.config.model,
+                                                             snapshot.config.protocol), snapshot.config.model),
             "allowed_efforts": allowed,
             "default_effort": default,
         }

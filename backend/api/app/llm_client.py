@@ -49,7 +49,10 @@ def call_agent_model(
     if not base_url or not model or not api_key:
         raise AppError(ErrorCode.VALIDATION, "Agent 协议档未配置完整（缺 URL / 模型 / API Key）")
     try:
+        from .profile_env import read_profile_env
+
         return call_protocol(
+            full_url=read_profile_env(profile.id).full_url,
             protocol=profile.protocol,
             base_url=base_url,
             model=model,

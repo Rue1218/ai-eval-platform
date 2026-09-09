@@ -41,7 +41,7 @@
             <article v-else class="loop-message assistant">
               <header class="assistant-header">
                 <div class="assistant-identity">
-                  <ProviderLogo v-if="row.request_summary?.model" :provider="getProviderLogoKey({model:row.request_summary.model})" :size="18"/>
+                  <ProviderLogo v-if="row.request_summary?.model" :provider="getProviderLogoKey({model:row.request_summary.model,provider:row.request_summary.provider})" :size="18"/>
                   <strong>{{ row.request_summary?.model || '助手' }}</strong>
                   <time v-if="formatTimestamp(row.timestamp)" :datetime="row.timestamp">{{ formatTimestamp(row.timestamp) }}</time>
                   <small v-if="row.request_summary">{{ row.request_summary.reasoning_effort }} · step {{ row.correlation.step }}</small>
@@ -441,11 +441,15 @@ async function refreshUi() {
 /** 本地偏好只保存协议档 ID 和思考档位，不保存 API 端点、凭据或服务端配置。 */
 function localPreference(key: string) { try { return localStorage.getItem(`${key}:${auth.user?.id}`) } catch { return null } }
 function effortPreferenceKey(profile: LoopProfile) { return `agent-effort:${auth.user?.id}:${profile.id}:${profile.version}` }
+let effortProfileKey = ''
 function restoreEffort(profile: LoopProfile | null) {
   if (!profile) { effort.value = null; return }
   let saved: string | null = null
   try { saved = localStorage.getItem(effortPreferenceKey(profile)) } catch { /* 隐私模式下保留内存偏好。 */ }
-  const previous = saved || effort.value
+  // 首次切到另一个供应商使用该模型默认值，避免普通模型的 off 覆盖 Claude 默认开启。
+  const key = effortPreferenceKey(profile)
+  const previous = saved || (effortProfileKey === key ? effort.value : null)
+  effortProfileKey = key
   effort.value = previous && profile.allowed_efforts.includes(previous as Effort) ? previous as Effort : profile.default_effort
   if (previous && previous !== effort.value) error.value = '当前协议档不支持原思考档位，已恢复默认值'
 }

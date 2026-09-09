@@ -236,7 +236,7 @@ def test_resolver_freezes_and_excludes_credentials(clients):
     asyncio.run(collect(adapter, req))
     wire = clients[-1].requests[-1]
     assert wire["extra_body"]["thinking"] == {"type": "enabled"}
-    assert wire["reasoning_effort"] == "medium"
+    assert "reasoning_effort" not in wire  # 旧 DeepSeek 仅发送思考开关。
     asyncio.run(close_adapter(adapter))
     assert clients[-1].closed
 
@@ -565,8 +565,6 @@ def test_request_rejects_credentials_before_header(options):
 
 
 @pytest.mark.parametrize("model,effort,max_tokens", [
-    ("deepseek-v4-flash-0731", "medium", 4096),
-    ("deepseek-v4-flash-0731", "xhigh", 4096),
     ("qwen3-coder-plus", "high", 4096),
     ("qwen3.6-flash-unknown", "high", 4096),
     ("qwen3.6-flash", "high", 1024),

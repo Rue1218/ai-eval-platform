@@ -319,6 +319,7 @@ export const api = {
     async fetchModels(params: {
       protocol: string
       base_url: string
+      full_url?: boolean
       api_key?: string
       profile_id?: string
       anthropic_version?: string

@@ -34,15 +34,9 @@ def _provider(snapshot: AuthorizedProfileSnapshot) -> str:
     """有明确供应商时优先使用；旧配置仅按模型标识兼容 DeepSeek。"""
     if snapshot.provider:
         return snapshot.provider
-    if snapshot.config.protocol == "anthropic_messages":
-        return "anthropic"
-    if snapshot.config.model.lower().startswith("deepseek"):
-        return "deepseek"
-    if snapshot.config.model.lower().startswith("mimo"):
-        return "mimo"
-    if snapshot.config.model.lower().startswith("gemini"):
-        return "google"
-    return "openai"
+    from .providers.catalog import detect_provider
+
+    return detect_provider(snapshot.config.base_url, snapshot.config.model, snapshot.config.protocol)
 
 
 def resolve_request(
@@ -57,7 +51,7 @@ def resolve_request(
     snapshot = _snapshot(config)
     model = snapshot.config
     # 即使只构建请求也校验连接格式，但地址本身不进入持久请求头。
-    normalize_base_url(model.base_url, model.protocol)
+    normalize_base_url(model.base_url, model.protocol, full_url=model.full_url)
     if not model.model or model.protocol not in {
         "openai_chat",
         "anthropic_messages",
@@ -135,6 +129,7 @@ def build_adapter(config: ModelConfig | AuthorizedProfileSnapshot) -> tuple[LlmA
     return classes[model.protocol](
         api_key=model.api_key,
         base_url=model.base_url,
+        full_url=model.full_url,
         provider=_provider(snapshot),
         timeout_s=model.timeout_s,
     ), model.model

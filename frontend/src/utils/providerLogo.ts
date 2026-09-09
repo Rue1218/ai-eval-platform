@@ -1,14 +1,24 @@
 export type ProviderLogoKey =
   | 'stepfun' | 'nvidia' | 'mimo' | 'openai' | 'anthropic' | 'gemini' | 'deepseek'
   | 'siliconflow' | 'qwen' | 'volcengine' | 'qianfan' | 'hunyuan'
-  | 'grok' | 'groq' | 'ollama' | 'zhipu' | 'moonshot' | 'mistral' | 'together' | 'custom'
+  | 'minimax' | 'grok' | 'groq' | 'ollama' | 'zhipu' | 'moonshot' | 'mistral' | 'together' | 'custom'
 
 /** 根据协议档地址、名称和模型标识推断供应商 Logo。 */
-export function getProviderLogoKey(profile: { base_url?: string; name?: string; model?: string }): ProviderLogoKey {
+export function getProviderLogoKey(profile: { base_url?: string; name?: string; model?: string; provider?: string }): ProviderLogoKey {
   const url = (profile.base_url || '').toLowerCase()
   const name = (profile.name || '').toLowerCase()
   const model = (profile.model || '').toLowerCase()
 
+  if (model.includes('minimax')) return 'minimax'
+  // 模型品牌优先于托管端点：NVIDIA / 百炼上的 GLM、Kimi 保留各自品牌。
+  const modelBrand = model.split('/').pop() || ''
+  if (/^glm(?:-|$)/.test(modelBrand)) return 'zhipu'
+  if (/^(kimi|moonshot)(?:-|$)/.test(modelBrand)) return 'moonshot'
+  if (modelBrand.startsWith('deepseek')) return 'deepseek'
+  if (modelBrand.startsWith('qwen')) return 'qwen'
+  if (modelBrand.startsWith('claude')) return 'anthropic'
+  if (modelBrand.startsWith('gemini')) return 'gemini'
+  if (/^(gpt-|o[134](?:-|$))/.test(modelBrand)) return 'openai'
   // 1. 优先匹配模型名中的品牌归属（支持托管在 NVIDIA NIM / 硅基流动等聚合平台的特定模型）
   if (model.includes('stepfun') || model.includes('step-') || name.includes('stepfun') || name.includes('阶跃') || url.includes('stepfun')) return 'stepfun'
   if (model.includes('deepseek') || name.includes('deepseek') || url.includes('deepseek')) return 'deepseek'
@@ -32,5 +42,8 @@ export function getProviderLogoKey(profile: { base_url?: string; name?: string; 
   if (url.includes('groq') || name.includes('groq')) return 'groq'
   if (url.includes('11434') || url.includes('ollama') || name.includes('ollama')) return 'ollama'
   if (url.includes('together') || name.includes('together')) return 'together'
+  if (profile.provider === 'google') return 'gemini'
+  if (profile.provider) return profile.provider as ProviderLogoKey
+  if (url.includes('minimax') || name.includes('minimax')) return 'minimax'
   return 'custom'
 }
