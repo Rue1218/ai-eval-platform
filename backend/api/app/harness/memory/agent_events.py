@@ -413,9 +413,22 @@ class SessionLog:
             else:
                 raise AppError(ErrorCode.CONCURRENCY, "交互结算不属于当前卡片")
 
-    def snapshot(self) -> tuple[int, dict]:
+    def snapshot(self, actor_id: str | None = None) -> tuple[int, dict]:
         """在同一会话锁下取高水位及由事实维护的快照，快照不执行任何副作用。"""
         with self._transaction(check_writer=False) as (db, session, state):
+            from app.agent.events import visible_frame
+            from app.models import User
+            from app.session_access import require_visible_session
+
+            # H、会话共享状态和用户 ACL 在同一事务读取，快照不借用较早的权限。
+            access = {"reasoning": True, "interactions": True}
+            if actor_id is not None:
+                user = db.get(User, actor_id)
+                if user is None or user.disabled:
+                    raise AppError(ErrorCode.UNAUTHORIZED, "成员不可用")
+                require_visible_session(db, self.session_id, actor_id)
+                access = {"reasoning": session.user_id == actor_id,
+                          "interactions": session.pending_confirm_author_id in (None, actor_id)}
             # 消息顺序由源 seq 决定，不能由同事务时间戳及随机 UUID 决定。
             messages = db.execute(select(Message).join(
                 AgentEvent, (AgentEvent.session_id == Message.session_id)
@@ -428,7 +441,10 @@ class SessionLog:
                 SessionStream.session_id == self.session_id,
                 SessionStream.cursor <= state.last_cursor,
             ).order_by(SessionStream.cursor))
+            timeline = []
             for envelope in frames:
+                envelope = visible_frame(envelope, **access)
+                timeline.append(envelope)
                 kind = envelope["type"]
                 correlation, data = envelope["correlation"], envelope["data"]
                 family = kind.partition(".")[0]
@@ -447,7 +463,7 @@ class SessionLog:
                 identity = tuple(values.get(key) for key in keys)
                 if any(value is None for value in identity):
                     continue
-                record = readmodels[group].setdefault(identity, {})
+                record = readmodels[group].setdefault(identity, {"first_cursor": envelope["cursor"]})
                 record.update(deepcopy(values))
                 record["cursor"] = envelope["cursor"]
                 record["event"] = kind
@@ -460,7 +476,8 @@ class SessionLog:
             return state.last_cursor, {
                 "engine_version": session.engine_version,
                 "active_turn": state.active_turn,
-                "pending_confirm": deepcopy(session.pending_confirm),
+                "timeline": timeline,
+                "pending_confirm": deepcopy(session.pending_confirm) if access["interactions"] else {"restricted": True},
                 "messages": [{"id": row.id, "role": row.role, "content": row.content,
                               "client_message_id": row.client_message_id, "author_id": row.author_id,
                               "attachment_refs": deepcopy(row.attachments)} for row in messages],

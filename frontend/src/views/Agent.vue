@@ -137,6 +137,9 @@
         </span>
 
         <span class="grow"></span>
+        <select v-if="!currentSessionId && !api.isMock()" v-model="draftEngine" aria-label="会话引擎" class="btn btn-sm btn-ghost">
+          <option value="legacy">现有引擎</option><option value="agent_loop_v2">AgentLoop · 试验</option>
+        </select>
 
         <!-- F3/G5：草稿会话可预选绑定工作区；发送首条消息时随创建固化 -->
         <template v-if="!currentSessionId && !isGenerating">
@@ -178,6 +181,8 @@
         </button>
       </div>
 
+      <AgentWorkspace v-if="isLoopView" :session-id="currentSessionId" :store="loopStore" :create-session="createLoopSession" />
+      <template v-else>
       <!-- 断线重连横幅提示（真实 WS 状态） -->
       <div v-if="!isWsOnline" class="info-strip">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
@@ -583,6 +588,7 @@
           </div>
         </div>
       </div>
+      </template>
     </section>
 
     <!-- 移动端侧边栏抽屉遮罩层 (点击遮罩收起所有侧边栏) -->
@@ -623,6 +629,8 @@ import { formatLatency } from '../utils/format'
 import AttachmentPreview from '../components/agent/AttachmentPreview.vue'
 import MarkdownView from '../components/agent/MarkdownView.vue'
 import ContextMeter, { type ContextMeterData } from '../components/agent/ContextMeter.vue'
+import AgentWorkspace from '../components/agent/loop/AgentWorkspace.vue'
+import { createLoopStore } from '../agent/loop/store'
 import ApprovalCard from '../components/agent/ApprovalCard.vue'
 import ClarifyCard from '../components/agent/ClarifyCard.vue'
 import ConfirmCard from '../components/agent/ConfirmCard.vue'
@@ -778,6 +786,21 @@ const bindableWorkspaces = ref<Array<{ id: string; name: string }>>([])
 const bindingLoading = ref(false)
 // 未绑定服务端会话时保持草稿态，不得用列表首项冒充当前会话。
 const currentSession = computed(() => sessions.value.find(s => s.id === currentSessionId.value) || null)
+// 新会话保留显式试验入口；既有 v2 reader 不受默认开关回滚影响。
+const draftEngine = ref<'legacy' | 'agent_loop_v2'>('legacy')
+const isLoopView = computed(() => currentSessionId.value ? currentSession.value?.engine_version === 'agent_loop_v2' : draftEngine.value === 'agent_loop_v2')
+const loopStore = createLoopStore(id => removeInaccessibleSession(id))
+watch(() => authStore.user?.id, (id, previous) => { if (previous && id !== previous) loopStore.close() })
+watch(() => Object.values(loopStore.sessions).map(s => [s.sessionId, s.title]), () => {
+  for (const value of Object.values(loopStore.sessions)) { const session = sessions.value.find(s => s.id === value.sessionId); if (session && value.title) session.title = value.title }
+})
+/** 创建时固化 v2 和工作区，后续只使用独立 transport。 */
+async function createLoopSession(): Promise<string> {
+  if (currentSessionId.value) return currentSessionId.value
+  const session = await api.sessions.create('新会话', { workspaceId: draftWorkspaceId.value || undefined, engineVersion: 'agent_loop_v2' })
+  sessions.value.unshift(session); currentSessionId.value = session.id; clearDraftWorkspace()
+  return session.id
+}
 const deletableSessionCount = computed(() => filteredSessions.value.filter((session) => session.can_delete).length)
 const allDeletableSessionsSelected = computed(() => {
   const deletableIds = filteredSessions.value.filter((session) => session.can_delete).map((session) => session.id)
@@ -856,6 +879,13 @@ const defaultKpis = [
 
 /** D5 会话列表状态点多态：按 status / active_task / 本轮生成中 / 断线重连 映射 nav-dot 样式，常驻显示就绪状态。 */
 function sessionDotClass(s: any): string {
+  if (s.engine_version === 'agent_loop_v2') {
+    const value = loopStore.sessions[s.id]
+    if (!value) return s.active_task?.status === 'running' || s.active_task?.status === 'queued' ? 'running' : 'ready'
+    if (value.connection !== 'online') return 'offline'
+    if (value.activeTurn || Object.values(value.tasks).some(task => ['running','queued','awaiting_case_confirm'].includes(task.status))) return 'running'
+    return value.phase === 'error' ? 'failed' : value.phase === 'completed' ? 'succeeded' : 'ready'
+  }
   const rt = sessionRuntimes.get(s.id)
   const isGen = generatingBySession.value[s.id] || (s.id === currentSessionId.value && isGenerating.value) || rt?.isGenerating
   if (isGen) return 'running'
@@ -876,6 +906,10 @@ function sessionDotClass(s: any): string {
 
 /** 会话状态提示语（鼠标悬停指示点时展示）。 */
 function sessionDotTooltip(s: any): string {
+  if (s.engine_version === 'agent_loop_v2') {
+    const value = loopStore.sessions[s.id]
+    return !value ? 'AgentLoop 会话' : value.connection !== 'online' ? '连接中断，状态待同步' : value.activeTurn ? 'Agent 回合进行中' : 'Agent 回合已结束；Worker 状态独立'
+  }
   const rt = sessionRuntimes.get(s.id)
   const isGen = generatingBySession.value[s.id] || (s.id === currentSessionId.value && isGenerating.value) || rt?.isGenerating
   if (isGen) return '智能体正在思考生成中…'
@@ -1729,6 +1763,11 @@ async function selectSession(sid: string) {
   persistCurrentRuntime()
   stopFlowAnimations()
   currentSessionId.value = sid
+  if (sessions.value.find(s => s.id === sid)?.engine_version === 'agent_loop_v2') {
+    isGenerating.value = false; isWsOnline.value = true; isRailOpen.value = false; agentWs = null
+    loopStore.open(sid)
+    return
+  }
 
   const rt = ensureRuntime(sid)
   events.value = rt.events
@@ -2728,6 +2767,7 @@ function gcIdleSockets(keepId: string) {
 
 /** 服务端以 4404 收回会话后同步移除本地缓存，避免列表留下无法重连的幽灵项。 */
 function removeInaccessibleSession(sid: string, navigate = true) {
+  if (loopStore.sessions[sid] || loopStore.drafts[sid]) loopStore.remove(sid)
   const index = sessions.value.findIndex((session) => session.id === sid)
   const wasCurrent = currentSessionId.value === sid
   const socket = sockets.get(sid)
@@ -3118,8 +3158,8 @@ onMounted(async () => {
     const settings = await api.admin.getSettings()
     if (settings?.prod_approvers?.length) prodApprovers.value = settings.prod_approvers
   } catch {}
-  // 默认停留在未持久化草稿，只有首次发送消息时才创建服务端会话。
-  resetToDraftSession()
+  // 异步初始化不能覆盖用户已经选中的会话或 v2 草稿。
+  if (!currentSessionId.value && draftEngine.value === 'legacy') resetToDraftSession()
   // 消费报告页「在对话中解读」直达参数（兼容 ?interpret= 与 ?report_id=）。
   const interpretId = (route.query.interpret || route.query.report_id) as string | undefined
   if (interpretId) {
@@ -3151,6 +3191,7 @@ onMounted(async () => {
 let interpretStopWatch: (() => void) | null = null
 
 onBeforeUnmount(() => {
+  loopStore.close()
   // 统一清理登记的全部定时器与解读监听，防止卸载后回调触发
   pendingTimers.forEach(id => {
     window.clearTimeout(id)

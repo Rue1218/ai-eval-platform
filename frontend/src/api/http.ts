@@ -1279,7 +1279,7 @@ export const api = {
     },
     async create(
       title?: string,
-      options: { visibility?: SessionVisibility; workspaceId?: string; scopePath?: string } = {},
+      options: { visibility?: SessionVisibility; workspaceId?: string; scopePath?: string; engineVersion?: 'legacy' | 'agent_loop_v2' } = {},
     ): Promise<AgentSession> {
       const visibility = options.visibility ?? 'private'
       if (getDataMode() === 'mock') {
@@ -1303,6 +1303,7 @@ export const api = {
         visibility,
         workspace_id: options.workspaceId || undefined,
         scope_path: options.scopePath || undefined,
+        engine_version: options.engineVersion || 'legacy',
       })
       return data
     },

@@ -2,7 +2,7 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.78 |
+| 文档版本 | V1.79 |
 | WS v2 修订日期 | 2026-09-09（§4A，新引擎契约登记） |
 | 对应 PRD | V1.18（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
@@ -1967,10 +1967,21 @@ send 超时同样关闭 4408。Runtime 的事实提交不等待网络。
 断连/退订调用 detach；仅释放并取消该连接实际控制的活动回合，观察者不取消，
 重连/重复命令不自动抢占旧控制权。接收循环只等短事务接受结果，不 await 整轮图。
 
+### 4A.5 前端展示增量（V1.79，2026-09-09）
+
+- `GET /api/sessions/agent-ui` 返回草稿能力；`GET /api/sessions/{id}/agent-ui` 复验会话可见性与 v2 引擎。响应 `version=1, enabled, profile, allowed_efforts, default_effort, permissions{write,trace,reasoning,interactions,settings}, controller{active,owned_by_actor}, attachments`。profile 仅包含 `id,version,model,protocol`，配置来自每回合相同的 resolver；allowed_efforts 逐档通过 options 校验。controller 不授予当前连接控制权。
+- `attachments{upload_suffixes,inline_suffixes,image_suffixes,max_bytes,max_image_bytes,content_required}`：上传、模型内联和图片能力分开；模型实际是否支持视觉仍以供应商为准。附件正文不能为空；音频和旧 Office 仅元信息。历史附件按 `file_id` 使用已有 `/api/files/{id}` 和 `/content` 授权接口，不公开磁盘路径。
+- `tool.call/result.data.display` 为 ToolDisplay v1：`version,title,registry_name,wire_name,arguments_preview,result_preview,target,format,truncated,unavailable_reason`，预览最多 12000 字符。参数按工具字段白名单生成，失败仅公开错误码；未知工具有明确缺失说明，不开放任意内部结果。
+- `assistant.start.data.request_summary` 提供实际 `model,provider,protocol,profile_id,profile_version,reasoning_effort,max_tokens,input_fingerprint,tools[{name,parameters_schema}],context_meter`。context_meter 为实际请求的同源序列化估算，字段 `basis,estimated,profile_version,input_fingerprint,history_upto_seq,capacity,input_tokens,reserved_output_tokens`；旧事实缺统计时为 null，不显示为 0。
+- `assistant.message.data.reasoning_preview` 为持久思考正文，仅 reasoning ACL 允许时发送。禁止出现在普通 trace 或撤权后的快照里。`question.resolved` 增 `outcome,answers`（仍受 interactions ACL）。
+- 恢复快照增加有序 `timeline`（完整语义信封，受逐帧 ACL）；与 H 和当前用户权限在同一行锁事务读取。旧分组投影保留，记录增 `first_cursor`，新 reader 以 timeline 为权威，禁止重复追加 messages。
+- `question.respond.answers[].answer` 接受字符串或字符串数组；多选使用标签数组，包含逗号的标签不切分。旧字符串多选仍兼容逗号编码。数组只允许用于 checkbox，多选规范化后复用 validate_answers。
+- 同一连接对相同 session 再次 subscribe 仅重启读取流，保留控制权；跨会话须退订。附件元数据与内容接口复验上传者或可见会话引用权限，未知/无权限统一 NOT_FOUND。
+
 ### 4A.4 主服务注入契约
 
 路由从 `app.state.loop_service` 获取 `app.agent.loop_service.LoopService`。
-本批不修改 main.py。缺服务关闭 1013，不启用内存回退实现。
+主服务 main.py 已接入 LoopService 生命周期。缺服务关闭 1013，不启用内存回退实现。
 WS 类型定义在 `routers/ws_v2.py`：`WsAccess(write,trace,reasoning,interactions)`、
 `StreamSnapshot(cursor,earliest_cursor=1,state={})`、`Command`、
 `CommandReceipt(data,correlation={})`。下列方法均 async：
@@ -2944,3 +2955,7 @@ Composer 上方抽屉；点击确认或取消即收回，消息流只保留关�
 | `frontend/src/views/Agent.vue` / `frontend/src/components/agent/ClarifyCard.vue` | approval_terminal 按 `card_type` 路由（实时 + 历史回放）；ClarifyCard 增 `clarifyDone='failed'` 终态展示；canActClarify 排除 failed |
 | `backend/api/tests/test_approval_terminal.py` / `test_workspace_quota.py` | 新增 recovery_failed 卡型归类（clarify/approval 各一）与水位核算失败 fail-closed 用例 |
 | `docs/AI测试与评估平台-API.md` | 本版（V1.78）契约修订 + V1.77 追溯登记（头部引用块、错误码表、§4.3 事件表） |
+
+### V1.79 修改代码文件与作用清单（2026-09-09）
+
+`agent/loop_presentation.py`、`agent/events.py`、`agent/loop.py`、`agent/loop_wiring.py`：安全预览、持久思考与实际请求统计；`agent/loop_service.py`、`routers/ws_v2.py`：问答标签数组与重同步控制权；`harness/memory/agent_events.py`：授权有序快照；`harness/contracts/loop_events.py`：目录 v4；`routers/sessions.py`：草稿/会话 UI 能力；`routers/files.py`：上传者或可见会话引用访问；`frontend/src/api/agentLoop*` 与 `agent/loop`/`components/agent/loop`：新前端 reader 与命令接线。完整阶段状态见前端重写计划 §11。

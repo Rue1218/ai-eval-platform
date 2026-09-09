@@ -86,7 +86,7 @@ class LoopService:
         access = await self.authorize(actor_id, session_id)
         log = SessionLog(session_id, self.session_factory)
         log.bridge_worker()
-        cursor, state = log.snapshot()
+        cursor, state = log.snapshot(actor_id=actor_id)
         if state.get("pending_confirm"):
             state["pending_confirm"] = scrub(state["pending_confirm"]) if access.interactions else {"restricted": True}
         return StreamSnapshot(cursor=cursor, state=state)
@@ -322,17 +322,11 @@ class LoopService:
             if state.active_turn != data["turn"]:
                 raise AppError(ErrorCode.CONCURRENCY, "回合已结束")
             if command.type == "question.respond":
-                from app.harness.execution.ask_user import validate_answers
 
                 questions = card["questions"]
-                by_id = {q["id"]: q for q in questions}
-                normalized = []
-                for item in data["answers"]:
-                    question = by_id.get(item["question_id"], {})
-                    value = item["answer"]
-                    selected = [part.strip() for part in value.split(",") if part.strip()] if question.get("multi_select") or question.get("type") == "checkbox" else ([value] if value else [])
-                    normalized.append({"id": item["question_id"], "custom": value, "selected": selected if question.get("options") else []})
-                answer = {"answers": validate_answers(questions, normalized)}
+                from .loop_presentation import question_answers
+
+                answer = question_answers(questions, data["answers"])
             else:
                 answer = data["decision"]
             if command.type == "task_confirmation.respond" and card.get("spec_hash") != data.get("spec_hash"):

@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
@@ -23,6 +23,54 @@ from ..workspace_service import ensure_workspace_scope
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 ACTIVE_STATUSES = {"queued", "running", "awaiting_case_confirm"}
+
+
+def _loop_ui(db: Session, user: User, request: Request, session=None) -> dict:
+    """草稿与现有会话共用能力解析；读取不分配模型或 Runner 客户端。"""
+    from ..agent.attachments import MAX_IMAGE_BYTES, TEXT_SUFFIXES
+    from ..agent.loop_presentation import profile_capabilities
+    from ..agent.loop_wiring import authorized_profile
+    from ..config import settings
+    from .files import ALLOWED_SUFFIXES, MAX_FILE_BYTES
+
+    if session is not None and session.engine_version != "agent_loop_v2":
+        raise AppError(ErrorCode.VALIDATION, "该会话使用 legacy 协议")
+    profile_data, allowed, default, error = None, [], None, None
+    try:
+        profile, _ = authorized_profile(db, {})
+        allowed, default = profile_capabilities(profile)
+        profile_data = {"id": profile.profile_id, "version": profile.profile_version,
+                        "model": profile.config.model, "protocol": profile.config.protocol}
+    except AppError:
+        error = "请配置可用的 Agent 协议档"
+    service = getattr(request.app.state, "loop_service", None)
+    entry = service.entries.get(session.id) if service and session else None
+    controller = entry.controller if entry and entry.runtime.running else None
+    return {"version": 1, "enabled": settings.agent_loop_enabled, "profile": profile_data,
+            "allowed_efforts": allowed, "default_effort": default, "unavailable_reason": error,
+            "permissions": {"write": True, "trace": session is None or session.user_id == user.id or user.role == "admin",
+                            "reasoning": session is None or session.user_id == user.id,
+                            "interactions": session is None or session.pending_confirm_author_id in (None, user.id),
+                            "settings": user.role == "admin"},
+            "controller": {"active": bool(controller), "owned_by_actor": bool(controller and controller[0] == user.id)},
+            "attachments": {"upload_suffixes": sorted(ALLOWED_SUFFIXES),
+                            "inline_suffixes": sorted(TEXT_SUFFIXES | {".pdf", ".docx", ".xlsx"}),
+                            "image_suffixes": [".png", ".jpg", ".jpeg", ".webp", ".gif"],
+                            "max_bytes": MAX_FILE_BYTES, "max_image_bytes": MAX_IMAGE_BYTES,
+                            "content_required": True}}
+
+
+@router.get("/agent-ui")
+def draft_agent_ui(request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """返回登录成员的新会话 UI 能力，默认灰度开关仍由部署控制。"""
+    return _loop_ui(db, user, request)
+
+
+@router.get("/{session_id}/agent-ui")
+def session_agent_ui(session_id: str, request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """返回授权会话当前配置；实际活动 attempt 使用持久 request_summary。"""
+    session = require_visible_session(db, session_id, user.id)
+    return _loop_ui(db, user, request, session)
 
 
 def _agent_context_window(db: Session) -> int:

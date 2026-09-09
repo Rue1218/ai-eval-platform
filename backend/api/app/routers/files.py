@@ -7,13 +7,15 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, UploadFile
 from fastapi.responses import FileResponse
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
-from ..models import StoredFile, User, uuid_str
+from ..models import Message, StoredFile, User, uuid_str
+from ..models import Session as AgentSession
 from ..schemas import FileOut
 
 logger = logging.getLogger("ai-eval.api.files")
@@ -126,8 +128,7 @@ def get_file_metadata(
 ):
     """返回文件元数据，不返回二进制内容或内部存储路径。"""
     stored = db.query(StoredFile).filter(StoredFile.id == file_id).first()
-    if not stored:
-        raise AppError(ErrorCode.NOT_FOUND, "文件不存在")
+    _require_file_access(db, user, stored)
     return stored
 
 
@@ -139,8 +140,7 @@ def get_file_content(
 ):
     """登录后下载或在线播放文件二进制；不回内部存储路径。"""
     stored = db.query(StoredFile).filter(StoredFile.id == file_id).first()
-    if not stored:
-        raise AppError(ErrorCode.NOT_FOUND, "文件不存在")
+    _require_file_access(db, user, stored)
     path = Path(stored.storage_path)
     if not path.is_file():
         raise AppError(ErrorCode.NOT_FOUND, "文件不存在")
@@ -151,3 +151,20 @@ def get_file_content(
         filename=stored.filename,
         content_disposition_type="inline",
     )
+
+
+def _require_file_access(db: Session, user: User, stored: StoredFile | None) -> None:
+    """上传者或可见会话的附件读取者可访问；仅知道 UUID 不构成授权。"""
+    if stored is None:
+        raise AppError(ErrorCode.NOT_FOUND, "文件不存在")
+    if stored.uploaded_by == user.id:
+        return
+    # 同时兼容旧字符串引用和 AttachmentView 对象引用，仅遍历可见会话消息。
+    refs = db.query(Message.attachments).join(AgentSession, AgentSession.id == Message.session_id).filter(
+        AgentSession.deleted_at.is_(None),
+        or_(AgentSession.user_id == user.id, AgentSession.visibility == "team"),
+    )
+    for (attachments,) in refs:
+        if any((item if isinstance(item, str) else item.get("file_id") if isinstance(item, dict) else None) == stored.id for item in attachments or []):
+            return
+    raise AppError(ErrorCode.NOT_FOUND, "文件不存在")
