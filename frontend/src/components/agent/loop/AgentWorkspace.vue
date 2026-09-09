@@ -5,9 +5,26 @@
     <p v-if="state?.error || error" class="loop-notice error" role="alert">{{ state?.error || error }}</p>
     <div class="loop-content">
       <div class="loop-center">
-        <section v-if="tab==='chat'" ref="chatShell" class="loop-chat-shell" :class="{ 'is-resizing': isResizing }" :style="chatShellStyle" aria-label="对话内容区域">
-          <div ref="scroller" class="loop-conversation" @scroll="trackScroll">
-          <div v-if="!rows.length" class="loop-welcome"><span>AI EVAL · AGENT LOOP</span><h2>从一个目标开始，<br>让每一步都有依据。</h2><p>在工作区处理文件、查找资料，或创建评测任务。</p><div><button v-for="prompt in prompts" :key="prompt" @click="fill(prompt)">{{ prompt }} ↗</button></div></div>
+        <section v-if="tab==='chat'" ref="chatShell" class="loop-chat-shell" :class="{ 'is-resizing': isResizing, 'is-empty': !rows.length }" :style="chatShellStyle" aria-label="对话内容区域">
+          <!-- 空状态：输入框上方水平居中展示 Logo + 名字及产品标语 -->
+          <div v-if="!rows.length" class="loop-empty-hero">
+            <div class="hero-brand">
+              <div class="hero-logo-mark" aria-hidden="true">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+                  <path d="M12 3L4 20H8.5L10.2 15.5H13.8L15.5 20H20L12 3ZM11.1 11.8L12 7.2L12.9 11.8H11.1Z" fill="#ffffff" />
+                </svg>
+              </div>
+              <div class="hero-brand-name-wrap">
+                <span class="hero-brand-name">AI Eval</span>
+                <span class="hero-brand-badge">AGENT LOOP</span>
+              </div>
+            </div>
+            <h1 class="hero-tagline">从一个目标开始，让每一步都有依据。</h1>
+            <p class="hero-subline">在工作区处理文件、查找资料，或创建评测任务。</p>
+          </div>
+
+          <!-- 对话消息滚动区：有消息时正常滚动展示；空状态隐藏以保持居中 -->
+          <div ref="scroller" class="loop-conversation" :class="{ 'is-empty': !rows.length }" @scroll="trackScroll">
           <button v-if="shown < rows.length" class="history-more" @click="shown+=80">显示更早的 {{ Math.min(80, rows.length-shown) }} 条记录</button>
           <template v-for="row in visibleRows" :key="row.key">
             <article v-if="row.role==='user'" class="loop-message user"><header>你</header><div class="history-files"><AttachmentPreview v-for="file in attachments[row.key] || []" :key="file.file_id" :attachment="file"/></div><p>{{ row.content }}</p></article>
@@ -39,13 +56,26 @@
           <p v-if="!busy && state?.phase && ['max_tokens','max_steps','cancelled','interrupted','error'].includes(state.phase)" class="loop-notice">{{ finishLabels[state.phase] }}</p>
           </div>
           <div class="loop-composer-wrap"><AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :metrics="conversationMetrics" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile"/></div>
+          <!-- 空状态时的提示词卡片（位于输入框下方，点击填充草稿） -->
+          <div v-if="!rows.length" class="loop-empty-prompts">
+            <button
+              v-for="prompt in prompts"
+              :key="prompt"
+              class="empty-prompt-card"
+              type="button"
+              @click="fill(prompt)"
+            >
+              <span class="prompt-text">{{ prompt }}</span>
+              <span class="prompt-arrow">↗</span>
+            </button>
+          </div>
           <div class="loop-width-edge loop-width-edge-left" @pointerenter="previewContentResize('left', $event)" @pointermove="moveContentResizePreview('left', $event)" @pointerleave="hideContentResizePreview('left')">
-            <button class="loop-width-handle" :class="{ 'is-visible': hoverResizeEdge === 'left', 'is-active': isResizing && resizeEdge === 'left' }" :style="resizeHandleStyle('left')" type="button" aria-label="向左拖拽调整对话内容宽度" aria-orientation="vertical" role="separator" :aria-valuemin="minimumChatWidth" :aria-valuemax="maximumChatWidth" :aria-valuenow="Math.round(renderedChatWidth)" @pointerdown="beginContentResize($event, 'left')" @keydown="adjustContentWidthByKey($event, 'left')">
+            <button class="loop-width-handle" :class="{ 'is-visible': hoverResizeEdge === 'left' || (isResizing && resizeEdge === 'left'), 'is-active': isResizing && resizeEdge === 'left' }" :style="resizeHandleStyle('left')" type="button" aria-label="向左拖拽调整对话内容宽度" aria-orientation="vertical" role="separator" :aria-valuemin="minimumChatWidth" :aria-valuemax="maximumChatWidth" :aria-valuenow="Math.round(renderedChatWidth)" @pointerdown="beginContentResize($event, 'left')" @keydown="adjustContentWidthByKey($event, 'left')">
               <span aria-hidden="true"></span>
             </button>
           </div>
           <div class="loop-width-edge loop-width-edge-right" @pointerenter="previewContentResize('right', $event)" @pointermove="moveContentResizePreview('right', $event)" @pointerleave="hideContentResizePreview('right')">
-            <button class="loop-width-handle" :class="{ 'is-visible': hoverResizeEdge === 'right', 'is-active': isResizing && resizeEdge === 'right' }" :style="resizeHandleStyle('right')" type="button" aria-label="向右拖拽调整对话内容宽度" aria-orientation="vertical" role="separator" :aria-valuemin="minimumChatWidth" :aria-valuemax="maximumChatWidth" :aria-valuenow="Math.round(renderedChatWidth)" @pointerdown="beginContentResize($event, 'right')" @keydown="adjustContentWidthByKey($event, 'right')">
+            <button class="loop-width-handle" :class="{ 'is-visible': hoverResizeEdge === 'right' || (isResizing && resizeEdge === 'right'), 'is-active': isResizing && resizeEdge === 'right' }" :style="resizeHandleStyle('right')" type="button" aria-label="向右拖拽调整对话内容宽度" aria-orientation="vertical" role="separator" :aria-valuemin="minimumChatWidth" :aria-valuemax="maximumChatWidth" :aria-valuenow="Math.round(renderedChatWidth)" @pointerdown="beginContentResize($event, 'right')" @keydown="adjustContentWidthByKey($event, 'right')">
               <span aria-hidden="true"></span>
             </button>
           </div>
@@ -131,7 +161,7 @@ const maximumChatWidth = computed(() => Math.max(minimumChatWidth, (chatShell.va
 const renderedChatWidth = computed(() => chatWidth.value || chatShell.value?.getBoundingClientRect().width || minimumChatWidth)
 let epoch = 0
 let resizeStartX = 0, resizeStartWidth = 0
-const resizeHandleHeight = 96
+const resizeHandleHeight = 100
 /** 能力随会话/窗口聚焦刷新；活动请求显示自己的持久配置版本。 */
 async function refreshUi() {
   const current = ++epoch, sid = props.sessionId
@@ -281,12 +311,8 @@ function formatTimestamp(value?: string): string {
 }
 /** 引用只写入下一轮草稿，供模型参考；不会伪造为服务端持久记忆。 */
 function quoteMemory(text: string) {
-  const quote = `[引用对话记忆]
-${text}
-[/引用对话记忆]`
-  draft.value.content = draft.value.content.trim() ? `${draft.value.content}
-
-${quote}` : quote
+  const quote = `[引用对话记忆]\n${text}\n[/引用对话记忆]`
+  draft.value.content = draft.value.content.trim() ? `${draft.value.content}\n\n${quote}` : quote
   composer.value?.focus()
 }
 function originalUserMessage(row: LoopRecord): LoopRecord | undefined {
@@ -360,7 +386,7 @@ async function hydrateAttachments() {
 .loop-control{background:transparent;color:inherit;border:1px solid transparent;border-radius:7px;padding:7px 9px;font-size:12px;cursor:pointer}.loop-control:hover{background:#eaf3ee}.loop-primary{background:#174a3a!important;color:#fff!important}.loop-workspace button:focus-visible,.loop-workspace input:focus-visible,.loop-workspace summary:focus-visible{outline:2px solid #16977a;outline-offset:2px}
 </style>
 <style scoped>
-.loop-workspace{display:flex;flex:1;flex-direction:column;min-height:0;min-width:0;background:var(--bg-main,#f8faf8)}.loop-tabs{display:flex;align-items:center;gap:8px;padding:8px 20px;border-bottom:1px solid #e0e8e2}.loop-tabs button{padding:7px 12px;border:0;border-radius:7px;background:transparent;color:#61776a;cursor:pointer}.loop-tabs .active{background:#e2eee6;color:#154834}.loop-status{margin-left:auto;font-size:12px;display:flex;align-items:center;gap:6px}.loop-status i{width:7px;height:7px;border-radius:50%;background:#93a99c}.loop-status .running{background:#21a37e;animation:pulse 1.5s ease-in-out infinite}.loop-content{display:flex;flex:1;min-height:0;position:relative}.loop-center{display:flex;flex-direction:column;flex:1;min-width:0;position:relative;min-height:0}.loop-conversation{overflow:auto;flex:1;padding:24px max(20px,calc((100% - 800px)/2));scrollbar-gutter:stable}.loop-message{margin:0 0 22px;min-width:0;overflow-wrap:anywhere}.loop-message header{display:flex;gap:8px;align-items:center;font-size:13px;font-weight:600;margin-bottom:8px}.loop-message header small{font-weight:400;color:#7b8e82}.assistant-header{justify-content:space-between}.assistant-identity,.assistant-actions,.assistant-metrics{display:flex;min-width:0;align-items:center;gap:8px}.assistant-identity{flex-wrap:wrap}.assistant-identity strong{font-weight:650}.assistant-identity time{color:#8390a0;font-size:11px;font-weight:400;font-variant-numeric:tabular-nums}.assistant-actions{margin-left:auto;gap:2px}.assistant-action{display:inline-grid;width:28px;height:28px;place-items:center;border:0;border-radius:7px;background:transparent;color:#758497;padding:0;cursor:pointer}.assistant-action:hover:not(:disabled){background:#eff5f1;color:#2d6851}.assistant-action:disabled{cursor:default;opacity:.45}.assistant-metrics{margin-top:10px;color:#7a8797;font-size:11px;font-variant-numeric:tabular-nums}.assistant-metrics span{display:inline-flex;align-items:center;gap:4px}.loop-message.user{background:#eaf3ed;padding:16px 20px;border-radius:12px}.loop-message.user p{white-space:pre-wrap;margin:0;line-height:1.7}.history-files{display:flex;gap:8px;flex-wrap:wrap}.loop-welcome{max-width:750px;margin:6vh auto 24px}.loop-welcome>span{letter-spacing:.16em;color:#5c8c75;font-size:11px}.loop-welcome h2{font-size:32px;line-height:1.4;font-weight:600;color:#173f30;margin:16px 0}.loop-welcome p{color:#7d8b82}.loop-welcome>div{display:flex;gap:10px;margin-top:25px}.loop-welcome button{flex:1;text-align:left;border:1px solid #d8e4dc;border-radius:10px;padding:18px;background:#fff;color:#4d6858;line-height:1.7;cursor:pointer}.loop-composer-wrap{padding:12px 24px 18px;max-width:950px;width:100%;box-sizing:border-box;margin:0 auto}.loop-runtime{width:240px;overflow:auto;padding:18px;border-left:1px solid #e0e8e2;font-size:12px;background:#f5f8f5}.loop-runtime dd{margin:5px 0 14px;overflow-wrap:anywhere}.loop-runtime dt{color:#7d9081}.runtime-close{float:right;border:0;background:transparent;cursor:pointer}.loop-notice{padding:8px 16px;margin:4px 10px;background:#f6f0e2;color:#866934;font-size:12px}.loop-notice.error{color:#a24d43}.loop-notice button,.history-more{border:0;background:transparent;text-decoration:underline;cursor:pointer}.jump-bottom{position:absolute;bottom:10px;right:20px;border:1px solid #caddcf;background:#fff;border-radius:20px;padding:8px 15px;cursor:pointer}.muted{color:#86968b}@keyframes pulse{50%{opacity:.35}}@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}@media(max-width:768px){.loop-runtime{position:absolute;inset:0 0 0 auto;max-width:calc(100% - 35px);z-index:30;box-shadow:-20px 0 50px #173e2520}.loop-composer-wrap{padding:8px}.loop-conversation{padding:16px 12px}.loop-welcome h2{font-size:25px}.loop-welcome>div{flex-direction:column}.loop-welcome button{padding:12px}.loop-tabs{padding:6px;gap:0}.loop-tabs button{padding:7px}.loop-status{font-size:11px}.loop-message header{flex-wrap:wrap}}
+.loop-workspace{display:flex;flex:1;flex-direction:column;min-height:0;min-width:0;background:var(--bg-main,#f8faf8)}.loop-tabs{display:flex;align-items:center;gap:8px;padding:8px 20px;border-bottom:1px solid #e0e8e2}.loop-tabs button{padding:7px 12px;border:0;border-radius:7px;background:transparent;color:#61776a;cursor:pointer}.loop-tabs .active{background:#e2eee6;color:#154834}.loop-status{margin-left:auto;font-size:12px;display:flex;align-items:center;gap:6px}.loop-status i{width:7px;height:7px;border-radius:50%;background:#93a99c}.loop-status .running{background:#21a37e;animation:pulse 1.5s ease-in-out infinite}.loop-content{display:flex;flex:1;min-height:0;position:relative}.loop-center{display:flex;flex-direction:column;flex:1;min-width:0;position:relative;min-height:0}.loop-conversation{overflow:auto;flex:1;padding:24px max(20px,calc((100% - 800px)/2));scrollbar-gutter:stable}.loop-message{margin:0 0 22px;min-width:0;overflow-wrap:anywhere}.loop-message header{display:flex;gap:8px;align-items:center;font-size:13px;font-weight:600;margin-bottom:8px}.loop-message header small{font-weight:400;color:#7b8e82}.assistant-header{justify-content:space-between}.assistant-identity,.assistant-actions,.assistant-metrics{display:flex;min-width:0;align-items:center;gap:8px}.assistant-identity{flex-wrap:wrap}.assistant-identity strong{font-weight:650}.assistant-identity time{color:#8390a0;font-size:11px;font-weight:400;font-variant-numeric:tabular-nums}.assistant-actions{margin-left:auto;gap:2px}.assistant-action{display:inline-grid;width:28px;height:28px;place-items:center;border:0;border-radius:7px;background:transparent;color:#758497;padding:0;cursor:pointer}.assistant-action:hover:not(:disabled){background:#eff5f1;color:#2d6851}.assistant-action:disabled{cursor:default;opacity:.45}.assistant-metrics{margin-top:10px;color:#7a8797;font-size:11px;font-variant-numeric:tabular-nums}.assistant-metrics span{display:inline-flex;align-items:center;gap:4px}.loop-message.user{background:#eaf3ed;padding:16px 20px;border-radius:12px}.loop-message.user p{white-space:pre-wrap;margin:0;line-height:1.7}.history-files{display:flex;gap:8px;flex-wrap:wrap}.loop-composer-wrap{padding:12px 24px 18px;max-width:950px;width:100%;box-sizing:border-box;margin:0 auto}.loop-runtime{width:240px;overflow:auto;padding:18px;border-left:1px solid #e0e8e2;font-size:12px;background:#f5f8f5}.loop-runtime dd{margin:5px 0 14px;overflow-wrap:anywhere}.loop-runtime dt{color:#7d9081}.runtime-close{float:right;border:0;background:transparent;cursor:pointer}.loop-notice{padding:8px 16px;margin:4px 10px;background:#f6f0e2;color:#866934;font-size:12px}.loop-notice.error{color:#a24d43}.loop-notice button,.history-more{border:0;background:transparent;text-decoration:underline;cursor:pointer}.jump-bottom{position:absolute;bottom:10px;right:20px;border:1px solid #caddcf;background:#fff;border-radius:20px;padding:8px 15px;cursor:pointer}.muted{color:#86968b}@keyframes pulse{50%{opacity:.35}}@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}@media(max-width:768px){.loop-runtime{position:absolute;inset:0 0 0 auto;max-width:calc(100% - 35px);z-index:30;box-shadow:-20px 0 50px #173e2520}.loop-composer-wrap{padding:8px}.loop-conversation{padding:16px 12px}.loop-tabs{padding:6px;gap:0}.loop-tabs button{padding:7px}.loop-status{font-size:11px}.loop-message header{flex-wrap:wrap}}
 
 /* 对话/轨迹导航采用参考页的下划线选中态。 */
 .loop-tabs{--line:#e3e8f0;--text:#172033;--subtle:#748197;--accent:#5b5bd6}
@@ -381,10 +407,268 @@ async function hydrateAttachments() {
 .loop-chat-shell .loop-conversation{padding:24px 16px}
 .loop-chat-shell .loop-composer-wrap{flex:0 0 auto;width:100%;max-width:none;margin:0;padding:12px 0 18px;box-sizing:border-box}
 
-/* 两侧保留窄命中区；只有进入边缘时才显示跟随鼠标移动的细玻璃阴影线。 */
-.loop-width-edge{position:absolute;z-index:3;top:0;bottom:0;width:28px;cursor:ew-resize}.loop-width-edge-left{left:-14px}.loop-width-edge-right{right:-14px}
-.loop-width-handle{position:absolute;left:0;width:28px;height:96px;border:0;border-radius:14px;background:transparent;cursor:ew-resize;opacity:0;touch-action:none;transition:opacity .14s ease,background-color .14s ease}
-.loop-width-handle span{display:block;width:2px;height:76px;margin:auto;border-radius:2px;background:rgba(105,128,122,.3);box-shadow:0 0 10px rgba(119,147,138,.24)}
-.loop-width-handle.is-visible,.loop-width-handle.is-active,.loop-width-handle:focus-visible{opacity:1;background:rgba(255,255,255,.08);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);outline:0}.loop-width-handle:hover{background:rgba(255,255,255,.2)}.loop-width-handle:hover span,.loop-width-handle:focus-visible span{background:rgba(91,129,117,.54)}
+/* 空状态：居中布局、输入框上方水平居中 Logo + 名字及提示词卡片 */
+.loop-chat-shell.is-empty {
+  justify-content: center;
+  padding: 32px 0 48px;
+  overflow-y: auto;
+}
+.loop-chat-shell.is-empty .loop-conversation.is-empty {
+  display: none;
+}
+.loop-empty-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  width: 100%;
+  margin-bottom: 24px;
+  padding: 0 12px;
+}
+.hero-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.hero-logo-mark {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #1f5947 0%, #154234 100%);
+  display: grid;
+  place-items: center;
+  box-shadow: 0 4px 14px rgba(23, 74, 58, 0.22);
+}
+.hero-brand-name-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.hero-brand-name {
+  font-family: var(--font-display, inherit);
+  font-size: 26px;
+  font-weight: 750;
+  color: #173f30;
+  letter-spacing: -0.02em;
+}
+.hero-brand-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: #e2eee6;
+  color: #154834;
+  letter-spacing: 0.1em;
+}
+.hero-tagline {
+  font-size: 22px;
+  font-weight: 600;
+  color: #173f30;
+  margin: 0 0 6px;
+  line-height: 1.4;
+}
+.hero-subline {
+  font-size: 13.5px;
+  color: #697d72;
+  margin: 0;
+}
+.loop-empty-prompts {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  width: 100%;
+  margin-top: 14px;
+  box-sizing: border-box;
+}
+.empty-prompt-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border: 1px solid #d8e4dc;
+  border-radius: 12px;
+  background: #ffffff;
+  color: #41594d;
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.03);
+  transition: all 0.18s ease;
+}
+.empty-prompt-card:hover {
+  border-color: #1f5947;
+  background: #f8faf9;
+  color: #173f30;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(23, 74, 58, 0.08);
+}
+.prompt-arrow {
+  color: #8da496;
+  font-size: 14px;
+  margin-left: 8px;
+  flex-shrink: 0;
+  transition: transform 0.18s ease, color 0.18s ease;
+}
+.empty-prompt-card:hover .prompt-arrow {
+  color: #1f5947;
+  transform: translate(2px, -2px);
+}
+
+/* 深色模式适配 */
+[data-theme='dark'] .hero-logo-mark {
+  background: linear-gradient(135deg, #16977a 0%, #0f5e4c 100%);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+[data-theme='dark'] .hero-brand-name {
+  color: #f3f4f6;
+}
+[data-theme='dark'] .hero-brand-badge {
+  background: rgba(22, 151, 122, 0.2);
+  color: #34d399;
+}
+[data-theme='dark'] .hero-tagline {
+  color: #f9fafb;
+}
+[data-theme='dark'] .hero-subline {
+  color: #9ca3af;
+}
+[data-theme='dark'] .empty-prompt-card {
+  background: #111827;
+  border-color: rgba(255, 255, 255, 0.1);
+  color: #d1d5db;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+[data-theme='dark'] .empty-prompt-card:hover {
+  border-color: #16977a;
+  background: #1f2937;
+  color: #ffffff;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+[data-theme='dark'] .empty-prompt-card:hover .prompt-arrow {
+  color: #34d399;
+}
+@media(max-width: 768px) {
+  .loop-empty-prompts {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* 拖拽式隐藏边框：命中区与图2高品质羽化渐变悬浮手柄 */
+.loop-chat-shell.is-resizing {
+  user-select: none;
+  cursor: col-resize;
+}
+.loop-chat-shell.is-resizing * {
+  user-select: none !important;
+}
+.loop-width-edge {
+  position: absolute;
+  z-index: 30;
+  top: 0;
+  bottom: 0;
+  width: 28px;
+  cursor: col-resize;
+}
+.loop-width-edge-left {
+  left: -14px;
+}
+.loop-width-edge-right {
+  right: -14px;
+}
+.loop-width-handle {
+  position: absolute;
+  left: 0;
+  width: 28px;
+  height: 100px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  cursor: col-resize;
+  opacity: 0;
+  touch-action: none;
+  padding: 0;
+  margin: 0;
+  outline: none;
+  transition: opacity 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  /* 默认浅色主题变量：对齐图2像素级平滑渐变消隐 (212/255 ≈ 0.17 核心实度) */
+  --resizer-rgb: 15, 23, 42;
+  --resizer-alpha-core: 0.17;
+  --resizer-alpha-mid: 0.12;
+  --resizer-alpha-soft: 0.06;
+  --resizer-alpha-tip: 0.02;
+  --resizer-scale-x: 1;
+}
+.loop-width-handle.is-visible,
+.loop-width-handle.is-active,
+.loop-width-handle:focus-visible {
+  opacity: 1;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+.loop-width-handle:hover {
+  background: transparent;
+  --resizer-alpha-core: 0.32;
+  --resizer-alpha-mid: 0.22;
+  --resizer-alpha-soft: 0.10;
+  --resizer-alpha-tip: 0.03;
+  --resizer-scale-x: 1.25;
+}
+.loop-width-handle.is-active {
+  background: transparent;
+  --resizer-alpha-core: 0.48;
+  --resizer-alpha-mid: 0.34;
+  --resizer-alpha-soft: 0.16;
+  --resizer-alpha-tip: 0.05;
+  --resizer-scale-x: 1.35;
+}
+/* 深色主题适配 */
+[data-theme='dark'] .loop-width-handle {
+  --resizer-rgb: 255, 255, 255;
+  --resizer-alpha-core: 0.22;
+  --resizer-alpha-mid: 0.15;
+  --resizer-alpha-soft: 0.07;
+  --resizer-alpha-tip: 0.02;
+}
+[data-theme='dark'] .loop-width-handle:hover {
+  --resizer-alpha-core: 0.38;
+  --resizer-alpha-mid: 0.26;
+  --resizer-alpha-soft: 0.12;
+  --resizer-alpha-tip: 0.04;
+}
+[data-theme='dark'] .loop-width-handle.is-active {
+  --resizer-alpha-core: 0.54;
+  --resizer-alpha-mid: 0.38;
+  --resizer-alpha-soft: 0.18;
+  --resizer-alpha-tip: 0.06;
+}
+.loop-width-handle span {
+  display: block;
+  width: 2px;
+  height: 100%;
+  margin: auto;
+  border-radius: 999px;
+  background: linear-gradient(
+    to bottom,
+    rgba(var(--resizer-rgb), 0) 0%,
+    rgba(var(--resizer-rgb), var(--resizer-alpha-tip)) 10%,
+    rgba(var(--resizer-rgb), var(--resizer-alpha-soft)) 20%,
+    rgba(var(--resizer-rgb), var(--resizer-alpha-mid)) 30%,
+    rgba(var(--resizer-rgb), var(--resizer-alpha-core)) 38%,
+    rgba(var(--resizer-rgb), var(--resizer-alpha-core)) 62%,
+    rgba(var(--resizer-rgb), var(--resizer-alpha-mid)) 70%,
+    rgba(var(--resizer-rgb), var(--resizer-alpha-soft)) 80%,
+    rgba(var(--resizer-rgb), var(--resizer-alpha-tip)) 90%,
+    rgba(var(--resizer-rgb), 0) 100%
+  );
+  box-shadow: none;
+  transform: scaleX(var(--resizer-scale-x));
+  transform-origin: center center;
+  transition: transform 0.15s ease, background 0.15s ease;
+  pointer-events: none;
+}
 @media(max-width:768px){.loop-chat-shell{width:100%!important;max-width:none;min-width:0;margin:0}.loop-chat-shell .loop-composer-wrap{padding:8px}.loop-width-edge{display:none}.loop-chat-shell .loop-conversation{padding:16px 12px}}
 </style>
