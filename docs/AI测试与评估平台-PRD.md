@@ -2,10 +2,10 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.19 |
-| 文档状态 | 冻结基线 + V1.19 登记（V1.19：废除「首次登录强制改密」） |
+| 文档版本 | V1.20 |
+| 文档状态 | 冻结基线 + V1.19/V1.20 登记（V1.19：废除「首次登录强制改密」；V1.20：协议档收敛为 OpenAI Chat 与 Anthropic Messages） |
 | 撰写日期 | 2026-08-17 |
-| 本轮修订 | 2026-09-09：V1.19 废除首次登录强制改密（产品决策）：开户/重置密码/引导账号不再强制首登改密，账号可自助在右上角「修改密码」更新凭据；密码强度规则（≥8 位含字母与数字）不变。2026-08-31：V1.18 收敛 Agent 对话投影：Plan 只用 PlanCard，工具只用 ToolCard，危险 bash 只用确认卡；ReAct `thought`、Plan/Reflect 阶段、工具调用前草稿均属于内部控制，禁止出现在对话或历史重放。最终回答只能在真实工具终态之后展示。 |
+| 本轮修订 | 2026-09-09：V1.20 删除 OpenAI Responses 协议档及适配器；迁移同时删除该档环境凭据、历史密文和失效 Agent 默认引用。V1.19 废除首次登录强制改密（产品决策）：开户/重置密码/引导账号不再强制首登改密，账号可自助在右上角「修改密码」更新凭据；密码强度规则（≥8 位含字母与数字）不变。2026-08-31：V1.18 收敛 Agent 对话投影：Plan 只用 PlanCard，工具只用 ToolCard，危险 bash 只用确认卡；ReAct `thought`、Plan/Reflect 阶段、工具调用前草稿均属于内部控制，禁止出现在对话或历史重放。最终回答只能在真实工具终态之后展示。 |
 | 最近修订 | 2026-08-31：V1.17 增加危险 bash 的 LangGraph 人在回路：风险命令必须弹出确认卡，原发起成员确认后才进入 bwrap 沙箱；拒绝不执行。思考卡只呈现过程摘要，禁止显示会与工具真实结果冲突的原始推理。2026-08-30：V1.16 增加受控 Agent 技能文件与协议档专属补充提示词管理；技能正文遵循渐进式披露，核心安全提示词不可覆盖。2026-08-28：V1.15 统一基准目录治理、独立导入队列、staging 并发发布、成员同权双人复核与 M3 里程碑；冻结任务必须锁定数据集/黄金集版本。2026-08-28：V1.14 新增基准数据集目录、异步导入、staging 表格和发布门禁；下载/解析仅由 Worker 执行，未审核行不得评测。2026-08-24：补充 Agent 多附件交互：支持图片（PNG/JPG/JPEG/WEBP/GIF）、Markdown/TXT/HTML/JSON/YAML、PDF、Word（DOC/DOCX）、Excel（XLS/XLSX）、CSV/JSONL 与音频；输入区支持文件选择和拖拽上传，图片显示缩略图，PDF/文本支持预览，Office 文件显示类型卡片并可打开/下载。2026-08-23：补齐 Gemini OpenAI 兼容端点的思考摘要请求与增量归一化；增加 Agent 思考摘要开关与思考强度设置；将用户回显固定为 `user_message`，将完成信号固定为 `response.completed`，明确 `thought` 不承载助手正文；协议档增加可选 Embedding / Reranker 独立端点配置，三类 Key 均按 profile 写入受控环境文件 |
 | 适用版本 | 平台 V1.0 |
 | 技术栈 | Vue3 + Naive UI、Python FastAPI、PostgreSQL、WebSocket、Docker Compose、go-stress-testing |
@@ -34,6 +34,7 @@
 | V1.17 | 2026-08-31 | 危险 bash 先弹人工确认卡再执行；推理仅呈现过程摘要，工具结果是唯一执行事实 |
 | V1.18 | 2026-08-31 | ReAct / Plan-and-Solve / reflect 的内部过程不再生成对话卡；只显示 Plan、工具、确认与真实最终结果 |
 | V1.19 | 2026-09-09 | 废除首次登录强制改密；账号自助改密入口保留（右上角「修改密码」），密码强度规则不变 |
+| V1.20 | 2026-09-09 | 协议档收敛为 OpenAI Chat 与 Anthropic Messages，删除 OpenAI Responses 适配与已有档位凭据 |
 
 ---
 
@@ -57,14 +58,14 @@
 | 模块 | 职责 |
 | --- | --- |
 | A. Agent | 会话、拆解、确认卡、进度；**不执行长任务** |
-| B. Benchmark | 自定义文本集、三协议调用、规则评分 / Judge、对比与基线 |
+| B. Benchmark | 自定义文本集、两类协议调用、规则评分 / Judge、对比与基线 |
 | C. RAG | Compose 内 LightRAG，或外部 **OpenAI Chat Completions** RAG HTTP |
 | 共享压测 | 质量成功后压同一推理 / query 接口；平台面板 + Prometheus scrape |
 
 ### 1.3 目标
 
 1. 对话完成：用例（可选）→ Benchmark 和 / 或 RAG →（可选）压测 → 报告。
-2. 兼容 `openai_chat`、`openai_responses`、`anthropic_messages`；Agent / Judge / 被测均可切换。
+2. 兼容 `openai_chat`、`anthropic_messages`；Agent / Judge / 被测均可切换。
 3. 无内置公开榜单；集来自 JSONL/CSV 或用例映射。
 4. 一张 Compose 拉起：`web` `api` `worker` `postgres` `lightrag` `stress`（go-stress-testing 扩展）。
 
@@ -82,7 +83,7 @@
 
 | 术语 | 含义 |
 | --- | --- |
-| 协议档 | `openai_chat` / `openai_responses` / `anthropic_messages` 之一 + 主模型 base_url/模型名/Key；可选 Embedding、Reranker 各自 base_url/模型名/Key，均写入受控环境文件 |
+| 协议档 | `openai_chat` / `anthropic_messages` 之一 + 主模型 base_url/模型名/Key；可选 Embedding、Reranker 各自 base_url/模型名/Key，均写入受控环境文件 |
 | 会话 | 每成员可多开；默认仅创建者可见，也可由创建者设为团队共享；**会话内任务串行**，会话间可并行（受平台并发上限） |
 | 长任务 | `benchmark.run` / `rag.evaluate` / `testcase.generate` 由 **worker 进程执行**；`stress.run` 由 worker **下发到 stress 容器**（go-stress-testing） |
 | 短工具 | `*.list` / `report.get` / `task.get`，Agent 可同步调用 |
@@ -115,12 +116,12 @@
 WebSocket 短票
   -> LangGraph Agent Graph（单轮）
   -> ModelGateway（LangGraph 模型调用图）
-  -> 三协议适配器
+  -> 两类协议适配器
   -> user_message / thought / assistant_delta / assistant_message / response.completed / error / pong
 ```
 
 - `app/agent/graph.py` 只编排一次模型调用，不持有数据库、WebSocket、工具或任务状态；
-- `app/llm/` 只负责 `ModelRequest`、`ModelResponse`、三协议适配与流式事件，不承载 Harness；
+- `app/llm/` 只负责 `ModelRequest`、`ModelResponse`、两类协议适配与流式事件，不承载 Harness；
 - `app/routers/ws.py` 负责短票、会话事件、后台 Task 和流式 WS 投影，收包循环不得等待整轮模型调用；
 - 首期支持 `user_message(role=user)`、`thought` 思考摘要、`assistant_delta` 正文增量、`assistant_message` 最终交付句和 `response.completed` 结束信号；`pong` 为独立应用层心跳；`message` 不再作为新用户回显事件；
 - Harness、ReAct/MCP、人工确认、任务取消、长任务队列和记忆层属于后续设计，不得在首期代码中提前实现。
@@ -230,7 +231,7 @@ queued → running → succeeded
 
 ### 4.1 内
 
-三模块、共享压测、三协议、内部 MCP、用例/评测 Skill、Naive UI 工作台、Compose 六件套（含 stress）、Grafana scrape、预算与并发。
+三模块、共享压测、两类协议、内部 MCP、用例/评测 Skill、Naive UI 工作台、Compose 六件套（含 stress）、Grafana scrape、预算与并发。
 
 ### 4.2 外
 
@@ -485,7 +486,7 @@ V1 压测内核：**go-stress-testing**（Apache-2.0）扩展，独立 `stress` 
 | `/datasets` | 数据集工作台 | 目录树结构管理、自定义列管理（+新增列）、单元格行内即点即改、多行/JSON 弹窗编辑器、AI 智能合成新数据与补全缺失行 | 成员 |
 | `/cases` | 用例工作台 | 用例集目录树、6 大测试策略分布与自检横幅、用例表格行内编辑、AI 智能从 PRD 生成用例集、批量映射至基准数据集/黄金 QA、72h 倒计时确认入库 | 成员 |
 | `/kb` | 知识库与切块检索 | 文档分块预览、2D 向量投影散点图、Top-K 相似度召回连线与重排前后位次对比 (Rerank Delta)、黄金 QA 维护 | 成员 |
-| `/admin/profiles` | 协议档治理 | 三大协议（`openai_chat`、`openai_responses`、`anthropic_messages`）及可选 Embedding / Reranker 端点维护、Key 只写不回显、连通性检查 | 成员 |
+| `/admin/profiles` | 协议档治理 | 两类协议（`openai_chat`、`anthropic_messages`）及可选 Embedding / Reranker 端点维护、Key 只写不回显、连通性检查 | 成员 |
 | `/admin/stress` | 压测治理 | 白名单维护、QPS/时长上限、默认预算、单价并发控制、AI 参数推荐 | 成员 |
 | `/admin/users` | 账号协同 | 成员开户、停用、重置密码（系统安全保底：不可停用最后一名正常账号） | 成员 |
 
@@ -523,7 +524,6 @@ FastAPI（REST + WS）+ worker 进程 + PostgreSQL + Vue3/Naive/Vite + LightRAG 
 | 类型 | 请求 | 鉴权 |
 | --- | --- | --- |
 | `openai_chat` | `POST {base}/v1/chat/completions`，`messages` | `Authorization: Bearer` |
-| `openai_responses` | `POST {base}/v1/responses`，`input` 由 messages 转换 | 同上 |
 | `anthropic_messages` | `POST {base}/v1/messages`，`system` 拆出，`messages` 仅 user/assistant | `x-api-key` + `anthropic-version: 2023-06-01`（可配） |
 
 被测评测：**非流式**。压测：对 chat/responses 解析 SSE 以算 TTFT。适配失败归 `UPSTREAM`，raw 截断入库（≤32KB）。
@@ -543,7 +543,7 @@ FastAPI（REST + WS）+ worker 进程 + PostgreSQL + Vue3/Naive/Vite + LightRAG 
               ModelGateway（LangGraph）
                     │
                     ▼
-              三协议适配器 / 上游模型
+              两类协议适配器 / 上游模型
 
   其它页 ──REST─┐
                 └── PostgreSQL（sessions / messages / ws_events / tasks）
@@ -552,7 +552,7 @@ FastAPI（REST + WS）+ worker 进程 + PostgreSQL + Vue3/Naive/Vite + LightRAG 
               worker（后续长任务：评测 / RAG / 生成用例；压测下发到 stress）
                  │         │              │
                  ▼         ▼              ▼
-           三协议适配   LightRAG      go-stress-testing
+           两类协议适配 LightRAG      go-stress-testing
                          /外部 Chat        /metrics
                                             ▼
                                     现有 Prometheus
@@ -587,7 +587,7 @@ testcase-tools：只对齐，不进镜像。LightRAG：MIT，锁 tag。go-stress
 | 稳定 | 断点：评测按样本行号续跑；可用性 99%/月 |
 | 安全 | 协议档 URL、模型 ID、API Key 按 profile 写入服务器受控环境文件（文件权限 0600、API 加锁刷新并 fsync、Worker 只读）；旧数据库密文仅迁移后清空；WS 使用短票 `ws_ticket`；`/metrics` 不暴露公网 |
 | 成本 | usage_ledger + 任务预算 |
-| 兼容 | 被测仅 HTTP 三协议；导出 xlsx / xmind 8+ |
+| 兼容 | 被测仅 HTTP 两类协议；导出 xlsx / xmind 8+ |
 
 ---
 
@@ -595,7 +595,7 @@ testcase-tools：只对齐，不进镜像。LightRAG：MIT，锁 tag。go-stress
 
 | 风险 | 应对 |
 | --- | --- |
-| 三协议字段差 | 夹具单测 |
+| 两类协议字段差 | 夹具单测 |
 | 并行打爆 API | 平台并发 + 预算 |
 | 映射失败 | 待补全；可手传 JSONL |
 | LightRAG 升级 | 锁 tag |
@@ -693,7 +693,7 @@ testcase-tools：只对齐，不进镜像。LightRAG：MIT，锁 tag。go-stress
 ### 本版（V1.6.3）相对问答仍无冲突的说明
 
 - 「Agent 调 MCP」：Host 仍是 Agent；长任务进 PG 后由 worker / stress 执行，避免对话断线任务停。与「PG 队列 + worker」那一问一致。
-- 外部 RAG 只用 OpenAI Chat：以最后一问为准；被测/Agent/Judge 仍是三协议。
+- 外部 RAG 只用 OpenAI Chat：以最后一问为准；被测/Agent/Judge 仅支持两类协议。
 - 压测 Grafana：以「需要接入」为准，覆盖更早的「不需要」。
 
 ### 会话上下文持久化修订（2026-08-20）

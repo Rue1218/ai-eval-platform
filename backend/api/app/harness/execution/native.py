@@ -1,6 +1,6 @@
 """原生基础工具执行器。
 
-模型通过三协议 Function Calling 生成 ToolCall 后，read/write/edit/bash/web_search/
+模型通过两类协议 Function Calling 生成 ToolCall 后，read/write/edit/bash/web_search/
 web_fetch/task 等基础工具在本进程直接调用既有受控 handler。这里仅承担异步
 隔离、超时与取消；不会经过 MCP 目录、provider 或 transport。权限、Schema、
 附件与长任务门禁仍固定在 ToolNode 之前执行。

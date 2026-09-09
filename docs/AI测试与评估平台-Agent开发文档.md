@@ -1,10 +1,10 @@
 # AI 测试与评估平台 Agent 开发文档
 
-> 版本：V1.7.2
+> 版本：V1.7.3
 > 状态：新建会话统一使用 AgentLoop v2；历史 legacy 行仅保留审计与显式回放路径。此前骨架化与混合引擎说明属于 legacy 路径及其历史阶段，不能据此认定新路径仍为纯对话。前端输入栏按每回合协议档选择模型和思考强度，完整真实供应商/Linux Runner 联调验收仍未结束。
 > 审查日期：2026-09-09
-> 对应需求：`AI测试与评估平台-PRD.md` V1.18
-> 对应接口：`AI测试与评估平台-API.md` V1.80
+> 对应需求：`AI测试与评估平台-PRD.md` V1.19
+> 对应接口：`AI测试与评估平台-API.md` V1.82
 
 ## 1. legacy 骨架化运行链路（历史基线）
 
@@ -15,7 +15,7 @@
   -> app/agent/graph.py（LangGraph 纯对话图）
   -> routing.py（chat_stream_node：assemble 装配上下文 → ModelGateway 流式生成）
   -> app/llm/gateway.py（LangGraph 模型调用图）
-  -> app/adapters.py（三协议 HTTP 适配）
+  -> app/adapters.py（两类协议 HTTP 适配）
   -> 上游模型
 ```
 
@@ -65,7 +65,7 @@ ReAct 循环、Plan/reflect 节点、工具节点、澄清卡与确认卡。
 - `ModelStreamEvent`：`content`、`reasoning`、`tool_call`、`completed`；
 - `ModelGateway`：基于 LangGraph 的同步、异步和流式调用入口。
 
-三协议 HTTP 细节只允许存在于 `app/adapters.py`。API Key 不得出现在日志、事件、异常消息或模型层对象的默认 repr 中。
+两类协议 HTTP 细节只允许存在于 `app/adapters.py`。API Key 不得出现在日志、事件、异常消息或模型层对象的默认 repr 中。
 
 骨架化后 Agent 不再注入工具定义、不消费 `ModelStreamEvent(kind="tool_call")`；
 模型层仍保留原生 ToolCall 契约（供 Worker/未来扩展复用），但浏览器与 Agent 图
@@ -73,9 +73,9 @@ ReAct 循环、Plan/reflect 节点、工具节点、澄清卡与确认卡。
 `assistant_delta` 瞬时广播，`completed` 收尾产出 `assistant_message`。
 
 Agent 思考配置从 `Setting(key="agent_reasoning")` 读取，结构为
-`{"enabled": true, "effort": "medium"}`。开启时，OpenAI Responses 使用
-`reasoning.effort` 与 `reasoning.summary="auto"`，Gemini OpenAI 兼容端点使用
-`extra_body.google.thinking_config`，OpenAI Chat / Mimo 与 Anthropic 使用各自的思考字段；
+`{"enabled": true, "effort": "medium"}`。开启时，OpenAI Chat 的兼容推理模型使用
+`reasoning_effort`，Gemini OpenAI 兼容端点使用
+`extra_body.google.thinking_config`，DeepSeek / Mimo 与 Anthropic 使用各自的思考字段；
 骨架化后不再投影 `thought` 事件，前端不渲染任何思考摘要。关闭时网关过滤
 reasoning 事件，并对已知支持显式关闭的端点发送关闭参数。Gemini 的
 `xhigh/max` 映射为 `high`。
@@ -172,7 +172,7 @@ reasoning 事件，并对已知支持显式关闭的端点发送关闭参数。G
 - `backend/api/app/routers/admin.py`：新增 Agent 思考开关与强度的配置默认值、校验和读取入口；
 - `backend/api/app/routers/ws.py`：将 `agent_reasoning` 注入每轮 `ModelConfig`；
 - `backend/api/app/llm/contracts.py` / `gateway.py`：扩展 reasoning 配置并支持关闭时过滤思考流；
-- `backend/api/app/adapters.py`：按 OpenAI Chat/Responses、Mimo、Anthropic 协议映射思考参数；
+- `backend/api/app/adapters.py`：按 OpenAI Chat、Mimo、Anthropic 协议映射思考参数；
 - `frontend/src/views/AdminProfiles.vue` / `frontend/src/api/types.ts` / `frontend/src/api/mockData.ts`：增加管理页设置、类型与 Mock 数据；
 - `backend/api/tests/test_adapters.py` / `backend/api/tests/test_llm_graph.py`：覆盖思考强度映射和关闭行为。
 
@@ -184,9 +184,9 @@ reasoning 事件，并对已知支持显式关闭的端点发送关闭参数。G
 
 - `backend/api/app/agent/attachments.py`：校验消息附件归属，解析文本、PDF、DOCX、XLSX，并把图片转换为内部图文内容块；解析结果只进入模型请求，不覆盖用户原文。
 - `backend/api/app/routers/ws.py`：将用户消息附件注入 Harness 模型窗口，支持附件-only 消息并持久化安全预览元数据。
-- `backend/api/app/adapters.py`：将内部图文内容块适配为 OpenAI Chat/Responses 与 Anthropic Messages 请求格式。
+- `backend/api/app/adapters.py`：将内部图文内容块适配为 OpenAI Chat 与 Anthropic Messages 请求格式。
 - `backend/api/app/routers/sessions.py` / `frontend/src/api/types.ts`：历史回放返回并消费附件文件名、大小、类型和内容地址，刷新后仍可预览。
-- `backend/api/tests/test_agent_attachments.py`：覆盖文本注入、图片内容块和三协议格式转换。
+- `backend/api/tests/test_agent_attachments.py`：覆盖文本注入、图片内容块和两类协议格式转换。
 
 ### V0.5.3（2026-08-25）修改代码文件与作用清单
 
@@ -205,11 +205,11 @@ reasoning 事件，并对已知支持显式关闭的端点发送关闭参数。G
 ### V0.7.0（2026-08-25）修改代码文件与作用清单
 
 - `backend/api/app/llm/contracts.py` / `gateway.py`：增加统一 `NativeToolCall` 和 `ModelResponse.tool_calls`，把 `ModelRequest.tools` 透传给模型协议适配器。
-- `backend/api/app/adapters.py`：实现 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 的工具 schema、完整 ToolCall 和 ToolResultMessage 双向映射；上游缺少 ID 时生成 `toolcall_<uuid>`。
+- `backend/api/app/adapters.py`：实现 OpenAI Chat Completions、Anthropic Messages 的工具 schema、完整 ToolCall 和 ToolResultMessage 双向映射；上游缺少 ID 时生成 `toolcall_<uuid>`。
 - `backend/api/app/agent/react.py` / `graph.py`：原生 ToolCall 优先，保留严格 `react.v1` JSON 兼容回退；同轮多调用以队列串行执行，结果作为标准 `assistant.tool_calls` / `role=tool` 消息回传模型，工具后最终正文继续走无工具模型流式回合。
 - `backend/api/app/harness/memory/state.py` / `contracts/artifacts.py` / `execution/toolnode.py`：将 `call_id` 写入可序列化状态、`tool_call`、成功/拒绝/超时失败的 `tool_result`；不修改既有 Gate、附件绑定、dispatch 或 bwrap 安全边界。
 - `frontend/src/views/Agent.vue`：ToolCard 按 `call_id` 回填，只有旧历史事件缺失 ID 时才退回“同名最近 pending”兼容逻辑。
-- `backend/api/tests/test_adapters.py` / `test_agent_react.py`：覆盖三协议原生 ToolCall、协议化 ToolResult 回填、同轮两个 `read` 的队列执行、`call_id` 顺序与工具后最终正文流式输出。
+- `backend/api/tests/test_adapters.py` / `test_agent_react.py`：覆盖两类协议原生 ToolCall、协议化 ToolResult 回填、同轮两个 `read` 的队列执行、`call_id` 顺序与工具后最终正文流式输出。
 - `docs/AI测试与评估平台-API.md`：升级 V1.26，冻结 `tool_call` / `tool_result` 的 `call_id` 规则。
 
 ### V0.8.0（2026-08-25）修改代码文件与作用清单
@@ -232,10 +232,10 @@ reasoning 事件，并对已知支持显式关闭的端点发送关闭参数。G
 
 ### V1.0.0（2026-08-25）修改代码文件与作用清单
 
-- `backend/api/app/adapters.py`：三协议流式请求透传已验证的工具 schema，在适配器内累计工具参数片段，仅输出完整 JSON 对象的 ToolCall；无效参数归一为 `UPSTREAM`。
+- `backend/api/app/adapters.py`：两类协议流式请求透传已验证的工具 schema，在适配器内累计工具参数片段，仅输出完整 JSON 对象的 ToolCall；无效参数归一为 `UPSTREAM`。
 - `backend/api/app/llm/gateway.py`：将适配器完整 ToolCall 投影为 `ModelStreamEvent(tool_call)`，并保留到流式收尾的 `ModelResponse.tool_calls`。
 - `backend/api/app/agent/react.py`：native 模式在 ToolResult 后直接使用第二个流式模型回合收敛正文或继续工具调用，消除简单路径的第三次无工具调用；不改变 WebSocket 事件契约。
-- `backend/api/tests/test_adapters.py` / `test_llm_graph.py` / `test_agent_react.py`：覆盖三协议参数累计、网关工具事件、`call_id` 保留及 native 两回合流式收敛。
+- `backend/api/tests/test_adapters.py` / `test_llm_graph.py` / `test_agent_react.py`：覆盖两类协议参数累计、网关工具事件、`call_id` 保留及 native 两回合流式收敛。
 
 ### V1.1.0（2026-08-25）修改代码文件与作用清单
 
@@ -374,7 +374,7 @@ reasoning 事件，并对已知支持显式关闭的端点发送关闭参数。G
 ### V1.5.10（2026-08-26）修改代码文件与作用清单
 
 - `backend/api/app/agent/react.py`：native 首轮改走 `gateway.stream()`，工具前正文实时投影，完整 ToolCall 仍在响应结束后入队。
-- `backend/api/tests/test_agent_react.py` / `test_llm_graph.py` / `test_adapters.py`：覆盖首轮交错流、三协议 text→tool_call 夹具。
+- `backend/api/tests/test_agent_react.py` / `test_llm_graph.py` / `test_adapters.py`：覆盖首轮交错流、两类协议 text→tool_call 夹具。
 - `docs/AI测试与评估平台-API.md`：V1.46，冻结「ToolCall 结束当前上游响应」。
 - `docs/AI测试与评估平台-Agent内容块交错流式调用规划.md`：V0.2，P1 落地对照。
 
@@ -508,7 +508,7 @@ reasoning 事件，并对已知支持显式关闭的端点发送关闭参数。G
 
 - `backend/api/app/agent/loop.py`、`runtime.py`、`stream.py`、`loop_settings.py`：七节点、流式 attempt、回合管理与恢复。
 - `backend/api/app/agent/loop_service.py`、`loop_wiring.py`：身份、幂等命令、依赖接线、审批及资源生命周期。
-- `backend/api/app/llm/loop_contracts.py`、`resolver.py`、`providers/`：异步三协议与供应商状态往返。
+- `backend/api/app/llm/loop_contracts.py`、`resolver.py`、`providers/`：异步两类协议与供应商状态往返。
 - `backend/api/app/main.py`、`config.py`、`schemas.py`、`routers/sessions.py`、`routers/ws.py`、`routers/ws_v2.py`：新路径装配与引擎隔离。
 
 细节和当前验证边界见 [后端架构设计](AI测试与评估平台-AgentLoop后端架构设计.md) 与 [实施记录](AI测试与评估平台-AgentLoop后端实施记录.md)。

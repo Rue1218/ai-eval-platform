@@ -81,7 +81,7 @@ export const NODE_METAS: Record<WorkflowNodeType, NodeMeta> = {
     type: 'benchmark_eval',
     category: 'eval',
     name: '大模型基准评测',
-    description: '三大协议多模型横向对比评测（openai_chat/anthropic）',
+    description: '两类协议多模型横向对比评测（openai_chat/anthropic）',
     icon: '📊',
     color: 'var(--c-tasks)',
     defaultInputs: [

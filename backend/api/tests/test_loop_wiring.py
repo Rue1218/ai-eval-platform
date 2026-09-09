@@ -374,9 +374,9 @@ def test_profile_overlay_rejects_secret_or_takeover_text(overlay):
     assert caught.value.code == ErrorCode.VALIDATION
 
 
-@pytest.mark.parametrize("protocol", ["openai_chat", "openai_responses", "anthropic_messages"])
+@pytest.mark.parametrize("protocol", ["openai_chat", "anthropic_messages"])
 def test_window_retains_images_and_checks_protocol_state(wired, protocol):
-    """三协议使用 SDK 同源转换，保留图片；不兼容 opaque 状态在提交前拒绝。"""
+    """两类协议使用 SDK 同源转换，保留图片；不兼容 opaque 状态在提交前拒绝。"""
     profile = replace(wired.profile, config=replace(wired.profile.config, protocol=protocol,
                                                   model="claude-sonnet-4" if protocol == "anthropic_messages" else "gpt-4o"))
     message = {"role": "user", "content": [{"type": "text", "text": "image"},

@@ -259,7 +259,6 @@ const form = ref<{
 
 const protocolOptions = [
   { label: 'OpenAI Chat (/chat/completions)', value: 'openai_chat' },
-  { label: 'OpenAI Responses (/responses)', value: 'openai_responses' },
   { label: 'Anthropic Messages (/messages)', value: 'anthropic_messages' },
 ]
 

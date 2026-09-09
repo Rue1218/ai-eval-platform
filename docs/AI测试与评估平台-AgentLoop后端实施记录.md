@@ -1,6 +1,13 @@
 # AI 测试与评估平台 — AgentLoop 后端实施记录
 
-> 版本：V0.3 ｜ 审查日期：2026-09-09 ｜ 状态：AgentLoop 单入口、协议档选择、重启恢复和共享评测档已完成本地回归；服务器端真实供应商/Linux Runner 联调待验收。
+> 版本：V0.4 ｜ 审查日期：2026-09-09 ｜ 状态：AgentLoop 单入口、协议档选择、重启恢复和共享评测档已完成本地回归；OpenAI Responses 已删除，服务器端真实供应商/Linux Runner 联调待验收。
+
+## 0.4 协议收敛记录
+
+协议档收敛为 OpenAI Chat Completions 与 Anthropic Messages。删除 OpenAI Responses
+适配器、模型发现分支和前端选择项；迁移删除已有 Responses 档、受控环境文件变量、
+旧数据库密文和失效的 Agent 默认档位引用。历史任务和报告 JSON 快照不改写，后续
+请求该协议统一按 `VALIDATION` 拒绝。
 
 ## 0.3 审查修复记录
 
@@ -14,7 +21,7 @@ CI 同时向 API 测试传入 `LOOP_TEST_DATABASE_URL`、`LOOP_STORE_TEST_DATABA
 
 新 Agent 路径独立使用 `deepseek-harness-py` 的七节点循环与源字段语义，覆盖模型多轮调用、工具回填、并行/屏障、重试、审批、取消和恢复。平台原有工具、业务门禁、协议档、Worker 与数据库继续复用。
 
-LLM 调用层对新路径重写为异步三协议适配：OpenAI Chat Completions（含 DeepSeek 配置）、OpenAI Responses、Anthropic Messages。保留必要的供应商内容块、签名/协议状态、usage、finish、reasoning 和图文字段。旧 `llm/gateway.py`、`adapters.py`、`llm_client.py` 的业务调用继续保留；新路径不再经过旧的 react.v1 文本解析、TAOR 或图 interrupt 审批。
+LLM 调用层对新路径重写为异步两类协议适配：OpenAI Chat Completions（含 DeepSeek 配置）与 Anthropic Messages。保留必要的供应商内容块、签名/协议状态、usage、finish、reasoning 和图文字段。旧 `llm/gateway.py`、`adapters.py`、`llm_client.py` 的业务调用继续保留；新路径不再经过旧的 react.v1 文本解析、TAOR 或图 interrupt 审批。
 
 WS 为独立 `/ws/agent/v2`，支持严格命令、订阅快照、PG 游标补发、瞬态 chunk 和受限 trace。新旧 endpoint 以不可中途切换的会话 `engine_version` 隔离。浏览器投影与模型事实分离；同一事务提交事实、卡片、UI 消息、投影、隔离记录与命令回执。
 
@@ -25,7 +32,7 @@ WS 为独立 `/ws/agent/v2`，支持严格命令、订阅快照、PG 游标补�
 ## 2. 配置与启用顺序
 
 1. 使用项目 Python 3.12 与 `backend/api/requirements.txt`、`requirements-dev.txt` 锁定依赖。全局旧版 SDK 不能代替项目环境。
-2. 在目标部署执行正常 Alembic 流程：从 `backend/api` 运行 `python -m alembic upgrade head`。本次新增迁移为 `8f9a2c4d6e01`，上游 `77586e897dae`；不要手工创建生产表。
+2. 在目标部署执行正常 Alembic 流程：从 `backend/api` 运行 `python -m alembic upgrade head`。本次新增迁移为 `01b89a06eb4b`，上游 `8f9a2c4d6e01`；不要手工创建生产表。
 3. 为平台设置有效 Agent 协议档，保留现有环境文件凭据加载规则。新建会话自动使用 AgentLoop；输入栏只从 agent-ui 返回的脱敏 profiles 中选择模型和思考档位。
 4. v2 客户端复用 REST 短票认证，按 API.md V1.81 连接、订阅和发送 `turn.submit`。每次提交可带 `profile_id` 与 `reasoning_effort`，服务端重新校验；`request_id` 标识命令，`client_message_id` 标识用户输入；同一幂等 ID 不得改正文。
 5. 如果使用 bash，API 和 Runner 配置相同的非空 `RUNNER_INTERNAL_TOKEN`，保持内部网络隔离；Runner 还需 Linux cgroup v2 的专用可写委派根 `RUNNER_CGROUP_ROOT`。目录在容器内必须位于 `/sys/fs/cgroup` 下，并有可创建子组和读取/写入必要控制文件的权限。
@@ -73,7 +80,7 @@ python -m ruff check . ../shared
 | 旧 TAOR、react.v1、Workflow 图恢复 | 新路径不装配；旧引擎仍可使用，未无依据删掉共享代码 |
 | 源 CLI、独立静态页面、JSONL 生产写入、全套源工具 | 不迁入；生产持久化语义由 PG 实现 |
 | 源尚未实现的 steer/反思/自动续写 | 不新增，不作为迁移遗漏 |
-| 真实模型与评测 | 仍需三协议实际凭据驱动工具闭环、图文/签名/cache，以及真实 Worker 评测报告验收 |
+| 真实模型与评测 | 仍需两类协议实际凭据驱动工具闭环、图文/签名/cache，以及真实 Worker 评测报告验收 |
 | Linux Runner | 仍需容器/bwrap/cgroup 的进程树取消、失联后持续写入、跨重启隔离和可信对账演练 |
 | 前端 v2 | 已接入单入口会话、协议档菜单、思考控制和重连快照；真实供应商、Linux Runner、权限撤回和隔离故障仍待服务器证据 |
 | 多 API 副本 | PG 写者排他不等于运行中任务自动接力；上线仍需验证会话路由、实例故障与恢复策略 |

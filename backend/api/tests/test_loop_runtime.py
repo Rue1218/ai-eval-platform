@@ -137,7 +137,7 @@ def request(model="model-a"):
         model=model, messages=[], system="平台系统提示", tools=[
             ToolSpec("read", "读取", {"type": "object", "properties": {}})
         ], max_tokens=123, provider="openai", reasoning_effort="off",
-        protocol="openai_responses", profile_id="profile-a", profile_version=7,
+        protocol="anthropic_messages", profile_id="profile-a", profile_version=7,
         compatibility_key="profile-a:7", temperature=0.3,
         provider_options={"prompt_cache": False},
     )
@@ -294,7 +294,7 @@ async def test_max_steps_exceeds_langgraph_default_and_settles_once():
 async def test_protocol_state_survives_tool_roundtrip_and_runtime_restart():
     """重启后的请求继续携带完整原始状态及其工具结果。"""
     item = {"type": "reasoning", "encrypted_content": "cipher", "id": "p"}
-    state = ProtocolState(provider="openai", protocol="openai_responses",
+    state = ProtocolState(provider="anthropic", protocol="anthropic_messages",
                           model="model-a", compatibility_key="profile-a:7", items=[item])
     adapter = ScriptedAdapter(
         [ProviderItemStart("p", 0, "reasoning"), ProviderItemEnd("p", item),

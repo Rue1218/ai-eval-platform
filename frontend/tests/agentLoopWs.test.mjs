@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { AgentLoopWebSocket } from '../src/api/agentLoopWs.ts'
+import { AgentLoopWebSocket, createRequestId } from '../src/api/agentLoopWs.ts'
 import { createLoopState } from '../src/agent/loop/reducer.ts'
 
 globalThis.location = { protocol:'http:',host:'localhost' }
@@ -11,7 +11,6 @@ class Socket {
   close(){this.readyState=3}
   frame(type,data={},extra={}) { this.onmessage({data:JSON.stringify({protocol_version:2,type,data,durability:'control',correlation:{},ts:'2026-09-09T00:00:00Z',...extra})}) }
 }
-
 test('socket 写入时断线保留冻结请求，不伪造发送成功', async () => {
   const state = createLoopState('s'), socket = new Socket()
   const client = new AgentLoopWebSocket('s', {ticket:async()=>'ticket',state:()=>state,replace:()=>{},socket:()=>socket})
@@ -24,6 +23,14 @@ test('socket 写入时断线保留冻结请求，不伪造发送成功', async (
     assert.equal(state.connection, 'reconnecting')
     assert.equal(command.data.content, '保留此消息')
   } finally { client.close() }
+})
+
+test('HTTP 环境缺少 randomUUID 时，仍可生成服务端接受的 UUID 请求标识', () => {
+  const requestId = createRequestId({ getRandomValues: values => {
+    values.set(Uint8Array.from({ length: 16 }, (_, index) => index)); return values
+  } })
+  assert.equal(requestId, '00010203-0405-4607-8809-0a0b0c0d0e0f')
+  assert.match(requestId, /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/)
 })
 test('首次协商、缺口原连接恢复，快照在 H 后继续',async()=>{
   let state=createLoopState('s');const socket=new Socket()

@@ -344,13 +344,6 @@ def _prompt_tokens(request) -> int:
                                           include_reasoning_content=request.provider == "deepseek"),
             "tools": to_openai_tools(request.tools),
         }
-    elif request.protocol == "openai_responses":
-        from dataclasses import asdict
-
-        from app.llm.providers.responses import to_responses_input
-
-        payload = {"instructions": request.system, "input": to_responses_input(request, request.provider),
-                   "tools": [{"type": "function", **asdict(tool)} for tool in request.tools]}
     elif request.protocol == "anthropic_messages":
         from app.llm.providers.anthropic import to_anthropic_messages, to_anthropic_tools
 

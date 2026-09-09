@@ -2,11 +2,15 @@ import type { LoopCommand, LoopFrame } from './agentLoopTypes.ts'
 import { applyFrame, restoreSnapshot, type LoopState } from '../agent/loop/reducer.ts'
 import { createRequestId } from '../utils/requestId.ts'
 
+// 保持既有传输层测试和调用方的导出路径，同时复用全局唯一的 HTTP UUID 实现。
+export { createRequestId } from '../utils/requestId.ts'
+
 /** 可注入短票与 socket 的独立 transport，测试不依赖浏览器或 legacy HTTP mock。 */
 export interface LoopTransportOptions {
   ticket: () => Promise<string>; state: () => LoopState; replace: (state: LoopState) => void
   socket?: (url: string) => WebSocket; onFrame?: (frame: LoopFrame) => void; onRevoke?: () => void
 }
+
 export class AgentLoopWebSocket {
   private ws: WebSocket | null = null
   private timer?: ReturnType<typeof setTimeout>

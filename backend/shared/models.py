@@ -328,12 +328,12 @@ class WorkspaceExecutionGuard(Base):
 
 
 class ProtocolProfile(Base):
-    """三协议档及仅写入的加密上游凭据。"""
+    """两类协议档及仅写入的加密上游凭据。"""
 
     __tablename__ = "protocol_profiles"
     __table_args__ = (
         CheckConstraint(
-            "protocol IN ('openai_chat', 'openai_responses', 'anthropic_messages')",
+            "protocol IN ('openai_chat', 'anthropic_messages')",
             name="ck_protocol_profiles_protocol",
         ),
     )

@@ -1,10 +1,10 @@
 # AI 测试与评估平台 — AgentLoop 前端重写与联调计划
 
-> 版本：V0.8 ｜ 审查日期：2026-09-09 ｜ 状态：按参考页原始 CSS 修正思考卡片与轨迹样式；补齐输入焦点去框与居中双边共享壳层调宽；服务器联调及完整切换验收进行中。
+> 版本：V0.10 ｜ 审查日期：2026-09-09 ｜ 状态：按参考页原始 CSS 修正思考卡片与轨迹样式；补齐输入焦点去框、居中双边共享壳层调宽、HTTP WebSocket 请求标识兼容，并将协议档收敛为两类协议；服务器联调及完整切换验收进行中。
 >
 > 基线：`deepseek-harness-py/static/index.html` 当前页面 + `ai-eval-platform/frontend/src/views/Agent.vue` 当前实现 + 已落地后端 WS v2。后端设计见 [架构设计](AI测试与评估平台-AgentLoop后端架构设计.md)，已验证范围见 [实施记录](AI测试与评估平台-AgentLoop后端实施记录.md)。
 >
-> V0.1 为计划基线；V0.2 的首次实现记录见 §11，V0.3 的单入口与输入栏增量见 §12。下文原阶段退出条件继续有效，不能把本次实现认定为 F0–F7 全部完成。
+> V0.1 为计划基线；V0.2 的首次实现记录见 §11，V0.3 的单入口与输入栏增量见 §12，V0.4–V0.8 的页面细节修订见 §13–§17，HTTP 兼容与协议收敛见 §18–§19。下文原阶段退出条件继续有效，不能把本次实现认定为 F0–F7 全部完成。
 
 ## 1. 用户要求与实施口径
 
@@ -593,3 +593,23 @@ In-app Browser 在 1440×900 下读取计算样式：卡片 272×121.5px、外�
 | :--- | :--- |
 | frontend/src/components/agent/loop/AgentWorkspace.vue | 增加左右透明边缘命中区、随鼠标定位的固定高度细玻璃线，并让壳层居中双边调宽。 |
 | 本文件、design-qa.md | 记录用户确认的交互定义及浏览器布局测量。 |
+
+## 18. V0.9 HTTP WebSocket 请求标识兼容修复（2026-09-09）
+
+服务器以 HTTP 提供页面时，浏览器不保证存在 `crypto.randomUUID()`。传输层现优先使用原生 UUID；缺失或拒绝调用时用 `crypto.getRandomValues()` 生成 RFC 4122 v4 UUID，继续满足 v2 的 `request_id` 契约；没有安全随机源时明确失败，不使用可预测随机数。
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `frontend/src/utils/requestId.ts`、`api/agentLoopWs.ts` | 为 HTTP 与 HTTPS 环境统一生成安全 UUID 请求标识，并保留既有传输层导出路径。 |
+| `frontend/tests/agentLoopWs.test.mjs`、`tests/requestId.test.mjs` | 覆盖 `randomUUID` 缺失时的 RFC 4122 v4 回退格式与 HTTP 发送。 |
+
+## 19. V0.10 协议收敛（2026-09-09）
+
+AgentLoop 与协议档管理只保留 `openai_chat` 和 `anthropic_messages`。模型菜单删除 OpenAI Responses；后端、Worker 和异步调用层删除该适配器。数据库迁移会删除已有 Responses 档及其受控环境文件变量、历史密文，并清理失效的 Agent 默认档位引用。
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `frontend/src/api/types.ts`、`components/modals/ProfileModal.vue`、`api/mockData.ts` | 收紧协议类型、表单选项和 Mock 协议档。 |
+| `backend/api/app/{adapters,schemas,seed}.py`、`llm/` | 删除 Responses HTTP/SDK 适配与协议校验分支。 |
+| `backend/worker/app/{protocol,stress}.py` | 删除评测与压测的 Responses 请求形状。 |
+| `backend/api/migrations/versions/01b89a06eb4b_删除_responses_协议.py` | 清除协议档、环境凭据、默认引用并收紧数据库约束。 |

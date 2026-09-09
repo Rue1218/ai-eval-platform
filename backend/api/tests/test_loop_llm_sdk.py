@@ -13,13 +13,11 @@ import pytest
 from app.llm.loop_contracts import Done, LlmRequest, LlmRequestError, TextDelta
 from app.llm.providers.anthropic import AnthropicAdapter
 from app.llm.providers.openai import OpenAiAdapter
-from app.llm.providers.responses import ResponsesAdapter
 from app.llm.resolver import close_adapter
 
 PROTOCOLS = [
     (OpenAiAdapter, "openai", "/v1/chat/completions"),
     (AnthropicAdapter, "anthropic", "/v1/messages"),
-    (ResponsesAdapter, "openai", "/v1/responses"),
 ]
 
 
@@ -589,7 +587,7 @@ def test_runtime_cancel_prefix_next_request_has_no_opaque_or_partial_tools(
                 return httpx.Response(
                     200, headers={"content-type": "text/event-stream"}, stream=body
                 )
-            history = payload["input" if adapter_type is ResponsesAdapter else "messages"]
+            history = payload["messages"]
             assert len(history) == 3
             assert history[0]["role"] == history[-1]["role"] == "user"
             assert history[1]["role"] == "assistant"

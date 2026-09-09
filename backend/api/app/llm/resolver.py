@@ -60,7 +60,6 @@ def resolve_request(
     normalize_base_url(model.base_url, model.protocol)
     if not model.model or model.protocol not in {
         "openai_chat",
-        "openai_responses",
         "anthropic_messages",
     }:
         raise LlmRequestError("模型或协议不合法", code="model_config")
@@ -128,11 +127,9 @@ def build_adapter(config: ModelConfig | AuthorizedProfileSnapshot) -> tuple[LlmA
     resolve_request(snapshot, messages=[])
     from .providers.anthropic import AnthropicAdapter
     from .providers.openai import OpenAiAdapter
-    from .providers.responses import ResponsesAdapter
 
     classes = {
         "openai_chat": OpenAiAdapter,
-        "openai_responses": ResponsesAdapter,
         "anthropic_messages": AnthropicAdapter,
     }
     return classes[model.protocol](

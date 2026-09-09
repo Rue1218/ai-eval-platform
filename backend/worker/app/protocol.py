@@ -1,11 +1,10 @@
-"""Worker 侧三协议统一调用器（镜像 ``api/app/adapters.py`` 的 ``call_protocol``）。
+"""Worker 侧两类协议统一调用器（镜像 ``api/app/adapters.py`` 的 ``call_protocol``）。
 
 容器隔离导致 Worker 无法直接复用 api 包；本文件与其镜像源保持同一套
 端点 / 鉴权头 / 响应解析逻辑，修改任一侧必须同步另一侧（技术债：后续
 抽共享 package，见 ``worker/app/models.py`` 头注释）。
 
 - ``openai_chat``        POST ``{base}/v1/chat/completions``   ``Authorization: Bearer``
-- ``openai_responses``   POST ``{base}/v1/responses``          ``Authorization: Bearer``
 - ``anthropic_messages`` POST ``{base}/v1/messages``           ``x-api-key`` + ``anthropic-version``
 
 失败统一归一为 ``ProtocolCallError``：上游 4xx/5xx 与连接错误 → ``UPSTREAM``，
@@ -20,8 +19,8 @@ from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-# 契约支持的三种协议（与 protocol_profiles 的 CHECK 约束一致）
-SUPPORTED_PROTOCOLS = ("openai_chat", "openai_responses", "anthropic_messages")
+# 契约支持的两类协议（与 protocol_profiles 的 CHECK 约束一致）
+SUPPORTED_PROTOCOLS = ("openai_chat", "anthropic_messages")
 
 # 非流式调用被测模型的默认超时秒数
 DEFAULT_TIMEOUT_S = 30.0
@@ -38,7 +37,7 @@ class ProtocolCallError(Exception):
 
 @dataclass(frozen=True)
 class AdapterResult:
-    """三协议统一调用结果。
+    """两类协议统一调用结果。
 
     ``usage`` 已归一为 ``prompt_tokens / completion_tokens / total_tokens``；
     ``raw`` 保留上游原始 JSON 对象，消费方落库时按契约截断到 32KB。
@@ -58,7 +57,7 @@ def _post_json(url: str, body: dict, headers: dict, timeout_s: float) -> dict:
 
 
 def _norm_usage(data: dict, *, anthropic: bool) -> dict:
-    """把三协议各自的 usage 字段归一为统一 token 计数结构。"""
+    """把两类协议各自的 usage 字段归一为统一 token 计数结构。"""
     usage = data.get("usage") or {}
     if anthropic:
         prompt = int(usage.get("input_tokens") or 0)
@@ -79,13 +78,6 @@ def _full_text(protocol: str, data: dict) -> str:
     if protocol == "openai_chat":
         choices = data["choices"]
         return str(choices[0]["message"].get("content") or "")
-    if protocol == "openai_responses":
-        return "".join(
-            str(part.get("text") or "")
-            for item in data["output"]
-            for part in (item.get("content") or [])
-            if part.get("type") == "output_text"
-        )
     return "".join(str(block.get("text") or "") for block in data["content"] if block.get("type") == "text")
 
 
@@ -132,13 +124,6 @@ def call_protocol(
         # 与 api 侧一致：xiaomimimo 系列与阿里云 MaaS 网关（deepseek-v4 / glm 等）显式关闭思考提速并避免正文为空
         if "xiaomimimo" in base or "maas.aliyuncs.com" in base:
             body["thinking"] = {"type": "disabled"}
-        headers["Authorization"] = f"Bearer {api_key}"
-
-    elif protocol == "openai_responses":
-        url = f"{base}/v1/responses"
-        body = {"model": model, "input": list(messages), "max_output_tokens": max_tokens}
-        if system:
-            body["instructions"] = system
         headers["Authorization"] = f"Bearer {api_key}"
 
     else:  # anthropic_messages
