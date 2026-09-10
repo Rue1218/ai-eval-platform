@@ -137,35 +137,53 @@ if hybrid_enabled and (checkpointer != "postgres" or not strict_pg):
     print("错误：HYBRID_ENGINE_ENABLED=true 时必须同时设置 AGENT_CHECKPOINTER=postgres 与 AGENT_HITL_STRICT_PG=true", file=sys.stderr)
     sys.exit(1)
 runner_networks = set(services.get("runner", {}).get("networks", {}))
-if runner_networks != {"sandbox_net"}:
-    print("错误：runner 必须仅加入 sandbox_net", file=sys.stderr)
+if runner_networks != {"sandbox_net", "runner_egress"}:
+    print("错误：runner 必须加入 sandbox_net(控制面) + runner_egress(出网)", file=sys.stderr)
     sys.exit(1)
-# G2 降权断言（PoC 定稿形态，见 docs/…-G2G3实施评估与PoC结论.md）：无 privileged、
-# read_only rootfs + tmpfs、no-new-privileges、显式 seccomp:unconfined、SYS_ADMIN。
+if config.get("networks", {}).get("runner_egress", {}).get("internal"):
+    print("错误：runner_egress 不得为 internal（档3 需公网）", file=sys.stderr)
+    sys.exit(1)
+# 沙箱形态断言（容器内直跑，见 docs/…-沙箱执行方案重设计.md）：无 privileged、
+# read_only rootfs + tmpfs、no-new-privileges、显式 seccomp:unconfined、
+# SYS_ADMIN（unshare 建命名空间）+ NET_ADMIN（档3 专用 netns/veth 出网）。
 runner_cfg = services.get("runner", {})
 runner_caps = set(runner_cfg.get("cap_add", []) or [])
 runner_secopts = set(runner_cfg.get("security_opt", []) or [])
 runner_tmpfs = set(runner_cfg.get("tmpfs", []) or [])
 if runner_cfg.get("privileged"):
-    print("错误：runner 不得 privileged（G2 降权），请改 compose 后重试", file=sys.stderr)
+    print("错误：runner 不得 privileged，请改 compose 后重试", file=sys.stderr)
     sys.exit(1)
 if not runner_cfg.get("read_only"):
-    print("错误：runner 必须 read_only: true（G2 降权 rootfs 只读）", file=sys.stderr)
+    print("错误：runner 必须 read_only: true（rootfs 只读，系统目录兜底）", file=sys.stderr)
     sys.exit(1)
 if "SYS_ADMIN" not in runner_caps:
-    print("错误：runner 必须 cap_add SYS_ADMIN（bwrap userns/mount 所需）", file=sys.stderr)
+    print("错误：runner 必须 cap_add SYS_ADMIN（unshare 建 netns/pidns 所需）", file=sys.stderr)
+    sys.exit(1)
+if "NET_ADMIN" not in runner_caps:
+    print("错误：runner 必须 cap_add NET_ADMIN（档3 专用 netns/veth 出网所需）", file=sys.stderr)
     sys.exit(1)
 if "seccomp:unconfined" not in runner_secopts:
-    print("错误：runner 必须显式 seccomp:unconfined（默认 profile 拦 bwrap，PoC 结论）", file=sys.stderr)
+    print("错误：runner 必须显式 seccomp:unconfined（默认 profile 拦 unshare，PoC 结论）", file=sys.stderr)
     sys.exit(1)
 if not any(opt.startswith("no-new-privileges") for opt in runner_secopts):
-    print("错误：runner 必须设 no-new-privileges（G2 降权）", file=sys.stderr)
+    print("错误：runner 必须设 no-new-privileges", file=sys.stderr)
     sys.exit(1)
 if not any(p.startswith("/tmp") for p in runner_tmpfs) or not any(p.startswith("/run") for p in runner_tmpfs):
     print("错误：runner 必须挂 /tmp 与 /run tmpfs（read_only 运行面）", file=sys.stderr)
     sys.exit(1)
-print(f"H5 配置通过：hybrid={hybrid_enabled} checkpointer={checkpointer} strict_pg={strict_pg}；runner 降权断言通过")
+runner_mounts = {v.get("target") for v in (runner_cfg.get("volumes", []) or []) if isinstance(v, dict)}
+if "/data/workspaces" not in runner_mounts:
+    print("错误：runner 必须挂载工作区 /data/workspaces（rw）", file=sys.stderr)
+    sys.exit(1)
+if not any(t for t in runner_mounts if t and not str(t).startswith("/data")):
+    print("错误：runner 必须挂载外部白名单基目录（EXTERNAL_BASE_DIR）", file=sys.stderr)
+    sys.exit(1)
+print(f"H5 配置通过：hybrid={hybrid_enabled} checkpointer={checkpointer} strict_pg={strict_pg}；runner 沙箱断言通过")
 '
+
+# 外部白名单基目录就绪（compose 以它做 rw 挂载；不存在时 docker 会建空目录）
+EXTERNAL_BASE_DIR="${EXTERNAL_BASE_DIR:-/srv/agent-external}"
+mkdir -p "$EXTERNAL_BASE_DIR"
 
 echo "==> [2/4] 按代码差异构建容器镜像（BUILD_VERSION=$BUILD_VERSION，旧容器持续服务中）"
 BUILD_SERVICES=()
@@ -445,7 +463,7 @@ fi
 printf '%s\n' "${DEPLOY_COMMIT:-$(git rev-parse HEAD)}" > "$DEPLOY_MARKER"
 # 持久化镜像引用；使用 %q 防止再次 source 时发生 shell 注入。
 {
-    for variable in WEB_IMAGE API_IMAGE WORKER_IMAGE LIGHTRAG_IMAGE STRESS_IMAGE; do
+    for variable in WEB_IMAGE API_IMAGE WORKER_IMAGE RUNNER_IMAGE LIGHTRAG_IMAGE STRESS_IMAGE; do
         if [ -n "${!variable:-}" ]; then
             printf '%s=%q\n' "$variable" "${!variable}"
         fi
@@ -459,7 +477,7 @@ docker image prune -f --filter "dangling=true" >/dev/null 2>&1 || true
 # 镜像与 .deploy-images.env 记录的当前镜像引用，其余 ghcr 业务镜像删除。
 # 回滚代价为重新 pull（ghcr 保留全部历史 tag），与 2026-08-19 手动清理策略一致。
 KEEP_IMAGES=$(docker ps -a --format '{{.Image}}')
-for variable in WEB_IMAGE API_IMAGE WORKER_IMAGE LIGHTRAG_IMAGE STRESS_IMAGE; do
+for variable in WEB_IMAGE API_IMAGE WORKER_IMAGE RUNNER_IMAGE LIGHTRAG_IMAGE STRESS_IMAGE; do
     KEEP_IMAGES+=$'\n'"${!variable:-}"
 done
 docker images --format '{{.Repository}}:{{.Tag}}' \

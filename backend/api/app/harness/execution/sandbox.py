@@ -66,25 +66,27 @@ def run_sandboxed(
     cmd: str,
     *,
     sandbox_dir: str,
-    mode: str = "workspace-write",
+    mode: str = "isolated",
     timeout_s: float,
     limits: SandboxLimits | None = None,
     bwrap_bin: str = "/usr/bin/bwrap",
     max_output_chars: int = MODEL_TOOL_RESULT_MAX_CHARS,
     on_output: Callable[[str], None] | None = None,
 ) -> str:
-    """经 runner 在一次性 bwrap 沙箱内执行命令，返回 stdout；失败归一为 AppError。
+    """经 runner 在容器内直跑命令，返回 stdout；失败归一为 AppError。
 
-    F2/G4：``mode`` ∈ {"workspace-write", "read-only"}（文件效果档位，见
-    shared.sandbox_kernel.SANDBOX_MODES），经 ``policy{mode, workspace_root}``
-    传给 runner 按档位组装 bind（read-only → scope 只读）；``sandbox_dir``
-    参数名保留为兼容别名，语义 = policy.workspace_root。``bwrap_bin`` 仅为
-    签名兼容保留（bwrap 路径由 runner 侧 env 决定，api 不可指定——安全边界）。
-    失败抛 AppError（TIMEOUT/VALIDATION/INTERNAL），runner 不可达时
-    fail-closed（VALIDATION「沙箱引擎不可用」）。
+    ``mode`` ∈ {"isolated", "network"}（网络模式，见 shared.sandbox_kernel.
+    NETWORK_MODES），经 ``policy{mode, workspace_root}`` 传给 runner；旧文件
+    效果档位（workspace-write/read-only）自动映射为 isolated（过渡兼容）。
+    ``sandbox_dir`` 参数名保留为兼容别名，语义 = policy.workspace_root。
+    ``bwrap_bin`` 仅为签名兼容保留（已无 bwrap）。失败抛 AppError
+    （TIMEOUT/VALIDATION/INTERNAL），runner 不可达时 fail-closed。
     """
     if not cmd.strip():
         raise AppError(ErrorCode.VALIDATION, "bash 命令为空")
+    mode = {"workspace-write": "isolated", "read-only": "isolated"}.get(mode, mode)
+    if mode not in {"isolated", "network"}:
+        raise AppError(ErrorCode.VALIDATION, f"未知沙箱档位：{mode}")
     limits = limits or SandboxLimits()
     # 每 scope 闸门（D4/G3）：同目录 bash 排他，限时等待（config 可调）
     gate = _scope_gate(sandbox_dir)
@@ -164,10 +166,10 @@ def _read_stream_response(response: object, on_output: Callable[[str], None]) ->
 
 
 def probe_sandbox(bwrap_bin: str = "/usr/bin/bwrap", timeout_s: float = 5.0) -> bool:
-    """经 runner 冒烟探测 bwrap 可用性；结果进程内缓存。
+    """经 runner 冒烟探测命名空间（unshare）可用性；结果进程内缓存。
 
     runner 不可达/探测失败返回 False（调用方据此 fail-closed）。``bwrap_bin``
-    仅为签名兼容保留，实际由 runner 侧 env 决定。
+    仅为签名兼容保留（已无 bwrap）。
     """
     global _PROBE_RESULT
     if _PROBE_RESULT is not None:

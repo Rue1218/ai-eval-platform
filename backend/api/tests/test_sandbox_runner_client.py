@@ -61,9 +61,9 @@ def test_run_ok_sends_payload_and_returns_output(monkeypatch) -> None:
     assert result == "hello"
     payload = json.loads(capture["request"].data.decode("utf-8"))
     assert payload["command"] == "echo hello"
-    # F2/G4：sandbox_dir 键并入 policy{ mode, workspace_root }，不再单独发送
+    # sandbox_dir 键并入 policy{ mode, workspace_root }，不再单独发送
     assert payload["policy"] == {
-        "mode": "workspace-write",
+        "mode": "isolated",
         "workspace_root": f"/data/workspaces/{_UUID}",
     }
     assert "sandbox_dir" not in payload
@@ -75,8 +75,8 @@ def test_run_ok_sends_payload_and_returns_output(monkeypatch) -> None:
     assert capture["timeout"] >= 5.0
 
 
-def test_run_read_only_mode_carried_in_policy(monkeypatch) -> None:
-    """read-only 档位随 policy.mode 传递（F2/G4 bind mode 化）。"""
+def test_run_network_mode_carried_in_policy(monkeypatch) -> None:
+    """network 模式随 policy.mode 传递；旧 read-only/workspace-write 归一 isolated。"""
     capture: dict = {}
     _patch_urlopen(
         monkeypatch,
@@ -86,15 +86,21 @@ def test_run_read_only_mode_carried_in_policy(monkeypatch) -> None:
     result = sandbox_mod.run_sandboxed(
         "cat a.txt",
         sandbox_dir=f"/data/workspaces/{_UUID}",
-        mode="read-only",
+        mode="network",
         timeout_s=5.0,
     )
     assert result == "readonly"
     payload = json.loads(capture["request"].data.decode("utf-8"))
     assert payload["policy"] == {
-        "mode": "read-only",
+        "mode": "network",
         "workspace_root": f"/data/workspaces/{_UUID}",
     }
+    # 旧文件效果档位归一为 isolated（滚动兼容）
+    capture.clear()
+    _patch_urlopen(monkeypatch, {"ok": True, "output": "ro"}, capture=capture)
+    sandbox_mod.run_sandboxed("cat a.txt", sandbox_dir=f"/data/workspaces/{_UUID}",
+                              mode="read-only", timeout_s=5.0)
+    assert json.loads(capture["request"].data.decode("utf-8"))["policy"]["mode"] == "isolated"
 
 
 def test_run_stream_forwards_ndjson_output(monkeypatch) -> None:

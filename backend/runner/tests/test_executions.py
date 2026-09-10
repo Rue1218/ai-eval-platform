@@ -41,7 +41,7 @@ def endpoint(tmp_path, monkeypatch):
             return response.status, json.loads(response.read())
 
     payload = {"execution_id": str(uuid4()), "session_id": "s", "turn_id": "t", "call_id": "c",
-               "command": "echo hi", "policy": {"mode": "workspace-write", "workspace_root": str(tmp_path / "workspace")}}
+               "command": "echo hi", "policy": {"mode": "isolated", "workspace_root": str(tmp_path / "workspace")}}
     yield send, payload
     server.shutdown()
     server.server_close()
@@ -64,7 +64,7 @@ def _success(_command, *, control, **_kwargs):
     control.started = True
     control.exit_code = 0
     control.process_tree_terminated = True
-    control.termination_evidence = "cgroup_empty"
+    control.termination_evidence = "process_exited"
     return "hi"
 
 
@@ -104,7 +104,7 @@ def test_cancel_needs_tree_evidence_and_bypasses_slots(endpoint, monkeypatch, pr
         started.set()
         assert control.cancel_event.wait(2)
         control.process_tree_terminated = proven
-        control.termination_evidence = "cgroup_empty" if proven else None
+        control.termination_evidence = "process_exited" if proven else None
         raise SandboxError("CANCELLED", "命令已取消")
 
     monkeypatch.setattr(main, "run_sandboxed", execute)
@@ -181,10 +181,18 @@ def test_slots_and_receipt_capacity_do_not_reexecute(endpoint, monkeypatch):
     assert send("POST", "/executions", {**payload, "execution_id": str(uuid4())})[0] == 503
 
 
-def test_new_execution_without_cgroup_fails_before_launch(endpoint, monkeypatch):
-    """没有委派时拒绝新执行，不能降级到旧 kernel 路径。"""
+def test_engine_unavailable_fails_before_launch(endpoint, monkeypatch):
+    """命名空间引擎不可用时拒绝新执行，不能降级为无隔离裸执行。"""
     send, payload = endpoint
-    monkeypatch.setattr(main, "CGROUP_ROOT", None)
+
+    def unavailable(_command, *, control, **_kwargs):
+        """模拟内核启动前 fail-closed：未启动 + not_started 证据。"""
+        control.started = False
+        control.process_tree_terminated = True
+        control.termination_evidence = "not_started"
+        raise SandboxError("VALIDATION", "沙箱引擎不可用")
+
+    monkeypatch.setattr(main, "run_sandboxed", unavailable)
     send("POST", "/executions", payload)
     body = _finished(send, payload["execution_id"])
     assert body["status"] == "not_started"

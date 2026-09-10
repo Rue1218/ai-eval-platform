@@ -117,6 +117,8 @@ services:
     volumes:
       - ./data:/data
       - ./.env:/run/config/.env
+      # 外部白名单基目录（与 runner 同路径，供 read/write/edit 解析绝对路径）。
+      - ${EXTERNAL_BASE_DIR:-/srv/agent-external}:${EXTERNAL_BASE_DIR:-/srv/agent-external}:rw
     # API 同时连接默认业务网与仅供沙箱调用的内网；runner 不暴露到业务网。
     networks:
       - default
@@ -129,17 +131,11 @@ services:
       start_period: 10s
 
   runner:
-    # 独立沙箱 Runner（P4-2）：bash bwrap 内核执行体，唯一持有
-    # seccomp:unconfined + SYS_ADMIN 的容器（api 已移除；G2 降权后无 privileged）。
-    # 降权形态（G2-PoC，2026-09-07 实测定稿，见 docs/…-G2G3实施评估与PoC结论.md）：
-    #   - 去 privileged（消除设备全访问与 SYS_MODULE/RAWIO/PTRACE 等超集）；
-    #   - 保留 Docker 默认 caps + SYS_ADMIN——cap_drop ALL 会破坏 bwrap userns
-    #     uid_map（容器 root 需 SETUID 系默认 cap）；
-    #   - seccomp 维持 unconfined：默认 builtin profile 拦截 userns/pivot_root 链
-    #     （实测 pivot_root EPERM）；自定义最小 profile 列为后续强化；
-    #   - read_only rootfs + /tmp /run tmpfs + no-new-privileges（逃逸落盘受限）；
-    #   - 容器 root 运行：Docker --user 下 cap-add 不生效（CapEff=0）→ 非 root
-    #     USER 否决（bwrap 全 unshare 不可用）。
+    # 独立沙箱 Runner：bash 在容器内直跑（容器即隔离边界，unshare 建 netns/pidns）。
+    # 唯一持有 seccomp:unconfined + SYS_ADMIN（建命名空间）+ NET_ADMIN（档3 专用
+    # netns/veth 出公网）的容器；read_only rootfs 使系统目录天然只读。
+    #   - read_only rootfs + /tmp /run tmpfs + no-new-privileges（写落盘受限）；
+    #   - 容器 root 运行：Docker --user 下 cap-add 不生效（CapEff=0）→ 非 root 否决。
     image: ${RUNNER_IMAGE:-ai-eval-platform-runner}
     mem_limit: 512m
     build:
@@ -155,22 +151,25 @@ services:
       - no-new-privileges:true
     cap_add:
       - SYS_ADMIN
+      - NET_ADMIN
     read_only: true
     tmpfs:
       - /tmp:rw,size=64m
       - /run:rw,size=8m
     environment:
-      # 工作区根（与 api 同挂 ./data:/data，路径两侧一致）
+      # 工作区根（与 api 同挂 ./data/workspaces，路径两侧一致）
       SANDBOX_WORKSPACE_ROOT: /data/workspaces
       RUNNER_HOST: 0.0.0.0
       RUNNER_PORT: "8001"
       RUNNER_INTERNAL_TOKEN: ${RUNNER_INTERNAL_TOKEN:-}
-      # 新执行须有受限 cgroup v2 委派；未配置时拒绝新 bash，不降低沙箱隔离。
-      RUNNER_CGROUP_ROOT: ${RUNNER_CGROUP_ROOT:-}
     volumes:
-      - ./data:/data
+      # 仅挂工作区（不挂整盘 ./data，避免暴露备份/其他数据）；系统目录靠
+      # read_only rootfs 兜底；外部白名单基目录按需 rw 挂入。
+      - ./data/workspaces:/data/workspaces
+      - ${EXTERNAL_BASE_DIR:-/srv/agent-external}:${EXTERNAL_BASE_DIR:-/srv/agent-external}:rw
     networks:
       - sandbox_net
+      - runner_egress
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,json; print(json.load(urllib.request.urlopen('http://localhost:8001/health')))"]
       interval: 10s
@@ -256,6 +255,8 @@ volumes:
   redisdata:
 
 networks:
-  # runner 仅加入 internal 网络，由 API 通过内网访问，避免被其他业务容器横向访问。
+  # 控制面内网：仅 api↔runner（postgres/redis 不在其上，runner 结构性不可达）。
   sandbox_net:
     internal: true
+  # 出网网络：仅 runner，提供公网（档3 专用 netns/veth 只经此出网，隔离内网）。
+  runner_egress: {}

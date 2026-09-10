@@ -22,12 +22,12 @@ def _assert_verdict(verdict: ExecVerdict, allow: bool, mode: str) -> None:
 
 
 def test_bash_engine_three_tiers() -> None:
-    """bwrap 放行；off / 未知引擎 fail-closed（三档显式判定）。"""
-    _assert_verdict(resolve_bash_engine("bwrap"), True, "bwrap")
+    """container 放行；off / 未知引擎 fail-closed（三档显式判定）。"""
+    _assert_verdict(resolve_bash_engine("container"), True, "container")
     _assert_verdict(resolve_bash_engine("off"), False, "off")
     _assert_verdict(resolve_bash_engine(""), False, "off")
-    _assert_verdict(resolve_bash_engine("docker"), False, "off")
-    # off 文案沿用历史用户提示（说明 bwrap 缺失属 fail-closed 原因，非伪装可用）
+    _assert_verdict(resolve_bash_engine("bwrap"), False, "off")
+    # off 文案沿用历史用户提示（说明引擎缺失属 fail-closed 原因，非伪装可用）
     assert "read/write/edit" in resolve_bash_engine("off").reason
 
 

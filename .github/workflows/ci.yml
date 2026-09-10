@@ -36,12 +36,13 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt -r requirements-dev.txt
 
-      - name: Install sandbox runtime (bubblewrap)
-        # bwrap 沙箱集成测试依赖 bubblewrap；未安装/被 userns 限制时
-        # probe_sandbox 探测失败 → 集成测试自动 skip，不会误红。
+      - name: Probe sandbox runtime (unshare)
+        # 容器内直跑沙箱集成测试依赖 util-linux 的 unshare；Ubuntu runner 自带，
+        # 探测失败时 probe_sandbox()=False → 集成测试自动 skip，不会误红。
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends bubblewrap
+          unshare --net --pid --fork --mount-proc true \
+            && echo "unshare available" \
+            || echo "unshare unavailable (sandbox integration tests will skip)"
 
       - name: Lint (ruff)
         run: ruff check . ../shared
@@ -81,12 +82,13 @@ jobs:
         # Runner 与共享沙箱内核仅依赖标准库；pytest 用于 HTTP 契约和清理语义测试。
         run: pip install pytest
 
-      - name: Install Linux sandbox runtime (bubblewrap)
-        # 验证 Linux 运行环境具备 bwrap。真实可写 cgroup 委派需部署环境提供，
-        # 对应测试会在未设置 RUNNER_TEST_CGROUP_ROOT 时按标记跳过。
+      - name: Probe Linux sandbox runtime (unshare)
+        # 验证 Linux 运行环境具备 util-linux unshare。真实命名空间集成用例需
+        # RUNNER_TEST_UNSHARE=1，未设置时按标记跳过。
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends bubblewrap
+          unshare --net --pid --fork --mount-proc true \
+            && echo "unshare available" \
+            || echo "unshare unavailable (namespace integration tests will skip)"
 
       - name: Test Runner (pytest)
         # 覆盖 Runner HTTP 契约、执行幂等、取消与共享内核的确定性清理路径。

@@ -225,7 +225,7 @@ async def _build_dependencies(service, entry, actor_id: str, data: dict, resourc
             require_visible_session(db, context.session_id, actor_id)
             if definition.name not in ALLOWED_TOOLS:
                 raise AppError(ErrorCode.WHITELIST, "工具不在当前授权范围")
-            if definition.name == "bash" and settings.sandbox_engine != "bwrap":
+            if definition.name == "bash" and settings.sandbox_engine != "container":
                 raise AppError(ErrorCode.VALIDATION, "沙箱执行能力未启用")
 
     async def mcp(definition, arguments, context, identity):
@@ -303,7 +303,7 @@ async def _build_dependencies(service, entry, actor_id: str, data: dict, resourc
 
     runner_callback = None
     instance_id = None
-    if settings.runner_internal_token and settings.sandbox_engine == "bwrap":
+    if settings.runner_internal_token and settings.sandbox_engine == "container":
         from app.harness.execution.loop_runner import LoopRunnerClient, RunnerRequest
 
         runner = LoopRunnerClient(settings.sandbox_runner_url, settings.runner_internal_token)

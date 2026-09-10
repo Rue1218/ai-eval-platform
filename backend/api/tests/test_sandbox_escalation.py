@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from shared.sandbox_kernel import _looks_readonly_denied
 
 from app.agent import LangGraphAgent
 from app.config import settings
@@ -142,20 +141,7 @@ def _esc_on(monkeypatch):
     yield
 
 
-# ─── 1. kernel read-only 拒写识别 ───
-
-
-def test_looks_readonly_denied_matches_erofs_evidence() -> None:
-    assert _looks_readonly_denied("touch: cannot touch '/work/a.txt': Read-only file system")
-    assert _looks_readonly_denied("bash: echo: cannot create /work/x: erofs")
-    assert _looks_readonly_denied("  READ-ONLY FILE SYSTEM  ")
-
-
-def test_looks_readonly_denied_negative_cases() -> None:
-    assert not _looks_readonly_denied("touch: cannot touch '/work/a.txt': Permission denied")
-    assert not _looks_readonly_denied("No space left on device")
-    assert not _looks_readonly_denied("")
-    assert not _looks_readonly_denied("command not found")
+# ─── 1. 错误码映射 ───
 
 
 def test_denied_error_code_maps_in_client() -> None:
