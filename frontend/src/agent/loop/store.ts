@@ -19,11 +19,17 @@ export function createLoopStore(onRevoke: (id: string) => void) {
   /** 清理授权正文和诊断；恢复必须从 cursor=0 重建。 */
   function remove(id: string) { clients.get(id)?.close(); clients.delete(id); delete sessions[id]; delete traces[id]; delete capabilities[id]; for (const file of drafts[id]?.files || []) { file.removed = true; URL.revokeObjectURL(file.source) }; delete drafts[id] }
   function draft(id: string) { return drafts[id] ??= { content: '', files: [], submitting: false } }
-  function open(id: string): AgentLoopWebSocket {
+  function open(id: string, preparedTicket?: Promise<string>): AgentLoopWebSocket {
     if (clients.has(id)) return clients.get(id)!
     sessions[id] = createLoopState(id); traces[id] = createTrace()
+    // 新建会话时短票可与 REST 建会并行；首次失败后的重连仍重新领取一次性短票。
+    let firstTicket = preparedTicket
     const client = markRaw(new AgentLoopWebSocket(id, {
-      ticket: async () => (await api.auth.getWsTicket()).ticket,
+      ticket: async () => {
+        const ticket = firstTicket
+        firstTicket = undefined
+        return ticket ? await ticket : (await api.auth.getWsTicket()).ticket
+      },
       state: () => sessions[id], replace: value => { sessions[id] = value },
       onFrame: frame => {
         applyTrace(traces[id], frame)

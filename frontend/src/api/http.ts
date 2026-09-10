@@ -44,6 +44,8 @@ import {
   type UserWorkspace,
   type UserWorkspaceList,
   type UserWorkspaceFileList,
+  type UserWorkspaceTree,
+  type UserWorkspaceFileContent,
   type CompareSampleRow,
   type McpHealthCheckResponse,
 } from './types'
@@ -319,6 +321,7 @@ export const api = {
     async fetchModels(params: {
       protocol: string
       base_url: string
+      full_url?: boolean
       api_key?: string
       profile_id?: string
       anthropic_version?: string
@@ -1236,6 +1239,37 @@ export const api = {
     async createFolder(id: string, path: string, name: string): Promise<{ ok: boolean; path: string }> {
       const { data } = await http.post(`/api/workspaces/${id}/files`, { path, name })
       return data
+    },
+    async getTree(id: string, max_depth = 5): Promise<UserWorkspaceTree> {
+      const { data } = await http.get(`/api/workspaces/${id}/files/tree`, { params: { max_depth } })
+      return data
+    },
+    async getFileContent(id: string, path: string): Promise<UserWorkspaceFileContent> {
+      const { data } = await http.get(`/api/workspaces/${id}/files/content`, { params: { path } })
+      return data
+    },
+    async saveFileContent(id: string, path: string, content: string): Promise<{ ok: boolean; path: string; size: number }> {
+      const { data } = await http.put(`/api/workspaces/${id}/files/content`, { path, content })
+      return data
+    },
+    async createFile(id: string, path: string, name: string, content = ''): Promise<{ ok: boolean; path: string; name: string }> {
+      const { data } = await http.post(`/api/workspaces/${id}/files/file`, { path, name, content })
+      return data
+    },
+    async renamePath(id: string, path: string, new_name: string): Promise<{ ok: boolean; old_path: string; new_path: string; name: string }> {
+      const { data } = await http.patch(`/api/workspaces/${id}/files/rename`, { path, new_name })
+      return data
+    },
+    async deletePath(id: string, path: string): Promise<{ ok: boolean; path: string; deleted: boolean }> {
+      const { data } = await http.delete(`/api/workspaces/${id}/files`, { params: { path } })
+      return data
+    },
+    async getRawBlob(id: string, path: string): Promise<Blob> {
+      const res = await http.get(`/api/workspaces/${id}/files/raw`, {
+        params: { path },
+        responseType: 'blob',
+      })
+      return res.data
     },
   },
 

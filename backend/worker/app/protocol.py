@@ -19,6 +19,8 @@ from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from shared.model_urls import model_request_url
+
 # 契约支持的两类协议（与 protocol_profiles 的 CHECK 约束一致）
 SUPPORTED_PROTOCOLS = ("openai_chat", "anthropic_messages")
 
@@ -81,20 +83,11 @@ def _full_text(protocol: str, data: dict) -> str:
     return "".join(str(block.get("text") or "") for block in data["content"] if block.get("type") == "text")
 
 
-def _service_base_url(base_url: str) -> str:
-    """规范化协议服务根地址，兼容带或不带 ``/v1`` 的协议档配置。
-
-    Worker 与 API 侧调用器均会统一追加 ``/v1``。仅剥离输入地址末尾的
-    版本段，避免真实评测请求生成 ``/v1/v1/...``，而不改写持久化配置。
-    """
-    base = base_url.strip().rstrip("/")
-    return base[:-3] if base.endswith("/v1") else base
-
-
 def call_protocol(
     *,
     protocol: str,
     base_url: str,
+    full_url: bool = False,
     model: str,
     api_key: str,
     messages: list[dict],
@@ -108,11 +101,14 @@ def call_protocol(
     if protocol not in SUPPORTED_PROTOCOLS:
         raise ProtocolCallError("VALIDATION", f"协议不受支持：{protocol}")
 
-    base = _service_base_url(base_url)
+    try:
+        url = model_request_url(base_url, protocol, full_url=full_url)
+    except ValueError as exc:
+        raise ProtocolCallError("VALIDATION", "模型服务地址不合法") from exc
+    base = base_url
     headers = {"Content-Type": "application/json"}
 
     if protocol == "openai_chat":
-        url = f"{base}/v1/chat/completions"
         chat: list[dict] = ([{"role": "system", "content": system}] if system else []) + list(messages)
         body: dict = {
             "model": model,
@@ -127,7 +123,6 @@ def call_protocol(
         headers["Authorization"] = f"Bearer {api_key}"
 
     else:  # anthropic_messages
-        url = f"{base}/v1/messages"
         body = {
             "model": model,
             "messages": list(messages),

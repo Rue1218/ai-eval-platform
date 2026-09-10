@@ -46,6 +46,7 @@ _CONFIG_KEYS: tuple[str, ...] = (
     "reasoning_enabled",
     "reasoning_effort",
     "tool_call_mode",
+    "full_url",  # 完整端点模式须随无密钥配置恢复。
 )
 
 
@@ -190,6 +191,7 @@ def rebuild_model_config(
     return ModelConfig(
         protocol=config.get("protocol") or "openai_chat",  # type: ignore[arg-type]
         base_url=str(config.get("base_url") or ""),
+        full_url=bool(config.get("full_url", False)),
         model=str(config.get("model") or ""),
         api_key=api_key,
         anthropic_version=config.get("anthropic_version"),  # type: ignore[arg-type]

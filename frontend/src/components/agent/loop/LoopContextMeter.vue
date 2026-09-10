@@ -2,29 +2,59 @@
   <n-popover trigger="click" placement="top" :show-arrow="false">
     <template #trigger>
       <button class="loop-control meter" :aria-label="label" :title="label" type="button">
-        <svg viewBox="0 0 20 20" aria-hidden="true">
-          <circle cx="10" cy="10" r="7" fill="none" stroke="#dfe8e4" stroke-width="2"/>
-          <circle v-if="meter" cx="10" cy="10" r="7" fill="none" stroke="#587be8" stroke-width="2" :stroke-dasharray="`${percent * .44} 44`" transform="rotate(-90 10 10)"/>
+        <svg viewBox="0 0 36 36" aria-hidden="true">
+          <circle class="meter-base" cx="18" cy="18" r="12" fill="none" stroke-width="4" />
+          <circle
+            v-for="segment in ringSegments"
+            :key="segment.key"
+            cx="18"
+            cy="18"
+            r="12"
+            fill="none"
+            stroke-width="4"
+            :stroke="segment.color"
+            :stroke-dasharray="`${segment.length} ${ringLength - segment.length}`"
+            :stroke-dashoffset="-segment.offset"
+            transform="rotate(-90 18 18)"
+          />
         </svg>
-        <span v-if="!meter">?</span>
       </button>
     </template>
-    <section class="meter-detail" :aria-label="label">
+
+    <section class="meter-detail" aria-label="实际请求上下文用量">
       <template v-if="meter">
         <header class="meter-header">
-          <strong>上下文已用 <b>{{ percent }}%</b></strong>
-          <span>~{{ formatTokens(meter.input_tokens) }} / {{ formatTokens(meter.capacity) }}</span>
+          <strong>上下文预计占用 {{ Math.round(percent) }}%</strong>
+          <strong>{{ formatTokens(usedTokens) }} / {{ formatTokens(meter.capacity) }}</strong>
         </header>
-        <div class="meter-track" role="progressbar" aria-label="实际请求上下文占用" :aria-valuenow="percent" aria-valuemin="0" aria-valuemax="100">
-          <span v-for="segment in segments" :key="segment.key" class="meter-segment" :data-source="segment.key" :style="{ width: `${segment.percent}%`, background: segment.color }"/>
+        <div
+          class="meter-progress"
+          role="progressbar"
+          aria-label="上下文预计占用"
+          :aria-valuenow="Math.round(percent)"
+          aria-valuemin="0"
+          aria-valuemax="100"
+        >
+          <span
+            v-for="segment in progressSegments"
+            :key="segment.key"
+            :style="{ width: `${segment.percent}%`, backgroundColor: segment.color }"
+          />
         </div>
-        <div class="meter-legend">
-          <div v-for="segment in segments" :key="segment.key" class="meter-row">
-            <span class="meter-name"><i :style="{ background: segment.color }"/>{{ segment.label }}</span>
-            <span>~{{ formatTokens(segment.tokens) }}</span>
-          </div>
-        </div>
-        <footer>输出预留 ~{{ formatTokens(meter.reserved_output_tokens) }} · 最近一次实际请求</footer>
+        <ul class="meter-breakdown">
+          <li v-for="item in breakdownItems" :key="item.key">
+            <span class="meter-dot" :style="{ backgroundColor: item.color }" />
+            <span>{{ item.label }}</span>
+            <strong>{{ formatTokens(item.tokens) }}</strong>
+          </li>
+        </ul>
+        <p v-if="meter.reserved_output_tokens" class="meter-reserved">
+          <span />输出预留<strong>{{ formatTokens(meter.reserved_output_tokens) }}</strong>
+        </p>
+        <small>
+          {{ meter.basis === 'serialized_request.v2' ? '同源序列化估算 · 最近一次实际请求' : '历史请求未记录来源细分，输入已合并到对话消息' }}<br>
+          不包含尚未发送的草稿
+        </small>
       </template>
       <p v-else>尚无实际请求统计，当前用量未知。</p>
     </section>
@@ -38,41 +68,200 @@ import type { LoopMeter } from '../../../api/agentLoopTypes'
 
 const props = defineProps<{ meter?: LoopMeter | null }>()
 
-/** 各段只计算实际发往模型的序列化内容，旧回合缺明细时归入对话消息。 */
-const inputTokens = computed(() => props.meter?.input_tokens || 0)
-const capacity = computed(() => Math.max(1, props.meter?.capacity || 1))
-const percent = computed(() => Math.min(100, Math.max(0, Math.round(inputTokens.value / capacity.value * 100))))
-const label = computed(() => props.meter ? `上下文已用 ${percent.value}%` : '上下文用量未知')
-const hasBreakdown = computed(() => props.meter && [
-  props.meter.system_tokens, props.meter.skills_tokens, props.meter.mcp_tokens,
-  props.meter.tools_tokens, props.meter.conversation_tokens,
-].some(value => value !== undefined))
-const segments = computed(() => {
-  const meter = props.meter
-  const system = meter?.system_tokens || 0
-  const skills = meter?.skills_tokens || 0
-  const mcp = meter?.mcp_tokens || 0
-  const tools = meter?.tools_tokens || 0
-  const conversation = hasBreakdown.value ? meter?.conversation_tokens || 0 : inputTokens.value
+const palette = {
+  system_prompt: '#97a1af',
+  conversation_messages: '#4d8df7',
+  tools: '#9571f4',
+  mcp: '#ea885f',
+  skill: '#bd8a2d',
+  memory_files: '#22a47b',
+  reserved_output: '#d5dbe2',
+} as const
+
+const labels = {
+  system_prompt: '系统提示词',
+  conversation_messages: '对话消息',
+  tools: '工具',
+  mcp: 'MCP',
+  skill: 'Skill',
+  memory_files: '记忆文件',
+} as const
+
+const ringLength = 75.4
+const usedTokens = computed(() => props.meter ? props.meter.input_tokens + props.meter.reserved_output_tokens : 0)
+const percent = computed(() => props.meter?.capacity ? Math.min(100, usedTokens.value / props.meter.capacity * 100) : 0)
+const label = computed(() => props.meter ? `上下文预计占用 ${Math.round(percent.value)}%（含输出预留）` : '上下文用量未知')
+const breakdown = computed(() => props.meter?.breakdown ?? {
+  system_prompt: 0,
+  conversation_messages: props.meter?.input_tokens ?? 0,
+  tools: 0,
+  mcp: 0,
+  skill: 0,
+  memory_files: 0,
+})
+const breakdownItems = computed(() => Object.entries(labels).map(([key, label]) => ({
+  key: key as keyof typeof labels,
+  label,
+  color: palette[key as keyof typeof labels],
+  tokens: breakdown.value[key as keyof typeof labels],
+})))
+const progressSegments = computed(() => {
+  if (!props.meter?.capacity) return []
   return [
-    { key: 'system', label: '系统提示词', tokens: system, color: '#98a2b3' },
-    { key: 'skill', label: 'Skill', tokens: skills, color: '#9b8afb' },
-    { key: 'mcp', label: 'MCP', tokens: mcp, color: '#e6a23c' },
-    { key: 'tools', label: '工具', tokens: tools, color: '#5f8fe8' },
-    { key: 'conversation', label: '对话消息', tokens: conversation, color: '#7c9ff5' },
-  ].map(segment => ({ ...segment, percent: Math.min(100, Math.max(0, segment.tokens / capacity.value * 100)) }))
+    ...breakdownItems.value,
+    { key: 'reserved_output', color: palette.reserved_output, tokens: props.meter.reserved_output_tokens },
+  ].filter(item => item.tokens > 0).map(item => ({
+    ...item,
+    percent: Math.min(100, item.tokens / props.meter!.capacity * 100),
+  }))
+})
+const ringSegments = computed(() => {
+  let offset = 0
+  return progressSegments.value.map(segment => {
+    const length = ringLength * segment.percent / 100
+    const result = { ...segment, length, offset }
+    offset += length
+    return result
+  })
 })
 
-/** 对齐截图的紧凑 K/M 格式；0 不伪装成近似值。 */
-function formatTokens(tokens: number): string {
-  if (!tokens) return '0'
-  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(tokens % 1_000_000 ? 1 : 0)}M`
-  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}K`
-  return tokens.toLocaleString()
+/** 使用 K/M 紧凑格式，和输入栏的小型信息密度保持一致。 */
+function formatTokens(value: number): string {
+  if (value >= 1_000_000) return `~${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}M`
+  if (value >= 1_000) return `~${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)}K`
+  return value.toLocaleString()
 }
 </script>
 
 <style scoped>
-/* 触发器仅保留 18px 小圆环，避免占据输入栏操作位。 */
-.meter{position:relative;width:26px;height:30px;justify-content:center;padding:0!important}.meter svg{width:18px;height:18px}.meter>span{position:absolute;inset:6px;display:grid;place-items:center;font-size:11px}.meter-detail{width:min(268px,calc(100vw - 28px));padding:12px 13px 10px;color:#344054}.meter-header{display:flex;align-items:baseline;justify-content:space-between;gap:12px;font-size:12px}.meter-header strong{font-weight:650}.meter-header b{color:#415b9c}.meter-header>span{color:#344054;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11px;font-weight:600;white-space:nowrap}.meter-track{display:flex;overflow:hidden;width:100%;height:4px;margin:9px 0 11px;border-radius:999px;background:#edf0f5}.meter-segment{display:block;min-width:0;height:100%;transition:width .2s ease}.meter-legend{display:grid;gap:7px}.meter-row{display:flex;align-items:center;justify-content:space-between;color:#536071;font-size:12px;line-height:1.2}.meter-name{display:flex;align-items:center;gap:7px}.meter-name i{display:block;width:7px;height:7px;border-radius:2px}.meter-row>span:last-child{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11px;color:#344054}footer{margin-top:10px;padding-top:8px;border-top:1px solid #eef1f4;color:#8a95a4;font-size:10px;line-height:1.35}@media(prefers-reduced-motion:reduce){.meter-segment{transition:none}}
+.meter {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0 !important;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #667487;
+  cursor: pointer;
+  line-height: 1;
+  flex-shrink: 0;
+  vertical-align: middle;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.meter:hover:not(:disabled) {
+  background: #f3f7f5;
+  color: #304a3e;
+}
+.meter:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+.meter svg {
+  display: block;
+  width: 24px;
+  height: 24px;
+  overflow: visible;
+  flex-shrink: 0;
+}
+.meter-base {
+  stroke: #e4e9e8;
+}
+[data-theme='dark'] .meter-base {
+  stroke: rgba(255, 255, 255, 0.18);
+}
+[data-theme='dark'] .meter {
+  color: #8895a4;
+}
+[data-theme='dark'] .meter:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+}
+.meter-detail {
+  width: min(280px, calc(100vw - 32px));
+  padding: 2px 1px;
+}
+.meter-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  color: #303a48;
+  font-size: 12px;
+  line-height: 20px;
+}
+.meter-header strong:last-child {
+  font-variant-numeric: tabular-nums;
+}
+.meter-progress {
+  display: flex;
+  overflow: hidden;
+  height: 4px;
+  margin: 8px 0 10px;
+  border-radius: 99px;
+  background: #edf0f1;
+}
+.meter-progress span {
+  display: block;
+  min-width: 0;
+  height: 100%;
+}
+.meter-breakdown {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.meter-breakdown li,
+.meter-reserved {
+  display: grid;
+  grid-template-columns: 7px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 6px;
+  color: #667385;
+  font-size: 12px;
+  line-height: 16px;
+}
+.meter-dot,
+.meter-reserved > span {
+  display: block;
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+}
+.meter-breakdown strong,
+.meter-reserved strong {
+  color: #435064;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+.meter-reserved {
+  margin: 8px 0 0;
+  padding-top: 7px;
+  border-top: 1px solid #edf0f1;
+}
+.meter-reserved > span {
+  background: #d5dbe2;
+}
+.meter-detail small {
+  display: block;
+  margin-top: 9px;
+  color: #8994a1;
+  font-size: 10px;
+  line-height: 1.5;
+}
+.meter-detail > p {
+  margin: 0;
+  color: #6f7b89;
+  font-size: 12px;
+}
+@media (max-width: 560px) {
+  .meter-detail {
+    width: min(260px, calc(100vw - 24px));
+  }
+}
 </style>

@@ -23,6 +23,9 @@ export class AgentLoopWebSocket {
   private traceEnabled = false
   private traceSeq = -1
   private traceRequestId: string | null = null
+  private streamVersion = ''
+  /** socket 重建时保持稳定，服务端据此区分重连与同账号的另一标签页。 */
+  private readonly clientId = createRequestId()
   constructor(private sessionId: string, private options: LoopTransportOptions) {}
   /** 幂等请求由调用者保存；重连不会自动换 ID 或提交草稿。 */
   send(command: LoopCommand): boolean {
@@ -43,7 +46,10 @@ export class AgentLoopWebSocket {
   resync(): void {
     if (this.syncing) return
     this.syncing = true; this.options.state().ready = false
-    this.send(this.command('subscribe', { after_cursor: this.options.state().cursor }))
+    const data: Record<string, unknown> = { after_cursor: this.options.state().cursor }
+    // v2.1 的严格服务端不接受新字段；先协商再为 v2.2 增加稳定客户端身份。
+    if (this.streamVersion === 'agent-loop-stream.v2.2') data.client_id = this.clientId
+    this.send(this.command('subscribe', data))
   }
   trace(enabled: boolean, afterSeq = -1): void {
     this.traceEnabled = enabled; this.traceSeq = afterSeq
@@ -77,12 +83,13 @@ export class AgentLoopWebSocket {
             this.traceRequestId = null
           }
           if (frame.type === 'capabilities') {
-            if (frame.data.stream_schema_version !== 'agent-loop-stream.v2.1') throw new Error('不支持的事件 Schema 版本')
+            if (!['agent-loop-stream.v2.1', 'agent-loop-stream.v2.2'].includes(frame.data.stream_schema_version)) throw new Error('不支持的事件 Schema 版本')
+            this.streamVersion = frame.data.stream_schema_version
             this.resync(); return
           }
           if (frame.type === 'resync.required') {
             const next = restoreSnapshot(this.sessionId, frame.data.cursor, frame.data.snapshot)
-            next.connection = 'online'; next.controlled = this.options.state().controlled
+            next.connection = 'online'
             this.options.replace(next); this.syncing = false; this.resync(); return
           }
           const outcome = applyFrame(this.options.state(), frame)

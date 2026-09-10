@@ -22,7 +22,8 @@ from sqlalchemy.orm.attributes import flag_modified
 from .db import SessionLocal
 from .events import push_ws
 from .models import ProtocolProfile, Report, Setting, Task, TaskEvent
-from .profile_env import profile_connection
+from .profile_env import profile_connection, read_profile_env
+from shared.model_urls import model_request_url
 from .task_state import claim_running_task_for_terminal_write, is_cancelled
 
 logger = logging.getLogger("worker.stress")
@@ -31,12 +32,6 @@ DEFAULT_STRESS_URL = "http://stress:19090"
 DEFAULT_MAX_QPS = 500
 DEFAULT_MAX_DURATION_S = 1800
 POLL_INTERVAL_S = 1.0
-
-
-def _service_base_url(base_url: str) -> str:
-    """与 protocol.py 相同：去掉末尾 /v1，避免拼出 /v1/v1。"""
-    base = base_url.strip().rstrip("/")
-    return base[:-3] if base.endswith("/v1") else base
 
 
 def _now() -> datetime:
@@ -134,17 +129,15 @@ def _build_probe(profile: ProtocolProfile) -> tuple[str, str, dict[str, str], di
     base_url, model, api_key = profile_connection(profile, allow_global_alias=True)
     if not base_url or not model:
         raise ValueError("missing_target")
-    base = _service_base_url(base_url)
+    url = model_request_url(base_url, profile.protocol, full_url=read_profile_env(profile.id).full_url)
     headers = {"Content-Type": "application/json"}
     ping = [{"role": "user", "content": "ping"}]
     if profile.protocol == "anthropic_messages":
-        url = f"{base}/v1/messages"
         body = {"model": model, "messages": ping, "max_tokens": 8}
         if api_key:
             headers["x-api-key"] = api_key
         headers["anthropic-version"] = profile.anthropic_version or "2023-06-01"
     else:
-        url = f"{base}/v1/chat/completions"
         body = {"model": model, "messages": ping, "max_tokens": 8, "temperature": 0}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"

@@ -59,6 +59,14 @@ test('四步模型、三个同名工具与下一回合：顺序和调用身份�
   assert.equal(Object.keys(s.tools).length, 4)
 })
 
+test('订阅和快照恢复服务端确认的控制权，不沿用断线前本地猜测', () => {
+  const state = createLoopState('s'), f = fixture()
+  applyFrame(state, f('subscribed', {cursor:0,controller:{active:true,owned_by_actor:true}}, {}, 'control'))
+  assert.equal(state.controlled, true)
+  const restored = restoreSnapshot('s', 0, {timeline:[],controller:{active:false,owned_by_actor:false}})
+  assert.equal(restored.controlled, false)
+})
+
 test('模型开始帧迟于文本或思考增量到达时，不倒退显示状态', () => {
   for (const [kind, phase] of [['assistant.text.delta', 'answering'], ['assistant.reasoning.delta', 'thinking']]) {
     const state = createLoopState('s'), f = fixture(), c = { attempt_id: 'a' }
@@ -70,19 +78,29 @@ test('模型开始帧迟于文本或思考增量到达时，不倒退显示状�
   }
 })
 
-test('轨迹每次模型请求合为一行，重试独立并保留最终正文和来源', () => {
+test('轨迹请求快照与助手提交分别成行，平台扩展归入参考页四类筛选', () => {
   assert.equal(category('approval.requested'), 'approval')
-  assert.equal(category('question.requested'), 'question')
+  assert.equal(category('question.requested'), 'approval')
   assert.equal(category('task_confirmation.requested'), 'approval')
+  assert.equal(category('task.progress'), 'tool')
   const f = fixture(), c = { attempt_id: 'a' }
   const facts = [f('assistant.start', {request_summary: {model: 'test'}}, c),
     f('assistant.message', {content: '完整回答'}, {...c, source_seq: 3}),
     f('assistant.end', {outcome: 'committed'}, c), f('assistant.start', {}, {attempt_id: 'b'})]
   const rows = semanticTraceRows(facts)
-  assert.equal(rows.length, 2)
-  assert.equal(rows[0].layers.length, 3)
-  assert.equal(rows[0].data.content, '完整回答')
+  assert.equal(rows.length, 3)
+  assert.equal(rows[0].layers.length, 1)
   assert.equal(rows[0].data.request_summary.model, 'test')
+  assert.equal(rows[1].layers.length, 2)
+  assert.equal(rows[1].data.content, '完整回答')
+  assert.equal(rows[1].correlation.source_seq, 3)
+  const approvalRows = semanticTraceRows([
+    f('approval.requested', {interaction_id: 'approval-1', name: 'shell'}, c),
+    f('approval.resolved', {interaction_id: 'approval-1', decision: 'allow'}, c),
+  ])
+  assert.equal(approvalRows.length, 1)
+  assert.equal(approvalRows[0].type, 'approval.requested')
+  assert.equal(approvalRows[0].data.decision, 'allow')
   const trace = createTrace(); trace.denied = true
   applyTrace(trace, f('trace.event', {event: {seq: 0}}, {}, 'control'))
   applyTrace(trace, f('schema.catalog', {secret: 'old'}, {}, 'control'))
@@ -102,9 +120,9 @@ test('1000 chunks、450 条历史、最终校正和迟到片段不回写终态',
   applyFrame(s, f('assistant.start', {}, { attempt_id:'a' }))
   for(let i=0;i<1000;i++){const chunk=f('assistant.text.delta',{text:'x',chunk_index:i},{attempt_id:'a'},'transient');applyFrame(s,chunk);applyFrame(s,chunk)}
   const a=Object.values(s.attempts)[0]; assert.equal(a.text.length,1000)
-  applyFrame(s,f('assistant.message',{content:'最终正文',reasoning_preview:'授权思考'},{attempt_id:'a'}))
+  applyFrame(s,f('assistant.message',{content:'最终正文',reasoning_preview:'授权思考',usage:{prompt_tokens:12,completion_tokens:3},latency_ms:240},{attempt_id:'a'}))
   applyFrame(s,f('assistant.text.delta',{text:'迟到',chunk_index:1001},{attempt_id:'a'},'transient'))
-  assert.equal(a.text,'最终正文');assert.equal(Object.keys(s.messages).length,450)
+  assert.equal(a.text,'最终正文');assert.deepEqual(a.usage,{prompt_tokens:12,completion_tokens:3});assert.equal(a.latency_ms,240);assert.ok(a.timestamp);assert.equal(Object.keys(s.messages).length,450)
   const restored=restoreSnapshot('s',s.cursor,{timeline:s.facts})
   assert.equal(conversationRows(restored).length,451)
   assert.equal(Object.values(restored.attempts)[0].reasoning,'授权思考')

@@ -20,6 +20,7 @@ class ProfileEnvValues:
     base_url: str | None
     model: str | None
     api_key: str | None
+    full_url: bool = False  # 完整端点不追加协议后缀。
     embedding_base_url: str | None = None
     embedding_model: str | None = None
     embedding_api_key: str | None = None
@@ -44,6 +45,7 @@ def _profile_env_keys(profile_id: str) -> dict[str, str]:
     return {
         "base_url": f"AI_PROFILE_{token}_BASE_URL",
         "model": f"AI_PROFILE_{token}_MODEL",
+        "full_url": f"AI_PROFILE_{token}_FULL_URL",
         "api_key": f"AI_PROFILE_{token}_API_KEY",
         "embedding_base_url": f"AI_PROFILE_{token}_EMBEDDING_BASE_URL",
         "embedding_model": f"AI_PROFILE_{token}_EMBEDDING_MODEL",
@@ -80,6 +82,7 @@ def read_profile_env(profile_id: str) -> ProfileEnvValues:
         values[key.strip()] = _decode_value(raw)
     keys = _profile_env_keys(profile_id)
     return ProfileEnvValues(
+        full_url=values.get(keys["full_url"], "false").lower() == "true",
         base_url=values.get(keys["base_url"]) or None,
         model=values.get(keys["model"]) or None,
         api_key=values.get(keys["api_key"]) or None,

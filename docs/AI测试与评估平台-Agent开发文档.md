@@ -1,10 +1,10 @@
 # AI 测试与评估平台 Agent 开发文档
 
-> 版本：V1.7.4
+> 版本：V1.7.5
 > 状态：新建会话统一使用 AgentLoop v2；历史 legacy 行仅保留审计与显式回放路径。此前骨架化与混合引擎说明属于 legacy 路径及其历史阶段，不能据此认定新路径仍为纯对话。前端输入栏按每回合协议档选择模型和思考强度，完整真实供应商/Linux Runner 联调验收仍未结束。
 > 审查日期：2026-09-09
 > 对应需求：`AI测试与评估平台-PRD.md` V1.19
-> 对应接口：`AI测试与评估平台-API.md` V1.86
+> 对应接口：`AI测试与评估平台-API.md` V1.88
 
 ## 1. legacy 骨架化运行链路（历史基线）
 
@@ -526,8 +526,16 @@ POST /api/sessions 只创建 AgentLoop 会话，数据库默认值迁至 agent_l
 
 修改代码文件与作用清单：backend/shared/models.py 与 migrations/versions/8f9a2c4d6e01_新会话默认使用agentloop.py 固化新会话默认引擎；schemas.py、routers/sessions.py、routers/ws.py、routers/ws_v2.py 与 agent/loop_service.py、agent/loop_wiring.py 落实单入口和逐回合校验；frontend/src/components/agent/loop/AgentComposer.vue、AgentWorkspace.vue、ThinkingControl.vue 与 views/Agent.vue 实现模型选择和 DeepSeek Harness 风格的思考控制；docs/AI测试与评估平台-API.md 升级至 V1.80。
 
-### V1.7.4 实际请求上下文拆分（2026-09-09）
+### V1.7.5 消息操作与真实用量（2026-09-09）
 
-AgentLoop 在 `assistant.start.data.request_summary.context_meter` 中增加系统提示词、Skill、MCP、原生工具与对话消息五类输入 token。拆分与协议序列化同源：先计算无消息、无工具的基线系统输入，再分别计算 MCP/原生工具增量；其余序列化输入归入对话消息，五类合计恒等于 `input_tokens`。当前 Loop 未把 Skill 文本注入模型请求，因此 `skills_tokens=0`；同理，无 MCP 工具时 `mcp_tokens=0`。前端展示这些实际来源并使用不同颜色的分段细进度条，输出预留独立展示，不影响已用比例。
+AgentLoop 消息卡在实际模型名后展示该持久事件的发送日期时间；回答提供复制、重新生成和「引用为参考记忆」三个线性图标操作。重新生成重新提交同一回合的原用户内容与附件引用，引用操作仅将回答写入下一轮草稿的明确引用块，不创建或伪造服务端持久记忆。
 
-修改代码文件与作用清单：`backend/api/app/agent/loop_wiring.py` 提供同源 token 拆分；`loop_presentation.py` 下发增量字段；`frontend/src/api/agentLoopTypes.ts` 与 `components/agent/loop/LoopContextMeter.vue` 读取并渲染五类彩色明细；`backend/api/tests/test_loop_presentation.py`、`frontend/tests/e2e/agentLoop.spec.ts` 覆盖协议和页面行为；`docs/AI测试与评估平台-API.md` 升级至 V1.86。
+每个完成的助手消息展示上游返回的 token 总量与单次模型生成耗时。输入框下方聚合已持久化 `assistant.message.usage` 与 `latency_ms`：显示输入/输出 token、生成速度和缓存命中率。上游未返回的 token 或缓存字段一律显示未知，绝不按文本反推；生成速度只在输出 token 与模型耗时都存在时计算。浏览器 v2 流 schema 更新为 `agent-loop-stream.v2.2`，源事实目录版本为 `5`。
+
+修改代码文件与作用清单：`backend/api/app/agent/loop.py` 在成功 attempt 上记录模型流耗时；`agent/events.py`、`harness/contracts/loop_events.py`、`routers/ws_v2.py` 公开 `latency_ms` 并升级目录；`frontend/src/api/agentLoopTypes.ts`、`agent/loop/reducer.ts` 保留消息时间、用量与耗时；`components/agent/loop/AgentWorkspace.vue` 与 `AgentComposer.vue` 呈现消息操作和会话统计；对应后端与前端 AgentLoop 测试覆盖事件投影和前端状态。
+
+### V1.7.4 上下文来源分布（2026-09-09）
+
+每个 `assistant.start` 的 `request_summary.context_meter` 按实际请求序列化拆分系统提示词、对话消息、工具、MCP、Skill 与记忆文件。六项只统计输入并严格合计 `input_tokens`；输出预留继续由 `reserved_output_tokens` 单列，不混入任一来源。Skill 和记忆文件未注入当前请求时必须显示 `0`，历史事实没有 `breakdown` 时前端把旧输入合并显示为对话消息并标明限制。
+
+修改代码文件与作用清单：`backend/api/app/agent/loop.py` 固化本轮工具传输快照；`loop_wiring.py` 以实际 wire 投影计算来源分项；`loop_presentation.py` 将分项写入安全请求摘要；`frontend/src/components/agent/loop/LoopContextMeter.vue` 以小型分色圆环、进度条和来源列表展示；`frontend/src/api/agentLoopTypes.ts` 补齐前端契约；`backend/api/tests/test_loop_presentation.py` 校验分项与输入总量一致；`docs/AI测试与评估平台-API.md` 登记 V1.87 增量。

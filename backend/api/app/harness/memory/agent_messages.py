@@ -11,6 +11,16 @@ class MessageProjectionError(ValueError):
     """已提交事件无法组成合法的模型历史。"""
 
 
+def protocol_state_compatible(state: Any, target: dict[str, Any]) -> bool:
+    """判断不透明状态能否回传给当前模型；未知结构一律不可迁移。"""
+    if not isinstance(state, dict):
+        return False
+    return all(
+        state.get(key) == value
+        for key, value in target.items()
+    )
+
+
 def _event_data(event: dict[str, Any]) -> dict[str, Any]:
     """读取规范事实数据，拒绝非对象事件。"""
     data = event.get("data")
@@ -40,7 +50,8 @@ def _assistant_message(data: dict[str, Any], seq: Any) -> Message:
 
 
 def derive_messages(
-    events: Iterable[dict[str, Any]], *, allow_open_tool_calls: bool = False
+    events: Iterable[dict[str, Any]], *, allow_open_tool_calls: bool = False,
+    protocol_state_compatibility: dict[str, Any] | None = None,
 ) -> list[Message]:
     """推导并验证工具调用与结果配对；开放调用仅允许用于运行中的节点边界。"""
 
@@ -71,6 +82,16 @@ def derive_messages(
                     f"assistant/message {seq} appears before tool results: {unresolved}"
                 )
             message = _assistant_message(data, seq)
+            if (
+                protocol_state_compatibility is not None
+                and "protocol_state" in message
+                and not protocol_state_compatible(
+                    message["protocol_state"], protocol_state_compatibility
+                )
+            ):
+                # 跨模型只迁移用户可见文本，绝不把旧供应商签名伪装成新模型状态。
+                message.pop("protocol_state", None)
+                message.pop("reasoning_content", None)
             calls = message.get("tool_calls") or []
             if not isinstance(calls, list):
                 raise MessageProjectionError(f"assistant/message {seq} tool_calls must be a list")

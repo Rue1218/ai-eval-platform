@@ -20,7 +20,7 @@ export function identity(frame: Pick<LoopFrame, 'session_id' | 'correlation'>, t
   return JSON.stringify([frame.session_id, c.turn_id ?? c.turn, c.attempt_id, ...(tool ? [c.call_id] : [])])
 }
 function record(frame: LoopFrame, key: string): LoopRecord {
-  return { key, first_cursor: frame.cursor ?? Number.MAX_SAFE_INTEGER, correlation: { ...frame.correlation }, event: frame.type }
+  return { key, first_cursor: frame.cursor ?? Number.MAX_SAFE_INTEGER, correlation: { ...frame.correlation }, event: frame.type, timestamp: frame.ts }
 }
 /** 流片段可能先于持久 start 到达，之后只校正首次顺序，不替换稳定对象。 */
 function attemptFor(state: LoopState, frame: LoopFrame): Attempt {
@@ -58,6 +58,12 @@ export function applyFrame(state: LoopState, frame: LoopFrame): 'applied' | 'dup
     return 'applied'
   }
   if (kind.startsWith('command.') && frame.request_id) state.receipts[frame.request_id] = frame
+  if (kind === 'subscribed') {
+    state.controlled = Boolean(
+      d.controller?.active
+      && (d.controller?.owned_by_connection ?? d.controller?.owned_by_actor),
+    )
+  }
   if (kind === 'replay.completed') state.ready = true
   if (kind === 'user.message') {
     const key = d.client_message_id || `user:${frame.cursor}`
@@ -123,6 +129,10 @@ export function restoreSnapshot(sessionId: string, cursor: number, snapshot: Dat
     applyFrame(state, frame)
   }
   state.cursor = cursor
+  state.controlled = Boolean(
+    snapshot.controller?.active
+    && (snapshot.controller?.owned_by_connection ?? snapshot.controller?.owned_by_actor),
+  )
   return state
 }
 /** 消息、模型 attempt 和工具各自只出现一次，按首个持久位置展示。 */

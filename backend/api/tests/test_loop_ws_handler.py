@@ -91,15 +91,22 @@ class FakeService:
             raise AppError(ErrorCode.NOT_FOUND, "hidden")
         return self.access
 
-    async def attach(self, actor_id, session_id, connection_id, on_transient):
+    async def attach(self, actor_id, session_id, connection_id, on_transient, client_id=None):
         """观察订阅不得启动回合或 claim writer。"""
         self.attachments[connection_id] = on_transient
 
-    async def snapshot(self, actor_id, session_id):
+    async def snapshot(self, actor_id, session_id, connection_id=None):
         """读取绑定高水位的状态，仅供恢复，不执行任何命令。"""
         assert self.attachments
         high = max((row["cursor"] for row in self.rows), default=0)
-        return StreamSnapshot(high, self.earliest, {"at_cursor": high})
+        return StreamSnapshot(high, self.earliest, {
+            "at_cursor": high,
+            "controller": {
+                "active": self.owner is not None,
+                "owned_by_actor": self.owner is not None,
+                "owned_by_connection": self.owner == connection_id,
+            },
+        })
 
     async def read_stream(self, session_id, after_cursor, limit):
         """模拟排序分页，存储是唯一持久实时来源。"""
@@ -250,7 +257,14 @@ def test_bad_cursor_produces_bound_snapshot_and_blocks_mutations(after, earliest
         await socket.push(data={"after_cursor": after})
         await until(lambda: any(f["type"] == "resync.required" for f in socket.sent))
         resync = next(f for f in socket.sent if f["type"] == "resync.required")
-        assert resync["data"] == {"cursor": 3, "snapshot": {"at_cursor": 3}}
+        assert resync["data"] == {"cursor": 3, "snapshot": {
+            "at_cursor": 3,
+            "controller": {
+                "active": False,
+                "owned_by_actor": False,
+                "owned_by_connection": False,
+            },
+        }}
         assert not connection.ready and service.effects == 0
         await socket.push("turn.submit", {"client_message_id": "m", "content": "x"})
         await until(lambda: any(f["type"] == "command.rejected" for f in socket.sent))
@@ -342,6 +356,29 @@ def test_output_acl_is_checked_at_send_time_and_errors_are_sanitized():
         await socket.push("turn.submit", {"client_message_id": "m", "content": "x"})
         await until(lambda: any(f["type"] == "command.rejected" for f in socket.sent))
         assert "private-secret" not in json.dumps(socket.sent)
+        await disconnect(socket, task)
+    asyncio.run(scenario())
+
+
+def test_command_rejection_exposes_safe_actionable_reason():
+    """并发拒绝应让浏览器可重试，不能退回模糊的权限/输入提示。"""
+    async def scenario():
+        """先占用回合，再验证第二次提交得到固定安全说明。"""
+        service = FakeService()
+        socket, _, task = await connect(service)
+        await socket.push(
+            "turn.submit", {"client_message_id": "first", "content": "x"}, request_id="first"
+        )
+        await until(lambda: service.effects == 1)
+        await socket.push(
+            "turn.submit", {"client_message_id": "second", "content": "y"}, request_id="second"
+        )
+        await until(lambda: any(f["type"] == "command.rejected" for f in socket.sent))
+        rejected = next(f for f in socket.sent if f["type"] == "command.rejected")
+        assert rejected["data"] == {
+            "code": "CONCURRENCY",
+            "message": "上一轮仍在收尾或会话正被占用，请稍后重试",
+        }
         await disconnect(socket, task)
     asyncio.run(scenario())
 

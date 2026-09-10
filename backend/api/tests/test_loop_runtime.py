@@ -52,6 +52,29 @@ async def test_history_selection_rejects_reordering_or_rewriting(selected):
         _history_selection(messages, chosen)
 
 
+async def test_history_selection_records_only_protocol_state_compatibility_drop():
+    """模型切换降级可由持久索引重建，且不能放宽正文或工具字段的改写。"""
+    source = {
+        "role": "assistant",
+        "content": "portable answer",
+        "tool_calls": [{"id": "call", "name": "read", "args": {"path": "a.txt"}}],
+        "protocol_state": {"provider": "old", "items": []},
+    }
+    selected = deepcopy(source)
+    selected.pop("protocol_state")
+    selection = _history_selection([source], [selected])
+    assert selection["algorithm"] == "message_indices.v2"
+    assert selection["indices"] == [0]
+    assert selection["transformations"] == [{
+        "index": 0,
+        "removed_fields": ["protocol_state"],
+        "reason": "model_compatibility",
+    }]
+    assert "protocol_state" in source
+    with pytest.raises(LlmRequestError, match="模型输入无法对应持久历史"):
+        _history_selection([source], [{**selected, "content": "rewritten"}])
+
+
 class MemoryLog:
     """只实现公开日志接口，不依赖数据库、SQLite 或源工作区。"""
 
@@ -183,7 +206,7 @@ async def test_runtime_template_reasoning_override_rebuilds_wire_options(monkeyp
             enabled = expected != "off"
             wire = client.requests[-1]
             assert wire["extra_body"]["thinking"] == {"type": "enabled" if enabled else "disabled"}
-            assert wire.get("reasoning_effort") == (expected if enabled else None)
+            assert "reasoning_effort" not in wire  # 旧 DeepSeek 只支持思考开关。
             header = [e["data"]["header"] for e in events if e["type"] == "request/header"][-1]
             assert header["reasoning_effort"] == expected
             assert header["thinking"] is enabled
@@ -225,6 +248,8 @@ async def test_seven_nodes_tool_loop_second_turn_and_committed_publication():
     assert len(scheduler.invocations) == 1
     assert [e["reason"] for e in observed if e["kind"] == "turn_end"] == ["completed"] * 2
     assert adapter.requests[0].profile_version == 7
+    messages = [event["data"] for event in runtime.log.read() if event["type"] == "assistant/message"]
+    assert all(isinstance(message["latency_ms"], int) and message["latency_ms"] >= 0 for message in messages)
     await runtime.close()
 
 

@@ -82,6 +82,7 @@ class ProfileCreate(ApiModel):
     name: str = Field(min_length=1, max_length=128)
     protocol: Literal["openai_chat", "anthropic_messages"]
     base_url: str = Field(min_length=1, max_length=1024)
+    full_url: bool = False  # 原样使用完整请求地址。
     model: str = Field(min_length=1, max_length=256)
     api_key: str | None = Field(default=None, max_length=4096)
     embedding_base_url: str | None = Field(default=None, max_length=1024)
@@ -125,6 +126,7 @@ class ProfileUpdate(ApiModel):
     name: str | None = Field(default=None, min_length=1, max_length=128)
     protocol: Literal["openai_chat", "anthropic_messages"] | None = None
     base_url: str | None = Field(default=None, min_length=1, max_length=1024)
+    full_url: bool | None = None  # 原样使用完整请求地址。
     model: str | None = Field(default=None, min_length=1, max_length=256)
     api_key: str | None = Field(default=None, max_length=4096)
     embedding_base_url: str | None = Field(default=None, max_length=1024)
@@ -167,6 +169,7 @@ class ProfileOut(OrmOut):
     name: str
     protocol: str
     base_url: str
+    full_url: bool = False  # 原样使用完整请求地址。
     model: str
     usages: list[str]
     anthropic_version: str | None = None
@@ -179,6 +182,10 @@ class ProfileOut(OrmOut):
     has_reranker_api_key: bool = False
     context_window: int = 200000
     max_output_tokens: int = 8192
+    provider: str = "openai"
+    reasoning_effort: str = "off"
+    allowed_efforts: list[str] = Field(default_factory=list)
+    reasoning_note: str = ""
     tool_call_mode: Literal["native", "legacy"] = "native"
     created_at: Any
     updated_at: Any
@@ -189,6 +196,7 @@ class FetchModelsIn(ApiModel):
 
     protocol: Literal["openai_chat", "anthropic_messages"] = "openai_chat"
     base_url: str | None = Field(default=None, max_length=1024)
+    full_url: bool | None = None  # 原样使用完整请求地址。
     api_key: str | None = Field(default=None, max_length=4096)
     profile_id: str | None = None
     anthropic_version: str | None = None

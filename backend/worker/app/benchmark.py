@@ -38,7 +38,7 @@ from .models import (
     TaskEvent,
     UsageLedger,
 )
-from .profile_env import profile_connection
+from .profile_env import profile_connection, read_profile_env
 from .sampling import clamp_sample_size
 from .scoring import DEFAULT_METRIC
 from .stress_spawn import maybe_spawn_stress
@@ -267,6 +267,7 @@ def _run_judge(
         anthropic_version=judge_profile.anthropic_version,
         timeout_s=float(run_params.get("timeout_s") or 30.0),
     )
+    judge_kwargs["full_url"] = read_profile_env(judge_profile.id).full_url
     total = len(samples)
     done = 0
     judged = 0
@@ -582,6 +583,7 @@ def run_benchmark(task_id: str) -> None:
                     "name": p.name,
                     "protocol": p.protocol,
                     "base_url": base_url,
+                    "full_url": read_profile_env(p.id).full_url,
                     "model": model,
                     "api_key": api_key,
                     "anthropic_version": p.anthropic_version,

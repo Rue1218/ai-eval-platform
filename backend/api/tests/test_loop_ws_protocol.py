@@ -106,6 +106,7 @@ def test_assistant_fact_has_two_stable_projections_and_no_raw():
     original = fact(
         content="answer", raw={"key": "hidden"}, protocol_state={"items": ["opaque"]},
         header={"system": "hidden"}, reasoning_content="private",
+        usage={"prompt_tokens": 8, "completion_tokens": 3}, latency_ms=123,
         tool_calls=[{"id": "c", "name": "read", "args": {"secret": "hidden"}}],
     )
     before = deepcopy(original)
@@ -118,11 +119,22 @@ def test_assistant_fact_has_two_stable_projections_and_no_raw():
         assert "cursor" not in item
     payload = projections[0]["data"]
     assert payload["tool_calls"] == [{"id": "c", "name": "read"}]
+    assert payload["usage"] == {"prompt_tokens": 8, "completion_tokens": 3}
+    assert payload["latency_ms"] == 123
     assert "hidden" not in json.dumps(projections)
     assert original == before
     wire = persistent_frame("s", 8, projections[0])
     assert wire["cursor"] == 8 and wire["correlation"]["source_seq"] == 0
     assert "projection_kind" not in wire
+
+
+def test_assistant_attempt_latency_is_projected_without_estimating_old_records():
+    """单次模型 Attempt 的耗时随消息和终态投影，旧事实缺字段仍保持兼容。"""
+    projections = project_fact(fact(content="answer", latency_ms=1267))
+    assert projections[0]["data"]["latency_ms"] == 1267
+    assert projections[1]["data"]["latency_ms"] == 1267
+    legacy = project_fact(fact(content="legacy"))
+    assert all("latency_ms" not in item["data"] for item in legacy)
 
 
 @pytest.mark.parametrize("status", [
@@ -140,6 +152,31 @@ def test_tool_six_states_keep_identity_not_model_body(status):
         assert projected["data"]["display"]["result_preview"] == "PRIVATE BODY"
     else:
         assert "PRIVATE BODY" not in json.dumps(projected)
+
+
+def test_tool_dispatch_projects_name_mapping_and_contract_without_arguments():
+    """公开调度字段可解释 wire→registry 映射，但绝不携带规范化参数或沙箱路径。"""
+    event = fact(
+        "tool/dispatch",
+        call_id="c",
+        call_seq=2,
+        name="platform_task_status",
+        execution_id="execution",
+        registry_name="task.status",
+        wire_name="platform_task_status",
+        tool_contract_version="deepseek-harness.v1",
+        normalized_args={"task_id": "private-task"},
+        scope_path="C:/private/workspace",
+    )
+    projected = project_fact(event)[0]
+    assert projected["data"] == {
+        "name": "platform_task_status",
+        "execution_id": "execution",
+        "registry_name": "task.status",
+        "wire_name": "platform_task_status",
+        "tool_contract_version": "deepseek-harness.v1",
+    }
+    assert "private" not in json.dumps(projected)
 
 
 def test_acl_placeholder_and_reasoning_filter():
@@ -180,7 +217,7 @@ def test_catalog_matches_runtime_history_selection_and_legacy_attempts():
                {"role": "user", "content": "latest"}]
     selection = _history_selection(history, history[2:])
     catalog = event_schema_catalog()
-    assert catalog["catalog_version"] == 4
+    assert catalog["catalog_version"] == 5
     validator = Draft202012Validator(catalog["events"]["assistant/attempt_start"]["schema"])
     legacy = {"turn": 1, "step": 1, "attempt_id": "a", "header_seq": 0,
               "history_upto_seq": 5}
@@ -197,6 +234,13 @@ def test_catalog_matches_runtime_history_selection_and_legacy_attempts():
     trace = trace_frame(event, "s", source="history")
     assert trace["data"]["event"]["data"]["history_selection"] == selection
     assert trace["data"]["event"]["data"]["fingerprint_algorithm"] == "dsh-json-v1"
+
+    switched_history = [{"role": "assistant", "content": "reply", "protocol_state": {"private": True}}]
+    switched_selection = _history_selection(
+        switched_history, [{"role": "assistant", "content": "reply"}],
+    )
+    validator.validate({**legacy, "history_selection": switched_selection})
+    assert switched_selection["algorithm"] == "message_indices.v2"
 
 
 def test_runtime_command_catalog_matches_store_receipt_without_semantic_reexecution():
