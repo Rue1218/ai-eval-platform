@@ -131,13 +131,17 @@ def build_exec_argv(*, cmd: str, mode: str, limits: SandboxLimits) -> list[str]:
 # 容器本地服务。命令只作位置参数传入，绝不拼进脚本。任一 setup 失败即退出
 # （fail-closed，绝不在无隔离下执行）。清理由 EXIT trap 保证（幂等）。
 # 依赖：iproute2(ip) + iptables；runner 需 `--sysctl net.ipv4.ip_forward=1`。
+# DNS：docker 内嵌解析器 127.0.0.11 只在容器自身 netns，独立 netns 不可达，
+# 故在 mount ns 内把 /etc/resolv.conf 绑定为公网解析器（不影响容器本体）。
 _NETWORK_LAUNCHER = r"""
 set -eu
 cmd="$1"; mem_kb="$2"; nproc="$3"; cpu_s="$4"
 idx=$(( ($$ % 250) + 1 ))
 ns="aieval-ns-$idx"; veth_h="aieval-h-$idx"; veth_s="aieval-s-$idx"
 subnet="10.201.$idx"; host_ip="$subnet.1"; ns_ip="$subnet.2"
+resolv="/tmp/.sbx-resolv-$idx"
 cleanup() {
+  rm -f "$resolv" 2>/dev/null || true
   ip netns del "$ns" 2>/dev/null || true
   ip link del "$veth_h" 2>/dev/null || true
   iptables -t nat -D POSTROUTING -s "$host_ip/30" -j MASQUERADE 2>/dev/null || true
@@ -163,7 +167,12 @@ iptables -I FORWARD 1 -s "$host_ip/30" -d 192.168.0.0/16 -j DROP
 iptables -I FORWARD 1 -s "$host_ip/30" -d 172.16.0.0/12 -j DROP
 iptables -I FORWARD 1 -s "$host_ip/30" -d 10.0.0.0/8 -j DROP
 iptables -I INPUT 1 -s "$host_ip/30" -j DROP
-ip netns exec "$ns" unshare --pid --fork --mount-proc bash -c "ulimit -v $mem_kb; ulimit -u $nproc; ulimit -t $cpu_s; exec bash -c \"\$1\"" bash "$cmd"
+printf 'nameserver 223.5.5.5\nnameserver 119.29.29.29\n' > "$resolv"
+ip netns exec "$ns" unshare --mount --pid --fork --mount-proc bash -c '
+mount --bind '"$resolv"' /etc/resolv.conf 2>/dev/null || true
+ulimit -v '"$mem_kb"'; ulimit -u '"$nproc"'; ulimit -t '"$cpu_s"'
+exec bash -c "$1"
+' bash "$cmd"
 """
 
 

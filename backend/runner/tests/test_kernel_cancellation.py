@@ -60,8 +60,10 @@ def test_build_exec_argv_modes():
     for cidr in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"):
         assert cidr in script  # 内网阻断
     # ulimit 值以位置参数传入（mem_kb/nproc/cpu_s）
-    assert "ulimit -v $mem_kb" in script
+    assert "ulimit -v " in script and "$mem_kb" in script
     assert net[5:8] == ["1024", "8", "3"]
+    # 档3 DNS：docker 内嵌 127.0.0.11 在独立 netns 不可达 → 挂载公网解析器
+    assert "resolv.conf" in script and "223.5.5.5" in script
 
 
 @pytest.mark.parametrize("reason", ["success", "cancel", "timeout", "nonzero"])
