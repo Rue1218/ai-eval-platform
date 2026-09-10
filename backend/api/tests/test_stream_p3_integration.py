@@ -189,7 +189,7 @@ def test_bwrap_bash_serial_barrier_when_parallel_enabled(monkeypatch) -> None:
 
     monkeypatch.setattr(settings, "agent_parallel_tool_batch_enabled", True)
     monkeypatch.setattr(settings, "agent_parallel_tool_batch_profile_ids", "*")
-    monkeypatch.setattr(settings, "sandbox_engine", "bwrap")
+    monkeypatch.setattr(settings, "sandbox_engine", "container")
     monkeypatch.setattr(dispatch_mod, "run_sandboxed", _map_kernel_run)
     get_default_stream_metrics().reset()
 

@@ -217,12 +217,20 @@ class SessionCreate(ApiModel):
     visibility: Literal["private", "team"] = "private"
     workspace_id: str | None = Field(default=None, max_length=64)
     scope_path: str | None = Field(default=None, max_length=1024)
+    # 三档权限等级；None = 继承全局 settings.permission_tier_default。
+    permission_tier: str | None = Field(default=None, max_length=16)
 
 
 class SessionSharingUpdate(ApiModel):
     """会话创建者设置团队共享范围的输入。"""
 
     visibility: Literal["private", "team"]
+
+
+class SessionPermissionTierUpdate(ApiModel):
+    """会话级权限档位覆盖输入；None = 继承全局默认。"""
+
+    permission_tier: Literal["tier1", "tier2", "tier3"] | None = None
 
 
 class SessionOut(OrmOut):
@@ -240,6 +248,7 @@ class SessionOut(OrmOut):
     workspace_id: str | None = None
     scope_path: str | None = None
     workspace_name: str | None = None
+    permission_tier: str | None = None
     created_at: Any
     updated_at: Any
     can_manage: bool = False

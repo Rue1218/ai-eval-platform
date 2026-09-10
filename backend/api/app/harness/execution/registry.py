@@ -888,12 +888,12 @@ def build_default_registry() -> ToolRegistry:
     registry.register(
         ToolDef(
             name="bash",
-            description="在 bwrap 沙箱内执行 shell 命令（相对路径、无网络、受资源限制）",
+            description="在受控沙箱容器内执行 shell 命令（工作区可写、受资源限制；网络按权限档位）",
             parameters_schema={
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "command": {"type": "string", "description": "完整 shell 命令，仅在 bwrap 沙箱运行"},
+                    "command": {"type": "string", "description": "完整 shell 命令，仅在沙箱容器内运行"},
                     "description": {"type": "string", "description": "命令简短描述"},
                     "timeout": {
                         "type": "integer",
@@ -1583,13 +1583,12 @@ def _bash_handler(
     sandbox_dir: str | None = None,
     context: object | None = None,
 ) -> object:
-    """bash 工具 handler：bwrap 沙箱内按档位执行（阶段 3 开放通用 bash）。
+    """bash 工具 handler：runner 容器内按网络模式执行（阶段 3 开放通用 bash）。
 
     资源限制读 Settings（内存/进程数/CPU），``sandbox_dir`` 由平台注入，
-    禁止模型传参（M5-D7 红线）；F2/G4 后无字符串词表/静态裁决——档位
-    （settings.sandbox_bash_default_mode）只声明文件效果，物理边界由
-    降权容器 + bwrap（无网络、scope bind、资源受限）承担；引擎为 "off"
-    或 bwrap 不可用时 fail-closed（VALIDATION），禁止降级为裸 subprocess。
+    禁止模型传参（M5-D7 红线）；无字符串词表/静态裁决——``mode`` 声明网络模式
+    （isolated 断网 / network 保留网络），文件边界由容器挂载与权限档位审批承担；
+    引擎为 "off" 或 runner 不可用时 fail-closed（VALIDATION），禁止降级为无隔离执行。
     """
     from app.config import settings
     from app.harness.execution.dispatch import BashResult, run_bash
@@ -1597,7 +1596,7 @@ def _bash_handler(
     from app.harness.security.exec_policy import resolve_bash_engine
 
     # #5：沙箱引擎决策收敛于 exec_policy.resolve_bash_engine（显式 Spec 决策，
-    # 默认行为不变：非 bwrap 一律 fail-closed，禁止降级裸 subprocess）
+    # 非 container 一律 fail-closed，禁止降级无隔离执行）
     verdict = resolve_bash_engine(settings.sandbox_engine)
     if not verdict.allow:
         raise AppError(ErrorCode.VALIDATION, verdict.reason)
@@ -1609,12 +1608,10 @@ def _bash_handler(
     from .aliases import bash_timeout_seconds
 
     started = time.perf_counter()
-    # F5/G6：档位来源接缝——上下文（会话注入/升档重放）优先，缺省回落全局
-    # settings.sandbox_bash_default_mode（现状逐字节一致）。
+    # 网络模式来源接缝——上下文（会话档位派生）优先，缺省回落全局 settings。
     mode = str(getattr(context, "sandbox_mode", "") or "") or settings.sandbox_bash_default_mode
-    if mode == "workspace-write" and sandbox_dir:
-        # F5/G6（§6.6）：workspace-write 档写前容量检查（卷水位熔断优先；
-        # read-only/none 档不查——无持久写入）。VALIDATION 码不触发升档链。
+    if sandbox_dir:
+        # F5/G6（§6.6）：bash 工作区可写，写前容量检查（卷水位熔断优先）。
         from .quota import check_workspace_write_capacity
 
         check_workspace_write_capacity(sandbox_dir, extra_bytes=0)

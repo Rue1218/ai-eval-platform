@@ -12,6 +12,11 @@ from uuid import UUID
 import httpx
 from shared.sandbox_kernel import SandboxLimits
 
+# 可接受的「进程树已终止」证据：not_started（启动前/墓碑）与 process_exited
+# （容器内直跑，私有 PID 命名空间 PID 1 退出由内核清空整树）。旧 cgroup_empty
+# 已随 bwrap 移除。
+_TERMINATED_EVIDENCE = frozenset({"not_started", "process_exited"})
+
 
 @dataclass(frozen=True)
 class RunnerRequest:
@@ -23,7 +28,7 @@ class RunnerRequest:
     call_id: str
     command: str
     workspace_root: str
-    mode: str = "workspace-write"
+    mode: str = "isolated"
     timeout_s: float = 15.0
     limits: SandboxLimits = field(default_factory=SandboxLimits)
     max_output_chars: int = 20000
@@ -65,7 +70,7 @@ class RunnerResult:
     @property
     def guard_releasable(self) -> bool:
         """请求已结束不等于执行已停止；没有证据时必须保持隔离。"""
-        return self.status != "running" and self.process_tree_terminated and self.termination_evidence in {"not_started", "cgroup_empty"}
+        return self.status != "running" and self.process_tree_terminated and self.termination_evidence in _TERMINATED_EVIDENCE
 
 
 class LoopRunnerClient:
@@ -126,13 +131,13 @@ class LoopRunnerClient:
             evidence = data.get("termination_evidence")
             terminated = data.get("process_tree_terminated") is True
             if terminated and ((evidence == "not_started" and data.get("execution_started") is not False)
-                               or (evidence == "cgroup_empty" and data.get("execution_started") is not True)):
+                               or (evidence == "process_exited" and data.get("execution_started") is not True)):
                 return self._unknown(execution_id, instance_id)
-            if status not in {"running", "outcome_unknown"} and (not terminated or evidence not in {"not_started", "cgroup_empty"}):
+            if status not in {"running", "outcome_unknown"} and (not terminated or evidence not in _TERMINATED_EVIDENCE):
                 return self._unknown(execution_id, instance_id)
-            if (status == "not_started" and evidence != "not_started") or (status == "cancelled" and evidence != "cgroup_empty"):
+            if (status == "not_started" and evidence != "not_started") or (status == "cancelled" and evidence != "process_exited"):
                 return self._unknown(execution_id, instance_id)
-            if status == "succeeded" and (evidence != "cgroup_empty" or data.get("exit_code") != 0):
+            if status == "succeeded" and (evidence != "process_exited" or data.get("exit_code") != 0):
                 return self._unknown(execution_id, instance_id)
             if fingerprint is not None and data.get("request_fingerprint") != fingerprint:
                 # 取消先到产生的墓碑没有请求摘要，只证明此代次的 ID 永远不会启动。

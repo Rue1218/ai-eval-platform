@@ -41,12 +41,20 @@ export interface LoopProfile {
   id: string; name: string; version: string; model: string; protocol: string
   allowed_efforts: Effort[]; default_effort: Effort | null
 }
+/** 可选择的 Agent 专家；只包含展示字段，不含提示词与工具视野。 */
+export interface LoopAgent {
+  id: string; name: string; description: string; badge: string; default: boolean
+}
 export interface LoopUi {
   version: 1; enabled: boolean; unavailable_reason?: string
   /** 当前草稿选中的协议档；实际回合继续以 request_summary 为准。 */
   profile: LoopProfile | null
   /** 当前账号可以用于 AgentLoop 的协议档，不返回端点或凭据。 */
   profiles: LoopProfile[]
+  /** 会话/草稿当前选中的专家 ID；已有会话按最近一轮记忆。 */
+  agent: string
+  /** 当前账号可以选择的专家列表。 */
+  agents: LoopAgent[]
   allowed_efforts: Effort[]; default_effort: Effort | null
   permissions: { write: boolean; trace: boolean; reasoning: boolean; interactions: boolean; settings: boolean }
   controller: { active: boolean; owned_by_actor: boolean }
@@ -65,5 +73,9 @@ export interface ToolRun extends LoopRecord {
   /** 调度边界公开名称映射与契约版本，不包含实际工具参数。 */
   registry_name?: string; wire_name?: string; tool_contract_version?: string
 }
-export interface InteractionRecord extends LoopRecord { interaction_id: string; kind: string; resolved: boolean; submitting?: boolean; restricted?: boolean }
+export interface InteractionRecord extends LoopRecord {
+  interaction_id: string; kind: string; resolved: boolean; submitting?: boolean; restricted?: boolean
+  /** 三档权限等级与工具风险等级（审批卡展示用，来自服务端事实）。 */
+  permission_tier?: string; risk_level?: string
+}
 export type Connection = 'connecting' | 'online' | 'reconnecting' | 'offline' | 'revoked'

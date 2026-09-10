@@ -164,6 +164,9 @@ class Session(Base):
         String, ForeignKey("workspaces.id", ondelete="RESTRICT"), nullable=True, index=True
     )
     scope_path = Column(String, nullable=True)
+    # 三档权限等级（tier1/tier2/tier3）；null = 继承全局 settings.permission_tier_default。
+    # 运行期由 loop_wiring.context_factory 解析进 ToolExecutionContext，不进入模型上下文。
+    permission_tier = Column(String, nullable=True)
     # /compact 摘要与窗口游标（messages.id）；从未压缩时皆为空
     compact_summary = Column(Text, nullable=True)
     compact_keep_from = Column(String, nullable=True)

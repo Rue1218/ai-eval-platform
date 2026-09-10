@@ -185,7 +185,7 @@ def wired(tmp_path, monkeypatch):
     monkeypatch.setattr(loop_service, "require_visible_session", lambda db, sid, actor: session)
     monkeypatch.setattr(loop_wiring, "resolve_session_sandbox", lambda *args: str(tmp_path))
     monkeypatch.setattr(loop_wiring.settings, "runner_internal_token", "")
-    monkeypatch.setattr(loop_wiring.settings, "sandbox_engine", "bwrap")
+    monkeypatch.setattr(loop_wiring.settings, "sandbox_engine", "container")
     runtime = SimpleNamespace(running=False, recover=AsyncMock(), submit=AsyncMock(),
                               set_approval_gate=lambda *a, **k: None, wait=AsyncMock())
     pool = {"capacity": 15, "active": 0, "peak": 0, "claims": 0}
@@ -282,7 +282,7 @@ async def test_runner_callback_matches_bridge_dispatch(wired, monkeypatch):
             """模拟可信 Runner 终态收据。"""
             captured.append((request, epoch))
             return loop_runner.RunnerResult(request.execution_id, epoch, "succeeded", True,
-                "cgroup_empty", True, request.fingerprint, 0, "ok")
+                "process_exited", True, request.fingerprint, 0, "ok")
 
     monkeypatch.setattr(loop_runner, "LoopRunnerClient", lambda *a: Runner("runner", wired.closed))
     monkeypatch.setattr(loop_wiring.settings, "runner_internal_token", "test-token")
@@ -403,18 +403,37 @@ async def test_initial_budget_failure_does_not_accept_user_fact(wired, monkeypat
 
 
 def test_stored_file_uses_storage_path_and_owner(wired, monkeypatch):
-    """StoredFile 没有 path 字段；按上传者校验后读取 storage_path。"""
+    """StoredFile 没有 path 字段；按上传者校验后读取 storage_path；工作区不可得时回退内联。"""
     path = wired.root / "notes.txt"
     path.write_text("attachment-body", encoding="utf-8")
     row = SimpleNamespace(id="file", storage_path=str(path), filename="notes.txt", content_type="text/plain", size_bytes=15)
     owners = []
     monkeypatch.setattr(attachments, "normalize_attachment_refs", lambda db, refs, *, owner_id: owners.append(owner_id))
     monkeypatch.setattr(attachments, "load_message_files", lambda *a, **k: [row])
-    content = wired.service._input_content("actor", {"content": "read", "attachment_refs": ["file"]})
+    # 行态失效/目录不可得（_resolve_content_workspace 返回 None）时必须回退内联正文。
+    monkeypatch.setattr(attachments, "_resolve_content_workspace", lambda db, session_id: None)
+    content = wired.service._input_content("actor", "session", {"content": "read", "attachment_refs": ["file"]})
     assert "attachment-body" in content and owners == ["actor"]
     path.unlink()
     with pytest.raises(loop_service.AppError):
-        wired.service._input_content("actor", {"content": "read", "attachment_refs": ["file"]})
+        wired.service._input_content("actor", "session", {"content": "read", "attachment_refs": ["file"]})
+
+
+def test_text_attachment_stages_into_session_workspace(wired, monkeypatch):
+    """文本附件落会话工作区（与工具注入根同源）：落盘 + 路径清单，模型可用 read 读取。"""
+    source = wired.root / "需求.md"
+    source.write_text("# 需求\n正文", encoding="utf-8")
+    row = SimpleNamespace(id="file-1", storage_path=str(source), filename="需求.md",
+                          content_type="text/markdown", size_bytes=source.stat().st_size)
+    workspace = wired.root / "ws"
+    workspace.mkdir()
+    monkeypatch.setattr(attachments, "normalize_attachment_refs", lambda *a, **k: None)
+    monkeypatch.setattr(attachments, "load_message_files", lambda *a, **k: [row])
+    monkeypatch.setattr(attachments, "_resolve_content_workspace", lambda db, session_id: str(workspace))
+    content = wired.service._input_content("actor", "session", {"content": "读附件", "attachment_refs": ["file-1"]})
+    staged = workspace / "attachments" / "file-1-需求.md"
+    assert staged.is_file() and staged.read_text(encoding="utf-8") == "# 需求\n正文"
+    assert "attachments/file-1-需求.md" in content and "read" in content
 
 
 def test_publish_matches_runtime_and_isolates_broken_observer(wired):

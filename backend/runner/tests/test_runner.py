@@ -2,9 +2,10 @@
 
 覆盖：/health、/run 正常往返（policy{mode, workspace_root}）、空命令/
 非法 mode/缺失 policy/工作区越界与符号链接逃逸 → VALIDATION、嵌套 scope
-接受、read-only 档位透传、SandboxError 错误码映射、/probe、未预期异常兜底
-INTERNAL。真实 bwrap 行为由 ``test_harness_sandbox.py``（shared 内核）在
-特权容器内覆盖；路径校验以 pytest tmp_path 真实目录驱动（跨平台）。
+接受、网络模式透传、旧文件效果档位归一 isolated、SandboxError 错误码映射、
+/probe、未预期异常兜底 INTERNAL。真实命名空间行为由
+``test_kernel_cancellation.py``（shared 内核）覆盖；路径校验以 pytest
+tmp_path 真实目录驱动（跨平台）。
 """
 
 from __future__ import annotations
@@ -70,7 +71,7 @@ def _run_payload(ws, *, workspace_root: str | None = None, **overrides: object) 
     payload: dict = {
         "command": "echo hi",
         "policy": {
-            "mode": "workspace-write",
+            "mode": "isolated",
             "workspace_root": workspace_root or str(ws / "ws-1"),
         },
         "timeout_s": 5.0,
@@ -146,7 +147,6 @@ def test_run_ok_passes_kernel_and_returns_output(server: _Server, ws, monkeypatc
         captured["mode"] = kwargs["mode"]
         captured["timeout_s"] = kwargs["timeout_s"]
         captured["limits"] = kwargs["limits"]
-        captured["bwrap_bin"] = kwargs["bwrap_bin"]
         return "hi\n"
 
     monkeypatch.setattr(main, "run_sandboxed", fake_run)
@@ -154,12 +154,11 @@ def test_run_ok_passes_kernel_and_returns_output(server: _Server, ws, monkeypatc
     assert status == 200
     assert body == {"ok": True, "output": "hi\n"}
     assert captured["cmd"] == "echo hi"
-    # runner 校验后 bind 使用 canonical 路径（resolve realpath 结果）
+    # runner 校验后使用 canonical 路径（resolve realpath 结果）
     assert captured["sandbox_dir"] == os.path.realpath(str(ws / "ws-1"))
-    assert captured["mode"] == "workspace-write"
+    assert captured["mode"] == "isolated"
     assert captured["timeout_s"] == 5.0
     assert captured["limits"].memory_kb == 262144
-    assert captured["bwrap_bin"] == "/usr/bin/bwrap"
 
 
 def test_run_nested_scope_accepted(server: _Server, ws, monkeypatch) -> None:
@@ -179,8 +178,25 @@ def test_run_nested_scope_accepted(server: _Server, ws, monkeypatch) -> None:
     assert captured["sandbox_dir"] == os.path.realpath(str(nested))
 
 
-def test_run_read_only_mode_forwarded(server: _Server, ws, monkeypatch) -> None:
-    """read-only 档位通过校验并透传 kernel（bind mode 化）。"""
+def test_run_network_mode_forwarded(server: _Server, ws, monkeypatch) -> None:
+    """network 模式通过校验并透传 kernel（保留网络）。"""
+    captured: dict = {}
+
+    def fake_run(_cmd: str, **kwargs: object) -> str:
+        captured["mode"] = kwargs["mode"]
+        return "ok"
+
+    monkeypatch.setattr(main, "run_sandboxed", fake_run)
+    payload = _run_payload(ws)
+    payload["policy"] = {"mode": "network", "workspace_root": str(ws / "ws-1")}
+    status, body = _post(server.url("/run"), payload)
+    assert status == 200
+    assert body["ok"] is True
+    assert captured["mode"] == "network"
+
+
+def test_run_legacy_mode_normalized(server: _Server, ws, monkeypatch) -> None:
+    """滚动兼容：旧文件效果档位（read-only/workspace-write）归一为 isolated。"""
     captured: dict = {}
 
     def fake_run(_cmd: str, **kwargs: object) -> str:
@@ -193,7 +209,7 @@ def test_run_read_only_mode_forwarded(server: _Server, ws, monkeypatch) -> None:
     status, body = _post(server.url("/run"), payload)
     assert status == 200
     assert body["ok"] is True
-    assert captured["mode"] == "read-only"
+    assert captured["mode"] == "isolated"
 
 
 def test_run_stream_forwards_chunks_then_result(server: _Server, ws, monkeypatch) -> None:

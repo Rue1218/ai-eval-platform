@@ -840,7 +840,7 @@ def test_bash_no_blocklist_static_adjudication(monkeypatch) -> None:
 
 
 def test_run_bash_delegates_to_sandbox(monkeypatch) -> None:
-    """EX-6：bash 执行走 bwrap 沙箱内核，而非裸 subprocess。"""
+    """EX-6：bash 执行经 runner 客户端（容器内直跑），而非裸 subprocess。"""
     import app.harness.execution.dispatch as dispatch
 
     captured: dict[str, object] = {}
@@ -857,7 +857,7 @@ def test_run_bash_delegates_to_sandbox(monkeypatch) -> None:
     assert result == "沙箱输出"
     assert captured["cmd"] == "echo hi"
     assert captured["sandbox_dir"] == "/tmp/ws"
-    assert captured["mode"] == "workspace-write"
+    assert captured["mode"] == "isolated"
     assert captured["timeout_s"] == 15.0
 
 

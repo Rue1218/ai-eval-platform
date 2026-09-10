@@ -3,7 +3,7 @@
 | 项目 | 内容 |
 | --- | --- |
 | 文档版本 | V1.91 |
-| WS v2 修订日期 | 2026-09-10（§4A，工具 Schema 轨迹快照） |
+| WS v2 修订日期 | 2026-09-10（§4A，工具 Schema 轨迹快照与专家选择器） |
 | 对应 PRD | V1.18（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.7.5（AgentLoop 单入口；JSON 仍以本文为准） |
@@ -15,6 +15,8 @@
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
 > V1.86（2026-09-09）：协议档页面 `POST /api/profiles/{id}/check` 的真实 ping 探活上限与通用协议调用统一为 30 秒，避免上游模型冷启动被误判为不可用；响应字段与错误码不变。
+
+> V1.89（2026-09-10）：Agent 专家（Expert）选择与附件工作区落地。`turn.submit.data` 新增可选 `agent_id`（专家 ID；缺省或未知值回落默认专家 `general`，服务端按回合解析，不新增会话列）。`GET /api/sessions/agent-ui`（草稿与会话态）响应增量 `agent`（当前选中专家 ID——已有会话按最近一轮 `user/message` 事实的 `extensions.expert_id` 记忆，无记录回落默认）与 `agents[]`（`id,name,description,badge,default` 投影，**不返回**专家提示词与工具视野）。专家为产品内置角色、随代码分发：`general`（默认，无附加提示词、平台全量工具白名单，行为与 V1.88 一致）与 `testcase-agent`（测试用例设计专家：专属提示词 + 工具视野收窄为 `read/write/edit/bash/ask_user_question`）。提示词按「核心 → 专家 → 协议档补充提示词」顺序注入 system 段（专家段 `cacheable=false`，读取时同样拒绝疑似密钥与接管性措辞）；专家声明工具与平台白名单**取交集**（只收窄不扩大，交集为空 fail-closed）；专家不改变权限、错误契约与任务状态机。`user/message` 事实 `extensions` 增量 `expert_id`（审计与跨端一致选择，不参与幂等摘要）。附件落地：`turn.submit` 的文本附件（`.md/.txt/.html/.json/.yaml/.yml/.csv/.jsonl`）随回合 staging 进**会话沙箱根**（与 read/bash 注入根同源），模型收到 `attachments/{file_id}-{name}` 相对路径清单并用 read 读取；行态失效/目录不可得时回退内联注入（与 V1.88 行为一致）。AGENTS.md V2.0 登记的「附件 staging 仍 legacy」在 agent_loop_v2 主链路随之解除。
 
 > V1.88（2026-09-09）：浏览器 AgentLoop v2 流 schema 升至 `agent-loop-stream.v2.2`，完整事实目录升至 `catalog_version=5`。`assistant.message.data` 新增可选 `latency_ms`，为单次模型流从建立到完成的真实毫秒耗时，不含工具执行；已有 `usage` 继续仅透传上游返回的 `prompt_tokens`、`completion_tokens`、`total_tokens` 与可选缓存 token。前端聚合统计只能使用已持久化的这些字段：上游没有返回缓存 token 时缓存命中率显示未知，不能补零或估算。
 
@@ -1846,7 +1848,7 @@ request_id/session_id/交互标识为非空字符串，长度不超过 128；non
 | :--- | :--- |
 | subscribe | `after_cursor:int>=0=0, view:"semantic"="semantic"` |
 | unsubscribe | 空对象 |
-| turn.submit | `client_message_id, content`；可选 `attachment_refs:string[]=[], profile_id, reasoning_effort:off/low/medium/high/xhigh/max`；`profile_id` 只能是平台协议档 ID，附件只接受平台引用，不接受路径、模型地址、密钥或任意供应商参数 |
+| turn.submit | `client_message_id, content`；可选 `attachment_refs:string[]=[], profile_id, reasoning_effort:off/low/medium/high/xhigh/max, agent_id`；`profile_id` 只能是平台协议档 ID，`agent_id` 只能是平台内置专家 ID（缺省/未知回落默认专家，V1.89），附件只接受平台引用，不接受路径、模型地址、密钥或任意供应商参数 |
 | turn.cancel | `turn_id` |
 | approval.respond | `interaction_id, turn_id, turn:int>=1, attempt_id, call_id, nonce, decision:allow/deny/always` |
 | question.respond | 同上交互身份，改为 `answers:[{question_id,answer}]`（非空、问题 ID 不重复） |
@@ -1927,7 +1929,8 @@ send 超时同样关闭 4408。Runtime 的事实提交不等待网络。
 
 ### 4A.5 前端展示增量（V1.81，2026-09-09）
 
-- `GET /api/sessions/agent-ui` 返回草稿能力；`GET /api/sessions/{id}/agent-ui` 复验会话可见性与 v2 引擎。响应 `version=1, enabled, profile, profiles, allowed_efforts, default_effort, permissions{write,trace,reasoning,interactions,settings}, controller{active,owned_by_actor}, attachments`。`profile` 与 `profiles[]` 同形，均只包含 `id,name,version,model,protocol,allowed_efforts,default_effort`；服务端逐档通过同一 resolver 校验，绝不返回 base_url、API Key 或供应商参数。顶层 `allowed_efforts/default_effort` 保留为默认协议档兼容字段。controller 不授予当前连接控制权。
+- `GET /api/sessions/agent-ui` 返回草稿能力；`GET /api/sessions/{id}/agent-ui` 复验会话可见性与 v2 引擎。响应 `version=1, enabled, profile, profiles, agent, agents, allowed_efforts, default_effort, permissions{write,trace,reasoning,interactions,settings}, controller{active,owned_by_actor}, attachments`。`profile` 与 `profiles[]` 同形，均只包含 `id,name,version,model,protocol,allowed_efforts,default_effort`；服务端逐档通过同一 resolver 校验，绝不返回 base_url、API Key 或供应商参数。顶层 `allowed_efforts/default_effort` 保留为默认协议档兼容字段。controller 不授予当前连接控制权。
+- V1.89：`agent` 为当前选中的专家 ID（已有会话取最近一轮 `user/message` 事实的 `extensions.expert_id`，无记录回落默认专家 `general`；草稿恒为默认），`agents[]` 为可选专家投影，每项仅 `id,name,description,badge,default`——**不返回**专家提示词正文与工具视野。专家由平台内置（随代码版本分发），`agent_id` 缺省或传未知值时服务端回落默认专家，不因该可选字段失败；专家只收窄工具范围，不改变权限、错误契约与任务状态机。
 - 每次 `turn.submit` 都以提交的 `profile_id` 与 `reasoning_effort` 重新解析协议档；协议档不存在、未声明 Agent 用途、无有效凭据或思考档位不支持时返回 `VALIDATION`。前端本地偏好只能辅助预选，不能替代服务端解析。
   - V1.83：省略 `reasoning_effort` 时，若全局思考偏好不被该模型支持，使用经 resolver 验证的 `off`，`agent-ui.default_effort` 和实际请求保持一致。显式提交不支持的档位仍返回 `VALIDATION`。DeepSeek/Qwen 的 Anthropic 兼容请求在 `off` 时实际发送 `thinking.type=disabled`；收到的空签名思考块按兼容模型无损保留，不强套 Claude 非空签名规则，跨模型回放校验仍有效。
   - V1.85：Anthropic 兼容 DeepSeek V4 flash/pro（含日期版本）公开共同有效档位 `off/high/max`，开启时发送 `thinking.type=enabled` 与 `output_config.effort`，不把别名映射伪装成独立强度。Qwen3.6 Flash（含日期版本）使用 `thinking.budget_tokens` 表达五档预算，沿用平台 20%/40%/60%/75%/80% 比例、最低 1024 token；从总输出预留中扣除思考预算后下发正文 `max_tokens`，总预算不增加。输出预留不足时只公开 off。其他模型保持原能力边界；前端仅按服务端候选渲染，只有一个候选时明确显示不可调节。

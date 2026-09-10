@@ -115,6 +115,17 @@
                     选择绑定的沙箱工作区（可选）。绑定后模型的文件读写与终端命令将在此工作区内隔离执行。
                   </p>
 
+                  <div v-if="sessionId" class="ws-popover-tier">
+                    <span class="ws-tier-label">本会话权限档位</span>
+                    <n-select
+                      size="small"
+                      style="width: 200px"
+                      :value="sessionTier"
+                      :options="tierOptions"
+                      @update:value="handleTierChange"
+                    />
+                  </div>
+
                   <div v-if="loadingWorkspaces" class="ws-popover-loading">加载工作区中…</div>
                   <div v-else class="ws-popover-list">
                     <!-- 选项 1：不绑定工作区（默认沙箱） -->
@@ -188,7 +199,7 @@
                 </div>
               </n-popover>
             </div>
-            <AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :metrics="conversationMetrics" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" :has-workspace="true" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile" @request-workspace="handleRequestWorkspace"/>
+            <AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :metrics="conversationMetrics" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" :has-workspace="true" :agent="selectedAgent" :agents="ui?.agents || []" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile" @agent="selectAgent" @request-workspace="handleRequestWorkspace"/>
           </div>
           <!-- 空状态时的提示词卡片（位于输入框下方，点击填充草稿） -->
           <div v-if="!rows.length" class="loop-empty-prompts">
@@ -241,7 +252,7 @@
           </span>
         </button>
       </div>
-      <AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :metrics="conversationMetrics" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" :has-workspace="true" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile" @request-workspace="handleRequestWorkspace"/>
+      <AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :metrics="conversationMetrics" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" :has-workspace="true" :agent="selectedAgent" :agents="ui?.agents || []" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile" @agent="selectAgent" @request-workspace="handleRequestWorkspace"/>
     </div>
     <!-- 页面最底部指标栏：只有开始对话后（rows.length > 0）且有 conversationMetrics 时显示 -->
     <footer v-if="rows.length && conversationMetrics" class="conversation-metrics loop-bottom-metrics" aria-label="会话模型总用量指标">
@@ -282,7 +293,7 @@ import TimeIcon from 'naive-ui/es/_internal/icons/Time'
 import http, { ApiError, api } from '../../../api/http'
 import { createRequestId } from '../../../utils/requestId'
 import type { AttachmentReference, AgentSession } from '../../../api/types'
-import type { ConversationMetrics, Data, Effort, InteractionRecord, LoopProfile, LoopRecord, LoopUi, LoopUsage, ToolRun } from '../../../api/agentLoopTypes'
+import type { ConversationMetrics, Data, Effort, InteractionRecord, LoopAgent, LoopProfile, LoopRecord, LoopUi, LoopUsage, ToolRun } from '../../../api/agentLoopTypes'
 import { conversationRows, identity } from '../../../agent/loop/reducer'
 import type { LoopStore } from '../../../agent/loop/store'
 import { useAuthStore } from '../../../stores/auth'
@@ -316,6 +327,27 @@ const draftWorkspaceId = ref<string | null>(null)
 const draftWorkspaceName = ref<string>('')
 const newWorkspaceName = ref('')
 const creatingWorkspace = ref(false)
+
+// 三档权限等级（会话级覆盖；空 = 继承全局默认）
+const tierOptions = [
+  { label: '继承全局默认', value: '' },
+  { label: '档1 请求批准', value: 'tier1' },
+  { label: '档2 帮我批准', value: 'tier2' },
+  { label: '档3 完全访问', value: 'tier3' },
+]
+const sessionTier = ref<string>('')
+watch(() => props.session?.permission_tier, (value) => { sessionTier.value = value || '' }, { immediate: true })
+async function handleTierChange(value: string) {
+  if (!props.sessionId) return
+  const tier = (value || null) as 'tier1' | 'tier2' | 'tier3' | null
+  try {
+    await api.sessions.updatePermissionTier(props.sessionId, tier)
+    sessionTier.value = value || ''
+    message.success('本会话权限档位已更新')
+  } catch (err: any) {
+    message.error(err?.message || '权限档位更新失败')
+  }
+}
 
 const activeWorkspaceId = computed<string | null>(() => {
   if (props.sessionId) {
@@ -414,7 +446,7 @@ function handleRequestWorkspace() {
   if (!workspaces.value.length) void loadWorkspaces(false)
 }
 const runtimeOpen = ref(false), error = ref(''), effort = ref<Effort | null>(null)
-const ui = ref<LoopUi | null>(null), selectedProfileId = ref(''), shown = ref(80), attachments = ref<Record<string, AttachmentReference[]>>({})
+const ui = ref<LoopUi | null>(null), selectedProfileId = ref(''), selectedAgentId = ref(''), shown = ref(80), attachments = ref<Record<string, AttachmentReference[]>>({})
 const composer = ref<InstanceType<typeof AgentComposer>>(), scroller = ref<HTMLElement>(), chatShell = ref<HTMLElement>(), atBottom = ref(true)
 type ResizeEdge = 'left' | 'right'
 const chatWidth = ref<number | null>(null), isResizing = ref(false), resizeEdge = ref<ResizeEdge | null>(null), hoverResizeEdge = ref<ResizeEdge | null>(null)
@@ -454,6 +486,11 @@ function isFirstAssistantInTurn(row: LoopRecord): boolean {
 const busy = computed(() => !!state.value?.activeTurn)
 /** 草稿协议档可独立于平台默认项选择；后端在提交时再次校验。 */
 const selectedProfile = computed<LoopProfile | null>(() => ui.value?.profiles.find(item => item.id === selectedProfileId.value) || ui.value?.profile || null)
+/** 草稿专家可独立选择；后端按会话最近一轮记忆并在提交时复核（未知 ID 回落默认专家）。 */
+const selectedAgent = computed<LoopAgent | null>(() => {
+  const list = ui.value?.agents || []
+  return list.find(item => item.id === selectedAgentId.value) || list.find(item => item.default) || null
+})
 const ready = computed(() => !!selectedProfile.value && !!effort.value && (props.sessionId ? !!state.value?.ready : !!ui.value?.enabled))
 const canControl = computed(() => !!state.value?.controlled && !!ui.value?.permissions.interactions)
 const summary = computed(() => Object.values(state.value?.attempts || {}).sort((a,b)=>b.first_cursor-a.first_cursor)[0]?.request_summary)
@@ -505,6 +542,15 @@ async function refreshUi() {
       || null
     selectedProfileId.value = profile?.id || ''
     restoreEffort(profile)
+    // 专家优先沿用会话记忆（data.agent 由后端按最近一轮解析），草稿回落本地偏好与默认专家。
+    const savedAgentId = localPreference('agent-expert')
+    const agentList = data.agents || []
+    const agent = agentList.find(item => item.id === selectedAgentId.value)
+      || agentList.find(item => item.id === data.agent)
+      || agentList.find(item => item.id === savedAgentId)
+      || agentList.find(item => item.default)
+      || null
+    selectedAgentId.value = agent?.id || ''
     if (!data.permissions.reasoning && state.value) { for (const a of Object.values(state.value.attempts)) { a.reasoning = ''; delete a.reasoning_preview }; for (const event of state.value.facts) delete event.data.reasoning_preview }
     if (trace.value) {
       trace.value.denied = !data.permissions.trace
@@ -540,6 +586,13 @@ function selectProfile(id: string) {
   selectedProfileId.value = profile.id
   try { localStorage.setItem(`agent-profile:${auth.user?.id}`, profile.id) } catch { /* 本地存储不可用不影响发送。 */ }
   restoreEffort(profile)
+}
+/** 专家切换同样只影响下一轮；会话内选择由后端按最近一轮记忆，本地仅作草稿偏好。 */
+function selectAgent(id: string) {
+  const agent = ui.value?.agents.find(item => item.id === id)
+  if (!agent) return
+  selectedAgentId.value = agent.id
+  try { localStorage.setItem(`agent-expert:${auth.user?.id}`, agent.id) } catch { /* 本地存储不可用不影响发送。 */ }
 }
 watch(() => props.sessionId, (newSid) => { ui.value = null; attachments.value = {}; shown.value = 80; tab.value='chat'; if (props.sessionId) props.store.open(props.sessionId); void refreshUi(); if (!newSid) void loadWorkspaces(true) }, { immediate: true })
 // 轨迹订阅属于当前可见面板；切会话/卸载仅退订诊断，不关闭执行中的控制连接。
@@ -690,7 +743,7 @@ async function submit(override?: { content: string; attachmentRefs: string[] }) 
       delete props.store.drafts.draft
     }
     const client=props.store.open(sid, preparedTicket)
-    source.pending ??= client.command('turn.submit',{client_message_id:createRequestId(),content,attachment_refs:refs,profile_id:profile.id,reasoning_effort:selectedEffort})
+    source.pending ??= client.command('turn.submit',{client_message_id:createRequestId(),content,attachment_refs:refs,profile_id:profile.id,reasoning_effort:selectedEffort,agent_id:selectedAgent.value?.id})
     // 只有首次订阅完成后才发送；超时取消等待，不能在以后重连时偷偷补发。
     if (!props.store.sessions[sid].ready) await new Promise<void>((resolve, reject) => {
       const unwatch = watch(() => props.store.sessions[sid]?.ready, ok => {

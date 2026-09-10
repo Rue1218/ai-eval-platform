@@ -144,20 +144,34 @@ class PlatformLoopTool:
 
     @property
     def metadata(self) -> dict[str, Any]:
-        """平台风险映射到源调度元数据，交互不会与其他调用并发。"""
+        """平台风险映射到源调度元数据，交互不会与其他调用并发。
+
+        ``dsh_requires_approval`` 为无参粗判（bash 按空命令=normal 计）；
+        真正逐调用裁决在 ``approval_decision(args)``（scheduler 带 args 调用）。
+        """
         policy = self.definition.permission_policy
         parallel = self.definition.name in _PARALLEL and policy.workspace != "write" and not self.definition.requires_prior_result and not self.definition.requires_confirmation
         access = "read" if parallel else "execute" if self.definition.name == "bash" else "write"
         # 问答和业务确认由各自回调等待，不叠加普通工具审批卡。
         interaction = self.definition.name in {"ask_user_question", "task.create"} or policy.confirmation_required or self.definition.requires_confirmation
+        requires = (not parallel) and (not interaction) and self.approval_decision({}) != "auto"
         return {"dsh_execution_mode": "parallel" if parallel else "exclusive",
-                "dsh_access": access, "dsh_requires_approval": not parallel and not interaction}
+                "dsh_access": access, "dsh_requires_approval": requires}
+
+    def approval_decision(self, args: Mapping[str, Any]) -> str:
+        """按会话档位 + 工具 + 命令风险返回 ``auto``/``approval``/``deny``。"""
+        from app.harness.security import permission_tier as tier_policy
+
+        tier = self.context.permission_tier if self.context is not None else ""
+        return tier_policy.decide(self.definition.name, dict(args or {}), tier)
 
     @property
     def approval_scope(self) -> str:
-        """工作区/用户/档位变化会使 always 授权失效。"""
+        """工作区/用户/档位/权限等级变化会使 always 授权失效。"""
         ctx = self.context
-        return json.dumps([ctx.user_id, ctx.sandbox_dir, ctx.sandbox_mode], ensure_ascii=False) if ctx else ""
+        if not ctx:
+            return ""
+        return json.dumps([ctx.user_id, ctx.sandbox_dir, ctx.sandbox_mode, ctx.permission_tier], ensure_ascii=False)
 
     def bind_call(self, identity: dict[str, Any]) -> PlatformLoopTool:
         """每个 call 独立上下文，避免并行共享 call_id。"""
@@ -198,14 +212,17 @@ class PlatformLoopTool:
         if not self.available or self.context is None or self.identity is None:
             raise AppError(ErrorCode.VALIDATION, "工具执行接口尚未接线")
         current = self.bridge.context_factory(dict(self.identity))
-        if (current.session_id, current.user_id, current.sandbox_dir, current.sandbox_mode) != (
-            self.context.session_id, self.context.user_id, self.context.sandbox_dir, self.context.sandbox_mode
+        if (current.session_id, current.user_id, current.sandbox_dir, current.sandbox_mode,
+                current.permission_tier) != (
+            self.context.session_id, self.context.user_id, self.context.sandbox_dir,
+            self.context.sandbox_mode, self.context.permission_tier
         ):
             raise AppError(ErrorCode.UNAUTHORIZED, "工具授权上下文已变化")
         if self.definition.permission_policy.workspace != "none" and not self.context.sandbox_dir:
             raise AppError(ErrorCode.VALIDATION, "缺少可信工作区")
-        if self.context.sandbox_mode == "read-only" and self.definition.permission_policy.workspace == "write" and self.definition.name != "bash":
-            raise AppError(ErrorCode.UNAUTHORIZED, "当前沙箱仅允许读取")
+        # 三档权限：灾难级 bash 命令直接拒绝（不进审批；三档一致）。
+        if self.definition.name == "bash" and self.approval_decision(args) == "deny":
+            raise AppError(ErrorCode.DENIED, "命令命中灾难级操作，已拒绝执行")
         if self.bridge.authorize(self.definition, self.normalize_arguments(args), self.context) is not None:
             raise AppError(ErrorCode.UNAUTHORIZED, "权限接口必须显式校验并返回 None")
 

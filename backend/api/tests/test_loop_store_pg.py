@@ -224,7 +224,7 @@ def test_pg_scope_quarantine_survives_restart_and_blocks_other_session(pg_case, 
             restarted.reconcile_execution(started["execution_id"], {
                 "execution_id": started["execution_id"],
                 "status": "failed", "process_tree_terminated": True,
-                "termination_evidence": "cgroup_empty",
+                "termination_evidence": "process_exited",
             })
         next_call = dispatch(second, tmp_path / "nested")
         result(second, next_call, "succeeded")

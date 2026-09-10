@@ -54,17 +54,19 @@ class Settings(BaseSettings):
     # SSRF 防护后的最小直接文本抓取。
     firecrawl_api_url: str = "https://api.firecrawl.dev/v1"
     firecrawl_api_key: str = ""
-    # Harness 沙箱（bash 工具）：bwrap 内核由独立 runner 容器执行（P4-2），
-    # api 不再持有 privileged/bubblewrap。engine 为 "bwrap" 时开放通用 bash；
-    # engine 为 "off" 时 bash 工具 fail-closed。
-    sandbox_engine: str = "bwrap"
-    # F2/G4：bash 默认档位（《工作区与沙箱设计方案》§6，只声明文件效果）。
-    # "workspace-write" = 现状可写语义（F4 read-only 灰度前保持无行为变化）；
-    # F4 灰度时翻转 "read-only"（拒写 → 升档审批）。"none"（bash 不可达）由
-    # sandbox_engine=off fail-closed 承担，本字段不接受 none。
-    sandbox_bash_default_mode: str = "workspace-write"
+    # Harness 沙箱（bash 工具）：命令在独立 runner 容器内直跑（容器即隔离
+    # 边界，unshare 建命名空间）；api 不持有特权。engine 为 "container" 时
+    # 开放通用 bash；engine 为 "off" 时 bash 工具 fail-closed。
+    sandbox_engine: str = "container"
+    # 已废弃（保留字段防 env 解析报错，不再消费）：文件效果档位由容器挂载与
+    # 权限档位审批取代；网络模式见 sandbox_kernel.NETWORK_MODES。
+    sandbox_bash_default_mode: str = "isolated"
     sandbox_memory_mb: int = 256  # 沙箱虚拟内存上限（MB）
     sandbox_nproc: int = 32  # 沙箱最大进程数（防 fork 炸弹）
+    # 外部白名单基目录：read/write/edit 的**绝对路径**必须落在其下（逐段 realpath
+    # 校验，符号链接逃逸拒绝）。空 = 关闭外部访问（文件工具仅限会话工作区）。
+    # 与 runner 容器 rw 挂载同路径（compose EXTERNAL_BASE_DIR）。
+    external_base_dir: str = "/srv/agent-external"
     sandbox_cpu_s: int = 10  # 沙箱 CPU 时间上限（秒）
     # 独立沙箱 runner 服务（compose 内网，默认 runner:8001，不发布主机端口）
     sandbox_runner_url: str = "http://runner:8001"

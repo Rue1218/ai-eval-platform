@@ -1,15 +1,24 @@
-"""bwrap 进程级沙箱内核（api 与独立 sandbox runner 共用，P4-2）。
+"""容器内直跑沙箱内核（api 与独立 sandbox runner 共用）。
 
-从 api 的 ``app.harness.execution.sandbox`` 迁移，**不依赖任何 ``app.*``
-模块**：api 侧沙箱模块包装为远程客户端，runner 服务直接调用本内核。
+**不再使用 bwrap**：``bash`` 直接在 runner 容器内以 ``subprocess`` 执行，
+容器本身即隔离边界；每次执行用 ``unshare`` 建立命名空间：
 
-- ``run_sandboxed`` 每次调用构造一次性 bwrap 沙箱（秒级启动，无常驻进程）：
-  无网络（--unshare-net）、会话工作区唯一可写（其余只读 bind）、资源受限
-  （ulimit 内存/进程数/CPU）、超时整树清理（--die-with-parent + killpg）；
-- ``probe_sandbox`` 冒烟探测 bwrap 可用性（懒加载 + 进程内缓存）；探测失败
-  或引擎不可用时调用方必须 fail-closed（禁止降级为裸 subprocess）；
-- 错误以 ``SandboxError(code, message)`` 表达（code ∈ TIMEOUT/VALIDATION/
-  INTERNAL），由调用方映射到各自错误模型。
+- ``mode="isolated"``（档1/2）：``unshare --net --pid --fork --mount-proc``
+  → 全新网络命名空间（仅 lo，无内外网）+ 私有 PID 命名空间；
+- ``mode="network"``（档3）：``unshare --pid --fork --mount-proc``
+  → 保留网络（是否可达公网由 runner 容器网络与受信启动器决定）；
+- **终止证据**：私有 PID 命名空间的 PID 1 退出即由内核清空整个命名空间，
+  故 ``killpg`` + ``wait`` 返回即 ``termination_evidence="process_exited"``
+  （强度等价于原 cgroup v2 执行域）；
+- **资源限制**：``bash`` 启动器设置 ``ulimit``（dash 不支持 ``ulimit -u``，
+  必须用 ``bash -c``）；命令始终只作 ``$1`` 参数传入，绝不拼进脚本；
+- **环境最小化**：只透传 PATH/HOME/LANG 等，**不含 RUNNER_INTERNAL_TOKEN**。
+
+``probe_sandbox`` 冒烟探测 ``unshare`` 可用性；失败或引擎不可用时调用方必须
+fail-closed（禁止降级为无命名空间裸执行）。
+
+错误以 ``SandboxError(code, message)`` 表达（code ∈ TIMEOUT/VALIDATION/
+INTERNAL/CANCELLED/OUTCOME_UNKNOWN），由调用方映射到各自错误模型。
 """
 
 from __future__ import annotations
@@ -18,27 +27,41 @@ import logging
 import os
 import signal
 import subprocess
-import sys
 import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from pathlib import Path
-from uuid import uuid4
 
 logger = logging.getLogger("ai-eval.sandbox_kernel")
 
-# 沙箱内工作区挂载点（固定路径，避免被 --tmpfs /tmp 遮蔽；模型相对路径落在此处）
-_SANDBOX_MOUNT = "/work"
+# 网络模式（取代原 bwrap 文件效果档位）："isolated" 断网 / "network" 保留网络。
+NETWORK_MODES: frozenset[str] = frozenset({"isolated", "network"})
 
-# 沙箱档位（F2/G4，《工作区与沙箱设计方案》§6）：只声明文件效果——
-# "read-only"（scope 只读 bind）与 "workspace-write"（scope 可写 bind）。
-# "none"（bash 不可达）由 api 侧 sandbox_engine=off fail-closed 承担，不进 runner。
-SANDBOX_MODES: frozenset[str] = frozenset({"read-only", "workspace-write"})
+# 过渡兼容：旧 api/legacy 路径可能仍传文件效果档位，一律映射为 isolated
+# （新模型下文件边界由容器挂载与档位审批决定，与网络模式解耦）。
+_LEGACY_MODE_ALIASES: dict[str, str] = {
+    "workspace-write": "isolated",
+    "read-only": "isolated",
+}
+
+# 命令最小环境：不含 RUNNER_INTERNAL_TOKEN 等凭据；HOME 指向可写 tmpfs。
+_MINIMAL_ENV: dict[str, str] = {
+    "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    "HOME": "/tmp",
+    "LANG": "C.UTF-8",
+    "LC_ALL": "C.UTF-8",
+    "TERM": "dumb",
+    "XDG_CACHE_HOME": "/tmp/.cache",
+    "XDG_CONFIG_HOME": "/tmp/.config",
+    "XDG_DATA_HOME": "/tmp/.local/share",
+}
+
+# 墙钟终止宽限（killpg 后等待进程组回收的上限，秒）。
+_TERMINATE_GRACE_S = 2.0
 
 
 class SandboxError(Exception):
-    """沙箱执行错误（code ∈ TIMEOUT/VALIDATION/INTERNAL）。"""
+    """沙箱执行错误（code ∈ TIMEOUT/VALIDATION/INTERNAL/CANCELLED/OUTCOME_UNKNOWN）。"""
 
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
@@ -57,82 +80,108 @@ class SandboxLimits:
 
 @dataclass
 class SandboxExecutionControl:
-    """新执行接口的取消信号和终止证据；旧调用不传入，保持原返回接口。"""
+    """执行取消信号与终止证据载体；旧调用不传入则保持原返回接口。"""
 
     cancel_event: threading.Event = field(default_factory=threading.Event)
     started: bool = False
     process_tree_terminated: bool = False
     termination_evidence: str | None = None
     exit_code: int | None = None
+    # 契约保留字段：容器模型下无 cgroup，恒为 None（客户端/存储结构不变）。
     cgroup_path: str | None = None
 
 
-class _ExecutionCgroup:
-    """每次执行使用独立 cgroup v2，覆盖 setsid 后代，禁止退回仅 killpg 的证明。"""
+def normalize_mode(mode: str | None) -> str:
+    """归一化执行模式；旧文件效果档位映射为 isolated，非法值 fail-closed。"""
+    value = str(mode or "").strip()
+    if value in NETWORK_MODES:
+        return value
+    if value in _LEGACY_MODE_ALIASES:
+        return _LEGACY_MODE_ALIASES[value]
+    raise SandboxError("VALIDATION", f"未知沙箱档位：{mode}")
 
-    def __init__(self, root: str | None) -> None:
-        """只在服务端配置的 cgroup v2 委派下创建独立执行域。"""
-        if sys.platform != "linux" or not root:
-            raise SandboxError("VALIDATION", "可取消执行需要 Linux cgroup v2 委派")
-        parent = Path(root).resolve()
-        if not parent.is_relative_to(Path("/sys/fs/cgroup")) or not (parent / "cgroup.controllers").is_file():
-            raise SandboxError("VALIDATION", "可取消执行的 cgroup 根目录非法")
-        self.path = parent / f"agent-{uuid4().hex}"
-        try:
-            self.path.mkdir()
-            if not (self.path / "cgroup.kill").is_file():
-                raise OSError("cgroup.kill 不可用")
-        except OSError:
-            self.close()
-            raise SandboxError("VALIDATION", "可取消执行的 cgroup 委派不可用") from None
 
-    def wrap(self, argv: list[str]) -> list[str]:
-        """可信启动器先加入执行域再 exec bwrap；模型命令始终只由 bwrap 执行。"""
+def build_exec_argv(*, cmd: str, mode: str, limits: SandboxLimits) -> list[str]:
+    """构造容器内直跑 argv（纯函数，便于单测）。
+
+    - ``isolated``：``unshare --net --pid --fork --mount-proc`` 直接断网 + 私有 pidns；
+    - ``network``（档3）：受信启动器建 netns + veth，经 runner 出公网，
+      并用 iptables 阻断内网（RFC1918）与容器本地服务（详见 ``_NETWORK_LAUNCHER``）；
+    - 受信启动器：``bash -c '<ulimit>; exec bash -c "$1"' bash <cmd>``——
+      命令只作 ``$1``，绝不拼进脚本；``ulimit`` 用 bash（dash 无 ``-u``）。
+    """
+    normalized = normalize_mode(mode)
+    launcher = [
+        "bash", "-c",
+        (
+            f"ulimit -v {limits.memory_kb}; ulimit -u {limits.nproc}; "
+            f"ulimit -t {limits.cpu_s}; exec bash -c \"$1\""
+        ),
+        "bash", cmd,
+    ]
+    if normalized == "network":
         return [
-            "/bin/sh", "-c",
-            'printf "%s\\n" "$$" > "$1/cgroup.procs" || exit 125; shift; exec "$@"',
-            "runner-cgroup", str(self.path), *argv,
+            "bash", "-c", _NETWORK_LAUNCHER, "sandbox-network",
+            cmd, str(limits.memory_kb), str(limits.nproc), str(limits.cpu_s),
         ]
+    return ["unshare", "--net", "--pid", "--fork", "--mount-proc", *launcher]
 
-    def terminate(self, process: subprocess.Popen[str]) -> bool:
-        """先停启动器，再杀执行域；必须同时取得父进程回收和空执行域证据。"""
-        try:
-            if process.poll() is None:
-                os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        except OSError:
-            # 进程组信号失败仍须尝试 cgroup.kill；最终以回收和空域证据裁决。
-            pass
-        try:
-            (self.path / "cgroup.kill").write_text("1", encoding="ascii")
-            process.wait(timeout=2.0)
-            deadline = time.monotonic() + 2.0
-            while time.monotonic() < deadline:
-                events = dict(line.split() for line in (self.path / "cgroup.events").read_text().splitlines())
-                if events.get("populated") == "0":
-                    return True
-                time.sleep(0.02)
-        except (OSError, ValueError, subprocess.TimeoutExpired):
-            return False
-        return False
 
-    def close(self) -> None:
-        """只删除已空的执行域；未知状态保留目录供运维对账。"""
-        try:
-            self.path.rmdir()
-        except OSError:
-            pass
+# 档3 网络启动器：建独立 netns + veth，经 runner 出公网；iptables 阻断内网与
+# 容器本地服务。命令只作位置参数传入，绝不拼进脚本。任一 setup 失败即退出
+# （fail-closed，绝不在无隔离下执行）。清理由 EXIT trap 保证（幂等）。
+# 依赖：iproute2(ip) + iptables；runner 需 `--sysctl net.ipv4.ip_forward=1`。
+# DNS：docker 内嵌解析器 127.0.0.11 只在容器自身 netns，独立 netns 不可达，
+# 故在 mount ns 内把 /etc/resolv.conf 绑定为公网解析器（不影响容器本体）。
+_NETWORK_LAUNCHER = r"""
+set -eu
+cmd="$1"; mem_kb="$2"; nproc="$3"; cpu_s="$4"
+idx=$(( ($$ % 250) + 1 ))
+ns="aieval-ns-$idx"; veth_h="aieval-h-$idx"; veth_s="aieval-s-$idx"
+subnet="10.201.$idx"; host_ip="$subnet.1"; ns_ip="$subnet.2"
+resolv="/tmp/.sbx-resolv-$idx"
+cleanup() {
+  rm -f "$resolv" 2>/dev/null || true
+  ip netns del "$ns" 2>/dev/null || true
+  ip link del "$veth_h" 2>/dev/null || true
+  iptables -t nat -D POSTROUTING -s "$host_ip/30" -j MASQUERADE 2>/dev/null || true
+  iptables -D FORWARD -s "$host_ip/30" -j ACCEPT 2>/dev/null || true
+  iptables -D FORWARD -s "$host_ip/30" -d 192.168.0.0/16 -j DROP 2>/dev/null || true
+  iptables -D FORWARD -s "$host_ip/30" -d 172.16.0.0/12 -j DROP 2>/dev/null || true
+  iptables -D FORWARD -s "$host_ip/30" -d 10.0.0.0/8 -j DROP 2>/dev/null || true
+  iptables -D INPUT -s "$host_ip/30" -j DROP 2>/dev/null || true
+}
+trap cleanup EXIT
+ip netns add "$ns"
+ip link add "$veth_h" type veth peer name "$veth_s"
+ip link set "$veth_s" netns "$ns"
+ip addr add "$host_ip/30" dev "$veth_h"
+ip link set "$veth_h" up
+ip netns exec "$ns" ip addr add "$ns_ip/30" dev "$veth_s"
+ip netns exec "$ns" ip link set "$veth_s" up
+ip netns exec "$ns" ip link set lo up
+ip netns exec "$ns" ip route add default via "$host_ip"
+iptables -t nat -A POSTROUTING -s "$host_ip/30" -j MASQUERADE
+iptables -I FORWARD 1 -s "$host_ip/30" -j ACCEPT
+iptables -I FORWARD 1 -s "$host_ip/30" -d 192.168.0.0/16 -j DROP
+iptables -I FORWARD 1 -s "$host_ip/30" -d 172.16.0.0/12 -j DROP
+iptables -I FORWARD 1 -s "$host_ip/30" -d 10.0.0.0/8 -j DROP
+iptables -I INPUT 1 -s "$host_ip/30" -j DROP
+printf 'nameserver 223.5.5.5\nnameserver 119.29.29.29\n' > "$resolv"
+ip netns exec "$ns" unshare --mount --pid --fork --mount-proc bash -c '
+mount --bind '"$resolv"' /etc/resolv.conf 2>/dev/null || true
+ulimit -v '"$mem_kb"'; ulimit -u '"$nproc"'; ulimit -t '"$cpu_s"'
+exec bash -c "$1"
+' bash "$cmd"
+"""
 
 
 def resolve_workspace_path(path: str, root: str) -> str:
-    """校验工作区路径位于 ``root`` 前缀内，返回 canonical 绝对路径供 bind。
+    """校验工作区路径位于 ``root`` 前缀内，返回 canonical 绝对路径供使用。
 
-    F2/G4（MAJ-5）：替代旧「root 直接子目录 + 会话标识」校验（runner 侧不再
-    依赖会话形态）——接受嵌套 scope（``{root}/<ws>/<folder>/…``），逐段
-    realpath 后重验前缀（符号链接逃逸拒绝），仍拒相对路径与 ``..`` 段；
-    bind 使用返回值（realpath 最终路径），消除 resolve→bind 换链窗口。
-    越界/非法一律抛 ``SandboxError(VALIDATION)``（fail-closed）。
+    接受嵌套 scope（``{root}/<ws>/<folder>/…``），逐段 realpath 后重验前缀
+    （符号链接逃逸拒绝），拒相对路径与 ``..`` 段；越界/非法一律抛
+    ``SandboxError(VALIDATION)``（fail-closed）。
     """
     if not path or not root:
         raise SandboxError("VALIDATION", "非法工作区路径")
@@ -152,82 +201,48 @@ def resolve_workspace_path(path: str, root: str) -> str:
     return current
 
 
-def _build_bwrap_argv(
-    *,
-    bwrap_bin: str,
-    sandbox_dir: str,
-    cmd: str,
-    limits: SandboxLimits,
-    mode: str = "workspace-write",
-) -> list[str]:
-    """构造 bwrap 命令行（按档位绑定 scope + 无网络 + ulimit 限制）。
+def _terminate(process: subprocess.Popen[str]) -> bool:
+    """强杀进程组并回收；返回是否取得「进程树已终止」证据。
 
-    F2/G4：scope 按 ``mode`` 组装 bind——"workspace-write" 可写（--bind）、
-    "read-only" 只读（--ro-bind）；调用方须先行校验 mode ∈ SANDBOX_MODES。
-    最小 bind 而非 ``--ro-bind / /``：不暴露源码、``/run/config/.env``
-    （供应商 Key，已被 ``--tmpfs /run`` 遮蔽）、其他会话工作区与备份文件；
-    ulimit 由 bash 设置后 ``exec`` 继承（RLIMIT 在 exec 后保留）。
+    私有 PID 命名空间的 PID 1 退出后由内核清空整个命名空间，故 ``killpg`` +
+    ``wait`` 返回即证明整树停止（``process_exited``）。无法在宽限内回收则返回
+    False，交由调用方判 ``OUTCOME_UNKNOWN``。
     """
-    argv = [
-        bwrap_bin,
-        "--unshare-user",
-        # PoC 勘误（G2，2026-09-07，见《…G2G3实施评估与PoC结论.md》）：非特权
-        # 容器下 `--unshare-pid` + `--proc` 组合 mount proc EPERM（bwrap 0.12/
-        # Docker 26 实测），故移除私有 PID ns——`/proc` 呈容器 pid ns 级视图
-        # （仅 runner 容器自身进程，无宿主/跨容器进程；沙箱 userns root 对
-        # 容器内他进程无 ptrace 权限，防护语义保持）。bwrap ≥1.0.4 可复测。
-        "--unshare-net",
-        "--unshare-ipc",
-        "--unshare-uts",
-        "--die-with-parent",
-        "--new-session",
-        "--ro-bind", "/usr", "/usr",
-        "--ro-bind", "/bin", "/bin",
-        "--ro-bind", "/sbin", "/sbin",
-        "--ro-bind", "/lib", "/lib",
-        "--ro-bind", "/lib64", "/lib64",
-        "--ro-bind", "/usr/local", "/usr/local",
-        "--ro-bind", "/etc", "/etc",
-        "--proc", "/proc",
-        "--dev", "/dev",
-        "--tmpfs", "/tmp",
-        "--tmpfs", "/run",
-        ("--bind" if mode == "workspace-write" else "--ro-bind"),
-        sandbox_dir, _SANDBOX_MOUNT,
-        "--clearenv",
-        "--setenv", "PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-        "--setenv", "HOME", "/tmp",
-        "--chdir", _SANDBOX_MOUNT,
-        "--",
-        "bash", "-c",
-        f"ulimit -v {limits.memory_kb}; ulimit -u {limits.nproc}; ulimit -t {limits.cpu_s}; exec bash -c \"$1\"",
-        "bash", cmd,
-    ]
-    return argv
+    try:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    except OSError:
+        pass
+    try:
+        process.wait(timeout=_TERMINATE_GRACE_S)
+    except subprocess.TimeoutExpired:
+        return False
+    return True
 
 
 def run_sandboxed(
     cmd: str,
     *,
     sandbox_dir: str,
-    mode: str = "workspace-write",
+    mode: str = "isolated",
     timeout_s: float,
     limits: SandboxLimits | None = None,
-    bwrap_bin: str = "/usr/bin/bwrap",
+    bwrap_bin: str | None = None,  # 兼容保留，容器模型下忽略
     max_output_chars: int = 20000,
     on_output: Callable[[str], None] | None = None,
     control: SandboxExecutionControl | None = None,
-    cgroup_root: str | None = None,
+    cgroup_root: str | None = None,  # 兼容保留，容器模型下忽略
 ) -> str:
-    """在一次性 bwrap 沙箱内按档位执行命令，返回 stdout；失败抛 SandboxError。
+    """在 runner 容器内（可选命名空间隔离）执行命令，返回 stdout；失败抛 SandboxError。
 
-    - ``mode`` ∈ SANDBOX_MODES（文件效果档位，F2/G4）：workspace-write →
-      scope 可写 bind；read-only → scope 只读 bind；未知档位 fail-closed；
-    - 超时：wall-clock 超时后 ``killpg(SIGKILL)`` 整树清理（配合
-      ``--die-with-parent`` 回收沙箱内全部进程），抛 ``SandboxError(TIMEOUT)``；
-    - 非零退出码：抛 ``SandboxError(INTERNAL)``，附截断的 stderr 摘要；
-    - fail-closed：bwrap 缺失/被 seccomp 拦截导致启动失败即抛
-      ``SandboxError(VALIDATION, "沙箱引擎不可用")``，禁止降级为裸 subprocess。
+    - ``mode`` ∈ NETWORK_MODES：isolated → ``unshare --net`` 断网；
+      network → 保留网络；旧文件效果档位自动映射 isolated；未知档位 fail-closed；
+    - 超时/取消：``killpg(SIGKILL)`` 整树清理（PID 1 退出由内核清空 pidns）；
+    - 非零退出码：抛 ``SandboxError(VALIDATION)``，附截断的 stderr 摘要；
+    - fail-closed：``unshare`` 缺失/被 seccomp 拦截导致启动失败即抛
+      ``SandboxError(VALIDATION, "沙箱引擎不可用")``，禁止降级为无隔离执行。
     """
     if control is not None:
         control.process_tree_terminated = True
@@ -236,21 +251,14 @@ def run_sandboxed(
             raise SandboxError("CANCELLED", "命令在启动前取消")
     if not cmd.strip():
         raise SandboxError("VALIDATION", "bash 命令为空")
-    if mode not in SANDBOX_MODES:
-        raise SandboxError("VALIDATION", f"未知沙箱档位：{mode}")
+    normalized = normalize_mode(mode)
     limits = limits or SandboxLimits()
-    argv = _build_bwrap_argv(
-        bwrap_bin=bwrap_bin, sandbox_dir=sandbox_dir, cmd=cmd, limits=limits, mode=mode
-    )
-    # 记录脱敏摘要（命令长度与摘要，不打印命令原文/密钥）
+    argv = build_exec_argv(cmd=cmd, mode=normalized, limits=limits)
+    # 记录脱敏摘要（命令长度与目录，不打印命令原文/密钥）
     logger.info(
-        "bash 沙箱执行 mode=%s len=%d dir=%s timeout=%s",
-        mode, len(cmd), sandbox_dir, timeout_s,
+        "bash 容器执行 mode=%s len=%d dir=%s timeout=%s",
+        normalized, len(cmd), sandbox_dir, timeout_s,
     )
-    execution_group = _ExecutionCgroup(cgroup_root) if control is not None else None
-    if execution_group is not None:
-        control.cgroup_path = str(execution_group.path)
-        argv = execution_group.wrap(argv)
     try:
         if control is not None:
             control.started = True
@@ -259,27 +267,18 @@ def run_sandboxed(
         started = subprocess.Popen(
             argv,
             start_new_session=True,
+            cwd=sandbox_dir,
+            env=_MINIMAL_ENV,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
         )
-    except FileNotFoundError as exc:
+    except (FileNotFoundError, OSError) as exc:
         if control is not None:
             control.started = False
             control.process_tree_terminated = True
             control.termination_evidence = "not_started"
-        if execution_group is not None:
-            execution_group.close()
-        # bwrap 二进制缺失：fail-closed，禁止降级为裸 subprocess
-        raise SandboxError("VALIDATION", "沙箱引擎不可用") from exc
-    except OSError as exc:
-        if control is not None:
-            control.started = False
-            control.process_tree_terminated = True
-            control.termination_evidence = "not_started"
-        if execution_group is not None:
-            execution_group.close()
-        # userns/seccomp 拒绝等启动失败：fail-closed
+        # unshare 缺失/命名空间被拒：fail-closed，禁止降级为无隔离执行
         raise SandboxError("VALIDATION", "沙箱引擎不可用") from exc
     output_parts: list[str] = []
     output_chars = 0
@@ -303,13 +302,13 @@ def run_sandboxed(
                 if on_output is not None:
                     try:
                         on_output(safe_chunk)
-                    except Exception:  # noqa: BLE001 —— 客户端断开不应影响沙箱清理
-                        logger.info("bash 输出回调失败，继续执行并回收沙箱")
+                    except Exception:  # noqa: BLE001 —— 客户端断开不应影响清理
+                        logger.info("bash 输出回调失败，继续执行并回收进程")
         finally:
             stdout.close()
 
     reader = threading.Thread(target=drain_stdout, name="sandbox-stdout", daemon=True)
-    if control is not None and execution_group is not None:
+    if control is not None:
         # 清理覆盖读线程启动、wait 异常、超时和主动取消；取消请求本身不是终止证据。
         reason = None
         try:
@@ -328,11 +327,10 @@ def run_sandboxed(
                 except subprocess.TimeoutExpired:
                     continue
         finally:
-            control.process_tree_terminated = execution_group.terminate(started)
+            control.process_tree_terminated = _terminate(started)
             control.exit_code = started.returncode
             if control.process_tree_terminated:
-                control.termination_evidence = "cgroup_empty"
-                execution_group.close()
+                control.termination_evidence = "process_exited"
             if reader.ident is not None:
                 reader.join(timeout=1.0)
             elif started.stdout is not None:
@@ -344,15 +342,14 @@ def run_sandboxed(
     else:
         reader.start()
         _wait_legacy(started, reader, timeout_s)
-    return _sandbox_output(started.returncode, "".join(output_parts), mode)
+    return _sandbox_output(started.returncode, "".join(output_parts))
 
 
 def _wait_legacy(started: subprocess.Popen[str], reader: threading.Thread, timeout_s: float) -> None:
-    """保留旧接口的等待和超时语义，不把旧 killpg 结果当作新接口的整树证据。"""
+    """保留旧接口的等待和超时语义（不产生新接口的整树证据）。"""
     try:
         started.wait(timeout=timeout_s)
     except subprocess.TimeoutExpired:
-        # 超时：整进程组强杀，防孤儿进程残留
         try:
             os.killpg(started.pid, signal.SIGKILL)
         except ProcessLookupError:
@@ -363,59 +360,27 @@ def _wait_legacy(started: subprocess.Popen[str], reader: threading.Thread, timeo
     reader.join(timeout=1.0)
 
 
-def _sandbox_output(returncode: int | None, stdout: str, mode: str) -> str:
-    """统一新旧接口的输出、只读拒绝和非零退出码兼容规则。"""
+def _sandbox_output(returncode: int | None, stdout: str) -> str:
+    """统一输出与非零退出码归因（容器模型下不再有 read-only bind / EROFS）。"""
     if returncode != 0:
-        # 命令已在沙箱内成功启动，非零退出码属业务失败（如写只读目录被拒），
-        # 归 VALIDATION 并把截断摘要送达模型（INTERNAL 会被 api 侧 hint 过滤
-        # 成"操作失败"，模型无法得知具体原因而盲目重试）。
         detail = stdout.strip().splitlines()
         snippet = detail[-1][:500] if detail else ""
-        # F5/G6（§6.4）：read-only 档对 /work 写入被内核拒（EROFS）→ 归
-        # DENIED（升档审批触发源）。bwrap 无结构化错误通道，只能以只读 bind
-        # 下 EROFS 内核证据归因——这是被动错误归因而非命令词表扫描（与 §6.3
-        # 删词表层立场一致）；仅 read-only 档检测（workspace-write 可写 bind
-        # 下不可能出现 scope EROFS）。
-        if mode == "read-only" and _looks_readonly_denied(snippet):
-            raise SandboxError(
-                "DENIED",
-                # 口径按设计 §6.1.1：read-only 只约束 bash 持久写（绑定会话内
-                # 文件工具仍可写）；文案不指引升档通道——该通道受 api 开关
-                # agent_escalation_approval_enabled 门控，开关关时指引即误导。
-                "沙箱卷只读拒绝写入（当前 bash read-only 档位）",
-            )
         raise SandboxError("VALIDATION", f"命令执行失败（退出码 {returncode}）：{snippet}")
     return stdout.strip() or "（无输出）"
 
 
-def _looks_readonly_denied(snippet: str) -> bool:
-    """read-only bind 写被拒的内核证据识别（EROFS/只读文件系统特征）。
+def probe_sandbox(timeout_s: float = 5.0) -> bool:
+    """冒烟探测 ``unshare`` 命名空间能力；结果进程内缓存。
 
-    检测只发生在被动错误归因点（见 run_sandboxed 注释），命中即视为
-    拒写事实；空白/未知输出不命中（fail-closed 维持 VALIDATION 归因）。
-    """
-    lowered = (snippet or "").lower()
-    return "read-only file system" in lowered or "erofs" in lowered
-
-
-def probe_sandbox(bwrap_bin: str = "/usr/bin/bwrap", timeout_s: float = 5.0) -> bool:
-    """冒烟探测 bwrap 可用性（userns/seccomp 放行）；结果进程内缓存。
-
-    用最小参数组合验证 ``--unshare-user`` + ``--ro-bind`` 可执行；被 seccomp
-    拦截/二进制缺失返回 False，调用方据此 fail-closed。
+    用 ``unshare --net --pid --fork --mount-proc true`` 验证可建命名空间；
+    被 seccomp 拦截/二进制缺失返回 False，调用方据此 fail-closed。
     """
     global _PROBE_RESULT
     if _PROBE_RESULT is not None:
         return _PROBE_RESULT
     try:
         result = subprocess.run(
-            [
-                bwrap_bin,
-                "--unshare-user",
-                "--ro-bind", "/", "/",
-                "--die-with-parent",
-                "--", "true",
-            ],
+            ["unshare", "--net", "--pid", "--fork", "--mount-proc", "true"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=timeout_s,
@@ -423,7 +388,7 @@ def probe_sandbox(bwrap_bin: str = "/usr/bin/bwrap", timeout_s: float = 5.0) -> 
         _PROBE_RESULT = result.returncode == 0
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         _PROBE_RESULT = False
-    logger.info("bwrap 冒烟探测 result=%s", _PROBE_RESULT)
+    logger.info("unshare 冒烟探测 result=%s", _PROBE_RESULT)
     return _PROBE_RESULT
 
 

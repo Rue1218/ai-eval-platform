@@ -419,7 +419,7 @@ async def test_runner_receipt_evidence_controls_result(tmp_path, receipt):
         """直接返回 Runner 客户端的正式收据。"""
         assert identity["runner_request"].fingerprint == identity["request_fingerprint"]
         values = dict(execution_id=identity["execution_id"], runner_instance_id=identity["runner_instance_id"],
-                      status="succeeded", process_tree_terminated=True, termination_evidence="cgroup_empty",
+                      status="succeeded", process_tree_terminated=True, termination_evidence="process_exited",
                       execution_started=True, request_fingerprint=identity["request_fingerprint"], output="done")
         if receipt == "unknown":
             values.update(status="outcome_unknown", process_tree_terminated=False)

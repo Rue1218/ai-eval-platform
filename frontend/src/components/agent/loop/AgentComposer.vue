@@ -5,6 +5,19 @@
     <div class="composer-bottom">
       <input ref="picker" type="file" multiple hidden :accept="ui?.attachments.upload_suffixes.join(',')" @change="pick"/>
       <button class="loop-control attach-trigger" aria-label="添加附件" type="button" :disabled="!ui" @click="picker?.click()"><n-icon :component="AddIcon" :size="15"/></button>
+      <n-popover v-model:show="agentOpen" trigger="click" placement="top-start" :show-arrow="false">
+        <template #trigger>
+          <button class="loop-control model-trigger agent-trigger" type="button" aria-haspopup="dialog" :aria-expanded="agentOpen" :disabled="!agents.length">
+            <span class="model-name">{{ agent?.name || '通用助手' }}</span><n-icon :component="ChevronDownIcon" :size="13" class="model-chevron"/>
+          </button>
+        </template>
+        <section class="model-popover" aria-label="选择 Agent 专家">
+          <header><strong>本轮专家</strong><p>专家决定工作方法与可用工具，切换后下一轮生效。</p></header>
+          <button v-for="item in agents" :key="item.id" class="model-option" :class="{selected:item.id===agent?.id}" type="button" @click="chooseAgent(item.id)">
+            <span><strong>{{ item.name }}</strong><small>{{ item.badge }} · {{ item.description }}</small></span><n-icon v-if="item.id===agent?.id" :component="CheckmarkIcon" :size="16"/>
+          </button>
+        </section>
+      </n-popover>
       <n-popover v-model:show="modelOpen" trigger="click" placement="top-start" :show-arrow="false">
         <template #trigger>
           <button class="loop-control model-trigger" type="button" aria-haspopup="dialog" :aria-expanded="modelOpen" :disabled="!profiles.length">
@@ -72,7 +85,7 @@ import CheckmarkIcon from 'naive-ui/es/_internal/icons/Checkmark'
 import ChevronDownIcon from 'naive-ui/es/_internal/icons/ChevronDown'
 import { api } from '../../../api/http'
 import { createRequestId } from '../../../utils/requestId'
-import type { ConversationMetrics, Effort, LoopMeter, LoopProfile, LoopUi } from '../../../api/agentLoopTypes'
+import type { ConversationMetrics, Effort, LoopAgent, LoopMeter, LoopProfile, LoopUi } from '../../../api/agentLoopTypes'
 import type { DraftFile, LoopDraft } from '../../../agent/loop/store'
 import AttachmentPreview from '../AttachmentPreview.vue'
 import ProviderLogo from '../../ProviderLogo.vue'
@@ -85,6 +98,8 @@ const props = withDefaults(defineProps<{
   ui: LoopUi | null
   profile: LoopProfile | null
   profiles: LoopProfile[]
+  agent: LoopAgent | null
+  agents: LoopAgent[]
   effort: Effort | null
   meter?: LoopMeter | null
   metrics?: ConversationMetrics
@@ -97,8 +112,8 @@ const props = withDefaults(defineProps<{
   hasWorkspace: true,
   metrics: () => ({ inputTokens: 0, outputTokens: 0, modelLatencyMs: 0, outputTokensPerSecond: null, cacheReadTokens: 0, cacheHitRate: null })
 })
-const emit = defineEmits<{ submit: []; stop: []; retry: []; effort: [Effort]; model: [string]; requestWorkspace: [] }>()
-const picker = ref<HTMLInputElement>(), input = ref<HTMLTextAreaElement>(), notice = ref(''), modelOpen = ref(false)
+const emit = defineEmits<{ submit: []; stop: []; retry: []; effort: [Effort]; model: [string]; agent: [string]; requestWorkspace: [] }>()
+const picker = ref<HTMLInputElement>(), input = ref<HTMLTextAreaElement>(), notice = ref(''), modelOpen = ref(false), agentOpen = ref(false)
 const sendLabel = computed(() => props.busy ? (props.cancelling ? '正在取消' : '停止执行') : props.draft.submitting ? '正在提交' : '发送')
 const protocolLabels: Record<string, string> = { openai_chat: 'OpenAI 兼容', anthropic_messages: 'Anthropic' }
 function handleClickSend() {
@@ -117,6 +132,7 @@ function keydown(event: KeyboardEvent) {
 function resize() { const el = input.value; if (el) { el.style.height = 'auto'; el.style.height = Math.min(200, Math.max(52, el.scrollHeight)) + 'px' } }
 function focus() { nextTick(() => { input.value?.focus(); resize() }) }
 function chooseModel(id: string) { modelOpen.value = false; emit('model', id) }
+function chooseAgent(id: string) { agentOpen.value = false; emit('agent', id) }
 function protocolLabel(protocol: string) { return protocolLabels[protocol] || protocol }
 defineExpose({ focus })
 /** Tombstone 先标记再移除；迟到上传只结束请求，不能复活草稿引用。 */

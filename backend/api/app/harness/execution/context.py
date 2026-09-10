@@ -24,9 +24,12 @@ class ToolExecutionContext:
     user_id: str = ""
     thread_id: str = ""
     sandbox_dir: str | None = None
-    # F5/G6：bash 档位（只声明文件效果）。空 = 回落 settings.sandbox_bash_default_mode
-    # （现状逐字节一致）；升档审批重放时由 ToolNode 改写为 "workspace-write"。
+    # bash 网络模式：isolated（档1/2 断网）/ network（档3 保留网络）。
+    # 空 = 回落 settings.sandbox_bash_default_mode。
     sandbox_mode: str = ""
+    # 三档权限等级（tier1 请求批准 / tier2 帮我批准 / tier3 完全访问）；
+    # 空 = 回落全局 settings.permission_tier_default。审批裁决据此分级。
+    permission_tier: str = ""
     owned_file_ids: frozenset[str] = frozenset()
     call_id: str = ""
     report_progress: ToolProgressReporter | None = None

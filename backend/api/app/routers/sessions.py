@@ -14,9 +14,20 @@ from ..errors import AppError, ErrorCode
 from ..harness.context import compute_meter, is_window_eligible, recent_window
 from ..harness.context.meter import DEFAULT_MAX_TOKENS, DEFAULT_MCP_TOOLS_MAX
 from ..harness.memory import purge_session_checkpoints
-from ..models import AuditLog, Message, ProtocolProfile, Setting, Task, User, Workspace, WsEvent
+from ..harness.security.permission_tier import TIERS
+from ..models import (
+    AgentEvent,
+    AuditLog,
+    Message,
+    ProtocolProfile,
+    Setting,
+    Task,
+    User,
+    Workspace,
+    WsEvent,
+)
 from ..models import Session as AgentSession
-from ..schemas import SessionCreate, SessionOut, SessionSharingUpdate
+from ..schemas import SessionCreate, SessionOut, SessionPermissionTierUpdate, SessionSharingUpdate
 from ..session_access import require_session_owner, require_visible_session
 from ..session_connections import SESSION_CONNECTION_HUB
 from ..workspace_service import ensure_workspace_scope
@@ -25,9 +36,28 @@ router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 ACTIVE_STATUSES = {"queued", "running", "awaiting_case_confirm"}
 
 
+def _last_expert_id(db: Session, session_id: str) -> str | None:
+    """读取会话最近一轮使用的专家 ID（user/message 事实的 extensions.expert_id）。
+
+    无记录或历史数据缺字段时返回 None，由调用方回落默认专家；不为此新增列或迁移。
+    """
+    row = (
+        db.query(AgentEvent.envelope)
+        .filter(AgentEvent.session_id == session_id, AgentEvent.type == "user/message")
+        .order_by(AgentEvent.seq.desc())
+        .first()
+    )
+    if not row:
+        return None
+    envelope = row[0] if isinstance(row[0], dict) else {}
+    value = (envelope.get("extensions") or {}).get("expert_id")
+    return value if isinstance(value, str) and value.strip() else None
+
+
 def _loop_ui(db: Session, user: User, request: Request, session=None) -> dict:
     """草稿与现有会话共用能力解析；读取不分配模型或 Runner 客户端。"""
     from ..agent.attachments import MAX_IMAGE_BYTES, TEXT_SUFFIXES
+    from ..agent.experts import default_expert_id, list_experts
     from ..agent.loop_presentation import profile_capabilities
     from ..agent.loop_wiring import authorized_profile
     from ..llm.providers.catalog import detect_provider, reasoning_note
@@ -84,7 +114,10 @@ def _loop_ui(db: Session, user: User, request: Request, session=None) -> dict:
     service = getattr(request.app.state, "loop_service", None)
     entry = service.entries.get(session.id) if service and session else None
     controller = entry.controller if entry and entry.runtime.running else None
+    # 专家选择：会话内记忆最近一轮的选择，草稿回落默认专家（前端仍可覆盖）。
+    selected_expert = _last_expert_id(db, session.id) if session is not None else None
     return {"version": 1, "enabled": True, "profile": profile_data, "profiles": profiles,
+            "agent": selected_expert or default_expert_id(), "agents": list_experts(),
             "allowed_efforts": allowed, "default_effort": default, "unavailable_reason": error,
             "permissions": {"write": True, "trace": session is None or session.user_id == user.id or user.role == "admin",
                             "reasoning": session is None or session.user_id == user.id,
@@ -267,6 +300,9 @@ def create_session(
         ):
             raise AppError(ErrorCode.VALIDATION, "工作区不存在或无权绑定")
         scope_path = (body.scope_path or "").strip("/") or None
+    permission_tier = (body.permission_tier or "").strip() or None
+    if permission_tier is not None and permission_tier not in TIERS:
+        raise AppError(ErrorCode.VALIDATION, "permission_tier 不受支持")
     session = AgentSession(
         user_id=user.id,
         title=body.title.strip(),
@@ -275,6 +311,7 @@ def create_session(
         visibility=body.visibility,
         workspace_id=workspace_id,
         scope_path=scope_path,
+        permission_tier=permission_tier,
     )
     db.add(session)
     db.flush()  # 行先落库（取 id 供审计；目录就绪在行后，失败回滚不产生孤儿行）
@@ -341,6 +378,33 @@ async def update_session_sharing(
     # 从 team 收回到 private 时主动中断协作者连接，避免继续收到瞬态流。
     if session.visibility == "private":
         await SESSION_CONNECTION_HUB.close_non_owner(session.id, session.user_id)
+    return _session_out(db, session, user)
+
+
+@router.put("/{session_id}/permission-tier", response_model=SessionOut)
+def update_session_permission_tier(
+    session_id: str,
+    body: SessionPermissionTierUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """由会话创建者覆盖本会话的权限档位；None = 继承全局默认。"""
+    session = require_session_owner(db, session_id, user.id, lock=True)
+    tier = (body.permission_tier or "").strip() or None
+    if tier is not None and tier not in TIERS:
+        raise AppError(ErrorCode.VALIDATION, "permission_tier 不受支持")
+    session.permission_tier = tier
+    db.add(
+        AuditLog(
+            user_id=user.id,
+            action="session_permission_tier_update",
+            target_type="session",
+            target_id=session.id,
+            detail={"permission_tier": tier},
+        )
+    )
+    db.commit()
+    db.refresh(session)
     return _session_out(db, session, user)
 
 

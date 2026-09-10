@@ -20,7 +20,7 @@ def _body(request, instance, status="succeeded", **overrides):
     """完整可信收据，反例通过单独替换字段构造。"""
     body = {"execution_id": request.execution_id, "runner_instance_id": instance,
             "status": status, "process_tree_terminated": status != "running",
-            "termination_evidence": None if status == "running" else "cgroup_empty",
+            "termination_evidence": None if status == "running" else "process_exited",
             "execution_started": True, "request_fingerprint": request.fingerprint,
             "exit_code": 0, "output": "hi"}
     return httpx.Response(200, json={**body, **overrides})

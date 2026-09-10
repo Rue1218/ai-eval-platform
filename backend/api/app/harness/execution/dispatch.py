@@ -169,17 +169,17 @@ def run_bash(
     cmd: str,
     *,
     sandbox_dir: str,
-    mode: str = "workspace-write",
+    mode: str = "isolated",
     timeout_s: float,
     limits: SandboxLimits | None = None,
     on_output: ToolOutputCallback | None = None,
 ) -> str:
-    """按档位经 bwrap 沙箱执行 shell 命令（阶段 3 开放通用 bash，F2/G4）。
+    """按网络模式经 runner 容器执行 shell 命令（阶段 3 开放通用 bash）。
 
-    无字符串词表/静态裁决（§6.3）——准入由档位（文件效果）+ 物理边界承担：
-    经 ``run_sandboxed`` 在一次性 bwrap 沙箱内执行（按 mode 组装 scope bind、
-    无网络、资源受限、超时整树清理）；bwrap 不可用时 fail-closed，禁止
-    降级为裸 subprocess。
+    无字符串词表/静态裁决（§6.3）——准入由权限档位审批 + 物理边界承担：
+    经 ``run_sandboxed`` 在 runner 容器内执行（isolated → unshare --net 断网；
+    network → 保留网络；资源受限、超时整树清理）；引擎不可用时 fail-closed，
+    禁止降级为无隔离执行。
     """
     command = cmd.strip()
     if not command:
@@ -199,11 +199,27 @@ def run_bash(
 
 
 def _resolve_safe_path(path: str, root: str) -> str:
-    """把相对路径解析到受控根目录内；目录穿越/绝对路径拒绝（M5-D7 红线）。"""
+    """解析文件工具目标路径，返回 canonical 绝对路径（M5-D7 红线）。
+
+    - **相对路径**：解析到受控工作区 ``root`` 内；目录穿越/越界拒绝。
+    - **绝对路径**：必须位于外部白名单基目录 ``settings.external_base_dir``
+      之下（realpath 逐段解析，符号链接逃逸拒绝）；未配置基目录时一律拒绝。
+
+    越界/非法一律抛 ``AppError(VALIDATION)``（fail-closed）。
+    """
+    if not path:
+        raise AppError(ErrorCode.VALIDATION, "路径不能为空")
+    if os.path.isabs(path):
+        base = (settings.external_base_dir or "").strip()
+        if not base:
+            raise AppError(ErrorCode.VALIDATION, "未启用外部目录访问")
+        base_real = os.path.realpath(base)
+        target = os.path.realpath(os.path.abspath(path))
+        if target != base_real and not target.startswith(base_real + os.sep):
+            raise AppError(ErrorCode.VALIDATION, "绝对路径越出外部白名单目录")
+        return target
     if not root:
         raise AppError(ErrorCode.VALIDATION, "未配置沙箱目录")
-    if os.path.isabs(path):
-        raise AppError(ErrorCode.VALIDATION, "仅支持沙箱内相对路径")
     root_real = os.path.realpath(root)
     target = os.path.realpath(os.path.join(root_real, path))
     if not target.startswith(root_real + os.sep) and target != root_real:
