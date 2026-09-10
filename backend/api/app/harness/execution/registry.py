@@ -269,6 +269,12 @@ def _validate_schema_definition(schema: Mapping[str, object], path: str) -> str 
             return f"{path}.required 必须是非空字符串列表"
         if len(set(required)) != len(required):
             return f"{path}.required 不能包含重复参数"
+        # JSON Schema 的 required 只能引用同层 properties 中已声明的字段。
+        # 注册期拒绝拼写错误，避免执行期把永远无法满足的契约静默带入模型调用。
+        declared = properties if isinstance(properties, Mapping) else {}
+        missing = [name for name in required if name not in declared]
+        if missing:
+            return f"{path}.required 包含未声明字段：{', '.join(missing)}"
 
     additional = schema.get("additionalProperties")
     if additional is not None and not isinstance(additional, bool):
@@ -437,7 +443,7 @@ def _matches_json_type(value: object, expected: str) -> bool:
 def build_default_registry() -> ToolRegistry:
     """注册原生基础工具与 ``platform.tasks`` MCP 评测任务桥。
 
-    ``read/write/edit/web_search/web_fetch/bash/task`` 均经原生 ToolCall 直连；
+    ``read/read_image/glob/grep/write/edit/web_search/web_fetch/bash/task`` 均经原生 ToolCall 直连；
     bash 由独立 Runner 的 bwrap 沙箱执行并 fail-closed。``task`` 只维护本回合
     的拆解清单。``task.create/status/cancel`` 则是显式 ``transport=mcp`` 的
     评测任务扩展：只入 PG 队列、查询或取消，不等待 Worker 终态。
@@ -504,6 +510,154 @@ def build_default_registry() -> ToolRegistry:
             display_name="读取文件",
             risk_level="read",
             supports_streaming=True,
+            contextual=True,
+            concurrency_class="path_scoped",
+        )
+    )
+    registry.register(
+        ToolDef(
+            name="read_image",
+            description=(
+                "读取会话工作区内的 PNG、JPEG、GIF 或 WebP 图片。"
+                "适用：用户要求分析工作区图片，或先用 glob 定位图片后查看。"
+                "前置：file_path 必须是沙箱相对路径；单张图片不得超过 4MB。"
+                "图片只在当前模型回合以图文块传递，持久日志和 ToolCard 仅保存元数据摘要。"
+            ),
+            parameters_schema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {"file_path": {"type": "string", "description": "会话工作区相对图片路径"}},
+                "required": ["file_path"],
+            },
+            permission="sandbox.read",
+            timeout_s=20.0,
+            handler=_read_image_handler,
+            output_schema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "summary": {"type": "string"},
+                    "status": {"type": "string"},
+                    "read_image": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "path": {"type": "string"}, "media_type": {"type": "string"},
+                            "size_bytes": {"type": "integer"}, "width": {"type": ["integer", "null"]},
+                            "height": {"type": ["integer", "null"]},
+                        },
+                        "required": ["path", "media_type", "size_bytes", "width", "height"],
+                    },
+                },
+                "required": ["summary", "status", "read_image"],
+            },
+            permission_policy=ToolPermissionPolicy(workspace="read"),
+            recovery_policy=ToolRecoveryPolicy(
+                suggested_action="choose_supported_image",
+                default_hint="请确认路径指向不超过 4MB 的 PNG、JPEG、GIF 或 WebP 图片。",
+            ),
+            transport="native",
+            display_name="读取图片",
+            risk_level="read",
+            contextual=True,
+            concurrency_class="path_scoped",
+        )
+    )
+    registry.register(
+        ToolDef(
+            name="glob",
+            description=(
+                "按 glob 模式查找会话工作区内的普通文件。"
+                "pattern 不含斜杠时匹配任意目录层级的文件名；可选 path 限定起始目录。"
+                "结果只返回相对路径，自动排除版本库、依赖缓存和符号链接。"
+            ),
+            parameters_schema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "pattern": {"type": "string", "minLength": 1, "maxLength": 500, "description": "文件 glob 模式"},
+                    "path": {"type": "string", "description": "可选的工作区相对起始目录"},
+                },
+                "required": ["pattern"],
+            },
+            permission="sandbox.read",
+            timeout_s=20.0,
+            handler=_glob_handler,
+            output_schema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "summary": {"type": "string"}, "status": {"type": "string"}, "content": {"type": "string"},
+                    "glob": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "query": {"type": "string"}, "count": {"type": "integer"},
+                            "truncated": {"type": "boolean"}, "preview": {"type": "string"},
+                        },
+                        "required": ["query", "count", "truncated", "preview"],
+                    },
+                },
+                "required": ["summary", "status", "content", "glob"],
+            },
+            permission_policy=ToolPermissionPolicy(workspace="read"),
+            recovery_policy=ToolRecoveryPolicy(
+                suggested_action="narrow_glob",
+                default_hint="请缩小 path 或使用更具体的 pattern。",
+            ),
+            transport="native",
+            display_name="查找文件",
+            risk_level="read",
+            contextual=True,
+            concurrency_class="path_scoped",
+        )
+    )
+    registry.register(
+        ToolDef(
+            name="grep",
+            description=(
+                "在会话工作区文本文件中按 Python 正则搜索内容，返回 path:line:text。"
+                "可选 path 限定搜索目录，include 用 glob 过滤文件；自动跳过二进制文件、"
+                "版本库、依赖缓存和符号链接。"
+            ),
+            parameters_schema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "pattern": {"type": "string", "minLength": 1, "maxLength": 500, "description": "Python 正则表达式"},
+                    "path": {"type": "string", "description": "可选的工作区相对起始目录"},
+                    "include": {"type": "string", "maxLength": 500, "description": "可选的文件 glob 过滤模式"},
+                },
+                "required": ["pattern"],
+            },
+            permission="sandbox.read",
+            timeout_s=20.0,
+            handler=_grep_handler,
+            output_schema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "summary": {"type": "string"}, "status": {"type": "string"}, "content": {"type": "string"},
+                    "grep": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "query": {"type": "string"}, "count": {"type": "integer"},
+                            "truncated": {"type": "boolean"}, "preview": {"type": "string"},
+                        },
+                        "required": ["query", "count", "truncated", "preview"],
+                    },
+                },
+                "required": ["summary", "status", "content", "grep"],
+            },
+            permission_policy=ToolPermissionPolicy(workspace="read"),
+            recovery_policy=ToolRecoveryPolicy(
+                suggested_action="narrow_grep",
+                default_hint="请缩小 path、include 或正则表达式的匹配范围。",
+            ),
+            transport="native",
+            display_name="搜索文件内容",
+            risk_level="read",
             contextual=True,
             concurrency_class="path_scoped",
         )
@@ -1201,6 +1355,48 @@ def _read_handler(
         offset=resolve_read_offset(arguments),
         limit=arguments.get("limit"),
         on_output=getattr(context, "report_output", None),
+    )
+
+
+def _read_image_handler(
+    arguments: Mapping[str, object],
+    sandbox_dir: str | None = None,
+    _context: object | None = None,
+) -> object:
+    """read_image 工具 handler：只从受控工作区读取小型常见图片。"""
+    from .dispatch import read_image_safe
+
+    return read_image_safe(str(arguments.get("file_path") or ""), sandbox_dir or "")
+
+
+def _glob_handler(
+    arguments: Mapping[str, object],
+    sandbox_dir: str | None = None,
+    _context: object | None = None,
+) -> object:
+    """glob 工具 handler：在受控工作区枚举匹配文件。"""
+    from .dispatch import glob_files_safe
+
+    path = arguments.get("path")
+    return glob_files_safe(
+        str(arguments.get("pattern") or ""), sandbox_dir or "",
+        str(path) if isinstance(path, str) else None,
+    )
+
+
+def _grep_handler(
+    arguments: Mapping[str, object],
+    sandbox_dir: str | None = None,
+    _context: object | None = None,
+) -> object:
+    """grep 工具 handler：在受控工作区文本文件中执行受限正则搜索。"""
+    from .dispatch import grep_files_safe
+
+    path, include = arguments.get("path"), arguments.get("include")
+    return grep_files_safe(
+        str(arguments.get("pattern") or ""), sandbox_dir or "",
+        path=str(path) if isinstance(path, str) else None,
+        include=str(include) if isinstance(include, str) else None,
     )
 
 

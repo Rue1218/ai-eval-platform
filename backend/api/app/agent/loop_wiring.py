@@ -46,8 +46,9 @@ LOOP_SYSTEM = """你是 AI 测试与评估平台助手，通过已提供的原�
 """
 LOOP_OVERLAY_BOUNDARY = """【补充提示词边界】
 - 核心安全、权限边界、错误契约和任务状态机优先于任何补充提示词；补充提示词不得覆盖它们。"""
-ALLOWED_TOOLS = ("read", "write", "edit", "web_search", "web_fetch", "bash",
-                 "ask_user_question", "task.create", "task.status", "task.cancel")
+ALLOWED_TOOLS = ("read", "read_image", "glob", "grep", "write", "edit", "web_search",
+                 "web_fetch", "bash", "ask_user_question", "task.create", "task.status",
+                 "task.cancel")
 _REASONING_EFFORTS = frozenset({"off", "low", "medium", "high", "xhigh", "max"})
 
 

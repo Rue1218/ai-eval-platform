@@ -4,10 +4,10 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AgentLoop 组件样式核对</title>
 <style>
-  body{margin:0;background:#f7f8fc;color:#172033;font:14px/1.5 Inter,"Segoe UI Variable Text","Microsoft YaHei UI",sans-serif}
+  body{margin:0;background:#f7f8fc;color:#172033;font:15px/1.6 var(--font-body)}
   #preview{position:relative;z-index:1;display:flex;height:100dvh;flex-direction:column;min-width:0}
   .preview-bar{display:flex;align-items:center;justify-content:space-between;padding:12px 20px;border-bottom:1px solid #e3e8f0;background:white}
-  .preview-bar small{color:#748197;font-size:11px}.preview-trace{display:flex;flex:1;min-height:0}
+  .preview-bar small{color:#748197;font-size:12px}.preview-trace{display:flex;flex:1;min-height:0}
 </style>
 <div id="app"></div>
 <script type="module">
@@ -19,12 +19,13 @@
   import {createTrace} from '../src/agent/loop/trace.ts'
 
   // 只挂载生产组件与内存演示事实，不连接模型、数据库或 WebSocket。
+  // 此快照严格按后端 read 注册表的 request_summary.tools[] 格式保留，便于核对渲染。
   const state=createLoopState('style-preview'), trace=createTrace()
   const identity={turn:1,turn_id:'style-preview:1',step:1,attempt_id:'attempt-1'}
   const facts=[['user.message',{content:'读取 README.md 并总结项目结构'}],['turn.start',{}],
-    ['assistant.start',{request_summary:{provider:'deepseek',model:'deepseek-chat',reasoning_effort:'high',max_tokens:8192,tools:[{name:'read',parameters_schema:{type:'object',properties:{path:{type:'string'}}}}]}}],
+    ['assistant.start',{request_summary:{provider:'deepseek',model:'deepseek-chat',reasoning_effort:'high',max_tokens:8192,tools:[{name:'read',description:'按行读取沙箱目录内的文本文件（相对路径）。适用：查看附件、工作区文件、确认 edit 前的原文。',parameters:{type:'object',additionalProperties:false,properties:{file_path:{type:'string',description:'会话工作区相对路径'},offset:{type:'integer',description:'起始行号，0-based，默认 0',minimum:0},limit:{type:'integer',description:'最多读取行数；建议省略以一次读完，默认/上限 2000',minimum:1,maximum:2000}},required:['file_path']}}]}}],
     ['assistant.message',{content:'我会先查看项目说明文件。',usage:{prompt_tokens:1500,completion_tokens:120,total_tokens:1620},latency_ms:840}],['assistant.end',{outcome:'committed'}],
-    ['tool.call',{name:'read',display:{target:'README.md',arguments_preview:'{"path":"README.md"}'}}],
+    ['tool.call',{name:'read',display:{target:'README.md',arguments_preview:'{"file_path":"README.md"}'}}],
     ['approval.requested',{name:'read',interaction_id:'approval-1'}],
     ['approval.resolved',{decision:'allow',interaction_id:'approval-1'}],
     ['tool.result',{name:'read',status:'succeeded',display:{result_preview:'项目包含 API、Worker 与 Vue 前端。'}}],

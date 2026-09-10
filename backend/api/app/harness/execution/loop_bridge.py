@@ -33,7 +33,7 @@ from .loop_tools import ToolExecutionResult, normalize_tool_output, tool_spec
 from .registry import ToolDef, ToolRegistry, validate_tool_arguments
 
 # 只开放文档首批已验证的读取并行语义，未知能力保持独占。
-_PARALLEL = frozenset({"read", "web_search", "web_fetch"})
+_PARALLEL = frozenset({"read", "read_image", "glob", "grep", "web_search", "web_fetch"})
 _ALIASES = {
     "read": (("path", "file_path"), ("next_offset", "offset")),
     "write": (("path", "file_path"),),

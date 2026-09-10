@@ -358,6 +358,31 @@ def test_chat_source_messages_preserve_raw_and_error_results():
     assert wire[1] == {"role": "tool", "tool_call_id": "c", "content": "不存在"}
 
 
+def test_image_tool_result_converts_for_openai_and_anthropic():
+    """read_image 的当前回合图文结果应进入 provider 请求，且不要求持久事件保留字节。"""
+    messages = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"id": "image-call", "name": "read_image", "args": {"file_path": "a.png"}}],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "image-call",
+            "name": "read_image",
+            "content": [
+                {"type": "text", "text": "已读取图片"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,YQ=="}},
+            ],
+            "is_error": False,
+        },
+    ]
+    openai_wire = to_openai_messages(messages, "")
+    assert openai_wire[1]["content"][1]["image_url"]["url"].endswith("YQ==")
+    anthropic_wire = to_anthropic_messages(messages)
+    assert anthropic_wire[1]["content"][0]["content"][1]["source"]["data"] == "YQ=="
+
+
 @pytest.mark.parametrize("adapter_type", [OpenAiAdapter, AnthropicAdapter])
 def test_eof_does_not_fabricate_done(clients, adapter_type):
     """自然 EOF 不等同于模型完成。"""

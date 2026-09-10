@@ -95,7 +95,7 @@ function close() { open.value = false; trigger.value?.focus() }
     @media (prefers-reduced-motion: reduce) { .effort-slider-wrap.is-max::before, .effort-liquid { animation: none; } }
     .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); clip-path: inset(50%); white-space: nowrap; }
 /* 只隔离字体与盒模型，避免 Naive UI 和平台全局输入框规则覆盖参考样式。 */
-.thinking-menu{box-sizing:border-box;width:min(272px,calc(100vw - 24px));font-family:Inter,"Segoe UI Variable Text","Microsoft YaHei UI","Microsoft YaHei",system-ui,sans-serif;line-height:1.5;color:#172033}
+.thinking-menu{box-sizing:border-box;width:min(272px,calc(100vw - 24px));font-family:var(--font-body);line-height:1.5;color:#172033}
 .thinking-menu *{box-sizing:border-box}.thinking-menu .effort-slider{padding:0;box-shadow:none;outline:none;border:0;border-radius:0}
 .effort-slider-card[data-effort="xhigh"] .effort-slider-header strong{color:#5b5bd6}.effort-slider-card[data-effort="xhigh"] .effort-slider{--effort-start:#5b5bd6;--effort-end:#9d84f5;--effort-glow:rgba(91,91,214,.25)}
 @media(prefers-reduced-motion:reduce){.thinking-trigger,.thinking-chevron,.thinking-dial::after,.effort-slider-mark{transition:none}}

@@ -22,7 +22,7 @@ ToolExecutionMode = Literal["parallel", "exclusive"]
 
 @dataclass(frozen=True)
 class ToolExecutionResult:
-    """工具六态事实；正文用于模型回填，展示投影不参与成功判断。"""
+    """工具六态事实；日志正文与当前回合模型内容可显式分离。"""
 
     content: str
     status: ToolResultStatus
@@ -31,6 +31,8 @@ class ToolExecutionResult:
     synthetic: bool = False
     display: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
+    # 图片等二进制内容仅在当前回合回填给模型；持久日志仍只记录 ``content`` 摘要。
+    model_content: str | list[dict[str, Any]] | None = None
 
     def __post_init__(self) -> None:
         """拒绝把未知终态默认为成功。"""
@@ -66,6 +68,10 @@ def requires_approval(tool: object) -> bool:
 
 def tool_schema(tool: object) -> dict[str, Any]:
     """接受普通 schema 字典/方法，兼容具备模型校验器的鸭子类型。"""
+    # ToolDef 的唯一输入契约字段为 parameters_schema；必须先读取它，不能退化为空对象。
+    parameters_schema = getattr(tool, "parameters_schema", None)
+    if isinstance(parameters_schema, Mapping):
+        return deepcopy(dict(parameters_schema))
     schema = getattr(tool, "schema", None)
     if callable(schema):
         schema = schema()
@@ -123,10 +129,14 @@ def normalize_tool_output(output: object) -> ToolExecutionResult:
         status: ToolResultStatus = "succeeded" if output.ok else "failed"
         if code in {"UNAUTHORIZED", "WHITELIST", "NEED_APPROVAL"}:
             status = "denied"
+        model_content = data.get("model_content")
+        if not isinstance(model_content, str | list):
+            model_content = None
         return ToolExecutionResult(
             content=content, status=status, error_code=code,
             exit_code=data.get("exit_code"), display=deepcopy(data.get("display") or {}),
             metadata={**deepcopy(data.get("metadata") or {}), "truncated": truncated or bool(data.get("truncated"))},
+            model_content=deepcopy(model_content),
         )
     if not isinstance(output, str):
         return ToolExecutionResult("工具返回值缺少明确结果契约", "failed", "invalid_tool_result")

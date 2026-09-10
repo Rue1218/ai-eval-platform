@@ -2,6 +2,7 @@
   <div class="trace-workspace trace-view">
     <div class="trace-toolbar">
       <nav class="trace-filters trace-filter-group" aria-label="事件分类"><button v-for="(name, key) in categories" :key="key" class="trace-filter" :aria-pressed="filter === key" :class="{ active: filter === key }" @click="filter = key">{{ name }}</button></nav>
+      <span class="trace-toolbar-meta">{{ rows.length }} 条记录 · 按事件顺序</span>
       <label class="trace-search"><input v-model="search" placeholder="搜索类型、字段或内容" aria-label="搜索轨迹"/></label>
     </div>
     <p v-if="trace.denied">没有轨迹权限；普通对话与工具结果仍可使用。</p>
@@ -22,7 +23,7 @@
         <div v-if="rows.length > 80" class="trace-pagination"><button :disabled="page === 0" @click="page--">上一页</button><span>{{ page + 1 }} / {{ Math.max(1, Math.ceil(rows.length / 80)) }}</span><button :disabled="(page + 1) * 80 >= rows.length" @click="page++">下一页</button></div>
       </div>
       <section v-if="current" class="trace-inspector trace-detail">
-        <div class="inspector-head trace-detail-head"><div><small class="trace-detail-eyebrow">{{ kind(current).toUpperCase() }} RECORD · {{ current.durability === 'persistent' ? 'DURABLE' : 'LIVE' }}</small><b class="trace-detail-title">{{ title(current) }}</b></div><div class="trace-detail-actions"><button class="trace-copy-button" @click="copy">{{ copyLabel }}</button><span class="trace-detail-state">{{ status(current) }}</span></div></div>
+        <div class="inspector-head trace-detail-head"><div><small class="trace-detail-eyebrow">{{ kind(current).toUpperCase() }} RECORD · {{ current.durability === 'persistent' ? 'DURABLE' : 'LIVE' }}</small><b class="trace-detail-title">{{ title(current) }}</b></div><div class="trace-detail-actions"><button class="trace-copy-button" @click="copy">{{ copyLabel }}</button><span class="trace-detail-state">{{ status(current) }}</span><button class="trace-close" aria-label="关闭详情" title="关闭详情" @click="clear">×</button></div></div>
         <nav class="trace-detail-tabs" aria-label="事件详情"><button v-for="item in tabs" :key="item.key" class="trace-detail-tab" :class="{active:tab===item.key}" :aria-pressed="tab===item.key" @click="tab=item.key">{{ item.label }}</button></nav>
         <div class="inspector-body trace-detail-body">
         <template v-if="tab === 'overview'">
@@ -32,9 +33,10 @@
           <div v-if="related.length" class="trace-chain"><span class="trace-chain-label">关联链</span><button v-for="row in related" :key="row.cursor" class="trace-chain-link" :class="{current:row.cursor===current.cursor}" @click="focus(row)">{{ relationLabel(row) }}</button></div>
           <div class="trace-notice">{{ overviewNotice }}</div>
         </template>
-        <template v-else-if="tab === 'preview'"><div v-if="preview(current, true)" class="trace-preview-card"><pre>{{ preview(current, true) }}</pre></div><p v-else class="trace-preview-empty">当前事件没有可直接预览的文本内容；请查看概览、参数、结果或原始内容。</p></template>
+        <template v-else-if="tab === 'preview'"><div v-if="preview(current, true)" class="trace-preview-card"><TraceCodeBlock :value="preview(current, true)"/></div><p v-else class="trace-preview-empty">当前事件没有可直接预览的文本内容；请查看概览、参数、结果或原始内容。</p></template>
         <template v-else-if="tab === 'timing'"><div class="trace-section-title">计时</div><dl class="trace-kv"><template v-for="item in timing" :key="item[0]"><dt>{{ item[0] }}</dt><dd>{{ item[1] }}</dd></template></dl><div class="trace-notice">仅显示服务端记录的时间和耗时；缺失时不推算 TTFT。</div></template>
-        <template v-else><div class="trace-section-title">{{ activeTabLabel }}</div><div v-if="detail != null" class="trace-json-tree"><JsonTree :value="detail"/></div><p v-else class="trace-preview-empty">{{ emptyDetail }}</p></template>
+        <template v-else-if="tab === 'schema'"><div v-if="schemaDetail" class="trace-schema-card"><div class="trace-schema-card-head"><strong><span class="trace-badge" data-category="tool">工具</span> {{ schemaDetail.name }}</strong><p v-if="schemaDetail.description">{{ schemaDetail.description }}</p></div><div class="trace-section-title">参数</div><div class="trace-json-tree"><JsonTree :value="schemaDetail.parameters" :label="`${schemaDetail.name} 参数 JSON`"/></div></div><p v-else class="trace-preview-empty">{{ emptyDetail }}</p></template>
+        <template v-else><div class="trace-section-title">{{ activeTabLabel }}</div><TraceCodeBlock v-if="detail != null" :value="detail"/><p v-else class="trace-preview-empty">{{ emptyDetail }}</p></template>
         </div>
       </section>
     </div>
@@ -48,6 +50,7 @@ import type { LoopState } from '../../../agent/loop/reducer'
 import type { Data, LoopFrame } from '../../../api/agentLoopTypes'
 import { category, safePacket, semanticTraceRows, type SemanticTraceRow, type TraceState } from '../../../agent/loop/trace'
 import { copyText } from '../../../utils/clipboard'
+import TraceCodeBlock from './TraceCodeBlock.vue'
 import JsonTree from './JsonTree.vue'
 const props = defineProps<{ state: LoopState; trace: TraceState }>()
 type DetailKey = 'overview' | 'preview' | 'content' | 'parameters' | 'result' | 'options' | 'usage' | 'source' | 'schema' | 'timing' | 'packet'
@@ -149,13 +152,22 @@ const rawContent = computed(() => { if (!current.value) return null; const d = c
   if (kind(current.value) === 'assistant') return Object.fromEntries(Object.entries({content:d.content,reasoning_preview:d.reasoning_preview,tool_calls:d.tool_calls}).filter(([,value]) => value != null && value !== ''))
   return null
 })
+/** 读取本轮模型真实收到的工具定义；旧轨迹仍兼容早期 parameters_schema 字段。 */
+const schemaDetail = computed<{name:string;description:string;parameters:Data} | null>(() => { if (!current.value) return null
+  const row = current.value, tool = relatedTool(row), tools = requestSummary(row)?.tools
+  if (!Array.isArray(tools)) return null
+  const name = typeof row.data.name === 'string' ? row.data.name : tool?.data.name
+  const definition = tools.find(item => item && item.name === name)
+  if (!definition || typeof definition.name !== 'string') return null
+  const parameters = definition.parameters ?? definition.parameters_schema
+  return parameters && typeof parameters === 'object' ? {name:definition.name,description:typeof definition.description === 'string' ? definition.description : '',parameters:parameters as Data} : null
+})
 const detail = computed(() => { if (!current.value) return null; const row = current.value, d = row.data, tool = relatedTool(row), assistant = relatedAssistant(row), summary = requestSummary(row)
   if (tab.value === 'content') return rawContent.value && Object.keys(rawContent.value).length ? rawContent.value : null
   if (tab.value === 'parameters') return parsePreview(d.display?.arguments_preview || tool?.data.display?.arguments_preview)
   if (tab.value === 'result') return kind(row) === 'approval' ? d.decision || d.source_outcome || null : d.display?.result_preview || tool?.data.display?.result_preview || null
   if (tab.value === 'options') return summary ? safePacket({provider:summary.provider,model:summary.model,protocol:summary.protocol,profile_id:summary.profile_id,profile_version:summary.profile_version,reasoning_effort:summary.reasoning_effort,max_tokens:summary.max_tokens}) : null
   if (tab.value === 'usage') return d.usage || assistant?.data.usage || null
-  if (tab.value === 'schema') { const tools = summary?.tools; if (!Array.isArray(tools)) return null; const name = d.name || tool?.data.name; return name ? tools.find(item => item.name === name) ?? null : tools }
   if (tab.value === 'source') return sources.value.length ? sources.value : null
   if (tab.value === 'packet') return safePacket({record:row.layers,source_events:sources.value})
   return null
@@ -170,7 +182,7 @@ function clear() { dragging.value = false; range.value = null; selected.value = 
 function inRange(index: number) { return range.value && index >= Math.min(...range.value) && index <= Math.max(...range.value) }
 /** 指针捕获让跨泳道、空白处及轴外松手都保持同一次选区操作。 */
 function indexOf(event: PointerEvent) { const rect = (event.currentTarget as HTMLElement).getBoundingClientRect(); return rows.value.length ? Math.max(0, Math.min(rows.value.length - 1, Math.floor((event.clientX - rect.left) / rect.width * rows.value.length))) : -1 }
-function select(index: number) { if (!rows.value[index]) return; selected.value = rows.value[index].cursor!; page.value = Math.floor(index / 80) }
+function select(index: number) { const row = rows.value[index]; if (!row) return; selected.value = row.cursor!; page.value = Math.floor(index / 80); tab.value = kind(row) === 'tool' ? 'schema' : 'overview' }
 function start(event: PointerEvent) { if (event.button !== 0) return; const index = indexOf(event); if (index >= 0) { (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId); dragging.value = true; anchor = index; range.value = [index,index]; select(index) } }
 function move(event: PointerEvent) { const index = indexOf(event); if (dragging.value && index >= 0) range.value = [anchor,index] }
 function finish(event: PointerEvent) { if (!dragging.value) return; move(event); dragging.value = false; const target = event.currentTarget as HTMLElement; if (target.hasPointerCapture(event.pointerId)) target.releasePointerCapture(event.pointerId); select(indexOf(event)) }
@@ -186,6 +198,7 @@ async function copy() { const text = JSON.stringify(safePacket(range.value ? row
     .trace-filter { flex: 0 0 auto; min-height: 27px; border: 1px solid transparent; border-radius: 7px; background: transparent; padding: 0 8px; color: var(--muted); font-size: 11px; cursor: pointer; }
     .trace-filter:hover { background: var(--surface-hover); color: var(--text); }
     .trace-filter.active { border-color: #d9dcff; background: #f0f1ff; color: #4546aa; font-weight: 650; }
+    .trace-toolbar-meta { flex: 1; min-width: 0; color: #8792a5; font: 10px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace; text-align: center; white-space: nowrap; }
     .trace-search { display: flex; width: min(230px,32vw); align-items: center; }
     .trace-search input { width: 100%; height: 28px; border: 1px solid #dce2eb; border-radius: 7px; outline: 0; background: #fbfcfe; padding: 0 9px; color: var(--text); font-size: 11px; }
     .trace-search input:focus { border-color: #aeb1ed; box-shadow: 0 0 0 3px rgba(91,91,214,.09); }
@@ -247,15 +260,15 @@ async function copy() { const text = JSON.stringify(safePacket(range.value ? row
     .trace-detail-tab { position: relative; flex: 0 0 auto; min-height: 36px; border: 0; background: transparent; padding: 0 7px; color: #788598; font-size: 10px; cursor: pointer; }
     .trace-detail-tab::after { position: absolute; right: 7px; bottom: -1px; left: 7px; height: 2px; content: ""; background: transparent; }
     .trace-detail-tab.active { color: #4c4db6; font-weight: 700; } .trace-detail-tab.active::after { background: #5b5bd6; }
-    .trace-detail-body { padding: 13px 15px 20px; }
+    .trace-detail-body { padding: 15px 17px 24px; }
     .trace-detail-empty { margin: 22px 0; color: #788598; font-size: 12px; line-height: 1.65; }
-    .trace-purpose { margin: 0 0 13px; color: #44536a; font-size: 12px; line-height: 1.65; }
-    .trace-kv { display: grid; grid-template-columns: 96px minmax(0,1fr); gap: 7px 10px; margin: 0; font-size: 11px; }
+    .trace-purpose { margin: 0 0 13px; color: #44536a; font-size: 13px; line-height: 1.7; }
+    .trace-kv { display: grid; grid-template-columns: 104px minmax(0,1fr); gap: 8px 11px; margin: 0; font-size: 13px; }
     .trace-kv dt { color: #8490a3; } .trace-kv dd { overflow-wrap: anywhere; margin: 0; color: #3d4b61; font-family: ui-monospace,SFMono-Regular,Consolas,monospace; }
     .trace-overview-label { margin: 0 0 8px; color: #5f6f85; font-size: 10px; font-weight: 700; letter-spacing: .06em; }
-    .trace-preview-card { overflow: hidden; border: 1px solid #e2e7ef; border-radius: 9px; background: #fbfcfe; }
-    .trace-preview-card > pre { max-height: 400px; overflow: auto; margin: 0; padding: 11px; color: #33445d; font: 11px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
-    .trace-preview-empty { border: 1px dashed #dde3ec; border-radius: 8px; padding: 13px; color: #8290a3; font-size: 11px; line-height: 1.6; }
+    .trace-preview-card { overflow: hidden; border: 0; border-radius: 9px; background: #fbfcfe; }
+    .trace-preview-card :deep(.trace-code-block) { max-height: 460px; }
+    .trace-preview-empty { border: 1px dashed #dde3ec; border-radius: 8px; padding: 13px; color: #8290a3; font-size: 13px; line-height: 1.65; }
     .trace-result-state { display: inline-flex; margin: 0 0 10px; border-radius: 999px; background: #edf8f1; padding: 3px 7px; color: #287351; font: 10px ui-monospace,SFMono-Regular,Consolas,monospace; }
     .trace-result-state.is-error { background: #fff0ed; color: #ad5245; }
     .trace-inline-summary { margin: 0 0 12px; color: #46566d; font-size: 11px; line-height: 1.6; }
@@ -270,23 +283,29 @@ async function copy() { const text = JSON.stringify(safePacket(range.value ? row
     .trace-schema-card { margin: 0 0 13px; border: 1px solid #e1e6ef; border-radius: 9px; background: #fbfcfe; padding: 10px; }
     .trace-schema-card:last-child { margin-bottom: 0; }
     .trace-schema-card-head { display: grid; gap: 4px; margin-bottom: 8px; }
-    .trace-schema-card-head strong { color: #35445d; font: 600 11px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace; }
-    .trace-schema-card-head p { margin: 0; color: #617087; font-size: 10px; line-height: 1.55; }
-    .trace-json-tree { overflow: auto; border: 1px solid #e3e8ef; border-radius: 7px; background: #fff; padding: 6px 8px; color: #43536b; font: 10px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace; }
+    .trace-schema-card-head strong { color: #35445d; font: 600 13px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace; }
+    .trace-schema-card-head p { margin: 0; color: #617087; font-size: 13px; line-height: 1.6; }
+    .trace-json-tree { overflow: auto; border: 1px solid #dfe5ee; border-radius: 8px; background: #fbfcff; padding: 10px 12px; color: #43536b; font: 13px/1.68 ui-monospace,SFMono-Regular,Consolas,monospace; }
     .trace-json-tree details { margin: 1px 0; padding-left: 10px; }
     .trace-json-tree summary { color: #54647b; cursor: pointer; }
     .trace-json-tree-row { display: grid; grid-template-columns: minmax(92px,auto) minmax(0,1fr); gap: 7px; padding: 1px 0; }
     .trace-json-tree-key { color: #6a5baa; } .trace-json-tree-value { color: #3f607a; overflow-wrap: anywhere; }
     .trace-packet-details > summary { margin: 0 0 8px; color: #626fa5; font-size: 10px; cursor: pointer; }
-    .trace-section-title { margin: 0 0 8px; color: #64738a; font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+    .trace-section-title { margin: 0 0 9px; color: #64738a; font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
     .trace-section-title + .trace-json { margin-bottom: 14px; }
     .trace-timing { display: grid; gap: 0; } .trace-timing-row { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 10px; border-bottom: 1px solid #edf0f4; padding: 8px 0; color: #536278; font-size: 11px; } .trace-timing-row strong { color: #394960; font-weight: 600; } .trace-timing-row time { color: #758298; font-family: ui-monospace,SFMono-Regular,Consolas,monospace; font-size: 10px; }
 
     @media (max-width:960px) { .trace-main { grid-template-columns: 1fr; overflow: auto; } .trace-list-panel { min-height: 330px; overflow: visible; } .trace-detail { min-height: 360px; border-top: 1px solid var(--line); border-left: 0; overflow: visible; } }
     @media (max-width:680px) { .workspace-tabs { padding: 0 14px; gap: 16px; } .workspace-tab-hint { display: none; } .trace-toolbar { padding-right: 14px; padding-left: 14px; } .trace-toolbar { align-items: stretch; flex-direction: column; gap: 5px; padding-top: 7px; padding-bottom: 7px; } .trace-search { width: 100%; } .trace-list-header, .trace-row { grid-template-columns: 42px minmax(0,1fr); gap: 8px; } .trace-list-header > :last-child, .trace-row-ref { display: none; } }
 /* 参考 CSS 限于轨迹面板；平台输入栏独立占位，因此不重复预留源悬浮输入栏的 102px。 */
-.trace-workspace{--canvas:#f7f8fc;--surface-hover:#f1f4f9;--line:#e3e8f0;--text:#172033;--muted:#5f6d82;--subtle:#748197;--accent:#5b5bd6;box-sizing:border-box;min-width:0;padding-bottom:0;color:var(--text);font:14px/1.5 Inter,"Segoe UI Variable Text","Microsoft YaHei UI","Microsoft YaHei",system-ui,sans-serif}
+.trace-workspace{--canvas:#f7f8fc;--surface-hover:#f1f4f9;--line:#e3e8f0;--text:#172033;--muted:#5f6d82;--subtle:#748197;--accent:#5b5bd6;--trace-font-sans:var(--font-body);--trace-font-mono:var(--font-mono);box-sizing:border-box;min-width:0;padding-bottom:0;color:var(--text);font:15px/1.6 var(--trace-font-sans)}
 .trace-workspace *{box-sizing:border-box}.trace-workspace button,.trace-workspace input{font-family:inherit}.trace-row-title b{font-weight:inherit;overflow:hidden;text-overflow:ellipsis}.trace-row-title{overflow:hidden}.trace-list-panel{min-height:0}.trace-search input{box-shadow:none}.trace-close{height:24px;width:24px;border:0;border-radius:6px;background:transparent;color:#788598;font-size:17px;cursor:pointer}.trace-close:hover{background:#f1f4f9}.trace-help{padding:5px 14px;border-top:1px solid #edf0f4;color:#8994a6;font:10px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace}.trace-pagination{display:flex;justify-content:space-between;align-items:center;padding:10px;font-size:10px}.trace-pagination button{border:1px solid #d8def0;border-radius:6px;background:#fafbff;padding:3px 7px;color:#555ba8}.trace-detail-body{overflow-wrap:anywhere}.trace-detail-body>p{color:#788598;font-size:12px;line-height:1.65}.trace-workspace>p{padding:8px 14px;margin:0;color:#788598;font-size:12px}
 @media(max-width:960px){.trace-main.has-selection{grid-template-columns:1fr}.trace-list-panel{min-height:0;flex-shrink:0}.trace-detail{min-height:260px}.trace-main.has-selection .trace-list-panel{min-height:330px}}
 @media(prefers-reduced-motion:reduce){.trace-row{transition:none}}
-.trace-json-tree :deep(summary){padding:1px 0;color:#54647b}.trace-json-tree :deep(.json-children){padding-left:10px;border-left:1px solid #e3e8ef}.trace-json-tree :deep(.json-leaf){padding:1px 0;color:#3f607a}.trace-json-tree :deep(.json-leaf b){color:#6a5baa;font-weight:400}</style>
+/* 增大轨迹阅读字号，并使用系统中清晰的中英文与等宽字体回退链。 */
+.trace-toolbar{min-height:48px}.trace-filter{min-height:31px;padding:0 10px;font-size:12px}.trace-toolbar-meta{font:11px/1.45 var(--trace-font-mono)}.trace-search input{height:32px;font-size:12px}
+.trace-waterfall-panel,.trace-waterfall{height:58px;flex-basis:58px}.trace-waterfall-panel{grid-template-columns:50px minmax(0,1fr)}.trace-lane-labels{font-size:11px}.trace-lane-labels span{right:6px;height:10px}.trace-lane-labels span:nth-child(1){top:8px}.trace-lane-labels span:nth-child(2){top:25px}.trace-lane-labels span:nth-child(3){top:42px}.trace-turn-marker{font:700 10px/1.5 var(--trace-font-mono)}.trace-segment{top:calc(8px + var(--trace-segment-lane) * 17px);height:10px}
+.trace-main{grid-template-columns:minmax(0,1fr) minmax(390px,480px)}.trace-empty{font-size:14px}.trace-row{min-height:40px;grid-template-columns:62px minmax(0,1fr);gap:10px;padding:7px 12px 7px 9px}.trace-row-seq{font:11.5px/1.5 var(--trace-font-mono)}.trace-row-title{gap:8px;font-size:13.5px}.trace-badge{padding:2px 6px;font-size:10.5px}.trace-turn-badge{padding:2px 6px;font:700 10.5px/1.4 var(--trace-font-mono)}.trace-row-preview{font:12.5px/1.5 var(--trace-font-mono)}
+.trace-detail-head{padding:15px 18px 12px}.trace-detail-eyebrow{font:10.5px/1.4 var(--trace-font-mono)}.trace-detail-title{font:600 15.5px/1.4 var(--trace-font-mono)}.trace-detail-state{padding:4px 8px;font-size:11px}.trace-copy-button{min-height:27px;padding:0 9px;font-size:11.5px}.trace-detail-tabs{padding:0 14px}.trace-detail-tab{min-height:42px;padding:0 9px;font-size:12px}.trace-detail-body{padding:18px 20px 30px}.trace-purpose{font-size:14.5px}.trace-kv{grid-template-columns:112px minmax(0,1fr);gap:9px 13px;font-size:14.5px}.trace-kv dd{font-family:var(--trace-font-mono);font-size:13.5px;line-height:1.6}.trace-overview-label,.trace-section-title{font-size:12.5px}.trace-preview-empty,.trace-detail-body>p,.trace-workspace>p{font-size:13.5px}.trace-result-state{font:11px/1.45 var(--trace-font-mono)}.trace-inline-summary{font-size:13px}.trace-notice{padding:10px 11px;font-size:12.5px}.trace-chain-label{font-size:12px}.trace-chain-link{padding:4px 8px;font:11.5px/1.4 var(--trace-font-mono)}
+.trace-field-table,.trace-schema-table{font-size:12.5px}.trace-field-table td,.trace-schema-table td{padding-top:9px;padding-bottom:9px}.trace-field-table td:first-child,.trace-schema-table td:first-child,.trace-field-table code,.trace-schema-table code{font-family:var(--trace-font-mono);font-size:12px}.trace-json{padding:13px 14px;font:14px/1.7 var(--trace-font-mono)}.trace-schema-card{padding:13px}.trace-schema-card-head{gap:5px;margin-bottom:10px}.trace-schema-card-head strong{font:600 14.5px/1.55 var(--trace-font-mono)}.trace-schema-card-head p{font-size:14px}.trace-json-tree{padding:12px 14px;font:14px/1.72 var(--trace-font-mono)}.trace-json-tree :deep(.json-tree){font:14px/1.72 var(--trace-font-mono)}.trace-help{padding:7px 16px;font:11px/1.55 var(--trace-font-mono)}.trace-pagination{padding:12px;font-size:12px}.trace-pagination button{padding:5px 9px}
+.trace-json-tree :deep(summary){padding:2px 0;color:#54647b}.trace-json-tree :deep(.json-children){padding-left:12px;border-left:1px solid #e3e8ef}.trace-json-tree :deep(.json-leaf){padding:2px 0;color:#3f607a}.trace-json-tree :deep(.json-leaf b){color:#6a5baa;font-weight:500}</style>
