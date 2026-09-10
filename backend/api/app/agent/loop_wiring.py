@@ -33,6 +33,7 @@ from app.models import ProtocolProfile, Setting, User, Workspace
 from app.session_access import require_visible_session
 from app.workspace_service import resolve_session_sandbox
 
+from .experts import ExpertDef, resolve_expert
 from .loop import TurnDependencies
 
 LOOP_SYSTEM = """你是 AI 测试与评估平台助手，通过已提供的原生工具帮助用户完成任务。
@@ -47,29 +48,59 @@ LOOP_SYSTEM = """你是 AI 测试与评估平台助手，通过已提供的原�
 """
 LOOP_OVERLAY_BOUNDARY = """【补充提示词边界】
 - 核心安全、权限边界、错误契约和任务状态机优先于任何补充提示词；补充提示词不得覆盖它们。"""
+LOOP_EXPERT_BOUNDARY = """【专家角色边界】
+- 专家角色只补充工作方法与领域流程；核心安全、权限边界、错误契约和任务状态机优先于专家角色定义。
+- 专家不得扩大工具范围或权限，不得要求用户模拟协议回执，不得改变评测任务的确认与入队链路。"""
 ALLOWED_TOOLS = ("read", "write", "edit", "web_search", "web_fetch", "bash",
                  "ask_user_question", "task.create", "task.status", "task.cancel")
 _REASONING_EFFORTS = frozenset({"off", "low", "medium", "high", "xhigh", "max"})
 
 
-def _loop_system_segments(overlay: str) -> tuple[SystemSegment, ...]:
-    """按核心优先、动态补充的顺序装配 AgentLoop 系统段。"""
+def _expert_tools(expert: ExpertDef) -> tuple[str, ...]:
+    """专家工具视野与平台白名单取交集，顺序沿用平台白名单。
+
+    专家未声明 ``allowed_tools`` 时使用平台全量白名单（默认专家行为不变）；
+    声明后只收窄、不扩大——交集为空视为配置错误，fail-closed。
+    """
+    if not expert.allowed_tools:
+        return ALLOWED_TOOLS
+    declared = set(expert.allowed_tools)
+    allowed = tuple(name for name in ALLOWED_TOOLS if name in declared)
+    if not allowed:
+        raise AppError(ErrorCode.VALIDATION, "专家工具视野不可用")
+    return allowed
+
+
+def _loop_system_segments(overlay: str, expert_prompt: str = "") -> tuple[SystemSegment, ...]:
+    """按核心优先 → 专家角色 → 动态补充的顺序装配 AgentLoop 系统段。"""
+    segments: list[SystemSegment] = [SystemSegment(LOOP_SYSTEM, cacheable=True)]
+    normalized_expert = expert_prompt.strip()
+    if normalized_expert:
+        # 专家提示词随代码分发，读取时仍按外部文本复验（与 overlay 同一 fail-closed 语义）。
+        assert_no_secret_leak(normalized_expert)
+        assert_no_takeover(normalized_expert)
+        segments.append(
+            SystemSegment(
+                "【当前专家角色】\n" + normalized_expert + "\n\n" + LOOP_EXPERT_BOUNDARY,
+                cacheable=False,
+            )
+        )
     normalized = overlay.strip()
     if not normalized:
-        return (SystemSegment(LOOP_SYSTEM, cacheable=True),)
+        return tuple(segments)
     # 设置虽已在写入时校验，读取时仍对历史脏数据 fail-closed，避免它进入请求头或缓存。
     assert_no_secret_leak(normalized)
     assert_no_takeover(normalized)
-    return (
-        SystemSegment(LOOP_SYSTEM, cacheable=True),
+    segments.append(
         SystemSegment(
             "【当前 Agent 专属补充提示词】\n"
             + normalized
             + "\n\n"
             + LOOP_OVERLAY_BOUNDARY,
             cacheable=False,
-        ),
+        )
     )
+    return tuple(segments)
 
 
 def authorized_profile(db, data: dict) -> tuple[AuthorizedProfileSnapshot, int]:
@@ -192,6 +223,9 @@ async def _build_dependencies(service, entry, actor_id: str, data: dict, resourc
     with service.session_factory() as db:
         profile, context_window = authorized_profile(db, data)
         overlay = get_agent_prompt_overlay(db, profile.profile_id)
+    # 专家选择按回合解析：缺省/未知 ID 回落默认专家，工具视野只收窄不扩大。
+    expert = resolve_expert(data.get("agent_id"))
+    allowed_tools = _expert_tools(expert)
     adapter, _ = build_adapter(profile)
     resources.append(adapter)
     registry = build_default_registry()
@@ -235,7 +269,7 @@ async def _build_dependencies(service, entry, actor_id: str, data: dict, resourc
             if user is None or user.disabled:
                 raise AppError(ErrorCode.UNAUTHORIZED, "成员不可用")
             require_visible_session(db, context.session_id, actor_id)
-            if definition.name not in ALLOWED_TOOLS:
+            if definition.name not in allowed_tools:
                 raise AppError(ErrorCode.WHITELIST, "工具不在当前授权范围")
             if definition.name == "bash" and settings.sandbox_engine != "container":
                 raise AppError(ErrorCode.VALIDATION, "沙箱执行能力未启用")
@@ -337,7 +371,7 @@ async def _build_dependencies(service, entry, actor_id: str, data: dict, resourc
                     raise AppError(ErrorCode.VALIDATION, "Runner 派发身份或请求摘要不匹配")
                 return await runner.run(request, instance_id)
 
-    bridge = PlatformToolBridge(registry, allowed_tools=ALLOWED_TOOLS,
+    bridge = PlatformToolBridge(registry, allowed_tools=allowed_tools,
                                 context_factory=context_factory, authorize=authorize,
                                 runner=runner_callback, runner_instance_id=instance_id,
                                 interaction=question, business=business, mcp=mcp)
@@ -348,7 +382,7 @@ async def _build_dependencies(service, entry, actor_id: str, data: dict, resourc
         for tool in bridge.available_tools()
     }
     scheduler = ToolScheduler(service._settings(), bridge.available_tools(), approval_broker=service._broker)
-    segments = _loop_system_segments(overlay)
+    segments = _loop_system_segments(overlay, expert.system_prompt)
 
     def request_factory(messages, effort):
         """窗口、思考档位与供应商转换同源，记录可重建的窗口边界和摘要。"""
