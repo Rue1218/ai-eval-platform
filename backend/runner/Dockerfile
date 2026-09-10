@@ -10,8 +10,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# 沙箱内核改为「容器内直跑」：需要 util-linux 的 unshare 建 netns/pidns
-# （runner 是唯一持有 SYS_ADMIN/NET_ADMIN + seccomp:unconfined 的容器）。
+# 沙箱内核改为「容器内直跑」：util-linux(unshare) 建 netns/pidns；
+# iproute2(ip) + iptables 供档3 建 veth/netns 并阻断内网（runner 需
+# `--sysctl net.ipv4.ip_forward=1`）。
 # trixie 的源集中在 /etc/apt/sources.list.d/debian.sources（main 与 security
 # 均为 deb.debian.org host），替换 host 即可同时覆盖；兼容旧版 sources.list。
 RUN if [ -n "$APT_MIRROR" ]; then \
@@ -19,7 +20,7 @@ RUN if [ -n "$APT_MIRROR" ]; then \
             /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list 2>/dev/null || true; \
     fi \
     && apt-get update \
-    && apt-get install -y --no-install-recommends util-linux \
+    && apt-get install -y --no-install-recommends util-linux iproute2 iptables \
     && rm -rf /var/lib/apt/lists/*
 
 # 构建上下文为 backend/：共享沙箱内核 backend/shared/sandbox_kernel.py

@@ -63,6 +63,10 @@ class Settings(BaseSettings):
     sandbox_bash_default_mode: str = "isolated"
     sandbox_memory_mb: int = 256  # 沙箱虚拟内存上限（MB）
     sandbox_nproc: int = 32  # 沙箱最大进程数（防 fork 炸弹）
+    # 外部白名单基目录：read/write/edit 的**绝对路径**必须落在其下（逐段 realpath
+    # 校验，符号链接逃逸拒绝）。空 = 关闭外部访问（文件工具仅限会话工作区）。
+    # 与 runner 容器 rw 挂载同路径（compose EXTERNAL_BASE_DIR）。
+    external_base_dir: str = "/srv/agent-external"
     sandbox_cpu_s: int = 10  # 沙箱 CPU 时间上限（秒）
     # 独立沙箱 runner 服务（compose 内网，默认 runner:8001，不发布主机端口）
     sandbox_runner_url: str = "http://runner:8001"

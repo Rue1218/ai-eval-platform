@@ -104,15 +104,13 @@ def normalize_mode(mode: str | None) -> str:
 def build_exec_argv(*, cmd: str, mode: str, limits: SandboxLimits) -> list[str]:
     """构造容器内直跑 argv（纯函数，便于单测）。
 
-    - 前缀 ``unshare``：isolated 含 ``--net``（断网），network 不含；
-      两者都 ``--pid --fork --mount-proc``（私有 PID 命名空间 + 干净 /proc）；
+    - ``isolated``：``unshare --net --pid --fork --mount-proc`` 直接断网 + 私有 pidns；
+    - ``network``（档3）：受信启动器建 netns + veth，经 runner 出公网，
+      并用 iptables 阻断内网（RFC1918）与容器本地服务（详见 ``_NETWORK_LAUNCHER``）；
     - 受信启动器：``bash -c '<ulimit>; exec bash -c "$1"' bash <cmd>``——
       命令只作 ``$1``，绝不拼进脚本；``ulimit`` 用 bash（dash 无 ``-u``）。
     """
     normalized = normalize_mode(mode)
-    prefix = ["unshare", "--pid", "--fork", "--mount-proc"]
-    if normalized == "isolated":
-        prefix = ["unshare", "--net", "--pid", "--fork", "--mount-proc"]
     launcher = [
         "bash", "-c",
         (
@@ -121,7 +119,52 @@ def build_exec_argv(*, cmd: str, mode: str, limits: SandboxLimits) -> list[str]:
         ),
         "bash", cmd,
     ]
-    return [*prefix, *launcher]
+    if normalized == "network":
+        return [
+            "bash", "-c", _NETWORK_LAUNCHER, "sandbox-network",
+            cmd, str(limits.memory_kb), str(limits.nproc), str(limits.cpu_s),
+        ]
+    return ["unshare", "--net", "--pid", "--fork", "--mount-proc", *launcher]
+
+
+# 档3 网络启动器：建独立 netns + veth，经 runner 出公网；iptables 阻断内网与
+# 容器本地服务。命令只作位置参数传入，绝不拼进脚本。任一 setup 失败即退出
+# （fail-closed，绝不在无隔离下执行）。清理由 EXIT trap 保证（幂等）。
+# 依赖：iproute2(ip) + iptables；runner 需 `--sysctl net.ipv4.ip_forward=1`。
+_NETWORK_LAUNCHER = r"""
+set -eu
+cmd="$1"; mem_kb="$2"; nproc="$3"; cpu_s="$4"
+idx=$(( ($$ % 250) + 1 ))
+ns="aieval-ns-$idx"; veth_h="aieval-h-$idx"; veth_s="aieval-s-$idx"
+subnet="10.201.$idx"; host_ip="$subnet.1"; ns_ip="$subnet.2"
+cleanup() {
+  ip netns del "$ns" 2>/dev/null || true
+  ip link del "$veth_h" 2>/dev/null || true
+  iptables -t nat -D POSTROUTING -s "$host_ip/30" -j MASQUERADE 2>/dev/null || true
+  iptables -D FORWARD -s "$host_ip/30" -j ACCEPT 2>/dev/null || true
+  iptables -D FORWARD -s "$host_ip/30" -d 192.168.0.0/16 -j DROP 2>/dev/null || true
+  iptables -D FORWARD -s "$host_ip/30" -d 172.16.0.0/12 -j DROP 2>/dev/null || true
+  iptables -D FORWARD -s "$host_ip/30" -d 10.0.0.0/8 -j DROP 2>/dev/null || true
+  iptables -D INPUT -s "$host_ip/30" -j DROP 2>/dev/null || true
+}
+trap cleanup EXIT
+ip netns add "$ns"
+ip link add "$veth_h" type veth peer name "$veth_s"
+ip link set "$veth_s" netns "$ns"
+ip addr add "$host_ip/30" dev "$veth_h"
+ip link set "$veth_h" up
+ip netns exec "$ns" ip addr add "$ns_ip/30" dev "$veth_s"
+ip netns exec "$ns" ip link set "$veth_s" up
+ip netns exec "$ns" ip link set lo up
+ip netns exec "$ns" ip route add default via "$host_ip"
+iptables -t nat -A POSTROUTING -s "$host_ip/30" -j MASQUERADE
+iptables -I FORWARD 1 -s "$host_ip/30" -j ACCEPT
+iptables -I FORWARD 1 -s "$host_ip/30" -d 192.168.0.0/16 -j DROP
+iptables -I FORWARD 1 -s "$host_ip/30" -d 172.16.0.0/12 -j DROP
+iptables -I FORWARD 1 -s "$host_ip/30" -d 10.0.0.0/8 -j DROP
+iptables -I INPUT 1 -s "$host_ip/30" -j DROP
+ip netns exec "$ns" unshare --pid --fork --mount-proc bash -c "ulimit -v $mem_kb; ulimit -u $nproc; ulimit -t $cpu_s; exec bash -c \"\$1\"" bash "$cmd"
+"""
 
 
 def resolve_workspace_path(path: str, root: str) -> str:

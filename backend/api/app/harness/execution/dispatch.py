@@ -190,11 +190,27 @@ def run_bash(
 
 
 def _resolve_safe_path(path: str, root: str) -> str:
-    """把相对路径解析到受控根目录内；目录穿越/绝对路径拒绝（M5-D7 红线）。"""
+    """解析文件工具目标路径，返回 canonical 绝对路径（M5-D7 红线）。
+
+    - **相对路径**：解析到受控工作区 ``root`` 内；目录穿越/越界拒绝。
+    - **绝对路径**：必须位于外部白名单基目录 ``settings.external_base_dir``
+      之下（realpath 逐段解析，符号链接逃逸拒绝）；未配置基目录时一律拒绝。
+
+    越界/非法一律抛 ``AppError(VALIDATION)``（fail-closed）。
+    """
+    if not path:
+        raise AppError(ErrorCode.VALIDATION, "路径不能为空")
+    if os.path.isabs(path):
+        base = (settings.external_base_dir or "").strip()
+        if not base:
+            raise AppError(ErrorCode.VALIDATION, "未启用外部目录访问")
+        base_real = os.path.realpath(base)
+        target = os.path.realpath(os.path.abspath(path))
+        if target != base_real and not target.startswith(base_real + os.sep):
+            raise AppError(ErrorCode.VALIDATION, "绝对路径越出外部白名单目录")
+        return target
     if not root:
         raise AppError(ErrorCode.VALIDATION, "未配置沙箱目录")
-    if os.path.isabs(path):
-        raise AppError(ErrorCode.VALIDATION, "仅支持沙箱内相对路径")
     root_real = os.path.realpath(root)
     target = os.path.realpath(os.path.join(root_real, path))
     if not target.startswith(root_real + os.sep) and target != root_real:
