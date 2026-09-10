@@ -650,7 +650,7 @@ class SessionLog:
             or evidence.get("execution_id") != guard.execution_id
             or evidence.get("process_tree_terminated") is not True
             or evidence.get("status") not in {"succeeded", "failed", "cancelled", "not_started", "denied"}
-            or evidence.get("termination_evidence") not in {"not_started", "cgroup_empty"}
+            or evidence.get("termination_evidence") not in {"not_started", "process_exited"}
         ):
             raise AppError(ErrorCode.VALIDATION, "缺少同一执行的可信停止证据")
         tombstone = (

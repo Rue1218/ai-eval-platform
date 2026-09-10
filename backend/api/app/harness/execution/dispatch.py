@@ -160,17 +160,17 @@ def run_bash(
     cmd: str,
     *,
     sandbox_dir: str,
-    mode: str = "workspace-write",
+    mode: str = "isolated",
     timeout_s: float,
     limits: SandboxLimits | None = None,
     on_output: ToolOutputCallback | None = None,
 ) -> str:
-    """按档位经 bwrap 沙箱执行 shell 命令（阶段 3 开放通用 bash，F2/G4）。
+    """按网络模式经 runner 容器执行 shell 命令（阶段 3 开放通用 bash）。
 
-    无字符串词表/静态裁决（§6.3）——准入由档位（文件效果）+ 物理边界承担：
-    经 ``run_sandboxed`` 在一次性 bwrap 沙箱内执行（按 mode 组装 scope bind、
-    无网络、资源受限、超时整树清理）；bwrap 不可用时 fail-closed，禁止
-    降级为裸 subprocess。
+    无字符串词表/静态裁决（§6.3）——准入由权限档位审批 + 物理边界承担：
+    经 ``run_sandboxed`` 在 runner 容器内执行（isolated → unshare --net 断网；
+    network → 保留网络；资源受限、超时整树清理）；引擎不可用时 fail-closed，
+    禁止降级为无隔离执行。
     """
     command = cmd.strip()
     if not command:

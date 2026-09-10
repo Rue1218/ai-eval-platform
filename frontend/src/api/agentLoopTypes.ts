@@ -73,5 +73,9 @@ export interface ToolRun extends LoopRecord {
   /** 调度边界公开名称映射与契约版本，不包含实际工具参数。 */
   registry_name?: string; wire_name?: string; tool_contract_version?: string
 }
-export interface InteractionRecord extends LoopRecord { interaction_id: string; kind: string; resolved: boolean; submitting?: boolean; restricted?: boolean }
+export interface InteractionRecord extends LoopRecord {
+  interaction_id: string; kind: string; resolved: boolean; submitting?: boolean; restricted?: boolean
+  /** 三档权限等级与工具风险等级（审批卡展示用，来自服务端事实）。 */
+  permission_tier?: string; risk_level?: string
+}
 export type Connection = 'connecting' | 'online' | 'reconnecting' | 'offline' | 'revoked'

@@ -141,7 +141,8 @@ const mockStore = {
       can_manage: true,
       can_delete: true,
       created_at: new Date().toISOString(),
-    },
+      permission_tier: null,
+    } as AgentSession,
   ],
 }
 
@@ -1287,7 +1288,7 @@ export const api = {
     },
     async create(
       title?: string,
-      options: { visibility?: SessionVisibility; workspaceId?: string; scopePath?: string } = {},
+      options: { visibility?: SessionVisibility; workspaceId?: string; scopePath?: string; permissionTier?: 'tier1' | 'tier2' | 'tier3' } = {},
     ): Promise<AgentSession> {
       const visibility = options.visibility ?? 'private'
       if (getDataMode() === 'mock') {
@@ -1300,6 +1301,7 @@ export const api = {
           workspace_id: options.workspaceId || null,
           workspace_name: null,
           scope_path: options.scopePath || null,
+          permission_tier: options.permissionTier || null,
           can_manage: true,
           can_delete: true,
           created_at: new Date().toISOString(),
@@ -1312,6 +1314,7 @@ export const api = {
         visibility,
         workspace_id: options.workspaceId || undefined,
         scope_path: options.scopePath || undefined,
+        permission_tier: options.permissionTier || undefined,
         // 会话 transport 已收敛为 AgentLoop；不允许调用方回退 legacy。
         engine_version: 'agent_loop_v2',
       })
@@ -1325,6 +1328,21 @@ export const api = {
         return session
       }
       const { data } = await http.put(`/api/sessions/${id}/sharing`, { visibility })
+      return data
+    },
+    async updatePermissionTier(
+      id: string,
+      permissionTier: 'tier1' | 'tier2' | 'tier3' | null,
+    ): Promise<AgentSession> {
+      if (getDataMode() === 'mock') {
+        const session = mockStore.sessions.find((item) => item.id === id)
+        if (!session) throw new ApiError('会话不存在', ErrorCode.NOT_FOUND)
+        session.permission_tier = permissionTier
+        return session
+      }
+      const { data } = await http.put(`/api/sessions/${id}/permission-tier`, {
+        permission_tier: permissionTier,
+      })
       return data
     },
     async remove(id: string): Promise<void> {

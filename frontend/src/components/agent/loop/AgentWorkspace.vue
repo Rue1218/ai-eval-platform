@@ -113,6 +113,17 @@
                     选择绑定的沙箱工作区，必须选中工作区才能开始对话。
                   </p>
 
+                  <div v-if="sessionId" class="ws-popover-tier">
+                    <span class="ws-tier-label">本会话权限档位</span>
+                    <n-select
+                      size="small"
+                      style="width: 200px"
+                      :value="sessionTier"
+                      :options="tierOptions"
+                      @update:value="handleTierChange"
+                    />
+                  </div>
+
                   <div v-if="loadingWorkspaces" class="ws-popover-loading">加载工作区中…</div>
                   <div v-else class="ws-popover-list">
                     <div v-if="workspaces.length === 0" class="ws-popover-empty">
@@ -280,6 +291,27 @@ const draftWorkspaceId = ref<string | null>(null)
 const draftWorkspaceName = ref<string>('')
 const newWorkspaceName = ref('')
 const creatingWorkspace = ref(false)
+
+// 三档权限等级（会话级覆盖；空 = 继承全局默认）
+const tierOptions = [
+  { label: '继承全局默认', value: '' },
+  { label: '档1 请求批准', value: 'tier1' },
+  { label: '档2 帮我批准', value: 'tier2' },
+  { label: '档3 完全访问', value: 'tier3' },
+]
+const sessionTier = ref<string>('')
+watch(() => props.session?.permission_tier, (value) => { sessionTier.value = value || '' }, { immediate: true })
+async function handleTierChange(value: string) {
+  if (!props.sessionId) return
+  const tier = (value || null) as 'tier1' | 'tier2' | 'tier3' | null
+  try {
+    await api.sessions.updatePermissionTier(props.sessionId, tier)
+    sessionTier.value = value || ''
+    message.success('本会话权限档位已更新')
+  } catch (err: any) {
+    message.error(err?.message || '权限档位更新失败')
+  }
+}
 
 const activeWorkspaceId = computed<string | null>(() => {
   if (props.sessionId) {

@@ -91,6 +91,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "agent_profile_id": None,
     # Agent 模型推理控制：只允许展示上游返回的 reasoning summary，不暴露隐藏思维链。
     "agent_reasoning": {"enabled": True, "effort": "medium"},
+    # 三档权限等级全局默认（tier1 请求批准 / tier2 帮我批准 / tier3 完全访问）；
+    # 会话可用 Session.permission_tier 覆盖。
+    "permission_tier_default": "tier1",
     "max_running_tasks": 3,
     "max_inflight_model_calls": 8,
     "default_max_usd": 5,
@@ -143,6 +146,11 @@ def _validate_settings(body: dict[str, Any], db: Session) -> None:
             raise AppError(ErrorCode.VALIDATION, f"{key} 必须为正整数")
     if "default_max_usd" in body and (not isinstance(body["default_max_usd"], int | float) or body["default_max_usd"] <= 0):
         raise AppError(ErrorCode.VALIDATION, "default_max_usd 必须大于 0")
+    if "permission_tier_default" in body:
+        from ..harness.security.permission_tier import TIERS
+
+        if body["permission_tier_default"] not in TIERS:
+            raise AppError(ErrorCode.VALIDATION, "permission_tier_default 不受支持")
     if "agent_reasoning" in body:
         reasoning = body["agent_reasoning"]
         if not isinstance(reasoning, dict):

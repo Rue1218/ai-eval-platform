@@ -1,19 +1,19 @@
 """独立沙箱 Runner 服务（P4-2）。
 
-bash MCP Server 的执行体从 api 容器迁出：本服务在特权容器内运行 bwrap，
-api 经 HTTP JSON 调用，不再持有 ``privileged``/``seccomp:unconfined``/
-``SYS_ADMIN`` 与 bubblewrap，缩小攻击面。
+bash 执行体从 api 容器迁出：本服务在容器内直接执行命令（``unshare`` 建
+网络/PID 命名空间，容器即隔离边界），api 经 HTTP JSON 调用，api 不持有
+``seccomp:unconfined``/``SYS_ADMIN``/``NET_ADMIN``。
 
 端点（仅 compose 内网可达，不发布主机端口）：
 
 - ``POST /run``：body ``{command, policy{mode, workspace_root}, timeout_s,
   limits, max_output_chars}`` → ``{ok:true, output}`` 或 ``{ok:false,
-  error:{code,message}}``。F2/G4：无字符串词表（§6.3）——仅工作区前缀 +
-  realpath 逐段校验（接受嵌套 scope、拒符号链接逃逸）与档位校验；
+  error:{code,message}}``。无字符串词表（§6.3）——仅工作区前缀 +
+  realpath 逐段校验（接受嵌套 scope、拒符号链接逃逸）与网络模式校验；
   fail-closed：``policy`` 缺失/``mode`` 非法一律返回 VALIDATION（不按任何
-  档位猜测），bwrap 缺失/启动失败一律返回 VALIDATION。
+  档位猜测），``unshare`` 缺失/命名空间被拒一律返回 VALIDATION。
 - ``POST /run/stream``：NDJSON 输出块 + 最终结果，仅供 API 内网转发 ToolCard。
-- ``POST /probe``：bwrap 冒烟探测 → ``{ok:bool}``。
+- ``POST /probe``：``unshare`` 冒烟探测 → ``{ok:bool}``。
 - ``GET /health``：``{"status":"ok"}``。
 - ``GET /executions``：发现本次启动的实例代次。
 - ``POST /executions``：按 execution_id 幂等派发，body 增加 session_id/turn_id/call_id。
@@ -40,10 +40,10 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from shared.sandbox_kernel import (
-    SANDBOX_MODES,
     SandboxError,
     SandboxExecutionControl,
     SandboxLimits,
+    normalize_mode,
     probe_sandbox,
     resolve_workspace_path,
     run_sandboxed,
@@ -51,18 +51,16 @@ from shared.sandbox_kernel import (
 
 RUNNER_HOST = os.environ.get("RUNNER_HOST", "0.0.0.0")
 RUNNER_PORT = int(os.environ.get("RUNNER_PORT", "8001"))
-# 工作区根（api 与 runner 都挂载同一 ./data:/data，路径两侧一致）
+# 工作区根（api 与 runner 都挂载同一 ./data/workspaces，路径两侧一致）
 WORKSPACE_ROOT = os.environ.get("SANDBOX_WORKSPACE_ROOT", "/data/workspaces")
-BWRAP_BIN = os.environ.get("SANDBOX_BWRAP_BIN", "/usr/bin/bwrap")
 # 墙钟超时上限（防御畸形请求拖住 worker 线程）
 MAX_TIMEOUT_S = 60.0
 MAX_OUTPUT_CHARS = 20000
 # 并发配额（D4/G3）：固定 worker 槽位 + 限时等待队列；超时返回 429 BUSY
 MAX_WORKERS = int(os.environ.get("RUNNER_MAX_WORKERS", "4"))
 SLOT_WAIT_S = float(os.environ.get("RUNNER_SLOT_WAIT_S", "5.0"))
-# 新接口缺省关闭，令牌与 cgroup 根只由部署注入，不接受模型指定。
+# 新接口缺省关闭，令牌只由部署注入，不接受模型指定。
 INTERNAL_TOKEN = os.environ.get("RUNNER_INTERNAL_TOKEN", "")
-CGROUP_ROOT = os.environ.get("RUNNER_CGROUP_ROOT")
 MAX_EXECUTION_RECORDS = 4096
 
 
@@ -177,7 +175,7 @@ class _ExecutionRegistry:
         status, output, error = "succeeded", "", None
         try:
             command = arguments.pop("cmd")
-            output = run_sandboxed(command, **arguments, control=record.control, cgroup_root=CGROUP_ROOT)
+            output = run_sandboxed(command, **arguments, control=record.control)
         except SandboxError as exc:
             status = "cancelled" if exc.code == "CANCELLED" else "denied" if exc.code == "DENIED" else "failed"
             error = {"code": exc.code, "message": exc.message}
@@ -256,14 +254,14 @@ class _SandboxHandler(BaseHTTPRequestHandler):
                 elif self.path == "/run/stream":
                     self._handle_run_stream()
                 else:
-                    self._send(200, {"ok": probe_sandbox(bwrap_bin=BWRAP_BIN)})
+                    self._send(200, {"ok": probe_sandbox()})
             finally:
                 SLOT_GATE.release()
         else:
             self._send(404, {"ok": False, "error": {"code": "VALIDATION", "message": "未知端点"}})
 
     def _run_from_payload(self, *, on_output: Callable[[str], None] | None = None) -> str:
-        """校验请求后按档位执行 bwrap；流式和非流式端点共用同一安全边界。
+        """校验请求后在容器内按网络模式执行；流式和非流式端点共用同一安全边界。
 
         F2/G4 契约（§6.2）：只收 ``policy{mode, workspace_root}``——不再接收
         任何词表/黑白名单字段；policy 缺失或 mode 非法 → VALIDATION
@@ -274,17 +272,20 @@ class _SandboxHandler(BaseHTTPRequestHandler):
 
     @staticmethod
     def _run_arguments(payload: dict[str, Any]) -> dict[str, Any]:
-        """新旧接口共用档位、scope 和资源验证，禁止新接口绕过 bwrap 边界。"""
+        """新旧接口共用档位、scope 和资源验证，禁止新接口绕过命名空间边界。"""
         command = str(payload.get("command") or "")
         policy = payload.get("policy") if isinstance(payload.get("policy"), dict) else {}
         mode = str(policy.get("mode") or "")
         workspace_root = str(policy.get("workspace_root") or "")
         if not command.strip():
             raise SandboxError("VALIDATION", "bash 命令为空")
-        if mode not in SANDBOX_MODES:
-            raise SandboxError("VALIDATION", "policy.mode 非法或缺失")
-        # 工作区前缀 + realpath 逐段校验（MAJ-5）；返回值 = canonical 路径供
-        # bind（bind realpath 最终路径，消除 resolve→bind 换链窗口）
+        # 归一网络模式：旧文件效果档位映射 isolated（滚动部署期新旧 api 互操作），
+        # 非法/缺失一律 fail-closed，不按任何档位猜测。
+        try:
+            mode = normalize_mode(mode)
+        except SandboxError:
+            raise SandboxError("VALIDATION", "policy.mode 非法或缺失") from None
+        # 工作区前缀 + realpath 逐段校验（MAJ-5）；返回值 = canonical 路径
         sandbox_dir = resolve_workspace_path(workspace_root, WORKSPACE_ROOT)
         try:
             timeout_s = float(payload.get("timeout_s", 15.0))
@@ -301,7 +302,7 @@ class _SandboxHandler(BaseHTTPRequestHandler):
         if max_output <= 0 or max_output > 1_000_000:
             max_output = MAX_OUTPUT_CHARS
         return dict(cmd=command, sandbox_dir=sandbox_dir, mode=mode, timeout_s=timeout_s,
-                    limits=limits, bwrap_bin=BWRAP_BIN, max_output_chars=max_output)
+                    limits=limits, max_output_chars=max_output)
 
     def _handle_execution(self) -> None:
         """仅令牌认证的内网客户端可操作新接口；认证和实例围栏先于执行。"""

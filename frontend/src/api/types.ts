@@ -694,6 +694,8 @@ export interface Report {
 export interface AdminSettings {
   agent_profile_id: string
   agent_reasoning: AgentReasoningSettings
+  // 三档权限等级全局默认（tier1/tier2/tier3）
+  permission_tier_default?: 'tier1' | 'tier2' | 'tier3'
   max_running_tasks: number
   max_inflight_model_calls: number
   default_max_usd: number
@@ -784,6 +786,8 @@ export interface AgentSession {
   workspace_id?: string | null
   workspace_name?: string | null
   scope_path?: string | null
+  /** 三档权限等级（会话覆盖；null=继承全局默认） */
+  permission_tier?: 'tier1' | 'tier2' | 'tier3' | null
   active_task?: { id: string; kind: TaskKind; status: TaskStatus } | null
 }
 

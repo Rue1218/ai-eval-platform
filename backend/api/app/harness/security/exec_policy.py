@@ -33,17 +33,17 @@ class ExecVerdict:
 
 
 def resolve_bash_engine(sandbox_engine: str) -> ExecVerdict:
-    """bash 执行引擎显式决策（#5）：仅 ``bwrap`` 可执行，其余一律 fail-closed。
+    """bash 执行引擎显式决策（#5）：仅 ``container`` 可执行，其余一律 fail-closed。
 
-    ``sandbox_engine="off"`` / 未知引擎均拒绝 bash（环境缺 bwrap 时同样
-    fail-closed，提示改用 read/write/edit，绝不降级为裸 subprocess）。
+    ``sandbox_engine="off"`` / 未知引擎均拒绝 bash（runner 容器不可用/未配置时
+    同样 fail-closed，提示改用 read/write/edit，绝不降级为无隔离裸执行）。
     """
-    if sandbox_engine == "bwrap":
-        return ExecVerdict(True, "bwrap", "沙箱引擎已启用（bwrap）")
+    if sandbox_engine == "container":
+        return ExecVerdict(True, "container", "沙箱引擎已启用（runner 容器内直跑）")
     return ExecVerdict(
         False,
         "off",
-        "bash 工具不可用：沙箱引擎未启用（环境缺 bwrap 时 fail-closed，"
+        "bash 工具不可用：沙箱引擎未启用（runner 容器不可用/未配置时 fail-closed，"
         "请改用 read/write/edit 工具完成文件操作，不要重试 bash）",
     )
 

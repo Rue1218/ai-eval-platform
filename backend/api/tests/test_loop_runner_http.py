@@ -31,7 +31,7 @@ async def test_async_client_real_http_lifecycle(tmp_path, monkeypatch, cancelled
         if cancelled:
             assert control.cancel_event.wait(2)
         control.process_tree_terminated = True
-        control.termination_evidence = "cgroup_empty"
+        control.termination_evidence = "process_exited"
         control.exit_code = -9 if cancelled else 0
         if cancelled:
             raise SandboxError("CANCELLED", "命令已取消")

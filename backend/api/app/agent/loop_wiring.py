@@ -20,6 +20,7 @@ from app.harness.execution.loop_tools import ToolExecutionResult
 from app.harness.execution.registry import build_default_registry
 from app.harness.execution.scheduler import ToolScheduler
 from app.harness.prompts.system import assert_no_secret_leak, assert_no_takeover
+from app.harness.security import permission_tier as tier_policy
 from app.llm.contracts import ModelConfig, SystemSegment
 from app.llm.loop_contracts import (
     LlmRequestError,
@@ -231,6 +232,15 @@ async def _build_dependencies(service, entry, actor_id: str, data: dict, resourc
     manager = MCPClientManager.build_from_registry(registry, join_on_cancel=True)
     resources.append(manager)
 
+    def _resolve_permission_tier(db, session) -> str:
+        """会话列优先、否则全局 settings 键；非法/缺失回落默认档（fail-safe）。"""
+        tier = getattr(session, "permission_tier", None)
+        if tier:
+            return tier_policy.normalize(tier)
+        row = db.get(Setting, "permission_tier_default")
+        value = row.value if row is not None and isinstance(row.value, str) else None
+        return tier_policy.normalize(value)
+
     def context_factory(identity: dict) -> ToolExecutionContext:
         """绑定时和审批后均重新解析真实工作区，不接受模型指定 cwd/身份。"""
         with service.session_factory() as db:
@@ -245,9 +255,11 @@ async def _build_dependencies(service, entry, actor_id: str, data: dict, resourc
                 if workspace is None or workspace.deleted_at or workspace.owner_id != actor_id:
                     raise AppError(ErrorCode.UNAUTHORIZED, "绑定工作区已失效")
             directory = resolve_session_sandbox(session.id, session.workspace_id, session.scope_path)
+            tier = _resolve_permission_tier(db, session)
             return ToolExecutionContext(session_id=session.id, user_id=actor_id,
                                         thread_id=f"loop:{session.id}", sandbox_dir=directory,
-                                        sandbox_mode=settings.sandbox_bash_default_mode,
+                                        sandbox_mode=tier_policy.sandbox_mode_for(tier),
+                                        permission_tier=tier,
                                         call_id=identity.get("call_id", ""))
 
     def authorize(definition, arguments, context) -> None:
@@ -259,7 +271,7 @@ async def _build_dependencies(service, entry, actor_id: str, data: dict, resourc
             require_visible_session(db, context.session_id, actor_id)
             if definition.name not in allowed_tools:
                 raise AppError(ErrorCode.WHITELIST, "工具不在当前授权范围")
-            if definition.name == "bash" and settings.sandbox_engine != "bwrap":
+            if definition.name == "bash" and settings.sandbox_engine != "container":
                 raise AppError(ErrorCode.VALIDATION, "沙箱执行能力未启用")
 
     async def mcp(definition, arguments, context, identity):
@@ -337,7 +349,7 @@ async def _build_dependencies(service, entry, actor_id: str, data: dict, resourc
 
     runner_callback = None
     instance_id = None
-    if settings.runner_internal_token and settings.sandbox_engine == "bwrap":
+    if settings.runner_internal_token and settings.sandbox_engine == "container":
         from app.harness.execution.loop_runner import LoopRunnerClient, RunnerRequest
 
         runner = LoopRunnerClient(settings.sandbox_runner_url, settings.runner_internal_token)
