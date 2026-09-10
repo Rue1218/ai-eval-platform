@@ -16,7 +16,36 @@
           </template>
           <p v-if="!busy && state?.phase && ['max_tokens','max_steps','cancelled','interrupted','error'].includes(state.phase)" class="loop-notice">{{ finishLabels[state.phase] }}</p>
           </div>
-          <div class="loop-composer-wrap"><AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile"/></div>
+          <div class="loop-composer-wrap">
+            <AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile"/>
+            <div v-if="conversationMetrics.hasData" class="conversation-metrics-bar" aria-label="全会话模型调用指标统计">
+              <span class="metric-item" title="全会话平均 Token 生成速度">
+                <svg class="metric-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="m12 14 4-4"/>
+                  <path d="M3.34 19a10 10 0 1 1 17.32 0"/>
+                </svg>
+                生成token速度 {{ conversationMetrics.speed }}
+              </span>
+              <span class="metric-item" title="全会话 Prompt 缓存命中率">
+                <svg class="metric-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <ellipse cx="12" cy="5" rx="9" ry="3"/>
+                  <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+                  <path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"/>
+                </svg>
+                缓存命中率 {{ conversationMetrics.cacheRate }}%
+              </span>
+              <span class="metric-item" title="全会话累计输入与输出 Token 统计">
+                <svg class="metric-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                  <polyline points="14 2 14 8 20 8"/>
+                  <line x1="16" y1="13" x2="8" y2="13"/>
+                  <line x1="16" y1="17" x2="8" y2="17"/>
+                  <polyline points="10 9 9 9 8 9"/>
+                </svg>
+                输入 {{ conversationMetrics.inputFormatted }} · 输出 {{ conversationMetrics.outputFormatted }}
+              </span>
+            </div>
+          </div>
           <div class="loop-width-edge loop-width-edge-left" @pointerenter="previewContentResize('left', $event)" @pointermove="moveContentResizePreview('left', $event)" @pointerleave="hideContentResizePreview('left')">
             <button class="loop-width-handle" :class="{ 'is-visible': hoverResizeEdge === 'left', 'is-active': isResizing && resizeEdge === 'left' }" :style="resizeHandleStyle('left')" type="button" aria-label="向左拖拽调整对话内容宽度" aria-orientation="vertical" role="separator" :aria-valuemin="minimumChatWidth" :aria-valuemax="maximumChatWidth" :aria-valuenow="Math.round(renderedChatWidth)" @pointerdown="beginContentResize($event, 'left')" @keydown="adjustContentWidthByKey($event, 'left')">
               <span aria-hidden="true"></span>
@@ -33,11 +62,40 @@
       </div>
       <aside v-if="runtimeOpen" class="loop-runtime"><button class="runtime-close" @click="runtimeOpen=false">关闭</button><h3>当前运行</h3><p>{{ status }}</p><dl><dt>会话</dt><dd>{{ sessionId || '未发送的草稿' }}</dd><dt>实际模型</dt><dd>{{ summary?.model || '尚无实际请求' }}</dd><dt>思考档位</dt><dd>{{ summary?.reasoning_effort || '未知' }}</dd><dt>协议档版本</dt><dd>{{ summary?.profile_version || '未知' }}</dd><dt>最近活动</dt><dd v-for="event in state?.facts.slice(-5) || []" :key="event.cursor">{{ event.type }}</dd></dl><h4 v-if="tasks.length">Worker 任务</h4><div v-for="task in tasks" :key="task.key"><router-link :to="'/tasks'">{{ task.key }}</router-link><p>{{ task.status || '等待状态' }}</p><p v-if="task.progress">{{ JSON.stringify(task.progress) }}</p><router-link v-if="task.report_id" :to="`/reports/${task.report_id}`">查看报告</router-link></div><p v-for="execution in quarantined" :key="execution.key" class="loop-notice">执行范围受限 · {{ execution.reason || '等待对账' }}</p></aside>
     </div>
-    <div v-if="tab==='trace'" class="loop-composer-wrap loop-trace-composer"><AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile"/></div>
+    <div v-if="tab==='trace'" class="loop-composer-wrap loop-trace-composer">
+      <AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile"/>
+      <div v-if="conversationMetrics.hasData" class="conversation-metrics-bar" aria-label="全会话模型调用指标统计">
+        <span class="metric-item" title="全会话平均 Token 生成速度">
+          <svg class="metric-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="m12 14 4-4"/>
+            <path d="M3.34 19a10 10 0 1 1 17.32 0"/>
+          </svg>
+          生成token速度 {{ conversationMetrics.speed }}
+        </span>
+        <span class="metric-item" title="全会话 Prompt 缓存命中率">
+          <svg class="metric-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <ellipse cx="12" cy="5" rx="9" ry="3"/>
+            <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+            <path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"/>
+          </svg>
+          缓存命中率 {{ conversationMetrics.cacheRate }}%
+        </span>
+        <span class="metric-item" title="全会话累计输入与输出 Token 统计">
+          <svg class="metric-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+            <line x1="16" y1="13" x2="8" y2="13"/>
+            <line x1="16" y1="17" x2="8" y2="17"/>
+            <polyline points="10 9 9 9 8 9"/>
+          </svg>
+          输入 {{ conversationMetrics.inputFormatted }} · 输出 {{ conversationMetrics.outputFormatted }}
+        </span>
+      </div>
+    </div>
   </div>
 </template>
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import http, { ApiError } from '../../../api/http'
 import { createRequestId } from '../../../utils/requestId'
 import type { AttachmentReference } from '../../../api/types'
@@ -64,6 +122,126 @@ const minimumChatWidth = 520
 const chatWidthStorageKey = 'agent-loop:chat-shell-width:v3'
 const state = computed(() => props.store.sessions[props.sessionId]), trace = computed(() => props.store.traces[props.sessionId])
 const draft = computed(() => props.store.draft(props.sessionId || 'draft'))
+
+export interface ConversationMetrics {
+  hasData: boolean
+  speed: string
+  cacheRate: number
+  inputFormatted: string
+  outputFormatted: string
+  totalInput: number
+  totalOutput: number
+  totalCached: number
+  totalLatencyMs: number
+}
+
+function formatMetricTokens(val: number): string {
+  if (val >= 1_000_000) {
+    const m = val / 1_000_000
+    return `${m.toFixed(1).replace(/\.0$/, '')}M`
+  }
+  if (val >= 10_000) {
+    return `${(val / 1_000).toFixed(0)}K`
+  }
+  if (val >= 1_000) {
+    const k = val / 1_000
+    return `${k.toFixed(1).replace(/\.0$/, '')}K`
+  }
+  return String(Math.max(0, Math.round(val)))
+}
+
+function loadMetricsCache(): Record<string, ConversationMetrics> {
+  try {
+    const raw = sessionStorage.getItem('agent-loop:conversation-metrics')
+    return raw ? JSON.parse(raw) : {}
+  } catch {
+    return {}
+  }
+}
+
+function saveMetricsCache(cache: Record<string, ConversationMetrics>) {
+  try {
+    sessionStorage.setItem('agent-loop:conversation-metrics', JSON.stringify(cache))
+  } catch {
+    // 忽略存储受限环境
+  }
+}
+
+const sessionMetricsCache = reactive<Record<string, ConversationMetrics>>(loadMetricsCache())
+
+const conversationMetrics = computed<ConversationMetrics>(() => {
+  const sid = props.sessionId
+  const attempts = state.value ? Object.values(state.value.attempts || {}) : []
+
+  let totalInput = 0
+  let totalOutput = 0
+  let totalCached = 0
+  let totalLatencyMs = 0
+  let totalOutputForSpeed = 0
+  let hasAttemptsData = false
+
+  for (const a of attempts) {
+    const usage = a.usage || {}
+    const prompt = Number(usage.prompt_tokens ?? usage.input_tokens ?? a.request_summary?.context_meter?.input_tokens ?? 0)
+    const completion = Number(usage.completion_tokens ?? usage.output_tokens ?? 0)
+    const cached = Number(
+      usage.cache_read_input_tokens
+      ?? usage.cached_tokens
+      ?? usage.prompt_tokens_details?.cached_tokens
+      ?? 0
+    )
+    const latency = Number(a.latency_ms ?? usage.latency_ms ?? 0)
+
+    if (prompt > 0 || completion > 0 || cached > 0 || latency > 0) {
+      hasAttemptsData = true
+      totalInput += prompt
+      totalOutput += completion
+      totalCached += cached
+      if (latency > 0 && completion > 0) {
+        totalLatencyMs += latency
+        totalOutputForSpeed += completion
+      }
+    }
+  }
+
+  if (hasAttemptsData) {
+    const totalLatencySec = totalLatencyMs / 1000
+    const avgSpeed = totalLatencySec > 0 ? Math.round(totalOutputForSpeed / totalLatencySec) : 0
+    const cacheRate = totalInput > 0 ? Math.min(100, Math.round((totalCached / totalInput) * 100)) : 0
+    const result: ConversationMetrics = {
+      hasData: true,
+      speed: `${avgSpeed}/s`,
+      cacheRate,
+      inputFormatted: formatMetricTokens(totalInput),
+      outputFormatted: formatMetricTokens(totalOutput),
+      totalInput,
+      totalOutput,
+      totalCached,
+      totalLatencyMs,
+    }
+    if (sid) {
+      sessionMetricsCache[sid] = result
+      saveMetricsCache(sessionMetricsCache)
+    }
+    return result
+  }
+
+  if (sid && sessionMetricsCache[sid]) {
+    return sessionMetricsCache[sid]
+  }
+
+  return {
+    hasData: false,
+    speed: '0/s',
+    cacheRate: 0,
+    inputFormatted: '0',
+    outputFormatted: '0',
+    totalInput: 0,
+    totalOutput: 0,
+    totalCached: 0,
+    totalLatencyMs: 0,
+  }
+})
 const rows = computed(() => state.value ? conversationRows(state.value) : [])
 const visibleRows = computed(() => rows.value.slice(-shown.value))
 const busy = computed(() => !!state.value?.activeTurn)
@@ -291,5 +469,33 @@ async function hydrateAttachments() {
 .loop-width-handle{position:absolute;left:0;width:28px;height:96px;border:0;border-radius:14px;background:transparent;cursor:ew-resize;opacity:0;touch-action:none;transition:opacity .14s ease,background-color .14s ease}
 .loop-width-handle span{display:block;width:2px;height:76px;margin:auto;border-radius:2px;background:rgba(105,128,122,.3);box-shadow:0 0 10px rgba(119,147,138,.24)}
 .loop-width-handle.is-visible,.loop-width-handle.is-active,.loop-width-handle:focus-visible{opacity:1;background:rgba(255,255,255,.08);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);outline:0}.loop-width-handle:hover{background:rgba(255,255,255,.2)}.loop-width-handle:hover span,.loop-width-handle:focus-visible span{background:rgba(91,129,117,.54)}
-@media(max-width:768px){.loop-chat-shell{width:100%!important;max-width:none;min-width:0;margin:0}.loop-chat-shell .loop-composer-wrap{padding:8px}.loop-width-edge{display:none}.loop-chat-shell .loop-conversation{padding:16px 12px}}
+/* 全会话指标统计栏 */
+.conversation-metrics-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  padding: 8px 4px 0;
+  color: #748197;
+  font-size: 11px;
+  line-height: 1.4;
+  user-select: none;
+}
+.metric-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.metric-icon {
+  display: inline-block;
+  flex-shrink: 0;
+  vertical-align: middle;
+  color: #748197;
+}
+.loop-trace-composer .conversation-metrics-bar {
+  padding-bottom: 8px;
+}
+
+@media(max-width:768px){.loop-chat-shell{width:100%!important;max-width:none;min-width:0;margin:0}.loop-chat-shell .loop-composer-wrap{padding:8px}.loop-width-edge{display:none}.loop-chat-shell .loop-conversation{padding:16px 12px}.conversation-metrics-bar{gap:12px;font-size:10px;flex-wrap:wrap}}
 </style>

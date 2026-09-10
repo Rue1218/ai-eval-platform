@@ -52,6 +52,29 @@ async def test_history_selection_rejects_reordering_or_rewriting(selected):
         _history_selection(messages, chosen)
 
 
+async def test_history_selection_records_only_protocol_state_compatibility_drop():
+    """模型切换降级可由持久索引重建，且不能放宽正文或工具字段的改写。"""
+    source = {
+        "role": "assistant",
+        "content": "portable answer",
+        "tool_calls": [{"id": "call", "name": "read", "args": {"path": "a.txt"}}],
+        "protocol_state": {"provider": "old", "items": []},
+    }
+    selected = deepcopy(source)
+    selected.pop("protocol_state")
+    selection = _history_selection([source], [selected])
+    assert selection["algorithm"] == "message_indices.v2"
+    assert selection["indices"] == [0]
+    assert selection["transformations"] == [{
+        "index": 0,
+        "removed_fields": ["protocol_state"],
+        "reason": "model_compatibility",
+    }]
+    assert "protocol_state" in source
+    with pytest.raises(LlmRequestError, match="模型输入无法对应持久历史"):
+        _history_selection([source], [{**selected, "content": "rewritten"}])
+
+
 class MemoryLog:
     """只实现公开日志接口，不依赖数据库、SQLite 或源工作区。"""
 

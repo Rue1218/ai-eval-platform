@@ -43,6 +43,8 @@ class Subscribe(StrictData):
 
     after_cursor: Cursor = 0
     view: Literal["semantic"] = "semantic"
+    # client_id 在同一前端实例的 socket 重建间保持稳定，用于区分同账号多标签页。
+    client_id: Id | None = None
 
 
 class Submit(StrictData):
@@ -210,8 +212,8 @@ class LoopServiceProtocol(Protocol):
     execute_command 在会话行锁事务中校验幂等键/输入摘要/client_message_id，
     当前执行身份、nonce、TTL 与控制连接；提交后调用 Runtime 的快速启动/
     取消入口并返回既有或新回执。attach 可在已取得释放写锁时结算硬重启
-    遗留回合，但不抢占存活控制权；detach 仅取消实际属于该 connection_id
-    的回合。失败抛 AppError，不返回异常原文。
+    遗留回合，也可由同成员续接当前进程内的控制权；detach 仅为实际控制者
+    启动有限重连宽限。失败抛 AppError，不返回异常原文。
     """
 
     async def authenticate(self, ticket: str) -> str:
@@ -224,12 +226,14 @@ class LoopServiceProtocol(Protocol):
 
     async def attach(
         self, actor_id: str, session_id: str, connection_id: str,
-        on_transient: Callable[[dict], None],
+        on_transient: Callable[[dict], None], client_id: str | None = None,
     ) -> None:
         """先注册瞬态回调；回调只接收完整 transient 信封，不等待网络。"""
         ...
 
-    async def snapshot(self, actor_id: str, session_id: str) -> StreamSnapshot:
+    async def snapshot(
+        self, actor_id: str, session_id: str, connection_id: str | None = None,
+    ) -> StreamSnapshot:
         """返回同一高水位对应的授权快照。"""
         ...
 
@@ -248,7 +252,7 @@ class LoopServiceProtocol(Protocol):
         ...
 
     async def detach(self, actor_id: str, session_id: str, connection_id: str) -> None:
-        """注销并仅取消实际控制者持有的回合；可安全重复调用。"""
+        """注销观察者；实际控制者的回合在有限重连宽限后取消。"""
         ...
 
 
@@ -268,6 +272,7 @@ class WsV2Connection:
         self.send_timeout = send_timeout
         self.slow = asyncio.Event()
         self.session_id: str | None = None
+        self.client_id: str | None = None
         self.ready = False
         self.trace_enabled = False
         self.trace_seq = -1
@@ -349,6 +354,10 @@ class WsV2Connection:
 
     async def subscribe(self, command: Command) -> None:
         """注册后取快照；回放独立任务让收包循环继续处理取消/判活。"""
+        client_id = command.data.get("client_id")
+        if self.client_id is not None and client_id != self.client_id:
+            raise AppError(ErrorCode.VALIDATION, "同一连接不能更换客户端身份")
+        self.client_id = client_id
         if self.session_id == command.session_id:
             # 同连接修复 cursor 缺口时保留 Runtime 控制权，不能 detach 误取消回合。
             self.ready = False
@@ -367,6 +376,7 @@ class WsV2Connection:
         self.session_id = command.session_id
         await self.service.attach(
             self.actor_id, command.session_id, self.connection_id, self.on_transient,
+            self.client_id,
         )
         self.pump = asyncio.create_task(self.stream(command.data["after_cursor"]))
 
@@ -374,9 +384,14 @@ class WsV2Connection:
         """只推进连续已提交前缀；快照替换后由客户端显式重新订阅。"""
         sid = self.session_id
         try:
-            snapshot = await self.service.snapshot(self.actor_id, sid)
+            snapshot = await self.service.snapshot(self.actor_id, sid, self.connection_id)
             high = snapshot.cursor
-            self.control("subscribed", {"cursor": high})
+            self.control("subscribed", {
+                "cursor": high,
+                "controller": snapshot.state.get(
+                    "controller", {"active": False, "owned_by_actor": False}
+                ),
+            })
             if after_cursor > high or after_cursor < snapshot.earliest_cursor - 1:
                 self.control("resync.required", {"cursor": high, "snapshot": snapshot.state})
                 return
@@ -396,7 +411,9 @@ class WsV2Connection:
                         continue
                     if number != cursor + 1:
                         # 缺号不得推进；重新获取绑定高水位的授权快照。
-                        current = await self.service.snapshot(self.actor_id, sid)
+                        current = await self.service.snapshot(
+                            self.actor_id, sid, self.connection_id,
+                        )
                         self.ready = False
                         self.control("resync.required", {
                             "cursor": current.cursor, "snapshot": current.state,
@@ -494,7 +511,7 @@ class WsV2Connection:
         """管理连接任务并在所有退出路径释放控制权，不 await 整轮结算。"""
         self.control("hello", {"protocol_version": 2})
         self.control("capabilities", {
-            "commands": sorted(_DATA_TYPES), "stream_schema_version": "agent-loop-stream.v2.1",
+            "commands": sorted(_DATA_TYPES), "stream_schema_version": "agent-loop-stream.v2.2",
         })
         tasks = [
             asyncio.create_task(self.sender()), asyncio.create_task(self.receive()),

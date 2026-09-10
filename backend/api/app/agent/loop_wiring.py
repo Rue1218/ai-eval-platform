@@ -6,7 +6,8 @@ import asyncio
 import hashlib
 import json
 import time
-from dataclasses import replace
+from copy import deepcopy
+from dataclasses import asdict, replace
 from uuid import uuid4
 
 from app.agent_prompt_settings import get_agent_prompt_overlay
@@ -22,6 +23,7 @@ from app.llm.contracts import ModelConfig, SystemSegment
 from app.llm.loop_contracts import (
     LlmRequestError,
     MissingApiKeyError,
+    ProtocolState,
     UnsupportedReasoningEffortError,
 )
 from app.llm.resolver import AuthorizedProfileSnapshot, build_adapter, resolve_request
@@ -397,14 +399,59 @@ def _prompt_token_breakdown(request) -> dict[str, int]:
     }
 
 
+def _drop_incompatible_protocol_state(request):
+    """切换模型时仅移除可确认不兼容的 opaque 状态，保留正文与工具调用历史。
+
+    结构损坏的状态仍交给协议 codec 严格拒绝，不能借模型切换掩盖坏事实。
+    """
+    from app.llm.providers.common import compatibility_key
+
+    provider, protocol = request.provider, request.protocol
+    if not isinstance(provider, str) or not isinstance(protocol, str):
+        return request, []
+    expected_key = request.compatibility_key or compatibility_key(
+        provider, protocol, request.model,
+    )
+    messages = list(request.messages)
+    dropped_indices: list[int] = []
+    for index, message in enumerate(messages):
+        state = message.get("protocol_state") if isinstance(message, dict) else None
+        if isinstance(state, ProtocolState):
+            state = asdict(state)
+        # 只有完整、可验证的旧状态才能被判断为“不兼容”；残缺结构继续 fail-closed。
+        if not isinstance(state, dict) or not (
+            state.get("version") == 1
+            and state.get("replay_policy") == "items_v1"
+            and all(isinstance(state.get(key), str) for key in (
+                "provider", "protocol", "model", "compatibility_key",
+            ))
+            and isinstance(state.get("items"), list)
+            and all(isinstance(item, dict) for item in state["items"])
+        ):
+            continue
+        if (
+            state["provider"], state["protocol"], state["model"],
+            state["compatibility_key"],
+        ) == (provider, protocol, request.model, expected_key):
+            continue
+        portable = deepcopy(message)
+        portable.pop("protocol_state", None)
+        messages[index] = portable
+        dropped_indices.append(index)
+    if not dropped_indices:
+        return request, []
+    return replace(request, messages=messages), dropped_indices
+
+
 def _window_request(profile, segments, specs, messages, effort, context_window):
-    """纯函数预检和裁剪完整 user 回合；不改事实、不丢单个工具结果或签名块。"""
+    """纯函数预检和裁剪完整 user 回合；换模型仅降级不可移植的签名块。"""
     if type(context_window) is not int or context_window <= 0:
         raise AppError(ErrorCode.VALIDATION, "模型上下文窗口配置非法")
     config = replace(profile.config, reasoning_enabled=effort != "off",
                      reasoning_effort=effort if effort != "off" else "medium")
     request = resolve_request(replace(profile, config=config), messages=messages,
                               system_segments=segments, tools=specs)
+    request, protocol_state_dropped_indices = _drop_incompatible_protocol_state(request)
     budget = context_window - request.max_tokens
     if budget <= 0:
         raise AppError(ErrorCode.BUDGET_EXCEEDED, "模型输出预算占满上下文窗口")
@@ -428,4 +475,6 @@ def _window_request(profile, segments, specs, messages, effort, context_window):
         "window_start": dropped, "window_end": len(messages),
         "messages_fingerprint": _hash({"messages": selected.messages}),
         "estimated_input_tokens": tokens, "reserved_output_tokens": request.max_tokens,
+        "protocol_state_dropped": len(protocol_state_dropped_indices),
+        "protocol_state_dropped_indices": protocol_state_dropped_indices,
     }

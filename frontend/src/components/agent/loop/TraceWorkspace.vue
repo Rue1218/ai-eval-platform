@@ -9,6 +9,7 @@
       <div class="trace-lanes trace-lane-labels" aria-hidden="true"><span>会话</span><span>模型</span><span>工具</span></div>
       <div class="trace-axis trace-waterfall" @pointerdown="start" @pointermove="move" @pointerup="finish" @pointercancel="dragging = false" @dblclick="clear" @contextmenu.prevent="clear" @keydown.esc="clear" tabindex="0" aria-label="事件顺序轴，点击选择；Shift 加方向键扩选；Escape 清除" @keydown="keyRange">
         <span v-if="range" class="trace-range trace-selection-range" :style="rangeStyle"/>
+        <span v-for="marker in turnMarkers" :key="marker.key" class="trace-turn-marker" :style="marker.style" :title="marker.label">{{ marker.label }}</span>
         <button v-for="(row, index) in rows" :key="row.cursor" class="trace-segment" :data-index="index" :data-kind="role(row) === 'USER' ? 'user' : category(row.type) === 'model' ? 'message' : category(row.type)" :class="{ selected: selected === row.cursor, 'out-of-range': range && !inRange(index) }" :style="segmentStyle(row, index)" :title="`#${row.cursor} ${title(row)}`" :aria-label="`定位 #${row.cursor} ${title(row)}`" tabindex="-1"/>
       </div>
     </div>
@@ -16,7 +17,7 @@
       <div class="trace-list trace-list-panel">
         <p v-if="!rows.length" class="trace-empty">{{ state.facts.length ? '没有匹配的轨迹，请调整分类或搜索内容。' : '发送一条消息后，在这里查看模型请求、工具执行和事件详情。' }}</p>
         <button v-for="(row, index) in pageRows" :key="row.cursor" class="trace-row" :class="{selected:selected === row.cursor, 'timeline-inside': range && inRange(page * 80 + index), 'timeline-outside': range && !inRange(page * 80 + index)}" @click="select(page * 80 + index)">
-          <span class="trace-seq trace-row-seq">#{{ row.cursor }}</span><span class="trace-row-main"><span class="trace-row-title"><span class="trace-badge" :data-category="category(row.type)" :data-role="role(row).toLowerCase()">{{ role(row) }}</span><b>{{ title(row) }}</b></span><span class="trace-preview trace-row-preview">{{ preview(row) }}</span><small v-if="row.layers.length > 1" class="trace-schema-badge" title="该语义行包含的传输事件数量">{{ row.layers.length }} 层</small></span>
+          <span class="trace-seq trace-row-seq">#{{ row.cursor }}</span><span class="trace-row-main"><span class="trace-row-title"><span class="trace-badge" :data-category="category(row.type)" :data-role="role(row).toLowerCase()">{{ role(row) }}</span><span class="trace-turn-badge">{{ turnLabel(row) }}</span><b>{{ title(row) }}</b></span><span class="trace-preview trace-row-preview">{{ preview(row) }}</span><small v-if="row.layers.length > 1" class="trace-schema-badge" title="该语义行包含的传输事件数量">{{ row.layers.length }} 层</small></span>
         </button>
         <div v-if="rows.length > 80" class="trace-pagination"><button :disabled="page === 0" @click="page--">上一页</button><span>{{ page + 1 }} / {{ Math.max(1, Math.ceil(rows.length / 80)) }}</span><button :disabled="(page + 1) * 80 >= rows.length" @click="page++">下一页</button></div>
       </div>
@@ -26,11 +27,11 @@
         <div class="inspector-body trace-detail-body">
         <template v-if="tab === '概览'">
           <p class="trace-purpose">{{ title(current) }}<span v-if="current.data.status"> · {{ current.data.status }}</span></p>
-          <dl class="trace-kv"><dt>事件类型</dt><dd>{{ current.type }}</dd><dt>记录序号</dt><dd>#{{ current.cursor }}</dd><dt>回合 / 步骤</dt><dd>{{ current.correlation.turn ?? '—' }} / {{ current.correlation.step ?? '—' }}</dd><dt>请求标识</dt><dd>{{ current.correlation.attempt_id ?? '—' }}</dd><dt>服务端时间</dt><dd>{{ current.ts }}</dd><dt>来源序号</dt><dd>{{ current.correlation.source_seq ?? '未提供' }}</dd></dl>
+          <dl class="trace-kv"><dt>事件类型</dt><dd>{{ current.type }}</dd><dt>记录序号</dt><dd>#{{ current.cursor }}</dd><dt>对话回合 / 步骤</dt><dd>{{ turnLabel(current) }} / {{ current.correlation.step ?? '—' }}</dd><dt>请求标识</dt><dd>{{ current.correlation.attempt_id ?? '—' }}</dd><dt>服务端时间</dt><dd>{{ current.ts }}</dd><dt>来源序号</dt><dd>{{ current.correlation.source_seq ?? '未提供' }}</dd></dl>
           <div class="trace-chain"><span class="trace-chain-label">关联记录</span><button v-for="layer in current.layers" :key="layer.cursor" class="trace-chain-link" @click="tab = '已授权内容'">#{{ layer.cursor }} {{ layer.type }}</button></div>
         </template>
         <template v-else-if="tab === '预览'"><div v-if="preview(current)" class="trace-preview-card"><pre>{{ preview(current, true) }}</pre></div><p v-else class="trace-preview-empty">该事件未提供内容预览。</p></template>
-        <template v-else-if="tab === '计时'"><p>事件时间：{{ current.ts }}</p><p>未提供服务端请求起止时点时，不推算 TTFT 或历史耗时。</p></template>
+        <template v-else-if="tab === '计时'"><div class="trace-timing"><div class="trace-timing-row"><strong>事件时间</strong><time>{{ current.ts }}</time></div><div class="trace-timing-row"><strong>本次调用耗时</strong><time>{{ formatLatency(current) || '未提供' }}</time></div><div class="trace-timing-row"><strong>本次 token 消耗</strong><time>{{ formatUsage(current) || '未提供' }}</time></div></div><p>耗时仅在模型 Attempt 终态由服务端单调时钟记录；旧记录和非模型事件不会推算。</p></template>
         <template v-else-if="tab === 'Schema'"><div v-if="trace.catalog" class="trace-json-tree"><JsonTree :value="schema"/></div><p v-else>服务端尚未提供 Schema 目录。</p></template>
         <template v-else-if="tab === '来源'"><div v-if="sources.length" class="trace-json-tree"><JsonTree :value="sources"/></div><p v-else>未取得授权源记录，源 seq 与语义 cursor 独立。</p></template>
         <template v-else><div v-if="detail != null" class="trace-json-tree"><JsonTree :value="detail"/></div><p v-else>该事件未提供此项授权数据。原始系统提示词、请求头与协议内部状态不公开。</p></template>
@@ -46,6 +47,7 @@ import { computed, ref, watch } from 'vue'
 import type { LoopState } from '../../../agent/loop/reducer'
 import type { LoopFrame } from '../../../api/agentLoopTypes'
 import { category, safePacket, semanticTraceRows, type TraceState } from '../../../agent/loop/trace'
+import { copyText } from '../../../utils/clipboard'
 import JsonTree from './JsonTree.vue'
 const props = defineProps<{ state: LoopState; trace: TraceState }>()
 const filter = ref('all'), search = ref(''), selected = ref<number | null>(null), page = ref(0), tab = ref('概览'), notice = ref('')
@@ -58,6 +60,13 @@ const rows = computed(() => semanticTraceRows(props.state.facts).filter(row => (
 const pageRows = computed(() => rows.value.slice(page.value * 80, page.value * 80 + 80))
 const current = computed(() => rows.value.find(row => row.cursor === selected.value))
 const rangeStyle = computed(() => range.value ? { left: `${Math.min(...range.value) / rows.value.length * 100}%`, width: `${(Math.abs(range.value[1] - range.value[0]) + 1) / rows.value.length * 100}%` } : {})
+/** 在每轮的首个语义事件处立标；筛选后仍按当前可见顺序表达，不伪造耗时比例。 */
+const turnMarkers = computed(() => rows.value.flatMap((row, index) => {
+  const previous = rows.value[index - 1]
+  const turn = row.correlation.turn
+  if (!Number.isInteger(turn) || previous?.correlation.turn === turn) return []
+  return [{ key: `${turn}:${row.cursor}`, label: `第 ${turn} 轮`, style: { left: `${index / rows.value.length * 100}%` } }]
+}))
 /** 泳道表达类别，横坐标只表达持久顺序，避免伪造模型耗时。 */
 function segmentStyle(row: LoopFrame, index: number) {
   const kind = category(row.type), lane = kind === 'model' ? 1 : ['tool', 'approval', 'question', 'task'].includes(kind) ? 2 : 0
@@ -65,6 +74,7 @@ function segmentStyle(row: LoopFrame, index: number) {
 }
 /** 使用授权摘要生成紧凑语义行，原始事件保留在详情的数据层。 */
 function role(row: LoopFrame) { return row.type === 'user.message' ? 'USER' : category(row.type) === 'model' ? 'ASSISTANT' : category(row.type).toUpperCase() }
+function turnLabel(row: LoopFrame): string { return Number.isInteger(row.correlation.turn) ? `第 ${row.correlation.turn} 轮` : '未归属' }
 function title(row: LoopFrame) { return row.data.name || row.data.request_summary?.model || ({ 'user.message': '用户消息', 'turn.start': '回合开始', 'turn.end': '回合结束' } as Record<string, string>)[row.type] || row.type }
 /** 列表只显示短摘要；详情保留服务端已经授权的完整预览，不再二次截断。 */
 function preview(row: LoopFrame, full = false) { const d = row.data; const text = String(safePacket(d.display?.result_preview || d.display?.target || d.content || d.reason || d.status || row.correlation.attempt_id || '')); return full ? text : text.slice(0, 240) }
@@ -84,7 +94,15 @@ function move(event: PointerEvent) { const index = indexOf(event); if (dragging.
 function finish(event: PointerEvent) { if (!dragging.value) return; move(event); dragging.value = false; const target = event.currentTarget as HTMLElement; if (target.hasPointerCapture(event.pointerId)) target.releasePointerCapture(event.pointerId); select(indexOf(event)) }
 /** 时间选区提供键盘等价操作，事件位置与屏幕像素无关。 */
 function keyRange(event: KeyboardEvent) { if (!['ArrowLeft','ArrowRight','Home','End'].includes(event.key) || !rows.value.length) return; event.preventDefault(); const previous = range.value?.[1] ?? 0; const next = event.key === 'Home' ? 0 : event.key === 'End' ? rows.value.length - 1 : Math.max(0, Math.min(rows.value.length - 1, previous + (event.key === 'ArrowRight' ? 1 : -1))); range.value = [event.shiftKey ? range.value?.[0] ?? previous : next, next]; selected.value = rows.value[next].cursor!; page.value = Math.floor(next / 80) }
-async function copy() { try { await navigator.clipboard.writeText(JSON.stringify(safePacket(range.value ? rows.value.filter((_, i) => inRange(i)) : current.value ?? rows.value), null, 2)); notice.value = '已复制脱敏数据' } catch { notice.value = '无法访问剪贴板' } }
+/** 轨迹复制与正文复制共用降级方案，内嵌页面也能复制已脱敏内容。 */
+async function copy() { notice.value = await copyText(JSON.stringify(safePacket(range.value ? rows.value.filter((_, i) => inRange(i)) : current.value ?? rows.value), null, 2)) ? '已复制脱敏数据' : '无法访问剪贴板' }
+/** 优先从当前事件读取；语义行合并后再回退到同 Attempt 的模型终态。 */
+function attemptData(row: LoopFrame): Record<string, unknown> { return row.data.usage || row.data.latency_ms !== undefined ? row.data : Object.values(props.state.attempts).find(item => item.correlation.attempt_id === row.correlation.attempt_id) || {} }
+function numericMetric(value: unknown): number | null { return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null }
+function formatLatency(row: LoopFrame): string { const value = numericMetric(attemptData(row).latency_ms); return value === null ? '' : value >= 1000 ? `${(value / 1000).toFixed(value % 1000 ? 1 : 0)} 秒` : `${value} ms` }
+function formatUsage(row: LoopFrame): string { const usage = attemptData(row).usage as Record<string, unknown> | undefined; const total = numericMetric(usage?.total_tokens) ?? sumMetrics(usage?.prompt_tokens ?? usage?.input_tokens, usage?.completion_tokens ?? usage?.output_tokens); return total === null ? '' : `${formatNumber(total)} tokens` }
+function sumMetrics(first: unknown, second: unknown): number | null { const a = numericMetric(first), b = numericMetric(second); return a === null && b === null ? null : (a ?? 0) + (b ?? 0) }
+function formatNumber(value: number): string { return value >= 1000 ? `${(value / 1000).toFixed(value >= 10000 ? 0 : 1)}K` : String(Math.round(value)) }
 </script>
 <style scoped>    .trace-view { display: flex; min-height: 0; flex: 1; flex-direction: column; overflow: hidden; background: #fff; padding-bottom: 102px; }
     .trace-toolbar { display: flex; min-height: 44px; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--line); padding: 0 22px; background: #fff; }
@@ -104,6 +122,7 @@ async function copy() { try { await navigator.clipboard.writeText(JSON.stringify
     .trace-waterfall { position: relative; width: 100%; height: 50px; overflow: hidden; cursor: crosshair; touch-action: none; }
     .trace-waterfall:focus-visible { outline: 1px solid #536fe4; outline-offset: -1px; }
     .trace-selection-range { position: absolute; z-index: 0; top: 0; bottom: 0; min-width: 1px; border-right: 3px solid #536fe4; border-left: 3px solid #536fe4; background: rgba(83,111,228,.12); box-shadow: -100vw 0 0 100vw rgba(255,255,255,.58), 100vw 0 0 100vw rgba(255,255,255,.58); pointer-events: none; }
+    .trace-turn-marker { position: absolute; z-index: 3; top: 1px; max-width: 58px; overflow: hidden; border-left: 1px dashed #7e7cda; padding-left: 3px; color: #4d4db6; font: 700 9px/1.15 Inter,"Microsoft YaHei UI",sans-serif; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
     .trace-segment { position: absolute; z-index: 1; top: calc(7px + var(--trace-segment-lane) * 14px); left: calc(var(--trace-segment-left) + var(--trace-segment-gap)); width: max(2px,calc(var(--trace-segment-width) - var(--trace-segment-gap) - var(--trace-segment-gap))); height: 8px; min-width: 2px; border: 0; border-radius: 1px; outline: 0; background: #78879d; padding: 0; cursor: pointer; opacity: .78; }
     .trace-segment:hover { z-index: 2; opacity: 1; }
     .trace-segment.selected { z-index: 2; opacity: 1; box-shadow: 0 0 0 1px #fcfdff,0 0 0 2px #536fe4; }
@@ -128,7 +147,7 @@ async function copy() { try { await navigator.clipboard.writeText(JSON.stringify
     .trace-row.timeline-outside { opacity: .28; }
     .trace-row.timeline-outside:hover { opacity: .8; }
     .trace-row-seq { color: #8390a3; font: 10px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace; }
-    .trace-row-main { display: flex; min-width: 0; align-items: center; gap: 8px; } .trace-row-title { display: flex; min-width: 0; flex: 0 1 auto; align-items: center; gap: 7px; color: #334158; font-size: 11px; font-weight: 620; white-space: nowrap; }
+    .trace-row-main { display: flex; min-width: 0; align-items: center; gap: 8px; } .trace-row-title { display: flex; min-width: 0; flex: 0 1 auto; align-items: center; gap: 7px; color: #334158; font-size: 11px; font-weight:620; white-space: nowrap; } .trace-turn-badge { flex:0 0 auto; border:1px solid #d7d5fb; border-radius:4px; background:#f4f3ff; padding:1px 4px; color:#5b58bd; font:700 9px/1.3 Inter,"Microsoft YaHei UI",sans-serif; }
     .trace-badge { flex: 0 0 auto; border-radius: 4px; padding: 1px 5px; font-size: 9px; font-weight: 700; letter-spacing: .04em; }
     .trace-badge[data-category="model"] { background: #f0ebfb; color: #6e4eaa; } .trace-badge[data-category="tool"] { background: #fff1dc; color: #aa6510; } .trace-badge[data-category="approval"] { background: #fff5d9; color: #946617; } .trace-badge[data-category="lifecycle"] { background: #edf1f5; color: #667589; }
     .trace-badge[data-role="system"] { background: #eef1f5; color: #667589; } .trace-badge[data-role="user"] { background: #eaf0ff; color: #4b68a8; } .trace-badge[data-role="context"] { background: #e8f8ea; color: #378553; } .trace-badge[data-role="assistant"] { background: #f3ecff; color: #7860aa; } .trace-badge[data-role="tool"] { background: #fff1dc; color: #aa6510; } .trace-badge[data-role="approval"] { background: #fff5d9; color: #946617; } .trace-badge[data-role="protocol"] { background: #f2f4f7; color: #758399; }
@@ -189,7 +208,7 @@ async function copy() { try { await navigator.clipboard.writeText(JSON.stringify
     @media (max-width:960px) { .trace-main { grid-template-columns: 1fr; overflow: auto; } .trace-list-panel { min-height: 330px; overflow: visible; } .trace-detail { min-height: 360px; border-top: 1px solid var(--line); border-left: 0; overflow: visible; } }
     @media (max-width:680px) { .workspace-tabs { padding: 0 14px; gap: 16px; } .workspace-tab-hint { display: none; } .trace-toolbar { padding-right: 14px; padding-left: 14px; } .trace-toolbar { align-items: stretch; flex-direction: column; gap: 5px; padding-top: 7px; padding-bottom: 7px; } .trace-search { width: 100%; } .trace-list-header, .trace-row { grid-template-columns: 42px minmax(0,1fr); gap: 8px; } .trace-list-header > :last-child, .trace-row-ref { display: none; } }
 /* 参考 CSS 限于轨迹面板；平台输入栏独立占位，因此不重复预留源悬浮输入栏的 102px。 */
-.trace-workspace{--canvas:#f7f8fc;--surface-hover:#f1f4f9;--line:#e3e8f0;--text:#172033;--muted:#5f6d82;--subtle:#748197;--accent:#5b5bd6;box-sizing:border-box;min-width:0;padding-bottom:0;color:var(--text);font:14px/1.5 Inter,"Segoe UI Variable Text","Microsoft YaHei UI","Microsoft YaHei",system-ui,sans-serif}
+.trace-workspace{--canvas:#f7f8fc;--surface-hover:#f1f4f9;--line:#e3e8f0;--text:#172033;--muted:#5f6d82;--subtle:#748197;--accent:#5b5bd6;box-sizing:border-box;min-width:0;padding-bottom:0;color:var(--text);font:14px/1.5 Inter,"Segoe UI Variable Text","Microsoft YaHei UI","Microsoft YaHei",system-ui,sans-serif}.trace-json-tree{background:linear-gradient(135deg,#fafcff,#f6f8ff)!important}.trace-json-tree :deep(.json-leaf b){color:#7c3aed!important;font-weight:650!important}.trace-json-tree :deep(.json-leaf){color:#075985!important;font-weight:520}.trace-json-tree :deep(summary){color:#0f766e!important;font-weight:650}
 .trace-workspace *{box-sizing:border-box}.trace-workspace button,.trace-workspace input{font-family:inherit}.trace-row-title b{font-weight:inherit;overflow:hidden;text-overflow:ellipsis}.trace-row-title{overflow:hidden}.trace-list-panel{min-height:0}.trace-search input{box-shadow:none}.trace-close{height:24px;width:24px;border:0;border-radius:6px;background:transparent;color:#788598;font-size:17px;cursor:pointer}.trace-close:hover{background:#f1f4f9}.trace-help{padding:5px 14px;border-top:1px solid #edf0f4;color:#8994a6;font:10px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace}.trace-pagination{display:flex;justify-content:space-between;align-items:center;padding:10px;font-size:10px}.trace-pagination button{border:1px solid #d8def0;border-radius:6px;background:#fafbff;padding:3px 7px;color:#555ba8}.trace-detail-body{overflow-wrap:anywhere}.trace-detail-body>p{color:#788598;font-size:12px;line-height:1.65}.trace-workspace>p{padding:8px 14px;margin:0;color:#788598;font-size:12px}
 @media(max-width:960px){.trace-main.has-selection{grid-template-columns:1fr}.trace-list-panel{min-height:0;flex-shrink:0}.trace-detail{min-height:260px}.trace-main.has-selection .trace-list-panel{min-height:330px}}
 @media(prefers-reduced-motion:reduce){.trace-row{transition:none}}

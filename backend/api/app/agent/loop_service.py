@@ -33,8 +33,10 @@ class _Entry:
     log: SessionLog
     runtime: AgentRuntime
     controller: tuple[str, str] | None = None
+    controller_client_id: str | None = None
     interactions: dict[str, asyncio.Future] = field(default_factory=dict)
     cleanup: asyncio.Task | None = None
+    disconnect_cleanup: asyncio.Task | None = None
     approval_gate: Callable | None = None
     approval_owner: tuple[str, str] | None = None
     writer_released: bool = False
@@ -43,16 +45,29 @@ class _Entry:
 class LoopService:
     """唯一平台装配点；测试可注入真实循环所用的可控模型，其他边界照常执行。"""
 
-    def __init__(self, session_factory=None, *, dependency_builder=None):
+    def __init__(
+        self,
+        session_factory=None,
+        *,
+        dependency_builder=None,
+        reconnect_grace_seconds: float | None = None,
+    ):
         if session_factory is None:
             from app.db import SessionLocal
 
             session_factory = SessionLocal
         self.session_factory = session_factory
         self.dependency_builder = dependency_builder
+        grace = (
+            settings.agent_loop_reconnect_grace_seconds
+            if reconnect_grace_seconds is None
+            else reconnect_grace_seconds
+        )
+        self.reconnect_grace_seconds = max(0.0, float(grace))
         self.entries: dict[str, _Entry] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._observers: dict[str, dict[str, tuple[str, Callable]]] = {}
+        self._connection_clients: dict[tuple[str, str], str | None] = {}
         self._broker = ApprovalBroker()
         self._closed = False
 
@@ -77,16 +92,44 @@ class LoopService:
             return WsAccess(write=True, trace=owner or user.role == "admin", reasoning=owner,
                             interactions=interactive)
 
-    async def attach(self, actor_id: str, session_id: str, connection_id: str, on_transient: Callable) -> None:
-        """登记订阅前结算无主中断回合，绝不接管存活写者。"""
+    async def attach(
+        self,
+        actor_id: str,
+        session_id: str,
+        connection_id: str,
+        on_transient: Callable,
+        client_id: str | None = None,
+    ) -> None:
+        """登记订阅；同成员在宽限期重连时迁移控制权，绝不抢占其他成员。"""
         await self.authorize(actor_id, session_id)
         async with self._locks.setdefault(session_id, asyncio.Lock()):
             if self._closed:
                 raise AppError(ErrorCode.VALIDATION, "服务正在关闭")
-            # 强杀后进程内 Runtime 已不存在；在回放前补齐终态，前端才不会把旧
-            # turn.start 一直视为运行中。活动实例仍持有 advisory lock，不能被接管。
-            await self._recover_abandoned_turn(actor_id, session_id)
+            entry = self.entries.get(session_id)
+            if (
+                entry is not None
+                and entry.runtime.running
+                and entry.controller is not None
+                and entry.controller[0] == actor_id
+                and (
+                    entry.disconnect_cleanup is not None
+                    or client_id is not None
+                    and client_id == entry.controller_client_id
+                )
+            ):
+                # 同账号多标签页不能只凭身份抢占；稳定 client_id 区分同一浏览器重连。
+                if entry.disconnect_cleanup is not None:
+                    entry.disconnect_cleanup.cancel()
+                    entry.disconnect_cleanup = None
+                entry.controller = (actor_id, connection_id)
+                entry.controller_client_id = client_id
+                self._bind_approval_owner(entry, actor_id, connection_id)
+            else:
+                # 强杀后进程内 Runtime 已不存在；在回放前补齐终态，前端才不会把旧
+                # turn.start 一直视为运行中。活动实例仍持有 advisory lock，不能被接管。
+                await self._recover_abandoned_turn(actor_id, session_id)
             self._observers.setdefault(session_id, {})[connection_id] = (actor_id, on_transient)
+            self._connection_clients[(session_id, connection_id)] = client_id
 
     async def _recover_abandoned_turn(self, actor_id: str, session_id: str) -> bool:
         """仅在成功取得已释放的 PG 写锁后，结算硬重启遗留的事实。"""
@@ -113,12 +156,24 @@ class LoopService:
             # 恢复只写补偿事实，不保留空闲 writer；下一条输入仍经 _submit 获取租约。
             log.close()
 
-    async def snapshot(self, actor_id: str, session_id: str) -> StreamSnapshot:
+    async def snapshot(
+        self,
+        actor_id: str,
+        session_id: str,
+        connection_id: str | None = None,
+    ) -> StreamSnapshot:
         """快照与 H 取自同一事务，交互卡按实际回执成员裁剪。"""
         access = await self.authorize(actor_id, session_id)
         log = SessionLog(session_id, self.session_factory)
         log.bridge_worker()
         cursor, state = log.snapshot(actor_id=actor_id)
+        entry = self.entries.get(session_id)
+        controller = entry.controller if entry is not None and entry.runtime.running else None
+        state["controller"] = {
+            "active": controller is not None,
+            "owned_by_actor": controller is not None and controller[0] == actor_id,
+            "owned_by_connection": controller == (actor_id, connection_id),
+        }
         if state.get("pending_confirm"):
             state["pending_confirm"] = scrub(state["pending_confirm"]) if access.interactions else {"restricted": True}
         return StreamSnapshot(cursor=cursor, state=state)
@@ -271,6 +326,9 @@ class LoopService:
             # 依赖装配可能等待 Runner 握手，提交输入前必须复验账号和会话权限。
             await self.authorize(actor_id, command.session_id)
             entry.controller = (actor_id, connection_id)
+            entry.controller_client_id = self._connection_clients.get(
+                (command.session_id, connection_id),
+            )
             self._bind_approval_owner(entry, actor_id, connection_id)
             effort = data.get("reasoning_effort")
             if effort is None and dependencies.request is not None:
@@ -283,6 +341,7 @@ class LoopService:
                 await self._close_resources(resources)
             finally:
                 entry.controller = None
+                entry.controller_client_id = None
             raise
         entry.cleanup = asyncio.create_task(self._finish(entry, resources))
         receipt = entry.log.command_receipt(actor_id, command.request_id)
@@ -371,17 +430,49 @@ class LoopService:
         return self._receipt(receipt, command.fingerprint)
 
     async def detach(self, actor_id: str, session_id: str, connection_id: str) -> None:
-        """只有当前控制连接断开才取消；观察者退出不影响执行。"""
+        """观察者立即注销；活动控制者先进入重连宽限期，超时后才取消。"""
         self._observers.get(session_id, {}).pop(connection_id, None)
+        self._connection_clients.pop((session_id, connection_id), None)
         async with self._locks.setdefault(session_id, asyncio.Lock()):
             entry = self.entries.get(session_id)
             if entry is None:
                 return
-            if entry.approval_owner == (actor_id, connection_id):
+            owner = (actor_id, connection_id)
+            if entry.controller == owner and entry.runtime.running:
+                if entry.disconnect_cleanup is not None:
+                    entry.disconnect_cleanup.cancel()
+                entry.disconnect_cleanup = asyncio.create_task(
+                    self._cancel_after_disconnect_grace(session_id, entry, owner)
+                )
+                return
+            if entry.approval_owner == owner:
                 entry.runtime.clear_approval_gate(entry.approval_gate)
                 entry.approval_owner = None
-            if entry.controller == (actor_id, connection_id):
+            if entry.controller == owner:
                 await entry.runtime.cancel()
+
+    async def _cancel_after_disconnect_grace(
+        self,
+        session_id: str,
+        entry: _Entry,
+        owner: tuple[str, str],
+    ) -> None:
+        """宽限期内允许同成员续接；过期后撤销连接级授权并终止回合。"""
+        current = asyncio.current_task()
+        try:
+            await asyncio.sleep(self.reconnect_grace_seconds)
+            async with self._locks.setdefault(session_id, asyncio.Lock()):
+                if entry.controller != owner or not entry.runtime.running:
+                    return
+                if entry.approval_owner == owner:
+                    entry.runtime.clear_approval_gate(entry.approval_gate)
+                    entry.approval_owner = None
+                await entry.runtime.cancel()
+        except asyncio.CancelledError:
+            return
+        finally:
+            if entry.disconnect_cleanup is current:
+                entry.disconnect_cleanup = None
 
     def _bind_approval_owner(self, entry: _Entry, actor_id: str, connection_id: str) -> None:
         """同连接跨回合复用固定 gate；换连接或成员先废除旧 always，再注册。"""
@@ -406,7 +497,11 @@ class LoopService:
             try:
                 await self._close_resources(resources)
             finally:
+                if entry.disconnect_cleanup is not None:
+                    entry.disconnect_cleanup.cancel()
+                    entry.disconnect_cleanup = None
                 entry.controller = None
+                entry.controller_client_id = None
                 if not entry.runtime.running:
                     self._release_writer(entry)
 
@@ -448,6 +543,9 @@ class LoopService:
         for session_id, entry in tuple(self.entries.items()):
             async with self._locks.setdefault(session_id, asyncio.Lock()):
                 try:
+                    if entry.disconnect_cleanup is not None:
+                        entry.disconnect_cleanup.cancel()
+                        entry.disconnect_cleanup = None
                     await entry.runtime.close()
                 except Exception as exc:
                     logger.warning("运行时关闭失败 type=%s", type(exc).__name__)
@@ -459,6 +557,7 @@ class LoopService:
                         entry.log.close()
                         self.entries.pop(session_id, None)
         self._observers.clear()
+        self._connection_clients.clear()
 
     async def _dependencies(self, entry: _Entry, actor_id: str, data: dict) -> tuple[TurnDependencies, list]:
         """默认平台装配与注入测试使用同一 Runtime/Attempt/Store/ToolBridge。"""

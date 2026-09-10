@@ -2,9 +2,9 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.87 |
-| 当前增量 | V1.87：AgentLoop `request_summary.context_meter` 新增系统提示词、Skill、MCP、原生工具、对话消息五类实际输入 token 明细。 |
-| WS v2 修订日期 | 2026-09-09（§4A，HTTP 消息标识、默认档位与 Anthropic 兼容流修复） |
+| 文档版本 | V1.89 |
+| 当前增量 | V1.89：AgentLoop WS 断线增加控制权续接宽限；`subscribed`/快照返回当前成员控制权；跨协议档继续问答时保留可移植历史并审计 opaque 状态降级；`tool.dispatch` 公开名称映射与工具契约版本。 |
+| WS v2 修订日期 | 2026-09-10（§4A，重连、模型切换与工具字段） |
 | 对应 PRD | V1.18（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.7.2（AgentLoop 单入口；JSON 仍以本文为准） |
@@ -20,6 +20,8 @@
 > V1.78（2026-09-09）：G6b 磁盘配额与终态契约组（F5 §6.6/M-R3-7）+ G6 评审 M1–M3 合并登记（G6a 升档审批主体已随 #235 于 2026-09-08 合入 main，其 `DENIED` 错误码与 `tool_approval` 升档卡语义见本版事件表与错误码表）。**G6b**：新增配置 `workspace_quota_bytes`（默认 1GiB）与 `sandbox_volume_watermark_bytes`（默认 512MiB）——workspace-write 档写前容量检查（卷水位熔断优先于每目录配额，TTL 缓存 du，VALIDATION 码不触发升档链）；`approval_terminal` outcome 成组扩展 `voided`（ack 行锁内检查点预检缺失作废）/`recovery_failed`（resume 恢复失败）。**评审修订**：审批卡终态按卡型归类（M3）——`approval_terminal` payload 新增可选 `card_type`（`"approval"`|`"clarify"`，缺省 `"approval"`——旧事件与旧客户端按缺省解释，无破坏）：`recovery_failed` 对澄清卡恢复失败同样广播并携带 `card_type="clarify"`（`_start_card_resume` 按发起卡型携带，前端按卡型路由 → ClarifyCard 增 `failed` 终态展示）；`expired`/`voided`/`cancelled` 恒为审批卡（payload 均带 `card_type="approval"`）。错误码 `DENIED`（403）口径收敛为 **bash 只读档拒写**——read-only 只约束 bash 持久写（绑定会话内文件工具仍可写，口径见《工作区与沙箱设计方案》§6.1.1），DENIED 文案不指引升档通道（该通道受 `agent_escalation_approval_enabled` 门控）；磁盘配额卷水位核算失败（disk_usage OSError）改为 fail-closed 拒写（§6.6，不静默放行，核算恢复自动放行）。
 >
 > V1.87（2026-09-09）：`assistant.start.data.request_summary.context_meter` 增量提供系统提示词、Skill、MCP、原生工具和对话消息的实际输入 token。它们都由本轮协议序列化请求计量，五项合计等于 `input_tokens`；未注入的来源如实为 0，输出预留不参与前端「已用」比例。
+
+> V1.88（2026-09-10）：每个 AgentLoop 模型 Attempt 在终态可选携带 `latency_ms`（单调时钟毫秒）与既有 `usage`；前端按 Attempt 而非整轮累计显示消耗和耗时，并在对话、轨迹列表及事件顺序轴显示 `correlation.turn`。正文、代码段和脱敏轨迹复制均在 Clipboard API 不可用时使用浏览器兼容回退，既有 ACL 与脱敏边界不变。
 
 > V1.81（2026-09-09）：不新增 REST 或 WS 字段。`subscribe` 的 attach 阶段在回放前检查持久开放回合：只有成功取得已释放的 PostgreSQL advisory writer lock，才结算硬重启遗留的 `turn.end(reason="interrupted")`；锁仍被存活实例持有时只订阅，不转移控制权或关闭其回合。每回合按所选 Agent 协议档读取已保存的补充提示词，核心提示词优先、补充段不可缓存，并在读取时再次拒绝疑似密钥或接管性内容。`task.create` 的评测档和裁判档使用全员同权协议档目录，`created_by` 仅为审计字段。CI 同时运行三组 Loop PostgreSQL 夹具和 Runner 回归；真实 cgroup v2 进程树取消仍需部署环境验收。
 >
@@ -1817,7 +1819,7 @@ MCP/平台短工具中文名（ToolCard 标题；原生基础工具 `read` / `wr
 ---
 
 
-## 4A. Agent Loop WebSocket v2（V1.81，2026-09-09）
+## 4A. Agent Loop WebSocket v2（V1.89，2026-09-10）
 
 本节按《AgentLoop后端架构设计》V0.6 §11 登记，独立于 §4 legacy 协议。
 `SessionOut.engine_version` 仍可返回 `"legacy" | "agent_loop_v2"`，用于历史记录审计；
@@ -1840,7 +1842,7 @@ request_id/session_id/交互标识为非空字符串，长度不超过 128；non
 
 | type | data（未注明可选即必填） |
 | :--- | :--- |
-| subscribe | `after_cursor:int>=0=0, view:"semantic"="semantic"` |
+| subscribe | `after_cursor:int>=0=0, view:"semantic"="semantic", client_id?:string`；v2.2 前端在同一实例的 socket 重建间保持稳定，用于区分重连与同账号另一标签页，不替代短票鉴权 |
 | unsubscribe | 空对象 |
 | turn.submit | `client_message_id, content`；可选 `attachment_refs:string[]=[], profile_id, reasoning_effort:off/low/medium/high/xhigh/max`；`profile_id` 只能是平台协议档 ID，附件只接受平台引用，不接受路径、模型地址、密钥或任意供应商参数 |
 | turn.cancel | `turn_id` |
@@ -1867,9 +1869,13 @@ turn.cancel 只请求指定 Agent 回合停止，最终以 turn.end 确认为准
 `runtime/command`，data 为 `{fingerprint,data,correlation}`；这是持久命令回执，
 不是原始命令请求，不产生额外语义 cursor 或回放触发的 command.accepted。
 `assistant/attempt_start` 增补可选 `history_selection`（algorithm、indices、
-message_count、input_fingerprint）及 `fingerprint_algorithm="dsh-json-v1"`。
+message_count、input_fingerprint、transformations）及 `fingerprint_algorithm="dsh-json-v1"`。
 indices 为对 `history_upto_seq` 所界定的派生消息列表的零基有序选择，不是事实 seq。
-旧事实可省略新增字段；传输版本仍为 2，stream 目录保持 v2.1。
+正常窗口选择使用 `message_indices.v1`；跨模型/协议档时若旧助手消息携带完整但与
+当前请求不兼容的 `protocol_state`，请求只删除该字段并使用 `message_indices.v2`，
+`transformations[]` 登记 `{index,removed_fields:["protocol_state"],reason:"model_compatibility"}`。
+助手正文、工具调用和工具结果不得被改写或删除；残缺 opaque 状态仍严格拒绝。
+旧事实可省略新增字段；传输版本仍为 2，stream 目录升级为 v2.2（前端滚动兼容 v2.1）。
 上述追踪字段仅供已授权 trace；普通 assistant.start 继续只公开 header/history 引用。
 runtime/command 的 trace 仅投影 fingerprint、接受结果身份和关联字段；原始 request、
 请求凭据、header、opaque 状态与未登记扩展不得透传。事实目录 schema 本身不含凭据。
@@ -1889,9 +1895,15 @@ source_seq 仅引用 Agent 事实，不替代 session_stream cursor。
 语义字段采用白名单投影；工具内容与原始参数保留在事实存储，tool.result 仅发送
 name/status/synthetic/display/error_code/exit_code 等展示字段，六态为
 succeeded/failed/denied/cancelled/not_started/outcome_unknown。
+`tool.dispatch` 增量公开 `execution_id,registry_name,wire_name,tool_contract_version`，
+用于解释模型工具名到授权注册名的映射及参数契约版本；`normalized_args`、沙箱路径、
+Runner 请求和原始参数仍不进入普通语义流。
 assistant/message 事实稳定产生 assistant.message 和 assistant.end 两个 projection_kind；
 失败/放弃 assistant/attempt 产生 assistant.end，不能依赖瞬态 end。
 assistant.message 的工具列表只投影调用身份和名称，不携带 args/arguments_raw。
+`assistant.message.data.latency_ms` 与对应 `assistant.end.data.latency_ms` 可选，单位为毫秒，
+表示该次模型 Attempt 的服务端单调时钟耗时；`assistant.message.data.usage` 保持供应商
+已授权 token 计量。两项都不是整回合或工具链累计值；旧事实可缺省，前端不得推算。
 错误只发送平台标准错误码与固定安全摘要；未知异常不得外发原文、SQL 或 traceback。
 system、protocol_state、provider_options、密钥、请求头和原始上下文不进入普通语义或 trace 帧。
 
@@ -1908,7 +1920,7 @@ trace.event 的 `data:{source:"history"|"runtime",event:{seq,type,ts,data}}` 使
 attach 在建立回放前检查持久开放回合；只在已成功取得释放的 PostgreSQL writer lock
 后补齐 `turn.end(reason="interrupted")`，锁仍被存活实例持有时只回放而不接管。随后注册
 瞬态接收，再在一致性快照读高水位 H 和最早保留 cursor。
-subscribed 返回 `{cursor:H}`；合法游标只回放 (after_cursor,H]，然后
+subscribed 返回 `{cursor:H,controller:{active,owned_by_actor,owned_by_connection}}`；合法游标只回放 (after_cursor,H]，然后
 replay.completed `{cursor:H}`，再发送连续的 >H 已提交前缀。
 持久读取按 cursor 排序并校验连续性，重复行去重；不能依通知先后推进 cursor。
 不存在、超水位、早于保留窗口的游标返回 resync.required：
@@ -1918,10 +1930,14 @@ replay.completed `{cursor:H}`，再发送连续的 >H 已提交前缀。
 
 每连接有界发送队列和分页读取；优先丢瞬态，持久/控制帧仍超限时关闭 4408，
 send 超时同样关闭 4408。Runtime 的事实提交不等待网络。
-断连/退订调用 detach；仅释放并取消该连接实际控制的活动回合，观察者不取消，
-重连/重复命令不自动抢占旧控制权。接收循环只等短事务接受结果，不 await 整轮图。
+断连/退订调用 detach；观察者立即注销。活动控制连接断开后进入可配置宽限期
+`AGENT_LOOP_RECONNECT_GRACE_SECONDS`（默认 20 秒），期间同一已鉴权成员且携带相同稳定
+`client_id` 的新连接可续接控制权和待交互回合；同账号另一标签页和不同成员均不可抢占。
+宽限到期仍未续接才撤销连接级 always 授权并
+请求 Runtime.cancel。显式 turn.cancel 仍立即生效。快照同样返回 controller，前端以
+服务端状态替换断线前本地值。接收循环只等短事务接受结果，不 await 整轮图。
 
-### 4A.5 前端展示增量（V1.81，2026-09-09）
+### 4A.5 前端展示增量（V1.88，2026-09-10）
 
 - `GET /api/sessions/agent-ui` 返回草稿能力；`GET /api/sessions/{id}/agent-ui` 复验会话可见性与 v2 引擎。响应 `version=1, enabled, profile, profiles, allowed_efforts, default_effort, permissions{write,trace,reasoning,interactions,settings}, controller{active,owned_by_actor}, attachments`。`profile` 与 `profiles[]` 同形，均只包含 `id,name,version,model,protocol,allowed_efforts,default_effort`；服务端逐档通过同一 resolver 校验，绝不返回 base_url、API Key 或供应商参数。顶层 `allowed_efforts/default_effort` 保留为默认协议档兼容字段。controller 不授予当前连接控制权。
 - 每次 `turn.submit` 都以提交的 `profile_id` 与 `reasoning_effort` 重新解析协议档；协议档不存在、未声明 Agent 用途、无有效凭据或思考档位不支持时返回 `VALIDATION`。前端本地偏好只能辅助预选，不能替代服务端解析。
@@ -1932,6 +1948,7 @@ send 超时同样关闭 4408。Runtime 的事实提交不等待网络。
 - `tool.call/result.data.display` 为 ToolDisplay v1：`version,title,registry_name,wire_name,arguments_preview,result_preview,target,format,truncated,unavailable_reason`，预览最多 12000 字符。参数按工具字段白名单生成，失败仅公开错误码；未知工具有明确缺失说明，不开放任意内部结果。
 - `assistant.start.data.request_summary` 提供实际 `model,provider,protocol,profile_id,profile_version,reasoning_effort,max_tokens,input_fingerprint,tools[{name,parameters_schema}],context_meter`。context_meter 为实际请求的同源序列化估算，字段 `basis,estimated,profile_version,input_fingerprint,history_upto_seq,capacity,input_tokens,reserved_output_tokens,system_tokens,skills_tokens,mcp_tokens,tools_tokens,conversation_tokens`；五类输入明细之和等于 `input_tokens`，仅计已注入本轮模型请求的内容，当前未注入 Skill/MCP 时如实为 0；旧事实缺统计时为 null，不显示为 0。
 - `assistant.message.data.reasoning_preview` 为持久思考正文，仅 reasoning ACL 允许时发送。禁止出现在普通 trace 或撤权后的快照里。`question.resolved` 增 `outcome,answers`（仍受 interactions ACL）。
+- 对话中的每个模型 Attempt 显示所属“第 N 轮 / 步骤”、本次 token 消耗和耗时；轨迹列表与事件顺序轴按 `correlation.turn` 标记“第 N 轮”。复制正文、代码段或脱敏轨迹时优先使用 Clipboard API，权限或非安全上下文不可用时可回退到浏览器内临时选择复制；复制内容仍受既有脱敏边界约束。
 - 恢复快照增加有序 `timeline`（完整语义信封，受逐帧 ACL）；与 H 和当前用户权限在同一行锁事务读取。旧分组投影保留，记录增 `first_cursor`，新 reader 以 timeline 为权威，禁止重复追加 messages。
 - `question.respond.answers[].answer` 接受字符串或字符串数组；多选使用标签数组，包含逗号的标签不切分。旧字符串多选仍兼容逗号编码。数组只允许用于 checkbox，多选规范化后复用 validate_answers。
 - 同一连接对相同 session 再次 subscribe 仅重启读取流，保留控制权；跨会话须退订。附件元数据与内容接口复验上传者或可见会话引用权限，未知/无权限统一 NOT_FOUND。
@@ -1948,12 +1965,12 @@ WS 类型定义在 `routers/ws_v2.py`：`WsAccess(write,trace,reasoning,interact
 | :--- | :--- |
 | authenticate(ticket:str) | str，复用旧短票消费及用户校验，返回服务端 actor ID |
 | authorize(actor_id,session_id) | WsAccess；复用 session ACL，验证引擎版本；权限变化实时读取 |
-| attach(actor_id,session_id,connection_id,on_transient) | 注册 Callable[[dict],None]；仅在取得已释放 writer lock 时结算硬重启遗留回合，绝不转移存活控制权 |
+| attach(actor_id,session_id,connection_id,on_transient) | 注册 Callable[[dict],None]；取得已释放 writer lock 时结算硬重启遗留回合，或由同成员在当前进程宽限期续接控制权；绝不转移给其他成员 |
 | snapshot(actor_id,session_id) | StreamSnapshot；state 经授权，与 cursor 同一数据库快照 |
 | read_stream(session_id,after_cursor,limit) | list[dict]，完整 persistent 信封、按已提交 cursor 升序 |
 | read_trace(session_id,after_seq,limit) | list[dict]，规范事实、按 seq 升序 |
 | execute_command(actor_id,connection_id,command) | CommandReceipt；行锁事务幂等接受、校验控制权/交互、调用 Runtime 快速 start_turn/cancel；不 wait 整轮 |
-| detach(actor_id,session_id,connection_id) | 幂等注销瞬态订阅；仅 owner connection 请求 Runtime.cancel |
+| detach(actor_id,session_id,connection_id) | 幂等注销瞬态订阅；owner connection 进入有限宽限，超时仍未续接才请求 Runtime.cancel |
 
 `app.agent.events.project_fact(fact)` 返回除 cursor 外完整 persistent 信封列表（含稳定 projection_kind）；稳定 projection_kind 与源事实 ID 联合去重。
 主服务在事实同事务分配 cursor，用
@@ -2985,3 +3002,34 @@ Composer 上方抽屉；点击确认或取消即收回，消息流只保留关�
 | `backend/api/app/llm/providers/options.py`、`llm/loop_contracts.py` | 兼容 effort/预算映射，限制 output_config 结构 |
 | `frontend/src/components/agent/loop/ThinkingControl.vue` | 单候选明确不可调节 |
 | `backend/api/tests/test_loop_profile_selection.py`、`test_loop_llm.py`、`test_loop_llm_sdk.py`、`frontend/tests/e2e/agentLoop.spec.ts` | 验证 UI 候选、WS 档位、SDK HTTP 参数与换档后的工具回填 |
+
+**V1.88（2026-09-10）— ReAct Attempt 指标、回合轨迹与复制兼容**
+
+每个模型 Attempt 的耗时以服务端单调时钟记录并随终态公开，token 沿用已授权的
+provider usage；前端按 Attempt 展示，禁止将工具耗时或整轮时长混入。轨迹的列表、
+时间轴和检查器共用 `correlation.turn`，旧事实没有该字段时明确显示“未归属”。
+
+| 实际修改文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/agent/loop.py` | 对每次模型 Attempt 独立测量耗时，并写入成功、失败和中断终态事实 |
+| `backend/api/app/agent/events.py` / `harness/contracts/loop_events.py` | 白名单投影和事实 Schema 增加可选 `latency_ms` |
+| `backend/api/tests/test_loop_ws_protocol.py` | 覆盖耗时投影与旧事实无字段兼容 |
+| `frontend/src/components/agent/loop/AgentWorkspace.vue` | 展示逐 Attempt 的回合、步骤、token、耗时与复制反馈 |
+| `frontend/src/components/agent/loop/TraceWorkspace.vue` / `ToolRunCard.vue` | 列表和顺序轴回合标签、计时面板、清晰的代码/工具输出样式 |
+| `frontend/src/utils/clipboard.ts` / `components/agent/MarkdownView.vue` | 统一 Clipboard API 与浏览器 selection 回退，代码复制可用 |
+
+**V1.89（2026-09-10）— AgentLoop 重连、跨模型续答与工具调度字段**
+
+短暂网络中断不再立即取消正在执行的回合；同一前端实例可在 20 秒默认宽限期内用新连接
+续接控制权，服务端通过订阅控制帧和快照给出权威控制状态。切换协议档时仅移除已确认
+与当前模型不兼容的供应商 opaque 状态，正文及完整工具历史继续参与下一问，并以
+`history_selection` v2 留痕。工具调度语义公开名称映射与契约版本，不扩大参数暴露面。
+
+| 实际修改文件 | 作用 |
+| :--- | :--- |
+| `.env.example` / `docker-compose.yml` / `backend/api/app/config.py` / `agent/loop_service.py` / `routers/ws_v2.py` | 重连宽限配置、稳定 client_id 控制权迁移、服务端 controller 快照与 stream v2.2 协商 |
+| `backend/api/app/agent/loop_wiring.py` / `agent/loop.py` | 跨模型可移植历史降级与 `message_indices.v2` 可重建审计 |
+| `backend/api/app/agent/events.py` / `harness/contracts/loop_events.py` | 工具调度公开字段、历史转换 Schema 与脱敏 trace 投影 |
+| `frontend/src/api/agentLoopWs.ts` / `agentLoopTypes.ts` / `agent/loop/reducer.ts` | 重连后采用服务端控制权、兼容 v2.1/v2.2、补齐工具调度 DTO |
+| `backend/api/tests/test_loop_runtime.py` / `test_loop_wiring.py` / `test_loop_ws_protocol.py` / `test_loop_ws_handler.py`；`frontend/tests/agentLoop.test.mjs` / `agentLoopWs.test.mjs` | 覆盖续接超时、多标签页隔离、模型切换、字段隔离及快照控制权 |
+| `docs/AI测试与评估平台-API.md` | V1.89 契约、默认值与修改清单 |

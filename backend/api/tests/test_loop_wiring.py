@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import replace
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
@@ -484,24 +484,79 @@ async def test_business_confirmation_revalidates_and_enqueues_in_transaction(wir
 
 
 @pytest.mark.asyncio
-async def test_model_switch_rejected_before_user_acceptance(wired):
-    """历史带旧模型签名时预检必须拒绝，不能先 accepted 再在适配器失败。"""
+async def test_model_switch_keeps_portable_history_and_drops_old_opaque_state(wired):
+    """切换模型保留正文和工具历史，只删除已确认不兼容的供应商 opaque 状态。"""
     wired.entry.log.append("user/message", {"turn": 1, "content": "old input"})
     wired.entry.log.append("assistant/message", {"turn": 1, "message": {
-        "role": "assistant", "content": "old answer", "protocol_state": {
+        "role": "assistant", "content": "old answer",
+        "tool_calls": [{"id": "old-call", "name": "read", "args": {"path": "a.txt"}}],
+        "protocol_state": {
             "version": 1, "provider": "anthropic", "protocol": "anthropic_messages",
             "model": "claude-sonnet-4", "compatibility_key": "old-key", "replay_policy": "items_v1", "items": [],
         }}})
+    wired.entry.log.append("tool/result", {
+        "turn": 1, "call_id": "old-call", "name": "read",
+        "content": "old tool result", "status": "succeeded",
+    })
     before = wired.entry.log.read()
-    command = SimpleNamespace(data={"content": "new input", "client_message_id": "new"},
-                              request_id="req", session_id="session", fingerprint="fp")
-    with pytest.raises(loop_service.AppError) as error:
-        await wired.service._submit(wired.entry, "actor", "connection", command)
-    assert error.value.code == loop_service.ErrorCode.VALIDATION
+    dependencies, resources = await loop_wiring.build_dependencies(
+        wired.service, wired.entry, "actor", {"content": "new input"},
+    )
+    assert dependencies.request.messages == [
+        {"role": "user", "content": "old input"},
+        {
+            "role": "assistant", "content": "old answer",
+            "tool_calls": [{"id": "old-call", "name": "read", "args": {"path": "a.txt"}}],
+        },
+        {
+            "role": "tool", "tool_call_id": "old-call", "name": "read",
+            "content": "old tool result", "is_error": False,
+        },
+        {"role": "user", "content": "new input"},
+    ]
     assert wired.entry.log.read() == before
-    wired.entry.runtime.submit.assert_not_awaited()
+    await wired.service._close_resources(resources)
     assert wired.closed == ["mcp", "sdk"]
-    assert wired.pool["active"] == 0 and wired.entry.writer_released
+
+
+@pytest.mark.asyncio
+async def test_controller_reconnects_during_grace_then_disconnect_timeout_cancels(wired):
+    """同成员新连接可续接运行回合；再次断开且宽限到期后才真正取消。"""
+    entry = wired.entry
+    entry.runtime.running = True
+    entry.runtime.cancel = AsyncMock()
+    entry.runtime.clear_approval_gate = Mock()
+    entry.controller = ("actor", "old-connection")
+    entry.controller_client_id = "client-a"
+    entry.approval_gate = Mock()
+    entry.approval_owner = entry.controller
+    wired.service.entries["session"] = entry
+    wired.service.reconnect_grace_seconds = 60
+
+    await wired.service.attach(
+        "actor", "session", "other-tab", lambda _frame: None, "client-b",
+    )
+    assert entry.controller == ("actor", "old-connection")
+
+    await wired.service.detach("actor", "session", "old-connection")
+    assert entry.disconnect_cleanup is not None
+    entry.runtime.cancel.assert_not_awaited()
+    await wired.service.attach(
+        "actor", "session", "new-connection", lambda _frame: None, "client-a",
+    )
+    await asyncio.sleep(0)
+
+    assert entry.controller == ("actor", "new-connection")
+    assert entry.approval_owner == ("actor", "new-connection")
+    assert entry.disconnect_cleanup is None
+    entry.runtime.cancel.assert_not_awaited()
+
+    wired.service.reconnect_grace_seconds = 0
+    await wired.service.detach("actor", "session", "new-connection")
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    entry.runtime.cancel.assert_awaited_once()
+    assert entry.approval_owner is None
 
 
 @pytest.mark.asyncio

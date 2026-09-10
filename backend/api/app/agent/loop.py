@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import time
 import uuid
 from collections.abc import Callable
 from copy import deepcopy
@@ -66,26 +67,57 @@ def _override_reasoning(request: LlmRequest, effort: ReasoningEffort) -> LlmRequ
 
 
 def _history_selection(messages: list[Message], selected: list[Message]) -> dict[str, Any]:
-    """以有序索引追踪真实模型输入，不额外持久化一份历史正文。"""
+    """以有序索引追踪真实输入，并登记模型切换时唯一允许的字段降级。"""
+    def match(source: Message, target: Message) -> tuple[bool, list[str]]:
+        """只允许删除供应商 opaque 状态，任何正文或工具字段改写仍拒绝。"""
+        if source == target:
+            return True, []
+        if isinstance(source, dict) and "protocol_state" in source:
+            portable = deepcopy(source)
+            portable.pop("protocol_state", None)
+            if portable == target:
+                return True, ["protocol_state"]
+        return False, []
+
     start = len(messages) - len(selected)
-    if start >= 0 and messages[start:] == selected:
+    suffix = [match(source, target) for source, target in zip(messages[start:], selected)] if start >= 0 else []
+    transformations: list[dict[str, Any]] = []
+    if start >= 0 and len(suffix) == len(selected) and all(result[0] for result in suffix):
         indices = list(range(start, len(messages)))
+        transformations = [
+            {"index": index, "removed_fields": fields, "reason": "model_compatibility"}
+            for index, (_matched, fields) in zip(indices, suffix) if fields
+        ]
     else:
         indices, position = [], 0
         for message in selected:
-            while position < len(messages) and messages[position] != message:
+            fields: list[str] = []
+            while position < len(messages):
+                matched, fields = match(messages[position], message)
+                if matched:
+                    break
                 position += 1
             if position == len(messages):
                 raise LlmRequestError("模型输入无法对应持久历史", code="history_selection")
             indices.append(position)
+            if fields:
+                transformations.append({
+                    "index": position,
+                    "removed_fields": fields,
+                    "reason": "model_compatibility",
+                })
             position += 1
-    return {
-        "algorithm": "message_indices.v1", "indices": indices,
+    result = {
+        "algorithm": "message_indices.v2" if transformations else "message_indices.v1",
+        "indices": indices,
         "message_count": len(messages),
         "input_fingerprint": hashlib.sha256(
             json.dumps(selected, sort_keys=True, ensure_ascii=False).encode("utf-8")
         ).hexdigest(),
     }
+    if transformations:
+        result["transformations"] = transformations
+    return result
 
 
 @dataclass(frozen=True)
@@ -347,6 +379,13 @@ async def build_agent(
         # 先缓存流片段，只有收到 Done 并通过校验后才形成正式 assistant/message。
         # 因此尚未完成的工具参数不会被提前执行。
         attempt = AssistantAttempt()
+        # 每次 Attempt 独立计时；同一 Step 的网络重试不能混入首次调用耗时。
+        attempt_started_at = time.perf_counter()
+
+        def attempt_latency_ms() -> int:
+            """返回本次模型流请求的单调时钟耗时，避免受系统时钟调整影响。"""
+            return max(0, round((time.perf_counter() - attempt_started_at) * 1000))
+
         try:
             model_stream = current.adapter.stream(request)
             try:
@@ -396,6 +435,7 @@ async def build_agent(
                         "content": attempt.text,
                         "reasoning_content": attempt.reasoning_content,
                         "interrupted": True,
+                        "latency_ms": attempt_latency_ms(),
                     },
                 )
                 _emit(
@@ -410,6 +450,7 @@ async def build_agent(
                     usage={},
                     finish_reason="cancelled",
                     interrupted=True,
+                    latency_ms=attempt_latency_ms(),
                 )
                 _emit(
                     "assistant_end",
@@ -420,6 +461,7 @@ async def build_agent(
                     outcome="committed",
                     committed_seq=committed["seq"],
                     interrupted=True,
+                    latency_ms=attempt_latency_ms(),
                 )
             else:
                 _emit(
@@ -445,6 +487,7 @@ async def build_agent(
                     "error": error_message,
                     "error_code": error_code,
                     "usage": attempt.done.usage if attempt.done else {},
+                    "latency_ms": attempt_latency_ms(),
                 },
             )
             _emit(
@@ -457,6 +500,7 @@ async def build_agent(
                 committed_seq=failed["seq"],
                 error=error_message,
                 error_code=error_code,
+                latency_ms=attempt_latency_ms(),
             )
             return {
                 "attempt_id": attempt_id,
@@ -482,6 +526,7 @@ async def build_agent(
                     "attempt_id": attempt_id,
                     "error": "provider stream ended without a finish reason",
                     "error_code": "missing_finish",
+                    "latency_ms": attempt_latency_ms(),
                 },
             )
             _emit(
@@ -494,6 +539,7 @@ async def build_agent(
                 committed_seq=failed["seq"],
                 error="provider stream ended without a finish reason",
                 error_code="missing_finish",
+                latency_ms=attempt_latency_ms(),
             )
             return {
                 "attempt_id": attempt_id,
@@ -544,6 +590,7 @@ async def build_agent(
                     "error": "; ".join(invalid),
                     "error_code": error_code,
                     "usage": attempt.done.usage,
+                    "latency_ms": attempt_latency_ms(),
                 },
             )
             _emit(
@@ -556,6 +603,7 @@ async def build_agent(
                 committed_seq=failed["seq"],
                 error="; ".join(invalid),
                 error_code=error_code,
+                latency_ms=attempt_latency_ms(),
             )
             return {
                 "attempt_id": attempt_id,
@@ -589,6 +637,7 @@ async def build_agent(
                 "reasoning_content": assistant.get("reasoning_content"),
                 "usage": attempt.done.usage,
                 "finish_reason": attempt.done.finish_reason,
+                "latency_ms": attempt_latency_ms(),
             },
         )
         _emit(
@@ -604,6 +653,7 @@ async def build_agent(
             finish_reason=attempt.done.finish_reason,
             source=assistant.get("source"),
             interrupted=False,
+            latency_ms=attempt_latency_ms(),
         )
         _emit(
             "assistant_end",
@@ -614,6 +664,7 @@ async def build_agent(
             outcome="committed",
             committed_seq=committed["seq"],
             interrupted=False,
+            latency_ms=attempt_latency_ms(),
         )
         terminal_error = _terminal_failure(attempt.done.finish_reason)
         return {

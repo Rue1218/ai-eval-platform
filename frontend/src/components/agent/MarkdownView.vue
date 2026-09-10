@@ -21,6 +21,7 @@
 import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue'
 import mermaid from 'mermaid'
 import StructuredDataView from './StructuredDataView.vue'
+import { copyText } from '../../utils/clipboard'
 
 const props = withDefaults(
   defineProps<{
@@ -578,7 +579,8 @@ function handleContainerClick(e: MouseEvent): void {
   if (copyBtn) {
     const code = copyBtn.getAttribute('data-copy')
     if (code) {
-      navigator.clipboard.writeText(code).then(() => {
+      void copyText(code).then((copied) => {
+        if (!copied) return
         const textSpan = copyBtn.querySelector('.md-copy-text') || copyBtn
         const originalText = textSpan.textContent || '复制'
         textSpan.textContent = '已复制 ✓'

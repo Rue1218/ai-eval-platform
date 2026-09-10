@@ -45,6 +45,10 @@ export interface ToolDisplay {
 /** 业务记录保持稳定引用，页面展开状态由组件管理。 */
 export interface LoopRecord extends Data { key: string; first_cursor: number; correlation: Correlation; event: string }
 export interface Attempt extends LoopRecord { text: string; reasoning: string; ended: boolean; chunks: Record<string, number>; request_summary?: Data }
-export interface ToolRun extends LoopRecord { name: string; status: ToolStatus; display: ToolDisplay; synthetic?: boolean }
+export interface ToolRun extends LoopRecord {
+  name: string; status: ToolStatus; display: ToolDisplay; synthetic?: boolean
+  /** 调度边界公开名称映射与契约版本，不包含实际工具参数。 */
+  registry_name?: string; wire_name?: string; tool_contract_version?: string
+}
 export interface InteractionRecord extends LoopRecord { interaction_id: string; kind: string; resolved: boolean; submitting?: boolean; restricted?: boolean }
 export type Connection = 'connecting' | 'online' | 'reconnecting' | 'offline' | 'revoked'
