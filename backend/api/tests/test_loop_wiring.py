@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import replace
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
@@ -486,50 +486,79 @@ async def test_business_confirmation_revalidates_and_enqueues_in_transaction(wir
 
 
 @pytest.mark.asyncio
-async def test_model_switch_migrates_text_history_before_user_acceptance(wired):
-    """无工具历史切换模型时只剔除旧签名，正文仍在首次请求前保留。"""
+async def test_model_switch_keeps_portable_history_and_drops_old_opaque_state(wired):
+    """切换模型保留正文和工具历史，只删除已确认不兼容的供应商 opaque 状态。"""
     wired.entry.log.append("user/message", {"turn": 1, "content": "old input"})
     wired.entry.log.append("assistant/message", {"turn": 1, "message": {
-        "role": "assistant", "content": "old answer", "protocol_state": {
+        "role": "assistant", "content": "old answer",
+        "tool_calls": [{"id": "old-call", "name": "read", "args": {"path": "a.txt"}}],
+        "protocol_state": {
             "version": 1, "provider": "anthropic", "protocol": "anthropic_messages",
             "model": "claude-sonnet-4", "compatibility_key": "old-key", "replay_policy": "items_v1", "items": [],
         }}})
+    wired.entry.log.append("tool/result", {
+        "turn": 1, "call_id": "old-call", "name": "read",
+        "content": "old tool result", "status": "succeeded",
+    })
     before = wired.entry.log.read()
     dependencies, resources = await loop_wiring.build_dependencies(
-        wired.service, wired.entry, "actor", {"content": "new input"}
+        wired.service, wired.entry, "actor", {"content": "new input"},
     )
-    assert wired.entry.log.read() == before
-    assert dependencies.history_transition_reason == "model_switch_text_only"
-    assert dependencies.protocol_state_compatibility is not None
-    assert [message["content"] for message in dependencies.request.messages] == [
-        "old input", "old answer", "new input",
+    assert dependencies.request.messages == [
+        {"role": "user", "content": "old input"},
+        {
+            "role": "assistant", "content": "old answer",
+            "tool_calls": [{"id": "old-call", "name": "read", "args": {"path": "a.txt"}}],
+        },
+        {
+            "role": "tool", "tool_call_id": "old-call", "name": "read",
+            "content": "old tool result", "is_error": False,
+        },
+        {"role": "user", "content": "new input"},
     ]
-    assert "protocol_state" not in dependencies.request.messages[1]
-    assert "reasoning_content" not in dependencies.request.messages[1]
+    assert wired.entry.log.read() == before
     await wired.service._close_resources(resources)
     assert wired.closed == ["mcp", "sdk"]
 
 
 @pytest.mark.asyncio
-async def test_model_switch_with_tool_history_requires_new_session(wired):
-    """工具 wire 记录不可跨模型伪造，带工具历史仍需显式新建会话。"""
-    wired.entry.log.append("user/message", {"turn": 1, "content": "old input"})
-    wired.entry.log.append("assistant/message", {"turn": 1, "message": {
-        "role": "assistant", "content": "", "tool_calls": [
-            {"id": "call-1", "name": "read", "args": {"file_path": "a.txt"}},
-        ], "protocol_state": {
-            "version": 1, "provider": "anthropic", "protocol": "anthropic_messages",
-            "model": "claude-sonnet-4", "compatibility_key": "old-key", "replay_policy": "items_v1", "items": [],
-        }}})
-    wired.entry.log.append("tool/result", {"call_id": "call-1", "name": "read", "content": "done"})
+async def test_controller_reconnects_during_grace_then_disconnect_timeout_cancels(wired):
+    """同成员新连接可续接运行回合；再次断开且宽限到期后才真正取消。"""
+    entry = wired.entry
+    entry.runtime.running = True
+    entry.runtime.cancel = AsyncMock()
+    entry.runtime.clear_approval_gate = Mock()
+    entry.controller = ("actor", "old-connection")
+    entry.controller_client_id = "client-a"
+    entry.approval_gate = Mock()
+    entry.approval_owner = entry.controller
+    wired.service.entries["session"] = entry
+    wired.service.reconnect_grace_seconds = 60
 
-    with pytest.raises(loop_service.AppError) as error:
-        await loop_wiring.build_dependencies(
-            wired.service, wired.entry, "actor", {"content": "new input"}
-        )
-    assert error.value.code == loop_service.ErrorCode.VALIDATION
-    assert error.value.message == "当前会话包含工具调用，切换模型请新建会话"
-    assert wired.closed == ["mcp", "sdk"]
+    await wired.service.attach(
+        "actor", "session", "other-tab", lambda _frame: None, "client-b",
+    )
+    assert entry.controller == ("actor", "old-connection")
+
+    await wired.service.detach("actor", "session", "old-connection")
+    assert entry.disconnect_cleanup is not None
+    entry.runtime.cancel.assert_not_awaited()
+    await wired.service.attach(
+        "actor", "session", "new-connection", lambda _frame: None, "client-a",
+    )
+    await asyncio.sleep(0)
+
+    assert entry.controller == ("actor", "new-connection")
+    assert entry.approval_owner == ("actor", "new-connection")
+    assert entry.disconnect_cleanup is None
+    entry.runtime.cancel.assert_not_awaited()
+
+    wired.service.reconnect_grace_seconds = 0
+    await wired.service.detach("actor", "session", "new-connection")
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    entry.runtime.cancel.assert_awaited_once()
+    assert entry.approval_owner is None
 
 
 @pytest.mark.asyncio

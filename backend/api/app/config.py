@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     agent_loop_model_retry_delay_seconds: float = 0.25
     agent_loop_max_parallel_tool_calls: int = 4
     agent_loop_approval_timeout_seconds: float = 300.0
+    # 浏览器短暂断网、切网或睡眠恢复时保留当前回合控制权；超时后才取消，
+    # 避免重连只能回放 interrupted。显式取消命令仍立即生效。
+    agent_loop_reconnect_grace_seconds: float = 20.0
     data_dir: str = "/data"
     # Harness 记忆层：Redis 仅存可过期短期状态，长期审计仍使用 PostgreSQL。
     # 短期 Port 默认关闭；Redis 容器经 feat/deploy-* 落地后再由环境变量开启。

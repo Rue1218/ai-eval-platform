@@ -102,6 +102,7 @@ services:
       RUNNER_INTERNAL_TOKEN: ${RUNNER_INTERNAL_TOKEN:-}
       AGENT_LOOP_MAX_STEPS: ${AGENT_LOOP_MAX_STEPS:-16}
       AGENT_LOOP_MAX_PARALLEL_TOOL_CALLS: ${AGENT_LOOP_MAX_PARALLEL_TOOL_CALLS:-4}
+      AGENT_LOOP_RECONNECT_GRACE_SECONDS: ${AGENT_LOOP_RECONNECT_GRACE_SECONDS:-20}
     # Harness 沙箱（bash 工具）：bwrap 已迁至独立 runner 容器（P4-2），
     # api 不再需要 privileged/seccomp:unconfined/SYS_ADMIN/bubblewrap。
     depends_on:

@@ -9,6 +9,7 @@
       <div class="trace-lanes trace-lane-labels" aria-hidden="true"><span>输入</span><span>模型</span><span>工具</span></div>
       <div class="trace-axis trace-waterfall" @pointerdown="start" @pointermove="move" @pointerup="finish" @pointercancel="dragging = false" @dblclick="clear" @contextmenu.prevent="clear" @keydown.esc="clear" tabindex="0" aria-label="事件顺序轴，点击选择；Shift 加方向键扩选；Escape 清除" @keydown="keyRange">
         <span v-if="range" class="trace-range trace-selection-range" :style="rangeStyle"/>
+        <span v-for="marker in turnMarkers" :key="marker.key" class="trace-turn-marker" :style="marker.style">{{ marker.label }}</span>
         <button v-for="(row, index) in rows" :key="row.cursor" class="trace-segment" :data-index="index" :data-kind="timelineKind(row)" :data-state="status(row)" :class="{ selected: selected === row.cursor, 'out-of-range': range && !inRange(index) }" :style="segmentStyle(row, index)" :title="`#${displaySeq(row)} ${title(row)}`" :aria-label="`定位 #${displaySeq(row)} ${title(row)}`" tabindex="-1"/>
       </div>
     </div>
@@ -16,7 +17,7 @@
       <div class="trace-list trace-list-panel">
         <p v-if="!rows.length" class="trace-empty">{{ state.facts.length ? '没有匹配的轨迹，请调整分类或搜索内容。' : '发送一条消息后，在这里查看模型请求、工具执行和事件详情。' }}</p>
         <button v-for="(row, index) in pageRows" :key="row.cursor" class="trace-row" :class="{selected:selected === row.cursor, 'timeline-inside': range && inRange(page * 80 + index), 'timeline-outside': range && !inRange(page * 80 + index)}" @click="select(page * 80 + index)">
-          <span class="trace-seq trace-row-seq">#{{ displaySeq(row) }}</span><span class="trace-row-main"><span class="trace-row-title"><span class="trace-badge" :data-category="category(row.type)" :data-role="role(row).key">{{ role(row).label }}</span><b>{{ title(row) }}</b></span><span class="trace-preview trace-row-preview">{{ preview(row) }}</span></span>
+          <span class="trace-seq trace-row-seq">#{{ displaySeq(row) }}</span><span class="trace-row-main"><span class="trace-row-title"><span class="trace-badge" :data-category="category(row.type)" :data-role="role(row).key">{{ role(row).label }}</span><span v-if="row.correlation.turn != null" class="trace-turn-badge">第 {{ row.correlation.turn }} 轮</span><b>{{ title(row) }}</b></span><span class="trace-preview trace-row-preview">{{ preview(row) }}</span></span>
         </button>
         <div v-if="rows.length > 80" class="trace-pagination"><button :disabled="page === 0" @click="page--">上一页</button><span>{{ page + 1 }} / {{ Math.max(1, Math.ceil(rows.length / 80)) }}</span><button :disabled="(page + 1) * 80 >= rows.length" @click="page++">下一页</button></div>
       </div>
@@ -46,6 +47,7 @@ import { computed, ref, watch } from 'vue'
 import type { LoopState } from '../../../agent/loop/reducer'
 import type { Data, LoopFrame } from '../../../api/agentLoopTypes'
 import { category, safePacket, semanticTraceRows, type SemanticTraceRow, type TraceState } from '../../../agent/loop/trace'
+import { copyText } from '../../../utils/clipboard'
 import JsonTree from './JsonTree.vue'
 const props = defineProps<{ state: LoopState; trace: TraceState }>()
 type DetailKey = 'overview' | 'preview' | 'content' | 'parameters' | 'result' | 'options' | 'usage' | 'source' | 'schema' | 'timing' | 'packet'
@@ -63,6 +65,12 @@ const rows = computed(() => allRows.value.filter(row => {
 const pageRows = computed(() => rows.value.slice(page.value * 80, page.value * 80 + 80))
 const current = computed(() => rows.value.find(row => row.cursor === selected.value))
 const rangeStyle = computed(() => range.value ? { left: `${Math.min(...range.value) / rows.value.length * 100}%`, width: `${(Math.abs(range.value[1] - range.value[0]) + 1) / rows.value.length * 100}%` } : {})
+/** 每轮只在首条轨迹处落一个标记，横坐标仍仅表达事件顺序。 */
+const turnMarkers = computed(() => rows.value.flatMap((row, index) => {
+  const turn = row.correlation.turn
+  if (!Number.isInteger(turn) || rows.value[index - 1]?.correlation.turn === turn) return []
+  return [{ key: `${turn}:${row.cursor}`, label: `第 ${turn} 轮`, style: { left: `${index / rows.value.length * 100}%` } }]
+}))
 /** 泳道表达类别，横坐标只表达持久顺序，避免伪造模型耗时。 */
 function segmentStyle(row: LoopFrame, index: number) {
   const lane = role(row).key === 'assistant' ? 1 : ['tool', 'approval'].includes(role(row).key) ? 2 : 0
@@ -169,7 +177,8 @@ function finish(event: PointerEvent) { if (!dragging.value) return; move(event);
 /** 时间选区提供键盘等价操作，事件位置与屏幕像素无关。 */
 function keyRange(event: KeyboardEvent) { if (!['ArrowLeft','ArrowRight','Home','End'].includes(event.key) || !rows.value.length) return; event.preventDefault(); const previous = range.value?.[1] ?? 0; const next = event.key === 'Home' ? 0 : event.key === 'End' ? rows.value.length - 1 : Math.max(0, Math.min(rows.value.length - 1, previous + (event.key === 'ArrowRight' ? 1 : -1))); range.value = [event.shiftKey ? range.value?.[0] ?? previous : next, next]; selected.value = rows.value[next].cursor!; page.value = Math.floor(next / 80) }
 function focus(row: SemanticTraceRow) { const index = rows.value.findIndex(item => item.cursor === row.cursor); if (index >= 0) select(index); tab.value = 'overview' }
-async function copy() { try { await navigator.clipboard.writeText(JSON.stringify(safePacket(range.value ? rows.value.filter((_, i) => inRange(i)) : detail.value ?? current.value ?? rows.value), null, 2)); notice.value = '已复制脱敏数据'; copyLabel.value = '已复制' } catch { notice.value = '无法访问剪贴板'; copyLabel.value = '复制失败' } finally { window.setTimeout(() => { copyLabel.value = '复制脱敏包' },1600) } }
+/** 复制审计包时优先安全剪贴板，受限环境回退到文本域复制。 */
+async function copy() { const text = JSON.stringify(safePacket(range.value ? rows.value.filter((_, i) => inRange(i)) : detail.value ?? current.value ?? rows.value), null, 2); if (await copyText(text)) { notice.value = '已复制脱敏数据'; copyLabel.value = '已复制' } else { notice.value = '无法访问剪贴板'; copyLabel.value = '复制失败' } window.setTimeout(() => { copyLabel.value = '复制脱敏包' },1600) }
 </script>
 <style scoped>    .trace-view { display: flex; min-height: 0; flex: 1; flex-direction: column; overflow: hidden; background: #fff; padding-bottom: 102px; }
     .trace-toolbar { display: flex; min-height: 44px; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--line); padding: 0 22px; background: #fff; }
@@ -189,6 +198,7 @@ async function copy() { try { await navigator.clipboard.writeText(JSON.stringify
     .trace-waterfall { position: relative; width: 100%; height: 50px; overflow: hidden; cursor: crosshair; touch-action: none; }
     .trace-waterfall:focus-visible { outline: 1px solid #536fe4; outline-offset: -1px; }
     .trace-selection-range { position: absolute; z-index: 0; top: 0; bottom: 0; min-width: 1px; border-right: 3px solid #536fe4; border-left: 3px solid #536fe4; background: rgba(83,111,228,.12); box-shadow: -100vw 0 0 100vw rgba(255,255,255,.58), 100vw 0 0 100vw rgba(255,255,255,.58); pointer-events: none; }
+    .trace-turn-marker { position: absolute; z-index: 3; top: 0; transform: translateX(-1px); border-left: 1px dashed #7463b6; padding-left: 3px; color: #6955a5; font: 700 9px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace; pointer-events: none; white-space: nowrap; }
     .trace-segment { position: absolute; z-index: 1; top: calc(7px + var(--trace-segment-lane) * 14px); left: calc(var(--trace-segment-left) + var(--trace-segment-gap)); width: max(2px,calc(var(--trace-segment-width) - var(--trace-segment-gap) - var(--trace-segment-gap))); height: 8px; min-width: 2px; border: 0; border-radius: 1px; outline: 0; background: #78879d; padding: 0; cursor: pointer; opacity: .78; }
     .trace-segment:hover { z-index: 2; opacity: 1; }
     .trace-segment.selected { z-index: 2; opacity: 1; box-shadow: 0 0 0 1px #fcfdff,0 0 0 2px #536fe4; }
@@ -215,6 +225,7 @@ async function copy() { try { await navigator.clipboard.writeText(JSON.stringify
     .trace-row-seq { color: #8390a3; font: 10px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace; }
     .trace-row-main { display: flex; min-width: 0; align-items: center; gap: 8px; } .trace-row-title { display: flex; min-width: 0; flex: 0 1 auto; align-items: center; gap: 7px; color: #334158; font-size: 11px; font-weight: 620; white-space: nowrap; }
     .trace-badge { flex: 0 0 auto; border-radius: 4px; padding: 1px 5px; font-size: 9px; font-weight: 700; letter-spacing: .04em; }
+    .trace-turn-badge { flex: 0 0 auto; border-radius: 999px; background: #eef3ff; padding: 1px 5px; color: #4b62a8; font: 700 9px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace; }
     .trace-badge[data-category="model"] { background: #f0ebfb; color: #6e4eaa; } .trace-badge[data-category="tool"] { background: #fff1dc; color: #aa6510; } .trace-badge[data-category="approval"] { background: #fff5d9; color: #946617; } .trace-badge[data-category="lifecycle"] { background: #edf1f5; color: #667589; }
     .trace-badge[data-role="system"] { background: #eef1f5; color: #667589; } .trace-badge[data-role="user"] { background: #eaf0ff; color: #4b68a8; } .trace-badge[data-role="context"] { background: #e8f8ea; color: #378553; } .trace-badge[data-role="assistant"] { background: #f3ecff; color: #7860aa; } .trace-badge[data-role="tool"] { background: #fff1dc; color: #aa6510; } .trace-badge[data-role="approval"] { background: #fff5d9; color: #946617; } .trace-badge[data-role="protocol"] { background: #f2f4f7; color: #758399; }
     .trace-schema-badge { flex: 0 0 auto; border: 1px solid #dce2ea; border-radius: 999px; background: #f8fafc; padding: 1px 5px; color: #738197; font: 9px/1.25 ui-monospace,SFMono-Regular,Consolas,monospace; letter-spacing: 0; }

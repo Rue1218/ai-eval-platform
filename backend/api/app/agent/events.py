@@ -29,10 +29,10 @@ _FIELDS = {
     "step.end": "reason usage",
     "assistant.start": "header_seq history_upto_seq request_summary",
     "assistant.message": "content tool_calls usage latency_ms finish_reason interrupted reasoning_preview",
-    "assistant.end": "outcome committed_seq interrupted error_code",
+    "assistant.end": "outcome committed_seq interrupted error_code latency_ms",
     "assistant.retry": "retry_index previous_attempt_id error_code delay_s",
     "tool.call": "name display",
-    "tool.dispatch": "name execution_id",
+    "tool.dispatch": "name execution_id registry_name wire_name tool_contract_version",
     "tool.result": "name status synthetic display error_code exit_code",
     "approval.requested": "interaction_id nonce name expires_at display",
     "approval.resolved": "interaction_id decision source_outcome",
@@ -251,10 +251,14 @@ def project_fact(event: dict) -> list[dict]:
         data = {"code": "INTERNAL", "message": "回合运行失败"}
     projections = [(event_type, data)]
     if event_type == "assistant.message":
-        projections.append(("assistant.end", {
+        end_data = {
             "outcome": "committed", "committed_seq": seq,
             "interrupted": bool(source.get("interrupted", False)),
-        }))
+        }
+        # 旧事实没有该字段时保持缺省，不把 null 伪装成一次已计量的耗时。
+        if "latency_ms" in source:
+            end_data["latency_ms"] = source["latency_ms"]
+        projections.append(("assistant.end", end_data))
     result = []
     for kind, payload in projections:
         envelope = frame(
@@ -332,7 +336,8 @@ def trace_frame(event: dict, session_id: str, *, source: str) -> dict:
         }
     if event["type"] == "assistant/attempt_start" and "history_selection" in public:
         public["history_selection"] = _pick(
-            public["history_selection"], "algorithm indices message_count input_fingerprint",
+            public["history_selection"],
+            "algorithm indices message_count input_fingerprint transformations",
         )
     return frame("trace.event", {
         "source": source,

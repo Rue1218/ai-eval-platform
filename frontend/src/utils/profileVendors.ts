@@ -24,4 +24,3 @@ export function getProfileVendor(profile: { provider?: string; base_url?: string
     return PROFILE_VENDORS.find(v => new URL(v.base_url).hostname === host)?.key || 'custom'
   } catch { return 'custom' }
 }
-

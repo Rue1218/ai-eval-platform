@@ -491,4 +491,3 @@ def get_raw_file(
     directory = workspace_dir_for(row.id)
     abs_path = resolve_scope_file(directory, path, must_exist=True)
     return FileResponse(abs_path, filename=os.path.basename(abs_path))
-

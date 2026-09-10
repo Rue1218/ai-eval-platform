@@ -38,12 +38,17 @@ test('首次协商、缺口原连接恢复，快照在 H 后继续',async()=>{
   try {
     await client.connect();socket.frame('hello');socket.frame('capabilities',{stream_schema_version:'agent-loop-stream.v2.2'})
     assert.equal(socket.sent[0].data.after_cursor,0)
+    const clientId = socket.sent[0].data.client_id
+    assert.equal(typeof clientId,'string')
     socket.frame('replay.completed',{cursor:0},{session_id:'s'});assert.equal(state.ready,true)
     socket.frame('user.message',{content:'missed first'},{session_id:'s',durability:'persistent',cursor:2})
     assert.equal(state.cursor,0);assert.equal(socket.sent.at(-1).type,'subscribe')
     assert.ok(!socket.sent.some(c=>c.type==='unsubscribe'))
-    socket.frame('resync.required',{cursor:2,snapshot:{timeline:[]}}, {session_id:'s'})
+    state.controlled = true
+    socket.frame('resync.required',{cursor:2,snapshot:{timeline:[],controller:{active:false,owned_by_actor:false}}}, {session_id:'s'})
     assert.equal(state.cursor,2);assert.equal(socket.sent.at(-1).data.after_cursor,2)
+    assert.equal(socket.sent.at(-1).data.client_id,clientId)
+    assert.equal(state.controlled,false)
   } finally { client.close() }
 })
 test('同一冻结命令重复发送保持 ID 和负载，错误版本关闭',async()=>{
@@ -54,6 +59,15 @@ test('同一冻结命令重复发送保持 ID 和负载，错误版本关闭',as
     const cmd=client.command('turn.submit',{content:'hi',client_message_id:'m',attachment_refs:[],reasoning_effort:'off'})
     client.send(cmd);client.send(cmd);assert.deepEqual(socket.sent[0],socket.sent[1])
     socket.frame('capabilities',{stream_schema_version:'unknown'});assert.equal(socket.readyState,3);assert.match(state.error,/协议/)
+  } finally { client.close() }
+})
+
+test('旧 v2.1 服务端协商时不发送新增 client_id', async () => {
+  const state=createLoopState('s'),socket=new Socket()
+  const client=new AgentLoopWebSocket('s',{ticket:async()=>'ticket',state:()=>state,replace:()=>{},socket:()=>socket})
+  try {
+    await client.connect();socket.frame('capabilities',{stream_schema_version:'agent-loop-stream.v2.1'})
+    assert.deepEqual(socket.sent[0].data,{after_cursor:0})
   } finally { client.close() }
 })
 

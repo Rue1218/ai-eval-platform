@@ -6,7 +6,8 @@ import asyncio
 import hashlib
 import json
 import time
-from dataclasses import replace
+from copy import deepcopy
+from dataclasses import asdict, replace
 from typing import Any
 from uuid import uuid4
 
@@ -23,6 +24,7 @@ from app.llm.contracts import ModelConfig, SystemSegment
 from app.llm.loop_contracts import (
     LlmRequestError,
     MissingApiKeyError,
+    ProtocolState,
     UnsupportedReasoningEffortError,
 )
 from app.llm.resolver import AuthorizedProfileSnapshot, build_adapter, resolve_request
@@ -156,11 +158,6 @@ def _history_requires_text_migration(messages: list[dict], compatibility: dict[s
         and not protocol_state_compatible(message["protocol_state"], compatibility)
         for message in messages
     )
-
-
-def _history_has_tools(messages: list[dict]) -> bool:
-    """工具调用的 wire 名和参数可能随模型变化，不能降级成跨模型文本历史。"""
-    return any(message.get("role") == "tool" or bool(message.get("tool_calls")) for message in messages)
 
 
 def _identity(identity: dict) -> dict:
@@ -358,12 +355,7 @@ async def _build_dependencies(service, entry, actor_id: str, data: dict, resourc
     compatibility = _protocol_state_compatibility(profile)
     migrated_history = _history_requires_text_migration(history, compatibility)
     if migrated_history:
-        if _history_has_tools(history):
-            raise AppError(
-                ErrorCode.VALIDATION,
-                "当前会话包含工具调用，切换模型请新建会话",
-            )
-        # 仅清理与目标模型不兼容的原始签名；普通正文继续作为下一轮上下文。
+        # 仅清理与目标模型不兼容的 opaque 签名，正文与已完成工具配对仍可继续使用。
         messages = derive_messages(
             entry.log.read(), protocol_state_compatibility=compatibility
         )
@@ -376,7 +368,7 @@ async def _build_dependencies(service, entry, actor_id: str, data: dict, resourc
                             request_factory=request_factory, context_window=context_window,
                             tool_transports=tool_transports,
                             protocol_state_compatibility=compatibility if migrated_history else None,
-                            history_transition_reason="model_switch_text_only" if migrated_history else None), resources
+                            history_transition_reason="model_switch_protocol_state_only" if migrated_history else None), resources
 
 
 def _wire_payload(request) -> dict:
@@ -488,14 +480,101 @@ def _prompt_breakdown(
     return categories
 
 
+def _prompt_token_breakdown(request) -> dict[str, int]:
+    """按实际序列化请求归因输入 token，五类明细之和始终等于输入总量。
+
+    Skill 只有在其正文实际注入当前请求时才计入；AgentLoop 当前未注入时保留 0，
+    不能把目录 Hint 或其他会话的估算伪装成本轮模型上下文。
+    """
+    # 保留协议 codec 的系统包装成本，其余三类以同一请求减去基线得到。
+    baseline = replace(request, messages=[], tools=[])
+    system_tokens = _prompt_tokens(baseline)
+    from app.harness.execution.registry import build_default_registry
+
+    mcp_names = {
+        definition.name
+        for definition in build_default_registry().iter_defs(transport="mcp")
+    }
+    mcp_tools = [tool for tool in request.tools if tool.name in mcp_names]
+    all_tools_tokens = max(
+        0,
+        _prompt_tokens(replace(baseline, tools=request.tools)) - system_tokens,
+    )
+    # JSON 数组和协议包装只归属一次，避免 MCP/原生工具独立试算时重复计算外层 token。
+    mcp_tokens = min(
+        all_tools_tokens,
+        max(0, _prompt_tokens(replace(baseline, tools=mcp_tools)) - system_tokens),
+    )
+    tools_tokens = all_tools_tokens - mcp_tokens
+    skills_tokens = 0
+    input_tokens = _prompt_tokens(request)
+    conversation_tokens = max(
+        0,
+        input_tokens - system_tokens - skills_tokens - mcp_tokens - tools_tokens,
+    )
+    return {
+        "input_tokens": input_tokens,
+        "system_tokens": system_tokens,
+        "skills_tokens": skills_tokens,
+        "mcp_tokens": mcp_tokens,
+        "tools_tokens": tools_tokens,
+        "conversation_tokens": conversation_tokens,
+    }
+
+
+def _drop_incompatible_protocol_state(request):
+    """切换模型时仅移除可确认不兼容的 opaque 状态，保留正文与工具调用历史。
+
+    结构损坏的状态仍交给协议 codec 严格拒绝，不能借模型切换掩盖坏事实。
+    """
+    from app.llm.providers.common import compatibility_key
+
+    provider, protocol = request.provider, request.protocol
+    if not isinstance(provider, str) or not isinstance(protocol, str):
+        return request, []
+    expected_key = request.compatibility_key or compatibility_key(
+        provider, protocol, request.model,
+    )
+    messages = list(request.messages)
+    dropped_indices: list[int] = []
+    for index, message in enumerate(messages):
+        state = message.get("protocol_state") if isinstance(message, dict) else None
+        if isinstance(state, ProtocolState):
+            state = asdict(state)
+        # 只有完整、可验证的旧状态才能被判断为“不兼容”；残缺结构继续 fail-closed。
+        if not isinstance(state, dict) or not (
+            state.get("version") == 1
+            and state.get("replay_policy") == "items_v1"
+            and all(isinstance(state.get(key), str) for key in (
+                "provider", "protocol", "model", "compatibility_key",
+            ))
+            and isinstance(state.get("items"), list)
+            and all(isinstance(item, dict) for item in state["items"])
+        ):
+            continue
+        if (
+            state["provider"], state["protocol"], state["model"],
+            state["compatibility_key"],
+        ) == (provider, protocol, request.model, expected_key):
+            continue
+        portable = deepcopy(message)
+        portable.pop("protocol_state", None)
+        messages[index] = portable
+        dropped_indices.append(index)
+    if not dropped_indices:
+        return request, []
+    return replace(request, messages=messages), dropped_indices
+
+
 def _window_request(profile, segments, specs, messages, effort, context_window):
-    """纯函数预检和裁剪完整 user 回合；不改事实、不丢单个工具结果或签名块。"""
+    """纯函数预检和裁剪完整 user 回合；换模型仅降级不可移植的签名块。"""
     if type(context_window) is not int or context_window <= 0:
         raise AppError(ErrorCode.VALIDATION, "模型上下文窗口配置非法")
     config = replace(profile.config, reasoning_enabled=effort != "off",
                      reasoning_effort=effort if effort != "off" else "medium")
     request = resolve_request(replace(profile, config=config), messages=messages,
                               system_segments=segments, tools=specs)
+    request, protocol_state_dropped_indices = _drop_incompatible_protocol_state(request)
     budget = context_window - request.max_tokens
     if budget <= 0:
         raise AppError(ErrorCode.BUDGET_EXCEEDED, "模型输出预算占满上下文窗口")
@@ -519,4 +598,6 @@ def _window_request(profile, segments, specs, messages, effort, context_window):
         "window_start": dropped, "window_end": len(messages),
         "messages_fingerprint": _hash({"messages": selected.messages}),
         "estimated_input_tokens": tokens, "reserved_output_tokens": request.max_tokens,
+        "protocol_state_dropped": len(protocol_state_dropped_indices),
+        "protocol_state_dropped_indices": protocol_state_dropped_indices,
     }

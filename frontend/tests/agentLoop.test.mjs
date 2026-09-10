@@ -59,6 +59,14 @@ test('四步模型、三个同名工具与下一回合：顺序和调用身份�
   assert.equal(Object.keys(s.tools).length, 4)
 })
 
+test('订阅和快照恢复服务端确认的控制权，不沿用断线前本地猜测', () => {
+  const state = createLoopState('s'), f = fixture()
+  applyFrame(state, f('subscribed', {cursor:0,controller:{active:true,owned_by_actor:true}}, {}, 'control'))
+  assert.equal(state.controlled, true)
+  const restored = restoreSnapshot('s', 0, {timeline:[],controller:{active:false,owned_by_actor:false}})
+  assert.equal(restored.controlled, false)
+})
+
 test('模型开始帧迟于文本或思考增量到达时，不倒退显示状态', () => {
   for (const [kind, phase] of [['assistant.text.delta', 'answering'], ['assistant.reasoning.delta', 'thinking']]) {
     const state = createLoopState('s'), f = fixture(), c = { attempt_id: 'a' }

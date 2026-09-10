@@ -482,5 +482,3 @@ def get_file_tree(directory: str, max_depth: int = 4, max_entries: int = 1000) -
         return res
 
     return _scan(base_abs, "", 1)
-
-

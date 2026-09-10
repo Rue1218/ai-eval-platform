@@ -1,6 +1,6 @@
 # AI 测试与评估平台 — Agent 消息链路兼容修复
 
-> 版本：V1.1 ｜ 审查日期：2026-09-09 ｜ 状态：补充思考滑块与模型请求审查；修复后线上验收待部署及 qa-test 凭据线下交付。
+> 版本：V1.2 ｜ 审查日期：2026-09-10 ｜ 状态：补充 WS 重连控制权、跨模型继续问答与工具调度字段；修复后线上验收待部署及 qa-test 凭据线下交付。
 
 ## 1. 已定位的故障
 
@@ -68,6 +68,36 @@
 - 本地真实浏览器通过开发代理登录服务器（200），收到 hello/capabilities/subscribed 与完整持久回放及 replay.completed，页面异常数为 0。该检查只回放前述测试会话，没有重新调用模型。
 
 V1.1 本轮回归：API 1263 passed / 69 skipped（本机未配置隔离 PostgreSQL）；Worker 50 passed；前端单测 16、浏览器 11 项通过，typecheck/build 与 Ruff 通过。浏览器覆盖两种实际型号的拖动、键盘调节、单候选提示和 WS 参数；真实 SDK 用例覆盖 off/high/max、工具后续请求、下一回合关闭思考。本轮未认证访问生产模型配置或发起线上 LLM 请求。
+
+## 5. V1.2 重连与跨模型继续问答
+
+- WS 控制连接断开后默认保留 20 秒宽限；同一前端实例使用稳定 `client_id` 续接，
+  因而即使旧 socket 的关闭事件稍晚到达，也不会让同账号另一标签页抢占。
+- `subscribed` 与授权快照返回当前连接的控制状态；前端恢复时以服务端状态为准，
+  不复用断线前的本地猜测。
+- 每次 `turn.submit` 仍重新解析所选协议档。若历史助手消息携带完整但属于旧模型的
+  `protocol_state`，仅从本次模型请求副本移除该 opaque 字段；正文、tool_calls 与
+  tool result 继续参与问答，持久事实不修改。
+- `assistant/attempt_start.history_selection` 使用 `message_indices.v2` 登记降级索引；
+  残缺状态、正文改写或工具字段改写继续 fail-closed。
+- `tool.dispatch` 普通语义流公开 `execution_id/registry_name/wire_name/tool_contract_version`，
+  便于核对参考工程的 wire→registry 契约；参数、工作区和 Runner 请求仍只留在受控事实层。
+
+### V1.2 修改代码文件与作用清单
+
+| 文件 | 作用 |
+| --- | --- |
+| `.env.example`、`docker-compose.yml`、`backend/api/app/config.py`、`agent/loop_service.py`、`routers/ws_v2.py` | 断线宽限配置、稳定客户端身份、控制权续接与权威快照 |
+| `backend/api/app/agent/loop_wiring.py`、`agent/loop.py` | 跨模型可移植历史与可审计降级 |
+| `backend/api/app/agent/events.py`、`harness/contracts/loop_events.py` | stream v2.2、工具字段和历史转换 Schema |
+| `frontend/src/api/agentLoopWs.ts`、`agentLoopTypes.ts`、`agent/loop/reducer.ts` | 稳定 `client_id`、版本兼容与服务端控制状态恢复 |
+| `backend/api/tests/test_loop_runtime.py`、`test_loop_wiring.py`、`test_loop_ws_protocol.py`、`test_loop_ws_handler.py`；`frontend/tests/agentLoop.test.mjs`、`agentLoopWs.test.mjs` | 重连竞争、模型切换、工具字段和前端恢复回归 |
+| `docs/AI测试与评估平台-API.md`、本文 | V1.89 接口契约与 V1.2 技术记录 |
+
+V1.2 本地验证：AgentLoop 聚焦回归 118 passed；API 全量 1174 passed / 73 skipped；
+Worker 48 passed；前端单测 19 passed，typecheck 与 production build 通过；Ruff 全量通过。
+跨模型用例显式覆盖旧助手工具调用、对应工具结果和下一条用户消息均保留，仅移除旧
+`protocol_state`。本轮未连接生产模型或写入业务数据。
 
 首轮 Linux CI 的 Qwen 拖动用例停在 xhigh：测试未等待弹层缩放结束便读取坐标，并把离轨道末端 15px 当作跨浏览器固定终点。已改为等待控件位置稳定并拖至轨道边缘，保留最高档及 WS 参数断言；不以重跑或放宽断言掩盖失败。
 

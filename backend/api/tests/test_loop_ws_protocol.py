@@ -128,6 +128,15 @@ def test_assistant_fact_has_two_stable_projections_and_no_raw():
     assert "projection_kind" not in wire
 
 
+def test_assistant_attempt_latency_is_projected_without_estimating_old_records():
+    """单次模型 Attempt 的耗时随消息和终态投影，旧事实缺字段仍保持兼容。"""
+    projections = project_fact(fact(content="answer", latency_ms=1267))
+    assert projections[0]["data"]["latency_ms"] == 1267
+    assert projections[1]["data"]["latency_ms"] == 1267
+    legacy = project_fact(fact(content="legacy"))
+    assert all("latency_ms" not in item["data"] for item in legacy)
+
+
 @pytest.mark.parametrize("status", [
     "succeeded", "failed", "denied", "cancelled", "not_started", "outcome_unknown",
 ])
@@ -143,6 +152,31 @@ def test_tool_six_states_keep_identity_not_model_body(status):
         assert projected["data"]["display"]["result_preview"] == "PRIVATE BODY"
     else:
         assert "PRIVATE BODY" not in json.dumps(projected)
+
+
+def test_tool_dispatch_projects_name_mapping_and_contract_without_arguments():
+    """公开调度字段可解释 wire→registry 映射，但绝不携带规范化参数或沙箱路径。"""
+    event = fact(
+        "tool/dispatch",
+        call_id="c",
+        call_seq=2,
+        name="platform_task_status",
+        execution_id="execution",
+        registry_name="task.status",
+        wire_name="platform_task_status",
+        tool_contract_version="deepseek-harness.v1",
+        normalized_args={"task_id": "private-task"},
+        scope_path="C:/private/workspace",
+    )
+    projected = project_fact(event)[0]
+    assert projected["data"] == {
+        "name": "platform_task_status",
+        "execution_id": "execution",
+        "registry_name": "task.status",
+        "wire_name": "platform_task_status",
+        "tool_contract_version": "deepseek-harness.v1",
+    }
+    assert "private" not in json.dumps(projected)
 
 
 def test_acl_placeholder_and_reasoning_filter():
@@ -200,6 +234,13 @@ def test_catalog_matches_runtime_history_selection_and_legacy_attempts():
     trace = trace_frame(event, "s", source="history")
     assert trace["data"]["event"]["data"]["history_selection"] == selection
     assert trace["data"]["event"]["data"]["fingerprint_algorithm"] == "dsh-json-v1"
+
+    switched_history = [{"role": "assistant", "content": "reply", "protocol_state": {"private": True}}]
+    switched_selection = _history_selection(
+        switched_history, [{"role": "assistant", "content": "reply"}],
+    )
+    validator.validate({**legacy, "history_selection": switched_selection})
+    assert switched_selection["algorithm"] == "message_indices.v2"
 
 
 def test_runtime_command_catalog_matches_store_receipt_without_semantic_reexecution():

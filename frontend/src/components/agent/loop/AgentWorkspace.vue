@@ -44,7 +44,7 @@
                   <ProviderLogo v-if="row.request_summary?.model" :provider="getProviderLogoKey({model:row.request_summary.model,provider:row.request_summary.provider})" :size="18"/>
                   <strong>{{ row.request_summary?.model || '助手' }}</strong>
                   <time v-if="formatTimestamp(row.timestamp)" :datetime="row.timestamp">{{ formatTimestamp(row.timestamp) }}</time>
-                  <small v-if="row.request_summary">{{ row.request_summary.reasoning_effort }} · step {{ row.correlation.step }}</small>
+                  <small v-if="row.request_summary">第 {{ row.correlation.turn ?? '—' }} 轮 · {{ row.request_summary.reasoning_effort }} · step {{ row.correlation.step }}</small>
                 </div>
                 <div v-else class="assistant-identity continuation-spacer" />
                 <div v-if="row.text" class="assistant-actions" aria-label="回答操作">
@@ -251,6 +251,7 @@ import { conversationRows, identity } from '../../../agent/loop/reducer'
 import type { LoopStore } from '../../../agent/loop/store'
 import { useAuthStore } from '../../../stores/auth'
 import { getProviderLogoKey } from '../../../utils/providerLogo'
+import { copyText } from '../../../utils/clipboard'
 import ProviderLogo from '../../ProviderLogo.vue'
 import MarkdownView from '../MarkdownView.vue'
 import AttachmentPreview from '../AttachmentPreview.vue'
@@ -569,7 +570,8 @@ function adjustContentWidthByKey(event: KeyboardEvent, edge: ResizeEdge) {
   chatWidth.value = Math.min(maximumChatWidth.value, Math.max(minimumChatWidth, renderedChatWidth.value + (outward ? 24 : -24)))
   try { localStorage.setItem(chatWidthStorageKey, String(Math.round(chatWidth.value))) } catch { /* 本地存储失败不影响本次调整。 */ }
 }
-async function copy(text: string) { try { await navigator.clipboard.writeText(text) } catch { error.value='复制失败' } }
+/** 使用兼容复制方案，HTTP 或受限浏览器仍可复制已生成回答。 */
+async function copy(text: string) { if (!await copyText(text)) error.value = '复制失败，请检查浏览器剪贴板权限' }
 function formatSpeed(value: number | null): string {
   return value === null ? '—' : `${formatTokens(value)}/s`
 }

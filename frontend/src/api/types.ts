@@ -1128,4 +1128,3 @@ export interface UserWorkspaceFileContent {
   is_large: boolean
   content: string
 }
-
