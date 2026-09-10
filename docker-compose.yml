@@ -156,6 +156,9 @@ services:
     tmpfs:
       - /tmp:rw,size=64m
       - /run:rw,size=8m
+    # 档3 网络启动器需在容器内转发（netns/veth 出公网）
+    sysctls:
+      - net.ipv4.ip_forward=1
     environment:
       # 工作区根（与 api 同挂 ./data/workspaces，路径两侧一致）
       SANDBOX_WORKSPACE_ROOT: /data/workspaces

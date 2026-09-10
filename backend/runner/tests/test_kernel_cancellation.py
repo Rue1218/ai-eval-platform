@@ -41,18 +41,29 @@ def test_normalize_mode():
 
 
 def test_build_exec_argv_modes():
-    """isolated 含 --net，network 不含；两者都建 pidns；命令只作 $1 不拼进脚本。"""
+    """isolated 直接 unshare 断网；network 走受信启动器建 netns/veth 并阻断内网。"""
     limits = kernel.SandboxLimits(memory_kb=1024, nproc=8, cpu_s=3)
     iso = kernel.build_exec_argv(cmd="echo hi", mode="isolated", limits=limits)
     net = kernel.build_exec_argv(cmd="echo hi", mode="network", limits=limits)
+    # isolated：unshare 断网 + 私有 pidns；命令只作 $1
     assert iso[0] == "unshare" and "--net" in iso
-    assert net[0] == "unshare" and "--net" not in net
-    for argv in (iso, net):
-        assert "--pid" in argv and "--fork" in argv and "--mount-proc" in argv
-        assert argv[-1] == "echo hi"
-        script = argv[argv.index("-c") + 1]
-        assert "echo hi" not in script
-        assert "ulimit -v 1024" in script and "ulimit -u 8" in script
+    assert "--pid" in iso and "--fork" in iso and "--mount-proc" in iso
+    assert iso[-1] == "echo hi"
+    assert "echo hi" not in iso[iso.index("-c") + 1]
+    assert "ulimit -v 1024" in iso[iso.index("-c") + 1]
+    # network：受信启动器（位置参数传命令，绝不拼进脚本）
+    assert net[0] == "bash" and net[1] == "-c"
+    script = net[2]
+    assert "sandbox-network" in net and "echo hi" in net
+    assert "echo hi" not in script
+    assert "ip netns add" in script and "MASQUERADE" in script
+    for cidr in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"):
+        assert cidr in script  # 内网阻断
+    # ulimit 值以位置参数传入（mem_kb/nproc/cpu_s）
+    assert "ulimit -v " in script and "$mem_kb" in script
+    assert net[5:8] == ["1024", "8", "3"]
+    # 档3 DNS：docker 内嵌 127.0.0.11 在独立 netns 不可达 → 挂载公网解析器
+    assert "resolv.conf" in script and "223.5.5.5" in script
 
 
 @pytest.mark.parametrize("reason", ["success", "cancel", "timeout", "nonzero"])
