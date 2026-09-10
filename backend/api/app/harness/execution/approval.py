@@ -55,7 +55,8 @@ broker = ApprovalBroker()
 async def request_approval(
     *, session_id: str, log: Any, turn: int, step: int, attempt_id: str,
     call: dict[str, Any], emit: Callable, approval_broker: ApprovalBroker = broker,
-    scope: str = "", owner_user_id: str = "", timeout_seconds: float = 300,
+    scope: str = "", owner_user_id: str = "", permission_tier: str = "",
+    risk_level: str = "", timeout_seconds: float = 300,
 ) -> str:
     """先提交审批事实再等待；gate 必须联动 pending_confirm 并校验 nonce/身份。
 
@@ -69,7 +70,8 @@ async def request_approval(
         "step": step, "attempt_id": attempt_id,
         "call_id": call["id"], "toolName": call["name"], "name": call["name"],
         "owner_user_id": owner_user_id or getattr(log, "actor_id", ""),
-        "scope": scope, "nonce": uuid4().hex, "expires_at": time.time() + timeout_seconds,
+        "scope": scope, "permission_tier": permission_tier, "risk_level": risk_level,
+        "nonce": uuid4().hex, "expires_at": time.time() + timeout_seconds,
     }
 
     def record(kind: str, payload: dict[str, Any]) -> None:

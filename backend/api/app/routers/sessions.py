@@ -14,9 +14,10 @@ from ..errors import AppError, ErrorCode
 from ..harness.context import compute_meter, is_window_eligible, recent_window
 from ..harness.context.meter import DEFAULT_MAX_TOKENS, DEFAULT_MCP_TOOLS_MAX
 from ..harness.memory import purge_session_checkpoints
+from ..harness.security.permission_tier import TIERS
 from ..models import AuditLog, Message, ProtocolProfile, Setting, Task, User, Workspace, WsEvent
 from ..models import Session as AgentSession
-from ..schemas import SessionCreate, SessionOut, SessionSharingUpdate
+from ..schemas import SessionCreate, SessionOut, SessionPermissionTierUpdate, SessionSharingUpdate
 from ..session_access import require_session_owner, require_visible_session
 from ..session_connections import SESSION_CONNECTION_HUB
 from ..workspace_service import ensure_workspace_scope
@@ -267,6 +268,9 @@ def create_session(
         ):
             raise AppError(ErrorCode.VALIDATION, "工作区不存在或无权绑定")
         scope_path = (body.scope_path or "").strip("/") or None
+    permission_tier = (body.permission_tier or "").strip() or None
+    if permission_tier is not None and permission_tier not in TIERS:
+        raise AppError(ErrorCode.VALIDATION, "permission_tier 不受支持")
     session = AgentSession(
         user_id=user.id,
         title=body.title.strip(),
@@ -275,6 +279,7 @@ def create_session(
         visibility=body.visibility,
         workspace_id=workspace_id,
         scope_path=scope_path,
+        permission_tier=permission_tier,
     )
     db.add(session)
     db.flush()  # 行先落库（取 id 供审计；目录就绪在行后，失败回滚不产生孤儿行）
@@ -341,6 +346,33 @@ async def update_session_sharing(
     # 从 team 收回到 private 时主动中断协作者连接，避免继续收到瞬态流。
     if session.visibility == "private":
         await SESSION_CONNECTION_HUB.close_non_owner(session.id, session.user_id)
+    return _session_out(db, session, user)
+
+
+@router.put("/{session_id}/permission-tier", response_model=SessionOut)
+def update_session_permission_tier(
+    session_id: str,
+    body: SessionPermissionTierUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """由会话创建者覆盖本会话的权限档位；None = 继承全局默认。"""
+    session = require_session_owner(db, session_id, user.id, lock=True)
+    tier = (body.permission_tier or "").strip() or None
+    if tier is not None and tier not in TIERS:
+        raise AppError(ErrorCode.VALIDATION, "permission_tier 不受支持")
+    session.permission_tier = tier
+    db.add(
+        AuditLog(
+            user_id=user.id,
+            action="session_permission_tier_update",
+            target_type="session",
+            target_id=session.id,
+            detail={"permission_tier": tier},
+        )
+    )
+    db.commit()
+    db.refresh(session)
     return _session_out(db, session, user)
 
 

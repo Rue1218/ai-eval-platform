@@ -124,7 +124,7 @@ class ToolScheduler:
     def _mode_for_call(self, call: dict[str, Any]) -> ToolExecutionMode:
         name = call.get("name")
         tool = self._by_name.get(name) if isinstance(name, str) else None
-        if tool is not None and self._settings.dsh_require_approval and requires_approval(tool):
+        if tool is not None and self._settings.dsh_require_approval and requires_approval(tool, call.get("args") or {}):
             return "exclusive"
         return execution_mode(tool)
 
@@ -268,7 +268,7 @@ class ToolScheduler:
             slot.result is not None
             or slot.tool is None
             or not self._settings.dsh_require_approval
-            or not requires_approval(slot.tool)
+            or not requires_approval(slot.tool, slot.call.get("args") or {})
         ):
             return
 
@@ -283,6 +283,8 @@ class ToolScheduler:
             approval_broker=self._approval_broker,
             scope=getattr(slot.tool, "approval_scope", ""),
             owner_user_id=getattr(getattr(slot.tool, "context", None), "user_id", ""),
+            permission_tier=getattr(getattr(slot.tool, "context", None), "permission_tier", ""),
+            risk_level=getattr(getattr(slot.tool, "definition", None), "risk_level", ""),
             timeout_seconds=getattr(self._settings, "dsh_approval_timeout_seconds", 300),
         )
         if decision in ("allow", "always"):

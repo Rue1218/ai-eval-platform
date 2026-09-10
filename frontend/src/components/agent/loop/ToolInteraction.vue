@@ -3,6 +3,11 @@
     <p v-if="interaction.restricted">交互内容受权限限制。</p>
     <template v-else>
       <strong>{{ titles[interaction.kind] }}</strong>
+      <p v-if="interaction.kind === 'approval'" class="interaction-meta">
+        <span v-if="interaction.permission_tier">权限档位：{{ tierLabels[interaction.permission_tier] || interaction.permission_tier }}</span>
+        <span v-if="interaction.risk_level"> · 风险等级：{{ interaction.risk_level }}</span>
+        <span v-if="interaction.risk_level === 'code'">（破坏性命令在所有档位都需批准）</span>
+      </p>
       <pre v-if="interaction.display">{{ JSON.stringify(interaction.display, null, 2) }}</pre>
       <form v-if="interaction.kind === 'question' && !interaction.resolved" @submit.prevent="answer">
         <fieldset v-for="q in interaction.questions || []" :key="q.id" :disabled="disabled">
@@ -32,6 +37,7 @@ const now = ref(Date.now()), timer = setInterval(() => { now.value = Date.now() 
 onBeforeUnmount(() => clearInterval(timer))
 const values = reactive<Record<string, string>>({}), selected = reactive<Record<string, string[]>>({})
 const titles: Record<string, string> = { approval: '工具权限确认', question: '补充信息', task_confirmation: '确认冻结的评测规格' }
+const tierLabels: Record<string, string> = { tier1: '档1 请求批准', tier2: '档2 帮我批准', tier3: '档3 完全访问' }
 const expired = computed(() => props.interaction.expires_at && props.interaction.expires_at * 1000 <= now.value)
 const disabled = computed(() => !props.canControl || !props.online || expired.value || props.interaction.submitting || props.interaction.resolved || !props.interaction.nonce)
 /** 多选用标签数组往返，含逗号的标签不能拆分。 */

@@ -232,7 +232,7 @@ def test_unknown_recovery_quarantine_and_evidence_bound_reconcile(pg):
     log.append("tool/result", result(base, "outcome_unknown"))
     assert log.read()[-1]["type"] == "execution/quarantined"
     evidence = {"execution_id": "other", "status": "cancelled", "process_tree_terminated": True,
-                "termination_evidence": "cgroup_empty"}
+                "termination_evidence": "process_exited"}
     with pytest.raises(AppError):
         log.reconcile_execution("exec-a", evidence)
     evidence["execution_id"] = "exec-a"
@@ -461,7 +461,7 @@ def test_remote_known_result_requires_original_runner_stop_evidence(pg):
         log.append("tool/result", result(base))
     receipt = {
         "execution_id": "e", "runner_instance_id": "runner", "request_fingerprint": "request",
-        "process_tree_terminated": True, "termination_evidence": "cgroup_empty",
+        "process_tree_terminated": True, "termination_evidence": "process_exited",
     }
     with pytest.raises(AppError):
         log.append("tool/result", result(base, metadata={**receipt, "request_fingerprint": "wrong"}))

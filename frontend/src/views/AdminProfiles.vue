@@ -1422,6 +1422,16 @@
           </label>
         </div>
 
+        <div class="panel-title mb8">默认权限等级（全局默认，会话可覆盖）</div>
+        <p class="small tertiary mb12">
+          档1 请求批准：写文件/联网/bash 均需逐次批准；档2 帮我批准：工作区写入与联网自动，破坏性命令仍需批准；
+          档3 完全访问：全部自动，但破坏性命令仍需批准、灾难性命令一律拒绝。
+        </p>
+        <div class="field mb16" style="width: 320px">
+          <span class="field-label">全局默认档位</span>
+          <n-select v-model:value="runtimeForm.permission_tier_default" :options="permissionTierOptions" style="width: 100%" />
+        </div>
+
         <button class="btn btn-sign btn-sm" :disabled="runtimeSaving" @click="saveRuntime">
           {{ runtimeSaving ? '保存中…' : '保存运行时参数' }}
         </button>
@@ -1898,9 +1908,21 @@ function handleExportSkillsJson() {
   }
 }
 
-// 运行时治理表单（settings.runtime）
-const runtimeForm = ref({ ws_ping_s: 15, ws_timeout_s: 45, strict_session_slot: true })
+// 运行时治理表单（settings.runtime + 全局权限档位）
+const runtimeForm = ref({
+  ws_ping_s: 15,
+  ws_timeout_s: 45,
+  strict_session_slot: true,
+  permission_tier_default: 'tier1',
+})
 const runtimeSaving = ref(false)
+
+// 三档权限等级选项（与后端 permission_tier.TIERS 一致）
+const permissionTierOptions = [
+  { label: '档1 请求批准（最保守）', value: 'tier1' },
+  { label: '档2 帮我批准（推荐）', value: 'tier2' },
+  { label: '档3 完全访问（危险）', value: 'tier3' },
+]
 
 // 视图模式：'cards' (供应商分类多卡片视图) | 'table' (详细表格视图)
 const viewMode = ref<'cards' | 'table'>('cards')
@@ -2267,7 +2289,10 @@ async function loadProfiles() {
       const settings = settingsRes.value
       selectedAgentProfileId.value = settings?.agent_profile_id || null
       lastSavedAgentProfileId.value = selectedAgentProfileId.value
-      if (settings?.runtime) runtimeForm.value = { ...settings.runtime }
+      if (settings?.runtime) runtimeForm.value = { ...runtimeForm.value, ...settings.runtime }
+      if (settings?.permission_tier_default) {
+        runtimeForm.value.permission_tier_default = settings.permission_tier_default
+      }
     }
   } catch (err: any) {
     message.error(err.message || '加载配置失败')
@@ -2276,11 +2301,18 @@ async function loadProfiles() {
   }
 }
 
-/** 保存运行时治理参数（settings.runtime，后端写审计） */
+/** 保存运行时治理参数（settings.runtime + 全局权限档位，后端写审计） */
 async function saveRuntime() {
   runtimeSaving.value = true
   try {
-    await api.admin.updateSettings({ runtime: { ...runtimeForm.value } } as any)
+    await api.admin.updateSettings({
+      runtime: {
+        ws_ping_s: runtimeForm.value.ws_ping_s,
+        ws_timeout_s: runtimeForm.value.ws_timeout_s,
+        strict_session_slot: runtimeForm.value.strict_session_slot,
+      },
+      permission_tier_default: runtimeForm.value.permission_tier_default,
+    } as any)
     message.success('运行时参数已更新生效（写审计）')
   } catch (err: any) {
     message.error(err.message || '运行时参数保存失败')

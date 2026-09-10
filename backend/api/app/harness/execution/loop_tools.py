@@ -56,8 +56,18 @@ def execution_mode(tool: object | None) -> ToolExecutionMode:
     return "parallel" if isinstance(metadata, Mapping) and metadata.get("dsh_execution_mode") == "parallel" else "exclusive"
 
 
-def requires_approval(tool: object) -> bool:
-    """只读观察免审批，其余按声明裁决；平台权限仍逐次独立检查。"""
+def requires_approval(tool: object, args: Mapping[str, Any] | None = None) -> bool:
+    """按档位与命令风险裁决是否需要审批；平台权限仍逐次独立检查。
+
+    优先调用工具的 ``approval_decision(args)``（三档权限 + bash 命令分级）；
+    无该接口时回落元数据声明（只读免审批，其余按声明）。
+    """
+    decision = getattr(tool, "approval_decision", None)
+    if callable(decision):
+        try:
+            return decision(dict(args or {})) == "approval"
+        except Exception:  # noqa: BLE001 —— 裁决异常保守按需审批
+            return True
     metadata = getattr(tool, "metadata", None) or {}
     if not isinstance(metadata, Mapping):
         return True

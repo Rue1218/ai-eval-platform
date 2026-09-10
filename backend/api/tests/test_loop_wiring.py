@@ -185,7 +185,7 @@ def wired(tmp_path, monkeypatch):
     monkeypatch.setattr(loop_service, "require_visible_session", lambda db, sid, actor: session)
     monkeypatch.setattr(loop_wiring, "resolve_session_sandbox", lambda *args: str(tmp_path))
     monkeypatch.setattr(loop_wiring.settings, "runner_internal_token", "")
-    monkeypatch.setattr(loop_wiring.settings, "sandbox_engine", "bwrap")
+    monkeypatch.setattr(loop_wiring.settings, "sandbox_engine", "container")
     runtime = SimpleNamespace(running=False, recover=AsyncMock(), submit=AsyncMock(),
                               set_approval_gate=lambda *a, **k: None, wait=AsyncMock())
     pool = {"capacity": 15, "active": 0, "peak": 0, "claims": 0}
@@ -282,7 +282,7 @@ async def test_runner_callback_matches_bridge_dispatch(wired, monkeypatch):
             """模拟可信 Runner 终态收据。"""
             captured.append((request, epoch))
             return loop_runner.RunnerResult(request.execution_id, epoch, "succeeded", True,
-                "cgroup_empty", True, request.fingerprint, 0, "ok")
+                "process_exited", True, request.fingerprint, 0, "ok")
 
     monkeypatch.setattr(loop_runner, "LoopRunnerClient", lambda *a: Runner("runner", wired.closed))
     monkeypatch.setattr(loop_wiring.settings, "runner_internal_token", "test-token")
