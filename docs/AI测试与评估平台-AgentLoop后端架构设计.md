@@ -1,6 +1,6 @@
 # AI 测试与评估平台 — Agent Loop 后端架构设计
 
-> 版本：V0.6 ｜ 日期：2026-09-09 ｜ 状态：AgentLoop 单入口、协议档选择、重启恢复和共享评测档已完成本地回归；真实供应商与 Linux 执行尚待验收。
+> 版本：V0.8 ｜ 日期：2026-09-10 ｜ 状态：AgentLoop 单入口、协议档选择、重启恢复和共享评测档已完成本地回归；真实供应商与 Linux 执行尚待验收。
 >
 > 用户目标：完整采用 `deepseek-harness-py` 当前已实现的 Agent Loop 及其运行时、模型适配、消息、事件、审批、取消和恢复能力；工具复用平台现有实现，重写字段与接缝并完成兼容联调。核心验收是模型—工具—结果回填—再次模型调用的完整循环。
 >
@@ -15,6 +15,8 @@
 > V0.5 修订：新建会话固定 AgentLoop，删除 AGENT_LOOP_ENABLED；历史 legacy 行只读保留。agent-ui 发布脱敏 profiles，客户端每回合提交 profile_id 与 reasoning_effort，服务端重新校验协议档、凭据、模型和档位兼容性。输入栏采用参考图的紧凑结构和 DeepSeek Harness 风格思考控制。
 >
 > V0.6 修订：订阅建立阶段先读取持久事实；只有成功取得已释放的 PostgreSQL advisory writer lock，才补齐硬重启遗留回合的 `interrupted` 终态，存活实例持锁时只订阅而不接管。每回合按所选协议档读取补充提示词，核心系统提示词保持首段和可缓存边界，补充段动态、不可缓存且读取时再次拒绝密钥或接管性文本。`task.create` 的共享协议档遵循全员同权，`created_by` 只作审计不作使用 ACL。CI 同时配置三组 Loop PostgreSQL URL 并新增 Runner Ubuntu 回归任务；真实供应商与可写 cgroup v2 委派仍待服务器验收。
+>
+> V0.8 修订：模型或协议档切换遇到不兼容 `ProtocolState` 时，纯文本历史在服务端显式迁移——保留用户和助手可见正文，剔除旧供应商签名与 reasoning，并以 `request/header.reason="model_switch_text_only"` 留痕；含任意工具调用/结果的历史仍拒绝跨模型提交并要求新建会话。浏览器新建会话将短票领取与 REST 建会并行，并保证页面切换前复用该短票，减少首次 WS 建连的串行等待。
 
 ## 1. 范围与设计基线
 
@@ -256,7 +258,7 @@ ProviderItemEnd 只接受结构合法、大小受限的完整项；item 未闭�
 | anthropic_messages | 以源 AsyncAnthropic 适配器为基础 | tool_use/tool_result 连续回填、错误结果；平台已有 thinking/cache/system 分段能力 |
 Anthropic 等协议的 thinking/signature 及其他必要回传数据，均通过 §6.1 的 ProtocolState 保存。每个适配器按其实际协议需要登记必需字段；不是给所有模型统一添加 signature。不得将不透明块塞入用户正文或跨协议直接复用。
 
-回传时，适配器按保存的 item 顺序组装原始块与规范工具结果，同一 tool call 只能出现一次。compatibility_key 包含协议、供应商及模型兼容边界；切换到不兼容协议/模型时，先在空闲边界拒绝原样携带并给出明确说明，显式建立不含不透明块的有效迁移上下文后才开始新 turn。不能静默删状态后声称原请求可精确重建，也不能将其他供应商签名透传。A19 使用带必要状态的 fake 协议严格验证，A15 再做真实档回归。
+回传时，适配器按保存的 item 顺序组装原始块与规范工具结果，同一 tool call 只能出现一次。compatibility_key 包含协议、供应商及模型兼容边界；切换到不兼容协议/模型时，纯文本历史只在空闲边界显式建立不含不透明块的迁移上下文：保留可见正文，删除旧供应商签名和 reasoning，并在 `request/header.reason` 记录 `model_switch_text_only`。任何含工具调用或工具结果的历史仍拒绝提交并要求新建会话，不能把工具 wire 身份、结果或其他供应商签名跨协议透传。不能静默删状态后声称原请求可精确重建。A19 使用带必要状态的 fake 协议严格验证，A15 再做真实档回归。
 
 ### 6.3 模型配置、思考与重试
 
@@ -975,7 +977,7 @@ B2 或 B3 只能称中间阶段；B4 的取消/恢复、B5 的业务与事件联
 | A16 | 用户要求评测 → 确认 → task.create → 模型答复 | 确认绑定真实 spec；只入队一次；模型拿真实 task_id，未宣称已评测完成 |
 | A17 | Worker 完成/失败/取消及重新打开会话 | task.progress/task.report/task.end 如实回放；无 Agent 内等待长任务 |
 | A18 | legacy 会话、新会话灰度、停止放行、软件回滚 | endpoint/解析器隔离，旧审批不串线；新事实和 guard 不丢，不中途换引擎 |
-| A19 | ProviderItem/签名增量、Done 状态、重启后回传、模型切换 | 必要原始状态逐字段/顺序还原；不重复 tool call；不完整项失败；不兼容跨协议明确拒绝 |
+| A19 | ProviderItem/签名增量、Done 状态、重启后回传、模型切换 | 必要原始状态逐字段/顺序还原；不重复 tool call；不完整项失败；不兼容的纯文本历史可留痕迁移，任何工具历史明确要求新建会话 |
 | A20 | runner 失联仍写文件、API 重启、另一会话操作重叠 scope | turn 可结算但 guard 保留；纯对话可继续，冲突读写均不 dispatch；只有可信对账后解除 |
 | A21 | 普通 failed/denied、取消、截断禁派发、调度器异常四组对照 | 普通失败继续剩余调用；其余按原因停止/结算，兄弟结果不丢；A09 顺序与上限不变 |
 | A22 | v2 协商/回执、慢连接、trace ACL、快照高水位与游标过期 | 控制/瞬态无 cursor；命令重发不重复执行；仅 turn.end 收尾；快照/实时不重放副作用，旧帧不进入 v2 reducer |
@@ -1097,3 +1099,13 @@ JSON 快照不改写，已删除协议的后续调用统一返回 `VALIDATION`�
 | `backend/api/app/agent/{loop_wiring,title}.py`、`backend/worker/app/{protocol,stress}.py` | 删除 AgentLoop、评测和压测的 Responses 分支 |
 | `backend/shared/models.py`、迁移 `01b89a06eb4b` | 收紧数据库协议约束，在线迁移同步删除档位与受控环境凭据 |
 | `frontend/src/{api,components/modals}` | 协议档类型、模拟档和选择菜单仅展示两类协议 |
+
+V0.8 的模型切换与首连优化文件如下：
+
+| 实际文件（相对项目根） | 作用 |
+| :--- | :--- |
+| `backend/api/app/harness/memory/agent_messages.py` | 按目标协议身份过滤不兼容的 `ProtocolState` 与 reasoning，保留纯文本历史 |
+| `backend/api/app/agent/{loop,runtime,loop_wiring}.py` | 装配目标模型兼容边界，记录文本迁移原因；工具历史跨模型时明确拒绝 |
+| `backend/api/app/routers/ws_v2.py` | 将命令拒绝转换为安全、可操作的状态说明 |
+| `frontend/src/agent/loop/store.ts`、`components/agent/loop/AgentWorkspace.vue`、`views/Agent.vue` | 新建会话并行领票，并在页面切换前实际复用首张短票 |
+| `backend/api/tests/test_loop_{wiring,runtime_recovery,ws_handler}.py` | 覆盖纯文本迁移、工具历史边界与安全拒绝提示 |

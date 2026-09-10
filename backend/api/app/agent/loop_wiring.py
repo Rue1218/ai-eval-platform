@@ -8,6 +8,7 @@ import json
 import time
 from copy import deepcopy
 from dataclasses import asdict, replace
+from typing import Any
 from uuid import uuid4
 
 from app.agent_prompt_settings import get_agent_prompt_overlay
@@ -94,11 +95,13 @@ def authorized_profile(db, data: dict) -> tuple[AuthorizedProfileSnapshot, int]:
     base_url, model, key = _profile_connection(profile, allow_global_alias=profile.id == default_profile_id)
     if not isinstance(key, str) or not key.strip():
         raise AppError(ErrorCode.VALIDATION, "所选 Agent 协议档未配置模型凭据")
-    reasoning_row = db.get(Setting, "agent_reasoning")
-    reasoning = reasoning_row.value if reasoning_row and isinstance(reasoning_row.value, dict) else {}
+    from app.profile_env import read_profile_env
+    from app.profile_reasoning import profile_reasoning
+
     effort = data.get("reasoning_effort")
     if effort is None:
-        effort = reasoning.get("effort", "medium") if reasoning.get("enabled", True) else "off"
+        effort = profile_reasoning(profile.protocol, base_url, model,
+                                   profile.max_output_tokens, full_url=read_profile_env(profile.id).full_url)["reasoning_effort"]
     if effort not in _REASONING_EFFORTS:
         raise AppError(ErrorCode.VALIDATION, "思考强度配置非法")
     try:
@@ -108,7 +111,7 @@ def authorized_profile(db, data: dict) -> tuple[AuthorizedProfileSnapshot, int]:
         raise AppError(ErrorCode.VALIDATION, "所选 Agent 协议档配置非法") from exc
     if context_window <= 0 or max_tokens <= 0:
         raise AppError(ErrorCode.VALIDATION, "所选 Agent 协议档配置非法")
-    config = ModelConfig(protocol=profile.protocol, base_url=base_url, model=model, api_key=key or "",
+    config = ModelConfig(full_url=read_profile_env(profile.id).full_url, protocol=profile.protocol, base_url=base_url, model=model, api_key=key or "",
                          max_tokens=max_tokens, timeout_s=60,
                          anthropic_version=profile.anthropic_version,
                          reasoning_enabled=effort != "off", reasoning_effort=effort if effort != "off" else "medium")
@@ -130,6 +133,31 @@ def authorized_profile(db, data: dict) -> tuple[AuthorizedProfileSnapshot, int]:
     except LlmRequestError as exc:
         raise AppError(ErrorCode.VALIDATION, "所选 Agent 协议档的模型或连接配置无效") from exc
     return snapshot, context_window
+
+
+def _protocol_state_compatibility(profile: AuthorizedProfileSnapshot) -> dict[str, Any]:
+    """提取目标模型可回放 opaque 状态的最小身份，不含连接地址或凭据。"""
+    request = resolve_request(profile, messages=[])
+    return {
+        "version": 1,
+        "replay_policy": "items_v1",
+        "provider": request.provider or "",
+        "protocol": request.protocol or "",
+        "model": request.model,
+        "compatibility_key": request.compatibility_key or "",
+    }
+
+
+def _history_requires_text_migration(messages: list[dict], compatibility: dict[str, Any]) -> bool:
+    """仅在历史确有其他模型的 opaque 状态时启动文本迁移。"""
+    from app.harness.memory.agent_messages import protocol_state_compatible
+
+    return any(
+        message.get("role") == "assistant"
+        and message.get("protocol_state") is not None
+        and not protocol_state_compatible(message["protocol_state"], compatibility)
+        for message in messages
+    )
 
 
 def _identity(identity: dict) -> dict:
@@ -302,6 +330,11 @@ async def _build_dependencies(service, entry, actor_id: str, data: dict, resourc
                                 runner=runner_callback, runner_instance_id=instance_id,
                                 interaction=question, business=business, mcp=mcp)
     specs = bridge.specs()
+    # 工具 schema 已转换为 wire 名；同一快照供上下文仪表区分原生工具与 MCP 扩展。
+    tool_transports = {
+        tool.name: tool.definition.transport
+        for tool in bridge.available_tools()
+    }
     scheduler = ToolScheduler(service._settings(), bridge.available_tools(), approval_broker=service._broker)
     segments = _loop_system_segments(overlay)
 
@@ -318,43 +351,133 @@ async def _build_dependencies(service, entry, actor_id: str, data: dict, resourc
     # 首个请求在 user/message 提交前完整预检；附件展开后的正文也必须计入预算。
     from app.harness.memory.agent_messages import derive_messages
 
-    messages = derive_messages(entry.log.read())
+    history = derive_messages(entry.log.read())
+    compatibility = _protocol_state_compatibility(profile)
+    migrated_history = _history_requires_text_migration(history, compatibility)
+    if migrated_history:
+        # 仅清理与目标模型不兼容的 opaque 签名，正文与已完成工具配对仍可继续使用。
+        messages = derive_messages(
+            entry.log.read(), protocol_state_compatibility=compatibility
+        )
+    else:
+        messages = history
     messages.append({"role": "user", "content": data.get("_model_content", data["content"])})
     effort = profile.config.reasoning_effort if profile.config.reasoning_enabled else "off"
     initial, _ = _window_request(profile, segments, specs, messages, effort, context_window)
     return TurnDependencies(adapter=adapter, scheduler=scheduler, request=initial,
-                            request_factory=request_factory, context_window=context_window), resources
+                            request_factory=request_factory, context_window=context_window,
+                            tool_transports=tool_transports,
+                            protocol_state_compatibility=compatibility if migrated_history else None,
+                            history_transition_reason="model_switch_protocol_state_only" if migrated_history else None), resources
+
+
+def _wire_payload(request) -> dict:
+    """构造与既有输入估算完全同源的无凭据请求投影。"""
+    if request.protocol == "openai_chat":
+        from app.llm.providers.openai import to_openai_messages, to_openai_tools
+
+        return {
+            "messages": to_openai_messages(
+                request.messages,
+                request.system,
+                include_reasoning_content=request.provider in {"deepseek", "moonshot", "zhipu", "minimax"},
+                request=request,
+            ),
+            "tools": to_openai_tools(request.tools),
+        }
+    if request.protocol == "anthropic_messages":
+        from app.llm.providers.anthropic import to_anthropic_messages, to_anthropic_tools
+
+        return {
+            "system": request.system,
+            "messages": to_anthropic_messages(
+                request.messages,
+                request=request,
+                provider=request.provider,
+            ),
+            "tools": to_anthropic_tools(request.tools),
+        }
+    raise AppError(ErrorCode.VALIDATION, "未支持的模型请求协议")
 
 
 def _prompt_tokens(request) -> int:
-    """用 SDK 同源消息转换估算输入成本，包含工具、图文与 opaque 回传块。
-
-    这是序列化成本估算，不声称等于供应商 tokenizer；图片编码也保守计入。
-    不能用 UI 消息数或省略 protocol_state 的正文长度代替实际请求窗口。
-    """
+    """用 SDK 同源消息转换估算输入成本，包含工具、图文与 opaque 回传块。"""
     from app.harness.context.meter import estimate_tokens
 
+    return estimate_tokens(json.dumps(_wire_payload(request), ensure_ascii=False, allow_nan=False))
+
+
+def _prompt_breakdown(
+    request,
+    tool_transports: dict[str, str] | None = None,
+    input_tokens: int | None = None,
+) -> dict[str, int]:
+    """按实际序列化请求拆分输入来源；没有注入的 Skill/记忆文件必须保持为零。"""
+    from app.harness.context.meter import estimate_tokens
+
+    payload = _wire_payload(request)
+    categories = {
+        "system_prompt": 0,
+        "conversation_messages": 0,
+        "tools": 0,
+        "mcp": 0,
+        "skill": 0,
+        "memory_files": 0,
+    }
+
+    def tokens(value) -> int:
+        return estimate_tokens(json.dumps(value, ensure_ascii=False, allow_nan=False))
+
+    transports = tool_transports or {}
+    for spec, wire in zip(request.tools, payload.get("tools", []), strict=True):
+        category = "mcp" if transports.get(spec.name) == "mcp" else "tools"
+        categories[category] += tokens(wire)
+
     if request.protocol == "openai_chat":
-        from app.llm.providers.common import replay_items
-        from app.llm.providers.openai import to_openai_messages, to_openai_tools
-
+        wire_messages = payload["messages"]
+        start = 1 if wire_messages and wire_messages[0].get("role") == "system" else 0
+        if start:
+            categories["system_prompt"] += tokens(wire_messages[0])
+        call_transports: dict[str, str] = {}
         for message in request.messages:
-            if replay_items(message, request, request.provider, request.protocol):
-                raise LlmRequestError("Chat 历史不能回传 opaque item", code="protocol_state_incompatible")
-        payload = {
-            "messages": to_openai_messages(request.messages, request.system,
-                                          include_reasoning_content=request.provider == "deepseek"),
-            "tools": to_openai_tools(request.tools),
-        }
-    elif request.protocol == "anthropic_messages":
-        from app.llm.providers.anthropic import to_anthropic_messages, to_anthropic_tools
-
-        payload = {"system": request.system, "messages": to_anthropic_messages(
-            request.messages, request=request, provider=request.provider),
-            "tools": to_anthropic_tools(request.tools)}
+            if message.get("role") == "assistant":
+                for call in message.get("tool_calls") or []:
+                    if isinstance(call, dict):
+                        call_transports[str(call.get("id", ""))] = transports.get(
+                            str(call.get("name", "")), "native"
+                        )
+        projected = wire_messages[start:]
+        if len(projected) == len(request.messages):
+            for source, wire in zip(request.messages, projected, strict=True):
+                if source.get("role") == "tool":
+                    category = "mcp" if call_transports.get(
+                        str(source.get("tool_call_id", ""))
+                    ) == "mcp" else "tools"
+                    categories[category] += tokens(wire)
+                else:
+                    categories["conversation_messages"] += tokens(wire)
+        else:
+            categories["conversation_messages"] += tokens(projected)
     else:
-        raise AppError(ErrorCode.VALIDATION, "未支持的模型请求协议")
-    return estimate_tokens(json.dumps(payload, ensure_ascii=False, allow_nan=False))
+        # Anthropic 会把连续 ToolResult 合并进 user 块，不能从 wire 可靠拆回单项。
+        categories["system_prompt"] += tokens(payload.get("system", ""))
+        categories["conversation_messages"] += tokens(payload.get("messages", []))
+
+    total = _prompt_tokens(request) if input_tokens is None else input_tokens
+    delta = total - sum(categories.values())
+    if delta >= 0:
+        # JSON 外层字段、分隔符等无法归属具体业务来源，统一计入系统请求开销。
+        categories["system_prompt"] += delta
+    else:
+        # 独立估算的四舍五入可能略大于整体估算，逆序回收确保分项之和严格对齐。
+        remaining = -delta
+        for name in ("conversation_messages", "tools", "mcp", "system_prompt"):
+            deducted = min(categories[name], remaining)
+            categories[name] -= deducted
+            remaining -= deducted
+            if not remaining:
+                break
+    return categories
 
 
 def _prompt_token_breakdown(request) -> dict[str, int]:

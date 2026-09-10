@@ -81,7 +81,7 @@ def question_answers(questions: list[dict], answers: list[dict]) -> dict:
 def profile_capabilities(profile) -> tuple[list[str], str | None]:
     """调用同一个 resolver 验证每个候选档位，禁止维护第二份模型能力名单。"""
     allowed = []
-    for effort in ("off", "low", "medium", "high", "xhigh", "max"):
+    for effort in ("off", "low", "medium", "high", "max"):
         config = replace(profile.config, reasoning_enabled=effort != "off",
                          reasoning_effort=effort if effort != "off" else "medium")
         try:
@@ -93,17 +93,25 @@ def profile_capabilities(profile) -> tuple[list[str], str | None]:
     return allowed, selected if selected in allowed else next(iter(allowed), None)
 
 
-def request_summary(request, *, context_window=None, history_upto_seq=None, input_fingerprint=None) -> dict:
+def request_summary(
+    request,
+    *,
+    context_window=None,
+    history_upto_seq=None,
+    input_fingerprint=None,
+    tool_transports: dict[str, str] | None = None,
+) -> dict:
     """记录实际 attempt 的配置和同源输入估算；测试/旧事实缺协议时保留未知。"""
     meter = None
     if request.protocol and context_window:
-        from .loop_wiring import _prompt_token_breakdown
+        from .loop_wiring import _prompt_breakdown, _prompt_tokens
 
-        breakdown = _prompt_token_breakdown(request)
-        meter = {"basis": "serialized_request.v1", "estimated": True,
+        input_tokens = _prompt_tokens(request)
+        meter = {"basis": "serialized_request.v2", "estimated": True,
                  "profile_version": request.profile_version, "input_fingerprint": input_fingerprint,
                  "history_upto_seq": history_upto_seq, "capacity": context_window,
-                 **breakdown, "reserved_output_tokens": request.max_tokens}
+                 "input_tokens": input_tokens, "reserved_output_tokens": request.max_tokens,
+                 "breakdown": _prompt_breakdown(request, tool_transports, input_tokens)}
     return {"model": request.model, "provider": request.provider, "protocol": request.protocol,
             "profile_id": request.profile_id, "profile_version": request.profile_version,
             "reasoning_effort": request.reasoning_effort, "max_tokens": request.max_tokens,

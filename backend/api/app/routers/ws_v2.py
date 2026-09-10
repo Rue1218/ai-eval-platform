@@ -315,10 +315,27 @@ class WsV2Connection:
         """排入控制帧；控制数据始终与持久流游标独立。"""
         self.enqueue(frame(kind, data, session_id=self.session_id, request_id=request_id))
 
-    def reject(self, code: ErrorCode, command: Command | None = None) -> None:
-        """错误只用固定安全摘要，避免 AppError 意外携带上游秘密。"""
+    def reject(self, error: AppError, command: Command | None = None) -> None:
+        """命令拒绝只投影白名单原因，既可诊断也不暴露上游异常正文。"""
+        messages = {
+            ErrorCode.CONCURRENCY: "上一轮仍在收尾或会话正被占用，请稍后重试",
+            ErrorCode.UNAUTHORIZED: "当前账号没有操作该会话的权限",
+            ErrorCode.VALIDATION: "模型、思考档位或历史状态不兼容；请重新选择或新建会话",
+            ErrorCode.BUDGET_EXCEEDED: "当前对话超过模型上下文预算，请缩短内容后重试",
+            ErrorCode.TIMEOUT: "命令处理超时，请稍后使用原请求重试",
+        }
+        known_validation_messages = {
+            "当前会话包含工具调用，切换模型请新建会话",
+            "所选 Agent 协议档不支持该思考强度",
+        }
+        message = (
+            error.message
+            if error.code == ErrorCode.VALIDATION and error.message in known_validation_messages
+            else messages.get(error.code, "命令暂时无法处理，请稍后重试")
+        )
         self.control("command.rejected", {
-            "code": code.value, "message": "命令未接受，请检查权限、状态或输入",
+            "code": error.code.value,
+            "message": message,
         }, command.request_id if command else None)
 
     async def sender(self) -> None:
@@ -500,12 +517,12 @@ class WsV2Connection:
                 if exc.code == ErrorCode.NOT_FOUND:
                     await self.ws.close(code=4404)
                     return
-                self.reject(exc.code, command)
+                self.reject(exc, command)
             except WebSocketDisconnect:
                 return
             except Exception as exc:
                 logger.error("WS v2 命令失败 type=%s", type(exc).__name__)
-                self.reject(ErrorCode.INTERNAL, command)
+                self.reject(AppError(ErrorCode.INTERNAL, "命令处理失败"), command)
 
     async def run(self) -> None:
         """管理连接任务并在所有退出路径释放控制权，不 await 整轮结算。"""

@@ -26,19 +26,20 @@ async function setup(page: Page, holdNewReplay = false) {
     let body: any={}
     if(path==='/api/auth/me') body={id:'u',username:'tester',role:'admin',must_change_password:false}
     else if(path==='/api/auth/ws-ticket') body={ticket:'ticket',expires_in:300}
-    else if(path==='/api/sessions' && route.request().method()==='GET') body=[{id:'s',title:'联调会话',owner_id:'u',visibility:'private',can_manage:true,can_delete:true,engine_version:'agent_loop_v2',created_at:'2026-09-09T00:00:00Z'},{id:'s2',title:'另一个会话',owner_id:'u',visibility:'private',can_manage:true,can_delete:true,engine_version:'agent_loop_v2',created_at:'2026-09-09T00:00:00Z'},{id:'legacy',title:'历史旧会话',owner_id:'u',visibility:'private',can_manage:true,can_delete:true,engine_version:'legacy',created_at:'2026-09-09T00:00:00Z'}]
-    else if(path==='/api/sessions' && route.request().method()==='POST') { const payload=route.request().postDataJSON() as Record<string, unknown>;sessionCreates.push(payload);body={id:'s3',title:payload.title || '新会话',owner_id:'u',visibility:'private',can_manage:true,can_delete:true,engine_version:'agent_loop_v2',created_at:'2026-09-09T00:00:00Z'} }
+    else if(path==='/api/sessions' && route.request().method()==='GET') body=[{id:'s',title:'联调会话',owner_id:'u',visibility:'private',can_manage:true,can_delete:true,engine_version:'agent_loop_v2',workspace_id:'ws-default',workspace_name:'默认工作区',created_at:'2026-09-09T00:00:00Z'},{id:'s2',title:'另一个会话',owner_id:'u',visibility:'private',can_manage:true,can_delete:true,engine_version:'agent_loop_v2',workspace_id:'ws-default',workspace_name:'默认工作区',created_at:'2026-09-09T00:00:00Z'},{id:'legacy',title:'历史旧会话',owner_id:'u',visibility:'private',can_manage:true,can_delete:true,engine_version:'legacy',created_at:'2026-09-09T00:00:00Z'}]
+    else if(path==='/api/sessions' && route.request().method()==='POST') { const payload=route.request().postDataJSON() as Record<string, unknown>;sessionCreates.push(payload);body={id:'s3',title:payload.title || '新会话',owner_id:'u',visibility:'private',can_manage:true,can_delete:true,engine_version:'agent_loop_v2',workspace_id:payload.workspace_id,created_at:'2026-09-09T00:00:00Z'} }
     else if(path.endsWith('/agent-ui')) body=ui
     else if(path==='/api/profiles') body=[{id:'p',name:'测试模型',model:'deepseek-chat',usages:['agent'],protocol:'openai_chat'}]
     else if(path==='/api/admin/settings') body={agent_profile_id:'p'}
     else if(['/api/datasets','/api/kb','/api/tasks'].includes(path)) body=[]
+    else if(path==='/api/workspaces') body=[{id:'ws-default',name:'默认工作区'}]
     else if(path==='/api/files' && route.request().method()==='POST') { await new Promise<void>(resolve=>{releaseUpload=resolve});body={id:'f',filename:'draft.txt',size:5,content_type:'text/plain'} }
     await route.fulfill({json:body})
   })
   await page.routeWebSocket('**/ws/agent/v2?*', socket => {
     const send=(type:string,data:any={},correlation:any={},persistent=false,sid='s')=>socket.send(JSON.stringify({protocol_version:2,type,durability:persistent?'persistent':'control',...(persistent?{cursor:++cursor}:{}),session_id:sid,ts:'2026-09-09T00:00:00Z',correlation,data}))
     socket.send(JSON.stringify({protocol_version:2,type:'hello',durability:'control',data:{protocol_version:2},correlation:{}}))
-    socket.send(JSON.stringify({protocol_version:2,type:'capabilities',durability:'control',data:{stream_schema_version:'agent-loop-stream.v2.1'},correlation:{}}))
+    socket.send(JSON.stringify({protocol_version:2,type:'capabilities',durability:'control',data:{stream_schema_version:'agent-loop-stream.v2.2'},correlation:{}}))
     socket.onMessage(raw=>{
       const cmd=JSON.parse(String(raw));commands.push(cmd);sockets.set(cmd.session_id,socket)
       const sid=cmd.session_id, c={turn:1,turn_id:`${sid}:1`,step:1,attempt_id:'a',call_id:'c'}
@@ -53,8 +54,8 @@ async function setup(page: Page, holdNewReplay = false) {
         send('user.message',{content:cmd.data.content,client_message_id:cmd.data.client_message_id},{turn:1,turn_id:`${sid}:1`},true,sid)
         send('turn.start',{},c,true,sid)
         socket.send(JSON.stringify({protocol_version:2,type:'command.accepted',durability:'control',session_id:sid,request_id:cmd.request_id,data:{accepted:true},correlation:c}))
-        send('assistant.start',{request_summary:{model:'deepseek-chat',reasoning_effort:cmd.data.reasoning_effort,profile_version:'v1',context_meter:{basis:'serialized_request.v2',estimated:true,profile_version:'v1',input_fingerprint:'fixture',history_upto_seq:3,capacity:1000000,input_tokens:23300,reserved_output_tokens:25600,system_tokens:1800,skills_tokens:6900,mcp_tokens:1300,tools_tokens:1400,conversation_tokens:11900}}},c,true,sid)
-        send('assistant.message',{content:'准备读取文件',reasoning_preview:'检查工作区'},c,true,sid)
+        send('assistant.start',{request_summary:{model:'deepseek-chat',reasoning_effort:cmd.data.reasoning_effort,profile_version:'v1'}},c,true,sid)
+        send('assistant.message',{content:'准备读取文件',reasoning_preview:'检查工作区',usage:{prompt_tokens:1500,completion_tokens:320,total_tokens:1820,cache_read_input_tokens:600},latency_ms:800},c,true,sid)
         send('assistant.end',{outcome:'committed'},c,true,sid)
         send('tool.call',{name:'read',display:{version:1,target:'test.txt',arguments_preview:'{"path":"test.txt"}'}},c,true,sid)
         send('approval.requested',{interaction_id:'i',nonce:'nonce-memory-only',expires_at:Date.now()/1000+300,name:'read'},c,true,sid)
@@ -73,7 +74,8 @@ async function setup(page: Page, holdNewReplay = false) {
   await expect(page.getByText('历史旧会话',{exact:true})).toHaveCount(0)
   await page.locator('.session-title-text').filter({hasText:'联调会话'}).click()
   await expect(page.getByRole('textbox',{name:'消息'})).toBeVisible()
-  await expect(page.locator('.loop-status')).toContainText('就绪')
+  // 空会话按当前产品约定隐藏“就绪”状态，运行信息入口仍应可见。
+  await expect(page.locator('.loop-runtime-btn')).toBeVisible()
   return {commands,sessionCreates,get submits(){return submit},get uploading(){return !!releaseUpload},release:()=>releaseUpload?.(),replay:()=>releaseReplay?.(),sockets}
 }
 
@@ -120,22 +122,6 @@ test('协议档选择会同步收窄思考强度并冻结到本轮请求',async(
   await page.getByRole('button',{name:'发送'}).click()
   await expect.poll(()=>ctx.commands.find(command=>command.type==='turn.submit')?.data.profile_id).toBe('p2')
   expect(ctx.commands.find(command=>command.type==='turn.submit')?.data.reasoning_effort).toBe('high')
-})
-
-test('上下文仪表按实际来源显示分段进度和详细消息', async ({page}) => {
-  const ctx = await setup(page)
-  await page.getByRole('textbox', {name:'消息'}).fill('验证上下文来源')
-  await page.getByRole('button', {name:'发送'}).click()
-  await expect.poll(() => ctx.submits).toBe(1)
-  await page.getByRole('button', {name:'上下文已用 2%'}).click()
-  await expect(page.getByText('~23.3K / 1M')).toBeVisible()
-  for (const name of ['系统提示词', 'Skill', 'MCP', '工具', '对话消息']) {
-    await expect(page.getByText(name, {exact:true})).toBeVisible()
-  }
-  await expect(page.locator('.meter-segment')).toHaveCount(5)
-  await expect(page.locator('.meter-segment[data-source="system"]')).toHaveCSS('background-color', 'rgb(152, 162, 179)')
-  await expect(page.locator('.meter-segment[data-source="skill"]')).toHaveCSS('background-color', 'rgb(155, 138, 251)')
-  await expect(page.getByText('输出预留 ~25.6K · 最近一次实际请求')).toBeVisible()
 })
 
 for (const profile of serverProfiles.slice(0, 2)) {
@@ -199,6 +185,28 @@ test('首次订阅超时保留草稿，迟到回放不自动发送，原请求�
   await expect(page.getByRole('alert')).toHaveCount(0)
 })
 
+test('消息操作和真实模型指标遵循持久事件字段', async ({page}) => {
+  const ctx = await setup(page)
+  await page.getByRole('textbox', {name:'消息'}).fill('读取测试文件')
+  await page.getByRole('button', {name:'发送'}).click()
+  await expect(page.locator('.assistant-identity time')).toContainText('2026')
+  await expect(page.getByLabel('复制回答')).toBeVisible()
+  await expect(page.getByLabel('重新生成')).toBeDisabled()
+  await expect(page.getByLabel('引用为参考记忆')).toBeVisible()
+  await expect(page.locator('.assistant-metrics')).toContainText('1.8K token')
+  await expect(page.locator('.assistant-metrics')).toContainText('800 ms')
+  await expect(page.locator('.loop-bottom-metrics')).toContainText('生成速度 400/s')
+  await expect(page.locator('.loop-bottom-metrics')).toContainText('缓存命中 40%')
+  await expect(page.locator('.loop-bottom-metrics')).toContainText('输入 1.5K · 输出 320')
+  await page.getByLabel('引用为参考记忆').click()
+  await expect(page.getByRole('textbox', {name:'消息'})).toHaveValue('[引用对话记忆]\n准备读取文件\n[/引用对话记忆]')
+  await page.getByRole('button', {name:'允许一次', exact:true}).click()
+  await expect(page.getByRole('button', {name:'重新生成'})).toBeEnabled()
+  await page.getByRole('button', {name:'重新生成'}).click()
+  await expect.poll(() => ctx.submits).toBe(2)
+  expect(ctx.commands.filter(command => command.type === 'turn.submit')[1].data.content).toBe('读取测试文件')
+})
+
 test('多步工具内审批、attempt 结束不解锁发送、切会话不取消、轨迹可用',async({page})=>{
   const ctx=await setup(page)
   await page.getByRole('textbox',{name:'消息'}).fill('读取测试文件')
@@ -219,9 +227,18 @@ test('多步工具内审批、attempt 结束不解锁发送、切会话不取消
   await page.locator('.trace-row').first().click()
   await expect(page.locator('.trace-inspector')).toBeVisible()
   await expect(page.locator('.trace-lanes')).toContainText('模型')
+  await expect(page.locator('.trace-detail-tabs')).toContainText('参数')
+  await expect(page.locator('.trace-detail-tabs')).toContainText('结果')
+  await expect(page.locator('.trace-detail-tabs')).toContainText('Schema')
   await page.getByRole('textbox',{name:'搜索轨迹'}).fill('')
   await page.locator('.trace-filters').getByRole('button',{name:'模型',exact:true}).click()
-  await expect(page.locator('.trace-row')).toHaveCount(1)
+  await expect(page.locator('.trace-row')).toHaveCount(2)
+  await expect(page.locator('.trace-filters').getByRole('button',{name:'授权',exact:true})).toBeVisible()
+  await expect(page.locator('.trace-filters').getByRole('button',{name:'问答',exact:true})).toHaveCount(0)
+  await page.locator('.trace-row').first().click()
+  await expect(page.locator('.trace-detail-title')).toHaveText('模型请求快照')
+  await expect(page.locator('.trace-detail-tabs')).toContainText('原始内容')
+  await expect(page.locator('.trace-detail-tabs')).toContainText('数据包')
   await page.locator('.trace-filters').getByRole('button',{name:'全部',exact:true}).click()
   // 拖选允许经过泳道空白，详情定位到松手的事件且不丢失选区。
   const axis = page.locator('.trace-axis'), box = (await axis.boundingBox())!

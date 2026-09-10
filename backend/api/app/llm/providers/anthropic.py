@@ -27,6 +27,7 @@ from .common import (
     anthropic_usage,
     close_async,
     content_parts,
+    full_url_client_options,
     invalid,
     make_state,
     normalize_base_url,
@@ -40,7 +41,7 @@ from .options import request_options
 
 def _allows_unsigned_thinking(request: LlmRequest | None) -> bool:
     """DeepSeek/Qwen 的 Messages 兼容流允许空签名，不能套用 Claude 签名规则。"""
-    return request is not None and request.model.lower().startswith(("deepseek-", "qwen"))
+    return request is not None and request.model.lower().startswith(("deepseek-", "qwen", "glm-", "kimi-", "minimax-"))
 
 
 def _validate_block(block: dict, *, allow_unsigned_thinking: bool = False) -> None:
@@ -173,13 +174,15 @@ class AnthropicAdapter:
         base_url: str | None = None,
         provider: str = "anthropic",
         timeout_s: float = 60.0,
+        full_url: bool = False,
     ):
         self._provider = provider
         self._client = anthropic.AsyncAnthropic(
             api_key=api_key,
-            base_url=normalize_base_url(base_url, "anthropic_messages") if base_url else None,
+            base_url=normalize_base_url(base_url, "anthropic_messages", full_url=full_url) if base_url else None,
             timeout=timeout_s,
             max_retries=0,
+            **(full_url_client_options(base_url, asynchronous=True) if full_url and base_url else {}),
         )
 
     async def close(self) -> None:

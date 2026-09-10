@@ -360,6 +360,29 @@ def test_output_acl_is_checked_at_send_time_and_errors_are_sanitized():
     asyncio.run(scenario())
 
 
+def test_command_rejection_exposes_safe_actionable_reason():
+    """并发拒绝应让浏览器可重试，不能退回模糊的权限/输入提示。"""
+    async def scenario():
+        """先占用回合，再验证第二次提交得到固定安全说明。"""
+        service = FakeService()
+        socket, _, task = await connect(service)
+        await socket.push(
+            "turn.submit", {"client_message_id": "first", "content": "x"}, request_id="first"
+        )
+        await until(lambda: service.effects == 1)
+        await socket.push(
+            "turn.submit", {"client_message_id": "second", "content": "y"}, request_id="second"
+        )
+        await until(lambda: any(f["type"] == "command.rejected" for f in socket.sent))
+        rejected = next(f for f in socket.sent if f["type"] == "command.rejected")
+        assert rejected["data"] == {
+            "code": "CONCURRENCY",
+            "message": "上一轮仍在收尾或会话正被占用，请稍后重试",
+        }
+        await disconnect(socket, task)
+    asyncio.run(scenario())
+
+
 def test_backpressure_drops_transient_then_closes_persistent_overflow():
     """有界队列先丢瞬态；仍超限则断连，让持久事件从数据库回放。"""
     async def scenario():

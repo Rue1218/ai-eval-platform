@@ -2,6 +2,26 @@
 
 import pytest
 
+
+@pytest.mark.parametrize("kind", ["openai_chat", "anthropic_messages"])
+def test_full_endpoint_is_used_unchanged(monkeypatch, kind):
+    """Worker 完整 URL 与 API 行为一致，不追加资源后缀。"""
+    from app import protocol
+
+    captured = []
+
+    def post(url, body, headers, timeout_s):
+        """记录最终 URL，使用固定协议响应。"""
+        captured.append(url)
+        return {"choices": [{"message": {"content": "ok"}}],
+                "content": [{"type": "text", "text": "ok"}]}
+
+    monkeypatch.setattr(protocol, "_post_json", post)
+    url = "https://unit.invalid/run/?region=cn"
+    protocol.call_protocol(protocol=kind, base_url=url, full_url=True,
+                           model="unit", api_key="unit", messages=[])
+    assert captured == [url]
+
 from app import protocol
 
 

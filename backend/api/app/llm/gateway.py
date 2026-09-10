@@ -55,6 +55,7 @@ def _default_invoke_transport(request: ModelRequest) -> AdapterResult:
     return call_protocol(
         protocol=config.protocol,
         base_url=config.base_url,
+        full_url=config.full_url,
         model=config.model,
         api_key=config.api_key,
         messages=[dict(message) for message in request.messages],
@@ -78,6 +79,7 @@ def _default_stream_transport(
     yield from stream_protocol(
         protocol=config.protocol,
         base_url=config.base_url,
+        full_url=config.full_url,
         model=config.model,
         api_key=config.api_key,
         messages=[dict(message) for message in request.messages],

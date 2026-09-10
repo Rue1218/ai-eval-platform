@@ -10,6 +10,8 @@ from ..loop_contracts import (
     Done,
     LlmRequest,
     Message,
+    ProviderItemEnd,
+    ProviderItemStart,
     ReasoningDelta,
     StreamChunk,
     TextDelta,
@@ -22,7 +24,9 @@ from .common import (
     call_arguments,
     close_async,
     content_parts,
+    full_url_client_options,
     invalid,
+    make_state,
     normalize_base_url,
     plain,
     replay_items,
@@ -37,10 +41,11 @@ def to_openai_messages(
     system: str,
     *,
     include_reasoning_content: bool = False,
+    request: LlmRequest | None = None,
 ) -> list[dict[str, Any]]:
     """源 args/raw 字段直译为函数调用；坏 JSON 原串保留供模型修正。"""
     validate_messages(messages)
-    if any(message.get("protocol_state") is not None for message in messages):
+    if request is None and any(message.get("protocol_state") is not None for message in messages):
         raise invalid("Chat 消息不能静默删除其他协议的状态")
     wire = [{"role": "system", "content": system}] if system else []
     for message in messages:
@@ -61,6 +66,14 @@ def to_openai_messages(
                     }
                     for call in message["tool_calls"]
                 ]
+            items = replay_items(message, request, request.provider, "openai_chat") if request else None
+            if items:
+                if request.provider != "minimax" or len(items) != 1 or items[0].get("type") != "minimax_reasoning":
+                    raise invalid("Chat 协议不接受其他供应商原始状态")
+                details = items[0].get("details")
+                if not isinstance(details, list) or not all(isinstance(d, dict) for d in details):
+                    raise invalid("MiniMax 思考状态不合法")
+                item["reasoning_details"] = details
             if include_reasoning_content and isinstance(message.get("reasoning_content"), str):
                 item["reasoning_content"] = message["reasoning_content"]
         wire.append(item)
@@ -110,13 +123,15 @@ class OpenAiAdapter:
         base_url: str | None = None,
         provider: str = "openai",
         timeout_s: float = 60.0,
+        full_url: bool = False,
     ):
         self._provider = provider
         self._client = openai.AsyncOpenAI(
             api_key=api_key,
-            base_url=normalize_base_url(base_url, "openai_chat") if base_url else None,
+            base_url=normalize_base_url(base_url, "openai_chat", full_url=full_url) if base_url else None,
             timeout=timeout_s,
             max_retries=0,
+            **(full_url_client_options(base_url, asynchronous=True) if full_url and base_url else {}),
         )
 
     async def close(self) -> None:
@@ -127,16 +142,13 @@ class OpenAiAdapter:
         """一次 SDK 请求对应一次 Attempt，EOF 不补发 Done。"""
         provider = request.provider or self._provider
         kwargs = request_options(request, provider, "openai_chat")
-        for message in request.messages:
-            items = replay_items(message, request, provider, "openai_chat")
-            if items:
-                raise invalid("Chat 协议不接受其他协议的原始 item")
         kwargs.update(
             model=request.model,
             messages=to_openai_messages(
                 request.messages,
                 request.system,
-                include_reasoning_content=provider == "deepseek",
+                include_reasoning_content=provider in {"deepseek", "moonshot", "zhipu", "minimax"},
+                request=request,
             ),
             stream=True,
             stream_options={"include_usage": True},
@@ -147,6 +159,7 @@ class OpenAiAdapter:
         try:
             stream = await self._client.chat.completions.create(**kwargs)
             calls: dict[int, tuple[str, str]] = {}
+            details: dict[int, dict] = {}
             finish = None
             usage = {}
             async for event in stream:
@@ -161,9 +174,24 @@ class OpenAiAdapter:
                 choice = choices[0]
                 delta = choice.get("delta") or {}
                 if finish is not None and any(
-                    delta.get(key) for key in ("content", "reasoning_content", "tool_calls")
+                    delta.get(key) for key in ("content", "reasoning_content", "reasoning_details", "tool_calls")
                 ):
                     raise invalid("结束信号之后仍出现语义增量")
+                # MiniMax 的 reasoning_details 是累计快照；原样保存结构并只投影新文本。
+                detail_text = ""
+                if provider == "minimax":
+                    for detail in delta.get("reasoning_details") or []:
+                        index = detail.get("index", 0)
+                        if not isinstance(index, int) or not isinstance(detail.get("text", ""), str):
+                            raise invalid("MiniMax 思考增量不合法")
+                        previous = details.get(index, {}).get("text", "")
+                        current = detail.get("text", "")
+                        if previous and not current.startswith(previous):
+                            raise invalid("MiniMax 累计思考内容发生回退")
+                        detail_text += current[len(previous):]
+                        details[index] = {**details.get(index, {}), **detail}
+                if detail_text and not delta.get("reasoning_content"):
+                    yield ReasoningDelta(detail_text)
                 if delta.get("reasoning_content"):
                     yield ReasoningDelta(delta["reasoning_content"])
                 if delta.get("content"):
@@ -190,7 +218,13 @@ class OpenAiAdapter:
                         raise invalid("重复结束信号")
                     finish = choice["finish_reason"]
             if finish is not None:
-                yield Done(normalize_openai_finish_reason(finish), usage)
+                state = None
+                if details:
+                    item = {"type": "minimax_reasoning", "details": list(details.values())}
+                    yield ProviderItemStart("minimax-reasoning", 0, "minimax_reasoning")
+                    yield ProviderItemEnd("minimax-reasoning", item)
+                    state = make_state(request, provider, "openai_chat", [item])
+                yield Done(normalize_openai_finish_reason(finish), usage, state)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

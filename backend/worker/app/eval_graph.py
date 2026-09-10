@@ -224,6 +224,7 @@ class BenchmarkEvalPipeline:
                 call_kwargs = dict(
                     protocol=p_dict["protocol"],
                     base_url=p_dict["base_url"],
+                    full_url=p_dict.get("full_url", False),
                     model=p_dict["model"],
                     api_key=api_key,
                     anthropic_version=p_dict.get("anthropic_version"),

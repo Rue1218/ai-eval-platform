@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 from datetime import UTC, datetime
 from typing import Any
 
@@ -257,3 +258,227 @@ def resolve_session_sandbox(
         raise AppError(ErrorCode.VALIDATION, "绑定工作区目录不可用")
     return target
 
+
+def resolve_scope_item(base: str, rel_path: str, *, must_exist: bool = True) -> str:
+    """在工作区 base 内解析相对条目（文件或目录），严格防穿越 + 符号链接逃逸。"""
+    base_abs = os.path.abspath(base)
+    base_real = os.path.realpath(base_abs)
+    if not os.path.isdir(base_real):
+        raise AppError(ErrorCode.NOT_FOUND, "工作区目录不存在")
+    rel = (rel_path or "").strip("/").replace("\\", "/")
+    if not rel:
+        raise AppError(ErrorCode.VALIDATION, "相对路径不能为空")
+    current = base_abs
+    parts = [p for p in rel.split("/") if p]
+    for part in parts:
+        validate_segment(part)
+        current = os.path.join(current, part)
+        if os.path.islink(current):
+            raise AppError(ErrorCode.VALIDATION, "路径含符号链接，拒绝访问")
+        if os.path.exists(current):
+            real = os.path.realpath(current)
+            if real != base_real and not real.startswith(base_real + os.sep):
+                raise AppError(ErrorCode.VALIDATION, "路径越出工作区，拒绝访问")
+    current_abs = os.path.abspath(current)
+    if must_exist and not os.path.exists(current_abs):
+        raise AppError(ErrorCode.NOT_FOUND, "目标不存在")
+    return current_abs
+
+
+def resolve_scope_file(base: str, rel_path: str, *, must_exist: bool = True) -> str:
+    """在工作区 base 内解析相对单文件路径，严格防穿越并确保为文件而非目录。"""
+    target = resolve_scope_item(base, rel_path, must_exist=must_exist)
+    if must_exist and os.path.isdir(target):
+        raise AppError(ErrorCode.VALIDATION, "目标为目录而非文件")
+    return target
+
+
+def read_workspace_file(directory: str, rel_path: str, max_bytes: int = 5 * 1024 * 1024) -> dict[str, Any]:
+    """安全读取工作区单文件内容与元数据。超大文件标明 is_large，二进制标明 is_binary。"""
+    abs_path = resolve_scope_file(directory, rel_path, must_exist=True)
+    try:
+        st = os.stat(abs_path)
+    except OSError as exc:
+        raise AppError(ErrorCode.NOT_FOUND, "文件读取失败") from exc
+    size = st.st_size
+    mtime = (
+        datetime.fromtimestamp(st.st_mtime, UTC).isoformat() if st.st_mtime else None
+    )
+    is_large = size > max_bytes
+    if is_large:
+        return {
+            "path": rel_path.strip("/").replace("\\", "/"),
+            "name": os.path.basename(abs_path),
+            "size": size,
+            "updated_at": mtime,
+            "is_binary": False,
+            "is_large": True,
+            "content": "",
+        }
+    try:
+        with open(abs_path, "rb") as f:
+            raw = f.read()
+    except OSError as exc:
+        raise AppError(ErrorCode.INTERNAL, "无法读取文件数据") from exc
+
+    is_binary = b"\x00" in raw
+    if not is_binary:
+        try:
+            content = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            is_binary = True
+            content = ""
+    else:
+        content = ""
+
+    return {
+        "path": rel_path.strip("/").replace("\\", "/"),
+        "name": os.path.basename(abs_path),
+        "size": size,
+        "updated_at": mtime,
+        "is_binary": is_binary,
+        "is_large": False,
+        "content": content,
+    }
+
+
+def write_workspace_file(directory: str, rel_path: str, content: str) -> dict[str, Any]:
+    """安全写回工作区文本文件内容。"""
+    abs_path = resolve_scope_file(directory, rel_path, must_exist=True)
+    if os.path.islink(abs_path):
+        raise AppError(ErrorCode.VALIDATION, "目标为符号链接，拒绝写入")
+    try:
+        with open(abs_path, "w", encoding="utf-8", newline="") as f:
+            f.write(content)
+        st = os.stat(abs_path)
+    except OSError as exc:
+        raise AppError(ErrorCode.INTERNAL, "写入文件失败") from exc
+    return {
+        "path": rel_path.strip("/").replace("\\", "/"),
+        "name": os.path.basename(abs_path),
+        "size": st.st_size,
+        "updated_at": (
+            datetime.fromtimestamp(st.st_mtime, UTC).isoformat() if st.st_mtime else None
+        ),
+    }
+
+
+def create_workspace_file(directory: str, parent_path: str, name: str, content: str = "") -> dict[str, Any]:
+    """在指定相对父目录下创建新文件。"""
+    validate_segment(name)
+    parent_dir = resolve_scope_dir(directory, parent_path)
+    target = os.path.join(parent_dir, name)
+    if os.path.exists(target) or os.path.islink(target):
+        raise AppError(ErrorCode.VALIDATION, "同名文件或目录已存在")
+    try:
+        with open(target, "w", encoding="utf-8", newline="") as f:
+            f.write(content)
+        st = os.stat(target)
+    except OSError as exc:
+        raise AppError(ErrorCode.INTERNAL, "创建文件失败") from exc
+    rel = os.path.join(parent_path, name).replace("\\", "/").strip("/")
+    return {
+        "path": rel,
+        "name": name,
+        "size": st.st_size,
+        "updated_at": (
+            datetime.fromtimestamp(st.st_mtime, UTC).isoformat() if st.st_mtime else None
+        ),
+    }
+
+
+def rename_workspace_path(directory: str, rel_path: str, new_name: str) -> dict[str, Any]:
+    """在同级目录下重命名文件或目录。"""
+    validate_segment(new_name)
+    rel = (rel_path or "").strip("/").replace("\\", "/")
+    if not rel:
+        raise AppError(ErrorCode.VALIDATION, "无法重命名工作区根目录")
+    abs_src = resolve_scope_item(directory, rel, must_exist=True)
+    parent_dir = os.path.dirname(abs_src)
+    abs_dst = os.path.join(parent_dir, new_name)
+    if os.path.exists(abs_dst) or os.path.islink(abs_dst):
+        raise AppError(ErrorCode.VALIDATION, "目标名称已存在")
+    try:
+        os.rename(abs_src, abs_dst)
+    except OSError as exc:
+        raise AppError(ErrorCode.INTERNAL, "重命名失败") from exc
+    parent_rel = os.path.dirname(rel).replace("\\", "/")
+    new_rel = os.path.join(parent_rel, new_name).replace("\\", "/").strip("/")
+    return {
+        "old_path": rel,
+        "new_path": new_rel,
+        "name": new_name,
+    }
+
+
+def delete_workspace_path(directory: str, rel_path: str) -> dict[str, Any]:
+    """安全删除工作区内的指定文件或目录（拒绝删除工作区根）。"""
+    rel = (rel_path or "").strip("/").replace("\\", "/")
+    if not rel:
+        raise AppError(ErrorCode.VALIDATION, "无法删除工作区根目录")
+    abs_target = resolve_scope_item(directory, rel, must_exist=True)
+    base_real = os.path.realpath(os.path.abspath(directory))
+    target_real = os.path.realpath(abs_target)
+    if target_real == base_real:
+        raise AppError(ErrorCode.VALIDATION, "无法删除工作区根目录")
+    try:
+        if os.path.isdir(abs_target) and not os.path.islink(abs_target):
+            shutil.rmtree(abs_target)
+        else:
+            os.remove(abs_target)
+    except OSError as exc:
+        raise AppError(ErrorCode.INTERNAL, "删除失败") from exc
+    return {
+        "path": rel,
+        "deleted": True,
+    }
+
+
+def get_file_tree(directory: str, max_depth: int = 4, max_entries: int = 1000) -> list[dict[str, Any]]:
+    """递归获取工作区目录树结构（限定深度与条目数，防 OOM）。"""
+    base_abs = os.path.abspath(directory)
+    if not os.path.isdir(base_abs):
+        return []
+
+    count = 0
+
+    def _scan(current_path: str, rel_prefix: str, current_depth: int) -> list[dict[str, Any]]:
+        nonlocal count
+        if current_depth > max_depth or count >= max_entries:
+            return []
+        res = []
+        try:
+            with os.scandir(current_path) as it:
+                items = list(it)
+        except OSError:
+            return []
+        items.sort(key=lambda e: (not e.is_dir(follow_symlinks=False), e.name.lower()))
+        for entry in items:
+            if count >= max_entries:
+                break
+            try:
+                is_dir = entry.is_dir(follow_symlinks=False)
+                is_file = entry.is_file(follow_symlinks=False)
+                kind = "dir" if is_dir else ("file" if is_file else "link")
+                st = entry.stat(follow_symlinks=False)
+                size = st.st_size if kind == "file" else 0
+                mtime = st.st_mtime if kind in {"file", "dir"} else 0
+            except OSError:
+                continue
+            count += 1
+            rel = os.path.join(rel_prefix, entry.name).replace("\\", "/").strip("/")
+            node: dict[str, Any] = {
+                "name": entry.name,
+                "path": rel,
+                "kind": kind,
+                "size": size,
+                "updated_at": (
+                    datetime.fromtimestamp(mtime, UTC).isoformat() if mtime else None
+                ),
+            }
+            if is_dir:
+                node["children"] = _scan(entry.path, rel, current_depth + 1)
+            res.append(node)
+        return res
+
+    return _scan(base_abs, "", 1)

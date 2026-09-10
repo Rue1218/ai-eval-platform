@@ -137,15 +137,6 @@
         </span>
 
         <span class="grow"></span>
-        <!-- F3/G5：草稿会话可预选绑定工作区；发送首条消息时随创建固化 -->
-        <template v-if="!currentSessionId && !isGenerating">
-          <span v-if="draftWorkspaceId" class="chat-ws-chip draft">
-            <span>工作区 · {{ draftWorkspaceName }}</span>
-            <span class="ws-chip-x" title="取消绑定" @click="clearDraftWorkspace">×</span>
-          </span>
-          <button v-else class="btn btn-sm btn-ghost" @click="openBindingPanel">绑定工作区</button>
-        </template>
-
         <button
           v-if="currentSession?.can_manage"
           class="btn btn-sm btn-ghost"
@@ -156,48 +147,7 @@
         </button>
       </div>
 
-      <!-- F3/G5：草稿会话工作区选择面板（初版仅根 scope；固化后不可更改）。
-           支持面板内直接新建工作区并自动选中（即建即绑，无需跳「我的工作区」） -->
-      <div v-if="bindingPanelOpen" class="ws-binding-panel" data-od-id="ws-binding-panel">
-        <div class="ws-binding-panel-title">
-          选择要绑定的工作区
-          <span class="muted">（绑定后会话内模型的文件读写与 bash 均在该工作区进行，发送首条消息后固化）</span>
-        </div>
-        <div v-if="bindingLoading" class="muted" style="padding: 8px 0">加载中…</div>
-        <template v-else>
-          <div v-if="bindableWorkspaces.length === 0" class="muted" style="padding: 8px 0">
-            暂无工作区——在下方直接新建即可
-          </div>
-          <button
-            v-for="wsItem in bindableWorkspaces"
-            :key="wsItem.id"
-            class="ws-binding-item"
-            @click="pickDraftWorkspace(wsItem.id, wsItem.name)"
-          >
-            <span>{{ wsItem.name }}</span>
-            <span class="muted">根目录</span>
-          </button>
-        </template>
-        <div class="ws-binding-create">
-          <input
-            v-model="newWorkspaceName"
-            class="input ws-binding-create-input"
-            placeholder="新建工作区名称"
-            :disabled="newWorkspaceBusy"
-            maxlength="100"
-            @keyup.enter="createDraftWorkspace"
-          />
-          <button
-            class="btn btn-sm btn-primary"
-            :disabled="newWorkspaceBusy || !newWorkspaceName.trim()"
-            @click="createDraftWorkspace"
-          >
-            新建
-          </button>
-        </div>
-      </div>
-
-      <AgentWorkspace v-if="isLoopView" :session-id="currentSessionId" :store="loopStore" :create-session="createLoopSession" />
+      <AgentWorkspace v-if="isLoopView" :session-id="currentSessionId" :session="currentSession" :store="loopStore" :create-session="createLoopSession" />
       <!-- 历史 v1 界面仅保留源码供审计；isLoopView 恒为真，不能再到达此分支。 -->
       <template v-else>
       <!-- 断线重连横幅提示（真实 WS 状态） -->
@@ -597,9 +547,9 @@
               <svg v-if="isGenerating" width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
                 <rect x="6" y="6" width="12" height="12" rx="2" />
               </svg>
-              <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
-                <line x1="5" y1="12" x2="19" y2="12"></line>
-                <polyline points="12 5 19 12 12 19"></polyline>
+              <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="12" y1="19" x2="12" y2="5"></line>
+                <polyline points="5 12 12 5 19 12"></polyline>
               </svg>
             </button>
           </div>
@@ -814,10 +764,16 @@ watch(() => Object.values(loopStore.sessions).map(s => [s.sessionId, s.title]), 
   for (const value of Object.values(loopStore.sessions)) { const session = sessions.value.find(s => s.id === value.sessionId); if (session && value.title) session.title = value.title }
 })
 /** 创建时固化 v2 和工作区，后续只使用独立 transport。 */
-async function createLoopSession(): Promise<string> {
+async function createLoopSession(
+  workspaceId?: string, preparedTicket?: Promise<string>
+): Promise<string> {
   if (currentSessionId.value) return currentSessionId.value
-  const session = await api.sessions.create('新会话', { workspaceId: draftWorkspaceId.value || undefined })
-  sessions.value.unshift(session); currentSessionId.value = session.id; clearDraftWorkspace()
+  const targetWsId = workspaceId || draftWorkspaceId.value || undefined
+  const session = await api.sessions.create('新会话', { workspaceId: targetWsId })
+  sessions.value.unshift(session)
+  // 在切换 prop 触发子组件 watch 前先建立连接，确保首次连接实际复用并行领取的短票。
+  loopStore.open(session.id, preparedTicket)
+  currentSessionId.value = session.id; clearDraftWorkspace()
   return session.id
 }
 const deletableSessionCount = computed(() => filteredSessions.value.filter((session) => session.can_delete).length)
@@ -3747,8 +3703,8 @@ onBeforeUnmount(() => {
 
 /* 右侧圆形发送/暂停按钮 */
 .composer-send-btn {
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
   border: none;
   display: flex;
@@ -3757,19 +3713,36 @@ onBeforeUnmount(() => {
   background: var(--bg-elevated);
   color: var(--text-tertiary);
   cursor: not-allowed;
-  transition: all 0.15s ease;
+  transition: all 0.18s ease;
   flex-shrink: 0;
 }
 
 .composer-send-btn.active {
-  background: var(--text-primary);
-  color: #fff;
+  background: #1f5947;
+  color: #ffffff;
   cursor: pointer;
+  box-shadow: 0 1px 3px rgba(23, 74, 58, 0.25);
 }
 
 .composer-send-btn.active:hover {
-  opacity: 0.88;
+  background: #184738;
+  color: #ffffff;
   transform: scale(1.05);
+  box-shadow: 0 2px 6px rgba(23, 74, 58, 0.35);
+}
+
+.composer-send-btn.active:active {
+  background: #143d30;
+  transform: scale(0.96);
+}
+
+[data-theme='dark'] .composer-send-btn.active {
+  background: #16977a;
+  color: #ffffff;
+}
+
+[data-theme='dark'] .composer-send-btn.active:hover {
+  background: #148369;
 }
 
 .session-meta-right .nav-dot {

@@ -14,6 +14,7 @@
           <span class="effort-slider-marks" :style="{ gridTemplateColumns: `repeat(${allowed.length}, 1fr)` }" aria-hidden="true"><span v-for="(item, position) in allowed" :key="item" class="effort-slider-mark" :class="{ 'is-active': position <= index }"></span></span>
           <input id="agent-loop-effort-slider" ref="slider" class="effort-slider" type="range" min="0" :max="Math.max(0, allowed.length - 1)" step="1" :disabled="allowed.length < 2" :value="index" :style="sliderStyle" aria-label="思考强度" :aria-valuetext="label" @input="change(Number(($event.target as HTMLInputElement).value))" />
         </div>
+        <p v-if="note" class="effort-unavailable">{{ note }}</p>
         <p v-if="allowed.length === 1" class="effort-unavailable" role="status">当前模型配置仅支持“{{ label }}”，无法调节思考强度。</p>
       </div>
     </section>
@@ -25,7 +26,7 @@ import { NIcon, NPopover } from 'naive-ui'
 import ChevronDownIcon from 'naive-ui/es/_internal/icons/ChevronDown'
 import type { Effort } from '../../../api/agentLoopTypes'
 
-const props = defineProps<{ modelValue: Effort | null; allowed: Effort[]; model?: string }>()
+const props = defineProps<{ modelValue: Effort | null; allowed: Effort[]; model?: string; note?: string }>()
 const emit = defineEmits<{ 'update:modelValue': [Effort] }>()
 const open = ref(false), trigger = ref<HTMLButtonElement>(), slider = ref<HTMLInputElement>()
 const labels: Record<Effort, string> = { off: '关闭', low: '低强度', medium: '中强度', high: '高强度', xhigh: '更高强度', max: '最高强度' }

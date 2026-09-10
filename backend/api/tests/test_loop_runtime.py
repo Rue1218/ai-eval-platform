@@ -206,7 +206,7 @@ async def test_runtime_template_reasoning_override_rebuilds_wire_options(monkeyp
             enabled = expected != "off"
             wire = client.requests[-1]
             assert wire["extra_body"]["thinking"] == {"type": "enabled" if enabled else "disabled"}
-            assert wire.get("reasoning_effort") == (expected if enabled else None)
+            assert "reasoning_effort" not in wire  # 旧 DeepSeek 只支持思考开关。
             header = [e["data"]["header"] for e in events if e["type"] == "request/header"][-1]
             assert header["reasoning_effort"] == expected
             assert header["thinking"] is enabled
@@ -248,6 +248,8 @@ async def test_seven_nodes_tool_loop_second_turn_and_committed_publication():
     assert len(scheduler.invocations) == 1
     assert [e["reason"] for e in observed if e["kind"] == "turn_end"] == ["completed"] * 2
     assert adapter.requests[0].profile_version == 7
+    messages = [event["data"] for event in runtime.log.read() if event["type"] == "assistant/message"]
+    assert all(isinstance(message["latency_ms"], int) and message["latency_ms"] >= 0 for message in messages)
     await runtime.close()
 
 

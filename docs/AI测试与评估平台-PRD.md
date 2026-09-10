@@ -3,7 +3,7 @@
 | 项目 | 内容 |
 | --- | --- |
 | 文档版本 | V1.20 |
-| 文档状态 | 冻结基线 + V1.19/V1.20 登记（V1.19：废除「首次登录强制改密」；V1.20：协议档收敛为 OpenAI Chat 与 Anthropic Messages） |
+| 文档状态 | 冻结基线 + V1.20/V1.20 登记（V1.19：废除「首次登录强制改密」；V1.20：协议档收敛为 OpenAI Chat 与 Anthropic Messages） |
 | 撰写日期 | 2026-08-17 |
 | 本轮修订 | 2026-09-09：V1.20 删除 OpenAI Responses 协议档及适配器；迁移同时删除该档环境凭据、历史密文和失效 Agent 默认引用。V1.19 废除首次登录强制改密（产品决策）：开户/重置密码/引导账号不再强制首登改密，账号可自助在右上角「修改密码」更新凭据；密码强度规则（≥8 位含字母与数字）不变。2026-08-31：V1.18 收敛 Agent 对话投影：Plan 只用 PlanCard，工具只用 ToolCard，危险 bash 只用确认卡；ReAct `thought`、Plan/Reflect 阶段、工具调用前草稿均属于内部控制，禁止出现在对话或历史重放。最终回答只能在真实工具终态之后展示。 |
 | 最近修订 | 2026-08-31：V1.17 增加危险 bash 的 LangGraph 人在回路：风险命令必须弹出确认卡，原发起成员确认后才进入 bwrap 沙箱；拒绝不执行。思考卡只呈现过程摘要，禁止显示会与工具真实结果冲突的原始推理。2026-08-30：V1.16 增加受控 Agent 技能文件与协议档专属补充提示词管理；技能正文遵循渐进式披露，核心安全提示词不可覆盖。2026-08-28：V1.15 统一基准目录治理、独立导入队列、staging 并发发布、成员同权双人复核与 M3 里程碑；冻结任务必须锁定数据集/黄金集版本。2026-08-28：V1.14 新增基准数据集目录、异步导入、staging 表格和发布门禁；下载/解析仅由 Worker 执行，未审核行不得评测。2026-08-24：补充 Agent 多附件交互：支持图片（PNG/JPG/JPEG/WEBP/GIF）、Markdown/TXT/HTML/JSON/YAML、PDF、Word（DOC/DOCX）、Excel（XLS/XLSX）、CSV/JSONL 与音频；输入区支持文件选择和拖拽上传，图片显示缩略图，PDF/文本支持预览，Office 文件显示类型卡片并可打开/下载。2026-08-23：补齐 Gemini OpenAI 兼容端点的思考摘要请求与增量归一化；增加 Agent 思考摘要开关与思考强度设置；将用户回显固定为 `user_message`，将完成信号固定为 `response.completed`，明确 `thought` 不承载助手正文；协议档增加可选 Embedding / Reranker 独立端点配置，三类 Key 均按 profile 写入受控环境文件 |
@@ -763,3 +763,8 @@ testcase-tools：只对齐，不进镜像。LightRAG：MIT，锁 tag。go-stress
 | `frontend/src/views/Agent.vue` | 一个回合最多显示一张固定过程摘要卡；历史事件跳过 `thought`，阶段事件只更新生成状态，不创建对话卡 |
 | `backend/api/tests/test_agent_react.py` / `test_agent_routing.py` / `test_agent_multiturn.py` | 覆盖 JSON ReAct thought 不出站、ToolCall 草稿不出站、Plan/Reflect 无阶段卡与最终回答重新生成 |
 | `docs/AI测试与评估平台-PRD.md` / `AI测试与评估平台-API.md` / `AI测试与评估平台-Agent开发文档.md` | 统一过程卡、最终交付和历史重放边界 |
+
+
+## 2026-09-09 协议档供应商与完整 URL 优化
+
+详见 [协议档供应商思考适配](AI测试与评估平台-协议档供应商思考适配.md) V1.0：十个供应商新建入口、真实模型品牌图标、只读能力投影及 `full_url` 字段以该节定义为准。管理页和编辑弹窗删除思考强度设置，仅在对话输入框选择；AgentLoop 按供应商能力初始化，不再继承 legacy 全局思考偏好。完整 URL 开启后不追加版本或协议后缀，后台主模型调用使用同一规则。

@@ -130,6 +130,12 @@ class TurnDependencies:
     request_factory: RequestFactory | None = None
     # 平台配置的容量只用于真实请求展示，不改变核心循环窗口策略。
     context_window: int | None = None
+    # 工具 wire 名到执行通道的本轮快照，仅用于上下文用量展示，不参与模型路由。
+    tool_transports: dict[str, str] | None = None
+    # 目标模型的 opaque 状态兼容边界；跨模型文本迁移时仅剔除不兼容的历史状态。
+    protocol_state_compatibility: dict[str, Any] | None = None
+    # 请求头记录本轮是否发生了受控的历史降级，供轨迹和排障核对。
+    history_transition_reason: str | None = None
 
 
 FinishReason = Literal["completed", "error", "max_tokens", "max_steps"]
@@ -362,6 +368,7 @@ async def build_agent(
                     request, context_window=current.context_window,
                     history_upto_seq=context.log.read()[-1]["seq"],
                     input_fingerprint=selection["input_fingerprint"],
+                    tool_transports=current.tool_transports,
                 ),
                 "fingerprint_algorithm": "dsh-json-v1",
             },
@@ -385,7 +392,6 @@ async def build_agent(
         def attempt_latency_ms() -> int:
             """返回本次模型流请求的单调时钟耗时，避免受系统时钟调整影响。"""
             return max(0, round((time.perf_counter() - attempt_started_at) * 1000))
-
         try:
             model_stream = current.adapter.stream(request)
             try:
@@ -622,8 +628,10 @@ async def build_agent(
 
         # 完整 assistant 消息先提交，再同时作为图状态中的下一轮历史。
         assistant = attempt.message()
+        latency_ms = attempt_latency_ms()
         if attempt.done.usage:
             assistant["usage"] = attempt.done.usage
+        assistant["latency_ms"] = latency_ms
         assistant["source"] = {"provider": request.provider, "model": request.model}
         committed = context.log.append(
             "assistant/message",
@@ -636,8 +644,8 @@ async def build_agent(
                 "tool_calls": calls,
                 "reasoning_content": assistant.get("reasoning_content"),
                 "usage": attempt.done.usage,
+                "latency_ms": latency_ms,
                 "finish_reason": attempt.done.finish_reason,
-                "latency_ms": attempt_latency_ms(),
             },
         )
         _emit(
@@ -650,10 +658,10 @@ async def build_agent(
             reasoning_content=assistant.get("reasoning_content", ""),
             tool_calls=calls,
             usage=attempt.done.usage,
+            latency_ms=latency_ms,
             finish_reason=attempt.done.finish_reason,
             source=assistant.get("source"),
             interrupted=False,
-            latency_ms=attempt_latency_ms(),
         )
         _emit(
             "assistant_end",
@@ -664,7 +672,6 @@ async def build_agent(
             outcome="committed",
             committed_seq=committed["seq"],
             interrupted=False,
-            latency_ms=attempt_latency_ms(),
         )
         terminal_error = _terminal_failure(attempt.done.finish_reason)
         return {

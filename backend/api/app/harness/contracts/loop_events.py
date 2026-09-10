@@ -8,7 +8,7 @@ from typing import Any
 
 EVENT_ENVELOPE_VERSION = 2
 EVENT_SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema"
-SCHEMA_CATALOG_VERSION = 4
+SCHEMA_CATALOG_VERSION = 5
 SCHEMA_REF_PREFIX = "dsh://events/"
 
 

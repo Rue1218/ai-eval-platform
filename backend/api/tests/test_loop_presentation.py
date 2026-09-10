@@ -9,7 +9,7 @@ from app.agent.loop_presentation import (
     request_summary,
     tool_display,
 )
-from app.llm.contracts import ModelConfig, SystemSegment
+from app.llm.contracts import ModelConfig
 from app.llm.loop_contracts import ToolSpec
 from app.llm.resolver import AuthorizedProfileSnapshot, resolve_request
 
@@ -33,31 +33,42 @@ def test_preview_allowlist_empty_edit_and_truncation():
 
 
 def test_request_meter_matches_actual_wire_estimator():
-    """统计读取同一个请求对象，来源归因不会丢失或重复输入 token。"""
+    """统计读取同一个请求对象，明确估算及输出预留。"""
     from app.agent.loop_wiring import _prompt_tokens
 
     config = ModelConfig(protocol="openai_chat", base_url="https://api.deepseek.com", model="deepseek-chat", api_key="test")
+    request = resolve_request(config, messages=[{"role": "user", "content": "你好"}])
+    summary = request_summary(request, context_window=64000, input_fingerprint="fingerprint", history_upto_seq=7)
+    assert summary["context_meter"]["input_tokens"] == _prompt_tokens(request)
+    assert summary["context_meter"]["reserved_output_tokens"] == request.max_tokens
+    assert sum(summary["context_meter"]["breakdown"].values()) == _prompt_tokens(request)
+    assert summary["context_meter"]["breakdown"]["system_prompt"] > 0
+    assert summary["context_meter"]["breakdown"]["conversation_messages"] > 0
+    assert "api_key" not in str(summary)
+
+
+def test_request_meter_splits_native_and_mcp_tool_schemas():
+    """工具来源按本轮注册表快照区分，不能把 MCP schema 混入原生工具。"""
+    config = ModelConfig(protocol="openai_chat", base_url="https://api.deepseek.com", model="deepseek-chat", api_key="test")
     request = resolve_request(
         config,
-        messages=[{"role": "user", "content": "你好"}],
-        system_segments=(SystemSegment("系统提示词"),),
-        tools=(
-            ToolSpec("read", "读取", {"type": "object", "properties": {}}),
-            ToolSpec("task.create", "创建评测", {"type": "object", "properties": {}}),
-        ),
+        messages=[{"role": "user", "content": "请执行"}],
+        tools=[
+            ToolSpec("read", "读取文件", {"type": "object", "properties": {}}),
+            ToolSpec("platform_task_create", "创建任务", {"type": "object", "properties": {}}),
+        ],
     )
-    summary = request_summary(request, context_window=64000, input_fingerprint="fingerprint", history_upto_seq=7)
-    meter = summary["context_meter"]
-    assert meter["input_tokens"] == _prompt_tokens(request)
-    assert meter["reserved_output_tokens"] == request.max_tokens
-    assert meter["system_tokens"] > 0
-    assert meter["mcp_tokens"] > 0
-    assert meter["tools_tokens"] > 0
-    assert meter["skills_tokens"] == 0
-    assert sum(meter[name] for name in (
-        "system_tokens", "skills_tokens", "mcp_tokens", "tools_tokens", "conversation_tokens",
-    )) == meter["input_tokens"]
-    assert "api_key" not in str(summary)
+    meter = request_summary(
+        request,
+        context_window=64000,
+        input_fingerprint="fingerprint",
+        history_upto_seq=7,
+        tool_transports={"read": "native", "platform_task_create": "mcp"},
+    )["context_meter"]
+    assert meter["breakdown"]["tools"] > 0
+    assert meter["breakdown"]["mcp"] > 0
+    assert meter["breakdown"]["skill"] == 0
+    assert meter["breakdown"]["memory_files"] == 0
 
 
 def test_reasoning_is_persistent_but_acl_trimmed_on_replay_and_snapshot():

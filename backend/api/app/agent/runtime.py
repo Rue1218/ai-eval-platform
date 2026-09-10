@@ -184,7 +184,7 @@ class AgentRuntime:
             header_reason = (
                 "resume"
                 if not self._started_turn_here and request_header_seq is not None
-                else None
+                else dependencies.history_transition_reason if dependencies is not None else None
             )
             # 先持久接收用户输入，再启动后台图任务。这样图任务创建失败时，输入仍能
             # 从会话日志定位和诊断，浏览器也不会先看到一个不存在的 Turn。
@@ -207,7 +207,13 @@ class AgentRuntime:
                 user_event = self.log.append("user/message", user_message)
             # 根据已提交历史建立本次初始上下文；图内之后会把 assistant/tool 消息继续
             # 追加到 AgentState.messages，直到本 Turn 结束。
-            messages = derive_messages(self.log.read())
+            messages = derive_messages(
+                self.log.read(),
+                protocol_state_compatibility=(
+                    dependencies.protocol_state_compatibility
+                    if dependencies is not None else None
+                ),
+            )
             self._publish({
                 "kind": "user_message", "seq": user_event["seq"],
                 "event_ts": user_event["ts"], "record_type": user_event["type"],

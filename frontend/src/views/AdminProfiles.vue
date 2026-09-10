@@ -14,44 +14,28 @@
 
     <template v-if="activeTab === 'profiles'">
     <!-- 顶部指定 Agent 后端设置 -->
-    <div class="panel mb16">
-      <div class="panel-title">智能体后台模型配置 (Agent Backend)</div>
+    <div class="panel">
+      <div class="panel-title">Agent 默认模型</div>
       <div class="row wrap" style="gap: 16px">
         <div style="font-size: 13px; color: var(--text-secondary)">
-          指定系统唯一的 Agent 决策后台协议档：
+          新对话默认使用的协议档：
         </div>
         <n-select
           v-model:value="selectedAgentProfileId"
           style="width: 260px"
           :options="agentProfileOptions"
+          :loading="agentProfileSaving"
+          :disabled="loading || agentProfileSaving"
           @update:value="handleUpdateAgentProfile"
         />
         <span class="mono" style="font-size: 12px; color: var(--text-tertiary)">
           (保存即刻全局生效)
         </span>
       </div>
-      <div class="row wrap" style="gap: 16px; margin-top: 14px; align-items: flex-end">
-        <div class="field" style="width: 180px">
-          <span class="field-label">思考摘要输出</span>
-          <label class="row" style="gap: 8px; cursor: pointer; height: 34px">
-            <n-switch v-model:value="agentReasoningForm.enabled" />
-            <span>{{ agentReasoningForm.enabled ? '开启' : '关闭' }}</span>
-          </label>
-        </div>
-        <div class="field" style="width: 180px">
-          <span class="field-label">思考强度</span>
-          <n-select
-            v-model:value="agentReasoningForm.effort"
-            :options="reasoningEffortOptions"
-            :disabled="!agentReasoningForm.enabled"
-          />
-        </div>
-        <button class="btn btn-secondary btn-sm" :disabled="reasoningSaving" @click="saveAgentReasoning">
-          {{ reasoningSaving ? '保存中…' : '保存思考设置' }}
-        </button>
-        <span class="field-hint" style="max-width: 560px">
-          仅展示模型返回的 reasoning summary / thinking 增量，不展示隐藏思维链；不支持该能力的模型会自动忽略专用参数。
-        </span>
+      <div class="profile-default-summary" v-if="selectedAgentProfile">
+        <ProviderLogo :provider="getProviderLogoKey(selectedAgentProfile)"/>
+        <div><strong>{{ selectedAgentProfile.model }}</strong><p>{{ selectedAgentProfile.name }} · {{ selectedAgentProfile.full_url ? '完整 URL' : 'Base URL 自动补全' }}</p></div>
+        <button class="btn btn-secondary btn-sm" @click="openModal(selectedAgentProfile)">配置模型</button>
       </div>
     </div>
 
@@ -59,7 +43,7 @@
     <div class="panel">
       <div class="panel-title">
         <div class="row" style="gap: 12px">
-          <span>大模型协议档与供应商管理</span>
+          <span>模型协议档</span>
           <span class="mono" style="font-size: 12px; color: var(--text-tertiary)">({{ profiles.length }} 个模型)</span>
 
           <!-- 视图模式切换器 -->
@@ -69,14 +53,14 @@
               :class="{ active: viewMode === 'cards' }"
               @click="viewMode = 'cards'"
             >
-              📇 供应商卡片视图
+              卡片
             </button>
             <button
               class="toggle-btn"
               :class="{ active: viewMode === 'table' }"
               @click="viewMode = 'table'"
             >
-              📑 详细表格视图
+              表格
             </button>
           </div>
         </div>
@@ -101,7 +85,14 @@
         </div>
       </div>
 
+      <div class="profile-filters">
+        <n-input v-model:value="profileSearch" clearable placeholder="搜索名称、模型或端点…" aria-label="搜索协议档"/>
+        <n-select v-model:value="vendorFilter" :options="vendorFilters" clearable placeholder="全部供应商"/>
+        <n-select v-model:value="usageFilter" :options="usageFilters" clearable placeholder="全部用途"/>
+        <span>{{ filteredProfiles.length }} / {{ profiles.length }} 个协议档</span>
+      </div>
       <!-- 模式 1：供应商分类多卡片视图 -->
+      <p v-if="loading" role="status" class="small tertiary">正在加载协议档…</p>
       <div v-if="viewMode === 'cards'" class="vendor-cards-container">
         <div
           v-for="group in vendorGroups"
@@ -122,7 +113,7 @@
                 class="btn btn-secondary btn-xs"
                 @click="openModalWithVendor(group)"
               >
-                + 添加此供应商模型
+                + 添加模型
               </button>
             </div>
           </div>
@@ -141,7 +132,8 @@
                   <span v-if="p.id === selectedAgentProfileId" class="tag-soft agent-core-tag">★ Agent 核心</span>
                 </div>
                 <!-- 探活胶囊 -->
-                <span
+                <button
+                  :disabled="pinging[p.id]"
                   v-if="pingStates[p.id]"
                   class="ping-badge"
                   :class="pingStates[p.id].ok ? 'ok' : 'err'"
@@ -149,15 +141,16 @@
                   @click="handlePing(p)"
                 >
                   {{ pingStates[p.id].ok ? `● 正常 (${pingStates[p.id].latencyMs ?? '—'}ms)` : '✕ 连接失败' }}
-                </span>
-                <button v-else class="link-btn small" :disabled="pingingId === p.id" @click="handlePing(p)">
-                  {{ pingingId === p.id ? '探活中…' : '探活' }}
+                </button>
+                <button v-else class="link-btn small" :disabled="pinging[p.id]" @click="handlePing(p)">
+                  {{ pinging[p.id] ? '探活中…' : '探活' }}
                 </button>
               </div>
 
               <div class="model-chip-meta">
                 <span class="mono model-id-tag" :title="p.model">{{ p.model }}</span>
                 <span class="mono protocol-tag">{{ p.protocol }}</span>
+                <span v-if="p.full_url" class="url-mode-tag">完整 URL</span>
                 <span class="mono window-tag" title="上下文窗口容量">{{ formatContextWindow(p.context_window) }}</span>
               </div>
 
@@ -184,8 +177,8 @@
           </div>
         </div>
 
-        <div v-if="profiles.length === 0" class="empty-state-wrap">
-          <EmptyState title="暂无模型协议档" description="点击右上角新增 OpenAI / Anthropic / Xiaomi Mimo 协议档">
+        <div v-if="!loading && filteredProfiles.length === 0" class="empty-state-wrap">
+          <EmptyState title="暂无匹配的协议档" description="调整搜索条件，或新增供应商协议档。">
             <template #action>
               <button class="btn btn-primary btn-sm" @click="openModal(null)">新增协议档</button>
             </template>
@@ -194,14 +187,14 @@
       </div>
 
       <!-- 模式 2：详细表格视图 -->
-      <table v-else class="ds-table">
+      <div v-else class="profile-table-scroll"><table class="ds-table">
         <thead>
           <tr>
             <th>协议档名称</th>
             <th style="width: 160px">协议类型</th>
             <th style="width: 140px">模型标识</th>
             <th style="width: 100px">上下文窗口</th>
-            <th>Base URL</th>
+            <th>请求地址</th>
             <th style="width: 140px">用途标签</th>
             <!-- P2 连通性探活列（对齐原型 admin-profiles.html：行内 ping-badge） -->
             <th style="width: 130px">探活</th>
@@ -209,10 +202,10 @@
           </tr>
         </thead>
         <tbody>
-          <tr v-for="p in profiles" :key="p.id">
+          <tr v-for="p in filteredProfiles" :key="p.id">
             <td style="font-weight: 600; font-size: 14px">
               <span class="row" style="gap: 6px">
-                <span>{{ p.name }}</span>
+                <ProviderLogo :provider="getProviderLogoKey(p)" compact :size="20" /><span>{{ p.name }}</span>
                 <!-- P4 名称徽标对齐原型「★ Agent 核心驱动」 -->
                 <span v-if="p.id === selectedAgentProfileId" class="tag-soft agent-core-tag">★ Agent 核心驱动</span>
               </span>
@@ -228,6 +221,7 @@
             </td>
             <td>
               <span class="mono" style="font-size: 11.5px; color: var(--text-secondary)">{{ p.base_url }}</span>
+              <span v-if="p.full_url" class="url-mode-tag">完整 URL</span>
             </td>
             <td>
               <div class="row" style="gap: 4px; flex-wrap: wrap">
@@ -238,7 +232,8 @@
             </td>
             <td>
               <!-- P2 探活胶囊：点击原位刷新（复用 api.profiles.check），不弹窗 -->
-              <span
+              <button
+                :disabled="pinging[p.id]"
                 v-if="pingStates[p.id]"
                 class="ping-badge"
                 :class="pingStates[p.id].ok ? 'ok' : 'err'"
@@ -246,9 +241,9 @@
                 @click="handlePing(p)"
               >
                 {{ pingStates[p.id].ok ? `● 正常 (${pingStates[p.id].latencyMs ?? '—'}ms)` : '✕ 连接失败' }}
-              </span>
-              <button v-else class="link-btn" :disabled="pingingId === p.id" @click="handlePing(p)">
-                {{ pingingId === p.id ? '探活中…' : '探活' }}
+              </button>
+              <button v-else class="link-btn" :disabled="pinging[p.id]" @click="handlePing(p)">
+                {{ pinging[p.id] ? '探活中…' : '探活' }}
               </button>
             </td>
             <td style="text-align: right">
@@ -270,9 +265,9 @@
             </td>
           </tr>
 
-          <tr v-if="profiles.length === 0">
-            <td colspan="7">
-              <EmptyState title="暂无模型协议档" description="点击右上角新增 OpenAI / Anthropic 协议档">
+          <tr v-if="!loading && filteredProfiles.length === 0">
+            <td colspan="8">
+              <EmptyState title="暂无匹配的协议档" description="点击右上角新增 OpenAI / Anthropic 协议档">
                 <template #action>
                   <button class="btn btn-primary btn-sm" @click="openModal(null)">新增协议档</button>
                 </template>
@@ -280,7 +275,7 @@
             </td>
           </tr>
         </tbody>
-      </table>
+      </table></div>
     </div>
 
     </template>
@@ -1473,10 +1468,11 @@
 import { ref, computed, onMounted } from 'vue'
 import { useMessage, useDialog, NSelect, NInput, NInputNumber, NSwitch } from 'naive-ui'
 import { api } from '../api/http'
-import type { AgentReasoningSettings, Profile, ProfileCheckOut, McpTool, McpHealthCheckResponse } from '../api/types'
+import type { Profile, ProfileCheckOut, McpTool, McpHealthCheckResponse } from '../api/types'
 import EmptyState from '../components/common/EmptyState.vue'
 import ProviderLogo, { type ProviderLogoKey } from '../components/ProviderLogo.vue'
 import { getProviderLogoKey } from '../utils/providerLogo'
+import { PROFILE_VENDORS, getProfileVendor } from '../utils/profileVendors'
 import ProfileModal from '../components/modals/ProfileModal.vue'
 import CheckResultModal from '../components/modals/CheckResultModal.vue'
 import McpToolModal from '../components/modals/McpToolModal.vue'
@@ -1906,25 +1902,28 @@ function handleExportSkillsJson() {
 const runtimeForm = ref({ ws_ping_s: 15, ws_timeout_s: 45, strict_session_slot: true })
 const runtimeSaving = ref(false)
 
-// Agent 模型推理设置：默认开启摘要、使用中等强度，保存后新回合立即读取。
-const agentReasoningForm = ref<AgentReasoningSettings>({ enabled: true, effort: 'medium' })
-const reasoningSaving = ref(false)
-const reasoningEffortOptions = [
-  { label: '低 · 更快', value: 'low' },
-  { label: '中 · 平衡', value: 'medium' },
-  { label: '高 · 更充分', value: 'high' },
-  { label: '极高 · 更深入', value: 'xhigh' },
-  { label: '最大 · 质量优先', value: 'max' },
-]
-
 // 视图模式：'cards' (供应商分类多卡片视图) | 'table' (详细表格视图)
 const viewMode = ref<'cards' | 'table'>('cards')
 
 const profiles = ref<Profile[]>([])
+const profileSearch = ref('')
+const vendorFilter = ref<string | null>(null)
+const usageFilter = ref<string | null>(null)
+/** 搜索、供应商与用途组合过滤，卡片和表格共用同一列表。 */
+const filteredProfiles = computed(() => profiles.value.filter(p => {
+  const text = profileSearch.value.trim().toLowerCase()
+  return (!text || `${p.name} ${p.model} ${p.base_url}`.toLowerCase().includes(text))
+    && (!vendorFilter.value || getProfileVendor(p) === vendorFilter.value)
+    && (!usageFilter.value || p.usages?.includes(usageFilter.value as any))
+}))
+const vendorFilters = computed(() => [...PROFILE_VENDORS.map(v => ({label:v.name,value:v.key})), {label:'其它已有协议档',value:'custom'}])
+const usageFilters = [{label:'Agent',value:'agent'},{label:'被测模型',value:'target'},{label:'裁判模型',value:'judge'}]
+
 const loading = ref(false)
 const selectedAgentProfileId = ref<string | null>(null)
 // 最近一次成功保存的 Agent 协议档 ID，用于保存失败时回滚选择器
 const lastSavedAgentProfileId = ref<string | null>(null)
+const agentProfileSaving = ref(false)
 const showAgentPromptModal = ref(false)
 const promptProfile = ref<Profile | null>(null)
 const selectedAgentProfile = computed(() => (
@@ -1956,10 +1955,10 @@ interface PingState {
   latencyMs: number | null
 }
 const pingStates = ref<Record<string, PingState>>({})
-const pingingId = ref<string | null>(null)
+const pinging = ref<Record<string, boolean>>({})
 
 const agentProfileOptions = computed(() =>
-  profiles.value.map((p) => ({ label: `${p.name} (${p.model})`, value: p.id })),
+  profiles.value.filter(p => p.usages?.includes('agent')).map((p) => ({ label: `${p.name} (${p.model})`, value: p.id })),
 )
 
 interface VendorGroup {
@@ -1967,6 +1966,7 @@ interface VendorGroup {
   name: string
   logoKey: ProviderLogoKey
   base_url: string
+  full_url: boolean
   protocol: any
   profiles: Profile[]
 }
@@ -1980,15 +1980,16 @@ const VENDOR_NAMES: Record<ProviderLogoKey, string> = {
   deepseek: 'DeepSeek',
   stepfun: 'StepFun (阶跃星辰)',
   siliconflow: 'SiliconFlow (硅基流动)',
-  qwen: 'Alibaba Qwen (通义千问)',
-  volcengine: 'ByteDance Doubao (火山引擎)',
+  qwen: '阿里百炼',
+  volcengine: '火山引擎',
   qianfan: 'Baidu Qianfan (百度千帆)',
   hunyuan: 'Tencent Hunyuan (腾讯混元)',
   grok: 'xAI Grok',
   groq: 'Groq',
   ollama: 'Ollama (本地私有)',
-  zhipu: 'Zhipu GLM (智谱清言)',
-  moonshot: 'Moonshot (月之暗面)',
+  zhipu: 'GLM · 智谱',
+  moonshot: 'Kimi · 月之暗面',
+  minimax: 'MiniMax',
   mistral: 'Mistral AI',
   together: 'Together AI',
   custom: '自定义端点 / 内部代理',
@@ -1998,9 +1999,9 @@ const VENDOR_NAMES: Record<ProviderLogoKey, string> = {
 const vendorGroups = computed<VendorGroup[]>(() => {
   const groups: Record<string, VendorGroup> = {}
 
-  for (const p of profiles.value) {
-    const logoKey = getProviderLogoKey(p)
-    const key = logoKey
+  for (const p of filteredProfiles.value) {
+    const logoKey = getProfileVendor(p)
+    const key = `${logoKey}:${p.base_url}:${p.protocol}:${p.full_url ?? false}`
     const vName = VENDOR_NAMES[logoKey] || '自定义端点 / 内部代理'
 
     if (!groups[key]) {
@@ -2009,6 +2010,7 @@ const vendorGroups = computed<VendorGroup[]>(() => {
         name: vName,
         logoKey,
         base_url: p.base_url,
+        full_url: p.full_url ?? false,
         protocol: p.protocol,
         profiles: [],
       }
@@ -2025,7 +2027,7 @@ function formatContextWindow(tokens?: number): string {
   return `${(tokens / 1000).toFixed(0)}k`
 }
 
-const modalInitialData = ref<{ vendorKey?: string; base_url?: string; protocol?: any; name?: string } | null>(null)
+const modalInitialData = ref<{ vendorKey?: string; base_url?: string; full_url?: boolean; protocol?: any; name?: string } | null>(null)
 
 function openModal(profile: Profile | null) {
   safeBlur()
@@ -2038,8 +2040,9 @@ function openModalWithVendor(group: VendorGroup) {
   safeBlur()
   selectedProfile.value = null
   modalInitialData.value = {
-    vendorKey: group.key !== 'custom' ? group.key : undefined,
+    vendorKey: group.logoKey !== 'custom' ? group.logoKey : undefined,
     base_url: group.base_url,
+    full_url: group.full_url,
     protocol: group.protocol,
     name: group.name,
   }
@@ -2258,14 +2261,12 @@ async function loadProfiles() {
     ])
     if (pListRes.status === 'fulfilled') {
       profiles.value = pListRes.value || []
-    }
+    } else { message.error('协议档加载失败，请重试') }
+    if (settingsRes.status === 'rejected') message.error('默认模型设置加载失败，请重试')
     if (settingsRes.status === 'fulfilled') {
       const settings = settingsRes.value
       selectedAgentProfileId.value = settings?.agent_profile_id || null
       lastSavedAgentProfileId.value = selectedAgentProfileId.value
-      if (settings?.agent_reasoning) {
-        agentReasoningForm.value = { ...agentReasoningForm.value, ...settings.agent_reasoning }
-      }
       if (settings?.runtime) runtimeForm.value = { ...settings.runtime }
     }
   } catch (err: any) {
@@ -2288,21 +2289,8 @@ async function saveRuntime() {
   }
 }
 
-/** 保存 Agent 思考摘要与强度；配置按 Setting JSON 存储，不新增表字段。 */
-async function saveAgentReasoning() {
-  reasoningSaving.value = true
-  try {
-    const settings = await api.admin.updateSettings({ agent_reasoning: { ...agentReasoningForm.value } })
-    if (settings.agent_reasoning) agentReasoningForm.value = { ...settings.agent_reasoning }
-    message.success('思考设置已保存，新对话回合立即生效')
-  } catch (err: any) {
-    message.error(err.message || '思考设置保存失败')
-  } finally {
-    reasoningSaving.value = false
-  }
-}
-
 async function handleUpdateAgentProfile(profileId: string) {
+  agentProfileSaving.value = true
   try {
     await api.admin.updateSettings({ agent_profile_id: profileId })
     lastSavedAgentProfileId.value = profileId
@@ -2311,12 +2299,13 @@ async function handleUpdateAgentProfile(profileId: string) {
     // 保存失败时回滚选择器，保持 UI 与后端状态一致
     selectedAgentProfileId.value = lastSavedAgentProfileId.value
     message.error(err.message || '设置失败')
-  }
+  } finally { agentProfileSaving.value = false }
 }
 
 /** P2 行内探活：原位刷新 ping-badge（复用 api.profiles.check，不泄露凭据） */
 async function handlePing(p: Profile) {
-  pingingId.value = p.id
+  if (pinging.value[p.id]) return
+  pinging.value[p.id] = true
   try {
     const res = await api.profiles.check(p.id)
     pingStates.value[p.id] = { ok: !!res.ok, latencyMs: res.latency_ms ?? null }
@@ -2329,7 +2318,7 @@ async function handlePing(p: Profile) {
     pingStates.value[p.id] = { ok: false, latencyMs: null }
     message.error(`[${p.name}] ${err.message || '连通性测试失败'}`)
   } finally {
-    pingingId.value = null
+    delete pinging.value[p.id]
   }
 }
 
@@ -2374,6 +2363,19 @@ onMounted(() => {
 </script>
 
 <style scoped>
+.profile-default-summary{display:flex;align-items:center;gap:12px;margin-top:18px;padding:16px;border:1px solid var(--border-color,#dce8e1);border-radius:12px;background:var(--bg-secondary,#f5faf7)}.profile-default-summary>div{flex:1;min-width:0}.profile-default-summary strong{font-size:15px;overflow-wrap:anywhere}.profile-default-summary p{margin:5px 0 0;color:var(--text-tertiary);font-size:12px}.profile-default-summary b{font-weight:600;color:#367b5b}.profile-filters{display:grid;grid-template-columns:minmax(180px,1fr) 180px 150px auto;align-items:center;gap:12px;margin:6px 0 20px}.profile-filters>span{color:var(--text-tertiary);font-size:12px;white-space:nowrap}.url-mode-tag{border-radius:5px;background:#eaf5ee;color:#31744e;padding:3px 7px;font:11px ui-monospace,monospace}.profiles-page .panel-title{flex-wrap:wrap;gap:12px}.profiles-page .model-chip-name{overflow-wrap:anywhere}.profiles-page .vendor-url{overflow-wrap:anywhere}@media(max-width:760px){.profile-filters{grid-template-columns:1fr 1fr}.profile-filters>.n-input{grid-column:1/-1}.profile-default-summary{flex-wrap:wrap}.profile-default-summary button{margin-left:40px}}
+
+.profile-table-scroll { overflow-x: auto; }
+.profile-table-scroll table { min-width: 1050px; }
+.profile-table-scroll td { overflow-wrap: anywhere; }
+.vendor-info { min-width: 0; }
+.vendor-group-header { gap: 12px; }
+.vendor-actions { flex-shrink: 0; }
+.vendor-title-row { flex-wrap: wrap; }
+.empty-state-wrap { grid-column: 1 / -1; }
+.ping-badge { font: inherit; font-size: 11px; cursor: pointer; }
+@media(max-width: 560px) { .vendor-group-header, .model-chip-bottom { flex-wrap: wrap; gap: 10px; } .model-chip-title-wrap { flex-wrap: wrap; } }
+
 .profiles-page {
   display: flex;
   flex-direction: column;
@@ -2407,8 +2409,9 @@ onMounted(() => {
 
 /* 供应商多卡片容器 */
 .vendor-cards-container {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
   gap: 16px;
 }
 .vendor-group-card {
@@ -2460,19 +2463,8 @@ onMounted(() => {
 }
 .vendor-models-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
-}
-
-/* 模型芯片卡片与流光动效 */
-@keyframes core-mesh {
-  0% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
-  100% { background-position: 0% 50%; }
-}
-@keyframes pulse-border {
-  0%, 100% { border-color: rgba(99, 102, 241, 0.55); box-shadow: 0 0 12px rgba(99, 102, 241, 0.12); }
-  50% { border-color: rgba(56, 189, 248, 0.85); box-shadow: 0 0 20px rgba(56, 189, 248, 0.22); }
 }
 
 .model-chip-card {
@@ -2492,11 +2484,9 @@ onMounted(() => {
   box-shadow: 0 6px 20px -2px rgba(99, 102, 241, 0.1);
 }
 .model-chip-card.is-agent-core {
-  border-width: 1.5px;
-  background: linear-gradient(135deg, rgba(99, 102, 241, 0.07), rgba(56, 189, 248, 0.08), rgba(168, 85, 247, 0.06), rgba(99, 102, 241, 0.07));
-  background-size: 300% 300%;
-  animation: core-mesh 6s ease infinite, pulse-border 3.2s ease-in-out infinite;
-  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.15);
+  border-color: #84b89c;
+  background: var(--bg-card, #fff);
+  box-shadow: inset 3px 0 #498467;
 }
 .model-chip-top {
   display: flex;
@@ -3490,4 +3480,5 @@ onMounted(() => {
     padding: 12px;
   }
 }
+@media(max-width: 920px) { .vendor-cards-container { grid-template-columns: minmax(0, 1fr); } }
 </style>
