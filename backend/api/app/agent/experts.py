@@ -1,0 +1,116 @@
+"""Agent 专家目录：用户在 Agent 页显式选择的专家角色。
+
+与 ``harness/orchestration/agents.py`` 的 Worker 注册表职责不同：
+
+- ``AgentRegistry``：图内按能力自动打分发现的**内部分工**，不对用户暴露；
+- 本模块：用户在 Agent 页**显式选择**的专家，是前端选择器的唯一数据源，
+  定义专家提示词（追加在核心系统提示词之后）与工具视野。
+
+红线：
+- 专家提示词是产品内置资产，随代码版本分发；管理员可编辑的协议档补充提示词
+  （``agent_prompt_overlays``）仍然独立生效，两者不互相覆盖。
+- 专家**不能**扩大平台工具白名单：``allowed_tools`` 与 AgentLoop 的
+  ``ALLOWED_TOOLS`` 取交集后才生效（见 ``loop_wiring._build_dependencies``）。
+- 专家不改变权限、错误契约与任务状态机；提示词只做角色与流程约束。
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+
+# 默认专家：保持平台既有行为（无额外提示词、全工具视野）。
+DEFAULT_EXPERT_ID = "general"
+_PROMPT_DIR = Path(__file__).resolve().parent / "expert_prompts"
+
+
+@dataclass(frozen=True, slots=True)
+class ExpertDef:
+    """一个可被用户选择的专家；``system_prompt`` 为空表示不追加提示词。"""
+
+    expert_id: str
+    name: str
+    description: str
+    badge: str
+    prompt_file: str | None = None
+    allowed_tools: tuple[str, ...] = ()
+    default: bool = False
+
+    @property
+    def system_prompt(self) -> str:
+        """读取专家提示词；文件缺失或为空时返回空串（由 validate_experts 兜底）。"""
+        if not self.prompt_file:
+            return ""
+        path = _PROMPT_DIR / self.prompt_file
+        if not path.is_file():
+            return ""
+        return path.read_text(encoding="utf-8").strip()
+
+
+EXPERTS: tuple[ExpertDef, ...] = (
+    ExpertDef(
+        expert_id=DEFAULT_EXPERT_ID,
+        name="通用助手",
+        description="平台默认助手：对话、工作区文件、评测任务入队与查询。",
+        badge="通用",
+        default=True,
+    ),
+    ExpertDef(
+        expert_id="testcase-agent",
+        name="测试用例设计专家",
+        description="从需求文档生成测试用例：需求解析 → 功能点/测试点拆分 → 六类用例 → CSV 交付。",
+        badge="用例设计",
+        prompt_file="testcase_agent.md",
+        allowed_tools=("read", "write", "edit", "bash", "ask_user_question"),
+    ),
+)
+_BY_ID = {expert.expert_id: expert for expert in EXPERTS}
+
+
+def validate_experts() -> None:
+    """启动期校验：ID 唯一、默认专家唯一、声明了提示词的专家必须有正文。
+
+    fail-fast 而非静默降级——专家提示词缺失会让用户选中一个"没有能力的专家"。
+    """
+    if len(_BY_ID) != len(EXPERTS):
+        raise RuntimeError("专家 ID 重复")
+    defaults = [expert for expert in EXPERTS if expert.default]
+    if len(defaults) != 1:
+        raise RuntimeError("必须且只能有一个默认专家")
+    for expert in EXPERTS:
+        if not expert.expert_id or not expert.name.strip():
+            raise RuntimeError(f"专家定义不完整：{expert.expert_id!r}")
+        if expert.prompt_file and not expert.system_prompt:
+            raise RuntimeError(f"专家提示词缺失或为空：{expert.expert_id}")
+
+
+def resolve_expert(agent_id: object) -> ExpertDef:
+    """解析用户选择的专家；缺省或非法值回落默认专家（不报错，保证旧客户端兼容）。
+
+    显式传入未知 ID 视为前端与后端版本不一致，回落默认专家并在选择器里体现，
+    避免因为一个可选字段让整个回合提交失败。
+    """
+    if isinstance(agent_id, str):
+        expert = _BY_ID.get(agent_id.strip())
+        if expert is not None:
+            return expert
+    return _BY_ID[DEFAULT_EXPERT_ID]
+
+
+def list_experts() -> list[dict]:
+    """投影给前端选择器：不暴露提示词正文与工具视野细节。"""
+    return [
+        {
+            "id": expert.expert_id,
+            "name": expert.name,
+            "description": expert.description,
+            "badge": expert.badge,
+            "default": expert.default,
+        }
+        for expert in EXPERTS
+    ]
+
+
+def default_expert_id() -> str:
+    """当前默认专家 ID（会话 UI 的初始选择）。"""
+    return _BY_ID[DEFAULT_EXPERT_ID].expert_id

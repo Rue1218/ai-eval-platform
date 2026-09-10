@@ -14,7 +14,17 @@ from ..errors import AppError, ErrorCode
 from ..harness.context import compute_meter, is_window_eligible, recent_window
 from ..harness.context.meter import DEFAULT_MAX_TOKENS, DEFAULT_MCP_TOOLS_MAX
 from ..harness.memory import purge_session_checkpoints
-from ..models import AuditLog, Message, ProtocolProfile, Setting, Task, User, Workspace, WsEvent
+from ..models import (
+    AgentEvent,
+    AuditLog,
+    Message,
+    ProtocolProfile,
+    Setting,
+    Task,
+    User,
+    Workspace,
+    WsEvent,
+)
 from ..models import Session as AgentSession
 from ..schemas import SessionCreate, SessionOut, SessionSharingUpdate
 from ..session_access import require_session_owner, require_visible_session
@@ -25,9 +35,28 @@ router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 ACTIVE_STATUSES = {"queued", "running", "awaiting_case_confirm"}
 
 
+def _last_expert_id(db: Session, session_id: str) -> str | None:
+    """读取会话最近一轮使用的专家 ID（user/message 事实的 extensions.expert_id）。
+
+    无记录或历史数据缺字段时返回 None，由调用方回落默认专家；不为此新增列或迁移。
+    """
+    row = (
+        db.query(AgentEvent.envelope)
+        .filter(AgentEvent.session_id == session_id, AgentEvent.type == "user/message")
+        .order_by(AgentEvent.seq.desc())
+        .first()
+    )
+    if not row:
+        return None
+    envelope = row[0] if isinstance(row[0], dict) else {}
+    value = (envelope.get("extensions") or {}).get("expert_id")
+    return value if isinstance(value, str) and value.strip() else None
+
+
 def _loop_ui(db: Session, user: User, request: Request, session=None) -> dict:
     """草稿与现有会话共用能力解析；读取不分配模型或 Runner 客户端。"""
     from ..agent.attachments import MAX_IMAGE_BYTES, TEXT_SUFFIXES
+    from ..agent.experts import default_expert_id, list_experts
     from ..agent.loop_presentation import profile_capabilities
     from ..agent.loop_wiring import authorized_profile
     from ..llm.providers.catalog import detect_provider, reasoning_note
@@ -84,7 +113,10 @@ def _loop_ui(db: Session, user: User, request: Request, session=None) -> dict:
     service = getattr(request.app.state, "loop_service", None)
     entry = service.entries.get(session.id) if service and session else None
     controller = entry.controller if entry and entry.runtime.running else None
+    # 专家选择：会话内记忆最近一轮的选择，草稿回落默认专家（前端仍可覆盖）。
+    selected_expert = _last_expert_id(db, session.id) if session is not None else None
     return {"version": 1, "enabled": True, "profile": profile_data, "profiles": profiles,
+            "agent": selected_expert or default_expert_id(), "agents": list_experts(),
             "allowed_efforts": allowed, "default_effort": default, "unavailable_reason": error,
             "permissions": {"write": True, "trace": session is None or session.user_id == user.id or user.role == "admin",
                             "reasoning": session is None or session.user_id == user.id,
