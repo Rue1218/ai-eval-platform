@@ -46,13 +46,18 @@ class Subscribe(StrictData):
 
 
 class Submit(StrictData):
-    """附件与协议档只接受平台对象 ID；服务端重新解析权限与模型配置。"""
+    """附件与协议档只接受平台对象 ID；服务端重新解析权限与模型配置。
+
+    ``agent_id`` 为可选的专家选择（见 ``agent/experts.py``）：缺省或未知 ID
+    回落默认专家，保证旧客户端与前端版本不一致时回合仍可提交。
+    """
 
     client_message_id: Id
     content: Annotated[str, StringConstraints(min_length=1, max_length=60000)]
     attachment_refs: list[Id] = Field(default_factory=list, max_length=32)
     profile_id: Id | None = None
     reasoning_effort: Literal["off", "low", "medium", "high", "xhigh", "max"] | None = None
+    agent_id: Id | None = None
 
 
 class Cancel(StrictData):

@@ -19,6 +19,7 @@ from app.routers.ws_v2 import CommandReceipt, StreamSnapshot, WsAccess
 from app.session_access import require_visible_session
 
 from .events import frame, scrub
+from .experts import resolve_expert
 from .loop import TurnDependencies, build_agent
 from .loop_settings import LoopSettings
 from .runtime import AgentRuntime
@@ -261,10 +262,11 @@ class LoopService:
         if entry.runtime.running:
             raise AppError(ErrorCode.CONCURRENCY, "会话已有活动回合")
         entry.log.actor_id = actor_id
-        content = self._input_content(actor_id, data)
+        content = self._input_content(actor_id, command.session_id, data)
         dependencies, resources = await self._dependencies(entry, actor_id, {**data, "_model_content": content})
         context = {"request_id": command.request_id, "fingerprint": command.fingerprint,
-                   "display_content": data["content"], "attachment_refs": data.get("attachment_refs", [])}
+                   "display_content": data["content"], "attachment_refs": data.get("attachment_refs", []),
+                   "expert_id": resolve_expert(data.get("agent_id")).expert_id}
         try:
             if self._closed:
                 raise AppError(ErrorCode.VALIDATION, "服务正在关闭")
@@ -290,13 +292,15 @@ class LoopService:
             raise AppError(ErrorCode.INTERNAL, "输入提交缺少持久回执")
         return self._receipt(receipt, command.fingerprint)
 
-    def _input_content(self, actor_id: str, data: dict):
-        """附件按上传者验证并冻结到事实；本期内联读取，不隐式写工作区。"""
+    def _input_content(self, actor_id: str, session_id: str, data: dict):
+        """附件按上传者验证并冻结到事实；文本附件落会话工作区，供 read/bash 读取。"""
         from .attachments import (
             MAX_IMAGE_BYTES,
+            _resolve_content_workspace,
             build_model_content,
             load_message_files,
             normalize_attachment_refs,
+            stage_attachments,
         )
 
         refs = data.get("attachment_refs", [])
@@ -312,7 +316,12 @@ class LoopService:
                 image = (row.content_type or "").startswith("image/") or path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp", ".gif"}
                 if image and max(row.size_bytes, path.stat().st_size) > MAX_IMAGE_BYTES:
                     raise AppError(ErrorCode.VALIDATION, "图片超出模型附件限制")
-            return build_model_content(data["content"], files)
+            # 文本附件 staging 进会话沙箱根（与工具注入根同源解析）：模型可用 read 工具
+            # 按路径读取；行态失效或目录不可得时返回 None，回退内联注入，绝不写错位目录。
+            workspace_dir = _resolve_content_workspace(db, session_id)
+            if workspace_dir:
+                stage_attachments(workspace_dir, files)
+            return build_model_content(data["content"], files, workspace_dir=workspace_dir)
 
     async def _wait_interaction(self, entry: _Entry, payload: dict):
         """卡已随 asked 事实提交；Future 仅承担本进程等待，不是持久授权事实。"""

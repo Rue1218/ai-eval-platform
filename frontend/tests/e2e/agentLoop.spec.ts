@@ -8,7 +8,12 @@ const serverProfiles = [
   { id:'p4',name:'MaaS Qwen',version:'v3',model:'qwen3.6-flash',protocol:'anthropic_messages',allowed_efforts:['off','low','medium','high','xhigh','max'],default_effort:'off' },
   { id:'p5',name:'NIM StepFun',version:'v3',model:'stepfun-ai/step-3.7-flash',protocol:'openai_chat',allowed_efforts:['off'],default_effort:'off' },
 ]
-const ui = { version:1,enabled:true,profile:deepseekProfile,profiles:[deepseekProfile,compatibleProfile,...serverProfiles],allowed_efforts:deepseekProfile.allowed_efforts,default_effort:deepseekProfile.default_effort,permissions:{write:true,trace:true,reasoning:true,interactions:true,settings:true},controller:{active:false,owned_by_actor:false},attachments:{upload_suffixes:['.txt'],inline_suffixes:['.txt'],image_suffixes:[],max_bytes:20971520,max_image_bytes:4194304,content_required:true} }
+// 专家目录夹具：与后端 /agent-ui 的 agents 投影同形（只含展示字段，不含提示词与工具视野）。
+const experts = [
+  { id:'general',name:'通用助手',description:'平台默认助手：对话、工作区文件、评测任务入队与查询。',badge:'通用',default:true },
+  { id:'testcase-agent',name:'测试用例设计专家',description:'从需求文档生成测试用例：需求解析 → 功能点/测试点拆分 → 六类用例 → CSV 交付。',badge:'用例设计',default:false },
+]
+const ui = { version:1,enabled:true,profile:deepseekProfile,profiles:[deepseekProfile,compatibleProfile,...serverProfiles],agent:'general',agents:experts,allowed_efforts:deepseekProfile.allowed_efforts,default_effort:deepseekProfile.default_effort,permissions:{write:true,trace:true,reasoning:true,interactions:true,settings:true},controller:{active:false,owned_by_actor:false},attachments:{upload_suffixes:['.txt'],inline_suffixes:['.txt'],image_suffixes:[],max_bytes:20971520,max_image_bytes:4194304,content_required:true} }
 
 /** 真实页面与 WebSocket transport 使用协议夹具；不把夹具当供应商/沙箱闭环。 */
 async function setup(page: Page, holdNewReplay = false) {
@@ -111,6 +116,18 @@ test('HTTP 缺少 randomUUID 时新建会话、附件、发送和工具结果回
   await expect(page.locator('.tool-state').first()).toHaveText('已完成')
   await expect(page.getByRole('textbox', {name:'消息'})).toHaveValue('')
   await expect(page.getByText('草稿已保留', {exact:false})).toHaveCount(0)
+})
+
+test('专家选择写入本轮 turn.submit 的 agent_id',async({page})=>{
+  const ctx=await setup(page)
+  // 默认专家在触发按钮上可见；选择器列出全部专家并可切换。
+  await expect(page.locator('.agent-trigger')).toContainText('通用助手')
+  await page.locator('.agent-trigger').click()
+  await page.locator('.model-option').filter({hasText:'测试用例设计专家'}).click()
+  await expect(page.locator('.agent-trigger')).toContainText('测试用例设计专家')
+  await page.getByRole('textbox',{name:'消息'}).fill('生成用例')
+  await page.getByRole('button',{name:'发送',exact:true}).click()
+  await expect.poll(()=>ctx.commands.find(command=>command.type==='turn.submit')?.data.agent_id).toBe('testcase-agent')
 })
 
 test('协议档选择会同步收窄思考强度并冻结到本轮请求',async({page})=>{

@@ -208,7 +208,8 @@ class SessionLog:
                                       "client_message_id": value.get("client_message_id"),
                                       "request_id": self.command_context.get("request_id"),
                                       "display_content": self.command_context.get("display_content"),
-                                      "attachment_refs": self.command_context.get("attachment_refs", [])}
+                                      "attachment_refs": self.command_context.get("attachment_refs", []),
+                                      "expert_id": self.command_context.get("expert_id")}
         event = {
             "schema_version": 2, "event_version": metadata.get("event_version", 1),
             "event_id": f"evt-{self.session_id}-{seq}", "session_id": self.session_id,
