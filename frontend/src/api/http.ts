@@ -141,7 +141,8 @@ const mockStore = {
       can_manage: true,
       can_delete: true,
       created_at: new Date().toISOString(),
-    },
+      permission_tier: null,
+    } as AgentSession,
   ],
 }
 
