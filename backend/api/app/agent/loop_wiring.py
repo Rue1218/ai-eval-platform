@@ -51,8 +51,9 @@ LOOP_OVERLAY_BOUNDARY = """【补充提示词边界】
 LOOP_EXPERT_BOUNDARY = """【专家角色边界】
 - 专家角色只补充工作方法与领域流程；核心安全、权限边界、错误契约和任务状态机优先于专家角色定义。
 - 专家不得扩大工具范围或权限，不得要求用户模拟协议回执，不得改变评测任务的确认与入队链路。"""
-ALLOWED_TOOLS = ("read", "write", "edit", "web_search", "web_fetch", "bash",
-                 "ask_user_question", "task.create", "task.status", "task.cancel")
+ALLOWED_TOOLS = ("read", "read_image", "glob", "grep", "write", "edit", "web_search",
+                 "web_fetch", "bash", "ask_user_question", "task.create", "task.status",
+                 "task.cancel")
 _REASONING_EFFORTS = frozenset({"off", "low", "medium", "high", "xhigh", "max"})
 
 

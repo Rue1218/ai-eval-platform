@@ -249,6 +249,56 @@ async def test_real_workspace_write_edit_read_and_failure(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_workspace_image_and_search_tools_are_parallel_and_keep_image_bytes_out_of_log(tmp_path):
+    """图片只回填当前模型回合，glob/grep 只枚举受控工作区的普通文本文件。"""
+    import struct
+
+    (tmp_path / "images").mkdir()
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 8 + struct.pack(">II", 2, 3)
+    (tmp_path / "images" / "chart.png").write_bytes(png)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.py").write_text("needle = 1\n", encoding="utf-8")
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "hidden.py").write_text("needle = 2\n", encoding="utf-8")
+
+    bridge = bridge_for(tmp_path, names=("read_image", "glob", "grep"))
+    messages, log = await run(
+        ToolScheduler(settings(), bridge.available_tools()),
+        [
+            call("read_image", "image", file_path="images/chart.png"),
+            call("glob", "glob", pattern="*.py"),
+            call("grep", "grep", pattern="needle", include="*.py"),
+        ],
+    )
+
+    image_content = messages[0]["content"]
+    assert isinstance(image_content, list)
+    assert image_content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert "src/main.py" in messages[1]["content"]
+    assert "hidden.py" not in messages[1]["content"]
+    assert "src/main.py:1:needle = 1" in messages[2]["content"]
+    image_event = next(item for item in results(log) if item["name"] == "read_image")
+    assert "data:image" not in image_event["content"]
+    assert "2×3" in image_event["content"]
+
+
+@pytest.mark.asyncio
+async def test_workspace_search_tools_reject_traversal_and_bad_image_format(tmp_path):
+    """搜索与图片读取都复用工作区实路径边界，不能通过绝对路径或伪图片绕过。"""
+    (tmp_path / "fake.bin").write_bytes(b"not an image")
+    bridge = bridge_for(tmp_path, names=("read_image", "glob", "grep"))
+    _, log = await run(
+        ToolScheduler(settings(), bridge.available_tools()),
+        [
+            call("glob", "glob", pattern="*", path="../outside"),
+            call("grep", "grep", pattern="[", path="."),
+            call("read_image", "image", file_path="fake.bin"),
+        ],
+    )
+    assert [item["status"] for item in results(log)] == ["failed", "failed", "failed"]
+
+
+@pytest.mark.asyncio
 async def test_alias_conflict_traversal_and_source_offsets(tmp_path):
     """拒绝歧义和越界；源 1-based 显式转换，平台 offset 保持 0-based。"""
     (tmp_path / "x").write_text("zero\none\ntwo\n")

@@ -14,12 +14,16 @@ subprocess**。
 
 from __future__ import annotations
 
+import base64
 import codecs
+import fnmatch
 import ipaddress
 import json
 import logging
 import os
+import re
 import socket
+import struct
 import tempfile
 import time
 from collections.abc import Callable, Mapping
@@ -56,6 +60,11 @@ READ_UNREAD_HINT_RESERVE = 320
 READ_CONTENT_BUDGET = max(1, READ_MAX_CHARS - READ_UNREAD_HINT_RESERVE)
 # 对齐 Agent 附件接口的 20MB 上限；窗口内仍只解码受控文本片段。
 READ_MAX_BYTES = 20 * 1024 * 1024
+# 图片工具仅接收当前会话工作区中的常见静态图片；上限与对话图片附件一致。
+READ_IMAGE_MAX_BYTES = 4 * 1024 * 1024
+# 文件搜索不能借单次调用无限枚举工作区或填满下一步上下文。
+SEARCH_MAX_RESULTS = 500
+SEARCH_MAX_CHARS = 60_000
 # 剩余正文按块统计行数/字符，避免对未返回内容逐行建 Python 字符串导致超时。
 READ_SCAN_CHUNK = 256 * 1024
 WRITE_MAX_BYTES = 2 * 1024 * 1024
@@ -218,6 +227,68 @@ def _resolve_safe_path(path: str, root: str) -> str:
     return target
 
 
+def _workspace_relative(path: str, root: str) -> str:
+    """返回稳定的工作区相对路径，供搜索工具回传给模型而非暴露绝对路径。"""
+    return os.path.relpath(path, os.path.realpath(root)).replace(os.sep, "/")
+
+
+def _iter_workspace_files(root: str, workspace_root: str):
+    """遍历受控目录中的普通文件，排除 VCS、依赖缓存和所有符号链接。"""
+    excluded = {".git", ".hg", ".svn", "node_modules", "__pycache__"}
+    root_real = os.path.realpath(root)
+    workspace_real = os.path.realpath(workspace_root)
+    for directory, names, files in os.walk(root_real, followlinks=False):
+        # os.walk 默认不跟随链接；仍显式移除目录链接，避免未来参数调整导致越界。
+        names[:] = [
+            name for name in names
+            if name not in excluded and not os.path.islink(os.path.join(directory, name))
+        ]
+        for name in files:
+            candidate = os.path.join(directory, name)
+            if os.path.islink(candidate) or not os.path.isfile(candidate):
+                continue
+            real = os.path.realpath(candidate)
+            if real.startswith(workspace_real + os.sep) or real == workspace_real:
+                yield real
+
+
+def _image_metadata(payload: bytes) -> tuple[str, int | None, int | None]:
+    """从常见图片头读取格式与尺寸，不引入会阻塞 API 进程的图像解码依赖。"""
+    if payload.startswith(b"\x89PNG\r\n\x1a\n") and len(payload) >= 24:
+        width, height = struct.unpack(">II", payload[16:24])
+        return "image/png", width, height
+    if payload.startswith((b"GIF87a", b"GIF89a")) and len(payload) >= 10:
+        width, height = struct.unpack("<HH", payload[6:10])
+        return "image/gif", width, height
+    if payload.startswith(b"\xff\xd8"):
+        cursor = 2
+        while cursor + 9 < len(payload):
+            if payload[cursor] != 0xFF:
+                cursor += 1
+                continue
+            marker = payload[cursor + 1]
+            cursor += 2
+            if marker in {0xD8, 0xD9}:
+                continue
+            if cursor + 2 > len(payload):
+                break
+            length = struct.unpack(">H", payload[cursor:cursor + 2])[0]
+            if length < 2 or cursor + length > len(payload):
+                break
+            if marker in {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF} and length >= 7:
+                height, width = struct.unpack(">HH", payload[cursor + 3:cursor + 7])
+                return "image/jpeg", width, height
+            cursor += length
+        return "image/jpeg", None, None
+    if payload.startswith(b"RIFF") and payload[8:12] == b"WEBP":
+        if payload[12:16] == b"VP8X" and len(payload) >= 30:
+            width = 1 + int.from_bytes(payload[24:27], "little")
+            height = 1 + int.from_bytes(payload[27:30], "little")
+            return "image/webp", width, height
+        return "image/webp", None, None
+    raise AppError(ErrorCode.VALIDATION, "仅支持 PNG、JPEG、GIF 或 WebP 图片")
+
+
 @dataclass(frozen=True, slots=True)
 class ReadResult:
     """read 的行级结构化结果：正文与浏览器展示投影严格分离。"""
@@ -289,6 +360,176 @@ class ReadResult:
                 },
             },
         }
+
+
+@dataclass(frozen=True, slots=True)
+class ImageReadResult:
+    """图片读取结果：日志只保存摘要，当前工具链向模型回填受限图文块。"""
+
+    path: str
+    media_type: str
+    size_bytes: int
+    width: int | None
+    height: int | None
+    data_url: str
+
+    def to_tool_data(self) -> dict[str, object]:
+        """构造仅当前回合可见的图文内容，避免 Base64 进入事件、ToolCard 或恢复日志。"""
+        dimensions = (
+            f"，{self.width}×{self.height} 像素"
+            if self.width is not None and self.height is not None
+            else ""
+        )
+        summary = f"已读取图片 {self.path}（{self.media_type}，{self.size_bytes} 字节{dimensions}）"
+        return {
+            "summary": summary,
+            "model_text": summary,
+            # 模型适配器会把该图文块转换为当前 provider 的 tool-result 内容格式。
+            "model_content": [
+                {"type": "text", "text": summary},
+                {"type": "image_url", "image_url": {"url": self.data_url}},
+            ],
+            "source": f"workspace:{self.path}",
+            "display": {
+                "summary": summary,
+                "status": "success",
+                "read_image": {
+                    "path": self.path,
+                    "media_type": self.media_type,
+                    "size_bytes": self.size_bytes,
+                    "width": self.width,
+                    "height": self.height,
+                },
+            },
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class FileSearchResult:
+    """glob/grep 的共享回传结构，模型正文与浏览器安全预览使用同一受控窗口。"""
+
+    kind: str
+    query: str
+    lines: tuple[str, ...]
+    truncated: bool
+
+    def to_tool_data(self) -> dict[str, object]:
+        """返回相对路径搜索结果，超限时明确告知模型缩窄范围。"""
+        body = "\n".join(self.lines)
+        if self.truncated:
+            body = f"{body}\n…[结果已截断，请缩小 path、pattern 或 include]" if body else "…[结果已截断，请缩小查询范围]"
+        summary = f"{self.kind} 完成，返回 {len(self.lines)} 条结果"
+        preview, preview_truncated = clip_at_line_boundary(body, preview_char_limit())
+        return {
+            "summary": summary,
+            "model_text": body,
+            "truncated": self.truncated,
+            "source": f"workspace:{self.kind}",
+            "display": {
+                "summary": summary,
+                "status": "success",
+                "content": preview,
+                self.kind: {
+                    "query": self.query,
+                    "count": len(self.lines),
+                    "truncated": self.truncated or preview_truncated,
+                    "preview": preview,
+                },
+            },
+        }
+
+
+def read_image_safe(path: str, sandbox_dir: str) -> ImageReadResult:
+    """读取工作区图片并构造图文块；不接受绝对路径、链接或超限文件。"""
+    target = _resolve_safe_path(path, sandbox_dir)
+    if os.path.islink(target) or not os.path.isfile(target):
+        raise AppError(ErrorCode.NOT_FOUND, "图片文件不存在")
+    size_bytes = os.path.getsize(target)
+    if size_bytes > READ_IMAGE_MAX_BYTES:
+        raise AppError(ErrorCode.VALIDATION, "图片超过 read_image 单次允许的 4MB 上限")
+    try:
+        with open(target, "rb") as handle:
+            payload = handle.read(READ_IMAGE_MAX_BYTES + 1)
+    except OSError as exc:
+        raise AppError(ErrorCode.INTERNAL, "图片读取失败") from exc
+    if len(payload) != size_bytes or len(payload) > READ_IMAGE_MAX_BYTES:
+        raise AppError(ErrorCode.VALIDATION, "图片超过 read_image 单次允许的 4MB 上限")
+    media_type, width, height = _image_metadata(payload)
+    encoded = base64.b64encode(payload).decode("ascii")
+    return ImageReadResult(
+        path=path,
+        media_type=media_type,
+        size_bytes=size_bytes,
+        width=width,
+        height=height,
+        data_url=f"data:{media_type};base64,{encoded}",
+    )
+
+
+def glob_files_safe(pattern: str, sandbox_dir: str, path: str | None = None) -> FileSearchResult:
+    """在工作区内按 glob 枚举普通文件；无斜杠模式匹配任意层级的文件名。"""
+    if not pattern.strip():
+        raise AppError(ErrorCode.VALIDATION, "pattern 不能为空")
+    root = _resolve_safe_path(path or ".", sandbox_dir)
+    if not os.path.isdir(root) or os.path.islink(root):
+        raise AppError(ErrorCode.VALIDATION, "glob 的 path 必须是工作区内目录")
+    has_separator = "/" in pattern.replace("\\", "/")
+    matches: list[str] = []
+    for candidate in _iter_workspace_files(root, sandbox_dir):
+        relative_root = _workspace_relative(candidate, root)
+        target = relative_root if has_separator else os.path.basename(candidate)
+        if not fnmatch.fnmatchcase(target, pattern):
+            continue
+        matches.append(_workspace_relative(candidate, sandbox_dir))
+    matches.sort()
+    truncated = len(matches) > SEARCH_MAX_RESULTS
+    return FileSearchResult("glob", pattern, tuple(matches[:SEARCH_MAX_RESULTS]), truncated)
+
+
+def grep_files_safe(
+    pattern: str,
+    sandbox_dir: str,
+    *,
+    path: str | None = None,
+    include: str | None = None,
+) -> FileSearchResult:
+    """在工作区普通文本文件中执行 Python 正则搜索，返回 ``path:line:text``。"""
+    if not pattern.strip():
+        raise AppError(ErrorCode.VALIDATION, "pattern 不能为空")
+    try:
+        expression = re.compile(pattern)
+    except re.error as exc:
+        raise AppError(ErrorCode.VALIDATION, "grep 正则表达式无效") from exc
+    root = _resolve_safe_path(path or ".", sandbox_dir)
+    if not os.path.isdir(root) or os.path.islink(root):
+        raise AppError(ErrorCode.VALIDATION, "grep 的 path 必须是工作区内目录")
+    matches: list[str] = []
+    chars = 0
+    truncated = False
+    for candidate in _iter_workspace_files(root, sandbox_dir):
+        relative_root = _workspace_relative(candidate, root)
+        if include and not fnmatch.fnmatchcase(relative_root, include):
+            continue
+        try:
+            with open(candidate, "rb") as handle:
+                if b"\x00" in handle.read(4096):
+                    continue
+            with open(candidate, encoding="utf-8", errors="replace") as handle:
+                for line_number, line in enumerate(handle, start=1):
+                    if expression.search(line) is None:
+                        continue
+                    rendered = f"{_workspace_relative(candidate, sandbox_dir)}:{line_number}:{line.rstrip()}"
+                    if len(matches) >= SEARCH_MAX_RESULTS or chars + len(rendered) > SEARCH_MAX_CHARS:
+                        truncated = True
+                        break
+                    matches.append(rendered)
+                    chars += len(rendered)
+        except OSError:
+            # 单个文件在遍历期间消失或不可读不能扩大搜索根；继续查其他文件。
+            continue
+        if truncated:
+            break
+    return FileSearchResult("grep", pattern, tuple(matches), truncated)
 
 
 def resolve_read_offset(arguments: Mapping[str, object] | None) -> object | None:
@@ -1359,20 +1600,18 @@ def execute_raw(
         data["latency_ms"] = latency_ms
         # output_schema 是 handler 展示投影的契约（非装饰字段）：运行期按声明比对，
         # 失败不外泄原始返回，归一为 INTERNAL 并只记录工具名与失败字段名。
-        # 比对对象是 handler 原始返回（result），不是归一后的 data——data 已被
-        # execute_raw 包成 {"summary","display"}，与 handler 声明的 output_schema 不同层。
+        # 映射型 handler 直接返回展示投影；带 to_tool_data 的结果则固定以 data.display
+        # 为投影。禁止对包含 model_text/source 等内部字段的外层包装校验，以免契约失焦。
         if output_schema:
             from .registry import validate_tool_output
 
             raw_projection: Mapping[str, object] | None = None
             if isinstance(result, Mapping):
                 raw_projection = result
-            else:
-                to_tool_data = getattr(result, "to_tool_data", None)
-                if callable(to_tool_data):
-                    candidate = to_tool_data()
-                    if isinstance(candidate, Mapping):
-                        raw_projection = candidate
+            elif isinstance(data, Mapping):
+                candidate = data.get("display")
+                if isinstance(candidate, Mapping):
+                    raw_projection = candidate
             if raw_projection is not None:
                 output_error = validate_tool_output(output_schema, raw_projection)
                 if output_error:

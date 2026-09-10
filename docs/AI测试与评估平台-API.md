@@ -2,8 +2,8 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.89 |
-| WS v2 修订日期 | 2026-09-10（§4A，Agent 专家选择与附件工作区落地） |
+| 文档版本 | V1.91 |
+| WS v2 修订日期 | 2026-09-10（§4A，工具 Schema 轨迹快照与专家选择器） |
 | 对应 PRD | V1.18（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.7.5（AgentLoop 单入口；JSON 仍以本文为准） |
@@ -1682,6 +1682,9 @@ V1.67（H3）起，`engine="agent"` 分支经 `discover` 按 Worker 白名单（
 | 工具 | 输入 Schema（必填；可选） | 成功 `tool_result.data` 安全投影 | 执行权限边界 | 失败恢复 |
 | --- | --- | --- | --- | --- |
 | `read` | `path`；`offset?`/`next_offset?`、`limit?≤2000` | `read.path/total_lines/start_line/end_line/next_offset/preview` | 仅会话工作区相对路径；≤20MB；模型正文≤600,000 字符；浏览器预览≤`TOOL_PREVIEW_MAX_CHARS`（默认与窗口对齐） | 仅 `TIMEOUT` 可修复重试；路径/分页错误提示相对路径或 `next_offset` |
+| `read_image` | `file_path` | `read_image.path/media_type/size_bytes/width/height` | 仅会话工作区相对路径；仅 PNG/JPEG/GIF/WebP，≤4MB；图片二进制仅作为**当前回合**模型 tool-result 图文块，持久事件、恢复快照与 ToolCard 均只保存元数据摘要 | 不自动重试；格式、大小或路径无效时改用受支持图片或正确相对路径 |
+| `glob` | `pattern`；`path?` | `glob.query/count/truncated/preview` | 仅工作区普通文件；不含 `/` 的 pattern 匹配任意层级文件名；排除 `.git/.hg/.svn`、`node_modules`、`__pycache__` 与符号链接；最多 500 条 | 不自动重试；缩小 `path` 或使用更具体 `pattern` |
+| `grep` | `pattern`；`path?`、`include?` | `grep.query/count/truncated/preview` | 仅工作区普通文本文件；Python 正则，返回 `path:line:text`；跳过二进制、版本库、依赖缓存与符号链接；最多 500 条或 60,000 字符 | 不自动重试；缩小 `path`/`include`/正则范围 |
 | `write` | `path`、`content` | `write.path/bytes_written/lines_written/preview` | 仅会话工作区；≤2MB；排他新建 + fsync，绝不覆盖已有文件 | 不自动重试；文件存在时改用新路径或先 `read` 后 `edit` |
 | `edit` | `path`、`old`、`new` | `edit.path/replacements=1/old_length/new_length` | 仅会话工作区；原子替换；`old` 必须匹配 | 不自动重跑；不匹配时返回邻近行脱敏建议，先 `read` 再调整 |
 | `bash` | `command` | `bash.exit_code/preview/preview_truncated` | 独立 Runner 的一次性 bwrap（档位只声明文件效果）：read-only 档 scope 只读 bind，写入被内核拒（EROFS）→ `tool_result` 错误码 `DENIED` 且自动产生 `reason="escalation"` 升档卡（V1.77/F5，approve 后同一命令以 workspace-write 重放恰好一次；`agent_escalation_approval_enabled` 默认关）；workspace-write 档 scope 可写。无网络、唯一可写工作区、CPU/内存/进程/墙钟限制恒开启 | 仅 `TIMEOUT` 表示可缩小范围后再试；`DENIED` 且升档被拒 → 失败观察；沙箱不可用与档位拒绝绝不降级或自动重跑 |
@@ -1934,7 +1937,7 @@ send 超时同样关闭 4408。Runtime 的事实提交不等待网络。
   - 传输边界：模型配置管理走 REST，浏览器回合走 `/ws/agent/v2`；平台到模型根据协议档使用 HTTP(S) POST + SSE（Anthropic `/v1/messages`、OpenAI Chat `/chat/completions` 等），不将浏览器 WS 地址作为模型接口。思考强度随 `turn.submit` 冻结，经同一 resolver 转成 SDK 请求体。
 - `attachments{upload_suffixes,inline_suffixes,image_suffixes,max_bytes,max_image_bytes,content_required}`：上传、模型内联和图片能力分开；模型实际是否支持视觉仍以供应商为准。附件正文不能为空；音频和旧 Office 仅元信息。历史附件按 `file_id` 使用已有 `/api/files/{id}` 和 `/content` 授权接口，不公开磁盘路径。
 - `tool.call/result.data.display` 为 ToolDisplay v1：`version,title,registry_name,wire_name,arguments_preview,result_preview,target,format,truncated,unavailable_reason`，预览最多 12000 字符。参数按工具字段白名单生成，失败仅公开错误码；未知工具有明确缺失说明，不开放任意内部结果。
-- `assistant.start.data.request_summary` 提供实际 `model,provider,protocol,profile_id,profile_version,reasoning_effort,max_tokens,input_fingerprint,tools[{name,parameters_schema}],context_meter`。context_meter 为实际请求的同源序列化估算，字段 `basis,estimated,profile_version,input_fingerprint,history_upto_seq,capacity,input_tokens,reserved_output_tokens,breakdown`；`basis="serialized_request.v2"` 时 `breakdown` 为 `system_prompt,conversation_messages,tools,mcp,skill,memory_files` 的非负整数映射，六项严格合计 `input_tokens`。Skill/记忆文件未实际注入时必须为 `0`；旧事实缺统计时为 null，不显示为 0。
+- `assistant.start.data.request_summary` 提供实际 `model,provider,protocol,profile_id,profile_version,reasoning_effort,max_tokens,input_fingerprint,tools[{name,description,parameters}],context_meter`。其中 `parameters` 是本次真实发送给模型的受限 JSON Schema 根对象，`description` 是注册工具描述；前端轨迹的 Schema 页直接消费此快照，旧事实中的 `parameters_schema` 仅作只读兼容。context_meter 为实际请求的同源序列化估算，字段 `basis,estimated,profile_version,input_fingerprint,history_upto_seq,capacity,input_tokens,reserved_output_tokens,breakdown`；`basis="serialized_request.v2"` 时 `breakdown` 为 `system_prompt,conversation_messages,tools,mcp,skill,memory_files` 的非负整数映射，六项严格合计 `input_tokens`。Skill/记忆文件未实际注入时必须为 `0`；旧事实缺统计时为 null，不显示为 0。
 - `assistant.message.data.reasoning_preview` 为持久思考正文，仅 reasoning ACL 允许时发送。禁止出现在普通 trace 或撤权后的快照里。可选 `usage` 仅保留上游归一化 token 字段；可选 `latency_ms` 是该模型流的真实毫秒耗时，不含工具执行。缺字段表示上游未返回，前端不得补造。`question.resolved` 增 `outcome,answers`（仍受 interactions ACL）。
 - 恢复快照增加有序 `timeline`（完整语义信封，受逐帧 ACL）；与 H 和当前用户权限在同一行锁事务读取。旧分组投影保留，记录增 `first_cursor`，新 reader 以 timeline 为权威，禁止重复追加 messages。
 - `question.respond.answers[].answer` 接受字符串或字符串数组；多选使用标签数组，包含逗号的标签不切分。旧字符串多选仍兼容逗号编码。数组只允许用于 checkbox，多选规范化后复用 validate_answers。
@@ -2989,6 +2992,52 @@ Composer 上方抽屉；点击确认或取消即收回，消息流只保留关�
 | `backend/api/app/llm/providers/options.py`、`llm/loop_contracts.py` | 兼容 effort/预算映射，限制 output_config 结构 |
 | `frontend/src/components/agent/loop/ThinkingControl.vue` | 单候选明确不可调节 |
 | `backend/api/tests/test_loop_profile_selection.py`、`test_loop_llm.py`、`test_loop_llm_sdk.py`、`frontend/tests/e2e/agentLoop.spec.ts` | 验证 UI 候选、WS 档位、SDK HTTP 参数与换档后的工具回填 |
+
+**V1.89（2026-09-10）— 工作区图片与文件搜索工具**
+
+`read_image`、`glob`、`grep` 为 AgentLoop 已接线的原生只读工具。它们只访问会话绑定的工作区：
+搜索跳过版本库、依赖缓存与符号链接；图片只支持≤4MB 的 PNG/JPEG/GIF/WebP，图片数据只在
+当前模型回合传递，绝不写入 WS、ToolCard、事件日志或恢复快照。
+
+| 实际修改文件 | 作用 |
+| :--- | :--- |
+| `backend/api/app/harness/execution/registry.py` | 注册三项工具、字段 Schema、只读权限、输出投影与恢复提示 |
+| `backend/api/app/harness/execution/dispatch.py` | 统一 realpath 工作区边界；实现图片头解析和受限图文块、glob/grep 遍历与结果上限 |
+| `backend/api/app/harness/execution/loop_tools.py` / `scheduler.py` | 将图片图文块仅回填给当前模型请求，持久终态仍保存安全文字摘要 |
+| `backend/api/app/agent/loop_wiring.py` / `harness/execution/loop_bridge.py` | 将三项工具加入 AgentLoop 白名单与只读并行调度集合 |
+| `backend/api/tests/test_harness_execution.py` / `test_loop_tools.py` | 覆盖注册、图片字节不落日志、工作区/VCS 边界与无效输入 |
+| `docs/AI测试与评估平台-API.md` | V1.89：§4.3.1 原生工具契约与本清单 |
+
+**V1.90（2026-09-10）— 原生工具输出 Schema 闭合校验**
+
+工具注册期进一步约束受限 JSON Schema：同层 `required` 中每个字段必须在同层
+`properties` 声明，拼写错误或不可满足的 Schema 一律以 `VALIDATION` 拒绝登记。运行期
+`output_schema` 校验对象统一为浏览器对外的 `display` 投影；含 `model_text`、图文块、
+溯源等内部字段的外层包装不属于输出契约。`read_image`、`glob`、`grep` 的成功展示投影均
+设为闭合对象，固定字段缺失、类型不符或多余字段均归一为 `INTERNAL`，不向浏览器泄露内部结果。
+
+| 修改文件 | 作用 |
+| --- | --- |
+| `backend/api/app/harness/execution/registry.py` | 校验 `required ⊆ properties`，闭合三项原生工具的展示输出 Schema |
+| `backend/api/app/harness/execution/dispatch.py` | 按 `to_tool_data().display` 执行输出 Schema 校验，隔离模型内部回填字段 |
+| `backend/api/tests/test_harness_execution.py` | 覆盖无效 required、图片图文外层与闭合展示投影 |
+| `docs/AI测试与评估平台-API.md` | V1.90：登记 Schema 闭合校验规则 |
+
+**V1.91（2026-09-10）— 工具 Schema 轨迹快照**
+
+`assistant.start.data.request_summary.tools[]` 对齐 DeepSeek Harness 的原生工具定义：
+`name`、`description`、`parameters`。`parameters` 为 JSON Schema 根对象，不再把
+`parameters_schema` 暴露为新的 v2 轨迹字段；前端轨迹页默认在工具记录打开 Schema 标签，
+以工具描述和可折叠 JSON Schema 展示本轮真实快照。为保证历史回放可读，旧快照仍接受
+`parameters_schema` 作为仅前端的兼容回退。
+
+| 修改文件 | 作用 |
+| --- | --- |
+| `backend/api/app/agent/loop_presentation.py` | 生成 DSH 外形的工具请求快照 |
+| `backend/api/tests/test_loop_presentation.py` | 固化 `name/description/parameters` 轨迹契约 |
+| `frontend/src/components/agent/loop/TraceWorkspace.vue` | 优化事件时间线、工具详情与 Schema 面板，并兼容旧快照 |
+| `frontend/tests/agent-loop-style-preview.html` | 使用新工具快照格式提供轨迹样式预览 |
+| `docs/AI测试与评估平台-API.md` | V1.91：§4A 字段契约与本清单 |
 
 
 ## 2026-09-09 协议档供应商与完整 URL 优化

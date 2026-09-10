@@ -25,6 +25,7 @@ from app.harness.execution import (
     read_file_safe,
     run_bash,
     validate_tool_arguments,
+    validate_tool_output,
     validate_tool_schema,
     write_file_safe,
 )
@@ -70,7 +71,6 @@ def test_registry_rejects_duplicate_register() -> None:
         )
     assert error.value.code == ErrorCode.VALIDATION
 
-
 def test_registry_get_unregistered_rejected() -> None:
     """未注册工具调用一律拒绝。"""
     registry = build_default_registry()
@@ -92,6 +92,9 @@ def test_default_registry_includes_bash() -> None:
     names = {definition["name"] for definition in registry.all_defs()}
     assert names == {
         "read",
+        "read_image",
+        "glob",
+        "grep",
         "write",
         "edit",
         "web_search",
@@ -166,6 +169,87 @@ def test_registry_rejects_unsupported_tool_schema_keywords() -> None:
     assert output_error.value.code == ErrorCode.VALIDATION
     assert "输出 Schema" in output_error.value.message
     assert "oneOf" in error.value.message
+
+
+def test_tool_schema_required_fields_must_be_declared() -> None:
+    """注册期拒绝 required 指向不存在 properties 的无效 JSON Schema。"""
+    schema = {
+        "type": "object",
+        "properties": {"known": {"type": "string"}},
+        "required": ["missing"],
+    }
+    assert validate_tool_schema(schema) == "arguments.required 包含未声明字段：missing"
+
+    registry = ToolRegistry()
+    with pytest.raises(AppError) as error:
+        registry.register(
+            ToolDef(
+                name="invalid-required-output",
+                description="无效输出字段",
+                parameters_schema={},
+                output_schema=schema,
+                permission="test.read",
+                timeout_s=1.0,
+                handler=_handler_factory("invalid-required-output"),
+            )
+        )
+    assert error.value.code == ErrorCode.VALIDATION
+
+
+def test_read_image_output_schema_checks_display_projection() -> None:
+    """图片工具校验对外 display，而非含模型图文块的内部包装。"""
+    output_schema = build_default_registry().get("read_image").output_schema
+
+    class _ImageResult:
+        """模拟含内部模型字段的图片结果，展示投影保持对外契约。"""
+
+        def to_tool_data(self) -> dict[str, object]:
+            return {
+                "summary": "已读取图片 sample.png",
+                "model_text": "已读取图片 sample.png",
+                "model_content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}}],
+                "display": {
+                    "summary": "已读取图片 sample.png",
+                    "status": "success",
+                    "read_image": {
+                        "path": "sample.png",
+                        "media_type": "image/png",
+                        "size_bytes": 1,
+                        "width": 1,
+                        "height": 1,
+                    },
+                },
+            }
+
+    def image_handler(_arguments: dict, _sandbox_dir: str | None = None) -> _ImageResult:
+        """返回模拟图片结果，供执行器验证投影层级。"""
+        return _ImageResult()
+
+    observation = execute(
+        ToolCall(name="read_image", arguments={"file_path": "sample.png"}),
+        timeout_s=1.0,
+        permission="sandbox.read",
+        handler=image_handler,
+        output_schema=output_schema,
+    )
+    assert observation.ok is True
+    output_error = validate_tool_output(
+        output_schema,
+        {
+            "summary": "已读取图片 sample.png",
+            "status": "success",
+            "read_image": {
+                "path": "sample.png",
+                "media_type": "image/png",
+                "size_bytes": 1,
+                "width": 1,
+                "height": 1,
+                "unexpected": True,
+            },
+        },
+    )
+    assert output_error is not None
+    assert "unexpected" in output_error
 
 
 def test_seal_budget_if_exhausted_appends_error_once() -> None:

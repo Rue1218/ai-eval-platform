@@ -1,7 +1,7 @@
 <template>
   <div class="loop-composer" @dragover.prevent @drop.prevent="drop">
     <div class="draft-files"><AttachmentPreview v-for="file in draft.files" :key="file.key" :attachment="{file_id:file.id,filename:file.filename,size:file.size,content_type:file.content_type,preview_url:file.source,uploading:file.uploading,uploadProgress:file.progress,error:!!file.error}" removable @remove="remove(file)"/></div>
-    <textarea ref="input" v-model="draft.content" aria-label="消息" :placeholder="hasWorkspace ? '输入任何评测问题或需求，Shift + Enter 换行，Enter 发送' : '请先在上方选择或新建工作区才能开始对话…'" rows="1" @input="resize" @keydown="keydown" />
+    <textarea ref="input" v-model="draft.content" aria-label="消息" placeholder="输入任何评测问题或需求，Shift + Enter 换行，Enter 发送" rows="1" @input="resize" @keydown="keydown" />
     <div class="composer-bottom">
       <input ref="picker" type="file" multiple hidden :accept="ui?.attachments.upload_suffixes.join(',')" @change="pick"/>
       <button class="loop-control attach-trigger" aria-label="添加附件" type="button" :disabled="!ui" @click="picker?.click()"><n-icon :component="AddIcon" :size="15"/></button>
@@ -36,9 +36,9 @@
       <LoopContextMeter :meter="meter"/>
       <button
         class="loop-send"
-        :class="{ 'is-busy': busy, 'is-cancelling': cancelling, 'is-ready': ready && hasWorkspace && draft.content.trim().length > 0 }"
+        :class="{ 'is-busy': busy, 'is-cancelling': cancelling, 'is-ready': ready && draft.content.trim().length > 0 }"
         :aria-label="sendLabel"
-        :title="!hasWorkspace ? '请先选择工作区' : sendLabel"
+        :title="sendLabel"
         :disabled="busy ? !canStop : !ready || !draft.content.trim() || draft.files.some(f => f.uploading || f.error) || draft.submitting"
         type="button"
         @click="handleClickSend"
@@ -118,15 +118,13 @@ const sendLabel = computed(() => props.busy ? (props.cancelling ? '正在取消'
 const protocolLabels: Record<string, string> = { openai_chat: 'OpenAI 兼容', anthropic_messages: 'Anthropic' }
 function handleClickSend() {
   if (props.busy) { emit('stop'); return }
-  if (!props.hasWorkspace) { emit('requestWorkspace'); return }
   emit('submit')
 }
-/** IME 选词不提交；运行中的 Enter 保留下一轮草稿。未绑定工作区时拦截并引导选择。 */
+/** IME 选词不提交；运行中的 Enter 保留下一轮草稿。 */
 function keydown(event: KeyboardEvent) {
   if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229) {
     event.preventDefault()
     if (!props.busy && props.ready && props.draft.content.trim() && !props.draft.submitting && !props.draft.files.some(f => f.uploading || f.error)) {
-      if (!props.hasWorkspace) { emit('requestWorkspace'); return }
       emit('submit')
     }
   }

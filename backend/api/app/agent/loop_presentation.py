@@ -116,4 +116,8 @@ def request_summary(
             "profile_id": request.profile_id, "profile_version": request.profile_version,
             "reasoning_effort": request.reasoning_effort, "max_tokens": request.max_tokens,
             "input_fingerprint": input_fingerprint, "context_meter": meter,
-            "tools": [{"name": tool.name, "parameters_schema": tool.parameters} for tool in request.tools]}
+            # 轨迹快照沿用 DeepSeek Harness 的原生工具定义外形，方便前端直接呈现 Schema。
+            "tools": [
+                {"name": tool.name, "description": tool.description, "parameters": tool.parameters}
+                for tool in request.tools
+            ]}

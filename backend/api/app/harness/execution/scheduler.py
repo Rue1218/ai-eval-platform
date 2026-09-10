@@ -94,7 +94,8 @@ def _result(
         "role": "tool",
         "tool_call_id": call_id,
         "name": name,
-        "content": result.content,
+        # 图片内容只驻留在本次图执行的规范消息，永不写入事件/快照/WS 载荷。
+        "content": result.model_content if result.model_content is not None else result.content,
         "is_error": result.is_error,
     }
 

@@ -9,6 +9,8 @@ from app.agent.loop_presentation import (
     request_summary,
     tool_display,
 )
+from app.harness.execution.loop_tools import tool_spec
+from app.harness.execution.registry import build_default_registry
 from app.llm.contracts import ModelConfig
 from app.llm.loop_contracts import ToolSpec
 from app.llm.resolver import AuthorizedProfileSnapshot, resolve_request
@@ -69,6 +71,25 @@ def test_request_meter_splits_native_and_mcp_tool_schemas():
     assert meter["breakdown"]["mcp"] > 0
     assert meter["breakdown"]["skill"] == 0
     assert meter["breakdown"]["memory_files"] == 0
+
+
+def test_request_summary_uses_native_tool_schema_shape():
+    """轨迹快照必须直接复用真实注册表定义，不能给前端拼装示例 Schema。"""
+    config = ModelConfig(protocol="openai_chat", base_url="https://api.deepseek.com", model="deepseek-chat", api_key="test")
+    definition = build_default_registry().get("read")
+    request = resolve_request(
+        config,
+        messages=[{"role": "user", "content": "读取文件"}],
+        tools=[tool_spec(definition)],
+    )
+
+    tool = request_summary(request)["tools"][0]
+
+    assert tool == {
+        "name": definition.name,
+        "description": definition.description,
+        "parameters": dict(definition.parameters_schema),
+    }
 
 
 def test_reasoning_is_persistent_but_acl_trimmed_on_replay_and_snapshot():

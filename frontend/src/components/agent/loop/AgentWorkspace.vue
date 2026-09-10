@@ -78,15 +78,15 @@
                     type="button"
                     class="composer-ws-btn"
                     :class="{ 'has-ws': !!activeWorkspaceId, 'is-draft': !sessionId }"
-                    :title="activeWorkspaceId ? `当前工作区：${activeWorkspaceName}` : '点击选择或新建工作区'"
+                    :title="activeWorkspaceId ? `当前绑定工作区：${activeWorkspaceName}` : '点击选择或新建沙箱工作区（可选）'"
                     @click="handleOpenWorkspacePopover"
                   >
                     <span class="ws-btn-folder-icon" aria-hidden="true">
-                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
                       </svg>
                     </span>
-                    <span class="ws-btn-name">{{ activeWorkspaceName || '选择工作区' }}</span>
+                    <span class="ws-btn-name">{{ activeWorkspaceId ? activeWorkspaceName : '绑定工作区' }}</span>
                     <span class="ws-btn-arrow" aria-hidden="true">
                       <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M3 4.5l3 3 3-3" />
@@ -98,19 +98,21 @@
                 <div class="ws-popover-card">
                   <header class="ws-popover-header">
                     <div class="ws-popover-title">
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
                       </svg>
-                      <span>工作区</span>
+                      <span>沙箱工作区</span>
                     </div>
                     <span v-if="sessionId" class="ws-popover-badge">已绑定会话</span>
+                    <span v-else-if="activeWorkspaceId" class="ws-popover-badge is-active">已预选</span>
+                    <span v-else class="ws-popover-badge-draft">可选</span>
                   </header>
 
                   <p v-if="sessionId" class="ws-popover-tip">
-                    当前会话已绑定工作区，创建后不可更改。如需切换工作区，请新建会话。
+                    当前会话已绑定此工作区，创建后不可更改。如需切换工作区，请新建会话。
                   </p>
                   <p v-else class="ws-popover-tip">
-                    选择绑定的沙箱工作区，必须选中工作区才能开始对话。
+                    选择绑定的沙箱工作区（可选）。绑定后模型的文件读写与终端命令将在此工作区内隔离执行。
                   </p>
 
                   <div v-if="sessionId" class="ws-popover-tier">
@@ -126,9 +128,29 @@
 
                   <div v-if="loadingWorkspaces" class="ws-popover-loading">加载工作区中…</div>
                   <div v-else class="ws-popover-list">
-                    <div v-if="workspaces.length === 0" class="ws-popover-empty">
-                      暂无工作区，请在下方直接新建
-                    </div>
+                    <!-- 选项 1：不绑定工作区（默认沙箱） -->
+                    <button
+                      v-if="!sessionId"
+                      type="button"
+                      class="ws-popover-item"
+                      :class="{ 'is-selected': !activeWorkspaceId }"
+                      @click="handleSelectWorkspace(null)"
+                    >
+                      <span class="ws-item-folder">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                          <circle cx="12" cy="12" r="10"></circle>
+                          <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line>
+                        </svg>
+                      </span>
+                      <span class="ws-item-name">不绑定工作区（默认沙箱）</span>
+                      <span v-if="!activeWorkspaceId" class="ws-item-check">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                          <polyline points="20 6 9 17 4 12"></polyline>
+                        </svg>
+                      </span>
+                    </button>
+
+                    <!-- 工作区列表项 -->
                     <button
                       v-for="ws in workspaces"
                       :key="ws.id"
@@ -138,17 +160,29 @@
                       :disabled="!!sessionId"
                       @click="handleSelectWorkspace(ws)"
                     >
-                      <span class="ws-item-folder">📁</span>
+                      <span class="ws-item-folder">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                        </svg>
+                      </span>
                       <span class="ws-item-name" :title="ws.name">{{ ws.name }}</span>
-                      <span v-if="ws.id === activeWorkspaceId" class="ws-item-check">✓</span>
+                      <span v-if="ws.id === activeWorkspaceId" class="ws-item-check">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                          <polyline points="20 6 9 17 4 12"></polyline>
+                        </svg>
+                      </span>
                     </button>
+
+                    <div v-if="workspaces.length === 0" class="ws-popover-empty">
+                      暂无自定义工作区，可在下方新建
+                    </div>
                   </div>
 
                   <footer v-if="!sessionId" class="ws-popover-footer">
                     <input
                       v-model="newWorkspaceName"
                       class="ws-popover-input"
-                      placeholder="新建工作区名称"
+                      placeholder="新建工作区名称…"
                       :disabled="creatingWorkspace"
                       maxlength="80"
                       @keydown.enter.prevent="handleCreateWorkspace"
@@ -159,13 +193,13 @@
                       :disabled="creatingWorkspace || !newWorkspaceName.trim()"
                       @click="handleCreateWorkspace"
                     >
-                      {{ creatingWorkspace ? '创建中' : '新建' }}
+                      {{ creatingWorkspace ? '创建中…' : '新建' }}
                     </button>
                   </footer>
                 </div>
               </n-popover>
             </div>
-            <AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :metrics="conversationMetrics" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" :has-workspace="!!activeWorkspaceId" :agent="selectedAgent" :agents="ui?.agents || []" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile" @agent="selectAgent" @request-workspace="handleRequestWorkspace"/>
+            <AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :metrics="conversationMetrics" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" :has-workspace="true" :agent="selectedAgent" :agents="ui?.agents || []" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile" @agent="selectAgent" @request-workspace="handleRequestWorkspace"/>
           </div>
           <!-- 空状态时的提示词卡片（位于输入框下方，点击填充草稿） -->
           <div v-if="!rows.length" class="loop-empty-prompts">
@@ -202,15 +236,15 @@
           type="button"
           class="composer-ws-btn"
           :class="{ 'has-ws': !!activeWorkspaceId, 'is-draft': !sessionId }"
-          :title="activeWorkspaceId ? `当前工作区：${activeWorkspaceName}` : '工作区'"
+          :title="activeWorkspaceId ? `当前绑定工作区：${activeWorkspaceName}` : '点击选择或新建沙箱工作区（可选）'"
           @click="handleOpenWorkspacePopover"
         >
           <span class="ws-btn-folder-icon" aria-hidden="true">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
               <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
             </svg>
           </span>
-          <span class="ws-btn-name">{{ activeWorkspaceName || '选择工作区' }}</span>
+          <span class="ws-btn-name">{{ activeWorkspaceId ? activeWorkspaceName : '绑定工作区' }}</span>
           <span class="ws-btn-arrow" aria-hidden="true">
             <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
               <path d="M3 4.5l3 3 3-3" />
@@ -218,24 +252,26 @@
           </span>
         </button>
       </div>
-      <AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :metrics="conversationMetrics" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" :has-workspace="hasWorkspace" :agent="selectedAgent" :agents="ui?.agents || []" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile" @agent="selectAgent" @request-workspace="handleRequestWorkspace"/>
+      <AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :metrics="conversationMetrics" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" :has-workspace="true" :agent="selectedAgent" :agents="ui?.agents || []" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile" @agent="selectAgent" @request-workspace="handleRequestWorkspace"/>
     </div>
     <!-- 页面最底部指标栏：只有开始对话后（rows.length > 0）且有 conversationMetrics 时显示 -->
     <footer v-if="rows.length && conversationMetrics" class="conversation-metrics loop-bottom-metrics" aria-label="会话模型总用量指标">
-      <span>
+      <span title="全会话平均 Token 生成速度">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <line x1="5" y1="12" x2="19" y2="12"></line>
-          <polyline points="12 5 19 12 12 19"></polyline>
+          <path d="m12 14 4-4"/>
+          <path d="M3.34 19a10 10 0 1 1 17.32 0"/>
         </svg>
-        生成速度 {{ formatSpeed(conversationMetrics.outputTokensPerSecond) }}
+        生成token速度 {{ formatSpeed(conversationMetrics.outputTokensPerSecond) }}
       </span>
-      <span>
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
-          <polygon points="5 3 19 12 5 21 5 3"></polygon>
+      <span title="全会话 Prompt 缓存命中率">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <ellipse cx="12" cy="5" rx="9" ry="3"/>
+          <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+          <path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"/>
         </svg>
-        缓存命中 {{ formatRate(conversationMetrics.cacheHitRate) }}
+        缓存命中率 {{ formatRate(conversationMetrics.cacheHitRate) }}
       </span>
-      <span>
+      <span title="全会话累计输入与输出 Token 统计">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
           <polyline points="14 2 14 8 20 8"></polyline>
@@ -344,9 +380,13 @@ async function loadWorkspaces(autoSelect = true) {
     }))
     if (!props.sessionId && !draftWorkspaceId.value && workspaces.value.length > 0 && autoSelect) {
       const savedWsId = localPreference('last-workspace')
-      const matched = workspaces.value.find(ws => ws.id === savedWsId) || workspaces.value[0]
-      draftWorkspaceId.value = matched.id
-      draftWorkspaceName.value = matched.name
+      if (savedWsId) {
+        const matched = workspaces.value.find(ws => ws.id === savedWsId)
+        if (matched) {
+          draftWorkspaceId.value = matched.id
+          draftWorkspaceName.value = matched.name
+        }
+      }
     }
   } catch {
     // 忽略加载异常
@@ -362,8 +402,15 @@ function handleOpenWorkspacePopover() {
   }
 }
 
-function handleSelectWorkspace(ws: { id: string; name: string }) {
+function handleSelectWorkspace(ws: { id: string; name: string } | null) {
   if (props.sessionId) {
+    workspacePopoverOpen.value = false
+    return
+  }
+  if (!ws) {
+    draftWorkspaceId.value = null
+    draftWorkspaceName.value = ''
+    try { localStorage.removeItem(`last-workspace:${auth.user?.id}`) } catch { /* 忽略 */ }
     workspacePopoverOpen.value = false
     return
   }
@@ -395,7 +442,6 @@ async function handleCreateWorkspace() {
 }
 
 function handleRequestWorkspace() {
-  message.warning('请先选择或新建工作区才能开始对话')
   workspacePopoverOpen.value = true
   if (!workspaces.value.length) void loadWorkspaces(false)
 }
@@ -456,7 +502,8 @@ const conversationMetrics = computed<ConversationMetrics>(() => {
     if (!usage) continue
     const input = tokenValue(usage.prompt_tokens), output = tokenValue(usage.completion_tokens)
     inputTokens += input; outputTokens += output
-    if (input > 0 && output > 0 && tokenValue(attempt.latency_ms) > 0) modelLatencyMs += tokenValue(attempt.latency_ms)
+    const lat = tokenValue(attempt.latency_ms) || tokenValue((usage as any)?.latency_ms)
+    if (input > 0 && output > 0 && lat > 0) modelLatencyMs += lat
     const cached = tokenValue(usage.cache_read_input_tokens) || tokenValue(usage.cached_tokens)
     if (cached > 0 || typeof usage.cache_read_input_tokens === 'number' || typeof usage.cached_tokens === 'number') {
       hasCacheUsage = true; cacheReadTokens += cached
@@ -676,12 +723,6 @@ function regenerate(row: LoopRecord) {
 }
 /** 冻结输入/附件/effort 与幂等 ID；未受理时保留可恢复草稿。 */
 async function submit(override?: { content: string; attachmentRefs: string[] }) {
-  if (!props.sessionId && !activeWorkspaceId.value) {
-    message.warning('请先选择或新建工作区才能开始对话')
-    workspacePopoverOpen.value = true
-    if (!workspaces.value.length) void loadWorkspaces(false)
-    return
-  }
   if (!ready.value || busy.value || draft.value.submitting) return
   const source = draft.value, selectedEffort=effort.value, profile=selectedProfile.value
   if (!selectedEffort || !profile) return
@@ -1139,7 +1180,7 @@ async function hydrateAttachments() {
 
 /* 工作区弹窗面板 */
 .ws-popover-card {
-  width: 290px;
+  width: 300px;
   background: #ffffff;
   border-radius: 12px;
   padding: 12px;
@@ -1167,6 +1208,18 @@ async function hydrateAttachments() {
   border-radius: 4px;
   background: #eef2f5;
   color: #64748b;
+}
+.ws-popover-badge.is-active {
+  background: #e6f1ec;
+  color: #174a3a;
+}
+.ws-popover-badge-draft {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #f1f5f3;
+  color: #647d70;
 }
 .ws-popover-tip {
   margin: 0 0 10px;
@@ -1219,7 +1272,14 @@ async function hydrateAttachments() {
   cursor: default;
 }
 .ws-item-folder {
-  font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #7b8e84;
+  flex-shrink: 0;
+}
+.ws-popover-item.is-selected .ws-item-folder {
+  color: #1f5947;
 }
 .ws-item-name {
   flex: 1;
@@ -1228,9 +1288,11 @@ async function hydrateAttachments() {
   white-space: nowrap;
 }
 .ws-item-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   color: #1f5947;
-  font-weight: 700;
-  font-size: 13px;
+  flex-shrink: 0;
 }
 .ws-popover-footer {
   display: flex;
@@ -1242,21 +1304,31 @@ async function hydrateAttachments() {
 .ws-popover-input {
   flex: 1;
   min-width: 0;
-  padding: 5px 8px;
+  height: 32px;
+  box-sizing: border-box;
+  padding: 6px 10px;
   border: 1px solid #d2ded7;
   border-radius: 6px;
   background: #f9fbf9;
   font-size: 12px;
   color: #1e332a;
-  outline: none;
-  transition: border-color 0.15s ease;
+  outline: none !important;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
-.ws-popover-input:focus {
-  border-color: #1f5947;
+.ws-popover-input:focus,
+.ws-popover-input:focus-visible {
+  outline: none !important;
+  border-color: #1f5947 !important;
+  box-shadow: 0 0 0 2px rgba(31, 89, 71, 0.12) !important;
   background: #ffffff;
 }
 .ws-popover-create-btn {
-  padding: 5px 11px;
+  height: 32px;
+  box-sizing: border-box;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: 0;
   border-radius: 6px;
   background: #1f5947;
@@ -1264,14 +1336,16 @@ async function hydrateAttachments() {
   font-size: 12px;
   font-weight: 550;
   cursor: pointer;
-  transition: background 0.15s ease;
+  transition: all 0.15s ease;
   white-space: nowrap;
 }
 .ws-popover-create-btn:hover:not(:disabled) {
   background: #174a3a;
 }
 .ws-popover-create-btn:disabled {
-  opacity: 0.5;
+  background: #edf3f0;
+  color: #9ab0a4;
+  opacity: 1;
   cursor: not-allowed;
 }
 
@@ -1282,6 +1356,10 @@ async function hydrateAttachments() {
 }
 [data-theme='dark'] .ws-popover-title {
   color: #f1f5f9;
+}
+[data-theme='dark'] .ws-popover-badge-draft {
+  background: rgba(255, 255, 255, 0.08);
+  color: #94a3b8;
 }
 [data-theme='dark'] .ws-popover-tip {
   color: #94a3b8;
@@ -1298,6 +1376,12 @@ async function hydrateAttachments() {
   border-color: rgba(22, 151, 122, 0.4);
   color: #34d399;
 }
+[data-theme='dark'] .ws-item-folder {
+  color: #94a3b8;
+}
+[data-theme='dark'] .ws-popover-item.is-selected .ws-item-folder {
+  color: #34d399;
+}
 [data-theme='dark'] .ws-item-check {
   color: #34d399;
 }
@@ -1309,11 +1393,22 @@ async function hydrateAttachments() {
   border-color: rgba(255, 255, 255, 0.15);
   color: #f8fafc;
 }
+[data-theme='dark'] .ws-popover-input:focus,
+[data-theme='dark'] .ws-popover-input:focus-visible {
+  border-color: #16977a !important;
+  box-shadow: 0 0 0 2px rgba(22, 151, 122, 0.25) !important;
+  background: #1e293b;
+}
 [data-theme='dark'] .ws-popover-create-btn {
   background: #16977a;
+  color: #ffffff;
 }
 [data-theme='dark'] .ws-popover-create-btn:hover:not(:disabled) {
   background: #148369;
+}
+[data-theme='dark'] .ws-popover-create-btn:disabled {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.3);
 }
 
 /* 页面底部指标条 */
