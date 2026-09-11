@@ -33,10 +33,11 @@ test('calculateTurnSummaries: 单轮多次 ReAct 步骤正确累加 Token 与用
     {
       key: 'a1',
       role: 'assistant',
-      text: '',
+      text: '我先检查工作区文件。',
       reasoning: '思考步骤 1',
       ended: true,
       correlation: { turn: 1, step: 1 },
+      tool_calls: [{ id: 'c1', name: 'bash' }],
       usage: { prompt_tokens: 3000, completion_tokens: 100, total_tokens: 3100 },
       latency_ms: 4900,
     },
@@ -50,10 +51,11 @@ test('calculateTurnSummaries: 单轮多次 ReAct 步骤正确累加 Token 与用
     {
       key: 'a2',
       role: 'assistant',
-      text: '',
+      text: '已找到文件，继续读取内容。',
       reasoning: '思考步骤 2',
       ended: true,
       correlation: { turn: 1, step: 2 },
+      tool_calls: [{ id: 'c2', name: 'read' }],
       usage: { total_tokens: 3300 },
       latency_ms: 1800,
     },
@@ -98,8 +100,25 @@ test('calculateTurnSummaries: 单轮多次 ReAct 步骤正确累加 Token 与用
   assert.equal(summary.totalTokens, 17400)
   // 4900 + 1800 + 14000 = 20700
   assert.equal(summary.totalLatencyMs, 20700)
-  assert.equal(summary.text, '已查看工作区，目前只有一个文件。')
-  assert.equal(summary.representativeRow.key, 'a3')
+  // 复制与引用记忆只使用总结，不能混入前两步 ReAct 过程文字。
+  assert.equal(summary.summaryText, '已查看工作区，目前只有一个文件。')
+  assert.equal(summary.summaryRow.key, 'a3')
+  assert.deepEqual(summary.processRows.map(row => row.key), ['a1', 'a2'])
+})
+
+test('calculateTurnSummaries: 过程最后仍发起工具调用时不伪造本轮总结', () => {
+  const rows = [
+    { key: 'u1', role: 'user', content: '读取文件', correlation: { turn: 1 } },
+    {
+      key: 'a1', role: 'assistant', text: '我将读取文件。', ended: true,
+      correlation: { turn: 1, step: 1 }, tool_calls: [{ id: 'c1', name: 'read' }],
+      usage: { total_tokens: 100 }, latency_ms: 500,
+    },
+    { key: 't1', name: 'read', status: 'succeeded', display: {}, correlation: { turn: 1, call_id: 'c1' } },
+  ]
+
+  // 没有最终无工具调用输出时，复制/重新生成/引用记忆操作栏不应出现。
+  assert.equal(calculateTurnSummaries(rows, { activeTurnId: null, isBusy: false }).size, 0)
 })
 
 test('calculateTurnSummaries: 工具处于运行状态时不输出结尾总结', () => {

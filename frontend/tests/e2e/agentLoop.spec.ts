@@ -60,7 +60,10 @@ async function setup(page: Page, holdNewReplay = false) {
         send('turn.start',{},c,true,sid)
         socket.send(JSON.stringify({protocol_version:2,type:'command.accepted',durability:'control',session_id:sid,request_id:cmd.request_id,data:{accepted:true},correlation:c}))
         send('assistant.start',{request_summary:{model:'deepseek-chat',reasoning_effort:cmd.data.reasoning_effort,profile_version:'v1'}},c,true,sid)
-        send('assistant.message',{content:'准备读取文件',reasoning_preview:'检查工作区',usage:{prompt_tokens:1500,completion_tokens:320,total_tokens:1820,cache_read_input_tokens:600},latency_ms:800},c,true,sid)
+        // 第一步明确携带工具调用身份，是 ReAct 执行过程而不是可操作的本轮总结。
+        const processTool = cmd.data.content === '创建评测任务' ? 'platform.tasks.task.create' : 'read'
+        const processCallId = cmd.data.content === '创建评测任务' ? 'task-create' : 'c'
+        send('assistant.message',{content:'准备读取文件',reasoning_preview:'检查工作区',tool_calls:[{id:processCallId,name:processTool}],usage:{prompt_tokens:1500,completion_tokens:320,total_tokens:1820,cache_read_input_tokens:600},latency_ms:800},c,true,sid)
         send('assistant.end',{outcome:'committed'},c,true,sid)
         if (cmd.data.content === '创建评测任务') {
           // 夹具直接采用后端允许的 MCP 全名，验证前端不依赖某一种模型 wire 名。
@@ -79,7 +82,12 @@ async function setup(page: Page, holdNewReplay = false) {
       if(cmd.type==='approval.respond') {
         send('approval.resolved',{interaction_id:'i',decision:cmd.data.decision},c,true,sid)
         send('tool.result',{name:'read',status:cmd.data.decision==='deny'?'denied':'succeeded',display:{version:1,result_preview:'实际输出夹具'}},c,true,sid)
-        send('turn.end',{reason:'completed'},c,true,sid)
+        // 工具结算后第二次模型输出才是总结；未返回 usage 时聚合指标保持第一步的真实字段。
+        const summaryCorrelation = {...c,step:2,attempt_id:'a2'}
+        send('assistant.start',{request_summary:{model:'deepseek-chat',reasoning_effort:'high',profile_version:'v1'}},summaryCorrelation,true,sid)
+        send('assistant.message',{content:'文件已读取完成。',reasoning_preview:'根据工具结果总结。'},summaryCorrelation,true,sid)
+        send('assistant.end',{outcome:'committed'},summaryCorrelation,true,sid)
+        send('turn.end',{reason:'completed'},summaryCorrelation,true,sid)
       }
       if(cmd.type==='trace.subscribe') { send('schema.catalog',{stream:{types:{'tool.call':{fields:['name','display']}}},facts:{events:{}}});send('trace.event',{event:{seq:0,type:'tool/call',data:{name:'read'},correlation:c}}) }
     })
@@ -261,10 +269,13 @@ test('消息操作和真实模型指标遵循持久事件字段', async ({page})
   await page.getByRole('button', {name:'允许一次', exact:true}).click()
   await expect(page.getByLabel('复制回答')).toBeVisible()
   await expect(page.getByLabel('引用为参考记忆')).toBeVisible()
+  await expect(page.getByText('执行过程 · step 1', {exact:true})).toBeVisible()
+  await expect(page.getByText('执行过程 · 工具调用', {exact:true})).toBeVisible()
+  await expect(page.getByText('本轮总结', {exact:true})).toBeVisible()
   await expect(page.locator('.assistant-metrics')).toContainText('1.8K token')
   await expect(page.locator('.assistant-metrics')).toContainText('800 ms')
   await page.getByLabel('引用为参考记忆').click()
-  await expect(page.getByRole('textbox', {name:'消息'})).toHaveValue('[引用对话记忆]\n准备读取文件\n[/引用对话记忆]')
+  await expect(page.getByRole('textbox', {name:'消息'})).toHaveValue('[引用对话记忆]\n文件已读取完成。\n[/引用对话记忆]')
   await expect(page.getByRole('button', {name:'重新生成'})).toBeEnabled()
   await page.getByRole('button', {name:'重新生成'}).click()
   await expect.poll(() => ctx.submits).toBe(2)
@@ -296,7 +307,8 @@ test('多步工具内审批、attempt 结束不解锁发送、切会话不取消
   await expect(page.locator('.trace-detail-tabs')).toContainText('Schema')
   await page.getByRole('textbox',{name:'搜索轨迹'}).fill('')
   await page.locator('.trace-filters').getByRole('button',{name:'模型',exact:true}).click()
-  await expect(page.locator('.trace-row')).toHaveCount(2)
+  // 工具过程与最终总结各自对应一次模型请求/提交，因此模型轨迹为四条。
+  await expect(page.locator('.trace-row')).toHaveCount(4)
   await expect(page.locator('.trace-filters').getByRole('button',{name:'授权',exact:true})).toBeVisible()
   await expect(page.locator('.trace-filters').getByRole('button',{name:'问答',exact:true})).toHaveCount(0)
   await page.locator('.trace-row').first().click()
