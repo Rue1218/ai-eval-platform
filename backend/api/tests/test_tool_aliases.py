@@ -57,7 +57,7 @@ def test_schema_accepts_canonical_names_after_normalize() -> None:
         ("write", {"path": "a.txt", "content": "hi"}),
         ("edit", {"path": "a.txt", "old": "a", "new": "b"}),
         ("web_search", {"query": "评测", "limit": 3}),
-        ("task", {"goal": "拆解计划", "steps": [{"title": "第一步"}]}),
+        ("task", {"goal": "拆解计划", "steps": [{"title": "第一步", "status": "pending"}]}),
     ):
         normalized = normalize_tool_arguments(name, raw)
         assert validate_tool_arguments(registry.get(name).parameters_schema, normalized) is None
@@ -114,12 +114,27 @@ def test_edit_replace_all_and_multiple_matches(tmp_path: Path) -> None:
     assert result.diff.startswith("@@")
 
 
-def test_task_plan_accepts_prompt_without_steps() -> None:
-    """新契约允许只有 description/prompt、没有 steps。"""
-    result = build_task_plan({"description": "拆解", "prompt": "先列计划再执行"})
-    assert result.goal == "先列计划再执行"
-    assert result.description == "拆解"
-    assert result.steps == ()
+def test_task_plan_uses_full_step_list_and_rejects_duplicate_steps() -> None:
+    """task 每次都以完整步骤清单为准，重复条目必须在执行前被拒绝。"""
+    result = build_task_plan({
+        "description": "检查工具链路",
+        "steps": [
+            {"title": "读取注册表", "status": "completed"},
+            {"title": "验证前端投影", "status": "in_progress"},
+        ],
+    })
+    assert result.goal == "检查工具链路"
+    assert result.description == "检查工具链路"
+    assert result.steps[1]["status"] == "in_progress"
     data = result.to_tool_data()
     assert data["display"]["status"] == "success"
     assert data["display"]["result"]
+
+    with pytest.raises(AppError, match="重复"):
+        build_task_plan({
+            "description": "检查工具链路",
+            "steps": [
+                {"title": "读取注册表", "status": "pending"},
+                {"title": "读取注册表", "status": "in_progress"},
+            ],
+        })

@@ -48,6 +48,32 @@ def test_task_display_accepts_agent_wire_registry_and_mcp_names():
         assert "hidden" not in str(display)
 
 
+def test_native_task_display_projects_real_plan_without_worker_fields():
+    """原生 task 的抽屉只读取真实完整清单，不与 Worker 任务卡混用。"""
+    args = {
+        "description": "检查 WebSocket 链路",
+        "steps": [
+            {"title": "读取事件契约", "status": "completed"},
+            {"title": "验证重连回放", "status": "in_progress"},
+        ],
+        "api_key": "private-value",
+    }
+    call = tool_display({"name": "task", "args": args})
+    assert call["task"] == {
+        "goal": "检查 WebSocket 链路",
+        "steps": args["steps"],
+    }
+    assert "private-value" not in str(call)
+
+    result = tool_display({
+        "name": "task",
+        "status": "succeeded",
+        "content": "已更新任务规划",
+        "display": {"task": {"goal": args["description"], "steps": args["steps"]}},
+    }, result=True)
+    assert result["task"] == call["task"]
+
+
 def test_request_meter_matches_actual_wire_estimator():
     """统计读取同一个请求对象，明确估算及输出预留。"""
     from app.agent.loop_wiring import _prompt_tokens

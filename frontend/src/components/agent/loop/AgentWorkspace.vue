@@ -38,7 +38,7 @@
           <template v-for="row in visibleRows" :key="row.key">
             <article v-if="row.role==='user'" class="loop-message user"><header>你</header><div class="history-files"><AttachmentPreview v-for="file in attachments[row.key] || []" :key="file.file_id" :attachment="file"/></div><p>{{ row.content }}</p></article>
             <TaskRunCard v-else-if="'status' in row && 'name' in row && isTaskTool((row as ToolRun).name)" :tool="row as ToolRun" :task="taskForTool(row as ToolRun)" :interactions="interactions(row)" :can-control="canControl" :online="!!state?.ready" @respond="respond"/>
-            <ToolRunCard v-else-if="'status' in row && 'name' in row" :tool="row as ToolRun" :interactions="interactions(row)" :can-control="canControl" :online="!!state?.ready" @respond="respond"/>
+            <ToolRunCard v-else-if="'status' in row && 'name' in row && (row as ToolRun).name !== 'task'" :tool="row as ToolRun" :interactions="interactions(row)" :can-control="canControl" :online="!!state?.ready" @respond="respond"/>
             <article v-else class="loop-message assistant" :class="{ 'is-continuation': !isFirstAssistantInTurn(row) }">
               <header v-if="isFirstAssistantInTurn(row) || row.text" class="assistant-header">
                 <div v-if="isFirstAssistantInTurn(row)" class="assistant-identity">
@@ -192,6 +192,7 @@
                 </div>
               </n-popover>
             </div>
+            <TaskStateDrawer :plan="taskPlan" />
             <AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :metrics="conversationMetrics" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" :has-workspace="true" :agent="selectedAgent" :agents="ui?.agents || []" :permission-tier="sessionTier" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile" @agent="selectAgent" @request-workspace="handleRequestWorkspace" @update-permission-tier="handleTierChange"/>
           </div>
           <!-- 空状态时的提示词卡片（位于输入框下方，点击填充草稿） -->
@@ -245,6 +246,7 @@
           </span>
         </button>
       </div>
+      <TaskStateDrawer :plan="taskPlan" />
       <AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :metrics="conversationMetrics" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" :has-workspace="true" :agent="selectedAgent" :agents="ui?.agents || []" :permission-tier="sessionTier" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile" @agent="selectAgent" @request-workspace="handleRequestWorkspace" @update-permission-tier="handleTierChange"/>
     </div>
     <!-- 页面最底部指标栏：只有开始对话后（rows.length > 0）且有 conversationMetrics 时显示 -->
@@ -286,7 +288,7 @@ import TimeIcon from 'naive-ui/es/_internal/icons/Time'
 import http, { ApiError, api } from '../../../api/http'
 import { createRequestId } from '../../../utils/requestId'
 import type { AttachmentReference, AgentSession } from '../../../api/types'
-import type { ConversationMetrics, Data, Effort, InteractionRecord, LoopAgent, LoopProfile, LoopRecord, LoopUi, LoopUsage, ToolRun } from '../../../api/agentLoopTypes'
+import type { ConversationMetrics, Data, Effort, InteractionRecord, LoopAgent, LoopProfile, LoopRecord, LoopUi, LoopUsage, TaskPlanDisplay, ToolRun } from '../../../api/agentLoopTypes'
 import { conversationRows, identity } from '../../../agent/loop/reducer'
 import type { LoopStore } from '../../../agent/loop/store'
 import { useAuthStore } from '../../../stores/auth'
@@ -296,6 +298,7 @@ import ProviderLogo from '../../ProviderLogo.vue'
 import MarkdownView from '../MarkdownView.vue'
 import AttachmentPreview from '../AttachmentPreview.vue'
 import AgentComposer from './AgentComposer.vue'
+import TaskStateDrawer from './TaskStateDrawer.vue'
 import ToolRunCard from './ToolRunCard.vue'
 import TaskRunCard from './TaskRunCard.vue'
 import ReasoningBlock from './ReasoningBlock.vue'
@@ -453,6 +456,13 @@ const state = computed(() => props.store.sessions[props.sessionId]), trace = com
 const draft = computed(() => props.store.draft(props.sessionId || 'draft'))
 const rows = computed(() => state.value ? conversationRows(state.value) : [])
 const visibleRows = computed(() => rows.value.slice(-shown.value))
+/** 仅消费后端白名单投影的原生 task 清单；Worker 队列 task.* 不会进入此抽屉。 */
+const taskPlan = computed<TaskPlanDisplay | null>(() => {
+  const plans = Object.values(state.value?.tools || {})
+    .filter((tool): tool is ToolRun => tool.name === 'task' && !!tool.display.task)
+    .sort((left, right) => left.first_cursor - right.first_cursor)
+  return plans.length ? plans[plans.length - 1].display.task || null : null
+})
 
 function getTurnIdentifier(row: LoopRecord): string {
   if (row.correlation?.turn_id) return `turn_id:${row.correlation.turn_id}`

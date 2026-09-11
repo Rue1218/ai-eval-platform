@@ -1,10 +1,10 @@
 # AI 测试与评估平台 Agent 开发文档
 
-> 版本：V1.7.7
+> 版本：V1.7.8
 > 状态：新建会话统一使用 AgentLoop v2；历史 legacy 行仅保留审计与显式回放路径。此前骨架化与混合引擎说明属于 legacy 路径及其历史阶段，不能据此认定新路径仍为纯对话。前端输入栏按每回合协议档选择模型和思考强度，完整真实供应商/Linux Runner 联调验收仍未结束。
 > 审查日期：2026-09-11
 > 对应需求：`AI测试与评估平台-PRD.md` V1.19
-> 对应接口：`AI测试与评估平台-API.md` V1.93
+> 对应接口：`AI测试与评估平台-API.md` V1.94
 
 ## 1. legacy 骨架化运行链路（历史基线）
 
@@ -560,3 +560,22 @@ MCP `tool_id`；未知前缀不推断为平台工具。工具事件保留模型�
 `AgentWorkspace.vue` 连接 Task 卡与工作区弹层动效；`backend/api/tests/test_loop_tools.py`、
 `test_loop_presentation.py`、`frontend/tests/agentLoop.test.mjs` 与
 `frontend/tests/e2e/agentLoop.spec.ts` 覆盖工具别名、Worker 事件关联和浏览器契约。
+
+### V1.7.8 原生 task 规划抽屉恢复（2026-09-11）
+
+原生 `task` 与 `task.create/status/cancel` 是两条独立链路：前者只维护复杂多步骤工作的
+会话规划，后者才是评测 Worker 队列。AgentLoop 将 `task` 加入授权白名单，并通过系统提示词
+约束其仅用于多工具、相互依赖或不确定性排查等复杂工作；简单单步问题直接处理。每次调用必须
+提交完整 `steps` 清单（1–12 项），状态只能为 `pending`、`in_progress`、`completed`，新清单整体
+替换旧清单。
+
+`tool.call/result.data.display.task` 是原生 `task` 的唯一浏览器投影，包含脱敏的
+`goal` 与 `steps[]`。`TaskStateDrawer.vue` 只读取该持久投影，因此重连回放可恢复；它被挂在
+`AgentWorkspace.vue` 的工作区选择栏与输入框之间，按 `task 1 ：步骤` 显示进度。普通对话区不再
+重复渲染该规划工具卡；评测任务继续由 `TaskRunCard.vue` 与 `task.*` Worker 事实展示。
+
+修改代码文件与作用清单：`backend/api/app/harness/execution/registry.py`、`dispatch.py`、
+`session_board.py` 统一原生 task 的完整清单、替换语义和 JSON Schema；`loop_wiring.py` 放行并
+约束复杂任务使用；`agent/loop_presentation.py` 产出安全的 `display.task`；
+`frontend/src/components/agent/loop/TaskStateDrawer.vue`、`AgentWorkspace.vue` 负责蓝色输入区上方的
+抽屉展示；`agentLoopTypes.ts` 与 `mockData.ts` 使用真实字段；对应单测校验投影、去重和队列隔离。

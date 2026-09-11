@@ -21,6 +21,6 @@ import { computed } from 'vue'
 import { toolAliases } from '../../../agent/loop/toolPresentation'
 /** 静态路径来自已评审本地 SVG 稿，禁止加载工具返回的 SVG。 */
 const props = defineProps<{ name: string }>()
-const icons: Record<string,string> = { read:'file-read',write:'file-write',edit:'file-edit',bash:'terminal',web_search:'search-web',web_fetch:'globe',ask_user_question:'message-question','task.create':'task-add','task.status':'list-check','task.cancel':'circle-stop',list_dir:'folder-tree',glob:'files-search',grep:'text-search',str_replace_editor:'code-edit' }
+const icons: Record<string,string> = { read:'file-read',write:'file-write',edit:'file-edit',bash:'terminal',web_search:'search-web',web_fetch:'globe',ask_user_question:'message-question',task:'list-check','task.create':'task-add','task.status':'list-check','task.cancel':'circle-stop',list_dir:'folder-tree',glob:'files-search',grep:'text-search',str_replace_editor:'code-edit' }
 const icon = computed(() => icons[toolAliases[props.name] || props.name] || 'wrench')
 </script>

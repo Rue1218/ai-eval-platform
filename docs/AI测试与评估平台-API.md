@@ -2,11 +2,11 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.93 |
-| WS v2 修订日期 | 2026-09-11（§4A，会话标题与任务工具三层命名兼容） |
+| 文档版本 | V1.94 |
+| WS v2 修订日期 | 2026-09-11（§4A，原生 task 会话规划抽屉投影） |
 | 对应 PRD | V1.18（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
-| 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.7.7（AgentLoop 单入口；JSON 仍以本文为准） |
+| 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.7.8（AgentLoop 单入口；JSON 仍以本文为准） |
 | 对应前端计划 | AgentLoop 前端计划 V0.5 |
 | 对应后端计划 | V1.5 |
 | 撰写日期 | 2026-08-18 |
@@ -19,6 +19,8 @@
 > V1.89（2026-09-10）：Agent 专家（Expert）选择与附件工作区落地。`turn.submit.data` 新增可选 `agent_id`（专家 ID；缺省或未知值回落默认专家 `general`，服务端按回合解析，不新增会话列）。`GET /api/sessions/agent-ui`（草稿与会话态）响应增量 `agent`（当前选中专家 ID——已有会话按最近一轮 `user/message` 事实的 `extensions.expert_id` 记忆，无记录回落默认）与 `agents[]`（`id,name,description,badge,default` 投影，**不返回**专家提示词与工具视野）。专家为产品内置角色、随代码分发：`general`（默认，无附加提示词、平台全量工具白名单，行为与 V1.88 一致）与 `testcase-agent`（测试用例设计专家：专属提示词 + 工具视野收窄为 `read/write/edit/bash/ask_user_question`）。提示词按「核心 → 专家 → 协议档补充提示词」顺序注入 system 段（专家段 `cacheable=false`，读取时同样拒绝疑似密钥与接管性措辞）；专家声明工具与平台白名单**取交集**（只收窄不扩大，交集为空 fail-closed）；专家不改变权限、错误契约与任务状态机。`user/message` 事实 `extensions` 增量 `expert_id`（审计与跨端一致选择，不参与幂等摘要）。附件落地：`turn.submit` 的文本附件（`.md/.txt/.html/.json/.yaml/.yml/.csv/.jsonl`）随回合 staging 进**会话沙箱根**（与 read/bash 注入根同源），模型收到 `attachments/{file_id}-{name}` 相对路径清单并用 read 读取；行态失效/目录不可得时回退内联注入（与 V1.88 行为一致）。AGENTS.md V2.0 登记的「附件 staging 仍 legacy」在 agent_loop_v2 主链路随之解除。
 
 > V1.93（2026-09-11）：不新增浏览器 WS 字段。AgentLoop 的 `task.create`、`task.status`、`task.cancel` 统一以注册表短名作为权限、Schema 与 MCP 路由事实源；模型请求继续使用无点号的安全 Function Calling 名 `platform_task_create/status/cancel`。调度器仅兼容这三个安全 wire 名、短名和已登记 MCP 全名 `platform.tasks.task.create/status/cancel`，未知前缀一律按未知工具拒绝。三种名称均引用同一 `ToolDef.parameters_schema` JSON Schema（根对象 `additionalProperties=false`），调用事实保留实际 wire 名，同时以 `registry_name` 记录短名，确保轨迹与审计可追溯而不复制字段定义。
+
+> V1.94（2026-09-11）：AgentLoop 恢复原生 `task` 会话规划工具（与 Worker 队列 `task.create/status/cancel` 严格分离）。`task` 仅用于复杂多步骤工作的完整清单：输入 Schema 为根对象 `additionalProperties=false`，必填 `description` 与 `steps`，每个步骤必填 `title`、`status`（`pending|in_progress|completed`），`steps` 为 1–12 项；每次调用整体替换上一份清单。简单单步任务不调用该工具。既有持久 `tool.call/result.data.display` 增量可选 `task:{goal,steps:[{title,status}]}`，它只由原生 `task` 产生，字段来自注册表真实输入/输出的白名单投影，供输入框上方抽屉回放；不新增长任务、Worker 事件或浏览器上行字段。
 
 > V1.88（2026-09-09）：浏览器 AgentLoop v2 流 schema 升至 `agent-loop-stream.v2.2`，完整事实目录升至 `catalog_version=5`。`assistant.message.data` 新增可选 `latency_ms`，为单次模型流从建立到完成的真实毫秒耗时，不含工具执行；已有 `usage` 继续仅透传上游返回的 `prompt_tokens`、`completion_tokens`、`total_tokens` 与可选缓存 token。前端聚合统计只能使用已持久化的这些字段：上游没有返回缓存 token 时缓存命中率显示未知，不能补零或估算。
 
@@ -1950,7 +1952,7 @@ send 超时同样关闭 4408。Runtime 的事实提交不等待网络。
   - V1.85：Anthropic 兼容 DeepSeek V4 flash/pro（含日期版本）公开共同有效档位 `off/high/max`，开启时发送 `thinking.type=enabled` 与 `output_config.effort`，不把别名映射伪装成独立强度。Qwen3.6 Flash（含日期版本）使用 `thinking.budget_tokens` 表达五档预算，沿用平台 20%/40%/60%/75%/80% 比例、最低 1024 token；从总输出预留中扣除思考预算后下发正文 `max_tokens`，总预算不增加。输出预留不足时只公开 off。其他模型保持原能力边界；前端仅按服务端候选渲染，只有一个候选时明确显示不可调节。
   - 传输边界：模型配置管理走 REST，浏览器回合走 `/ws/agent/v2`；平台到模型根据协议档使用 HTTP(S) POST + SSE（Anthropic `/v1/messages`、OpenAI Chat `/chat/completions` 等），不将浏览器 WS 地址作为模型接口。思考强度随 `turn.submit` 冻结，经同一 resolver 转成 SDK 请求体。
 - `attachments{upload_suffixes,inline_suffixes,image_suffixes,max_bytes,max_image_bytes,content_required}`：上传、模型内联和图片能力分开；模型实际是否支持视觉仍以供应商为准。附件正文不能为空；音频和旧 Office 仅元信息。历史附件按 `file_id` 使用已有 `/api/files/{id}` 和 `/content` 授权接口，不公开磁盘路径。
-- `tool.call/result.data.display` 为 ToolDisplay v1：`version,title,registry_name,wire_name,arguments_preview,result_preview,target,format,truncated,unavailable_reason`，预览最多 12000 字符。参数按工具字段白名单生成，失败仅公开错误码；未知工具有明确缺失说明，不开放任意内部结果。
+- `tool.call/result.data.display` 为 ToolDisplay v1：`version,title,registry_name,wire_name,arguments_preview,result_preview,target,format,truncated,unavailable_reason`，预览最多 12000 字符。参数按工具字段白名单生成，失败仅公开错误码；未知工具有明确缺失说明，不开放任意内部结果。V1.94 仅对原生 `task` 追加可选 `task:{goal:string,steps:[{title:string,status:"pending"|"in_progress"|"completed"}]}`；前端抽屉只消费该结构化投影，不能从预览文本猜测或关联 Worker `task_id`。
 - `assistant.start.data.request_summary` 提供实际 `model,provider,protocol,profile_id,profile_version,reasoning_effort,max_tokens,input_fingerprint,tools[{name,description,parameters}],context_meter`。其中 `parameters` 是本次真实发送给模型的受限 JSON Schema 根对象，`description` 是注册工具描述；前端轨迹的 Schema 页直接消费此快照，旧事实中的 `parameters_schema` 仅作只读兼容。context_meter 为实际请求的同源序列化估算，字段 `basis,estimated,profile_version,input_fingerprint,history_upto_seq,capacity,input_tokens,reserved_output_tokens,breakdown`；`basis="serialized_request.v2"` 时 `breakdown` 为 `system_prompt,conversation_messages,tools,mcp,skill,memory_files` 的非负整数映射，六项严格合计 `input_tokens`。Skill/记忆文件未实际注入时必须为 `0`；旧事实缺统计时为 null，不显示为 0。
 - `assistant.message.data.reasoning_preview` 为持久思考正文，仅 reasoning ACL 允许时发送。禁止出现在普通 trace 或撤权后的快照里。可选 `usage` 仅保留上游归一化 token 字段；可选 `latency_ms` 是该模型流的真实毫秒耗时，不含工具执行。缺字段表示上游未返回，前端不得补造。`question.resolved` 增 `outcome,answers`（仍受 interactions ACL）。
 - 恢复快照增加有序 `timeline`（完整语义信封，受逐帧 ACL）；与 H 和当前用户权限在同一行锁事务读取。旧分组投影保留，记录增 `first_cursor`，新 reader 以 timeline 为权威，禁止重复追加 messages。

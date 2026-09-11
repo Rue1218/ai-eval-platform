@@ -949,11 +949,14 @@ def build_default_registry() -> ToolRegistry:
         ToolDef(
             name="task",
             description=(
-                "维护本回合的执行清单：把复杂需求拆成有限步骤并标注状态。"
-                "适用：多步评测/用例/压测前先列出 3–7 步计划。"
+                "维护当前会话的执行清单：仅在复杂、多步骤、需要跟踪进度的工作开始前调用。"
+                "适用：包含多个相互依赖步骤、需要调用多种工具、排查不确定问题，或需要向用户展示推进状态的任务。"
+                "不适用：简单单步问答、一次读取或一次修改；这些任务直接执行，不要创建清单。"
+                "每次必须提交完整 steps 列表，新列表整体替换上一份；开始执行后及时把对应步骤更新为 in_progress，"
+                "完成后立即更新为 completed。"
                 "不适用：真正创建评测任务（用确认卡或 platform.tasks.task.create）、"
                 "查询/取消已入队任务（用 task.status / task.cancel）、启动子代理。"
-                "前置：description 与 prompt 必填；steps 可选；不写数据库、不绕过确认卡或 Worker。"
+                "前置：description 概括本轮目标，steps 是有限的具体步骤；不写 PG 任务表、不绕过确认卡或 Worker。"
             ),
             parameters_schema={
                 "type": "object",
@@ -969,11 +972,13 @@ def build_default_registry() -> ToolRegistry:
                         "type": "string",
                         "minLength": 1,
                         "maxLength": 2000,
-                        "description": "完整指令，映射为本回合清单目标",
+                        "description": "兼容旧调用的完整目标；新调用以 description 为准",
                     },
                     "steps": {
                         "type": "array",
-                        "maxItems": 20,
+                        "minItems": 1,
+                        "maxItems": 12,
+                        "description": "当前完整步骤清单；每次调用整体替换上一份清单",
                         "items": {
                             "type": "object",
                             "additionalProperties": False,
@@ -981,7 +986,7 @@ def build_default_registry() -> ToolRegistry:
                                 "title": {"type": "string", "minLength": 1, "maxLength": 300},
                                 "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]},
                             },
-                            "required": ["title"],
+                            "required": ["title", "status"],
                         },
                     },
                     "subagent_type": {"type": "string", "description": "仅展示，不启子代理"},
@@ -991,19 +996,42 @@ def build_default_registry() -> ToolRegistry:
                     "tools": {"type": "array", "items": {"type": "string"}, "maxItems": 20, "description": "仅展示"},
                     "max_turns": {"type": "integer", "minimum": 1, "description": "仅展示"},
                 },
-                "required": ["description", "prompt"],
+                "required": ["description", "steps"],
             },
             permission="task.plan",
             timeout_s=2.0,
             handler=_task_handler,
             output_schema={
                 "type": "object",
+                "additionalProperties": False,
                 "properties": {
                     "summary": {"type": "string"},
-                    "status": {"type": "string"},
+                    "status": {"type": "string", "enum": ["success"]},
                     "result": {"type": "string"},
-                    "task": {"type": "object"},
+                    "task": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "goal": {"type": "string"},
+                            "description": {"type": "string"},
+                            "prompt": {"type": "string"},
+                            "steps": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "additionalProperties": False,
+                                    "properties": {
+                                        "title": {"type": "string"},
+                                        "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]},
+                                    },
+                                    "required": ["title", "status"],
+                                },
+                            },
+                        },
+                        "required": ["goal", "description", "prompt", "steps"],
+                    },
                 },
+                "required": ["summary", "status", "result", "task"],
             },
             permission_policy=ToolPermissionPolicy(),
             recovery_policy=ToolRecoveryPolicy(
@@ -1489,14 +1517,14 @@ def _task_handler(
     _sandbox_dir: str | None = None,
     context: object | None = None,
 ) -> object:
-    """task 原生 handler：生成本回合清单，并同步写入会话看板。"""
+    """task 原生 handler：整表替换会话规划，并回传前端抽屉所需的真实步骤。"""
     from .dispatch import build_task_plan
-    from .session_board import import_plan_steps
+    from .session_board import replace_plan_steps
 
     plan = build_task_plan(arguments)
     board = getattr(context, "session_tasks", None)
     if isinstance(board, list):
-        import_plan_steps(
+        replace_plan_steps(
             board,
             subject=plan.description or plan.goal[:24],
             description=plan.goal,

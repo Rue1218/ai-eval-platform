@@ -1529,17 +1529,16 @@ def web_fetch(
 
 
 def build_task_plan(arguments: Mapping[str, object]) -> TaskPlanResult:
-    """构造会话内任务清单；它不是 ``Task`` ORM 行，也不会触发 Worker。"""
-    goal = str(arguments.get("prompt") or arguments.get("goal") or "").strip()
+    """构造会话内任务清单；整表参数不对应 ``Task`` ORM 行或 Worker 队列。"""
     description = str(arguments.get("description") or "").strip()
+    goal = description or str(arguments.get("prompt") or arguments.get("goal") or "").strip()
     raw_steps = arguments.get("steps")
     if not goal:
-        raise AppError(ErrorCode.VALIDATION, "任务指令不能为空")
-    if raw_steps is None:
-        raw_steps = []
-    if not isinstance(raw_steps, list) or len(raw_steps) > 12:
-        raise AppError(ErrorCode.VALIDATION, "任务步骤数量必须在 0 到 12 之间")
+        raise AppError(ErrorCode.VALIDATION, "任务概括不能为空")
+    if not isinstance(raw_steps, list) or not raw_steps or len(raw_steps) > 12:
+        raise AppError(ErrorCode.VALIDATION, "任务步骤数量必须在 1 到 12 之间")
     steps: list[dict[str, str]] = []
+    seen_titles: set[str] = set()
     for index, raw_step in enumerate(raw_steps, start=1):
         if not isinstance(raw_step, Mapping):
             raise AppError(ErrorCode.VALIDATION, f"第 {index} 个任务步骤格式无效")
@@ -1547,6 +1546,10 @@ def build_task_plan(arguments: Mapping[str, object]) -> TaskPlanResult:
         status = str(raw_step.get("status") or "pending")
         if not title or len(title) > 300:
             raise AppError(ErrorCode.VALIDATION, f"第 {index} 个任务步骤标题无效")
+        normalized_title = title.casefold()
+        if normalized_title in seen_titles:
+            raise AppError(ErrorCode.VALIDATION, f"第 {index} 个任务步骤与已有步骤重复")
+        seen_titles.add(normalized_title)
         if status not in {"pending", "in_progress", "completed"}:
             raise AppError(ErrorCode.VALIDATION, f"第 {index} 个任务步骤状态无效")
         steps.append({"title": title, "status": status})
