@@ -342,9 +342,9 @@ import ToolRunCard from './ToolRunCard.vue'
 import TaskRunCard from './TaskRunCard.vue'
 import ReasoningBlock from './ReasoningBlock.vue'
 import TraceWorkspace from './TraceWorkspace.vue'
-import { isTaskTool, taskCardSnapshot } from '../../../agent/loop/taskPresentation'
+import { isTaskTool } from '../../../agent/loop/taskPresentation'
 import { calculateTurnSummaries, formatDuration, formatTokens, tokenValue, type TurnSummary } from '../../../agent/loop/turnSummary'
-import { assistantKeysByTurn, conversationMetricsFrom, firstAssistantInTurn, pickAgent, pickProfile } from '../../../agent/loop/workspaceDerived'
+import { assistantKeysByTurn, conversationMetricsFrom, effortPreferenceKey, finishLabels, firstAssistantInTurn, latestRequestSummary, phaseStatusText, pickAgent, pickProfile, preferenceKey, taskForToolRow } from '../../../agent/loop/workspaceDerived'
 
 const props = withDefaults(
   defineProps<{
@@ -539,19 +539,17 @@ const selectedProfile = computed<LoopProfile | null>(() => pickProfile(ui.value,
 const selectedAgent = computed<LoopAgent | null>(() => pickAgent(ui.value, selectedAgentId.value))
 const ready = computed(() => !!selectedProfile.value && !!effort.value && (props.sessionId ? !!state.value?.ready : !!ui.value?.enabled))
 const canControl = computed(() => !!state.value?.controlled && !!ui.value?.permissions.interactions)
-const summary = computed(() => Object.values(state.value?.attempts || {}).sort((a,b)=>b.first_cursor-a.first_cursor)[0]?.request_summary)
+const summary = computed(() => latestRequestSummary(state.value?.attempts))
 /** 仅聚合已提交的上游 usage；缺字段代表上游未返回，不能当作零或自行估算。 */
 const conversationMetrics = computed<ConversationMetrics>(() => conversationMetricsFrom(state.value?.attempts))
 const tasks = computed(() => Object.values(state.value?.tasks || {}))
 /** 从脱敏参数/结果解析 task_id，再关联实时 Worker 事实，不能靠工具名称猜测任务。 */
 function taskForTool(tool: ToolRun): LoopRecord | null {
-  const taskId = taskCardSnapshot(tool, null).taskId
-  return taskId ? state.value?.tasks[taskId] || null : null
+  return taskForToolRow(tool, state.value?.tasks)
 }
 const quarantined = computed(() => Object.values(state.value?.executions || {}).filter(e => e.event === 'execution.quarantined'))
-const finishLabels: Record<string,string> = { max_tokens:'达到输出上限，本轮已结束', max_steps:'达到步骤上限，本轮已结束', cancelled:'本轮已取消', interrupted:'本轮已中断', error:'本轮失败，请查看错误信息' }
-const phaseLabels: Record<string,string> = { idle:'就绪',model:'模型处理中',thinking:'正在思考',answering:'正在回答',tools:'工具执行中',waiting_interaction:'等待交互',retry_wait:'等待重试',completed:'已完成',...finishLabels }
-const status = computed(() => state.value?.cancelling ? '取消中' : state.value && state.value.connection !== 'online' ? '连接待同步' : phaseLabels[state.value?.phase || 'idle'] || state.value?.phase || '就绪')
+/** finishLabels / phaseLabels / status 文案与 workspaceDerived 同源（模板与状态条共用）。 */
+const status = computed(() => phaseStatusText(state.value))
 const prompts = ['查看工作区文件，说明可以如何处理', '帮我准备一次模型基准评测', '查询资料并给出可核对的来源']
 const chatShellStyle = computed(() => chatWidth.value ? { width: `${chatWidth.value}px` } : undefined)
 const maximumChatWidth = computed(() => Math.max(minimumChatWidth, (chatShell.value?.parentElement?.clientWidth || minimumChatWidth + 48) - 48))
@@ -591,15 +589,14 @@ async function refreshUi() {
   } catch { if (current === epoch) { ui.value = null; error.value = '读取会话能力失败，请确认权限和服务状态' } }
 }
 /** 本地偏好只保存协议档 ID 和思考档位，不保存 API 端点、凭据或服务端配置。 */
-function localPreference(key: string) { try { return localStorage.getItem(`${key}:${auth.user?.id}`) } catch { return null } }
-function effortPreferenceKey(profile: LoopProfile) { return `agent-effort:${auth.user?.id}:${profile.id}:${profile.version}` }
+function localPreference(key: string) { try { return localStorage.getItem(preferenceKey(key, auth.user?.id)) } catch { return null } }
 let effortProfileKey = ''
 function restoreEffort(profile: LoopProfile | null) {
   if (!profile) { effort.value = null; return }
   let saved: string | null = null
-  try { saved = localStorage.getItem(effortPreferenceKey(profile)) } catch { /* 隐私模式下保留内存偏好。 */ }
+  try { saved = localStorage.getItem(effortPreferenceKey(profile, auth.user?.id)) } catch { /* 隐私模式下保留内存偏好。 */ }
   // 首次切到另一个供应商使用该模型默认值，避免普通模型的 off 覆盖 Claude 默认开启。
-  const key = effortPreferenceKey(profile)
+  const key = effortPreferenceKey(profile, auth.user?.id)
   const previous = saved || (effortProfileKey === key ? effort.value : null)
   effortProfileKey = key
   effort.value = previous && profile.allowed_efforts.includes(previous as Effort) ? previous as Effort : profile.default_effort
@@ -608,7 +605,7 @@ function restoreEffort(profile: LoopProfile | null) {
 function setEffort(value: Effort) {
   effort.value = value
   const profile = selectedProfile.value
-  if (profile) try { localStorage.setItem(effortPreferenceKey(profile), value) } catch { /* 本地存储不可用不影响发送。 */ }
+  if (profile) try { localStorage.setItem(effortPreferenceKey(profile, auth.user?.id), value) } catch { /* 本地存储不可用不影响发送。 */ }
 }
 /** 切换只影响下一轮；已经发出的 attempt 永远读取其持久 request_summary。 */
 function selectProfile(id: string) {

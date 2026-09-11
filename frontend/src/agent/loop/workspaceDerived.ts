@@ -8,12 +8,15 @@
 import type {
   Attempt,
   ConversationMetrics,
+  Data,
   LoopAgent,
   LoopProfile,
   LoopRecord,
   LoopUi,
+  ToolRun,
 } from '../../api/agentLoopTypes.ts'
 import { getTurnIdentifier, tokenValue } from './turnSummary.ts'
+import { taskCardSnapshot } from './taskPresentation.ts'
 
 /**
  * 每轮首条助手记录的 key（用于「续写」样式：非首条不重复展示助手头）。
@@ -83,4 +86,59 @@ export function pickProfile(ui: LoopUi | null | undefined, profileId: string): L
 export function pickAgent(ui: LoopUi | null | undefined, agentId: string): LoopAgent | null {
   const list = ui?.agents || []
   return list.find(item => item.id === agentId) || list.find(item => item.default) || null
+}
+
+/** 最近一轮（first_cursor 最大）attempt 的持久 request_summary；无 attempt 时为 undefined。 */
+export function latestRequestSummary(attempts: Record<string, Attempt> | undefined): Data | undefined {
+  return Object.values(attempts || {}).sort((a, b) => b.first_cursor - a.first_cursor)[0]?.request_summary
+}
+
+/** 从脱敏参数/结果解析 task_id，再关联实时 Worker 事实，不能靠工具名称猜测任务。 */
+export function taskForToolRow(tool: ToolRun, tasks: Record<string, LoopRecord> | undefined): LoopRecord | null {
+  const taskId = taskCardSnapshot(tool, null).taskId
+  return taskId ? tasks?.[taskId] || null : null
+}
+
+/** 结束原因文案（模板状态条与 phase 映射共用）。 */
+export const finishLabels: Record<string, string> = {
+  max_tokens: '达到输出上限，本轮已结束',
+  max_steps: '达到步骤上限，本轮已结束',
+  cancelled: '本轮已取消',
+  interrupted: '本轮已中断',
+  error: '本轮失败，请查看错误信息',
+}
+
+/** 阶段文案；连接未就绪与取消中优先于 phase 映射。 */
+export const phaseLabels: Record<string, string> = {
+  idle: '就绪',
+  model: '模型处理中',
+  thinking: '正在思考',
+  answering: '正在回答',
+  tools: '工具执行中',
+  waiting_interaction: '等待交互',
+  retry_wait: '等待重试',
+  completed: '已完成',
+  ...finishLabels,
+}
+
+/** 状态条文案：取消中 > 连接待同步 > phase 映射 > 原始 phase > 就绪。 */
+export function phaseStatusText(
+  state: { cancelling?: boolean; connection?: string; phase?: string } | undefined,
+): string {
+  if (state?.cancelling) return '取消中'
+  if (state && state.connection !== 'online') return '连接待同步'
+  return phaseLabels[state?.phase || 'idle'] || state?.phase || '就绪'
+}
+
+/** 本地偏好 key：仅按用户隔离；不保存端点、凭据或服务端配置。 */
+export function preferenceKey(base: string, userId: string | undefined): string {
+  return `${base}:${userId}`
+}
+
+/** 思考档位偏好 key：按协议档版本隔离，避免升级后沿用旧档位。 */
+export function effortPreferenceKey(
+  profile: { id: string; version: string },
+  userId: string | undefined,
+): string {
+  return `agent-effort:${userId}:${profile.id}:${profile.version}`
 }
