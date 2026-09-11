@@ -193,13 +193,13 @@ function download(): void {
 }
 
 .download-btn {
-  color: var(--accent-ai, #6366f1);
-  border-color: rgba(99, 102, 241, 0.3);
+  color: var(--accent-ai, #1f5947);
+  border-color: color-mix(in srgb, var(--accent-ai, #1f5947) 30%, transparent);
 }
 
 .download-btn:hover {
-  background: rgba(99, 102, 241, 0.08);
-  border-color: var(--accent-ai, #6366f1);
+  background: color-mix(in srgb, var(--accent-ai, #1f5947) 8%, transparent);
+  border-color: var(--accent-ai, #1f5947);
 }
 
 .zoom-text {

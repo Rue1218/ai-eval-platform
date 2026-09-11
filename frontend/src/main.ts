@@ -25,7 +25,7 @@ const beijingTime = buildDate.toLocaleString('zh-CN', {
 
 console.log(
   '%cAI 测试与评估平台',
-  'background:#6366F1;color:#fff;padding:4px 10px;border-radius:4px;font-weight:700;font-size:13px',
+  'background:#1f5947;color:#fff;padding:4px 10px;border-radius:4px;font-weight:700;font-size:13px',
 )
 console.log(`版本（Git Commit）：${__BUILD_VERSION__}`)
 console.log(`构建时间（UTC）：${utcTime}`)

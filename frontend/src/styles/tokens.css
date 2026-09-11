@@ -11,7 +11,7 @@
   --text-secondary: #4b5563;
   --text-tertiary: #9ca3af;
   --border-subtle: #e5e7eb;
-  --accent-ai: #6366f1;
+  --accent-ai: #1f5947;
   --accent-success: #10b981;
   --accent-warning: #f59e0b;
   --accent-error: #ef4444;
@@ -30,6 +30,7 @@
   --t-profiles: #fef3c7; --c-profiles: #d97706; /* 协议档：琥珀暖金 */
   --t-stress: #ffe4e6;   --c-stress: #e11d48;   /* 压测治理：能量玫红 */
   --t-users: #e0f2fe;    --c-users: #0369a1;    /* 账号：极光蔚蓝 */
+  --t-workspaces: #e6f1ec; --c-workspaces: #1f5947; /* 工作区：松石林绿 */
 
   /* 字体 */
   --font-display: 'Noto Serif SC', 'Space Grotesk', Georgia, serif;
@@ -42,7 +43,7 @@
   --sidebar-w-fold: 72px;
   --topbar-h: 64px;
   --ease-shell: 0.28s cubic-bezier(0.4, 0, 0.2, 1);
-  --focus-ring: 0 0 0 3px rgba(99, 102, 241, 0.15);
+  --focus-ring: 0 0 0 3px rgba(31, 89, 71, 0.16);
 }
 
 [data-theme='dark'] {
@@ -52,13 +53,14 @@
   --text-secondary: #9ca3af;
   --text-tertiary: #6b7280;
   --border-subtle: #1f2937;
-  --accent-ai: #818cf8;
+  --accent-ai: #16977a;
   --accent-success: #34d399;
   --accent-warning: #fbbf24;
   --accent-error: #f87171;
   --accent-info: #60a5fa;
   --row-hover: rgba(255, 255, 255, 0.04);
   --sidebar-bg: rgba(11, 15, 25, 0.65);
+  --focus-ring: 0 0 0 3px rgba(22, 151, 122, 0.25);
 
   --t-agent: #2e1065;    --c-agent: #c4b5fd;
   --t-dispatch: #082f49; --c-dispatch: #38bdf8;
@@ -70,4 +72,5 @@
   --t-profiles: #451a03; --c-profiles: #fbbf24;
   --t-stress: #4c0519;   --c-stress: #fb7185;
   --t-users: #0c4a6e;    --c-users: #7dd3fc;
+  --t-workspaces: rgba(22, 151, 122, 0.25); --c-workspaces: #34d399;
 }

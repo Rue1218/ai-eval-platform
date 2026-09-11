@@ -2845,7 +2845,7 @@ onMounted(() => {
 }
 .pill-btn.active {
   background: var(--bg-card, #ffffff);
-  color: var(--accent-ai, #6366f1);
+  color: var(--accent-ai, #1f5947);
   font-weight: 600;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
 }
@@ -3099,9 +3099,9 @@ onMounted(() => {
 }
 
 .skills-badge-vault {
-  background: rgba(99, 102, 241, 0.1);
-  color: var(--accent-ai, #6366f1);
-  border-color: rgba(99, 102, 241, 0.25);
+  background: color-mix(in srgb, var(--accent-ai, #1f5947) 10%, transparent);
+  color: var(--accent-ai, #1f5947);
+  border-color: color-mix(in srgb, var(--accent-ai, #1f5947) 25%, transparent);
   font-size: 11px;
 }
 
@@ -3223,9 +3223,9 @@ onMounted(() => {
 
 .skill-builtin-chip {
   font-size: 10.5px;
-  background: rgba(99, 102, 241, 0.08);
-  color: var(--accent-ai, #6366f1);
-  border-color: rgba(99, 102, 241, 0.2);
+  background: color-mix(in srgb, var(--accent-ai, #1f5947) 8%, transparent);
+  color: var(--accent-ai, #1f5947);
+  border-color: color-mix(in srgb, var(--accent-ai, #1f5947) 20%, transparent);
   font-weight: 600;
 }
 
@@ -3259,7 +3259,7 @@ onMounted(() => {
 }
 
 .tuning-v {
-  color: var(--accent-ai, #6366f1);
+  color: var(--accent-ai, #1f5947);
   font-weight: 700;
 }
 
