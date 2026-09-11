@@ -291,6 +291,49 @@ else
     done
 fi
 
+# 上一轮部署可能在镜像已拉取后、容器滚动前被中断；此时 .deploy-images.env
+# 虽记录了目标不可变镜像，但线上仍会继续运行旧容器。把镜像不一致的服务
+# 重新纳入本轮更新，避免工作流误报成功而静态前端仍停留在旧版本。
+RECONCILED_SERVICES=()
+for service in web api worker runner lightrag stress; do
+    case "$service" in
+        web) image_variable=WEB_IMAGE ;;
+        api) image_variable=API_IMAGE ;;
+        worker) image_variable=WORKER_IMAGE ;;
+        runner) image_variable=RUNNER_IMAGE ;;
+        lightrag) image_variable=LIGHTRAG_IMAGE ;;
+        stress) image_variable=STRESS_IMAGE ;;
+    esac
+    expected_image="${!image_variable:-}"
+    [ -n "$expected_image" ] || continue
+
+    service_containers=$(docker compose ps -aq "$service" 2>/dev/null || true)
+    [ -n "$service_containers" ] || continue
+    running_images=$(docker inspect --format '{{.Config.Image}}' $service_containers 2>/dev/null | sort -u)
+    if grep -Fqx "$expected_image" <<<"$running_images"; then
+        continue
+    fi
+
+    echo "==> 检测到 $service 仍使用旧镜像，补入本轮更新：${running_images:-未知} -> $expected_image"
+    case " ${BUILD_SERVICES[*]} " in
+        *" $service "*) ;;
+        *)
+            BUILD_SERVICES+=("$service")
+            RECONCILED_SERVICES+=("$service")
+            ;;
+    esac
+done
+
+# 差异矩阵在前面已完成，补入的服务尚未经过首次拉取；CI 凭据可用时必须显式
+# 拉取其已记录的不可变镜像，避免 --no-build 更新时误用本地旧缓存。
+if [ "${#RECONCILED_SERVICES[@]}" -gt 0 ] \
+    && [ -n "$IMAGE_PREFIX" ] && [ -n "$GHCR_ACTOR" ] && [ -n "$GHCR_TOKEN" ]; then
+    echo "==> 拉取镜像不一致的服务：${RECONCILED_SERVICES[*]}"
+    printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_ACTOR" --password-stdin >/dev/null
+    docker compose pull "${RECONCILED_SERVICES[@]}"
+    docker logout ghcr.io >/dev/null 2>&1 || true
+fi
+
 # 基础设施目标镜像以 docker-compose.yml 插值结果为准（唯一事实源），脚本不再重复定义默认值；
 # 若环境显式设置 POSTGRES_IMAGE/REDIS_IMAGE，compose 插值会自然生效。单次调用减少部署耗时。
 INFRA_IMAGES=$(docker compose config --format json | python3 -c \
