@@ -3,9 +3,14 @@ import assert from 'node:assert/strict'
 import {
   assistantKeysByTurn,
   conversationMetricsFrom,
+  effortPreferenceKey,
   firstAssistantInTurn,
+  latestRequestSummary,
+  phaseStatusText,
   pickAgent,
   pickProfile,
+  preferenceKey,
+  taskForToolRow,
 } from '../src/agent/loop/workspaceDerived.ts'
 
 /** 构造会话记录：correlation 提供轮次标识，status+name 表示工具记录。 */
@@ -125,4 +130,63 @@ test('pickAgent：未知 ID 回落 default 标记项，无默认时为 null', ()
   assert.equal(pickAgent(ui, 'unknown').id, 'tc')
   assert.equal(pickAgent({ agents: [{ id: 'a', default: false }] }, 'unknown'), null)
   assert.equal(pickAgent(undefined, 'a'), null)
+})
+
+test('latestRequestSummary：取 first_cursor 最大的 attempt，无 attempt 为 undefined', () => {
+  const attempts = {
+    a1: { key: 'a1', first_cursor: 3, request_summary: { profile: 'p-old' } },
+    a2: { key: 'a2', first_cursor: 9, request_summary: { profile: 'p-new' } },
+    a3: { key: 'a3', first_cursor: 5 },
+  }
+  assert.deepEqual(latestRequestSummary(attempts), { profile: 'p-new' })
+  assert.equal(latestRequestSummary(undefined), undefined)
+  assert.equal(latestRequestSummary({}), undefined)
+})
+
+test('taskForToolRow：task_id 解析优先级 事实 > 结果 > 参数，未关联为 null', () => {
+  const tasks = { 'task-9': { key: 'task-9', status: 'running' } }
+  const fromArgs = {
+    key: 't1',
+    name: 'task.create',
+    display: { arguments_preview: JSON.stringify({ task_id: 'task-9' }) },
+  }
+  assert.equal(taskForToolRow(fromArgs, tasks).key, 'task-9')
+
+  const bothPreviews = {
+    key: 't2',
+    name: 'task.status',
+    display: {
+      arguments_preview: JSON.stringify({ task_id: 'task-args' }),
+      result_preview: JSON.stringify({ task_id: 'task-9' }),
+    },
+  }
+  assert.equal(taskForToolRow(bothPreviews, tasks).key, 'task-9')
+
+  assert.equal(taskForToolRow({ key: 't3', name: 'task.create', display: {} }, tasks), null)
+  assert.equal(
+    taskForToolRow({ key: 't4', name: 'task.create', display: { arguments_preview: 'not-json' } }, tasks),
+    null,
+  )
+  assert.equal(taskForToolRow(fromArgs, undefined), null)
+  assert.equal(taskForToolRow(fromArgs, {}), null)
+})
+
+test('phaseStatusText：取消中 > 连接待同步 > phase 映射 > 原始值 > 就绪', () => {
+  assert.equal(phaseStatusText({ cancelling: true, connection: 'offline', phase: 'thinking' }), '取消中')
+  assert.equal(phaseStatusText({ connection: 'connecting', phase: 'thinking' }), '连接待同步')
+  assert.equal(phaseStatusText({ connection: 'online', phase: 'thinking' }), '正在思考')
+  assert.equal(phaseStatusText({ connection: 'online', phase: 'max_tokens' }), '达到输出上限，本轮已结束')
+  assert.equal(phaseStatusText({ connection: 'online', phase: 'custom_phase' }), 'custom_phase')
+  assert.equal(phaseStatusText({ connection: 'online' }), '就绪')
+  assert.equal(phaseStatusText(undefined), '就绪')
+})
+
+test('偏好 key：按用户与协议档版本隔离，升级版本后不沿用旧档位', () => {
+  assert.equal(preferenceKey('agent-profile', 'u1'), 'agent-profile:u1')
+  assert.equal(preferenceKey('agent-profile', undefined), 'agent-profile:undefined')
+  assert.equal(effortPreferenceKey({ id: 'p1', version: 'v2' }, 'u1'), 'agent-effort:u1:p1:v2')
+  assert.notEqual(
+    effortPreferenceKey({ id: 'p1', version: 'v2' }, 'u1'),
+    effortPreferenceKey({ id: 'p1', version: 'v3' }, 'u1'),
+  )
 })
