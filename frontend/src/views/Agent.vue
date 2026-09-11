@@ -997,6 +997,11 @@ function scrollToBottom(force = false) {
 function adjustTextareaHeight() {
   const el = textareaRef.value
   if (!el) return
+  if (!inputText.value) {
+    el.style.height = ''
+    el.style.overflowY = 'hidden'
+    return
+  }
   // 先将高度置为 0px，强制浏览器依据当前文本行数精确重算真实的 scrollHeight
   el.style.height = '0px'
   const scrollH = el.scrollHeight
