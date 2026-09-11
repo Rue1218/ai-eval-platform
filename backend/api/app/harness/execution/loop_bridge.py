@@ -31,6 +31,7 @@ from .context import ToolExecutionContext
 from .dispatch import execute_raw
 from .loop_tools import ToolExecutionResult, normalize_tool_output, tool_spec
 from .registry import ToolDef, ToolRegistry, validate_tool_arguments
+from .task_contract import task_tool_aliases, task_tool_wire_name
 
 # 只开放文档首批已验证的读取并行语义，未知能力保持独占。
 _PARALLEL = frozenset({"read", "read_image", "glob", "grep", "web_search", "web_fetch"})
@@ -81,10 +82,17 @@ class PlatformToolBridge:
         self.wire_to_name: dict[str, str] = {}
         for name in dict.fromkeys(allowed_tools):
             definition = registry.get(name)
-            wire = name if re.fullmatch(r"[A-Za-z0-9_]+", name) else "platform_" + re.sub(r"[^A-Za-z0-9_]", "_", name)
-            if wire in self.wire_to_name:
-                raise ValueError("工具 wire 名称冲突")
-            self.wire_to_name[wire] = name
+            # 任务桥使用与 DeepSeek Harness 兼容的固定安全名称；其余工具维持既有转换。
+            wire = task_tool_wire_name(name) or (
+                name if re.fullmatch(r"[A-Za-z0-9_]+", name)
+                else "platform_" + re.sub(r"[^A-Za-z0-9_]", "_", name)
+            )
+            # 回传兼容仅限已登记的三种名称，不把未知 MCP 前缀猜测为平台工具。
+            for alias in dict.fromkeys((wire, *task_tool_aliases(name))):
+                existing = self.wire_to_name.get(alias)
+                if existing is not None and existing != name:
+                    raise ValueError("工具 wire 名称冲突")
+                self.wire_to_name[alias] = name
             self.tools.append(PlatformLoopTool(self, definition, wire))
 
     def specs(self) -> list:
@@ -115,6 +123,11 @@ class PlatformLoopTool:
     def schema(self) -> dict[str, Any]:
         """参数使用平台字段，源字段只用于显式兼容输入。"""
         return deepcopy(dict(self.definition.parameters_schema))
+
+    @property
+    def aliases(self) -> tuple[str, ...]:
+        """声明当前工具可接受的回传名称；任务桥只允许既有三层命名。"""
+        return task_tool_aliases(self.definition.name) or (self.name,)
 
     @property
     def callback(self) -> DispatchCallback | None:
@@ -178,7 +191,11 @@ class PlatformLoopTool:
         ctx = self.bridge.context_factory(dict(identity))
         if ctx.session_id != identity["session_id"] or not ctx.user_id:
             raise AppError(ErrorCode.UNAUTHORIZED, "工具上下文身份不匹配")
-        return replace(self, identity=dict(identity), context=replace(ctx, call_id=identity["call_id"]))
+        wire_name = identity.get("wire_name", self.name)
+        if not isinstance(wire_name, str) or wire_name not in self.aliases:
+            raise AppError(ErrorCode.VALIDATION, "工具调用名称不属于当前契约")
+        # 事实保留模型实际回传的名称，registry_name 始终是短名，供审计和 MCP 路由使用。
+        return replace(self, name=wire_name, identity=dict(identity), context=replace(ctx, call_id=identity["call_id"]))
 
     def normalize_arguments(self, args: Mapping[str, Any]) -> dict[str, Any]:
         """拒绝冲突别名；源行号仅在显式旧契约下转换一次。"""

@@ -1,6 +1,7 @@
 import type { ToolStatus } from '../../api/agentLoopTypes.ts'
+import { taskToolAliases } from './taskPresentation.ts'
 /** 精确登记别名；未知工具保持原名，不推断执行能力。 */
-export const toolAliases: Record<string, string> = { platform_task_create: 'task.create', platform_task_status: 'task.status', platform_task_cancel: 'task.cancel' }
+export const toolAliases: Record<string, string> = taskToolAliases
 export const statusLabels: Record<ToolStatus, string> = {
   pending: '待派发', waiting_approval: '等待交互', running: '执行中', succeeded: '已完成', failed: '失败',
   denied: '已拒绝', cancelled: '已取消', not_started: '未启动', outcome_unknown: '结果未知',

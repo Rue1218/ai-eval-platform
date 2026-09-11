@@ -34,6 +34,20 @@ def test_preview_allowlist_empty_edit_and_truncation():
     assert tool_display({"name": "unknown", "args": {"secret": "hidden"}})["unavailable_reason"]
 
 
+def test_task_display_accepts_agent_wire_registry_and_mcp_names():
+    """三种已登记任务名称都投影同一安全字段集合，避免卡片因名称差异失去参数。"""
+    names = (
+        "platform_task_status",
+        "task.status",
+        "platform.tasks.task.status",
+    )
+    for name in names:
+        display = tool_display({"name": name, "args": {"task_id": "task-1", "secret": "hidden"}})
+        assert display["registry_name"] == "task.status"
+        assert '"task_id": "task-1"' in display["arguments_preview"]
+        assert "hidden" not in str(display)
+
+
 def test_request_meter_matches_actual_wire_estimator():
     """统计读取同一个请求对象，明确估算及输出预留。"""
     from app.agent.loop_wiring import _prompt_tokens

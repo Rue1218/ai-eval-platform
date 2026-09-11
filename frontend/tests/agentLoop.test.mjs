@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { createLoopState, applyFrame, conversationRows, restoreSnapshot } from '../src/agent/loop/reducer.ts'
 import { createTrace, applyTrace, safePacket, schemaRef, semanticTraceRows, category } from '../src/agent/loop/trace.ts'
 import { safeLink } from '../src/agent/loop/toolPresentation.ts'
+import { canonicalTaskToolName, isTaskTool, taskCardSnapshot, taskProgressPercent } from '../src/agent/loop/taskPresentation.ts'
 
 /** 夹具遵循生产信封，持久 cursor 与 source seq 从各自起点计数。 */
 function fixture() {
@@ -140,6 +141,23 @@ test('Worker 的 report 和百分比不代表任务结束',()=>{
   applyFrame(s,f('task.queued',{status:'queued'},c));applyFrame(s,f('task.progress',{progress:{percent:100}},c));applyFrame(s,f('task.report',{report_id:'r'},c))
   assert.equal(s.tasks.task.status,'queued')
   applyFrame(s,f('task.end',{status:'failed'},c));applyFrame(s,f('task.progress',{status:'running'},c));assert.equal(s.tasks.task.status,'failed')
+})
+test('任务卡片只接纳登记的三层名称，并用 Worker 事实刷新工具快照',()=>{
+  const tool={name:'platform.tasks.task.create',status:'succeeded',display:{
+    arguments_preview:'{"kind":"benchmark"}',
+    result_preview:'{"task_id":"task-1","kind":"benchmark","status":"queued"}',
+  }}
+  const task={status:'running',progress:{percent:42,message:'正在执行第 42 项'},report_id:'report-1'}
+  const snapshot=taskCardSnapshot(tool,task)
+  assert.equal(canonicalTaskToolName(tool.name),'task.create')
+  assert.equal(isTaskTool(tool.name),true)
+  assert.equal(isTaskTool('task.unknown'),false)
+  assert.equal(isTaskTool('platform.tasks.unknown'),false)
+  assert.equal(snapshot.taskId,'task-1')
+  assert.equal(snapshot.status,'running')
+  assert.equal(snapshot.reportId,'report-1')
+  assert.equal(taskProgressPercent(snapshot.progress),42)
+  assert.equal(taskProgressPercent({percent:180}),100)
 })
 test('trace seq=0 独立去重，复制脱敏及安全链接',()=>{
   const s=createTrace(),f=fixture();const event=f('trace.event',{event:{seq:0,type:'tool/call',data:{}}},{},'control')

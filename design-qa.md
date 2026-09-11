@@ -33,3 +33,24 @@
 - P0/P1/P2 迭代记录：首次 QA 受环境阻断，尚未产生可执行的视觉差异迭代。
 
 final result: blocked
+
+## 2026-09-11 工作区弹层与 Task 卡片复核
+
+**比较依据**
+
+- 源视觉真相：`C:/Users/Administrator/AppData/Local/Temp/codex-clipboard-9627e622-b3a6-4e5a-9b38-ef26d5d3bf79.png`，1035 × 197 像素；红、蓝标记用于说明工作区触发器、弹层落点与输入框的相对区域。
+- 实现快照：`frontend/test-results/workspace-popover-task-card-ux.png` 与 `frontend/test-results/task-run-card-task-card-ux.png`，1280 × 720 CSS 像素、device scale factor 1。
+- 比较状态：桌面端默认工作区已绑定；弹层刚进入时保留轻微透明度/模糊过渡，Task 卡展示 `platform.tasks.task.create` 返回与 Worker `task.progress=42` 事件。
+
+**核验结果**
+
+- 工作区触发器打开时向上平移 8px，箭头同步翻转；真实浏览器坐标断言确认位移至少为 6px。
+- 弹层从触发器下方进入输入框上方的预留区域，未覆盖输入框操作区；入场动画的浏览器计算样式为 `workspace-popover-enter`（Vue 作用域后缀已兼容）。
+- Task 卡通过 MCP 完整名称映射到 `task.create`，并以真实 Worker 事件呈现任务标识、执行状态、42% 进度和调用详情入口。
+- Playwright 复核通过：工作区弹层、上移动效、入场动画、MCP 名称映射与 Worker 进度联调均已在同一真实浏览器会话验证。
+
+**P0/P1/P2 迭代记录**
+
+- 无 P0/P1/P2 可执行差异。源图中的 `147` 为动态工作区名称；实现保留实际工作区名称，不硬编码该测试数据。
+
+final result: passed

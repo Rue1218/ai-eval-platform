@@ -62,8 +62,19 @@ async function setup(page: Page, holdNewReplay = false) {
         send('assistant.start',{request_summary:{model:'deepseek-chat',reasoning_effort:cmd.data.reasoning_effort,profile_version:'v1'}},c,true,sid)
         send('assistant.message',{content:'准备读取文件',reasoning_preview:'检查工作区',usage:{prompt_tokens:1500,completion_tokens:320,total_tokens:1820,cache_read_input_tokens:600},latency_ms:800},c,true,sid)
         send('assistant.end',{outcome:'committed'},c,true,sid)
-        send('tool.call',{name:'read',display:{version:1,target:'test.txt',arguments_preview:'{"path":"test.txt"}'}},c,true,sid)
-        send('approval.requested',{interaction_id:'i',nonce:'nonce-memory-only',expires_at:Date.now()/1000+300,name:'read'},c,true,sid)
+        if (cmd.data.content === '创建评测任务') {
+          // 夹具直接采用后端允许的 MCP 全名，验证前端不依赖某一种模型 wire 名。
+          const taskCorrelation = {turn:1,turn_id:`${sid}:1`,step:1,attempt_id:'a',call_id:'task-create'}
+          send('tool.call',{name:'platform.tasks.task.create',display:{version:1,registry_name:'task.create',wire_name:'platform.tasks.task.create',arguments_preview:'{"kind":"benchmark"}'}},taskCorrelation,true,sid)
+          send('tool.dispatch',{name:'platform.tasks.task.create',registry_name:'task.create',wire_name:'platform.tasks.task.create'},taskCorrelation,true,sid)
+          send('tool.result',{name:'platform.tasks.task.create',status:'succeeded',display:{version:1,registry_name:'task.create',wire_name:'platform.tasks.task.create',format:'json',result_preview:'{"task_id":"task-1","kind":"benchmark","status":"queued"}'}},taskCorrelation,true,sid)
+          send('task.queued',{status:'queued'}, {task_id:'task-1'},true,sid)
+          send('task.progress',{status:'running',progress:{percent:42,message:'正在执行第 42 项'}}, {task_id:'task-1'},true,sid)
+          send('turn.end',{reason:'completed'},c,true,sid)
+        } else {
+          send('tool.call',{name:'read',display:{version:1,target:'test.txt',arguments_preview:'{"path":"test.txt"}'}},c,true,sid)
+          send('approval.requested',{interaction_id:'i',nonce:'nonce-memory-only',expires_at:Date.now()/1000+300,name:'read'},c,true,sid)
+        }
       }
       if(cmd.type==='approval.respond') {
         send('approval.resolved',{interaction_id:'i',decision:cmd.data.decision},c,true,sid)
@@ -116,6 +127,37 @@ test('HTTP 缺少 randomUUID 时新建会话、附件、发送和工具结果回
   await expect(page.locator('.tool-state').first()).toHaveText('已完成')
   await expect(page.getByRole('textbox', {name:'消息'})).toHaveValue('')
   await expect(page.getByText('草稿已保留', {exact:false})).toHaveCount(0)
+})
+
+test('工作区弹层从输入框上方展开，Task 卡片接收 MCP 名与 Worker 实时事件', async ({page}) => {
+  await setup(page)
+  const workspaceButton = page.locator('.composer-ws-btn').first()
+  const restingButtonBox = (await workspaceButton.boundingBox())!
+  await workspaceButton.click()
+  await expect(workspaceButton).toHaveClass(/is-open/)
+  const workspacePopover = page.locator('.ws-popover-card')
+  await expect(workspacePopover).toBeVisible()
+  // Vue scoped 样式会为 keyframes 追加哈希，保留名称前缀即可验证入场动画实际生效。
+  await expect.poll(() => workspacePopover.evaluate(element => getComputedStyle(element).animationName)).toMatch(/^workspace-popover-enter/)
+  const triggerBox = (await workspaceButton.boundingBox())!
+  const popoverBox = (await workspacePopover.boundingBox())!
+  expect(triggerBox.y).toBeLessThanOrEqual(restingButtonBox.y - 6)
+  expect(popoverBox.y).toBeGreaterThanOrEqual(triggerBox.y + triggerBox.height - 2)
+  // 保留真实浏览器快照，供工作区弹层的视觉回归核验。
+  await page.screenshot({path:'test-results/workspace-popover-task-card-ux.png'})
+  await workspaceButton.click()
+  await expect(workspacePopover).toHaveCount(0)
+
+  await page.getByRole('textbox',{name:'消息'}).fill('创建评测任务')
+  await page.getByRole('button',{name:'发送',exact:true}).click()
+  const taskCard = page.locator('[data-task-tool="task.create"]')
+  await expect(taskCard).toBeVisible()
+  await expect(taskCard).toHaveAttribute('data-task-id','task-1')
+  await expect(taskCard).toContainText('正在执行第 42 项')
+  await expect(taskCard.getByRole('progressbar')).toHaveAttribute('aria-valuenow','42')
+  await expect(taskCard).toContainText('执行中')
+  // Task 卡由 MCP 规范名称与 Worker 事件共同驱动，快照用于联调回归。
+  await page.screenshot({path:'test-results/task-run-card-task-card-ux.png'})
 })
 
 test('专家选择写入本轮 turn.submit 的 agent_id',async({page})=>{

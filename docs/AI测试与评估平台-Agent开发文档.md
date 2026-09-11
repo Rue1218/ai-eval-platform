@@ -1,10 +1,10 @@
 # AI 测试与评估平台 Agent 开发文档
 
-> 版本：V1.7.5
+> 版本：V1.7.7
 > 状态：新建会话统一使用 AgentLoop v2；历史 legacy 行仅保留审计与显式回放路径。此前骨架化与混合引擎说明属于 legacy 路径及其历史阶段，不能据此认定新路径仍为纯对话。前端输入栏按每回合协议档选择模型和思考强度，完整真实供应商/Linux Runner 联调验收仍未结束。
-> 审查日期：2026-09-09
+> 审查日期：2026-09-11
 > 对应需求：`AI测试与评估平台-PRD.md` V1.19
-> 对应接口：`AI测试与评估平台-API.md` V1.88
+> 对应接口：`AI测试与评估平台-API.md` V1.93
 
 ## 1. legacy 骨架化运行链路（历史基线）
 
@@ -539,3 +539,24 @@ AgentLoop 消息卡在实际模型名后展示该持久事件的发送日期时�
 每个 `assistant.start` 的 `request_summary.context_meter` 按实际请求序列化拆分系统提示词、对话消息、工具、MCP、Skill 与记忆文件。六项只统计输入并严格合计 `input_tokens`；输出预留继续由 `reserved_output_tokens` 单列，不混入任一来源。Skill 和记忆文件未注入当前请求时必须显示 `0`，历史事实没有 `breakdown` 时前端把旧输入合并显示为对话消息并标明限制。
 
 修改代码文件与作用清单：`backend/api/app/agent/loop.py` 固化本轮工具传输快照；`loop_wiring.py` 以实际 wire 投影计算来源分项；`loop_presentation.py` 将分项写入安全请求摘要；`frontend/src/components/agent/loop/LoopContextMeter.vue` 以小型分色圆环、进度条和来源列表展示；`frontend/src/api/agentLoopTypes.ts` 补齐前端契约；`backend/api/tests/test_loop_presentation.py` 校验分项与输入总量一致；`docs/AI测试与评估平台-API.md` 登记 V1.87 增量。
+
+### V1.7.7 Task 工具命名、状态卡片与工作区弹层（2026-09-11）
+
+Task 工具只允许三层已登记名称：注册表短名 `task.create/status/cancel`、模型 Function
+Calling 安全 wire 名 `platform_task_create/status/cancel`、以及 MCP 全名
+`platform.tasks.task.create/status/cancel`。三者均路由至同一 `ToolDef`、JSON Schema 和
+MCP `tool_id`；未知前缀不推断为平台工具。工具事件保留模型实际回传的 `name` 与
+`wire_name`，同时用 `registry_name` 固化短名，前端不需要新 WS 字段即可显示准确工具名。
+
+工作台对三种已登记 Task 名渲染统一的任务卡片。卡片只解析服务端已经脱敏的
+`display.arguments_preview/result_preview` 以取得 `task_id`，再关联同一会话的持久
+`task.queued/progress/report/end` 事实。Worker 进度和终态始终覆盖一次工具调用的快照，
+不会因 `progress.percent=100` 自行伪造成功。工作区选择器改为从输入框上方展开；打开时
+选择器平滑上移、箭头转向并播放弹层入场动画，减少对输入编辑区的遮挡。
+
+修改代码文件与作用清单：`backend/api/app/harness/execution/task_contract.py`、
+`loop_bridge.py`、`scheduler.py` 与 `agent/loop_presentation.py` 统一任务名称、Schema
+投影和调度；`frontend/src/agent/loop/taskPresentation.ts`、`TaskRunCard.vue`、
+`AgentWorkspace.vue` 连接 Task 卡与工作区弹层动效；`backend/api/tests/test_loop_tools.py`、
+`test_loop_presentation.py`、`frontend/tests/agentLoop.test.mjs` 与
+`frontend/tests/e2e/agentLoop.spec.ts` 覆盖工具别名、Worker 事件关联和浏览器契约。

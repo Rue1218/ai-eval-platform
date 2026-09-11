@@ -2,11 +2,11 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.92 |
-| WS v2 修订日期 | 2026-09-10（§4A，工具 Schema 轨迹快照与专家选择器） |
+| 文档版本 | V1.93 |
+| WS v2 修订日期 | 2026-09-11（§4A，会话标题与任务工具三层命名兼容） |
 | 对应 PRD | V1.18（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
-| 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.7.5（AgentLoop 单入口；JSON 仍以本文为准） |
+| 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.7.7（AgentLoop 单入口；JSON 仍以本文为准） |
 | 对应前端计划 | AgentLoop 前端计划 V0.5 |
 | 对应后端计划 | V1.5 |
 | 撰写日期 | 2026-08-18 |
@@ -17,6 +17,8 @@
 > V1.86（2026-09-09）：协议档页面 `POST /api/profiles/{id}/check` 的真实 ping 探活上限与通用协议调用统一为 30 秒，避免上游模型冷启动被误判为不可用；响应字段与错误码不变。
 
 > V1.89（2026-09-10）：Agent 专家（Expert）选择与附件工作区落地。`turn.submit.data` 新增可选 `agent_id`（专家 ID；缺省或未知值回落默认专家 `general`，服务端按回合解析，不新增会话列）。`GET /api/sessions/agent-ui`（草稿与会话态）响应增量 `agent`（当前选中专家 ID——已有会话按最近一轮 `user/message` 事实的 `extensions.expert_id` 记忆，无记录回落默认）与 `agents[]`（`id,name,description,badge,default` 投影，**不返回**专家提示词与工具视野）。专家为产品内置角色、随代码分发：`general`（默认，无附加提示词、平台全量工具白名单，行为与 V1.88 一致）与 `testcase-agent`（测试用例设计专家：专属提示词 + 工具视野收窄为 `read/write/edit/bash/ask_user_question`）。提示词按「核心 → 专家 → 协议档补充提示词」顺序注入 system 段（专家段 `cacheable=false`，读取时同样拒绝疑似密钥与接管性措辞）；专家声明工具与平台白名单**取交集**（只收窄不扩大，交集为空 fail-closed）；专家不改变权限、错误契约与任务状态机。`user/message` 事实 `extensions` 增量 `expert_id`（审计与跨端一致选择，不参与幂等摘要）。附件落地：`turn.submit` 的文本附件（`.md/.txt/.html/.json/.yaml/.yml/.csv/.jsonl`）随回合 staging 进**会话沙箱根**（与 read/bash 注入根同源），模型收到 `attachments/{file_id}-{name}` 相对路径清单并用 read 读取；行态失效/目录不可得时回退内联注入（与 V1.88 行为一致）。AGENTS.md V2.0 登记的「附件 staging 仍 legacy」在 agent_loop_v2 主链路随之解除。
+
+> V1.93（2026-09-11）：不新增浏览器 WS 字段。AgentLoop 的 `task.create`、`task.status`、`task.cancel` 统一以注册表短名作为权限、Schema 与 MCP 路由事实源；模型请求继续使用无点号的安全 Function Calling 名 `platform_task_create/status/cancel`。调度器仅兼容这三个安全 wire 名、短名和已登记 MCP 全名 `platform.tasks.task.create/status/cancel`，未知前缀一律按未知工具拒绝。三种名称均引用同一 `ToolDef.parameters_schema` JSON Schema（根对象 `additionalProperties=false`），调用事实保留实际 wire 名，同时以 `registry_name` 记录短名，确保轨迹与审计可追溯而不复制字段定义。
 
 > V1.88（2026-09-09）：浏览器 AgentLoop v2 流 schema 升至 `agent-loop-stream.v2.2`，完整事实目录升至 `catalog_version=5`。`assistant.message.data` 新增可选 `latency_ms`，为单次模型流从建立到完成的真实毫秒耗时，不含工具执行；已有 `usage` 继续仅透传上游返回的 `prompt_tokens`、`completion_tokens`、`total_tokens` 与可选缓存 token。前端聚合统计只能使用已持久化的这些字段：上游没有返回缓存 token 时缓存命中率显示未知，不能补零或估算。
 
@@ -3050,6 +3052,25 @@ Composer 上方抽屉；点击确认或取消即收回，消息流只保留关�
 | `frontend/src/components/agent/loop/TraceWorkspace.vue` | 优化事件时间线、工具详情与 Schema 面板，并兼容旧快照 |
 | `frontend/tests/agent-loop-style-preview.html` | 使用新工具快照格式提供轨迹样式预览 |
 | `docs/AI测试与评估平台-API.md` | V1.91：§4A 字段契约与本清单 |
+
+**V1.93（2026-09-11）— AgentLoop 任务工具命名兼容与状态卡片**
+
+`task.create`、`task.status`、`task.cancel` 的注册表短名、模型 Function Calling
+安全 wire 名和 MCP 目录全名由同一后端命名契约统一。模型请求保持
+`platform_task_create/status/cancel`，调度器仅接受该名称、注册表短名或已登记的
+`platform.tasks.task.create/status/cancel`，并始终使用同一个 `ToolDef` 的输入/输出
+JSON Schema 与 MCP `tool_id`；未知别名不得推断为平台工具。调用事实的 `name` /
+`wire_name` 保留模型原始回传，`registry_name` 固定为短名。前端 Task 卡片读取这些已
+脱敏工具展示字段，再按返回的 `task_id` 关联持久 `task.queued/progress/report/end` 事实；
+Worker 事实覆盖一次调用快照，不新增浏览器 WS 字段。
+
+| 实际修改文件 | 作用 |
+| --- | --- |
+| `backend/api/app/harness/execution/task_contract.py` | 固化任务工具三层名称与只读归一函数，不复制 JSON Schema。 |
+| `backend/api/app/harness/execution/loop_bridge.py` / `scheduler.py` | 为本轮模型注册安全 wire 名，受控接纳三种既有名称并保持原始 wire 审计。 |
+| `backend/api/app/agent/loop_presentation.py` | 三种任务名称投影同一字段白名单与安全展示短名。 |
+| `frontend/src/agent/loop/taskPresentation.ts` / `components/agent/loop/TaskRunCard.vue` | 从安全预览和 Worker 事实构建实时 Task 卡片。 |
+| `backend/api/tests/test_loop_tools.py` / `test_loop_presentation.py` / `frontend/tests/agentLoop.test.mjs` | 覆盖 Schema 同源、三名称路由、脱敏展示及前端状态关联。 |
 
 
 ## 2026-09-09 协议档供应商与完整 URL 优化
