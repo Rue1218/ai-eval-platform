@@ -1345,6 +1345,16 @@ export const api = {
       })
       return data
     },
+    async updateTitle(id: string, title: string): Promise<AgentSession> {
+      if (getDataMode() === 'mock') {
+        const session = mockStore.sessions.find((item) => item.id === id)
+        if (!session) throw new ApiError('会话不存在', ErrorCode.NOT_FOUND)
+        session.title = title
+        return session
+      }
+      const { data } = await http.put(`/api/sessions/${id}/title`, { title })
+      return data
+    },
     async remove(id: string): Promise<void> {
       if (getDataMode() === 'mock') {
         mockStore.sessions = mockStore.sessions.filter((item) => item.id !== id)

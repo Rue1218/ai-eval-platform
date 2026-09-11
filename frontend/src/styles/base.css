@@ -19,7 +19,7 @@
   --row-hover: rgba(17, 24, 39, .035);
 
   /* 模块色（规范 §8.2：--t-* 淡底 / --c-* 深字） */
-  --t-agent: #DDD6FE;    --c-agent: #7C3AED;
+  --t-agent: #e6f1ec;    --c-agent: #1f5947;
   --t-tasks: #E0E7FF;    --c-tasks: #4F46E5;
   --t-reports: #EDE9FE;  --c-reports: #6D28D9;
   --t-datasets: #DBEAFE; --c-datasets: #1D4ED8;
@@ -54,7 +54,7 @@
   --row-hover: rgba(255, 255, 255, .04);
   --accent-ai: #16977a;
   --focus-ring: 0 0 0 3px rgba(22, 151, 122, .25);
-  --t-agent: rgba(124, 58, 237, 0.25);  --c-agent: #A78BFA;
+  --t-agent: rgba(22, 151, 122, 0.2);  --c-agent: #34D399;
   --t-tasks: rgba(79, 70, 229, 0.25);   --c-tasks: #818CF8;
   --t-reports: rgba(109, 40, 217, 0.25); --c-reports: #C4B5FD;
   --t-datasets: rgba(29, 78, 216, 0.25); --c-datasets: #60A5FA;
@@ -587,9 +587,12 @@ p { margin: 0; text-wrap: pretty; }
   transition: background .13s ease; border: 1px solid transparent;
 }
 .session-item:hover { background: var(--bg-elevated); }
-.session-item.active { background: var(--t-agent); border-color: transparent; }
+.session-item.active {
+  background: var(--t-agent);
+  border-color: color-mix(in srgb, var(--c-agent) 24%, transparent);
+}
 .session-item.active .session-title { color: var(--c-agent); font-weight: 600; }
-.session-item.active .session-time { color: var(--c-agent); opacity: .62; }
+.session-item.active .session-time { color: var(--c-agent); opacity: .75; }
 .session-title { font-size: 13px; font-weight: 500; display: flex; align-items: center; gap: 8px; min-height: 22px; }
 .session-select { flex: 0 0 auto; }
 .session-title-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

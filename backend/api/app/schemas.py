@@ -233,6 +233,12 @@ class SessionPermissionTierUpdate(ApiModel):
     permission_tier: Literal["tier1", "tier2", "tier3"] | None = None
 
 
+class SessionTitleUpdate(ApiModel):
+    """修改会话标题的输入。"""
+
+    title: str = Field(..., min_length=1, max_length=200)
+
+
 class SessionOut(OrmOut):
     """会话列表项及当前成员的共享管理权限。
 

@@ -11,6 +11,7 @@ destructive（破坏，三档都审批）、normal（普通，按档位）。
 from __future__ import annotations
 
 import os
+import posixpath
 import re
 import shlex
 from typing import Literal
@@ -53,7 +54,7 @@ def _is_system_target(token: str) -> bool:
         return True
     if not t.startswith("/"):
         return False
-    normalized = os.path.normpath(t)
+    normalized = posixpath.normpath(t)
     return normalized in _SYSTEM_PATHS
 
 

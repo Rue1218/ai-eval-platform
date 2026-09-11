@@ -71,11 +71,11 @@
               class="session-select"
               type="checkbox"
               :checked="selectedSessionIds.includes(s.id)"
-              :aria-label="`选择会话：${s.title || '新会话'}`"
+              :aria-label="`选择会话：${displaySessionTitle(s)}`"
               @click.stop
               @change="toggleSessionSelected(s.id)"
             />
-            <span class="session-title-text">{{ s.title || '新会话' }}</span>
+            <span class="session-title-text">{{ displaySessionTitle(s) }}</span>
             <span v-if="s.visibility === 'team'" class="session-team-badge">团队</span>
             <span
               v-if="s.workspace_id"
@@ -122,7 +122,7 @@
             <path d="M4 6h16M4 12h10M4 18h16" />
           </svg>
         </button>
-        <span class="chat-head-title">{{ currentSession?.title || '新会话' }}</span>
+        <span class="chat-head-title">{{ displaySessionTitle(currentSession) }}</span>
         <span v-if="currentSession?.visibility === 'team'" class="chat-team-badge">团队共享</span>
         <span
           v-if="currentSession?.workspace_id && currentSession?.workspace_name"
@@ -763,13 +763,26 @@ watch(() => authStore.user?.id, (id, previous) => { if (previous && id !== previ
 watch(() => Object.values(loopStore.sessions).map(s => [s.sessionId, s.title]), () => {
   for (const value of Object.values(loopStore.sessions)) { const session = sessions.value.find(s => s.id === value.sessionId); if (session && value.title) session.title = value.title }
 })
+
+function displaySessionTitle(session?: AgentSession | null): string {
+  if (!session) return '新会话'
+  const title = (session.title || '').trim()
+  if (title && title !== '新会话') return title
+  const loopState = loopStore.sessions[session.id]
+  if (loopState?.title && loopState.title !== '新会话') {
+    return loopState.title
+  }
+  return '新会话'
+}
+
 /** 创建时固化 v2、工作区与权限档位，后续只使用独立 transport。 */
 async function createLoopSession(
-  workspaceId?: string, preparedTicket?: Promise<string>, permissionTier?: string
+  workspaceId?: string, preparedTicket?: Promise<string>, permissionTier?: string, initialTitle?: string
 ): Promise<string> {
   if (currentSessionId.value) return currentSessionId.value
   const targetWsId = workspaceId || draftWorkspaceId.value || undefined
-  const session = await api.sessions.create('新会话', {
+  const title = initialTitle || '新会话'
+  const session = await api.sessions.create(title, {
     workspaceId: targetWsId,
     permissionTier: (permissionTier as any) || undefined,
   })
