@@ -9,6 +9,7 @@ from fastapi import WebSocketDisconnect
 
 from app.agent.events import frame
 from app.errors import AppError, ErrorCode
+from app.harness.execution.ask_user import validate_answers
 from app.routers.ws_v2 import (
     CommandReceipt,
     StreamSnapshot,
@@ -379,6 +380,41 @@ def test_command_rejection_exposes_safe_actionable_reason():
             "code": "CONCURRENCY",
             "message": "上一轮仍在收尾或会话正被占用，请稍后重试",
         }
+        await disconnect(socket, task)
+    asyncio.run(scenario())
+
+
+def test_interaction_validation_rejection_projects_specific_reason():
+    """交互答案校验失败投影具体原因（题号/题 id），不再回落通用模型提示。"""
+    async def scenario():
+        """真实校验函数抛出的消息直接驱动拒绝出口，白名单外仍回落通用文案。"""
+        socket, connection, task = await connect(FakeService())
+        questions = [{
+            "id": "case_type", "question": "?",
+            "options": [{"label": "A"}], "type": "radio", "required": True,
+        }]
+        cases = []
+        for raw in ([{"id": "case_type", "selected": ["非法值"]}], []):
+            try:
+                validate_answers(questions, raw)
+            except AppError as error:
+                cases.append(error)
+        cases.append(AppError(ErrorCode.VALIDATION, "交互身份不匹配"))
+        cases.append(AppError(ErrorCode.VALIDATION, "内部未登记原因"))
+        for error in cases:
+            connection.reject(error)
+        await until(
+            lambda: len([f for f in socket.sent if f["type"] == "command.rejected"]) >= len(cases)
+        )
+        messages = [
+            f["data"]["message"] for f in socket.sent if f["type"] == "command.rejected"
+        ]
+        assert messages == [
+            "问题 case_type 的选项不在给定范围内：非法值",
+            "answers 不能为空",
+            "交互身份不匹配",
+            "模型、思考档位或历史状态不兼容；请重新选择或新建会话",
+        ]
         await disconnect(socket, task)
     asyncio.run(scenario())
 
