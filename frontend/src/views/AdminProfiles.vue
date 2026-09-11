@@ -673,12 +673,17 @@
               :class="{ 'is-disabled': t.enabled === false }"
             >
               <div class="mcp-card-top">
-                <div class="mcp-tool-heading">
-                  <div class="mcp-tool-title">{{ t.display_name || t.name }}</div>
-                  <div class="domain-tag mono">{{ t.name }}</div>
+                <div class="mcp-tool-heading-wrap">
+                  <div class="mcp-tool-icon-box" :class="`tool-icon-${getToolDomain(t.name).key}`">
+                    <ToolIcon :name="t.name" :size="20" />
+                  </div>
+                  <div class="mcp-tool-heading">
+                    <div class="mcp-tool-title">{{ t.display_name || t.name }}</div>
+                    <div class="domain-tag mono">{{ t.name }}</div>
+                  </div>
                 </div>
 
-                <div class="row" style="gap: 4px">
+                <div class="row" style="gap: 4px; flex-shrink: 0">
                   <span class="tag-soft">
                     {{ t.transport === 'native' ? '原生' : '内部 MCP' }}
                   </span>
@@ -741,8 +746,15 @@
               <tbody>
                 <tr v-for="t in filteredMcpTools" :key="t.name">
                   <td>
-                    <div style="font-weight: 600; font-size: 13px">{{ t.display_name || t.name }}</div>
-                    <div class="mono small tertiary" style="font-size: 10.5px">{{ t.name }}</div>
+                    <div class="mcp-table-tool-col">
+                      <div class="mcp-table-tool-icon" :class="`tool-icon-${getToolDomain(t.name).key}`">
+                        <ToolIcon :name="t.name" :size="15" />
+                      </div>
+                      <div class="mcp-table-tool-info">
+                        <div style="font-weight: 600; font-size: 13px">{{ t.display_name || t.name }}</div>
+                        <div class="mono small tertiary" style="font-size: 10.5px">{{ t.name }}</div>
+                      </div>
+                    </div>
                   </td>
                   <td>
                     <span class="tag-soft">
@@ -1125,6 +1137,7 @@ import McpToolModal from '../components/modals/McpToolModal.vue'
 import SkillDetailModal, { type SkillDetail } from '../components/modals/SkillDetailModal.vue'
 import AgentSkillFileModal from '../components/modals/AgentSkillFileModal.vue'
 import AgentPromptModal from '../components/modals/AgentPromptModal.vue'
+import ToolIcon from '../components/agent/loop/ToolIcon.vue'
 
 const message = useMessage()
 const dialog = useDialog()
@@ -1198,11 +1211,29 @@ const domainFilterOptions = [
 
 /** 获取工具业务领域与图标映射 */
 function getToolDomain(name: string): { label: string; icon: string; key: string } {
-  if (name === 'read' || name === 'write' || name === 'edit') return { label: '文件系统', icon: '', key: 'file' }
+  if (
+    name === 'read' ||
+    name === 'read_image' ||
+    name === 'write' ||
+    name === 'edit' ||
+    name === 'glob' ||
+    name === 'grep' ||
+    name === 'list_dir' ||
+    name === 'str_replace_editor'
+  ) {
+    return { label: '文件系统', icon: '', key: 'file' }
+  }
   if (name === 'web_search' || name === 'web_fetch') return { label: '网络抓取', icon: '', key: 'web' }
   if (name === 'bash') return { label: '沙箱命令', icon: '', key: 'bash' }
-  if (name === 'task') return { label: '任务规划', icon: '', key: 'plan' }
-  if (name.includes('task.create') || name.includes('task.status') || name.includes('task.cancel')) return { label: '任务调度', icon: '', key: 'task' }
+  if (name === 'task' || name === 'ask_user_question') return { label: '任务规划', icon: '', key: 'plan' }
+  if (
+    name.includes('task.create') ||
+    name.includes('task.status') ||
+    name.includes('task.cancel') ||
+    name.startsWith('Task')
+  ) {
+    return { label: '任务调度', icon: '', key: 'task' }
+  }
   if (name.startsWith('model.')) return { label: '模型资产', icon: '', key: 'model' }
   if (name.startsWith('dataset.')) return { label: '数据集', icon: '', key: 'dataset' }
   if (name.startsWith('kb.')) return { label: '知识库', icon: '', key: 'kb' }
@@ -2620,6 +2651,118 @@ onMounted(() => {
   justify-content: space-between;
   gap: 8px;
 }
+.mcp-tool-heading-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+.mcp-tool-icon-box {
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: var(--bg-elevated, #f3f4f6);
+  border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.08));
+  color: var(--c-profiles, #16977a);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.mcp-card:hover .mcp-tool-icon-box {
+  transform: scale(1.05);
+}
+
+/* 领域/分类色彩徽标容器 */
+.tool-icon-file {
+  color: #10b981;
+  background: rgba(16, 185, 129, 0.08);
+  border-color: rgba(16, 185, 129, 0.22);
+}
+.tool-icon-web {
+  color: #3b82f6;
+  background: rgba(59, 130, 246, 0.08);
+  border-color: rgba(59, 130, 246, 0.22);
+}
+.tool-icon-bash {
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.08);
+  border-color: rgba(245, 158, 11, 0.22);
+}
+.tool-icon-plan,
+.tool-icon-task {
+  color: #8b5cf6;
+  background: rgba(139, 92, 246, 0.08);
+  border-color: rgba(139, 92, 246, 0.22);
+}
+.tool-icon-model {
+  color: #6366f1;
+  background: rgba(99, 102, 241, 0.08);
+  border-color: rgba(99, 102, 241, 0.22);
+}
+.tool-icon-dataset {
+  color: #06b6d4;
+  background: rgba(6, 182, 212, 0.08);
+  border-color: rgba(6, 182, 212, 0.22);
+}
+.tool-icon-kb {
+  color: #14b8a6;
+  background: rgba(20, 184, 166, 0.08);
+  border-color: rgba(20, 184, 166, 0.22);
+}
+.tool-icon-report {
+  color: #ec4899;
+  background: rgba(236, 72, 153, 0.08);
+  border-color: rgba(236, 72, 153, 0.22);
+}
+.tool-icon-dispatch {
+  color: #0ea5e9;
+  background: rgba(14, 165, 233, 0.08);
+  border-color: rgba(14, 165, 233, 0.22);
+}
+.tool-icon-cases {
+  color: #84cc16;
+  background: rgba(132, 204, 22, 0.08);
+  border-color: rgba(132, 204, 22, 0.22);
+}
+.tool-icon-image {
+  color: #a855f7;
+  background: rgba(168, 85, 247, 0.08);
+  border-color: rgba(168, 85, 247, 0.22);
+}
+.tool-icon-audio {
+  color: #eab308;
+  background: rgba(234, 179, 8, 0.08);
+  border-color: rgba(234, 179, 8, 0.22);
+}
+.tool-icon-other {
+  color: var(--c-profiles, #16977a);
+  background: var(--t-profiles, rgba(22, 151, 122, 0.08));
+  border-color: rgba(22, 151, 122, 0.22);
+}
+
+/* 表格列工具图标 */
+.mcp-table-tool-col {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.mcp-table-tool-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.08));
+}
+.mcp-table-tool-info {
+  min-width: 0;
+}
+
 .mcp-tool-heading {
   min-width: 0;
   flex: 1;

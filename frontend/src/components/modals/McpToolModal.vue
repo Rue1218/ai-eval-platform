@@ -12,7 +12,9 @@
       <!-- 头部概览条 -->
       <div class="tool-modal-header">
         <div class="tool-title-row">
-          <span class="tool-icon">{{ toolIcon }}</span>
+          <div class="tool-modal-icon-box" :class="`tool-icon-${getToolDomainKey(tool.name)}`">
+            <ToolIcon :name="tool.name" :size="24" />
+          </div>
           <div style="flex: 1">
             <div class="row-between">
               <div class="row" style="gap: 8px; align-items: center">
@@ -377,6 +379,7 @@ import { ref, computed, watch } from 'vue'
 import { NModal, useMessage } from 'naive-ui'
 import { api } from '../../api/http'
 import type { McpTool } from '../../api/types'
+import ToolIcon from '../agent/loop/ToolIcon.vue'
 
 const message = useMessage()
 
@@ -411,22 +414,32 @@ watch(
   },
 )
 
-/** 工具展示图标 */
-const toolIcon = computed(() => {
-  if (!props.tool) return '🛠️'
-  const name = props.tool.name
-  if (name === 'read' || name === 'write' || name === 'edit') return '📂'
-  if (name === 'web_search' || name === 'web_fetch') return '🌐'
-  if (name === 'bash') return '💻'
-  if (name === 'task') return '📋'
-  if (name.includes('task.')) return '🚀'
-  if (name.startsWith('model.')) return '🤖'
-  if (name.startsWith('dataset.')) return '📚'
-  if (name.startsWith('kb.')) return '🧠'
-  if (name.startsWith('audio.')) return '🔊'
-  if (name.startsWith('image.')) return '🖼️'
-  return '🛠️'
-})
+function getToolDomainKey(name?: string): string {
+  if (!name) return 'other'
+  if (
+    name === 'read' ||
+    name === 'read_image' ||
+    name === 'write' ||
+    name === 'edit' ||
+    name === 'glob' ||
+    name === 'grep' ||
+    name === 'list_dir' ||
+    name === 'str_replace_editor'
+  ) return 'file'
+  if (name === 'web_search' || name === 'web_fetch') return 'web'
+  if (name === 'bash') return 'bash'
+  if (name === 'task' || name === 'ask_user_question') return 'plan'
+  if (name.includes('task.') || name.startsWith('Task')) return 'task'
+  if (name.startsWith('model.')) return 'model'
+  if (name.startsWith('dataset.')) return 'dataset'
+  if (name.startsWith('kb.')) return 'kb'
+  if (name.startsWith('report.')) return 'report'
+  if (name.startsWith('dispatch.')) return 'dispatch'
+  if (name.startsWith('testcase.')) return 'cases'
+  if (name.startsWith('image.')) return 'image'
+  if (name.startsWith('audio.')) return 'audio'
+  return 'other'
+}
 
 /** 风险等级标签与样式 */
 const riskBadgeLabel = computed(() => {
@@ -629,9 +642,81 @@ async function handleRunLiveToolCall() {
   gap: 12px;
   align-items: flex-start;
 }
-.tool-icon {
-  font-size: 30px;
-  line-height: 1;
+.tool-modal-icon-box {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.08));
+}
+.tool-icon-file {
+  color: #10b981;
+  background: rgba(16, 185, 129, 0.08);
+  border-color: rgba(16, 185, 129, 0.22);
+}
+.tool-icon-web {
+  color: #3b82f6;
+  background: rgba(59, 130, 246, 0.08);
+  border-color: rgba(59, 130, 246, 0.22);
+}
+.tool-icon-bash {
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.08);
+  border-color: rgba(245, 158, 11, 0.22);
+}
+.tool-icon-plan,
+.tool-icon-task {
+  color: #8b5cf6;
+  background: rgba(139, 92, 246, 0.08);
+  border-color: rgba(139, 92, 246, 0.22);
+}
+.tool-icon-model {
+  color: #6366f1;
+  background: rgba(99, 102, 241, 0.08);
+  border-color: rgba(99, 102, 241, 0.22);
+}
+.tool-icon-dataset {
+  color: #06b6d4;
+  background: rgba(6, 182, 212, 0.08);
+  border-color: rgba(6, 182, 212, 0.22);
+}
+.tool-icon-kb {
+  color: #14b8a6;
+  background: rgba(20, 184, 166, 0.08);
+  border-color: rgba(20, 184, 166, 0.22);
+}
+.tool-icon-report {
+  color: #ec4899;
+  background: rgba(236, 72, 153, 0.08);
+  border-color: rgba(236, 72, 153, 0.22);
+}
+.tool-icon-dispatch {
+  color: #0ea5e9;
+  background: rgba(14, 165, 233, 0.08);
+  border-color: rgba(14, 165, 233, 0.22);
+}
+.tool-icon-cases {
+  color: #84cc16;
+  background: rgba(132, 204, 22, 0.08);
+  border-color: rgba(132, 204, 22, 0.22);
+}
+.tool-icon-image {
+  color: #a855f7;
+  background: rgba(168, 85, 247, 0.08);
+  border-color: rgba(168, 85, 247, 0.22);
+}
+.tool-icon-audio {
+  color: #eab308;
+  background: rgba(234, 179, 8, 0.08);
+  border-color: rgba(234, 179, 8, 0.22);
+}
+.tool-icon-other {
+  color: var(--c-profiles, #16977a);
+  background: var(--t-profiles, rgba(22, 151, 122, 0.08));
+  border-color: rgba(22, 151, 122, 0.22);
 }
 .tool-name {
   font-size: 16px;
