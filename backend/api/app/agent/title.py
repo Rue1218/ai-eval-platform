@@ -13,6 +13,7 @@ anthropic_messages）的原生 ``response_format`` 能力
 
 import asyncio
 import json
+import re
 
 from ..db import SessionLocal
 from ..errors import AppError
@@ -40,7 +41,20 @@ _TITLE_QUOTE_PAIRS = {('"', '"'), ("'", "'"), ("“", "”"), ("‘", "’")}
 
 def fallback_title(text: str, limit: int = 18) -> str:
     """兜底标题：首条消息压缩空白后截断（与前端乐观占位同规则）。"""
-    cleaned = " ".join((text or "").split())
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return ""
+    # 剥离 [引用对话记忆]...[/引用对话记忆] 引用块
+    cleaned = re.sub(r"\[引用对话记忆\][\s\S]*?\[/引用对话记忆\]", "", cleaned)
+    # 剥离 [引用...] 等前置引用标签
+    cleaned = re.sub(r"^\[[^\]]+\]\s*", "", cleaned)
+    # 剥离 markdown 标题符 # 或列表符 * -
+    cleaned = re.sub(r"^[#*\-\s]+", "", cleaned)
+    cleaned = " ".join(cleaned.split())
+    if not cleaned:
+        return ""
+    if len(cleaned) >= 2 and (cleaned[0], cleaned[-1]) in _TITLE_QUOTE_PAIRS:
+        cleaned = cleaned[1:-1].strip()
     if not cleaned:
         return ""
     return cleaned[:limit]

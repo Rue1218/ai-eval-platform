@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from ..agent.attachments import normalize_history_attachments
 from ..agent.log import agent_trace
+from ..agent.title import fallback_title
 from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
@@ -27,7 +28,13 @@ from ..models import (
     WsEvent,
 )
 from ..models import Session as AgentSession
-from ..schemas import SessionCreate, SessionOut, SessionPermissionTierUpdate, SessionSharingUpdate
+from ..schemas import (
+    SessionCreate,
+    SessionOut,
+    SessionPermissionTierUpdate,
+    SessionSharingUpdate,
+    SessionTitleUpdate,
+)
 from ..session_access import require_session_owner, require_visible_session
 from ..session_connections import SESSION_CONNECTION_HUB
 from ..workspace_service import ensure_workspace_scope
@@ -240,6 +247,71 @@ def _session_out(
     return value
 
 
+def _auto_fill_session_titles(db: Session, rows: list[AgentSession]) -> None:
+    """自动为标题为默认「新会话」的存量会话提取首条提问作为标题并持久化。"""
+    unnamed = [r for r in rows if not r.title or r.title == "新会话"]
+    if not unnamed:
+        return
+    unnamed_ids = [s.id for s in unnamed]
+
+    # 1. 优先查 AgentLoop v2 的 agent_events 事实表 (user/message)
+    agent_events = (
+        db.query(AgentEvent.session_id, AgentEvent.envelope)
+        .filter(
+            AgentEvent.session_id.in_(unnamed_ids),
+            AgentEvent.type == "user/message",
+        )
+        .order_by(AgentEvent.seq.asc())
+        .all()
+    )
+    first_content_by_session: dict[str, str] = {}
+    for sid, env in agent_events:
+        if sid not in first_content_by_session and isinstance(env, dict):
+            data = env.get("data") or {}
+            ext = env.get("extensions") or {}
+            content = ext.get("display_content") or data.get("content")
+            if isinstance(content, list):
+                texts = [
+                    b.get("text", "")
+                    for b in content
+                    if isinstance(b, dict) and b.get("type") == "text"
+                ]
+                content = " ".join(texts)
+            if isinstance(content, str) and content.strip():
+                first_content_by_session[sid] = content.strip()
+
+    # 2. 查 legacy Message 消息表 (role == 'user')
+    remaining_ids = [sid for sid in unnamed_ids if sid not in first_content_by_session]
+    if remaining_ids:
+        messages = (
+            db.query(Message.session_id, Message.content)
+            .filter(
+                Message.session_id.in_(remaining_ids),
+                Message.role == "user",
+            )
+            .order_by(Message.created_at.asc(), Message.id.asc())
+            .all()
+        )
+        for sid, content in messages:
+            if sid not in first_content_by_session and isinstance(content, str) and content.strip():
+                first_content_by_session[sid] = content.strip()
+
+    # 3. 提取并持久化
+    changed = False
+    for r in unnamed:
+        raw_text = first_content_by_session.get(r.id)
+        if raw_text:
+            extracted = fallback_title(raw_text, limit=24)
+            if extracted and extracted != r.title:
+                r.title = extracted
+                changed = True
+    if changed:
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+
+
 @router.get("")
 def list_sessions(
     db: Session = Depends(get_db),
@@ -255,6 +327,7 @@ def list_sessions(
         .order_by(AgentSession.updated_at.desc())
         .all()
     )
+    _auto_fill_session_titles(db, rows)
     # N+1 收窄（P3 轻修）：绑定工作区名称一次预取（活跃任务查询仍按行进行）
     bound_ids = {row.workspace_id for row in rows if row.workspace_id}
     ws_names: dict[str, str] = {}
@@ -401,6 +474,33 @@ def update_session_permission_tier(
             target_type="session",
             target_id=session.id,
             detail={"permission_tier": tier},
+        )
+    )
+    db.commit()
+    db.refresh(session)
+    return _session_out(db, session, user)
+
+
+@router.put("/{session_id}/title", response_model=SessionOut)
+def update_session_title(
+    session_id: str,
+    body: SessionTitleUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """由会话创建者修改会话标题。"""
+    session = require_session_owner(db, session_id, user.id, lock=True)
+    new_title = body.title.strip()
+    if not new_title:
+        raise AppError(ErrorCode.VALIDATION, "会话标题不能为空")
+    session.title = new_title
+    db.add(
+        AuditLog(
+            user_id=user.id,
+            action="session_title_update",
+            target_type="session",
+            target_id=session.id,
+            detail={"title": new_title},
         )
     )
     db.commit()

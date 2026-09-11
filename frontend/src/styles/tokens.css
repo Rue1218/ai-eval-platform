@@ -20,7 +20,7 @@
   --sidebar-bg: rgba(255, 255, 255, 0.55);
 
   /* 模块专属强调色（--t-* 柔和淡底 / --c-* 鲜明深字） */
-  --t-agent: #ede9fe;    --c-agent: #7c3aed;    /* 智能体：AI 紫罗兰 */
+  --t-agent: #e6f1ec;    --c-agent: #1f5947;    /* 智能体：松石林绿 / 薄荷绿 */
   --t-dispatch: #e0f2fe; --c-dispatch: #0284c7; /* 调度中心：科技青天蓝 */
   --t-tasks: #e0e7ff;    --c-tasks: #4f46e5;    /* 任务中心：经典靛蓝 */
   --t-reports: #fae8ff;  --c-reports: #a21caf;  /* 评测报告：品红紫罗兰 */
@@ -62,7 +62,7 @@
   --sidebar-bg: rgba(11, 15, 25, 0.65);
   --focus-ring: 0 0 0 3px rgba(22, 151, 122, 0.25);
 
-  --t-agent: #2e1065;    --c-agent: #c4b5fd;
+  --t-agent: rgba(22, 151, 122, 0.2); --c-agent: #34d399;
   --t-dispatch: #082f49; --c-dispatch: #38bdf8;
   --t-tasks: #1e1b4b;    --c-tasks: #a5b4fc;
   --t-reports: #4a044e;  --c-reports: #f0abfc;

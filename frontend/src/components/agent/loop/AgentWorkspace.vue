@@ -301,7 +301,7 @@ const props = withDefaults(
     sessionId: string
     session?: AgentSession | null
     store: LoopStore
-    createSession: (workspaceId?: string, preparedTicket?: Promise<string>, permissionTier?: string) => Promise<string>
+    createSession: (workspaceId?: string, preparedTicket?: Promise<string>, permissionTier?: string, initialTitle?: string) => Promise<string>
   }>(),
   {
     session: null
@@ -703,6 +703,23 @@ function regenerate(row: LoopRecord) {
   const refs = Array.isArray(source.attachment_refs) ? source.attachment_refs.map(item => typeof item === 'string' ? item : item?.file_id).filter((item): item is string => typeof item === 'string') : []
   void submit({ content: String(source.content), attachmentRefs: refs })
 }
+function formatSessionTitle(rawText: string): string {
+  if (!rawText) return '新会话'
+  let cleaned = rawText.trim()
+  // 剥除 [引用对话记忆] ... [/引用对话记忆]
+  cleaned = cleaned.replace(/\[引用对话记忆\][\s\S]*?\[\/引用对话记忆\]/g, '').trim()
+  // 剥除其他 [引用...] 标签
+  cleaned = cleaned.replace(/^\[[^\]]+\]\s*/g, '').trim()
+  // 剥除 markdown 标题符 # 或列表符 * -
+  cleaned = cleaned.replace(/^[#*\-\s]+/g, '').trim()
+  // 压缩连续空白
+  cleaned = cleaned.replace(/\s+/g, ' ')
+  // 剥离首尾引号
+  cleaned = cleaned.replace(/^["'“”‘’]+|["'“”‘’]+$/g, '')
+  if (!cleaned) return '新会话'
+  return cleaned.slice(0, 24)
+}
+
 /** 冻结输入/附件/effort 与幂等 ID；未受理时保留可恢复草稿。 */
 async function submit(override?: { content: string; attachmentRefs: string[] }) {
   if (!ready.value || busy.value || draft.value.submitting) return
@@ -719,10 +736,17 @@ async function submit(override?: { content: string; attachmentRefs: string[] }) 
       preparedTicket=api.auth.getWsTicket().then(({ticket})=>ticket)
       // 建会失败时仍消费此 Promise 的拒绝，避免后台短票请求产生未处理异常。
       void preparedTicket.catch(()=>undefined)
-      sid=await props.createSession(activeWorkspaceId.value || undefined, preparedTicket, sessionTier.value || undefined)
+      const initialTitle = formatSessionTitle(content)
+      sid=await props.createSession(activeWorkspaceId.value || undefined, preparedTicket, sessionTier.value || undefined, initialTitle)
       if(!sid) throw new Error()
       props.store.drafts[sid]=source
       delete props.store.drafts.draft
+    } else if (props.session && (!props.session.title || props.session.title === '新会话')) {
+      const newTitle = formatSessionTitle(content)
+      if (newTitle && newTitle !== '新会话') {
+        props.session.title = newTitle
+        void api.sessions.updateTitle(sid, newTitle).catch(() => {})
+      }
     }
     const client=props.store.open(sid, preparedTicket)
     source.pending ??= client.command('turn.submit',{client_message_id:createRequestId(),content,attachment_refs:refs,profile_id:profile.id,reasoning_effort:selectedEffort,agent_id:selectedAgent.value?.id})

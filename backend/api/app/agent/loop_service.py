@@ -20,11 +20,14 @@ from app.session_access import require_visible_session
 
 from .events import frame, scrub
 from .experts import resolve_expert
+from .log import agent_trace
 from .loop import TurnDependencies, build_agent
 from .loop_settings import LoopSettings
 from .runtime import AgentRuntime
+from .title import generate_title_text
 
 logger = logging.getLogger(__name__)
+_TITLE_GENERATING: set[str] = set()
 
 
 @dataclass
@@ -346,10 +349,54 @@ class LoopService:
                 entry.controller_client_id = None
             raise
         entry.cleanup = asyncio.create_task(self._finish(entry, resources))
+        self._maybe_schedule_title(command.session_id, data.get("content", ""))
         receipt = entry.log.command_receipt(actor_id, command.request_id)
         if receipt is None:
             raise AppError(ErrorCode.INTERNAL, "输入提交缺少持久回执")
         return self._receipt(receipt, command.fingerprint)
+
+    def _maybe_schedule_title(self, session_id: str, text: str) -> None:
+        """会话仍是默认标题时，首条消息后后台生成 AI 标题并写库。"""
+        stripped = (text or "").strip()
+        if not stripped or session_id in _TITLE_GENERATING:
+            return
+
+        try:
+            with self.session_factory() as db:
+                if not hasattr(db, "query"):
+                    return
+                session_row = db.query(Session).filter(Session.id == session_id).first()
+                if not session_row or (session_row.title and session_row.title != "新会话"):
+                    return
+        except Exception:
+            return
+
+        _TITLE_GENERATING.add(session_id)
+
+        async def _apply() -> None:
+            try:
+                title = await generate_title_text(stripped)
+                if not title:
+                    return
+                with self.session_factory() as db:
+                    if not hasattr(db, "query"):
+                        return
+                    row = (
+                        db.query(Session)
+                        .filter(Session.id == session_id)
+                        .with_for_update()
+                        .first()
+                    )
+                    if row is None or (row.title and row.title != "新会话"):
+                        return
+                    row.title = title
+                    db.commit()
+            except Exception as exc:
+                agent_trace(f"v2 session title apply failed type={type(exc).__name__}")
+            finally:
+                _TITLE_GENERATING.discard(session_id)
+
+        asyncio.create_task(_apply(), name=f"agent-v2-title-{session_id}")
 
     def _input_content(self, actor_id: str, session_id: str, data: dict):
         """附件按上传者验证并冻结到事实；文本附件落会话工作区，供 read/bash 读取。"""
