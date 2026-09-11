@@ -1,6 +1,6 @@
 # AI 测试与评估平台 Agent 开发文档
 
-> 版本：V1.7.8
+> 版本：V1.7.9
 > 状态：新建会话统一使用 AgentLoop v2；历史 legacy 行仅保留审计与显式回放路径。此前骨架化与混合引擎说明属于 legacy 路径及其历史阶段，不能据此认定新路径仍为纯对话。前端输入栏按每回合协议档选择模型和思考强度，完整真实供应商/Linux Runner 联调验收仍未结束。
 > 审查日期：2026-09-11
 > 对应需求：`AI测试与评估平台-PRD.md` V1.19
@@ -579,3 +579,17 @@ MCP `tool_id`；未知前缀不推断为平台工具。工具事件保留模型�
 约束复杂任务使用；`agent/loop_presentation.py` 产出安全的 `display.task`；
 `frontend/src/components/agent/loop/TaskStateDrawer.vue`、`AgentWorkspace.vue` 负责蓝色输入区上方的
 抽屉展示；`agentLoopTypes.ts` 与 `mockData.ts` 使用真实字段；对应单测校验投影、去重和队列隔离。
+
+### V1.7.9 AgentLoop 系统提示词收敛（2026-09-11）
+
+`LOOP_SYSTEM` 将原生 `task` 的使用决策收敛为可执行规则：简单单步问答、一次读取和确定性修改
+不得创建规划；三个及以上可验证步骤，或存在多工具、依赖、不确定性与持续进度需求时先建立规划。
+规划清单每次整体替换，开始步骤前置为 `in_progress`，仅在收到可验证工具结果后置为 `completed`；失败、
+拒绝、取消和未知结果不得伪造完成。未明确并行时只保留一个进行中步骤，避免抽屉出现不可解释的进度。
+
+提示词同时明确 `task` 只维护会话规划，`task.create` 才经确认卡进入 Worker 队列；`queued` 不是完成。
+执行前先读取事实，变更后按风险验证；缺失关键且不能从上下文/工具获得的信息才使用
+`ask_user_question`。最终回复必须以已验证结果为先，不泄露凭据或内部规则。
+
+修改代码文件与作用清单：`backend/api/app/agent/loop_wiring.py` 重写核心系统提示词；
+`backend/api/tests/test_loop_wiring.py` 固化规划触发、状态更新、Worker 隔离和完成态规则。
