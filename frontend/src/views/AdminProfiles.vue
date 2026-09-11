@@ -22,7 +22,7 @@
         <div class="agent-default-info">
           <div class="agent-default-badge">Agent 核心驱动</div>
           <div v-if="selectedAgentProfile" class="agent-default-content">
-            <ProviderLogo :provider="getProviderLogoKey(selectedAgentProfile)" :size="20" compact />
+            <ProviderLogo :provider="getModelLogoKey(selectedAgentProfile.model)" :size="20" compact />
             <span class="agent-default-name">{{ selectedAgentProfile.name }}</span>
             <span class="mono agent-default-model">{{ selectedAgentProfile.model }}</span>
             <span class="agent-default-url-tag">{{ selectedAgentProfile.full_url ? '完整 URL' : 'Base URL' }}</span>
@@ -158,6 +158,7 @@
               >
                 <div class="model-chip-top">
                   <div class="model-chip-title-wrap">
+                    <ProviderLogo class="model-chip-brand" :provider="getModelLogoKey(p.model)" compact :size="18" />
                     <span class="model-chip-name" :title="p.name">{{ p.name }}</span>
                     <span v-if="p.id === selectedAgentProfileId" class="tag-soft agent-core-tag">核心驱动</span>
                   </div>
@@ -228,6 +229,7 @@
             <thead>
               <tr>
                 <th>协议档名称</th>
+                <th style="width: 155px">供应商</th>
                 <th style="width: 140px">协议类型</th>
                 <th style="width: 160px">模型标识</th>
                 <th style="width: 100px">上下文窗口</th>
@@ -241,16 +243,24 @@
               <tr v-for="p in filteredProfiles" :key="p.id">
                 <td style="font-weight: 600; font-size: 13.5px">
                   <span class="row" style="gap: 8px; align-items: center">
-                    <ProviderLogo :provider="getProviderLogoKey(p)" compact :size="18" />
                     <span>{{ p.name }}</span>
                     <span v-if="p.id === selectedAgentProfileId" class="tag-soft agent-core-tag">核心驱动</span>
+                  </span>
+                </td>
+                <td>
+                  <span class="row" style="gap: 6px; align-items: center">
+                    <ProviderLogo :provider="getProfileVendor(p)" compact :size="18" />
+                    <span class="provider-cell-name">{{ VENDOR_NAMES[getProfileVendor(p)] }}</span>
                   </span>
                 </td>
                 <td>
                   <span class="mono" style="font-size: 12px">{{ p.protocol }}</span>
                 </td>
                 <td>
-                  <span class="mono" style="font-size: 12px; font-weight: 600">{{ p.model }}</span>
+                  <span class="row model-id-cell">
+                    <ProviderLogo :provider="getModelLogoKey(p.model)" compact :size="16" />
+                    <span class="mono">{{ p.model }}</span>
+                  </span>
                 </td>
                 <td>
                   <span class="mono window-tag">{{ formatContextWindow(p.context_window) }}</span>
@@ -301,7 +311,7 @@
               </tr>
 
               <tr v-if="!loading && filteredProfiles.length === 0">
-                <td colspan="8">
+                <td colspan="9">
                   <EmptyState title="暂无匹配的协议档" description="点击右上角新增 OpenAI / Anthropic 协议档">
                     <template #action>
                       <button class="btn btn-primary btn-sm" @click="openModal(null)">新增协议档</button>
@@ -1129,7 +1139,7 @@ import { api } from '../api/http'
 import type { Profile, ProfileCheckOut, McpTool, McpHealthCheckResponse } from '../api/types'
 import EmptyState from '../components/common/EmptyState.vue'
 import ProviderLogo, { type ProviderLogoKey } from '../components/ProviderLogo.vue'
-import { getProviderLogoKey } from '../utils/providerLogo'
+import { getModelLogoKey } from '../utils/providerLogo'
 import { PROFILE_VENDORS, getProfileVendor } from '../utils/profileVendors'
 import ProfileModal from '../components/modals/ProfileModal.vue'
 import CheckResultModal from '../components/modals/CheckResultModal.vue'
@@ -2342,11 +2352,34 @@ onMounted(() => {
   min-width: 0;
   flex: 1;
 }
+.model-chip-brand {
+  flex: 0 0 auto;
+}
 .model-chip-name {
   font-size: 13.5px;
   font-weight: 600;
   color: var(--text-primary, #111827);
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.provider-cell-name {
+  overflow: hidden;
+  color: var(--text-secondary, #4b5563);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.model-id-cell {
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.model-id-cell .mono {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

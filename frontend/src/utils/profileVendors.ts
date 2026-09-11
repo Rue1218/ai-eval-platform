@@ -1,5 +1,5 @@
 import type { ProtocolType } from '../api/types'
-import type { ProviderLogoKey } from './providerLogo'
+import { getServiceLogoKey, type ProviderLogoKey } from './providerLogo.ts'
 
 /** 新建入口的十个供应商；真实模型可通过 /models 获取，旧协议档仍可编辑。 */
 export const PROFILE_VENDORS: Array<{ key: ProviderLogoKey; name: string; base_url: string; protocol: ProtocolType; model: string; context_window: number }> = [
@@ -15,12 +15,7 @@ export const PROFILE_VENDORS: Array<{ key: ProviderLogoKey; name: string; base_u
   { key: 'anthropic', name: 'Anthropic', base_url: 'https://api.anthropic.com', protocol: 'anthropic_messages', model: 'claude-sonnet-4-6', context_window: 200000 },
 ]
 
-/** 管理页按服务供应商分组，Agent 按模型品牌展示，两者不混用。 */
-export function getProfileVendor(profile: { provider?: string; base_url?: string }): ProviderLogoKey {
-  if (profile.provider === 'google') return 'gemini'
-  if (PROFILE_VENDORS.some(v => v.key === profile.provider)) return profile.provider as ProviderLogoKey
-  try {
-    const host = new URL(profile.base_url || '').hostname
-    return PROFILE_VENDORS.find(v => new URL(v.base_url).hostname === host)?.key || 'custom'
-  } catch { return 'custom' }
+/** 管理页的分组供应商只读取服务端点与协议档名称，不读取模型 ID。 */
+export function getProfileVendor(profile: { provider?: string; base_url?: string; name?: string }): ProviderLogoKey {
+  return getServiceLogoKey(profile)
 }

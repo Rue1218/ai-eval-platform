@@ -31,7 +31,8 @@
         </div>
         <div class="field">
           <label class="field-label">
-            模型标识名 <span class="req">*</span>
+            <span>模型标识名 <span class="req">*</span></span>
+            <ProviderLogo v-if="form.model.trim()" :provider="getModelLogoKey(form.model)" compact :size="16" />
           </label>
           <div class="row" style="gap: 6px">
             <n-input
@@ -189,6 +190,7 @@
 
 <script setup lang="ts">
 import { PROFILE_VENDORS } from '../../utils/profileVendors'
+import { getModelLogoKey } from '../../utils/providerLogo'
 import ProviderLogo from '../ProviderLogo.vue'
 
 import { ref, computed, watch } from 'vue'
@@ -536,6 +538,9 @@ async function handleSave() {
   gap: 6px;
 }
 .field-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
   font-size: 13px;
   font-weight: 500;
   color: var(--text-secondary);
