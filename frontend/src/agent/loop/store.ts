@@ -1,16 +1,21 @@
 import { reactive, markRaw } from 'vue'
-import { api } from '../../api/http'
-import { AgentLoopWebSocket } from '../../api/agentLoopWs'
-import type { LoopCommand, LoopUi } from '../../api/agentLoopTypes'
-import { createLoopState } from './reducer'
-import { applyTrace, createTrace } from './trace'
+import { AgentLoopWebSocket, type LoopTransportOptions } from '../../api/agentLoopWs.ts'
+import type { LoopCommand, LoopUi } from '../../api/agentLoopTypes.ts'
+import { createLoopState } from './reducer.ts'
+import { applyTrace, createTrace } from './trace.ts'
 
 /** 每会话独立草稿与冻结提交；object URL 仅在当前页面内存中存在。 */
 export interface DraftFile { key: string; id?: string; filename: string; size: number; content_type?: string; source: string; uploading: boolean; progress: number; error?: string; removed: boolean }
 export interface LoopDraft { content: string; files: DraftFile[]; pending?: LoopCommand; pendingInteraction?: string; cancelRequestId?: string; submitting: boolean }
 
+/** transport 工厂：默认创建真实 WebSocket 客户端；测试注入 fake 以驱动帧结算逻辑。 */
+export type LoopClientFactory = (id: string, options: LoopTransportOptions) => AgentLoopWebSocket
+
 /** 页面拥有连接池；切换视图不销毁正在执行的会话。 */
-export function createLoopStore(onRevoke: (id: string) => void) {
+export function createLoopStore(
+  onRevoke: (id: string) => void,
+  createClient: LoopClientFactory = (id, options) => new AgentLoopWebSocket(id, options),
+) {
   const sessions = reactive<Record<string, ReturnType<typeof createLoopState>>>({})
   const traces = reactive<Record<string, ReturnType<typeof createTrace>>>({})
   const capabilities = reactive<Record<string, LoopUi>>({})
@@ -24,11 +29,14 @@ export function createLoopStore(onRevoke: (id: string) => void) {
     sessions[id] = createLoopState(id); traces[id] = createTrace()
     // 新建会话时短票可与 REST 建会并行；首次失败后的重连仍重新领取一次性短票。
     let firstTicket = preparedTicket
-    const client = markRaw(new AgentLoopWebSocket(id, {
+    const client = markRaw(createClient(id, {
       ticket: async () => {
         const ticket = firstTicket
         firstTicket = undefined
-        return ticket ? await ticket : (await api.auth.getWsTicket()).ticket
+        if (ticket) return await ticket
+        // 延迟导入：store 模块保持无 HTTP 依赖，单测无需浏览器 mock。
+        const { api } = await import('../../api/http.ts')
+        return (await api.auth.getWsTicket()).ticket
       },
       state: () => sessions[id], replace: value => { sessions[id] = value },
       onFrame: frame => {
