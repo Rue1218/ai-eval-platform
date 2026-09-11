@@ -327,7 +327,7 @@ import TimeIcon from 'naive-ui/es/_internal/icons/Time'
 import http, { ApiError, api } from '../../../api/http'
 import { createRequestId } from '../../../utils/requestId'
 import type { AttachmentReference, AgentSession } from '../../../api/types'
-import type { ConversationMetrics, Data, Effort, InteractionRecord, LoopAgent, LoopProfile, LoopRecord, LoopUi, LoopUsage, TaskPlanDisplay, ToolRun } from '../../../api/agentLoopTypes'
+import type { ConversationMetrics, Data, Effort, InteractionRecord, LoopAgent, LoopProfile, LoopRecord, LoopUi, TaskPlanDisplay, ToolRun } from '../../../api/agentLoopTypes'
 import { conversationRows, identity } from '../../../agent/loop/reducer'
 import type { LoopStore } from '../../../agent/loop/store'
 import { useAuthStore } from '../../../stores/auth'
@@ -343,7 +343,8 @@ import TaskRunCard from './TaskRunCard.vue'
 import ReasoningBlock from './ReasoningBlock.vue'
 import TraceWorkspace from './TraceWorkspace.vue'
 import { isTaskTool, taskCardSnapshot } from '../../../agent/loop/taskPresentation'
-import { calculateTurnSummaries, type TurnSummary } from '../../../agent/loop/turnSummary'
+import { calculateTurnSummaries, formatDuration, formatTokens, tokenValue, type TurnSummary } from '../../../agent/loop/turnSummary'
+import { assistantKeysByTurn, conversationMetricsFrom, firstAssistantInTurn, pickAgent, pickProfile } from '../../../agent/loop/workspaceDerived'
 
 const props = withDefaults(
   defineProps<{
@@ -524,64 +525,23 @@ const visibleRows = computed(() => rows.value.slice(-shown.value))
 /** 只读取 task_plan.updated 的会话快照；工具调用草稿与失败结果不能改变抽屉。 */
 const taskPlan = computed<TaskPlanDisplay | null>(() => state.value?.taskPlan || null)
 
-function getTurnIdentifier(row: LoopRecord): string {
-  if (row.correlation?.turn_id) return `turn_id:${row.correlation.turn_id}`
-  if (row.correlation?.turn !== undefined) return `turn:${row.correlation.turn}`
-  return `key:${row.key}`
-}
-
-const firstAssistantKeyByTurn = computed<Map<string, string>>(() => {
-  const map = new Map<string, string>()
-  for (const r of rows.value) {
-    const isAssistant = r.role !== 'user' && !('status' in r && 'name' in r)
-    if (!isAssistant) continue
-    const turnKey = getTurnIdentifier(r)
-    if (!map.has(turnKey)) {
-      map.set(turnKey, r.key)
-    }
-  }
-  return map
-})
+/** 轮次分组与首条判定抽离到 workspaceDerived（纯函数可单测）；此处仅保留 computed 缓存。 */
+const firstAssistantKeyByTurn = computed<Map<string, string>>(() => assistantKeysByTurn(rows.value))
 
 function isFirstAssistantInTurn(row: LoopRecord): boolean {
-  const turnKey = getTurnIdentifier(row)
-  const firstKey = firstAssistantKeyByTurn.value.get(turnKey)
-  return !firstKey || firstKey === row.key
+  return firstAssistantInTurn(row, firstAssistantKeyByTurn.value)
 }
 
 const busy = computed(() => !!state.value?.activeTurn)
 /** 草稿协议档可独立于平台默认项选择；后端在提交时再次校验。 */
-const selectedProfile = computed<LoopProfile | null>(() => ui.value?.profiles.find(item => item.id === selectedProfileId.value) || ui.value?.profile || null)
+const selectedProfile = computed<LoopProfile | null>(() => pickProfile(ui.value, selectedProfileId.value))
 /** 草稿专家可独立选择；后端按会话最近一轮记忆并在提交时复核（未知 ID 回落默认专家）。 */
-const selectedAgent = computed<LoopAgent | null>(() => {
-  const list = ui.value?.agents || []
-  return list.find(item => item.id === selectedAgentId.value) || list.find(item => item.default) || null
-})
+const selectedAgent = computed<LoopAgent | null>(() => pickAgent(ui.value, selectedAgentId.value))
 const ready = computed(() => !!selectedProfile.value && !!effort.value && (props.sessionId ? !!state.value?.ready : !!ui.value?.enabled))
 const canControl = computed(() => !!state.value?.controlled && !!ui.value?.permissions.interactions)
 const summary = computed(() => Object.values(state.value?.attempts || {}).sort((a,b)=>b.first_cursor-a.first_cursor)[0]?.request_summary)
 /** 仅聚合已提交的上游 usage；缺字段代表上游未返回，不能当作零或自行估算。 */
-const conversationMetrics = computed<ConversationMetrics>(() => {
-  let inputTokens = 0, outputTokens = 0, modelLatencyMs = 0, cacheReadTokens = 0, hasCacheUsage = false
-  for (const attempt of Object.values(state.value?.attempts || {})) {
-    const usage = attempt.usage
-    if (!usage) continue
-    const input = tokenValue(usage.prompt_tokens), output = tokenValue(usage.completion_tokens)
-    inputTokens += input; outputTokens += output
-    const lat = tokenValue(attempt.latency_ms) || tokenValue((usage as any)?.latency_ms)
-    if (input > 0 && output > 0 && lat > 0) modelLatencyMs += lat
-    const cached = tokenValue(usage.cache_read_input_tokens) || tokenValue(usage.cached_tokens)
-    if (cached > 0 || typeof usage.cache_read_input_tokens === 'number' || typeof usage.cached_tokens === 'number') {
-      hasCacheUsage = true; cacheReadTokens += cached
-    }
-  }
-  return {
-    inputTokens,
-    outputTokens,
-    outputTokensPerSecond: outputTokens > 0 && modelLatencyMs > 0 ? outputTokens / (modelLatencyMs / 1000) : null,
-    cacheHitRate: hasCacheUsage && inputTokens > 0 ? cacheReadTokens / inputTokens * 100 : null,
-  }
-})
+const conversationMetrics = computed<ConversationMetrics>(() => conversationMetricsFrom(state.value?.attempts))
 const tasks = computed(() => Object.values(state.value?.tasks || {}))
 /** 从脱敏参数/结果解析 task_id，再关联实时 Worker 事实，不能靠工具名称猜测任务。 */
 function taskForTool(tool: ToolRun): LoopRecord | null {
@@ -756,24 +716,7 @@ function formatSpeed(value: number | null): string {
 function formatRate(value: number | null): string {
   return value === null ? '—' : `${value.toFixed(value >= 10 ? 0 : 1)}%`
 }
-function tokenValue(value: unknown): number { return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0 }
-function answerTokens(row: LoopRecord): number | null {
-  const usage = row.usage as LoopUsage | undefined
-  if (!usage) return null
-  const total = tokenValue(usage.total_tokens)
-  return total > 0 ? total : tokenValue(usage.prompt_tokens) + tokenValue(usage.completion_tokens)
-}
-function formatTokens(value: number | null | undefined): string {
-  if (value === null || value === undefined || !Number.isFinite(value)) return '—'
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}M`
-  if (value >= 1_000) return `${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)}K`
-  return String(Math.round(value))
-}
-function formatDuration(value: unknown): string {
-  const milliseconds = tokenValue(value)
-  if (typeof value !== 'number' || !Number.isFinite(value)) return '—'
-  return milliseconds < 1000 ? `${milliseconds} ms` : `${(milliseconds / 1000).toFixed(milliseconds >= 10_000 ? 0 : 1)} s`
-}
+/** tokenValue / formatTokens / formatDuration 与 turnSummary 同源（顶部导入），消除双份实现。 */
 function formatTimestamp(value?: string): string {
   if (!value) return ''
   const date = new Date(value)
