@@ -74,15 +74,22 @@ def test_redact_is_pure_and_does_not_mutate_input():
     assert out is not source and out["nested"] is not source["nested"]
 
 
-def test_redact_sensitive_key_with_container_value_is_known_gap():
-    """已知边界：敏感键的值是容器时不抹除（仅递归内部键）。
+def test_redact_masks_sensitive_key_with_container_value():
+    """安全收紧：敏感键的值是容器时整体抹除，避免递归绕过键级脱敏。"""
+    out = redact({
+        "api_key": {"value": "sk-abcdef123456"},
+        "cookie": ["session=abc"],
+        "note": {"text": "keep"},
+    })
+    assert out["api_key"] == "***"
+    assert out["cookie"] == "***"
+    assert out["note"] == {"text": "keep"}  # 非敏感键仍递归脱敏
 
-    记录当前行为供后续决策：``{"api_key": {"value": "sk-xxx"}}`` 中
-    内层 "value" 非敏感键，因此内容原样保留。若安全侧要求抹除，
-    需调整 ``redact`` 对容器值命中敏感键时的处理。
-    """
-    out = redact({"api_key": {"value": "sk-abcdef123456"}})
-    assert out == {"api_key": {"value": "sk-abcdef123456"}}
+
+def test_redact_for_log_masks_sensitive_container_value():
+    """日志脱敏同样整体抹除敏感键的容器值。"""
+    out = redact_for_log({"authorization": {"scheme": "Bearer", "token": "x"}})
+    assert out["authorization"] == "***"
 
 
 def test_redact_for_log_is_stricter_than_redact():
