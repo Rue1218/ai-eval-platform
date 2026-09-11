@@ -11,6 +11,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 from sqlalchemy.orm import Session
 
+import app.harness.execution.dispatch_common as dispatch_common
+import app.harness.execution.dispatch_web as dispatch_web
 import app.harness.execution.toolnode as toolnode_mod
 from app.errors import AppError, ErrorCode
 from app.harness.contracts import ToolCall
@@ -1175,7 +1177,7 @@ def test_web_search_projects_safe_structured_results(monkeypatch) -> None:
         return _FakeResponse()
 
     monkeypatch.setattr(settings, "firecrawl_api_key", "private-key")
-    monkeypatch.setattr(dispatch, "urlopen", fake_urlopen)
+    monkeypatch.setattr(dispatch_web, "urlopen", fake_urlopen)
     result = dispatch.web_search("LangGraph", limit=1, timeout_s=1.0)
     data = result.to_tool_data()
     assert result.results[0]["title"] == "LangGraph"
@@ -1195,7 +1197,7 @@ def test_web_fetch_rejects_internal_targets(monkeypatch) -> None:
     def fake_urlopen(*_args, **_kwargs):
         raise AssertionError("SSRF 校验未拦截，urlopen 不应被调用")
 
-    monkeypatch.setattr(dispatch, "urlopen", fake_urlopen)
+    monkeypatch.setattr(dispatch_web, "urlopen", fake_urlopen)
     blocked_urls = (
         "http://127.0.0.1:8000/api/health",
         "http://localhost:8000/api/health",
@@ -1257,12 +1259,12 @@ def test_web_fetch_allows_public_target(monkeypatch) -> None:
             assert timeout == 1.0
             return _FakeResponse(b"<html>public</html>")
 
-    monkeypatch.setattr(dispatch, "build_opener", lambda *_a, **_k: _FakeOpener())
+    monkeypatch.setattr(dispatch_web, "build_opener", lambda *_a, **_k: _FakeOpener())
     # 公网 IP 字面量：无需 DNS，直接放行
     assert "public" in dispatch.web_fetch("http://93.184.216.34/", timeout_s=1.0).content
     # 与 HTTP 一样固定 DNS 响应，避免本机代理/离线解析改变本例的公网前提。
-    monkeypatch.setattr(dispatch.socket, "getaddrinfo", lambda *_a, **_k: [
-        (dispatch.socket.AF_INET, dispatch.socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0)),
+    monkeypatch.setattr(dispatch_common.socket, "getaddrinfo", lambda *_a, **_k: [
+        (dispatch_common.socket.AF_INET, dispatch_common.socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0)),
     ])
     result = dispatch.web_fetch("http://example.com/", timeout_s=1.0)
     assert "public" in result.content
@@ -1316,7 +1318,7 @@ def test_web_fetch_content_budget_and_card_preview(monkeypatch) -> None:
 
     # 1) 介于旧 8000 与新 60000 预算之间的长文不再被截半
     monkeypatch.setattr(
-        dispatch, "build_opener", lambda *_a, **_k: _FakeOpener(b"x" * 20_000)
+        dispatch_web, "build_opener", lambda *_a, **_k: _FakeOpener(b"x" * 20_000)
     )
     mid = dispatch.web_fetch("http://93.184.216.34/long", format="text", timeout_s=1.0)
     assert len(mid.content) == 20_000
@@ -1324,10 +1326,10 @@ def test_web_fetch_content_budget_and_card_preview(monkeypatch) -> None:
 
     # 2) 超出 60000 预算仍受控截断，并带诚实标记
     monkeypatch.setattr(
-        dispatch, "build_opener", lambda *_a, **_k: _FakeOpener(b"y" * 61_000)
+        dispatch_web, "build_opener", lambda *_a, **_k: _FakeOpener(b"y" * 61_000)
     )
     over = dispatch.web_fetch("http://93.184.216.34/long", format="text", timeout_s=1.0)
-    assert len(over.content) == dispatch.WEB_FETCH_MAX_CHARS
+    assert len(over.content) == dispatch_web.WEB_FETCH_MAX_CHARS
     assert over.truncated is True
 
     # 3) 卡片预览与 preview_char_limit() 同源，上限随数据下发
@@ -1382,7 +1384,7 @@ def test_web_fetch_streams_direct_plain_text_before_completion(monkeypatch) -> N
             assert timeout == 1.0
             return _FakeResponse(("第一行\\n第二行\\n" * 1_000).encode("utf-8"))
 
-    monkeypatch.setattr(dispatch, "build_opener", lambda *_a, **_k: _FakeOpener())
+    monkeypatch.setattr(dispatch_web, "build_opener", lambda *_a, **_k: _FakeOpener())
     chunks: list[tuple[str, str, int | None]] = []
     stages: list[tuple[str, str]] = []
     result = dispatch.web_fetch(
@@ -1424,7 +1426,6 @@ _ARTICLE_HTML = """<!DOCTYPE html>
 
 def _install_fake_html_fetch(monkeypatch, body: bytes) -> None:
     """给 web_fetch 直抓路径装上返回固定 HTML 的假 opener（测试辅助）。"""
-    from app.harness.execution import dispatch
 
     class _FakeHeaders:
         def get_content_type(self) -> str:
@@ -1455,7 +1456,7 @@ def _install_fake_html_fetch(monkeypatch, body: bytes) -> None:
             _ = timeout
             return _FakeResponse()
 
-    monkeypatch.setattr(dispatch, "build_opener", lambda *_a, **_k: _FakeOpener())
+    monkeypatch.setattr(dispatch_web, "build_opener", lambda *_a, **_k: _FakeOpener())
 
 
 def test_web_fetch_trafilatura_markdown_extraction(monkeypatch) -> None:
@@ -1472,7 +1473,7 @@ def test_web_fetch_trafilatura_markdown_extraction(monkeypatch) -> None:
         return "# Agent设计模式详解\n\n正文含 [ReAct 模式](https://example.com/react-paper)。"
 
     monkeypatch.setattr(
-        dispatch, "_load_trafilatura", lambda: SimpleNamespace(extract=_fake_extract)
+        dispatch_web, "_load_trafilatura", lambda: SimpleNamespace(extract=_fake_extract)
     )
     _install_fake_html_fetch(monkeypatch, _ARTICLE_HTML.encode("utf-8"))
     result = dispatch.web_fetch("http://93.184.216.34/article", format="markdown", timeout_s=1.0)
@@ -1489,7 +1490,7 @@ def test_web_fetch_falls_back_without_trafilatura(monkeypatch) -> None:
     """未安装 trafilatura 时降级回 _TextExtractor，格式诚实保持 text。"""
     from app.harness.execution import dispatch
 
-    monkeypatch.setattr(dispatch, "_load_trafilatura", lambda: None)
+    monkeypatch.setattr(dispatch_web, "_load_trafilatura", lambda: None)
     _install_fake_html_fetch(monkeypatch, _ARTICLE_HTML.encode("utf-8"))
     result = dispatch.web_fetch("http://93.184.216.34/article", format="markdown", timeout_s=1.0)
     assert result.format == "text"
@@ -1507,7 +1508,7 @@ def test_web_fetch_falls_back_when_trafilatura_raises(monkeypatch) -> None:
         raise RuntimeError("extractor exploded")
 
     monkeypatch.setattr(
-        dispatch, "_load_trafilatura", lambda: SimpleNamespace(extract=_boom)
+        dispatch_web, "_load_trafilatura", lambda: SimpleNamespace(extract=_boom)
     )
     _install_fake_html_fetch(monkeypatch, _ARTICLE_HTML.encode("utf-8"))
     result = dispatch.web_fetch("http://93.184.216.34/article", format="markdown", timeout_s=1.0)
@@ -1619,7 +1620,7 @@ def test_web_fetch_integration_reachable_when_guard_disabled(loopback_server, mo
     """集成对照：绕过 SSRF 校验后同一回环服务可正常抓取，证明拦截来自校验本身而非环境。"""
     from app.harness.execution import dispatch
 
-    monkeypatch.setattr(dispatch, "_reject_internal_target", lambda _host: None)
+    monkeypatch.setattr(dispatch_web, "_reject_internal_target", lambda _host: None)
     result = dispatch.web_fetch(loopback_server, timeout_s=3.0)
     assert "integration-ok" in result.content
     assert _RecordingHandler.requests == ["/health"]
