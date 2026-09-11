@@ -2195,6 +2195,9 @@ onMounted(() => {
     flex: 1;
     width: auto;
   }
+  .vendor-models-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* 协议档筛选工具条 */
@@ -2295,6 +2298,7 @@ onMounted(() => {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
   gap: 12px;
+  width: 100%;
 }
 .model-chip-card {
   background: var(--bg-card, #ffffff);
@@ -2305,6 +2309,8 @@ onMounted(() => {
   flex-direction: column;
   gap: 10px;
   position: relative;
+  min-width: 0;
+  box-sizing: border-box;
   transition: all 0.22s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .model-chip-card:hover {
