@@ -222,9 +222,14 @@ watch(
 .status-lang {
   padding: 1px 8px;
   border-radius: 4px;
-  background: rgba(99, 102, 241, 0.1);
-  color: var(--accent-ai, #6366f1);
+  background: #e6f1ec;
+  color: #1f5947;
   font-weight: 500;
   font-size: 11px;
+}
+
+[data-theme='dark'] .status-lang {
+  background: rgba(22, 151, 122, 0.18);
+  color: #34d399;
 }
 </style>

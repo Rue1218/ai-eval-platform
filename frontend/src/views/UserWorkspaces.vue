@@ -39,7 +39,11 @@
 
       <div class="header-right">
         <button class="btn btn-sm btn-primary" :disabled="busy" @click="openCreateModal">
-          <span class="btn-icon">+</span> 新建工作区
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
+          <span>新建工作区</span>
         </button>
         <template v-if="currentWorkspace && !currentWorkspace.deleted">
           <button class="btn btn-sm" :disabled="busy" @click="openRenameModal(currentWorkspace)">
@@ -163,7 +167,9 @@
                     :disabled="!currentWorkspace || currentWorkspace.deleted"
                     @click.stop="openRenamePathModal(node)"
                   >
-                    ✏️
+                    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+                    </svg>
                   </button>
                   <button
                     class="node-act-btn btn-del"
@@ -171,7 +177,10 @@
                     :disabled="!currentWorkspace || currentWorkspace.deleted"
                     @click.stop="confirmDeletePath(node)"
                   >
-                    🗑️
+                    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <polyline points="3 6 5 6 21 6" />
+                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                    </svg>
                   </button>
                 </div>
               </div>
@@ -214,10 +223,18 @@
 
             <div class="quick-create-strip">
               <button class="btn btn-sm" :disabled="!currentWorkspace || currentWorkspace.deleted" @click="quickCreateCode">
-                + 新建 Python 脚本
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="12" y1="5" x2="12" y2="19" />
+                  <line x1="5" y1="12" x2="19" y2="12" />
+                </svg>
+                <span>新建 Python 脚本</span>
               </button>
               <button class="btn btn-sm" :disabled="!currentWorkspace || currentWorkspace.deleted" @click="quickCreateMarkdown">
-                + 新建 Markdown 报告
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="12" y1="5" x2="12" y2="19" />
+                  <line x1="5" y1="12" x2="19" y2="12" />
+                </svg>
+                <span>新建 Markdown 报告</span>
               </button>
             </div>
           </div>
@@ -271,7 +288,12 @@
                 :disabled="saving || !isDirty || currentWorkspace?.deleted"
                 @click="saveCurrentFile"
               >
-                {{ saving ? '保存中…' : '💾 保存 (Ctrl+S)' }}
+                <svg v-if="!saving" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+                  <polyline points="17 21 17 13 7 13 7 21" />
+                  <polyline points="7 3 7 8 15 8" />
+                </svg>
+                <span>{{ saving ? '保存中…' : '保存 (Ctrl+S)' }}</span>
               </button>
 
               <!-- 下载文件按钮 -->
@@ -1070,15 +1092,26 @@ onBeforeUnmount(() => {
 }
 
 .btn-primary {
-  background: var(--accent-ai, #6366f1);
+  background: #1f5947;
   color: #ffffff;
-  border-color: var(--accent-ai, #6366f1);
+  border-color: #1f5947;
 }
 
 .btn-primary:hover:not(:disabled) {
-  background: #4f46e5;
-  border-color: #4f46e5;
+  background: #174a3a;
+  border-color: #174a3a;
   color: #ffffff;
+}
+
+[data-theme='dark'] .btn-primary {
+  background: #16977a;
+  border-color: #16977a;
+  color: #ffffff;
+}
+
+[data-theme='dark'] .btn-primary:hover:not(:disabled) {
+  background: #148369;
+  border-color: #148369;
 }
 
 .btn-danger-soft {
@@ -1144,8 +1177,13 @@ onBeforeUnmount(() => {
 }
 
 .workspace-select:focus {
-  border-color: var(--accent-ai, #6366f1);
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
+  border-color: #1f5947;
+  box-shadow: 0 0 0 2.5px rgba(31, 89, 71, 0.16);
+}
+
+[data-theme='dark'] .workspace-select:focus {
+  border-color: #16977a;
+  box-shadow: 0 0 0 2.5px rgba(22, 151, 122, 0.25);
 }
 
 .status-pill {
@@ -1265,7 +1303,11 @@ onBeforeUnmount(() => {
 }
 
 .explorer-title svg {
-  color: var(--accent-ai, #6366f1);
+  color: #1f5947;
+}
+
+[data-theme='dark'] .explorer-title svg {
+  color: #34d399;
 }
 
 .explorer-actions {
@@ -1290,7 +1332,11 @@ onBeforeUnmount(() => {
 
 .icon-btn:hover:not(:disabled) {
   background: var(--row-hover, rgba(17, 24, 39, 0.05));
-  color: var(--accent-ai, #6366f1);
+  color: #1f5947;
+}
+
+[data-theme='dark'] .icon-btn:hover:not(:disabled) {
+  color: #34d399;
 }
 
 .icon-btn:disabled {
@@ -1319,8 +1365,13 @@ onBeforeUnmount(() => {
 }
 
 .filter-input:focus {
-  border-color: var(--accent-ai, #6366f1);
-  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.12);
+  border-color: #1f5947;
+  box-shadow: 0 0 0 2px rgba(31, 89, 71, 0.16);
+}
+
+[data-theme='dark'] .filter-input:focus {
+  border-color: #16977a;
+  box-shadow: 0 0 0 2px rgba(22, 151, 122, 0.25);
 }
 
 .filter-input::placeholder {
@@ -1372,9 +1423,16 @@ onBeforeUnmount(() => {
 }
 
 .tree-node-row.is-active {
-  background: rgba(99, 102, 241, 0.09);
-  color: var(--accent-ai, #6366f1);
+  background: #e6f1ec;
+  color: #1f5947;
   font-weight: 600;
+  box-shadow: inset 3px 0 0 #1f5947;
+}
+
+[data-theme='dark'] .tree-node-row.is-active {
+  background: rgba(22, 151, 122, 0.16);
+  color: #34d399;
+  box-shadow: inset 3px 0 0 #34d399;
 }
 
 .expand-arrow {
@@ -1472,11 +1530,16 @@ onBeforeUnmount(() => {
 }
 
 .hero-logo {
-  color: var(--accent-ai, #6366f1);
-  background: rgba(99, 102, 241, 0.08);
+  color: #1f5947;
+  background: #e6f1ec;
   padding: 18px;
   border-radius: 20px;
   display: inline-flex;
+}
+
+[data-theme='dark'] .hero-logo {
+  color: #34d399;
+  background: rgba(22, 151, 122, 0.16);
 }
 
 .hero-title {
@@ -1513,15 +1576,23 @@ onBeforeUnmount(() => {
 }
 
 .shortcut-card:hover {
-  border-color: var(--accent-ai, #6366f1);
+  border-color: #1f5947;
   transform: translateY(-1px);
+}
+
+[data-theme='dark'] .shortcut-card:hover {
+  border-color: #16977a;
 }
 
 .shortcut-key {
   font-family: var(--font-mono, monospace);
   font-size: 13.5px;
   font-weight: 600;
-  color: var(--accent-ai, #6366f1);
+  color: #1f5947;
+}
+
+[data-theme='dark'] .shortcut-key {
+  color: #34d399;
 }
 
 .shortcut-desc {
@@ -1622,9 +1693,14 @@ onBeforeUnmount(() => {
 }
 
 .mode-btn.is-active {
-  background: var(--accent-ai, #6366f1);
+  background: #1f5947;
   color: #ffffff;
   font-weight: 500;
+}
+
+[data-theme='dark'] .mode-btn.is-active {
+  background: #16977a;
+  color: #ffffff;
 }
 
 .close-file-btn {
@@ -1818,8 +1894,13 @@ onBeforeUnmount(() => {
 }
 
 .modal-input:focus {
-  border-color: var(--accent-ai, #6366f1);
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
+  border-color: #1f5947;
+  box-shadow: 0 0 0 3px rgba(31, 89, 71, 0.16);
+}
+
+[data-theme='dark'] .modal-input:focus {
+  border-color: #16977a;
+  box-shadow: 0 0 0 3px rgba(22, 151, 122, 0.25);
 }
 
 .modal-actions {
