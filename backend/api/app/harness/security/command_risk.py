@@ -10,7 +10,6 @@ destructive（破坏，三档都审批）、normal（普通，按档位）。
 
 from __future__ import annotations
 
-import os
 import posixpath
 import re
 import shlex
@@ -54,6 +53,7 @@ def _is_system_target(token: str) -> bool:
         return True
     if not t.startswith("/"):
         return False
+    # 待执行的是 Linux 沙箱中的 bash；宿主即使是 Windows 也必须按 POSIX 路径归一。
     normalized = posixpath.normpath(t)
     return normalized in _SYSTEM_PATHS
 
@@ -63,7 +63,7 @@ def _strip_prefixes(tokens: list[str]) -> list[str]:
     idx = 0
     while idx < len(tokens) and "=" in tokens[idx] and not tokens[idx].startswith("-"):
         idx += 1
-    while idx < len(tokens) and os.path.basename(tokens[idx]) in _PREFIXES:
+    while idx < len(tokens) and posixpath.basename(tokens[idx]) in _PREFIXES:
         idx += 1
     return tokens[idx:]
 
@@ -84,7 +84,7 @@ def _classify_segment(segment: str) -> Risk:
     real = _strip_prefixes(tokens)
     if not real:
         return "normal"
-    cmd = os.path.basename(real[0])
+    cmd = posixpath.basename(real[0])
     rest = real[1:]
     # 灾难：整盘/系统目录递归删除、块设备写、系统目录写入
     if cmd.startswith("mkfs") or cmd in _DISASTER_CMDS:

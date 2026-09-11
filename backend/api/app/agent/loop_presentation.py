@@ -3,6 +3,7 @@
 import json
 from dataclasses import replace
 
+from app.harness.execution.task_contract import canonical_task_tool_name
 from app.harness.security.loop_redaction import redact_for_transport
 from app.llm.loop_contracts import LlmRequestError
 from app.llm.resolver import resolve_request
@@ -20,14 +21,13 @@ TOOL_FIELDS = {
     "task.status": "task_id",
     "task.cancel": "task_id",
 }
-WIRE_NAMES = {"platform_task_" + action: "task." + action for action in ("create", "status", "cancel")}
 PREVIEW_LIMIT = 12000
 
 
 def tool_display(source: dict, *, result: bool = False) -> dict:
     """仅对登记工具投影安全预览；错误输出只公开归一错误码。"""
     wire = source.get("name", "")
-    name = WIRE_NAMES.get(wire, wire)
+    name = canonical_task_tool_name(wire)
     display = {"version": 1, "title": name, "registry_name": name, "wire_name": wire,
                "format": "text", "truncated": False}
     if name not in TOOL_FIELDS:

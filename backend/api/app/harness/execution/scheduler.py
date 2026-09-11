@@ -117,10 +117,22 @@ class ToolScheduler:
         """兼容源构造接口，允许与 Runtime 共用注入的审批 broker。"""
         self._approval_broker = approval_broker if approval_broker is not None else broker
         self._settings = settings
-        self._by_name = {tool.name: tool for tool in tools}
+        self._by_name: dict[str, Any] = {}
+        for tool in tools:
+            # 普通工具只有 ``name``；任务桥额外声明注册名/MCP 全名兼容别名。
+            aliases = getattr(tool, "aliases", (tool.name,))
+            if not isinstance(aliases, tuple | list | set | frozenset):
+                raise ValueError("工具别名必须是字符串集合")
+            for name in dict.fromkeys(aliases):
+                if not isinstance(name, str) or not name:
+                    raise ValueError("工具名称必须是非空字符串")
+                existing = self._by_name.get(name)
+                if existing is not None and existing is not tool:
+                    raise ValueError("工具名不能重复")
+                self._by_name[name] = tool
         self._max_parallel = settings.dsh_max_parallel_tool_calls
-        if self._max_parallel < 1 or len(self._by_name) != len(tools):
-            raise ValueError("并发数必须为正，工具名不能重复")
+        if self._max_parallel < 1:
+            raise ValueError("并发数必须为正")
 
     def _mode_for_call(self, call: dict[str, Any]) -> ToolExecutionMode:
         name = call.get("name")
@@ -242,6 +254,7 @@ class ToolScheduler:
                 slot.tool = tool.bind_call({
                     "session_id": log.session_id, "turn": turn, "step": step,
                     "attempt_id": attempt_id, "call_id": call_id, "call_seq": call_seq,
+                    "wire_name": name,
                 })
             except AppError as exc:
                 slot.result = _permission_result(exc)

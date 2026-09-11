@@ -37,6 +37,7 @@
           <button v-if="shown < rows.length" class="history-more" @click="shown+=80">显示更早的 {{ Math.min(80, rows.length-shown) }} 条记录</button>
           <template v-for="row in visibleRows" :key="row.key">
             <article v-if="row.role==='user'" class="loop-message user"><header>你</header><div class="history-files"><AttachmentPreview v-for="file in attachments[row.key] || []" :key="file.file_id" :attachment="file"/></div><p>{{ row.content }}</p></article>
+            <TaskRunCard v-else-if="'status' in row && 'name' in row && isTaskTool((row as ToolRun).name)" :tool="row as ToolRun" :task="taskForTool(row as ToolRun)" :interactions="interactions(row)" :can-control="canControl" :online="!!state?.ready" @respond="respond"/>
             <ToolRunCard v-else-if="'status' in row && 'name' in row" :tool="row as ToolRun" :interactions="interactions(row)" :can-control="canControl" :online="!!state?.ready" @respond="respond"/>
             <article v-else class="loop-message assistant" :class="{ 'is-continuation': !isFirstAssistantInTurn(row) }">
               <header v-if="isFirstAssistantInTurn(row) || row.text" class="assistant-header">
@@ -68,18 +69,21 @@
           <div class="loop-composer-wrap">
             <div class="composer-top-bar">
               <n-popover
-                v-model:show="workspacePopoverOpen"
+                :show="workspacePopoverOpen"
                 trigger="click"
-                placement="top-start"
+                placement="bottom-start"
                 :show-arrow="false"
+                :duration="220"
+                :content-style="{ padding: '0' }"
+                class="workspace-popover-layer"
+                @update:show="handleWorkspacePopoverVisibility"
               >
                 <template #trigger>
                   <button
                     type="button"
                     class="composer-ws-btn"
-                    :class="{ 'has-ws': !!activeWorkspaceId, 'is-draft': !sessionId }"
+                    :class="{ 'has-ws': !!activeWorkspaceId, 'is-draft': !sessionId, 'is-open': workspacePopoverOpen }"
                     :title="activeWorkspaceId ? `当前绑定工作区：${activeWorkspaceName}` : '点击选择或新建沙箱工作区（可选）'"
-                    @click="handleOpenWorkspacePopover"
                   >
                     <span class="ws-btn-folder-icon" aria-hidden="true">
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -95,7 +99,7 @@
                   </button>
                 </template>
 
-                <div class="ws-popover-card">
+                <div v-if="workspacePopoverOpen" :key="workspacePopoverEpoch" class="ws-popover-card">
                   <header class="ws-popover-header">
                     <div class="ws-popover-title">
                       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -293,8 +297,10 @@ import MarkdownView from '../MarkdownView.vue'
 import AttachmentPreview from '../AttachmentPreview.vue'
 import AgentComposer from './AgentComposer.vue'
 import ToolRunCard from './ToolRunCard.vue'
+import TaskRunCard from './TaskRunCard.vue'
 import ReasoningBlock from './ReasoningBlock.vue'
 import TraceWorkspace from './TraceWorkspace.vue'
+import { isTaskTool, taskCardSnapshot } from '../../../agent/loop/taskPresentation'
 
 const props = withDefaults(
   defineProps<{
@@ -312,6 +318,7 @@ const message = useMessage()
 const workspaces = ref<Array<{ id: string; name: string }>>([])
 const loadingWorkspaces = ref(false)
 const workspacePopoverOpen = ref(false)
+const workspacePopoverEpoch = ref(0)
 const draftWorkspaceId = ref<string | null>(null)
 const draftWorkspaceName = ref<string>('')
 const newWorkspaceName = ref('')
@@ -378,8 +385,16 @@ async function loadWorkspaces(autoSelect = true) {
 }
 
 function handleOpenWorkspacePopover() {
-  workspacePopoverOpen.value = !workspacePopoverOpen.value
-  if (workspacePopoverOpen.value && !workspaces.value.length) {
+  handleWorkspacePopoverVisibility(!workspacePopoverOpen.value)
+}
+
+/** 统一由 Naive Popover 回调驱动开关，避免点击触发器时被双重翻转。 */
+function handleWorkspacePopoverVisibility(open: boolean) {
+  workspacePopoverOpen.value = open
+  if (open) {
+    workspacePopoverEpoch.value += 1
+  }
+  if (open && !workspaces.value.length) {
     void loadWorkspaces(false)
   }
 }
@@ -424,8 +439,7 @@ async function handleCreateWorkspace() {
 }
 
 function handleRequestWorkspace() {
-  workspacePopoverOpen.value = true
-  if (!workspaces.value.length) void loadWorkspaces(false)
+  handleWorkspacePopoverVisibility(true)
 }
 const runtimeOpen = ref(false), error = ref(''), effort = ref<Effort | null>(null)
 const ui = ref<LoopUi | null>(null), selectedProfileId = ref(''), selectedAgentId = ref(''), shown = ref(80), attachments = ref<Record<string, AttachmentReference[]>>({})
@@ -499,6 +513,11 @@ const conversationMetrics = computed<ConversationMetrics>(() => {
   }
 })
 const tasks = computed(() => Object.values(state.value?.tasks || {}))
+/** 从脱敏参数/结果解析 task_id，再关联实时 Worker 事实，不能靠工具名称猜测任务。 */
+function taskForTool(tool: ToolRun): LoopRecord | null {
+  const taskId = taskCardSnapshot(tool, null).taskId
+  return taskId ? state.value?.tasks[taskId] || null : null
+}
 const quarantined = computed(() => Object.values(state.value?.executions || {}).filter(e => e.event === 'execution.quarantined'))
 const finishLabels: Record<string,string> = { max_tokens:'达到输出上限，本轮已结束', max_steps:'达到步骤上限，本轮已结束', cancelled:'本轮已取消', interrupted:'本轮已中断', error:'本轮失败，请查看错误信息' }
 const phaseLabels: Record<string,string> = { idle:'就绪',model:'模型处理中',thinking:'正在思考',answering:'正在回答',tools:'工具执行中',waiting_interaction:'等待交互',retry_wait:'等待重试',completed:'已完成',...finishLabels }
@@ -1128,7 +1147,8 @@ async function hydrateAttachments() {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 8px;
+  min-height: 28px;
+  margin-bottom: 6px;
   padding: 0 4px;
 }
 .composer-ws-btn {
@@ -1143,8 +1163,20 @@ async function hydrateAttachments() {
   font-size: 13px;
   font-weight: 550;
   cursor: pointer;
-  transition: all 0.16s ease;
+  position: relative;
+  z-index: 1;
+  transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.16s ease, color 0.16s ease, border-color 0.16s ease;
   user-select: none;
+}
+.composer-ws-btn.is-open {
+  transform: translateY(-8px);
+  background: #edf7f1;
+  border-color: #c6dfd1;
+  color: #174a3a;
+}
+.composer-ws-btn.is-open .ws-btn-arrow {
+  transform: rotate(180deg);
+  color: #1f7155;
 }
 .composer-ws-btn:hover {
   background: #edf3f0;
@@ -1172,6 +1204,7 @@ async function hydrateAttachments() {
   align-items: center;
   color: #7b8e84;
   margin-left: -1px;
+  transition: transform 0.24s cubic-bezier(0.16, 1, 0.3, 1), color 0.16s ease;
 }
 [data-theme='dark'] .composer-ws-btn {
   color: #e2e8f0;
@@ -1193,6 +1226,17 @@ async function hydrateAttachments() {
   box-shadow: 0 10px 30px -4px rgba(23, 74, 58, 0.15), 0 4px 12px -2px rgba(15, 23, 42, 0.08);
   border: 1px solid #d8e4dc;
   font-size: 13px;
+  transform-origin: 22px 0;
+  animation: workspace-popover-enter 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@keyframes workspace-popover-enter {
+  from { opacity: 0; transform: translateY(-10px) scale(0.97); filter: blur(2px); }
+  to { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
+}
+:deep(.workspace-popover-layer) {
+  border: 0;
+  border-radius: 12px;
+  box-shadow: none;
 }
 .ws-popover-header {
   display: flex;
@@ -1359,6 +1403,11 @@ async function hydrateAttachments() {
   background: #1e293b;
   border-color: rgba(255, 255, 255, 0.12);
   box-shadow: 0 10px 30px -4px rgba(0, 0, 0, 0.5);
+}
+@media (prefers-reduced-motion: reduce) {
+  .composer-ws-btn,
+  .ws-btn-arrow { transition: none; }
+  .ws-popover-card { animation: none; }
 }
 [data-theme='dark'] .ws-popover-title {
   color: #f1f5f9;

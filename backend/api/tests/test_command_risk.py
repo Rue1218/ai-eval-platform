@@ -69,6 +69,13 @@ def test_quote_aware_split_ignores_quoted_separators() -> None:
     assert classify('grep "x|y" f.txt') == "normal"
 
 
+def test_posix_paths_are_classified_independently_from_windows_host() -> None:
+    """bash 在 Linux 沙箱执行；Windows 宿主不能把 POSIX 系统路径降为普通路径。"""
+    assert classify("/bin/rm -rf /") == "disaster"
+    assert classify("rm -rf /etc/../etc") == "disaster"
+    assert classify("/sbin/mkfs.ext4 /dev/sda") == "disaster"
+
+
 def test_substitution_promotes_risk() -> None:
     """子命令任一为 disaster/destructive 即整体提升。"""
     assert classify("echo $(cat /etc/hostname)") == "normal"

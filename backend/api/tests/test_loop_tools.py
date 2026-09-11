@@ -16,6 +16,11 @@ from app.harness.execution.loop_bridge import PlatformToolBridge
 from app.harness.execution.loop_tools import ToolExecutionResult, normalize_tool_output
 from app.harness.execution.registry import ToolRegistry, build_default_registry
 from app.harness.execution.scheduler import ToolScheduler
+from app.harness.execution.task_contract import (
+    TASK_TOOL_MCP_NAMES,
+    TASK_TOOL_NAMES,
+    TASK_TOOL_WIRE_NAMES,
+)
 
 
 class MemoryLog:
@@ -77,6 +82,65 @@ def bridge_for(tmp_path, *, registry=None, names=("read", "write", "edit"), auth
 
     return PlatformToolBridge(registry or build_default_registry(), allowed_tools=names,
                               context_factory=context, authorize=authorize or (lambda *args: None), **kwargs)
+
+
+def test_task_tools_share_registry_schema_and_publish_safe_wire_names(tmp_path):
+    """任务工具只从注册表投影 Schema，模型侧继续使用无点号的安全 wire 名。"""
+    from jsonschema import Draft202012Validator
+
+    async def business(*_args):
+        """创建任务的确认桥替身，仅用于验证工具可见性。"""
+        return ToolExecutionResult("{}", "succeeded")
+
+    async def mcp(*_args):
+        """查询/取消 MCP 桥替身，仅用于验证工具可见性。"""
+        return ToolExecutionResult("{}", "succeeded")
+
+    registry = build_default_registry()
+    bridge = bridge_for(tmp_path, registry=registry, names=TASK_TOOL_NAMES,
+                        business=business, mcp=mcp)
+    specs = {spec.name: spec for spec in bridge.specs()}
+
+    assert set(specs) == set(TASK_TOOL_WIRE_NAMES.values())
+    for registry_name in TASK_TOOL_NAMES:
+        wire_name = TASK_TOOL_WIRE_NAMES[registry_name]
+        definition = registry.get(registry_name)
+        assert specs[wire_name].parameters == dict(definition.parameters_schema)
+        assert specs[wire_name].parameters["additionalProperties"] is False
+        Draft202012Validator.check_schema(specs[wire_name].parameters)
+        assert bridge.wire_to_name[wire_name] == registry_name
+        assert bridge.wire_to_name[registry_name] == registry_name
+        assert bridge.wire_to_name[TASK_TOOL_MCP_NAMES[registry_name]] == registry_name
+
+
+@pytest.mark.asyncio
+async def test_task_status_accepts_registered_wire_short_and_mcp_names(tmp_path):
+    """同一任务状态工具可兼容三种既有名称，仍只路由到同一个 MCP tool_id。"""
+    invoked = []
+
+    async def mcp(definition, arguments, _context, identity):
+        """记录实际 MCP 路由与保留的回传 wire 名。"""
+        invoked.append((definition.name, definition.tool_id, dict(arguments), identity["wire_name"]))
+        return ToolExecutionResult("{}", "succeeded")
+
+    bridge = bridge_for(tmp_path, names=("task.status",), mcp=mcp)
+    aliases = (
+        TASK_TOOL_WIRE_NAMES["task.status"],
+        "task.status",
+        TASK_TOOL_MCP_NAMES["task.status"],
+    )
+    _, log = await run(
+        ToolScheduler(settings(), bridge.available_tools()),
+        [call(name, f"call-{index}", task_id=f"task-{index}") for index, name in enumerate(aliases)],
+    )
+
+    assert [item[0] for item in invoked] == ["task.status"] * len(aliases)
+    assert [item[1] for item in invoked] == [TASK_TOOL_MCP_NAMES["task.status"]] * len(aliases)
+    assert [item[3] for item in invoked] == list(aliases)
+    dispatches = [event["data"] for event in log.events if event["type"] == "tool/dispatch"]
+    assert [item["name"] for item in dispatches] == list(aliases)
+    assert all(item["registry_name"] == "task.status" for item in dispatches)
+    assert [item["wire_name"] for item in dispatches] == list(aliases)
 
 
 @pytest.mark.asyncio
