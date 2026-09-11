@@ -46,3 +46,6 @@ data/
 .idea/
 .vscode/
 *.swp
+
+# 设计 QA 截图（本地留存，不入库）
+artifacts/
