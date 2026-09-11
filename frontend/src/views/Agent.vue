@@ -598,6 +598,7 @@ import MarkdownView from '../components/agent/MarkdownView.vue'
 import ContextMeter, { type ContextMeterData } from '../components/agent/ContextMeter.vue'
 import AgentWorkspace from '../components/agent/loop/AgentWorkspace.vue'
 import { createLoopStore } from '../agent/loop/store'
+import { filterSessionsByStatus, legacySessionDot, legacySessionTooltip, loopSessionDot, loopSessionTooltip, sessionStatusFilterLabel } from '../agent/sessionList'
 import ApprovalCard from '../components/agent/ApprovalCard.vue'
 import ClarifyCard from '../components/agent/ClarifyCard.vue'
 import ConfirmCard from '../components/agent/ConfirmCard.vue'
@@ -719,15 +720,7 @@ const sessionStatusFilterOptions = computed<DropdownOption[]>(() => [
 ])
 
 /** 当前选中的状态筛选展示文案 */
-const currentSessionStatusFilterLabel = computed(() => {
-  switch (sessionStatusFilter.value) {
-    case 'running': return '进行中'
-    case 'ready': return '就绪'
-    case 'succeeded': return '成功'
-    case 'failed': return '失败'
-    default: return '状态'
-  }
-})
+const currentSessionStatusFilterLabel = computed(() => sessionStatusFilterLabel(sessionStatusFilter.value))
 
 /** 切换会话状态筛选 */
 function handleSelectSessionStatusFilter(key: string) {
@@ -735,10 +728,7 @@ function handleSelectSessionStatusFilter(key: string) {
 }
 
 /** 按状态筛选后的会话列表 */
-const filteredSessions = computed(() => {
-  if (sessionStatusFilter.value === 'all') return sessions.value
-  return sessions.value.filter((s) => sessionDotClass(s) === sessionStatusFilter.value)
-})
+const filteredSessions = computed(() => filterSessionsByStatus(sessions.value, sessionStatusFilter.value, sessionDotClass))
 
 const selectedSessionIds = ref<string[]>([])
 const deletingSessionIds = new Set<string>()
@@ -868,55 +858,29 @@ const defaultKpis = [
   { value: '0.86', label: '主指标 contain' },
 ]
 
+/** 旧栈会话判定输入：生成中 / 任务（当前会话优先）/ 会话状态 / 当前会话断线。 */
+function legacyDotInput(s: any) {
+  const rt = sessionRuntimes.get(s.id)
+  const generating = Boolean(generatingBySession.value[s.id] || (s.id === currentSessionId.value && isGenerating.value) || rt?.isGenerating)
+  const task = (s.id === currentSessionId.value ? activeTask.value : null) || rt?.activeTask || s.active_task
+  return {
+    generating,
+    taskStatus: task?.status as string | undefined,
+    sessionStatus: s.status as string | undefined,
+    offline: s.id === currentSessionId.value && !isWsOnline.value,
+  }
+}
+
 /** D5 会话列表状态点多态：按 status / active_task / 本轮生成中 / 断线重连 映射 nav-dot 样式，常驻显示就绪状态。 */
 function sessionDotClass(s: any): string {
-  if (s.engine_version === 'agent_loop_v2') {
-    const value = loopStore.sessions[s.id]
-    if (!value) return s.active_task?.status === 'running' || s.active_task?.status === 'queued' ? 'running' : 'ready'
-    if (value.connection !== 'online') return 'offline'
-    if (value.activeTurn || Object.values(value.tasks).some(task => ['running','queued','awaiting_case_confirm'].includes(task.status))) return 'running'
-    return value.phase === 'error' ? 'failed' : value.phase === 'completed' ? 'succeeded' : 'ready'
-  }
-  const rt = sessionRuntimes.get(s.id)
-  const isGen = generatingBySession.value[s.id] || (s.id === currentSessionId.value && isGenerating.value) || rt?.isGenerating
-  if (isGen) return 'running'
-
-  const task = (s.id === currentSessionId.value ? activeTask.value : null) || rt?.activeTask || s.active_task
-  if (task) {
-    if (task.status === 'running' || task.status === 'queued') return 'running'
-    if (task.status === 'failed') return 'failed'
-    if (task.status === 'succeeded') return 'succeeded'
-    if (task.status === 'cancelled') return 'offline'
-  }
-  if (s.status === 'running' || s.status === 'queued') return 'running'
-  if (s.status === 'failed') return 'failed'
-  if (s.status === 'succeeded') return 'succeeded'
-  if (s.id === currentSessionId.value && !isWsOnline.value) return 'offline'
-  return 'ready'
+  if (s.engine_version === 'agent_loop_v2') return loopSessionDot(loopStore.sessions[s.id], s.active_task?.status)
+  return legacySessionDot(legacyDotInput(s))
 }
 
 /** 会话状态提示语（鼠标悬停指示点时展示）。 */
 function sessionDotTooltip(s: any): string {
-  if (s.engine_version === 'agent_loop_v2') {
-    const value = loopStore.sessions[s.id]
-    return !value ? 'AgentLoop 会话' : value.connection !== 'online' ? '连接中断，状态待同步' : value.activeTurn ? 'Agent 回合进行中' : 'Agent 回合已结束；Worker 状态独立'
-  }
-  const rt = sessionRuntimes.get(s.id)
-  const isGen = generatingBySession.value[s.id] || (s.id === currentSessionId.value && isGenerating.value) || rt?.isGenerating
-  if (isGen) return '智能体正在思考生成中…'
-
-  const task = (s.id === currentSessionId.value ? activeTask.value : null) || rt?.activeTask || s.active_task
-  if (task) {
-    if (task.status === 'running' || task.status === 'queued') return '评测任务进行中…'
-    if (task.status === 'failed') return '任务执行失败 (failed)'
-    if (task.status === 'succeeded') return '任务评测成功 (succeeded)'
-    if (task.status === 'cancelled') return '任务已取消 (cancelled)'
-  }
-  if (s.status === 'running' || s.status === 'queued') return '评测任务进行中…'
-  if (s.status === 'failed') return '任务执行失败 (failed)'
-  if (s.status === 'succeeded') return '任务评测成功 (succeeded)'
-  if (s.id === currentSessionId.value && !isWsOnline.value) return 'WebSocket 已断开，正在重连…'
-  return '智能体就绪 (在线)'
+  if (s.engine_version === 'agent_loop_v2') return loopSessionTooltip(loopStore.sessions[s.id])
+  return legacySessionTooltip(legacyDotInput(s))
 }
 
 /* S10 进度坞收尾提示：非空时坞保持可见，2.6s 后隐藏 */
