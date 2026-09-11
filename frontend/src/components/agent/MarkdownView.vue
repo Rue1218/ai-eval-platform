@@ -18,7 +18,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import mermaid from 'mermaid'
 import StructuredDataView from './StructuredDataView.vue'
 import { copyText } from '../../utils/clipboard'
@@ -37,48 +37,91 @@ const props = withDefaults(
 )
 
 const containerRef = ref<HTMLElement | null>(null)
+const renderedSource = ref(props.content)
 let renderSvgCounter = 0
-let mermaidInitialized = false
 let markdownRenderFrame: number | undefined
 let mermaidRenderFrame: number | undefined
-const renderedSource = ref('')
+let currentMermaidTheme: 'light' | 'dark' | null = null
+let themeObserver: MutationObserver | null = null
+
+function isDarkTheme(): boolean {
+  return typeof document !== 'undefined' && document.documentElement.getAttribute('data-theme') === 'dark'
+}
 
 /**
- * 初始化 Mermaid 全局深色主题与渲染配置
+ * 初始化 Mermaid 主题配置（适配平台浅色薄荷绿/深色深空蓝主题体系）
  */
-function initMermaid(): void {
-  if (mermaidInitialized) return
-  mermaid.initialize({
-    startOnLoad: false,
-    theme: 'dark',
-    themeVariables: {
-      darkMode: true,
-      background: '#090d16',
-      primaryColor: '#059669',
-      primaryTextColor: '#f8fafc',
-      primaryBorderColor: '#10b981',
-      lineColor: '#34d399',
-      secondaryColor: '#1e293b',
-      tertiaryColor: '#0f172a',
-      secondaryTextColor: '#cbd5e1',
-      tertiaryTextColor: '#94a3b8',
-      fontSize: '14px',
-      fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
-      nodeBorder: '#10b981',
-      mainBkg: '#0f172a',
-      nodeTextColor: '#f8fafc',
-      actorBkg: '#1e293b',
-      actorBorder: '#10b981',
-      actorTextColor: '#f8fafc',
-      signalColor: '#10b981',
-      signalTextColor: '#f8fafc',
-      clusterBkg: '#0d131f',
-      clusterBorder: '#334155',
-    },
-    securityLevel: 'loose',
-    fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
-  })
-  mermaidInitialized = true
+function initMermaid(force = false): void {
+  const isDark = isDarkTheme()
+  const targetTheme = isDark ? 'dark' : 'light'
+  if (!force && currentMermaidTheme === targetTheme) return
+
+  if (isDark) {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: 'dark',
+      themeVariables: {
+        darkMode: true,
+        background: 'transparent',
+        primaryColor: '#0f3d30',
+        primaryTextColor: '#f8fafc',
+        primaryBorderColor: '#16977a',
+        lineColor: '#34d399',
+        secondaryColor: '#12382c',
+        tertiaryColor: '#0b261e',
+        secondaryTextColor: '#cbd5e1',
+        tertiaryTextColor: '#94a3b8',
+        fontSize: '13.5px',
+        fontFamily: '"Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif',
+        nodeBorder: '#16977a',
+        mainBkg: '#0d2820',
+        nodeTextColor: '#f8fafc',
+        actorBkg: '#111827',
+        actorBorder: '#16977a',
+        actorTextColor: '#f8fafc',
+        signalColor: '#34d399',
+        signalTextColor: '#f8fafc',
+        clusterBkg: '#091c16',
+        clusterBorder: '#1a5c48',
+        edgeLabelBackground: '#0b1915',
+      },
+      securityLevel: 'loose',
+      fontFamily: '"Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif',
+    })
+  } else {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: 'base',
+      themeVariables: {
+        darkMode: false,
+        background: 'transparent',
+        primaryColor: '#e6f1ec',
+        primaryTextColor: '#143d30',
+        primaryBorderColor: '#1f5947',
+        lineColor: '#1f5947',
+        secondaryColor: '#edf5f1',
+        tertiaryColor: '#f3f8f5',
+        secondaryTextColor: '#374151',
+        tertiaryTextColor: '#6b7280',
+        fontSize: '13.5px',
+        fontFamily: '"Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif',
+        nodeBorder: '#1f5947',
+        mainBkg: '#f0f7f4',
+        nodeTextColor: '#143d30',
+        actorBkg: '#ffffff',
+        actorBorder: '#1f5947',
+        actorTextColor: '#143d30',
+        signalColor: '#1f5947',
+        signalTextColor: '#143d30',
+        clusterBkg: '#f7faf8',
+        clusterBorder: '#a3c2b5',
+        edgeLabelBackground: '#ffffff',
+      },
+      securityLevel: 'loose',
+      fontFamily: '"Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif',
+    })
+  }
+  currentMermaidTheme = targetTheme
 }
 
 /**
@@ -445,12 +488,12 @@ function renderMarkdown(raw: string): string {
     return `<div class="md-mermaid-card" data-mermaid-code="${encodedCode}">
       <div class="md-code-head">
         <div class="md-code-lang-tag">
-          <span class="md-code-icon">📊</span>
+          <svg class="md-code-icon-svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><path d="M10 6.5h4"></path><path d="M17.5 10v4"></path></svg>
           <span class="md-code-lang">Mermaid 架构图 / 流程图</span>
         </div>
         <div class="md-mermaid-actions">
-          <button class="md-mermaid-tab-btn active" data-action="tab-chart" type="button">📊 图表</button>
-          <button class="md-mermaid-tab-btn" data-action="tab-code" type="button">💻 源码</button>
+          <button class="md-mermaid-tab-btn active" data-action="tab-chart" type="button">图表</button>
+          <button class="md-mermaid-tab-btn" data-action="tab-code" type="button">源码</button>
           <button class="md-copy-btn" data-copy="${escapedCode}" type="button" title="复制 Mermaid 源码">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
             <span class="md-copy-text">复制</span>
@@ -481,7 +524,7 @@ function renderMarkdown(raw: string): string {
     return `<div class="md-code-card">
       <div class="md-code-head">
         <div class="md-code-lang-tag">
-          <span class="md-code-icon">💻</span>
+          <svg class="md-code-icon-svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>
           <span class="md-code-lang">${escapeHtml(langDisplay)}</span>
         </div>
         <button class="md-copy-btn" data-copy="${escapeHtml(item.code)}" type="button" title="复制代码">
@@ -563,7 +606,30 @@ watch(
   { immediate: true },
 )
 
+onMounted(() => {
+  if (typeof MutationObserver !== 'undefined' && typeof document !== 'undefined') {
+    themeObserver = new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        if (m.type === 'attributes' && m.attributeName === 'data-theme') {
+          initMermaid(true)
+          if (containerRef.value) {
+            const cards = containerRef.value.querySelectorAll<HTMLElement>('.md-mermaid-card[data-mermaid-code]')
+            cards.forEach((card) => card.removeAttribute('data-rendered-code'))
+          }
+          void renderAllMermaidDiagrams()
+          break
+        }
+      }
+    })
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
+  }
+})
+
 onBeforeUnmount(() => {
+  if (themeObserver) {
+    themeObserver.disconnect()
+    themeObserver = null
+  }
   if (markdownRenderFrame !== undefined) window.cancelAnimationFrame(markdownRenderFrame)
   if (mermaidRenderFrame !== undefined) window.cancelAnimationFrame(mermaidRenderFrame)
 })
@@ -622,11 +688,15 @@ function handleContainerClick(e: MouseEvent): void {
 
 <style scoped>
 .markdown-view {
-  font-size: 16.5px;
-  line-height: 1.85;
-  color: var(--text-primary, #f1f5f9);
+  font-size: 15.5px;
+  line-height: 1.8;
+  color: var(--text-primary, #111827);
   word-break: break-word;
   position: relative;
+}
+
+[data-theme='dark'] .markdown-view {
+  color: var(--text-primary, #f9fafb);
 }
 
 .markdown-content {
@@ -636,12 +706,16 @@ function handleContainerClick(e: MouseEvent): void {
 /* 实时打字机光标 */
 .md-streaming-cursor {
   display: inline-block;
-  color: var(--accent-ai, #10b981);
+  color: #1f5947;
   font-weight: 700;
   margin-left: 3px;
   font-size: 15px;
   vertical-align: baseline;
   animation: md-cursor-blink 0.8s infinite ease-in-out;
+}
+
+[data-theme='dark'] .md-streaming-cursor {
+  color: #34d399;
 }
 
 @keyframes md-cursor-blink {
@@ -652,8 +726,8 @@ function handleContainerClick(e: MouseEvent): void {
 /* 段落与文本排版 */
 :deep(.md-p) {
   margin: 0 0 14px;
-  font-size: 16.5px;
-  line-height: 1.85;
+  font-size: 15.5px;
+  line-height: 1.8;
   letter-spacing: 0.01em;
 }
 :deep(.md-p:last-child) {
@@ -669,14 +743,22 @@ function handleContainerClick(e: MouseEvent): void {
 :deep(.md-h6) {
   font-weight: 700;
   line-height: 1.45;
-  color: var(--text-primary, #ffffff);
+  color: var(--text-primary, #111827);
   letter-spacing: 0.02em;
+}
+[data-theme='dark'] :deep(.md-h1),
+[data-theme='dark'] :deep(.md-h2),
+[data-theme='dark'] :deep(.md-h3),
+[data-theme='dark'] :deep(.md-h4),
+[data-theme='dark'] :deep(.md-h5),
+[data-theme='dark'] :deep(.md-h6) {
+  color: var(--text-primary, #f9fafb);
 }
 :deep(.md-h1) {
   font-size: 22px;
   margin: 22px 0 12px;
   padding-bottom: 6px;
-  border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  border-bottom: 1px solid var(--border-subtle, #e5e7eb);
 }
 :deep(.md-h2) {
   font-size: 19.5px;
@@ -687,55 +769,79 @@ function handleContainerClick(e: MouseEvent): void {
   margin: 15px 0 8px;
 }
 :deep(.md-h4) {
-  font-size: 16.5px;
+  font-size: 16px;
   margin: 12px 0 6px;
 }
 :deep(.md-h5),
 :deep(.md-h6) {
-  font-size: 15.5px;
+  font-size: 15px;
   margin: 10px 0 6px;
-  color: var(--text-secondary, #94a3b8);
+  color: var(--text-secondary, #4b5563);
+}
+[data-theme='dark'] :deep(.md-h5),
+[data-theme='dark'] :deep(.md-h6) {
+  color: var(--text-secondary, #9ca3af);
 }
 
 :deep(.md-hr) {
   border: 0;
-  border-top: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  border-top: 1px solid var(--border-subtle, #e5e7eb);
   margin: 18px 0;
+}
+[data-theme='dark'] :deep(.md-hr) {
+  border-top-color: var(--border-subtle, rgba(255, 255, 255, 0.08));
 }
 
 :deep(.md-quote) {
   margin: 12px 0;
   padding: 10px 16px;
-  border-left: 3.5px solid var(--accent-ai, #10b981);
-  background: var(--bg-elevated, rgba(255, 255, 255, 0.035));
+  border-left: 3.5px solid #1f5947;
+  background: #f0f6f3;
   border-radius: 0 8px 8px 0;
-  color: var(--text-secondary, #94a3b8);
-  font-size: 15.5px;
+  color: #263d33;
+  font-size: 15px;
   line-height: 1.75;
+}
+[data-theme='dark'] :deep(.md-quote) {
+  border-left-color: #16977a;
+  background: rgba(22, 151, 122, 0.08);
+  color: #cbd5e1;
 }
 
 /* 行内代码 */
 :deep(.md-inline-code) {
   font-family: var(--font-mono, "JetBrains Mono", "Fira Code", monospace);
-  font-size: 14.5px;
-  background: rgba(16, 185, 129, 0.08);
-  color: var(--accent-ai, #10b981);
+  font-size: 14px;
+  background: #edf5f1;
+  color: #1f5947;
   padding: 2.5px 7px;
   border-radius: 5px;
-  border: 1px solid rgba(16, 185, 129, 0.2);
+  border: 1px solid rgba(31, 89, 71, 0.2);
   margin: 0 2px;
+}
+[data-theme='dark'] :deep(.md-inline-code) {
+  background: rgba(22, 151, 122, 0.15);
+  color: #34d399;
+  border-color: rgba(22, 151, 122, 0.3);
 }
 
 /* 超链接 */
 :deep(.md-link) {
-  color: var(--accent-ai, #10b981);
+  color: #1f5947;
   text-decoration: underline;
   text-underline-offset: 3px;
   font-weight: 500;
-  transition: opacity 0.15s ease;
+  transition: opacity 0.15s ease, color 0.15s ease;
 }
 :deep(.md-link:hover) {
-  opacity: 0.82;
+  opacity: 0.85;
+  color: #174a3a;
+}
+[data-theme='dark'] :deep(.md-link) {
+  color: #34d399;
+}
+[data-theme='dark'] :deep(.md-link:hover) {
+  color: #6ee7b7;
 }
 :deep(.link-arrow) {
   font-size: 12px;
@@ -750,44 +856,68 @@ function handleContainerClick(e: MouseEvent): void {
 :deep(.md-li-bullet) {
   list-style-type: disc;
   margin-bottom: 8px;
-  font-size: 16.5px;
-  line-height: 1.85;
+  font-size: 15.5px;
+  line-height: 1.8;
 }
 :deep(.md-li-bullet::marker) {
-  color: var(--accent-ai, #10b981);
+  color: #1f5947;
+}
+[data-theme='dark'] :deep(.md-li-bullet::marker) {
+  color: #34d399;
 }
 :deep(.md-li-num) {
   list-style-type: decimal;
   margin-bottom: 8px;
-  font-size: 16.5px;
-  line-height: 1.85;
+  font-size: 15.5px;
+  line-height: 1.8;
 }
 :deep(.md-li-num::marker) {
-  color: var(--accent-ai, #10b981);
+  color: #1f5947;
   font-weight: 600;
+}
+[data-theme='dark'] :deep(.md-li-num::marker) {
+  color: #34d399;
 }
 
 /* 围栏代码块卡片 */
 :deep(.md-code-card) {
   margin: 14px 0;
-  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.1));
+  border: 1px solid #d8e2de;
   border-radius: 10px;
   overflow: hidden;
-  background: #090d16;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  background: #f8fafc;
+  box-shadow: 0 2px 8px rgba(23, 74, 58, 0.04);
 }
+[data-theme='dark'] :deep(.md-code-card) {
+  background: #0b1015;
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+
 :deep(.md-code-head) {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 7px 14px;
-  background: rgba(255, 255, 255, 0.035);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  background: #eef4f1;
+  border-bottom: 1px solid #d8e2de;
 }
+[data-theme='dark'] :deep(.md-code-head) {
+  background: rgba(255, 255, 255, 0.035);
+  border-bottom-color: rgba(255, 255, 255, 0.07);
+}
+
 :deep(.md-code-lang-tag) {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+:deep(.md-code-icon-svg) {
+  color: #1f5947;
+  flex-shrink: 0;
+}
+[data-theme='dark'] :deep(.md-code-icon-svg) {
+  color: #34d399;
 }
 :deep(.md-code-icon) {
   font-size: 13px;
@@ -796,16 +926,20 @@ function handleContainerClick(e: MouseEvent): void {
   font-family: var(--font-mono, monospace);
   font-size: 12px;
   font-weight: 600;
-  color: var(--text-secondary, #94a3b8);
+  color: #1f5947;
   letter-spacing: 0.04em;
 }
+[data-theme='dark'] :deep(.md-code-lang) {
+  color: #34d399;
+}
+
 :deep(.md-copy-btn) {
   display: flex;
   align-items: center;
   gap: 5px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  color: var(--text-secondary, #94a3b8);
+  background: #ffffff;
+  border: 1px solid #d8e2de;
+  color: #4b5563;
   border-radius: 5px;
   padding: 3px 9px;
   font-size: 12px;
@@ -813,34 +947,60 @@ function handleContainerClick(e: MouseEvent): void {
   transition: all 0.18s ease;
 }
 :deep(.md-copy-btn:hover) {
-  background: rgba(255, 255, 255, 0.09);
-  color: var(--text-primary, #ffffff);
-  border-color: rgba(255, 255, 255, 0.22);
+  background: #eef4f1;
+  color: #1f5947;
+  border-color: #1f5947;
 }
 :deep(.md-copy-btn.copied) {
-  color: var(--accent-ai, #10b981);
-  border-color: var(--accent-ai, #10b981);
-  background: rgba(16, 185, 129, 0.08);
+  color: #1f5947;
+  border-color: #1f5947;
+  background: #e6f1ec;
 }
+[data-theme='dark'] :deep(.md-copy-btn) {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #94a3b8;
+}
+[data-theme='dark'] :deep(.md-copy-btn:hover) {
+  background: rgba(22, 151, 122, 0.1);
+  color: #34d399;
+  border-color: #34d399;
+}
+[data-theme='dark'] :deep(.md-copy-btn.copied) {
+  color: #34d399;
+  border-color: #34d399;
+  background: rgba(22, 151, 122, 0.18);
+}
+
 :deep(.md-code-body) {
   margin: 0;
   padding: 12px 16px;
   font-family: var(--font-mono, "JetBrains Mono", "Fira Code", monospace);
-  font-size: 14px;
+  font-size: 13.5px;
   line-height: 1.65;
-  color: #e2e8f0;
+  color: #1e293b;
   overflow-x: auto;
+  background: transparent;
+}
+[data-theme='dark'] :deep(.md-code-body) {
+  color: #e2e8f0;
 }
 
 /* Mermaid 架构图卡片样式 */
 :deep(.md-mermaid-card) {
   margin: 16px 0;
-  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.12));
+  border: 1px solid #d8e2de;
   border-radius: 10px;
   overflow: hidden;
-  background: #090d16;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.28);
+  background: #ffffff;
+  box-shadow: 0 2px 10px rgba(23, 74, 58, 0.04);
 }
+[data-theme='dark'] :deep(.md-mermaid-card) {
+  background: #0b1015;
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+
 :deep(.md-mermaid-actions) {
   display: flex;
   align-items: center;
@@ -849,7 +1009,7 @@ function handleContainerClick(e: MouseEvent): void {
 :deep(.md-mermaid-tab-btn) {
   background: transparent;
   border: 1px solid transparent;
-  color: var(--text-secondary, #94a3b8);
+  color: #4b5563;
   border-radius: 5px;
   padding: 2.5px 8px;
   font-size: 11.5px;
@@ -857,24 +1017,42 @@ function handleContainerClick(e: MouseEvent): void {
   transition: all 0.15s ease;
 }
 :deep(.md-mermaid-tab-btn:hover) {
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--text-primary, #ffffff);
+  background: #eef4f1;
+  color: #1f5947;
 }
 :deep(.md-mermaid-tab-btn.active) {
-  background: rgba(16, 185, 129, 0.15);
-  color: var(--accent-ai, #10b981);
-  border-color: rgba(16, 185, 129, 0.32);
+  background: #e6f1ec;
+  color: #1f5947;
+  border-color: rgba(31, 89, 71, 0.3);
   font-weight: 600;
 }
+[data-theme='dark'] :deep(.md-mermaid-tab-btn) {
+  color: #94a3b8;
+}
+[data-theme='dark'] :deep(.md-mermaid-tab-btn:hover) {
+  background: rgba(255, 255, 255, 0.06);
+  color: #f8fafc;
+}
+[data-theme='dark'] :deep(.md-mermaid-tab-btn.active) {
+  background: rgba(22, 151, 122, 0.2);
+  color: #34d399;
+  border-color: rgba(22, 151, 122, 0.4);
+  font-weight: 600;
+}
+
 :deep(.md-mermaid-view-chart) {
-  padding: 18px 14px;
+  padding: 20px 16px;
   overflow-x: auto;
   display: flex;
   justify-content: center;
   align-items: center;
-  min-height: 90px;
-  background: #090d16;
+  min-height: 100px;
+  background: #fafcfa;
 }
+[data-theme='dark'] :deep(.md-mermaid-view-chart) {
+  background: #08110e;
+}
+
 :deep(.md-mermaid-view-chart svg) {
   max-width: 100% !important;
   height: auto !important;
@@ -892,7 +1070,7 @@ function handleContainerClick(e: MouseEvent): void {
 }
 :deep(.md-mermaid-error-hint) {
   font-size: 13px;
-  color: #f59e0b;
+  color: #d97706;
   padding: 12px;
 }
 :deep(.md-spin) {
@@ -909,37 +1087,64 @@ function handleContainerClick(e: MouseEvent): void {
   margin: 14px 0;
   overflow-x: auto;
   border-radius: 8px;
-  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.1));
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  border: 1px solid #d8e2de;
+  box-shadow: 0 1px 4px rgba(23, 74, 58, 0.04);
+  background: #ffffff;
 }
+[data-theme='dark'] :deep(.md-table-wrap) {
+  background: #0f172a;
+  border-color: rgba(255, 255, 255, 0.1);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
 :deep(.md-table) {
   width: 100%;
   border-collapse: collapse;
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.6;
   text-align: left;
 }
 :deep(.md-th) {
-  background: var(--bg-elevated, rgba(255, 255, 255, 0.05));
-  color: var(--text-primary, #f8fafc);
+  background: #eef5f2;
+  color: #174a3a;
   font-weight: 600;
-  padding: 10px 16px;
-  border-bottom: 1.5px solid var(--border-subtle, rgba(255, 255, 255, 0.12));
+  padding: 11px 16px;
+  border-bottom: 2px solid #a3c2b5;
   white-space: nowrap;
+  font-size: 13.5px;
 }
+[data-theme='dark'] :deep(.md-th) {
+  background: rgba(22, 151, 122, 0.15);
+  color: #ecfdf5;
+  border-bottom-color: rgba(22, 151, 122, 0.35);
+}
+
 :deep(.md-td) {
   padding: 10px 16px;
-  border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.06));
-  color: var(--text-primary, #e2e8f0);
+  border-bottom: 1px solid #e5e7eb;
+  color: #1e293b;
+  font-size: 13.5px;
 }
+[data-theme='dark'] :deep(.md-td) {
+  color: #cbd5e1;
+  border-bottom-color: rgba(255, 255, 255, 0.06);
+}
+
 :deep(.md-table tbody tr:nth-child(even)) {
-  background: rgba(255, 255, 255, 0.018);
+  background: rgba(31, 89, 71, 0.018);
 }
+[data-theme='dark'] :deep(.md-table tbody tr:nth-child(even)) {
+  background: rgba(255, 255, 255, 0.02);
+}
+
 :deep(.md-table tbody tr:last-child .md-td) {
   border-bottom: none;
 }
 :deep(.md-table tbody tr:hover) {
-  background: rgba(16, 185, 129, 0.04);
+  background: rgba(31, 89, 71, 0.05);
+}
+[data-theme='dark'] :deep(.md-table tbody tr:hover) {
+  background: rgba(22, 151, 122, 0.08);
 }
 
 /* 数学公式 */
@@ -947,17 +1152,27 @@ function handleContainerClick(e: MouseEvent): void {
   padding: 12px 16px;
   margin: 12px 0;
   text-align: center;
-  background: var(--bg-elevated, rgba(255, 255, 255, 0.03));
-  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.06));
+  background: #f3f8f5;
+  border: 1px solid #d8e2de;
   border-radius: 8px;
-  color: #cbd5e1;
-  font-size: 15px;
+  color: #1e332a;
+  font-size: 14.5px;
 }
+[data-theme='dark'] :deep(.md-math-block) {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.06);
+  color: #cbd5e1;
+}
+
 :deep(.md-inline-math) {
   padding: 1px 6px;
-  background: var(--bg-elevated, rgba(255, 255, 255, 0.04));
+  background: #edf5f1;
   border-radius: 4px;
-  color: #cbd5e1;
-  font-size: 14px;
+  color: #1f5947;
+  font-size: 13.5px;
+}
+[data-theme='dark'] :deep(.md-inline-math) {
+  background: rgba(22, 151, 122, 0.15);
+  color: #34d399;
 }
 </style>

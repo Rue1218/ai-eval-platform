@@ -658,9 +658,9 @@ async function handleRunLiveToolCall() {
   border-color: rgba(16, 185, 129, 0.25);
 }
 .channel-mcp {
-  background: rgba(99, 102, 241, 0.1);
-  color: var(--accent-ai, #6366f1);
-  border-color: rgba(99, 102, 241, 0.25);
+  background: color-mix(in srgb, var(--accent-ai, #1f5947) 10%, transparent);
+  color: var(--accent-ai, #1f5947);
+  border-color: color-mix(in srgb, var(--accent-ai, #1f5947) 25%, transparent);
 }
 .perm-badge {
   font-size: 11px;
@@ -761,7 +761,7 @@ async function handleRunLiveToolCall() {
 .text-success { color: var(--accent-success, #10b981); }
 .text-warning { color: var(--accent-warning, #f59e0b); }
 .text-error { color: var(--accent-error, #ef4444); }
-.text-ai { color: var(--accent-ai, #6366f1); }
+.text-ai { color: var(--accent-ai, #1f5947); }
 
 .section-block {
   display: flex;
@@ -815,7 +815,7 @@ async function handleRunLiveToolCall() {
   padding: 1px 5px;
   border-radius: 4px;
   font-size: 11px;
-  color: var(--accent-ai, #6366f1);
+  color: var(--accent-ai, #1f5947);
 }
 .empty-params {
   padding: 12px;
@@ -863,15 +863,15 @@ async function handleRunLiveToolCall() {
 }
 
 .guardrail-box {
-  background: rgba(99, 102, 241, 0.05);
-  border: 1px solid rgba(99, 102, 241, 0.18);
+  background: color-mix(in srgb, var(--accent-ai, #1f5947) 5%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-ai, #1f5947) 20%, transparent);
   border-radius: 8px;
   padding: 10px 12px;
 }
 .guardrail-title {
   font-size: 12px;
   font-weight: 700;
-  color: var(--accent-ai, #6366f1);
+  color: var(--accent-ai, #1f5947);
   margin-bottom: 4px;
 }
 .guardrail-desc {
@@ -958,7 +958,7 @@ async function handleRunLiveToolCall() {
   width: 20px;
   height: 20px;
   border-radius: 50%;
-  background: var(--accent-ai, #6366f1);
+  background: var(--accent-ai, #1f5947);
   color: #ffffff;
   font-size: 11px;
   font-weight: 700;

@@ -197,9 +197,9 @@ function getToolSimpleDesc(toolName: string): string {
   color: var(--text-primary, #111827);
 }
 .skill-builtin-badge {
-  background: rgba(99, 102, 241, 0.1);
-  color: var(--accent-ai, #6366f1);
-  border-color: rgba(99, 102, 241, 0.2);
+  background: color-mix(in srgb, var(--accent-ai, #1f5947) 10%, transparent);
+  color: var(--accent-ai, #1f5947);
+  border-color: color-mix(in srgb, var(--accent-ai, #1f5947) 20%, transparent);
   font-size: 11px;
 }
 .status-badge-active {
@@ -244,7 +244,7 @@ function getToolSimpleDesc(toolName: string): string {
   color: var(--text-primary, #111827);
 }
 .text-ai {
-  color: var(--accent-ai, #6366f1);
+  color: var(--accent-ai, #1f5947);
 }
 .section-block {
   display: flex;
@@ -319,15 +319,15 @@ function getToolSimpleDesc(toolName: string): string {
   font-weight: 500;
 }
 .flow-step.highlight {
-  background: rgba(99, 102, 241, 0.08);
-  border-color: var(--accent-ai, #6366f1);
-  color: var(--accent-ai, #6366f1);
+  background: color-mix(in srgb, var(--accent-ai, #1f5947) 8%, transparent);
+  border-color: var(--accent-ai, #1f5947);
+  color: var(--accent-ai, #1f5947);
 }
 .step-num {
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: var(--accent-ai, #6366f1);
+  background: var(--accent-ai, #1f5947);
   color: #ffffff;
   display: inline-flex;
   align-items: center;
@@ -340,15 +340,15 @@ function getToolSimpleDesc(toolName: string): string {
   font-size: 12px;
 }
 .guardrail-box {
-  background: rgba(99, 102, 241, 0.05);
-  border: 1px solid rgba(99, 102, 241, 0.18);
+  background: color-mix(in srgb, var(--accent-ai, #1f5947) 5%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-ai, #1f5947) 20%, transparent);
   border-radius: 8px;
   padding: 10px 12px;
 }
 .guardrail-title {
   font-size: 12px;
   font-weight: 700;
-  color: var(--accent-ai, #6366f1);
+  color: var(--accent-ai, #1f5947);
   margin-bottom: 4px;
 }
 .guardrail-desc {
