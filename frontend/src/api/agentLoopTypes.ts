@@ -61,6 +61,13 @@ export interface LoopUi {
   attachments: { upload_suffixes: string[]; inline_suffixes: string[]; image_suffixes: string[]; max_bytes: number; max_image_bytes: number; content_required: boolean }
 }
 export type ToolStatus = 'pending' | 'waiting_approval' | 'running' | 'succeeded' | 'failed' | 'denied' | 'cancelled' | 'not_started' | 'outcome_unknown'
+/** 原生 task 的权威会话规划投影；仅来自持久 task_plan.updated。 */
+export interface TaskPlanDisplay {
+  goal: string
+  description: string
+  steps: Array<{ title: string; status: 'pending' | 'in_progress' | 'completed' }>
+  counts: { pending: number; in_progress: number; completed: number }
+}
 export interface ToolDisplay {
   version?: number; title?: string; target?: string; registry_name?: string; wire_name?: string
   arguments_preview?: string; result_preview?: string; format?: string; truncated?: boolean; unavailable_reason?: string

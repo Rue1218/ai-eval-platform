@@ -8,7 +8,7 @@ from typing import Any
 
 EVENT_ENVELOPE_VERSION = 2
 EVENT_SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema"
-SCHEMA_CATALOG_VERSION = 5
+SCHEMA_CATALOG_VERSION = 6
 SCHEMA_REF_PREFIX = "dsh://events/"
 
 
@@ -285,6 +285,18 @@ EVENT_SCHEMAS: dict[str, dict[str, Any]] = {
             "synthetic": _field({"type": "boolean"}, "Whether recovery synthesized this result."),
         },
         required=("turn", "step", "attempt_id", "call_id", "name", "content", "status"),
+    ),
+    "task_plan/updated": _event(
+        "A validated, whole-list task-plan snapshot owned by one agent session.",
+        {
+            "turn": _field(_INTEGER, "Owning turn."),
+            "step": _field(_INTEGER, "Owning model/tool-loop step."),
+            "attempt_id": _field(_STRING, "Provider attempt that wrote the plan."),
+            "call_id": _field(_STRING, "Successful native task tool call."),
+            "call_seq": _field(_INTEGER, "Sequence of the corresponding tool/call event."),
+            "plan": _field(_OBJECT, "Complete replacement plan with goal, steps, and counts."),
+        },
+        required=("turn", "step", "attempt_id", "call_id", "call_seq", "plan"),
     ),
     "runtime/error": _event(
         "The graph runtime failed outside a normal provider attempt.",

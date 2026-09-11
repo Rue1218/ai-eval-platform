@@ -1131,7 +1131,7 @@ def test_task_plan_is_transient_and_never_creates_platform_task() -> None:
 
     result = build_task_plan(
         {
-            "goal": "审查工具链路",
+            "description": "审查工具链路",
             "steps": [
                 {"title": "读取注册表", "status": "completed"},
                 {"title": "总结风险", "status": "in_progress"},

@@ -195,8 +195,9 @@ def import_plan_steps(
     subject: str,
     description: str,
     steps: list[Mapping[str, object]],
+    source: str = "",
 ) -> list[dict[str, object]]:
-    """把旧 ``task`` 清单写入看板：父项 + 每步一项。"""
+    """把 ``task`` 清单写入看板：父项 + 每步一项。"""
     titles = [str(step.get("title") or "").strip() for step in steps]
     needed = 1 + sum(1 for title in titles if title)
     visible = sum(1 for item in board if str(item.get("status") or "") != "deleted")
@@ -205,7 +206,12 @@ def import_plan_steps(
     created: list[dict[str, object]] = []
     parent = create_task(
         board,
-        {"subject": subject, "description": description, "activeForm": "拆解任务"},
+        {
+            "subject": subject,
+            "description": description,
+            "activeForm": "拆解任务",
+            "metadata": {"source": source, "role": "plan"} if source else {},
+        },
     )
     created.append(parent)
     parent_id = str(parent.get("id") or "")
@@ -219,7 +225,10 @@ def import_plan_steps(
                 "subject": title[:_MAX_SUBJECT],
                 "description": title,
                 "activeForm": title,
-                "metadata": {"parent": parent_id},
+                "metadata": {
+                    "parent": parent_id,
+                    **({"source": source, "role": "step"} if source else {}),
+                },
             },
         )
         status = str(step.get("status") or "pending")
@@ -230,3 +239,28 @@ def import_plan_steps(
             )
         created.append(child)
     return created
+
+
+def replace_plan_steps(
+    board: list[dict[str, object]],
+    *,
+    subject: str,
+    description: str,
+    steps: list[Mapping[str, object]],
+) -> list[dict[str, object]]:
+    """整体替换原生 ``task`` 清单，保留其他会话看板工具创建的条目。"""
+    board[:] = [
+        item
+        for item in board
+        if not (
+            isinstance(item.get("metadata"), Mapping)
+            and item["metadata"].get("source") == "task.plan"
+        )
+    ]
+    return import_plan_steps(
+        board,
+        subject=subject,
+        description=description,
+        steps=steps,
+        source="task.plan",
+    )

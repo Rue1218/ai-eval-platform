@@ -1,6 +1,7 @@
 """前端展示投影：只读真实请求和登记工具，不开放内部执行配置。"""
 
 import json
+from collections.abc import Mapping
 from dataclasses import replace
 
 from app.harness.execution.task_contract import canonical_task_tool_name
@@ -17,11 +18,49 @@ TOOL_FIELDS = {
     "web_search": "query limit max_results",
     "web_fetch": "url",
     "ask_user_question": "",
+    "task": "description prompt steps",
     "task.create": "kind",
     "task.status": "task_id",
     "task.cancel": "task_id",
 }
 PREVIEW_LIMIT = 12000
+_TASK_STEP_LIMIT = 12
+_TASK_TEXT_LIMIT = 300
+
+
+def _task_display(source: Mapping[str, object], *, result: bool) -> dict[str, object] | None:
+    """提取成功 task 的有限结果预览；抽屉状态不从这里读取。"""
+    raw: object
+    if result:
+        display = source.get("display")
+        raw = display.get("task") if isinstance(display, Mapping) else None
+    else:
+        raw = source.get("args")
+    if not isinstance(raw, Mapping):
+        return None
+
+    goal = str(raw.get("goal") or raw.get("description") or raw.get("prompt") or "").strip()
+    raw_steps = raw.get("steps")
+    if not goal or not isinstance(raw_steps, list):
+        return None
+
+    steps: list[dict[str, str]] = []
+    seen_titles: set[str] = set()
+    for item in raw_steps[:_TASK_STEP_LIMIT]:
+        if not isinstance(item, Mapping):
+            continue
+        title = str(item.get("title") or "").strip()[:_TASK_TEXT_LIMIT]
+        status = str(item.get("status") or "pending")
+        if not title or status not in {"pending", "in_progress", "completed"}:
+            continue
+        normalized_title = title.casefold()
+        if normalized_title in seen_titles:
+            continue
+        seen_titles.add(normalized_title)
+        steps.append({"title": title, "status": status})
+    if not steps:
+        return None
+    return {"goal": goal[:_TASK_TEXT_LIMIT], "steps": steps}
 
 
 def tool_display(source: dict, *, result: bool = False) -> dict:
@@ -32,6 +71,7 @@ def tool_display(source: dict, *, result: bool = False) -> dict:
                "format": "text", "truncated": False}
     if name not in TOOL_FIELDS:
         return {**display, "unavailable_reason": "该工具尚未登记展示字段"}
+    task = _task_display(source, result=True) if name == "task" and result and source.get("status") == "succeeded" else None
     if result:
         if source.get("status") != "succeeded":
             return {**display, "result_preview": source.get("error_code") or "工具未成功完成"}
@@ -53,6 +93,8 @@ def tool_display(source: dict, *, result: bool = False) -> dict:
         text = json.dumps(safe, ensure_ascii=False, indent=2)
         display.update(arguments_preview=text[:PREVIEW_LIMIT], truncated=len(text) > PREVIEW_LIMIT)
         display["target"] = str(safe.get("path", safe.get("file_path", safe.get("url", safe.get("query", "")))))[:300]
+    if task is not None:
+        display["task"] = task
     return display
 
 

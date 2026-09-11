@@ -48,6 +48,54 @@ def test_task_display_accepts_agent_wire_registry_and_mcp_names():
         assert "hidden" not in str(display)
 
 
+def test_native_task_display_projects_real_plan_without_worker_fields():
+    """task 轨迹只在成功结果保留预览，抽屉不再读取调用草稿。"""
+    args = {
+        "description": "检查 WebSocket 链路",
+        "steps": [
+            {"title": "读取事件契约", "status": "completed"},
+            {"title": "验证重连回放", "status": "in_progress"},
+        ],
+        "api_key": "private-value",
+    }
+    call = tool_display({"name": "task", "args": args})
+    assert "task" not in call
+    assert "private-value" not in str(call)
+
+    result = tool_display({
+        "name": "task",
+        "status": "succeeded",
+        "content": "已更新任务规划",
+        "display": {"task": {"goal": args["description"], "steps": args["steps"]}},
+    }, result=True)
+    assert result["task"] == {
+        "goal": "检查 WebSocket 链路",
+        "steps": args["steps"],
+    }
+
+
+def test_task_plan_update_projects_a_dedicated_persistent_snapshot():
+    """抽屉状态走独立 task_plan.updated，不与工具卡的 display 合并。"""
+    plan = {
+        "goal": "检查 WebSocket 链路",
+        "description": "检查 WebSocket 链路",
+        "steps": [{"title": "验证重连回放", "status": "in_progress"}],
+        "counts": {"pending": 0, "in_progress": 1, "completed": 0},
+    }
+    frames = project_fact({
+        "session_id": "session-1",
+        "seq": 7,
+        "ts": 0,
+        "type": "task_plan/updated",
+        "data": {"turn": 1, "step": 2, "attempt_id": "attempt-1", "call_id": "call-1", "call_seq": 5, "plan": plan},
+        "correlation": {},
+    })
+    assert len(frames) == 1
+    assert frames[0]["type"] == "task_plan.updated"
+    assert frames[0]["data"] == {"plan": plan}
+    assert frames[0]["correlation"]["call_id"] == "call-1"
+
+
 def test_request_meter_matches_actual_wire_estimator():
     """统计读取同一个请求对象，明确估算及输出预留。"""
     from app.agent.loop_wiring import _prompt_tokens

@@ -38,7 +38,7 @@
           <template v-for="row in visibleRows" :key="row.key">
             <article v-if="row.role==='user'" class="loop-message user"><header>你</header><div class="history-files"><AttachmentPreview v-for="file in attachments[row.key] || []" :key="file.file_id" :attachment="file"/></div><p>{{ row.content }}</p></article>
             <TaskRunCard v-else-if="'status' in row && 'name' in row && isTaskTool((row as ToolRun).name)" :tool="row as ToolRun" :task="taskForTool(row as ToolRun)" :interactions="interactions(row)" :can-control="canControl" :online="!!state?.ready" @respond="respond"/>
-            <ToolRunCard v-else-if="'status' in row && 'name' in row" :tool="row as ToolRun" :interactions="interactions(row)" :can-control="canControl" :online="!!state?.ready" @respond="respond"/>
+            <ToolRunCard v-else-if="'status' in row && 'name' in row && (row as ToolRun).name !== 'task'" :tool="row as ToolRun" :interactions="interactions(row)" :can-control="canControl" :online="!!state?.ready" @respond="respond"/>
             <article v-else class="loop-message assistant" :class="{ 'is-continuation': !isFirstAssistantInTurn(row) }">
               <header v-if="isFirstAssistantInTurn(row) || row.text" class="assistant-header">
                 <div v-if="isFirstAssistantInTurn(row)" class="assistant-identity">
@@ -67,13 +67,15 @@
           <p v-if="!busy && state?.phase && ['max_tokens','max_steps','cancelled','interrupted','error'].includes(state.phase)" class="loop-notice">{{ finishLabels[state.phase] }}</p>
           </div>
           <div class="loop-composer-wrap">
-            <div class="composer-top-bar">
+            <div class="composer-top-bar" :class="{ 'is-workspace-open': workspacePopoverOpen, 'is-locked': !!sessionId }">
               <n-popover
+                ref="workspacePopoverRef"
                 :show="workspacePopoverOpen"
                 trigger="click"
                 placement="bottom-start"
                 :show-arrow="false"
-                :duration="220"
+                :animated="false"
+                :flip="false"
                 :content-style="{ padding: '0' }"
                 class="workspace-popover-layer"
                 @update:show="handleWorkspacePopoverVisibility"
@@ -84,6 +86,8 @@
                     class="composer-ws-btn"
                     :class="{ 'has-ws': !!activeWorkspaceId, 'is-draft': !sessionId, 'is-open': workspacePopoverOpen }"
                     :title="activeWorkspaceId ? `当前绑定工作区：${activeWorkspaceName}` : '点击选择或新建沙箱工作区（可选）'"
+                    aria-haspopup="dialog"
+                    :aria-expanded="workspacePopoverOpen"
                   >
                     <span class="ws-btn-folder-icon" aria-hidden="true">
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -192,6 +196,7 @@
                 </div>
               </n-popover>
             </div>
+            <TaskStateDrawer :plan="taskPlan" />
             <AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :metrics="conversationMetrics" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" :has-workspace="true" :agent="selectedAgent" :agents="ui?.agents || []" :permission-tier="sessionTier" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile" @agent="selectAgent" @request-workspace="handleRequestWorkspace" @update-permission-tier="handleTierChange"/>
           </div>
           <!-- 空状态时的提示词卡片（位于输入框下方，点击填充草稿） -->
@@ -245,6 +250,7 @@
           </span>
         </button>
       </div>
+      <TaskStateDrawer :plan="taskPlan" />
       <AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :metrics="conversationMetrics" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" :has-workspace="true" :agent="selectedAgent" :agents="ui?.agents || []" :permission-tier="sessionTier" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile" @agent="selectAgent" @request-workspace="handleRequestWorkspace" @update-permission-tier="handleTierChange"/>
     </div>
     <!-- 页面最底部指标栏：只有开始对话后（rows.length > 0）且有 conversationMetrics 时显示 -->
@@ -286,7 +292,7 @@ import TimeIcon from 'naive-ui/es/_internal/icons/Time'
 import http, { ApiError, api } from '../../../api/http'
 import { createRequestId } from '../../../utils/requestId'
 import type { AttachmentReference, AgentSession } from '../../../api/types'
-import type { ConversationMetrics, Data, Effort, InteractionRecord, LoopAgent, LoopProfile, LoopRecord, LoopUi, LoopUsage, ToolRun } from '../../../api/agentLoopTypes'
+import type { ConversationMetrics, Data, Effort, InteractionRecord, LoopAgent, LoopProfile, LoopRecord, LoopUi, LoopUsage, TaskPlanDisplay, ToolRun } from '../../../api/agentLoopTypes'
 import { conversationRows, identity } from '../../../agent/loop/reducer'
 import type { LoopStore } from '../../../agent/loop/store'
 import { useAuthStore } from '../../../stores/auth'
@@ -296,6 +302,7 @@ import ProviderLogo from '../../ProviderLogo.vue'
 import MarkdownView from '../MarkdownView.vue'
 import AttachmentPreview from '../AttachmentPreview.vue'
 import AgentComposer from './AgentComposer.vue'
+import TaskStateDrawer from './TaskStateDrawer.vue'
 import ToolRunCard from './ToolRunCard.vue'
 import TaskRunCard from './TaskRunCard.vue'
 import ReasoningBlock from './ReasoningBlock.vue'
@@ -319,10 +326,12 @@ const workspaces = ref<Array<{ id: string; name: string }>>([])
 const loadingWorkspaces = ref(false)
 const workspacePopoverOpen = ref(false)
 const workspacePopoverEpoch = ref(0)
+const workspacePopoverRef = ref<{ syncPosition: () => void } | null>(null)
 const draftWorkspaceId = ref<string | null>(null)
 const draftWorkspaceName = ref<string>('')
 const newWorkspaceName = ref('')
 const creatingWorkspace = ref(false)
+let workspacePopoverSyncFrame: number | undefined
 
 const sessionTier = ref<string>('')
 watch(() => props.session?.permission_tier, (value) => { sessionTier.value = value || '' }, { immediate: true })
@@ -393,10 +402,33 @@ function handleWorkspacePopoverVisibility(open: boolean) {
   workspacePopoverOpen.value = open
   if (open) {
     workspacePopoverEpoch.value += 1
+    syncWorkspacePopoverDuringEntrance()
+  } else if (workspacePopoverSyncFrame !== undefined) {
+    cancelAnimationFrame(workspacePopoverSyncFrame)
+    workspacePopoverSyncFrame = undefined
   }
   if (open && !workspaces.value.length) {
     void loadWorkspaces(false)
   }
+}
+
+/** 顶栏扩展会推动触发器上移；逐帧同步浮层，避免浮层与“147”脱节。 */
+function syncWorkspacePopoverDuringEntrance() {
+  if (workspacePopoverSyncFrame !== undefined) cancelAnimationFrame(workspacePopoverSyncFrame)
+  void nextTick(() => {
+    if (!workspacePopoverOpen.value) return
+    const startedAt = performance.now()
+    const sync = (now: number) => {
+      workspacePopoverRef.value?.syncPosition()
+      if (workspacePopoverOpen.value && now - startedAt < 380) {
+        workspacePopoverSyncFrame = requestAnimationFrame(sync)
+      } else {
+        workspacePopoverSyncFrame = undefined
+      }
+    }
+    workspacePopoverRef.value?.syncPosition()
+    workspacePopoverSyncFrame = requestAnimationFrame(sync)
+  })
 }
 
 function handleSelectWorkspace(ws: { id: string; name: string } | null) {
@@ -453,6 +485,8 @@ const state = computed(() => props.store.sessions[props.sessionId]), trace = com
 const draft = computed(() => props.store.draft(props.sessionId || 'draft'))
 const rows = computed(() => state.value ? conversationRows(state.value) : [])
 const visibleRows = computed(() => rows.value.slice(-shown.value))
+/** 只读取 task_plan.updated 的会话快照；工具调用草稿与失败结果不能改变抽屉。 */
+const taskPlan = computed<TaskPlanDisplay | null>(() => state.value?.taskPlan || null)
 
 function getTurnIdentifier(row: LoopRecord): string {
   if (row.correlation?.turn_id) return `turn_id:${row.correlation.turn_id}`
@@ -610,7 +644,7 @@ try {
   const savedWidth = Number(localStorage.getItem(chatWidthStorageKey))
   if (Number.isFinite(savedWidth) && savedWidth >= minimumChatWidth) chatWidth.value = savedWidth
 } catch { /* 本地存储不可用时使用默认宽度。 */ }
-onBeforeUnmount(() => { epoch++; clearInterval(refreshTimer); window.removeEventListener('focus', refreshUi); finishContentResize() })
+onBeforeUnmount(() => { epoch++; clearInterval(refreshTimer); if (workspacePopoverSyncFrame !== undefined) cancelAnimationFrame(workspacePopoverSyncFrame); window.removeEventListener('focus', refreshUi); finishContentResize() })
 function interactions(row: LoopRecord) { return Object.values(state.value?.interactions || {}).filter(i => identity({session_id:props.sessionId,correlation:i.correlation},true) === row.key) }
 function fill(text: string) { draft.value.content = text; composer.value?.focus() }
 function trackScroll() { const el=scroller.value; if(el) atBottom.value=el.scrollHeight-el.scrollTop-el.clientHeight<100 }
@@ -1150,6 +1184,14 @@ async function hydrateAttachments() {
   min-height: 28px;
   margin-bottom: 6px;
   padding: 0 4px;
+  transition: margin-bottom 0.36s cubic-bezier(0.16, 1, 0.3, 1);
+}
+/* 浮层占用输入区上方的蓝色缓冲带，布局扩展会自然把工作区选择器平滑推上去。 */
+.composer-top-bar.is-workspace-open {
+  margin-bottom: 356px;
+}
+.composer-top-bar.is-workspace-open.is-locked {
+  margin-bottom: 118px;
 }
 .composer-ws-btn {
   display: inline-flex;
@@ -1165,14 +1207,16 @@ async function hydrateAttachments() {
   cursor: pointer;
   position: relative;
   z-index: 1;
-  transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.16s ease, color 0.16s ease, border-color 0.16s ease;
+  transition: transform 0.36s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.16s ease, color 0.16s ease, border-color 0.16s ease, box-shadow 0.2s ease;
   user-select: none;
+  will-change: transform;
 }
 .composer-ws-btn.is-open {
-  transform: translateY(-8px);
+  transform: translate3d(0, -10px, 0);
   background: #edf7f1;
   border-color: #c6dfd1;
   color: #174a3a;
+  box-shadow: 0 7px 18px rgba(23, 74, 58, 0.11);
 }
 .composer-ws-btn.is-open .ws-btn-arrow {
   transform: rotate(180deg);
@@ -1220,6 +1264,7 @@ async function hydrateAttachments() {
 /* 工作区弹窗面板 */
 .ws-popover-card {
   width: 300px;
+  max-width: calc(100vw - 32px);
   background: #ffffff;
   border-radius: 12px;
   padding: 12px;
@@ -1227,16 +1272,19 @@ async function hydrateAttachments() {
   border: 1px solid #d8e4dc;
   font-size: 13px;
   transform-origin: 22px 0;
-  animation: workspace-popover-enter 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: workspace-popover-enter 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
+  backface-visibility: hidden;
+  will-change: transform, opacity;
 }
 @keyframes workspace-popover-enter {
-  from { opacity: 0; transform: translateY(-10px) scale(0.97); filter: blur(2px); }
-  to { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
+  from { opacity: 0; transform: translate3d(0, -8px, 0) scale(0.985); }
+  to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
 }
 :deep(.workspace-popover-layer) {
   border: 0;
   border-radius: 12px;
   box-shadow: none;
+  overflow: visible;
 }
 .ws-popover-header {
   display: flex;
@@ -1405,9 +1453,15 @@ async function hydrateAttachments() {
   box-shadow: 0 10px 30px -4px rgba(0, 0, 0, 0.5);
 }
 @media (prefers-reduced-motion: reduce) {
+  .composer-top-bar,
   .composer-ws-btn,
   .ws-btn-arrow { transition: none; }
   .ws-popover-card { animation: none; }
+}
+@media (max-height: 640px) {
+  .composer-top-bar.is-workspace-open { margin-bottom: 282px; }
+  .composer-top-bar.is-workspace-open.is-locked { margin-bottom: 104px; }
+  .ws-popover-list { max-height: 132px; }
 }
 [data-theme='dark'] .ws-popover-title {
   color: #f1f5f9;

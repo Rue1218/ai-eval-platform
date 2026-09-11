@@ -184,6 +184,20 @@ class SessionLog:
         with self._transaction(guard=type in {"tool/dispatch", "tool/result", "execution/reconciled"}) as (db, session, state):
             return self._append(db, session, state, type, data, **metadata)
 
+    def append_task_plan_result(
+        self, result_data: dict[str, Any], plan_data: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """原子提交 task 工具成功结果与会话级整表规划快照。
+
+        ``task_plan/updated`` 不是从 ``tool.call`` 草稿推断，而是紧随已验证的成功
+        ``tool/result`` 写入。任一事实校验失败都会回滚两者，避免浏览器显示未实际
+        提交的计划。
+        """
+        with self._transaction(guard=True) as (db, session, state):
+            result = self._append(db, session, state, "tool/result", result_data)
+            plan = self._append(db, session, state, "task_plan/updated", plan_data)
+            return result, plan
+
     def _append(self, db, session, state, kind: str, data: dict, **metadata) -> dict:
         """内部事务复用点；禁止在这里提交，从而允许成组事实原子落库。"""
         from app.agent.events import (
@@ -255,6 +269,8 @@ class SessionLog:
                                   "result_metadata": value.get("metadata", {})}
                 if guard.status == "quarantined":
                     quarantined.append(guard.execution_id)
+        elif kind == "task_plan/updated":
+            self._guard_task_plan_update(db, state, value, seq)
         elif kind == "execution/reconciled":
             guard = db.get(WorkspaceExecutionGuard, value.get("execution_id"))
             if (
@@ -292,6 +308,45 @@ class SessionLog:
                 **{key: value[key] for key in ("turn", "step", "attempt_id", "call_id") if key in value},
             }, logical_key=f"quarantine:{execution_id}")
         return deepcopy(event)
+
+    def _guard_task_plan_update(self, db, state, value: dict, seq: int) -> None:
+        """校验规划快照只能由当前打开回合的成功原生 task 调用写入。"""
+        from app.harness.execution.dispatch import build_task_plan
+
+        required = ("turn", "step", "attempt_id", "call_id", "call_seq", "plan")
+        if any(key not in value for key in required) or state.active_turn != value.get("turn"):
+            raise AppError(ErrorCode.VALIDATION, "任务规划快照缺少调用身份或不属于当前回合")
+        call_seq = value["call_seq"]
+        if type(call_seq) is not int or call_seq < 0 or not isinstance(value.get("plan"), dict):
+            raise AppError(ErrorCode.VALIDATION, "任务规划快照格式无效")
+        call = db.execute(select(AgentEvent).where(
+            AgentEvent.session_id == self.session_id,
+            AgentEvent.seq == call_seq,
+            AgentEvent.type == "tool/call",
+        )).scalar_one_or_none()
+        result = db.execute(select(AgentEvent).where(
+            AgentEvent.session_id == self.session_id,
+            AgentEvent.type == "tool/result",
+            AgentEvent.seq < seq,
+        ).order_by(AgentEvent.seq.desc()).limit(1)).scalar_one_or_none()
+        if call is None or result is None:
+            raise AppError(ErrorCode.VALIDATION, "任务规划快照缺少已结算的原生 task 调用")
+        call_data, result_data = call.envelope["data"], result.envelope["data"]
+        identity = ("turn", "step", "attempt_id", "call_id")
+        if (
+            call_data.get("name") != "task"
+            or result_data.get("status") != "succeeded"
+            or call.seq != call_seq
+            or any(call_data.get(key) != value.get(key) for key in identity)
+            or any(result_data.get(key) != value.get(key) for key in (*identity, "call_seq"))
+        ):
+            raise AppError(ErrorCode.VALIDATION, "任务规划快照必须紧随同一成功 task 调用")
+        arguments = call_data.get("args")
+        if not isinstance(arguments, dict):
+            raise AppError(ErrorCode.VALIDATION, "任务规划调用缺少规范参数")
+        expected = build_task_plan(arguments).to_snapshot()
+        if value["plan"] != expected:
+            raise AppError(ErrorCode.VALIDATION, "任务规划快照与成功调用参数不一致")
 
     def _stream_frame(self, db, state, frame: dict, *, source_kind: str, source_id: str) -> None:
         """只在持有 session 行锁时分配连续已提交游标。"""

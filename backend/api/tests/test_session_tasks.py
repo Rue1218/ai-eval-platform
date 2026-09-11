@@ -9,6 +9,7 @@ from app.harness.execution.session_board import (
     get_task,
     import_plan_steps,
     list_tasks,
+    replace_plan_steps,
     update_task,
 )
 
@@ -107,6 +108,32 @@ def test_import_plan_steps_rejects_over_capacity() -> None:
     else:
         raise AssertionError("超容量应整批拒绝")
     assert board == []
+
+
+def test_replace_plan_steps_only_replaces_native_plan_entries() -> None:
+    """原生 task 整表更新不能删除 TaskCreate 等看板条目。"""
+    board: list[dict] = []
+    manual = create_task(board, {"subject": "人工看板项"})
+    replace_plan_steps(
+        board,
+        subject="首次规划",
+        description="排查并修复问题",
+        steps=[{"title": "定位", "status": "in_progress"}],
+    )
+    replace_plan_steps(
+        board,
+        subject="更新规划",
+        description="排查并修复问题",
+        steps=[{"title": "修复", "status": "completed"}],
+    )
+
+    visible = list_tasks(board)
+    assert len(visible) == 3
+    assert visible[0]["id"] == manual["id"]
+    assert visible[0]["task"]["subject"] == "人工看板项"
+    assert visible[1]["task"]["metadata"]["source"] == "task.plan"
+    assert visible[2]["task"]["subject"] == "修复"
+    assert visible[2]["task"]["status"] == "completed"
 
 
 def test_ask_user_question_validates_and_projects_answers() -> None:

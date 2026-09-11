@@ -1,4 +1,4 @@
-import type { Attempt, Connection, Data, InteractionRecord, LoopFrame, LoopRecord, ToolRun } from '../../api/agentLoopTypes.ts'
+import type { Attempt, Connection, Data, InteractionRecord, LoopFrame, LoopRecord, TaskPlanDisplay, ToolRun } from '../../api/agentLoopTypes.ts'
 
 /** 一个会话独占三套游标；持久事实不受瞬态诊断缓冲大小限制。 */
 export interface LoopState {
@@ -6,13 +6,13 @@ export interface LoopState {
   phase: string; cancelling: boolean; error: string; controlled: boolean
   messages: Record<string, LoopRecord>; attempts: Record<string, Attempt>; tools: Record<string, ToolRun>
   interactions: Record<string, InteractionRecord>; tasks: Record<string, LoopRecord>; executions: Record<string, LoopRecord>
-  turns: Record<string, LoopRecord>; facts: LoopFrame[]; receipts: Record<string, LoopFrame>; title?: string
+  turns: Record<string, LoopRecord>; facts: LoopFrame[]; receipts: Record<string, LoopFrame>; taskPlan: TaskPlanDisplay | null; title?: string
 }
 /** 新建空会话时 cursor 必须从零开始，禁止仅从 localStorage 恢复游标。 */
 export function createLoopState(sessionId: string): LoopState {
   return { sessionId, cursor: 0, connection: 'connecting', ready: false, activeTurn: null, phase: 'idle',
     cancelling: false, error: '', controlled: false, messages: {}, attempts: {}, tools: {}, interactions: {},
-    tasks: {}, executions: {}, turns: {}, facts: [], receipts: {} }
+    tasks: {}, executions: {}, turns: {}, facts: [], receipts: {}, taskPlan: null }
 }
 /** 身份包含会话、回合、attempt、call，工具重名或 call_id 跨轮复用均不冲突。 */
 export function identity(frame: Pick<LoopFrame, 'session_id' | 'correlation'>, tool = false): string {
@@ -34,6 +34,33 @@ function toolFor(state: LoopState, frame: LoopFrame): ToolRun {
   const value = state.tools[key] ??= { ...record(frame, key), name: frame.data.name || '未知工具', status: 'pending', display: {} }
   if (frame.cursor) value.first_cursor = Math.min(value.first_cursor, frame.cursor)
   return value
+}
+/** 只接受后端已验证并持久化的完整计划快照，拒绝工具调用草稿或畸形回放数据。 */
+function taskPlanFromFrame(data: Data): TaskPlanDisplay | null {
+  const raw = data.plan
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const plan = raw as Data
+  const goal = typeof plan.goal === 'string' ? plan.goal.trim() : ''
+  const description = typeof plan.description === 'string' ? plan.description.trim() : goal
+  if (!goal || !Array.isArray(plan.steps) || plan.steps.length < 1 || plan.steps.length > 12) return null
+  const seen = new Set<string>()
+  const steps: TaskPlanDisplay['steps'] = []
+  for (const rawStep of plan.steps) {
+    if (!rawStep || typeof rawStep !== 'object' || Array.isArray(rawStep)) return null
+    const step = rawStep as Data
+    const title = typeof step.title === 'string' ? step.title.trim() : ''
+    const status = step.status
+    if (!title || title.length > 300 || seen.has(title.toLocaleLowerCase()) || !['pending', 'in_progress', 'completed'].includes(String(status))) return null
+    seen.add(title.toLocaleLowerCase())
+    steps.push({ title, status: status as TaskPlanDisplay['steps'][number]['status'] })
+  }
+  const counts = {
+    pending: steps.filter(step => step.status === 'pending').length,
+    in_progress: steps.filter(step => step.status === 'in_progress').length,
+    completed: steps.filter(step => step.status === 'completed').length,
+  }
+  if (counts.in_progress > 1) return null
+  return { goal, description, steps, counts }
 }
 /** 成功应用连续事实才提交 cursor；restricted 占位也消费序号。 */
 export function applyFrame(state: LoopState, frame: LoopFrame): 'applied' | 'duplicate' | 'gap' {
@@ -93,6 +120,11 @@ export function applyFrame(state: LoopState, frame: LoopFrame): 'applied' | 'dup
     const display = { ...t.display, ...d.display }
     Object.assign(t, d, { display, event: kind })
     if (kind === 'tool.dispatch') { t.status = 'running'; state.phase = 'tools' }
+  }
+  if (kind === 'task_plan.updated') {
+    // 计划只能由成功 task 的同事务事件更新，抽屉不再消费 tool.call/result 的草稿。
+    const plan = taskPlanFromFrame(d)
+    if (plan) state.taskPlan = plan
   }
   if (/^(approval|question|task_confirmation)\.(requested|resolved)$/.test(kind) && c.call_id) {
     const tool = toolFor(state, frame)

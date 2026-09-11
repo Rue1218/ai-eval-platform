@@ -82,6 +82,42 @@ async def test_pg_real_results_release_with_commit(pg_logs, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_pg_task_plan_commits_complete_snapshot_and_failed_draft_does_not_replace(pg_logs, tmp_path):
+    """task 成功才原子写会话快照；失败参数只留下工具终态，不污染当前计划。"""
+    logs, factory = pg_logs
+    logs[0].append("turn/start", {"turn": 1})
+    bridge = bridge_for(tmp_path, names=("task",))
+    initial = {
+        "description": "检查任务规划链路",
+        "steps": [
+            {"title": "写入完整计划", "status": "completed"},
+            {"title": "验证会话回放", "status": "in_progress"},
+        ],
+    }
+    await execute(logs[0], bridge, [call("task", "task-ok", **initial)])
+
+    failed = {
+        "description": "不应覆盖的草稿",
+        "steps": [
+            {"title": "重复步骤", "status": "pending"},
+            {"title": "重复步骤", "status": "in_progress"},
+        ],
+    }
+    await execute(logs[0], bridge, [call("task", "task-failed", **failed)])
+
+    events = logs[0].read()
+    snapshots = [event for event in events if event["type"] == "task_plan/updated"]
+    assert len(snapshots) == 1
+    assert snapshots[0]["data"]["plan"]["goal"] == initial["description"]
+    assert snapshots[0]["data"]["plan"]["steps"] == initial["steps"]
+    assert snapshots[0]["data"]["plan"]["counts"] == {"pending": 0, "in_progress": 1, "completed": 1}
+    assert any(event["type"] == "tool/result" and event["data"]["call_id"] == "task-failed" and event["data"]["status"] != "succeeded" for event in events)
+    with factory() as db:
+        streams = list(db.scalars(select(SessionStream).where(SessionStream.session_id == logs[0].session_id)))
+        assert [stream.projection_kind for stream in streams].count("task_plan.updated") == 1
+
+
+@pytest.mark.asyncio
 async def test_pg_unknown_quarantines_cross_session_and_reopen(pg_logs, tmp_path):
     """未知结果跨会话和重新打开日志仍隔离，同 scope 读取也被阻止。"""
     logs, factory = pg_logs

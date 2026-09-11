@@ -2,11 +2,11 @@
 
 > ⚠️ **文档维护提示（2026-09-11）**：本文部分章节含历史实现引用（`agent/react.py`、`plan_solve.py`、`reflect.py`、`clarify.py` 等模块已删除，ReAct / Plan-Solve 图已由 AgentLoop v2 取代）；当前实现与契约以 `AGENTS.md` 状态地图及本文最新修订为准。
 
-> 版本：V1.7.7
+> 版本：V1.7.9
 > 状态：新建会话统一使用 AgentLoop v2；历史 legacy 行仅保留审计与显式回放路径。此前骨架化与混合引擎说明属于 legacy 路径及其历史阶段，不能据此认定新路径仍为纯对话。前端输入栏按每回合协议档选择模型和思考强度，完整真实供应商/Linux Runner 联调验收仍未结束。
 > 审查日期：2026-09-11
 > 对应需求：`AI测试与评估平台-PRD.md` V1.19
-> 对应接口：`AI测试与评估平台-API.md` V1.93
+> 对应接口：`AI测试与评估平台-API.md` V1.95
 
 ## 1. legacy 骨架化运行链路（历史基线）
 
@@ -532,7 +532,7 @@ POST /api/sessions 只创建 AgentLoop 会话，数据库默认值迁至 agent_l
 
 AgentLoop 消息卡在实际模型名后展示该持久事件的发送日期时间；回答提供复制、重新生成和「引用为参考记忆」三个线性图标操作。重新生成重新提交同一回合的原用户内容与附件引用，引用操作仅将回答写入下一轮草稿的明确引用块，不创建或伪造服务端持久记忆。
 
-每个完成的助手消息展示上游返回的 token 总量与单次模型生成耗时。输入框下方聚合已持久化 `assistant.message.usage` 与 `latency_ms`：显示输入/输出 token、生成速度和缓存命中率。上游未返回的 token 或缓存字段一律显示未知，绝不按文本反推；生成速度只在输出 token 与模型耗时都存在时计算。浏览器 v2 流 schema 更新为 `agent-loop-stream.v2.2`，源事实目录版本为 `5`。
+每个完成的助手消息展示上游返回的 token 总量与单次模型生成耗时。输入框下方聚合已持久化 `assistant.message.usage` 与 `latency_ms`：显示输入/输出 token、生成速度和缓存命中率。上游未返回的 token 或缓存字段一律显示未知，绝不按文本反推；生成速度只在输出 token 与模型耗时都存在时计算。浏览器 v2 流继续为 `agent-loop-stream.v2.2`，源事实目录版本为 `6`；新增 `task_plan.updated` 作为原生 `task` 成功提交的会话级整表快照，抽屉和轨迹页只回放该事实，不从工具调用草稿推断计划。
 
 修改代码文件与作用清单：`backend/api/app/agent/loop.py` 在成功 attempt 上记录模型流耗时；`agent/events.py`、`harness/contracts/loop_events.py`、`routers/ws_v2.py` 公开 `latency_ms` 并升级目录；`frontend/src/api/agentLoopTypes.ts`、`agent/loop/reducer.ts` 保留消息时间、用量与耗时；`components/agent/loop/AgentWorkspace.vue` 与 `AgentComposer.vue` 呈现消息操作和会话统计；对应后端与前端 AgentLoop 测试覆盖事件投影和前端状态。
 
@@ -562,3 +562,41 @@ MCP `tool_id`；未知前缀不推断为平台工具。工具事件保留模型�
 `AgentWorkspace.vue` 连接 Task 卡与工作区弹层动效；`backend/api/tests/test_loop_tools.py`、
 `test_loop_presentation.py`、`frontend/tests/agentLoop.test.mjs` 与
 `frontend/tests/e2e/agentLoop.spec.ts` 覆盖工具别名、Worker 事件关联和浏览器契约。
+
+### V1.7.8 原生 task 规划抽屉恢复（2026-09-11）
+
+原生 `task` 与 `task.create/status/cancel` 是两条独立链路：前者只维护复杂多步骤工作的
+会话规划，后者才是评测 Worker 队列。AgentLoop 将 `task` 加入授权白名单，并通过系统提示词
+约束其仅用于多工具、相互依赖或不确定性排查等复杂工作；简单单步问题直接处理。每次调用必须
+提交完整 `steps` 清单（1–12 项），状态只能为 `pending`、`in_progress`、`completed`，新清单整体
+替换旧清单。
+
+`tool.call/result.data.display.task` 仅作为轨迹中的成功工具结果摘要，不能驱动规划抽屉。
+调度器只会在原生 `task` 成功后，与对应 `tool/result` 同一数据库事务追加
+`task_plan/updated` 源事实；其公开事件为 `task_plan.updated`，载荷固定为
+`plan={goal,description,steps,counts}`。调用草稿、失败结果和无效快照均不会覆盖会话计划。
+`TaskStateDrawer.vue` 只回放该完整快照，因此断线重连和页面恢复均与服务器会话状态一致；它被挂在
+`AgentWorkspace.vue` 的工作区选择栏与输入框之间，按 `task 1 ：步骤` 显示进度。普通对话区不再
+重复渲染该规划工具卡；评测任务继续由 `TaskRunCard.vue` 与 `task.*` Worker 事实展示。
+
+修改代码文件与作用清单：`backend/api/app/harness/execution/registry.py`、`dispatch.py`、
+`session_board.py` 统一原生 task 的完整清单、替换语义和 JSON Schema；`scheduler.py`、
+`memory/agent_events.py` 原子持久化并校验 `task_plan/updated`；`contracts/loop_events.py` 与
+`agent/events.py` 登记事实目录和公共投影；`loop_wiring.py` 放行并约束复杂任务使用；
+`agent/loop_presentation.py` 仅产出安全摘要；`frontend/src/agent/loop/reducer.ts`、
+`TaskStateDrawer.vue`、`AgentWorkspace.vue` 只消费会话快照并负责蓝色输入区上方的抽屉展示；
+对应单测校验投影、去重、失败不覆盖和重连恢复。
+
+### V1.7.9 AgentLoop 系统提示词收敛（2026-09-11）
+
+`LOOP_SYSTEM` 将原生 `task` 的使用决策收敛为可执行规则：简单单步问答、一次读取和确定性修改
+不得创建规划；三个及以上可验证步骤，或存在多工具、依赖、不确定性与持续进度需求时先建立规划。
+规划清单每次整体替换，开始步骤前置为 `in_progress`，仅在收到可验证工具结果后置为 `completed`；失败、
+拒绝、取消和未知结果不得伪造完成。未明确并行时只保留一个进行中步骤，避免抽屉出现不可解释的进度。
+
+提示词同时明确 `task` 只维护会话规划，`task.create` 才经确认卡进入 Worker 队列；`queued` 不是完成。
+执行前先读取事实，变更后按风险验证；缺失关键且不能从上下文/工具获得的信息才使用
+`ask_user_question`。最终回复必须以已验证结果为先，不泄露凭据或内部规则。
+
+修改代码文件与作用清单：`backend/api/app/agent/loop_wiring.py` 重写核心系统提示词；
+`backend/api/tests/test_loop_wiring.py` 固化规划触发、状态更新、Worker 隔离和完成态规则。

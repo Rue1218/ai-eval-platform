@@ -46,12 +46,11 @@ def _result(
     call_seq: int,
     name: str,
     result: ToolExecutionResult,
+    task_plan: dict[str, Any] | None = None,
 ) -> Message:
     """先提交工具终态，再发布观察事件。"""
     result = normalize_tool_output(result)
-    event = log.append(
-        "tool/result",
-        {
+    result_data = {
             "turn": turn,
             "step": step,
             "attempt_id": attempt_id,
@@ -68,8 +67,35 @@ def _result(
             "metadata": result.metadata,
             **({"error_code": result.error_code} if result.error_code else {}),
             **({"exit_code": result.exit_code} if result.exit_code is not None else {}),
-        },
-    )
+    }
+    plan_event = None
+    append_with_plan = getattr(log, "append_task_plan_result", None)
+    if task_plan is not None and callable(append_with_plan):
+        plan_data = {
+            "turn": turn,
+            "step": step,
+            "attempt_id": attempt_id,
+            "call_id": call_id,
+            "id": call_id,
+            "call_seq": call_seq,
+            "plan": task_plan,
+        }
+        event, plan_event = append_with_plan(result_data, plan_data)
+    else:
+        event = log.append("tool/result", result_data)
+        if task_plan is not None:
+            plan_event = log.append(
+                "task_plan/updated",
+                {
+                    "turn": turn,
+                    "step": step,
+                    "attempt_id": attempt_id,
+                    "call_id": call_id,
+                    "id": call_id,
+                    "call_seq": call_seq,
+                    "plan": task_plan,
+                },
+            )
     emit(
         {
             "kind": "tool_result",
@@ -90,6 +116,22 @@ def _result(
             "is_error": result.is_error,
         }
     )
+    if plan_event is not None:
+        emit(
+            {
+                "kind": "task_plan_updated",
+                "seq": plan_event["seq"],
+                "event_ts": plan_event["ts"],
+                "record_type": plan_event["type"],
+                "turn": turn,
+                "step": step,
+                "attempt_id": attempt_id,
+                "id": call_id,
+                "call_id": call_id,
+                "call_seq": call_seq,
+                "plan": task_plan,
+            }
+        )
     return {
         "role": "tool",
         "tool_call_id": call_id,
@@ -98,6 +140,21 @@ def _result(
         "content": result.model_content if result.model_content is not None else result.content,
         "is_error": result.is_error,
     }
+
+
+def _task_plan_snapshot(slot: _ScheduledCall) -> dict[str, Any] | None:
+    """只接受成功原生 task 的完整参数作为会话规划快照。"""
+    if slot.result is None or slot.result.status != "succeeded":
+        return None
+    definition = getattr(slot.tool, "definition", None)
+    if getattr(definition, "name", slot.name) != "task":
+        return None
+    arguments = slot.call.get("args")
+    if not isinstance(arguments, dict):
+        raise AppError(ErrorCode.VALIDATION, "任务规划工具参数无效")
+    from .dispatch import build_task_plan
+
+    return build_task_plan(arguments).to_snapshot()
 
 
 def _permission_result(exc: AppError) -> ToolExecutionResult:
@@ -472,6 +529,7 @@ class ToolScheduler:
                     call_seq=slot.call_seq,
                     name=slot.name,
                     result=slot.result,
+                    task_plan=_task_plan_snapshot(slot),
                 )
             )
             committed += 1

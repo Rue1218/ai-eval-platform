@@ -116,13 +116,13 @@ TOOL_METADATA_EXT: dict[str, dict[str, Any]] = {
     },
     "task": {
         "source_file": "backend/api/app/harness/execution/registry.py",
-        "handler_function": "_task_planner_handler(arguments, sandbox_dir, context)",
-        "code_summary": "解析 tasks 执行步骤 -> 校验步骤状态机 (pending/in_progress/completed) -> 更新回合 GraphState",
+        "handler_function": "_task_handler(arguments, sandbox_dir, context)",
+        "code_summary": "校验完整 steps 清单 -> 成功 task 工具结果与 task_plan/updated 快照同事务提交 -> 会话流回放最后一份快照",
         "pipeline_stages": [
-            {"step": 1, "name": "执行清单步骤解析", "desc": "读取 tasks 步骤数组，校验每项的 id、title 与 status"},
-            {"step": 2, "name": "状态机跃迁合规", "desc": "校验步骤状态：pending (待执行) -> in_progress (执行中) -> completed (已完成)"},
-            {"step": 3, "name": "回合 GraphState 同步", "desc": "写入当前 Agent 会话的全局记忆状态机"},
-            {"step": 4, "name": "前端可视化同步", "desc": "触发 WebSocket 状态帧，实时更新界面任务清单进度条"},
+            {"step": 1, "name": "完整清单解析", "desc": "读取必填 description 与 steps；每项必须含 title、status，未知字段由 JSON Schema 拒绝"},
+            {"step": 2, "name": "规划不变式校验", "desc": "步骤数限制为 1–12，标题非空且不重复，状态仅 pending/in_progress/completed，顺序任务最多一个进行中步骤"},
+            {"step": 3, "name": "成功快照原子提交", "desc": "仅 task 执行成功时，与 tool/result 同事务追加 task_plan/updated；失败调用不会覆盖当前计划"},
+            {"step": 4, "name": "会话流回放", "desc": "浏览器重连按持久 task_plan.updated 回放，TaskStateDrawer 不从 tool.call 草稿推断状态"},
         ],
     },
     "platform.tasks.task.create": {
