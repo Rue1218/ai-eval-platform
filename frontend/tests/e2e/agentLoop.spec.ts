@@ -139,10 +139,14 @@ test('工作区弹层从输入框上方展开，Task 卡片接收 MCP 名与 Wor
   await expect(workspacePopover).toBeVisible()
   // Vue scoped 样式会为 keyframes 追加哈希，保留名称前缀即可验证入场动画实际生效。
   await expect.poll(() => workspacePopover.evaluate(element => getComputedStyle(element).animationName)).toMatch(/^workspace-popover-enter/)
+  // 按钮上移由 0.28s transition 驱动；轮询等待位移完成，避免慢环境取到过渡起点。
+  await expect.poll(async () => restingButtonBox.y - (await workspaceButton.boundingBox())!.y)
+    .toBeGreaterThanOrEqual(6)
   const triggerBox = (await workspaceButton.boundingBox())!
-  const popoverBox = (await workspacePopover.boundingBox())!
-  expect(triggerBox.y).toBeLessThanOrEqual(restingButtonBox.y - 6)
-  expect(popoverBox.y).toBeGreaterThanOrEqual(triggerBox.y + triggerBox.height - 2)
+  await expect.poll(async () => {
+    const popoverBox = (await workspacePopover.boundingBox())!
+    return popoverBox.y - (triggerBox.y + triggerBox.height)
+  }).toBeGreaterThanOrEqual(-2)
   // 保留真实浏览器快照，供工作区弹层的视觉回归核验。
   await page.screenshot({path:'test-results/workspace-popover-task-card-ux.png'})
   await workspaceButton.click()
