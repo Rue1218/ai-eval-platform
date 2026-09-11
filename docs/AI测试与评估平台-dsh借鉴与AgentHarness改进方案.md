@@ -1,5 +1,7 @@
 # AI 测试与评估平台 — dsh 借鉴与 Agent Harness 改进方案
 
+> 📦 **历史归档（2026-09-11）**：本文为历史设计稿 / 规划，其中提及的 `agent/react.py`、`plan_solve.py`、`reflect.py`、`clarify.py` 等模块已删除或演进，仅作决策留痕；请勿按本文直接立项。
+
 > 版本:V1.5 | 状态:五项已实施交付（2026-09-07，见 §九） | 审查:2026-09-07
 >
 > 背景:2026-09-07 对 DeepSeek 开源 Agent Harness（`dsh`，本地源码
