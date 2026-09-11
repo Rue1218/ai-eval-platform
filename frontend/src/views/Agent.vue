@@ -599,6 +599,7 @@ import ContextMeter, { type ContextMeterData } from '../components/agent/Context
 import AgentWorkspace from '../components/agent/loop/AgentWorkspace.vue'
 import { createLoopStore } from '../agent/loop/store'
 import { filterSessionsByStatus, legacySessionDot, legacySessionTooltip, loopSessionDot, loopSessionTooltip, sessionStatusFilterLabel } from '../agent/sessionList'
+import { attachmentRejectionReason, createPreviewTracker } from '../agent/attachments'
 import ApprovalCard from '../components/agent/ApprovalCard.vue'
 import ClarifyCard from '../components/agent/ClarifyCard.vue'
 import ConfirmCard from '../components/agent/ConfirmCard.vue'
@@ -807,7 +808,7 @@ const isDragActive = ref(false)
 const isUploadingAttachments = computed(() => stagedFiles.value.some((file) => file.uploading))
 const hasUploadedAttachments = computed(() => stagedFiles.value.some((file) => Boolean(file.id) && !file.error))
 let dragDepth = 0
-const localAttachmentUrls = new Set<string>()
+const attachmentPreviews = createPreviewTracker()
 const activeTask = ref<Task | null>(null)
 // 取消请求发送后等待服务端确认，避免重复提交且不提前伪造 cancelled。
 const cancellingTaskId = ref<string | null>(null)
@@ -985,34 +986,14 @@ function triggerFileInput() {
   fileInputRef.value?.click()
 }
 
-const ALLOWED_ATTACHMENT_SUFFIXES = new Set([
-  '.md', '.txt', '.html', '.pdf', '.json', '.yaml', '.yml', '.xlsx', '.xls', '.csv', '.jsonl',
-  '.doc', '.docx', '.wav', '.mp3', '.png', '.jpg', '.jpeg', '.webp', '.gif',
-])
-
-function hasAllowedAttachmentSuffix(file: File): boolean {
-  const dotIndex = file.name.lastIndexOf('.')
-  return dotIndex >= 0 && ALLOWED_ATTACHMENT_SUFFIXES.has(file.name.slice(dotIndex).toLowerCase())
-}
-
-function createAttachmentPreviewUrl(file: File): string {
-  const url = URL.createObjectURL(file)
-  localAttachmentUrls.add(url)
-  return url
-}
-
-function releaseAttachmentPreviewUrl(file: Pick<StagedAttachment, 'previewUrl'>) {
-  if (!file.previewUrl || !localAttachmentUrls.has(file.previewUrl)) return
-  URL.revokeObjectURL(file.previewUrl)
-  localAttachmentUrls.delete(file.previewUrl)
-}
+/** 后缀白名单、准入校验与预览 URL 追踪见 agent/attachments；此处只做上传编排。 */
 
 /** 把文件加入暂存架并立即上传，发送时只把成功换取的 file_id 写入 WS 消息。 */
 async function stageAttachmentFiles(files: File[]) {
   const validFiles: File[] = []
   let invalidCount = 0
   for (const file of files) {
-    if (!file.size || file.size > 20 * 1024 * 1024 || !hasAllowedAttachmentSuffix(file)) {
+    if (attachmentRejectionReason(file)) {
       invalidCount += 1
       continue
     }
@@ -1029,7 +1010,7 @@ async function stageAttachmentFiles(files: File[]) {
       name: file.name,
       size: file.size,
       contentType: file.type,
-      previewUrl: createAttachmentPreviewUrl(file),
+      previewUrl: attachmentPreviews.create(file),
       file,
       uploading: true,
       uploadProgress: 0,
@@ -1095,7 +1076,7 @@ function removeStagedFile(localId: string) {
   const index = stagedFiles.value.findIndex((file) => file.localId === localId)
   if (index < 0) return
   const [removed] = stagedFiles.value.splice(index, 1)
-  if (removed) releaseAttachmentPreviewUrl(removed)
+  if (removed) attachmentPreviews.release(removed.previewUrl)
 }
 
 /** 键盘事件监听：Enter 发送，Shift + Enter 换行。 */
@@ -3089,8 +3070,7 @@ onBeforeUnmount(() => {
   }
   sockets.clear()
   agentWs = null
-  for (const url of localAttachmentUrls) URL.revokeObjectURL(url)
-  localAttachmentUrls.clear()
+  attachmentPreviews.revokeAll()
 })
 </script>
 
