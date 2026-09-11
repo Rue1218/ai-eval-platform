@@ -1,5 +1,7 @@
 # AI 测试与评估平台 — Harness 六层架构
 
+> ⚠️ **文档维护提示（2026-09-11）**：本文部分章节含历史实现引用（`agent/react.py`、`plan_solve.py`、`reflect.py`、`clarify.py` 等模块已删除，ReAct / Plan-Solve 图已由 AgentLoop v2 取代）；当前实现与契约以 `AGENTS.md` 状态地图及本文最新修订为准。
+
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 六层架构 |
