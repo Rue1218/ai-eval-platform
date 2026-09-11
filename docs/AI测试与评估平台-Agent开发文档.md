@@ -2,7 +2,7 @@
 
 > ⚠️ **文档维护提示（2026-09-11）**：本文部分章节含历史实现引用（`agent/react.py`、`plan_solve.py`、`reflect.py`、`clarify.py` 等模块已删除，ReAct / Plan-Solve 图已由 AgentLoop v2 取代）；当前实现与契约以 `AGENTS.md` 状态地图及本文最新修订为准。
 
-> 版本：V1.7.9
+> 版本：V1.7.10
 > 状态：新建会话统一使用 AgentLoop v2；历史 legacy 行仅保留审计与显式回放路径。此前骨架化与混合引擎说明属于 legacy 路径及其历史阶段，不能据此认定新路径仍为纯对话。前端输入栏按每回合协议档选择模型和思考强度，完整真实供应商/Linux Runner 联调验收仍未结束。
 > 审查日期：2026-09-11
 > 对应需求：`AI测试与评估平台-PRD.md` V1.19
@@ -600,3 +600,18 @@ MCP `tool_id`；未知前缀不推断为平台工具。工具事件保留模型�
 
 修改代码文件与作用清单：`backend/api/app/agent/loop_wiring.py` 重写核心系统提示词；
 `backend/api/tests/test_loop_wiring.py` 固化规划触发、状态更新、Worker 隔离和完成态规则。
+
+### V1.7.10 过程与本轮总结分段展示（2026-09-11）
+
+AgentLoop 前端以服务端持久投影的 `assistant.message.data.tool_calls` 作为唯一事实边界：
+发起工具调用的助手尝试及总结前的任何助手尝试均是执行过程，工具卡同步标为“执行过程 · 工具调用”；
+本轮最后一条不带工具调用且未失败的助手输出才是“本轮总结”。如果一轮结束时没有这样的最终输出，
+前端不将过程文字伪装为总结，也不展示总结操作栏。
+
+复制、重新生成、引用为参考记忆都只作用于本轮总结；回合 Token 消耗与模型用时仍聚合过程与总结的
+全部已持久化 `usage`、`latency_ms`，并固定在本轮最后一项之后，顺序为复制、重新生成、引用记忆、
+Token、用时。工具执行时间不混入模型用时。
+
+修改代码文件与作用清单：`frontend/src/agent/loop/turnSummary.ts` 用持久工具调用字段选择总结并保留过程
+尝试；`frontend/src/components/agent/loop/AgentWorkspace.vue` 呈现过程/总结标签及轮末统一操作栏；
+`frontend/tests/turnSummary.test.mjs` 覆盖过程文字不能进入复制与引用记忆的白盒断言。

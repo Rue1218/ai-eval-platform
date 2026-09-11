@@ -37,15 +37,25 @@
           <button v-if="shown < rows.length" class="history-more" @click="shown+=80">显示更早的 {{ Math.min(80, rows.length-shown) }} 条记录</button>
           <template v-for="row in visibleRows" :key="row.key">
             <article v-if="row.role==='user'" class="loop-message user"><header>你</header><div class="history-files"><AttachmentPreview v-for="file in attachments[row.key] || []" :key="file.file_id" :attachment="file"/></div><p>{{ row.content }}</p></article>
-            <TaskRunCard v-else-if="'status' in row && 'name' in row && isTaskTool((row as ToolRun).name)" :tool="row as ToolRun" :task="taskForTool(row as ToolRun)" :interactions="interactions(row)" :can-control="canControl" :online="!!state?.ready" @respond="respond"/>
-            <ToolRunCard v-else-if="'status' in row && 'name' in row && (row as ToolRun).name !== 'task'" :tool="row as ToolRun" :interactions="interactions(row)" :can-control="canControl" :online="!!state?.ready" @respond="respond"/>
-            <article v-else class="loop-message assistant" :class="{ 'is-continuation': !isFirstAssistantInTurn(row) }">
-              <header v-if="isFirstAssistantInTurn(row)" class="assistant-header">
+            <section v-else-if="'status' in row && 'name' in row && isTaskTool((row as ToolRun).name)" class="turn-process-tool">
+              <p class="turn-segment-label process">执行过程 · 工具调用</p>
+              <TaskRunCard :tool="row as ToolRun" :task="taskForTool(row as ToolRun)" :interactions="interactions(row)" :can-control="canControl" :online="!!state?.ready" @respond="respond"/>
+            </section>
+            <section v-else-if="'status' in row && 'name' in row && (row as ToolRun).name !== 'task'" class="turn-process-tool">
+              <p class="turn-segment-label process">执行过程 · 工具调用</p>
+              <ToolRunCard :tool="row as ToolRun" :interactions="interactions(row)" :can-control="canControl" :online="!!state?.ready" @respond="respond"/>
+            </section>
+            <article v-else class="loop-message assistant" :class="{ 'is-continuation': !isFirstAssistantInTurn(row), 'is-process': isProcessAssistantRow(row), 'is-turn-summary': isSummaryAssistantRow(row) }">
+              <header v-if="isFirstAssistantInTurn(row) || isSummaryAssistantRow(row) || isProcessAssistantRow(row)" class="assistant-header">
                 <div class="assistant-identity">
-                  <ProviderLogo v-if="row.request_summary?.model" :provider="getModelLogoKey(row.request_summary.model)" :size="18"/>
-                  <strong>{{ row.request_summary?.model || '助手' }}</strong>
-                  <time v-if="formatTimestamp(row.timestamp)" :datetime="row.timestamp">{{ formatTimestamp(row.timestamp) }}</time>
-                  <small v-if="row.request_summary">第 {{ row.correlation.turn ?? '—' }} 轮 · {{ row.request_summary.reasoning_effort }} · step {{ row.correlation.step }}</small>
+                  <template v-if="isFirstAssistantInTurn(row)">
+                    <ProviderLogo v-if="row.request_summary?.model" :provider="getModelLogoKey(row.request_summary.model)" :size="18"/>
+                    <strong>{{ row.request_summary?.model || '助手' }}</strong>
+                    <time v-if="formatTimestamp(row.timestamp)" :datetime="row.timestamp">{{ formatTimestamp(row.timestamp) }}</time>
+                    <small v-if="row.request_summary">第 {{ row.correlation.turn ?? '—' }} 轮 · {{ row.request_summary.reasoning_effort }} · step {{ row.correlation.step }}</small>
+                  </template>
+                  <span v-if="isSummaryAssistantRow(row)" class="turn-segment-label summary">本轮总结</span>
+                  <span v-else class="turn-segment-label process">执行过程 · step {{ row.correlation.step ?? '—' }}</span>
                 </div>
               </header>
               <ReasoningBlock v-if="row.reasoning && ui?.permissions.reasoning" :content="row.reasoning" :ended="row.ended" :interrupted="row.interrupted"/>
@@ -53,16 +63,16 @@
               <p v-else-if="!row.ended" class="muted">正在响应…</p>
               <small v-if="row.interrupted || row.error_code">{{ row.interrupted ? '本次输出已中断' : row.error_code }}</small>
             </article>
-            <!-- 每轮对话结尾的统一操作与指标栏：复制、重新生成、引用记忆、token消耗、用时依次排列 -->
-            <div v-if="turnSummaryByLastRowKey.get(row.key)" class="turn-end-toolbar" aria-label="本轮对话操作与指标">
+            <!-- 总结操作固定置于整轮末尾：复制、重新生成、引用记忆、Token、用时。 -->
+            <div v-if="turnSummaryByLastRowKey.get(row.key)" class="turn-end-toolbar" aria-label="本轮总结操作与指标">
               <div class="turn-end-actions">
                 <button
                   class="assistant-action"
                   type="button"
                   title="复制回答"
                   aria-label="复制回答"
-                  :disabled="!turnSummaryByLastRowKey.get(row.key)!.text"
-                  @click="copy(turnSummaryByLastRowKey.get(row.key)!.text)"
+                  :disabled="!turnSummaryByLastRowKey.get(row.key)!.summaryText"
+                  @click="copy(turnSummaryByLastRowKey.get(row.key)!.summaryText)"
                 >
                   <n-icon :component="FileIcon" :size="15"/>
                 </button>
@@ -72,7 +82,7 @@
                   title="重新生成"
                   aria-label="重新生成"
                   :disabled="busy || draft.submitting || !!draft.pending"
-                  @click="regenerate(turnSummaryByLastRowKey.get(row.key)!.representativeRow)"
+                  @click="regenerate(turnSummaryByLastRowKey.get(row.key)!.summaryRow)"
                 >
                   <n-icon :component="RetryIcon" :size="15"/>
                 </button>
@@ -81,8 +91,8 @@
                   type="button"
                   title="引用为参考记忆"
                   aria-label="引用为参考记忆"
-                  :disabled="!turnSummaryByLastRowKey.get(row.key)!.text"
-                  @click="quoteMemory(turnSummaryByLastRowKey.get(row.key)!.text)"
+                  :disabled="!turnSummaryByLastRowKey.get(row.key)!.summaryText"
+                  @click="quoteMemory(turnSummaryByLastRowKey.get(row.key)!.summaryText)"
                 >
                   <n-icon :component="BackwardIcon" :size="15"/>
                 </button>
@@ -750,6 +760,20 @@ const turnSummaryByLastRowKey = computed<Map<string, TurnSummary>>(() =>
     sessionId: props.sessionId,
   }),
 )
+
+/** 服务端仅将工具调用身份公开为持久字段；页面按此边界分离 ReAct 过程和最终总结。 */
+const summaryAssistantRowKeys = computed<Set<string>>(() =>
+  new Set([...turnSummaryByLastRowKey.value.values()].map(summary => summary.summaryRow.key))
+)
+
+function isSummaryAssistantRow(row: LoopRecord): boolean {
+  return row.role !== 'user' && !('status' in row && 'name' in row) && summaryAssistantRowKeys.value.has(row.key)
+}
+
+function isProcessAssistantRow(row: LoopRecord): boolean {
+  return row.role !== 'user' && !('status' in row && 'name' in row) && !isSummaryAssistantRow(row)
+}
+
 function formatSessionTitle(rawText: string): string {
   if (!rawText) return '新会话'
   let cleaned = rawText.trim()
@@ -843,6 +867,15 @@ async function hydrateAttachments() {
 </style>
 <style scoped>
 .loop-workspace{display:flex;flex:1;flex-direction:column;min-height:0;min-width:0;background:var(--bg-main,#f8faf8)}.loop-tabs{display:flex;align-items:center;gap:8px;padding:8px 20px;border-bottom:1px solid #e0e8e2}.loop-tabs button{padding:7px 12px;border:0;border-radius:7px;background:transparent;color:#61776a;cursor:pointer}.loop-tabs .active{background:#e2eee6;color:#154834}.loop-status{margin-left:auto;font-size:12px;display:flex;align-items:center;gap:6px}.loop-status i{width:7px;height:7px;border-radius:50%;background:#93a99c}.loop-status .running{background:#21a37e;animation:pulse 1.5s ease-in-out infinite}.loop-content{display:flex;flex:1;min-height:0;position:relative}.loop-center{display:flex;flex-direction:column;flex:1;min-width:0;position:relative;min-height:0}.loop-conversation{overflow:auto;flex:1;padding:24px max(20px,calc((100% - 800px)/2));scrollbar-gutter:stable}.loop-message{margin:0 0 22px;min-width:0;overflow-wrap:anywhere}.loop-message header{display:flex;gap:8px;align-items:center;font-size:13px;font-weight:600;margin-bottom:8px}.loop-message header small{font-weight:400;color:#7b8e82}.assistant-header{display:flex;align-items:center}.assistant-identity{display:flex;min-width:0;align-items:center;gap:8px;flex-wrap:wrap}.assistant-identity strong{font-weight:650}.assistant-identity time{color:#8390a0;font-size:11px;font-weight:400;font-variant-numeric:tabular-nums}.loop-message.assistant.is-continuation{margin-top:12px}.loop-message.user{background:#eaf3ed;padding:16px 20px;border-radius:12px}.loop-message.user p{white-space:pre-wrap;margin:0;line-height:1.7}.history-files{display:flex;gap:8px;flex-wrap:wrap}.loop-composer-wrap{padding:12px 24px 18px;max-width:950px;width:100%;box-sizing:border-box;margin:0 auto}.loop-runtime{width:240px;overflow:auto;padding:18px;border-left:1px solid #e0e8e2;font-size:12px;background:#f5f8f5}.loop-runtime dd{margin:5px 0 14px;overflow-wrap:anywhere}.loop-runtime dt{color:#7d9081}.runtime-close{float:right;border:0;background:transparent;cursor:pointer}.loop-notice{padding:8px 16px;margin:4px 10px;background:#f6f0e2;color:#866934;font-size:12px}.loop-notice.error{color:#a24d43}.loop-notice button,.history-more{border:0;background:transparent;text-decoration:underline;cursor:pointer}.jump-bottom{position:absolute;bottom:10px;right:20px;border:1px solid #caddcf;background:#fff;border-radius:20px;padding:8px 15px;cursor:pointer}.muted{color:#86968b}@keyframes pulse{50%{opacity:.35}}@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}@media(max-width:768px){.loop-runtime{position:absolute;inset:0 0 0 auto;max-width:calc(100% - 35px);z-index:30;box-shadow:-20px 0 50px #173e2520}.loop-composer-wrap{padding:8px}.loop-conversation{padding:16px 12px}.loop-tabs{padding:6px;gap:0}.loop-tabs button{padding:7px}.loop-status{font-size:11px}.loop-message header{flex-wrap:wrap}}
+
+/* ReAct 过程与本轮总结使用服务端持久的工具调用字段分段，避免混入可操作回答。 */
+.loop-message.assistant.is-process { margin-bottom: 12px; }
+.loop-message.assistant.is-turn-summary { margin-top: 16px; }
+.turn-process-tool { margin: 0 0 12px; }
+.turn-segment-label { display: inline-flex; align-items: center; min-height: 20px; padding: 0 7px; border-radius: 10px; font-size: 11px; font-weight: 500; line-height: 20px; }
+.turn-segment-label.process { color: #718096; background: #f1f5f9; }
+.turn-segment-label.summary { color: #176b55; background: #e6f5ee; }
+.turn-process-tool > .turn-segment-label { margin: 0 0 6px; }
 
 /* 每轮对话结尾的统一操作与指标栏 */
 .turn-end-toolbar {

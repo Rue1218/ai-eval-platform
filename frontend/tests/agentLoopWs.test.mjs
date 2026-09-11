@@ -25,6 +25,20 @@ test('socket 写入时断线保留冻结请求，不伪造发送成功', async (
   } finally { client.close() }
 })
 
+test('AgentLoop 使用 v2 WebSocket 路径，短票只出现在握手查询参数', async () => {
+  const state = createLoopState('s'), socket = new Socket()
+  let requestUrl = ''
+  const client = new AgentLoopWebSocket('s', {
+    ticket: async () => 'ticket', state: () => state, replace: () => {},
+    socket: url => { requestUrl = url; return socket },
+  })
+  try {
+    await client.connect()
+    // 网络面板应在“WS”过滤器显示此握手；之后的 subscribe 与 turn.submit 是 Messages 帧。
+    assert.equal(requestUrl, 'ws://localhost/ws/agent/v2?ticket=ticket')
+  } finally { client.close() }
+})
+
 test('HTTP 环境缺少 randomUUID 时，仍可生成服务端接受的 UUID 请求标识', () => {
   const requestId = createRequestId({ getRandomValues: values => {
     values.set(Uint8Array.from({ length: 16 }, (_, index) => index)); return values

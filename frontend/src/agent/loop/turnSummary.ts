@@ -4,8 +4,12 @@ export interface TurnSummary {
   turnKey: string
   totalTokens: number | null
   totalLatencyMs: number | null
-  text: string
-  representativeRow: LoopRecord
+  /** 本轮最终可读回答；执行过程文字不能进入复制或引用记忆。 */
+  summaryText: string
+  /** 本轮最后一个未发起工具调用的助手输出，作为可操作的总结。 */
+  summaryRow: Attempt
+  /** 除总结外的助手尝试均为过程，供页面以 ReAct 过程样式呈现。 */
+  processRows: Attempt[]
 }
 
 export function tokenValue(value: unknown): number {
@@ -40,6 +44,11 @@ export function getTurnIdentifier(row: LoopRecord): string {
   return `key:${row.key}`
 }
 
+/** 工具调用由服务端持久投影，不能根据回答文字或 step 序号猜测过程状态。 */
+function hasToolCalls(row: Attempt): boolean {
+  return Array.isArray(row.tool_calls) && row.tool_calls.length > 0
+}
+
 export interface CalculateTurnSummariesOptions {
   activeTurnId?: string | null
   isBusy?: boolean
@@ -47,8 +56,9 @@ export interface CalculateTurnSummariesOptions {
 }
 
 /**
- * 遍历会话记录，计算每轮对话的聚合指标，并在该轮对话结束时将摘要绑定至该轮最后一行记录。
- * 顺序：复制、重新生成、引用记忆、token消耗、用时。
+ * 遍历会话记录，计算每轮对话的聚合指标，并在该轮对话结束时将总结绑定至该轮最后一行记录。
+ * 带工具调用的助手尝试以及总结前的任何助手尝试均为 ReAct 过程；仅最后一条不带工具调用的
+ * 助手输出属于可复制、重新生成和引用记忆的总结。指标仍覆盖该轮全部模型尝试。
  */
 export function calculateTurnSummaries(
   allRows: LoopRecord[],
@@ -113,20 +123,21 @@ export function calculateTurnSummaries(
       }
     }
 
-    const text = attempts
-      .map(a => (typeof a.text === 'string' ? a.text.trim() : ''))
-      .filter(Boolean)
-      .join('\n\n')
-
     const lastRow = turnRows[turnRows.length - 1]
-    const representativeRow = attempts[attempts.length - 1] || lastRow
+    // 只有最后一个已提交的助手输出且未发起工具调用才是本轮总结；若最后一步仍在调用工具或失败，
+    // 不能回退到更早的过程文字并把它冒充总结。
+    const summaryRow = attempts[attempts.length - 1]
+    if (hasToolCalls(summaryRow) || summaryRow.outcome === 'failed' || summaryRow.error_code) continue
+    const summaryText = typeof summaryRow.text === 'string' ? summaryRow.text.trim() : ''
+    const processRows = attempts.filter(attempt => attempt.key !== summaryRow.key)
 
     result.set(lastRow.key, {
       turnKey,
       totalTokens,
       totalLatencyMs,
-      text,
-      representativeRow,
+      summaryText,
+      summaryRow,
+      processRows,
     })
   }
 
