@@ -332,10 +332,23 @@ class WsV2Connection:
         known_validation_messages = {
             "当前会话包含工具调用，切换模型请新建会话",
             "所选 Agent 协议档不支持该思考强度",
+            # 交互应答校验：消息只含题号/题 id/选项标签等客户端可回显内容，投影具体原因便于纠正
+            "answers 不能为空",
+            "答复数量超过问题数量",
+            "问题答复不能重复",
+            "仅多选问题接受标签数组",
+            "交互身份不匹配",
+            "确认规格已变化",
         }
+        # 动态校验消息（含题号或题 id）同样只含客户端可回显内容，按前缀投影
+        known_validation_prefixes = ("第 ", "问题 ")
+        known_validation = error.code == ErrorCode.VALIDATION and (
+            error.message in known_validation_messages
+            or error.message.startswith(known_validation_prefixes)
+        )
         message = (
             error.message
-            if error.code == ErrorCode.VALIDATION and error.message in known_validation_messages
+            if known_validation
             else messages.get(error.code, "命令暂时无法处理，请稍后重试")
         )
         self.control("command.rejected", {
