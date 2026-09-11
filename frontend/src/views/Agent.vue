@@ -591,7 +591,7 @@ import { useModeStore } from '../stores/mode'
 import { useAuthStore } from '../stores/auth'
 import KindTag from '../components/common/KindTag.vue'
 import ProviderLogo from '../components/ProviderLogo.vue'
-import { getProviderLogoKey, type ProviderLogoKey } from '../utils/providerLogo'
+import { getModelLogoKey, getServiceLogoKey, type ProviderLogoKey } from '../utils/providerLogo'
 import { formatLatency } from '../utils/format'
 import AttachmentPreview from '../components/agent/AttachmentPreview.vue'
 import MarkdownView from '../components/agent/MarkdownView.vue'
@@ -654,7 +654,7 @@ const activeAgentProfile = computed(() => {
   return allProfiles.value.find((item) => item.id === activeId) || null
 })
 const agentProfileLogoKey = computed<ProviderLogoKey>(() => {
-  return activeAgentProfile.value ? getProviderLogoKey(activeAgentProfile.value) : 'custom'
+  return activeAgentProfile.value ? getModelLogoKey(activeAgentProfile.value.model) : 'custom'
 })
 const agentDisplayModelName = computed(() => activeAgentProfile.value?.model || 'Agent')
 const agentProfileDisplayName = computed(() => activeAgentProfile.value?.name || '')
@@ -679,7 +679,7 @@ const agentProfileDropdownOptions = computed<DropdownOption[]>(() => {
       label: `${p.name} (${p.model || p.protocol})${isCurrent ? ' ✓' : ''}`,
       key: p.id,
       disabled: isCurrent,
-      icon: () => h(ProviderLogo, { provider: getProviderLogoKey(p), compact: true }),
+      icon: () => h(ProviderLogo, { provider: getModelLogoKey(p.model), compact: true }),
     }
   })
   return [
@@ -2483,19 +2483,22 @@ function pushAgentMessage(text: string) {
   agent.streaming = false
 }
 
-/** 解析历史消息中的供应商 Logo 标识，优先使用快照字段。 */
+/** 按消息模型快照解析品牌图标，避免协议档后续改动影响历史回合。 */
 function resolveMessageLogoKey(m: { provider?: string | null; profile_id?: string | null; model_name?: string | null }): ProviderLogoKey {
-  // 同一模型可能托管在不同供应商，必须优先按消息快照的 profile_id 取图标。
-  if (m.profile_id) {
-    const prof = allProfiles.value.find((p) => p.id === m.profile_id)
-    if (prof) return getProviderLogoKey(prof)
-  }
   if (m.model_name) {
-    const key = getProviderLogoKey({ model: m.model_name })
+    const key = getModelLogoKey(m.model_name)
     if (key !== 'custom') return key
   }
+  if (m.profile_id) {
+    const prof = allProfiles.value.find((p) => p.id === m.profile_id)
+    if (prof) {
+      const key = getModelLogoKey(prof.model)
+      if (key !== 'custom') return key
+      return getServiceLogoKey(prof)
+    }
+  }
   if (m.provider) {
-    return getProviderLogoKey({ name: m.provider, model: m.model_name || '' })
+    return getServiceLogoKey({ provider: m.provider })
   }
   return agentProfileLogoKey.value || 'custom'
 }
@@ -2540,9 +2543,12 @@ function messageMetaFromPayload(payload: Record<string, any>): Partial<StreamIte
   }
   // 旧事件可能没有模型快照，不能用默认 custom 覆盖回合初始展示信息。
   if (profile || modelName || typeof payload.provider === 'string') {
-    meta.providerLogoKey = profile
-      ? getProviderLogoKey(profile)
-      : getProviderLogoKey({ name: payload.provider, model: modelName })
+    const modelLogoKey = getModelLogoKey(modelName)
+    meta.providerLogoKey = modelLogoKey !== 'custom'
+      ? modelLogoKey
+      : profile
+        ? getServiceLogoKey(profile)
+        : getServiceLogoKey({ provider: payload.provider })
   }
   return meta
 }

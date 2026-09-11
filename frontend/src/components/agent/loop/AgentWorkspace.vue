@@ -42,7 +42,7 @@
             <article v-else class="loop-message assistant" :class="{ 'is-continuation': !isFirstAssistantInTurn(row) }">
               <header v-if="isFirstAssistantInTurn(row) || row.text" class="assistant-header">
                 <div v-if="isFirstAssistantInTurn(row)" class="assistant-identity">
-                  <ProviderLogo v-if="row.request_summary?.model" :provider="getProviderLogoKey({model:row.request_summary.model,provider:row.request_summary.provider})" :size="18"/>
+                  <ProviderLogo v-if="row.request_summary?.model" :provider="getModelLogoKey(row.request_summary.model)" :size="18"/>
                   <strong>{{ row.request_summary?.model || '助手' }}</strong>
                   <time v-if="formatTimestamp(row.timestamp)" :datetime="row.timestamp">{{ formatTimestamp(row.timestamp) }}</time>
                   <small v-if="row.request_summary">第 {{ row.correlation.turn ?? '—' }} 轮 · {{ row.request_summary.reasoning_effort }} · step {{ row.correlation.step }}</small>
@@ -290,7 +290,7 @@ import type { ConversationMetrics, Data, Effort, InteractionRecord, LoopAgent, L
 import { conversationRows, identity } from '../../../agent/loop/reducer'
 import type { LoopStore } from '../../../agent/loop/store'
 import { useAuthStore } from '../../../stores/auth'
-import { getProviderLogoKey } from '../../../utils/providerLogo'
+import { getModelLogoKey } from '../../../utils/providerLogo'
 import { copyText } from '../../../utils/clipboard'
 import ProviderLogo from '../../ProviderLogo.vue'
 import MarkdownView from '../MarkdownView.vue'
