@@ -109,97 +109,86 @@
                   </header>
 
                   <p v-if="sessionId" class="ws-popover-tip">
-                    当前会话已绑定此工作区，创建后不可更改。如需切换工作区，请新建会话。
+                    当前会话已绑定此工作区{{ activeWorkspaceName ? `「${activeWorkspaceName}」` : '' }}，创建后不可更改。如需切换工作区，请新建会话。
                   </p>
                   <p v-else class="ws-popover-tip">
                     选择绑定的沙箱工作区（可选）。绑定后模型的文件读写与终端命令将在此工作区内隔离执行。
                   </p>
 
-                  <div v-if="sessionId" class="ws-popover-tier">
-                    <span class="ws-tier-label">本会话权限档位</span>
-                    <n-select
-                      size="small"
-                      style="width: 200px"
-                      :value="sessionTier"
-                      :options="tierOptions"
-                      @update:value="handleTierChange"
-                    />
-                  </div>
+                  <template v-if="!sessionId">
+                    <div v-if="loadingWorkspaces" class="ws-popover-loading">加载工作区中…</div>
+                    <div v-else class="ws-popover-list">
+                      <!-- 选项 1：不绑定工作区（默认沙箱） -->
+                      <button
+                        type="button"
+                        class="ws-popover-item"
+                        :class="{ 'is-selected': !activeWorkspaceId }"
+                        @click="handleSelectWorkspace(null)"
+                      >
+                        <span class="ws-item-folder">
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line>
+                          </svg>
+                        </span>
+                        <span class="ws-item-name">不绑定工作区（默认沙箱）</span>
+                        <span v-if="!activeWorkspaceId" class="ws-item-check">
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="20 6 9 17 4 12"></polyline>
+                          </svg>
+                        </span>
+                      </button>
 
-                  <div v-if="loadingWorkspaces" class="ws-popover-loading">加载工作区中…</div>
-                  <div v-else class="ws-popover-list">
-                    <!-- 选项 1：不绑定工作区（默认沙箱） -->
-                    <button
-                      v-if="!sessionId"
-                      type="button"
-                      class="ws-popover-item"
-                      :class="{ 'is-selected': !activeWorkspaceId }"
-                      @click="handleSelectWorkspace(null)"
-                    >
-                      <span class="ws-item-folder">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                          <circle cx="12" cy="12" r="10"></circle>
-                          <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line>
-                        </svg>
-                      </span>
-                      <span class="ws-item-name">不绑定工作区（默认沙箱）</span>
-                      <span v-if="!activeWorkspaceId" class="ws-item-check">
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                          <polyline points="20 6 9 17 4 12"></polyline>
-                        </svg>
-                      </span>
-                    </button>
+                      <!-- 工作区列表项 -->
+                      <button
+                        v-for="ws in workspaces"
+                        :key="ws.id"
+                        type="button"
+                        class="ws-popover-item"
+                        :class="{ 'is-selected': ws.id === activeWorkspaceId }"
+                        @click="handleSelectWorkspace(ws)"
+                      >
+                        <span class="ws-item-folder">
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                          </svg>
+                        </span>
+                        <span class="ws-item-name" :title="ws.name">{{ ws.name }}</span>
+                        <span v-if="ws.id === activeWorkspaceId" class="ws-item-check">
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="20 6 9 17 4 12"></polyline>
+                          </svg>
+                        </span>
+                      </button>
 
-                    <!-- 工作区列表项 -->
-                    <button
-                      v-for="ws in workspaces"
-                      :key="ws.id"
-                      type="button"
-                      class="ws-popover-item"
-                      :class="{ 'is-selected': ws.id === activeWorkspaceId }"
-                      :disabled="!!sessionId"
-                      @click="handleSelectWorkspace(ws)"
-                    >
-                      <span class="ws-item-folder">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
-                        </svg>
-                      </span>
-                      <span class="ws-item-name" :title="ws.name">{{ ws.name }}</span>
-                      <span v-if="ws.id === activeWorkspaceId" class="ws-item-check">
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                          <polyline points="20 6 9 17 4 12"></polyline>
-                        </svg>
-                      </span>
-                    </button>
-
-                    <div v-if="workspaces.length === 0" class="ws-popover-empty">
-                      暂无自定义工作区，可在下方新建
+                      <div v-if="workspaces.length === 0" class="ws-popover-empty">
+                        暂无自定义工作区，可在下方新建
+                      </div>
                     </div>
-                  </div>
 
-                  <footer v-if="!sessionId" class="ws-popover-footer">
-                    <input
-                      v-model="newWorkspaceName"
-                      class="ws-popover-input"
-                      placeholder="新建工作区名称…"
-                      :disabled="creatingWorkspace"
-                      maxlength="80"
-                      @keydown.enter.prevent="handleCreateWorkspace"
-                    />
-                    <button
-                      type="button"
-                      class="ws-popover-create-btn"
-                      :disabled="creatingWorkspace || !newWorkspaceName.trim()"
-                      @click="handleCreateWorkspace"
-                    >
-                      {{ creatingWorkspace ? '创建中…' : '新建' }}
-                    </button>
-                  </footer>
+                    <footer class="ws-popover-footer">
+                      <input
+                        v-model="newWorkspaceName"
+                        class="ws-popover-input"
+                        placeholder="新建工作区名称…"
+                        :disabled="creatingWorkspace"
+                        maxlength="80"
+                        @keydown.enter.prevent="handleCreateWorkspace"
+                      />
+                      <button
+                        type="button"
+                        class="ws-popover-create-btn"
+                        :disabled="creatingWorkspace || !newWorkspaceName.trim()"
+                        @click="handleCreateWorkspace"
+                      >
+                        {{ creatingWorkspace ? '创建中…' : '新建' }}
+                      </button>
+                    </footer>
+                  </template>
                 </div>
               </n-popover>
             </div>
-            <AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :metrics="conversationMetrics" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" :has-workspace="true" :agent="selectedAgent" :agents="ui?.agents || []" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile" @agent="selectAgent" @request-workspace="handleRequestWorkspace"/>
+            <AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :metrics="conversationMetrics" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" :has-workspace="true" :agent="selectedAgent" :agents="ui?.agents || []" :permission-tier="sessionTier" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile" @agent="selectAgent" @request-workspace="handleRequestWorkspace" @update-permission-tier="handleTierChange"/>
           </div>
           <!-- 空状态时的提示词卡片（位于输入框下方，点击填充草稿） -->
           <div v-if="!rows.length" class="loop-empty-prompts">
@@ -252,7 +241,7 @@
           </span>
         </button>
       </div>
-      <AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :metrics="conversationMetrics" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" :has-workspace="true" :agent="selectedAgent" :agents="ui?.agents || []" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile" @agent="selectAgent" @request-workspace="handleRequestWorkspace"/>
+      <AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :metrics="conversationMetrics" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" :has-workspace="true" :agent="selectedAgent" :agents="ui?.agents || []" :permission-tier="sessionTier" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile" @agent="selectAgent" @request-workspace="handleRequestWorkspace" @update-permission-tier="handleTierChange"/>
     </div>
     <!-- 页面最底部指标栏：只有开始对话后（rows.length > 0）且有 conversationMetrics 时显示 -->
     <footer v-if="rows.length && conversationMetrics" class="conversation-metrics loop-bottom-metrics" aria-label="会话模型总用量指标">
@@ -312,7 +301,7 @@ const props = withDefaults(
     sessionId: string
     session?: AgentSession | null
     store: LoopStore
-    createSession: (workspaceId?: string, preparedTicket?: Promise<string>) => Promise<string>
+    createSession: (workspaceId?: string, preparedTicket?: Promise<string>, permissionTier?: string) => Promise<string>
   }>(),
   {
     session: null
@@ -328,21 +317,14 @@ const draftWorkspaceName = ref<string>('')
 const newWorkspaceName = ref('')
 const creatingWorkspace = ref(false)
 
-// 三档权限等级（会话级覆盖；空 = 继承全局默认）
-const tierOptions = [
-  { label: '继承全局默认', value: '' },
-  { label: '档1 请求批准', value: 'tier1' },
-  { label: '档2 帮我批准', value: 'tier2' },
-  { label: '档3 完全访问', value: 'tier3' },
-]
 const sessionTier = ref<string>('')
 watch(() => props.session?.permission_tier, (value) => { sessionTier.value = value || '' }, { immediate: true })
 async function handleTierChange(value: string) {
+  sessionTier.value = value || ''
   if (!props.sessionId) return
   const tier = (value || null) as 'tier1' | 'tier2' | 'tier3' | null
   try {
     await api.sessions.updatePermissionTier(props.sessionId, tier)
-    sessionTier.value = value || ''
     message.success('本会话权限档位已更新')
   } catch (err: any) {
     message.error(err?.message || '权限档位更新失败')
@@ -737,7 +719,7 @@ async function submit(override?: { content: string; attachmentRefs: string[] }) 
       preparedTicket=api.auth.getWsTicket().then(({ticket})=>ticket)
       // 建会失败时仍消费此 Promise 的拒绝，避免后台短票请求产生未处理异常。
       void preparedTicket.catch(()=>undefined)
-      sid=await props.createSession(activeWorkspaceId.value || undefined, preparedTicket)
+      sid=await props.createSession(activeWorkspaceId.value || undefined, preparedTicket, sessionTier.value || undefined)
       if(!sid) throw new Error()
       props.store.drafts[sid]=source
       delete props.store.drafts.draft
