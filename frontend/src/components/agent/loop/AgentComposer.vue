@@ -1,7 +1,11 @@
 <template>
   <div class="loop-composer" :class="{ 'is-busy': busy || draft.submitting }" @dragover.prevent @drop.prevent="drop">
-    <div v-if="busy || draft.submitting" class="composer-border-glow" aria-hidden="true" />
-    <div v-if="busy || draft.submitting" class="composer-border-beam" aria-hidden="true" />
+    <div v-if="busy || draft.submitting" class="composer-border-glow" aria-hidden="true">
+      <span class="composer-beam-head" />
+    </div>
+    <div v-if="busy || draft.submitting" class="composer-border-beam" aria-hidden="true">
+      <span class="composer-beam-head" />
+    </div>
     <div class="draft-files"><AttachmentPreview v-for="file in draft.files" :key="file.key" :attachment="{file_id:file.id,filename:file.filename,size:file.size,content_type:file.content_type,preview_url:file.source,uploading:file.uploading,uploadProgress:file.progress,error:!!file.error}" removable @remove="remove(file)"/></div>
     <textarea ref="input" v-model="draft.content" aria-label="消息" placeholder="输入任何评测问题或需求，Shift + Enter 换行，Enter 发送" rows="1" @input="resize" @paste="() => nextTick(resize)" @keydown="keydown" />
     <div class="composer-bottom">
@@ -314,7 +318,16 @@ function drop(event: DragEvent) { void upload(Array.from(event.dataTransfer?.fil
 .loop-composer textarea:focus,.loop-composer textarea:focus-visible{border:0!important;outline:0!important;box-shadow:none!important}
 .tier-trigger{gap:5px}.tier-trigger.is-warning{color:#d97706}.tier-trigger-icon{display:inline-flex;align-items:center;justify-content:center;color:#667487;flex-shrink:0}.tier-trigger-icon.is-warning{color:#d97706}[data-theme='dark'] .tier-trigger.is-warning,[data-theme='dark'] .tier-trigger-icon.is-warning{color:#fbbf24}.tier-popover{width:min(320px,calc(100vw - 30px));padding:5px}.tier-list{display:flex;flex-direction:column;gap:2px}.tier-option{display:flex;width:100%;align-items:center;gap:10px;border:1px solid transparent;border-radius:9px;background:transparent;padding:8px 10px;text-align:left;cursor:pointer;transition:background-color .15s ease,border-color .15s ease}.tier-option:hover{background:#f2f7f4;border-color:#dae9e0}.tier-option.is-selected{background:#eef6f2;border-color:#cde4d6}.tier-option-icon{display:flex;align-items:center;justify-content:center;flex:0 0 24px;width:24px;height:24px;color:#475569}.tier-option-icon.is-warning{color:#d97706}.tier-option-content{display:flex;flex-direction:column;min-width:0;flex:1 1 auto;gap:1px}.tier-option-title{font-size:13px;font-weight:600;color:#1e293b;line-height:1.35}.tier-option-title.is-warning{color:#d97706}.tier-option-desc{font-size:11.5px;color:#64748b;line-height:1.4}.tier-option-desc.is-warning{color:#b45309}.tier-option-check{display:inline-flex;align-items:center;justify-content:center;margin-left:auto;flex:0 0 auto;color:#1f5947}[data-theme='dark'] .tier-option:hover{background:rgba(22,151,122,.12);border-color:rgba(22,151,122,.25)}[data-theme='dark'] .tier-option.is-selected{background:rgba(22,151,122,.18);border-color:rgba(22,151,122,.35)}[data-theme='dark'] .tier-option-icon{color:#94a3b8}[data-theme='dark'] .tier-option-icon.is-warning{color:#fbbf24}[data-theme='dark'] .tier-option-title{color:#f1f5f9}[data-theme='dark'] .tier-option-title.is-warning{color:#fbbf24}[data-theme='dark'] .tier-option-desc{color:#94a3b8}[data-theme='dark'] .tier-option-desc.is-warning{color:#f59e0b}[data-theme='dark'] .tier-option-check{color:#34d399}
 
-/* Agent 运行中边框旋绕循环动画 */
+/* Agent 运行中边框旋绕循环动画 (基于 CSS Motion Path 沿圆角边缘匀速循环) */
+.loop-composer {
+  --composer-radius: 20px;
+}
+@media (max-width: 560px) {
+  .loop-composer {
+    --composer-radius: 14px;
+  }
+}
+
 .loop-composer.is-busy {
   border-color: rgba(96, 165, 250, 0.45);
   box-shadow: 0 4px 24px -2px rgba(59, 130, 246, 0.12), 0 0 0 1px rgba(59, 130, 246, 0.08);
@@ -323,6 +336,7 @@ function drop(event: DragEvent) { void upload(Array.from(event.dataTransfer?.fil
   border-color: rgba(96, 165, 250, 0.35);
   box-shadow: 0 4px 24px -2px rgba(0, 0, 0, 0.6), 0 0 18px rgba(59, 130, 246, 0.15);
 }
+
 .draft-files,
 .loop-composer textarea,
 .composer-bottom,
@@ -330,6 +344,8 @@ function drop(event: DragEvent) { void upload(Array.from(event.dataTransfer?.fil
   position: relative;
   z-index: 3;
 }
+
+/* 边框通道：掏空中间内容，仅露出边缘 1.5px 边框 */
 .composer-border-beam {
   position: absolute;
   inset: -1px;
@@ -343,69 +359,97 @@ function drop(event: DragEvent) { void upload(Array.from(event.dataTransfer?.fil
   mask-composite: exclude;
   z-index: 2;
 }
-.composer-border-beam::before {
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 300%;
-  height: 300%;
-  transform: translate(-50%, -50%);
-  background: conic-gradient(
-    from 0deg,
-    transparent 0deg,
-    transparent 270deg,
-    rgba(56, 189, 248, 0.15) 295deg,
-    rgba(56, 189, 248, 0.6) 325deg,
-    #38bdf8 340deg,
-    #2563eb 354deg,
-    #818cf8 360deg
-  );
-  animation: composer-beam-spin 3.2s linear infinite;
-}
+
+/* 外围柔和发光层 */
 .composer-border-glow {
   position: absolute;
-  inset: -2px;
+  inset: -4px;
   border-radius: inherit;
-  padding: 3px;
+  padding: 6px;
   pointer-events: none;
   overflow: hidden;
   -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
   -webkit-mask-composite: xor;
   mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
   mask-composite: exclude;
-  filter: blur(3px);
-  opacity: 0.65;
+  filter: blur(5px);
+  opacity: 0.85;
   z-index: 1;
 }
-.composer-border-glow::before {
-  content: '';
+
+/* 沿圆角矩形切线自对齐匀速循环的光束头 */
+.composer-beam-head {
   position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 300%;
-  height: 300%;
-  transform: translate(-50%, -50%);
-  background: conic-gradient(
-    from 0deg,
-    transparent 0deg,
-    transparent 270deg,
-    rgba(56, 189, 248, 0.2) 300deg,
-    #38bdf8 335deg,
-    #3b82f6 352deg,
-    #818cf8 360deg
+  top: 0;
+  left: 0;
+  width: 280px;
+  height: 96px;
+  offset-path: rect(0 auto auto 0 round var(--composer-radius, 20px));
+  offset-anchor: 50% 50%;
+  offset-rotate: auto;
+  animation: composer-beam-travel 4.2s linear infinite;
+  background: radial-gradient(
+    ellipse 60% 50% at center,
+    #38bdf8 0%,
+    rgba(59, 130, 246, 0.9) 30%,
+    rgba(37, 99, 235, 0.5) 60%,
+    transparent 80%
   );
-  animation: composer-beam-spin 3.2s linear infinite;
 }
-@keyframes composer-beam-spin {
+
+.composer-border-glow .composer-beam-head {
+  width: 330px;
+  height: 120px;
+  background: radial-gradient(
+    ellipse 60% 50% at center,
+    #60a5fa 0%,
+    #3b82f6 40%,
+    transparent 75%
+  );
+}
+
+@keyframes composer-beam-travel {
   from {
-    transform: translate(-50%, -50%) rotate(0deg);
+    offset-distance: 0%;
   }
   to {
-    transform: translate(-50%, -50%) rotate(360deg);
+    offset-distance: 100%;
   }
 }
+
+@supports not (offset-path: rect(0 auto auto 0 round 20px)) {
+  .composer-border-beam::before,
+  .composer-border-glow::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 300%;
+    height: 300%;
+    transform: translate(-50%, -50%);
+    background: conic-gradient(
+      from 0deg,
+      transparent 0deg,
+      transparent 270deg,
+      rgba(56, 189, 248, 0.2) 300deg,
+      #38bdf8 335deg,
+      #3b82f6 352deg,
+      #818cf8 360deg
+    );
+    animation: composer-beam-spin 3.2s linear infinite;
+  }
+  @keyframes composer-beam-spin {
+    from {
+      transform: translate(-50%, -50%) rotate(0deg);
+    }
+    to {
+      transform: translate(-50%, -50%) rotate(360deg);
+    }
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .composer-beam-head,
   .composer-border-beam::before,
   .composer-border-glow::before {
     animation: none !important;
