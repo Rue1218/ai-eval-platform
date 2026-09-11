@@ -1,7 +1,7 @@
 <template>
   <div class="loop-composer" @dragover.prevent @drop.prevent="drop">
     <div class="draft-files"><AttachmentPreview v-for="file in draft.files" :key="file.key" :attachment="{file_id:file.id,filename:file.filename,size:file.size,content_type:file.content_type,preview_url:file.source,uploading:file.uploading,uploadProgress:file.progress,error:!!file.error}" removable @remove="remove(file)"/></div>
-    <textarea ref="input" v-model="draft.content" aria-label="消息" placeholder="输入任何评测问题或需求，Shift + Enter 换行，Enter 发送" rows="1" @input="resize" @keydown="keydown" />
+    <textarea ref="input" v-model="draft.content" aria-label="消息" placeholder="输入任何评测问题或需求，Shift + Enter 换行，Enter 发送" rows="1" @input="resize" @paste="() => nextTick(resize)" @keydown="keydown" />
     <div class="composer-bottom">
       <input ref="picker" type="file" multiple hidden :accept="ui?.attachments.upload_suffixes.join(',')" @change="pick"/>
       <button class="loop-control attach-trigger" aria-label="添加附件" type="button" :disabled="!ui" @click="picker?.click()"><n-icon :component="AddIcon" :size="15"/></button>
@@ -156,7 +156,7 @@
   </div>
 </template>
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { NIcon, NPopover } from 'naive-ui'
 import AddIcon from 'naive-ui/es/_internal/icons/Add'
 import CheckmarkIcon from 'naive-ui/es/_internal/icons/Checkmark'
@@ -265,7 +265,23 @@ function keydown(event: KeyboardEvent) {
     }
   }
 }
-function resize() { const el = input.value; if (el) { el.style.height = 'auto'; el.style.height = Math.min(200, Math.max(52, el.scrollHeight)) + 'px' } }
+function resize() {
+  const el = input.value
+  if (!el) return
+  if (!props.draft.content) {
+    el.style.height = ''
+    el.style.overflowY = 'hidden'
+    return
+  }
+  el.style.height = 'auto'
+  const scrollH = el.scrollHeight
+  const targetH = Math.min(200, Math.max(52, scrollH))
+  el.style.height = `${targetH}px`
+  el.style.overflowY = scrollH > 200 ? 'auto' : 'hidden'
+}
+watch([() => props.draft, () => props.draft?.content], () => {
+  nextTick(resize)
+}, { immediate: true })
 function focus() { nextTick(() => { input.value?.focus(); resize() }) }
 function chooseModel(id: string) { modelOpen.value = false; emit('model', id) }
 function chooseAgent(id: string) { agentOpen.value = false; emit('agent', id) }

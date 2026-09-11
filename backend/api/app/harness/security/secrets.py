@@ -72,16 +72,21 @@ def redact(obj: Any) -> Any:
     """递归脱敏（CX-3）：遍历 dict/list，命中 REDACT_KEYS 的值按方式抹除。
 
     纯函数，返回脱敏后的副本；非密钥键原样保留。
+    敏感键的值是容器（dict/list/tuple）时整体全量抹除——容器内部键名不可枚举，
+    逐层递归会绕过键级脱敏（安全方向收紧：宁过度勿泄漏）。
     """
     if isinstance(obj, dict):
-        return {
-            key: (
-                _mask_value(str(key), str(value))
-                if is_sensitive_key(str(key)) and not isinstance(value, dict | list)
-                else redact(value)
-            )
-            for key, value in obj.items()
-        }
+        result: dict[Any, Any] = {}
+        for key, value in obj.items():
+            if is_sensitive_key(str(key)):
+                result[key] = (
+                    mask_full("")
+                    if isinstance(value, dict | list | tuple)
+                    else _mask_value(str(key), str(value))
+                )
+            else:
+                result[key] = redact(value)
+        return result
     if isinstance(obj, list):
         return [redact(item) for item in obj]
     if isinstance(obj, tuple):
@@ -93,16 +98,16 @@ def redact_for_log(obj: Any) -> Any:
     """日志专用脱敏（§5.2.1）：更严格，所有疑似密钥全量 '***'。
 
     供 agent_trace / logger 调用；与 ``redact`` 的区别：不留部分前缀。
+    敏感键的值是容器时同样整体全量抹除。
     """
     if isinstance(obj, dict):
-        return {
-            key: (
-                mask_full(str(value))
-                if is_sensitive_key(str(key)) and not isinstance(value, dict | list)
-                else redact_for_log(value)
-            )
-            for key, value in obj.items()
-        }
+        result: dict[Any, Any] = {}
+        for key, value in obj.items():
+            if is_sensitive_key(str(key)):
+                result[key] = mask_full("")
+            else:
+                result[key] = redact_for_log(value)
+        return result
     if isinstance(obj, list):
         return [redact_for_log(item) for item in obj]
     if isinstance(obj, tuple):

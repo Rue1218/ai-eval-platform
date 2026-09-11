@@ -673,12 +673,17 @@
               :class="{ 'is-disabled': t.enabled === false }"
             >
               <div class="mcp-card-top">
-                <div class="mcp-tool-heading">
-                  <div class="mcp-tool-title">{{ t.display_name || t.name }}</div>
-                  <div class="domain-tag mono">{{ t.name }}</div>
+                <div class="mcp-tool-heading-wrap">
+                  <div class="mcp-tool-icon-box" :class="`tool-icon-${getToolDomain(t.name).key}`">
+                    <ToolIcon :name="t.name" :size="20" />
+                  </div>
+                  <div class="mcp-tool-heading">
+                    <div class="mcp-tool-title">{{ t.display_name || t.name }}</div>
+                    <div class="domain-tag mono">{{ t.name }}</div>
+                  </div>
                 </div>
 
-                <div class="row" style="gap: 4px">
+                <div class="row" style="gap: 4px; flex-shrink: 0">
                   <span class="tag-soft">
                     {{ t.transport === 'native' ? '原生' : '内部 MCP' }}
                   </span>
@@ -741,8 +746,15 @@
               <tbody>
                 <tr v-for="t in filteredMcpTools" :key="t.name">
                   <td>
-                    <div style="font-weight: 600; font-size: 13px">{{ t.display_name || t.name }}</div>
-                    <div class="mono small tertiary" style="font-size: 10.5px">{{ t.name }}</div>
+                    <div class="mcp-table-tool-col">
+                      <div class="mcp-table-tool-icon" :class="`tool-icon-${getToolDomain(t.name).key}`">
+                        <ToolIcon :name="t.name" :size="15" />
+                      </div>
+                      <div class="mcp-table-tool-info">
+                        <div style="font-weight: 600; font-size: 13px">{{ t.display_name || t.name }}</div>
+                        <div class="mono small tertiary" style="font-size: 10.5px">{{ t.name }}</div>
+                      </div>
+                    </div>
                   </td>
                   <td>
                     <span class="tag-soft">
@@ -1010,20 +1022,20 @@
          Tab 5：运行时与主机治理 (Runtime)
          ═══════════════════════════════════════════════════════════════ -->
     <template v-else>
-      <div class="runtime-governance-container">
+      <div class="panel runtime-governance-panel">
         <!-- 1. 会话与连接参数 -->
-        <div class="panel">
+        <div class="runtime-section">
           <div class="panel-section-title">WebSocket 会话与连接参数</div>
-          <div class="runtime-form-grid mt12">
-            <div class="field">
+          <div class="runtime-form-row mt10">
+            <div class="runtime-field">
               <label class="field-label">心跳 Ping 间隔 (秒)</label>
               <n-input-number v-model:value="runtimeForm.ws_ping_s" :min="5" :max="300" style="width: 100%" />
             </div>
-            <div class="field">
+            <div class="runtime-field">
               <label class="field-label">连接超时断开 (秒)</label>
               <n-input-number v-model:value="runtimeForm.ws_timeout_s" :min="5" :max="300" style="width: 100%" />
             </div>
-            <div class="field">
+            <div class="runtime-field">
               <label class="field-label">WS Ticket 授权 TTL (秒)</label>
               <n-input-number :value="300" disabled style="width: 100%" />
               <span class="field-hint">一次性授权票据，固定 5 分钟 (PRD §5.1)</span>
@@ -1031,43 +1043,45 @@
           </div>
         </div>
 
+        <div class="runtime-divider"></div>
+
         <!-- 2. 会话互斥与长任务槽位 -->
-        <div class="panel">
+        <div class="runtime-section">
           <div class="panel-section-title">会话占槽与并发互斥规则</div>
-          <div class="mt10">
-            <label class="row" style="gap: 10px; align-items: center; cursor: pointer">
-              <n-switch v-model:value="runtimeForm.strict_session_slot" />
-              <div>
-                <div style="font-weight: 600; font-size: 13.5px">严格会话占槽互斥</div>
-                <div class="small tertiary mt2">压测等长任务执行期间保持槽位独占，防止并发任务冲突 (PRD §3.4)</div>
-              </div>
-            </label>
+          <div class="small tertiary mt2 mb10">
+            当前会话有进行中任务（含压测子任务）时，主按钮自动禁用，完成后方可开启新长任务 (PRD §3.4)。
           </div>
+          <label class="row" style="gap: 10px; align-items: center; cursor: pointer">
+            <n-switch v-model:value="runtimeForm.strict_session_slot" />
+            <span style="font-weight: 600; font-size: 13.5px">严格会话占槽互斥：压测等长任务执行期间保持槽位独占</span>
+          </label>
         </div>
 
+        <div class="runtime-divider"></div>
+
         <!-- 3. 安全权限等级 -->
-        <div class="panel">
+        <div class="runtime-section">
           <div class="panel-section-title">全局默认权限等级</div>
-          <div class="small tertiary mt4 mb12">
+          <div class="small tertiary mt2 mb10">
             控制 Agent 会话执行写操作、联网与命令调用的授权策略；单会话可在此基础上自定义调整。
           </div>
           <div class="runtime-tier-select-wrap">
             <n-select
               v-model:value="runtimeForm.permission_tier_default"
               :options="permissionTierOptions"
-              style="width: 100%"
+              style="width: 380px; max-width: 100%;"
             />
           </div>
+        </div>
 
-          <div class="mt20 pt12" style="border-top: 1px solid var(--border-subtle)">
-            <button
-              class="btn btn-primary btn-sm"
-              :disabled="runtimeSaving"
-              @click="saveRuntime"
-            >
-              {{ runtimeSaving ? '保存中…' : '保存运行时治理参数' }}
-            </button>
-          </div>
+        <div class="runtime-footer mt20">
+          <button
+            class="btn btn-primary btn-sm"
+            :disabled="runtimeSaving"
+            @click="saveRuntime"
+          >
+            {{ runtimeSaving ? '保存中…' : '保存运行时治理参数' }}
+          </button>
         </div>
       </div>
     </template>
@@ -1123,6 +1137,7 @@ import McpToolModal from '../components/modals/McpToolModal.vue'
 import SkillDetailModal, { type SkillDetail } from '../components/modals/SkillDetailModal.vue'
 import AgentSkillFileModal from '../components/modals/AgentSkillFileModal.vue'
 import AgentPromptModal from '../components/modals/AgentPromptModal.vue'
+import ToolIcon from '../components/agent/loop/ToolIcon.vue'
 
 const message = useMessage()
 const dialog = useDialog()
@@ -1196,11 +1211,29 @@ const domainFilterOptions = [
 
 /** 获取工具业务领域与图标映射 */
 function getToolDomain(name: string): { label: string; icon: string; key: string } {
-  if (name === 'read' || name === 'write' || name === 'edit') return { label: '文件系统', icon: '', key: 'file' }
+  if (
+    name === 'read' ||
+    name === 'read_image' ||
+    name === 'write' ||
+    name === 'edit' ||
+    name === 'glob' ||
+    name === 'grep' ||
+    name === 'list_dir' ||
+    name === 'str_replace_editor'
+  ) {
+    return { label: '文件系统', icon: '', key: 'file' }
+  }
   if (name === 'web_search' || name === 'web_fetch') return { label: '网络抓取', icon: '', key: 'web' }
   if (name === 'bash') return { label: '沙箱命令', icon: '', key: 'bash' }
-  if (name === 'task') return { label: '任务规划', icon: '', key: 'plan' }
-  if (name.includes('task.create') || name.includes('task.status') || name.includes('task.cancel')) return { label: '任务调度', icon: '', key: 'task' }
+  if (name === 'task' || name === 'ask_user_question') return { label: '任务规划', icon: '', key: 'plan' }
+  if (
+    name.includes('task.create') ||
+    name.includes('task.status') ||
+    name.includes('task.cancel') ||
+    name.startsWith('Task')
+  ) {
+    return { label: '任务调度', icon: '', key: 'task' }
+  }
   if (name.startsWith('model.')) return { label: '模型资产', icon: '', key: 'model' }
   if (name.startsWith('dataset.')) return { label: '数据集', icon: '', key: 'dataset' }
   if (name.startsWith('kb.')) return { label: '知识库', icon: '', key: 'kb' }
@@ -2162,6 +2195,9 @@ onMounted(() => {
     flex: 1;
     width: auto;
   }
+  .vendor-models-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* 协议档筛选工具条 */
@@ -2183,24 +2219,24 @@ onMounted(() => {
 
 /* 供应商卡片容器与自适应网格 */
 .vendor-cards-container {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
-  align-items: start;
+  display: flex;
+  flex-direction: column;
   gap: 16px;
 }
 .vendor-group-card {
   border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.08));
-  border-radius: 12px;
+  border-radius: 14px;
   background: var(--bg-card, #ffffff);
-  padding: 16px;
+  padding: 16px 18px;
   display: flex;
   flex-direction: column;
   gap: 12px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
-  transition: border-color 0.2s ease;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 .vendor-group-card:hover {
-  border-color: var(--c-profiles, rgba(22, 151, 122, 0.35));
+  border-color: rgba(217, 119, 6, 0.3);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.04);
 }
 .vendor-group-header {
   display: flex;
@@ -2221,7 +2257,7 @@ onMounted(() => {
   flex-wrap: wrap;
 }
 .vendor-name {
-  font-size: 14px;
+  font-size: 14.5px;
   font-weight: 700;
   color: var(--text-primary, #111827);
   overflow: hidden;
@@ -2230,11 +2266,12 @@ onMounted(() => {
 }
 .vendor-count-badge {
   font-size: 11px;
-  background: var(--t-profiles, rgba(22, 151, 122, 0.08));
-  color: var(--c-profiles, #1f5947);
-  padding: 1px 6px;
+  background: var(--t-profiles, #fef3c7);
+  color: var(--c-profiles, #b45309);
+  padding: 1.5px 7px;
   border-radius: 10px;
   font-weight: 600;
+  border: 1px solid rgba(180, 83, 9, 0.15);
 }
 .vendor-url {
   font-size: 11px;
@@ -2245,30 +2282,52 @@ onMounted(() => {
   white-space: nowrap;
 }
 
-/* 内部模型芯片网格 */
+/* 内部模型芯片网格与动态流光动效 */
+@keyframes pulse-border {
+  0%, 100% {
+    border-color: rgba(217, 119, 6, 0.65);
+    box-shadow: 0 0 12px rgba(217, 119, 6, 0.15);
+  }
+  50% {
+    border-color: rgba(245, 158, 11, 0.95);
+    box-shadow: 0 0 20px rgba(245, 158, 11, 0.28);
+  }
+}
+
 .vendor-models-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 12px;
+  width: 100%;
+}
+.model-chip-card {
+  background: var(--bg-card, #ffffff);
+  border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.08));
+  border-radius: 12px;
+  padding: 14px 16px;
   display: flex;
   flex-direction: column;
   gap: 10px;
-}
-.model-chip-card {
-  background: var(--bg-elevated, #f9fafb);
-  border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.06));
-  border-radius: 10px;
-  padding: 12px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  transition: all 0.18s ease;
+  position: relative;
+  min-width: 0;
+  box-sizing: border-box;
+  transition: all 0.22s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .model-chip-card:hover {
-  background: var(--bg-card, #ffffff);
-  border-color: var(--c-profiles, rgba(22, 151, 122, 0.4));
-  box-shadow: 0 4px 12px rgba(22, 151, 122, 0.06);
+  transform: translateY(-2px);
+  border-color: rgba(217, 119, 6, 0.45);
+  box-shadow: 0 6px 20px -2px rgba(217, 119, 6, 0.12);
 }
 .model-chip-card.is-agent-core {
-  border-color: var(--c-profiles, #1f5947);
-  background: var(--t-profiles, rgba(22, 151, 122, 0.05));
+  background: #FEF3C7;
+  border: 1.5px solid #d97706;
+  border-radius: 12px;
+  box-shadow: 0 4px 14px rgba(217, 119, 6, 0.15);
+  animation: pulse-border 3.2s ease-in-out infinite;
+}
+.model-chip-card.is-agent-core:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px -2px rgba(217, 119, 6, 0.25);
 }
 .model-chip-top {
   display: flex;
@@ -2284,7 +2343,7 @@ onMounted(() => {
   flex: 1;
 }
 .model-chip-name {
-  font-size: 13px;
+  font-size: 13.5px;
   font-weight: 600;
   color: var(--text-primary, #111827);
   overflow: hidden;
@@ -2292,10 +2351,13 @@ onMounted(() => {
   white-space: nowrap;
 }
 .agent-core-tag {
-  font-size: 10.5px;
+  background: #ffffff;
+  color: #b45309;
+  border: 1px solid #b45309;
+  border-radius: 999px;
+  padding: 1.5px 8px;
+  font-size: 11px;
   font-weight: 600;
-  color: var(--c-profiles, #1f5947);
-  border-color: var(--c-profiles, rgba(22, 151, 122, 0.25));
   white-space: nowrap;
 }
 .model-chip-meta {
@@ -2306,7 +2368,7 @@ onMounted(() => {
   flex-wrap: wrap;
 }
 .model-id-tag {
-  background: var(--bg-card, #ffffff);
+  background: var(--bg-elevated, #f3f4f6);
   padding: 2px 7px;
   border-radius: 5px;
   font-weight: 600;
@@ -2317,8 +2379,16 @@ onMounted(() => {
   white-space: nowrap;
   max-width: 220px;
 }
+.model-chip-card.is-agent-core .model-id-tag {
+  background: #ffffff;
+  border-color: rgba(0, 0, 0, 0.08);
+  color: #1e293b;
+}
 .protocol-tag {
   color: var(--text-tertiary, #9ca3af);
+}
+.model-chip-card.is-agent-core .protocol-tag {
+  color: #6b7280;
 }
 .url-mode-tag {
   border-radius: 4px;
@@ -2335,13 +2405,37 @@ onMounted(() => {
   border-radius: 4px;
   font-size: 11px;
 }
+.model-chip-card.is-agent-core .window-tag {
+  background: #ffffff;
+  color: #4b5563;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+}
 .model-chip-bottom {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding-top: 6px;
+  padding-top: 8px;
   border-top: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.04));
+  margin-top: 4px;
+}
+.model-chip-card.is-agent-core .model-chip-bottom {
+  border-top-color: rgba(217, 119, 6, 0.2);
+}
+.model-chip-bottom .link-btn {
+  color: #047857;
+  font-size: 12px;
+  font-weight: 500;
+  transition: color 0.15s ease;
+}
+.model-chip-bottom .link-btn:hover {
+  color: #065f46;
+}
+.model-chip-bottom .link-btn.danger {
+  color: #9ca3af;
+}
+.model-chip-bottom .link-btn.danger:hover {
+  color: #ef4444;
 }
 
 /* 探活轻量化胶囊 */
@@ -2541,17 +2635,18 @@ onMounted(() => {
 }
 .mcp-card {
   border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.08));
-  border-radius: 10px;
-  padding: 14px;
+  border-radius: 12px;
+  padding: 14px 16px;
   background: var(--bg-card, #ffffff);
   display: flex;
   flex-direction: column;
   gap: 10px;
-  transition: all 0.18s ease;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .mcp-card:hover {
-  border-color: var(--c-profiles, rgba(22, 151, 122, 0.35));
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
+  transform: translateY(-2px);
+  border-color: var(--c-profiles, rgba(22, 151, 122, 0.45));
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.06);
 }
 .mcp-card.is-disabled {
   opacity: 0.7;
@@ -2562,6 +2657,118 @@ onMounted(() => {
   justify-content: space-between;
   gap: 8px;
 }
+.mcp-tool-heading-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+.mcp-tool-icon-box {
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: var(--bg-elevated, #f3f4f6);
+  border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.08));
+  color: var(--c-profiles, #16977a);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.mcp-card:hover .mcp-tool-icon-box {
+  transform: scale(1.05);
+}
+
+/* 领域/分类色彩徽标容器 */
+.tool-icon-file {
+  color: #10b981;
+  background: rgba(16, 185, 129, 0.08);
+  border-color: rgba(16, 185, 129, 0.22);
+}
+.tool-icon-web {
+  color: #3b82f6;
+  background: rgba(59, 130, 246, 0.08);
+  border-color: rgba(59, 130, 246, 0.22);
+}
+.tool-icon-bash {
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.08);
+  border-color: rgba(245, 158, 11, 0.22);
+}
+.tool-icon-plan,
+.tool-icon-task {
+  color: #8b5cf6;
+  background: rgba(139, 92, 246, 0.08);
+  border-color: rgba(139, 92, 246, 0.22);
+}
+.tool-icon-model {
+  color: #6366f1;
+  background: rgba(99, 102, 241, 0.08);
+  border-color: rgba(99, 102, 241, 0.22);
+}
+.tool-icon-dataset {
+  color: #06b6d4;
+  background: rgba(6, 182, 212, 0.08);
+  border-color: rgba(6, 182, 212, 0.22);
+}
+.tool-icon-kb {
+  color: #14b8a6;
+  background: rgba(20, 184, 166, 0.08);
+  border-color: rgba(20, 184, 166, 0.22);
+}
+.tool-icon-report {
+  color: #ec4899;
+  background: rgba(236, 72, 153, 0.08);
+  border-color: rgba(236, 72, 153, 0.22);
+}
+.tool-icon-dispatch {
+  color: #0ea5e9;
+  background: rgba(14, 165, 233, 0.08);
+  border-color: rgba(14, 165, 233, 0.22);
+}
+.tool-icon-cases {
+  color: #84cc16;
+  background: rgba(132, 204, 22, 0.08);
+  border-color: rgba(132, 204, 22, 0.22);
+}
+.tool-icon-image {
+  color: #a855f7;
+  background: rgba(168, 85, 247, 0.08);
+  border-color: rgba(168, 85, 247, 0.22);
+}
+.tool-icon-audio {
+  color: #eab308;
+  background: rgba(234, 179, 8, 0.08);
+  border-color: rgba(234, 179, 8, 0.22);
+}
+.tool-icon-other {
+  color: var(--c-profiles, #16977a);
+  background: var(--t-profiles, rgba(22, 151, 122, 0.08));
+  border-color: rgba(22, 151, 122, 0.22);
+}
+
+/* 表格列工具图标 */
+.mcp-table-tool-col {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.mcp-table-tool-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.08));
+}
+.mcp-table-tool-info {
+  min-width: 0;
+}
+
 .mcp-tool-heading {
   min-width: 0;
   flex: 1;
@@ -2720,17 +2927,18 @@ onMounted(() => {
 }
 .skill-card-v2 {
   border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.08));
-  border-radius: 10px;
+  border-radius: 12px;
   padding: 16px;
   background: var(--bg-card, #ffffff);
   display: flex;
   flex-direction: column;
   gap: 10px;
-  transition: all 0.18s ease;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .skill-card-v2:hover {
-  border-color: var(--c-profiles, rgba(22, 151, 122, 0.35));
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
+  transform: translateY(-2px);
+  border-color: var(--c-profiles, rgba(22, 151, 122, 0.45));
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.06);
 }
 .skill-card-top {
   display: flex;
@@ -2821,10 +3029,10 @@ onMounted(() => {
 /* ═══════════════════════════════════════════════════════════════
    Tab 5：运行时治理
    ═══════════════════════════════════════════════════════════════ */
-.runtime-governance-container {
+.runtime-governance-panel {
+  padding: 22px 26px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
 }
 .panel-section-title {
   font-size: 14.5px;
@@ -2832,13 +3040,43 @@ onMounted(() => {
   color: var(--text-primary, #111827);
   margin-bottom: 4px;
 }
-.runtime-form-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 16px;
+.runtime-section {
+  display: flex;
+  flex-direction: column;
+}
+.runtime-divider {
+  height: 1px;
+  background: var(--border-subtle, rgba(0, 0, 0, 0.06));
+  margin: 20px 0;
+}
+.runtime-form-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+.runtime-field {
+  width: 240px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.runtime-field .field-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary, #111827);
+}
+.runtime-field .field-hint {
+  font-size: 11px;
+  color: var(--text-tertiary, #9ca3af);
+  margin-top: 2px;
 }
 .runtime-tier-select-wrap {
-  max-width: 480px;
+  max-width: 380px;
+}
+.runtime-footer {
+  padding-top: 16px;
+  border-top: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.06));
 }
 
 /* ═══════════════════════════════════════════════════════════════
