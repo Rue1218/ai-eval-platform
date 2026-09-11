@@ -1,24 +1,31 @@
-"""协议档环境文件读写工具。
+"""协议档环境文件读写工具（API 侧：读写 + 快照回滚）。
 
-协议档的主模型、Embedding、Reranker 的 Base URL、模型 ID 和 API Key 不再写入数据库；本模块以 profile ID
-生成稳定的环境变量名，并在 bind mount 受控 ``.env`` 文件上加锁刷新。
+共享部分（数据类 / 键名生成 / dotenv 解析 / 只读投影）收敛在 ``shared/profile_env.py``，
+本模块保留 API 独有的写能力（快照 / 回滚 / 全局 RAG 写入）与 URL→Key 解析。
 模块不执行 shell、不展开变量，也不会把敏感值写入日志。
 """
 
 from __future__ import annotations
 
-import ast
 import json
 import os
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
 
+from shared.profile_env import (  # noqa: F401  （对外兼容导出）
+    GlobalLlmEnvValues,
+    GlobalRagEnvValues,
+    ProfileEnvValues,
+    global_llm_values_from,
+    global_rag_values_from,
+    profile_env_keys,
+    profile_values_from,
+)
+from shared.profile_env import parse_env_lines as _parse_lines
+
 from .config import settings
 
-_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_PROFILE_ID_RE = re.compile(r"[^A-Za-z0-9]+")
 _ENV_WRITE_LOCK = RLock()
 
 
@@ -32,78 +39,9 @@ class ProfileEnvSnapshot:
     mode: int | None
 
 
-@dataclass(frozen=True)
-class ProfileEnvValues:
-    """协议档从环境文件读取的连接参数。"""
-
-    base_url: str | None
-    model: str | None
-    api_key: str | None
-    full_url: bool = False  # 完整端点不追加协议后缀。
-    embedding_base_url: str | None = None
-    embedding_model: str | None = None
-    embedding_api_key: str | None = None
-    reranker_base_url: str | None = None
-    reranker_model: str | None = None
-    reranker_api_key: str | None = None
-
-
-@dataclass(frozen=True)
-class GlobalLlmEnvValues:
-    """兼容服务器既有单模型 LLM_* 环境变量。"""
-
-    api_key: str | None
-    model: str | None
-    openai_base_url: str | None
-    anthropic_base_url: str | None
-
-
 def env_path() -> Path:
     """解析协议档环境文件路径；相对路径按当前服务工作目录解析。"""
     return Path(settings.profile_env_file).expanduser().resolve()
-
-
-def profile_env_keys(profile_id: str) -> dict[str, str]:
-    """根据协议档 ID 生成固定、无冲突的环境变量名。"""
-    token = _PROFILE_ID_RE.sub("_", str(profile_id)).strip("_").upper() or "UNKNOWN"
-    return {
-        "base_url": f"AI_PROFILE_{token}_BASE_URL",
-        "model": f"AI_PROFILE_{token}_MODEL",
-        "full_url": f"AI_PROFILE_{token}_FULL_URL",
-        "api_key": f"AI_PROFILE_{token}_API_KEY",
-        "embedding_base_url": f"AI_PROFILE_{token}_EMBEDDING_BASE_URL",
-        "embedding_model": f"AI_PROFILE_{token}_EMBEDDING_MODEL",
-        "embedding_api_key": f"AI_PROFILE_{token}_EMBEDDING_API_KEY",
-        "reranker_base_url": f"AI_PROFILE_{token}_RERANKER_BASE_URL",
-        "reranker_model": f"AI_PROFILE_{token}_RERANKER_MODEL",
-        "reranker_api_key": f"AI_PROFILE_{token}_RERANKER_API_KEY",
-    }
-
-
-def _decode_value(raw: str) -> str:
-    """解析简单 dotenv 值；仅处理本模块写入的单引号/双引号值。"""
-    value = raw.strip()
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-        try:
-            parsed = ast.literal_eval(value)
-        except (SyntaxError, ValueError):
-            return value[1:-1]
-        return parsed if isinstance(parsed, str) else value[1:-1]
-    return value
-
-
-def _parse_lines(lines: list[str]) -> dict[str, str]:
-    """读取 KEY=VALUE 行，不执行 shell 替换或命令。"""
-    values: dict[str, str] = {}
-    for line in lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        key, raw = stripped.split("=", 1)
-        key = key.strip()
-        if _KEY_RE.fullmatch(key):
-            values[key] = _decode_value(raw)
-    return values
 
 
 def _read_snapshot(path: Path) -> ProfileEnvSnapshot:
@@ -140,48 +78,14 @@ def _write_content(path: Path, content: str, mode: int = 0o600) -> None:
 
 def read_profile_env(profile_id: str) -> ProfileEnvValues:
     """读取一个协议档的环境参数；不存在的字段返回 ``None``。"""
-    path = env_path()
-    snapshot = _read_snapshot(path)
-    values = _parse_lines(snapshot.content.splitlines())
-    keys = profile_env_keys(profile_id)
-    return ProfileEnvValues(
-        full_url=values.get(keys["full_url"], "false").lower() == "true",
-        base_url=values.get(keys["base_url"]) or None,
-        model=values.get(keys["model"]) or None,
-        api_key=values.get(keys["api_key"]) or None,
-        embedding_base_url=values.get(keys["embedding_base_url"]) or values.get("AI_EMBEDDING_BASE_URL") or None,
-        embedding_model=values.get(keys["embedding_model"]) or values.get("AI_EMBEDDING_MODEL") or None,
-        embedding_api_key=values.get(keys["embedding_api_key"]) or values.get("AI_EMBEDDING_API_KEY") or None,
-        reranker_base_url=values.get(keys["reranker_base_url"]) or values.get("AI_RERANKER_BASE_URL") or None,
-        reranker_model=values.get(keys["reranker_model"]) or values.get("AI_RERANKER_MODEL") or None,
-        reranker_api_key=values.get(keys["reranker_api_key"]) or values.get("AI_RERANKER_API_KEY") or None,
-    )
-
-
-@dataclass(frozen=True)
-class GlobalRagEnvValues:
-    """系统全局唯一的 Embedding 与 Reranker 模型环境参数。"""
-
-    embedding_base_url: str | None
-    embedding_model: str | None
-    embedding_api_key: str | None
-    reranker_base_url: str | None
-    reranker_model: str | None
-    reranker_api_key: str | None
+    values = _parse_lines(_read_snapshot(env_path()).content.splitlines())
+    return profile_values_from(values, profile_id)
 
 
 def read_global_rag_env() -> GlobalRagEnvValues:
     """读取系统全局唯一的 Embedding 与 Reranker 模型环境参数。"""
-    snapshot = _read_snapshot(env_path())
-    values = _parse_lines(snapshot.content.splitlines())
-    return GlobalRagEnvValues(
-        embedding_base_url=values.get("AI_EMBEDDING_BASE_URL") or None,
-        embedding_model=values.get("AI_EMBEDDING_MODEL") or None,
-        embedding_api_key=values.get("AI_EMBEDDING_API_KEY") or None,
-        reranker_base_url=values.get("AI_RERANKER_BASE_URL") or None,
-        reranker_model=values.get("AI_RERANKER_MODEL") or None,
-        reranker_api_key=values.get("AI_RERANKER_API_KEY") or None,
-    )
+    values = _parse_lines(_read_snapshot(env_path()).content.splitlines())
+    return global_rag_values_from(values)
 
 
 def write_global_rag_env(
@@ -235,14 +139,8 @@ def write_global_rag_env(
 
 def read_global_llm_env() -> GlobalLlmEnvValues:
     """读取服务器既有的单模型环境变量，供未迁移旧协议档兼容使用。"""
-    snapshot = _read_snapshot(env_path())
-    values = _parse_lines(snapshot.content.splitlines())
-    return GlobalLlmEnvValues(
-        api_key=values.get("LLM_API_KEY") or None,
-        model=values.get("LLM_MODEL") or None,
-        openai_base_url=values.get("OPENAI_BASE_URL") or None,
-        anthropic_base_url=values.get("ANTHROPIC_BASE_URL") or None,
-    )
+    values = _parse_lines(_read_snapshot(env_path()).content.splitlines())
+    return global_llm_values_from(values)
 
 
 def write_profile_env(
