@@ -142,10 +142,12 @@ test('工作区弹层从输入框上方展开，Task 卡片接收 MCP 名与 Wor
   // 按钮上移由 0.28s transition 驱动；轮询等待位移完成，避免慢环境取到过渡起点。
   await expect.poll(async () => restingButtonBox.y - (await workspaceButton.boundingBox())!.y)
     .toBeGreaterThanOrEqual(6)
-  const triggerBox = (await workspaceButton.boundingBox())!
+  const messageInput = page.getByRole('textbox', {name:'消息'})
+  // 按钮和浮层分别有 transform/同步定位动画；以浮层不遮挡输入框验证稳定的界面契约，不读取过渡中的触发器坐标。
   await expect.poll(async () => {
     const popoverBox = (await workspacePopover.boundingBox())!
-    return popoverBox.y - (triggerBox.y + triggerBox.height)
+    const inputBox = (await messageInput.boundingBox())!
+    return inputBox.y - (popoverBox.y + popoverBox.height)
   }).toBeGreaterThanOrEqual(-2)
   // 保留真实浏览器快照，供工作区弹层的视觉回归核验。
   await page.screenshot({path:'test-results/workspace-popover-task-card-ux.png'})
@@ -199,12 +201,12 @@ for (const profile of serverProfiles.slice(0, 2)) {
     // 切换模型会保留仍受支持的偏好；先归零，再验证真实指针拖动。
     await slider.press('Home')
     await expect(slider).toHaveValue('0')
-    // 等待弹层缩放结束再取坐标；拖到轨道边缘，避免跨浏览器的滑块中心偏差。
+    // 等待弹层缩放结束再取坐标；按下后越过可视轨道右侧，触发原生 range 对最大值的钳制，避免各浏览器在最后 1px 的落点差异。
     await slider.click({trial:true})
     const box = (await slider.boundingBox())!
     await page.mouse.move(box.x + 15, box.y + box.height / 2)
     await page.mouse.down()
-    await page.mouse.move(box.x + box.width - 1, box.y + box.height / 2, {steps:8})
+    await page.mouse.move(box.x + box.width + 15, box.y + box.height / 2, {steps:8})
     await page.mouse.up()
     await expect(slider).toHaveAttribute('aria-valuetext', '最高强度')
     await slider.press('Home')
