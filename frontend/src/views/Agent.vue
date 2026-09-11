@@ -1115,280 +1115,44 @@ function handleInterpretReport(reportId: string) {
   border-color: var(--t-success, rgba(24, 128, 56, 0.3));
 }
 
-.ws-chip-x {
-  cursor: pointer;
-  font-weight: 700;
-  padding: 0 2px;
-  color: var(--text-tertiary);
-}
 
-.ws-chip-x:hover {
-  color: var(--text-primary);
-}
 
-.ws-binding-panel {
-  position: absolute;
-  top: 52px;
-  right: 16px;
-  z-index: 40;
-  width: min(360px, calc(100vw - 32px));
-  max-height: 300px;
-  overflow: auto;
-  padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px solid var(--border-subtle);
-  background: var(--bg-elevated);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
-}
 
-.ws-binding-panel-title {
-  font-size: 12px;
-  font-weight: 600;
-  padding-bottom: 6px;
-  border-bottom: 1px solid var(--border-subtle);
-  margin-bottom: 4px;
-}
 
-.ws-binding-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  text-align: left;
-  gap: 8px;
-  border: none;
-  background: transparent;
-  color: var(--text-primary);
-  font-size: 13px;
-  padding: 8px 4px;
-  border-radius: 8px;
-  cursor: pointer;
-}
 
-.ws-binding-item:hover {
-  background: var(--bg-hover, rgba(128, 128, 128, 0.08));
-}
 
 /* 面板内新建工作区（即建即绑） */
-.ws-binding-create {
-  display: flex;
-  gap: 8px;
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border-subtle);
-}
 
-.ws-binding-create-input {
-  flex: 1;
-  min-width: 0;
-  font-size: 13px;
-  padding: 6px 10px;
-}
 
 /* 协作者消息左对齐并弱化背景色，作者行让多人记录可以追溯。 */
-.msg-user.remote {
-  align-items: flex-start;
-}
 
-.msg-user.remote .bubble-user {
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-subtle);
-  border-bottom-left-radius: 6px;
-  border-bottom-right-radius: 20px;
-  color: var(--text-primary);
-}
 
-.bubble-user-markdown {
-  color: #ffffff;
-  word-break: break-word;
-}
 
-.bubble-user-markdown :deep(.markdown-content) {
-  font-size: 15px;
-  line-height: 1.65;
-  color: #ffffff;
-  tab-size: 4;
-  -moz-tab-size: 4;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
 
-.bubble-user-markdown :deep(.md-p) {
-  margin: 0;
-  line-height: 1.65;
-  color: inherit;
-  font-size: 15px;
-  white-space: pre-wrap;
-}
 
-.bubble-user-markdown :deep(.md-p + .md-p) {
-  margin-top: 10px;
-}
 
-.bubble-user-markdown :deep(strong) {
-  color: #ffffff;
-  font-weight: 700;
-}
 
-.bubble-user-markdown :deep(em) {
-  color: #ffffff;
-  font-style: italic;
-}
 
-.bubble-user-markdown :deep(.md-inline-code) {
-  background: rgba(255, 255, 255, 0.22);
-  color: #ffffff;
-  border: 1px solid rgba(255, 255, 255, 0.35);
-  border-radius: 4px;
-  padding: 1.5px 6px;
-  font-family: var(--font-mono);
-  font-size: 13.5px;
-  white-space: pre-wrap;
-}
 
-.bubble-user-markdown :deep(.md-code-card) {
-  margin: 8px 0;
-  background: rgba(15, 23, 42, 0.95);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 8px;
-  text-align: left;
-}
 
-.bubble-user-markdown :deep(.md-code-body) {
-  color: #f1f5f9;
-  font-size: 13.5px;
-}
 
-.bubble-user-markdown :deep(.md-ul) {
-  padding-left: 20px;
-  margin: 6px 0;
-}
 
-.bubble-user-markdown :deep(.md-li-bullet),
-.bubble-user-markdown :deep(.md-li-num) {
-  color: #ffffff;
-  margin-bottom: 4px;
-  line-height: 1.6;
-  font-size: 15px;
-}
 
-.bubble-user-markdown :deep(.md-li-bullet::marker),
-.bubble-user-markdown :deep(.md-li-num::marker) {
-  color: rgba(255, 255, 255, 0.85);
-}
 
-.bubble-user-markdown :deep(.md-quote) {
-  border-left-color: rgba(255, 255, 255, 0.6);
-  background: rgba(255, 255, 255, 0.12);
-  color: rgba(255, 255, 255, 0.95);
-  margin: 8px 0;
-  padding: 6px 12px;
-}
 
 /* 远端协作者用户气泡颜色自适应 */
-.msg-user.remote .bubble-user-markdown,
-.msg-user.remote .bubble-user-markdown :deep(.markdown-content),
-.msg-user.remote .bubble-user-markdown :deep(.md-p),
-.msg-user.remote .bubble-user-markdown :deep(strong),
-.msg-user.remote .bubble-user-markdown :deep(.md-li-bullet),
-.msg-user.remote .bubble-user-markdown :deep(.md-li-num) {
-  color: var(--text-primary);
-}
 
-.msg-user.remote .bubble-user-markdown :deep(.md-inline-code) {
-  background: rgba(0, 0, 0, 0.06);
-  color: var(--accent-ai);
-  border-color: var(--border-subtle);
-}
 
-.user-author {
-  color: var(--text-tertiary);
-  font-size: 11px;
-  font-weight: 600;
-}
 
 /* 助手消息头：用真实供应商图形对齐模型名和协议档名称。 */
-.assistant-message-layout {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-}
 
-.assistant-message-logo {
-  margin-top: 2px;
-}
 
-.assistant-message-main {
-  min-width: 0;
-  flex: 1;
-}
 
-.assistant-message-header {
-  margin-bottom: 7px;
-  line-height: 1.25;
-}
 
-.assistant-message-model {
-  color: var(--text-primary);
-  font-size: 14px;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-}
 
-.assistant-message-profile {
-  color: var(--text-secondary);
-  font-weight: 650;
-}
 
-.assistant-message-time {
-  margin-top: 3px;
-  color: var(--text-tertiary);
-  font-size: 10px;
-  line-height: 1.2;
-}
 
 /* 顶部与输入框模型选择胶囊按钮 */
-.chat-head-model-pill,
-.chat-head-model-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--border-subtle);
-  background: var(--bg-elevated);
-  color: var(--text-secondary);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  cursor: pointer;
-  user-select: none;
-  transition: all 0.15s ease;
-}
-.chat-head-model-btn:hover {
-  background: var(--bg-hover, #f3f4f6);
-  border-color: var(--border-color, #d1d5db);
-  color: var(--text-primary, #111827);
-}
-.composer-model-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 2px 8px;
-  border-radius: 6px;
-  border: 1px solid var(--border-subtle);
-  background: var(--bg-elevated);
-  color: var(--text-secondary);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  cursor: pointer;
-  user-select: none;
-  transition: all 0.15s ease;
-}
-.composer-model-btn:hover {
-  background: var(--bg-hover, #f3f4f6);
-  border-color: var(--border-color, #d1d5db);
-  color: var(--text-primary, #111827);
-}
 
 /* 底部输入框整体容器（固定吸附于对话流底部，不随会话滚动消失） */
 .composer {
@@ -1397,91 +1161,18 @@ function handleInterpretReport(reportId: string) {
   background: var(--bg-main);
 }
 
-.quick-chips {
-  max-width: 840px;
-  margin: 0 auto 8px;
-}
 
 /* 用户消息与输入区共用附件卡片布局，图片优先给出可识别的缩略图。 */
-.message-attachments,
-.attach-stage {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
 
-.message-attachments {
-  justify-content: flex-end;
-}
 
-.msg-user.remote .message-attachments {
-  justify-content: flex-start;
-}
 
-.attach-stage {
-  width: 100%;
-  max-width: none;
-  margin: 0 0 2px;
-}
 
 /* 输入卡片：上部多行文本，下部操作底栏（对齐 Gemini / Cursor / Claude 对话框） */
-.composer-card {
-  max-width: 840px;
-  margin: 0 auto;
-  border: 1px solid var(--border-subtle);
-  border-radius: 16px;
-  background: var(--bg-main);
-  box-shadow: 0 2px 14px rgba(0, 0, 0, 0.04);
-  padding: 10px 12px 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  transition: border-color 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease;
-}
 
-.composer-card:focus-within {
-  border-color: var(--accent-ai);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-ai) 15%, transparent), 0 4px 18px rgba(0, 0, 0, 0.06);
-}
 
-.composer-card.drag-active {
-  border-color: var(--accent-ai);
-  background: color-mix(in srgb, var(--accent-ai) 5%, var(--bg-main));
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent-ai) 13%, transparent);
-}
 
-.composer-drop-hint {
-  position: absolute;
-  inset: 0;
-  z-index: 3;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  border-radius: inherit;
-  background: color-mix(in srgb, var(--bg-main) 92%, var(--accent-ai));
-  color: var(--text-primary);
-  font-size: 13px;
-  pointer-events: none;
-}
 
-.composer-drop-hint span:last-child {
-  color: var(--text-tertiary);
-  font-size: 11px;
-}
 
-.composer-drop-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  background: var(--t-agent);
-  color: var(--c-agent);
-  font-size: 17px;
-  line-height: 1;
-}
 
 /* 运行生成中的动态环绕光束特效 (Border Beam) */
 @property --composer-border-angle {
@@ -1529,121 +1220,21 @@ function handleInterpretReport(reportId: string) {
 }
 
 /* 输入框上半区行容器 */
-.composer-input-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 2px;
-  width: 100%;
-  min-height: 38px;
-}
 
 /* 多行文本域自适应高度（最小 38px，最大 200px 限制） */
-.composer-textarea {
-  flex: 1;
-  width: 100% !important;
-  border: none !important;
-  outline: none !important;
-  box-shadow: none !important;
-  resize: none !important;
-  font-family: var(--font-chat, inherit) !important;
-  font-size: 14.5px !important;
-  line-height: 1.55 !important;
-  min-height: 38px !important;
-  max-height: 200px !important;
-  padding: 4px 6px !important;
-  background: transparent !important;
-  color: var(--text-primary, #111827) !important;
-  box-sizing: border-box !important;
-  overflow-y: hidden;
-  -webkit-appearance: none !important;
-  -moz-appearance: none !important;
-  appearance: none !important;
-}
 
-.composer-textarea:focus,
-.composer-textarea:hover,
-.composer-textarea:active {
-  border: none !important;
-  outline: none !important;
-  box-shadow: none !important;
-}
 
-.composer-textarea::placeholder {
-  color: var(--text-tertiary);
-  font-size: 13.5px;
-}
 
 /* 操作底栏 */
-.composer-bottom-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding-top: 2px;
-}
 
-.composer-left-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
 
 /* 附件小按钮 (+) */
-.composer-action-btn {
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
-  border: none;
-  background: transparent;
-  color: var(--text-tertiary);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
 
-.composer-attach-btn {
-  flex: 0 0 22px;
-  margin-top: 5px;
-}
 
-.composer-action-btn:hover {
-  background: var(--bg-elevated);
-  color: var(--text-primary);
-}
 
 /* 模型切换下拉按钮（对齐参考图：模型名 + 箭头） */
-.composer-model-dropdown-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 8px;
-  border-radius: 6px;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 12.5px;
-  font-weight: 500;
-  cursor: pointer;
-  white-space: nowrap;
-  user-select: none;
-  transition: all 0.15s ease;
-}
 
-.composer-model-dropdown-btn:hover {
-  background: var(--bg-elevated);
-  color: var(--text-primary);
-}
 
-.composer-model-dropdown-btn .model-name {
-  max-width: 220px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: var(--font-mono, monospace);
-  font-size: 12px;
-}
 
 .composer-model-dropdown-btn .chevron-icon {
   opacity: 0.65;
@@ -1651,20 +1242,6 @@ function handleInterpretReport(reportId: string) {
 }
 
 /* 右侧圆形发送/暂停按钮 */
-.composer-send-btn {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  border: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--bg-elevated);
-  color: var(--text-tertiary);
-  cursor: not-allowed;
-  transition: all 0.18s ease;
-  flex-shrink: 0;
-}
 
 .composer-send-btn.active {
   background: #1f5947;
@@ -1723,31 +1300,6 @@ function handleInterpretReport(reportId: string) {
   }
   .composer {
     padding: 6px 10px max(12px, env(safe-area-inset-bottom));
-  }
-  .composer-card {
-    border-radius: 14px;
-  }
-  .composer-drop-hint {
-    flex-wrap: wrap;
-    padding: 12px 24px;
-    text-align: center;
-  }
-  .composer-model-dropdown-btn .model-name {
-    max-width: 100px;
-  }
-  .quick-chips {
-    overflow-x: auto;
-    white-space: nowrap;
-    -webkit-overflow-scrolling: touch;
-  }
-  .chat-scroll {
-    padding: 12px 10px;
-  }
-  .msg-agent pre,
-  .msg-agent table {
-    max-width: calc(100vw - 44px);
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
   }
 }
 </style>
