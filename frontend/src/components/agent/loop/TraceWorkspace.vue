@@ -83,7 +83,7 @@ const docs: Record<string,[string,string]> = {
   'session.updated':['会话信息已更新','会话的公开展示信息已经更新。'], 'turn.start':['轮次开始','一轮 Agent 执行的持久边界。'], 'turn.end':['轮次结束','本轮已经结算，原因字段说明完成、取消或失败。'],
   'step.start':['步骤开始','一个步骤包含一次模型请求以及它触发的工具工作。'], 'step.end':['步骤结束','当前模型与工具步骤已经收束。'], 'user.message':['用户输入已提交','已写入持久记录并纳入后续模型历史的用户消息。'],
   'assistant.start':['模型请求快照','模型实际使用的模型、工具、输出上限与思考配置的安全摘要。'], 'assistant.message':['助手消息已提交','流式文本合并后的持久模型输出，可能带有工具调用、用量与结束原因。'], 'assistant.end':['模型尝试结算','本次模型尝试已经提交、失败或中断。'], 'assistant.retry':['模型重试','可重试的模型异常已经记录，随后会在同一步骤中重新尝试。'],
-  'tool.call':['工具调用','模型声明的工具调用；参数只显示服务端授权的安全预览。'], 'tool.dispatch':['工具已派发','工具调用已经跨过副作用边界。'], 'tool.result':['工具结果','工具终态结果用于判断执行是否成功。'],
+  'tool.call':['工具调用','模型声明的工具调用；参数只显示服务端授权的安全预览。'], 'tool.dispatch':['工具已派发','工具调用已经跨过副作用边界。'], 'tool.result':['工具结果','工具终态结果用于判断执行是否成功。'], 'task_plan.updated':['任务规划已更新','成功 task 调用提交的完整会话规划快照；失败草稿不会改变该状态。'],
   'approval.requested':['请求授权','需要写入或执行权限的工具在派发前等待用户决定。'], 'approval.resolved':['授权已结算','授权决定已进入持久记录。'], 'question.requested':['请求补充信息','Agent 等待用户补充继续执行所需的信息。'], 'question.resolved':['补充信息已提交','用户回答已进入持久记录。'],
   'task_confirmation.requested':['请求确认任务','长任务入队前等待用户确认业务规格。'], 'task_confirmation.resolved':['任务确认已结算','任务规格确认已经进入持久记录。'], 'context.trimmed':['上下文已裁剪','上下文窗口裁剪只记录元信息，不公开被裁剪正文。'],
   'execution.quarantined':['执行已隔离','远端执行结果未知，工作区保持隔离。'], 'execution.reconciled':['执行已对账','可信执行证据已经完成对账。'], 'runtime.error':['运行时错误','Agent 图无法继续时记录的安全错误边界。'],
@@ -93,7 +93,7 @@ function kind(row: LoopFrame): 'lifecycle'|'message'|'system'|'assistant'|'tool'
   if (row.type === 'assistant.start') return 'system'
   if (row.type.startsWith('assistant.')) return 'assistant'
   if (/^(approval|question|task_confirmation)\./.test(row.type)) return 'approval'
-  if (/^(tool|task|execution)\./.test(row.type)) return 'tool'
+  if (/^(tool|task|task_plan|execution)\./.test(row.type)) return 'tool'
   return 'lifecycle'
 }
 function role(row: LoopFrame) { const key = ({message:'user',system:'context',assistant:'assistant',tool:'tool',approval:'approval',lifecycle:'system'} as const)[kind(row)]; return { key, label: ({user:'用户',context:'上下文',assistant:'助手',tool:'工具',approval:'授权',system:'系统'} as const)[key] } }
@@ -109,7 +109,11 @@ function textPreview(value: unknown) { const text = typeof value === 'string' ? 
 function preview(row: LoopFrame, full = false) { const d = row.data, summary = requestSummary(row); let value = ''
   if (row.type === 'assistant.start') value = `model=${summary?.model ?? '—'} · tools=${Array.isArray(summary?.tools) ? summary.tools.length : 0}`
   else if (kind(row) === 'approval') value = d.decision || d.source_outcome ? `授权结果：${status(row)}` : `等待 ${d.name || relatedTool(row)?.data.name || '工具'} 授权`
-  else if (kind(row) === 'tool') value = String(row.type === 'tool.call' ? d.name || d.display?.target || '' : d.display?.result_preview || d.name || d.status || '')
+  else if (row.type === 'task_plan.updated') {
+    const plan = d.plan as Data | undefined, steps = Array.isArray(plan?.steps) ? plan.steps : []
+    const completed = steps.filter(step => (step as Data).status === 'completed').length
+    value = `已更新计划：${plan?.goal || '未命名'} · ${completed}/${steps.length}`
+  } else if (kind(row) === 'tool') value = String(row.type === 'tool.call' ? d.name || d.display?.target || '' : d.display?.result_preview || d.name || d.status || '')
   else value = String(d.content || d.display?.result_preview || d.reason || d.status || '')
   return full ? value : textPreview(value)
 }

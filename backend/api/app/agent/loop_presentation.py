@@ -29,11 +29,7 @@ _TASK_TEXT_LIMIT = 300
 
 
 def _task_display(source: Mapping[str, object], *, result: bool) -> dict[str, object] | None:
-    """提取原生 task 的真实清单，作为输入框上方抽屉的唯一前端投影。
-
-    工具调用与结果都已写入持久会话日志；只投影目标和有限步骤，避免将工具内部
-    输出、会话上下文或任意 display 字段一并发送到浏览器。
-    """
+    """提取成功 task 的有限结果预览；抽屉状态不从这里读取。"""
     raw: object
     if result:
         display = source.get("display")
@@ -75,7 +71,7 @@ def tool_display(source: dict, *, result: bool = False) -> dict:
                "format": "text", "truncated": False}
     if name not in TOOL_FIELDS:
         return {**display, "unavailable_reason": "该工具尚未登记展示字段"}
-    task = _task_display(source, result=result) if name == "task" else None
+    task = _task_display(source, result=True) if name == "task" and result and source.get("status") == "succeeded" else None
     if result:
         if source.get("status") != "succeeded":
             return {**display, "result_preview": source.get("error_code") or "工具未成功完成"}

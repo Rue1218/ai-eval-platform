@@ -34,6 +34,7 @@ _FIELDS = {
     "tool.call": "name display",
     "tool.dispatch": "name execution_id registry_name wire_name tool_contract_version",
     "tool.result": "name status synthetic display error_code exit_code",
+    "task_plan.updated": "plan",
     "approval.requested": "interaction_id nonce name expires_at display",
     "approval.resolved": "interaction_id decision source_outcome",
     "question.requested": "interaction_id nonce questions expires_at",

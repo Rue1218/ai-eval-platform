@@ -20,7 +20,7 @@
 
 > V1.93（2026-09-11）：不新增浏览器 WS 字段。AgentLoop 的 `task.create`、`task.status`、`task.cancel` 统一以注册表短名作为权限、Schema 与 MCP 路由事实源；模型请求继续使用无点号的安全 Function Calling 名 `platform_task_create/status/cancel`。调度器仅兼容这三个安全 wire 名、短名和已登记 MCP 全名 `platform.tasks.task.create/status/cancel`，未知前缀一律按未知工具拒绝。三种名称均引用同一 `ToolDef.parameters_schema` JSON Schema（根对象 `additionalProperties=false`），调用事实保留实际 wire 名，同时以 `registry_name` 记录短名，确保轨迹与审计可追溯而不复制字段定义。
 
-> V1.94（2026-09-11）：AgentLoop 恢复原生 `task` 会话规划工具（与 Worker 队列 `task.create/status/cancel` 严格分离）。`task` 仅用于复杂多步骤工作的完整清单：输入 Schema 为根对象 `additionalProperties=false`，必填 `description` 与 `steps`，每个步骤必填 `title`、`status`（`pending|in_progress|completed`），`steps` 为 1–12 项；每次调用整体替换上一份清单。简单单步任务不调用该工具。既有持久 `tool.call/result.data.display` 增量可选 `task:{goal,steps:[{title,status}]}`，它只由原生 `task` 产生，字段来自注册表真实输入/输出的白名单投影，供输入框上方抽屉回放；不新增长任务、Worker 事件或浏览器上行字段。
+> V1.95（2026-09-11）：AgentLoop 原生 `task` 对齐 DeepSeek Harness 的 `todo_write`：它是当前 Agent 会话独占的整表规划工具，与 Worker 队列 `task.create/status/cancel` 严格分离。输入 Schema 为根对象 `additionalProperties=false`，必填 `description` 与 `steps`，每个步骤必填 `title`、`status`（`pending|in_progress|completed`），`steps` 为 1–12 项且顺序执行时最多一项 `in_progress`；每次调用整体替换上一份清单。仅成功的 `task` 与对应 `tool.result` 同事务写入 `task_plan.updated:{plan:{goal,description,steps,counts}}` 持久投影；失败调用、工具调用草稿和旧 `tool.display.task` 都不能改变当前抽屉。重连按该事件回放，简单单步任务不调用该工具；不新增长任务、Worker 事件或浏览器上行字段。
 
 > V1.88（2026-09-09）：浏览器 AgentLoop v2 流 schema 升至 `agent-loop-stream.v2.2`，完整事实目录升至 `catalog_version=5`。`assistant.message.data` 新增可选 `latency_ms`，为单次模型流从建立到完成的真实毫秒耗时，不含工具执行；已有 `usage` 继续仅透传上游返回的 `prompt_tokens`、`completion_tokens`、`total_tokens` 与可选缓存 token。前端聚合统计只能使用已持久化的这些字段：上游没有返回缓存 token 时缓存命中率显示未知，不能补零或估算。
 
@@ -1904,7 +1904,7 @@ source_seq 仅引用 Agent 事实，不替代 session_stream cursor。
 
 | durability | type |
 | :--- | :--- |
-| persistent | user.message、turn.start/end、step.start/end、assistant.start/message/end/retry、tool.call/dispatch/result、approval.requested/resolved、question.requested/resolved、task_confirmation.requested/resolved、execution.quarantined/reconciled、task.queued/progress/report/end、session.updated、context.trimmed、runtime.error |
+| persistent | user.message、turn.start/end、step.start/end、assistant.start/message/end/retry、tool.call/dispatch/result、task_plan.updated、approval.requested/resolved、question.requested/resolved、task_confirmation.requested/resolved、execution.quarantined/reconciled、task.queued/progress/report/end、session.updated、context.trimmed、runtime.error |
 | transient | assistant.text.delta、assistant.reasoning.delta、trace.chunk |
 | control | hello、capabilities、schema.catalog、command.accepted/rejected、subscribed、replay.completed、resync.required、pong、trace.event |
 
@@ -3073,6 +3073,23 @@ Worker 事实覆盖一次调用快照，不新增浏览器 WS 字段。
 | `backend/api/app/agent/loop_presentation.py` | 三种任务名称投影同一字段白名单与安全展示短名。 |
 | `frontend/src/agent/loop/taskPresentation.ts` / `components/agent/loop/TaskRunCard.vue` | 从安全预览和 Worker 事实构建实时 Task 卡片。 |
 | `backend/api/tests/test_loop_tools.py` / `test_loop_presentation.py` / `frontend/tests/agentLoop.test.mjs` | 覆盖 Schema 同源、三名称路由、脱敏展示及前端状态关联。 |
+
+**V1.95（2026-09-11）— 原生 task 会话规划快照**
+
+原生 `task` 采用 DeepSeek Harness `todo_write` 的会话规划语义：模型每次提交完整
+`steps` 列表，成功写入的最后一个 `task_plan.updated` 即为该 Agent 会话当前计划。该事件
+包含 `plan:{goal,description,steps,counts}`，与同一 `tool.result` 在一个事务提交；它必须引用
+同一回合、步骤、attempt、调用和 `tool.call` 序号，且快照必须逐字等于成功 `task` 的规范参数。
+因此失败调用或 `tool.call` 草稿不会覆盖已生效计划。浏览器只消费该持久事件构建
+`TaskStateDrawer`，断线重连和状态快照均按事件流回放；工具轨迹保留展示价值，但不是计划状态源。
+
+| 实际修改文件 | 作用 |
+| --- | --- |
+| `backend/api/app/harness/execution/{dispatch,scheduler}.py` | 规范任务快照、限制顺序规划单活跃步骤，并把 task 成功结果与快照作为一组提交。 |
+| `backend/api/app/harness/memory/agent_events.py` / `harness/contracts/loop_events.py` / `agent/events.py` | 登记、校验并投影 `task_plan/updated` 事实。 |
+| `frontend/src/{api/agentLoopTypes.ts,agent/loop/reducer.ts,components/agent/loop/AgentWorkspace.vue}` | 只按权威规划事件更新和恢复抽屉，不再读取工具调用草稿。 |
+| `backend/api/app/routers/mcp.py` | 修正工具目录中已过期的 task handler、字段与管线描述。 |
+| `backend/api/tests/test_loop_tools_pg.py` / `test_loop_presentation.py` / `frontend/tests/agentLoop.test.mjs` | 覆盖原子提交、失败不覆盖、重连回放及前端投影。 |
 
 
 ## 2026-09-09 协议档供应商与完整 URL 优化

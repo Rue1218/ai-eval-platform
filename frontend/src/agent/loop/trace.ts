@@ -29,7 +29,7 @@ export function category(type: string): string {
   // 参考页只有四类业务筛选；问答/规格确认属于授权，任务/执行属于工具工作。
   const namespace = type.split(/[./]/)[0]
   if (['assistant', 'request'].includes(namespace)) return 'model'
-  if (['tool', 'execution', 'task'].includes(namespace)) return 'tool'
+  if (['tool', 'execution', 'task', 'task_plan'].includes(namespace)) return 'tool'
   if (['approval', 'question', 'task_confirmation'].includes(namespace)) return 'approval'
   return 'lifecycle'
 }

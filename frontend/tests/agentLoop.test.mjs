@@ -43,6 +43,19 @@ test('严格游标：重复丢弃，缺口停住，受限占位仍消费序号',
   assert.equal(s.cursor, 3); assert.equal(Object.keys(s.messages).length, 1)
   assert.throws(() => applyFrame(s, { ...first, protocol_version: 3 }))
 })
+test('任务抽屉只接受成功 task 的独立会话快照，调用草稿和失败结果均不覆盖', () => {
+  const s = createLoopState('s'), f = fixture(), c = {attempt_id:'a',call_id:'task-1',call_seq:1}
+  applyFrame(s, f('tool.call', {name:'task',display:{task:{goal:'草稿',steps:[{title:'不应显示',status:'pending'}]}}}, c))
+  applyFrame(s, f('tool.result', {name:'task',status:'failed'}, c))
+  assert.equal(s.taskPlan, null)
+  const plan = {goal:'修复任务链路',description:'修复任务链路',steps:[
+    {title:'写入完整计划',status:'completed'}, {title:'验证重连',status:'in_progress'},
+  ],counts:{pending:0,in_progress:1,completed:1}}
+  applyFrame(s, f('task_plan.updated', {plan}, c))
+  assert.deepEqual(s.taskPlan, plan)
+  const restored = restoreSnapshot('s', s.cursor, {timeline:s.facts})
+  assert.deepEqual(restored.taskPlan, plan)
+})
 test('四步模型、三个同名工具与下一回合：顺序和调用身份保持独立', () => {
   const s = createLoopState('s'), f = fixture()
   applyFrame(s, f('user.message', { content: '编辑文件' })); applyFrame(s, f('turn.start'))
@@ -84,6 +97,7 @@ test('轨迹请求快照与助手提交分别成行，平台扩展归入参考�
   assert.equal(category('question.requested'), 'approval')
   assert.equal(category('task_confirmation.requested'), 'approval')
   assert.equal(category('task.progress'), 'tool')
+  assert.equal(category('task_plan.updated'), 'tool')
   const f = fixture(), c = { attempt_id: 'a' }
   const facts = [f('assistant.start', {request_summary: {model: 'test'}}, c),
     f('assistant.message', {content: '完整回答'}, {...c, source_seq: 3}),

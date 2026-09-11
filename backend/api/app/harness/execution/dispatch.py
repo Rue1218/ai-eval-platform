@@ -1068,6 +1068,23 @@ class TaskPlanResult:
     steps: tuple[dict[str, str], ...]
     description: str = ""
 
+    def to_snapshot(self) -> dict[str, object]:
+        """返回写入会话事实的完整规划快照，供回放按最后一次成功写入覆盖。"""
+        counts = {
+            status: sum(step["status"] == status for step in self.steps)
+            for status in ("pending", "in_progress", "completed")
+        }
+        return {
+            "goal": self.goal,
+            "description": self.description or self.goal,
+            "steps": [dict(step) for step in self.steps],
+            "counts": {
+                "pending": counts["pending"],
+                "in_progress": counts["in_progress"],
+                "completed": counts["completed"],
+            },
+        }
+
     def to_tool_data(self) -> dict[str, object]:
         """返回模型可读清单和 ToolCard 摘要。"""
         lines = [f"目标：{self.goal}"]
@@ -1075,6 +1092,7 @@ class TaskPlanResult:
             lines.append(f"{index}. [{step['status']}] {step['title']}")
         model_text = "\n".join(lines)
         summary = f"已拆解为 {len(self.steps)} 个步骤（仅当前会话，不创建评测任务）"
+        snapshot = self.to_snapshot()
         return {
             "summary": summary,
             "model_text": model_text,
@@ -1084,10 +1102,10 @@ class TaskPlanResult:
                 "status": "success",
                 "result": summary,
                 "task": {
-                    "goal": self.goal,
-                    "description": self.description,
+                    "goal": snapshot["goal"],
+                    "description": snapshot["description"],
                     "prompt": self.goal,
-                    "steps": list(self.steps),
+                    "steps": snapshot["steps"],
                 },
             },
         }
@@ -1539,6 +1557,7 @@ def build_task_plan(arguments: Mapping[str, object]) -> TaskPlanResult:
         raise AppError(ErrorCode.VALIDATION, "任务步骤数量必须在 1 到 12 之间")
     steps: list[dict[str, str]] = []
     seen_titles: set[str] = set()
+    in_progress_count = 0
     for index, raw_step in enumerate(raw_steps, start=1):
         if not isinstance(raw_step, Mapping):
             raise AppError(ErrorCode.VALIDATION, f"第 {index} 个任务步骤格式无效")
@@ -1552,7 +1571,11 @@ def build_task_plan(arguments: Mapping[str, object]) -> TaskPlanResult:
         seen_titles.add(normalized_title)
         if status not in {"pending", "in_progress", "completed"}:
             raise AppError(ErrorCode.VALIDATION, f"第 {index} 个任务步骤状态无效")
+        if status == "in_progress":
+            in_progress_count += 1
         steps.append({"title": title, "status": status})
+    if in_progress_count > 1:
+        raise AppError(ErrorCode.VALIDATION, "顺序会话规划同时只能有一个进行中的步骤")
     return TaskPlanResult(goal=goal, steps=tuple(steps), description=description)
 
 

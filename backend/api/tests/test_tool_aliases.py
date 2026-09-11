@@ -129,6 +129,7 @@ def test_task_plan_uses_full_step_list_and_rejects_duplicate_steps() -> None:
     data = result.to_tool_data()
     assert data["display"]["status"] == "success"
     assert data["display"]["result"]
+    assert result.to_snapshot()["counts"] == {"pending": 0, "in_progress": 1, "completed": 1}
 
     with pytest.raises(AppError, match="重复"):
         build_task_plan({
@@ -136,5 +137,14 @@ def test_task_plan_uses_full_step_list_and_rejects_duplicate_steps() -> None:
             "steps": [
                 {"title": "读取注册表", "status": "pending"},
                 {"title": "读取注册表", "status": "in_progress"},
+            ],
+        })
+
+    with pytest.raises(AppError, match="一个进行中"):
+        build_task_plan({
+            "description": "检查工具链路",
+            "steps": [
+                {"title": "读取注册表", "status": "in_progress"},
+                {"title": "验证前端投影", "status": "in_progress"},
             ],
         })

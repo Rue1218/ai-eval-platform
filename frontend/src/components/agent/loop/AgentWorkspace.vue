@@ -456,13 +456,8 @@ const state = computed(() => props.store.sessions[props.sessionId]), trace = com
 const draft = computed(() => props.store.draft(props.sessionId || 'draft'))
 const rows = computed(() => state.value ? conversationRows(state.value) : [])
 const visibleRows = computed(() => rows.value.slice(-shown.value))
-/** 仅消费后端白名单投影的原生 task 清单；Worker 队列 task.* 不会进入此抽屉。 */
-const taskPlan = computed<TaskPlanDisplay | null>(() => {
-  const plans = Object.values(state.value?.tools || {})
-    .filter((tool): tool is ToolRun => tool.name === 'task' && !!tool.display.task)
-    .sort((left, right) => left.first_cursor - right.first_cursor)
-  return plans.length ? plans[plans.length - 1].display.task || null : null
-})
+/** 只读取 task_plan.updated 的会话快照；工具调用草稿与失败结果不能改变抽屉。 */
+const taskPlan = computed<TaskPlanDisplay | null>(() => state.value?.taskPlan || null)
 
 function getTurnIdentifier(row: LoopRecord): string {
   if (row.correlation?.turn_id) return `turn_id:${row.correlation.turn_id}`
