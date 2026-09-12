@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import os
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
@@ -27,6 +29,30 @@ from shared.profile_env import parse_env_lines as _parse_lines
 from .config import settings
 
 _ENV_WRITE_LOCK = RLock()
+# 仅能力投影的同步请求作用域复用，不跨请求缓存凭据或影响写入后的读取。
+_ENV_READ_VALUES: ContextVar[list[dict[str, str]] | None] = ContextVar("profile_env_read_values", default=None)
+
+
+@contextmanager
+def profile_env_read_scope():
+    """一次只读能力投影使用同一份文件快照，结束或异常时立即归还上下文。"""
+    # 惰性读取保留调用方原有的异常归一化边界；容器最多保存一份解析快照。
+    token = _ENV_READ_VALUES.set([])
+    try:
+        yield
+    finally:
+        _ENV_READ_VALUES.reset(token)
+
+
+def _read_values() -> dict[str, str]:
+    """读取当前作用域快照；普通调用仍从文件获取最新值。"""
+    scope = _ENV_READ_VALUES.get()
+    if scope:
+        return scope[0]
+    values = _parse_lines(_read_snapshot(env_path()).content.splitlines())
+    if scope is not None:
+        scope.append(values)
+    return values
 
 
 @dataclass(frozen=True)
@@ -78,13 +104,13 @@ def _write_content(path: Path, content: str, mode: int = 0o600) -> None:
 
 def read_profile_env(profile_id: str) -> ProfileEnvValues:
     """读取一个协议档的环境参数；不存在的字段返回 ``None``。"""
-    values = _parse_lines(_read_snapshot(env_path()).content.splitlines())
+    values = _read_values()
     return profile_values_from(values, profile_id)
 
 
 def read_global_rag_env() -> GlobalRagEnvValues:
     """读取系统全局唯一的 Embedding 与 Reranker 模型环境参数。"""
-    values = _parse_lines(_read_snapshot(env_path()).content.splitlines())
+    values = _read_values()
     return global_rag_values_from(values)
 
 
@@ -139,7 +165,7 @@ def write_global_rag_env(
 
 def read_global_llm_env() -> GlobalLlmEnvValues:
     """读取服务器既有的单模型环境变量，供未迁移旧协议档兼容使用。"""
-    values = _parse_lines(_read_snapshot(env_path()).content.splitlines())
+    values = _read_values()
     return global_llm_values_from(values)
 
 

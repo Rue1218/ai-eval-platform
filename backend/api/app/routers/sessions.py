@@ -28,6 +28,7 @@ from ..models import (
     WsEvent,
 )
 from ..models import Session as AgentSession
+from ..profile_env import profile_env_read_scope
 from ..schemas import (
     SessionCreate,
     SessionOut,
@@ -61,6 +62,7 @@ def _last_expert_id(db: Session, session_id: str) -> str | None:
     return value if isinstance(value, str) and value.strip() else None
 
 
+@profile_env_read_scope()
 def _loop_ui(db: Session, user: User, request: Request, session=None) -> dict:
     """草稿与现有会话共用能力解析；读取不分配模型或 Runner 客户端。"""
     from ..agent.attachments import MAX_IMAGE_BYTES, TEXT_SUFFIXES
@@ -89,15 +91,19 @@ def _loop_ui(db: Session, user: User, request: Request, session=None) -> dict:
         }
 
     rows = db.query(ProtocolProfile).order_by(ProtocolProfile.created_at.desc()).all()
-    row_by_id = {row.id: row for row in rows}
+    default_row = db.get(Setting, "agent_profile_id")
+    default_id = default_row.value.strip() if default_row and isinstance(default_row.value, str) else None
+    default_item = None
     profiles: list[dict] = []
     for row in rows:
         if "agent" not in (row.usages or []):
             continue
+        configured_effort_valid = True
         try:
             # 优先发布设置页的默认档位；不兼容时仍以关闭思考档探测可选择性。
             snapshot, _ = authorized_profile(db, {"profile_id": row.id})
         except AppError:
+            configured_effort_valid = False
             try:
                 snapshot, _ = authorized_profile(
                     db, {"profile_id": row.id, "reasoning_effort": "off"}
@@ -106,17 +112,16 @@ def _loop_ui(db: Session, user: User, request: Request, session=None) -> dict:
                 continue
         allowed, default = profile_capabilities(snapshot)
         if allowed:
-            profiles.append(profile_item(row, snapshot, allowed, default))
+            item = profile_item(row, snapshot, allowed, default)
+            profiles.append(item)
+            # 默认项只复用原配置校验成功的结果，不能把关闭思考的探测回退当默认配置。
+            if row.id == default_id and configured_effort_valid:
+                default_item = item
 
     profile_data, allowed, default = None, [], None
-    try:
-        profile, _ = authorized_profile(db, {})
-        allowed, default = profile_capabilities(profile)
-        row = row_by_id.get(profile.profile_id)
-        if row is not None and allowed:
-            profile_data = profile_item(row, profile, allowed, default)
-    except AppError:
-        pass
+    if default_item is not None:
+        profile_data = dict(default_item)
+        allowed, default = profile_data["allowed_efforts"], profile_data["default_effort"]
     error = None if profile_data else "请选择可用的 Agent 协议档"
     service = getattr(request.app.state, "loop_service", None)
     entry = service.entries.get(session.id) if service and session else None
@@ -216,13 +221,13 @@ def _session_out(
     row: AgentSession,
     user: User,
     workspace_names: dict[str, str] | None = None,
+    active_tasks: dict[str, Task] | None = None,
 ) -> dict:
     """补齐会话 owner、绑定工作区名、当前成员管理权和活动任务摘要。
 
-    ``workspace_names`` 为列表预取结果（避免 N+1）；None 时按行单查（单对象
-    场景如 create/sharing）。
+    名称和活动任务均可由列表批量预取；None 时按行单查（create/sharing 等单对象场景）。
     """
-    task = (
+    task = active_tasks.get(row.id) if active_tasks is not None else (
         db.query(Task)
         .filter(Task.session_id == row.id, Task.status.in_(ACTIVE_STATUSES))
         .order_by(Task.created_at.desc())
@@ -328,7 +333,7 @@ def list_sessions(
         .all()
     )
     _auto_fill_session_titles(db, rows)
-    # N+1 收窄（P3 轻修）：绑定工作区名称一次预取（活跃任务查询仍按行进行）
+    # 名称与活动任务批量预取，空映射也表示查询完成，不能回落逐会话查询。
     bound_ids = {row.workspace_id for row in rows if row.workspace_id}
     ws_names: dict[str, str] = {}
     if bound_ids:
@@ -336,7 +341,18 @@ def list_sessions(
             ws.id: ws.name
             for ws in db.query(Workspace).filter(Workspace.id.in_(bound_ids)).all()
         }
-    items = [_session_out(db, row, user, workspace_names=ws_names) for row in rows]
+    active_tasks: dict[str, Task] = {}
+    for start in range(0, len(rows), 500):
+        tasks = (
+            db.query(Task)
+            .filter(Task.session_id.in_([row.id for row in rows[start:start + 500]]),
+                    Task.status.in_(ACTIVE_STATUSES))
+            .order_by(Task.created_at.desc())
+            .all()
+        )
+        for task in tasks:
+            active_tasks.setdefault(task.session_id, task)
+    items = [_session_out(db, row, user, workspace_names=ws_names, active_tasks=active_tasks) for row in rows]
     return {"items": items, "total": len(items)}
 
 

@@ -21,13 +21,16 @@ async function setup(page: Page, holdNewReplay = false) {
   await page.route('https://fonts.googleapis.com/**', route => route.fulfill({contentType:'text/css',body:''}))
   page.on('pageerror', error => console.log('页面异常：', error.message))
   page.on('console', message => { if (message.type() === 'error') console.log('浏览器错误：', message.text()) })
-  const commands: any[] = [], sessionCreates: Record<string, unknown>[] = [], sockets = new Map<string, any>()
+  const commands: any[] = [], sessionCreates: Record<string, unknown>[] = [], sockets = new Map<string, any>(), closed: string[] = []
+  const requests: string[] = []
   let cursor=0, submit=0
   let releaseUpload: (()=>void) | undefined
   let releaseReplay: (()=>void) | undefined
+  let holdReplay = false
   await page.route('**/api/**', async route => {
     const path=new URL(route.request().url()).pathname
     if (!path.startsWith('/api/')) { await route.continue(); return }
+    requests.push(path)
     let body: any={}
     if(path==='/api/auth/me') body={id:'u',username:'tester',role:'admin',must_change_password:false}
     else if(path==='/api/auth/ws-ticket') body={ticket:'ticket',expires_in:300}
@@ -42,16 +45,20 @@ async function setup(page: Page, holdNewReplay = false) {
     await route.fulfill({json:body})
   })
   await page.routeWebSocket('**/ws/agent/v2?*', socket => {
+    let socketSession = ''
+    socket.onClose(() => { closed.push(socketSession) })
     const send=(type:string,data:any={},correlation:any={},persistent=false,sid='s')=>socket.send(JSON.stringify({protocol_version:2,type,durability:persistent?'persistent':'control',...(persistent?{cursor:++cursor}:{}),session_id:sid,ts:'2026-09-09T00:00:00Z',correlation,data}))
     socket.send(JSON.stringify({protocol_version:2,type:'hello',durability:'control',data:{protocol_version:2},correlation:{}}))
     socket.send(JSON.stringify({protocol_version:2,type:'capabilities',durability:'control',data:{stream_schema_version:'agent-loop-stream.v2.2'},correlation:{}}))
     socket.onMessage(raw=>{
       const cmd=JSON.parse(String(raw));commands.push(cmd);sockets.set(cmd.session_id,socket)
+      socketSession = cmd.session_id
       const sid=cmd.session_id, c={turn:1,turn_id:`${sid}:1`,step:1,attempt_id:'a',call_id:'c'}
+      if(cmd.type==='ping') send('pong',cmd.data,{},false,sid)
       if(cmd.type==='subscribe') {
         send('subscribed',{cursor:cmd.session_id==='s'?cursor:0},{},false,cmd.session_id)
         const replay=()=>send('replay.completed',{cursor:cmd.session_id==='s'?cursor:0},{},false,cmd.session_id)
-        if(holdNewReplay && cmd.session_id==='s3') releaseReplay=replay
+        if(holdReplay || holdNewReplay && cmd.session_id==='s3') releaseReplay=replay
         else replay()
       }
       if(cmd.type==='turn.submit') {
@@ -100,8 +107,66 @@ async function setup(page: Page, holdNewReplay = false) {
   await expect(page.getByRole('textbox',{name:'消息'})).toBeVisible()
   // 空会话按当前产品约定隐藏“就绪”状态，运行信息入口仍应可见。
   await expect(page.locator('.loop-runtime-btn')).toBeVisible()
-  return {commands,sessionCreates,get submits(){return submit},get uploading(){return !!releaseUpload},release:()=>releaseUpload?.(),replay:()=>releaseReplay?.(),sockets}
+  return {commands,sessionCreates,get submits(){return submit},get uploading(){return !!releaseUpload},release:()=>releaseUpload?.(),replay:()=>releaseReplay?.(),holdReplay:()=>{holdReplay=true},sockets,closed,requests}
 }
+
+test('工作台初始化不再预加载旧栈偏好、模型和确认卡选项', async ({page}) => {
+  const ctx = await setup(page)
+  await page.getByRole('textbox',{name:'消息'}).fill('初始化后可发送')
+  await expect(page.getByRole('button',{name:'发送',exact:true})).toBeEnabled()
+  const legacyPaths = ['/api/agent/prefs', '/api/profiles', '/api/admin/settings', '/api/datasets', '/api/kb']
+  expect(ctx.requests.filter(path => legacyPaths.includes(path))).toEqual([])
+  expect(ctx.requests).toContain('/api/sessions')
+  expect(ctx.requests).toContain('/api/sessions/s/agent-ui')
+})
+
+test('重复聚焦合并能力请求，刷新期间可发送，切会话拒绝旧响应', async ({page}) => {
+  await page.clock.install()
+  await setup(page)
+  await page.clock.runFor(1100)
+  let requests = 0, release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  await page.route('**/api/sessions/s/agent-ui', async route => {
+    requests++
+    await held
+    // 模拟取消后仍可能完成的旧作用域响应，不能覆盖新会话的模型候选。
+    await route.fulfill({json:{...ui, profiles:[], profile:null}}).catch(() => {})
+  })
+  await page.evaluate(() => { for(let i=0;i<20;i++) window.dispatchEvent(new Event('focus')) })
+  await expect.poll(() => requests).toBe(1)
+  await page.getByRole('textbox',{name:'消息'}).fill('刷新期间仍可发送')
+  await expect(page.getByRole('button',{name:'发送',exact:true})).toBeEnabled()
+  await page.locator('.session-title-text').filter({hasText:'另一个会话'}).click()
+  release()
+  await page.getByRole('textbox',{name:'消息'}).fill('新会话继续发送')
+  await expect(page.getByRole('button',{name:'发送',exact:true})).toBeEnabled()
+  expect(requests).toBe(1)
+})
+
+test('后台空闲释放后使用原游标恢复，快速切回复用原连接', async ({page}) => {
+  await page.clock.install()
+  const ctx = await setup(page)
+  await page.getByRole('textbox',{name:'消息'}).fill('检查恢复状态')
+  await page.getByRole('button',{name:'发送',exact:true}).click()
+  await page.getByRole('button',{name:'允许一次',exact:true}).click()
+  await expect(page.getByText('文件已读取完成。',{exact:true})).toBeVisible()
+  const select = (title: string) => page.locator('.session-title-text').filter({hasText:title}).click()
+  await select('另一个会话')
+  await select('联调会话')
+  expect(ctx.commands.filter(c=>c.type==='subscribe' && c.session_id==='s')).toHaveLength(1)
+  await select('另一个会话')
+  await page.clock.runFor(75000)
+  await expect.poll(()=>ctx.closed.includes('s')).toBe(true)
+  ctx.holdReplay()
+  await select('联调会话')
+  await expect.poll(()=>ctx.commands.filter(c=>c.type==='subscribe' && c.session_id==='s').length).toBe(2)
+  const resumed = ctx.commands.filter(c=>c.type==='subscribe' && c.session_id==='s')[1]
+  expect(resumed.data.after_cursor).toBeGreaterThan(0)
+  // 缓存只用于增量恢复，服务端尚未完成授权回放时不能闪现旧正文。
+  await expect(page.getByText('文件已读取完成。',{exact:true})).toHaveCount(0)
+  ctx.replay()
+  await expect(page.getByText('文件已读取完成。',{exact:true})).toBeVisible()
+})
 
 test('新建会话固定采用 AgentLoop transport',async({page})=>{
   const ctx=await setup(page)

@@ -10,8 +10,8 @@
         <button class="loop-runtime-btn" type="button" @click="runtimeOpen=!runtimeOpen">运行信息</button>
       </div>
     </div>
-    <p v-if="state && state.connection !== 'online'" class="loop-notice" role="status">{{ state.connection === 'connecting' ? '正在同步会话…' : '连接中断，状态待同步。' }}<button @click="store.clients.get(sessionId)?.connect()">重新连接</button></p>
-    <p v-if="state?.error || error" class="loop-notice error" role="alert">{{ state?.error || error }}</p>
+    <p v-if="connectionState && connectionState.connection !== 'online'" class="loop-notice" role="status">{{ connectionState.connection === 'connecting' ? '正在同步会话…' : '连接中断，状态待同步。' }}<button @click="store.clients.get(sessionId)?.connect()">重新连接</button></p>
+    <p v-if="connectionState?.error || error" class="loop-notice error" role="alert">{{ connectionState?.error || error }}</p>
     <div class="loop-content">
       <div class="loop-center">
         <section v-if="tab==='chat'" ref="chatShell" class="loop-chat-shell" :class="{ 'is-resizing': isResizing, 'is-empty': !rows.length }" :style="chatShellStyle" aria-label="对话内容区域">
@@ -242,7 +242,7 @@
               </n-popover>
             </div>
             <TaskStateDrawer :plan="taskPlan" />
-            <AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :metrics="conversationMetrics" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" :has-workspace="true" :agent="selectedAgent" :agents="ui?.agents || []" :permission-tier="sessionTier" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile" @agent="selectAgent" @request-workspace="handleRequestWorkspace" @update-permission-tier="handleTierChange"/>
+            <AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :metrics="conversationMetrics" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" :agent="selectedAgent" :agents="ui?.agents || []" :permission-tier="sessionTier" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile" @agent="selectAgent" @update-permission-tier="handleTierChange"/>
           </div>
           <!-- 空状态时的提示词卡片（位于输入框下方，点击填充草稿） -->
           <div v-if="!rows.length" class="loop-empty-prompts">
@@ -296,7 +296,7 @@
         </button>
       </div>
       <TaskStateDrawer :plan="taskPlan" />
-      <AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :metrics="conversationMetrics" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" :has-workspace="true" :agent="selectedAgent" :agents="ui?.agents || []" :permission-tier="sessionTier" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile" @agent="selectAgent" @request-workspace="handleRequestWorkspace" @update-permission-tier="handleTierChange"/>
+      <AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :metrics="conversationMetrics" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" :agent="selectedAgent" :agents="ui?.agents || []" :permission-tier="sessionTier" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile" @agent="selectAgent" @update-permission-tier="handleTierChange"/>
     </div>
     <!-- 页面最底部指标栏：只有开始对话后（rows.length > 0）且有 conversationMetrics 时显示 -->
     <footer v-if="rows.length && conversationMetrics" class="conversation-metrics loop-bottom-metrics" aria-label="会话模型总用量指标">
@@ -335,6 +335,7 @@ import FileIcon from 'naive-ui/es/_internal/icons/File'
 import RetryIcon from 'naive-ui/es/_internal/icons/Retry'
 import TimeIcon from 'naive-ui/es/_internal/icons/Time'
 import http, { ApiError, api } from '../../../api/http'
+import { createAgentUiRefresh } from '../../../agent/loop/uiRefresh'
 import { createRequestId } from '../../../utils/requestId'
 import type { AttachmentReference, AgentSession } from '../../../api/types'
 import type { ConversationMetrics, Data, Effort, InteractionRecord, LoopAgent, LoopProfile, LoopRecord, LoopUi, TaskPlanDisplay, ToolRun } from '../../../api/agentLoopTypes'
@@ -353,7 +354,7 @@ import TaskRunCard from './TaskRunCard.vue'
 import ReasoningBlock from './ReasoningBlock.vue'
 import TraceWorkspace from './TraceWorkspace.vue'
 import { isTaskTool } from '../../../agent/loop/taskPresentation'
-import { calculateTurnSummaries, formatDuration, formatTokens, tokenValue, type TurnSummary } from '../../../agent/loop/turnSummary'
+import { calculateTurnSummaries, formatDuration, formatTokens, type TurnSummary } from '../../../agent/loop/turnSummary'
 import { assistantKeysByTurn, conversationMetricsFrom, effortPreferenceKey, finishLabels, firstAssistantInTurn, latestRequestSummary, phaseStatusText, pickAgent, pickProfile, preferenceKey, taskForToolRow } from '../../../agent/loop/workspaceDerived'
 
 const props = withDefaults(
@@ -406,11 +407,6 @@ const activeWorkspaceName = computed<string>(() => {
     return props.session?.workspace_name || (props.session?.workspace_id ? '工作区' : '')
   }
   return draftWorkspaceName.value || (draftWorkspaceId.value ? '工作区' : '')
-})
-
-const hasWorkspace = computed<boolean>(() => {
-  if (props.sessionId) return true
-  return !!activeWorkspaceId.value
 })
 
 async function loadWorkspaces(autoSelect = true) {
@@ -517,9 +513,6 @@ async function handleCreateWorkspace() {
   }
 }
 
-function handleRequestWorkspace() {
-  handleWorkspacePopoverVisibility(true)
-}
 const runtimeOpen = ref(false), error = ref(''), effort = ref<Effort | null>(null)
 const ui = ref<LoopUi | null>(null), selectedProfileId = ref(''), selectedAgentId = ref(''), shown = ref(80), attachments = ref<Record<string, AttachmentReference[]>>({})
 const composer = ref<InstanceType<typeof AgentComposer>>(), scroller = ref<HTMLElement>(), chatShell = ref<HTMLElement>(), atBottom = ref(true)
@@ -528,7 +521,9 @@ const chatWidth = ref<number | null>(null), isResizing = ref(false), resizeEdge 
 const resizeHandleOffsets = ref<Record<ResizeEdge, number>>({ left: 110, right: 110 })
 const minimumChatWidth = 520
 const chatWidthStorageKey = 'agent-loop:chat-shell-width:v3'
-const state = computed(() => props.store.sessions[props.sessionId]), trace = computed(() => props.store.traces[props.sessionId])
+// 空闲连接重开时，先完成服务端授权与回放，再展示保留的历史正文。
+const connectionState = computed(() => props.store.sessions[props.sessionId])
+const state = computed(() => props.store.restoring.has(props.sessionId) ? undefined : connectionState.value), trace = computed(() => props.store.traces[props.sessionId])
 const draft = computed(() => props.store.draft(props.sessionId || 'draft'))
 const rows = computed(() => state.value ? conversationRows(state.value) : [])
 const visibleRows = computed(() => rows.value.slice(-shown.value))
@@ -564,15 +559,15 @@ const prompts = ['查看工作区文件，说明可以如何处理', '帮我准�
 const chatShellStyle = computed(() => chatWidth.value ? { width: `${chatWidth.value}px` } : undefined)
 const maximumChatWidth = computed(() => Math.max(minimumChatWidth, (chatShell.value?.parentElement?.clientWidth || minimumChatWidth + 48) - 48))
 const renderedChatWidth = computed(() => chatWidth.value || chatShell.value?.getBoundingClientRect().width || minimumChatWidth)
-let epoch = 0
 let resizeStartX = 0, resizeStartWidth = 0
 const resizeHandleHeight = 100
-/** 能力随会话/窗口聚焦刷新；活动请求显示自己的持久配置版本。 */
-async function refreshUi() {
-  const current = ++epoch, sid = props.sessionId
-  try {
-    const { data } = await http.get<LoopUi>(sid ? `/api/sessions/${sid}/agent-ui` : '/api/sessions/agent-ui')
-    if (current !== epoch) return
+/** 合并重复能力读取，首次加载即时执行；后台刷新保留当前有效配置。 */
+const uiRefresh = createAgentUiRefresh(
+  async (sid, signal) => {
+    const { data } = await http.get<LoopUi>(sid ? `/api/sessions/${sid}/agent-ui` : '/api/sessions/agent-ui', { signal })
+    return data
+  },
+  data => {
     ui.value = data
     const savedProfileId = localPreference('agent-profile')
     const profile = data.profiles.find(item => item.id === selectedProfileId.value)
@@ -596,8 +591,11 @@ async function refreshUi() {
       if (!data.permissions.trace) { trace.value.events = []; trace.value.seen.clear(); trace.value.seq = -1; trace.value.catalog = null }
     }
     if (!data.permissions.interactions && state.value) for (const i of Object.values(state.value.interactions)) { delete i.nonce; delete i.spec_hash; i.restricted = true }
-  } catch { if (current === epoch) { ui.value = null; error.value = '读取会话能力失败，请确认权限和服务状态' } }
-}
+  },
+  () => { ui.value = null; error.value = '读取会话能力失败，请确认权限和服务状态' },
+)
+function refreshUi() { return uiRefresh.refresh(auth.user?.id || '', props.sessionId) }
+function refreshUiOnFocus() { return uiRefresh.refresh(auth.user?.id || '', props.sessionId, true) }
 /** 本地偏好只保存协议档 ID 和思考档位，不保存 API 端点、凭据或服务端配置。 */
 function localPreference(key: string) { try { return localStorage.getItem(preferenceKey(key, auth.user?.id)) } catch { return null } }
 let effortProfileKey = ''
@@ -632,7 +630,7 @@ function selectAgent(id: string) {
   selectedAgentId.value = agent.id
   try { localStorage.setItem(`agent-expert:${auth.user?.id}`, agent.id) } catch { /* 本地存储不可用不影响发送。 */ }
 }
-watch(() => props.sessionId, (newSid) => { ui.value = null; attachments.value = {}; shown.value = 80; tab.value='chat'; if (props.sessionId) props.store.open(props.sessionId); void refreshUi(); if (!newSid) void loadWorkspaces(true) }, { immediate: true })
+watch([() => props.sessionId, () => auth.user?.id], ([newSid]) => { ui.value = null; attachments.value = {}; shown.value = 80; tab.value='chat'; props.store.focus(props.sessionId, props.session?.active_task?.id); void refreshUi(); if (!newSid) void loadWorkspaces(true) }, { immediate: true })
 // 轨迹订阅属于当前可见面板；切会话/卸载仅退订诊断，不关闭执行中的控制连接。
 watch([tab, () => props.sessionId, () => ui.value?.permissions.trace], ([view, sid, permitted], _, cleanup) => {
   if (!sid || view !== 'trace' || !permitted) return
@@ -642,12 +640,12 @@ watch([tab, () => props.sessionId, () => ui.value?.permissions.trace], ([view, s
 })
 watch(() => state.value?.cursor, () => { if (atBottom.value) void nextTick(scrollBottom); void hydrateAttachments() })
 const refreshTimer = setInterval(() => { if (document.visibilityState === 'visible') void refreshUi() }, 30000)
-window.addEventListener('focus', refreshUi)
+window.addEventListener('focus', refreshUiOnFocus)
 try {
   const savedWidth = Number(localStorage.getItem(chatWidthStorageKey))
   if (Number.isFinite(savedWidth) && savedWidth >= minimumChatWidth) chatWidth.value = savedWidth
 } catch { /* 本地存储不可用时使用默认宽度。 */ }
-onBeforeUnmount(() => { epoch++; clearInterval(refreshTimer); if (workspacePopoverSyncFrame !== undefined) cancelAnimationFrame(workspacePopoverSyncFrame); window.removeEventListener('focus', refreshUi); finishContentResize() })
+onBeforeUnmount(() => { uiRefresh.cancel(); props.store.focus(''); clearInterval(refreshTimer); if (workspacePopoverSyncFrame !== undefined) cancelAnimationFrame(workspacePopoverSyncFrame); window.removeEventListener('focus', refreshUiOnFocus); finishContentResize() })
 function interactions(row: LoopRecord) { return Object.values(state.value?.interactions || {}).filter(i => identity({session_id:props.sessionId,correlation:i.correlation},true) === row.key) }
 function fill(text: string) { draft.value.content = text; composer.value?.focus() }
 function trackScroll() { const el=scroller.value; if(el) atBottom.value=el.scrollHeight-el.scrollTop-el.clientHeight<100 }
@@ -723,7 +721,7 @@ function formatSpeed(value: number | null): string {
 function formatRate(value: number | null): string {
   return value === null ? '—' : `${value.toFixed(value >= 10 ? 0 : 1)}%`
 }
-/** tokenValue / formatTokens / formatDuration 与 turnSummary 同源（顶部导入），消除双份实现。 */
+/** formatTokens / formatDuration 与 turnSummary 同源（顶部导入），消除双份实现。 */
 function formatTimestamp(value?: string): string {
   if (!value) return ''
   const date = new Date(value)

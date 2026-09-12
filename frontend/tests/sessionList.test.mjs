@@ -2,8 +2,6 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   filterSessionsByStatus,
-  legacySessionDot,
-  legacySessionTooltip,
   loopSessionDot,
   loopSessionTooltip,
   sessionStatusFilterLabel,
@@ -34,36 +32,11 @@ test('loopSessionDot：phase 终态映射 failed/succeeded', () => {
   assert.equal(loopSessionDot({ connection: 'online', phase: 'thinking' }), 'ready')
 })
 
-test('legacySessionDot：生成中 > 任务终态 > 会话状态 > 断线 > 就绪', () => {
-  assert.equal(legacySessionDot({ generating: true }), 'running')
-  assert.equal(legacySessionDot({ taskStatus: 'running' }), 'running')
-  assert.equal(legacySessionDot({ taskStatus: 'queued' }), 'running')
-  assert.equal(legacySessionDot({ taskStatus: 'failed' }), 'failed')
-  assert.equal(legacySessionDot({ taskStatus: 'succeeded' }), 'succeeded')
-  assert.equal(legacySessionDot({ taskStatus: 'cancelled' }), 'offline')
-  assert.equal(legacySessionDot({ sessionStatus: 'running' }), 'running')
-  assert.equal(legacySessionDot({ sessionStatus: 'failed' }), 'failed')
-  assert.equal(legacySessionDot({ sessionStatus: 'succeeded' }), 'succeeded')
-  assert.equal(legacySessionDot({ offline: true }), 'offline')
-  assert.equal(legacySessionDot({}), 'ready')
-  assert.equal(legacySessionDot({ generating: true, taskStatus: 'succeeded' }), 'running')
-})
-
 test('tooltip：loop 会话文案与状态点判定同源', () => {
   assert.equal(loopSessionTooltip(undefined), 'AgentLoop 会话')
   assert.equal(loopSessionTooltip({ connection: 'offline' }), '连接中断，状态待同步')
   assert.equal(loopSessionTooltip({ connection: 'online', activeTurn: {} }), 'Agent 回合进行中')
   assert.equal(loopSessionTooltip({ connection: 'online' }), 'Agent 回合已结束；Worker 状态独立')
-})
-
-test('tooltip：旧栈会话文案覆盖任务四态与断线', () => {
-  assert.equal(legacySessionTooltip({ generating: true }), '智能体正在思考生成中…')
-  assert.equal(legacySessionTooltip({ taskStatus: 'running' }), '评测任务进行中…')
-  assert.equal(legacySessionTooltip({ taskStatus: 'failed' }), '任务执行失败 (failed)')
-  assert.equal(legacySessionTooltip({ taskStatus: 'succeeded' }), '任务评测成功 (succeeded)')
-  assert.equal(legacySessionTooltip({ taskStatus: 'cancelled' }), '任务已取消 (cancelled)')
-  assert.equal(legacySessionTooltip({ offline: true }), 'WebSocket 已断开，正在重连…')
-  assert.equal(legacySessionTooltip({}), '智能体就绪 (在线)')
 })
 
 test('sessionStatusFilterLabel：五档文案，未知回落“状态”', () => {

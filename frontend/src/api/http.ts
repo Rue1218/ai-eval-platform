@@ -39,7 +39,6 @@ import {
   type AgentSession,
   type SessionHistory,
   type SessionVisibility,
-  type AgentPrefs,
   type StressSeriesResponse,
   type UserWorkspace,
   type UserWorkspaceList,
@@ -1365,23 +1364,6 @@ export const api = {
     async getMessages(id: string): Promise<SessionHistory> {
       if (getDataMode() === 'mock') return { messages: [], events: [] }
       const { data } = await http.get(`/api/sessions/${id}/messages`)
-      return data
-    },
-  },
-  agent: {
-    async getPrefs(): Promise<AgentPrefs> {
-      if (getDataMode() === 'mock') {
-        return {
-          last_kind: null,
-          last_profile_ids: [],
-          last_dataset_id: null,
-          last_kb_id: null,
-          last_gold_qa_id: null,
-          last_with_stress: false,
-          updated_at: null,
-        }
-      }
-      const { data } = await http.get('/api/agent/prefs')
       return data
     },
   },
