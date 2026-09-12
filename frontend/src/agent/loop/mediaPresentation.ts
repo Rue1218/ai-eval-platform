@@ -60,3 +60,13 @@ export function mediaPreviewFor(tool: Pick<ToolRun, 'name' | 'status' | 'event' 
   }
   return imageUrls.length || videoUrl || preview.upstreamTaskId || preview.model || status !== 'UNKNOWN' ? preview : null
 }
+
+/** 汇总同一轮的安全媒体结果，由总结区统一展示，工具卡不再承载图片或视频预览。 */
+export function mediaPreviewsFor(tools: Iterable<Pick<ToolRun, 'name' | 'status' | 'event' | 'display'>>): MediaPreview[] {
+  const previews: MediaPreview[] = []
+  for (const tool of tools) {
+    const preview = mediaPreviewFor(tool)
+    if (preview) previews.push(preview)
+  }
+  return previews
+}

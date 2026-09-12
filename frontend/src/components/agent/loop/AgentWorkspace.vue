@@ -47,24 +47,31 @@
               <ToolRunCard :tool="row as ToolRun" :interactions="interactions(row)" :can-control="canControl" :online="!!state?.ready" @respond="respond"/>
             </section>
             <!-- task 工具由任务规划看板展示，不能落入助手分支生成虚假的响应占位。 -->
-            <article v-else-if="!('status' in row && 'name' in row)" class="loop-message assistant" :class="{ 'is-continuation': !isFirstAssistantInTurn(row), 'is-process': isProcessAssistantRow(row), 'is-turn-summary': isSummaryAssistantRow(row) }">
-              <header v-if="isFirstAssistantInTurn(row) || isSummaryAssistantRow(row) || isProcessAssistantRow(row)" class="assistant-header">
-                <div class="assistant-identity">
-                  <template v-if="isFirstAssistantInTurn(row)">
-                    <ProviderLogo v-if="row.request_summary?.model" :provider="getModelLogoKey(row.request_summary.model)" :size="18"/>
-                    <strong>{{ row.request_summary?.model || '助手' }}</strong>
-                    <time v-if="formatTimestamp(row.timestamp)" :datetime="row.timestamp">{{ formatTimestamp(row.timestamp) }}</time>
-                    <small v-if="row.request_summary">第 {{ row.correlation.turn ?? '—' }} 轮 · {{ row.request_summary.reasoning_effort }} · step {{ row.correlation.step }}</small>
-                  </template>
-                  <span v-if="isSummaryAssistantRow(row)" class="turn-segment-label summary">本轮总结</span>
-                  <span v-else class="turn-segment-label process">执行过程 · step {{ row.correlation.step ?? '—' }}</span>
-                </div>
-              </header>
-              <ReasoningBlock v-if="row.reasoning && ui?.permissions.reasoning" :content="row.reasoning" :ended="row.ended" :interrupted="row.interrupted"/>
-              <MarkdownView v-if="row.text" :content="row.text"/>
-              <p v-else-if="!row.ended" class="muted">正在响应…</p>
-              <small v-if="row.interrupted || row.error_code">{{ row.interrupted ? '本次输出已中断' : row.error_code }}</small>
-            </article>
+            <template v-else-if="!('status' in row && 'name' in row)">
+              <!-- 媒体产物按轮次紧邻最终总结展示，避免图片或视频被折叠在执行过程卡中。 -->
+              <section v-if="isSummaryAssistantRow(row) && mediaPreviewsForSummary(row.key).length" class="turn-media-results" aria-label="本轮生成结果">
+                <p class="turn-segment-label summary">生成结果</p>
+                <MediaResultPreview v-for="(preview, index) in mediaPreviewsForSummary(row.key)" :key="`${preview.kind}:${preview.upstreamTaskId || preview.videoUrl || preview.imageUrls.join(',')}:${index}`" :preview="preview"/>
+              </section>
+              <article class="loop-message assistant" :class="{ 'is-continuation': !isFirstAssistantInTurn(row), 'is-process': isProcessAssistantRow(row), 'is-turn-summary': isSummaryAssistantRow(row) }">
+                <header v-if="isFirstAssistantInTurn(row) || isSummaryAssistantRow(row) || isProcessAssistantRow(row)" class="assistant-header">
+                  <div class="assistant-identity">
+                    <template v-if="isFirstAssistantInTurn(row)">
+                      <ProviderLogo v-if="row.request_summary?.model" :provider="getModelLogoKey(row.request_summary.model)" :size="18"/>
+                      <strong>{{ row.request_summary?.model || '助手' }}</strong>
+                      <time v-if="formatTimestamp(row.timestamp)" :datetime="row.timestamp">{{ formatTimestamp(row.timestamp) }}</time>
+                      <small v-if="row.request_summary">第 {{ row.correlation.turn ?? '—' }} 轮 · {{ row.request_summary.reasoning_effort }} · step {{ row.correlation.step }}</small>
+                    </template>
+                    <span v-if="isSummaryAssistantRow(row)" class="turn-segment-label summary">本轮总结</span>
+                    <span v-else class="turn-segment-label process">执行过程 · step {{ row.correlation.step ?? '—' }}</span>
+                  </div>
+                </header>
+                <ReasoningBlock v-if="row.reasoning && ui?.permissions.reasoning" :content="row.reasoning" :ended="row.ended" :interrupted="row.interrupted"/>
+                <MarkdownView v-if="row.text" :content="row.text"/>
+                <p v-else-if="!row.ended" class="muted">正在响应…</p>
+                <small v-if="row.interrupted || row.error_code">{{ row.interrupted ? '本次输出已中断' : row.error_code }}</small>
+              </article>
+            </template>
             <!-- 总结操作固定置于整轮末尾：复制、重新生成、引用记忆、Token、用时。 -->
             <div v-if="turnSummaryByLastRowKey.get(row.key)" class="turn-end-toolbar" aria-label="本轮总结操作与指标">
               <div class="turn-end-actions">
@@ -384,8 +391,10 @@ import ToolRunCard from './ToolRunCard.vue'
 import TaskRunCard from './TaskRunCard.vue'
 import ReasoningBlock from './ReasoningBlock.vue'
 import TraceWorkspace from './TraceWorkspace.vue'
+import MediaResultPreview from './MediaResultPreview.vue'
 import { isTaskTool } from '../../../agent/loop/taskPresentation'
-import { calculateTurnSummaries, formatDuration, formatTokens, type TurnSummary } from '../../../agent/loop/turnSummary'
+import { calculateTurnSummaries, formatDuration, formatTokens, getTurnIdentifier, type TurnSummary } from '../../../agent/loop/turnSummary'
+import { mediaPreviewsFor, type MediaPreview } from '../../../agent/loop/mediaPresentation'
 import { assistantKeysByTurn, conversationMetricsFrom, effortPreferenceKey, finishLabels, firstAssistantInTurn, latestRequestSummary, phaseStatusText, pickAgent, pickProfile, preferenceKey, taskForToolRow } from '../../../agent/loop/workspaceDerived'
 
 const props = withDefaults(
@@ -797,6 +806,29 @@ const summaryAssistantRowKeys = computed<Set<string>>(() =>
   new Set([...turnSummaryByLastRowKey.value.values()].map(summary => summary.summaryRow.key))
 )
 
+/** 将本轮完成的媒体工具结果放到总结消息之前，保持过程卡只呈现调用事实。 */
+const mediaPreviewsBySummaryRowKey = computed<Map<string, MediaPreview[]>>(() => {
+  const previewsBySummary = new Map<string, MediaPreview[]>()
+  const toolsByTurn = new Map<string, ToolRun[]>()
+  for (const row of rows.value) {
+    if (!('status' in row && 'name' in row)) continue
+    const tool = row as ToolRun
+    const turnKey = getTurnIdentifier(tool)
+    const tools = toolsByTurn.get(turnKey) || []
+    tools.push(tool)
+    toolsByTurn.set(turnKey, tools)
+  }
+  for (const summary of turnSummaryByLastRowKey.value.values()) {
+    const previews = mediaPreviewsFor(toolsByTurn.get(summary.turnKey) || [])
+    if (previews.length) previewsBySummary.set(summary.summaryRow.key, previews)
+  }
+  return previewsBySummary
+})
+
+function mediaPreviewsForSummary(rowKey: string): MediaPreview[] {
+  return mediaPreviewsBySummaryRowKey.value.get(rowKey) || []
+}
+
 function isSummaryAssistantRow(row: LoopRecord): boolean {
   return row.role !== 'user' && !('status' in row && 'name' in row) && summaryAssistantRowKeys.value.has(row.key)
 }
@@ -903,6 +935,9 @@ async function hydrateAttachments() {
 .loop-message.assistant.is-process { margin-bottom: 12px; }
 .loop-message.assistant.is-turn-summary { margin-top: 16px; }
 .turn-process-tool { margin: 0 0 12px; }
+.turn-media-results { margin: 0 0 12px; }
+.turn-media-results > .turn-segment-label { margin: 0 0 2px; }
+.turn-media-results :deep(.media-preview) { margin: 8px 0 0; }
 .turn-segment-label { display: inline-flex; align-items: center; min-height: 20px; padding: 0 7px; border-radius: 10px; font-size: 11px; font-weight: 500; line-height: 20px; }
 .turn-segment-label.process { color: #718096; background: #f1f5f9; }
 .turn-segment-label.summary { color: #176b55; background: #e6f5ee; }
