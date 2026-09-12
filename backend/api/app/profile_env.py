@@ -65,6 +65,18 @@ class ProfileEnvSnapshot:
     mode: int | None
 
 
+@dataclass(frozen=True)
+class MediaMcpEnvValues:
+    """媒体 MCP 的受控配置投影；密钥仅以是否存在的形式对外暴露。"""
+
+    enabled: bool | None
+    compatible_base_url: str | None
+    api_key: str | None
+    image_model: str | None
+    video_model: str | None
+    request_timeout_s: float | None
+
+
 def env_path() -> Path:
     """解析协议档环境文件路径；相对路径按当前服务工作目录解析。"""
     return Path(settings.profile_env_file).expanduser().resolve()
@@ -167,6 +179,71 @@ def read_global_llm_env() -> GlobalLlmEnvValues:
     """读取服务器既有的单模型环境变量，供未迁移旧协议档兼容使用。"""
     values = _read_values()
     return global_llm_values_from(values)
+
+
+def read_media_mcp_env() -> MediaMcpEnvValues:
+    """读取媒体 MCP 配置；格式非法的超时值按缺失处理，避免把异常带入响应。"""
+    values = _read_values()
+    raw_timeout = values.get("MEDIA_MCP_REQUEST_TIMEOUT_S")
+    try:
+        timeout = float(raw_timeout) if raw_timeout else None
+    except ValueError:
+        timeout = None
+    raw_enabled = values.get("MEDIA_MCP_ENABLED")
+    enabled = raw_enabled.strip().lower() in {"1", "true", "yes", "on"} if raw_enabled else None
+    return MediaMcpEnvValues(
+        enabled=enabled,
+        compatible_base_url=values.get("MEDIA_MCP_COMPATIBLE_BASE_URL") or None,
+        api_key=values.get("MEDIA_MCP_API_KEY") or None,
+        image_model=values.get("MEDIA_MCP_IMAGE_MODEL") or None,
+        video_model=values.get("MEDIA_MCP_VIDEO_MODEL") or None,
+        request_timeout_s=timeout,
+    )
+
+
+def write_media_mcp_env(
+    *,
+    enabled: bool | None = None,
+    compatible_base_url: str | None = None,
+    api_key: str | None = None,
+    image_model: str | None = None,
+    video_model: str | None = None,
+    request_timeout_s: float | None = None,
+) -> ProfileEnvSnapshot:
+    """原位保存媒体 MCP 配置；空 API Key 表示保留，禁止意外清除既有凭据。"""
+    updates: dict[str, str] = {}
+    if enabled is not None:
+        updates["MEDIA_MCP_ENABLED"] = str(enabled).lower()
+    if compatible_base_url is not None:
+        updates["MEDIA_MCP_COMPATIBLE_BASE_URL"] = compatible_base_url.rstrip("/")
+    if api_key is not None and api_key.strip():
+        updates["MEDIA_MCP_API_KEY"] = api_key.strip()
+    if image_model is not None:
+        updates["MEDIA_MCP_IMAGE_MODEL"] = image_model.strip()
+    if video_model is not None:
+        updates["MEDIA_MCP_VIDEO_MODEL"] = video_model.strip()
+    if request_timeout_s is not None:
+        updates["MEDIA_MCP_REQUEST_TIMEOUT_S"] = str(request_timeout_s)
+    if not updates:
+        with _ENV_WRITE_LOCK:
+            return _read_snapshot(env_path())
+    with _ENV_WRITE_LOCK:
+        path = env_path()
+        snapshot = _read_snapshot(path)
+        rendered: list[str] = []
+        seen: set[str] = set()
+        for line in snapshot.content.splitlines():
+            key = line.strip().split("=", 1)[0].strip() if "=" in line else ""
+            if key in updates:
+                rendered.append(f"{key}={json.dumps(updates[key], ensure_ascii=False)}")
+                seen.add(key)
+            else:
+                rendered.append(line)
+        for key, value in updates.items():
+            if key not in seen:
+                rendered.append(f"{key}={json.dumps(value, ensure_ascii=False)}")
+        _write_content(path, "\n".join(rendered).rstrip("\n") + "\n")
+        return snapshot
 
 
 def write_profile_env(

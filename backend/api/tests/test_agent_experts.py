@@ -51,6 +51,15 @@ def test_expert_tools_narrow_only():
     assert "task.create" not in tools and "web_search" not in tools
 
 
+def test_general_expert_receives_media_tools_only_after_media_gate_opens(monkeypatch):
+    """媒体工具由服务端总开关装配，定向专家的既有工具边界不被扩大。"""
+    monkeypatch.setattr(loop_wiring.settings, "media_mcp_enabled", True)
+    general = experts.resolve_expert("general")
+    testcase = experts.resolve_expert("testcase-agent")
+    assert set(loop_wiring.MEDIA_MCP_TOOLS) <= set(loop_wiring._expert_tools(general))
+    assert set(loop_wiring.MEDIA_MCP_TOOLS).isdisjoint(loop_wiring._expert_tools(testcase))
+
+
 def test_expert_tools_empty_intersection_is_fail_closed(monkeypatch):
     """专家声明了平台不存在的工具时交集为空，必须 fail-closed 而不是放开全量。"""
     bogus = experts.ExpertDef(expert_id="bogus", name="bogus", description="bogus",

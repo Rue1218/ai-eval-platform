@@ -517,7 +517,7 @@
                 class="btn btn-sign btn-sm"
                 @click="handleOpenAddExternalServer"
               >
-                + 接入外部 Server
+                媒体 MCP 说明
               </button>
             </div>
           </div>
@@ -530,14 +530,58 @@
               <span class="channel-meta mono">{{ nativeTools.length }} 个 · 进程直连</span>
             </div>
             <div class="channel-chip">
-              <span class="status-dot" :class="{ 'is-disabled': mcpExtTools.length === 0 }"></span>
+              <span class="status-dot" :class="{ 'is-disabled': internalMcpTools.length === 0 }"></span>
               <span class="channel-name">内部 MCP (Tasks)</span>
-              <span class="channel-meta mono">{{ mcpExtTools.length }} 个 · 任务桥接</span>
+              <span class="channel-meta mono">{{ internalMcpTools.length }} 个 · 任务桥接</span>
             </div>
-            <div class="channel-chip standby">
-              <span class="status-dot is-disabled"></span>
-              <span class="channel-name">外部网关 (Gateway)</span>
-              <span class="channel-meta">受控 Standby</span>
+            <div class="channel-chip" :class="{ standby: !mediaMcpForm.enabled }">
+              <span class="status-dot" :class="{ 'is-disabled': !mediaMcpForm.enabled }"></span>
+              <span class="channel-name">媒体 MCP (Streamable HTTP)</span>
+              <span class="channel-meta mono">{{ mediaMcpTools.length }} 个 · {{ mediaMcpForm.enabled ? '已启用' : '未启用' }}</span>
+            </div>
+          </div>
+
+          <div class="media-mcp-config mt14">
+            <div class="media-mcp-config-heading">
+              <div>
+                <div class="panel-section-title">生图与视频 MCP</div>
+                <div class="small tertiary mt2">固定通过 Compose 内网 Streamable HTTP 调用；密钥仅在服务端保存，留空不会覆盖已保存密钥。</div>
+              </div>
+              <span class="badge" :class="mediaMcpForm.enabled ? 'badge-succeeded' : 'badge-warning'">
+                {{ mediaMcpForm.enabled ? '已启用' : '未启用' }}
+              </span>
+            </div>
+            <div class="media-mcp-form-grid mt12">
+              <label class="runtime-field media-mcp-switch">
+                <span class="field-label">启用媒体 MCP</span>
+                <n-switch v-model:value="mediaMcpForm.enabled" />
+              </label>
+              <label class="runtime-field">
+                <span class="field-label">兼容模式地址</span>
+                <n-input v-model:value="mediaMcpForm.compatible_base_url" placeholder="https://…/compatible-mode/v1" />
+              </label>
+              <label class="runtime-field">
+                <span class="field-label">API Key</span>
+                <n-input v-model:value="mediaMcpForm.api_key" type="password" show-password-on="click" placeholder="留空保留已保存密钥" />
+              </label>
+              <label class="runtime-field">
+                <span class="field-label">生图模型</span>
+                <n-input v-model:value="mediaMcpForm.image_model" placeholder="qwen-image-3.0-pro" />
+              </label>
+              <label class="runtime-field">
+                <span class="field-label">视频模型</span>
+                <n-input v-model:value="mediaMcpForm.video_model" placeholder="happyhorse-1.1-i2v" />
+              </label>
+              <label class="runtime-field">
+                <span class="field-label">MCP 调用超时（秒）</span>
+                <n-input-number v-model:value="mediaMcpForm.request_timeout_s" :min="10" :max="600" style="width: 100%" />
+              </label>
+            </div>
+            <div class="row mt12" style="justify-content: space-between; gap: 12px">
+              <span class="small tertiary">{{ mediaMcpConfig?.has_api_key ? '已保存 API Key' : '尚未保存 API Key' }} · 视频使用首帧图生模式并异步返回任务 ID</span>
+              <button class="btn btn-primary btn-sm" :disabled="mediaMcpSaving || mediaMcpConfigLoading" @click="saveMediaMcpConfig">
+                {{ mediaMcpSaving ? '保存中…' : '保存媒体 MCP 配置' }}
+              </button>
             </div>
           </div>
         </div>
@@ -567,14 +611,14 @@
                   :class="{ active: mcpTransportFilter === 'mcp' }"
                   @click="mcpTransportFilter = 'mcp'"
                 >
-                  内部 MCP ({{ mcpExtTools.length }})
+                  MCP 工具 ({{ mcpExtTools.length }})
                 </button>
                 <button
                   class="pill-btn"
                   :class="{ active: mcpTransportFilter === 'external' }"
                   @click="mcpTransportFilter = 'external'"
                 >
-                  外部网关规范
+                  接入说明
                 </button>
               </div>
 
@@ -648,11 +692,11 @@
               <div style="flex: 1">
                 <div class="ext-title">外部 MCP Server 接入规范与隔离说明</div>
                 <div class="ext-desc">
-                  平台对外部工具执行采用严格的长短任务分离与沙箱隔离。V1.0 外部网关处于受控 Standby 状态，支持标准 JSON-RPC、SSE 与 HTTP 流式协议，提供超时熔断与敏感凭据过滤防护。
+                  媒体 MCP 使用标准 Streamable HTTP：API 先完成工具目录和权限裁决，再经 Compose 内网连接媒体服务。媒体服务独占上游凭据；生图同步返回临时地址，视频创建只返回异步任务 ID，须再查询状态。
                 </div>
               </div>
               <button class="btn btn-sign btn-sm" @click="handleOpenAddExternalServer">
-                申请接入外部 Server
+                查看接入边界
               </button>
             </div>
 
@@ -660,15 +704,15 @@
               <div class="ext-card">
                 <div class="ext-card-title">通信协议支持</div>
                 <div class="ext-card-content">
-                  • stdio 管道隔离：在独立安全沙箱中启动子进程，通过标准 I/O 通信。<br>
-                  • SSE / HTTP Stream：支持单向流式事件分发与长连接分块传输。
+                  • Streamable HTTP：initialize → tools/list → tools/call。<br>
+                  • 服务发现固定为 Compose 私网 `media-mcp:8002/mcp`，不接受浏览器指定地址。
                 </div>
               </div>
               <div class="ext-card">
                 <div class="ext-card-title">安全风控门禁</div>
                 <div class="ext-card-content">
-                  • 30 秒执行超时熔断，超长任务必须进入异步任务队列。<br>
-                  • 双向通信经由 redact_secrets() 引擎过滤敏感凭据。
+                  • 目录、参数与权限在 API 内完成；媒体服务不向浏览器暴露上游密钥。<br>
+                  • 视频创建不等待生成完成，查询结果中的临时视频地址需及时使用。
                 </div>
               </div>
             </div>
@@ -695,7 +739,7 @@
 
                 <div class="row" style="gap: 4px; flex-shrink: 0">
                   <span class="tag-soft">
-                    {{ t.transport === 'native' ? '原生' : '内部 MCP' }}
+                    {{ t.transport === 'native' ? '原生' : t.category === 'external_mcp' ? '媒体 MCP' : '内部 MCP' }}
                   </span>
                   <span class="tag-soft" :class="getRiskBadge(t.risk_level).cls">
                     {{ getRiskBadge(t.risk_level).label }}
@@ -720,7 +764,7 @@
                 <div class="row" style="gap: 6px; align-items: center">
                   <span class="status-dot" :class="{ 'is-disabled': t.enabled === false }"></span>
                   <span class="small tertiary">
-                    {{ t.transport === 'native' ? '原生沙箱' : 'InProcess Host' }} · {{ t.timeout_s ?? '15' }}s
+                    {{ t.transport === 'native' ? '原生沙箱' : t.category === 'external_mcp' ? 'Streamable HTTP' : 'InProcess Host' }} · {{ t.timeout_s ?? '15' }}s
                   </span>
                 </div>
                 <button
@@ -768,7 +812,7 @@
                   </td>
                   <td>
                     <span class="tag-soft">
-                      {{ t.transport === 'native' ? '原生' : '内部 MCP' }}
+                      {{ t.transport === 'native' ? '原生' : t.category === 'external_mcp' ? '媒体 MCP' : '内部 MCP' }}
                     </span>
                   </td>
                   <td>
@@ -1136,7 +1180,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useMessage, useDialog, NSelect, NInput, NInputNumber, NSwitch } from 'naive-ui'
 import { api } from '../api/http'
-import type { Profile, ProfileCheckOut, McpTool, McpHealthCheckResponse } from '../api/types'
+import type { MediaMcpConfig, Profile, ProfileCheckOut, McpTool, McpHealthCheckResponse } from '../api/types'
 import EmptyState from '../components/common/EmptyState.vue'
 import ProviderLogo, { type ProviderLogoKey } from '../components/ProviderLogo.vue'
 import { getModelLogoKey } from '../utils/providerLogo'
@@ -1196,11 +1240,24 @@ const mcpRequestState = ref<McpRequestState>('idle')
 const mcpRequestError = ref('')
 const selectedMcpTool = ref<McpTool | null>(null)
 const showMcpModal = ref(false)
+const mediaMcpConfig = ref<MediaMcpConfig | null>(null)
+const mediaMcpConfigLoading = ref(false)
+const mediaMcpSaving = ref(false)
+const mediaMcpForm = ref({
+  enabled: false,
+  compatible_base_url: '',
+  api_key: '',
+  image_model: 'qwen-image-3.0-pro',
+  video_model: 'happyhorse-1.1-i2v',
+  request_timeout_s: 180,
+})
 
 /** 原生基础工具（transport=native），由 NativeToolExecutor 直连执行 */
 const nativeTools = computed(() => mcpTools.value.filter((t) => t.transport === 'native'))
 /** 内部 MCP 扩展工具（transport=mcp），通过 MCPClientManager 调用 */
 const mcpExtTools = computed(() => mcpTools.value.filter((t) => t.transport === 'mcp'))
+const internalMcpTools = computed(() => mcpExtTools.value.filter((t) => t.category !== 'external_mcp'))
+const mediaMcpTools = computed(() => mcpExtTools.value.filter((t) => t.category === 'external_mcp'))
 
 const domainFilterOptions = [
   { label: '全部领域', value: 'all' },
@@ -1251,7 +1308,9 @@ function getToolDomain(name: string): { label: string; icon: string; key: string
   if (name.startsWith('dispatch.')) return { label: '调度大盘', icon: '', key: 'dispatch' }
   if (name.startsWith('testcase.')) return { label: '用例管理', icon: '', key: 'cases' }
   if (name.startsWith('audio.')) return { label: '音色克隆', icon: '', key: 'audio' }
-  if (name.startsWith('image.')) return { label: '图像生成', icon: '', key: 'image' }
+  if (name.startsWith('image.') || name.startsWith('video.') || name.includes('.image.generate') || name.includes('.video.')) {
+    return { label: '媒体生成', icon: '', key: 'image' }
+  }
   return { label: '内置通用', icon: '', key: 'other' }
 }
 
@@ -1345,12 +1404,46 @@ const filteredMcpTools = computed(() => {
   })
 })
 
+/** 将脱敏服务端配置投影到可编辑表单，Key 输入框始终保持空白。 */
+function applyMediaMcpConfig(config: MediaMcpConfig) {
+  mediaMcpConfig.value = config
+  mediaMcpForm.value = {
+    enabled: config.enabled,
+    compatible_base_url: config.compatible_base_url,
+    api_key: '',
+    image_model: config.image_model,
+    video_model: config.video_model,
+    request_timeout_s: config.request_timeout_s,
+  }
+}
+
+async function saveMediaMcpConfig() {
+  mediaMcpSaving.value = true
+  try {
+    const saved = await api.mcp.updateMediaConfig({
+      enabled: mediaMcpForm.value.enabled,
+      compatible_base_url: mediaMcpForm.value.compatible_base_url.trim(),
+      api_key: mediaMcpForm.value.api_key.trim() || undefined,
+      image_model: mediaMcpForm.value.image_model.trim(),
+      video_model: mediaMcpForm.value.video_model.trim(),
+      request_timeout_s: mediaMcpForm.value.request_timeout_s,
+    })
+    applyMediaMcpConfig(saved)
+    await handleRefreshMcpTools()
+    message.success('媒体 MCP 配置已保存')
+  } catch (err: any) {
+    message.error(err.message || '媒体 MCP 配置保存失败')
+  } finally {
+    mediaMcpSaving.value = false
+  }
+}
+
 async function handleRunHealthCheck() {
   mcpHealthChecking.value = true
   try {
     const res = await api.mcp.healthCheck()
     mcpHealthResult.value = res
-    message.success(`自检完成 · 耗时 ${res.total_latency_ms}ms · 原生(${res.summary.native_tools_count}) · MCP(${res.summary.internal_mcp_tools_count})`)
+    message.success(`自检完成 · 耗时 ${res.total_latency_ms}ms · 原生(${res.summary.native_tools_count}) · 内部 MCP(${res.summary.internal_mcp_tools_count}) · 媒体(${res.summary.external_mcp_servers_count})`)
   } catch (err: any) {
     message.error(`健康自检失败: ${err.message || '网络连接异常'}`)
   } finally {
@@ -1360,13 +1453,15 @@ async function handleRunHealthCheck() {
 
 async function handleRefreshMcpTools() {
   mcpLoading.value = true
+  mediaMcpConfigLoading.value = true
   mcpRequestState.value = 'loading'
   mcpRequestError.value = ''
   const start = performance.now()
   try {
-    const [res, healthRes] = await Promise.all([
+    const [res, healthRes, mediaConfig] = await Promise.all([
       api.mcp.tools(),
       api.mcp.healthCheck().catch(() => null),
+      api.mcp.mediaConfig().catch(() => null),
     ])
     if (!res || !Array.isArray(res.items)) {
       throw new Error('工具清单接口返回格式不正确')
@@ -1377,6 +1472,9 @@ async function handleRefreshMcpTools() {
     mcpServerPingState.value = { ok: true, latencyMs: Math.max(1, latency) }
     if (healthRes) {
       mcpHealthResult.value = healthRes
+    }
+    if (mediaConfig) {
+      applyMediaMcpConfig(mediaConfig)
     }
     if (mcpTools.value.length > 0) {
       message.success(`已加载 ${mcpTools.value.length} 个工具 · ${mcpServerPingState.value.latencyMs}ms`)
@@ -1389,6 +1487,7 @@ async function handleRefreshMcpTools() {
     message.error(mcpRequestError.value)
   } finally {
     mcpLoading.value = false
+    mediaMcpConfigLoading.value = false
   }
 }
 
@@ -1418,10 +1517,10 @@ function handleExportMcpJson() {
 function handleOpenAddExternalServer() {
   safeBlur()
   dialog.info({
-    title: '接入外部 MCP Server · 架构受控说明',
+    title: '媒体 MCP · 架构边界说明',
     content:
-      '依据系统架构契约（PRD §5.5 与 API §3.6.1），V1.0 智能体环境采用严格的单一 Eval-Core 内置受控 Host 模式，暂不开放外部第三方 MCP Server 动态接入，以确保基准测试与 RAG 评测的高可用与任务确定性。',
-    positiveText: '了解规范',
+      '当前仅接入平台部署的 media-mcp 服务。API 固定通过 Compose 私网地址建立 Streamable HTTP 会话，媒体服务独占上游凭据；浏览器无法添加任意第三方 Server 或直接调用模型端点。',
+    positiveText: '了解边界',
   })
 }
 
@@ -2611,6 +2710,39 @@ onMounted(() => {
   font-size: 11.5px;
   color: var(--text-tertiary, #9ca3af);
   margin-left: auto;
+}
+.media-mcp-config {
+  padding: 14px;
+  border: 1px solid var(--c-profiles, rgba(22, 151, 122, 0.2));
+  border-radius: 10px;
+  background: var(--t-profiles, rgba(22, 151, 122, 0.05));
+}
+.media-mcp-config-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.media-mcp-form-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(180px, 1fr));
+  gap: 12px;
+}
+.media-mcp-form-grid .runtime-field {
+  width: auto;
+}
+.media-mcp-switch {
+  justify-content: center;
+}
+@media (max-width: 900px) {
+  .media-mcp-form-grid {
+    grid-template-columns: repeat(2, minmax(180px, 1fr));
+  }
+}
+@media (max-width: 560px) {
+  .media-mcp-form-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .mcp-toolbar {

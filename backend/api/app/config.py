@@ -132,6 +132,10 @@ class Settings(BaseSettings):
     agent_registry_strict: bool = True  # AgentDef.allowed_tools 未注册时启动 fail-fast
     prompt_cache_enabled: bool = False  # 提示词缓存边界开关；关闭时装配行为与今日字节级一致
     external_mcp_enabled: bool = False  # 外部 MCP fail-closed（ADR-8）
+    # 独立媒体 MCP 仅允许 Compose 内网地址；默认关闭，不影响既有内部任务 MCP。
+    media_mcp_enabled: bool = False
+    media_mcp_url: str = "http://media-mcp:8002/mcp"
+    media_mcp_request_timeout_s: float = 180.0
     # dsh 改进 #4 事件词汇表版本化（登记《dsh 借鉴与 AgentHarness 改进方案》§6.3）：
     # false（默认）灰度——转发循环对未知 kind/版本不符事件告警并跳过；
     # true——fail-closed 拒收并落 error。灰度观察期（生产无未知事件告警）后置

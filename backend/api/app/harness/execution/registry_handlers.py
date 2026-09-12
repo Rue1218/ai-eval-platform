@@ -13,6 +13,15 @@ from collections.abc import Mapping
 from app.errors import AppError, ErrorCode
 
 
+def _media_mcp_unavailable_handler(
+    _arguments: Mapping[str, object],
+    _sandbox_dir: str | None = None,
+    _context: object | None = None,
+) -> object:
+    """媒体工具的防御性占位 handler；正常调用只能经远程 MCP provider。"""
+    raise AppError(ErrorCode.VALIDATION, "媒体 MCP 未启用")
+
+
 def _read_handler(
     arguments: Mapping[str, object],
     sandbox_dir: str | None = None,

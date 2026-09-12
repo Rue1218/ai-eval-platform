@@ -93,6 +93,22 @@ def test_catalog_only_exposes_platform_task_mcp_extensions() -> None:
     assert catalog.get("nope") is None
 
 
+def test_catalog_exposes_media_mcp_only_when_enabled(monkeypatch) -> None:
+    """媒体目录受总开关控制，关闭时不把未接通工具暴露给模型或管理端。"""
+    from app.harness.execution import registry as registry_module
+
+    monkeypatch.setattr(registry_module.settings, "media_mcp_enabled", True)
+    catalog = ToolCatalog.build(build_default_registry())
+    assert {
+        descriptor.tool_id for descriptor in catalog.all_descriptors()
+        if descriptor.server_id == "media.generation"
+    } == {
+        "media.generation.image.generate",
+        "media.generation.video.create",
+        "media.generation.video.status",
+    }
+
+
 def test_catalog_refresh_reflects_newly_registered_tool() -> None:
     registry = ToolRegistry()
     registry.register(_def("a"))

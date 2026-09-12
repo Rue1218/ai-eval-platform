@@ -203,6 +203,36 @@ class FetchModelsIn(ApiModel):
 
 
 
+class MediaMcpConfigUpdate(ApiModel):
+    """协议档页面写入的媒体 MCP 配置；Key 只接收不回显。"""
+
+    enabled: bool | None = None
+    compatible_base_url: str | None = Field(default=None, min_length=1, max_length=1024)
+    api_key: str | None = Field(default=None, max_length=4096)
+    image_model: str | None = Field(default=None, min_length=1, max_length=256)
+    video_model: str | None = Field(default=None, min_length=1, max_length=256)
+    request_timeout_s: float | None = Field(default=None, ge=10, le=600)
+
+    @model_validator(mode="before")
+    @classmethod
+    def clean_empty_api_key(cls, data: Any) -> Any:
+        """空密钥是保留现状，避免编辑模型时误删已保存的凭据。"""
+        if isinstance(data, dict) and isinstance(data.get("api_key"), str) and not data["api_key"].strip():
+            data["api_key"] = None
+        return data
+
+
+class MediaMcpConfigOut(ApiModel):
+    """媒体 MCP 的脱敏配置响应。"""
+
+    enabled: bool
+    compatible_base_url: str
+    image_model: str
+    video_model: str
+    request_timeout_s: float
+    has_api_key: bool
+
+
 class SessionCreate(ApiModel):
     """创建空 Agent 会话的输入。
 

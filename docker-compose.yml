@@ -103,6 +103,10 @@ services:
       AGENT_LOOP_MAX_STEPS: ${AGENT_LOOP_MAX_STEPS:-16}
       AGENT_LOOP_MAX_PARALLEL_TOOL_CALLS: ${AGENT_LOOP_MAX_PARALLEL_TOOL_CALLS:-4}
       AGENT_LOOP_RECONNECT_GRACE_SECONDS: ${AGENT_LOOP_RECONNECT_GRACE_SECONDS:-20}
+      # 媒体 MCP 只走 Compose 内网；主闸门默认关闭，启用前需完成工具与任务联调。
+      MEDIA_MCP_ENABLED: ${MEDIA_MCP_ENABLED:-false}
+      MEDIA_MCP_URL: ${MEDIA_MCP_URL:-http://media-mcp:8002/mcp}
+      MEDIA_MCP_REQUEST_TIMEOUT_S: ${MEDIA_MCP_REQUEST_TIMEOUT_S:-180}
     # Harness 沙箱（bash 工具）：bwrap 已迁至独立 runner 容器（P4-2），
     # api 不再需要 privileged/seccomp:unconfined/SYS_ADMIN/bubblewrap。
     depends_on:
@@ -125,6 +129,33 @@ services:
       - sandbox_net
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+  media-mcp:
+    # 独立 Streamable HTTP MCP：只在 Compose 内网开放，由平台后端接入。
+    image: ${MEDIA_MCP_IMAGE:-ai-eval-platform-media-mcp}
+    mem_limit: 384m
+    build:
+      context: ./backend
+      dockerfile: media_mcp/Dockerfile
+    restart: unless-stopped
+    environment:
+      # 兼容模式基础 URL 用于 Qwen 生图；视频接口从同一业务空间域名派生。
+      MEDIA_MCP_COMPATIBLE_BASE_URL: ${MEDIA_MCP_COMPATIBLE_BASE_URL:-}
+      MEDIA_MCP_API_KEY: ${MEDIA_MCP_API_KEY:-}
+      MEDIA_MCP_IMAGE_MODEL: ${MEDIA_MCP_IMAGE_MODEL:-qwen-image-3.0-pro}
+      MEDIA_MCP_VIDEO_MODEL: ${MEDIA_MCP_VIDEO_MODEL:-happyhorse-1.1-i2v}
+      MEDIA_MCP_REQUEST_TIMEOUT_SECONDS: ${MEDIA_MCP_REQUEST_TIMEOUT_SECONDS:-600}
+      # 管理端原位更新该只读挂载；媒体服务按调用读取，密钥不进入 API 响应。
+      MEDIA_MCP_CONFIG_FILE: /run/config/.env
+    volumes:
+      - ./.env:/run/config/.env:ro
+    # 不发布主机端口；平台接入地址固定为 http://media-mcp:8002/mcp。
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('localhost', 8002), 3).close()"]
       interval: 10s
       timeout: 5s
       retries: 6

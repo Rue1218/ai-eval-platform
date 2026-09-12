@@ -1,0 +1,6 @@
+# 本地测试与静态检查缓存不属于独立 MCP 服务交付物。
+.venv/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.py[cod]

@@ -35,6 +35,8 @@ import {
   type DispatchEventPage,
   type DispatchConfig,
   type McpTool,
+  type MediaMcpConfig,
+  type MediaMcpConfigUpdate,
   type RagModelsConfig,
   type AgentSession,
   type SessionHistory,
@@ -557,6 +559,18 @@ export const api = {
         }
       }
       const { data } = await http.get('/api/mcp/health-check')
+      return data
+    },
+
+    /** 读取媒体 MCP 的脱敏模型配置。 */
+    async mediaConfig(): Promise<MediaMcpConfig> {
+      const { data } = await http.get('/api/mcp/media-config')
+      return data
+    },
+
+    /** 保存媒体 MCP 模型与开关；服务端绝不回显 api_key。 */
+    async updateMediaConfig(payload: MediaMcpConfigUpdate): Promise<MediaMcpConfig> {
+      const { data } = await http.put('/api/mcp/media-config', payload)
       return data
     },
 

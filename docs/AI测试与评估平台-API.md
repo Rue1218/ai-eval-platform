@@ -4,9 +4,9 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.96 |
+| 文档版本 | V1.97 |
 | WS v2 修订日期 | 2026-09-12（§4A，交互抽屉的自定义选择答案） |
-| 对应 PRD | V1.18（功能唯一权威） |
+| 对应 PRD | V1.21（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.7.8（AgentLoop 单入口；JSON 仍以本文为准） |
 | 对应前端计划 | AgentLoop 前端计划 V0.5 |
@@ -23,6 +23,8 @@
 > V1.93（2026-09-11）：不新增浏览器 WS 字段。AgentLoop 的 `task.create`、`task.status`、`task.cancel` 统一以注册表短名作为权限、Schema 与 MCP 路由事实源；模型请求继续使用无点号的安全 Function Calling 名 `platform_task_create/status/cancel`。调度器仅兼容这三个安全 wire 名、短名和已登记 MCP 全名 `platform.tasks.task.create/status/cancel`，未知前缀一律按未知工具拒绝。三种名称均引用同一 `ToolDef.parameters_schema` JSON Schema（根对象 `additionalProperties=false`），调用事实保留实际 wire 名，同时以 `registry_name` 记录短名，确保轨迹与审计可追溯而不复制字段定义。
 
 > V1.96（2026-09-12）：`question.respond.answers[]` 增加可选 `custom:string<=16000`。`answer` 继续承载 radio 的已选标签或 checkbox 的标签数组，`custom` 单独承载“其他，请填写”的文本；checkbox 可以同时提交已登记标签和自定义文本。服务端仍复用问题 ID、题型、给定选项、必答和交互身份校验，custom 不会伪装成未登记选项；省略 custom 的旧客户端保持原行为。
+
+> V1.97（2026-09-12）：新增受控媒体 MCP 配置 `GET/PUT /api/mcp/media-config`（§3.6.1）：固定 Compose 私网 Streamable HTTP 服务，密钥只写不回显，配置保存写审计 `media_mcp_config_update`；媒体工具目录仅在启用后显示，健康检查真实执行 `initialize → tools/list`，不产生收费内容。视频工具本期仅提交/查询上游任务，不新增浏览器 WS 或平台媒体任务。
 
 > V1.95（2026-09-11）：AgentLoop 原生 `task` 对齐 DeepSeek Harness 的 `todo_write`：它是当前 Agent 会话独占的整表规划工具，与 Worker 队列 `task.create/status/cancel` 严格分离。输入 Schema 为根对象 `additionalProperties=false`，必填 `description` 与 `steps`，每个步骤必填 `title`、`status`（`pending|in_progress|completed`），`steps` 为 1–12 项且顺序执行时最多一项 `in_progress`；每次调用整体替换上一份清单。仅成功的 `task` 与对应 `tool.result` 同事务写入 `task_plan.updated:{plan:{goal,description,steps,counts}}` 持久投影；失败调用、工具调用草稿和旧 `tool.display.task` 都不能改变当前抽屉。重连按该事件回放，简单单步任务不调用该工具；不新增长任务、Worker 事件或浏览器上行字段。
 
@@ -781,7 +783,7 @@ Embedding 与 Reranker 的 URL、模型和 Key 与主模型使用相同的“按
 
 获取当前智能体环境中平台 allowlist 的**MCP 扩展目录**（只读）。`read`、`write`、`edit`、`bash`、`web_search`、`web_fetch` 与对话拆解 `task` 不属于目录：模型以原生 Function Calling 生成 ToolCall，ToolNode 完成 Schema、权限、附件门禁后，直接交 `NativeToolExecutor` 在线程池执行，不产生 MCP catalog/provider 路由开销。
 
-当前已挂载的 MCP 扩展仅为评测任务桥 `platform.tasks`；RAG、报告等其它扩展仍须按 allowlist 和契约另行登记。目录只展示元数据，**不展示任何 MCP Server 连接命令、环境变量、工作目录或凭据**，也不展示内部 handler 细节。`code_snippet` 字段与 `GET /api/mcp/tools/{name}/code` 端点已于 V1.65 移除（原为手写示意代码且与真实 handler 不符）；前端「源码实现」视图改为引导按 `source_file`/`handler_function` 在代码仓库中查看真实实现。
+默认已挂载的 MCP 扩展为评测任务桥 `platform.tasks`；启用媒体配置后，目录额外出现 `media.generation.image.generate`、`media.generation.video.create`、`media.generation.video.status`。目录只展示元数据，**不展示任何 MCP Server 连接命令、环境变量、工作目录或凭据**，也不展示内部 handler 细节。`code_snippet` 字段与 `GET /api/mcp/tools/{name}/code` 端点已于 V1.65 移除（原为手写示意代码且与真实 handler 不符）；前端「源码实现」视图改为引导按 `source_file`/`handler_function` 在代码仓库中查看真实实现。
 
 `platform.tasks` 三工具只入 PG 队列或查询，**不等待 Worker 终态**：`task.create` 校验通过后直接入队返回 `queued` + `task_id`；`task.status` 只读当前状态不轮询；`task.cancel` 行锁取消非终态任务。真实进度/报告/错误由 Worker 写入 `task_events`/`ws_events` 转发。
 
@@ -809,7 +811,30 @@ Embedding 与 Reranker 的 URL、模型和 Key 与主模型使用相同的“按
 | `web_fetch(url, format?)` | 仅公开 http/https 文本页 | 首次和每次重定向均执行 DNS/IP SSRF 校验；优先 Firecrawl Markdown，未配置时降级为安全直接文本抓取；正文不进 WS 持久事件 |
 | `task(goal, steps)` | 1–12 个 `pending/in_progress/completed` 步骤 | 只生成当前回合任务清单和 ToolCard；**不创建 `Task` 行、不入队、不调用 Worker、不替代 `confirm_ack`** |
 
-V1.0 不接入外部 MCP Server，也不让浏览器创建、删除、探活或动态发现外部工具。原型中的 MCP Server 管理按钮须显示“能力未启用”说明；不得请求或假装成功调用 `/api/mcp/servers*`。
+浏览器不能创建、删除或指定任意第三方 MCP Server，也不得请求 `/api/mcp/servers*`。本期唯一远程服务是固定 Compose 私网地址 `http://media-mcp:8002/mcp` 的媒体 MCP；API 以 Streamable HTTP 执行 `initialize → tools/list → tools/call`，上游密钥仅在媒体服务保存。
+
+#### `GET /api/mcp/media-config`
+
+返回媒体 MCP 的脱敏配置：
+
+```json
+{
+  "enabled": true,
+  "compatible_base_url": "https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+  "image_model": "qwen-image-3.0-pro",
+  "video_model": "happyhorse-1.1-i2v",
+  "request_timeout_s": 180,
+  "has_api_key": true
+}
+```
+
+`has_api_key` 只表示服务端已保存凭据，响应不包含密钥。`enabled=false` 时 AgentLoop 不向模型注入媒体工具。
+
+#### `PUT /api/mcp/media-config`
+
+请求体可增量更新 `enabled`、`compatible_base_url`、`api_key`、`image_model`、`video_model`、`request_timeout_s`。兼容模式地址必须为无用户名、无查询串的 HTTPS `.../compatible-mode/v1`；`request_timeout_s` 为 10–600。`api_key` 留空或省略表示保留现值，不能通过该接口清除。启用前必须已具备兼容模式地址和 API Key。成功后写 `AuditLog(action="media_mcp_config_update")`，当前 API 实例刷新媒体工具目录。
+
+媒体 MCP 工具：`image.generate(prompt, reference_images?, size?, count?, prompt_extend?)` 同步返回临时图片地址；`video.create(prompt, first_frame, resolution?, duration?, watermark?)` 只提交 HappyHorse 图生视频异步任务并返回上游任务 ID；`video.status(upstream_task_id)` 查询状态，成功时含临时视频地址。本期不创建平台媒体 `Task`、不归档结果、不新增 WS 事件，也未实现上游取消。
 
 #### `GET /api/mcp/metrics`
 

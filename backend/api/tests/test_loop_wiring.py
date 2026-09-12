@@ -180,12 +180,18 @@ def wired(tmp_path, monkeypatch):
     monkeypatch.setattr(loop_wiring, "authorized_profile", lambda db, data: (profile, 100000))
     monkeypatch.setattr(loop_wiring, "get_agent_prompt_overlay", lambda db, profile_id: "")
     monkeypatch.setattr(loop_wiring, "build_adapter", lambda config: (_Resource("sdk", closed), config.config.model))
-    monkeypatch.setattr(MCPClientManager, "build_from_registry", lambda registry, *, join_on_cancel: _Resource("mcp", closed))
+    monkeypatch.setattr(
+        MCPClientManager,
+        "build_from_registry",
+        lambda registry, *, join_on_cancel, remote_providers=None: _Resource("mcp", closed),
+    )
     monkeypatch.setattr(loop_wiring, "require_visible_session", lambda db, sid, actor: session)
     monkeypatch.setattr(loop_service, "require_visible_session", lambda db, sid, actor: session)
     monkeypatch.setattr(loop_wiring, "resolve_session_sandbox", lambda *args: str(tmp_path))
     monkeypatch.setattr(loop_wiring.settings, "runner_internal_token", "")
     monkeypatch.setattr(loop_wiring.settings, "sandbox_engine", "container")
+    # 此组装测试只覆盖进程内 MCP 的资源释放，不受本机媒体开关或 .env 影响。
+    monkeypatch.setattr(loop_wiring.settings, "media_mcp_enabled", False)
     runtime = SimpleNamespace(running=False, recover=AsyncMock(), submit=AsyncMock(),
                               set_approval_gate=lambda *a, **k: None, wait=AsyncMock())
     pool = {"capacity": 15, "active": 0, "peak": 0, "claims": 0}

@@ -319,6 +319,26 @@ export interface McpHealthCheckResponse {
   }
 }
 
+/** 媒体 MCP 的脱敏配置；API Key 仅以 has_api_key 形式返回。 */
+export interface MediaMcpConfig {
+  enabled: boolean
+  compatible_base_url: string
+  image_model: string
+  video_model: string
+  request_timeout_s: number
+  has_api_key: boolean
+}
+
+/** 媒体 MCP 的可写字段；api_key 留空表示保留服务端已有值。 */
+export interface MediaMcpConfigUpdate {
+  enabled?: boolean
+  compatible_base_url?: string
+  api_key?: string
+  image_model?: string
+  video_model?: string
+  request_timeout_s?: number
+}
+
 // MCP 内置短工具与原生 ToolCall（API V1.3 §3.6.1，只读契约）
 // transport='native'：原生基础工具（read/write/edit/bash 等）由 NativeToolExecutor 直连执行；
 // transport='mcp'：内部 MCP 扩展工具（platform.tasks 等）通过 MCPClientManager 调用。
