@@ -1,7 +1,7 @@
 <template>
   <section
     class="interaction-drawer"
-    :class="`is-${interaction.kind}`"
+    :class="[`is-${interaction.kind}`, { 'is-collapsed': isCollapsed }]"
     role="dialog"
     :aria-label="title"
     aria-live="polite"
@@ -17,11 +17,53 @@
         </div>
         <h3 class="head-heading">{{ title }}</h3>
       </div>
+      <div class="head-controls">
+        <button
+          type="button"
+          class="drawer-toggle-btn"
+          :aria-expanded="!isCollapsed"
+          :title="isCollapsed ? '展开作答面板' : '收起面板以查看上方对话'"
+          @click="isCollapsed = !isCollapsed"
+        >
+          <span>{{ isCollapsed ? '展开' : '收起' }}</span>
+          <svg class="toggle-icon" :class="{ 'is-rotated': isCollapsed }" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true">
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
+        </button>
+      </div>
     </header>
 
-    <template v-if="interaction.restricted">
-      <p class="interaction-notice">交互内容受权限限制，无法在当前连接中处理。</p>
-    </template>
+    <!-- 收起状态提示条：紧凑轻量，点击即可展开 -->
+    <div
+      v-if="isCollapsed"
+      class="drawer-collapsed-bar"
+      role="button"
+      tabindex="0"
+      title="点击展开作答面板"
+      @click="isCollapsed = false"
+      @keydown.enter="isCollapsed = false"
+      @keydown.space.prevent="isCollapsed = false"
+    >
+      <div class="collapsed-summary">
+        <span class="collapsed-badge">待作答</span>
+        <span class="collapsed-text">
+          {{ currentQuestion ? (currentQuestion.question || currentQuestion.title) : title }}
+        </span>
+        <span v-if="questions.length > 1" class="collapsed-step">（第 {{ activeQuestionIndex + 1 }} / {{ questions.length }} 题）</span>
+      </div>
+      <span class="collapsed-trigger">
+        点击展开
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true">
+          <polyline points="18 15 12 9 6 15"></polyline>
+        </svg>
+      </span>
+    </div>
+
+    <!-- 展开内容主体 -->
+    <div v-show="!isCollapsed" class="drawer-body-wrap">
+      <template v-if="interaction.restricted">
+        <p class="interaction-notice">交互内容受权限限制，无法在当前连接中处理。</p>
+      </template>
     <template v-else-if="interaction.kind === 'approval'">
       <p class="interaction-summary">{{ interaction.name ? `工具“${interaction.name}”需要你的授权后才能继续。` : '该工具需要你的授权后才能继续。' }}</p>
       <dl class="approval-details">
@@ -211,15 +253,21 @@
     <p class="interaction-hint">
       {{ interaction.submitting ? '已提交，正在等待服务端确认。' : expired ? '交互已到期，等待服务端结算。' : !canControl ? '当前连接没有控制权。' : '仅本次交互会使用这些回答。' }}
     </p>
+    </div>
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import type { Data, InteractionRecord } from '../../../api/agentLoopTypes'
 
 const props = defineProps<{ interaction: InteractionRecord; canControl: boolean; online: boolean }>()
 const emit = defineEmits<{ respond: [InteractionRecord, Data] }>()
+
+const isCollapsed = ref(false)
+watch(() => props.interaction.submitting, (submitting) => {
+  if (submitting) isCollapsed.value = false
+})
 
 const now = ref(Date.now())
 const timer = setInterval(() => { now.value = Date.now() }, 1000)
@@ -354,25 +402,38 @@ function respond(data: Data) {
   box-shadow: 0 -12px 32px rgba(18, 65, 48, 0.12);
   padding: 16px 20px;
   color: #243b31;
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
 .interaction-drawer.is-question {
   border-color: #cbd9ed;
   background: linear-gradient(145deg, #ffffff 0%, #f6f9fc 100%);
   box-shadow: 0 -12px 32px rgba(37, 99, 235, 0.08);
 }
+.interaction-drawer.is-collapsed {
+  max-height: none;
+  overflow: visible;
+  padding: 12px 18px;
+  box-shadow: 0 -8px 24px rgba(37, 99, 235, 0.08);
+}
 
 .interaction-drawer-head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
   padding-bottom: 12px;
   border-bottom: 1px solid #e2e8f0;
 }
+.is-collapsed .interaction-drawer-head {
+  padding-bottom: 0;
+  border-bottom: none;
+}
 .head-title-wrap {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 .head-tag-row {
   display: flex;
@@ -393,6 +454,9 @@ function respond(data: Data) {
   font-size: 17px;
   font-weight: 700;
   line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .interaction-state {
   display: inline-flex;
@@ -420,6 +484,102 @@ function respond(data: Data) {
   50% { opacity: 1; transform: scale(1.2); }
 }
 
+/* 头部收起/展开按钮 */
+.head-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.drawer-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+.drawer-toggle-btn:hover {
+  background: #f8fafc;
+  border-color: #94a3b8;
+  color: #0f172a;
+}
+.toggle-icon {
+  transition: transform 0.22s ease;
+}
+.toggle-icon.is-rotated {
+  transform: rotate(180deg);
+}
+
+/* 折叠状态胶囊提示条 */
+.drawer-collapsed-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 10px;
+  padding: 9px 14px;
+  border: 1px solid #bfdbfe;
+  border-radius: 9px;
+  background: #eff6ff;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.drawer-collapsed-bar:hover {
+  background: #e0f2fe;
+  border-color: #93c5fd;
+  transform: translateY(-1px);
+}
+.collapsed-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.collapsed-badge {
+  flex: 0 0 auto;
+  border-radius: 4px;
+  background: #2563eb;
+  padding: 2px 6px;
+  color: #ffffff;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+.collapsed-text {
+  color: #1e293b;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.collapsed-step {
+  flex: 0 0 auto;
+  color: #64748b;
+  font-size: 11.5px;
+}
+.collapsed-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.drawer-body-wrap {
+  min-width: 0;
+}
+
 .interaction-summary {
   margin: 12px 0 10px;
   color: #475569;
@@ -429,11 +589,12 @@ function respond(data: Data) {
 
 /* 分段进度条 */
 .question-progress-wrap {
-  margin-top: 10px;
+  margin-top: 12px;
+  margin-bottom: 4px;
   border: 1px solid #e2e8f0;
   border-radius: 10px;
   background: #f8fafc;
-  padding: 10px 12px;
+  padding: 10px 14px;
 }
 .stepper-track {
   display: flex;
@@ -487,12 +648,16 @@ function respond(data: Data) {
 
 /* 题目表单与翻页容器 */
 .question-form {
-  margin-top: 12px;
+  margin-top: 10px;
 }
+
+/* 题目间距优化关键：拉开与上方进度条的间隙 */
 .question-page-shell {
   display: grid;
   min-width: 0;
   overflow: hidden;
+  margin-top: 18px;
+  margin-bottom: 6px;
 }
 .question-page {
   grid-area: 1 / 1;
@@ -501,32 +666,37 @@ function respond(data: Data) {
 .question-fieldset {
   min-width: 0;
   margin: 0;
-  padding: 10px 0 6px;
+  padding: 4px 0 6px;
   border: 0;
 }
 
+/* 题干标题与标签间距排版 */
 .question-legend {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 12px;
   width: 100%;
-  padding: 0 0 8px;
-  border-bottom: 1px solid #edf2f7;
+  padding: 4px 0 14px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid #eef2f6;
 }
 .question-title-text {
   color: #0f172a;
-  font-size: 14.5px;
+  font-size: 15px;
   font-weight: 700;
-  line-height: 1.45;
+  line-height: 1.6;
+  flex: 1 1 240px;
 }
 .question-type-badge {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
   border-radius: 999px;
-  padding: 2px 8px;
-  font-size: 11px;
+  padding: 2px 9px;
+  font-size: 11.5px;
   font-weight: 600;
+  flex: 0 0 auto;
 }
 .question-type-badge.is-required {
   background: #fef3c7;
@@ -541,17 +711,17 @@ function respond(data: Data) {
 .choices-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin-top: 10px;
+  gap: 12px;
+  margin-top: 4px;
 }
 
 .choice-card {
   position: relative;
   display: flex;
   flex-direction: column;
-  padding: 10px 14px;
+  padding: 13px 16px;
   border: 1.5px solid #e2e8f0;
-  border-radius: 10px;
+  border-radius: 12px;
   background: #ffffff;
   cursor: pointer;
   transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
@@ -572,7 +742,7 @@ function respond(data: Data) {
 .choice-header {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
   width: 100%;
 }
 
@@ -623,7 +793,7 @@ function respond(data: Data) {
 }
 .choice-description {
   display: block;
-  margin-top: 2px;
+  margin-top: 3px;
   color: #64748b;
   font-size: 11.5px;
   line-height: 1.4;
@@ -640,21 +810,21 @@ function respond(data: Data) {
 
 /* 自定义答案卡片 */
 .custom-input-box {
-  margin-top: 8px;
-  padding-left: 40px;
+  margin-top: 10px;
+  padding-left: 42px;
   width: 100%;
   box-sizing: border-box;
 }
 .custom-answer-input {
   width: 100%;
   box-sizing: border-box;
-  height: 34px;
+  height: 36px;
   border: 1px solid #cbd5e1;
-  border-radius: 7px;
+  border-radius: 8px;
   background: #ffffff;
-  padding: 4px 10px;
+  padding: 6px 12px;
   color: #1e293b;
-  font: 12.5px var(--font-body, inherit);
+  font: 13px var(--font-body, inherit);
   outline: none;
   transition: all 0.2s ease;
 }
@@ -663,7 +833,7 @@ function respond(data: Data) {
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14);
 }
 .custom-answer-input:disabled {
-  background: #f1f5f9;
+  background: #f8fafc;
   color: #94a3b8;
   cursor: not-allowed;
   border-color: #e2e8f0;
@@ -674,11 +844,11 @@ function respond(data: Data) {
 
 /* 简答题卡片 */
 .text-question-card {
-  margin-top: 10px;
+  margin-top: 6px;
   border: 1.5px solid #e2e8f0;
-  border-radius: 10px;
+  border-radius: 12px;
   background: #ffffff;
-  padding: 8px 10px 6px;
+  padding: 10px 12px 8px;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
   transition: all 0.2s ease;
 }
@@ -690,22 +860,22 @@ function respond(data: Data) {
   width: 100%;
   box-sizing: border-box;
   resize: vertical;
-  min-height: 92px;
+  min-height: 96px;
   border: none;
   background: transparent;
   padding: 4px 2px;
   color: #0f172a;
-  font: 13.5px/1.55 var(--font-body, inherit);
+  font: 14px/1.6 var(--font-body, inherit);
   outline: none;
 }
 .textarea-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 2px 2px;
+  padding: 8px 2px 2px;
   border-top: 1px solid #f1f5f9;
   color: #94a3b8;
-  font-size: 11px;
+  font-size: 11.5px;
 }
 
 /* 题目切换动画 */
@@ -744,16 +914,16 @@ function respond(data: Data) {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
-  margin-top: 16px;
+  margin-top: 18px;
 }
 .interaction-actions button {
-  min-height: 34px;
+  min-height: 36px;
   border: 1px solid #cbd5e1;
   border-radius: 8px;
   background: #ffffff;
-  padding: 6px 14px;
+  padding: 6px 16px;
   color: #334155;
-  font: 600 12.5px var(--font-body, inherit);
+  font: 600 13px var(--font-body, inherit);
   cursor: pointer;
   transition: all 0.18s ease;
   display: inline-flex;
@@ -797,7 +967,7 @@ function respond(data: Data) {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin: 10px 0 0;
+  margin: 12px 0 0;
   color: #dc2626;
   font-size: 12px;
   font-weight: 500;
@@ -810,9 +980,9 @@ function respond(data: Data) {
 }
 
 .interaction-hint {
-  margin: 12px 0 0;
+  margin: 14px 0 0;
   color: #64748b;
-  font-size: 11px;
+  font-size: 11.5px;
   line-height: 1.45;
 }
 .interaction-notice {
@@ -885,6 +1055,31 @@ function respond(data: Data) {
 }
 [data-theme='dark'] .interaction-kicker {
   color: #94a3b8;
+}
+[data-theme='dark'] .drawer-toggle-btn {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: #1e293b;
+  color: #cbd5e1;
+}
+[data-theme='dark'] .drawer-toggle-btn:hover {
+  background: #334155;
+  color: #ffffff;
+}
+[data-theme='dark'] .drawer-collapsed-bar {
+  border-color: rgba(96, 165, 250, 0.3);
+  background: rgba(30, 58, 138, 0.3);
+}
+[data-theme='dark'] .drawer-collapsed-bar:hover {
+  background: rgba(30, 58, 138, 0.45);
+}
+[data-theme='dark'] .collapsed-text {
+  color: #f1f5f9;
+}
+[data-theme='dark'] .collapsed-step {
+  color: #94a3b8;
+}
+[data-theme='dark'] .collapsed-trigger {
+  color: #60a5fa;
 }
 [data-theme='dark'] .interaction-state {
   background: rgba(37, 99, 235, 0.2);

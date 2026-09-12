@@ -335,6 +335,43 @@ test('工具审批和 ask_user_question 在输入框上方抽屉处理，题型�
   await expect(page.locator('.tool-state').first()).toHaveText('已完成')
 })
 
+test('交互抽屉支持收起与展开，收起时保留作答内容且可恢复展开继续作答', async ({page}) => {
+  await setup(page)
+  await page.getByRole('textbox', {name:'消息'}).fill('补充执行信息')
+  await page.getByRole('button', {name:'发送', exact:true}).click()
+
+  const drawer = page.locator('.composer-interaction-drawer')
+  await expect(drawer).toBeVisible()
+
+  // 填写第 1 题自定义答案
+  const radioOptions = drawer.locator('input[type=radio]')
+  await radioOptions.last().check()
+  await drawer.getByLabel('选择评测方式的自定义回答').fill('折叠测试模式')
+
+  // 点击收起按钮
+  await drawer.getByRole('button', {name:'收起', exact:true}).click()
+  await expect(drawer.locator('.drawer-collapsed-bar')).toBeVisible()
+  await expect(drawer.locator('.drawer-body-wrap')).not.toBeVisible()
+  await expect(drawer.locator('.collapsed-badge')).toHaveText('待作答')
+
+  // 点击胶囊条展开
+  await drawer.locator('.drawer-collapsed-bar').click()
+  await expect(drawer.locator('.drawer-body-wrap')).toBeVisible()
+  await expect(drawer.locator('.drawer-collapsed-bar')).toHaveCount(0)
+
+  // 验证之前填写的内容依然保留
+  await expect(radioOptions.last()).toBeChecked()
+  await expect(drawer.getByLabel('选择评测方式的自定义回答')).toHaveValue('折叠测试模式')
+
+  // 进入下一题后再次收起，使用头部按钮展开
+  await drawer.getByRole('button', {name:'下一题', exact:true}).click()
+  await expect(drawer).toContainText('问题 2 / 3')
+  await drawer.getByRole('button', {name:'收起', exact:true}).click()
+  await expect(drawer.locator('.drawer-collapsed-bar')).toBeVisible()
+  await drawer.getByRole('button', {name:'展开', exact:true}).click()
+  await expect(drawer.locator('.drawer-body-wrap')).toBeVisible()
+})
+
 test('窄屏交互抽屉保持在输入框上方且不产生横向溢出', async ({page}) => {
   await page.setViewportSize({width:390,height:844})
   await setup(page)
