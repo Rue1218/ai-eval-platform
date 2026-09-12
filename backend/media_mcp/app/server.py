@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import re
 from urllib.parse import urlsplit
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
 from .upstream import MediaSettings, MediaUpstreamClient, MediaUpstreamError
+
+_SIZE_PATTERN = re.compile(r"[0-9]{1,5}[x*][0-9]{1,5}")
 
 
 def _require_prompt(value: str) -> str:
@@ -67,8 +70,8 @@ async def generate_image(
     """使用 Qwen Image 3.0 Pro 生成图片；参考图最多三张。"""
     if not 1 <= count <= 6:
         raise ValueError("count 必须为 1–6")
-    if len(size) > 32 or "x" not in size:
-        raise ValueError("size 必须为宽x高格式")
+    if len(size) > 32 or not _SIZE_PATTERN.fullmatch(size.strip()):
+        raise ValueError("size 必须为宽x高格式，例如 1024x1024")
     images = [_validate_media(item) for item in reference_images or []]
     if len(images) > 3:
         raise ValueError("reference_images 最多三张")

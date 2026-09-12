@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
+
+logger = logging.getLogger("media_mcp.upstream")
+
+_SIZE_PATTERN = re.compile(r"(\d{2,5})[x*](\d{2,5})")
 
 
 class MediaUpstreamError(RuntimeError):
@@ -98,6 +105,47 @@ def _safe_error(response: httpx.Response | None = None) -> MediaUpstreamError:
     return MediaUpstreamError("媒体上游调用失败")
 
 
+def _native_size(size: str) -> str:
+    """把工具契约的「宽x高」规范为原生多模态接口要求的「宽*高」。"""
+    match = _SIZE_PATTERN.fullmatch(size.strip())
+    if not match:
+        raise MediaUpstreamError("媒体图片尺寸格式非法")
+    return f"{match.group(1)}*{match.group(2)}"
+
+
+def _image_urls_from_output(output: Any) -> list[str]:
+    """从原生多模态返回的 output.choices[].message.content[] 提取图片地址。"""
+    choices = output.get("choices")
+    if not isinstance(choices, list):
+        return []
+    urls: list[str] = []
+    for choice in choices:
+        message = choice.get("message") if isinstance(choice, dict) else None
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if isinstance(part, dict) and isinstance(part.get("image"), str):
+                urls.append(part["image"])
+    return urls
+
+
+def _elapsed_ms(started: float) -> int:
+    """单调时钟毫秒耗时，供脱敏日志使用。"""
+    return int((time.monotonic() - started) * 1000)
+
+
+def _error_code(response: httpx.Response) -> str:
+    """只取上游错误类别码；上游正文一律不落日志。"""
+    try:
+        body = response.json()
+    except ValueError:
+        return "UNKNOWN"
+    if isinstance(body, dict) and isinstance(body.get("code"), str) and body["code"]:
+        return str(body["code"])
+    return "UNKNOWN"
+
+
 class MediaUpstreamClient:
     """调用 Qwen 生图同步接口和 HappyHorse 视频异步接口。"""
 
@@ -118,8 +166,9 @@ class MediaUpstreamClient:
         payload: dict[str, Any] | None = None,
         extra_headers: dict[str, str] | None = None,
     ) -> dict[str, Any]:
-        """有界 HTTP 调用并安全解析 JSON 对象。"""
+        """有界 HTTP 调用并安全解析 JSON 对象；失败只记录脱敏元数据。"""
         headers = {**self._headers, **(extra_headers or {})}
+        started = time.monotonic()
         try:
             async with httpx.AsyncClient(
                 timeout=self._settings.request_timeout_s,
@@ -128,8 +177,18 @@ class MediaUpstreamClient:
             ) as client:
                 response = await client.request(method, url, headers=headers, json=payload)
         except httpx.HTTPError as exc:
+            # 只记录异常类别与耗时；请求头、密钥和上游正文不进日志。
+            logger.warning(
+                "media upstream transport error path=%s kind=%s elapsed_ms=%d",
+                urlsplit(url).path, type(exc).__name__, _elapsed_ms(started),
+            )
             raise MediaUpstreamError("媒体上游连接失败") from exc
+        elapsed_ms = _elapsed_ms(started)
         if response.is_error:
+            logger.warning(
+                "media upstream error path=%s status=%d code=%s elapsed_ms=%d",
+                urlsplit(url).path, response.status_code, _error_code(response), elapsed_ms,
+            )
             raise _safe_error(response)
         try:
             data = response.json()
@@ -143,23 +202,27 @@ class MediaUpstreamClient:
         self, *, prompt: str, reference_images: list[str] | None, size: str, count: int,
         prompt_extend: bool,
     ) -> dict[str, Any]:
-        """调用兼容模式图片生成接口，返回上游临时图片链接。"""
+        """调用原生同步多模态生成接口，返回上游临时图片链接。
+
+        该工作空间的兼容模式未开通 images/generations（上游固定返回 url error），
+        图片模型由原生多模态同步端点服务；参考图按内容块顺序排在提示词之前。
+        """
+        content: list[dict[str, str]] = [{"image": item} for item in reference_images or []]
+        content.append({"text": prompt})
         payload: dict[str, Any] = {
             "model": self._settings.image_model,
-            "prompt": prompt,
-            "size": size,
-            "n": count,
-            "prompt_extend": prompt_extend,
+            "input": {"messages": [{"role": "user", "content": content}]},
+            "parameters": {"size": _native_size(size), "n": count, "prompt_extend": prompt_extend},
         }
-        if reference_images:
-            payload["image"] = reference_images[0] if len(reference_images) == 1 else reference_images
         data = await self._request(
-            "POST", f"{self._settings.compatible_base_url.rstrip('/')}/images/generations", payload=payload
+            "POST",
+            f"{self._settings.origin}/api/v1/services/aigc/multimodal-generation/generation",
+            payload=payload,
         )
-        images = data.get("data")
-        if not isinstance(images, list):
+        output = data.get("output")
+        if not isinstance(output, dict):
             raise MediaUpstreamError("媒体上游未返回图片结果")
-        urls = [item.get("url") for item in images if isinstance(item, dict) and isinstance(item.get("url"), str)]
+        urls = _image_urls_from_output(output)
         if not urls:
             raise MediaUpstreamError("媒体上游未返回图片地址")
         return {"status": "succeeded", "model": self._settings.image_model, "image_urls": urls}

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 
@@ -20,25 +22,51 @@ def _settings() -> MediaSettings:
 
 
 @pytest.mark.asyncio
-async def test_generate_image_uses_compatible_endpoint_and_does_not_expose_key() -> None:
-    """生图保持兼容模式 URL，认证只放 HTTP 请求头。"""
+async def test_generate_image_uses_native_sync_endpoint_and_does_not_expose_key() -> None:
+    """生图走原生多模态同步端点，尺寸归一为「宽*高」，认证只放请求头。"""
     seen: dict = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen["url"] = str(request.url)
         seen["auth"] = request.headers["Authorization"]
         seen["body"] = request.content.decode()
-        return httpx.Response(200, json={"data": [{"url": "https://result.example/image.png"}]})
+        return httpx.Response(
+            200,
+            json={"output": {"choices": [{"message": {"content": [{"image": "https://result.example/image.png"}]}}]}},
+        )
 
     client = MediaUpstreamClient(_settings(), transport=httpx.MockTransport(handler))
     result = await client.generate_image(
-        prompt="一朵花", reference_images=None, size="1024x1024", count=1, prompt_extend=True
+        prompt="一朵花", reference_images=["https://images.example/frame.png"], size="1024x1024",
+        count=1, prompt_extend=True,
     )
 
-    assert seen["url"].endswith("/compatible-mode/v1/images/generations")
+    assert seen["url"] == (
+        "https://workspace.cn-beijing.maas.aliyuncs.com"
+        "/api/v1/services/aigc/multimodal-generation/generation"
+    )
     assert seen["auth"] == "Bearer test-key"
     assert "test-key" not in seen["body"]
+    payload = json.loads(seen["body"])
+    assert payload["model"] == "qwen-image-3.0-pro"
+    assert payload["parameters"] == {"size": "1024*1024", "n": 1, "prompt_extend": True}
+    assert payload["input"]["messages"] == [
+        {"role": "user", "content": [{"image": "https://images.example/frame.png"}, {"text": "一朵花"}]}
+    ]
     assert result["image_urls"] == ["https://result.example/image.png"]
+
+
+@pytest.mark.asyncio
+async def test_generate_image_without_upstream_url_is_safely_normalized() -> None:
+    """上游结构正常但未带图片地址时归一为安全错误。"""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"output": {"choices": [{"message": {"content": [{"text": "ok"}]}}]}})
+
+    client = MediaUpstreamClient(_settings(), transport=httpx.MockTransport(handler))
+    with pytest.raises(MediaUpstreamError, match="图片地址"):
+        await client.generate_image(
+            prompt="一朵花", reference_images=None, size="1024*1024", count=1, prompt_extend=False
+        )
 
 
 @pytest.mark.asyncio
