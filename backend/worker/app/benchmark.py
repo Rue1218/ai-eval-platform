@@ -17,7 +17,6 @@ from __future__ import annotations
 import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
@@ -37,6 +36,7 @@ from .models import (
     Task,
     TaskEvent,
     UsageLedger,
+    utcnow,
 )
 from .profile_env import profile_connection, read_profile_env
 from .sampling import clamp_sample_size
@@ -58,11 +58,6 @@ RAW_MAX_BYTES = 32 * 1024
 
 # 终态集合（与 main.py TERMINAL 一致）
 _TERMINAL = {"succeeded", "failed", "cancelled"}
-
-
-def _now() -> datetime:
-    """统一使用 UTC 时间戳。"""
-    return datetime.now(UTC)
 
 
 def _setting_value(db: Session, key: str):
@@ -163,7 +158,7 @@ def _fail(db: Session, task: Task, code: str, message: str) -> None:
         logger.info("benchmark task %s skipped failure because it is no longer running", task_id)
         return
     task.status = "failed"
-    task.finished_at = _now()
+    task.finished_at = utcnow()
     task.result = {**(task.result or {}), "error_code": code, "error_message": message}
     db.add(TaskEvent(task_id=task.id, event="error", level="error", message=message, payload={"code": code}))
     db.commit()
@@ -451,7 +446,7 @@ def _finish(db: Session, task: Task, dataset: Dataset, metric: str, total: int) 
     db.add(report)
     db.flush()
     task.status = "succeeded"
-    task.finished_at = _now()
+    task.finished_at = utcnow()
     task.report_id = report.id
     task.result = {"metric": metric, "profile_count": len(scores), "sample_total": total}
     task.progress = {"percent": 100, "done": total, "total": total, "message": "任务已完成"}

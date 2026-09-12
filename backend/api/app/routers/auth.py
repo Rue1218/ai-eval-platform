@@ -20,6 +20,7 @@ from ..security import (
     hash_password,
     verify_password,
 )
+from ._common import client_ip
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 COOKIE_NAME = "aieval_session"
@@ -50,11 +51,6 @@ def _set_access_cookie(response: Response, user: User) -> None:
     )
 
 
-def _request_ip(request: Request) -> str | None:
-    """返回客户端直连 IP，缺失连接信息时保持为空。"""
-    return request.client.host if request.client else None
-
-
 @router.post("/login", response_model=UserOut)
 def login(
     body: LoginRequest,
@@ -69,14 +65,14 @@ def login(
             AuditLog(
                 action="login_failed",
                 detail={"username": body.username},
-                ip=_request_ip(request),
+                ip=client_ip(request),
             )
         )
         db.commit()
         raise AppError(ErrorCode.UNAUTHORIZED, "用户名或密码错误", status_code=401)
 
     user.last_login_at = datetime.now(UTC)
-    user.last_login_ip = _request_ip(request)
+    user.last_login_ip = client_ip(request)
     db.add(
         AuditLog(
             user_id=user.id,
@@ -127,7 +123,7 @@ def change_password(
             target_type="user",
             target_id=user.id,
             detail={},
-            ip=_request_ip(request),
+            ip=client_ip(request),
         )
     )
     db.commit()

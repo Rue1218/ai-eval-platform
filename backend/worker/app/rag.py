@@ -17,9 +17,6 @@ from __future__ import annotations
 import json
 import logging
 import time
-from datetime import UTC, datetime
-
-from sqlalchemy.orm import Session
 
 from shared.kb import (
     RETRIEVE_SOURCE_LIGHTRAG,
@@ -27,6 +24,7 @@ from shared.kb import (
     compute_metrics,
     retrieve_with_source,
 )
+from sqlalchemy.orm import Session
 
 from .db import SessionLocal
 from .events import push_ws
@@ -38,6 +36,7 @@ from .models import (
     Report,
     Task,
     TaskEvent,
+    utcnow,
 )
 from .sampling import clamp_sample_size
 from .stress_spawn import maybe_spawn_stress
@@ -47,11 +46,6 @@ logger = logging.getLogger("worker.rag")
 
 DEFAULT_K = 5
 DEFAULT_MODES = ["hybrid"]
-
-
-def _now() -> datetime:
-    """统一使用 UTC 时间戳。"""
-    return datetime.now(UTC)
 
 
 def _progress(db: Session, task: Task, done: int, total: int, message: str) -> None:
@@ -83,7 +77,7 @@ def _fail(db: Session, task: Task, code: str, message: str) -> None:
         logger.info("rag task %s skipped failure because it is no longer running", task_id)
         return
     task.status = "failed"
-    task.finished_at = _now()
+    task.finished_at = utcnow()
     task.result = {**(task.result or {}), "error_code": code, "error_message": message}
     db.add(
         TaskEvent(
@@ -270,7 +264,7 @@ def run_rag(task_id: str) -> None:
             logger.info("rag task %s skipped finish because it is no longer running", task_id)
             return
         task.status = "succeeded"
-        task.finished_at = _now()
+        task.finished_at = utcnow()
         task.report_id = report.id
         task.result = {"kind": "rag", "samples": len(items)}
         db.add(TaskEvent(task_id=task.id, event="finish", payload={"status": "succeeded"}))

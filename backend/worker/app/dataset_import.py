@@ -20,8 +20,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from sqlalchemy.orm import Session
 from shared.dataset_import import SUPPORTED_DATASET_IMPORT_PARSERS
+from sqlalchemy.orm import Session
 
 from .db import SessionLocal
 from .models import (
@@ -58,7 +58,7 @@ def _max_running_dataset_imports(db: Session) -> int:
     value = row.value if row else None
     if isinstance(value, bool):
         return DEFAULT_MAX_RUNNING_DATASET_IMPORTS
-    if isinstance(value, (int, float)) and value >= 1:
+    if isinstance(value, int | float) and value >= 1:
         return int(value)
     return DEFAULT_MAX_RUNNING_DATASET_IMPORTS
 
