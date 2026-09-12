@@ -1,6 +1,6 @@
 import { reactive, markRaw } from 'vue'
 import { AgentLoopWebSocket, type LoopTransportOptions } from '../../api/agentLoopWs.ts'
-import type { LoopCommand, LoopUi } from '../../api/agentLoopTypes.ts'
+import type { LoopCommand } from '../../api/agentLoopTypes.ts'
 import { createLoopState } from './reducer.ts'
 import { applyTrace, createTrace } from './trace.ts'
 
@@ -18,15 +18,55 @@ export function createLoopStore(
 ) {
   const sessions = reactive<Record<string, ReturnType<typeof createLoopState>>>({})
   const traces = reactive<Record<string, ReturnType<typeof createTrace>>>({})
-  const capabilities = reactive<Record<string, LoopUi>>({})
   const drafts = reactive<Record<string, LoopDraft>>({})
   const clients = new Map<string, AgentLoopWebSocket>()
+  // 已关闭连接的最多十份恢复状态；草稿独立保存，淘汰后由 cursor=0 重建。
+  const cached = new Set<string>()
+  const restoring = reactive(new Set<string>())
+  const idleSince = new Map<string, number>()
+  const taskHints = new Map<string, string>()
+  let focused = ''
   /** 清理授权正文和诊断；恢复必须从 cursor=0 重建。 */
-  function remove(id: string) { clients.get(id)?.close(); clients.delete(id); delete sessions[id]; delete traces[id]; delete capabilities[id]; for (const file of drafts[id]?.files || []) { file.removed = true; URL.revokeObjectURL(file.source) }; delete drafts[id] }
+  function remove(id: string) { clients.get(id)?.close(); clients.delete(id); cached.delete(id); restoring.delete(id); idleSince.delete(id); taskHints.delete(id); delete sessions[id]; delete traces[id]; for (const file of drafts[id]?.files || []) { file.removed = true; URL.revokeObjectURL(file.source) }; delete drafts[id] }
   function draft(id: string) { return drafts[id] ??= { content: '', files: [], submitting: false } }
+  /** 只回收后台且已同步的空闲连接，活动 Worker 与未确认提交不能误判为结束。 */
+  function releaseIdle(now = Date.now()) {
+    for (const [id, client] of clients) {
+      const state = sessions[id], pending = drafts[id], taskId = taskHints.get(id)
+      const protectedSession = id === focused || !state.ready || !!state.activeTurn || state.cancelling
+        || !!pending?.pending || !!pending?.submitting
+        || Object.values(state.interactions).some(item => !item.resolved)
+        || Object.values(state.tasks).some(item => item.event !== 'task.end')
+        || !!taskId && state.tasks[taskId]?.event !== 'task.end'
+        || Object.values(state.executions).some(item => item.event === 'execution.quarantined')
+      if (protectedSession) { idleSince.delete(id); continue }
+      const since = idleSince.get(id)
+      if (since === undefined) { idleSince.set(id, now); continue }
+      if (now - since < 60000) continue
+      client.close(); clients.delete(id); idleSince.delete(id)
+      state.ready = false; state.controlled = false; state.connection = 'offline'
+      // 诊断正文不跨连接复用；对话缓存只有重新授权并回放完成后才能显示。
+      traces[id] = createTrace()
+      cached.add(id)
+    }
+    while (cached.size > 10) {
+      const id = cached.values().next().value!
+      cached.delete(id); delete sessions[id]; delete traces[id]; taskHints.delete(id)
+    }
+  }
+  /** 切换即建立或复用连接；快速往返不触发关闭/重建。 */
+  function focus(id: string, activeTaskId?: string) {
+    focused = id
+    if (activeTaskId) taskHints.set(id, activeTaskId)
+    else taskHints.delete(id)
+    if (id) open(id)
+    releaseIdle()
+  }
   function open(id: string, preparedTicket?: Promise<string>): AgentLoopWebSocket {
     if (clients.has(id)) return clients.get(id)!
-    sessions[id] = createLoopState(id); traces[id] = createTrace()
+    if (sessions[id]) { restoring.add(id); sessions[id].ready = false; sessions[id].controlled = false }
+    sessions[id] ??= createLoopState(id); traces[id] ??= createTrace()
+    cached.delete(id)
     // 新建会话时短票可与 REST 建会并行；首次失败后的重连仍重新领取一次性短票。
     let firstTicket = preparedTicket
     const client = markRaw(createClient(id, {
@@ -40,6 +80,11 @@ export function createLoopStore(
       },
       state: () => sessions[id], replace: value => { sessions[id] = value },
       onFrame: frame => {
+        // 按已通过 transport 去重的业务事件重新计时，避免漏掉两次清理之间完成的短回合。
+        // 心跳、订阅控制帧和诊断帧不续期，空闲连接仍能按时回收。
+        if (id !== focused && (frame.durability === 'persistent'
+          || frame.durability === 'transient' && frame.type.startsWith('assistant.'))) idleSince.set(id, Date.now())
+        if (frame.type === 'replay.completed') restoring.delete(id)
         applyTrace(traces[id], frame)
         if (frame.type === 'command.rejected' && frame.request_id === drafts[id]?.cancelRequestId) {
           sessions[id].cancelling = false
@@ -76,7 +121,7 @@ export function createLoopStore(
   }
   /** 回执不明确时允许用户以原 ID 重发冻结命令，禁止替换正文。 */
   function send(id: string, command: LoopCommand) { return open(id).send(command) }
-  function close() { for (const id of new Set([...clients.keys(), ...Object.keys(drafts)])) remove(id) }
-  return { sessions, traces, capabilities, drafts, draft, clients, open, send, remove, close }
+  function close() { focused = ''; for (const id of new Set([...clients.keys(), ...Object.keys(sessions), ...Object.keys(drafts)])) remove(id) }
+  return { sessions, traces, drafts, draft, clients, restoring, focus, releaseIdle, open, send, remove, close }
 }
 export type LoopStore = ReturnType<typeof createLoopStore>

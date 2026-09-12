@@ -191,10 +191,8 @@ const props = withDefaults(defineProps<{
   cancelling: boolean
   canStop: boolean
   ready: boolean
-  hasWorkspace?: boolean
   permissionTier?: string | null
 }>(), {
-  hasWorkspace: true,
   permissionTier: '',
   metrics: () => ({ inputTokens: 0, outputTokens: 0, modelLatencyMs: 0, outputTokensPerSecond: null, cacheReadTokens: 0, cacheHitRate: null })
 })
@@ -205,7 +203,6 @@ const emit = defineEmits<{
   effort: [Effort]
   model: [string]
   agent: [string]
-  requestWorkspace: []
   updatePermissionTier: [string]
 }>()
 const picker = ref<HTMLInputElement>(), input = ref<HTMLTextAreaElement>(), notice = ref('')

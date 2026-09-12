@@ -1,5 +1,5 @@
 <template>
-  <div class="agent-layout" :class="{ 'with-rail': isRailOpen, 'no-list': isListCollapsed }">
+  <div class="agent-layout" :class="{ 'no-list': isListCollapsed }">
     <!-- 左侧会话列表轨 (264px) -->
     <aside class="session-list" data-od-id="session-list">
       <div class="session-list-head">
@@ -130,12 +130,6 @@
           :title="'会话绑定工作区：' + currentSession.workspace_name + '（模型的文件读写与 bash 均在此进行，创建后不可更改）'"
           >工作区 · {{ currentSession.workspace_name }}</span
         >
-        <span v-if="isGenerating" class="gen-pill">
-          <i class="bdot"></i>
-          <span>生成中</span>
-          <span v-if="turnLatencyLabel" class="mono" style="opacity:.8">{{ turnLatencyLabel }}</span>
-        </span>
-
         <span class="grow"></span>
         <button
           v-if="currentSession?.can_manage"
@@ -147,7 +141,7 @@
         </button>
       </div>
 
-      <AgentWorkspace v-if="isLoopView" :session-id="currentSessionId" :session="currentSession" :store="loopStore" :create-session="createLoopSession" />
+      <AgentWorkspace :session-id="currentSessionId" :session="currentSession" :store="loopStore" :create-session="createLoopSession" />
     </section>
 
     <!-- 移动端侧边栏抽屉遮罩层 (点击遮罩收起所有侧边栏) -->
@@ -160,72 +154,38 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch, h } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, h } from 'vue'
 import { useRoute } from 'vue-router'
 import { useMessage, useDialog, NDropdown, type DropdownOption } from 'naive-ui'
 import { api } from '../api/http'
-import { AgentWebSocket } from '../api/ws'
-import type {
-  AgentPrefs,
-  AgentSession,
-  ClarifyPayload,
-  Dataset,
-  KnowledgeBase,
-  Profile,
-  SessionAuthor,
-  Task,
-  ToolApprovalPayload,
-} from '../api/types'
+import type { AgentSession } from '../api/types'
 import { useAuthStore } from '../stores/auth'
-import type { ProviderLogoKey } from '../utils/providerLogo'
-import { formatLatency } from '../utils/format'
-import type { ContextMeterData } from '../components/agent/ContextMeter.vue'
 import AgentWorkspace from '../components/agent/loop/AgentWorkspace.vue'
 import { createLoopStore } from '../agent/loop/store'
-import { filterSessionsByStatus, legacySessionDot, legacySessionTooltip, loopSessionDot, loopSessionTooltip, sessionStatusFilterLabel } from '../agent/sessionList'
-import { createPreviewTracker } from '../agent/attachments'
+import { filterSessionsByStatus, loopSessionDot, loopSessionTooltip, sessionStatusFilterLabel } from '../agent/sessionList'
 
 const message = useMessage()
 const dialog = useDialog()
 const route = useRoute()
 const authStore = useAuthStore()
-const textareaRef = ref<HTMLTextAreaElement | null>(null)
 
 const isListCollapsed = ref(typeof window !== 'undefined' && window.innerWidth <= 768)
-const isRailOpen = ref(false)
 
 /** 移动端抽屉遮罩层显隐状态：在窄屏下有任一侧边栏抽屉展开时激活 */
 const isMobileDrawerActive = computed(() => {
   if (typeof window === 'undefined') return false
   const isMobile = window.innerWidth <= 768
-  return isMobile && (!isListCollapsed.value || isRailOpen.value)
+  return isMobile && !isListCollapsed.value
 })
 
 function closeMobileDrawers() {
   isListCollapsed.value = true
-  isRailOpen.value = false
 }
 
 function toggleSessionList() {
   isListCollapsed.value = !isListCollapsed.value
-  if (!isListCollapsed.value && typeof window !== 'undefined' && window.innerWidth <= 768) {
-    isRailOpen.value = false
-  }
 }
 
-
-const isWsOnline = ref(true)
-const isGenerating = ref(false)
-const turnLatencyMs = ref(0)
-const turnLatencyLabel = computed(() => formatLatency(turnLatencyMs.value) || '')
-const currentAgentProfileId = ref<string>('')
-const allProfiles = ref<Profile[]>([])
-
-// 上下文度量状态
-const currentContextMeter = ref<ContextMeterData | null>(null)
-const currentCompactSummary = ref<string | null>(null)
-
-/** 模型选择下拉菜单项（对齐 /admin/profiles 接入池） */
 
 const sessions = ref<AgentSession[]>([])
 /** 会话状态筛选当前选项：all | running | ready | succeeded | failed */
@@ -270,17 +230,8 @@ const filteredSessions = computed(() => filterSessionsByStatus(sessions.value, s
 const selectedSessionIds = ref<string[]>([])
 const deletingSessionIds = new Set<string>()
 const currentSessionId = ref<string>('')
-const isCreatingSession = ref(false)
-// F3/G5：草稿会话可预选绑定工作区（首条消息发送时随 create 固化；已建会话
-// 绑定关系只读展示 workspace_name，运行期不可变更——换绑 = 新建会话）。
-const draftWorkspaceId = ref<string | null>(null)
-const draftWorkspaceName = ref<string>('')
-const bindingPanelOpen = ref(false)
-// 面板内新建工作区（即建即绑，无需跳「我的工作区」）
 // 未绑定服务端会话时保持草稿态，不得用列表首项冒充当前会话。
 const currentSession = computed(() => sessions.value.find(s => s.id === currentSessionId.value) || null)
-// 产品入口已收敛为 AgentLoop；保留 v-else 源码仅用于历史审计与后续删除。
-const isLoopView = computed(() => true)
 const loopStore = createLoopStore(id => removeInaccessibleSession(id))
 watch(() => authStore.user?.id, (id, previous) => { if (previous && id !== previous) loopStore.close() })
 watch(() => Object.values(loopStore.sessions).map(s => [s.sessionId, s.title]), () => {
@@ -303,16 +254,15 @@ async function createLoopSession(
   workspaceId?: string, preparedTicket?: Promise<string>, permissionTier?: string, initialTitle?: string
 ): Promise<string> {
   if (currentSessionId.value) return currentSessionId.value
-  const targetWsId = workspaceId || draftWorkspaceId.value || undefined
   const title = initialTitle || '新会话'
   const session = await api.sessions.create(title, {
-    workspaceId: targetWsId,
+    workspaceId,
     permissionTier: (permissionTier as any) || undefined,
   })
   sessions.value.unshift(session)
   // 在切换 prop 触发子组件 watch 前先建立连接，确保首次连接实际复用并行领取的短票。
   loopStore.open(session.id, preparedTicket)
-  currentSessionId.value = session.id; clearDraftWorkspace()
+  currentSessionId.value = session.id
   return session.id
 }
 const deletableSessionCount = computed(() => filteredSessions.value.filter((session) => session.can_delete).length)
@@ -320,143 +270,23 @@ const allDeletableSessionsSelected = computed(() => {
   const deletableIds = filteredSessions.value.filter((session) => session.can_delete).map((session) => session.id)
   return deletableIds.length > 0 && deletableIds.every((id) => selectedSessionIds.value.includes(id))
 })
-const inputText = ref('')
-
-const attachmentPreviews = createPreviewTracker()
-const activeTask = ref<Task | null>(null)
-
-/** 共享会话里进度坞只给任务创建者展示取消入口，服务端仍是最终权限裁决。 */
-
-// 智能体能力卡与顶栏共用同一模式状态，避免出现页面内外不一致的评测上下文。
-
-
-
-
-// 快捷芯片：短标签 + 完整 prompt（对齐原型 data-say），顺序随顶栏模式重排
-
-/** 旧栈会话判定输入：生成中 / 任务（当前会话优先）/ 会话状态 / 当前会话断线。 */
-function legacyDotInput(s: any) {
-  const rt = sessionRuntimes.get(s.id)
-  const generating = Boolean(generatingBySession.value[s.id] || (s.id === currentSessionId.value && isGenerating.value) || rt?.isGenerating)
-  const task = (s.id === currentSessionId.value ? activeTask.value : null) || rt?.activeTask || s.active_task
-  return {
-    generating,
-    taskStatus: task?.status as string | undefined,
-    sessionStatus: s.status as string | undefined,
-    offline: s.id === currentSessionId.value && !isWsOnline.value,
-  }
+/** 会话列表仅展示 AgentLoop，会话和 Worker 状态均来自 v2 投影。 */
+function sessionDotClass(s: AgentSession): string {
+  return loopSessionDot(loopStore.sessions[s.id], s.active_task?.status)
 }
 
-/** D5 会话列表状态点多态：按 status / active_task / 本轮生成中 / 断线重连 映射 nav-dot 样式，常驻显示就绪状态。 */
-function sessionDotClass(s: any): string {
-  if (s.engine_version === 'agent_loop_v2') return loopSessionDot(loopStore.sessions[s.id], s.active_task?.status)
-  return legacySessionDot(legacyDotInput(s))
+/** 会话状态提示语与 v2 连接状态保持一致。 */
+function sessionDotTooltip(s: AgentSession): string {
+  return loopSessionTooltip(loopStore.sessions[s.id])
 }
 
-/** 会话状态提示语（鼠标悬停指示点时展示）。 */
-function sessionDotTooltip(s: any): string {
-  if (s.engine_version === 'agent_loop_v2') return loopSessionTooltip(loopStore.sessions[s.id])
-  return legacySessionTooltip(legacyDotInput(s))
-}
+// 页面只保留后台空闲连接清理计时器，不改变活动 WS 的收发频率。
+const idleTimer = window.setInterval(() => loopStore.releaseIdle(), 15000)
 
-/* S10 进度坞收尾提示：非空时坞保持可见，2.6s 后隐藏 */
-const dockClosingNote = ref('')
-
-/** S10 任务结束收尾：先展示完成 note，2.6s 后再隐藏进度坞（对齐原型 hideDock）。 */
-
-/** 仅在服务端确认取消后关闭进度坞，避免网络失败被前端误报为已取消。 */
-
-/* ─── 页面级定时器登记：所有演示/兜底定时器统一登记，组件卸载时集中清理，避免回调写入已销毁状态 ─── */
-const pendingTimers = new Set<number>()
-
-/** 主动清除已登记定时器（任务提前完成时使用）。 */
-
-/** 滚动锚定：仅当视口贴底（距底 <72px）时才跟随新消息，上翻阅读不被打断（对齐原型行为）。 */
-
-
-
-/** 自适应调整多行输入框高度（最小 38px，最大 200px 限制，超高自动滚动） */
-function adjustTextareaHeight() {
-  const el = textareaRef.value
-  if (!el) return
-  if (!inputText.value) {
-    el.style.height = ''
-    el.style.overflowY = 'hidden'
-    return
-  }
-  // 先将高度置为 0px，强制浏览器依据当前文本行数精确重算真实的 scrollHeight
-  el.style.height = '0px'
-  const scrollH = el.scrollHeight
-  const minH = 38
-  const maxH = 200
-  const targetH = Math.min(maxH, Math.max(minH, scrollH))
-  el.style.height = `${targetH}px`
-  el.style.overflowY = scrollH > maxH ? 'auto' : 'hidden'
-}
-
-// 深度监听输入文本变化，无论是快捷 Prompt 填入还是换行均即时同步高度
-watch(inputText, () => {
-  nextTick(adjustTextareaHeight)
-})
-
-
-/** 后缀白名单、准入校验与预览 URL 追踪见 agent/attachments；此处只做上传编排。 */
-
-/** 把文件加入暂存架并立即上传，发送时只把成功换取的 file_id 写入 WS 消息。 */
-
-/** 文件选择支持多选，与拖拽上传共用同一校验和上传流程。 */
-
-/** 拖拽进入时用深度计数避免经过子节点触发闪烁。 */
-
-
-
-
-
-/** 键盘事件监听：Enter 发送，Shift + Enter 换行。 */
-
-
-/** 快捷芯片/能力卡点击仅填入输入框并聚焦，由用户确认后再发送（对齐原型行为）。 */
-
-/** 将当前页面切换为未持久化的新会话草稿，保留其他会话的后台生成状态。 */
+/** 切回本地草稿，已建会话的后台运行与草稿由 store 保留。 */
 function resetToDraftSession() {
-  persistCurrentRuntime()
-  stopFlowAnimations()
-  gcIdleSockets('')
   currentSessionId.value = ''
-  agentWs = null
-  events.value = []
-  isGenerating.value = false
-  turnLatencyMs.value = 0
-  activeTask.value = null
-  currentContextMeter.value = null
-  currentCompactSummary.value = null
-  dockClosingNote.value = ''
-  isRailOpen.value = false
-  // 草稿尚未绑定 WS，页面不应因为没有会话而显示离线错误。
-  isWsOnline.value = true
 }
-
-/** 将服务端新建的会话绑定到当前页面，并初始化空的运行时缓存。 */
-
-/** F3/G5：打开草稿绑定面板并加载可选工作区（仅属主自己的，无 share）。 */
-
-
-/** 面板内新建工作区并自动选中（即建即绑；失败保留面板与输入，便于重试）。 */
-
-function clearDraftWorkspace() {
-  draftWorkspaceId.value = null
-  draftWorkspaceName.value = ''
-  bindingPanelOpen.value = false
-}
-
-/** 首次发送消息时才向服务端创建会话；mock 列表已由 API 层写入时避免重复插入。 */
-
-/** 确保当前会话的实时连接已建立，首次发送和报告解读共用此连接门禁。 */
-
-
-/** Mock 模式：本地模拟一次纯文本回复（不再伪造思考卡/工具/确认卡）。 */
-
-
 
 async function loadSessions() {
   try {
@@ -468,57 +298,24 @@ async function loadSessions() {
   }
 }
 
-/** 加载全部接入协议档并解析当前 Agent 驱动模型 */
-async function resolveAgentModelName() {
-  try {
-    const [settings, profiles] = await Promise.all([
-      api.admin.getSettings().catch(() => null),
-      api.profiles.list().catch(() => []),
-    ])
-    allProfiles.value = profiles || []
-    const pid = settings?.agent_profile_id
-    currentAgentProfileId.value = pid || ''
-  } catch {
-    currentAgentProfileId.value = ''
-  }
-}
-
-/** 切换当前 Agent 调用的后端接入模型（直接持久化至 admin settings 并即时生效） */
-
-/** F4 会话历史回放：按回合容器恢复模型头部与助手正文的顺序。 */
-
+/** 选中可见的 v2 会话并建立或复用连接。 */
 async function selectSession(sid: string) {
   if (deletingSessionIds.has(sid)) return
   const selected = sessions.value.find((session) => session.id === sid)
   // 列表已过滤历史会话；双重守卫确保任何残留点击也不会落到旧 WS transport。
   if (!selected || selected.engine_version !== 'agent_loop_v2') return
-  // S2 修复：切换会话即关闭草稿绑定面板（绑定仅草稿态可用，避免误操作残留）
-  bindingPanelOpen.value = false
   // 移动端会话列表是覆盖式抽屉，选中会话后自动收起让出对话区。
   if (typeof window !== 'undefined' && window.innerWidth <= 768) isListCollapsed.value = true
-  if (sid === currentSessionId.value && sockets.has(sid)) {
-    const existing = sockets.get(sid)
-    if (existing?.isConnected) return
-    existing?.close()
-    sockets.delete(sid)
-  }
-  persistCurrentRuntime()
-  stopFlowAnimations()
   currentSessionId.value = sid
-  // 统一由 AgentLoop store 持有 v2 连接；不再为会话建立旧 AgentWebSocket。
-  isGenerating.value = false; isWsOnline.value = true; isRailOpen.value = false; agentWs = null
   loopStore.open(sid)
 }
 
 /** 打开一个新的本地草稿；服务端会话在用户真正发送消息时才创建。 */
 function handleCreateSession() {
-  if (isCreatingSession.value) return
   sessionStatusFilter.value = 'all'
   resetToDraftSession()
   // 清除未持久化 AgentLoop 草稿及其对象 URL；已建会话的连接和草稿保持不动。
   loopStore.remove('draft')
-  // 新会话不带上次草稿的工作区预选
-  clearDraftWorkspace()
 }
 
 /** 仅 owner 可切换会话私有/团队共享范围，服务端为最终权限裁决。 */
@@ -599,33 +396,7 @@ function handleBatchDeleteSessions() {
 }
 
 
-/** 等待 WebSocket 首次连接完成，避免草稿首条消息落在连接竞态窗口内。 */
-
-/** 移除打字占位气泡：服务端首个事件到达即表明流式已开始。 */
-
-/** 把纯文本渲染为气泡 HTML（转义防 XSS + 换行转 <br>）。 */
-
-/** 本轮最后一条用户消息之后仍在流式的助手气泡。 */
-
-/** 停掉当前页打字机，避免切会话后定时器改旧缓存并滚动新会话。 */
-function stopFlowAnimations() {
-  events.value.forEach((item) => {
-    if (item.type === 'agent') {
-      if (item.streaming) item.streaming = false
-      for (const block of item.blocks || []) {
-        if (block.type === 'assistant' && block.streaming) block.streaming = false
-      }
-    }
-  })
-}
-
-/** 交付后向服务端重拉 ContextMeter，禁止前端自己加减条数。 */
-
-/** AI 生成的会话标题回写侧边栏；currentSession 是列表派生值，头部标题随之联动。 */
-
-/** 后台会话继续生成：把事件写入该会话缓存，不打断当前正在看的对话。 */
-
-
+/** 列表展示会话创建时间的相对值。 */
 function formatRelativeTime(dateStr?: string) {
   if (!dateStr) return '刚刚'
   const diff = Date.now() - new Date(dateStr).getTime()
@@ -635,129 +406,15 @@ function formatRelativeTime(dateStr?: string) {
   return `${Math.floor(mins / 60)} 小时前`
 }
 
-/** HTML 转义：历史 assistant 消息纯文本安全注入气泡（对齐原型 AE.esc）。 */
-
-/** 将历史或 WS 的文件 ID 统一成既有附件芯片可读取的对象。 */
-
-/** 返回用户气泡展示名：自己的消息显示“我”，协作者优先显示昵称。 */
-
-/** 判断用户气泡是否来自当前成员以外的团队协作者。 */
-
-/** 将助手消息时间格式化为原型中的 MM/DD HH:mm。 */
-
-/** 记录本轮助手消息头所需的供应商、模型和协议档信息。 */
-
-/** 追加本地演示助手消息，并同步当前 Agent 的供应商 Logo 与模型元数据。 */
-
-/** 按消息模型快照解析品牌图标，避免协议档后续改动影响历史回合。 */
-
-/** 解析历史消息中的模型显示名称，优先使用快照字段。 */
-
-/** 解析历史消息中的协议档显示名称，优先使用快照字段。 */
-
-/** 将 assistant_message 的服务端模型快照转换为前端回合元数据。 */
-
-/** 把服务端确认的模型快照应用到助手回合，避免继续使用全局当前模型。 */
-
-/** 返回当前用户回合的助手容器；错误、报告等顶层事件会结束当前容器。 */
-
-/** 获取或创建一个 Agent 回合容器；助手正文追加到其 blocks。 */
-
-/** 返回或创建当前回合的助手正文块。已落库的段落不再覆盖，保证中间叙述另起一段。 */
-
-/** 为每次用户发送生成浏览器侧幂等键，断线重发时避免重复触发 Harness。 */
-
-const events = ref<StreamItem[]>([])
-let agentWs: AgentWebSocket | null = null
-
-/** 按会话缓存对话流与生成态：切换会话不丢历史，生成中的 WS 不拆。 */
-interface SessionRuntime {
-  events: StreamItem[]
-  isGenerating: boolean
-  harnessStage: string
-  turnLatencyMs: number
-  activeTask: any
-  contextMeter: ContextMeterData | null
-  compactSummary: string | null
-}
-
-const sessionRuntimes = new Map<string, SessionRuntime>()
-const sockets = new Map<string, AgentWebSocket>()
-const generatingBySession = ref<Record<string, boolean>>({})
-
-function emptyRuntime(): SessionRuntime {
-  return {
-    events: [],
-    isGenerating: false,
-    harnessStage: '',
-    turnLatencyMs: 0,
-    activeTask: null,
-    contextMeter: null,
-    compactSummary: null,
-  }
-}
-
-function ensureRuntime(sid: string): SessionRuntime {
-  let rt = sessionRuntimes.get(sid)
-  if (!rt) {
-    rt = emptyRuntime()
-    sessionRuntimes.set(sid, rt)
-  }
-  return rt
-}
-
-function markGenerating(sid: string, value: boolean) {
-  if (!sid) return
-  const rt = ensureRuntime(sid)
-  rt.isGenerating = value
-  if (generatingBySession.value[sid] === value) return
-  generatingBySession.value = { ...generatingBySession.value, [sid]: value }
-}
-
-/** 当前会话生成态：同步列表小点与缓存，切走后后台仍显示「正在生成」。 */
-
-/** 把当前 UI 状态写回该会话缓存（切走前调用）。 */
-function persistCurrentRuntime() {
-  const sid = currentSessionId.value
-  if (!sid) return
-  const rt = ensureRuntime(sid)
-  rt.events = events.value
-  rt.isGenerating = isGenerating.value
-  rt.harnessStage = harnessStage.value
-  rt.turnLatencyMs = turnLatencyMs.value
-  rt.activeTask = activeTask.value
-  rt.contextMeter = currentContextMeter.value
-  rt.compactSummary = currentCompactSummary.value
-  markGenerating(sid, isGenerating.value)
-}
-
-/** 关闭已结束生成且非当前会话的连接，生成中的会话保持 WS 以便后台继续收事件。 */
-function gcIdleSockets(keepId: string) {
-  for (const [id, ws] of sockets) {
-    if (id === keepId) continue
-    if (sessionRuntimes.get(id)?.isGenerating) continue
-    ws.close()
-    sockets.delete(id)
-  }
-}
-
 /** 服务端以 4404 收回会话后同步移除本地缓存，避免列表留下无法重连的幽灵项。 */
 function removeInaccessibleSession(sid: string, navigate = true) {
   if (loopStore.sessions[sid] || loopStore.drafts[sid]) loopStore.remove(sid)
   const index = sessions.value.findIndex((session) => session.id === sid)
   const wasCurrent = currentSessionId.value === sid
-  const socket = sockets.get(sid)
-  if (socket) socket.close()
-  sockets.delete(sid)
-  sessionRuntimes.delete(sid)
   selectedSessionIds.value = selectedSessionIds.value.filter((id) => id !== sid)
-  const nextGenerating = { ...generatingBySession.value }
-  delete nextGenerating[sid]
-  generatingBySession.value = nextGenerating
   if (index < 0) return
 
   sessions.value.splice(index, 1)
-  if (wasCurrent && agentWs === socket) agentWs = null
   if (!wasCurrent || !navigate) return
   const next = sessions.value[index] || sessions.value[index - 1]
   if (next) {
@@ -797,183 +454,8 @@ function handleSelectAllChange(event: Event) {
     : []
 }
 
-/** ToolCard：点击折叠/展开详情。 */
-
-
-
-
-interface AgentAssistantItem {
-  type: 'assistant'
-  raw?: string
-  text?: string
-  streaming?: boolean
-  latency_ms?: number
-}
-
-interface AgentErrorItem {
-  type: 'error'
-  code?: string
-  message?: string
-  noAnim?: boolean
-}
-
-/** H3 ToolCard 运行时状态（tool_call → tool_result 生命周期）。 */
-interface ToolRunItem {
-  call_id: string
-  name: string
-  arguments?: unknown
-  status: 'running' | 'done' | 'error'
-  ok?: boolean
-  error?: string
-}
-
-type AgentBlock = AgentAssistantItem | AgentErrorItem
-
-interface StreamItem {
-  type: 'user' | 'agent' | 'report' | 'confirm' | 'toolApproval' | 'clarify' | 'error' | 'typing'
-  text?: string
-  latency_ms?: number
-  streaming?: boolean
-  raw?: string
-  noAnim?: boolean
-  messageId?: string
-  clientMessageId?: string
-  author?: SessionAuthor | null
-  files?: any[]
-  blocks?: AgentBlock[]
-  toolItems?: ToolRunItem[]
-  openToolId?: string
-  providerLogoKey?: ProviderLogoKey
-  profileId?: string
-  modelName?: string
-  profileName?: string
-  createdAt?: string
-  reportId?: string
-  kpis?: any[]
-  bars?: any[]
-  code?: string
-  message?: string
-  // 确认卡（V1.67 恢复）：card 为 TaskSpec；confirmAuthor 为服务端元数据（提交前剥离）
-  card?: any
-  confirmAuthor?: SessionAuthor | null
-  isAcked?: boolean
-  ackResult?: boolean
-  summary?: string
-  open?: boolean
-  fieldErrors?: Record<string, string>
-  // 工具审批卡（H5 HITL，API.md V1.70 / V1.73 / F5-G6）：approval 为中断载荷
-  // 快照；approvalDone 由 tool_approval_ack 回执盖章（approved/rejected）或
-  // approval_terminal 终态事件驱动（expired 超时 / cancelled 放弃 /
-  // voided 检查点缺失作废 / recovery_failed 恢复失败——M-R3-7 成组扩展）。
-  approval?: ToolApprovalPayload | null
-  approvalDone?: 'approved' | 'rejected' | 'expired' | 'cancelled' | 'voided' | 'recovery_failed' | null
-  // 澄清卡（V1.72 / dsh #1，API.md §4.3）：clarify 为中断问卷快照；
-  // clarifyDone 由 clarify_reply 乐观盖章 + clarify_ack 广播回执确认；
-  // M3：failed = approval_terminal(recovery_failed, card_type=clarify) 终态。
-  clarify?: ClarifyPayload | null
-  clarifyDone?: 'submitted' | 'failed' | null
-}
-
-const harnessStage = ref<string>('')
-// ════════ 确认卡（V1.67 / H2 批次 2 恢复）：选项加载、规范化、校验与 ack ════════
-
-const availableProfiles = ref<Profile[]>([])
-const availableDatasets = ref<Dataset[]>([])
-const availableKbs = ref<KnowledgeBase[]>([])
-/** 跨会话下单偏好（/api/agent/prefs）：首单空槽预填，后端已给的值不覆盖。 */
-const agentPrefs = ref<AgentPrefs | null>(null)
-/** F12 prod 会签人名单：取自 api.admin.getSettings().prod_approvers，失败回退静态文案。 */
-const prodApprovers = ref<string[]>([])
-/** A1：确认成功前不盖章，等服务端 confirm_ack 到达后再清除乐观态。 */
-
-
-/** 工具审批卡可操作：实时连接且该卡尚未回执（owner 校验由服务端行锁把关）。 */
-
-/** H5 HITL 审批回执：乐观盖章（服务端行锁兜底重复 ack；tool_approval_ack
- * 广播回执到达后终态一致）。审批放行以原 thread_id 恢复检查点回合。 */
-
-
-/** 澄清卡可作答：实时连接且尚未终态（submitted/failed 均禁操作；owner 校验由服务端行锁把关）。 */
-
-/** V1.72（dsh #1）澄清作答：乐观盖章（服务端行锁兜底重复 reply；clarify_ack
- * 广播回执到达后终态一致）。作答后回合按 answers[] 以原 thread_id 续跑。 */
-
-
-/** F10：当前选中知识库是否为外部 Chat 库（无 rag_mode，改选恰好 1 个外部 RAG 服务档）。 */
-
-/** F8 确认卡内联校验：错误留在卡内 .field-error 红字，不 Toast。 */
-
-/** 现网列表加载后，丢掉确认卡上已删除、chip 点不掉的资产 ID。 */
-function sanitizeConfirmAssets(card: any) {
-  if (!card || typeof card !== 'object') return card
-  const liveProfiles = new Set(availableProfiles.value.map(p => p.id))
-  if (liveProfiles.size && Array.isArray(card.profile_ids)) {
-    card.profile_ids = card.profile_ids.filter((id: string) => liveProfiles.has(String(id)))
-  }
-  const liveDatasets = new Set(availableDatasets.value.map(d => d.id))
-  if (liveDatasets.size && card.dataset_id && !liveDatasets.has(card.dataset_id)) {
-    card.dataset_id = null
-  }
-  const liveKbs = new Set(availableKbs.value.map(k => k.id))
-  if (liveKbs.size && card.kb_id && !liveKbs.has(card.kb_id)) {
-    card.kb_id = null
-    card.gold_qa_id = null
-  }
-  return card
-}
-
-/** 选项列表到达后，再滤一遍未 ack 确认卡上的失效 ID。 */
-function sanitizeOpenConfirmCards() {
-  for (const item of events.value) {
-    if (item?.type === 'confirm' && item.card && !item.isAcked) {
-      sanitizeConfirmAssets(item.card)
-    }
-  }
-}
-
-/** 确认卡规范化：补齐 run / stress / case_source 默认值，保证折叠区 v-model 绑定路径始终存在。 */
-
-/** 实时模式预装确认卡选项（API.md §4.3 confirm：卡即补槽 UI）。 */
-async function loadConfirmOptions() {
-  if (api.isMock()) return
-  try {
-    const [profiles, datasets, kbs] = await Promise.all([
-      api.profiles.list().catch(() => []),
-      api.datasets.list().catch(() => []),
-      api.kb.list().catch(() => []),
-    ])
-    if (profiles?.length) availableProfiles.value = profiles
-    if (datasets?.length) availableDatasets.value = datasets
-    if (kbs?.length) availableKbs.value = kbs
-    // 黄金 QA 选项仅在 rag 卡可用（skill-rag 现行 fail-closed，暂无实时来源）
-    sanitizeOpenConfirmCards()
-  } catch {
-    // 选项留空，确认时仍走卡内校验，不阻断会话
-  }
-}
-
-
-
 onMounted(async () => {
-  // 跨会话下单偏好先行加载：历史回放中的确认卡规范化要用它预填空槽
-  try {
-    agentPrefs.value = await api.agent.getPrefs()
-  } catch {
-    agentPrefs.value = null
-  }
   await loadSessions()
-  // 顶栏/输入框的 Agent 模型名改为按后端协议档动态解析，不再硬编码
-  // 先解析协议档，再回放历史消息，保证助手消息头能显示正确供应商 Logo 与模型名称。
-  await resolveAgentModelName()
-  // V1.67：预装确认卡选项（协议档/数据集/知识库），刷新后的待确认卡才能补槽
-  await loadConfirmOptions()
-  // F12 拉取 prod 会签人名单用于确认卡动态提示；失败静默回退静态文案
-  try {
-    const settings = await api.admin.getSettings()
-    if (settings?.prod_approvers?.length) prodApprovers.value = settings.prod_approvers
-  } catch {
-    // 配置读取失败不阻断页面初始化，沿用默认审批人列表
-  }
   // 异步初始化不能覆盖用户已经选中的 AgentLoop 会话。
   if (!currentSessionId.value) resetToDraftSession()
   // 报告直达仅预填 AgentLoop 草稿，实际发送统一经过 v2 composer。
@@ -985,21 +467,8 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   loopStore.close()
-  // 统一清理登记的全部定时器，防止卸载后回调触发
-  pendingTimers.forEach(id => {
-    window.clearTimeout(id)
-    window.clearInterval(id)
-  })
-  pendingTimers.clear()
-  for (const ws of sockets.values()) {
-    ws.close()
-  }
-  sockets.clear()
-  agentWs = null
-  attachmentPreviews.revokeAll()
+  window.clearInterval(idleTimer)
 })
-
-/** 移除打字占位气泡：服务端首个事件到达即表明流式已开始（旧栈 WS 事件链仍在引用，保留定义）。 */
 
 /** 报告解读入口：AgentLoop 只写入草稿，避免 v2 会话被旧 WebSocket 入口误发。 */
 function handleInterpretReport(reportId: string) {
@@ -1067,167 +536,6 @@ function handleInterpretReport(reportId: string) {
   white-space: nowrap;
 }
 
-.chat-ws-chip.draft {
-  color: var(--c-success, #188038);
-  border-color: var(--t-success, rgba(24, 128, 56, 0.3));
-}
-
-
-
-
-
-
-
-/* 面板内新建工作区（即建即绑） */
-
-
-/* 协作者消息左对齐并弱化背景色，作者行让多人记录可以追溯。 */
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-/* 远端协作者用户气泡颜色自适应 */
-
-
-
-/* 助手消息头：用真实供应商图形对齐模型名和协议档名称。 */
-
-
-
-
-
-
-
-/* 顶部与输入框模型选择胶囊按钮 */
-
-/* 底部输入框整体容器（固定吸附于对话流底部，不随会话滚动消失） */
-.composer {
-  padding: 6px 20px 14px;
-  flex-shrink: 0;
-  background: var(--bg-main);
-}
-
-
-/* 用户消息与输入区共用附件卡片布局，图片优先给出可识别的缩略图。 */
-
-
-
-
-/* 输入卡片：上部多行文本，下部操作底栏（对齐 Gemini / Cursor / Claude 对话框） */
-
-
-
-
-
-
-/* 运行生成中的动态环绕光束特效 (Border Beam) */
-@property --composer-border-angle {
-  syntax: '<angle>';
-  inherits: false;
-  initial-value: 0deg;
-}
-
-.composer-card.generating {
-  border-color: transparent !important;
-  box-shadow: 0 0 20px color-mix(in srgb, var(--accent-ai, #10b981) 22%, transparent),
-              0 4px 20px rgba(0, 0, 0, 0.12);
-}
-
-.composer-card.generating::before {
-  content: '';
-  position: absolute;
-  inset: -1.5px;
-  border-radius: 17.5px;
-  padding: 1.5px;
-  background: conic-gradient(
-    from var(--composer-border-angle, 0deg),
-    transparent 0%,
-    transparent 40%,
-    var(--accent-ai, #10b981) 60%,
-    #38bdf8 76%,
-    #818cf8 88%,
-    transparent 100%
-  );
-  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-  pointer-events: none;
-  z-index: 1;
-  animation: rotate-composer-border 2.4s linear infinite;
-}
-
-@keyframes rotate-composer-border {
-  from {
-    --composer-border-angle: 0deg;
-  }
-  to {
-    --composer-border-angle: 360deg;
-  }
-}
-
-/* 输入框上半区行容器 */
-
-/* 多行文本域自适应高度（最小 38px，最大 200px 限制） */
-
-
-
-/* 操作底栏 */
-
-
-/* 附件小按钮 (+) */
-
-
-
-/* 模型切换下拉按钮（对齐参考图：模型名 + 箭头） */
-
-
-
-.composer-model-dropdown-btn .chevron-icon {
-  opacity: 0.65;
-  transition: transform 0.15s ease;
-}
-
-/* 右侧圆形发送/暂停按钮 */
-
-.composer-send-btn.active {
-  background: #1f5947;
-  color: #ffffff;
-  cursor: pointer;
-  box-shadow: 0 1px 3px rgba(23, 74, 58, 0.25);
-}
-
-.composer-send-btn.active:hover {
-  background: #184738;
-  color: #ffffff;
-  transform: scale(1.05);
-  box-shadow: 0 2px 6px rgba(23, 74, 58, 0.35);
-}
-
-.composer-send-btn.active:active {
-  background: #143d30;
-  transform: scale(0.96);
-}
-
-[data-theme='dark'] .composer-send-btn.active {
-  background: #16977a;
-  color: #ffffff;
-}
-
-[data-theme='dark'] .composer-send-btn.active:hover {
-  background: #148369;
-}
-
 .session-meta-right .nav-dot {
   position: static;
   margin: 0;
@@ -1254,9 +562,6 @@ function handleInterpretReport(reportId: string) {
   }
   .session-title {
     font-size: 13.5px;
-  }
-  .composer {
-    padding: 6px 10px max(12px, env(safe-area-inset-bottom));
   }
 }
 </style>

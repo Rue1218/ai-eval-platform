@@ -947,7 +947,6 @@ pre.code {
   transition: border-color .15s ease, box-shadow .15s ease;
 }
 .composer textarea,
-.composer-card textarea,
 .composer-textarea {
   border: none !important;
   outline: none !important;

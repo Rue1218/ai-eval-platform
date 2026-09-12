@@ -209,12 +209,10 @@ test('remove：关闭连接、撤销附件并清理会话数据', () => {
     key: 'f1', id: 'att-2', filename: 'b.txt', size: 1,
     source: 'blob:2', uploading: false, progress: 0, removed: false,
   }]
-  store.capabilities.s1 = { version: 1 }
   store.remove('s1')
   assert.equal(client.closed, true)
   assert.equal(store.sessions.s1, undefined)
   assert.equal(store.drafts.s1, undefined)
-  assert.equal(store.capabilities.s1, undefined)
   assert.ok(revoked.includes('blob:2'))
 })
 
@@ -246,4 +244,138 @@ test('send：委托给已建连接并透传命令', () => {
   const command = { protocol_version: 2, type: 'ping', data: {} }
   assert.equal(store.send('s1', command), true)
   assert.deepEqual(client.sent, [command])
+})
+
+test('快速切回不重建，后台空闲满一分钟释放连接并保留草稿及完整游标状态', t => {
+  let now = 1000
+  t.mock.method(Date, 'now', () => now)
+  const { factory, created } = fakeTransport()
+  const store = createLoopStore(() => {}, factory)
+  store.focus('s1')
+  store.sessions.s1.ready = true
+  store.sessions.s1.cursor = 42
+  store.sessions.s1.messages.m = { content: '已授权历史' }
+  store.draft('s1').content = '未发送草稿'
+  store.focus('s2')
+  const original = created[0]
+  now += 30000
+  store.focus('s1')
+  assert.equal(store.clients.get('s1'), original)
+  assert.equal(created.length, 2)
+  store.focus('s2')
+  now += 60000
+  store.releaseIdle()
+  assert.equal(original.closed, true)
+  assert.equal(store.clients.has('s1'), false)
+  assert.equal(store.draft('s1').content, '未发送草稿')
+  store.focus('s1')
+  assert.equal(created.length, 3)
+  assert.equal(store.sessions.s1.cursor, 42)
+  assert.equal(store.sessions.s1.messages.m.content, '已授权历史')
+  assert.equal(store.restoring.has('s1'), true, '授权回放完成前禁止显示缓存')
+  created[2].options.onFrame(frame('replay.completed'))
+  assert.equal(store.restoring.has('s1'), false)
+  store.close()
+})
+
+test('活动回合、交互、未确认请求、隔离执行和 Worker 任务不被回收', t => {
+  t.mock.method(Date, 'now', () => 1000)
+  const { factory } = fakeTransport()
+  const store = createLoopStore(() => {}, factory)
+  const ids = ['turn', 'interaction', 'pending', 'worker', 'hint', 'quarantine', 'unsynced', 'cancel', 'submit']
+  for (const id of ids) {
+    store.focus(id, id === 'hint' ? 'worker-1' : undefined)
+    store.sessions[id].ready = id !== 'unsynced'
+  }
+  store.sessions.turn.activeTurn = 'turn:1'
+  store.sessions.interaction.interactions.i = { resolved: false }
+  store.draft('pending').pending = { type: 'turn.submit' }
+  store.sessions.worker.tasks.t = { event: 'task.progress', status: 'running' }
+  store.sessions.quarantine.executions.e = { event: 'execution.quarantined' }
+  store.sessions.cancel.cancelling = true
+  store.draft('submit').submitting = true
+  store.focus('current')
+  store.releaseIdle(100000)
+  store.releaseIdle(200000)
+  for (const id of ids) assert.equal(store.clients.has(id), true, id)
+  // Agent 回合已结束仍保留 Worker；只有任务的持久终态才开启空闲宽限期。
+  store.sessions.worker.tasks.t = { event: 'task.end', status: 'succeeded' }
+  store.releaseIdle(200001)
+  store.releaseIdle(260001)
+  assert.equal(store.clients.has('worker'), false)
+  store.close()
+})
+
+test('恢复状态最多保留十份，淘汰后从零回放但不删除草稿，注销清空所有缓存', t => {
+  t.mock.method(Date, 'now', () => 1000)
+  const { factory } = fakeTransport()
+  const store = createLoopStore(() => {}, factory)
+  for (let i = 0; i < 20; i++) {
+    const id = 's' + i
+    store.focus(id)
+    store.sessions[id].ready = true
+    store.sessions[id].cursor = i + 1
+    store.draft(id).content = id
+  }
+  store.releaseIdle(61000)
+  assert.deepEqual([...store.clients.keys()], ['s19'])
+  assert.equal(Object.keys(store.sessions).length, 11)
+  assert.equal(store.sessions.s0, undefined)
+  assert.equal(store.draft('s0').content, 's0')
+  store.focus('s0')
+  assert.equal(store.sessions.s0.cursor, 0)
+  store.close()
+  assert.equal(Object.keys(store.sessions).length, 0)
+  assert.equal(Object.keys(store.drafts).length, 0)
+  assert.equal(store.restoring.size, 0)
+})
+
+for (const kind of ['turn', 'task']) test(`${kind} 在两次清理之间开始并结束后，重新等待完整空闲宽限期`, t => {
+  let now = 0, sequence = 0
+  t.mock.method(Date, 'now', () => now)
+  const { factory, created } = fakeTransport()
+  const store = createLoopStore(() => {}, factory)
+  t.after(() => store.close())
+  store.focus('background'); store.sessions.background.ready = true
+  store.focus('current'); store.sessions.current.ready = true
+  for (const time of [15000, 30000, 45000]) { now = time; store.releaseIdle() }
+  // 模拟另一连接发起短回合，或 Worker 在两次扫描之间完成任务。
+  const correlation = kind === 'turn' ? { turn: 1, turn_id: 'background:1' } : { task_id: 'worker-1' }
+  const emit = (type, data) => {
+    const event = frame(type, data, correlation, { session_id: 'background', durability: 'persistent', cursor: ++sequence })
+    assert.equal(applyFrame(store.sessions.background, event), 'applied')
+    created[0].options.onFrame(event)
+  }
+  now = 50000; emit(kind === 'turn' ? 'turn.start' : 'task.queued', {})
+  now = 58000; emit(`${kind}.end`, kind === 'turn' ? { reason: 'completed' } : { status: 'succeeded' })
+  now = 60000; store.releaseIdle()
+  assert.equal(created[0].closed, false, '最后业务活动后仅 2 秒，不能沿用旧空闲时间关闭')
+  now = 117999; store.releaseIdle()
+  assert.equal(created[0].closed, false)
+  now = 118000; store.releaseIdle()
+  assert.equal(created[0].closed, true, '重新空闲满 60 秒后仍可正常回收')
+})
+
+test('有效模型增量重置空闲时间，心跳不会无限续期', t => {
+  let now = 0
+  t.mock.method(Date, 'now', () => now)
+  const { factory, created } = fakeTransport()
+  const store = createLoopStore(() => {}, factory)
+  t.after(() => store.close())
+  store.focus('background'); store.sessions.background.ready = true
+  store.focus('current'); store.sessions.current.ready = true
+  now = 50000
+  const delta = frame('assistant.text.delta', { text: '片段', chunk_index: 0 },
+    { turn: 1, turn_id: 'background:1', attempt_id: 'a' }, { session_id: 'background', durability: 'transient' })
+  assert.equal(applyFrame(store.sessions.background, delta), 'applied')
+  created[0].options.onFrame(delta)
+  now = 60000; store.releaseIdle()
+  assert.equal(created[0].closed, false)
+  for (const time of [75000, 90000, 105000]) {
+    now = time
+    created[0].options.onFrame(frame('pong', {}, {}, { durability: 'control' }))
+    store.releaseIdle()
+  }
+  now = 110000; store.releaseIdle()
+  assert.equal(created[0].closed, true, '持续心跳不应推迟最后业务事件后的回收')
 })

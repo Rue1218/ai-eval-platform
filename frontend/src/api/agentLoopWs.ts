@@ -124,7 +124,7 @@ export class AgentLoopWebSocket {
     clearTimeout(this.timer)
     this.timer = setTimeout(() => { void this.connect() }, Math.min(30000, 1000 * 2 ** Math.min(this.retries++, 5)))
   }
-  /** 页面退出/注销才关闭活动控制连接；普通切会话保留 store 中的实例。 */
+  /** 页面退出/注销或 store 确认后台空闲后关闭；普通切会话仍复用连接。 */
   close(): void {
     this.stopped = true; this.epoch++; clearTimeout(this.timer); clearInterval(this.heartbeat)
     this.ws?.close(); this.ws = null; this.options.state().ready = false
