@@ -27,15 +27,6 @@ _WS_ID = "c09bd564-1443-4a2e-b085-70e719818d08"
 _SID = "a09bd564-1443-4a2e-b085-70e719818d09"
 
 
-@pytest.fixture()
-def tmp_root(tmp_path, monkeypatch):
-    """数据根指向 tmp：workspace 目录 + legacy 目录并存（同根拓扑）。"""
-    root = tmp_path / "workspaces"
-    root.mkdir()
-    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(root))
-    return root
-
-
 def _ws_dir(tmp_root) -> str:
     """建一个工作区目录并返回（workspaces/<uuid>）。"""
     directory = tmp_root / _WS_ID

@@ -324,7 +324,6 @@ function isRouteActive(itemPath: string): boolean {
   return route.path === itemPath || route.path.startsWith(itemPath + '/')
 }
 
-const currentPath = computed(() => route.path)
 const currentTitle = computed(() => {
   if (route.path === '/datasets') return modeStore.mode === 'llm' ? '基准数据集' : 'RAG 资产切换'
   if (route.path === '/kb') return modeStore.mode === 'rag' ? '知识库' : '大模型资产切换'

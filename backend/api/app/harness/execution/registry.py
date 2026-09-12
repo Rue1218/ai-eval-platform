@@ -226,6 +226,16 @@ def build_default_registry() -> ToolRegistry:
     评测任务扩展：只入 PG 队列、查询或取消，不等待 Worker 终态。
     """
     registry = ToolRegistry()
+    _register_file_tools(registry)
+    _register_web_tools(registry)
+    _register_bash_tool(registry)
+    _register_task_tools(registry)
+    _register_platform_task_tools(registry)
+    return registry
+
+
+def _register_file_tools(registry: ToolRegistry) -> None:
+    """工作区文件工具：read / read_image / glob / grep / write / edit。"""
     registry.register(
         ToolDef(
             name="read",
@@ -547,6 +557,10 @@ def build_default_registry() -> ToolRegistry:
             concurrency_class="path_scoped",
         )
     )
+
+
+def _register_web_tools(registry: ToolRegistry) -> None:
+    """网络工具：web_search / web_fetch。"""
     registry.register(
         ToolDef(
             name="web_search",
@@ -662,6 +676,10 @@ def build_default_registry() -> ToolRegistry:
             concurrency_class="read_only",
         )
     )
+
+
+def _register_bash_tool(registry: ToolRegistry) -> None:
+    """沙箱执行工具：bash（独立 Runner bwrap 沙箱，fail-closed）。"""
     registry.register(
         ToolDef(
             name="bash",
@@ -722,6 +740,10 @@ def build_default_registry() -> ToolRegistry:
             concurrency_class="exclusive",
         )
     )
+
+
+def _register_task_tools(registry: ToolRegistry) -> None:
+    """会话任务清单与澄清工具：task / TaskCreate / TaskGet / TaskUpdate / TaskList / ask_user_question。"""
     registry.register(
         ToolDef(
             name="task",
@@ -983,6 +1005,10 @@ def build_default_registry() -> ToolRegistry:
             concurrency_class="exclusive",
         )
     )
+
+
+def _register_platform_task_tools(registry: ToolRegistry) -> None:
+    """platform.tasks 长任务 MCP：只入队/查询/取消，不等待终态。"""
     # ── platform.tasks 长任务 MCP：只入队/查询/取消，不等待终态 ──
     registry.register(
         ToolDef(
@@ -1139,4 +1165,3 @@ def build_default_registry() -> ToolRegistry:
             concurrency_class="session_exclusive",
         )
     )
-    return registry

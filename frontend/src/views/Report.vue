@@ -9,7 +9,7 @@
             <span style="font-size: 18px; font-weight: 700">{{ report.title || '评测报告' }}</span>
           </div>
           <div class="mono mt8" style="font-size: 11.5px; color: var(--text-tertiary)">
-            报告 ID: {{ report.id }} · 关联任务: {{ report.task_id }} · 生成时间: {{ formatDate(report.created_at) }}
+            报告 ID: {{ report.id }} · 关联任务: {{ report.task_id }} · 生成时间: {{ formatDateTime(report.created_at) }}
           </div>
         </div>
 
@@ -427,6 +427,7 @@ import EmptyState from '../components/common/EmptyState.vue'
 import ShareModal from '../components/modals/ShareModal.vue'
 import RadarMetricsChart from '../components/charts/RadarMetricsChart.vue'
 import StressSeriesChart from '../components/charts/StressSeriesChart.vue'
+import { formatDateTime } from '../utils/format'
 
 const route = useRoute()
 const router = useRouter()
@@ -563,11 +564,6 @@ function sampleRawJson(item: any): string {
     null,
     2,
   )
-}
-
-function formatDate(d?: string) {
-  if (!d) return ''
-  return new Date(d).toLocaleString('zh-CN', { hour12: false })
 }
 
 function formatScore(val?: number) {

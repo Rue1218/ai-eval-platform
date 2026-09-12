@@ -59,7 +59,6 @@ async def run_stop_idle(client: ProbeClient, report: AcceptanceReport) -> None:
 
 async def run_unknown_uplink(client: ProbeClient, report: AcceptanceReport) -> None:
     """非法上行事件 → error(VALIDATION)。"""
-    mark = len(client.trace.frames)
     await client.send_raw({"event": "not_an_event", "payload": {}})
     await client.wait_event("error", timeout_s=20)
     matcher = ExpectMatcher(client.trace)
@@ -132,7 +131,6 @@ async def run_cards_reject_no_card(client: ProbeClient, report: AcceptanceReport
         ("confirm_ack", {"ok": True, "patch": {"run": {"sample_size": 1}, "with_stress": False}}),
     ]
     for event, payload in probes:
-        mark = len(client.trace.frames)
         await client.send_raw({"event": event, "payload": payload})
         await client.wait_event("error", timeout_s=20)
         matcher = ExpectMatcher(client.trace)

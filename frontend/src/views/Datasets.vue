@@ -334,7 +334,7 @@
 
               <!-- 当前页切片数据行 -->
               <tr
-                v-for="(r, pageIdx) in pagedRows"
+                v-for="r in pagedRows"
                 v-else
                 :key="r.row_no"
                 class="data-row"
@@ -920,7 +920,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, h, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage, useDialog, type DropdownOption } from 'naive-ui'
 import { api } from '../api/http'
@@ -928,6 +928,7 @@ import type { Dataset, DatasetRow, GoldQA, TaskSpec } from '../api/types'
 import { useModeStore } from '../stores/mode'
 import UploadDatasetModal from '../components/modals/UploadDatasetModal.vue'
 import BenchmarkLaunchDrawer from '../components/drawers/BenchmarkLaunchDrawer.vue'
+import { escapeHtml, escapeRegex, renderIcon } from '../utils/render'
 
 interface EditableDatasetRow {
   row_no: number
@@ -959,25 +960,6 @@ interface AiCandidate {
 }
 
 // ─── 右键菜单 SVG 图标辅助渲染 ───
-function renderIcon(pathD: string | string[], strokeColor?: string) {
-  return () =>
-    h(
-      'svg',
-      {
-        width: 14,
-        height: 14,
-        viewBox: '0 0 24 24',
-        fill: 'none',
-        stroke: strokeColor || 'currentColor',
-        strokeWidth: 2,
-        strokeLinecap: 'round',
-        strokeLinejoin: 'round',
-        style: { display: 'inline-block', verticalAlign: '-2px', marginRight: '6px' },
-      },
-      Array.isArray(pathD) ? pathD.map(p => h('path', { d: p })) : [h('path', { d: pathD })],
-    )
-}
-
 const message = useMessage()
 const dialog = useDialog()
 const router = useRouter()
@@ -996,12 +978,6 @@ const showUploadModal = ref(false)
 const datasetForUpload = ref<Dataset | null>(null)
 const showLaunchDrawer = ref(false)
 const filterPendingMode = ref<'all' | 'clean' | 'pending'>('all')
-const filterPendingOnly = computed({
-  get: () => filterPendingMode.value === 'pending',
-  set: (val: boolean) => {
-    filterPendingMode.value = val ? 'pending' : 'all'
-  },
-})
 const tableContainerRef = ref<HTMLElement | null>(null)
 
 // ─── 更多操作下拉菜单配置 ───
@@ -1177,13 +1153,6 @@ function highlightMatch(text: string): string {
   if (!q || !text) return escapeHtml(text)
   const regex = new RegExp(`(${escapeRegex(q)})`, 'gi')
   return escapeHtml(text).replace(regex, '<mark class="highlight-match">$1</mark>')
-}
-
-function escapeHtml(str: string): string {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-}
-function escapeRegex(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 // ─── 键盘流网格导航 (Keyboard Flow) ───
@@ -1426,7 +1395,9 @@ async function loadFolders() {
         .map(folder => ({ id: folder.id, name: folder.name, open: true, items: [] })),
     ]
     if (datasets.value.length) syncDatasetTree(datasets.value)
-  } catch {}
+  } catch {
+    // 目录树加载失败保持现状，不阻断数据行编辑
+  }
 }
 
 function syncGoldQaTree(list: GoldQA[]) {
@@ -1441,7 +1412,6 @@ function syncGoldQaTree(list: GoldQA[]) {
 
 // 批量选择
 const isCurrentPageAllChecked = computed(() => pagedRows.value.length > 0 && pagedRows.value.every(row => row.checked))
-const allRowsChecked = computed(() => sampleRows.value.length > 0 && sampleRows.value.every(row => row.checked))
 const selectedCount = computed(() => sampleRows.value.filter(row => row.checked).length)
 
 const lastCheckedIdx = ref<number>(-1)
@@ -1449,11 +1419,6 @@ const lastCheckedIdx = ref<number>(-1)
 function toggleCurrentPageRowsDirect() {
   const nextState = !isCurrentPageAllChecked.value
   pagedRows.value.forEach(row => { row.checked = nextState })
-}
-
-function toggleAllRowsDirect() {
-  const nextState = !allRowsChecked.value
-  sampleRows.value.forEach(row => { row.checked = nextState })
 }
 
 function handleRowCheckClick(r: EditableDatasetRow, e: MouseEvent) {
@@ -2093,7 +2058,9 @@ async function confirmAddCol() {
   try {
     await persistCustomCols(ds.id, nextCols, list)
     message.success(`已添加列「${name}」`)
-  } catch {}
+  } catch {
+    // 自定义列持久化失败不阻断本地编辑
+  }
 }
 
 async function removeCustomCol(key: string) {
@@ -2109,7 +2076,9 @@ async function removeCustomCol(key: string) {
   try {
     await persistCustomCols(ds.id, nextCols, prevCols)
     message.info(`已移除列 ${key}`)
-  } catch {}
+  } catch {
+    // 自定义列持久化失败不阻断本地编辑
+  }
 }
 
 // 抽屉式数据合成向导

@@ -49,14 +49,6 @@ def _workspace_row(*, deleted: bool) -> SimpleNamespace:
     )
 
 
-@pytest.fixture()
-def tmp_root(tmp_path, monkeypatch):
-    root = tmp_path / "workspaces"
-    root.mkdir()
-    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(root))
-    return root
-
-
 # ─── BLK-2：行态校验 fail-closed ───
 
 

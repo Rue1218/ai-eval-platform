@@ -26,6 +26,7 @@ from ..profile_env import (
 from ..profile_reasoning import profile_reasoning
 from ..schemas import FetchModelsIn, ProfileCreate, ProfileOut, ProfileUpdate
 from ..security import decrypt_secret
+from ._common import client_ip
 
 router = APIRouter(prefix="/api/profiles", tags=["profiles"])
 logger = logging.getLogger("ai-eval.profiles")
@@ -154,11 +155,6 @@ def _profile_out(profile: ProtocolProfile, connection: tuple[str, str, str | Non
     )
 
 
-def _request_ip(request: FastApiRequest) -> str | None:
-    """提取协议档变更的请求来源 IP。"""
-    return request.client.host if request.client else None
-
-
 @router.get("")
 def list_profiles(
     db: Session = Depends(get_db),
@@ -274,7 +270,7 @@ def create_profile(
                     "has_embedding_api_key": bool(body.embedding_api_key),
                     "has_reranker_api_key": bool(body.reranker_api_key),
                 },
-                ip=_request_ip(request),
+                ip=client_ip(request),
             )
         )
         db.commit()
@@ -370,7 +366,7 @@ def update_profile(
                     "has_embedding_api_key": bool(next_embedding_api_key),
                     "has_reranker_api_key": bool(next_reranker_api_key),
                 },
-                ip=_request_ip(request),
+                ip=client_ip(request),
             )
         )
         db.commit()
@@ -409,7 +405,7 @@ def delete_profile(
                 target_type="profile",
                 target_id=profile_id,
                 detail={"name": profile.name},
-                ip=_request_ip(request),
+                ip=client_ip(request),
             )
         )
         db.commit()

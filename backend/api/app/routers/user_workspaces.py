@@ -26,8 +26,8 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
-from ..models import AuditLog, User, Workspace
 from ..models import Session as AgentSession
+from ..models import User, Workspace
 from ..workspace_service import (
     create_child_dir,
     create_workspace_file,
@@ -42,6 +42,7 @@ from ..workspace_service import (
     workspace_dir_for,
     write_workspace_file,
 )
+from ._common import write_audit
 
 router = APIRouter(prefix="/api/workspaces", tags=["user-workspaces"])
 
@@ -94,28 +95,6 @@ def _owned_workspace(
     if require_active and row.deleted_at is not None:
         raise AppError(ErrorCode.VALIDATION, "工作区已注销，不可操作（可在 legacy 目录中复活，随 F3）")
     return row
-
-
-def _audit(
-    db: Session,
-    request: Request,
-    user: User,
-    *,
-    action: str,
-    target_id: str,
-    detail: dict[str, Any] | None = None,
-) -> None:
-    """写审计（AuditLog 追加，调用方负责 commit）。"""
-    db.add(
-        AuditLog(
-            user_id=user.id,
-            action=action,
-            target_type="workspace",
-            target_id=target_id,
-            detail=detail or {},
-            ip=request.client.host if request.client else None,
-        )
-    )
 
 
 def _workspace_item(row: Workspace) -> dict[str, Any]:
@@ -178,7 +157,7 @@ def create_workspace(
         db.flush()
         directory = workspace_dir_for(row.id)
         os.makedirs(directory, exist_ok=False)
-        _audit(db, request, user, action="workspace_create", target_id=row.id)
+        write_audit(db, request, user, action="workspace_create", target_type="workspace", target_id=row.id)
         db.commit()
     except IntegrityError:
         db.rollback()
@@ -217,7 +196,7 @@ def rename_workspace(
     if duplicate:
         raise AppError(ErrorCode.VALIDATION, "已存在同名工作区")
     row.name = name
-    _audit(db, request, user, action="workspace_rename", target_id=row.id)
+    write_audit(db, request, user, action="workspace_rename", target_type="workspace", target_id=row.id)
     db.commit()
     return _workspace_item(row)
 
@@ -246,7 +225,7 @@ def delete_workspace(
         if row.deleted_at is not None:
             return {"ok": True, "id": workspace_id, "deleted": True}
         row.deleted_at = datetime.now(UTC)
-        _audit(db, request, user, action="workspace_delete", target_id=workspace_id)
+        write_audit(db, request, user, action="workspace_delete", target_type="workspace", target_id=workspace_id)
         db.commit()
         return {"ok": True, "id": workspace_id, "deleted": True}
 
@@ -280,12 +259,12 @@ def delete_workspace(
             .values(workspace_id=None, scope_path=None)
         )
     directory = workspace_dir_for(workspace_id)
-    _audit(
+    write_audit(
         db,
         request,
         user,
         action="workspace_purge",
-        target_id=workspace_id,
+        target_type="workspace", target_id=workspace_id,
         detail={
             "unbound_sessions": len(unbound_ids),
             "session_ids": unbound_ids,
@@ -342,12 +321,12 @@ def create_folder(
     directory = workspace_dir_for(row.id)
     parent = resolve_scope_dir(directory, body.path)
     target = create_child_dir(parent, body.name.strip() or body.name)
-    _audit(
+    write_audit(
         db,
         request,
         user,
         action="workspace_folder_create",
-        target_id=workspace_id,
+        target_type="workspace", target_id=workspace_id,
         detail={"path": os.path.join(body.path, body.name).lstrip("./")},
     )
     db.commit()
@@ -395,12 +374,12 @@ def update_file_content(
     row = _owned_workspace(db, user, workspace_id)
     directory = workspace_dir_for(row.id)
     res = write_workspace_file(directory, body.path, body.content)
-    _audit(
+    write_audit(
         db,
         request,
         user,
         action="workspace_file_update",
-        target_id=workspace_id,
+        target_type="workspace", target_id=workspace_id,
         detail={"path": res["path"], "size": res["size"]},
     )
     db.commit()
@@ -419,12 +398,12 @@ def create_file(
     row = _owned_workspace(db, user, workspace_id)
     directory = workspace_dir_for(row.id)
     res = create_workspace_file(directory, body.path, body.name.strip(), body.content)
-    _audit(
+    write_audit(
         db,
         request,
         user,
         action="workspace_file_create",
-        target_id=workspace_id,
+        target_type="workspace", target_id=workspace_id,
         detail={"path": res["path"], "name": res["name"]},
     )
     db.commit()
@@ -443,12 +422,12 @@ def rename_item(
     row = _owned_workspace(db, user, workspace_id)
     directory = workspace_dir_for(row.id)
     res = rename_workspace_path(directory, body.path, body.new_name.strip())
-    _audit(
+    write_audit(
         db,
         request,
         user,
         action="workspace_file_rename",
-        target_id=workspace_id,
+        target_type="workspace", target_id=workspace_id,
         detail={"old_path": res["old_path"], "new_path": res["new_path"]},
     )
     db.commit()
@@ -467,12 +446,12 @@ def delete_item(
     row = _owned_workspace(db, user, workspace_id)
     directory = workspace_dir_for(row.id)
     res = delete_workspace_path(directory, path)
-    _audit(
+    write_audit(
         db,
         request,
         user,
         action="workspace_file_delete",
-        target_id=workspace_id,
+        target_type="workspace", target_id=workspace_id,
         detail={"path": res["path"]},
     )
     db.commit()

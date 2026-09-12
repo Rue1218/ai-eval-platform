@@ -72,6 +72,7 @@ from ..schemas import (
     FolderIn,
     FolderOut,
 )
+from ._common import assert_folder_exists, client_ip, get_folder_or_404
 
 router = APIRouter(prefix="/api/case-sets", tags=["case-sets"])
 folders_router = APIRouter(prefix="/api/case-folders", tags=["case-folders"])
@@ -123,31 +124,12 @@ _XLSX_MEDIA_TYPE = xlsx_media_type()
 _XMIND_MEDIA_TYPE = "application/vnd.xmind.workbook"
 
 
-def _request_ip(request: FastApiRequest) -> str | None:
-    """提取审计日志的请求来源 IP。"""
-    return request.client.host if request.client else None
-
-
 def _get_case_set_or_404(db: Session, set_id: str) -> CaseSet:
     """读取用例集或抛出 NOT_FOUND。"""
     case_set = db.query(CaseSet).filter(CaseSet.id == set_id).first()
     if not case_set:
         raise AppError(ErrorCode.NOT_FOUND, "用例集不存在")
     return case_set
-
-
-def _get_folder_or_404(db: Session, folder_id: str) -> CaseFolder:
-    """读取目录或抛出 NOT_FOUND。"""
-    folder = db.query(CaseFolder).filter(CaseFolder.id == folder_id).first()
-    if not folder:
-        raise AppError(ErrorCode.NOT_FOUND, "目录不存在")
-    return folder
-
-
-def _assert_folder_exists(db: Session, folder_id: str) -> None:
-    """校验挂载目标目录存在，不存在按入参错误 VALIDATION 处理。"""
-    if not db.query(CaseFolder).filter(CaseFolder.id == folder_id).first():
-        raise AppError(ErrorCode.VALIDATION, "目标目录不存在")
 
 
 def _assert_editable(case_set: CaseSet) -> None:
@@ -405,7 +387,7 @@ def create_case_set(
 ):
     """创建空用例集（status=generated，generated_count=0）；expires_at 留空由任务域写入。"""
     if body.folder_id:
-        _assert_folder_exists(db, body.folder_id)
+        assert_folder_exists(db, CaseFolder, body.folder_id)
     case_set = CaseSet(
         name=body.name,
         folder_id=body.folder_id,
@@ -421,7 +403,7 @@ def create_case_set(
             target_type="case_set",
             target_id=case_set.id,
             detail={"name": case_set.name},
-            ip=_request_ip(request),
+            ip=client_ip(request),
         )
     )
     db.commit()
@@ -500,7 +482,7 @@ def download_import_template(
             target_type="case_set",
             target_id="template",
             detail={"fmt": "xlsx"},
-            ip=_request_ip(request),
+            ip=client_ip(request),
         )
     )
     db.commit()
@@ -540,7 +522,7 @@ def update_case_set(
     if "folder_id" in values:
         folder_id = values.pop("folder_id")
         if folder_id is not None:
-            _assert_folder_exists(db, folder_id)
+            assert_folder_exists(db, CaseFolder, folder_id)
         case_set.folder_id = folder_id
     if "column_schema" in values:
         case_set.column_schema = values.pop("column_schema")
@@ -554,7 +536,7 @@ def update_case_set(
             target_type="case_set",
             target_id=case_set.id,
             detail={"name": case_set.name, "fields": sorted(body.model_fields_set)},
-            ip=_request_ip(request),
+            ip=client_ip(request),
         )
     )
     db.commit()
@@ -637,7 +619,7 @@ def confirm_case_set(
                 "mapping_target": body.mapping_target,
                 "target_id": body.target_id,
             },
-            ip=_request_ip(request),
+            ip=client_ip(request),
         )
     )
     db.commit()
@@ -670,7 +652,7 @@ def cancel_case_set(
             target_type="case_set",
             target_id=case_set.id,
             detail={"name": case_set.name, "reason": body.reason},
-            ip=_request_ip(request),
+            ip=client_ip(request),
         )
     )
     db.commit()
@@ -738,7 +720,7 @@ def map_cases(
                 "case_count": len(cases),
                 "pending_count": pending_count,
             },
-            ip=_request_ip(request),
+            ip=client_ip(request),
         )
     )
     db.commit()
@@ -879,7 +861,7 @@ async def import_case_set(
                 "imported_count": imported,
                 "skipped_count": skipped,
             },
-            ip=_request_ip(request),
+            ip=client_ip(request),
         )
     )
     db.commit()
@@ -919,7 +901,7 @@ def export_case_set(
             target_type="case_set",
             target_id=case_set.id,
             detail={"name": case_set.name, "fmt": fmt, "case_count": len(cases)},
-            ip=_request_ip(request),
+            ip=client_ip(request),
         )
     )
     db.commit()
@@ -954,7 +936,7 @@ def create_case_folder(
     if not body.name:
         raise AppError(ErrorCode.VALIDATION, "目录名称不能为空")
     if body.parent_id:
-        _assert_folder_exists(db, body.parent_id)
+        assert_folder_exists(db, CaseFolder, body.parent_id)
     folder = CaseFolder(
         name=body.name,
         parent_id=body.parent_id,
@@ -969,7 +951,7 @@ def create_case_folder(
             target_type="case_folder",
             target_id=folder.id,
             detail={"name": folder.name},
-            ip=_request_ip(request),
+            ip=client_ip(request),
         )
     )
     db.commit()
@@ -986,12 +968,12 @@ def update_case_folder(
     user: User = Depends(get_current_user),
 ):
     """按提供的字段更新用例目录；移动时校验父目录存在且不构成环。"""
-    folder = _get_folder_or_404(db, folder_id)
+    folder = get_folder_or_404(db, CaseFolder, folder_id)
     values = body.model_dump(exclude_unset=True)
     if "parent_id" in values:
         parent_id = values.pop("parent_id")
         if parent_id is not None:
-            _assert_folder_exists(db, parent_id)
+            assert_folder_exists(db, CaseFolder, parent_id)
             # 沿祖先链向上检查，防止把目录挂到自身或后代节点下形成环
             current = parent_id
             while current:
@@ -1010,7 +992,7 @@ def update_case_folder(
             target_type="case_folder",
             target_id=folder.id,
             detail={"name": folder.name, "fields": sorted(body.model_fields_set)},
-            ip=_request_ip(request),
+            ip=client_ip(request),
         )
     )
     db.commit()
@@ -1026,7 +1008,7 @@ def delete_case_folder(
     user: User = Depends(get_current_user),
 ):
     """删除空目录；仍含用例集或子目录时返回 VALIDATION。"""
-    folder = _get_folder_or_404(db, folder_id)
+    folder = get_folder_or_404(db, CaseFolder, folder_id)
     if db.query(CaseFolder).filter(CaseFolder.parent_id == folder.id).first():
         raise AppError(ErrorCode.VALIDATION, "目录下仍有子目录，无法删除")
     if db.query(CaseSet).filter(CaseSet.folder_id == folder.id).first():
@@ -1039,7 +1021,7 @@ def delete_case_folder(
             target_type="case_folder",
             target_id=folder_id,
             detail={"name": folder.name},
-            ip=_request_ip(request),
+            ip=client_ip(request),
         )
     )
     db.commit()

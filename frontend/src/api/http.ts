@@ -2,7 +2,7 @@
  * AI 测试与评估平台 — 统一 HTTP 客户端
  * 依据：docs/AI测试与评估平台-API.md (V1.5)
  */
-import axios, { type AxiosRequestConfig } from 'axios'
+import axios from 'axios'
 import {
   ErrorCode,
   ERROR_MESSAGES,

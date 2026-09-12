@@ -12,7 +12,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import workspace_service
-from app.main import app
 from app.routers import user_workspaces
 
 
@@ -137,10 +136,6 @@ class TestCreateChildDir:
 
 class TestUserRouterAuth:
     """用户域工作区路由未登录鉴权（与 admin 测试同构，不依赖数据库）。"""
-
-    @pytest.fixture()
-    def client(self) -> TestClient:
-        return TestClient(app)
 
     def test_list_requires_auth(self, client: TestClient) -> None:
         resp = client.get("/api/workspaces")

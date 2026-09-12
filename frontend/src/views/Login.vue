@@ -517,7 +517,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
-import { useMessage, NModal, NButton, NInput } from 'naive-ui'
+import { useMessage, NModal, NButton } from 'naive-ui'
 import { useAuthStore } from '../stores/auth'
 
 /** 路由与状态管理 */
@@ -696,7 +696,7 @@ async function submitLogin() {
     isSuccessExit.value = true
     await wait(300)
     router.push('/agent')
-  } catch (err: any) {
+  } catch {
     loading.value = false
     isLoginSuccess.value = false
     globalErrorMsg.value = '用户名或密码错误，请重新输入'

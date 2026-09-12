@@ -10,17 +10,17 @@
 
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import not_
 
 from .benchmark import run_benchmark
-from .db import SessionLocal
 from .dataset_import import (
     claim_next_dataset_import,
     recover_expired_dataset_import_leases,
     run_dataset_import,
 )
+from .db import SessionLocal
 from .events import push_ws
 from .models import CaseSet, Setting, Task, TaskEvent
 from .rag import run_rag
@@ -109,7 +109,7 @@ def _run_task(task_id: str) -> None:
         if not task:
             return
         task.status = "failed"
-        task.finished_at = datetime.now(timezone.utc)
+        task.finished_at = datetime.now(UTC)
         db.add(
             TaskEvent(
                 task_id=task.id,
@@ -137,7 +137,7 @@ def _run_task(task_id: str) -> None:
                     logger.info("task %s skipped exception failure because it is no longer running", task_id)
                     return
                 task.status = "failed"
-                task.finished_at = datetime.now(timezone.utc)
+                task.finished_at = datetime.now(UTC)
             db.add(
                 TaskEvent(
                     task_id=task_id,
@@ -167,7 +167,7 @@ def _expire_stale_case_confirmations(db) -> int:
     悬挂用例集也一并清理（扫描器只改 case set / task 状态，不动其它域）。
     返回本次取消的用例集数量，供日志与测试观测。
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     stale = (
         db.query(CaseSet)
         .filter(
@@ -243,7 +243,7 @@ def loop() -> None:
                 )
                 if task:
                     task.status = "running"
-                    task.started_at = datetime.now(timezone.utc)
+                    task.started_at = datetime.now(UTC)
                     db.commit()
                     task_id = task.id
         except Exception:
