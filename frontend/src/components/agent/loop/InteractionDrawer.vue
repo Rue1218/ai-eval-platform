@@ -7,11 +7,16 @@
     aria-live="polite"
   >
     <header class="interaction-drawer-head">
-      <div>
-        <span class="interaction-kicker">{{ interaction.kind === 'approval' ? '工具权限' : '需要你的回答' }}</span>
-        <h3>{{ title }}</h3>
+      <div class="head-title-wrap">
+        <div class="head-tag-row">
+          <span class="interaction-kicker">{{ interaction.kind === 'approval' ? '工具权限' : '需要你的回答' }}</span>
+          <span class="interaction-state" :class="{ 'is-submitting': interaction.submitting }">
+            <span class="state-dot" aria-hidden="true" />
+            {{ interaction.submitting ? '正在提交' : '等待处理' }}
+          </span>
+        </div>
+        <h3 class="head-heading">{{ title }}</h3>
       </div>
-      <span class="interaction-state">{{ interaction.submitting ? '正在提交' : '等待处理' }}</span>
     </header>
 
     <template v-if="interaction.restricted">
@@ -38,68 +43,168 @@
     </template>
     <form v-else class="question-form" @submit.prevent="submitAnswers">
       <p class="interaction-summary">请补充以下信息，回答会作为当前工具的结果继续本轮执行。</p>
-      <div class="question-progress" aria-live="polite">
-        <strong>问题 {{ activeQuestionIndex + 1 }} / {{ questions.length }}</strong>
-        <span>可使用上一题和下一题检查回答</span>
+      
+      <!-- 现代分段进度指示条 -->
+      <div class="question-progress-wrap" aria-live="polite">
+        <div class="stepper-track" aria-hidden="true">
+          <div
+            v-for="(_, sIdx) in questions"
+            :key="sIdx"
+            class="stepper-segment"
+            :class="{
+              'is-current': sIdx === activeQuestionIndex,
+              'is-completed': isQuestionCompleted(sIdx),
+              'is-upcoming': sIdx > activeQuestionIndex && !isQuestionCompleted(sIdx)
+            }"
+          />
+        </div>
+        <div class="question-progress-meta">
+          <div class="progress-left">
+            <strong class="progress-title">问题 {{ activeQuestionIndex + 1 }} / {{ questions.length }}</strong>
+            <span v-if="currentQuestion?.type === 'checkbox'" class="type-pill is-checkbox">可多选</span>
+          </div>
+          <span class="progress-tip">可使用上一题和下一题检查回答</span>
+        </div>
       </div>
+
       <div class="question-page-shell">
         <Transition :name="questionTransitionName">
           <fieldset v-if="currentQuestion" :key="currentQuestion.id" :disabled="disabled" class="question-fieldset question-page">
-            <legend>
-              <span>{{ currentQuestion.question || currentQuestion.title }}</span>
-              <small>{{ questionTypeLabel(currentQuestion.type) }}{{ currentQuestion.required === false ? ' · 选填' : ' · 必答' }}</small>
+            <legend class="question-legend">
+              <span class="question-title-text">{{ currentQuestion.question || currentQuestion.title }}</span>
+              <span class="question-type-badge" :class="[`type-${currentQuestion.type}`, currentQuestion.required === false ? 'is-optional' : 'is-required']">
+                {{ questionTypeLabel(currentQuestion.type) }}{{ currentQuestion.required === false ? ' · 选填' : ' · 必答' }}
+              </span>
             </legend>
 
+            <!-- 简答题 -->
             <template v-if="currentQuestion.type === 'text'">
-              <textarea
-                v-model="textValues[currentQuestion.id]"
-                :aria-label="currentQuestion.question || currentQuestion.title"
-                class="question-textarea"
-                maxlength="16000"
-                rows="3"
-                placeholder="请输入你的回答…"
-              />
-            </template>
-            <template v-else>
-              <label v-for="option in currentQuestion.options || []" :key="option.label" class="choice-option">
-                <input
-                  :type="currentQuestion.type === 'checkbox' ? 'checkbox' : 'radio'"
-                  :name="`${interaction.key}-${currentQuestion.id}`"
-                  :checked="isSelected(currentQuestion.id, option.label)"
-                  @change="choose(currentQuestion, option.label, ($event.target as HTMLInputElement).checked)"
-                />
-                <span>{{ option.label }}</span>
-                <small v-if="option.description">{{ option.description }}</small>
-              </label>
-              <!-- 自定义答案独立传入 custom，避免伪装成服务端未提供的选项。 -->
-              <label class="choice-option choice-custom">
-                <input
-                  :type="currentQuestion.type === 'checkbox' ? 'checkbox' : 'radio'"
-                  :name="`${interaction.key}-${currentQuestion.id}`"
-                  :checked="customEnabled[currentQuestion.id] === true"
-                  @change="toggleCustom(currentQuestion, ($event.target as HTMLInputElement).checked)"
-                />
-                <span>其他，请填写</span>
-                <input
-                  v-model="customValues[currentQuestion.id]"
-                  class="custom-answer-input"
-                  :disabled="customEnabled[currentQuestion.id] !== true"
-                  :aria-label="`${currentQuestion.question || currentQuestion.title}的自定义回答`"
+              <div class="text-question-card">
+                <textarea
+                  v-model="textValues[currentQuestion.id]"
+                  :aria-label="currentQuestion.question || currentQuestion.title"
+                  class="question-textarea"
                   maxlength="16000"
-                  placeholder="输入自定义答案"
-                  @focus="enableCustom(currentQuestion)"
-                  @input="enableCustom(currentQuestion)"
+                  rows="4"
+                  placeholder="请输入你的回答…"
+                  @keydown.ctrl.enter="handleTextShortcut"
+                  @keydown.meta.enter="handleTextShortcut"
                 />
-              </label>
+                <div class="textarea-bar">
+                  <span class="textarea-shortcut">提示：支持换行；完成可点击下方按钮</span>
+                  <span class="textarea-counter">{{ (textValues[currentQuestion.id] || '').length }} / 16000</span>
+                </div>
+              </div>
+            </template>
+
+            <!-- 单选与多选 -->
+            <template v-else>
+              <div class="choices-list" role="group" :aria-label="currentQuestion.question || currentQuestion.title">
+                <label
+                  v-for="(option, optIdx) in currentQuestion.options || []"
+                  :key="option.label"
+                  class="choice-card"
+                  :class="{
+                    'is-selected': isSelected(currentQuestion.id, option.label),
+                    'is-checkbox': currentQuestion.type === 'checkbox',
+                    'is-radio': currentQuestion.type !== 'checkbox'
+                  }"
+                >
+                  <div class="choice-header">
+                    <div class="choice-badge" :class="`is-${currentQuestion.type}`">
+                      <span class="choice-letter">{{ getOptionLetter(optIdx) }}</span>
+                    </div>
+                    <div class="choice-content">
+                      <span class="choice-label">{{ option.label }}</span>
+                      <small v-if="option.description" class="choice-description">{{ option.description }}</small>
+                    </div>
+                    <input
+                      :type="currentQuestion.type === 'checkbox' ? 'checkbox' : 'radio'"
+                      :name="`${interaction.key}-${currentQuestion.id}`"
+                      :checked="isSelected(currentQuestion.id, option.label)"
+                      class="choice-native-input"
+                      @change="choose(currentQuestion, option.label, ($event.target as HTMLInputElement).checked)"
+                    />
+                  </div>
+                </label>
+
+                <!-- 自定义答案卡片 -->
+                <label
+                  class="choice-card choice-custom"
+                  :class="{
+                    'is-selected': customEnabled[currentQuestion.id] === true,
+                    'is-checkbox': currentQuestion.type === 'checkbox',
+                    'is-radio': currentQuestion.type !== 'checkbox'
+                  }"
+                >
+                  <div class="choice-header">
+                    <div class="choice-badge choice-custom-badge" :class="`is-${currentQuestion.type}`">
+                      <span class="choice-letter">{{ getOptionLetter(currentQuestion.options?.length || 0) }}</span>
+                    </div>
+                    <div class="choice-content">
+                      <span class="choice-label">其他，请填写</span>
+                    </div>
+                    <input
+                      :type="currentQuestion.type === 'checkbox' ? 'checkbox' : 'radio'"
+                      :name="`${interaction.key}-${currentQuestion.id}`"
+                      :checked="customEnabled[currentQuestion.id] === true"
+                      class="choice-native-input"
+                      @change="toggleCustom(currentQuestion, ($event.target as HTMLInputElement).checked)"
+                    />
+                  </div>
+                  <div class="custom-input-box">
+                    <input
+                      v-model="customValues[currentQuestion.id]"
+                      class="custom-answer-input"
+                      :disabled="customEnabled[currentQuestion.id] !== true"
+                      :aria-label="`${currentQuestion.question || currentQuestion.title}的自定义回答`"
+                      maxlength="16000"
+                      placeholder="输入自定义答案"
+                      @focus="enableCustom(currentQuestion)"
+                      @input="enableCustom(currentQuestion)"
+                    />
+                  </div>
+                </label>
+              </div>
             </template>
           </fieldset>
         </Transition>
       </div>
-      <p v-if="formError" class="question-error" role="alert">{{ formError }}</p>
+
+      <p v-if="formError" class="question-error" role="alert">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        {{ formError }}
+      </p>
+
       <div class="interaction-actions question-navigation">
-        <button type="button" :disabled="disabled || !hasPreviousQuestion" @click="moveQuestion(-1)">上一题</button>
-        <button v-if="hasNextQuestion" class="interaction-primary" type="button" :disabled="disabled" @click="moveQuestion(1)">下一题</button>
-        <button v-else class="interaction-primary" type="submit" :disabled="disabled">提交回答</button>
+        <button
+          type="button"
+          class="btn-nav btn-prev"
+          :disabled="disabled || !hasPreviousQuestion"
+          @click="moveQuestion(-1)"
+        >
+          <svg class="nav-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+          上一题
+        </button>
+        <button
+          v-if="hasNextQuestion"
+          class="interaction-primary btn-nav btn-next"
+          type="button"
+          :disabled="disabled"
+          @click="moveQuestion(1)"
+        >
+          下一题
+          <svg class="nav-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </button>
+        <button
+          v-else
+          class="interaction-primary btn-nav btn-submit"
+          type="submit"
+          :disabled="disabled"
+        >
+          <svg class="nav-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>
+          提交回答
+        </button>
       </div>
     </form>
 
@@ -136,6 +241,11 @@ const expired = computed(() => props.interaction.expires_at && props.interaction
 const disabled = computed(() => !props.canControl || !props.online || expired.value || props.interaction.submitting || !props.interaction.nonce)
 
 onBeforeUnmount(() => clearInterval(timer))
+
+/** 获取字母选项序号 (0 -> A, 1 -> B, ...) */
+function getOptionLetter(index: number): string {
+  return String.fromCharCode(65 + index)
+}
 
 /** 选择题型保持后端 radio/checkbox/text 的单一事实源。 */
 function questionTypeLabel(type: string) {
@@ -189,6 +299,13 @@ function hasAnswer(question: Data, answer: { answer: string | string[]; custom?:
   return !!answer.answer || !!answer.custom
 }
 
+/** 检查指定索引的题目是否已有有效答案（用于步进器高亮）。 */
+function isQuestionCompleted(index: number): boolean {
+  const q = questions.value[index]
+  if (!q) return false
+  return hasAnswer(q, answerFor(q))
+}
+
 /** 切换题目不丢弃已填写答案；统一在最终提交时校验全部必答题。 */
 function moveQuestion(direction: -1 | 1) {
   const next = activeQuestionIndex.value + direction
@@ -196,6 +313,15 @@ function moveQuestion(direction: -1 | 1) {
   questionTransitionName.value = direction === 1 ? 'question-forward' : 'question-backward'
   activeQuestionIndex.value = next
   formError.value = ''
+}
+
+/** 简答题支持快捷键下一题或提交。 */
+function handleTextShortcut() {
+  if (hasNextQuestion.value) {
+    moveQuestion(1)
+  } else {
+    submitAnswers()
+  }
 }
 
 /** 提交前只做题面必填校验，并将焦点留在首个缺答题；服务端仍作权威校验。 */
@@ -219,7 +345,658 @@ function respond(data: Data) {
 </script>
 
 <style scoped>
-.interaction-drawer{max-height:min(54vh,480px);overflow:auto;border:1px solid #cbded4;border-radius:14px;background:linear-gradient(135deg,#fbfefc,#f4faf6);box-shadow:0 -12px 32px rgba(18,65,48,.12);padding:16px 18px 14px;color:#243b31}.interaction-drawer.is-question{border-color:#cbd9ed;background:linear-gradient(135deg,#fbfdff,#f3f8ff);box-shadow:0 -12px 32px rgba(42,87,152,.12)}.interaction-drawer-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding-bottom:12px;border-bottom:1px solid #dce9e1}.is-question .interaction-drawer-head{border-color:#dbe6f5}.interaction-kicker{display:block;color:#647b6e;font-size:11px;font-weight:700;letter-spacing:.08em}.interaction-drawer h3{margin:3px 0 0;color:#173f30;font-size:16px;line-height:1.35}.interaction-state{flex:0 0 auto;border-radius:999px;background:#e3f2e9;padding:4px 8px;color:#1f7254;font-size:11px;font-weight:650}.is-question .interaction-state{background:#e7f0ff;color:#386db1}.interaction-summary{margin:12px 0;color:#496257;font-size:13px;line-height:1.55}.approval-details{display:grid;grid-template-columns:auto minmax(0,1fr);gap:5px 12px;margin:0;color:#536c60;font-size:12px}.approval-details dt{color:#7c9185}.approval-details dd{margin:0;overflow-wrap:anywhere}.approval-preview{max-height:130px;overflow:auto;margin:12px 0 0;border:1px solid #dce8e1;border-radius:8px;background:#f7fbf8;padding:9px;color:#325847;font:11px/1.55 var(--font-mono,ui-monospace,Consolas,monospace);white-space:pre-wrap}.question-form{margin-top:12px}.question-fieldset{min-width:0;margin:0;padding:12px 0;border:0;border-bottom:1px solid #dce6f2}.question-fieldset:last-of-type{border-bottom:0}.question-fieldset legend{width:100%;padding:0;color:#253b54;font-size:13px;font-weight:650;line-height:1.5}.question-fieldset legend small{margin-left:7px;color:#788ba5;font-size:11px;font-weight:500}.choice-option{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:start;gap:7px;margin-top:9px;color:#405570;font-size:13px;line-height:1.45;cursor:pointer}.choice-option input[type=radio],.choice-option input[type=checkbox]{margin:3px 0 0;accent-color:#3d78c5}.choice-option small{grid-column:2;color:#7b8ea8;font-size:11px}.choice-custom{grid-template-columns:auto auto minmax(0,1fr);align-items:center}.choice-custom .custom-answer-input{min-width:0;height:29px;border:1px solid #cddbec;border-radius:7px;background:#fff;padding:4px 8px;color:#243b54;font:12px var(--font-body,inherit);outline:0}.choice-custom .custom-answer-input:focus{border-color:#4d85cf;box-shadow:0 0 0 2px rgba(77,133,207,.14)}.choice-custom .custom-answer-input:disabled{background:#f2f5f8;color:#9ba8b8;cursor:not-allowed}.question-textarea{width:100%;box-sizing:border-box;resize:vertical;margin-top:10px;border:1px solid #cddbec;border-radius:8px;background:#fff;padding:8px 9px;color:#243b54;font:13px/1.5 var(--font-body,inherit);outline:0}.question-textarea:focus{border-color:#4d85cf;box-shadow:0 0 0 2px rgba(77,133,207,.14)}.interaction-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}.interaction-actions button{min-height:32px;border:1px solid #bfd3c7;border-radius:8px;background:#fff;padding:6px 11px;color:#315343;font:600 12px var(--font-body,inherit);cursor:pointer}.interaction-actions .interaction-primary{border-color:#1e7455;background:#1f7858;color:#fff}.is-question .interaction-actions button{border-color:#c7d6e9;color:#315272}.is-question .interaction-actions .interaction-primary{border-color:#437dc6;background:#447fc8;color:#fff}.interaction-actions button:disabled{opacity:.52;cursor:not-allowed}.question-error{margin:10px 0 0;color:#b34b3d;font-size:12px}.interaction-hint{margin:11px 0 0;color:#718479;font-size:11px;line-height:1.45}.interaction-notice{margin:14px 0 0;color:#8c6136;font-size:13px}@media(max-width:768px){.interaction-drawer{max-height:min(56vh,460px);border-radius:12px;padding:14px}.interaction-drawer-head{gap:8px}.choice-custom{grid-template-columns:auto minmax(0,1fr)}.choice-custom .custom-answer-input{grid-column:2;width:100%}.interaction-actions button{flex:1 1 120px}}[data-theme='dark'] .interaction-drawer{border-color:rgba(74,180,132,.32);background:linear-gradient(135deg,#112820,#10241d);box-shadow:0 -12px 32px rgba(0,0,0,.35);color:#d3e9dc}[data-theme='dark'] .interaction-drawer.is-question{border-color:rgba(96,165,250,.32);background:linear-gradient(135deg,#132239,#111e32)}[data-theme='dark'] .interaction-drawer h3{color:#ecfdf5}[data-theme='dark'] .interaction-kicker,[data-theme='dark'] .interaction-summary,[data-theme='dark'] .interaction-hint{color:#a9c6b4}[data-theme='dark'] .is-question .interaction-summary,[data-theme='dark'] .is-question .interaction-hint{color:#b8cce8}[data-theme='dark'] .interaction-drawer-head,.is-question .interaction-drawer-head{border-color:rgba(255,255,255,.1)}[data-theme='dark'] .approval-preview{border-color:rgba(255,255,255,.1);background:#0c1b15;color:#bce7ce}[data-theme='dark'] .question-fieldset{border-color:rgba(255,255,255,.1)}[data-theme='dark'] .question-fieldset legend{color:#d9e9ff}[data-theme='dark'] .choice-option{color:#c6d8ee}[data-theme='dark'] .choice-custom .custom-answer-input,[data-theme='dark'] .question-textarea{border-color:rgba(255,255,255,.14);background:#0b1728;color:#e5effd}
-.question-progress{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:10px;border-radius:8px;background:#edf4ff;padding:7px 9px;color:#456b9e;font-size:11px}.question-progress strong{color:#315d96;font-size:12px}.question-progress span{color:#7189aa}.question-navigation{justify-content:space-between}.question-navigation .interaction-primary{margin-left:auto}[data-theme='dark'] .question-progress{background:rgba(96,165,250,.12);color:#b8cce8}[data-theme='dark'] .question-progress strong{color:#d9e9ff}[data-theme='dark'] .question-progress span{color:#a8c0df}@media(max-width:560px){.question-progress{align-items:flex-start;flex-direction:column;gap:3px}.question-navigation button{flex:1 1 0}}
-.question-page-shell{display:grid;min-width:0;overflow:hidden}.question-page{grid-area:1/1;min-width:0}.question-forward-enter-active,.question-forward-leave-active,.question-backward-enter-active,.question-backward-leave-active{transition:opacity .2s ease,transform .24s cubic-bezier(.2,.8,.2,1);will-change:opacity,transform}.question-forward-enter-from,.question-backward-leave-to{opacity:0;transform:translate3d(18px,0,0)}.question-forward-leave-to,.question-backward-enter-from{opacity:0;transform:translate3d(-18px,0,0)}.question-forward-leave-active,.question-backward-leave-active{pointer-events:none}@media(prefers-reduced-motion:reduce){.question-forward-enter-active,.question-forward-leave-active,.question-backward-enter-active,.question-backward-leave-active{transition:none}}
+.interaction-drawer {
+  max-height: min(58vh, 520px);
+  overflow-y: auto;
+  border: 1px solid #cbded4;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #fbfefc, #f4faf6);
+  box-shadow: 0 -12px 32px rgba(18, 65, 48, 0.12);
+  padding: 16px 20px;
+  color: #243b31;
+}
+.interaction-drawer.is-question {
+  border-color: #cbd9ed;
+  background: linear-gradient(145deg, #ffffff 0%, #f6f9fc 100%);
+  box-shadow: 0 -12px 32px rgba(37, 99, 235, 0.08);
+}
+
+.interaction-drawer-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e2e8f0;
+}
+.head-title-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.head-tag-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.interaction-kicker {
+  display: inline-block;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.head-heading {
+  margin: 0;
+  color: #0f172a;
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+.interaction-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-radius: 999px;
+  background: #eff6ff;
+  padding: 3px 9px;
+  color: #2563eb;
+  font-size: 11px;
+  font-weight: 600;
+}
+.interaction-state .state-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #3b82f6;
+}
+.interaction-state.is-submitting .state-dot {
+  background: #10b981;
+  animation: pulse-dot 1.2s infinite ease-in-out;
+}
+@keyframes pulse-dot {
+  0%, 100% { opacity: 0.4; transform: scale(0.9); }
+  50% { opacity: 1; transform: scale(1.2); }
+}
+
+.interaction-summary {
+  margin: 12px 0 10px;
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* 分段进度条 */
+.question-progress-wrap {
+  margin-top: 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
+  padding: 10px 12px;
+}
+.stepper-track {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.stepper-segment {
+  flex: 1 1 0;
+  height: 4px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.stepper-segment.is-completed {
+  background: #10b981;
+}
+.stepper-segment.is-current {
+  background: #2563eb;
+  box-shadow: 0 0 6px rgba(37, 99, 235, 0.4);
+}
+.question-progress-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.progress-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.progress-title {
+  color: #1e293b;
+  font-size: 12px;
+  font-weight: 700;
+}
+.type-pill {
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+.type-pill.is-checkbox {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+.progress-tip {
+  color: #64748b;
+  font-size: 11px;
+}
+
+/* 题目表单与翻页容器 */
+.question-form {
+  margin-top: 12px;
+}
+.question-page-shell {
+  display: grid;
+  min-width: 0;
+  overflow: hidden;
+}
+.question-page {
+  grid-area: 1 / 1;
+  min-width: 0;
+}
+.question-fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 10px 0 6px;
+  border: 0;
+}
+
+.question-legend {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: 100%;
+  padding: 0 0 8px;
+  border-bottom: 1px solid #edf2f7;
+}
+.question-title-text {
+  color: #0f172a;
+  font-size: 14.5px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+.question-type-badge {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.question-type-badge.is-required {
+  background: #fef3c7;
+  color: #b45309;
+}
+.question-type-badge.is-optional {
+  background: #f1f5f9;
+  color: #64748b;
+}
+
+/* 选项列表 */
+.choices-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.choice-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  padding: 10px 14px;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 10px;
+  background: #ffffff;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
+}
+.choice-card:hover {
+  border-color: #93c5fd;
+  background: #f8fafc;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px rgba(37, 99, 235, 0.06);
+}
+.choice-card.is-selected {
+  border-color: #3b82f6;
+  background: #eff6ff;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.1);
+}
+
+.choice-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+
+/* ABCD 字母徽标 */
+.choice-badge {
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: #f1f5f9;
+  color: #475569;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+  font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+  transition: all 0.2s ease;
+}
+.choice-badge.is-radio {
+  border-radius: 50%;
+}
+.choice-card:hover .choice-badge {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+.choice-card.is-selected .choice-badge {
+  background: #2563eb;
+  color: #ffffff;
+  box-shadow: 0 2px 6px rgba(37, 99, 235, 0.35);
+}
+
+.choice-content {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.choice-label {
+  display: block;
+  color: #1e293b;
+  font-size: 13.5px;
+  font-weight: 500;
+  line-height: 1.45;
+  overflow-wrap: break-word;
+}
+.choice-card.is-selected .choice-label {
+  color: #1d4ed8;
+  font-weight: 600;
+}
+.choice-description {
+  display: block;
+  margin-top: 2px;
+  color: #64748b;
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.choice-native-input {
+  flex: 0 0 auto;
+  width: 17px;
+  height: 17px;
+  margin: 0;
+  accent-color: #2563eb;
+  cursor: pointer;
+}
+
+/* 自定义答案卡片 */
+.custom-input-box {
+  margin-top: 8px;
+  padding-left: 40px;
+  width: 100%;
+  box-sizing: border-box;
+}
+.custom-answer-input {
+  width: 100%;
+  box-sizing: border-box;
+  height: 34px;
+  border: 1px solid #cbd5e1;
+  border-radius: 7px;
+  background: #ffffff;
+  padding: 4px 10px;
+  color: #1e293b;
+  font: 12.5px var(--font-body, inherit);
+  outline: none;
+  transition: all 0.2s ease;
+}
+.custom-answer-input:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14);
+}
+.custom-answer-input:disabled {
+  background: #f1f5f9;
+  color: #94a3b8;
+  cursor: not-allowed;
+  border-color: #e2e8f0;
+}
+.choice-card.is-selected .custom-answer-input:not(:disabled) {
+  border-color: #93c5fd;
+}
+
+/* 简答题卡片 */
+.text-question-card {
+  margin-top: 10px;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 8px 10px 6px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
+  transition: all 0.2s ease;
+}
+.text-question-card:focus-within {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.14);
+}
+.question-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 92px;
+  border: none;
+  background: transparent;
+  padding: 4px 2px;
+  color: #0f172a;
+  font: 13.5px/1.55 var(--font-body, inherit);
+  outline: none;
+}
+.textarea-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 2px 2px;
+  border-top: 1px solid #f1f5f9;
+  color: #94a3b8;
+  font-size: 11px;
+}
+
+/* 题目切换动画 */
+.question-forward-enter-active,
+.question-forward-leave-active,
+.question-backward-enter-active,
+.question-backward-leave-active {
+  transition: opacity 0.2s ease, transform 0.24s cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: opacity, transform;
+}
+.question-forward-enter-from,
+.question-backward-leave-to {
+  opacity: 0;
+  transform: translate3d(20px, 0, 0);
+}
+.question-forward-leave-to,
+.question-backward-enter-from {
+  opacity: 0;
+  transform: translate3d(-20px, 0, 0);
+}
+.question-forward-leave-active,
+.question-backward-leave-active {
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .question-forward-enter-active,
+  .question-forward-leave-active,
+  .question-backward-enter-active,
+  .question-backward-leave-active {
+    transition: none;
+  }
+}
+
+/* 操作与导航按钮 */
+.interaction-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+.interaction-actions button {
+  min-height: 34px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 6px 14px;
+  color: #334155;
+  font: 600 12.5px var(--font-body, inherit);
+  cursor: pointer;
+  transition: all 0.18s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.interaction-actions button:hover:not(:disabled) {
+  background: #f8fafc;
+  border-color: #94a3b8;
+  color: #0f172a;
+}
+.interaction-actions .interaction-primary {
+  border-color: #2563eb;
+  background: #2563eb;
+  color: #ffffff;
+}
+.interaction-actions .interaction-primary:hover:not(:disabled) {
+  border-color: #1d4ed8;
+  background: #1d4ed8;
+  color: #ffffff;
+}
+.interaction-actions button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.question-navigation {
+  justify-content: space-between;
+}
+.question-navigation .interaction-primary {
+  margin-left: auto;
+}
+
+.nav-icon {
+  flex: 0 0 14px;
+}
+
+/* 错误与状态提示 */
+.question-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 0 0;
+  color: #dc2626;
+  font-size: 12px;
+  font-weight: 500;
+  animation: shake-err 0.3s ease-in-out;
+}
+@keyframes shake-err {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-4px); }
+  75% { transform: translateX(4px); }
+}
+
+.interaction-hint {
+  margin: 12px 0 0;
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.45;
+}
+.interaction-notice {
+  margin: 14px 0 0;
+  color: #b45309;
+  font-size: 13px;
+}
+
+/* 审批视图适配 */
+.approval-details {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 5px 12px;
+  margin: 0;
+  color: #536c60;
+  font-size: 12px;
+}
+.approval-details dt { color: #7c9185; }
+.approval-details dd { margin: 0; overflow-wrap: anywhere; }
+.approval-preview {
+  max-height: 130px;
+  overflow: auto;
+  margin: 12px 0 0;
+  border: 1px solid #dce8e1;
+  border-radius: 8px;
+  background: #f7fbf8;
+  padding: 9px;
+  color: #325847;
+  font: 11px/1.55 var(--font-mono, ui-monospace, Consolas, monospace);
+  white-space: pre-wrap;
+}
+
+/* 响应式调整 */
+@media (max-width: 560px) {
+  .interaction-drawer {
+    padding: 14px;
+    border-radius: 12px;
+  }
+  .question-progress-meta {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+  .custom-input-box {
+    padding-left: 0;
+  }
+  .question-navigation button {
+    flex: 1 1 0;
+  }
+}
+
+/* 深色模式适配 */
+[data-theme='dark'] .interaction-drawer {
+  border-color: rgba(74, 180, 132, 0.32);
+  background: linear-gradient(135deg, #112820, #10241d);
+  box-shadow: 0 -12px 32px rgba(0, 0, 0, 0.35);
+  color: #d3e9dc;
+}
+[data-theme='dark'] .interaction-drawer.is-question {
+  border-color: rgba(96, 165, 250, 0.28);
+  background: linear-gradient(145deg, #0f172a 0%, #1e293b 100%);
+  box-shadow: 0 -12px 32px rgba(0, 0, 0, 0.4);
+  color: #e2e8f0;
+}
+[data-theme='dark'] .interaction-drawer-head {
+  border-color: rgba(255, 255, 255, 0.08);
+}
+[data-theme='dark'] .head-heading {
+  color: #f8fafc;
+}
+[data-theme='dark'] .interaction-kicker {
+  color: #94a3b8;
+}
+[data-theme='dark'] .interaction-state {
+  background: rgba(37, 99, 235, 0.2);
+  color: #93c5fd;
+}
+[data-theme='dark'] .interaction-summary,
+[data-theme='dark'] .interaction-hint {
+  color: #94a3b8;
+}
+[data-theme='dark'] .question-progress-wrap {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(15, 23, 42, 0.6);
+}
+[data-theme='dark'] .stepper-segment {
+  background: rgba(255, 255, 255, 0.12);
+}
+[data-theme='dark'] .stepper-segment.is-completed {
+  background: #10b981;
+}
+[data-theme='dark'] .stepper-segment.is-current {
+  background: #60a5fa;
+  box-shadow: 0 0 8px rgba(96, 165, 250, 0.5);
+}
+[data-theme='dark'] .progress-title {
+  color: #f1f5f9;
+}
+[data-theme='dark'] .progress-tip {
+  color: #64748b;
+}
+[data-theme='dark'] .question-legend {
+  border-color: rgba(255, 255, 255, 0.08);
+}
+[data-theme='dark'] .question-title-text {
+  color: #f8fafc;
+}
+[data-theme='dark'] .question-type-badge.is-optional {
+  background: rgba(255, 255, 255, 0.08);
+  color: #94a3b8;
+}
+[data-theme='dark'] .question-type-badge.is-required {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fcd34d;
+}
+[data-theme='dark'] .choice-card {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: rgba(30, 41, 59, 0.4);
+}
+[data-theme='dark'] .choice-card:hover {
+  border-color: rgba(96, 165, 250, 0.4);
+  background: rgba(30, 41, 59, 0.8);
+}
+[data-theme='dark'] .choice-card.is-selected {
+  border-color: #3b82f6;
+  background: rgba(37, 99, 235, 0.16);
+}
+[data-theme='dark'] .choice-badge {
+  background: #1e293b;
+  color: #94a3b8;
+}
+[data-theme='dark'] .choice-card:hover .choice-badge {
+  background: #334155;
+  color: #f1f5f9;
+}
+[data-theme='dark'] .choice-card.is-selected .choice-badge {
+  background: #3b82f6;
+  color: #ffffff;
+}
+[data-theme='dark'] .choice-label {
+  color: #f1f5f9;
+}
+[data-theme='dark'] .choice-card.is-selected .choice-label {
+  color: #93c5fd;
+}
+[data-theme='dark'] .choice-description {
+  color: #94a3b8;
+}
+[data-theme='dark'] .custom-answer-input {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: #0f172a;
+  color: #f1f5f9;
+}
+[data-theme='dark'] .custom-answer-input:disabled {
+  background: #0b1320;
+  border-color: rgba(255, 255, 255, 0.06);
+  color: #475569;
+}
+[data-theme='dark'] .text-question-card {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: rgba(15, 23, 42, 0.6);
+}
+[data-theme='dark'] .text-question-card:focus-within {
+  border-color: #3b82f6;
+}
+[data-theme='dark'] .question-textarea {
+  color: #f1f5f9;
+}
+[data-theme='dark'] .textarea-bar {
+  border-color: rgba(255, 255, 255, 0.08);
+  color: #64748b;
+}
+[data-theme='dark'] .interaction-actions button {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: #1e293b;
+  color: #cbd5e1;
+}
+[data-theme='dark'] .interaction-actions button:hover:not(:disabled) {
+  background: #334155;
+  color: #ffffff;
+}
+[data-theme='dark'] .interaction-actions .interaction-primary {
+  border-color: #2563eb;
+  background: #2563eb;
+  color: #ffffff;
+}
 </style>
