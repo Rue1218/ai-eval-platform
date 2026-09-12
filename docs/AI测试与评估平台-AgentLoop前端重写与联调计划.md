@@ -1,6 +1,6 @@
 # AI 测试与评估平台 — AgentLoop 前端重写与联调计划
 
-> 版本：V0.14 ｜ 审查日期：2026-09-12 ｜ 状态：修复草稿工作区浮层的固定空白占位，按面板实际高度布局并减少打开时的浏览器重排；本次修复进入 PR 发布流程，合入与部署状态以关联 PR/Actions 为准。
+> 版本：V0.16 ｜ 审查日期：2026-09-12 ｜ 状态：已实现输入框上方的工具权限与 ask_user_question 抽屉、三题型问答、自定义答案及 task 任务清单默认收起，并通过本地门禁；合入与部署状态以关联 PR/Actions 为准。
 >
 > 基线：`deepseek-harness-py/static/index.html` 当前页面 + `ai-eval-platform/frontend/src/views/Agent.vue` 当前实现 + 已落地后端 WS v2。后端设计见 [架构设计](AI测试与评估平台-AgentLoop后端架构设计.md)，已验证范围见 [实施记录](AI测试与评估平台-AgentLoop后端实施记录.md)。
 >
@@ -695,3 +695,43 @@ AgentLoop 与协议档管理只保留 `openai_chat` 和 `anthropic_messages`。�
 | `frontend/src/components/agent/loop/AgentWorkspace.vue` | 按工作区浮层实际高度预留输入区间距，并删除固定空白和连续逐帧定位。 |
 | `frontend/tests/e2e/agentLoop.spec.ts` | 覆盖草稿会话打开面板后不重现多余空白，同时保持面板不遮挡输入框。 |
 | 本文件 | 登记根因、性能调整、验证证据与发布边界。 |
+
+## 24. V0.15 交互抽屉与问题工具优化（2026-09-12）
+
+工具权限请求与 `ask_user_question` 原先嵌在工具详情卡中，会拉长对话时间线，也让用户在输入区与待处理交互之间来回定位。本次将两种未结算交互移动到输入框正上方的统一抽屉；持久事件、重连回放、交互身份、nonce、TTL 与服务端结算流程保持原有 V2 语义，抽屉不自行乐观关闭，必须等 `approval.resolved` 或 `question.resolved` 事实到达后收起。
+
+- 工具详情只保留业务任务确认，工具权限和问题表单不再占用历史工具卡；当前会话按持久 cursor 只展示最早的一张未结算审批或问题抽屉。
+- `ask_user_question` 按 Codex 式逐题流程展示：抽屉一次只显示一题并标注“问题 n / 总题数”，可用“上一题 / 下一题”往返检查，切题不丢弃已填写答案；下一题从右侧、上一题从左侧淡入，双页网格叠层防止抽屉高度闪动，系统开启减少动态效果时关闭过渡；最后一题才提交，若遗漏必答题会自动跳回首道缺答题。题型支持单择题、多选题、简答题。单选和多选题均提供“其他，请填写”：单选选择其他时清空既有标签；多选可同时保留已选标签和自定义文本；简答题直接填写回答。
+- V2 `question.respond.answers[]` 新增可选 `custom` 字段，防止把自定义内容伪造成服务端未登记的 option label。服务端继续复用现有题目、选项、必填、身份与 nonce 校验，旧客户端只传 `answer` 时保持兼容。
+- 抽屉锚定 Composer 上沿并以浮层展示，不参与页面正常文档流，长题目不会再把输入框推离可视区域；最大高度为视口的 54%，消息区保留最小可滚动高度；移动端同步校验抽屉宽度、输入框相邻间距与横向溢出。
+
+验证：API 全量门禁按三批文件执行合计 **1438 passed / 75 skipped**，Ruff 通过；前端单测 **77 passed**，浏览器协议夹具 **26 passed**（含桌面、390px 窄屏与既有 375/768/1440px 视口），ESLint 无 error（仓库既有 211 条 warning），typecheck 与 production build 通过。构建仍提示既有 vendor 大包超过 500kB，本次未改变拆包策略。
+
+### 24.1 修改代码文件与作用清单
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `frontend/src/components/agent/loop/InteractionDrawer.vue` | 提供工具授权与三题型问答的输入框上方抽屉，并输出结构化自定义答案。 |
+| `frontend/src/components/agent/loop/AgentWorkspace.vue` | 选择会话当前未结算交互、调整输入区和消息区的垂直布局，并在对话/轨迹页挂载抽屉。 |
+| `frontend/src/components/agent/loop/{ToolRunCard,TaskRunCard}.vue` | 不再在时间线工具详情内渲染工具授权或问答表单。 |
+| `backend/api/app/{routers/ws_v2.py,agent/loop_presentation.py}` | 接受并校验 V2 自定义答案字段，保留 checkbox 标签和 custom 文本。 |
+| `backend/api/tests/{test_loop_ws_protocol,test_loop_presentation}.py` | 覆盖严格命令解析及多选标签与自定义文本共同回传。 |
+| `frontend/tests/e2e/agentLoop.spec.ts` | 覆盖抽屉定位、逐题前后导航、答案保留、三题型、自定义回答和 V2 回执。 |
+| `docs/AI测试与评估平台-API.md`、本文件 | 更新 V1.96 回执契约、交互布局与实现边界。 |
+
+## 25. V0.16 task 任务清单默认收起（2026-09-12）
+
+`task_plan.updated` 到达后，任务规划卡原本以展开状态渲染，并会在计划快照变化时再次强制展开。task 调用及后续进度刷新会因此展开完整步骤列表，挤占对话区域并打断用户阅读。
+
+- 任务规划卡初始状态改为收起；计划的新增和进度更新均不会改变用户手动选择的展开状态。
+- 收起态继续展示任务目标、完成进度和进行中步骤摘要；用户点击标题后才显示完整任务列表。
+
+验证：浏览器夹具断言 task 计划到达后 `aria-expanded=false`、步骤列表不可见，点击标题后完整步骤可见；其余回归门禁沿用 V0.15。
+
+### 25.1 修改代码文件与作用清单
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `frontend/src/components/agent/loop/TaskStateDrawer.vue` | 取消 task 计划到达或更新时的自动展开，仅保留用户点击展开。 |
+| `frontend/tests/e2e/agentLoop.spec.ts` | 覆盖默认收起和手动展开完整步骤列表。 |
+| 本文件 | 登记触发原因、交互边界和验证方式。 |

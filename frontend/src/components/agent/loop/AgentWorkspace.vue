@@ -14,7 +14,7 @@
     <p v-if="connectionState?.error || error" class="loop-notice error" role="alert">{{ connectionState?.error || error }}</p>
     <div class="loop-content">
       <div class="loop-center">
-        <section v-if="tab==='chat'" ref="chatShell" class="loop-chat-shell" :class="{ 'is-resizing': isResizing, 'is-empty': !rows.length }" :style="chatShellStyle" aria-label="对话内容区域">
+        <section v-if="tab==='chat'" ref="chatShell" class="loop-chat-shell" :class="{ 'is-resizing': isResizing, 'is-empty': !rows.length, 'has-interaction': !!activeInteractionDrawer }" :style="chatShellStyle" aria-label="对话内容区域">
           <!-- 空状态：输入框上方水平居中展示 Logo + 名字及产品标语 -->
           <div v-if="!rows.length" class="loop-empty-hero">
             <div class="hero-brand">
@@ -244,7 +244,21 @@
               </n-popover>
             </div>
             <TaskStateDrawer :plan="taskPlan" />
-            <AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :metrics="conversationMetrics" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" :agent="selectedAgent" :agents="ui?.agents || []" :permission-tier="sessionTier" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile" @agent="selectAgent" @update-permission-tier="handleTierChange"/>
+            <!-- 交互抽屉锚定输入框上沿，不参与纵向流，避免长题目把输入框挤出可视区域。 -->
+            <div class="composer-anchor">
+              <Transition name="composer-interaction">
+                <InteractionDrawer
+                  v-if="activeInteractionDrawer"
+                  :key="activeInteractionDrawer.key"
+                  class="composer-interaction-drawer"
+                  :interaction="activeInteractionDrawer"
+                  :can-control="canControl"
+                  :online="!!state?.ready"
+                  @respond="respond"
+                />
+              </Transition>
+              <AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :metrics="conversationMetrics" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" :agent="selectedAgent" :agents="ui?.agents || []" :permission-tier="sessionTier" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile" @agent="selectAgent" @update-permission-tier="handleTierChange"/>
+            </div>
           </div>
           <!-- 空状态时的提示词卡片（位于输入框下方，点击填充草稿） -->
           <div v-if="!rows.length" class="loop-empty-prompts">
@@ -275,7 +289,7 @@
       </div>
       <aside v-if="runtimeOpen" class="loop-runtime"><button class="runtime-close" @click="runtimeOpen=false">关闭</button><h3>当前运行</h3><p>{{ status }}</p><dl><dt>会话</dt><dd>{{ sessionId || '未发送的草稿' }}</dd><dt>实际模型</dt><dd>{{ summary?.model || '尚无实际请求' }}</dd><dt>思考档位</dt><dd>{{ summary?.reasoning_effort || '未知' }}</dd><dt>协议档版本</dt><dd>{{ summary?.profile_version || '未知' }}</dd><dt>最近活动</dt><dd v-for="event in state?.facts.slice(-5) || []" :key="event.cursor">{{ event.type }}</dd></dl><h4 v-if="tasks.length">Worker 任务</h4><div v-for="task in tasks" :key="task.key"><router-link :to="'/tasks'">{{ task.key }}</router-link><p>{{ task.status || '等待状态' }}</p><p v-if="task.progress">{{ JSON.stringify(task.progress) }}</p><router-link v-if="task.report_id" :to="`/reports/${task.report_id}`">查看报告</router-link></div><p v-for="execution in quarantined" :key="execution.key" class="loop-notice">执行范围受限 · {{ execution.reason || '等待对账' }}</p></aside>
     </div>
-    <div v-if="tab==='trace'" class="loop-composer-wrap loop-trace-composer">
+    <div v-if="tab==='trace'" class="loop-composer-wrap loop-trace-composer" :class="{ 'has-interaction': !!activeInteractionDrawer }">
       <div class="composer-top-bar">
         <button
           type="button"
@@ -298,7 +312,21 @@
         </button>
       </div>
       <TaskStateDrawer :plan="taskPlan" />
-      <AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :metrics="conversationMetrics" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" :agent="selectedAgent" :agents="ui?.agents || []" :permission-tier="sessionTier" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile" @agent="selectAgent" @update-permission-tier="handleTierChange"/>
+      <!-- Trace 面板复用同一输入框锚点，保证交互不会撑高页面。 -->
+      <div class="composer-anchor">
+        <Transition name="composer-interaction">
+          <InteractionDrawer
+            v-if="activeInteractionDrawer"
+            :key="activeInteractionDrawer.key"
+            class="composer-interaction-drawer"
+            :interaction="activeInteractionDrawer"
+            :can-control="canControl"
+            :online="!!state?.ready"
+            @respond="respond"
+          />
+        </Transition>
+        <AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :metrics="conversationMetrics" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" :agent="selectedAgent" :agents="ui?.agents || []" :permission-tier="sessionTier" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile" @agent="selectAgent" @update-permission-tier="handleTierChange"/>
+      </div>
     </div>
     <!-- 页面最底部指标栏：只有开始对话后（rows.length > 0）且有 conversationMetrics 时显示 -->
     <footer v-if="rows.length && conversationMetrics" class="conversation-metrics loop-bottom-metrics" aria-label="会话模型总用量指标">
@@ -350,6 +378,7 @@ import ProviderLogo from '../../ProviderLogo.vue'
 import MarkdownView from '../MarkdownView.vue'
 import AttachmentPreview from '../AttachmentPreview.vue'
 import AgentComposer from './AgentComposer.vue'
+import InteractionDrawer from './InteractionDrawer.vue'
 import TaskStateDrawer from './TaskStateDrawer.vue'
 import ToolRunCard from './ToolRunCard.vue'
 import TaskRunCard from './TaskRunCard.vue'
@@ -541,6 +570,13 @@ const selectedProfile = computed<LoopProfile | null>(() => pickProfile(ui.value,
 const selectedAgent = computed<LoopAgent | null>(() => pickAgent(ui.value, selectedAgentId.value))
 const ready = computed(() => !!selectedProfile.value && !!effort.value && (props.sessionId ? !!state.value?.ready : !!ui.value?.enabled))
 const canControl = computed(() => !!state.value?.controlled && !!ui.value?.permissions.interactions)
+/** 同一会话只展示当前待处理的工具审批或补充问题，历史卡保留在事实流而不占聊天高度。 */
+const activeInteractionDrawer = computed<InteractionRecord | null>(() => {
+  const pending = Object.values(state.value?.interactions || {})
+    .filter(interaction => !interaction.resolved && (interaction.kind === 'approval' || interaction.kind === 'question'))
+    .sort((left, right) => left.first_cursor - right.first_cursor)
+  return pending[0] || null
+})
 const summary = computed(() => latestRequestSummary(state.value?.attempts))
 /** 仅聚合已提交的上游 usage；缺字段代表上游未返回，不能当作零或自行估算。 */
 const conversationMetrics = computed<ConversationMetrics>(() => conversationMetricsFrom(state.value?.attempts))
@@ -953,6 +989,7 @@ async function hydrateAttachments() {
 .loop-chat-shell{position:relative;display:flex;flex:1;flex-direction:column;min-height:0;width:min(900px,calc(100% - 48px));max-width:calc(100% - 48px);min-width:520px;margin:0 auto}
 .loop-chat-shell .loop-conversation{padding:24px 16px}
 .loop-chat-shell .loop-composer-wrap{flex:0 0 auto;width:100%;max-width:none;margin:0;padding:12px 0 18px;box-sizing:border-box}
+.loop-chat-shell.has-interaction .loop-conversation{min-height:96px;padding-bottom:12px}.loop-chat-shell.has-interaction .loop-composer-wrap{padding-top:8px}.loop-chat-shell.has-interaction .composer-top-bar,.loop-trace-composer.has-interaction .composer-top-bar{display:none}.composer-anchor{position:relative}.composer-interaction-drawer{position:absolute;z-index:20;right:0;bottom:calc(100% + 12px);left:0;margin:0}.composer-interaction-enter-active,.composer-interaction-leave-active{overflow:hidden;transition:max-height .24s cubic-bezier(.2,.8,.2,1),opacity .18s ease,transform .24s cubic-bezier(.2,.8,.2,1)}.composer-interaction-enter-from,.composer-interaction-leave-to{max-height:0;opacity:0;transform:translateY(12px)}.composer-interaction-enter-to,.composer-interaction-leave-from{max-height:520px;opacity:1;transform:translateY(0)}
 
 /* 空状态：居中布局、输入框上方水平居中 Logo + 名字及提示词卡片 */
 .loop-chat-shell.is-empty {
@@ -1217,7 +1254,7 @@ async function hydrateAttachments() {
   transition: transform 0.15s ease, background 0.15s ease;
   pointer-events: none;
 }
-@media(max-width:768px){.loop-chat-shell{width:100%!important;max-width:none;min-width:0;margin:0}.loop-chat-shell .loop-composer-wrap{padding:8px}.loop-width-edge{display:none}.loop-chat-shell .loop-conversation{padding:16px 12px}}
+@media(max-width:768px){.loop-chat-shell{width:100%!important;max-width:none;min-width:0;margin:0}.loop-chat-shell .loop-composer-wrap{padding:8px}.loop-chat-shell.has-interaction .loop-conversation{min-height:72px;padding-bottom:8px}.loop-width-edge{display:none}.loop-chat-shell .loop-conversation{padding:16px 12px}}
 
 /* 顶栏操作区：对齐与垂直居中 */
 .loop-tabs-actions {

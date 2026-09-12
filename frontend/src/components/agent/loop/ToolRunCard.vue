@@ -7,7 +7,7 @@
       <p v-if="tool.display.truncated">预览已截断，未提供完整结果接口。</p>
       <p v-if="tool.display.unavailable_reason">{{ tool.display.unavailable_reason }}</p>
       <p v-if="tool.status === 'outcome_unknown'" role="status">执行结果未知，关联范围可能仍受限制；等待可信对账。</p>
-      <ToolInteraction v-for="i in interactions" :key="i.key" :interaction="i" :can-control="canControl" :online="online" @respond="(record, data) => emit('respond', record, data)"/>
+      <ToolInteraction v-for="i in interactions.filter(item => item.kind === 'task_confirmation')" :key="i.key" :interaction="i" :can-control="canControl" :online="online" @respond="(record, data) => emit('respond', record, data)"/>
     </div>
   </details>
 </template>

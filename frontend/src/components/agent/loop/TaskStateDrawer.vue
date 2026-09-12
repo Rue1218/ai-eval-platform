@@ -39,19 +39,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref } from 'vue'
 import type { TaskPlanDisplay } from '../../../api/agentLoopTypes'
 
 const props = defineProps<{ plan: TaskPlanDisplay | null }>()
 
-/** 新规划到达时自动展开，用户手动收起后不会被同一份状态反复打断。 */
-const isExpanded = ref(true)
-const planFingerprint = computed(() => props.plan
-  ? JSON.stringify([props.plan.goal, props.plan.steps])
-  : '')
-watch(planFingerprint, (next, previous) => {
-  if (next && next !== previous) isExpanded.value = true
-})
+/** task 调用默认收起任务列表；展开状态仅由用户手动控制，进度更新不会打断阅读。 */
+const isExpanded = ref(false)
 
 const hasPlan = computed(() => Boolean(props.plan?.goal && props.plan.steps.length))
 const completedCount = computed(() => props.plan?.steps.filter(step => step.status === 'completed').length || 0)
