@@ -114,6 +114,9 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      media-mcp:
+        # 媒体工具启用后，API 必须等待其 Streamable HTTP 端点就绪，避免启动后首轮调用直连失败。
+        condition: service_healthy
       runner:
         condition: service_started
     ports:
