@@ -20,7 +20,7 @@ function source(value: unknown) {
 
 /** 轻量 JSON 词法分段，只负责展示配色，不改变实际代码字符。 */
 function tokenize(value: string): CodeToken[] {
-  const result: CodeToken[] = [], matcher = /("(?:\\.|[^"\\])*")(\s*:)?|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)|\b(true|false|null)\b|([{}\[\],:])/g
+  const result: CodeToken[] = [], matcher = /("(?:\\.|[^"\\])*")(\s*:)?|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)|\b(true|false|null)\b|([{}[\],:])/g
   let cursor = 0, match: RegExpExecArray | null
   while ((match = matcher.exec(value))) {
     if (match.index > cursor) result.push({ text: value.slice(cursor, match.index), kind: 'plain' })

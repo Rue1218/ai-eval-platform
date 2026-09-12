@@ -1,8 +1,8 @@
 """抽样夹紧与先评后压派生回归测试。"""
 
+from app.models import Task
 from app.sampling import SAMPLE_SIZE_CAP, clamp_sample_size
 from app.stress_spawn import maybe_spawn_stress
-from app.models import Task
 
 
 class _Query:

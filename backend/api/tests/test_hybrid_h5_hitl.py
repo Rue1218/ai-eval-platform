@@ -15,7 +15,6 @@ import asyncio
 import pytest
 
 from app.agent import LangGraphAgent
-from app.config import settings
 from app.errors import AppError, ErrorCode
 from app.harness.memory import SerializableRequest
 from app.harness.orchestration.agents import AgentDef, AgentRegistry
@@ -133,12 +132,6 @@ def _engine_config(thread_id: str) -> dict:
 # 不重放；卡协议/落卡/ack 链路由本文件第 2–4 节继续保护。
 
 
-@pytest.fixture()
-def _engine_on(monkeypatch):
-    monkeypatch.setattr(settings, "hybrid_engine_enabled", True)
-    yield
-
-
 def _saver():
     """进程内检查点（BaseCheckpointSaver 契约，CI 严格类型校验兼容）。"""
     from langgraph.checkpoint.memory import InMemorySaver
@@ -146,7 +139,7 @@ def _saver():
     return InMemorySaver()
 
 
-def test_graph_bash_passthrough_no_interrupt(_engine_on) -> None:
+def test_graph_bash_passthrough_no_interrupt(engine_on) -> None:
     """F2/G4：bash（原危险/变更命令）直通执行——无任何 tool_approval 中断。"""
     thread_id = "h5-thread-1"
     # H4 失败阶梯：bash 工具失败（本机无沙箱）→ 允许一次 repair → 两次收尾响应
@@ -429,7 +422,7 @@ def test_approval_ack_wrong_owner_or_kind_rejected() -> None:
 # ─── 4. interrupt 帧 → 落卡广播（ws 层）───
 
 
-def test_graph_interrupt_frame_persists_and_broadcasts(_engine_on, monkeypatch) -> None:
+def test_graph_interrupt_frame_persists_and_broadcasts(engine_on, monkeypatch) -> None:
     """__interrupt__ 帧（tool_approval）→ 行锁落卡 + tool_approval 事件广播。"""
     db = _FakeDb(_Row())
     emitted: list[tuple[str, dict]] = []

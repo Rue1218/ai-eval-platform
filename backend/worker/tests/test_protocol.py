@@ -2,6 +2,8 @@
 
 import pytest
 
+from app import protocol
+
 
 @pytest.mark.parametrize("kind", ["openai_chat", "anthropic_messages"])
 def test_full_endpoint_is_used_unchanged(monkeypatch, kind):
@@ -21,8 +23,6 @@ def test_full_endpoint_is_used_unchanged(monkeypatch, kind):
     protocol.call_protocol(protocol=kind, base_url=url, full_url=True,
                            model="unit", api_key="unit", messages=[])
     assert captured == [url]
-
-from app import protocol
 
 
 @pytest.mark.parametrize(

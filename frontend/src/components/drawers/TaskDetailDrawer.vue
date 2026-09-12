@@ -9,7 +9,7 @@
             <StatusBadge :status="task.status" />
           </div>
           <div class="td-meta mono">
-            ID: {{ task.id }} · 创建者: {{ task.creator }} · {{ formatDate(task.created_at) }}
+            ID: {{ task.id }} · 创建者: {{ task.creator }} · {{ formatDateTime(task.created_at) }}
           </div>
           <div v-if="task.parent_task_id" class="td-parent mono">
             ↳ 继承自父任务: {{ task.parent_task_id }}
@@ -106,6 +106,7 @@ import type { Task, TaskEvent } from '../../api/types'
 import { api } from '../../api/http'
 import StatusBadge from '../common/StatusBadge.vue'
 import KindTag from '../common/KindTag.vue'
+import { formatDateTime } from '../../utils/format'
 
 const props = defineProps<{
   show: boolean
@@ -142,11 +143,6 @@ const progressPercent = computed(() => {
   return 0
 })
 
-function formatDate(d?: string) {
-  if (!d) return ''
-  return new Date(d).toLocaleString('zh-CN', { hour12: false })
-}
-
 async function loadDetail() {
   if (!props.task?.id) return
   try {
@@ -154,7 +150,7 @@ async function loadDetail() {
     events.value = full.events || props.task.events || [
       { id: 0, task_id: props.task.id, event: 'queued', level: 'info', message: '任务入队', payload: {}, ts: props.task.created_at },
     ]
-  } catch (err) {
+  } catch {
     events.value = props.task.events || []
   }
 }

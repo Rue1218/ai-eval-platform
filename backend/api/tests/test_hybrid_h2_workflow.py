@@ -12,8 +12,6 @@ from __future__ import annotations
 import asyncio
 import json
 
-import pytest
-
 from app.agent import LangGraphAgent
 from app.agent.graph import iter_pending_events
 from app.agent.workflow_nodes import (
@@ -301,13 +299,7 @@ def _pending(events: list[tuple[str, dict]]) -> list[dict]:
     ]
 
 
-@pytest.fixture()
-def _engine_on(monkeypatch):
-    monkeypatch.setattr(settings, "hybrid_engine_enabled", True)
-    yield
-
-
-def test_dag_full_path_five_runs_identical(_engine_on, monkeypatch) -> None:
+def test_dag_full_path_five_runs_identical(engine_on, monkeypatch) -> None:
     """固定槽位请求：五次运行 W0–W7 路径 100% 一致，入队一次。"""
     calls: list[str] = []
     monkeypatch.setattr(
@@ -335,7 +327,7 @@ def test_dag_full_path_five_runs_identical(_engine_on, monkeypatch) -> None:
     assert completed["payload"]["engine"] == "workflow"
 
 
-def test_dag_rag_and_direct_stress_fail_closed(_engine_on) -> None:
+def test_dag_rag_and_direct_stress_fail_closed(engine_on) -> None:
     """rag 与直接压测：error 收尾、无入队、无 succeeded。"""
     rag_events = _pending(_run_workflow("跑一次 rag 评测"))
     assert any(
@@ -353,7 +345,7 @@ def test_dag_rag_and_direct_stress_fail_closed(_engine_on) -> None:
     assert stress_completed[0]["payload"]["finish_reason"] == "error"
 
 
-def test_workflow_state_serializable(_engine_on, monkeypatch) -> None:
+def test_workflow_state_serializable(engine_on, monkeypatch) -> None:
     """全链终态 State JSON 可序列化（E-A1 检查点兼容）。"""
     monkeypatch.setattr(
         "app.harness.execution.worker_bridge.enqueue_long_task",

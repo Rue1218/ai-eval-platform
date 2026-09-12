@@ -526,7 +526,7 @@ function startPolling() {
       } else if (task.value.status === 'failed' || task.value.status === 'cancelled') {
         stopPolling()
       }
-    } catch (e: any) {
+    } catch {
       // 轮询失败不中断，下次继续
     }
   }, 2000)

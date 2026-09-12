@@ -363,7 +363,7 @@
                 </p>
                 <div class="binary-meta">
                   <span>文件大小: {{ formatBytes(activeFile.size) }}</span>
-                  <span v-if="activeFile.updated_at">修改时间: {{ formatDate(activeFile.updated_at) }}</span>
+                  <span v-if="activeFile.updated_at">修改时间: {{ formatDateTime(activeFile.updated_at, '—') }}</span>
                 </div>
                 <button class="btn btn-primary" @click="downloadActiveFile">下载到本地查看</button>
               </div>
@@ -479,6 +479,7 @@ import type {
 import MarkdownView from '../components/agent/MarkdownView.vue'
 import WorkspaceCodeEditor from '../components/workspace/WorkspaceCodeEditor.vue'
 import WorkspaceImageViewer from '../components/workspace/WorkspaceImageViewer.vue'
+import { formatBytes, formatDateTime } from '../utils/format'
 
 interface FlattenedNode extends UserWorkspaceTreeNode {
   _depth: number
@@ -575,25 +576,6 @@ const filteredTree = computed<FlattenedNode[]>(() => {
   traverse(rawTree.value, 0)
   return result
 })
-
-function formatBytes(bytes: number): string {
-  if (!bytes) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB']
-  let value = bytes
-  let unit = 0
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024
-    unit++
-  }
-  return `${value.toFixed(value >= 10 || unit === 0 ? 0 : 1)} ${units[unit]}`
-}
-
-function formatDate(value?: string | null): string {
-  if (!value) return '—'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return '—'
-  return date.toLocaleString('zh-CN', { hour12: false })
-}
 
 function getFileIcon(node: { name: string; kind?: 'dir' | 'file' | 'link' }): string {
   if (node.kind === 'dir') {

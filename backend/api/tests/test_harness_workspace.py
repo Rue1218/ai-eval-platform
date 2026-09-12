@@ -19,14 +19,6 @@ SID = "834a68f1-a4fd-4261-8677-6f51830c895d"
 SID2 = "ef459f86-112c-4b13-9b0f-cab7f26f7a05"
 
 
-@pytest.fixture()
-def tmp_root(monkeypatch, tmp_path):
-    """把工作区根指向临时目录。"""
-    root = tmp_path / "workspaces"
-    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(root))
-    return root
-
-
 def test_ensure_creates_session_dir(tmp_root) -> None:
     """会话工作区创建：{root}/{session_id} 存在且独立。"""
     directory = ensure_session_workspace(SID)

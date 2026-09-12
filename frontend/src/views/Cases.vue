@@ -805,12 +805,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, nextTick, h } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage, useDialog, type DropdownOption } from 'naive-ui'
 import { api } from '../api/http'
-import type { CaseSet, TestCase, Dataset } from '../api/types'
+import type { CaseSet, Dataset } from '../api/types'
 import BenchmarkLaunchDrawer from '../components/drawers/BenchmarkLaunchDrawer.vue'
+import { escapeHtml, escapeRegex, renderIcon } from '../utils/render'
 
 type CaseStrategy = '正向' | '反向' | '边界' | '状态' | '场景' | '等价'
 type CasePriority = 'HX' | 'FHX' | 'BJ' | 'YC' | 'ZD' | 'BL'
@@ -843,25 +844,6 @@ const STRATEGIES: CaseStrategy[] = ['正向', '反向', '边界', '等价', '状
 const PRIORITIES: CasePriority[] = ['HX', 'FHX', 'BJ', 'YC', 'ZD', 'BL']
 
 // ─── 右键菜单 SVG 图标辅助渲染 ───
-function renderIcon(pathD: string | string[], strokeColor?: string) {
-  return () =>
-    h(
-      'svg',
-      {
-        width: 14,
-        height: 14,
-        viewBox: '0 0 24 24',
-        fill: 'none',
-        stroke: strokeColor || 'currentColor',
-        strokeWidth: 2,
-        strokeLinecap: 'round',
-        strokeLinejoin: 'round',
-        style: { display: 'inline-block', verticalAlign: '-2px', marginRight: '6px' },
-      },
-      Array.isArray(pathD) ? pathD.map(p => h('path', { d: p })) : [h('path', { d: pathD })],
-    )
-}
-
 const message = useMessage()
 const dialog = useDialog()
 const router = useRouter()
@@ -1038,13 +1020,6 @@ function highlightMatch(text: string): string {
   return escapeHtml(text).replace(regex, '<mark class="highlight-match">$1</mark>')
 }
 
-function escapeHtml(str: string): string {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-}
-function escapeRegex(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
 // ─── 键盘流网格导航 (Keyboard Flow) ───
 const NAV_FIELDS = computed(() => {
   const base = ['chk', 'row_no', 'code', 'name', 'module', 'strategy', 'priority', 'preconditions', 'expected_result']
@@ -1200,7 +1175,6 @@ function getCaseExtra(c: ExtendedTestCase, key: string): string {
 
 // 批量勾选
 const isCurrentPageAllChecked = computed(() => pagedCases.value.length > 0 && pagedCases.value.every(c => isCaseChecked(c)))
-const allCasesChecked = computed(() => displayedCases.value.length > 0 && displayedCases.value.every(c => isCaseChecked(c)))
 const lastCheckedCaseIdx = ref<number>(-1)
 
 function isCaseChecked(c: ExtendedTestCase): boolean {
@@ -1223,14 +1197,6 @@ function toggleCurrentPageCasesDirect() {
     if (target && idx < 0) selectedCaseIds.value.push(id)
     else if (!target && idx >= 0) selectedCaseIds.value.splice(idx, 1)
   })
-}
-
-function toggleAllCasesDirect() {
-  if (allCasesChecked.value) {
-    selectedCaseIds.value = []
-  } else {
-    selectedCaseIds.value = displayedCases.value.map(c => c.id || c.code)
-  }
 }
 
 function handleCaseCheckClick(c: ExtendedTestCase, e: MouseEvent) {
@@ -1615,7 +1581,7 @@ function confirmDeleteCaseSet(s: CaseSet) {
   })
 }
 
-async function handleFolderCtxAction(key: string, folderId: string) {
+async function handleFolderCtxAction(key: string, _folderId: string) {
   if (key === 'new-set') createEmptyCaseSet()
 }
 

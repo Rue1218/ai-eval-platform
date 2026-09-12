@@ -1,6 +1,7 @@
 """Worker 评测流水线 LangGraph 图编排单元测试。"""
 
 from unittest.mock import MagicMock
+
 from app.eval_graph import BenchmarkEvalPipeline, BenchmarkGraphState, eval_single_row
 
 

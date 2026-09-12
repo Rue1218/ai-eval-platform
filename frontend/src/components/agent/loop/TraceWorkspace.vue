@@ -106,7 +106,7 @@ function relatedTool(row: LoopFrame) { return allRows.value.find(item => categor
 function relatedAssistant(row: LoopFrame) { return allRows.value.find(item => kind(item) === 'assistant' && item.correlation.attempt_id && item.correlation.attempt_id === row.correlation.attempt_id) }
 function textPreview(value: unknown) { const text = typeof value === 'string' ? value : ''; return text.length > 240 ? `${text.slice(0,239)}…` : text }
 /** 列表只展示真实授权字段，缺失内容保持空值。 */
-function preview(row: LoopFrame, full = false) { const d = row.data, summary = requestSummary(row); let value = ''
+function preview(row: LoopFrame, full = false) { const d = row.data, summary = requestSummary(row); let value: string
   if (row.type === 'assistant.start') value = `model=${summary?.model ?? '—'} · tools=${Array.isArray(summary?.tools) ? summary.tools.length : 0}`
   else if (kind(row) === 'approval') value = d.decision || d.source_outcome ? `授权结果：${status(row)}` : `等待 ${d.name || relatedTool(row)?.data.name || '工具'} 授权`
   else if (row.type === 'task_plan.updated') {

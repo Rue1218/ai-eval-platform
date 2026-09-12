@@ -47,7 +47,7 @@ export default defineConfig(({ mode }) => {
             if (id.includes('katex')) {
               return 'vendor-katex'
             }
-            if (id.includes('naive-ui') || id.includes('@vicons')) {
+            if (id.includes('naive-ui')) {
               return 'vendor-naive'
             }
           }

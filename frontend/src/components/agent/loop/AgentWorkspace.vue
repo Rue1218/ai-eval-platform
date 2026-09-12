@@ -353,7 +353,7 @@ import TaskRunCard from './TaskRunCard.vue'
 import ReasoningBlock from './ReasoningBlock.vue'
 import TraceWorkspace from './TraceWorkspace.vue'
 import { isTaskTool } from '../../../agent/loop/taskPresentation'
-import { calculateTurnSummaries, formatDuration, formatTokens, tokenValue, type TurnSummary } from '../../../agent/loop/turnSummary'
+import { calculateTurnSummaries, formatDuration, formatTokens, type TurnSummary } from '../../../agent/loop/turnSummary'
 import { assistantKeysByTurn, conversationMetricsFrom, effortPreferenceKey, finishLabels, firstAssistantInTurn, latestRequestSummary, phaseStatusText, pickAgent, pickProfile, preferenceKey, taskForToolRow } from '../../../agent/loop/workspaceDerived'
 
 const props = withDefaults(
@@ -406,11 +406,6 @@ const activeWorkspaceName = computed<string>(() => {
     return props.session?.workspace_name || (props.session?.workspace_id ? '工作区' : '')
   }
   return draftWorkspaceName.value || (draftWorkspaceId.value ? '工作区' : '')
-})
-
-const hasWorkspace = computed<boolean>(() => {
-  if (props.sessionId) return true
-  return !!activeWorkspaceId.value
 })
 
 async function loadWorkspaces(autoSelect = true) {

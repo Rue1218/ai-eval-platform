@@ -17,7 +17,7 @@ export const useAuthStore = defineStore('auth', {
       try {
         const user = await api.auth.getMe()
         this.user = user
-      } catch (e) {
+      } catch {
         this.user = null
       } finally {
         this.loaded = true

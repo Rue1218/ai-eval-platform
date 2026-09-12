@@ -568,8 +568,6 @@ const selectedTask = ref<Task | null>(null)
 const modeKinds = computed<TaskKind[]>(() =>
   modeStore.mode === 'rag' ? ['rag', 'testcase'] : ['benchmark', 'stress', 'testcase']
 )
-const modeTaskLabel = computed(() => modeStore.mode === 'rag' ? 'RAG 评测' : '基准评测')
-
 // 状态分布与色值
 const statusList = [
   { key: 'queued', label: '排队中', color: '#9CA3AF' },

@@ -160,40 +160,34 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, reactive, onMounted, onBeforeUnmount, nextTick, watch, h } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch, h } from 'vue'
+import { useRoute } from 'vue-router'
 import { useMessage, useDialog, NDropdown, type DropdownOption } from 'naive-ui'
 import { api } from '../api/http'
 import { AgentWebSocket } from '../api/ws'
 import type {
   AgentPrefs,
   AgentSession,
-  ClarifyAnswer,
   ClarifyPayload,
   Dataset,
-  GoldQA,
   KnowledgeBase,
   Profile,
   SessionAuthor,
   Task,
   ToolApprovalPayload,
-  WsServerEvent,
 } from '../api/types'
-import { useModeStore } from '../stores/mode'
 import { useAuthStore } from '../stores/auth'
-import { getModelLogoKey, getServiceLogoKey, type ProviderLogoKey } from '../utils/providerLogo'
+import type { ProviderLogoKey } from '../utils/providerLogo'
 import { formatLatency } from '../utils/format'
 import type { ContextMeterData } from '../components/agent/ContextMeter.vue'
 import AgentWorkspace from '../components/agent/loop/AgentWorkspace.vue'
 import { createLoopStore } from '../agent/loop/store'
 import { filterSessionsByStatus, legacySessionDot, legacySessionTooltip, loopSessionDot, loopSessionTooltip, sessionStatusFilterLabel } from '../agent/sessionList'
-import { attachmentRejectionReason, createPreviewTracker } from '../agent/attachments'
-import { getDefaultRunConfig, getDefaultStressConfig } from '../schemas/confirmCard'
+import { createPreviewTracker } from '../agent/attachments'
 
 const message = useMessage()
 const dialog = useDialog()
 const route = useRoute()
-const router = useRouter()
 const authStore = useAuthStore()
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 
@@ -226,15 +220,6 @@ const turnLatencyMs = ref(0)
 const turnLatencyLabel = computed(() => formatLatency(turnLatencyMs.value) || '')
 const currentAgentProfileId = ref<string>('')
 const allProfiles = ref<Profile[]>([])
-const activeAgentProfile = computed(() => {
-  const activeId = currentAgentProfileId.value || allProfiles.value[0]?.id
-  return allProfiles.value.find((item) => item.id === activeId) || null
-})
-const agentProfileLogoKey = computed<ProviderLogoKey>(() => {
-  return activeAgentProfile.value ? getModelLogoKey(activeAgentProfile.value.model) : 'custom'
-})
-const agentDisplayModelName = computed(() => activeAgentProfile.value?.model || 'Agent')
-const agentProfileDisplayName = computed(() => activeAgentProfile.value?.name || '')
 
 // 上下文度量状态
 const currentContextMeter = ref<ContextMeterData | null>(null)
@@ -337,23 +322,8 @@ const allDeletableSessionsSelected = computed(() => {
 })
 const inputText = ref('')
 
-interface StagedAttachment {
-  localId: string
-  id: string
-  name: string
-  size: number
-  contentType: string
-  previewUrl: string
-  file: File
-  uploading: boolean
-  uploadProgress: number
-  error: boolean
-}
-
 const attachmentPreviews = createPreviewTracker()
 const activeTask = ref<Task | null>(null)
-// 取消请求发送后等待服务端确认，避免重复提交且不提前伪造 cancelled。
-const cancellingTaskId = ref<string | null>(null)
 
 /** 共享会话里进度坞只给任务创建者展示取消入口，服务端仍是最终权限裁决。 */
 
@@ -398,16 +368,6 @@ const dockClosingNote = ref('')
 
 /* ─── 页面级定时器登记：所有演示/兜底定时器统一登记，组件卸载时集中清理，避免回调写入已销毁状态 ─── */
 const pendingTimers = new Set<number>()
-
-function trackTimeout(fn: () => void, ms: number): number {
-  const id = window.setTimeout(() => {
-    pendingTimers.delete(id)
-    fn()
-  }, ms)
-  pendingTimers.add(id)
-  return id
-}
-
 
 /** 主动清除已登记定时器（任务提前完成时使用）。 */
 
@@ -461,8 +421,6 @@ watch(inputText, () => {
 function resetToDraftSession() {
   persistCurrentRuntime()
   stopFlowAnimations()
-  // 失效尚未完成的历史回放，避免旧会话回放结果覆盖草稿页。
-  selectEpoch += 1
   gcIdleSockets('')
   currentSessionId.value = ''
   agentWs = null
@@ -544,7 +502,6 @@ async function selectSession(sid: string) {
     existing?.close()
     sockets.delete(sid)
   }
-  selectEpoch += 1
   persistCurrentRuntime()
   stopFlowAnimations()
   currentSessionId.value = sid
@@ -727,7 +684,6 @@ interface SessionRuntime {
 const sessionRuntimes = new Map<string, SessionRuntime>()
 const sockets = new Map<string, AgentWebSocket>()
 const generatingBySession = ref<Record<string, boolean>>({})
-let selectEpoch = 0
 
 function emptyRuntime(): SessionRuntime {
   return {
@@ -814,7 +770,6 @@ function removeInaccessibleSession(sid: string, navigate = true) {
 /** 批量清理已删除会话后只导航一次，避免依次跳转到同批次的已删除会话。 */
 function removeInaccessibleSessions(sids: string[]) {
   const wasCurrent = sids.includes(currentSessionId.value)
-  if (wasCurrent) selectEpoch += 1
   sids.forEach((sid) => removeInaccessibleSession(sid, false))
   if (!wasCurrent) return
   const next = sessions.value[0]
@@ -1016,7 +971,9 @@ onMounted(async () => {
   try {
     const settings = await api.admin.getSettings()
     if (settings?.prod_approvers?.length) prodApprovers.value = settings.prod_approvers
-  } catch {}
+  } catch {
+    // 配置读取失败不阻断页面初始化，沿用默认审批人列表
+  }
   // 异步初始化不能覆盖用户已经选中的 AgentLoop 会话。
   if (!currentSessionId.value) resetToDraftSession()
   // 报告直达仅预填 AgentLoop 草稿，实际发送统一经过 v2 composer。

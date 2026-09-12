@@ -21,7 +21,6 @@ from app.agent.taor_nodes import (
     make_plan_node,
     make_tools_node,
 )
-from app.config import settings
 from app.harness.memory import GraphState, SerializableRequest
 from app.harness.orchestration.agents import (
     AgentDef,
@@ -30,6 +29,7 @@ from app.harness.orchestration.agents import (
 )
 from app.harness.orchestration.budget import DEFAULT_BUDGET
 from app.llm import ModelResponse
+from tests._helpers import enable_hybrid_engine as _engine_on
 
 
 def _request(text: str) -> SerializableRequest:
@@ -393,10 +393,6 @@ class _TalkStubGateway:
 
 def _fake_graph_gateway(texts: list[str]):
     return _ScriptedGateway(*texts)
-
-
-def _engine_on(monkeypatch):
-    monkeypatch.setattr(settings, "hybrid_engine_enabled", True)
 
 
 def _collect(agent: LangGraphAgent, request: SerializableRequest, config: dict):

@@ -19,7 +19,6 @@ import pytest
 
 from app.agent import LangGraphAgent
 from app.agent.graph import iter_pending_events
-from app.config import settings
 from app.errors import AppError, ErrorCode
 from app.harness.memory import SerializableRequest
 from app.llm import ModelRequest, ModelResponse, ModelStreamEvent
@@ -174,12 +173,6 @@ def _node_output(events: list[tuple[str, dict]], node: str) -> dict | None:
         if mode == "updates" and node in chunk:
             return chunk[node]
     return None
-
-
-@pytest.fixture
-def hybrid_on(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(settings, "hybrid_engine_enabled", True)
-    monkeypatch.setattr(settings, "hybrid_router_cot_enabled", False)
 
 
 # ─── 1. W5 发卡收尾 ───

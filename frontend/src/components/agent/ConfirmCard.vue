@@ -19,7 +19,7 @@
           <span class="field-label">kind</span>
           <div>
             <KindTag kind="benchmark" />
-            <span class="small tertiary">　一任务一种 kind</span>
+            <span class="small tertiary">&#x3000;一任务一种 kind</span>
           </div>
         </div>
 
