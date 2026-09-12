@@ -4,10 +4,10 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.20 |
-| 文档状态 | 冻结基线 + V1.20/V1.20 登记（V1.19：废除「首次登录强制改密」；V1.20：协议档收敛为 OpenAI Chat 与 Anthropic Messages） |
+| 文档版本 | V1.21 |
+| 文档状态 | 冻结基线 + V1.21 登记（V1.19：废除「首次登录强制改密」；V1.20：协议档收敛；V1.21：受控媒体 MCP） |
 | 撰写日期 | 2026-08-17 |
-| 本轮修订 | 2026-09-09：V1.20 删除 OpenAI Responses 协议档及适配器；迁移同时删除该档环境凭据、历史密文和失效 Agent 默认引用。V1.19 废除首次登录强制改密（产品决策）：开户/重置密码/引导账号不再强制首登改密，账号可自助在右上角「修改密码」更新凭据；密码强度规则（≥8 位含字母与数字）不变。2026-08-31：V1.18 收敛 Agent 对话投影：Plan 只用 PlanCard，工具只用 ToolCard，危险 bash 只用确认卡；ReAct `thought`、Plan/Reflect 阶段、工具调用前草稿均属于内部控制，禁止出现在对话或历史重放。最终回答只能在真实工具终态之后展示。 |
+| 本轮修订 | 2026-09-12：V1.21 新增受控媒体 MCP：协议档 → MCP 与工具可保存生图/视频模型配置，API 固定经 Compose 私网 Streamable HTTP 连接媒体服务；`image.generate` 生成图片，`video.create`/`video.status` 提交并查询 HappyHorse 异步图生视频。密钥只写不回显，媒体任务持久化、归档和播放器不在本期范围。2026-09-09：V1.20 删除 OpenAI Responses 协议档及适配器；迁移同时删除该档环境凭据、历史密文和失效 Agent 默认引用。 |
 | 最近修订 | 2026-08-31：V1.17 增加危险 bash 的 LangGraph 人在回路：风险命令必须弹出确认卡，原发起成员确认后才进入 bwrap 沙箱；拒绝不执行。思考卡只呈现过程摘要，禁止显示会与工具真实结果冲突的原始推理。2026-08-30：V1.16 增加受控 Agent 技能文件与协议档专属补充提示词管理；技能正文遵循渐进式披露，核心安全提示词不可覆盖。2026-08-28：V1.15 统一基准目录治理、独立导入队列、staging 并发发布、成员同权双人复核与 M3 里程碑；冻结任务必须锁定数据集/黄金集版本。2026-08-28：V1.14 新增基准数据集目录、异步导入、staging 表格和发布门禁；下载/解析仅由 Worker 执行，未审核行不得评测。2026-08-24：补充 Agent 多附件交互：支持图片（PNG/JPG/JPEG/WEBP/GIF）、Markdown/TXT/HTML/JSON/YAML、PDF、Word（DOC/DOCX）、Excel（XLS/XLSX）、CSV/JSONL 与音频；输入区支持文件选择和拖拽上传，图片显示缩略图，PDF/文本支持预览，Office 文件显示类型卡片并可打开/下载。2026-08-23：补齐 Gemini OpenAI 兼容端点的思考摘要请求与增量归一化；增加 Agent 思考摘要开关与思考强度设置；将用户回显固定为 `user_message`，将完成信号固定为 `response.completed`，明确 `thought` 不承载助手正文；协议档增加可选 Embedding / Reranker 独立端点配置，三类 Key 均按 profile 写入受控环境文件 |
 | 适用版本 | 平台 V1.0 |
 | 技术栈 | Vue3 + Naive UI、Python FastAPI、PostgreSQL、WebSocket、Docker Compose、go-stress-testing |
@@ -37,6 +37,7 @@
 | V1.18 | 2026-08-31 | ReAct / Plan-and-Solve / reflect 的内部过程不再生成对话卡；只显示 Plan、工具、确认与真实最终结果 |
 | V1.19 | 2026-09-09 | 废除首次登录强制改密；账号自助改密入口保留（右上角「修改密码」），密码强度规则不变 |
 | V1.20 | 2026-09-09 | 协议档收敛为 OpenAI Chat 与 Anthropic Messages，删除 OpenAI Responses 适配与已有档位凭据 |
+| V1.21 | 2026-09-12 | 协议档 → MCP 与工具新增受控媒体 MCP 配置；Qwen 生图和 HappyHorse 首帧图生视频接入 AgentLoop，视频仅异步提交与查询，不新增媒体任务表或结果归档 |
 
 ---
 
@@ -418,7 +419,7 @@ queued → running → succeeded
 
 ### 5.5 MCP 工具中心与技能编排
 
-平台最终采用 **MCP Host** 统一智能体架构。长任务由 Worker 异步执行；Agent 仅调用 MCP 短工具进行信息发现与 `task.create` 结构化建单。MCP 是后续 Harness 阶段能力，首期 LangGraph Agent 不注册或执行 MCP 工具。
+平台采用受控 MCP Host 统一智能体架构。长评测任务由 Worker 异步执行；Agent 仅调用短工具与 `task.create` 结构化建单。媒体 MCP 是唯一允许的远程扩展：API 固定经 Compose 私网 Streamable HTTP 连接 `media-mcp`，浏览器不能配置任意第三方地址，模型和密钥仅由“协议档 → MCP 与工具”受控配置保存。
 
 #### 5.5.1 内置受控短工具清单 (Tools Manifest)
 
@@ -431,6 +432,11 @@ queued → running → succeeded
 | `task.create` | 短 | 确认卡 TaskSpec JSON | `task_id`, `status` | WRITE · 下单推入调度队列 |
 | `task.cancel` | 短 | `task_id`, `reason` | `ok: true` | WRITE · 任务取消分流 |
 | `dispatch.overview` | 短 | — | Worker 节点数/CPU负载/策略 | READ · 调度大盘感知 |
+| `image.generate` | 短 | prompt、可选参考图、尺寸/数量 | 临时图片地址 | NET · Qwen 图片生成 |
+| `video.create` | 短 | prompt、首帧、分辨率/时长 | 上游异步任务 ID | NET · HappyHorse 图生视频提交 |
+| `video.status` | 短 | 上游任务 ID | 状态、临时视频地址 | READ · 查询视频结果 |
+
+媒体工具受既有会话权限档位裁决。视频创建不等待生成完成，当前不创建平台 `Task`、不归档图片或视频、不提供上游取消和播放器；这些属于后续媒体任务阶段，不能把上游临时地址当作平台文件资产。
 
 #### 5.5.2 智能体 4 大核心内置技能 (Skills)
 

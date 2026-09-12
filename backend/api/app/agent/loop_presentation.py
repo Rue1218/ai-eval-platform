@@ -22,6 +22,10 @@ TOOL_FIELDS = {
     "task.create": "kind",
     "task.status": "task_id",
     "task.cancel": "task_id",
+    # 媒体提示词与参考图可能包含用户隐私；卡片只展示非敏感生成参数。
+    "image.generate": "size count prompt_extend",
+    "video.create": "resolution duration watermark",
+    "video.status": "upstream_task_id",
 }
 PREVIEW_LIMIT = 12000
 _TASK_STEP_LIMIT = 12
@@ -92,7 +96,7 @@ def tool_display(source: dict, *, result: bool = False) -> dict:
         safe = redact_for_transport({key: args[key] for key in TOOL_FIELDS[name].split() if key in args})
         text = json.dumps(safe, ensure_ascii=False, indent=2)
         display.update(arguments_preview=text[:PREVIEW_LIMIT], truncated=len(text) > PREVIEW_LIMIT)
-        display["target"] = str(safe.get("path", safe.get("file_path", safe.get("url", safe.get("query", "")))))[:300]
+        display["target"] = str(safe.get("path", safe.get("file_path", safe.get("url", safe.get("query", safe.get("upstream_task_id", ""))))))[:300]
     if task is not None:
         display["task"] = task
     return display

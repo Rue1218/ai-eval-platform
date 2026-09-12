@@ -1,4 +1,4 @@
-"""MCP 扩展与工具中心服务（只读与健康自检）。
+"""MCP 扩展与工具中心服务（目录、媒体配置与健康自检）。
 
 对应 API.md §3.6.1：
 1. 原生基础工具 (transport=native)：read/write/edit/bash/web_search/web_fetch/task，
@@ -6,10 +6,10 @@
    由 NativeToolExecutor 进程内直连执行，bwrap 沙箱隔离，零 MCP 序列化开销。
 2. 内部受控 MCP Server (transport=mcp, server=platform.tasks)：task.create/status/cancel，
    由 MCPClientManager 通过受控 InProcessProvider 桥接 PostgreSQL 任务队列。
-3. 外部 MCP Gateway (受控边界)：受控边界保护，预留扩展插槽与安全隔离。
+3. 媒体 MCP (``media.generation``)：API 经固定 Compose 私网 Streamable HTTP
+   连接独立媒体服务；该服务独占上游模型凭据。
 
-当前 Agent 为纯对话骨架，以上目录仅表示已注册的执行基础设施，不能表示
-模型正在调用；恢复 ToolNode 前，浏览器不可把它们显示为当前 Agent 可用能力。
+浏览器只能查看目录和管理媒体配置，不能调用工具或指定任意第三方 MCP 地址。
 """
 
 from __future__ import annotations
@@ -18,13 +18,21 @@ import os
 import shutil
 import time
 from typing import Any
+from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
+from sqlalchemy.orm import Session
 
+from ..config import settings
+from ..db import get_db
 from ..deps import get_current_user
+from ..errors import AppError, ErrorCode
 from ..harness.execution import ToolCatalog, build_default_registry
-from ..harness.execution.mcp import get_default_metrics
+from ..harness.execution.mcp import StreamableHttpProvider, get_default_metrics
 from ..models import User
+from ..profile_env import read_media_mcp_env, restore_snapshot, write_media_mcp_env
+from ..schemas import MediaMcpConfigOut, MediaMcpConfigUpdate
+from ._common import write_audit
 
 router = APIRouter(prefix="/api/mcp", tags=["mcp"])
 
@@ -39,9 +47,140 @@ def _get_default_catalog() -> ToolCatalog:
     return _catalog
 
 
+def _media_mcp_config_out() -> MediaMcpConfigOut:
+    """读取脱敏媒体配置；环境文件缺字段时保留启动期安全默认值。"""
+    saved = read_media_mcp_env()
+    return MediaMcpConfigOut(
+        enabled=settings.media_mcp_enabled if saved.enabled is None else saved.enabled,
+        compatible_base_url=saved.compatible_base_url or "",
+        image_model=saved.image_model or "qwen-image-3.0-pro",
+        video_model=saved.video_model or "happyhorse-1.1-i2v",
+        request_timeout_s=saved.request_timeout_s or settings.media_mcp_request_timeout_s,
+        has_api_key=bool(saved.api_key),
+    )
+
+
+def _validate_media_compatible_url(value: str) -> None:
+    """限制为阿里云兼容模式根路径，防管理端配置演变成任意服务转发。"""
+    parsed = urlsplit(value)
+    if (
+        parsed.scheme != "https"
+        or not parsed.netloc
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+        or parsed.path.rstrip("/") != "/compatible-mode/v1"
+    ):
+        raise ValueError("媒体兼容模式地址必须是无凭据的 HTTPS compatible-mode/v1 地址")
+
+
+@router.get("/media-config", response_model=MediaMcpConfigOut, summary="读取媒体 MCP 配置")
+def get_media_config(user: User = Depends(get_current_user)) -> MediaMcpConfigOut:
+    """返回媒体模型配置和密钥存在状态，绝不回显密钥或上游响应。"""
+    _ = user
+    return _media_mcp_config_out()
+
+
+@router.put("/media-config", response_model=MediaMcpConfigOut, summary="更新媒体 MCP 配置")
+def update_media_config(
+    body: MediaMcpConfigUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> MediaMcpConfigOut:
+    """保存媒体模型配置并同步当前 API 实例的工具开关，不回显任何密钥。"""
+    global _catalog
+    current = _media_mcp_config_out()
+    values = body.model_dump(exclude_unset=True)
+    next_url = str(values.get("compatible_base_url", current.compatible_base_url)).strip()
+    next_enabled = bool(values.get("enabled", current.enabled))
+    if next_url:
+        try:
+            _validate_media_compatible_url(next_url)
+        except ValueError as exc:
+            raise AppError(ErrorCode.VALIDATION, "媒体兼容模式地址非法") from exc
+    if next_enabled and (not next_url or not (current.has_api_key or values.get("api_key"))):
+        raise AppError(ErrorCode.VALIDATION, "启用媒体 MCP 前必须配置兼容模式地址和 API Key")
+    snapshot = None
+    try:
+        snapshot = write_media_mcp_env(
+            enabled=next_enabled,
+            compatible_base_url=next_url or None,
+            api_key=values.get("api_key"),
+            image_model=values.get("image_model"),
+            video_model=values.get("video_model"),
+            request_timeout_s=values.get("request_timeout_s"),
+        )
+        write_audit(
+            db,
+            request,
+            user,
+            "media_mcp_config_update",
+            "media_mcp",
+            "media.generation",
+            {
+                "enabled": next_enabled,
+                "compatible_base_url": next_url,
+                "image_model": values.get("image_model", current.image_model),
+                "video_model": values.get("video_model", current.video_model),
+                "has_api_key": bool(current.has_api_key or values.get("api_key")),
+            },
+        )
+        db.commit()
+        # 当前单实例立刻重新装配目录；其他实例以其下一次配置刷新/部署为准。
+        settings.media_mcp_enabled = next_enabled
+        settings.media_mcp_request_timeout_s = float(
+            values.get("request_timeout_s", current.request_timeout_s)
+        )
+        _catalog = None
+    except AppError:
+        db.rollback()
+        if snapshot:
+            restore_snapshot(snapshot)
+        raise
+    except Exception as exc:
+        db.rollback()
+        if snapshot:
+            restore_snapshot(snapshot)
+        raise AppError(ErrorCode.INTERNAL, "媒体 MCP 配置保存失败") from exc
+    return _media_mcp_config_out()
+
+
 # 工具实现位置与执行链路元数据（只读、脱敏；不含代码片段——code_snippet 已移除，
 # 原实现为手写示意代码且与真实 handler 不符，违反「禁止伪造」红线）。
 TOOL_METADATA_EXT: dict[str, dict[str, Any]] = {
+    "media.generation.image.generate": {
+        "source_file": "backend/media_mcp/app/server.py",
+        "handler_function": "StreamableHttpProvider.invoke() -> image.generate",
+        "code_summary": "API 受控目录与权限裁决 -> Compose 内网 Streamable HTTP MCP -> Qwen 图片生成 -> 返回临时图片地址",
+        "pipeline_stages": [
+            {"step": 1, "name": "参数与权限裁决", "desc": "校验提示词、参考图和会话权限；按权限档位处理审批"},
+            {"step": 2, "name": "MCP 会话调用", "desc": "API 在 Compose 内网建立 Streamable HTTP MCP 会话"},
+            {"step": 3, "name": "上游图片生成", "desc": "媒体服务持有密钥并调用兼容模式图片接口"},
+            {"step": 4, "name": "结构化结果投影", "desc": "只回传状态、模型和临时图片地址，不回传密钥"},
+        ],
+    },
+    "media.generation.video.create": {
+        "source_file": "backend/media_mcp/app/server.py",
+        "handler_function": "StreamableHttpProvider.invoke() -> video.create",
+        "code_summary": "API 受控目录与权限裁决 -> Streamable HTTP MCP -> HappyHorse 异步任务提交 -> 返回上游任务标识",
+        "pipeline_stages": [
+            {"step": 1, "name": "首帧与参数校验", "desc": "校验首帧图片、分辨率、时长与会话权限"},
+            {"step": 2, "name": "异步任务提交", "desc": "媒体服务带 X-DashScope-Async 请求头提交图生视频任务"},
+            {"step": 3, "name": "立即返回收据", "desc": "只回传任务标识，调用不等待视频生成完成"},
+        ],
+    },
+    "media.generation.video.status": {
+        "source_file": "backend/media_mcp/app/server.py",
+        "handler_function": "StreamableHttpProvider.invoke() -> video.status",
+        "code_summary": "API 受控目录 -> Streamable HTTP MCP -> 查询 HappyHorse 任务 -> 成功时返回临时视频地址",
+        "pipeline_stages": [
+            {"step": 1, "name": "任务标识校验", "desc": "校验上游任务标识格式和会话权限"},
+            {"step": 2, "name": "状态查询", "desc": "媒体服务查询异步任务状态"},
+            {"step": 3, "name": "状态结果投影", "desc": "成功时回传临时视频地址，视频任务失败仍如实返回任务状态"},
+        ],
+    },
     "read": {
         "source_file": "backend/api/app/harness/execution/registry.py",
         "handler_function": "_read_handler(arguments, sandbox_dir, context)",
@@ -211,12 +350,13 @@ def _project_descriptor(item: object, def_: object | None = None) -> dict[str, o
     tool_id = item.tool_id
     risk = item.risk_level
     ext = _get_tool_ext_metadata(tool_id)
+    is_media = item.server_id == "media.generation"
     return {
         "name": tool_id,
         "desc": item.description,
         "permission": item.permission or ("read" if risk in ("read", "network") else "write"),
         "enabled": True,
-        "source": "builtin",
+        "source": "standalone" if is_media else "builtin",
         "tool_id": tool_id,
         "server_id": item.server_id,
         "short_name": item.name,
@@ -227,7 +367,7 @@ def _project_descriptor(item: object, def_: object | None = None) -> dict[str, o
         "requires_confirmation": item.requires_confirmation,
         "supports_streaming": item.supports_streaming,
         "transport": "mcp",
-        "category": "internal_mcp",
+        "category": "external_mcp" if is_media else "internal_mcp",
         "parameters_schema": getattr(item, "input_schema", {}) or (getattr(def_, "parameters_schema", {}) if def_ else {}),
         "output_schema": getattr(item, "output_schema", {}) or (getattr(def_, "output_schema", {}) if def_ else {}),
         "permission_policy": getattr(item, "permission_policy", {}) or (def_.permission_policy.to_payload() if def_ else {}),
@@ -317,13 +457,8 @@ def list_all_tools(user: User = Depends(get_current_user)):
 
 
 @router.get("/health-check", summary="ToolCall 与 MCP 通道连通性与健康自检")
-def health_check(user: User = Depends(get_current_user)):
-    """全面自检平台三大工具执行通道的运行健康度与沙箱状态：
-
-    1. ``native_executor``：测试临时工作区读写、检测 bwrap 沙箱存在性、统计原生工具数量；
-    2. ``internal_mcp_host``：测试 ToolCatalog 索引、InProcessProvider 状态、任务队列扩展；
-    3. ``external_gateway``：检测外部 MCP Gateway 受控隔离边界状态。
-    """
+async def health_check(user: User = Depends(get_current_user)):
+    """检查原生、内部 MCP 与已启用媒体 Streamable HTTP MCP 的真实可达性。"""
     _ = user
     start_time = time.perf_counter()
     registry = build_default_registry()
@@ -350,33 +485,57 @@ def health_check(user: User = Depends(get_current_user)):
     # 2. 检测内部 MCP Server (platform.tasks Host)
     mcp_start = time.perf_counter()
     mcp_tools = list(catalog.all_descriptors())
+    internal_mcp_tools = [item for item in mcp_tools if item.server_id == "platform.tasks"]
+    media_mcp_tools = [item for item in mcp_tools if item.server_id == "media.generation"]
     mcp_latency_ms = max(1, int((time.perf_counter() - mcp_start) * 1000))
     mcp_status = {
         "channel": "internal_mcp",
         "name": "platform.tasks (内部受控 MCP Server)",
-        "ok": len(mcp_tools) >= 3,
+        "ok": len(internal_mcp_tools) >= 3,
         "server_id": "platform.tasks",
-        "tools_count": len(mcp_tools),
-        "tools": [t.tool_id for t in mcp_tools],
+        "tools_count": len(internal_mcp_tools),
+        "tools": [t.tool_id for t in internal_mcp_tools],
         "latency_ms": mcp_latency_ms,
         "provider": "InProcessProvider (受控 Host)",
         "task_queue_bridge": "PostgreSQL tasks 状态机连通正常",
-        "message": f"内部 MCP 已注册 · {len(mcp_tools)} 个任务队列扩展等待 ToolNode 启用",
+        "message": f"内部 MCP 已注册 · {len(internal_mcp_tools)} 个任务队列扩展",
     }
 
-    # 3. 检测外部 MCP Gateway (受控边界)
+    # 3. 已启用时真实执行 MCP initialize + tools/list，不运行计费生图/视频工具。
+    external_enabled = settings.media_mcp_enabled
+    ext_started = time.perf_counter()
+    remote_tools: tuple[str, ...] = ()
+    if external_enabled:
+        try:
+            provider = StreamableHttpProvider(
+                settings.media_mcp_url,
+                request_timeout_s=settings.media_mcp_request_timeout_s,
+            )
+            remote_tools = await provider.list_tools()
+        except ValueError:
+            remote_tools = ()
+    expected_remote_tools = {item.name for item in media_mcp_tools}
+    external_ok = (not external_enabled) or expected_remote_tools.issubset(set(remote_tools))
     ext_status = {
         "channel": "external_mcp",
-        "name": "External MCP Server Gateway",
-        "ok": True,
-        "status": "controlled_standby",
-        "active_external_servers": 0,
-        "isolation_guard": "严格启用 (防范长延迟与越权代码注入)",
-        "message": "外部网关处于受控边界保护状态 · 预留动态扩展槽位",
+        "name": "media.generation (Streamable HTTP MCP)",
+        "ok": external_ok,
+        "status": "connected" if external_enabled and external_ok else "controlled_standby" if not external_enabled else "unavailable",
+        "active_external_servers": 1 if external_enabled else 0,
+        "tools_count": len(remote_tools),
+        "tools": list(remote_tools),
+        "latency_ms": max(1, int((time.perf_counter() - ext_started) * 1000)),
+        "provider": "Streamable HTTP MCP",
+        "isolation_guard": "固定 Compose 私网地址，媒体上游凭据仅在 media-mcp 服务保存",
+        "message": (
+            f"媒体 MCP 已连接 · 发现 {len(remote_tools)} 个工具"
+            if external_enabled and external_ok
+            else "媒体 MCP 未启用" if not external_enabled else "媒体 MCP 不可达或工具目录不完整"
+        ),
     }
 
     total_latency_ms = max(1, int((time.perf_counter() - start_time) * 1000))
-    all_ok = native_status["ok"] and mcp_status["ok"]
+    all_ok = native_status["ok"] and mcp_status["ok"] and external_ok
 
     return {
         "ok": all_ok,
@@ -385,8 +544,8 @@ def health_check(user: User = Depends(get_current_user)):
         "summary": {
             "total_tools": len(native_tools) + len(mcp_tools),
             "native_tools_count": len(native_tools),
-            "internal_mcp_tools_count": len(mcp_tools),
-            "external_mcp_servers_count": 0,
+            "internal_mcp_tools_count": len(internal_mcp_tools),
+            "external_mcp_servers_count": 1 if external_enabled else 0,
         },
         "channels": {
             "native": native_status,
