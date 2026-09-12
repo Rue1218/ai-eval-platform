@@ -17,7 +17,6 @@ from typing import Any
 
 from ..client import ProbeClient
 from ..errors import ProbeError
-from ..expect import ExpectMatcher, ProbeAssertion
 from ..recorder import TraceFrame
 
 MAX_WAIT_TURN = 180.0
