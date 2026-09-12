@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mediaPreviewFor, safeMediaUrl } from '../src/agent/loop/mediaPresentation.ts'
+import { mediaPreviewFor, mediaPreviewsFor, safeMediaUrl } from '../src/agent/loop/mediaPresentation.ts'
 
 /** 夹具模拟浏览器已收到的 tool.result 投影，不接触真实临时地址。 */
 function tool(name, result) {
@@ -26,4 +26,13 @@ test('视频在完成前显示任务状态，完成后才提供播放器地址',
   }))
   assert.equal(ready?.videoUrl, 'https://cdn.example/video.mp4')
   assert.equal(safeMediaUrl('http://cdn.example/video.mp4'), null)
+})
+
+test('媒体总结区只汇总登记工具的成功结果', () => {
+  const previews = mediaPreviewsFor([
+    tool('image.generate', { status: 'succeeded', image_urls: ['https://cdn.example/image.png'] }),
+    tool('read', { status: 'succeeded', image_urls: ['https://cdn.example/not-media.png'] }),
+  ])
+  assert.equal(previews.length, 1)
+  assert.equal(previews[0]?.imageUrls[0], 'https://cdn.example/image.png')
 })
