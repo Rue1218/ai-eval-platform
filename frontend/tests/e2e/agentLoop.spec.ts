@@ -264,26 +264,28 @@ test('HTTP 缺少 randomUUID 时新建会话、附件、发送和工具结果回
   await expect(page.getByText('草稿已保留', {exact:false})).toHaveCount(0)
 })
 
-test('工作区弹层从输入框上方展开，Task 卡片接收 MCP 名与 Worker 实时事件', async ({page}) => {
+test('草稿工作区浮层不扩张空状态布局，Task 卡片接收 MCP 名与 Worker 实时事件', async ({page}) => {
   await setup(page)
+  await page.getByRole('button', {name:'新建会话'}).click()
   const workspaceButton = page.locator('.composer-ws-btn').first()
-  const restingButtonBox = (await workspaceButton.boundingBox())!
+  const messageInput = page.getByRole('textbox', {name:'消息'})
   await workspaceButton.click()
   await expect(workspaceButton).toHaveClass(/is-open/)
   const workspacePopover = page.locator('.ws-popover-card')
   await expect(workspacePopover).toBeVisible()
   // Vue scoped 样式会为 keyframes 追加哈希，保留名称前缀即可验证入场动画实际生效。
   await expect.poll(() => workspacePopover.evaluate(element => getComputedStyle(element).animationName)).toMatch(/^workspace-popover-enter/)
-  // 按钮上移由 0.28s transition 驱动；轮询等待位移完成，避免慢环境取到过渡起点。
-  await expect.poll(async () => restingButtonBox.y - (await workspaceButton.boundingBox())!.y)
-    .toBeGreaterThanOrEqual(6)
-  const messageInput = page.getByRole('textbox', {name:'消息'})
-  // 按钮和浮层分别有 transform/同步定位动画；以浮层不遮挡输入框验证稳定的界面契约，不读取过渡中的触发器坐标。
+  // 浮层保留自身高度加间距，不能留下旧固定 356px 的多余空白。
   await expect.poll(async () => {
     const popoverBox = (await workspacePopover.boundingBox())!
     const inputBox = (await messageInput.boundingBox())!
     return inputBox.y - (popoverBox.y + popoverBox.height)
   }).toBeGreaterThanOrEqual(-2)
+  await expect.poll(async () => {
+    const popoverBox = (await workspacePopover.boundingBox())!
+    const inputBox = (await messageInput.boundingBox())!
+    return inputBox.y - (popoverBox.y + popoverBox.height)
+  }).toBeLessThanOrEqual(24)
   // 保留真实浏览器快照，供工作区弹层的视觉回归核验。
   await page.screenshot({path:'test-results/workspace-popover-task-card-ux.png'})
   await workspaceButton.click()
