@@ -2,12 +2,9 @@
 set -euo pipefail
 
 # ============================================================
-# 部署脚本：GitHub 代码更新 -> 服务器同步 -> 零中断平滑热更
-# 优化点：
-# 1. 开启 BuildKit 并发多核构建，极大缩短镜像生成时间
-# 2. 前端 Dockerfile 分层缓存修复（npm install 100% 命中缓存）
-# 3. 先在后台并发完成镜像构建，构建期间旧容器持续对外提供服务（0 中断）
-# 4. 镜像构建完成后，执行 docker compose 原子滚动替换，避免数据库与前端闪断
+# 部署脚本：同步精确提交 -> 增量准备镜像 -> 替换变化服务。
+# CI 构建后生产机只拉取；本地回退使用 BuildKit 缓存并逐服务串行构建。
+# 构建期间旧容器继续服务；单副本替换仍有短暂切换窗口。
 # ============================================================
 
 # 部署目录可被环境变量覆盖（本机部署于 /root/ai-eval-platform，GitHub Actions 使用 /opt 默认值）
@@ -23,6 +20,13 @@ IMAGE_PREFIX=${IMAGE_PREFIX:-}
 IMAGE_TAG=${IMAGE_TAG:-}
 GHCR_ACTOR=${GHCR_ACTOR:-}
 GHCR_TOKEN=${GHCR_TOKEN:-}
+# 限制生产机同时拉取的服务数，降低并发下载/解压造成的内存与磁盘争抢。
+# 仅作用于 pull，不改变 Compose 启动依赖顺序或 CI 的独立构建任务。
+DEPLOY_PULL_PARALLEL=${DEPLOY_PULL_PARALLEL:-2}
+if ! [[ "$DEPLOY_PULL_PARALLEL" =~ ^[1-9][0-9]*$ ]]; then
+    echo "错误：DEPLOY_PULL_PARALLEL 必须为正整数" >&2
+    exit 1
+fi
 # 基础设施镜像不在此处定义默认值：以 docker-compose.yml 的插值结果为唯一事实源（见 [2] 阶段）。
 # 避免脚本默认值与 Compose 默认镜像漂移（曾因旧 postgres:16.15-alpine 硬编码覆盖 pgvector 镜像）。
 LOCK_FILE="$APP_DIR/.deploy.lock"
@@ -268,7 +272,7 @@ if [ -n "$IMAGE_PREFIX" ] && [ -n "$IMAGE_TAG" ] && [ -n "$GHCR_ACTOR" ] && [ -n
     else
         echo "==> 登录 GHCR，仅拉取变化服务：${BUILD_SERVICES[*]}"
         printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_ACTOR" --password-stdin >/dev/null
-        docker compose pull "${BUILD_SERVICES[@]}"
+        docker compose --parallel "$DEPLOY_PULL_PARALLEL" pull "${BUILD_SERVICES[@]}"
         docker logout ghcr.io >/dev/null 2>&1 || true
     fi
 elif [ "${#BUILD_SERVICES[@]}" -eq 0 ]; then
@@ -330,7 +334,7 @@ if [ "${#RECONCILED_SERVICES[@]}" -gt 0 ] \
     && [ -n "$IMAGE_PREFIX" ] && [ -n "$GHCR_ACTOR" ] && [ -n "$GHCR_TOKEN" ]; then
     echo "==> 拉取镜像不一致的服务：${RECONCILED_SERVICES[*]}"
     printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_ACTOR" --password-stdin >/dev/null
-    docker compose pull "${RECONCILED_SERVICES[@]}"
+    docker compose --parallel "$DEPLOY_PULL_PARALLEL" pull "${RECONCILED_SERVICES[@]}"
     docker logout ghcr.io >/dev/null 2>&1 || true
 fi
 

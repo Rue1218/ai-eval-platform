@@ -1,0 +1,16 @@
+# 相对于 backend/ 构建上下文，仅发送 Runner 与共享内核；测试和缓存不进入运行镜像。
+**
+!runner/
+!runner/**
+!shared/
+!shared/**
+runner/tests
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.ruff_cache
+**/*.log
+**/.env
+**/.env.*
+**/.venv
+**/venv

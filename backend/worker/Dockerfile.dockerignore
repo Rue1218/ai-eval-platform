@@ -1,0 +1,18 @@
+# 相对于 backend/ 构建上下文，仅发送 Worker 镜像实际需要的文件。
+**
+!worker/
+worker/**
+!worker/requirements.txt
+!worker/app/
+!worker/app/**
+!shared/
+!shared/**
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.ruff_cache
+**/*.log
+**/.env
+**/.env.*
+**/.venv
+**/venv
