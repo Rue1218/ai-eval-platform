@@ -1,3 +1,9 @@
 node_modules
 dist
 .vite
+# 测试、报告和本地日志不参与 Vite 生产构建，避免扩大上下文或使源码层失效。
+tests
+test-results
+playwright-report
+playwright.config.*
+*.log

@@ -6,6 +6,19 @@ on:
   pull_request:
 
 jobs:
+  deploy-scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check deployment scripts and asset layers
+        # 不接触服务器；验证 Shell 语法与 Dockerfile 静态资源分层的完整性。
+        run: |
+          bash -n deploy/deploy.sh
+          bash -n deploy/auto-deploy-watch.sh
+          python3 -m unittest discover -s deploy/tests -v
+
   backend:
     runs-on: ubuntu-latest
     # 隔离临时 PG 运行真实事实/WS/文件闭环测试，绝不借用生产库。

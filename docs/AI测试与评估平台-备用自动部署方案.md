@@ -2,7 +2,7 @@
 
 > **文档地位**：本文件是平台部署链路的配套技术方案，规定 GitHub Actions CD 因用量上限停摆时，
 > 生产环境 `47.119.132.83` 的备用自动化部署机制。与 [`AI测试与评估平台-API.md`](AI测试与评估平台-API.md) 无契约交集。
-> 版本：V1.2 ｜ 审查日期：2026-08-29
+> 版本：V1.3 ｜ 审查日期：2026-09-12
 
 ---
 
@@ -161,3 +161,72 @@ root crontab 计划任务（每 5 分钟），试跑巡检通过。
 `.deploy-success-sha`（上次成功部署标记）对比 origin/main，标记落后即自动续跑；续跑时
 `deploy.sh` 差异构建仍以标记为基准，只重建未完成部分。同步补充排错表「部署被中途打断」
 自愈说明。
+
+## 9. 构建与传输优化（V1.3）
+
+本轮检查涵盖 `.github/workflows/deploy.yml`、`deploy/deploy.sh`、备用巡检脚本、
+Compose 与六个业务 Dockerfile。主链路已有按服务的 GHA 层缓存，生产机只拉取镜像；
+备用链路已逐服务串行构建，不再通过增加服务器构建并发提速。
+
+### 9.1 已确认的基线
+
+- [Deploy 34603425193](https://github.com/Rue1218/ai-eval-platform/actions/runs/34603425193)
+  （2026-09-11，提交 `e8f0bf3`）从创建到结束约 200 秒；Web 构建任务 84 秒，
+  其中构建与推送步骤 51 秒、Vite 26.10 秒；SSH 部署步骤 93 秒。
+- 该次生产日志显示，Web 的一个 1.908 MB 层下载约一分钟。原 Dockerfile 将整个
+  `dist` 放在一层，业务文件变化时未变的 vendor 文件也随该层重新传输。
+- API / Worker / Runner 构建上下文均为 `backend/`，原 `api/.dockerignore` 与
+  `worker/.dockerignore` 不位于上下文根，也不是 Dockerfile 专属忽略文件，因此不生效。
+- 前端原 `NODE_BUILD_MEMORY` 在 npm 安装前声明；改变堆上限会使后面的依赖层失效。
+  原安装使用 `npm install`；Python 安装显式禁用下载缓存。
+
+### 9.2 实施内容与边界
+
+1. API / Worker / Runner 分别新增 `Dockerfile.dockerignore`，路径相对 `backend/`，
+   只纳入镜像所需源码与共享包，排除测试、环境文件、虚拟环境和本地缓存。
+   文件位于既有服务路径下，现有 CI 和服务器差异计算会自动选中对应服务。
+2. 前端改用 `npm ci` 严格按锁文件安装；npm 与三份 Python 镜像的 pip 下载目录
+   使用 BuildKit cache mount，下载文件不进入镜像层。内存和版本参数均放在依赖安装后。
+   Cache mount 在同一个持久构建器上累积；**GHA 后端默认不导出 cache mount 内容**，
+   Actions 跨任务仍主要依赖既有 `cache-from/cache-to type=gha,mode=max` 层缓存。
+3. 将 `dist/assets/vendor-*` 移到独立目录，并在运行阶段先复制 vendor 层，再复制
+   其余 `dist`。最终 URL 与文件内容不变；vendor 内容稳定时只需传输应用层。
+   首次切换分层布局仍需拉取新层，依赖变更时 vendor 层也会更新。
+4. 两处 Compose 拉取默认使用 `--parallel 2`，可由进程环境变量
+   `DEPLOY_PULL_PARALLEL` 覆盖为正整数。该限制是**服务级并发**，不限制单个镜像
+   内的层下载数、CPU 或总内存；资源更紧时可设为 1，可能延长全量拉取时间。
+   服务器本地 Vite 堆上限维持 1536 MB，不将已有 OOM 阈值调低。
+5. CI 保留 Runner 每次准备镜像的恢复兜底；不改变镜像引用恢复、停止/暂停状态保留、
+   数据库升级备份或清理策略。新增独立脚本检查任务，不连接生产。
+
+实现依据：[Docker 构建上下文](https://docs.docker.com/build/concepts/context/)、
+[缓存优化](https://docs.docker.com/build/cache/optimize/)、
+[GHA 缓存边界](https://docs.docker.com/build/ci/github-actions/cache/)、
+[Compose 并发选项](https://docs.docker.com/reference/cli/docker/compose/)。
+
+### 9.3 本地验证与生产验收
+
+- Bash 语法检查、YAML 解析、部署静态资源分层回归用例、现有 H5 部署契约检查通过。
+- 用 Docker 同源的 `moby/patternmatcher v0.6.0` 核验三份忽略规则：实际 COPY 输入保留，
+  环境文件、测试和缓存排除。当前本地后端文件总量约 18.94 MB；规则纳入 API
+  1.93 MB、Worker 0.23 MB、Runner 0.12 MB。此为文件集合统计，不是实测 Docker 传输量。
+- 隔离目录执行锁文件安装、前端 typecheck 与 1536 MB 堆上限构建。
+  构建产物约 6.73 MB，其中独立 vendor 文件约 5.47 MB（81.18%），其余约 1.27 MB。
+  在隔离副本修改业务文案、版本号和时间后再次构建，3 个 vendor 文件哈希不变；
+  执行 Dockerfile 拆分命令并合并两层后，46 个真实产物逐字节一致，4 个入口资源引用均存在。
+  这是未压缩文件大小，不能直接换算生产下载耗时或声称部署提速比例。
+- 本机没有 Docker，尚未执行真实镜像构建、GHA 新版本流水线或生产资源采样。
+  合入后应对比至少两轮 Web 更新的 vendor 层 digest、实际下载字节、构建/部署耗时，
+  并用 `docker stats --no-stream` 与主机内存/swap/磁盘指标确认运行期间的资源表现。
+
+## 修改代码文件与作用清单（V1.3，2026-09-12）
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `frontend/Dockerfile` | 锁文件安装、npm 下载缓存、内存参数后移、vendor 与应用静态资源分层 |
+| `frontend/.dockerignore` | 排除测试、浏览器报告和日志，避免无关文件触发源码层更新 |
+| `backend/{api,worker,lightrag}/Dockerfile` | pip 下载缓存移到 BuildKit cache mount |
+| `backend/{api,worker,runner}/Dockerfile.dockerignore` | 在正确上下文生效的各服务文件筛选规则 |
+| `deploy/deploy.sh` | 限制镜像拉取并发，修正与实际行为不符的旧构建说明 |
+| `deploy/tests/test_build_artifacts.py` | 执行真实 Dockerfile 拆分命令，验证资源路径与内容完整、无 vendor 场景 |
+| `.github/workflows/ci.yml` | 持续检查部署 Shell 语法与静态资源分层 |
