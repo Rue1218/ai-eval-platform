@@ -86,12 +86,13 @@ class Approval(Interaction):
 
 
 class Answer(StrictData):
-    """单题回答不允许任意对象注入。"""
+    """单题回答不允许任意对象注入；custom 保留选择题的“其他”文本。"""
 
     question_id: Id
     answer: Annotated[str, StringConstraints(max_length=16000)] | Annotated[
         list[Annotated[str, StringConstraints(max_length=16000)]], Field(max_length=32)
     ]
+    custom: Annotated[str, StringConstraints(max_length=16000)] | None = None
 
 
 class Question(Interaction):

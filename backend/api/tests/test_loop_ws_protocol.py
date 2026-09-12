@@ -93,6 +93,10 @@ def test_approval_and_question_have_strict_identity():
         **identity, "decision": "always",
     })))
     assert approval.data["nonce"] == "n"
+    question = parse_command(json.dumps(command("question.respond", {
+        **identity, "answers": [{"question_id": "q", "answer": ["A"], "custom": "其他说明"}],
+    })))
+    assert question.data["answers"] == [{"question_id": "q", "answer": ["A"], "custom": "其他说明"}]
     with pytest.raises(AppError):
         parse_command(json.dumps(command("question.respond", {
             **identity, "answers": [

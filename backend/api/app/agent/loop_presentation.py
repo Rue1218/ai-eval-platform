@@ -99,7 +99,7 @@ def tool_display(source: dict, *, result: bool = False) -> dict:
 
 
 def question_answers(questions: list[dict], answers: list[dict]) -> dict:
-    """v2 多选标签数组与 legacy 字符串转同一校验模型，保留逗号标签。"""
+    """v2 选择标签与“其他”文本转同一校验模型，保留逗号标签。"""
     from app.errors import AppError, ErrorCode
     from app.harness.execution.ask_user import validate_answers
 
@@ -108,13 +108,18 @@ def question_answers(questions: list[dict], answers: list[dict]) -> dict:
     for item in answers:
         question = by_id.get(item["question_id"], {})
         value = item["answer"]
+        question_type = str(question.get("type") or "radio")
+        custom = str(item.get("custom") or "").strip()
         if isinstance(value, list):
-            if question.get("type") != "checkbox":
+            if question_type != "checkbox":
                 raise AppError(ErrorCode.VALIDATION, "仅多选问题接受标签数组")
-            selected, custom = value, ""
+            selected = value
         else:
-            selected = [part.strip() for part in value.split(",") if part.strip()] if question.get("multi_select") or question.get("type") == "checkbox" else ([value] if value else [])
-            custom = value
+            selected = [part.strip() for part in value.split(",") if part.strip()] if question.get("multi_select") or question_type == "checkbox" else ([value] if value else [])
+        # 简答题及无选项题保持旧客户端仅传 answer 时的兼容投影。
+        if question_type == "text" or not question.get("options"):
+            custom = custom or (value if isinstance(value, str) else "")
+            selected = []
         normalized.append({"id": item["question_id"], "custom": custom,
                            "selected": selected if question.get("options") else []})
     return {"answers": validate_answers(questions, normalized)}

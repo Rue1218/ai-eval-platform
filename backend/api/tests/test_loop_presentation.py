@@ -175,6 +175,17 @@ def test_question_array_roundtrip_preserves_comma_labels():
     assert result == {"answers": [{"id": "q", "selected": ["A,B", "C"], "custom": ""}]}
 
 
+def test_question_answers_keeps_checkbox_selection_and_custom_text():
+    """“其他”文本与已选多选项分开传输，不能伪装成未登记 option label。"""
+    questions = [{"id": "q", "question": "选择", "type": "checkbox", "required": True,
+                  "options": [{"label": "本地"}, {"label": "联网"}]}]
+    result = question_answers(
+        questions,
+        [{"question_id": "q", "answer": ["本地"], "custom": "私有镜像"}],
+    )
+    assert result == {"answers": [{"id": "q", "selected": ["本地"], "custom": "私有镜像"}]}
+
+
 def test_json_result_credentials_are_redacted_before_stringification():
     """工具 JSON 字符串必须先解析，避免键名脱敏被序列化边界绕过。"""
     result = tool_display({"name": "read", "status": "succeeded", "content": '{"api_key":"private-value","rows":2}'}, result=True)

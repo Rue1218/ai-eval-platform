@@ -83,7 +83,13 @@ async function setup(page: Page, holdNewReplay = false) {
           send('turn.end',{reason:'completed'},c,true,sid)
         } else {
           send('tool.call',{name:'read',display:{version:1,target:'test.txt',arguments_preview:'{"path":"test.txt"}'}},c,true,sid)
-          send('approval.requested',{interaction_id:'i',nonce:'nonce-memory-only',expires_at:Date.now()/1000+300,name:'read'},c,true,sid)
+          if (cmd.data.content === '补充执行信息') {
+            send('question.requested',{interaction_id:'question-i',nonce:'question-nonce-memory-only',expires_at:Date.now()/1000+300,questions:[
+              {id:'mode',question:'选择评测方式',type:'radio',required:true,options:[{label:'标准评测',description:'使用默认基准配置'},{label:'快速验证',description:'使用最小样本验证'}]},
+              {id:'sources',question:'选择资料来源',type:'checkbox',required:true,options:[{label:'本地检索'},{label:'联网检索'}]},
+              {id:'note',question:'补充执行说明',type:'text',required:true},
+            ]},c,true,sid)
+          } else send('approval.requested',{interaction_id:'i',nonce:'nonce-memory-only',expires_at:Date.now()/1000+300,name:'read'},c,true,sid)
         }
       }
       if(cmd.type==='approval.respond') {
@@ -95,6 +101,11 @@ async function setup(page: Page, holdNewReplay = false) {
         send('assistant.message',{content:'文件已读取完成。',reasoning_preview:'根据工具结果总结。'},summaryCorrelation,true,sid)
         send('assistant.end',{outcome:'committed'},summaryCorrelation,true,sid)
         send('turn.end',{reason:'completed'},summaryCorrelation,true,sid)
+      }
+      if(cmd.type==='question.respond') {
+        send('question.resolved',{interaction_id:'question-i',outcome:'answered',answers:cmd.data.answers},c,true,sid)
+        send('tool.result',{name:'read',status:'succeeded',display:{version:1,result_preview:'已采用补充信息'}},c,true,sid)
+        send('turn.end',{reason:'completed'},c,true,sid)
       }
       if(cmd.type==='trace.subscribe') { send('schema.catalog',{stream:{types:{'tool.call':{fields:['name','display']}}},facts:{events:{}}});send('trace.event',{event:{seq:0,type:'tool/call',data:{name:'read'},correlation:c}}) }
     })
@@ -173,6 +184,13 @@ for (const reason of ['completed', 'max_steps']) test(`任务规划更新后不�
     counts:{pending:0,in_progress:0,completed:5}}})
   await expect(page.getByText('完成成都家庭游计划', {exact:true})).toBeVisible()
   await expect(page.getByText('5/5', {exact:true})).toBeVisible()
+  const taskDrawer = page.locator('.task-state-drawer')
+  const taskDrawerHeader = taskDrawer.getByRole('button', {name:/任务规划/})
+  const taskSteps = taskDrawer.locator('.task-step-title')
+  await expect(taskDrawerHeader).toHaveAttribute('aria-expanded', 'false')
+  await expect(taskSteps).toHaveCount(0)
+  await taskDrawerHeader.click()
+  await expect(taskSteps.first()).toHaveText('task 1 ：完成第 1 项')
   await expect(page.getByText('正在响应…', {exact:true})).toHaveCount(0)
   await expect(page.locator('.loop-message.assistant')).toHaveCount(1)
   send('turn.end', {reason})
@@ -258,10 +276,80 @@ test('HTTP 缺少 randomUUID 时新建会话、附件、发送和工具结果回
   expect(submit.data.attachment_refs).toEqual(['f'])
   expect(submit.request_id).toMatch(/^[0-9a-f-]{36}$/)
   expect(submit.data.client_message_id).not.toBe(submit.request_id)
-  await page.getByRole('button', {name:'允许一次', exact:true}).click()
+  const approvalDrawer = page.locator('.composer-interaction-drawer')
+  await expect(approvalDrawer).toContainText('工具权限请求')
+  await expect(page.locator('.tool-run .interaction')).toHaveCount(0)
+  await approvalDrawer.getByRole('button', {name:'允许一次', exact:true}).click()
   await expect(page.locator('.tool-state').first()).toHaveText('已完成')
   await expect(page.getByRole('textbox', {name:'消息'})).toHaveValue('')
   await expect(page.getByText('草稿已保留', {exact:false})).toHaveCount(0)
+})
+
+test('工具审批和 ask_user_question 在输入框上方抽屉处理，题型与自定义答案完整回传', async ({page}) => {
+  const ctx = await setup(page)
+  await page.getByRole('textbox', {name:'消息'}).fill('补充执行信息')
+  await page.getByRole('button', {name:'发送', exact:true}).click()
+
+  const drawer = page.locator('.composer-interaction-drawer')
+  await expect(drawer).toBeVisible()
+  await expect(drawer).toContainText('请补充执行所需信息')
+  await expect(drawer).toContainText('问题 1 / 3')
+  await expect(drawer).toContainText('单择题')
+  await expect(drawer.getByText('选择资料来源', {exact:true})).toHaveCount(0)
+  await expect(drawer.getByText('补充执行说明', {exact:true})).toHaveCount(0)
+  // 待处理表单不再嵌入工具时间线，避免工具详情撑高对话区。
+  await expect(page.locator('.tool-run .interaction')).toHaveCount(0)
+
+  const drawerBox = (await drawer.boundingBox())!
+  const composerBox = (await page.locator('.loop-composer').boundingBox())!
+  expect(composerBox.y - (drawerBox.y + drawerBox.height)).toBeGreaterThanOrEqual(0)
+  expect(composerBox.y - (drawerBox.y + drawerBox.height)).toBeLessThanOrEqual(16)
+
+  const radioOptions = drawer.locator('input[type=radio]')
+  await radioOptions.last().check()
+  await drawer.getByLabel('选择评测方式的自定义回答').fill('混合模式')
+  await drawer.getByRole('button', {name:'下一题', exact:true}).click()
+  await expect(drawer).toContainText('问题 2 / 3')
+  await expect(drawer).toContainText('多选题')
+  const checkboxes = drawer.locator('input[type=checkbox]')
+  await checkboxes.first().check()
+  await checkboxes.last().check()
+  await drawer.getByLabel('选择资料来源的自定义回答').fill('离线缓存')
+  await drawer.getByRole('button', {name:'下一题', exact:true}).click()
+  await expect(drawer).toContainText('问题 3 / 3')
+  await expect(drawer).toContainText('简答题')
+  await drawer.getByRole('button', {name:'上一题', exact:true}).click()
+  await expect(drawer).toContainText('问题 2 / 3')
+  await expect(checkboxes.first()).toBeChecked()
+  await expect(drawer.getByLabel('选择资料来源的自定义回答')).toHaveValue('离线缓存')
+  await drawer.getByRole('button', {name:'下一题', exact:true}).click()
+  await drawer.getByLabel('补充执行说明').fill('保留数据来源')
+  await drawer.getByRole('button', {name:'提交回答', exact:true}).click()
+
+  await expect.poll(() => ctx.commands.find(command => command.type === 'question.respond')?.data.answers).toEqual([
+    {question_id:'mode',answer:'',custom:'混合模式'},
+    {question_id:'sources',answer:['本地检索'],custom:'离线缓存'},
+    {question_id:'note',answer:'',custom:'保留数据来源'},
+  ])
+  await expect(drawer).toHaveCount(0)
+  await expect(page.locator('.tool-state').first()).toHaveText('已完成')
+})
+
+test('窄屏交互抽屉保持在输入框上方且不产生横向溢出', async ({page}) => {
+  await page.setViewportSize({width:390,height:844})
+  await setup(page)
+  await page.getByRole('textbox', {name:'消息'}).fill('补充执行信息')
+  await page.getByRole('button', {name:'发送', exact:true}).click()
+
+  const drawer = page.locator('.composer-interaction-drawer')
+  await expect(drawer).toBeVisible()
+  const drawerBox = (await drawer.boundingBox())!
+  const composerBox = (await page.locator('.loop-composer').boundingBox())!
+  expect(drawerBox.x).toBeGreaterThanOrEqual(0)
+  expect(drawerBox.x + drawerBox.width).toBeLessThanOrEqual(390)
+  expect(composerBox.y - (drawerBox.y + drawerBox.height)).toBeGreaterThanOrEqual(0)
+  expect(composerBox.y - (drawerBox.y + drawerBox.height)).toBeLessThanOrEqual(16)
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
 })
 
 test('草稿工作区浮层不扩张空状态布局，Task 卡片接收 MCP 名与 Worker 实时事件', async ({page}) => {
