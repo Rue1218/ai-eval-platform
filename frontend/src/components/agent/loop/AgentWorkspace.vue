@@ -114,7 +114,7 @@
           <p v-if="!busy && state?.phase && ['max_tokens','max_steps','cancelled','interrupted','error'].includes(state.phase)" class="loop-notice">{{ finishLabels[state.phase] }}</p>
           </div>
           <div class="loop-composer-wrap">
-            <div class="composer-top-bar" :class="{ 'is-workspace-open': workspacePopoverOpen, 'is-locked': !!sessionId }">
+            <div class="composer-top-bar" :style="workspacePopoverOpen ? { marginBottom: `${workspacePopoverSpace}px` } : undefined">
               <n-popover
                 ref="workspacePopoverRef"
                 :show="workspacePopoverOpen"
@@ -150,7 +150,7 @@
                   </button>
                 </template>
 
-                <div v-if="workspacePopoverOpen" :key="workspacePopoverEpoch" class="ws-popover-card">
+                <div v-if="workspacePopoverOpen" ref="workspacePopoverCard" :key="workspacePopoverEpoch" class="ws-popover-card">
                   <header class="ws-popover-header">
                     <div class="ws-popover-title">
                       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -377,11 +377,12 @@ const loadingWorkspaces = ref(false)
 const workspacePopoverOpen = ref(false)
 const workspacePopoverEpoch = ref(0)
 const workspacePopoverRef = ref<{ syncPosition: () => void } | null>(null)
+const workspacePopoverCard = ref<HTMLElement | null>(null)
+const workspacePopoverSpace = ref(0)
 const draftWorkspaceId = ref<string | null>(null)
 const draftWorkspaceName = ref<string>('')
 const newWorkspaceName = ref('')
 const creatingWorkspace = ref(false)
-let workspacePopoverSyncFrame: number | undefined
 
 const sessionTier = ref<string>('')
 watch(() => props.session?.permission_tier, (value) => { sessionTier.value = value || '' }, { immediate: true })
@@ -447,34 +448,28 @@ function handleWorkspacePopoverVisibility(open: boolean) {
   workspacePopoverOpen.value = open
   if (open) {
     workspacePopoverEpoch.value += 1
-    syncWorkspacePopoverDuringEntrance()
-  } else if (workspacePopoverSyncFrame !== undefined) {
-    cancelAnimationFrame(workspacePopoverSyncFrame)
-    workspacePopoverSyncFrame = undefined
+    syncWorkspacePopoverLayout()
+  } else {
+    workspacePopoverSpace.value = 0
   }
   if (open && !workspaces.value.length) {
     void loadWorkspaces(false)
   }
 }
 
-/** 顶栏扩展会推动触发器上移；逐帧同步浮层，避免浮层与“147”脱节。 */
-function syncWorkspacePopoverDuringEntrance() {
-  if (workspacePopoverSyncFrame !== undefined) cancelAnimationFrame(workspacePopoverSyncFrame)
+/** 面板按实际高度预留空间，避免固定 356px 在短面板下留下大块空白。 */
+function syncWorkspacePopoverLayout() {
   void nextTick(() => {
     if (!workspacePopoverOpen.value) return
-    const startedAt = performance.now()
-    const sync = (now: number) => {
-      workspacePopoverRef.value?.syncPosition()
-      if (workspacePopoverOpen.value && now - startedAt < 380) {
-        workspacePopoverSyncFrame = requestAnimationFrame(sync)
-      } else {
-        workspacePopoverSyncFrame = undefined
-      }
-    }
-    workspacePopoverRef.value?.syncPosition()
-    workspacePopoverSyncFrame = requestAnimationFrame(sync)
+    const height = workspacePopoverCard.value?.offsetHeight || 0
+    workspacePopoverSpace.value = height ? height + 12 : 0
+    void nextTick(() => workspacePopoverRef.value?.syncPosition())
   })
 }
+
+watch([workspacePopoverOpen, loadingWorkspaces, () => workspaces.value.length], () => {
+  if (workspacePopoverOpen.value) syncWorkspacePopoverLayout()
+})
 
 function handleSelectWorkspace(ws: { id: string; name: string } | null) {
   if (props.sessionId) {
@@ -647,7 +642,7 @@ try {
   const savedWidth = Number(localStorage.getItem(chatWidthStorageKey))
   if (Number.isFinite(savedWidth) && savedWidth >= minimumChatWidth) chatWidth.value = savedWidth
 } catch { /* 本地存储不可用时使用默认宽度。 */ }
-onBeforeUnmount(() => { uiRefresh.cancel(); props.store.focus(''); clearInterval(refreshTimer); if (workspacePopoverSyncFrame !== undefined) cancelAnimationFrame(workspacePopoverSyncFrame); window.removeEventListener('focus', refreshUiOnFocus); finishContentResize() })
+onBeforeUnmount(() => { uiRefresh.cancel(); props.store.focus(''); clearInterval(refreshTimer); window.removeEventListener('focus', refreshUiOnFocus); finishContentResize() })
 function interactions(row: LoopRecord) { return Object.values(state.value?.interactions || {}).filter(i => identity({session_id:props.sessionId,correlation:i.correlation},true) === row.key) }
 function fill(text: string) { draft.value.content = text; composer.value?.focus() }
 function trackScroll() { const el=scroller.value; if(el) atBottom.value=el.scrollHeight-el.scrollTop-el.clientHeight<100 }
@@ -1274,14 +1269,6 @@ async function hydrateAttachments() {
   min-height: 28px;
   margin-bottom: 6px;
   padding: 0 4px;
-  transition: margin-bottom 0.36s cubic-bezier(0.16, 1, 0.3, 1);
-}
-/* 浮层占用输入区上方的蓝色缓冲带，布局扩展会自然把工作区选择器平滑推上去。 */
-.composer-top-bar.is-workspace-open {
-  margin-bottom: 356px;
-}
-.composer-top-bar.is-workspace-open.is-locked {
-  margin-bottom: 118px;
 }
 .composer-ws-btn {
   display: inline-flex;
@@ -1302,7 +1289,6 @@ async function hydrateAttachments() {
   will-change: transform;
 }
 .composer-ws-btn.is-open {
-  transform: translate3d(0, -10px, 0);
   background: #edf7f1;
   border-color: #c6dfd1;
   color: #174a3a;
@@ -1549,8 +1535,6 @@ async function hydrateAttachments() {
   .ws-popover-card { animation: none; }
 }
 @media (max-height: 640px) {
-  .composer-top-bar.is-workspace-open { margin-bottom: 282px; }
-  .composer-top-bar.is-workspace-open.is-locked { margin-bottom: 104px; }
   .ws-popover-list { max-height: 132px; }
 }
 [data-theme='dark'] .ws-popover-title {
