@@ -38,6 +38,11 @@ def normalize_tool_arguments(
     ``path`` 时被误删。
     """
     raw = dict(arguments or {})
+    if name == "task":
+        # 别名只兼容字段名，不能把数字、容器或 null 转成字符串绕过 Schema。
+        for key in ("description", "prompt", "goal"):
+            if key in raw and not isinstance(raw[key], str):
+                raise AppError(ErrorCode.VALIDATION, f"字段 {key} 必须是字符串")
     properties = schema.get("properties") if isinstance(schema, Mapping) else None
     declared = properties if isinstance(properties, Mapping) else None
     for old_key, new_key in _ALIASES.get(name, ()):

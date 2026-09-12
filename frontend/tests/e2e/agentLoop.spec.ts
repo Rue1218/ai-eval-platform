@@ -120,6 +120,38 @@ test('工作台初始化不再预加载旧栈偏好、模型和确认卡选项',
   expect(ctx.requests).toContain('/api/sessions/s/agent-ui')
 })
 
+for (const [status, label] of Object.entries({failed:'失败',denied:'已拒绝',cancelled:'已取消',not_started:'未启动',outcome_unknown:'结果未知'})) test(`任务规划 ${status} 可见且保留最后成功计划`, async ({page}) => {
+  const ctx = await setup(page)
+  await expect.poll(() => ctx.sockets.has('s')).toBe(true)
+  let cursor = 0
+  const correlation = {turn:1,turn_id:'s:1',step:1,attempt_id:'plan-attempt',call_id:'plan-ok'}
+  // 先建立成功看板，再注入失败更新，避免失败记录覆盖当前计划或生成助手占位。
+  const send = (type: string, data: Record<string, unknown> = {}) => ctx.sockets.get('s').send(JSON.stringify({
+    protocol_version:2,type,durability:'persistent',cursor:++cursor,session_id:'s',
+    ts:'2026-09-12T00:00:00Z',correlation,data,
+  }))
+  send('turn.start')
+  send('tool.call', {name:'task'})
+  send('tool.result', {name:'task',status:'succeeded'})
+  send('task_plan.updated', {plan:{goal:'最后成功的计划',description:'最后成功的计划',
+    steps:[{title:'已完成步骤',status:'completed'}],counts:{pending:0,in_progress:0,completed:1}}})
+  correlation.call_id = 'plan-failed'
+  send('tool.call', {name:'task'})
+  send('tool.result', {name:'task',status,display:{version:1,result_preview:'本次任务规划更新未成功'}})
+  send('turn.end', {reason:'completed'})
+  const card = page.locator('.tool-run')
+  await expect(card).toHaveCount(1)
+  await expect(card.locator('.tool-state')).toHaveText(label)
+  await card.locator('summary').first().click()
+  await expect(card.getByText('本次任务规划更新未成功', {exact:true})).toBeVisible()
+  await expect(page.locator('.task-goal')).toHaveText('最后成功的计划')
+  await expect(page.locator('.task-progress')).toHaveText('1/1')
+  await expect(page.locator('.loop-message.assistant')).toHaveCount(0)
+  await expect(page.getByText('正在响应…', {exact:true})).toHaveCount(0)
+  await page.getByRole('textbox', {name:'消息'}).fill('继续')
+  await expect(page.getByRole('button', {name:'发送',exact:true})).toBeEnabled()
+})
+
 for (const reason of ['completed', 'max_steps']) test(`任务规划更新后不产生助手占位，${reason} 收尾允许继续发送`, async ({page}) => {
   const ctx = await setup(page)
   await expect.poll(() => ctx.sockets.has('s')).toBe(true)

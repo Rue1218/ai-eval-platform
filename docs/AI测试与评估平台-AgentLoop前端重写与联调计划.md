@@ -1,6 +1,6 @@
 # AI 测试与评估平台 — AgentLoop 前端重写与联调计划
 
-> 版本：V0.12 ｜ 审查日期：2026-09-12 ｜ 状态：修复任务规划工具误入助手分支的响应占位，补充步骤上限后的继续处理提示；轨迹页和 HTTP WebSocket 兼容行为延续，新增修复进入 PR 发布流程，发布状态以关联 PR/Actions 为准。
+> 版本：V0.13 ｜ 审查日期：2026-09-12 ｜ 状态：修复任务规划失败结果隐藏及 v2 旧参数兼容缺口，执行与规划快照共用归一规则；本次修复进入 PR 发布流程，合入与部署状态以关联 PR/Actions 为准。
 >
 > 基线：`deepseek-harness-py/static/index.html` 当前页面 + `ai-eval-platform/frontend/src/views/Agent.vue` 当前实现 + 已落地后端 WS v2。后端设计见 [架构设计](AI测试与评估平台-AgentLoop后端架构设计.md)，已验证范围见 [实施记录](AI测试与评估平台-AgentLoop后端实施记录.md)。
 >
@@ -651,3 +651,29 @@ AgentLoop 与协议档管理只保留 `openai_chat` 和 `anthropic_messages`。�
 | `frontend/src/agent/loop/workspaceDerived.ts` | 步数耗尽提示说明如何继续处理。 |
 | `frontend/tests/e2e/agentLoop.spec.ts` | 正常结束与 max_steps 两种协议夹具先复现失败，修复后验证 5/5 看板、无伪助手占位和终态后发送可用。 |
 | 本文件 | 登记根因、修复边界与验证结果。 |
+
+## 22. V0.13 原生 task 适配审查修复（2026-09-12）
+
+原生 `task` 是会话规划工具。此前成功与失败结果都被聊天工具卡分支隐藏，失败时用户只能看到上一次成功计划；同时 v2 桥直接按注册表校验参数，未接入已有 `prompt` / `goal` 兼容规则，旧调用会因缺少 `description` 被拒绝。
+
+- 成功规划继续由看板展示；`failed`、`denied`、`cancelled`、`not_started`、`outcome_unknown` 终态使用已有工具结果卡显示状态与安全结果预览。失败记录不生成助手响应占位，也不覆盖最后成功的计划。
+- v2 原生 `task` 在 Schema 校验前复用已有归一逻辑：`goal` 转为 `prompt`，缺少概括时取目标前 24 个字符并按需加省略号；显式 `description` 优先。模型原始参数保留于 `tool/call`，实际参数保留于 `tool/dispatch.normalized_args`，不改模型可见的注册表 Schema。
+- `build_task_plan` 共用这份归一逻辑，使执行结果、调度器规划快照及持久化写入校验一致。类型校验拒绝把数字、容器、null 转成文本；长度、未知字段、步骤合法性和禁止后台执行的门禁继续有效。
+- 不增加 HTTP 轮询、数据库查询、模型调用或默认步数预算；Worker 的创建、查询与取消工具行为不变。
+
+验证：先用旧代码复现旧字段调用失败与页面缺少失败卡，修复后后端相关回归 **108 passed / 6 skipped**，前端单测 **77 passed**、页面协议夹具 **24 passed**，Ruff、ESLint、typecheck/build 通过。6 项跳过均需要显式独立 PostgreSQL 测试连接；已扩展真实 PG 用例覆盖三种目标字段，但本地未验证真实 PG 事务与生产会话。构建仍有既有 vendor 大包提示。
+
+提交前全量门禁：API **1437 passed / 75 skipped**，Worker **50 passed**；前端沿用同一代码版本上述已通过结果。真实 PostgreSQL 用例由 PR 的独立数据库 CI 继续验证，发布状态以 Actions 为准。
+
+### 22.1 修改代码文件与作用清单
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `frontend/src/components/agent/loop/AgentWorkspace.vue` | 显示规划非成功终态的工具结果卡，继续阻止工具误入助手分支。 |
+| `backend/api/app/harness/execution/loop_bridge.py` | 为原生 task 接入既有参数归一，再执行策略与 Schema 校验。 |
+| `backend/api/app/harness/execution/aliases.py` | 阻止规划目标字段类型在归一时被强制转换，保持验证约束。 |
+| `backend/api/app/harness/execution/dispatch.py` | 让执行与持久化校验从原始或已归一参数构造一致计划。 |
+| `backend/api/tests/test_loop_tools.py` | 覆盖三种目标字段、长目标摘要一致性、失败更新不覆盖及输入门禁。 |
+| `backend/api/tests/test_loop_tools_pg.py` | 扩展成功计划事务写入和失败更新隔离用例，覆盖旧字段。 |
+| `frontend/tests/e2e/agentLoop.spec.ts` | 覆盖五类非成功终态可见、计划保留、无伪占位及终态后可发送。 |
+| 本文件 | 登记审查修复、资源影响与验证边界。 |

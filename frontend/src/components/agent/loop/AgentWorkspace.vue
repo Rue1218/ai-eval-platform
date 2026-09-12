@@ -41,7 +41,8 @@
               <p class="turn-segment-label process">执行过程 · 工具调用</p>
               <TaskRunCard :tool="row as ToolRun" :task="taskForTool(row as ToolRun)" :interactions="interactions(row)" :can-control="canControl" :online="!!state?.ready" @respond="respond"/>
             </section>
-            <section v-else-if="'status' in row && 'name' in row && (row as ToolRun).name !== 'task'" class="turn-process-tool">
+            <!-- task 成功由看板展示；非成功终态保留结果卡，避免更新失败后无处查看原因。 -->
+            <section v-else-if="'status' in row && 'name' in row && ((row as ToolRun).name !== 'task' || ((row as ToolRun).event === 'tool.result' && (row as ToolRun).status !== 'succeeded'))" class="turn-process-tool">
               <p class="turn-segment-label process">执行过程 · 工具调用</p>
               <ToolRunCard :tool="row as ToolRun" :interactions="interactions(row)" :can-control="canControl" :online="!!state?.ready" @respond="respond"/>
             </section>
