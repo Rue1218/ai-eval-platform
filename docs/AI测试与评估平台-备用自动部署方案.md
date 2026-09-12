@@ -2,7 +2,7 @@
 
 > **文档地位**：本文件是平台部署链路的配套技术方案，规定 GitHub Actions CD 因用量上限停摆时，
 > 生产环境 `47.119.132.83` 的备用自动化部署机制。与 [`AI测试与评估平台-API.md`](AI测试与评估平台-API.md) 无契约交集。
-> 版本：V1.3 ｜ 审查日期：2026-09-12
+> 版本：V1.4 ｜ 审查日期：2026-09-12
 
 ---
 
@@ -215,9 +215,64 @@ Compose 与六个业务 Dockerfile。主链路已有按服务的 GHA 层缓存�
   在隔离副本修改业务文案、版本号和时间后再次构建，3 个 vendor 文件哈希不变；
   执行 Dockerfile 拆分命令并合并两层后，46 个真实产物逐字节一致，4 个入口资源引用均存在。
   这是未压缩文件大小，不能直接换算生产下载耗时或声称部署提速比例。
-- 本机没有 Docker，尚未执行真实镜像构建、GHA 新版本流水线或生产资源采样。
-  合入后应对比至少两轮 Web 更新的 vendor 层 digest、实际下载字节、构建/部署耗时，
-  并用 `docker stats --no-stream` 与主机内存/swap/磁盘指标确认运行期间的资源表现。
+- 合入后生产验收（V1.4 更新）：服务器侧首轮实测已完成（见 §9.4，2026-09-12，`d42a5b46`）；
+  第二轮 Web 更新的 vendor 层 digest 对比、Actions 侧逐步骤耗时与逐层下载字节仍待后续部署补录。
+
+### 9.4 生产验收实测（V1.4，2026-09-12，d42a5b46）
+
+PR #305 合入后由 GitHub Actions 主链路完成生产部署：web / api / worker / runner / lightrag
+五个镜像更新为 `d42a5b46` 不可变 tag（stress 本轮无代码变更），`.deploy-success-sha=d42a5b46`，
+api / runner 容器 healthy、健康接口 200；lightrag 容器保持用户主动停止状态（镜像已就绪，
+按部署脚本「停止/暂停状态保留」策略未滚动）。
+
+**部署时间线（服务器侧，CST）**
+
+| 阶段 | 时间 | 说明 |
+| :--- | :--- | :--- |
+| CD SSH 登录 / 精确提交同步 | 13:50:09 / 13:50:14 | `git reset` 到 `d42a5b46` 完成 |
+| 镜像拉取与本地解包 | 13:50:22 – 14:17:19 | 约 27 分钟；期间 dockerd 记录 2 次 `unexpected EOF` 下载中断并自动重试（14:05:16、14:16:56），未影响最终结果 |
+| 业务容器滚动重建 | 14:17:55 – 14:18:18 | runner → api → web → worker，约 23 秒 |
+| 完成标记写入 | 14:18:19 | SSH 部署窗口合计 ≈ 28m05s（13:50:14 起算） |
+
+**本轮实际重传的镜像层**（口径：diff 目录 mtime 落在部署窗口内的层，即本次真正解包/下载的层；
+大小为未压缩字节，MiB）
+
+| 服务 | 重传层数 | 未压缩合计 | 主要层 |
+| :--- | ---: | ---: | :--- |
+| web | 2 | 6.42 MB | vendor 5.21 MB + 应用 1.21 MB（nginx 及基础层全部复用 2026-09-04 解包，零重传） |
+| api | 7 | 205.2 MB | `pip install` 层 203.34 MB（其余为 shared/app 等小层） |
+| worker | 3 | 105.8 MB | `pip install` 层 105.54 MB |
+| runner | 1 | 0.02 MB | 单层极小更新 |
+| lightrag | 7 | 86.0 MB | apt 11.40 + 40.46 MB、`pip install` 34.18 MB |
+| **合计** | **20** | **403.4 MB** | |
+
+- 约 395 MB（98%）是三个 Python 服务的 apt/pip 依赖层：本轮 Dockerfile 变更（pip 缓存挂载等）
+  使这些层 digest 更新，触发一次性整层重传；依赖不变时层 digest 稳定，后续轮次预计回落到
+  runner/web 量级的小增量（本轮 runner 仅 0.02 MB 已验证增量拉取机制）。
+- **Web 分层在生产镜像中成立**：vendor 层
+  `sha256:ba91fe365171658fa1858a64855d5c009629250b0ce6e1e45cd639230d9f2876`（5.21 MB）、
+  应用层 `sha256:031f6d80ca91118cbb9e903e4098e28b97687fcedd9ff078661b74e8526a7cc1`（1.21 MB）。
+  下一轮仅改业务代码时应只重传应用层——**第二轮对比待下一次 Web 更新后按同口径补录**。
+- 镜像未压缩总大小：web 51.3 / api 326.7 / worker 226.1 / runner 132.3 / lightrag 161.0 MB；
+  清单 digest 随部署记录（如 web `sha256:8b68ad47892e2dc3315fa02509e44593506b634b7f6917f26a18c9370487625d`）。
+- 耗时对比：本轮 SSH 部署 ≈ 28m05s，高于 §9.1 基线轮（`e8f0bf3`，SSH 步骤 93 秒），
+  差异即上述一次性大层重传叠加受限带宽；不代表流水线常态回退。
+
+**资源快照（部署完成后空闲态，14:40；主机 2 核 / 1.6 GB）**
+
+- 内存 used 1003 MB / total 1671 MB，available 667 MB；swap：磁盘 `/www/swap` 563 MB、
+  zram 1024 MB 用满；磁盘 17 GB / 40 GB（46%）；load average 1.10。
+- `docker stats --no-stream`：web 1.7 MB、api 15.7 MB、worker 59.8 MB、runner 2.9 MB、
+  postgres 9.2 MB、redis 2.7 MB。
+- 部署期间峰值无法回溯采样（stats 为实时指标）；下一轮部署时应实时采集。
+
+**测量方法与遗留**
+
+- 「本轮重传层」由镜像 `RootFS.Layers`（diff_id）× overlay2 layerdb（cache-id / size）交叉，
+  取 diff 目录 mtime 落在部署窗口内的层；容器起停取 `docker inspect .State.StartedAt`；
+  下载中断证据取 journald `dockerd` 日志。
+- 压缩传输字节与 Actions 侧逐步骤耗时不在服务器落盘（仓库私有，服务器无 Actions API 访问）：
+  需从该轮 Actions「Deploy to server」步骤日志补录；下一轮对比时同步记录 vendor 层 digest。
 
 ## 修改代码文件与作用清单（V1.3，2026-09-12）
 
@@ -230,3 +285,10 @@ Compose 与六个业务 Dockerfile。主链路已有按服务的 GHA 层缓存�
 | `deploy/deploy.sh` | 限制镜像拉取并发，修正与实际行为不符的旧构建说明 |
 | `deploy/tests/test_build_artifacts.py` | 执行真实 Dockerfile 拆分命令，验证资源路径与内容完整、无 vendor 场景 |
 | `.github/workflows/ci.yml` | 持续检查部署 Shell 语法与静态资源分层 |
+
+**V1.4（2026-09-12）— d42a5b46 上线轮生产验收实测**
+
+V1.3 合入后由 GitHub Actions 主链路完成部署（当日 14:18 完成，web/api/worker/runner/lightrag
+更新为 `d42a5b46`）。本版为纯文档修订：§9.3 末尾的「合入后应对比…」待办收口为已采集服务器侧
+首轮实测，新增 §9.4（部署时间线、本轮实际重传层清单、Web vendor/应用层 digest 基线、
+资源快照与测量口径）；第二轮 vendor 层对比与 Actions 侧逐步骤耗时/逐层下载量标记为待补录。
