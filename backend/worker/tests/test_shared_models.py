@@ -4,8 +4,9 @@ worker 的 models.py 必须是 backend/shared/models.py 的 re-export；
 一旦有人误改回独立副本，本测试立刻失败。
 """
 
-from app.models import Base as WorkerBase
 from shared.models import Base as SharedBase
+
+from app.models import Base as WorkerBase
 
 
 def test_worker_models_share_single_source():

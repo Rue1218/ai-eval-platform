@@ -148,7 +148,7 @@ async function onKbChange(kbId: string) {
   if (kbId) {
     try {
       goldQAs.value = await api.kb.getGoldQA(kbId)
-    } catch (err) {
+    } catch {
       goldQAs.value = []
     }
   }

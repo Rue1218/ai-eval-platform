@@ -65,6 +65,7 @@
 
 <script setup lang="ts">
 import { ref, watch } from 'vue'
+import { formatBytes } from '../../utils/format'
 
 const props = defineProps<{
   src: string
@@ -121,18 +122,6 @@ function handleWheel(e: WheelEvent): void {
   } else {
     zoomOut()
   }
-}
-
-function formatBytes(bytes: number): string {
-  if (!bytes) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB']
-  let val = bytes
-  let idx = 0
-  while (val >= 1024 && idx < units.length - 1) {
-    val /= 1024
-    idx++
-  }
-  return `${val.toFixed(val >= 10 || idx === 0 ? 0 : 1)} ${units[idx]}`
 }
 
 function download(): void {

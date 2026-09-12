@@ -41,6 +41,7 @@ from ..schemas import (
     KbQueryOut,
     KbUpdate,
 )
+from ._common import client_ip
 
 logger = logging.getLogger("ai-eval.api.kb")
 
@@ -49,11 +50,6 @@ router = APIRouter(prefix="/api/kb", tags=["kb"])
 MAX_DOC_BYTES = 20 * 1024 * 1024
 MAX_GOLD_QA_ROWS = 10_000
 GOLD_QA_COLUMNS = {"question", "reference", "expected_doc_ids"}
-
-
-def _request_ip(request: FastApiRequest) -> str | None:
-    """提取审计日志的请求来源 IP。"""
-    return request.client.host if request.client else None
 
 
 def _get_kb_or_404(db: Session, kb_id: str) -> KnowledgeBase:
@@ -168,7 +164,7 @@ def create_kb(
             target_type="knowledge_base",
             target_id=kb.id,
             detail={"name": kb.name, "kind": kb.kind},
-            ip=_request_ip(request),
+            ip=client_ip(request),
         )
     )
     db.commit()
@@ -209,7 +205,7 @@ def update_kb(
             target_type="knowledge_base",
             target_id=kb.id,
             detail={"name": kb.name, "fields": sorted(body.model_fields_set)},
-            ip=_request_ip(request),
+            ip=client_ip(request),
         )
     )
     db.commit()
@@ -244,7 +240,7 @@ def delete_kb(
             target_type="knowledge_base",
             target_id=kb.id,
             detail={"name": kb.name},
-            ip=_request_ip(request),
+            ip=client_ip(request),
         )
     )
     db.delete(kb)
@@ -299,7 +295,7 @@ async def upload_doc(
             target_type="kb_document",
             target_id=doc.id,
             detail={"filename": filename, "kb_id": kb_id},
-            ip=_request_ip(request),
+            ip=client_ip(request),
         )
     )
     try:
@@ -395,7 +391,7 @@ def delete_doc(
             target_type="kb_document",
             target_id=doc.id,
             detail={"filename": doc.filename, "kb_id": kb_id},
-            ip=_request_ip(request),
+            ip=client_ip(request),
         )
     )
     db.delete(doc)
@@ -535,7 +531,7 @@ async def upload_gold_qa(
             target_type="gold_qa",
             target_id=qa.id,
             detail={"name": qa_name, "kb_id": kb_id, "version": version, "rows": len(rows)},
-            ip=_request_ip(request),
+            ip=client_ip(request),
         )
     )
     db.commit()

@@ -23,13 +23,13 @@ import pytest
 
 from app.agent import LangGraphAgent
 from app.agent.taor_nodes import make_reflect_node, make_tools_node
-from app.config import settings
 from app.harness.contracts import Observation, PlanArtifact, from_dict
 from app.harness.feedback.review import MAX_REPAIRS, MAX_REPLANS, review
 from app.harness.memory import GraphState, SerializableRequest
 from app.harness.orchestration.budget import DEFAULT_BUDGET
 from app.harness.prompts.protocols import parse_reflect
 from app.llm import ModelResponse
+from tests._helpers import enable_hybrid_engine as _engine_on
 
 
 def _request(text: str) -> SerializableRequest:
@@ -458,10 +458,6 @@ _REACT_DONE = (
 _REFLECT_PASS = (
     '{"verdict":"pass","reason":"可直接给出","protocol":"reflect","version":"reflect.v1"}'
 )
-
-
-def _engine_on(monkeypatch):
-    monkeypatch.setattr(settings, "hybrid_engine_enabled", True)
 
 
 def _collect(agent: LangGraphAgent, request: SerializableRequest, config: dict):

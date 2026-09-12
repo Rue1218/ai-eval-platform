@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from ..client import ProbeClient
 from ..errors import ProbeError
 from ..expect import ExpectMatcher, ProbeAssertion

@@ -207,7 +207,7 @@ function renderInlineMarkdown(str: string): string {
   res = res.replace(/`([^`]+)`/g, '<code class="md-inline-code">$1</code>')
   // 安全超链接 [text](url)（仅允许 http/https 链接，拦截 javascript: 等伪协议）
   res = res.replace(
-    /\[([^\]]+)\]\((https?:\/\/[^\s\)]+)\)/g,
+    /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
     '<a href="$2" target="_blank" rel="noopener noreferrer" class="md-link">$1 <span class="link-arrow">↗</span></a>',
   )
   return res
@@ -416,7 +416,7 @@ function renderMarkdown(raw: string): string {
 
   // 5. 提取并暂存行内数学公式 $formula$
   const inlineMaths: string[] = []
-  text = text.replace(/\$([^\$\n]+?)\$/g, (_, formula) => {
+  text = text.replace(/\$([^$\n]+?)\$/g, (_, formula) => {
     const idx = inlineMaths.length
     inlineMaths.push(formula.trim())
     return inlineMathMarker(idx)
@@ -446,12 +446,12 @@ function renderMarkdown(raw: string): string {
   text = text.replace(/~~(.+?)~~/g, '<del>$1</del>')
   text = text.replace(/`([^`]+)`/g, '<code class="md-inline-code">$1</code>')
   text = text.replace(
-    /\[([^\]]+)\]\((https?:\/\/[^\s\)]+)\)/g,
+    /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
     '<a href="$2" target="_blank" rel="noopener noreferrer" class="md-link">$1 <span class="link-arrow">↗</span></a>',
   )
 
   // 11. 无序列表与有序列表
-  text = text.replace(/^[\*\-\+]\s+(.+)$/gm, '<li class="md-li-bullet">$1</li>')
+  text = text.replace(/^[*\-+]\s+(.+)$/gm, '<li class="md-li-bullet">$1</li>')
   text = text.replace(/^\d+\.\s+(.+)$/gm, '<li class="md-li-num">$1</li>')
 
   // 12. 段落分块与换行处理

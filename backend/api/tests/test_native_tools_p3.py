@@ -11,8 +11,8 @@ import asyncio
 
 from app.agent import LangGraphAgent
 from app.agent.taor_nodes import _fabrication_claim
-from app.config import settings
 from app.harness.memory import SerializableRequest
+from tests._helpers import enable_hybrid_engine as _engine_on
 
 _PLAN_OK = (
     '{"intent":"排查并定位测试报告失败原因","skill_id":null,'
@@ -141,10 +141,6 @@ def test_claim_empty_text_skipped() -> None:
 
 
 # ─── 2. reflect L1.5 图级：修复一次 → 复现 reject + fabrication 事件 ───
-
-
-def _engine_on(monkeypatch):
-    monkeypatch.setattr(settings, "hybrid_engine_enabled", True)
 
 
 def test_fabrication_repair_then_reject_with_audit(monkeypatch) -> None:

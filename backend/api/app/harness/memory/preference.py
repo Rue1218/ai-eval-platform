@@ -8,9 +8,9 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 from sqlalchemy.orm import Session
+
+from ...time_utils import iso_utc
 
 # API.md §3.4 允许写出的字段；其它键一律丢弃。
 _PREF_KEYS = (
@@ -26,14 +26,6 @@ _PREF_KEYS = (
 def _prefs_key(user_id: str) -> str:
     """偏好存储键（settings 表）。"""
     return f"agent_prefs:{user_id}"
-
-
-def _iso(value: datetime | None) -> str | None:
-    """把数据库时间转为前端可解析的 UTC ISO 字符串。"""
-    if value is None:
-        return None
-    current = value if value.tzinfo else value.replace(tzinfo=UTC)
-    return current.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
 def empty_prefs() -> dict:
@@ -113,5 +105,5 @@ def public_prefs(db: Session, user_id: str) -> dict:
         payload[key] = value if isinstance(value, str) and value else None
     if "last_with_stress" in raw:
         payload["last_with_stress"] = bool(raw.get("last_with_stress"))
-    payload["updated_at"] = _iso(row.updated_at)
+    payload["updated_at"] = iso_utc(row.updated_at) if row.updated_at else None
     return payload

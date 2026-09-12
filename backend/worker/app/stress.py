@@ -10,20 +10,19 @@ import json
 import logging
 import os
 import time
-from datetime import UTC, datetime
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
+from shared.model_urls import model_request_url
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from .db import SessionLocal
 from .events import push_ws
-from .models import ProtocolProfile, Report, Setting, Task, TaskEvent
+from .models import ProtocolProfile, Report, Setting, Task, TaskEvent, utcnow
 from .profile_env import profile_connection, read_profile_env
-from shared.model_urls import model_request_url
 from .task_state import claim_running_task_for_terminal_write, is_cancelled
 
 logger = logging.getLogger("worker.stress")
@@ -32,10 +31,6 @@ DEFAULT_STRESS_URL = "http://stress:19090"
 DEFAULT_MAX_QPS = 500
 DEFAULT_MAX_DURATION_S = 1800
 POLL_INTERVAL_S = 1.0
-
-
-def _now() -> datetime:
-    return datetime.now(UTC)
 
 
 def _stress_base() -> str:
@@ -274,7 +269,7 @@ def _fail(db: Session, task_id: str, code: str, message: str) -> None:
         logger.info("stress task %s skipped failure because it is no longer running", task_id)
         return
     task.status = "failed"
-    task.finished_at = _now()
+    task.finished_at = utcnow()
     db.add(
         TaskEvent(
             task_id=task.id,
@@ -394,7 +389,7 @@ def run_stress(task_id: str) -> None:
         metrics = metrics_from_status(last_status, sla_p99_ms=sla_i)
         report = _upsert_report(db, task, metrics)
         task.status = "succeeded"
-        task.finished_at = _now()
+        task.finished_at = utcnow()
         task.report_id = report.id
         task.result = {"kind": "stress", "qps": metrics.get("qps"), "error_rate": metrics.get("error_rate")}
         db.add(TaskEvent(task_id=task.id, event="finish", payload={"status": "succeeded"}))

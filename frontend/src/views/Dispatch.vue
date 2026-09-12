@@ -1215,10 +1215,6 @@ function flashTask(tid: string) {
   flashTimer = window.setTimeout(() => { flashTaskId.value = '' }, 1600)
 }
 
-function goTasks() {
-  router.push('/tasks')
-}
-
 /** 前往任务中心并自动打开指定任务详情抽屉 */
 function goToTaskDetail(taskId?: string) {
   if (taskId) {
