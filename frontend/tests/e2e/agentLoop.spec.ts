@@ -120,6 +120,36 @@ test('工作台初始化不再预加载旧栈偏好、模型和确认卡选项',
   expect(ctx.requests).toContain('/api/sessions/s/agent-ui')
 })
 
+for (const reason of ['completed', 'max_steps']) test(`任务规划更新后不产生助手占位，${reason} 收尾允许继续发送`, async ({page}) => {
+  const ctx = await setup(page)
+  await expect.poll(() => ctx.sockets.has('s')).toBe(true)
+  let cursor = 0
+  const correlation = {turn:1,turn_id:'s:1',step:16,attempt_id:'final-step',call_id:'plan-update'}
+  // 复现最后一步更新任务清单后结束；不调用供应商，也不额外生成总结。
+  const send = (type: string, data: Record<string, unknown> = {}) => ctx.sockets.get('s').send(JSON.stringify({
+    protocol_version:2,type,durability:'persistent',cursor:++cursor,session_id:'s',
+    ts:'2026-09-12T00:00:00Z',correlation,data,
+  }))
+  send('turn.start')
+  send('assistant.start')
+  send('assistant.message', {content:'文件内容完整，更新任务清单为完成状态',tool_calls:[{id:'plan-update',name:'task'}]})
+  send('assistant.end', {outcome:'committed'})
+  send('tool.call', {name:'task'})
+  send('tool.result', {name:'task',status:'succeeded'})
+  send('task_plan.updated', {plan:{goal:'完成成都家庭游计划',description:'完成成都家庭游计划',
+    steps:Array.from({length:5}, (_, index) => ({title:`完成第 ${index + 1} 项`,status:'completed'})),
+    counts:{pending:0,in_progress:0,completed:5}}})
+  await expect(page.getByText('完成成都家庭游计划', {exact:true})).toBeVisible()
+  await expect(page.getByText('5/5', {exact:true})).toBeVisible()
+  await expect(page.getByText('正在响应…', {exact:true})).toHaveCount(0)
+  await expect(page.locator('.loop-message.assistant')).toHaveCount(1)
+  send('turn.end', {reason})
+  if (reason === 'max_steps') await expect(page.locator('.loop-conversation > .loop-notice')).toContainText('达到步骤上限')
+  await page.getByRole('textbox', {name:'消息'}).fill('继续')
+  await expect(page.getByRole('button', {name:'发送',exact:true})).toBeEnabled()
+  await expect(page.getByText('正在响应…', {exact:true})).toHaveCount(0)
+})
+
 test('重复聚焦合并能力请求，刷新期间可发送，切会话拒绝旧响应', async ({page}) => {
   await page.clock.install()
   await setup(page)

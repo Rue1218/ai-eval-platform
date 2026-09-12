@@ -45,7 +45,8 @@
               <p class="turn-segment-label process">执行过程 · 工具调用</p>
               <ToolRunCard :tool="row as ToolRun" :interactions="interactions(row)" :can-control="canControl" :online="!!state?.ready" @respond="respond"/>
             </section>
-            <article v-else class="loop-message assistant" :class="{ 'is-continuation': !isFirstAssistantInTurn(row), 'is-process': isProcessAssistantRow(row), 'is-turn-summary': isSummaryAssistantRow(row) }">
+            <!-- task 工具由任务规划看板展示，不能落入助手分支生成虚假的响应占位。 -->
+            <article v-else-if="!('status' in row && 'name' in row)" class="loop-message assistant" :class="{ 'is-continuation': !isFirstAssistantInTurn(row), 'is-process': isProcessAssistantRow(row), 'is-turn-summary': isSummaryAssistantRow(row) }">
               <header v-if="isFirstAssistantInTurn(row) || isSummaryAssistantRow(row) || isProcessAssistantRow(row)" class="assistant-header">
                 <div class="assistant-identity">
                   <template v-if="isFirstAssistantInTurn(row)">

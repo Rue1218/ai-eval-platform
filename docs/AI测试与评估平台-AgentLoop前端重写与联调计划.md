@@ -1,6 +1,6 @@
 # AI 测试与评估平台 — AgentLoop 前端重写与联调计划
 
-> 版本：V0.11 ｜ 审查日期：2026-09-09 ｜ 状态：轨迹页已补齐参考实现的四类筛选、请求/回复语义拆分与按记录类型变化的详情字段；HTTP WebSocket 请求标识兼容及两类协议收敛保持不变；服务器联调及完整切换验收进行中。
+> 版本：V0.12 ｜ 审查日期：2026-09-12 ｜ 状态：修复任务规划工具误入助手分支的响应占位，补充步骤上限后的继续处理提示；轨迹页和 HTTP WebSocket 兼容行为延续，新增修复进入 PR 发布流程，发布状态以关联 PR/Actions 为准。
 >
 > 基线：`deepseek-harness-py/static/index.html` 当前页面 + `ai-eval-platform/frontend/src/views/Agent.vue` 当前实现 + 已落地后端 WS v2。后端设计见 [架构设计](AI测试与评估平台-AgentLoop后端架构设计.md)，已验证范围见 [实施记录](AI测试与评估平台-AgentLoop后端实施记录.md)。
 >
@@ -634,3 +634,20 @@ AgentLoop 与协议档管理只保留 `openai_chat` 和 `anthropic_messages`。�
 | `frontend/tests/e2e/agentLoop.spec.ts` | 更新轨迹筛选、记录数量和动态详情字段的浏览器断言。 |
 | `frontend/tests/agent-loop-style-preview.html` | 增加请求摘要、用量、耗时、工具 Schema 和授权状态的隔离预览数据。 |
 | 本文件、`design-qa.md` | 登记问题定位、修复范围与浏览器视觉复核证据。 |
+
+## 21. V0.12 任务规划工具与回合结束显示修复（2026-09-12）
+
+截图中第 16 步完成任务清单更新后，出现“达到步骤上限，本轮已结束”，同时残留“正在响应…”。原因是 `task` 工具被普通工具卡分支排除后落入助手消息的兜底分支；工具记录没有助手的 `ended` 字段，因此生成错误占位。这与后端是否仍在运行无关，正常结束回合也能复现。
+
+助手分支现在排除所有工具记录，任务规划仍由 `task_plan.updated` 驱动看板，工具原始事件继续保留于状态和轨迹中。`turn.end` 继续作为回合唯一终态；步骤上限提示增加可发送“继续”的操作说明，不自动发送、不额外调用模型、不增加默认 16 步预算，也不把任务清单 5/5 当作完整交付证明。
+
+验证：新增正常结束与步数耗尽两项页面用例先在旧代码复现错误占位，修复后通过；完整页面协议夹具回归 **19 passed**、前端单测 **77 passed**，ESLint、typecheck/build 与差异检查通过。构建仍有原有 vendor 大包提示。本次仅修改前端，合入与部署状态以关联 PR/Actions 为准。
+
+### 21.1 修改代码文件与作用清单
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `frontend/src/components/agent/loop/AgentWorkspace.vue` | 阻止隐藏的任务规划工具生成助手消息及响应占位。 |
+| `frontend/src/agent/loop/workspaceDerived.ts` | 步数耗尽提示说明如何继续处理。 |
+| `frontend/tests/e2e/agentLoop.spec.ts` | 正常结束与 max_steps 两种协议夹具先复现失败，修复后验证 5/5 看板、无伪助手占位和终态后发送可用。 |
+| 本文件 | 登记根因、修复边界与验证结果。 |
