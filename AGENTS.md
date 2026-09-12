@@ -204,23 +204,26 @@ main（保护，仅 PR 合入）
 ## 4. 自动部署与 CI/CD (CI/CD & DevOps)
 
 ```text
-功能分支 Push ──► GitHub Actions CI（Ruff + Pytest；不部署）
-合并 PR 到 main ──► GitHub Actions CI
-                         │ (通过)
+功能分支 Push ──► GitHub Actions CI（Ruff + Pytest + 部署脚本校验；不部署）
+合并 PR 到 main ──► GitHub Actions Deploy
+                         │ Plan：对比上次成功部署提交，计算需要重建的服务
+                         │ Build：GitHub Runner 构建镜像并推送 GHCR（ghcr.io/rue1218/ai-eval-platform-<服务>:<提交>）
                          ▼
-                    GitHub Actions CD (SSH) ──► 服务器 /opt/ai-eval-platform
-                                                    │
-                                                    ▼
-                                            deploy.sh: git reset --hard && docker compose build & up -d
+                    CD（SSH 以 root 登录）──► 服务器 /opt/ai-eval-platform
+                         │ 从目标提交提取 deploy/deploy.sh 执行（入口与提交严格同版本）
+                         ▼
+                    deploy.sh：reset 到精确提交 → 仅拉取变化服务镜像（并发上限 DEPLOY_PULL_PARALLEL=2）→ 滚动替换
 ```
 
 **生产只跟 `main`。** 功能分支、个人 fork、未合并 PR 不得触发对 `47.119.132.83` 的 CD。
 
+镜像默认在 GitHub Runner 上构建并推送 GHCR，服务器只拉取；仅回退路径（手动执行 `deploy/deploy.sh` 或备用巡检 `mode=local`）会在服务器本地逐服务串行 `docker compose build`（web 受 `NODE_BUILD_MEMORY` 限制，默认 1536）。纯文档变更（`docs/**`、`*.md` 等）不触发部署。
+
 ### 4.1 Secrets 配置清单
 - `SSH_HOST`：`47.119.132.83`（纯 IP，严禁带 `http://`）
 - `SSH_PORT`：`22`（**必须是 22**，切勿误填 Web 的 80/8000）
-- `SSH_USER`：`deploy`
-- `SSH_PRIVATE_KEY`：服务器 `/home/deploy/.ssh/id_ed25519` 的完整私钥（含首尾标记）
+- `SSH_USER`：`root`（服务器无 `deploy` 用户，仓库/密钥/部署均以 root 运行）
+- `SSH_PRIVATE_KEY`：服务器 root 的完整私钥（`/root/.ssh/id_ed25519`，含首尾标记）
 
 ### 4.2 部署与构建失败排查 SOP
 1. **CI 失败**：本地进入 `backend/api/` 执行 `ruff check --fix .` 与 `pytest`；进入 `frontend/` 执行 `npm run build`。
@@ -228,16 +231,26 @@ main（保护，仅 PR 合入）
 3. **Docker 容器残留 (`No such container`)**：`deploy.sh` 会自动调用 `docker rm -f` 强力清理并自愈拉起。手动修复命令：
    ```bash
    docker rm -f $(docker ps -a -q --filter "name=ai-eval-platform") 2>/dev/null || true
-   sudo -u deploy bash /opt/ai-eval-platform/deploy/deploy.sh
+   bash /opt/ai-eval-platform/deploy/deploy.sh
    ```
+   （手动执行不带 CI 环境变量，走服务器本地构建回退路径，耗时较长。）
 4. **容器状态异常 / 端口占用**：在服务器执行 `netstat -tlpn | grep -E '80|8000|5432'` 排查端口占用；执行 `docker compose logs -n 100 api` 查看日志。
 5. **git `HEAD.lock` / `update_ref failed`**：被取消的旧 CD 可能留下 `/opt/ai-eval-platform/.git/HEAD.lock`。确认没有正在跑的 `git`/`deploy.sh` 后删除锁文件并重跑 Deploy：
    ```bash
    rm -f /opt/ai-eval-platform/.git/HEAD.lock /opt/ai-eval-platform/.git/index.lock
-   sudo -u deploy bash /opt/ai-eval-platform/deploy/deploy.sh
+   bash /opt/ai-eval-platform/deploy/deploy.sh
    ```
    `deploy.sh` 在拿到部署互斥锁后会自动清理过期 `*.lock`。
-6. **紧急回滚**：本地 `git revert HEAD && git push origin main`，或在服务器执行 `git reset --hard <commit_id> && bash deploy/deploy.sh`。
+6. **紧急回滚**：本地 `git revert HEAD && git push origin main`（CI 重建并部署回滚后的镜像）；或在服务器 `/opt/ai-eval-platform` 执行 `git reset --hard <commit_id> && bash deploy/deploy.sh`（走本地构建路径；`reset --hard` 会丢弃工作区未提交改动，执行前确认无人在改）。
+
+### 4.3 服务器侧备用巡检（GitHub Actions 不可用时的回退链路）
+
+服务器 root crontab 每 5 分钟执行 `deploy/auto-deploy-watch.sh`，巡检 `origin/main` 是否有未部署提交；行为由未跟踪文件 `/opt/ai-eval-platform/.deploy-mode` 控制：
+
+- `actions`（默认）：只记录「待部署」日志，由 GitHub Actions 主链路完成部署，避免双链路重复部署；
+- `local`（回退）：发现新提交即在服务器本地构建并部署，不依赖 Actions。切换：`echo local > /opt/ai-eval-platform/.deploy-mode`；恢复主链路：`echo actions > /opt/ai-eval-platform/.deploy-mode`。
+
+巡检/部署日志在 `/opt/ai-eval-platform/logs/auto-deploy.log`（cron 标准输出重定向在 `logs/auto-deploy-cron.log`）。备用巡检与 Actions 共用 `.deploy.lock` 部署互斥锁，不会并发部署；需要手动立即部署一次时执行 `bash /opt/ai-eval-platform/deploy/auto-deploy-watch.sh --force`。
 
 ---
 
