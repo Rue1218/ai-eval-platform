@@ -1022,6 +1022,7 @@ def _register_media_mcp_tools(registry: ToolRegistry) -> None:
             "image_urls": {"type": "array", "items": {"type": "string"}},
             # 平台归档产物：api 侧下载进会话工作区的相对路径（原生 MCP 返回中无此字段）。
             "workspace_images": {"type": "array", "items": {"type": "string"}},
+            "workspace_videos": {"type": "array", "items": {"type": "string"}},
             "upstream_task_id": {"type": ["string", "null"]},
             "video_url": {"type": ["string", "null"]},
             "code": {"type": ["string", "null"]},
@@ -1109,7 +1110,10 @@ def _register_media_mcp_tools(registry: ToolRegistry) -> None:
     registry.register(
         ToolDef(
             name="video.status",
-            description="查询 HappyHorse 图生视频异步任务状态；成功时返回临时视频地址。",
+            description=(
+                "查询 HappyHorse 图生视频异步任务状态；成功时返回临时视频地址。"
+                "成功的视频自动归档到会话工作区，workspace_videos 返回工作区相对路径。"
+            ),
             parameters_schema={
                 "type": "object",
                 "additionalProperties": False,

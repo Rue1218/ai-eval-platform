@@ -20,7 +20,7 @@ from app.harness.contracts import ToolDescriptor, ToolResult
 from ..context import ToolExecutionContext
 from ..registry import ToolDef, ToolRegistry
 from .catalog import ToolCatalog
-from .media_archive import archive_media_images
+from .media_archive import archive_media_results
 from .metrics import ToolMetrics, get_default_metrics
 from .provider import InProcessProvider
 from .streamable_provider import StreamableHttpProvider
@@ -184,10 +184,10 @@ class MCPClientManager:
             self._call_tasks.pop(key, None)
         if not result.call_id:
             result = replace(result, call_id=context.call_id)
-        # 媒体图片在 api 侧归档进会话工作区（失败不改写原结果），使模型与
-        # 后续工具能在无出网沙箱内使用图片文件本体。
+        # 媒体产物（图片/视频）在 api 侧归档进会话工作区（失败不改写原结果），
+        # 使模型与后续工具能在无出网沙箱内使用文件本体。
         if result.ok and descriptor.server_id in _ARCHIVED_SERVER_IDS:
-            result = await archive_media_images(result, context.sandbox_dir)
+            result = await archive_media_results(result, context.sandbox_dir)
         latency_ms = round((time.perf_counter() - started) * 1000)
         if result.ok:
             self._metrics.record_call(tool_id, descriptor.server_id, ok=True, timeout=timed_out, latency_ms=latency_ms)
