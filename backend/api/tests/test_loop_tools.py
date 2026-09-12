@@ -84,6 +84,53 @@ def bridge_for(tmp_path, *, registry=None, names=("read", "write", "edit"), auth
                               context_factory=context, authorize=authorize or (lambda *args: None), **kwargs)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["description", "prompt", "goal"])
+async def test_native_task_aliases_keep_execution_and_snapshot_consistent(tmp_path, field):
+    """旧目标超过摘要长度时，执行、事实快照与回放校验仍得到同一份计划。"""
+    from app.harness.execution.dispatch import build_task_plan
+
+    goal = "检查任务工具的参数兼容、实际执行、持久化快照与断线回放是否完全一致"
+    steps = [{"title": "检查参数兼容", "status": "in_progress"}]
+    arguments = {field: goal, "steps": steps}
+    bridge = bridge_for(tmp_path, names=("task",))
+    messages, log = await run(ToolScheduler(settings(), bridge.available_tools()), [call("task", **arguments)])
+
+    assert results(log)[0]["status"] == "succeeded"
+    assert not messages[0].get("is_error")
+    expected_goal = goal if field == "description" else goal[:24] + "…"
+    assert expected_goal in messages[0]["content"]
+    raw_call = next(e["data"] for e in log.events if e["type"] == "tool/call")
+    dispatch = next(e["data"] for e in log.events if e["type"] == "tool/dispatch")
+    snapshot = next(e["data"]["plan"] for e in log.events if e["type"] == "task_plan/updated")
+    assert raw_call["args"] == arguments
+    assert dispatch["normalized_args"] == {"description": expected_goal, "prompt": goal, "steps": steps}
+    assert snapshot == {"goal": expected_goal, "description": expected_goal, "steps": steps,
+                        "counts": {"pending": 0, "in_progress": 1, "completed": 0}}
+    assert build_task_plan(raw_call["args"]).to_snapshot() == snapshot
+    assert build_task_plan(dispatch["normalized_args"]).to_snapshot() == snapshot
+
+    # 经过 handler 拒绝的重复步骤只能结算失败，不能写入下一份规划快照。
+    await run(ToolScheduler(settings(), bridge.available_tools()), [call(
+        "task", "bad-plan", **{field: "不能覆盖的计划", "steps": steps + steps},
+    )], log)
+    assert results(log)[-1]["status"] == "failed"
+    assert [e["data"]["plan"] for e in log.events if e["type"] == "task_plan/updated"] == [snapshot]
+
+
+@pytest.mark.parametrize("invalid", [
+    {"description": 123}, {"prompt": 123}, {"goal": 123},
+    {"description": None}, {"prompt": []}, {"goal": {}},
+    {"description": "x" * 81}, {"prompt": "x" * 2001},
+    {"description": "检查", "unknown": True},
+    {"prompt": "检查", "run_in_background": True},
+])
+def test_native_task_aliases_do_not_weaken_validation(tmp_path, invalid):
+    """兼容字段名不放宽类型、长度、未知字段及后台执行门禁。"""
+    tool = bridge_for(tmp_path, names=("task",)).tools[0]
+    assert tool.argument_error({**invalid, "steps": [{"title": "检查", "status": "pending"}]})
+
+
 def test_task_tools_share_registry_schema_and_publish_safe_wire_names(tmp_path):
     """任务工具只从注册表投影 Schema，模型侧继续使用无点号的安全 wire 名。"""
     from jsonschema import Draft202012Validator

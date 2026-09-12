@@ -26,7 +26,7 @@ from uuid import NAMESPACE_URL, uuid5
 from app.errors import AppError, ErrorCode
 from app.harness.contracts import ToolCall
 
-from .aliases import bash_timeout_seconds, enforce_tool_argument_policy
+from .aliases import bash_timeout_seconds, enforce_tool_argument_policy, normalize_tool_arguments
 from .context import ToolExecutionContext
 from .dispatch import execute_raw
 from .loop_tools import ToolExecutionResult, normalize_tool_output, tool_spec
@@ -200,6 +200,9 @@ class PlatformLoopTool:
     def normalize_arguments(self, args: Mapping[str, Any]) -> dict[str, Any]:
         """拒绝冲突别名；源行号仅在显式旧契约下转换一次。"""
         normalized = deepcopy(dict(args))
+        if self.definition.name == "task":
+            # 原生规划沿用旧 prompt/goal 兼容规则；其他工具仍按 v2 冲突规则处理。
+            normalized = normalize_tool_arguments("task", normalized, self.schema)
         for old, new in _ALIASES.get(self.definition.name, ()):
             if old in normalized:
                 if new in normalized and normalized[old] != normalized[new]:

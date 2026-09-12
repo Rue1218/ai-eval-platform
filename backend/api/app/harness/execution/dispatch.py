@@ -34,6 +34,7 @@ from app.harness.execution.sandbox import SandboxLimits, run_sandboxed
 from app.harness.feedback.observation import normalize
 from app.harness.security.secrets import redact_for_log
 
+from .aliases import normalize_tool_arguments
 from .dispatch_common import (  # noqa: F401  （对外兼容导出，共享底层见 dispatch_common）
     ToolOutputCallback,
     ToolProgressCallback,
@@ -934,6 +935,8 @@ class TaskPlanResult:
 
 def build_task_plan(arguments: Mapping[str, object]) -> TaskPlanResult:
     """构造会话内任务清单；整表参数不对应 ``Task`` ORM 行或 Worker 队列。"""
+    # 执行入口和持久化校验均使用同一份归一结果，避免旧目标的摘要与快照分歧。
+    arguments = normalize_tool_arguments("task", arguments)
     description = str(arguments.get("description") or "").strip()
     goal = description or str(arguments.get("prompt") or arguments.get("goal") or "").strip()
     raw_steps = arguments.get("steps")
