@@ -11,6 +11,11 @@ def _qwen_budget_model(model: str) -> bool:
     return re.fullmatch(r"qwen3\.[68]-flash(?:-\d{4}-\d{2}-\d{2})?", model) is not None
 
 
+def _qwen_budget_inside_max_tokens(model: str) -> bool:
+    """3.8 Flash 起端点把 max_tokens 当总输出上限，思考预算必须小于它，不能再从预留中扣除。"""
+    return re.fullmatch(r"qwen3\.8-flash(?:-\d{4}-\d{2}-\d{2})?", model) is not None
+
+
 def resolve_options(request: LlmRequest, provider: str, protocol: str) -> dict:
     """保留平台已知思考能力；不支持的显式组合在发请求前拒绝。"""
     validate_request(request, protocol)
@@ -158,8 +163,9 @@ def request_options(request: LlmRequest, provider: str, protocol: str) -> dict:
     if protocol == "anthropic_messages":
         if "thinking" in resolved:
             result["thinking"] = resolved["thinking"]
-            if _qwen_budget_model(request.model.lower()) and "budget_tokens" in resolved["thinking"]:
-                # 此型号的 max_tokens 仅约束正文；保持平台总输出预留不被思考额外突破。
+            if (_qwen_budget_model(request.model.lower()) and "budget_tokens" in resolved["thinking"]
+                    and not _qwen_budget_inside_max_tokens(request.model.lower())):
+                # 3.6 的 max_tokens 仅约束正文；保持平台总输出预留不被思考额外突破。
                 result["max_tokens"] -= resolved["thinking"]["budget_tokens"]
         if "output_config" in resolved:
             result["extra_body"] = {"output_config": resolved["output_config"]}

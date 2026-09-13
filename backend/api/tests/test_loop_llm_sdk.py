@@ -21,7 +21,7 @@ PROTOCOLS = [
 ]
 
 
-@pytest.mark.parametrize("model", ["deepseek-v4-flash-0731", "qwen3.6-flash"])
+@pytest.mark.parametrize("model", ["deepseek-v4-flash-0731", "qwen3.6-flash", "qwen3.8-flash"])
 @pytest.mark.parametrize("effort", ["off", "high", "max"])
 def test_compatible_messages_sdk_loop_and_next_turn(monkeypatch, model, effort):
     """真实 SDK 和七节点图验证空签名、工具回填、最终回复及下一轮历史。"""
@@ -61,7 +61,12 @@ def test_compatible_messages_sdk_loop_and_next_turn(monkeypatch, model, effort):
                 ratio = 0.6 if expected_effort == "high" else 0.8
                 budget = round(config.max_tokens * ratio)
                 assert payload["thinking"]["budget_tokens"] == budget
-                assert payload["max_tokens"] + budget == config.max_tokens
+                if model.startswith("qwen3.8"):
+                    # 3.8 起 max_tokens 是总输出上限，思考预算必须小于它，不能额外扣除。
+                    assert payload["max_tokens"] == config.max_tokens
+                    assert budget < payload["max_tokens"]
+                else:
+                    assert payload["max_tokens"] + budget == config.max_tokens
         if len(requests) == 1:
             wire = b"".join(sse(event, named=True) for event in anthropic_events(signature=False))
         else:

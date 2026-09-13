@@ -81,7 +81,12 @@ def test_supplier_efforts_reach_real_sdk_body(monkeypatch, provider, url, model,
         if sdk == "anthropic":
             assert body["thinking"]["type"] == ("enabled" if enabled else "disabled")
             if enabled:
-                assert body["max_tokens"] + body["thinking"]["budget_tokens"] == 8192
+                if model.startswith("qwen3.8"):
+                    # 3.8 起 max_tokens 是总输出上限，思考预算必须小于它，不能额外扣除。
+                    assert body["max_tokens"] == 8192
+                    assert body["thinking"]["budget_tokens"] < body["max_tokens"]
+                else:
+                    assert body["max_tokens"] + body["thinking"]["budget_tokens"] == 8192
         else:
             assert body["enable_thinking"] == enabled
             assert ("thinking_budget" in body) == enabled
@@ -136,6 +141,22 @@ def test_bailian_hosted_models_use_model_specific_thinking(protocol, model):
     assert request.provider == "qwen"
     assert request.provider_options["thinking"]["type"] == "enabled"
     assert "enable_thinking" not in request.provider_options
+
+
+@pytest.mark.parametrize("effort,ratio", [("low", 0.2), ("medium", 0.4), ("high", 0.6), ("max", 0.8)])
+def test_qwen38_budget_stays_below_total_output_limit(effort, ratio):
+    """3.8 端点的 max_tokens 是总输出上限，思考预算必须小于它，不能因扣除预算触发 400。"""
+    from app.llm.providers.options import request_options
+
+    request = resolve_request(ModelConfig(
+        "anthropic_messages", "https://unit.invalid/apps/anthropic", "qwen3.8-flash",
+        api_key="unit-test-only", max_tokens=25600,
+        reasoning_enabled=True, reasoning_effort=effort,
+    ), messages=[])
+    body = request_options(request, request.provider, "anthropic_messages")
+    assert body["max_tokens"] == 25600
+    assert body["thinking"]["budget_tokens"] == round(25600 * ratio)
+    assert body["max_tokens"] > body["thinking"]["budget_tokens"]
 
 
 def test_minimax_reasoning_details_survive_real_sdk_replay(monkeypatch):
