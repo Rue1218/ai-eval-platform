@@ -141,6 +141,20 @@ def test_assistant_attempt_latency_is_projected_without_estimating_old_records()
     assert all("latency_ms" not in item["data"] for item in legacy)
 
 
+def test_failed_attempt_projects_safe_error_message_and_platform_code():
+    """失败 Attempt 公开固定摘要和平台码，绝不投影上游错误正文。"""
+    projected = project_fact(fact(
+        "assistant/attempt",
+        error="模型服务额度已用尽，请为当前协议档充值或切换可用模型后重试",
+        error_code="BUDGET_EXCEEDED",
+        raw={"message": "Authorization: super-secret"},
+    ))[0]
+    assert projected["type"] == "assistant.end"
+    assert projected["data"]["error_code"] == "BUDGET_EXCEEDED"
+    assert "额度已用尽" in projected["data"]["error_message"]
+    assert "super-secret" not in json.dumps(projected)
+
+
 @pytest.mark.parametrize("status", [
     "succeeded", "failed", "denied", "cancelled", "not_started", "outcome_unknown",
 ])

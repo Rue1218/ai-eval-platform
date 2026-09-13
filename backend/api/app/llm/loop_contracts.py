@@ -2,7 +2,7 @@
 
 import hashlib
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, Protocol
@@ -21,9 +21,18 @@ class MissingApiKeyError(RuntimeError):
 class LlmRequestError(RuntimeError):
     """供循环确定重试策略的内部错误，不携带上游原文。"""
 
-    def __init__(self, message: str, *, code: str, retryable: bool = False):
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str,
+        retryable: bool = False,
+        public_code: str | None = None,
+    ):
         super().__init__(message)
         self.code = code
+        # 浏览器只消费平台标准码，内部分类码仅用于重试与诊断。
+        self.public_code = public_code or _public_error_code(code)
         self.retryable = retryable
         self.status_code: int | None = None
 
@@ -46,23 +55,91 @@ def is_retryable_error(error: BaseException) -> bool:
     return isinstance(error, TimeoutError | ConnectionError | OSError)
 
 
+def _public_error_code(code: str) -> str:
+    """把模型内部分类压缩为既有平台错误码，避免浏览器依赖供应商细节。"""
+    if code in {"model_config", "history_selection", "unsupported_reasoning_effort", "protocol_state_incompatible"}:
+        return "VALIDATION"
+    return "UPSTREAM"
+
+
+def _provider_error_terms(error: Exception) -> str:
+    """从 SDK 的结构化错误字段提取分类词，绝不把字段内容返回给调用方。"""
+    values: list[str] = []
+    direct_code = getattr(error, "code", None)
+    if isinstance(direct_code, str):
+        values.append(direct_code)
+    body = getattr(error, "body", None)
+    if isinstance(body, Mapping):
+        candidates = [body]
+        nested = body.get("error")
+        if isinstance(nested, Mapping):
+            candidates.append(nested)
+        for candidate in candidates:
+            for key in ("code", "type", "error_code"):
+                value = candidate.get(key)
+                if isinstance(value, str):
+                    values.append(value)
+    return "".join(character for value in values for character in value.casefold() if character.isalnum())
+
+
 def classify_provider_error(error: Exception) -> LlmRequestError:
-    """归一 SDK 错误；只保留结构化状态码，避免凭据进入事实。"""
+    """归一 SDK 错误为可行动的安全摘要，避免凭据与上游原文进入事实。"""
     if isinstance(error, LlmRequestError):
         return error
     status = getattr(error, "status_code", None)
-    retryable = (
-        isinstance(error, TimeoutError | ConnectionError | OSError)
-        or type(error).__name__ in {"APIConnectionError", "APITimeoutError"}
-        or status == 429
-        or isinstance(status, int)
-        and status >= 500
-    )
-    result = LlmRequestError(
-        "模型连接失败" if retryable else "模型请求失败",
-        code="provider_transport" if retryable else "provider_request",
-        retryable=retryable,
-    )
+    status = status if isinstance(status, int) and not isinstance(status, bool) else None
+    terms = _provider_error_terms(error)
+    # 顺序固定：额度耗尽常以 429 返回，必须先于通用限流识别。
+    if any(marker in terms for marker in (
+        "insufficientquota", "quotaexceeded", "quotaexhausted", "insufficientbalance",
+        "balanceinsufficient", "insufficientfunds", "creditbalance", "arrearage",
+    )):
+        result = LlmRequestError(
+            "模型服务额度已用尽，请为当前协议档充值或切换可用模型后重试",
+            code="provider_quota", public_code="BUDGET_EXCEEDED",
+        )
+    elif any(marker in terms for marker in (
+        "contextlengthexceeded", "maximumcontextlength", "maxcontextlength", "inputtoolong",
+        "requesttoolarge", "toomanytokens", "tokenlimitexceeded",
+    )):
+        result = LlmRequestError(
+            "本轮输入超出模型上下文限制，请缩短消息或减少附件后重试",
+            code="provider_context", public_code="VALIDATION",
+        )
+    elif status in {401, 403} or any(marker in terms for marker in (
+        "invalidapikey", "authenticationerror", "authenticationfailed", "permissiondenied", "accessdenied",
+    )):
+        result = LlmRequestError(
+            "模型服务认证失败，请检查当前协议档的 API Key、地址和访问权限",
+            code="provider_auth",
+        )
+    elif status == 404 or any(marker in terms for marker in (
+        "modelnotfound", "modelnotexist", "modeldoesnotexist", "unsupportedmodel", "modelnotsupported",
+    )):
+        result = LlmRequestError(
+            "当前模型不可用，请检查模型 ID、区域和账号权限",
+            code="provider_model",
+        )
+    elif status == 429:
+        result = LlmRequestError(
+            "模型服务请求过于频繁，请稍后重试或降低并发",
+            code="provider_rate_limit", retryable=True,
+        )
+    elif status is not None and status >= 500:
+        result = LlmRequestError(
+            "模型服务暂时不可用，请稍后重试",
+            code="provider_unavailable", retryable=True,
+        )
+    elif isinstance(error, TimeoutError | ConnectionError | OSError) or type(error).__name__ in {"APIConnectionError", "APITimeoutError"}:
+        result = LlmRequestError(
+            "模型服务连接失败，请稍后重试",
+            code="provider_transport", retryable=True,
+        )
+    else:
+        result = LlmRequestError(
+            "模型服务拒绝了本次请求，请检查协议档配置后重试",
+            code="provider_request",
+        )
     result.status_code = status if isinstance(status, int) else None
     return result
 

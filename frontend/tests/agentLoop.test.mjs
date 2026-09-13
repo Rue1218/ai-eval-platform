@@ -92,6 +92,19 @@ test('模型开始帧迟于文本或思考增量到达时，不倒退显示状�
   }
 })
 
+test('失败模型调用保留平台错误码与安全中文摘要', () => {
+  const state = createLoopState('s'), f = fixture(), c = { attempt_id: 'a' }
+  applyFrame(state, f('turn.start'))
+  applyFrame(state, f('assistant.end', {
+    outcome: 'failed', error_code: 'BUDGET_EXCEEDED',
+    error_message: '模型服务额度已用尽，请为当前协议档充值或切换可用模型后重试',
+  }, c))
+  const attempt = Object.values(state.attempts)[0]
+  assert.equal(attempt.error_code, 'BUDGET_EXCEEDED')
+  assert.match(attempt.error_message, /额度已用尽/)
+  assert.equal(attempt.ended, true)
+})
+
 test('轨迹请求快照与助手提交分别成行，平台扩展归入参考页四类筛选', () => {
   assert.equal(category('approval.requested'), 'approval')
   assert.equal(category('question.requested'), 'approval')

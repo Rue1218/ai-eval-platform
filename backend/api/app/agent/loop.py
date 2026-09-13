@@ -483,7 +483,8 @@ async def build_agent(
             raise
         except Exception as exc:
             error_message = str(exc) if isinstance(exc, LlmRequestError) else "模型请求失败"
-            error_code = getattr(exc, "code", "provider_error")
+            # 对外仅保留十类平台错误码，内部 provider_* 分类不进入事件流。
+            error_code = getattr(exc, "public_code", "UPSTREAM")
             failed = context.log.append(
                 "assistant/attempt",
                 {
@@ -524,14 +525,15 @@ async def build_agent(
             }
 
         if attempt.done is None:
+            error_message = "模型服务未返回完整结束标记，请稍后重试"
             failed = context.log.append(
                 "assistant/attempt",
                 {
                     "turn": context.turn,
                     "step": state["step"],
                     "attempt_id": attempt_id,
-                    "error": "provider stream ended without a finish reason",
-                    "error_code": "missing_finish",
+                    "error": error_message,
+                    "error_code": "UPSTREAM",
                     "latency_ms": attempt_latency_ms(),
                 },
             )
@@ -543,8 +545,8 @@ async def build_agent(
                 step=state["step"],
                 outcome="failed",
                 committed_seq=failed["seq"],
-                error="provider stream ended without a finish reason",
-                error_code="missing_finish",
+                error=error_message,
+                error_code="UPSTREAM",
                 latency_ms=attempt_latency_ms(),
             )
             return {
@@ -552,8 +554,8 @@ async def build_agent(
                 "request_fingerprint": fingerprint,
                 "request_header_seq": header_seq,
                 "request_header_reason": None,
-                "model_error": "provider stream ended without a finish reason",
-                "model_error_code": "missing_finish",
+                "model_error": error_message,
+                "model_error_code": "UPSTREAM",
                 "retryable_error": False,
                 "model_attempts": model_attempts,
                 "model_finish": "error",
@@ -582,19 +584,16 @@ async def build_agent(
         ):
             invalid.append("provider returned an empty completed response")
         if invalid:
-            error_code = (
-                "empty_response"
-                if invalid == ["provider returned an empty completed response"]
-                else ("invalid_protocol_state" if protocol_errors else "invalid_tool_call")
-            )
+            # 模型协议细节仅用于服务端拒绝执行，浏览器只接收统一的安全处理建议。
+            error_message = "模型返回内容无效，请稍后重试或切换模型"
             failed = context.log.append(
                 "assistant/attempt",
                 {
                     "turn": context.turn,
                     "step": state["step"],
                     "attempt_id": attempt_id,
-                    "error": "; ".join(invalid),
-                    "error_code": error_code,
+                    "error": error_message,
+                    "error_code": "UPSTREAM",
                     "usage": attempt.done.usage,
                     "latency_ms": attempt_latency_ms(),
                 },
@@ -607,8 +606,8 @@ async def build_agent(
                 step=state["step"],
                 outcome="failed",
                 committed_seq=failed["seq"],
-                error="; ".join(invalid),
-                error_code=error_code,
+                error=error_message,
+                error_code="UPSTREAM",
                 latency_ms=attempt_latency_ms(),
             )
             return {
@@ -616,8 +615,8 @@ async def build_agent(
                 "request_fingerprint": fingerprint,
                 "request_header_seq": header_seq,
                 "request_header_reason": None,
-                "model_error": "; ".join(invalid),
-                "model_error_code": error_code,
+                "model_error": error_message,
+                "model_error_code": "UPSTREAM",
                 "retryable_error": False,
                 "model_attempts": model_attempts,
                 "model_finish": "error",
