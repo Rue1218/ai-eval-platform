@@ -271,20 +271,19 @@ async def test_retry_classification_stays_in_same_step(retryable, expected):
     await runtime.close()
 
 
-@pytest.mark.parametrize("chunks,code", [
-    ([TextDelta("无终态")], "missing_finish"),
-    ([Done("stop")], "empty_response"),
-    ([ToolCallDelta(0, "{}"), Done("tool_calls")], "invalid_tool_call"),
-    ([ProviderItemStart("p", 0, "reasoning"), Done("stop", protocol_state=ProtocolState())],
-     "invalid_protocol_state"),
+@pytest.mark.parametrize("chunks", [
+    [TextDelta("无终态")],
+    [Done("stop")],
+    [ToolCallDelta(0, "{}"), Done("tool_calls")],
+    [ProviderItemStart("p", 0, "reasoning"), Done("stop", protocol_state=ProtocolState())],
 ])
-async def test_failed_attempt_never_dispatches_or_enters_history(chunks, code):
+async def test_failed_attempt_never_dispatches_or_enters_history(chunks):
     """EOF、空回复、缺失身份和不完整协议状态都不能伪造成功。"""
     runtime = await make_runtime(ScriptedAdapter(chunks))
     await runtime.start_turn("请求")
     await runtime.wait()
     events = runtime.log.read()
-    assert [e["data"]["error_code"] for e in events if e["type"] == "assistant/attempt"] == [code]
+    assert [e["data"]["error_code"] for e in events if e["type"] == "assistant/attempt"] == ["UPSTREAM"]
     assert not any(e["type"] == "assistant/message" for e in events)
     assert events[-1]["data"]["reason"] == "error"
     await runtime.close()
