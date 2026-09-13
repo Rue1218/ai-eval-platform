@@ -5,6 +5,20 @@ const MEDIA_TOOLS = new Set(['image.generate', 'video.create', 'video.status'])
 const TEXT_LIMIT = 300
 const IMAGE_LIMIT = 4
 
+/** 模型侧安全名 → 注册表短名：服务端对含点号的工具统一生成 platform_ 前缀名。 */
+const MEDIA_WIRE_ALIASES: Record<string, string> = {
+  platform_image_generate: 'image.generate',
+  platform_video_create: 'video.create',
+  platform_video_status: 'video.status',
+}
+
+/** 事件里的 name 是模型可见的 wire 名；先归一再匹配登记表。 */
+export function canonicalMediaToolName(name: string): string {
+  return MEDIA_WIRE_ALIASES[name] || name
+}
+
+type MediaToolRun = Pick<ToolRun, 'name' | 'status' | 'event' | 'display' | 'registry_name'>
+
 export interface MediaPreview {
   kind: 'image' | 'video'
   status: string
@@ -32,8 +46,10 @@ function textField(value: unknown): string | null {
 }
 
 /** 从既有脱敏结果预览提取固定字段，避免将任意 MCP JSON 当作浏览器内容。 */
-export function mediaPreviewFor(tool: Pick<ToolRun, 'name' | 'status' | 'event' | 'display'>): MediaPreview | null {
-  if (tool.event !== 'tool.result' || tool.status !== 'succeeded' || !MEDIA_TOOLS.has(tool.name)) return null
+export function mediaPreviewFor(tool: MediaToolRun): MediaPreview | null {
+  // 调度事件回传的 registry_name 最可信；缺失时按 wire 别名表归一。
+  const name = canonicalMediaToolName(tool.registry_name || tool.name)
+  if (tool.event !== 'tool.result' || tool.status !== 'succeeded' || !MEDIA_TOOLS.has(name)) return null
   const raw = tool.display.result_preview
   if (typeof raw !== 'string') return null
   let value: unknown
@@ -44,7 +60,7 @@ export function mediaPreviewFor(tool: Pick<ToolRun, 'name' | 'status' | 'event' 
   }
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const result = value as Record<string, unknown>
-  const isImage = tool.name === 'image.generate'
+  const isImage = name === 'image.generate'
   const imageUrls = isImage && Array.isArray(result.image_urls)
     ? result.image_urls.map(safeMediaUrl).filter((url): url is string => !!url).slice(0, IMAGE_LIMIT)
     : []
@@ -62,11 +78,17 @@ export function mediaPreviewFor(tool: Pick<ToolRun, 'name' | 'status' | 'event' 
 }
 
 /** 汇总同一轮的安全媒体结果，由总结区统一展示，工具卡不再承载图片或视频预览。 */
-export function mediaPreviewsFor(tools: Iterable<Pick<ToolRun, 'name' | 'status' | 'event' | 'display'>>): MediaPreview[] {
-  const previews: MediaPreview[] = []
+export function mediaPreviewsFor(tools: Iterable<MediaToolRun>): MediaPreview[] {
+  const byMedia = new Map<string, MediaPreview>()
   for (const tool of tools) {
     const preview = mediaPreviewFor(tool)
-    if (preview) previews.push(preview)
+    if (!preview) continue
+    // 同一视频任务的多次查询合并为一条；图片按地址集合去重（重试不产生重复卡）。
+    const key = preview.kind === 'image'
+      ? `image:${preview.imageUrls.join(',')}`
+      : `video:${preview.upstreamTaskId || preview.videoUrl || ''}`
+    const existing = byMedia.get(key)
+    if (!existing || (!existing.videoUrl && preview.videoUrl)) byMedia.set(key, preview)
   }
-  return previews
+  return [...byMedia.values()]
 }

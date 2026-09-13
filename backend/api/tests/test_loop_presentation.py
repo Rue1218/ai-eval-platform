@@ -63,6 +63,21 @@ def test_media_preview_projects_result_but_not_prompt_or_reference_image():
     assert "https://media.example/video.mp4" in result["result_preview"]
 
 
+def test_media_display_accepts_agent_wire_names():
+    """媒体工具经 platform_ wire 名调用时同样投影结果预览与登记参数。"""
+    result = tool_display({
+        "name": "platform_image_generate",
+        "status": "succeeded",
+        "content": json.dumps({"status": "succeeded", "image_urls": ["https://media.example/image.png"]}),
+    }, result=True)
+    assert result["registry_name"] == "image.generate"
+    assert "https://media.example/image.png" in result["result_preview"]
+
+    call = tool_display({"name": "platform_video_status", "args": {"upstream_task_id": "task-1"}})
+    assert call["registry_name"] == "video.status"
+    assert '"upstream_task_id": "task-1"' in call["arguments_preview"]
+
+
 def test_task_display_accepts_agent_wire_registry_and_mcp_names():
     """三种已登记任务名称都投影同一安全字段集合，避免卡片因名称差异失去参数。"""
     names = (

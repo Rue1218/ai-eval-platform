@@ -32,6 +32,22 @@ _TASK_STEP_LIMIT = 12
 _TASK_TEXT_LIMIT = 300
 
 
+# 模型侧安全名 → 注册表短名：媒体 MCP 工具由 loop_bridge 统一生成
+# ``platform_`` 前缀名（含点号的工具不能直接暴露给部分提供方），展示投影
+# 必须按此还原，否则媒体结果会因未登记展示字段而拿不到结果预览。
+_MODEL_WIRE_ALIASES = {
+    "platform_image_generate": "image.generate",
+    "platform_video_create": "video.create",
+    "platform_video_status": "video.status",
+}
+
+
+def _canonical_display_name(wire: str) -> str:
+    """把模型可见名归一为注册表短名；未知名称保持原样。"""
+    name = canonical_task_tool_name(wire)
+    return _MODEL_WIRE_ALIASES.get(name, name)
+
+
 def _task_display(source: Mapping[str, object], *, result: bool) -> dict[str, object] | None:
     """提取成功 task 的有限结果预览；抽屉状态不从这里读取。"""
     raw: object
@@ -70,7 +86,7 @@ def _task_display(source: Mapping[str, object], *, result: bool) -> dict[str, ob
 def tool_display(source: dict, *, result: bool = False) -> dict:
     """仅对登记工具投影安全预览；错误输出只公开归一错误码。"""
     wire = source.get("name", "")
-    name = canonical_task_tool_name(wire)
+    name = _canonical_display_name(wire)
     display = {"version": 1, "title": name, "registry_name": name, "wire_name": wire,
                "format": "text", "truncated": False}
     if name not in TOOL_FIELDS:
