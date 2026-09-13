@@ -496,7 +496,7 @@ def test_anthropic_rejects_missing_signature(clients):
     assert clients[-1].stream.closed
 
 
-@pytest.mark.parametrize("model", ["deepseek-v4-flash-0731", "qwen3.6-flash"])
+@pytest.mark.parametrize("model", ["deepseek-v4-flash-0731", "qwen3.6-flash", "qwen3.8-flash"])
 def test_compatible_anthropic_unsigned_thinking_tool_roundtrip(clients, model):
     """兼容流空签名可回填工具结果，且不会越过 Claude 的跨模型边界。"""
     profile = AuthorizedProfileSnapshot(
@@ -592,6 +592,7 @@ def test_request_rejects_credentials_before_header(options):
 @pytest.mark.parametrize("model,effort,max_tokens", [
     ("qwen3-coder-plus", "high", 4096),
     ("qwen3.6-flash-unknown", "high", 4096),
+    ("qwen3.7-flash", "high", 4096),
     ("qwen3.6-flash", "high", 1024),
 ])
 def test_compatible_reasoning_does_not_invent_model_or_budget_capabilities(model, effort, max_tokens):

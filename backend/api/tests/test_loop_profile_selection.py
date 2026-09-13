@@ -189,6 +189,8 @@ def test_compatible_default_profile_survives_global_reasoning_preference(profile
     ("deepseek-v4-pro-0813", ["off", "low", "medium", "high", "max"]),
     ("qwen3.6-flash", ["off", "low", "medium", "high", "max"]),
     ("qwen3.6-flash-2026-04-16", ["off", "low", "medium", "high", "max"]),
+    ("qwen3.8-flash", ["off", "low", "medium", "high", "max"]),
+    ("qwen3.8-flash-2026-08-01", ["off", "low", "medium", "high", "max"]),
 ])
 def test_server_model_capabilities_match_each_authorized_request(profile_db, model, allowed):
     """服务器型号可展示的每个档位，都必须能通过回合授权和模型参数解析。"""

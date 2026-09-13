@@ -31,6 +31,7 @@ CASES = [
     ("zhipu", "https://open.bigmodel.cn/api/anthropic", "glm-4.7", "anthropic_messages", "off"),
     ("moonshot", "https://api.moonshot.cn/anthropic", "kimi-k2.5", "anthropic_messages", "off"),
     ("qwen", "https://dashscope.aliyuncs.com/apps/anthropic", "qwen3.6-flash", "anthropic_messages", "off"),
+    ("qwen", "https://dashscope.aliyuncs.com/apps/anthropic", "qwen3.8-flash", "anthropic_messages", "off"),
 ]
 
 

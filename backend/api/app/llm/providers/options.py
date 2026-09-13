@@ -8,7 +8,7 @@ from .common import invalid, validate_request
 
 def _qwen_budget_model(model: str) -> bool:
     """只开放已核对百炼预算契约的 Flash 型号，不推断全部 Qwen 能力。"""
-    return re.fullmatch(r"qwen3\.6-flash(?:-\d{4}-\d{2}-\d{2})?", model) is not None
+    return re.fullmatch(r"qwen3\.[68]-flash(?:-\d{4}-\d{2}-\d{2})?", model) is not None
 
 
 def resolve_options(request: LlmRequest, provider: str, protocol: str) -> dict:
