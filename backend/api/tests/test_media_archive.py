@@ -37,8 +37,19 @@ def _video_result(url: str) -> ToolResult:
     )
 
 
-def _mp4_fetch(_url: str, _kind: media_archive._MediaKind) -> tuple[bytes, str]:
-    return b"mp4-bytes", "video/mp4"
+def _fake_download(payload: bytes, content_type: str):
+    """下载替身：把载荷写入 staging 路径并返回 content-type（不触网）。"""
+
+    def download(_url: str, _kind: media_archive._MediaKind, target: str) -> str:
+        with open(target, "wb") as handle:
+            handle.write(payload)
+        return content_type
+
+    return download
+
+
+def _mp4_download(url: str, kind: media_archive._MediaKind, target: str) -> str:
+    return _fake_download(b"mp4-bytes", "video/mp4")(url, kind, target)
 
 
 @pytest.mark.asyncio
@@ -46,11 +57,13 @@ async def test_archive_writes_workspace_files_and_keeps_urls(tmp_path) -> None:
     """图片归档落入 <工作区>/media/，data 追加相对路径且保留原 URL。"""
     calls: list[str] = []
 
-    def fetch(url: str, _kind: media_archive._MediaKind) -> tuple[bytes, str]:
+    def download(url: str, _kind: media_archive._MediaKind, target: str) -> str:
         calls.append(url)
-        return b"png-bytes", "image/png"
+        with open(target, "wb") as handle:
+            handle.write(b"png-bytes")
+        return "image/png"
 
-    result = await media_archive.archive_media_results(_image_result(_IMAGE_URL), str(tmp_path), fetch=fetch)
+    result = await media_archive.archive_media_results(_image_result(_IMAGE_URL), str(tmp_path), download=download)
 
     assert calls == [_IMAGE_URL]
     relative = result.data["workspace_images"][0]
@@ -64,7 +77,9 @@ async def test_archive_writes_workspace_files_and_keeps_urls(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_archive_writes_video_into_workspace(tmp_path) -> None:
     """video.status 成功结果中的临时视频地址同样归档并追加 workspace_videos。"""
-    result = await media_archive.archive_media_results(_video_result(_VIDEO_URL), str(tmp_path), fetch=_mp4_fetch)
+    result = await media_archive.archive_media_results(
+        _video_result(_VIDEO_URL), str(tmp_path), download=_mp4_download
+    )
 
     relative = result.data["workspace_videos"][0]
     assert relative.startswith("media/video-") and relative.endswith(".mp4")
@@ -78,12 +93,14 @@ async def test_archive_is_idempotent_for_same_url(tmp_path) -> None:
     """同一 URL 重复归档直接复用既有文件，不重复下载。"""
     calls: list[str] = []
 
-    def fetch(url: str, _kind: media_archive._MediaKind) -> tuple[bytes, str]:
+    def download(url: str, _kind: media_archive._MediaKind, target: str) -> str:
         calls.append(url)
-        return b"png-bytes", "image/png"
+        with open(target, "wb") as handle:
+            handle.write(b"png-bytes")
+        return "image/png"
 
-    first = await media_archive.archive_media_results(_image_result(_IMAGE_URL), str(tmp_path), fetch=fetch)
-    second = await media_archive.archive_media_results(_image_result(_IMAGE_URL), str(tmp_path), fetch=fetch)
+    first = await media_archive.archive_media_results(_image_result(_IMAGE_URL), str(tmp_path), download=download)
+    second = await media_archive.archive_media_results(_image_result(_IMAGE_URL), str(tmp_path), download=download)
 
     assert calls == [_IMAGE_URL]
     assert first.data["workspace_images"] == second.data["workspace_images"]
@@ -91,14 +108,18 @@ async def test_archive_is_idempotent_for_same_url(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_archive_tolerates_download_failure(tmp_path) -> None:
-    """单个下载失败只跳过该条，不改写原工具结果。"""
-    def fetch(_url: str, _kind: media_archive._MediaKind) -> tuple[bytes, str]:
+    """单个下载失败只跳过该条，不改写原工具结果，且不留下半成品文件。"""
+    def download(_url: str, _kind: media_archive._MediaKind, target: str) -> str:
+        with open(target, "wb") as handle:
+            handle.write(b"partial")
         raise AppError(ErrorCode.UPSTREAM, "媒体下载失败")
 
-    result = await media_archive.archive_media_results(_image_result(_IMAGE_URL), str(tmp_path), fetch=fetch)
+    result = await media_archive.archive_media_results(_image_result(_IMAGE_URL), str(tmp_path), download=download)
 
     assert result.data.get("workspace_images") is None
     assert result.data["image_urls"] == [_IMAGE_URL]
+    assert not list((tmp_path / "media").glob("*.staging"))
+    assert not list((tmp_path / "media").glob("image-*"))
 
 
 @pytest.mark.asyncio
@@ -130,54 +151,67 @@ def test_validate_media_url_rejects_insecure_or_internal_targets(monkeypatch) ->
     assert media_archive._validate_media_url(_IMAGE_URL) == _IMAGE_URL
 
 
-def test_fetch_media_enforces_content_type_and_size(monkeypatch) -> None:
-    """下载层按类别拒绝类型不符与超过上限的响应体。"""
+class _FakeResponse:
+    """最小 HTTP 响应替身：分块 read 语义与真实 response 一致。"""
+
+    def __init__(self, body: bytes, content_type: str) -> None:
+        self._body = body
+        self._offset = 0
+        message = Message()
+        message["Content-Type"] = content_type
+        self.headers = message
+
+    def read(self, size: int = -1) -> bytes:
+        if size < 0:
+            chunk = self._body[self._offset :]
+        else:
+            chunk = self._body[self._offset : self._offset + size]
+        self._offset += len(chunk)
+        return chunk
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args) -> None:
+        return None
+
+
+class _FakeOpener:
+    def __init__(self, response: _FakeResponse) -> None:
+        self._response = response
+
+    def open(self, _request, timeout=None):  # noqa: ANN001,ANN201
+        return self._response
+
+
+def _install_response(monkeypatch, body: bytes, content_type: str) -> None:
+    monkeypatch.setattr(
+        media_archive, "build_opener", lambda *_args: _FakeOpener(_FakeResponse(body, content_type))
+    )
+
+
+def test_download_media_enforces_content_type_and_size(monkeypatch, tmp_path) -> None:
+    """下载层按类别拒绝类型不符与超过上限的响应体，且不留下超限文件。"""
     monkeypatch.setattr(media_archive, "_reject_internal_target", lambda _host: None)
 
-    class _FakeResponse:
-        def __init__(self, body: bytes, content_type: str) -> None:
-            self._body = body
-            message = Message()
-            message["Content-Type"] = content_type
-            self.headers = message
-
-        def read(self, size: int = -1) -> bytes:
-            return self._body if size < 0 else self._body[:size]
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args) -> None:
-            return None
-
-    class _FakeOpener:
-        def __init__(self, response: _FakeResponse) -> None:
-            self._response = response
-
-        def open(self, _request, timeout=None):  # noqa: ANN001,ANN201
-            return self._response
-
-    def _install(body: bytes, content_type: str) -> None:
-        monkeypatch.setattr(
-            media_archive, "build_opener", lambda *_args: _FakeOpener(_FakeResponse(body, content_type))
-        )
-
-    _install(b"html", "text/html")
+    _install_response(monkeypatch, b"html", "text/html")
     with pytest.raises(AppError, match="类型"):
-        media_archive._fetch_media(_IMAGE_URL, media_archive._IMAGE)
+        media_archive._download_media(_IMAGE_URL, media_archive._IMAGE, str(tmp_path / "a"))
 
     # 视频类别不接受图片类型，反之亦然（白名单按类别隔离）。
-    _install(b"png", "image/png")
+    _install_response(monkeypatch, b"png", "image/png")
     with pytest.raises(AppError, match="类型"):
-        media_archive._fetch_media(_VIDEO_URL, media_archive._VIDEO)
+        media_archive._download_media(_VIDEO_URL, media_archive._VIDEO, str(tmp_path / "b"))
 
-    small_image = replace(media_archive._IMAGE, max_bytes=16)
-    _install(b"x" * 17, "image/png")
+    # 视频上限 500MB，超限即中断流式写入。
+    assert media_archive._VIDEO.max_bytes == 500 * 1024 * 1024
+    tiny_video = replace(media_archive._VIDEO, max_bytes=16)
+    _install_response(monkeypatch, b"x" * 17, "video/mp4")
     with pytest.raises(AppError, match="大小"):
-        media_archive._fetch_media(_IMAGE_URL, small_image)
+        media_archive._download_media(_VIDEO_URL, tiny_video, str(tmp_path / "c"))
 
-    _install(b"x" * 16, "image/png")
-    assert media_archive._fetch_media(_IMAGE_URL, small_image) == (b"x" * 16, "image/png")
+    _install_response(monkeypatch, b"x" * 16, "video/mp4")
+    assert media_archive._download_media(_VIDEO_URL, tiny_video, str(tmp_path / "d")) == "video/mp4"
 
 
 def _media_tool(name: str) -> ToolDef:
@@ -208,10 +242,13 @@ def test_manager_archives_media_results_into_sandbox(monkeypatch, tmp_path) -> N
         async def invoke(self, *, tool_id, tool_name, arguments, output_schema, call_id):  # noqa: ANN001
             return ToolResult(name=tool_name, ok=True, data=dict(self._payload), call_id=call_id)
 
-    def _fetch(url: str, kind) -> tuple[bytes, str]:  # noqa: ANN001
-        return (b"png-bytes", "image/png") if kind is media_archive._IMAGE else (b"mp4-bytes", "video/mp4")
+    def _download(_url: str, kind: media_archive._MediaKind, target: str) -> str:
+        payload, content_type = (b"png-bytes", "image/png") if kind is media_archive._IMAGE else (b"mp4-bytes", "video/mp4")
+        with open(target, "wb") as handle:
+            handle.write(payload)
+        return content_type
 
-    monkeypatch.setattr(media_archive, "_fetch_media", _fetch)
+    monkeypatch.setattr(media_archive, "_download_media", _download)
     registry = ToolRegistry()
     registry.register(_media_tool("image.generate"))
     registry.register(_media_tool("video.status"))

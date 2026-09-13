@@ -61,9 +61,13 @@ _VIDEO = _MediaKind(
     label="video",
     field="workspace_videos",
     content_types={"video/mp4": ".mp4", "video/webm": ".webm", "video/quicktime": ".mov"},
-    max_bytes=64 * 1024 * 1024,
-    timeout_s=120.0,
+    # 500MB 级视频必须流式落盘（api 容器内存上限 512MB），下载超时相应放宽。
+    max_bytes=500 * 1024 * 1024,
+    timeout_s=600.0,
 )
+
+# 流式下载分块：内存占用与文件大小解耦，只保留单个分块。
+_DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 
 
 def _validate_media_url(url: str) -> str:
@@ -83,26 +87,36 @@ class _MediaRedirectHandler(HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-def _fetch_media(url: str, kind: _MediaKind) -> tuple[bytes, str]:
-    """受控下载单个媒体，返回 (字节, content-type)；类型或大小超限即拒绝。"""
+def _download_media(url: str, kind: _MediaKind, target: str) -> str:
+    """受控流式下载到 ``target``，返回 content-type；类型或大小超限即拒绝。
+
+    分块写盘，500MB 级视频不会整块驻留内存；超限/失败时由调用方清理半成品。
+    """
     request = Request(
         _validate_media_url(url),
         headers={"User-Agent": "ai-eval-platform/1.0", "Accept": "*/*"},
     )
+    written = 0
     try:
         opener = build_opener(_MediaRedirectHandler())
         with opener.open(request, timeout=kind.timeout_s) as response:
             content_type = response.headers.get_content_type()
             if content_type not in kind.content_types:
                 raise AppError(ErrorCode.UPSTREAM, "上游媒体类型不受支持")
-            body = response.read(kind.max_bytes + 1)
+            with open(target, "wb") as handle:
+                while True:
+                    chunk = response.read(_DOWNLOAD_CHUNK_BYTES)
+                    if not chunk:
+                        break
+                    written += len(chunk)
+                    if written > kind.max_bytes:
+                        raise AppError(ErrorCode.UPSTREAM, "上游媒体超过大小上限")
+                    handle.write(chunk)
     except (HTTPError, URLError, TimeoutError) as exc:
         raise AppError(ErrorCode.UPSTREAM, "媒体下载失败") from exc
-    if len(body) > kind.max_bytes:
-        raise AppError(ErrorCode.UPSTREAM, "上游媒体超过大小上限")
-    if not body:
+    if written == 0:
         raise AppError(ErrorCode.UPSTREAM, "上游媒体为空")
-    return body, content_type
+    return content_type
 
 
 def _media_links(data: Mapping[str, object]) -> tuple[_MediaKind, list[str]] | None:
@@ -135,37 +149,41 @@ def _existing_relative(sandbox_dir: str, kind: _MediaKind, url: str) -> str | No
     return None
 
 
-def _publish(target: str, body: bytes) -> None:
-    """同目录临时文件原子发布，避免半成品文件被并发读到。"""
-    os.makedirs(os.path.dirname(target), exist_ok=True)
-    temporary = f"{target}.{uuid4().hex}.staging"
+def _archive_one(
+    url: str,
+    sandbox_dir: str,
+    kind: _MediaKind,
+    download: Callable[[str, _MediaKind, str], str],
+) -> str:
+    """下载单个媒体并经同目录临时文件原子发布；返回工作区相对路径。"""
+    existing = _existing_relative(sandbox_dir, kind, url)
+    if existing is not None:
+        return existing
+    directory = os.path.join(sandbox_dir, MEDIA_DIRNAME)
+    os.makedirs(directory, exist_ok=True)
+    digest = _url_digest(url)
+    staging = os.path.join(directory, f".{kind.label}-{digest}-{uuid4().hex}.staging")
     try:
-        with open(temporary, "wb") as handle:
-            handle.write(body)
-        os.replace(temporary, target)
+        content_type = download(url, kind, staging)
+        filename = f"{kind.label}-{digest}{kind.content_types[content_type]}"
+        os.replace(staging, os.path.join(directory, filename))
+        return f"{MEDIA_DIRNAME}/{filename}"
     finally:
         with suppress(FileNotFoundError):
-            os.unlink(temporary)
+            os.unlink(staging)
 
 
 def _archive_urls_sync(
     urls: list[str],
     sandbox_dir: str,
     kind: _MediaKind,
-    fetch: Callable[[str, _MediaKind], tuple[bytes, str]],
+    download: Callable[[str, _MediaKind, str], str],
 ) -> list[str]:
     """逐个下载并写入工作区；单个失败只记异常类别，不影响其余媒体。"""
     saved: list[str] = []
     for url in urls:
         try:
-            existing = _existing_relative(sandbox_dir, kind, url)
-            if existing is not None:
-                saved.append(existing)
-                continue
-            body, content_type = fetch(url, kind)
-            filename = f"{kind.label}-{_url_digest(url)}{kind.content_types[content_type]}"
-            _publish(os.path.join(sandbox_dir, MEDIA_DIRNAME, filename), body)
-            saved.append(f"{MEDIA_DIRNAME}/{filename}")
+            saved.append(_archive_one(url, sandbox_dir, kind, download))
         except Exception as exc:  # noqa: BLE001 —— 归档尽力而为，绝不失败工具调用
             logger.warning("media archive item failed kind=%s", type(exc).__name__)
     return saved
@@ -175,7 +193,7 @@ async def archive_media_results(
     result: ToolResult,
     sandbox_dir: str | None,
     *,
-    fetch: Callable[[str, _MediaKind], tuple[bytes, str]] | None = None,
+    download: Callable[[str, _MediaKind, str], str] | None = None,
 ) -> ToolResult:
     """把成功的媒体结果归档进会话工作区；任何失败都保持原结果不变。
 
@@ -190,7 +208,7 @@ async def archive_media_results(
     if links is None:
         return result
     kind, urls = links
-    saved = await asyncio.to_thread(_archive_urls_sync, urls, sandbox_dir, kind, fetch or _fetch_media)
+    saved = await asyncio.to_thread(_archive_urls_sync, urls, sandbox_dir, kind, download or _download_media)
     if not saved:
         return result
     return replace(result, data={**dict(data), kind.field: saved})
