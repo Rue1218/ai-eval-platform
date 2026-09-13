@@ -485,9 +485,9 @@ def _wire_payload(request) -> dict:
 
 def _prompt_tokens(request) -> int:
     """用 SDK 同源消息转换估算输入成本，包含工具、图文与 opaque 回传块。"""
-    from app.harness.context.meter import estimate_tokens
+    from app.harness.context.meter import estimate_payload_tokens
 
-    return estimate_tokens(json.dumps(_wire_payload(request), ensure_ascii=False, allow_nan=False))
+    return estimate_payload_tokens(_wire_payload(request))
 
 
 def _prompt_breakdown(
@@ -496,7 +496,7 @@ def _prompt_breakdown(
     input_tokens: int | None = None,
 ) -> dict[str, int]:
     """按实际序列化请求拆分输入来源；没有注入的 Skill/记忆文件必须保持为零。"""
-    from app.harness.context.meter import estimate_tokens
+    from app.harness.context.meter import estimate_payload_tokens
 
     payload = _wire_payload(request)
     categories = {
@@ -509,7 +509,7 @@ def _prompt_breakdown(
     }
 
     def tokens(value) -> int:
-        return estimate_tokens(json.dumps(value, ensure_ascii=False, allow_nan=False))
+        return estimate_payload_tokens(value)
 
     transports = tool_transports or {}
     for spec, wire in zip(request.tools, payload.get("tools", []), strict=True):

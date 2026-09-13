@@ -339,6 +339,25 @@ def test_window_keeps_tool_group_and_applies_effort(wired):
         loop_wiring._window_request(wired.profile, (), [], messages[2:], "off", 129)
 
 
+def test_window_counts_image_blocks_as_vision_cost(wired):
+    """read_image 的 base64 图文块按视觉成本计，不把 base64 当文本压爆上下文预算。"""
+    image = "data:image/png;base64," + "A" * 1_600_000
+    messages = [
+        {"role": "user", "content": "看看我刚生成的图片"},
+        {"role": "assistant", "content": "",
+         "tool_calls": [{"id": "c", "name": "read_image", "args": {"file_path": "media/a.png"}}]},
+        {"role": "tool", "tool_call_id": "c", "name": "read_image",
+         "content": [{"type": "text", "text": "已读取图片 media/a.png"},
+                     {"type": "image_url", "image_url": {"url": image}}]},
+    ]
+    request, window = loop_wiring._window_request(
+        wired.profile, (SystemSegment("system"),), [], messages, "off", 20000
+    )
+    assert request.messages == messages
+    # 若把 base64 当文本，此处会是 40 万量级并触发 BUDGET_EXCEEDED。
+    assert window["estimated_input_tokens"] < 5000
+
+
 @pytest.mark.asyncio
 async def test_profile_overlay_is_dynamic_and_changes_request_fingerprint(wired, monkeypatch):
     """每回合只读取所选协议档的补充提示词，核心段保持静态缓存边界。"""
