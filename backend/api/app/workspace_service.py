@@ -387,6 +387,39 @@ def create_workspace_file(directory: str, parent_path: str, name: str, content: 
     }
 
 
+def save_workspace_file_bytes(
+    directory: str,
+    parent_path: str,
+    name: str,
+    content: bytes,
+    *,
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """在指定相对父目录下保存二进制或文本文件数据。"""
+    validate_segment(name)
+    parent_dir = resolve_scope_dir(directory, parent_path)
+    target = os.path.join(parent_dir, name)
+    if not overwrite and (os.path.exists(target) or os.path.islink(target)):
+        raise AppError(ErrorCode.VALIDATION, "同名文件或目录已存在")
+    if os.path.islink(target):
+        raise AppError(ErrorCode.VALIDATION, "目标为符号链接，拒绝写入")
+    try:
+        with open(target, "wb") as f:
+            f.write(content)
+        st = os.stat(target)
+    except OSError as exc:
+        raise AppError(ErrorCode.INTERNAL, "保存文件失败") from exc
+    rel = os.path.join(parent_path, name).replace("\\", "/").strip("/")
+    return {
+        "path": rel,
+        "name": name,
+        "size": st.st_size,
+        "updated_at": (
+            datetime.fromtimestamp(st.st_mtime, UTC).isoformat() if st.st_mtime else None
+        ),
+    }
+
+
 def rename_workspace_path(directory: str, rel_path: str, new_name: str) -> dict[str, Any]:
     """在同级目录下重命名文件或目录。"""
     validate_segment(new_name)

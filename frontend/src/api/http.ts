@@ -1285,6 +1285,20 @@ export const api = {
       })
       return res.data
     },
+    getRawFileUrl(id: string, path: string, download = false): string {
+      const q = new URLSearchParams({ path })
+      if (download) q.set('download', 'true')
+      return `/api/workspaces/${encodeURIComponent(id)}/files/raw?${q.toString()}`
+    },
+    async uploadFile(id: string, path: string, file: File): Promise<{ ok: boolean; path: string; name: string; size: number }> {
+      const form = new FormData()
+      form.append('file', file)
+      form.append('path', path)
+      const { data } = await http.post(`/api/workspaces/${id}/files/upload`, form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      return data
+    },
   },
 
   // 11. 会话管理
