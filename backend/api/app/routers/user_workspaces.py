@@ -11,12 +11,13 @@
 
 from __future__ import annotations
 
+import mimetypes
 import os
 import shutil
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import update
@@ -39,6 +40,7 @@ from ..workspace_service import (
     rename_workspace_path,
     resolve_scope_dir,
     resolve_scope_file,
+    save_workspace_file_bytes,
     workspace_dir_for,
     write_workspace_file,
 )
@@ -458,15 +460,97 @@ def delete_item(
     return {"ok": True, "workspace_id": workspace_id, **res}
 
 
+VIDEO_AUDIO_MIME_MAP: dict[str, str] = {
+    "mp4": "video/mp4",
+    "m4v": "video/mp4",
+    "webm": "video/webm",
+    "ogv": "video/ogg",
+    "ogg": "video/ogg",
+    "mov": "video/quicktime",
+    "mkv": "video/x-matroska",
+    "avi": "video/x-msvideo",
+    "flv": "video/x-flv",
+    "wmv": "video/x-ms-wmv",
+    "mp3": "audio/mpeg",
+    "wav": "audio/wav",
+    "flac": "audio/flac",
+    "aac": "audio/aac",
+    "m4a": "audio/mp4",
+    "weba": "audio/webm",
+}
+
+
 @router.get("/{workspace_id}/files/raw")
 def get_raw_file(
     workspace_id: str,
     path: str = Query(..., min_length=1, description="相对路径"),
+    download: bool = Query(False, description="是否强制以附件形式下载"),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """以原始二进制/文件流方式返回文件（供图片预览或文件下载）。"""
+    """以原始二进制/文件流方式返回文件（供图片/音视频预览或文件下载）。"""
     row = _owned_workspace(db, user, workspace_id)
     directory = workspace_dir_for(row.id)
     abs_path = resolve_scope_file(directory, path, must_exist=True)
-    return FileResponse(abs_path, filename=os.path.basename(abs_path))
+
+    media_type, _ = mimetypes.guess_type(abs_path)
+    ext = os.path.splitext(abs_path)[1].lower().lstrip(".")
+    if ext in VIDEO_AUDIO_MIME_MAP:
+        media_type = VIDEO_AUDIO_MIME_MAP[ext]
+
+    disposition = "attachment" if download else "inline"
+    return FileResponse(
+        abs_path,
+        filename=os.path.basename(abs_path),
+        media_type=media_type,
+        content_disposition_type=disposition,
+    )
+
+
+@router.post("/{workspace_id}/files/upload", status_code=201)
+async def upload_file(
+    workspace_id: str,
+    file: UploadFile = File(..., description="上传的文件对象"),
+    path: str = Form(default="", description="保存的目标父目录相对路径"),
+    request: Request = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """上传文件至指定相对父目录下（支持音视频、图像、数据集等任意文件格式）。"""
+    row = _owned_workspace(db, user, workspace_id)
+    directory = workspace_dir_for(row.id)
+
+    raw_filename = file.filename or "uploaded_file"
+    clean_name = os.path.basename(raw_filename.replace("\\", "/")).strip()
+    if not clean_name or clean_name in (".", ".."):
+        raise AppError(ErrorCode.VALIDATION, "非法的文件名称")
+
+    clean_parent = (path or "").strip("/").replace("\\", "/")
+
+    content_bytes = await file.read()
+    file_size = len(content_bytes)
+
+    from ..config import settings
+
+    quota = int(getattr(settings, "workspace_quota_bytes", 1024 * 1024 * 1024))
+    if quota > 0:
+        summary = folder_summary(directory) or {"total_bytes": 0}
+        target_dir = resolve_scope_dir(directory, clean_parent)
+        target_item = os.path.join(target_dir, clean_name)
+        existing_file_size = os.path.getsize(target_item) if os.path.isfile(target_item) else 0
+        projected_size = summary["total_bytes"] - existing_file_size + file_size
+        if projected_size > quota:
+            raise AppError(ErrorCode.VALIDATION, f"工作区容量超出配额上限（上限 {quota // (1024 * 1024)}MB）")
+
+    res = save_workspace_file_bytes(directory, clean_parent, clean_name, content_bytes, overwrite=True)
+    write_audit(
+        db,
+        request,
+        user,
+        action="workspace_file_upload",
+        target_type="workspace",
+        target_id=workspace_id,
+        detail={"path": res["path"], "name": res["name"], "size": res["size"]},
+    )
+    db.commit()
+    return {"ok": True, "workspace_id": workspace_id, **res}

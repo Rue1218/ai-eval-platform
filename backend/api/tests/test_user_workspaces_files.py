@@ -122,3 +122,23 @@ class TestWorkspaceFileOperations:
         assert len(dir_node["children"]) == 1
         assert dir_node["children"][0]["name"] == "inner.py"
         assert file_node["name"] == "root.txt"
+
+    def test_save_workspace_file_bytes(self, tmp_path) -> None:
+        base = str(tmp_path)
+        # 保存二进制视频内容
+        video_bytes = b"\x00\x00\x00 ftypisom\x00\x00\x02\x00"
+        res = workspace_service.save_workspace_file_bytes(base, "", "sample.mp4", video_bytes)
+        assert res["name"] == "sample.mp4"
+        assert res["path"] == "sample.mp4"
+        assert res["size"] == len(video_bytes)
+
+        # 嵌套目录保存
+        os.makedirs(os.path.join(base, "media"))
+        audio_bytes = b"ID3\x03\x00\x00\x00"
+        res_sub = workspace_service.save_workspace_file_bytes(base, "media", "bgm.mp3", audio_bytes)
+        assert res_sub["path"] == "media/bgm.mp3"
+        assert res_sub["size"] == len(audio_bytes)
+
+        # 拒绝非法名字
+        with pytest.raises(AppError):
+            workspace_service.save_workspace_file_bytes(base, "", "../evil.mp4", b"bad")

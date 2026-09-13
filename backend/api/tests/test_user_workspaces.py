@@ -166,6 +166,17 @@ class TestUserRouterAuth:
         resp = client.post("/api/workspaces/some-id/files", json={"path": "", "name": "d"})
         assert resp.status_code == 401
 
+    def test_raw_file_requires_auth(self, client: TestClient) -> None:
+        resp = client.get("/api/workspaces/some-id/files/raw?path=video.mp4")
+        assert resp.status_code == 401
+
+    def test_upload_requires_auth(self, client: TestClient) -> None:
+        resp = client.post(
+            "/api/workspaces/some-id/files/upload",
+            files={"file": ("video.mp4", b"dummy video content", "video/mp4")},
+        )
+        assert resp.status_code == 401
+
 
 def test_router_module_surface() -> None:
     """路由注册面：模块可导入且暴露 router（回归锁）。"""
