@@ -700,7 +700,6 @@
     <!-- 弹窗与抽屉组件 (全居中显示) -->
     <BenchmarkLaunchDrawer
       v-model:show="showLaunchDrawer"
-      :default-dataset-id="(currentSet as any)?.target_dataset_id"
       @success="handleLaunchSuccess"
     />
 
@@ -809,7 +808,7 @@ import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage, useDialog, type DropdownOption } from 'naive-ui'
 import { api } from '../api/http'
-import type { CaseSet, Dataset } from '../api/types'
+import type { CaseSet, Dataset, DatasetRow, TestCase } from '../api/types'
 import BenchmarkLaunchDrawer from '../components/drawers/BenchmarkLaunchDrawer.vue'
 import { escapeHtml, escapeRegex, renderIcon } from '../utils/render'
 
@@ -830,6 +829,8 @@ interface ExtendedTestCase {
   target_dataset_id?: string
   checked?: boolean
   extras?: Record<string, string>
+  /** extras 平铺后的动态扩展列（支持按字段名动态读写） */
+  [key: string]: unknown
 }
 
 interface CustomColumn {
@@ -938,7 +939,7 @@ const folders = ref<TreeFolder[]>([{ id: 'cases', name: '用例集目录', open:
 const currentSet = computed<CaseSet | undefined>(() => caseSets.value.find((s: CaseSet) => s.id === activeSetId.value))
 
 const countdownHours = computed(() => {
-  const expires = currentSet.value?.expires_at || (currentSet.value as any)?.confirm_deadline
+  const expires = currentSet.value?.expires_at
   if (!expires) return null
   const deadline = new Date(expires).getTime()
   const now = Date.now()
@@ -1250,7 +1251,7 @@ function batchDeleteCases() {
 // 单元格即时编辑
 function editCell(row: ExtendedTestCase, field: string) {
   if (currentSet.value?.status === 'confirmed') return
-  const original = String((row as any)[field] ?? (row.extras ? row.extras[field] : '') ?? '')
+  const original = String((row as Record<string, unknown>)[field] ?? (row.extras ? row.extras[field] : '') ?? '')
   editingCell.value = { row, field, original }
 }
 
@@ -1263,7 +1264,7 @@ function cancelEditing() {
   const cell = editingCell.value
   if (cell) {
     if (cell.field in cell.row) {
-      (cell.row as any)[cell.field] = cell.original
+      (cell.row as Record<string, unknown>)[cell.field] = cell.original
     } else if (cell.row.extras) {
       cell.row.extras[cell.field] = cell.original
     }
@@ -1365,6 +1366,7 @@ async function persistCases() {
   savingCases.value = true
   try {
     const payload = cases.value.map((c, i) => ({
+      id: c.id,
       code: c.code || `TC-${String(i + 1).padStart(3, '0')}`,
       name: c.name,
       module: c.module || '通用',
@@ -1376,7 +1378,7 @@ async function persistCases() {
       target_dataset_id: c.target_dataset_id,
       ...c.extras,
     }))
-    await api.cases.saveCases(currentSet.value.id, payload as any)
+    await api.cases.saveCases(currentSet.value.id, payload)
     hasUnsavedChanges.value = false
     justSaved.value = true
     setTimeout(() => { justSaved.value = false }, 1800)
@@ -1423,8 +1425,8 @@ function exportXMind() {
 async function loadCases(setId: string) {
   try {
     const setObj = await api.cases.getSet(setId)
-    const list = (setObj as any).cases || []
-    cases.value = list.map((c: any, i: number) => ({
+    const list = setObj.cases || []
+    cases.value = list.map((c: TestCase, i: number) => ({
       id: c.id || `c-${i}`,
       set_id: setId,
       code: c.code || `TC-${String(i + 1).padStart(3, '0')}`,
@@ -1731,7 +1733,7 @@ async function confirmBatchMap() {
   const selected = cases.value.filter(c => selectedCaseIds.value.includes(c.id || c.code))
   if (!selected.length) return
   try {
-    const rows = ((await api.datasets.getRows(dsId)) || []).slice()
+    const rows = (((await api.datasets.getRows(dsId)) || []).slice()) as Array<DatasetRow & Record<string, unknown>>
     let maxRowNo = Math.max(0, ...rows.map(r => r.row_no || 0))
     selected.forEach(c => {
       rows.push({
@@ -1741,10 +1743,10 @@ async function confirmBatchMap() {
         context: c.preconditions || null,
         tags: `${c.strategy},${c.priority}`,
         difficulty: c.priority === 'HX' ? '高' : '中等',
-      } as any)
+      })
       c.target_dataset_id = dsId
     })
-    await api.datasets.saveRows(dsId, rows as any)
+    await api.datasets.saveRows(dsId, rows)
     hasUnsavedChanges.value = true
     batchMap.value.show = false
     selectedCaseIds.value = []
@@ -1883,7 +1885,7 @@ async function runAiGenerateCases() {
         model: aiGen.value.model,
         temperature: aiGen.value.temperature,
       })
-      candidates = (generated as any[]).map((c, i) => ({
+      candidates = generated.map((c, i) => ({
         selected: true,
         code: c.code || `TC-${String(i + 1).padStart(3, '0')}`,
         name: c.name || c.question || '',

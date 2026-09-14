@@ -527,7 +527,8 @@ async function toggleFullscreen(): Promise<void> {
     } catch {
       // 降级使用视频全屏
       if (videoRef.value && 'webkitEnterFullscreen' in videoRef.value) {
-        (videoRef.value as any).webkitEnterFullscreen()
+        // iOS Safari 私有全屏 API（不在标准 HTMLVideoElement 类型中）
+        ;(videoRef.value as HTMLVideoElement & { webkitEnterFullscreen: () => void }).webkitEnterFullscreen()
       }
     }
   } else {

@@ -472,6 +472,16 @@ export interface TestCase {
   selected?: boolean
 }
 
+/** 后端用例项平铺 case.extras 的扩展键（cases.py _case_to_item）；与上方 TestCase 声明合并。 */
+export interface TestCase {
+  code?: string
+  preconditions?: string
+  expected_result?: string
+  target_dataset_id?: string
+  /** extras 平铺后的动态扩展列（未显式声明的键） */
+  [key: string]: unknown
+}
+
 export interface CaseFolder {
   id: string
   name: string

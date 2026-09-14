@@ -815,7 +815,7 @@ async function loadTasks() {
     const res = await api.tasks.list({
       status: filterStatus.value || undefined,
     })
-    tasks.value = Array.isArray(res) ? res : ((res as any).items || [])
+    tasks.value = res
     checkRouteTaskId()
   } catch (err: any) {
     message.error(err.message || '加载任务列表失败')

@@ -1180,7 +1180,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useMessage, useDialog, NSelect, NInput, NInputNumber, NSwitch } from 'naive-ui'
 import { api } from '../api/http'
-import type { MediaMcpConfig, Profile, ProfileCheckOut, McpTool, McpHealthCheckResponse } from '../api/types'
+import type { MediaMcpConfig, Profile, ProfileCheckOut, ProfileUsage, McpTool, McpHealthCheckResponse } from '../api/types'
 import EmptyState from '../components/common/EmptyState.vue'
 import ProviderLogo, { type ProviderLogoKey } from '../components/ProviderLogo.vue'
 import { getModelLogoKey } from '../utils/providerLogo'
@@ -1633,7 +1633,12 @@ function handleExportSkillsJson() {
 // ═══════════════════════════════════════════════════════════════
 // 运行时治理
 // ═══════════════════════════════════════════════════════════════
-const runtimeForm = ref({
+const runtimeForm = ref<{
+  ws_ping_s: number
+  ws_timeout_s: number
+  strict_session_slot: boolean
+  permission_tier_default: 'tier1' | 'tier2' | 'tier3'
+}>({
   ws_ping_s: 15,
   ws_timeout_s: 45,
   strict_session_slot: true,
@@ -1654,17 +1659,17 @@ const viewMode = ref<'cards' | 'table'>('cards')
 const profiles = ref<Profile[]>([])
 const profileSearch = ref('')
 const vendorFilter = ref<string | null>(null)
-const usageFilter = ref<string | null>(null)
+const usageFilter = ref<ProfileUsage | null>(null)
 
 const filteredProfiles = computed(() => profiles.value.filter(p => {
   const text = profileSearch.value.trim().toLowerCase()
   return (!text || `${p.name} ${p.model} ${p.base_url}`.toLowerCase().includes(text))
     && (!vendorFilter.value || getProfileVendor(p) === vendorFilter.value)
-    && (!usageFilter.value || p.usages?.includes(usageFilter.value as any))
+    && (!usageFilter.value || p.usages?.includes(usageFilter.value))
 }))
 
 const vendorFilters = computed(() => [...PROFILE_VENDORS.map(v => ({label:v.name,value:v.key})), {label:'其它已有协议档',value:'custom'}])
-const usageFilters = [{label:'Agent',value:'agent'},{label:'被测模型',value:'target'},{label:'裁判模型',value:'judge'}]
+const usageFilters: { label: string; value: ProfileUsage }[] = [{label:'Agent',value:'agent'},{label:'被测模型',value:'target'},{label:'裁判模型',value:'judge'}]
 
 const loading = ref(false)
 const selectedAgentProfileId = ref<string | null>(null)
@@ -2033,7 +2038,7 @@ async function saveRuntime() {
         strict_session_slot: runtimeForm.value.strict_session_slot,
       },
       permission_tier_default: runtimeForm.value.permission_tier_default,
-    } as any)
+    })
     message.success('运行时治理参数已更新')
   } catch (err: any) {
     message.error(err.message || '运行时参数保存失败')

@@ -251,13 +251,13 @@ function displaySessionTitle(session?: AgentSession | null): string {
 
 /** 创建时固化 v2、工作区与权限档位，后续只使用独立 transport。 */
 async function createLoopSession(
-  workspaceId?: string, preparedTicket?: Promise<string>, permissionTier?: string, initialTitle?: string
+  workspaceId?: string, preparedTicket?: Promise<string>, permissionTier?: NonNullable<AgentSession['permission_tier']>, initialTitle?: string
 ): Promise<string> {
   if (currentSessionId.value) return currentSessionId.value
   const title = initialTitle || '新会话'
   const session = await api.sessions.create(title, {
     workspaceId,
-    permissionTier: (permissionTier as any) || undefined,
+    permissionTier: permissionTier || undefined,
   })
   sessions.value.unshift(session)
   // 在切换 prop 触发子组件 watch 前先建立连接，确保首次连接实际复用并行领取的短票。

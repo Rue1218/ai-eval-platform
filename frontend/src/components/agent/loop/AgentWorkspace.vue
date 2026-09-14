@@ -404,7 +404,7 @@ const props = withDefaults(
     sessionId: string
     session?: AgentSession | null
     store: LoopStore
-    createSession: (workspaceId?: string, preparedTicket?: Promise<string>, permissionTier?: string, initialTitle?: string) => Promise<string>
+    createSession: (workspaceId?: string, preparedTicket?: Promise<string>, permissionTier?: NonNullable<AgentSession['permission_tier']>, initialTitle?: string) => Promise<string>
   }>(),
   {
     session: null
@@ -424,14 +424,13 @@ const draftWorkspaceName = ref<string>('')
 const newWorkspaceName = ref('')
 const creatingWorkspace = ref(false)
 
-const sessionTier = ref<string>('')
+const sessionTier = ref<NonNullable<AgentSession['permission_tier']> | ''>('')
 watch(() => props.session?.permission_tier, (value) => { sessionTier.value = value || '' }, { immediate: true })
-async function handleTierChange(value: string) {
-  sessionTier.value = value || ''
+async function handleTierChange(value: NonNullable<AgentSession['permission_tier']> | '') {
+  sessionTier.value = value
   if (!props.sessionId) return
-  const tier = (value || null) as 'tier1' | 'tier2' | 'tier3' | null
   try {
-    await api.sessions.updatePermissionTier(props.sessionId, tier)
+    await api.sessions.updatePermissionTier(props.sessionId, value || null)
     message.success('本会话权限档位已更新')
   } catch (err: any) {
     message.error(err?.message || '权限档位更新失败')
@@ -457,8 +456,8 @@ async function loadWorkspaces(autoSelect = true) {
   loadingWorkspaces.value = true
   try {
     const payload = await api.workspaces.list()
-    const items = Array.isArray(payload) ? payload : (payload as any)?.items || []
-    workspaces.value = items.map((item: any) => ({
+    const items = Array.isArray(payload) ? payload : payload.items
+    workspaces.value = items.map(item => ({
       id: String(item.id),
       name: String(item.name)
     }))
@@ -922,7 +921,7 @@ async function hydrateAttachments() {
   for(const row of rows.value.filter(r=>r.role==='user' && r.attachment_refs?.length)){
     if(attachments.value[row.key])continue
     attachments.value[row.key]=[]
-    const values=await Promise.all((row.attachment_refs as any[]).map(async item=>{const id=typeof item==='string'?item:item.file_id;try{const {data}=await http.get(`/api/files/${encodeURIComponent(id)}`);return {file_id:id,filename:data.filename,size:data.size,content_type:data.content_type,content_url:`/api/files/${encodeURIComponent(id)}/content`} as AttachmentReference}catch{return null}}))
+    const values=await Promise.all((row.attachment_refs as Array<string | { file_id: string }>).map(async item=>{const id=typeof item==='string'?item:item.file_id;try{const {data}=await http.get(`/api/files/${encodeURIComponent(id)}`);return {file_id:id,filename:data.filename,size:data.size,content_type:data.content_type,content_url:`/api/files/${encodeURIComponent(id)}/content`} as AttachmentReference}catch{return null}}))
     if(sid===props.sessionId)attachments.value[row.key]=values.filter((v):v is AttachmentReference=>v!==null)
   }
 }

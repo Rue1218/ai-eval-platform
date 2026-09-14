@@ -39,8 +39,9 @@ export function formatDuration(value: unknown): string {
 export function getTurnIdentifier(row: LoopRecord): string {
   if (row.correlation?.turn_id) return `turn_id:${row.correlation.turn_id}`
   if (row.correlation?.turn !== undefined) return `turn:${row.correlation.turn}`
-  if ((row as any).turn_id) return `turn_id:${(row as any).turn_id}`
-  if ((row as any).turn !== undefined) return `turn:${(row as any).turn}`
+  const legacy = row as { turn_id?: string; turn?: number }
+  if (legacy.turn_id) return `turn_id:${legacy.turn_id}`
+  if (legacy.turn !== undefined) return `turn:${legacy.turn}`
   return `key:${row.key}`
 }
 

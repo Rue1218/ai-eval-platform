@@ -189,7 +189,7 @@ const props = withDefaults(defineProps<{
   cancelling: boolean
   canStop: boolean
   ready: boolean
-  permissionTier?: string | null
+  permissionTier?: SessionPermissionTier | '' | null
 }>(), {
   permissionTier: '',
   metrics: () => ({ inputTokens: 0, outputTokens: 0, modelLatencyMs: 0, outputTokensPerSecond: null, cacheReadTokens: 0, cacheHitRate: null })
@@ -201,13 +201,15 @@ const emit = defineEmits<{
   effort: [Effort]
   model: [string]
   agent: [string]
-  updatePermissionTier: [string]
+  updatePermissionTier: [SessionPermissionTier | '']
 }>()
 const picker = ref<HTMLInputElement>(), input = ref<HTMLTextAreaElement>(), notice = ref('')
 const modelOpen = ref(false), agentOpen = ref(false), tierOpen = ref(false)
 
+type SessionPermissionTier = 'tier1' | 'tier2' | 'tier3'
+
 interface TierOption {
-  value: string
+  value: SessionPermissionTier | ''
   title: string
   description: string
   icon: 'hand' | 'shield' | 'warning' | 'inherit'
@@ -247,7 +249,7 @@ const activeTier = computed(() => {
   return tierOptions.find(t => t.value === cur) || tierOptions[3]
 })
 
-function chooseTier(value: string) {
+function chooseTier(value: SessionPermissionTier | '') {
   tierOpen.value = false
   emit('updatePermissionTier', value)
 }

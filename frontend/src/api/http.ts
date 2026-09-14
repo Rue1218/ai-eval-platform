@@ -12,6 +12,7 @@ import {
   type ProfileUpdateIn,
   type RemoteModel,
   type Dataset,
+  type DatasetMetric,
   type DatasetRow,
   type KnowledgeBase,
   type KbDocument,
@@ -597,7 +598,7 @@ export const api = {
       const { data } = await http.get(`/api/datasets/${id}`)
       return data
     },
-    async create(payload: { name: string; metric?: string }): Promise<Dataset> {
+    async create(payload: { name: string; metric?: DatasetMetric }): Promise<Dataset> {
       if (getDataMode() === 'mock') {
         const ds: Dataset = {
           id: 'ds-' + Date.now(),
@@ -605,7 +606,7 @@ export const api = {
           version: 1,
           row_count: 0,
           pending_complete_count: 0,
-          metric: (payload.metric as any) || 'contain',
+          metric: payload.metric || 'contain',
           owner: localStorage.getItem('ae_user') || 'admin',
           created_at: new Date().toISOString(),
         }
