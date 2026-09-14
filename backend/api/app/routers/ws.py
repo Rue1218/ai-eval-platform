@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from ..adapters import StreamAborted
 from ..agent import LangGraphAgent
-from ..agent.attachments import model_content_for_message, normalize_attachment_refs
+from ..agent.attachments import normalize_attachment_refs
 from ..agent.graph import (
     enqueued_task_id_from_update,
     iter_pending_events,
@@ -34,7 +34,7 @@ from ..agent_prompt_settings import get_agent_prompt_overlay
 from ..config import settings
 from ..db import SessionLocal
 from ..errors import AppError, ErrorCode
-from ..harness.context import skill_hint_lines, window_trim_stats
+from ..harness.context import skill_hint_lines
 from ..harness.execution.ask_user import validate_answers
 from ..harness.execution.context import ToolExecutionContext
 from ..harness.execution.task_tools import cancel_task_safe
@@ -62,7 +62,6 @@ from ..models import Session as AgentSession
 from ..security import TOKEN_TYPE_WS, decode_token
 from ..session_access import require_visible_session
 from ..session_connections import SESSION_CONNECTION_HUB
-from ..time_utils import iso_utc
 from ..workspace_service import resolve_session_sandbox_db
 from ..ws_tickets import consume_ws_jti, ttl_from_jwt_payload
 from .profiles import _profile_connection
@@ -132,6 +131,23 @@ from .ws_emit import (
 )
 from .ws_emit import (
     _split_event_version as _split_event_version,
+)
+
+# 消息视图层（ws_messages）：同名 re-export，保持既有调用点不变
+from .ws_messages import (
+    _assistant_message_payload as _assistant_message_payload,
+)
+from .ws_messages import (
+    _author_payload as _author_payload,
+)
+from .ws_messages import (
+    _history_with_trim as _history_with_trim,
+)
+from .ws_messages import (
+    _message_payload as _message_payload,
+)
+from .ws_messages import (
+    _window_messages as _window_messages,
 )
 from .ws_turns import (
     _attach_turn_task as _attach_turn_task,
@@ -724,45 +740,6 @@ def _consume_ws_ticket(db: Session, ticket: str | None) -> User:
     return user
 
 
-def _author_payload(user: User) -> dict[str, Any]:
-    """构造消息作者的非敏感展示字段。"""
-    return {
-        "id": user.id,
-        "username": user.username,
-        "display_name": user.display_name,
-    }
-
-
-def _message_payload(row: Message, user: User) -> dict[str, Any]:
-    """构造与 REST 历史回放一致的 user_message 事件 payload。"""
-    return {
-        "id": row.id,
-        "role": row.role,
-        "content": row.content,
-        "attachments": row.attachments or [],
-        "author_id": row.author_id,
-        "author": _author_payload(user) if row.author_id else None,
-        "client_message_id": row.client_message_id,
-        "created_at": iso_utc(row.created_at),
-    }
-
-
-def _assistant_message_payload(row: Message) -> dict[str, Any]:
-    """构造助手最终交付事件；正文与用户消息回显使用不同事件类型。"""
-    return {
-        "id": row.id,
-        "role": "assistant",
-        "text": row.content,
-        "reply_latency_ms": row.latency_ms,
-        "turn_stats": row.turn_stats,
-        "model_name": row.model_name,
-        "profile_id": row.profile_id,
-        "profile_name": row.profile_name,
-        "provider": row.provider,
-        "created_at": iso_utc(row.created_at),
-    }
-
-
 def _heartbeat_interval(db: Session) -> int:
     """读取运行时心跳秒数；配置缺失或异常时回退 15 秒。"""
     row = db.query(Setting).filter(Setting.key == "runtime").first()
@@ -1027,49 +1004,6 @@ def _selected_model_config(db: Session) -> tuple[ModelConfig, _ProfileSnapshot]:
     )
     _MODEL_CONFIG_CACHE[profile_id] = (now + _MODEL_CONFIG_CACHE_TTL_S, (config, snapshot))
     return config, snapshot
-
-
-def _window_messages(db: Session, session_id: str) -> tuple[list[dict], dict[str, object]]:
-    """读取会话消息，经 Harness 窗口算法（CX-1）投影（含 source_id）。
-
-    ``compact_keep_from`` 指定保留起点时截断更早消息；思考/工具/确认/进度
-    事件不进窗口（CX-2）。窗口算法唯一来源为
-    ``app.harness.context.window.recent_window``（#2 起经 window_trim_stats
-    同源实现返回裁剪元信息，供 context_trim 留痕事件使用）。
-    返回 ``(窗口消息, trim_meta)``；trim_meta.dropped>0 即本回合发生了窗口裁剪。
-    """
-    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
-    # getattr 容错：会话行缺少该列（测试桩/旧快照）时按未压缩处理
-    keep_from = getattr(session, "compact_keep_from", None) if session else None
-    rows = (
-        db.query(Message)
-        .filter(Message.session_id == session_id, Message.role.in_(("user", "assistant")))
-        .order_by(Message.created_at.desc(), Message.id.desc())
-        .limit(200)
-        .all()
-    )
-    ordered = [
-        {
-            "role": row.role,
-            # 附件装配（staging）在 model_content_for_message 内按会话绑定自行
-            # 解析（resolve_session_sandbox_db，与 _run_turn 注入同源同态——BLK-1）
-            "content": model_content_for_message(db, row) if row.role == "user" else row.content,
-            "source_id": row.source_id,
-        }
-        for row in reversed(rows)
-    ]
-    return window_trim_stats(ordered, limit=20, keep_from=keep_from)
-
-
-def _history_with_trim(
-    db: Session, session_id: str
-) -> tuple[list[dict[str, str]], dict[str, object]]:
-    """窗口投影消息 + 裁剪元信息（#2 留痕用，与 _window_messages 同一次查询）。"""
-    windowed, meta = _window_messages(db, session_id)
-    return [
-        {"role": item["role"], "content": item["content"]}
-        for item in windowed
-    ], meta
 
 
 def _infer_provider(profile: _ProfileSnapshot | None) -> str | None:
