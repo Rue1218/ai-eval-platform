@@ -6,6 +6,7 @@ on:
     paths-ignore:
       - 'docs/**'
       - '*.md'
+      - '**/README.md'
       - '.gitignore'
       - 'Web-Prototype/**'
   workflow_dispatch:
@@ -16,19 +17,21 @@ permissions:
   actions: read
   packages: write
 
-# 同一台生产服务器一次只执行一个部署；新提交应淘汰旧提交，避免它们在服务器上重复构建。
+# 同一台生产服务器串行部署；不取消正在拉取或切换容器的任务，确保成功基准完整。
 concurrency:
   group: ai-eval-production-deploy
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   plan:
     name: Plan changed services
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     outputs:
       base_sha: ${{ steps.base.outputs.sha }}
       matrix: ${{ steps.services.outputs.matrix }}
       has_services: ${{ steps.services.outputs.has_services }}
+      needs_deploy: ${{ steps.services.outputs.needs_deploy }}
     steps:
       - name: Checkout full history
         uses: actions/checkout@v4
@@ -45,6 +48,7 @@ jobs:
               repo: context.repo.repo,
               workflow_id: 'deploy.yml',
               status: 'success',
+              branch: 'main',
               per_page: 1,
             })
             const sha = runs.data.workflow_runs[0]?.head_sha || ''
@@ -56,81 +60,7 @@ jobs:
         env:
           BASE_SHA: ${{ steps.base.outputs.sha }}
           TARGET_SHA: ${{ github.sha }}
-        shell: python
-        run: |
-          import json
-          import os
-          import subprocess
-          from pathlib import Path
-
-          definitions = {
-              "web": {"service": "web", "context": "frontend", "dockerfile": "frontend/Dockerfile"},
-              "api": {"service": "api", "context": "backend", "dockerfile": "backend/api/Dockerfile"},
-              "worker": {"service": "worker", "context": "backend", "dockerfile": "backend/worker/Dockerfile"},
-              "lightrag": {"service": "lightrag", "context": "backend/lightrag", "dockerfile": "backend/lightrag/Dockerfile"},
-              "stress": {"service": "stress", "context": "backend/stress", "dockerfile": "backend/stress/Dockerfile"},
-              "runner": {"service": "runner", "context": "backend", "dockerfile": "backend/runner/Dockerfile"},
-          }
-          path_prefixes = {
-              "web": "frontend/",
-              "api": "backend/api/",
-              "worker": "backend/worker/",
-              "lightrag": "backend/lightrag/",
-              "stress": "backend/stress/",
-              "runner": "backend/runner/",
-          }
-          # MCP 服务按 ``backend/<名称>_mcp/Dockerfile`` 自动发现，Compose 服务名
-          # 统一转换为 ``<名称>-mcp``。新增受控 MCP 无需维护第二份构建矩阵。
-          mcp_services = []
-          for dockerfile in sorted(Path("backend").glob("*_mcp/Dockerfile")):
-              package = dockerfile.parent.name
-              service = f"{package.removesuffix('_mcp').replace('_', '-')}-mcp"
-              definitions[service] = {
-                  "service": service,
-                  "context": "backend",
-                  "dockerfile": str(dockerfile),
-              }
-              path_prefixes[service] = f"backend/{package}/"
-              mcp_services.append(service)
-
-          base = os.environ.get("BASE_SHA", "")
-          target = os.environ["TARGET_SHA"]
-          base_valid = bool(base) and subprocess.run(
-              ["git", "cat-file", "-e", f"{base}^{{commit}}"],
-              check=False,
-              stdout=subprocess.DEVNULL,
-              stderr=subprocess.DEVNULL,
-          ).returncode == 0
-
-          if not base_valid:
-              selected = list(definitions)
-          else:
-              changed = subprocess.check_output(
-                  ["git", "diff", "--name-only", base, target],
-                  text=True,
-              ).splitlines()
-              selected = [
-                  service
-                  for service, prefix in path_prefixes.items()
-                  if any(path.startswith(prefix) for path in changed)
-              ]
-              # 共享包 backend/shared/ 被 api/worker/runner 打进镜像，变更须同时重建
-              if any(path.startswith("backend/shared/") for path in changed):
-                  selected += [s for s in ("api", "worker", "runner") if s not in selected]
-              # Compose 或部署机制变更时，同步构建所有已发现 MCP。这样首次引入
-              # MCP 的发布也会产出可被生产机拉取的镜像，避免只更新 API 后服务缺席。
-              if any(path in {"docker-compose.yml", "deploy/deploy.sh", ".github/workflows/deploy.yml"} for path in changed):
-                  selected += [s for s in mcp_services if s not in selected]
-              # runner 是平台核心服务（bash 沙箱执行体），始终纳入构建，
-              # 保证目标机任何时候都有 runner 镜像（避免 Docker Hub 不可达时回退拉取失败）
-              if "runner" not in selected:
-                  selected.append("runner")
-
-          matrix = {"include": [definitions[service] for service in selected]}
-          print(f"动态构建服务：{', '.join(selected) if selected else '无'}")
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-              output.write(f"matrix={json.dumps(matrix, separators=(',', ':'))}\n")
-              output.write(f"has_services={'true' if selected else 'false'}\n")
+        run: python3 deploy/plan_services.py --format github
 
   build:
     name: Build ${{ matrix.service }}
@@ -181,6 +111,7 @@ jobs:
     if: >-
       always() &&
       needs.plan.result == 'success' &&
+      needs.plan.outputs.needs_deploy == 'true' &&
       (needs.build.result == 'success' || needs.build.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
@@ -194,8 +125,8 @@ jobs:
           SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: |
           if [ -z "$SSH_HOST" ] || [ -z "$SSH_KEY" ]; then
-            echo "部署所需的 Secrets（SSH_HOST / SSH_PRIVATE_KEY）未配置，跳过部署。"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "部署所需的 Secrets（SSH_HOST / SSH_PRIVATE_KEY）未配置，终止部署以保留成功基准。"
+            exit 1
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi

@@ -1,6 +1,7 @@
 """验证前端镜像拆分静态资源后路径与内容保持完整。"""
 
 import hashlib
+import os
 from pathlib import Path
 import shlex
 import shutil
@@ -42,6 +43,9 @@ class BuildAssetsTest(unittest.TestCase):
             # 跳过 npm 编译，保留 Dockerfile 的真实拆分逻辑，并映射到隔离目录。
             tail = dockerfile.split("RUN npm run build", 1)[1].split("\n\n", 1)[0]
             command = ("true" + tail).replace("/app", shlex.quote(app.as_posix()))
+            if os.name == "nt":
+                # Git Bash 非登录 Shell 不保证含 coreutils 路径，显式提供 mkdir/mv。
+                command = "export PATH=/usr/bin:$PATH\n" + command
             subprocess.run([BASH, "-c", command], check=True, capture_output=True)
 
             vendor = app / "vendor-assets"

@@ -1,9 +1,14 @@
 name: CI
 
 on:
+  # 额度治理：功能分支与 Pull Request 不运行 Actions，仅 main 推送后校验。
   push:
     branches: [main]
-  pull_request:
+    # 纯说明文档不消耗 Runner；运行时 SKILL.md 等提示词仍需验证。
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+      - '**/README.md'
 
 jobs:
   deploy-scripts:

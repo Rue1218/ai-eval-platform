@@ -1,6 +1,8 @@
 # AI 测试与评估平台 — AI Agent 行为规范与工程指南 (AGENTS.md)
 
 > **最高指示**：本文件是面向所有参与本项目的 **AI Agent 与开发者** 的最高行动指南。在编写或修改代码前，**必须严格遵守本文档所规定的架构边界、开发契约与行为红线**。
+> 版本：V2.5 ｜ 审查日期：2026-09-14（纯说明文档提交不构建、不触发 CI/CD；部署计划统一由 `deploy/plan_services.py` 按 Dockerfile 输入计算，MCP 工具自动发现，取消 runner 常驻构建；部署脚本变更复用已有镜像，Compose 构建参数变更保守全量处理）。
+> 版本：V2.4 ｜ 审查日期：2026-09-14（V2.4 GitHub Actions 额度治理：取消 `pull_request` 触发，功能分支与 PR 不运行 GitHub Actions；仅 `push main` 运行 CI/CD。PR 仍可用于人工审查，但合入前的构建、自检和测试须在本地完成）。
 > 版本：V2.3 ｜ 审查日期：2026-09-12（V2.3 部署文档校正（按生产实测同步）：§4 链路更正为 GitHub Runner 构建并推送 GHCR、生产机受限并发拉取（`DEPLOY_PULL_PARALLEL` 默认 2）后滚动替换，服务器本地逐服务串行构建仅作回退路径（web `NODE_BUILD_MEMORY` 默认 1536）；`SSH_USER`/`SSH_PRIVATE_KEY` 与 §4.2 SOP 命令由 `deploy` 改为 `root`（服务器无 `deploy` 用户，仓库/密钥/部署均以 root 运行；Actions 部署入口从目标提交提取 `deploy/deploy.sh` 执行）；新增 §4.3 服务器侧备用巡检（root crontab 每 5 分钟 `auto-deploy-watch.sh`，`.deploy-mode` 切换 actions/local，与 Actions 共用 `.deploy.lock`））。版本：V2.2 ｜ 审查日期：2026-09-09（V2.2 废除「首次登录强制改密」（产品决策）：后端开户/重置密码/引导成员一律不再置 `must_change_password=true`（`shared/models.py` 列默认改 False、`schemas.UserCreate` 默认 False 且开户忽略请求字段、`users.reset_password` 与 `auth.change_password` 不再维护标记、bootstrap 恒 False，列/响应字段保留兼容）；前端删除 Login.vue 强制改密弹窗与登录拦截、MainLayout 改密弹窗收敛普通形态（可关闭、恒显示原密码与取消）、auth store 移除 mustChangePassword getter；API.md V1.84、PRD V1.19 登记；qa-test 等测试账号登录不再弹改密提示）。版本：V2.1 ｜ 审查日期：2026-09-09（V2.1 管理端工作区下线 + 智能体新建工作区：**产品决策**移除管理端「工作区管理」——`/api/admin/workspaces` 五个接口（列表/磁盘统计/文件展开/沙箱清理/孤儿清理）整文件删除（`backend/api/app/routers/workspaces.py` 下线、`main.py` 注册移除、`workspace_service.orphan_direct_children` 删除、`test_admin_workspaces.py` 删除，孤儿/管理端定位相关测试同步裁剪）；前端 `AdminWorkspaces.vue`/路由/侧边栏「工作区」菜单/`api.admin.*` 封装与专属类型全删，用户域「我的工作区」不受影响（API.md V1.82：§3.12.2 整节移除、原 §3.12.3 重编号为 §3.12.2）；**智能体页草稿会话绑定面板新增「新建工作区」即建即绑**（`Agent.vue createDraftWorkspace`，创建后自动选中绑定，无需跳「我的工作区」）；新增跑测账号 `qa-test`（生产，`must_change_password=false`，凭据仅线下交付，跑测数据一律落该账号，harness-ws-probe 跑测传 `--user qa-test`，禁止用 admin 跑测污染业务数据）。版本：V2.0 ｜ 审查日期：2026-09-07（V2.0 沙箱档位化与会话绑定（主稿 A《工作区与沙箱设计方案》V0.5 / 关联稿 B V0.6.1；分支 `feat/sandbox-g4-policy`→G4、`feat/sandbox-g5-binding`→G5）：**G4 = F2** 删除四处 bash 命令词表与静态裁决（`feedback/rules.py` gate 分支、`sandbox_kernel` 词表、`dispatch` `bash_approval_reason`/`bash_block_reason`、runner 黑名单，含 sudo 残余项——S3/G2 部署后按 PoC 定稿形态删除，理由见 B 稿 D1 勘误），bash 直通受控沙箱；runner 契约改 `policy{mode, workspace_root}`（mode ∈ workspace-write/read-only，缺省/非法 VALIDATION 双向 fail-closed），kernel bind 按 mode 化，`config.sandbox_bash_default_mode`（默认 workspace-write=行为不变）；runner 校验 `is_valid_session_workspace` → `resolve_workspace_path`（前缀+realpath 逐段、接受嵌套 scope、拒符号链接、bind canonical）；API.md V1.75 相关工具描述同步。**G5 = F3** 会话-工作区绑定接线：`POST /api/sessions` 增量 `workspace_id/scope_path`（创建固化、仅 private、属主校验+目录就绪、AuditLog `session_workspace_bind`）；`resolve_session_sandbox` 唯一沙箱解析入口（ws 注入替换，绑定失效 fail-closed 不回落 legacy）；已绑定会话转 team 拒绝（BLK-4）；`SessionOut` 增绑定字段与 `workspace_name`；前端草稿会话「绑定工作区」预选 + 会话列表/顶栏绑定展示；API.md V1.76（§3.4/§3.12.3）。全量门禁：api 894 passed/20 skipped、runner 17、worker 50、前端 typecheck/build 通过。F4（read-only 档灰度）与 G6/F5（workspace-write 档+升档审批+契约组）未交付：放行依赖 S3 空转观察（≥7 天至 ~2026-09-14）与部署决策；图级 tool_approval 端到端用例随 F5 升档卡接入恢复；附件 staging 仍 legacy（归属迁移留评审）。V1.9 用户工作区实体 F1/G1（《工作区与沙箱设计方案》V0.4.1；历史）：新增 `workspaces` 表（软删 `deleted_at`、每属主活跃唯一）与 `sessions.workspace_id(FK ON DELETE RESTRICT)/scope_path` 列（迁移 `e8f1a2b3c4d5`）；用户域 `GET/POST/PUT/DELETE /api/workspaces`——注销=软删，purge=行锁内显式解绑 + FK RESTRICT 兜底（禁 SET NULL），写 AuditLog；`GET/POST /api/workspaces/{id}/files` 一层浏览/建夹（`app/workspace_service.py` 段级 + realpath 防穿越单一实现）；孤儿判定与 `delete_orphan` 排除活跃 `workspaces.id`（B2 行态守卫）；前端「我的工作区」页 + 导航 + PRD 5.8 增补登记；API.md V1.75（§3.12.3）。全量门禁：api 880 passed/20 skipped、worker 50 passed、前端 typecheck/build 通过。会话绑定接线（F3）与 legacy 复活（F3）未交付，本期会话不产生绑定。V1.8 dsh 借鉴五项改进交付：护栏 #4 事件词汇表版本化（`backend/shared/event_vocab.py` 单一事实源，当前 `event.v4`；api/worker 落库带 `event_version` 保留字段、`_forward_loop` 按 `event_vocab_strict` 默认告警跳过/fail-closed 拒收）→ #1 clarify 问答恢复（API.md V1.72 转正：`ask_user_question` 中断落澄清卡，三类卡共用 `pending_confirm` 单行互斥、meta `schema_version=2`、回执 `clarify_ack`；`worker.general` 视野含 `ask_user_question`；前端 ClarifyCard）→ #3 审批终态（API.md V1.73：`approval_terminal` expired/cancelled、TTL `agent_approval_ttl_seconds` 幂等判龄、api 后台扫描、`/stop` 清悬挂审批卡；ApprovalCard 失效态）→ #2 上下文压缩事件化首期（API.md V1.74：`NativeToolResultStore` 超长结果先裁剪带标注、窗口裁剪留痕 `context_trim` 仅元信息）→ #5 执行选择显式化（`harness/security/exec_policy.py` 收敛沙箱/演练决策，默认行为不变）；全量门禁：api 854 passed / 20 skipped / 0 failed、worker 50 passed、前端 typecheck/build 通过；H5 批次 2 未完成项延续：`AGENT_CHECKPOINTER=postgres` 生产切换、网关粘性路由落地、重启恢复演练、`worker.sandbox` 安全评审（#1/#3 跨重启寻址价值仍依赖此前置，本批按单副本/memory 语义交付））
 
 ---
@@ -160,7 +162,7 @@ main（保护，仅 PR 合入）
   └── docs/api-v1.4
          │
          ▼
-      Pull Request → CI 通过 → 合并 main → CD 部署生产
+      Pull Request → 人工审查与本地门禁 → 合并 main → 按变更触发 CI/CD（纯文档跳过）
 ```
 
 **分支命名**：`<type>/<scope>-<短横线英文或拼音简述>`，type/scope 与提交规范同一套。
@@ -179,7 +181,7 @@ main（保护，仅 PR 合入）
 1. **一模块一分支**（或一 Task 一分支）。Agent、前端、Worker 不要堆在同一条长期分支上。  
 2. 从最新 `origin/main` 拉出：`git fetch origin && git checkout -b feat/agent-xxx origin/main`。  
 3. 推送功能分支：`git push -u origin HEAD`。合入用 **Pull Request**，禁止把功能分支 `push --force` 到 `main`。  
-4. **只有 `main` 触发生产 CD**。功能分支只跑 CI，不部署 `47.119.132.83`。  
+4. **仅 `push main` 自动触发 GitHub Actions CI/CD，纯说明文档除外**。功能分支和 Pull Request 不运行 Actions；代码提交、开 PR、合入前按 §2.1 完成本地门禁，文档按下述例外自检。
 5. 允许直接在 `main` 的例外：**无代码、无迁移**的错别字级文档（仍建议开 `docs/` 分支）。契约变更（API.md / PRD / Agent 说明书）按模块开 `docs/` 分支。  
 6. 合并后删除远程功能分支，不在本地长期占用 `main` 做开发。
 
@@ -189,6 +191,7 @@ main（保护，仅 PR 合入）
 - **常见 Type**：`feat`（新功能）、`fix`（修缺陷）、`docs`（文档）、`style`（格式）、`refactor`（重构）、`test`（测试）、`ci`（CI/CD）、`chore`（杂项）。
 - **常用 Scope**：`api`、`worker`、`web`、`mcp`、`rag`、`stress`、`auth`、`dataset`、`profile`、`task`、`report`、`agent`、`deploy`。
 - **提交前强制门禁**：提交代码前**必须在本地先完成构建与自检**，确保 0 错误后方可执行 `git commit`：后端 `cd backend/api && ruff check . ../shared && pytest`、`cd backend/worker && PYTHONPATH=.:.. pytest`；前端 `cd frontend && npm run typecheck && npm run build`。
+- **纯文档例外**：仅修改 `docs/**`、根目录 `*.md`、各级 `README.md` 时，无需应用构建与测试，只校验文档内容、链接与 `git diff --check`。运行时提示词（例如工具目录中的 `SKILL.md`）不属于说明文档例外。仅修改部署脚本/工作流时，运行部署单元测试、Shell 语法、工作流 YAML 和 Python 静态检查，无需构建未修改的业务应用。
 - **提交标题编码检查（强制，防乱码）**：提交消息含中文时，**禁止在非 UTF-8 终端（如 Windows PowerShell）直接内联中文参数**执行 `git commit -m "中文标题"` / `gh pr create --title "中文"`——终端编码会把中文标题写成乱码并永久进入历史（曾发生：`docs: 娣峰悎寮曟搸…`）。正确做法与提交前检查：
   1. 中文提交消息一律写入临时文件后 `git commit -F <msg_file>`（`gh pr create` 同理用 `--body-file`，标题用 ASCII 或经文件传递）；
   2. 提交后立即检查标题可读：`git log -1 --format=%s` 与 `git show -s --format=%B HEAD` 输出必须为正常中文；
@@ -204,18 +207,20 @@ main（保护，仅 PR 合入）
 ## 4. 自动部署与 CI/CD (CI/CD & DevOps)
 
 ```text
-功能分支 Push ──► GitHub Actions CI（Ruff + Pytest + 部署脚本校验；不部署）
-合并 PR 到 main ──► GitHub Actions Deploy
-                         │ Plan：对比上次成功部署提交，计算需要重建的服务
-                         │ Build：GitHub Runner 构建镜像并推送 GHCR（ghcr.io/rue1218/ai-eval-platform-<服务>:<提交>）
-                         ▼
-                    CD（SSH 以 root 登录）──► 服务器 /opt/ai-eval-platform
-                         │ 从目标提交提取 deploy/deploy.sh 执行（入口与提交严格同版本）
-                         ▼
-                    deploy.sh：reset 到精确提交 → 仅拉取变化服务镜像（并发上限 DEPLOY_PULL_PARALLEL=2）→ 滚动替换
+功能分支 Push / Pull Request ──► 不触发 GitHub Actions（本地完成构建、自检、测试）
+push main ──► CI 与 Deploy 各自按路径触发（纯说明文档跳过）
+                  │ Plan：对比上次成功部署提交，计算需要重建的服务
+                  │ Build：GitHub Runner 构建镜像并推送 GHCR（ghcr.io/rue1218/ai-eval-platform-<服务>:<提交>）
+                  ▼
+             CD（SSH 以 root 登录）──► 服务器 /opt/ai-eval-platform
+                  │ 从目标提交提取 deploy/deploy.sh 执行（入口与提交严格同版本）
+                  ▼
+             deploy.sh：reset 到精确提交 → 仅拉取变化服务镜像（并发上限 DEPLOY_PULL_PARALLEL=2）→ 滚动替换
 ```
 
-**生产只跟 `main`。** 功能分支、个人 fork、未合并 PR 不得触发对 `47.119.132.83` 的 CD。
+**生产只跟 `main`。** 功能分支与 Pull Request 不自动触发 GitHub Actions；`push main` 按路径过滤运行 CI/CD。Deploy 保留 `main` 上的手动触发入口。
+
+**增量部署单一事实源**：Actions 和服务器统一调用 `deploy/plan_services.py`，对比上次成功部署与目标提交（包含失败轮次的累积改动）。按 Dockerfile 的 COPY/ADD 输入选择服务；`backend/*_mcp/Dockerfile` 自动发现工具。取消 runner 常驻构建、部署脚本改动强制构建全部 MCP。无变化服务复用上次成功镜像；首次部署/基准丢失或 Compose 构建输入变化时保守全量构建。不得把运行时 Markdown 提示词误当纯说明文档过滤。
 
 镜像默认在 GitHub Runner 上构建并推送 GHCR，服务器只拉取；仅回退路径（手动执行 `deploy/deploy.sh` 或备用巡检 `mode=local`）会在服务器本地逐服务串行 `docker compose build`（web 受 `NODE_BUILD_MEMORY` 限制，默认 1536）。纯文档变更（`docs/**`、`*.md` 等）不触发部署。
 
@@ -338,6 +343,6 @@ except AppError as exc:
 ### 🟢 推荐操作五步法
 1. **先查后改、先开分支**：查阅 PRD、API.md、Agent 开发文档；从 `origin/main` 拉出 `<type>/<scope>-简述` 再写代码；
 2. **中文注释**：编写规范的中文 docstring 与代码注释；
-3. **本地先构建与自检**：提交前必须在本地执行 §2.1 的门禁命令：前端 `npm run typecheck && npm run build`、后端 `ruff check . ../shared` / `pytest`，验证 100% 通过；
-4. **规范中文提交**：严格采用 `<type>(<scope>): <中文描述>` 格式在**功能分支**上原子化提交，再开 PR；
-5. **监控部署**：PR 合入 `main` 后关注 GitHub Actions CI/CD 流水线，异常时按 SOP 处置。
+3. **本地先构建与自检**：代码提交前执行 §2.1 的门禁命令；纯说明文档与部署配置按 §3.2 的例外验证，禁止为纯说明文档运行应用构建；
+4. **规范中文提交**：严格采用 `<type>(<scope>): <中文描述>` 格式在**功能分支**上原子化提交；需要评审时可开 PR，但 PR 不运行 GitHub Actions；
+5. **监控部署**：`push main` 后关注 GitHub Actions CI/CD 流水线，异常时按 SOP 处置。

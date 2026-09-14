@@ -124,6 +124,20 @@ export BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 export DOCKER_BUILDKIT=1
 export COMPOSE_DOCKER_CLI_BUILD=1
 
+# 先判断部署差异：纯文档/测试提交同步 Git 后即可结束，不访问 Docker 或清理镜像。
+# CI 与服务器共用计划，避免拉取 CI 未构建的目标标签。
+DEPLOY_PLAN=$(python3 deploy/plan_services.py --base "$DEPLOY_BASE_COMMIT" --target "$DEPLOY_COMMIT")
+BUILD_LIST=$(python3 -c 'import json,sys; print(" ".join(json.load(sys.stdin)["build_services"]))' <<<"$DEPLOY_PLAN")
+UPDATE_LIST=$(python3 -c 'import json,sys; print(" ".join(json.load(sys.stdin)["deploy_services"]))' <<<"$DEPLOY_PLAN")
+read -r -a BUILD_SERVICES <<<"$BUILD_LIST"
+read -r -a UPDATE_SERVICES <<<"$UPDATE_LIST"
+if [ "${#UPDATE_SERVICES[@]}" -eq 0 ]; then
+    echo "==> 无运行时变化，跳过构建与容器更新"
+    printf '%s\n' "$DEPLOY_COMMIT" > "$DEPLOY_MARKER"
+    exit 0
+fi
+echo "==> 本次构建：${BUILD_SERVICES[*]:-无}；配置应用：${UPDATE_SERVICES[*]:-无}"
+
 # H5 混合引擎生产前置检查：开启混合引擎时禁止以 memory 检查点部署，
 # 否则 API 虽能启动，HITL 中断状态却无法跨进程重启恢复。
 echo "==> 校验 H5 生产检查点与沙箱网络配置"
@@ -190,7 +204,6 @@ EXTERNAL_BASE_DIR="${EXTERNAL_BASE_DIR:-/srv/agent-external}"
 mkdir -p "$EXTERNAL_BASE_DIR"
 
 echo "==> [2/4] 按代码差异构建容器镜像（BUILD_VERSION=$BUILD_VERSION，旧容器持续服务中）"
-BUILD_SERVICES=()
 
 # 受控 MCP 以 backend/<名称>_mcp/Dockerfile 作为约定入口，Compose 服务名为
 # <名称>-mcp。新增 MCP 只需遵守该目录与命名约定，即可自动进入构建、拉取、
@@ -204,89 +217,12 @@ for dockerfile in backend/*_mcp/Dockerfile; do
     MCP_BUILD_SERVICES+=("$mcp_service")
 done
 
-add_build_service() {
-    # 保持服务列表去重，供目录变更和部署配置变更两类入口复用。
-    local service="$1"
-    case " ${BUILD_SERVICES[*]} " in
-        *" $service "*) ;;
-        *) BUILD_SERVICES+=("$service") ;;
-    esac
-}
-
 service_image_variable() {
     # Compose 镜像变量统一遵循 <SERVICE_UPPERCASE>_IMAGE，例如 media-mcp -> MEDIA_MCP_IMAGE。
     local normalized="${1^^}"
     normalized="${normalized//-/_}"
     printf '%s_IMAGE\n' "$normalized"
 }
-
-# 先计算本次真正受影响的服务；CI 拉取与手动本地构建共用同一结果。
-if [ -z "$DEPLOY_BASE_COMMIT" ] || ! git cat-file -e "${DEPLOY_BASE_COMMIT}^{commit}" 2>/dev/null; then
-    echo "==> 未找到有效部署基准，本次全量构建"
-    BUILD_SERVICES=(web api worker lightrag stress runner "${MCP_BUILD_SERVICES[@]}")
-else
-    echo "==> 对比上次成功部署：${DEPLOY_BASE_COMMIT:0:8}..${BUILD_VERSION}"
-    CHANGED_FILES=$(git diff --name-only "$DEPLOY_BASE_COMMIT" "$DEPLOY_COMMIT")
-
-    # Compose/部署配置由 up 阶段直接应用，不要求重建镜像；只有服务构建上下文变化才构建。
-    grep -q '^frontend/' <<<"$CHANGED_FILES" && BUILD_SERVICES+=(web)
-    grep -q '^backend/api/' <<<"$CHANGED_FILES" && BUILD_SERVICES+=(api)
-    grep -q '^backend/worker/' <<<"$CHANGED_FILES" && BUILD_SERVICES+=(worker)
-    grep -q '^backend/lightrag/' <<<"$CHANGED_FILES" && BUILD_SERVICES+=(lightrag)
-    grep -q '^backend/stress/' <<<"$CHANGED_FILES" && BUILD_SERVICES+=(stress)
-    grep -q '^backend/runner/' <<<"$CHANGED_FILES" && BUILD_SERVICES+=(runner)
-    for dockerfile in backend/*_mcp/Dockerfile; do
-        [ -f "$dockerfile" ] || continue
-        mcp_dir="$(dirname "$dockerfile")/"
-        if grep -Fq "$mcp_dir" <<<"$CHANGED_FILES"; then
-            mcp_package=$(basename "$(dirname "$dockerfile")")
-            mcp_service="${mcp_package%_mcp}"
-            add_build_service "${mcp_service//_/-}-mcp"
-        fi
-    done
-    # MCP 的 Compose 定义、构建矩阵或部署流程变更时，必须重新产出全部 MCP
-    # 镜像；否则新增服务可能只更新 API 配置而没有可供生产机拉取的镜像。
-    if grep -Eq '^(docker-compose\.yml|deploy/deploy\.sh|\.github/workflows/deploy\.yml)$' <<<"$CHANGED_FILES"; then
-        for service in "${MCP_BUILD_SERVICES[@]}"; do
-            add_build_service "$service"
-        done
-    fi
-    # 共享包 backend/shared/ 被 api/worker/runner 打进镜像，变更须同时重建（缺谁补谁）。
-    if grep -q '^backend/shared/' <<<"$CHANGED_FILES"; then
-        case " ${BUILD_SERVICES[*]} " in
-            *' api '*) ;;
-            *) BUILD_SERVICES+=(api) ;;
-        esac
-        case " ${BUILD_SERVICES[*]} " in
-            *' worker '*) ;;
-            *) BUILD_SERVICES+=(worker) ;;
-        esac
-        case " ${BUILD_SERVICES[*]} " in
-            *' runner '*) ;;
-            *) BUILD_SERVICES+=(runner) ;;
-        esac
-    fi
-    # runner 是平台核心服务（P4-3：bash 沙箱执行体），必须始终纳入构建/拉取列表：
-    # 否则目标机首次部署或镜像清理后缺 runner 镜像（且 Docker Hub 不可达）时，
-    # compose up 会以 "No such image: ai-eval-platform-runner" 失败。
-    # 手动路径例外：runner 代码未变且本地已有容器/镜像时跳过构建——
-    # 层缓存命中虽快但毫无必要，且避免把运行中的 CI ghcr 镜像换成等价的本地镜像重滚容器。
-    case " ${BUILD_SERVICES[*]} " in
-        *' runner '*) ;;
-        *)
-            if [ -n "$IMAGE_PREFIX" ]; then
-                # CI 拉取路径：增量拉取便宜，始终包含以确保镜像存在。
-                BUILD_SERVICES+=(runner)
-            elif [ -z "$(docker compose ps -aq runner 2>/dev/null || true)" ] \
-                && ! docker image inspect ai-eval-platform-runner >/dev/null 2>&1; then
-                # 手动路径：本地既无 runner 容器也无镜像，必须构建，否则 up 会因缺镜像失败。
-                BUILD_SERVICES+=(runner)
-            else
-                echo "==> runner 代码无变化且本地镜像/容器已存在，跳过 runner 构建与滚动"
-            fi
-            ;;
-    esac
-fi
 
 # 恢复上一轮各服务使用的不可变镜像引用，未变化服务不会回退到旧镜像。
 if [ -s "$DEPLOY_IMAGE_ENV" ]; then
@@ -483,7 +419,14 @@ fi
 
 # 只滚动更新发生变化且原本处于运行状态的服务；用户主动 stop/pause 的服务保持原状态。
 DEPLOY_SERVICES=()
-for service in "${BUILD_SERVICES[@]}"; do
+# 配置应用与镜像构建分离：脚本更新复用旧镜像，恢复检测到的旧容器仍需纳入更新。
+for service in "${RECONCILED_SERVICES[@]}"; do
+    case " ${UPDATE_SERVICES[*]} " in
+        *" $service "*) ;;
+        *) UPDATE_SERVICES+=("$service") ;;
+    esac
+done
+for service in "${UPDATE_SERVICES[@]}"; do
     SERVICE_CONTAINER=$(docker compose ps -aq "$service" 2>/dev/null || true)
     if [ -z "$SERVICE_CONTAINER" ]; then
         # 首次部署没有旧容器，需要创建服务。
@@ -503,7 +446,7 @@ if [ "${#DEPLOY_SERVICES[@]}" -eq 0 ]; then
     echo "==> [3/4] 无需滚动更新业务服务"
 else
     UP_ARGS=(--no-build --remove-orphans)
-    if [ -z "$IMAGE_PREFIX" ]; then
+    if [ -z "$IMAGE_PREFIX" ] && [ "${#BUILD_SERVICES[@]}" -gt 0 ]; then
         # 本地构建路径（手动部署回退）：镜像名固定不变（ai-eval-platform-api 等），
         # compose 判定容器 config 未变时不 recreate，新代码将不生效（历史事故：
         # api 容器长期跑 2 天前旧镜像）。强制重建以加载本次构建产物。
@@ -567,9 +510,9 @@ if [[ " ${DEPLOY_SERVICES[*]} " == *" web "* ]]; then
     '
 fi
 
-# 仅在容器滚动更新成功后记录部署提交，失败任务不会污染下一次差异计算基准。
-printf '%s\n' "${DEPLOY_COMMIT:-$(git rev-parse HEAD)}" > "$DEPLOY_MARKER"
-# 持久化镜像引用；使用 %q 防止再次 source 时发生 shell 注入。
+# 先原子持久化镜像引用，再更新成功基准，避免中断留下新基准与旧镜像映射。
+# 使用 %q 防止再次 source 时发生 shell 注入；临时文件位于同目录以保证原子替换。
+IMAGE_ENV_NEXT=$(mktemp "$APP_DIR/.deploy-images.env.XXXXXX")
 {
     for service in "${TRACKED_IMAGE_SERVICES[@]}"; do
         variable="$(service_image_variable "$service")"
@@ -577,7 +520,12 @@ printf '%s\n' "${DEPLOY_COMMIT:-$(git rev-parse HEAD)}" > "$DEPLOY_MARKER"
             printf '%s=%q\n' "$variable" "${!variable}"
         fi
     done
-} > "$DEPLOY_IMAGE_ENV"
+} > "$IMAGE_ENV_NEXT"
+mv -f "$IMAGE_ENV_NEXT" "$DEPLOY_IMAGE_ENV"
+# 仅在容器更新与镜像映射持久化成功后推进基准。
+MARKER_NEXT=$(mktemp "$APP_DIR/.deploy-success-sha.XXXXXX")
+printf '%s\n' "$DEPLOY_COMMIT" > "$MARKER_NEXT"
+mv -f "$MARKER_NEXT" "$DEPLOY_MARKER"
 
 echo "==> [4/4] 清理未使用的历史镜像"
 docker image prune -f --filter "dangling=true" >/dev/null 2>&1 || true

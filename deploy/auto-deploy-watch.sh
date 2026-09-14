@@ -149,6 +149,17 @@ if [ "$COMPARE_BASE" = "$REMOTE_SHA" ] && [ "$FORCE" != "1" ]; then
     exit 0
 fi
 
+# 文档发布不会触发 Actions；已有成功基准且累计差异全是说明文档时直接跳过。
+# 不推进成功标记，后续代码发布仍基于真实上线版本计算；强制巡检保留原有语义。
+if [ -n "$LAST_DEPLOYED" ] && [ "$FORCE" != "1" ] \
+    && git diff --quiet "$LAST_DEPLOYED" "$REMOTE_SHA" -- . \
+        ':(top,glob,exclude)docs/**' \
+        ':(top,glob,exclude)*.md' \
+        ':(top,glob,exclude)**/README.md'; then
+    _log "巡检正常：${REMOTE_SHA:0:8} 仅更新说明文档，无需构建或部署"
+    exit 0
+fi
+
 if [ "$MODE" != "local" ] && [ "$FORCE" != "1" ]; then
     # actions 模式只提示待部署，不部署（避免与主链路双写部署基准）。
     # 若该日志连续出现而 Actions 又长期没有成功记录，即主链路已停摆，应切换 local。
