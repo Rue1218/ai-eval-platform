@@ -2490,7 +2490,7 @@ Qwen Image 通过与 `audio.voiceclone` 相同的 Agent 内部短工具链路执
 
 **V1.15（2026-08-22）— Agent 骨架重置**
 
-旧 Agent、Harness、模型调用层和 Runtime 实现已清空，避免旧实现与新设计并存。`/ws/agent`、Agent 偏好、MCP 工具清单以及数据集/用例 AI 候选入口暂由 API 保留路径但返回统一的 `VALIDATION` 能力未启用错误；核心 CRUD、Worker、数据库模型与迁移不受本次重置影响。后续实现边界以 [`AI测试与评估平台-Agent重设计工作区.md`](AI测试与评估平台-Agent重设计工作区.md) 为准。
+旧 Agent、Harness、模型调用层和 Runtime 实现已清空，避免旧实现与新设计并存。`/ws/agent`、Agent 偏好、MCP 工具清单以及数据集/用例 AI 候选入口暂由 API 保留路径但返回统一的 `VALIDATION` 能力未启用错误；核心 CRUD、Worker、数据库模型与迁移不受本次重置影响。后续实现边界以 [`AI测试与评估平台-Agent重设计工作区.md`](https://github.com/Rue1218/ai-eval-platform/blob/45a7f49260c37b986d19c3b880e5d2d9cf1a1692/docs/AI%E6%B5%8B%E8%AF%95%E4%B8%8E%E8%AF%84%E4%BC%B0%E5%B9%B3%E5%8F%B0-Agent%E9%87%8D%E8%AE%BE%E8%AE%A1%E5%B7%A5%E4%BD%9C%E5%8C%BA.md) 为准。
 
 | 文件 | 作用 |
 | :--- | :--- |
@@ -3036,7 +3036,7 @@ Composer 上方抽屉；点击确认或取消即收回，消息流只保留关�
 
 **V1.83（2026-09-09）— Agent 消息链路兼容修复**
 
-无新增 REST/WS 字段与数据库迁移。默认思考偏好不支持时解析到 off；显式选择仍严格校验。DeepSeek/Qwen Anthropic 流按兼容模型接收空签名，off 显式下发。具体证据与验证边界见 [消息链路兼容修复](AI测试与评估平台-Agent消息链路兼容修复.md)。
+无新增 REST/WS 字段与数据库迁移。默认思考偏好不支持时解析到 off；显式选择仍严格校验。DeepSeek/Qwen Anthropic 流按兼容模型接收空签名，off 显式下发。具体证据与验证边界见 [消息链路兼容修复](https://github.com/Rue1218/ai-eval-platform/blob/45a7f49260c37b986d19c3b880e5d2d9cf1a1692/docs/AI%E6%B5%8B%E8%AF%95%E4%B8%8E%E8%AF%84%E4%BC%B0%E5%B9%B3%E5%8F%B0-Agent%E6%B6%88%E6%81%AF%E9%93%BE%E8%B7%AF%E5%85%BC%E5%AE%B9%E4%BF%AE%E5%A4%8D.md)。
 
 | 修改代码文件 | 作用 |
 | --- | --- |
@@ -3062,7 +3062,7 @@ Composer 上方抽屉；点击确认或取消即收回，消息流只保留关�
 
 **V1.85（2026-09-09）— 思考滑块与兼容模型请求参数**
 
-无新增 REST/WS 字段。`allowed_efforts` 与实际调用继续共用 resolver；DeepSeek V4 开放 off/high/max，Qwen3.6 Flash 开放预算档位。传输边界、厂商依据和线上验证限制见 [消息链路兼容修复 V1.1](AI测试与评估平台-Agent消息链路兼容修复.md)。
+无新增 REST/WS 字段。`allowed_efforts` 与实际调用继续共用 resolver；DeepSeek V4 开放 off/high/max，Qwen3.6 Flash 开放预算档位。传输边界、厂商依据和线上验证限制见 [消息链路兼容修复 V1.1](https://github.com/Rue1218/ai-eval-platform/blob/45a7f49260c37b986d19c3b880e5d2d9cf1a1692/docs/AI%E6%B5%8B%E8%AF%95%E4%B8%8E%E8%AF%84%E4%BC%B0%E5%B9%B3%E5%8F%B0-Agent%E6%B6%88%E6%81%AF%E9%93%BE%E8%B7%AF%E5%85%BC%E5%AE%B9%E4%BF%AE%E5%A4%8D.md)。
 
 | 修改代码文件 | 作用 |
 | --- | --- |
