@@ -175,7 +175,7 @@ bash deploy/auto-deploy-watch.sh --force
 - [AgentLoop 后端架构设计](docs/AI测试与评估平台-AgentLoop后端架构设计.md)
 - [AgentLoop 前端重写与联调计划](docs/AI测试与评估平台-AgentLoop前端重写与联调计划.md)
 - [备用自动部署方案](docs/AI测试与评估平台-备用自动部署方案.md)
-- [开发计划](docs/AI测试与评估平台-开发计划.md)
+- [开发计划](https://github.com/Rue1218/ai-eval-platform/blob/45a7f49260c37b986d19c3b880e5d2d9cf1a1692/docs/AI%E6%B5%8B%E8%AF%95%E4%B8%8E%E8%AF%84%E4%BC%B0%E5%B9%B3%E5%8F%B0-%E5%BC%80%E5%8F%91%E8%AE%A1%E5%88%92.md)
 
 ## 贡献约定
 

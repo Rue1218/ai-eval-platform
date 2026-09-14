@@ -14,7 +14,7 @@
 
 1. [`AI测试与评估平台-PRD.md`](AI测试与评估平台-PRD.md)：功能范围、任务状态机、确认卡字段和权限口径。
 2. [`AI测试与评估平台-API.md`](AI测试与评估平台-API.md)：资源字段、REST/WS 契约和 TaskSpec。
-3. [`AI测试与评估平台-后端开发计划.md`](AI测试与评估平台-后端开发计划.md)：表的最早交付批次和实现顺序。
+3. [`AI测试与评估平台-后端开发计划.md`](https://github.com/Rue1218/ai-eval-platform/blob/45a7f49260c37b986d19c3b880e5d2d9cf1a1692/docs/AI%E6%B5%8B%E8%AF%95%E4%B8%8E%E8%AF%84%E4%BC%B0%E5%B9%B3%E5%8F%B0-%E5%90%8E%E7%AB%AF%E5%BC%80%E5%8F%91%E8%AE%A1%E5%88%92.md)：表的最早交付批次和实现顺序。
 4. 本文：将上述契约映射为 PostgreSQL 表、关系、约束、索引和迁移要求。
 
 本文不新增 PRD V1.0 外的业务能力。`dataset_folders`、`case_folders`、`kb_chunks`、`gold_qa_items`、`dispatch_workers`、`dispatch_events`、`stress_whitelist`、`stress_approvals` 和 `task_stress_series` 是 API/开发计划已明确的持久化需求；它们用于规范化既有页面和接口，不是产品扩范围。

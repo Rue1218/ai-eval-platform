@@ -28,7 +28,7 @@
 - [API 契约](AI测试与评估平台-API.md)：REST 与 WS v2 字段、游标、权限和终态语义。
 - [AgentLoop 后端架构设计](AI测试与评估平台-AgentLoop后端架构设计.md)：持久事实、运行时及执行边界。
 - [AgentLoop 前端重写与联调计划](AI测试与评估平台-AgentLoop前端重写与联调计划.md)：回放、控制权、前端性能验收。
-- [Agent 优化遗留项与 SDK 迁移方案](AI测试与评估平台-Agent优化遗留项与SDK迁移方案.md)：历史 SDK 迁移记录，不作为本次 WS v2 性能现状依据。
+- [Agent 优化遗留项与 SDK 迁移方案](https://github.com/Rue1218/ai-eval-platform/blob/45a7f49260c37b986d19c3b880e5d2d9cf1a1692/docs/AI%E6%B5%8B%E8%AF%95%E4%B8%8E%E8%AF%84%E4%BC%B0%E5%B9%B3%E5%8F%B0-Agent%E4%BC%98%E5%8C%96%E9%81%97%E7%95%99%E9%A1%B9%E4%B8%8ESDK%E8%BF%81%E7%A7%BB%E6%96%B9%E6%A1%88.md)：历史 SDK 迁移记录，不作为本次 WS v2 性能现状依据。
 
 本稿不新增 REST/WS 字段。后续若引入配置失效通知、会话列表分页或改变可观察的权限撤销时效，必须先检查并更新 API 契约；不能仅凭本稿直接实施契约变化。
 
