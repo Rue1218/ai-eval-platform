@@ -1,182 +1,182 @@
 # AI 测试与评估平台
 
-基于 PRD V1.12 的单团队大模型测试与评估平台。当前首期采用 LangGraph 实现单轮 Agent
-与模型调用层，并通过 FastAPI WebSocket 提供流式对话；用户消息、思考摘要、助手正文
-增量、最终助手消息和结束信号已拆分为独立事件。Harness、人工确认和长任务按阶段冻结，
-避免多套运行时并存。
+面向单一研发与评测团队的内部 AI 测试平台。平台把模型协议管理、数据集与用例、基准评测、RAG 评测、共享压测、报告分析和 Agent 辅助编排放在同一工作台中，帮助团队以可追踪、可复现的方式评估模型与知识库效果。
 
-> 开发规范：[AGENTS.md](AGENTS.md)
->
-> 需求：[PRD V1.12](docs/AI测试与评估平台-PRD.md) · 接口：[API V1.20](docs/AI测试与评估平台-API.md)
->
-> Agent：[Agent 开发文档 V0.5](docs/AI测试与评估平台-Agent开发文档.md) · [LangGraph + WebSocket 设计](docs/AI测试与评估平台-Agent框架LangGraph与WebSocket重设计.md)
+项目不是通用聊天机器人：对话是任务规划和工具协作入口，耗时评测统一进入任务队列执行，结果以报告、事件和审计记录沉淀。
 
-技术栈：Vue 3 + TypeScript + Naive UI / Python 3.12 + FastAPI / LangGraph / PostgreSQL /
-WebSocket / Docker Compose / LightRAG / go-stress-testing。
+> 产品范围以 [PRD](docs/AI测试与评估平台-PRD.md) 为准；接口、字段和 WebSocket 事件以 [API 文档](docs/AI测试与评估平台-API.md) 为准；工程约定见 [AGENTS.md](AGENTS.md)。
 
-## 当前架构
+## 项目介绍
+
+大模型接入、数据准备、质量评测和容量验证常常分散在不同工具中，难以比较、复跑或说明一次结果是怎样得出的。本平台围绕“先评后压”的闭环设计：先运行基准、用例或 RAG 质量评测，只有质量任务成功且选择压测时，才派生共享压测任务。
+
+平台支持多种上游模型协议，并将调用细节收敛在协议档中。团队成员可以在浏览器中维护评测资源、发起任务、跟踪进度和查看报告；AgentLoop 则提供会话、专家技能、受控工具、工作区文件和人工交互卡片，使复杂评测工作可以通过对话完成编排而不绕过平台权限与审计边界。
+
+## 架构
 
 ```text
-浏览器 Vue 3
-  ├─ REST /api/* ────────────────┐
-  └─ WS /ws/agent?ticket= ───────┤
-                                ▼
-                         FastAPI WS Bridge
-                                │
-                                ▼
-                    LangGraph 单轮 Agent Graph
-                                │
-                                ▼
-                         ModelGateway（LangGraph）
-                                │
-                                ▼
-                    三协议适配器 / 上游模型
-
-       sessions / messages / ws_events ──► PostgreSQL
-       后续长任务 ───────────────────────► worker ──► LightRAG / stress
+浏览器（Vue 3 + Naive UI）
+  ├── REST /api/* ───────────────────────────────────┐
+  └── WebSocket /ws/agent?ticket=... ────────────────┤
+                                                       ▼
+FastAPI API / AgentLoop Host
+  ├── 认证、协议档、数据集、知识库、任务、报告、工作区
+  ├── WebSocket 事件持久化、断线补发、受控工具与交互卡片
+  └── AgentLoop：专家技能、模型调用、工具编排与会话状态
+                         │                         │
+                         │                         └── Runner 沙箱 / MCP 工具服务
+                         ▼
+PostgreSQL + pgvector  ◄──── Redis（短期状态与幂等）
+                         │
+                         ▼
+Worker 任务队列
+  ├── Benchmark：多协议模型质量评测
+  ├── Testcase：多策略用例生成与确认
+  ├── RAG：LightRAG 优先、可标注的本地降级检索
+  └── Stress：共享压测与 SLA 判定
 ```
 
-模型调用协议：`openai_chat`、`openai_responses`、`anthropic_messages`。协议 HTTP 细节只
-保留在 `backend/api/app/adapters.py`；Agent 图只依赖 `backend/api/app/llm/` 的稳定契约。
+| 层级 | 主要组件 | 职责 |
+| --- | --- | --- |
+| 前端工作台 | Vue 3、TypeScript、Naive UI、Pinia | 对话、评测配置、任务、报告、工作区和管理界面 |
+| API 与 Agent | FastAPI、WebSocket、AgentLoop | 短请求、权限、会话、流式事件、专家技能、工具与人工交互 |
+| 异步执行 | Worker、LightRAG、go-stress-testing | 领取长任务、执行评测、生成报告、运行压力测试 |
+| 数据与状态 | PostgreSQL、pgvector、Redis | 业务数据、事件回放、任务状态、向量能力与短期状态 |
+| 运行与部署 | Docker Compose、GitHub Actions、GHCR | 服务编排、按改动构建镜像、滚动部署与服务器备用巡检 |
 
-WebSocket 建连流程：
+## 业务流程
 
-1. 登录后调用 `POST /api/auth/ws-ticket` 获取五分钟单次短票；
-2. 连接 `GET /ws/agent?ticket=...&session_id=...&last_event_id=...`；
-3. 首次连接可创建私有会话，重连按 `last_event_id` 补发持久化事件；
-4. `user_message` 进入后台 Agent Task，收包循环不等待模型整轮执行。
+```text
+配置模型协议档 / 数据集 / 知识库 / 评测参数
+                     │
+                     ▼
+创建评测任务 ──► queued ──► Worker 领取并执行 ──► succeeded / failed / cancelled
+                     │                                  │
+                     │                                  ├── 事件实时推送与断线回放
+                     │                                  └── 报告、指标、审计记录落库
+                     ▼
+勾选压测且质量评测成功 ──► 派生共享压测 ──► SLA 判定与容量报告
+```
 
-## 首期已实现
+在 AgentLoop 中，用户可先选择专家与模型，再通过对话使用已授权的技能和工具。需要补充信息、确认任务或批准高风险操作时，系统展示相应交互卡片；确认后的动作仍由服务端校验权限、会话和工作区范围。长耗时评测不会阻塞 WebSocket 收包循环。
 
-| 模块 | 当前状态 |
+## 功能
+
+| 模块 | 功能概览 |
 | --- | --- |
-| LangGraph Agent | 单轮 `invoke` / 流式 `astream`，只组合 `ModelGateway` |
-| 模型调用层 | 三协议统一配置、思考开关/强度、同步/异步调用、正文/推理流和取消信号 |
-| WebSocket | 短票、会话可见性、心跳 `pong`、事件回放、后台单轮回合 |
-| WS 事件 | `user_message`、`thought`、`assistant_delta`、`assistant_message`、`response.completed`、`error`、`pong` |
-| 会话 | 私有/团队可见性、消息与事件持久化、断线补发 |
-| 平台基础 | 登录、协议档、文件、任务/数据集等 REST 基础接口 |
+| 模型与协议档 | 统一维护 OpenAI Chat、OpenAI Responses、Anthropic Messages 等协议档与模型参数 |
+| 基准评测 | 使用数据集运行多协议模型评测、规则评分、预算控制、断点续跑与报告生成 |
+| 用例生成 | 通过多种策略生成测试用例，支持人工确认后进入后续流程 |
+| RAG 评测 | 面向知识库进行检索与回答质量评测；LightRAG 不可用时明确标注降级来源，避免混淆结果 |
+| 共享压测 | 质量评测成功后派生压测，记录吞吐、延迟、错误率并按 SLA 输出结论 |
+| AgentLoop | 会话管理、流式回复、专家技能、提示词查看编辑、受控工具、人工问答与审批卡片 |
+| 工作区 | 用户工作区、会话绑定、文件管理、上传及媒体预览；工具操作限定在授权范围内 |
+| 任务与报告 | 队列状态、事件时间线、报告查看与分享、失败原因和审计留痕 |
+| 安全与权限 | Cookie 登录、WebSocket 短票、统一错误码、敏感配置加密、工具沙箱与审计日志 |
 
-## 当前冻结范围
+## 项目亮点
 
-以下能力不在首期 Agent 运行时中实现：
+- **评测与压测闭环**：以质量结果作为容量验证的前置条件，减少没有质量保障的无效压测。
+- **真实任务语义**：评测由 Worker 异步执行，任务状态、事件和报告可追踪；RAG 降级路径会明确标注，不用模拟成功掩盖引擎状态。
+- **可控的 Agent 协作**：专家技能和提示词可管理，工具权限、工作区范围和人工确认由服务端统一校验。
+- **可恢复的实时体验**：WebSocket 事件持久化，网络断开后可按事件游标补发；流式文本与持久业务事件分层处理。
+- **按实际改动部署**：部署计划读取 Dockerfile 输入并自动发现 MCP 工具服务。代码改动只构建相关镜像；纯说明文档不消耗 CI/CD 构建资源。
+- **安全边界清晰**：浏览器不接触模型密钥或宿主命令；敏感配置加密存储，受控命令经 Runner 沙箱执行。
 
-- 旧 `react.py`、旧 Harness 循环、Plan/Reflect、ParallelFacade；
-- MCP Server/Transport、工具调用、工具结果和自定义 Skill；
-- 人工确认卡、`confirm_ack`、任务取消 `cancel_task`；
-- Agent 直接创建长任务、Worker 终态等待、Redis/pgvector 记忆；
-- 新增数据库迁移、外部 MCP、可配置系统 Prompt。
+## 技术栈
 
-当前收到未启用的确认/任务控制事件时，服务端返回统一 `VALIDATION` 错误，不伪造成功任务或报告。
+- 前端：Vue 3、TypeScript、Vite、Naive UI、Pinia
+- API：Python、FastAPI、SQLAlchemy、Alembic、WebSocket
+- Agent：AgentLoop、模型协议适配层、受控工具与 MCP 服务
+- 数据与任务：PostgreSQL 16、pgvector、Redis、异步 Worker
+- 评测与运行：LightRAG、go-stress-testing、Docker Compose
+- 工程化：GitHub Actions、GHCR、按差异构建与服务器备用自动部署
 
 ## 目录结构
 
 ```text
 .
-├── frontend/                 Vue 3 + TypeScript + Naive UI + Vite
-│   ├── src/api/              REST 客户端、WS 客户端与 TypeScript 契约
-│   ├── src/components/       Agent、任务、数据集等可复用组件
-│   ├── src/layouts/          主布局
-│   ├── src/stores/           Pinia 状态
-│   └── src/views/            登录、Agent、任务、数据集、知识库等页面
+├── frontend/                 Vue 前端工作台
 ├── backend/
-│   ├── api/                  FastAPI 主服务、REST、WS Bridge、Agent、ModelGateway
-│   │   ├── app/              配置、依赖、错误、模型、会话与 Agent 入口
-│   │   │   ├── agent/        LangGraph 单轮 Agent 图
-│   │   │   ├── harness/      Harness 未来扩展的空包边界
-│   │   │   ├── llm/          ModelRequest/Response 与模型网关
-│   │   │   ├── routers/      REST、认证、会话和 `/ws/agent` 路由
-│   │   │   └── runtime/      旧运行时隔离的空包边界
-│   │   ├── migrations/       Alembic 数据库迁移
-│   │   └── tests/            API、Agent、模型和契约测试
-│   ├── worker/               长任务 Worker、评测执行器与 Worker 测试
-│   ├── shared/               API 与 Worker 共用的数据库模型
-│   ├── lightrag/             LightRAG 服务组件
-│   └── stress/               go-stress-testing 服务组件
-├── docs/                     PRD、API、Agent/Harness 设计与开发计划
-├── deploy/                   服务器初始化、数据库初始化与部署脚本
-├── Web-Prototype/            静态 HTML 原型与原型资源
-├── .github/workflows/        CI 与 main 分支部署流程
-└── docker-compose.yml
+│   ├── api/                  FastAPI、REST、WebSocket、AgentLoop 与认证
+│   ├── worker/               评测、用例生成、RAG 与压测任务执行器
+│   ├── runner/               受控工具与沙箱执行服务
+│   ├── shared/               API 与 Worker 共用模型、事件与公共能力
+│   ├── lightrag/             RAG 引擎服务
+│   └── stress/               压测服务
+├── deploy/                   初始化、增量部署、备用巡检与部署测试
+├── docs/                     PRD、API 契约、架构设计与实施记录
+├── Web-Prototype/            原型参考
+├── .github/workflows/        CI 与 main 分支部署工作流
+└── docker-compose.yml        本地与生产服务编排
 ```
 
-## 本地开发
+## 本地启动
+
+前置条件：Docker 与 Docker Compose，或分别安装 Python 3.12+、Node.js 20+ 和 PostgreSQL。
 
 ```bash
-# 1. 准备环境变量（可选，默认值可用于本地启动）
+# 复制并填写本地环境变量
 cp .env.example .env
 
-# 2. 启动完整 Compose
+# 启动完整服务栈
 docker compose up -d --build
-
-# 3. 访问
-# 前端：http://localhost
-# API：http://localhost:8000/api/health
-# Swagger：http://localhost:8000/docs
 ```
 
-首次部署会从环境变量创建引导管理员（默认 `admin / admin123`），登录后请立即改密。
+启动后可访问：
 
-### 前端本地热更新
+- 前端：`http://localhost`
+- 健康检查：`http://localhost:8000/api/health`
+- API 文档：`http://localhost:8000/docs`
+
+首次启动会根据环境变量创建引导管理员。生产环境必须自行设置强密码与密钥，禁止使用示例值。
+
+### 常用本地开发命令
 
 ```bash
+# 前端热更新
 cd frontend
 npm install
-npm run dev                 # http://localhost:5173，/api 与 /ws 代理到 localhost:8000
-```
+npm run dev
 
-### 本地检查
-
-```bash
-# 后端
+# API 检查
 cd backend/api
-python -m ruff check . ../shared
-python -m pytest -q
+ruff check . ../shared
+pytest
 
-# Worker（Windows PowerShell）
+# Worker 检查（Windows PowerShell）
 cd ../worker
 $env:PYTHONPATH = ".;.."
-python -m pytest -q
+pytest
 
-# 前端
+# 前端检查
 cd ../../frontend
 npm run typecheck
 npm run build
 ```
 
-## 部署
+## 部署说明
 
-首次初始化服务器：
+生产环境使用 Docker Compose。代码推送到 `main` 后，CI/CD 会按路径和 Dockerfile 输入决定是否构建、构建哪些镜像；纯说明文档提交会跳过构建与部署。
 
-```bash
-sudo bash deploy/server-setup.sh
-```
-
-之后推送 `main` 会触发 GitHub Actions，通过 SSH 执行部署脚本；服务器也可以手动执行：
+当 GitHub Actions 不可用时，服务器可以使用备用巡检在本地增量构建。详细配置、密钥要求、回滚和故障排查见 [备用自动部署方案](docs/AI测试与评估平台-备用自动部署方案.md) 与 [AGENTS.md](AGENTS.md)。
 
 ```bash
-sudo -u deploy bash /opt/ai-eval-platform/deploy/deploy.sh
+# 服务器上手动执行一次备用部署
+cd /opt/ai-eval-platform
+bash deploy/auto-deploy-watch.sh --force
 ```
-
-生产环境至少修改：`SECRET_KEY`、`POSTGRES_PASSWORD`、`BOOTSTRAP_ADMIN_PASSWORD`、
-`KEY_ENCRYPTION_KEY`。完整 SSH、Deploy Key 和 Actions Secret 说明见
-[AGENTS.md](AGENTS.md) 与 `deploy/`。
 
 ## 文档索引
 
-- [产品需求 PRD V1.12](docs/AI测试与评估平台-PRD.md)
-- [API 契约 V1.20](docs/AI测试与评估平台-API.md)
-- [Agent 开发文档 V0.5](docs/AI测试与评估平台-Agent开发文档.md)
-- [Agent 重设计工作区 V0.3](docs/AI测试与评估平台-Agent重设计工作区.md)
-- [LangGraph + WebSocket 设计](docs/AI测试与评估平台-Agent框架LangGraph与WebSocket重设计.md)
-- [模型调用层 LangGraph 设计](docs/AI测试与评估平台-模型调用层LangGraph重设计.md)
-- [总开发计划](docs/AI测试与评估平台-开发计划.md)
-- [后端开发计划](docs/AI测试与评估平台-后端开发计划.md)
-- [前端开发计划](docs/AI测试与评估平台-前端开发计划.md)
+- [产品需求文档（PRD）](docs/AI测试与评估平台-PRD.md)
+- [接口契约（API）](docs/AI测试与评估平台-API.md)
+- [Agent 开发文档](docs/AI测试与评估平台-Agent开发文档.md)
+- [AgentLoop 后端架构设计](docs/AI测试与评估平台-AgentLoop后端架构设计.md)
+- [AgentLoop 前端重写与联调计划](docs/AI测试与评估平台-AgentLoop前端重写与联调计划.md)
+- [备用自动部署方案](docs/AI测试与评估平台-备用自动部署方案.md)
+- [开发计划](docs/AI测试与评估平台-开发计划.md)
 
-## 说明
+## 贡献约定
 
-- 表结构由 Alembic 管理，禁止绕过迁移直接修改数据库；
-- API 统一使用十类错误码，禁止向浏览器返回 Key、Cookie、SQL、traceback 或上游原文；
-- 当前唯一平台 WS 入口是 `backend/api/app/routers/ws.py`，不恢复旧 Agent 工程的 Socket.IO `chat:*` 事件协议；
-- `frontend/codex-make-patch.py` 与 `frontend/codex-ui.patch` 若存在，属于本地未跟踪文件，不属于平台运行时。
+提交前请遵循 [AGENTS.md](AGENTS.md) 中的分支、测试、提交信息、迁移和安全规范。数据库结构变更必须由 Alembic 迁移管理；新增 API 或 WebSocket 字段必须先同步 API 文档；禁止在日志、接口响应或提交中暴露密码、密钥、Cookie、令牌或上游原始异常。
