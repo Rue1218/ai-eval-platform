@@ -75,6 +75,8 @@ const icons: Record<string, string> = {
 }
 
 const icon = computed(() => {
+  // 媒体工具先按原始逻辑名判别，避免中文展示别名影响图标选择。
+  if (props.name.startsWith('image.') || props.name.startsWith('video.')) return 'image'
   const resolved = toolAliases[props.name] || props.name
   if (icons[resolved]) return icons[resolved]
   if (resolved.startsWith('model.')) return 'cpu'
@@ -83,7 +85,6 @@ const icon = computed(() => {
   if (resolved.startsWith('report.')) return 'bar-chart'
   if (resolved.startsWith('dispatch.')) return 'sliders'
   if (resolved.startsWith('testcase.')) return 'check-circle'
-  if (resolved.startsWith('image.')) return 'image'
   return 'wrench'
 })
 </script>

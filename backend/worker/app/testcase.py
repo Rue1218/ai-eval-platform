@@ -19,10 +19,8 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from pathlib import Path
-
-from sqlalchemy.orm import Session
 
 from shared.casegen import (
     MAX_COUNT,
@@ -33,11 +31,22 @@ from shared.casegen import (
     rebalance_by_strategy,
     selfcheck,
 )
+from sqlalchemy.orm import Session
+
 from .db import SessionLocal
 from .events import push_ws
-from .models import CaseItem, CaseSet, ProtocolProfile, Setting, StoredFile, Task, TaskEvent
-from .protocol import ProtocolCallError, call_protocol
+from .models import (
+    CaseItem,
+    CaseSet,
+    ProtocolProfile,
+    Setting,
+    StoredFile,
+    Task,
+    TaskEvent,
+    utcnow,
+)
 from .profile_env import profile_connection, read_profile_env
+from .protocol import ProtocolCallError, call_protocol
 from .task_state import claim_running_task_for_terminal_write, is_cancelled
 
 logger = logging.getLogger("worker.testcase")
@@ -48,11 +57,6 @@ LLM_MAX_TOKENS = 8192  # 45 条用例的输出 token 预算
 CONFIRM_WINDOW_H = 72  # 确认窗口：72h 未确认由扫描器取消
 
 
-def _now():
-    """统一 UTC 时间戳。"""
-    return datetime.now(timezone.utc)
-
-
 def _fail(db: Session, task: Task, code: str, message: str) -> None:
     """任务失败收尾：落终态、写错误时间线并推送 WS error 事件。"""
     task_id = task.id
@@ -61,7 +65,7 @@ def _fail(db: Session, task: Task, code: str, message: str) -> None:
         logger.info("testcase task %s skipped failure because it is no longer running", task_id)
         return
     task.status = "failed"
-    task.finished_at = _now()
+    task.finished_at = utcnow()
     task.result = {**(task.result or {}), "error_code": code, "error_message": message}
     db.add(TaskEvent(task_id=task.id, event="error", level="error", message=message, payload={"code": code}))
     db.commit()
@@ -235,7 +239,7 @@ def run_testcase(task_id: str) -> None:
         if not task:
             logger.info("testcase task %s skipped persistence because it is no longer running", task_id)
             return
-        expires_at = _now() + timedelta(hours=CONFIRM_WINDOW_H)
+        expires_at = utcnow() + timedelta(hours=CONFIRM_WINDOW_H)
         case_set = CaseSet(
             task_id=task.id,
             name=f"AI 生成用例集 · 任务 {task.id[:8]}",

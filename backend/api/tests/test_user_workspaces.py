@@ -12,7 +12,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import workspace_service
-from app.main import app
 from app.routers import user_workspaces
 
 
@@ -138,10 +137,6 @@ class TestCreateChildDir:
 class TestUserRouterAuth:
     """用户域工作区路由未登录鉴权（与 admin 测试同构，不依赖数据库）。"""
 
-    @pytest.fixture()
-    def client(self) -> TestClient:
-        return TestClient(app)
-
     def test_list_requires_auth(self, client: TestClient) -> None:
         resp = client.get("/api/workspaces")
         assert resp.status_code == 401
@@ -169,6 +164,17 @@ class TestUserRouterAuth:
 
     def test_folder_create_requires_auth(self, client: TestClient) -> None:
         resp = client.post("/api/workspaces/some-id/files", json={"path": "", "name": "d"})
+        assert resp.status_code == 401
+
+    def test_raw_file_requires_auth(self, client: TestClient) -> None:
+        resp = client.get("/api/workspaces/some-id/files/raw?path=video.mp4")
+        assert resp.status_code == 401
+
+    def test_upload_requires_auth(self, client: TestClient) -> None:
+        resp = client.post(
+            "/api/workspaces/some-id/files/upload",
+            files={"file": ("video.mp4", b"dummy video content", "video/mp4")},
+        )
         assert resp.status_code == 401
 
 

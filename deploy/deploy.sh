@@ -2,12 +2,9 @@
 set -euo pipefail
 
 # ============================================================
-# 部署脚本：GitHub 代码更新 -> 服务器同步 -> 零中断平滑热更
-# 优化点：
-# 1. 开启 BuildKit 并发多核构建，极大缩短镜像生成时间
-# 2. 前端 Dockerfile 分层缓存修复（npm install 100% 命中缓存）
-# 3. 先在后台并发完成镜像构建，构建期间旧容器持续对外提供服务（0 中断）
-# 4. 镜像构建完成后，执行 docker compose 原子滚动替换，避免数据库与前端闪断
+# 部署脚本：同步精确提交 -> 增量准备镜像 -> 替换变化服务。
+# CI 构建后生产机只拉取；本地回退使用 BuildKit 缓存并逐服务串行构建。
+# 构建期间旧容器继续服务；单副本替换仍有短暂切换窗口。
 # ============================================================
 
 # 部署目录可被环境变量覆盖（本机部署于 /root/ai-eval-platform，GitHub Actions 使用 /opt 默认值）
@@ -23,6 +20,13 @@ IMAGE_PREFIX=${IMAGE_PREFIX:-}
 IMAGE_TAG=${IMAGE_TAG:-}
 GHCR_ACTOR=${GHCR_ACTOR:-}
 GHCR_TOKEN=${GHCR_TOKEN:-}
+# 限制生产机同时拉取的服务数，降低并发下载/解压造成的内存与磁盘争抢。
+# 仅作用于 pull，不改变 Compose 启动依赖顺序或 CI 的独立构建任务。
+DEPLOY_PULL_PARALLEL=${DEPLOY_PULL_PARALLEL:-2}
+if ! [[ "$DEPLOY_PULL_PARALLEL" =~ ^[1-9][0-9]*$ ]]; then
+    echo "错误：DEPLOY_PULL_PARALLEL 必须为正整数" >&2
+    exit 1
+fi
 # 基础设施镜像不在此处定义默认值：以 docker-compose.yml 的插值结果为唯一事实源（见 [2] 阶段）。
 # 避免脚本默认值与 Compose 默认镜像漂移（曾因旧 postgres:16.15-alpine 硬编码覆盖 pgvector 镜像）。
 LOCK_FILE="$APP_DIR/.deploy.lock"
@@ -188,10 +192,38 @@ mkdir -p "$EXTERNAL_BASE_DIR"
 echo "==> [2/4] 按代码差异构建容器镜像（BUILD_VERSION=$BUILD_VERSION，旧容器持续服务中）"
 BUILD_SERVICES=()
 
+# 受控 MCP 以 backend/<名称>_mcp/Dockerfile 作为约定入口，Compose 服务名为
+# <名称>-mcp。新增 MCP 只需遵守该目录与命名约定，即可自动进入构建、拉取、
+# 滚动更新和历史镜像保留流程，避免再出现媒体 MCP 漏部署。
+MCP_BUILD_SERVICES=()
+for dockerfile in backend/*_mcp/Dockerfile; do
+    [ -f "$dockerfile" ] || continue
+    mcp_package=$(basename "$(dirname "$dockerfile")")
+    mcp_service="${mcp_package%_mcp}"
+    mcp_service="${mcp_service//_/-}-mcp"
+    MCP_BUILD_SERVICES+=("$mcp_service")
+done
+
+add_build_service() {
+    # 保持服务列表去重，供目录变更和部署配置变更两类入口复用。
+    local service="$1"
+    case " ${BUILD_SERVICES[*]} " in
+        *" $service "*) ;;
+        *) BUILD_SERVICES+=("$service") ;;
+    esac
+}
+
+service_image_variable() {
+    # Compose 镜像变量统一遵循 <SERVICE_UPPERCASE>_IMAGE，例如 media-mcp -> MEDIA_MCP_IMAGE。
+    local normalized="${1^^}"
+    normalized="${normalized//-/_}"
+    printf '%s_IMAGE\n' "$normalized"
+}
+
 # 先计算本次真正受影响的服务；CI 拉取与手动本地构建共用同一结果。
 if [ -z "$DEPLOY_BASE_COMMIT" ] || ! git cat-file -e "${DEPLOY_BASE_COMMIT}^{commit}" 2>/dev/null; then
     echo "==> 未找到有效部署基准，本次全量构建"
-    BUILD_SERVICES=(web api worker lightrag stress runner)
+    BUILD_SERVICES=(web api worker lightrag stress runner "${MCP_BUILD_SERVICES[@]}")
 else
     echo "==> 对比上次成功部署：${DEPLOY_BASE_COMMIT:0:8}..${BUILD_VERSION}"
     CHANGED_FILES=$(git diff --name-only "$DEPLOY_BASE_COMMIT" "$DEPLOY_COMMIT")
@@ -203,6 +235,22 @@ else
     grep -q '^backend/lightrag/' <<<"$CHANGED_FILES" && BUILD_SERVICES+=(lightrag)
     grep -q '^backend/stress/' <<<"$CHANGED_FILES" && BUILD_SERVICES+=(stress)
     grep -q '^backend/runner/' <<<"$CHANGED_FILES" && BUILD_SERVICES+=(runner)
+    for dockerfile in backend/*_mcp/Dockerfile; do
+        [ -f "$dockerfile" ] || continue
+        mcp_dir="$(dirname "$dockerfile")/"
+        if grep -Fq "$mcp_dir" <<<"$CHANGED_FILES"; then
+            mcp_package=$(basename "$(dirname "$dockerfile")")
+            mcp_service="${mcp_package%_mcp}"
+            add_build_service "${mcp_service//_/-}-mcp"
+        fi
+    done
+    # MCP 的 Compose 定义、构建矩阵或部署流程变更时，必须重新产出全部 MCP
+    # 镜像；否则新增服务可能只更新 API 配置而没有可供生产机拉取的镜像。
+    if grep -Eq '^(docker-compose\.yml|deploy/deploy\.sh|\.github/workflows/deploy\.yml)$' <<<"$CHANGED_FILES"; then
+        for service in "${MCP_BUILD_SERVICES[@]}"; do
+            add_build_service "$service"
+        done
+    fi
     # 共享包 backend/shared/ 被 api/worker/runner 打进镜像，变更须同时重建（缺谁补谁）。
     if grep -q '^backend/shared/' <<<"$CHANGED_FILES"; then
         case " ${BUILD_SERVICES[*]} " in
@@ -253,14 +301,8 @@ fi
 if [ -n "$IMAGE_PREFIX" ] && [ -n "$IMAGE_TAG" ] && [ -n "$GHCR_ACTOR" ] && [ -n "$GHCR_TOKEN" ]; then
     IMAGE_PREFIX=${IMAGE_PREFIX,,}
     for service in "${BUILD_SERVICES[@]}"; do
-        case "$service" in
-            web) export WEB_IMAGE="${IMAGE_PREFIX}-web:${IMAGE_TAG}" ;;
-            api) export API_IMAGE="${IMAGE_PREFIX}-api:${IMAGE_TAG}" ;;
-            worker) export WORKER_IMAGE="${IMAGE_PREFIX}-worker:${IMAGE_TAG}" ;;
-            lightrag) export LIGHTRAG_IMAGE="${IMAGE_PREFIX}-lightrag:${IMAGE_TAG}" ;;
-            stress) export STRESS_IMAGE="${IMAGE_PREFIX}-stress:${IMAGE_TAG}" ;;
-            runner) export RUNNER_IMAGE="${IMAGE_PREFIX}-runner:${IMAGE_TAG}" ;;
-        esac
+        image_variable="$(service_image_variable "$service")"
+        export "$image_variable=${IMAGE_PREFIX}-${service}:${IMAGE_TAG}"
     done
 
     if [ "${#BUILD_SERVICES[@]}" -eq 0 ]; then
@@ -268,7 +310,7 @@ if [ -n "$IMAGE_PREFIX" ] && [ -n "$IMAGE_TAG" ] && [ -n "$GHCR_ACTOR" ] && [ -n
     else
         echo "==> 登录 GHCR，仅拉取变化服务：${BUILD_SERVICES[*]}"
         printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_ACTOR" --password-stdin >/dev/null
-        docker compose pull "${BUILD_SERVICES[@]}"
+        docker compose --parallel "$DEPLOY_PULL_PARALLEL" pull "${BUILD_SERVICES[@]}"
         docker logout ghcr.io >/dev/null 2>&1 || true
     fi
 elif [ "${#BUILD_SERVICES[@]}" -eq 0 ]; then
@@ -295,15 +337,9 @@ fi
 # 虽记录了目标不可变镜像，但线上仍会继续运行旧容器。把镜像不一致的服务
 # 重新纳入本轮更新，避免工作流误报成功而静态前端仍停留在旧版本。
 RECONCILED_SERVICES=()
-for service in web api worker runner lightrag stress; do
-    case "$service" in
-        web) image_variable=WEB_IMAGE ;;
-        api) image_variable=API_IMAGE ;;
-        worker) image_variable=WORKER_IMAGE ;;
-        runner) image_variable=RUNNER_IMAGE ;;
-        lightrag) image_variable=LIGHTRAG_IMAGE ;;
-        stress) image_variable=STRESS_IMAGE ;;
-    esac
+TRACKED_IMAGE_SERVICES=(web api worker runner lightrag stress "${MCP_BUILD_SERVICES[@]}")
+for service in "${TRACKED_IMAGE_SERVICES[@]}"; do
+    image_variable="$(service_image_variable "$service")"
     expected_image="${!image_variable:-}"
     [ -n "$expected_image" ] || continue
 
@@ -330,7 +366,7 @@ if [ "${#RECONCILED_SERVICES[@]}" -gt 0 ] \
     && [ -n "$IMAGE_PREFIX" ] && [ -n "$GHCR_ACTOR" ] && [ -n "$GHCR_TOKEN" ]; then
     echo "==> 拉取镜像不一致的服务：${RECONCILED_SERVICES[*]}"
     printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_ACTOR" --password-stdin >/dev/null
-    docker compose pull "${RECONCILED_SERVICES[@]}"
+    docker compose --parallel "$DEPLOY_PULL_PARALLEL" pull "${RECONCILED_SERVICES[@]}"
     docker logout ghcr.io >/dev/null 2>&1 || true
 fi
 
@@ -482,6 +518,35 @@ else
     fi
 fi
 
+# 受控 MCP 在 API 调用前必须完成服务端健康检查。为后续 MCP 固化 healthcheck
+# 契约：缺少健康检查也会阻断部署，而不是把连接失败留到 Agent 回合才暴露。
+for service in "${DEPLOY_SERVICES[@]}"; do
+    case " ${MCP_BUILD_SERVICES[*]} " in
+        *" $service "*) ;;
+        *) continue ;;
+    esac
+    echo "==> 验证 $service MCP 服务健康状态"
+    MCP_READY=0
+    for attempt in $(seq 1 30); do
+        service_container=$(docker compose ps -q "$service" 2>/dev/null || true)
+        if [ -n "$service_container" ]; then
+            service_health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$service_container" 2>/dev/null || true)
+            if [ "$service_health" = "healthy" ]; then
+                MCP_READY=1
+                break
+            fi
+            if [ "$service_health" = "unhealthy" ] || [ "$service_health" = "missing" ]; then
+                break
+            fi
+        fi
+        sleep 2
+    done
+    if [ "$MCP_READY" != "1" ]; then
+        echo "错误：$service MCP 服务未在 60 秒内通过健康检查" >&2
+        exit 1
+    fi
+done
+
 # Web 镜像的入口 HTML 与其首屏静态资源必须成对存在，否则 Nginx 会把缺失分包回退成 HTML。
 if [[ " ${DEPLOY_SERVICES[*]} " == *" web "* ]]; then
     echo "==> 验证 Web 入口引用的静态资源"
@@ -506,7 +571,8 @@ fi
 printf '%s\n' "${DEPLOY_COMMIT:-$(git rev-parse HEAD)}" > "$DEPLOY_MARKER"
 # 持久化镜像引用；使用 %q 防止再次 source 时发生 shell 注入。
 {
-    for variable in WEB_IMAGE API_IMAGE WORKER_IMAGE RUNNER_IMAGE LIGHTRAG_IMAGE STRESS_IMAGE; do
+    for service in "${TRACKED_IMAGE_SERVICES[@]}"; do
+        variable="$(service_image_variable "$service")"
         if [ -n "${!variable:-}" ]; then
             printf '%s=%q\n' "$variable" "${!variable}"
         fi
@@ -520,7 +586,8 @@ docker image prune -f --filter "dangling=true" >/dev/null 2>&1 || true
 # 镜像与 .deploy-images.env 记录的当前镜像引用，其余 ghcr 业务镜像删除。
 # 回滚代价为重新 pull（ghcr 保留全部历史 tag），与 2026-08-19 手动清理策略一致。
 KEEP_IMAGES=$(docker ps -a --format '{{.Image}}')
-for variable in WEB_IMAGE API_IMAGE WORKER_IMAGE RUNNER_IMAGE LIGHTRAG_IMAGE STRESS_IMAGE; do
+for service in "${TRACKED_IMAGE_SERVICES[@]}"; do
+    variable="$(service_image_variable "$service")"
     KEEP_IMAGES+=$'\n'"${!variable:-}"
 done
 docker images --format '{{.Repository}}:{{.Tag}}' \

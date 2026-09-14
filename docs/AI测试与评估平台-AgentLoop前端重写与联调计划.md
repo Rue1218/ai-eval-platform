@@ -1,6 +1,6 @@
 # AI 测试与评估平台 — AgentLoop 前端重写与联调计划
 
-> 版本：V0.11 ｜ 审查日期：2026-09-09 ｜ 状态：轨迹页已补齐参考实现的四类筛选、请求/回复语义拆分与按记录类型变化的详情字段；HTTP WebSocket 请求标识兼容及两类协议收敛保持不变；服务器联调及完整切换验收进行中。
+> 版本：V0.16 ｜ 审查日期：2026-09-12 ｜ 状态：已实现输入框上方的工具权限与 ask_user_question 抽屉、三题型问答、自定义答案及 task 任务清单默认收起，并通过本地门禁；合入与部署状态以关联 PR/Actions 为准。
 >
 > 基线：`deepseek-harness-py/static/index.html` 当前页面 + `ai-eval-platform/frontend/src/views/Agent.vue` 当前实现 + 已落地后端 WS v2。后端设计见 [架构设计](AI测试与评估平台-AgentLoop后端架构设计.md)，已验证范围见 [实施记录](AI测试与评估平台-AgentLoop后端实施记录.md)。
 >
@@ -634,3 +634,104 @@ AgentLoop 与协议档管理只保留 `openai_chat` 和 `anthropic_messages`。�
 | `frontend/tests/e2e/agentLoop.spec.ts` | 更新轨迹筛选、记录数量和动态详情字段的浏览器断言。 |
 | `frontend/tests/agent-loop-style-preview.html` | 增加请求摘要、用量、耗时、工具 Schema 和授权状态的隔离预览数据。 |
 | 本文件、`design-qa.md` | 登记问题定位、修复范围与浏览器视觉复核证据。 |
+
+## 21. V0.12 任务规划工具与回合结束显示修复（2026-09-12）
+
+截图中第 16 步完成任务清单更新后，出现“达到步骤上限，本轮已结束”，同时残留“正在响应…”。原因是 `task` 工具被普通工具卡分支排除后落入助手消息的兜底分支；工具记录没有助手的 `ended` 字段，因此生成错误占位。这与后端是否仍在运行无关，正常结束回合也能复现。
+
+助手分支现在排除所有工具记录，任务规划仍由 `task_plan.updated` 驱动看板，工具原始事件继续保留于状态和轨迹中。`turn.end` 继续作为回合唯一终态；步骤上限提示增加可发送“继续”的操作说明，不自动发送、不额外调用模型、不增加默认 16 步预算，也不把任务清单 5/5 当作完整交付证明。
+
+验证：新增正常结束与步数耗尽两项页面用例先在旧代码复现错误占位，修复后通过；完整页面协议夹具回归 **19 passed**、前端单测 **77 passed**，ESLint、typecheck/build 与差异检查通过。构建仍有原有 vendor 大包提示。本次仅修改前端，合入与部署状态以关联 PR/Actions 为准。
+
+### 21.1 修改代码文件与作用清单
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `frontend/src/components/agent/loop/AgentWorkspace.vue` | 阻止隐藏的任务规划工具生成助手消息及响应占位。 |
+| `frontend/src/agent/loop/workspaceDerived.ts` | 步数耗尽提示说明如何继续处理。 |
+| `frontend/tests/e2e/agentLoop.spec.ts` | 正常结束与 max_steps 两种协议夹具先复现失败，修复后验证 5/5 看板、无伪助手占位和终态后发送可用。 |
+| 本文件 | 登记根因、修复边界与验证结果。 |
+
+## 22. V0.13 原生 task 适配审查修复（2026-09-12）
+
+原生 `task` 是会话规划工具。此前成功与失败结果都被聊天工具卡分支隐藏，失败时用户只能看到上一次成功计划；同时 v2 桥直接按注册表校验参数，未接入已有 `prompt` / `goal` 兼容规则，旧调用会因缺少 `description` 被拒绝。
+
+- 成功规划继续由看板展示；`failed`、`denied`、`cancelled`、`not_started`、`outcome_unknown` 终态使用已有工具结果卡显示状态与安全结果预览。失败记录不生成助手响应占位，也不覆盖最后成功的计划。
+- v2 原生 `task` 在 Schema 校验前复用已有归一逻辑：`goal` 转为 `prompt`，缺少概括时取目标前 24 个字符并按需加省略号；显式 `description` 优先。模型原始参数保留于 `tool/call`，实际参数保留于 `tool/dispatch.normalized_args`，不改模型可见的注册表 Schema。
+- `build_task_plan` 共用这份归一逻辑，使执行结果、调度器规划快照及持久化写入校验一致。类型校验拒绝把数字、容器、null 转成文本；长度、未知字段、步骤合法性和禁止后台执行的门禁继续有效。
+- 不增加 HTTP 轮询、数据库查询、模型调用或默认步数预算；Worker 的创建、查询与取消工具行为不变。
+
+验证：先用旧代码复现旧字段调用失败与页面缺少失败卡，修复后后端相关回归 **108 passed / 6 skipped**，前端单测 **77 passed**、页面协议夹具 **24 passed**，Ruff、ESLint、typecheck/build 通过。6 项跳过均需要显式独立 PostgreSQL 测试连接；已扩展真实 PG 用例覆盖三种目标字段，但本地未验证真实 PG 事务与生产会话。构建仍有既有 vendor 大包提示。
+
+提交前全量门禁：API **1437 passed / 75 skipped**，Worker **50 passed**；前端沿用同一代码版本上述已通过结果。真实 PostgreSQL 用例由 PR 的独立数据库 CI 继续验证，发布状态以 Actions 为准。
+
+### 22.1 修改代码文件与作用清单
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `frontend/src/components/agent/loop/AgentWorkspace.vue` | 显示规划非成功终态的工具结果卡，继续阻止工具误入助手分支。 |
+| `backend/api/app/harness/execution/loop_bridge.py` | 为原生 task 接入既有参数归一，再执行策略与 Schema 校验。 |
+| `backend/api/app/harness/execution/aliases.py` | 阻止规划目标字段类型在归一时被强制转换，保持验证约束。 |
+| `backend/api/app/harness/execution/dispatch.py` | 让执行与持久化校验从原始或已归一参数构造一致计划。 |
+| `backend/api/tests/test_loop_tools.py` | 覆盖三种目标字段、长目标摘要一致性、失败更新不覆盖及输入门禁。 |
+| `backend/api/tests/test_loop_tools_pg.py` | 扩展成功计划事务写入和失败更新隔离用例，覆盖旧字段。 |
+| `frontend/tests/e2e/agentLoop.spec.ts` | 覆盖五类非成功终态可见、计划保留、无伪占位及终态后可发送。 |
+| 本文件 | 登记审查修复、资源影响与验证边界。 |
+
+## 23. V0.14 草稿工作区浮层空白修复（2026-09-12）
+
+草稿会话打开“绑定工作区”时，页面使用固定 `356px` 底部边距为浮层预留空间。实际面板通常不足该高度，空状态的居中布局会把剩余差值显示为输入框前的大块空白；已绑定会话也依赖另一组固定 `118px` 规则。此前为追踪该边距动画，每次打开还会连续约 380ms 调用 `requestAnimationFrame` 刷新浮层位置。
+
+- 改为读取已渲染面板的实际高度，仅额外预留 12px；工作区列表从加载态变为列表态时会重新测量，不再依赖草稿或已绑定会话的固定像素值。
+- 移除边距动画和连续逐帧重定位；高度写入后仅进行一次定位同步，减少打开浮层时的布局计算。
+- 工作区选择、默认沙箱、已选工作区的本地偏好和会话创建绑定参数均保持原行为；没有新增接口、请求或存储字段。
+
+验证：浏览器用例先在旧样式复现输入区额外下移 **175px**，修复后验证面板与输入框间距为 `-2px` 至 `24px`，完整 AgentLoop 页面夹具 **24 passed**、前端单测 **77 passed**，ESLint、typecheck/build 与差异检查通过。构建仍有既有 vendor 大包提示。本次进入 PR 发布流程，合入与部署状态以关联 PR/Actions 为准。
+
+### 23.1 修改代码文件与作用清单
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `frontend/src/components/agent/loop/AgentWorkspace.vue` | 按工作区浮层实际高度预留输入区间距，并删除固定空白和连续逐帧定位。 |
+| `frontend/tests/e2e/agentLoop.spec.ts` | 覆盖草稿会话打开面板后不重现多余空白，同时保持面板不遮挡输入框。 |
+| 本文件 | 登记根因、性能调整、验证证据与发布边界。 |
+
+## 24. V0.15 交互抽屉与问题工具优化（2026-09-12）
+
+工具权限请求与 `ask_user_question` 原先嵌在工具详情卡中，会拉长对话时间线，也让用户在输入区与待处理交互之间来回定位。本次将两种未结算交互移动到输入框正上方的统一抽屉；持久事件、重连回放、交互身份、nonce、TTL 与服务端结算流程保持原有 V2 语义，抽屉不自行乐观关闭，必须等 `approval.resolved` 或 `question.resolved` 事实到达后收起。
+
+- 工具详情只保留业务任务确认，工具权限和问题表单不再占用历史工具卡；当前会话按持久 cursor 只展示最早的一张未结算审批或问题抽屉。
+- `ask_user_question` 按 Codex 式逐题流程展示：抽屉一次只显示一题并标注“问题 n / 总题数”，可用“上一题 / 下一题”往返检查，切题不丢弃已填写答案；下一题从右侧、上一题从左侧淡入，双页网格叠层防止抽屉高度闪动，系统开启减少动态效果时关闭过渡；最后一题才提交，若遗漏必答题会自动跳回首道缺答题。题型支持单择题、多选题、简答题。单选和多选题均提供“其他，请填写”：单选选择其他时清空既有标签；多选可同时保留已选标签和自定义文本；简答题直接填写回答。
+- V2 `question.respond.answers[]` 新增可选 `custom` 字段，防止把自定义内容伪造成服务端未登记的 option label。服务端继续复用现有题目、选项、必填、身份与 nonce 校验，旧客户端只传 `answer` 时保持兼容。
+- 抽屉锚定 Composer 上沿并以浮层展示，不参与页面正常文档流，长题目不会再把输入框推离可视区域；最大高度为视口的 54%，消息区保留最小可滚动高度；移动端同步校验抽屉宽度、输入框相邻间距与横向溢出。
+
+验证：API 全量门禁按三批文件执行合计 **1438 passed / 75 skipped**，Ruff 通过；前端单测 **77 passed**，浏览器协议夹具 **26 passed**（含桌面、390px 窄屏与既有 375/768/1440px 视口），ESLint 无 error（仓库既有 211 条 warning），typecheck 与 production build 通过。构建仍提示既有 vendor 大包超过 500kB，本次未改变拆包策略。
+
+### 24.1 修改代码文件与作用清单
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `frontend/src/components/agent/loop/InteractionDrawer.vue` | 提供工具授权与三题型问答的输入框上方抽屉，并输出结构化自定义答案。 |
+| `frontend/src/components/agent/loop/AgentWorkspace.vue` | 选择会话当前未结算交互、调整输入区和消息区的垂直布局，并在对话/轨迹页挂载抽屉。 |
+| `frontend/src/components/agent/loop/{ToolRunCard,TaskRunCard}.vue` | 不再在时间线工具详情内渲染工具授权或问答表单。 |
+| `backend/api/app/{routers/ws_v2.py,agent/loop_presentation.py}` | 接受并校验 V2 自定义答案字段，保留 checkbox 标签和 custom 文本。 |
+| `backend/api/tests/{test_loop_ws_protocol,test_loop_presentation}.py` | 覆盖严格命令解析及多选标签与自定义文本共同回传。 |
+| `frontend/tests/e2e/agentLoop.spec.ts` | 覆盖抽屉定位、逐题前后导航、答案保留、三题型、自定义回答和 V2 回执。 |
+| `docs/AI测试与评估平台-API.md`、本文件 | 更新 V1.96 回执契约、交互布局与实现边界。 |
+
+## 25. V0.16 task 任务清单默认收起（2026-09-12）
+
+`task_plan.updated` 到达后，任务规划卡原本以展开状态渲染，并会在计划快照变化时再次强制展开。task 调用及后续进度刷新会因此展开完整步骤列表，挤占对话区域并打断用户阅读。
+
+- 任务规划卡初始状态改为收起；计划的新增和进度更新均不会改变用户手动选择的展开状态。
+- 收起态继续展示任务目标、完成进度和进行中步骤摘要；用户点击标题后才显示完整任务列表。
+
+验证：浏览器夹具断言 task 计划到达后 `aria-expanded=false`、步骤列表不可见，点击标题后完整步骤可见；其余回归门禁沿用 V0.15。
+
+### 25.1 修改代码文件与作用清单
+
+| 文件 | 作用 |
+| :--- | :--- |
+| `frontend/src/components/agent/loop/TaskStateDrawer.vue` | 取消 task 计划到达或更新时的自动展开，仅保留用户点击展开。 |
+| `frontend/tests/e2e/agentLoop.spec.ts` | 覆盖默认收起和手动展开完整步骤列表。 |
+| 本文件 | 登记触发原因、交互边界和验证方式。 |

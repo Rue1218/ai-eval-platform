@@ -132,6 +132,36 @@ def test_agent_ui_lists_only_safe_selectable_profile_metadata(profile_db):
     assert "https://alternate.invalid" not in rendered
 
 
+def test_agent_ui_reads_env_once_and_reuses_default_profile(profile_db, monkeypatch):
+    """真实能力投影只取一次文件快照，默认档不被重复授权解析。"""
+    from app import profile_env
+
+    reads = []
+    original = profile_env._read_snapshot
+
+    def read(path):
+        """保留真实解析路径，仅记录读取次数。"""
+        reads.append(path)
+        return original(path)
+
+    monkeypatch.setattr(profile_env, "_read_snapshot", read)
+    payload = sessions._loop_ui(
+        profile_db.db, SimpleNamespace(id="member", role="member"),
+        SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())),
+    )
+    assert len(reads) == 1
+    assert profile_db.connections == [("default", True), ("alternate", False)]
+    assert payload["profile"] == payload["profiles"][0]
+    # 后续请求重新读取文件，不跨请求复用上一次默认协议档。
+    profile_db.db.settings["agent_profile_id"] = "alternate"
+    next_payload = sessions._loop_ui(
+        profile_db.db, SimpleNamespace(id="member", role="member"),
+        SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())),
+    )
+    assert len(reads) == 2
+    assert next_payload["profile"]["id"] == "alternate"
+
+
 @pytest.mark.parametrize("protocol,model", [
     ("anthropic_messages", "unknown-compatible-model"),
     ("openai_chat", "stepfun-ai/step-3.7-flash"),
@@ -159,6 +189,8 @@ def test_compatible_default_profile_survives_global_reasoning_preference(profile
     ("deepseek-v4-pro-0813", ["off", "low", "medium", "high", "max"]),
     ("qwen3.6-flash", ["off", "low", "medium", "high", "max"]),
     ("qwen3.6-flash-2026-04-16", ["off", "low", "medium", "high", "max"]),
+    ("qwen3.8-flash", ["off", "low", "medium", "high", "max"]),
+    ("qwen3.8-flash-2026-08-01", ["off", "low", "medium", "high", "max"]),
 ])
 def test_server_model_capabilities_match_each_authorized_request(profile_db, model, allowed):
     """服务器型号可展示的每个档位，都必须能通过回合授权和模型参数解析。"""

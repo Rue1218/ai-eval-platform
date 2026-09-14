@@ -319,6 +319,26 @@ export interface McpHealthCheckResponse {
   }
 }
 
+/** 媒体 MCP 的脱敏配置；API Key 仅以 has_api_key 形式返回。 */
+export interface MediaMcpConfig {
+  enabled: boolean
+  compatible_base_url: string
+  image_model: string
+  video_model: string
+  request_timeout_s: number
+  has_api_key: boolean
+}
+
+/** 媒体 MCP 的可写字段；api_key 留空表示保留服务端已有值。 */
+export interface MediaMcpConfigUpdate {
+  enabled?: boolean
+  compatible_base_url?: string
+  api_key?: string
+  image_model?: string
+  video_model?: string
+  request_timeout_s?: number
+}
+
 // MCP 内置短工具与原生 ToolCall（API V1.3 §3.6.1，只读契约）
 // transport='native'：原生基础工具（read/write/edit/bash 等）由 NativeToolExecutor 直连执行；
 // transport='mcp'：内部 MCP 扩展工具（platform.tasks 等）通过 MCPClientManager 调用。
@@ -902,17 +922,6 @@ export interface TaskSessionState {
   notes?: string
 }
 
-/** 跨会话下单偏好（API.md §3.4 GET /api/agent/prefs） */
-export interface AgentPrefs {
-  last_kind?: string | null
-  last_profile_ids?: string[] | null
-  last_dataset_id?: string | null
-  last_kb_id?: string | null
-  last_gold_qa_id?: string | null
-  last_with_stress?: boolean | null
-  updated_at?: string | null
-}
-
 // WS 事件公共头（API.md §4.2）：payload 嵌套，task_id 入队后才有
 // H3 起 Agent 引擎恢复 tool_call / tool_result（ToolCard 只渲染脱敏摘要）；
 // V1.68（H2 批次 2）恢复确认卡 confirm / confirm_ack；历史旧事件一律不重放。 (feat(agent): H2 批次 2 确认卡链路——W5 发卡与 ack 重放经 W6 唯一入队)
@@ -979,47 +988,6 @@ export interface ToolResultPayload {
   data?: Record<string, unknown>
   error?: string
   source?: string
-}
-
-// tool_approval payload（API.md §4.3 V1.70 / H5 HITL）：危险 bash 等命令在
-// 执行前中断，事件载荷即审批卡；approved/rejected 由上行 tool_approval_ack 回执。
-export interface ToolApprovalPayload {
-  type: 'tool_approval'
-  id: string
-  call_id: string
-  name: string
-  command: string
-  reason?: string
-  risk_level?: 'high' | 'medium' | 'low'
-  sandbox_scope?: string
-  allowed_decisions?: Array<'approve' | 'reject'>
-}
-
-// clarify payload（API.md §4.3 V1.72 / dsh #1）：ask_user_question 的图内
-// interrupt 载荷即澄清卡（≤8 题三题型一次作答）；submitted 由上行 clarify_reply
-// 乐观盖章并经 clarify_ack 广播回执确认（与 tool_approval_ack 同构）。
-export interface ClarifyQuestion {
-  id: string
-  question: string
-  header?: string
-  options?: Array<{ label: string; description?: string }>
-  multi_select?: boolean
-  required?: boolean
-  type: 'radio' | 'checkbox' | 'text'
-}
-
-export interface ClarifyPayload {
-  type: 'clarify'
-  id: string
-  questions: ClarifyQuestion[]
-}
-
-/** 澄清答案（API.md §4.4 V1.72 clarify_reply.answers[]）：radio/checkbox 用
- * selected（label 列表），text 用 custom。 */
-export interface ClarifyAnswer {
-  id: string
-  selected: string[]
-  custom?: string
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

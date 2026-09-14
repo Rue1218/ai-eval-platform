@@ -61,6 +61,7 @@ jobs:
           import json
           import os
           import subprocess
+          from pathlib import Path
 
           definitions = {
               "web": {"service": "web", "context": "frontend", "dockerfile": "frontend/Dockerfile"},
@@ -78,6 +79,19 @@ jobs:
               "stress": "backend/stress/",
               "runner": "backend/runner/",
           }
+          # MCP 服务按 ``backend/<名称>_mcp/Dockerfile`` 自动发现，Compose 服务名
+          # 统一转换为 ``<名称>-mcp``。新增受控 MCP 无需维护第二份构建矩阵。
+          mcp_services = []
+          for dockerfile in sorted(Path("backend").glob("*_mcp/Dockerfile")):
+              package = dockerfile.parent.name
+              service = f"{package.removesuffix('_mcp').replace('_', '-')}-mcp"
+              definitions[service] = {
+                  "service": service,
+                  "context": "backend",
+                  "dockerfile": str(dockerfile),
+              }
+              path_prefixes[service] = f"backend/{package}/"
+              mcp_services.append(service)
 
           base = os.environ.get("BASE_SHA", "")
           target = os.environ["TARGET_SHA"]
@@ -103,6 +117,10 @@ jobs:
               # 共享包 backend/shared/ 被 api/worker/runner 打进镜像，变更须同时重建
               if any(path.startswith("backend/shared/") for path in changed):
                   selected += [s for s in ("api", "worker", "runner") if s not in selected]
+              # Compose 或部署机制变更时，同步构建所有已发现 MCP。这样首次引入
+              # MCP 的发布也会产出可被生产机拉取的镜像，避免只更新 API 后服务缺席。
+              if any(path in {"docker-compose.yml", "deploy/deploy.sh", ".github/workflows/deploy.yml"} for path in changed):
+                  selected += [s for s in mcp_services if s not in selected]
               # runner 是平台核心服务（bash 沙箱执行体），始终纳入构建，
               # 保证目标机任何时候都有 runner 镜像（避免 Docker Hub 不可达时回退拉取失败）
               if "runner" not in selected:

@@ -205,6 +205,7 @@ import { api } from '../api/http'
 import type { AuthUser } from '../api/types'
 import UserModal from '../components/modals/UserModal.vue'
 import ResetPasswordModal from '../components/modals/ResetPasswordModal.vue'
+import { formatDate } from '../utils/format'
 
 const message = useMessage()
 const dialog = useDialog()
@@ -247,11 +248,6 @@ function lastLoginText(u: AuthUser): string {
   const ip = ext.last_login_ip || '—'
   const at = ext.last_login_at ? new Date(ext.last_login_at).toLocaleString('zh-CN', { hour12: false }) : ''
   return at ? `${ip} · ${at}` : ip
-}
-
-function formatDate(d?: string) {
-  if (!d) return ''
-  return new Date(d).toLocaleDateString('zh-CN')
 }
 
 /* ─── U6 右栏：AI 异常检测 / 登录活跃柱图 / 审计轨迹（均为本地演示数据） ─── */

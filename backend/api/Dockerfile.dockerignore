@@ -1,0 +1,22 @@
+# 相对于 backend/ 构建上下文，仅发送 API 镜像实际需要的文件。
+**
+!api/
+api/**
+!api/requirements.txt
+!api/app/
+!api/app/**
+!api/alembic.ini
+!api/migrations/
+!api/migrations/**
+!api/entrypoint.sh
+!shared/
+!shared/**
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.ruff_cache
+**/*.log
+**/.env
+**/.env.*
+**/.venv
+**/venv

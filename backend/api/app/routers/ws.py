@@ -65,6 +65,7 @@ from ..models import Session as AgentSession
 from ..security import TOKEN_TYPE_WS, decode_token
 from ..session_access import require_visible_session
 from ..session_connections import SESSION_CONNECTION_HUB
+from ..time_utils import iso_utc
 from ..workspace_service import resolve_session_sandbox_db
 from ..ws_tickets import consume_ws_jti, ttl_from_jwt_payload
 from .profiles import _profile_connection
@@ -181,13 +182,6 @@ def _claim_terminal(session_id: str, turn_id: str | None) -> bool:
             return False
         current.terminal_emitted = True
         return True
-
-
-def _turn_owner(session_id: str) -> str | None:
-    """读取当前回合所有者，仅返回非敏感用户 ID。"""
-    with _TURN_LOCK:
-        current = _SESSION_TURNS.get(session_id)
-        return current.user_id if current else None
 
 
 def _start_turn(
@@ -716,14 +710,6 @@ async def _handle_confirm_ack(
         raise AppError(ErrorCode.INTERNAL, "确认任务重放失败，请稍后重试") from exc
 
 
-def _iso(value: datetime | None = None) -> str:
-    """将数据库时间统一转换为前端可解析的 UTC ISO 字符串。"""
-    current = value or datetime.now(UTC)
-    if current.tzinfo is None:
-        current = current.replace(tzinfo=UTC)
-    return current.astimezone(UTC).isoformat().replace("+00:00", "Z")
-
-
 def _frame(
     session_id: str,
     event: str,
@@ -743,7 +729,7 @@ def _frame(
         "session_id": session_id,
         "task_id": task_id,
         "event_id": event_id,
-        "ts": _iso(ts),
+        "ts": iso_utc(ts),
         "vocab_version": EVENT_VERSION,
         "payload": payload,
     }
@@ -949,7 +935,7 @@ def _message_payload(row: Message, user: User) -> dict[str, Any]:
         "author_id": row.author_id,
         "author": _author_payload(user) if row.author_id else None,
         "client_message_id": row.client_message_id,
-        "created_at": _iso(row.created_at),
+        "created_at": iso_utc(row.created_at),
     }
 
 
@@ -965,7 +951,7 @@ def _assistant_message_payload(row: Message) -> dict[str, Any]:
         "profile_id": row.profile_id,
         "profile_name": row.profile_name,
         "provider": row.provider,
-        "created_at": _iso(row.created_at),
+        "created_at": iso_utc(row.created_at),
     }
 
 
@@ -1154,13 +1140,6 @@ async def _replay_events(
             state.cursor = row.event_id
 
 
-DEFAULT_AGENT_SYSTEM = (
-    "你是 AI 测试与评估平台的智能助手。保持客观、精炼、专业，使用中文进行逻辑思考与交流。"
-    "在思考问题时，请使用中文分步骤分析用户输入与目标，并给出清晰、专业的中文回复。"
-    "你的职责是协助研发与评测团队完成大模型基准评测、知识库评估、测试用例生成与压测等任务。"
-)
-
-
 @dataclass(frozen=True)
 class _ProfileSnapshot:
     """协议档纯数据快照：仅含回合所需的已加载标量字段，缓存安全。
@@ -1272,12 +1251,6 @@ def _window_messages(db: Session, session_id: str) -> tuple[list[dict], dict[str
         for row in reversed(rows)
     ]
     return window_trim_stats(ordered, limit=20, keep_from=keep_from)
-
-
-def _history_messages(db: Session, session_id: str) -> list[dict[str, str]]:
-    """模型层稳定消息格式（窗口投影，去掉 source_id）。"""
-    history, _meta = _history_with_trim(db, session_id)
-    return history
 
 
 def _history_with_trim(

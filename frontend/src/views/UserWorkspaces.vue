@@ -94,6 +94,25 @@
                 <line x1="9" y1="14" x2="15" y2="14" />
               </svg>
             </button>
+            <button
+              class="icon-btn"
+              title="上传文件 (支持音视频/图片/文档，可拖拽放入)"
+              :disabled="!currentWorkspace || currentWorkspace.deleted || uploading"
+              @click="triggerUpload"
+            >
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="17 8 12 3 7 8" />
+                <line x1="12" y1="3" x2="12" y2="15" />
+              </svg>
+            </button>
+            <input
+              ref="fileUploadInputRef"
+              type="file"
+              style="display: none"
+              multiple
+              @change="handleFileInputChange"
+            />
             <button class="icon-btn" title="刷新文件树" :disabled="treeLoading" @click="loadTree">
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="23 4 23 10 17 10" />
@@ -127,10 +146,17 @@
           <span v-if="searchKeyword" class="clear-search" @click="searchKeyword = ''">✕</span>
         </div>
 
-        <!-- 树形节点列表 -->
-        <div class="tree-container">
-          <div v-if="treeLoading" class="tree-loading">加载文件树…</div>
-          <div v-else-if="!fileTree.length" class="tree-empty">暂无文件，点击上方新建。</div>
+        <!-- 树形节点列表（支持直接拖拽文件上传） -->
+        <div
+          class="tree-container"
+          :class="{ 'is-dragging-over': isDraggingOver }"
+          @dragover.prevent="isDraggingOver = true"
+          @dragleave.prevent="isDraggingOver = false"
+          @drop.prevent="handleDropUpload"
+        >
+          <div v-if="uploading" class="tree-loading">正在上传文件…</div>
+          <div v-else-if="treeLoading" class="tree-loading">加载文件树…</div>
+          <div v-else-if="!fileTree.length" class="tree-empty">暂无文件，点击上方新建或拖拽文件上传。</div>
           <div v-else class="tree-nodes">
             <template v-for="node in filteredTree" :key="node.path">
               <div
@@ -212,12 +238,12 @@
                 <span class="shortcut-desc">快捷保存当前修改</span>
               </div>
               <div class="shortcut-card">
-                <span class="shortcut-key">分屏对照</span>
-                <span class="shortcut-desc">Markdown 实时渲染</span>
+                <span class="shortcut-key">媒体预览</span>
+                <span class="shortcut-desc">视频倍速播放与原图画廊</span>
               </div>
               <div class="shortcut-card">
-                <span class="shortcut-key">原图画廊</span>
-                <span class="shortcut-desc">图片缩放与棋盘底纹</span>
+                <span class="shortcut-key">分屏对照</span>
+                <span class="shortcut-desc">Markdown 实时渲染</span>
               </div>
             </div>
 
@@ -247,6 +273,9 @@
             <div class="topbar-left">
               <span class="file-top-icon">{{ getFileIcon(activeFile) }}</span>
               <span class="file-top-path mono">{{ activeFile.path }}</span>
+              <span v-if="isVideo" class="media-badge">视频</span>
+              <span v-else-if="isAudio" class="media-badge">音频</span>
+              <span v-else-if="isImage" class="media-badge">图片</span>
               <span v-if="isDirty" class="dirty-badge" title="有未保存修改">● 未保存</span>
               <span class="file-size-tag">{{ formatBytes(activeFile.size) }}</span>
             </div>
@@ -282,7 +311,7 @@
 
               <!-- 保存按钮（带 Ctrl+S 提示） -->
               <button
-                v-if="!activeFile.is_binary && !isImage"
+                v-if="!activeFile.is_binary && !isImage && !isVideo && !isAudio"
                 class="btn btn-sm"
                 :class="isDirty ? 'btn-primary' : ''"
                 :disabled="saving || !isDirty || currentWorkspace?.deleted"
@@ -333,7 +362,19 @@
               </div>
             </template>
 
-            <!-- 2. 图片画廊视图 -->
+            <!-- 2. 视频播放器视图 -->
+            <template v-else-if="isVideo">
+              <WorkspaceVideoViewer
+                v-if="videoStreamUrl"
+                :src="videoStreamUrl"
+                :file-name="activeFile.name"
+                :file-size="activeFile.size"
+                :fallback-blob-url="videoBlobUrl"
+                @download="downloadActiveFile"
+              />
+            </template>
+
+            <!-- 3. 图片画廊视图 -->
             <template v-else-if="isImage">
               <WorkspaceImageViewer
                 v-if="imageBlobUrl"
@@ -343,7 +384,7 @@
               />
             </template>
 
-            <!-- 3. 代码/普通文本编辑器 -->
+            <!-- 4. 代码/普通文本编辑器 -->
             <template v-else-if="!activeFile.is_binary && !activeFile.is_large">
               <WorkspaceCodeEditor
                 v-model="editorContent"
@@ -363,7 +404,7 @@
                 </p>
                 <div class="binary-meta">
                   <span>文件大小: {{ formatBytes(activeFile.size) }}</span>
-                  <span v-if="activeFile.updated_at">修改时间: {{ formatDate(activeFile.updated_at) }}</span>
+                  <span v-if="activeFile.updated_at">修改时间: {{ formatDateTime(activeFile.updated_at, '—') }}</span>
                 </div>
                 <button class="btn btn-primary" @click="downloadActiveFile">下载到本地查看</button>
               </div>
@@ -479,6 +520,8 @@ import type {
 import MarkdownView from '../components/agent/MarkdownView.vue'
 import WorkspaceCodeEditor from '../components/workspace/WorkspaceCodeEditor.vue'
 import WorkspaceImageViewer from '../components/workspace/WorkspaceImageViewer.vue'
+import WorkspaceVideoViewer from '../components/workspace/WorkspaceVideoViewer.vue'
+import { formatBytes, formatDateTime } from '../utils/format'
 
 interface FlattenedNode extends UserWorkspaceTreeNode {
   _depth: number
@@ -493,6 +536,11 @@ const selectedWorkspaceId = ref<string>('')
 const loading = ref(false)
 const busy = ref(false)
 const showDeleted = ref(false)
+
+// 文件上传相关状态
+const fileUploadInputRef = ref<HTMLInputElement | null>(null)
+const uploading = ref(false)
+const isDraggingOver = ref(false)
 
 // 工作区弹窗
 const showCreateWsModal = ref(false)
@@ -525,6 +573,8 @@ const initialContent = ref('')
 const contentLoading = ref(false)
 const saving = ref(false)
 const imageBlobUrl = ref<string | null>(null)
+const videoStreamUrl = ref<string | null>(null)
+const videoBlobUrl = ref<string | null>(null)
 const mdViewMode = ref<'split' | 'preview' | 'edit'>('split')
 
 const currentWorkspace = computed(() => {
@@ -538,7 +588,7 @@ const storagePercent = computed(() => {
 })
 
 const isDirty = computed(() => {
-  if (!activeFile.value || activeFile.value.is_binary || isImage.value) return false
+  if (!activeFile.value || activeFile.value.is_binary || isImage.value || isVideo.value || isAudio.value) return false
   return editorContent.value !== initialContent.value
 })
 
@@ -551,6 +601,18 @@ const isImage = computed(() => {
   if (!activeFile.value) return false
   const ext = activeFile.value.name.toLowerCase().split('.').pop() || ''
   return ['png', 'jpg', 'jpeg', 'svg', 'gif', 'webp', 'ico'].includes(ext)
+})
+
+const isVideo = computed(() => {
+  if (!activeFile.value) return false
+  const ext = activeFile.value.name.toLowerCase().split('.').pop() || ''
+  return ['mp4', 'webm', 'ogg', 'mov', 'm4v', 'mkv', 'avi', 'flv', 'wmv'].includes(ext)
+})
+
+const isAudio = computed(() => {
+  if (!activeFile.value) return false
+  const ext = activeFile.value.name.toLowerCase().split('.').pop() || ''
+  return ['mp3', 'wav', 'aac', 'flac', 'm4a', 'weba'].includes(ext)
 })
 
 // 平铺展开后的树节点，支持折叠控制与关键字检索
@@ -576,25 +638,6 @@ const filteredTree = computed<FlattenedNode[]>(() => {
   return result
 })
 
-function formatBytes(bytes: number): string {
-  if (!bytes) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB']
-  let value = bytes
-  let unit = 0
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024
-    unit++
-  }
-  return `${value.toFixed(value >= 10 || unit === 0 ? 0 : 1)} ${units[unit]}`
-}
-
-function formatDate(value?: string | null): string {
-  if (!value) return '—'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return '—'
-  return date.toLocaleString('zh-CN', { hour12: false })
-}
-
 function getFileIcon(node: { name: string; kind?: 'dir' | 'file' | 'link' }): string {
   if (node.kind === 'dir') {
     return '📁'
@@ -612,7 +655,12 @@ function getFileIcon(node: { name: string; kind?: 'dir' | 'file' | 'link' }): st
   if (name.endsWith('.css') || name.endsWith('.scss')) return '🎨'
   if (name.endsWith('.sh') || name.endsWith('.bash')) return '🐚'
   if (name.endsWith('.yaml') || name.endsWith('.yml') || name.endsWith('.toml')) return '⚙️'
-  if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].some((ext) => name.endsWith('.' + ext))) return '🖼️'
+  if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'ico'].some((ext) => name.endsWith('.' + ext))) return '🖼️'
+  if (['mp4', 'webm', 'ogg', 'mov', 'm4v', 'mkv', 'avi', 'flv', 'wmv'].some((ext) => name.endsWith('.' + ext))) return '🎬'
+  if (['mp3', 'wav', 'aac', 'flac', 'm4a', 'weba'].some((ext) => name.endsWith('.' + ext))) return '🎵'
+  if (['zip', 'tar', 'gz', '7z', 'rar'].some((ext) => name.endsWith('.' + ext))) return '🗜️'
+  if (['csv', 'tsv', 'xlsx', 'xls'].some((ext) => name.endsWith('.' + ext))) return '📊'
+  if (name.endsWith('.pdf')) return '📕'
   return '📄'
 }
 
@@ -755,11 +803,16 @@ async function handleNodeClick(node: UserWorkspaceTreeNode): Promise<void> {
 async function openFile(relPath: string): Promise<void> {
   if (!selectedWorkspaceId.value) return
   contentLoading.value = true
-  // 清理之前的图片 blob
+  // 清理之前的图片与视频 blob 资源
   if (imageBlobUrl.value) {
     URL.revokeObjectURL(imageBlobUrl.value)
     imageBlobUrl.value = null
   }
+  if (videoBlobUrl.value) {
+    URL.revokeObjectURL(videoBlobUrl.value)
+    videoBlobUrl.value = null
+  }
+  videoStreamUrl.value = null
 
   try {
     const data = await api.workspaces.getFileContent(selectedWorkspaceId.value, relPath)
@@ -767,14 +820,25 @@ async function openFile(relPath: string): Promise<void> {
     editorContent.value = data.content || ''
     initialContent.value = data.content || ''
 
-    // 如果是图片，加载二进制 blob
     const ext = data.name.toLowerCase().split('.').pop() || ''
+    // 如果是图片，加载二进制 blob
     if (['png', 'jpg', 'jpeg', 'svg', 'gif', 'webp', 'ico'].includes(ext)) {
       try {
         const blob = await api.workspaces.getRawBlob(selectedWorkspaceId.value, relPath)
         imageBlobUrl.value = URL.createObjectURL(blob)
       } catch {
         message.warning('图片流加载失败')
+      }
+    } else if (['mp4', 'webm', 'ogg', 'mov', 'm4v', 'mkv', 'avi', 'flv', 'wmv'].includes(ext)) {
+      // 视频文件：直接使用后端流 URL，利用 HTTP 206 Range 支持分段秒开
+      videoStreamUrl.value = api.workspaces.getRawFileUrl(selectedWorkspaceId.value, relPath, false)
+      // 如果视频小于 50MB，后台预取 Blob 作为兼容容错备用
+      if (data.size && data.size <= 50 * 1024 * 1024) {
+        api.workspaces.getRawBlob(selectedWorkspaceId.value, relPath).then((blob) => {
+          videoBlobUrl.value = URL.createObjectURL(blob)
+        }).catch(() => {
+          // 忽略预取失败
+        })
       }
     }
   } catch (e) {
@@ -819,6 +883,11 @@ function closeActiveFile(force = false): void {
     URL.revokeObjectURL(imageBlobUrl.value)
     imageBlobUrl.value = null
   }
+  if (videoBlobUrl.value) {
+    URL.revokeObjectURL(videoBlobUrl.value)
+    videoBlobUrl.value = null
+  }
+  videoStreamUrl.value = null
   activeFile.value = null
   editorContent.value = ''
   initialContent.value = ''
@@ -844,10 +913,53 @@ async function downloadActiveFile(): Promise<void> {
 function handleGlobalKeydown(e: KeyboardEvent): void {
   if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
     e.preventDefault()
-    if (activeFile.value && !activeFile.value.is_binary && !isImage.value) {
+    if (activeFile.value && !activeFile.value.is_binary && !isImage.value && !isVideo.value) {
       void saveCurrentFile()
     }
   }
+}
+
+// 文件上传
+function triggerUpload(): void {
+  if (fileUploadInputRef.value) {
+    fileUploadInputRef.value.value = ''
+    fileUploadInputRef.value.click()
+  }
+}
+
+async function handleFileInputChange(e: Event): Promise<void> {
+  const input = e.target as HTMLInputElement
+  if (!input.files || input.files.length === 0 || !selectedWorkspaceId.value) return
+  await uploadFilesList(Array.from(input.files))
+}
+
+async function handleDropUpload(e: DragEvent): Promise<void> {
+  isDraggingOver.value = false
+  if (!selectedWorkspaceId.value || !e.dataTransfer?.files?.length) return
+  await uploadFilesList(Array.from(e.dataTransfer.files))
+}
+
+async function uploadFilesList(files: File[]): Promise<void> {
+  if (!selectedWorkspaceId.value || files.length === 0) return
+  uploading.value = true
+  let successCount = 0
+  for (const file of files) {
+    try {
+      await api.workspaces.uploadFile(selectedWorkspaceId.value, '', file)
+      successCount++
+    } catch (err: any) {
+      message.error(`文件 ${file.name} 上传失败: ${err.message || '未知错误'}`)
+    }
+  }
+  if (successCount > 0) {
+    message.success(`成功上传 ${successCount} 个文件`)
+    await loadTree()
+    await loadWorkspaces(selectedWorkspaceId.value)
+    if (files.length === 1 && successCount === 1) {
+      await openFile(files[0].name)
+    }
+  }
+  uploading.value = false
 }
 
 // 新建文件/文件夹
@@ -1048,6 +1160,9 @@ onMounted(() => {
 onBeforeUnmount(() => {
   if (imageBlobUrl.value) {
     URL.revokeObjectURL(imageBlobUrl.value)
+  }
+  if (videoBlobUrl.value) {
+    URL.revokeObjectURL(videoBlobUrl.value)
   }
 })
 </script>
@@ -1395,6 +1510,17 @@ onBeforeUnmount(() => {
   flex: 1;
   overflow-y: auto;
   padding: 6px 0;
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.tree-container.is-dragging-over {
+  background: rgba(31, 89, 71, 0.08);
+  box-shadow: inset 0 0 0 2px #1f5947;
+}
+
+[data-theme='dark'] .tree-container.is-dragging-over {
+  background: rgba(16, 185, 129, 0.12);
+  box-shadow: inset 0 0 0 2px #10b981;
 }
 
 .tree-loading,
@@ -1650,6 +1776,17 @@ onBeforeUnmount(() => {
   font-size: 11px;
   font-weight: 600;
   margin-left: 4px;
+  white-space: nowrap;
+}
+
+.media-badge {
+  font-size: 11px;
+  font-weight: 600;
+  color: #10b981;
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  padding: 1px 6px;
+  border-radius: 4px;
   white-space: nowrap;
 }
 

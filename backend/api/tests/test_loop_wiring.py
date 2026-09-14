@@ -180,12 +180,18 @@ def wired(tmp_path, monkeypatch):
     monkeypatch.setattr(loop_wiring, "authorized_profile", lambda db, data: (profile, 100000))
     monkeypatch.setattr(loop_wiring, "get_agent_prompt_overlay", lambda db, profile_id: "")
     monkeypatch.setattr(loop_wiring, "build_adapter", lambda config: (_Resource("sdk", closed), config.config.model))
-    monkeypatch.setattr(MCPClientManager, "build_from_registry", lambda registry, *, join_on_cancel: _Resource("mcp", closed))
+    monkeypatch.setattr(
+        MCPClientManager,
+        "build_from_registry",
+        lambda registry, *, join_on_cancel, remote_providers=None: _Resource("mcp", closed),
+    )
     monkeypatch.setattr(loop_wiring, "require_visible_session", lambda db, sid, actor: session)
     monkeypatch.setattr(loop_service, "require_visible_session", lambda db, sid, actor: session)
     monkeypatch.setattr(loop_wiring, "resolve_session_sandbox", lambda *args: str(tmp_path))
     monkeypatch.setattr(loop_wiring.settings, "runner_internal_token", "")
     monkeypatch.setattr(loop_wiring.settings, "sandbox_engine", "container")
+    # 此组装测试只覆盖进程内 MCP 的资源释放，不受本机媒体开关或 .env 影响。
+    monkeypatch.setattr(loop_wiring.settings, "media_mcp_enabled", False)
     runtime = SimpleNamespace(running=False, recover=AsyncMock(), submit=AsyncMock(),
                               set_approval_gate=lambda *a, **k: None, wait=AsyncMock())
     pool = {"capacity": 15, "active": 0, "peak": 0, "claims": 0}
@@ -331,6 +337,25 @@ def test_window_keeps_tool_group_and_applies_effort(wired):
     assert window["reserved_output_tokens"] == 128
     with pytest.raises(loop_service.AppError):
         loop_wiring._window_request(wired.profile, (), [], messages[2:], "off", 129)
+
+
+def test_window_counts_image_blocks_as_vision_cost(wired):
+    """read_image 的 base64 图文块按视觉成本计，不把 base64 当文本压爆上下文预算。"""
+    image = "data:image/png;base64," + "A" * 1_600_000
+    messages = [
+        {"role": "user", "content": "看看我刚生成的图片"},
+        {"role": "assistant", "content": "",
+         "tool_calls": [{"id": "c", "name": "read_image", "args": {"file_path": "media/a.png"}}]},
+        {"role": "tool", "tool_call_id": "c", "name": "read_image",
+         "content": [{"type": "text", "text": "已读取图片 media/a.png"},
+                     {"type": "image_url", "image_url": {"url": image}}]},
+    ]
+    request, window = loop_wiring._window_request(
+        wired.profile, (SystemSegment("system"),), [], messages, "off", 20000
+    )
+    assert request.messages == messages
+    # 若把 base64 当文本，此处会是 40 万量级并触发 BUDGET_EXCEEDED。
+    assert window["estimated_input_tokens"] < 5000
 
 
 @pytest.mark.asyncio

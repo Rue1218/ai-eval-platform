@@ -421,6 +421,27 @@ def test_error_classification_redacts_upstream(status, retryable):
     assert "super-secret" not in str(result)
 
 
+@pytest.mark.parametrize(("status", "body", "public_code", "message", "retryable"), [
+    (429, {"error": {"code": "insufficient_quota", "message": "super-secret"}}, "BUDGET_EXCEEDED", "额度已用尽", False),
+    (400, {"error": {"code": "context_length_exceeded"}}, "VALIDATION", "上下文限制", False),
+    (429, {"error": {"code": "rate_limit_exceeded"}}, "UPSTREAM", "请求过于频繁", True),
+    (401, {"error": {"code": "invalid_api_key"}}, "UPSTREAM", "认证失败", False),
+    (404, {"error": {"code": "model_not_found"}}, "UPSTREAM", "模型不可用", False),
+])
+def test_error_classification_uses_safe_actionable_model_messages(
+    status, body, public_code, message, retryable,
+):
+    """额度、上下文、限流、鉴权与模型配置都映射为平台码和固定中文摘要。"""
+    error = RuntimeError("Authorization: super-secret")
+    error.status_code = status
+    error.body = body
+    result = classify_provider_error(error)
+    assert result.public_code == public_code
+    assert message in str(result)
+    assert result.retryable is retryable
+    assert "super-secret" not in str(result)
+
+
 def test_anthropic_signature_tool_roundtrip_and_cache(clients):
     """签名完整回传一次，工具结果合并且保留错误标记及缓存边界。"""
     config = ModelConfig(
@@ -496,7 +517,7 @@ def test_anthropic_rejects_missing_signature(clients):
     assert clients[-1].stream.closed
 
 
-@pytest.mark.parametrize("model", ["deepseek-v4-flash-0731", "qwen3.6-flash"])
+@pytest.mark.parametrize("model", ["deepseek-v4-flash-0731", "qwen3.6-flash", "qwen3.8-flash"])
 def test_compatible_anthropic_unsigned_thinking_tool_roundtrip(clients, model):
     """兼容流空签名可回填工具结果，且不会越过 Claude 的跨模型边界。"""
     profile = AuthorizedProfileSnapshot(
@@ -592,6 +613,7 @@ def test_request_rejects_credentials_before_header(options):
 @pytest.mark.parametrize("model,effort,max_tokens", [
     ("qwen3-coder-plus", "high", 4096),
     ("qwen3.6-flash-unknown", "high", 4096),
+    ("qwen3.7-flash", "high", 4096),
     ("qwen3.6-flash", "high", 1024),
 ])
 def test_compatible_reasoning_does_not_invent_model_or_budget_capabilities(model, effort, max_tokens):

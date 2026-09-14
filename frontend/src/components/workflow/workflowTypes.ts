@@ -2,8 +2,6 @@
  * AI 测试与评估平台 — 工作流与编排设计器类型定义 (workflowTypes.ts)
  * 依据：PRD §5.5 调度中心、§5.8 前端信息架构、API V1.3 §3.13 与 §3.8
  */
-import type { TaskKind, TaskStatus } from '../../api/types'
-
 /** 节点卡片标准几何尺寸 */
 export const NODE_WIDTH = 264
 export const NODE_MIN_HEIGHT = 108

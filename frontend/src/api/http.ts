@@ -2,7 +2,7 @@
  * AI 测试与评估平台 — 统一 HTTP 客户端
  * 依据：docs/AI测试与评估平台-API.md (V1.5)
  */
-import axios, { type AxiosRequestConfig } from 'axios'
+import axios from 'axios'
 import {
   ErrorCode,
   ERROR_MESSAGES,
@@ -37,11 +37,12 @@ import {
   type DispatchEventPage,
   type DispatchConfig,
   type McpTool,
+  type MediaMcpConfig,
+  type MediaMcpConfigUpdate,
   type RagModelsConfig,
   type AgentSession,
   type SessionHistory,
   type SessionVisibility,
-  type AgentPrefs,
   type StressSeriesResponse,
   type UserWorkspace,
   type UserWorkspaceList,
@@ -576,6 +577,18 @@ export const api = {
         }
       }
       const { data } = await http.get('/api/mcp/health-check')
+      return data
+    },
+
+    /** 读取媒体 MCP 的脱敏模型配置。 */
+    async mediaConfig(): Promise<MediaMcpConfig> {
+      const { data } = await http.get('/api/mcp/media-config')
+      return data
+    },
+
+    /** 保存媒体 MCP 模型与开关；服务端绝不回显 api_key。 */
+    async updateMediaConfig(payload: MediaMcpConfigUpdate): Promise<MediaMcpConfig> {
+      const { data } = await http.put('/api/mcp/media-config', payload)
       return data
     },
 
@@ -1323,6 +1336,20 @@ export const api = {
       })
       return res.data
     },
+    getRawFileUrl(id: string, path: string, download = false): string {
+      const q = new URLSearchParams({ path })
+      if (download) q.set('download', 'true')
+      return `/api/workspaces/${encodeURIComponent(id)}/files/raw?${q.toString()}`
+    },
+    async uploadFile(id: string, path: string, file: File): Promise<{ ok: boolean; path: string; name: string; size: number }> {
+      const form = new FormData()
+      form.append('file', file)
+      form.append('path', path)
+      const { data } = await http.post(`/api/workspaces/${id}/files/upload`, form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      return data
+    },
   },
 
   // 11. 会话管理
@@ -1416,23 +1443,6 @@ export const api = {
     async getMessages(id: string): Promise<SessionHistory> {
       if (getDataMode() === 'mock') return { messages: [], events: [] }
       const { data } = await http.get(`/api/sessions/${id}/messages`)
-      return data
-    },
-  },
-  agent: {
-    async getPrefs(): Promise<AgentPrefs> {
-      if (getDataMode() === 'mock') {
-        return {
-          last_kind: null,
-          last_profile_ids: [],
-          last_dataset_id: null,
-          last_kb_id: null,
-          last_gold_qa_id: null,
-          last_with_stress: false,
-          updated_at: null,
-        }
-      }
-      const { data } = await http.get('/api/agent/prefs')
       return data
     },
   },

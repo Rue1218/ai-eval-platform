@@ -1,8 +1,8 @@
-"""内部 MCP Client Manager（阶段 D，P3）。
+"""受控 MCP Client Manager（阶段 D，P3）。
 
 ``MCPClientManager`` 是 Agent 图与短工具执行之间的**唯一内部边界**：
 ``refresh_catalog``（tools/list）→ 门禁后的 ``call_tool``（tools/call）→
-``ToolResult``（与 Observation 分离，§5.4）。同步 handler 经
+``ToolResult``（与 Observation 分离，§5.4）。进程内同步 handler 经
 ``asyncio.to_thread`` 线程池执行（防 15s bash 阻塞 api 事件循环）；超时
 cancel + TIMEOUT；``/stop`` 取消经 ``CancelledError`` 穿透给图运行；
 ``cancel_call`` 支持按 call_id 取消在飞调用。
@@ -20,16 +20,23 @@ from app.harness.contracts import ToolDescriptor, ToolResult
 from ..context import ToolExecutionContext
 from ..registry import ToolDef, ToolRegistry
 from .catalog import ToolCatalog
+from .media_archive import archive_media_results
 from .metrics import ToolMetrics, get_default_metrics
 from .provider import InProcessProvider
+from .streamable_provider import StreamableHttpProvider
+
+# 需要平台侧归档产物的远程 MCP server（沙箱无公网出口，临时链接无法自行取回）。
+_ARCHIVED_SERVER_IDS = frozenset({"media.generation"})
 
 
 class MCPClientManager:
-    """内部 MCP 扩展 Host：目录发现、调用、取消、熔断与度量。"""
+    """受控 MCP 扩展 Host：目录发现、调用、取消、熔断与度量。"""
 
     def __init__(self, metrics: ToolMetrics | None = None, *, join_on_cancel: bool = False) -> None:
         self._catalog = ToolCatalog()
-        self._providers: dict[str, InProcessProvider] = {}
+        self._providers: dict[str, InProcessProvider | StreamableHttpProvider] = {}
+        # 远程 provider 只能由启动配置构造，不能由模型参数或浏览器请求新增。
+        self._remote_providers: dict[str, StreamableHttpProvider] = {}
         self._registry: ToolRegistry | None = None
         self._inflight: dict[str, asyncio.Future] = {}
         # 新循环显式选择等待线程真实结束；旧调用方保持原超时/取消行为。
@@ -46,10 +53,12 @@ class MCPClientManager:
         *,
         metrics: ToolMetrics | None = None,
         join_on_cancel: bool = False,
+        remote_providers: Mapping[str, StreamableHttpProvider] | None = None,
     ) -> MCPClientManager:
-        """按 server 分组构建 in-process provider，并建立目录索引。"""
+        """按 server 构建受控 provider，并建立目录索引。"""
         manager = cls(metrics=metrics, join_on_cancel=join_on_cancel)
         manager._registry = registry
+        manager._remote_providers = dict(remote_providers or {})
         manager._rebuild(registry)
         return manager
 
@@ -64,7 +73,8 @@ class MCPClientManager:
             by_server.setdefault(descriptor.server_id, {})[descriptor.tool_id] = definition
         self._catalog = catalog
         self._providers = {
-            server: InProcessProvider(server, defs) for server, defs in by_server.items()
+            server: self._remote_providers.get(server, InProcessProvider(server, defs))
+            for server, defs in by_server.items()
         }
 
     async def refresh_catalog(self) -> list[ToolDescriptor]:
@@ -119,15 +129,27 @@ class MCPClientManager:
                 call_id=context.call_id,
             )
         started = time.perf_counter()
-        future = asyncio.ensure_future(
-            asyncio.to_thread(
-                provider.invoke,
-                tool_id,
-                dict(arguments),
-                context,
-                context.call_id,
+        is_remote = isinstance(provider, StreamableHttpProvider)
+        if is_remote:
+            future = asyncio.ensure_future(
+                provider.invoke(
+                    tool_id=tool_id,
+                    tool_name=descriptor.name,
+                    arguments=arguments,
+                    output_schema=descriptor.output_schema,
+                    call_id=context.call_id,
+                )
             )
-        )
+        else:
+            future = asyncio.ensure_future(
+                asyncio.to_thread(
+                    provider.invoke,
+                    tool_id,
+                    dict(arguments),
+                    context,
+                    context.call_id,
+                )
+            )
         key = context.call_id or tool_id
         self._inflight[key] = future
         timed_out = False
@@ -139,7 +161,7 @@ class MCPClientManager:
                 timeout=max(0.001, float(descriptor.timeout_s)),
             )
         except TimeoutError:
-            if self._join_on_cancel:
+            if self._join_on_cancel and not is_remote:
                 timed_out = True
                 result = await self._wait_joined(future)
             else:
@@ -152,7 +174,7 @@ class MCPClientManager:
                                   error={"code": "TIMEOUT", "message": "操作失败（TIMEOUT）"},
                                   call_id=context.call_id)
         except asyncio.CancelledError:
-            if self._join_on_cancel:
+            if self._join_on_cancel and not is_remote:
                 result = await self._wait_joined(future)
             else:
                 future.cancel()
@@ -162,6 +184,10 @@ class MCPClientManager:
             self._call_tasks.pop(key, None)
         if not result.call_id:
             result = replace(result, call_id=context.call_id)
+        # 媒体产物（图片/视频）在 api 侧归档进会话工作区（失败不改写原结果），
+        # 使模型与后续工具能在无出网沙箱内使用文件本体。
+        if result.ok and descriptor.server_id in _ARCHIVED_SERVER_IDS:
+            result = await archive_media_results(result, context.sandbox_dir)
         latency_ms = round((time.perf_counter() - started) * 1000)
         if result.ok:
             self._metrics.record_call(tool_id, descriptor.server_id, ok=True, timeout=timed_out, latency_ms=latency_ms)

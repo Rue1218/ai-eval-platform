@@ -73,6 +73,7 @@ LOOP_EXPERT_BOUNDARY = """【专家角色边界】
 ALLOWED_TOOLS = ("read", "read_image", "glob", "grep", "write", "edit", "web_search",
                  "web_fetch", "bash", "ask_user_question", "task", "task.create", "task.status",
                  "task.cancel")
+MEDIA_MCP_TOOLS = ("image.generate", "video.create", "video.status")
 _REASONING_EFFORTS = frozenset({"off", "low", "medium", "high", "xhigh", "max"})
 
 
@@ -82,10 +83,11 @@ def _expert_tools(expert: ExpertDef) -> tuple[str, ...]:
     专家未声明 ``allowed_tools`` 时使用平台全量白名单（默认专家行为不变）；
     声明后只收窄、不扩大——交集为空视为配置错误，fail-closed。
     """
+    available_tools = ALLOWED_TOOLS + (MEDIA_MCP_TOOLS if settings.media_mcp_enabled else ())
     if not expert.allowed_tools:
-        return ALLOWED_TOOLS
+        return available_tools
     declared = set(expert.allowed_tools)
-    allowed = tuple(name for name in ALLOWED_TOOLS if name in declared)
+    allowed = tuple(name for name in available_tools if name in declared)
     if not allowed:
         raise AppError(ErrorCode.VALIDATION, "专家工具视野不可用")
     return allowed
@@ -238,7 +240,7 @@ async def build_dependencies(service, entry, actor_id: str, data: dict) -> tuple
 
 async def _build_dependencies(service, entry, actor_id: str, data: dict, resources: list) -> tuple[TurnDependencies, list]:
     """用源调度器执行平台工具，所有外部副作用继续通过受控实现。"""
-    from app.harness.execution.mcp import MCPClientManager
+    from app.harness.execution.mcp import MCPClientManager, StreamableHttpProvider
 
     # 专家选择按回合解析：缺省/未知 ID 回落默认专家，工具视野只收窄不扩大。
     expert = resolve_expert(data.get("agent_id"))
@@ -250,7 +252,23 @@ async def _build_dependencies(service, entry, actor_id: str, data: dict, resourc
     adapter, _ = build_adapter(profile)
     resources.append(adapter)
     registry = build_default_registry()
-    manager = MCPClientManager.build_from_registry(registry, join_on_cancel=True)
+    remote_providers = {}
+    if settings.media_mcp_enabled:
+        # 媒体 MCP 只接受 Compose 服务发现地址，防环境变量被误配成任意内网请求。
+        if settings.media_mcp_url.rstrip("/") != "http://media-mcp:8002/mcp":
+            raise AppError(ErrorCode.VALIDATION, "媒体 MCP 地址不符合部署约束")
+        try:
+            remote_providers["media.generation"] = StreamableHttpProvider(
+                settings.media_mcp_url,
+                request_timeout_s=settings.media_mcp_request_timeout_s,
+            )
+        except ValueError as exc:
+            raise AppError(ErrorCode.VALIDATION, "媒体 MCP 配置非法") from exc
+    manager = MCPClientManager.build_from_registry(
+        registry,
+        join_on_cancel=True,
+        remote_providers=remote_providers,
+    )
     resources.append(manager)
 
     def _resolve_permission_tier(db, session) -> str:
@@ -469,9 +487,9 @@ def _wire_payload(request) -> dict:
 
 def _prompt_tokens(request) -> int:
     """用 SDK 同源消息转换估算输入成本，包含工具、图文与 opaque 回传块。"""
-    from app.harness.context.meter import estimate_tokens
+    from app.harness.context.meter import estimate_payload_tokens
 
-    return estimate_tokens(json.dumps(_wire_payload(request), ensure_ascii=False, allow_nan=False))
+    return estimate_payload_tokens(_wire_payload(request))
 
 
 def _prompt_breakdown(
@@ -480,7 +498,7 @@ def _prompt_breakdown(
     input_tokens: int | None = None,
 ) -> dict[str, int]:
     """按实际序列化请求拆分输入来源；没有注入的 Skill/记忆文件必须保持为零。"""
-    from app.harness.context.meter import estimate_tokens
+    from app.harness.context.meter import estimate_payload_tokens
 
     payload = _wire_payload(request)
     categories = {
@@ -493,7 +511,7 @@ def _prompt_breakdown(
     }
 
     def tokens(value) -> int:
-        return estimate_tokens(json.dumps(value, ensure_ascii=False, allow_nan=False))
+        return estimate_payload_tokens(value)
 
     transports = tool_transports or {}
     for spec, wire in zip(request.tools, payload.get("tools", []), strict=True):

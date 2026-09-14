@@ -10,11 +10,11 @@
         <button class="loop-runtime-btn" type="button" @click="runtimeOpen=!runtimeOpen">运行信息</button>
       </div>
     </div>
-    <p v-if="state && state.connection !== 'online'" class="loop-notice" role="status">{{ state.connection === 'connecting' ? '正在同步会话…' : '连接中断，状态待同步。' }}<button @click="store.clients.get(sessionId)?.connect()">重新连接</button></p>
-    <p v-if="state?.error || error" class="loop-notice error" role="alert">{{ state?.error || error }}</p>
+    <p v-if="connectionState && connectionState.connection !== 'online'" class="loop-notice" role="status">{{ connectionState.connection === 'connecting' ? '正在同步会话…' : '连接中断，状态待同步。' }}<button @click="store.clients.get(sessionId)?.connect()">重新连接</button></p>
+    <p v-if="connectionState?.error || error" class="loop-notice error" role="alert">{{ connectionState?.error || error }}</p>
     <div class="loop-content">
       <div class="loop-center">
-        <section v-if="tab==='chat'" ref="chatShell" class="loop-chat-shell" :class="{ 'is-resizing': isResizing, 'is-empty': !rows.length }" :style="chatShellStyle" aria-label="对话内容区域">
+        <section v-if="tab==='chat'" ref="chatShell" class="loop-chat-shell" :class="{ 'is-resizing': isResizing, 'is-empty': !rows.length, 'has-interaction': !!activeInteractionDrawer }" :style="chatShellStyle" aria-label="对话内容区域">
           <!-- 空状态：输入框上方水平居中展示 Logo + 名字及产品标语 -->
           <div v-if="!rows.length" class="loop-empty-hero">
             <div class="hero-brand">
@@ -41,28 +41,39 @@
               <p class="turn-segment-label process">执行过程 · 工具调用</p>
               <TaskRunCard :tool="row as ToolRun" :task="taskForTool(row as ToolRun)" :interactions="interactions(row)" :can-control="canControl" :online="!!state?.ready" @respond="respond"/>
             </section>
-            <section v-else-if="'status' in row && 'name' in row && (row as ToolRun).name !== 'task'" class="turn-process-tool">
+            <!-- task 成功由看板展示；非成功终态保留结果卡，避免更新失败后无处查看原因。 -->
+            <section v-else-if="'status' in row && 'name' in row && ((row as ToolRun).name !== 'task' || ((row as ToolRun).event === 'tool.result' && (row as ToolRun).status !== 'succeeded'))" class="turn-process-tool">
               <p class="turn-segment-label process">执行过程 · 工具调用</p>
               <ToolRunCard :tool="row as ToolRun" :interactions="interactions(row)" :can-control="canControl" :online="!!state?.ready" @respond="respond"/>
             </section>
-            <article v-else class="loop-message assistant" :class="{ 'is-continuation': !isFirstAssistantInTurn(row), 'is-process': isProcessAssistantRow(row), 'is-turn-summary': isSummaryAssistantRow(row) }">
-              <header v-if="isFirstAssistantInTurn(row) || isSummaryAssistantRow(row) || isProcessAssistantRow(row)" class="assistant-header">
-                <div class="assistant-identity">
-                  <template v-if="isFirstAssistantInTurn(row)">
-                    <ProviderLogo v-if="row.request_summary?.model" :provider="getModelLogoKey(row.request_summary.model)" :size="18"/>
-                    <strong>{{ row.request_summary?.model || '助手' }}</strong>
-                    <time v-if="formatTimestamp(row.timestamp)" :datetime="row.timestamp">{{ formatTimestamp(row.timestamp) }}</time>
-                    <small v-if="row.request_summary">第 {{ row.correlation.turn ?? '—' }} 轮 · {{ row.request_summary.reasoning_effort }} · step {{ row.correlation.step }}</small>
-                  </template>
-                  <span v-if="isSummaryAssistantRow(row)" class="turn-segment-label summary">本轮总结</span>
-                  <span v-else class="turn-segment-label process">执行过程 · step {{ row.correlation.step ?? '—' }}</span>
-                </div>
-              </header>
-              <ReasoningBlock v-if="row.reasoning && ui?.permissions.reasoning" :content="row.reasoning" :ended="row.ended" :interrupted="row.interrupted"/>
-              <MarkdownView v-if="row.text" :content="row.text"/>
-              <p v-else-if="!row.ended" class="muted">正在响应…</p>
-              <small v-if="row.interrupted || row.error_code">{{ row.interrupted ? '本次输出已中断' : row.error_code }}</small>
-            </article>
+            <!-- task 工具由任务规划看板展示，不能落入助手分支生成虚假的响应占位。 -->
+            <template v-else-if="!('status' in row && 'name' in row)">
+              <!-- 媒体产物按轮次紧邻最终总结展示，避免图片或视频被折叠在执行过程卡中。 -->
+              <section v-if="isSummaryAssistantRow(row) && mediaPreviewsForSummary(row.key).length" class="turn-media-results" aria-label="本轮生成结果">
+                <p class="turn-segment-label summary">生成结果</p>
+                <MediaResultPreview v-for="(preview, index) in mediaPreviewsForSummary(row.key)" :key="`${preview.kind}:${preview.upstreamTaskId || preview.videoUrl || preview.imageUrls.join(',')}:${index}`" :preview="preview"/>
+              </section>
+              <article class="loop-message assistant" :class="{ 'is-continuation': !isFirstAssistantInTurn(row), 'is-process': isProcessAssistantRow(row), 'is-turn-summary': isSummaryAssistantRow(row) }">
+                <header v-if="isFirstAssistantInTurn(row) || isSummaryAssistantRow(row) || isProcessAssistantRow(row)" class="assistant-header">
+                  <div class="assistant-identity">
+                    <template v-if="isFirstAssistantInTurn(row)">
+                      <ProviderLogo v-if="row.request_summary?.model" :provider="getModelLogoKey(row.request_summary.model)" :size="18"/>
+                      <strong>{{ row.request_summary?.model || '助手' }}</strong>
+                      <time v-if="formatTimestamp(row.timestamp)" :datetime="row.timestamp">{{ formatTimestamp(row.timestamp) }}</time>
+                      <small v-if="row.request_summary">第 {{ row.correlation.turn ?? '—' }} 轮 · {{ row.request_summary.reasoning_effort }} · step {{ row.correlation.step }}</small>
+                    </template>
+                    <span v-if="isSummaryAssistantRow(row)" class="turn-segment-label summary">本轮总结</span>
+                    <span v-else class="turn-segment-label process">执行过程 · step {{ row.correlation.step ?? '—' }}</span>
+                  </div>
+                </header>
+                <ReasoningBlock v-if="row.reasoning && ui?.permissions.reasoning" :content="row.reasoning" :ended="row.ended" :interrupted="row.interrupted"/>
+                <MarkdownView v-if="row.text" :content="row.text"/>
+                <p v-else-if="!row.ended" class="muted">正在响应…</p>
+                <small v-if="row.interrupted || row.error_code || row.error_message" class="attempt-error">
+                  {{ row.interrupted ? '本次输出已中断' : `${row.error_code ? `[${row.error_code}] ` : ''}${row.error_message || '模型调用未完成'}` }}
+                </small>
+              </article>
+            </template>
             <!-- 总结操作固定置于整轮末尾：复制、重新生成、引用记忆、Token、用时。 -->
             <div v-if="turnSummaryByLastRowKey.get(row.key)" class="turn-end-toolbar" aria-label="本轮总结操作与指标">
               <div class="turn-end-actions">
@@ -112,7 +123,7 @@
           <p v-if="!busy && state?.phase && ['max_tokens','max_steps','cancelled','interrupted','error'].includes(state.phase)" class="loop-notice">{{ finishLabels[state.phase] }}</p>
           </div>
           <div class="loop-composer-wrap">
-            <div class="composer-top-bar" :class="{ 'is-workspace-open': workspacePopoverOpen, 'is-locked': !!sessionId }">
+            <div class="composer-top-bar" :style="workspacePopoverOpen ? { marginBottom: `${workspacePopoverSpace}px` } : undefined">
               <n-popover
                 ref="workspacePopoverRef"
                 :show="workspacePopoverOpen"
@@ -148,7 +159,7 @@
                   </button>
                 </template>
 
-                <div v-if="workspacePopoverOpen" :key="workspacePopoverEpoch" class="ws-popover-card">
+                <div v-if="workspacePopoverOpen" ref="workspacePopoverCard" :key="workspacePopoverEpoch" class="ws-popover-card">
                   <header class="ws-popover-header">
                     <div class="ws-popover-title">
                       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -242,7 +253,21 @@
               </n-popover>
             </div>
             <TaskStateDrawer :plan="taskPlan" />
-            <AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :metrics="conversationMetrics" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" :has-workspace="true" :agent="selectedAgent" :agents="ui?.agents || []" :permission-tier="sessionTier" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile" @agent="selectAgent" @request-workspace="handleRequestWorkspace" @update-permission-tier="handleTierChange"/>
+            <!-- 交互抽屉锚定输入框上沿，不参与纵向流，避免长题目把输入框挤出可视区域。 -->
+            <div class="composer-anchor">
+              <Transition name="composer-interaction">
+                <InteractionDrawer
+                  v-if="activeInteractionDrawer"
+                  :key="activeInteractionDrawer.key"
+                  class="composer-interaction-drawer"
+                  :interaction="activeInteractionDrawer"
+                  :can-control="canControl"
+                  :online="!!state?.ready"
+                  @respond="respond"
+                />
+              </Transition>
+              <AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :metrics="conversationMetrics" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" :agent="selectedAgent" :agents="ui?.agents || []" :permission-tier="sessionTier" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile" @agent="selectAgent" @update-permission-tier="handleTierChange"/>
+            </div>
           </div>
           <!-- 空状态时的提示词卡片（位于输入框下方，点击填充草稿） -->
           <div v-if="!rows.length" class="loop-empty-prompts">
@@ -273,7 +298,7 @@
       </div>
       <aside v-if="runtimeOpen" class="loop-runtime"><button class="runtime-close" @click="runtimeOpen=false">关闭</button><h3>当前运行</h3><p>{{ status }}</p><dl><dt>会话</dt><dd>{{ sessionId || '未发送的草稿' }}</dd><dt>实际模型</dt><dd>{{ summary?.model || '尚无实际请求' }}</dd><dt>思考档位</dt><dd>{{ summary?.reasoning_effort || '未知' }}</dd><dt>协议档版本</dt><dd>{{ summary?.profile_version || '未知' }}</dd><dt>最近活动</dt><dd v-for="event in state?.facts.slice(-5) || []" :key="event.cursor">{{ event.type }}</dd></dl><h4 v-if="tasks.length">Worker 任务</h4><div v-for="task in tasks" :key="task.key"><router-link :to="'/tasks'">{{ task.key }}</router-link><p>{{ task.status || '等待状态' }}</p><p v-if="task.progress">{{ JSON.stringify(task.progress) }}</p><router-link v-if="task.report_id" :to="`/reports/${task.report_id}`">查看报告</router-link></div><p v-for="execution in quarantined" :key="execution.key" class="loop-notice">执行范围受限 · {{ execution.reason || '等待对账' }}</p></aside>
     </div>
-    <div v-if="tab==='trace'" class="loop-composer-wrap loop-trace-composer">
+    <div v-if="tab==='trace'" class="loop-composer-wrap loop-trace-composer" :class="{ 'has-interaction': !!activeInteractionDrawer }">
       <div class="composer-top-bar">
         <button
           type="button"
@@ -296,7 +321,21 @@
         </button>
       </div>
       <TaskStateDrawer :plan="taskPlan" />
-      <AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :metrics="conversationMetrics" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" :has-workspace="true" :agent="selectedAgent" :agents="ui?.agents || []" :permission-tier="sessionTier" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile" @agent="selectAgent" @request-workspace="handleRequestWorkspace" @update-permission-tier="handleTierChange"/>
+      <!-- Trace 面板复用同一输入框锚点，保证交互不会撑高页面。 -->
+      <div class="composer-anchor">
+        <Transition name="composer-interaction">
+          <InteractionDrawer
+            v-if="activeInteractionDrawer"
+            :key="activeInteractionDrawer.key"
+            class="composer-interaction-drawer"
+            :interaction="activeInteractionDrawer"
+            :can-control="canControl"
+            :online="!!state?.ready"
+            @respond="respond"
+          />
+        </Transition>
+        <AgentComposer ref="composer" :draft="draft" :ui="ui" :profile="selectedProfile" :profiles="ui?.profiles || []" :effort="effort" :meter="summary?.context_meter" :metrics="conversationMetrics" :busy="busy" :cancelling="!!state?.cancelling" :can-stop="canControl && !!state?.ready && !state?.cancelling" :ready="ready" :agent="selectedAgent" :agents="ui?.agents || []" :permission-tier="sessionTier" @effort="setEffort" @submit="submit" @stop="stop" @retry="retry" @model="selectProfile" @agent="selectAgent" @update-permission-tier="handleTierChange"/>
+      </div>
     </div>
     <!-- 页面最底部指标栏：只有开始对话后（rows.length > 0）且有 conversationMetrics 时显示 -->
     <footer v-if="rows.length && conversationMetrics" class="conversation-metrics loop-bottom-metrics" aria-label="会话模型总用量指标">
@@ -335,6 +374,7 @@ import FileIcon from 'naive-ui/es/_internal/icons/File'
 import RetryIcon from 'naive-ui/es/_internal/icons/Retry'
 import TimeIcon from 'naive-ui/es/_internal/icons/Time'
 import http, { ApiError, api } from '../../../api/http'
+import { createAgentUiRefresh } from '../../../agent/loop/uiRefresh'
 import { createRequestId } from '../../../utils/requestId'
 import type { AttachmentReference, AgentSession } from '../../../api/types'
 import type { ConversationMetrics, Data, Effort, InteractionRecord, LoopAgent, LoopProfile, LoopRecord, LoopUi, TaskPlanDisplay, ToolRun } from '../../../api/agentLoopTypes'
@@ -347,13 +387,16 @@ import ProviderLogo from '../../ProviderLogo.vue'
 import MarkdownView from '../MarkdownView.vue'
 import AttachmentPreview from '../AttachmentPreview.vue'
 import AgentComposer from './AgentComposer.vue'
+import InteractionDrawer from './InteractionDrawer.vue'
 import TaskStateDrawer from './TaskStateDrawer.vue'
 import ToolRunCard from './ToolRunCard.vue'
 import TaskRunCard from './TaskRunCard.vue'
 import ReasoningBlock from './ReasoningBlock.vue'
 import TraceWorkspace from './TraceWorkspace.vue'
+import MediaResultPreview from './MediaResultPreview.vue'
 import { isTaskTool } from '../../../agent/loop/taskPresentation'
-import { calculateTurnSummaries, formatDuration, formatTokens, tokenValue, type TurnSummary } from '../../../agent/loop/turnSummary'
+import { calculateTurnSummaries, formatDuration, formatTokens, getTurnIdentifier, type TurnSummary } from '../../../agent/loop/turnSummary'
+import { mediaPreviewsFor, type MediaPreview } from '../../../agent/loop/mediaPresentation'
 import { assistantKeysByTurn, conversationMetricsFrom, effortPreferenceKey, finishLabels, firstAssistantInTurn, latestRequestSummary, phaseStatusText, pickAgent, pickProfile, preferenceKey, taskForToolRow } from '../../../agent/loop/workspaceDerived'
 
 const props = withDefaults(
@@ -374,11 +417,12 @@ const loadingWorkspaces = ref(false)
 const workspacePopoverOpen = ref(false)
 const workspacePopoverEpoch = ref(0)
 const workspacePopoverRef = ref<{ syncPosition: () => void } | null>(null)
+const workspacePopoverCard = ref<HTMLElement | null>(null)
+const workspacePopoverSpace = ref(0)
 const draftWorkspaceId = ref<string | null>(null)
 const draftWorkspaceName = ref<string>('')
 const newWorkspaceName = ref('')
 const creatingWorkspace = ref(false)
-let workspacePopoverSyncFrame: number | undefined
 
 const sessionTier = ref<string>('')
 watch(() => props.session?.permission_tier, (value) => { sessionTier.value = value || '' }, { immediate: true })
@@ -406,11 +450,6 @@ const activeWorkspaceName = computed<string>(() => {
     return props.session?.workspace_name || (props.session?.workspace_id ? '工作区' : '')
   }
   return draftWorkspaceName.value || (draftWorkspaceId.value ? '工作区' : '')
-})
-
-const hasWorkspace = computed<boolean>(() => {
-  if (props.sessionId) return true
-  return !!activeWorkspaceId.value
 })
 
 async function loadWorkspaces(autoSelect = true) {
@@ -449,34 +488,28 @@ function handleWorkspacePopoverVisibility(open: boolean) {
   workspacePopoverOpen.value = open
   if (open) {
     workspacePopoverEpoch.value += 1
-    syncWorkspacePopoverDuringEntrance()
-  } else if (workspacePopoverSyncFrame !== undefined) {
-    cancelAnimationFrame(workspacePopoverSyncFrame)
-    workspacePopoverSyncFrame = undefined
+    syncWorkspacePopoverLayout()
+  } else {
+    workspacePopoverSpace.value = 0
   }
   if (open && !workspaces.value.length) {
     void loadWorkspaces(false)
   }
 }
 
-/** 顶栏扩展会推动触发器上移；逐帧同步浮层，避免浮层与“147”脱节。 */
-function syncWorkspacePopoverDuringEntrance() {
-  if (workspacePopoverSyncFrame !== undefined) cancelAnimationFrame(workspacePopoverSyncFrame)
+/** 面板按实际高度预留空间，避免固定 356px 在短面板下留下大块空白。 */
+function syncWorkspacePopoverLayout() {
   void nextTick(() => {
     if (!workspacePopoverOpen.value) return
-    const startedAt = performance.now()
-    const sync = (now: number) => {
-      workspacePopoverRef.value?.syncPosition()
-      if (workspacePopoverOpen.value && now - startedAt < 380) {
-        workspacePopoverSyncFrame = requestAnimationFrame(sync)
-      } else {
-        workspacePopoverSyncFrame = undefined
-      }
-    }
-    workspacePopoverRef.value?.syncPosition()
-    workspacePopoverSyncFrame = requestAnimationFrame(sync)
+    const height = workspacePopoverCard.value?.offsetHeight || 0
+    workspacePopoverSpace.value = height ? height + 12 : 0
+    void nextTick(() => workspacePopoverRef.value?.syncPosition())
   })
 }
+
+watch([workspacePopoverOpen, loadingWorkspaces, () => workspaces.value.length], () => {
+  if (workspacePopoverOpen.value) syncWorkspacePopoverLayout()
+})
 
 function handleSelectWorkspace(ws: { id: string; name: string } | null) {
   if (props.sessionId) {
@@ -517,9 +550,6 @@ async function handleCreateWorkspace() {
   }
 }
 
-function handleRequestWorkspace() {
-  handleWorkspacePopoverVisibility(true)
-}
 const runtimeOpen = ref(false), error = ref(''), effort = ref<Effort | null>(null)
 const ui = ref<LoopUi | null>(null), selectedProfileId = ref(''), selectedAgentId = ref(''), shown = ref(80), attachments = ref<Record<string, AttachmentReference[]>>({})
 const composer = ref<InstanceType<typeof AgentComposer>>(), scroller = ref<HTMLElement>(), chatShell = ref<HTMLElement>(), atBottom = ref(true)
@@ -528,7 +558,9 @@ const chatWidth = ref<number | null>(null), isResizing = ref(false), resizeEdge 
 const resizeHandleOffsets = ref<Record<ResizeEdge, number>>({ left: 110, right: 110 })
 const minimumChatWidth = 520
 const chatWidthStorageKey = 'agent-loop:chat-shell-width:v3'
-const state = computed(() => props.store.sessions[props.sessionId]), trace = computed(() => props.store.traces[props.sessionId])
+// 空闲连接重开时，先完成服务端授权与回放，再展示保留的历史正文。
+const connectionState = computed(() => props.store.sessions[props.sessionId])
+const state = computed(() => props.store.restoring.has(props.sessionId) ? undefined : connectionState.value), trace = computed(() => props.store.traces[props.sessionId])
 const draft = computed(() => props.store.draft(props.sessionId || 'draft'))
 const rows = computed(() => state.value ? conversationRows(state.value) : [])
 const visibleRows = computed(() => rows.value.slice(-shown.value))
@@ -549,6 +581,13 @@ const selectedProfile = computed<LoopProfile | null>(() => pickProfile(ui.value,
 const selectedAgent = computed<LoopAgent | null>(() => pickAgent(ui.value, selectedAgentId.value))
 const ready = computed(() => !!selectedProfile.value && !!effort.value && (props.sessionId ? !!state.value?.ready : !!ui.value?.enabled))
 const canControl = computed(() => !!state.value?.controlled && !!ui.value?.permissions.interactions)
+/** 同一会话只展示当前待处理的工具审批或补充问题，历史卡保留在事实流而不占聊天高度。 */
+const activeInteractionDrawer = computed<InteractionRecord | null>(() => {
+  const pending = Object.values(state.value?.interactions || {})
+    .filter(interaction => !interaction.resolved && (interaction.kind === 'approval' || interaction.kind === 'question'))
+    .sort((left, right) => left.first_cursor - right.first_cursor)
+  return pending[0] || null
+})
 const summary = computed(() => latestRequestSummary(state.value?.attempts))
 /** 仅聚合已提交的上游 usage；缺字段代表上游未返回，不能当作零或自行估算。 */
 const conversationMetrics = computed<ConversationMetrics>(() => conversationMetricsFrom(state.value?.attempts))
@@ -564,15 +603,15 @@ const prompts = ['查看工作区文件，说明可以如何处理', '帮我准�
 const chatShellStyle = computed(() => chatWidth.value ? { width: `${chatWidth.value}px` } : undefined)
 const maximumChatWidth = computed(() => Math.max(minimumChatWidth, (chatShell.value?.parentElement?.clientWidth || minimumChatWidth + 48) - 48))
 const renderedChatWidth = computed(() => chatWidth.value || chatShell.value?.getBoundingClientRect().width || minimumChatWidth)
-let epoch = 0
 let resizeStartX = 0, resizeStartWidth = 0
 const resizeHandleHeight = 100
-/** 能力随会话/窗口聚焦刷新；活动请求显示自己的持久配置版本。 */
-async function refreshUi() {
-  const current = ++epoch, sid = props.sessionId
-  try {
-    const { data } = await http.get<LoopUi>(sid ? `/api/sessions/${sid}/agent-ui` : '/api/sessions/agent-ui')
-    if (current !== epoch) return
+/** 合并重复能力读取，首次加载即时执行；后台刷新保留当前有效配置。 */
+const uiRefresh = createAgentUiRefresh(
+  async (sid, signal) => {
+    const { data } = await http.get<LoopUi>(sid ? `/api/sessions/${sid}/agent-ui` : '/api/sessions/agent-ui', { signal })
+    return data
+  },
+  data => {
     ui.value = data
     const savedProfileId = localPreference('agent-profile')
     const profile = data.profiles.find(item => item.id === selectedProfileId.value)
@@ -596,8 +635,11 @@ async function refreshUi() {
       if (!data.permissions.trace) { trace.value.events = []; trace.value.seen.clear(); trace.value.seq = -1; trace.value.catalog = null }
     }
     if (!data.permissions.interactions && state.value) for (const i of Object.values(state.value.interactions)) { delete i.nonce; delete i.spec_hash; i.restricted = true }
-  } catch { if (current === epoch) { ui.value = null; error.value = '读取会话能力失败，请确认权限和服务状态' } }
-}
+  },
+  () => { ui.value = null; error.value = '读取会话能力失败，请确认权限和服务状态' },
+)
+function refreshUi() { return uiRefresh.refresh(auth.user?.id || '', props.sessionId) }
+function refreshUiOnFocus() { return uiRefresh.refresh(auth.user?.id || '', props.sessionId, true) }
 /** 本地偏好只保存协议档 ID 和思考档位，不保存 API 端点、凭据或服务端配置。 */
 function localPreference(key: string) { try { return localStorage.getItem(preferenceKey(key, auth.user?.id)) } catch { return null } }
 let effortProfileKey = ''
@@ -632,7 +674,7 @@ function selectAgent(id: string) {
   selectedAgentId.value = agent.id
   try { localStorage.setItem(`agent-expert:${auth.user?.id}`, agent.id) } catch { /* 本地存储不可用不影响发送。 */ }
 }
-watch(() => props.sessionId, (newSid) => { ui.value = null; attachments.value = {}; shown.value = 80; tab.value='chat'; if (props.sessionId) props.store.open(props.sessionId); void refreshUi(); if (!newSid) void loadWorkspaces(true) }, { immediate: true })
+watch([() => props.sessionId, () => auth.user?.id], ([newSid]) => { ui.value = null; attachments.value = {}; shown.value = 80; tab.value='chat'; props.store.focus(props.sessionId, props.session?.active_task?.id); void refreshUi(); if (!newSid) void loadWorkspaces(true) }, { immediate: true })
 // 轨迹订阅属于当前可见面板；切会话/卸载仅退订诊断，不关闭执行中的控制连接。
 watch([tab, () => props.sessionId, () => ui.value?.permissions.trace], ([view, sid, permitted], _, cleanup) => {
   if (!sid || view !== 'trace' || !permitted) return
@@ -642,12 +684,12 @@ watch([tab, () => props.sessionId, () => ui.value?.permissions.trace], ([view, s
 })
 watch(() => state.value?.cursor, () => { if (atBottom.value) void nextTick(scrollBottom); void hydrateAttachments() })
 const refreshTimer = setInterval(() => { if (document.visibilityState === 'visible') void refreshUi() }, 30000)
-window.addEventListener('focus', refreshUi)
+window.addEventListener('focus', refreshUiOnFocus)
 try {
   const savedWidth = Number(localStorage.getItem(chatWidthStorageKey))
   if (Number.isFinite(savedWidth) && savedWidth >= minimumChatWidth) chatWidth.value = savedWidth
 } catch { /* 本地存储不可用时使用默认宽度。 */ }
-onBeforeUnmount(() => { epoch++; clearInterval(refreshTimer); if (workspacePopoverSyncFrame !== undefined) cancelAnimationFrame(workspacePopoverSyncFrame); window.removeEventListener('focus', refreshUi); finishContentResize() })
+onBeforeUnmount(() => { uiRefresh.cancel(); props.store.focus(''); clearInterval(refreshTimer); window.removeEventListener('focus', refreshUiOnFocus); finishContentResize() })
 function interactions(row: LoopRecord) { return Object.values(state.value?.interactions || {}).filter(i => identity({session_id:props.sessionId,correlation:i.correlation},true) === row.key) }
 function fill(text: string) { draft.value.content = text; composer.value?.focus() }
 function trackScroll() { const el=scroller.value; if(el) atBottom.value=el.scrollHeight-el.scrollTop-el.clientHeight<100 }
@@ -723,7 +765,7 @@ function formatSpeed(value: number | null): string {
 function formatRate(value: number | null): string {
   return value === null ? '—' : `${value.toFixed(value >= 10 ? 0 : 1)}%`
 }
-/** tokenValue / formatTokens / formatDuration 与 turnSummary 同源（顶部导入），消除双份实现。 */
+/** formatTokens / formatDuration 与 turnSummary 同源（顶部导入），消除双份实现。 */
 function formatTimestamp(value?: string): string {
   if (!value) return ''
   const date = new Date(value)
@@ -765,6 +807,29 @@ const turnSummaryByLastRowKey = computed<Map<string, TurnSummary>>(() =>
 const summaryAssistantRowKeys = computed<Set<string>>(() =>
   new Set([...turnSummaryByLastRowKey.value.values()].map(summary => summary.summaryRow.key))
 )
+
+/** 将本轮完成的媒体工具结果放到总结消息之前，保持过程卡只呈现调用事实。 */
+const mediaPreviewsBySummaryRowKey = computed<Map<string, MediaPreview[]>>(() => {
+  const previewsBySummary = new Map<string, MediaPreview[]>()
+  const toolsByTurn = new Map<string, ToolRun[]>()
+  for (const row of rows.value) {
+    if (!('status' in row && 'name' in row)) continue
+    const tool = row as ToolRun
+    const turnKey = getTurnIdentifier(tool)
+    const tools = toolsByTurn.get(turnKey) || []
+    tools.push(tool)
+    toolsByTurn.set(turnKey, tools)
+  }
+  for (const summary of turnSummaryByLastRowKey.value.values()) {
+    const previews = mediaPreviewsFor(toolsByTurn.get(summary.turnKey) || [])
+    if (previews.length) previewsBySummary.set(summary.summaryRow.key, previews)
+  }
+  return previewsBySummary
+})
+
+function mediaPreviewsForSummary(rowKey: string): MediaPreview[] {
+  return mediaPreviewsBySummaryRowKey.value.get(rowKey) || []
+}
 
 function isSummaryAssistantRow(row: LoopRecord): boolean {
   return row.role !== 'user' && !('status' in row && 'name' in row) && summaryAssistantRowKeys.value.has(row.key)
@@ -868,10 +933,15 @@ async function hydrateAttachments() {
 <style scoped>
 .loop-workspace{display:flex;flex:1;flex-direction:column;min-height:0;min-width:0;background:var(--bg-main,#f8faf8)}.loop-tabs{display:flex;align-items:center;gap:8px;padding:8px 20px;border-bottom:1px solid #e0e8e2}.loop-tabs button{padding:7px 12px;border:0;border-radius:7px;background:transparent;color:#61776a;cursor:pointer}.loop-tabs .active{background:#e2eee6;color:#154834}.loop-status{margin-left:auto;font-size:12px;display:flex;align-items:center;gap:6px}.loop-status i{width:7px;height:7px;border-radius:50%;background:#93a99c}.loop-status .running{background:#21a37e;animation:pulse 1.5s ease-in-out infinite}.loop-content{display:flex;flex:1;min-height:0;position:relative}.loop-center{display:flex;flex-direction:column;flex:1;min-width:0;position:relative;min-height:0}.loop-conversation{overflow:auto;flex:1;padding:24px max(20px,calc((100% - 800px)/2));scrollbar-gutter:stable}.loop-message{margin:0 0 22px;min-width:0;overflow-wrap:anywhere}.loop-message header{display:flex;gap:8px;align-items:center;font-size:13px;font-weight:600;margin-bottom:8px}.loop-message header small{font-weight:400;color:#7b8e82}.assistant-header{display:flex;align-items:center}.assistant-identity{display:flex;min-width:0;align-items:center;gap:8px;flex-wrap:wrap}.assistant-identity strong{font-weight:650}.assistant-identity time{color:#8390a0;font-size:11px;font-weight:400;font-variant-numeric:tabular-nums}.loop-message.assistant.is-continuation{margin-top:12px}.loop-message.user{background:#eaf3ed;padding:16px 20px;border-radius:12px}.loop-message.user p{white-space:pre-wrap;margin:0;line-height:1.7}.history-files{display:flex;gap:8px;flex-wrap:wrap}.loop-composer-wrap{padding:12px 24px 18px;max-width:950px;width:100%;box-sizing:border-box;margin:0 auto}.loop-runtime{width:240px;overflow:auto;padding:18px;border-left:1px solid #e0e8e2;font-size:12px;background:#f5f8f5}.loop-runtime dd{margin:5px 0 14px;overflow-wrap:anywhere}.loop-runtime dt{color:#7d9081}.runtime-close{float:right;border:0;background:transparent;cursor:pointer}.loop-notice{padding:8px 16px;margin:4px 10px;background:#f6f0e2;color:#866934;font-size:12px}.loop-notice.error{color:#a24d43}.loop-notice button,.history-more{border:0;background:transparent;text-decoration:underline;cursor:pointer}.jump-bottom{position:absolute;bottom:10px;right:20px;border:1px solid #caddcf;background:#fff;border-radius:20px;padding:8px 15px;cursor:pointer}.muted{color:#86968b}@keyframes pulse{50%{opacity:.35}}@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}@media(max-width:768px){.loop-runtime{position:absolute;inset:0 0 0 auto;max-width:calc(100% - 35px);z-index:30;box-shadow:-20px 0 50px #173e2520}.loop-composer-wrap{padding:8px}.loop-conversation{padding:16px 12px}.loop-tabs{padding:6px;gap:0}.loop-tabs button{padding:7px}.loop-status{font-size:11px}.loop-message header{flex-wrap:wrap}}
 
+.attempt-error { display: block; margin-top: 8px; color: #a24d43; line-height: 1.5; }
+
 /* ReAct 过程与本轮总结使用服务端持久的工具调用字段分段，避免混入可操作回答。 */
 .loop-message.assistant.is-process { margin-bottom: 12px; }
 .loop-message.assistant.is-turn-summary { margin-top: 16px; }
 .turn-process-tool { margin: 0 0 12px; }
+.turn-media-results { margin: 0 0 12px; }
+.turn-media-results > .turn-segment-label { margin: 0 0 2px; }
+.turn-media-results :deep(.media-preview) { margin: 8px 0 0; }
 .turn-segment-label { display: inline-flex; align-items: center; min-height: 20px; padding: 0 7px; border-radius: 10px; font-size: 11px; font-weight: 500; line-height: 20px; }
 .turn-segment-label.process { color: #718096; background: #f1f5f9; }
 .turn-segment-label.summary { color: #176b55; background: #e6f5ee; }
@@ -958,6 +1028,7 @@ async function hydrateAttachments() {
 .loop-chat-shell{position:relative;display:flex;flex:1;flex-direction:column;min-height:0;width:min(900px,calc(100% - 48px));max-width:calc(100% - 48px);min-width:520px;margin:0 auto}
 .loop-chat-shell .loop-conversation{padding:24px 16px}
 .loop-chat-shell .loop-composer-wrap{flex:0 0 auto;width:100%;max-width:none;margin:0;padding:12px 0 18px;box-sizing:border-box}
+.loop-chat-shell.has-interaction .loop-conversation{min-height:96px;padding-bottom:12px}.loop-chat-shell.has-interaction .loop-composer-wrap{padding-top:8px}.loop-chat-shell.has-interaction .composer-top-bar,.loop-trace-composer.has-interaction .composer-top-bar{display:none}.composer-anchor{position:relative}.composer-interaction-drawer{position:absolute;z-index:20;right:0;bottom:calc(100% + 12px);left:0;margin:0}.composer-interaction-enter-active,.composer-interaction-leave-active{overflow:hidden;transition:max-height .24s cubic-bezier(.2,.8,.2,1),opacity .18s ease,transform .24s cubic-bezier(.2,.8,.2,1)}.composer-interaction-enter-from,.composer-interaction-leave-to{max-height:0;opacity:0;transform:translateY(12px)}.composer-interaction-enter-to,.composer-interaction-leave-from{max-height:520px;opacity:1;transform:translateY(0)}
 
 /* 空状态：居中布局、输入框上方水平居中 Logo + 名字及提示词卡片 */
 .loop-chat-shell.is-empty {
@@ -1222,7 +1293,7 @@ async function hydrateAttachments() {
   transition: transform 0.15s ease, background 0.15s ease;
   pointer-events: none;
 }
-@media(max-width:768px){.loop-chat-shell{width:100%!important;max-width:none;min-width:0;margin:0}.loop-chat-shell .loop-composer-wrap{padding:8px}.loop-width-edge{display:none}.loop-chat-shell .loop-conversation{padding:16px 12px}}
+@media(max-width:768px){.loop-chat-shell{width:100%!important;max-width:none;min-width:0;margin:0}.loop-chat-shell .loop-composer-wrap{padding:8px}.loop-chat-shell.has-interaction .loop-conversation{min-height:72px;padding-bottom:8px}.loop-width-edge{display:none}.loop-chat-shell .loop-conversation{padding:16px 12px}}
 
 /* 顶栏操作区：对齐与垂直居中 */
 .loop-tabs-actions {
@@ -1274,14 +1345,6 @@ async function hydrateAttachments() {
   min-height: 28px;
   margin-bottom: 6px;
   padding: 0 4px;
-  transition: margin-bottom 0.36s cubic-bezier(0.16, 1, 0.3, 1);
-}
-/* 浮层占用输入区上方的蓝色缓冲带，布局扩展会自然把工作区选择器平滑推上去。 */
-.composer-top-bar.is-workspace-open {
-  margin-bottom: 356px;
-}
-.composer-top-bar.is-workspace-open.is-locked {
-  margin-bottom: 118px;
 }
 .composer-ws-btn {
   display: inline-flex;
@@ -1302,7 +1365,6 @@ async function hydrateAttachments() {
   will-change: transform;
 }
 .composer-ws-btn.is-open {
-  transform: translate3d(0, -10px, 0);
   background: #edf7f1;
   border-color: #c6dfd1;
   color: #174a3a;
@@ -1549,8 +1611,6 @@ async function hydrateAttachments() {
   .ws-popover-card { animation: none; }
 }
 @media (max-height: 640px) {
-  .composer-top-bar.is-workspace-open { margin-bottom: 282px; }
-  .composer-top-bar.is-workspace-open.is-locked { margin-bottom: 104px; }
   .ws-popover-list { max-height: 132px; }
 }
 [data-theme='dark'] .ws-popover-title {

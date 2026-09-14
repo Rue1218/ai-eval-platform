@@ -19,7 +19,6 @@ from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
 from ..models import (
-    AuditLog,
     Dataset,
     DatasetCatalogEntry,
     DatasetCatalogRelease,
@@ -41,14 +40,10 @@ from ..schemas import (
     ResolveBlockIn,
     ReviewNoteIn,
 )
+from ._common import write_audit
 
 router = APIRouter(prefix="/api", tags=["dataset-catalog"])
 _OPEN_IMPORT_STATUSES = {"queued", "downloading", "validating", "parsing", "review_ready"}
-
-
-def _request_ip(request: Request) -> str | None:
-    """提取审计日志的请求来源 IP。"""
-    return request.client.host if request.client else None
 
 
 def _canonical_hash(value: dict[str, Any]) -> str:
@@ -87,28 +82,6 @@ def _review(
             next_status=next_status,
             manifest_hash=release.manifest_hash if release else None,
             note=note,
-        )
-    )
-
-
-def _audit(
-    db: Session,
-    request: Request,
-    user: User,
-    action: str,
-    target_type: str,
-    target_id: str,
-    detail: dict[str, Any],
-) -> None:
-    """写入不含凭据、上游正文或制品内容的通用审计记录。"""
-    db.add(
-        AuditLog(
-            user_id=user.id,
-            action=action,
-            target_type=target_type,
-            target_id=target_id,
-            detail=detail,
-            ip=_request_ip(request),
         )
     )
 
@@ -268,7 +241,7 @@ def create_catalog_entry(
         next_status="draft",
         note=None,
     )
-    _audit(
+    write_audit(
         db,
         request,
         user,
@@ -310,7 +283,7 @@ def update_catalog_entry(
         next_status="draft",
         note=None,
     )
-    _audit(
+    write_audit(
         db,
         request,
         user,
@@ -364,7 +337,7 @@ def create_catalog_release(
         next_status="draft",
         note=None,
     )
-    _audit(
+    write_audit(
         db,
         request,
         user,
@@ -413,7 +386,7 @@ def update_catalog_release(
         next_status="draft",
         note=None,
     )
-    _audit(
+    write_audit(
         db,
         request,
         user,
@@ -450,7 +423,7 @@ def submit_release_review(
         next_status="reviewing",
         note=body.note,
     )
-    _audit(
+    write_audit(
         db,
         request,
         user,
@@ -492,7 +465,7 @@ def approve_release(
         next_status="approved",
         note=body.note,
     )
-    _audit(
+    write_audit(
         db,
         request,
         user,
@@ -530,7 +503,7 @@ def block_release(
         next_status="blocked",
         note=body.note,
     )
-    _audit(
+    write_audit(
         db,
         request,
         user,
@@ -585,7 +558,7 @@ def resolve_release_block(
         next_status=body.decision,
         note=body.note,
     )
-    _audit(
+    write_audit(
         db,
         request,
         user,
@@ -751,7 +724,7 @@ def create_import(
     )
     db.add(job)
     db.flush()
-    _audit(
+    write_audit(
         db,
         request,
         user,
@@ -824,7 +797,7 @@ def retry_import(
     job.lease_owner = None
     job.lease_expires_at = None
     job.error = {}
-    _audit(
+    write_audit(
         db,
         request,
         user,
@@ -855,7 +828,7 @@ def reject_import(
     job.stage = "rejected"
     job.reviewed_by = user.id
     job.summary = {**(job.summary or {}), "review_note": body.note}
-    _audit(
+    write_audit(
         db, request, user, "dataset_import_reject", "dataset_import", job.id, {"note": body.note}
     )
     db.commit()
@@ -936,7 +909,7 @@ def publish_import(
     job.stage = "published"
     job.reviewed_by = user.id
     job.summary = {**(job.summary or {}), "published_rows": len(rows), "version_id": version.id}
-    _audit(
+    write_audit(
         db,
         request,
         user,

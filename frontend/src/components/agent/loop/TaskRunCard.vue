@@ -46,7 +46,7 @@
 
       <p v-if="tool.display.truncated" class="task-run-notice">预览已截断，未提供完整结果接口。</p>
       <p v-if="tool.display.unavailable_reason" class="task-run-notice">{{ tool.display.unavailable_reason }}</p>
-      <ToolInteraction v-for="interaction in interactions" :key="interaction.key" :interaction="interaction" :can-control="canControl" :online="online" @respond="(record, data) => emit('respond', record, data)" />
+      <ToolInteraction v-for="interaction in interactions.filter(item => item.kind === 'task_confirmation')" :key="interaction.key" :interaction="interaction" :can-control="canControl" :online="online" @respond="(record, data) => emit('respond', record, data)" />
     </div>
   </article>
 </template>

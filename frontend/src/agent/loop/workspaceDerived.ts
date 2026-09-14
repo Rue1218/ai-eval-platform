@@ -102,7 +102,7 @@ export function taskForToolRow(tool: ToolRun, tasks: Record<string, LoopRecord> 
 /** 结束原因文案（模板状态条与 phase 映射共用）。 */
 export const finishLabels: Record<string, string> = {
   max_tokens: '达到输出上限，本轮已结束',
-  max_steps: '达到步骤上限，本轮已结束',
+  max_steps: '达到步骤上限，本轮已结束。如需继续，可发送“继续”接着处理。',
   cancelled: '本轮已取消',
   interrupted: '本轮已中断',
   error: '本轮失败，请查看错误信息',

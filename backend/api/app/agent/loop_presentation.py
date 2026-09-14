@@ -22,10 +22,30 @@ TOOL_FIELDS = {
     "task.create": "kind",
     "task.status": "task_id",
     "task.cancel": "task_id",
+    # 媒体提示词与参考图可能包含用户隐私；卡片只展示非敏感生成参数。
+    "image.generate": "size count prompt_extend",
+    "video.create": "resolution duration watermark",
+    "video.status": "upstream_task_id",
 }
 PREVIEW_LIMIT = 12000
 _TASK_STEP_LIMIT = 12
 _TASK_TEXT_LIMIT = 300
+
+
+# 模型侧安全名 → 注册表短名：媒体 MCP 工具由 loop_bridge 统一生成
+# ``platform_`` 前缀名（含点号的工具不能直接暴露给部分提供方），展示投影
+# 必须按此还原，否则媒体结果会因未登记展示字段而拿不到结果预览。
+_MODEL_WIRE_ALIASES = {
+    "platform_image_generate": "image.generate",
+    "platform_video_create": "video.create",
+    "platform_video_status": "video.status",
+}
+
+
+def _canonical_display_name(wire: str) -> str:
+    """把模型可见名归一为注册表短名；未知名称保持原样。"""
+    name = canonical_task_tool_name(wire)
+    return _MODEL_WIRE_ALIASES.get(name, name)
 
 
 def _task_display(source: Mapping[str, object], *, result: bool) -> dict[str, object] | None:
@@ -66,7 +86,7 @@ def _task_display(source: Mapping[str, object], *, result: bool) -> dict[str, ob
 def tool_display(source: dict, *, result: bool = False) -> dict:
     """仅对登记工具投影安全预览；错误输出只公开归一错误码。"""
     wire = source.get("name", "")
-    name = canonical_task_tool_name(wire)
+    name = _canonical_display_name(wire)
     display = {"version": 1, "title": name, "registry_name": name, "wire_name": wire,
                "format": "text", "truncated": False}
     if name not in TOOL_FIELDS:
@@ -92,14 +112,14 @@ def tool_display(source: dict, *, result: bool = False) -> dict:
         safe = redact_for_transport({key: args[key] for key in TOOL_FIELDS[name].split() if key in args})
         text = json.dumps(safe, ensure_ascii=False, indent=2)
         display.update(arguments_preview=text[:PREVIEW_LIMIT], truncated=len(text) > PREVIEW_LIMIT)
-        display["target"] = str(safe.get("path", safe.get("file_path", safe.get("url", safe.get("query", "")))))[:300]
+        display["target"] = str(safe.get("path", safe.get("file_path", safe.get("url", safe.get("query", safe.get("upstream_task_id", ""))))))[:300]
     if task is not None:
         display["task"] = task
     return display
 
 
 def question_answers(questions: list[dict], answers: list[dict]) -> dict:
-    """v2 多选标签数组与 legacy 字符串转同一校验模型，保留逗号标签。"""
+    """v2 选择标签与“其他”文本转同一校验模型，保留逗号标签。"""
     from app.errors import AppError, ErrorCode
     from app.harness.execution.ask_user import validate_answers
 
@@ -108,13 +128,18 @@ def question_answers(questions: list[dict], answers: list[dict]) -> dict:
     for item in answers:
         question = by_id.get(item["question_id"], {})
         value = item["answer"]
+        question_type = str(question.get("type") or "radio")
+        custom = str(item.get("custom") or "").strip()
         if isinstance(value, list):
-            if question.get("type") != "checkbox":
+            if question_type != "checkbox":
                 raise AppError(ErrorCode.VALIDATION, "仅多选问题接受标签数组")
-            selected, custom = value, ""
+            selected = value
         else:
-            selected = [part.strip() for part in value.split(",") if part.strip()] if question.get("multi_select") or question.get("type") == "checkbox" else ([value] if value else [])
-            custom = value
+            selected = [part.strip() for part in value.split(",") if part.strip()] if question.get("multi_select") or question_type == "checkbox" else ([value] if value else [])
+        # 简答题及无选项题保持旧客户端仅传 answer 时的兼容投影。
+        if question_type == "text" or not question.get("options"):
+            custom = custom or (value if isinstance(value, str) else "")
+            selected = []
         normalized.append({"id": item["question_id"], "custom": custom,
                            "selected": selected if question.get("options") else []})
     return {"answers": validate_answers(questions, normalized)}

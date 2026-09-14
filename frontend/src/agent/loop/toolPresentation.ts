@@ -1,7 +1,16 @@
 import type { ToolStatus } from '../../api/agentLoopTypes.ts'
 import { taskToolAliases } from './taskPresentation.ts'
 /** 精确登记别名；未知工具保持原名，不推断执行能力。 */
-export const toolAliases: Record<string, string> = taskToolAliases
+export const toolAliases: Record<string, string> = {
+  ...taskToolAliases,
+  'image.generate': '生成图片',
+  'video.create': '创建图生视频',
+  'video.status': '查询视频结果',
+  // 媒体工具的模型侧 wire 名（服务端 platform_ 规则）同样映射为中文标题。
+  platform_image_generate: '生成图片',
+  platform_video_create: '创建图生视频',
+  platform_video_status: '查询视频结果',
+}
 export const statusLabels: Record<ToolStatus, string> = {
   pending: '待派发', waiting_approval: '等待交互', running: '执行中', succeeded: '已完成', failed: '失败',
   denied: '已拒绝', cancelled: '已取消', not_started: '未启动', outcome_unknown: '结果未知',

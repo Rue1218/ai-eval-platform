@@ -82,13 +82,15 @@ async def test_pg_real_results_release_with_commit(pg_logs, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_pg_task_plan_commits_complete_snapshot_and_failed_draft_does_not_replace(pg_logs, tmp_path):
+@pytest.mark.parametrize("field", ["description", "prompt", "goal"])
+async def test_pg_task_plan_commits_complete_snapshot_and_failed_draft_does_not_replace(pg_logs, tmp_path, field):
     """task 成功才原子写会话快照；失败参数只留下工具终态，不污染当前计划。"""
     logs, factory = pg_logs
     logs[0].append("turn/start", {"turn": 1})
     bridge = bridge_for(tmp_path, names=("task",))
+    goal = "检查任务规划链路中的旧参数兼容、工具结果持久化以及会话断线后的完整回放"
     initial = {
-        "description": "检查任务规划链路",
+        field: goal,
         "steps": [
             {"title": "写入完整计划", "status": "completed"},
             {"title": "验证会话回放", "status": "in_progress"},
@@ -108,7 +110,7 @@ async def test_pg_task_plan_commits_complete_snapshot_and_failed_draft_does_not_
     events = logs[0].read()
     snapshots = [event for event in events if event["type"] == "task_plan/updated"]
     assert len(snapshots) == 1
-    assert snapshots[0]["data"]["plan"]["goal"] == initial["description"]
+    assert snapshots[0]["data"]["plan"]["goal"] == (goal if field == "description" else goal[:24] + "…")
     assert snapshots[0]["data"]["plan"]["steps"] == initial["steps"]
     assert snapshots[0]["data"]["plan"]["counts"] == {"pending": 0, "in_progress": 1, "completed": 1}
     assert any(event["type"] == "tool/result" and event["data"]["call_id"] == "task-failed" and event["data"]["status"] != "succeeded" for event in events)

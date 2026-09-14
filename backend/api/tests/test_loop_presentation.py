@@ -1,5 +1,6 @@
 """前端契约：模型能力、真实请求估算、安全预览与快照 ACL。"""
 
+import json
 from copy import deepcopy
 
 from app.agent.events import frame, persistent_frame, project_fact, visible_frame
@@ -32,6 +33,49 @@ def test_preview_allowlist_empty_edit_and_truncation():
     output = tool_display({"name": "read", "status": "succeeded", "content": "x" * 12001}, result=True)
     assert output["truncated"] and len(output["result_preview"]) == 12000
     assert tool_display({"name": "unknown", "args": {"secret": "hidden"}})["unavailable_reason"]
+
+
+def test_media_preview_projects_result_but_not_prompt_or_reference_image():
+    """媒体卡只取得已脱敏结果预览，生成输入不回显提示词和参考图。"""
+    call = tool_display({
+        "name": "image.generate",
+        "args": {
+            "prompt": "不应展示的用户提示词",
+            "reference_images": ["data:image/png;base64,private"],
+            "size": "1024x1024",
+            "count": 1,
+        },
+    })
+    assert '"size": "1024x1024"' in call["arguments_preview"]
+    assert "不应展示" not in str(call)
+    assert "base64" not in str(call)
+
+    result = tool_display({
+        "name": "video.status",
+        "status": "succeeded",
+        "content": json.dumps({
+            "status": "SUCCEEDED",
+            "upstream_task_id": "task-1",
+            "video_url": "https://media.example/video.mp4?Signature=temporary",
+        }),
+    }, result=True)
+    assert result["format"] == "json"
+    assert "https://media.example/video.mp4" in result["result_preview"]
+
+
+def test_media_display_accepts_agent_wire_names():
+    """媒体工具经 platform_ wire 名调用时同样投影结果预览与登记参数。"""
+    result = tool_display({
+        "name": "platform_image_generate",
+        "status": "succeeded",
+        "content": json.dumps({"status": "succeeded", "image_urls": ["https://media.example/image.png"]}),
+    }, result=True)
+    assert result["registry_name"] == "image.generate"
+    assert "https://media.example/image.png" in result["result_preview"]
+
+    call = tool_display({"name": "platform_video_status", "args": {"upstream_task_id": "task-1"}})
+    assert call["registry_name"] == "video.status"
+    assert '"upstream_task_id": "task-1"' in call["arguments_preview"]
 
 
 def test_task_display_accepts_agent_wire_registry_and_mcp_names():
@@ -173,6 +217,17 @@ def test_question_array_roundtrip_preserves_comma_labels():
                   "options": [{"label": "A,B"}, {"label": "C"}]}]
     result = question_answers(questions, [{"question_id": "q", "answer": ["A,B", "C"]}])
     assert result == {"answers": [{"id": "q", "selected": ["A,B", "C"], "custom": ""}]}
+
+
+def test_question_answers_keeps_checkbox_selection_and_custom_text():
+    """“其他”文本与已选多选项分开传输，不能伪装成未登记 option label。"""
+    questions = [{"id": "q", "question": "选择", "type": "checkbox", "required": True,
+                  "options": [{"label": "本地"}, {"label": "联网"}]}]
+    result = question_answers(
+        questions,
+        [{"question_id": "q", "answer": ["本地"], "custom": "私有镜像"}],
+    )
+    assert result == {"answers": [{"id": "q", "selected": ["本地"], "custom": "私有镜像"}]}
 
 
 def test_json_result_credentials_are_redacted_before_stringification():

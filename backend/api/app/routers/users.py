@@ -14,6 +14,7 @@ from ..errors import AppError, ErrorCode
 from ..models import AuditLog, Task, User
 from ..schemas import ResetPasswordRequest, UserCreate, UserOut, UserStatusUpdate, UserUpdate
 from ..security import hash_password
+from ._common import client_ip
 
 router = APIRouter(prefix="/api/users", tags=["users"])
 
@@ -22,11 +23,6 @@ def _validate_password(password: str) -> None:
     """执行 PRD 规定的至少八位且包含字母和数字的密码校验。"""
     if len(password) < 8 or not re.search(r"[A-Za-z]", password) or not re.search(r"\d", password):
         raise AppError(ErrorCode.VALIDATION, "密码至少 8 位且包含字母和数字")
-
-
-def _client_ip(request: Request) -> str | None:
-    """提取本次请求的直连地址，供安全审计使用。"""
-    return request.client.host if request.client else None
 
 
 @router.get("")
@@ -69,7 +65,7 @@ def create_user(
             target_type="user",
             target_id=member.id,
             detail={"username": member.username},
-            ip=_client_ip(request),
+            ip=client_ip(request),
         )
     )
     try:
@@ -222,7 +218,7 @@ def update_user(
             target_type="user",
             target_id=member.id,
             detail={},
-            ip=_client_ip(request),
+            ip=client_ip(request),
         )
     )
     try:
@@ -259,7 +255,7 @@ def update_user_status(
             target_type="user",
             target_id=member.id,
             detail={"disabled": body.disabled},
-            ip=_client_ip(request),
+            ip=client_ip(request),
         )
     )
     db.commit()
@@ -289,7 +285,7 @@ def reset_password(
             target_type="user",
             target_id=member.id,
             detail={},
-            ip=_client_ip(request),
+            ip=client_ip(request),
         )
     )
     db.commit()

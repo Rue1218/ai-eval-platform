@@ -13,6 +13,7 @@ from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Literal
 
+from app.config import settings
 from app.errors import AppError, ErrorCode
 from app.harness.contracts import ToolDescriptor
 
@@ -24,6 +25,7 @@ from .registry_handlers import (  # noqa: F401
     _edit_handler,
     _glob_handler,
     _grep_handler,
+    _media_mcp_unavailable_handler,
     _read_handler,
     _read_image_handler,
     _session_task_create_handler,
@@ -226,6 +228,18 @@ def build_default_registry() -> ToolRegistry:
     评测任务扩展：只入 PG 队列、查询或取消，不等待 Worker 终态。
     """
     registry = ToolRegistry()
+    _register_file_tools(registry)
+    _register_web_tools(registry)
+    _register_bash_tool(registry)
+    _register_task_tools(registry)
+    _register_platform_task_tools(registry)
+    if settings.media_mcp_enabled:
+        _register_media_mcp_tools(registry)
+    return registry
+
+
+def _register_file_tools(registry: ToolRegistry) -> None:
+    """工作区文件工具：read / read_image / glob / grep / write / edit。"""
     registry.register(
         ToolDef(
             name="read",
@@ -547,6 +561,10 @@ def build_default_registry() -> ToolRegistry:
             concurrency_class="path_scoped",
         )
     )
+
+
+def _register_web_tools(registry: ToolRegistry) -> None:
+    """网络工具：web_search / web_fetch。"""
     registry.register(
         ToolDef(
             name="web_search",
@@ -662,6 +680,10 @@ def build_default_registry() -> ToolRegistry:
             concurrency_class="read_only",
         )
     )
+
+
+def _register_bash_tool(registry: ToolRegistry) -> None:
+    """沙箱执行工具：bash（独立 Runner bwrap 沙箱，fail-closed）。"""
     registry.register(
         ToolDef(
             name="bash",
@@ -722,6 +744,10 @@ def build_default_registry() -> ToolRegistry:
             concurrency_class="exclusive",
         )
     )
+
+
+def _register_task_tools(registry: ToolRegistry) -> None:
+    """会话任务清单与澄清工具：task / TaskCreate / TaskGet / TaskUpdate / TaskList / ask_user_question。"""
     registry.register(
         ToolDef(
             name="task",
@@ -983,6 +1009,141 @@ def build_default_registry() -> ToolRegistry:
             concurrency_class="exclusive",
         )
     )
+
+
+def _register_media_mcp_tools(registry: ToolRegistry) -> None:
+    """登记 Compose 私网媒体 MCP；上游凭据只保存在 media-mcp 服务。"""
+    common_output = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "status": {"type": "string"},
+            "model": {"type": ["string", "null"]},
+            "image_urls": {"type": "array", "items": {"type": "string"}},
+            # 平台归档产物：api 侧下载进会话工作区的相对路径（原生 MCP 返回中无此字段）。
+            "workspace_images": {"type": "array", "items": {"type": "string"}},
+            "workspace_videos": {"type": "array", "items": {"type": "string"}},
+            "upstream_task_id": {"type": ["string", "null"]},
+            "video_url": {"type": ["string", "null"]},
+            "code": {"type": ["string", "null"]},
+            "message": {"type": ["string", "null"]},
+            "error_code": {"type": ["string", "null"]},
+        },
+        "required": ["status"],
+    }
+    registry.register(
+        ToolDef(
+            name="image.generate",
+            description=(
+                "使用已配置的 Qwen 图片模型生成图片；可选传入至多三张 HTTPS 或 Data URI 参考图。"
+                "生成结果自动归档到会话工作区，workspace_images 返回工作区相对路径，"
+                "可直接用 read/read_image 等工具读取。"
+            ),
+            parameters_schema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "prompt": {"type": "string", "minLength": 1, "maxLength": 5000},
+                    "reference_images": {
+                        "type": "array",
+                        "items": {"type": "string", "minLength": 1, "maxLength": 29_360_128},
+                        "maxItems": 3,
+                    },
+                    "size": {"type": "string", "minLength": 3, "maxLength": 32},
+                    "count": {"type": "integer", "minimum": 1, "maximum": 6},
+                    "prompt_extend": {"type": "boolean"},
+                },
+                "required": ["prompt"],
+            },
+            permission="media.generate",
+            timeout_s=180.0,
+            handler=_media_mcp_unavailable_handler,
+            output_schema=common_output,
+            permission_policy=ToolPermissionPolicy(network="public_only"),
+            recovery_policy=ToolRecoveryPolicy(
+                retryable_codes=frozenset({"UPSTREAM", "TIMEOUT"}),
+                suggested_action="retry_after_check",
+                default_hint="请确认媒体服务可用和提示词参数后重试。",
+                max_auto_repairs=0,
+            ),
+            transport="mcp",
+            server_id="media.generation",
+            display_name="生成图片",
+            risk_level="network",
+            concurrency_class="exclusive",
+        )
+    )
+    registry.register(
+        ToolDef(
+            name="video.create",
+            description="使用已配置的 HappyHorse 首帧图生视频模型创建异步任务；必须提供一张首帧图片。",
+            parameters_schema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "prompt": {"type": "string", "minLength": 1, "maxLength": 5000},
+                    "first_frame": {"type": "string", "minLength": 1, "maxLength": 29_360_128},
+                    "resolution": {"type": "string", "enum": ["480P", "720P", "1080P"]},
+                    "duration": {"type": "integer", "minimum": 3, "maximum": 15},
+                    "watermark": {"type": "boolean"},
+                },
+                "required": ["prompt", "first_frame"],
+            },
+            permission="media.generate",
+            timeout_s=45.0,
+            handler=_media_mcp_unavailable_handler,
+            output_schema=common_output,
+            permission_policy=ToolPermissionPolicy(network="public_only"),
+            recovery_policy=ToolRecoveryPolicy(
+                retryable_codes=frozenset({"UPSTREAM", "TIMEOUT"}),
+                suggested_action="retry_after_check",
+                default_hint="请确认媒体服务可用和首帧图片格式后重试。",
+                max_auto_repairs=0,
+            ),
+            transport="mcp",
+            server_id="media.generation",
+            display_name="创建图生视频",
+            risk_level="network",
+            concurrency_class="exclusive",
+        )
+    )
+    registry.register(
+        ToolDef(
+            name="video.status",
+            description=(
+                "查询 HappyHorse 图生视频异步任务状态；成功时返回临时视频地址。"
+                "成功的视频自动归档到会话工作区，workspace_videos 返回工作区相对路径。"
+            ),
+            parameters_schema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "upstream_task_id": {"type": "string", "minLength": 1, "maxLength": 200},
+                },
+                "required": ["upstream_task_id"],
+            },
+            permission="media.read",
+            timeout_s=30.0,
+            handler=_media_mcp_unavailable_handler,
+            output_schema=common_output,
+            permission_policy=ToolPermissionPolicy(network="public_only"),
+            recovery_policy=ToolRecoveryPolicy(
+                retryable_codes=frozenset({"UPSTREAM", "TIMEOUT"}),
+                suggested_action="retry_after_check",
+                default_hint="请确认视频任务标识和媒体服务状态后重试。",
+                max_auto_repairs=0,
+            ),
+            transport="mcp",
+            server_id="media.generation",
+            display_name="查询视频状态",
+            risk_level="read",
+            concurrency_class="read_only",
+        )
+    )
+
+
+def _register_platform_task_tools(registry: ToolRegistry) -> None:
+    """platform.tasks 长任务 MCP：只入队/查询/取消，不等待终态。"""
     # ── platform.tasks 长任务 MCP：只入队/查询/取消，不等待终态 ──
     registry.register(
         ToolDef(
@@ -1139,4 +1300,3 @@ def build_default_registry() -> ToolRegistry:
             concurrency_class="session_exclusive",
         )
     )
-    return registry

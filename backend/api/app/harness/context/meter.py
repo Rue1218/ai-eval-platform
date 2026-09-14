@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from typing import TypedDict
 
@@ -14,6 +15,11 @@ DEFAULT_MAX_TOKENS = 200_000
 DEFAULT_WINDOW = 20
 DEFAULT_MCP_TOOLS_MAX = 28
 DEFAULT_MEMORY_FILES_MAX = 1
+
+# 视觉块按固定成本估算（Anthropic 单图上限约 1.6k；OpenAI 1024² 约 1.1k），
+# 图片的 base64 数据本身绝不能按文本字符计入上下文预算。
+IMAGE_TOKEN_COST = 1_600
+_DATA_IMAGE_PREFIX = "data:image/"
 
 
 class ContextMeter(TypedDict, total=False):
@@ -56,6 +62,37 @@ def estimate_tokens(text: str) -> int:
         else:
             other += 1
     return max(0, round(cjk / 1.5 + other / 4.0))
+
+
+def estimate_payload_tokens(payload: object) -> int:
+    """结构化请求载荷的确定性估算：图文块按视觉成本计，base64 不按文本计数。
+
+    图片在 wire 载荷里以 base64 data URL 出现（OpenAI ``image_url`` /
+    Anthropic ``image.source``），按文本长度估算会虚增数十万 token，把上下文
+    预算误判为超限；此处替换为固定视觉成本。
+    """
+    images = 0
+
+    def scrub(value: object) -> object:
+        nonlocal images
+        if isinstance(value, dict):
+            if value.get("type") == "image_url" and isinstance(value.get("image_url"), dict):
+                images += 1
+                return {**value, "image_url": {"url": "[图片]"}}
+            if value.get("type") == "image" and isinstance(value.get("source"), dict):
+                images += 1
+                source = value["source"]
+                return {**value, "source": {key: "[图片]" if key == "data" else item for key, item in source.items()}}
+            return {key: scrub(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [scrub(item) for item in value]
+        if isinstance(value, str) and value.startswith(_DATA_IMAGE_PREFIX) and ";base64," in value:
+            images += 1
+            return "[图片]"
+        return value
+
+    text = json.dumps(scrub(payload), ensure_ascii=False, allow_nan=False)
+    return estimate_tokens(text) + images * IMAGE_TOKEN_COST
 
 
 def _as_int(value: object, default: int = 0) -> int:

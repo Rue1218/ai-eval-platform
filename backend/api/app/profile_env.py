@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import os
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
@@ -27,6 +29,30 @@ from shared.profile_env import parse_env_lines as _parse_lines
 from .config import settings
 
 _ENV_WRITE_LOCK = RLock()
+# 仅能力投影的同步请求作用域复用，不跨请求缓存凭据或影响写入后的读取。
+_ENV_READ_VALUES: ContextVar[list[dict[str, str]] | None] = ContextVar("profile_env_read_values", default=None)
+
+
+@contextmanager
+def profile_env_read_scope():
+    """一次只读能力投影使用同一份文件快照，结束或异常时立即归还上下文。"""
+    # 惰性读取保留调用方原有的异常归一化边界；容器最多保存一份解析快照。
+    token = _ENV_READ_VALUES.set([])
+    try:
+        yield
+    finally:
+        _ENV_READ_VALUES.reset(token)
+
+
+def _read_values() -> dict[str, str]:
+    """读取当前作用域快照；普通调用仍从文件获取最新值。"""
+    scope = _ENV_READ_VALUES.get()
+    if scope:
+        return scope[0]
+    values = _parse_lines(_read_snapshot(env_path()).content.splitlines())
+    if scope is not None:
+        scope.append(values)
+    return values
 
 
 @dataclass(frozen=True)
@@ -37,6 +63,18 @@ class ProfileEnvSnapshot:
     existed: bool
     content: str
     mode: int | None
+
+
+@dataclass(frozen=True)
+class MediaMcpEnvValues:
+    """媒体 MCP 的受控配置投影；密钥仅以是否存在的形式对外暴露。"""
+
+    enabled: bool | None
+    compatible_base_url: str | None
+    api_key: str | None
+    image_model: str | None
+    video_model: str | None
+    request_timeout_s: float | None
 
 
 def env_path() -> Path:
@@ -78,13 +116,13 @@ def _write_content(path: Path, content: str, mode: int = 0o600) -> None:
 
 def read_profile_env(profile_id: str) -> ProfileEnvValues:
     """读取一个协议档的环境参数；不存在的字段返回 ``None``。"""
-    values = _parse_lines(_read_snapshot(env_path()).content.splitlines())
+    values = _read_values()
     return profile_values_from(values, profile_id)
 
 
 def read_global_rag_env() -> GlobalRagEnvValues:
     """读取系统全局唯一的 Embedding 与 Reranker 模型环境参数。"""
-    values = _parse_lines(_read_snapshot(env_path()).content.splitlines())
+    values = _read_values()
     return global_rag_values_from(values)
 
 
@@ -139,8 +177,73 @@ def write_global_rag_env(
 
 def read_global_llm_env() -> GlobalLlmEnvValues:
     """读取服务器既有的单模型环境变量，供未迁移旧协议档兼容使用。"""
-    values = _parse_lines(_read_snapshot(env_path()).content.splitlines())
+    values = _read_values()
     return global_llm_values_from(values)
+
+
+def read_media_mcp_env() -> MediaMcpEnvValues:
+    """读取媒体 MCP 配置；格式非法的超时值按缺失处理，避免把异常带入响应。"""
+    values = _read_values()
+    raw_timeout = values.get("MEDIA_MCP_REQUEST_TIMEOUT_S")
+    try:
+        timeout = float(raw_timeout) if raw_timeout else None
+    except ValueError:
+        timeout = None
+    raw_enabled = values.get("MEDIA_MCP_ENABLED")
+    enabled = raw_enabled.strip().lower() in {"1", "true", "yes", "on"} if raw_enabled else None
+    return MediaMcpEnvValues(
+        enabled=enabled,
+        compatible_base_url=values.get("MEDIA_MCP_COMPATIBLE_BASE_URL") or None,
+        api_key=values.get("MEDIA_MCP_API_KEY") or None,
+        image_model=values.get("MEDIA_MCP_IMAGE_MODEL") or None,
+        video_model=values.get("MEDIA_MCP_VIDEO_MODEL") or None,
+        request_timeout_s=timeout,
+    )
+
+
+def write_media_mcp_env(
+    *,
+    enabled: bool | None = None,
+    compatible_base_url: str | None = None,
+    api_key: str | None = None,
+    image_model: str | None = None,
+    video_model: str | None = None,
+    request_timeout_s: float | None = None,
+) -> ProfileEnvSnapshot:
+    """原位保存媒体 MCP 配置；空 API Key 表示保留，禁止意外清除既有凭据。"""
+    updates: dict[str, str] = {}
+    if enabled is not None:
+        updates["MEDIA_MCP_ENABLED"] = str(enabled).lower()
+    if compatible_base_url is not None:
+        updates["MEDIA_MCP_COMPATIBLE_BASE_URL"] = compatible_base_url.rstrip("/")
+    if api_key is not None and api_key.strip():
+        updates["MEDIA_MCP_API_KEY"] = api_key.strip()
+    if image_model is not None:
+        updates["MEDIA_MCP_IMAGE_MODEL"] = image_model.strip()
+    if video_model is not None:
+        updates["MEDIA_MCP_VIDEO_MODEL"] = video_model.strip()
+    if request_timeout_s is not None:
+        updates["MEDIA_MCP_REQUEST_TIMEOUT_S"] = str(request_timeout_s)
+    if not updates:
+        with _ENV_WRITE_LOCK:
+            return _read_snapshot(env_path())
+    with _ENV_WRITE_LOCK:
+        path = env_path()
+        snapshot = _read_snapshot(path)
+        rendered: list[str] = []
+        seen: set[str] = set()
+        for line in snapshot.content.splitlines():
+            key = line.strip().split("=", 1)[0].strip() if "=" in line else ""
+            if key in updates:
+                rendered.append(f"{key}={json.dumps(updates[key], ensure_ascii=False)}")
+                seen.add(key)
+            else:
+                rendered.append(line)
+        for key, value in updates.items():
+            if key not in seen:
+                rendered.append(f"{key}={json.dumps(value, ensure_ascii=False)}")
+        _write_content(path, "\n".join(rendered).rstrip("\n") + "\n")
+        return snapshot
 
 
 def write_profile_env(

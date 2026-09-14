@@ -5,9 +5,11 @@ from pathlib import Path
 from app.config import settings
 from app.profile_env import (
     read_global_llm_env,
+    read_media_mcp_env,
     read_profile_env,
     remove_profile_env,
     restore_snapshot,
+    write_media_mcp_env,
     write_profile_env,
 )
 
@@ -132,3 +134,24 @@ def test_global_rag_env_write_and_fallback(tmp_path: Path, monkeypatch):
     assert profile_val.base_url == "https://api.openai.com/v1"
     assert profile_val.embedding_model == "BAAI/bge-large-zh-v1.5"
     assert profile_val.reranker_model == "BAAI/bge-reranker-v2-m3"
+
+
+def test_media_mcp_env_preserves_key_when_only_switching_models(tmp_path: Path, monkeypatch):
+    """媒体模型编辑不清除已保存的 Key，读取投影只提供配置事实。"""
+    monkeypatch.setattr(settings, "profile_env_file", str(tmp_path / ".env"))
+    write_media_mcp_env(
+        enabled=True,
+        compatible_base_url="https://workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+        api_key="test-media-key",
+        image_model="qwen-image-3.0-pro",
+        video_model="happyhorse-1.1-i2v",
+        request_timeout_s=180,
+    )
+    write_media_mcp_env(image_model="qwen-image-next")
+
+    values = read_media_mcp_env()
+    assert values.enabled is True
+    assert values.api_key == "test-media-key"
+    assert values.image_model == "qwen-image-next"
+    assert values.video_model == "happyhorse-1.1-i2v"
+    assert values.request_timeout_s == 180

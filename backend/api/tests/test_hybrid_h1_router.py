@@ -101,13 +101,6 @@ def _node_output(events: list[tuple[str, dict]], node: str) -> dict | None:
     return None
 
 
-@pytest.fixture
-def hybrid_on(monkeypatch: pytest.MonkeyPatch) -> None:
-    """开启混合引擎主开关（L1 CoT 默认关闭，纯 L0 可复现）。"""
-    monkeypatch.setattr(settings, "hybrid_engine_enabled", True)
-    monkeypatch.setattr(settings, "hybrid_router_cot_enabled", False)
-
-
 # ─── 1. L0 纯函数：可复现性与场景对齐 ───
 
 

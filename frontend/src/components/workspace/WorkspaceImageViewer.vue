@@ -77,6 +77,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { clampImageOffset, clampImageScale, fitImageScale, MAX_IMAGE_SCALE, MIN_IMAGE_SCALE } from '../../utils/imageViewport'
+import { formatBytes } from '../../utils/format'
 
 const props = defineProps<{
   src: string
@@ -223,19 +224,6 @@ onMounted(() => {
   if (stageRef.value) observer.observe(stageRef.value)
 })
 onBeforeUnmount(() => { observer?.disconnect(); stopDrag() })
-
-/** 格式化文件大小，保持工具栏紧凑。 */
-function formatBytes(bytes: number): string {
-  if (!bytes) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB']
-  let val = bytes
-  let idx = 0
-  while (val >= 1024 && idx < units.length - 1) {
-    val /= 1024
-    idx++
-  }
-  return `${val.toFixed(val >= 10 || idx === 0 ? 0 : 1)} ${units[idx]}`
-}
 
 /** 下载沿用原图地址，不导出缩放后的渲染内容。 */
 function download(): void {

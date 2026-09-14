@@ -29,7 +29,7 @@ _FIELDS = {
     "step.end": "reason usage",
     "assistant.start": "header_seq history_upto_seq request_summary",
     "assistant.message": "content tool_calls usage latency_ms finish_reason interrupted reasoning_preview",
-    "assistant.end": "outcome committed_seq interrupted error_code latency_ms",
+    "assistant.end": "outcome committed_seq interrupted error_code error_message latency_ms",
     "assistant.retry": "retry_index previous_attempt_id error_code delay_s",
     "tool.call": "name display",
     "tool.dispatch": "name execution_id registry_name wire_name tool_contract_version",
@@ -239,6 +239,9 @@ def project_fact(event: dict) -> list[dict]:
     if event_type == "assistant.end":
         data.setdefault("outcome", source.get("outcome", "failed"))
         data.setdefault("committed_seq", seq)
+        # attempt 事实只保存安全摘要 error；投影改名避免客户端误把它当上游原文。
+        if isinstance(source.get("error"), str):
+            data["error_message"] = source["error"]
     if event_type == "tool.result":
         data.setdefault("synthetic", False)
     if event_type == "approval.resolved":
