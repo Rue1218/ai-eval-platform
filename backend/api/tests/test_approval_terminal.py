@@ -12,7 +12,7 @@ import pytest
 
 from app.config import settings
 from app.errors import AppError, ErrorCode
-from app.routers import ws
+from app.routers import ws, ws_turns
 
 _EMIT = "_emit_persistent"
 
@@ -159,7 +159,7 @@ async def test_stop_cancels_hanging_approval_and_completes(monkeypatch) -> None:
 
     monkeypatch.setattr(ws, _EMIT, fake_emit)
     monkeypatch.setattr(ws, "_emit_turn_completed", fake_completed)
-    monkeypatch.setattr(ws, "_SESSION_TURNS", {})  # 无活跃回合
+    monkeypatch.setattr(ws_turns, "_SESSION_TURNS", {})  # 无活跃回合
     db = _FakeDb()
     db.rows[0].pending_confirm = _card(created_at=_now())
     db.rows[0].pending_confirm_author_id = "u-1"
@@ -213,7 +213,7 @@ async def test_stop_terminal_emit_failure_still_completes(monkeypatch) -> None:
 
     monkeypatch.setattr(ws, "_emit_persistent", fake_emit_boom)
     monkeypatch.setattr(ws, "_emit_turn_completed", fake_completed)
-    monkeypatch.setattr(ws, "_SESSION_TURNS", {})
+    monkeypatch.setattr(ws_turns, "_SESSION_TURNS", {})
     db = _FakeDb()
     db.rows[0].pending_confirm = _card(created_at=_now())
     db.rows[0].pending_confirm_author_id = "u-1"
@@ -346,8 +346,8 @@ async def test_clarify_resume_failure_broadcasts_card_type_clarify(monkeypatch) 
 
     monkeypatch.setattr(ws, _EMIT, fake_emit)
     monkeypatch.setattr(ws, "_run_turn", boom_run_turn)
-    monkeypatch.setattr(ws, "_SESSION_TURNS", {})
-    monkeypatch.setattr(ws, "_SESSION_ABORTS", {})
+    monkeypatch.setattr(ws_turns, "_SESSION_TURNS", {})
+    monkeypatch.setattr(ws_turns, "_SESSION_ABORTS", {})
     db = _FakeDb()
     monkeypatch.setattr(ws, "SessionLocal", lambda: db)
 
@@ -378,8 +378,8 @@ async def test_approval_resume_failure_still_card_type_approval(monkeypatch) -> 
 
     monkeypatch.setattr(ws, _EMIT, fake_emit)
     monkeypatch.setattr(ws, "_run_turn", boom_run_turn)
-    monkeypatch.setattr(ws, "_SESSION_TURNS", {})
-    monkeypatch.setattr(ws, "_SESSION_ABORTS", {})
+    monkeypatch.setattr(ws_turns, "_SESSION_TURNS", {})
+    monkeypatch.setattr(ws_turns, "_SESSION_ABORTS", {})
     db = _FakeDb()
     monkeypatch.setattr(ws, "SessionLocal", lambda: db)
 

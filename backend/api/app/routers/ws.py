@@ -133,6 +133,31 @@ from .ws_emit import (
 from .ws_emit import (
     _split_event_version as _split_event_version,
 )
+from .ws_turns import (
+    _attach_turn_task as _attach_turn_task,
+)
+from .ws_turns import (
+    _claim_terminal as _claim_terminal,
+)
+from .ws_turns import (
+    _release_turn as _release_turn,
+)
+from .ws_turns import (
+    _reserve_turn as _reserve_turn,
+)
+from .ws_turns import (
+    _turn_busy as _turn_busy,
+)
+
+# 回合租约管理（ws_turns）：同名 re-export；注册表本身只在新模块内读写
+from .ws_turns import (
+    _TurnHandle as _TurnHandle,
+)
+from .ws_turns import (
+    get_abort,
+    get_active_turn,
+    mark_turn_started,
+)
 
 router = APIRouter(tags=["ws"])
 logger = logging.getLogger("ai-eval.agent-ws")
@@ -145,99 +170,8 @@ _AGENT = LangGraphAgent(
     checkpointer=get_default_checkpointer(),
 )
 _TICKET_LOCK = threading.Lock()
-# 会话级 abort 事件注册表（/stop 即时中断；单副本进程内 dict，见 AGENTS.md）
-_SESSION_ABORTS: dict[str, asyncio.Event] = {}
 # 标题生成中去重：同一会话一次只跑一个 AI 标题任务，避免并发消息重复调模型
 _TITLE_GENERATING: set[str] = set()
-
-
-@dataclass
-class _TurnHandle:
-    """会话级 Agent 回合租约，隔离多连接并发与旧任务清理。"""
-
-    turn_id: str
-    user_id: str
-    abort: asyncio.Event
-    task: asyncio.Task[None] | None = None
-    started: bool = False
-    terminal_emitted: bool = False
-
-
-# 一个共享会话同一时刻只能有一个交互回合；锁只保护本进程内短临界区，不跨越 await。
-_TURN_LOCK = threading.Lock()
-_SESSION_TURNS: dict[str, _TurnHandle] = {}
-
-
-def _turn_busy(session_id: str, local_task: asyncio.Task[None] | None = None) -> bool:
-    """判断会话是否已有尚未完成的回合，覆盖同会话多条 WebSocket 连接。"""
-    if local_task is not None and not local_task.done():
-        return True
-    with _TURN_LOCK:
-        current = _SESSION_TURNS.get(session_id)
-        return current is not None and (current.task is None or not current.task.done())
-
-
-def _reserve_turn(
-    session_id: str,
-    user_id: str,
-    *,
-    local_task: asyncio.Task[None] | None = None,
-) -> _TurnHandle:
-    """原子抢占会话回合；失败时不写入用户消息或恢复令牌。"""
-    if local_task is not None and not local_task.done():
-        raise AppError(ErrorCode.CONCURRENCY, "上一轮 Agent 仍在生成")
-    with _TURN_LOCK:
-        current = _SESSION_TURNS.get(session_id)
-        if current is not None and (current.task is None or not current.task.done()):
-            raise AppError(ErrorCode.CONCURRENCY, "上一轮 Agent 仍在生成")
-        handle = _TurnHandle(
-            turn_id=f"{session_id}:{uuid4().hex}",
-            user_id=str(user_id),
-            abort=asyncio.Event(),
-        )
-        _SESSION_TURNS[session_id] = handle
-        _SESSION_ABORTS[session_id] = handle.abort
-        return handle
-
-
-def _release_turn(handle: _TurnHandle, task: asyncio.Task[None] | None = None) -> None:
-    """只清理仍指向当前租约的映射，防止旧任务回调误删新回合 abort。"""
-    session_id = handle.turn_id.split(":", 1)[0]
-    with _TURN_LOCK:
-        current = _SESSION_TURNS.get(session_id)
-        if current is not handle:
-            return
-        if task is not None and current.task is not task:
-            return
-        _SESSION_TURNS.pop(session_id, None)
-        if _SESSION_ABORTS.get(session_id) is handle.abort:
-            _SESSION_ABORTS.pop(session_id, None)
-
-
-def _attach_turn_task(handle: _TurnHandle, task: asyncio.Task[None]) -> None:
-    """把后台任务绑定到租约，并用身份校验注册完成回调。"""
-    with _TURN_LOCK:
-        current = _SESSION_TURNS.get(handle.turn_id.split(":", 1)[0])
-        if current is not handle:
-            task.cancel()
-            raise AppError(ErrorCode.CONCURRENCY, "Agent 回合已失效，请重试")
-        handle.task = task
-    # stop 可能在 task 首次调度前到达；先让它启动并由 abort 路径发出唯一 completed。
-    if handle.abort.is_set() and handle.started:
-        task.cancel()
-    task.add_done_callback(lambda done: _release_turn(handle, done))
-
-
-def _claim_terminal(session_id: str, turn_id: str | None) -> bool:
-    """为回合抢占唯一完成事件；旧任务或 stop 不得重复发送 completed。"""
-    if not turn_id:
-        return True
-    with _TURN_LOCK:
-        current = _SESSION_TURNS.get(session_id)
-        if current is None or current.turn_id != turn_id or current.terminal_emitted:
-            return False
-        current.terminal_emitted = True
-        return True
 
 
 def _start_turn(
@@ -1400,10 +1334,7 @@ async def _run_turn(
     pending_events，避免事件重放；resume 至多一次由审批卡行锁清卡保证）。
     """
     if turn_id:
-        with _TURN_LOCK:
-            current = _SESSION_TURNS.get(session_id)
-            if current is not None and current.turn_id == turn_id:
-                current.started = True
+        mark_turn_started(session_id, turn_id)
     db = SessionLocal()
     # Router 审计三元组（H1）：先置空再进 try，任何阶段异常收尾均可安全携带
     router_audit: dict | None = None
@@ -1658,13 +1589,12 @@ async def _handle_stop(
     骨架版无人工中断（澄清/危险工具确认），/stop 仅取消活跃图回合；活跃
     回合由后台任务统一发送唯一 ``response.completed``，避免 stop 与任务竞态重复收尾。
     """
-    with _TURN_LOCK:
-        turn = _SESSION_TURNS.get(session_id)
+    turn = get_active_turn(session_id)
     owner = turn.user_id if turn else None
     if user_id and owner and str(user_id) != str(owner):
         raise AppError(ErrorCode.UNAUTHORIZED, "仅本轮发起成员可以执行 /stop")
 
-    abort = turn.abort if turn else _SESSION_ABORTS.get(session_id)
+    abort = turn.abort if turn else get_abort(session_id)
     active = False
     if turn and (turn.task is None or not turn.task.done()):
         active = True
@@ -1735,9 +1665,8 @@ def stop_session_turns(session_id: str) -> None:
     ``response.completed`` 收尾。调用方（如 REST delete_session 已在 owner
     校验后）无需传 user_id——删除/管理意图本身即授权。
     """
-    with _TURN_LOCK:
-        turn = _SESSION_TURNS.get(session_id)
-    abort = turn.abort if turn else _SESSION_ABORTS.get(session_id)
+    turn = get_active_turn(session_id)
+    abort = turn.abort if turn else get_abort(session_id)
     if turn is not None and (turn.task is None or not turn.task.done()):
         turn.abort.set()
         if turn.task is not None and turn.started:

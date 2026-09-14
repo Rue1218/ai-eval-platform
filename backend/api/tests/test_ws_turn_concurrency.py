@@ -7,7 +7,7 @@ import asyncio
 import pytest
 
 from app.errors import AppError, ErrorCode
-from app.routers import ws
+from app.routers import ws, ws_turns
 from app.session_connections import SessionConnectionHub
 
 
@@ -48,8 +48,8 @@ class _State:
 @pytest.mark.asyncio
 async def test_turn_reservation_is_shared_across_connections(monkeypatch):
     """没有共享 local task 时，第二条连接也必须收到 CONCURRENCY。"""
-    monkeypatch.setattr(ws, "_SESSION_TURNS", {})
-    monkeypatch.setattr(ws, "_SESSION_ABORTS", {})
+    monkeypatch.setattr(ws_turns, "_SESSION_TURNS", {})
+    monkeypatch.setattr(ws_turns, "_SESSION_ABORTS", {})
     handle = ws._reserve_turn("s-1", "u-1")
     gate = asyncio.Event()
     task = asyncio.create_task(gate.wait())
@@ -67,24 +67,24 @@ async def test_turn_reservation_is_shared_across_connections(monkeypatch):
 @pytest.mark.asyncio
 async def test_stale_turn_cleanup_keeps_new_abort(monkeypatch):
     """旧回合完成回调不得删除已经替换的新回合 abort 令牌。"""
-    monkeypatch.setattr(ws, "_SESSION_TURNS", {})
-    monkeypatch.setattr(ws, "_SESSION_ABORTS", {})
+    monkeypatch.setattr(ws_turns, "_SESSION_TURNS", {})
+    monkeypatch.setattr(ws_turns, "_SESSION_ABORTS", {})
     old = ws._reserve_turn("s-1", "u-1")
     new = ws._TurnHandle("s-1:new", "u-2", asyncio.Event())
-    ws._SESSION_TURNS["s-1"] = new
-    ws._SESSION_ABORTS["s-1"] = new.abort
+    ws_turns._SESSION_TURNS["s-1"] = new
+    ws_turns._SESSION_ABORTS["s-1"] = new.abort
 
     ws._release_turn(old)
 
-    assert ws._SESSION_TURNS["s-1"] is new
-    assert ws._SESSION_ABORTS["s-1"] is new.abort
+    assert ws_turns._SESSION_TURNS["s-1"] is new
+    assert ws_turns._SESSION_ABORTS["s-1"] is new.abort
 
 
 @pytest.mark.asyncio
 async def test_terminal_claim_is_exactly_once(monkeypatch):
     """正常完成与 stop 竞态下只能有一个路径领取 completed。"""
-    monkeypatch.setattr(ws, "_SESSION_TURNS", {})
-    monkeypatch.setattr(ws, "_SESSION_ABORTS", {})
+    monkeypatch.setattr(ws_turns, "_SESSION_TURNS", {})
+    monkeypatch.setattr(ws_turns, "_SESSION_ABORTS", {})
     handle = ws._reserve_turn("s-1", "u-1")
     try:
         assert ws._claim_terminal("s-1", handle.turn_id) is True
@@ -96,8 +96,8 @@ async def test_terminal_claim_is_exactly_once(monkeypatch):
 @pytest.mark.asyncio
 async def test_stop_requires_turn_owner(monkeypatch):
     """共享会话中协作者不得停止其他成员发起的回合。"""
-    monkeypatch.setattr(ws, "_SESSION_TURNS", {})
-    monkeypatch.setattr(ws, "_SESSION_ABORTS", {})
+    monkeypatch.setattr(ws_turns, "_SESSION_TURNS", {})
+    monkeypatch.setattr(ws_turns, "_SESSION_ABORTS", {})
     handle = ws._reserve_turn("s-1", "u-owner")
     try:
         with pytest.raises(AppError) as error:
