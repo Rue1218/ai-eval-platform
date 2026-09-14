@@ -2,11 +2,11 @@
 
 > ⚠️ **文档维护提示（2026-09-11）**：本文部分章节含历史实现引用（`agent/react.py`、`plan_solve.py`、`reflect.py`、`clarify.py` 等模块已删除，ReAct / Plan-Solve 图已由 AgentLoop v2 取代）；当前实现与契约以 `AGENTS.md` 状态地图及本文最新修订为准。
 
-> 版本：V1.7.10
+> 版本：V1.7.12
 > 状态：新建会话统一使用 AgentLoop v2；历史 legacy 行仅保留审计与显式回放路径。此前骨架化与混合引擎说明属于 legacy 路径及其历史阶段，不能据此认定新路径仍为纯对话。前端输入栏按每回合协议档选择模型和思考强度，完整真实供应商/Linux Runner 联调验收仍未结束。
-> 审查日期：2026-09-11
-> 对应需求：`AI测试与评估平台-PRD.md` V1.19
-> 对应接口：`AI测试与评估平台-API.md` V1.95
+> 审查日期：2026-09-14
+> 对应需求：`AI测试与评估平台-PRD.md` V1.21
+> 对应接口：`AI测试与评估平台-API.md` V1.97
 
 ## 1. legacy 骨架化运行链路（历史基线）
 
@@ -615,3 +615,28 @@ Token、用时。工具执行时间不混入模型用时。
 修改代码文件与作用清单：`frontend/src/agent/loop/turnSummary.ts` 用持久工具调用字段选择总结并保留过程
 尝试；`frontend/src/components/agent/loop/AgentWorkspace.vue` 呈现过程/总结标签及轮末统一操作栏；
 `frontend/tests/turnSummary.test.mjs` 覆盖过程文字不能进入复制与引用记忆的白盒断言。
+
+### V1.7.11 专家提示词受控联调（2026-09-14）
+
+AgentLoop 的专家选择仍由 `agent/experts.py` 按回合解析：缺省或未知专家 ID 回落默认专家，
+专家声明工具与平台白名单只取交集。管理端新增严格寻址函数，避免未知 ID 在配置写入时被静默
+回落到默认专家。只有声明 `prompt_file` 的专家才可管理其提示词；默认角色没有额外人格层，
+不提供编辑入口。
+
+专家提示词以「内置基线 + 数据库覆盖层」组成有效文本。覆盖层按专家 ID 存在 `Setting` 中，
+编辑不会修改镜像内基线文件；写回相同内置基线会删除覆盖层。每次 AgentLoop 组装依赖时在
+同一数据库会话读取有效专家文本，再按「核心 → 专家 → 协议档补充」顺序生成系统段。保存有
+16 位修订指纹保护，且同样拒绝疑似密钥和接管性措辞；审计仅记录 ID、长度、修订与覆盖状态。
+
+修改代码文件与作用清单：`backend/api/app/expert_prompt_settings.py` 管理覆盖层与修订；
+`agent/experts.py` 提供严格专家查找，`agent/loop_wiring.py` 读取有效专家文本；
+`routers/admin.py` 提供专家目录与提示词读写接口；`frontend/src/views/AdminProfiles.vue` 与
+`components/modals/AgentExpertPromptModal.vue` 在 Agent 技能页展示、预览、编辑与恢复基线；
+`api/http.ts` / `api/types.ts` 对齐客户端契约；`test_agent_experts.py` / `test_agent_skill_admin.py`
+覆盖生命周期与鉴权边界。
+
+### V1.7.12 专家提示词逻辑审查（2026-09-14）
+
+配置键先用 `INSERT ... ON CONFLICT DO NOTHING` 幂等创建，再 `SELECT FOR UPDATE` 并刷新 ORM 缓存；修订校验、覆盖层 flush 和无正文审计同事务提交。首次保存不再依赖 autoflush 读回未写入的内容，两个专家不会互相丢失映射，同专家旧修订拒绝覆盖。损坏配置 fail-closed；编辑器按请求代次隔离读取，保存期间禁止重复提交，恢复内置只填草稿。
+
+修改代码文件与作用清单：`backend/api/app/expert_prompt_settings.py`、`routers/admin.py` 修复持久化及异常边界；`tests/test_agent_experts.py`、`test_expert_prompt_concurrency_pg.py`、`test_loop_wiring.py` 验证真实 Session、PostgreSQL 并发与回合快照；`frontend/src/composables/useExpertPromptEditor.ts`、`components/modals/AgentExpertPromptModal.vue` 管理草稿和请求生命周期；`views/AdminProfiles.vue` 保护目录刷新与既有导出格式；`api/http.ts` 修复 Mock 保存后重读；`frontend/tests/expertPromptEditor.test.mjs` 覆盖前端竞态。

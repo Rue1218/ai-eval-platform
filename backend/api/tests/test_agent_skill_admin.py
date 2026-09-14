@@ -50,6 +50,21 @@ def test_agent_prompt_management_requires_authentication() -> None:
     assert response.json()["code"] == "UNAUTHORIZED"
 
 
+def test_agent_expert_prompt_management_requires_authentication() -> None:
+    """专家目录、提示词预览与保存均须通过既有成员鉴权。"""
+    client = TestClient(app)
+    for method, path, body in (
+        ("get", "/api/admin/experts", None),
+        ("get", "/api/admin/experts/testcase-agent/prompt", None),
+        ("put", "/api/admin/experts/testcase-agent/prompt", {
+            "content": "专家提示词", "expected_revision": "0" * 16,
+        }),
+    ):
+        response = client.get(path) if method == "get" else client.put(path, json=body)
+        assert response.status_code == 401
+        assert response.json()["code"] == "UNAUTHORIZED"
+
+
 def test_agent_skill_audit_failure_restores_previous_file(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     """审计提交失败时，必须恢复刚才被替换的 SKILL.md 原内容。"""
     monkeypatch.setenv("AGENT_SKILLS_ROOT", str(tmp_path / "skills"))

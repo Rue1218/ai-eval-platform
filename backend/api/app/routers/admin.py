@@ -18,6 +18,13 @@ from ..agent_prompt_settings import (
 from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
+from ..expert_prompt_settings import (
+    MAX_EXPERT_PROMPT_LENGTH,
+    ExpertPromptDocument,
+    list_expert_prompt_metadata,
+    read_expert_prompt_document,
+    update_expert_prompt_document,
+)
 from ..harness.context import skill_hint_lines
 from ..harness.prompts import DEFAULT_PROJECT_INSTRUCTIONS, SystemVars, build_system_prompt
 from ..harness.skills.storage import (
@@ -86,6 +93,13 @@ class AgentPromptUpdateIn(ApiModel):
     """管理端更新单个 Agent 协议档补充提示词的请求体。"""
 
     overlay: str = Field(default="", max_length=MAX_AGENT_PROMPT_OVERLAY_LENGTH)
+
+
+class ExpertPromptUpdateIn(ApiModel):
+    """管理端更新单个内置专家有效提示词的请求体。"""
+
+    content: str = Field(min_length=1, max_length=MAX_EXPERT_PROMPT_LENGTH)
+    expected_revision: str = Field(min_length=16, max_length=16)
 
 DEFAULT_SETTINGS: dict[str, Any] = {
     "agent_profile_id": None,
@@ -325,6 +339,79 @@ def put_agent_skill(
             "summary": document.metadata.summary,
         },
     }
+
+
+def _expert_prompt_out(document: ExpertPromptDocument) -> dict[str, object]:
+    """将受控专家提示词文档投影为管理端响应，统一字段名。"""
+    return {
+        "expert_id": document.expert.expert_id,
+        "name": document.expert.name,
+        "content": document.content,
+        "builtin_content": document.builtin_content,
+        "revision": document.revision,
+        "overridden": document.overridden,
+    }
+
+
+@router.get("/experts")
+def list_agent_experts(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """返回 Agent 技能页的专家目录，不暴露提示词与工具视野。"""
+    return {"items": list_expert_prompt_metadata(db)}
+
+
+@router.get("/experts/{expert_id}/prompt")
+def get_agent_expert_prompt(
+    expert_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """读取一名专家的有效提示词、内置基线与当前修订指纹。"""
+    return _expert_prompt_out(read_expert_prompt_document(db, expert_id))
+
+
+@router.put("/experts/{expert_id}/prompt")
+def put_agent_expert_prompt(
+    expert_id: str,
+    body: ExpertPromptUpdateIn,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """保存专家提示词覆盖层，并以最小审计记录本次配置变更。"""
+    try:
+        document = update_expert_prompt_document(
+            db,
+            expert_id,
+            body.content,
+            body.expected_revision,
+            updated_by=user.id,
+        )
+        db.add(
+            AuditLog(
+                user_id=user.id,
+                action="agent_expert_prompt_update",
+                target_type="agent_expert_prompt",
+                target_id=document.expert.expert_id,
+                detail={
+                    "revision": document.revision,
+                    "content_length": len(document.content),
+                    "overridden": document.overridden,
+                },
+                ip=request.client.host if request.client else None,
+            )
+        )
+        db.commit()
+    except AppError:
+        db.rollback()
+        raise
+    except Exception as exc:
+        db.rollback()
+        agent_trace(f"专家提示词写入失败 type={type(exc).__name__}")
+        raise AppError(ErrorCode.INTERNAL, "专家提示词配置写入失败") from exc
+    return _expert_prompt_out(document)
 
 
 @router.get("/agent-prompts/{profile_id}")

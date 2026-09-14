@@ -7,8 +7,9 @@
   定义专家提示词（追加在核心系统提示词之后）与工具视野。
 
 红线：
-- 专家提示词是产品内置资产，随代码版本分发；管理员可编辑的协议档补充提示词
-  （``agent_prompt_overlays``）仍然独立生效，两者不互相覆盖。
+- 专家角色与其提示词内置基线随代码版本分发；管理端的专家覆盖层
+  （``agent_expert_prompt_overrides``）仅替换有效文本，协议档补充提示词
+  （``agent_prompt_overlays``）仍然独立生效，三者不互相覆盖。
 - 专家**不能**扩大平台工具白名单：``allowed_tools`` 与 AgentLoop 的
   ``ALLOWED_TOOLS`` 取交集后才生效（见 ``loop_wiring._build_dependencies``）。
 - 专家不改变权限、错误契约与任务状态机；提示词只做角色与流程约束。
@@ -18,6 +19,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+
+from app.errors import AppError, ErrorCode
 
 # 默认专家：保持平台既有行为（无额外提示词、全工具视野）。
 DEFAULT_EXPERT_ID = "general"
@@ -95,6 +98,19 @@ def resolve_expert(agent_id: object) -> ExpertDef:
         if expert is not None:
             return expert
     return _BY_ID[DEFAULT_EXPERT_ID]
+
+
+def get_expert(expert_id: object) -> ExpertDef:
+    """按 ID 严格读取专家定义，供受控管理接口拒绝未知目标。
+
+    与 ``resolve_expert`` 的兼容回落语义不同，管理端不能把拼错的 ID 悄悄
+    落到默认专家，否则会造成错误配置或错误审计记录。
+    """
+    normalized = expert_id.strip() if isinstance(expert_id, str) else ""
+    expert = _BY_ID.get(normalized)
+    if expert is None:
+        raise AppError(ErrorCode.NOT_FOUND, "专家不存在")
+    return expert
 
 
 def list_experts() -> list[dict]:

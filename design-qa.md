@@ -54,3 +54,40 @@ final result: blocked
 - 无 P0/P1/P2 可执行差异。源图中的 `147` 为动态工作区名称；实现保留实际工作区名称，不硬编码该测试数据。
 
 final result: passed
+
+## 2026-09-14 专家提示词技能页复核
+
+**比较依据**
+
+- 源视觉真相：用户提供的 `C:/Users/Administrator/AppData/Local/Temp/codex-clipboard-a2e8ca4c-d08e-4bdc-817d-5fef1432c5eb.png`；目标状态为管理端「Agent 技能」卡片视图。
+- 实现截图：不可用。Codex In-app Browser 在两次重试中均返回 `nodeRepl.fetch request failed`，没有可用于同输入比较的浏览器渲染快照。
+- 目标状态：桌面端 Agent 技能页，展示内置技能卡片及新增的专家提示词分区；测试用例设计专家打开有效提示词编辑弹窗。
+
+**Findings**
+
+- [P1] 浏览器提供端不可用，无法生成与源图同状态的实现截图。
+  Location: 管理端「Agent 技能」页。
+  Evidence: 两次 In-app Browser 枚举均未返回浏览器或标签页，并报告 `nodeRepl.fetch request failed`。
+  Impact: 已完成的类型检查、构建启动和组件逻辑不能代替截图级视觉验收。
+  Fix: 浏览器恢复后，以相同桌面视口打开「Agent 技能」，捕获技能卡片与专家提示词弹窗，再与源图做全视图及局部对照。
+
+**Required fidelity surfaces**
+
+- 字体与排版：尚缺浏览器截图，无法核验卡片标题、说明和按钮的实际换行。
+- 间距与布局：代码沿用现有技能卡片网格与令牌；尚缺运行时画面验证。
+- 颜色与视觉令牌：代码复用现有 `--c-profiles`、卡片边框和状态标签；尚缺实际渲染对照。
+- 图片与资产：本次分区没有新增图像、Logo 或自定义图标。
+- 文案与内容：专家名称、状态和操作文案来自后端受控目录；尚缺浏览器状态验证。
+
+**Implementation Checklist**
+
+- [x] 在技能页列出专家角色与提示词覆盖状态。
+- [x] 提供专属提示词的查看、编辑、修订冲突提示与恢复内置操作。
+- [x] 完成后端定向回归和前端类型检查。
+- [ ] 在浏览器可用后完成同视口截图对照。
+
+**Comparison history**
+
+- 本次首次比较：未得到实现截图；未进行 P0/P1/P2 视觉修复迭代。
+
+final result: blocked

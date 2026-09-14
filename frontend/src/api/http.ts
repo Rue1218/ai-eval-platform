@@ -21,6 +21,8 @@ import {
   type TaskSpec,
   type Report,
   type AdminSettings,
+  type AgentExpertPromptDocument,
+  type AgentExpertPromptMetadata,
   type AgentPromptConfig,
   type AgentSkillDocument,
   type AgentSkillMetadata,
@@ -98,6 +100,22 @@ const http = axios.create({
   withCredentials: true,
   timeout: 30000,
 })
+
+// Mock 配置在当前页面生命周期内保持一致；刷新目录或重开编辑器不应丢失刚保存的内容。
+const mockExpertPrompts = new Map<string, AgentExpertPromptDocument>()
+let mockExpertPromptRevision = 0
+
+/** Mock 与真实接口一样严格寻址，返回副本避免草稿直接修改已保存对象。 */
+function readMockExpertPrompt(expertId: string): AgentExpertPromptDocument {
+  if (expertId !== 'testcase-agent') {
+    throw new ApiError(expertId === 'general' ? '该专家没有专属提示词，无需配置' : '专家不存在',
+      expertId === 'general' ? ErrorCode.VALIDATION : ErrorCode.NOT_FOUND, expertId === 'general' ? 400 : 404)
+  }
+  const saved = mockExpertPrompts.get(expertId)
+  if (saved) return { ...saved }
+  const content = '# 测试用例设计专家\n\n优先覆盖关键路径、隐藏风险与模块耦合。'
+  return { expert_id: expertId, name: '测试用例设计专家', content, builtin_content: content, revision: '0000000000000000', overridden: false }
+}
 
 http.interceptors.response.use(
   (res) => res,
@@ -1145,6 +1163,39 @@ export const api = {
         return { ...document, content: payload.content, revision: `mock-${Date.now()}`.slice(0, 16) }
       }
       const { data } = await http.put(`/api/admin/skills/${encodeURIComponent(skillId)}`, payload)
+      return data
+    },
+    /** 读取技能页可配置专家目录；列表不携带提示词正文。 */
+    async listAgentExpertPrompts(): Promise<AgentExpertPromptMetadata[]> {
+      if (getDataMode() === 'mock') {
+        return [
+          { id: 'general', name: '通用助手', description: '平台默认助手：对话、工作区文件、评测任务入队与查询。', badge: '通用', prompt_available: false, overridden: false },
+          { id: 'testcase-agent', name: '测试用例设计专家', description: '从需求文档生成测试用例：需求解析 → 功能点/测试点拆分 → 六类用例 → CSV 交付。', badge: '用例设计', prompt_available: true, overridden: readMockExpertPrompt('testcase-agent').overridden },
+        ]
+      }
+      const { data } = await http.get('/api/admin/experts')
+      return Array.isArray(data) ? data : data.items || []
+    },
+    /** 预览指定专家的有效提示词与内置基线。 */
+    async getAgentExpertPrompt(expertId: string): Promise<AgentExpertPromptDocument> {
+      if (getDataMode() === 'mock') {
+        return readMockExpertPrompt(expertId)
+      }
+      const { data } = await http.get(`/api/admin/experts/${encodeURIComponent(expertId)}/prompt`)
+      return data
+    },
+    /** 保存专家有效提示词；回传读取时取得的修订指纹以避免覆盖他人配置。 */
+    async updateAgentExpertPrompt(expertId: string, payload: { content: string; expected_revision: string }): Promise<AgentExpertPromptDocument> {
+      if (getDataMode() === 'mock') {
+        const document = readMockExpertPrompt(expertId)
+        if (payload.expected_revision !== document.revision) throw new ApiError('专家提示词已更新，请刷新后再保存', ErrorCode.CONCURRENCY, 409)
+        const content = payload.content.replace(/\r\n/g, '\n').trim()
+        if (!content || content.length > 30000) throw new ApiError('专家提示词需为 1–30000 个字符', ErrorCode.VALIDATION, 400)
+        const result = { ...document, content, revision: (++mockExpertPromptRevision).toString(16).padStart(16, '0'), overridden: content !== document.builtin_content }
+        mockExpertPrompts.set(expertId, result)
+        return { ...result }
+      }
+      const { data } = await http.put(`/api/admin/experts/${encodeURIComponent(expertId)}/prompt`, payload)
       return data
     },
     /** 查看某个 Agent 协议档的核心提示词和可编辑补充层。 */

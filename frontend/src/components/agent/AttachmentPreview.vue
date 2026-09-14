@@ -33,8 +33,9 @@
     </button>
   </div>
 
+  <ImagePreviewModal v-if="isImage && source" v-model:show="open" :src="source" :filename="filename" />
   <Teleport to="body">
-    <div v-if="open" class="attachment-lightbox" @click.self="open = false">
+    <div v-if="open && !isImage" class="attachment-lightbox" @click.self="open = false">
       <button class="attachment-close" type="button" aria-label="关闭预览" @click="open = false">×</button>
       <div class="attachment-lightbox-panel">
         <div class="attachment-lightbox-head">
@@ -51,8 +52,7 @@
           </a>
         </div>
 
-        <img v-if="isImage && source" :src="source" :alt="filename" class="attachment-lightbox-image" decoding="async" />
-        <iframe v-else-if="previewKind === 'pdf' && source" :src="source" :title="filename" class="attachment-lightbox-document" />
+        <iframe v-if="previewKind === 'pdf' && source" :src="source" :title="filename" class="attachment-lightbox-document" />
         <pre v-else-if="previewKind === 'text'" class="attachment-lightbox-text">{{ textContent }}</pre>
         <div v-else class="attachment-unsupported">
           <span class="attachment-file-mark large">{{ extension }}</span>
@@ -66,6 +66,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import ImagePreviewModal from './ImagePreviewModal.vue'
 
 /** 附件展示所需的最小字段；既兼容本地暂存文件，也兼容历史消息的文件引用。 */
 export interface AttachmentPreviewItem {
@@ -361,7 +362,6 @@ async function openPreview() {
   white-space: nowrap;
 }
 
-.attachment-lightbox-image,
 .attachment-lightbox-document {
   display: block;
   width: 100%;

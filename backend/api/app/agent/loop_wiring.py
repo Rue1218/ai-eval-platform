@@ -14,6 +14,7 @@ from uuid import uuid4
 from app.agent_prompt_settings import get_agent_prompt_overlay
 from app.config import settings
 from app.errors import AppError, ErrorCode
+from app.expert_prompt_settings import get_effective_expert_prompt
 from app.harness.execution.context import ToolExecutionContext
 from app.harness.execution.loop_bridge import PlatformToolBridge
 from app.harness.execution.loop_tools import ToolExecutionResult
@@ -239,11 +240,12 @@ async def _build_dependencies(service, entry, actor_id: str, data: dict, resourc
     """用源调度器执行平台工具，所有外部副作用继续通过受控实现。"""
     from app.harness.execution.mcp import MCPClientManager
 
+    # 专家选择按回合解析：缺省/未知 ID 回落默认专家，工具视野只收窄不扩大。
+    expert = resolve_expert(data.get("agent_id"))
     with service.session_factory() as db:
         profile, context_window = authorized_profile(db, data)
         overlay = get_agent_prompt_overlay(db, profile.profile_id)
-    # 专家选择按回合解析：缺省/未知 ID 回落默认专家，工具视野只收窄不扩大。
-    expert = resolve_expert(data.get("agent_id"))
+        expert_prompt = get_effective_expert_prompt(db, expert)
     allowed_tools = _expert_tools(expert)
     adapter, _ = build_adapter(profile)
     resources.append(adapter)
@@ -401,7 +403,7 @@ async def _build_dependencies(service, entry, actor_id: str, data: dict, resourc
         for tool in bridge.available_tools()
     }
     scheduler = ToolScheduler(service._settings(), bridge.available_tools(), approval_broker=service._broker)
-    segments = _loop_system_segments(overlay, expert.system_prompt)
+    segments = _loop_system_segments(overlay, expert_prompt)
 
     def request_factory(messages, effort):
         """窗口、思考档位与供应商转换同源，记录可重建的窗口边界和摘要。"""

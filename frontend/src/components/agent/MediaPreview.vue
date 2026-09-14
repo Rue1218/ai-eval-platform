@@ -12,16 +12,12 @@
     </div>
   </div>
 
-  <Teleport to="body">
-    <div v-if="open" class="media-lightbox" @click.self="open = false">
-      <button type="button" class="media-close" aria-label="关闭预览" @click="open = false">×</button>
-      <img :src="src" :alt="filename || '生成图片'" class="media-full" decoding="async" />
-    </div>
-  </Teleport>
+  <ImagePreviewModal v-model:show="open" :src="src" :filename="filename" />
 </template>
 
 <script setup lang="ts">
 import { ref } from 'vue'
+import ImagePreviewModal from './ImagePreviewModal.vue'
 
 defineProps<{
   src: string
@@ -88,34 +84,6 @@ const open = ref(false)
   font-size: 12px;
   color: var(--accent-ai, #10b981);
   text-decoration: none;
-}
-.media-lightbox {
-  position: fixed;
-  inset: 0;
-  z-index: 80;
-  display: grid;
-  place-items: center;
-  background: rgba(2, 6, 23, 0.82);
-  padding: 24px;
-}
-.media-full {
-  max-width: min(96vw, 1100px);
-  max-height: 90vh;
-  object-fit: contain;
-  border-radius: 8px;
-}
-.media-close {
-  position: absolute;
-  top: 16px;
-  right: 20px;
-  width: 36px;
-  height: 36px;
-  border: 0;
-  border-radius: 50%;
-  background: rgba(15, 23, 42, 0.8);
-  color: #fff;
-  font-size: 22px;
-  cursor: pointer;
 }
 @keyframes msg-in {
   from {

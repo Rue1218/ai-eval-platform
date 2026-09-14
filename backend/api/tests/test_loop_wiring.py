@@ -368,6 +368,42 @@ async def test_profile_overlay_is_dynamic_and_changes_request_fingerprint(wired,
     await wired.service._close_resources(resources)
 
 
+@pytest.mark.asyncio
+async def test_expert_prompt_refreshes_next_turn_without_mutating_active_request(wired, monkeypatch):
+    """专家段按回合刷新，当前请求保持快照；核心、协议档补充与工具白名单互不覆盖。"""
+    reads = []
+    current = ["专家旧约定。"]
+
+    def expert_prompt(db, expert):
+        """模拟受控配置层切换版本，记录运行时实际选中的专家。"""
+        reads.append(expert.expert_id)
+        return current[0] if expert.prompt_file else ""
+
+    monkeypatch.setattr(loop_wiring, "get_effective_expert_prompt", expert_prompt)
+    monkeypatch.setattr(loop_wiring, "get_agent_prompt_overlay", lambda *args: "协议档团队术语。")
+    first, resources = await loop_wiring.build_dependencies(
+        wired.service, wired.entry, "actor", {"content": "准备评测", "agent_id": "testcase-agent"},
+    )
+    try:
+        assert "专家旧约定。" in first.request.system_segments[1].text
+        assert "协议档团队术语。" in first.request.system_segments[2].text
+        assert first.request.system_segments[0].text == loop_wiring.LOOP_SYSTEM
+        assert set(first.scheduler._by_name) <= set(loop_wiring.resolve_expert("testcase-agent").allowed_tools)
+        current[0] = "专家新约定。"
+        second, next_resources = await loop_wiring.build_dependencies(
+            wired.service, wired.entry, "actor", {"content": "准备评测", "agent_id": "testcase-agent"},
+        )
+        try:
+            assert "专家新约定。" in second.request.system_segments[1].text
+            assert "专家旧约定。" in first.request.system_segments[1].text
+            assert first.request.fingerprint() != second.request.fingerprint()
+            assert reads == ["testcase-agent", "testcase-agent"]
+        finally:
+            await wired.service._close_resources(next_resources)
+    finally:
+        await wired.service._close_resources(resources)
+
+
 def test_loop_system_prompt_locks_task_planning_and_completion_rules() -> None:
     """核心提示词必须区分会话规划、Worker 队列与经验证的完成态。"""
     prompt = loop_wiring.LOOP_SYSTEM

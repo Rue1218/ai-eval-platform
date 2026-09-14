@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>图片预览回归夹具</title></head>
+<body>
+  <div id="app"></div>
+  <script type="module">
+    import { createApp, h } from 'vue'
+    import { NConfigProvider, zhCN } from 'naive-ui'
+    import MediaPreview from '../src/components/agent/MediaPreview.vue'
+    import AttachmentPreview from '../src/components/agent/AttachmentPreview.vue'
+    // 自包含测试图片，不调用模型、业务服务或外部图片资源。
+    const canvas = document.createElement('canvas')
+    canvas.width = 1600
+    canvas.height = 1000
+    const ctx = canvas.getContext('2d')
+    ctx.fillStyle = '#e2f5eb'
+    ctx.fillRect(0, 0, 1600, 1000)
+    ctx.fillStyle = '#1f5947'
+    ctx.font = '64px sans-serif'
+    ctx.fillText('1600 × 1000 · 图片缩放测试', 120, 200)
+    ctx.strokeStyle = '#1f5947'
+    ctx.strokeRect(40, 40, 1520, 920)
+    const src = canvas.toDataURL()
+    createApp({ render: () => h(NConfigProvider, { locale: zhCN }, { default: () => [
+      h(MediaPreview, { src, filename: '生成图片.png' }),
+      h(AttachmentPreview, { attachment: { filename: '图片附件.png', content_type: 'image/png', preview_url: src } }),
+    ] }) }).mount('#app')
+  </script>
+</body>
+</html>

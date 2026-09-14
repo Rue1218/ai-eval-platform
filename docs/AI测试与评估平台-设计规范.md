@@ -2,11 +2,12 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.12 |
-| 对应 PRD | V1.16（唯一产品权威） |
+| 文档版本 | V1.15 |
+| 对应 PRD | V1.21（唯一产品权威） |
 | 对应开发计划 | V1.5 |
 | 撰写日期 | 2026-08-17 |
-| 本轮修订 | 2026-08-30：Agent 技能页增加真实 SKILL.md 预览/编辑与协议档专属补充提示词入口；核心提示词只读。 |
+| 本轮修订 | 2026-09-14：Agent 技能页新增专家提示词分区，按专家角色展示内置/已定制状态；有专属提示词的专家可预览、编辑并恢复内置基线，默认角色仅说明其无额外人格层。 |
+| 图片预览修订 | 2026-09-14：生成图片与图片附件复用工作区图片查看器；支持 1%–500% 缩放、滚轮、拖动、原始像素 1:1、按容器适配及旋转，关闭后重开自动适配。 |
 | 最近修订 | 2026-08-30：协议档新增 xAI Grok 快捷配置、供应商自动归类与本地内联图标；2026-08-26：ToolCard 在 ToolCall 后立即显示执行加载态，ToolResult 的安全投影按帧渐显，并加入卡片弹出与展开动画；动效遵从系统减少动态效果设置。2026-08-26：ToolCard 原生工具收起态统一显示 ToolCall，不回显文件路径、命令和写入内容；展开区继续展示详细参数与行号内容；2026-08-26：ToolCard 原生工具改用英文工具名，展开区统一使用 ToolCall/输出分区，文件、命令和代码/文档结果使用行号展示；2026-08-23：Agent 对话助手消息增加供应商 Logo、模型名、协议档名和时间；2026-08-23：Agent 输入框模型选择器增加供应商 Logo；2026-08-23：协议档供应商卡片改用本地品牌标识并补充 Gemini 归类；2026-08-23：对齐 LangGraph 单轮 Agent、WS 基础事件和 Harness 冻结边界；2026-08-21：协议档增加 Embedding / Reranker 独立 URL、模型 ID、Key 配置，仍按 profile 环境文件隔离持久化 |
 | 技术栈（PRD） | Vue3 + Naive UI、Python FastAPI、PostgreSQL、WebSocket、Docker Compose、go-stress-testing |
 | 适用范围 | V1.0 前端 `frontend/` |
@@ -771,3 +772,22 @@ Agent 页允许的 Dialog **只有**：取消当前长任务、退出登录。�
 | `frontend/src/api/http.ts` / `frontend/src/api/types.ts` | 接入 Skill 与协议档 Prompt 的管理端契约类型和读写调用。 |
 
 *V1.12：补充受控 Skill 文件管理与 Agent 专属 Prompt 补充层。产品以 PRD 为准。*
+
+## 本次修订代码文件与作用清单（2026-09-14 · 专家提示词）
+
+| 文件 | 作用 |
+| --- | --- |
+| `frontend/src/views/AdminProfiles.vue` | 在 Agent 技能卡片列表下增加专家提示词分区，展示角色、覆盖状态、说明和查看/编辑入口。 |
+| `frontend/src/components/modals/AgentExpertPromptModal.vue` | 提供有效提示词的预览/编辑、修订提示与恢复内置操作。 |
+| `frontend/src/api/http.ts` / `frontend/src/api/types.ts` | 接入专家目录与提示词读写契约；技能页列表不缓存正文。 |
+| `backend/api/app/expert_prompt_settings.py` / `routers/admin.py` | 提供按专家隔离的安全持久化、审计和 REST 接口。 |
+
+*V1.13：补充 Agent 技能页的专家提示词配置交互。产品以 PRD 为准。*
+
+## V1.14 修改代码文件与作用清单（2026-09-14）
+
+`frontend/src/components/modals/AgentExpertPromptModal.vue`：恢复内置仅填入草稿；刷新/关闭先确认放弃修改；加载中禁保存、保存中禁编辑与关闭；隐私文案明确仅审计不含正文。`composables/useExpertPromptEditor.ts`：旧请求不回写新专家草稿，失败保留编辑内容。`views/AdminProfiles.vue`：目录失败可重试，保存状态不被迟到目录覆盖；保留技能数组导出格式。`frontend/tests/expertPromptEditor.test.mjs`：验证请求乱序及草稿保护边界。
+
+## V1.15 修改代码文件与作用清单（2026-09-14）
+
+`frontend/src/components/workspace/WorkspaceImageViewer.vue`：真实像素比例、容器适配、旋转适配、指针拖动及边界校正、键盘缩放、加载失败提示和响应式工具栏。`components/agent/ImagePreviewModal.vue`：共用图片弹窗，保留焦点管理与 Esc 关闭；`MediaPreview.vue` / `AttachmentPreview.vue`：图片入口接入共用弹窗，PDF/文本预览保持不变。`utils/imageViewport.ts` / `tests/imageViewport.test.mjs`：缩放和拖动几何边界回归；`tests/image-preview-fixture.html` / `tests/e2e/imagePreview.spec.ts`：无外部依赖的真实组件浏览器测试。未改变 REST/WS 契约。

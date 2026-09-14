@@ -737,6 +737,26 @@ export interface AgentSkillDocument {
   metadata: AgentSkillMetadata
 }
 
+/** Agent 技能页的专家提示词目录；列表不返回提示词正文或工具视野。 */
+export interface AgentExpertPromptMetadata {
+  id: string
+  name: string
+  description: string
+  badge: string
+  prompt_available: boolean
+  overridden: boolean
+}
+
+/** 管理端预览或编辑的单个专家有效提示词。 */
+export interface AgentExpertPromptDocument {
+  expert_id: string
+  name: string
+  content: string
+  builtin_content: string
+  revision: string
+  overridden: boolean
+}
+
 /** Agent 协议档的只读核心提示词与可写补充层。 */
 export interface AgentPromptConfig {
   profile_id: string

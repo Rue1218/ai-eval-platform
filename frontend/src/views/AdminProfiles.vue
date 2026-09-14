@@ -812,7 +812,7 @@
           <div class="panel-header-row">
             <div class="panel-title-area">
               <span class="panel-title-text">Agent 技能编排</span>
-              <span class="tag-soft">统一 SKILL.md · 4 大内置场景</span>
+              <span class="tag-soft">统一 SKILL.md · 内置技能与专家角色</span>
             </div>
 
             <div class="panel-actions-area">
@@ -1025,6 +1025,48 @@
             </table>
           </div>
         </div>
+
+        <!-- 专家提示词与技能文件分区展示，避免把角色工作方法混入 SKILL.md。 -->
+        <div class="panel expert-prompt-panel">
+          <div class="panel-header-row">
+            <div class="panel-title-area">
+              <span class="panel-title-text">专家提示词</span>
+              <span class="tag-soft">按专家角色生效 · {{ expertPromptItems.length }} 位专家</span>
+            </div>
+            <div class="small tertiary">编辑后从下一个会话回合开始生效</div>
+          </div>
+
+          <div v-if="expertPromptsLoading" class="expert-prompt-loading">正在读取专家目录…</div>
+          <div v-else-if="expertPromptsError" class="expert-prompt-loading error">
+            {{ expertPromptsError }}
+            <button class="btn btn-secondary btn-sm" @click="loadExpertPromptMetadata">重试</button>
+          </div>
+          <div v-else class="expert-prompt-grid mt16">
+            <article v-for="expert in expertPromptItems" :key="expert.id" class="expert-prompt-card">
+              <div class="skill-card-top">
+                <div class="skill-card-heading">
+                  <div class="skill-card-name">{{ expert.name }}</div>
+                  <div class="skill-scenario-tag">{{ expert.badge }} · {{ expert.id }}</div>
+                </div>
+                <span class="tag-soft" :class="{ 'expert-overridden': expert.overridden }">
+                  {{ expert.overridden ? '已定制' : expert.prompt_available ? '内置基线' : '无附加提示词' }}
+                </span>
+              </div>
+              <div class="skill-card-desc expert-prompt-desc">{{ expert.description }}</div>
+              <div class="expert-prompt-card-bottom">
+                <span class="small tertiary">{{ expert.prompt_available ? '可查看与编辑专家工作方法' : '默认角色沿用平台核心提示词' }}</span>
+                <button
+                  class="btn btn-sign btn-xs"
+                  :disabled="!expert.prompt_available"
+                  :title="expert.prompt_available ? `查看或编辑 ${expert.name} 的提示词` : '该默认角色没有额外专家提示词'"
+                  @click="handleOpenExpertPrompt(expert)"
+                >
+                  {{ expert.prompt_available ? '查看 / 编辑' : '无需配置' }}
+                </button>
+              </div>
+            </article>
+          </div>
+        </div>
       </div>
     </template>
 
@@ -1124,6 +1166,13 @@
       :skill-id="selectedSkillFileId"
     />
 
+    <AgentExpertPromptModal
+      v-model:show="showExpertPromptModal"
+      :expert-id="selectedExpertPrompt?.id || null"
+      :expert-name="selectedExpertPrompt?.name || ''"
+      @saved="handleExpertPromptSaved"
+    />
+
     <AgentPromptModal
       v-model:show="showAgentPromptModal"
       :profile-id="promptProfile?.id || null"
@@ -1136,7 +1185,14 @@
 import { ref, computed, onMounted } from 'vue'
 import { useMessage, useDialog, NSelect, NInput, NInputNumber, NSwitch } from 'naive-ui'
 import { api } from '../api/http'
-import type { Profile, ProfileCheckOut, McpTool, McpHealthCheckResponse } from '../api/types'
+import type {
+  AgentExpertPromptDocument,
+  AgentExpertPromptMetadata,
+  Profile,
+  ProfileCheckOut,
+  McpTool,
+  McpHealthCheckResponse,
+} from '../api/types'
 import EmptyState from '../components/common/EmptyState.vue'
 import ProviderLogo, { type ProviderLogoKey } from '../components/ProviderLogo.vue'
 import { getModelLogoKey } from '../utils/providerLogo'
@@ -1146,6 +1202,7 @@ import CheckResultModal from '../components/modals/CheckResultModal.vue'
 import McpToolModal from '../components/modals/McpToolModal.vue'
 import SkillDetailModal, { type SkillDetail } from '../components/modals/SkillDetailModal.vue'
 import AgentSkillFileModal from '../components/modals/AgentSkillFileModal.vue'
+import AgentExpertPromptModal from '../components/modals/AgentExpertPromptModal.vue'
 import AgentPromptModal from '../components/modals/AgentPromptModal.vue'
 import ToolIcon from '../components/agent/loop/ToolIcon.vue'
 
@@ -1172,6 +1229,8 @@ function switchTab(key: TabKey) {
     loadProfiles()
   } else if (key === 'rag_models') {
     loadRagModels()
+  } else if (key === 'skills') {
+    loadExpertPromptMetadata()
   }
 }
 
@@ -1486,6 +1545,12 @@ const selectedSkill = ref<SkillDetail | null>(null)
 const showSkillModal = ref(false)
 const selectedSkillFileId = ref<string | null>(null)
 const showSkillFileModal = ref(false)
+const expertPromptItems = ref<AgentExpertPromptMetadata[]>([])
+const expertPromptsLoading = ref(false)
+const expertPromptsError = ref('')
+const selectedExpertPrompt = ref<AgentExpertPromptMetadata | null>(null)
+const showExpertPromptModal = ref(false)
+let expertPromptRequest = 0
 
 const filteredSkills = computed(() => {
   return builtinSkills.filter((s) => {
@@ -1520,11 +1585,48 @@ function handleOpenSkillFile(skill: SkillDetail) {
   showSkillFileModal.value = true
 }
 
-function handleExportSkillsJson() {
+/** 仅在打开 Agent 技能页时读取专家目录，列表不携带任何提示词正文。 */
+async function loadExpertPromptMetadata() {
+  const request = ++expertPromptRequest
+  expertPromptsLoading.value = true
+  expertPromptsError.value = ''
+  try {
+    const items = await api.admin.listAgentExpertPrompts()
+    if (request === expertPromptRequest) expertPromptItems.value = items
+  } catch (error: any) {
+    if (request !== expertPromptRequest) return
+    expertPromptItems.value = []
+    expertPromptsError.value = error?.message || '专家目录读取失败'
+  } finally {
+    if (request === expertPromptRequest) expertPromptsLoading.value = false
+  }
+}
+
+/** 只有声明专属提示词的专家才开放预览与编辑，默认角色不产生额外人格层。 */
+function handleOpenExpertPrompt(expert: AgentExpertPromptMetadata) {
+  if (!expert.prompt_available) return
+  safeBlur()
+  selectedExpertPrompt.value = expert
+  showExpertPromptModal.value = true
+}
+
+/** 保存成功后仅回写目录状态，不把提示词正文保留在技能页状态中。 */
+function handleExpertPromptSaved(document: AgentExpertPromptDocument) {
+  // 保存结果比先前发起的目录读取更新，禁止迟到快照覆盖已定制状态。
+  expertPromptRequest += 1
+  expertPromptsLoading.value = false
+  expertPromptsError.value = ''
+  expertPromptItems.value = expertPromptItems.value.map((item) => (
+    item.id === document.expert_id ? { ...item, overridden: document.overridden } : item
+  ))
+}
+
+/** 保持既有技能数组导出格式，复制完成后才报告成功。 */
+async function handleExportSkillsJson() {
   safeBlur()
   try {
     const payload = JSON.stringify(builtinSkills, null, 2)
-    navigator.clipboard.writeText(payload)
+    await navigator.clipboard.writeText(payload)
     message.success('已复制技能配置 JSON')
   } catch {
     message.info('请在安全上下文中复制配置')
@@ -3057,6 +3159,49 @@ onMounted(() => {
   padding-top: 8px;
   border-top: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.06));
   margin-top: auto;
+}
+.expert-prompt-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.expert-prompt-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 14px;
+}
+.expert-prompt-card {
+  border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.08));
+  border-radius: 12px;
+  padding: 16px;
+  background: var(--bg-card, #ffffff);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.expert-prompt-desc {
+  min-height: 36px;
+}
+.expert-prompt-card-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.06));
+  margin-top: auto;
+}
+.expert-overridden {
+  color: var(--c-profiles, #1f5947);
+  background: var(--t-profiles, rgba(22, 151, 122, 0.1));
+}
+.expert-prompt-loading {
+  padding: 28px 16px;
+  text-align: center;
+  color: var(--text-secondary, #6b7280);
+}
+.expert-prompt-loading.error {
+  color: var(--accent-error, #dc2626);
 }
 
 /* ═══════════════════════════════════════════════════════════════
