@@ -8,7 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.models import ProtocolProfile, Setting
-from app.routers.ws import _MODEL_CONFIG_CACHE, _selected_model_config
+from app.routers.ws_profiles import _MODEL_CONFIG_CACHE, _selected_model_config
 from app.schemas import ProfileCreate, ProfileUpdate
 
 

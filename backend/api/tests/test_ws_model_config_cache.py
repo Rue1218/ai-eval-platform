@@ -11,15 +11,15 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from app.routers import ws
+from app.routers import ws, ws_profiles
 
 
 @pytest.fixture(autouse=True)
 def _clean_cache() -> None:
     """每个用例前后清空缓存，避免用例间互相污染。"""
-    ws._MODEL_CONFIG_CACHE.clear()
+    ws_profiles._MODEL_CONFIG_CACHE.clear()
     yield
-    ws._MODEL_CONFIG_CACHE.clear()
+    ws_profiles._MODEL_CONFIG_CACHE.clear()
 
 
 def _fake_db(profile: MagicMock) -> MagicMock:
@@ -55,15 +55,15 @@ def _fake_profile() -> MagicMock:
 def test_cache_holds_snapshot_not_orm(monkeypatch: pytest.MonkeyPatch) -> None:
     """缓存值必须是纯数据快照，禁止出现 ORM 实例（事故根因）。"""
     monkeypatch.setattr(
-        ws,
+        ws_profiles,
         "_profile_connection",
         lambda profile, allow_global_alias=False: ("https://x", "qwen", "key"),
     )
     db = _fake_db(_fake_profile())
     config, snapshot = ws._selected_model_config(db)
-    cached_config, cached_snapshot = ws._MODEL_CONFIG_CACHE["p1"][1]
+    cached_config, cached_snapshot = ws_profiles._MODEL_CONFIG_CACHE["p1"][1]
     assert isinstance(cached_snapshot, ws._ProfileSnapshot)
-    assert not isinstance(cached_snapshot, ws.ProtocolProfile)
+    assert not isinstance(cached_snapshot, ws_profiles.ProtocolProfile)
     assert isinstance(snapshot, ws._ProfileSnapshot)
     assert cached_config is config
 
@@ -73,7 +73,7 @@ def test_cache_hit_after_session_close_no_detached_error(
 ) -> None:
     """模拟事故生命周期：首回合写缓存后 commit+close，后续命中缓存访问属性不得抛错。"""
     monkeypatch.setattr(
-        ws,
+        ws_profiles,
         "_profile_connection",
         lambda profile, allow_global_alias=False: ("https://x", "qwen", "key"),
     )
@@ -97,14 +97,14 @@ def test_cache_hit_after_session_close_no_detached_error(
 def test_cache_miss_reloads_profile(monkeypatch: pytest.MonkeyPatch) -> None:
     """缓存过期（TTL 15s）后重新查库构造新快照。"""
     monkeypatch.setattr(
-        ws,
+        ws_profiles,
         "_profile_connection",
         lambda profile, allow_global_alias=False: ("https://x", "qwen", "key"),
     )
     db1 = _fake_db(_fake_profile())
     ws._selected_model_config(db1)
     # 直接改缓存过期时间，模拟 15s TTL 到期
-    ws._MODEL_CONFIG_CACHE["p1"] = (0.0, ws._MODEL_CONFIG_CACHE["p1"][1])
+    ws_profiles._MODEL_CONFIG_CACHE["p1"] = (0.0, ws_profiles._MODEL_CONFIG_CACHE["p1"][1])
     db2 = _fake_db(_fake_profile())
     config2, snapshot2 = ws._selected_model_config(db2)
     assert isinstance(snapshot2, ws._ProfileSnapshot)
