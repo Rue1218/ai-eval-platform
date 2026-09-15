@@ -4,9 +4,9 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V2.3 |
+| 文档版本 | V2.4 |
 | WS v2 修订日期 | 2026-09-13（§4A，模型错误安全摘要） |
-| 对应 PRD | V1.24（功能唯一权威） |
+| 对应 PRD | V1.26（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.7.8（AgentLoop 单入口；JSON 仍以本文为准） |
 | 对应前端计划 | AgentLoop 前端计划 V0.5 |
@@ -19,6 +19,8 @@
 > V1.86（2026-09-09）：协议档页面 `POST /api/profiles/{id}/check` 的真实 ping 探活上限与通用协议调用统一为 30 秒，避免上游模型冷启动被误判为不可用；响应字段与错误码不变。
 
 > V2.3（2026-09-15）：补齐 Anthropic Messages 兼容供应商的受控思考模板：Kimi K3 使用 `output_config.effort`（`low/high/max`，无 `off`），智谱 GLM 与火山方舟豆包使用 `thinking.type=enabled/disabled` 开关。兼容供应商的无签名 thinking 块可原样回放，原生 Claude 仍要求签名。新模板全部必须经探测同时验证请求完成与思考证据，不能因目录出现就宣称模型支持。
+
+> V2.4（2026-09-15）：供应商快速填充以“供应商 + 协议”为联合键，协议切换同步替换官方 Base URL、建议模型与思考模板。DeepSeek 原厂 Anthropic 使用 `/anthropic` 和 `thinking + output_config.effort`；NVIDIA NIM 的 `/v1/messages` 使用实际部署根地址，不伪造统一公网入口。未公布兼容层的组合仅在官方快速填充中禁用，已有自建兼容网关仍可编辑和真实探测。
 
 > V2.1（2026-09-15，历史记录；模型族限制及超时口径已由 V2.2 替代）：思考模板候选和保存校验新增模型 ID 维度，百炼 DeepSeek 与千问等同端点不同方言不会混用。开启思考的探测必须取得 reasoning 增量或推理用量证据，普通文本完成不再视为通过；各档短请求并发执行，整次探测受单次 30 秒调用超时约束。
 
@@ -3236,3 +3238,15 @@ Worker 事实覆盖一次调用快照，不新增浏览器 WS 字段。
 | backend/api/tests/test_reasoning_templates.py、test_loop_profile_selection.py | 参数与探测回归、响应字段边界 |
 
 完整实现边界及官方来源见[模型思考模板自动继承实施方案 V1.3](./AI测试与评估平台-模型思考模板自动继承实施方案.md)。
+
+### V2.4 修改代码文件与作用清单（审查日期：2026-09-15）
+
+本次不改变 REST 或 WS JSON 字段，只扩充协议档目录数据及其受控模板。新建协议档按
+供应商和协议分别填充 Base URL；NVIDIA NIM 的 Anthropic 地址必须填写实际部署根地址。
+
+| 文件 | 作用 |
+| --- | --- |
+| `frontend/src/utils/profileVendors.ts`、`components/modals/ProfileModal.vue` | 登记供应商协议矩阵，切换协议时同步 URL、模型与模板，并禁用官方未提供的组合 |
+| `backend/api/app/llm/providers/reasoning_templates.py`、`anthropic.py`、`catalog.py` | 增加 DeepSeek/NIM Messages 模板、兼容思考块回放和 MiniMax 中国区域名识别 |
+| `frontend/tests/profileVendors.test.mjs`、`backend/api/tests/test_reasoning_templates.py` | 覆盖官方 URL、协议支持、模板请求字段与托管服务识别 |
+| `docs/AI测试与评估平台-PRD.md`、`AI测试与评估平台-协议档供应商思考适配.md` | 固化 V1.26 产品规则和 V1.1 官方依据 |

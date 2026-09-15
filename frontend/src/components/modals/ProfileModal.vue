@@ -18,7 +18,7 @@
       <div class="field">
         <label class="field-label">供应商快速填充</label>
         <div class="vendor-picker">
-          <button v-for="vendor in PROFILE_VENDORS" :key="vendor.key" type="button" :class="{selected:selectedVendor === vendor.key}" :aria-pressed="selectedVendor === vendor.key" @click="selectedVendor = vendor.key; handleSelectVendor(vendor.key)">
+          <button v-for="vendor in PROFILE_VENDORS" :key="vendor.key" type="button" :class="{selected:selectedVendor === vendor.key}" :aria-pressed="selectedVendor === vendor.key" @click="handleSelectVendor(vendor.key)">
             <ProviderLogo :provider="vendor.key"/><span>{{ vendor.name }}</span>
           </button>
         </div>
@@ -27,7 +27,7 @@
       <div class="form-row">
         <div class="field">
           <label class="field-label">协议类型 <span class="req">*</span></label>
-          <n-select v-model:value="form.protocol" :options="protocolOptions" />
+          <n-select :value="form.protocol" :options="protocolOptions" @update:value="handleProtocolChange" />
         </div>
         <div class="field">
           <label class="field-label">
@@ -56,6 +56,8 @@
           </div>
         </div>
       </div>
+
+      <p v-if="selectedVendor" class="field-hint">{{ vendorProtocolHint }}</p>
 
       <div v-if="modelParameterDefinitions.length" class="field">
         <label class="field-label">模型请求字段（由 /models 目录提供）</label>
@@ -203,7 +205,7 @@
 </template>
 
 <script setup lang="ts">
-import { PROFILE_VENDORS } from '../../utils/profileVendors'
+import { findPresetVendor, getVendorProtocolPreset, PROFILE_VENDORS } from '../../utils/profileVendors'
 import { getModelLogoKey } from '../../utils/providerLogo'
 import ProviderLogo from '../ProviderLogo.vue'
 
@@ -296,12 +298,31 @@ const form = ref<{
   reasoning_template_id: '',
 })
 
-const protocolOptions = [
+const ALL_PROTOCOL_OPTIONS: Array<{ label: string; value: ProtocolType }> = [
   { label: 'OpenAI Chat (/chat/completions)', value: 'openai_chat' },
   { label: 'Anthropic Messages (/messages)', value: 'anthropic_messages' },
 ]
 
 const VENDOR_MAP = Object.fromEntries(PROFILE_VENDORS.map(v => [v.key, v]))
+const selectedVendorConfig = computed(() => selectedVendor.value ? VENDOR_MAP[selectedVendor.value] : null)
+const selectedProtocolPreset = computed(() => getVendorProtocolPreset(selectedVendor.value, form.value.protocol))
+const protocolOptions = computed(() => ALL_PROTOCOL_OPTIONS.map(option => ({
+  ...option,
+  disabled: Boolean(selectedVendorConfig.value && !selectedVendorConfig.value.protocols[option.value]),
+  label: selectedVendorConfig.value && !selectedVendorConfig.value.protocols[option.value]
+    ? `${option.label}（官方未提供）`
+    : option.label,
+})))
+const vendorProtocolHint = computed(() => {
+  const vendor = selectedVendorConfig.value
+  if (!vendor) return ''
+  const supported = ALL_PROTOCOL_OPTIONS
+    .filter(option => vendor.protocols[option.value])
+    .map(option => option.value === 'openai_chat' ? 'OpenAI Chat' : 'Anthropic Messages')
+    .join('、')
+  const note = selectedProtocolPreset.value?.note
+  return `${vendor.name} 已核对协议：${supported}。${note ? ` ${note}` : ''}`
+})
 const TEMPLATE_PROVIDER: Record<string, string> = { gemini: 'google' }
 const VENDOR_BY_PROVIDER: Record<string, string> = { google: 'gemini' }
 const reasoningTemplateOptions = computed(() => reasoningTemplates.value.map(template => ({ label: template.name, value: template.id })))
@@ -347,19 +368,50 @@ async function loadReasoningTemplates() {
 
 async function handleSelectVendor(val: string | null) {
   if (!val || !VENDOR_MAP[val]) return
+  selectedVendor.value = val
   templateSelectionManual.value = false
   clearModelParameters()
   const item = VENDOR_MAP[val]
+  const preset = item.protocols[item.default_protocol]
+  if (!preset) return
   form.value.api_key = ''
   fetchedModelList.value = []
   form.value.full_url = false
-  form.value.base_url = item.base_url
-  form.value.protocol = item.protocol
+  form.value.base_url = preset.base_url
+  form.value.protocol = item.default_protocol
   form.value.context_window = item.context_window || 200000
-  form.value.model = item.model
-  form.value.name = `${item.name} (${item.model})`
+  form.value.model = preset.model
+  form.value.name = `${item.name} (${preset.model})`
   await loadReasoningTemplates()
-  message.info(`已快速填充 ${item.name} 厂商端点与协议配置`)
+  if (preset.base_url) {
+    message.info(`已快速填充 ${item.name} 厂商端点与协议配置`)
+  } else {
+    message.info(`已切换到 ${item.name} 协议，请填写实际部署地址`)
+  }
+}
+
+async function handleProtocolChange(protocol: ProtocolType) {
+  const vendor = selectedVendorConfig.value
+  const preset = vendor?.protocols[protocol]
+  if (vendor && !preset) {
+    message.warning(`${vendor.name} 未提供该协议的官方快速填充配置`)
+    return
+  }
+  form.value.protocol = protocol
+  if (vendor && preset) {
+    templateSelectionManual.value = false
+    clearModelParameters()
+    fetchedModelList.value = []
+    form.value.full_url = false
+    form.value.base_url = preset.base_url
+    form.value.model = preset.model
+    form.value.context_window = vendor.context_window || 200000
+    form.value.name = `${vendor.name} (${preset.model})`
+  }
+  await loadReasoningTemplates()
+  if (vendor && preset && !preset.base_url) {
+    message.info(`${vendor.name} 没有统一公网 Base URL，请填写实际部署地址`)
+  }
 }
 
 async function handleFetchRemoteModels() {
@@ -496,7 +548,9 @@ watch(
       // 已通过的自选方言保留；版本失效的旧模型重新推荐，避免继续沿用错误映射。
       templateSelectionManual.value = Boolean(profileVal?.reasoning_template_id
         && ['passed', 'partial'].includes(profileVal.reasoning_probe_status || ''))
-      selectedVendor.value = props.initialData?.vendorKey || null
+      selectedVendor.value = props.initialData?.vendorKey
+        || (profileVal ? findPresetVendor(profileVal.base_url, profileVal.protocol) : null)
+        || null
       clearModelParameters()
       if (profileVal) {
         form.value = {

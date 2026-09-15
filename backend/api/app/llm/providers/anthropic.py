@@ -42,7 +42,7 @@ from .options import request_options
 def _allows_unsigned_thinking(request: LlmRequest | None) -> bool:
     """兼容供应商的 Messages 流可省略签名，原生 Claude 仍严格要求签名。"""
     return request is not None and request.provider in {
-        "deepseek", "qwen", "zhipu", "moonshot", "minimax", "volcengine",
+        "deepseek", "qwen", "zhipu", "moonshot", "minimax", "nvidia", "volcengine",
     }
 
 

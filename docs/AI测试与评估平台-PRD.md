@@ -4,10 +4,10 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.24 |
-| 文档状态 | 冻结基线 + V1.24 登记（V1.19：废除「首次登录强制改密」；V1.20：协议档收敛；V1.21：受控媒体 MCP；V1.22：模型思考模板验证；V1.23：模板模型族与证据复核） |
+| 文档版本 | V1.26 |
+| 文档状态 | 冻结基线 + V1.26 登记（V1.22：模型思考模板验证；V1.24：供应商多方言；V1.25：Anthropic 兼容模板；V1.26：供应商协议 URL 矩阵） |
 | 撰写日期 | 2026-08-17 |
-| 本轮修订 | 2026-09-15：V1.24 供应商多方言修复；模型名称仅用于推荐，不阻断未知模型验证；开关/等级/预算/固定开启按真实语义展示，旧模板版本需复验，关闭仍有思考及非正常完成不能通过。原修订： 2026-09-15：V1.23 修复思考模板预注册：模板必须同时匹配供应商、协议和模型族；开启思考的探测必须取得 reasoning 增量或推理用量证据，普通完成不视为支持；最多五档短请求并发执行，避免串行累加超时。新模型仍是验证成功后才保存，旧协议档保留 legacy 型号解析。 |
+| 本轮修订 | 2026-09-15：V1.26 供应商快速填充改为供应商与协议二维矩阵，协议切换同步官方 Base URL、建议模型和思考模板；官方未提供的兼容组合禁用。补齐 DeepSeek 原厂与 NVIDIA NIM 的 Anthropic Messages 模板，真实探测仍为保存门禁。 |
 | 最近修订 | 2026-08-31：V1.17 增加危险 bash 的 LangGraph 人在回路：风险命令必须弹出确认卡，原发起成员确认后才进入 bwrap 沙箱；拒绝不执行。思考卡只呈现过程摘要，禁止显示会与工具真实结果冲突的原始推理。2026-08-30：V1.16 增加受控 Agent 技能文件与协议档专属补充提示词管理；技能正文遵循渐进式披露，核心安全提示词不可覆盖。2026-08-28：V1.15 统一基准目录治理、独立导入队列、staging 并发发布、成员同权双人复核与 M3 里程碑；冻结任务必须锁定数据集/黄金集版本。2026-08-28：V1.14 新增基准数据集目录、异步导入、staging 表格和发布门禁；下载/解析仅由 Worker 执行，未审核行不得评测。2026-08-24：补充 Agent 多附件交互：支持图片（PNG/JPG/JPEG/WEBP/GIF）、Markdown/TXT/HTML/JSON/YAML、PDF、Word（DOC/DOCX）、Excel（XLS/XLSX）、CSV/JSONL 与音频；输入区支持文件选择和拖拽上传，图片显示缩略图，PDF/文本支持预览，Office 文件显示类型卡片并可打开/下载。2026-08-23：补齐 Gemini OpenAI 兼容端点的思考摘要请求与增量归一化；增加 Agent 思考摘要开关与思考强度设置；将用户回显固定为 `user_message`，将完成信号固定为 `response.completed`，明确 `thought` 不承载助手正文；协议档增加可选 Embedding / Reranker 独立端点配置，三类 Key 均按 profile 写入受控环境文件 |
 | 适用版本 | 平台 V1.0 |
 | 技术栈 | Vue3 + Naive UI、Python FastAPI、PostgreSQL、WebSocket、Docker Compose、go-stress-testing |
@@ -777,7 +777,7 @@ testcase-tools：只对齐，不进镜像。LightRAG：MIT，锁 tag。go-stress
 
 ## 2026-09-09 协议档供应商与完整 URL 优化
 
-详见 [协议档供应商思考适配](AI测试与评估平台-协议档供应商思考适配.md) V1.0：十个供应商新建入口、真实模型品牌图标、只读能力投影及 `full_url` 字段以该节定义为准。管理页和编辑弹窗删除思考强度设置，仅在对话输入框选择；AgentLoop 按供应商能力初始化，不再继承 legacy 全局思考偏好。完整 URL 开启后不追加版本或协议后缀，后台主模型调用使用同一规则。
+详见 [协议档供应商思考适配](AI测试与评估平台-协议档供应商思考适配.md) V1.1：十个供应商新建入口、真实模型品牌图标、只读能力投影及 `full_url` 字段以该节定义为准。管理页和编辑弹窗删除思考强度设置，仅在对话输入框选择；AgentLoop 按供应商能力初始化，不再继承 legacy 全局思考偏好。完整 URL 开启后不追加版本或协议后缀，后台主模型调用使用同一规则。
 
 
 ### V1.24 修改代码文件与作用清单（审查日期：2026-09-15）
@@ -802,3 +802,14 @@ Anthropic Messages 兼容供应商的思考配置必须由供应商模板解析�
 | `backend/api/app/llm/providers/anthropic.py` | 兼容供应商回放没有签名的 thinking 块，原生 Claude 的签名校验保持不变 |
 | `backend/api/tests/test_reasoning_templates.py`、`backend/api/tests/test_loop_llm.py` | 覆盖模板推荐、最终 SDK 参数、关闭/强度边界及无签名 thinking 的工具回放 |
 | `docs/AI测试与评估平台-API.md`、`AI测试与评估平台-模型思考模板自动继承实施方案.md` | 固化供应商差异、验证门禁和官方依据 |
+
+### V1.26 修改代码文件与作用清单（审查日期：2026-09-15）
+
+十家供应商的快速填充按 `供应商 × 协议` 保存官方 Base URL。选择协议时必须同步替换 URL 和建议模型；未公布 OpenAI 或 Anthropic 兼容层的组合显示为不可选。火山 Anthropic 入口明确限定 Coding Plan；NVIDIA NIM 的 Messages 与扩展思考能力按部署版本、模型和真实探测结果生效。
+
+| 修改文件 | 作用 |
+| --- | --- |
+| `frontend/src/utils/profileVendors.ts`、`components/modals/ProfileModal.vue` | 协议 URL 矩阵、协议可用性、切换联动和适用范围提示 |
+| `backend/api/app/llm/providers/reasoning_templates.py`、`providers/anthropic.py` | DeepSeek、NVIDIA NIM 的 Messages 模板与兼容 thinking 回放 |
+| `frontend/tests/profileVendors.test.mjs`、`backend/api/tests/test_reasoning_templates.py` | URL、协议支持、模板推荐和 SDK 请求体回归 |
+| `docs/AI测试与评估平台-协议档供应商思考适配.md` | V1.1 官方 URL 与协议支持矩阵 |
