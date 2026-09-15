@@ -63,12 +63,15 @@ def test_template_cannot_cross_provider_or_protocol(provider, protocol):
     ("provider", "protocol", "model"),
     [
         ("zhipu", "openai_chat", "glm-4.7"), ("deepseek", "openai_chat", "deepseek-v4.1-flash"),
-        ("qwen", "openai_chat", "qwen-plus"), ("moonshot", "openai_chat", "kimi-k2.5"),
-        ("minimax", "anthropic_messages", "MiniMax-M2.5"), ("nvidia", "openai_chat", "nvidia/nemotron-3-super-120b-a12b"),
+        ("qwen", "openai_chat", "qwen-plus"), ("qwen", "anthropic_messages", "qwen3.8-max"),
+        ("moonshot", "openai_chat", "kimi-k2.5"),
+        ("minimax", "openai_chat", "MiniMax-M3"), ("minimax", "anthropic_messages", "MiniMax-M2.5"),
         ("volcengine", "openai_chat", "doubao-seed-1-8-251228"), ("google", "openai_chat", "gemini-2.5-flash"),
         ("openai", "openai_chat", "gpt-5.4"), ("anthropic", "anthropic_messages", "claude-sonnet-4-6"),
+        ("deepseek", "anthropic_messages", "deepseek-v4-flash"),
         ("moonshot", "anthropic_messages", "kimi-k3"), ("zhipu", "anthropic_messages", "glm-4.7"),
         ("volcengine", "anthropic_messages", "doubao-seed-evolving"),
+        ("nvidia", "anthropic_messages", "nvidia/nemotron-3-super-120b-a12b"),
     ],
 )
 def test_every_profile_vendor_has_a_non_generic_template(provider: str, protocol: str, model: str):
@@ -76,6 +79,15 @@ def test_every_profile_vendor_has_a_non_generic_template(provider: str, protocol
     templates = list_templates(provider, protocol, model)
 
     assert any(template.id != "no-reasoning-v1" for template in templates)
+
+
+def test_minimax_china_endpoint_is_detected_by_host_before_model_brand():
+    """MiniMax 中国区官方域名必须按托管服务识别，不能依赖模型名猜测。"""
+    from app.llm.providers.catalog import detect_provider
+
+    assert detect_provider(
+        "https://api.minimax.cn/anthropic", "custom-model-alias", "anthropic_messages",
+    ) == "minimax"
 
 
 def test_explicit_numeric_template_uses_integer_wire_options():
@@ -205,10 +217,12 @@ async def test_probe_runs_all_template_efforts_concurrently(monkeypatch):
     ('google', 'openai_chat', 'gemini-3-pro', 'google-gemini-level-v1'),
     ('moonshot', 'openai_chat', 'kimi-k3', 'moonshot-reasoning-effort-v1'),
     ('moonshot', 'anthropic_messages', 'kimi-k3', 'moonshot-anthropic-output-effort-v1'),
+    ('deepseek', 'anthropic_messages', 'deepseek-v4-flash', 'deepseek-anthropic-effort-v1'),
     ('zhipu', 'anthropic_messages', 'glm-4.7', 'zhipu-anthropic-thinking-switch-v1'),
     ('volcengine', 'openai_chat', 'ep-20260915-example', 'volcengine-seed-thinking-v1'),
     ('volcengine', 'anthropic_messages', 'doubao-seed-evolving', 'volcengine-anthropic-thinking-switch-v1'),
     ('nvidia', 'openai_chat', 'nvidia/unknown-next-model', 'nvidia-nim-thinking-v1'),
+    ('nvidia', 'anthropic_messages', 'nvidia/nemotron-3-super-120b-a12b', 'nvidia-nim-anthropic-budget-v1'),
     ('openai', 'openai_chat', 'unknown-next-model', 'openai-reasoning-effort-v1'),
 ])
 def test_new_models_and_deployment_ids_remain_probeable(provider, protocol, model, first):
@@ -271,6 +285,26 @@ def test_kimi_messages_uses_output_config_effort_without_unsupported_budget():
     assert wire['extra_body'] == {'output_config': {'effort': 'max'}}
     assert 'thinking' not in wire
     assert 'temperature' not in wire
+
+
+def test_deepseek_messages_uses_thinking_and_output_effort():
+    """DeepSeek 原厂 Messages 同时发送开关与强度，不能回退成无思考模板。"""
+    wire = _wire('deepseek-anthropic-effort-v1', 'deepseek', 'max', model='deepseek-v4-flash')
+
+    assert wire['thinking'] == {'type': 'enabled'}
+    assert wire['extra_body'] == {'output_config': {'effort': 'max'}}
+    assert 'temperature' not in wire
+
+
+def test_nvidia_messages_uses_standard_budget_and_requires_probe():
+    """NIM Messages 只发送标准 thinking 预算，具体部署支持度交由真实探测决定。"""
+    wire = _wire(
+        'nvidia-nim-anthropic-budget-v1', 'nvidia', 'high',
+        model='nvidia/nemotron-3-super-120b-a12b',
+    )
+
+    assert wire['thinking']['type'] == 'enabled'
+    assert 1024 <= wire['thinking']['budget_tokens'] < wire['max_tokens']
 
 
 @pytest.mark.parametrize(

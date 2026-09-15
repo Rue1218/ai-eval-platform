@@ -10,7 +10,7 @@ def detect_provider(base_url: str, model: str, protocol: str) -> str:
         "nvidia.com": "nvidia", "volces.com": "volcengine",
         "aliyuncs.com": "qwen", "bigmodel.cn": "zhipu", "z.ai": "zhipu",
         "moonshot.cn": "moonshot", "moonshot.ai": "moonshot", "kimi.com": "moonshot",
-        "minimaxi.com": "minimax", "minimax.io": "minimax", "minimax.chat": "minimax",
+        "minimaxi.com": "minimax", "minimax.cn": "minimax", "minimax.io": "minimax", "minimax.chat": "minimax",
         "deepseek.com": "deepseek", "anthropic.com": "anthropic",
         "googleapis.com": "google", "openai.com": "openai", "xiaomimimo.com": "mimo",
     }

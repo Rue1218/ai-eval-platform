@@ -62,7 +62,15 @@ TEMPLATES: tuple[ReasoningTemplate, ...] = (
     ReasoningTemplate(
         "deepseek-reasoning-effort-v1", "DeepSeek 思考强度", "deepseek", "openai_chat",
         "effort", _DEEPSEEK_EFFORTS, "high", "thinking_effort",
-        "发送 thinking 开关及 low/high/max 强度；无 medium 别名档位。", model_pattern=r"^deepseek-v4",
+        "发送 thinking 开关及 low/high/max 强度；无 medium 别名档位。",
+        model_pattern=r"^deepseek-(?:v4|flash|pro)",
+    ),
+    ReasoningTemplate(
+        "deepseek-anthropic-effort-v1", "DeepSeek · Anthropic Messages 思考强度",
+        "deepseek", "anthropic_messages", "effort", _DEEPSEEK_EFFORTS, "high",
+        "anthropic_thinking_effort",
+        "发送 Anthropic thinking 开关，并通过 output_config.effort 选择 low/high/max。",
+        model_pattern=r"^deepseek-(?:v4|flash|pro)",
     ),
     ReasoningTemplate(
         "moonshot-reasoning-effort-v1", "Kimi 思考强度（固定开启）", "moonshot", "openai_chat",
@@ -158,6 +166,12 @@ TEMPLATES: tuple[ReasoningTemplate, ...] = (
         "nvidia-nim-thinking-v1", "NVIDIA NIM 思考开关", "nvidia", "openai_chat",
         "switch", _SWITCH, "high", "nvidia_chat_template",
         "适用于 NIM 通过 chat_template_kwargs.enable_thinking 控制的托管模型。", model_pattern=r"^nemotron-3-",
+    ),
+    ReasoningTemplate(
+        "nvidia-nim-anthropic-budget-v1", "NVIDIA NIM · Anthropic Messages 思考预算",
+        "nvidia", "anthropic_messages", "budget", _EFFORTS, "high", "anthropic_budget",
+        "NIM /v1/messages 的扩展思考依赖部署版本和模型；使用标准 thinking 预算并以真实探测裁定。",
+        model_pattern=r"^(?:nvidia/)?(?:nvidia-)?nemotron-3-",
     ),
     ReasoningTemplate(
         "volcengine-seed-thinking-v1", "火山引擎 Seed 思考强度", "volcengine", "openai_chat",
