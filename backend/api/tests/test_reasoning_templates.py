@@ -67,6 +67,8 @@ def test_template_cannot_cross_provider_or_protocol(provider, protocol):
         ("minimax", "anthropic_messages", "MiniMax-M2.5"), ("nvidia", "openai_chat", "nvidia/nemotron-3-super-120b-a12b"),
         ("volcengine", "openai_chat", "doubao-seed-1-8-251228"), ("google", "openai_chat", "gemini-2.5-flash"),
         ("openai", "openai_chat", "gpt-5.4"), ("anthropic", "anthropic_messages", "claude-sonnet-4-6"),
+        ("moonshot", "anthropic_messages", "kimi-k3"), ("zhipu", "anthropic_messages", "glm-4.7"),
+        ("volcengine", "anthropic_messages", "doubao-seed-evolving"),
     ],
 )
 def test_every_profile_vendor_has_a_non_generic_template(provider: str, protocol: str, model: str):
@@ -202,7 +204,10 @@ async def test_probe_runs_all_template_efforts_concurrently(monkeypatch):
     ('anthropic', 'anthropic_messages', 'claude-sonnet-4-5', 'anthropic-thinking-v1'),
     ('google', 'openai_chat', 'gemini-3-pro', 'google-gemini-level-v1'),
     ('moonshot', 'openai_chat', 'kimi-k3', 'moonshot-reasoning-effort-v1'),
+    ('moonshot', 'anthropic_messages', 'kimi-k3', 'moonshot-anthropic-output-effort-v1'),
+    ('zhipu', 'anthropic_messages', 'glm-4.7', 'zhipu-anthropic-thinking-switch-v1'),
     ('volcengine', 'openai_chat', 'ep-20260915-example', 'volcengine-seed-thinking-v1'),
+    ('volcengine', 'anthropic_messages', 'doubao-seed-evolving', 'volcengine-anthropic-thinking-switch-v1'),
     ('nvidia', 'openai_chat', 'nvidia/unknown-next-model', 'nvidia-nim-thinking-v1'),
     ('openai', 'openai_chat', 'unknown-next-model', 'openai-reasoning-effort-v1'),
 ])
@@ -257,6 +262,31 @@ def test_kimi_off_does_not_send_invalid_default_temperature():
     wire = _wire('moonshot-thinking-switch-v1', 'moonshot', 'high', enabled=False)
     assert 'temperature' not in wire
     assert wire['extra_body']['thinking'] == {'type': 'disabled'}
+
+
+def test_kimi_messages_uses_output_config_effort_without_unsupported_budget():
+    """Kimi K3 的 Messages 端点通过 output_config 控制强度，不能误发 Anthropic 预算。"""
+    wire = _wire('moonshot-anthropic-output-effort-v1', 'moonshot', 'max', model='kimi-k3')
+
+    assert wire['extra_body'] == {'output_config': {'effort': 'max'}}
+    assert 'thinking' not in wire
+    assert 'temperature' not in wire
+
+
+@pytest.mark.parametrize(
+    ('template_id', 'provider', 'model'),
+    [
+        ('zhipu-anthropic-thinking-switch-v1', 'zhipu', 'glm-4.7'),
+        ('volcengine-anthropic-thinking-switch-v1', 'volcengine', 'doubao-seed-evolving'),
+    ],
+)
+def test_anthropic_compatible_switch_templates_preserve_standard_thinking_wire(template_id, provider, model):
+    """智谱和火山兼容端点使用标准 thinking 开关，供应商探测再确认各模型是否实际支持。"""
+    enabled = _wire(template_id, provider, 'high', model=model)
+    disabled = _wire(template_id, provider, 'off', enabled=False, model=model)
+
+    assert enabled['thinking'] == {'type': 'enabled'}
+    assert disabled['thinking'] == {'type': 'disabled'}
 
 
 @pytest.mark.parametrize('template', [item for item in TEMPLATES if item.mode == 'switch'], ids=lambda t: t.id)

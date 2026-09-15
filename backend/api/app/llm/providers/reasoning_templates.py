@@ -123,6 +123,18 @@ TEMPLATES: tuple[ReasoningTemplate, ...] = (
         "适用于 Moonshot OpenAI 兼容端点的 thinking 开关。", model_pattern=r"^(?:kimi|moonshot)(?:[.-]|$)",
     ),
     ReasoningTemplate(
+        "moonshot-anthropic-output-effort-v1", "Kimi K3 · Anthropic Messages 思考强度", "moonshot", "anthropic_messages",
+        "effort", ("low", "high", "max"), "high", "anthropic_output_effort",
+        "Kimi Messages 通过 output_config.effort 选择推理强度；当前官方 Messages 文档仅列出 Kimi K3，强度须经连通性验证。",
+        model_pattern=r"^kimi-k3(?:[.-]|$)",
+    ),
+    ReasoningTemplate(
+        "zhipu-anthropic-thinking-switch-v1", "智谱 GLM · Anthropic Messages 思考开关", "zhipu", "anthropic_messages",
+        "switch", _SWITCH, "high", "thinking_switch",
+        "智谱 Claude 兼容端点使用 Anthropic thinking 开关；仅在探测同时验证请求和思考证据后启用。",
+        model_pattern=r"^glm-",
+    ),
+    ReasoningTemplate(
         "minimax-m2-fixed-v1", "MiniMax M2 固定思考", "minimax", "openai_chat",
         "fixed", ("high",), "high", "minimax_fixed",
         "适用于始终开启思考的 MiniMax M2 系列；不提供关闭选项。", model_pattern=r"^minimax-m2",
@@ -151,6 +163,12 @@ TEMPLATES: tuple[ReasoningTemplate, ...] = (
         "volcengine-seed-thinking-v1", "火山引擎 Seed 思考强度", "volcengine", "openai_chat",
         "effort", ("off", "low", "medium", "high"), "medium", "thinking_effort",
         "适用于 Doubao Seed OpenAI 兼容模型的 thinking 与 reasoning_effort 参数。", model_pattern=r"^doubao-seed-",
+    ),
+    ReasoningTemplate(
+        "volcengine-anthropic-thinking-switch-v1", "火山方舟豆包 · Anthropic Messages 思考开关", "volcengine", "anthropic_messages",
+        "switch", _SWITCH, "high", "thinking_switch",
+        "火山方舟 Anthropic Messages 兼容端点通过 thinking 开关控制扩展思考；模型和区域差异由真实探测裁定。",
+        model_pattern=r"^doubao-",
     ),
     ReasoningTemplate(
         "google-gemini-thinking-v1", "Google Gemini 思考配置", "google", "openai_chat",
@@ -288,6 +306,9 @@ def resolve_template_options(request: LlmRequest, provider: str, protocol: str) 
     if adapter == "anthropic_adaptive_effort":
         return {"thinking": {"type": "adaptive" if enabled else "disabled"}, "omit_temperature": True,
                 **({"output_config": {"effort": effort}} if enabled else {})}
+    if adapter == "anthropic_output_effort":
+        # Kimi Messages 以 output_config 选择推理深度，不接受人为拼装的 thinking 预算。
+        return {"output_config": {"effort": effort}, "omit_temperature": True}
     if adapter == "nvidia_chat_template":
         return {"chat_template_kwargs": {"enable_thinking": enabled}}
     if adapter == "thinking_effort":

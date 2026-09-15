@@ -517,7 +517,10 @@ def test_anthropic_rejects_missing_signature(clients):
     assert clients[-1].stream.closed
 
 
-@pytest.mark.parametrize("model", ["deepseek-v4-flash-0731", "qwen3.6-flash", "qwen3.8-flash"])
+@pytest.mark.parametrize(
+    "model",
+    ["deepseek-v4-flash-0731", "qwen3.6-flash", "qwen3.8-flash", "doubao-seed-evolving"],
+)
 def test_compatible_anthropic_unsigned_thinking_tool_roundtrip(clients, model):
     """兼容流空签名可回填工具结果，且不会越过 Claude 的跨模型边界。"""
     profile = AuthorizedProfileSnapshot(
@@ -541,7 +544,11 @@ def test_compatible_anthropic_unsigned_thinking_tool_roundtrip(clients, model):
         "thinking": "分析",
         "signature": "",
     }
-    assert client.requests[0]["thinking"] == {"type": "disabled"}
+    if model.startswith("doubao-"):
+        # 旧档未绑定模板时不为火山臆造思考参数；新建档必须选模板后才发送开关。
+        assert "thinking" not in client.requests[0]
+    else:
+        assert client.requests[0]["thinking"] == {"type": "disabled"}
     messages = [
         {
             "role": "assistant",

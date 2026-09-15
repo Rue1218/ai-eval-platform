@@ -39,6 +39,7 @@
 | V1.20 | 2026-09-09 | 协议档收敛为 OpenAI Chat 与 Anthropic Messages，删除 OpenAI Responses 适配与已有档位凭据 |
 | V1.21 | 2026-09-12 | 协议档 → MCP 与工具新增受控媒体 MCP 配置；Qwen 生图和 HappyHorse 首帧图生视频接入 AgentLoop，视频仅异步提交与查询，不新增媒体任务表或结果归档 |
 | V1.22 | 2026-09-15 | 新模型用供应商与协议的受控思考模板逐档真实验证后才登记；验证结果限制 AgentLoop 可选思考强度，旧协议档保持 legacy 解析 |
+| V1.25 | 2026-09-15 | 补齐 Kimi K3、智谱 GLM 与火山方舟豆包的 Anthropic Messages 思考模板；Kimi 使用 output_config 强度，GLM/豆包使用标准 thinking 开关，均以真实探测为准 |
 
 ---
 
@@ -790,3 +791,14 @@ testcase-tools：只对齐，不进镜像。LightRAG：MIT，锁 tag。go-stress
 - `backend/api/tests/test_reasoning_templates.py`、`test_loop_profile_selection.py`：自动化回归。
 
 详见[API V2.2](./AI测试与评估平台-API.md)及[方案 V1.3](./AI测试与评估平台-模型思考模板自动继承实施方案.md)。
+
+### V1.25 修改代码文件与作用清单（审查日期：2026-09-15）
+
+Anthropic Messages 兼容供应商的思考配置必须由供应商模板解析。Kimi K3 只开放 `low/high/max` 并发出 `output_config.effort`，不伪造关闭开关；智谱 GLM 和火山方舟豆包开放关闭/开启并发出标准 `thinking.type`。任何模板都只有在真实探测取得思考证据后，才在 Agent 输入栏显示为可用。
+
+| 修改文件 | 作用 |
+| --- | --- |
+| `backend/api/app/llm/providers/reasoning_templates.py` | 登记 Kimi、智谱和火山方舟的 Anthropic Messages 模板及受控参数映射 |
+| `backend/api/app/llm/providers/anthropic.py` | 兼容供应商回放没有签名的 thinking 块，原生 Claude 的签名校验保持不变 |
+| `backend/api/tests/test_reasoning_templates.py`、`backend/api/tests/test_loop_llm.py` | 覆盖模板推荐、最终 SDK 参数、关闭/强度边界及无签名 thinking 的工具回放 |
+| `docs/AI测试与评估平台-API.md`、`AI测试与评估平台-模型思考模板自动继承实施方案.md` | 固化供应商差异、验证门禁和官方依据 |

@@ -1,7 +1,7 @@
 # AI 测试与评估平台 — 模型思考模板自动继承实施方案
 
-> 版本：V1.3 ｜ 审查日期：2026-09-15
-> 状态：本地实现与门禁验证完成；尚未逐供应商使用真实 Key 联调。产品与接口契约同步至 [PRD](./AI测试与评估平台-PRD.md) V1.24 与 [API 契约](./AI测试与评估平台-API.md) V2.2。
+> 版本：V1.4 ｜ 审查日期：2026-09-15
+> 状态：本地实现与门禁验证完成；尚未逐供应商使用真实 Key 联调。产品与接口契约同步至 [PRD](./AI测试与评估平台-PRD.md) V1.25 与 [API 契约](./AI测试与评估平台-API.md) V2.3。
 > 产品决策：采用供应商、协议和模板配置驱动新增模型；用户点击“测试并添加”时，平台使用该模板向所选模型发送最小真实请求，验证通过才保存。暂不建设无人触发的文档抓取、智能体自动生成模板或后台批量探测。
 > 权威边界：接口路径、字段名与错误码以 API 契约为准；本稿说明实现边界、模板治理和后续演进。
 
@@ -231,3 +231,18 @@ P2 同时清点旧适配器调用方，未迁移的路径保持原有行为并�
 ### 本地验证记录
 
 全量 API：1552 passed / 78 skipped；Worker：50 passed；Ruff、前端 typecheck/build 通过。最终供应商推荐调整后补跑模板、能力投影和 AgentLoop 协议档选择回归。以上为本地测试与请求参数验证，未代表供应商真实端点逐家验收；现有前端大 chunk 提示仍为构建警告。
+
+## V1.4 修订说明与修改代码文件清单（2026-09-15）
+
+补齐此前没有受控模板的 Anthropic Messages 兼容供应商，但不把“兼容协议”误写成“全部模型已验证”。Kimi 官方 Messages 文档列出 Kimi K3，并把 `output_config` 定义为推理强度与结构化输出的配置，因此模板只开放 `low/high/max`，使用 `output_config.effort`，不提供虚假的 `off`。智谱的 Claude 兼容入口和火山方舟的兼容实践均采用 Anthropic `thinking` 开关，二者只开放关闭/开启；实际型号、地域或网关是否接受该字段仍由逐档探测决定。
+
+兼容供应商的流可能返回无 `signature` 的 thinking 块。回放校验改为按已解析的供应商判断：DeepSeek、百炼、智谱、Moonshot、MiniMax 和火山方舟允许空签名；原生 Anthropic 继续要求签名，防止放宽 Claude 的上下文完整性约束。
+
+| 修改文件 | 作用 |
+| --- | --- |
+| `backend/api/app/llm/providers/reasoning_templates.py` | 增加 Kimi K3、智谱 GLM、火山方舟豆包的 Anthropic Messages 模板和 Kimi 的 `output_config.effort` 适配器 |
+| `backend/api/app/llm/providers/anthropic.py` | 将无签名 thinking 块的兼容例外收敛到供应商层级 |
+| `backend/api/tests/test_reasoning_templates.py`、`backend/api/tests/test_loop_llm.py` | 覆盖新供应商的推荐、请求线格式、可选档位边界及无签名 thinking 回放 |
+| `docs/AI测试与评估平台-PRD.md`、`docs/AI测试与评估平台-API.md` | 同步产品边界、验证门禁和接口口径 |
+
+官方依据：[Kimi Messages API](https://platform.kimi.ai/docs/api/messages)（Anthropic Messages、thinking 与 `output_config`）、[智谱 Claude API 兼容](https://docs.bigmodel.cn/cn/guide/develop/claude/introduction)（兼容端点与 Anthropic SDK 迁移）、[火山方舟 Anthropic Messages 实践](https://developer.volcengine.com/articles/7670478135158112306)（`thinking.type=disabled`）。最后一项为火山开发者社区案例，故模板说明明确标记为需真实探测，不把社区案例当作模型能力承诺。

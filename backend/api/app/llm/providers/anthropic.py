@@ -40,8 +40,10 @@ from .options import request_options
 
 
 def _allows_unsigned_thinking(request: LlmRequest | None) -> bool:
-    """DeepSeek/Qwen 的 Messages 兼容流允许空签名，不能套用 Claude 签名规则。"""
-    return request is not None and request.model.lower().startswith(("deepseek-", "qwen", "glm-", "kimi-", "minimax-"))
+    """兼容供应商的 Messages 流可省略签名，原生 Claude 仍严格要求签名。"""
+    return request is not None and request.provider in {
+        "deepseek", "qwen", "zhipu", "moonshot", "minimax", "volcengine",
+    }
 
 
 def _validate_block(block: dict, *, allow_unsigned_thinking: bool = False) -> None:
