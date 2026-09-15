@@ -44,6 +44,10 @@ class ModelConfig:
     # 要求 native），native = 默认（可流式/可装配，视装配闸门）。
     tool_call_mode: ToolCallMode = "native"
     full_url: bool = False  # 禁用 SDK 的版本及资源路径补全。
+    # 新协议档显式绑定受控模板；为空时仅兼容历史型号解析，不能用于新增模型。
+    reasoning_template_id: str | None = None
+    # 真实探测通过的档位。None 表示 legacy；空元组表示模板尚未验证，必须拒绝调用。
+    reasoning_allowed_efforts: tuple[str, ...] | None = None
 
 
 Message = Mapping[str, object]

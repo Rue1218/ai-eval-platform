@@ -10,8 +10,15 @@ from ..adapters import DEFAULT_TIMEOUT_S, call_protocol, fetch_remote_models
 from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
+from ..llm.contracts import ModelConfig
 from ..llm.loop_contracts import LlmRequestError
+from ..llm.providers.catalog import detect_provider
 from ..llm.providers.common import normalize_base_url
+from ..llm.providers.reasoning_templates import (
+    ensure_template_compatible,
+    get_template,
+    list_templates,
+)
 from ..models import AuditLog, ProtocolProfile, Setting, User
 from ..profile_env import (
     ProfileEnvSnapshot,
@@ -23,8 +30,17 @@ from ..profile_env import (
     restore_snapshot,
     write_profile_env,
 )
+from ..profile_probe import probe_reasoning_template
 from ..profile_reasoning import profile_reasoning
-from ..schemas import FetchModelsIn, ProfileCreate, ProfileOut, ProfileUpdate
+from ..schemas import (
+    FetchModelsIn,
+    ProfileCreate,
+    ProfileOut,
+    ProfileProbeCreate,
+    ProfileProbeOut,
+    ProfileProbeUpdate,
+    ProfileUpdate,
+)
 from ..security import decrypt_secret
 from ._common import client_ip
 
@@ -128,10 +144,28 @@ def _profile_out(profile: ProtocolProfile, connection: tuple[str, str, str | Non
     except Exception as exc:
         logger.warning("协议档响应环境读取失败 type=%s", type(exc).__name__)
         raise AppError(ErrorCode.INTERNAL, "协议档环境配置读取失败") from exc
+    reasoning = profile_reasoning(
+        profile.protocol,
+        base_url,
+        model,
+        getattr(profile, "max_output_tokens", 8192) or 8192,
+        full_url=env_values.full_url,
+        reasoning_template_id=getattr(profile, "reasoning_template_id", None),
+        reasoning_probe=getattr(profile, "reasoning_probe", None),
+    )
+    template_id = getattr(profile, "reasoning_template_id", None)
+    try:
+        template_name = get_template(template_id).name if template_id else None
+    except LlmRequestError:
+        template_name = None
+    probe = getattr(profile, "reasoning_probe", None)
+    probe_status = (
+        str(probe.get("status"))
+        if isinstance(probe, dict) and probe.get("status") in {"passed", "partial", "failed"}
+        else "unverified" if template_id else "legacy"
+    )
     return ProfileOut(
-        **profile_reasoning(profile.protocol, base_url, model,
-                            getattr(profile, "max_output_tokens", 8192) or 8192,
-                            full_url=env_values.full_url),
+        **reasoning,
         full_url=env_values.full_url,
         id=profile.id,
         name=profile.name,
@@ -149,6 +183,9 @@ def _profile_out(profile: ProtocolProfile, connection: tuple[str, str, str | Non
         has_reranker_api_key=bool(env_values.reranker_api_key),
         context_window=getattr(profile, "context_window", 200000) or 200000,
         max_output_tokens=getattr(profile, "max_output_tokens", 8192) or 8192,
+        reasoning_template_id=template_id,
+        reasoning_template_name=template_name,
+        reasoning_probe_status=probe_status,
         tool_call_mode=getattr(profile, "tool_call_mode", "native") or "native",
         created_at=profile.created_at,
         updated_at=profile.updated_at,
@@ -184,6 +221,67 @@ def list_profiles(
     }
 
 
+@router.get("/reasoning-templates")
+def get_reasoning_templates(
+    provider: str,
+    protocol: str,
+    user: User = Depends(get_current_user),
+):
+    """返回当前供应商和协议可选择的受控思考模板，不返回可执行请求体。"""
+    if protocol not in {"openai_chat", "anthropic_messages"}:
+        raise AppError(ErrorCode.VALIDATION, "协议类型不支持")
+    normalized_provider = provider.strip().lower()
+    if not normalized_provider or len(normalized_provider) > 64:
+        raise AppError(ErrorCode.VALIDATION, "供应商标识不合法")
+    items = [template.summary() for template in list_templates(normalized_provider, protocol)]
+    return {"items": items, "total": len(items)}
+
+
+def _probe_model_config(
+    body: ProfileProbeCreate,
+    *,
+    api_key: str | None,
+) -> dict[str, object]:
+    """用待保存配置执行真实模板探测；返回内容仅含安全状态与通过档位。"""
+    _validate_profile_url(body.base_url, body.protocol, body.full_url)
+    provider = detect_provider(str(body.base_url).strip(), body.model, body.protocol)
+    try:
+        template = ensure_template_compatible(body.reasoning_template_id, provider, body.protocol)
+    except LlmRequestError as exc:
+        raise AppError(ErrorCode.VALIDATION, "所选思考模板与供应商或协议不兼容") from exc
+    if not api_key or not api_key.strip():
+        raise AppError(ErrorCode.VALIDATION, "测试并添加需要当前模型的 API Key")
+    config = ModelConfig(
+        protocol=body.protocol,
+        base_url=str(body.base_url).strip(),
+        model=body.model,
+        api_key=api_key,
+        anthropic_version=body.anthropic_version,
+        max_tokens=body.max_output_tokens,
+        timeout_s=PROFILE_CHECK_TIMEOUT_S,
+        reasoning_enabled=template.default_effort != "off",
+        reasoning_effort=(template.default_effort if template.default_effort != "off" else "medium"),
+        tool_call_mode=body.tool_call_mode,
+        full_url=body.full_url,
+        reasoning_template_id=template.id,
+    )
+    try:
+        return probe_reasoning_template(config)
+    except LlmRequestError as exc:
+        raise AppError(ErrorCode.VALIDATION, "模型思考模板配置无效") from exc
+
+
+def _probe_message(probe: dict[str, object]) -> str:
+    """把非敏感探测结果转换为配置页可读提示，不泄露上游正文。"""
+    supported = probe.get("supported_efforts")
+    count = len(supported) if isinstance(supported, list) else 0
+    if probe.get("status") == "passed":
+        return f"模型模板验证通过，已确认 {count} 个思考档位"
+    if probe.get("status") == "partial":
+        return f"模型模板部分通过，已确认 {count} 个思考档位"
+    return "模型模板验证失败，未保存协议档"
+
+
 @router.get("/{profile_id}", response_model=ProfileOut)
 def get_profile(
     profile_id: str,
@@ -208,12 +306,13 @@ def get_profile(
     return _profile_out(profile)
 
 
-@router.post("", response_model=ProfileOut, status_code=201)
-def create_profile(
+def _create_profile(
     body: ProfileCreate,
     request: FastApiRequest,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
+    *,
+    reasoning_probe: dict[str, object] | None = None,
 ):
     """创建协议档并把 URL、模型 ID、API Key 写入受控环境文件。"""
     _validate_profile_url(body.base_url, body.protocol, body.full_url)
@@ -229,6 +328,9 @@ def create_profile(
         context_window=body.context_window,
         max_output_tokens=body.max_output_tokens,
         tool_call_mode=body.tool_call_mode,
+        reasoning_template_id=body.reasoning_template_id,
+        reasoning_probe=reasoning_probe,
+        reasoning_config_version=1,
         created_by=user.id,
     )
     db.add(profile)
@@ -269,6 +371,8 @@ def create_profile(
                     "has_api_key": bool(body.api_key),
                     "has_embedding_api_key": bool(body.embedding_api_key),
                     "has_reranker_api_key": bool(body.reranker_api_key),
+                    "reasoning_template_id": body.reasoning_template_id,
+                    "reasoning_probe_status": reasoning_probe.get("status") if reasoning_probe else None,
                 },
                 ip=client_ip(request),
             )
@@ -283,13 +387,43 @@ def create_profile(
     return _profile_out(profile)
 
 
-@router.put("/{profile_id}", response_model=ProfileOut)
-def update_profile(
+@router.post("", response_model=ProfileOut, status_code=201)
+def create_profile(
+    body: ProfileCreate,
+    request: FastApiRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """保留旧协议档创建入口；带模板的新模型必须改走真实探测接口。"""
+    if body.reasoning_template_id:
+        raise AppError(ErrorCode.VALIDATION, "使用思考模板的新模型请先测试并添加")
+    return _create_profile(body, request, db, user)
+
+
+@router.post("/probe-create", response_model=ProfileProbeOut)
+def probe_create_profile(
+    body: ProfileProbeCreate,
+    request: FastApiRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """逐档真实验证供应商模板；成功后才创建协议档与受控环境配置。"""
+    probe = _probe_model_config(body, api_key=body.api_key)
+    message = _probe_message(probe)
+    if probe.get("status") == "failed":
+        return ProfileProbeOut(ok=False, profile=None, probe=probe, message=message)
+    profile = _create_profile(body, request, db, user, reasoning_probe=probe)
+    return ProfileProbeOut(ok=True, profile=profile, probe=probe, message=message)
+
+
+def _update_profile(
     profile_id: str,
     body: ProfileUpdate,
     request: FastApiRequest,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
+    *,
+    reasoning_probe: dict[str, object] | None = None,
 ):
     """更新协议档并安全刷新环境文件中的 URL、模型 ID、API Key。"""
     profile = db.query(ProtocolProfile).filter(ProtocolProfile.id == profile_id).first()
@@ -299,6 +433,10 @@ def update_profile(
     api_key = values.pop("api_key", None)
     embedding_api_key = values.pop("embedding_api_key", None)
     reranker_api_key = values.pop("reranker_api_key", None)
+    changed_reasoning_inputs = bool(
+        {"protocol", "base_url", "full_url", "model", "max_output_tokens", "reasoning_template_id"}
+        & set(values)
+    )
     current_env = read_profile_env(profile.id)
     full_url = values.pop("full_url", None)
     full_url = current_env.full_url if full_url is None else full_url
@@ -336,6 +474,13 @@ def update_profile(
         if field == "base_url" and value is not None:
             value = str(value).strip()
         setattr(profile, field, value)
+    if reasoning_probe is not None:
+        profile.reasoning_probe = reasoning_probe
+        profile.reasoning_config_version = int(getattr(profile, "reasoning_config_version", 0) or 0) + 1
+    elif changed_reasoning_inputs:
+        # 兼容旧 API 编辑时不偷偷沿用已验证的结果；必须重新走测试并更新。
+        profile.reasoning_probe = None
+        profile.reasoning_config_version = int(getattr(profile, "reasoning_config_version", 0) or 0) + 1
     profile.encrypted_key = None
     try:
         snapshot = write_profile_env(
@@ -365,6 +510,8 @@ def update_profile(
                     "has_api_key": bool(next_api_key),
                     "has_embedding_api_key": bool(next_embedding_api_key),
                     "has_reranker_api_key": bool(next_reranker_api_key),
+                    "reasoning_template_id": getattr(profile, "reasoning_template_id", None),
+                    "reasoning_probe_status": reasoning_probe.get("status") if reasoning_probe else None,
                 },
                 ip=client_ip(request),
             )
@@ -377,6 +524,42 @@ def update_profile(
             restore_snapshot(snapshot)
         raise AppError(ErrorCode.INTERNAL, "协议档环境配置写入失败") from exc
     return _profile_out(profile)
+
+
+@router.put("/{profile_id}", response_model=ProfileOut)
+def update_profile(
+    profile_id: str,
+    body: ProfileUpdate,
+    request: FastApiRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """保留 legacy 编辑入口；模板模型的连接变更必须先重新验证。"""
+    if body.reasoning_template_id:
+        raise AppError(ErrorCode.VALIDATION, "使用思考模板的模型请先测试并更新")
+    return _update_profile(profile_id, body, request, db, user)
+
+
+@router.post("/{profile_id}/probe-update", response_model=ProfileProbeOut)
+def probe_update_profile(
+    profile_id: str,
+    body: ProfileProbeUpdate,
+    request: FastApiRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """用完整的拟更新配置验证模板，失败时不改动已保存的协议档。"""
+    profile = db.query(ProtocolProfile).filter(ProtocolProfile.id == profile_id).first()
+    if not profile:
+        raise AppError(ErrorCode.NOT_FOUND, "协议档不存在")
+    _base_url, _model, current_api_key = _profile_connection(profile, allow_global_alias=True)
+    api_key = body.api_key or current_api_key
+    probe = _probe_model_config(body, api_key=api_key)
+    message = _probe_message(probe)
+    if probe.get("status") == "failed":
+        return ProfileProbeOut(ok=False, profile=None, probe=probe, message=message)
+    updated = _update_profile(profile_id, body, request, db, user, reasoning_probe=probe)
+    return ProfileProbeOut(ok=True, profile=updated, probe=probe, message=message)
 
 
 @router.delete("/{profile_id}")

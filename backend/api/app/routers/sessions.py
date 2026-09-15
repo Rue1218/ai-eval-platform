@@ -16,6 +16,7 @@ from ..harness.context import compute_meter, is_window_eligible, recent_window
 from ..harness.context.meter import DEFAULT_MAX_TOKENS, DEFAULT_MCP_TOOLS_MAX
 from ..harness.memory import purge_session_checkpoints
 from ..harness.security.permission_tier import TIERS
+from ..llm.loop_contracts import LlmRequestError
 from ..models import (
     AgentEvent,
     AuditLog,
@@ -70,6 +71,7 @@ def _loop_ui(db: Session, user: User, request: Request, session=None) -> dict:
     from ..agent.loop_presentation import profile_capabilities
     from ..agent.loop_wiring import authorized_profile
     from ..llm.providers.catalog import detect_provider, reasoning_note
+    from ..llm.providers.reasoning_templates import get_template
     from .files import ALLOWED_SUFFIXES, MAX_FILE_BYTES
 
     if session is not None and session.engine_version != "agent_loop_v2":
@@ -77,15 +79,23 @@ def _loop_ui(db: Session, user: User, request: Request, session=None) -> dict:
 
     def profile_item(row: ProtocolProfile, snapshot, allowed: list[str], default: str | None) -> dict:
         """投影可提交的协议档，绝不把连接地址或凭据带到浏览器。"""
+        provider = detect_provider(snapshot.config.base_url, snapshot.config.model, snapshot.config.protocol)
+        try:
+            note = (
+                get_template(snapshot.config.reasoning_template_id).description
+                if snapshot.config.reasoning_template_id
+                else reasoning_note(provider, snapshot.config.model)
+            )
+        except LlmRequestError:
+            note = "思考模板不可用，请在协议档中重新测试。"
         return {
             "id": snapshot.profile_id,
             "name": row.name,
             "version": snapshot.profile_version,
             "model": snapshot.config.model,
             "protocol": snapshot.config.protocol,
-            "provider": detect_provider(snapshot.config.base_url, snapshot.config.model, snapshot.config.protocol),
-            "reasoning_note": reasoning_note(detect_provider(snapshot.config.base_url, snapshot.config.model,
-                                                             snapshot.config.protocol), snapshot.config.model),
+            "provider": provider,
+            "reasoning_note": note,
             "allowed_efforts": allowed,
             "default_effort": default,
         }

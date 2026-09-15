@@ -187,6 +187,8 @@ class LlmRequest:
     reasoning_enabled: bool | None = None
     provider_options: dict[str, Any] = field(default_factory=dict)
     compatibility_key: str | None = None
+    # 模板 ID 进入无密钥请求头，确保历史回放可以追溯供应商参数方言。
+    reasoning_template_id: str | None = None
 
     def __post_init__(self) -> None:
         """持久请求禁止任意供应商透传，凭据字段在生成 header 前即被拒绝。"""
@@ -204,6 +206,8 @@ class LlmRequest:
         }
         if not isinstance(self.provider_options, dict) or set(self.provider_options) - allowed:
             raise LlmRequestError("供应商选项含未登记字段", code="model_config")
+        if self.reasoning_template_id is not None and not isinstance(self.reasoning_template_id, str):
+            raise LlmRequestError("思考模板标识不合法", code="model_config")
         shapes = {
             "thinking": {"type", "budget_tokens"},
             "output_config": {"effort"},
@@ -250,6 +254,7 @@ class LlmRequest:
             "timeout_s",
             "reasoning_enabled",
             "compatibility_key",
+            "reasoning_template_id",
         ):
             value = getattr(self, name)
             if value is not None:

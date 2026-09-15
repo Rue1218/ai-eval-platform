@@ -9,7 +9,12 @@ import {
   type AuthUser,
   type Profile,
   type ProfileCreateIn,
+  type ProfileProbeCreateIn,
+  type ProfileProbeOut,
+  type ProfileProbeUpdateIn,
+  type ReasoningTemplate,
   type ProfileUpdateIn,
+  type ProtocolType,
   type RemoteModel,
   type Dataset,
   type DatasetRow,
@@ -324,6 +329,34 @@ export const api = {
         return mockStore.profiles[idx]
       }
       const { data } = await http.put(`/api/profiles/${id}`, payload)
+      return data
+    },
+    async listReasoningTemplates(provider: string, protocol: ProtocolType): Promise<ReasoningTemplate[]> {
+      if (getDataMode() === 'mock') {
+        return [{ id: 'no-reasoning-v1', name: '不启用思考', provider: '*', protocol: '*', mode: 'none', allowed_efforts: ['off'], default_effort: 'off', description: '模拟模式不发起模型请求。', version: 1 }]
+      }
+      const { data } = await http.get('/api/profiles/reasoning-templates', { params: { provider, protocol } })
+      return data.items || []
+    },
+    async probeCreate(payload: ProfileProbeCreateIn): Promise<ProfileProbeOut> {
+      if (getDataMode() === 'mock') {
+        const profile: Profile = { id: 'p-' + Date.now(), ...payload, created_at: new Date().toISOString() }
+        mockStore.profiles.unshift(profile)
+        const now = new Date().toISOString()
+        return { ok: true, profile: { ...profile, reasoning_probe_status: 'passed' }, message: '模拟模式已验证', probe: { status: 'passed', template_id: payload.reasoning_template_id, template_version: 1, supported_efforts: ['off'], attempts: [{ effort: 'off', ok: true }], tested_at: now } }
+      }
+      const { data } = await http.post('/api/profiles/probe-create', payload)
+      return data
+    },
+    async probeUpdate(id: string, payload: ProfileProbeUpdateIn): Promise<ProfileProbeOut> {
+      if (getDataMode() === 'mock') {
+        const idx = mockStore.profiles.findIndex((item) => item.id === id)
+        if (idx < 0) throw new Error('协议档不存在')
+        const profile = mockStore.profiles[idx] = { ...mockStore.profiles[idx], ...payload }
+        const now = new Date().toISOString()
+        return { ok: true, profile: { ...profile, reasoning_probe_status: 'passed' }, message: '模拟模式已验证', probe: { status: 'passed', template_id: payload.reasoning_template_id, template_version: 1, supported_efforts: ['off'], attempts: [{ effort: 'off', ok: true }], tested_at: now } }
+      }
+      const { data } = await http.post(`/api/profiles/${id}/probe-update`, payload)
       return data
     },
     async delete(id: string): Promise<void> {

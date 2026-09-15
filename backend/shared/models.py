@@ -357,6 +357,10 @@ class ProtocolProfile(Base):
     tool_call_mode = Column(
         String, nullable=False, default="native", server_default="native"
     )
+    # 受控思考模板与真实探测结果；结果不保存凭据、上游正文或请求体。
+    reasoning_template_id = Column(String, nullable=True)
+    reasoning_probe = Column(JSONB, nullable=True)
+    reasoning_config_version = Column(Integer, nullable=False, default=1, server_default="1")
     created_by = Column(String, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)

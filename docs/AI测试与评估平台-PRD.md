@@ -4,10 +4,10 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.21 |
-| 文档状态 | 冻结基线 + V1.21 登记（V1.19：废除「首次登录强制改密」；V1.20：协议档收敛；V1.21：受控媒体 MCP） |
+| 文档版本 | V1.22 |
+| 文档状态 | 冻结基线 + V1.22 登记（V1.19：废除「首次登录强制改密」；V1.20：协议档收敛；V1.21：受控媒体 MCP；V1.22：模型思考模板验证） |
 | 撰写日期 | 2026-08-17 |
-| 本轮修订 | 2026-09-12：V1.21 新增受控媒体 MCP：协议档 → MCP 与工具可保存生图/视频模型配置，API 固定经 Compose 私网 Streamable HTTP 连接媒体服务；`image.generate` 生成图片，`video.create`/`video.status` 提交并查询 HappyHorse 异步图生视频。密钥只写不回显，媒体任务持久化、归档和播放器不在本期范围。2026-09-09：V1.20 删除 OpenAI Responses 协议档及适配器；迁移同时删除该档环境凭据、历史密文和失效 Agent 默认引用。 |
+| 本轮修订 | 2026-09-15：V1.22 新增供应商思考模板与预注册真实验证：新模型选择模板后逐档发送最小真实请求，至少一个档位成功才保存；AgentLoop 只允许使用探测成功的档位，变更模型、端点、协议、输出上限或模板即使探测失效。旧协议档保留 legacy 型号解析。 |
 | 最近修订 | 2026-08-31：V1.17 增加危险 bash 的 LangGraph 人在回路：风险命令必须弹出确认卡，原发起成员确认后才进入 bwrap 沙箱；拒绝不执行。思考卡只呈现过程摘要，禁止显示会与工具真实结果冲突的原始推理。2026-08-30：V1.16 增加受控 Agent 技能文件与协议档专属补充提示词管理；技能正文遵循渐进式披露，核心安全提示词不可覆盖。2026-08-28：V1.15 统一基准目录治理、独立导入队列、staging 并发发布、成员同权双人复核与 M3 里程碑；冻结任务必须锁定数据集/黄金集版本。2026-08-28：V1.14 新增基准数据集目录、异步导入、staging 表格和发布门禁；下载/解析仅由 Worker 执行，未审核行不得评测。2026-08-24：补充 Agent 多附件交互：支持图片（PNG/JPG/JPEG/WEBP/GIF）、Markdown/TXT/HTML/JSON/YAML、PDF、Word（DOC/DOCX）、Excel（XLS/XLSX）、CSV/JSONL 与音频；输入区支持文件选择和拖拽上传，图片显示缩略图，PDF/文本支持预览，Office 文件显示类型卡片并可打开/下载。2026-08-23：补齐 Gemini OpenAI 兼容端点的思考摘要请求与增量归一化；增加 Agent 思考摘要开关与思考强度设置；将用户回显固定为 `user_message`，将完成信号固定为 `response.completed`，明确 `thought` 不承载助手正文；协议档增加可选 Embedding / Reranker 独立端点配置，三类 Key 均按 profile 写入受控环境文件 |
 | 适用版本 | 平台 V1.0 |
 | 技术栈 | Vue3 + Naive UI、Python FastAPI、PostgreSQL、WebSocket、Docker Compose、go-stress-testing |
@@ -38,6 +38,7 @@
 | V1.19 | 2026-09-09 | 废除首次登录强制改密；账号自助改密入口保留（右上角「修改密码」），密码强度规则不变 |
 | V1.20 | 2026-09-09 | 协议档收敛为 OpenAI Chat 与 Anthropic Messages，删除 OpenAI Responses 适配与已有档位凭据 |
 | V1.21 | 2026-09-12 | 协议档 → MCP 与工具新增受控媒体 MCP 配置；Qwen 生图和 HappyHorse 首帧图生视频接入 AgentLoop，视频仅异步提交与查询，不新增媒体任务表或结果归档 |
+| V1.22 | 2026-09-15 | 新模型用供应商与协议的受控思考模板逐档真实验证后才登记；验证结果限制 AgentLoop 可选思考强度，旧协议档保持 legacy 解析 |
 
 ---
 
@@ -323,7 +324,7 @@ queued → running → succeeded
 
 | 编号 | 功能 | 优先级 | 交付 | 说明 |
 | --- | --- | --- | --- | --- |
-| F-BM-01 | 协议档 CRUD | P0 | M1 | 见 6.2；主模型及可选 Embedding / Reranker 端点配置，三类 Key 只写不回显，审计变更 |
+| F-BM-01 | 协议档 CRUD 与模型验证 | P0 | M1 | 见 6.2；主模型及可选 Embedding / Reranker 端点配置，三类 Key 只写不回显，审计变更；新模型按供应商与协议模板真实验证思考能力后才登记 |
 | F-BM-02 | 统一调用 | P0 | M1 | 入 `messages`，出 `text,usage,raw,latency_ms` |
 | F-BM-03 | 数据集 | P0 | M2 | JSONL/CSV UTF-8；列 `question,reference,context?`；导入/编辑先写 `draft` 或 staging，审核发布才生成可评测版本；单集 ≤50MB、≤2 万行 |
 | F-BM-04 | 用例入集 | P0 | M2 | 5.4.2；待补全不评分 |

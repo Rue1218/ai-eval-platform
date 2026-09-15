@@ -4,6 +4,7 @@ import re
 
 from ..loop_contracts import LlmRequest, UnsupportedReasoningEffortError
 from .common import invalid, validate_request
+from .reasoning_templates import resolve_template_options
 
 
 def _qwen_budget_model(model: str) -> bool:
@@ -28,6 +29,14 @@ def resolve_options(request: LlmRequest, provider: str, protocol: str) -> dict:
     effort = effort or ("medium" if enabled else "off")
     if effort not in {"off", "low", "medium", "high", "xhigh", "max"}:
         raise UnsupportedReasoningEffortError(provider, effort)
+    if request.reasoning_template_id:
+        options = resolve_template_options(request, provider, protocol)
+        for key, value in request.provider_options.items():
+            if key in {"prompt_cache", "anthropic_version"} and protocol == "anthropic_messages":
+                continue
+            if key not in options or options[key] != value:
+                raise invalid("供应商选项不是当前协议解析结果")
+        return options
     model = request.model.lower().split("/")[-1]
     options: dict = {}
     ratio = {"low": 0.2, "medium": 0.4, "high": 0.6, "xhigh": 0.75, "max": 0.8}
@@ -163,7 +172,7 @@ def request_options(request: LlmRequest, provider: str, protocol: str) -> dict:
     if protocol == "anthropic_messages":
         if "thinking" in resolved:
             result["thinking"] = resolved["thinking"]
-            if (_qwen_budget_model(request.model.lower()) and "budget_tokens" in resolved["thinking"]
+            if (not request.reasoning_template_id and _qwen_budget_model(request.model.lower()) and "budget_tokens" in resolved["thinking"]
                     and not _qwen_budget_inside_max_tokens(request.model.lower())):
                 # 3.6 的 max_tokens 仅约束正文；保持平台总输出预留不被思考额外突破。
                 result["max_tokens"] -= resolved["thinking"]["budget_tokens"]

@@ -93,6 +93,19 @@
       <p class="field-hint">{{ form.full_url ? '原样使用此地址，不追加任何协议后缀。请手动填写模型标识。' : '自动补齐协议请求路径；已有的供应商版本路径会保留。' }}</p>
 
       <div class="field">
+        <label class="field-label">思考模板 <span class="req">*</span></label>
+        <n-select
+          v-model:value="form.reasoning_template_id"
+          :options="reasoningTemplateOptions"
+          :loading="loadingTemplates"
+          :disabled="!reasoningTemplates.length"
+          placeholder="请先选择供应商以加载模板"
+        />
+        <span class="small tertiary">{{ selectedTemplate?.description || '模板会在保存前以真实请求验证，未通过不会保存模型。' }}</span>
+        <span v-if="props.profile?.reasoning_probe_status" class="small tertiary">当前状态：{{ probeStatusText }}</span>
+      </div>
+
+      <div class="field">
         <div class="row-between">
           <label class="field-label">
             API Key
@@ -174,7 +187,7 @@
       <div style="display: flex; gap: 8px; justify-content: flex-end">
         <n-button @click="$emit('update:show', false)">取消</n-button>
         <n-button type="primary" :loading="saving" @click="handleSave">
-          保存协议档
+          {{ isEdit ? '测试并更新' : '测试并添加' }}
         </n-button>
       </div>
     </template>
@@ -211,10 +224,11 @@ import {
 import { api } from '../../api/http'
 import type {
   Profile,
-  ProfileCreateIn,
-  ProfileUpdateIn,
+  ProfileProbeCreateIn,
+  ProfileProbeUpdateIn,
   ProtocolType,
   ProfileUsage,
+  ReasoningTemplate,
   RemoteModel,
   RemoteModelParameter,
   ToolCallMode,
@@ -248,6 +262,8 @@ const selectedModelId = ref('')
 const selectedModelOwner = ref<string | undefined>()
 const modelParameterDefinitions = ref<RemoteModelParameter[]>([])
 const modelParameterValues = ref<Record<string, string>>({})
+const reasoningTemplates = ref<ReasoningTemplate[]>([])
+const loadingTemplates = ref(false)
 
 const isEdit = computed(() => !!props.profile?.id)
 
@@ -263,6 +279,7 @@ const form = ref<{
   context_window: number
   max_output_tokens: number
   tool_call_mode: ToolCallMode
+  reasoning_template_id: string
 }>({
   name: '',
   protocol: 'openai_chat',
@@ -275,6 +292,7 @@ const form = ref<{
   max_output_tokens: 8192,
   tool_call_mode: 'native',
   full_url: false,
+  reasoning_template_id: '',
 })
 
 const protocolOptions = [
@@ -283,8 +301,41 @@ const protocolOptions = [
 ]
 
 const VENDOR_MAP = Object.fromEntries(PROFILE_VENDORS.map(v => [v.key, v]))
+const TEMPLATE_PROVIDER: Record<string, string> = { gemini: 'google' }
+const VENDOR_BY_PROVIDER: Record<string, string> = { google: 'gemini' }
+const reasoningTemplateOptions = computed(() => reasoningTemplates.value.map(template => ({ label: template.name, value: template.id })))
+const selectedTemplate = computed(() => reasoningTemplates.value.find(template => template.id === form.value.reasoning_template_id) || null)
+const probeStatusText = computed(() => ({ legacy: '旧规则兼容', unverified: '待验证', passed: '已通过', partial: '部分通过', failed: '验证失败' }[props.profile?.reasoning_probe_status || 'legacy']))
 
-function handleSelectVendor(val: string | null) {
+function currentProvider() {
+  const vendor = selectedVendor.value || VENDOR_BY_PROVIDER[props.profile?.provider || ''] || props.profile?.provider || ''
+  return TEMPLATE_PROVIDER[vendor] || vendor
+}
+
+async function loadReasoningTemplates() {
+  const provider = currentProvider()
+  if (!provider) {
+    reasoningTemplates.value = []
+    form.value.reasoning_template_id = ''
+    return
+  }
+  loadingTemplates.value = true
+  try {
+    const templates = await api.profiles.listReasoningTemplates(provider, form.value.protocol)
+    reasoningTemplates.value = templates
+    if (!templates.some(template => template.id === form.value.reasoning_template_id)) {
+      form.value.reasoning_template_id = templates[0]?.id || ''
+    }
+  } catch (err: any) {
+    reasoningTemplates.value = []
+    form.value.reasoning_template_id = ''
+    message.error(err.message || '获取思考模板失败')
+  } finally {
+    loadingTemplates.value = false
+  }
+}
+
+async function handleSelectVendor(val: string | null) {
   if (!val || !VENDOR_MAP[val]) return
   clearModelParameters()
   const item = VENDOR_MAP[val]
@@ -296,6 +347,7 @@ function handleSelectVendor(val: string | null) {
   form.value.context_window = item.context_window || 200000
   form.value.model = item.model
   form.value.name = `${item.name} (${item.model})`
+  await loadReasoningTemplates()
   message.info(`已快速填充 ${item.name} 厂商端点与协议配置`)
 }
 
@@ -379,12 +431,16 @@ function onModelSelect(model: RemoteModel) {
 
 async function onBatchCreate(modelIds: string[]) {
   if (!modelIds.length) return
+  if (!form.value.reasoning_template_id) {
+    message.warning('请选择思考模板后再批量测试')
+    return
+  }
   saving.value = true
   try {
     let count = 0
     for (const mId of modelIds) {
       const vendorName = selectedVendor.value ? VENDOR_MAP[selectedVendor.value]?.name : '模型'
-      await api.profiles.create({
+      const result = await api.profiles.probeCreate({
         name: `${vendorName} ${mId}`,
         protocol: form.value.protocol,
         base_url: form.value.base_url.trim(),
@@ -396,7 +452,13 @@ async function onBatchCreate(modelIds: string[]) {
         context_window: form.value.context_window,
         max_output_tokens: form.value.max_output_tokens,
         tool_call_mode: form.value.tool_call_mode,
+        reasoning_template_id: form.value.reasoning_template_id,
       })
+      if (!result.ok) {
+        if (count) emit('success')
+        message.error(`${mId}：${result.message}`)
+        return
+      }
       count++
     }
     message.success(`已批量创建 ${count} 个模型协议档！`)
@@ -428,6 +490,7 @@ watch(
           max_output_tokens: profileVal.max_output_tokens || 8192,
           tool_call_mode: profileVal.tool_call_mode || 'native',
           full_url: profileVal.full_url ?? false,
+          reasoning_template_id: profileVal.reasoning_template_id || '',
         }
       } else if (props.initialData) {
         form.value = {
@@ -442,6 +505,7 @@ watch(
           max_output_tokens: 8192,
           tool_call_mode: 'native',
           full_url: props.initialData.full_url ?? false,
+          reasoning_template_id: '',
         }
       } else {
         form.value = {
@@ -456,11 +520,20 @@ watch(
           max_output_tokens: 8192,
           tool_call_mode: 'native',
           full_url: false,
+          reasoning_template_id: '',
         }
       }
+      void loadReasoningTemplates()
     }
   },
   { immediate: true },
+)
+
+watch(
+  () => form.value.protocol,
+  () => {
+    if (props.show) void loadReasoningTemplates()
+  },
 )
 
 async function handleSave() {
@@ -472,29 +545,15 @@ async function handleSave() {
     message.warning('请确保名称、模型标识名及 Base URL 已填写')
     return
   }
+  if (!form.value.reasoning_template_id) {
+    message.warning('请选择思考模板后再测试')
+    return
+  }
 
   saving.value = true
   try {
     if (isEdit.value && props.profile?.id) {
-      const payload: ProfileUpdateIn = {
-        name,
-        protocol: form.value.protocol,
-        base_url: baseUrl,
-        full_url: form.value.full_url,
-        model,
-        anthropic_version: form.value.anthropic_version?.trim() || undefined,
-        usages: form.value.usages,
-        context_window: form.value.context_window,
-        max_output_tokens: form.value.max_output_tokens,
-        tool_call_mode: form.value.tool_call_mode,
-      }
-      if (form.value.api_key.trim()) {
-        payload.api_key = form.value.api_key.trim()
-      }
-      await api.profiles.update(props.profile.id, payload)
-      message.success('协议档已更新')
-    } else {
-      const payload: ProfileCreateIn = {
+      const payload: ProfileProbeUpdateIn = {
         name,
         protocol: form.value.protocol,
         base_url: baseUrl,
@@ -506,9 +565,38 @@ async function handleSave() {
         context_window: form.value.context_window,
         max_output_tokens: form.value.max_output_tokens,
         tool_call_mode: form.value.tool_call_mode,
+        reasoning_template_id: form.value.reasoning_template_id,
       }
-      await api.profiles.create(payload)
-      message.success('协议档创建成功')
+      if (form.value.api_key.trim()) {
+        payload.api_key = form.value.api_key.trim()
+      }
+      const result = await api.profiles.probeUpdate(props.profile.id, payload)
+      if (!result.ok) {
+        message.error(result.message)
+        return
+      }
+      message.success(result.message)
+    } else {
+      const payload: ProfileProbeCreateIn = {
+        name,
+        protocol: form.value.protocol,
+        base_url: baseUrl,
+        full_url: form.value.full_url,
+        model,
+        api_key: form.value.api_key.trim(),
+        anthropic_version: form.value.anthropic_version?.trim() || undefined,
+        usages: form.value.usages,
+        context_window: form.value.context_window,
+        max_output_tokens: form.value.max_output_tokens,
+        tool_call_mode: form.value.tool_call_mode,
+        reasoning_template_id: form.value.reasoning_template_id,
+      }
+      const result = await api.profiles.probeCreate(payload)
+      if (!result.ok) {
+        message.error(result.message)
+        return
+      }
+      message.success(result.message)
     }
     emit('update:show', false)
     emit('success')

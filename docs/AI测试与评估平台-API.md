@@ -4,9 +4,9 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.99 |
+| 文档版本 | V2.0 |
 | WS v2 修订日期 | 2026-09-13（§4A，模型错误安全摘要） |
-| 对应 PRD | V1.21（功能唯一权威） |
+| 对应 PRD | V1.22（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.7.8（AgentLoop 单入口；JSON 仍以本文为准） |
 | 对应前端计划 | AgentLoop 前端计划 V0.5 |
@@ -17,6 +17,8 @@
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
 > V1.86（2026-09-09）：协议档页面 `POST /api/profiles/{id}/check` 的真实 ping 探活上限与通用协议调用统一为 30 秒，避免上游模型冷启动被误判为不可用；响应字段与错误码不变。
+
+> V2.0（2026-09-15）：协议档新模型改为“供应商模板 → 真实验证 → 保存”链路（§3.6）。`GET /api/profiles/reasoning-templates` 返回受控模板目录；`POST /api/profiles/probe-create` 与 `POST /api/profiles/{id}/probe-update` 分别验证后创建、验证后原子更新。探测结果只保存通过档位与安全错误分类，AgentLoop 仅放行这些档位；旧协议档继续使用 legacy 解析。
 
 > V1.89（2026-09-10）：Agent 专家（Expert）选择与附件工作区落地。`turn.submit.data` 新增可选 `agent_id`（专家 ID；缺省或未知值回落默认专家 `general`，服务端按回合解析，不新增会话列）。`GET /api/sessions/agent-ui`（草稿与会话态）响应增量 `agent`（当前选中专家 ID——已有会话按最近一轮 `user/message` 事实的 `extensions.expert_id` 记忆，无记录回落默认）与 `agents[]`（`id,name,description,badge,default` 投影，**不返回**专家提示词与工具视野）。专家为产品内置角色、随代码分发：`general`（默认，无附加提示词、平台全量工具白名单，行为与 V1.88 一致）与 `testcase-agent`（测试用例设计专家：专属提示词 + 工具视野收窄为 `read/write/edit/bash/ask_user_question`）。提示词按「核心 → 专家 → 协议档补充提示词」顺序注入 system 段（专家段 `cacheable=false`，读取时同样拒绝疑似密钥与接管性措辞）；专家声明工具与平台白名单**取交集**（只收窄不扩大，交集为空 fail-closed）；专家不改变权限、错误契约与任务状态机。`user/message` 事实 `extensions` 增量 `expert_id`（审计与跨端一致选择，不参与幂等摘要）。附件落地：`turn.submit` 的文本附件（`.md/.txt/.html/.json/.yaml/.yml/.csv/.jsonl`）随回合 staging 进**会话沙箱根**（与 read/bash 注入根同源），模型收到 `attachments/{file_id}-{name}` 相对路径清单并用 read 读取；行态失效/目录不可得时回退内联注入（与 V1.88 行为一致）。AGENTS.md V2.0 登记的「附件 staging 仍 legacy」在 agent_loop_v2 主链路随之解除。
 
@@ -674,6 +676,26 @@ Agent 收到 `user_message` 后会校验每个 `file_id` 属于当前发言人�
 ### 3.6 协议档
 
 响应 **永不** 含 Key，即使 PUT 刚写入。空字符串 Key = 不修改。
+
+#### 模型思考模板与预注册验证（V2.0）
+
+新模型不再由模型名正则推断思考能力。页面先按供应商和协议取得受控模板，用户选择与目标模型相符的模板后，后端用同一 URL、模型 ID、协议和 Key 对模板声明的档位逐一发起最小真实请求。验证至少有一个档位成功时才允许创建或更新；失败不会写入数据库或受控环境文件。验证每次使用不超过 2,048 个输出 token 的短请求，最多执行 5 次。
+
+`reasoning_template_id`、`reasoning_probe` 是协议档的非敏感配置元数据。`reasoning_probe` 只保存验证时间、模板版本、通过的档位和安全错误分类，禁止保存 API Key、上游正文、思考内容、请求头或请求体。模型、端点、协议、输出上限或模板改变时必须使验证结果失效；此时 AgentLoop 的 `allowed_efforts` 为空，不能用未验证的强度发起请求。旧行没有模板时继续走既有 legacy 解析，避免升级改变已存在模型的行为。
+
+#### `GET /api/profiles/reasoning-templates`
+
+参数：`provider`（供应商标识）和 `protocol`（`openai_chat` / `anthropic_messages`）。返回当前组合可选择的静态模板摘要：`id,name,provider,protocol,mode,allowed_efforts,default_effort,description,version`。模板是平台受控的参数适配器目录，不接收任意 JSON 请求覆盖，也不回传密钥。
+
+#### `POST /api/profiles/probe-create`
+
+请求体与 `POST /api/profiles` 相同，另含必填 `reasoning_template_id`。服务端先验证 URL 和模板兼容性，再执行真实验证；返回 `{ok,profile?,probe,message}`。`ok=true` 时 `profile` 是已写入的脱敏协议档；`ok=false` 时 `profile` 为 `null`，不会创建任何协议档或环境变量。前端的新建与批量添加入口必须调用本接口。
+
+#### `POST /api/profiles/{id}/probe-update`
+
+请求体与 `PUT /api/profiles/{id}` 相同，另含必填 `reasoning_template_id`。使用拟更新的连接配置验证；验证失败时原协议档及环境变量保持不变，成功后原子更新。前端编辑模型、端点、协议、输出上限或模板时必须调用本接口。
+
+原 `POST /api/profiles` / `PUT /api/profiles/{id}` 保留给 legacy 协议档兼容和非模型字段更新；若上述影响思考验证的字段改变，服务端清空已有验证结果，不能静默沿用旧能力。
 
 协议档的 `base_url`、`model` 和 `api_key` 由 API 后端脚本写入服务器受控环境文件，数据库只保留
 协议档 ID、名称、协议、用途和上下文窗口等元数据。每个协议档使用独立变量，变量名为：

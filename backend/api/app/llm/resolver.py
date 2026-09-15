@@ -80,6 +80,12 @@ def resolve_request(
                 ToolSpec(str(tool["name"]), str(tool.get("description", "")), deepcopy(schema))
             )
     provider = _provider(snapshot)
+    selected_effort = model.reasoning_effort if model.reasoning_enabled else "off"
+    if (
+        model.reasoning_allowed_efforts is not None
+        and selected_effort not in model.reasoning_allowed_efforts
+    ):
+        raise LlmRequestError("所选思考强度尚未通过模型验证", code="unsupported_reasoning_effort")
     options: dict[str, Any] = {}
     if model.protocol == "anthropic_messages":
         options["prompt_cache"] = snapshot.prompt_cache
@@ -103,6 +109,7 @@ def resolve_request(
         reasoning_enabled=model.reasoning_enabled,
         provider_options=options,
         compatibility_key=compatibility_key(provider, model.protocol, model.model),
+        reasoning_template_id=model.reasoning_template_id,
     )
     # 提前解析实际 wire 选项，使 header 可重建真正发送的参数。
     from .providers.options import resolve_options

@@ -152,10 +152,18 @@ def authorized_profile(db, data: dict) -> tuple[AuthorizedProfileSnapshot, int]:
     from app.profile_env import read_profile_env
     from app.profile_reasoning import profile_reasoning
 
+    reasoning = profile_reasoning(
+        profile.protocol,
+        base_url,
+        model,
+        profile.max_output_tokens,
+        full_url=read_profile_env(profile.id).full_url,
+        reasoning_template_id=getattr(profile, "reasoning_template_id", None),
+        reasoning_probe=getattr(profile, "reasoning_probe", None),
+    )
     effort = data.get("reasoning_effort")
     if effort is None:
-        effort = profile_reasoning(profile.protocol, base_url, model,
-                                   profile.max_output_tokens, full_url=read_profile_env(profile.id).full_url)["reasoning_effort"]
+        effort = reasoning["reasoning_effort"]
     if effort not in _REASONING_EFFORTS:
         raise AppError(ErrorCode.VALIDATION, "思考强度配置非法")
     try:
@@ -168,7 +176,10 @@ def authorized_profile(db, data: dict) -> tuple[AuthorizedProfileSnapshot, int]:
     config = ModelConfig(full_url=read_profile_env(profile.id).full_url, protocol=profile.protocol, base_url=base_url, model=model, api_key=key or "",
                          max_tokens=max_tokens, timeout_s=60,
                          anthropic_version=profile.anthropic_version,
-                         reasoning_enabled=effort != "off", reasoning_effort=effort if effort != "off" else "medium")
+                         reasoning_enabled=effort != "off", reasoning_effort=effort if effort != "off" else "medium",
+                         reasoning_template_id=getattr(profile, "reasoning_template_id", None),
+                         reasoning_allowed_efforts=(tuple(reasoning["allowed_efforts"])
+                                                    if getattr(profile, "reasoning_template_id", None) else None))
     updated_at = getattr(profile, "updated_at", None)
     version = updated_at.isoformat() if hasattr(updated_at, "isoformat") else ""
     snapshot = AuthorizedProfileSnapshot(config, profile_id=profile.id, profile_version=version,

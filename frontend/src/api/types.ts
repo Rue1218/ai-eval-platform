@@ -72,6 +72,9 @@ export interface Profile {
   provider?: string
   allowed_efforts?: ProfileEffort[]
   reasoning_note?: string
+  reasoning_template_id?: string | null
+  reasoning_template_name?: string | null
+  reasoning_probe_status?: 'legacy' | 'unverified' | 'passed' | 'partial' | 'failed'
   id: string
   name: string
   protocol: ProtocolType
@@ -114,6 +117,7 @@ export interface ProfileCreateIn {
   context_window?: number
   max_output_tokens?: number
   tool_call_mode?: ToolCallMode
+  reasoning_template_id?: string
 }
 
 export interface ProfileUpdateIn {
@@ -134,7 +138,44 @@ export interface ProfileUpdateIn {
   context_window?: number
   max_output_tokens?: number
   tool_call_mode?: ToolCallMode
+  reasoning_template_id?: string
 }
+
+/** 供应商与协议共同限定的受控思考模板摘要。 */
+export interface ReasoningTemplate {
+  id: string
+  name: string
+  provider: string
+  protocol: ProtocolType | '*'
+  mode: 'none' | 'switch' | 'effort' | 'budget' | 'fixed'
+  allowed_efforts: ProfileEffort[]
+  default_effort: ProfileEffort
+  description: string
+  version: number
+}
+
+/** 探测仅返回安全状态，不含 API Key、模型正文或供应商原始错误。 */
+export interface ProfileReasoningProbe {
+  status: 'passed' | 'partial' | 'failed'
+  template_id: string
+  template_version: number
+  supported_efforts: ProfileEffort[]
+  attempts: Array<{ effort: ProfileEffort; ok: boolean; error_code?: string }>
+  tested_at: string
+}
+
+export interface ProfileProbeOut {
+  ok: boolean
+  profile: Profile | null
+  probe: ProfileReasoningProbe
+  message: string
+}
+
+export interface ProfileProbeCreateIn extends ProfileCreateIn {
+  reasoning_template_id: string
+}
+
+export interface ProfileProbeUpdateIn extends ProfileProbeCreateIn {}
 
 export interface ProfileCheckOut {
   ok: boolean

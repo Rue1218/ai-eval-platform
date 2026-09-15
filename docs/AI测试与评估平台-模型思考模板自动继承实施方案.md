@@ -1,9 +1,9 @@
 # AI 测试与评估平台 — 模型思考模板自动继承实施方案
 
-> 版本：V1.0 ｜ 审查日期：2026-09-14
-> 状态：待实施设计；本次仅新增说明文档，不修改代码、数据库、接口契约或线上配置。
-> 产品决策：采用供应商、协议和模板配置驱动新增模型，暂不建设智能体自动注册、文档抓取和能力探测系统。
-> 权威边界：本稿中的字段、接口和数据结构均为拟议设计。开发前先回写 [PRD](./AI测试与评估平台-PRD.md) 和 [API 契约](./AI测试与评估平台-API.md)，不得将本文视为已生效接口。
+> 版本：V1.1 ｜ 审查日期：2026-09-15
+> 状态：实施中；产品与接口契约已先回写至 [PRD](./AI测试与评估平台-PRD.md) V1.22 与 [API 契约](./AI测试与评估平台-API.md) V2.0。
+> 产品决策：采用供应商、协议和模板配置驱动新增模型；用户点击“测试并添加”时，平台使用该模板向所选模型发送最小真实请求，验证通过才保存。暂不建设无人触发的文档抓取、智能体自动生成模板或后台批量探测。
+> 权威边界：接口路径、字段名与错误码以 API 契约为准；本稿说明实现边界、模板治理和后续演进。
 
 ## 1. 问题与目标
 
@@ -17,8 +17,9 @@
 
 1. 用户选择供应商、协议和已有连接，输入模型 ID 或从接口列表选择。
 2. 系统查找该连接已选定的默认思考模板，自动填充能力摘要。
-3. 用户保存，模型进入可选列表；Agent 输入栏读取继承后的能力。
-4. 若模型能力有差异，展开“高级设置”，选择其他模板或设置模型级覆盖。
+3. 用户点击“测试并添加”；平台按模板声明的可选档位发起真实请求，至少一个档位成功才保存协议档。
+4. 模型进入可选列表；Agent 输入栏只读取实际验证成功的能力。
+5. 若模型能力有差异，选择其他供应商模板后重新验证。
 
 首次配置连接时选择一次默认模板，后续新增模型直接继承。普通新增流程不展示请求 JSON，也不要求填写每个参数。
 
@@ -30,8 +31,8 @@
 模型 ID：deepseek-v4.1-flash
 思考配置：继承连接模板
 模板：该连接已选定的 DeepSeek 思考模板
-状态：使用模板 · 未验证
-[高级设置]                         [保存]
+状态：验证中 / 已验证 3 个档位 / 验证失败（未保存）
+[选择模板]                       [测试并添加]
 ```
 
 以上示例不声明该型号的具体参数已被百炼验证。模板须依据实际端点协议配置，不能仅凭模型品牌推断。
@@ -71,23 +72,15 @@
 
 ## 5. 最小数据设计
 
-为控制改动范围，第一期不重构现有协议档和密钥存储，也不建立完整“连接实体”。
+为控制改动范围，第一期不重构现有协议档和密钥存储，不建立完整“连接实体”或可编辑模板表。模板目录以受控静态注册表交付，后续再演进为版本化管理。
 
-### 5.1 模板版本
+### 5.1 受控模板注册表
 
-拟新增模板版本表：保存模板身份、递增版本、受控配置 JSON、来源、状态、创建人和时间。`template_id + version` 唯一；已发布版本不可原地修改，更新生成新版本。
+模板以代码中的只读注册表保存 ID、名称、版本、供应商、协议、能力模式、可选档位、默认值、适配器和说明。注册表覆盖当前配置页支持的 OpenAI、Anthropic、阿里云百炼、DeepSeek、智谱、Moonshot、MiniMax、NVIDIA、火山引擎和 Google 供应商；同一托管供应商可提供多个模型方言模板，平台不靠模型名猜测选择。
 
-### 5.2 连接默认绑定
+### 5.2 协议档绑定与探测结果
 
-拟新增默认模板绑定：供应商、协议、规范化端点、`full_url` 和模板 ID。连接键在后端生成，不包含凭据。只按已授权连接读取和使用，端点本身不投影到 Agent 上下文。
-
-同一端点需要不同默认模板的情况，可建立命名预设供用户选择；不要仅凭 URL 合并具有不同权限或用途的配置。复用默认模板不等于复用其他用户的凭据。
-
-### 5.3 模型绑定
-
-在协议档关联的配置中保存：`reasoning_config_mode`（legacy / inherit / override）、模板引用、可选固定版本、受控覆盖内容和配置修订号。首期覆盖只允许能力范围、默认值及适配器允许的映射参数，不允许任意 HTTP 字段。
-
-模型 ID、端点、协议、输出上限、模板或覆盖变化后，配置修订号更新，相关验证状态失效。任何改表均通过 Alembic autogenerate 生成迁移并人工审查。
+`protocol_profiles` 新增 `reasoning_template_id`、`reasoning_probe` 和 `reasoning_config_version`。探测结果只保存模板版本、验证时间、通过档位和安全错误分类；不保存 API Key、上游正文、请求体或推理内容。模型 ID、端点、协议、输出上限或模板变更后，探测结果失效。任何改表均通过 Alembic autogenerate 生成迁移并人工审查。
 
 ## 6. 继承、更新与回滚
 
@@ -125,16 +118,14 @@
 
 ## 8. 拟议接口与权限
 
-以下接口尚未生效，须在实施阶段先登记 API 契约：
+已生效接口如下：
 
-| 操作 | 拟议路径 | 约束 |
+| 操作 | 路径 | 约束 |
 | --- | --- | --- |
-| 获取可选模板 | `GET /api/reasoning-templates` | 返回适用于当前供应商、协议的摘要 |
-| 查询模板版本 | `GET /api/reasoning-templates/{id}/versions/{version}` | 不返回凭据 |
-| 新建模板版本 | `POST /api/reasoning-templates/{id}/versions` | 首期管理员维护，草稿静态校验 |
-| 发布模板版本 | `POST /api/reasoning-templates/{id}/publish` | 携带预期当前版本，冲突返回 CONCURRENCY |
-| 获取/保存连接默认模板 | `GET/PUT /api/reasoning-defaults/{preset_id}` | 预设权限与连接授权一致，不能跨权修改 |
-| 新增/修改模型 | 复用现有 `/api/profiles` 与 `/api/profiles/{id}` | 增量接收绑定、继承模式和受控覆盖 |
+| 获取可选模板 | `GET /api/profiles/reasoning-templates` | 按供应商与协议返回受控摘要 |
+| 测试并新增 | `POST /api/profiles/probe-create` | 验证成功后才写协议档与环境变量 |
+| 测试并更新 | `POST /api/profiles/{id}/probe-update` | 验证失败时保持原配置不变 |
+| legacy CRUD | `POST/PUT /api/profiles` | 保留兼容；影响模型能力的变更会使探测结果失效 |
 
 首次选择默认模板通过配置页面完成，不要求用户手工调用接口。模型接口和 `agent-ui` 增量返回有效模板版本、配置来源、能力模式和验证说明；保留 `allowed_efforts` 等兼容投影。
 
@@ -142,11 +133,11 @@
 
 ## 9. 自动化边界与验证状态
 
-“自动添加”在首期指自动套用已选模板、保存和刷新，不代表自动发现模型全部能力，也不代表无人授权地批量创建模型。
+“自动添加”在首期指由用户选择模型与模板后自动逐档验证、写入成功配置和刷新能力；不代表自动发现模型全部能力，也不代表无人授权地批量创建模型。
 
 - 模型列表接口只提供 ID 时，只用于选模型，不推断能力。
-- 保存执行本地静态检查，不自动发起付费探测。
-- 界面区分“使用模板、未验证”“参数接受”“人工确认”，并记录对应配置版本。
+- 用户触发的保存会执行有上限的真实探测，探测失败不落库；后台不会自行发起付费探测。
+- 界面展示验证中、已验证档位数或验证失败，并记录对应模板版本。
 - 连接测试成功不等于思考参数生效；HTTP 200 不足以证明上游没有忽略参数。
 - 可继续提供已有连接测试入口；自动抓取文档、智能体生成模板、批量付费探测属于后续方案，不是本期依赖。
 
@@ -179,18 +170,17 @@ P2 同时清点旧适配器调用方，未迁移的路径保持原有行为并�
 
 实施代码后执行项目要求的 API lint/测试、Worker 回归、前端 typecheck/build 和迁移验证。当前纯文档变更只执行内容、链接与 diff 检查。
 
-## 12. 后续拟修改文件与作用清单
+## 12. 实际修改文件与作用清单
 
 | 位置 | 拟议作用 |
 | --- | --- |
-| `backend/shared/models.py` 与 API migrations | 模板版本、绑定和修订信息，Alembic 迁移 |
-| `backend/api/app/schemas.py`、`routers/profiles.py` | 模型新增/修改的继承配置与公开投影 |
-| `backend/api/app/profile_reasoning.py` | 模板优先、legacy 回退的统一能力入口 |
-| `backend/api/app/llm/contracts.py`、`resolver.py`、`providers/options.py` | 快照、受控映射和 SDK 参数一致性 |
-| `backend/api/app/agent/loop_wiring.py`、`loop_presentation.py`、`routers/sessions.py` | Agent 授权请求与界面能力同源 |
-| `frontend/src/components/modals/ProfileModal.vue`、`frontend/src/views/AdminProfiles.vue` | 自动继承、模板选择与高级覆盖 |
-| `frontend/src/components/agent/loop/ThinkingControl.vue`、`AgentWorkspace.vue` | 能力模式展示及偏好版本化 |
-| 前后端 API 类型、模型配置和请求适配相关测试 | 契约、HTTP 请求体和交互回归 |
+| `backend/shared/models.py`、`backend/api/migrations/versions/941e807cfafa_协议档增加思考模板验证字段.py` | 保存模板 ID、非敏感探测结果、配置修订号及迁移 |
+| `backend/api/app/schemas.py`、`routers/profiles.py`、`profile_probe.py` | 模板目录、测试并添加、测试并更新、脱敏探测结果与审计 |
+| `backend/api/app/profile_reasoning.py` | 模板优先、探测结果限制与 legacy 回退的能力入口 |
+| `backend/api/app/llm/contracts.py`、`loop_contracts.py`、`resolver.py`、`providers/reasoning_templates.py`、`providers/options.py` | 受控模板注册表、请求快照、强度限制和 SDK 参数一致性 |
+| `backend/api/app/agent/loop_wiring.py`、`routers/sessions.py` | Agent 授权与能力说明只使用探测已通过的档位 |
+| `frontend/src/api/http.ts`、`frontend/src/api/types.ts`、`frontend/src/components/modals/ProfileModal.vue` | 模板选择、测试并添加/更新、批量逐个验证与结果展示 |
+| `backend/api/tests/test_reasoning_templates.py` | 新百炼 DeepSeek 型号、所有供应商模板、探测限制与请求参数回归 |
 
 ## 13. 参考依据与限制
 
@@ -200,8 +190,9 @@ P2 同时清点旧适配器调用方，未迁移的路径保持原有行为并�
 
 以上页面在前期排查中于 2026-09-14 查阅，供应商可能继续更新。截图已确认新型号在用户百炼订阅中出现，但实际连接与各档位未做真实请求验证。模板发布时需再次核对适用端点，不能把品牌、模型列表或截图当成全部参数已验证的证据。
 
-## 14. 本次实际修改文件与作用清单
+## 14. 本次验证记录
 
-- 本文：新增 V1.0 待实施方案，明确自动继承、例外覆盖、版本冻结及分期验收。
-- `docs/README.md`：增加方案入口，更新文档计数和索引版本。
-- 不修改应用代码、运行时提示词、数据库迁移、现行 PRD/API 或线上模型配置。
+- API：`ruff check app ../shared`、`pytest --basetemp .test-tmp-full -p no:cacheprovider` 全量通过；模板相关 117 项回归通过。
+- Worker：`PYTHONPATH=.:.. pytest -q`，50 passed。
+- 前端：`npm run typecheck` 与 `npm run build` 通过。
+- 数据库：Alembic 已从 `f3a91b2c7d40` 升级至 `941e807cfafa`，迁移仅新增协议档的三个模板验证字段。

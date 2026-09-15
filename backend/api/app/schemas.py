@@ -100,6 +100,7 @@ class ProfileCreate(ApiModel):
     tool_call_mode: Literal["native", "legacy"] = Field(
         default="native", description="Agent 工具调用模式：原生 ToolCall（默认）或受控 JSON 回退"
     )
+    reasoning_template_id: str | None = Field(default=None, min_length=1, max_length=128)
 
     @model_validator(mode="before")
     @classmethod
@@ -142,6 +143,7 @@ class ProfileUpdate(ApiModel):
         default=None, ge=256, le=131072, description="Agent 单回合模型输出上限 (max_tokens)"
     )
     tool_call_mode: Literal["native", "legacy"] | None = None
+    reasoning_template_id: str | None = Field(default=None, min_length=1, max_length=128)
 
     @model_validator(mode="before")
     @classmethod
@@ -186,9 +188,31 @@ class ProfileOut(OrmOut):
     reasoning_effort: str = "off"
     allowed_efforts: list[str] = Field(default_factory=list)
     reasoning_note: str = ""
+    reasoning_template_id: str | None = None
+    reasoning_template_name: str | None = None
+    reasoning_probe_status: Literal["legacy", "unverified", "passed", "partial", "failed"] = "legacy"
     tool_call_mode: Literal["native", "legacy"] = "native"
     created_at: Any
     updated_at: Any
+
+
+class ProfileProbeCreate(ProfileCreate):
+    """使用受控模板真实验证并创建协议档的完整请求。"""
+
+    reasoning_template_id: str = Field(min_length=1, max_length=128)
+
+
+class ProfileProbeUpdate(ProfileProbeCreate):
+    """使用拟更新的完整连接配置验证后原子更新协议档。"""
+
+
+class ProfileProbeOut(ApiModel):
+    """模型模板探测结果；任何字段都不得含上游响应正文或凭据。"""
+
+    ok: bool
+    profile: ProfileOut | None = None
+    probe: dict[str, Any]
+    message: str
 
 
 class FetchModelsIn(ApiModel):
