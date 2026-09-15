@@ -18,6 +18,8 @@
 
 > V1.86（2026-09-09）：协议档页面 `POST /api/profiles/{id}/check` 的真实 ping 探活上限与通用协议调用统一为 30 秒，避免上游模型冷启动被误判为不可用；响应字段与错误码不变。
 
+> V2.1（2026-09-15）：思考模板候选和保存校验新增模型 ID 维度，百炼 DeepSeek 与千问等同端点不同方言不会混用。开启思考的探测必须取得 reasoning 增量或推理用量证据，普通文本完成不再视为通过；各档短请求并发执行，整次探测受单次 30 秒调用超时约束。
+
 > V2.0（2026-09-15）：协议档新模型改为“供应商模板 → 真实验证 → 保存”链路（§3.6）。`GET /api/profiles/reasoning-templates` 返回受控模板目录；`POST /api/profiles/probe-create` 与 `POST /api/profiles/{id}/probe-update` 分别验证后创建、验证后原子更新。探测结果只保存通过档位与安全错误分类，AgentLoop 仅放行这些档位；旧协议档继续使用 legacy 解析。
 
 > V1.89（2026-09-10）：Agent 专家（Expert）选择与附件工作区落地。`turn.submit.data` 新增可选 `agent_id`（专家 ID；缺省或未知值回落默认专家 `general`，服务端按回合解析，不新增会话列）。`GET /api/sessions/agent-ui`（草稿与会话态）响应增量 `agent`（当前选中专家 ID——已有会话按最近一轮 `user/message` 事实的 `extensions.expert_id` 记忆，无记录回落默认）与 `agents[]`（`id,name,description,badge,default` 投影，**不返回**专家提示词与工具视野）。专家为产品内置角色、随代码分发：`general`（默认，无附加提示词、平台全量工具白名单，行为与 V1.88 一致）与 `testcase-agent`（测试用例设计专家：专属提示词 + 工具视野收窄为 `read/write/edit/bash/ask_user_question`）。提示词按「核心 → 专家 → 协议档补充提示词」顺序注入 system 段（专家段 `cacheable=false`，读取时同样拒绝疑似密钥与接管性措辞）；专家声明工具与平台白名单**取交集**（只收窄不扩大，交集为空 fail-closed）；专家不改变权限、错误契约与任务状态机。`user/message` 事实 `extensions` 增量 `expert_id`（审计与跨端一致选择，不参与幂等摘要）。附件落地：`turn.submit` 的文本附件（`.md/.txt/.html/.json/.yaml/.yml/.csv/.jsonl`）随回合 staging 进**会话沙箱根**（与 read/bash 注入根同源），模型收到 `attachments/{file_id}-{name}` 相对路径清单并用 read 读取；行态失效/目录不可得时回退内联注入（与 V1.88 行为一致）。AGENTS.md V2.0 登记的「附件 staging 仍 legacy」在 agent_loop_v2 主链路随之解除。
@@ -679,13 +681,15 @@ Agent 收到 `user_message` 后会校验每个 `file_id` 属于当前发言人�
 
 #### 模型思考模板与预注册验证（V2.0）
 
-新模型不再由模型名正则推断思考能力。页面先按供应商和协议取得受控模板，用户选择与目标模型相符的模板后，后端用同一 URL、模型 ID、协议和 Key 对模板声明的档位逐一发起最小真实请求。验证至少有一个档位成功时才允许创建或更新；失败不会写入数据库或受控环境文件。验证每次使用不超过 2,048 个输出 token 的短请求，最多执行 5 次。
+新模型不再由模型名正则推断思考能力。页面按供应商、协议和模型 ID 取得受控模板；后端也用这三个维度复验，禁止把同端点但不同模型族的方言混用。后端用同一 URL、模型 ID、协议和 Key 对模板声明的档位并发发起最小真实请求。验证每次使用不超过 2,048 个输出 token，最多执行 5 次；整次验证受单次模型调用 30 秒超时约束。
+
+关闭思考仅要求请求正常完成。开启思考除正常完成外，必须出现 reasoning 增量或正数推理用量；否则该档位以 `NO_REASONING_EVIDENCE` 失败，不能仅因兼容网关返回普通文本就开放思考强度。探测元数据只保存证据类别（`reasoning_delta`、`reasoning_usage` 或 `request_completed`），不保存任何思考正文或原始上游响应。
 
 `reasoning_template_id`、`reasoning_probe` 是协议档的非敏感配置元数据。`reasoning_probe` 只保存验证时间、模板版本、通过的档位和安全错误分类，禁止保存 API Key、上游正文、思考内容、请求头或请求体。模型、端点、协议、输出上限或模板改变时必须使验证结果失效；此时 AgentLoop 的 `allowed_efforts` 为空，不能用未验证的强度发起请求。旧行没有模板时继续走既有 legacy 解析，避免升级改变已存在模型的行为。
 
 #### `GET /api/profiles/reasoning-templates`
 
-参数：`provider`（供应商标识）和 `protocol`（`openai_chat` / `anthropic_messages`）。返回当前组合可选择的静态模板摘要：`id,name,provider,protocol,mode,allowed_efforts,default_effort,description,version`。模板是平台受控的参数适配器目录，不接收任意 JSON 请求覆盖，也不回传密钥。
+参数：`provider`（供应商标识）、`protocol`（`openai_chat` / `anthropic_messages`）和必填 `model`（目标模型 ID）。返回当前组合可选择的静态模板摘要：`id,name,provider,protocol,mode,allowed_efforts,default_effort,description,version`。模板是平台受控的参数适配器目录，不接收任意 JSON 请求覆盖，也不回传密钥。
 
 #### `POST /api/profiles/probe-create`
 

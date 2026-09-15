@@ -160,7 +160,7 @@ export interface ProfileReasoningProbe {
   template_id: string
   template_version: number
   supported_efforts: ProfileEffort[]
-  attempts: Array<{ effort: ProfileEffort; ok: boolean; error_code?: string }>
+  attempts: Array<{ effort: ProfileEffort; ok: boolean; evidence?: 'reasoning_delta' | 'reasoning_usage' | 'request_completed'; error_code?: string }>
   tested_at: string
 }
 

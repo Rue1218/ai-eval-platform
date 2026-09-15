@@ -306,6 +306,8 @@ const VENDOR_BY_PROVIDER: Record<string, string> = { google: 'gemini' }
 const reasoningTemplateOptions = computed(() => reasoningTemplates.value.map(template => ({ label: template.name, value: template.id })))
 const selectedTemplate = computed(() => reasoningTemplates.value.find(template => template.id === form.value.reasoning_template_id) || null)
 const probeStatusText = computed(() => ({ legacy: '旧规则兼容', unverified: '待验证', passed: '已通过', partial: '部分通过', failed: '验证失败' }[props.profile?.reasoning_probe_status || 'legacy']))
+// 连续输入、切换供应商和协议会并发拉取；只有最后一次响应有资格改写模板选择。
+let templateLoadRevision = 0
 
 function currentProvider() {
   const vendor = selectedVendor.value || VENDOR_BY_PROVIDER[props.profile?.provider || ''] || props.profile?.provider || ''
@@ -313,25 +315,30 @@ function currentProvider() {
 }
 
 async function loadReasoningTemplates() {
+  const revision = ++templateLoadRevision
   const provider = currentProvider()
-  if (!provider) {
+  const model = form.value.model.trim()
+  if (!provider || !model) {
+    loadingTemplates.value = false
     reasoningTemplates.value = []
     form.value.reasoning_template_id = ''
     return
   }
   loadingTemplates.value = true
   try {
-    const templates = await api.profiles.listReasoningTemplates(provider, form.value.protocol)
+    const templates = await api.profiles.listReasoningTemplates(provider, form.value.protocol, model)
+    if (revision !== templateLoadRevision) return
     reasoningTemplates.value = templates
     if (!templates.some(template => template.id === form.value.reasoning_template_id)) {
       form.value.reasoning_template_id = templates[0]?.id || ''
     }
   } catch (err: any) {
+    if (revision !== templateLoadRevision) return
     reasoningTemplates.value = []
     form.value.reasoning_template_id = ''
     message.error(err.message || '获取思考模板失败')
   } finally {
-    loadingTemplates.value = false
+    if (revision === templateLoadRevision) loadingTemplates.value = false
   }
 }
 
@@ -426,6 +433,7 @@ function onModelSelect(model: RemoteModel) {
     const vendorName = selectedVendor.value ? VENDOR_MAP[selectedVendor.value]?.name : ''
     form.value.name = vendorName ? `${vendorName} (${model.id})` : model.id
   }
+  void loadReasoningTemplates()
   message.info(`已选用模型: ${model.id}`)
 }
 
@@ -530,7 +538,7 @@ watch(
 )
 
 watch(
-  () => form.value.protocol,
+  [() => form.value.protocol, () => form.value.model],
   () => {
     if (props.show) void loadReasoningTemplates()
   },

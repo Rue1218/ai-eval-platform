@@ -2,7 +2,7 @@
 
 import logging
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from fastapi import Request as FastApiRequest
 from sqlalchemy.orm import Session
 
@@ -225,15 +225,16 @@ def list_profiles(
 def get_reasoning_templates(
     provider: str,
     protocol: str,
+    model: str = Query(min_length=1, max_length=256),
     user: User = Depends(get_current_user),
 ):
-    """返回当前供应商和协议可选择的受控思考模板，不返回可执行请求体。"""
+    """返回当前供应商、协议和模型可选择的受控思考模板，不返回可执行请求体。"""
     if protocol not in {"openai_chat", "anthropic_messages"}:
         raise AppError(ErrorCode.VALIDATION, "协议类型不支持")
     normalized_provider = provider.strip().lower()
     if not normalized_provider or len(normalized_provider) > 64:
         raise AppError(ErrorCode.VALIDATION, "供应商标识不合法")
-    items = [template.summary() for template in list_templates(normalized_provider, protocol)]
+    items = [template.summary() for template in list_templates(normalized_provider, protocol, model)]
     return {"items": items, "total": len(items)}
 
 
@@ -246,7 +247,9 @@ def _probe_model_config(
     _validate_profile_url(body.base_url, body.protocol, body.full_url)
     provider = detect_provider(str(body.base_url).strip(), body.model, body.protocol)
     try:
-        template = ensure_template_compatible(body.reasoning_template_id, provider, body.protocol)
+        template = ensure_template_compatible(
+            body.reasoning_template_id, provider, body.protocol, body.model,
+        )
     except LlmRequestError as exc:
         raise AppError(ErrorCode.VALIDATION, "所选思考模板与供应商或协议不兼容") from exc
     if not api_key or not api_key.strip():

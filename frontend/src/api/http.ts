@@ -331,11 +331,11 @@ export const api = {
       const { data } = await http.put(`/api/profiles/${id}`, payload)
       return data
     },
-    async listReasoningTemplates(provider: string, protocol: ProtocolType): Promise<ReasoningTemplate[]> {
+    async listReasoningTemplates(provider: string, protocol: ProtocolType, model: string): Promise<ReasoningTemplate[]> {
       if (getDataMode() === 'mock') {
         return [{ id: 'no-reasoning-v1', name: '不启用思考', provider: '*', protocol: '*', mode: 'none', allowed_efforts: ['off'], default_effort: 'off', description: '模拟模式不发起模型请求。', version: 1 }]
       }
-      const { data } = await http.get('/api/profiles/reasoning-templates', { params: { provider, protocol } })
+      const { data } = await http.get('/api/profiles/reasoning-templates', { params: { provider, protocol, model } })
       return data.items || []
     },
     async probeCreate(payload: ProfileProbeCreateIn): Promise<ProfileProbeOut> {

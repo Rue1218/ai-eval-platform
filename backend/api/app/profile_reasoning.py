@@ -38,7 +38,9 @@ def profile_reasoning(
     template = None
     if reasoning_template_id:
         try:
-            template = ensure_template_compatible(reasoning_template_id, provider, protocol)
+            template = ensure_template_compatible(
+                reasoning_template_id, provider, protocol, model,
+            )
         except LlmRequestError:
             return {
                 "provider": provider,
