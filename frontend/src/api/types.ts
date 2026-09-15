@@ -178,7 +178,8 @@ export interface ProfileProbeCreateIn extends ProfileCreateIn {
   reasoning_template_id: string
 }
 
-export interface ProfileProbeUpdateIn extends ProfileProbeCreateIn {}
+/** 验证后更新与创建共享完整字段契约，避免空接口触发 ESLint 错误。 */
+export type ProfileProbeUpdateIn = ProfileProbeCreateIn
 
 export interface ProfileCheckOut {
   ok: boolean
