@@ -8,13 +8,14 @@ from copy import deepcopy
 from typing import TYPE_CHECKING, Any
 
 from app.agent.loop import GraphRunContext, TurnDependencies
+from app.harness.contracts.fact_log import RuntimeLog, execution_key, log_run_id
 from app.harness.execution.approval import ApprovalGate, broker
 from app.harness.memory.agent_messages import derive_messages
 from app.harness.memory.agent_recovery import RecoveryEvent, recovery_events
 from app.llm.loop_contracts import ReasoningEffort, header_fingerprint
 
 if TYPE_CHECKING:
-    from app.harness.memory.agent_events import SessionLog
+    from app.agent.collaboration_scope import TurnChildren
 
 RuntimeSubscriber = Callable[[dict[str, Any]], None]
 
@@ -31,7 +32,7 @@ class AgentRuntime:
     """持有单会话的活动回合、观察者及确定性结算。"""
 
     def __init__(
-        self, log: SessionLog, graph: Any, *, approval_broker: Any = None,
+        self, log: RuntimeLog, graph: Any, *, approval_broker: Any = None,
         writer_id: str | None = None, actor_id: str | None = None,
     ):
         """绑定已授权的日志及固定模型图；writer 租约由主 service 管理。"""
@@ -39,6 +40,8 @@ class AgentRuntime:
         self.actor_id = actor_id
         self._broker = approval_broker if approval_broker is not None else broker
         self.log = log
+        self._execution_key = execution_key(log)
+        self._children: TurnChildren | None = None
         self._graph = graph
         self._lock = asyncio.Lock()
         self._subscribers: set[RuntimeSubscriber] = set()
@@ -58,6 +61,11 @@ class AgentRuntime:
     def running(self) -> bool:
         """判断当前是否仍持有活动图任务。"""
         return self._task is not None and not self._task.done()
+
+    @property
+    def execution_id(self) -> str:
+        """返回图和审批的运行域；工具授权仍使用真实 session_id。"""
+        return self._execution_key
 
     @property
     def active_turn(self) -> int | None:
@@ -83,9 +91,9 @@ class AgentRuntime:
             return False
         self._approval_gate = gate
         if previous is not None:
-            self._broker.unregister(self.session_id, previous)
+            self._broker.unregister(self.execution_id, previous)
         if gate is not None:
-            self._broker.register(self.session_id, gate)
+            self._broker.register(self.execution_id, gate)
         return True
 
     def clear_approval_gate(self, gate: ApprovalGate) -> bool:
@@ -104,6 +112,8 @@ class AgentRuntime:
         # Graph 节点只携带业务字段；Runtime 在这里补上 Session 身份，使同一事件
         # 可以被 WebSocket、测试或其他订阅者使用，而无需了解图的运行上下文。
         payload = {"session_id": self.session_id, **payload}
+        if (run_id := log_run_id(self.log)) is not None:
+            payload = {**payload, "run_id": run_id}
         for subscriber in tuple(self._subscribers):
             try:
                 subscriber(payload)
@@ -143,6 +153,10 @@ class AgentRuntime:
         async with self._lock:
             if self._closed:
                 raise RuntimeClosedError(self.session_id)
+            if self._task is not None and self._task.cancelled():
+                # 首次调度前取消的图已经 done，但子任务可能仍在运行；先复用同一
+                # 取消结算入口，避免提前发布 interrupted 或覆盖真实 cancelled 原因。
+                return await self._settle_cancelled_task_locked(self._task)
             if self.running:
                 return []
             return self._append_recovery("interrupted")
@@ -163,7 +177,7 @@ class AgentRuntime:
                 raise RuntimeClosedError(self.session_id)
             if self._task is not None and self._task.done():
                 # 首次调度前被取消的任务不会进入 _drive，需在持锁状态补齐结算。
-                self._settle_cancelled_task_locked(self._task)
+                await self._settle_cancelled_task_locked(self._task)
             if self.running:
                 raise TurnAlreadyRunningError(self.session_id)
             # 新 Turn 前先结算此前未闭合的 Turn；当前实现的 recover 是收尾，不是
@@ -228,6 +242,7 @@ class AgentRuntime:
                     "turn": turn,
                 }
             )
+            self._children = dependencies.children if dependencies is not None else None
             task = asyncio.create_task(
                 self._drive(
                     turn,
@@ -238,7 +253,7 @@ class AgentRuntime:
                     reasoning_effort,
                     dependencies,
                 ),
-                name=f"agent-turn-{self.session_id}",
+                name=f"agent-turn-{self.execution_id}",
             )
             self._task = task
             self._active_turn = turn
@@ -314,7 +329,7 @@ class AgentRuntime:
                 pass
             await self._settle_cancelled_task(task)
         self.set_approval_gate(None)
-        self._broker.clear_session(self.session_id)
+        self._broker.clear_session(self.execution_id)
         self._subscribers.clear()
 
     def _schedule_cancelled_settlement(self, task: asyncio.Task[None]) -> None:
@@ -329,17 +344,20 @@ class AgentRuntime:
     async def _settle_cancelled_task(self, task: asyncio.Task[None]) -> None:
         """持锁补齐首次调度前取消的任务边界。"""
         async with self._lock:
-            self._settle_cancelled_task_locked(task)
+            await self._settle_cancelled_task_locked(task)
 
-    def _settle_cancelled_task_locked(self, task: asyncio.Task[None]) -> None:
-        """在持锁状态结算尚未启动的取消任务。"""
+    async def _settle_cancelled_task_locked(self, task: asyncio.Task[None]) -> list[dict[str, Any]]:
+        """在持锁状态结算尚未启动的取消任务，并返回本次提交的事实。"""
 
         if self._task is not task or not task.cancelled():
-            return
-        self._append_recovery("cancelled")
+            return []
+        if self._children is not None:
+            await self._children.close(propagate_cancel=False)
+        committed = self._append_recovery("cancelled")
         self._task = None
         self._active_turn = None
         self._cancelling = False
+        return committed
 
     async def _drive(
         self,
@@ -360,7 +378,7 @@ class AgentRuntime:
         config = {
             "recursion_limit": getattr(self._graph, "loop_recursion_limit", 25),
             "configurable": {
-                "thread_id": self.session_id,
+                "thread_id": self.execution_id,
                 "checkpoint_ns": "agent-loop-v2",
                 "run_context": context,
                 "reasoning_effort": reasoning_effort,
@@ -397,12 +415,16 @@ class AgentRuntime:
                 if isinstance(seq, int):
                     last_published_seq = max(last_published_seq, seq)
         except asyncio.CancelledError:
+            if self._children is not None:
+                await self._children.close(propagate_cancel=False)
             # 图流中断前可能已写入助手消息或工具事实。先补发这些记录，再统一追加
             # 取消收尾，避免 UI 已经收到取消却漏掉 assistant_end 或 tool_result。
             self._publish_unpublished_events(turn=turn, after_seq=last_published_seq)
             self._append_recovery("cancelled")
             raise
         except Exception:
+            if self._children is not None:
+                await self._children.close(propagate_cancel=False)
             # 图异常不能让 Session 停在无终态状态：记录 runtime/error，并将确定的
             # 已落盘事件补发给订阅者后再交由 recovery 写收尾记录。
             failed = self.log.append(
@@ -617,21 +639,22 @@ class AgentRuntime:
 
 
 class RuntimeRegistry:
-    """应用级运行时缓存，仅按持久会话标识复用运行时。"""
+    """按授权会话与可选 run_id 缓存，专家不能命中主运行或其他专家。"""
 
     def __init__(self, graph: Any):
         """初始化当前对象的独立状态。"""
         self._graph = graph
-        self._runtimes: dict[str, AgentRuntime] = {}
+        self._runtimes: dict[tuple[str, str | None], AgentRuntime] = {}
         self._lock = asyncio.Lock()
 
-    async def get(self, log: SessionLog) -> AgentRuntime:
-        """按会话标识取得唯一运行时，不改变持久写者归属。"""
+    async def get(self, log: RuntimeLog) -> AgentRuntime:
+        """按独立事实域取得运行时，不改变持久写者归属。"""
         async with self._lock:
-            runtime = self._runtimes.get(log.session_id)
+            key = (log.session_id, log_run_id(log))
+            runtime = self._runtimes.get(key)
             if runtime is None:
                 runtime = AgentRuntime(log, self._graph)
-                self._runtimes[log.session_id] = runtime
+                self._runtimes[key] = runtime
             return runtime
 
     async def close(self) -> None:

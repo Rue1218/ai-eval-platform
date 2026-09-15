@@ -8,6 +8,8 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
+from app.harness.contracts.fact_log import log_run_id
+
 ApprovalGate = Callable[[dict[str, Any]], Awaitable[str]]
 DECISIONS = ("allow", "deny", "always")
 
@@ -57,21 +59,24 @@ async def request_approval(
     call: dict[str, Any], emit: Callable, approval_broker: ApprovalBroker = broker,
     scope: str = "", owner_user_id: str = "", permission_tier: str = "",
     risk_level: str = "", timeout_seconds: float = 300,
+    execution_id: str | None = None,
 ) -> str:
     """先提交审批事实再等待；gate 必须联动 pending_confirm 并校验 nonce/身份。
 
     主 Agent 将 log.append 的 approval 事实与写卡/清卡放入同一事务。
     gate 接收完整 identity，只有经过授权的 WS 回执才能 resolve 对应 Future。
     """
-    approval_id = str(uuid5(NAMESPACE_URL, f"approval:{session_id}:{turn}:{attempt_id}:{call['id']}"))
+    routing_id = execution_id or session_id
+    approval_id = str(uuid5(NAMESPACE_URL, f"approval:{routing_id}:{turn}:{attempt_id}:{call['id']}"))
     base = {
         "id": approval_id, "approval_id": approval_id, "interaction_id": approval_id,
-        "session_id": session_id, "turn": turn, "turn_id": f"{session_id}:{turn}",
+        "session_id": session_id, "turn": turn, "turn_id": f"{routing_id}:{turn}",
         "step": step, "attempt_id": attempt_id,
         "call_id": call["id"], "toolName": call["name"], "name": call["name"],
         "owner_user_id": owner_user_id or getattr(log, "actor_id", ""),
         "scope": scope, "permission_tier": permission_tier, "risk_level": risk_level,
         "nonce": uuid4().hex, "expires_at": time.time() + timeout_seconds,
+        **({"run_id": run_id} if (run_id := log_run_id(log)) is not None else {}),
     }
 
     def record(kind: str, payload: dict[str, Any]) -> None:
@@ -80,11 +85,11 @@ async def request_approval(
         emit({"kind": kind.replace("/", "_"), "seq": event["seq"],
               "event_ts": event["ts"], "record_type": event["type"], **base, **payload})
 
-    if approval_broker.is_always_allowed(session_id, call["name"], scope):
+    if approval_broker.is_always_allowed(routing_id, call["name"], scope):
         record("approval/decided", {"outcome": "always", "source_outcome": "allowed-always", "implicit": True})
         return "always"
     record("approval/asked", {"args": call["args"]})
-    gate = approval_broker.gate_for(session_id)
+    gate = approval_broker.gate_for(routing_id)
     try:
         decision = "unavailable" if gate is None else await asyncio.wait_for(
             gate({**base, "name": call["name"], "args": call["args"]}), timeout_seconds
@@ -102,5 +107,5 @@ async def request_approval(
     outcome, source_outcome = outcomes.get(decision, ("deny", "invalid"))
     record("approval/decided", {"outcome": outcome, "source_outcome": source_outcome})
     if decision == "always":
-        approval_broker.allow_always(session_id, call["name"], scope)
+        approval_broker.allow_always(routing_id, call["name"], scope)
     return decision

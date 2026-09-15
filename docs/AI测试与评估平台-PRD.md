@@ -4,10 +4,10 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.26 |
-| 文档状态 | 冻结基线 + V1.26 登记（V1.22：模型思考模板验证；V1.24：供应商多方言；V1.25：Anthropic 兼容模板；V1.26：供应商协议 URL 矩阵） |
+| 文档版本 | V1.27 |
+| 文档状态 | 冻结基线 + V1.27 专家协作 P0 基础接缝登记（2026-09-15）；专家调度入口尚未交付 |
 | 撰写日期 | 2026-08-17 |
-| 本轮修订 | 2026-09-15：V1.26 供应商快速填充改为供应商与协议二维矩阵，协议切换同步官方 Base URL、建议模型和思考模板；官方未提供的兼容组合禁用。补齐 DeepSeek 原厂与 NVIDIA NIM 的 Anthropic Messages 模板，真实探测仍为保存门禁。 |
+| 本轮修订 | 2026-09-15：V1.27 登记专家协作 P0 运行时基础接缝及未交付范围；V1.26 供应商快速填充改为供应商与协议二维矩阵，协议切换同步官方 Base URL、建议模型和思考模板；官方未提供的兼容组合禁用。补齐 DeepSeek 原厂与 NVIDIA NIM 的 Anthropic Messages 模板，真实探测仍为保存门禁。 |
 | 最近修订 | 2026-08-31：V1.17 增加危险 bash 的 LangGraph 人在回路：风险命令必须弹出确认卡，原发起成员确认后才进入 bwrap 沙箱；拒绝不执行。思考卡只呈现过程摘要，禁止显示会与工具真实结果冲突的原始推理。2026-08-30：V1.16 增加受控 Agent 技能文件与协议档专属补充提示词管理；技能正文遵循渐进式披露，核心安全提示词不可覆盖。2026-08-28：V1.15 统一基准目录治理、独立导入队列、staging 并发发布、成员同权双人复核与 M3 里程碑；冻结任务必须锁定数据集/黄金集版本。2026-08-28：V1.14 新增基准数据集目录、异步导入、staging 表格和发布门禁；下载/解析仅由 Worker 执行，未审核行不得评测。2026-08-24：补充 Agent 多附件交互：支持图片（PNG/JPG/JPEG/WEBP/GIF）、Markdown/TXT/HTML/JSON/YAML、PDF、Word（DOC/DOCX）、Excel（XLS/XLSX）、CSV/JSONL 与音频；输入区支持文件选择和拖拽上传，图片显示缩略图，PDF/文本支持预览，Office 文件显示类型卡片并可打开/下载。2026-08-23：补齐 Gemini OpenAI 兼容端点的思考摘要请求与增量归一化；增加 Agent 思考摘要开关与思考强度设置；将用户回显固定为 `user_message`，将完成信号固定为 `response.completed`，明确 `thought` 不承载助手正文；协议档增加可选 Embedding / Reranker 独立端点配置，三类 Key 均按 profile 写入受控环境文件 |
 | 适用版本 | 平台 V1.0 |
 | 技术栈 | Vue3 + Naive UI、Python FastAPI、PostgreSQL、WebSocket、Docker Compose、go-stress-testing |
@@ -813,3 +813,28 @@ Anthropic Messages 兼容供应商的思考配置必须由供应商模板解析�
 | `backend/api/app/llm/providers/reasoning_templates.py`、`providers/anthropic.py` | DeepSeek、NVIDIA NIM 的 Messages 模板与兼容 thinking 回放 |
 | `frontend/tests/profileVendors.test.mjs`、`backend/api/tests/test_reasoning_templates.py` | URL、协议支持、模板推荐和 SDK 请求体回归 |
 | `docs/AI测试与评估平台-协议档供应商思考适配.md` | V1.1 官方 URL 与协议支持矩阵 |
+
+## V1.27 专家协作实施登记（2026-09-15）
+
+依据[专家 Subagent 与多 Agent 协作技术方案](AI测试与评估平台-专家Subagent与多Agent协作技术方案.md)，开始分阶段实施。当前批次为 **P0 运行时基础接缝**，不等于 P0 全部门槛或 P1 专家调度已完成。
+
+### 本批产品边界
+
+1. 专家复用现有原生 AgentLoop；主会话仍为唯一面向用户的事实写者。子运行日志端口承载独立历史，`session_id` 保持授权所属会话，`run_id` 标识子运行。
+2. 主回合正常结束、取消或异常时，先取消并等待当前回合拥有的子任务清理，再写主回合唯一终态。收尾开始后禁止继续创建子任务；累计实例额度不因完成而返还。
+3. 同一协作可注入共享模型调用预算，按实际尝试累计（含网络重试），并限制模型流并发及单运行调用数。等待模型槽位不扣次数；已派发的失败或取消调用不返还次数。本批限额为同进程精确计数，不作为持久账本、token 硬限额或金额硬限额。
+4. 本批通过确定性适配器验证独立运行和生命周期。生产 `SubagentLog`、协作表/迁移、权限快照、工作区隔离、`agent.*` 工具及前端面板仍未交付，不向用户宣称已可调度专家。既有 `task` 继续只表示任务规划。
+5. 被测调用、裁判执行与批量评测继续遵循 Worker 分工；本批不修改评测分数、报告或榜单规则。
+
+### 修改代码文件与作用清单
+
+| 文件 | 作用 |
+| --- | --- |
+| `backend/api/app/harness/contracts/fact_log.py` | 最小事实日志接口、授权会话与运行命名空间分离 |
+| `backend/api/app/agent/loop.py`、`runtime.py` | 日志端口、子任务终态前收拢、运行缓存和审批域隔离 |
+| `backend/api/app/agent/collaboration_scope.py` | 当前回合的子任务所有权、累计上限和幂等取消清理 |
+| `backend/api/app/agent/model_budget.py` | 可注入的共享模型调用预算和适配器包装 |
+| `backend/api/app/harness/execution/scheduler.py`、`approval.py` | 工具绑定的运行身份和独立审批路由，保留授权会话 |
+| `backend/api/tests/test_subagent_foundations.py` | 独立图运行、主子取消排序、审批和预算竞态实验 |
+
+验证结果与后续退出门槛统一记录在技术方案 §22。

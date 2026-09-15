@@ -26,6 +26,7 @@ from langgraph.graph import END, START, StateGraph
 
 from app.agent.loop_settings import LoopSettings
 from app.agent.stream import AssistantAttempt
+from app.harness.contracts.fact_log import FactLog
 from app.llm.loop_contracts import (
     LlmAdapter,
     LlmRequest,
@@ -39,8 +40,8 @@ from app.llm.loop_contracts import (
 )
 
 if TYPE_CHECKING:
+    from app.agent.collaboration_scope import TurnChildren
     from app.harness.execution.scheduler import ToolScheduler
-    from app.harness.memory.agent_events import SessionLog
 
 SYSTEM_PROMPT = "你是平台助手。按已提供的工具契约执行任务，如实报告工具结果。"
 
@@ -136,6 +137,8 @@ class TurnDependencies:
     protocol_state_compatibility: dict[str, Any] | None = None
     # 请求头记录本轮是否发生了受控的历史降级，供轨迹和排障核对。
     history_transition_reason: str | None = None
+    # 前台子任务归属当前主回合，写主终态前必须全部停止并完成清理。
+    children: TurnChildren | None = None
 
 
 FinishReason = Literal["completed", "error", "max_tokens", "max_steps"]
@@ -183,7 +186,7 @@ class GraphRunContext:
 
     session_id: str
     turn: int
-    log: SessionLog
+    log: FactLog
     dependencies: TurnDependencies | None = None
 
 
@@ -810,6 +813,8 @@ async def build_agent(
         """提交本回合唯一正常终态。"""
         context = _context(config)
         reason = state.get("stop_reason", "completed")
+        if context.dependencies is not None and context.dependencies.children is not None:
+            await context.dependencies.children.close()
         event = context.log.append("turn/end", {"turn": context.turn, "reason": reason})
         _emit("turn_end", event, turn=context.turn, reason=reason)
         return {"phase": "finished", "last_event_seq": event["seq"]}

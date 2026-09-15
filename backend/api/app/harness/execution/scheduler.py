@@ -6,7 +6,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.errors import AppError, ErrorCode
-from app.harness.memory.agent_events import SessionLog, SessionLogWriteError
+from app.harness.contracts.fact_log import FactLog, execution_key, log_run_id
+from app.harness.memory.agent_events import SessionLogWriteError
 from app.llm.loop_contracts import Message
 
 from .approval import ApprovalBroker, broker, request_approval
@@ -37,7 +38,7 @@ class _ScheduledCall:
 
 def _result(
     *,
-    log: SessionLog,
+    log: FactLog,
     emit: StreamWriter,
     turn: int,
     step: int,
@@ -201,7 +202,7 @@ class ToolScheduler:
     def _record_call(
         self,
         *,
-        log: SessionLog,
+        log: FactLog,
         turn: int,
         step: int,
         attempt_id: str,
@@ -312,6 +313,7 @@ class ToolScheduler:
                     "session_id": log.session_id, "turn": turn, "step": step,
                     "attempt_id": attempt_id, "call_id": call_id, "call_seq": call_seq,
                     "wire_name": name,
+                    **({"run_id": run_id} if (run_id := log_run_id(log)) is not None else {}),
                 })
             except AppError as exc:
                 slot.result = _permission_result(exc)
@@ -322,7 +324,7 @@ class ToolScheduler:
         slot: _ScheduledCall,
         *,
         session_id: str,
-        log: SessionLog,
+        log: FactLog,
         turn: int,
         step: int,
         attempt_id: str,
@@ -345,6 +347,7 @@ class ToolScheduler:
 
         decision = await request_approval(
             session_id=session_id,
+            execution_id=execution_key(log),
             log=log,
             turn=turn,
             step=step,
@@ -377,7 +380,7 @@ class ToolScheduler:
         self,
         slot: _ScheduledCall,
         *,
-        log: SessionLog,
+        log: FactLog,
         turn: int,
         step: int,
         attempt_id: str,
@@ -505,7 +508,7 @@ class ToolScheduler:
         slots: list[_ScheduledCall],
         committed: int,
         *,
-        log: SessionLog,
+        log: FactLog,
         emit: StreamWriter,
         turn: int,
         step: int,
@@ -563,7 +566,7 @@ class ToolScheduler:
         calls: list[dict[str, Any]],
         next_to_start: int,
         slots: list[_ScheduledCall],
-        log: SessionLog,
+        log: FactLog,
         turn: int,
         step: int,
         attempt_id: str,
@@ -595,7 +598,7 @@ class ToolScheduler:
         self,
         *,
         session_id: str,
-        log: SessionLog,
+        log: FactLog,
         turn: int,
         step: int,
         attempt_id: str,
@@ -733,7 +736,7 @@ class ToolScheduler:
         self,
         *,
         session_id: str,
-        log: SessionLog,
+        log: FactLog,
         turn: int,
         step: int,
         attempt_id: str,
