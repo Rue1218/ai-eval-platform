@@ -4,9 +4,9 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V2.0 |
+| 文档版本 | V2.2 |
 | WS v2 修订日期 | 2026-09-13（§4A，模型错误安全摘要） |
-| 对应 PRD | V1.22（功能唯一权威） |
+| 对应 PRD | V1.24（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.7.8（AgentLoop 单入口；JSON 仍以本文为准） |
 | 对应前端计划 | AgentLoop 前端计划 V0.5 |
@@ -18,7 +18,7 @@
 
 > V1.86（2026-09-09）：协议档页面 `POST /api/profiles/{id}/check` 的真实 ping 探活上限与通用协议调用统一为 30 秒，避免上游模型冷启动被误判为不可用；响应字段与错误码不变。
 
-> V2.1（2026-09-15）：思考模板候选和保存校验新增模型 ID 维度，百炼 DeepSeek 与千问等同端点不同方言不会混用。开启思考的探测必须取得 reasoning 增量或推理用量证据，普通文本完成不再视为通过；各档短请求并发执行，整次探测受单次 30 秒调用超时约束。
+> V2.1（2026-09-15，历史记录；模型族限制及超时口径已由 V2.2 替代）：思考模板候选和保存校验新增模型 ID 维度，百炼 DeepSeek 与千问等同端点不同方言不会混用。开启思考的探测必须取得 reasoning 增量或推理用量证据，普通文本完成不再视为通过；各档短请求并发执行，整次探测受单次 30 秒调用超时约束。
 
 > V2.0（2026-09-15）：协议档新模型改为“供应商模板 → 真实验证 → 保存”链路（§3.6）。`GET /api/profiles/reasoning-templates` 返回受控模板目录；`POST /api/profiles/probe-create` 与 `POST /api/profiles/{id}/probe-update` 分别验证后创建、验证后原子更新。探测结果只保存通过档位与安全错误分类，AgentLoop 仅放行这些档位；旧协议档继续使用 legacy 解析。
 
@@ -679,9 +679,13 @@ Agent 收到 `user_message` 后会校验每个 `file_id` 属于当前发言人�
 
 响应 **永不** 含 Key，即使 PUT 刚写入。空字符串 Key = 不修改。
 
-#### 模型思考模板与预注册验证（V2.0）
+#### 模型思考模板与预注册验证（V2.2，2026-09-15）
 
-新模型不再由模型名正则推断思考能力。页面按供应商、协议和模型 ID 取得受控模板；后端也用这三个维度复验，禁止把同端点但不同模型族的方言混用。后端用同一 URL、模型 ID、协议和 Key 对模板声明的档位并发发起最小真实请求。验证每次使用不超过 2,048 个输出 token，最多执行 5 次；整次验证受单次模型调用 30 秒超时约束。
+V2.2 修订（替代 V2.1 的模型族硬限制和超时说明）：供应商与协议是模板兼容边界，模型名称只决定候选推荐顺序，未知型号、部署 ID 可以选择同供应商模板验证。分别提供开关、枚举、数值、预算、自适应与固定开启方言；开关仅暴露 off/high（界面显示关闭/开启），可选数值模板的平台 low/medium/high/max 映射为 1/33/67/100（不按具体型号默认启用），枚举模板不制造重复档位。模板版本变化后旧探测失效，ProfileOut.reasoning_probe_status 返回 unverified。预算被上下限夹紧后同参的档位只保留一个（优先默认档），避免重复探测和伪强度。ProfileOut 和 AgentLoop options 的 profile 增量 `reasoning_mode`（none/switch/effort/budget/fixed，legacy 为 null），用于真实显示控件语义。
+
+探测最多五档并发，使用拟保存的输出上限以确保预算参数与正式调用一致（取代 2,048 token 截断），每档有最长 30 秒整体截止时间并取消未完成流，连接清理最多额外一秒。开启必须有推理证据；关闭如仍有推理证据则失败；没有正常完成、仅截断或没有正文也不能算通过。没有推理证据表示本次未确认，不等于供应商不支持。结果只能证明该配置请求成功并取得可观测证据，不能证明供应商没有忽略某个强度字段。
+
+页面按供应商与协议取得受控模板，模型名称只用于推荐排序。后端保持供应商与协议隔离；未知型号也可以选择模板并验证。后端用拟保存的 URL、模型 ID、协议、Key 和输出上限并发探测，最多五档，每档整体截止时间最长 30 秒，清理连接另有最多一秒限时。
 
 关闭思考仅要求请求正常完成。开启思考除正常完成外，必须出现 reasoning 增量或正数推理用量；否则该档位以 `NO_REASONING_EVIDENCE` 失败，不能仅因兼容网关返回普通文本就开放思考强度。探测元数据只保存证据类别（`reasoning_delta`、`reasoning_usage` 或 `request_completed`），不保存任何思考正文或原始上游响应。
 
@@ -3215,3 +3219,18 @@ Worker 事实覆盖一次调用快照，不新增浏览器 WS 字段。
 | `backend/api/tests/test_loop_llm.py` / `test_loop_ws_protocol.py` / `frontend/tests/agentLoop.test.mjs` | 覆盖分类、脱敏投影与前端回放状态。 |
 | `docs/AI测试与评估平台-API.md` | V1.99：记录失败 `assistant.end` 的错误字段和映射口径。 |
 
+
+
+### V2.2 修改代码文件与作用清单（审查日期：2026-09-15）
+
+| 文件 | 作用 |
+| --- | --- |
+| backend/api/app/llm/providers/reasoning_templates.py、llm/loop_contracts.py | 按供应商方言编码并允许受控整数强度；模型名称只作推荐 |
+| backend/api/app/profile_probe.py、profile_reasoning.py | 正反向证据、结束状态、总截止时间、同参去重及模板版本失效 |
+| backend/api/app/schemas.py、routers/profiles.py、routers/sessions.py | reasoning_mode 与待验证状态、安全失败原因 |
+| frontend/src/api/types.ts、api/agentLoopTypes.ts | 对应增量字段类型 |
+| frontend/src/components/agent/loop/ThinkingControl.vue、AgentComposer.vue | 按真实模式展示控件 |
+| frontend/src/components/modals/ProfileModal.vue | 模型变更与批量推荐 |
+| backend/api/tests/test_reasoning_templates.py、test_loop_profile_selection.py | 参数与探测回归、响应字段边界 |
+
+完整实现边界及官方来源见[模型思考模板自动继承实施方案 V1.3](./AI测试与评估平台-模型思考模板自动继承实施方案.md)。

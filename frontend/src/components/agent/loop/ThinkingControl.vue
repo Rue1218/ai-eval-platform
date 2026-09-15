@@ -25,8 +25,9 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { NIcon, NPopover } from 'naive-ui'
 import ChevronDownIcon from 'naive-ui/es/_internal/icons/ChevronDown'
 import type { Effort } from '../../../api/agentLoopTypes'
+import type { ReasoningMode } from '../../../api/types'
 
-const props = defineProps<{ modelValue: Effort | null; allowed: Effort[]; model?: string; note?: string }>()
+const props = defineProps<{ modelValue: Effort | null; allowed: Effort[]; model?: string; note?: string; mode?: ReasoningMode | null }>()
 const emit = defineEmits<{ 'update:modelValue': [Effort] }>()
 const open = ref(false), trigger = ref<HTMLButtonElement>(), slider = ref<HTMLInputElement>()
 const labels: Record<Effort, string> = { off: '关闭', low: '低强度', medium: '中强度', high: '高强度', xhigh: '更高强度', max: '最高强度' }
@@ -35,8 +36,23 @@ const captions: Record<Effort, string> = { off: '直接回答', low: '快速推�
 const particles = [[7,28,2],[14,68,2],[21,17,1],[31,60,2],[39,29,1],[48,66,2],[57,24,2],[65,72,1],[74,31,2],[83,66,2],[86,20,1]]
 const current = computed<Effort | null>(() => props.modelValue && props.allowed.includes(props.modelValue) ? props.modelValue : props.allowed[0] || null)
 const index = computed(() => Math.max(0, props.allowed.indexOf(current.value || props.allowed[0])))
-const label = computed(() => current.value ? labels[current.value] : '不可用')
-const caption = computed(() => current.value ? captions[current.value] : '当前协议档未公开思考档位')
+/** 由后端能力语义决定文案，固定思考和开关不使用高强度标签。 */
+const label = computed(() => {
+  if (!current.value) return '不可用'
+  if (props.mode === 'switch') return current.value === 'off' ? '关闭' : '开启'
+  if (props.mode === 'fixed') return '固定开启'
+  if (props.mode === 'none') return '未请求思考'
+  if (props.mode === 'budget') return labels[current.value].replace('强度', '预算')
+  return labels[current.value]
+})
+const caption = computed(() => {
+  if (!current.value) return '当前协议档未公开思考档位'
+  if (props.mode === 'switch') return '思考开关'
+  if (props.mode === 'fixed') return '不能调节或关闭'
+  if (props.mode === 'none') return '普通请求'
+  if (props.mode === 'budget') return '思考 token 预算'
+  return captions[current.value]
+})
 const sliderStyle = computed(() => ({ '--slider-progress': `${index.value / Math.max(1, props.allowed.length - 1) * 100}%` }))
 watch(open, value => { if (value) void nextTick(() => slider.value?.focus()) })
 // 能力刷新为空时关闭弹层，不保留可操作的过期档位。

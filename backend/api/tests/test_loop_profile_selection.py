@@ -116,13 +116,14 @@ def test_agent_ui_lists_only_safe_selectable_profile_metadata(profile_db):
     payload = sessions._loop_ui(profile_db.db, user, request)
 
     fields = {
-        "id", "name", "version", "model", "protocol", "provider", "reasoning_note", "allowed_efforts", "default_effort",
+        "id", "name", "version", "model", "protocol", "provider", "reasoning_note", "reasoning_mode", "allowed_efforts", "default_effort",
     }
     assert [item["id"] for item in payload["profiles"]] == ["default", "alternate"]
     assert all(set(item) == fields for item in payload["profiles"])
     assert payload["profile"] is not None
     assert set(payload["profile"]) == fields
     assert payload["profile"]["id"] == "default"
+    assert payload["profile"]["reasoning_mode"] is None
     assert payload["profile"]["allowed_efforts"] == ["off", "low", "medium", "high", "max"]
     assert payload["profile"]["default_effort"] == "off"
     assert payload["enabled"] is True

@@ -164,6 +164,8 @@ def _profile_out(profile: ProtocolProfile, connection: tuple[str, str, str | Non
         if isinstance(probe, dict) and probe.get("status") in {"passed", "partial", "failed"}
         else "unverified" if template_id else "legacy"
     )
+    if template_id and probe_status in {"passed", "partial"} and not reasoning["allowed_efforts"]:
+        probe_status = "unverified"
     return ProfileOut(
         **reasoning,
         full_url=env_values.full_url,
@@ -282,7 +284,21 @@ def _probe_message(probe: dict[str, object]) -> str:
         return f"模型模板验证通过，已确认 {count} 个思考档位"
     if probe.get("status") == "partial":
         return f"模型模板部分通过，已确认 {count} 个思考档位"
-    return "模型模板验证失败，未保存协议档"
+    # 仅解释平台安全分类，不展示上游正文；便于用户选其他方言或重试。
+    labels = {
+        "NO_REASONING_EVIDENCE": "本次未观察到思考证据",
+        "THINKING_NOT_DISABLED": "关闭后仍返回思考内容",
+        "EMPTY_RESPONSE": "未返回正文",
+        "TIMEOUT": "验证超时",
+        "UPSTREAM": "上游拒绝请求或未正常完成",
+        "VALIDATION": "所选参数不兼容",
+    }
+    reasons = list(dict.fromkeys(
+        labels.get(item.get("error_code"), "所选参数未通过验证")
+        for item in probe.get("attempts", []) if isinstance(item, dict) and not item.get("ok")
+    ))
+    detail = "；".join(reasons) or "所选模板未通过验证"
+    return f"{detail}，未保存协议档；可选择其他模板或重试"
 
 
 @router.get("/{profile_id}", response_model=ProfileOut)

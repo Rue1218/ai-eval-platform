@@ -63,6 +63,8 @@ export interface AgentReasoningSettings {
 
 /** 对话输入框的五个思考候选，能力由后端 resolver 验证。 */
 export type ProfileEffort = 'off' | 'low' | 'medium' | 'high' | 'max'
+/** 模板的控制语义；开关不能伪装成多个推理强度。 */
+export type ReasoningMode = 'none' | 'switch' | 'effort' | 'budget' | 'fixed'
 // 协议档用途
 // benchmark 为 legacy usage 值（种子协议档使用），后端仍接受
 export type ProfileUsage = 'target' | 'agent' | 'judge' | 'benchmark'
@@ -72,6 +74,7 @@ export interface Profile {
   provider?: string
   allowed_efforts?: ProfileEffort[]
   reasoning_note?: string
+  reasoning_mode?: ReasoningMode | null
   reasoning_template_id?: string | null
   reasoning_template_name?: string | null
   reasoning_probe_status?: 'legacy' | 'unverified' | 'passed' | 'partial' | 'failed'

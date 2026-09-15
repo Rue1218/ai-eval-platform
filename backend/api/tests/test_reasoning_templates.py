@@ -1,19 +1,25 @@
 """供应商思考模板、探测结果与运行时请求的一致性回归。"""
 
 import asyncio
+from dataclasses import replace
 
 import pytest
 
 from app import profile_probe
 from app.llm.contracts import ModelConfig
-from app.llm.loop_contracts import Done, LlmRequestError, ReasoningDelta
+from app.llm.loop_contracts import Done, LlmRequestError, ReasoningDelta, TextDelta
 from app.llm.providers.options import request_options
-from app.llm.providers.reasoning_templates import ensure_template_compatible, list_templates
+from app.llm.providers.reasoning_templates import (
+    TEMPLATES,
+    ensure_template_compatible,
+    get_template,
+    list_templates,
+)
 from app.llm.resolver import resolve_request
 from app.profile_reasoning import profile_reasoning
 
 _ALIYUN_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-_ALIYUN_DEEPSEEK_TEMPLATE = "aliyun-deepseek-openai-v1"
+_ALIYUN_DEEPSEEK_TEMPLATE = "aliyun-numeric-effort-v1"
 _ALL_EFFORTS = ["off", "low", "medium", "high", "max"]
 
 
@@ -32,7 +38,7 @@ def _config(*, effort: str = "medium", enabled: bool = True, allowed: tuple[str,
 
 
 def test_aliyun_template_directory_matches_model_family_and_keeps_generic_fallback():
-    """百炼同一端点的 DeepSeek 与千问必须分别选择对应模板。"""
+    """同一供应商保留全部方言，名称只影响推荐顺序。"""
     deepseek_template_ids = [
         template.id for template in list_templates("qwen", "openai_chat", "deepseek-v4.1-flash")
     ]
@@ -40,19 +46,17 @@ def test_aliyun_template_directory_matches_model_family_and_keeps_generic_fallba
         template.id for template in list_templates("qwen", "openai_chat", "qwen-plus")
     ]
 
-    assert _ALIYUN_DEEPSEEK_TEMPLATE in deepseek_template_ids
-    assert "qwen-openai-thinking-budget-v1" not in deepseek_template_ids
-    assert "qwen-openai-thinking-budget-v1" in qwen_template_ids
-    assert _ALIYUN_DEEPSEEK_TEMPLATE not in qwen_template_ids
+    assert deepseek_template_ids[0] == 'aliyun-deepseek-openai-v1'
+    assert qwen_template_ids[0] == "qwen-openai-thinking-budget-v1"
+    assert set(deepseek_template_ids) == set(qwen_template_ids)
     assert deepseek_template_ids[-1] == qwen_template_ids[-1] == "no-reasoning-v1"
 
 
-def test_aliyun_deepseek_template_cannot_be_applied_to_qwen_model():
-    """即使服务地址和协议相同，也禁止用 DeepSeek 方言注册千问模型。"""
-    with pytest.raises(LlmRequestError, match="模型不兼容"):
-        ensure_template_compatible(
-            _ALIYUN_DEEPSEEK_TEMPLATE, "qwen", "openai_chat", "qwen-plus",
-        )
+@pytest.mark.parametrize(('provider', 'protocol'), [('deepseek', 'openai_chat'), ('qwen', 'anthropic_messages')])
+def test_template_cannot_cross_provider_or_protocol(provider, protocol):
+    """取消型号硬限制不等于允许跨供应商或跨协议套用方言。"""
+    with pytest.raises(LlmRequestError, match="不兼容"):
+        ensure_template_compatible(_ALIYUN_DEEPSEEK_TEMPLATE, provider, protocol, "unknown-new-model")
 
 
 @pytest.mark.parametrize(
@@ -72,13 +76,13 @@ def test_every_profile_vendor_has_a_non_generic_template(provider: str, protocol
     assert any(template.id != "no-reasoning-v1" for template in templates)
 
 
-def test_new_aliyun_deepseek_model_uses_template_effort_wire_options():
-    """新型号名称不在旧规则时，模板仍应生成百炼要求的思考参数。"""
+def test_explicit_numeric_template_uses_integer_wire_options():
+    """显式选择数值候选时仍受真实探测约束，不能把整数序列化成字符串。"""
     request = resolve_request(_config(), messages=[])
     wire = request_options(request, "qwen", "openai_chat")
 
     assert request.reasoning_template_id == _ALIYUN_DEEPSEEK_TEMPLATE
-    assert wire["reasoning_effort"] == "medium"
+    assert wire["reasoning_effort"] == 33
     assert wire["extra_body"]["enable_thinking"] is True
 
 
@@ -92,6 +96,8 @@ def test_template_projection_only_exposes_real_probe_successes():
         reasoning_template_id=_ALIYUN_DEEPSEEK_TEMPLATE,
         reasoning_probe={
             "status": "partial",
+            "template_id": _ALIYUN_DEEPSEEK_TEMPLATE,
+            "template_version": 2,
             "supported_efforts": ["off", "high"],
         },
     )
@@ -148,7 +154,7 @@ async def test_probe_rejects_completed_stream_without_reasoning_evidence(monkeyp
 @pytest.mark.asyncio
 async def test_probe_accepts_reasoning_delta_as_evidence(monkeypatch):
     """返回的 reasoning 增量是开启思考后可安全持久化的能力证据。"""
-    adapter = _ProbeAdapter([ReasoningDelta("计算中"), Done("stop")])
+    adapter = _ProbeAdapter([ReasoningDelta("计算中"), TextDelta("120"), Done("stop")])
 
     monkeypatch.setattr(profile_probe, "build_adapter", lambda config: (adapter, config.model))
 
@@ -187,3 +193,152 @@ async def test_probe_runs_all_template_efforts_concurrently(monkeypatch):
 
     assert started_count == len(_ALL_EFFORTS)
     assert result["status"] == "passed"
+
+
+@pytest.mark.parametrize(('provider', 'protocol', 'model', 'first'), [
+    ('qwen', 'openai_chat', 'qwen3-235b-a22b', 'qwen-openai-thinking-budget-v1'),
+    ('qwen', 'openai_chat', 'deepseek-v4.1-flash', 'aliyun-deepseek-openai-v1'),
+    ('anthropic', 'anthropic_messages', 'claude-opus-4-7', 'anthropic-adaptive-effort-v1'),
+    ('anthropic', 'anthropic_messages', 'claude-sonnet-4-5', 'anthropic-thinking-v1'),
+    ('google', 'openai_chat', 'gemini-3-pro', 'google-gemini-level-v1'),
+    ('moonshot', 'openai_chat', 'kimi-k3', 'moonshot-reasoning-effort-v1'),
+    ('volcengine', 'openai_chat', 'ep-20260915-example', 'volcengine-seed-thinking-v1'),
+    ('nvidia', 'openai_chat', 'nvidia/unknown-next-model', 'nvidia-nim-thinking-v1'),
+    ('openai', 'openai_chat', 'unknown-next-model', 'openai-reasoning-effort-v1'),
+])
+def test_new_models_and_deployment_ids_remain_probeable(provider, protocol, model, first):
+    """新型号和部署 ID 保留可探测模板，已知方言优先推荐。"""
+    assert list_templates(provider, protocol, model)[0].id == first
+    ensure_template_compatible(first, provider, protocol, model)
+
+
+def _wire(template_id, provider, effort, *, enabled=True, model='future-model'):
+    """通过真实 resolver 与 SDK 参数组装检查端到端方言，完全不访问网络。"""
+    from app.llm.resolver import AuthorizedProfileSnapshot
+
+    template = get_template(template_id)
+    config = ModelConfig(protocol=template.protocol, base_url='https://example.com/v1', model=model,
+                         reasoning_template_id=template_id, reasoning_enabled=enabled, reasoning_effort=effort)
+    request = resolve_request(AuthorizedProfileSnapshot(config, provider=provider), messages=[])
+    return request_options(request, provider, template.protocol)
+
+
+@pytest.mark.parametrize(('effort', 'expected'), [('low', 1), ('medium', 33), ('high', 67), ('max', 100)])
+def test_numeric_effort_wire_contract(effort, expected):
+    """百炼数值强度必须作为整数到达 SDK，不能降级为字符串或布尔值。"""
+    wire = _wire(_ALIYUN_DEEPSEEK_TEMPLATE, 'qwen', effort)
+    assert type(wire['reasoning_effort']) is int
+    assert wire['reasoning_effort'] == expected
+
+
+@pytest.mark.parametrize(('template_id', 'provider'), [
+    ('deepseek-reasoning-effort-v1', 'deepseek'), ('aliyun-deepseek-openai-v1', 'qwen'),
+    ('moonshot-reasoning-effort-v1', 'moonshot'),
+])
+def test_real_effort_levels_do_not_collapse_to_same_request(template_id, provider):
+    """低档与最高档必须真正传递不同枚举，最高档不能改写成 high。"""
+    assert _wire(template_id, provider, 'low')['reasoning_effort'] == 'low'
+    assert _wire(template_id, provider, 'max')['reasoning_effort'] == 'max'
+
+
+def test_adaptive_anthropic_and_gemini_levels_use_correct_fields():
+    """现代方言不发送旧预算字段，Google 的嵌套 extra_body 保持 SDK 契约。"""
+    claude = _wire('anthropic-adaptive-effort-v1', 'anthropic', 'high')
+    assert claude['thinking'] == {'type': 'adaptive'}
+    assert claude['extra_body'] == {'output_config': {'effort': 'high'}}
+    gemini = _wire('google-gemini-level-v1', 'google', 'low')
+    assert gemini['extra_body']['extra_body']['google']['thinking_config'] == {
+        'thinking_level': 'low', 'include_thoughts': True,
+    }
+
+
+def test_kimi_off_does_not_send_invalid_default_temperature():
+    """Kimi 关闭模式不能发送平台默认 0.2，交由供应商使用固定默认值。"""
+    wire = _wire('moonshot-thinking-switch-v1', 'moonshot', 'high', enabled=False)
+    assert 'temperature' not in wire
+    assert wire['extra_body']['thinking'] == {'type': 'disabled'}
+
+
+@pytest.mark.parametrize('template', [item for item in TEMPLATES if item.mode == 'switch'], ids=lambda t: t.id)
+def test_switch_templates_only_expose_one_enabled_state(template):
+    """开关型供应商不再提供四个相同参数的伪强度。"""
+    assert template.allowed_efforts == ('off', 'high')
+    with pytest.raises(LlmRequestError):
+        _wire(template.id, template.provider, 'low')
+
+
+@pytest.mark.parametrize('override', [{'template_version': 1}, {'template_id': 'other'}, {'template_version': None}])
+def test_old_or_other_template_probe_cannot_authorize_runtime(override):
+    """模板修订、错绑或历史缺版本的结果均需要重新验证。"""
+    probe = {'status': 'passed', 'template_id': _ALIYUN_DEEPSEEK_TEMPLATE,
+             'template_version': 2, 'supported_efforts': ['high'], **override}
+    capability = profile_reasoning('openai_chat', _ALIYUN_URL, 'deepseek-v4.1-flash', 8192,
+                                   reasoning_template_id=_ALIYUN_DEEPSEEK_TEMPLATE, reasoning_probe=probe)
+    assert capability['allowed_efforts'] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(('events', 'code'), [
+    ([ReasoningDelta('thinking'), TextDelta('120'), Done('stop')], 'THINKING_NOT_DISABLED'),
+    ([TextDelta('<thi'), TextDelta('nk>thinking'), Done('stop')], 'THINKING_NOT_DISABLED'),
+    ([TextDelta('120'), Done('stop', {'reasoning_tokens': 10})], 'THINKING_NOT_DISABLED'),
+    ([TextDelta('unfinished'), Done('length')], 'UPSTREAM'),
+    ([Done('stop')], 'EMPTY_RESPONSE'),
+])
+async def test_probe_rejects_false_off_and_incomplete_results(monkeypatch, events, code):
+    """静默忽略关闭参数、截断和空响应都不能成为保存依据。"""
+    monkeypatch.setattr(profile_probe, 'build_adapter', lambda config: (_ProbeAdapter(events), config.model))
+    result = await profile_probe._probe_one(_config(enabled=False), requires_reasoning_evidence=False)
+    assert result[0] is False and result[2] == code
+
+
+@pytest.mark.asyncio
+async def test_total_deadline_cancels_continuously_active_stream(monkeypatch):
+    """连续输出不应刷新总截止时间，超时取消后必须释放客户端。"""
+    closed = asyncio.Event()
+
+    class SlowAdapter:
+        """持续输出短帧，模拟从不触发读取空闲超时的上游。"""
+        async def stream(self, request):
+            while True:
+                yield TextDelta('x')
+                await asyncio.sleep(0.002)
+
+        async def close(self):
+            """记录资源释放。"""
+            closed.set()
+
+    monkeypatch.setattr(profile_probe, 'build_adapter', lambda config: (SlowAdapter(), config.model))
+    result = await asyncio.wait_for(profile_probe._probe_with_deadline(
+        replace(_config(), timeout_s=0.02), requires_reasoning_evidence=True), timeout=1)
+    assert result == (False, None, 'TIMEOUT')
+    assert closed.is_set()
+
+
+@pytest.mark.asyncio
+async def test_probe_keeps_production_token_budget(monkeypatch):
+    """验证与保存后的预算请求必须一致，不再按 2048 截断。"""
+    observed = []
+
+    async def probe(config, *, requires_reasoning_evidence):
+        """记录每档输出配置。"""
+        observed.append(config.max_tokens)
+        return True, 'request_completed', None
+
+    monkeypatch.setattr(profile_probe, '_probe_one', probe)
+    await profile_probe._probe_all(replace(_config(), max_tokens=16000))
+    assert observed == [16000] * 5
+
+
+@pytest.mark.asyncio
+async def test_clamped_budget_does_not_expose_duplicate_levels(monkeypatch):
+    """输出上限较小时 low/medium 同为 1024，只开放默认代表档 medium。"""
+    async def probe(config, *, requires_reasoning_evidence):
+        """替代网络，仅检查实际调度和能力去重。"""
+        return True, 'request_completed', None
+
+    monkeypatch.setattr(profile_probe, '_probe_one', probe)
+    result = await profile_probe._probe_all(replace(
+        _config(), model='qwen3-test', max_tokens=2048,
+        reasoning_template_id='qwen-openai-thinking-budget-v1'))
+    assert result['supported_efforts'] == ['off', 'medium', 'high', 'max']

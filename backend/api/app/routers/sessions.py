@@ -80,7 +80,10 @@ def _loop_ui(db: Session, user: User, request: Request, session=None) -> dict:
     def profile_item(row: ProtocolProfile, snapshot, allowed: list[str], default: str | None) -> dict:
         """投影可提交的协议档，绝不把连接地址或凭据带到浏览器。"""
         provider = detect_provider(snapshot.config.base_url, snapshot.config.model, snapshot.config.protocol)
+        mode = None
         try:
+            if snapshot.config.reasoning_template_id:
+                mode = get_template(snapshot.config.reasoning_template_id).mode
             note = (
                 get_template(snapshot.config.reasoning_template_id).description
                 if snapshot.config.reasoning_template_id
@@ -96,6 +99,7 @@ def _loop_ui(db: Session, user: User, request: Request, session=None) -> dict:
             "protocol": snapshot.config.protocol,
             "provider": provider,
             "reasoning_note": note,
+            "reasoning_mode": mode,
             "allowed_efforts": allowed,
             "default_effort": default,
         }

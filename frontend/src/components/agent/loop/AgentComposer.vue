@@ -114,7 +114,7 @@
           </button>
         </section>
       </n-popover>
-      <ThinkingControl :model-value="effort" :allowed="profile?.allowed_efforts || []" :model="profile?.model" :note="profile?.reasoning_note" @update:model-value="value => emit('effort', value)"/>
+      <ThinkingControl :model-value="effort" :allowed="profile?.allowed_efforts || []" :model="profile?.model" :note="profile?.reasoning_note" :mode="profile?.reasoning_mode" @update:model-value="value => emit('effort', value)"/>
       <LoopContextMeter :meter="meter"/>
       <button
         class="loop-send"

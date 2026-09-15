@@ -38,6 +38,8 @@ export interface ConversationMetrics {
 /** 已授权的 Agent 协议档；只包含选择模型所需的公开元数据。 */
 export interface LoopProfile {
   provider?: string; reasoning_note?: string
+  /** 后端模板的控制方式，legacy 不声明。 */
+  reasoning_mode?: import('./types').ReasoningMode | null
   id: string; name: string; version: string; model: string; protocol: string
   allowed_efforts: Effort[]; default_effort: Effort | null
 }

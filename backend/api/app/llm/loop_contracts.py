@@ -231,7 +231,11 @@ class LlmRequest:
             or self.provider_options["thinking_budget"] < 0
         ):
             raise LlmRequestError("思考预算必须为非负整数", code="model_config")
-        for name in ("anthropic_version", "reasoning_effort", "max_tokens_parameter"):
+        # 百炼数值方言允许 1～100 的整数；bool 不能冒充整数，仍拒绝任意对象透传。
+        value = self.provider_options.get("reasoning_effort")
+        if value is not None and not (isinstance(value, str) or (type(value) is int and 1 <= value <= 100)):
+            raise LlmRequestError("思考强度必须为枚举字符串或 1～100 的整数", code="model_config")
+        for name in ("anthropic_version", "max_tokens_parameter"):
             if name in self.provider_options and not isinstance(self.provider_options[name], str):
                 raise LlmRequestError("供应商标识必须为字符串", code="model_config")
 

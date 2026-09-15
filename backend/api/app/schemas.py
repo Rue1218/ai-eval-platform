@@ -188,6 +188,8 @@ class ProfileOut(OrmOut):
     reasoning_effort: str = "off"
     allowed_efforts: list[str] = Field(default_factory=list)
     reasoning_note: str = ""
+    # 控件语义由模板声明；legacy 为 null，避免把开关展示成多档强度。
+    reasoning_mode: Literal["none", "switch", "effort", "budget", "fixed"] | None = None
     reasoning_template_id: str | None = None
     reasoning_template_name: str | None = None
     reasoning_probe_status: Literal["legacy", "unverified", "passed", "partial", "failed"] = "legacy"

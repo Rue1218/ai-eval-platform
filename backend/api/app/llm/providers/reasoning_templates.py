@@ -14,6 +14,8 @@ from ..loop_contracts import LlmRequest, LlmRequestError, UnsupportedReasoningEf
 
 TemplateMode = Literal["none", "switch", "effort", "budget", "fixed"]
 _EFFORTS = ("off", "low", "medium", "high", "max")
+_SWITCH = ("off", "high")
+_DEEPSEEK_EFFORTS = ("off", "low", "high", "max")
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,8 +31,8 @@ class ReasoningTemplate:
     default_effort: str
     adapter: str
     description: str
-    version: int = 1
-    # 正则只匹配模型 ID；供应商与协议仍由兼容校验共同约束。
+    version: int = 2
+    # 名称只用于推荐排序；是否可用由供应商、协议边界和真实探测决定。
     model_pattern: str | None = None
     # 启用思考时必须从流或用量拿到证据，不能只按 HTTP 成功推断能力。
     requires_reasoning_evidence: bool = True
@@ -52,43 +54,72 @@ class ReasoningTemplate:
 
 TEMPLATES: tuple[ReasoningTemplate, ...] = (
     ReasoningTemplate(
+        "aliyun-numeric-effort-v1", "百炼 · 数值思考强度（可选）", "qwen", "openai_chat",
+        "effort", _EFFORTS, "medium", "aliyun_numeric",
+        "仅供已支持整数强度的兼容端点验证：低/中/高/最高为 1/33/67/100；不按型号默认启用。",
+        model_pattern=r"(?!)",
+    ),
+    ReasoningTemplate(
+        "deepseek-reasoning-effort-v1", "DeepSeek 思考强度", "deepseek", "openai_chat",
+        "effort", _DEEPSEEK_EFFORTS, "high", "thinking_effort",
+        "发送 thinking 开关及 low/high/max 强度；无 medium 别名档位。", model_pattern=r"^deepseek-v4",
+    ),
+    ReasoningTemplate(
+        "moonshot-reasoning-effort-v1", "Kimi 思考强度（固定开启）", "moonshot", "openai_chat",
+        "effort", ("low", "high", "max"), "max", "moonshot_effort",
+        "始终思考，通过 reasoning_effort 调整 low/high/max，不发送 K2 的 thinking 开关。",
+        model_pattern=r"^kimi-k[3-9]",
+    ),
+    ReasoningTemplate(
+        "anthropic-adaptive-effort-v1", "Anthropic 自适应思考强度", "anthropic", "anthropic_messages",
+        "effort", _EFFORTS, "high", "anthropic_adaptive_effort",
+        "使用 adaptive thinking 与 output_config.effort；旧型号可改选预算模板。",
+        model_pattern=r"^claude-(?!.*(?:3[-.]|4[-.][0-5](?:-|$)))",
+    ),
+    ReasoningTemplate(
+        "google-gemini-level-v1", "Google Gemini 思考等级", "google", "openai_chat",
+        "effort", ("low", "medium", "high"), "high", "google_level",
+        "通过 thinking_level 请求等级，不提供关闭或重复的最高档；各等级需要验证。",
+        model_pattern=r"^gemini-[3-9]",
+    ),
+    ReasoningTemplate(
         "openai-reasoning-effort-v1", "OpenAI Reasoning Effort", "openai", "openai_chat",
         "effort", _EFFORTS, "medium", "openai_effort",
         "适用于 OpenAI 原生 reasoning_effort 参数的推理模型。", model_pattern=r"^(?:o1|o3|o4|gpt-5)(?:[.-]|$)",
     ),
     ReasoningTemplate(
         "deepseek-thinking-switch-v1", "DeepSeek 思考开关", "deepseek", "openai_chat",
-        "switch", _EFFORTS, "medium", "thinking_switch",
-        "适用于 DeepSeek 原生 OpenAI 兼容端点的 thinking 开关。", model_pattern=r"^deepseek-",
+        "switch", _SWITCH, "high", "thinking_switch",
+        "仅切换思考开启/关闭，不提供多档强度。", model_pattern=r"^deepseek-",
     ),
     ReasoningTemplate(
         "aliyun-deepseek-openai-v1", "百炼 DeepSeek · OpenAI Chat", "qwen", "openai_chat",
-        "effort", _EFFORTS, "medium", "aliyun_enable_effort",
+        "effort", _DEEPSEEK_EFFORTS, "high", "aliyun_enable_effort",
         "适用于百炼兼容模式中需要 enable_thinking 与 reasoning_effort 的 DeepSeek 模型。", model_pattern=r"^deepseek-",
     ),
     ReasoningTemplate(
         "aliyun-deepseek-anthropic-v1", "百炼 DeepSeek · Anthropic Messages", "qwen", "anthropic_messages",
-        "effort", _EFFORTS, "medium", "anthropic_thinking_effort",
+        "effort", _DEEPSEEK_EFFORTS, "high", "anthropic_thinking_effort",
         "适用于百炼 Anthropic Messages 兼容端点的 DeepSeek 思考方言。", model_pattern=r"^deepseek-",
     ),
     ReasoningTemplate(
         "qwen-openai-thinking-budget-v1", "百炼千问 · OpenAI Chat", "qwen", "openai_chat",
         "budget", _EFFORTS, "medium", "qwen_budget",
-        "适用于支持 enable_thinking 和 thinking_budget 的千问兼容模型。", model_pattern=r"^(?:qwen|qwq)(?:[.-]|$)",
+        "适用于支持 enable_thinking 和 thinking_budget 的千问兼容模型。", model_pattern=r"^(?:qwen|qwq)",
     ),
     ReasoningTemplate(
         "qwen-anthropic-thinking-budget-v1", "百炼千问 · Anthropic Messages", "qwen", "anthropic_messages",
         "budget", _EFFORTS, "medium", "anthropic_budget",
-        "适用于百炼 Anthropic Messages 兼容模式的千问预算思考模型。", model_pattern=r"^(?:qwen|qwq)(?:[.-]|$)",
+        "适用于百炼 Anthropic Messages 兼容模式的千问预算思考模型。", model_pattern=r"^(?:qwen|qwq)",
     ),
     ReasoningTemplate(
         "zhipu-thinking-switch-v1", "智谱 GLM 思考开关", "zhipu", "openai_chat",
-        "switch", _EFFORTS, "medium", "thinking_switch",
+        "switch", _SWITCH, "high", "thinking_switch",
         "适用于智谱 OpenAI 兼容端点的 thinking 开关。", model_pattern=r"^glm-",
     ),
     ReasoningTemplate(
         "moonshot-thinking-switch-v1", "Moonshot/Kimi 思考开关", "moonshot", "openai_chat",
-        "switch", _EFFORTS, "medium", "thinking_switch",
+        "switch", _SWITCH, "high", "moonshot_switch",
         "适用于 Moonshot OpenAI 兼容端点的 thinking 开关。", model_pattern=r"^(?:kimi|moonshot)(?:[.-]|$)",
     ),
     ReasoningTemplate(
@@ -98,7 +129,7 @@ TEMPLATES: tuple[ReasoningTemplate, ...] = (
     ),
     ReasoningTemplate(
         "minimax-m3-switch-v1", "MiniMax M3 自适应思考", "minimax", "openai_chat",
-        "switch", _EFFORTS, "medium", "minimax_adaptive",
+        "switch", _SWITCH, "high", "minimax_adaptive",
         "适用于支持 adaptive thinking 的 MiniMax M3 系列。", model_pattern=r"^minimax-m3",
     ),
     ReasoningTemplate(
@@ -108,33 +139,33 @@ TEMPLATES: tuple[ReasoningTemplate, ...] = (
     ),
     ReasoningTemplate(
         "minimax-anthropic-m3-adaptive-v1", "MiniMax M3 自适应思考 · Anthropic Messages", "minimax", "anthropic_messages",
-        "switch", _EFFORTS, "medium", "anthropic_adaptive",
+        "switch", _SWITCH, "high", "anthropic_adaptive",
         "适用于 Anthropic Messages 兼容端点的 MiniMax M3 adaptive thinking。", model_pattern=r"^minimax-m3",
     ),
     ReasoningTemplate(
         "nvidia-nim-thinking-v1", "NVIDIA NIM 思考开关", "nvidia", "openai_chat",
-        "switch", _EFFORTS, "medium", "nvidia_chat_template",
+        "switch", _SWITCH, "high", "nvidia_chat_template",
         "适用于 NIM 通过 chat_template_kwargs.enable_thinking 控制的托管模型。", model_pattern=r"^nemotron-3-",
     ),
     ReasoningTemplate(
         "volcengine-seed-thinking-v1", "火山引擎 Seed 思考强度", "volcengine", "openai_chat",
-        "effort", _EFFORTS, "medium", "thinking_effort",
+        "effort", ("off", "low", "medium", "high"), "medium", "thinking_effort",
         "适用于 Doubao Seed OpenAI 兼容模型的 thinking 与 reasoning_effort 参数。", model_pattern=r"^doubao-seed-",
     ),
     ReasoningTemplate(
         "google-gemini-thinking-v1", "Google Gemini 思考配置", "google", "openai_chat",
         "budget", _EFFORTS, "medium", "google_thinking",
-        "适用于 Gemini OpenAI 兼容端点的 google.thinking_config 参数。", model_pattern=r"^gemini-",
+        "适用于 Gemini 预算参数；预算按拟保存输出上限计算，关闭也需要验证。", model_pattern=r"^gemini-2[.]5",
     ),
     ReasoningTemplate(
         "anthropic-thinking-v1", "Anthropic 思考预算", "anthropic", "anthropic_messages",
         "budget", _EFFORTS, "high", "anthropic_budget",
-        "适用于 Anthropic Messages 的 thinking budget 参数。", model_pattern=r"^claude-",
+        "适用于 Anthropic Messages 的 thinking budget 参数。", model_pattern=r"^claude-.*(?:3[-.]|4[-.][0-5](?:-|$))",
     ),
     ReasoningTemplate(
         "no-reasoning-v1", "不启用思考", "*", "*",
         "none", ("off",), "off", "none",
-        "适用于已确认不支持思考参数的模型，只发送普通文本请求。", requires_reasoning_evidence=False,
+        "只发送普通文本请求；若仍观察到思考则验证失败，未观察到也不代表模型没有内部推理。", requires_reasoning_evidence=False,
     ),
 )
 
@@ -149,23 +180,24 @@ def _model_id_variants(model: str) -> tuple[str, ...]:
 
 
 def _matches_model(template: ReasoningTemplate, model: str) -> bool:
-    """仅让模型族匹配的模板进入候选和运行时校验，通用关闭模板不受限制。"""
+    """按模型名称给候选排序，不把名称匹配当作能力判定。"""
     if template.model_pattern is None:
         return True
     return any(re.search(template.model_pattern, item) is not None for item in _model_id_variants(model))
 
 
 def list_templates(provider: str, protocol: str, model: str) -> list[ReasoningTemplate]:
-    """列出与供应商、协议和模型 ID 均兼容的模板，通用关闭模板始终置后。"""
+    """列出供应商和协议允许的全部模板，匹配名称的优先，普通模板置后。"""
     normalized_provider = provider.strip().lower()
     normalized_protocol = protocol.strip()
     matched = [
         template for template in TEMPLATES
         if template.provider in {normalized_provider, "*"}
         and template.protocol in {normalized_protocol, "*"}
-        and _matches_model(template, model)
     ]
-    return sorted(matched, key=lambda item: item.provider == "*")
+    return sorted(matched, key=lambda item: (
+        item.provider == "*", not _matches_model(item, model), item.adapter == "aliyun_numeric",
+    ))
 
 
 def get_template(template_id: str) -> ReasoningTemplate:
@@ -179,12 +211,11 @@ def get_template(template_id: str) -> ReasoningTemplate:
 def ensure_template_compatible(
     template_id: str, provider: str, protocol: str, model: str,
 ) -> ReasoningTemplate:
-    """确认模板只能用于已登记的供应商、协议和模型族，禁止跨端点套用。"""
+    """保留供应商与协议硬边界，允许未知模型 ID 参与验证。"""
     template = get_template(template_id)
     if (
         template.provider not in {"*", provider}
         or template.protocol not in {"*", protocol}
-        or not _matches_model(template, model)
     ):
         raise LlmRequestError("思考模板与供应商、协议或模型不兼容", code="model_config")
     return template
@@ -210,11 +241,6 @@ def _budget(request: LlmRequest, effort: str) -> int:
     return max(1024, min(request.max_tokens - 1, round(request.max_tokens * ratio.get(effort, 0.4))))
 
 
-def _normalized_effort(effort: str) -> str:
-    """把平台最高档映射为多数供应商声明的最高可接受枚举。"""
-    return "high" if effort == "max" else effort
-
-
 def resolve_template_options(request: LlmRequest, provider: str, protocol: str) -> dict:
     """将请求绑定的模板转换成 SDK 参数中间表示。"""
     template_id = request.reasoning_template_id
@@ -230,12 +256,19 @@ def resolve_template_options(request: LlmRequest, provider: str, protocol: str) 
                 "omit_temperature": True, "max_tokens_parameter": "max_completion_tokens"}
     if adapter == "thinking_switch":
         return {"thinking": {"type": "enabled" if enabled else "disabled"}, "omit_temperature": enabled}
+    if adapter == "moonshot_switch":
+        # Kimi 的开启和关闭都有固定温度要求，均交由供应商使用默认值。
+        return {"thinking": {"type": "enabled" if enabled else "disabled"}, "omit_temperature": True}
+    if adapter == "moonshot_effort":
+        return {"reasoning_effort": effort, "omit_temperature": True}
+    if adapter == "aliyun_numeric":
+        return {"enable_thinking": enabled, **({"reasoning_effort": {"low": 1, "medium": 33, "high": 67, "max": 100}[effort]} if enabled else {})}
     if adapter == "aliyun_enable_effort":
-        return {"enable_thinking": enabled, **({"reasoning_effort": _normalized_effort(effort)} if enabled else {})}
+        return {"enable_thinking": enabled, **({"reasoning_effort": effort} if enabled else {})}
     if adapter == "anthropic_thinking_effort":
         options = {"thinking": {"type": "enabled" if enabled else "disabled"}}
         if enabled:
-            options["output_config"] = {"effort": _normalized_effort(effort)}
+            options["output_config"] = {"effort": effort}
             options["omit_temperature"] = True
         return options
     if adapter == "qwen_budget":
@@ -252,11 +285,17 @@ def resolve_template_options(request: LlmRequest, provider: str, protocol: str) 
         return {"omit_temperature": True}
     if adapter == "anthropic_adaptive":
         return {"thinking": {"type": "adaptive" if enabled else "disabled"}, "omit_temperature": True}
+    if adapter == "anthropic_adaptive_effort":
+        return {"thinking": {"type": "adaptive" if enabled else "disabled"}, "omit_temperature": True,
+                **({"output_config": {"effort": effort}} if enabled else {})}
     if adapter == "nvidia_chat_template":
         return {"chat_template_kwargs": {"enable_thinking": enabled}}
     if adapter == "thinking_effort":
         return {"thinking": {"type": "enabled" if enabled else "disabled"},
-                **({"reasoning_effort": _normalized_effort(effort)} if enabled else {})}
+                "omit_temperature": enabled,
+                **({"reasoning_effort": effort} if enabled else {})}
+    if adapter == "google_level":
+        return {"google_thinking": {"thinking_level": effort, "include_thoughts": True}, "omit_temperature": True}
     if adapter == "google_thinking":
         return {"google_thinking": ({"thinking_budget": min(24576, _budget(request, effort)), "include_thoughts": True}
                                      if enabled else {"thinking_budget": 0, "include_thoughts": False})}

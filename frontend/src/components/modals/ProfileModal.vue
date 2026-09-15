@@ -96,6 +96,7 @@
         <label class="field-label">思考模板 <span class="req">*</span></label>
         <n-select
           v-model:value="form.reasoning_template_id"
+          @update:value="templateSelectionManual = true"
           :options="reasoningTemplateOptions"
           :loading="loadingTemplates"
           :disabled="!reasoningTemplates.length"
@@ -308,6 +309,8 @@ const selectedTemplate = computed(() => reasoningTemplates.value.find(template =
 const probeStatusText = computed(() => ({ legacy: '旧规则兼容', unverified: '待验证', passed: '已通过', partial: '部分通过', failed: '验证失败' }[props.profile?.reasoning_probe_status || 'legacy']))
 // 连续输入、切换供应商和协议会并发拉取；只有最后一次响应有资格改写模板选择。
 let templateLoadRevision = 0
+// 用户显式选择后保留；新建及失效配置默认跟随当前模型的推荐。
+const templateSelectionManual = ref(false)
 
 function currentProvider() {
   const vendor = selectedVendor.value || VENDOR_BY_PROVIDER[props.profile?.provider || ''] || props.profile?.provider || ''
@@ -329,7 +332,7 @@ async function loadReasoningTemplates() {
     const templates = await api.profiles.listReasoningTemplates(provider, form.value.protocol, model)
     if (revision !== templateLoadRevision) return
     reasoningTemplates.value = templates
-    if (!templates.some(template => template.id === form.value.reasoning_template_id)) {
+    if (!templateSelectionManual.value || !templates.some(template => template.id === form.value.reasoning_template_id)) {
       form.value.reasoning_template_id = templates[0]?.id || ''
     }
   } catch (err: any) {
@@ -344,6 +347,7 @@ async function loadReasoningTemplates() {
 
 async function handleSelectVendor(val: string | null) {
   if (!val || !VENDOR_MAP[val]) return
+  templateSelectionManual.value = false
   clearModelParameters()
   const item = VENDOR_MAP[val]
   form.value.api_key = ''
@@ -448,6 +452,12 @@ async function onBatchCreate(modelIds: string[]) {
     let count = 0
     for (const mId of modelIds) {
       const vendorName = selectedVendor.value ? VENDOR_MAP[selectedVendor.value]?.name : '模型'
+      // 系统推荐随批量中的具体模型重新计算，显式选择的模板则保持不变。
+      let templateId = form.value.reasoning_template_id
+      if (!templateSelectionManual.value) {
+        const candidates = await api.profiles.listReasoningTemplates(currentProvider(), form.value.protocol, mId)
+        templateId = candidates[0]?.id || templateId
+      }
       const result = await api.profiles.probeCreate({
         name: `${vendorName} ${mId}`,
         protocol: form.value.protocol,
@@ -460,7 +470,7 @@ async function onBatchCreate(modelIds: string[]) {
         context_window: form.value.context_window,
         max_output_tokens: form.value.max_output_tokens,
         tool_call_mode: form.value.tool_call_mode,
-        reasoning_template_id: form.value.reasoning_template_id,
+        reasoning_template_id: templateId,
       })
       if (!result.ok) {
         if (count) emit('success')
@@ -483,6 +493,9 @@ watch(
   [() => props.show, () => props.profile],
   ([showVal, profileVal]) => {
     if (showVal) {
+      // 已通过的自选方言保留；版本失效的旧模型重新推荐，避免继续沿用错误映射。
+      templateSelectionManual.value = Boolean(profileVal?.reasoning_template_id
+        && ['passed', 'partial'].includes(profileVal.reasoning_probe_status || ''))
       selectedVendor.value = props.initialData?.vendorKey || null
       clearModelParameters()
       if (profileVal) {
