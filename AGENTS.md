@@ -1,6 +1,7 @@
 # AI 测试与评估平台 — AI Agent 行为规范与工程指南 (AGENTS.md)
 
 > **最高指示**：本文件是面向所有参与本项目的 **AI Agent 与开发者** 的最高行动指南。在编写或修改代码前，**必须严格遵守本文档所规定的架构边界、开发契约与行为红线**。
+> 版本：V2.7 ｜ 审查日期：2026-09-16（专家协作 P1 审查修复：关闭开关同步过滤工具白名单；整组取消与 spawn 共用协作行锁且保留旧请求回执；分批调度原子恢复 running；主回合资源收尾持久化最终调用预算。API V2.7、PRD V1.29、专家协作方案 V0.7；API 1607 passed/78 skipped、Worker 50 passed，Ruff 与前端 typecheck/build 通过。未新增后台恢复能力。）
 > 版本：V2.6 ｜ 审查日期：2026-09-16（专家协作 P1 前台闭环：主 `general` Agent 接入 `agent.list/spawn/status/wait/result/cancel`；新增协作/实例/运行/独立事件/命令回执五类持久表与迁移 `f70e5a53bd54`；子运行复用原生 AgentLoop，独立 `.subagents/<run_id>` 工作目录，共享 80 次调用/3 并发/单运行 20 次硬调用次数账本；Agent 页新增持久协作、成果和单个/整组停止面板。P1 仍为同进程前台执行；主流 outbox、信箱/工作项/续跑及跨进程租约恢复未交付，不得宣称后台协作。）
 > 版本：V2.5 ｜ 审查日期：2026-09-14（纯说明文档提交不构建、不触发 CI/CD；部署计划统一由 `deploy/plan_services.py` 按 Dockerfile 输入计算，MCP 工具自动发现，取消 runner 常驻构建；部署脚本变更复用已有镜像，Compose 构建参数变更保守全量处理）。
 > 版本：V2.4 ｜ 审查日期：2026-09-14（V2.4 GitHub Actions 额度治理：取消 `pull_request` 触发，功能分支与 PR 不运行 GitHub Actions；仅 `push main` 运行 CI/CD。PR 仍可用于人工审查，但合入前的构建、自检和测试须在本地完成）。

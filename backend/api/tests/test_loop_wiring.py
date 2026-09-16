@@ -321,6 +321,24 @@ async def test_permission_context_is_rechecked(wired):
     await wired.service._close_resources(resources)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_subagent_switch_preserves_default_assistant(wired, monkeypatch, enabled):
+    """协作开关只控制专家调度工具，关闭后仍可装配默认助手和既有工具。"""
+    monkeypatch.setattr(loop_wiring.settings, "agent_subagents_enabled", enabled)
+    deps, resources = await loop_wiring.build_dependencies(
+        wired.service, wired.entry, "actor", {"content": "普通对话"},
+    )
+    try:
+        names = set(deps.scheduler._by_name)
+        assert "read" in names
+        assert ("platform_agent_spawn" in names) is enabled
+        if enabled:
+            assert wired.entry.collaboration_coordinator in resources
+    finally:
+        await wired.service._close_resources(resources)
+
+
 def test_window_keeps_tool_group_and_applies_effort(wired):
     """旧回合可整体裁掉，当前调用与结果保持配对，思考档位写入真正请求。"""
     messages = [{"role": "user", "content": "old" * 5000}, {"role": "assistant", "content": "old answer"},

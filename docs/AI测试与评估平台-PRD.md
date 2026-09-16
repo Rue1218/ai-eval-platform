@@ -4,10 +4,10 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.28 |
-| 文档状态 | 冻结基线 + V1.28 专家协作 P1 前台闭环（2026-09-16）；后台恢复与专家通讯仍待 P2/P3 |
+| 文档版本 | V1.29 |
+| 文档状态 | 冻结基线 + V1.29 专家协作 P1 审查修复（2026-09-16）；后台恢复与专家通讯仍待 P2/P3 |
 | 撰写日期 | 2026-08-17 |
-| 本轮修订 | 2026-09-16：V1.28 交付专家协作 P1 前台闭环：主 Agent 可自由调用六个专家工具，子运行独立持久、并行受限、可查成果和停止，Agent 页展示持久协作状态；2026-09-15：V1.27 登记 P0 运行时基础接缝。 |
+| 本轮修订 | 2026-09-16：V1.29 修复 P1 开关回退、整组停止后派发、分批状态和最终预算展示；V1.28 交付六个专家工具与前台持久协作面板；V1.27 登记 P0 运行时基础接缝。 |
 | 最近修订 | 2026-08-31：V1.17 增加危险 bash 的 LangGraph 人在回路：风险命令必须弹出确认卡，原发起成员确认后才进入 bwrap 沙箱；拒绝不执行。思考卡只呈现过程摘要，禁止显示会与工具真实结果冲突的原始推理。2026-08-30：V1.16 增加受控 Agent 技能文件与协议档专属补充提示词管理；技能正文遵循渐进式披露，核心安全提示词不可覆盖。2026-08-28：V1.15 统一基准目录治理、独立导入队列、staging 并发发布、成员同权双人复核与 M3 里程碑；冻结任务必须锁定数据集/黄金集版本。2026-08-28：V1.14 新增基准数据集目录、异步导入、staging 表格和发布门禁；下载/解析仅由 Worker 执行，未审核行不得评测。2026-08-24：补充 Agent 多附件交互：支持图片（PNG/JPG/JPEG/WEBP/GIF）、Markdown/TXT/HTML/JSON/YAML、PDF、Word（DOC/DOCX）、Excel（XLS/XLSX）、CSV/JSONL 与音频；输入区支持文件选择和拖拽上传，图片显示缩略图，PDF/文本支持预览，Office 文件显示类型卡片并可打开/下载。2026-08-23：补齐 Gemini OpenAI 兼容端点的思考摘要请求与增量归一化；增加 Agent 思考摘要开关与思考强度设置；将用户回显固定为 `user_message`，将完成信号固定为 `response.completed`，明确 `thought` 不承载助手正文；协议档增加可选 Embedding / Reranker 独立端点配置，三类 Key 均按 profile 写入受控环境文件 |
 | 适用版本 | 平台 V1.0 |
 | 技术栈 | Vue3 + Naive UI、Python FastAPI、PostgreSQL、WebSocket、Docker Compose、go-stress-testing |
@@ -858,3 +858,17 @@ Anthropic Messages 兼容供应商的思考配置必须由供应商模板解析�
 | `backend/api/app/routers/collaborations.py` | 持久查询、记录分页和用户停止操作 |
 | `frontend/src/components/agent/loop/CollaborationPanel.vue` | Agent 页协作状态、成果与停止 UI |
 | `backend/api/tests/test_subagent_collaboration.py` | 并行、幂等、隔离和工具契约回归 |
+
+## V1.29 专家协作 P1 审查修复（2026-09-16）
+
+关闭专家协作开关保留普通助手能力；停止整组后不允许该组继续派发新专家，旧请求的回执仍能恢复。同一主回合允许分批调度，新增运行时页面恢复“执行中”并提供整组停止。当前协作状态汇总已创建运行，父回合是否完成仍以其自身终态为准。单个专家停止不禁止主 Agent 后续安排其他专家。
+
+父回合收尾保存包括最后一次汇总调用在内的最终调用预算，取消已派发请求不返还调用额度。本次无新增页面、接口、数据库迁移或后台运行能力。
+
+### V1.29 修改代码文件与作用清单
+
+| 文件 | 作用 |
+| --- | --- |
+| `backend/api/app/agent/loop_wiring.py` | 开关回退和当前回合预算收尾接线 |
+| `backend/api/app/agent/collaboration.py` | 取消锁存、分批状态与最终预算持久化 |
+| `backend/api/tests/test_loop_wiring.py`、`test_subagent_collaboration.py` | 六项复现与回归验证 |

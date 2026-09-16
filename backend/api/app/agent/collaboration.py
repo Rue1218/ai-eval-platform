@@ -68,6 +68,13 @@ class CollaborationCoordinator:
         self.collaboration_id: str | None = None
         self.root_turn: int | None = None
         self.tasks: dict[str, asyncio.Task[Any]] = {}
+        self._closed = False
+
+    async def close(self) -> None:
+        """主回合 drain 后冻结新派发并保存最后汇总调用；按当前回合资源归属调用。"""
+        self._closed = True
+        self.budget.close()
+        self._persist_budget()
 
     async def dispatch(self, definition, arguments, _context, identity) -> ToolExecutionResult:
         """按注册表名称分派六个短工具，返回可直接进入模型历史的 JSON。"""
@@ -175,9 +182,15 @@ class CollaborationCoordinator:
         expert = get_expert(arguments["expert_id"])
         profile_id = arguments.get("profile_id") or self.root_data.get("profile_id")
         with self.service.session_factory() as db:
+            # 与整组停止锁定同一行，避免取消锁存与新实例创建交错。
+            collaboration = db.execute(select(AgentCollaboration).where(
+                AgentCollaboration.id == collaboration.id,
+            ).with_for_update()).scalar_one()
             previous = self._receipt(db, collaboration.id, identity, "agent.spawn", arguments)
             if previous is not None:
                 return previous
+            if self._closed or collaboration.cancel_requested:
+                raise AppError(ErrorCode.CONCURRENCY, "专家协作已停止，不能启动新专家")
             count = db.query(AgentInstance).filter(
                 AgentInstance.collaboration_id == collaboration.id
             ).count()
@@ -246,6 +259,9 @@ class CollaborationCoordinator:
                 "status": "queued",
             }
             self._write_receipt(db, collaboration.id, identity, "agent.spawn", arguments, result)
+            # 同一主回合可分批调度，创建新运行时原子刷新当前成果汇总状态。
+            collaboration.status = "running"
+            collaboration.finished_at = None
             db.commit()
         try:
             task = self.children.start(
@@ -549,6 +565,9 @@ class CollaborationCoordinator:
                 else:
                     collaboration.status = "succeeded"
                 collaboration.finished_at = utcnow()
+            elif statuses:
+                collaboration.status = "running"
+                collaboration.finished_at = None
             collaboration.budget = {**(collaboration.budget or {}), **self.budget.snapshot()}
             db.commit()
 

@@ -12,6 +12,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.agent.collaboration import CollaborationCoordinator
 from app.agent.collaboration_scope import TurnChildren
+from app.agent.loop_service import LoopService
 from app.agent.model_budget import ModelCallBudget
 from app.agent.subagent_log import SubagentLog
 from app.agent.subagent_tools import register_subagent_tools
@@ -350,3 +351,131 @@ async def test_cancel_without_runtime_preserves_terminal_and_aggregates(
             assert result["accepted"] is True
             assert db.get(AgentCollaboration, "c1").status == "cancelled"
             assert db.get(AgentRun, "r1").result["complete"] is False
+
+
+@pytest.mark.asyncio
+async def test_group_cancel_latches_new_dispatch_but_replays_receipts(collaboration_db, monkeypatch):
+    """整组停止后旧 spawn 仍幂等回放，但新调用不能创建运行或消耗实例额度。"""
+    children = TurnChildren(max_children=8)
+    coordinator = CollaborationCoordinator(
+        SimpleNamespace(session_factory=collaboration_db),
+        SimpleNamespace(log=SimpleNamespace(session_id="s1")), "u1",
+        {"content": "检查", "profile_id": "p1"}, children,
+        ModelCallBudget(max_calls=80, max_concurrent=3, max_calls_per_run=20),
+    )
+    waiting = asyncio.Event()
+
+    async def child(*_args):
+        """等待用户取消，不发起供应商请求。"""
+        await waiting.wait()
+
+    monkeypatch.setattr(coordinator, "_run_child", child)
+    args = {"expert_id": "general", "goal": "检查", "output_contract": "结论"}
+    identity = {"turn": 1, "call_id": "first"}
+    try:
+        first = await coordinator._spawn(args, identity)
+        await coordinator.cancel_all_by_user("停止全部")
+        assert await coordinator._spawn(args, identity) == first
+        with pytest.raises(AppError) as caught:
+            await coordinator._spawn(args, {"turn": 1, "call_id": "second"})
+        assert caught.value.code.value == "CONCURRENCY"
+        with collaboration_db() as db:
+            assert db.query(AgentRun).count() == 1
+            assert db.query(AgentCommandReceipt).count() == 1
+        await asyncio.gather(*coordinator.tasks.values(), return_exceptions=True)
+        with pytest.raises(AppError):
+            await coordinator._spawn(args, {"turn": 1, "call_id": "third"})
+    finally:
+        waiting.set()
+        await children.close()
+
+
+@pytest.mark.asyncio
+async def test_second_wave_restores_running_and_allows_group_stop(collaboration_db, monkeypatch):
+    """主回合分批调度时，第二批创建即恢复运行态并可通过真实 REST 入口整组停止。"""
+    from app.routers.collaborations import CancelRequest, cancel_collaboration
+
+    children = TurnChildren(max_children=8)
+    entry = SimpleNamespace(log=SimpleNamespace(session_id="s1"))
+    service = SimpleNamespace(session_factory=collaboration_db, entries={"s1": entry})
+    coordinator = CollaborationCoordinator(
+        service, entry, "u1", {"content": "检查", "profile_id": "p1"}, children,
+        ModelCallBudget(max_calls=80, max_concurrent=3, max_calls_per_run=20),
+    )
+    entry.collaboration_coordinator = coordinator
+    waiting = asyncio.Event()
+
+    async def child(run_id, _expert, _profile, goal, _contract):
+        """第一批立即完成，第二批等待用户停止。"""
+        if goal == "second":
+            await waiting.wait()
+        coordinator._finish_run(run_id, "succeeded", {"complete": True})
+        coordinator._refresh_collaboration()
+
+    monkeypatch.setattr(coordinator, "_run_child", child)
+    try:
+        await coordinator._spawn(
+            {"expert_id": "general", "goal": "first", "output_contract": "结论"},
+            {"turn": 1, "call_id": "first"},
+        )
+        await asyncio.gather(*coordinator.tasks.values())
+        second = await coordinator._spawn(
+            {"expert_id": "general", "goal": "second", "output_contract": "结论"},
+            {"turn": 1, "call_id": "second"},
+        )
+        coordinator._refresh_collaboration()
+        with collaboration_db() as db:
+            group = db.get(AgentCollaboration, coordinator.collaboration_id)
+            assert group.status == "running"
+            assert group.finished_at is None
+            request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(loop_service=service)))
+            result = await cancel_collaboration(group.id, CancelRequest(), request, db, db.get(User, "u1"))
+            assert result["accepted"] is True
+            assert result["run_ids"] == [second["run_id"]]
+    finally:
+        waiting.set()
+        await children.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_root_cleanup_persists_last_model_call(collaboration_db, monkeypatch, cancelled):
+    """所有专家结算后的最后一次主模型调用，在正常与取消收尾时均准确持久化。"""
+    children = TurnChildren(max_children=8)
+    budget = ModelCallBudget(max_calls=80, max_concurrent=3, max_calls_per_run=20)
+    service = LoopService(collaboration_db)
+    entry = SimpleNamespace(
+        log=SimpleNamespace(session_id="s1"), disconnect_cleanup=None,
+        controller=None, controller_client_id=None,
+    )
+    coordinator = CollaborationCoordinator(
+        service, entry, "u1", {"content": "检查", "profile_id": "p1"}, children, budget,
+    )
+    coordinator._ensure_collaboration({"turn": 1})
+
+    class Adapter:
+        """模拟最后一次主模型回复，不发起网络请求。"""
+
+        async def stream(self, _request):
+            yield "汇总成果"
+
+    async def wait():
+        """运行时等到模型消费完成；取消不返还已派发调用额度。"""
+        async for _chunk in budget.stream(Adapter(), "root:s1", None):
+            pass
+        if cancelled:
+            raise asyncio.CancelledError
+
+    entry.runtime = SimpleNamespace(wait=wait, running=False)
+    monkeypatch.setattr(service, "_release_writer", lambda _entry: None)
+    if cancelled:
+        with pytest.raises(asyncio.CancelledError):
+            await service._finish(entry, [coordinator])
+    else:
+        await service._finish(entry, [coordinator])
+    with collaboration_db() as db:
+        snapshot = db.get(AgentCollaboration, coordinator.collaboration_id).budget
+        assert snapshot["calls"] == 1
+        assert snapshot["active"] == 0
+        assert snapshot["by_run"]["root:s1"] == 1
+    await children.close()

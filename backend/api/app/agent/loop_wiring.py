@@ -95,6 +95,8 @@ def _expert_tools(expert: ExpertDef) -> tuple[str, ...]:
     声明后只收窄、不扩大——交集为空视为配置错误，fail-closed。
     """
     available_tools = ALLOWED_TOOLS + (MEDIA_MCP_TOOLS if settings.media_mcp_enabled else ())
+    if not settings.agent_subagents_enabled:
+        available_tools = tuple(name for name in available_tools if not name.startswith("agent."))
     if not expert.allowed_tools:
         return available_tools
     declared = set(expert.allowed_tools)
@@ -476,6 +478,8 @@ async def _build_dependencies(service, entry, actor_id: str, data: dict, resourc
 
         coordinator = CollaborationCoordinator(service, entry, actor_id, data, children, budget)
         entry.collaboration_coordinator = coordinator
+        # 资源列表绑定当前回合；正常、取消及异常收尾均在模型停止后保存最终调用预算。
+        resources.append(coordinator)
     collaboration_callback = coordinator.dispatch if coordinator is not None else None
     bridge = PlatformToolBridge(registry, allowed_tools=allowed_tools,
                                 context_factory=context_factory, authorize=authorize,
